@@ -31,6 +31,7 @@ aide/
 │   │   └── ModalDialog.vue     # 通用弹窗（确认/输入）
 │   ├── composables/
 │   │   ├── useContextMenu.ts   # 右键菜单状态层（模块级 ref 单例）
+│   │   ├── useSessionState.ts  # 会话运行状态（模块级 reactive 单例）
 │   │   └── useModal.ts         # 弹窗状态层
 │   ├── menus/
 │   │   └── contextMenus.ts     # 右键菜单配置层（工厂函数，与组件解耦）
@@ -81,6 +82,23 @@ aide/
         → liveSessions.get(ptyId).terminal.write(data)   ← 直达，无过滤
 ```
 
+### 会话状态指示器
+
+侧栏每条会话有四种状态，通过 `useSessionState`（模块级 `reactive` 单例）在组件间共享：
+
+| 状态 | 侧栏显示 | 触发条件 |
+|------|---------|----------|
+| `stopped` | 无标识 | 默认（PTY 不存在） |
+| `running` | 绿色光带从右到左扫过 | 用户按 Enter 发消息 |
+| `waiting` | 右侧绿色边框 | `.jsonl` 最后事件为 `assistant`（Claude 完成） |
+| `attention` | 琥珀色光带扫过 | 终端出现权限审批提示 `[y/n]` |
+
+**判定逻辑**（`TerminalPanel.vue`）：
+- 进入实时模式 → 默认 `waiting`
+- 用户按 Enter → 立即 `running`
+- 每 2 秒周期查 `session_last_event` → `assistant` 则 `waiting`
+- 权限关键词 → `attention`
+
 ### PTY 管理（Rust 侧不变）
 
 PtyManager 维护 `HashMap<String, PtySession>`，每个会话独立持有 PTY。切换会话时不杀进程，只切换终端显隐。
@@ -92,6 +110,7 @@ PtyManager 维护 `HashMap<String, PtySession>`，每个会话独立持有 PTY�
 | `liveSessions` | `Map<ptyId, LiveSession>` | 直播终端表，key 是 PTY 侧 session ID |
 | `ptyToDisplay` | `Map<ptyId, displayId>` | `new_xxx` → 真实 UUID 的迁移映射 |
 | `liveDisplayIds` | `reactive Set<displayId>` | 给模板用，驱动关闭按钮显隐 |
+| `periodicTimers` | `Map<ptyId, setInterval>` | 每 2 秒轮询 `.jsonl` 状态 |
 | `props.sessionId` | 外部传入 | 当前该显示哪个会话（唯一真相源，无 `activeSid`） |
 
 **切换流程**：
@@ -164,6 +183,7 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 | `create_session` | placeholder `new_<timestamp>`，真实 session 由 Claude 创建 |
 | `delete_session` | 删 `.jsonl` + pid JSON + 我们元数据 |
 | `rename_session` | 更新我们元数据的 displayName |
+| `session_last_event` | 读 `.jsonl` 最后一行，返回事件 type（`user`/`assistant`/`system`），用于判断 Claude 是否完成 |
 | `list_workspaces` | 扫描 `~/.claude/projects/` 下所有项目目录 |
 | `set_workspace` | 设置当前工作区 |
 
@@ -192,6 +212,7 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 - 会话列表从 `list_sessions` 加载，按时间戳倒序
 - 空列表时自动创建首个会话；`activeSessionId` 为 `new_` 时自动选真实会话
 - 相对时间显示（分钟前/小时前/天前）
+- **会话状态指示器**：通过 `useSessionState` 读取状态，渲染三种效果（绿色扫光 = running，右侧绿边 = waiting，琥珀色扫光 = attention）
 - 自定义功能区（智能体/技能等，仅展示名称）
 - 右键菜单：重命名 / 删除
 - `defineExpose({ newSession, loadSessions })`
@@ -207,6 +228,7 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 - 三栏可拖拽布局 + Catppuccin 暗色主题
 - **全屏 xterm.js 终端** — 多会话 PTY，完整 Claude 交互
 - **多会话并行存活** — 切换 instant，不杀进程
+- **会话状态指示器** — 侧栏显示会话运行状态（running/waiting/attention），通过 `.jsonl` 事件类型判断
 - **会话预览** — 无 PTY 时展示完整历史，按 Enter 启动
 - 会话管理 — 适配 `~/.claude/` 真实存储（列表/创建/删除/重命名）
 - 工作区管理（`list_workspaces` / `set_workspace`）
