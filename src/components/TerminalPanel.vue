@@ -26,7 +26,7 @@ const emit = defineEmits<{ "session-updated": [] }>();
 
 interface BackendMsg { role: string; content: string; timestamp: number; }
 
-// ── Markdown renderer setup (reuse marked + hljs, same as FileViewer) ──
+// ── Markdown renderer setup ──
 
 hljs.registerLanguage("typescript", typescript);
 hljs.registerLanguage("javascript", javascript);
@@ -56,12 +56,53 @@ marked.use({
   },
 });
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 // ── Preview content (HTML div, replaces xterm preview) ──
 
 const stackRef = ref<HTMLDivElement>();
 const previewRef = ref<HTMLDivElement>();
 const previewMessages = ref<BackendMsg[]>([]);
 let unlistenPty: UnlistenFn | null = null;
+
+const previewHtml = computed(() => {
+  if (previewMessages.value.length === 0) return "";
+  let html = "";
+  for (const m of previewMessages.value) {
+    const who = m.role === "user" ? "You" : "Claude";
+    html += `<div class="preview-msg preview-msg--${m.role}">`;
+    html += `<div class="preview-msg__who">${who}</div>`;
+    html += `<div class="preview-msg__body">`;
+    if (m.role === "user") {
+      html += `<div class="preview-text">${escapeHtml(m.content)}</div>`;
+    } else {
+      try {
+        html += `<div class="preview-text">${marked.parse(m.content)}</div>`;
+      } catch {
+        html += `<div class="preview-text">${escapeHtml(m.content)}</div>`;
+      }
+    }
+    html += `</div></div>`;
+  }
+  return html;
+});
+
+async function loadPreviewContent(sid: string) {
+  if (sid.startsWith("new_")) {
+    previewMessages.value = [];
+    return;
+  }
+  try {
+    previewMessages.value = await invoke<BackendMsg[]>("load_messages", { sessionId: sid });
+  } catch (_) {
+    previewMessages.value = [];
+  }
+}
 
 // ── Live terminals (one per running Claude) ──
 
@@ -87,7 +128,6 @@ let currentSid = "";
 const { setSessionState, removeSessionState } = useSessionState();
 const periodicTimers = new Map<string, ReturnType<typeof setInterval>>();
 
-/** Read the last ~3 rendered lines from a live terminal's buffer. */
 function terminalTailLines(ptyId: string): string {
   const ls = liveSessions.get(ptyId);
   if (!ls) return "";
@@ -131,7 +171,6 @@ async function checkSessionState(ptyId: string) {
   }
 
   // Authoritative: .jsonl last event type
-  // Only use it to CONFIRM "waiting" — never to force "running"
   try {
     const lastEvent = await invoke<string | null>("session_last_event", { sessionId: displayId });
     if (lastEvent === "assistant") {
@@ -194,62 +233,39 @@ function showSession(sid: string) {
     nextTick(() => ls.fitAddon.fit());
   } else {
     // Preview — show HTML preview div
-    if (previewRef.value) previewRef.value.style.display = "";
+    if (previewRef.value) {
+      previewRef.value.style.display = "";
+      previewRef.value.focus();
+    }
     loadPreviewContent(sid);
   }
 }
 
-// ── Preview content ──
+// ── Keyboard & click handlers (window-level fallback) ──
 
-async function loadPreviewContent(sid: string) {
-  if (sid.startsWith("new_")) {
-    previewMessages.value = [];
-    return;
-  }
-  try {
-    previewMessages.value = await invoke<BackendMsg[]>("load_messages", { sessionId: sid });
-  } catch (_) {
-    previewMessages.value = [];
-  }
+function tryStartClaude() {
+  const sid = props.sessionId;
+  if (sid && !liveDisplayIds.has(sid)) startClaude();
 }
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-const previewHtml = computed(() => {
-  if (previewMessages.value.length === 0) return "";
-  let html = "";
-  for (const m of previewMessages.value) {
-    const who = m.role === "user" ? "You" : "Claude";
-    html += `<div class="preview-msg preview-msg--${m.role}">`;
-    html += `<div class="preview-msg__who">${who}</div>`;
-    html += `<div class="preview-msg__body">`;
-    if (m.role === "user") {
-      html += `<div class="preview-text">${escapeHtml(m.content)}</div>`;
-    } else {
-      try {
-        html += `<div class="preview-text">${marked.parse(m.content)}</div>`;
-      } catch {
-        html += `<div class="preview-text">${escapeHtml(m.content)}</div>`;
-      }
-    }
-    html += `</div></div>`;
-  }
-  return html;
-});
 
 function onPreviewKeydown(e: KeyboardEvent) {
-  if (e.key === "Enter") {
-    const sid = props.sessionId;
-    if (sid && !liveDisplayIds.has(sid)) startClaude();
-  }
+  if (e.key === "Enter") tryStartClaude();
+}
+
+function onWindowKeydown(e: KeyboardEvent) {
+  if (e.key !== "Enter") return;
+  const tag = (e.target as HTMLElement)?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
+  if (!previewRef.value || previewRef.value.style.display === "none") return;
+  tryStartClaude();
+}
+
+function onPreviewClick() {
+  tryStartClaude();
 }
 
 // ── Start Claude → create a live terminal ──
+// (EXACT copy from ff07cd2 — no changes)
 
 function startClaude() {
   const sid = props.sessionId;
@@ -268,7 +284,7 @@ function startClaude() {
   div.style.display = "none";
   stackRef.value.appendChild(div);
 
-  // Hide preview div, show this div FIRST so it has correct dimensions
+  // Hide preview, show this div FIRST so it has correct dimensions
   if (previewRef.value) previewRef.value.style.display = "none";
   div.style.display = "";
 
@@ -390,6 +406,9 @@ watch(() => props.sessionId, (newId) => {
 // ── Lifecycle ──
 
 onMounted(async () => {
+  // Global keyboard fallback: Enter starts Claude when preview is visible
+  window.addEventListener("keydown", onWindowKeydown);
+
   // pty-output → route directly to the right live terminal
   unlistenPty = await listen<string>("pty-output", (event) => {
     try {
@@ -403,6 +422,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   unlistenPty?.();
+  window.removeEventListener("keydown", onWindowKeydown);
   // Clean up all timers
   for (const [, timer] of periodicTimers) clearInterval(timer);
   periodicTimers.clear();
@@ -428,15 +448,15 @@ onUnmounted(() => {
         tabindex="0"
         @keydown="onPreviewKeydown"
       >
-        <div v-if="props.sessionId && props.sessionId.startsWith('new_')" class="preview-empty">
+        <div v-if="props.sessionId && props.sessionId.startsWith('new_')" class="preview-empty" @click="onPreviewClick">
           <div class="preview-empty__title">New Session</div>
           <div class="preview-empty__hint">Press Enter to start</div>
         </div>
         <template v-else-if="previewHtml">
           <div class="preview-messages" v-html="previewHtml"></div>
-          <div class="preview-footer">Press Enter to continue</div>
+          <div class="preview-footer" @click="onPreviewClick">Press Enter to continue</div>
         </template>
-        <div v-else class="preview-empty">
+        <div v-else class="preview-empty" @click="onPreviewClick">
           <div class="preview-empty__title">Session {{ (props.sessionId || '').substring(0, 8) }}</div>
           <div class="preview-empty__hint">Press Enter to start</div>
         </div>
@@ -461,7 +481,7 @@ onUnmounted(() => {
 .terminal-container .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
 .terminal-container .xterm-viewport::-webkit-scrollbar-thumb { background: var(--surface); border-radius: 3px; }
 
-/* ── Preview content (HTML div, replaces xterm preview) ── */
+/* ── Preview content (HTML div) ── */
 .preview-container {
   overflow-y: auto;
   outline: none;

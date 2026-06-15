@@ -43,7 +43,14 @@ impl PtyManager {
             .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
             .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
-        let mut cmd = CommandBuilder::new(command);
+        // On Windows, npm global packages are .cmd wrappers (the bare name
+        // resolves to a shell script, not a valid Win32 exe — error 193).
+        #[cfg(target_os = "windows")]
+        let resolved = format!("{}.cmd", command);
+        #[cfg(not(target_os = "windows"))]
+        let resolved = command.to_string();
+
+        let mut cmd = CommandBuilder::new(&resolved);
         cmd.args(args);
         cmd.cwd(cwd);
 
