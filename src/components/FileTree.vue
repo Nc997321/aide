@@ -19,7 +19,11 @@ const loading = ref(true);
 const errorMsg = ref("");
 const expandedDirs = ref<Set<string>>(new Set());
 const selectedPath = ref<string>("");
-const workspaces = ref<string[]>([]);
+interface FileWsInfo {
+  key: string;
+  name: string;
+}
+const workspaces = ref<FileWsInfo[]>([]);
 const showWsDropdown = ref(false);
 
 const emit = defineEmits<{
@@ -92,19 +96,19 @@ async function loadRoot() {
 
 async function loadWorkspaces() {
   try {
-    workspaces.value = await invoke<string[]>("list_workspaces");
+    workspaces.value = await invoke<FileWsInfo[]>("list_workspaces");
   } catch (_e) {
     workspaces.value = [];
   }
 }
 
-async function selectWorkspace(path: string) {
+async function selectWorkspace(ws: FileWsInfo) {
   showWsDropdown.value = false;
-  if (path === projectInfo.value.root) return;
+  if (ws.name === projectInfo.value.root) return;
   try {
-    await invoke("set_workspace", { path });
-  } catch (_e) { /* ignore */ }
-  emit("workspace-changed", path);
+    await invoke("set_workspace", { key: ws.key, path: ws.name });
+  } catch (_e) { return; }
+  emit("workspace-changed", ws.name);
   await loadRoot();
 }
 
@@ -151,13 +155,13 @@ defineExpose({ loadRoot });
       <div v-if="showWsDropdown" class="ws-dropdown" @click.stop>
         <div
           v-for="ws in workspaces"
-          :key="ws"
+          :key="ws.key"
           class="ws-item"
-          :class="{ active: ws === projectInfo.root }"
+          :class="{ active: ws.name === projectInfo.root }"
           @click="selectWorkspace(ws)"
         >
           <span class="ws-item-icon">&#x1F4C1;</span>
-          <span class="ws-item-text">{{ ws }}</span>
+          <span class="ws-item-text">{{ ws.name }}</span>
         </div>
         <div v-if="workspaces.length === 0" class="ws-item muted">
           未找到其他工作区

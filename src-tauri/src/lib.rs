@@ -8,8 +8,10 @@ use std::sync::Mutex;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let manager = PtyManager::new();
+    let saved_key = commands::load_workspace_config();
     let workspace_state = WorkspaceState {
-        current: Mutex::new(None),
+        key: Mutex::new(saved_key.clone()),
+        path: Mutex::new(None), // resolved on first set_workspace call
     };
 
     tauri::Builder::default()

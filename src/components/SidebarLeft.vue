@@ -12,25 +12,24 @@ interface Session {
   last_message: string;
 }
 
+interface WorkspaceInfo {
+  key: string;
+  name: string;
+}
+
 const props = defineProps<{
   activeSessionId: string;
 }>();
 
 const emit = defineEmits<{
   "session-changed": [id: string];
+  "workspace-changed": [path: string];
 }>();
 
 const sessions = ref<Session[]>([]);
+const workspaces = ref<WorkspaceInfo[]>([]);
+const activeWorkspace = ref("");
 const searchQuery = ref("");
-const filteredSessions = computed(() => {
-  const q = searchQuery.value.trim().toLowerCase();
-  if (!q) return sessions.value;
-  return sessions.value.filter(
-    (s) =>
-      s.name.toLowerCase().includes(q) ||
-      s.last_message.toLowerCase().includes(q),
-  );
-});
 const customExpanded = ref(false);
 const loading = ref(true);
 
@@ -41,6 +40,29 @@ const customItems = [
   { name: "钩构" },
   { name: "MCP 服务器" },
 ];
+
+function workspaceLabel(ws: WorkspaceInfo): string {
+  const parts = ws.name.replace(/[/\\]+$/, "").split(/[/\\]/);
+  return parts[parts.length - 1] || ws.name;
+}
+
+const filteredWorkspaces = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase();
+  if (!q) return workspaces.value;
+  return workspaces.value.filter(
+    (ws) => workspaceLabel(ws).toLowerCase().includes(q) || ws.name.toLowerCase().includes(q),
+  );
+});
+
+const filteredSessions = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase();
+  if (!q) return sessions.value;
+  return sessions.value.filter(
+    (s) =>
+      s.name.toLowerCase().includes(q) ||
+      s.last_message.toLowerCase().includes(q),
+  );
+});
 
 function timeAgo(ts: number): string {
   const diff = Date.now() - ts;
@@ -53,7 +75,16 @@ function timeAgo(ts: number): string {
   return `${Math.floor(days / 7)}周前`;
 }
 
+async function loadWorkspaces() {
+  try {
+    workspaces.value = await invoke<WorkspaceInfo[]>("list_workspaces");
+  } catch (_e) {
+    workspaces.value = [];
+  }
+}
+
 async function loadSessions() {
+  loading.value = true;
   try {
     sessions.value = await invoke<Session[]>("list_sessions");
   } catch (_e) {
@@ -61,12 +92,10 @@ async function loadSessions() {
   }
   loading.value = false;
 
-  // No sessions at all: auto-create the first one
   if (sessions.value.length === 0) {
     await newSession();
     return;
   }
-  // Auto-select first session if none active (including placeholder new_ IDs)
   if (!props.activeSessionId || props.activeSessionId.startsWith("new_")) {
     emit("session-changed", sessions.value[0].id);
   }
@@ -77,6 +106,16 @@ const { state: sessionState } = useSessionState();
 
 function selectSession(id: string) {
   emit("session-changed", id);
+}
+
+async function switchWorkspace(ws: WorkspaceInfo) {
+  if (ws.key === activeWorkspace.value) return;
+  try {
+    await invoke("set_workspace", { key: ws.key, path: ws.name });
+  } catch (_e) { return; }
+  activeWorkspace.value = ws.key;
+  emit("workspace-changed", ws.name);
+  await loadSessions();
 }
 
 async function renameSession(id: string, name: string) {
@@ -113,7 +152,20 @@ async function newSession() {
   }
 }
 
-onMounted(loadSessions);
+onMounted(async () => {
+  await loadWorkspaces();
+  // Find active workspace: match by encoded key derived from get_project_info
+  try {
+    const info = await invoke<{ root: string }>("get_project_info");
+    for (const ws of workspaces.value) {
+      if (ws.name === info.root) {
+        activeWorkspace.value = ws.key;
+        break;
+      }
+    }
+  } catch (_) { /* ignore */ }
+  await loadSessions();
+});
 
 defineExpose({ newSession, loadSessions });
 </script>
@@ -133,35 +185,57 @@ defineExpose({ newSession, loadSessions });
       <input
         v-model="searchQuery"
         class="search-input"
-        placeholder="搜索会话..."
+        placeholder="搜索工作区或会话..."
       />
     </div>
 
-    <!-- Session list -->
+    <!-- Workspace + Session list -->
     <div class="session-list">
       <div v-if="loading" class="session-item muted">加载中...</div>
-      <div
-        v-else-if="filteredSessions.length === 0 && sessions.length > 0"
-        class="session-item muted"
-      >
-        无匹配的会话
-      </div>
-      <div
-        v-for="s in filteredSessions"
-        :key="s.id"
-        class="session-item"
-        :class="{
-          active: props.activeSessionId === s.id,
-          running: sessionState[s.id] === 'running',
-          waiting: sessionState[s.id] === 'waiting',
-          attention: sessionState[s.id] === 'attention',
-        }"
-        @click="selectSession(s.id)"
-        @contextmenu.prevent="onSessionContextMenu($event, s.id)"
-      >
-        <div class="session-name">{{ s.name }}</div>
-        <div class="session-time">{{ timeAgo(s.timestamp) }}</div>
-      </div>
+
+      <template v-else v-for="ws in filteredWorkspaces" :key="ws.key">
+        <!-- Workspace row -->
+        <div
+          class="workspace-item"
+          :class="{ active: ws.key === activeWorkspace }"
+          @click="switchWorkspace(ws)"
+        >
+          <span class="ws-arrow" :class="{ expanded: ws.key === activeWorkspace }">&#x25B8;</span>
+          <span class="ws-name">{{ workspaceLabel(ws) }}</span>
+        </div>
+
+        <!-- Sessions (only for active workspace) -->
+        <template v-if="ws.key === activeWorkspace">
+          <div
+            v-if="filteredSessions.length === 0 && sessions.length > 0"
+            class="session-item muted"
+          >
+            无匹配的会话
+          </div>
+          <div
+            v-else-if="filteredSessions.length === 0"
+            class="session-item muted"
+          >
+            暂无会话
+          </div>
+          <div
+            v-for="s in filteredSessions"
+            :key="s.id"
+            class="session-item"
+            :class="{
+              active: props.activeSessionId === s.id,
+              running: sessionState[s.id] === 'running',
+              waiting: sessionState[s.id] === 'waiting',
+              attention: sessionState[s.id] === 'attention',
+            }"
+            @click="selectSession(s.id)"
+            @contextmenu.prevent="onSessionContextMenu($event, s.id)"
+          >
+            <div class="session-name">{{ s.name }}</div>
+            <div class="session-time">{{ timeAgo(s.timestamp) }}</div>
+          </div>
+        </template>
+      </template>
     </div>
 
     <!-- Custom section -->
@@ -243,11 +317,54 @@ defineExpose({ newSession, loadSessions });
 .session-list {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 0;
+  padding: 4px 0;
 }
 
-.session-item {
+/* ── Workspace item ── */
+
+.workspace-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 8px 16px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--surface);
+  transition: all 0.1s;
+}
+
+.ws-arrow {
+  font-size: 13px;
+  width: 14px;
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+.ws-arrow.expanded {
+  transform: rotate(90deg);
+}
+.workspace-item:first-child {
+  border-top: 1px solid var(--surface);
+}
+.workspace-item:hover {
+  color: var(--text-primary);
+  background: var(--surface);
+}
+.workspace-item.active {
+  color: var(--text-primary);
+}
+
+.ws-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Session item ── */
+
+.session-item {
+  padding: 7px 16px 7px 36px;
   cursor: pointer;
   border-left: 2px solid transparent;
   border-right: 2px solid transparent;
@@ -320,7 +437,8 @@ defineExpose({ newSession, loadSessions });
   color: var(--text-muted);
   cursor: default;
   font-size: 12px;
-  padding: 12px 16px;
+  padding-top: 12px;
+  padding-bottom: 12px;
 }
 
 .session-name {
@@ -336,6 +454,8 @@ defineExpose({ newSession, loadSessions });
   color: var(--text-muted);
   margin-top: 2px;
 }
+
+/* ── Custom section ── */
 
 .custom-section {
   border-top: 1px solid var(--surface);

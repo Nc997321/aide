@@ -32,17 +32,25 @@ pub struct ChatMessageItem {
     pub timestamp: u64,
 }
 
-pub struct WorkspaceState {
-    pub current: Mutex<Option<String>>,
+#[derive(Debug, Serialize, Clone)]
+pub struct WorkspaceInfo {
+    pub key: String,   // encoded directory name (unambiguous)
+    pub name: String,  // actual filesystem path
 }
 
-/// Resolve the active project root: explicit workspace > auto-detect from CWD
+/// WorkspaceState stores the encoded key (for session lookup) and
+/// resolved filesystem path (for file operations) of the active workspace.
+pub struct WorkspaceState {
+    pub key: Mutex<Option<String>>,
+    pub path: Mutex<Option<PathBuf>>,
+}
+
+/// Resolve the active project root: explicit workspace path > auto-detect from CWD
 fn project_root_for_commands(ws: &WorkspaceState) -> PathBuf {
-    if let Ok(current) = ws.current.lock() {
-        if let Some(path) = current.as_ref() {
-            let p = PathBuf::from(path);
-            if p.exists() {
-                return p;
+    if let Ok(path_guard) = ws.path.lock() {
+        if let Some(path) = path_guard.as_ref() {
+            if path.exists() {
+                return path.clone();
             }
         }
     }
@@ -271,40 +279,45 @@ fn claude_sessions_dir() -> PathBuf {
     claude_home().join("sessions")
 }
 
-fn our_sessions_dir() -> PathBuf {
+fn our_config_dir() -> PathBuf {
     user_home()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".claude-code-desktop")
-        .join("sessions")
+}
+
+fn our_sessions_dir() -> PathBuf {
+    our_config_dir().join("sessions")
+}
+
+fn config_path() -> PathBuf {
+    our_config_dir().join("config.json")
+}
+
+fn save_workspace_config(path: &str) -> Result<(), String> {
+    let dir = our_config_dir();
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
+    let json = serde_json::json!({ "workspace": path });
+    fs::write(config_path(), serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("Failed to write config: {}", e))
+}
+
+/// Returns the persisted workspace path, if any.
+pub fn load_workspace_config() -> Option<String> {
+    let path = config_path();
+    if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(v) = serde_json::from_str::<Value>(&content) {
+                return v.get("workspace").and_then(|w| w.as_str()).map(|s| s.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Encode a filesystem path for Claude Code's directory naming:
 /// `C:\document\owner\aide` → `C--document-owner-aide`
 fn encode_project_path(path: &str) -> String {
     path.replace(':', "-").replace('\\', "-").replace('/', "-")
-}
-
-/// Decode back (best effort): `C--document-owner` → `C:\document\owner`
-fn decode_project_path(encoded: &str) -> String {
-    let mut result = String::new();
-    let mut chars = encoded.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '-' {
-            // Check context: after a single letter at start, it's the colon separator
-            if result.len() == 1 {
-                result.push(':');
-            } else {
-                result.push('\\');
-            }
-            // Skip any consecutive dashes
-            while chars.peek() == Some(&'-') {
-                chars.next();
-            }
-        } else {
-            result.push(ch);
-        }
-    }
-    result
 }
 
 /// Find the .jsonl file for a session in the current project
@@ -392,8 +405,14 @@ pub fn list_sessions(
 ) -> Result<Vec<Session>, String> {
     let mut sessions: Vec<Session> = Vec::new();
 
-    let root = project_root_for_commands(&workspace_state);
-    let encoded = encode_project_path(&root.to_string_lossy());
+    let encoded = if let Ok(key_guard) = workspace_state.key.lock() {
+        match key_guard.as_ref() {
+            Some(key) => key.clone(),
+            None => return Ok(sessions),
+        }
+    } else {
+        return Ok(sessions);
+    };
     let proj_dir = claude_projects_dir().join(&encoded);
 
     if !proj_dir.exists() {
@@ -441,27 +460,68 @@ pub fn list_sessions(
 #[tauri::command]
 pub fn set_workspace(
     workspace_state: State<'_, WorkspaceState>,
+    key: String,
     path: String,
 ) -> Result<(), String> {
-    let mut current = workspace_state.current.lock().map_err(|e| e.to_string())?;
-    *current = Some(path);
+    {
+        let mut k = workspace_state.key.lock().map_err(|e| e.to_string())?;
+        *k = Some(key.clone());
+    }
+    {
+        let mut p = workspace_state.path.lock().map_err(|e| e.to_string())?;
+        *p = Some(PathBuf::from(path));
+    }
+    // Best-effort persist — don't block workspace switch on config write
+    let _ = save_workspace_config(&key);
     Ok(())
 }
 
+/// Resolve a real filesystem path from an encoded workspace key.
+/// Uses DFS: try each dash as either separator or literal, check filesystem.
+fn resolve_path_from_key(key: &str) -> Option<String> {
+    let mut chars = key.chars();
+    let drive = chars.next()?;
+    chars.next()?; // first -
+    chars.next()?; // second -
+    let rest: String = chars.collect();
+    if rest.is_empty() {
+        let path = format!("{}:\\", drive);
+        return if PathBuf::from(&path).exists() { Some(path) } else { None };
+    }
+    try_decode(&format!("{}:\\", drive), &rest)
+}
+
+fn try_decode(prefix: &str, remaining: &str) -> Option<String> {
+    for (i, ch) in remaining.char_indices() {
+        if ch == '-' {
+            let component = &remaining[..i];
+            let candidate = format!("{}{}", prefix, component);
+            if !component.is_empty() && PathBuf::from(&candidate).exists() {
+                let next_prefix = format!("{}{}\\", prefix, component);
+                if let Some(result) = try_decode(&next_prefix, &remaining[i + 1..]) {
+                    return Some(result);
+                }
+            }
+        }
+    }
+    let final_path = format!("{}{}", prefix, remaining);
+    if PathBuf::from(&final_path).exists() { Some(final_path) } else { None }
+}
+
 #[tauri::command]
-pub fn list_workspaces() -> Result<Vec<String>, String> {
+pub fn list_workspaces() -> Result<Vec<WorkspaceInfo>, String> {
     let dir = claude_projects_dir();
     if !dir.exists() {
         return Ok(Vec::new());
     }
-    let mut workspaces: Vec<String> = Vec::new();
+    let mut workspaces = Vec::new();
     let read_dir = fs::read_dir(&dir).map_err(|e| format!("Failed to read projects dir: {}", e))?;
     for entry in read_dir {
         let Ok(entry) = entry else { continue; };
         if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            let encoded = entry.file_name().to_string_lossy().to_string();
-            let decoded = decode_project_path(&encoded);
-            workspaces.push(decoded);
+            let key = entry.file_name().to_string_lossy().to_string();
+            let name = resolve_path_from_key(&key).unwrap_or_else(|| key.clone());
+            workspaces.push(WorkspaceInfo { key, name });
         }
     }
     Ok(workspaces)

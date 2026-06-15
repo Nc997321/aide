@@ -57,9 +57,14 @@ async function onSessionUpdated() {
   await sidebarRef.value?.loadSessions();
 }
 
-async function onWorkspaceChanged(_path: string) {
+async function onFileTreeWsChanged(_path: string) {
   activeSessionId.value = "";
   await sidebarRef.value?.loadSessions();
+}
+
+async function onSidebarWsChanged(_path: string) {
+  activeSessionId.value = "";
+  await fileTreeRef.value?.loadRoot();
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -83,7 +88,7 @@ onUnmounted(() => {
   <div class="app-layout">
     <!-- Left panel -->
     <div class="panel-left" :style="{ width: leftWidth + 'px' }">
-      <SidebarLeft ref="sidebarRef" :active-session-id="activeSessionId" @session-changed="onSessionChanged" />
+      <SidebarLeft ref="sidebarRef" :active-session-id="activeSessionId" @session-changed="onSessionChanged" @workspace-changed="onSidebarWsChanged" />
     </div>
 
     <!-- Resize handle left -->
@@ -107,7 +112,7 @@ onUnmounted(() => {
 
     <!-- Right panel -->
     <div class="panel-right" :style="{ width: rightWidth + 'px' }">
-      <FileTree ref="fileTreeRef" @workspace-changed="onWorkspaceChanged" />
+      <FileTree ref="fileTreeRef" @workspace-changed="onFileTreeWsChanged" />
     </div>
 
     <ContextMenu />
