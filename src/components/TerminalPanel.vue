@@ -432,7 +432,10 @@ onUnmounted(() => {
           <div class="preview-empty__title">New Session</div>
           <div class="preview-empty__hint">Press Enter to start</div>
         </div>
-        <div v-else-if="previewHtml" class="preview-messages" v-html="previewHtml"></div>
+        <template v-else-if="previewHtml">
+          <div class="preview-messages" v-html="previewHtml"></div>
+          <div class="preview-footer">Press Enter to continue</div>
+        </template>
         <div v-else class="preview-empty">
           <div class="preview-empty__title">Session {{ (props.sessionId || '').substring(0, 8) }}</div>
           <div class="preview-empty__hint">Press Enter to start</div>
@@ -481,7 +484,15 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding-bottom: 32px;
+}
+
+.preview-footer {
+  margin-top: 24px;
+  padding-top: 12px;
+  border-top: 1px solid var(--surface-hover);
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .preview-msg__who {
