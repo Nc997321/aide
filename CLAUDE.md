@@ -187,6 +187,7 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 | `delete_file` | `path` | 删除文件或目录 |
 | `create_file` | `parent_path, name` | 新建空文件 |
 | `create_dir` | `parent_path, name` | 新建目录 |
+| `git_diff_files` | — | 执行 `git status --porcelain`，返回 `[{path, status}]`，用于文件树"更改"tab |
 
 ### 会话持久化
 
@@ -236,8 +237,10 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 
 ### FileTree.vue
 - 路径栏 `📁 root · branch`，rtl 省略
+- **Tab 栏**：文件 / 更改 — 切换文件树和 git diff 视图
 - 懒加载子目录（`list_directory`）
 - **左键点击文件** → 内置查看器 `FileViewer`（语法高亮 + Markdown 渲染）
+- **更改 tab**：调用 `git_diff_files` 列出 modified/added/deleted 文件，点击在 FileViewer 中打开
 - **右键菜单**：查看 / 其他方式打开（系统默认程序）/ 复制路径 / 复制相对路径 / 删除
 - 目录右键菜单：展开/折叠 / 复制路径 / 新建文件 / 新建文件夹 / 删除
 
@@ -255,16 +258,16 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 - **全屏 xterm.js 终端** — 多会话 PTY，完整 Claude 交互
 - **多会话并行存活** — 切换 instant，不杀进程
 - **会话状态指示器** — 侧栏显示会话运行状态（running/waiting/attention），通过 `.jsonl` 事件类型判断
-- **会话预览** — 无 PTY 时展示完整历史，按 Enter 启动
+- **会话预览** — 无 PTY 时展示 Markdown 渲染历史，按 Enter 或点击启动（HTML div + window 级键盘拦截）
 - 会话管理 — 适配 `~/.claude/` 真实存储（列表/创建/删除/重命名）
 - 工作区管理（`list_workspaces` / `set_workspace`）
-- 文件树（懒加载，新建/删除文件目录）
+- 文件树（懒加载，新建/删除文件目录，**"更改"tab 显示 git diff 文件列表**）
 - 右键菜单（4 层架构，文件/目录/树空白/会话）
 - **文件查看器** — 左键点击内置查看，highlight.js 语法高亮 + marked .md 渲染，右键"其他方式打开"调系统程序
 - Ctrl+N 新建会话
+- **窗口状态记忆** — `tauri-plugin-window-state` 自动保存/恢复窗口位置和大小
 
 ### 未实现 / 待改进
-- 工作区切换 UI（后端已实现，前端未接入）
 - 自定义功能区读真实配置
 - 会话搜索
 - 窗口状态记忆

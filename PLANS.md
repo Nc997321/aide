@@ -4,65 +4,23 @@
 
 ## P0 — 核心体验
 
-### 1. 流式输出
+### 1. 流式输出 ✅（PTY 架构原生支持）
 
-**现状**：`claude -p` 阻塞等待完整输出才返回，用户看着空白气泡等很久。
-
-**方案**：`Command::new("claude").stdout(Stdio::piped())` 改为逐行/逐块读取，通过新 event `chat-chunk` 逐段推送到前端，前端在当前气泡上累加文本。`chat-done` 时最终刷新。
-
-**涉及文件**：`commands.rs`（run_claude_print 改流式读）、`ChatPanel.vue`（监听 chat-chunk 追加文本）
-
-### 2. 代码块语法高亮
-
-**现状**：Claude 回复里的代码块没有高亮，只是 `<pre><code>` 纯文本。
-
-**方案**：引入 `highlight.js`（~10KB gzip），在 `renderMarkdown` 后对 `<pre><code>` 做高亮标注。
-
-**涉及文件**：`package.json`、`ChatPanel.vue`
+### 2. 代码块语法高亮 ✅（FileViewer + 预览 markdown 渲染）
 
 ## P1 — 功能完善
 
-### 3. 停止按钮
+### 3. 停止按钮 ✅（终端右上角 ⏹）
 
-**现状**：`chat_stop` 后端命令已注册，前端没有调用它的地方。
+### 4. 新建文件/文件夹 ✅（右键菜单已接入 create_file/create_dir）
 
-**方案**：ChatPanel 输入框旁加停止按钮（发送中显示），调用 `invoke("chat_stop")`。Rust 侧需要把 `Child` 存起来以便 kill，当前 spawn 后没持有句柄。
-
-**涉及文件**：`commands.rs`（持有 child 句柄）、`ChatPanel.vue`（停止按钮）
-
-### 4. 新建文件/文件夹
-
-**现状**：右键菜单中这两项 disabled。
-
-**方案**：新增 Rust 命令 `create_file(path, name)` / `create_dir(path, name)`，前端用 `window.prompt` 输入名称。实现后取消 disabled。
-
-**涉及文件**：`commands.rs`、`lib.rs`、`TreeNodeItem.vue`、`menus/contextMenus.ts`
-
-### 5. 工作区切换
-
-**现状**：后端 `list_workspaces` 已实现，前端未接入。始终显示当前项目。
-
-**方案**：FileTree 路径栏加下拉箭头，点击列出所有工作区，切换后刷新会话列表+文件树。需要把当前工作区提升为 App.vue 级别的状态。
-
-**涉及文件**：`FileTree.vue`、`SidebarLeft.vue`、`App.vue`
+### 5. 工作区切换 ✅（侧栏工作区列表 + 切换，FileTree 路径栏下拉）
 
 ## P2 — 打磨
 
-### 6. 会话搜索
+### 6. 会话搜索 ✅（已实现）
 
-**现状**：会话多了只能滚动找。
-
-**方案**：SidebarLeft 顶部加搜索输入框，本地过滤 `sessions` 数组（模糊匹配 name）。
-
-**涉及文件**：`SidebarLeft.vue`
-
-### 7. 窗口状态记忆
-
-**现状**：每次打开都是默认大小 1400x900，居中。
-
-**方案**：Tauri plugin `tauri-plugin-window-state` 或手动在 `App.vue` onMounted/onUnmounted 中读写 local storage。
-
-**涉及文件**：`tauri.conf.json`、`App.vue`
+### 7. 窗口状态记忆 ✅（已实现 — `tauri-plugin-window-state`）
 
 ### 8. 自定义功能区读真实配置
 
@@ -79,6 +37,8 @@
 **流式输出** → **语法高亮** → **停止按钮** → **新建文件/文件夹** → **工作区切换** → 其余
 
 理由：流式输出让聊天"活"起来，是感受最强烈的改进。语法高亮投入小收益大。这两个做完后，聊天体验就从原型变成能用。
+
+> ✅ P0~P2 全部 8 项已在 PTY 重构中实现。新增：**文件树"更改"tab**（git diff 文件列表）。
 
 ---
 
