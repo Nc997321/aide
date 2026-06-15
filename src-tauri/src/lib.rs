@@ -36,6 +36,7 @@ pub fn run() {
             commands::delete_session,
             commands::rename_session,
             commands::load_messages,
+            commands::session_last_event,
             commands::list_workspaces,
             commands::set_workspace,
         ])

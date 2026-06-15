@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
+import { useSessionState } from "../composables/useSessionState";
 import "xterm/css/xterm.css";
 
 const props = defineProps<{ sessionId: string }>();
@@ -38,6 +39,70 @@ const liveDisplayIds = reactive(new Set<string>());
 
 // Currently visible session
 let currentSid = "";
+
+// ── Session state tracking (shared with SidebarLeft) ──
+
+const { setSessionState, removeSessionState } = useSessionState();
+const periodicTimers = new Map<string, ReturnType<typeof setInterval>>();
+
+/** Read the last ~3 rendered lines from a live terminal's buffer. */
+function terminalTailLines(ptyId: string): string {
+  const ls = liveSessions.get(ptyId);
+  if (!ls) return "";
+  const buf = ls.terminal.buffer.active;
+  const last = Math.max(0, buf.length - 3);
+  const lines: string[] = [];
+  for (let i = last; i < buf.length; i++) {
+    const line = buf.getLine(i);
+    if (line) lines.push(line.translateToString(true));
+  }
+  return lines.join("\n");
+}
+
+function startPeriodicCheck(ptyId: string) {
+  if (periodicTimers.has(ptyId)) return;
+
+  // First check after 2s (let Claude initialize)
+  setTimeout(() => checkSessionState(ptyId), 2000);
+
+  // Then check every 2s — authoritative state from .jsonl
+  const timer = setInterval(() => checkSessionState(ptyId), 2000);
+  periodicTimers.set(ptyId, timer);
+}
+
+function stopPeriodicCheck(ptyId: string) {
+  const timer = periodicTimers.get(ptyId);
+  if (timer) {
+    clearInterval(timer);
+    periodicTimers.delete(ptyId);
+  }
+}
+
+async function checkSessionState(ptyId: string) {
+  const displayId = ptyToDisplay.get(ptyId) || ptyId;
+
+  // Permission prompt (check first — overrides everything)
+  const tail = terminalTailLines(ptyId);
+  if (/Do you want to proceed|\[y\/n\]|needs?\s+(your\s+)?permission/i.test(tail)) {
+    setSessionState(displayId, "attention");
+    return;
+  }
+
+  // Authoritative: .jsonl last event type
+  // Only use it to CONFIRM "waiting" — never to force "running"
+  try {
+    const lastEvent = await invoke<string | null>("session_last_event", { sessionId: displayId });
+    if (lastEvent === "assistant") {
+      setSessionState(displayId, "waiting");
+      return;
+    }
+  } catch (_) { /* fall through */ }
+
+  // Fallback: if Claude shows `> ` prompt, confirm waiting
+  if (/>\s*$/.test(tail.trimEnd())) {
+    setSessionState(displayId, "waiting");
+  }
+}
 
 // ── Terminal factory ──
 
@@ -176,6 +241,10 @@ function startClaude() {
   // I/O bound directly to this session
   terminal.onData((data) => {
     invoke("pty_write", { sessionId: ptyId, data }).catch(() => {});
+    // User pressed Enter → just sent a message → Claude will start processing
+    if (data === "\r") {
+      setSessionState(sid, "running");
+    }
   });
 
   const observer = new ResizeObserver(() => {
@@ -188,6 +257,9 @@ function startClaude() {
   liveDisplayIds.add(sid);
   currentSid = sid;
 
+  startPeriodicCheck(ptyId);
+  // Default to waiting — session just opened, Claude isn't processing yet
+  setSessionState(sid, "waiting");
   terminal.writeln("Starting Claude...\r");
 
   invoke("pty_spawn_claude", { sessionId: ptyId, rows: terminal.rows, cols: terminal.cols })
@@ -212,6 +284,10 @@ function destroyLiveSession(ptyId: string) {
   const displayId = ptyToDisplay.get(ptyId) || ptyId;
   liveDisplayIds.delete(displayId);
   ptyToDisplay.delete(ptyId);
+
+  // Clean up state tracking
+  removeSessionState(displayId);
+  stopPeriodicCheck(ptyId);
 
   // If we were viewing this session, fall back to preview
   if (currentSid === displayId || currentSid === ptyId) {
@@ -254,6 +330,10 @@ async function scheduleMigration(placeholderId: string) {
       ptyToDisplay.set(placeholderId, real.id);
       liveDisplayIds.delete(placeholderId);
       liveDisplayIds.add(real.id);
+
+      // Migrate session state key (keep whatever state the PTY is in)
+      removeSessionState(placeholderId);
+
       invoke("pty_rename_session", { oldId: placeholderId, newId: real.id }).catch(() => {});
     }
   } catch (_) { /* best effort */ }
@@ -286,6 +366,9 @@ onMounted(async () => {
 
 onUnmounted(() => {
   unlistenPty?.();
+  // Clean up all timers
+  for (const [, timer] of periodicTimers) clearInterval(timer);
+  periodicTimers.clear();
   // Destroy all live sessions
   for (const [ptyId] of liveSessions) {
     invoke("pty_kill", { sessionId: ptyId }).catch(() => {});

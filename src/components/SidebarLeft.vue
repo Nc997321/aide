@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useContextMenu } from "../composables/useContextMenu";
+import { useSessionState } from "../composables/useSessionState";
 import { sessionMenuItems } from "../menus/contextMenus";
 
 interface Session {
@@ -72,6 +73,7 @@ async function loadSessions() {
 }
 
 const { show } = useContextMenu();
+const { state: sessionState } = useSessionState();
 
 function selectSession(id: string) {
   emit("session-changed", id);
@@ -148,7 +150,12 @@ defineExpose({ newSession, loadSessions });
         v-for="s in filteredSessions"
         :key="s.id"
         class="session-item"
-        :class="{ active: props.activeSessionId === s.id }"
+        :class="{
+          active: props.activeSessionId === s.id,
+          running: sessionState[s.id] === 'running',
+          waiting: sessionState[s.id] === 'waiting',
+          attention: sessionState[s.id] === 'attention',
+        }"
         @click="selectSession(s.id)"
         @contextmenu.prevent="onSessionContextMenu($event, s.id)"
       >
@@ -243,6 +250,7 @@ defineExpose({ newSession, loadSessions });
   padding: 8px 16px;
   cursor: pointer;
   border-left: 2px solid transparent;
+  border-right: 2px solid transparent;
   transition: all 0.1s;
 }
 
@@ -253,6 +261,59 @@ defineExpose({ newSession, loadSessions });
 .session-item.active {
   background: var(--surface);
   border-left-color: var(--accent);
+}
+
+/* Running: green shimmer sweeping right→left */
+.session-item.running {
+  position: relative;
+  overflow: hidden;
+}
+.session-item.running::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(166, 227, 161, 0.06) 40%,
+    rgba(166, 227, 161, 0.12) 50%,
+    rgba(166, 227, 161, 0.06) 60%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: sweep-right 2.5s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes sweep-right {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Waiting: subtle green right accent */
+.session-item.waiting {
+  border-right-color: var(--accent-green);
+}
+
+/* Attention: amber shimmer */
+.session-item.attention {
+  position: relative;
+  overflow: hidden;
+}
+.session-item.attention::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(249, 226, 175, 0.06) 40%,
+    rgba(249, 226, 175, 0.12) 50%,
+    rgba(249, 226, 175, 0.06) 60%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: sweep-right 1.5s ease-in-out infinite;
+  pointer-events: none;
 }
 
 .session-item.muted {

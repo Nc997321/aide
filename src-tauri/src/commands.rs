@@ -524,6 +524,40 @@ pub fn load_messages(
     Ok(messages)
 }
 
+/// Return the last event type ("user" / "assistant" / …) from the .jsonl for a session.
+/// Returns None if the session file doesn't exist or has no events yet.
+#[tauri::command]
+pub fn session_last_event(
+    workspace_state: State<'_, WorkspaceState>,
+    session_id: String,
+) -> Result<Option<String>, String> {
+    let root = project_root_for_commands(&workspace_state);
+    let encoded = encode_project_path(&root.to_string_lossy());
+    let jsonl_path = claude_projects_dir()
+        .join(&encoded)
+        .join(format!("{}.jsonl", session_id));
+
+    if !jsonl_path.exists() {
+        return Ok(None);
+    }
+
+    let file = fs::File::open(&jsonl_path)
+        .map_err(|e| format!("Failed to open session file: {}", e))?;
+    let reader = BufReader::new(file);
+    let last_line = reader.lines().filter_map(|l| l.ok()).last();
+
+    match last_line {
+        Some(line) => {
+            if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                Ok(v.get("type").and_then(|t| t.as_str()).map(|s| s.to_string()))
+            } else {
+                Ok(None)
+            }
+        }
+        None => Ok(None),
+    }
+}
+
 fn our_session_name(session_id: &str) -> Option<String> {
     let dir = our_sessions_dir();
     let path = dir.join(format!("{}.json", session_id));
