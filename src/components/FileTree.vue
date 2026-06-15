@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, onMounted, onUnmounted, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import TreeNodeItem from "./TreeNodeItem.vue";
 import { useContextMenu } from "../composables/useContextMenu";
@@ -11,6 +11,11 @@ interface FileEntry {
   path: string;
   is_dir: boolean;
   children: FileEntry[] | null;
+}
+
+interface DiffEntry {
+  path: string;
+  status: string;
 }
 
 const projectInfo = ref({ root: "...", name: "...", branch: "" });
@@ -25,6 +30,43 @@ interface FileWsInfo {
 }
 const workspaces = ref<FileWsInfo[]>([]);
 const showWsDropdown = ref(false);
+
+// ── Tab switching ──
+
+type TabId = "files" | "changes";
+const activeTab = ref<TabId>("files");
+
+// ── Diff files ──
+
+const diffFiles = ref<DiffEntry[]>([]);
+const diffLoading = ref(false);
+
+async function loadDiffFiles() {
+  diffLoading.value = true;
+  try {
+    diffFiles.value = await invoke<DiffEntry[]>("git_diff_files");
+  } catch (_) {
+    diffFiles.value = [];
+  }
+  diffLoading.value = false;
+}
+
+function resolveDiffPath(rel: string): string {
+  return projectInfo.value.root.replace(/\\/g, "/") + "/" + rel;
+}
+
+const statusLabel: Record<string, string> = {
+  "M": "已修改",
+  "A": "新增",
+  "D": "已删除",
+  "R": "重命名",
+  "??": "未跟踪",
+};
+
+function switchTab(tab: TabId) {
+  activeTab.value = tab;
+  if (tab === "changes") loadDiffFiles();
+}
 
 const emit = defineEmits<{
   "workspace-changed": [path: string];
@@ -169,7 +211,25 @@ defineExpose({ loadRoot });
       </div>
     </div>
 
-    <div class="tree-content" @contextmenu="onAreaContextMenu">
+    <!-- Tab bar -->
+    <div class="tab-bar">
+      <button
+        class="tab-btn"
+        :class="{ active: activeTab === 'files' }"
+        @click="switchTab('files')"
+      >文件</button>
+      <button
+        class="tab-btn"
+        :class="{ active: activeTab === 'changes' }"
+        @click="switchTab('changes')"
+      >
+        更改
+        <span v-if="diffFiles.length > 0" class="tab-badge">{{ diffFiles.length }}</span>
+      </button>
+    </div>
+
+    <!-- Files tab -->
+    <div class="tree-content" @contextmenu="onAreaContextMenu" v-show="activeTab === 'files'">
       <div v-if="loading" class="tree-status">加载中...</div>
       <div v-else-if="errorMsg" class="tree-status error">{{ errorMsg }}</div>
       <template v-else>
@@ -186,6 +246,24 @@ defineExpose({ loadRoot });
           @open="openFile"
         />
         <div v-if="treeData.length === 0" class="tree-status">目录为空</div>
+      </template>
+    </div>
+
+    <!-- Changes tab -->
+    <div class="tree-content" v-show="activeTab === 'changes'">
+      <div v-if="diffLoading" class="tree-status">加载中...</div>
+      <template v-else>
+        <div
+          v-for="f in diffFiles"
+          :key="f.path"
+          class="diff-item"
+          :class="{ selected: selectedPath === f.path }"
+          @click="openFile(resolveDiffPath(f.path))"
+        >
+          <span class="diff-status" :class="'diff-' + (f.status === '??' ? 'un' : f.status)">{{ f.status }}</span>
+          <span class="diff-path">{{ f.path }}</span>
+        </div>
+        <div v-if="diffFiles.length === 0" class="tree-status">没有更改</div>
       </template>
     </div>
   </div>
@@ -307,5 +385,94 @@ defineExpose({ loadRoot });
 
 .tree-status.error {
   color: var(--accent-red);
+}
+
+/* ── Tab bar ── */
+
+.tab-bar {
+  display: flex;
+  border-bottom: 1px solid var(--surface);
+  flex-shrink: 0;
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 7px 0;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.tab-btn:hover {
+  color: var(--text-primary);
+}
+.tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.tab-badge {
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  min-width: 18px;
+  text-align: center;
+}
+.tab-btn.active .tab-badge {
+  background: var(--accent);
+  color: var(--bg-primary);
+}
+
+/* ── Diff items ── */
+
+.diff-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 16px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+  border-left: 2px solid transparent;
+}
+.diff-item:hover {
+  background: var(--surface);
+}
+.diff-item.selected {
+  background: var(--surface);
+  border-left-color: var(--accent);
+}
+
+.diff-status {
+  flex-shrink: 0;
+  width: 22px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
+  text-transform: uppercase;
+}
+.diff-M { background: rgba(249, 226, 175, 0.15); color: #f9e2af; }
+.diff-A { background: rgba(166, 227, 161, 0.15); color: #a6e3a1; }
+.diff-D { background: rgba(243, 139, 168, 0.15); color: #f38ba8; }
+.diff-R { background: rgba(137, 180, 250, 0.15); color: #89b4fa; }
+.diff-un { background: rgba(108, 112, 134, 0.15); color: #6c7086; }
+
+.diff-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
 }
 </style>

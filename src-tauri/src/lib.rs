@@ -41,6 +41,7 @@ pub fn run() {
             commands::session_last_event,
             commands::list_workspaces,
             commands::set_workspace,
+            commands::git_diff_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
