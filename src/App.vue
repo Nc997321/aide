@@ -112,7 +112,7 @@ onUnmounted(() => {
 
     <!-- Right panel -->
     <div class="panel-right" :style="{ width: rightWidth + 'px' }">
-      <FileTree ref="fileTreeRef" @workspace-changed="onFileTreeWsChanged" />
+      <FileTree ref="fileTreeRef" :session-id="activeSessionId" @workspace-changed="onFileTreeWsChanged" />
     </div>
 
     <ContextMenu />

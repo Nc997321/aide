@@ -42,6 +42,8 @@ pub fn run() {
             commands::list_workspaces,
             commands::set_workspace,
             commands::git_diff_files,
+            commands::git_stage_all,
+            commands::git_revert_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

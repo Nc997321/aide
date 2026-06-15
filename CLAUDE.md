@@ -36,7 +36,8 @@ aide/
 │   │   ├── useContextMenu.ts   # 右键菜单状态层（模块级 ref 单例）
 │   │   ├── useSessionState.ts  # 会话运行状态（模块级 reactive 单例）
 │   │   ├── useModal.ts         # 弹窗状态层
-│   │   └── useFileViewer.ts    # 文件查看器状态层（模块级 ref 单例）
+│   │   ├── useFileViewer.ts    # 文件查看器状态层（模块级 ref 单例）
+│   │   └── useConversationChanges.ts  # 会话变更追踪（按轮次分组 + 撤回）
 │   ├── menus/
 │   │   └── contextMenus.ts     # 右键菜单配置层（工厂函数，与组件解耦）
 │   └── styles/global.css       # 暗色主题 CSS 变量 + 滚动条 + 菜单动画
@@ -187,7 +188,9 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 | `delete_file` | `path` | 删除文件或目录 |
 | `create_file` | `parent_path, name` | 新建空文件 |
 | `create_dir` | `parent_path, name` | 新建目录 |
-| `git_diff_files` | — | 执行 `git status --porcelain`，返回 `[{path, status}]`，用于文件树"更改"tab |
+| `git_diff_files` | — | `git diff --numstat`，返回 `[{path, additions, deletions}]`，用于会话变更日志 |
+| `git_stage_all` | — | `git add -A`，Claude 回复前打快照 |
+| `git_revert_file` | `path` | `git checkout -- <path>`，撤回单个文件到快照状态 |
 
 ### 会话持久化
 
@@ -237,12 +240,20 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 
 ### FileTree.vue
 - 路径栏 `📁 root · branch`，rtl 省略
-- **Tab 栏**：文件 / 更改 — 切换文件树和 git diff 视图
+- **Tab 栏**：文件 / 会话变更 — 切换文件树和 Claude 对话变更日志
 - 懒加载子目录（`list_directory`）
 - **左键点击文件** → 内置查看器 `FileViewer`（语法高亮 + Markdown 渲染）
-- **更改 tab**：调用 `git_diff_files` 列出 modified/added/deleted 文件，点击在 FileViewer 中打开
+- **会话变更 tab**：按 Claude 对话轮次分组显示修改的文件（增删行数），支持 ↶ 撤回单个文件或整轮修改
+  - Claude 回复前自动 `git add -A` 打快照，完成后 `git diff --numstat` 算差异
+  - 撤回用 `git checkout -- <path>` 恢复到快照状态
 - **右键菜单**：查看 / 其他方式打开（系统默认程序）/ 复制路径 / 复制相对路径 / 删除
 - 目录右键菜单：展开/折叠 / 复制路径 / 新建文件 / 新建文件夹 / 删除
+
+### useConversationChanges.ts
+- 监听 `useSessionState` 状态变化，在 Claude 回复前后自动打快照/算差异
+- 导出 `{ rounds, revertRound, revertSingleFile }`，按对话轮次分组
+- `git_stage_all` → （Claude 运行） → `git_diff_files` → 生成轮次记录
+- 撤回通过 `git_revert_file` 实现
 
 ### FileViewer.vue
 - 模块级 `useFileViewer` 单例状态层（`open(path)` / `close()`）
@@ -261,7 +272,7 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 - **会话预览** — 无 PTY 时展示 Markdown 渲染历史，按 Enter 或点击启动（HTML div + window 级键盘拦截）
 - 会话管理 — 适配 `~/.claude/` 真实存储（列表/创建/删除/重命名）
 - 工作区管理（`list_workspaces` / `set_workspace`）
-- 文件树（懒加载，新建/删除文件目录，**"更改"tab 显示 git diff 文件列表**）
+- 文件树（懒加载，新建/删除文件目录，**"会话变更"tab 按轮次分组 + 撤回**）
 - 右键菜单（4 层架构，文件/目录/树空白/会话）
 - **文件查看器** — 左键点击内置查看，highlight.js 语法高亮 + marked .md 渲染，右键"其他方式打开"调系统程序
 - Ctrl+N 新建会话

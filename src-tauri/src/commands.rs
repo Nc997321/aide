@@ -258,12 +258,14 @@ pub fn create_dir(parent_path: String, name: String) -> Result<(), String> {
     fs::create_dir_all(&dir_path).map_err(|e| format!("Failed to create directory: {}", e))
 }
 
-// ── Git diff files ──
+// ── Git: diff, stage, revert ──
 
 #[derive(Debug, Serialize, Clone)]
 pub struct DiffEntry {
     pub path: String,
-    pub status: String, // "M" | "A" | "D" | "R" | "??"
+    pub status: String,
+    pub additions: u32,
+    pub deletions: u32,
 }
 
 #[tauri::command]
@@ -275,26 +277,67 @@ pub fn git_diff_files(
         return Ok(Vec::new());
     }
 
+    // Use --numstat for line counts, fall back to --porcelain for status
     let output = std::process::Command::new("git")
-        .args(["status", "--porcelain"])
+        .args(["diff", "--numstat"])
         .current_dir(&root)
         .output()
-        .map_err(|e| format!("Failed to run git: {}", e))?;
+        .map_err(|e| format!("Failed to run git diff: {}", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut files: Vec<DiffEntry> = Vec::new();
 
     for line in stdout.lines() {
-        if line.len() < 3 {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 3 {
             continue;
         }
-        let status = line[..2].trim().to_string();
-        let path = line[3..].trim_end_matches('/').to_string();
-        // Skip files that look like they might be in filtered dirs (optional)
-        files.push(DiffEntry { path, status });
+        let nums: Vec<&str> = parts[0].split_whitespace().collect();
+        if nums.len() < 2 {
+            continue;
+        }
+        let additions = if nums[0] == "-" { 0 } else { nums[0].parse().unwrap_or(0) };
+        let deletions = if nums[1] == "-" { 0 } else { nums[1].parse().unwrap_or(0) };
+        files.push(DiffEntry {
+            path: parts[2].to_string(),
+            status: "M".to_string(),
+            additions,
+            deletions,
+        });
     }
 
     Ok(files)
+}
+
+#[tauri::command]
+pub fn git_stage_all(
+    workspace_state: State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    let root = project_root_for_commands(&workspace_state);
+    if !root.join(".git").exists() {
+        return Ok(());
+    }
+    std::process::Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(&root)
+        .output()
+        .map_err(|e| format!("Failed to git add: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn git_revert_file(
+    workspace_state: State<'_, WorkspaceState>,
+    path: String,
+) -> Result<(), String> {
+    let root = project_root_for_commands(&workspace_state);
+    // git checkout -- <path> reverts to the staged (or HEAD) version
+    std::process::Command::new("git")
+        .args(["checkout", "--", &path])
+        .current_dir(&root)
+        .output()
+        .map_err(|e| format!("Failed to revert: {}", e))?;
+    Ok(())
 }
 
 // ── Adapter: Claude Code Storage Helpers ──

@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import TreeNodeItem from "./TreeNodeItem.vue";
 import { useContextMenu } from "../composables/useContextMenu";
 import { useFileViewer } from "../composables/useFileViewer";
+import { useConversationChanges } from "../composables/useConversationChanges";
 import { fileTreeAreaMenuItems } from "../menus/contextMenus";
 
 interface FileEntry {
@@ -13,10 +14,7 @@ interface FileEntry {
   children: FileEntry[] | null;
 }
 
-interface DiffEntry {
-  path: string;
-  status: string;
-}
+const props = defineProps<{ sessionId: string }>();
 
 const projectInfo = ref({ root: "...", name: "...", branch: "" });
 const treeData = ref<FileEntry[]>([]);
@@ -36,36 +34,16 @@ const showWsDropdown = ref(false);
 type TabId = "files" | "changes";
 const activeTab = ref<TabId>("files");
 
-// ── Diff files ──
+// ── Conversation change log ──
 
-const diffFiles = ref<DiffEntry[]>([]);
-const diffLoading = ref(false);
-
-async function loadDiffFiles() {
-  diffLoading.value = true;
-  try {
-    diffFiles.value = await invoke<DiffEntry[]>("git_diff_files");
-  } catch (_) {
-    diffFiles.value = [];
-  }
-  diffLoading.value = false;
-}
+const { rounds, revertRound, revertSingleFile } = useConversationChanges(() => props.sessionId);
 
 function resolveDiffPath(rel: string): string {
   return projectInfo.value.root.replace(/\\/g, "/") + "/" + rel;
 }
 
-const statusLabel: Record<string, string> = {
-  "M": "已修改",
-  "A": "新增",
-  "D": "已删除",
-  "R": "重命名",
-  "??": "未跟踪",
-};
-
 function switchTab(tab: TabId) {
   activeTab.value = tab;
-  if (tab === "changes") loadDiffFiles();
 }
 
 const emit = defineEmits<{
@@ -223,8 +201,8 @@ defineExpose({ loadRoot });
         :class="{ active: activeTab === 'changes' }"
         @click="switchTab('changes')"
       >
-        更改
-        <span v-if="diffFiles.length > 0" class="tab-badge">{{ diffFiles.length }}</span>
+        会话变更
+        <span v-if="rounds.length > 0" class="tab-badge">{{ rounds.length }}</span>
       </button>
     </div>
 
@@ -249,21 +227,31 @@ defineExpose({ loadRoot });
       </template>
     </div>
 
-    <!-- Changes tab -->
+    <!-- Changes tab: per-round conversation change log -->
     <div class="tree-content" v-show="activeTab === 'changes'">
-      <div v-if="diffLoading" class="tree-status">加载中...</div>
+      <template v-if="rounds.length === 0">
+        <div class="tree-status">暂无变更 — 在终端里跟 Claude 对话，修改的文件会出现在这里</div>
+      </template>
       <template v-else>
-        <div
-          v-for="f in diffFiles"
-          :key="f.path"
-          class="diff-item"
-          :class="{ selected: selectedPath === f.path }"
-          @click="openFile(resolveDiffPath(f.path))"
-        >
-          <span class="diff-status" :class="'diff-' + (f.status === '??' ? 'un' : f.status)">{{ f.status }}</span>
-          <span class="diff-path">{{ f.path }}</span>
+        <div v-for="(round, ri) in [...rounds].reverse()" :key="ri" class="round-group">
+          <div class="round-header">
+            <span class="round-badge">轮 {{ round.index }}</span>
+            <span class="round-time">{{ round.time }}</span>
+            <span class="round-revert" title="撤回本轮所有修改" @click="revertRound(round)">↶ 撤回本轮</span>
+          </div>
+          <div
+            v-for="f in round.files"
+            :key="f.path"
+            class="diff-item"
+            :class="{ selected: selectedPath === f.path }"
+            @click="openFile(resolveDiffPath(f.path))"
+          >
+            <span class="diff-status diff-M">M</span>
+            <span class="diff-path">{{ f.path }}</span>
+            <span class="diff-stat">+{{ f.additions }}/-{{ f.deletions }}</span>
+            <span class="diff-revert" title="撤回此文件" @click.stop="revertSingleFile(round, f.path)">↶</span>
+          </div>
         </div>
-        <div v-if="diffFiles.length === 0" class="tree-status">没有更改</div>
       </template>
     </div>
   </div>
@@ -474,5 +462,65 @@ defineExpose({ loadRoot });
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-secondary);
+  flex: 1;
+}
+
+.diff-stat {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.diff-revert {
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s, background 0.1s;
+}
+.diff-item:hover .diff-revert {
+  opacity: 1;
+}
+.diff-revert:hover {
+  color: #f38ba8;
+  background: rgba(243, 139, 168, 0.12);
+}
+
+/* ── Round groups ── */
+
+.round-group {
+  border-bottom: 1px solid var(--surface);
+}
+
+.round-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--surface);
+}
+
+.round-badge {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.round-time {
+  flex: 1;
+}
+
+.round-revert {
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: color 0.1s;
+}
+.round-revert:hover {
+  color: #f38ba8;
 }
 </style>
