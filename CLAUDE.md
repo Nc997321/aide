@@ -144,6 +144,16 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 
 我们自己的元数据: `~/.claude-code-desktop/sessions/<sessionId>.json` — 只存 displayName，sessionId 直接使用 Claude Code 的 UUID。
 
+### 工作区系统
+
+`WorkspaceState` 存两个字段：
+- `key`：encoded 目录名（如 `C--document-owner-cypress-agent`），唯一标识，用于定位 `~/.claude/projects/<key>/` 下的会话
+- `path`：真实文件系统路径（如 `C:\document\owner\cypress-agent`），用于文件树、PTY cwd 等文件操作
+
+路径解析（`resolve_path_from_key`）：DFS 搜索文件系统，对每个 `-` 尝试分隔符或字面量的解读，找到磁盘上存在的路径。解决了编码有损（路径含 `-` 时无法区分）的问题。
+
+持久化：`set_workspace` 时 key 写到 `~/.claude-code-desktop/config.json`，启动时读回。
+
 ### 右键菜单系统（4 层）
 
 ```
@@ -188,8 +198,8 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 | `delete_session` | 删 `.jsonl` + pid JSON + 我们元数据 |
 | `rename_session` | 更新我们元数据的 displayName |
 | `session_last_event` | 读 `.jsonl` 最后一行，返回事件 type（`user`/`assistant`/`system`），用于判断 Claude 是否完成 |
-| `list_workspaces` | 扫描 `~/.claude/projects/` 下所有项目目录 |
-| `set_workspace` | 设置当前工作区 |
+| `list_workspaces` | 扫描 `~/.claude/projects/` 目录，返回 `[{key, name}]`，key 是 encoded 目录名，name 通过 DFS 文件系统搜索解析的真实路径 |
+| `set_workspace` | 设置当前工作区，`{key, path}` 分别存 key（用于查会话）和 path（用于文件操作） |
 
 ## 前端组件要点
 
@@ -198,6 +208,7 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 - `activeSessionId` ref 桥接 SidebarLeft ↔ TerminalPanel
 - `Ctrl+N` → `SidebarLeft.newSession()`
 - 监听 `session-updated` → 重新加载会话列表
+- **工作区切换**：监听 SidebarLeft 和 FileTree 的 `workspace-changed`，emit 链驱动另一端刷新
 - 面板宽度限制：左 200-450px，右 200-500px，中 min 400px
 
 ### TerminalPanel.vue（核心）
@@ -213,6 +224,8 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 - **注意**：动态创建的 DOM 元素不受 Vue scoped CSS 影响，terminal 相关样式放在非 scoped `<style>` 块
 
 ### SidebarLeft.vue
+- **工作区列表**：`list_workspaces` 加载全部工作区，活动工作区展开显示其会话，`▸` 三角旋转 90° 表示展开
+- 点击其他工作区 → `set_workspace({key, path})` → 加载会话 + emit `workspace-changed` 通知 FileTree 刷新
 - 会话列表从 `list_sessions` 加载，按时间戳倒序
 - 空列表时自动创建首个会话；`activeSessionId` 为 `new_` 时自动选真实会话
 - 相对时间显示（分钟前/小时前/天前）
