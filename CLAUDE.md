@@ -9,6 +9,8 @@
 | 桌面框架 | Tauri v2 (Rust 后端 + WebView 前端) |
 | 前端 | Vue 3 + Composition API + TypeScript |
 | 终端 | xterm.js 5.x + xterm-addon-fit |
+| 代码高亮 | highlight.js 11.x（仅打包 12 种语言） |
+| Markdown 渲染 | marked 18.x（文件查看器 .md 预览） |
 | 样式 | Tailwind CSS 3 + Catppuccin 暗色主题 |
 | 包管理 | pnpm |
 | Rust 编译 | MSVC 工具链（VS Build Tools 2022） |
@@ -28,11 +30,13 @@ aide/
 │   │   ├── FileTree.vue        # 右侧：路径栏 + 文件树（懒加载递归）
 │   │   ├── TreeNodeItem.vue    # 文件树递归节点（独立 SFC，构建时编译）
 │   │   ├── ContextMenu.vue     # 全局右键菜单组件（Teleport to body）
-│   │   └── ModalDialog.vue     # 通用弹窗（确认/输入）
+│   │   ├── ModalDialog.vue     # 通用弹窗（确认/输入）
+│   │   └── FileViewer.vue      # 文件查看器弹窗（highlight.js 语法高亮 + marked Markdown 渲染）
 │   ├── composables/
 │   │   ├── useContextMenu.ts   # 右键菜单状态层（模块级 ref 单例）
 │   │   ├── useSessionState.ts  # 会话运行状态（模块级 reactive 单例）
-│   │   └── useModal.ts         # 弹窗状态层
+│   │   ├── useModal.ts         # 弹窗状态层
+│   │   └── useFileViewer.ts    # 文件查看器状态层（模块级 ref 单例）
 │   ├── menus/
 │   │   └── contextMenus.ts     # 右键菜单配置层（工厂函数，与组件解耦）
 │   └── styles/global.css       # 暗色主题 CSS 变量 + 滚动条 + 菜单动画
@@ -219,8 +223,17 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 
 ### FileTree.vue
 - 路径栏 `📁 root · branch`，rtl 省略
-- 懒加载子目录（`list_directory`），点击打开文件
-- 右键菜单：刷新 / 新建文件 / 新建文件夹 / 删除
+- 懒加载子目录（`list_directory`）
+- **左键点击文件** → 内置查看器 `FileViewer`（语法高亮 + Markdown 渲染）
+- **右键菜单**：查看 / 其他方式打开（系统默认程序）/ 复制路径 / 复制相对路径 / 删除
+- 目录右键菜单：展开/折叠 / 复制路径 / 新建文件 / 新建文件夹 / 删除
+
+### FileViewer.vue
+- 模块级 `useFileViewer` 单例状态层（`open(path)` / `close()`）
+- **代码文件**：highlight.js 语法高亮，12 种语言自动匹配，Catppuccin 配色
+- **Markdown 文件**（`.md` / `.mdx`）：marked 渲染为排版 HTML（标题、表格、代码块语法高亮等）
+- 弹窗 90vw / 900px 宽，85vh 高，Esc 关闭
+- `read_file_content` 读文件，二进制/不可读文件显示错误
 
 ## 当前状态
 
@@ -234,6 +247,7 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 - 工作区管理（`list_workspaces` / `set_workspace`）
 - 文件树（懒加载，新建/删除文件目录）
 - 右键菜单（4 层架构，文件/目录/树空白/会话）
+- **文件查看器** — 左键点击内置查看，highlight.js 语法高亮 + marked .md 渲染，右键"其他方式打开"调系统程序
 - Ctrl+N 新建会话
 
 ### 未实现 / 待改进
