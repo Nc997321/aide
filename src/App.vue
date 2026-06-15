@@ -4,6 +4,7 @@ import TerminalPanel from "./components/TerminalPanel.vue";
 import FileTree from "./components/FileTree.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import ModalDialog from "./components/ModalDialog.vue";
+import FileViewer from "./components/FileViewer.vue";
 import { ref, onMounted, onUnmounted } from "vue";
 
 const leftWidth = ref(280);
@@ -111,6 +112,7 @@ onUnmounted(() => {
 
     <ContextMenu />
     <ModalDialog />
+    <FileViewer />
   </div>
 </template>
 

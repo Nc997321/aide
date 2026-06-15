@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import TreeNodeItem from "./TreeNodeItem.vue";
 import { useContextMenu } from "../composables/useContextMenu";
+import { useFileViewer } from "../composables/useFileViewer";
 import { fileTreeAreaMenuItems } from "../menus/contextMenus";
 
 interface FileEntry {
@@ -65,13 +66,11 @@ function selectFile(path: string) {
   selectedPath.value = path;
 }
 
-async function openFile(path: string) {
+const fileViewer = useFileViewer();
+
+function openFile(path: string) {
   selectFile(path);
-  try {
-    await invoke("file_open", { path });
-  } catch (e) {
-    errorMsg.value = `无法打开: ${e}`;
-  }
+  fileViewer.open(path);
 }
 
 async function loadRoot() {

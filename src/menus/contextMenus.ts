@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { MenuItem } from "../composables/useContextMenu";
 import { useModal } from "../composables/useModal";
+import { useFileViewer } from "../composables/useFileViewer";
 
 function sep(): MenuItem {
   return { label: "", separator: true };
@@ -16,8 +17,10 @@ export function fileMenuItems(
   onDeleted?: () => void,
 ): MenuItem[] {
   const fileName = path.split(/[/\\]/).pop() || path;
+  const viewer = useFileViewer();
   return [
-    { label: "打开", action: () => invoke("file_open", { path }) },
+    { label: "查看", action: () => viewer.open(path) },
+    { label: "其他方式打开", action: () => invoke("file_open", { path }) },
     { label: "复制路径", action: () => navigator.clipboard.writeText(path) },
     {
       label: "复制相对路径",
