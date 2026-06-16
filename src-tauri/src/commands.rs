@@ -518,7 +518,19 @@ pub fn list_sessions(
 
             // Get metadata from Claude's session records
             let (name, started_at) = claude_session_meta(&session_id)
-                .unwrap_or_else(|| ("未命名".to_string(), 0));
+                .unwrap_or_else(|| (session_id.clone(), 0));
+
+            // If timestamp is 0, fall back to file modification time (millis)
+            let timestamp = if started_at == 0 {
+                path.metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0)
+            } else {
+                started_at
+            };
 
             // Check our own metadata for a custom display name
             let display_name = our_session_name(&session_id)
@@ -529,7 +541,7 @@ pub fn list_sessions(
             sessions.push(Session {
                 id: session_id,
                 name: display_name,
-                timestamp: started_at,
+                timestamp,
                 last_message: last_msg,
             });
         }

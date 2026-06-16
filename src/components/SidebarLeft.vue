@@ -29,6 +29,7 @@ const emit = defineEmits<{
 const sessions = ref<Session[]>([]);
 const workspaces = ref<WorkspaceInfo[]>([]);
 const activeWorkspace = ref("");
+const expandedWorkspaces = ref(new Set<string>());
 const searchQuery = ref("");
 const customExpanded = ref(false);
 const loading = ref(true);
@@ -109,11 +110,19 @@ function selectSession(id: string) {
 }
 
 async function switchWorkspace(ws: WorkspaceInfo) {
-  if (ws.key === activeWorkspace.value) return;
+  if (ws.key === activeWorkspace.value) {
+    if (expandedWorkspaces.value.has(ws.key)) {
+      expandedWorkspaces.value.delete(ws.key);
+    } else {
+      expandedWorkspaces.value.add(ws.key);
+    }
+    return;
+  }
   try {
     await invoke("set_workspace", { key: ws.key, path: ws.name });
   } catch (_e) { return; }
   activeWorkspace.value = ws.key;
+  expandedWorkspaces.value.add(ws.key);
   emit("workspace-changed", ws.name);
   await loadSessions();
 }
@@ -160,6 +169,7 @@ onMounted(async () => {
     for (const ws of workspaces.value) {
       if (ws.name === info.root) {
         activeWorkspace.value = ws.key;
+        expandedWorkspaces.value.add(ws.key);
         break;
       }
     }
@@ -200,12 +210,12 @@ defineExpose({ newSession, loadSessions });
           :class="{ active: ws.key === activeWorkspace }"
           @click="switchWorkspace(ws)"
         >
-          <span class="ws-arrow" :class="{ expanded: ws.key === activeWorkspace }">&#x25B8;</span>
+          <span class="ws-arrow" :class="{ expanded: expandedWorkspaces.has(ws.key) }">&#x25B8;</span>
           <span class="ws-name">{{ workspaceLabel(ws) }}</span>
         </div>
 
-        <!-- Sessions (only for active workspace) -->
-        <template v-if="ws.key === activeWorkspace">
+        <!-- Sessions (only for active & expanded workspace) -->
+        <template v-if="ws.key === activeWorkspace && expandedWorkspaces.has(ws.key)">
           <div
             v-if="filteredSessions.length === 0 && sessions.length > 0"
             class="session-item muted"
