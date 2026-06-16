@@ -55,6 +55,31 @@ pub struct DiffEntry {
     pub deletions: u32,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct LastEventInfo {
+    pub event_type: Option<String>,
+    pub stop_reason: Option<String>,
+    pub timestamp: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ChangeFileData {
+    pub path: String,
+    #[serde(default = "default_status")]
+    pub status: String,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+fn default_status() -> String { "M".to_string() }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ChangeRoundData {
+    pub index: u32,
+    pub time: String,
+    pub files: Vec<ChangeFileData>,
+}
+
 // ── WorkspaceState ──
 
 pub struct WorkspaceState {

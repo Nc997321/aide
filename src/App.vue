@@ -2,6 +2,7 @@
 import SidebarLeft from "./components/SidebarLeft.vue";
 import TerminalPanel from "./components/TerminalPanel.vue";
 import FileTree from "./components/FileTree.vue";
+import ChangeLogPanel from "./components/ChangeLogPanel.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import ModalDialog from "./components/ModalDialog.vue";
 import FileViewer from "./components/FileViewer.vue";
@@ -9,8 +10,10 @@ import { ref, onMounted, onUnmounted } from "vue";
 
 const leftWidth = ref(280);
 const rightWidth = ref(300);
+const changeLogHeight = ref(220);
 const isDraggingLeft = ref(false);
 const isDraggingRight = ref(false);
+const isDraggingChangeLog = ref(false);
 const sidebarRef = ref<InstanceType<typeof SidebarLeft> | null>(null);
 const fileTreeRef = ref<InstanceType<typeof FileTree> | null>(null);
 const activeSessionId = ref("");
@@ -40,6 +43,22 @@ function onRightResizeStart(e: MouseEvent) {
   };
   const onUp = () => {
     isDraggingRight.value = false;
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+  };
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+
+function onChangeLogResizeStart(e: MouseEvent) {
+  isDraggingChangeLog.value = true;
+  const startY = e.clientY;
+  const startHeight = changeLogHeight.value;
+  const onMove = (ev: MouseEvent) => {
+    changeLogHeight.value = Math.max(100, Math.min(500, startHeight - ev.clientY + startY));
+  };
+  const onUp = () => {
+    isDraggingChangeLog.value = false;
     document.removeEventListener("mousemove", onMove);
     document.removeEventListener("mouseup", onUp);
   };
@@ -113,6 +132,12 @@ onUnmounted(() => {
     <!-- Right panel -->
     <div class="panel-right" :style="{ width: rightWidth + 'px' }">
       <FileTree ref="fileTreeRef" :session-id="activeSessionId" @workspace-changed="onFileTreeWsChanged" />
+      <div
+        class="resize-handle-h"
+        :class="{ active: isDraggingChangeLog }"
+        @mousedown="onChangeLogResizeStart"
+      />
+      <ChangeLogPanel :session-id="activeSessionId" :style="{ height: changeLogHeight + 'px' }" />
     </div>
 
     <ContextMenu />
@@ -168,6 +193,20 @@ onUnmounted(() => {
 
 .resize-handle:hover,
 .resize-handle.active {
+  background-color: var(--accent);
+}
+
+.resize-handle-h {
+  height: 3px;
+  cursor: row-resize;
+  background-color: transparent;
+  transition: background-color 0.15s;
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.resize-handle-h:hover,
+.resize-handle-h.active {
   background-color: var(--accent);
 }
 </style>

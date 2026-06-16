@@ -12,6 +12,7 @@ pub fn git_diff_files(
         return Ok(Vec::new());
     }
 
+    // Modified / deleted files (working tree vs index)
     let output = Command::new("git")
         .args(["diff", "--numstat"])
         .current_dir(&root)
@@ -26,18 +27,38 @@ pub fn git_diff_files(
         if parts.len() < 3 {
             continue;
         }
-        let nums: Vec<&str> = parts[0].split_whitespace().collect();
-        if nums.len() < 2 {
-            continue;
-        }
-        let additions = if nums[0] == "-" { 0 } else { nums[0].parse().unwrap_or(0) };
-        let deletions = if nums[1] == "-" { 0 } else { nums[1].parse().unwrap_or(0) };
+        let additions = if parts[0] == "-" { 0 } else { parts[0].parse().unwrap_or(0) };
+        let deletions = if parts[1] == "-" { 0 } else { parts[1].parse().unwrap_or(0) };
         files.push(DiffEntry {
             path: parts[2].to_string(),
             status: "M".to_string(),
             additions,
             deletions,
         });
+    }
+
+    // Untracked (new) files — git diff doesn't see them, so we scan separately
+    if let Ok(untracked) = Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .current_dir(&root)
+        .output()
+    {
+        let untracked_stdout = String::from_utf8_lossy(&untracked.stdout);
+        for path in untracked_stdout.lines() {
+            let file_path = root.join(path);
+            if !file_path.is_file() {
+                continue;
+            }
+            let additions = std::fs::read_to_string(&file_path)
+                .map(|c| c.lines().count() as u32)
+                .unwrap_or(0);
+            files.push(DiffEntry {
+                path: path.to_string(),
+                status: "A".to_string(),
+                additions,
+                deletions: 0,
+            });
+        }
     }
 
     Ok(files)

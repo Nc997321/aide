@@ -36,6 +36,12 @@ export interface DiffEntry {
   deletions: number;
 }
 
+export interface LastEventInfo {
+  event_type: string | null;
+  stop_reason: string | null;
+  timestamp: string | null;
+}
+
 export interface ChangeRound {
   index: number;
   time: string;
@@ -44,6 +50,7 @@ export interface ChangeRound {
 
 export interface ChangeFile {
   path: string;
+  status: string;
   additions: number;
   deletions: number;
 }

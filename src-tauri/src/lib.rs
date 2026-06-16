@@ -39,6 +39,8 @@ pub fn run() {
             commands::session::rename_session,
             commands::session::load_messages,
             commands::session::session_last_event,
+            commands::session::load_session_changes,
+            commands::session::save_session_changes,
             commands::workspace::list_workspaces,
             commands::workspace::set_workspace,
             commands::git::git_diff_files,

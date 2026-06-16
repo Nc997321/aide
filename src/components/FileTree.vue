@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import TreeNodeItem from "./TreeNodeItem.vue";
 import { useContextMenu } from "../composables/useContextMenu";
 import { useFileViewer } from "../composables/useFileViewer";
-import { useConversationChanges } from "../composables/useConversationChanges";
 import { fileTreeAreaMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
 import type { FileEntry, WorkspaceInfo } from "../types";
@@ -18,23 +17,6 @@ const expandedDirs = ref<Set<string>>(new Set());
 const selectedPath = ref<string>("");
 const workspaces = ref<WorkspaceInfo[]>([]);
 const showWsDropdown = ref(false);
-
-// ── Tab switching ──
-
-type TabId = "files" | "changes";
-const activeTab = ref<TabId>("files");
-
-// ── Conversation change log ──
-
-const { rounds, revertRound, revertSingleFile } = useConversationChanges(() => props.sessionId);
-
-function resolveDiffPath(rel: string): string {
-  return projectInfo.value.root.replace(/\\/g, "/") + "/" + rel;
-}
-
-function switchTab(tab: TabId) {
-  activeTab.value = tab;
-}
 
 const emit = defineEmits<{
   "workspace-changed": [path: string];
@@ -179,25 +161,8 @@ defineExpose({ loadRoot });
       </div>
     </div>
 
-    <!-- Tab bar -->
-    <div class="tab-bar">
-      <button
-        class="tab-btn"
-        :class="{ active: activeTab === 'files' }"
-        @click="switchTab('files')"
-      >文件</button>
-      <button
-        class="tab-btn"
-        :class="{ active: activeTab === 'changes' }"
-        @click="switchTab('changes')"
-      >
-        会话变更
-        <span v-if="rounds.length > 0" class="tab-badge">{{ rounds.length }}</span>
-      </button>
-    </div>
-
-    <!-- Files tab -->
-    <div class="tree-content" @contextmenu="onAreaContextMenu" v-show="activeTab === 'files'">
+    <!-- File tree -->
+    <div class="tree-content" @contextmenu="onAreaContextMenu">
       <div v-if="loading" class="tree-status">加载中...</div>
       <div v-else-if="errorMsg" class="tree-status error">{{ errorMsg }}</div>
       <template v-else>
@@ -217,39 +182,13 @@ defineExpose({ loadRoot });
       </template>
     </div>
 
-    <!-- Changes tab: per-round conversation change log -->
-    <div class="tree-content" v-show="activeTab === 'changes'">
-      <template v-if="rounds.length === 0">
-        <div class="tree-status">暂无变更 — 在终端里跟 Claude 对话，修改的文件会出现在这里</div>
-      </template>
-      <template v-else>
-        <div v-for="(round, ri) in [...rounds].reverse()" :key="ri" class="round-group">
-          <div class="round-header">
-            <span class="round-badge">轮 {{ round.index }}</span>
-            <span class="round-time">{{ round.time }}</span>
-            <span class="round-revert" title="撤回本轮所有修改" @click="revertRound(round)">↶ 撤回本轮</span>
-          </div>
-          <div
-            v-for="f in round.files"
-            :key="f.path"
-            class="diff-item"
-            :class="{ selected: selectedPath === f.path }"
-            @click="openFile(resolveDiffPath(f.path))"
-          >
-            <span class="diff-status diff-M">M</span>
-            <span class="diff-path">{{ f.path }}</span>
-            <span class="diff-stat">+{{ f.additions }}/-{{ f.deletions }}</span>
-            <span class="diff-revert" title="撤回此文件" @click.stop="revertSingleFile(round, f.path)">↶</span>
-          </div>
-        </div>
-      </template>
-    </div>
   </div>
 </template>
 
 <style scoped>
 .file-tree {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -364,153 +303,5 @@ defineExpose({ loadRoot });
 .tree-status.error {
   color: var(--accent-red);
 }
-
-/* ── Tab bar ── */
-
-.tab-bar {
-  display: flex;
-  border-bottom: 1px solid var(--surface);
-  flex-shrink: 0;
-}
-
-.tab-btn {
-  flex: 1;
-  padding: 7px 0;
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-family: inherit;
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-.tab-btn:hover {
-  color: var(--text-primary);
-}
-.tab-btn.active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-}
-
-.tab-badge {
-  background: var(--surface);
-  color: var(--text-muted);
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 8px;
-  min-width: 18px;
-  text-align: center;
-}
-.tab-btn.active .tab-badge {
-  background: var(--accent);
-  color: var(--bg-primary);
-}
-
-/* ── Diff items ── */
-
-.diff-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 16px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.1s;
-  border-left: 2px solid transparent;
-}
-.diff-item:hover {
-  background: var(--surface);
-}
-.diff-item.selected {
-  background: var(--surface);
-  border-left-color: var(--accent);
-}
-
-.diff-status {
-  flex-shrink: 0;
-  width: 22px;
-  padding: 1px 4px;
-  border-radius: 3px;
-  font-size: 10px;
-  font-weight: 600;
-  text-align: center;
-  text-transform: uppercase;
-}
-.diff-M { background: rgba(249, 226, 175, 0.15); color: #f9e2af; }
-.diff-A { background: rgba(166, 227, 161, 0.15); color: #a6e3a1; }
-.diff-D { background: rgba(243, 139, 168, 0.15); color: #f38ba8; }
-.diff-R { background: rgba(137, 180, 250, 0.15); color: #89b4fa; }
-.diff-un { background: rgba(108, 112, 134, 0.15); color: #6c7086; }
-
-.diff-path {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-secondary);
-  flex: 1;
-}
-
-.diff-stat {
-  flex-shrink: 0;
-  font-size: 10px;
-  color: var(--text-muted);
-}
-
-.diff-revert {
-  flex-shrink: 0;
-  font-size: 13px;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 3px;
-  opacity: 0;
-  transition: opacity 0.1s, color 0.1s, background 0.1s;
-}
-.diff-item:hover .diff-revert {
-  opacity: 1;
-}
-.diff-revert:hover {
-  color: #f38ba8;
-  background: rgba(243, 139, 168, 0.12);
-}
-
-/* ── Round groups ── */
-
-.round-group {
-  border-bottom: 1px solid var(--surface);
-}
-
-.round-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 16px;
-  font-size: 11px;
-  color: var(--text-muted);
-  background: var(--bg-tertiary);
-  border-bottom: 1px solid var(--surface);
-}
-
-.round-badge {
-  font-weight: 600;
-  color: var(--accent);
-}
-
-.round-time {
-  flex: 1;
-}
-
-.round-revert {
-  cursor: pointer;
-  color: var(--text-muted);
-  transition: color 0.1s;
-}
-.round-revert:hover {
-  color: #f38ba8;
-}
 </style>
+

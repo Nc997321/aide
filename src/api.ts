@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem,
-  ProjectInfo, DiffEntry,
+  ProjectInfo, DiffEntry, LastEventInfo, ChangeRound,
 } from "./types";
 
 export const api = {
@@ -78,8 +78,14 @@ export const api = {
   renameSession(id: string, name: string): Promise<void> {
     return invoke("rename_session", { id, name });
   },
-  sessionLastEvent(sessionId: string): Promise<string | null> {
+  sessionLastEvent(sessionId: string): Promise<LastEventInfo> {
     return invoke("session_last_event", { sessionId });
+  },
+  loadSessionChanges(sessionId: string): Promise<ChangeRound[]> {
+    return invoke("load_session_changes", { sessionId });
+  },
+  saveSessionChanges(sessionId: string, rounds: ChangeRound[]): Promise<void> {
+    return invoke("save_session_changes", { sessionId, rounds });
   },
 
   // 工作区

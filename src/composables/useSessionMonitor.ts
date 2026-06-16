@@ -13,8 +13,9 @@ export function useSessionMonitor(
   liveSessions: Map<string, LiveSession>,
   ptyToDisplay: Map<string, string>,
 ) {
-  const { setSessionState, removeSessionState } = useSessionState();
+  const { state: sessionState, setSessionState, removeSessionState } = useSessionState();
   const periodicTimers = new Map<string, ReturnType<typeof setInterval>>();
+  const lastEnterMs = new Map<string, number>();
 
   function terminalTailLines(ptyId: string): string {
     const ls = liveSessions.get(ptyId);
@@ -31,6 +32,10 @@ export function useSessionMonitor(
 
   async function checkSessionState(ptyId: string) {
     const displayId = ptyToDisplay.get(ptyId) || ptyId;
+    const cur = sessionState[displayId];
+
+    // Skip if already waiting
+    if (cur === "waiting") return;
 
     const tail = terminalTailLines(ptyId);
     if (/Do you want to proceed|\[y\/n\]|needs?\s+(your\s+)?permission/i.test(tail)) {
@@ -39,9 +44,14 @@ export function useSessionMonitor(
     }
 
     try {
-      const lastEvent = await api.sessionLastEvent(displayId);
-      if (lastEvent === "assistant") {
-        setSessionState(displayId, "waiting");
+      const info = await api.sessionLastEvent(displayId);
+      if (info.event_type === "assistant" && info.stop_reason === "end_turn") {
+        const entered = lastEnterMs.get(displayId) || 0;
+        const eventMs = info.timestamp ? new Date(info.timestamp).getTime() : 0;
+        // Only accept end_turn events that occurred after the user pressed Enter
+        if (entered === 0 || eventMs >= entered) {
+          setSessionState(displayId, "waiting");
+        }
         return;
       }
     } catch (_) { /* fall through */ }
@@ -71,11 +81,16 @@ export function useSessionMonitor(
     periodicTimers.clear();
   }
 
+  function recordEnter(displayId: string) {
+    lastEnterMs.set(displayId, Date.now());
+  }
+
   return {
     setSessionState,
     removeSessionState,
     startPeriodicCheck,
     stopPeriodicCheck,
     stopAll,
+    recordEnter,
   };
 }

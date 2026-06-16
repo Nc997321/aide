@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use tauri::State;
 
-use super::{Session, ChatMessageItem, WorkspaceState, project_root_for_commands, encode_project_path, claude_projects_dir, claude_sessions_dir, our_sessions_dir};
+use super::{Session, ChatMessageItem, LastEventInfo, ChangeRoundData, WorkspaceState, project_root_for_commands, encode_project_path, claude_projects_dir, claude_sessions_dir, our_sessions_dir};
 
 #[tauri::command]
 pub fn list_sessions(
@@ -212,7 +212,7 @@ pub fn load_messages(
 pub fn session_last_event(
     workspace_state: State<'_, WorkspaceState>,
     session_id: String,
-) -> Result<Option<String>, String> {
+) -> Result<LastEventInfo, String> {
     let root = project_root_for_commands(&workspace_state);
     let encoded = encode_project_path(&root.to_string_lossy());
     let jsonl_path = claude_projects_dir()
@@ -220,24 +220,58 @@ pub fn session_last_event(
         .join(format!("{}.jsonl", session_id));
 
     if !jsonl_path.exists() {
-        return Ok(None);
+        return Ok(LastEventInfo { event_type: None, stop_reason: None, timestamp: None });
     }
 
     let file = fs::File::open(&jsonl_path)
         .map_err(|e| format!("Failed to open session file: {}", e))?;
     let reader = BufReader::new(file);
-    let last_line = reader.lines().filter_map(|l| l.ok()).last();
 
-    match last_line {
-        Some(line) => {
-            if let Ok(v) = serde_json::from_str::<Value>(&line) {
-                Ok(v.get("type").and_then(|t| t.as_str()).map(|s| s.to_string()))
-            } else {
-                Ok(None)
+    // Scan lines in reverse to find the last meaningful conversation event
+    // (assistant or user). The actual last line is often a system or
+    // file-history-snapshot event, which doesn't tell us if Claude is done.
+    let lines: Vec<String> = reader.lines().filter_map(|l| l.ok()).collect();
+    for line in lines.iter().rev() {
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
+            let event_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if event_type == "assistant" || event_type == "user" {
+                let stop_reason = v.get("message")
+                    .and_then(|m| m.get("stop_reason"))
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.to_string());
+                let timestamp = v.get("timestamp").and_then(|t| t.as_str()).map(|s| s.to_string());
+                return Ok(LastEventInfo {
+                    event_type: Some(event_type.to_string()),
+                    stop_reason,
+                    timestamp,
+                });
             }
         }
-        None => Ok(None),
     }
+    // No conversation events found — treat as empty
+    Ok(LastEventInfo { event_type: None, stop_reason: None, timestamp: None })
+}
+
+#[tauri::command]
+pub fn load_session_changes(session_id: String) -> Result<Vec<ChangeRoundData>, String> {
+    let path = our_sessions_dir().join(format!("{}-changes.json", session_id));
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read changes: {}", e))?;
+    serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse changes: {}", e))
+}
+
+#[tauri::command]
+pub fn save_session_changes(session_id: String, rounds: Vec<ChangeRoundData>) -> Result<(), String> {
+    let dir = our_sessions_dir();
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create dir: {}", e))?;
+    let path = dir.join(format!("{}-changes.json", session_id));
+    let content = serde_json::to_string_pretty(&rounds)
+        .map_err(|e| format!("Failed to serialize: {}", e))?;
+    fs::write(&path, content).map_err(|e| format!("Failed to write: {}", e))
 }
 
 // ── Internal helpers ──

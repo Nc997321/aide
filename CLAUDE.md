@@ -23,11 +23,12 @@ aide/
 ├── dev.sh                      # Git Bash 一键启动
 ├── src/
 │   ├── main.ts                 # Vue 入口
-│   ├── App.vue                 # 三栏布局 + 可拖拽分隔 + Ctrl+N + 桥接会话 + ContextMenu
+│   ├── App.vue                 # 三栏布局 + 右面板纵向拆分 + 可拖拽分隔 + Ctrl+N + 桥接会话
 │   ├── components/
 │   │   ├── SidebarLeft.vue     # 左侧：会话列表 + 自定义功能区
 │   │   ├── TerminalPanel.vue   # 中间：全屏 xterm.js 终端（主交互区）
-│   │   ├── FileTree.vue        # 右侧：路径栏 + 文件树（懒加载递归）
+│   │   ├── FileTree.vue        # 右侧上部：路径栏 + 文件树（懒加载递归）
+│   │   ├── ChangeLogPanel.vue  # 右侧下部：会话变更面板（可折叠 + 轮次分组 + 撤回）
 │   │   ├── TreeNodeItem.vue    # 文件树递归节点（独立 SFC，构建时编译）
 │   │   ├── ContextMenu.vue     # 全局右键菜单组件（Teleport to body）
 │   │   ├── ModalDialog.vue     # 通用弹窗（确认/输入）
@@ -43,7 +44,7 @@ aide/
 │   ├── utils/
 │   │   ├── highlight.ts        # 共享 hljs 初始化 + extToLang + highlightCode()
 │   │   └── markdown.ts         # 共享 marked 初始化 + escapeHtml()
-│   ├── types.ts                # 集中类型定义（Session, FileEntry, DiffEntry 等）
+│   ├── types.ts                # 集中类型定义（Session, FileEntry, DiffEntry, LastEventInfo 等）
 │   ├── api.ts                  # Tauri invoke 类型安全封装层
 │   ├── menus/
 │   │   └── contextMenus.ts     # 右键菜单配置层（工厂函数，与组件解耦）
@@ -108,13 +109,13 @@ aide/
 |------|---------|----------|
 | `stopped` | 无标识 | 默认（PTY 不存在） |
 | `running` | 绿色光带从右到左扫过 | 用户按 Enter 发消息 |
-| `waiting` | 右侧绿色边框 | `.jsonl` 最后事件为 `assistant`（Claude 完成） |
+| `waiting` | 右侧绿色边框 | `.jsonl` 最后事件为 `assistant` 且 `stop_reason === "end_turn"`（Claude 真正完成，排除中间 tool_use） |
 | `attention` | 琥珀色光带扫过 | 终端出现权限审批提示 `[y/n]` |
 
 **判定逻辑**（`useSessionMonitor.ts`）：
 - 进入实时模式 → 默认 `waiting`
 - 用户按 Enter → 立即 `running`
-- 每 2 秒周期查 `session_last_event` → `assistant` 则 `waiting`
+- 每 2 秒周期查 `session_last_event` → 返回 `{ event_type, stop_reason }`，`assistant` + `end_turn` 才置 `waiting`（避免 tool_use 中间态误判）
 - 权限关键词 → `attention`
 
 ### PTY 管理（Rust 侧不变）
@@ -215,7 +216,7 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 | `create_session` | placeholder `new_<timestamp>`，真实 session 由 Claude 创建 |
 | `delete_session` | 删 `.jsonl` + pid JSON + 我们元数据 |
 | `rename_session` | 更新我们元数据的 displayName |
-| `session_last_event` | 读 `.jsonl` 最后一行，返回事件 type（`user`/`assistant`/`system`），用于判断 Claude 是否完成 |
+| `session_last_event` | 读 `.jsonl` 最后一行，返回 `LastEventInfo { event_type, stop_reason }`，用于判断 Claude 是否真正完成（end_turn vs tool_use） |
 | `list_workspaces` | 扫描 `~/.claude/projects/` 目录，返回 `[{key, name}]`，key 是 encoded 目录名，name 通过 DFS 文件系统搜索解析的真实路径 |
 | `set_workspace` | 设置当前工作区，`{key, path}` 分别存 key（用于查会话）和 path（用于文件操作） |
 
@@ -223,7 +224,8 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 
 ### App.vue
 - 三栏 `flex` 布局 + 可拖拽分隔条（3px，hover 高亮）
-- `activeSessionId` ref 桥接 SidebarLeft ↔ TerminalPanel
+- **右面板纵向拆分**：上部 FileTree（`flex:1`）+ 横向拖拽条 + 下部 ChangeLogPanel（默认 220px，可拖拽 100-500px）
+- `activeSessionId` ref 桥接 SidebarLeft ↔ TerminalPanel ↔ FileTree ↔ ChangeLogPanel
 - `Ctrl+N` → `SidebarLeft.newSession()`
 - 监听 `session-updated` → 重新加载会话列表
 - **工作区切换**：监听 SidebarLeft 和 FileTree 的 `workspace-changed`，emit 链驱动另一端刷新
@@ -257,27 +259,35 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 - `defineExpose({ newSession, loadSessions })`
 
 ### FileTree.vue
-- 路径栏 `📁 root · branch`，rtl 省略
-- **Tab 栏**：文件 / 会话变更 — 切换文件树和 Claude 对话变更日志
+- 路径栏 `📁 root · branch`，rtl 省略（点击展开工作区切换下拉菜单）
 - 懒加载子目录（`list_directory`）
 - **左键点击文件** → 内置查看器 `FileViewer`（语法高亮 + Markdown 渲染）
-- **会话变更 tab**：按 Claude 对话轮次分组显示修改的文件（增删行数），支持 ↶ 撤回单个文件或整轮修改
-  - Claude 回复前自动 `git add -A` 打快照，完成后 `git diff --numstat` 算差异
-  - 撤回用 `git checkout -- <path>` 恢复到快照状态
-- **右键菜单**：查看 / 其他方式打开（系统默认程序）/ 复制路径 / 复制相对路径 / 删除
+- **右键菜单**：查看/编辑 / 其他方式打开（系统默认程序）/ 复制路径 / 复制相对路径 / 删除
 - 目录右键菜单：展开/折叠 / 复制路径 / 新建文件 / 新建文件夹 / 删除
+- `defineExpose({ loadRoot })` — 工作区切换时外部调用刷新
+
+### ChangeLogPanel.vue
+- 右面板下部独立面板，通过横向拖拽条与 FileTree 分隔
+- **标题栏**（始终可见，可点击折叠）：`● 会话变更` + 文件计数 badge + `▾` 箭头
+- **轮次分组**：`轮 N` + 时间 + `↶ 撤回本轮`
+- **文件行**：相对路径 + 绿色 `+N` / 红色 `-M` 增删统计 + hover 显示 `↶ 撤回文件`
+- 点击文件 → `FileViewer` 打开查看
+- 注入 `useConversationChanges(() => props.sessionId)`，复用变更追踪
 
 ### useConversationChanges.ts
 - 监听 `useSessionState` 状态变化，在 Claude 回复前后自动打快照/算差异
 - 导出 `{ rounds, revertRound, revertSingleFile }`，按对话轮次分组
-- `git_stage_all` → （Claude 运行） → `git_diff_files` → 生成轮次记录
+- `waiting/stopped → running` 时调 `git_stage_all` 打快照
+- `running → waiting` 时调 `git_diff_files` 捕获变更，生成轮次记录
 - 撤回通过 `git_revert_file` 实现
+- 被 `ChangeLogPanel.vue` 注入使用
 
 ### useTerminalManager.ts
 - 终端实例生命周期管理（从 TerminalPanel.vue 提取）
 - `liveSessions` Map + `ptyToDisplay` Map + `liveDisplayIds` reactive Set
 - `makeTerminal()` — 创建 xterm 实例 + FitAddon + Catppuccin 主题
 - `startClaude()` — 创建 DOM、打开终端、绑定 I/O、启动监测
+- Enter 键处理：动态解析 `displayId = ptyToDisplay.get(ptyId) || ptyId`，避免迁移后闭包捕获旧 ID
 - `destroyLiveSession()` — 清理 DOM、终端、observer、timer
 - `stopClaude()` — 通过 invoke 杀 PTY
 - `scheduleMigration()` — `new_xxx` → 真实 UUID 迁移
@@ -287,8 +297,8 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 - 会话状态监测逻辑（从 TerminalPanel.vue 提取）
 - `periodicTimers` Map — 每 2 秒轮询 `.jsonl` 状态
 - `terminalTailLines()` — 读终端缓冲最后 3 行
-- `checkSessionState()` — 权限关键词检测 + `.jsonl` 事件类型判断
-- 导出 `{ startPeriodicCheck, stopPeriodicCheck, stopAll }`
+- `checkSessionState()` — 权限关键词检测 + `.jsonl` 事件判断（`event_type === "assistant" && stop_reason === "end_turn"` 才置 waiting，排除 tool_use 中间态）
+- 导出 `{ setSessionState, removeSessionState, startPeriodicCheck, stopPeriodicCheck, stopAll }`
 
 ### FileViewer.vue
 - 模块级 `useFileViewer` 单例状态层（`open(path)` / `close()`）
@@ -311,7 +321,8 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 - **会话预览** — 无 PTY 时展示 Markdown 渲染历史，按 Enter 或点击启动（HTML div + window 级键盘拦截）
 - 会话管理 — 适配 `~/.claude/` 真实存储（列表/创建/删除/重命名）
 - 工作区管理（`list_workspaces` / `set_workspace`）
-- 文件树（懒加载，新建/删除文件目录，**"会话变更"tab 按轮次分组 + 撤回**）
+- 文件树（懒加载，新建/删除文件目录，右键菜单）
+- **会话变更面板**（右下角独立面板，可折叠/拖拽，按轮次分组 + 绿色 `+N` 红色 `-M` + 撤回）
 - 右键菜单（4 层架构，文件/目录/树空白/会话）
 - **文件查看器** — 左键点击内置查看，highlight.js 语法高亮 + marked .md 渲染，右键"查看/编辑"打开编辑模式，右键"其他方式打开"调系统程序
 - Ctrl+N 新建会话

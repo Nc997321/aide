@@ -127,6 +127,7 @@ function onContextMenu(e: MouseEvent) {
 .arrow {
   font-size: 10px;
   width: 12px;
+  text-align: center;
   transition: transform 0.15s;
   flex-shrink: 0;
 }
@@ -142,6 +143,8 @@ function onContextMenu(e: MouseEvent) {
 
 .icon {
   font-size: 13px;
+  width: 1.3em;
+  text-align: center;
   flex-shrink: 0;
 }
 

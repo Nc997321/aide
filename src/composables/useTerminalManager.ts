@@ -100,7 +100,9 @@ export function useTerminalManager(
     terminal.onData((data) => {
       api.ptyWrite(ptyId, data).catch(() => {});
       if (data === "\r") {
-        monitor.setSessionState(sid, "running");
+        const displayId = ptyToDisplay.get(ptyId) || ptyId;
+        monitor.recordEnter(displayId);
+        monitor.setSessionState(displayId, "running");
       }
     });
 
