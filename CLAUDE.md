@@ -96,9 +96,15 @@ aide/
 ```
 用户键盘 → live terminal.onData → api.ptyWrite(ptyId, data)
   → Rust PtyManager.write(ptyId) → PTY stdin → claude 进程
-    → claude stdout → PTY reader thread
+    → claude stdout → PTY reader thread (I/O)
       → emit("pty-output", {session_id: ptyId, data})
         → liveSessions.get(ptyId).terminal.write(data)   ← 直达，无过滤
+
+进程退出检测（独立 waiter 线程）：
+  Rust child.wait() 阻塞 → 进程退出 → HashMap 清理
+    → emit("pty-exit", {session_id})
+      → initExitListener → stopClaude() → destroyLiveSession()
+        → showSession() → 预览模式
 ```
 
 ### 会话状态指示器
@@ -118,9 +124,13 @@ aide/
 - 每 2 秒周期查 `session_last_event` → 返回 `{ event_type, stop_reason }`，`assistant` + `end_turn` 才置 `waiting`（避免 tool_use 中间态误判）
 - 权限关键词 → `attention`
 
-### PTY 管理（Rust 侧不变）
+### PTY 管理（Rust 侧）
 
 PtyManager 维护 `HashMap<String, PtySession>`，每个会话独立持有 PTY。切换会话时不杀进程，只切换终端显隐。
+
+**双线程模型**：
+- **reader 线程**：纯 I/O 转发，`read()` 循环 → `emit("pty-output", ...)`，EOF/error 时退出
+- **waiter 线程**：`child.wait()` 阻塞等待进程退出 → 可靠检测 Ctrl+D 退出 → 清理 HashMap → `emit("pty-exit", ...)`。reader 线程的 EOF 检测不可靠（PTY 不保证在子进程退出时关闭管道），waiter 线程才是退出检测的权威来源
 
 ### 前端状态
 
@@ -169,15 +179,6 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 
 持久化：`set_workspace` 时 key 写到 `~/.claude-code-desktop/config.json`，启动时读回。
 
-### 右键菜单系统（4 层）
-
-```
-展示层  ContextMenu.vue     Teleport + Transition + 边界检测
-状态层  useContextMenu.ts   模块级 ref 单例
-配置层  contextMenus.ts     工厂函数，与组件解耦
-接入层  各组件 @contextmenu  handler
-```
-
 ## Tauri Commands
 
 ### 终端交互（PTY）
@@ -220,113 +221,31 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 | `list_workspaces` | 扫描 `~/.claude/projects/` 目录，返回 `[{key, name}]`，key 是 encoded 目录名，name 通过 DFS 文件系统搜索解析的真实路径 |
 | `set_workspace` | 设置当前工作区，`{key, path}` 分别存 key（用于查会话）和 path（用于文件操作） |
 
-## 前端组件要点
+## 关键组件行为
 
-### App.vue
-- 三栏 `flex` 布局 + 可拖拽分隔条（3px，hover 高亮）
-- **右面板纵向拆分**：上部 FileTree（`flex:1`）+ 横向拖拽条 + 下部 ChangeLogPanel（默认 220px，可拖拽 100-500px）
-- `activeSessionId` ref 桥接 SidebarLeft ↔ TerminalPanel ↔ FileTree ↔ ChangeLogPanel
-- `Ctrl+N` → `SidebarLeft.newSession()`
-- 监听 `session-updated` → 重新加载会话列表
-- **工作区切换**：监听 SidebarLeft 和 FileTree 的 `workspace-changed`，emit 链驱动另一端刷新
-- 面板宽度限制：左 200-450px，右 200-500px，中 min 400px
+### App.vue — 三栏拖拽布局
+- 左 200-450px、右 200-500px、中 min 400px，3px 分隔条
+- **右面板纵向拆分**：FileTree（`flex:1`）+ 拖拽条 + ChangeLogPanel（默认 220px）
+- **变更面板折叠沉底**：`@collapse-changed` → `height: auto` → 拖拽条隐藏，FileTree 撑满
 
-### TerminalPanel.vue + useTerminalManager + useSessionMonitor
+### TerminalPanel — 多终端 + 预览 + 加载
+- **非 scoped 样式**：`terminal-container`、`xterm`、`session-loader` 等动态 DOM 的样式放在非 scoped `<style>` 块
+- **加载动画 DOM** 由 `useTerminalManager.createLoadingOverlay()` 动态创建，样式在 TerminalPanel 的非 scoped CSS
 
-核心逻辑已拆分到两个 composable，TerminalPanel.vue 只管模板 + 预览 + 键盘事件（~110 行 script）。
+### ChangeLogPanel — 折叠通知父组件
+- `emit("collapse-changed", collapsed)` → App.vue 切换高度
 
-- **多终端架构**：1 个 HTML 预览 div（共享）+ N 个直播终端（每 PTY 一个独立 xterm 实例）
-- **DOM 布局**：`.terminal-stack`（flex:1, position:relative）→ 所有 `.terminal-container`（absolute inset:0），display none 切换
-- **数据流**：每个直播 terminal 的 `onData` 绑定自己的 `ptyId`；`pty-output` 监听直接 `liveSessions.get(p.session_id).terminal.write(data)`，无需 session ID 过滤
-- **切换**：`showSession(sid)` → 隐藏全部 div → 找到对应 live terminal 或显示预览 div + 调用 `loadPreviewContent(sid)` 加载消息
-- **新建会话迁移**：`startClaude()` 用 `new_xxx` 创建 PTY → 3 秒后 `scheduleMigration()` 拉列表找真实 UUID → 更新 `ptyToDisplay` + `pty_rename_session` → emit `session-updated`
-- **预览模式**：HTML div 渲染 Markdown（marked），Enter 键触发 `startClaude()`
-- **关闭按钮**：⏹ 停止当前 Claude（`destroyLiveSession` 清理 DOM + terminal + observer，回退到预览模式）
-- **自适应**：每个终端独立 FitAddon + ResizeObserver → `pty_resize`
-- **注意**：动态创建的 DOM 元素不受 Vue scoped CSS 影响，terminal 相关样式放在非 scoped `<style>` 块
+### useTerminalManager — 终端生命周期
+- `createLoadingOverlay()` / `dismissLoader()` — 加载动画 DOM 管理
+- `initExitListener()` — 监听 `pty-exit` → `stopClaude()` 回预览，与 ⏹ 按钮相同路径
+- `LOADER_DISMISS_DELAY = 5000` — 首次 pty-output 后延迟 5s 再关 loader
 
-### SidebarLeft.vue
-- **工作区列表**：`list_workspaces` 加载全部工作区，活动工作区展开显示其会话，`▸` 三角旋转 90° 表示展开
-- **工作区展开/收起**：`expandedWorkspaces: Set<string>` 跟踪展开状态，点击当前工作区 toggle 展开/收起
-- **会话搜索**：`searchQuery` 过滤工作区和会话（名称 + 最后消息），无匹配时显示提示
-- 点击其他工作区 → `set_workspace({key, path})` → 加载会话 + emit `workspace-changed` 通知 FileTree 刷新
-- 会话列表从 `list_sessions` 加载，按时间戳倒序
-- 空列表时自动创建首个会话；`activeSessionId` 为 `new_` 时自动选真实会话
-- 相对时间显示（分钟前/小时前/天前）
-- **会话状态指示器**：通过 `useSessionState` 读取状态，渲染三种效果（绿色扫光 = running，右侧绿边 = waiting，琥珀色扫光 = attention）
-- 自定义功能区（智能体/技能等，仅展示名称）
-- 右键菜单：重命名 / 删除
-- `defineExpose({ newSession, loadSessions })`
+### useConversationChanges — 变更追踪
+- `waiting/stopped → running` → `git_stage_all` 快照
+- `running → waiting` → `git_diff_files` 捕获变更 → 生成轮次
 
-### FileTree.vue
-- 路径栏 `📁 root · branch`，rtl 省略（点击展开工作区切换下拉菜单）
-- 懒加载子目录（`list_directory`）
-- **左键点击文件** → 内置查看器 `FileViewer`（语法高亮 + Markdown 渲染）
-- **右键菜单**：查看/编辑 / 其他方式打开（系统默认程序）/ 复制路径 / 复制相对路径 / 删除
-- 目录右键菜单：展开/折叠 / 复制路径 / 新建文件 / 新建文件夹 / 删除
-- `defineExpose({ loadRoot })` — 工作区切换时外部调用刷新
-
-### ChangeLogPanel.vue
-- 右面板下部独立面板，通过横向拖拽条与 FileTree 分隔
-- **标题栏**（始终可见，可点击折叠）：`● 会话变更` + 文件计数 badge + `▾` 箭头
-- **轮次分组**：`轮 N` + 时间 + `↶ 撤回本轮`
-- **文件行**：相对路径 + 绿色 `+N` / 红色 `-M` 增删统计 + hover 显示 `↶ 撤回文件`
-- 点击文件 → `FileViewer` 打开查看
-- 注入 `useConversationChanges(() => props.sessionId)`，复用变更追踪
-
-### useConversationChanges.ts
-- 监听 `useSessionState` 状态变化，在 Claude 回复前后自动打快照/算差异
-- 导出 `{ rounds, revertRound, revertSingleFile }`，按对话轮次分组
-- `waiting/stopped → running` 时调 `git_stage_all` 打快照
-- `running → waiting` 时调 `git_diff_files` 捕获变更，生成轮次记录
-- 撤回通过 `git_revert_file` 实现
-- 被 `ChangeLogPanel.vue` 注入使用
-
-### useTerminalManager.ts
-- 终端实例生命周期管理（从 TerminalPanel.vue 提取）
-- `liveSessions` Map + `ptyToDisplay` Map + `liveDisplayIds` reactive Set
-- `makeTerminal()` — 创建 xterm 实例 + FitAddon + Catppuccin 主题
-- `startClaude()` — 创建 DOM、打开终端、绑定 I/O、启动监测
-- Enter 键处理：动态解析 `displayId = ptyToDisplay.get(ptyId) || ptyId`，避免迁移后闭包捕获旧 ID
-- `destroyLiveSession()` — 清理 DOM、终端、observer、timer
-- `stopClaude()` — 通过 invoke 杀 PTY
-- `scheduleMigration()` — `new_xxx` → 真实 UUID 迁移
-- `showSession()` — 切换终端显隐
-
-### useSessionMonitor.ts
-- 会话状态监测逻辑（从 TerminalPanel.vue 提取）
-- `periodicTimers` Map — 每 2 秒轮询 `.jsonl` 状态
-- `terminalTailLines()` — 读终端缓冲最后 3 行
-- `checkSessionState()` — 权限关键词检测 + `.jsonl` 事件判断（`event_type === "assistant" && stop_reason === "end_turn"` 才置 waiting，排除 tool_use 中间态）
-- 导出 `{ setSessionState, removeSessionState, startPeriodicCheck, stopPeriodicCheck, stopAll }`
-
-### FileViewer.vue
-- 模块级 `useFileViewer` 单例状态层（`open(path)` / `close()`）
-- **代码文件**：highlight.js 语法高亮，12 种语言自动匹配，Catppuccin 配色
-- **Markdown 文件**（`.md` / `.mdx`）：marked 渲染为排版 HTML（标题、表格、代码块语法高亮等）
-- **编辑模式**：右键菜单"查看/编辑"打开，按钮切换编辑/保存状态
-  - textarea 编辑区（`width: 100%` + `flex: 1` 填满容器）
-  - Ctrl+S 保存，ESC 取消编辑
-  - 保存后同步 `content`，退出编辑态
-- 弹窗 90vw / 900px 宽，85vh 高，Esc 关闭
-- `read_file_content` / `write_file_content` 读写文件，二进制/不可读文件显示错误
-
-## 当前状态
-
-### 已实现
-- 三栏可拖拽布局 + Catppuccin 暗色主题
-- **全屏 xterm.js 终端** — 多会话 PTY，完整 Claude 交互
-- **多会话并行存活** — 切换 instant，不杀进程
-- **会话状态指示器** — 侧栏显示会话运行状态（running/waiting/attention），通过 `.jsonl` 事件类型判断
-- **会话预览** — 无 PTY 时展示 Markdown 渲染历史，按 Enter 或点击启动（HTML div + window 级键盘拦截）
-- 会话管理 — 适配 `~/.claude/` 真实存储（列表/创建/删除/重命名）
-- 工作区管理（`list_workspaces` / `set_workspace`）
-- 文件树（懒加载，新建/删除文件目录，右键菜单）
-- **会话变更面板**（右下角独立面板，可折叠/拖拽，按轮次分组 + 绿色 `+N` 红色 `-M` + 撤回）
-- 右键菜单（4 层架构，文件/目录/树空白/会话）
-- **文件查看器** — 左键点击内置查看，highlight.js 语法高亮 + marked .md 渲染，右键"查看/编辑"打开编辑模式，右键"其他方式打开"调系统程序
-- Ctrl+N 新建会话
-- **窗口状态记忆** — `tauri-plugin-window-state` 自动保存/恢复窗口位置和大小
-
-### 未实现 / 待改进
-- 自定义功能区读真实配置
+### FileViewer — 内置查看器
+- 代码：highlight.js + Catppuccin 配色
+- Markdown：marked 渲染
+- 编辑模式：Ctrl+S 保存、ESC 取消
+- 模块级 `useFileViewer` 单例 `open(path)` / `close()`
