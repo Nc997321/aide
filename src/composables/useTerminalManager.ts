@@ -10,6 +10,8 @@ interface LiveSession {
   terminal: Terminal;
   fitAddon: FitAddon;
   observer: ResizeObserver;
+  loadingDiv: HTMLDivElement | null;
+  loaderTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export function useTerminalManager(
@@ -25,6 +27,7 @@ export function useTerminalManager(
 
   const monitor = useSessionMonitor(liveSessions, ptyToDisplay);
   let unlistenPty: UnlistenFn | null = null;
+  let unlistenExit: UnlistenFn | null = null;
 
   function makeTerminal(): { terminal: Terminal; fitAddon: FitAddon } {
     const terminal = new Terminal({
@@ -45,6 +48,31 @@ export function useTerminalManager(
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
     return { terminal, fitAddon };
+  }
+
+  /** Build the loading overlay shown while the PTY session is spinning up */
+  function createLoadingOverlay(): HTMLDivElement {
+    const el = document.createElement("div");
+    el.className = "session-loader";
+    el.innerHTML = `
+      <div class="session-loader__glow"></div>
+      <div class="session-loader__card">
+        <div class="session-loader__hex">&#x2B21;</div>
+        <div class="session-loader__title">Claude</div>
+        <div class="session-loader__sub">Starting session<span class="session-loader__dots"><span>.</span><span>.</span><span>.</span></span></div>
+        <div class="session-loader__track"><div class="session-loader__bar"></div></div>
+      </div>`;
+    return el;
+  }
+
+  /** Remove the loading overlay with a brief fade, then dispose */
+  function dismissLoader(ls: LiveSession) {
+    if (ls.loaderTimer) { clearTimeout(ls.loaderTimer); ls.loaderTimer = null; }
+    if (!ls.loadingDiv) return;
+    ls.loadingDiv.classList.add("session-loader--out");
+    const el = ls.loadingDiv;
+    ls.loadingDiv = null;
+    setTimeout(() => el.remove(), 350);
   }
 
   function resolvePtyId(sid: string): string {
@@ -112,13 +140,16 @@ export function useTerminalManager(
     });
     observer.observe(div);
 
-    liveSessions.set(ptyId, { div, terminal, fitAddon, observer });
+    // Loading overlay while PTY spins up
+    const loadingDiv = createLoadingOverlay();
+    div.appendChild(loadingDiv);
+
+    liveSessions.set(ptyId, { div, terminal, fitAddon, observer, loadingDiv, loaderTimer: null });
     liveDisplayIds.add(sid);
     currentSid = sid;
 
     monitor.startPeriodicCheck(ptyId);
     monitor.setSessionState(sid, "waiting");
-    terminal.writeln("Starting Claude...\r");
 
     api.ptySpawnClaude(ptyId, terminal.rows, terminal.cols)
       .catch((e) => {
@@ -134,6 +165,7 @@ export function useTerminalManager(
   function destroyLiveSession(ptyId: string) {
     const ls = liveSessions.get(ptyId);
     if (!ls) return;
+    if (ls.loaderTimer) clearTimeout(ls.loaderTimer);
     ls.observer.disconnect();
     ls.terminal.dispose();
     ls.div.remove();
@@ -180,17 +212,42 @@ export function useTerminalManager(
     onSessionUpdated();
   }
 
+  /** Seconds to keep the loader after first PTY data — bridges the gap
+   *  between "PTY connected" and "Claude TUI actually rendered". */
+  const LOADER_DISMISS_DELAY = 5000;
+
   async function initPtyListener() {
     unlistenPty = await listen<string>("pty-output", (event) => {
       try {
         const p = JSON.parse(event.payload);
-        liveSessions.get(p.session_id)?.terminal.write(p.data);
+        const ls = liveSessions.get(p.session_id);
+        if (!ls) return;
+        // Delay dismiss: Claude TUI may not be visible yet on first bytes.
+        // Start a one-shot timer; kept alive across subsequent packets.
+        if (ls.loadingDiv && !ls.loaderTimer) {
+          ls.loaderTimer = setTimeout(() => dismissLoader(ls), LOADER_DISMISS_DELAY);
+        }
+        ls.terminal.write(p.data);
+      } catch (_) {}
+    });
+  }
+
+  /** Listen for PTY process exit (e.g. Ctrl+D twice) → same code path as ⏹ button */
+  async function initExitListener() {
+    unlistenExit = await listen<string>("pty-exit", (event) => {
+      try {
+        const p = JSON.parse(event.payload);
+        const ptyId: string = p.session_id;
+        if (!liveSessions.has(ptyId)) return;
+        const displayId = ptyToDisplay.get(ptyId) || ptyId;
+        stopClaude(displayId);
       } catch (_) {}
     });
   }
 
   function cleanup() {
     unlistenPty?.();
+    unlistenExit?.();
     monitor.stopAll();
     for (const [ptyId] of liveSessions) {
       api.ptyKill(ptyId).catch(() => {});
@@ -211,6 +268,7 @@ export function useTerminalManager(
     stopClaude,
     destroyLiveSession,
     initPtyListener,
+    initExitListener,
     cleanup,
   };
 }

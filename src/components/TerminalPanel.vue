@@ -60,6 +60,7 @@ const {
   startClaude,
   stopClaude,
   initPtyListener,
+  initExitListener,
   cleanup,
 } = useTerminalManager(stackRef, previewRef, () => emit("session-updated"), loadPreviewContent);
 
@@ -100,6 +101,7 @@ watch(() => props.sessionId, async (newId) => {
 onMounted(async () => {
   window.addEventListener("keydown", onWindowKeydown);
   await initPtyListener();
+  await initExitListener();
   await nextTick();
   showSession(props.sessionId);
   await loadPreviewContent(props.sessionId);
@@ -151,6 +153,85 @@ onUnmounted(() => {
 .terminal-container .xterm-viewport::-webkit-scrollbar { width: 6px; }
 .terminal-container .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
 .terminal-container .xterm-viewport::-webkit-scrollbar-thumb { background: var(--surface); border-radius: 3px; }
+
+/* ── Session loader overlay ── */
+
+.session-loader {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg-primary); /* #1e1e2e — same as terminal */
+  transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+.session-loader--out { opacity: 0; visibility: hidden; pointer-events: none; }
+
+.session-loader__glow {
+  position: absolute;
+  width: 260px; height: 260px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(137,180,250,0.10) 0%, transparent 70%);
+  animation: loader-glow-pulse 2.2s ease-in-out infinite;
+}
+@keyframes loader-glow-pulse {
+  0%, 100% { transform: scale(0.92); opacity: 0.6; }
+  50%      { transform: scale(1.06); opacity: 1; }
+}
+
+.session-loader__card {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+}
+
+/* Hex icon */
+.session-loader__hex {
+  font-size: 40px; line-height: 1;
+  color: var(--accent); /* #89b4fa */
+  animation: loader-hex-float 3s ease-in-out infinite;
+}
+@keyframes loader-hex-float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-5px); }
+}
+
+.session-loader__title {
+  font-size: 18px; font-weight: 600; letter-spacing: 0.04em;
+  color: var(--text-primary);
+}
+
+.session-loader__sub {
+  font-size: 12px; color: var(--text-muted);
+  display: flex; align-items: center; gap: 0;
+}
+
+/* Animated dots */
+.session-loader__dots span {
+  display: inline-block;
+  animation: loader-dot-blink 1.4s infinite both;
+  width: 0.5em; text-align: left;
+}
+.session-loader__dots span:nth-child(1) { animation-delay: 0.0s; }
+.session-loader__dots span:nth-child(2) { animation-delay: 0.2s; }
+.session-loader__dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes loader-dot-blink {
+  0%, 80%, 100% { opacity: 0.2; }
+  40%            { opacity: 1; }
+}
+
+/* Progress track */
+.session-loader__track {
+  width: 180px; height: 3px;
+  background: var(--surface); /* #313244 */
+  border-radius: 3px; overflow: hidden;
+}
+.session-loader__bar {
+  height: 100%; width: 35%;
+  background: var(--accent);
+  border-radius: 3px;
+  animation: loader-bar-shimmer 1.8s ease-in-out infinite;
+}
+@keyframes loader-bar-shimmer {
+  0%   { transform: translateX(-60%); }
+  100% { transform: translateX(320%); }
+}
 
 .preview-container {
   overflow-y: auto;

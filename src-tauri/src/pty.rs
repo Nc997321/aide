@@ -54,7 +54,7 @@ impl PtyManager {
         cmd.args(args);
         cmd.cwd(cwd);
 
-        let _child = pty_pair
+        let mut child = pty_pair
             .slave
             .spawn_command(cmd)
             .map_err(|e| format!("Failed to spawn {}: {}", command, e))?;
@@ -74,8 +74,11 @@ impl PtyManager {
         }
 
         let sid = session_id.to_string();
+        let sessions = self.sessions.clone();
+        let app_reader = app_handle.clone();
 
-        // Reader thread — emits session-scoped pty-output
+        // Reader thread — handles PTY output
+        let sid_reader = sid.clone();
         thread::spawn(move || {
             let mut buf = [0u8; 4096];
             loop {
@@ -84,14 +87,25 @@ impl PtyManager {
                     Ok(n) => {
                         let data = String::from_utf8_lossy(&buf[..n]).to_string();
                         let payload = serde_json::json!({
-                            "session_id": sid,
+                            "session_id": sid_reader,
                             "data": data,
                         });
-                        let _ = app_handle.emit("pty-output", payload.to_string());
+                        let _ = app_reader.emit("pty-output", payload.to_string());
                     }
                     Err(_) => break,
                 }
             }
+        });
+
+        // Waiter thread — blocks on child.wait() to reliably detect process exit
+        let sid_waiter = sid.clone();
+        thread::spawn(move || {
+            let _ = child.wait();
+            if let Ok(mut map) = sessions.lock() {
+                map.remove(&sid_waiter);
+            }
+            let payload = serde_json::json!({ "session_id": &sid_waiter });
+            let _ = app_handle.emit("pty-exit", payload.to_string());
         });
 
         Ok(())
