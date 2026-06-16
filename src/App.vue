@@ -76,9 +76,12 @@ function onSessionChanged(id: string) {
   activeSessionId.value = id;
 }
 
-async function onSessionUpdated() {
-  // Reload sessions from Claude Code storage; if the current session was a
-  // placeholder (new_xxx), the sidebar will auto-select the first real session.
+async function onSessionUpdated(newId?: string) {
+  // If migration happened, switch to the real session ID before refreshing
+  // the sidebar, so loadSessions() won't auto-switch away from it.
+  if (newId) {
+    activeSessionId.value = newId;
+  }
   await sidebarRef.value?.loadSessions();
 }
 

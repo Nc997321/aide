@@ -18,7 +18,7 @@ interface LiveSession {
 export function useTerminalManager(
   stackRef: { value: HTMLDivElement | undefined },
   previewRef: { value: HTMLDivElement | undefined },
-  onSessionUpdated: () => void,
+  onSessionUpdated: (newId?: string) => void,
   onShowPreview: (sid: string) => void,
 ) {
   const liveSessions = new Map<string, LiveSession>();
@@ -210,7 +210,10 @@ export function useTerminalManager(
   }
 
   async function scheduleMigration(placeholderId: string) {
+    // Wait 3 seconds for Claude Code to start and create its session
+    // metadata file (~/.claude/sessions/<pid>.json).
     await new Promise((r) => setTimeout(r, 3000));
+    if (!liveSessions.has(placeholderId)) return;
     try {
       const sessions = await api.listSessions();
       const real = sessions.find((s) =>
@@ -218,15 +221,26 @@ export function useTerminalManager(
         !liveSessions.has(s.id) &&
         !Array.from(ptyToDisplay.values()).includes(s.id),
       );
+      // Validate the candidate was started after our placeholder.
+      // Claude Code stores startedAt in ms (JS timestamp), but normalise
+      // just in case (seconds → ms) to avoid filtering out the real session.
       if (real && liveSessions.has(placeholderId)) {
+        const sinceMs = parseInt(placeholderId.replace("new_", ""), 10) || 0;
+        const realMs = real.timestamp < 1_000_000_000_000
+          ? real.timestamp * 1000
+          : real.timestamp;
+        if (realMs <= sinceMs) return; // older session — metadata not ready yet
         ptyToDisplay.set(placeholderId, real.id);
         liveDisplayIds.delete(placeholderId);
         liveDisplayIds.add(real.id);
-        monitor.removeSessionState(placeholderId);
-        api.ptyRenameSession(placeholderId, real.id).catch(() => {});
+        // IMPORTANT: do NOT call pty_rename_session on the Rust side.
+        // The onData handler and ResizeObserver in startClaude() capture
+        // the placeholder PTY key in their closures. Renaming on the Rust
+        // side breaks input because pty_write("new_xxx") can no longer
+        // find the PTY (it was moved to the real UUID in Rust's HashMap).
+        onSessionUpdated(real.id);
       }
     } catch (_) { /* best effort */ }
-    onSessionUpdated();
   }
 
   /** Seconds to keep the loader after first PTY data — bridges the gap

@@ -7,7 +7,7 @@ import { api } from "../api";
 import "xterm/css/xterm.css";
 
 const props = defineProps<{ sessionId: string }>();
-const emit = defineEmits<{ "session-updated": [] }>();
+const emit = defineEmits<{ "session-updated": [newId?: string] }>();
 
 interface BackendMsg { role: string; content: string; timestamp: number; }
 
@@ -62,7 +62,7 @@ const {
   initPtyListener,
   initExitListener,
   cleanup,
-} = useTerminalManager(stackRef, previewRef, () => emit("session-updated"), loadPreviewContent);
+} = useTerminalManager(stackRef, previewRef, (newId) => emit("session-updated", newId), loadPreviewContent);
 
 // ── Keyboard & click handlers ──
 

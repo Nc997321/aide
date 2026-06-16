@@ -21,49 +21,99 @@ pub fn list_sessions(
     };
     let proj_dir = claude_projects_dir().join(&encoded);
 
-    if !proj_dir.exists() {
-        return Ok(sessions);
+    // Scan .jsonl files if the project directory exists (created after first
+    // conversation). If it doesn't exist yet, skip to metadata scan — sessions
+    // that were started but never had a conversation still have metadata in
+    // ~/.claude/sessions/.
+    if proj_dir.exists() {
+        let read_dir = fs::read_dir(&proj_dir)
+            .map_err(|e| format!("Failed to read project dir: {}", e))?;
+
+        for entry in read_dir {
+            let Ok(entry) = entry else { continue; };
+            let path = entry.path();
+            if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
+                let session_id = path.file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                if session_id.is_empty() {
+                    continue;
+                }
+
+                let (name, started_at) = claude_session_meta(&session_id)
+                    .unwrap_or_else(|| (session_id.clone(), 0));
+
+                let timestamp = if started_at == 0 {
+                    path.metadata()
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0)
+                } else {
+                    started_at
+                };
+
+                let display_name = our_session_name(&session_id)
+                    .unwrap_or(name);
+
+                let last_msg = last_jsonl_message(&path);
+
+                sessions.push(Session {
+                    id: session_id,
+                    name: display_name,
+                    timestamp,
+                    last_message: last_msg,
+                });
+            }
+        }
     }
 
-    let read_dir = fs::read_dir(&proj_dir)
-        .map_err(|e| format!("Failed to read project dir: {}", e))?;
+    // Second pass: scan ~/.claude/sessions/ for sessions that have metadata
+    // but no .jsonl file yet (Claude started, no conversation happened).
+    // These sessions won't appear in the project dir scan above.
+    let root = project_root_for_commands(&workspace_state);
+    let root_normalized = normalize_path_for_compare(&root.to_string_lossy());
+    let sessions_dir = claude_sessions_dir();
+    if sessions_dir.exists() {
+        if let Ok(read_dir) = fs::read_dir(&sessions_dir) {
+            for entry in read_dir {
+                let Ok(entry) = entry else { continue; };
+                let path = entry.path();
+                if path.extension().map(|e| e == "json").unwrap_or(false) {
+                    let Ok(content) = fs::read_to_string(&path) else { continue; };
+                    let Ok(v) = serde_json::from_str::<Value>(&content) else { continue; };
 
-    for entry in read_dir {
-        let Ok(entry) = entry else { continue; };
-        let path = entry.path();
-        if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
-            let session_id = path.file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if session_id.is_empty() {
-                continue;
+                    let session_cwd = v.get("cwd").and_then(|c| c.as_str()).unwrap_or("");
+                    if normalize_path_for_compare(session_cwd) != root_normalized {
+                        continue;
+                    }
+
+                    let session_id = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
+                    if session_id.is_empty() || session_id.starts_with("new_") {
+                        continue;
+                    }
+
+                    // Skip if already in the list (has a .jsonl file)
+                    if sessions.iter().any(|s| s.id == session_id) {
+                        continue;
+                    }
+
+                    let name = v.get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("未命名")
+                        .to_string();
+                    let started_at = v.get("startedAt").and_then(|t| t.as_u64()).unwrap_or(0);
+                    let display_name = our_session_name(&session_id).unwrap_or(name);
+
+                    sessions.push(Session {
+                        id: session_id.to_string(),
+                        name: display_name,
+                        timestamp: started_at,
+                        last_message: String::new(),
+                    });
+                }
             }
-
-            let (name, started_at) = claude_session_meta(&session_id)
-                .unwrap_or_else(|| (session_id.clone(), 0));
-
-            let timestamp = if started_at == 0 {
-                path.metadata()
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0)
-            } else {
-                started_at
-            };
-
-            let display_name = our_session_name(&session_id)
-                .unwrap_or(name);
-
-            let last_msg = last_jsonl_message(&path);
-
-            sessions.push(Session {
-                id: session_id,
-                name: display_name,
-                timestamp,
-                last_message: last_msg,
-            });
         }
     }
 
@@ -206,6 +256,14 @@ pub fn load_messages(
     }
 
     Ok(messages)
+}
+
+/// Normalize a filesystem path so two paths pointing to the same location
+/// compare equal: strip trailing separator, use forward slashes, lowercase.
+fn normalize_path_for_compare(p: &str) -> String {
+    p.trim_end_matches(['/', '\\'])
+        .replace('\\', "/")
+        .to_lowercase()
 }
 
 #[tauri::command]

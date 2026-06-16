@@ -76,11 +76,25 @@ async function loadWorkspaces() {
 
 async function loadSessions() {
   loading.value = true;
+
+  // Save the active placeholder session so it survives the refresh
+  // (new_xxx entries only exist in our metadata, not in Claude Code's storage,
+  // so list_sessions won't return them)
+  const activePlaceholder = (props.activeSessionId?.startsWith("new_"))
+    ? sessions.value.find(s => s.id === props.activeSessionId)
+    : null;
+
   try {
     sessions.value = await api.listSessions();
   } catch (_e) {
     sessions.value = [];
   }
+
+  // Restore active placeholder that hasn't been migrated yet
+  if (activePlaceholder) {
+    sessions.value.unshift(activePlaceholder);
+  }
+
   loading.value = false;
 
   if (sessions.value.length === 0) {

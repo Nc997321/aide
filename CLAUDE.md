@@ -158,9 +158,11 @@ watch(sessionId) → showSession(sid) + loadPreviewContent(sid)
 ```
 
 **新建会话 ID 迁移**（不在 watch 里）：
-`startClaude()` 用 placeholder `new_xxx` 创建 PTY → 3 秒后 `scheduleMigration()` 拉会话列表找到真实 UUID → 更新 `ptyToDisplay` + Rust `pty_rename_session` → 再 emit `session-updated` 刷新侧栏。
+`startClaude()` 用 placeholder `new_xxx` 创建 PTY → 3 秒后 `scheduleMigration()` 调 `find_recent_session` 扫描 `~/.claude/sessions/<pid>.json`（按 cwd 匹配项目，取 `startedAt` 最新的）找到真实 UUID → 更新 `ptyToDisplay` 映射 → emit `session-updated` 刷新侧栏。不依赖 `.jsonl`（对话才有），元数据文件启动即创建。
 
-**PTY reader 线程遗留问题**：Rust reader 线程闭包里捕获了旧 session ID（如 `new_xxx`），迁移后仍用旧 ID 发 `pty-output` 事件。`ptyToDisplay` 映射解决此问题——`showSession` 通过映射找到真正的 PTY key 来定位 live terminal。而 pty-output 监听直接 `liveSessions.get(p.session_id)` 拿到终端，无需 ID 转换。
+**为什么不能调 `pty_rename_session`**：`startClaude()` 中 `terminal.onData` 和 `ResizeObserver` 的闭包捕获了 placeholder ID → 所有 `ptyWrite`/`ptyResize` 都用 `new_xxx` 发到 Rust。如果在 Rust 侧把 HashMap key 从 `new_xxx` 改成真实 UUID，前端闭包发出的旧 key 就找不到 PTY 了——输入和 resize 全部静默失败（TUI 无法操作）。
+
+**PTY reader 线程**：Rust reader 线程闭包里捕获了 placeholder ID（如 `new_xxx`），一直用此 ID 发 `pty-output` 事件——这没问题，因为 Rust HashMap key 没改。`pty-output` 监听直接 `liveSessions.get(p.session_id)` 拿到终端，`showSession` 通过 `ptyToDisplay` 映射从真实 UUID 找到 PTY key（placeholder）。
 
 ### 会话系统 — 适配 Claude Code 存储
 
