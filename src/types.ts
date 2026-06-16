@@ -48,6 +48,12 @@ export interface ChangeRound {
   files: ChangeFile[];
 }
 
+export interface AppSettings {
+  fontSize: number;
+  fontFamily: string;
+  notificationsEnabled: boolean;
+}
+
 export interface ChangeFile {
   path: string;
   status: string;

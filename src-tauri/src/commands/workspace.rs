@@ -1,9 +1,8 @@
-use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 use tauri::State;
 
-use super::{WorkspaceInfo, WorkspaceState, claude_projects_dir, our_config_dir, config_path};
+use super::{WorkspaceInfo, WorkspaceState, claude_projects_dir};
 
 #[tauri::command]
 pub fn list_workspaces() -> Result<Vec<WorkspaceInfo>, String> {
@@ -43,23 +42,17 @@ pub fn set_workspace(
 }
 
 pub fn load_workspace_config() -> Option<String> {
-    let path = config_path();
-    if path.exists() {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(v) = serde_json::from_str::<Value>(&content) {
-                return v.get("workspace").and_then(|w| w.as_str()).map(|s| s.to_string());
-            }
-        }
-    }
-    None
+    let config = super::settings::load_config();
+    config.get("workspace").and_then(|w| w.as_str()).map(|s| s.to_string())
 }
 
 fn save_workspace_config(path: &str) -> Result<(), String> {
-    let dir = our_config_dir();
-    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
-    let json = serde_json::json!({ "workspace": path });
-    fs::write(config_path(), serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("Failed to write config: {}", e))
+    let mut config = super::settings::load_config();
+    if config.is_null() {
+        config = serde_json::json!({});
+    }
+    config["workspace"] = serde_json::Value::String(path.to_string());
+    super::settings::save_config(&config)
 }
 
 fn resolve_path_from_key(key: &str) -> Option<String> {

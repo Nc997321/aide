@@ -32,15 +32,19 @@ aide/
 │   │   ├── TreeNodeItem.vue    # 文件树递归节点（独立 SFC，构建时编译）
 │   │   ├── ContextMenu.vue     # 全局右键菜单组件（Teleport to body）
 │   │   ├── ModalDialog.vue     # 通用弹窗（确认/输入）
+│   │   ├── SettingsModal.vue    # 设置弹窗（字号/字体/通知开关，即时生效）
 │   │   └── FileViewer.vue      # 文件查看器弹窗（语法高亮 + Markdown 渲染 + 编辑模式）
 │   ├── composables/
 │   │   ├── useContextMenu.ts   # 右键菜单状态层（模块级 ref 单例）
 │   │   ├── useSessionState.ts  # 会话运行状态（模块级 reactive 单例）
-│   │   ├── useSessionMonitor.ts # 会话状态监测（periodicTimers + 权限检测 + .jsonl 事件判断）
+│   │   ├── useSessionMonitor.ts # 会话状态监测 + `checking` Set 防 async 竞态
 │   │   ├── useTerminalManager.ts # 终端实例生命周期（liveSessions + PTY I/O + 迁移 + 显隐切换）
 │   │   ├── useModal.ts         # 弹窗状态层
 │   │   ├── useFileViewer.ts    # 文件查看器状态层（模块级 ref 单例）
-│   │   └── useConversationChanges.ts  # 会话变更追踪（按轮次分组 + 撤回）
+│   │   ├── useConversationChanges.ts  # 会话变更追踪（按轮次分组 + 撤回）
+│   │   ├── useSettings.ts      # 设置状态层（模块级 reactive 单例 + load/update）
+│   │   ├── useWindowFocus.ts   # 窗口焦点跟踪（onFocusChanged）
+│   │   └── useNotification.ts  # 桌面通知触发（watch sessionState 转换）
 │   ├── utils/
 │   │   ├── highlight.ts        # 共享 hljs 初始化 + extToLang + highlightCode()
 │   │   └── markdown.ts         # 共享 marked 初始化 + escapeHtml()
@@ -50,7 +54,7 @@ aide/
 │   │   └── contextMenus.ts     # 右键菜单配置层（工厂函数，与组件解耦）
 │   └── styles/global.css       # 暗色主题 CSS 变量 + 滚动条 + 菜单动画
 ├── src-tauri/
-│   ├── Cargo.toml              # tauri, portable-pty, serde, serde_json
+│   ├── Cargo.toml              # tauri, portable-pty, serde, notify-rust
 │   ├── tauri.conf.json         # 窗口 1400x900，devUrl :1420
 │   ├── capabilities/default.json
 │   └── src/
@@ -62,7 +66,8 @@ aide/
 │       │   ├── filesystem.rs   # 文件系统 commands
 │       │   ├── git.rs          # Git 相关 commands
 │       │   ├── session.rs      # 会话持久化 commands
-│       │   └── workspace.rs    # 工作区 commands
+│       │   ├── workspace.rs    # 工作区 commands
+│       │   └── settings.rs     # 设置 commands + notify_send（绕过插件 dev 限制）
 │       └── pty.rs              # 多会话 PTY 管理器（HashMap<sessionId, PtySession>）
 ├── package.json
 ├── vite.config.ts
@@ -140,6 +145,9 @@ PtyManager 维护 `HashMap<String, PtySession>`，每个会话独立持有 PTY�
 | `ptyToDisplay` | `useTerminalManager` | `new_xxx` → 真实 UUID 的迁移映射 |
 | `liveDisplayIds` | `useTerminalManager` | reactive Set，驱动关闭按钮显隐 |
 | `periodicTimers` | `useSessionMonitor` | 每 2 秒轮询 `.jsonl` 状态 |
+| `checking` | `useSessionMonitor` | Set 互斥锁，防止 async 轮询竞态 |
+| `settings` | `useSettings` | 模块级 reactive 单例，字号/字体/通知开关 |
+| `isFocused` | `useWindowFocus` | 模块级 ref，窗口焦点状态 |
 | `props.sessionId` | TerminalPanel | 当前该显示哪个会话（唯一真相源） |
 
 **切换流程**：
@@ -178,6 +186,41 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 路径解析（`resolve_path_from_key`）：DFS 搜索文件系统，对每个 `-` 尝试分隔符或字面量的解读，找到磁盘上存在的路径。解决了编码有损（路径含 `-` 时无法区分）的问题。
 
 持久化：`set_workspace` 时 key 写到 `~/.claude-code-desktop/config.json`，启动时读回。
+
+### 设置系统
+
+`~/.claude-code-desktop/config.json` 现在存两个顶层字段：
+```json
+{ "workspace": "C-Users-...", "settings": { "font_size": 14, ... } }
+```
+
+**Rust 侧**：`settings.rs` 提供 `load_config()` / `save_config()` 作为全文件 JSON 读写 helper。`workspace.rs` 重构为使用这些 helper，不再覆盖 settings 字段。`get_settings` / `set_settings` 命令用默认值填充缺失字段。
+
+**前端侧**：`useSettings` 模块级 reactive 单例。`SettingsModal` v-model 绑定本地 ref，watch 同步到 settings + 调 `update()` 持久化。`useTerminalManager` watch `settings.fontSize`/`fontFamily`，遍历 `liveSessions` 即时应用到所有终端。
+
+### 桌面通知
+
+**不依赖 `tauri-plugin-notification`**——该插件在桌面端只是 `notify-rust` 的薄封装，且 dev 模式下故意跳过 `app_id`（检查 exe 路径是否含 `target\debug` 或 `target\release`）。
+
+我们自己的 `notify_send` 命令直接用 `notify-rust`：
+```rust
+n.app_id("com.aide.app");  // 强制设，不论 dev/prod
+n.auto_icon();
+n.summary(&title).body(&body).show();
+```
+
+**触发链**：
+```
+useSessionMonitor.checkSessionState() 检测到 end_turn
+  → setSessionState(id, "waiting")
+    → useNotification watch 触发
+      → 检查 loaded && notificationsEnabled && !isFocused
+        → api.notifySend(项目名, "会话名 已回复")
+```
+
+**防重复**：`useSessionMonitor.checkSessionState` 是 async 函数，`await api.sessionLastEvent()` 会让出。`checking` Set 作为互斥锁——同一会话同一时刻只有一个 check 在执行，防止两个轮询 tick 同时通过 `cur !== "waiting"` 检查后都设 "waiting"。`finally` 释放锁。
+
+**窗口焦点**：`useWindowFocus` 通过 `getCurrentWindow().onFocusChanged` 跟踪，初始化时主动调 `isFocused()` 补获当前状态。
 
 ## Tauri Commands
 
@@ -220,13 +263,21 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 | `session_last_event` | 读 `.jsonl` 最后一行，返回 `LastEventInfo { event_type, stop_reason }`，用于判断 Claude 是否真正完成（end_turn vs tool_use） |
 | `list_workspaces` | 扫描 `~/.claude/projects/` 目录，返回 `[{key, name}]`，key 是 encoded 目录名，name 通过 DFS 文件系统搜索解析的真实路径 |
 | `set_workspace` | 设置当前工作区，`{key, path}` 分别存 key（用于查会话）和 path（用于文件操作） |
+| `get_settings` | 读 `config.json` 中 `settings` 字段，缺失用默认值 |
+| `set_settings` | 合并 partial settings 到 `config.json`，不覆盖 `workspace` |
+| `notify_send` | 直接用 `notify-rust` 发系统通知，强制 `app_id("com.aide.app")` |
 
 ## 关键组件行为
 
-### App.vue — 三栏拖拽布局
+### App.vue — 三栏拖拽布局 + 启动初始化
 - 左 200-450px、右 200-500px、中 min 400px，3px 分隔条
 - **右面板纵向拆分**：FileTree（`flex:1`）+ 拖拽条 + ChangeLogPanel（默认 220px）
 - **变更面板折叠沉底**：`@collapse-changed` → `height: auto` → 拖拽条隐藏，FileTree 撑满
+- **启动初始化**：`loadSettings()` → `initWindowFocus()` → `useNotification()`，顺序保证通知触发时设置已就绪
+- 渲染 `SettingsModal`（v-if）和齿轮按钮 `@open-settings` 事件
+
+### SidebarLeft — 会话列表 + 设置入口
+- 底部齿轮图标 SVG 按钮 → `emit("open-settings")`
 
 ### TerminalPanel — 多终端 + 预览 + 加载
 - **非 scoped 样式**：`terminal-container`、`xterm`、`session-loader` 等动态 DOM 的样式放在非 scoped `<style>` 块
@@ -235,10 +286,12 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 ### ChangeLogPanel — 折叠通知父组件
 - `emit("collapse-changed", collapsed)` → App.vue 切换高度
 
-### useTerminalManager — 终端生命周期
+### useTerminalManager — 终端生命周期 + 设置响应
 - `createLoadingOverlay()` / `dismissLoader()` — 加载动画 DOM 管理
 - `initExitListener()` — 监听 `pty-exit` → `stopClaude()` 回预览，与 ⏹ 按钮相同路径
 - `LOADER_DISMISS_DELAY = 5000` — 首次 pty-output 后延迟 5s 再关 loader
+- `makeTerminal()` 从 `useSettings().settings` 读字号/字体，非硬编码
+- watch `settings.fontSize`/`fontFamily` → 遍历所有 liveSessions 即时更新 + `fitAddon.fit()`
 
 ### useConversationChanges — 变更追踪
 - `waiting/stopped → running` → `git_stage_all` 快照

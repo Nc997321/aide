@@ -3,6 +3,7 @@ pub mod filesystem;
 pub mod git;
 pub mod session;
 pub mod workspace;
+pub mod settings;
 
 use serde::{Deserialize, Serialize};
 use std::fs;

@@ -6,7 +6,11 @@ import ChangeLogPanel from "./components/ChangeLogPanel.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import ModalDialog from "./components/ModalDialog.vue";
 import FileViewer from "./components/FileViewer.vue";
+import SettingsModal from "./components/SettingsModal.vue";
 import { ref, onMounted, onUnmounted } from "vue";
+import { useSettings } from "./composables/useSettings";
+import { useWindowFocus } from "./composables/useWindowFocus";
+import { useNotification } from "./composables/useNotification";
 
 const leftWidth = ref(280);
 const rightWidth = ref(300);
@@ -18,6 +22,7 @@ const isDraggingChangeLog = ref(false);
 const sidebarRef = ref<InstanceType<typeof SidebarLeft> | null>(null);
 const fileTreeRef = ref<InstanceType<typeof FileTree> | null>(null);
 const activeSessionId = ref("");
+const settingsVisible = ref(false);
 
 function onLeftResizeStart(e: MouseEvent) {
   isDraggingLeft.value = true;
@@ -95,8 +100,19 @@ function handleKeydown(e: KeyboardEvent) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener("keydown", handleKeydown);
+
+  // Load persisted settings
+  const { load: loadSettings } = useSettings();
+  await loadSettings();
+
+  // Start tracking window focus for notifications
+  const { init: initWindowFocus } = useWindowFocus();
+  initWindowFocus();
+
+  // Initialize notification watcher
+  useNotification();
 });
 
 onUnmounted(() => {
@@ -108,7 +124,7 @@ onUnmounted(() => {
   <div class="app-layout">
     <!-- Left panel -->
     <div class="panel-left" :style="{ width: leftWidth + 'px' }">
-      <SidebarLeft ref="sidebarRef" :active-session-id="activeSessionId" @session-changed="onSessionChanged" @workspace-changed="onSidebarWsChanged" />
+      <SidebarLeft ref="sidebarRef" :active-session-id="activeSessionId" @session-changed="onSessionChanged" @workspace-changed="onSidebarWsChanged" @open-settings="() => settingsVisible = true" />
     </div>
 
     <!-- Resize handle left -->
@@ -144,6 +160,7 @@ onUnmounted(() => {
 
     <ContextMenu />
     <ModalDialog />
+    <SettingsModal v-if="settingsVisible" @close="settingsVisible = false" />
     <FileViewer />
   </div>
 </template>

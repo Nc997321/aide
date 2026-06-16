@@ -16,6 +16,7 @@ export function useSessionMonitor(
   const { state: sessionState, setSessionState, removeSessionState } = useSessionState();
   const periodicTimers = new Map<string, ReturnType<typeof setInterval>>();
   const lastEnterMs = new Map<string, number>();
+  const checking = new Set<string>(); // prevent concurrent checks for same session
 
   function terminalTailLines(ptyId: string): string {
     const ls = liveSessions.get(ptyId);
@@ -36,28 +37,35 @@ export function useSessionMonitor(
 
     // Skip if already waiting
     if (cur === "waiting") return;
-
-    const tail = terminalTailLines(ptyId);
-    if (/Do you want to proceed|\[y\/n\]|needs?\s+(your\s+)?permission/i.test(tail)) {
-      setSessionState(displayId, "attention");
-      return;
-    }
+    // Prevent concurrent checks (async race between interval ticks)
+    if (checking.has(displayId)) return;
+    checking.add(displayId);
 
     try {
-      const info = await api.sessionLastEvent(displayId);
-      if (info.event_type === "assistant" && info.stop_reason === "end_turn") {
-        const entered = lastEnterMs.get(displayId) || 0;
-        const eventMs = info.timestamp ? new Date(info.timestamp).getTime() : 0;
-        // Only accept end_turn events that occurred after the user pressed Enter
-        if (entered === 0 || eventMs >= entered) {
-          setSessionState(displayId, "waiting");
-        }
+      const tail = terminalTailLines(ptyId);
+      if (/Do you want to proceed|\[y\/n\]|needs?\s+(your\s+)?permission/i.test(tail)) {
+        setSessionState(displayId, "attention");
         return;
       }
-    } catch (_) { /* fall through */ }
 
-    if (/>\s*$/.test(tail.trimEnd())) {
-      setSessionState(displayId, "waiting");
+      try {
+        const info = await api.sessionLastEvent(displayId);
+        if (info.event_type === "assistant" && info.stop_reason === "end_turn") {
+          const entered = lastEnterMs.get(displayId) || 0;
+          const eventMs = info.timestamp ? new Date(info.timestamp).getTime() : 0;
+          // Only accept end_turn events that occurred after the user pressed Enter
+          if (entered === 0 || eventMs >= entered) {
+            setSessionState(displayId, "waiting");
+          }
+          return;
+        }
+      } catch (_) { /* fall through */ }
+
+      if (/>\s*$/.test(tail.trimEnd())) {
+        setSessionState(displayId, "waiting");
+      }
+    } finally {
+      checking.delete(displayId);
     }
   }
 

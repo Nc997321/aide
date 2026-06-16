@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem,
-  ProjectInfo, DiffEntry, LastEventInfo, ChangeRound,
+  ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
 } from "./types";
 
 export const api = {
@@ -86,6 +86,19 @@ export const api = {
   },
   saveSessionChanges(sessionId: string, rounds: ChangeRound[]): Promise<void> {
     return invoke("save_session_changes", { sessionId, rounds });
+  },
+
+  // 通知（绕过插件 dev 模式限制）
+  notifySend(title: string, body: string): Promise<void> {
+    return invoke("notify_send", { title, body });
+  },
+
+  // 设置
+  getSettings(): Promise<AppSettings> {
+    return invoke("get_settings");
+  },
+  setSettings(settings: Partial<AppSettings>): Promise<void> {
+    return invoke("set_settings", { settings });
   },
 
   // 工作区

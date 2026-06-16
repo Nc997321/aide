@@ -1,9 +1,10 @@
-import { reactive, nextTick } from "vue";
+import { reactive, nextTick, watch } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { api } from "../api";
 import { useSessionMonitor } from "./useSessionMonitor";
+import { useSettings } from "./useSettings";
 
 interface LiveSession {
   div: HTMLDivElement;
@@ -25,15 +26,31 @@ export function useTerminalManager(
   const liveDisplayIds = reactive(new Set<string>());
   let currentSid = "";
 
+  const { settings } = useSettings();
   const monitor = useSessionMonitor(liveSessions, ptyToDisplay);
   let unlistenPty: UnlistenFn | null = null;
   let unlistenExit: UnlistenFn | null = null;
 
+  // Apply font size changes to all live terminals immediately
+  watch(() => settings.fontSize, (newSize) => {
+    for (const [, ls] of liveSessions) {
+      ls.terminal.options.fontSize = newSize;
+      ls.fitAddon.fit();
+    }
+  });
+
+  // Apply font family changes to all live terminals immediately
+  watch(() => settings.fontFamily, (newFamily) => {
+    for (const [, ls] of liveSessions) {
+      ls.terminal.options.fontFamily = newFamily;
+    }
+  });
+
   function makeTerminal(): { terminal: Terminal; fitAddon: FitAddon } {
     const terminal = new Terminal({
       cursorBlink: true,
-      fontSize: 14,
-      fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+      fontSize: settings.fontSize,
+      fontFamily: settings.fontFamily,
       theme: {
         background: "#1e1e2e", foreground: "#cdd6f4", cursor: "#f5e0dc",
         selectionBackground: "#585b70",
