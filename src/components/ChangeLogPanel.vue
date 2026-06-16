@@ -5,6 +5,7 @@ import { useFileViewer } from "../composables/useFileViewer";
 import { api } from "../api";
 
 const props = defineProps<{ sessionId: string }>();
+const emit = defineEmits<{ (e: "collapse-changed", collapsed: boolean): void }>();
 
 const { rounds, revertRound, revertSingleFile } = useConversationChanges(() => props.sessionId);
 const fileViewer = useFileViewer();
@@ -27,6 +28,11 @@ function openFile(path: string) {
   fileViewer.open(path);
 }
 
+function toggleCollapsed() {
+  collapsed.value = !collapsed.value;
+  emit("collapse-changed", collapsed.value);
+}
+
 const totalFiles = computed(() => {
   let n = 0;
   for (const r of rounds.value) n += r.files.length;
@@ -39,7 +45,7 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
 <template>
   <div class="changelog" :class="{ collapsed }">
     <!-- Header -->
-    <div class="changelog-header" @click="collapsed = !collapsed">
+    <div class="changelog-header" @click="toggleCollapsed">
       <div class="changelog-header-left">
         <span class="changelog-dot">●</span>
         <span class="changelog-title">会话变更</span>

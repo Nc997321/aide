@@ -11,6 +11,7 @@ import { ref, onMounted, onUnmounted } from "vue";
 const leftWidth = ref(280);
 const rightWidth = ref(300);
 const changeLogHeight = ref(220);
+const changeLogCollapsed = ref(false);
 const isDraggingLeft = ref(false);
 const isDraggingRight = ref(false);
 const isDraggingChangeLog = ref(false);
@@ -133,11 +134,12 @@ onUnmounted(() => {
     <div class="panel-right" :style="{ width: rightWidth + 'px' }">
       <FileTree ref="fileTreeRef" :session-id="activeSessionId" @workspace-changed="onFileTreeWsChanged" />
       <div
+        v-show="!changeLogCollapsed"
         class="resize-handle-h"
         :class="{ active: isDraggingChangeLog }"
         @mousedown="onChangeLogResizeStart"
       />
-      <ChangeLogPanel :session-id="activeSessionId" :style="{ height: changeLogHeight + 'px' }" />
+      <ChangeLogPanel :session-id="activeSessionId" :style="{ height: changeLogCollapsed ? 'auto' : changeLogHeight + 'px' }" @collapse-changed="(v) => changeLogCollapsed = v" />
     </div>
 
     <ContextMenu />

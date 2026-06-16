@@ -18,6 +18,11 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(manager)
         .manage(workspace_state)
+        .setup(|app| {
+            #[cfg(target_os = "windows")]
+            apply_window_theme(app);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::pty::pty_write,
             commands::pty::pty_resize,
@@ -49,4 +54,53 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Apply Catppuccin Mocha dark theme to the Windows title bar via DWM.
+///
+/// 1. Sets the window theme to Dark (→ `DWMWA_USE_IMMERSIVE_DARK_MODE` on Windows).
+/// 2. Sets `DWMWA_CAPTION_COLOR` (Win 11) so the title bar matches the app's
+///    background (#1e1e2e) instead of generic dark gray.
+#[cfg(target_os = "windows")]
+fn apply_window_theme(app: &mut tauri::App) {
+    use tauri::Manager;
+
+    let window = match app.get_webview_window("main") {
+        Some(w) => w,
+        None => return,
+    };
+
+    // Enable dark title bar (DWMWA_USE_IMMERSIVE_DARK_MODE under the hood)
+    let _ = window.set_theme(Some(tauri::Theme::Dark));
+
+    // HWND is a newtype struct from the `windows` crate; extract the raw handle
+    let hwnd_raw: *mut std::ffi::c_void = match window.hwnd() {
+        Ok(h) => h.0,
+        Err(_) => return,
+    };
+
+    // DWMWA_CAPTION_COLOR = 35 — available since Windows 11 22H2.
+    // On older Windows, the call fails silently and we keep the default dark title bar.
+    // COLORREF: 0x00BBGGRR → Catppuccin Mocha base #1e1e2e = 0x002e1e1e
+    const DWMWA_CAPTION_COLOR: u32 = 35;
+    const CATPPUCCIN_BASE: u32 = 0x002e1e1e;
+
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: *mut std::ffi::c_void,
+            dw_attribute: u32,
+            pv_attribute: *const std::ffi::c_void,
+            cb_attribute: u32,
+        ) -> i32;
+    }
+
+    unsafe {
+        let _hr = DwmSetWindowAttribute(
+            hwnd_raw,
+            DWMWA_CAPTION_COLOR,
+            &CATPPUCCIN_BASE as *const u32 as *const std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
+    }
 }
