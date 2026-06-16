@@ -72,7 +72,7 @@ const extToLang: Record<string, string> = {
   gitignore: "plaintext", env: "plaintext",
 };
 
-const { visible, filePath, content, error, close } = useFileViewer();
+const { visible, filePath, content, error, editing, editContent, saving, close, startEdit, save, cancelEdit } = useFileViewer();
 
 const codeRef = ref<HTMLElement | null>(null);
 
@@ -116,7 +116,19 @@ watch(visible, async (v) => {
 });
 
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") close();
+  if (e.key === "Escape") {
+    if (editing.value) {
+      cancelEdit();
+    } else {
+      close();
+    }
+  }
+  if (e.key === "s" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    if (editing.value) {
+      save();
+    }
+  }
 }
 
 function onOverlayClick(e: MouseEvent) {
@@ -139,10 +151,17 @@ function getLanguageLabel(): string {
           <span class="viewer-title">{{ fileName }}</span>
           <span class="viewer-lang">{{ getLanguageLabel() }}</span>
           <span class="viewer-path" :title="filePath">{{ filePath }}</span>
+          <button v-if="!error" class="viewer-btn" :class="{ primary: editing }" @click="editing ? save() : startEdit()">
+            {{ editing ? '保存' : '编辑' }}
+          </button>
+          <span v-if="editing" class="viewer-hint">Esc 取消 · Ctrl+S 保存</span>
           <button class="viewer-close" @click="close">&times;</button>
         </div>
         <div class="viewer-body">
           <div v-if="error" class="viewer-error">{{ error }}</div>
+          <div v-else-if="editing" class="viewer-editor">
+            <textarea v-model="editContent" class="viewer-textarea" spellcheck="false"></textarea>
+          </div>
           <div v-else-if="isMarkdown" ref="codeRef" class="viewer-markdown" v-html="renderedMarkdown"></div>
           <pre v-else><code ref="codeRef" class="viewer-code" v-html="highlighted"></code></pre>
         </div>
@@ -173,7 +192,7 @@ function getLanguageLabel(): string {
   border: 1px solid var(--surface-hover);
   border-radius: 10px;
   width: min(90vw, 900px);
-  max-height: 85vh;
+  height: 85vh;
   display: flex;
   flex-direction: column;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
@@ -234,16 +253,72 @@ function getLanguageLabel(): string {
   background: var(--surface-hover);
 }
 
+.viewer-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--surface-hover);
+  color: var(--text-secondary);
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+.viewer-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.viewer-btn.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.viewer-btn.primary:hover {
+  opacity: 0.9;
+}
+
+.viewer-hint {
+  flex: 1;
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .viewer-body {
   flex: 1;
   overflow: auto;
   padding: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .viewer-error {
   padding: 24px;
   color: var(--accent-red);
   font-size: 13px;
+}
+
+.viewer-textarea {
+  flex: 1;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: none;
+  margin: 0;
+  padding: 16px;
+  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  resize: none;
+  outline: none;
+}
+
+.viewer-editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .viewer-code {

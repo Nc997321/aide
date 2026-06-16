@@ -30,6 +30,7 @@ pub fn run() {
             commands::list_directory,
             commands::file_open,
             commands::read_file_content,
+            commands::write_file_content,
             commands::delete_file,
             commands::create_file,
             commands::create_dir,

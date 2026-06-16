@@ -19,7 +19,7 @@ export function fileMenuItems(
   const fileName = path.split(/[/\\]/).pop() || path;
   const viewer = useFileViewer();
   return [
-    { label: "查看", action: () => viewer.open(path) },
+    { label: "查看/编辑", action: () => viewer.open(path) },
     { label: "其他方式打开", action: () => invoke("file_open", { path }) },
     { label: "复制路径", action: () => navigator.clipboard.writeText(path) },
     {

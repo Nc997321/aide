@@ -185,6 +185,7 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 | `list_directory` | `path` | 文件/目录列表，过滤 `.`开头、`node_modules`、`target`、`dist` |
 | `file_open` | `path` | 系统默认程序打开文件（Windows: `cmd /c start`） |
 | `read_file_content` | `path` | 读文件内容 |
+| `write_file_content` | `path, content` | 写入文件内容 |
 | `delete_file` | `path` | 删除文件或目录 |
 | `create_file` | `parent_path, name` | 新建空文件 |
 | `create_dir` | `parent_path, name` | 新建目录 |
@@ -229,6 +230,8 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 
 ### SidebarLeft.vue
 - **工作区列表**：`list_workspaces` 加载全部工作区，活动工作区展开显示其会话，`▸` 三角旋转 90° 表示展开
+- **工作区展开/收起**：`expandedWorkspaces: Set<string>` 跟踪展开状态，点击当前工作区 toggle 展开/收起
+- **会话搜索**：`searchQuery` 过滤工作区和会话（名称 + 最后消息），无匹配时显示提示
 - 点击其他工作区 → `set_workspace({key, path})` → 加载会话 + emit `workspace-changed` 通知 FileTree 刷新
 - 会话列表从 `list_sessions` 加载，按时间戳倒序
 - 空列表时自动创建首个会话；`activeSessionId` 为 `new_` 时自动选真实会话
@@ -259,8 +262,12 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 - 模块级 `useFileViewer` 单例状态层（`open(path)` / `close()`）
 - **代码文件**：highlight.js 语法高亮，12 种语言自动匹配，Catppuccin 配色
 - **Markdown 文件**（`.md` / `.mdx`）：marked 渲染为排版 HTML（标题、表格、代码块语法高亮等）
+- **编辑模式**：右键菜单"查看/编辑"打开，按钮切换编辑/保存状态
+  - textarea 编辑区（`width: 100%` + `flex: 1` 填满容器）
+  - Ctrl+S 保存，ESC 取消编辑
+  - 保存后同步 `content`，退出编辑态
 - 弹窗 90vw / 900px 宽，85vh 高，Esc 关闭
-- `read_file_content` 读文件，二进制/不可读文件显示错误
+- `read_file_content` / `write_file_content` 读写文件，二进制/不可读文件显示错误
 
 ## 当前状态
 
@@ -274,12 +281,10 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 - 工作区管理（`list_workspaces` / `set_workspace`）
 - 文件树（懒加载，新建/删除文件目录，**"会话变更"tab 按轮次分组 + 撤回**）
 - 右键菜单（4 层架构，文件/目录/树空白/会话）
-- **文件查看器** — 左键点击内置查看，highlight.js 语法高亮 + marked .md 渲染，右键"其他方式打开"调系统程序
+- **文件查看器** — 左键点击内置查看，highlight.js 语法高亮 + marked .md 渲染，右键"查看/编辑"打开编辑模式，右键"其他方式打开"调系统程序
 - Ctrl+N 新建会话
 - **窗口状态记忆** — `tauri-plugin-window-state` 自动保存/恢复窗口位置和大小
 
 ### 未实现 / 待改进
 - 自定义功能区读真实配置
-- 会话搜索
-- 窗口状态记忆
 - 文件树的 "更改" tab（git diff）
