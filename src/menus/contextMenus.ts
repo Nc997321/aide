@@ -1,7 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
 import type { MenuItem } from "../composables/useContextMenu";
 import { useModal } from "../composables/useModal";
 import { useFileViewer } from "../composables/useFileViewer";
+import { api } from "../api";
 
 function sep(): MenuItem {
   return { label: "", separator: true };
@@ -20,7 +20,7 @@ export function fileMenuItems(
   const viewer = useFileViewer();
   return [
     { label: "查看/编辑", action: () => viewer.open(path) },
-    { label: "其他方式打开", action: () => invoke("file_open", { path }) },
+    { label: "其他方式打开", action: () => api.fileOpen(path) },
     { label: "复制路径", action: () => navigator.clipboard.writeText(path) },
     {
       label: "复制相对路径",
@@ -38,7 +38,7 @@ export function fileMenuItems(
       action: async () => {
         const ok = await modal.confirm("删除文件", `确定要删除「${fileName}」吗？`, "删除", true);
         if (!ok) return;
-        await invoke("delete_file", { path });
+        await api.deleteFile(path);
         onDeleted?.();
       },
     },
@@ -64,7 +64,7 @@ export function directoryMenuItems(
       action: async () => {
         const name = await modal.prompt("新建文件", "输入文件名...", "创建");
         if (!name) return;
-        await invoke("create_file", { parentPath: path, name });
+        await api.createFile(path, name);
         onRefresh?.();
       },
     },
@@ -73,7 +73,7 @@ export function directoryMenuItems(
       action: async () => {
         const name = await modal.prompt("新建文件夹", "输入文件夹名...", "创建");
         if (!name) return;
-        await invoke("create_dir", { parentPath: path, name });
+        await api.createDir(path, name);
         onRefresh?.();
       },
     },
@@ -84,7 +84,7 @@ export function directoryMenuItems(
       action: async () => {
         const ok = await modal.confirm("删除文件夹", `确定要删除「${dirName}」及其所有内容吗？`, "删除", true);
         if (!ok) return;
-        await invoke("delete_file", { path });
+        await api.deleteFile(path);
         onDeleted?.();
       },
     },
@@ -102,7 +102,7 @@ export function fileTreeAreaMenuItems(rootPath: string, onRefresh: () => void): 
       action: async () => {
         const name = await modal.prompt("新建文件", "输入文件名...", "创建");
         if (!name) return;
-        await invoke("create_file", { parentPath: rootPath, name });
+        await api.createFile(rootPath, name);
         onRefresh();
       },
     },
@@ -111,7 +111,7 @@ export function fileTreeAreaMenuItems(rootPath: string, onRefresh: () => void): 
       action: async () => {
         const name = await modal.prompt("新建文件夹", "输入文件夹名...", "创建");
         if (!name) return;
-        await invoke("create_dir", { parentPath: rootPath, name });
+        await api.createDir(rootPath, name);
         onRefresh();
       },
     },
@@ -140,7 +140,7 @@ export function sessionMenuItems(
       action: async () => {
         const ok = await modal.confirm("删除会话", "确定要删除此会话吗？此操作不可撤销。", "删除", true);
         if (!ok) return;
-        await invoke("delete_session", { id });
+        await api.deleteSession(id);
         onDeleted();
       },
     },

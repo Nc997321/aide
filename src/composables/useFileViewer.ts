@@ -1,5 +1,5 @@
 import { ref, readonly } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { api } from "../api";
 
 // Module-level singletons
 const visible = ref(false);
@@ -18,7 +18,7 @@ export function useFileViewer() {
     editing.value = false;
     editContent.value = "";
     try {
-      content.value = await invoke<string>("read_file_content", { path });
+      content.value = await api.readFileContent(path);
     } catch (e) {
       error.value = String(e);
     }
@@ -33,7 +33,7 @@ export function useFileViewer() {
   async function save() {
     saving.value = true;
     try {
-      await invoke("write_file_content", { path: filePath.value, content: editContent.value });
+      await api.writeFileContent(filePath.value, editContent.value);
       content.value = editContent.value;
       editing.value = false;
     } catch (e) {

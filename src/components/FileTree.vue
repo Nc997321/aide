@@ -1,18 +1,12 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from "vue";
-import { invoke } from "@tauri-apps/api/core";
 import TreeNodeItem from "./TreeNodeItem.vue";
 import { useContextMenu } from "../composables/useContextMenu";
 import { useFileViewer } from "../composables/useFileViewer";
 import { useConversationChanges } from "../composables/useConversationChanges";
 import { fileTreeAreaMenuItems } from "../menus/contextMenus";
-
-interface FileEntry {
-  name: string;
-  path: string;
-  is_dir: boolean;
-  children: FileEntry[] | null;
-}
+import { api } from "../api";
+import type { FileEntry, WorkspaceInfo } from "../types";
 
 const props = defineProps<{ sessionId: string }>();
 
@@ -22,11 +16,7 @@ const loading = ref(true);
 const errorMsg = ref("");
 const expandedDirs = ref<Set<string>>(new Set());
 const selectedPath = ref<string>("");
-interface FileWsInfo {
-  key: string;
-  name: string;
-}
-const workspaces = ref<FileWsInfo[]>([]);
+const workspaces = ref<WorkspaceInfo[]>([]);
 const showWsDropdown = ref(false);
 
 // ── Tab switching ──
@@ -61,7 +51,7 @@ async function toggleDir(path: string) {
 
 async function loadChildren(dirPath: string) {
   try {
-    const entries = await invoke<FileEntry[]>("list_directory", { path: dirPath });
+    const entries = await api.listDirectory(dirPath);
     if (dirPath === projectInfo.value.root) {
       // Refresh root: replace treeData entirely
       treeData.value = entries;
@@ -101,10 +91,10 @@ async function loadRoot() {
   loading.value = true;
   errorMsg.value = "";
   try {
-    const info = await invoke<{ root: string; name: string; branch: string }>("get_project_info");
+    const info = await api.getProjectInfo();
     projectInfo.value = info;
     const root = info.root;
-    const entries = await invoke<FileEntry[]>("list_directory", { path: root });
+    const entries = await api.listDirectory(root);
     treeData.value = entries;
     expandedDirs.value = new Set([root]);
   } catch (e) {
@@ -116,17 +106,17 @@ async function loadRoot() {
 
 async function loadWorkspaces() {
   try {
-    workspaces.value = await invoke<FileWsInfo[]>("list_workspaces");
+    workspaces.value = await api.listWorkspaces();
   } catch (_e) {
     workspaces.value = [];
   }
 }
 
-async function selectWorkspace(ws: FileWsInfo) {
+async function selectWorkspace(ws: WorkspaceInfo) {
   showWsDropdown.value = false;
   if (ws.name === projectInfo.value.root) return;
   try {
-    await invoke("set_workspace", { key: ws.key, path: ws.name });
+    await api.setWorkspace(ws.key, ws.name);
   } catch (_e) { return; }
   emit("workspace-changed", ws.name);
   await loadRoot();

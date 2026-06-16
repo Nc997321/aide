@@ -27,3 +27,6 @@ Thumbs.db
 
 # Editor
 *.code-workspace
+
+# Local plans
+PLANS.md

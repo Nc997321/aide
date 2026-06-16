@@ -1,21 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { invoke } from "@tauri-apps/api/core";
 import { useContextMenu } from "../composables/useContextMenu";
 import { useSessionState } from "../composables/useSessionState";
 import { sessionMenuItems } from "../menus/contextMenus";
-
-interface Session {
-  id: string;
-  name: string;
-  timestamp: number;
-  last_message: string;
-}
-
-interface WorkspaceInfo {
-  key: string;
-  name: string;
-}
+import { api } from "../api";
+import type { Session, WorkspaceInfo } from "../types";
 
 const props = defineProps<{
   activeSessionId: string;
@@ -78,7 +67,7 @@ function timeAgo(ts: number): string {
 
 async function loadWorkspaces() {
   try {
-    workspaces.value = await invoke<WorkspaceInfo[]>("list_workspaces");
+    workspaces.value = await api.listWorkspaces();
   } catch (_e) {
     workspaces.value = [];
   }
@@ -87,7 +76,7 @@ async function loadWorkspaces() {
 async function loadSessions() {
   loading.value = true;
   try {
-    sessions.value = await invoke<Session[]>("list_sessions");
+    sessions.value = await api.listSessions();
   } catch (_e) {
     sessions.value = [];
   }
@@ -119,7 +108,7 @@ async function switchWorkspace(ws: WorkspaceInfo) {
     return;
   }
   try {
-    await invoke("set_workspace", { key: ws.key, path: ws.name });
+    await api.setWorkspace(ws.key, ws.name);
   } catch (_e) { return; }
   activeWorkspace.value = ws.key;
   expandedWorkspaces.value.add(ws.key);
@@ -129,7 +118,7 @@ async function switchWorkspace(ws: WorkspaceInfo) {
 
 async function renameSession(id: string, name: string) {
   try {
-    await invoke("rename_session", { id, name });
+    await api.renameSession(id, name);
     await loadSessions();
   } catch (_e) { /* ignore */ }
 }
@@ -146,7 +135,7 @@ function onSessionContextMenu(e: MouseEvent, id: string) {
 async function newSession() {
   const name = `新会话 ${new Date().toLocaleTimeString()}`;
   try {
-    const s = await invoke<Session>("create_session", { name });
+    const s = await api.createSession(name);
     sessions.value.unshift(s);
     emit("session-changed", s.id);
   } catch (_e) {
@@ -165,7 +154,7 @@ onMounted(async () => {
   await loadWorkspaces();
   // Find active workspace: match by encoded key derived from get_project_info
   try {
-    const info = await invoke<{ root: string }>("get_project_info");
+    const info = await api.getProjectInfo();
     for (const ws of workspaces.value) {
       if (ws.name === info.root) {
         activeWorkspace.value = ws.key;

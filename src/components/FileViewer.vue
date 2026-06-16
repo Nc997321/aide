@@ -1,76 +1,8 @@
 <script setup lang="ts">
 import { computed, watch, ref, nextTick } from "vue";
 import { useFileViewer } from "../composables/useFileViewer";
-import { Marked } from "marked";
-import hljs from "highlight.js/lib/core";
-import typescript from "highlight.js/lib/languages/typescript";
-import javascript from "highlight.js/lib/languages/javascript";
-import rust from "highlight.js/lib/languages/rust";
-import json from "highlight.js/lib/languages/json";
-import xml from "highlight.js/lib/languages/xml";
-import css from "highlight.js/lib/languages/css";
-import bash from "highlight.js/lib/languages/bash";
-import python from "highlight.js/lib/languages/python";
-import markdown from "highlight.js/lib/languages/markdown";
-import yaml from "highlight.js/lib/languages/yaml";
-import sql from "highlight.js/lib/languages/sql";
-import plaintext from "highlight.js/lib/languages/plaintext";
-
-hljs.registerLanguage("typescript", typescript);
-hljs.registerLanguage("javascript", javascript);
-hljs.registerLanguage("rust", rust);
-hljs.registerLanguage("json", json);
-hljs.registerLanguage("xml", xml);
-hljs.registerLanguage("html", xml);
-hljs.registerLanguage("css", css);
-hljs.registerLanguage("bash", bash);
-hljs.registerLanguage("python", python);
-hljs.registerLanguage("markdown", markdown);
-hljs.registerLanguage("yaml", yaml);
-hljs.registerLanguage("sql", sql);
-hljs.registerLanguage("plaintext", plaintext);
-
-const marked = new Marked({
-  gfm: true,
-  breaks: false,
-});
-
-// Override code renderer to use highlight.js
-const originalRenderer = marked.options;
-marked.setOptions({
-  ...originalRenderer,
-});
-
-// Patch marked's code tokenizer to use hljs
-marked.use({
-  renderer: {
-    code({ text, lang }: { text: string; lang?: string }) {
-      if (lang && hljs.getLanguage(lang)) {
-        const result = hljs.highlight(text, { language: lang });
-        return `<pre><code class="hljs language-${lang}">${result.value}</code></pre>`;
-      }
-      // Auto-detect
-      const result = hljs.highlightAuto(text);
-      return `<pre><code class="hljs">${result.value}</code></pre>`;
-    },
-  },
-});
-
-const extToLang: Record<string, string> = {
-  ts: "typescript", tsx: "typescript",
-  js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
-  rs: "rust",
-  json: "json", jsonc: "json",
-  xml: "xml", html: "html", htm: "html", vue: "html", svelte: "html",
-  css: "css", scss: "css", less: "css",
-  sh: "bash", bash: "bash", zsh: "bash", ps1: "bash",
-  py: "python", pyw: "python",
-  md: "markdown", mdx: "markdown",
-  yaml: "yaml", yml: "yaml",
-  sql: "sql",
-  toml: "ini", ini: "ini", cfg: "ini", conf: "ini",
-  gitignore: "plaintext", env: "plaintext",
-};
+import { hljs, extToLang, highlightCode } from "../utils/highlight";
+import { marked } from "../utils/markdown";
 
 const { visible, filePath, content, error, editing, editContent, saving, close, startEdit, save, cancelEdit } = useFileViewer();
 
@@ -88,15 +20,7 @@ const isMarkdown = computed(() => {
 const highlighted = computed(() => {
   if (!content.value) return "";
   const ext = fileName.value.split(".").pop()?.toLowerCase() || "";
-  const lang = extToLang[ext] || "plaintext";
-  try {
-    const result = hljs.highlight(content.value, { language: lang });
-    return result.value;
-  } catch {
-    // Fallback: auto-detect
-    const result = hljs.highlightAuto(content.value);
-    return result.value;
-  }
+  return highlightCode(content.value, ext);
 });
 
 const renderedMarkdown = computed(() => {

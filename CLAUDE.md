@@ -31,13 +31,20 @@ aide/
 │   │   ├── TreeNodeItem.vue    # 文件树递归节点（独立 SFC，构建时编译）
 │   │   ├── ContextMenu.vue     # 全局右键菜单组件（Teleport to body）
 │   │   ├── ModalDialog.vue     # 通用弹窗（确认/输入）
-│   │   └── FileViewer.vue      # 文件查看器弹窗（highlight.js 语法高亮 + marked Markdown 渲染）
+│   │   └── FileViewer.vue      # 文件查看器弹窗（语法高亮 + Markdown 渲染 + 编辑模式）
 │   ├── composables/
 │   │   ├── useContextMenu.ts   # 右键菜单状态层（模块级 ref 单例）
 │   │   ├── useSessionState.ts  # 会话运行状态（模块级 reactive 单例）
+│   │   ├── useSessionMonitor.ts # 会话状态监测（periodicTimers + 权限检测 + .jsonl 事件判断）
+│   │   ├── useTerminalManager.ts # 终端实例生命周期（liveSessions + PTY I/O + 迁移 + 显隐切换）
 │   │   ├── useModal.ts         # 弹窗状态层
 │   │   ├── useFileViewer.ts    # 文件查看器状态层（模块级 ref 单例）
 │   │   └── useConversationChanges.ts  # 会话变更追踪（按轮次分组 + 撤回）
+│   ├── utils/
+│   │   ├── highlight.ts        # 共享 hljs 初始化 + extToLang + highlightCode()
+│   │   └── markdown.ts         # 共享 marked 初始化 + escapeHtml()
+│   ├── types.ts                # 集中类型定义（Session, FileEntry, DiffEntry 等）
+│   ├── api.ts                  # Tauri invoke 类型安全封装层
 │   ├── menus/
 │   │   └── contextMenus.ts     # 右键菜单配置层（工厂函数，与组件解耦）
 │   └── styles/global.css       # 暗色主题 CSS 变量 + 滚动条 + 菜单动画
@@ -48,7 +55,13 @@ aide/
 │   └── src/
 │       ├── main.rs             # 入口 → lib::run()
 │       ├── lib.rs              # Tauri Builder：注册 state + commands
-│       ├── commands.rs         # Tauri commands + Claude Code 适配层
+│       ├── commands/
+│       │   ├── mod.rs          # 共享类型 + 辅助函数 + re-export
+│       │   ├── pty.rs          # PTY 相关 commands
+│       │   ├── filesystem.rs   # 文件系统 commands
+│       │   ├── git.rs          # Git 相关 commands
+│       │   ├── session.rs      # 会话持久化 commands
+│       │   └── workspace.rs    # 工作区 commands
 │       └── pty.rs              # 多会话 PTY 管理器（HashMap<sessionId, PtySession>）
 ├── package.json
 ├── vite.config.ts
@@ -80,7 +93,7 @@ aide/
 ### 数据流
 
 ```
-用户键盘 → live terminal.onData → invoke("pty_write", {sessionId: ptyId})
+用户键盘 → live terminal.onData → api.ptyWrite(ptyId, data)
   → Rust PtyManager.write(ptyId) → PTY stdin → claude 进程
     → claude stdout → PTY reader thread
       → emit("pty-output", {session_id: ptyId, data})
@@ -98,7 +111,7 @@ aide/
 | `waiting` | 右侧绿色边框 | `.jsonl` 最后事件为 `assistant`（Claude 完成） |
 | `attention` | 琥珀色光带扫过 | 终端出现权限审批提示 `[y/n]` |
 
-**判定逻辑**（`TerminalPanel.vue`）：
+**判定逻辑**（`useSessionMonitor.ts`）：
 - 进入实时模式 → 默认 `waiting`
 - 用户按 Enter → 立即 `running`
 - 每 2 秒周期查 `session_last_event` → `assistant` 则 `waiting`
@@ -108,21 +121,21 @@ aide/
 
 PtyManager 维护 `HashMap<String, PtySession>`，每个会话独立持有 PTY。切换会话时不杀进程，只切换终端显隐。
 
-### 前端状态（TerminalPanel.vue）
+### 前端状态
 
-| 变量 | 类型 | 说明 |
-|------|------|------|
-| `liveSessions` | `Map<ptyId, LiveSession>` | 直播终端表，key 是 PTY 侧 session ID |
-| `ptyToDisplay` | `Map<ptyId, displayId>` | `new_xxx` → 真实 UUID 的迁移映射 |
-| `liveDisplayIds` | `reactive Set<displayId>` | 给模板用，驱动关闭按钮显隐 |
-| `periodicTimers` | `Map<ptyId, setInterval>` | 每 2 秒轮询 `.jsonl` 状态 |
-| `props.sessionId` | 外部传入 | 当前该显示哪个会话（唯一真相源，无 `activeSid`） |
+| 变量 | 所属模块 | 说明 |
+|------|---------|------|
+| `liveSessions` | `useTerminalManager` | 直播终端表，key 是 PTY 侧 session ID |
+| `ptyToDisplay` | `useTerminalManager` | `new_xxx` → 真实 UUID 的迁移映射 |
+| `liveDisplayIds` | `useTerminalManager` | reactive Set，驱动关闭按钮显隐 |
+| `periodicTimers` | `useSessionMonitor` | 每 2 秒轮询 `.jsonl` 状态 |
+| `props.sessionId` | TerminalPanel | 当前该显示哪个会话（唯一真相源） |
 
 **切换流程**：
 ```
-watch(sessionId) → showSession(sid)
-  ├─ liveSessions 有 → 显示对应 div，fit()
-  └─ 没有 → 显示预览终端，渲染历史
+watch(sessionId) → showSession(sid) + loadPreviewContent(sid)
+  ├─ liveSessions 有 PTY → 显示对应 div，fit()
+  └─ 没有 PTY → 显示 HTML 预览 div + 加载消息历史
 ```
 
 **新建会话 ID 迁移**（不在 watch 里）：
@@ -216,15 +229,17 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 - **工作区切换**：监听 SidebarLeft 和 FileTree 的 `workspace-changed`，emit 链驱动另一端刷新
 - 面板宽度限制：左 200-450px，右 200-500px，中 min 400px
 
-### TerminalPanel.vue（核心）
-- **多终端架构**：1 个预览终端（共享）+ N 个直播终端（每 PTY 一个独立 xterm 实例）
+### TerminalPanel.vue + useTerminalManager + useSessionMonitor
+
+核心逻辑已拆分到两个 composable，TerminalPanel.vue 只管模板 + 预览 + 键盘事件（~110 行 script）。
+
+- **多终端架构**：1 个 HTML 预览 div（共享）+ N 个直播终端（每 PTY 一个独立 xterm 实例）
 - **DOM 布局**：`.terminal-stack`（flex:1, position:relative）→ 所有 `.terminal-container`（absolute inset:0），display none 切换
 - **数据流**：每个直播 terminal 的 `onData` 绑定自己的 `ptyId`；`pty-output` 监听直接 `liveSessions.get(p.session_id).terminal.write(data)`，无需 session ID 过滤
-- **状态**：`liveSessions: Map<ptyId, LiveSession>`（真相源）、`ptyToDisplay: Map<ptyId, displayId>`（迁移映射）、`liveDisplayIds: reactive Set`（模板驱动）
-- **切换**：`showSession(sid)` → 隐藏全部 div → 找到对应 live terminal 或显示预览
+- **切换**：`showSession(sid)` → 隐藏全部 div → 找到对应 live terminal 或显示预览 div + 调用 `loadPreviewContent(sid)` 加载消息
 - **新建会话迁移**：`startClaude()` 用 `new_xxx` 创建 PTY → 3 秒后 `scheduleMigration()` 拉列表找真实 UUID → 更新 `ptyToDisplay` + `pty_rename_session` → emit `session-updated`
-- **预览模式**：共享预览终端展示 `load_messages` 历史，Enter 键触发 `startClaude()`
-- **关闭按钮**：⏹ 停止当前 Claude（`destroyLiveSession` 清理 DOM + terminal + observer）
+- **预览模式**：HTML div 渲染 Markdown（marked），Enter 键触发 `startClaude()`
+- **关闭按钮**：⏹ 停止当前 Claude（`destroyLiveSession` 清理 DOM + terminal + observer，回退到预览模式）
 - **自适应**：每个终端独立 FitAddon + ResizeObserver → `pty_resize`
 - **注意**：动态创建的 DOM 元素不受 Vue scoped CSS 影响，terminal 相关样式放在非 scoped `<style>` 块
 
@@ -258,6 +273,23 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 - `git_stage_all` → （Claude 运行） → `git_diff_files` → 生成轮次记录
 - 撤回通过 `git_revert_file` 实现
 
+### useTerminalManager.ts
+- 终端实例生命周期管理（从 TerminalPanel.vue 提取）
+- `liveSessions` Map + `ptyToDisplay` Map + `liveDisplayIds` reactive Set
+- `makeTerminal()` — 创建 xterm 实例 + FitAddon + Catppuccin 主题
+- `startClaude()` — 创建 DOM、打开终端、绑定 I/O、启动监测
+- `destroyLiveSession()` — 清理 DOM、终端、observer、timer
+- `stopClaude()` — 通过 invoke 杀 PTY
+- `scheduleMigration()` — `new_xxx` → 真实 UUID 迁移
+- `showSession()` — 切换终端显隐
+
+### useSessionMonitor.ts
+- 会话状态监测逻辑（从 TerminalPanel.vue 提取）
+- `periodicTimers` Map — 每 2 秒轮询 `.jsonl` 状态
+- `terminalTailLines()` — 读终端缓冲最后 3 行
+- `checkSessionState()` — 权限关键词检测 + `.jsonl` 事件类型判断
+- 导出 `{ startPeriodicCheck, stopPeriodicCheck, stopAll }`
+
 ### FileViewer.vue
 - 模块级 `useFileViewer` 单例状态层（`open(path)` / `close()`）
 - **代码文件**：highlight.js 语法高亮，12 种语言自动匹配，Catppuccin 配色
@@ -287,4 +319,3 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 
 ### 未实现 / 待改进
 - 自定义功能区读真实配置
-- 文件树的 "更改" tab（git diff）

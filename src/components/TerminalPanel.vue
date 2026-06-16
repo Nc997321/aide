@@ -1,24 +1,9 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, nextTick, reactive, computed } from "vue";
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { Terminal } from "xterm";
-import { FitAddon } from "xterm-addon-fit";
+import { ref, watch, onMounted, onUnmounted, nextTick, computed } from "vue";
 import { useSessionState } from "../composables/useSessionState";
-import { Marked } from "marked";
-import hljs from "highlight.js/lib/core";
-import typescript from "highlight.js/lib/languages/typescript";
-import javascript from "highlight.js/lib/languages/javascript";
-import rust from "highlight.js/lib/languages/rust";
-import json from "highlight.js/lib/languages/json";
-import xml from "highlight.js/lib/languages/xml";
-import css from "highlight.js/lib/languages/css";
-import bash from "highlight.js/lib/languages/bash";
-import python from "highlight.js/lib/languages/python";
-import markdown from "highlight.js/lib/languages/markdown";
-import yaml from "highlight.js/lib/languages/yaml";
-import sql from "highlight.js/lib/languages/sql";
-import plaintext from "highlight.js/lib/languages/plaintext";
+import { useTerminalManager } from "../composables/useTerminalManager";
+import { marked, escapeHtml } from "../utils/markdown";
+import { api } from "../api";
 import "xterm/css/xterm.css";
 
 const props = defineProps<{ sessionId: string }>();
@@ -26,49 +11,11 @@ const emit = defineEmits<{ "session-updated": [] }>();
 
 interface BackendMsg { role: string; content: string; timestamp: number; }
 
-// ── Markdown renderer setup ──
-
-hljs.registerLanguage("typescript", typescript);
-hljs.registerLanguage("javascript", javascript);
-hljs.registerLanguage("rust", rust);
-hljs.registerLanguage("json", json);
-hljs.registerLanguage("xml", xml);
-hljs.registerLanguage("html", xml);
-hljs.registerLanguage("css", css);
-hljs.registerLanguage("bash", bash);
-hljs.registerLanguage("python", python);
-hljs.registerLanguage("markdown", markdown);
-hljs.registerLanguage("yaml", yaml);
-hljs.registerLanguage("sql", sql);
-hljs.registerLanguage("plaintext", plaintext);
-
-const marked = new Marked({ gfm: true, breaks: false });
-marked.use({
-  renderer: {
-    code({ text, lang }: { text: string; lang?: string }) {
-      if (lang && hljs.getLanguage(lang)) {
-        const result = hljs.highlight(text, { language: lang });
-        return `<pre><code class="hljs language-${lang}">${result.value}</code></pre>`;
-      }
-      const result = hljs.highlightAuto(text);
-      return `<pre><code class="hljs">${result.value}</code></pre>`;
-    },
-  },
-});
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-// ── Preview content (HTML div, replaces xterm preview) ──
+// ── Preview content ──
 
 const stackRef = ref<HTMLDivElement>();
 const previewRef = ref<HTMLDivElement>();
 const previewMessages = ref<BackendMsg[]>([]);
-let unlistenPty: UnlistenFn | null = null;
 
 const previewHtml = computed(() => {
   if (previewMessages.value.length === 0) return "";
@@ -98,154 +45,29 @@ async function loadPreviewContent(sid: string) {
     return;
   }
   try {
-    previewMessages.value = await invoke<BackendMsg[]>("load_messages", { sessionId: sid });
+    previewMessages.value = await api.loadMessages(sid);
   } catch (_) {
     previewMessages.value = [];
   }
 }
 
-// ── Live terminals (one per running Claude) ──
+// ── Terminal manager ──
 
-interface LiveSession {
-  div: HTMLDivElement;
-  terminal: Terminal;
-  fitAddon: FitAddon;
-  observer: ResizeObserver;
-}
-const liveSessions = new Map<string, LiveSession>();
+const {
+  liveDisplayIds,
+  currentSid,
+  showSession,
+  startClaude,
+  stopClaude,
+  initPtyListener,
+  cleanup,
+} = useTerminalManager(stackRef, previewRef, () => emit("session-updated"), loadPreviewContent);
 
-// ptyId → displayId for migrated sessions (new_xxx → real UUID)
-const ptyToDisplay = new Map<string, string>();
-
-// Reactive mirror for template
-const liveDisplayIds = reactive(new Set<string>());
-
-// Currently visible session
-let currentSid = "";
-
-// ── Session state tracking (shared with SidebarLeft) ──
-
-const { setSessionState, removeSessionState } = useSessionState();
-const periodicTimers = new Map<string, ReturnType<typeof setInterval>>();
-
-function terminalTailLines(ptyId: string): string {
-  const ls = liveSessions.get(ptyId);
-  if (!ls) return "";
-  const buf = ls.terminal.buffer.active;
-  const last = Math.max(0, buf.length - 3);
-  const lines: string[] = [];
-  for (let i = last; i < buf.length; i++) {
-    const line = buf.getLine(i);
-    if (line) lines.push(line.translateToString(true));
-  }
-  return lines.join("\n");
-}
-
-function startPeriodicCheck(ptyId: string) {
-  if (periodicTimers.has(ptyId)) return;
-
-  // First check after 2s (let Claude initialize)
-  setTimeout(() => checkSessionState(ptyId), 2000);
-
-  // Then check every 2s — authoritative state from .jsonl
-  const timer = setInterval(() => checkSessionState(ptyId), 2000);
-  periodicTimers.set(ptyId, timer);
-}
-
-function stopPeriodicCheck(ptyId: string) {
-  const timer = periodicTimers.get(ptyId);
-  if (timer) {
-    clearInterval(timer);
-    periodicTimers.delete(ptyId);
-  }
-}
-
-async function checkSessionState(ptyId: string) {
-  const displayId = ptyToDisplay.get(ptyId) || ptyId;
-
-  // Permission prompt (check first — overrides everything)
-  const tail = terminalTailLines(ptyId);
-  if (/Do you want to proceed|\[y\/n\]|needs?\s+(your\s+)?permission/i.test(tail)) {
-    setSessionState(displayId, "attention");
-    return;
-  }
-
-  // Authoritative: .jsonl last event type
-  try {
-    const lastEvent = await invoke<string | null>("session_last_event", { sessionId: displayId });
-    if (lastEvent === "assistant") {
-      setSessionState(displayId, "waiting");
-      return;
-    }
-  } catch (_) { /* fall through */ }
-
-  // Fallback: if Claude shows `> ` prompt, confirm waiting
-  if (/>\s*$/.test(tail.trimEnd())) {
-    setSessionState(displayId, "waiting");
-  }
-}
-
-// ── Terminal factory ──
-
-function makeTerminal(): { terminal: Terminal; fitAddon: FitAddon } {
-  const terminal = new Terminal({
-    cursorBlink: true,
-    fontSize: 14,
-    fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
-    theme: {
-      background: "#1e1e2e", foreground: "#cdd6f4", cursor: "#f5e0dc",
-      selectionBackground: "#585b70",
-      black: "#45475a", red: "#f38ba8", green: "#a6e3a1", yellow: "#f9e2af",
-      blue: "#89b4fa", magenta: "#f5c2e7", cyan: "#94e2d5", white: "#bac2de",
-      brightBlack: "#585b70", brightRed: "#f38ba8", brightGreen: "#a6e3a1",
-      brightYellow: "#f9e2af", brightBlue: "#89b4fa", brightMagenta: "#f5c2e7",
-      brightCyan: "#94e2d5", brightWhite: "#a6adc8",
-    },
-    allowProposedApi: true,
-  });
-  const fitAddon = new FitAddon();
-  terminal.loadAddon(fitAddon);
-  return { terminal, fitAddon };
-}
-
-// ── Show a session ──
-
-function showSession(sid: string) {
-  if (!sid || sid === currentSid) return;
-  currentSid = sid;
-
-  // Hide everything
-  if (previewRef.value) previewRef.value.style.display = "none";
-  for (const [, ls] of liveSessions) ls.div.style.display = "none";
-
-  // Resolve PTY ID: is this display ID a migrated session?
-  let ptyId = sid;
-  if (!liveSessions.has(ptyId)) {
-    for (const [pid, did] of ptyToDisplay) {
-      if (did === sid) { ptyId = pid; break; }
-    }
-  }
-
-  if (liveSessions.has(ptyId)) {
-    // Live — show the session's own terminal
-    const ls = liveSessions.get(ptyId)!;
-    ls.div.style.display = "";
-    nextTick(() => ls.fitAddon.fit());
-  } else {
-    // Preview — show HTML preview div
-    if (previewRef.value) {
-      previewRef.value.style.display = "";
-      previewRef.value.focus();
-    }
-    loadPreviewContent(sid);
-  }
-}
-
-// ── Keyboard & click handlers (window-level fallback) ──
+// ── Keyboard & click handlers ──
 
 function tryStartClaude() {
   const sid = props.sessionId;
-  if (sid && !liveDisplayIds.has(sid)) startClaude();
+  if (sid && !liveDisplayIds.has(sid)) startClaude(sid);
 }
 
 function onPreviewKeydown(e: KeyboardEvent) {
@@ -264,178 +86,28 @@ function onPreviewClick() {
   tryStartClaude();
 }
 
-// ── Start Claude → create a live terminal ──
-// (EXACT copy from ff07cd2 — no changes)
+// ── Watch session changes ──
 
-function startClaude() {
-  const sid = props.sessionId;
-  if (!sid || !stackRef.value || liveSessions.has(sid)) return;
-
-  // Resolve PTY ID
-  let ptyId = sid;
-  for (const [pid, did] of ptyToDisplay) {
-    if (did === sid) { ptyId = pid; break; }
-  }
-  if (liveSessions.has(ptyId)) return;
-
-  // Create DOM element, append hidden, then show before opening xterm
-  const div = document.createElement("div");
-  div.className = "terminal-container";
-  div.style.display = "none";
-  stackRef.value.appendChild(div);
-
-  // Hide preview, show this div FIRST so it has correct dimensions
-  if (previewRef.value) previewRef.value.style.display = "none";
-  div.style.display = "";
-
-  // Now create and open terminal — div is visible, dimensions are correct
-  const { terminal, fitAddon } = makeTerminal();
-  terminal.open(div);
-  fitAddon.fit();
-
-  // I/O bound directly to this session
-  terminal.onData((data) => {
-    invoke("pty_write", { sessionId: ptyId, data }).catch(() => {});
-    // User pressed Enter → just sent a message → Claude will start processing
-    if (data === "\r") {
-      setSessionState(sid, "running");
-    }
-  });
-
-  const observer = new ResizeObserver(() => {
-    fitAddon.fit();
-    invoke("pty_resize", { sessionId: ptyId, rows: terminal.rows, cols: terminal.cols }).catch(() => {});
-  });
-  observer.observe(div);
-
-  liveSessions.set(ptyId, { div, terminal, fitAddon, observer });
-  liveDisplayIds.add(sid);
-  currentSid = sid;
-
-  startPeriodicCheck(ptyId);
-  // Default to waiting — session just opened, Claude isn't processing yet
-  setSessionState(sid, "waiting");
-  terminal.writeln("Starting Claude...\r");
-
-  invoke("pty_spawn_claude", { sessionId: ptyId, rows: terminal.rows, cols: terminal.cols })
-    .catch((e) => {
-      terminal.writeln(`\r\nFailed: ${e}`);
-      destroyLiveSession(ptyId);
-    });
-
-  if (ptyId.startsWith("new_")) {
-    scheduleMigration(ptyId);
-  }
-}
-
-function destroyLiveSession(ptyId: string) {
-  const ls = liveSessions.get(ptyId);
-  if (!ls) return;
-  ls.observer.disconnect();
-  ls.terminal.dispose();
-  ls.div.remove();
-  liveSessions.delete(ptyId);
-
-  const displayId = ptyToDisplay.get(ptyId) || ptyId;
-  liveDisplayIds.delete(displayId);
-  ptyToDisplay.delete(ptyId);
-
-  // Clean up state tracking
-  removeSessionState(displayId);
-  stopPeriodicCheck(ptyId);
-
-  // If we were viewing this session, fall back to preview
-  if (currentSid === displayId || currentSid === ptyId) {
-    currentSid = "";
-    showSession(displayId);
-  }
-}
-
-// ── Stop Claude ──
-
-function stopClaude() {
-  const sid = props.sessionId;
-  if (!sid) return;
-
-  let ptyId = sid;
-  if (!liveSessions.has(ptyId)) {
-    for (const [pid, did] of ptyToDisplay) {
-      if (did === sid) { ptyId = pid; break; }
-    }
-  }
-  if (!liveSessions.has(ptyId)) return;
-
-  invoke("pty_kill", { sessionId: ptyId }).catch(() => {});
-  destroyLiveSession(ptyId);
-}
-
-// ── Migration: new_xxx → real UUID ──
-
-async function scheduleMigration(placeholderId: string) {
-  await new Promise((r) => setTimeout(r, 3000));
-  try {
-    const sessions = await invoke<{ id: string }[]>("list_sessions");
-    // Find the newly created session (not a placeholder, not already tracked)
-    const real = sessions.find((s) =>
-      !s.id.startsWith("new_") &&
-      !liveSessions.has(s.id) &&
-      !Array.from(ptyToDisplay.values()).includes(s.id),
-    );
-    if (real && liveSessions.has(placeholderId)) {
-      ptyToDisplay.set(placeholderId, real.id);
-      liveDisplayIds.delete(placeholderId);
-      liveDisplayIds.add(real.id);
-
-      // Migrate session state key (keep whatever state the PTY is in)
-      removeSessionState(placeholderId);
-
-      invoke("pty_rename_session", { oldId: placeholderId, newId: real.id }).catch(() => {});
-    }
-  } catch (_) { /* best effort */ }
-  emit("session-updated");
-}
-
-// ── Session switching ──
-
-watch(() => props.sessionId, (newId) => {
-  if (newId && newId !== currentSid) {
+watch(() => props.sessionId, async (newId) => {
+  if (newId && newId !== currentSid()) {
     showSession(newId);
+    await loadPreviewContent(newId);
   }
 });
 
 // ── Lifecycle ──
 
 onMounted(async () => {
-  // Global keyboard fallback: Enter starts Claude when preview is visible
   window.addEventListener("keydown", onWindowKeydown);
-
-  // pty-output → route directly to the right live terminal
-  unlistenPty = await listen<string>("pty-output", (event) => {
-    try {
-      const p = JSON.parse(event.payload);
-      liveSessions.get(p.session_id)?.terminal.write(p.data);
-    } catch (_) {}
-  });
-
-  nextTick(() => showSession(props.sessionId));
+  await initPtyListener();
+  await nextTick();
+  showSession(props.sessionId);
+  await loadPreviewContent(props.sessionId);
 });
 
 onUnmounted(() => {
-  unlistenPty?.();
   window.removeEventListener("keydown", onWindowKeydown);
-  // Clean up all timers
-  for (const [, timer] of periodicTimers) clearInterval(timer);
-  periodicTimers.clear();
-  // Destroy all live sessions
-  for (const [ptyId] of liveSessions) {
-    invoke("pty_kill", { sessionId: ptyId }).catch(() => {});
-    const ls = liveSessions.get(ptyId)!;
-    ls.observer.disconnect();
-    ls.terminal.dispose();
-  }
-  liveSessions.clear();
-  liveDisplayIds.clear();
-  ptyToDisplay.clear();
+  cleanup();
 });
 </script>
 
@@ -466,13 +138,12 @@ onUnmounted(() => {
       v-if="liveDisplayIds.has(props.sessionId)"
       class="close-btn"
       title="Stop Claude"
-      @click="stopClaude"
+      @click="stopClaude(props.sessionId)"
     >&#x23F9;</button>
   </div>
 </template>
 
 <style>
-/* Non-scoped — applies to dynamically created terminals too */
 .terminal-stack { flex: 1; position: relative; }
 .terminal-container { position: absolute; inset: 0; overflow: hidden; }
 .terminal-container .xterm { padding: 8px; height: 100%; }
@@ -481,7 +152,6 @@ onUnmounted(() => {
 .terminal-container .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
 .terminal-container .xterm-viewport::-webkit-scrollbar-thumb { background: var(--surface); border-radius: 3px; }
 
-/* ── Preview content (HTML div) ── */
 .preview-container {
   overflow-y: auto;
   outline: none;
@@ -531,7 +201,6 @@ onUnmounted(() => {
   color: var(--text-primary);
 }
 
-/* Markdown rendered content inside preview messages */
 .preview-text h1 { font-size: 1.4em; font-weight: 600; margin: 1em 0 0.4em; border-bottom: 1px solid var(--surface-hover); padding-bottom: 0.2em; }
 .preview-text h1:first-child { margin-top: 0; }
 .preview-text h2 { font-size: 1.2em; font-weight: 600; margin: 0.9em 0 0.3em; border-bottom: 1px solid var(--surface-hover); padding-bottom: 0.15em; }
@@ -603,7 +272,6 @@ onUnmounted(() => {
 
 .preview-text img { max-width: 100%; border-radius: 4px; }
 
-/* hljs overrides inside preview markdown code blocks */
 .preview-text .hljs-keyword,
 .preview-text .hljs-selector-tag,
 .preview-text .hljs-type { color: #cba6f7; }

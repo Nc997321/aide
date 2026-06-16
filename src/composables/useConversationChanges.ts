@@ -1,21 +1,9 @@
 import { ref, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
 import { useSessionState } from "./useSessionState";
+import { api } from "../api";
+import type { ChangeRound, ChangeFile } from "../types";
 
-export interface ChangeRound {
-  /** Monotonic round index within this session */
-  index: number;
-  /** Human-readable timestamp */
-  time: string;
-  /** Files changed in this round */
-  files: ChangeFile[];
-}
-
-export interface ChangeFile {
-  path: string;
-  additions: number;
-  deletions: number;
-}
+export type { ChangeRound, ChangeFile };
 
 export function useConversationChanges(sessionId: () => string) {
   const rounds = ref<ChangeRound[]>([]);
@@ -27,14 +15,14 @@ export function useConversationChanges(sessionId: () => string) {
   /** Before Claude starts processing: stage everything so we can diff later */
   async function takeSnapshot() {
     try {
-      await invoke("git_stage_all");
+      await api.gitStageAll();
     } catch (_) { /* best effort */ }
   }
 
   /** After Claude finishes: compute what changed and create a round entry */
   async function captureChanges() {
     try {
-      const files = await invoke<ChangeFile[]>("git_diff_files");
+      const files = await api.gitDiffFiles();
       if (files.length === 0) return;
 
       roundCounter++;
@@ -47,7 +35,7 @@ export function useConversationChanges(sessionId: () => string) {
   /** Revert a single file to its staged (pre-Claude) version */
   async function revertFile(filePath: string) {
     try {
-      await invoke("git_revert_file", { path: filePath });
+      await api.gitRevertFile(filePath);
     } catch (_) { /* best effort */ }
   }
 
