@@ -44,17 +44,25 @@ export function useConversationChanges(sessionId: () => string) {
     },
   );
 
-  /** Before Claude starts processing: stage everything so we can diff later */
+  /**
+   * Before Claude starts processing: previously staged everything with git add -A.
+   * Now a no-op — git_diff_files uses `git diff HEAD` which detects all changes
+   * (staged, unstaged, and deletions) without needing a clean index baseline.
+   * Removing `git add -A` prevents ephemeral files from being written into the
+   * index, which previously made them look "real" to cleanup checks.
+   */
   async function takeSnapshot() {
-    try {
-      await api.gitStageAll();
-    } catch (_) { /* best effort */ }
+    // intentionally empty — see comment above
   }
 
   /** After Claude finishes: compute what changed and create a round entry */
   async function captureChanges() {
     try {
       const files = await api.gitDiffFiles();
+
+      // Clean up ephemeral entries from previous rounds before saving new round.
+      await cleanupPreviousRounds();
+
       if (files.length === 0) return;
 
       roundCounter++;
@@ -63,6 +71,45 @@ export function useConversationChanges(sessionId: () => string) {
       rounds.value.push({ index: roundCounter, time, files });
       await save();
     } catch (_) { /* best effort */ }
+  }
+
+  /**
+   * Remove entries from previous rounds for files that no longer exist on disk
+   * AND were never committed to HEAD (ephemeral files: created + deleted within a session).
+   */
+  async function cleanupPreviousRounds() {
+    if (rounds.value.length === 0) return;
+
+    let changed = false;
+    for (const round of rounds.value) {
+      const before = round.files.length;
+      // Check each file sequentially (git_has_file is fast: stat + cat-file)
+      const kept: ChangeFile[] = [];
+      for (const f of round.files) {
+        if (await fileIsReal(f.path)) {
+          kept.push(f);
+        }
+      }
+      round.files = kept;
+      if (round.files.length !== before) changed = true;
+    }
+
+    // Drop empty rounds
+    const beforeLen = rounds.value.length;
+    rounds.value = rounds.value.filter((r) => r.files.length > 0);
+    if (rounds.value.length !== beforeLen) changed = true;
+
+    if (changed) await save();
+  }
+
+  /** A file is "real" if it exists on disk OR was committed to HEAD at some point */
+  async function fileIsReal(relativePath: string): Promise<boolean> {
+    try {
+      return await api.gitHasFile(relativePath);
+    } catch (_) {
+      // If the check fails, conservatively keep the entry
+      return true;
+    }
   }
 
   /** Revert a single file to its staged (pre-Claude) version */
@@ -92,8 +139,8 @@ export function useConversationChanges(sessionId: () => string) {
     await save();
   }
 
-  // Watch session state transitions — serialized to prevent race between
-  // takeSnapshot (git add -A) and captureChanges (git diff --numstat).
+  // Watch session state transitions — serialized via pendingOp to prevent
+  // race between captureChanges calls within the same round.
   watch(
     () => {
       const sid = sessionId();

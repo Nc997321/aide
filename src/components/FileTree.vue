@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, watch, onMounted, onUnmounted } from "vue";
 import TreeNodeItem from "./TreeNodeItem.vue";
 import { useContextMenu } from "../composables/useContextMenu";
 import { useFileViewer } from "../composables/useFileViewer";
+import { useSessionState } from "../composables/useSessionState";
 import { fileTreeAreaMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
 import type { FileEntry, WorkspaceInfo } from "../types";
@@ -136,6 +137,38 @@ const { show } = useContextMenu();
 function onAreaContextMenu(e: MouseEvent) {
   e.preventDefault();
   show(e.clientX, e.clientY, fileTreeAreaMenuItems(projectInfo.value.root, loadRoot));
+}
+
+// Refresh file tree when the active session finishes a response round
+const { state: sessionState } = useSessionState();
+let prevSessionStatus = "";
+
+watch(
+  () => (props.sessionId ? sessionState[props.sessionId] : undefined),
+  (newStatus) => {
+    if (!newStatus || newStatus === prevSessionStatus) return;
+    const prev = prevSessionStatus;
+    prevSessionStatus = newStatus;
+
+    if (newStatus === "waiting" || newStatus === "stopped") {
+      if (prev === "running" || prev === "attention") {
+        refreshAllExpanded();
+      }
+    }
+  },
+);
+
+async function refreshAllExpanded() {
+  // Small delay to let useConversationChanges.captureChanges finish git ops
+  await new Promise((r) => setTimeout(r, 300));
+  const saved = new Set(expandedDirs.value);
+  await loadRoot();
+  for (const dir of saved) {
+    if (dir !== projectInfo.value.root) {
+      expandedDirs.value.add(dir);
+      await loadChildren(dir);
+    }
+  }
 }
 
 defineExpose({ loadRoot });

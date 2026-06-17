@@ -64,6 +64,9 @@ export const api = {
   gitRevertFile(path: string): Promise<void> {
     return invoke("git_revert_file", { path });
   },
+  gitHasFile(path: string): Promise<boolean> {
+    return invoke("git_has_file", { path });
+  },
 
   // 会话
   listSessions(): Promise<Session[]> {
