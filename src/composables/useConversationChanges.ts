@@ -156,6 +156,11 @@ export function useConversationChanges(sessionId: () => string) {
       if (newState === "running" && prev !== "attention") {
         pendingOp = pendingOp.then(takeSnapshot, takeSnapshot);
       }
+      // Transition: running/attention → stopped → process exited or killed.
+      // Capture any remaining changes before the session goes cold.
+      if (newState === "stopped" && (prev === "running" || prev === "attention")) {
+        pendingOp = pendingOp.then(captureChanges, captureChanges);
+      }
       // Transition: running/attention → waiting → Claude just finished a response.
       if (newState === "waiting" && (prev === "running" || prev === "attention")) {
         pendingOp = pendingOp.then(captureChanges, captureChanges);

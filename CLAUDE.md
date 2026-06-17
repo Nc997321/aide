@@ -159,7 +159,7 @@ aide/
 
 | 状态 | 侧栏显示 | 触发条件 |
 |------|---------|----------|
-| `stopped` | 无标识 | 默认（PTY 不存在） |
+| `stopped` | 无标识 | 默认（PTY 不存在）或进程退出/被停止时由 `destroyLiveSession` 显式设置 |
 | `running` | 绿色光带从右到左扫过 | 用户按 Enter 发消息 |
 | `waiting` | 右侧绿色边框 | `.jsonl` 最后事件为 `assistant` 且 `stop_reason === "end_turn"`（Claude 真正完成，排除中间 tool_use） |
 | `attention` | 琥珀色光带扫过 | 终端出现权限审批提示 `[y/n]` |
@@ -167,8 +167,12 @@ aide/
 **判定逻辑**（`useSessionMonitor.ts`）：
 - 进入实时模式 → 默认 `waiting`
 - 用户按 Enter → 立即 `running`
-- 每 2 秒周期查 `session_last_event` → 返回 `{ event_type, stop_reason }`，`assistant` + `end_turn` 才置 `waiting`（避免 tool_use 中间态误判）
-- 权限关键词 → `attention`
+- 每 2 秒周期检查，四层检测依次回退：
+  1. 权限关键词 → `attention`
+  2. JSONL 事件：`user` 事件跳过（Claude 在处理中）；`assistant` + `end_turn` 且时间戳晚于上次 Enter → `waiting`
+  3. 终端尾行匹配 `[>❯]` 提示符 → `waiting`
+  4. 距上次 Enter 超过 30 秒 → `waiting`（兜底超时）
+- 进程退出/被停止 → `stopped`（`destroyLiveSession` 显式设置，使 `useConversationChanges` 能捕获最后变更）
 
 ### PTY 管理（Rust 侧）
 
@@ -200,7 +204,9 @@ watch(sessionId) → showSession(sid) + loadPreviewContent(sid)
 ```
 
 **新建会话 ID 迁移**（不在 watch 里）：
-`startClaude()` 用 placeholder `new_xxx` 创建 PTY → 3 秒后 `scheduleMigration()` 调 `find_recent_session` 扫描 `~/.claude/sessions/<pid>.json`（按 cwd 匹配项目，取 `startedAt` 最新的）找到真实 UUID → 更新 `ptyToDisplay` 映射 → emit `session-updated` 刷新侧栏。不依赖 `.jsonl`（对话才有），元数据文件启动即创建。
+`startClaude()` 用 placeholder `new_xxx` 创建 PTY → 3 秒后 `scheduleMigration()` 开始扫描（最多重试 3 次，间隔 3 秒）→ 调 `listSessions()` 找到真实 UUID → 更新 `ptyToDisplay` 映射 → `onSessionUpdated` 刷新侧栏。重试机制用 `knownIds` Set 记录已知会话，后续重试只匹配新出现的会话，避免匹配到同一 placeholder 上一次运行遗留的旧会话。不依赖 `.jsonl`（对话才有），元数据文件启动即创建。
+
+**迁移后侧栏刷新**：`onSessionUpdated(realId)` 先设 `activeSessionId = realId`，再 `await nextTick()` 确保 Vue 将新值传递到 SidebarLeft 的 props，然后调 `migrateSession(oldId, newId)` 用 `splice` 原地替换占位符条目（无 `loading` 闪烁）。**不能直接调 `loadSessions()`**——Vue 的 props 传播是异步的，`loadSessions()` 同步读取 `props.activeSessionId` 时拿到的仍是旧值 `new_xxx`，导致占位符被捕获并重新添加到列表。
 
 **为什么不能调 `pty_rename_session`**：`startClaude()` 中 `terminal.onData` 和 `ResizeObserver` 的闭包捕获了 placeholder ID → 所有 `ptyWrite`/`ptyResize` 都用 `new_xxx` 发到 Rust。如果在 Rust 侧把 HashMap key 从 `new_xxx` 改成真实 UUID，前端闭包发出的旧 key 就找不到 PTY 了——输入和 resize 全部静默失败（TUI 无法操作）。
 

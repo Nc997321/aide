@@ -32,6 +32,9 @@ export function useSessionMonitor(
   }
 
   async function checkSessionState(ptyId: string) {
+    // Skip if PTY has been destroyed
+    if (!liveSessions.has(ptyId)) return;
+
     const displayId = ptyToDisplay.get(ptyId) || ptyId;
     const cur = sessionState[displayId];
 
@@ -43,13 +46,20 @@ export function useSessionMonitor(
 
     try {
       const tail = terminalTailLines(ptyId);
+
+      // 1) Permission prompt detection
       if (/Do you want to proceed|\[y\/n\]|needs?\s+(your\s+)?permission/i.test(tail)) {
         setSessionState(displayId, "attention");
         return;
       }
 
+      // 2) JSONL event detection
       try {
         const info = await api.sessionLastEvent(displayId);
+
+        // Last event is user → Claude is still processing, keep running
+        if (info.event_type === "user") return;
+
         if (info.event_type === "assistant" && info.stop_reason === "end_turn") {
           const entered = lastEnterMs.get(displayId) || 0;
           const eventMs = info.timestamp ? new Date(info.timestamp).getTime() : 0;
@@ -61,7 +71,15 @@ export function useSessionMonitor(
         }
       } catch (_) { /* fall through */ }
 
-      if (/>\s*$/.test(tail.trimEnd())) {
+      // 3) Terminal prompt fallback (broader pattern for TUI prompts)
+      if (/[>❯]\s*$/.test(tail.trimEnd())) {
+        setSessionState(displayId, "waiting");
+        return;
+      }
+
+      // 4) Timeout fallback: if 30+ seconds since last Enter, assume idle
+      const entered = lastEnterMs.get(displayId) || 0;
+      if (entered > 0 && Date.now() - entered > 30000) {
         setSessionState(displayId, "waiting");
       }
     } finally {
@@ -71,6 +89,7 @@ export function useSessionMonitor(
 
   function startPeriodicCheck(ptyId: string) {
     if (periodicTimers.has(ptyId)) return;
+    if (!liveSessions.has(ptyId)) return;
     setTimeout(() => checkSessionState(ptyId), 2000);
     const timer = setInterval(() => checkSessionState(ptyId), 2000);
     periodicTimers.set(ptyId, timer);

@@ -8,7 +8,7 @@ import ModalDialog from "./components/ModalDialog.vue";
 import FileViewer from "./components/FileViewer.vue";
 import SettingsPanel from "./components/SettingsPanel.vue";
 import GitPanel from "./components/GitPanel.vue";
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, onMounted, onUnmounted, nextTick } from "vue";
 import { useSettings } from "./composables/useSettings";
 import { useWindowFocus } from "./composables/useWindowFocus";
 import { useNotification } from "./composables/useNotification";
@@ -82,12 +82,16 @@ function onSessionChanged(id: string) {
 }
 
 async function onSessionUpdated(newId?: string) {
-  // If migration happened, switch to the real session ID before refreshing
-  // the sidebar, so loadSessions() won't auto-switch away from it.
   if (newId) {
+    // Migration: swap the placeholder entry in-place instead of reloading
+    // the entire list (avoids the loading indicator flash).
+    const oldId = activeSessionId.value;
     activeSessionId.value = newId;
+    await nextTick();
+    await sidebarRef.value?.migrateSession(oldId, newId);
+  } else {
+    await sidebarRef.value?.loadSessions();
   }
-  await sidebarRef.value?.loadSessions();
 }
 
 async function onFileTreeWsChanged(_path: string) {
