@@ -45,7 +45,7 @@ pub fn file_open(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
+pub fn list_directory(path: String, show_hidden: Option<bool>) -> Result<Vec<FileEntry>, String> {
     let dir = PathBuf::from(&path);
     if !dir.is_dir() {
         return Err(format!("Not a directory: {}", path));
@@ -58,8 +58,10 @@ pub fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
         let Ok(entry) = entry else { continue; };
         let name = entry.file_name().to_string_lossy().to_string();
 
-        if name.starts_with('.') || name == "node_modules" || name == "target" || name == "dist" {
-            continue;
+        if !show_hidden.unwrap_or(false) {
+            if name.starts_with('.') || name == "node_modules" || name == "target" || name == "dist" {
+                continue;
+            }
         }
 
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
