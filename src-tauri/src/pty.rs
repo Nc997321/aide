@@ -10,6 +10,7 @@ struct PtySession {
     #[allow(dead_code)]
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
+    output_buffer: Arc<Mutex<String>>,
 }
 
 pub struct PtyManager {
@@ -65,32 +66,36 @@ impl PtyManager {
         let writer = master.take_writer().map_err(|e| format!("Failed to take writer: {}", e))?;
         let mut reader = master.try_clone_reader().map_err(|e| format!("Failed to clone reader: {}", e))?;
 
+        let output_buffer = Arc::new(Mutex::new(String::new()));
+
         {
             let mut sessions = self.sessions.lock().map_err(|e| e.to_string())?;
             sessions.insert(
                 session_id.to_string(),
-                PtySession { master, writer },
+                PtySession { master, writer, output_buffer: output_buffer.clone() },
             );
         }
 
         let sid = session_id.to_string();
         let sessions = self.sessions.clone();
-        let app_reader = app_handle.clone();
+        let app_waiter = app_handle.clone();
 
-        // Reader thread — handles PTY output
-        let sid_reader = sid.clone();
+        // Reader thread — appends PTY output to a shared buffer.
+        // The frontend polls this buffer via `poll_pty_output` command.
+        // This pull-based design prevents IPC event flooding: the frontend
+        // controls the data rate by polling at its own pace (every 100ms),
+        // so the JS event loop is never overwhelmed regardless of output volume.
+        let buf_for_reader = output_buffer.clone();
         thread::spawn(move || {
-            let mut buf = [0u8; 4096];
+            let mut buf = [0u8; 65536];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        let data = String::from_utf8_lossy(&buf[..n]).to_string();
-                        let payload = serde_json::json!({
-                            "session_id": sid_reader,
-                            "data": data,
-                        });
-                        let _ = app_reader.emit("pty-output", payload.to_string());
+                        let data = String::from_utf8_lossy(&buf[..n]);
+                        if let Ok(mut output) = buf_for_reader.lock() {
+                            output.push_str(&data);
+                        }
                     }
                     Err(_) => break,
                 }
@@ -105,7 +110,7 @@ impl PtyManager {
                 map.remove(&sid_waiter);
             }
             let payload = serde_json::json!({ "session_id": &sid_waiter });
-            let _ = app_handle.emit("pty-exit", payload.to_string());
+            let _ = app_waiter.emit("pty-exit", payload.to_string());
         });
 
         Ok(())
@@ -158,5 +163,20 @@ impl PtyManager {
             .lock()
             .map(|s| s.contains_key(session_id))
             .unwrap_or(false)
+    }
+
+    /// Drain accumulated PTY output for a session.
+    /// Returns the buffered data and clears the buffer.
+    /// The frontend calls this on a polling interval instead of receiving
+    /// push events, giving it full control over the data consumption rate.
+    pub fn poll_output(&self, session_id: &str) -> Result<String, String> {
+        let sessions = self.sessions.lock().map_err(|e| e.to_string())?;
+        if let Some(session) = sessions.get(session_id) {
+            let mut output = session.output_buffer.lock().map_err(|e| e.to_string())?;
+            let data = std::mem::take(&mut *output);
+            Ok(data)
+        } else {
+            Ok(String::new())
+        }
     }
 }

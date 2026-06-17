@@ -55,6 +55,14 @@ pub fn pty_rename_session(manager: State<'_, PtyManager>, old_id: String, new_id
     Ok(())
 }
 
+/// Poll accumulated PTY output for a session.
+/// The frontend calls this periodically instead of receiving push events,
+/// giving it full control over the data consumption rate.
+#[tauri::command]
+pub fn poll_pty_output(manager: State<'_, PtyManager>, session_id: String) -> Result<String, String> {
+    manager.poll_output(&session_id)
+}
+
 fn find_claude_session_jsonl(session_id: &str, project_root: &PathBuf) -> Option<String> {
     let encoded = encode_project_path(&project_root.to_string_lossy());
     let jsonl_path = claude_projects_dir()

@@ -129,7 +129,7 @@ aide/
   div.terminal-container        div.terminal-container
     xterm.open()                  xterm.open()
     onData → pty_write(A)        onData → pty_write(B)
-    ← pty-output[A]              ← pty-output[B]
+    ← poll_pty_output(A)         ← poll_pty_output(B)
 ```
 
 两个终端 div 都放在 `.terminal-stack` wrapper 内，通过 `display: none` 切显隐。`position: absolute; inset: 0` 撑满 wrapper。
@@ -140,8 +140,9 @@ aide/
 用户键盘 → live terminal.onData → api.ptyWrite(ptyId, data)
   → Rust PtyManager.write(ptyId) → PTY stdin → claude 进程
     → claude stdout → PTY reader thread (I/O)
-      → emit("pty-output", {session_id: ptyId, data})
-        → liveSessions.get(ptyId).terminal.write(data)   ← 直达，无过滤
+      → Arc<Mutex<String>> output_buffer（共享缓冲区）
+        ← 前端 setInterval(100ms) → api.pollPtyOutput(ptyId) 拉取
+          → terminal.write(data)
 
 进程退出检测（独立 waiter 线程）：
   Rust child.wait() 阻塞 → 进程退出 → HashMap 清理
@@ -149,6 +150,8 @@ aide/
       → initExitListener → stopClaude() → destroyLiveSession()
         → showSession() → 预览模式
 ```
+
+**拉取模式（polling）而非推送模式**：PTY 输出通过共享缓冲区 + 前端轮询传递，不走 IPC 事件推送。前端每 100ms 主动拉取一次，自行控制数据消费速率，避免大量输出（Plan mode、/compact）淹没 WebView 事件循环导致 UI 卡死。唯一的 IPC 事件推送是 `pty-exit`（进程退出，低频且关键）。
 
 ### 会话状态指示器
 
@@ -172,7 +175,7 @@ aide/
 PtyManager 维护 `HashMap<String, PtySession>`，每个会话独立持有 PTY。切换会话时不杀进程，只切换终端显隐。
 
 **双线程模型**：
-- **reader 线程**：纯 I/O 转发，`read()` 循环 → `emit("pty-output", ...)`，EOF/error 时退出
+- **reader 线程**：纯 I/O，`read()` 循环 → 追加到 `Arc<Mutex<String>>` 共享缓冲区，EOF/error 时退出。前端通过 `poll_pty_output` 命令拉取并清空缓冲区
 - **waiter 线程**：`child.wait()` 阻塞等待进程退出 → 可靠检测 Ctrl+D 退出 → 清理 HashMap → `emit("pty-exit", ...)`。reader 线程的 EOF 检测不可靠（PTY 不保证在子进程退出时关闭管道），waiter 线程才是退出检测的权威来源
 
 ### 前端状态
@@ -182,6 +185,7 @@ PtyManager 维护 `HashMap<String, PtySession>`，每个会话独立持有 PTY�
 | `liveSessions` | `useTerminalManager` | 直播终端表，key 是 PTY 侧 session ID |
 | `ptyToDisplay` | `useTerminalManager` | `new_xxx` → 真实 UUID 的迁移映射 |
 | `liveDisplayIds` | `useTerminalManager` | reactive Set，驱动关闭按钮显隐 |
+| `pollTimer` | `useTerminalManager` | PTY 输出轮询定时器（100ms 间隔） |
 | `periodicTimers` | `useSessionMonitor` | 每 2 秒轮询 `.jsonl` 状态 |
 | `checking` | `useSessionMonitor` | Set 互斥锁，防止 async 轮询竞态 |
 | `settings` | `useSettings` | 模块级 reactive 单例，字号/字体/通知开关 |
@@ -200,7 +204,7 @@ watch(sessionId) → showSession(sid) + loadPreviewContent(sid)
 
 **为什么不能调 `pty_rename_session`**：`startClaude()` 中 `terminal.onData` 和 `ResizeObserver` 的闭包捕获了 placeholder ID → 所有 `ptyWrite`/`ptyResize` 都用 `new_xxx` 发到 Rust。如果在 Rust 侧把 HashMap key 从 `new_xxx` 改成真实 UUID，前端闭包发出的旧 key 就找不到 PTY 了——输入和 resize 全部静默失败（TUI 无法操作）。
 
-**PTY reader 线程**：Rust reader 线程闭包里捕获了 placeholder ID（如 `new_xxx`），一直用此 ID 发 `pty-output` 事件——这没问题，因为 Rust HashMap key 没改。`pty-output` 监听直接 `liveSessions.get(p.session_id)` 拿到终端，`showSession` 通过 `ptyToDisplay` 映射从真实 UUID 找到 PTY key（placeholder）。
+**PTY 输出轮询**：前端 `setInterval(100ms)` 遍历 `liveSessions`，对每个活跃 PTY 调 `pollPtyOutput(ptyId)` 拉取缓冲区数据并写入 xterm.js。Rust HashMap key 始终是 placeholder ID（如 `new_xxx`），前端通过 `ptyToDisplay` 映射从真实 UUID 找到 PTY key。
 
 ### 会话系统 — 适配 Claude Code 存储
 
@@ -298,6 +302,7 @@ useSessionMonitor.checkSessionState() 检测到 end_turn
 | `pty_kill` | `session_id` | 关闭指定会话的 Claude 进程 |
 | `pty_has_session` | `session_id` | 检查指定会话是否有活 PTY |
 | `pty_rename_session` | `old_id, new_id` | `new_` → 真实 UUID 时迁移 HashMap key |
+| `poll_pty_output` | `session_id` | 拉取并清空会话的 PTY 输出缓冲区（前端 100ms 轮询） |
 
 ### 项目 & 文件系统
 
@@ -390,8 +395,9 @@ useSessionMonitor.checkSessionState() 检测到 end_turn
 
 ### useTerminalManager — 终端生命周期 + 设置响应
 - `createLoadingOverlay()` / `dismissLoader()` — 加载动画 DOM 管理
+- `initPtyListener()` — 启动 100ms 轮询定时器，遍历 liveSessions 调 `pollPtyOutput()` → `terminal.write()`
 - `initExitListener()` — 监听 `pty-exit` → `stopClaude()` 回预览，与 ⏹ 按钮相同路径
-- `LOADER_DISMISS_DELAY = 5000` — 首次 pty-output 后延迟 5s 再关 loader
+- `LOADER_DISMISS_DELAY = 5000` — 首次 PTY 输出后延迟 5s 再关 loader
 - `makeTerminal()` 从 `useSettings().settings` 读字号/字体，非硬编码
 - watch `settings.fontSize`/`fontFamily` → 遍历所有 liveSessions 即时更新 + `fitAddon.fit()`
 

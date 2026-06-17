@@ -24,6 +24,9 @@ export const api = {
   ptyRenameSession(oldId: string, newId: string): Promise<void> {
     return invoke("pty_rename_session", { oldId, newId });
   },
+  pollPtyOutput(sessionId: string): Promise<string> {
+    return invoke("poll_pty_output", { sessionId });
+  },
 
   // 文件
   getProjectInfo(): Promise<ProjectInfo> {

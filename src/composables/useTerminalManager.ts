@@ -28,8 +28,8 @@ export function useTerminalManager(
 
   const { settings } = useSettings();
   const monitor = useSessionMonitor(liveSessions, ptyToDisplay);
-  let unlistenPty: UnlistenFn | null = null;
   let unlistenExit: UnlistenFn | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   // Apply font size changes to all live terminals immediately
   watch(() => settings.fontSize, (newSize) => {
@@ -248,19 +248,31 @@ export function useTerminalManager(
   const LOADER_DISMISS_DELAY = 5000;
 
   async function initPtyListener() {
-    unlistenPty = await listen<string>("pty-output", (event) => {
-      try {
-        const p = JSON.parse(event.payload);
-        const ls = liveSessions.get(p.session_id);
-        if (!ls) return;
-        // Delay dismiss: Claude TUI may not be visible yet on first bytes.
-        // Start a one-shot timer; kept alive across subsequent packets.
-        if (ls.loadingDiv && !ls.loaderTimer) {
-          ls.loaderTimer = setTimeout(() => dismissLoader(ls), LOADER_DISMISS_DELAY);
-        }
-        ls.terminal.write(p.data);
-      } catch (_) {}
-    });
+    // Pull-based polling: frontend controls the data rate.
+    //
+    // Instead of the Rust side pushing IPC events (which can flood the
+    // WebView event loop and freeze the main thread), the frontend polls
+    // for PTY output every 100ms via a Tauri command. Each poll drains the
+    // Rust-side buffer and writes the data to xterm.js.
+    //
+    // This guarantees the JS event loop is never overwhelmed:
+    // - At most 10 polls/s per session
+    // - Each poll returns bounded data (whatever accumulated in 100ms)
+    // - xterm.js handles each chunk with its own internal async processing
+    // - No unbounded queues, no event flooding, no main-thread freeze
+    pollTimer = setInterval(async () => {
+      for (const [ptyId, ls] of liveSessions) {
+        try {
+          const data = await api.pollPtyOutput(ptyId);
+          if (data) {
+            if (ls.loadingDiv && !ls.loaderTimer) {
+              ls.loaderTimer = setTimeout(() => dismissLoader(ls), LOADER_DISMISS_DELAY);
+            }
+            ls.terminal.write(data);
+          }
+        } catch (_) {}
+      }
+    }, 100);
   }
 
   /** Listen for PTY process exit (e.g. Ctrl+D twice) → same code path as ⏹ button */
@@ -277,7 +289,10 @@ export function useTerminalManager(
   }
 
   function cleanup() {
-    unlistenPty?.();
+    if (pollTimer !== null) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
     unlistenExit?.();
     monitor.stopAll();
     for (const [ptyId] of liveSessions) {
