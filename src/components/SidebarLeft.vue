@@ -5,6 +5,7 @@ import { useSessionState } from "../composables/useSessionState";
 import { sessionMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
 import type { Session, WorkspaceInfo } from "../types";
+import { CUSTOMIZATION_CATEGORIES } from "../composables/useCustomizations";
 
 const props = defineProps<{
   activeSessionId: string;
@@ -14,6 +15,7 @@ const emit = defineEmits<{
   "session-changed": [id: string];
   "workspace-changed": [path: string];
   "open-settings": [];
+  "open-customization": [];
 }>();
 
 const sessions = ref<Session[]>([]);
@@ -21,16 +23,7 @@ const workspaces = ref<WorkspaceInfo[]>([]);
 const activeWorkspace = ref("");
 const expandedWorkspaces = ref(new Set<string>());
 const searchQuery = ref("");
-const customExpanded = ref(false);
 const loading = ref(true);
-
-const customItems = [
-  { name: "智能体" },
-  { name: "技能" },
-  { name: "指令" },
-  { name: "钩构" },
-  { name: "MCP 服务器" },
-];
 
 function workspaceLabel(ws: WorkspaceInfo): string {
   const parts = ws.name.replace(/[/\\]+$/, "").split(/[/\\]/);
@@ -254,14 +247,9 @@ defineExpose({ newSession, loadSessions });
 
     <!-- Custom section -->
     <div class="custom-section">
-      <div class="custom-header" @click="customExpanded = !customExpanded">
-        <span class="arrow" :class="{ expanded: customExpanded }">&#x25B8;</span>
+      <div class="custom-header" @click="emit('open-customization')">
+        <span class="cat-icon">⚙️</span>
         <span>自定义</span>
-      </div>
-      <div v-if="customExpanded" class="custom-list">
-        <div v-for="item in customItems" :key="item.name" class="custom-item">
-          <span>{{ item.name }}</span>
-        </div>
       </div>
     </div>
 
