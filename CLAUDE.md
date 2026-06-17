@@ -11,7 +11,7 @@
 | 终端 | xterm.js 5.x + xterm-addon-fit |
 | 代码高亮 | highlight.js 11.x（仅打包 12 种语言） |
 | Markdown 渲染 | marked 18.x（文件查看器 .md 预览） |
-| 样式 | Tailwind CSS 3 + Catppuccin 暗色主题 |
+| 样式 | Tailwind CSS 3 + Catppuccin 暗色主题，全项目三角箭头统一 `font-size: 14px` |
 | 包管理 | pnpm |
 | Rust 编译 | MSVC 工具链（VS Build Tools 2022） |
 
@@ -23,12 +23,13 @@ aide/
 ├── dev.sh                      # Git Bash 一键启动
 ├── src/
 │   ├── main.ts                 # Vue 入口
-│   ├── App.vue                 # 三栏布局 + 右面板纵向拆分 + 可拖拽分隔 + Ctrl+N + 桥接会话
+│   ├── App.vue                 # 三栏布局 + 右面板 Tab 栏(📁文件/⎇Git) + 可拖拽分隔 + Ctrl+N + 桥接会话
 │   ├── components/
 │   │   ├── SidebarLeft.vue     # 左侧：会话列表 + 自定义功能区
 │   │   ├── TerminalPanel.vue   # 中间：全屏 xterm.js 终端（主交互区）
 │   │   ├── FileTree.vue        # 右侧上部：路径栏 + 文件树（懒加载递归）
 │   │   ├── ChangeLogPanel.vue  # 右侧下部：会话变更面板（可折叠 + 轮次分组 + 撤回）
+│   │   ├── GitPanel.vue        # 右侧 Git 面板（分支切换 + 工作区变更 + 提交历史 + diff 查看）
 │   │   ├── TreeNodeItem.vue    # 文件树递归节点（独立 SFC，构建时编译）
 │   │   ├── ContextMenu.vue     # 全局右键菜单组件（Teleport to body）
 │   │   ├── ModalDialog.vue     # 通用弹窗（确认/输入）
@@ -49,6 +50,7 @@ aide/
 │   │   ├── useModal.ts         # 弹窗状态层
 │   │   ├── useFileViewer.ts    # 文件查看器状态层（模块级 ref 单例）
 │   │   ├── useConversationChanges.ts  # 会话变更追踪（按轮次分组 + 撤回）
+│   │   ├── useGit.ts          # Git 状态管理（模块级单例：branches/commits/status/diff）
 │   │   ├── useSettings.ts      # 设置状态层（模块级 reactive 单例 + load/update）
 │   │   ├── useWindowFocus.ts   # 窗口焦点跟踪（onFocusChanged）
 │   │   ├── useNotification.ts  # 桌面通知触发（watch sessionState 转换）
@@ -58,7 +60,7 @@ aide/
 │   │   ├── highlight.ts        # 共享 hljs 初始化 + extToLang + highlightCode()
 │   │   ├── markdown.ts         # 共享 marked 初始化 + escapeHtml()
 │   │   └── errors.ts           # Git 错误解析：Rust CODE → 用户消息 + 操作按钮
-│   ├── types.ts                # 集中类型定义（Session, FileEntry, DiffEntry, LastEventInfo 等）
+│   ├── types.ts                # 集中类型定义（Session, FileEntry, DiffEntry, CommitEntry, BranchInfo 等）
 │   ├── api.ts                  # Tauri invoke 类型安全封装层（PTY/文件/会话/git/设置）
 │   ├── types/
 │   │   ├── index.ts            # Barrel re-export（customization + marketplace 类型）
@@ -66,7 +68,8 @@ aide/
 │   │   └── marketplace.ts      # 市场类型（PluginEntry, InstalledPlugin）
 │   ├── api/
 │   │   ├── customization.ts    # 自定义 CRUD API（泛型 list/create/update/delete/toggle）
-│   │   └── marketplace.ts      # 市场 API（fetch/install/uninstall/list-installed）
+│   │   ├── marketplace.ts      # 市场 API（fetch/install/uninstall/list-installed）
+│   │   └── git.ts              # Git API（log/show/branches/checkout/diff/status/commit）
 │   ├── menus/
 │   │   └── contextMenus.ts     # 右键菜单配置层（工厂函数，与组件解耦）
 │   └── styles/global.css       # 暗色主题 CSS 变量 + 滚动条 + 菜单动画
@@ -292,9 +295,16 @@ useSessionMonitor.checkSessionState() 检测到 end_turn
 | `delete_file` | `path` | 删除文件或目录 |
 | `create_file` | `parent_path, name` | 新建空文件 |
 | `create_dir` | `parent_path, name` | 新建目录 |
-| `git_diff_files` | — | `git diff --numstat`，返回 `[{path, additions, deletions}]`，用于会话变更日志 |
+| `git_diff_files` | — | `git diff --numstat` + `git ls-files --others`，返回 `[{path, status, additions, deletions}]`，用于会话变更日志 |
 | `git_stage_all` | — | `git add -A`，Claude 回复前打快照 |
 | `git_revert_file` | `path` | `git checkout -- <path>`，撤回单个文件到快照状态 |
+| `git_log` | `limit?, branch?` | `git log --format="%H\|%s\|%an\|%ar"`，返回 `Vec<CommitEntry>` |
+| `git_show` | `hash` | `git log -1` 元数据 + `git show --numstat` 文件列表，返回 `CommitDetail { files: Vec<DiffEntry> }` |
+| `git_branches` | — | `git branch`，返回 `Vec<BranchInfo>`，current 排最前 |
+| `git_checkout` | `branch` | `git checkout <branch>`，切换分支 |
+| `git_diff_content` | `path, staged?, commit_hash?` | `git diff [--cached] [<hash>^!] -- <path>`，返回原始 diff 文本 |
+| `git_status` | — | `git status --porcelain`，解析 XY 为 `Vec<GitStatusEntry>` |
+| `git_commit` | `message` | `git commit -m <message>`，先检查 working tree 非空，返回新 commit hash |
 
 ### 会话持久化
 
@@ -330,9 +340,11 @@ useSessionMonitor.checkSessionState() 检测到 end_turn
 
 ### App.vue — 三栏拖拽布局 + 启动初始化
 - 左 200-450px、右 200-500px、中 min 400px，3px 分隔条
-- **右面板纵向拆分**：FileTree（`flex:1`）+ 拖拽条 + ChangeLogPanel（默认 220px）
+- **右面板 Tab 栏**：`📁 文件` / `⎇ Git`（带未提交变更数角标），切换 FileTree+ChangeLog ↔ GitPanel
+- **右面板纵向拆分**（文件 Tab）：FileTree（`flex:1`）+ 拖拽条 + ChangeLogPanel（默认 220px）
 - **变更面板折叠沉底**：`@collapse-changed` → `height: auto` → 拖拽条隐藏，FileTree 撑满
-- **启动初始化**：`loadSettings()` → `initWindowFocus()` → `useNotification()`
+- **启动初始化**：`loadSettings()` → `loadStatus()`（Git 角标） → `initWindowFocus()` → `useNotification()`
+- **工作区切换联动**：`onSidebarWsChanged` / `onFileTreeWsChanged` → `gitPanelRef.value?.reload()`
 - 渲染 `SettingsPanel`（v-if，统一"设置"弹窗，替换了旧的 SettingsModal + CustomizationPanel）
 
 ### SidebarLeft — 会话列表 + 设置入口
@@ -351,6 +363,14 @@ useSessionMonitor.checkSessionState() 检测到 end_turn
 
 ### ChangeLogPanel — 折叠通知父组件
 - `emit("collapse-changed", collapsed)` → App.vue 切换高度
+
+### GitPanel — Git 看板（右面板 Git Tab）
+- **三区段**：分支栏（⎇ 下拉切换） → Changes（工作区未提交文件 + Commit 输入框） → Commits（提交历史）
+- **提交历史**：点击展开/折叠 → `git_show` 获取文件列表 + 增删统计
+- **Diff 查看**：点击任意文件 → `git_diff_content` → 底部内嵌 diff 面板，`+` 绿 / `-` 红 / `@@` 蓝
+- **Stage All / Commit / Revert** 直接操作工作区
+- **defineExpose({ reload })**：供 App.vue 在工作区切换时调用，重新加载全量 Git 数据
+- 数据层 `useGit` 是模块级 singleton，状态跨组件共享（App.vue 用 `loadStatus()` 驱动 Tab 角标）
 
 ### useTerminalManager — 终端生命周期 + 设置响应
 - `createLoadingOverlay()` / `dismissLoader()` — 加载动画 DOM 管理

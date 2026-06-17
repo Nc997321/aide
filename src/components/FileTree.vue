@@ -231,7 +231,7 @@ defineExpose({ loadRoot });
 }
 
 .ws-arrow {
-  font-size: 10px;
+  font-size: 14px;
   flex-shrink: 0;
   transition: transform 0.15s;
   margin-left: 2px;

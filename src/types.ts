@@ -61,3 +61,37 @@ export interface ChangeFile {
   additions: number;
   deletions: number;
 }
+
+// ── Git types ──
+
+export interface CommitEntry {
+  hash: string;
+  message: string;
+  author: string;
+  date: string;
+}
+
+export interface CommitDetail {
+  hash: string;
+  message: string;
+  author: string;
+  date: string;
+  body: string;
+  files: DiffEntry[];
+}
+
+export interface BranchInfo {
+  name: string;
+  is_current: boolean;
+}
+
+export interface GitStatusEntry {
+  path: string;
+  xy: string;
+  status: string;
+  staged: boolean;
+}
+
+export interface GitStatus {
+  entries: GitStatusEntry[];
+}

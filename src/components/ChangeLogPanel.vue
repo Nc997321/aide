@@ -146,7 +146,7 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
 }
 
 .changelog-arrow {
-  font-size: 10px;
+  font-size: 14px;
   color: var(--text-muted);
   transition: transform 0.15s;
 }

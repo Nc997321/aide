@@ -7,20 +7,25 @@ import ContextMenu from "./components/ContextMenu.vue";
 import ModalDialog from "./components/ModalDialog.vue";
 import FileViewer from "./components/FileViewer.vue";
 import SettingsPanel from "./components/SettingsPanel.vue";
+import GitPanel from "./components/GitPanel.vue";
 import { ref, onMounted, onUnmounted } from "vue";
 import { useSettings } from "./composables/useSettings";
 import { useWindowFocus } from "./composables/useWindowFocus";
 import { useNotification } from "./composables/useNotification";
+import { useGit } from "./composables/useGit";
 
 const leftWidth = ref(280);
 const rightWidth = ref(300);
 const changeLogHeight = ref(220);
 const changeLogCollapsed = ref(false);
+const rightTab = ref<"files" | "git">("files");
+const { unstagedFiles, hasChanges, loadStatus } = useGit();
 const isDraggingLeft = ref(false);
 const isDraggingRight = ref(false);
 const isDraggingChangeLog = ref(false);
 const sidebarRef = ref<InstanceType<typeof SidebarLeft> | null>(null);
 const fileTreeRef = ref<InstanceType<typeof FileTree> | null>(null);
+const gitPanelRef = ref<InstanceType<typeof GitPanel> | null>(null);
 const activeSessionId = ref("");
 const settingsVisible = ref(false);
 
@@ -88,11 +93,13 @@ async function onSessionUpdated(newId?: string) {
 async function onFileTreeWsChanged(_path: string) {
   activeSessionId.value = "";
   await sidebarRef.value?.loadSessions();
+  gitPanelRef.value?.reload();
 }
 
 async function onSidebarWsChanged(_path: string) {
   activeSessionId.value = "";
   await fileTreeRef.value?.loadRoot();
+  gitPanelRef.value?.reload();
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -109,6 +116,9 @@ onMounted(async () => {
   // Load persisted settings
   const { load: loadSettings } = useSettings();
   await loadSettings();
+
+  // Load git status for tab badge
+  loadStatus();
 
   // Start tracking window focus for notifications
   const { init: initWindowFocus } = useWindowFocus();
@@ -151,14 +161,43 @@ onUnmounted(() => {
 
     <!-- Right panel -->
     <div class="panel-right" :style="{ width: rightWidth + 'px' }">
-      <FileTree ref="fileTreeRef" :session-id="activeSessionId" @workspace-changed="onFileTreeWsChanged" />
-      <div
-        v-show="!changeLogCollapsed"
-        class="resize-handle-h"
-        :class="{ active: isDraggingChangeLog }"
-        @mousedown="onChangeLogResizeStart"
-      />
-      <ChangeLogPanel :session-id="activeSessionId" :style="{ height: changeLogCollapsed ? 'auto' : changeLogHeight + 'px' }" @collapse-changed="(v) => changeLogCollapsed = v" />
+      <!-- Tab bar -->
+      <div class="right-tab-bar">
+        <button
+          class="right-tab"
+          :class="{ active: rightTab === 'files' }"
+          @click="rightTab = 'files'"
+        >
+          <span class="right-tab-icon">📁</span>
+          <span class="right-tab-label">文件</span>
+        </button>
+        <button
+          class="right-tab"
+          :class="{ active: rightTab === 'git' }"
+          @click="rightTab = 'git'"
+        >
+          <span class="right-tab-icon">⎇</span>
+          <span class="right-tab-label">Git</span>
+          <span v-if="hasChanges" class="right-tab-badge">{{ unstagedFiles.length }}</span>
+        </button>
+      </div>
+
+      <!-- Files tab: FileTree + ChangeLog -->
+      <template v-if="rightTab === 'files'">
+        <FileTree ref="fileTreeRef" :session-id="activeSessionId" @workspace-changed="onFileTreeWsChanged" />
+        <div
+          v-show="!changeLogCollapsed"
+          class="resize-handle-h"
+          :class="{ active: isDraggingChangeLog }"
+          @mousedown="onChangeLogResizeStart"
+        />
+        <ChangeLogPanel :session-id="activeSessionId" :style="{ height: changeLogCollapsed ? 'auto' : changeLogHeight + 'px' }" @collapse-changed="(v) => changeLogCollapsed = v" />
+      </template>
+
+      <!-- Git tab -->
+      <template v-else>
+        <GitPanel ref="gitPanelRef" />
+      </template>
     </div>
 
     <ContextMenu />
@@ -230,5 +269,61 @@ onUnmounted(() => {
 .resize-handle-h:hover,
 .resize-handle-h.active {
   background-color: var(--accent);
+}
+
+/* ── Right panel tab bar ── */
+
+.right-tab-bar {
+  display: flex;
+  border-bottom: 1px solid var(--surface);
+  flex-shrink: 0;
+  background: var(--bg-tertiary);
+}
+
+.right-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 0;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11.5px;
+  font-family: inherit;
+  transition: all 0.12s;
+}
+
+.right-tab:hover {
+  color: var(--text-secondary);
+  background: var(--surface);
+}
+
+.right-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
+.right-tab-icon {
+  font-size: 13px;
+}
+
+.right-tab-label {
+  font-weight: 500;
+}
+
+.right-tab-badge {
+  background: var(--accent);
+  color: #1e1e2e;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 8px;
+  min-width: 14px;
+  text-align: center;
+  line-height: 1.4;
 }
 </style>

@@ -339,8 +339,8 @@ defineExpose({ newSession, loadSessions });
 }
 
 .ws-arrow {
-  font-size: 13px;
-  width: 14px;
+  font-size: 14px;
+  width: 16px;
   flex-shrink: 0;
   transition: transform 0.15s;
 }

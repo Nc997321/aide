@@ -125,8 +125,8 @@ function onContextMenu(e: MouseEvent) {
 }
 
 .arrow {
-  font-size: 10px;
-  width: 12px;
+  font-size: 14px;
+  width: 16px;
   text-align: center;
   transition: transform 0.15s;
   flex-shrink: 0;
@@ -137,7 +137,7 @@ function onContextMenu(e: MouseEvent) {
 }
 
 .arrow-placeholder {
-  width: 12px;
+  width: 16px;
   flex-shrink: 0;
 }
 
