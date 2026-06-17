@@ -12,6 +12,8 @@ pub struct AppSettings {
     pub font_family: String,
     #[serde(default = "default_notifications_enabled")]
     pub notifications_enabled: bool,
+    #[serde(default)]
+    pub proxy: String,
 }
 
 fn default_font_size() -> u32 { 14 }
@@ -26,6 +28,7 @@ impl Default for AppSettings {
             font_size: default_font_size(),
             font_family: default_font_family(),
             notifications_enabled: default_notifications_enabled(),
+            proxy: String::new(),
         }
     }
 }

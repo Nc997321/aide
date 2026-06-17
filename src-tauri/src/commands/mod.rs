@@ -5,6 +5,7 @@ pub mod session;
 pub mod workspace;
 pub mod settings;
 pub mod customizations;
+pub mod marketplace;
 
 use serde::{Deserialize, Serialize};
 use std::fs;

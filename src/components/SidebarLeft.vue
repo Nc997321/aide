@@ -5,7 +5,6 @@ import { useSessionState } from "../composables/useSessionState";
 import { sessionMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
 import type { Session, WorkspaceInfo } from "../types";
-import { CUSTOMIZATION_CATEGORIES } from "../composables/useCustomizations";
 
 const props = defineProps<{
   activeSessionId: string;
@@ -15,7 +14,6 @@ const emit = defineEmits<{
   "session-changed": [id: string];
   "workspace-changed": [path: string];
   "open-settings": [];
-  "open-customization": [];
 }>();
 
 const sessions = ref<Session[]>([]);
@@ -245,25 +243,14 @@ defineExpose({ newSession, loadSessions });
       </template>
     </div>
 
-    <!-- Custom section -->
-    <div class="custom-section">
-      <div class="custom-header" @click="emit('open-customization')">
-        <span class="cat-icon">⚙️</span>
-        <span>自定义</span>
-      </div>
-    </div>
-
-    <!-- Settings button -->
+    <!-- Settings entry -->
     <div class="sidebar-footer">
-      <button
-        class="settings-btn"
-        title="设置"
-        @click="emit('open-settings')"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <button class="settings-btn" @click="emit('open-settings')">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"/>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
         </svg>
+        <span>设置</span>
       </button>
     </div>
   </div>
@@ -471,82 +458,26 @@ defineExpose({ newSession, loadSessions });
   margin-top: 2px;
 }
 
-/* ── Custom section ── */
-
-.custom-section {
-  border-top: 1px solid var(--surface);
-  padding: 8px 0;
-}
-
-.custom-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.custom-header:hover {
-  color: var(--text-primary);
-}
-
-.arrow {
-  font-size: 10px;
-  transition: transform 0.15s;
-}
-
-.arrow.expanded {
-  transform: rotate(90deg);
-}
-
-.custom-list {
-  padding: 0 16px 4px;
-}
-
-.custom-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 8px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  border-radius: 4px;
-}
-
-.custom-item:hover {
-  background: var(--surface);
-  color: var(--text-primary);
-}
-
-.badge {
-  background: var(--surface);
-  color: var(--text-muted);
-  padding: 1px 6px;
-  border-radius: 8px;
-  font-size: 11px;
-}
-
 /* ── Footer ── */
 
 .sidebar-footer {
   border-top: 1px solid var(--surface);
-  padding: 6px 12px;
+  padding: 4px 8px;
 }
 
 .settings-btn {
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 7px;
   width: 100%;
-  padding: 6px 0;
+  padding: 7px 10px;
   background: none;
   border: none;
-  border-radius: 4px;
-  color: var(--text-muted);
+  border-radius: 6px;
+  color: var(--text-secondary);
   cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
   transition: all 0.12s;
 }
 

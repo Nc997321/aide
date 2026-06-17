@@ -23,3 +23,8 @@ export type {
   CustomizationFormData,
   CustomizationCategory,
 } from "./customization";
+
+export type {
+  PluginEntry,
+  InstalledPlugin,
+} from "./marketplace";

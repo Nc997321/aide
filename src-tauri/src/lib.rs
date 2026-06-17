@@ -81,6 +81,11 @@ pub fn run() {
             commands::customizations::update_mcp_server,
             commands::customizations::delete_mcp_server,
             commands::customizations::toggle_mcp_server,
+            // Marketplace commands
+            commands::marketplace::fetch_marketplace,
+            commands::marketplace::install_plugin,
+            commands::marketplace::uninstall_plugin,
+            commands::marketplace::list_installed_plugins,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

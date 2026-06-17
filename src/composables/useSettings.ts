@@ -6,6 +6,7 @@ const defaults: AppSettings = {
   fontSize: 14,
   fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
   notificationsEnabled: true,
+  proxy: "",
 };
 
 // Module-level reactive singleton — shared across TerminalPanel and SettingsModal
@@ -19,6 +20,7 @@ export function useSettings() {
       settings.fontSize = s.fontSize ?? defaults.fontSize;
       settings.fontFamily = s.fontFamily ?? defaults.fontFamily;
       settings.notificationsEnabled = s.notificationsEnabled ?? defaults.notificationsEnabled;
+      settings.proxy = s.proxy ?? defaults.proxy;
     } catch (_) {
       // Keep defaults on error
     }
@@ -30,6 +32,7 @@ export function useSettings() {
     if (partial.fontSize !== undefined) settings.fontSize = partial.fontSize;
     if (partial.fontFamily !== undefined) settings.fontFamily = partial.fontFamily;
     if (partial.notificationsEnabled !== undefined) settings.notificationsEnabled = partial.notificationsEnabled;
+    if (partial.proxy !== undefined) settings.proxy = partial.proxy;
     // Persist asynchronously
     try {
       await api.setSettings(partial);

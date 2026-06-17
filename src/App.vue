@@ -6,8 +6,7 @@ import ChangeLogPanel from "./components/ChangeLogPanel.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import ModalDialog from "./components/ModalDialog.vue";
 import FileViewer from "./components/FileViewer.vue";
-import SettingsModal from "./components/SettingsModal.vue";
-import CustomizationPanel from "./components/customizations/CustomizationPanel.vue";
+import SettingsPanel from "./components/SettingsPanel.vue";
 import { ref, onMounted, onUnmounted } from "vue";
 import { useSettings } from "./composables/useSettings";
 import { useWindowFocus } from "./composables/useWindowFocus";
@@ -24,7 +23,6 @@ const sidebarRef = ref<InstanceType<typeof SidebarLeft> | null>(null);
 const fileTreeRef = ref<InstanceType<typeof FileTree> | null>(null);
 const activeSessionId = ref("");
 const settingsVisible = ref(false);
-const customizationVisible = ref(false);
 
 function onLeftResizeStart(e: MouseEvent) {
   isDraggingLeft.value = true;
@@ -129,7 +127,7 @@ onUnmounted(() => {
   <div class="app-layout">
     <!-- Left panel -->
     <div class="panel-left" :style="{ width: leftWidth + 'px' }">
-      <SidebarLeft ref="sidebarRef" :active-session-id="activeSessionId" @session-changed="onSessionChanged" @workspace-changed="onSidebarWsChanged" @open-settings="() => settingsVisible = true" @open-customization="() => customizationVisible = true" />
+      <SidebarLeft ref="sidebarRef" :active-session-id="activeSessionId" @session-changed="onSessionChanged" @workspace-changed="onSidebarWsChanged" @open-settings="() => settingsVisible = true" />
     </div>
 
     <!-- Resize handle left -->
@@ -165,10 +163,7 @@ onUnmounted(() => {
 
     <ContextMenu />
     <ModalDialog />
-    <SettingsModal v-if="settingsVisible" @close="settingsVisible = false" />
-    <div v-if="customizationVisible" class="modal-overlay" @click="customizationVisible = false">
-      <CustomizationPanel @close="customizationVisible = false" @click.stop />
-    </div>
+    <SettingsPanel v-if="settingsVisible" @close="settingsVisible = false" />
     <FileViewer />
   </div>
 </template>
@@ -235,18 +230,5 @@ onUnmounted(() => {
 .resize-handle-h:hover,
 .resize-handle-h.active {
   background-color: var(--accent);
-}
-
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 999;
 }
 </style>

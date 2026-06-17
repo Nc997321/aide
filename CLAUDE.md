@@ -32,8 +32,15 @@ aide/
 │   │   ├── TreeNodeItem.vue    # 文件树递归节点（独立 SFC，构建时编译）
 │   │   ├── ContextMenu.vue     # 全局右键菜单组件（Teleport to body）
 │   │   ├── ModalDialog.vue     # 通用弹窗（确认/输入）
-│   │   ├── SettingsModal.vue    # 设置弹窗（字号/字体/通知开关，即时生效）
-│   │   └── FileViewer.vue      # 文件查看器弹窗（语法高亮 + Markdown 渲染 + 编辑模式）
+│   │   ├── SettingsPanel.vue    # 统一设置弹窗：左侧导航（通用/扩展/市场）+ 右侧内容
+│   │   ├── FileViewer.vue      # 文件查看器弹窗（语法高亮 + Markdown 渲染 + 编辑模式）
+│   │   ├── customizations/
+│   │   │   ├── CustomizationList.vue    # 扩展分类列表（三态：loading → empty → list）
+│   │   │   ├── CustomizationDetail.vue  # 扩展详情/编辑（<slot> 留给类型专属字段）
+│   │   │   └── CustomizationPanel.vue   # 旧扩展面板（SettingsPanel 已替代，保留未删）
+│   │   └── marketplace/
+│   │       ├── MarketplaceTab.vue       # 市场主页：搜索 + 错误横幅 + 插件列表
+│   │       └── MarketplacePluginCard.vue # 插件卡片：名称/描述/安装按钮（四态）
 │   ├── composables/
 │   │   ├── useContextMenu.ts   # 右键菜单状态层（模块级 ref 单例）
 │   │   ├── useSessionState.ts  # 会话运行状态（模块级 reactive 单例）
@@ -44,12 +51,22 @@ aide/
 │   │   ├── useConversationChanges.ts  # 会话变更追踪（按轮次分组 + 撤回）
 │   │   ├── useSettings.ts      # 设置状态层（模块级 reactive 单例 + load/update）
 │   │   ├── useWindowFocus.ts   # 窗口焦点跟踪（onFocusChanged）
-│   │   └── useNotification.ts  # 桌面通知触发（watch sessionState 转换）
+│   │   ├── useNotification.ts  # 桌面通知触发（watch sessionState 转换）
+│   │   ├── useCustomizations.ts # 扩展管理：模块级 reactive 单例 + CRUD + toggle
+│   │   └── useMarketplace.ts   # 插件市场：模块级单例（plugins/installing/errorActions）
 │   ├── utils/
 │   │   ├── highlight.ts        # 共享 hljs 初始化 + extToLang + highlightCode()
-│   │   └── markdown.ts         # 共享 marked 初始化 + escapeHtml()
+│   │   ├── markdown.ts         # 共享 marked 初始化 + escapeHtml()
+│   │   └── errors.ts           # Git 错误解析：Rust CODE → 用户消息 + 操作按钮
 │   ├── types.ts                # 集中类型定义（Session, FileEntry, DiffEntry, LastEventInfo 等）
-│   ├── api.ts                  # Tauri invoke 类型安全封装层
+│   ├── api.ts                  # Tauri invoke 类型安全封装层（PTY/文件/会话/git/设置）
+│   ├── types/
+│   │   ├── index.ts            # Barrel re-export（customization + marketplace 类型）
+│   │   ├── customization.ts    # 自定义类型（Agent, Skill, Instruction, Hook, McpServer）
+│   │   └── marketplace.ts      # 市场类型（PluginEntry, InstalledPlugin）
+│   ├── api/
+│   │   ├── customization.ts    # 自定义 CRUD API（泛型 list/create/update/delete/toggle）
+│   │   └── marketplace.ts      # 市场 API（fetch/install/uninstall/list-installed）
 │   ├── menus/
 │   │   └── contextMenus.ts     # 右键菜单配置层（工厂函数，与组件解耦）
 │   └── styles/global.css       # 暗色主题 CSS 变量 + 滚动条 + 菜单动画
@@ -67,7 +84,9 @@ aide/
 │       │   ├── git.rs          # Git 相关 commands
 │       │   ├── session.rs      # 会话持久化 commands
 │       │   ├── workspace.rs    # 工作区 commands
-│       │   └── settings.rs     # 设置 commands + notify_send（绕过插件 dev 限制）
+│       │   ├── settings.rs     # 设置 commands + notify_send（绕过插件 dev 限制）
+│       │   ├── customizations.rs # 自定义 CRUD（25 个命令，5 种类型 × CRUD+toggle）
+│       │   └── marketplace.rs  # 插件市场（fetch/install/uninstall/list-installed + 代理检测）
 │       └── pty.rs              # 多会话 PTY 管理器（HashMap<sessionId, PtySession>）
 ├── package.json
 ├── vite.config.ts
@@ -191,14 +210,38 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 
 ### 设置系统
 
-`~/.claude-code-desktop/config.json` 现在存两个顶层字段：
+`~/.claude-code-desktop/config.json` 存两个顶层字段：
 ```json
-{ "workspace": "C-Users-...", "settings": { "font_size": 14, ... } }
+{ "workspace": "C-Users-...", "settings": { "font_size": 14, "proxy": "", ... } }
 ```
 
-**Rust 侧**：`settings.rs` 提供 `load_config()` / `save_config()` 作为全文件 JSON 读写 helper。`workspace.rs` 重构为使用这些 helper，不再覆盖 settings 字段。`get_settings` / `set_settings` 命令用默认值填充缺失字段。
+**Rust 侧**：`settings.rs` 提供 `load_config()` / `save_config()` 作为全文件 JSON 读写 helper。`get_settings` / `set_settings` 命令用默认值填充缺失字段。`AppSettings` 含 `font_size`, `font_family`, `notifications_enabled`, `proxy`。
 
-**前端侧**：`useSettings` 模块级 reactive 单例。`SettingsModal` v-model 绑定本地 ref，watch 同步到 settings + 调 `update()` 持久化。`useTerminalManager` watch `settings.fontSize`/`fontFamily`，遍历 `liveSessions` 即时应用到所有终端。
+**前端侧**：`useSettings` 模块级 reactive 单例。`SettingsPanel.vue`（680×520 弹窗）左侧导航（⚙通用/🧩扩展/🏪市场），右侧 `v-if`/`v-else-if`/`v-else` 切换内容。"通用"tab 拉取 settings 本地 ref → watch 即时同步 + `update()` 持久化。`useTerminalManager` watch `settings.fontSize`/`fontFamily` 即时应用到所有终端。
+
+### 自定义（扩展）系统
+
+五种类型，每种对应 Claude Code 的存储位置：
+
+| 类型 | 存储 | CRUD |
+|------|------|------|
+| 智能体 | `~/.claude/agents/<name>.md` | ✅ |
+| 技能 | `~/.claude/skills/<name>/SKILL.md` | ✅ |
+| 指令 | `~/.claude/CLAUDE.md` + 项目 `CLAUDE.md` | get/save（单例） |
+| 钩子 | `~/.claude/settings.json` → `hooks` | ✅ |
+| MCP 服务器 | `~/.claude/settings.json` → `mcpServers` | ✅ |
+
+**已知缺口**：toggle 全是 no-op，创建只有 `prompt()` 填名字，类型专属字段（model/tools/command/args）未实现。
+
+### 插件市场
+
+**市场源**：`anthropics/claude-plugins-community`（GitHub），清单路径 `.claude-plugin/marketplace.json`。Rust 侧 `git clone --depth 1` 拉取，支持三种 `source` 格式：`{ source: "url", url: "https://..." }`（外部仓库）、`{ source: "git-subdir", ... }`（仓库子目录，自动拼接 GitHub URL）、`"./relative"`（内置，显示"内置"不可安装）。
+
+**代理检测**：`detect_proxy()` → TCP 端口扫描 (7890/10809) → 环境变量 → git config → 应用设置 `proxy` 字段。`git_clone()` 自动应用检测到的代理。
+
+**安装**：`git clone --depth 1 <repo_url>` → `~/.claude/plugins/<name>/`，验证 `.claude-plugin/plugin.json` 存在。
+
+**错误处理**：Rust 返回 `CODE: details`（NETWORK_FAILURE/REPO_NOT_FOUND/TIMEOUT/UNKNOWN_ERROR）。前端 `parseGitError()` 映射为用户消息 + 操作按钮（重试/配置代理/切换市场源）。错误文案集中在 `src/utils/errors.ts` 的 `ERROR_MAP`。
 
 ### 桌面通知
 
@@ -269,17 +312,38 @@ useSessionMonitor.checkSessionState() 检测到 end_turn
 | `set_settings` | 合并 partial settings 到 `config.json`，不覆盖 `workspace` |
 | `notify_send` | 直接用 `notify-rust` 发系统通知，强制 `app_id("com.aide.app")` |
 
+### 自定义（customizations.rs — 25 个命令）
+
+五种类型的 CRUD + toggle：
+`list_agents`, `get_agent`, `create_agent`, `update_agent`, `delete_agent`, `toggle_agent`（对 skill/hook/mcp_server 同样 pattern）。指令用 `get/save_global_instructions` + `get/save_project_instructions`（单例）。
+
+### 插件市场（marketplace.rs — 4 个命令）
+
+| 命令 | 参数 | 说明 |
+|------|------|------|
+| `fetch_marketplace` | `url` | 浅克隆市场仓库 → 解析 `.claude-plugin/marketplace.json` → 返回 `Vec<PluginEntry>` |
+| `install_plugin` | `repo_url, name` | `git clone --depth 1` 到 `~/.claude/plugins/<name>/`，验证清单 |
+| `uninstall_plugin` | `name` | `fs::remove_dir_all` 删除插件目录 |
+| `list_installed_plugins` | — | 扫描 `~/.claude/plugins/` 下含清单的目录 |
+
 ## 关键组件行为
 
 ### App.vue — 三栏拖拽布局 + 启动初始化
 - 左 200-450px、右 200-500px、中 min 400px，3px 分隔条
 - **右面板纵向拆分**：FileTree（`flex:1`）+ 拖拽条 + ChangeLogPanel（默认 220px）
 - **变更面板折叠沉底**：`@collapse-changed` → `height: auto` → 拖拽条隐藏，FileTree 撑满
-- **启动初始化**：`loadSettings()` → `initWindowFocus()` → `useNotification()`，顺序保证通知触发时设置已就绪
-- 渲染 `SettingsModal`（v-if）和齿轮按钮 `@open-settings` 事件
+- **启动初始化**：`loadSettings()` → `initWindowFocus()` → `useNotification()`
+- 渲染 `SettingsPanel`（v-if，统一"设置"弹窗，替换了旧的 SettingsModal + CustomizationPanel）
 
 ### SidebarLeft — 会话列表 + 设置入口
-- 底部齿轮图标 SVG 按钮 → `emit("open-settings")`
+- 底部单行按钮，齿轮 SVG + "设置"文字 → `emit("open-settings")`
+
+### SettingsPanel — 统一设置弹窗
+- 680×520px，左侧 120px 导航栏，三 tab：⚙通用 / 🧩扩展 / 🏪市场
+- "通用"：字号滑块 + 字体输入 + 通知开关 + 网络代理输入
+- "扩展"：5 个分类卡片 → 列表 → 详情（三级导航，复用 CustomizationList/CustomizationDetail）
+- "市场"：嵌入 MarketplaceTab
+- 关闭：Escape / 点击遮罩 / ✕ 按钮
 
 ### TerminalPanel — 多终端 + 预览 + 加载
 - **非 scoped 样式**：`terminal-container`、`xterm`、`session-loader` 等动态 DOM 的样式放在非 scoped `<style>` 块

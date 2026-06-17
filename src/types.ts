@@ -52,6 +52,7 @@ export interface AppSettings {
   fontSize: number;
   fontFamily: string;
   notificationsEnabled: boolean;
+  proxy: string;
 }
 
 export interface ChangeFile {
