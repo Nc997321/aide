@@ -43,6 +43,29 @@ pub struct GitStatus {
     pub entries: Vec<GitStatusEntry>,
 }
 
+/// Get the git remote origin URL for the project.
+#[tauri::command]
+pub fn git_remote_url(
+    workspace_state: State<'_, WorkspaceState>,
+) -> Result<Option<String>, String> {
+    let root = project_root_for_commands(&workspace_state);
+    if !root.join(".git").exists() {
+        return Ok(None);
+    }
+    let output = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(&root)
+        .output()
+        .map_err(|e| format!("Failed to get remote: {}", e))?;
+    if output.status.success() {
+        let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !url.is_empty() {
+            return Ok(Some(url));
+        }
+    }
+    Ok(None)
+}
+
 // ── Existing commands ──
 
 #[tauri::command]

@@ -56,6 +56,7 @@ pub fn run() {
             commands::git::git_stage_file,
             commands::git::git_unstage_file,
             commands::git::git_revert_file,
+            commands::git::git_remote_url,
             commands::git::git_log,
             commands::git::git_show,
             commands::git::git_branches,

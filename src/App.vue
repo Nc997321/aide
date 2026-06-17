@@ -13,6 +13,8 @@ import { useSettings } from "./composables/useSettings";
 import { useWindowFocus } from "./composables/useWindowFocus";
 import { useNotification } from "./composables/useNotification";
 import { useGit } from "./composables/useGit";
+import { useUpdate } from "./composables/useUpdate";
+import { getVersion } from "@tauri-apps/api/app";
 
 const leftWidth = ref(280);
 const rightWidth = ref(300);
@@ -119,6 +121,11 @@ onMounted(async () => {
 
   // Load git status for tab badge
   loadStatus();
+
+  // Check for updates
+  const { checkUpdate } = useUpdate();
+  const appVersion = await getVersion();
+  checkUpdate(appVersion);
 
   // Start tracking window focus for notifications
   const { init: initWindowFocus } = useWindowFocus();

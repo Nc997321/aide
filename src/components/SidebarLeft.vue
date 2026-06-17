@@ -2,8 +2,10 @@
 import { ref, computed, onMounted } from "vue";
 import { useContextMenu } from "../composables/useContextMenu";
 import { useSessionState } from "../composables/useSessionState";
+import { useUpdate } from "../composables/useUpdate";
 import { sessionMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
+import { open } from "@tauri-apps/plugin-shell";
 import type { Session, WorkspaceInfo } from "../types";
 
 const props = defineProps<{
@@ -99,9 +101,14 @@ async function loadSessions() {
 
 const { show } = useContextMenu();
 const { state: sessionState } = useSessionState();
+const { updateAvailable, latestVersion, downloadUrl, dismissUpdate } = useUpdate();
 
 function selectSession(id: string) {
   emit("session-changed", id);
+}
+
+function openUpdate() {
+  if (downloadUrl.value) open(downloadUrl.value);
 }
 
 async function switchWorkspace(ws: WorkspaceInfo) {
@@ -241,6 +248,15 @@ defineExpose({ newSession, loadSessions });
           </div>
         </template>
       </template>
+    </div>
+
+    <!-- Update banner -->
+    <div v-if="updateAvailable" class="update-banner" @click="openUpdate">
+      <div class="update-banner-body">
+        <span class="update-dot">●</span>
+        <span class="update-text">新版本 {{ latestVersion }}</span>
+      </div>
+      <button class="update-dismiss" title="忽略" @click.stop="dismissUpdate">✕</button>
     </div>
 
     <!-- Settings entry -->
@@ -456,6 +472,60 @@ defineExpose({ newSession, loadSessions });
   font-size: 11px;
   color: var(--text-muted);
   margin-top: 2px;
+}
+
+/* ── Update banner ── */
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  margin: 0 8px;
+  border-radius: 6px;
+  background: rgba(137, 180, 250, 0.1);
+  border: 1px solid rgba(137, 180, 250, 0.22);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.update-banner:hover {
+  background: rgba(137, 180, 250, 0.18);
+  border-color: rgba(137, 180, 250, 0.35);
+}
+
+.update-banner-body {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.update-dot {
+  font-size: 8px;
+  color: var(--accent);
+}
+
+.update-text {
+  font-size: 11.5px;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.update-dismiss {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-family: inherit;
+  transition: all 0.1s;
+}
+
+.update-dismiss:hover {
+  background: rgba(137, 180, 250, 0.2);
+  color: var(--text-primary);
 }
 
 /* ── Footer ── */
