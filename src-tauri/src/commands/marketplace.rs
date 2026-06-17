@@ -3,6 +3,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use super::{claude_home, config_path};
 
 // ── Types (API response) ──
@@ -45,11 +48,12 @@ pub struct InstalledPlugin {
 enum RawSource {
     Object {
         #[serde(default)]
-        source: String,   // "url" | "git-subdir"
+        source: String,
         #[serde(default)]
-        url: String,       // full URL for "url", "owner/repo" for "git-subdir"
+        url: String,
         #[serde(default)]
-        path: String,      // subdirectory path for "git-subdir"
+        #[allow(dead_code)]
+        path: String,
     },
     Bundled(String),       // "./relative/path" string
 }
@@ -136,13 +140,16 @@ fn detect_proxy() -> Option<String> {
     }
 
     // 3. Check git global config (only if still reachable)
-    if let Ok(output) = Command::new("git")
-        .args(["config", "--global", "http.proxy"])
-        .output()
     {
-        let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !val.is_empty() && is_proxy_reachable(&val) {
-            return Some(val);
+        let mut git_cmd = Command::new("git");
+        git_cmd.args(["config", "--global", "http.proxy"]);
+        #[cfg(windows)]
+        { git_cmd.creation_flags(0x08000000); }
+        if let Ok(output) = git_cmd.output() {
+            let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !val.is_empty() && is_proxy_reachable(&val) {
+                return Some(val);
+            }
         }
     }
 
@@ -208,6 +215,8 @@ fn git_err(stderr: &str) -> String {
 fn git_clone(url: &str, target: &std::path::Path) -> Result<std::process::Output, std::io::Error> {
     let mut cmd = Command::new("git");
     cmd.args(["clone", "--depth", "1"]);
+    #[cfg(windows)]
+    { cmd.creation_flags(0x08000000); }
 
     // Apply proxy if detected
     if let Some(ref proxy) = detect_proxy() {
@@ -420,11 +429,12 @@ pub fn list_installed_plugins() -> Result<Vec<InstalledPlugin>, String> {
 }
 
 fn get_remote_url(path: &std::path::Path) -> Option<String> {
-    let output = Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(path)
-        .output()
-        .ok()?;
+    let mut cmd = Command::new("git");
+    cmd.args(["remote", "get-url", "origin"])
+        .current_dir(path);
+    #[cfg(windows)]
+    { cmd.creation_flags(0x08000000); }
+    let output = cmd.output().ok()?;
 
     if output.status.success() {
         let url = String::from_utf8_lossy(&output.stdout).trim().to_string();

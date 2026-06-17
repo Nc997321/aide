@@ -15,6 +15,22 @@
 | 包管理 | pnpm |
 | Rust 编译 | MSVC 工具链（VS Build Tools 2022） |
 
+## ⚠️ Windows 必读坑点：`CREATE_NO_WINDOW`
+
+**所有 `Command::new("git")`（或任何 CLI 工具）必须加 `CREATE_NO_WINDOW (0x08000000)` 标志**，否则 Windows 会为每个子进程弹出一个控制台窗口（一闪而过），在 release build 中表现为大量错误弹窗。
+
+```rust
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+let mut cmd = Command::new("git");
+cmd.args(…);
+#[cfg(windows)]
+{ cmd.creation_flags(0x08000000); }  // 必须有！
+```
+
+涉及文件：`git.rs`、`marketplace.rs`、`filesystem.rs`、以及未来任何 spawn 外部进程的代码。
+
 ## 项目结构
 
 ```

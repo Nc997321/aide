@@ -13,8 +13,6 @@ import { useSettings } from "./composables/useSettings";
 import { useWindowFocus } from "./composables/useWindowFocus";
 import { useNotification } from "./composables/useNotification";
 import { useGit } from "./composables/useGit";
-import { useUpdate } from "./composables/useUpdate";
-import { getVersion } from "@tauri-apps/api/app";
 
 const leftWidth = ref(280);
 const rightWidth = ref(300);
@@ -95,13 +93,13 @@ async function onSessionUpdated(newId?: string) {
 async function onFileTreeWsChanged(_path: string) {
   activeSessionId.value = "";
   await sidebarRef.value?.loadSessions();
-  gitPanelRef.value?.reload();
+  if (rightTab.value === "git") gitPanelRef.value?.reload();
 }
 
 async function onSidebarWsChanged(_path: string) {
   activeSessionId.value = "";
   await fileTreeRef.value?.loadRoot();
-  gitPanelRef.value?.reload();
+  if (rightTab.value === "git") gitPanelRef.value?.reload();
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -118,14 +116,6 @@ onMounted(async () => {
   // Load persisted settings
   const { load: loadSettings } = useSettings();
   await loadSettings();
-
-  // Load git status for tab badge
-  loadStatus();
-
-  // Check for updates
-  const { checkUpdate } = useUpdate();
-  const appVersion = await getVersion();
-  checkUpdate(appVersion);
 
   // Start tracking window focus for notifications
   const { init: initWindowFocus } = useWindowFocus();
@@ -201,7 +191,6 @@ onUnmounted(() => {
         <ChangeLogPanel :session-id="activeSessionId" :style="{ height: changeLogCollapsed ? 'auto' : changeLogHeight + 'px' }" @collapse-changed="(v) => changeLogCollapsed = v" />
       </template>
 
-      <!-- Git tab -->
       <template v-else>
         <GitPanel ref="gitPanelRef" />
       </template>

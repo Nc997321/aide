@@ -1,5 +1,11 @@
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::State;
+use tracing::{info, error};
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 use super::{DiffEntry, WorkspaceState, project_root_for_commands};
 
@@ -32,9 +38,8 @@ pub struct BranchInfo {
 #[derive(Debug, serde::Serialize, Clone)]
 pub struct GitStatusEntry {
     pub path: String,
-    /// XY from git status --porcelain v1 (index + worktree)
     pub xy: String,
-    pub status: String, // "M", "A", "D", "R", "?"
+    pub status: String,
     pub staged: bool,
 }
 
@@ -43,33 +48,117 @@ pub struct GitStatus {
     pub entries: Vec<GitStatusEntry>,
 }
 
-/// Get the git remote origin URL for the project.
+// ── Timeout + Mutex ──
+
+const GIT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Serialises all git invocations so concurrent calls never fight over
+/// `.git/index.lock`.  A poisoned lock is treated as a fatal error and
+/// immediately returned to the caller.
+static GIT_LOCK: Mutex<()> = Mutex::new(());
+
+/// Spawn `git` with the given arguments inside `root`, blocking until it
+/// finishes or `GIT_TIMEOUT` expires.  Uses `.output()` (no manual polling)
+/// and a helper thread for the timeout.
+fn git_run(args: &[&str], root: &std::path::Path) -> Result<std::process::Output, String> {
+    let _guard = GIT_LOCK
+        .lock()
+        .map_err(|e| format!("Git lock poisoned: {}", e))?;
+
+    let mut cmd = Command::new("git");
+    cmd.args(args)
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    { cmd.creation_flags(0x08000000); }
+
+    let child = cmd.spawn().map_err(|e| format!("Failed to spawn git: {}", e))?;
+
+    // Spawn a helper thread for wait_with_output; join with a timeout.
+    let handle = std::thread::spawn(move || child.wait_with_output());
+    let start = Instant::now();
+    loop {
+        if handle.is_finished() {
+            return handle
+                .join()
+                .unwrap_or_else(|_| Err(std::io::Error::new(std::io::ErrorKind::Other, "Git thread panicked")))
+                .map_err(|e| format!("Failed to read git output: {}", e));
+        }
+        if start.elapsed() > GIT_TIMEOUT {
+            return Err(format!(
+                "Git command 'git {}' timed out after {}s",
+                args.join(" "),
+                GIT_TIMEOUT.as_secs(),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Run git inside `tokio::spawn_blocking` so the async handler never blocks
+/// the tokio worker thread.
+async fn git_run_async(
+    args: Vec<String>,
+    root: std::path::PathBuf,
+) -> Result<std::process::Output, String> {
+    tokio::task::spawn_blocking(move || {
+        let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        git_run(&refs, &root)
+    })
+    .await
+    .map_err(|e| format!("Git task panicked: {}", e))?
+}
+
+/// Like `git_run_async` but accepts an arbitrary closure that receives `root`
+/// and can execute **multiple** git steps inside a single blocking task —
+/// avoids repeated thread hops for compound operations (commit, show, …).
+async fn git_run_blocking<F, T>(f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("Git task panicked: {}", e))?
+}
+
+// ── Commands (all async to avoid blocking IPC) ──
+
+/// Capture frontend errors into the Rust tracing log.
 #[tauri::command]
-pub fn git_remote_url(
+pub fn log_frontend_error(message: String) {
+    error!(%message, "FRONTEND_ERROR");
+}
+
+#[tauri::command]
+pub async fn git_remote_url(
     workspace_state: State<'_, WorkspaceState>,
 ) -> Result<Option<String>, String> {
     let root = project_root_for_commands(&workspace_state);
+    info!(root = %root.display(), "git_remote_url");
     if !root.join(".git").exists() {
+        info!("git_remote_url: no .git, skip");
         return Ok(None);
     }
-    let output = Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("Failed to get remote: {}", e))?;
+    let output = git_run_async(
+        vec!["remote".into(), "get-url".into(), "origin".into()],
+        root,
+    )
+    .await?;
     if output.status.success() {
         let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if !url.is_empty() {
+            info!(%url, "git_remote_url ok");
             return Ok(Some(url));
         }
     }
     Ok(None)
 }
 
-// ── Existing commands ──
-
 #[tauri::command]
-pub fn git_diff_files(
+pub async fn git_diff_files(
     workspace_state: State<'_, WorkspaceState>,
 ) -> Result<Vec<DiffEntry>, String> {
     let root = project_root_for_commands(&workspace_state);
@@ -77,154 +166,122 @@ pub fn git_diff_files(
         return Ok(Vec::new());
     }
 
-    // Modified / deleted files (working tree vs index)
-    let output = Command::new("git")
-        .args(["diff", "--numstat"])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("Failed to run git diff: {}", e))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut files: Vec<DiffEntry> = Vec::new();
-
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() < 3 {
-            continue;
-        }
-        let additions = if parts[0] == "-" { 0 } else { parts[0].parse().unwrap_or(0) };
-        let deletions = if parts[1] == "-" { 0 } else { parts[1].parse().unwrap_or(0) };
-        files.push(DiffEntry {
-            path: parts[2].to_string(),
-            status: "M".to_string(),
-            additions,
-            deletions,
-        });
-    }
-
-    // Untracked (new) files — git diff doesn't see them, so we scan separately
-    if let Ok(untracked) = Command::new("git")
-        .args(["ls-files", "--others", "--exclude-standard"])
-        .current_dir(&root)
-        .output()
-    {
-        let untracked_stdout = String::from_utf8_lossy(&untracked.stdout);
-        for path in untracked_stdout.lines() {
-            let file_path = root.join(path);
-            if !file_path.is_file() {
-                continue;
-            }
-            let additions = std::fs::read_to_string(&file_path)
-                .map(|c| c.lines().count() as u32)
-                .unwrap_or(0);
+    // All git + filesystem work in one blocking task
+    git_run_blocking(move || {
+        // 1. Modified / deleted files
+        let diff_out = git_run(&["diff", "--numstat"], &root)?;
+        let stdout = String::from_utf8_lossy(&diff_out.stdout);
+        let mut files: Vec<DiffEntry> = Vec::new();
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() < 3 { continue; }
+            let additions = if parts[0] == "-" { 0 } else { parts[0].parse().unwrap_or(0) };
+            let deletions = if parts[1] == "-" { 0 } else { parts[1].parse().unwrap_or(0) };
             files.push(DiffEntry {
-                path: path.to_string(),
-                status: "A".to_string(),
+                path: parts[2].to_string(),
+                status: "M".to_string(),
                 additions,
-                deletions: 0,
+                deletions,
             });
         }
-    }
 
-    Ok(files)
+        // 2. Untracked files
+        if let Ok(untracked_out) = git_run(
+            &["ls-files", "--others", "--exclude-standard"],
+            &root,
+        ) {
+            let ut_stdout = String::from_utf8_lossy(&untracked_out.stdout);
+            for path in ut_stdout.lines() {
+                let file_path = root.join(path);
+                if !file_path.is_file() { continue; }
+                let additions = std::fs::read_to_string(&file_path)
+                    .map(|c| c.lines().count() as u32)
+                    .unwrap_or(0);
+                files.push(DiffEntry {
+                    path: path.to_string(),
+                    status: "A".to_string(),
+                    additions,
+                    deletions: 0,
+                });
+            }
+        }
+
+        Ok(files)
+    }).await
 }
 
 #[tauri::command]
-pub fn git_stage_all(
+pub async fn git_stage_all(
     workspace_state: State<'_, WorkspaceState>,
 ) -> Result<(), String> {
     let root = project_root_for_commands(&workspace_state);
     if !root.join(".git").exists() {
         return Ok(());
     }
-    Command::new("git")
-        .args(["add", "-A"])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("Failed to git add: {}", e))?;
+    git_run_async(vec!["add".into(), "-A".into()], root).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn git_stage_file(
+pub async fn git_stage_file(
     workspace_state: State<'_, WorkspaceState>,
     path: String,
 ) -> Result<(), String> {
     let root = project_root_for_commands(&workspace_state);
-    Command::new("git")
-        .args(["add", "--", &path])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("Failed to stage: {}", e))?;
+    git_run_async(vec!["add".into(), "--".into(), path], root).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn git_unstage_file(
+pub async fn git_unstage_file(
     workspace_state: State<'_, WorkspaceState>,
     path: String,
 ) -> Result<(), String> {
     let root = project_root_for_commands(&workspace_state);
-    Command::new("git")
-        .args(["restore", "--staged", "--", &path])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("Failed to unstage: {}", e))?;
+    git_run_async(vec!["restore".into(), "--staged".into(), "--".into(), path], root).await?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn git_revert_file(
+pub async fn git_revert_file(
     workspace_state: State<'_, WorkspaceState>,
     path: String,
 ) -> Result<(), String> {
     let root = project_root_for_commands(&workspace_state);
-    Command::new("git")
-        .args(["checkout", "--", &path])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("Failed to revert: {}", e))?;
+    git_run_async(vec!["checkout".into(), "--".into(), path], root).await?;
     Ok(())
 }
 
-// ── New commands ──
-
-/// Get commit history for the current branch.
 #[tauri::command]
-pub fn git_log(
+pub async fn git_log(
     workspace_state: State<'_, WorkspaceState>,
     limit: Option<u32>,
     branch: Option<String>,
 ) -> Result<Vec<CommitEntry>, String> {
     let root = project_root_for_commands(&workspace_state);
+    info!(root = %root.display(), ?limit, "git_log");
     if !root.join(".git").exists() {
         return Ok(Vec::new());
     }
 
     let limit = limit.unwrap_or(50);
-    let limit_str = format!("-n{}", limit);
     let mut args = vec![
-        "log",
-        "--format=%H|%s|%an|%ar",
-        &limit_str,
+        "log".to_string(),
+        "--format=%H|%s|%an|%ar".to_string(),
+        format!("-n{}", limit),
     ];
-
-    // If branch is specified, use it; otherwise default to HEAD
-    let branch_str;
-    if let Some(ref b) = branch {
-        branch_str = b.clone();
-        args.push(&branch_str);
+    if let Some(b) = branch {
+        args.push(b);
     }
 
-    let output = Command::new("git")
-        .args(&args)
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("Failed to run git log: {}", e))?;
+    let output = git_run_async(args, root).await
+        .map_err(|e| {
+            error!("git_log failed: {}", e);
+            e
+        })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut commits = Vec::new();
-
     for line in stdout.lines() {
         let parts: Vec<&str> = line.splitn(4, '|').collect();
         if parts.len() < 4 {
@@ -238,91 +295,74 @@ pub fn git_log(
         });
     }
 
+    info!(count = commits.len(), "git_log ok");
     Ok(commits)
 }
 
-/// Get details of a single commit: metadata + file list with stats.
 #[tauri::command]
-pub fn git_show(
+pub async fn git_show(
     workspace_state: State<'_, WorkspaceState>,
     hash: String,
 ) -> Result<CommitDetail, String> {
     let root = project_root_for_commands(&workspace_state);
+    info!(%hash, "git_show");
     if !root.join(".git").exists() {
         return Err("Not a git repository".into());
     }
 
-    // 1. Metadata: %H|%s|%an|%ar|%b
-    let meta_out = Command::new("git")
-        .args(["log", "--format=%H|%s|%an|%ar|%b", "-1", &hash])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("Failed to run git log: {}", e))?;
+    // Both git log + git show in one blocking task
+    git_run_blocking(move || {
+        let meta_out = git_run(
+            &["log", "--format=%H|%s|%an|%ar|%b", "-1", &hash],
+            &root,
+        ).map_err(|e| format!("Failed to run git log: {}", e))?;
 
-    let meta_str = String::from_utf8_lossy(&meta_out.stdout);
-    let mut meta_parts = meta_str.splitn(5, '|');
-    let commit_hash = meta_parts.next().unwrap_or(&hash).to_string();
-    let message = meta_parts.next().unwrap_or("").to_string();
-    let author = meta_parts.next().unwrap_or("").to_string();
-    let date = meta_parts.next().unwrap_or("").to_string();
-    let body = meta_parts.next().unwrap_or("").trim().to_string();
+        let meta_str = String::from_utf8_lossy(&meta_out.stdout);
+        let mut meta_parts = meta_str.splitn(5, '|');
+        let commit_hash = meta_parts.next().unwrap_or(&hash).to_string();
+        let message = meta_parts.next().unwrap_or("").to_string();
+        let author = meta_parts.next().unwrap_or("").to_string();
+        let date = meta_parts.next().unwrap_or("").to_string();
+        let body = meta_parts.next().unwrap_or("").trim().to_string();
 
-    // 2. File list with stats: git show --numstat --format="" <hash>
-    let stat_out = Command::new("git")
-        .args(["show", "--numstat", "--format=", &hash])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("Failed to run git show: {}", e))?;
+        let stat_out = git_run(
+            &["show", "--numstat", "--format=", &hash],
+            &root,
+        ).map_err(|e| format!("Failed to run git show: {}", e))?;
 
-    let stat_str = String::from_utf8_lossy(&stat_out.stdout);
-    let mut files = Vec::new();
-
-    for line in stat_str.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+        let stat_str = String::from_utf8_lossy(&stat_out.stdout);
+        let mut files = Vec::new();
+        for line in stat_str.lines() {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() < 3 { continue; }
+            let additions = if parts[0] == "-" { 0 } else { parts[0].parse().unwrap_or(0) };
+            let deletions = if parts[1] == "-" { 0 } else { parts[1].parse().unwrap_or(0) };
+            files.push(DiffEntry {
+                path: parts[2].to_string(),
+                status: status_from_numstat(parts[0], parts[1]),
+                additions,
+                deletions,
+            });
         }
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() < 3 {
-            continue;
-        }
-        let additions = if parts[0] == "-" { 0 } else { parts[0].parse().unwrap_or(0) };
-        let deletions = if parts[1] == "-" { 0 } else { parts[1].parse().unwrap_or(0) };
-        files.push(DiffEntry {
-            path: parts[2].to_string(),
-            status: status_from_numstat(parts[0], parts[1]),
-            additions,
-            deletions,
-        });
-    }
 
-    Ok(CommitDetail {
-        hash: commit_hash,
-        message,
-        author,
-        date,
-        body,
-        files,
-    })
+        Ok(CommitDetail { hash: commit_hash, message, author, date, body, files })
+    }).await
 }
 
 fn status_from_numstat(additions: &str, deletions: &str) -> String {
     if additions == "0" && deletions == "0" {
-        "R".to_string() // rename (no line changes)
+        "R".to_string()
     } else if additions == "-" && deletions == "-" {
-        "B".to_string() // binary
-    } else if deletions == "-" || additions == "0" {
-        "D".to_string() // deleted or all deletions
-    } else if additions == "0" {
-        "M".to_string()
+        "B".to_string()
     } else {
         "M".to_string()
     }
 }
 
-/// Get the raw diff content for a file.
 #[tauri::command]
-pub fn git_diff_content(
+pub async fn git_diff_content(
     workspace_state: State<'_, WorkspaceState>,
     path: String,
     staged: Option<bool>,
@@ -333,27 +373,29 @@ pub fn git_diff_content(
         return Err("Not a git repository".into());
     }
 
-    let mut args: Vec<String> = vec!["diff".to_string()];
-    if staged.unwrap_or(false) {
-        args.push("--cached".to_string());
-    }
-    if let Some(ref h) = commit_hash {
-        // Show diff for this commit's changes to the file
-        // git diff <hash>^! -- <path> shows changes introduced by that commit
-        args.push(format!("{}^!", h));
-    }
-    args.push("--".to_string());
-    args.push(path.clone());
+    // git diff + fallback file read in one blocking task
+    git_run_blocking(move || {
+        let mut args: Vec<&str> = vec!["diff"];
+        if staged.unwrap_or(false) {
+            args.push("--cached");
+        }
+        let hash_flag;
+        if let Some(ref h) = commit_hash {
+            hash_flag = format!("{}^!", h);
+            args.push(&hash_flag);
+        }
+        args.push("--");
+        args.push(&path);
 
-    let output = Command::new("git")
-        .args(&args)
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("Failed to run git diff: {}", e))?;
+        let output = git_run(&args, &root)
+            .map_err(|e| format!("Failed to run git diff: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    if stdout.is_empty() {
-        // File might be new (untracked) — show full file content as "diff"
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        if !stdout.is_empty() {
+            return Ok(stdout);
+        }
+
+        // Fallback: new file — synthesise a diff from its content
         let file_path = root.join(&path);
         if file_path.exists() {
             if let Ok(content) = std::fs::read_to_string(&file_path) {
@@ -367,62 +409,54 @@ pub fn git_diff_content(
                 return Ok(result);
             }
         }
-        return Ok("No changes".to_string());
-    }
-
-    Ok(stdout)
+        Ok("No changes".to_string())
+    }).await
 }
 
-/// List all local branches and mark the current one.
 #[tauri::command]
-pub fn git_branches(
+pub async fn git_branches(
     workspace_state: State<'_, WorkspaceState>,
 ) -> Result<Vec<BranchInfo>, String> {
     let root = project_root_for_commands(&workspace_state);
+    info!(root = %root.display(), "git_branches");
     if !root.join(".git").exists() {
         return Ok(Vec::new());
     }
 
-    let output = Command::new("git")
-        .args(["branch"])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("Failed to run git branch: {}", e))?;
+    let output = match git_run_async(vec!["branch".into()], root).await {
+        Ok(o) => o,
+        Err(e) => {
+            error!("git_branches failed: {}", e);
+            return Err(format!("Failed to run git branch: {}", e));
+        }
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut branches = Vec::new();
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        error!("git_branches stderr: {}", stderr);
+    }
 
+    let mut branches = Vec::new();
     for line in stdout.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
         if let Some(name) = trimmed.strip_prefix("* ") {
-            branches.push(BranchInfo {
-                name: name.to_string(),
-                is_current: true,
-            });
+            branches.push(BranchInfo { name: name.to_string(), is_current: true });
         } else {
-            branches.push(BranchInfo {
-                name: trimmed.to_string(),
-                is_current: false,
-            });
+            branches.push(BranchInfo { name: trimmed.to_string(), is_current: false });
         }
     }
 
-    // Sort: current branch first, then alphabetically
-    branches.sort_by(|a, b| {
-        b.is_current
-            .cmp(&a.is_current)
-            .then(a.name.cmp(&b.name))
-    });
-
+    branches.sort_by(|a, b| b.is_current.cmp(&a.is_current).then(a.name.cmp(&b.name)));
+    info!(count = branches.len(), "git_branches ok");
     Ok(branches)
 }
 
-/// Switch to a different branch.
 #[tauri::command]
-pub fn git_checkout(
+pub async fn git_checkout(
     workspace_state: State<'_, WorkspaceState>,
     branch: String,
 ) -> Result<(), String> {
@@ -431,10 +465,7 @@ pub fn git_checkout(
         return Err("Not a git repository".into());
     }
 
-    let output = Command::new("git")
-        .args(["checkout", &branch])
-        .current_dir(&root)
-        .output()
+    let output = git_run_async(vec!["checkout".into(), branch], root).await
         .map_err(|e| format!("Failed to run git checkout: {}", e))?;
 
     if !output.status.success() {
@@ -445,25 +476,26 @@ pub fn git_checkout(
     Ok(())
 }
 
-/// Get working tree status (porcelain format, parsed).
 #[tauri::command]
-pub fn git_status(
+pub async fn git_status(
     workspace_state: State<'_, WorkspaceState>,
 ) -> Result<GitStatus, String> {
     let root = project_root_for_commands(&workspace_state);
+    info!(root = %root.display(), "git_status");
     if !root.join(".git").exists() {
         return Ok(GitStatus { entries: vec![] });
     }
 
-    let output = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("Failed to run git status: {}", e))?;
+    let output = match git_run_async(vec!["status".into(), "--porcelain".into()], root).await {
+        Ok(o) => o,
+        Err(e) => {
+            error!("git_status failed: {}", e);
+            return Err(format!("Failed to run git status: {}", e));
+        }
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut entries = Vec::new();
-
     for line in stdout.lines() {
         if line.len() < 4 {
             continue;
@@ -473,11 +505,8 @@ pub fn git_status(
         if path.is_empty() {
             continue;
         }
-
         let x = line.chars().next().unwrap_or(' ');
         let y = line.chars().nth(1).unwrap_or(' ');
-
-        // Determine overall status and whether staged
         let (staged, status) = match (x, y) {
             ('M', ' ') => (true, "M"),
             ('A', ' ') => (true, "A"),
@@ -486,10 +515,9 @@ pub fn git_status(
             (' ', 'M') => (false, "M"),
             (' ', 'D') => (false, "D"),
             ('?', '?') => (false, "?"),
-            ('M', 'M') => (true, "M"),  // staged + unstaged mods: show as staged modified
+            ('M', 'M') => (true, "M"),
             _ => (false, "M"),
         };
-
         entries.push(GitStatusEntry {
             path,
             xy,
@@ -498,12 +526,12 @@ pub fn git_status(
         });
     }
 
+    info!(count = entries.len(), "git_status ok");
     Ok(GitStatus { entries })
 }
 
-/// Create a commit with the given message.
 #[tauri::command]
-pub fn git_commit(
+pub async fn git_commit(
     workspace_state: State<'_, WorkspaceState>,
     message: String,
 ) -> Result<String, String> {
@@ -512,35 +540,24 @@ pub fn git_commit(
         return Err("Not a git repository".into());
     }
 
-    // First check there's something to commit
-    let status_out = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("Failed to run git status: {}", e))?;
+    // status + commit + rev-parse in one blocking task
+    git_run_blocking(move || {
+        let status_out = git_run(&["status", "--porcelain"], &root)
+            .map_err(|e| format!("Failed to run git status: {}", e))?;
+        let stdout = String::from_utf8_lossy(&status_out.stdout);
+        if stdout.trim().is_empty() {
+            return Err("Nothing to commit (working tree clean)".into());
+        }
 
-    let stdout = String::from_utf8_lossy(&status_out.stdout);
-    if stdout.trim().is_empty() {
-        return Err("Nothing to commit (working tree clean)".into());
-    }
+        let output = git_run(&["commit", "-m", &message], &root)
+            .map_err(|e| format!("Failed to run git commit: {}", e))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Commit failed: {}", stderr.trim()));
+        }
 
-    let output = Command::new("git")
-        .args(["commit", "-m", &message])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("Failed to run git commit: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Commit failed: {}", stderr.trim()));
-    }
-
-    // Return the new commit hash
-    let hash_out = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("Failed to get commit hash: {}", e))?;
-
-    Ok(String::from_utf8_lossy(&hash_out.stdout).trim().to_string())
+        let hash_out = git_run(&["rev-parse", "HEAD"], &root)
+            .map_err(|e| format!("Failed to get commit hash: {}", e))?;
+        Ok(String::from_utf8_lossy(&hash_out.stdout).trim().to_string())
+    }).await
 }

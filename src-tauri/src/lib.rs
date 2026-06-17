@@ -4,12 +4,44 @@ mod pty;
 use commands::WorkspaceState;
 use pty::PtyManager;
 
+fn init_logging() {
+    let log_dir = commands::our_config_dir().join("log");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "aide");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    // Leak the guard so the writer lives for the lifetime of the app
+    std::mem::forget(_guard);
+    tracing_subscriber::fmt()
+        .with_writer(non_blocking)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    init_logging();
+
+    // Log panics before the crash dialog appears
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!("PANIC: {}", info);
+        if let Some(loc) = info.location() {
+            tracing::error!("  at {}:{}", loc.file(), loc.line());
+        }
+        default_hook(info);
+    }));
+
     let manager = PtyManager::new();
     let saved_key = commands::load_workspace_config();
     let workspace_state = WorkspaceState::new();
     if let Some(key) = saved_key {
+        // Resolve the encoded key back to a filesystem path
+        if let Some(path) = commands::resolve_path_from_key(&key) {
+            *workspace_state.path.lock().unwrap() = Some(std::path::PathBuf::from(&path));
+        }
         *workspace_state.key.lock().unwrap() = Some(key);
     }
 
@@ -56,6 +88,7 @@ pub fn run() {
             commands::git::git_stage_file,
             commands::git::git_unstage_file,
             commands::git::git_revert_file,
+            commands::git::log_frontend_error,
             commands::git::git_remote_url,
             commands::git::git_log,
             commands::git::git_show,

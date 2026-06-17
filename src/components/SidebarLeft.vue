@@ -6,6 +6,7 @@ import { useUpdate } from "../composables/useUpdate";
 import { sessionMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
 import { open } from "@tauri-apps/plugin-shell";
+import { getVersion } from "@tauri-apps/api/app";
 import type { Session, WorkspaceInfo } from "../types";
 
 const props = defineProps<{
@@ -177,6 +178,11 @@ onMounted(async () => {
     }
   } catch (_) { /* ignore */ }
   await loadSessions();
+
+  try {
+    const { checkUpdate } = useUpdate();
+    await checkUpdate(await getVersion());
+  } catch (_) { /* non-critical */ }
 });
 
 defineExpose({ newSession, loadSessions });

@@ -109,25 +109,11 @@ pub fn project_root_for_commands(ws: &WorkspaceState) -> PathBuf {
             }
         }
     }
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    guess_project_root(&cwd)
+    // No workspace explicitly set — fall back to user's home directory.
+    // Using the install directory (cwd) is never useful.
+    user_home().unwrap_or_else(|| PathBuf::from("."))
 }
 
-pub fn guess_project_root(cwd: &PathBuf) -> PathBuf {
-    let mut current = cwd.clone();
-    let mut best = cwd.clone();
-    loop {
-        if current.join(".git").exists() || current.join("package.json").exists() {
-            return current;
-        }
-        if best == cwd.clone() && current.join("Cargo.toml").exists() {
-            best = current.clone();
-        }
-        if !current.pop() {
-            return best;
-        }
-    }
-}
 
 pub fn detect_git_branch(root: &PathBuf) -> String {
     let head = root.join(".git").join("HEAD");
@@ -180,5 +166,5 @@ pub fn encode_project_path(path: &str) -> String {
     path.replace(':', "-").replace('\\', "-").replace('/', "-")
 }
 
-// Re-export load_workspace_config from workspace module
-pub use workspace::load_workspace_config;
+// Re-export from workspace module
+pub use workspace::{load_workspace_config, resolve_path_from_key};

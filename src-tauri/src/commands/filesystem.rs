@@ -3,6 +3,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use tauri::State;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use super::{FileEntry, WorkspaceState, project_root_for_commands, detect_git_branch, ProjectInfo};
 
 #[tauri::command]
@@ -25,9 +28,10 @@ pub fn get_project_info(
 pub fn file_open(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd")
-            .args(["/c", "start", "", &path])
-            .spawn()
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/c", "start", "", &path]);
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        cmd.spawn()
             .map_err(|e| format!("Failed to open: {}", e))?;
     }
     #[cfg(not(target_os = "windows"))]

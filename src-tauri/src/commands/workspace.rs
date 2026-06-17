@@ -55,7 +55,7 @@ fn save_workspace_config(path: &str) -> Result<(), String> {
     super::settings::save_config(&config)
 }
 
-fn resolve_path_from_key(key: &str) -> Option<String> {
+pub fn resolve_path_from_key(key: &str) -> Option<String> {
     let mut chars = key.chars();
     let drive = chars.next()?;
     chars.next()?;

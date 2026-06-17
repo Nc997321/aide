@@ -1,6 +1,6 @@
 import { ref, computed } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import type { CommitEntry, CommitDetail, BranchInfo, GitStatusEntry } from "../types";
-import { gitApi } from "../api/git";
 
 // ── Module-level reactive state ──
 
@@ -12,8 +12,6 @@ const loading = ref(false);
 const expandedCommit = ref<string | null>(null);
 const commitDetail = ref<CommitDetail | null>(null);
 const detailLoading = ref(false);
-
-// Currently viewed diff
 const viewingDiff = ref<{ path: string; content: string; loading: boolean } | null>(null);
 
 // ── Computed ──
@@ -32,17 +30,20 @@ const hasChanges = computed(() => statusEntries.value.length > 0);
 
 async function loadBranches() {
     try {
-        branches.value = await gitApi.branches();
+        branches.value = await invoke<BranchInfo[]>("git_branches");
         const cur = branches.value.find((b) => b.is_current);
         currentBranch.value = cur?.name ?? "";
-    } catch (_) { /* best effort */ }
+    } catch (e) {
+        console.error("[useGit] loadBranches failed:", e);
+    }
 }
 
 async function loadCommits() {
     loading.value = true;
     try {
-        commits.value = await gitApi.log(50, currentBranch.value || undefined);
-    } catch (_) {
+        commits.value = await invoke<CommitEntry[]>("git_log", { limit: 50, branch: currentBranch.value || null });
+    } catch (e) {
+        console.error("[useGit] loadCommits failed:", e);
         commits.value = [];
     } finally {
         loading.value = false;
@@ -51,9 +52,10 @@ async function loadCommits() {
 
 async function loadStatus() {
     try {
-        const s = await gitApi.status();
+        const s = await invoke<{ entries: GitStatusEntry[] }>("git_status");
         statusEntries.value = s.entries;
-    } catch (_) {
+    } catch (e) {
+        console.error("[useGit] loadStatus failed:", e);
         statusEntries.value = [];
     }
 }
@@ -75,7 +77,7 @@ async function toggleCommit(hash: string) {
     expandedCommit.value = hash;
     detailLoading.value = true;
     try {
-        commitDetail.value = await gitApi.show(hash);
+        commitDetail.value = await invoke<CommitDetail>("git_show", { hash });
     } catch (_) {
         commitDetail.value = null;
     } finally {
@@ -86,14 +88,10 @@ async function toggleCommit(hash: string) {
 async function viewDiff(path: string, staged?: boolean, commitHash?: string) {
     viewingDiff.value = { path, content: "", loading: true };
     try {
-        const content = await gitApi.diffContent(path, staged, commitHash);
+        const content = await invoke<string>("git_diff_content", { path, staged, commitHash });
         viewingDiff.value = { path, content, loading: false };
     } catch (e) {
-        viewingDiff.value = {
-            path,
-            content: `Failed to load diff: ${e}`,
-            loading: false,
-        };
+        viewingDiff.value = { path, content: `Failed to load diff: ${e}`, loading: false };
     }
 }
 
@@ -102,33 +100,33 @@ function closeDiff() {
 }
 
 async function switchBranch(branch: string) {
-    await gitApi.checkout(branch);
+    try { await invoke("git_checkout", { branch }); } catch (e) { console.error("[useGit] switchBranch:", e); }
     await loadAll();
 }
 
 async function doStageFile(path: string) {
-    await gitApi.stageFile(path);
+    try { await invoke("git_stage_file", { path }); } catch (e) { console.error("[useGit] stageFile:", e); }
     await loadStatus();
 }
 
 async function doUnstageFile(path: string) {
-    await gitApi.unstageFile(path);
+    try { await invoke("git_unstage_file", { path }); } catch (e) { console.error("[useGit] unstageFile:", e); }
     await loadStatus();
 }
 
 async function doStageAll() {
-    await gitApi.stageAll();
+    try { await invoke("git_stage_all"); } catch (e) { console.error("[useGit] stageAll:", e); }
     await loadStatus();
 }
 
 async function doCommit(message: string): Promise<string> {
-    const hash = await gitApi.commit(message);
+    const hash = await invoke<string>("git_commit", { message });
     await refreshAfterAction();
     return hash;
 }
 
 async function doRevertFile(path: string) {
-    await gitApi.revertFile(path);
+    try { await invoke("git_revert_file", { path }); } catch (e) { console.error("[useGit] revertFile:", e); }
     await loadStatus();
 }
 
@@ -136,7 +134,6 @@ async function doRevertFile(path: string) {
 
 export function useGit() {
     return {
-        // State
         commits,
         branches,
         currentBranch,
@@ -149,7 +146,6 @@ export function useGit() {
         commitDetail,
         detailLoading,
         viewingDiff,
-        // Actions
         loadAll,
         loadCommits,
         loadStatus,
