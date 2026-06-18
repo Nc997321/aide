@@ -39,7 +39,7 @@ aide/
 ├── dev.sh                      # Git Bash 一键启动
 ├── src/
 │   ├── main.ts                 # Vue 入口
-│   ├── App.vue                 # 三栏布局 + 右面板 Tab 栏(📁文件/⎇Git) + 可拖拽分隔 + Ctrl+N + 桥接会话
+│   ├── App.vue                 # 三栏布局 + 自定义标题栏 + 右面板 Tab 栏(📁文件/⎇Git) + 可拖拽分隔 + Ctrl+P/N 快捷键 + 桥接会话
 │   ├── components/
 │   │   ├── SidebarLeft.vue     # 左侧：会话列表 + 自定义功能区
 │   │   ├── TerminalPanel.vue   # 中间：全屏 xterm.js 终端（主交互区）
@@ -49,8 +49,12 @@ aide/
 │   │   ├── TreeNodeItem.vue    # 文件树递归节点（独立 SFC，构建时编译）
 │   │   ├── ContextMenu.vue     # 全局右键菜单组件（Teleport to body）
 │   │   ├── ModalDialog.vue     # 通用弹窗（确认/输入）
-│   │   ├── SettingsPanel.vue    # 统一设置弹窗：左侧导航（通用/扩展/市场）+ 右侧内容
+│   │   ├── SettingsPanel.vue    # 统一设置弹窗：左侧导航（通用/扩展/市场）+ 右侧内容 + 快捷键配置
 │   │   ├── FileViewer.vue      # 文件查看器弹窗（语法高亮 + Markdown 渲染 + 编辑模式）
+│   │   ├── titlebar/
+│   │   │   ├── TitleBar.vue     # 自定义标题栏容器（logo + 搜索框 + 窗口控件）
+│   │   │   ├── SearchBox.vue    # 搜索框：模糊搜索会话/文件 + 下拉结果面板（Teleport）
+│   │   │   └── WindowControls.vue # 窗口控件按钮（最小化/最大化/关闭，Tauri window API）
 │   │   ├── customizations/
 │   │   │   ├── CustomizationList.vue    # 扩展分类列表（三态：loading → empty → list）
 │   │   │   ├── CustomizationDetail.vue  # 扩展详情/编辑（<slot> 留给类型专属字段）
@@ -71,11 +75,14 @@ aide/
 │   │   ├── useWindowFocus.ts   # 窗口焦点跟踪（onFocusChanged）
 │   │   ├── useNotification.ts  # 桌面通知触发（watch sessionState 转换）
 │   │   ├── useCustomizations.ts # 扩展管理：模块级 reactive 单例 + CRUD + toggle
-│   │   └── useMarketplace.ts   # 插件市场：模块级单例（plugins/installing/errorActions）
+│   │   ├── useMarketplace.ts   # 插件市场：模块级单例（plugins/installing/errorActions）
+│   │   ├── useSearchProviders.ts # 标题栏搜索源注册表（SearchProvider 插件化接口 + SessionProvider + FileProvider）
+│   │   └── useWindowControls.ts # 窗口操作封装（minimize/toggleMaximize/close/isMaximized）
 │   ├── utils/
 │   │   ├── highlight.ts        # 共享 hljs 初始化 + extToLang + highlightCode()
 │   │   ├── markdown.ts         # 共享 marked 初始化 + escapeHtml()
 │   │   └── errors.ts           # Git 错误解析：Rust CODE → 用户消息 + 操作按钮
+│   │   └── shortcut.ts          # 快捷键解析/匹配/冲突检测（matchShortcut/formatShortcut/detectConflicts）
 │   ├── types.ts                # 集中类型定义（Session, FileEntry, DiffEntry, CommitEntry, BranchInfo 等）
 │   ├── api.ts                  # Tauri invoke 类型安全封装层（PTY/文件/会话/git/设置）
 │   ├── types/
@@ -91,7 +98,7 @@ aide/
 │   └── styles/global.css       # 暗色主题 CSS 变量 + 滚动条 + 菜单动画
 ├── src-tauri/
 │   ├── Cargo.toml              # tauri, portable-pty, serde, notify-rust
-│   ├── tauri.conf.json         # 窗口 1400x900，devUrl :1420
+│   ├── tauri.conf.json         # 窗口 1400x900，devUrl :1420，decorations: false（自定义标题栏）
 │   ├── capabilities/default.json
 │   └── src/
 │       ├── main.rs             # 入口 → lib::run()
@@ -117,6 +124,27 @@ aide/
 ### 交互模型：全屏终端
 
 中心面板为 xterm.js 终端，通过 PTY 直接运行 Claude Code 交互模式（不带 `-p`）。**不再使用聊天气泡**——终端内 Claude 的 TUI 原样渲染，权限审批、工具使用均为原生体验。
+
+### 自定义标题栏（decorations: false）
+
+关闭原生 Windows 标题栏，自绘整个标题栏（38px 高）。布局：左侧 Aide logo + 中间搜索框 + 右侧窗口控件（─ □ ✕）。
+
+**搜索框**（`SearchBox.vue`）：
+- `Ctrl+P` 聚焦，支持会话 + 文件混合搜索
+- 搜索源通过 `SearchProvider` 接口插件化注册（`useSearchProviders`）
+- 内置 `SessionProvider`（模糊匹配会话名 + 最后一条消息）和 `FileProvider`（递归遍历工作区目录树，缓存 30s）
+- 结果下拉面板 Teleport to body，↑↓ Enter Esc 键盘导航
+- 选中文件 → 调 `useFileViewer().open()`
+
+**窗口控件**（`WindowControls.vue`）：
+- 封装 Tauri window API（`minimize`/`toggleMaximize`/`close`）
+- 最大化时图标自动切换（□ ↔ ❐）
+- 关闭按钮 hover 红色
+
+**快捷键可配置**（`SettingsPanel.vue` "快捷键"区域）：
+- 预设 `Ctrl+P` → 打开搜索，可在设置面板录制新快捷键
+- `src/utils/shortcut.ts` 提供 `matchShortcut`/`formatShortcut`/`detectConflicts`
+- 快捷键存于 `AppSettings.keybindings`，持久化到 `config.json`
 
 ### 多终端架构（多例，非单例）
 
@@ -241,10 +269,10 @@ Rust 侧作为适配层读取 Claude Code 的真实存储：
 
 `~/.claude-code-desktop/config.json` 存两个顶层字段：
 ```json
-{ "workspace": "C-Users-...", "settings": { "font_size": 14, "proxy": "", ... } }
+{ "workspace": "C-Users-...", "settings": { "font_size": 14, "keybindings": { "searchOpen": "Ctrl+P" }, ... } }
 ```
 
-**Rust 侧**：`settings.rs` 提供 `load_config()` / `save_config()` 作为全文件 JSON 读写 helper。`get_settings` / `set_settings` 命令用默认值填充缺失字段。`AppSettings` 含 `font_size`, `font_family`, `notifications_enabled`, `proxy`。
+**Rust 侧**：`settings.rs` 提供 `load_config()` / `save_config()` 作为全文件 JSON 读写 helper。`get_settings` / `set_settings` 命令用默认值填充缺失字段。`AppSettings` 含 `font_size`, `font_family`, `notifications_enabled`, `proxy`, `shell_path`, `workbench_height`, `keybindings { search_open }`。
 
 **前端侧**：`useSettings` 模块级 reactive 单例。`SettingsPanel.vue`（680×520 弹窗）左侧导航（⚙通用/🧩扩展/🏪市场），右侧 `v-if`/`v-else-if`/`v-else` 切换内容。"通用"tab 拉取 settings 本地 ref → watch 即时同步 + `update()` 持久化。`useTerminalManager` watch `settings.fontSize`/`fontFamily` 即时应用到所有终端。
 
