@@ -14,6 +14,7 @@ const { settings } = useSettings();
 const wb = useWorkbenchTerminal();
 
 const termHostRef = ref<HTMLDivElement>();
+const exitedRef = ref<HTMLDivElement>();
 let terminal: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 let observer: ResizeObserver | null = null;
@@ -64,8 +65,17 @@ watch(() => wb.visible.value, async (v) => {
   }
 });
 
+// Auto-focus the exited overlay so Enter works immediately.
+watch(() => wb.shellExited.value, async (v) => {
+  if (v) {
+    await nextTick();
+    exitedRef.value?.focus();
+  }
+});
+
 // Drag the header to resize height.
 function onHeaderDragStart(e: MouseEvent) {
+  e.preventDefault();
   const startY = e.clientY;
   const startH = props.height;
   const onMove = (ev: MouseEvent) => {
@@ -109,6 +119,7 @@ function onExitedKeydown(e: KeyboardEvent) {
       <div ref="termHostRef" class="workbench-term-host"></div>
       <div
         v-if="wb.shellExited.value"
+        ref="exitedRef"
         class="workbench-exited"
         tabindex="0"
         @keydown="onExitedKeydown"
