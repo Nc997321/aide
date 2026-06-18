@@ -116,6 +116,86 @@ impl PtyManager {
         Ok(())
     }
 
+    /// Spawn an arbitrary shell program in a PTY (for the workbench terminal).
+    /// Unlike `spawn_command`, this does NOT append `.cmd` on Windows —
+    /// `program` must already be a resolved path (e.g. from `which`).
+    pub fn spawn_shell(
+        &self,
+        session_id: &str,
+        program: &str,
+        args: &[&str],
+        cwd: &PathBuf,
+        rows: u16,
+        cols: u16,
+        app_handle: AppHandle,
+    ) -> Result<(), String> {
+        // Kill existing PTY for this session if any
+        self.kill_session(session_id);
+
+        let pty_system = native_pty_system();
+        let pty_pair = pty_system
+            .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+            .map_err(|e| format!("Failed to open PTY: {}", e))?;
+
+        let mut cmd = CommandBuilder::new(program);
+        cmd.args(args);
+        cmd.cwd(cwd);
+
+        let mut child = pty_pair
+            .slave
+            .spawn_command(cmd)
+            .map_err(|e| format!("Failed to spawn {}: {}", program, e))?;
+
+        drop(pty_pair.slave);
+
+        let master = pty_pair.master;
+        let writer = master.take_writer().map_err(|e| format!("Failed to take writer: {}", e))?;
+        let mut reader = master.try_clone_reader().map_err(|e| format!("Failed to clone reader: {}", e))?;
+
+        let output_buffer = Arc::new(Mutex::new(String::new()));
+
+        {
+            let mut sessions = self.sessions.lock().map_err(|e| e.to_string())?;
+            sessions.insert(
+                session_id.to_string(),
+                PtySession { master, writer, output_buffer: output_buffer.clone() },
+            );
+        }
+
+        let sid = session_id.to_string();
+        let sessions = self.sessions.clone();
+        let app_waiter = app_handle.clone();
+
+        let buf_for_reader = output_buffer.clone();
+        thread::spawn(move || {
+            let mut buf = [0u8; 65536];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let data = String::from_utf8_lossy(&buf[..n]);
+                        if let Ok(mut output) = buf_for_reader.lock() {
+                            output.push_str(&data);
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let sid_waiter = sid.clone();
+        thread::spawn(move || {
+            let _ = child.wait();
+            if let Ok(mut map) = sessions.lock() {
+                map.remove(&sid_waiter);
+            }
+            let payload = serde_json::json!({ "session_id": &sid_waiter });
+            let _ = app_waiter.emit("pty-exit", payload.to_string());
+        });
+
+        Ok(())
+    }
+
     /// Resize the PTY for a specific session
     pub fn resize(&self, session_id: &str, rows: u16, cols: u16) -> Result<(), String> {
         let sessions = self.sessions.lock().map_err(|e| e.to_string())?;

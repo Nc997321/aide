@@ -63,6 +63,7 @@ pub fn run() {
             commands::pty::pty_has_session,
             commands::pty::pty_rename_session,
             commands::pty::poll_pty_output,
+            commands::pty::pty_spawn_shell,
             commands::filesystem::get_project_info,
             commands::filesystem::list_directory,
             commands::filesystem::file_open,
