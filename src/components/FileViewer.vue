@@ -24,9 +24,8 @@ async function onGotoResultSelect(match: { file: string; line: number }) {
   const separator = projectRoot.value.includes("\\") ? "\\" : "/";
   const targetPath = projectRoot.value + separator + match.file.replace(/\//g, separator);
   const result = await openAndScrollTo(targetPath, match.line);
-  // 等 Vue 重新渲染 + CodeEditor 挂载（需要两次 tick：一次 VNode patch，一次 onMounted 执行完）
-  await nextTick();
-  await nextTick();
+  // Wait for CodeEditor's async createEditor() to finish before scrolling
+  await codeEditorRef.value?.waitReady();
   codeEditorRef.value?.scrollToLine(result.line);
 }
 

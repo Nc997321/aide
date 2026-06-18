@@ -20,6 +20,13 @@ export function useFileViewer() {
     editContent.value = "";
     try {
       content.value = await api.readFileContent(path);
+      // Auto-detect project root for goto-definition
+      try {
+        const info = await api.getProjectInfo();
+        projectRoot.value = info.root;
+      } catch {
+        // project root detection is best-effort
+      }
     } catch (e) {
       error.value = String(e);
     }
@@ -54,11 +61,6 @@ export function useFileViewer() {
     editing.value = false;
   }
 
-  async function openWithRoot(path: string, root: string) {
-    projectRoot.value = root;
-    await open(path);
-  }
-
   // 跳转到目标文件，自动进入编辑模式并返回目标行
   async function openAndScrollTo(targetPath: string, line: number) {
     // close current viewer
@@ -85,7 +87,6 @@ export function useFileViewer() {
     saving: readonly(saving),
     open, close, startEdit, save, cancelEdit,
     projectRoot: readonly(projectRoot),
-    openWithRoot,
     openAndScrollTo,
   };
 }

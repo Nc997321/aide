@@ -19,6 +19,10 @@ const mountEl = ref<HTMLDivElement | null>(null);
 let view: EditorView | null = null;
 let createId = 0;
 
+// Track editor readiness for async createEditor completion
+let readyPromise = Promise.resolve();
+let resolveReady: (() => void) | null = null;
+
 // ── Language detection ──
 const ext = computed(() => {
   const parts = props.filePath.split(".");
@@ -88,6 +92,9 @@ async function createEditor() {
   if (!mountEl.value) return;
 
   const id = ++createId; // capture before async work
+
+  // Create fresh readiness promise for this invocation
+  readyPromise = new Promise<void>(r => { resolveReady = r; });
 
   // Destroy existing instance
   if (view) {
@@ -193,6 +200,9 @@ async function createEditor() {
     ],
     parent: mountEl.value,
   });
+
+  // Signal that the editor is fully created (including async lang import)
+  resolveReady?.();
 }
 
 function openGoToLine(target: EditorView): boolean {
@@ -249,7 +259,11 @@ function scrollToLine(line: number) {
   view.focus();
 }
 
-defineExpose({ scrollToLine });
+function waitReady(): Promise<void> {
+  return readyPromise;
+}
+
+defineExpose({ scrollToLine, waitReady });
 
 onMounted(() => {
   createEditor();
