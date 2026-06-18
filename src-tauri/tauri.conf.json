@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicedoc/schemas/main/tauri/config.schema.json",
   "productName": "Aide",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "identifier": "com.aide.app",
   "build": {
     "frontendDist": "../dist",
