@@ -164,7 +164,7 @@ onUnmounted(() => {
   <div class="app-layout">
     <!-- Left panel -->
     <div class="panel-left" :style="{ width: leftWidth + 'px' }">
-      <SidebarLeft ref="sidebarRef" :active-session-id="activeSessionId" @session-changed="onSessionChanged" @workspace-changed="onSidebarWsChanged" @open-settings="() => settingsVisible = true" />
+      <SidebarLeft ref="sidebarRef" :active-session-id="activeSessionId" @session-changed="onSessionChanged" @workspace-changed="onSidebarWsChanged" @open-settings="() => settingsVisible = true" @open-workbench="wb.toggle(workspacePath)" />
     </div>
 
     <!-- Resize handle left -->
