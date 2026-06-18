@@ -22,6 +22,8 @@ const leftWidth = ref(280);
 const rightWidth = ref(300);
 const changeLogHeight = ref(220);
 const changeLogCollapsed = ref(false);
+const leftCollapsed = ref(false);
+const rightCollapsed = ref(false);
 const rightTab = ref<"files" | "git">("files");
 const { unstagedFiles, hasChanges, loadStatus } = useGit();
 const isDraggingLeft = ref(false);
@@ -245,12 +247,20 @@ onUnmounted(() => {
     />
 
     <!-- Left panel -->
-    <div class="panel-left" :style="{ width: leftWidth + 'px' }">
-      <SidebarLeft ref="sidebarRef" :active-session-id="activeSessionId" @session-changed="onSessionChanged" @workspace-changed="onSidebarWsChanged" @open-settings="() => settingsVisible = true" @open-workbench="wb.toggle(workspacePath)" />
+    <div class="panel-left" :class="{ collapsed: leftCollapsed }" :style="{ width: leftCollapsed ? '6px' : leftWidth + 'px' }">
+      <div
+        class="collapse-toggle collapse-toggle-left"
+        :title="leftCollapsed ? '展开侧栏' : '收起侧栏'"
+        @click.stop="leftCollapsed = !leftCollapsed"
+      >
+        <span class="collapse-arrow">{{ leftCollapsed ? '▶' : '◀' }}</span>
+      </div>
+      <SidebarLeft v-show="!leftCollapsed" ref="sidebarRef" :active-session-id="activeSessionId" @session-changed="onSessionChanged" @workspace-changed="onSidebarWsChanged" @open-settings="() => settingsVisible = true" @open-workbench="wb.toggle(workspacePath)" />
     </div>
 
     <!-- Resize handle left -->
     <div
+      v-show="!leftCollapsed"
       class="resize-handle"
       :class="{ active: isDraggingLeft }"
       @mousedown="onLeftResizeStart"
@@ -263,13 +273,22 @@ onUnmounted(() => {
 
     <!-- Resize handle right -->
     <div
+      v-show="!rightCollapsed"
       class="resize-handle"
       :class="{ active: isDraggingRight }"
       @mousedown="onRightResizeStart"
     />
 
     <!-- Right panel -->
-    <div class="panel-right" :style="{ width: rightWidth + 'px' }">
+    <div class="panel-right" :class="{ collapsed: rightCollapsed }" :style="{ width: rightCollapsed ? '6px' : rightWidth + 'px' }">
+      <div
+        class="collapse-toggle collapse-toggle-right"
+        :title="rightCollapsed ? '展开侧栏' : '收起侧栏'"
+        @click.stop="rightCollapsed = !rightCollapsed"
+      >
+        <span class="collapse-arrow">{{ rightCollapsed ? '◀' : '▶' }}</span>
+      </div>
+      <div v-show="!rightCollapsed" class="panel-right-inner">
       <!-- Tab bar -->
       <div class="right-tab-bar">
         <button
@@ -306,6 +325,7 @@ onUnmounted(() => {
       <template v-else>
         <GitPanel ref="gitPanelRef" />
       </template>
+      </div> <!-- .panel-right-inner -->
     </div>
 
     <ContextMenu />
@@ -332,6 +352,9 @@ onUnmounted(() => {
   border-right: 1px solid var(--surface);
   display: flex;
   flex-direction: column;
+  position: relative;
+  transition: width 0.2s ease;
+  overflow: hidden;
 }
 
 .panel-center {
@@ -350,6 +373,9 @@ onUnmounted(() => {
   border-left: 1px solid var(--surface);
   display: flex;
   flex-direction: column;
+  position: relative;
+  transition: width 0.2s ease;
+  overflow: hidden;
 }
 
 .resize-handle {
@@ -378,6 +404,52 @@ onUnmounted(() => {
 .resize-handle-h:hover,
 .resize-handle-h.active {
   background-color: var(--accent);
+}
+
+/* ── Collapse toggles (thin edge strips) ── */
+
+.panel-right-inner {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.collapse-toggle {
+  position: absolute;
+  top: 0;
+  width: 6px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 20;
+  transition: background-color 0.15s;
+}
+
+.collapse-toggle:hover {
+  background-color: var(--surface);
+}
+
+.collapse-toggle-left {
+  right: 0;
+}
+
+.collapse-toggle-right {
+  left: 0;
+}
+
+.collapse-arrow {
+  font-size: 9px;
+  color: var(--text-muted);
+  transition: color 0.15s;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.collapse-toggle:hover .collapse-arrow {
+  color: var(--accent);
 }
 
 /* ── Right panel tab bar ── */
