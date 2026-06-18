@@ -20,12 +20,15 @@ const emit = defineEmits<{
   "open-workbench": [];
 }>();
 
-const sessions = ref<Session[]>([]);
+const sessionsByWorkspace = ref<Record<string, Session[]>>({});
 const workspaces = ref<WorkspaceInfo[]>([]);
 const activeWorkspace = ref("");
 const expandedWorkspaces = ref(new Set<string>());
 const searchQuery = ref("");
 const loading = ref(true);
+
+// Current active workspace's sessions (backward compat for external callers)
+const sessions = computed(() => sessionsByWorkspace.value[activeWorkspace.value] ?? []);
 
 function workspaceLabel(ws: WorkspaceInfo): string {
   const parts = ws.name.replace(/[/\\]+$/, "").split(/[/\\]/);
@@ -40,15 +43,15 @@ const filteredWorkspaces = computed(() => {
   );
 });
 
-const filteredSessions = computed(() => {
+// Sessions for a specific workspace (for template use, respects search filter)
+function wsSessions(wsKey: string): Session[] {
+  const list = sessionsByWorkspace.value[wsKey] ?? [];
   const q = searchQuery.value.trim().toLowerCase();
-  if (!q) return sessions.value;
-  return sessions.value.filter(
-    (s) =>
-      s.name.toLowerCase().includes(q) ||
-      s.last_message.toLowerCase().includes(q),
+  if (!q) return list;
+  return list.filter(
+    (s) => s.name.toLowerCase().includes(q) || s.last_message.toLowerCase().includes(q),
   );
-});
+}
 
 function timeAgo(ts: number): string {
   const diff = Date.now() - ts;
@@ -71,38 +74,44 @@ async function loadWorkspaces() {
 
 async function loadSessions() {
   loading.value = true;
+  const wsKey = activeWorkspace.value;
 
   // Save the active placeholder session so it survives the refresh
-  // (new_xxx entries only exist in our metadata, not in Claude Code's storage,
-  // so list_sessions won't return them)
+  const currentList = sessionsByWorkspace.value[wsKey] ?? [];
   const activePlaceholder = (props.activeSessionId?.startsWith("new_"))
-    ? sessions.value.find(s => s.id === props.activeSessionId)
+    ? currentList.find(s => s.id === props.activeSessionId)
     : null;
 
   try {
-    sessions.value = await api.listSessions();
+    const loaded = await api.listSessions();
+    const filtered = loaded.filter(s => !s.id.startsWith("new_"));
+    if (activePlaceholder) {
+      filtered.unshift(activePlaceholder);
+    }
+    sessionsByWorkspace.value[wsKey] = filtered;
   } catch (_e) {
-    sessions.value = [];
-  }
-
-  // Remove any stale placeholder entries that are no longer active.
-  if (!activePlaceholder) {
-    sessions.value = sessions.value.filter(s => !s.id.startsWith("new_"));
-  }
-
-  // Restore active placeholder that hasn't been migrated yet
-  if (activePlaceholder) {
-    sessions.value.unshift(activePlaceholder);
+    sessionsByWorkspace.value[wsKey] = [];
   }
 
   loading.value = false;
 
-  if (sessions.value.length === 0) {
+  const list = sessionsByWorkspace.value[wsKey] ?? [];
+  if (list.length === 0) {
     await newSession();
     return;
   }
   if (!props.activeSessionId || props.activeSessionId.startsWith("new_")) {
-    emit("session-changed", sessions.value[0].id);
+    emit("session-changed", list[0].id);
+  }
+}
+
+// Load sessions for a specific (non-active) workspace
+async function loadWsSessions(wsKey: string) {
+  try {
+    const loaded = await api.listSessionsForWorkspace(wsKey);
+    sessionsByWorkspace.value[wsKey] = loaded;
+  } catch (_e) {
+    sessionsByWorkspace.value[wsKey] = [];
   }
 }
 
@@ -110,8 +119,24 @@ const { show } = useContextMenu();
 const { state: sessionState } = useSessionState();
 const { updateAvailable, latestVersion, downloadUrl, dismissUpdate } = useUpdate();
 
-function selectSession(id: string) {
-  emit("session-changed", id);
+// Select a session from a potentially different workspace
+async function selectSessionFromWorkspace(wsKey: string, sessionId: string) {
+  if (wsKey !== activeWorkspace.value) {
+    // Switch to the workspace first
+    const ws = workspaces.value.find(w => w.key === wsKey);
+    if (ws) {
+      try {
+        await api.setWorkspace(ws.key, ws.name);
+      } catch (_e) { return; }
+      activeWorkspace.value = ws.key;
+      emit("workspace-changed", ws.name);
+      // Load sessions for the new active workspace if not already loaded
+      if (!sessionsByWorkspace.value[wsKey]) {
+        await loadSessions();
+      }
+    }
+  }
+  emit("session-changed", sessionId);
 }
 
 function openUpdate() {
@@ -119,7 +144,10 @@ function openUpdate() {
 }
 
 async function switchWorkspace(ws: WorkspaceInfo) {
-  if (ws.key === activeWorkspace.value) {
+  const isCurrentActive = ws.key === activeWorkspace.value;
+
+  if (isCurrentActive) {
+    // Clicking the active workspace: toggle expand/collapse
     if (expandedWorkspaces.value.has(ws.key)) {
       expandedWorkspaces.value.delete(ws.key);
     } else {
@@ -127,6 +155,9 @@ async function switchWorkspace(ws: WorkspaceInfo) {
     }
     return;
   }
+
+  // Clicking a non-active workspace: switch to it + expand
+  // (old workspace stays expanded if it was expanded before)
   try {
     await api.setWorkspace(ws.key, ws.name);
   } catch (_e) { return; }
@@ -153,10 +184,13 @@ function onSessionContextMenu(e: MouseEvent, id: string) {
 }
 
 async function newSession() {
+  const wsKey = activeWorkspace.value;
   const name = `新会话 ${new Date().toLocaleTimeString()}`;
   try {
     const s = await api.createSession(name);
-    sessions.value.unshift(s);
+    const list = sessionsByWorkspace.value[wsKey] ?? [];
+    list.unshift(s);
+    sessionsByWorkspace.value[wsKey] = list;
     emit("session-changed", s.id);
   } catch (_e) {
     const s: Session = {
@@ -165,7 +199,9 @@ async function newSession() {
       timestamp: Date.now(),
       last_message: "",
     };
-    sessions.value.unshift(s);
+    const list = sessionsByWorkspace.value[wsKey] ?? [];
+    list.unshift(s);
+    sessionsByWorkspace.value[wsKey] = list;
     emit("session-changed", s.id);
   }
 }
@@ -196,10 +232,12 @@ onMounted(async () => {
  * Does an in-place swap without triggering a full list reload or loading indicator.
  */
 async function migrateSession(oldId: string, newId: string) {
-  const idx = sessions.value.findIndex(s => s.id === oldId);
+  const wsKey = activeWorkspace.value;
+  const list = sessionsByWorkspace.value[wsKey] ?? [];
+  const idx = list.findIndex(s => s.id === oldId);
   if (idx === -1) return;
 
-  const placeholder = sessions.value[idx];
+  const placeholder = list[idx];
 
   // Persist the placeholder's custom name under the real session ID,
   // so it survives page reloads (otherwise listSessions returns "未命名"
@@ -213,7 +251,8 @@ async function migrateSession(oldId: string, newId: string) {
     const real = all.find(s => s.id === newId);
     if (real) {
       real.name = placeholder.name; // use our name, not Claude Code's
-      sessions.value.splice(idx, 1, real);
+      list.splice(idx, 1, real);
+      sessionsByWorkspace.value[wsKey] = [...list];
     } else {
       await loadSessions();
     }
@@ -259,22 +298,16 @@ defineExpose({ newSession, loadSessions, migrateSession });
           <span class="ws-name">{{ workspaceLabel(ws) }}</span>
         </div>
 
-        <!-- Sessions (only for active & expanded workspace) -->
-        <template v-if="ws.key === activeWorkspace && expandedWorkspaces.has(ws.key)">
+        <!-- Sessions (for any expanded workspace) -->
+        <template v-if="expandedWorkspaces.has(ws.key)">
           <div
-            v-if="filteredSessions.length === 0 && sessions.length > 0"
-            class="session-item muted"
-          >
-            无匹配的会话
-          </div>
-          <div
-            v-else-if="filteredSessions.length === 0"
+            v-if="wsSessions(ws.key).length === 0"
             class="session-item muted"
           >
             暂无会话
           </div>
           <div
-            v-for="s in filteredSessions"
+            v-for="s in wsSessions(ws.key)"
             :key="s.id"
             class="session-item"
             :class="{
@@ -283,7 +316,7 @@ defineExpose({ newSession, loadSessions, migrateSession });
               waiting: sessionState[s.id] === 'waiting',
               attention: sessionState[s.id] === 'attention',
             }"
-            @click="selectSession(s.id)"
+            @click="selectSessionFromWorkspace(ws.key, s.id)"
             @contextmenu.prevent="onSessionContextMenu($event, s.id)"
           >
             <div class="session-name">{{ s.name }}</div>

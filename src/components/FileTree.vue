@@ -27,10 +27,46 @@ const emit = defineEmits<{
 async function toggleDir(path: string) {
   if (expandedDirs.value.has(path)) {
     expandedDirs.value.delete(path);
+    removeExpandedDescendants(path);
   } else {
     expandedDirs.value.add(path);
     await loadChildren(path);
+    await loadExpandedDescendants(path);
   }
+}
+
+function removeExpandedDescendants(dirPath: string) {
+  const node = findNode(treeData.value, dirPath);
+  if (!node || !node.children) return;
+  for (const child of node.children) {
+    if (child.is_dir && expandedDirs.value.has(child.path)) {
+      expandedDirs.value.delete(child.path);
+      removeExpandedDescendants(child.path);
+    }
+  }
+}
+
+async function loadExpandedDescendants(dirPath: string) {
+  const node = findNode(treeData.value, dirPath);
+  if (!node || !node.children) return;
+  const expandedSubdirs = node.children.filter(
+    (c) => c.is_dir && expandedDirs.value.has(c.path),
+  );
+  for (const subdir of expandedSubdirs) {
+    await loadChildren(subdir.path);
+    await loadExpandedDescendants(subdir.path);
+  }
+}
+
+function findNode(nodes: FileEntry[], path: string): FileEntry | null {
+  for (const node of nodes) {
+    if (node.path === path) return node;
+    if (node.children) {
+      const found = findNode(node.children, path);
+      if (found) return found;
+    }
+  }
+  return null;
 }
 
 async function loadChildren(dirPath: string) {
@@ -163,12 +199,9 @@ async function refreshAllExpanded() {
   await new Promise((r) => setTimeout(r, 300));
   const saved = new Set(expandedDirs.value);
   await loadRoot();
-  for (const dir of saved) {
-    if (dir !== projectInfo.value.root) {
-      expandedDirs.value.add(dir);
-      await loadChildren(dir);
-    }
-  }
+  // loadRoot resets expandedDirs to just root; restore and reload recursively
+  expandedDirs.value = saved;
+  await loadExpandedDescendants(projectInfo.value.root);
 }
 
 defineExpose({ loadRoot });

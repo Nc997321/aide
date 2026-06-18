@@ -75,6 +75,9 @@ export const api = {
   listSessions(): Promise<Session[]> {
     return invoke("list_sessions");
   },
+  listSessionsForWorkspace(wsKey: string): Promise<Session[]> {
+    return invoke("list_sessions_for_workspace", { wsKey });
+  },
   loadMessages(sessionId: string): Promise<ChatMessageItem[]> {
     return invoke("load_messages", { sessionId });
   },

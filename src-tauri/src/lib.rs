@@ -73,6 +73,7 @@ pub fn run() {
             commands::filesystem::create_file,
             commands::filesystem::create_dir,
             commands::session::list_sessions,
+            commands::session::list_sessions_for_workspace,
             commands::session::create_session,
             commands::session::delete_session,
             commands::session::rename_session,
