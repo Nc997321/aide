@@ -273,7 +273,7 @@ onUnmounted(() => {
     />
 
     <!-- Left panel -->
-    <div class="panel-left" :class="{ collapsed: leftCollapsed }" :style="{ width: leftCollapsed ? '6px' : leftWidth + 'px' }">
+    <div class="panel-left" :class="{ collapsed: leftCollapsed }" :style="{ width: leftCollapsed ? '8px' : leftWidth + 'px' }">
       <div
         class="collapse-toggle collapse-toggle-left"
         :title="leftCollapsed ? '展开侧栏' : '收起侧栏'"
@@ -306,7 +306,7 @@ onUnmounted(() => {
     />
 
     <!-- Right panel -->
-    <div class="panel-right" :class="{ collapsed: rightCollapsed }" :style="{ width: rightCollapsed ? '6px' : rightWidth + 'px' }">
+    <div class="panel-right" :class="{ collapsed: rightCollapsed }" :style="{ width: rightCollapsed ? '8px' : rightWidth + 'px' }">
       <div
         class="collapse-toggle collapse-toggle-right"
         :title="rightCollapsed ? '展开侧栏' : '收起侧栏'"
@@ -441,7 +441,7 @@ onUnmounted(() => {
   background-color: var(--accent);
 }
 
-/* ── Collapse toggles (thin edge strips) ── */
+/* ── Collapse toggles (hover-reveal centered strip) ── */
 
 .panel-right-inner {
   display: flex;
@@ -452,39 +452,79 @@ onUnmounted(() => {
 
 .collapse-toggle {
   position: absolute;
-  top: 0;
-  width: 6px;
-  height: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;          /* wide invisible hover target */
+  height: 56px;
   display: flex;
   align-items: center;
-  justify-content: center;
   cursor: pointer;
   z-index: 20;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+/* Visible strip (pseudo-element inside the 20px hover zone) */
+.collapse-toggle::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  width: 8px;
+  height: 100%;
+  background: var(--surface);
+  border-radius: 3px;
   transition: background-color 0.15s;
 }
 
 .collapse-toggle:hover {
-  background-color: var(--surface);
+  opacity: 1;
 }
 
+.collapse-toggle:hover::before {
+  background: var(--surface-hover);
+}
+
+/* Left toggle: arrow hugs right edge so it stays visible when collapsed */
 .collapse-toggle-left {
   right: 0;
+  justify-content: flex-end;
 }
 
+.collapse-toggle-left::before {
+  right: 0;
+  border-radius: 3px 0 0 3px;
+}
+
+/* Right toggle: arrow hugs left edge so it stays visible when collapsed */
 .collapse-toggle-right {
   left: 0;
+  justify-content: flex-start;
+}
+
+.collapse-toggle-right::before {
+  left: 0;
+  border-radius: 0 3px 3px 0;
 }
 
 .collapse-arrow {
+  position: relative;
+  z-index: 1;
   font-size: 9px;
   color: var(--text-muted);
   transition: color 0.15s;
   line-height: 1;
   pointer-events: none;
+  margin: 0 1px;
 }
 
 .collapse-toggle:hover .collapse-arrow {
-  color: var(--accent);
+  color: var(--text-primary);
+}
+
+/* Always visible when panel is collapsed (user needs to find the expand button) */
+.panel-left.collapsed .collapse-toggle,
+.panel-right.collapsed .collapse-toggle {
+  opacity: 1;
 }
 
 /* ── Right panel tab bar ── */
