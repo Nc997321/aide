@@ -4,6 +4,9 @@ import { EditorView, basicSetup } from "codemirror";
 import { keymap } from "@codemirror/view";
 import { searchKeymap } from "@codemirror/search";
 import { oneDark } from "@codemirror/theme-one-dark";
+import { useSettings } from "../composables/useSettings";
+
+const { settings } = useSettings();
 
 const props = defineProps<{
   filePath: string;
@@ -154,9 +157,8 @@ async function createEditor() {
       EditorView.theme({
         "&": {
           height: "100%",
-          fontSize: "13px",
-          fontFamily:
-            '"Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, monospace',
+          fontSize: "var(--cm-font-size)",
+          fontFamily: "var(--cm-font-family)",
         },
         ".cm-scroller": {
           overflow: "auto",
@@ -202,8 +204,21 @@ async function createEditor() {
   });
 
   // Signal that the editor is fully created (including async lang import)
+  applyFontSettings();
   resolveReady?.();
 }
+
+function applyFontSettings() {
+  if (!view) return;
+  view.dom.style.setProperty("--cm-font-size", `${settings.fontSize}px`);
+  view.dom.style.setProperty("--cm-font-family", settings.fontFamily);
+}
+
+// ── React to user font settings changes ──
+watch(
+  [() => settings.fontSize, () => settings.fontFamily],
+  () => applyFontSettings()
+);
 
 function openGoToLine(target: EditorView): boolean {
   const line = prompt("跳转到行:");

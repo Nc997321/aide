@@ -55,12 +55,30 @@ export function useGotoDefinition() {
     return results.value[selectedIndex.value] ?? null;
   }
 
+  async function searchAllReferences(word: string, projectRoot: string) {
+    if (!word || !projectRoot) return;
+
+    searchWord.value = word;
+    targetProjectRoot.value = projectRoot;
+    results.value = [];
+    selectedIndex.value = 0;
+    visible.value = true;
+
+    try {
+      const matches = await api.grepSymbol(word, projectRoot);
+      results.value = matches; // show all results, no cap
+    } catch {
+      results.value = [];
+    }
+  }
+
   return {
     visible: readonly(visible),
     results: readonly(results),
     selectedIndex: readonly(selectedIndex),
     searchWord: readonly(searchWord),
     search,
+    searchAllReferences,
     dismiss,
     selectPrev,
     selectNext,

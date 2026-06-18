@@ -17,6 +17,11 @@ async function onGotoDefinition(payload: { word: string; filePath: string }) {
   await goto.search(payload.word, projectRoot.value);
 }
 
+// 搜索所有引用（从浮层空状态触发）
+async function onSearchAllReferences() {
+  await goto.searchAllReferences(goto.searchWord.value, projectRoot.value);
+}
+
 // 处理选中跳转结果
 async function onGotoResultSelect(match: { file: string; line: number }) {
   goto.dismiss();
@@ -155,7 +160,7 @@ function getLanguageLabel(): string {
               <div class="goto-popover-body">
                 <template v-if="goto.results.value.length === 0">
                   <div class="goto-popover-empty">
-                    未找到定义 · <span class="goto-popover-hint">按 Ctrl+Shift+F 搜索所有引用</span>
+                    未找到定义 · <span class="goto-popover-hint" @click="onSearchAllReferences">搜索所有引用</span>
                   </div>
                 </template>
                 <template v-else>
