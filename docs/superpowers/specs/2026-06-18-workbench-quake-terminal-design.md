@@ -72,9 +72,11 @@ Aide 当前只有 Claude TUI（中间面板，由 PTY 跑 `claude --resume`）�
 
 `pty_write` / `pty_resize` / `poll_pty_output` / `pty_kill` **全部复用**，无需新增 —— 它们本就按 session_id 寻址，工作台用保留 id `"__workbench__"`。`pty-exit` 事件也会为工作台触发，前端按需处理（显示退出遮罩）。
 
-#### ⚠️ Windows 坑点（CLAUDE.md 已强调）
+#### ⚠️ Windows 坑点说明（已核实）
 
-`pty_spawn_shell` 构造 `CommandBuilder` 时**必须设 `CREATE_NO_WINDOW (0x08000000)`**，否则 PowerShell/Git Bash 会弹出控制台窗口。portable-pty 的 `CommandBuilder` 通过 `creation_flags` 设置。
+CLAUDE.md 中 `CREATE_NO_WINDOW` 规则针对的是 `std::process::Command::new()`（git.rs/marketplace.rs/filesystem.rs），**不适用于 PTY 启动**：portable-pty 0.8.1 在 Windows 用 ConPty，ConPty 创建的是不可见 pseudo-console，不会弹出控制台窗口（现有 `claude` 启动即如此）。且 portable-pty 0.8.1 的 `CommandBuilder` 并未暴露 `creation_flags`。因此 `pty_spawn_shell` **无需也无法**设 `CREATE_NO_WINDOW`。
+
+但需注意现有 `spawn_command` 在 Windows 会给命令名追加 `.cmd`（line 49-50，专为 `claude` → `claude.cmd` 设计）。`pty_spawn_shell` 解析出的已是完整路径（`powershell.exe` / `bash.exe`），**绝不能走 `.cmd` 追加逻辑**，否则拼成 `powershell.exe.cmd` 启动失败。因此 `pty_spawn_shell` 必须用独立的 CommandBuilder 构造路径，不复用 `spawn_command` 的 `.cmd` 分支。
 
 #### Shell 路径探测（Rust 侧 `pty_spawn_shell` 内）
 
