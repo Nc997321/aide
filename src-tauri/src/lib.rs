@@ -88,6 +88,7 @@ pub fn run() {
             commands::git::git_stage_all,
             commands::git::git_stage_file,
             commands::git::git_unstage_file,
+            commands::git::git_has_file,
             commands::git::git_revert_file,
             commands::git::log_frontend_error,
             commands::git::git_remote_url,

@@ -84,6 +84,11 @@ async function loadSessions() {
     sessions.value = [];
   }
 
+  // Remove any stale placeholder entries that are no longer active.
+  if (!activePlaceholder) {
+    sessions.value = sessions.value.filter(s => !s.id.startsWith("new_"));
+  }
+
   // Restore active placeholder that hasn't been migrated yet
   if (activePlaceholder) {
     sessions.value.unshift(activePlaceholder);
@@ -185,7 +190,38 @@ onMounted(async () => {
   } catch (_) { /* non-critical */ }
 });
 
-defineExpose({ newSession, loadSessions });
+/**
+ * Replace a placeholder session (new_xxx) with the real session after migration.
+ * Does an in-place swap without triggering a full list reload or loading indicator.
+ */
+async function migrateSession(oldId: string, newId: string) {
+  const idx = sessions.value.findIndex(s => s.id === oldId);
+  if (idx === -1) return;
+
+  const placeholder = sessions.value[idx];
+
+  // Persist the placeholder's custom name under the real session ID,
+  // so it survives page reloads (otherwise listSessions returns "未命名"
+  // from Claude Code's auto-generated metadata).
+  try {
+    await api.renameSession(newId, placeholder.name);
+  } catch (_) { /* best effort */ }
+
+  try {
+    const all = await api.listSessions();
+    const real = all.find(s => s.id === newId);
+    if (real) {
+      real.name = placeholder.name; // use our name, not Claude Code's
+      sessions.value.splice(idx, 1, real);
+    } else {
+      await loadSessions();
+    }
+  } catch (_) {
+    await loadSessions();
+  }
+}
+
+defineExpose({ newSession, loadSessions, migrateSession });
 </script>
 
 <template>

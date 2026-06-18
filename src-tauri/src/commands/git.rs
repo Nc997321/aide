@@ -168,8 +168,18 @@ pub async fn git_diff_files(
 
     // All git + filesystem work in one blocking task
     git_run_blocking(move || {
-        // 1. Modified / deleted files
-        let diff_out = git_run(&["diff", "--numstat"], &root)?;
+        // 1. Collect all committed paths from HEAD (used to distinguish real tracked
+        //    deletions from ephemeral files that were never committed).
+        let mut committed_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+        if let Ok(tree_out) = git_run(&["ls-tree", "-r", "HEAD", "--name-only"], &root) {
+            let tree_stdout = String::from_utf8_lossy(&tree_out.stdout);
+            for p in tree_stdout.lines() {
+                committed_paths.insert(p.to_string());
+            }
+        }
+
+        // 2. Modified / deleted files (vs HEAD so staged-then-deleted files are also caught)
+        let diff_out = git_run(&["diff", "HEAD", "--numstat"], &root)?;
         let stdout = String::from_utf8_lossy(&diff_out.stdout);
         let mut files: Vec<DiffEntry> = Vec::new();
         for line in stdout.lines() {
@@ -177,15 +187,17 @@ pub async fn git_diff_files(
             if parts.len() < 3 { continue; }
             let additions = if parts[0] == "-" { 0 } else { parts[0].parse().unwrap_or(0) };
             let deletions = if parts[1] == "-" { 0 } else { parts[1].parse().unwrap_or(0) };
+            let file_path = root.join(parts[2]);
+            let status = if !file_path.exists() { "D" } else { "M" };
             files.push(DiffEntry {
                 path: parts[2].to_string(),
-                status: "M".to_string(),
+                status: status.to_string(),
                 additions,
                 deletions,
             });
         }
 
-        // 2. Untracked files
+        // 3. Untracked files — skip any that no longer exist on disk (ephemeral mid-round files)
         if let Ok(untracked_out) = git_run(
             &["ls-files", "--others", "--exclude-standard"],
             &root,
@@ -205,6 +217,16 @@ pub async fn git_diff_files(
                 });
             }
         }
+
+        // 4. Filter ephemeral files: not on disk AND never committed to HEAD.
+        //    These are files created after the snapshot and deleted before capture —
+        //    they should not appear in the changes panel.
+        files.retain(|f| {
+            let full_path = root.join(&f.path);
+            if full_path.exists() { return true; }
+            // File gone — keep only if it was committed at some point (real tracked deletion)
+            committed_paths.contains(&f.path)
+        });
 
         Ok(files)
     }).await
@@ -240,6 +262,27 @@ pub async fn git_unstage_file(
     let root = project_root_for_commands(&workspace_state);
     git_run_async(vec!["restore".into(), "--staged".into(), "--".into(), path], root).await?;
     Ok(())
+}
+
+/// Returns true if the file exists on disk OR is committed in HEAD.
+/// Used by the frontend to decide whether a previous-round change entry is still valid.
+/// Checking HEAD (not the index) avoids false positives from ephemeral files
+/// that were staged by `git add -A` but never committed.
+#[tauri::command]
+pub fn git_has_file(
+    workspace_state: State<'_, WorkspaceState>,
+    path: String,
+) -> Result<bool, String> {
+    let root = project_root_for_commands(&workspace_state);
+    // 1. Check disk
+    if root.join(&path).exists() {
+        return Ok(true);
+    }
+    // 2. Check HEAD commit (was the file ever committed?)
+    if git_run(&["cat-file", "-e", &format!("HEAD:{}", path)], &root).is_ok() {
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 #[tauri::command]

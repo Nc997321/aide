@@ -32,8 +32,8 @@ export const api = {
   getProjectInfo(): Promise<ProjectInfo> {
     return invoke("get_project_info");
   },
-  listDirectory(path: string): Promise<FileEntry[]> {
-    return invoke("list_directory", { path });
+  listDirectory(path: string, showHidden?: boolean): Promise<FileEntry[]> {
+    return invoke("list_directory", { path, showHidden: showHidden ?? false });
   },
   fileOpen(path: string): Promise<void> {
     return invoke("file_open", { path });
@@ -63,6 +63,9 @@ export const api = {
   },
   gitRevertFile(path: string): Promise<void> {
     return invoke("git_revert_file", { path });
+  },
+  gitHasFile(path: string): Promise<boolean> {
+    return invoke("git_has_file", { path });
   },
 
   // 会话

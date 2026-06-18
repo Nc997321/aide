@@ -170,9 +170,13 @@ pub fn delete_session(
             for entry in read_dir {
                 let Ok(entry) = entry else { continue; };
                 let path = entry.path();
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if content.contains(&format!("\"sessionId\":\"{}\"", id)) {
-                        let _ = fs::remove_file(&path);
+                if path.extension().map(|e| e == "json").unwrap_or(false) {
+                    if let Ok(content) = fs::read_to_string(&path) {
+                        if let Ok(v) = serde_json::from_str::<Value>(&content) {
+                            if v.get("sessionId").and_then(|s| s.as_str()) == Some(&id) {
+                                let _ = fs::remove_file(&path);
+                            }
+                        }
                     }
                 }
             }

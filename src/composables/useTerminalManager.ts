@@ -192,7 +192,7 @@ export function useTerminalManager(
     liveDisplayIds.delete(displayId);
     ptyToDisplay.delete(ptyId);
 
-    monitor.removeSessionState(displayId);
+    monitor.setSessionState(displayId, "stopped");
     monitor.stopPeriodicCheck(ptyId);
 
     if (currentSid === displayId || currentSid === ptyId) {
@@ -214,33 +214,63 @@ export function useTerminalManager(
     // metadata file (~/.claude/sessions/<pid>.json).
     await new Promise((r) => setTimeout(r, 3000));
     if (!liveSessions.has(placeholderId)) return;
-    try {
-      const sessions = await api.listSessions();
-      const real = sessions.find((s) =>
-        !s.id.startsWith("new_") &&
-        !liveSessions.has(s.id) &&
-        !Array.from(ptyToDisplay.values()).includes(s.id),
-      );
-      // Validate the candidate was started after our placeholder.
-      // Claude Code stores startedAt in ms (JS timestamp), but normalise
-      // just in case (seconds → ms) to avoid filtering out the real session.
-      if (real && liveSessions.has(placeholderId)) {
-        const sinceMs = parseInt(placeholderId.replace("new_", ""), 10) || 0;
-        const realMs = real.timestamp < 1_000_000_000_000
-          ? real.timestamp * 1000
-          : real.timestamp;
-        if (realMs <= sinceMs) return; // older session — metadata not ready yet
-        ptyToDisplay.set(placeholderId, real.id);
-        liveDisplayIds.delete(placeholderId);
-        liveDisplayIds.add(real.id);
-        // IMPORTANT: do NOT call pty_rename_session on the Rust side.
-        // The onData handler and ResizeObserver in startClaude() capture
-        // the placeholder PTY key in their closures. Renaming on the Rust
-        // side breaks input because pty_write("new_xxx") can no longer
-        // find the PTY (it was moved to the real UUID in Rust's HashMap).
-        onSessionUpdated(real.id);
+
+    const sinceMs = parseInt(placeholderId.replace("new_", ""), 10) || 0;
+    let knownIds = new Set<string>();
+
+    // Retry up to 3 times: the real session metadata may not be written
+    // yet when the first attempt runs.  knownIds tracks all candidates
+    // seen so far so that stale sessions from a previous run on the same
+    // placeholder are excluded from later attempts.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (!liveSessions.has(placeholderId)) return;
+      try {
+        const sessions = await api.listSessions();
+        const candidates = sessions.filter((s) =>
+          !s.id.startsWith("new_") &&
+          !liveSessions.has(s.id) &&
+          !Array.from(ptyToDisplay.values()).includes(s.id) &&
+          !knownIds.has(s.id),
+        );
+
+        // Sort by timestamp descending, pick the newest candidate
+        candidates.sort((a, b) => {
+          const aMs = a.timestamp < 1_000_000_000_000
+            ? a.timestamp * 1000 : a.timestamp;
+          const bMs = b.timestamp < 1_000_000_000_000
+            ? b.timestamp * 1000 : b.timestamp;
+          return bMs - aMs;
+        });
+        const real = candidates[0];
+
+        if (real) {
+          const realMs = real.timestamp < 1_000_000_000_000
+            ? real.timestamp * 1000 : real.timestamp;
+          if (realMs > sinceMs && liveSessions.has(placeholderId)) {
+            ptyToDisplay.set(placeholderId, real.id);
+            liveDisplayIds.delete(placeholderId);
+            liveDisplayIds.add(real.id);
+            // IMPORTANT: do NOT call pty_rename_session on the Rust side.
+            // The onData handler and ResizeObserver in startClaude() capture
+            // the placeholder PTY key in their closures. Renaming on the Rust
+            // side breaks input because pty_write("new_xxx") can no longer
+            // find the PTY (it was moved to the real UUID in Rust's HashMap).
+            onSessionUpdated(real.id);
+            return; // migration complete
+          }
+        }
+
+        // Record all known session IDs for exclusion in next attempt
+        for (const s of sessions) {
+          if (!s.id.startsWith("new_")) knownIds.add(s.id);
+        }
+      } catch (_) { /* best effort */ }
+
+      // Wait before next retry (skip after last attempt)
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 3000));
       }
-    } catch (_) { /* best effort */ }
+    }
   }
 
   /** Seconds to keep the loader after first PTY data — bridges the gap

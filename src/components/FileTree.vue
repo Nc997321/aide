@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, watch, onMounted, onUnmounted } from "vue";
 import TreeNodeItem from "./TreeNodeItem.vue";
 import { useContextMenu } from "../composables/useContextMenu";
 import { useFileViewer } from "../composables/useFileViewer";
+import { useSessionState } from "../composables/useSessionState";
 import { fileTreeAreaMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
 import type { FileEntry, WorkspaceInfo } from "../types";
@@ -17,6 +18,7 @@ const expandedDirs = ref<Set<string>>(new Set());
 const selectedPath = ref<string>("");
 const workspaces = ref<WorkspaceInfo[]>([]);
 const showWsDropdown = ref(false);
+const showHidden = ref(false);
 
 const emit = defineEmits<{
   "workspace-changed": [path: string];
@@ -33,7 +35,7 @@ async function toggleDir(path: string) {
 
 async function loadChildren(dirPath: string) {
   try {
-    const entries = await api.listDirectory(dirPath);
+    const entries = await api.listDirectory(dirPath, showHidden.value);
     if (dirPath === projectInfo.value.root) {
       // Refresh root: replace treeData entirely
       treeData.value = entries;
@@ -76,7 +78,7 @@ async function loadRoot() {
     const info = await api.getProjectInfo();
     projectInfo.value = info;
     const root = info.root;
-    const entries = await api.listDirectory(root);
+    const entries = await api.listDirectory(root, showHidden.value);
     treeData.value = entries;
     expandedDirs.value = new Set([root]);
   } catch (e) {
@@ -116,6 +118,11 @@ function closeWsDropdown() {
   showWsDropdown.value = false;
 }
 
+function toggleHidden() {
+  showHidden.value = !showHidden.value;
+  loadRoot();
+}
+
 onMounted(() => {
   loadRoot();
   document.addEventListener("click", closeWsDropdown);
@@ -130,6 +137,38 @@ const { show } = useContextMenu();
 function onAreaContextMenu(e: MouseEvent) {
   e.preventDefault();
   show(e.clientX, e.clientY, fileTreeAreaMenuItems(projectInfo.value.root, loadRoot));
+}
+
+// Refresh file tree when the active session finishes a response round
+const { state: sessionState } = useSessionState();
+let prevSessionStatus = "";
+
+watch(
+  () => (props.sessionId ? sessionState[props.sessionId] : undefined),
+  (newStatus) => {
+    if (!newStatus || newStatus === prevSessionStatus) return;
+    const prev = prevSessionStatus;
+    prevSessionStatus = newStatus;
+
+    if (newStatus === "waiting" || newStatus === "stopped") {
+      if (prev === "running" || prev === "attention") {
+        refreshAllExpanded();
+      }
+    }
+  },
+);
+
+async function refreshAllExpanded() {
+  // Small delay to let useConversationChanges.captureChanges finish git ops
+  await new Promise((r) => setTimeout(r, 300));
+  const saved = new Set(expandedDirs.value);
+  await loadRoot();
+  for (const dir of saved) {
+    if (dir !== projectInfo.value.root) {
+      expandedDirs.value.add(dir);
+      await loadChildren(dir);
+    }
+  }
 }
 
 defineExpose({ loadRoot });
@@ -159,6 +198,16 @@ defineExpose({ loadRoot });
           未找到其他工作区
         </div>
       </div>
+      <button class="hidden-toggle" :class="{ active: showHidden }" @click.stop="toggleHidden" :title="showHidden ? '隐藏隐藏文件' : '显示隐藏文件'">
+        <svg v-if="!showHidden" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+          <line x1="1" y1="1" x2="23" y2="23"/>
+        </svg>
+        <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+          <circle cx="12" cy="12" r="3"/>
+        </svg>
+      </button>
     </div>
 
     <!-- File tree -->
@@ -238,6 +287,27 @@ defineExpose({ loadRoot });
 }
 .ws-arrow.open {
   transform: rotate(180deg);
+}
+
+.hidden-toggle {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+.hidden-toggle:hover {
+  color: var(--text-secondary);
+  background: var(--surface);
+}
+.hidden-toggle.active {
+  color: var(--accent);
 }
 
 .ws-dropdown {
