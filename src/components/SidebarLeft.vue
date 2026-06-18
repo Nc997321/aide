@@ -17,6 +17,7 @@ const emit = defineEmits<{
   "session-changed": [id: string];
   "workspace-changed": [path: string];
   "open-settings": [];
+  "open-workbench": [];
 }>();
 
 const sessions = ref<Session[]>([]);
@@ -301,9 +302,17 @@ defineExpose({ newSession, loadSessions, migrateSession });
       <button class="update-dismiss" title="忽略" @click.stop="dismissUpdate">✕</button>
     </div>
 
-    <!-- Settings entry -->
+    <!-- Footer: terminal + settings -->
     <div class="sidebar-footer">
-      <button class="settings-btn" @click="emit('open-settings')">
+      <button class="footer-btn" title="工作台终端 (Ctrl+`)" @click="emit('open-workbench')">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="4 17 10 11 4 5"/>
+          <line x1="12" y1="19" x2="20" y2="19"/>
+        </svg>
+        <span>终端</span>
+        <span class="footer-btn-kbd">⌘`</span>
+      </button>
+      <button class="footer-btn" title="设置" @click="emit('open-settings')">
         <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"/>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -575,13 +584,15 @@ defineExpose({ newSession, loadSessions, migrateSession });
 .sidebar-footer {
   border-top: 1px solid var(--surface);
   padding: 4px 8px;
+  display: flex;
+  gap: 2px;
 }
 
-.settings-btn {
+.footer-btn {
   display: flex;
   align-items: center;
   gap: 7px;
-  width: 100%;
+  flex: 1;
   padding: 7px 10px;
   background: none;
   border: none;
@@ -591,10 +602,22 @@ defineExpose({ newSession, loadSessions, migrateSession });
   font-size: 13px;
   font-family: inherit;
   transition: all 0.12s;
+  position: relative;
 }
 
-.settings-btn:hover {
+.footer-btn:hover {
   color: var(--text-primary);
   background: var(--surface);
+}
+
+.footer-btn-kbd {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--text-muted);
+  line-height: 1.5;
+  font-family: inherit;
 }
 </style>

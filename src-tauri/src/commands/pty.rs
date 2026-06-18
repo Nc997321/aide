@@ -74,3 +74,45 @@ fn find_claude_session_jsonl(session_id: &str, project_root: &PathBuf) -> Option
         None
     }
 }
+
+/// Resolve the shell program path.
+/// If `shell` is non-empty, use it verbatim. Otherwise probe by OS:
+///   Windows: pwsh → powershell
+///   Linux:   $SHELL → bash → sh
+fn resolve_shell(shell: &str) -> Result<String, String> {
+    if !shell.trim().is_empty() {
+        return Ok(shell.to_string());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(p) = which::which("pwsh") { return Ok(p.to_string_lossy().to_string()); }
+        if let Ok(p) = which::which("powershell") { return Ok(p.to_string_lossy().to_string()); }
+        return Err("Shell not found: install PowerShell or set shell_path in settings".to_string());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(s) = std::env::var("SHELL") {
+            if !s.is_empty() { return Ok(s); }
+        }
+        if let Ok(p) = which::which("bash") { return Ok(p.to_string_lossy().to_string()); }
+        if let Ok(p) = which::which("sh") { return Ok(p.to_string_lossy().to_string()); }
+        Err("Shell not found: set shell_path in settings".to_string())
+    }
+}
+
+/// Spawn a general-purpose shell in a PTY (workbench terminal).
+/// `session_id` is a fixed reserved id ("__workbench__"). `shell` empty → OS default.
+#[tauri::command]
+pub fn pty_spawn_shell(
+    manager: State<'_, PtyManager>,
+    app_handle: AppHandle,
+    session_id: String,
+    rows: u16,
+    cols: u16,
+    cwd: String,
+    shell: String,
+) -> Result<(), String> {
+    let program = resolve_shell(&shell)?;
+    let cwd_path = PathBuf::from(&cwd);
+    manager.spawn_shell(&session_id, &program, &[], &cwd_path, rows, cols, app_handle)
+}

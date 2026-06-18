@@ -53,6 +53,7 @@ export interface AppSettings {
   fontFamily: string;
   notificationsEnabled: boolean;
   proxy: string;
+  shellPath: string;
 }
 
 export interface ChangeFile {
