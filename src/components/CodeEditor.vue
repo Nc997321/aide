@@ -8,7 +8,6 @@ import { oneDark } from "@codemirror/theme-one-dark";
 const props = defineProps<{
   filePath: string;
   modelValue: string;
-  placeholder?: string;
 }>();
 
 const emit = defineEmits<{
@@ -18,6 +17,7 @@ const emit = defineEmits<{
 
 const mountEl = ref<HTMLDivElement | null>(null);
 let view: EditorView | null = null;
+let createId = 0;
 
 // ── Language detection ──
 const ext = computed(() => {
@@ -34,7 +34,9 @@ async function loadLanguageExtension() {
       case "js":
       case "jsx": {
         const { javascript } = await import("@codemirror/lang-javascript");
-        return javascript({ typescript: e === "ts" || e === "tsx" });
+        const isTs = e === "ts" || e === "tsx";
+        const isJsx = e === "tsx" || e === "jsx";
+        return javascript({ typescript: isTs, jsx: isJsx });
       }
       case "rs": {
         const { rust } = await import("@codemirror/lang-rust");
@@ -85,6 +87,8 @@ async function loadLanguageExtension() {
 async function createEditor() {
   if (!mountEl.value) return;
 
+  const id = ++createId; // capture before async work
+
   // Destroy existing instance
   if (view) {
     view.destroy();
@@ -92,6 +96,9 @@ async function createEditor() {
   }
 
   const langExt = await loadLanguageExtension();
+
+  // Abort if a newer call has started
+  if (id !== createId) return;
 
   const updateListener = EditorView.updateListener.of((update) => {
     if (update.docChanged) {
