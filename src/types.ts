@@ -54,6 +54,7 @@ export interface AppSettings {
   notificationsEnabled: boolean;
   proxy: string;
   shellPath: string;
+  workbenchHeight: number;
 }
 
 export interface ChangeFile {

@@ -16,6 +16,8 @@ pub struct AppSettings {
     pub proxy: String,
     #[serde(default)]
     pub shell_path: String,
+    #[serde(default)]
+    pub workbench_height: u32,
 }
 
 fn default_font_size() -> u32 { 14 }
@@ -32,6 +34,7 @@ impl Default for AppSettings {
             notifications_enabled: default_notifications_enabled(),
             proxy: String::new(),
             shell_path: String::new(),
+            workbench_height: 0,
         }
     }
 }

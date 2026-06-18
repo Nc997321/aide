@@ -5,6 +5,7 @@ import { FitAddon } from "xterm-addon-fit";
 import { useSettings } from "../composables/useSettings";
 import { useWorkbenchTerminal } from "../composables/useWorkbenchTerminal";
 import { api } from "../api";
+import { catppuccinMochaTheme } from "../utils/xterm";
 import "xterm/css/xterm.css";
 
 const props = defineProps<{ cwd: string; height: number }>();
@@ -25,15 +26,7 @@ onMounted(async () => {
     cursorBlink: true,
     fontSize: settings.fontSize,
     fontFamily: settings.fontFamily,
-    theme: {
-      background: "#1e1e2e", foreground: "#cdd6f4", cursor: "#f5e0dc",
-      selectionBackground: "#585b70",
-      black: "#45475a", red: "#f38ba8", green: "#a6e3a1", yellow: "#f9e2af",
-      blue: "#89b4fa", magenta: "#f5c2e7", cyan: "#94e2d5", white: "#bac2de",
-      brightBlack: "#585b70", brightRed: "#f38ba8", brightGreen: "#a6e3a1",
-      brightYellow: "#f9e2af", brightBlue: "#89b4fa", brightMagenta: "#f5c2e7",
-      brightCyan: "#94e2d5", brightWhite: "#a6adc8",
-    },
+    theme: catppuccinMochaTheme,
     allowProposedApi: true,
   });
   fitAddon = new FitAddon();

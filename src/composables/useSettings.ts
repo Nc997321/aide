@@ -8,6 +8,7 @@ const defaults: AppSettings = {
   notificationsEnabled: true,
   proxy: "",
   shellPath: "",
+  workbenchHeight: 0,
 };
 
 // Module-level reactive singleton — shared across TerminalPanel and SettingsModal
@@ -23,6 +24,7 @@ export function useSettings() {
       settings.notificationsEnabled = s.notificationsEnabled ?? defaults.notificationsEnabled;
       settings.proxy = s.proxy ?? defaults.proxy;
       settings.shellPath = s.shellPath ?? defaults.shellPath;
+      settings.workbenchHeight = s.workbenchHeight ?? defaults.workbenchHeight;
     } catch (_) {
       // Keep defaults on error
     }
@@ -36,6 +38,7 @@ export function useSettings() {
     if (partial.notificationsEnabled !== undefined) settings.notificationsEnabled = partial.notificationsEnabled;
     if (partial.proxy !== undefined) settings.proxy = partial.proxy;
     if (partial.shellPath !== undefined) settings.shellPath = partial.shellPath;
+    if (partial.workbenchHeight !== undefined) settings.workbenchHeight = partial.workbenchHeight;
     // Persist asynchronously
     try {
       await api.setSettings(partial);

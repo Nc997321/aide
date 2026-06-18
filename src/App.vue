@@ -32,8 +32,15 @@ const gitPanelRef = ref<InstanceType<typeof GitPanel> | null>(null);
 const activeSessionId = ref("");
 const settingsVisible = ref(false);
 const workspacePath = ref("");
-const workbenchHeight = ref(Math.floor(window.innerHeight * 0.45));
+const { settings, update: updateSettings } = useSettings();
+const workbenchHeight = ref(settings.workbenchHeight || Math.floor(window.innerHeight * 0.45));
 const wb = useWorkbenchTerminal();
+
+// Persist workbench height changes to settings
+function onWorkbenchHeightChange(v: number) {
+  workbenchHeight.value = v;
+  updateSettings({ workbenchHeight: v });
+}
 
 function onLeftResizeStart(e: MouseEvent) {
   isDraggingLeft.value = true;
@@ -230,7 +237,7 @@ onUnmounted(() => {
     <ModalDialog />
     <SettingsPanel v-if="settingsVisible" @close="settingsVisible = false" />
     <FileViewer />
-    <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="(v) => workbenchHeight = v" />
+    <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
   </div>
 </template>
 
