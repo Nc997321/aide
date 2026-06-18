@@ -101,8 +101,11 @@ export const api = {
   },
 
   // 通知（绕过插件 dev 模式限制）
-  notifySend(title: string, body: string): Promise<void> {
-    return invoke("notify_send", { title, body });
+  notifySend(title: string, body: string, sessionId?: string): Promise<void> {
+    return invoke("notify_send", { title, body, sessionId: sessionId ?? null });
+  },
+  getPendingNotification(): Promise<string | null> {
+    return invoke("get_pending_notification");
   },
 
   // 设置

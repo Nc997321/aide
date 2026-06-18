@@ -9,12 +9,13 @@ import FileViewer from "./components/FileViewer.vue";
 import SettingsPanel from "./components/SettingsPanel.vue";
 import GitPanel from "./components/GitPanel.vue";
 import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
+import NotificationBanner from "./components/NotificationBanner.vue";
 import { useWorkbenchTerminal } from "./composables/useWorkbenchTerminal";
 import { api } from "./api";
-import { ref, onMounted, onUnmounted, nextTick } from "vue";
+import { ref, onMounted, onUnmounted, nextTick, watch, computed } from "vue";
 import { useSettings } from "./composables/useSettings";
 import { useWindowFocus } from "./composables/useWindowFocus";
-import { useNotification } from "./composables/useNotification";
+import { useNotification, pendingSessions, clearPending } from "./composables/useNotification";
 import { useGit } from "./composables/useGit";
 
 const leftWidth = ref(280);
@@ -40,6 +41,72 @@ const wb = useWorkbenchTerminal();
 function onWorkbenchHeightChange(v: number) {
   workbenchHeight.value = v;
   updateSettings({ workbenchHeight: v });
+}
+
+// ── Notification banner for completed sessions ──
+const { isFocused } = useWindowFocus();
+const bannerVisible = ref(false);
+
+interface PendingSessionInfo {
+  id: string;
+  name: string;
+  wsKey: string;
+  wsName: string;
+}
+
+const pendingSessionInfos = ref<PendingSessionInfo[]>([]);
+
+// When window regains focus, check for pending sessions and show banner
+watch(isFocused, async (focused, wasFocused) => {
+  if (focused && wasFocused === false) {
+    // Window just regained focus
+    // Also check Rust-side pending notification (in case frontend missed it)
+    const rustPending = await api.getPendingNotification();
+    if (rustPending) {
+      pendingSessions.add(rustPending);
+    }
+
+    if (pendingSessions.size > 0) {
+      // Build the pending session info list
+      const infos: PendingSessionInfo[] = [];
+      const [sessions, workspaces, projectInfo] = await Promise.all([
+        api.listSessions(),
+        api.listWorkspaces(),
+        api.getProjectInfo(),
+      ]);
+
+      // Find the current workspace by matching project root
+      const currentWs = workspaces.find(w => w.name === projectInfo.root);
+      const wsKey = currentWs?.key || "";
+      const wsName = currentWs?.name || projectInfo.root;
+
+      for (const id of pendingSessions) {
+        const session = sessions.find(s => s.id === id);
+        if (session) {
+          infos.push({
+            id,
+            name: session.name,
+            wsKey,
+            wsName,
+          });
+        }
+      }
+
+      pendingSessionInfos.value = infos;
+      bannerVisible.value = true;
+    }
+  }
+});
+
+function onBannerNavigate(sessionId: string, wsKey: string) {
+  bannerVisible.value = false;
+  clearPending([sessionId]);
+  sidebarRef.value?.selectSessionFromWorkspace(wsKey, sessionId);
+}
+
+function onBannerDismiss() {
+  bannerVisible.value = false;
+  clearPending();
 }
 
 function onLeftResizeStart(e: MouseEvent) {
@@ -169,6 +236,14 @@ onUnmounted(() => {
 
 <template>
   <div class="app-layout">
+    <!-- Notification banner for completed sessions -->
+    <NotificationBanner
+      :sessions="pendingSessionInfos"
+      :visible="bannerVisible"
+      @navigate="onBannerNavigate"
+      @dismiss="onBannerDismiss"
+    />
+
     <!-- Left panel -->
     <div class="panel-left" :style="{ width: leftWidth + 'px' }">
       <SidebarLeft ref="sidebarRef" :active-session-id="activeSessionId" @session-changed="onSessionChanged" @workspace-changed="onSidebarWsChanged" @open-settings="() => settingsVisible = true" @open-workbench="wb.toggle(workspacePath)" />

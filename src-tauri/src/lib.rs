@@ -86,6 +86,7 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::set_settings,
             commands::settings::notify_send,
+            commands::settings::get_pending_notification,
             commands::git::git_diff_files,
             commands::git::git_stage_all,
             commands::git::git_stage_file,

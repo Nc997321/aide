@@ -1,8 +1,19 @@
-import { watch } from "vue";
+import { watch, reactive } from "vue";
 import { useSessionState, type SessionStatus } from "./useSessionState";
 import { useWindowFocus } from "./useWindowFocus";
 import { useSettings } from "./useSettings";
 import { api } from "../api";
+
+// Module-level reactive set of sessions that completed while app was unfocused
+export const pendingSessions = reactive(new Set<string>());
+
+export function clearPending(ids?: string[]) {
+  if (ids) {
+    for (const id of ids) pendingSessions.delete(id);
+  } else {
+    pendingSessions.clear();
+  }
+}
 
 export function useNotification() {
   const { state: sessionState } = useSessionState();
@@ -39,8 +50,10 @@ export function useNotification() {
 
   async function fireNotification(id: string) {
     const [title, body] = await Promise.all([getProjectName(), getSessionName(id)]);
+    // Track this session as pending (completed while unfocused)
+    pendingSessions.add(id);
     try {
-      api.notifySend(title, `${body} 已回复`);
+      api.notifySend(title, `${body} 已回复`, id);
     } catch (_) { /* notification not available */ }
   }
 

@@ -261,7 +261,7 @@ async function migrateSession(oldId: string, newId: string) {
   }
 }
 
-defineExpose({ newSession, loadSessions, migrateSession });
+defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorkspace });
 </script>
 
 <template>

@@ -1,8 +1,15 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
+use std::sync::Mutex;
 
 use super::config_path;
+use once_cell::sync::Lazy;
+
+/// Global state to store the most recent notification's session ID.
+/// When the app window is activated (e.g., by clicking the toast),
+/// the frontend can retrieve this to navigate to the session.
+static PENDING_NOTIFICATION: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppSettings {
@@ -95,8 +102,16 @@ pub fn set_settings(settings: Value) -> Result<(), String> {
 
 /// Send a desktop notification with the correct AppUserModelID,
 /// bypassing the notification plugin's dev-mode skip.
+/// Optionally stores session_id for click-to-navigate support.
 #[tauri::command]
-pub fn notify_send(title: String, body: String) {
+pub fn notify_send(title: String, body: String, session_id: Option<String>) {
+    // Store session_id for later retrieval when window is activated
+    if let Some(ref sid) = session_id {
+        if let Ok(mut guard) = PENDING_NOTIFICATION.lock() {
+            *guard = Some(sid.clone());
+        }
+    }
+
     let mut n = notify_rust::Notification::new();
     n.app_id("com.aide.app");
     n.auto_icon();
@@ -105,4 +120,15 @@ pub fn notify_send(title: String, body: String) {
     tauri::async_runtime::spawn(async move {
         let _ = n.show();
     });
+}
+
+/// Retrieve and clear the pending notification's session ID.
+/// Called by frontend when window gains focus to check if user clicked a notification.
+#[tauri::command]
+pub fn get_pending_notification() -> Option<String> {
+    if let Ok(mut guard) = PENDING_NOTIFICATION.lock() {
+        guard.take()
+    } else {
+        None
+    }
 }
