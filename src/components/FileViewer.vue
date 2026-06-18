@@ -9,6 +9,7 @@ import { marked } from "../utils/markdown";
 const { visible, filePath, content, error, editing, editContent, saving, close, startEdit, save, cancelEdit, projectRoot, openAndScrollTo } = useFileViewer();
 
 const goto = useGotoDefinition();
+const gotoPopoverRef = ref<HTMLElement | null>(null);
 const codeEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null);
 
 // 处理跳转到定义
@@ -32,6 +33,7 @@ async function onGotoResultSelect(match: { file: string; line: number }) {
 // 在浮层上用键盘导航
 function onGotoKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
+    e.stopPropagation();
     goto.dismiss();
   } else if (e.key === "ArrowDown") {
     e.preventDefault();
@@ -78,6 +80,12 @@ watch(visible, async (v) => {
   if (v) {
     await nextTick();
     codeRef.value?.scrollTo(0, 0);
+  }
+});
+
+watch(goto.visible, (v) => {
+  if (v) {
+    nextTick(() => gotoPopoverRef.value?.focus());
   }
 });
 
@@ -140,7 +148,7 @@ function getLanguageLabel(): string {
               @goto-definition="onGotoDefinition"
             />
             <!-- 跳转结果浮层 -->
-            <div v-if="goto.visible.value" class="goto-popover" @keydown="onGotoKeydown">
+            <div v-if="goto.visible.value" ref="gotoPopoverRef" tabindex="-1" class="goto-popover" @keydown="onGotoKeydown">
               <div class="goto-popover-header">
                 <span class="goto-popover-title">「{{ goto.searchWord.value }}」的定义</span>
                 <button class="goto-popover-close" @click="goto.dismiss()">&times;</button>
@@ -305,22 +313,6 @@ function getLanguageLabel(): string {
   padding: 24px;
   color: var(--accent-red);
   font-size: 13px;
-}
-
-.viewer-textarea {
-  flex: 1;
-  width: 100%;
-  box-sizing: border-box;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  border: none;
-  margin: 0;
-  padding: 16px;
-  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  resize: none;
-  outline: none;
 }
 
 .viewer-editor {
