@@ -102,3 +102,12 @@ export interface GitStatusEntry {
 export interface GitStatus {
   entries: GitStatusEntry[];
 }
+
+// ── Grep types ──
+
+export interface GrepMatch {
+  file: string;
+  line: number;
+  content: string;
+  match_type: string;
+}

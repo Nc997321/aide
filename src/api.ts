@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem,
   ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
+  GrepMatch,
 } from "./types";
 
 export const api = {
@@ -55,6 +56,11 @@ export const api = {
   },
   createDir(parentPath: string, name: string): Promise<void> {
     return invoke("create_dir", { parentPath, name });
+  },
+
+  // 符号搜索（跳转到定义）
+  grepSymbol(word: string, cwd: string): Promise<GrepMatch[]> {
+    return invoke("grep_symbol", { word, cwd });
   },
 
   // Git
