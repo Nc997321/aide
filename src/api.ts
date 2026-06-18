@@ -27,6 +27,9 @@ export const api = {
   pollPtyOutput(sessionId: string): Promise<string> {
     return invoke("poll_pty_output", { sessionId });
   },
+  ptySpawnShell(sessionId: string, rows: number, cols: number, cwd: string, shell: string): Promise<void> {
+    return invoke("pty_spawn_shell", { sessionId, rows, cols, cwd, shell });
+  },
 
   // 文件
   getProjectInfo(): Promise<ProjectInfo> {
