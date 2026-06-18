@@ -53,7 +53,9 @@ onMounted(async () => {
 onUnmounted(() => {
   observer?.disconnect();
   terminal?.dispose();
-  wb.dispose();
+  // Note: wb.dispose() is NOT called here — the composable is a module-level
+  // singleton; disposing it would kill the PTY and destroy shared state.
+  // App.vue's onUnmounted handles full cleanup instead.
 });
 
 // Refit when the panel becomes visible (container was visibility:hidden).

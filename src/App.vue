@@ -121,8 +121,8 @@ function handleKeydown(e: KeyboardEvent) {
     wb.toggle(workspacePath.value);
     return;
   }
-  // Esc: collapse workbench if visible
-  if (e.key === "Escape" && wb.visible.value) {
+  // Esc: collapse workbench if visible (but don't steal from other overlays)
+  if (e.key === "Escape" && wb.visible.value && !settingsVisible.value) {
     wb.hide();
     return;
   }
@@ -156,6 +156,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener("keydown", handleKeydown);
+  wb.dispose();
 });
 </script>
 

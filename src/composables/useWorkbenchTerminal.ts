@@ -19,6 +19,23 @@ const visible = ref(false);
 const shellExited = ref(false);
 const shellName = ref("");
 
+// Lazy-init settings — useSettings() must be called inside a component setup
+// context, so we defer until the first useWorkbenchTerminal() call.
+let settingsRef: ReturnType<typeof useSettings>["settings"] | null = null;
+let watchersInitialized = false;
+function ensureSettingsWatchers() {
+  if (watchersInitialized) return;
+  watchersInitialized = true;
+  const { settings } = useSettings();
+  settingsRef = settings;
+  watch(() => settings.fontSize, (v) => {
+    if (terminal) { terminal.options.fontSize = v; fitAddon?.fit(); }
+  });
+  watch(() => settings.fontFamily, (v) => {
+    if (terminal) { terminal.options.fontFamily = v; }
+  });
+}
+
 function makeXtermTheme() {
   return {
     background: "#1e1e2e", foreground: "#cdd6f4", cursor: "#f5e0dc",
@@ -44,16 +61,9 @@ function deriveShellName(path: string): string {
   return base;
 }
 
-export function useWorkbenchTerminal() {
-  const { settings } = useSettings();
 
-  // Apply font size / family changes live.
-  watch(() => settings.fontSize, (v) => {
-    if (terminal) { terminal.options.fontSize = v; fitAddon?.fit(); }
-  });
-  watch(() => settings.fontFamily, (v) => {
-    if (terminal) { terminal.options.fontFamily = v; }
-  });
+export function useWorkbenchTerminal() {
+  ensureSettingsWatchers();
 
   function attachTerminal(t: Terminal, fa: FitAddon, div: HTMLDivElement) {
     terminal = t;
@@ -95,18 +105,19 @@ export function useWorkbenchTerminal() {
   async function spawn(cwd: string) {
     if (!terminal || !fitAddon || spawned) return;
     shellExited.value = false;
+    const s = settingsRef!;
     try {
       await api.ptySpawnShell(
         WORKBENCH_SESSION_ID,
         terminal.rows,
         terminal.cols,
         cwd,
-        settings.shellPath ?? "",
+        s.shellPath ?? "",
       );
       // Display name: user-configured path wins, else generic label (actual
       // resolved name lives on the Rust side; we approximate from settings).
-      shellName.value = settings.shellPath
-        ? deriveShellName(settings.shellPath)
+      shellName.value = s.shellPath
+        ? deriveShellName(s.shellPath)
         : (navigator.platform.toLowerCase().includes("win") ? "PowerShell" : "bash");
       spawned = true;
       startPolling();
