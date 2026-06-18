@@ -9,6 +9,7 @@ const error = ref("");
 const editing = ref(false);
 const editContent = ref("");
 const saving = ref(false);
+const projectRoot = ref("");
 
 export function useFileViewer() {
   async function open(path: string) {
@@ -53,6 +54,27 @@ export function useFileViewer() {
     editing.value = false;
   }
 
+  async function openWithRoot(path: string, root: string) {
+    projectRoot.value = root;
+    await open(path);
+  }
+
+  // 跳转到目标文件，自动进入编辑模式并返回目标行
+  async function openAndScrollTo(targetPath: string, line: number) {
+    // close current viewer
+    visible.value = false;
+    // brief delay to allow state reset
+    await new Promise(r => setTimeout(r, 50));
+    // open target in preview mode first
+    await open(targetPath);
+    // auto-enter edit mode so CodeEditor mounts and can scroll
+    if (content.value && !error.value && content.value.length <= 1_000_000) {
+      editContent.value = content.value;
+      editing.value = true;
+    }
+    return { line };
+  }
+
   return {
     visible: readonly(visible),
     filePath: readonly(filePath),
@@ -62,5 +84,8 @@ export function useFileViewer() {
     editContent,
     saving: readonly(saving),
     open, close, startEdit, save, cancelEdit,
+    projectRoot: readonly(projectRoot),
+    openWithRoot,
+    openAndScrollTo,
   };
 }

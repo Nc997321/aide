@@ -1,10 +1,52 @@
 <script setup lang="ts">
 import { computed, watch, ref, nextTick } from "vue";
 import { useFileViewer } from "../composables/useFileViewer";
+import { useGotoDefinition } from "../composables/useGotoDefinition";
+import CodeEditor from "./CodeEditor.vue";
 import { hljs, extToLang, highlightCode } from "../utils/highlight";
 import { marked } from "../utils/markdown";
 
-const { visible, filePath, content, error, editing, editContent, saving, close, startEdit, save, cancelEdit } = useFileViewer();
+const { visible, filePath, content, error, editing, editContent, saving, close, startEdit, save, cancelEdit, projectRoot, openAndScrollTo } = useFileViewer();
+
+const goto = useGotoDefinition();
+const codeEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null);
+
+// 处理跳转到定义
+async function onGotoDefinition(payload: { word: string; filePath: string }) {
+  await goto.search(payload.word, projectRoot.value);
+}
+
+// 处理选中跳转结果
+async function onGotoResultSelect(match: { file: string; line: number }) {
+  goto.dismiss();
+  // 构建绝对路径
+  const separator = projectRoot.value.includes("\\") ? "\\" : "/";
+  const targetPath = projectRoot.value + separator + match.file.replace(/\//g, separator);
+  const result = await openAndScrollTo(targetPath, match.line);
+  // 等 Vue 重新渲染 + CodeEditor 挂载（需要两次 tick：一次 VNode patch，一次 onMounted 执行完）
+  await nextTick();
+  await nextTick();
+  codeEditorRef.value?.scrollToLine(result.line);
+}
+
+// 在浮层上用键盘导航
+function onGotoKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    goto.dismiss();
+  } else if (e.key === "ArrowDown") {
+    e.preventDefault();
+    goto.selectNext();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    goto.selectPrev();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const selected = goto.getSelected();
+    if (selected) {
+      onGotoResultSelect(selected);
+    }
+  }
+}
 
 const codeRef = ref<HTMLElement | null>(null);
 
@@ -75,7 +117,14 @@ function getLanguageLabel(): string {
           <span class="viewer-title">{{ fileName }}</span>
           <span class="viewer-lang">{{ getLanguageLabel() }}</span>
           <span class="viewer-path" :title="filePath">{{ filePath }}</span>
-          <button v-if="!error" class="viewer-btn" :class="{ primary: editing }" @click="editing ? save() : startEdit()">
+          <button
+            v-if="!error"
+            class="viewer-btn"
+            :class="{ primary: editing }"
+            :disabled="content.length > 1_000_000"
+            :title="content.length > 1_000_000 ? '文件过大，不支持编辑' : ''"
+            @click="editing ? save() : startEdit()"
+          >
             {{ editing ? '保存' : '编辑' }}
           </button>
           <span v-if="editing" class="viewer-hint">Esc 取消 · Ctrl+S 保存</span>
@@ -84,7 +133,39 @@ function getLanguageLabel(): string {
         <div class="viewer-body">
           <div v-if="error" class="viewer-error">{{ error }}</div>
           <div v-else-if="editing" class="viewer-editor">
-            <textarea v-model="editContent" class="viewer-textarea" spellcheck="false"></textarea>
+            <CodeEditor
+              ref="codeEditorRef"
+              v-model="editContent"
+              :filePath="filePath"
+              @goto-definition="onGotoDefinition"
+            />
+            <!-- 跳转结果浮层 -->
+            <div v-if="goto.visible.value" class="goto-popover" @keydown="onGotoKeydown">
+              <div class="goto-popover-header">
+                <span class="goto-popover-title">「{{ goto.searchWord.value }}」的定义</span>
+                <button class="goto-popover-close" @click="goto.dismiss()">&times;</button>
+              </div>
+              <div class="goto-popover-body">
+                <template v-if="goto.results.value.length === 0">
+                  <div class="goto-popover-empty">
+                    未找到定义 · <span class="goto-popover-hint">按 Ctrl+Shift+F 搜索所有引用</span>
+                  </div>
+                </template>
+                <template v-else>
+                  <div
+                    v-for="(match, idx) in goto.results.value"
+                    :key="`${match.file}:${match.line}`"
+                    class="goto-popover-item"
+                    :class="{ active: idx === goto.selectedIndex.value }"
+                    @click="onGotoResultSelect(match)"
+                  >
+                    <span class="goto-item-path">{{ match.file }}:{{ match.line }}</span>
+                    <span class="goto-item-tag" :class="'tag-' + match.match_type">{{ match.match_type }}</span>
+                    <span class="goto-item-content">{{ match.content }}</span>
+                  </div>
+                </template>
+              </div>
+            </div>
           </div>
           <div v-else-if="isMarkdown" ref="codeRef" class="viewer-markdown" v-html="renderedMarkdown"></div>
           <pre v-else><code ref="codeRef" class="viewer-code" v-html="highlighted"></code></pre>
@@ -199,6 +280,10 @@ function getLanguageLabel(): string {
 .viewer-btn.primary:hover {
   opacity: 0.9;
 }
+.viewer-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 
 .viewer-hint {
   flex: 1;
@@ -243,6 +328,7 @@ function getLanguageLabel(): string {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
 }
 
 .viewer-code {
@@ -255,6 +341,133 @@ function getLanguageLabel(): string {
   color: var(--text-primary);
   white-space: pre;
   tab-size: 4;
+}
+
+/* ── Goto popover ── */
+
+.goto-popover {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  right: 8px;
+  max-height: 280px;
+  background: var(--surface);
+  border: 1px solid var(--surface-hover);
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  animation: slideUp 0.12s ease;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.goto-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--surface-hover);
+  flex-shrink: 0;
+}
+
+.goto-popover-title {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.goto-popover-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  border-radius: 4px;
+}
+.goto-popover-close:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.goto-popover-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.goto-popover-empty {
+  padding: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.goto-popover-hint {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.goto-popover-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.08s;
+}
+.goto-popover-item:hover,
+.goto-popover-item.active {
+  background: var(--surface-hover);
+}
+
+.goto-item-path {
+  font-size: 11px;
+  color: var(--accent);
+  white-space: nowrap;
+  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}
+
+.goto-item-tag {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+.goto-item-tag.tag-fn,
+.goto-item-tag.tag-function,
+.goto-item-tag.tag-def {
+  background: rgba(166, 227, 161, 0.15);
+  color: var(--accent-green);
+}
+.goto-item-tag.tag-class {
+  background: rgba(137, 180, 250, 0.15);
+  color: var(--accent);
+}
+.goto-item-tag.tag-const {
+  background: rgba(249, 226, 175, 0.15);
+  color: var(--accent-yellow);
+}
+
+.goto-item-content {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;
 }
 </style>
 
