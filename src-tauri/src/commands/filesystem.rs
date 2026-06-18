@@ -168,7 +168,7 @@ pub fn grep_symbol(word: String, cwd: String) -> Result<Vec<GrepMatch>, String> 
     let mut results: Vec<GrepMatch> = Vec::new();
 
     let walker = WalkBuilder::new(&cwd)
-        .hidden(false)
+        .hidden(true)
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)
@@ -179,12 +179,12 @@ pub fn grep_symbol(word: String, cwd: String) -> Result<Vec<GrepMatch>, String> 
         let Ok(entry) = entry else { continue };
         let path = entry.path();
 
-        // Skip directories, hidden files, and huge files
+        // Skip non-files and huge files
         if !path.is_file() {
             continue;
         }
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name.starts_with('.') {
+        if let Ok(meta) = std::fs::metadata(path) {
+            if meta.len() > 1_000_000 {
                 continue;
             }
         }
@@ -207,10 +207,6 @@ pub fn grep_symbol(word: String, cwd: String) -> Result<Vec<GrepMatch>, String> 
         let Ok(content) = std::fs::read_to_string(path) else {
             continue;
         };
-
-        if content.len() > 1_000_000 {
-            continue; // skip files > 1MB
-        }
 
         let rel_path = path
             .strip_prefix(&cwd)
