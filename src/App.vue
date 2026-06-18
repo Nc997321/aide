@@ -273,7 +273,7 @@ onUnmounted(() => {
     />
 
     <!-- Left panel -->
-    <div class="panel-left" :class="{ collapsed: leftCollapsed }" :style="{ width: leftCollapsed ? '8px' : leftWidth + 'px' }">
+    <div class="panel-left" :class="{ collapsed: leftCollapsed }" :style="{ width: leftCollapsed ? '10px' : leftWidth + 'px' }">
       <div
         class="collapse-toggle collapse-toggle-left"
         :title="leftCollapsed ? '展开侧栏' : '收起侧栏'"
@@ -306,7 +306,7 @@ onUnmounted(() => {
     />
 
     <!-- Right panel -->
-    <div class="panel-right" :class="{ collapsed: rightCollapsed }" :style="{ width: rightCollapsed ? '8px' : rightWidth + 'px' }">
+    <div class="panel-right" :class="{ collapsed: rightCollapsed }" :style="{ width: rightCollapsed ? '10px' : rightWidth + 'px' }">
       <div
         class="collapse-toggle collapse-toggle-right"
         :title="rightCollapsed ? '展开侧栏' : '收起侧栏'"
@@ -469,7 +469,7 @@ onUnmounted(() => {
   content: '';
   position: absolute;
   top: 0;
-  width: 8px;
+  width: 10px;
   height: 100%;
   background: var(--surface);
   border-radius: 3px;
@@ -509,7 +509,7 @@ onUnmounted(() => {
 .collapse-arrow {
   position: relative;
   z-index: 1;
-  font-size: 9px;
+  font-size: 10px;
   color: var(--text-muted);
   transition: color 0.15s;
   line-height: 1;
