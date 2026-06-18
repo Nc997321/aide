@@ -7,6 +7,7 @@ const defaults: AppSettings = {
   fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
   notificationsEnabled: true,
   proxy: "",
+  shellPath: "",
 };
 
 // Module-level reactive singleton — shared across TerminalPanel and SettingsModal
@@ -21,6 +22,7 @@ export function useSettings() {
       settings.fontFamily = s.fontFamily ?? defaults.fontFamily;
       settings.notificationsEnabled = s.notificationsEnabled ?? defaults.notificationsEnabled;
       settings.proxy = s.proxy ?? defaults.proxy;
+      settings.shellPath = s.shellPath ?? defaults.shellPath;
     } catch (_) {
       // Keep defaults on error
     }
@@ -33,6 +35,7 @@ export function useSettings() {
     if (partial.fontFamily !== undefined) settings.fontFamily = partial.fontFamily;
     if (partial.notificationsEnabled !== undefined) settings.notificationsEnabled = partial.notificationsEnabled;
     if (partial.proxy !== undefined) settings.proxy = partial.proxy;
+    if (partial.shellPath !== undefined) settings.shellPath = partial.shellPath;
     // Persist asynchronously
     try {
       await api.setSettings(partial);

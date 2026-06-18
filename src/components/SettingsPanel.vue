@@ -21,11 +21,13 @@ const fontSizeLocal = ref(settings.fontSize);
 const fontFamilyLocal = ref(settings.fontFamily);
 const notificationsEnabledLocal = ref(settings.notificationsEnabled);
 const proxyLocal = ref(settings.proxy);
+const shellPathLocal = ref(settings.shellPath);
 
 watch(fontSizeLocal, (v) => { settings.fontSize = v; update({ fontSize: v }); });
 watch(fontFamilyLocal, (v) => { settings.fontFamily = v; update({ fontFamily: v }); });
 watch(notificationsEnabledLocal, (v) => { settings.notificationsEnabled = v; update({ notificationsEnabled: v }); });
 watch(proxyLocal, (v) => { settings.proxy = v; update({ proxy: v }); });
+watch(shellPathLocal, (v) => { settings.shellPath = v; update({ shellPath: v }); });
 
 // ── Customizations (扩展) ──
 
@@ -169,6 +171,16 @@ function onOverlayClick(e: MouseEvent) {
                   class="text-input"
                   placeholder="例如 http://127.0.0.1:7890（Clash）"
                 />
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">工作台终端 Shell</label>
+                <input
+                  v-model="shellPathLocal"
+                  class="text-input"
+                  placeholder="留空自动探测（Windows: PowerShell / Linux: bash）"
+                />
+                <span class="field-hint">填绝对路径覆盖默认，如 C:\Program Files\Git\bin\bash.exe</span>
               </div>
             </div>
 
