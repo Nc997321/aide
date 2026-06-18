@@ -455,7 +455,7 @@ onUnmounted(() => {
   top: 50%;
   transform: translateY(-50%);
   width: 20px;          /* wide invisible hover target */
-  height: 56px;
+  height: clamp(72px, 15%, 180px);
   display: flex;
   align-items: center;
   cursor: pointer;
