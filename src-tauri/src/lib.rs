@@ -72,6 +72,7 @@ pub fn run() {
             commands::filesystem::delete_file,
             commands::filesystem::create_file,
             commands::filesystem::create_dir,
+            commands::filesystem::grep_symbol,
             commands::session::list_sessions,
             commands::session::list_sessions_for_workspace,
             commands::session::create_session,

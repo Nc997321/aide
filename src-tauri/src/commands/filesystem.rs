@@ -3,10 +3,13 @@ use std::path::PathBuf;
 use std::process::Command;
 use tauri::State;
 
+use ignore::WalkBuilder;
+use regex::Regex;
+
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use super::{FileEntry, WorkspaceState, project_root_for_commands, detect_git_branch, ProjectInfo};
+use super::{FileEntry, GrepMatch, WorkspaceState, project_root_for_commands, detect_git_branch, ProjectInfo};
 
 #[tauri::command]
 pub fn get_project_info(
@@ -124,4 +127,153 @@ pub fn create_dir(parent_path: String, name: String) -> Result<(), String> {
         return Err(format!("Already exists: {}", name));
     }
     fs::create_dir_all(&dir_path).map_err(|e| format!("Failed to create directory: {}", e))
+}
+
+// ── grep_symbol: project-wide symbol search for code navigation ──
+
+#[tauri::command]
+pub fn grep_symbol(word: String, cwd: String) -> Result<Vec<GrepMatch>, String> {
+    if word.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let escaped = regex::escape(word.trim());
+    let fn_pat = format!(r"^(pub\s+)?(async\s+)?fn\s+{}", escaped);
+    let func_pat = format!(r"^(export\s+)?(async\s+)?function\s+{}", escaped);
+    let class_pat = format!(r"^(export\s+)?class\s+{}", escaped);
+    let def_pat = format!(r"^def\s+{}", escaped);
+    let const_pat = format!(r"^(export\s+)?const\s+{}", escaped);
+    let patterns: Vec<(&str, &str)> = vec![
+        (&fn_pat, "fn"),
+        (&func_pat, "function"),
+        (&class_pat, "class"),
+        (&def_pat, "def"),
+        (&const_pat, "const"),
+    ];
+
+    // Compile regexes once
+    let compiled: Vec<(Regex, &str)> = patterns
+        .iter()
+        .filter_map(|(pat, mtype)| {
+            Regex::new(pat).ok().map(|re| (re, *mtype))
+        })
+        .collect();
+
+    // Fallback: any line containing the word
+    let fallback = match Regex::new(&escaped) {
+        Ok(re) => re,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let mut results: Vec<GrepMatch> = Vec::new();
+
+    let walker = WalkBuilder::new(&cwd)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .max_depth(Some(20))
+        .build();
+
+    for entry in walker {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+
+        // Skip directories, hidden files, and huge files
+        if !path.is_file() {
+            continue;
+        }
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if name.starts_with('.') {
+                continue;
+            }
+        }
+        // Skip binary-ish extensions
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            let skip = matches!(
+                ext,
+                "png" | "jpg" | "jpeg" | "gif" | "ico" | "svg"
+                    | "woff" | "woff2" | "ttf" | "eot"
+                    | "mp3" | "mp4" | "wav" | "ogg"
+                    | "zip" | "tar" | "gz" | "rar" | "7z"
+                    | "exe" | "dll" | "so" | "dylib"
+                    | "wasm" | "bin" | "dat"
+            );
+            if skip {
+                continue;
+            }
+        }
+
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+
+        if content.len() > 1_000_000 {
+            continue; // skip files > 1MB
+        }
+
+        let rel_path = path
+            .strip_prefix(&cwd)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        // Try definition patterns first
+        for (re, mtype) in &compiled {
+            for (line_num, line_content) in content.lines().enumerate() {
+                if re.is_match(line_content) {
+                    results.push(GrepMatch {
+                        file: rel_path.clone(),
+                        line: (line_num + 1) as u32,
+                        content: line_content.trim().to_string(),
+                        match_type: mtype.to_string(),
+                    });
+                    if results.len() >= 50 {
+                        break;
+                    }
+                }
+            }
+            if results.len() >= 50 {
+                break;
+            }
+        }
+
+        // Fallback: general reference search (only if few definition results)
+        if results.len() < 5 {
+            for (line_num, line_content) in content.lines().enumerate() {
+                if fallback.is_match(line_content) {
+                    // Skip if already matched as a definition
+                    let already = results.iter().any(|r| {
+                        r.file == rel_path && r.line == (line_num + 1) as u32
+                    });
+                    if !already {
+                        results.push(GrepMatch {
+                            file: rel_path.clone(),
+                            line: (line_num + 1) as u32,
+                            content: line_content.trim().to_string(),
+                            match_type: "reference".to_string(),
+                        });
+                        if results.len() >= 50 {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if results.len() >= 50 {
+            break;
+        }
+    }
+
+    // Sort: definitions before references
+    results.sort_by(|a, b| {
+        let a_def = a.match_type != "reference";
+        let b_def = b.match_type != "reference";
+        b_def.cmp(&a_def)
+            .then_with(|| a.file.cmp(&b.file))
+            .then_with(|| a.line.cmp(&b.line))
+    });
+
+    Ok(results)
 }

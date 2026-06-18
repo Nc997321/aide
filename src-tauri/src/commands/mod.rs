@@ -59,6 +59,14 @@ pub struct DiffEntry {
 }
 
 #[derive(Debug, Serialize, Clone)]
+pub struct GrepMatch {
+    pub file: String,
+    pub line: u32,
+    pub content: String,
+    pub match_type: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
 pub struct LastEventInfo {
     pub event_type: Option<String>,
     pub stop_reason: Option<String>,
