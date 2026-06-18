@@ -11,6 +11,14 @@ use once_cell::sync::Lazy;
 /// the frontend can retrieve this to navigate to the session.
 static PENDING_NOTIFICATION: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct Keybindings {
+    #[serde(default = "default_search_open")]
+    pub search_open: String,
+}
+
+fn default_search_open() -> String { "Ctrl+P".to_string() }
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppSettings {
     #[serde(default = "default_font_size")]
@@ -25,6 +33,8 @@ pub struct AppSettings {
     pub shell_path: String,
     #[serde(default)]
     pub workbench_height: u32,
+    #[serde(default)]
+    pub keybindings: Keybindings,
 }
 
 fn default_font_size() -> u32 { 14 }
@@ -42,6 +52,7 @@ impl Default for AppSettings {
             proxy: String::new(),
             shell_path: String::new(),
             workbench_height: 0,
+            keybindings: Keybindings::default(),
         }
     }
 }

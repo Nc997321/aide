@@ -33,8 +33,14 @@ importers:
         specifier: ^0.8.0
         version: 0.8.0(xterm@5.3.0)
     devDependencies:
+      '@esbuild/win32-x64':
+        specifier: 0.25.12
+        version: 0.25.12
       '@tauri-apps/cli':
         specifier: ^2.2.0
+        version: 2.11.2
+      '@tauri-apps/cli-win32-x64-msvc':
+        specifier: 2.11.2
         version: 2.11.2
       '@vitejs/plugin-vue':
         specifier: ^5.2.0
@@ -1080,8 +1086,7 @@ snapshots:
   '@esbuild/win32-ia32@0.25.12':
     optional: true
 
-  '@esbuild/win32-x64@0.25.12':
-    optional: true
+  '@esbuild/win32-x64@0.25.12': {}
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
@@ -1216,8 +1221,7 @@ snapshots:
   '@tauri-apps/cli-win32-ia32-msvc@2.11.2':
     optional: true
 
-  '@tauri-apps/cli-win32-x64-msvc@2.11.2':
-    optional: true
+  '@tauri-apps/cli-win32-x64-msvc@2.11.2': {}
 
   '@tauri-apps/cli@2.11.2':
     optionalDependencies:

@@ -153,8 +153,11 @@ fn apply_window_theme(app: &mut tauri::App) {
         None => return,
     };
 
-    // Enable dark title bar (DWMWA_USE_IMMERSIVE_DARK_MODE under the hood)
+    // Enable dark theme for system dialogs etc.
     let _ = window.set_theme(Some(tauri::Theme::Dark));
+
+    // Enable window shadow for borderless window (decorations: false)
+    let _ = window.set_shadow(true);
 
     // HWND is a newtype struct from the `windows` crate; extract the raw handle
     let hwnd_raw: *mut std::ffi::c_void = match window.hwnd() {

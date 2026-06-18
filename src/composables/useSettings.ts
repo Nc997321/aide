@@ -9,6 +9,9 @@ const defaults: AppSettings = {
   proxy: "",
   shellPath: "",
   workbenchHeight: 0,
+  keybindings: {
+    searchOpen: "Ctrl+P",
+  },
 };
 
 // Module-level reactive singleton — shared across TerminalPanel and SettingsModal
@@ -25,6 +28,7 @@ export function useSettings() {
       settings.proxy = s.proxy ?? defaults.proxy;
       settings.shellPath = s.shellPath ?? defaults.shellPath;
       settings.workbenchHeight = s.workbenchHeight ?? defaults.workbenchHeight;
+      settings.keybindings = s.keybindings ?? defaults.keybindings;
     } catch (_) {
       // Keep defaults on error
     }
@@ -39,6 +43,7 @@ export function useSettings() {
     if (partial.proxy !== undefined) settings.proxy = partial.proxy;
     if (partial.shellPath !== undefined) settings.shellPath = partial.shellPath;
     if (partial.workbenchHeight !== undefined) settings.workbenchHeight = partial.workbenchHeight;
+    if (partial.keybindings !== undefined) settings.keybindings = { ...settings.keybindings, ...partial.keybindings };
     // Persist asynchronously
     try {
       await api.setSettings(partial);

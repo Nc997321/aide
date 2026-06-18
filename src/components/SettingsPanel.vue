@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from "vue";
+import { ref, watch, onMounted, computed } from "vue";
 import { useSettings } from "../composables/useSettings";
 import { useCustomizations } from "../composables/useCustomizations";
 import CustomizationList from "./customizations/CustomizationList.vue";
 import CustomizationDetail from "./customizations/CustomizationDetail.vue";
 import MarketplaceTab from "./marketplace/MarketplaceTab.vue";
+import { formatShortcut, detectConflicts } from "../utils/shortcut";
 
 const emit = defineEmits<{
   close: [];
@@ -22,12 +23,66 @@ const fontFamilyLocal = ref(settings.fontFamily);
 const notificationsEnabledLocal = ref(settings.notificationsEnabled);
 const proxyLocal = ref(settings.proxy);
 const shellPathLocal = ref(settings.shellPath);
+const searchOpenLocal = ref(settings.keybindings.searchOpen);
 
 watch(fontSizeLocal, (v) => { settings.fontSize = v; update({ fontSize: v }); });
 watch(fontFamilyLocal, (v) => { settings.fontFamily = v; update({ fontFamily: v }); });
 watch(notificationsEnabledLocal, (v) => { settings.notificationsEnabled = v; update({ notificationsEnabled: v }); });
 watch(proxyLocal, (v) => { settings.proxy = v; update({ proxy: v }); });
 watch(shellPathLocal, (v) => { settings.shellPath = v; update({ shellPath: v }); });
+
+// ── Keybindings ──
+
+const recordingKey = ref<string | null>(null);
+
+const keybindingDefs: Array<{ key: string; label: string }> = [
+  { key: "searchOpen", label: "打开搜索" },
+];
+
+const keybindingConflicts = computed(() => {
+  const bindings: Record<string, string> = {};
+  for (const def of keybindingDefs) {
+    bindings[def.key] = settings.keybindings[def.key as keyof typeof settings.keybindings] || "";
+  }
+  return detectConflicts(bindings);
+});
+
+function startRecording(key: string) {
+  recordingKey.value = key;
+}
+
+function onRecordKeydown(e: KeyboardEvent) {
+  if (!recordingKey.value) return;
+  e.preventDefault();
+  e.stopPropagation();
+  // Only record when a modifier key is held (to avoid recording plain letters)
+  if (e.ctrlKey || e.metaKey || (e.altKey && e.key !== "Alt")) {
+    const shortcut = formatShortcut(e);
+    const kb = { ...settings.keybindings };
+    (kb as any)[recordingKey.value] = shortcut;
+    settings.keybindings = kb;
+    update({ keybindings: kb });
+    switch (recordingKey.value) {
+      case "searchOpen": searchOpenLocal.value = shortcut; break;
+    }
+  }
+  recordingKey.value = null;
+}
+
+function onRecordBlur() {
+  recordingKey.value = null;
+}
+
+function resetKeybinding(key: string) {
+  const defaults = { searchOpen: "Ctrl+P" };
+  const kb = { ...settings.keybindings };
+  (kb as any)[key] = (defaults as any)[key];
+  settings.keybindings = kb;
+  update({ keybindings: kb });
+  switch (key) {
+    case "searchOpen": searchOpenLocal.value = "Ctrl+P"; break;
+  }
+}
 
 // ── Customizations (扩展) ──
 
@@ -77,6 +132,10 @@ function handleBack() {
 // ── Overlay ──
 
 function onKeydown(e: KeyboardEvent) {
+  if (recordingKey.value) {
+    onRecordKeydown(e);
+    return;
+  }
   if (e.key === "Escape") emit("close");
 }
 
@@ -181,6 +240,60 @@ function onOverlayClick(e: MouseEvent) {
                   placeholder="留空自动探测（Windows: PowerShell / Linux: bash）"
                 />
                 <span class="field-hint">填绝对路径覆盖默认，如 C:\Program Files\Git\bin\bash.exe</span>
+              </div>
+
+              <!-- ── Keybindings ── -->
+              <div class="settings-section">
+                <div class="section-title">快捷键</div>
+
+                <div
+                  v-for="def in keybindingDefs"
+                  :key="def.key"
+                  class="kb-row"
+                >
+                  <span class="kb-label">{{ def.label }}</span>
+                  <div class="kb-control">
+                    <input
+                      class="kb-input"
+                      :class="{ recording: recordingKey === def.key }"
+                      :value="def.key === 'searchOpen' ? searchOpenLocal : ''"
+                      readonly
+                      :placeholder="recordingKey === def.key ? '按下快捷键...' : ''"
+                      @click="startRecording(def.key)"
+                      @blur="onRecordBlur"
+                    />
+                    <button
+                      v-if="recordingKey === def.key"
+                      class="kb-recording-hint"
+                    >
+                      录制中...
+                    </button>
+                    <button
+                      v-else
+                      class="kb-record-btn"
+                      title="录制新快捷键"
+                      @click="startRecording(def.key)"
+                    >
+                      🖱
+                    </button>
+                    <button
+                      class="kb-reset-btn"
+                      title="恢复默认"
+                      @click="resetKeybinding(def.key)"
+                    >
+                      ↺
+                    </button>
+                  </div>
+                </div>
+
+                <div v-if="keybindingConflicts.length > 0" class="kb-conflict-warn">
+                  ⚠ 快捷键冲突：
+                  <span v-for="(pair, i) in keybindingConflicts" :key="i">
+                    {{ keybindingDefs.find(d => d.key === pair[0])?.label }} 与
+                    {{ keybindingDefs.find(d => d.key === pair[1])?.label }}
+                    {{ i < keybindingConflicts.length - 1 ? '、' : '' }}
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -616,5 +729,110 @@ function onOverlayClick(e: MouseEvent) {
 .main-content::-webkit-scrollbar-thumb {
   background: var(--surface-hover);
   border-radius: 2px;
+}
+
+/* ── Keybindings ── */
+
+.settings-section {
+  margin-top: 8px;
+  border-top: 1px solid var(--surface);
+  padding-top: 16px;
+}
+
+.section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px;
+}
+
+.kb-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.kb-label {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.kb-control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.kb-input {
+  width: 100px;
+  background: var(--bg-primary);
+  border: 1px solid var(--surface-hover);
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--text-primary);
+  text-align: center;
+  font-family: "'Cascadia Code', 'Fira Code', monospace";
+  cursor: pointer;
+  transition: border-color 0.15s;
+  outline: none;
+}
+
+.kb-input:hover {
+  border-color: var(--accent);
+}
+
+.kb-input.recording {
+  border-color: var(--accent-green);
+  box-shadow: 0 0 0 1px rgba(166, 227, 161, 0.3);
+  animation: kb-pulse 1s ease-in-out infinite;
+}
+
+@keyframes kb-pulse {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(166, 227, 161, 0.3); }
+  50% { box-shadow: 0 0 0 3px rgba(166, 227, 161, 0.15); }
+}
+
+.kb-recording-hint {
+  background: none;
+  border: none;
+  color: var(--accent-green);
+  font-size: 10px;
+  cursor: default;
+  animation: kb-pulse 1s ease-in-out infinite;
+  font-family: inherit;
+}
+
+.kb-record-btn,
+.kb-reset-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  transition: all 0.12s;
+  font-family: inherit;
+}
+
+.kb-record-btn:hover,
+.kb-reset-btn:hover {
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+.kb-conflict-warn {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(249, 226, 175, 0.1);
+  border: 1px solid rgba(249, 226, 175, 0.25);
+  font-size: 11px;
+  color: var(--accent-yellow);
 }
 </style>

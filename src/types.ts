@@ -48,6 +48,10 @@ export interface ChangeRound {
   files: ChangeFile[];
 }
 
+export interface Keybindings {
+  searchOpen: string;
+}
+
 export interface AppSettings {
   fontSize: number;
   fontFamily: string;
@@ -55,6 +59,7 @@ export interface AppSettings {
   proxy: string;
   shellPath: string;
   workbenchHeight: number;
+  keybindings: Keybindings;
 }
 
 export interface ChangeFile {

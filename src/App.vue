@@ -10,6 +10,7 @@ import SettingsPanel from "./components/SettingsPanel.vue";
 import GitPanel from "./components/GitPanel.vue";
 import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
 import NotificationBanner from "./components/NotificationBanner.vue";
+import TitleBar from "./components/titlebar/TitleBar.vue";
 import { useWorkbenchTerminal } from "./composables/useWorkbenchTerminal";
 import { api } from "./api";
 import { ref, onMounted, onUnmounted, nextTick, watch, computed } from "vue";
@@ -17,6 +18,8 @@ import { useSettings } from "./composables/useSettings";
 import { useWindowFocus } from "./composables/useWindowFocus";
 import { useNotification, pendingSessions, clearPending } from "./composables/useNotification";
 import { useGit } from "./composables/useGit";
+import { useSearchProviders } from "./composables/useSearchProviders";
+import { matchShortcut } from "./utils/shortcut";
 
 const leftWidth = ref(280);
 const rightWidth = ref(300);
@@ -32,6 +35,7 @@ const isDraggingChangeLog = ref(false);
 const sidebarRef = ref<InstanceType<typeof SidebarLeft> | null>(null);
 const fileTreeRef = ref<InstanceType<typeof FileTree> | null>(null);
 const gitPanelRef = ref<InstanceType<typeof GitPanel> | null>(null);
+const titleBarRef = ref<InstanceType<typeof TitleBar> | null>(null);
 const activeSessionId = ref("");
 const settingsVisible = ref(false);
 const workspacePath = ref("");
@@ -191,6 +195,15 @@ async function onSidebarWsChanged(path: string) {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  const kb = settings.keybindings;
+
+  // Search open (configurable, default Ctrl+P) — highest priority
+  if (matchShortcut(e, kb.searchOpen)) {
+    e.preventDefault();
+    titleBarRef.value?.searchBox?.open();
+    return;
+  }
+
   // Ctrl+`: toggle workbench terminal
   if (e.ctrlKey && e.key === "`") {
     e.preventDefault();
@@ -228,6 +241,16 @@ onMounted(async () => {
     const info = await api.getProjectInfo();
     if (info?.root) workspacePath.value = info.root;
   } catch (_) { /* best effort */ }
+
+  // Initialize search providers for the title bar search box
+  const { initProviders: initSearchProviders } = useSearchProviders();
+  initSearchProviders(
+    async () => {
+      try { return await api.listSessions(); } catch { return []; }
+    },
+    (sessionId) => { activeSessionId.value = sessionId; },
+    () => workspacePath.value,
+  );
 });
 
 onUnmounted(() => {
@@ -237,8 +260,11 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="app-layout">
-    <!-- Notification banner for completed sessions -->
+  <div class="app-shell">
+    <TitleBar ref="titleBarRef" />
+
+    <div class="app-layout">
+      <!-- Notification banner for completed sessions -->
     <NotificationBanner
       :sessions="pendingSessionInfos"
       :visible="bannerVisible"
@@ -333,13 +359,22 @@ onUnmounted(() => {
     <SettingsPanel v-if="settingsVisible" @close="settingsVisible = false" />
     <FileViewer />
     <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
+    </div>
   </div>
 </template>
 
 <style scoped>
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+}
+
 .app-layout {
   display: flex;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   width: 100%;
   background-color: var(--bg-primary);
   user-select: none;
