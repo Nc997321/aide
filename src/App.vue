@@ -8,6 +8,9 @@ import ModalDialog from "./components/ModalDialog.vue";
 import FileViewer from "./components/FileViewer.vue";
 import SettingsPanel from "./components/SettingsPanel.vue";
 import GitPanel from "./components/GitPanel.vue";
+import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
+import { useWorkbenchTerminal } from "./composables/useWorkbenchTerminal";
+import { api } from "./api";
 import { ref, onMounted, onUnmounted, nextTick } from "vue";
 import { useSettings } from "./composables/useSettings";
 import { useWindowFocus } from "./composables/useWindowFocus";
@@ -28,6 +31,9 @@ const fileTreeRef = ref<InstanceType<typeof FileTree> | null>(null);
 const gitPanelRef = ref<InstanceType<typeof GitPanel> | null>(null);
 const activeSessionId = ref("");
 const settingsVisible = ref(false);
+const workspacePath = ref("");
+const workbenchHeight = ref(Math.floor(window.innerHeight * 0.45));
+const wb = useWorkbenchTerminal();
 
 function onLeftResizeStart(e: MouseEvent) {
   isDraggingLeft.value = true;
@@ -94,19 +100,32 @@ async function onSessionUpdated(newId?: string) {
   }
 }
 
-async function onFileTreeWsChanged(_path: string) {
+async function onFileTreeWsChanged(path: string) {
+  workspacePath.value = path;
   activeSessionId.value = "";
   await sidebarRef.value?.loadSessions();
   if (rightTab.value === "git") gitPanelRef.value?.reload();
 }
 
-async function onSidebarWsChanged(_path: string) {
+async function onSidebarWsChanged(path: string) {
+  workspacePath.value = path;
   activeSessionId.value = "";
   await fileTreeRef.value?.loadRoot();
   if (rightTab.value === "git") gitPanelRef.value?.reload();
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  // Ctrl+`: toggle workbench terminal
+  if (e.ctrlKey && e.key === "`") {
+    e.preventDefault();
+    wb.toggle(workspacePath.value);
+    return;
+  }
+  // Esc: collapse workbench if visible
+  if (e.key === "Escape" && wb.visible.value) {
+    wb.hide();
+    return;
+  }
   // Ctrl+N: new session
   if (e.ctrlKey && e.key === "n") {
     e.preventDefault();
@@ -127,6 +146,12 @@ onMounted(async () => {
 
   // Initialize notification watcher
   useNotification();
+
+  // Seed workbench cwd from the current project root.
+  try {
+    const info = await api.getProjectInfo();
+    if (info?.root) workspacePath.value = info.root;
+  } catch (_) { /* best effort */ }
 });
 
 onUnmounted(() => {
@@ -204,6 +229,7 @@ onUnmounted(() => {
     <ModalDialog />
     <SettingsPanel v-if="settingsVisible" @close="settingsVisible = false" />
     <FileViewer />
+    <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="(v) => workbenchHeight = v" />
   </div>
 </template>
 
