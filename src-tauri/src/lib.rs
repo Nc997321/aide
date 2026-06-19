@@ -47,7 +47,18 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED
+                        | tauri_plugin_window_state::StateFlags::VISIBLE
+                        | tauri_plugin_window_state::StateFlags::FULLSCREEN,
+                    // Exclude DECORATIONS — let tauri.conf.json be authoritative
+                )
+                .build(),
+        )
         .manage(manager)
         .manage(workspace_state)
         .setup(|app| {
@@ -153,6 +164,10 @@ fn apply_window_theme(app: &mut tauri::App) {
         Some(w) => w,
         None => return,
     };
+
+    // Ensure decorations are off (tauri.conf.json sets this, but
+    // window-state plugin may have restored stale state — belt-and-suspenders)
+    let _ = window.set_decorations(false);
 
     // Enable dark theme for system dialogs etc.
     let _ = window.set_theme(Some(tauri::Theme::Dark));

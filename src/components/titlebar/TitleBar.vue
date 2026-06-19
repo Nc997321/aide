@@ -11,9 +11,7 @@ defineExpose({ searchBox: searchBoxRef });
 <template>
   <div class="titlebar" data-tauri-drag-region>
     <div class="titlebar-logo" data-tauri-drag-region>
-      <svg class="titlebar-logo-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-      </svg>
+      <img class="titlebar-logo-icon" src="/icon.png" alt="Aide" />
       <span class="titlebar-logo-text">Aide</span>
     </div>
 
@@ -44,7 +42,10 @@ defineExpose({ searchBox: searchBoxRef });
 }
 
 .titlebar-logo-icon {
-  color: var(--accent);
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  image-rendering: auto;
 }
 
 .titlebar-logo-text {

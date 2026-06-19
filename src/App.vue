@@ -195,35 +195,43 @@ async function onSidebarWsChanged(path: string) {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  // ── App-level shortcuts (fire regardless of focus, including inside xterm.js) ──
+
+  // Ctrl+`: toggle workbench terminal — checked FIRST, before any potentially-
+  // throwing settings lookups. Use e.code (physical key, layout-independent)
+  // rather than e.key (which Ctrl may alter on some platforms).
+  if (e.ctrlKey && (e.code === "Backquote" || e.key === "`")) {
+    e.preventDefault();
+    e.stopPropagation();
+    wb.toggle(workspacePath.value);
+    return;
+  }
+
   const kb = settings.keybindings;
 
   // Search open (configurable, default Ctrl+P) — highest priority
-  if (matchShortcut(e, kb.searchOpen)) {
+  if (kb?.searchOpen && matchShortcut(e, kb.searchOpen)) {
     e.preventDefault();
+    e.stopPropagation();
     titleBarRef.value?.searchBox?.open();
     return;
   }
 
-  // Ctrl+`: toggle workbench terminal
-  if (e.ctrlKey && e.key === "`") {
-    e.preventDefault();
-    wb.toggle(workspacePath.value);
-    return;
-  }
   // Esc: collapse workbench if visible (but don't steal from other overlays)
   if (e.key === "Escape" && wb.visible.value && !settingsVisible.value) {
     wb.hide();
     return;
   }
   // Ctrl+N: new session
-  if (e.ctrlKey && e.key === "n") {
+  if (e.ctrlKey && (e.code === "KeyN" || e.key === "n")) {
     e.preventDefault();
+    e.stopPropagation();
     sidebarRef.value?.newSession();
   }
 }
 
 onMounted(async () => {
-  window.addEventListener("keydown", handleKeydown);
+  window.addEventListener("keydown", handleKeydown, { capture: true });
 
   // Load persisted settings
   const { load: loadSettings } = useSettings();
@@ -254,7 +262,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  window.removeEventListener("keydown", handleKeydown);
+  window.removeEventListener("keydown", handleKeydown, { capture: true });
   wb.dispose();
 });
 </script>
