@@ -57,9 +57,9 @@ export function useSessionMonitor(
       try {
         const info = await api.sessionLastEvent(displayId);
 
-        // Last event is user → Claude is still processing, keep running
-        if (info.event_type === "user") return;
-
+        // When the last event is user, Claude is still processing — but don't
+        // return early.  Commands like /compact and /clear don't produce an
+        // end_turn event; we must fall through to the terminal-prompt check.
         if (info.event_type === "assistant" && info.stop_reason === "end_turn") {
           const entered = lastEnterMs.get(displayId) || 0;
           const eventMs = info.timestamp ? new Date(info.timestamp).getTime() : 0;
