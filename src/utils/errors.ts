@@ -10,11 +10,7 @@ export interface GitError {
 
 export interface ErrorAction {
   label: string;
-  /** "retry" = run the same operation again;
-   *  "retry-with-proxy" = re-run with proxy applied;
-   *  "go-proxy-settings" = navigate to proxy config;
-   *  "go-marketplace-settings" = navigate to marketplace source config. */
-  kind: "retry" | "go-proxy-settings" | "go-marketplace-settings";
+  kind: "retry" | "go-proxy-settings" | "go-marketplace-settings" | "force-push" | "pull-first";
 }
 
 const ERROR_MAP: Record<string, { message: string; actions: ErrorAction["kind"][] }> = {
@@ -30,6 +26,19 @@ const ERROR_MAP: Record<string, { message: string; actions: ErrorAction["kind"][
   REPO_NOT_FOUND: {
     message: "仓库不存在或已被移除。",
     actions: ["retry", "go-marketplace-settings"],
+  },
+  // Push-specific errors
+  REJECTED: {
+    message: "推送被拒绝，本地分支落后于远程。请先拉取远程更新，或强制推送覆盖。",
+    actions: ["pull-first", "force-push"],
+  },
+  NO_UPSTREAM: {
+    message: "当前分支没有设置上游远程分支。",
+    actions: ["retry"],
+  },
+  PUSH_FAILED: {
+    message: "推送失败。",
+    actions: ["retry", "force-push"],
   },
 };
 
@@ -64,5 +73,7 @@ function actionLabel(kind: ErrorAction["kind"]): string {
     case "retry": return "重试";
     case "go-proxy-settings": return "配置代理";
     case "go-marketplace-settings": return "切换市场源";
+    case "force-push": return "强制推送";
+    case "pull-first": return "先拉取";
   }
 }

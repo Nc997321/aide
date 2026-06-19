@@ -657,3 +657,57 @@ pub async fn git_unpushed_commits(
     info!(count = hashes.len(), "git_unpushed_commits ok");
     Ok(hashes)
 }
+
+#[tauri::command]
+pub async fn git_push(
+    workspace_state: State<'_, WorkspaceState>,
+    force: Option<bool>,
+) -> Result<(), String> {
+    let root = project_root_for_commands(&workspace_state);
+    info!(root = %root.display(), "git_push");
+    if !root.join(".git").exists() {
+        return Err("Not a git repository".into());
+    }
+
+    let branch = detect_git_branch(&root);
+    if branch.is_empty() {
+        return Err("Could not detect current branch".into());
+    }
+
+    // Detect the default remote (origin or first available)
+    let remote = match git_run_async(vec!["remote".into()], root.clone()).await {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            stdout.lines().next().map(|s| s.to_string()).unwrap_or_else(|| "origin".into())
+        }
+        _ => "origin".into(),
+    };
+
+    let mut args = vec!["push".into(), "-u".into(), remote.clone(), branch.clone()];
+    if force.unwrap_or(false) {
+        args.insert(1, "--force-with-lease".into());
+    }
+
+    info!(%remote, %branch, ?force, "git_push");
+    let output = git_run_async(args, root)
+    .await
+    .map_err(|e| format!("Failed to run git push: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let msg = stderr.trim();
+        let code = if msg.contains("non-fast-forward") || msg.contains("rejected") {
+            "REJECTED"
+        } else if msg.contains("no upstream") {
+            "NO_UPSTREAM"
+        } else if msg.contains("Could not resolve host") || msg.contains("Could not connect") {
+            "NETWORK_FAILURE"
+        } else {
+            "PUSH_FAILED"
+        };
+        return Err(format!("{}: {}", code, msg));
+    }
+
+    info!("git_push ok");
+    Ok(())
+}

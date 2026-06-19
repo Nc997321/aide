@@ -14,6 +14,8 @@ const expandedCommit = ref<string | null>(null);
 const commitDetail = ref<CommitDetail | null>(null);
 const detailLoading = ref(false);
 const viewingDiff = ref<{ path: string; content: string; loading: boolean } | null>(null);
+const pushing = ref(false);
+const pushError = ref("");
 
 // ── Computed ──
 
@@ -143,6 +145,28 @@ async function doRevertFile(path: string) {
     await loadStatus();
 }
 
+async function doPush(force?: boolean): Promise<void> {
+    pushing.value = true;
+    pushError.value = "";
+    try {
+        await invoke("git_push", { force: force ?? false });
+        await refreshAfterAction();
+    } catch (e) {
+        pushError.value = typeof e === "string" ? e : (e as Error).message || "Push failed";
+        throw e;
+    } finally {
+        pushing.value = false;
+    }
+}
+
+async function doForcePush(): Promise<void> {
+    return doPush(true);
+}
+
+function clearPushError() {
+    pushError.value = "";
+}
+
 // ── Export ──
 
 export function useGit() {
@@ -177,5 +201,10 @@ export function useGit() {
         doStageAll,
         doCommit,
         doRevertFile,
+        doPush,
+        doForcePush,
+        pushing,
+        pushError,
+        clearPushError,
     };
 }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from "vue";
+import { ref, onMounted, watch, computed } from "vue";
 import { useGit } from "../composables/useGit";
+import { parseGitError } from "../utils/errors";
 
 const {
   commits,
@@ -10,6 +11,7 @@ const {
   stagedFiles,
   unpushedHashes,
   hasUnpushed,
+  unpushedCount,
   loading,
   expandedCommit,
   commitDetail,
@@ -25,6 +27,11 @@ const {
   doStageAll,
   doCommit,
   doRevertFile,
+  doPush,
+  doForcePush,
+  pushing,
+  pushError,
+  clearPushError,
 } = useGit();
 
 const branchDropdownOpen = ref(false);
@@ -79,6 +86,33 @@ async function onCommit() {
     commitError.value = typeof e === "string" ? e : (e as Error).message || "提交失败";
   } finally {
     committing.value = false;
+  }
+}
+
+const parsedPushError = computed(() => {
+  return pushError.value ? parseGitError(pushError.value) : null;
+});
+
+async function onPush() {
+  clearPushError();
+  try {
+    await doPush();
+  } catch (_) {
+    // error stored in pushError ref by doPush
+  }
+}
+
+async function onErrorAction(kind: string) {
+  if (kind === "force-push") {
+    clearPushError();
+    try {
+      await doForcePush();
+    } catch (_) {}
+  } else if (kind === "pull-first") {
+    clearPushError();
+    // User should pull from terminal
+  } else if (kind === "retry") {
+    await onPush();
   }
 }
 
@@ -158,8 +192,31 @@ defineExpose({ reload: loadAll });
       <button class="section-header section-header-commits" @click="commitsExpanded = !commitsExpanded">
         <span class="section-arrow" :class="{ open: commitsExpanded }">▸</span>
         <span class="section-title">Commits</span>
+        <span v-if="hasUnpushed" class="section-badge push-count-badge">{{ unpushedCount }}</span>
         <span v-if="commits.length > 0" class="section-badge commits-badge">{{ commits.length }}</span>
+        <span
+          v-if="hasUnpushed"
+          class="section-header-action push-action"
+          :class="{ pushing }"
+          @click.stop="onPush"
+        >
+          {{ pushing ? "Pushing..." : "Push ↑" }}
+        </span>
       </button>
+      <div v-if="parsedPushError" class="push-error">
+        <span class="push-error-text">{{ parsedPushError.message }}</span>
+        <span class="push-error-actions">
+          <button
+            v-for="action in parsedPushError.actions"
+            :key="action.kind"
+            class="push-error-action-btn"
+            @click="onErrorAction(action.kind)"
+          >
+            {{ action.label }}
+          </button>
+        </span>
+        <button class="push-error-close" @click="clearPushError">✕</button>
+      </div>
       <div v-show="commitsExpanded" class="section-body">
         <div v-if="loading" class="section-empty">Loading...</div>
         <div v-else-if="commits.length === 0" class="section-empty">No commits yet</div>
@@ -282,6 +339,28 @@ defineExpose({ reload: loadAll });
 }
 .section-header-action:hover { color: #a6e3a1; background: rgba(166,227,161,0.12); }
 
+.push-action:hover { color: #fab387; background: rgba(250,179,135,0.12); }
+.push-action.pushing { opacity: 0.5; pointer-events: none; }
+
+.push-error {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 6px 10px; font-size: 11px; color: var(--accent-red);
+  background: rgba(243,139,168,0.08); border-bottom: 1px solid var(--surface);
+}
+.push-error-text { flex: 1; white-space: pre-wrap; word-break: break-all; }
+.push-error-close {
+  flex-shrink: 0; background: none; border: none; color: var(--text-muted);
+  cursor: pointer; font-size: 11px; padding: 1px 4px; border-radius: 3px; font-family: inherit;
+}
+.push-error-close:hover { background: rgba(243,139,168,0.15); color: var(--accent-red); }
+.push-error-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.push-error-action-btn {
+  background: rgba(137,180,250,0.12); border: none; color: var(--accent);
+  padding: 3px 10px; border-radius: 4px; font-size: 11px; cursor: pointer;
+  font-family: inherit; white-space: nowrap; transition: background 0.12s;
+}
+.push-error-action-btn:hover { background: rgba(137,180,250,0.25); }
+
 .section-arrow { font-size: 14px; transition: transform 0.15s; width: 16px; text-align: center; }
 .section-arrow.open { transform: rotate(90deg); }
 
@@ -293,6 +372,7 @@ defineExpose({ reload: loadAll });
 .unstaged-badge { background: rgba(249,226,175,0.15); color: #f9e2af; }
 .commits-badge { background: rgba(137,180,250,0.15); color: var(--accent); }
 .section-badge { background: var(--surface); color: var(--text-muted); font-size: 10px; padding: 1px 6px; border-radius: 8px; }
+.push-count-badge { background: rgba(250,179,135,0.15); color: #fab387; }
 
 .staged-row:hover { background: rgba(166,227,161,0.06); }
 .staged-path { color: var(--text-primary); }
