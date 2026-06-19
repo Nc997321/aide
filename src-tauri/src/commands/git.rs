@@ -7,7 +7,7 @@ use tracing::{info, error};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use super::{DiffEntry, WorkspaceState, project_root_for_commands};
+use super::{DiffEntry, WorkspaceState, project_root_for_commands, detect_git_branch};
 
 // ── Git-specific types ──
 
@@ -603,4 +603,57 @@ pub async fn git_commit(
             .map_err(|e| format!("Failed to get commit hash: {}", e))?;
         Ok(String::from_utf8_lossy(&hash_out.stdout).trim().to_string())
     }).await
+}
+
+#[tauri::command]
+pub async fn git_unpushed_commits(
+    workspace_state: State<'_, WorkspaceState>,
+) -> Result<Vec<String>, String> {
+    let root = project_root_for_commands(&workspace_state);
+    info!(root = %root.display(), "git_unpushed_commits");
+    if !root.join(".git").exists() {
+        return Ok(Vec::new());
+    }
+
+    // Determine current branch
+    let branch = detect_git_branch(&root);
+    if branch.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // git log origin/<branch>..HEAD — commits in local but not on remote
+    let range = format!("origin/{}..HEAD", branch);
+    let output = match git_run_async(
+        vec!["log".into(), "--format=%H".into(), range],
+        root.clone(),
+    )
+    .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            // No upstream configured — all commits are unpushed
+            info!("git_unpushed_commits (no upstream): {}", e);
+            return Ok(Vec::new());
+        }
+    };
+
+    if !output.status.success() {
+        // origin/<branch> doesn't exist yet → all commits are unpushed
+        // `git log` with a non-existent ref exits non-zero; fall back to just HEAD
+        let fallback = git_run_async(
+            vec!["log".into(), "--format=%H".into()],
+            root.clone(),
+        )
+        .await
+        .map_err(|e| format!("Failed to run git log: {}", e))?;
+        let stdout = String::from_utf8_lossy(&fallback.stdout);
+        let hashes: Vec<String> = stdout.lines().map(|s| s.to_string()).filter(|s| !s.is_empty()).collect();
+        info!(count = hashes.len(), "git_unpushed_commits (all unpushed)");
+        return Ok(hashes);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let hashes: Vec<String> = stdout.lines().map(|s| s.to_string()).filter(|s| !s.is_empty()).collect();
+    info!(count = hashes.len(), "git_unpushed_commits ok");
+    Ok(hashes)
 }

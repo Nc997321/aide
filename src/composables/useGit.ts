@@ -8,6 +8,7 @@ const commits = ref<CommitEntry[]>([]);
 const branches = ref<BranchInfo[]>([]);
 const currentBranch = ref("");
 const statusEntries = ref<GitStatusEntry[]>([]);
+const unpushedHashes = ref<Set<string>>(new Set());
 const loading = ref(false);
 const expandedCommit = ref<string | null>(null);
 const commitDetail = ref<CommitDetail | null>(null);
@@ -25,6 +26,8 @@ const stagedFiles = computed(() =>
 );
 
 const hasChanges = computed(() => statusEntries.value.length > 0);
+const hasUnpushed = computed(() => unpushedHashes.value.size > 0);
+const unpushedCount = computed(() => unpushedHashes.value.size);
 
 // ── Actions ──
 
@@ -60,12 +63,22 @@ async function loadStatus() {
     }
 }
 
+async function loadUnpushed() {
+    try {
+        const hashes: string[] = await invoke("git_unpushed_commits");
+        unpushedHashes.value = new Set(hashes);
+    } catch (e) {
+        console.error("[useGit] loadUnpushed failed:", e);
+        unpushedHashes.value = new Set();
+    }
+}
+
 async function loadAll() {
-    await Promise.all([loadBranches(), loadCommits(), loadStatus()]);
+    await Promise.all([loadBranches(), loadCommits(), loadStatus(), loadUnpushed()]);
 }
 
 async function refreshAfterAction() {
-    await Promise.all([loadCommits(), loadStatus()]);
+    await Promise.all([loadCommits(), loadStatus(), loadUnpushed()]);
 }
 
 async function toggleCommit(hash: string) {
@@ -141,6 +154,9 @@ export function useGit() {
         unstagedFiles,
         stagedFiles,
         hasChanges,
+        unpushedHashes,
+        hasUnpushed,
+        unpushedCount,
         loading,
         expandedCommit,
         commitDetail,
@@ -150,6 +166,7 @@ export function useGit() {
         loadCommits,
         loadStatus,
         loadBranches,
+        loadUnpushed,
         refreshAfterAction,
         toggleCommit,
         viewDiff,

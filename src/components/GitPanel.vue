@@ -8,6 +8,8 @@ const {
   currentBranch,
   unstagedFiles,
   stagedFiles,
+  unpushedHashes,
+  hasUnpushed,
   loading,
   expandedCommit,
   commitDetail,
@@ -49,7 +51,7 @@ onMounted(() => { loadAll(); });
 
 // 工作区无变更时自动折叠 Changes，有变更时自动展开
 watch(
-  () => stagedFiles.length + unstagedFiles.length,
+  () => stagedFiles.value.length + unstagedFiles.value.length,
   (total) => { changesExpanded.value = total > 0; }
 );
 
@@ -78,6 +80,10 @@ async function onCommit() {
   } finally {
     committing.value = false;
   }
+}
+
+function isUnpushed(hash: string): boolean {
+  return unpushedHashes.value.has(hash);
 }
 
 defineExpose({ reload: loadAll });
@@ -158,30 +164,38 @@ defineExpose({ reload: loadAll });
         <div v-if="loading" class="section-empty">Loading...</div>
         <div v-else-if="commits.length === 0" class="section-empty">No commits yet</div>
         <template v-else>
-          <div v-for="commit in commits" :key="commit.hash" class="commit-item" :class="{ expanded: expandedCommit === commit.hash }">
-            <div class="commit-header" @click="toggleCommit(commit.hash)">
-              <span class="commit-dot">●</span>
-              <div class="commit-info">
-                <span class="commit-message">{{ commit.message }}</span>
-                <span class="commit-meta">{{ commit.author }} · {{ commit.date }}</span>
+          <template v-for="(commit, index) in commits" :key="commit.hash">
+            <div
+              v-if="hasUnpushed && index > 0 && isUnpushed(commits[index - 1].hash) && !isUnpushed(commit.hash)"
+              class="unpushed-divider"
+            >
+              <span class="unpushed-divider-label">已推送 ↓</span>
+            </div>
+            <div class="commit-item" :class="{ expanded: expandedCommit === commit.hash }">
+              <div class="commit-header" @click="toggleCommit(commit.hash)">
+                <span class="commit-dot" :class="{ unpushed: isUnpushed(commit.hash) }">●</span>
+                <div class="commit-info">
+                  <span class="commit-message">{{ commit.message }}</span>
+                  <span class="commit-meta">{{ commit.author }} · {{ commit.date }}</span>
+                </div>
+              </div>
+              <div v-if="expandedCommit === commit.hash" class="commit-detail">
+                <div v-if="detailLoading" class="detail-loading">Loading...</div>
+                <template v-else-if="commitDetail">
+                  <div v-if="commitDetail.body" class="commit-body">{{ commitDetail.body }}</div>
+                  <div v-for="f in commitDetail.files" :key="f.path" class="git-file-row" @click="onFileClick(f.path, undefined, commitDetail.hash)">
+                    <span class="git-file-status" :class="'status-' + (f.status === 'R' ? 'M' : f.status)">{{ f.status }}</span>
+                    <span class="git-file-path" :title="f.path">{{ f.path }}</span>
+                    <span class="git-file-stats">
+                      <span v-if="f.additions > 0" class="stat-add">+{{ f.additions }}</span>
+                      <span v-if="f.additions > 0 && f.deletions > 0" class="stat-sep"> </span>
+                      <span v-if="f.deletions > 0" class="stat-del">-{{ f.deletions }}</span>
+                    </span>
+                  </div>
+                </template>
               </div>
             </div>
-            <div v-if="expandedCommit === commit.hash" class="commit-detail">
-              <div v-if="detailLoading" class="detail-loading">Loading...</div>
-              <template v-else-if="commitDetail">
-                <div v-if="commitDetail.body" class="commit-body">{{ commitDetail.body }}</div>
-                <div v-for="f in commitDetail.files" :key="f.path" class="git-file-row" @click="onFileClick(f.path, undefined, commitDetail.hash)">
-                  <span class="git-file-status" :class="'status-' + (f.status === 'R' ? 'M' : f.status)">{{ f.status }}</span>
-                  <span class="git-file-path" :title="f.path">{{ f.path }}</span>
-                  <span class="git-file-stats">
-                    <span v-if="f.additions > 0" class="stat-add">+{{ f.additions }}</span>
-                    <span v-if="f.additions > 0 && f.deletions > 0" class="stat-sep"> </span>
-                    <span v-if="f.deletions > 0" class="stat-del">-{{ f.deletions }}</span>
-                  </span>
-                </div>
-              </template>
-            </div>
-          </div>
+          </template>
         </template>
       </div>
     </div>
@@ -328,6 +342,18 @@ defineExpose({ reload: loadAll });
 .commit-header { display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px; cursor: pointer; transition: background 0.1s; }
 .commit-header:hover { background: var(--surface); }
 .commit-dot { font-size: 12px; color: var(--accent); margin-top: 1px; flex-shrink: 0; }
+.commit-dot.unpushed { color: #fab387; }
+
+.unpushed-divider {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 10px; font-size: 10px; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.3px;
+}
+.unpushed-divider::before,
+.unpushed-divider::after {
+  content: ""; flex: 1; height: 1px;
+  background: var(--surface-hover);
+}
 .commit-info { flex: 1; min-width: 0; }
 .commit-message { display: block; font-size: 12px; color: var(--text-primary); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .commit-meta { display: block; font-size: 10px; color: var(--text-muted); margin-top: 1px; }
