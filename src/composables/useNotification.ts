@@ -48,13 +48,19 @@ export function useNotification() {
     }
   }
 
-  async function fireNotification(id: string) {
+  async function fireNotification(id: string, status: SessionStatus) {
     const [title, body] = await Promise.all([getProjectName(), getSessionName(id)]);
-    // Track this session as pending (completed while unfocused)
-    pendingSessions.add(id);
-    try {
-      api.notifySend(title, `${body} 已回复`, id);
-    } catch (_) { /* notification not available */ }
+    if (status === "attention") {
+      pendingSessions.add(id);
+      try {
+        api.notifySend(title, `${body} 需要确认`, id);
+      } catch (_) { /* notification not available */ }
+    } else {
+      pendingSessions.add(id);
+      try {
+        api.notifySend(title, `${body} 已回复`, id);
+      } catch (_) { /* notification not available */ }
+    }
   }
 
   watch(
@@ -77,11 +83,13 @@ export function useNotification() {
       // Step 3: guards
       if (!loaded.value || !settings.notificationsEnabled || isFocused.value) return;
 
-      // Step 4: fire for running/attention → waiting transitions
+      // Step 4: fire for running→attention (needs confirmation) and →waiting (replied)
       for (const { id, prev } of transitions) {
         const current = newStates[id];
-        if (current === "waiting" && (prev === "running" || prev === "attention")) {
-          fireNotification(id);
+        if (current === "attention" && prev === "running") {
+          fireNotification(id, "attention");
+        } else if (current === "waiting" && (prev === "running" || prev === "attention")) {
+          fireNotification(id, "waiting");
         }
       }
     },

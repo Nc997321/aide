@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, watch } from "vue";
 import { useGit } from "../composables/useGit";
 
 const {
@@ -46,6 +46,12 @@ function diffLines(content: string): { type: string; text: string }[] {
 }
 
 onMounted(() => { loadAll(); });
+
+// 工作区无变更时自动折叠 Changes，有变更时自动展开
+watch(
+  () => stagedFiles.length + unstagedFiles.length,
+  (total) => { changesExpanded.value = total > 0; }
+);
 
 function onBranchSelect(name: string) {
   branchDropdownOpen.value = false;
@@ -99,7 +105,7 @@ defineExpose({ reload: loadAll });
     <!-- Staged -->
     <div v-if="stagedFiles.length > 0" class="git-section">
       <button class="section-header section-header-staged" @click="changesExpanded = !changesExpanded">
-        <span class="section-arrow" :class="{ open: changesExpanded }">▾</span>
+        <span class="section-arrow" :class="{ open: changesExpanded }">▸</span>
         <span class="section-title">Staged</span>
         <span class="section-badge staged-badge">{{ stagedFiles.length }}</span>
       </button>
@@ -124,7 +130,7 @@ defineExpose({ reload: loadAll });
     <!-- Unstaged -->
     <div class="git-section">
       <button class="section-header section-header-unstaged" @click="changesExpanded = !changesExpanded">
-        <span class="section-arrow" :class="{ open: changesExpanded }">▾</span>
+        <span class="section-arrow" :class="{ open: changesExpanded }">▸</span>
         <span class="section-title">Changes</span>
         <span v-if="unstagedFiles.length > 0" class="section-badge unstaged-badge">{{ unstagedFiles.length }}</span>
         <span v-if="unstagedFiles.length > 0" class="section-header-action" title="暂存全部" @click.stop="doStageAll()">Stage All</span>
@@ -144,7 +150,7 @@ defineExpose({ reload: loadAll });
     <!-- Commits -->
     <div class="git-section commits-section">
       <button class="section-header section-header-commits" @click="commitsExpanded = !commitsExpanded">
-        <span class="section-arrow" :class="{ open: commitsExpanded }">▾</span>
+        <span class="section-arrow" :class="{ open: commitsExpanded }">▸</span>
         <span class="section-title">Commits</span>
         <span v-if="commits.length > 0" class="section-badge commits-badge">{{ commits.length }}</span>
       </button>

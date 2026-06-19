@@ -46,6 +46,10 @@ async function loadPreviewContent(sid: string) {
   }
   try {
     previewMessages.value = await api.loadMessages(sid);
+    await nextTick();
+    if (previewRef.value) {
+      previewRef.value.scrollTop = previewRef.value.scrollHeight;
+    }
   } catch (_) {
     previewMessages.value = [];
   }
