@@ -207,10 +207,10 @@ function handleKeydown(e: KeyboardEvent) {
     return;
   }
 
-  const kb = settings.keybindings;
+  const searchShortcut = settings.keybindings?.searchOpen || "Ctrl+P";
 
   // Search open (configurable, default Ctrl+P) — highest priority
-  if (kb?.searchOpen && matchShortcut(e, kb.searchOpen)) {
+  if (matchShortcut(e, searchShortcut)) {
     e.preventDefault();
     e.stopPropagation();
     titleBarRef.value?.searchBox?.open();

@@ -11,10 +11,18 @@ use once_cell::sync::Lazy;
 /// the frontend can retrieve this to navigate to the session.
 static PENDING_NOTIFICATION: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Keybindings {
     #[serde(default = "default_search_open")]
     pub search_open: String,
+}
+
+impl Default for Keybindings {
+    fn default() -> Self {
+        Self {
+            search_open: default_search_open(),
+        }
+    }
 }
 
 fn default_search_open() -> String { "Ctrl+P".to_string() }
