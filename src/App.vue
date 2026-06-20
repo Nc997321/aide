@@ -345,7 +345,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Files tab: FileTree + ChangeLog -->
-      <template v-if="rightTab === 'files'">
+      <div v-show="rightTab === 'files'">
         <FileTree ref="fileTreeRef" :session-id="activeSessionId" @workspace-changed="onFileTreeWsChanged" />
         <div
           v-show="!changeLogCollapsed"
@@ -354,11 +354,11 @@ onUnmounted(() => {
           @mousedown="onChangeLogResizeStart"
         />
         <ChangeLogPanel :session-id="activeSessionId" :style="{ height: changeLogCollapsed ? 'auto' : changeLogHeight + 'px' }" @collapse-changed="(v) => changeLogCollapsed = v" />
-      </template>
+      </div>
 
-      <template v-else>
+      <div v-show="rightTab === 'git'">
         <GitPanel ref="gitPanelRef" />
-      </template>
+      </div>
       </div> <!-- .panel-right-inner -->
     </div>
 
