@@ -23,7 +23,7 @@ import { matchShortcut } from "./utils/shortcut";
 
 const leftWidth = ref(280);
 const rightWidth = ref(300);
-const changeLogHeight = ref(220);
+const changeLogHeight = ref(300);
 const changeLogCollapsed = ref(false);
 const leftCollapsed = ref(false);
 const rightCollapsed = ref(false);
@@ -39,6 +39,7 @@ const titleBarRef = ref<InstanceType<typeof TitleBar> | null>(null);
 const activeSessionId = ref("");
 const settingsVisible = ref(false);
 const workspacePath = ref("");
+const projectName = ref("");
 const { settings, update: updateSettings } = useSettings();
 const workbenchHeight = ref(settings.workbenchHeight || Math.floor(window.innerHeight * 0.45));
 const wb = useWorkbenchTerminal();
@@ -152,7 +153,7 @@ function onChangeLogResizeStart(e: MouseEvent) {
   const startY = e.clientY;
   const startHeight = changeLogHeight.value;
   const onMove = (ev: MouseEvent) => {
-    changeLogHeight.value = Math.max(100, Math.min(500, startHeight - ev.clientY + startY));
+    changeLogHeight.value = Math.max(100, Math.min(600, startHeight + ev.clientY - startY));
   };
   const onUp = () => {
     isDraggingChangeLog.value = false;
@@ -180,15 +181,9 @@ async function onSessionUpdated(newId?: string) {
   }
 }
 
-async function onFileTreeWsChanged(path: string) {
-  workspacePath.value = path;
-  activeSessionId.value = "";
-  await sidebarRef.value?.loadSessions();
-  if (rightTab.value === "git") gitPanelRef.value?.reload();
-}
-
 async function onSidebarWsChanged(path: string) {
   workspacePath.value = path;
+  projectName.value = path.split(/[\\/]/).filter(Boolean).pop() || path;
   activeSessionId.value = "";
   await fileTreeRef.value?.loadRoot();
   if (rightTab.value === "git") gitPanelRef.value?.reload();
@@ -247,7 +242,7 @@ onMounted(async () => {
   // Seed workbench cwd from the current project root.
   try {
     const info = await api.getProjectInfo();
-    if (info?.root) workspacePath.value = info.root;
+    if (info?.root) { workspacePath.value = info.root; projectName.value = info.name; }
   } catch (_) { /* best effort */ }
 
   // Initialize search providers for the title bar search box
@@ -331,7 +326,7 @@ onUnmounted(() => {
           @click="rightTab = 'files'"
         >
           <span class="right-tab-icon">📁</span>
-          <span class="right-tab-label">文件</span>
+          <span class="right-tab-label">{{ projectName || "项目" }}</span>
         </button>
         <button
           class="right-tab"
@@ -345,8 +340,8 @@ onUnmounted(() => {
       </div>
 
       <!-- Files tab: FileTree + ChangeLog -->
-      <div v-show="rightTab === 'files'">
-        <FileTree ref="fileTreeRef" :session-id="activeSessionId" @workspace-changed="onFileTreeWsChanged" />
+      <div v-show="rightTab === 'files'" class="tab-content">
+        <FileTree ref="fileTreeRef" :session-id="activeSessionId" />
         <div
           v-show="!changeLogCollapsed"
           class="resize-handle-h"
@@ -356,7 +351,7 @@ onUnmounted(() => {
         <ChangeLogPanel :session-id="activeSessionId" :style="{ height: changeLogCollapsed ? 'auto' : changeLogHeight + 'px' }" @collapse-changed="(v) => changeLogCollapsed = v" />
       </div>
 
-      <div v-show="rightTab === 'git'">
+      <div v-show="rightTab === 'git'" class="tab-content">
         <GitPanel ref="gitPanelRef" />
       </div>
       </div> <!-- .panel-right-inner -->
@@ -452,6 +447,13 @@ onUnmounted(() => {
 /* ── Collapse toggles (hover-reveal centered strip) ── */
 
 .panel-right-inner {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.tab-content {
   display: flex;
   flex-direction: column;
   flex: 1;

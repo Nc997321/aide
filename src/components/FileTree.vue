@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from "vue";
+import { ref, watch, onMounted } from "vue";
 import TreeNodeItem from "./TreeNodeItem.vue";
 import { useContextMenu } from "../composables/useContextMenu";
 import { useFileViewer } from "../composables/useFileViewer";
 import { useSessionState } from "../composables/useSessionState";
 import { fileTreeAreaMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
-import type { FileEntry, WorkspaceInfo } from "../types";
+import type { FileEntry } from "../types";
 
 const props = defineProps<{ sessionId: string }>();
 
@@ -16,13 +16,7 @@ const loading = ref(true);
 const errorMsg = ref("");
 const expandedDirs = ref<Set<string>>(new Set());
 const selectedPath = ref<string>("");
-const workspaces = ref<WorkspaceInfo[]>([]);
-const showWsDropdown = ref(false);
 const showHidden = ref(false);
-
-const emit = defineEmits<{
-  "workspace-changed": [path: string];
-}>();
 
 async function toggleDir(path: string) {
   if (expandedDirs.value.has(path)) {
@@ -124,36 +118,6 @@ async function loadRoot() {
   loading.value = false;
 }
 
-async function loadWorkspaces() {
-  try {
-    workspaces.value = await api.listWorkspaces();
-  } catch (_e) {
-    workspaces.value = [];
-  }
-}
-
-async function selectWorkspace(ws: WorkspaceInfo) {
-  showWsDropdown.value = false;
-  if (ws.name === projectInfo.value.root) return;
-  try {
-    await api.setWorkspace(ws.key, ws.name);
-  } catch (_e) { return; }
-  emit("workspace-changed", ws.name);
-  await loadRoot();
-}
-
-function toggleWsDropdown(e: MouseEvent) {
-  e.stopPropagation();
-  showWsDropdown.value = !showWsDropdown.value;
-  if (showWsDropdown.value) {
-    loadWorkspaces();
-  }
-}
-
-function closeWsDropdown() {
-  showWsDropdown.value = false;
-}
-
 function toggleHidden() {
   showHidden.value = !showHidden.value;
   loadRoot();
@@ -161,11 +125,6 @@ function toggleHidden() {
 
 onMounted(() => {
   loadRoot();
-  document.addEventListener("click", closeWsDropdown);
-});
-
-onUnmounted(() => {
-  document.removeEventListener("click", closeWsDropdown);
 });
 
 const { show } = useContextMenu();
@@ -210,26 +169,9 @@ defineExpose({ loadRoot });
 <template>
   <div class="file-tree">
     <div class="path-bar">
-      <div class="path-left" @click="toggleWsDropdown">
-        <span class="path-icon">&#x1F4C1;</span>
-        <span class="path-text">{{ projectInfo.root }}<template v-if="projectInfo.branch"> &#xB7; {{ projectInfo.branch }}</template></span>
-        <span class="ws-arrow" :class="{ open: showWsDropdown }">&#x25BE;</span>
-      </div>
-      <!-- Workspace dropdown -->
-      <div v-if="showWsDropdown" class="ws-dropdown" @click.stop>
-        <div
-          v-for="ws in workspaces"
-          :key="ws.key"
-          class="ws-item"
-          :class="{ active: ws.name === projectInfo.root }"
-          @click="selectWorkspace(ws)"
-        >
-          <span class="ws-item-icon">&#x1F4C1;</span>
-          <span class="ws-item-text">{{ ws.name }}</span>
-        </div>
-        <div v-if="workspaces.length === 0" class="ws-item muted">
-          未找到其他工作区
-        </div>
+      <div class="path-left">
+        <span v-if="projectInfo.branch" class="path-branch">{{ projectInfo.branch }}</span>
+        <span v-else class="path-hint">{{ projectInfo.name }}</span>
       </div>
       <button class="hidden-toggle" :class="{ active: showHidden }" @click.stop="toggleHidden" :title="showHidden ? '隐藏隐藏文件' : '显示隐藏文件'">
         <svg v-if="!showHidden" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -290,36 +232,28 @@ defineExpose({ loadRoot });
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-secondary);
-  cursor: pointer;
   overflow: hidden;
   padding: 2px 6px;
-  border-radius: 4px;
-  transition: background 0.1s;
 }
-.path-left:hover {
+
+.path-branch {
+  font-size: 10px;
+  color: var(--text-muted);
   background: var(--surface);
-}
-
-.path-icon { font-size: 13px; flex-shrink: 0; }
-
-.path-text {
+  border-radius: 3px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  direction: rtl;
-  text-align: left;
 }
 
-.ws-arrow {
-  font-size: 14px;
-  flex-shrink: 0;
-  transition: transform 0.15s;
-  margin-left: 2px;
-}
-.ws-arrow.open {
-  transform: rotate(180deg);
+.path-hint {
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .hidden-toggle {
@@ -341,53 +275,6 @@ defineExpose({ loadRoot });
 }
 .hidden-toggle.active {
   color: var(--accent);
-}
-
-.ws-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 8px;
-  right: 8px;
-  background: var(--surface);
-  border: 1px solid var(--surface-hover);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  z-index: 50;
-  max-height: 240px;
-  overflow-y: auto;
-  padding: 4px 0;
-}
-
-.ws-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background 0.1s;
-}
-.ws-item:hover {
-  background: var(--surface-hover);
-  color: var(--text-primary);
-}
-.ws-item.active {
-  color: var(--accent);
-}
-.ws-item.muted {
-  color: var(--text-muted);
-  cursor: default;
-}
-.ws-item.muted:hover {
-  background: none;
-  color: var(--text-muted);
-}
-
-.ws-item-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .tree-content {
