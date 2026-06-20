@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { useGit } from "../composables/useGit";
+import { useFileViewer } from "../composables/useFileViewer";
 import { parseGitError } from "../utils/errors";
 
 const {
@@ -12,15 +14,13 @@ const {
   unpushedHashes,
   hasUnpushed,
   unpushedCount,
+  projectRoot,
   loading,
   expandedCommit,
   commitDetail,
   detailLoading,
-  viewingDiff,
   loadAll,
   toggleCommit,
-  viewDiff,
-  closeDiff,
   switchBranch,
   doStageFile,
   doUnstageFile,
@@ -34,25 +34,14 @@ const {
   clearPushError,
 } = useGit();
 
+const fileViewer = useFileViewer();
+
 const branchDropdownOpen = ref(false);
 const changesExpanded = ref(true);
 const commitsExpanded = ref(true);
 const commitMessage = ref("");
 const committing = ref(false);
 const commitError = ref("");
-
-function diffLines(content: string): { type: string; text: string }[] {
-  return content.split("\n").map((line) => {
-    if (line.startsWith("+") && !line.startsWith("+++")) return { type: "add", text: line };
-    if (line.startsWith("-") && !line.startsWith("---")) return { type: "del", text: line };
-    if (line.startsWith("@@")) return { type: "hunk", text: line };
-    if (line.startsWith("diff ") || line.startsWith("index ") ||
-        line.startsWith("--- ") || line.startsWith("+++ ") ||
-        line.startsWith("new file") || line.startsWith("deleted file"))
-      return { type: "meta", text: line };
-    return { type: "ctx", text: line };
-  });
-}
 
 onMounted(() => { loadAll(); });
 
@@ -72,7 +61,20 @@ function onToggleBranchDropdown() {
 }
 
 function onFileClick(path: string, staged?: boolean, commitHash?: string) {
-  viewDiff(path, staged, commitHash);
+  // 工作区变更 → staged 是 boolean；历史提交 → commitHash 是 string
+  openDiffInViewer(path, staged, commitHash);
+}
+
+async function openDiffInViewer(relPath: string, staged?: boolean, commitHash?: string) {
+  try {
+    const params: Record<string, unknown> = { path: relPath };
+    if (staged !== undefined) params.staged = staged;
+    if (commitHash) params.commitHash = commitHash;
+    const content = await invoke<string>("git_diff_content", params);
+    fileViewer.open(relPath, { content, language: "diff" });
+  } catch (e) {
+    fileViewer.open(relPath, { content: `Failed to load diff: ${e}`, language: "diff" });
+  }
 }
 
 async function onCommit() {
@@ -256,19 +258,6 @@ defineExpose({ reload: loadAll });
         </template>
       </div>
     </div>
-
-    <!-- Diff viewer -->
-    <div v-if="viewingDiff" class="diff-viewer">
-      <div class="diff-header">
-        <span class="diff-title">{{ viewingDiff.path }}</span>
-        <button class="diff-close" @click="closeDiff">✕</button>
-      </div>
-      <div class="diff-body">
-        <div v-if="viewingDiff.loading" class="diff-loading">Loading diff...</div>
-        <pre v-else class="diff-content"><code><template v-for="(line, i) in diffLines(viewingDiff.content)" :key="i"><span :class="'diff-' + line.type">{{ line.text }}</span>
-</template></code></pre>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -441,25 +430,10 @@ defineExpose({ reload: loadAll });
 .detail-loading { font-size: 11px; color: var(--text-muted); padding: 4px 0; }
 .commit-body { font-size: 11px; color: var(--text-secondary); white-space: pre-wrap; margin-bottom: 6px; padding: 4px 0; border-bottom: 1px solid var(--surface); }
 
-.diff-viewer { border-top: 1px solid var(--surface-hover); flex-shrink: 0; max-height: 45%; display: flex; flex-direction: column; }
-.diff-header { display: flex; align-items: center; justify-content: space-between; padding: 5px 10px; background: var(--bg-tertiary); border-bottom: 1px solid var(--surface); flex-shrink: 0; }
-.diff-title { font-size: 11px; color: var(--text-secondary); font-family: "Cascadia Code","Fira Code",Consolas,monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.diff-close { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 2px 6px; border-radius: 3px; font-family: inherit; }
-.diff-close:hover { background: var(--surface); color: var(--text-primary); }
-.diff-body { flex: 1; overflow: auto; background: var(--bg-primary); }
-.diff-loading { padding: 16px; font-size: 11px; color: var(--text-muted); text-align: center; }
-.diff-content { margin: 0; padding: 8px 0; font-size: 11px; font-family: "Cascadia Code","Fira Code",Consolas,monospace; line-height: 1.45; tab-size: 4; white-space: pre; }
-.diff-content code { display: block; }
-.diff-add { background: rgba(166,227,161,0.08); color: #a6e3a1; }
-.diff-del { background: rgba(243,139,168,0.08); color: #f38ba8; }
-.diff-hunk { color: var(--accent); }
-.diff-meta { color: #f9e2af; }
-.diff-ctx { color: var(--text-muted); }
-
-.section-body::-webkit-scrollbar, .diff-body::-webkit-scrollbar,
+.section-body::-webkit-scrollbar,
 .commit-detail::-webkit-scrollbar, .branch-dropdown::-webkit-scrollbar { width: 4px; }
-.section-body::-webkit-scrollbar-track, .diff-body::-webkit-scrollbar-track,
+.section-body::-webkit-scrollbar-track,
 .commit-detail::-webkit-scrollbar-track, .branch-dropdown::-webkit-scrollbar-track { background: transparent; }
-.section-body::-webkit-scrollbar-thumb, .diff-body::-webkit-scrollbar-thumb,
+.section-body::-webkit-scrollbar-thumb,
 .commit-detail::-webkit-scrollbar-thumb, .branch-dropdown::-webkit-scrollbar-thumb { background: var(--surface-hover); border-radius: 2px; }
 </style>

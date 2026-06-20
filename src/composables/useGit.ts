@@ -9,6 +9,7 @@ const branches = ref<BranchInfo[]>([]);
 const currentBranch = ref("");
 const statusEntries = ref<GitStatusEntry[]>([]);
 const unpushedHashes = ref<Set<string>>(new Set());
+const projectRoot = ref("");
 const loading = ref(false);
 const expandedCommit = ref<string | null>(null);
 const commitDetail = ref<CommitDetail | null>(null);
@@ -75,8 +76,17 @@ async function loadUnpushed() {
     }
 }
 
+async function loadProjectRoot() {
+    try {
+        const info = await invoke<{ root: string }>("get_project_info");
+        projectRoot.value = info.root;
+    } catch (e) {
+        console.error("[useGit] loadProjectRoot failed:", e);
+    }
+}
+
 async function loadAll() {
-    await Promise.all([loadBranches(), loadCommits(), loadStatus(), loadUnpushed()]);
+    await Promise.all([loadProjectRoot(), loadBranches(), loadCommits(), loadStatus(), loadUnpushed()]);
 }
 
 async function refreshAfterAction() {
@@ -181,6 +191,7 @@ export function useGit() {
         unpushedHashes,
         hasUnpushed,
         unpushedCount,
+        projectRoot,
         loading,
         expandedCommit,
         commitDetail,

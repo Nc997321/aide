@@ -5,6 +5,7 @@ import { api } from "../api";
 const visible = ref(false);
 const filePath = ref("");
 const content = ref("");
+const language = ref("");
 const error = ref("");
 const editing = ref(false);
 const editContent = ref("");
@@ -12,23 +13,28 @@ const saving = ref(false);
 const projectRoot = ref("");
 
 export function useFileViewer() {
-  async function open(path: string) {
+  async function open(path: string, opts?: { content?: string; language?: string }) {
     filePath.value = path;
     error.value = "";
     content.value = "";
+    language.value = opts?.language || "";
     editing.value = false;
     editContent.value = "";
-    try {
-      content.value = await api.readFileContent(path);
-      // Auto-detect project root for goto-definition
+    if (opts?.content !== undefined) {
+      content.value = opts.content;
+    } else {
       try {
-        const info = await api.getProjectInfo();
-        projectRoot.value = info.root;
-      } catch {
-        // project root detection is best-effort
+        content.value = await api.readFileContent(path);
+      } catch (e) {
+        error.value = String(e);
       }
-    } catch (e) {
-      error.value = String(e);
+    }
+    // Auto-detect project root for goto-definition
+    try {
+      const info = await api.getProjectInfo();
+      projectRoot.value = info.root;
+    } catch {
+      // project root detection is best-effort
     }
     visible.value = true;
   }
@@ -81,6 +87,7 @@ export function useFileViewer() {
     visible: readonly(visible),
     filePath: readonly(filePath),
     content: readonly(content),
+    language: readonly(language),
     error: readonly(error),
     editing: readonly(editing),
     editContent,

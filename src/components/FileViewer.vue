@@ -6,7 +6,7 @@ import CodeEditor from "./CodeEditor.vue";
 import { hljs, extToLang, highlightCode } from "../utils/highlight";
 import { marked } from "../utils/markdown";
 
-const { visible, filePath, content, error, editing, editContent, saving, close, startEdit, save, cancelEdit, projectRoot, openAndScrollTo } = useFileViewer();
+const { visible, filePath, content, language, error, editing, editContent, saving, close, startEdit, save, cancelEdit, projectRoot, openAndScrollTo } = useFileViewer();
 
 const goto = useGotoDefinition();
 const gotoPopoverRef = ref<HTMLElement | null>(null);
@@ -64,6 +64,27 @@ const isMarkdown = computed(() => {
   const ext = fileName.value.split(".").pop()?.toLowerCase() || "";
   return ext === "md" || ext === "mdx";
 });
+
+const isDiff = computed(() => language.value === "diff");
+
+const diffHighlighted = computed(() => {
+  if (!content.value) return "";
+  return content.value.split("\n").map((line) => {
+    let cls = "diff-ctx";
+    if (line.startsWith("+") && !line.startsWith("+++")) cls = "diff-add";
+    else if (line.startsWith("-") && !line.startsWith("---")) cls = "diff-del";
+    else if (line.startsWith("@@")) cls = "diff-hunk";
+    else if (line.startsWith("diff ") || line.startsWith("index ") ||
+             line.startsWith("--- ") || line.startsWith("+++ ") ||
+             line.startsWith("new file") || line.startsWith("deleted file"))
+      cls = "diff-meta";
+    return `<span class="${cls}">${escapeHtml(line)}</span>`;
+  }).join("\n");
+});
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 const highlighted = computed(() => {
   if (!content.value) return "";
@@ -180,6 +201,7 @@ function getLanguageLabel(): string {
             </div>
           </div>
           <div v-else-if="isMarkdown" ref="codeRef" class="viewer-markdown" v-html="renderedMarkdown"></div>
+          <pre v-else-if="isDiff"><code ref="codeRef" class="viewer-code viewer-diff" v-html="diffHighlighted"></code></pre>
           <pre v-else><code ref="codeRef" class="viewer-code" v-html="highlighted"></code></pre>
         </div>
       </div>
@@ -626,4 +648,22 @@ function getLanguageLabel(): string {
 .viewer-markdown pre code.hljs .hljs-strong { font-weight: bold; }
 .viewer-markdown pre code.hljs .hljs-link { color: #89b4fa; text-decoration: underline; }
 .viewer-markdown pre code.hljs .hljs-deletion { color: #f38ba8; }
+
+/* ── Diff viewer ── */
+.viewer-diff {
+  display: block;
+  padding: 12px 16px;
+  margin: 0;
+  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre;
+  tab-size: 4;
+}
+.viewer-diff .diff-add { color: #a6e3a1; background: rgba(166,227,161,0.04); display: block; }
+.viewer-diff .diff-del { color: #f38ba8; background: rgba(243,139,168,0.04); display: block; }
+.viewer-diff .diff-hunk { color: #89b4fa; display: block; }
+.viewer-diff .diff-meta { color: #f9e2af; display: block; }
+.viewer-diff .diff-ctx { color: var(--text-muted); display: block; }
 </style>
