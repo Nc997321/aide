@@ -336,6 +336,54 @@ pub fn save_session_changes(session_id: String, rounds: Vec<ChangeRoundData>) ->
     fs::write(&path, content).map_err(|e| format!("Failed to write: {}", e))
 }
 
+#[tauri::command]
+pub fn session_jsonl_size(
+    workspace_state: State<'_, WorkspaceState>,
+    session_id: String,
+) -> Result<u64, String> {
+    let root = project_root_for_commands(&workspace_state);
+    let encoded = encode_project_path(&root.to_string_lossy());
+    let jsonl_path = claude_projects_dir()
+        .join(&encoded)
+        .join(format!("{}.jsonl", session_id));
+
+    if !jsonl_path.exists() {
+        return Ok(0);
+    }
+
+    let metadata = fs::metadata(&jsonl_path)
+        .map_err(|e| format!("Failed to read jsonl metadata: {}", e))?;
+
+    Ok(metadata.len())
+}
+
+#[tauri::command]
+pub fn session_truncate_jsonl(
+    workspace_state: State<'_, WorkspaceState>,
+    session_id: String,
+    byte_pos: u64,
+) -> Result<(), String> {
+    let root = project_root_for_commands(&workspace_state);
+    let encoded = encode_project_path(&root.to_string_lossy());
+    let jsonl_path = claude_projects_dir()
+        .join(&encoded)
+        .join(format!("{}.jsonl", session_id));
+
+    if !jsonl_path.exists() {
+        return Ok(());
+    }
+
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .open(&jsonl_path)
+        .map_err(|e| format!("Failed to open jsonl: {}", e))?;
+
+    file.set_len(byte_pos)
+        .map_err(|e| format!("Failed to truncate jsonl: {}", e))?;
+
+    Ok(())
+}
+
 /// List sessions for a specific workspace by its encoded key, without relying
 /// on the current WorkspaceState. Used by the frontend to load sessions for
 /// non-active (but expanded) workspaces.

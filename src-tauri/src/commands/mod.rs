@@ -89,6 +89,8 @@ pub struct ChangeRoundData {
     pub index: u32,
     pub time: String,
     pub files: Vec<ChangeFileData>,
+    #[serde(default)]
+    pub rewind_to: Option<u64>,
 }
 
 // ── WorkspaceState ──

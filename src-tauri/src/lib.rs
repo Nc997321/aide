@@ -93,6 +93,8 @@ pub fn run() {
             commands::session::session_last_event,
             commands::session::load_session_changes,
             commands::session::save_session_changes,
+            commands::session::session_jsonl_size,
+            commands::session::session_truncate_jsonl,
             commands::workspace::list_workspaces,
             commands::workspace::set_workspace,
             commands::settings::get_settings,

@@ -57,7 +57,7 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
     <!-- Body -->
     <div v-show="!collapsed" class="changelog-body">
       <template v-if="rounds.length === 0">
-        <div class="changelog-empty">暂无变更</div>
+        <div class="changelog-empty">暂无会话记录</div>
       </template>
       <template v-else>
         <div v-for="round in displayedRounds" :key="round.index" class="changelog-round">
@@ -65,9 +65,15 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
           <div class="changelog-round-header">
             <span class="changelog-round-label">轮 {{ round.index }}</span>
             <span class="changelog-round-time">{{ round.time }}</span>
-            <button class="changelog-round-revert" title="撤回本轮" @click="revertRound(round)">↶</button>
+            <button
+              v-if="round.files.length > 0"
+              class="changelog-round-revert"
+              title="撤回本轮"
+              @click="revertRound(round)"
+            >↶</button>
           </div>
           <!-- Files -->
+          <div v-if="round.files.length === 0" class="changelog-nochange">无变更</div>
           <div
             v-for="f in round.files"
             :key="f.path"
@@ -228,6 +234,13 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
 }
 .changelog-file:hover {
   background: var(--surface);
+}
+
+.changelog-nochange {
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 .changelog-file-status {

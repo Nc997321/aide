@@ -138,7 +138,12 @@ export function sessionMenuItems(
       label: "删除",
       danger: true,
       action: async () => {
-        const ok = await modal.confirm("删除会话", "确定要删除此会话吗？此操作不可撤销。", "删除", true);
+        const ok = await modal.confirm(
+          "删除会话",
+          "此操作将同时删除 Claude 原生的对话记录（.jsonl），无法通过 --resume 恢复。确定删除？",
+          "删除",
+          true,
+        );
         if (!ok) return;
         await api.deleteSession(id);
         onDeleted();

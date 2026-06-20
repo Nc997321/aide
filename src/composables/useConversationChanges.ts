@@ -1,5 +1,6 @@
 import { ref, watch } from "vue";
 import { useSessionState } from "./useSessionState";
+import { useModal } from "./useModal";
 import { api } from "../api";
 import type { ChangeRound, ChangeFile } from "../types";
 
@@ -8,11 +9,14 @@ export type { ChangeRound, ChangeFile };
 export function useConversationChanges(sessionId: () => string) {
   const rounds = ref<ChangeRound[]>([]);
   const { state: sessionState } = useSessionState();
+  const modal = useModal();
 
   let roundCounter = 0;
   let lastState = "";
   let pendingOp = Promise.resolve();
   let currentSid = "";
+  let pendingRewindPosition: number | null = null;
+  let snapshotDiff: Map<string, { additions: number; deletions: number }> | null = null;
 
   /** Persist rounds to disk */
   async function save() {
@@ -45,71 +49,62 @@ export function useConversationChanges(sessionId: () => string) {
   );
 
   /**
-   * Before Claude starts processing: previously staged everything with git add -A.
-   * Now a no-op — git_diff_files uses `git diff HEAD` which detects all changes
-   * (staged, unstaged, and deletions) without needing a clean index baseline.
-   * Removing `git add -A` prevents ephemeral files from being written into the
-   * index, which previously made them look "real" to cleanup checks.
+   * Before Claude starts processing: record the .jsonl file size (for /rewind)
+   * and the current git diff snapshot (for per-round delta calculation).
    */
   async function takeSnapshot() {
-    // intentionally empty — see comment above
+    const sid = currentSid;
+    if (!sid || sid.startsWith("new_")) return;
+    try {
+      pendingRewindPosition = await api.sessionJsonlSize(sid);
+      const current = await api.gitDiffFiles();
+      snapshotDiff = new Map(
+        current.map((f) => [f.path, { additions: f.additions, deletions: f.deletions }]),
+      );
+    } catch (_) {
+      pendingRewindPosition = null;
+      snapshotDiff = null;
+    }
   }
 
-  /** After Claude finishes: compute what changed and create a round entry */
+  /** After Claude finishes: compute what changed this round and create an entry */
   async function captureChanges() {
     try {
-      const files = await api.gitDiffFiles();
+      const current = await api.gitDiffFiles();
 
-      // Clean up ephemeral entries from previous rounds before saving new round.
-      await cleanupPreviousRounds();
-
-      if (files.length === 0) return;
+      // Compute per-round delta from snapshot
+      let files: ChangeFile[];
+      if (snapshotDiff && snapshotDiff.size > 0) {
+        files = [];
+        for (const f of current) {
+          const prev = snapshotDiff.get(f.path);
+          if (!prev) {
+            // New file — wasn't in the snapshot at all
+            files.push(f);
+          } else if (prev.additions !== f.additions || prev.deletions !== f.deletions) {
+            // Same file, incremental change
+            files.push({
+              ...f,
+              additions: f.additions - prev.additions,
+              deletions: f.deletions - prev.deletions,
+            });
+          }
+          // else: unchanged since snapshot — skip
+        }
+      } else {
+        // No snapshot (first round or error) — use raw diff
+        files = current;
+      }
+      snapshotDiff = null;
 
       roundCounter++;
       const now = new Date();
       const time = now.toLocaleTimeString();
-      rounds.value.push({ index: roundCounter, time, files });
+      const rewindTo = pendingRewindPosition ?? undefined;
+      pendingRewindPosition = null;
+      rounds.value.push({ index: roundCounter, time, files, rewindTo });
       await save();
     } catch (_) { /* best effort */ }
-  }
-
-  /**
-   * Remove entries from previous rounds for files that no longer exist on disk
-   * AND were never committed to HEAD (ephemeral files: created + deleted within a session).
-   */
-  async function cleanupPreviousRounds() {
-    if (rounds.value.length === 0) return;
-
-    let changed = false;
-    for (const round of rounds.value) {
-      const before = round.files.length;
-      // Check each file sequentially (git_has_file is fast: stat + cat-file)
-      const kept: ChangeFile[] = [];
-      for (const f of round.files) {
-        if (await fileIsReal(f.path)) {
-          kept.push(f);
-        }
-      }
-      round.files = kept;
-      if (round.files.length !== before) changed = true;
-    }
-
-    // Drop empty rounds
-    const beforeLen = rounds.value.length;
-    rounds.value = rounds.value.filter((r) => r.files.length > 0);
-    if (rounds.value.length !== beforeLen) changed = true;
-
-    if (changed) await save();
-  }
-
-  /** A file is "real" if it exists on disk OR was committed to HEAD at some point */
-  async function fileIsReal(relativePath: string): Promise<boolean> {
-    try {
-      return await api.gitHasFile(relativePath);
-    } catch (_) {
-      // If the check fails, conservatively keep the entry
-      return true;
-    }
   }
 
   /** Revert a single file to its staged (pre-Claude) version */
@@ -119,8 +114,30 @@ export function useConversationChanges(sessionId: () => string) {
     } catch (_) { /* best effort */ }
   }
 
-  /** Revert all files in a round */
+  /** Revert all files in a round, and rewind the .jsonl conversation history */
   async function revertRound(round: ChangeRound) {
+    const sid = currentSid;
+
+    if (round.rewindTo !== undefined && sid) {
+      // Safety: if Claude is running, warn the user before killing
+      const curState = sessionState[sid];
+      if (curState === "running") {
+        const ok = await modal.confirm(
+          "终止会话",
+          "Claude 正在运行，撤回将强制终止进程。确定继续？",
+          "终止并撤回",
+          true,
+        );
+        if (!ok) return;
+        await api.ptyKill(sid);
+      }
+
+      // Truncate .jsonl to the position before this round started
+      try {
+        await api.truncateSessionJsonl(sid, round.rewindTo);
+      } catch (_) { /* best effort */ }
+    }
+
     for (const f of round.files) {
       await revertFile(f.path);
     }
@@ -133,9 +150,6 @@ export function useConversationChanges(sessionId: () => string) {
   async function revertSingleFile(round: ChangeRound, filePath: string) {
     await revertFile(filePath);
     round.files = round.files.filter((f) => f.path !== filePath);
-    if (round.files.length === 0) {
-      rounds.value = rounds.value.filter((r) => r.index !== round.index);
-    }
     await save();
   }
 

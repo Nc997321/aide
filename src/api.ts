@@ -105,6 +105,12 @@ export const api = {
   saveSessionChanges(sessionId: string, rounds: ChangeRound[]): Promise<void> {
     return invoke("save_session_changes", { sessionId, rounds });
   },
+  sessionJsonlSize(sessionId: string): Promise<number> {
+    return invoke("session_jsonl_size", { sessionId });
+  },
+  truncateSessionJsonl(sessionId: string, bytePos: number): Promise<void> {
+    return invoke("session_truncate_jsonl", { sessionId, bytePos });
+  },
 
   // 通知（绕过插件 dev 模式限制）
   notifySend(title: string, body: string, sessionId?: string): Promise<void> {

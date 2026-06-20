@@ -46,6 +46,7 @@ export interface ChangeRound {
   index: number;
   time: string;
   files: ChangeFile[];
+  rewindTo?: number;
 }
 
 export interface Keybindings {
