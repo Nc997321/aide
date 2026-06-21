@@ -163,8 +163,18 @@ export function useTerminalManager(
 
     api.ptySpawnClaude(ptyId, terminal.rows, terminal.cols)
       .catch((e) => {
-        terminal.writeln(`\r\nFailed: ${e}`);
-        destroyLiveSession(ptyId);
+        const ls = liveSessions.get(ptyId);
+        if (ls) dismissLoader(ls);
+        const red = "\x1b[31m";
+        const reset = "\x1b[0m";
+        terminal.writeln(`\r\n${red}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${reset}`);
+        terminal.writeln(`${red}  无法启动 Claude Code${reset}`);
+        terminal.writeln(`${red}  ${e}${reset}`);
+        terminal.writeln(`${red}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${reset}`);
+        terminal.writeln("");
+        terminal.writeln("请确认 claude 已安装并在 PATH 中。");
+        terminal.writeln("按 Ctrl+L 刷新，或点击 ⏹ 停止。");
+        monitor.setSessionState(sid, "stopped");
       });
 
     if (ptyId.startsWith("new_")) {
