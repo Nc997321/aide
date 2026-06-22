@@ -14,6 +14,12 @@ interface LiveSession {
   observer: ResizeObserver;
   loadingDiv: HTMLDivElement | null;
   loaderTimer: ReturnType<typeof setTimeout> | null;
+  /** True while the user is in an IME composition session (e.g. Chinese/Japanese input).
+   *  Terminal writes are buffered until composition ends so the DOM doesn't shift under
+   *  the IME candidate window, which would cause it to jump around. */
+  isComposing: boolean;
+  /** Accumulated PTY output received while isComposing is true. Flushed on compositionend. */
+  pendingBuffer: string;
 }
 
 export function useTerminalManager(
@@ -154,7 +160,20 @@ export function useTerminalManager(
     const loadingDiv = createLoadingOverlay();
     div.appendChild(loadingDiv);
 
-    liveSessions.set(ptyId, { div, terminal, fitAddon, observer, loadingDiv, loaderTimer: null });
+    const ls: LiveSession = { div, terminal, fitAddon, observer, loadingDiv, loaderTimer: null, isComposing: false, pendingBuffer: "" };
+    liveSessions.set(ptyId, ls);
+
+    // IME composition tracking — pause terminal writes while user is composing
+    // (e.g. typing Chinese/Japanese). Without this, each write() shifts the DOM
+    // rows, causing the IME candidate window to jump to wrong positions.
+    div.addEventListener("compositionstart", () => { ls.isComposing = true; }, true);
+    div.addEventListener("compositionend", () => {
+      ls.isComposing = false;
+      if (ls.pendingBuffer) {
+        ls.terminal.write(ls.pendingBuffer);
+        ls.pendingBuffer = "";
+      }
+    }, true);
     liveDisplayIds.add(sid);
     currentSid = sid;
 
@@ -301,7 +320,12 @@ export function useTerminalManager(
             if (ls.loadingDiv && !ls.loaderTimer) {
               ls.loaderTimer = setTimeout(() => dismissLoader(ls), LOADER_DISMISS_DELAY);
             }
-            ls.terminal.write(data);
+            if (ls.isComposing) {
+              // Buffer writes during IME composition to prevent DOM shifts
+              ls.pendingBuffer += data;
+            } else {
+              ls.terminal.write(data);
+            }
           }
         } catch (_) {}
       }
