@@ -10,7 +10,7 @@ export interface GitError {
 
 export interface ErrorAction {
   label: string;
-  kind: "retry" | "go-proxy-settings" | "go-marketplace-settings" | "force-push" | "pull-first";
+  kind: "retry" | "go-proxy-settings" | "go-marketplace-settings" | "force-push" | "pull-first" | "stash-and-switch" | "discard-and-switch" | "stash-and-pull" | "force-delete-branch";
 }
 
 const ERROR_MAP: Record<string, { message: string; actions: ErrorAction["kind"][] }> = {
@@ -39,6 +39,50 @@ const ERROR_MAP: Record<string, { message: string; actions: ErrorAction["kind"][
   PUSH_FAILED: {
     message: "推送失败。",
     actions: ["retry", "force-push"],
+  },
+  // Checkout-specific errors
+  CHECKOUT_CONFLICT: {
+    message: "当前分支有未提交的改动，切换分支会覆盖这些文件。",
+    actions: ["stash-and-switch", "discard-and-switch"],
+  },
+  CHECKOUT_FAILED: {
+    message: "分支切换失败。",
+    actions: ["retry"],
+  },
+  // Branch creation errors
+  BRANCH_EXISTS: {
+    message: "分支名已存在，请换一个名字。",
+    actions: ["retry"],
+  },
+  INVALID_NAME: {
+    message: "分支名不合法。不能包含空格、~ ^ : ? * [ \\ @ { 或以 . 开头。",
+    actions: ["retry"],
+  },
+  BRANCH_FAILED: {
+    message: "创建分支失败。",
+    actions: ["retry"],
+  },
+  // Pull-specific errors
+  MERGE_CONFLICT: {
+    message: "拉取后出现合并冲突，请在终端解决冲突后执行 `git commit`。",
+    actions: [],
+  },
+  LOCAL_CHANGES: {
+    message: "本地有未提交改动，请先提交或 stash 后再拉取。",
+    actions: ["stash-and-pull"],
+  },
+  PULL_FAILED: {
+    message: "拉取失败。",
+    actions: ["retry"],
+  },
+  // Branch deletion errors
+  BRANCH_NOT_MERGED: {
+    message: "分支有未合并的改动，强制删除将丢失这些改动。",
+    actions: ["force-delete-branch"],
+  },
+  DELETE_FAILED: {
+    message: "删除分支失败。",
+    actions: ["retry"],
   },
 };
 
@@ -75,5 +119,9 @@ function actionLabel(kind: ErrorAction["kind"]): string {
     case "go-marketplace-settings": return "切换市场源";
     case "force-push": return "强制推送";
     case "pull-first": return "先拉取";
+    case "stash-and-switch": return "Stash 并切换";
+    case "discard-and-switch": return "丢弃并切换";
+    case "stash-and-pull": return "Stash 并拉取";
+    case "force-delete-branch": return "强制删除";
   }
 }

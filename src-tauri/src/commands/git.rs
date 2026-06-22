@@ -296,6 +296,149 @@ pub async fn git_revert_file(
 }
 
 #[tauri::command]
+pub async fn git_stash(
+    workspace_state: State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    let root = project_root_for_commands(&workspace_state);
+    let output = git_run_async(vec!["stash".into(), "push".into()], root).await
+        .map_err(|e| format!("STASH_FAILED: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("STASH_FAILED: {}", stderr.trim()));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_stash_pop(
+    workspace_state: State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    let root = project_root_for_commands(&workspace_state);
+    let output = git_run_async(vec!["stash".into(), "pop".into()], root).await
+        .map_err(|e| format!("STASH_POP_FAILED: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("STASH_POP_FAILED: {}", stderr.trim()));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_discard_all(
+    workspace_state: State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    let root = project_root_for_commands(&workspace_state);
+    let output = git_run_async(vec!["checkout".into(), "--".into(), ".".into()], root).await
+        .map_err(|e| format!("DISCARD_FAILED: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("DISCARD_FAILED: {}", stderr.trim()));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_unstage_all(
+    workspace_state: State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    let root = project_root_for_commands(&workspace_state);
+    let output = git_run_async(vec!["reset".into(), "HEAD".into()], root).await
+        .map_err(|e| format!("Failed to run git reset: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("UNSTAGE_FAILED: {}", stderr.trim()));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_create_branch(
+    workspace_state: State<'_, WorkspaceState>,
+    name: String,
+) -> Result<(), String> {
+    let root = project_root_for_commands(&workspace_state);
+    if !root.join(".git").exists() {
+        return Err("BRANCH_FAILED: Not a git repository".into());
+    }
+    let output = git_run_async(vec!["checkout".into(), "-b".into(), name.clone()], root).await
+        .map_err(|e| format!("BRANCH_FAILED: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr_trimmed = stderr.trim();
+        let code = if stderr_trimmed.contains("already exists") {
+            "BRANCH_EXISTS"
+        } else {
+            "BRANCH_FAILED"
+        };
+        return Err(format!("{}: {}", code, stderr_trimmed));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_pull(
+    workspace_state: State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    let root = project_root_for_commands(&workspace_state);
+    if !root.join(".git").exists() {
+        return Err("PULL_FAILED: Not a git repository".into());
+    }
+
+    let branch = detect_git_branch(&root);
+    if branch.is_empty() {
+        return Err("PULL_FAILED: Cannot detect current branch".into());
+    }
+
+    let output = git_run_async(
+        vec!["pull".into(), "origin".into(), branch.clone()],
+        root,
+    ).await.map_err(|e| format!("PULL_FAILED: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let combined = format!("{}{}", stdout, stderr);
+        let code = if combined.contains("CONFLICT") || combined.contains("Automatic merge failed") {
+            "MERGE_CONFLICT"
+        } else if combined.contains("Your local changes") || combined.contains("would be overwritten") {
+            "LOCAL_CHANGES"
+        } else if combined.contains("Could not resolve hostname") || combined.contains("unable to access") {
+            "NETWORK_FAILURE"
+        } else {
+            "PULL_FAILED"
+        };
+        return Err(format!("{}: {}", code, combined.trim()));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_delete_branch(
+    workspace_state: State<'_, WorkspaceState>,
+    name: String,
+    force: Option<bool>,
+) -> Result<(), String> {
+    let root = project_root_for_commands(&workspace_state);
+    if !root.join(".git").exists() {
+        return Err("DELETE_FAILED: Not a git repository".into());
+    }
+    let flag = if force.unwrap_or(false) { "-D" } else { "-d" };
+    let output = git_run_async(vec!["branch".into(), flag.into(), name.clone()], root).await
+        .map_err(|e| format!("DELETE_FAILED: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr_trimmed = stderr.trim();
+        let code = if stderr_trimmed.contains("not fully merged") || stderr_trimmed.contains("is not fully merged") {
+            "BRANCH_NOT_MERGED"
+        } else {
+            "DELETE_FAILED"
+        };
+        return Err(format!("{}: {}", code, stderr_trimmed));
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn git_log(
     workspace_state: State<'_, WorkspaceState>,
     limit: Option<u32>,
@@ -513,7 +656,13 @@ pub async fn git_checkout(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Checkout failed: {}", stderr.trim()));
+        let stderr_trimmed = stderr.trim();
+        let code = if stderr_trimmed.contains("would be overwritten by checkout") {
+            "CHECKOUT_CONFLICT"
+        } else {
+            "CHECKOUT_FAILED"
+        };
+        return Err(format!("{}: {}", code, stderr_trimmed));
     }
 
     Ok(())

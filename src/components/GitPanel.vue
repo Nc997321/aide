@@ -3,6 +3,7 @@ import { ref, onMounted, watch, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useGit } from "../composables/useGit";
 import { useFileViewer } from "../composables/useFileViewer";
+import { useModal } from "../composables/useModal";
 import { parseGitError } from "../utils/errors";
 
 const {
@@ -22,21 +23,35 @@ const {
   loadAll,
   toggleCommit,
   switchBranch,
+  createBranch,
+  deleteBranch,
   doStageFile,
   doUnstageFile,
   doStageAll,
+  doUnstageAll,
   doCommit,
   doRevertFile,
   doPush,
   doForcePush,
+  doPull,
   pushing,
   pushError,
+  pulling,
+  pullError,
   clearPushError,
+  clearPullError,
 } = useGit();
 
 const fileViewer = useFileViewer();
+const { confirm: confirmDialog, prompt: promptDialog } = useModal();
 
 const branchDropdownOpen = ref(false);
+const switchError = ref("");
+const pendingBranch = ref("");
+const branchError = ref("");
+const deleteError = ref("");
+const pendingDeleteBranch = ref("");
+const stashPopWarning = ref("");
 const changesExpanded = ref(true);
 const commitsExpanded = ref(true);
 const commitMessage = ref("");
@@ -53,11 +68,64 @@ watch(
 
 function onBranchSelect(name: string) {
   branchDropdownOpen.value = false;
-  switchBranch(name);
+  switchError.value = "";
+  pendingBranch.value = name;
+  switchBranch(name).catch((e) => {
+    switchError.value = typeof e === "string" ? e : (e as Error).message || "切换分支失败";
+  });
 }
+
+const parsedSwitchError = computed(() => {
+  return switchError.value ? parseGitError(switchError.value) : null;
+});
 
 function onToggleBranchDropdown() {
   branchDropdownOpen.value = !branchDropdownOpen.value;
+}
+
+const BRANCH_NAME_RE = /^[a-zA-Z0-9._\-/]+$/;
+const BRANCH_INVALID_CHARS = /[~^:?*\[@{\s]/;
+
+async function onCreateBranch() {
+  branchDropdownOpen.value = false;
+  branchError.value = "";
+  const name = await promptDialog("新建分支", "例如: feature/my-branch", "创建");
+  if (!name) return;
+  if (!BRANCH_NAME_RE.test(name) || BRANCH_INVALID_CHARS.test(name) || name.startsWith(".") || name.endsWith("/") || name.endsWith(".")) {
+    branchError.value = "INVALID_NAME: 分支名只能包含字母、数字、. _ - /，且不能以 . 开头或以 / . 结尾";
+    return;
+  }
+  try {
+    await createBranch(name);
+  } catch (e) {
+    branchError.value = typeof e === "string" ? e : (e as Error).message || "创建分支失败";
+  }
+}
+
+const parsedBranchError = computed(() => {
+  return branchError.value ? parseGitError(branchError.value) : null;
+});
+
+const parsedDeleteError = computed(() => {
+  return deleteError.value ? parseGitError(deleteError.value) : null;
+});
+
+async function onDeleteBranch(name: string, event: MouseEvent) {
+  event.stopPropagation();
+  deleteError.value = "";
+  const ok = await confirmDialog(
+    "删除分支",
+    `确定要删除分支 '${name}' 吗？未合并的改动将丢失。`,
+    "删除",
+    true,
+  );
+  if (!ok) return;
+  try {
+    await deleteBranch(name);
+  } catch (e) {
+    pendingDeleteBranch.value = name;
+    deleteError.value = typeof e === "string" ? e : (e as Error).message || "删除分支失败";
+  }
 }
 
 function onFileClick(path: string, staged?: boolean, commitHash?: string) {
@@ -95,12 +163,25 @@ const parsedPushError = computed(() => {
   return pushError.value ? parseGitError(pushError.value) : null;
 });
 
+const parsedPullError = computed(() => {
+  return pullError.value ? parseGitError(pullError.value) : null;
+});
+
 async function onPush() {
   clearPushError();
   try {
     await doPush();
   } catch (_) {
     // error stored in pushError ref by doPush
+  }
+}
+
+async function onPull() {
+  clearPullError();
+  try {
+    await doPull();
+  } catch (_) {
+    // error stored in pullError ref by doPull
   }
 }
 
@@ -114,7 +195,81 @@ async function onErrorAction(kind: string) {
     clearPushError();
     // User should pull from terminal
   } else if (kind === "retry") {
-    await onPush();
+    if (pendingBranch.value) {
+      // Retry branch switch
+      switchError.value = "";
+      try {
+        await switchBranch(pendingBranch.value);
+      } catch (e) {
+        switchError.value = typeof e === "string" ? e : (e as Error).message || "切换分支失败";
+      }
+    } else if (pullError.value) {
+      await onPull();
+    } else if (branchError.value) {
+      branchError.value = "";
+      await onCreateBranch();
+    } else {
+      await onPush();
+    }
+  } else if (kind === "stash-and-switch" && pendingBranch.value) {
+    switchError.value = "";
+    stashPopWarning.value = "";
+    try {
+      await invoke("git_stash");
+      await switchBranch(pendingBranch.value);
+      try {
+        await invoke("git_stash_pop");
+      } catch (popErr) {
+        const msg = typeof popErr === "string" ? popErr : (popErr as Error).message || "";
+        stashPopWarning.value = msg.includes("CONFLICT") || msg.includes("conflict")
+          ? "改动已保存到 stash,但恢复时出现冲突。请在终端用 `git stash pop` 手动处理。"
+          : "改动已保存到 stash,但恢复失败。可在终端用 `git stash list` 查看,或 `git stash pop` 手动恢复。";
+      }
+    } catch (e) {
+      switchError.value = typeof e === "string" ? e : (e as Error).message || "Stash 并切换失败";
+    }
+    pendingBranch.value = "";
+  } else if (kind === "discard-and-switch" && pendingBranch.value) {
+    const ok = await confirmDialog(
+      "丢弃改动并切换",
+      `当前分支的未提交改动将被永久丢弃,无法恢复。\n\n确定要切换到 '${pendingBranch.value}' 吗?`,
+      "丢弃并切换",
+      true,
+    );
+    if (!ok) return;
+    switchError.value = "";
+    try {
+      await invoke("git_discard_all");
+      await switchBranch(pendingBranch.value);
+    } catch (e) {
+      switchError.value = typeof e === "string" ? e : (e as Error).message || "丢弃并切换失败";
+    }
+    pendingBranch.value = "";
+  } else if (kind === "stash-and-pull") {
+    clearPullError();
+    stashPopWarning.value = "";
+    try {
+      await invoke("git_stash");
+      await doPull();
+      try {
+        await invoke("git_stash_pop");
+      } catch (popErr) {
+        const msg = typeof popErr === "string" ? popErr : (popErr as Error).message || "";
+        stashPopWarning.value = msg.includes("CONFLICT") || msg.includes("conflict")
+          ? "改动已保存到 stash,但恢复时出现冲突。请在终端用 `git stash pop` 手动处理。"
+          : "改动已保存到 stash,但恢复失败。可在终端用 `git stash list` 查看,或 `git stash pop` 手动恢复。";
+      }
+    } catch (e) {
+      pullError.value = typeof e === "string" ? e : (e as Error).message || "Stash 并拉取失败";
+    }
+  } else if (kind === "force-delete-branch" && pendingDeleteBranch.value) {
+    deleteError.value = "";
+    try {
+      await deleteBranch(pendingDeleteBranch.value, true);
+    } catch (e) {
+      deleteError.value = typeof e === "string" ? e : (e as Error).message || "强制删除失败";
+    }
+    pendingDeleteBranch.value = "";
   }
 }
 
@@ -136,12 +291,52 @@ defineExpose({ reload: loadAll });
           <span class="branch-arrow">▾</span>
         </button>
         <div v-if="branchDropdownOpen" class="branch-dropdown" @mouseleave="branchDropdownOpen = false">
+          <button class="branch-dropdown-item branch-dropdown-create" @click="onCreateBranch">
+            <span class="branch-item-name">+ 新建分支...</span>
+          </button>
           <button v-for="b in branches" :key="b.name" class="branch-dropdown-item" :class="{ current: b.is_current }" @click="onBranchSelect(b.name)">
             <span class="branch-item-name">{{ b.name }}</span>
             <span v-if="b.is_current" class="branch-item-check">✓</span>
+            <button v-else class="branch-delete-btn" title="删除分支" @click.stop="onDeleteBranch(b.name, $event)">🗑</button>
           </button>
         </div>
       </div>
+    </div>
+    <div v-if="parsedBranchError" class="switch-error">
+      <span class="switch-error-text">{{ parsedBranchError.message }}</span>
+      <button class="switch-error-close" @click="branchError = ''">✕</button>
+    </div>
+    <div v-if="parsedDeleteError" class="switch-error">
+      <span class="switch-error-text">{{ parsedDeleteError.message }}</span>
+      <span class="switch-error-actions">
+        <button
+          v-for="action in parsedDeleteError.actions"
+          :key="action.kind"
+          class="switch-error-action-btn"
+          @click="onErrorAction(action.kind)"
+        >
+          {{ action.label }}
+        </button>
+      </span>
+      <button class="switch-error-close" @click="deleteError = ''">✕</button>
+    </div>
+    <div v-if="parsedSwitchError" class="switch-error">
+      <span class="switch-error-text">切换到 <b>{{ pendingBranch }}</b> 失败:{{ parsedSwitchError.message }}</span>
+      <span class="switch-error-actions">
+        <button
+          v-for="action in parsedSwitchError.actions"
+          :key="action.kind"
+          class="switch-error-action-btn"
+          @click="onErrorAction(action.kind)"
+        >
+          {{ action.label }}
+        </button>
+      </span>
+      <button class="switch-error-close" @click="switchError = ''">✕</button>
+    </div>
+    <div v-if="stashPopWarning" class="stash-warning">
+      <span class="stash-warning-text">{{ stashPopWarning }}</span>
+      <button class="stash-warning-close" @click="stashPopWarning = ''">✕</button>
     </div>
 
     <!-- Staged -->
@@ -150,6 +345,7 @@ defineExpose({ reload: loadAll });
         <span class="section-arrow" :class="{ open: changesExpanded }">▸</span>
         <span class="section-title">Staged</span>
         <span class="section-badge staged-badge">{{ stagedFiles.length }}</span>
+        <span class="section-header-action" title="取消暂存全部" @click.stop="doUnstageAll()">Unstage All</span>
       </button>
       <div v-show="changesExpanded" class="section-body">
         <div v-for="entry in stagedFiles" :key="entry.path" class="git-file-row staged-row" @click="onFileClick(entry.path, true)">
@@ -197,6 +393,13 @@ defineExpose({ reload: loadAll });
         <span v-if="hasUnpushed" class="section-badge push-count-badge">{{ unpushedCount }}</span>
         <span v-if="commits.length > 0" class="section-badge commits-badge">{{ commits.length }}</span>
         <span
+          class="section-header-action pull-action"
+          :class="{ pulling }"
+          @click.stop="onPull"
+        >
+          {{ pulling ? "Pulling..." : "Pull ↓" }}
+        </span>
+        <span
           v-if="hasUnpushed"
           class="section-header-action push-action"
           :class="{ pushing }"
@@ -205,6 +408,20 @@ defineExpose({ reload: loadAll });
           {{ pushing ? "Pushing..." : "Push ↑" }}
         </span>
       </button>
+      <div v-if="parsedPullError" class="pull-error">
+        <span class="pull-error-text">{{ parsedPullError.message }}</span>
+        <span class="pull-error-actions">
+          <button
+            v-for="action in parsedPullError.actions"
+            :key="action.kind"
+            class="pull-error-action-btn"
+            @click="onErrorAction(action.kind)"
+          >
+            {{ action.label }}
+          </button>
+        </span>
+        <button class="pull-error-close" @click="clearPullError">✕</button>
+      </div>
       <div v-if="parsedPushError" class="push-error">
         <span class="push-error-text">{{ parsedPushError.message }}</span>
         <span class="push-error-actions">
@@ -307,7 +524,51 @@ defineExpose({ reload: loadAll });
 }
 .branch-dropdown-item:hover { background: var(--surface); color: var(--text-primary); }
 .branch-dropdown-item.current { color: var(--accent); }
+.branch-dropdown-create {
+  color: var(--accent); border-bottom: 1px dashed var(--surface-hover);
+  margin-bottom: 4px; padding-bottom: 6px; border-radius: 4px 4px 0 0;
+}
+.branch-dropdown-create:hover { background: rgba(137,180,250,0.08); color: var(--accent); }
 .branch-item-check { font-size: 10px; }
+
+.branch-delete-btn {
+  display: none; flex-shrink: 0; background: none; border: none; color: var(--text-muted);
+  cursor: pointer; font-size: 11px; padding: 1px 4px; border-radius: 3px; font-family: inherit;
+  margin-left: auto;
+}
+.branch-dropdown-item:hover .branch-delete-btn { display: inline-block; }
+.branch-delete-btn:hover { background: rgba(243,139,168,0.15); color: var(--accent-red); }
+
+.switch-error {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 6px 10px; font-size: 11px; color: var(--accent-red);
+  background: rgba(243,139,168,0.08); border-bottom: 1px solid var(--surface);
+}
+.switch-error-text { flex: 1; white-space: pre-wrap; word-break: break-all; line-height: 1.4; }
+.switch-error-actions { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
+.switch-error-action-btn {
+  background: rgba(137,180,250,0.12); border: none; color: var(--accent);
+  padding: 3px 10px; border-radius: 4px; font-size: 11px; cursor: pointer;
+  font-family: inherit; white-space: nowrap; transition: background 0.12s;
+}
+.switch-error-action-btn:hover { background: rgba(137,180,250,0.25); }
+.switch-error-close {
+  flex-shrink: 0; background: none; border: none; color: var(--text-muted);
+  cursor: pointer; font-size: 11px; padding: 1px 4px; border-radius: 3px; font-family: inherit;
+}
+.switch-error-close:hover { background: rgba(243,139,168,0.15); color: var(--accent-red); }
+
+.stash-warning {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 6px 10px; font-size: 11px; color: #fab387;
+  background: rgba(250,179,135,0.08); border-bottom: 1px solid var(--surface);
+}
+.stash-warning-text { flex: 1; line-height: 1.4; }
+.stash-warning-close {
+  flex-shrink: 0; background: none; border: none; color: var(--text-muted);
+  cursor: pointer; font-size: 11px; padding: 1px 4px; border-radius: 3px; font-family: inherit;
+}
+.stash-warning-close:hover { background: rgba(250,179,135,0.15); color: #fab387; }
 
 .git-section { border-bottom: 1px solid var(--surface); flex-shrink: 0; }
 .commits-section { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -330,6 +591,29 @@ defineExpose({ reload: loadAll });
 
 .push-action:hover { color: #fab387; background: rgba(250,179,135,0.12); }
 .push-action.pushing { opacity: 0.5; pointer-events: none; }
+
+.pull-action { }
+.pull-action:hover { color: #89b4fa; background: rgba(137,180,250,0.12); }
+.pull-action.pulling { opacity: 0.5; pointer-events: none; }
+
+.pull-error {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 6px 10px; font-size: 11px; color: #89b4fa;
+  background: rgba(137,180,250,0.08); border-bottom: 1px solid var(--surface);
+}
+.pull-error-text { flex: 1; white-space: pre-wrap; word-break: break-all; line-height: 1.4; }
+.pull-error-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.pull-error-action-btn {
+  background: rgba(137,180,250,0.12); border: none; color: var(--accent);
+  padding: 3px 10px; border-radius: 4px; font-size: 11px; cursor: pointer;
+  font-family: inherit; white-space: nowrap; transition: background 0.12s;
+}
+.pull-error-action-btn:hover { background: rgba(137,180,250,0.25); }
+.pull-error-close {
+  flex-shrink: 0; background: none; border: none; color: var(--text-muted);
+  cursor: pointer; font-size: 11px; padding: 1px 4px; border-radius: 3px; font-family: inherit;
+}
+.pull-error-close:hover { background: rgba(137,180,250,0.15); color: #89b4fa; }
 
 .push-error {
   display: flex; align-items: flex-start; gap: 8px;

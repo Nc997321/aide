@@ -17,6 +17,8 @@ const detailLoading = ref(false);
 const viewingDiff = ref<{ path: string; content: string; loading: boolean } | null>(null);
 const pushing = ref(false);
 const pushError = ref("");
+const pulling = ref(false);
+const pullError = ref("");
 
 // ── Computed ──
 
@@ -125,8 +127,18 @@ function closeDiff() {
 }
 
 async function switchBranch(branch: string) {
-    try { await invoke("git_checkout", { branch }); } catch (e) { console.error("[useGit] switchBranch:", e); }
+    await invoke("git_checkout", { branch });
     await loadAll();
+}
+
+async function createBranch(name: string) {
+    await invoke("git_create_branch", { name });
+    await loadAll();
+}
+
+async function deleteBranch(name: string, force = false) {
+    await invoke("git_delete_branch", { name, force });
+    await loadBranches();
 }
 
 async function doStageFile(path: string) {
@@ -141,6 +153,11 @@ async function doUnstageFile(path: string) {
 
 async function doStageAll() {
     try { await invoke("git_stage_all"); } catch (e) { console.error("[useGit] stageAll:", e); }
+    await loadStatus();
+}
+
+async function doUnstageAll() {
+    try { await invoke("git_unstage_all"); } catch (e) { console.error("[useGit] unstageAll:", e); }
     await loadStatus();
 }
 
@@ -171,6 +188,25 @@ async function doPush(force?: boolean): Promise<void> {
 
 async function doForcePush(): Promise<void> {
     return doPush(true);
+}
+
+async function doPull(): Promise<void> {
+    pulling.value = true;
+    pullError.value = "";
+    try {
+        await invoke("git_pull");
+        await refreshAfterAction();
+        await loadBranches();
+    } catch (e) {
+        pullError.value = typeof e === "string" ? e : (e as Error).message || "Pull failed";
+        throw e;
+    } finally {
+        pulling.value = false;
+    }
+}
+
+function clearPullError() {
+    pullError.value = "";
 }
 
 function clearPushError() {
@@ -207,15 +243,22 @@ export function useGit() {
         viewDiff,
         closeDiff,
         switchBranch,
+        createBranch,
+        deleteBranch,
         doStageFile,
         doUnstageFile,
         doStageAll,
+        doUnstageAll,
         doCommit,
         doRevertFile,
         doPush,
         doForcePush,
+        doPull,
         pushing,
         pushError,
+        pulling,
+        pullError,
         clearPushError,
+        clearPullError,
     };
 }
