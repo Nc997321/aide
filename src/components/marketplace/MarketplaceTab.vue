@@ -131,7 +131,7 @@ function handleUninstall(name: string) {
 .error-banner {
   padding: 10px 12px;
   margin-bottom: 8px;
-  border-radius: 6px;
+  border-radius: var(--aide-radius-md);
   background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--aide-danger) 30%, transparent);
 }
@@ -143,7 +143,7 @@ function handleUninstall(name: string) {
 }
 
 .error-text {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--aide-danger);
   white-space: pre-line;
   line-height: 1.5;
@@ -192,8 +192,8 @@ function handleUninstall(name: string) {
   box-sizing: border-box;
   background: var(--aide-bg-base);
   border: 1px solid var(--aide-surface-hover);
-  border-radius: 6px;
-  padding: 7px 10px;
+  border-radius: var(--aide-radius-md);
+  padding: 8px 12px;
   font-size: 12px;
   color: var(--aide-text-primary);
   outline: none;
@@ -244,7 +244,7 @@ function handleUninstall(name: string) {
 .skel-btn {
   width: 60px;
   height: 26px;
-  border-radius: 5px;
+  border-radius: var(--aide-radius-sm);
   background: var(--aide-surface-hover);
   animation: pulse 1.5s ease-in-out infinite;
 }
@@ -287,7 +287,7 @@ function handleUninstall(name: string) {
   border: none;
   color: var(--aide-text-on-accent);
   padding: 6px 16px;
-  border-radius: 5px;
+  border-radius: var(--aide-radius-sm);
   cursor: pointer;
   font-size: 12px;
   font-family: inherit;

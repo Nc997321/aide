@@ -494,12 +494,12 @@ function onOverlayClick(e: MouseEvent) {
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--aide-radius-md);
   border: none;
   background: transparent;
   color: var(--aide-text-secondary);
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: 13px;
   font-family: inherit;
   transition: all 0.12s;
   text-align: left;
@@ -586,7 +586,7 @@ function onOverlayClick(e: MouseEvent) {
   box-sizing: border-box;
   background: var(--aide-bg-base);
   border: 1px solid var(--aide-surface-hover);
-  border-radius: 6px;
+  border-radius: var(--aide-radius-md);
   padding: 8px 12px;
   font-size: 13px;
   color: var(--aide-text-primary);
@@ -820,7 +820,7 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .kb-label {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--aide-text-secondary);
   flex-shrink: 0;
 }
@@ -835,7 +835,7 @@ function onOverlayClick(e: MouseEvent) {
   width: 100px;
   background: var(--aide-bg-base);
   border: 1px solid var(--aide-surface-hover);
-  border-radius: 5px;
+  border-radius: var(--aide-radius-sm);
   padding: 4px 8px;
   font-size: 11px;
   color: var(--aide-text-primary);
@@ -893,7 +893,7 @@ function onOverlayClick(e: MouseEvent) {
 .kb-conflict-warn {
   margin-top: 8px;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--aide-radius-md);
   background: color-mix(in srgb, var(--aide-warning) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--aide-warning) 25%, transparent);
   font-size: 11px;

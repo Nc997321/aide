@@ -566,7 +566,7 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
 }
 
 .session-name {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--aide-text-primary);
   overflow: hidden;
@@ -629,7 +629,7 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
 }
 
 .update-text {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--aide-accent);
   font-weight: 500;
 }
@@ -674,7 +674,7 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
   padding: 4px 8px;
   border-radius: var(--aide-radius-sm);
   cursor: pointer;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--aide-text-secondary);
   transition: all 0.12s;
   overflow: hidden;

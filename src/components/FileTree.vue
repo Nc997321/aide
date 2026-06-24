@@ -242,7 +242,7 @@ defineExpose({ loadRoot });
   font-size: 10px;
   color: var(--aide-text-muted);
   background: var(--aide-surface-default);
-  border-radius: 3px;
+  border-radius: var(--aide-radius-sm);
   padding: 1px 5px;
   flex-shrink: 0;
   max-width: 120px;

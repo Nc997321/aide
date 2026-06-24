@@ -203,7 +203,7 @@ function handleCancel() {
   width: 100%;
   background: var(--aide-surface-default);
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--aide-radius-md);
   padding: 8px 12px;
   font-size: 13px;
   color: var(--aide-text-primary);

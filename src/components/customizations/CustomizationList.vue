@@ -108,7 +108,7 @@ function handleToggle(id: string, event: Event) {
   color: var(--aide-text-on-accent);
   border: none;
   padding: 8px 16px;
-  border-radius: 6px;
+  border-radius: var(--aide-radius-md);
   cursor: pointer;
   font-size: 13px;
 }
@@ -201,7 +201,7 @@ function handleToggle(id: string, event: Event) {
   border: 1px dashed var(--aide-surface-default);
   color: var(--aide-text-secondary);
   padding: 8px;
-  border-radius: 6px;
+  border-radius: var(--aide-radius-md);
   cursor: pointer;
   font-size: 12px;
   transition: all 0.15s;

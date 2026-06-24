@@ -90,7 +90,7 @@ function onOverlayClick(e: MouseEvent) {
 .modal-dialog {
   background: var(--aide-surface-default);
   border: 1px solid var(--aide-surface-hover);
-  border-radius: 10px;
+  border-radius: var(--aide-radius-lg);
   padding: 20px 24px;
   min-width: 360px;
   max-width: 440px;
@@ -126,7 +126,7 @@ function onOverlayClick(e: MouseEvent) {
   box-sizing: border-box;
   background: var(--aide-bg-base);
   border: 1px solid var(--aide-surface-hover);
-  border-radius: 6px;
+  border-radius: var(--aide-radius-md);
   padding: 8px 12px;
   font-size: 13px;
   color: var(--aide-text-primary);
@@ -148,8 +148,8 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .modal-btn {
-  padding: 7px 18px;
-  border-radius: 6px;
+  padding: 8px 16px;
+  border-radius: var(--aide-radius-md);
   font-size: 13px;
   cursor: pointer;
   font-family: inherit;

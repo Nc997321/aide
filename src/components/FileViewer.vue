@@ -229,7 +229,7 @@ function getLanguageLabel(): string {
 .viewer-dialog {
   background: var(--aide-surface-default);
   border: 1px solid var(--aide-surface-hover);
-  border-radius: 10px;
+  border-radius: var(--aide-radius-lg);
   width: min(90vw, 900px);
   height: 85vh;
   display: flex;
@@ -285,7 +285,7 @@ function getLanguageLabel(): string {
   padding: 0 4px;
   line-height: 1;
   border-radius: 4px;
-  transition: all 0.1s;
+  transition: all 0.15s ease;
 }
 .viewer-close:hover {
   color: var(--aide-text-primary);
@@ -300,7 +300,7 @@ function getLanguageLabel(): string {
   border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.1s;
+  transition: all 0.15s ease;
 }
 .viewer-btn:hover {
   background: var(--aide-surface-hover);
@@ -437,7 +437,7 @@ function getLanguageLabel(): string {
   gap: 8px;
   padding: 6px 12px;
   cursor: pointer;
-  transition: background 0.08s;
+  transition: background 0.12s ease-out;
 }
 .goto-popover-item:hover,
 .goto-popover-item.active {

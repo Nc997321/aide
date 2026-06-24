@@ -112,11 +112,11 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   padding: 6px 10px;
-  border-radius: 5px;
+  border-radius: var(--aide-radius-sm);
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--aide-text-secondary);
-  transition: background 0.08s, color 0.08s;
+  transition: background 0.12s ease-out, color 0.12s ease-out;
 }
 
 .ctx-item:hover:not(.disabled) {

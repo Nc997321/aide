@@ -71,7 +71,7 @@ function handleClick() {
   gap: 12px;
   padding: 12px;
   border-radius: 8px;
-  transition: background 0.1s;
+  transition: background 0.15s ease;
 }
 
 .plugin-card:hover {
@@ -99,7 +99,7 @@ function handleClick() {
 }
 
 .plugin-desc {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--aide-text-secondary);
   line-height: 1.45;
   margin-bottom: 4px;
@@ -131,8 +131,8 @@ function handleClick() {
 
 .install-btn {
   flex-shrink: 0;
-  padding: 5px 14px;
-  border-radius: 5px;
+  padding: 4px 12px;
+  border-radius: var(--aide-radius-sm);
   font-size: 12px;
   cursor: pointer;
   font-family: inherit;

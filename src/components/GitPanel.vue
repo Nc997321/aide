@@ -288,7 +288,7 @@ defineExpose({ reload: loadAll });
         <button class="branch-btn" @click="onToggleBranchDropdown">
           <span class="branch-icon">⎇</span>
           <span class="branch-name">{{ currentBranch || "unknown" }}</span>
-          <span class="branch-arrow">▾</span>
+          <svg class="branch-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         <div v-if="branchDropdownOpen" class="branch-dropdown" @mouseleave="branchDropdownOpen = false">
           <button class="branch-dropdown-item branch-dropdown-create" @click="onCreateBranch">
@@ -342,7 +342,7 @@ defineExpose({ reload: loadAll });
     <!-- Staged -->
     <div v-if="stagedFiles.length > 0" class="git-section">
       <button class="section-header section-header-staged" @click="changesExpanded = !changesExpanded">
-        <span class="section-arrow" :class="{ open: changesExpanded }">▸</span>
+        <svg class="section-arrow" :class="{ open: changesExpanded }" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="section-title">Staged</span>
         <span class="section-badge staged-badge">{{ stagedFiles.length }}</span>
         <span class="section-header-action" title="取消暂存全部" @click.stop="doUnstageAll()">Unstage All</span>
@@ -368,7 +368,7 @@ defineExpose({ reload: loadAll });
     <!-- Unstaged -->
     <div class="git-section">
       <button class="section-header section-header-unstaged" @click="changesExpanded = !changesExpanded">
-        <span class="section-arrow" :class="{ open: changesExpanded }">▸</span>
+        <svg class="section-arrow" :class="{ open: changesExpanded }" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="section-title">Changes</span>
         <span v-if="unstagedFiles.length > 0" class="section-badge unstaged-badge">{{ unstagedFiles.length }}</span>
         <span v-if="unstagedFiles.length > 0" class="section-header-action" title="暂存全部" @click.stop="doStageAll()">Stage All</span>
@@ -388,7 +388,7 @@ defineExpose({ reload: loadAll });
     <!-- Commits -->
     <div class="git-section commits-section">
       <button class="section-header section-header-commits" @click="commitsExpanded = !commitsExpanded">
-        <span class="section-arrow" :class="{ open: commitsExpanded }">▸</span>
+        <svg class="section-arrow" :class="{ open: commitsExpanded }" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="section-title">Commits</span>
         <span v-if="hasUnpushed" class="section-badge push-count-badge">{{ unpushedCount }}</span>
         <span v-if="commits.length > 0" class="section-badge commits-badge">{{ commits.length }}</span>
@@ -499,28 +499,28 @@ defineExpose({ reload: loadAll });
 .branch-dropdown-wrapper { position: relative; }
 
 .branch-btn {
-  display: flex; align-items: center; gap: 5px;
+  display: flex; align-items: center; gap: 4px;
   background: var(--aide-bg-deep); border: 1px solid var(--aide-surface-hover);
-  border-radius: 5px; padding: 4px 10px; cursor: pointer;
+  border-radius: var(--aide-radius-sm); padding: 4px 10px; cursor: pointer;
   font-size: 12px; color: var(--aide-text-primary); font-family: inherit; transition: background 0.12s;
 }
 .branch-btn:hover { background: var(--aide-surface-default); }
 .branch-icon { font-size: 14px; color: var(--aide-accent); }
 .branch-name { font-weight: 500; }
-.branch-arrow { font-size: 14px; color: var(--aide-text-muted); }
+.branch-arrow { color: var(--aide-text-muted); flex-shrink: 0; }
 
 .branch-dropdown {
   position: absolute; top: 100%; left: 0; margin-top: 3px;
   min-width: 200px; max-height: 240px; overflow-y: auto;
   background: var(--aide-bg-deep); border: 1px solid var(--aide-surface-hover);
-  border-radius: 6px; box-shadow: var(--aide-shadow-md); z-index: 50; padding: 4px;
+  border-radius: var(--aide-radius-md); box-shadow: var(--aide-shadow-md); z-index: 50; padding: 4px;
 }
 
 .branch-dropdown-item {
   display: flex; align-items: center; justify-content: space-between;
   width: 100%; padding: 5px 8px; border: none; background: transparent;
   color: var(--aide-text-secondary); cursor: pointer; font-size: 12px;
-  font-family: inherit; border-radius: 4px; transition: background 0.1s; text-align: left;
+  font-family: inherit; border-radius: 4px; transition: background 0.15s ease; text-align: left;
 }
 .branch-dropdown-item:hover { background: var(--aide-surface-default); color: var(--aide-text-primary); }
 .branch-dropdown-item.current { color: var(--aide-accent); }
@@ -634,7 +634,7 @@ defineExpose({ reload: loadAll });
 }
 .push-error-action-btn:hover { background: color-mix(in srgb, var(--aide-info) 25%, transparent); }
 
-.section-arrow { font-size: 14px; transition: transform 0.15s; width: 16px; text-align: center; }
+.section-arrow { transition: transform 0.15s; width: 16px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: var(--aide-text-muted); }
 .section-arrow.open { transform: rotate(90deg); }
 
 .section-header-staged .section-title { color: var(--aide-success); }
@@ -669,7 +669,7 @@ defineExpose({ reload: loadAll });
 .commit-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .commit-error { padding: 6px 10px; font-size: 11px; color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 8%, transparent); }
 
-.git-file-row { display: flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; transition: background 0.1s; }
+.git-file-row { display: flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; transition: background 0.15s ease; }
 .git-file-row:hover { background: var(--aide-surface-default); }
 
 .git-file-status { flex-shrink: 0; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; border-radius: 3px; }
@@ -692,7 +692,7 @@ defineExpose({ reload: loadAll });
 
 .commit-item { border-bottom: 1px solid var(--aide-surface-default); }
 .commit-item:last-child { border-bottom: none; }
-.commit-header { display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px; cursor: pointer; transition: background 0.1s; }
+.commit-header { display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px; cursor: pointer; transition: background 0.15s ease; }
 .commit-header:hover { background: var(--aide-surface-default); }
 .commit-dot { font-size: 12px; color: var(--aide-accent); margin-top: 1px; flex-shrink: 0; }
 .commit-dot.unpushed { color: var(--aide-warning); }

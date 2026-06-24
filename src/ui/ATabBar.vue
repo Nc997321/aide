@@ -62,12 +62,12 @@ function onKeydown(e: KeyboardEvent) {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 7px 0 8px;
+  gap: 4px;
+  padding: 8px 0 8px;
   border: none;
   background: transparent;
   color: var(--aide-text-muted);
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
   font-family: inherit;
   cursor: pointer;

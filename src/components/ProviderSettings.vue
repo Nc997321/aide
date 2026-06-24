@@ -251,7 +251,7 @@ function knownModelsForDatalist(): string[] {
         <!-- Model mappings (collapsible) -->
         <div class="form-section">
           <button class="section-toggle" @click="showMappings = !showMappings">
-            <span class="toggle-arrow" :class="{ open: showMappings }">▸</span>
+            <svg class="toggle-arrow" :class="{ open: showMappings }" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
             模型映射
           </button>
 
@@ -337,7 +337,7 @@ function knownModelsForDatalist(): string[] {
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--aide-radius-md);
   cursor: pointer;
   transition: background 0.12s;
 }
@@ -363,7 +363,7 @@ function knownModelsForDatalist(): string[] {
 }
 
 .pi-name {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--aide-text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -409,7 +409,7 @@ function knownModelsForDatalist(): string[] {
 .add-btn {
   margin-top: 4px;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--aide-radius-md);
   border: 1px dashed var(--aide-surface-hover);
   background: transparent;
   color: var(--aide-text-secondary);
@@ -440,7 +440,7 @@ function knownModelsForDatalist(): string[] {
   padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
 
 .form-scroll::-webkit-scrollbar {
@@ -465,9 +465,9 @@ function knownModelsForDatalist(): string[] {
   box-sizing: border-box;
   background: var(--aide-bg-base);
   border: 1px solid var(--aide-surface-hover);
-  border-radius: 5px;
+  border-radius: var(--aide-radius-sm);
   padding: 6px 10px;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--aide-text-primary);
   outline: none;
   font-family: inherit;
@@ -504,7 +504,7 @@ select.text-input {
 .eye-btn {
   background: none;
   border: 1px solid var(--aide-surface-hover);
-  border-radius: 5px;
+  border-radius: var(--aide-radius-sm);
   cursor: pointer;
   font-size: 13px;
   width: 32px;
@@ -544,9 +544,10 @@ select.text-input {
 }
 
 .toggle-arrow {
-  font-size: 14px;
   transition: transform 0.15s;
-  display: inline-block;
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--aide-text-muted);
 }
 
 .toggle-arrow.open {
@@ -586,7 +587,7 @@ select.text-input {
   padding: 6px;
   background: var(--aide-bg-base);
   border: 1px solid var(--aide-surface-hover);
-  border-radius: 5px;
+  border-radius: var(--aide-radius-sm);
   min-height: 32px;
   align-items: center;
 }
@@ -646,7 +647,7 @@ select.text-input {
   border: 1px solid color-mix(in srgb, var(--aide-danger) 30%, transparent);
   color: var(--aide-danger);
   padding: 6px 16px;
-  border-radius: 5px;
+  border-radius: var(--aide-radius-sm);
   cursor: pointer;
   font-size: 12px;
   font-family: inherit;
@@ -662,7 +663,7 @@ select.text-input {
   border: none;
   color: var(--aide-bg-base);
   padding: 6px 24px;
-  border-radius: 5px;
+  border-radius: var(--aide-radius-sm);
   cursor: pointer;
   font-size: 12px;
   font-weight: 500;

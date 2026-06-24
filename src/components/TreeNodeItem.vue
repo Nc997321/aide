@@ -190,16 +190,16 @@ const isExpanded = () => props.expandedDirs.has(props.node.path);
 .tree-node {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   padding: 3px 10px 3px 8px;
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--aide-text-secondary);
   white-space: nowrap;
   position: relative;
   border-radius: 4px;
   margin: 0 4px;
-  transition: background 0.1s ease, color 0.1s ease;
+  transition: background 0.15s ease, color 0.15s ease;
   height: 26px;
 }
 

@@ -147,7 +147,7 @@ function onExitedKeydown(e: KeyboardEvent) {
   width: calc(100% - 20px);
   background: var(--aide-bg-base);
   border: 1px solid var(--aide-surface-default);
-  border-radius: 10px;
+  border-radius: var(--aide-radius-lg);
   box-shadow: var(--aide-shadow-lg);
   overflow: hidden;
   display: flex;

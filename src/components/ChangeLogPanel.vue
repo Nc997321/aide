@@ -57,7 +57,7 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
               class="changelog-round-revert"
               title="撤回本轮"
               @click="revertRound(round)"
-            >↶</button>
+            ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button>
           </div>
           <div v-if="round.files.length === 0" class="changelog-nochange">无变更</div>
           <div
@@ -77,7 +77,7 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
               class="changelog-file-revert"
               title="撤回此文件"
               @click.stop="revertSingleFile(round, f.path)"
-            >↶</button>
+            ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button>
           </div>
         </div>
       </template>
@@ -179,7 +179,7 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
   font-size: 12px;
   padding: 1px 4px;
   border-radius: 2px;
-  transition: color 0.1s, background 0.1s;
+  transition: color 0.15s ease, background 0.15s ease;
   font-family: inherit;
 }
 .changelog-round-revert:hover {
@@ -196,7 +196,7 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
   padding: 3px 12px;
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.1s;
+  transition: background 0.15s ease;
 }
 .changelog-file:hover {
   background: var(--aide-surface-default);
@@ -257,7 +257,7 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
   padding: 1px 4px;
   border-radius: 2px;
   opacity: 0;
-  transition: opacity 0.1s, color 0.1s, background 0.1s;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
   font-family: inherit;
 }
 .changelog-file:hover .changelog-file-revert {
