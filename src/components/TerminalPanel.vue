@@ -2,6 +2,7 @@
 import { ref, watch, onMounted, onUnmounted, nextTick, computed } from "vue";
 import { useSessionState } from "../composables/useSessionState";
 import { useTerminalManager } from "../composables/useTerminalManager";
+import { AToolbar, AStatusDot, AButton } from "../ui";
 import { marked, escapeHtml } from "../utils/markdown";
 import { api } from "../api";
 import "xterm/css/xterm.css";
@@ -68,6 +69,25 @@ const {
   cleanup,
 } = useTerminalManager(stackRef, previewRef, (newId) => emit("session-updated", newId), loadPreviewContent);
 
+// ── Toolbar state ──
+
+const { state: sessionState } = useSessionState();
+
+const currentStatus = computed(() => {
+  const sid = props.sessionId;
+  if (!sid) return "stopped" as const;
+  return (sessionState[sid] || "stopped") as "stopped" | "running" | "waiting" | "attention";
+});
+
+const sessionName = computed(() => {
+  const sid = props.sessionId;
+  if (!sid) return "";
+  if (sid.startsWith("new_")) return "新会话";
+  return sid.substring(0, 8);
+});
+
+const isLive = computed(() => liveDisplayIds.has(props.sessionId));
+
 // ── Keyboard & click handlers ──
 
 function tryStartClaude() {
@@ -126,6 +146,20 @@ onUnmounted(() => {
 
 <template>
   <div class="terminal-panel">
+    <AToolbar>
+      <template #left>
+        <AStatusDot :status="currentStatus" />
+        <span class="toolbar-session-name">{{ sessionName }}</span>
+      </template>
+      <template #right>
+        <AButton v-if="!isLive" variant="ghost" size="sm" @click="tryStartClaude">
+          ▶ 启动
+        </AButton>
+        <AButton v-if="isLive" variant="danger" size="sm" @click="stopClaude(props.sessionId)">
+          ⏹ 停止
+        </AButton>
+      </template>
+    </AToolbar>
     <div ref="stackRef" class="terminal-stack">
       <div
         ref="previewRef"
@@ -135,7 +169,7 @@ onUnmounted(() => {
       >
         <div v-if="props.sessionId && props.sessionId.startsWith('new_')" class="preview-empty" @click="onPreviewClick">
           <div class="preview-empty__title">New Session</div>
-          <div class="preview-empty__hint">Press Enter to start</div>
+          <div class="preview-empty__hint">Press Enter or click Start</div>
         </div>
         <template v-else-if="previewHtml">
           <div class="preview-messages" v-html="previewHtml"></div>
@@ -143,16 +177,10 @@ onUnmounted(() => {
         </template>
         <div v-else class="preview-empty" @click="onPreviewClick">
           <div class="preview-empty__title">Session {{ (props.sessionId || '').substring(0, 8) }}</div>
-          <div class="preview-empty__hint">Press Enter to start</div>
+          <div class="preview-empty__hint">Press Enter or click Start</div>
         </div>
       </div>
     </div>
-    <button
-      v-if="liveDisplayIds.has(props.sessionId)"
-      class="close-btn"
-      title="Stop Claude"
-      @click="stopClaude(props.sessionId)"
-    >&#x23F9;</button>
   </div>
 </template>
 
@@ -401,6 +429,12 @@ onUnmounted(() => {
 
 <style scoped>
 .terminal-panel { height: 100%; width: 100%; display: flex; flex-direction: column; position: relative; }
-.close-btn { position: absolute; top: 8px; right: 8px; background: var(--surface); border: 1px solid var(--surface-hover); color: var(--text-secondary); font-size: 12px; padding: 2px 8px; border-radius: 4px; cursor: pointer; opacity: 0.6; transition: opacity 0.15s, color 0.15s; z-index: 10; }
-.close-btn:hover { opacity: 1; color: #f38ba8; }
+.toolbar-session-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--aide-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 </style>
