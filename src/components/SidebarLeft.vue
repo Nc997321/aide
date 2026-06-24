@@ -8,6 +8,7 @@ import { sessionMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
 import { open } from "@tauri-apps/plugin-shell";
 import { getVersion } from "@tauri-apps/api/app";
+import { ACard, AStatusDot } from "../ui";
 import type { Session, WorkspaceInfo } from "../types";
 
 const props = defineProps<{
@@ -321,18 +322,9 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
       </button>
     </div>
 
-    <!-- Search box -->
-    <div class="search-box">
-      <input
-        v-model="searchQuery"
-        class="search-input"
-        placeholder="搜索工作区或会话..."
-      />
-    </div>
-
     <!-- Workspace + Session list -->
     <div class="session-list">
-      <div v-if="loading" class="session-item muted">加载中...</div>
+      <div v-if="loading" class="session-empty muted">加载中...</div>
 
       <template v-else v-for="ws in filteredWorkspaces" :key="ws.key">
         <!-- Workspace row -->
@@ -349,26 +341,26 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
         <template v-if="expandedWorkspaces.has(ws.key)">
           <div
             v-if="wsSessions(ws.key).length === 0"
-            class="session-item muted"
+            class="session-empty muted"
           >
             暂无会话
           </div>
-          <div
+          <ACard
             v-for="s in wsSessions(ws.key)"
             :key="s.id"
-            class="session-item"
-            :class="{
-              active: props.activeSessionId === s.id,
-              running: sessionState[s.id] === 'running',
-              waiting: sessionState[s.id] === 'waiting',
-              attention: sessionState[s.id] === 'attention',
-            }"
+            :active="props.activeSessionId === s.id"
+            :glow-color="sessionState[s.id] === 'running' ? 'var(--aide-success)' : undefined"
+            class="session-card"
             @click="selectSessionFromWorkspace(ws.key, s.id)"
             @contextmenu.prevent="onSessionContextMenu($event, s.id)"
           >
-            <div class="session-name">{{ s.name }}</div>
-            <div class="session-time">{{ timeAgo(s.timestamp) }}</div>
-          </div>
+            <div class="session-card-header">
+              <AStatusDot :status="sessionState[s.id] || 'stopped'" />
+              <span class="session-name">{{ s.name }}</span>
+              <span class="session-time">{{ timeAgo(s.timestamp) }}</span>
+            </div>
+            <div class="session-preview">{{ s.last_message }}</div>
+          </ACard>
         </template>
       </template>
     </div>
@@ -447,54 +439,33 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
 }
 
 .header-title {
+  font-size: 11px;
   font-weight: 600;
-  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--aide-text-muted);
 }
 
 .new-btn {
-  background: none;
-  border: 1px solid var(--surface);
-  color: var(--text-secondary);
-  padding: 3px 10px;
-  border-radius: 4px;
-  font-size: 12px;
+  background: var(--aide-accent-subtle);
+  border: 1px solid color-mix(in srgb, var(--aide-accent) 20%, transparent);
+  color: var(--aide-accent);
+  padding: 4px 12px;
+  border-radius: var(--aide-radius-sm);
+  font-size: 11px;
+  font-weight: 500;
   cursor: pointer;
+  transition: all 0.15s;
 }
-
 .new-btn:hover {
-  background: var(--surface);
-  color: var(--text-primary);
-}
-
-.search-box {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--surface);
-}
-
-.search-input {
-  width: 100%;
-  box-sizing: border-box;
-  background: var(--surface);
-  border: 1px solid transparent;
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 12px;
-  color: var(--text-primary);
-  outline: none;
-  font-family: inherit;
-  transition: border-color 0.15s;
-}
-.search-input::placeholder {
-  color: var(--text-muted);
-}
-.search-input:focus {
-  border-color: var(--accent);
+  background: color-mix(in srgb, var(--aide-accent) 20%, transparent);
+  border-color: color-mix(in srgb, var(--aide-accent) 35%, transparent);
 }
 
 .session-list {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 0;
+  padding: 0 10px 10px;
 }
 
 /* ── Workspace item ── */
@@ -538,98 +509,50 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
   white-space: nowrap;
 }
 
-/* ── Session item ── */
+/* ── Session card ── */
 
-.session-item {
-  padding: 7px 16px 7px 36px;
+.session-card {
+  margin-bottom: 6px;
   cursor: pointer;
-  border-left: 2px solid transparent;
-  border-right: 2px solid transparent;
-  transition: all 0.1s;
 }
 
-.session-item:hover {
-  background: var(--surface);
-}
-
-.session-item.active {
-  background: var(--surface);
-  border-left-color: var(--accent);
-}
-
-/* Running: green shimmer sweeping right→left */
-.session-item.running {
-  position: relative;
-  overflow: hidden;
-}
-.session-item.running::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(166, 227, 161, 0.06) 40%,
-    rgba(166, 227, 161, 0.12) 50%,
-    rgba(166, 227, 161, 0.06) 60%,
-    transparent 100%
-  );
-  background-size: 200% 100%;
-  animation: sweep-right 2.5s ease-in-out infinite;
-  pointer-events: none;
-}
-@keyframes sweep-right {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-/* Waiting: subtle green right accent */
-.session-item.waiting {
-  border-right-color: var(--accent-green);
-}
-
-/* Attention: amber shimmer */
-.session-item.attention {
-  position: relative;
-  overflow: hidden;
-}
-.session-item.attention::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(249, 226, 175, 0.06) 40%,
-    rgba(249, 226, 175, 0.12) 50%,
-    rgba(249, 226, 175, 0.06) 60%,
-    transparent 100%
-  );
-  background-size: 200% 100%;
-  animation: sweep-right 1.5s ease-in-out infinite;
-  pointer-events: none;
-}
-
-.session-item.muted {
-  color: var(--text-muted);
-  cursor: default;
-  font-size: 12px;
-  padding-top: 12px;
-  padding-bottom: 12px;
+.session-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
 }
 
 .session-name {
-  font-size: 13px;
-  color: var(--text-primary);
-  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--aide-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
 }
 
 .session-time {
+  font-size: 10px;
+  color: var(--aide-text-muted);
+  flex-shrink: 0;
+}
+
+.session-preview {
   font-size: 11px;
+  color: var(--aide-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.session-empty.muted {
   color: var(--text-muted);
-  margin-top: 2px;
+  cursor: default;
+  font-size: 12px;
+  padding: 12px 16px;
 }
 
 /* ── Update banner ── */
