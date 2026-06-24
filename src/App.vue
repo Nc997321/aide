@@ -12,6 +12,10 @@ import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
 import NotificationBanner from "./components/NotificationBanner.vue";
 import TitleBar from "./components/titlebar/TitleBar.vue";
 import ACommandPalette from "./ui/ACommandPalette.vue";
+import { ATabBar } from "./ui";
+import type { Tab } from "./ui";
+import { useResizable } from "./composables/useResizable";
+import { useConversationChanges } from "./composables/useConversationChanges";
 import { useWorkbenchTerminal } from "./composables/useWorkbenchTerminal";
 import { api } from "./api";
 import { ref, onMounted, onUnmounted, nextTick, watch, computed } from "vue";
@@ -25,17 +29,26 @@ import { useGitWatcher } from "./composables/useGitWatcher";
 import { matchShortcut } from "./utils/shortcut";
 import { applyTheme, warmDark } from "./themes";
 
-const leftWidth = ref(280);
-const rightWidth = ref(300);
-const changeLogHeight = ref(300);
-const changeLogCollapsed = ref(false);
 const leftCollapsed = ref(false);
 const rightCollapsed = ref(false);
-const rightTab = ref<"files" | "git">("files");
+const rightTab = ref<"files" | "changes" | "git">("files");
 const { unstagedFiles, hasChanges, loadStatus } = useGit();
-const isDraggingLeft = ref(false);
-const isDraggingRight = ref(false);
-const isDraggingChangeLog = ref(false);
+
+const leftResize = useResizable({
+  cssVar: "--aide-left-w",
+  initial: 280,
+  min: 220,
+  max: 450,
+  direction: "left",
+});
+
+const rightResize = useResizable({
+  cssVar: "--aide-right-w",
+  initial: 300,
+  min: 280,
+  max: 500,
+  direction: "right",
+});
 const sidebarRef = ref<InstanceType<typeof SidebarLeft> | null>(null);
 const fileTreeRef = ref<InstanceType<typeof FileTree> | null>(null);
 const gitPanelRef = ref<InstanceType<typeof GitPanel> | null>(null);
@@ -124,53 +137,19 @@ function onBannerDismiss() {
   clearPending();
 }
 
-function onLeftResizeStart(e: MouseEvent) {
-  isDraggingLeft.value = true;
-  const startX = e.clientX;
-  const startWidth = leftWidth.value;
-  const onMove = (ev: MouseEvent) => {
-    leftWidth.value = Math.max(200, Math.min(450, startWidth + ev.clientX - startX));
-  };
-  const onUp = () => {
-    isDraggingLeft.value = false;
-    document.removeEventListener("mousemove", onMove);
-    document.removeEventListener("mouseup", onUp);
-  };
-  document.addEventListener("mousemove", onMove);
-  document.addEventListener("mouseup", onUp);
-}
+// ── Conversation changes badge for the "changes" tab ──
+const { rounds } = useConversationChanges(() => activeSessionId.value);
+const changeCount = computed(() => {
+  let n = 0;
+  for (const r of rounds.value) n += r.files.length;
+  return n;
+});
 
-function onRightResizeStart(e: MouseEvent) {
-  isDraggingRight.value = true;
-  const startX = e.clientX;
-  const startWidth = rightWidth.value;
-  const onMove = (ev: MouseEvent) => {
-    rightWidth.value = Math.max(200, Math.min(500, startWidth - ev.clientX + startX));
-  };
-  const onUp = () => {
-    isDraggingRight.value = false;
-    document.removeEventListener("mousemove", onMove);
-    document.removeEventListener("mouseup", onUp);
-  };
-  document.addEventListener("mousemove", onMove);
-  document.addEventListener("mouseup", onUp);
-}
-
-function onChangeLogResizeStart(e: MouseEvent) {
-  isDraggingChangeLog.value = true;
-  const startY = e.clientY;
-  const startHeight = changeLogHeight.value;
-  const onMove = (ev: MouseEvent) => {
-    changeLogHeight.value = Math.max(100, Math.min(600, startHeight + ev.clientY - startY));
-  };
-  const onUp = () => {
-    isDraggingChangeLog.value = false;
-    document.removeEventListener("mousemove", onMove);
-    document.removeEventListener("mouseup", onUp);
-  };
-  document.addEventListener("mousemove", onMove);
-  document.addEventListener("mouseup", onUp);
-}
+const rightTabs = computed<Tab[]>(() => [
+  { id: "files", label: "文件", icon: "📁" },
+  { id: "changes", label: "变更", icon: "✎", badge: changeCount.value || undefined },
+  { id: "git", label: "Git", icon: "⎇", badge: unstagedFiles.value.length || undefined },
+]);
 
 function onSessionChanged(id: string) {
   activeSessionId.value = id;
@@ -314,102 +293,86 @@ onUnmounted(() => {
   <div class="app-shell">
     <TitleBar ref="titleBarRef" @open-palette="paletteOpen = true" />
 
-    <div class="app-layout">
-      <!-- Notification banner for completed sessions -->
-    <NotificationBanner
-      :sessions="pendingSessionInfos"
-      :visible="bannerVisible"
-      @navigate="onBannerNavigate"
-      @dismiss="onBannerDismiss"
-    />
+    <div class="app-layout" :class="{ 'is-dragging': leftResize.isDragging.value || rightResize.isDragging.value }">
+      <NotificationBanner
+        :sessions="pendingSessionInfos"
+        :visible="bannerVisible"
+        @navigate="onBannerNavigate"
+        @dismiss="onBannerDismiss"
+      />
 
-    <!-- Left panel -->
-    <div class="panel-left" :class="{ collapsed: leftCollapsed }" :style="{ width: leftCollapsed ? '10px' : leftWidth + 'px' }">
-      <div
-        class="collapse-toggle collapse-toggle-left"
-        :title="leftCollapsed ? '展开侧栏' : '收起侧栏'"
-        @click.stop="leftCollapsed = !leftCollapsed"
-      >
-        <span class="collapse-arrow">{{ leftCollapsed ? '▶' : '◀' }}</span>
-      </div>
-      <SidebarLeft v-show="!leftCollapsed" ref="sidebarRef" :active-session-id="activeSessionId" @session-changed="onSessionChanged" @workspace-changed="onSidebarWsChanged" @open-settings="openSettings" @open-workbench="wb.toggle(workspacePath)" @provider-switch="onProviderSwitch" @open-settings-providers="openSettingsProviders" />
-    </div>
-
-    <!-- Resize handle left -->
-    <div
-      v-show="!leftCollapsed"
-      class="resize-handle"
-      :class="{ active: isDraggingLeft }"
-      @mousedown="onLeftResizeStart"
-    />
-
-    <!-- Center panel -->
-    <div class="panel-center">
-      <TerminalPanel ref="terminalPanelRef" :session-id="activeSessionId" @session-updated="onSessionUpdated" />
-    </div>
-
-    <!-- Resize handle right -->
-    <div
-      v-show="!rightCollapsed"
-      class="resize-handle"
-      :class="{ active: isDraggingRight }"
-      @mousedown="onRightResizeStart"
-    />
-
-    <!-- Right panel -->
-    <div class="panel-right" :class="{ collapsed: rightCollapsed }" :style="{ width: rightCollapsed ? '10px' : rightWidth + 'px' }">
-      <div
-        class="collapse-toggle collapse-toggle-right"
-        :title="rightCollapsed ? '展开侧栏' : '收起侧栏'"
-        @click.stop="rightCollapsed = !rightCollapsed"
-      >
-        <span class="collapse-arrow">{{ rightCollapsed ? '◀' : '▶' }}</span>
-      </div>
-      <div v-show="!rightCollapsed" class="panel-right-inner">
-      <!-- Tab bar -->
-      <div class="right-tab-bar">
-        <button
-          class="right-tab"
-          :class="{ active: rightTab === 'files' }"
-          @click="rightTab = 'files'"
-        >
-          <span class="right-tab-icon">📁</span>
-          <span class="right-tab-label">{{ projectName || "项目" }}</span>
-        </button>
-        <button
-          class="right-tab"
-          :class="{ active: rightTab === 'git' }"
-          @click="rightTab = 'git'"
-        >
-          <span class="right-tab-icon">⎇</span>
-          <span class="right-tab-label">Git</span>
-          <span v-if="hasChanges" class="right-tab-badge">{{ unstagedFiles.length }}</span>
-        </button>
-      </div>
-
-      <!-- Files tab: FileTree + ChangeLog -->
-      <div v-show="rightTab === 'files'" class="tab-content">
-        <FileTree ref="fileTreeRef" :session-id="activeSessionId" />
+      <!-- Left panel -->
+      <div class="panel-left" :class="{ collapsed: leftCollapsed }">
         <div
-          v-show="!changeLogCollapsed"
-          class="resize-handle-h"
-          :class="{ active: isDraggingChangeLog }"
-          @mousedown="onChangeLogResizeStart"
+          class="collapse-toggle collapse-toggle-left"
+          :title="leftCollapsed ? '展开侧栏' : '收起侧栏'"
+          @click.stop="leftCollapsed = !leftCollapsed"
+        >
+          <span class="collapse-arrow">{{ leftCollapsed ? '▶' : '◀' }}</span>
+        </div>
+        <SidebarLeft
+          v-show="!leftCollapsed"
+          ref="sidebarRef"
+          :active-session-id="activeSessionId"
+          @session-changed="onSessionChanged"
+          @workspace-changed="onSidebarWsChanged"
+          @open-settings="openSettings"
+          @open-workbench="wb.toggle(workspacePath)"
+          @provider-switch="onProviderSwitch"
+          @open-settings-providers="openSettingsProviders"
         />
-        <ChangeLogPanel :session-id="activeSessionId" :style="{ height: changeLogCollapsed ? 'auto' : changeLogHeight + 'px' }" @collapse-changed="(v) => changeLogCollapsed = v" />
       </div>
 
-      <div v-show="rightTab === 'git'" class="tab-content">
-        <GitPanel ref="gitPanelRef" />
-      </div>
-      </div> <!-- .panel-right-inner -->
-    </div>
+      <!-- Left resize handle -->
+      <div
+        v-show="!leftCollapsed"
+        class="resize-handle"
+        :class="{ active: leftResize.isDragging.value }"
+        @mousedown="leftResize.onMousedown"
+      />
 
-    <ContextMenu />
-    <ModalDialog />
-    <SettingsPanel v-if="settingsVisible" :initial-tab="settingsInitialTab" @close="settingsVisible = false" />
-    <FileViewer />
-    <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
+      <!-- Center panel -->
+      <div class="panel-center">
+        <TerminalPanel
+          ref="terminalPanelRef"
+          :session-id="activeSessionId"
+          @session-updated="onSessionUpdated"
+        />
+      </div>
+
+      <!-- Right resize handle -->
+      <div
+        v-show="!rightCollapsed"
+        class="resize-handle"
+        :class="{ active: rightResize.isDragging.value }"
+        @mousedown="rightResize.onMousedown"
+      />
+
+      <!-- Right panel -->
+      <div class="panel-right" :class="{ collapsed: rightCollapsed }">
+        <div
+          class="collapse-toggle collapse-toggle-right"
+          :title="rightCollapsed ? '展开侧栏' : '收起侧栏'"
+          @click.stop="rightCollapsed = !rightCollapsed"
+        >
+          <span class="collapse-arrow">{{ rightCollapsed ? '◀' : '▶' }}</span>
+        </div>
+        <div v-show="!rightCollapsed" class="panel-right-inner">
+          <ATabBar :tabs="rightTabs" v-model="rightTab" />
+
+          <div class="tab-content">
+            <FileTree v-show="rightTab === 'files'" ref="fileTreeRef" :session-id="activeSessionId" />
+            <ChangeLogPanel v-show="rightTab === 'changes'" :session-id="activeSessionId" />
+            <GitPanel v-show="rightTab === 'git'" ref="gitPanelRef" />
+          </div>
+        </div>
+      </div>
+
+      <ContextMenu />
+      <ModalDialog />
+      <SettingsPanel v-if="settingsVisible" :initial-tab="settingsInitialTab" @close="settingsVisible = false" />
+      <FileViewer />
+      <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
     </div>
 
     <ACommandPalette
@@ -429,73 +392,87 @@ onUnmounted(() => {
 }
 
 .app-layout {
-  display: flex;
+  display: grid;
+  grid-template-columns:
+    var(--aide-left-w, 280px)
+    1px
+    minmax(400px, 1fr)
+    1px
+    var(--aide-right-w, 300px);
+  grid-template-rows: 1fr;
   flex: 1;
   min-height: 0;
   width: 100%;
-  background-color: var(--bg-primary);
+  background-color: var(--aide-bg-base);
   user-select: none;
 }
 
+.app-layout.is-dragging {
+  user-select: none;
+  cursor: col-resize;
+}
+
 .panel-left {
-  flex-shrink: 0;
   height: 100%;
-  background-color: var(--bg-secondary);
-  border-right: 1px solid var(--surface);
+  background-color: var(--aide-bg-deep);
+  border-right: 1px solid var(--aide-border);
   display: flex;
   flex-direction: column;
   position: relative;
-  transition: width 0.2s ease;
   overflow: hidden;
+  min-width: 0;
+}
+
+.panel-left.collapsed {
+  width: 10px !important;
+  min-width: 10px;
 }
 
 .panel-center {
-  flex: 1;
   height: 100%;
-  min-width: 400px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  background-color: var(--bg-primary);
+  background-color: var(--aide-bg-base);
 }
 
 .panel-right {
-  flex-shrink: 0;
   height: 100%;
-  background-color: var(--bg-secondary);
-  border-left: 1px solid var(--surface);
+  background-color: var(--aide-bg-deep);
+  border-left: 1px solid var(--aide-border);
   display: flex;
   flex-direction: column;
   position: relative;
-  transition: width 0.2s ease;
   overflow: hidden;
+  min-width: 0;
+}
+
+.panel-right.collapsed {
+  width: 10px !important;
+  min-width: 10px;
 }
 
 .resize-handle {
-  width: 3px;
+  width: 1px;
+  background: var(--aide-border);
   cursor: col-resize;
-  background-color: transparent;
-  transition: background-color 0.15s;
-  flex-shrink: 0;
-  z-index: 10;
+  position: relative;
+  transition: background 0.15s ease;
+}
+
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  left: -3px;
+  right: -3px;
+  top: 0;
+  bottom: 0;
 }
 
 .resize-handle:hover,
 .resize-handle.active {
-  background-color: var(--accent);
-}
-
-.resize-handle-h {
-  height: 3px;
-  cursor: row-resize;
-  background-color: transparent;
-  transition: background-color 0.15s;
-  flex-shrink: 0;
-  z-index: 10;
-}
-
-.resize-handle-h:hover,
-.resize-handle-h.active {
-  background-color: var(--accent);
+  background: var(--aide-accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 20%, transparent);
 }
 
 /* ── Collapse toggles (hover-reveal centered strip) ── */
@@ -518,26 +495,25 @@ onUnmounted(() => {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  width: 20px;          /* wide invisible hover target */
+  width: 20px;
   height: clamp(72px, 15%, 180px);
   display: flex;
   align-items: center;
   cursor: pointer;
   z-index: 20;
   opacity: 0;
-  transition: opacity 0.2s;
+  transition: opacity 0.2s ease;
 }
 
-/* Visible strip (pseudo-element inside the 20px hover zone) */
 .collapse-toggle::before {
   content: '';
   position: absolute;
   top: 0;
   width: 10px;
   height: 100%;
-  background: var(--surface);
+  background: var(--aide-surface-default);
   border-radius: 3px;
-  transition: background-color 0.15s;
+  transition: background-color 0.15s ease;
 }
 
 .collapse-toggle:hover {
@@ -545,10 +521,9 @@ onUnmounted(() => {
 }
 
 .collapse-toggle:hover::before {
-  background: var(--surface-hover);
+  background: var(--aide-surface-hover);
 }
 
-/* Left toggle: arrow hugs right edge so it stays visible when collapsed */
 .collapse-toggle-left {
   right: 0;
   justify-content: flex-end;
@@ -559,7 +534,6 @@ onUnmounted(() => {
   border-radius: 3px 0 0 3px;
 }
 
-/* Right toggle: arrow hugs left edge so it stays visible when collapsed */
 .collapse-toggle-right {
   left: 0;
   justify-content: flex-start;
@@ -574,76 +548,19 @@ onUnmounted(() => {
   position: relative;
   z-index: 1;
   font-size: 10px;
-  color: var(--text-muted);
-  transition: color 0.15s;
+  color: var(--aide-text-muted);
+  transition: color 0.15s ease;
   line-height: 1;
   pointer-events: none;
   margin: 0 1px;
 }
 
 .collapse-toggle:hover .collapse-arrow {
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
 }
 
-/* Always visible when panel is collapsed (user needs to find the expand button) */
 .panel-left.collapsed .collapse-toggle,
 .panel-right.collapsed .collapse-toggle {
   opacity: 1;
-}
-
-/* ── Right panel tab bar ── */
-
-.right-tab-bar {
-  display: flex;
-  border-bottom: 1px solid var(--surface);
-  flex-shrink: 0;
-  background: var(--bg-tertiary);
-}
-
-.right-tab {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 6px 0;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 11.5px;
-  font-family: inherit;
-  transition: all 0.12s;
-}
-
-.right-tab:hover {
-  color: var(--text-secondary);
-  background: var(--surface);
-}
-
-.right-tab.active {
-  color: var(--text-primary);
-  border-bottom-color: var(--accent);
-}
-
-.right-tab-icon {
-  font-size: 13px;
-}
-
-.right-tab-label {
-  font-weight: 500;
-}
-
-.right-tab-badge {
-  background: var(--accent);
-  color: #1e1e2e;
-  font-size: 10px;
-  font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 8px;
-  min-width: 14px;
-  text-align: center;
-  line-height: 1.4;
 }
 </style>

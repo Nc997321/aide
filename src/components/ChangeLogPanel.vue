@@ -1,16 +1,14 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useConversationChanges } from "../composables/useConversationChanges";
 import { useFileViewer } from "../composables/useFileViewer";
 import { api } from "../api";
 
 const props = defineProps<{ sessionId: string }>();
-const emit = defineEmits<{ (e: "collapse-changed", collapsed: boolean): void }>();
 
 const { rounds, revertRound, revertSingleFile } = useConversationChanges(() => props.sessionId);
 const fileViewer = useFileViewer();
 
-const collapsed = ref(false);
 const projectRoot = ref("");
 
 onMounted(async () => {
@@ -28,11 +26,6 @@ function openFile(path: string) {
   fileViewer.open(path);
 }
 
-function toggleCollapsed() {
-  collapsed.value = !collapsed.value;
-  emit("collapse-changed", collapsed.value);
-}
-
 const totalFiles = computed(() => {
   let n = 0;
   for (const r of rounds.value) n += r.files.length;
@@ -43,25 +36,19 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
 </script>
 
 <template>
-  <div class="changelog" :class="{ collapsed }">
-    <!-- Header -->
-    <div class="changelog-header" @click="toggleCollapsed">
-      <div class="changelog-header-left">
-        <span class="changelog-dot">●</span>
-        <span class="changelog-title">会话变更</span>
-        <span v-if="totalFiles > 0" class="changelog-badge">{{ totalFiles }}</span>
-      </div>
-      <span class="changelog-arrow" :class="{ open: !collapsed }">▾</span>
+  <div class="changelog">
+    <div class="changelog-header">
+      <span class="changelog-dot">●</span>
+      <span class="changelog-title">会话变更</span>
+      <span v-if="totalFiles > 0" class="changelog-badge">{{ totalFiles }}</span>
     </div>
 
-    <!-- Body -->
-    <div v-show="!collapsed" class="changelog-body">
+    <div class="changelog-body">
       <template v-if="rounds.length === 0">
-        <div class="changelog-empty">暂无会话记录</div>
+        <div class="changelog-empty">暂无变更记录</div>
       </template>
       <template v-else>
         <div v-for="round in displayedRounds" :key="round.index" class="changelog-round">
-          <!-- Round header -->
           <div class="changelog-round-header">
             <span class="changelog-round-label">轮 {{ round.index }}</span>
             <span class="changelog-round-time">{{ round.time }}</span>
@@ -72,7 +59,6 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
               @click="revertRound(round)"
             >↶</button>
           </div>
-          <!-- Files -->
           <div v-if="round.files.length === 0" class="changelog-nochange">无变更</div>
           <div
             v-for="f in round.files"
@@ -103,8 +89,9 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
 .changelog {
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--surface);
-  background: var(--bg-secondary);
+  flex: 1;
+  min-height: 0;
+  background: var(--aide-bg-deep);
   overflow: hidden;
 }
 
@@ -113,51 +100,30 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
 .changelog-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 5px 12px;
-  min-height: 28px;
-  cursor: pointer;
-  user-select: none;
-  background: var(--bg-tertiary);
-  flex-shrink: 0;
-}
-.changelog-header:hover {
-  background: var(--surface);
-}
-
-.changelog-header-left {
-  display: flex;
-  align-items: center;
   gap: 6px;
+  padding: 8px 12px;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.4px;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--aide-border);
 }
 
 .changelog-dot {
   font-size: 8px;
-  color: var(--accent);
+  color: var(--aide-accent);
 }
 
 .changelog-badge {
-  background: var(--surface);
-  color: var(--text-muted);
+  background: var(--aide-surface-default);
+  color: var(--aide-text-muted);
   font-size: 10px;
   padding: 1px 6px;
   border-radius: 8px;
   min-width: 16px;
   text-align: center;
   line-height: 1.4;
-}
-
-.changelog-arrow {
-  font-size: 14px;
-  color: var(--text-muted);
-  transition: transform 0.15s;
-}
-.changelog-arrow.open {
-  transform: rotate(180deg);
 }
 
 /* ── Body ── */
@@ -170,14 +136,14 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
 .changelog-empty {
   padding: 24px 16px;
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   text-align: center;
 }
 
 /* ── Round groups ── */
 
 .changelog-round {
-  border-bottom: 1px solid var(--surface);
+  border-bottom: 1px solid var(--aide-border-subtle);
 }
 
 .changelog-round:last-child {
@@ -190,25 +156,25 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
   gap: 8px;
   padding: 3px 12px;
   font-size: 10px;
-  color: var(--text-muted);
-  background: var(--bg-secondary);
-  border-bottom: 1px solid rgba(49, 50, 68, 0.6);
+  color: var(--aide-text-muted);
+  background: var(--aide-bg-deep);
+  border-bottom: 1px solid var(--aide-border-subtle);
 }
 
 .changelog-round-label {
   font-weight: 600;
-  color: var(--accent);
+  color: var(--aide-accent);
 }
 
 .changelog-round-time {
   flex: 1;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
 }
 
 .changelog-round-revert {
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   cursor: pointer;
   font-size: 12px;
   padding: 1px 4px;
@@ -217,8 +183,8 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
   font-family: inherit;
 }
 .changelog-round-revert:hover {
-  color: var(--accent-red);
-  background: rgba(243, 139, 168, 0.12);
+  color: var(--aide-danger);
+  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
 }
 
 /* ── File rows ── */
@@ -233,13 +199,13 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
   transition: background 0.1s;
 }
 .changelog-file:hover {
-  background: var(--surface);
+  background: var(--aide-surface-default);
 }
 
 .changelog-nochange {
   padding: 4px 12px;
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   font-style: italic;
 }
 
@@ -255,12 +221,12 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
   border-radius: 3px;
 }
 .status-M {
-  background: rgba(249, 226, 175, 0.15);
-  color: #f9e2af;
+  background: color-mix(in srgb, var(--aide-warning) 15%, transparent);
+  color: var(--aide-warning);
 }
 .status-A {
-  background: rgba(166, 227, 161, 0.15);
-  color: #a6e3a1;
+  background: color-mix(in srgb, var(--aide-success) 15%, transparent);
+  color: var(--aide-success);
 }
 
 .changelog-file-path {
@@ -268,7 +234,7 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   font-size: 12px;
 }
 
@@ -278,14 +244,14 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
   font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
 }
 
-.stat-add { color: var(--accent-green); }
-.stat-del { color: var(--accent-red); }
+.stat-add { color: var(--aide-success); }
+.stat-del { color: var(--aide-danger); }
 
 .changelog-file-revert {
   flex-shrink: 0;
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   cursor: pointer;
   font-size: 12px;
   padding: 1px 4px;
@@ -298,8 +264,8 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
   opacity: 1;
 }
 .changelog-file-revert:hover {
-  color: var(--accent-red);
-  background: rgba(243, 139, 168, 0.12);
+  color: var(--aide-danger);
+  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
 }
 
 /* ── Scrollbar ── */
@@ -311,7 +277,7 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
   background: transparent;
 }
 .changelog-body::-webkit-scrollbar-thumb {
-  background: var(--surface-hover);
+  background: var(--aide-surface-hover);
   border-radius: 2px;
 }
 </style>
