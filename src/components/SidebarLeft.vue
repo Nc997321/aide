@@ -330,11 +330,17 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
         <!-- Workspace row -->
         <div
           class="workspace-item"
-          :class="{ active: ws.key === activeWorkspace }"
+          :class="{ active: ws.key === activeWorkspace, expanded: expandedWorkspaces.has(ws.key) }"
           @click="switchWorkspace(ws)"
         >
-          <span class="ws-arrow" :class="{ expanded: expandedWorkspaces.has(ws.key) }">&#x25B8;</span>
+          <svg class="ws-chevron" :class="{ expanded: expandedWorkspaces.has(ws.key) }" width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <svg class="ws-folder-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M3 7C3 5.89543 3.89543 5 5 5H9.58579C9.851 5 10.1054 5.10536 10.2929 5.29289L12 7H19C20.1046 7 21 7.89543 21 9V17C21 18.1046 20.1046 19 19 19H5C3.89543 19 3 18.1046 3 17V7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
           <span class="ws-name">{{ workspaceLabel(ws) }}</span>
+          <span v-if="(sessionsByWorkspace[ws.key] ?? []).length > 0" class="ws-count">{{ (sessionsByWorkspace[ws.key] ?? []).length }}</span>
         </div>
 
         <!-- Sessions (for any expanded workspace) -->
@@ -474,39 +480,75 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px;
+  padding: 8px 10px;
+  margin: 6px 10px 4px;
   cursor: pointer;
-  font-size: 12.5px;
-  color: var(--aide-text-secondary);
-  background: var(--aide-bg-deep);
-  border-bottom: 1px solid var(--aide-surface-default);
-  transition: all 0.1s;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aide-text-muted);
+  background: transparent;
+  border-radius: var(--aide-radius-md);
+  transition: all 0.15s ease;
+  letter-spacing: 0.2px;
 }
 
-.ws-arrow {
-  font-size: 14px;
-  width: 16px;
-  flex-shrink: 0;
-  transition: transform 0.15s;
-}
-.ws-arrow.expanded {
-  transform: rotate(90deg);
-}
-.workspace-item:first-child {
-  border-top: 1px solid var(--aide-surface-default);
-}
 .workspace-item:hover {
-  color: var(--aide-text-primary);
+  color: var(--aide-text-secondary);
   background: var(--aide-surface-default);
 }
+
 .workspace-item.active {
   color: var(--aide-text-primary);
+}
+
+.workspace-item.expanded {
+  color: var(--aide-text-primary);
+}
+
+.ws-chevron {
+  flex-shrink: 0;
+  color: var(--aide-text-muted);
+  transition: transform 0.2s ease, color 0.15s;
+}
+
+.ws-chevron.expanded {
+  transform: rotate(90deg);
+  color: var(--aide-accent);
+}
+
+.workspace-item:hover .ws-chevron {
+  color: var(--aide-text-secondary);
+}
+
+.ws-folder-icon {
+  flex-shrink: 0;
+  color: var(--aide-text-muted);
+  transition: color 0.15s;
+}
+
+.workspace-item.active .ws-folder-icon,
+.workspace-item.expanded .ws-folder-icon {
+  color: var(--aide-accent);
 }
 
 .ws-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+}
+
+.ws-count {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--aide-text-muted);
+  background: var(--aide-surface-default);
+  padding: 0 6px;
+  border-radius: 8px;
+  min-width: 18px;
+  text-align: center;
+  line-height: 1.6;
+  flex-shrink: 0;
 }
 
 /* ── Session card ── */

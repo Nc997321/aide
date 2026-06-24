@@ -313,7 +313,7 @@ onUnmounted(() => {
           :title="leftCollapsed ? '展开侧栏' : '收起侧栏'"
           @click.stop="leftCollapsed = !leftCollapsed"
         >
-          <span class="collapse-arrow">{{ leftCollapsed ? '▶' : '◀' }}</span>
+          <svg class="collapse-arrow-svg" :style="{ transform: leftCollapsed ? 'rotate(0deg)' : 'rotate(180deg)' }" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3.5 1.5L7 5L3.5 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </div>
         <SidebarLeft
           v-show="!leftCollapsed"
@@ -360,7 +360,7 @@ onUnmounted(() => {
           :title="rightCollapsed ? '展开侧栏' : '收起侧栏'"
           @click.stop="rightCollapsed = !rightCollapsed"
         >
-          <span class="collapse-arrow">{{ rightCollapsed ? '◀' : '▶' }}</span>
+          <svg class="collapse-arrow-svg" :style="{ transform: rightCollapsed ? 'rotate(180deg)' : 'rotate(0deg)' }" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3.5 1.5L7 5L3.5 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </div>
         <div v-show="!rightCollapsed" class="panel-right-inner">
           <ATabBar :tabs="rightTabs" v-model="rightTab" />
@@ -549,18 +549,16 @@ onUnmounted(() => {
   border-radius: 0 3px 3px 0;
 }
 
-.collapse-arrow {
+.collapse-arrow-svg {
   position: relative;
   z-index: 1;
-  font-size: 10px;
   color: var(--aide-text-muted);
-  transition: color 0.15s ease;
-  line-height: 1;
+  transition: color 0.15s ease, transform 0.2s ease;
   pointer-events: none;
-  margin: 0 1px;
+  margin: 0 2px;
 }
 
-.collapse-toggle:hover .collapse-arrow {
+.collapse-toggle:hover .collapse-arrow-svg {
   color: var(--aide-text-primary);
 }
 
