@@ -124,6 +124,7 @@ pub fn run() {
             commands::git::git_status,
             commands::git::git_unpushed_commits,
             commands::git::git_push,
+            commands::git::git_fingerprint,
             commands::git::git_commit,
             // Customization commands
             commands::customizations::list_agents,

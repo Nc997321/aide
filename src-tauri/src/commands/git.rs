@@ -860,3 +860,48 @@ pub async fn git_push(
     info!("git_push ok");
     Ok(())
 }
+
+#[tauri::command]
+pub fn git_fingerprint(
+    workspace_state: State<'_, WorkspaceState>,
+) -> Result<String, String> {
+    let root = project_root_for_commands(&workspace_state);
+    let git_dir = root.join(".git");
+    if !git_dir.exists() {
+        return Ok(String::new());
+    }
+
+    fn mtime_ms(path: &std::path::Path) -> u64 {
+        path.metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    fn dir_max_mtime(dir: &std::path::Path, depth: u8) -> u64 {
+        let mut max = mtime_ms(dir);
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for e in entries.flatten() {
+                let p = e.path();
+                let m = if p.is_dir() && depth < 3 {
+                    dir_max_mtime(&p, depth + 1)
+                } else {
+                    mtime_ms(&p)
+                };
+                if m > max { max = m; }
+            }
+        }
+        max
+    }
+
+    let head = mtime_ms(&git_dir.join("HEAD"));
+    let index = mtime_ms(&git_dir.join("index"));
+    let fetch_head = mtime_ms(&git_dir.join("FETCH_HEAD"));
+    let refs_heads = dir_max_mtime(&git_dir.join("refs").join("heads"), 0);
+    let refs_remotes = dir_max_mtime(&git_dir.join("refs").join("remotes"), 0);
+    let stash = mtime_ms(&git_dir.join("refs").join("stash"));
+
+    Ok(format!("{}-{}-{}-{}-{}-{}", head, index, fetch_head, refs_heads, refs_remotes, stash))
+}

@@ -20,6 +20,7 @@ import { useNotification, pendingSessions, clearPending } from "./composables/us
 import { useGit } from "./composables/useGit";
 import { useSearchProviders } from "./composables/useSearchProviders";
 import { useProviders } from "./composables/useProviders";
+import { useGitWatcher } from "./composables/useGitWatcher";
 import { matchShortcut } from "./utils/shortcut";
 
 const leftWidth = ref(280);
@@ -264,6 +265,9 @@ onMounted(async () => {
 
   // Initialize notification watcher
   useNotification();
+
+  // Start git fingerprint watcher (auto-refresh on external changes)
+  useGitWatcher();
 
   // Seed workbench cwd from the current project root.
   try {
