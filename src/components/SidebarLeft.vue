@@ -380,13 +380,32 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
       <button class="update-dismiss" title="忽略" @click.stop="dismissUpdate">✕</button>
     </div>
 
-    <!-- Provider selector -->
-    <div ref="providerSelectorRef" class="provider-selector">
-      <div class="provider-current" @click="toggleProviderDropdown">
-        <span class="provider-icon">{{ activeProvider.icon }}</span>
-        <span class="provider-name">{{ activeProvider.name }}</span>
-        <span class="provider-arrow">{{ providerDropdownOpen ? '▾' : '▸' }}</span>
+    <!-- Status bar: provider + actions -->
+    <div ref="providerSelectorRef" class="status-bar">
+      <div class="status-bar-provider" @click="toggleProviderDropdown">
+        <span class="status-bar-provider-icon">{{ activeProvider.icon }}</span>
+        <span class="status-bar-provider-name">{{ activeProvider.name }}</span>
+        <svg class="status-bar-chevron" :class="{ open: providerDropdownOpen }" width="10" height="10" viewBox="0 0 10 10" fill="none">
+          <path d="M2.5 4L5 6.5L7.5 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
       </div>
+
+      <div class="status-bar-actions">
+        <button class="status-bar-btn" title="工作台终端 (Ctrl+`)" @click="emit('open-workbench')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="4 17 10 11 4 5"/>
+            <line x1="12" y1="19" x2="20" y2="19"/>
+          </svg>
+        </button>
+        <button class="status-bar-btn" title="设置" @click="emit('open-settings')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Provider dropdown -->
       <div v-if="providerDropdownOpen" class="provider-dropdown">
         <div
           v-for="p in providerDisplayList"
@@ -405,25 +424,6 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
           <span class="provider-opt-name">管理供应商…</span>
         </div>
       </div>
-    </div>
-
-    <!-- Footer: terminal + settings -->
-    <div class="sidebar-footer">
-      <button class="footer-btn" title="工作台终端 (Ctrl+`)" @click="emit('open-workbench')">
-        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="4 17 10 11 4 5"/>
-          <line x1="12" y1="19" x2="20" y2="19"/>
-        </svg>
-        <span>终端</span>
-        <span class="footer-btn-kbd">⌘`</span>
-      </button>
-      <button class="footer-btn" title="设置" @click="emit('open-settings')">
-        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-        </svg>
-        <span>设置</span>
-      </button>
     </div>
   </div>
 </template>
@@ -651,66 +651,109 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
   color: var(--aide-text-primary);
 }
 
-/* ── Provider selector ── */
+/* ── Status bar (provider + actions) ── */
 
-.provider-selector {
+.status-bar {
   position: relative;
-  padding: 4px 8px 0;
-  border-top: 1px solid var(--aide-surface-default);
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 6px;
+  border-top: 1px solid var(--aide-border);
+  background:
+    linear-gradient(180deg, var(--aide-border-subtle) 0%, transparent 100%),
+    var(--aide-bg-deep);
+  flex-shrink: 0;
+  gap: 2px;
 }
 
-.provider-current {
+.status-bar-provider {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
-  border-radius: 6px;
+  padding: 4px 8px;
+  border-radius: var(--aide-radius-sm);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--aide-text-secondary);
   transition: all 0.12s;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
 }
 
-.provider-current:hover {
+.status-bar-provider:hover {
   background: var(--aide-surface-default);
   color: var(--aide-text-primary);
 }
 
-.provider-icon {
-  font-size: 14px;
+.status-bar-provider-icon {
+  font-size: 13px;
   flex-shrink: 0;
 }
 
-.provider-name {
-  flex: 1;
+.status-bar-provider-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 500;
 }
 
-.provider-arrow {
-  font-size: 14px;
+.status-bar-chevron {
   flex-shrink: 0;
   color: var(--aide-text-muted);
+  transition: transform 0.15s ease;
 }
+
+.status-bar-chevron.open {
+  transform: rotate(180deg);
+}
+
+.status-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+.status-bar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: none;
+  border: none;
+  border-radius: var(--aide-radius-sm);
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.status-bar-btn:hover {
+  color: var(--aide-text-primary);
+  background: var(--aide-surface-default);
+}
+
+/* ── Provider dropdown ── */
 
 .provider-dropdown {
   position: absolute;
   bottom: calc(100% + 4px);
-  left: 8px;
-  right: 8px;
-  background: var(--aide-bg-deep);
-  border: 1px solid var(--aide-surface-hover);
-  border-radius: 8px;
-  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.35);
+  left: 6px;
+  right: 6px;
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-md);
+  box-shadow: var(--aide-shadow-md);
   z-index: 100;
   padding: 4px;
-  animation: dropdown-up 0.12s ease;
+  animation: dropdown-up 0.12s ease-out;
 }
 
 @keyframes dropdown-up {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateY(4px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 .provider-option {
@@ -718,7 +761,7 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
-  border-radius: 5px;
+  border-radius: var(--aide-radius-sm);
   cursor: pointer;
   font-size: 12px;
   color: var(--aide-text-secondary);
@@ -756,49 +799,7 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
 
 .provider-divider {
   height: 1px;
-  background: var(--aide-surface-default);
+  background: var(--aide-border);
   margin: 4px 6px;
-}
-
-/* ── Footer ── */
-
-.sidebar-footer {
-  border-top: 1px solid var(--aide-surface-default);
-  padding: 4px 8px;
-  display: flex;
-  gap: 2px;
-}
-
-.footer-btn {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  flex: 1;
-  padding: 7px 10px;
-  background: none;
-  border: none;
-  border-radius: 6px;
-  color: var(--aide-text-secondary);
-  cursor: pointer;
-  font-size: 13px;
-  font-family: inherit;
-  transition: all 0.12s;
-  position: relative;
-}
-
-.footer-btn:hover {
-  color: var(--aide-text-primary);
-  background: var(--aide-surface-default);
-}
-
-.footer-btn-kbd {
-  margin-left: auto;
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: var(--aide-surface-default);
-  color: var(--aide-text-muted);
-  line-height: 1.5;
-  font-family: inherit;
 }
 </style>
