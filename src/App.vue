@@ -22,6 +22,7 @@ import { useSearchProviders } from "./composables/useSearchProviders";
 import { useProviders } from "./composables/useProviders";
 import { useGitWatcher } from "./composables/useGitWatcher";
 import { matchShortcut } from "./utils/shortcut";
+import { applyTheme, warmDark } from "./themes";
 
 const leftWidth = ref(280);
 const rightWidth = ref(300);
@@ -250,6 +251,9 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 onMounted(async () => {
+  // Apply default theme before any rendering
+  applyTheme(warmDark);
+
   window.addEventListener("keydown", handleKeydown, { capture: true });
 
   // Load persisted settings

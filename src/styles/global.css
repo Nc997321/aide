@@ -9,26 +9,55 @@
 }
 
 :root {
-  --bg-primary: #1e1e2e;
-  --bg-secondary: #181825;
-  --bg-tertiary: #11111b;
-  --surface: #313244;
-  --surface-hover: #45475a;
-  --text-primary: #cdd6f4;
-  --text-secondary: #a6adc8;
-  --text-muted: #6c7086;
-  --accent: #89b4fa;
-  --accent-green: #a6e3a1;
-  --accent-yellow: #f9e2af;
-  --accent-red: #f38ba8;
+  --aide-bg-deep: #1a1a22;
+  --aide-bg-base: #22222e;
+  --aide-bg-raised: #2a2a38;
+  --aide-bg-overlay: rgba(10, 10, 15, 0.75);
+  --aide-surface-default: #32323f;
+  --aide-surface-hover: #3a3a4a;
+  --aide-surface-active: #44445a;
+  --aide-text-primary: #d8d4cf;
+  --aide-text-secondary: #a8a4a0;
+  --aide-text-muted: #6b6762;
+  --aide-text-on-accent: #1a1a22;
+  --aide-accent: #d4a574;
+  --aide-accent-hover: #e0b584;
+  --aide-accent-subtle: rgba(212, 165, 116, 0.12);
+  --aide-success: #8bc48a;
+  --aide-warning: #e8c374;
+  --aide-danger: #e87070;
+  --aide-info: #7eb8d8;
+  --aide-border: rgba(255, 255, 255, 0.06);
+  --aide-border-subtle: rgba(255, 255, 255, 0.03);
+  --aide-shadow-sm: 0 1px 3px rgba(0,0,0,0.25), 0 1px 2px rgba(0,0,0,0.15);
+  --aide-shadow-md: 0 4px 12px rgba(0,0,0,0.3), 0 1px 4px rgba(0,0,0,0.2);
+  --aide-shadow-lg: 0 12px 40px rgba(0,0,0,0.45), 0 4px 12px rgba(0,0,0,0.25);
+  --aide-radius-sm: 4px;
+  --aide-radius-md: 8px;
+  --aide-radius-lg: 12px;
+  --aide-space-unit: 4px;
+
+  /* Legacy aliases — temporary bridge, removed in Task 7 */
+  --bg-primary: var(--aide-bg-base);
+  --bg-secondary: var(--aide-bg-deep);
+  --bg-tertiary: var(--aide-bg-deep);
+  --surface: var(--aide-surface-default);
+  --surface-hover: var(--aide-surface-hover);
+  --text-primary: var(--aide-text-primary);
+  --text-secondary: var(--aide-text-secondary);
+  --text-muted: var(--aide-text-muted);
+  --accent: var(--aide-accent);
+  --accent-green: var(--aide-success);
+  --accent-yellow: var(--aide-warning);
+  --accent-red: var(--aide-danger);
 }
 
 html, body, #app {
   height: 100%;
   width: 100%;
   overflow: hidden;
-  background-color: var(--bg-primary);
-  color: var(--text-primary);
+  background-color: var(--aide-bg-base);
+  color: var(--aide-text-primary);
   font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   font-size: 13px;
 }
@@ -44,11 +73,11 @@ html, body, #app {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--surface-hover);
+  background: var(--aide-surface-hover);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
+  background: var(--aide-text-muted);
 }
 
