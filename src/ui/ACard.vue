@@ -33,7 +33,7 @@ withDefaults(
 
 .a-card--hoverable:hover {
   background: var(--aide-surface-default);
-  border-color: rgba(255, 255, 255, 0.1);
+  border-color: var(--aide-border);
   box-shadow: var(--aide-shadow-sm);
 }
 

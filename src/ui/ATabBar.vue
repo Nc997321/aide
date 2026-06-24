@@ -78,13 +78,13 @@ function onKeydown(e: KeyboardEvent) {
 
 .a-tab:hover {
   color: var(--aide-text-secondary);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--aide-border-subtle);
 }
 
 .a-tab--active {
   color: var(--aide-text-primary);
   border-bottom-color: var(--aide-accent);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--aide-border-subtle);
 }
 
 .a-tab__icon {

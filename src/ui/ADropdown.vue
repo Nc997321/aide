@@ -66,7 +66,7 @@ onUnmounted(() => {
   z-index: 9000;
   min-width: 160px;
   background: var(--aide-bg-raised);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--aide-border);
   border-radius: var(--aide-radius-md);
   box-shadow: var(--aide-shadow-md);
   padding: 4px;
