@@ -13,7 +13,7 @@
   height: 34px;
   padding: 0 12px;
   background:
-    linear-gradient(180deg, rgba(255,255,255,0.015) 0%, transparent 100%),
+    linear-gradient(180deg, var(--aide-border-subtle) 0%, transparent 100%),
     var(--aide-bg-deep);
   border-bottom: 1px solid var(--aide-border);
   flex-shrink: 0;
