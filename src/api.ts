@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem,
   ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
-  GrepMatch,
+  GrepMatch, ProviderConfig,
 } from "./types";
 
 export const api = {
@@ -126,6 +126,20 @@ export const api = {
   },
   setSettings(settings: Partial<AppSettings>): Promise<void> {
     return invoke("set_settings", { settings });
+  },
+
+  // 供应商
+  getProviders(): Promise<ProviderConfig[]> {
+    return invoke("get_providers");
+  },
+  setProviders(providers: ProviderConfig[]): Promise<void> {
+    return invoke("set_providers", { providers });
+  },
+  getActiveProviderId(): Promise<string> {
+    return invoke("get_active_provider_id");
+  },
+  setActiveProviderId(providerId: string): Promise<void> {
+    return invoke("set_active_provider_id", { providerId });
   },
 
   // 工作区

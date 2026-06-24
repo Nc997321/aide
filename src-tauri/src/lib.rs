@@ -152,6 +152,11 @@ pub fn run() {
             commands::customizations::update_mcp_server,
             commands::customizations::delete_mcp_server,
             commands::customizations::toggle_mcp_server,
+            // Provider commands
+            commands::provider::get_providers,
+            commands::provider::set_providers,
+            commands::provider::get_active_provider_id,
+            commands::provider::set_active_provider_id,
             // Marketplace commands
             commands::marketplace::fetch_marketplace,
             commands::marketplace::install_plugin,

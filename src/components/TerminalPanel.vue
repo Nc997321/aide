@@ -111,6 +111,13 @@ onMounted(async () => {
   await loadPreviewContent(props.sessionId);
 });
 
+function restartSession(sid: string) {
+  stopClaude(sid);
+  setTimeout(() => startClaude(sid), 300);
+}
+
+defineExpose({ restartSession });
+
 onUnmounted(() => {
   window.removeEventListener("keydown", onWindowKeydown);
   cleanup();

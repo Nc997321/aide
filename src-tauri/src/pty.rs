@@ -34,6 +34,7 @@ impl PtyManager {
         cwd: &PathBuf,
         rows: u16,
         cols: u16,
+        env_vars: HashMap<String, String>,
         app_handle: AppHandle,
     ) -> Result<(), String> {
         // Kill existing PTY for this session if any
@@ -54,6 +55,9 @@ impl PtyManager {
         let mut cmd = CommandBuilder::new(&resolved);
         cmd.args(args);
         cmd.cwd(cwd);
+        for (key, value) in &env_vars {
+            cmd.env(key, value);
+        }
 
         let mut child = pty_pair
             .slave

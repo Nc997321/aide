@@ -19,6 +19,7 @@ import { useWindowFocus } from "./composables/useWindowFocus";
 import { useNotification, pendingSessions, clearPending } from "./composables/useNotification";
 import { useGit } from "./composables/useGit";
 import { useSearchProviders } from "./composables/useSearchProviders";
+import { useProviders } from "./composables/useProviders";
 import { matchShortcut } from "./utils/shortcut";
 
 const leftWidth = ref(280);
@@ -38,6 +39,8 @@ const gitPanelRef = ref<InstanceType<typeof GitPanel> | null>(null);
 const titleBarRef = ref<InstanceType<typeof TitleBar> | null>(null);
 const activeSessionId = ref("");
 const settingsVisible = ref(false);
+const settingsInitialTab = ref<string | undefined>(undefined);
+const terminalPanelRef = ref<InstanceType<typeof TerminalPanel> | null>(null);
 const workspacePath = ref("");
 const projectName = ref("");
 const { settings, update: updateSettings } = useSettings();
@@ -189,6 +192,26 @@ async function onSidebarWsChanged(path: string) {
   if (rightTab.value === "git") gitPanelRef.value?.reload();
 }
 
+const { setActiveProvider, load: loadProviders } = useProviders();
+
+async function onProviderSwitch(providerId: string) {
+  await setActiveProvider(providerId);
+  const sid = activeSessionId.value;
+  if (sid) {
+    terminalPanelRef.value?.restartSession(sid);
+  }
+}
+
+function openSettingsProviders() {
+  settingsInitialTab.value = "providers";
+  settingsVisible.value = true;
+}
+
+function openSettings() {
+  settingsInitialTab.value = undefined;
+  settingsVisible.value = true;
+}
+
 function handleKeydown(e: KeyboardEvent) {
   // ── App-level shortcuts (fire regardless of focus, including inside xterm.js) ──
 
@@ -231,6 +254,9 @@ onMounted(async () => {
   // Load persisted settings
   const { load: loadSettings } = useSettings();
   await loadSettings();
+
+  // Load provider configuration
+  await loadProviders();
 
   // Start tracking window focus for notifications
   const { init: initWindowFocus } = useWindowFocus();
@@ -284,7 +310,7 @@ onUnmounted(() => {
       >
         <span class="collapse-arrow">{{ leftCollapsed ? '▶' : '◀' }}</span>
       </div>
-      <SidebarLeft v-show="!leftCollapsed" ref="sidebarRef" :active-session-id="activeSessionId" @session-changed="onSessionChanged" @workspace-changed="onSidebarWsChanged" @open-settings="() => settingsVisible = true" @open-workbench="wb.toggle(workspacePath)" />
+      <SidebarLeft v-show="!leftCollapsed" ref="sidebarRef" :active-session-id="activeSessionId" @session-changed="onSessionChanged" @workspace-changed="onSidebarWsChanged" @open-settings="openSettings" @open-workbench="wb.toggle(workspacePath)" @provider-switch="onProviderSwitch" @open-settings-providers="openSettingsProviders" />
     </div>
 
     <!-- Resize handle left -->
@@ -297,7 +323,7 @@ onUnmounted(() => {
 
     <!-- Center panel -->
     <div class="panel-center">
-      <TerminalPanel :session-id="activeSessionId" @session-updated="onSessionUpdated" />
+      <TerminalPanel ref="terminalPanelRef" :session-id="activeSessionId" @session-updated="onSessionUpdated" />
     </div>
 
     <!-- Resize handle right -->
@@ -359,7 +385,7 @@ onUnmounted(() => {
 
     <ContextMenu />
     <ModalDialog />
-    <SettingsPanel v-if="settingsVisible" @close="settingsVisible = false" />
+    <SettingsPanel v-if="settingsVisible" :initial-tab="settingsInitialTab" @close="settingsVisible = false" />
     <FileViewer />
     <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
     </div>

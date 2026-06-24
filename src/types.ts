@@ -70,6 +70,28 @@ export interface ChangeFile {
   deletions: number;
 }
 
+// ── Provider types ──
+
+export interface ProviderModelMappings {
+  opus: string;
+  sonnet: string;
+  haiku: string;
+  subagent: string;
+}
+
+export interface ProviderConfig {
+  id: string;
+  name: string;
+  icon: string;
+  baseUrl: string;
+  apiKey: string;
+  authToken: string;
+  model: string;
+  modelMappings: ProviderModelMappings;
+  effortLevel: string;
+  knownModels: string[];
+}
+
 // ── Git types ──
 
 export interface CommitEntry {

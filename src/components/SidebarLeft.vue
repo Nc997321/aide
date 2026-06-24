@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useContextMenu } from "../composables/useContextMenu";
 import { useSessionState } from "../composables/useSessionState";
 import { useUpdate } from "../composables/useUpdate";
+import { useProviders } from "../composables/useProviders";
 import { sessionMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
 import { open } from "@tauri-apps/plugin-shell";
@@ -18,6 +19,8 @@ const emit = defineEmits<{
   "workspace-changed": [path: string];
   "open-settings": [];
   "open-workbench": [];
+  "provider-switch": [providerId: string];
+  "open-settings-providers": [];
 }>();
 
 const sessionsByWorkspace = ref<Record<string, Session[]>>({});
@@ -119,6 +122,45 @@ const { show } = useContextMenu();
 const { state: sessionState } = useSessionState();
 const { updateAvailable, latestVersion, downloadUrl, dismissUpdate } = useUpdate();
 
+// ── Provider selector ──
+const {
+  displayList: providerDisplayList,
+  activeProviderId,
+  activeProvider,
+  setActiveProvider,
+  SYSTEM_DEFAULT_ID,
+} = useProviders();
+const providerDropdownOpen = ref(false);
+const providerSelectorRef = ref<HTMLDivElement | null>(null);
+
+function toggleProviderDropdown() {
+  providerDropdownOpen.value = !providerDropdownOpen.value;
+}
+
+async function onProviderSelect(id: string) {
+  providerDropdownOpen.value = false;
+  if (id === activeProviderId.value) return;
+
+  const sid = props.activeSessionId;
+  if (sid) {
+    try {
+      const hasSession = await api.ptyHasSession(sid);
+      if (hasSession) {
+        emit("provider-switch", id);
+        return;
+      }
+    } catch { /* ignore */ }
+  }
+  await setActiveProvider(id);
+}
+
+function onProviderClickOutside(e: MouseEvent) {
+  if (providerSelectorRef.value && !providerSelectorRef.value.contains(e.target as Node)) {
+    providerDropdownOpen.value = false;
+  }
+}
+
+
 // Select a session from a potentially different workspace
 async function selectSessionFromWorkspace(wsKey: string, sessionId: string) {
   if (wsKey !== activeWorkspace.value) {
@@ -206,7 +248,12 @@ async function newSession() {
   }
 }
 
+onUnmounted(() => {
+  document.removeEventListener("click", onProviderClickOutside);
+});
+
 onMounted(async () => {
+  document.addEventListener("click", onProviderClickOutside);
   await loadWorkspaces();
   // Find active workspace: match by encoded key derived from get_project_info
   try {
@@ -333,6 +380,33 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
         <span class="update-text">新版本 {{ latestVersion }}</span>
       </div>
       <button class="update-dismiss" title="忽略" @click.stop="dismissUpdate">✕</button>
+    </div>
+
+    <!-- Provider selector -->
+    <div ref="providerSelectorRef" class="provider-selector">
+      <div class="provider-current" @click="toggleProviderDropdown">
+        <span class="provider-icon">{{ activeProvider.icon }}</span>
+        <span class="provider-name">{{ activeProvider.name }}</span>
+        <span class="provider-arrow">{{ providerDropdownOpen ? '▾' : '▸' }}</span>
+      </div>
+      <div v-if="providerDropdownOpen" class="provider-dropdown">
+        <div
+          v-for="p in providerDisplayList"
+          :key="p.id"
+          class="provider-option"
+          :class="{ active: p.id === activeProviderId }"
+          @click="onProviderSelect(p.id)"
+        >
+          <span class="provider-opt-icon">{{ p.icon }}</span>
+          <span class="provider-opt-name">{{ p.name }}</span>
+          <span v-if="p.id === activeProviderId" class="provider-opt-check">✓</span>
+        </div>
+        <div class="provider-divider"></div>
+        <div class="provider-option" @click="providerDropdownOpen = false; emit('open-settings-providers')">
+          <span class="provider-opt-icon">⚙</span>
+          <span class="provider-opt-name">管理供应商…</span>
+        </div>
+      </div>
     </div>
 
     <!-- Footer: terminal + settings -->
@@ -610,6 +684,115 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
 .update-dismiss:hover {
   background: rgba(137, 180, 250, 0.2);
   color: var(--text-primary);
+}
+
+/* ── Provider selector ── */
+
+.provider-selector {
+  position: relative;
+  padding: 4px 8px 0;
+  border-top: 1px solid var(--surface);
+}
+
+.provider-current {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: all 0.12s;
+}
+
+.provider-current:hover {
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+.provider-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.provider-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-arrow {
+  font-size: 14px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.provider-dropdown {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 8px;
+  right: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--surface-hover);
+  border-radius: 8px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.35);
+  z-index: 100;
+  padding: 4px;
+  animation: dropdown-up 0.12s ease;
+}
+
+@keyframes dropdown-up {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.provider-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: all 0.1s;
+}
+
+.provider-option:hover {
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+.provider-option.active {
+  color: var(--text-primary);
+}
+
+.provider-opt-icon {
+  font-size: 14px;
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.provider-opt-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-opt-check {
+  color: var(--accent-green);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.provider-divider {
+  height: 1px;
+  background: var(--surface);
+  margin: 4px 6px;
 }
 
 /* ── Footer ── */

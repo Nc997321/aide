@@ -25,6 +25,20 @@ pub fn pty_spawn_claude(
 ) -> Result<(), String> {
     let project_root = project_root_for_commands(&workspace_state);
 
+    let mut env_vars = super::provider::load_active_provider()
+        .map(|p| super::provider::provider_to_env_vars(&p))
+        .unwrap_or_default();
+
+    // Inject proxy env vars from settings
+    if let Ok(s) = super::settings::get_settings() {
+        if !s.proxy.is_empty() {
+            env_vars.insert("HTTP_PROXY".to_string(), s.proxy.clone());
+            env_vars.insert("HTTPS_PROXY".to_string(), s.proxy.clone());
+            env_vars.insert("http_proxy".to_string(), s.proxy.clone());
+            env_vars.insert("https_proxy".to_string(), s.proxy);
+        }
+    }
+
     let resume_id = if session_id.starts_with("new_") {
         None
     } else {
@@ -32,9 +46,9 @@ pub fn pty_spawn_claude(
     };
 
     if let Some(ref id) = resume_id {
-        manager.spawn_command(&session_id, "claude", &["--resume", id.as_str()], &project_root, rows, cols, app_handle)
+        manager.spawn_command(&session_id, "claude", &["--resume", id.as_str()], &project_root, rows, cols, env_vars, app_handle)
     } else {
-        manager.spawn_command(&session_id, "claude", &[], &project_root, rows, cols, app_handle)
+        manager.spawn_command(&session_id, "claude", &[], &project_root, rows, cols, env_vars, app_handle)
     }
 }
 

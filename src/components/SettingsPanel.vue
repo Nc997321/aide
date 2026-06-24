@@ -5,15 +5,20 @@ import { useCustomizations } from "../composables/useCustomizations";
 import CustomizationList from "./customizations/CustomizationList.vue";
 import CustomizationDetail from "./customizations/CustomizationDetail.vue";
 import MarketplaceTab from "./marketplace/MarketplaceTab.vue";
+import ProviderSettings from "./ProviderSettings.vue";
 import { formatShortcut, detectConflicts } from "../utils/shortcut";
+
+const props = defineProps<{
+  initialTab?: string;
+}>();
 
 const emit = defineEmits<{
   close: [];
 }>();
 
-type Tab = "general" | "extensions" | "marketplace";
+type Tab = "general" | "providers" | "extensions" | "marketplace";
 
-const activeTab = ref<Tab>("general");
+const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 
 // ── Settings (通用) ──
 
@@ -169,6 +174,14 @@ function onOverlayClick(e: MouseEvent) {
             </button>
             <button
               class="nav-item"
+              :class="{ active: activeTab === 'providers' }"
+              @click="activeTab = 'providers'"
+            >
+              <span class="nav-icon">🧠</span>
+              <span class="nav-label">模型</span>
+            </button>
+            <button
+              class="nav-item"
               :class="{ active: activeTab === 'extensions' }"
               @click="activeTab = 'extensions'"
             >
@@ -295,6 +308,11 @@ function onOverlayClick(e: MouseEvent) {
                   </span>
                 </div>
               </div>
+            </div>
+
+            <!-- ── 模型 Tab ── -->
+            <div v-else-if="activeTab === 'providers'" class="tab-providers">
+              <ProviderSettings />
             </div>
 
             <!-- ── 扩展 Tab ── -->
@@ -706,6 +724,14 @@ function onOverlayClick(e: MouseEvent) {
   padding: 2px 8px;
   border-radius: 10px;
   flex-shrink: 0;
+}
+
+/* ── Providers tab ── */
+
+.tab-providers {
+  display: flex;
+  height: 100%;
+  margin: -20px;
 }
 
 /* ── Marketplace tab ── */
