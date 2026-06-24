@@ -32,7 +32,17 @@ import { applyTheme, themes } from "./themes";
 const leftCollapsed = ref(false);
 const rightCollapsed = ref(false);
 const rightTab = ref<"files" | "changes" | "git">("files");
-const { unstagedFiles, hasChanges, loadStatus } = useGit();
+const { unstagedFiles, hasChanges, loadStatus, currentBranch } = useGit();
+
+// Session activity counts for titlebar
+import { useSessionState } from "./composables/useSessionState";
+const { state: sessionStateMap } = useSessionState();
+const runningSessionCount = computed(() =>
+  Object.values(sessionStateMap).filter(s => s === "running").length
+);
+const activeSessionCount = computed(() =>
+  Object.values(sessionStateMap).filter(s => s === "running" || s === "waiting" || s === "attention").length
+);
 
 const leftResize = useResizable({
   cssVar: "--aide-left-w",
@@ -296,7 +306,14 @@ onUnmounted(() => {
 
 <template>
   <div class="app-shell">
-    <TitleBar ref="titleBarRef" @open-palette="paletteOpen = true" />
+    <TitleBar
+      ref="titleBarRef"
+      :project-name="projectName"
+      :git-branch="currentBranch"
+      :running-count="runningSessionCount"
+      :active-count="activeSessionCount"
+      @open-palette="paletteOpen = true"
+    />
 
     <div class="app-layout" :class="{ 'is-dragging': leftResize.isDragging.value || rightResize.isDragging.value }">
       <NotificationBanner
