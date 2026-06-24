@@ -202,6 +202,10 @@ function initProviders(
   register(createFileProvider(getWorkspacePath));
 }
 
+function getProviders(): SearchProvider[] {
+  return [...providers].sort((a, b) => a.priority - b.priority);
+}
+
 export function useSearchProviders() {
-  return { register, unregister, search, initProviders, invalidateFileCache };
+  return { register, unregister, search, getProviders, initProviders, invalidateFileCache };
 }

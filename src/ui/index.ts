@@ -9,3 +9,4 @@ export { default as AToolbar } from "./AToolbar.vue";
 export { default as ADropdown } from "./ADropdown.vue";
 export type { DropdownItem } from "./ADropdown.vue";
 export { default as ATreeItem } from "./ATreeItem.vue";
+export { default as ACommandPalette } from "./ACommandPalette.vue";

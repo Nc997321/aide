@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import { ref } from "vue";
-import SearchBox from "./SearchBox.vue";
 import WindowControls from "./WindowControls.vue";
 
-const searchBoxRef = ref<InstanceType<typeof SearchBox> | null>(null);
-
-defineExpose({ searchBox: searchBoxRef });
+defineEmits<{
+  "open-palette": [];
+}>();
 </script>
 
 <template>
@@ -15,7 +13,11 @@ defineExpose({ searchBox: searchBoxRef });
       <span class="titlebar-logo-text">Aide</span>
     </div>
 
-    <SearchBox ref="searchBoxRef" />
+    <button class="titlebar-search-trigger" @click="$emit('open-palette')">
+      <span class="titlebar-search-icon">&#x1F50D;</span>
+      <span class="titlebar-search-text">搜索会话、文件或命令...</span>
+      <kbd class="titlebar-search-kbd">Ctrl+P</kbd>
+    </button>
 
     <WindowControls />
   </div>
@@ -25,33 +27,76 @@ defineExpose({ searchBox: searchBoxRef });
 .titlebar {
   display: flex;
   align-items: center;
-  height: 38px;
+  height: 42px;
   flex-shrink: 0;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--surface);
+  background: var(--aide-bg-deep);
+  border-bottom: 1px solid var(--aide-border);
+  padding: 0 16px;
+  gap: 16px;
   user-select: none;
 }
 
 .titlebar-logo {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 14px;
-  height: 100%;
+  gap: 8px;
   flex-shrink: 0;
 }
 
 .titlebar-logo-icon {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   object-fit: contain;
-  image-rendering: auto;
 }
 
 .titlebar-logo-text {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  color: var(--text-secondary);
-  letter-spacing: 0.3px;
+  color: var(--aide-text-secondary);
+  letter-spacing: 0.5px;
+}
+
+.titlebar-search-trigger {
+  flex: 1;
+  max-width: 400px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-md);
+  padding: 6px 14px;
+  color: var(--aide-text-muted);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.titlebar-search-trigger:hover {
+  background: var(--aide-surface-hover);
+  border-color: var(--aide-border-subtle);
+}
+
+.titlebar-search-icon {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.titlebar-search-text {
+  flex: 1;
+  text-align: left;
+}
+
+.titlebar-search-kbd {
+  margin-left: auto;
+  background: var(--aide-bg-deep);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--aide-text-muted);
+  border: 1px solid var(--aide-border);
+  font-family: inherit;
 }
 </style>

@@ -11,6 +11,7 @@ import GitPanel from "./components/GitPanel.vue";
 import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
 import NotificationBanner from "./components/NotificationBanner.vue";
 import TitleBar from "./components/titlebar/TitleBar.vue";
+import ACommandPalette from "./ui/ACommandPalette.vue";
 import { useWorkbenchTerminal } from "./composables/useWorkbenchTerminal";
 import { api } from "./api";
 import { ref, onMounted, onUnmounted, nextTick, watch, computed } from "vue";
@@ -39,6 +40,8 @@ const sidebarRef = ref<InstanceType<typeof SidebarLeft> | null>(null);
 const fileTreeRef = ref<InstanceType<typeof FileTree> | null>(null);
 const gitPanelRef = ref<InstanceType<typeof GitPanel> | null>(null);
 const titleBarRef = ref<InstanceType<typeof TitleBar> | null>(null);
+const paletteOpen = ref(false);
+const paletteRef = ref<InstanceType<typeof ACommandPalette> | null>(null);
 const activeSessionId = ref("");
 const settingsVisible = ref(false);
 const settingsInitialTab = ref<string | undefined>(undefined);
@@ -233,12 +236,12 @@ function handleKeydown(e: KeyboardEvent) {
   if (matchShortcut(e, searchShortcut)) {
     e.preventDefault();
     e.stopPropagation();
-    titleBarRef.value?.searchBox?.open();
+    paletteOpen.value = true;
     return;
   }
 
   // Esc: collapse workbench if visible (but don't steal from other overlays)
-  if (e.key === "Escape" && wb.visible.value && !settingsVisible.value) {
+  if (e.key === "Escape" && wb.visible.value && !settingsVisible.value && !paletteOpen.value) {
     wb.hide();
     return;
   }
@@ -280,7 +283,7 @@ onMounted(async () => {
   } catch (_) { /* best effort */ }
 
   // Initialize search providers for the title bar search box
-  const { initProviders: initSearchProviders } = useSearchProviders();
+  const { initProviders: initSearchProviders, search: searchProviders } = useSearchProviders();
   initSearchProviders(
     async () => {
       try { return await api.listSessions(); } catch { return []; }
@@ -288,6 +291,17 @@ onMounted(async () => {
     (sessionId) => { activeSessionId.value = sessionId; },
     () => workspacePath.value,
   );
+
+  // Wire the search function into the palette
+  nextTick(() => {
+    paletteRef.value?.setSearchFn(async (q: string, limit: number) => {
+      const rawResults = await searchProviders(q, limit);
+      return rawResults.map((r) => ({
+        ...r,
+        group: r.icon === "\u{1F4DD}" ? "会话" : r.icon === "\u{1F4C4}" ? "文件" : "其他",
+      }));
+    });
+  });
 });
 
 onUnmounted(() => {
@@ -298,7 +312,7 @@ onUnmounted(() => {
 
 <template>
   <div class="app-shell">
-    <TitleBar ref="titleBarRef" />
+    <TitleBar ref="titleBarRef" @open-palette="paletteOpen = true" />
 
     <div class="app-layout">
       <!-- Notification banner for completed sessions -->
@@ -397,6 +411,12 @@ onUnmounted(() => {
     <FileViewer />
     <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
     </div>
+
+    <ACommandPalette
+      ref="paletteRef"
+      :open="paletteOpen"
+      @close="paletteOpen = false"
+    />
   </div>
 </template>
 
