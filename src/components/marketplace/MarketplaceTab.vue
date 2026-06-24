@@ -132,8 +132,8 @@ function handleUninstall(name: string) {
   padding: 10px 12px;
   margin-bottom: 8px;
   border-radius: 6px;
-  background: rgba(243, 139, 168, 0.12);
-  border: 1px solid rgba(243, 139, 168, 0.3);
+  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-danger) 30%, transparent);
 }
 
 .error-body {
@@ -156,7 +156,7 @@ function handleUninstall(name: string) {
 
 .error-btn {
   background: none;
-  border: 1px solid rgba(243, 139, 168, 0.4);
+  border: 1px solid color-mix(in srgb, var(--aide-danger) 40%, transparent);
   color: var(--aide-danger);
   padding: 4px 12px;
   border-radius: 4px;
@@ -168,7 +168,7 @@ function handleUninstall(name: string) {
 }
 
 .error-btn:hover {
-  background: rgba(243, 139, 168, 0.2);
+  background: color-mix(in srgb, var(--aide-danger) 20%, transparent);
 }
 
 .error-btn-primary {
@@ -177,7 +177,7 @@ function handleUninstall(name: string) {
 }
 
 .error-btn-primary:hover {
-  background: rgba(137, 180, 250, 0.12);
+  background: color-mix(in srgb, var(--aide-info) 12%, transparent);
 }
 
 /* ── Search ── */

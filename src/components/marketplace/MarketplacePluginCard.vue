@@ -157,7 +157,7 @@ function handleClick() {
 }
 
 .btn-installed:hover {
-  background: rgba(166, 227, 161, 0.1);
+  background: color-mix(in srgb, var(--aide-success) 10%, transparent);
   color: var(--aide-danger);
   border-color: var(--aide-danger);
 }

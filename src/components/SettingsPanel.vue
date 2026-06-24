@@ -401,7 +401,7 @@ function onOverlayClick(e: MouseEvent) {
 .settings-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--aide-bg-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -424,7 +424,7 @@ function onOverlayClick(e: MouseEvent) {
   height: 520px;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--aide-shadow-lg);
   animation: scaleIn 0.15s ease;
   overflow: hidden;
 }
@@ -852,13 +852,13 @@ function onOverlayClick(e: MouseEvent) {
 
 .kb-input.recording {
   border-color: var(--aide-success);
-  box-shadow: 0 0 0 1px rgba(166, 227, 161, 0.3);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--aide-success) 30%, transparent);
   animation: kb-pulse 1s ease-in-out infinite;
 }
 
 @keyframes kb-pulse {
-  0%, 100% { box-shadow: 0 0 0 1px rgba(166, 227, 161, 0.3); }
-  50% { box-shadow: 0 0 0 3px rgba(166, 227, 161, 0.15); }
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--aide-success) 30%, transparent); }
+  50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--aide-success) 15%, transparent); }
 }
 
 .kb-recording-hint {
@@ -894,8 +894,8 @@ function onOverlayClick(e: MouseEvent) {
   margin-top: 8px;
   padding: 8px 10px;
   border-radius: 6px;
-  background: rgba(249, 226, 175, 0.1);
-  border: 1px solid rgba(249, 226, 175, 0.25);
+  background: color-mix(in srgb, var(--aide-warning) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-warning) 25%, transparent);
   font-size: 11px;
   color: var(--aide-warning);
 }

@@ -105,7 +105,7 @@ function handleToggle(id: string, event: Event) {
 
 .create-btn {
   background: var(--aide-accent);
-  color: white;
+  color: var(--aide-text-on-accent);
   border: none;
   padding: 8px 16px;
   border-radius: 6px;
@@ -187,7 +187,7 @@ function handleToggle(id: string, event: Event) {
 .toggle-btn.active {
   background: var(--aide-accent);
   border-color: var(--aide-accent);
-  color: white;
+  color: var(--aide-text-on-accent);
 }
 
 .add-bar {

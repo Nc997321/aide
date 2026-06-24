@@ -131,7 +131,7 @@ function handleToggle(id: string, enabled: boolean) {
   background: var(--aide-bg-deep);
   border: 1px solid var(--aide-surface-default);
   border-radius: 12px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--aide-shadow-lg);
   z-index: 1000;
 }
 

@@ -213,7 +213,7 @@ function getLanguageLabel(): string {
 .viewer-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--aide-bg-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -234,7 +234,7 @@ function getLanguageLabel(): string {
   height: 85vh;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--aide-shadow-lg);
   animation: scaleIn 0.15s ease;
 }
 
@@ -308,7 +308,7 @@ function getLanguageLabel(): string {
 }
 .viewer-btn.primary {
   background: var(--aide-accent);
-  color: #fff;
+  color: var(--aide-text-on-accent);
   border-color: var(--aide-accent);
 }
 .viewer-btn.primary:hover {
@@ -372,7 +372,7 @@ function getLanguageLabel(): string {
   background: var(--aide-surface-default);
   border: 1px solid var(--aide-surface-hover);
   border-radius: 8px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--aide-shadow-md);
   z-index: 10;
   display: flex;
   flex-direction: column;
@@ -467,15 +467,15 @@ function getLanguageLabel(): string {
 .goto-item-tag.tag-fn,
 .goto-item-tag.tag-function,
 .goto-item-tag.tag-def {
-  background: rgba(166, 227, 161, 0.15);
+  background: color-mix(in srgb, var(--aide-success) 15%, transparent);
   color: var(--aide-success);
 }
 .goto-item-tag.tag-class {
-  background: rgba(137, 180, 250, 0.15);
+  background: color-mix(in srgb, var(--aide-info) 15%, transparent);
   color: var(--aide-accent);
 }
 .goto-item-tag.tag-const {
-  background: rgba(249, 226, 175, 0.15);
+  background: color-mix(in srgb, var(--aide-warning) 15%, transparent);
   color: var(--aide-warning);
 }
 
@@ -566,7 +566,7 @@ function getLanguageLabel(): string {
   background: var(--aide-bg-deep);
   padding: 2px 6px;
   border-radius: 4px;
-  color: #fab387;
+  color: var(--aide-warning);
 }
 
 .viewer-markdown pre {
@@ -600,7 +600,7 @@ function getLanguageLabel(): string {
   font-weight: 600;
 }
 .viewer-markdown tr:nth-child(even) td {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--aide-border-subtle);
 }
 
 .viewer-markdown hr {
@@ -661,9 +661,9 @@ function getLanguageLabel(): string {
   white-space: pre;
   tab-size: 4;
 }
-.viewer-diff .diff-add { color: #a6e3a1; background: rgba(166,227,161,0.04); display: block; }
-.viewer-diff .diff-del { color: #f38ba8; background: rgba(243,139,168,0.04); display: block; }
-.viewer-diff .diff-hunk { color: #89b4fa; display: block; }
-.viewer-diff .diff-meta { color: #f9e2af; display: block; }
+.viewer-diff .diff-add { color: var(--aide-success); background: color-mix(in srgb, var(--aide-success) 4%, transparent); display: block; }
+.viewer-diff .diff-del { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 4%, transparent); display: block; }
+.viewer-diff .diff-hunk { color: var(--aide-info); display: block; }
+.viewer-diff .diff-meta { color: var(--aide-warning); display: block; }
 .viewer-diff .diff-ctx { color: var(--aide-text-muted); display: block; }
 </style>

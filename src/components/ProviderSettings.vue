@@ -643,7 +643,7 @@ select.text-input {
 
 .btn-delete {
   background: none;
-  border: 1px solid rgba(243, 139, 168, 0.3);
+  border: 1px solid color-mix(in srgb, var(--aide-danger) 30%, transparent);
   color: var(--aide-danger);
   padding: 6px 16px;
   border-radius: 5px;
@@ -654,7 +654,7 @@ select.text-input {
 }
 
 .btn-delete:hover {
-  background: rgba(243, 139, 168, 0.1);
+  background: color-mix(in srgb, var(--aide-danger) 10%, transparent);
 }
 
 .btn-save {

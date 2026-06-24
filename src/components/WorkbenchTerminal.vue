@@ -148,7 +148,7 @@ function onExitedKeydown(e: KeyboardEvent) {
   background: var(--aide-bg-base);
   border: 1px solid var(--aide-surface-default);
   border-radius: 10px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--aide-shadow-lg);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -202,7 +202,7 @@ function onExitedKeydown(e: KeyboardEvent) {
 
 .workbench-exited {
   position: absolute; inset: 26px 0 0 0;
-  background: rgba(17, 17, 27, 0.85);
+  background: var(--aide-bg-overlay);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 6px; cursor: pointer; outline: none;
 }

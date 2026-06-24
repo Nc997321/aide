@@ -61,7 +61,7 @@ onMounted(() => {
 }
 
 .win-btn-close:hover {
-  color: #fff;
+  color: var(--aide-text-on-accent);
   background: var(--aide-danger);
 }
 </style>

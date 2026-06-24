@@ -161,7 +161,7 @@ function handleCancel() {
 .save-btn {
   background: var(--aide-accent);
   border-color: var(--aide-accent);
-  color: white;
+  color: var(--aide-text-on-accent);
 }
 
 .save-btn:hover {
@@ -179,7 +179,7 @@ function handleCancel() {
 
 .delete-btn:hover {
   background: var(--aide-danger);
-  color: white;
+  color: var(--aide-text-on-accent);
 }
 
 .detail-content {

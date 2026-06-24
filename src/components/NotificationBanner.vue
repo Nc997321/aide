@@ -96,7 +96,7 @@ function handleDismiss() {
   background: var(--aide-surface-default);
   border: 1px solid var(--aide-surface-hover);
   border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--aide-shadow-md);
   overflow: hidden;
 }
 

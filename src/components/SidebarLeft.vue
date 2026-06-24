@@ -606,15 +606,15 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
   padding: 6px 12px;
   margin: 0 8px;
   border-radius: 6px;
-  background: rgba(137, 180, 250, 0.1);
-  border: 1px solid rgba(137, 180, 250, 0.22);
+  background: color-mix(in srgb, var(--aide-info) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-info) 22%, transparent);
   cursor: pointer;
   transition: all 0.12s;
 }
 
 .update-banner:hover {
-  background: rgba(137, 180, 250, 0.18);
-  border-color: rgba(137, 180, 250, 0.35);
+  background: color-mix(in srgb, var(--aide-info) 18%, transparent);
+  border-color: color-mix(in srgb, var(--aide-info) 35%, transparent);
 }
 
 .update-banner-body {
@@ -647,7 +647,7 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
 }
 
 .update-dismiss:hover {
-  background: rgba(137, 180, 250, 0.2);
+  background: color-mix(in srgb, var(--aide-info) 20%, transparent);
   color: var(--aide-text-primary);
 }
 

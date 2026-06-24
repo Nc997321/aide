@@ -219,7 +219,7 @@ onUnmounted(() => {
   position: absolute;
   width: 260px; height: 260px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(137,180,250,0.10) 0%, transparent 70%);
+  background: radial-gradient(circle, color-mix(in srgb, var(--aide-info) 10%, transparent) 0%, transparent 70%);
   animation: loader-glow-pulse 2.2s ease-in-out infinite;
 }
 @keyframes loader-glow-pulse {
@@ -325,7 +325,7 @@ onUnmounted(() => {
   letter-spacing: 0.5px;
 }
 .preview-msg--user .preview-msg__who { color: var(--aide-accent); }
-.preview-msg--claude .preview-msg__who { color: #cba6f7; }
+.preview-msg--claude .preview-msg__who { color: #cba6f7; /* Claude purple — brand color, intentionally not tokenized */ }
 
 .preview-msg__body {
   font-size: 13px;
@@ -363,7 +363,7 @@ onUnmounted(() => {
   background: var(--aide-bg-deep);
   padding: 1px 5px;
   border-radius: 3px;
-  color: #fab387;
+  color: var(--aide-warning);
 }
 
 .preview-text pre {
@@ -394,7 +394,7 @@ onUnmounted(() => {
   text-align: left;
 }
 .preview-text th { background: var(--aide-bg-deep); font-weight: 600; }
-.preview-text tr:nth-child(even) td { background: rgba(255, 255, 255, 0.02); }
+.preview-text tr:nth-child(even) td { background: var(--aide-border-subtle); }
 
 .preview-text hr {
   border: none;

@@ -74,7 +74,7 @@ function onOverlayClick(e: MouseEvent) {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--aide-bg-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -94,7 +94,7 @@ function onOverlayClick(e: MouseEvent) {
   padding: 20px 24px;
   min-width: 360px;
   max-width: 440px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--aide-shadow-lg);
   animation: scaleIn 0.15s ease;
 }
 
