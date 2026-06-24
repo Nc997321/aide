@@ -79,11 +79,13 @@ const currentStatus = computed(() => {
   return (sessionState[sid] || "stopped") as "stopped" | "running" | "waiting" | "attention";
 });
 
+const displayName = ref("");
+
 const sessionName = computed(() => {
   const sid = props.sessionId;
   if (!sid) return "";
   if (sid.startsWith("new_")) return "新会话";
-  return sid.substring(0, 8);
+  return displayName.value || sid.substring(0, 8);
 });
 
 const isLive = computed(() => liveDisplayIds.has(props.sessionId));
@@ -117,6 +119,16 @@ watch(() => props.sessionId, async (newId) => {
   if (newId && newId !== currentSid()) {
     showSession(newId);
     await loadPreviewContent(newId);
+  }
+  // Look up display name for the toolbar
+  if (newId && !newId.startsWith("new_")) {
+    try {
+      const sessions = await api.listSessions();
+      const s = sessions.find(sess => sess.id === newId);
+      displayName.value = s?.name || "";
+    } catch { displayName.value = ""; }
+  } else {
+    displayName.value = "";
   }
 });
 

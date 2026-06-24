@@ -21,12 +21,15 @@ defineEmits<{
     :style="{ paddingLeft: `${depth * 16 + 8}px` }"
     @click="$emit('select')"
   >
-    <span
+    <svg
       v-if="isDir"
       class="a-tree-item__arrow"
       :class="{ 'a-tree-item__arrow--open': expanded }"
+      width="12" height="12" viewBox="0 0 12 12" fill="none"
       @click.stop="$emit('toggle')"
-    >&#x25B8;</span>
+    >
+      <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
     <span v-else class="a-tree-item__arrow-placeholder" />
     <span class="a-tree-item__icon">{{ icon }}</span>
     <span class="a-tree-item__label">{{ label }}</span>
@@ -59,13 +62,14 @@ defineEmits<{
 }
 
 .a-tree-item__arrow {
-  font-size: 10px;
   width: 14px;
-  text-align: center;
+  height: 12px;
   color: var(--aide-text-muted);
-  transition: transform 0.12s;
+  transition: transform 0.15s ease, color 0.15s ease;
   flex-shrink: 0;
   cursor: pointer;
+  border-radius: 3px;
+  padding: 1px;
 }
 
 .a-tree-item__arrow--open {

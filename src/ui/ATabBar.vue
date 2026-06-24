@@ -41,7 +41,7 @@ function onKeydown(e: KeyboardEvent) {
       :tabindex="modelValue === tab.id ? 0 : -1"
       @click="emit('update:modelValue', tab.id)"
     >
-      <span v-if="tab.icon" class="a-tab__icon">{{ tab.icon }}</span>
+      <span v-if="tab.icon" class="a-tab__icon" v-html="tab.icon"></span>
       <span class="a-tab__label">{{ tab.label }}</span>
       <ABadge v-if="tab.badge && tab.badge > 0" :value="tab.badge" />
     </button>
@@ -89,6 +89,14 @@ function onKeydown(e: KeyboardEvent) {
 
 .a-tab__icon {
   font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.a-tab__icon :deep(svg) {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
 }
 
 .a-tab__label {

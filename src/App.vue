@@ -155,10 +155,14 @@ const changeCount = computed(() => {
   return n;
 });
 
+const tabIconFiles = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7c0-1.1.9-2 2-2h4.6L12 7h7c1.1 0 2 .9 2 2v8c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2V7z"/></svg>';
+const tabIconChanges = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
+const tabIconGit = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
+
 const rightTabs = computed<Tab[]>(() => [
-  { id: "files", label: "文件", icon: "📁" },
-  { id: "changes", label: "变更", icon: "✎", badge: changeCount.value || undefined },
-  { id: "git", label: "Git", icon: "⎇", badge: unstagedFiles.value.length || undefined },
+  { id: "files", label: "文件", icon: tabIconFiles },
+  { id: "changes", label: "变更", icon: tabIconChanges, badge: changeCount.value || undefined },
+  { id: "git", label: "Git", icon: tabIconGit, badge: unstagedFiles.value.length || undefined },
 ]);
 
 function onSessionChanged(id: string) {
