@@ -43,6 +43,8 @@ pub struct AppSettings {
     pub workbench_height: u32,
     #[serde(default)]
     pub keybindings: Keybindings,
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 fn default_font_size() -> u32 { 14 }
@@ -50,6 +52,7 @@ fn default_font_family() -> String {
     "'Cascadia Code', 'Fira Code', 'Consolas', monospace".to_string()
 }
 fn default_notifications_enabled() -> bool { true }
+fn default_theme() -> String { "warm-dark".to_string() }
 
 impl Default for AppSettings {
     fn default() -> Self {
@@ -61,6 +64,7 @@ impl Default for AppSettings {
             shell_path: String::new(),
             workbench_height: 0,
             keybindings: Keybindings::default(),
+            theme: default_theme(),
         }
     }
 }

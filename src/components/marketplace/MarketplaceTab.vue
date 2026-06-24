@@ -144,7 +144,7 @@ function handleUninstall(name: string) {
 
 .error-text {
   font-size: 11.5px;
-  color: #f38ba8;
+  color: var(--aide-danger);
   white-space: pre-line;
   line-height: 1.5;
 }
@@ -157,7 +157,7 @@ function handleUninstall(name: string) {
 .error-btn {
   background: none;
   border: 1px solid rgba(243, 139, 168, 0.4);
-  color: #f38ba8;
+  color: var(--aide-danger);
   padding: 4px 12px;
   border-radius: 4px;
   cursor: pointer;
@@ -172,8 +172,8 @@ function handleUninstall(name: string) {
 }
 
 .error-btn-primary {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--aide-accent);
+  color: var(--aide-accent);
 }
 
 .error-btn-primary:hover {
@@ -190,23 +190,23 @@ function handleUninstall(name: string) {
 .search-input {
   width: 100%;
   box-sizing: border-box;
-  background: var(--bg-primary);
-  border: 1px solid var(--surface-hover);
+  background: var(--aide-bg-base);
+  border: 1px solid var(--aide-surface-hover);
   border-radius: 6px;
   padding: 7px 10px;
   font-size: 12px;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
   outline: none;
   font-family: inherit;
   transition: border-color 0.15s;
 }
 
 .search-input::placeholder {
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
 }
 
 .search-input:focus {
-  border-color: var(--accent);
+  border-color: var(--aide-accent);
 }
 
 /* ── Plugin list ── */
@@ -233,7 +233,7 @@ function handleUninstall(name: string) {
 .skel-line {
   height: 12px;
   border-radius: 4px;
-  background: var(--surface-hover);
+  background: var(--aide-surface-hover);
   animation: pulse 1.5s ease-in-out infinite;
 }
 
@@ -245,7 +245,7 @@ function handleUninstall(name: string) {
   width: 60px;
   height: 26px;
   border-radius: 5px;
-  background: var(--surface-hover);
+  background: var(--aide-surface-hover);
   animation: pulse 1.5s ease-in-out infinite;
 }
 
@@ -263,7 +263,7 @@ function handleUninstall(name: string) {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
 }
 
 .empty-icon {
@@ -278,14 +278,14 @@ function handleUninstall(name: string) {
 
 .empty-hint {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   margin-bottom: 12px;
 }
 
 .empty-retry {
-  background: var(--accent);
+  background: var(--aide-accent);
   border: none;
-  color: #1e1e2e;
+  color: var(--aide-text-on-accent);
   padding: 6px 16px;
   border-radius: 5px;
   cursor: pointer;
@@ -308,7 +308,7 @@ function handleUninstall(name: string) {
 }
 
 .plugin-list::-webkit-scrollbar-thumb {
-  background: var(--surface-hover);
+  background: var(--aide-surface-hover);
   border-radius: 2px;
 }
 </style>

@@ -61,6 +61,7 @@ export interface AppSettings {
   shellPath: string;
   workbenchHeight: number;
   keybindings: Keybindings;
+  theme: string;
 }
 
 export interface ChangeFile {

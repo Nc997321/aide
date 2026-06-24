@@ -128,8 +128,8 @@ function handleToggle(id: string, enabled: boolean) {
   max-height: 70vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg-secondary);
-  border: 1px solid var(--surface);
+  background: var(--aide-bg-deep);
+  border: 1px solid var(--aide-surface-default);
   border-radius: 12px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   z-index: 1000;
@@ -140,7 +140,7 @@ function handleToggle(id: string, enabled: boolean) {
   align-items: center;
   gap: 8px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--surface);
+  border-bottom: 1px solid var(--aide-surface-default);
   border-radius: 12px 12px 0 0;
 }
 
@@ -148,7 +148,7 @@ function handleToggle(id: string, enabled: boolean) {
 .close-btn {
   background: none;
   border: none;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   cursor: pointer;
   padding: 4px 8px;
   border-radius: 4px;
@@ -157,8 +157,8 @@ function handleToggle(id: string, enabled: boolean) {
 
 .back-btn:hover,
 .close-btn:hover {
-  background: var(--surface);
-  color: var(--text-primary);
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
 }
 
 .header-title {
@@ -189,7 +189,7 @@ function handleToggle(id: string, enabled: boolean) {
 }
 
 .category-item:hover {
-  background: var(--surface);
+  background: var(--aide-surface-default);
 }
 
 .cat-icon {
@@ -203,19 +203,19 @@ function handleToggle(id: string, enabled: boolean) {
 .cat-label {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
 }
 
 .cat-desc {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   margin-top: 2px;
 }
 
 .cat-count {
   font-size: 12px;
-  color: var(--text-muted);
-  background: var(--bg-tertiary);
+  color: var(--aide-text-muted);
+  background: var(--aide-bg-deep);
   padding: 2px 8px;
   border-radius: 10px;
 }

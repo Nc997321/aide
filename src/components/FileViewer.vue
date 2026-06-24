@@ -227,8 +227,8 @@ function getLanguageLabel(): string {
 }
 
 .viewer-dialog {
-  background: var(--surface);
-  border: 1px solid var(--surface-hover);
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-surface-hover);
   border-radius: 10px;
   width: min(90vw, 900px);
   height: 85vh;
@@ -248,20 +248,20 @@ function getLanguageLabel(): string {
   align-items: center;
   gap: 10px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--surface-hover);
+  border-bottom: 1px solid var(--aide-surface-hover);
   flex-shrink: 0;
 }
 
 .viewer-title {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
 }
 
 .viewer-lang {
   font-size: 10px;
-  color: var(--text-muted);
-  background: var(--bg-tertiary);
+  color: var(--aide-text-muted);
+  background: var(--aide-bg-deep);
   padding: 2px 8px;
   border-radius: 4px;
   text-transform: uppercase;
@@ -270,7 +270,7 @@ function getLanguageLabel(): string {
 .viewer-path {
   flex: 1;
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -279,7 +279,7 @@ function getLanguageLabel(): string {
 .viewer-close {
   background: none;
   border: none;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   font-size: 20px;
   cursor: pointer;
   padding: 0 4px;
@@ -288,14 +288,14 @@ function getLanguageLabel(): string {
   transition: all 0.1s;
 }
 .viewer-close:hover {
-  color: var(--text-primary);
-  background: var(--surface-hover);
+  color: var(--aide-text-primary);
+  background: var(--aide-surface-hover);
 }
 
 .viewer-btn {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--surface-hover);
-  color: var(--text-secondary);
+  background: var(--aide-bg-deep);
+  border: 1px solid var(--aide-surface-hover);
+  color: var(--aide-text-secondary);
   padding: 4px 12px;
   border-radius: 4px;
   font-size: 12px;
@@ -303,13 +303,13 @@ function getLanguageLabel(): string {
   transition: all 0.1s;
 }
 .viewer-btn:hover {
-  background: var(--surface-hover);
-  color: var(--text-primary);
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
 }
 .viewer-btn.primary {
-  background: var(--accent);
+  background: var(--aide-accent);
   color: #fff;
-  border-color: var(--accent);
+  border-color: var(--aide-accent);
 }
 .viewer-btn.primary:hover {
   opacity: 0.9;
@@ -323,7 +323,7 @@ function getLanguageLabel(): string {
   flex: 1;
   text-align: right;
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
 }
 
 .viewer-body {
@@ -337,7 +337,7 @@ function getLanguageLabel(): string {
 
 .viewer-error {
   padding: 24px;
-  color: var(--accent-red);
+  color: var(--aide-danger);
   font-size: 13px;
 }
 
@@ -356,7 +356,7 @@ function getLanguageLabel(): string {
   font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
   font-size: 13px;
   line-height: 1.6;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
   white-space: pre;
   tab-size: 4;
 }
@@ -369,8 +369,8 @@ function getLanguageLabel(): string {
   left: 8px;
   right: 8px;
   max-height: 280px;
-  background: var(--surface);
-  border: 1px solid var(--surface-hover);
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-surface-hover);
   border-radius: 8px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
   z-index: 10;
@@ -389,19 +389,19 @@ function getLanguageLabel(): string {
   align-items: center;
   justify-content: space-between;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--surface-hover);
+  border-bottom: 1px solid var(--aide-surface-hover);
   flex-shrink: 0;
 }
 
 .goto-popover-title {
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
 }
 
 .goto-popover-close {
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   font-size: 16px;
   cursor: pointer;
   padding: 0 4px;
@@ -409,8 +409,8 @@ function getLanguageLabel(): string {
   border-radius: 4px;
 }
 .goto-popover-close:hover {
-  color: var(--text-primary);
-  background: var(--surface-hover);
+  color: var(--aide-text-primary);
+  background: var(--aide-surface-hover);
 }
 
 .goto-popover-body {
@@ -423,11 +423,11 @@ function getLanguageLabel(): string {
   padding: 16px;
   text-align: center;
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
 }
 
 .goto-popover-hint {
-  color: var(--accent);
+  color: var(--aide-accent);
   cursor: pointer;
 }
 
@@ -441,12 +441,12 @@ function getLanguageLabel(): string {
 }
 .goto-popover-item:hover,
 .goto-popover-item.active {
-  background: var(--surface-hover);
+  background: var(--aide-surface-hover);
 }
 
 .goto-item-path {
   font-size: 11px;
-  color: var(--accent);
+  color: var(--aide-accent);
   white-space: nowrap;
   flex-shrink: 0;
   min-width: 0;
@@ -461,27 +461,27 @@ function getLanguageLabel(): string {
   border-radius: 3px;
   text-transform: uppercase;
   flex-shrink: 0;
-  background: var(--bg-tertiary);
-  color: var(--text-muted);
+  background: var(--aide-bg-deep);
+  color: var(--aide-text-muted);
 }
 .goto-item-tag.tag-fn,
 .goto-item-tag.tag-function,
 .goto-item-tag.tag-def {
   background: rgba(166, 227, 161, 0.15);
-  color: var(--accent-green);
+  color: var(--aide-success);
 }
 .goto-item-tag.tag-class {
   background: rgba(137, 180, 250, 0.15);
-  color: var(--accent);
+  color: var(--aide-accent);
 }
 .goto-item-tag.tag-const {
   background: rgba(249, 226, 175, 0.15);
-  color: var(--accent-yellow);
+  color: var(--aide-warning);
 }
 
 .goto-item-content {
   font-size: 11px;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -531,12 +531,12 @@ function getLanguageLabel(): string {
   padding: 24px 32px;
   font-size: 14px;
   line-height: 1.75;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
 }
 
-.viewer-markdown h1 { font-size: 1.6em; font-weight: 600; margin: 1.2em 0 0.6em; border-bottom: 1px solid var(--surface-hover); padding-bottom: 0.3em; }
+.viewer-markdown h1 { font-size: 1.6em; font-weight: 600; margin: 1.2em 0 0.6em; border-bottom: 1px solid var(--aide-surface-hover); padding-bottom: 0.3em; }
 .viewer-markdown h1:first-child { margin-top: 0; }
-.viewer-markdown h2 { font-size: 1.35em; font-weight: 600; margin: 1.1em 0 0.5em; border-bottom: 1px solid var(--surface-hover); padding-bottom: 0.25em; }
+.viewer-markdown h2 { font-size: 1.35em; font-weight: 600; margin: 1.1em 0 0.5em; border-bottom: 1px solid var(--aide-surface-hover); padding-bottom: 0.25em; }
 .viewer-markdown h2:first-child { margin-top: 0; }
 .viewer-markdown h3 { font-size: 1.15em; font-weight: 600; margin: 1em 0 0.4em; }
 .viewer-markdown h3:first-child { margin-top: 0; }
@@ -544,7 +544,7 @@ function getLanguageLabel(): string {
 .viewer-markdown h4:first-child { margin-top: 0; }
 
 .viewer-markdown p { margin: 0.6em 0; }
-.viewer-markdown a { color: var(--accent); text-decoration: none; }
+.viewer-markdown a { color: var(--aide-accent); text-decoration: none; }
 .viewer-markdown a:hover { text-decoration: underline; }
 
 .viewer-markdown ul, .viewer-markdown ol { padding-left: 1.5em; margin: 0.5em 0; }
@@ -554,16 +554,16 @@ function getLanguageLabel(): string {
 .viewer-markdown blockquote {
   margin: 0.6em 0;
   padding: 4px 14px;
-  border-left: 3px solid var(--accent);
-  color: var(--text-secondary);
-  background: var(--bg-tertiary);
+  border-left: 3px solid var(--aide-accent);
+  color: var(--aide-text-secondary);
+  background: var(--aide-bg-deep);
   border-radius: 0 4px 4px 0;
 }
 
 .viewer-markdown code {
   font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
   font-size: 0.9em;
-  background: var(--bg-tertiary);
+  background: var(--aide-bg-deep);
   padding: 2px 6px;
   border-radius: 4px;
   color: #fab387;
@@ -579,8 +579,8 @@ function getLanguageLabel(): string {
   padding: 14px 18px;
   font-size: 12.5px;
   line-height: 1.55;
-  color: var(--text-primary);
-  background: var(--bg-tertiary);
+  color: var(--aide-text-primary);
+  background: var(--aide-bg-deep);
   border-radius: 8px;
   overflow-x: auto;
 }
@@ -591,12 +591,12 @@ function getLanguageLabel(): string {
   margin: 0.8em 0;
 }
 .viewer-markdown th, .viewer-markdown td {
-  border: 1px solid var(--surface-hover);
+  border: 1px solid var(--aide-surface-hover);
   padding: 8px 12px;
   text-align: left;
 }
 .viewer-markdown th {
-  background: var(--bg-tertiary);
+  background: var(--aide-bg-deep);
   font-weight: 600;
 }
 .viewer-markdown tr:nth-child(even) td {
@@ -605,7 +605,7 @@ function getLanguageLabel(): string {
 
 .viewer-markdown hr {
   border: none;
-  border-top: 1px solid var(--surface-hover);
+  border-top: 1px solid var(--aide-surface-hover);
   margin: 1em 0;
 }
 
@@ -657,7 +657,7 @@ function getLanguageLabel(): string {
   font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
   font-size: 12px;
   line-height: 1.6;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
   white-space: pre;
   tab-size: 4;
 }
@@ -665,5 +665,5 @@ function getLanguageLabel(): string {
 .viewer-diff .diff-del { color: #f38ba8; background: rgba(243,139,168,0.04); display: block; }
 .viewer-diff .diff-hunk { color: #89b4fa; display: block; }
 .viewer-diff .diff-meta { color: #f9e2af; display: block; }
-.viewer-diff .diff-ctx { color: var(--text-muted); display: block; }
+.viewer-diff .diff-ctx { color: var(--aide-text-muted); display: block; }
 </style>

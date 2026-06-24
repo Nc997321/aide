@@ -145,8 +145,8 @@ function onExitedKeydown(e: KeyboardEvent) {
   position: absolute;
   top: 10px;
   width: calc(100% - 20px);
-  background: var(--bg-primary);
-  border: 1px solid var(--surface);
+  background: var(--aide-bg-base);
+  border: 1px solid var(--aide-surface-default);
   border-radius: 10px;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
   overflow: hidden;
@@ -169,26 +169,26 @@ function onExitedKeydown(e: KeyboardEvent) {
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--surface);
+  background: var(--aide-bg-deep);
+  border-bottom: 1px solid var(--aide-surface-default);
   cursor: row-resize;
   user-select: none;
 }
 
 .wb-dots { display: flex; gap: 6px; }
 .wb-dot { width: 8px; height: 8px; border-radius: 50%; }
-.wb-dot--red { background: #f38ba8; }
-.wb-dot--yellow { background: #f9e2af; }
-.wb-dot--green { background: #a6e3a1; }
+.wb-dot--red { background: var(--aide-danger); }
+.wb-dot--yellow { background: var(--aide-warning); }
+.wb-dot--green { background: var(--aide-success); }
 
 .wb-header-right { display: flex; align-items: center; gap: 8px; cursor: default; }
-.wb-shell-name { font-size: 11px; color: var(--text-muted); }
+.wb-shell-name { font-size: 11px; color: var(--aide-text-muted); }
 .wb-btn {
-  background: var(--surface); border: none; color: var(--text-secondary);
+  background: var(--aide-surface-default); border: none; color: var(--aide-text-secondary);
   font-size: 11px; padding: 2px 7px; border-radius: 4px; cursor: pointer;
   line-height: 1;
 }
-.wb-btn:hover { color: var(--accent-red); }
+.wb-btn:hover { color: var(--aide-danger); }
 
 .workbench-term-host {
   flex: 1;
@@ -196,9 +196,9 @@ function onExitedKeydown(e: KeyboardEvent) {
   overflow: hidden;
 }
 .workbench-term-host .xterm { padding: 8px 10px; height: 100%; }
-.workbench-term-host .xterm-viewport { scrollbar-width: thin; scrollbar-color: var(--surface) transparent; }
+.workbench-term-host .xterm-viewport { scrollbar-width: thin; scrollbar-color: var(--aide-surface-default) transparent; }
 .workbench-term-host .xterm-viewport::-webkit-scrollbar { width: 6px; }
-.workbench-term-host .xterm-viewport::-webkit-scrollbar-thumb { background: var(--surface); border-radius: 3px; }
+.workbench-term-host .xterm-viewport::-webkit-scrollbar-thumb { background: var(--aide-surface-default); border-radius: 3px; }
 
 .workbench-exited {
   position: absolute; inset: 26px 0 0 0;
@@ -206,6 +206,6 @@ function onExitedKeydown(e: KeyboardEvent) {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 6px; cursor: pointer; outline: none;
 }
-.workbench-exited__title { font-size: 14px; color: var(--text-secondary); }
-.workbench-exited__hint { font-size: 12px; color: var(--text-muted); }
+.workbench-exited__title { font-size: 14px; color: var(--aide-text-secondary); }
+.workbench-exited__hint { font-size: 12px; color: var(--aide-text-muted); }
 </style>

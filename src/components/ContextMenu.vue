@@ -100,8 +100,8 @@ onUnmounted(() => {
   z-index: 9999;
   min-width: 168px;
   max-width: 220px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--surface);
+  background: var(--aide-bg-deep);
+  border: 1px solid var(--aide-surface-default);
   border-radius: 8px;
   padding: 4px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
@@ -115,17 +115,17 @@ onUnmounted(() => {
   border-radius: 5px;
   cursor: pointer;
   font-size: 12.5px;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   transition: background 0.08s, color 0.08s;
 }
 
 .ctx-item:hover:not(.disabled) {
-  background: var(--surface);
-  color: var(--text-primary);
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
 }
 
 .ctx-item.danger {
-  color: var(--accent-red);
+  color: var(--aide-danger);
 }
 
 .ctx-item.danger:hover:not(.disabled) {
@@ -133,7 +133,7 @@ onUnmounted(() => {
 }
 
 .ctx-item.disabled {
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   cursor: default;
   opacity: 0.5;
 }
@@ -147,7 +147,7 @@ onUnmounted(() => {
 .ctx-separator {
   height: 1px;
   margin: 4px 8px;
-  background: var(--surface);
+  background: var(--aide-surface-default);
 }
 
 /* Transition */

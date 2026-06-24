@@ -37,19 +37,6 @@
   --aide-radius-lg: 12px;
   --aide-space-unit: 4px;
 
-  /* Legacy aliases — temporary bridge, removed in Task 7 */
-  --bg-primary: var(--aide-bg-base);
-  --bg-secondary: var(--aide-bg-deep);
-  --bg-tertiary: var(--aide-bg-deep);
-  --surface: var(--aide-surface-default);
-  --surface-hover: var(--aide-surface-hover);
-  --text-primary: var(--aide-text-primary);
-  --text-secondary: var(--aide-text-secondary);
-  --text-muted: var(--aide-text-muted);
-  --accent: var(--aide-accent);
-  --accent-green: var(--aide-success);
-  --accent-yellow: var(--aide-warning);
-  --accent-red: var(--aide-danger);
 }
 
 html, body, #app {

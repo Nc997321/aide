@@ -325,7 +325,7 @@ function knownModelsForDatalist(): string[] {
 .provider-list {
   width: 200px;
   flex-shrink: 0;
-  border-right: 1px solid var(--surface);
+  border-right: 1px solid var(--aide-surface-default);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -343,11 +343,11 @@ function knownModelsForDatalist(): string[] {
 }
 
 .provider-item:hover {
-  background: var(--surface);
+  background: var(--aide-surface-default);
 }
 
 .provider-item.active {
-  background: var(--surface);
+  background: var(--aide-surface-default);
 }
 
 .pi-icon {
@@ -364,7 +364,7 @@ function knownModelsForDatalist(): string[] {
 
 .pi-name {
   font-size: 12.5px;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -372,22 +372,22 @@ function knownModelsForDatalist(): string[] {
 
 .pi-model {
   font-size: 10px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .pi-check {
-  color: var(--accent-green);
+  color: var(--aide-success);
   font-size: 13px;
   flex-shrink: 0;
 }
 
 .pi-activate {
   background: none;
-  border: 1px solid var(--surface-hover);
-  color: var(--text-muted);
+  border: 1px solid var(--aide-surface-hover);
+  color: var(--aide-text-muted);
   font-size: 11px;
   width: 18px;
   height: 18px;
@@ -402,17 +402,17 @@ function knownModelsForDatalist(): string[] {
 }
 
 .pi-activate:hover {
-  border-color: var(--accent-green);
-  color: var(--accent-green);
+  border-color: var(--aide-success);
+  color: var(--aide-success);
 }
 
 .add-btn {
   margin-top: 4px;
   padding: 8px 10px;
   border-radius: 6px;
-  border: 1px dashed var(--surface-hover);
+  border: 1px dashed var(--aide-surface-hover);
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   cursor: pointer;
   font-size: 12px;
   font-family: inherit;
@@ -420,9 +420,9 @@ function knownModelsForDatalist(): string[] {
 }
 
 .add-btn:hover {
-  background: var(--surface);
-  border-color: var(--accent);
-  color: var(--text-primary);
+  background: var(--aide-surface-default);
+  border-color: var(--aide-accent);
+  color: var(--aide-text-primary);
 }
 
 /* ── Right form ── */
@@ -448,7 +448,7 @@ function knownModelsForDatalist(): string[] {
 }
 
 .form-scroll::-webkit-scrollbar-thumb {
-  background: var(--surface-hover);
+  background: var(--aide-surface-hover);
   border-radius: 2px;
 }
 
@@ -456,30 +456,30 @@ function knownModelsForDatalist(): string[] {
 .form-section > label {
   display: block;
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   margin-bottom: 4px;
 }
 
 .text-input {
   width: 100%;
   box-sizing: border-box;
-  background: var(--bg-primary);
-  border: 1px solid var(--surface-hover);
+  background: var(--aide-bg-base);
+  border: 1px solid var(--aide-surface-hover);
   border-radius: 5px;
   padding: 6px 10px;
   font-size: 12.5px;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
   outline: none;
   font-family: inherit;
   transition: border-color 0.15s;
 }
 
 .text-input::placeholder {
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
 }
 
 .text-input:focus {
-  border-color: var(--accent);
+  border-color: var(--aide-accent);
 }
 
 select.text-input {
@@ -503,7 +503,7 @@ select.text-input {
 
 .eye-btn {
   background: none;
-  border: 1px solid var(--surface-hover);
+  border: 1px solid var(--aide-surface-hover);
   border-radius: 5px;
   cursor: pointer;
   font-size: 13px;
@@ -515,20 +515,20 @@ select.text-input {
 }
 
 .eye-btn:hover {
-  background: var(--surface);
+  background: var(--aide-surface-default);
 }
 
 /* ── Mappings ── */
 
 .form-section {
-  border-top: 1px solid var(--surface);
+  border-top: 1px solid var(--aide-surface-default);
   padding-top: 10px;
 }
 
 .section-toggle {
   background: none;
   border: none;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   cursor: pointer;
   font-size: 12px;
   font-family: inherit;
@@ -540,7 +540,7 @@ select.text-input {
 }
 
 .section-toggle:hover {
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
 }
 
 .toggle-arrow {
@@ -568,7 +568,7 @@ select.text-input {
 
 .mapping-label {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   width: 56px;
   flex-shrink: 0;
 }
@@ -584,8 +584,8 @@ select.text-input {
   flex-wrap: wrap;
   gap: 4px;
   padding: 6px;
-  background: var(--bg-primary);
-  border: 1px solid var(--surface-hover);
+  background: var(--aide-bg-base);
+  border: 1px solid var(--aide-surface-hover);
   border-radius: 5px;
   min-height: 32px;
   align-items: center;
@@ -595,17 +595,17 @@ select.text-input {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  background: var(--surface);
+  background: var(--aide-surface-default);
   border-radius: 4px;
   padding: 2px 6px;
   font-size: 11px;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
 }
 
 .tag-remove {
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   cursor: pointer;
   font-size: 12px;
   padding: 0 2px;
@@ -613,7 +613,7 @@ select.text-input {
 }
 
 .tag-remove:hover {
-  color: var(--accent-red);
+  color: var(--aide-danger);
 }
 
 .tag-input {
@@ -621,14 +621,14 @@ select.text-input {
   background: transparent;
   outline: none;
   font-size: 11px;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
   min-width: 80px;
   flex: 1;
   font-family: inherit;
 }
 
 .tag-input::placeholder {
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
 }
 
 /* ── Action buttons ── */
@@ -637,14 +637,14 @@ select.text-input {
   display: flex;
   justify-content: space-between;
   padding: 10px 16px;
-  border-top: 1px solid var(--surface);
+  border-top: 1px solid var(--aide-surface-default);
   flex-shrink: 0;
 }
 
 .btn-delete {
   background: none;
   border: 1px solid rgba(243, 139, 168, 0.3);
-  color: var(--accent-red);
+  color: var(--aide-danger);
   padding: 6px 16px;
   border-radius: 5px;
   cursor: pointer;
@@ -658,9 +658,9 @@ select.text-input {
 }
 
 .btn-save {
-  background: var(--accent);
+  background: var(--aide-accent);
   border: none;
-  color: var(--bg-primary);
+  color: var(--aide-bg-base);
   padding: 6px 24px;
   border-radius: 5px;
   cursor: pointer;
@@ -683,7 +683,7 @@ select.text-input {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
 }
 
 .empty-icon {

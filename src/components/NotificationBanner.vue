@@ -93,8 +93,8 @@ function handleDismiss() {
   z-index: 100;
   min-width: 280px;
   max-width: 400px;
-  background: var(--surface);
-  border: 1px solid var(--surface-hover);
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-surface-hover);
   border-radius: 8px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
   overflow: hidden;
@@ -105,8 +105,8 @@ function handleDismiss() {
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  background: var(--bg-tertiary);
-  border-bottom: 1px solid var(--surface-hover);
+  background: var(--aide-bg-deep);
+  border-bottom: 1px solid var(--aide-surface-hover);
 }
 
 .banner-icon {
@@ -117,13 +117,13 @@ function handleDismiss() {
   flex: 1;
   font-size: 12px;
   font-weight: 500;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
 }
 
 .banner-close {
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   font-size: 18px;
   cursor: pointer;
   padding: 0 4px;
@@ -131,7 +131,7 @@ function handleDismiss() {
   transition: color 0.15s;
 }
 .banner-close:hover {
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
 }
 
 .banner-sessions {
@@ -142,19 +142,19 @@ function handleDismiss() {
 .banner-session {
   padding: 10px 12px;
   cursor: pointer;
-  border-bottom: 1px solid var(--surface-hover);
+  border-bottom: 1px solid var(--aide-surface-hover);
   transition: background 0.15s;
 }
 .banner-session:last-child {
   border-bottom: none;
 }
 .banner-session:hover {
-  background: var(--surface-hover);
+  background: var(--aide-surface-hover);
 }
 
 .session-name {
   font-size: 13px;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -162,7 +162,7 @@ function handleDismiss() {
 
 .session-ws {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   margin-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;

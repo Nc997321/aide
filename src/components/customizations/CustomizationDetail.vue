@@ -121,7 +121,7 @@ function handleCancel() {
   align-items: center;
   gap: 8px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--surface);
+  border-bottom: 1px solid var(--aide-surface-default);
 }
 
 .detail-icon {
@@ -144,8 +144,8 @@ function handleCancel() {
 .cancel-btn,
 .delete-btn {
   background: none;
-  border: 1px solid var(--surface);
-  color: var(--text-secondary);
+  border: 1px solid var(--aide-surface-default);
+  color: var(--aide-text-secondary);
   padding: 4px 12px;
   border-radius: 4px;
   cursor: pointer;
@@ -154,13 +154,13 @@ function handleCancel() {
 }
 
 .edit-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--aide-accent);
+  color: var(--aide-accent);
 }
 
 .save-btn {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--aide-accent);
+  border-color: var(--aide-accent);
   color: white;
 }
 
@@ -169,16 +169,16 @@ function handleCancel() {
 }
 
 .cancel-btn:hover {
-  background: var(--surface);
+  background: var(--aide-surface-default);
 }
 
 .delete-btn {
-  border-color: var(--error);
-  color: var(--error);
+  border-color: var(--aide-danger);
+  color: var(--aide-danger);
 }
 
 .delete-btn:hover {
-  background: var(--error);
+  background: var(--aide-danger);
   color: white;
 }
 
@@ -195,25 +195,25 @@ function handleCancel() {
 .form-group label {
   display: block;
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   margin-bottom: 6px;
 }
 
 .form-input {
   width: 100%;
-  background: var(--surface);
+  background: var(--aide-surface-default);
   border: 1px solid transparent;
   border-radius: 6px;
   padding: 8px 12px;
   font-size: 13px;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
   outline: none;
   font-family: inherit;
   transition: border-color 0.15s;
 }
 
 .form-input:focus {
-  border-color: var(--accent);
+  border-color: var(--aide-accent);
 }
 
 .form-input:disabled {

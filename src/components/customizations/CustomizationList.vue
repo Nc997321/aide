@@ -89,7 +89,7 @@ function handleToggle(id: string, event: Event) {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   padding: 32px;
 }
 
@@ -104,7 +104,7 @@ function handleToggle(id: string, event: Event) {
 }
 
 .create-btn {
-  background: var(--accent);
+  background: var(--aide-accent);
   color: white;
   border: none;
   padding: 8px 16px;
@@ -134,7 +134,7 @@ function handleToggle(id: string, event: Event) {
 }
 
 .list-item:hover {
-  background: var(--surface);
+  background: var(--aide-surface-default);
 }
 
 .list-item.disabled {
@@ -149,7 +149,7 @@ function handleToggle(id: string, event: Event) {
 .item-name {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -157,7 +157,7 @@ function handleToggle(id: string, event: Event) {
 
 .item-meta {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   margin-top: 2px;
   white-space: nowrap;
   overflow: hidden;
@@ -166,8 +166,8 @@ function handleToggle(id: string, event: Event) {
 
 .toggle-btn {
   background: none;
-  border: 1px solid var(--surface);
-  color: var(--text-muted);
+  border: 1px solid var(--aide-surface-default);
+  color: var(--aide-text-muted);
   width: 24px;
   height: 24px;
   border-radius: 50%;
@@ -180,26 +180,26 @@ function handleToggle(id: string, event: Event) {
 }
 
 .toggle-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--aide-accent);
+  color: var(--aide-accent);
 }
 
 .toggle-btn.active {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--aide-accent);
+  border-color: var(--aide-accent);
   color: white;
 }
 
 .add-bar {
   padding: 12px;
-  border-top: 1px solid var(--surface);
+  border-top: 1px solid var(--aide-surface-default);
 }
 
 .add-btn {
   width: 100%;
   background: none;
-  border: 1px dashed var(--surface);
-  color: var(--text-secondary);
+  border: 1px dashed var(--aide-surface-default);
+  color: var(--aide-text-secondary);
   padding: 8px;
   border-radius: 6px;
   cursor: pointer;
@@ -208,7 +208,7 @@ function handleToggle(id: string, event: Event) {
 }
 
 .add-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--aide-accent);
+  color: var(--aide-accent);
 }
 </style>

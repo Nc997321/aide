@@ -223,8 +223,8 @@ defineExpose({ loadRoot });
   display: flex;
   align-items: center;
   padding: 8px 12px;
-  background: var(--bg-tertiary);
-  border-bottom: 1px solid var(--surface);
+  background: var(--aide-bg-deep);
+  border-bottom: 1px solid var(--aide-surface-default);
   flex-shrink: 0;
 }
 
@@ -233,15 +233,15 @@ defineExpose({ loadRoot });
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   overflow: hidden;
   padding: 2px 6px;
 }
 
 .path-branch {
   font-size: 10px;
-  color: var(--text-muted);
-  background: var(--surface);
+  color: var(--aide-text-muted);
+  background: var(--aide-surface-default);
   border-radius: 3px;
   padding: 1px 5px;
   flex-shrink: 0;
@@ -253,14 +253,14 @@ defineExpose({ loadRoot });
 
 .path-hint {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
 }
 
 .hidden-toggle {
   margin-left: auto;
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   cursor: pointer;
   padding: 4px;
   border-radius: 4px;
@@ -270,11 +270,11 @@ defineExpose({ loadRoot });
   transition: color 0.15s, background 0.15s;
 }
 .hidden-toggle:hover {
-  color: var(--text-secondary);
-  background: var(--surface);
+  color: var(--aide-text-secondary);
+  background: var(--aide-surface-default);
 }
 .hidden-toggle.active {
-  color: var(--accent);
+  color: var(--aide-accent);
 }
 
 .tree-content {
@@ -285,13 +285,13 @@ defineExpose({ loadRoot });
 
 .tree-status {
   padding: 16px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   font-size: 12px;
   text-align: center;
 }
 
 .tree-status.error {
-  color: var(--accent-red);
+  color: var(--aide-danger);
 }
 </style>
 

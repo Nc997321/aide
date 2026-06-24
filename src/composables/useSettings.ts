@@ -12,9 +12,10 @@ const defaults: AppSettings = {
   keybindings: {
     searchOpen: "Ctrl+P",
   },
+  theme: "warm-dark",
 };
 
-// Module-level reactive singleton — shared across TerminalPanel and SettingsModal
+// Module-level reactive singleton — shared across TerminalPanel and SettingsPanel
 const settings = reactive<AppSettings>({ ...defaults });
 const loaded = ref(false);
 
@@ -29,6 +30,7 @@ export function useSettings() {
       settings.shellPath = s.shellPath ?? defaults.shellPath;
       settings.workbenchHeight = s.workbenchHeight ?? defaults.workbenchHeight;
       settings.keybindings = s.keybindings ?? defaults.keybindings;
+      settings.theme = s.theme ?? defaults.theme;
     } catch (_) {
       // Keep defaults on error
     }
@@ -44,6 +46,7 @@ export function useSettings() {
     if (partial.shellPath !== undefined) settings.shellPath = partial.shellPath;
     if (partial.workbenchHeight !== undefined) settings.workbenchHeight = partial.workbenchHeight;
     if (partial.keybindings !== undefined) settings.keybindings = { ...settings.keybindings, ...partial.keybindings };
+    if (partial.theme !== undefined) settings.theme = partial.theme;
     // Persist asynchronously
     try {
       await api.setSettings(partial);

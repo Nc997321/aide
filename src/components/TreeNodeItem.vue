@@ -111,17 +111,17 @@ function onContextMenu(e: MouseEvent) {
   padding: 5px 12px;
   cursor: pointer;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   white-space: nowrap;
 }
 
 .tree-node:hover {
-  background: var(--surface);
+  background: var(--aide-surface-default);
 }
 
 .tree-node.active {
-  background: var(--surface);
-  color: var(--text-primary);
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
 }
 
 .arrow {

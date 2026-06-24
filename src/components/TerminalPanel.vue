@@ -188,17 +188,17 @@ onUnmounted(() => {
 .terminal-stack { flex: 1; position: relative; }
 .terminal-container { position: absolute; inset: 0; overflow: hidden; }
 .terminal-container .xterm { padding: 8px; height: 100%; }
-.terminal-container .xterm-viewport { scrollbar-width: thin; scrollbar-color: var(--surface) transparent; }
+.terminal-container .xterm-viewport { scrollbar-width: thin; scrollbar-color: var(--aide-surface-default) transparent; }
 .terminal-container .xterm-viewport::-webkit-scrollbar { width: 6px; }
 .terminal-container .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
-.terminal-container .xterm-viewport::-webkit-scrollbar-thumb { background: var(--surface); border-radius: 3px; }
+.terminal-container .xterm-viewport::-webkit-scrollbar-thumb { background: var(--aide-surface-default); border-radius: 3px; }
 
 /* ── Session loader overlay ── */
 
 .session-loader {
   position: absolute; inset: 0; z-index: 20;
   display: flex; align-items: center; justify-content: center;
-  background: var(--bg-primary); /* #1e1e2e — same as terminal */
+  background: var(--aide-bg-base); /* #1e1e2e — same as terminal */
   transition: opacity 0.3s ease, visibility 0.3s ease;
 }
 .session-loader--out { opacity: 0; visibility: hidden; pointer-events: none; }
@@ -223,7 +223,7 @@ onUnmounted(() => {
 /* Hex icon */
 .session-loader__hex {
   font-size: 40px; line-height: 1;
-  color: var(--accent); /* #89b4fa */
+  color: var(--aide-accent); /* #89b4fa */
   animation: loader-hex-float 3s ease-in-out infinite;
 }
 @keyframes loader-hex-float {
@@ -233,11 +233,11 @@ onUnmounted(() => {
 
 .session-loader__title {
   font-size: 18px; font-weight: 600; letter-spacing: 0.04em;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
 }
 
 .session-loader__sub {
-  font-size: 12px; color: var(--text-muted);
+  font-size: 12px; color: var(--aide-text-muted);
   display: flex; align-items: center; gap: 0;
 }
 
@@ -258,12 +258,12 @@ onUnmounted(() => {
 /* Progress track */
 .session-loader__track {
   width: 180px; height: 3px;
-  background: var(--surface); /* #313244 */
+  background: var(--aide-surface-default); /* #313244 */
   border-radius: 3px; overflow: hidden;
 }
 .session-loader__bar {
   height: 100%; width: 35%;
-  background: var(--accent);
+  background: var(--aide-accent);
   border-radius: 3px;
   animation: loader-bar-shimmer 1.8s ease-in-out infinite;
 }
@@ -285,9 +285,9 @@ onUnmounted(() => {
   justify-content: center;
   height: 100%;
   gap: 8px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
 }
-.preview-empty__title { font-size: 15px; color: var(--text-secondary); }
+.preview-empty__title { font-size: 15px; color: var(--aide-text-secondary); }
 .preview-empty__hint { font-size: 12px; }
 
 .preview-messages {
@@ -299,10 +299,10 @@ onUnmounted(() => {
 .preview-footer {
   margin-top: 24px;
   padding-top: 12px;
-  border-top: 1px solid var(--surface-hover);
+  border-top: 1px solid var(--aide-surface-hover);
   text-align: center;
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
 }
 
 .preview-msg__who {
@@ -312,25 +312,25 @@ onUnmounted(() => {
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
-.preview-msg--user .preview-msg__who { color: var(--accent); }
+.preview-msg--user .preview-msg__who { color: var(--aide-accent); }
 .preview-msg--claude .preview-msg__who { color: #cba6f7; }
 
 .preview-msg__body {
   font-size: 13px;
   line-height: 1.65;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
 }
 
-.preview-text h1 { font-size: 1.4em; font-weight: 600; margin: 1em 0 0.4em; border-bottom: 1px solid var(--surface-hover); padding-bottom: 0.2em; }
+.preview-text h1 { font-size: 1.4em; font-weight: 600; margin: 1em 0 0.4em; border-bottom: 1px solid var(--aide-surface-hover); padding-bottom: 0.2em; }
 .preview-text h1:first-child { margin-top: 0; }
-.preview-text h2 { font-size: 1.2em; font-weight: 600; margin: 0.9em 0 0.3em; border-bottom: 1px solid var(--surface-hover); padding-bottom: 0.15em; }
+.preview-text h2 { font-size: 1.2em; font-weight: 600; margin: 0.9em 0 0.3em; border-bottom: 1px solid var(--aide-surface-hover); padding-bottom: 0.15em; }
 .preview-text h2:first-child { margin-top: 0; }
 .preview-text h3 { font-size: 1.05em; font-weight: 600; margin: 0.8em 0 0.2em; }
 .preview-text h3:first-child { margin-top: 0; }
 .preview-text h4 { font-size: 1em; font-weight: 600; margin: 0.7em 0 0.2em; }
 
 .preview-text p { margin: 0.4em 0; }
-.preview-text a { color: var(--accent); text-decoration: none; }
+.preview-text a { color: var(--aide-accent); text-decoration: none; }
 .preview-text a:hover { text-decoration: underline; }
 
 .preview-text ul, .preview-text ol { padding-left: 1.5em; margin: 0.3em 0; }
@@ -339,16 +339,16 @@ onUnmounted(() => {
 .preview-text blockquote {
   margin: 0.4em 0;
   padding: 4px 12px;
-  border-left: 3px solid var(--accent);
-  color: var(--text-secondary);
-  background: var(--bg-tertiary);
+  border-left: 3px solid var(--aide-accent);
+  color: var(--aide-text-secondary);
+  background: var(--aide-bg-deep);
   border-radius: 0 4px 4px 0;
 }
 
 .preview-text code {
   font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
   font-size: 0.88em;
-  background: var(--bg-tertiary);
+  background: var(--aide-bg-deep);
   padding: 1px 5px;
   border-radius: 3px;
   color: #fab387;
@@ -364,8 +364,8 @@ onUnmounted(() => {
   padding: 10px 14px;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--text-primary);
-  background: var(--bg-tertiary);
+  color: var(--aide-text-primary);
+  background: var(--aide-bg-deep);
   border-radius: 6px;
   overflow-x: auto;
 }
@@ -377,16 +377,16 @@ onUnmounted(() => {
   font-size: 12px;
 }
 .preview-text th, .preview-text td {
-  border: 1px solid var(--surface-hover);
+  border: 1px solid var(--aide-surface-hover);
   padding: 6px 10px;
   text-align: left;
 }
-.preview-text th { background: var(--bg-tertiary); font-weight: 600; }
+.preview-text th { background: var(--aide-bg-deep); font-weight: 600; }
 .preview-text tr:nth-child(even) td { background: rgba(255, 255, 255, 0.02); }
 
 .preview-text hr {
   border: none;
-  border-top: 1px solid var(--surface-hover);
+  border-top: 1px solid var(--aide-surface-hover);
   margin: 0.8em 0;
 }
 

@@ -75,11 +75,11 @@ function handleClick() {
 }
 
 .plugin-card:hover {
-  background: var(--surface);
+  background: var(--aide-surface-default);
 }
 
 .plugin-card.installed {
-  border-left: 2px solid var(--accent-green);
+  border-left: 2px solid var(--aide-success);
   padding-left: 10px;
 }
 
@@ -95,12 +95,12 @@ function handleClick() {
 .plugin-name {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
 }
 
 .plugin-desc {
   font-size: 11.5px;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   line-height: 1.45;
   margin-bottom: 4px;
   display: -webkit-box;
@@ -116,7 +116,7 @@ function handleClick() {
 .link-btn {
   background: none;
   border: none;
-  color: var(--accent);
+  color: var(--aide-accent);
   cursor: pointer;
   padding: 0;
   font-size: 11px;
@@ -141,9 +141,9 @@ function handleClick() {
 }
 
 .btn-install {
-  background: var(--accent);
-  border: 1px solid var(--accent);
-  color: #1e1e2e;
+  background: var(--aide-accent);
+  border: 1px solid var(--aide-accent);
+  color: var(--aide-text-on-accent);
 }
 
 .btn-install:hover {
@@ -152,27 +152,27 @@ function handleClick() {
 
 .btn-installed {
   background: transparent;
-  border: 1px solid var(--accent-green);
-  color: var(--accent-green);
+  border: 1px solid var(--aide-success);
+  color: var(--aide-success);
 }
 
 .btn-installed:hover {
   background: rgba(166, 227, 161, 0.1);
-  color: var(--accent-red);
-  border-color: var(--accent-red);
+  color: var(--aide-danger);
+  border-color: var(--aide-danger);
 }
 
 .btn-disabled {
   background: transparent;
-  border: 1px solid var(--surface-hover);
-  color: var(--text-muted);
+  border: 1px solid var(--aide-surface-hover);
+  color: var(--aide-text-muted);
   cursor: not-allowed;
 }
 
 .btn-builtin {
   background: transparent;
-  border: 1px solid var(--surface);
-  color: var(--text-muted);
+  border: 1px solid var(--aide-surface-default);
+  color: var(--aide-text-muted);
   font-size: 11px;
   cursor: default;
 }

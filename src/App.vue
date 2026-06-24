@@ -27,7 +27,7 @@ import { useSearchProviders } from "./composables/useSearchProviders";
 import { useProviders } from "./composables/useProviders";
 import { useGitWatcher } from "./composables/useGitWatcher";
 import { matchShortcut } from "./utils/shortcut";
-import { applyTheme, warmDark } from "./themes";
+import { applyTheme, themes } from "./themes";
 
 const leftCollapsed = ref(false);
 const rightCollapsed = ref(false);
@@ -234,13 +234,18 @@ function handleKeydown(e: KeyboardEvent) {
 
 onMounted(async () => {
   // Apply default theme before any rendering
-  applyTheme(warmDark);
+  applyTheme(themes["warm-dark"]);
 
   window.addEventListener("keydown", handleKeydown, { capture: true });
 
   // Load persisted settings
   const { load: loadSettings } = useSettings();
   await loadSettings();
+
+  // Apply persisted theme (overrides the default warm-dark if user chose differently)
+  const themeId = settings.theme || "warm-dark";
+  const themeTokens = themes[themeId] || themes["warm-dark"];
+  applyTheme(themeTokens);
 
   // Load provider configuration
   await loadProviders();

@@ -88,8 +88,8 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .modal-dialog {
-  background: var(--surface);
-  border: 1px solid var(--surface-hover);
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-surface-hover);
   border-radius: 10px;
   padding: 20px 24px;
   min-width: 360px;
@@ -106,13 +106,13 @@ function onOverlayClick(e: MouseEvent) {
 .modal-header {
   font-size: 14px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
   margin-bottom: 12px;
 }
 
 .modal-body {
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   line-height: 1.5;
   margin-bottom: 12px;
 }
@@ -124,21 +124,21 @@ function onOverlayClick(e: MouseEvent) {
 .modal-input {
   width: 100%;
   box-sizing: border-box;
-  background: var(--bg-primary);
-  border: 1px solid var(--surface-hover);
+  background: var(--aide-bg-base);
+  border: 1px solid var(--aide-surface-hover);
   border-radius: 6px;
   padding: 8px 12px;
   font-size: 13px;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
   outline: none;
   font-family: inherit;
   transition: border-color 0.15s;
 }
 .modal-input::placeholder {
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
 }
 .modal-input:focus {
-  border-color: var(--accent);
+  border-color: var(--aide-accent);
 }
 
 .modal-actions {
@@ -153,31 +153,31 @@ function onOverlayClick(e: MouseEvent) {
   font-size: 13px;
   cursor: pointer;
   font-family: inherit;
-  border: 1px solid var(--surface-hover);
+  border: 1px solid var(--aide-surface-hover);
   transition: all 0.12s;
 }
 
 .btn-cancel {
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
 }
 .btn-cancel:hover {
-  background: var(--surface-hover);
-  color: var(--text-primary);
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
 }
 
 .btn-confirm {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #1e1e2e;
+  background: var(--aide-accent);
+  border-color: var(--aide-accent);
+  color: var(--aide-text-on-accent);
 }
 .btn-confirm:hover {
   filter: brightness(1.1);
 }
 .btn-confirm.danger {
-  background: #f38ba8;
-  border-color: #f38ba8;
-  color: #1e1e2e;
+  background: var(--aide-danger);
+  border-color: var(--aide-danger);
+  color: var(--aide-text-on-accent);
 }
 .btn-confirm.danger:hover {
   filter: brightness(1.1);

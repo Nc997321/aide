@@ -22,7 +22,7 @@ onMounted(() => {
       </svg>
       <svg v-else width="12" height="12" viewBox="0 0 12 12">
         <rect x="3" y="0.5" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
-        <rect x="0.5" y="3.5" width="8" height="8" rx="1" fill="var(--bg-secondary)" stroke="currentColor" stroke-width="1.2" />
+        <rect x="0.5" y="3.5" width="8" height="8" rx="1" fill="var(--aide-bg-deep)" stroke="currentColor" stroke-width="1.2" />
       </svg>
     </button>
     <button class="win-btn win-btn-close" title="关闭" @click="close">
@@ -49,19 +49,19 @@ onMounted(() => {
   justify-content: center;
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   cursor: pointer;
   transition: all 0.12s;
   font-family: inherit;
 }
 
 .win-btn:hover {
-  color: var(--text-primary);
-  background: var(--surface-hover);
+  color: var(--aide-text-primary);
+  background: var(--aide-surface-hover);
 }
 
 .win-btn-close:hover {
   color: #fff;
-  background: var(--accent-red);
+  background: var(--aide-danger);
 }
 </style>

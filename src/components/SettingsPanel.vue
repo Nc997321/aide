@@ -7,6 +7,7 @@ import CustomizationDetail from "./customizations/CustomizationDetail.vue";
 import MarketplaceTab from "./marketplace/MarketplaceTab.vue";
 import ProviderSettings from "./ProviderSettings.vue";
 import { formatShortcut, detectConflicts } from "../utils/shortcut";
+import { applyTheme, themes } from "../themes";
 
 const props = defineProps<{
   initialTab?: string;
@@ -86,6 +87,16 @@ function resetKeybinding(key: string) {
   update({ keybindings: kb });
   switch (key) {
     case "searchOpen": searchOpenLocal.value = "Ctrl+P"; break;
+  }
+}
+
+// ── Theme ──
+
+function onThemeChange(themeId: string) {
+  const tokens = themes[themeId];
+  if (tokens) {
+    applyTheme(tokens);
+    update({ theme: themeId });
   }
 }
 
@@ -255,6 +266,18 @@ function onOverlayClick(e: MouseEvent) {
                 <span class="field-hint">填绝对路径覆盖默认，如 C:\Program Files\Git\bin\bash.exe</span>
               </div>
 
+              <div class="settings-field">
+                <label class="field-label">主题</label>
+                <select
+                  class="settings-select"
+                  :value="settings.theme"
+                  @change="onThemeChange(($event.target as HTMLSelectElement).value)"
+                >
+                  <option value="warm-dark">Warm Dark</option>
+                  <option value="catppuccin">Catppuccin Mocha</option>
+                </select>
+              </div>
+
               <!-- ── Keybindings ── -->
               <div class="settings-section">
                 <div class="section-title">快捷键</div>
@@ -394,8 +417,8 @@ function onOverlayClick(e: MouseEvent) {
 /* ── Dialog ── */
 
 .settings-dialog {
-  background: var(--bg-secondary);
-  border: 1px solid var(--surface-hover);
+  background: var(--aide-bg-deep);
+  border: 1px solid var(--aide-surface-hover);
   border-radius: 12px;
   width: 680px;
   height: 520px;
@@ -418,20 +441,20 @@ function onOverlayClick(e: MouseEvent) {
   align-items: center;
   justify-content: space-between;
   padding: 14px 20px;
-  border-bottom: 1px solid var(--surface);
+  border-bottom: 1px solid var(--aide-surface-default);
   flex-shrink: 0;
 }
 
 .dialog-title {
   font-size: 14px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
 }
 
 .dialog-close {
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   cursor: pointer;
   font-size: 14px;
   padding: 4px 8px;
@@ -441,8 +464,8 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .dialog-close:hover {
-  background: var(--surface);
-  color: var(--text-primary);
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
 }
 
 /* ── Body ── */
@@ -458,12 +481,12 @@ function onOverlayClick(e: MouseEvent) {
 .side-nav {
   width: 120px;
   flex-shrink: 0;
-  background: var(--bg-tertiary);
+  background: var(--aide-bg-deep);
   padding: 8px;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  border-right: 1px solid var(--surface);
+  border-right: 1px solid var(--aide-surface-default);
 }
 
 .nav-item {
@@ -474,7 +497,7 @@ function onOverlayClick(e: MouseEvent) {
   border-radius: 6px;
   border: none;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   cursor: pointer;
   font-size: 12.5px;
   font-family: inherit;
@@ -484,13 +507,13 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .nav-item:hover {
-  background: var(--surface);
-  color: var(--text-primary);
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
 }
 
 .nav-item.active {
-  background: var(--surface);
-  color: var(--text-primary);
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
 }
 
 .nav-icon {
@@ -532,7 +555,7 @@ function onOverlayClick(e: MouseEvent) {
 .field-label {
   display: block;
   font-size: 13px;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
   margin-bottom: 8px;
   font-weight: 500;
 }
@@ -545,14 +568,14 @@ function onOverlayClick(e: MouseEvent) {
 
 .slider {
   flex: 1;
-  accent-color: var(--accent);
+  accent-color: var(--aide-accent);
   height: 4px;
   cursor: pointer;
 }
 
 .field-value {
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   min-width: 36px;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -561,23 +584,38 @@ function onOverlayClick(e: MouseEvent) {
 .text-input {
   width: 100%;
   box-sizing: border-box;
-  background: var(--bg-primary);
-  border: 1px solid var(--surface-hover);
+  background: var(--aide-bg-base);
+  border: 1px solid var(--aide-surface-hover);
   border-radius: 6px;
   padding: 8px 12px;
   font-size: 13px;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
   outline: none;
   font-family: inherit;
   transition: border-color 0.15s;
 }
 
 .text-input::placeholder {
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
 }
 
 .text-input:focus {
-  border-color: var(--accent);
+  border-color: var(--aide-accent);
+}
+
+.settings-select {
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  padding: 6px 10px;
+  color: var(--aide-text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  cursor: pointer;
+}
+.settings-select:focus {
+  border-color: var(--aide-accent);
 }
 
 /* ── Toggle ── */
@@ -590,7 +628,7 @@ function onOverlayClick(e: MouseEvent) {
 
 .field-hint {
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
 }
 
 .toggle {
@@ -612,7 +650,7 @@ function onOverlayClick(e: MouseEvent) {
 .toggle-track {
   position: absolute;
   inset: 0;
-  background: var(--surface-hover);
+  background: var(--aide-surface-hover);
   border-radius: 10px;
   transition: background 0.15s;
 }
@@ -624,13 +662,13 @@ function onOverlayClick(e: MouseEvent) {
   left: 2px;
   width: 16px;
   height: 16px;
-  background: var(--text-primary);
+  background: var(--aide-text-primary);
   border-radius: 50%;
   transition: transform 0.15s;
 }
 
 .toggle input:checked + .toggle-track {
-  background: var(--accent-green);
+  background: var(--aide-success);
 }
 
 .toggle input:checked + .toggle-track::after {
@@ -652,7 +690,7 @@ function onOverlayClick(e: MouseEvent) {
 .back-btn {
   background: none;
   border: none;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   cursor: pointer;
   font-size: 12px;
   padding: 4px 8px;
@@ -662,8 +700,8 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .back-btn:hover {
-  background: var(--surface);
-  color: var(--text-primary);
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
 }
 
 /* Category grid */
@@ -690,7 +728,7 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .category-card:hover {
-  background: var(--surface);
+  background: var(--aide-surface-default);
 }
 
 .cat-icon {
@@ -708,19 +746,19 @@ function onOverlayClick(e: MouseEvent) {
 .cat-label {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
 }
 
 .cat-desc {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   margin-top: 2px;
 }
 
 .cat-badge {
   font-size: 11px;
-  color: var(--text-muted);
-  background: var(--bg-tertiary);
+  color: var(--aide-text-muted);
+  background: var(--aide-bg-deep);
   padding: 2px 8px;
   border-radius: 10px;
   flex-shrink: 0;
@@ -753,7 +791,7 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .main-content::-webkit-scrollbar-thumb {
-  background: var(--surface-hover);
+  background: var(--aide-surface-hover);
   border-radius: 2px;
 }
 
@@ -761,14 +799,14 @@ function onOverlayClick(e: MouseEvent) {
 
 .settings-section {
   margin-top: 8px;
-  border-top: 1px solid var(--surface);
+  border-top: 1px solid var(--aide-surface-default);
   padding-top: 16px;
 }
 
 .section-title {
   font-size: 12px;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 12px;
@@ -783,7 +821,7 @@ function onOverlayClick(e: MouseEvent) {
 
 .kb-label {
   font-size: 12.5px;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   flex-shrink: 0;
 }
 
@@ -795,12 +833,12 @@ function onOverlayClick(e: MouseEvent) {
 
 .kb-input {
   width: 100px;
-  background: var(--bg-primary);
-  border: 1px solid var(--surface-hover);
+  background: var(--aide-bg-base);
+  border: 1px solid var(--aide-surface-hover);
   border-radius: 5px;
   padding: 4px 8px;
   font-size: 11px;
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
   text-align: center;
   font-family: "'Cascadia Code', 'Fira Code', monospace";
   cursor: pointer;
@@ -809,11 +847,11 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .kb-input:hover {
-  border-color: var(--accent);
+  border-color: var(--aide-accent);
 }
 
 .kb-input.recording {
-  border-color: var(--accent-green);
+  border-color: var(--aide-success);
   box-shadow: 0 0 0 1px rgba(166, 227, 161, 0.3);
   animation: kb-pulse 1s ease-in-out infinite;
 }
@@ -826,7 +864,7 @@ function onOverlayClick(e: MouseEvent) {
 .kb-recording-hint {
   background: none;
   border: none;
-  color: var(--accent-green);
+  color: var(--aide-success);
   font-size: 10px;
   cursor: default;
   animation: kb-pulse 1s ease-in-out infinite;
@@ -837,7 +875,7 @@ function onOverlayClick(e: MouseEvent) {
 .kb-reset-btn {
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   cursor: pointer;
   font-size: 11px;
   padding: 2px 4px;
@@ -848,8 +886,8 @@ function onOverlayClick(e: MouseEvent) {
 
 .kb-record-btn:hover,
 .kb-reset-btn:hover {
-  background: var(--surface);
-  color: var(--text-primary);
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
 }
 
 .kb-conflict-warn {
@@ -859,6 +897,6 @@ function onOverlayClick(e: MouseEvent) {
   background: rgba(249, 226, 175, 0.1);
   border: 1px solid rgba(249, 226, 175, 0.25);
   font-size: 11px;
-  color: var(--accent-yellow);
+  color: var(--aide-warning);
 }
 </style>

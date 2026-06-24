@@ -164,21 +164,21 @@ async function createEditor() {
           overflow: "auto",
         },
         ".cm-gutters": {
-          backgroundColor: "var(--bg-tertiary)",
-          color: "var(--text-muted)",
-          borderRight: "1px solid var(--surface-hover)",
+          backgroundColor: "var(--aide-bg-deep)",
+          color: "var(--aide-text-muted)",
+          borderRight: "1px solid var(--aide-surface-hover)",
         },
         ".cm-activeLineGutter": {
-          backgroundColor: "var(--surface)",
+          backgroundColor: "var(--aide-surface-default)",
         },
         ".cm-activeLine": {
           backgroundColor: "rgba(255, 255, 255, 0.03)",
         },
         ".cm-selectionBackground": {
-          backgroundColor: "var(--surface-hover) !important",
+          backgroundColor: "var(--aide-surface-hover) !important",
         },
         ".cm-cursor": {
-          borderLeftColor: "var(--text-primary)",
+          borderLeftColor: "var(--aide-text-primary)",
         },
         ".cm-searchMatch": {
           backgroundColor: "rgba(249, 226, 175, 0.3)",
@@ -188,15 +188,15 @@ async function createEditor() {
         },
         ".cm-matchingBracket": {
           backgroundColor: "rgba(137, 180, 250, 0.15)",
-          outline: "1px solid var(--accent)",
+          outline: "1px solid var(--aide-accent)",
         },
         ".cm-nonmatchingBracket": {
           backgroundColor: "rgba(243, 139, 168, 0.15)",
         },
         ".cm-tooltip": {
-          backgroundColor: "var(--surface) !important",
-          color: "var(--text-primary) !important",
-          border: "1px solid var(--surface-hover) !important",
+          backgroundColor: "var(--aide-surface-default) !important",
+          color: "var(--aide-text-primary) !important",
+          border: "1px solid var(--aide-surface-hover) !important",
         },
       }),
     ],

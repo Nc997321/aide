@@ -435,7 +435,7 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--surface);
+  border-bottom: 1px solid var(--aide-surface-default);
 }
 
 .header-title {
@@ -477,9 +477,9 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
   padding: 8px 16px;
   cursor: pointer;
   font-size: 12.5px;
-  color: var(--text-secondary);
-  background: var(--bg-tertiary);
-  border-bottom: 1px solid var(--surface);
+  color: var(--aide-text-secondary);
+  background: var(--aide-bg-deep);
+  border-bottom: 1px solid var(--aide-surface-default);
   transition: all 0.1s;
 }
 
@@ -493,14 +493,14 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
   transform: rotate(90deg);
 }
 .workspace-item:first-child {
-  border-top: 1px solid var(--surface);
+  border-top: 1px solid var(--aide-surface-default);
 }
 .workspace-item:hover {
-  color: var(--text-primary);
-  background: var(--surface);
+  color: var(--aide-text-primary);
+  background: var(--aide-surface-default);
 }
 .workspace-item.active {
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
 }
 
 .ws-name {
@@ -549,7 +549,7 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
 }
 
 .session-empty.muted {
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   cursor: default;
   font-size: 12px;
   padding: 12px 16px;
@@ -583,19 +583,19 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
 
 .update-dot {
   font-size: 8px;
-  color: var(--accent);
+  color: var(--aide-accent);
 }
 
 .update-text {
   font-size: 11.5px;
-  color: var(--accent);
+  color: var(--aide-accent);
   font-weight: 500;
 }
 
 .update-dismiss {
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
   cursor: pointer;
   font-size: 11px;
   padding: 2px 5px;
@@ -606,7 +606,7 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
 
 .update-dismiss:hover {
   background: rgba(137, 180, 250, 0.2);
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
 }
 
 /* ── Provider selector ── */
@@ -614,7 +614,7 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
 .provider-selector {
   position: relative;
   padding: 4px 8px 0;
-  border-top: 1px solid var(--surface);
+  border-top: 1px solid var(--aide-surface-default);
 }
 
 .provider-current {
@@ -625,13 +625,13 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
   border-radius: 6px;
   cursor: pointer;
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   transition: all 0.12s;
 }
 
 .provider-current:hover {
-  background: var(--surface);
-  color: var(--text-primary);
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
 }
 
 .provider-icon {
@@ -649,7 +649,7 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
 .provider-arrow {
   font-size: 14px;
   flex-shrink: 0;
-  color: var(--text-muted);
+  color: var(--aide-text-muted);
 }
 
 .provider-dropdown {
@@ -657,8 +657,8 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
   bottom: calc(100% + 4px);
   left: 8px;
   right: 8px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--surface-hover);
+  background: var(--aide-bg-deep);
+  border: 1px solid var(--aide-surface-hover);
   border-radius: 8px;
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.35);
   z-index: 100;
@@ -679,17 +679,17 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
   border-radius: 5px;
   cursor: pointer;
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   transition: all 0.1s;
 }
 
 .provider-option:hover {
-  background: var(--surface);
-  color: var(--text-primary);
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
 }
 
 .provider-option.active {
-  color: var(--text-primary);
+  color: var(--aide-text-primary);
 }
 
 .provider-opt-icon {
@@ -707,21 +707,21 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
 }
 
 .provider-opt-check {
-  color: var(--accent-green);
+  color: var(--aide-success);
   font-size: 12px;
   flex-shrink: 0;
 }
 
 .provider-divider {
   height: 1px;
-  background: var(--surface);
+  background: var(--aide-surface-default);
   margin: 4px 6px;
 }
 
 /* ── Footer ── */
 
 .sidebar-footer {
-  border-top: 1px solid var(--surface);
+  border-top: 1px solid var(--aide-surface-default);
   padding: 4px 8px;
   display: flex;
   gap: 2px;
@@ -736,7 +736,7 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
   background: none;
   border: none;
   border-radius: 6px;
-  color: var(--text-secondary);
+  color: var(--aide-text-secondary);
   cursor: pointer;
   font-size: 13px;
   font-family: inherit;
@@ -745,8 +745,8 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
 }
 
 .footer-btn:hover {
-  color: var(--text-primary);
-  background: var(--surface);
+  color: var(--aide-text-primary);
+  background: var(--aide-surface-default);
 }
 
 .footer-btn-kbd {
@@ -754,8 +754,8 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
   font-size: 10px;
   padding: 1px 5px;
   border-radius: 3px;
-  background: var(--surface);
-  color: var(--text-muted);
+  background: var(--aide-surface-default);
+  color: var(--aide-text-muted);
   line-height: 1.5;
   font-family: inherit;
 }
