@@ -76,20 +76,35 @@ pub fn list_agents() -> Result<Vec<CustomizationItem>, String> {
     if let Ok(entries) = fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("md") {
-                if let Some(name) = path.file_stem().and_then(|n| n.to_str()) {
-                    let content = fs::read_to_string(&path).unwrap_or_default();
-                    let description = extract_frontmatter_field(&content, "description");
-                    items.push(CustomizationItem {
-                        id: name.to_string(),
-                        name: name.to_string(),
-                        r#type: "agent".to_string(),
-                        enabled: true,
-                        path: path.to_string_lossy().to_string(),
-                        description,
-                        metadata: None,
-                    });
-                }
+            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+            // Match both "foo.md" (enabled) and "foo.md.disabled" (disabled)
+            if file_name.ends_with(".md.disabled") {
+                let name = &file_name[..file_name.len() - ".md.disabled".len()];
+                let content = fs::read_to_string(&path).unwrap_or_default();
+                let description = extract_frontmatter_field(&content, "description");
+                items.push(CustomizationItem {
+                    id: name.to_string(),
+                    name: name.to_string(),
+                    r#type: "agent".to_string(),
+                    enabled: false,
+                    path: path.to_string_lossy().to_string(),
+                    description,
+                    metadata: None,
+                });
+            } else if file_name.ends_with(".md") {
+                let name = &file_name[..file_name.len() - ".md".len()];
+                let content = fs::read_to_string(&path).unwrap_or_default();
+                let description = extract_frontmatter_field(&content, "description");
+                items.push(CustomizationItem {
+                    id: name.to_string(),
+                    name: name.to_string(),
+                    r#type: "agent".to_string(),
+                    enabled: true,
+                    path: path.to_string_lossy().to_string(),
+                    description,
+                    metadata: None,
+                });
             }
         }
     }
@@ -180,8 +195,24 @@ pub fn delete_agent(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn toggle_agent(_id: String, _enabled: bool) -> Result<(), String> {
-    // For agents, toggling is not supported via file system
+pub fn toggle_agent(id: String, enabled: bool) -> Result<(), String> {
+    let dir = agents_dir();
+    let enabled_path = dir.join(format!("{}.md", id));
+    let disabled_path = dir.join(format!("{}.md.disabled", id));
+
+    if enabled {
+        // Re-enable: rename .md.disabled -> .md
+        if disabled_path.exists() {
+            fs::rename(&disabled_path, &enabled_path)
+                .map_err(|e| format!("Failed to enable agent '{}': {}", id, e))?;
+        }
+    } else {
+        // Disable: rename .md -> .md.disabled
+        if enabled_path.exists() {
+            fs::rename(&enabled_path, &disabled_path)
+                .map_err(|e| format!("Failed to disable agent '{}': {}", id, e))?;
+        }
+    }
     Ok(())
 }
 
@@ -200,35 +231,44 @@ pub fn list_skills() -> Result<Vec<CustomizationItem>, String> {
             let path = entry.path();
             if path.is_dir() {
                 let skill_md = path.join("SKILL.md");
-                if skill_md.exists() {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        let content = fs::read_to_string(&skill_md).unwrap_or_default();
-                        let description = extract_frontmatter_field(&content, "description");
+                let skill_md_disabled = path.join("SKILL.md.disabled");
 
-                        let scripts_dir = path.join("scripts");
-                        let scripts: Vec<String> = if scripts_dir.exists() {
-                            fs::read_dir(&scripts_dir)
-                                .map(|entries| {
-                                    entries
-                                        .flatten()
-                                        .filter_map(|e| e.path().file_name().map(|n| n.to_string_lossy().to_string()))
-                                        .collect()
-                                })
-                                .unwrap_or_default()
-                        } else {
-                            vec![]
-                        };
+                // Determine enabled status and which file to read
+                let (content_path, enabled) = if skill_md.exists() {
+                    (skill_md, true)
+                } else if skill_md_disabled.exists() {
+                    (skill_md_disabled, false)
+                } else {
+                    continue;
+                };
 
-                        items.push(CustomizationItem {
-                            id: name.to_string(),
-                            name: name.to_string(),
-                            r#type: "skill".to_string(),
-                            enabled: true,
-                            path: path.to_string_lossy().to_string(),
-                            description,
-                            metadata: Some(serde_json::json!({ "scripts": scripts })),
-                        });
-                    }
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    let content = fs::read_to_string(&content_path).unwrap_or_default();
+                    let description = extract_frontmatter_field(&content, "description");
+
+                    let scripts_dir = path.join("scripts");
+                    let scripts: Vec<String> = if scripts_dir.exists() {
+                        fs::read_dir(&scripts_dir)
+                            .map(|entries| {
+                                entries
+                                    .flatten()
+                                    .filter_map(|e| e.path().file_name().map(|n| n.to_string_lossy().to_string()))
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        vec![]
+                    };
+
+                    items.push(CustomizationItem {
+                        id: name.to_string(),
+                        name: name.to_string(),
+                        r#type: "skill".to_string(),
+                        enabled,
+                        path: path.to_string_lossy().to_string(),
+                        description,
+                        metadata: Some(serde_json::json!({ "scripts": scripts })),
+                    });
                 }
             }
         }
@@ -330,8 +370,24 @@ pub fn delete_skill(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn toggle_skill(_id: String, _enabled: bool) -> Result<(), String> {
-    // For skills, toggling is not supported via file system
+pub fn toggle_skill(id: String, enabled: bool) -> Result<(), String> {
+    let dir = skills_dir().join(&id);
+    let enabled_path = dir.join("SKILL.md");
+    let disabled_path = dir.join("SKILL.md.disabled");
+
+    if enabled {
+        // Re-enable: rename SKILL.md.disabled -> SKILL.md
+        if disabled_path.exists() {
+            fs::rename(&disabled_path, &enabled_path)
+                .map_err(|e| format!("Failed to enable skill '{}': {}", id, e))?;
+        }
+    } else {
+        // Disable: rename SKILL.md -> SKILL.md.disabled
+        if enabled_path.exists() {
+            fs::rename(&enabled_path, &disabled_path)
+                .map_err(|e| format!("Failed to disable skill '{}': {}", id, e))?;
+        }
+    }
     Ok(())
 }
 
@@ -406,12 +462,13 @@ pub fn list_hooks() -> Result<Vec<CustomizationItem>, String> {
                     let matcher = hook["matcher"].as_str().unwrap_or("");
                     let command = hook["hooks"][0]["command"].as_str().unwrap_or("");
                     let id = format!("{}_{}", event, index);
+                    let enabled = !hook.get("disabled").and_then(|v| v.as_bool()).unwrap_or(false);
 
                     items.push(CustomizationItem {
                         id: id.clone(),
                         name: format!("{}: {}", event, matcher),
                         r#type: "hook".to_string(),
-                        enabled: true,
+                        enabled,
                         path: settings_path().to_string_lossy().to_string(),
                         description: Some(command.to_string()),
                         metadata: Some(serde_json::json!({
@@ -543,9 +600,38 @@ pub fn delete_hook(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn toggle_hook(_id: String, _enabled: bool) -> Result<(), String> {
-    // For hooks, toggling is not directly supported
-    Ok(())
+pub fn toggle_hook(id: String, enabled: bool) -> Result<(), String> {
+    let parts: Vec<&str> = id.splitn(2, '_').collect();
+    if parts.len() != 2 {
+        return Err(format!("Invalid hook id: {}", id));
+    }
+    let event = parts[0];
+    let index: usize = parts[1].parse().map_err(|_| format!("Invalid hook index: {}", parts[1]))?;
+
+    let mut settings = load_settings();
+    if let Some(hooks) = settings.get_mut("hooks") {
+        if let Some(event_hooks) = hooks.get_mut(event) {
+            if let Some(arr) = event_hooks.as_array_mut() {
+                if index < arr.len() {
+                    if let Some(hook_obj) = arr[index].as_object_mut() {
+                        if enabled {
+                            hook_obj.remove("disabled");
+                        } else {
+                            hook_obj.insert("disabled".to_string(), serde_json::json!(true));
+                        }
+                    }
+                } else {
+                    return Err(format!("Hook index {} out of range for event '{}'", index, event));
+                }
+            }
+        } else {
+            return Err(format!("Hook event '{}' not found", event));
+        }
+    } else {
+        return Err("No hooks found in settings".to_string());
+    }
+
+    save_settings(&settings)
 }
 
 // ── MCP Server Commands ──
@@ -568,12 +654,13 @@ pub fn list_mcp_servers() -> Result<Vec<CustomizationItem>, String> {
                         .join(" ")
                 })
                 .unwrap_or_default();
+            let enabled = !config.get("disabled").and_then(|v| v.as_bool()).unwrap_or(false);
 
             items.push(CustomizationItem {
                 id: name.clone(),
                 name: name.clone(),
                 r#type: "mcp_server".to_string(),
-                enabled: true,
+                enabled,
                 path: settings_path().to_string_lossy().to_string(),
                 description: Some(format!("{} {}", command, args)),
                 metadata: Some(config.clone()),
@@ -652,9 +739,25 @@ pub fn delete_mcp_server(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn toggle_mcp_server(_id: String, _enabled: bool) -> Result<(), String> {
-    // For MCP servers, toggling is not directly supported
-    Ok(())
+pub fn toggle_mcp_server(id: String, enabled: bool) -> Result<(), String> {
+    let mut settings = load_settings();
+    if let Some(mcp_servers) = settings.get_mut("mcpServers") {
+        if let Some(config) = mcp_servers.get_mut(&id) {
+            if let Some(obj) = config.as_object_mut() {
+                if enabled {
+                    obj.remove("disabled");
+                } else {
+                    obj.insert("disabled".to_string(), serde_json::json!(true));
+                }
+            }
+        } else {
+            return Err(format!("MCP server '{}' not found", id));
+        }
+    } else {
+        return Err(format!("MCP server '{}' not found", id));
+    }
+
+    save_settings(&settings)
 }
 
 // ── Frontmatter Helpers ──

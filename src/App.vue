@@ -35,15 +35,38 @@ const rightCollapsed = ref(false);
 const rightTab = ref<"files" | "changes" | "git">("files");
 const { unstagedFiles, hasChanges, loadStatus, currentBranch } = useGit();
 
-// Session activity counts for titlebar
-import { useSessionState } from "./composables/useSessionState";
+// Session activity for titlebar
+import { useSessionState, type SessionStatus } from "./composables/useSessionState";
+export interface ActiveSessionInfo {
+  id: string;
+  name: string;
+  status: SessionStatus;
+  wsKey: string;
+}
 const { state: sessionStateMap } = useSessionState();
-const runningSessionCount = computed(() =>
-  Object.values(sessionStateMap).filter(s => s === "running").length
-);
-const activeSessionCount = computed(() =>
-  Object.values(sessionStateMap).filter(s => s === "running" || s === "waiting" || s === "attention").length
-);
+const activeSessionList = computed<ActiveSessionInfo[]>(() => {
+  const allSessions = sidebarRef.value?.sessionsByWorkspace ?? {};
+  const lookup = new Map<string, { name: string; wsKey: string }>();
+  for (const [wsKey, list] of Object.entries(allSessions)) {
+    for (const s of list) lookup.set(s.id, { name: s.name, wsKey });
+  }
+  const result: ActiveSessionInfo[] = [];
+  for (const [id, status] of Object.entries(sessionStateMap)) {
+    if (status === "stopped") continue;
+    const info = lookup.get(id);
+    result.push({
+      id,
+      name: info?.name || (id.startsWith("new_") ? "新会话" : id.slice(0, 8)),
+      status,
+      wsKey: info?.wsKey || "",
+    });
+  }
+  result.sort((a, b) => {
+    const order: Record<string, number> = { running: 0, attention: 1, waiting: 2 };
+    return (order[a.status] ?? 3) - (order[b.status] ?? 3);
+  });
+  return result;
+});
 
 const leftResize = useResizable({
   cssVar: "--aide-left-w",
@@ -316,9 +339,9 @@ onUnmounted(() => {
       ref="titleBarRef"
       :project-name="projectName"
       :git-branch="currentBranch"
-      :running-count="runningSessionCount"
-      :active-count="activeSessionCount"
+      :active-sessions="activeSessionList"
       @open-palette="paletteOpen = true"
+      @select-session="(s) => sidebarRef?.selectSessionFromWorkspace(s.wsKey, s.id)"
     />
 
     <div class="app-layout" :class="{ 'is-dragging': leftResize.isDragging.value || rightResize.isDragging.value }">
@@ -333,7 +356,7 @@ onUnmounted(() => {
       <div class="panel-left" :class="{ collapsed: leftCollapsed }">
         <div
           class="collapse-toggle collapse-toggle-left"
-          :title="leftCollapsed ? '展开侧栏' : '收起侧栏'"
+          v-tooltip="leftCollapsed ? '展开侧栏' : '收起侧栏'"
           @click.stop="leftCollapsed = !leftCollapsed"
         >
           <svg class="collapse-arrow-svg" :style="{ transform: leftCollapsed ? 'rotate(0deg)' : 'rotate(180deg)' }" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3.5 1.5L7 5L3.5 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -381,7 +404,7 @@ onUnmounted(() => {
       <div class="panel-right" :class="{ collapsed: rightCollapsed }">
         <div
           class="collapse-toggle collapse-toggle-right"
-          :title="rightCollapsed ? '展开侧栏' : '收起侧栏'"
+          v-tooltip="rightCollapsed ? '展开侧栏' : '收起侧栏'"
           @click.stop="rightCollapsed = !rightCollapsed"
         >
           <svg class="collapse-arrow-svg" :style="{ transform: rightCollapsed ? 'rotate(180deg)' : 'rotate(0deg)' }" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3.5 1.5L7 5L3.5 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>

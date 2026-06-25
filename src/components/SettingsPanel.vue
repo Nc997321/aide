@@ -307,14 +307,14 @@ function onOverlayClick(e: MouseEvent) {
                     <button
                       v-else
                       class="kb-record-btn"
-                      title="录制新快捷键"
+                      v-tooltip="'录制新快捷键'"
                       @click="startRecording(def.key)"
                     >
                       🖱
                     </button>
                     <button
                       class="kb-reset-btn"
-                      title="恢复默认"
+                      v-tooltip="'恢复默认'"
                       @click="resetKeybinding(def.key)"
                     >
                       ↺

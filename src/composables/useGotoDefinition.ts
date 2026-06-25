@@ -10,23 +10,30 @@ const searchWord = ref("");
 const currentFilePath = ref("");
 const targetProjectRoot = ref("");
 
-// Cache: store last project root for jump-back navigation
+// Cache: store last search context for jump-back / searchAllReferences
 let lastProjectRoot = "";
+let lastSourceExt = "";
 
 export function useGotoDefinition() {
-  async function search(word: string, projectRoot: string) {
+  async function search(word: string, projectRoot: string, source?: { sourceFile: string; sourceLine: number; sourceExt: string }) {
     if (!word || !projectRoot) return;
 
     searchWord.value = word;
     targetProjectRoot.value = projectRoot;
     lastProjectRoot = projectRoot;
+    lastSourceExt = source?.sourceExt || "";
     results.value = [];
     selectedIndex.value = 0;
     visible.value = true;
 
     try {
-      const matches = await api.grepSymbol(word, projectRoot);
-      results.value = matches.slice(0, 20); // cap display at 20
+      let matches = await api.grepSymbol(word, projectRoot, source?.sourceExt);
+      if (source?.sourceFile) {
+        matches = matches.filter(
+          m => !(m.file === source.sourceFile && m.line === source.sourceLine)
+        );
+      }
+      results.value = matches.slice(0, 20);
     } catch {
       results.value = [];
     }
@@ -65,8 +72,8 @@ export function useGotoDefinition() {
     visible.value = true;
 
     try {
-      const matches = await api.grepSymbol(word, projectRoot);
-      results.value = matches; // show all results, no cap
+      const matches = await api.grepSymbol(word, projectRoot, lastSourceExt || undefined);
+      results.value = matches;
     } catch {
       results.value = [];
     }

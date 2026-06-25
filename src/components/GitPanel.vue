@@ -314,7 +314,7 @@ defineExpose({ reload: loadAll });
           <button v-for="b in branches" :key="b.name" class="branch-dropdown-item" :class="{ current: b.is_current }" @click="onBranchSelect(b.name)">
             <span class="branch-item-name">{{ b.name }}</span>
             <span v-if="b.is_current" class="branch-item-check">✓</span>
-            <button v-else class="branch-delete-btn" title="删除分支" @click.stop="onDeleteBranch(b.name, $event)">🗑</button>
+            <button v-else class="branch-delete-btn" v-tooltip="'删除分支'" @click.stop="onDeleteBranch(b.name, $event)">🗑</button>
           </button>
         </div>
       </div>
@@ -362,13 +362,13 @@ defineExpose({ reload: loadAll });
         <svg class="section-arrow" :class="{ open: changesExpanded }" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="section-title">Staged</span>
         <span class="section-badge staged-badge">{{ stagedFiles.length }}</span>
-        <span class="section-header-action" title="取消暂存全部" @click.stop="doUnstageAll()">Unstage All</span>
+        <span class="section-header-action" v-tooltip="'取消暂存全部'" @click.stop="doUnstageAll()">Unstage All</span>
       </button>
       <div v-show="changesExpanded" class="section-body">
         <div v-for="entry in stagedFiles" :key="entry.path" class="git-file-row staged-row" @click="onFileClick(entry.path, true)">
           <span class="git-file-status staged-status" :class="'status-' + entry.status">{{ entry.status }}</span>
-          <span class="git-file-path staged-path" :title="entry.path">{{ entry.path }}</span>
-          <button class="git-file-unstage" title="Unstage" @click.stop="doUnstageFile(entry.path)">−</button>
+          <span class="git-file-path staged-path" v-tooltip="entry.path">{{ entry.path }}</span>
+          <button class="git-file-unstage" v-tooltip="'Unstage'" @click.stop="doUnstageFile(entry.path)">−</button>
         </div>
       </div>
     </div>
@@ -388,17 +388,17 @@ defineExpose({ reload: loadAll });
         <svg class="section-arrow" :class="{ open: changesExpanded }" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="section-title">Changes</span>
         <span v-if="unstagedFiles.length > 0" class="section-badge unstaged-badge">{{ unstagedFiles.length }}</span>
-        <span v-if="unstagedFiles.length > 0" class="section-header-action" title="暂存全部" @click.stop="doStageAll()">Stage All</span>
+        <span v-if="unstagedFiles.length > 0" class="section-header-action" v-tooltip="'暂存全部'" @click.stop="doStageAll()">Stage All</span>
       </button>
       <div v-show="changesExpanded" class="section-body">
         <div v-if="unstagedFiles.length === 0 && stagedFiles.length === 0" class="section-empty">Working tree clean</div>
         <div v-else-if="unstagedFiles.length === 0" class="section-empty">All changes staged</div>
         <div v-for="entry in unstagedFiles" :key="entry.path" class="git-file-row unstaged-row" :class="{ 'untracked-row': entry.status === '?' }" @click="onFileClick(entry.path, false)">
-          <button class="git-file-stage" title="Stage" @click.stop="doStageFile(entry.path)">+</button>
+          <button class="git-file-stage" v-tooltip="'Stage'" @click.stop="doStageFile(entry.path)">+</button>
           <span class="git-file-status unstaged-status" :class="'status-' + (entry.status === '?' ? 'U' : entry.status)">{{ entry.status === '?' ? 'U' : entry.status }}</span>
-          <span class="git-file-path unstaged-path" :title="entry.path">{{ entry.path }}</span>
-          <button v-if="entry.status === '?'" class="git-file-delete" title="Delete" @click.stop="onDeleteUntracked(entry.path)">✕</button>
-          <button v-else class="git-file-revert" title="Revert" @click.stop="doRevertFile(entry.path)">↶</button>
+          <span class="git-file-path unstaged-path" v-tooltip="entry.path">{{ entry.path }}</span>
+          <button v-if="entry.status === '?'" class="git-file-delete" v-tooltip="'Delete'" @click.stop="onDeleteUntracked(entry.path)">✕</button>
+          <button v-else class="git-file-revert" v-tooltip="'Revert'" @click.stop="doRevertFile(entry.path)">↶</button>
         </div>
       </div>
     </div>
@@ -479,7 +479,7 @@ defineExpose({ reload: loadAll });
                   <div v-if="commitDetail.body" class="commit-body">{{ commitDetail.body }}</div>
                   <div v-for="f in commitDetail.files" :key="f.path" class="git-file-row" @click="onFileClick(f.path, undefined, commitDetail.hash)">
                     <span class="git-file-status" :class="'status-' + (f.status === 'R' ? 'M' : f.status)">{{ f.status }}</span>
-                    <span class="git-file-path" :title="f.path">{{ f.path }}</span>
+                    <span class="git-file-path" v-tooltip="f.path">{{ f.path }}</span>
                     <span class="git-file-stats">
                       <span v-if="f.additions > 0" class="stat-add">+{{ f.additions }}</span>
                       <span v-if="f.additions > 0 && f.deletions > 0" class="stat-sep"> </span>

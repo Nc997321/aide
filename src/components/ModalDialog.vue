@@ -78,7 +78,7 @@ function onOverlayClick(e: MouseEvent) {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 1100;
   animation: fadeIn 0.12s ease;
 }
 

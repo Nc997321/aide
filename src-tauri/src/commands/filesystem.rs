@@ -131,8 +131,36 @@ pub fn create_dir(parent_path: String, name: String) -> Result<(), String> {
 
 // ── grep_symbol: project-wide symbol search for code navigation ──
 
+fn code_family(ext: &str) -> Option<&'static [&'static str]> {
+    match ext {
+        "java" | "kt" | "kts" | "scala" | "groovy" =>
+            Some(&["java", "kt", "kts", "scala", "groovy"]),
+        "js" | "jsx" | "ts" | "tsx" | "vue" | "svelte" | "mjs" | "cjs" | "mts" | "cts" =>
+            Some(&["js", "jsx", "ts", "tsx", "vue", "svelte", "mjs", "cjs", "mts", "cts"]),
+        "py" | "pyi" =>
+            Some(&["py", "pyi"]),
+        "rs" =>
+            Some(&["rs"]),
+        "go" =>
+            Some(&["go"]),
+        "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" =>
+            Some(&["c", "h", "cpp", "hpp", "cc", "cxx", "hxx"]),
+        "cs" =>
+            Some(&["cs"]),
+        "rb" | "erb" =>
+            Some(&["rb", "erb"]),
+        "php" =>
+            Some(&["php"]),
+        "swift" =>
+            Some(&["swift"]),
+        "dart" =>
+            Some(&["dart"]),
+        _ => None,
+    }
+}
+
 #[tauri::command]
-pub fn grep_symbol(word: String, cwd: String) -> Result<Vec<GrepMatch>, String> {
+pub fn grep_symbol(word: String, cwd: String, source_ext: Option<String>) -> Result<Vec<GrepMatch>, String> {
     if word.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -165,6 +193,10 @@ pub fn grep_symbol(word: String, cwd: String) -> Result<Vec<GrepMatch>, String> 
         Err(_) => return Ok(Vec::new()),
     };
 
+    let allowed_exts: Option<&[&str]> = source_ext
+        .as_deref()
+        .and_then(|e| code_family(e));
+
     let mut results: Vec<GrepMatch> = Vec::new();
 
     let walker = WalkBuilder::new(&cwd)
@@ -188,8 +220,9 @@ pub fn grep_symbol(word: String, cwd: String) -> Result<Vec<GrepMatch>, String> 
                 continue;
             }
         }
+        let file_ext = path.extension().and_then(|e| e.to_str());
         // Skip binary-ish extensions
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        if let Some(ext) = file_ext {
             let skip = matches!(
                 ext,
                 "png" | "jpg" | "jpeg" | "gif" | "ico" | "svg"
@@ -201,6 +234,13 @@ pub fn grep_symbol(word: String, cwd: String) -> Result<Vec<GrepMatch>, String> 
             );
             if skip {
                 continue;
+            }
+        }
+        // Filter by language family
+        if let Some(family) = allowed_exts {
+            match file_ext {
+                Some(ext) if family.contains(&ext) => {}
+                _ => continue,
             }
         }
 

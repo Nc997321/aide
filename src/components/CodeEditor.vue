@@ -5,6 +5,8 @@ import { keymap } from "@codemirror/view";
 import { searchKeymap } from "@codemirror/search";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { useSettings } from "../composables/useSettings";
+import { useModal } from "../composables/useModal";
+import { ctrlHoverHighlight } from "../extensions/cmCtrlHover";
 
 const { settings } = useSettings();
 
@@ -15,7 +17,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
-  (e: "goto-definition", payload: { word: string; filePath: string }): void;
+  (e: "goto-definition", payload: { word: string; filePath: string; line: number }): void;
 }>();
 
 const mountEl = ref<HTMLDivElement | null>(null);
@@ -128,6 +130,7 @@ async function createEditor() {
       ]),
       oneDark,
       updateListener,
+      ctrlHoverHighlight(),
       EditorView.domEventHandlers({
         click(event, view) {
           if (event.ctrlKey || event.metaKey) {
@@ -144,9 +147,11 @@ async function createEditor() {
                 );
                 if (word) {
                   event.preventDefault();
+                  const line = view.state.doc.lineAt(pos).number;
                   emit("goto-definition", {
                     word,
                     filePath: props.filePath,
+                    line,
                   });
                 }
               }
@@ -221,19 +226,21 @@ watch(
 );
 
 function openGoToLine(target: EditorView): boolean {
-  const line = prompt("跳转到行:");
-  if (line !== null && line !== "") {
-    const lineNum = parseInt(line, 10);
-    if (!isNaN(lineNum) && lineNum > 0) {
-      const pos = target.state.doc.line(lineNum);
-      target.dispatch({
-        selection: { anchor: pos.from, head: pos.from },
-        scrollIntoView: true,
-      });
-      return true;
+  const { prompt: modalPrompt } = useModal();
+  modalPrompt("跳转到行:", "行号").then((line) => {
+    if (line !== null && line !== "") {
+      const lineNum = parseInt(line, 10);
+      if (!isNaN(lineNum) && lineNum > 0) {
+        const pos = target.state.doc.line(lineNum);
+        target.dispatch({
+          selection: { anchor: pos.from, head: pos.from },
+          scrollIntoView: true,
+        });
+        target.focus();
+      }
     }
-  }
-  return false;
+  });
+  return true;
 }
 
 // ── External content update (when modelValue changes from parent) ──
@@ -264,14 +271,20 @@ watch(
 
 // ── Expose scrollToLine ──
 
-function scrollToLine(line: number) {
+function scrollToLine(line: number, opts?: { cursor?: boolean }) {
   if (!view) return;
   const docLine = view.state.doc.line(Math.min(line, view.state.doc.lines));
-  view.dispatch({
-    selection: { anchor: docLine.from, head: docLine.from },
-    scrollIntoView: true,
-  });
-  view.focus();
+  if (opts?.cursor !== false) {
+    view.dispatch({
+      selection: { anchor: docLine.from, head: docLine.from },
+      effects: EditorView.scrollIntoView(docLine.from, { y: "start" }),
+    });
+    view.focus();
+  } else {
+    view.dispatch({
+      effects: EditorView.scrollIntoView(docLine.from, { y: "start" }),
+    });
+  }
 }
 
 function waitReady(): Promise<void> {

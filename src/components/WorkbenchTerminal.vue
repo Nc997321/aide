@@ -65,13 +65,13 @@ function onHeaderDragStart(e: MouseEvent) {
             @click.stop="wb.switchTo(tab.id)"
           >
             <span class="wb-tab-label">{{ tab.shellName || 'Shell' }} {{ tab.label }}</span>
-            <button class="wb-tab-close" @click.stop="wb.closeSession(tab.id)" title="关闭终端">✕</button>
+            <button class="wb-tab-close" @click.stop="wb.closeSession(tab.id)" v-tooltip="'关闭终端'">✕</button>
           </div>
-          <button class="wb-tab-add" @click.stop="addTerminal" title="新建终端">+</button>
+          <button class="wb-tab-add" @click.stop="addTerminal" v-tooltip="'新建终端'">+</button>
         </div>
         <div class="wb-header-right">
-          <button class="wb-btn" title="清屏" @click.stop="wb.clear()">⌫</button>
-          <button class="wb-btn wb-btn--minimize" title="最小化 (Ctrl+`)" @click.stop="wb.hide()">─</button>
+          <button class="wb-btn" v-tooltip="'清屏'" @click.stop="wb.clear()">⌫</button>
+          <button class="wb-btn wb-btn--minimize" v-tooltip="'最小化 (Ctrl+`)'" @click.stop="wb.hide()">─</button>
         </div>
       </div>
       <div ref="containerRef" class="wb-container">

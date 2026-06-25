@@ -162,7 +162,7 @@ const isExpanded = () => props.expandedDirs.has(props.node.path);
       </svg>
 
       <!-- Name -->
-      <span class="node-name" :title="node.path">{{ node.name }}</span>
+      <span class="node-name" v-tooltip="node.path">{{ node.name }}</span>
     </div>
 
     <!-- Children with subtle background layer -->

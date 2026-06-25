@@ -309,7 +309,7 @@ async function migrateSession(oldId: string, newId: string) {
   }
 }
 
-defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorkspace });
+defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorkspace, sessionsByWorkspace });
 </script>
 
 <template>
@@ -317,7 +317,7 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
     <!-- Header -->
     <div class="sidebar-header">
       <span class="header-title">会话</span>
-      <button class="new-btn" @click="newSession" title="新建会话 (Ctrl+N)">
+      <button class="new-btn" @click="newSession" v-tooltip="'新建会话 (Ctrl+N)'">
         新 (Ctrl+N)
       </button>
     </div>
@@ -377,7 +377,7 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
         <span class="update-dot">●</span>
         <span class="update-text">新版本 {{ latestVersion }}</span>
       </div>
-      <button class="update-dismiss" title="忽略" @click.stop="dismissUpdate">✕</button>
+      <button class="update-dismiss" v-tooltip="'忽略'" @click.stop="dismissUpdate">✕</button>
     </div>
 
     <!-- Status bar: provider + actions -->
@@ -391,13 +391,13 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
       </div>
 
       <div class="status-bar-actions">
-        <button class="status-bar-btn" title="工作台终端 (Ctrl+`)" @click="emit('open-workbench')">
+        <button class="status-bar-btn" v-tooltip="'工作台终端 (Ctrl+`)'" @click="emit('open-workbench')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="4 17 10 11 4 5"/>
             <line x1="12" y1="19" x2="20" y2="19"/>
           </svg>
         </button>
-        <button class="status-bar-btn" title="设置" @click="emit('open-settings')">
+        <button class="status-bar-btn" v-tooltip="'设置'" @click="emit('open-settings')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3"/>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>

@@ -59,8 +59,8 @@ export const api = {
   },
 
   // 符号搜索（跳转到定义）
-  grepSymbol(word: string, cwd: string): Promise<GrepMatch[]> {
-    return invoke("grep_symbol", { word, cwd });
+  grepSymbol(word: string, cwd: string, sourceExt?: string): Promise<GrepMatch[]> {
+    return invoke("grep_symbol", { word, cwd, sourceExt: sourceExt ?? null });
   },
 
   // Git

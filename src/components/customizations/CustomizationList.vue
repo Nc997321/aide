@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { CustomizationType, CustomizationItem } from "../../types/customization";
 import { CUSTOMIZATION_CATEGORIES } from "../../composables/useCustomizations";
+import { useModal } from "../../composables/useModal";
 
 const props = defineProps<{
   type: CustomizationType;
@@ -16,8 +17,10 @@ const emit = defineEmits<{
 
 const category = CUSTOMIZATION_CATEGORIES.find((c) => c.type === props.type);
 
-function handleCreate() {
-  const name = prompt(`请输入${category?.label || '项目'}名称:`);
+const { prompt: modalPrompt } = useModal();
+
+async function handleCreate() {
+  const name = await modalPrompt(`请输入${category?.label || '项目'}名称:`);
   if (name) {
     emit("create", { name, type: props.type, enabled: true });
   }
@@ -61,7 +64,7 @@ function handleToggle(id: string, event: Event) {
           class="toggle-btn"
           :class="{ active: item.enabled }"
           @click="handleToggle(item.id, $event)"
-          :title="item.enabled ? '禁用' : '启用'"
+          v-tooltip="item.enabled ? '禁用' : '启用'"
         >
           {{ item.enabled ? '✓' : '○' }}
         </button>

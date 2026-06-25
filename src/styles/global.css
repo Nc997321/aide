@@ -68,3 +68,28 @@ html, body, #app {
   background: var(--aide-text-muted);
 }
 
+/* ── Tooltip (v-tooltip directive) ── */
+
+.aide-tooltip {
+  position: fixed;
+  z-index: 9999;
+  max-width: 320px;
+  padding: 5px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--aide-text-primary);
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-surface-hover);
+  border-radius: var(--aide-radius-sm);
+  box-shadow: var(--aide-shadow-md);
+  pointer-events: none;
+  white-space: pre-line;
+  word-break: break-word;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.aide-tooltip.visible {
+  opacity: 1;
+}
+

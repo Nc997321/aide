@@ -55,7 +55,7 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
             <button
               v-if="round.files.length > 0"
               class="changelog-round-revert"
-              title="撤回本轮"
+              v-tooltip="'撤回本轮'"
               @click="revertRound(round)"
             ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button>
           </div>
@@ -67,7 +67,7 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
             @click="openFile(resolvePath(f.path))"
           >
             <span class="changelog-file-status" :class="f.status === 'A' ? 'status-A' : 'status-M'">{{ f.status || 'M' }}</span>
-            <span class="changelog-file-path" :title="f.path">{{ f.path }}</span>
+            <span class="changelog-file-path" v-tooltip="f.path">{{ f.path }}</span>
             <span v-if="f.additions > 0 || f.deletions > 0" class="changelog-file-stats">
               <span v-if="f.additions > 0" class="stat-add">+{{ f.additions }}</span>
               <span v-if="f.additions > 0 && f.deletions > 0" class="stat-sep"> </span>
@@ -75,7 +75,7 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
             </span>
             <button
               class="changelog-file-revert"
-              title="撤回此文件"
+              v-tooltip="'撤回此文件'"
               @click.stop="revertSingleFile(round, f.path)"
             ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button>
           </div>

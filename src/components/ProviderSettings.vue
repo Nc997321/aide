@@ -146,14 +146,14 @@ function knownModelsForDatalist(): string[] {
         <span
           v-if="activeProviderId === p.id"
           class="pi-check"
-          title="当前激活"
+          v-tooltip="'当前激活'"
         >
           ✓
         </span>
         <button
           v-if="p.id !== SYSTEM_DEFAULT_ID && activeProviderId !== p.id"
           class="pi-activate"
-          title="设为激活"
+          v-tooltip="'设为激活'"
           @click.stop="handleActivate(p.id)"
         >
           ○

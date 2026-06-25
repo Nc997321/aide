@@ -67,7 +67,7 @@ function handleDismiss() {
       <div class="banner-header">
         <span class="banner-icon">&#x1F514;</span>
         <span class="banner-title">会话已完成</span>
-        <button class="banner-close" @click="handleDismiss" title="关闭">&times;</button>
+        <button class="banner-close" @click="handleDismiss" v-tooltip="'关闭'">&times;</button>
       </div>
       <div class="banner-sessions">
         <div

@@ -11,12 +11,12 @@ onMounted(() => {
 
 <template>
   <div class="window-controls" @mousedown.stop>
-    <button class="win-btn win-btn-min" title="最小化" @click="minimize">
+    <button class="win-btn win-btn-min" v-tooltip="'最小化'" @click="minimize">
       <svg width="12" height="12" viewBox="0 0 12 12">
         <rect x="1" y="5.5" width="10" height="1" fill="currentColor" />
       </svg>
     </button>
-    <button class="win-btn win-btn-max" title="最大化" @click="toggleMaximize">
+    <button class="win-btn win-btn-max" v-tooltip="'最大化'" @click="toggleMaximize">
       <svg v-if="!isMaximized" width="12" height="12" viewBox="0 0 12 12">
         <rect x="1.5" y="1.5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
       </svg>
@@ -25,7 +25,7 @@ onMounted(() => {
         <rect x="0.5" y="3.5" width="8" height="8" rx="1" fill="var(--aide-bg-deep)" stroke="currentColor" stroke-width="1.2" />
       </svg>
     </button>
-    <button class="win-btn win-btn-close" title="关闭" @click="close">
+    <button class="win-btn win-btn-close" v-tooltip="'关闭'" @click="close">
       <svg width="12" height="12" viewBox="0 0 12 12">
         <line x1="1" y1="1" x2="11" y2="11" stroke="currentColor" stroke-width="1.3" />
         <line x1="11" y1="1" x2="1" y2="11" stroke="currentColor" stroke-width="1.3" />

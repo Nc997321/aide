@@ -13,8 +13,14 @@ const gotoPopoverRef = ref<HTMLElement | null>(null);
 const codeEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null);
 
 // 处理跳转到定义
-async function onGotoDefinition(payload: { word: string; filePath: string }) {
-  await goto.search(payload.word, projectRoot.value);
+async function onGotoDefinition(payload: { word: string; filePath: string; line: number }) {
+  const root = projectRoot.value;
+  const sep = root.includes("\\") ? "\\" : "/";
+  const relPath = payload.filePath.startsWith(root)
+    ? payload.filePath.slice(root.length + sep.length).replace(/\\/g, "/")
+    : "";
+  const ext = payload.filePath.split(".").pop()?.toLowerCase() || "";
+  await goto.search(payload.word, root, { sourceFile: relPath, sourceLine: payload.line, sourceExt: ext });
 }
 
 // 搜索所有引用（从浮层空状态触发）
@@ -55,6 +61,22 @@ function onGotoKeydown(e: KeyboardEvent) {
 }
 
 const codeRef = ref<HTMLElement | null>(null);
+const viewerBodyRef = ref<HTMLElement | null>(null);
+
+async function handleStartEdit() {
+  let targetLine = 1;
+  if (viewerBodyRef.value && content.value) {
+    const { scrollTop, scrollHeight } = viewerBodyRef.value;
+    if (scrollHeight > 0) {
+      const totalLines = content.value.split('\n').length;
+      targetLine = Math.max(1, Math.ceil((scrollTop / scrollHeight) * totalLines));
+    }
+  }
+  startEdit();
+  await nextTick();
+  await codeEditorRef.value?.waitReady();
+  codeEditorRef.value?.scrollToLine(targetLine, { cursor: false });
+}
 
 const fileName = computed(() => {
   return filePath.value.split(/[/\\]/).pop() || filePath.value;
@@ -149,21 +171,21 @@ function getLanguageLabel(): string {
         <div class="viewer-header">
           <span class="viewer-title">{{ fileName }}</span>
           <span class="viewer-lang">{{ getLanguageLabel() }}</span>
-          <span class="viewer-path" :title="filePath">{{ filePath }}</span>
+          <span class="viewer-path" v-tooltip="filePath">{{ filePath }}</span>
           <button
             v-if="!error"
             class="viewer-btn"
             :class="{ primary: editing }"
             :disabled="content.length > 1_000_000"
-            :title="content.length > 1_000_000 ? '文件过大，不支持编辑' : ''"
-            @click="editing ? save() : startEdit()"
+            v-tooltip="content.length > 1_000_000 ? '文件过大，不支持编辑' : ''"
+            @click="editing ? save() : handleStartEdit()"
           >
             {{ editing ? '保存' : '编辑' }}
           </button>
           <span v-if="editing" class="viewer-hint">Esc 取消 · Ctrl+S 保存</span>
           <button class="viewer-close" @click="close">&times;</button>
         </div>
-        <div class="viewer-body">
+        <div ref="viewerBodyRef" class="viewer-body">
           <div v-if="error" class="viewer-error">{{ error }}</div>
           <div v-else-if="editing" class="viewer-editor">
             <CodeEditor

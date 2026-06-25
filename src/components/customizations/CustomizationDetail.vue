@@ -2,6 +2,7 @@
 import { ref, watch } from "vue";
 import type { CustomizationType, CustomizationItem } from "../../types/customization";
 import { CUSTOMIZATION_CATEGORIES } from "../../composables/useCustomizations";
+import { useModal } from "../../composables/useModal";
 
 const props = defineProps<{
   type: CustomizationType;
@@ -35,8 +36,16 @@ function handleSave() {
   isEditing.value = false;
 }
 
-function handleDelete() {
-  if (confirm(`确定要删除 "${props.item?.name}" 吗？`)) {
+const { confirm: modalConfirm } = useModal();
+
+async function handleDelete() {
+  const ok = await modalConfirm(
+    "确认删除",
+    `确定要删除 "${props.item?.name}" 吗？`,
+    "删除",
+    true,
+  );
+  if (ok) {
     emit("delete");
   }
 }
