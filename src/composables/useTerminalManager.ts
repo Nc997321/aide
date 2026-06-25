@@ -103,11 +103,16 @@ export function useTerminalManager(
   }
 
   function showSession(sid: string) {
-    if (!sid || sid === currentSid) return;
+    if (sid === currentSid) return;
     currentSid = sid;
 
     if (previewRef.value) previewRef.value.style.display = "none";
     for (const [, ls] of liveSessions) ls.div.style.display = "none";
+
+    if (!sid) {
+      if (previewRef.value) previewRef.value.style.display = "";
+      return;
+    }
 
     const ptyId = resolvePtyId(sid);
 
@@ -427,6 +432,13 @@ export function useTerminalManager(
     ptyToDisplay.clear();
   }
 
+  function resetView() {
+    currentSid = "";
+    if (previewRef.value) previewRef.value.style.display = "none";
+    for (const [, ls] of liveSessions) ls.div.style.display = "none";
+    if (previewRef.value) previewRef.value.style.display = "";
+  }
+
   return {
     liveDisplayIds,
     currentSid: () => currentSid,
@@ -434,6 +446,7 @@ export function useTerminalManager(
     startClaude,
     stopClaude,
     destroyLiveSession,
+    resetView,
     initPtyListener,
     initExitListener,
     initDragDrop,

@@ -6,6 +6,16 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [vue()],
   clearScreen: false,
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          xterm: ["xterm", "xterm-addon-fit"],
+          hljs: ["highlight.js/lib/core"],
+        },
+      },
+    },
+  },
   server: {
     port: 1420,
     strictPort: true,

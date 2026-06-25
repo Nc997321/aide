@@ -1,75 +1,41 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick, watch } from "vue";
-import { Terminal } from "xterm";
-import { FitAddon } from "xterm-addon-fit";
-import { useSettings } from "../composables/useSettings";
 import { useWorkbenchTerminal } from "../composables/useWorkbenchTerminal";
-import { api } from "../api";
-import { catppuccinMochaTheme } from "../utils/xterm";
 import "xterm/css/xterm.css";
 
 const props = defineProps<{ cwd: string; height: number }>();
 const emit = defineEmits<{ "update:height": [v: number] }>();
 
-const { settings } = useSettings();
 const wb = useWorkbenchTerminal();
+const containerRef = ref<HTMLDivElement>();
 
-const termHostRef = ref<HTMLDivElement>();
-const exitedRef = ref<HTMLDivElement>();
-let terminal: Terminal | null = null;
-let fitAddon: FitAddon | null = null;
-let observer: ResizeObserver | null = null;
-
-onMounted(async () => {
-  if (!termHostRef.value) return;
-  terminal = new Terminal({
-    cursorBlink: true,
-    fontSize: settings.fontSize,
-    fontFamily: settings.fontFamily,
-    theme: catppuccinMochaTheme,
-    allowProposedApi: true,
-  });
-  fitAddon = new FitAddon();
-  terminal.loadAddon(fitAddon);
-  terminal.open(termHostRef.value);
-  fitAddon.fit();
-
-  wb.attachTerminal(terminal, fitAddon, termHostRef.value);
-
-  observer = new ResizeObserver(() => {
-    fitAddon?.fit();
-    if (terminal) api.ptyResize(wb.getSessionId(), terminal.rows, terminal.cols).catch(() => {});
-  });
-  observer.observe(termHostRef.value);
+onMounted(() => {
+  if (containerRef.value) wb.init(containerRef.value);
 });
 
 onUnmounted(() => {
-  observer?.disconnect();
-  terminal?.dispose();
-  // Note: wb.dispose() is NOT called here — the composable is a module-level
-  // singleton; disposing it would kill the PTY and destroy shared state.
-  // App.vue's onUnmounted handles full cleanup instead.
+  // wb.dispose() is called by App.vue — don't call here.
 });
 
-// Refit when the panel becomes visible (container was visibility:hidden).
+watch(() => props.cwd, (newCwd) => {
+  wb.changeCwd(newCwd);
+});
+
 watch(() => wb.visible.value, async (v) => {
   if (v) {
     await nextTick();
-    fitAddon?.fit();
-    terminal?.focus();
+    if (wb.tabs.value.length > 0 && wb.activeId.value) {
+      wb.switchTo(wb.activeId.value);
+    }
   }
 });
 
-// Auto-focus the exited overlay so Enter works immediately.
-watch(() => wb.shellExited.value, async (v) => {
-  if (v) {
-    await nextTick();
-    exitedRef.value?.focus();
-  }
-});
+function addTerminal() {
+  wb.createSession(props.cwd);
+}
 
-// Drag the header to resize height.
 function onHeaderDragStart(e: MouseEvent) {
+  if ((e.target as HTMLElement).closest(".wb-tabs, .wb-header-right")) return;
   e.preventDefault();
   const startY = e.clientY;
   const startH = props.height;
@@ -84,44 +50,41 @@ function onHeaderDragStart(e: MouseEvent) {
   document.addEventListener("mousemove", onMove);
   document.addEventListener("mouseup", onUp);
 }
-
-function onExitedKeydown(e: KeyboardEvent) {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    wb.restart(props.cwd);
-  }
-}
 </script>
 
 <template>
-  <div
-    class="workbench-overlay"
-    :class="{ 'workbench-overlay--hidden': !wb.visible.value }"
-  >
+  <div class="workbench-overlay" :class="{ 'workbench-overlay--hidden': !wb.visible.value }">
     <div class="workbench-pill" :class="{ 'is-shown': wb.visible.value }" :style="{ height: props.height + 'px' }">
       <div class="workbench-header" @mousedown="onHeaderDragStart">
-        <div class="wb-dots">
-          <span class="wb-dot wb-dot--red"></span>
-          <span class="wb-dot wb-dot--yellow"></span>
-          <span class="wb-dot wb-dot--green"></span>
+        <div class="wb-tabs">
+          <div
+            v-for="tab in wb.tabs.value"
+            :key="tab.id"
+            class="wb-tab"
+            :class="{ active: tab.id === wb.activeId.value }"
+            @click.stop="wb.switchTo(tab.id)"
+          >
+            <span class="wb-tab-label">{{ tab.shellName || 'Shell' }} {{ tab.label }}</span>
+            <button class="wb-tab-close" @click.stop="wb.closeSession(tab.id)" title="关闭终端">✕</button>
+          </div>
+          <button class="wb-tab-add" @click.stop="addTerminal" title="新建终端">+</button>
         </div>
         <div class="wb-header-right">
-          <span class="wb-shell-name">{{ wb.shellName.value }}</span>
-          <button class="wb-btn" title="清屏" @click="wb.clear()">⌫</button>
-          <button class="wb-btn" title="关闭" @click="wb.close()">✕</button>
+          <button class="wb-btn" title="清屏" @click.stop="wb.clear()">⌫</button>
+          <button class="wb-btn wb-btn--minimize" title="最小化 (Ctrl+`)" @click.stop="wb.hide()">─</button>
         </div>
       </div>
-      <div ref="termHostRef" class="workbench-term-host"></div>
-      <div
-        v-if="wb.shellExited.value"
-        ref="exitedRef"
-        class="workbench-exited"
-        tabindex="0"
-        @keydown="onExitedKeydown"
-        @click="wb.restart(props.cwd)"
-      >
-        <div class="workbench-exited__title">Shell 已退出</div>
-        <div class="workbench-exited__hint">按 Enter 或点击重启</div>
+      <div ref="containerRef" class="wb-container">
+        <div
+          v-if="wb.activeExited.value"
+          class="workbench-exited"
+          tabindex="0"
+          @keydown.enter.prevent="wb.restart(wb.activeId.value, props.cwd)"
+          @click="wb.restart(wb.activeId.value, props.cwd)"
+        >
+          <div class="workbench-exited__title">Shell 已退出</div>
+          <div class="workbench-exited__hint">按 Enter 或点击重启</div>
+        </div>
       </div>
     </div>
   </div>
@@ -132,7 +95,7 @@ function onExitedKeydown(e: KeyboardEvent) {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
   z-index: 80;
-  pointer-events: none; /* let the underlying UI stay interactive */
+  pointer-events: none;
   display: flex;
   justify-content: center;
 }
@@ -163,45 +126,132 @@ function onExitedKeydown(e: KeyboardEvent) {
 }
 
 .workbench-header {
-  height: 26px;
+  height: 32px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
+  padding: 0 8px 0 4px;
   background: var(--aide-bg-deep);
   border-bottom: 1px solid var(--aide-surface-default);
   cursor: row-resize;
   user-select: none;
+  gap: 8px;
 }
 
-.wb-dots { display: flex; gap: 6px; }
-.wb-dot { width: 8px; height: 8px; border-radius: 50%; }
-.wb-dot--red { background: var(--aide-danger); }
-.wb-dot--yellow { background: var(--aide-warning); }
-.wb-dot--green { background: var(--aide-success); }
+/* ── Tab bar ── */
 
-.wb-header-right { display: flex; align-items: center; gap: 8px; cursor: default; }
-.wb-shell-name { font-size: 11px; color: var(--aide-text-muted); }
+.wb-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  cursor: default;
+}
+.wb-tabs::-webkit-scrollbar { display: none; }
+
+.wb-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px 3px 10px;
+  border-radius: var(--aide-radius-sm);
+  font-size: 11px;
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+.wb-tab:hover {
+  background: var(--aide-surface-default);
+  color: var(--aide-text-secondary);
+}
+.wb-tab.active {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
+}
+
+.wb-tab-label { pointer-events: none; }
+
+.wb-tab-close {
+  background: none; border: none;
+  color: var(--aide-text-muted);
+  font-size: 10px;
+  width: 16px; height: 16px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s, background 0.1s;
+}
+.wb-tab:hover .wb-tab-close,
+.wb-tab.active .wb-tab-close {
+  opacity: 1;
+}
+.wb-tab-close:hover {
+  background: var(--aide-surface-default);
+  color: var(--aide-danger);
+}
+
+.wb-tab-add {
+  background: none; border: none;
+  color: var(--aide-text-muted);
+  font-size: 14px; font-weight: 300;
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--aide-radius-sm);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.wb-tab-add:hover {
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
+}
+
+/* ── Header right actions ── */
+
+.wb-header-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: default;
+  flex-shrink: 0;
+}
 .wb-btn {
-  background: var(--aide-surface-default); border: none; color: var(--aide-text-secondary);
+  background: none; border: none; color: var(--aide-text-muted);
   font-size: 11px; padding: 2px 7px; border-radius: 4px; cursor: pointer;
   line-height: 1;
+  transition: color 0.12s, background 0.12s;
 }
-.wb-btn:hover { color: var(--aide-danger); }
+.wb-btn:hover { background: var(--aide-surface-default); color: var(--aide-text-secondary); }
+.wb-btn--minimize { font-size: 13px; font-weight: 700; }
 
-.workbench-term-host {
+/* ── Terminal container ── */
+
+.wb-container {
   flex: 1;
   position: relative;
   overflow: hidden;
 }
-.workbench-term-host .xterm { padding: 8px 10px; height: 100%; }
-.workbench-term-host .xterm-viewport { scrollbar-width: thin; scrollbar-color: var(--aide-surface-default) transparent; }
-.workbench-term-host .xterm-viewport::-webkit-scrollbar { width: 6px; }
-.workbench-term-host .xterm-viewport::-webkit-scrollbar-thumb { background: var(--aide-surface-default); border-radius: 3px; }
+
+.wb-term-pane {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.wb-term-pane .xterm { padding: 8px 10px; height: 100%; }
+.wb-term-pane .xterm-viewport { scrollbar-width: thin; scrollbar-color: var(--aide-surface-default) transparent; }
+.wb-term-pane .xterm-viewport::-webkit-scrollbar { width: 6px; }
+.wb-term-pane .xterm-viewport::-webkit-scrollbar-thumb { background: var(--aide-surface-default); border-radius: 3px; }
+
+/* ── Shell exited overlay ── */
 
 .workbench-exited {
-  position: absolute; inset: 26px 0 0 0;
+  position: absolute; inset: 0;
+  z-index: 5;
   background: var(--aide-bg-overlay);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 6px; cursor: pointer; outline: none;

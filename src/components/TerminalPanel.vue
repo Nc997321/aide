@@ -3,56 +3,56 @@ import { ref, watch, onMounted, onUnmounted, nextTick, computed } from "vue";
 import { useSessionState } from "../composables/useSessionState";
 import { useTerminalManager } from "../composables/useTerminalManager";
 import { AToolbar, AStatusDot, AButton } from "../ui";
-import { marked, escapeHtml } from "../utils/markdown";
 import { api } from "../api";
 import "xterm/css/xterm.css";
 
-const props = defineProps<{ sessionId: string }>();
+const props = defineProps<{ sessionId: string; workspacePath: string }>();
 const emit = defineEmits<{ "session-updated": [newId?: string] }>();
 
-interface BackendMsg { role: string; content: string; timestamp: number; }
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 // ── Preview content ──
 
 const stackRef = ref<HTMLDivElement>();
 const previewRef = ref<HTMLDivElement>();
-const previewMessages = ref<BackendMsg[]>([]);
-
-const previewHtml = computed(() => {
-  if (previewMessages.value.length === 0) return "";
-  let html = "";
-  for (const m of previewMessages.value) {
-    const who = m.role === "user" ? "You" : "Claude";
-    html += `<div class="preview-msg preview-msg--${m.role}">`;
-    html += `<div class="preview-msg__who">${who}</div>`;
-    html += `<div class="preview-msg__body">`;
-    if (m.role === "user") {
-      html += `<div class="preview-text">${escapeHtml(m.content)}</div>`;
-    } else {
-      try {
-        html += `<div class="preview-text">${marked.parse(m.content)}</div>`;
-      } catch {
-        html += `<div class="preview-text">${escapeHtml(m.content)}</div>`;
-      }
-    }
-    html += `</div></div>`;
-  }
-  return html;
-});
+const previewHtml = ref("");
 
 async function loadPreviewContent(sid: string) {
   if (sid.startsWith("new_")) {
-    previewMessages.value = [];
+    previewHtml.value = "";
     return;
   }
   try {
-    previewMessages.value = await api.loadMessages(sid);
+    const messages = await api.loadMessages(sid);
+    const recent = messages.slice(-50);
+    if (recent.length === 0) { previewHtml.value = ""; return; }
+    const { marked } = await import("../utils/markdown");
+    let html = "";
+    for (const m of recent) {
+      const who = m.role === "user" ? "You" : "Claude";
+      html += `<div class="preview-msg preview-msg--${m.role}">`;
+      html += `<div class="preview-msg__who">${who}</div>`;
+      html += `<div class="preview-msg__body">`;
+      if (m.role === "user") {
+        html += `<div class="preview-text">${escapeHtml(m.content)}</div>`;
+      } else {
+        try {
+          html += `<div class="preview-text">${marked.parse(m.content)}</div>`;
+        } catch {
+          html += `<div class="preview-text">${escapeHtml(m.content)}</div>`;
+        }
+      }
+      html += `</div></div>`;
+    }
+    previewHtml.value = html;
     await nextTick();
     if (previewRef.value) {
       previewRef.value.scrollTop = previewRef.value.scrollHeight;
     }
   } catch (_) {
-    previewMessages.value = [];
+    previewHtml.value = "";
   }
 }
 
@@ -64,6 +64,7 @@ const {
   showSession,
   startClaude,
   stopClaude,
+  resetView,
   initPtyListener,
   initExitListener,
   initDragDrop,
@@ -116,10 +117,14 @@ function onPreviewClick() {
 
 // ── Watch session changes ──
 
+watch(() => props.workspacePath, () => {
+  resetView();
+});
+
 watch(() => props.sessionId, async (newId) => {
-  if (newId && newId !== currentSid()) {
+  if (newId !== currentSid()) {
     showSession(newId);
-    await loadPreviewContent(newId);
+    if (newId) await loadPreviewContent(newId);
   }
   // Look up display name for the toolbar
   if (newId && !newId.startsWith("new_")) {
@@ -150,7 +155,7 @@ function restartSession(sid: string) {
   setTimeout(() => startClaude(sid), 300);
 }
 
-defineExpose({ restartSession });
+defineExpose({ restartSession, resetView });
 
 onUnmounted(() => {
   window.removeEventListener("keydown", onWindowKeydown);

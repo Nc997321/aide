@@ -5,8 +5,9 @@ import FileTree from "./components/FileTree.vue";
 import ChangeLogPanel from "./components/ChangeLogPanel.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import ModalDialog from "./components/ModalDialog.vue";
-import FileViewer from "./components/FileViewer.vue";
-import SettingsPanel from "./components/SettingsPanel.vue";
+import { defineAsyncComponent } from "vue";
+const FileViewer = defineAsyncComponent(() => import("./components/FileViewer.vue"));
+const SettingsPanel = defineAsyncComponent(() => import("./components/SettingsPanel.vue"));
 import GitPanel from "./components/GitPanel.vue";
 import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
 import NotificationBanner from "./components/NotificationBanner.vue";
@@ -186,6 +187,7 @@ async function onSidebarWsChanged(path: string) {
   workspacePath.value = path;
   projectName.value = path.split(/[\\/]/).filter(Boolean).pop() || path;
   activeSessionId.value = "";
+  terminalPanelRef.value?.resetView();
   await fileTreeRef.value?.loadRoot();
   if (rightTab.value === "git") gitPanelRef.value?.reload();
 }
@@ -362,6 +364,7 @@ onUnmounted(() => {
         <TerminalPanel
           ref="terminalPanelRef"
           :session-id="activeSessionId"
+          :workspace-path="workspacePath"
           @session-updated="onSessionUpdated"
         />
       </div>
