@@ -1,5 +1,4 @@
 import { useSessionState } from "./useSessionState";
-import { api } from "../api";
 import type { Terminal } from "xterm";
 
 interface LiveSession {
@@ -9,6 +8,19 @@ interface LiveSession {
   observer: ResizeObserver;
 }
 
+// Permission/confirmation prompts pause the turn waiting for user choice.
+const PERMISSION_RE = /Do you want to proceed|\[y\/n\]|needs?\s+(your\s+)?permission/i;
+
+// How many consecutive unchanged snapshots before declaring idle.
+// 3 ticks × 800ms = ~2.4s of silence required.
+const IDLE_CONFIRM_TICKS = 3;
+
+// Grace period after Enter before we start comparing snapshots.
+// Gives Claude Code's TUI time to start rendering its first frame.
+const STARTUP_GRACE_MS = 1500;
+
+const CHECK_INTERVAL_MS = 800;
+
 export function useSessionMonitor(
   liveSessions: Map<string, LiveSession>,
   ptyToDisplay: Map<string, string>,
@@ -16,82 +28,74 @@ export function useSessionMonitor(
   const { state: sessionState, setSessionState, removeSessionState } = useSessionState();
   const periodicTimers = new Map<string, ReturnType<typeof setInterval>>();
   const lastEnterMs = new Map<string, number>();
-  const checking = new Set<string>(); // prevent concurrent checks for same session
+  // Previous terminal tail snapshot — compared each tick to detect activity.
+  const lastSnapshot = new Map<string, string>();
+  // Count of consecutive ticks where the snapshot did not change.
+  const idleStreak = new Map<string, number>();
 
-  function terminalTailLines(ptyId: string): string {
+  function terminalTail(ptyId: string, n: number): string {
     const ls = liveSessions.get(ptyId);
     if (!ls) return "";
     const buf = ls.terminal.buffer.active;
-    const last = Math.max(0, buf.length - 3);
+    const start = Math.max(0, buf.length - n);
     const lines: string[] = [];
-    for (let i = last; i < buf.length; i++) {
+    for (let i = start; i < buf.length; i++) {
       const line = buf.getLine(i);
       if (line) lines.push(line.translateToString(true));
     }
     return lines.join("\n");
   }
 
-  async function checkSessionState(ptyId: string) {
-    // Skip if PTY has been destroyed
+  function checkSessionState(ptyId: string) {
     if (!liveSessions.has(ptyId)) return;
 
     const displayId = ptyToDisplay.get(ptyId) || ptyId;
     const cur = sessionState[displayId];
+    const tail = terminalTail(ptyId, 30);
 
-    // Skip if already waiting
-    if (cur === "waiting") return;
-    // Prevent concurrent checks (async race between interval ticks)
-    if (checking.has(displayId)) return;
-    checking.add(displayId);
+    // 1) Permission prompt → attention
+    if (PERMISSION_RE.test(tail)) {
+      idleStreak.set(displayId, 0);
+      lastSnapshot.set(displayId, tail);
+      if (cur !== "attention") setSessionState(displayId, "attention");
+      return;
+    }
 
-    try {
-      const tail = terminalTailLines(ptyId);
+    // 2) Compare snapshot — did the terminal change since last tick?
+    const prev = lastSnapshot.get(displayId) || "";
+    lastSnapshot.set(displayId, tail);
 
-      // 1) Permission prompt detection
-      if (/Do you want to proceed|\[y\/n\]|needs?\s+(your\s+)?permission/i.test(tail)) {
-        setSessionState(displayId, "attention");
-        return;
+    const changed = tail !== prev;
+
+    if (changed) {
+      idleStreak.set(displayId, 0);
+      // Only set running if there was a recent Enter (Claude genuinely started).
+      // lastEnterMs is cleared when we transition to waiting, so user typing
+      // after Claude finishes will NOT re-trigger running.
+      if (cur !== "running" && cur !== "attention" && lastEnterMs.has(displayId)) {
+        setSessionState(displayId, "running");
       }
+      return;
+    }
 
-      // 2) JSONL event detection
-      try {
-        const info = await api.sessionLastEvent(displayId);
+    // 3) Snapshot unchanged — terminal is quiet. Decide if idle long enough.
+    if (cur !== "running" && cur !== "attention") return;
 
-        // When the last event is user, Claude is still processing — but don't
-        // return early.  Commands like /compact and /clear don't produce an
-        // end_turn event; we must fall through to the terminal-prompt check.
-        if (info.event_type === "assistant" && info.stop_reason === "end_turn") {
-          const entered = lastEnterMs.get(displayId) || 0;
-          const eventMs = info.timestamp ? new Date(info.timestamp).getTime() : 0;
-          // Only accept end_turn events that occurred after the user pressed Enter
-          if (entered === 0 || eventMs >= entered) {
-            setSessionState(displayId, "waiting");
-          }
-          return;
-        }
-      } catch (_) { /* fall through */ }
+    const entered = lastEnterMs.get(displayId) || 0;
+    if (entered > 0 && Date.now() - entered < STARTUP_GRACE_MS) return;
 
-      // 3) Terminal prompt fallback (broader pattern for TUI prompts)
-      if (/[>❯]\s*$/.test(tail.trimEnd())) {
-        setSessionState(displayId, "waiting");
-        return;
-      }
-
-      // 4) Timeout fallback: if 30+ seconds since last Enter, assume idle
-      const entered = lastEnterMs.get(displayId) || 0;
-      if (entered > 0 && Date.now() - entered > 30000) {
-        setSessionState(displayId, "waiting");
-      }
-    } finally {
-      checking.delete(displayId);
+    const streak = (idleStreak.get(displayId) || 0) + 1;
+    idleStreak.set(displayId, streak);
+    if (streak >= IDLE_CONFIRM_TICKS) {
+      setSessionState(displayId, "waiting");
+      lastEnterMs.delete(displayId);
     }
   }
 
   function startPeriodicCheck(ptyId: string) {
     if (periodicTimers.has(ptyId)) return;
     if (!liveSessions.has(ptyId)) return;
-    setTimeout(() => checkSessionState(ptyId), 2000);
-    const timer = setInterval(() => checkSessionState(ptyId), 2000);
+    const timer = setInterval(() => checkSessionState(ptyId), CHECK_INTERVAL_MS);
     periodicTimers.set(ptyId, timer);
   }
 
@@ -110,6 +114,8 @@ export function useSessionMonitor(
 
   function recordEnter(displayId: string) {
     lastEnterMs.set(displayId, Date.now());
+    idleStreak.set(displayId, 0);
+    lastSnapshot.delete(displayId);
   }
 
   return {

@@ -1,5 +1,6 @@
 import { reactive, nextTick, watch } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { api } from "../api";
@@ -146,7 +147,6 @@ export function useTerminalManager(
       if (data === "\r") {
         const displayId = ptyToDisplay.get(ptyId) || ptyId;
         monitor.recordEnter(displayId);
-        monitor.setSessionState(displayId, "running");
       }
     });
 
@@ -332,6 +332,68 @@ export function useTerminalManager(
     }, 100);
   }
 
+  // ── Drag-and-drop file support ──
+
+  let unlistenDrop: UnlistenFn | null = null;
+  let dropOverlay: HTMLDivElement | null = null;
+
+  function isOverTerminalStack(pos: { x: number; y: number }): boolean {
+    if (!stackRef.value) return false;
+    const rect = stackRef.value.getBoundingClientRect();
+    return pos.x >= rect.left && pos.x <= rect.right &&
+           pos.y >= rect.top && pos.y <= rect.bottom;
+  }
+
+  function showDropOverlay() {
+    if (dropOverlay || !stackRef.value) return;
+    const el = document.createElement("div");
+    el.className = "terminal-drop-overlay";
+    el.innerHTML = `<div class="terminal-drop-overlay__inner">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      <span>拖放文件到终端</span>
+    </div>`;
+    stackRef.value.appendChild(el);
+    dropOverlay = el;
+  }
+
+  function hideDropOverlay() {
+    if (!dropOverlay) return;
+    dropOverlay.remove();
+    dropOverlay = null;
+  }
+
+  function handleFileDrop(paths: string[]) {
+    if (!currentSid) return;
+    const ptyId = resolvePtyId(currentSid);
+    if (!liveSessions.has(ptyId)) return;
+    const text = paths.map((p) => `@${p}`).join(" ") + " ";
+    api.ptyWrite(ptyId, text).catch(() => {});
+  }
+
+  async function initDragDrop() {
+    unlistenDrop = await getCurrentWebviewWindow().onDragDropEvent((event) => {
+      const { type } = event.payload;
+      if (type === "over") {
+        if (isOverTerminalStack(event.payload.position)) {
+          showDropOverlay();
+        } else {
+          hideDropOverlay();
+        }
+      } else if (type === "drop") {
+        hideDropOverlay();
+        if (isOverTerminalStack(event.payload.position) && currentSid) {
+          handleFileDrop(event.payload.paths);
+        }
+      } else {
+        hideDropOverlay();
+      }
+    });
+  }
+
   /** Listen for PTY process exit (e.g. Ctrl+D twice) → same code path as ⏹ button */
   async function initExitListener() {
     unlistenExit = await listen<string>("pty-exit", (event) => {
@@ -351,6 +413,8 @@ export function useTerminalManager(
       pollTimer = null;
     }
     unlistenExit?.();
+    unlistenDrop?.();
+    hideDropOverlay();
     monitor.stopAll();
     for (const [ptyId] of liveSessions) {
       api.ptyKill(ptyId).catch(() => {});
@@ -372,6 +436,7 @@ export function useTerminalManager(
     destroyLiveSession,
     initPtyListener,
     initExitListener,
+    initDragDrop,
     cleanup,
   };
 }

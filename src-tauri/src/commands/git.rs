@@ -678,7 +678,7 @@ pub async fn git_status(
         return Ok(GitStatus { entries: vec![] });
     }
 
-    let output = match git_run_async(vec!["status".into(), "--porcelain".into()], root).await {
+    let output = match git_run_async(vec!["status".into(), "--porcelain".into(), "-u".into()], root).await {
         Ok(o) => o,
         Err(e) => {
             error!("git_status failed: {}", e);

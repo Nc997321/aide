@@ -21,6 +21,7 @@ const {
   commitDetail,
   detailLoading,
   loadAll,
+  loadStatus,
   toggleCommit,
   switchBranch,
   createBranch,
@@ -142,6 +143,22 @@ async function openDiffInViewer(relPath: string, staged?: boolean, commitHash?: 
     fileViewer.open(relPath, { content, language: "diff" });
   } catch (e) {
     fileViewer.open(relPath, { content: `Failed to load diff: ${e}`, language: "diff" });
+  }
+}
+
+async function onDeleteUntracked(path: string) {
+  const ok = await confirmDialog(
+    "删除未跟踪文件",
+    `确定要删除 ${path} 吗？此操作不可撤回。`,
+    "删除",
+    true,
+  );
+  if (!ok) return;
+  try {
+    await invoke("delete_file", { path: `${projectRoot.value}/${path}` });
+    await loadStatus();
+  } catch (e) {
+    console.error("[GitPanel] delete untracked:", e);
   }
 }
 
@@ -376,11 +393,12 @@ defineExpose({ reload: loadAll });
       <div v-show="changesExpanded" class="section-body">
         <div v-if="unstagedFiles.length === 0 && stagedFiles.length === 0" class="section-empty">Working tree clean</div>
         <div v-else-if="unstagedFiles.length === 0" class="section-empty">All changes staged</div>
-        <div v-for="entry in unstagedFiles" :key="entry.path" class="git-file-row unstaged-row" @click="onFileClick(entry.path, false)">
+        <div v-for="entry in unstagedFiles" :key="entry.path" class="git-file-row unstaged-row" :class="{ 'untracked-row': entry.status === '?' }" @click="onFileClick(entry.path, false)">
           <button class="git-file-stage" title="Stage" @click.stop="doStageFile(entry.path)">+</button>
-          <span class="git-file-status unstaged-status" :class="'status-' + (entry.status === '?' ? 'A' : entry.status)">{{ entry.status === '?' ? '?' : entry.status }}</span>
+          <span class="git-file-status unstaged-status" :class="'status-' + (entry.status === '?' ? 'U' : entry.status)">{{ entry.status === '?' ? 'U' : entry.status }}</span>
           <span class="git-file-path unstaged-path" :title="entry.path">{{ entry.path }}</span>
-          <button class="git-file-revert" title="Revert" @click.stop="doRevertFile(entry.path)">↶</button>
+          <button v-if="entry.status === '?'" class="git-file-delete" title="Delete" @click.stop="onDeleteUntracked(entry.path)">✕</button>
+          <button v-else class="git-file-revert" title="Revert" @click.stop="doRevertFile(entry.path)">↶</button>
         </div>
       </div>
     </div>
@@ -676,6 +694,7 @@ defineExpose({ reload: loadAll });
 .status-M { background: color-mix(in srgb, var(--aide-warning) 15%, transparent); color: var(--aide-warning); }
 .status-A { background: color-mix(in srgb, var(--aide-success) 15%, transparent); color: var(--aide-success); }
 .status-D { background: color-mix(in srgb, var(--aide-danger) 15%, transparent); color: var(--aide-danger); }
+.status-U { background: color-mix(in srgb, var(--aide-info) 15%, transparent); color: var(--aide-info); }
 
 .git-file-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--aide-text-secondary); }
 .git-file-stats { flex-shrink: 0; font-size: 11px; font-family: "Cascadia Code","Fira Code",Consolas,monospace; }
@@ -689,6 +708,9 @@ defineExpose({ reload: loadAll });
 .git-file-revert { flex-shrink: 0; background: none; border: none; color: var(--aide-text-muted); cursor: pointer; font-size: 12px; padding: 1px 4px; border-radius: 2px; opacity: 0; transition: opacity 0.1s, color 0.1s, background 0.1s; font-family: inherit; }
 .git-file-row:hover .git-file-revert { opacity: 1; }
 .git-file-revert:hover { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 12%, transparent); }
+.git-file-delete { flex-shrink: 0; background: none; border: none; color: var(--aide-text-muted); cursor: pointer; font-size: 11px; padding: 1px 4px; border-radius: 2px; opacity: 0; transition: opacity 0.1s, color 0.1s, background 0.1s; font-family: inherit; }
+.git-file-row:hover .git-file-delete { opacity: 1; }
+.git-file-delete:hover { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 12%, transparent); }
 
 .commit-item { border-bottom: 1px solid var(--aide-surface-default); }
 .commit-item:last-child { border-bottom: none; }

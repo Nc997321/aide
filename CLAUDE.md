@@ -188,19 +188,22 @@ aide/
 | 状态 | 侧栏显示 | 触发条件 |
 |------|---------|----------|
 | `stopped` | 无标识 | 默认（PTY 不存在）或进程退出/被停止时由 `destroyLiveSession` 显式设置 |
-| `running` | 绿色光带从右到左扫过 | 用户按 Enter 发消息 |
-| `waiting` | 右侧绿色边框 | `.jsonl` 最后事件为 `assistant` 且 `stop_reason === "end_turn"`（Claude 真正完成，排除中间 tool_use） |
+| `running` | 绿色光带从右到左扫过 | 用户按 Enter 发消息 / 终端出现 `esc to interrupt` |
+| `waiting` | 右侧绿色边框 | 终端不再显示 `esc to interrupt`（Claude 真正完成） |
 | `attention` | 琥珀色光带扫过 | 终端出现权限审批提示 `[y/n]` |
 
-**判定逻辑**（`useSessionMonitor.ts`）：
-- 进入实时模式 → 默认 `waiting`
-- 用户按 Enter → 立即 `running`
-- 每 2 秒周期检查，四层检测依次回退：
-  1. 权限关键词 → `attention`
-  2. JSONL 事件：`user` 事件跳过（Claude 在处理中）；`assistant` + `end_turn` 且时间戳晚于上次 Enter → `waiting`
-  3. 终端尾行匹配 `[>❯]` 提示符 → `waiting`
-  4. 距上次 Enter 超过 30 秒 → `waiting`（兜底超时）
+**核心信号：`esc to interrupt`**。Claude Code 的 TUI **只在真正处理一个轮次时**（思考 / 流式输出 / 调用工具）在底部显示 `esc to interrupt`，轮次结束即消失。**输入框 `>` 是常驻的**，无法用来判断完成——这是之前 Bug 的根因（一按 Enter 就误判 waiting、通知过早出现）。
+
+**判定逻辑**（`useSessionMonitor.ts`，每 800ms 同步轮询终端尾部 30 行）：
+1. 权限关键词 → `attention`
+2. 命中 `esc to interrupt` → `running`，并标记 `sawWorking`（本轮确实开工）
+3. 未命中 `esc to interrupt`（Claude 空闲）：
+   - 若本轮 `sawWorking` → 连续 `IDLE_CONFIRM_TICKS`(2) 次空闲才转 `waiting`（防止轮次阶段间的瞬时空隙误判）
+   - 若从未 `sawWorking` → 距上次 Enter 超过 `STARTUP_GRACE_MS`(2500ms) 才转 `waiting`（兼顾慢启动与空 Enter）
+- 用户按 Enter → 立即 `running`，`recordEnter` 重置 `sawWorking`/`idleStreak`
 - 进程退出/被停止 → `stopped`（`destroyLiveSession` 显式设置，使 `useConversationChanges` 能捕获最后变更）
+
+通知由状态转换驱动（`useNotification` watch `running/attention → waiting`），状态准则通知准。空 Enter 不会误发通知：用户在终端按 Enter 时窗口必为聚焦态，`isFocused` 守卫拦截。
 
 ### PTY 管理（Rust 侧）
 
@@ -313,14 +316,14 @@ n.summary(&title).body(&body).show();
 
 **触发链**：
 ```
-useSessionMonitor.checkSessionState() 检测到 end_turn
+useSessionMonitor.checkSessionState() 检测到 esc to interrupt 消失（Claude 完成）
   → setSessionState(id, "waiting")
     → useNotification watch 触发
       → 检查 loaded && notificationsEnabled && !isFocused
         → api.notifySend(项目名, "会话名 已回复")
 ```
 
-**防重复**：`useSessionMonitor.checkSessionState` 是 async 函数，`await api.sessionLastEvent()` 会让出。`checking` Set 作为互斥锁——同一会话同一时刻只有一个 check 在执行，防止两个轮询 tick 同时通过 `cur !== "waiting"` 检查后都设 "waiting"。`finally` 释放锁。
+`checkSessionState` 现为同步函数（纯读 xterm 缓冲区，不再 `await` JSONL），单线程下无并发竞态，故无需互斥锁。`session_last_event` 命令仍保留（API 层定义），但状态判定已不依赖它。
 
 **窗口焦点**：`useWindowFocus` 通过 `getCurrentWindow().onFocusChanged` 跟踪，初始化时主动调 `isFocused()` 补获当前状态。
 

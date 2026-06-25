@@ -28,7 +28,8 @@ export function useGitWatcher() {
 
   watch(isFocused, async (focused, wasFocused) => {
     if (focused && wasFocused === false) {
-      await checkFingerprint();
+      // Always refresh status on focus — working tree changes don't update .git metadata
+      await Promise.all([checkFingerprint(), loadStatus()]);
     }
   });
 

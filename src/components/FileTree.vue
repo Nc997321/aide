@@ -25,7 +25,19 @@ async function toggleDir(path: string) {
   } else {
     expandedDirs.value.add(path);
     await loadChildren(path);
+    await autoExpandSingleChild(path);
     await loadExpandedDescendants(path);
+  }
+}
+
+async function autoExpandSingleChild(dirPath: string) {
+  const node = findNode(treeData.value, dirPath);
+  if (!node?.children) return;
+  if (node.children.length === 1 && node.children[0].is_dir) {
+    const child = node.children[0];
+    expandedDirs.value.add(child.path);
+    await loadChildren(child.path);
+    await autoExpandSingleChild(child.path);
   }
 }
 
@@ -111,6 +123,7 @@ async function loadRoot() {
     const entries = await api.listDirectory(root, showHidden.value);
     treeData.value = entries;
     expandedDirs.value = new Set([root]);
+    await autoExpandSingleChild(root);
   } catch (e) {
     errorMsg.value = `加载文件树失败: ${e}`;
     treeData.value = [];
