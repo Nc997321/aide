@@ -1,4 +1,5 @@
 import { watch, reactive } from "vue";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useSessionState, type SessionStatus } from "./useSessionState";
 import { useWindowFocus } from "./useWindowFocus";
 import { useSettings } from "./useSettings";
@@ -13,6 +14,26 @@ export function clearPending(ids?: string[]) {
   } else {
     pendingSessions.clear();
   }
+}
+
+let progressClearTimer: ReturnType<typeof setTimeout> | null = null;
+
+function setTaskbarProgress(status: string, progress?: number) {
+  if (progressClearTimer) {
+    clearTimeout(progressClearTimer);
+    progressClearTimer = null;
+  }
+  try {
+    const state: Record<string, unknown> = { status };
+    if (progress !== undefined) state.progress = progress;
+    getCurrentWindow().setProgressBar(state as never);
+  } catch (_) {}
+}
+
+function flashTaskbar() {
+  try {
+    getCurrentWindow().requestUserAttention(2);
+  } catch (_) {}
 }
 
 export function useNotification() {
@@ -54,12 +75,12 @@ export function useNotification() {
       pendingSessions.add(id);
       try {
         api.notifySend(title, `${body} 需要确认`, id);
-      } catch (_) { /* notification not available */ }
+      } catch (_) {}
     } else {
       pendingSessions.add(id);
       try {
         api.notifySend(title, `${body} 已回复`, id);
-      } catch (_) { /* notification not available */ }
+      } catch (_) {}
     }
   }
 
@@ -80,10 +101,26 @@ export function useNotification() {
         prevStates.set(id, status as SessionStatus);
       }
 
-      // Step 3: guards
+      // Step 3: taskbar progress (always, regardless of focus/settings)
+      for (const { id, prev } of transitions) {
+        const current = newStates[id];
+        if (current === "running") {
+          setTaskbarProgress("indeterminate");
+        } else if (current === "attention") {
+          setTaskbarProgress("paused");
+          flashTaskbar();
+        } else if (current === "waiting" && (prev === "running" || prev === "attention")) {
+          setTaskbarProgress("normal", 100);
+          flashTaskbar();
+          progressClearTimer = setTimeout(() => setTaskbarProgress("none"), 3000);
+        } else if (current === "stopped") {
+          setTaskbarProgress("none");
+        }
+      }
+
+      // Step 4: system notification (only when unfocused + enabled)
       if (!loaded.value || !settings.notificationsEnabled || isFocused.value) return;
 
-      // Step 4: fire for running→attention (needs confirmation) and →waiting (replied)
       for (const { id, prev } of transitions) {
         const current = newStates[id];
         if (current === "attention" && prev === "running") {

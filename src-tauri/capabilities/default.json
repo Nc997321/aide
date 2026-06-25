@@ -13,6 +13,8 @@
     "core:window:allow-close",
     "core:window:allow-is-maximized",
     "core:window:allow-start-dragging",
-    "core:window:allow-set-shadow"
+    "core:window:allow-set-shadow",
+    "core:window:allow-request-user-attention",
+    "core:window:allow-set-progress-bar"
   ]
 }
