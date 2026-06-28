@@ -276,9 +276,10 @@ export function useTerminalManager(
             ptyToDisplay.set(placeholderId, real.id);
             liveDisplayIds.delete(placeholderId);
             liveDisplayIds.add(real.id);
-            // Remove stale placeholder state so activeSessionList doesn't count
-            // both new_xxx and the real UUID as separate active sessions.
-            monitor.removeSessionState(placeholderId);
+            // Atomically migrate session status + internal tracking state from
+            // the placeholder key to the real UUID, so the title-bar count
+            // stays correct and Enter/idle tracking continues uninterrupted.
+            monitor.migrateState(placeholderId, real.id);
             // IMPORTANT: do NOT call pty_rename_session on the Rust side.
             // The onData handler and ResizeObserver in startClaude() capture
             // the placeholder PTY key in their closures. Renaming on the Rust

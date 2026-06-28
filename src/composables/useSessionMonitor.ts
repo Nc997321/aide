@@ -118,9 +118,19 @@ export function useSessionMonitor(
     lastSnapshot.delete(displayId);
   }
 
+  function migrateState(oldId: string, newId: string) {
+    const currentStatus = sessionState[oldId] ?? "waiting";
+    setSessionState(newId, currentStatus);
+    removeSessionState(oldId);
+    if (lastEnterMs.has(oldId)) { lastEnterMs.set(newId, lastEnterMs.get(oldId)!); lastEnterMs.delete(oldId); }
+    if (lastSnapshot.has(oldId)) { lastSnapshot.set(newId, lastSnapshot.get(oldId)!); lastSnapshot.delete(oldId); }
+    if (idleStreak.has(oldId)) { idleStreak.set(newId, idleStreak.get(oldId)!); idleStreak.delete(oldId); }
+  }
+
   return {
     setSessionState,
     removeSessionState,
+    migrateState,
     startPeriodicCheck,
     stopPeriodicCheck,
     stopAll,
