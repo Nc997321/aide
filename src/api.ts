@@ -57,6 +57,9 @@ export const api = {
   deleteFile(path: string): Promise<void> {
     return invoke("delete_file", { path });
   },
+  fileExists(path: string): Promise<boolean> {
+    return invoke("file_exists", { path });
+  },
   createFile(parentPath: string, name: string): Promise<void> {
     return invoke("create_file", { parentPath, name });
   },
