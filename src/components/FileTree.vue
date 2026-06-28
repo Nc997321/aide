@@ -212,6 +212,7 @@ defineExpose({ loadRoot });
           :selected-path="selectedPath"
           :project-root="projectInfo.root"
           :on-refresh-dir="(p: string) => loadChildren(p)"
+          :session-id="sessionId"
           @toggle="toggleDir"
           @open="openFile"
         />

@@ -18,6 +18,7 @@ const props = defineProps<{
   selectedPath: string;
   projectRoot: string;
   onRefreshDir: (path: string) => void;
+  sessionId?: string;
 }>();
 
 const emit = defineEmits<{
@@ -94,7 +95,7 @@ function onContextMenu(e: MouseEvent) {
         () => refresh(parentPath),
       )
     : fileMenuItems(props.node.path, props.projectRoot, () =>
-        refresh(parentPath),
+        refresh(parentPath), props.sessionId,
       );
   show(e.clientX, e.clientY, items);
 }
@@ -179,6 +180,7 @@ const isExpanded = () => props.expandedDirs.has(props.node.path);
         :selected-path="selectedPath"
         :project-root="projectRoot"
         :on-refresh-dir="onRefreshDir"
+        :session-id="sessionId"
         @toggle="(p: string) => emit('toggle', p)"
         @open="(p: string) => emit('open', p)"
       />
