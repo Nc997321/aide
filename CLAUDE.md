@@ -2,6 +2,8 @@
 
 非官方桌面应用，用 Tauri v2 + Vue 3 为 Claude Code CLI 提供带会话管理和文件树的终端桌面壳。
 
+详细架构见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
 ## 技术栈
 
 | 层 | 技术 |
@@ -17,7 +19,7 @@
 
 ## ⚠️ Windows 必读坑点：`CREATE_NO_WINDOW`
 
-**所有 `Command::new("git")`（或任何 CLI 工具）必须加 `CREATE_NO_WINDOW (0x08000000)` 标志**，否则 Windows 会为每个子进程弹出一个控制台窗口（一闪而过），在 release build 中表现为大量错误弹窗。
+**所有 `Command::new("git")`（或任何 CLI 工具）必须加 `CREATE_NO_WINDOW (0x08000000)` 标志**，否则 Windows 会为每个子进程弹出一个控制台窗口，在 release build 中表现为大量错误弹窗。
 
 ```rust
 #[cfg(windows)]
@@ -35,415 +37,63 @@ cmd.args(…);
 
 ```
 aide/
-├── dev.ps1                     # PowerShell 一键启动
-├── dev.sh                      # Git Bash 一键启动
+├── dev.ps1 / dev.sh            # 一键启动（PowerShell / Git Bash）
 ├── src/
-│   ├── main.ts                 # Vue 入口
-│   ├── App.vue                 # 三栏布局 + 自定义标题栏 + 右面板 Tab 栏(📁文件/⎇Git) + 可拖拽分隔 + Ctrl+P/N 快捷键 + 桥接会话
+│   ├── App.vue                 # 三栏布局 + 标题栏 + 右面板 Tab（文件/Git）+ 工作区桥接
 │   ├── components/
-│   │   ├── SidebarLeft.vue     # 左侧：会话列表 + 自定义功能区
-│   │   ├── TerminalPanel.vue   # 中间：全屏 xterm.js 终端（主交互区）
-│   │   ├── FileTree.vue        # 右侧上部：路径栏 + 文件树（懒加载递归）
-│   │   ├── ChangeLogPanel.vue  # 右侧下部：会话变更面板（可折叠 + 轮次分组 + 撤回）
-│   │   ├── GitPanel.vue        # 右侧 Git 面板（分支切换 + 工作区变更 + 提交历史 + diff 查看）
-│   │   ├── TreeNodeItem.vue    # 文件树递归节点（独立 SFC，构建时编译）
-│   │   ├── ContextMenu.vue     # 全局右键菜单组件（Teleport to body）
-│   │   ├── ModalDialog.vue     # 通用弹窗（确认/输入）
-│   │   ├── SettingsPanel.vue    # 统一设置弹窗：左侧导航（通用/扩展/市场）+ 右侧内容 + 快捷键配置
-│   │   ├── FileViewer.vue      # 文件查看器弹窗（语法高亮 + Markdown 渲染 + 编辑模式）
-│   │   ├── titlebar/
-│   │   │   ├── TitleBar.vue     # 自定义标题栏容器（logo + 搜索框 + 窗口控件）
-│   │   │   ├── SearchBox.vue    # 搜索框：模糊搜索会话/文件 + 下拉结果面板（Teleport）
-│   │   │   └── WindowControls.vue # 窗口控件按钮（最小化/最大化/关闭，Tauri window API）
-│   │   ├── customizations/
-│   │   │   ├── CustomizationList.vue    # 扩展分类列表（三态：loading → empty → list）
-│   │   │   ├── CustomizationDetail.vue  # 扩展详情/编辑（<slot> 留给类型专属字段）
-│   │   │   └── CustomizationPanel.vue   # 旧扩展面板（SettingsPanel 已替代，保留未删）
-│   │   └── marketplace/
-│   │       ├── MarketplaceTab.vue       # 市场主页：搜索 + 错误横幅 + 插件列表
-│   │       └── MarketplacePluginCard.vue # 插件卡片：名称/描述/安装按钮（四态）
+│   │   ├── SidebarLeft.vue     # 会话列表 + 功能区
+│   │   ├── TerminalPanel.vue   # xterm.js 终端（直播多例 + 预览单例）
+│   │   ├── FileTree.vue        # 文件树（懒加载递归）
+│   │   ├── ChangeLogPanel.vue  # 会话变更面板（轮次分组 + 撤回）
+│   │   ├── GitPanel.vue        # Git 看板（分支/变更/提交历史/diff）
+│   │   ├── ContextMenu.vue     # 全局右键菜单（Teleport to body）
+│   │   ├── ModalDialog.vue     # 通用弹窗
+│   │   ├── SettingsPanel.vue   # 设置弹窗（通用/扩展/市场，680×520px）
+│   │   ├── FileViewer.vue      # 文件查看器（高亮 + Markdown + 编辑）
+│   │   ├── titlebar/           # TitleBar / SearchBox / WindowControls
+│   │   ├── customizations/     # CustomizationList / Detail / Panel
+│   │   └── marketplace/        # MarketplaceTab / PluginCard
 │   ├── composables/
-│   │   ├── useContextMenu.ts   # 右键菜单状态层（模块级 ref 单例）
-│   │   ├── useSessionState.ts  # 会话运行状态（模块级 reactive 单例）
-│   │   ├── useSessionMonitor.ts # 会话状态监测 + `checking` Set 防 async 竞态
-│   │   ├── useTerminalManager.ts # 终端实例生命周期（liveSessions + PTY I/O + 迁移 + 显隐切换）
-│   │   ├── useModal.ts         # 弹窗状态层
-│   │   ├── useFileViewer.ts    # 文件查看器状态层（模块级 ref 单例）
-│   │   ├── useConversationChanges.ts  # 会话变更追踪（按轮次分组 + 撤回）
-│   │   ├── useGit.ts          # Git 状态管理（模块级单例：branches/commits/status/diff）
-│   │   ├── useSettings.ts      # 设置状态层（模块级 reactive 单例 + load/update）
-│   │   ├── useWindowFocus.ts   # 窗口焦点跟踪（onFocusChanged）
-│   │   ├── useNotification.ts  # 桌面通知触发（watch sessionState 转换）
-│   │   ├── useCustomizations.ts # 扩展管理：模块级 reactive 单例 + CRUD + toggle
-│   │   ├── useMarketplace.ts   # 插件市场：模块级单例（plugins/installing/errorActions）
-│   │   ├── useSearchProviders.ts # 标题栏搜索源注册表（SearchProvider 插件化接口 + SessionProvider + FileProvider）
-│   │   └── useWindowControls.ts # 窗口操作封装（minimize/toggleMaximize/close/isMaximized）
+│   │   ├── useTerminalManager.ts  # 终端生命周期（liveSessions + PTY I/O + 迁移 + 显隐）
+│   │   ├── useSessionMonitor.ts   # 会话状态检测（esc to interrupt 信号）
+│   │   ├── useSessionState.ts     # 会话运行状态（模块级 reactive 单例）
+│   │   ├── useConversationChanges.ts # 变更追踪（轮次分组 + 撤回）
+│   │   ├── useGit.ts              # Git 状态（模块级单例）
+│   │   ├── useSettings.ts         # 设置（模块级 reactive 单例）
+│   │   ├── useFileViewer.ts       # 文件查看器状态层
+│   │   ├── useContextMenu.ts      # 右键菜单状态层
+│   │   ├── useModal.ts            # 弹窗状态层
+│   │   ├── useWindowFocus.ts      # 窗口焦点跟踪
+│   │   ├── useNotification.ts     # 桌面通知（watch 状态转换）
+│   │   ├── useCustomizations.ts   # 扩展 CRUD + toggle
+│   │   ├── useMarketplace.ts      # 插件市场
+│   │   ├── useSearchProviders.ts  # 标题栏搜索源注册表
+│   │   └── useWindowControls.ts   # 窗口操作封装
 │   ├── utils/
-│   │   ├── highlight.ts        # 共享 hljs 初始化 + extToLang + highlightCode()
-│   │   ├── markdown.ts         # 共享 marked 初始化 + escapeHtml()
-│   │   └── errors.ts           # Git 错误解析：Rust CODE → 用户消息 + 操作按钮
-│   │   └── shortcut.ts          # 快捷键解析/匹配/冲突检测（matchShortcut/formatShortcut/detectConflicts）
-│   ├── types.ts                # 集中类型定义（Session, FileEntry, DiffEntry, CommitEntry, BranchInfo 等）
-│   ├── api.ts                  # Tauri invoke 类型安全封装层（PTY/文件/会话/git/设置）
-│   ├── types/
-│   │   ├── index.ts            # Barrel re-export（customization + marketplace 类型）
-│   │   ├── customization.ts    # 自定义类型（Agent, Skill, Instruction, Hook, McpServer）
-│   │   └── marketplace.ts      # 市场类型（PluginEntry, InstalledPlugin）
-│   ├── api/
-│   │   ├── customization.ts    # 自定义 CRUD API（泛型 list/create/update/delete/toggle）
-│   │   ├── marketplace.ts      # 市场 API（fetch/install/uninstall/list-installed）
-│   │   └── git.ts              # Git API（log/show/branches/checkout/diff/status/commit）
-│   ├── menus/
-│   │   └── contextMenus.ts     # 右键菜单配置层（工厂函数，与组件解耦）
-│   └── styles/global.css       # 暗色主题 CSS 变量 + 滚动条 + 菜单动画
-├── src-tauri/
-│   ├── Cargo.toml              # tauri, portable-pty, serde, notify-rust
-│   ├── tauri.conf.json         # 窗口 1400x900，devUrl :1420，decorations: false（自定义标题栏）
-│   ├── capabilities/default.json
-│   └── src/
-│       ├── main.rs             # 入口 → lib::run()
-│       ├── lib.rs              # Tauri Builder：注册 state + commands
-│       ├── commands/
-│       │   ├── mod.rs          # 共享类型 + 辅助函数 + re-export
-│       │   ├── pty.rs          # PTY 相关 commands
-│       │   ├── filesystem.rs   # 文件系统 commands
-│       │   ├── git.rs          # Git 相关 commands
-│       │   ├── session.rs      # 会话持久化 commands
-│       │   ├── workspace.rs    # 工作区 commands
-│       │   ├── settings.rs     # 设置 commands + notify_send（绕过插件 dev 限制）
-│       │   ├── customizations.rs # 自定义 CRUD（25 个命令，5 种类型 × CRUD+toggle）
-│       │   └── marketplace.rs  # 插件市场（fetch/install/uninstall/list-installed + 代理检测）
-│       └── pty.rs              # 多会话 PTY 管理器（HashMap<sessionId, PtySession>）
-├── package.json
-├── vite.config.ts
+│   │   ├── highlight.ts        # hljs 初始化 + extToLang + highlightCode()
+│   │   ├── markdown.ts         # marked 初始化 + escapeHtml()
+│   │   ├── errors.ts           # Git 错误解析（Rust CODE → 用户消息）
+│   │   └── shortcut.ts         # 快捷键解析/匹配/冲突检测
+│   ├── api.ts                  # Tauri invoke 类型安全封装层
+│   ├── types.ts                # 集中类型定义
+│   ├── types/                  # customization + marketplace 类型
+│   ├── api/                    # customization / marketplace / git API
+│   └── menus/contextMenus.ts   # 右键菜单配置（工厂函数）
+├── src-tauri/src/
+│   ├── lib.rs                  # Tauri Builder：注册 state + commands
+│   ├── pty.rs                  # 多会话 PTY 管理器
+│   └── commands/
+│       ├── pty.rs / filesystem.rs / git.rs
+│       ├── session.rs / workspace.rs / settings.rs
+│       ├── customizations.rs   # 25 命令，5 种类型 × CRUD+toggle
+│       └── marketplace.rs      # fetch/install/uninstall/list-installed
 └── PLANS.md                    # 产品待办清单
 ```
 
-## 核心架构
-
-### 交互模型：全屏终端
-
-中心面板为 xterm.js 终端，通过 PTY 直接运行 Claude Code 交互模式（不带 `-p`）。**不再使用聊天气泡**——终端内 Claude 的 TUI 原样渲染，权限审批、工具使用均为原生体验。
-
-### 自定义标题栏（decorations: false）
-
-关闭原生 Windows 标题栏，自绘整个标题栏（38px 高）。布局：左侧 Aide logo + 中间搜索框 + 右侧窗口控件（─ □ ✕）。
-
-**搜索框**（`SearchBox.vue`）：
-- `Ctrl+P` 聚焦，支持会话 + 文件混合搜索
-- 搜索源通过 `SearchProvider` 接口插件化注册（`useSearchProviders`）
-- 内置 `SessionProvider`（模糊匹配会话名 + 最后一条消息）和 `FileProvider`（递归遍历工作区目录树，缓存 30s）
-- 结果下拉面板 Teleport to body，↑↓ Enter Esc 键盘导航
-- 选中文件 → 调 `useFileViewer().open()`
-
-**窗口控件**（`WindowControls.vue`）：
-- 封装 Tauri window API（`minimize`/`toggleMaximize`/`close`）
-- 最大化时图标自动切换（□ ↔ ❐）
-- 关闭按钮 hover 红色
-
-**快捷键可配置**（`SettingsPanel.vue` "快捷键"区域）：
-- 预设 `Ctrl+P` → 打开搜索，可在设置面板录制新快捷键
-- `src/utils/shortcut.ts` 提供 `matchShortcut`/`formatShortcut`/`detectConflicts`
-- 快捷键存于 `AppSettings.keybindings`，持久化到 `config.json`
-
-### 多终端架构（多例，非单例）
-
-**预览终端**（单例）：所有无 PTY 的会话共用同一个 xterm 实例，展示静态历史文本。`props.sessionId` 切换时清屏重新渲染。
-
-**直播终端**（多例）：每个启动 Claude 的会话各自持有独立的 xterm 实例 + DOM div。互不干扰，各自保留滚动缓冲区。
-
-```
-.live terminal A              .live terminal B
-  div.terminal-container        div.terminal-container
-    xterm.open()                  xterm.open()
-    onData → pty_write(A)        onData → pty_write(B)
-    ← poll_pty_output(A)         ← poll_pty_output(B)
-```
-
-两个终端 div 都放在 `.terminal-stack` wrapper 内，通过 `display: none` 切显隐。`position: absolute; inset: 0` 撑满 wrapper。
-
-### 数据流
-
-```
-用户键盘 → live terminal.onData → api.ptyWrite(ptyId, data)
-  → Rust PtyManager.write(ptyId) → PTY stdin → claude 进程
-    → claude stdout → PTY reader thread (I/O)
-      → Arc<Mutex<String>> output_buffer（共享缓冲区）
-        ← 前端 setInterval(100ms) → api.pollPtyOutput(ptyId) 拉取
-          → terminal.write(data)
-
-进程退出检测（独立 waiter 线程）：
-  Rust child.wait() 阻塞 → 进程退出 → HashMap 清理
-    → emit("pty-exit", {session_id})
-      → initExitListener → stopClaude() → destroyLiveSession()
-        → showSession() → 预览模式
-```
-
-**拉取模式（polling）而非推送模式**：PTY 输出通过共享缓冲区 + 前端轮询传递，不走 IPC 事件推送。前端每 100ms 主动拉取一次，自行控制数据消费速率，避免大量输出（Plan mode、/compact）淹没 WebView 事件循环导致 UI 卡死。唯一的 IPC 事件推送是 `pty-exit`（进程退出，低频且关键）。
-
-### 会话状态指示器
-
-侧栏每条会话有四种状态，通过 `useSessionState`（模块级 `reactive` 单例）在组件间共享：
-
-| 状态 | 侧栏显示 | 触发条件 |
-|------|---------|----------|
-| `stopped` | 无标识 | 默认（PTY 不存在）或进程退出/被停止时由 `destroyLiveSession` 显式设置 |
-| `running` | 绿色光带从右到左扫过 | 用户按 Enter 发消息 / 终端出现 `esc to interrupt` |
-| `waiting` | 右侧绿色边框 | 终端不再显示 `esc to interrupt`（Claude 真正完成） |
-| `attention` | 琥珀色光带扫过 | 终端出现权限审批提示 `[y/n]` |
-
-**核心信号：`esc to interrupt`**。Claude Code 的 TUI **只在真正处理一个轮次时**（思考 / 流式输出 / 调用工具）在底部显示 `esc to interrupt`，轮次结束即消失。**输入框 `>` 是常驻的**，无法用来判断完成——这是之前 Bug 的根因（一按 Enter 就误判 waiting、通知过早出现）。
-
-**判定逻辑**（`useSessionMonitor.ts`，每 800ms 同步轮询终端尾部 30 行）：
-1. 权限关键词 → `attention`
-2. 命中 `esc to interrupt` → `running`，并标记 `sawWorking`（本轮确实开工）
-3. 未命中 `esc to interrupt`（Claude 空闲）：
-   - 若本轮 `sawWorking` → 连续 `IDLE_CONFIRM_TICKS`(2) 次空闲才转 `waiting`（防止轮次阶段间的瞬时空隙误判）
-   - 若从未 `sawWorking` → 距上次 Enter 超过 `STARTUP_GRACE_MS`(2500ms) 才转 `waiting`（兼顾慢启动与空 Enter）
-- 用户按 Enter → 立即 `running`，`recordEnter` 重置 `sawWorking`/`idleStreak`
-- 进程退出/被停止 → `stopped`（`destroyLiveSession` 显式设置，使 `useConversationChanges` 能捕获最后变更）
-
-通知由状态转换驱动（`useNotification` watch `running/attention → waiting`），状态准则通知准。空 Enter 不会误发通知：用户在终端按 Enter 时窗口必为聚焦态，`isFocused` 守卫拦截。
-
-### PTY 管理（Rust 侧）
-
-PtyManager 维护 `HashMap<String, PtySession>`，每个会话独立持有 PTY。切换会话时不杀进程，只切换终端显隐。
-
-**双线程模型**：
-- **reader 线程**：纯 I/O，`read()` 循环 → 追加到 `Arc<Mutex<String>>` 共享缓冲区，EOF/error 时退出。前端通过 `poll_pty_output` 命令拉取并清空缓冲区
-- **waiter 线程**：`child.wait()` 阻塞等待进程退出 → 可靠检测 Ctrl+D 退出 → 清理 HashMap → `emit("pty-exit", ...)`。reader 线程的 EOF 检测不可靠（PTY 不保证在子进程退出时关闭管道），waiter 线程才是退出检测的权威来源
-
-### 前端状态
-
-| 变量 | 所属模块 | 说明 |
-|------|---------|------|
-| `liveSessions` | `useTerminalManager` | 直播终端表，key 是 PTY 侧 session ID |
-| `ptyToDisplay` | `useTerminalManager` | `new_xxx` → 真实 UUID 的迁移映射 |
-| `liveDisplayIds` | `useTerminalManager` | reactive Set，驱动关闭按钮显隐 |
-| `pollTimer` | `useTerminalManager` | PTY 输出轮询定时器（100ms 间隔） |
-| `periodicTimers` | `useSessionMonitor` | 每 2 秒轮询 `.jsonl` 状态 |
-| `checking` | `useSessionMonitor` | Set 互斥锁，防止 async 轮询竞态 |
-| `settings` | `useSettings` | 模块级 reactive 单例，字号/字体/通知开关 |
-| `isFocused` | `useWindowFocus` | 模块级 ref，窗口焦点状态 |
-| `props.sessionId` | TerminalPanel | 当前该显示哪个会话（唯一真相源） |
-
-**切换流程**：
-```
-watch(sessionId) → showSession(sid) + loadPreviewContent(sid)
-  ├─ liveSessions 有 PTY → 显示对应 div，fit()
-  └─ 没有 PTY → 显示 HTML 预览 div + 加载消息历史
-```
-
-**新建会话 ID 迁移**（不在 watch 里）：
-`startClaude()` 用 placeholder `new_xxx` 创建 PTY → 3 秒后 `scheduleMigration()` 开始扫描（最多重试 3 次，间隔 3 秒）→ 调 `listSessions()` 找到真实 UUID → 更新 `ptyToDisplay` 映射 → `onSessionUpdated` 刷新侧栏。重试机制用 `knownIds` Set 记录已知会话，后续重试只匹配新出现的会话，避免匹配到同一 placeholder 上一次运行遗留的旧会话。不依赖 `.jsonl`（对话才有），元数据文件启动即创建。
-
-**迁移后侧栏刷新**：`onSessionUpdated(realId)` 先设 `activeSessionId = realId`，再 `await nextTick()` 确保 Vue 将新值传递到 SidebarLeft 的 props，然后调 `migrateSession(oldId, newId)` 用 `splice` 原地替换占位符条目（无 `loading` 闪烁）。**不能直接调 `loadSessions()`**——Vue 的 props 传播是异步的，`loadSessions()` 同步读取 `props.activeSessionId` 时拿到的仍是旧值 `new_xxx`，导致占位符被捕获并重新添加到列表。
-
-**为什么不能调 `pty_rename_session`**：`startClaude()` 中 `terminal.onData` 和 `ResizeObserver` 的闭包捕获了 placeholder ID → 所有 `ptyWrite`/`ptyResize` 都用 `new_xxx` 发到 Rust。如果在 Rust 侧把 HashMap key 从 `new_xxx` 改成真实 UUID，前端闭包发出的旧 key 就找不到 PTY 了——输入和 resize 全部静默失败（TUI 无法操作）。
-
-**PTY 输出轮询**：前端 `setInterval(100ms)` 遍历 `liveSessions`，对每个活跃 PTY 调 `pollPtyOutput(ptyId)` 拉取缓冲区数据并写入 xterm.js。Rust HashMap key 始终是 placeholder ID（如 `new_xxx`），前端通过 `ptyToDisplay` 映射从真实 UUID 找到 PTY key。
-
-### 会话系统 — 适配 Claude Code 存储
-
-Rust 侧作为适配层读取 Claude Code 的真实存储：
-
-```
-~/.claude/
-├── sessions/<pid>.json          {pid, sessionId, cwd, name, startedAt, kind}
-└── projects/<encoded-cwd>/
-    └── <sessionId>.jsonl        每行 JSON event (type: user/assistant/system/...)
-```
-
-路径编码: `C:\path\to\project` → `C--path-to-project`（`:` 和 `\` → `-`）
-
-我们自己的元数据: `~/.claude-code-desktop/sessions/<sessionId>.json` — 只存 displayName，sessionId 直接使用 Claude Code 的 UUID。
-
-### 工作区系统
-
-`WorkspaceState` 存两个字段：
-- `key`：encoded 目录名（如 `C--document-owner-cypress-agent`），唯一标识，用于定位 `~/.claude/projects/<key>/` 下的会话
-- `path`：真实文件系统路径（如 `C:\document\owner\cypress-agent`），用于文件树、PTY cwd 等文件操作
-
-路径解析（`resolve_path_from_key`）：DFS 搜索文件系统，对每个 `-` 尝试分隔符或字面量的解读，找到磁盘上存在的路径。解决了编码有损（路径含 `-` 时无法区分）的问题。
-
-持久化：`set_workspace` 时 key 写到 `~/.claude-code-desktop/config.json`，启动时读回。
-
-### 设置系统
-
-`~/.claude-code-desktop/config.json` 存两个顶层字段：
-```json
-{ "workspace": "C-Users-...", "settings": { "font_size": 14, "keybindings": { "searchOpen": "Ctrl+P" }, ... } }
-```
-
-**Rust 侧**：`settings.rs` 提供 `load_config()` / `save_config()` 作为全文件 JSON 读写 helper。`get_settings` / `set_settings` 命令用默认值填充缺失字段。`AppSettings` 含 `font_size`, `font_family`, `notifications_enabled`, `proxy`, `shell_path`, `workbench_height`, `keybindings { search_open }`。
-
-**前端侧**：`useSettings` 模块级 reactive 单例。`SettingsPanel.vue`（680×520 弹窗）左侧导航（⚙通用/🧩扩展/🏪市场），右侧 `v-if`/`v-else-if`/`v-else` 切换内容。"通用"tab 拉取 settings 本地 ref → watch 即时同步 + `update()` 持久化。`useTerminalManager` watch `settings.fontSize`/`fontFamily` 即时应用到所有终端。
-
-### 自定义（扩展）系统
-
-五种类型，每种对应 Claude Code 的存储位置：
-
-| 类型 | 存储 | CRUD |
-|------|------|------|
-| 智能体 | `~/.claude/agents/<name>.md` | ✅ |
-| 技能 | `~/.claude/skills/<name>/SKILL.md` | ✅ |
-| 指令 | `~/.claude/CLAUDE.md` + 项目 `CLAUDE.md` | get/save（单例） |
-| 钩子 | `~/.claude/settings.json` → `hooks` | ✅ |
-| MCP 服务器 | `~/.claude/settings.json` → `mcpServers` | ✅ |
-
-**已知缺口**：toggle 全是 no-op，创建只有 `prompt()` 填名字，类型专属字段（model/tools/command/args）未实现。
-
-### 插件市场
-
-**市场源**：`anthropics/claude-plugins-community`（GitHub），清单路径 `.claude-plugin/marketplace.json`。Rust 侧 `git clone --depth 1` 拉取，支持三种 `source` 格式：`{ source: "url", url: "https://..." }`（外部仓库）、`{ source: "git-subdir", ... }`（仓库子目录，自动拼接 GitHub URL）、`"./relative"`（内置，显示"内置"不可安装）。
-
-**代理检测**：`detect_proxy()` → TCP 端口扫描 (7890/10809) → 环境变量 → git config → 应用设置 `proxy` 字段。`git_clone()` 自动应用检测到的代理。
-
-**安装**：`git clone --depth 1 <repo_url>` → `~/.claude/plugins/<name>/`，验证 `.claude-plugin/plugin.json` 存在。
-
-**错误处理**：Rust 返回 `CODE: details`（NETWORK_FAILURE/REPO_NOT_FOUND/TIMEOUT/UNKNOWN_ERROR）。前端 `parseGitError()` 映射为用户消息 + 操作按钮（重试/配置代理/切换市场源）。错误文案集中在 `src/utils/errors.ts` 的 `ERROR_MAP`。
-
-### 桌面通知
-
-**不依赖 `tauri-plugin-notification`**——该插件在桌面端只是 `notify-rust` 的薄封装，且 dev 模式下故意跳过 `app_id`（检查 exe 路径是否含 `target\debug` 或 `target\release`）。
-
-我们自己的 `notify_send` 命令直接用 `notify-rust`：
-```rust
-n.app_id("com.aide.app");  // 强制设，不论 dev/prod
-n.auto_icon();
-n.summary(&title).body(&body).show();
-```
-
-**触发链**：
-```
-useSessionMonitor.checkSessionState() 检测到 esc to interrupt 消失（Claude 完成）
-  → setSessionState(id, "waiting")
-    → useNotification watch 触发
-      → 检查 loaded && notificationsEnabled && !isFocused
-        → api.notifySend(项目名, "会话名 已回复")
-```
-
-`checkSessionState` 现为同步函数（纯读 xterm 缓冲区，不再 `await` JSONL），单线程下无并发竞态，故无需互斥锁。`session_last_event` 命令仍保留（API 层定义），但状态判定已不依赖它。
-
-**窗口焦点**：`useWindowFocus` 通过 `getCurrentWindow().onFocusChanged` 跟踪，初始化时主动调 `isFocused()` 补获当前状态。
-
-## Tauri Commands
-
-### 终端交互（PTY）
-
-| 命令 | 参数 | 说明 |
-|------|------|------|
-| `pty_spawn_claude` | `rows, cols, session_id` | 通过 PTY 启动 `claude` 交互模式（`--resume <id>`） |
-| `pty_write` | `session_id, data` | 键盘输入 → 指定会话的 PTY stdin |
-| `pty_resize` | `session_id, rows, cols` | 窗口大小变化 → 同步 PTY 行列 |
-| `pty_kill` | `session_id` | 关闭指定会话的 Claude 进程 |
-| `pty_has_session` | `session_id` | 检查指定会话是否有活 PTY |
-| `pty_rename_session` | `old_id, new_id` | `new_` → 真实 UUID 时迁移 HashMap key |
-| `poll_pty_output` | `session_id` | 拉取并清空会话的 PTY 输出缓冲区（前端 100ms 轮询） |
-
-### 项目 & 文件系统
-
-| 命令 | 参数 | 说明 |
-|------|------|------|
-| `get_project_info` | — | 返回 `{root, name, branch}`，自动检测项目根目录（`.git` > `package.json` > `Cargo.toml`） |
-| `list_directory` | `path` | 文件/目录列表，过滤 `.`开头、`node_modules`、`target`、`dist` |
-| `file_open` | `path` | 系统默认程序打开文件（Windows: `cmd /c start`） |
-| `read_file_content` | `path` | 读文件内容 |
-| `write_file_content` | `path, content` | 写入文件内容 |
-| `delete_file` | `path` | 删除文件或目录 |
-| `create_file` | `parent_path, name` | 新建空文件 |
-| `create_dir` | `parent_path, name` | 新建目录 |
-| `git_diff_files` | — | `git diff --numstat` + `git ls-files --others`，返回 `[{path, status, additions, deletions}]`，用于会话变更日志 |
-| `git_stage_all` | — | `git add -A`，Claude 回复前打快照 |
-| `git_revert_file` | `path` | `git checkout -- <path>`，撤回单个文件到快照状态 |
-| `git_log` | `limit?, branch?` | `git log --format="%H\|%s\|%an\|%ar"`，返回 `Vec<CommitEntry>` |
-| `git_show` | `hash` | `git log -1` 元数据 + `git show --numstat` 文件列表，返回 `CommitDetail { files: Vec<DiffEntry> }` |
-| `git_branches` | — | `git branch`，返回 `Vec<BranchInfo>`，current 排最前 |
-| `git_checkout` | `branch` | `git checkout <branch>`，切换分支 |
-| `git_diff_content` | `path, staged?, commit_hash?` | `git diff [--cached] [<hash>^!] -- <path>`，返回原始 diff 文本 |
-| `git_status` | — | `git status --porcelain`，解析 XY 为 `Vec<GitStatusEntry>` |
-| `git_commit` | `message` | `git commit -m <message>`，先检查 working tree 非空，返回新 commit hash |
-
-### 会话持久化
-
-| 命令 | 说明 |
-|------|------|
-| `list_sessions` | 扫描 `~/.claude/projects/<encoded>/*.jsonl` + sessions 元数据 + 我们元数据 |
-| `load_messages` | 解析 `.jsonl`，提取 user/assistant 文本（用于终端预览） |
-| `create_session` | placeholder `new_<timestamp>`，真实 session 由 Claude 创建 |
-| `delete_session` | 删 `.jsonl` + pid JSON + 我们元数据 |
-| `rename_session` | 更新我们元数据的 displayName |
-| `session_last_event` | 读 `.jsonl` 最后一行，返回 `LastEventInfo { event_type, stop_reason }`，用于判断 Claude 是否真正完成（end_turn vs tool_use） |
-| `list_workspaces` | 扫描 `~/.claude/projects/` 目录，返回 `[{key, name}]`，key 是 encoded 目录名，name 通过 DFS 文件系统搜索解析的真实路径 |
-| `set_workspace` | 设置当前工作区，`{key, path}` 分别存 key（用于查会话）和 path（用于文件操作） |
-| `get_settings` | 读 `config.json` 中 `settings` 字段，缺失用默认值 |
-| `set_settings` | 合并 partial settings 到 `config.json`，不覆盖 `workspace` |
-| `notify_send` | 直接用 `notify-rust` 发系统通知，强制 `app_id("com.aide.app")` |
-
-### 自定义（customizations.rs — 25 个命令）
-
-五种类型的 CRUD + toggle：
-`list_agents`, `get_agent`, `create_agent`, `update_agent`, `delete_agent`, `toggle_agent`（对 skill/hook/mcp_server 同样 pattern）。指令用 `get/save_global_instructions` + `get/save_project_instructions`（单例）。
-
-### 插件市场（marketplace.rs — 4 个命令）
-
-| 命令 | 参数 | 说明 |
-|------|------|------|
-| `fetch_marketplace` | `url` | 浅克隆市场仓库 → 解析 `.claude-plugin/marketplace.json` → 返回 `Vec<PluginEntry>` |
-| `install_plugin` | `repo_url, name` | `git clone --depth 1` 到 `~/.claude/plugins/<name>/`，验证清单 |
-| `uninstall_plugin` | `name` | `fs::remove_dir_all` 删除插件目录 |
-| `list_installed_plugins` | — | 扫描 `~/.claude/plugins/` 下含清单的目录 |
-
-## 关键组件行为
-
-### App.vue — 三栏拖拽布局 + 启动初始化
-- 左 200-450px、右 200-500px、中 min 400px，3px 分隔条
-- **右面板 Tab 栏**：`📁 文件` / `⎇ Git`（带未提交变更数角标），切换 FileTree+ChangeLog ↔ GitPanel
-- **右面板纵向拆分**（文件 Tab）：FileTree（`flex:1`）+ 拖拽条 + ChangeLogPanel（默认 220px）
-- **变更面板折叠沉底**：`@collapse-changed` → `height: auto` → 拖拽条隐藏，FileTree 撑满
-- **启动初始化**：`loadSettings()` → `loadStatus()`（Git 角标） → `initWindowFocus()` → `useNotification()`
-- **工作区切换联动**：`onSidebarWsChanged` / `onFileTreeWsChanged` → `gitPanelRef.value?.reload()`
-- 渲染 `SettingsPanel`（v-if，统一"设置"弹窗，替换了旧的 SettingsModal + CustomizationPanel）
-
-### SidebarLeft — 会话列表 + 设置入口
-- 底部单行按钮，齿轮 SVG + "设置"文字 → `emit("open-settings")`
-
-### SettingsPanel — 统一设置弹窗
-- 680×520px，左侧 120px 导航栏，三 tab：⚙通用 / 🧩扩展 / 🏪市场
-- "通用"：字号滑块 + 字体输入 + 通知开关 + 网络代理输入
-- "扩展"：5 个分类卡片 → 列表 → 详情（三级导航，复用 CustomizationList/CustomizationDetail）
-- "市场"：嵌入 MarketplaceTab
-- 关闭：Escape / 点击遮罩 / ✕ 按钮
-
-### TerminalPanel — 多终端 + 预览 + 加载
-- **非 scoped 样式**：`terminal-container`、`xterm`、`session-loader` 等动态 DOM 的样式放在非 scoped `<style>` 块
-- **加载动画 DOM** 由 `useTerminalManager.createLoadingOverlay()` 动态创建，样式在 TerminalPanel 的非 scoped CSS
-
-### ChangeLogPanel — 折叠通知父组件
-- `emit("collapse-changed", collapsed)` → App.vue 切换高度
-
-### GitPanel — Git 看板（右面板 Git Tab）
-- **三区段**：分支栏（⎇ 下拉切换） → Changes（工作区未提交文件 + Commit 输入框） → Commits（提交历史）
-- **提交历史**：点击展开/折叠 → `git_show` 获取文件列表 + 增删统计
-- **Diff 查看**：点击任意文件 → `git_diff_content` → 底部内嵌 diff 面板，`+` 绿 / `-` 红 / `@@` 蓝
-- **Stage All / Commit / Revert** 直接操作工作区
-- **defineExpose({ reload })**：供 App.vue 在工作区切换时调用，重新加载全量 Git 数据
-- 数据层 `useGit` 是模块级 singleton，状态跨组件共享（App.vue 用 `loadStatus()` 驱动 Tab 角标）
-
-### useTerminalManager — 终端生命周期 + 设置响应
-- `createLoadingOverlay()` / `dismissLoader()` — 加载动画 DOM 管理
-- `initPtyListener()` — 启动 100ms 轮询定时器，遍历 liveSessions 调 `pollPtyOutput()` → `terminal.write()`
-- `initExitListener()` — 监听 `pty-exit` → `stopClaude()` 回预览，与 ⏹ 按钮相同路径
-- `LOADER_DISMISS_DELAY = 5000` — 首次 PTY 输出后延迟 5s 再关 loader
-- `makeTerminal()` 从 `useSettings().settings` 读字号/字体，非硬编码
-- watch `settings.fontSize`/`fontFamily` → 遍历所有 liveSessions 即时更新 + `fitAddon.fit()`
-
-### useConversationChanges — 变更追踪
-- `waiting/stopped → running` → `git_stage_all` 快照
-- `running → waiting` → `git_diff_files` 捕获变更 → 生成轮次
-
-### FileViewer — 内置查看器
-- 代码：highlight.js + Catppuccin 配色
-- Markdown：marked 渲染
-- 编辑模式：Ctrl+S 保存、ESC 取消
-- 模块级 `useFileViewer` 单例 `open(path)` / `close()`
+## 关键约定
+
+- **非 scoped 样式**：`TerminalPanel.vue` 中动态 DOM（`terminal-container`、`xterm`、`session-loader`）的样式必须放非 scoped `<style>` 块，否则 Vite scoped hash 导致样式不生效。
+- **通知不依赖插件**：直接用 `notify-rust`（`notify_send` 命令），强制 `app_id("com.aide.app")`，绕过 tauri-plugin-notification dev 模式跳过 app_id 的 bug。
+- **状态检测信号**：依赖终端尾部 `esc to interrupt` 文本判断 Claude 是否工作中；`>` 提示符常驻，不能用于状态判断。
+- **PTY key 不能重命名**：`startClaude()` 闭包捕获了 placeholder ID（`new_xxx`），Rust 侧 HashMap key 必须始终保持 placeholder，通过 `ptyToDisplay` 映射到真实 UUID。
+- **session ID 迁移**：新建会话用 `new_<timestamp>` 占位，3 秒后 `scheduleMigration()` 扫描找到真实 UUID，`onSessionUpdated` 用 `splice` 原地替换侧栏条目（不能直接 `loadSessions()`，Vue props 异步传播会导致 placeholder 被重新添加）。
