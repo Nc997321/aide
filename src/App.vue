@@ -27,6 +27,7 @@ import { useGit } from "./composables/useGit";
 import { useSearchProviders } from "./composables/useSearchProviders";
 import { useProviders } from "./composables/useProviders";
 import { useGitWatcher } from "./composables/useGitWatcher";
+import { useRunProject } from "./composables/useRunProject";
 import { matchShortcut } from "./utils/shortcut";
 import { applyTheme, themes } from "./themes";
 
@@ -98,6 +99,7 @@ const projectName = ref("");
 const { settings, update: updateSettings } = useSettings();
 const workbenchHeight = ref(settings.workbenchHeight || Math.floor(window.innerHeight * 0.45));
 const wb = useWorkbenchTerminal();
+const { run: runProject } = useRunProject();
 
 // Persist workbench height changes to settings
 function onWorkbenchHeightChange(v: number) {
@@ -235,15 +237,8 @@ function openSettings() {
   settingsVisible.value = true;
 }
 
-async function onRunProject() {
-  const cmd = await api.detectRunCommand(workspacePath.value).catch(() => null);
-  if (cmd) {
-    await wb.runCommand(workspacePath.value, cmd);
-  } else {
-    // No script detected — just open a new terminal
-    await wb.show(workspacePath.value);
-    wb.createSession(workspacePath.value);
-  }
+function onRunProject() {
+  runProject(workspacePath.value);
 }
 
 function handleKeydown(e: KeyboardEvent) {

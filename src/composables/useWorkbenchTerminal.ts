@@ -248,17 +248,6 @@ export function useWorkbenchTerminal() {
     }, 200);
   }
 
-  async function runCommand(cwd: string, command: string) {
-    visible.value = true;
-    // Let the workbench panel animate into view before mounting the terminal DOM
-    await new Promise<void>(r => setTimeout(r, 80));
-    createSession(cwd, command);
-    setTimeout(() => {
-      const s = sessions.get(activeId.value);
-      if (s) { s.fitAddon.fit(); s.terminal.focus(); }
-    }, 220);
-  }
-
   function hide() {
     visible.value = false;
   }
@@ -312,7 +301,6 @@ export function useWorkbenchTerminal() {
     toggle,
     clear,
     changeCwd,
-    runCommand,
     restart,
     dispose,
   };
