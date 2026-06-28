@@ -86,6 +86,7 @@ pub fn run() {
             commands::filesystem::show_in_explorer,
             commands::filesystem::detect_run_command,
             commands::filesystem::grep_symbol,
+            commands::filesystem::file_exists,
             commands::session::list_sessions,
             commands::session::list_sessions_for_workspace,
             commands::session::create_session,

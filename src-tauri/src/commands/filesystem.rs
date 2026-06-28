@@ -99,7 +99,7 @@ const PROJECT_DETECTORS: &[ProjectDetector] = &[
     detect_make,
 ];
 
-fn file_exists(root: &Path, name: &str) -> bool {
+fn file_exists_in_dir(root: &Path, name: &str) -> bool {
     root.join(name).exists()
 }
 
@@ -108,13 +108,13 @@ fn read_file(root: &Path, name: &str) -> String {
 }
 
 fn detect_node(root: &Path) -> Option<String> {
-    if !file_exists(root, "package.json") { return None; }
+    if !file_exists_in_dir(root, "package.json") { return None; }
     let json: serde_json::Value = serde_json::from_str(&read_file(root, "package.json")).ok()?;
     let scripts = json.get("scripts")?;
     let has = |n: &str| scripts.get(n).is_some();
-    let pm = if file_exists(root, "pnpm-lock.yaml") { "pnpm" }
-        else if file_exists(root, "bun.lockb") || file_exists(root, "bun.lock") { "bun" }
-        else if file_exists(root, "yarn.lock") { "yarn" }
+    let pm = if file_exists_in_dir(root, "pnpm-lock.yaml") { "pnpm" }
+        else if file_exists_in_dir(root, "bun.lockb") || file_exists_in_dir(root, "bun.lock") { "bun" }
+        else if file_exists_in_dir(root, "yarn.lock") { "yarn" }
         else { "npm" };
     ["dev", "start", "serve", "preview"].iter()
         .find(|&&s| has(s))
@@ -122,15 +122,15 @@ fn detect_node(root: &Path) -> Option<String> {
 }
 
 fn detect_cargo(root: &Path) -> Option<String> {
-    file_exists(root, "Cargo.toml").then(|| "cargo run".to_string())
+    file_exists_in_dir(root, "Cargo.toml").then(|| "cargo run".to_string())
 }
 
 fn detect_go(root: &Path) -> Option<String> {
-    file_exists(root, "go.mod").then(|| "go run .".to_string())
+    file_exists_in_dir(root, "go.mod").then(|| "go run .".to_string())
 }
 
 fn detect_flutter_dart(root: &Path) -> Option<String> {
-    if !file_exists(root, "pubspec.yaml") { return None; }
+    if !file_exists_in_dir(root, "pubspec.yaml") { return None; }
     let content = read_file(root, "pubspec.yaml");
     // pubspec.yaml 里有 `flutter:` 依赖块 → Flutter 项目，否则纯 Dart
     if content.contains("flutter:") {
@@ -141,7 +141,7 @@ fn detect_flutter_dart(root: &Path) -> Option<String> {
 }
 
 fn detect_java_maven(root: &Path) -> Option<String> {
-    if !file_exists(root, "pom.xml") { return None; }
+    if !file_exists_in_dir(root, "pom.xml") { return None; }
     let content = read_file(root, "pom.xml");
     if content.contains("spring-boot") {
         Some("mvn spring-boot:run".to_string())
@@ -151,19 +151,19 @@ fn detect_java_maven(root: &Path) -> Option<String> {
 }
 
 fn detect_java_gradle(root: &Path) -> Option<String> {
-    if !file_exists(root, "build.gradle") && !file_exists(root, "build.gradle.kts") {
+    if !file_exists_in_dir(root, "build.gradle") && !file_exists_in_dir(root, "build.gradle.kts") {
         return None;
     }
     let content = read_file(root, "build.gradle") + &read_file(root, "build.gradle.kts");
     let task = if content.contains("spring-boot") { "bootRun" } else { "run" };
     #[cfg(windows)]
-    let cmd = if file_exists(root, "gradlew.bat") {
+    let cmd = if file_exists_in_dir(root, "gradlew.bat") {
         format!(".\\gradlew.bat {}", task)
     } else {
         format!("gradle {}", task)
     };
     #[cfg(not(windows))]
-    let cmd = if file_exists(root, "gradlew") {
+    let cmd = if file_exists_in_dir(root, "gradlew") {
         format!("./gradlew {}", task)
     } else {
         format!("gradle {}", task)
@@ -179,27 +179,27 @@ fn detect_dotnet(root: &Path) -> Option<String> {
 }
 
 fn detect_django(root: &Path) -> Option<String> {
-    file_exists(root, "manage.py").then(|| "python manage.py runserver".to_string())
+    file_exists_in_dir(root, "manage.py").then(|| "python manage.py runserver".to_string())
 }
 
 fn detect_python(root: &Path) -> Option<String> {
-    if file_exists(root, "main.py") { return Some("python main.py".to_string()); }
-    if file_exists(root, "app.py")  { return Some("python app.py".to_string()); }
+    if file_exists_in_dir(root, "main.py") { return Some("python main.py".to_string()); }
+    if file_exists_in_dir(root, "app.py")  { return Some("python app.py".to_string()); }
     None
 }
 
 fn detect_rails(root: &Path) -> Option<String> {
-    (file_exists(root, "Gemfile") && file_exists(root, "config/application.rb"))
+    (file_exists_in_dir(root, "Gemfile") && file_exists_in_dir(root, "config/application.rb"))
         .then(|| "rails server".to_string())
 }
 
 fn detect_laravel(root: &Path) -> Option<String> {
-    (file_exists(root, "composer.json") && file_exists(root, "artisan"))
+    (file_exists_in_dir(root, "composer.json") && file_exists_in_dir(root, "artisan"))
         .then(|| "php artisan serve".to_string())
 }
 
 fn detect_elixir(root: &Path) -> Option<String> {
-    if !file_exists(root, "mix.exs") { return None; }
+    if !file_exists_in_dir(root, "mix.exs") { return None; }
     let content = read_file(root, "mix.exs");
     if content.contains(":phoenix") || content.contains("Phoenix") {
         Some("mix phx.server".to_string())
@@ -209,7 +209,7 @@ fn detect_elixir(root: &Path) -> Option<String> {
 }
 
 fn detect_make(root: &Path) -> Option<String> {
-    (file_exists(root, "Makefile") || file_exists(root, "makefile"))
+    (file_exists_in_dir(root, "Makefile") || file_exists_in_dir(root, "makefile"))
         .then(|| "make".to_string())
 }
 
@@ -489,4 +489,9 @@ pub fn grep_symbol(word: String, cwd: String, source_ext: Option<String>) -> Res
     });
 
     Ok(results)
+}
+
+#[tauri::command]
+pub fn file_exists(path: String) -> bool {
+    std::path::Path::new(&path).exists()
 }
