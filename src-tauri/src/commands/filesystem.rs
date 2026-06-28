@@ -5,6 +5,7 @@ use tauri::State;
 
 use ignore::WalkBuilder;
 use regex::Regex;
+use serde_json;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -72,6 +73,58 @@ pub fn show_in_explorer(path: String) -> Result<(), String> {
             .map_err(|e| format!("Failed to open: {}", e))?;
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn detect_run_command(cwd: String) -> Result<Option<String>, String> {
+    let root = PathBuf::from(&cwd);
+
+    // package.json — check for common dev scripts
+    let pkg = root.join("package.json");
+    if pkg.exists() {
+        if let Ok(text) = fs::read_to_string(&pkg) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                let scripts = json.get("scripts");
+                let has = |name: &str| scripts.and_then(|s| s.get(name)).is_some();
+                let pm = if root.join("pnpm-lock.yaml").exists() { "pnpm" }
+                    else if root.join("bun.lockb").exists() || root.join("bun.lock").exists() { "bun" }
+                    else if root.join("yarn.lock").exists() { "yarn" }
+                    else { "npm" };
+                for script in &["dev", "start", "serve", "preview"] {
+                    if has(script) {
+                        return Ok(Some(format!("{} run {}", pm, script)));
+                    }
+                }
+            }
+        }
+    }
+
+    // Cargo.toml → cargo run
+    if root.join("Cargo.toml").exists() {
+        return Ok(Some("cargo run".to_string()));
+    }
+
+    // go.mod → go run .
+    if root.join("go.mod").exists() {
+        return Ok(Some("go run .".to_string()));
+    }
+
+    // Django manage.py
+    if root.join("manage.py").exists() {
+        return Ok(Some("python manage.py runserver".to_string()));
+    }
+
+    // Generic Python entry point
+    if root.join("main.py").exists() {
+        return Ok(Some("python main.py".to_string()));
+    }
+
+    // Makefile
+    if root.join("Makefile").exists() || root.join("makefile").exists() {
+        return Ok(Some("make".to_string()));
+    }
+
+    Ok(None)
 }
 
 #[tauri::command]

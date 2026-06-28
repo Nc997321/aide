@@ -19,6 +19,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   "open-palette": [];
   "select-session": [session: ActiveSessionInfo];
+  "run-project": [];
 }>();
 
 function onSelectSession(s: ActiveSessionInfo) {
@@ -77,6 +78,17 @@ const runningCount = computed(() =>
         </svg>
         {{ gitBranch }}
       </span>
+
+      <button
+        v-if="projectName"
+        class="titlebar-run-btn"
+        v-tooltip="'运行项目'"
+        @click.stop="$emit('run-project')"
+      >
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+          <polygon points="2,1 9,5 2,9"/>
+        </svg>
+      </button>
     </div>
 
     <!-- Center: search trigger -->
@@ -201,6 +213,25 @@ const runningCount = computed(() =>
 .titlebar-branch-icon {
   flex-shrink: 0;
   opacity: 0.7;
+}
+
+.titlebar-run-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--aide-radius-sm);
+  color: var(--aide-success);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.titlebar-run-btn:hover {
+  background: color-mix(in srgb, var(--aide-success) 12%, transparent);
+  border-color: color-mix(in srgb, var(--aide-success) 30%, transparent);
 }
 
 /* ── Center: search ── */

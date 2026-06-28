@@ -235,6 +235,17 @@ function openSettings() {
   settingsVisible.value = true;
 }
 
+async function onRunProject() {
+  const cmd = await api.detectRunCommand(workspacePath.value).catch(() => null);
+  if (cmd) {
+    await wb.runCommand(workspacePath.value, cmd);
+  } else {
+    // No script detected — just open a new terminal
+    await wb.show(workspacePath.value);
+    wb.createSession(workspacePath.value);
+  }
+}
+
 function handleKeydown(e: KeyboardEvent) {
   // ── App-level shortcuts (fire regardless of focus, including inside xterm.js) ──
 
@@ -342,6 +353,7 @@ onUnmounted(() => {
       :active-sessions="activeSessionList"
       @open-palette="paletteOpen = true"
       @select-session="(s) => sidebarRef?.selectSessionFromWorkspace(s.wsKey, s.id)"
+      @run-project="onRunProject"
     />
 
     <div class="app-layout" :class="{ 'is-dragging': leftResize.isDragging.value || rightResize.isDragging.value }">

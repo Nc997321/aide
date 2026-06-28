@@ -45,6 +45,9 @@ export const api = {
   showInExplorer(path: string): Promise<void> {
     return invoke("show_in_explorer", { path });
   },
+  detectRunCommand(cwd: string): Promise<string | null> {
+    return invoke("detect_run_command", { cwd });
+  },
   readFileContent(path: string): Promise<string> {
     return invoke("read_file_content", { path });
   },

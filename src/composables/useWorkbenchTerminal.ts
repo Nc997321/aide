@@ -121,7 +121,7 @@ export function useWorkbenchTerminal() {
     containerEl = container;
   }
 
-  function createSession(cwd: string): string {
+  function createSession(cwd: string, initialCommand?: string): string {
     if (!containerEl) return "";
     const id = `__wb_${nextIdx++}__`;
     const s = settingsRef!;
@@ -155,7 +155,7 @@ export function useWorkbenchTerminal() {
 
     const session: WbSession = {
       id,
-      label: `${nextIdx - 1}`,
+      label: initialCommand || `${nextIdx - 1}`,
       terminal,
       fitAddon,
       div,
@@ -166,7 +166,7 @@ export function useWorkbenchTerminal() {
     };
     sessions.set(id, session);
     switchTo(id);
-    spawnShell(id, cwd);
+    spawnShell(id, cwd, initialCommand);
     ensurePolling();
     ensureExitListener();
 
@@ -206,7 +206,7 @@ export function useWorkbenchTerminal() {
     }
   }
 
-  async function spawnShell(id: string, cwd: string) {
+  async function spawnShell(id: string, cwd: string, initialCommand?: string) {
     const s = sessions.get(id);
     if (!s || s.spawned) return;
     const stg = settingsRef!;
@@ -217,6 +217,11 @@ export function useWorkbenchTerminal() {
         : (navigator.platform.toLowerCase().includes("win") ? "PowerShell" : "bash");
       s.spawned = true;
       syncTabs();
+      if (initialCommand) {
+        // Give the shell a moment to print its prompt before we send input
+        await new Promise<void>(r => setTimeout(r, 400));
+        await api.ptyWrite(id, initialCommand + "\r");
+      }
     } catch (e) {
       s.terminal.writeln(`\r\nFailed to start shell: ${e}`);
       s.exited = true;
@@ -241,6 +246,17 @@ export function useWorkbenchTerminal() {
       const s = sessions.get(activeId.value);
       if (s) { s.fitAddon.fit(); s.terminal.focus(); }
     }, 200);
+  }
+
+  async function runCommand(cwd: string, command: string) {
+    visible.value = true;
+    // Let the workbench panel animate into view before mounting the terminal DOM
+    await new Promise<void>(r => setTimeout(r, 80));
+    createSession(cwd, command);
+    setTimeout(() => {
+      const s = sessions.get(activeId.value);
+      if (s) { s.fitAddon.fit(); s.terminal.focus(); }
+    }, 220);
   }
 
   function hide() {
@@ -296,6 +312,7 @@ export function useWorkbenchTerminal() {
     toggle,
     clear,
     changeCwd,
+    runCommand,
     restart,
     dispose,
   };
