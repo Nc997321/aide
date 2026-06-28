@@ -42,6 +42,9 @@ export const api = {
   fileOpen(path: string): Promise<void> {
     return invoke("file_open", { path });
   },
+  showInExplorer(path: string): Promise<void> {
+    return invoke("show_in_explorer", { path });
+  },
   readFileContent(path: string): Promise<string> {
     return invoke("read_file_content", { path });
   },

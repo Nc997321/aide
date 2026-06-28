@@ -21,6 +21,7 @@ export function fileMenuItems(
   return [
     { label: "查看/编辑", action: () => viewer.open(path) },
     { label: "其他方式打开", action: () => api.fileOpen(path) },
+    { label: "在文件资源管理器中打开", action: () => api.showInExplorer(path) },
     { label: "复制路径", action: () => navigator.clipboard.writeText(path) },
     {
       label: "复制相对路径",
@@ -57,6 +58,7 @@ export function directoryMenuItems(
   const dirName = path.split(/[/\\]/).pop() || path;
   return [
     { label: "展开/折叠", action: onToggle },
+    { label: "在文件资源管理器中打开", action: () => api.showInExplorer(path) },
     { label: "复制路径", action: () => navigator.clipboard.writeText(path) },
     sep(),
     {

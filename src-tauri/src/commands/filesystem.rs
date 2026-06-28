@@ -48,6 +48,33 @@ pub fn file_open(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn show_in_explorer(path: String) -> Result<(), String> {
+    let p = PathBuf::from(&path);
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = Command::new("explorer");
+        if p.is_dir() {
+            cmd.arg(&path);
+        } else {
+            cmd.arg(format!("/select,{}", path));
+        };
+        cmd.creation_flags(0x08000000);
+        cmd.spawn().map_err(|e| format!("Failed to open explorer: {}", e))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let target = if p.is_dir() { path.clone() } else {
+            p.parent().map(|pa| pa.to_string_lossy().into_owned()).unwrap_or(path)
+        };
+        Command::new("xdg-open")
+            .arg(&target)
+            .spawn()
+            .map_err(|e| format!("Failed to open: {}", e))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn list_directory(path: String, show_hidden: Option<bool>) -> Result<Vec<FileEntry>, String> {
     let dir = PathBuf::from(&path);
     if !dir.is_dir() {

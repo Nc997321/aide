@@ -103,7 +103,6 @@ export function useTerminalManager(
   }
 
   function showSession(sid: string) {
-    if (sid === currentSid) return;
     currentSid = sid;
 
     if (previewRef.value) previewRef.value.style.display = "none";
@@ -277,6 +276,9 @@ export function useTerminalManager(
             ptyToDisplay.set(placeholderId, real.id);
             liveDisplayIds.delete(placeholderId);
             liveDisplayIds.add(real.id);
+            // Remove stale placeholder state so activeSessionList doesn't count
+            // both new_xxx and the real UUID as separate active sessions.
+            monitor.removeSessionState(placeholderId);
             // IMPORTANT: do NOT call pty_rename_session on the Rust side.
             // The onData handler and ResizeObserver in startClaude() capture
             // the placeholder PTY key in their closures. Renaming on the Rust

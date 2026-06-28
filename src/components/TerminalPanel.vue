@@ -117,15 +117,9 @@ function onPreviewClick() {
 
 // ── Watch session changes ──
 
-watch(() => props.workspacePath, () => {
-  resetView();
-});
-
 watch(() => props.sessionId, async (newId) => {
-  if (newId !== currentSid()) {
-    showSession(newId);
-    if (newId) await loadPreviewContent(newId);
-  }
+  showSession(newId);
+  if (newId) await loadPreviewContent(newId);
   // Look up display name for the toolbar
   if (newId && !newId.startsWith("new_")) {
     try {
