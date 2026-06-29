@@ -15,7 +15,7 @@ export function useTerminalLinkProvider({ workspacePath, openFile }: LinkProvide
   function registerTo(terminal: Terminal) {
     terminal.registerLinkProvider({
       provideLinks(y, callback) {
-        const line = terminal.buffer.active.getLine(y);
+        const line = terminal.buffer.active.getLine(y - 1);
         if (!line) { callback(undefined); return; }
 
         const text = line.translateToString(true);
