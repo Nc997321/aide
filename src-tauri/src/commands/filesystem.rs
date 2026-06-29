@@ -311,6 +311,65 @@ pub fn create_dir(parent_path: String, name: String) -> Result<(), String> {
     fs::create_dir_all(&dir_path).map_err(|e| format!("Failed to create directory: {}", e))
 }
 
+fn copy_dir_recursive(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    fs::create_dir_all(dest).map_err(|e| format!("Failed to create dir: {}", e))?;
+    for entry in fs::read_dir(src).map_err(|e| format!("Failed to read dir: {}", e))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let src_child = entry.path();
+        let dest_child = dest.join(entry.file_name());
+        if src_child.is_dir() {
+            copy_dir_recursive(&src_child, &dest_child)?;
+        } else {
+            fs::copy(&src_child, &dest_child)
+                .map_err(|e| format!("Failed to copy {}: {}", src_child.display(), e))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn copy_file(src: String, dest: String) -> Result<(), String> {
+    let src_path = PathBuf::from(&src);
+    let dest_path = PathBuf::from(&dest);
+    if dest_path.exists() {
+        let name = dest_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        return Err(format!("EXISTS:{}", name));
+    }
+    if src_path.is_dir() {
+        copy_dir_recursive(&src_path, &dest_path)
+    } else {
+        fs::copy(&src_path, &dest_path)
+            .map(|_| ())
+            .map_err(|e| format!("Failed to copy: {}", e))
+    }
+}
+
+#[tauri::command]
+pub fn move_file(src: String, dest: String) -> Result<(), String> {
+    let src_path = PathBuf::from(&src);
+    let dest_path = PathBuf::from(&dest);
+    if dest_path.exists() {
+        let name = dest_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        return Err(format!("EXISTS:{}", name));
+    }
+    // 同盘快速路径
+    if fs::rename(&src_path, &dest_path).is_ok() {
+        return Ok(());
+    }
+    // 跨盘 fallback：复制后删除源
+    if src_path.is_dir() {
+        copy_dir_recursive(&src_path, &dest_path)?;
+        fs::remove_dir_all(&src_path)
+            .map_err(|e| format!("Failed to remove source dir: {}", e))?;
+    } else {
+        fs::copy(&src_path, &dest_path)
+            .map_err(|e| format!("Failed to copy: {}", e))?;
+        fs::remove_file(&src_path)
+            .map_err(|e| format!("Failed to remove source: {}", e))?;
+    }
+    Ok(())
+}
+
 // ── grep_symbol: project-wide symbol search for code navigation ──
 
 fn code_family(ext: &str) -> Option<&'static [&'static str]> {

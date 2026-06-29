@@ -69,6 +69,12 @@ export const api = {
   fileExists(path: string): Promise<boolean> {
     return invoke("file_exists", { path });
   },
+  copyFile(src: string, dest: string): Promise<void> {
+    return invoke("copy_file", { src, dest });
+  },
+  moveFile(src: string, dest: string): Promise<void> {
+    return invoke("move_file", { src, dest });
+  },
   createFile(parentPath: string, name: string): Promise<void> {
     return invoke("create_file", { parentPath, name });
   },
