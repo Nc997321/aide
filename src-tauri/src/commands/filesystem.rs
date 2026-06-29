@@ -76,9 +76,6 @@ pub fn show_in_explorer(path: String) -> Result<(), String> {
 
 // ── Project run-command detection ──────────────────────────────────────────
 
-// Re-export so that run_configs (updated in Task 3) can still resolve this path.
-pub(crate) use super::detectors::detect_command_for_path;
-
 #[tauri::command]
 pub fn detect_run_command(cwd: String) -> Result<Option<String>, String> {
     Ok(super::detectors::detect_command_for_path(Path::new(&cwd)))
