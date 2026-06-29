@@ -25,6 +25,7 @@ export function useRunConfigs() {
   async function load(wsKey: string, cwd: string) {
     currentWsKey.value = wsKey;
     const saved = await api.listRunConfigs(wsKey).catch(() => [] as RunConfig[]);
+    if (currentWsKey.value !== wsKey) return;  // stale: workspace switched mid-flight
     configs.value = saved;
 
     // Restore activeId if still valid; otherwise default to first config.
@@ -35,6 +36,7 @@ export function useRunConfigs() {
     // First time for this workspace: auto-detect and silently populate.
     if (configs.value.length === 0 && cwd) {
       const targets = await api.detectRunTargets(cwd).catch(() => [] as RunTarget[]);
+      if (currentWsKey.value !== wsKey) return;  // stale: workspace switched mid-flight
       if (targets.length > 0) {
         configs.value = targets.map(t => ({
           id: generateId(),
