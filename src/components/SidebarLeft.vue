@@ -145,17 +145,6 @@ function toggleProviderDropdown() {
 async function onProviderSelect(id: string) {
   providerDropdownOpen.value = false;
   if (id === activeProviderId.value) return;
-
-  const sid = props.activeSessionId;
-  if (sid) {
-    try {
-      const hasSession = await api.ptyHasSession(sid);
-      if (hasSession) {
-        emit("provider-switch", id);
-        return;
-      }
-    } catch { /* ignore */ }
-  }
   await setActiveProvider(id);
 }
 

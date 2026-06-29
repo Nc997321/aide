@@ -221,10 +221,6 @@ const { setActiveProvider, load: loadProviders } = useProviders();
 
 async function onProviderSwitch(providerId: string) {
   await setActiveProvider(providerId);
-  const sid = activeSessionId.value;
-  if (sid) {
-    terminalPanelRef.value?.restartSession(sid);
-  }
 }
 
 function openSettingsProviders() {
