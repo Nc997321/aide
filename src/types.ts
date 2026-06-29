@@ -136,3 +136,18 @@ export interface GrepMatch {
   content: string;
   match_type: string;
 }
+
+// ── Run Config types ──
+
+export interface RunConfig {
+  id: string;
+  name: string;
+  cwd: string;
+  command: string;
+}
+
+export interface RunTarget {
+  name: string;
+  cwd: string;
+  command: string;
+}

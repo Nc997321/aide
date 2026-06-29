@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem,
   ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
-  GrepMatch, ProviderConfig,
+  GrepMatch, ProviderConfig, RunConfig, RunTarget,
 } from "./types";
 
 export const api = {
@@ -47,6 +47,15 @@ export const api = {
   },
   detectRunCommand(cwd: string): Promise<string | null> {
     return invoke("detect_run_command", { cwd });
+  },
+  listRunConfigs(wsKey: string): Promise<RunConfig[]> {
+    return invoke("list_run_configs", { wsKey });
+  },
+  saveRunConfigs(wsKey: string, configs: RunConfig[]): Promise<void> {
+    return invoke("save_run_configs", { wsKey, configs });
+  },
+  detectRunTargets(cwd: string): Promise<RunTarget[]> {
+    return invoke("detect_run_targets", { cwd });
   },
   readFileContent(path: string): Promise<string> {
     return invoke("read_file_content", { path });
