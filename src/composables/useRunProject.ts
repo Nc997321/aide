@@ -1,28 +1,23 @@
-import { ref } from "vue";
-import { api } from "../api";
 import { useWorkbenchTerminal } from "./useWorkbenchTerminal";
-
-// Module-level singleton — state shared across all callers.
-const lastCommand = ref<string | null>(null);
+import { useRunConfigs } from "./useRunConfigs";
+import type { RunConfig } from "../types";
 
 export function useRunProject() {
   const wb = useWorkbenchTerminal();
 
-  async function run(cwd: string) {
-    const cmd = await api.detectRunCommand(cwd).catch(() => null);
-    lastCommand.value = cmd;
-
-    // Show workbench first so the slide-in begins before we mount terminal DOM.
+  async function runConfig(cfg: RunConfig) {
     wb.visible.value = true;
+    // Small delay so the workbench slide-in animation starts before terminal mounts.
     await new Promise<void>(r => setTimeout(r, 80));
-
-    // Create a new terminal session; if a command was detected, it will be
-    // written to the shell automatically after spawn.
-    wb.createSession(cwd, cmd ?? undefined);
+    wb.createSession(cfg.cwd, cfg.command);
   }
 
-  return {
-    run,
-    lastCommand,
-  };
+  async function run() {
+    const { activeConfig } = useRunConfigs();
+    const cfg = activeConfig.value;
+    if (!cfg) return;
+    await runConfig(cfg);
+  }
+
+  return { run, runConfig };
 }
