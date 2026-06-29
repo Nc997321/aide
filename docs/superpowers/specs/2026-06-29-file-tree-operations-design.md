@@ -9,11 +9,12 @@
 
 为文件树（FileTree + TreeNodeItem）添加以下能力：
 
-1. **复制**：右键文件/目录 → 复制，右键目标目录 → 粘贴（执行文件/目录复制）
-2. **剪切**：右键文件/目录 → 剪切，右键目标目录 → 粘贴（执行移动）
+1. **复制**：右键文件/目录 → 复制（或 Ctrl+C），右键目标目录 → 粘贴（或 Ctrl+V）
+2. **剪切**：右键文件/目录 → 剪切（或 Ctrl+X），右键目标目录 → 粘贴（或 Ctrl+V）
 3. **拖拽移动**：拖拽任意节点到目标文件夹 → 弹确认框 → 确认后移动
 4. **冲突处理**：目标已存在同名时弹窗询问覆盖或取消
 5. **视觉反馈**：拖拽时目标文件夹整行高亮 + 节点间显示插入线；被剪切节点半透明
+6. **快捷键**：Ctrl+C / Ctrl+X / Ctrl+V / Escape，仅在文件树获得焦点时生效
 
 ---
 
@@ -172,6 +173,34 @@ dragstart → dataTransfer.setData('text/plain', node.path)
 
 ---
 
+## 第五节：快捷键（`FileTree.vue`）
+
+快捷键仅在文件树容器获得焦点时有效，避免和终端/编辑器的 Ctrl+C/X/V 冲突。
+
+### 焦点管理
+
+`.tree-content` 加 `tabindex="0"`，允许接受键盘焦点。用户点击树中任意节点时，`.tree-content` 自动获得焦点（`@click` 不需要额外处理，点击子元素时父容器 `tabindex` 元素即为焦点）。
+
+### 键盘事件处理
+
+在 `FileTree.vue` 的 `.tree-content` 上监听 `@keydown.stop`（阻止冒泡到终端）：
+
+| 快捷键 | 条件 | 行为 |
+|--------|------|------|
+| `Ctrl+C` | `selectedPath` 非空 | `clipboard.copy(selectedPath)` |
+| `Ctrl+X` | `selectedPath` 非空且不是 `projectRoot` | `clipboard.cut(selectedPath)` |
+| `Ctrl+V` | `clipboard` 非空 | 粘贴到当前选中节点（目录 = 自身，文件 = 父目录） |
+| `Escape` | `clipboard` 非空 | `clipboard.clear()` |
+
+**Ctrl+V 目标目录逻辑**：
+- 若 `selectedPath` 为目录 → 粘贴到该目录
+- 若 `selectedPath` 为文件 → 粘贴到其父目录
+- 若 `selectedPath` 为空 → 粘贴到项目根目录
+
+粘贴后刷新逻辑与右键菜单粘贴相同（复用 `executePaste`）。
+
+---
+
 ## 变更文件清单
 
 | 文件 | 变更类型 |
@@ -182,6 +211,7 @@ dragstart → dataTransfer.setData('text/plain', node.path)
 | `src/api.ts` | 新增 `copyFile`、`moveFile` |
 | `src/menus/contextMenus.ts` | 扩展文件/目录菜单；新增 `executePaste` |
 | `src/components/TreeNodeItem.vue` | 拖拽事件、样式、剪切态半透明 |
+| `src/components/FileTree.vue` | 键盘事件处理、`tabindex` |
 
 ---
 
