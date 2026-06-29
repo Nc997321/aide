@@ -49,10 +49,10 @@ export const api = {
     return invoke("detect_run_command", { cwd });
   },
   listRunConfigs(wsKey: string): Promise<RunConfig[]> {
-    return invoke("list_run_configs", { wsKey });
+    return invoke("list_run_configs", { ws_key: wsKey });
   },
   saveRunConfigs(wsKey: string, configs: RunConfig[]): Promise<void> {
-    return invoke("save_run_configs", { wsKey, configs });
+    return invoke("save_run_configs", { ws_key: wsKey, configs });
   },
   detectRunTargets(cwd: string): Promise<RunTarget[]> {
     return invoke("detect_run_targets", { cwd });
