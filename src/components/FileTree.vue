@@ -235,7 +235,7 @@ defineExpose({ loadRoot });
     </div>
 
     <!-- File tree -->
-    <div class="tree-content" tabindex="0" @contextmenu="onAreaContextMenu" @keydown="onTreeKeydown">
+    <div class="tree-content" tabindex="0" @contextmenu="onAreaContextMenu" @keydown="onTreeKeydown" @dragover.prevent @drop.prevent>
       <div v-if="loading" class="tree-status">加载中...</div>
       <div v-else-if="errorMsg" class="tree-status error">{{ errorMsg }}</div>
       <template v-else>

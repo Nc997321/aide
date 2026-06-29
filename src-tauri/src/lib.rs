@@ -62,6 +62,25 @@ pub fn run() {
         .manage(manager)
         .manage(workspace_state)
         .setup(|app| {
+            // Create the main window programmatically so we can set file_drop_enabled = false.
+            // On Windows, Tauri's built-in OLE Drop Target intercepts all drag-and-drop messages
+            // at the Win32 level before WebView2 sees them, which prevents HTML5 dragover /
+            // drop events from firing inside the WebView.  Disabling it lets WebView2 handle
+            // drag-and-drop natively.  This setting cannot be applied via tauri.conf.json in
+            // Tauri v2, so we must use the builder API.
+            tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::App("index.html".into()),
+            )
+            .title("Aide")
+            .inner_size(1400.0, 900.0)
+            .min_inner_size(900.0, 600.0)
+            .center()
+            .decorations(false)
+            .disable_drag_drop_handler()
+            .build()?;
+
             #[cfg(target_os = "windows")]
             apply_window_theme(app);
             Ok(())

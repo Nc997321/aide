@@ -10,18 +10,7 @@
     "beforeDevCommand": "pnpm dev"
   },
   "app": {
-    "windows": [
-      {
-        "title": "Aide",
-        "width": 1400,
-        "height": 900,
-        "minWidth": 900,
-        "minHeight": 600,
-        "center": true,
-        "decorations": false,
-        "backgroundColor": "#1e1e2e"
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

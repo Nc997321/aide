@@ -142,11 +142,15 @@ function onDragEnd(e: DragEvent) {
 
 async function onDrop(e: DragEvent) {
   e.preventDefault();
+  e.stopPropagation();
   isDragOver.value = false;
   insertPos.value = null;
 
-  const srcPath = e.dataTransfer!.getData('text/plain');
-  if (!srcPath) return;
+  // dataTransfer.getData() can return empty string in Tauri + WebView2 on Windows.
+  // Read the source path directly from the clipboard set in onDragStart instead.
+  const entry = clipboard.value;
+  if (!entry) return;
+  const srcPath = entry.path;
 
   const targetDir = props.node.is_dir ? props.node.path : getParentPath(props.node.path);
   const srcParent = getParentPath(srcPath);
@@ -179,11 +183,16 @@ async function onDrop(e: DragEvent) {
   }
 
   const refresh = props.onRefreshDir;
-  await executePaste(
-    targetDir,
-    () => refresh(srcParent),
-    () => refresh(targetDir),
-  );
+  try {
+    await executePaste(
+      targetDir,
+      () => refresh(srcParent),
+      () => refresh(targetDir),
+    );
+  } catch (err) {
+    await modal.confirm("移动失败", String(err), "确定", false);
+    clear();
+  }
 }
 
 const isExpanded = () => props.expandedDirs.has(props.node.path);
