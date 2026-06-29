@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { useContextMenu } from "../composables/useContextMenu";
 import { fileMenuItems, directoryMenuItems } from "../menus/contextMenus";
 
