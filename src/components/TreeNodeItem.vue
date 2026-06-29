@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { useContextMenu } from "../composables/useContextMenu";
 import { fileMenuItems, directoryMenuItems } from "../menus/contextMenus";
 
@@ -93,6 +93,7 @@ function onContextMenu(e: MouseEvent) {
         () => emit("toggle", props.node.path),
         () => refresh(props.node.path),
         () => refresh(parentPath),
+        refresh,
       )
     : fileMenuItems(props.node.path, props.projectRoot, () =>
         refresh(parentPath), props.sessionId,

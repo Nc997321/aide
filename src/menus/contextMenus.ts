@@ -1,6 +1,7 @@
 import type { MenuItem } from "../composables/useContextMenu";
 import { useModal } from "../composables/useModal";
 import { useFileViewer } from "../composables/useFileViewer";
+import { useFileClipboard, getParentPath } from "../composables/useFileClipboard";
 import { api } from "../api";
 
 function sep(): MenuItem {
@@ -8,6 +9,7 @@ function sep(): MenuItem {
 }
 
 const modal = useModal();
+const cb = useFileClipboard();
 
 // ── File context menu ──
 
@@ -41,6 +43,9 @@ export function fileMenuItems(
       },
     },
     sep(),
+    { label: "复制", action: () => cb.copy(path) },
+    { label: "剪切", action: () => cb.cut(path) },
+    sep(),
     {
       label: "删除",
       danger: true,
@@ -62,6 +67,7 @@ export function directoryMenuItems(
   onToggle?: () => void,
   onRefresh?: () => void,
   onDeleted?: () => void,
+  refreshDir?: (dirPath: string) => void,
 ): MenuItem[] {
   const dirName = path.split(/[/\\]/).pop() || path;
   return [
@@ -87,6 +93,25 @@ export function directoryMenuItems(
         onRefresh?.();
       },
     },
+    sep(),
+    { label: "复制", action: () => cb.copy(path) },
+    // 根目录不可剪切
+    ...(path !== projectRoot ? [{ label: "剪切", action: () => cb.cut(path) }] : []),
+    ...(cb.clipboard.value ? [
+      {
+        label: "粘贴",
+        action: async () => {
+          const entry = cb.clipboard.value;
+          if (!entry) return;
+          const srcParent = getParentPath(entry.path);
+          await cb.executePaste(
+            path,
+            () => (refreshDir ? refreshDir(srcParent) : onRefresh?.()),
+            () => onRefresh?.(),
+          );
+        },
+      },
+    ] : []),
     sep(),
     {
       label: "删除",
