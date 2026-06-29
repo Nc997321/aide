@@ -213,15 +213,20 @@ fn detect_make(root: &Path) -> Option<String> {
         .then(|| "make".to_string())
 }
 
-#[tauri::command]
-pub fn detect_run_command(cwd: String) -> Result<Option<String>, String> {
-    let root = Path::new(&cwd);
+/// Returns the first matching run command for the given directory.
+/// Used by `run_configs` module for sub-directory scanning.
+pub(crate) fn detect_command_for_path(root: &Path) -> Option<String> {
     for detect in PROJECT_DETECTORS {
         if let Some(cmd) = detect(root) {
-            return Ok(Some(cmd));
+            return Some(cmd);
         }
     }
-    Ok(None)
+    None
+}
+
+#[tauri::command]
+pub fn detect_run_command(cwd: String) -> Result<Option<String>, String> {
+    Ok(detect_command_for_path(Path::new(&cwd)))
 }
 
 #[tauri::command]
