@@ -29,6 +29,7 @@ import { useSearchProviders } from "./composables/useSearchProviders";
 import { useProviders } from "./composables/useProviders";
 import { useGitWatcher } from "./composables/useGitWatcher";
 import { useRunProject } from "./composables/useRunProject";
+import { useRunProcess } from "./composables/useRunProcess";
 import { useRunConfigs } from "./composables/useRunConfigs";
 import { matchShortcut } from "./utils/shortcut";
 import { applyTheme, themes } from "./themes";
@@ -102,6 +103,7 @@ const { settings, update: updateSettings } = useSettings();
 const workbenchHeight = ref(settings.workbenchHeight || Math.floor(window.innerHeight * 0.45));
 const wb = useWorkbenchTerminal();
 const { run: runProject } = useRunProject();
+const { runStatus, start: startRunProcess, stop: stopRunProcess, restart: restartRunProcess } = useRunProcess();
 const { configs: runConfigs, activeConfig: activeRunConfig, load: loadRunConfigs, setActive: setActiveRunConfig } = useRunConfigs();
 const runConfigsDialogVisible = ref(false);
 
@@ -239,8 +241,24 @@ function openSettings() {
   settingsVisible.value = true;
 }
 
-function onRunProject() {
-  runProject();
+async function onRunProject() {
+  const cfg = activeRunConfig.value;
+  if (cfg) {
+    await startRunProcess(cfg);
+  } else {
+    // Fallback: no config detected, use legacy workbench send
+    runProject();
+  }
+}
+
+async function onStopProject() {
+  await stopRunProcess();
+}
+
+async function onRestartProject() {
+  const cfg = activeRunConfig.value;
+  if (!cfg) return;
+  await restartRunProcess(cfg);
 }
 
 function onSelectRunConfig(id: string) {
@@ -354,9 +372,12 @@ onUnmounted(() => {
       :active-sessions="activeSessionList"
       :run-configs="runConfigs"
       :active-run-config="activeRunConfig"
+      :run-status="runStatus"
       @open-palette="paletteOpen = true"
       @select-session="(s) => sidebarRef?.selectSessionFromWorkspace(s.wsKey, s.id)"
       @run-project="onRunProject"
+      @stop-project="onStopProject"
+      @restart-project="onRestartProject"
       @select-run-config="onSelectRunConfig"
       @edit-run-configs="runConfigsDialogVisible = true"
     />
