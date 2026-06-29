@@ -314,7 +314,7 @@ onMounted(async () => {
   // Seed workbench cwd from the current project root.
   try {
     const info = await api.getProjectInfo();
-    if (info?.root) { workspacePath.value = info.root; projectName.value = info.name; }
+    if (info?.root) { workspacePath.value = info.root; projectName.value = info.name; loadRunConfigs(info.root, info.root); }
   } catch (_) { /* best effort */ }
 
   // Initialize search providers for the title bar search box
