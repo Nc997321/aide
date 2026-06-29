@@ -238,6 +238,7 @@ export function useWorkbenchTerminal() {
     if (existing) {
       // Restart case: PTY was re-spawned with same ID; reset terminal state
       existing.exited = false;
+      existing.spawned = true;
       if (clearFirst) existing.terminal.clear();
       syncTabs();
       switchTo(id);
