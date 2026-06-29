@@ -10,6 +10,8 @@ interface LinkProviderOptions {
 }
 
 export function useTerminalLinkProvider({ workspacePath, openFile }: LinkProviderOptions) {
+  const existsCache = new Map<string, boolean>();
+
   function registerTo(terminal: Terminal) {
     terminal.registerLinkProvider({
       provideLinks(y, callback) {
@@ -43,7 +45,11 @@ export function useTerminalLinkProvider({ workspacePath, openFile }: LinkProvide
               const isAbsolute = capturedPath.startsWith("/") || /^[A-Za-z]:[\\/]/.test(capturedPath);
               const fullPath = isAbsolute ? capturedPath : `${ws}/${capturedPath}`.replace(/\\/g, "/");
 
-              const exists = await api.fileExists(fullPath);
+              let exists = existsCache.get(fullPath);
+              if (exists === undefined) {
+                exists = await api.fileExists(fullPath);
+                existsCache.set(fullPath, exists);
+              }
               if (!exists) return;
 
               links.push({
