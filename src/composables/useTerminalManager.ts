@@ -28,6 +28,7 @@ export function useTerminalManager(
   previewRef: { value: HTMLDivElement | undefined },
   onSessionUpdated: (newId?: string) => void,
   onShowPreview: (sid: string) => void,
+  onTerminalReady?: (terminal: Terminal) => void,
 ) {
   const liveSessions = new Map<string, LiveSession>();
   const ptyToDisplay = new Map<string, string>();
@@ -64,6 +65,7 @@ export function useTerminalManager(
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
+    onTerminalReady?.(terminal);
     return { terminal, fitAddon };
   }
 

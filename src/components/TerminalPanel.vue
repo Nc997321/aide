@@ -2,6 +2,8 @@
 import { ref, watch, onMounted, onUnmounted, nextTick, computed } from "vue";
 import { useSessionState } from "../composables/useSessionState";
 import { useTerminalManager } from "../composables/useTerminalManager";
+import { useTerminalLinkProvider } from "../composables/useTerminalLinkProvider";
+import { useFileViewer } from "../composables/useFileViewer";
 import { AToolbar, AStatusDot, AButton } from "../ui";
 import { api } from "../api";
 import "xterm/css/xterm.css";
@@ -58,6 +60,19 @@ async function loadPreviewContent(sid: string) {
 
 // ── Terminal manager ──
 
+const { open: openFileViewer, openAndScrollTo } = useFileViewer();
+
+const { registerTo } = useTerminalLinkProvider({
+  workspacePath: () => props.workspacePath,
+  openFile: (path, line) => {
+    if (line !== undefined) {
+      openAndScrollTo(path, line);
+    } else {
+      openFileViewer(path);
+    }
+  },
+});
+
 const {
   liveDisplayIds,
   currentSid,
@@ -69,7 +84,7 @@ const {
   initExitListener,
   initDragDrop,
   cleanup,
-} = useTerminalManager(stackRef, previewRef, (newId) => emit("session-updated", newId), loadPreviewContent);
+} = useTerminalManager(stackRef, previewRef, (newId) => emit("session-updated", newId), loadPreviewContent, registerTo);
 
 // ── Toolbar state ──
 
