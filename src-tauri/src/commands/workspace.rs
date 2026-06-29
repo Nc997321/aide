@@ -16,8 +16,10 @@ pub fn list_workspaces() -> Result<Vec<WorkspaceInfo>, String> {
         let Ok(entry) = entry else { continue; };
         if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             let key = entry.file_name().to_string_lossy().to_string();
-            let name = resolve_path_from_key(&key).unwrap_or_else(|| key.clone());
-            workspaces.push(WorkspaceInfo { key, name });
+            let resolved = resolve_path_from_key(&key);
+            let missing = resolved.is_none();
+            let name = resolved.unwrap_or_else(|| key.clone());
+            workspaces.push(WorkspaceInfo { key, name, missing });
         }
     }
     Ok(workspaces)

@@ -42,6 +42,7 @@ pub struct ChatMessageItem {
 pub struct WorkspaceInfo {
     pub key: String,
     pub name: String,
+    pub missing: bool,
 }
 
 #[derive(Debug, Serialize)]

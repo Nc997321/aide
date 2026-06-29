@@ -8,6 +8,7 @@ export interface Session {
 export interface WorkspaceInfo {
   key: string;
   name: string;
+  missing: boolean;
 }
 
 export interface FileEntry {

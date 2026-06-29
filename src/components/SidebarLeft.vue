@@ -35,6 +35,10 @@ const loading = ref(true);
 const sessions = computed(() => sessionsByWorkspace.value[activeWorkspace.value] ?? []);
 
 function workspaceLabel(ws: WorkspaceInfo): string {
+  if (ws.missing) {
+    // Strip drive prefix (e.g. "C--") and show the rest as a best-effort label
+    return ws.key.replace(/^[A-Za-z]--/, "");
+  }
   const parts = ws.name.replace(/[/\\]+$/, "").split(/[/\\]/);
   return parts[parts.length - 1] || ws.name;
 }
@@ -330,17 +334,27 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
         <!-- Workspace row -->
         <div
           class="workspace-item"
-          :class="{ active: ws.key === activeWorkspace, expanded: expandedWorkspaces.has(ws.key) }"
-          @click="switchWorkspace(ws)"
+          :class="{
+            active: ws.key === activeWorkspace,
+            expanded: expandedWorkspaces.has(ws.key),
+            missing: ws.missing,
+          }"
+          v-tooltip="ws.missing ? `路径不存在，目录可能已被移动或删除：${ws.key}` : ''"
+          @click="ws.missing ? undefined : switchWorkspace(ws)"
         >
-          <svg class="ws-chevron" :class="{ expanded: expandedWorkspaces.has(ws.key) }" width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <svg v-if="!ws.missing" class="ws-chevron" :class="{ expanded: expandedWorkspaces.has(ws.key) }" width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          <svg class="ws-folder-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <svg v-if="ws.missing" class="ws-warn-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <svg v-if="!ws.missing" class="ws-folder-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M3 7C3 5.89543 3.89543 5 5 5H9.58579C9.851 5 10.1054 5.10536 10.2929 5.29289L12 7H19C20.1046 7 21 7.89543 21 9V17C21 18.1046 20.1046 19 19 19H5C3.89543 19 3 18.1046 3 17V7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
           <span class="ws-name">{{ workspaceLabel(ws) }}</span>
-          <span v-if="(sessionsByWorkspace[ws.key] ?? []).length > 0" class="ws-count">{{ (sessionsByWorkspace[ws.key] ?? []).length }}</span>
+          <span v-if="ws.missing" class="ws-missing-badge">失效</span>
+          <span v-else-if="(sessionsByWorkspace[ws.key] ?? []).length > 0" class="ws-count">{{ (sessionsByWorkspace[ws.key] ?? []).length }}</span>
         </div>
 
         <!-- Sessions (for any expanded workspace) -->
@@ -549,6 +563,34 @@ defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorksp
   text-align: center;
   line-height: 1.6;
   flex-shrink: 0;
+}
+
+.workspace-item.missing {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.workspace-item.missing:hover {
+  background: color-mix(in srgb, var(--aide-warning) 8%, transparent);
+  color: var(--aide-warning);
+}
+
+.ws-warn-icon {
+  flex-shrink: 0;
+  color: var(--aide-warning);
+}
+
+.ws-missing-badge {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--aide-warning);
+  background: color-mix(in srgb, var(--aide-warning) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-warning) 30%, transparent);
+  padding: 0 5px;
+  border-radius: 6px;
+  line-height: 1.6;
+  flex-shrink: 0;
+  letter-spacing: 0.3px;
 }
 
 /* ── Session card ── */
