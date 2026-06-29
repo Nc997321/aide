@@ -15,10 +15,22 @@ export function useTerminalLinkProvider({ workspacePath, openFile }: LinkProvide
   function registerTo(terminal: Terminal) {
     terminal.registerLinkProvider({
       provideLinks(y, callback) {
-        const line = terminal.buffer.active.getLine(y - 1);
-        if (!line) { callback(undefined); return; }
+        const bufLine = terminal.buffer.active.getLine(y - 1);
+        if (!bufLine) { callback(undefined); return; }
 
-        const text = line.translateToString(true);
+        // Build text and colMap by scanning buffer cells directly.
+        // This correctly handles wide characters (CJK, emoji) which occupy 2 terminal
+        // columns but only 1 string position — using translateToString() + match.index
+        // would give wrong x coordinates whenever wide chars appear before the path.
+        const colMap: number[] = []; // colMap[stringIndex] = 0-based terminal column
+        let text = "";
+        for (let x = 0; x < bufLine.length; x++) {
+          const cell = bufLine.getCell(x);
+          if (!cell || cell.getWidth() === 0) continue; // skip wide-char continuation cells
+          colMap.push(x);
+          text += cell.getChars() || " ";
+        }
+
         const links: ILink[] = [];
         let match: RegExpExecArray | null;
         FILE_PATH_RE.lastIndex = 0;
@@ -28,12 +40,13 @@ export function useTerminalLinkProvider({ workspacePath, openFile }: LinkProvide
         while ((match = FILE_PATH_RE.exec(text)) !== null) {
           const rawPath = match[1];
           const lineNum = match[3] ? parseInt(match[3].slice(1), 10) : undefined;
-          const startX = match.index;
-          const endX = match.index + match[0].length;
 
-          // 检查匹配是否是 URL 的一部分（前面有 http:// 或 https://）
           const textBefore = text.slice(0, match.index);
           if (/https?:\/\/\S*$/.test(textBefore)) continue;
+
+          // Convert string indices to actual terminal columns via colMap
+          const startCol = colMap[match.index] ?? match.index;
+          const endCol = colMap[match.index + match[0].length - 1] ?? (match.index + match[0].length - 1);
 
           const capturedPath = rawPath;
           const capturedLine = lineNum;
@@ -53,7 +66,7 @@ export function useTerminalLinkProvider({ workspacePath, openFile }: LinkProvide
               if (!exists) return;
 
               links.push({
-                range: { start: { x: startX + 1, y }, end: { x: endX, y } },
+                range: { start: { x: startCol + 1, y }, end: { x: endCol + 1, y } },
                 text: capturedText,
                 activate(event: MouseEvent) {
                   if (!event.ctrlKey) return;
