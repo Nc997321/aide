@@ -9,6 +9,7 @@ pub mod detectors;
 pub mod marketplace;
 pub mod provider;
 pub mod run_configs;
+pub mod run_process;
 
 use serde::{Deserialize, Serialize};
 use std::fs;

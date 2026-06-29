@@ -200,6 +200,98 @@ impl PtyManager {
         Ok(())
     }
 
+    /// Spawn a user run-config command in a PTY via the system shell.
+    /// On Windows: `cmd /c <command>`. On Unix: `sh -c <command>`.
+    /// The waiter thread emits `pty-exit` with `{"session_id":"...","success":bool}`.
+    pub fn spawn_run_command(
+        &self,
+        session_id: &str,
+        cwd: &PathBuf,
+        command: &str,
+        rows: u16,
+        cols: u16,
+        app_handle: AppHandle,
+    ) -> Result<(), String> {
+        self.kill_session(session_id);
+
+        let pty_system = native_pty_system();
+        let pty_pair = pty_system
+            .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+            .map_err(|e| format!("Failed to open PTY: {}", e))?;
+
+        #[cfg(target_os = "windows")]
+        let (shell_bin, shell_args): (String, Vec<String>) = (
+            std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into()),
+            vec!["/c".into(), command.into()],
+        );
+        #[cfg(not(target_os = "windows"))]
+        let (shell_bin, shell_args): (String, Vec<String>) = (
+            "/bin/sh".into(),
+            vec!["-c".into(), command.into()],
+        );
+
+        let mut cmd = CommandBuilder::new(&shell_bin);
+        cmd.args(&shell_args);
+        cmd.cwd(cwd);
+
+        let mut child = pty_pair
+            .slave
+            .spawn_command(cmd)
+            .map_err(|e| format!("Failed to spawn '{}': {}", command, e))?;
+
+        drop(pty_pair.slave);
+
+        let master = pty_pair.master;
+        let writer = master
+            .take_writer()
+            .map_err(|e| format!("Failed to take writer: {}", e))?;
+        let mut reader = master
+            .try_clone_reader()
+            .map_err(|e| format!("Failed to clone reader: {}", e))?;
+
+        let output_buffer = Arc::new(Mutex::new(String::new()));
+
+        {
+            let mut sessions = self.sessions.lock().map_err(|e| e.to_string())?;
+            sessions.insert(
+                session_id.to_string(),
+                PtySession { master, writer, output_buffer: output_buffer.clone() },
+            );
+        }
+
+        let sid = session_id.to_string();
+        let sessions_clone = self.sessions.clone();
+        let app_waiter = app_handle.clone();
+        let buf_for_reader = output_buffer.clone();
+
+        thread::spawn(move || {
+            let mut buf = [0u8; 65536];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let data = String::from_utf8_lossy(&buf[..n]);
+                        if let Ok(mut out) = buf_for_reader.lock() {
+                            out.push_str(&data);
+                        }
+                    }
+                }
+            }
+        });
+
+        thread::spawn(move || {
+            let exit_status = child.wait().ok();
+            let success = exit_status.map(|s| s.success()).unwrap_or(false);
+            if let Ok(mut map) = sessions_clone.lock() {
+                map.remove(&sid);
+            }
+            let payload = serde_json::json!({ "session_id": &sid, "success": success });
+            let _ = app_waiter.emit("pty-exit", payload.to_string());
+        });
+
+        Ok(())
+    }
+
     /// Resize the PTY for a specific session
     pub fn resize(&self, session_id: &str, rows: u16, cols: u16) -> Result<(), String> {
         let sessions = self.sessions.lock().map_err(|e| e.to_string())?;

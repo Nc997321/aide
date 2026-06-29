@@ -191,6 +191,9 @@ pub fn run() {
             commands::run_configs::list_run_configs,
             commands::run_configs::save_run_configs,
             commands::run_configs::detect_run_targets,
+            // Run process lifecycle commands
+            commands::run_process::run_process_start,
+            commands::run_process::run_process_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
