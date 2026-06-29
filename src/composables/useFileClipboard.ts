@@ -10,6 +10,13 @@ export interface ClipboardEntry {
 const clipboard = ref<ClipboardEntry | null>(null);
 const modal = useModal();
 
+/** Read the current in-app clipboard entry without clearing it.
+ *  Used by the terminal's Ctrl+V paste to turn a file-tree "copy" into an
+ *  `@path` mention. Does not affect the file-tree move semantics. */
+export function peekFileClipboard(): ClipboardEntry | null {
+  return clipboard.value;
+}
+
 export function getParentPath(path: string): string {
   const sep = path.includes("\\") ? "\\" : "/";
   const i = path.lastIndexOf(sep);
