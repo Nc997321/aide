@@ -2,7 +2,7 @@
 
 非官方桌面应用，用 Tauri v2 + Vue 3 为 Claude Code CLI 提供带会话管理和文件树的终端桌面壳。
 
-详细架构见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+详细架构见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，非必要不读取。
 
 ## 技术栈
 
