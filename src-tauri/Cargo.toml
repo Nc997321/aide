@@ -22,6 +22,20 @@ tracing-appender = "0.2"
 which = "7"
 ignore = "0.4"
 regex = "1"
+arboard = "1"
+percent-encoding = "2"
+png = "0.17"
+
+# Clipboard file-path reading is platform-specific; declare the platform-only
+# crates in target-specific sections so a Windows build doesn't try to compile
+# macOS-only crates (and vice versa). arboard (images) is cross-platform above.
+[target.'cfg(windows)'.dependencies]
+clipboard-win = "5"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.2"
+objc2-app-kit = { version = "0.2", features = ["NSPasteboard", "NSPasteboardItem"] }
+objc2-foundation = { version = "0.2", features = ["NSString", "NSURL", "NSArray"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
