@@ -50,17 +50,20 @@ export function useRunProcess() {
 
   async function restart(config: RunConfig): Promise<void> {
     isRestarting = true;
-    await api.runProcessStop(config.id).catch(() => {});
-    // Brief pause to let the old PTY flush before reopening with the same ID
-    await new Promise<void>(r => setTimeout(r, 150));
-    const sessionId = await api.runProcessStart(config.id, config.cwd, config.command);
-    runningConfigId.value = config.id;
-    activeSessionId.value = sessionId;
-    runStatus.value = "running";
-    isRestarting = false;
+    try {
+      await api.runProcessStop(config.id).catch(() => {});
+      // Brief pause to let the old PTY flush before reopening with the same ID
+      await new Promise<void>(r => setTimeout(r, 150));
+      const sessionId = await api.runProcessStart(config.id, config.cwd, config.command);
+      runningConfigId.value = config.id;
+      activeSessionId.value = sessionId;
+      runStatus.value = "running";
 
-    wb.visible.value = true;
-    wb.attachSession(sessionId, config.name, true /* clearFirst */);
+      wb.visible.value = true;
+      wb.attachSession(sessionId, config.name, true /* clearFirst */);
+    } finally {
+      isRestarting = false;
+    }
   }
 
   return {
