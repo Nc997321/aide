@@ -140,6 +140,8 @@ export function useWorkbenchTerminal() {
     div.className = "wb-term-pane";
     div.style.display = "none";
     containerEl.appendChild(div);
+    // Must be visible before open(): display:none causes offsetWidth=0 and wrong cols.
+    div.style.display = "";
     terminal.open(div);
     fitAddon.fit();
 
