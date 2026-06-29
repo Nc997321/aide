@@ -17,6 +17,7 @@ const props = defineProps<{
   activeSessions?: ActiveSessionInfo[];
   runConfigs?: RunConfig[];
   activeRunConfig?: RunConfig | null;
+  runStatus?: "idle" | "running" | "stopped" | "crashed";
 }>();
 
 const emit = defineEmits<{
@@ -25,6 +26,8 @@ const emit = defineEmits<{
   "run-project": [];
   "select-run-config": [id: string];
   "edit-run-configs": [];
+  "stop-project": [];
+  "restart-project": [];
 }>();
 
 function onSelectSession(s: ActiveSessionInfo) {
@@ -78,6 +81,19 @@ function openEditor() {
 const runningCount = computed(() =>
   (props.activeSessions ?? []).filter(s => s.status === "running").length
 );
+
+const isRunning = computed(() => props.runStatus === "running");
+const showRestartBtn = computed(() =>
+  props.runStatus === "running" || props.runStatus === "stopped" || props.runStatus === "crashed"
+);
+const runDotClass = computed(() => {
+  switch (props.runStatus) {
+    case "running":  return "run-dot run-dot-running";
+    case "stopped":  return "run-dot run-dot-stopped";
+    case "crashed":  return "run-dot run-dot-crashed";
+    default:         return "";
+  }
+});
 </script>
 
 <template>
@@ -111,26 +127,53 @@ const runningCount = computed(() =>
           @mouseenter="showConfigDrop"
           @mouseleave="hideConfigDrop"
         >
-          <!-- Config name selector -->
+          <!-- Config name selector — includes status dot -->
           <button
             class="run-config-sel"
             v-tooltip="'切换运行配置'"
             @click.stop="configDropOpen = !configDropOpen"
           >
+            <span v-if="runDotClass" :class="runDotClass" />
             <span class="run-config-name">{{ activeRunConfig?.name ?? '─' }}</span>
             <svg class="run-config-chevron" width="8" height="5" viewBox="0 0 8 5" fill="currentColor">
               <path d="M0.5 0.5L4 4L7.5 0.5"/>
             </svg>
           </button>
 
-          <!-- Run button -->
+          <!-- Stop button (only when running) -->
           <button
+            v-if="isRunning"
+            class="run-stop-btn"
+            v-tooltip="'停止'"
+            @click.stop="$emit('stop-project')"
+          >
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor">
+              <rect x="1" y="1" width="6" height="6" rx="0.5"/>
+            </svg>
+          </button>
+
+          <!-- Play button (when idle / stopped / crashed) -->
+          <button
+            v-else
             class="run-play-btn"
             v-tooltip="'运行'"
             @click.stop="$emit('run-project')"
           >
             <svg width="8" height="8" viewBox="0 0 10 10" fill="currentColor">
               <polygon points="2,1 9,5 2,9"/>
+            </svg>
+          </button>
+
+          <!-- Restart button (visible when process has been started at least once) -->
+          <button
+            v-if="showRestartBtn"
+            class="run-restart-btn"
+            v-tooltip="'重启'"
+            @click.stop="$emit('restart-project')"
+          >
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="1 4 1 10 7 10"/>
+              <path d="M3.51 15a9 9 0 1 0 .49-3.13"/>
             </svg>
           </button>
 
@@ -661,5 +704,73 @@ const runningCount = computed(() =>
 .config-drop-leave-to {
   opacity: 0;
   transform: translateY(-4px);
+}
+
+/* ── Run status dot ── */
+
+.run-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.run-dot-running {
+  background: var(--aide-success);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--aide-success) 60%, transparent);
+  animation: run-dot-pulse 2s ease-in-out infinite;
+}
+
+.run-dot-stopped {
+  background: var(--aide-text-muted);
+}
+
+.run-dot-crashed {
+  background: var(--aide-error, #f38ba8);
+}
+
+@keyframes run-dot-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+/* ── Stop button ── */
+
+.run-stop-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: none;
+  border: none;
+  color: var(--aide-error, #f38ba8);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.run-stop-btn:hover {
+  background: color-mix(in srgb, var(--aide-error, #f38ba8) 12%, transparent);
+}
+
+/* ── Restart button ── */
+
+.run-restart-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: none;
+  border: none;
+  border-left: 1px solid var(--aide-border);
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.run-restart-btn:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
 }
 </style>
