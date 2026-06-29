@@ -6,6 +6,7 @@ import { useFileViewer } from "../composables/useFileViewer";
 import { useSessionState } from "../composables/useSessionState";
 import { fileTreeAreaMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
+import { useFileClipboard, getParentPath } from "../composables/useFileClipboard";
 import type { FileEntry } from "../types";
 
 const props = defineProps<{ sessionId: string }>();
@@ -107,6 +108,7 @@ function selectFile(path: string) {
 }
 
 const fileViewer = useFileViewer();
+const { clipboard, copy, cut, clear, executePaste } = useFileClipboard();
 
 function openFile(path: string) {
   selectFile(path);
@@ -176,6 +178,40 @@ async function refreshAllExpanded() {
   await loadExpandedDescendants(projectInfo.value.root);
 }
 
+function getSelectedNodeIsDir(): boolean {
+  if (!selectedPath.value) return false;
+  const node = findNode(treeData.value, selectedPath.value);
+  return node?.is_dir ?? false;
+}
+
+async function onTreeKeydown(e: KeyboardEvent) {
+  if (e.ctrlKey && e.key === 'c') {
+    if (!selectedPath.value) return;
+    e.preventDefault();
+    copy(selectedPath.value);
+  } else if (e.ctrlKey && e.key === 'x') {
+    if (!selectedPath.value || selectedPath.value === projectInfo.value.root) return;
+    e.preventDefault();
+    cut(selectedPath.value);
+  } else if (e.ctrlKey && e.key === 'v') {
+    if (!clipboard.value) return;
+    e.preventDefault();
+    const targetDir = selectedPath.value
+      ? (getSelectedNodeIsDir() ? selectedPath.value : getParentPath(selectedPath.value))
+      : projectInfo.value.root;
+    const srcParent = getParentPath(clipboard.value.path);
+    await executePaste(
+      targetDir,
+      () => loadChildren(srcParent),
+      () => loadChildren(targetDir),
+    );
+  } else if (e.key === 'Escape') {
+    if (!clipboard.value) return;
+    e.preventDefault();
+    clear();
+  }
+}
+
 defineExpose({ loadRoot });
 </script>
 
@@ -199,7 +235,7 @@ defineExpose({ loadRoot });
     </div>
 
     <!-- File tree -->
-    <div class="tree-content" @contextmenu="onAreaContextMenu">
+    <div class="tree-content" tabindex="0" @contextmenu="onAreaContextMenu" @keydown="onTreeKeydown">
       <div v-if="loading" class="tree-status">加载中...</div>
       <div v-else-if="errorMsg" class="tree-status error">{{ errorMsg }}</div>
       <template v-else>
