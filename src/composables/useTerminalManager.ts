@@ -1,11 +1,12 @@
 import { reactive, nextTick, watch } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { api } from "../api";
 import { useSessionMonitor } from "./useSessionMonitor";
 import { useSettings } from "./useSettings";
+import { peekFileClipboard } from "./useFileClipboard";
+import { resolvePastePayload } from "../utils/paste";
 import { catppuccinMochaTheme } from "../utils/xterm";
 
 interface LiveSession {
@@ -55,6 +56,60 @@ export function useTerminalManager(
     }
   });
 
+  // ── Ctrl+V / Cmd+V paste: files / images / in-app paths / text ──
+
+  function isMac(): boolean {
+    return typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
+  }
+
+  async function readClipboardText(): Promise<string> {
+    try {
+      return await navigator.clipboard.readText();
+    } catch (_) {
+      return "";
+    }
+  }
+
+  /** Resolve the clipboard into a PTY payload string ("" = write nothing),
+   *  short-circuiting so we only read the sources we actually need. */
+  async function resolvePaste(ptyId: string): Promise<string> {
+    const files = await api.clipboardReadFiles();
+    if (files.length) return resolvePastePayload(files, null, null, "");
+
+    const img = await api.clipboardReadImage();
+    if (img) return resolvePastePayload([], img, null, "");
+
+    const entry = peekFileClipboard();
+    if (entry && entry.op === "copy") return resolvePastePayload([], null, entry, "");
+
+    return resolvePastePayload([], null, null, await readClipboardText());
+  }
+
+  async function handlePaste(ptyId: string) {
+    let payload = "";
+    try {
+      payload = await resolvePaste(ptyId);
+    } catch (_) {
+      return;
+    }
+    if (payload) api.ptyWrite(ptyId, payload).catch(() => {});
+  }
+
+  /** xterm key handler attached per live terminal. The ptyId is not known when
+   *  the terminal is created (startClaude resolves it later), so it is read
+   *  from a ref stashed on the terminal object at spawn time. */
+  function makePasteKeyHandler(ptyIdRef: { current: string }) {
+    return (e: KeyboardEvent): boolean => {
+      if (e.type !== "keydown") return true;
+      const isPaste = isMac()
+        ? e.metaKey && (e.key === "v" || e.key === "V")
+        : e.ctrlKey && (e.key === "v" || e.key === "V");
+      if (!isPaste) return true;
+      if (ptyIdRef.current) handlePaste(ptyIdRef.current);
+      return false; // swallow xterm's default (\x16) / browser paste
+    };
+  }
+
   function makeTerminal(): { terminal: Terminal; fitAddon: FitAddon } {
     const terminal = new Terminal({
       cursorBlink: true,
@@ -65,6 +120,10 @@ export function useTerminalManager(
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
+    // ptyId is filled in by startClaude; the paste handler reads it lazily.
+    const ptyIdRef = { current: "" };
+    (terminal as unknown as { __aidePtyIdRef?: { current: string } }).__aidePtyIdRef = ptyIdRef;
+    terminal.attachCustomKeyEventHandler(makePasteKeyHandler(ptyIdRef));
     onTerminalReady?.(terminal);
     return { terminal, fitAddon };
   }
@@ -147,6 +206,10 @@ export function useTerminalManager(
     const { terminal, fitAddon } = makeTerminal();
     terminal.open(div);
     fitAddon.fit();
+
+    // Bind the ptyId into the paste key handler stashed on this terminal.
+    const ptyIdRef = (terminal as unknown as { __aidePtyIdRef?: { current: string } }).__aidePtyIdRef;
+    if (ptyIdRef) ptyIdRef.current = ptyId;
 
     terminal.onData((data) => {
       api.ptyWrite(ptyId, data).catch(() => {});
@@ -342,68 +405,6 @@ export function useTerminalManager(
     }, 100);
   }
 
-  // ── Drag-and-drop file support ──
-
-  let unlistenDrop: UnlistenFn | null = null;
-  let dropOverlay: HTMLDivElement | null = null;
-
-  function isOverTerminalStack(pos: { x: number; y: number }): boolean {
-    if (!stackRef.value) return false;
-    const rect = stackRef.value.getBoundingClientRect();
-    return pos.x >= rect.left && pos.x <= rect.right &&
-           pos.y >= rect.top && pos.y <= rect.bottom;
-  }
-
-  function showDropOverlay() {
-    if (dropOverlay || !stackRef.value) return;
-    const el = document.createElement("div");
-    el.className = "terminal-drop-overlay";
-    el.innerHTML = `<div class="terminal-drop-overlay__inner">
-      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-        <polyline points="7 10 12 15 17 10"/>
-        <line x1="12" y1="15" x2="12" y2="3"/>
-      </svg>
-      <span>拖放文件到终端</span>
-    </div>`;
-    stackRef.value.appendChild(el);
-    dropOverlay = el;
-  }
-
-  function hideDropOverlay() {
-    if (!dropOverlay) return;
-    dropOverlay.remove();
-    dropOverlay = null;
-  }
-
-  function handleFileDrop(paths: string[]) {
-    if (!currentSid) return;
-    const ptyId = resolvePtyId(currentSid);
-    if (!liveSessions.has(ptyId)) return;
-    const text = paths.map((p) => `@${p}`).join(" ") + " ";
-    api.ptyWrite(ptyId, text).catch(() => {});
-  }
-
-  async function initDragDrop() {
-    unlistenDrop = await getCurrentWebviewWindow().onDragDropEvent((event) => {
-      const { type } = event.payload;
-      if (type === "over") {
-        if (isOverTerminalStack(event.payload.position)) {
-          showDropOverlay();
-        } else {
-          hideDropOverlay();
-        }
-      } else if (type === "drop") {
-        hideDropOverlay();
-        if (isOverTerminalStack(event.payload.position) && currentSid) {
-          handleFileDrop(event.payload.paths);
-        }
-      } else {
-        hideDropOverlay();
-      }
-    });
-  }
-
   /** Listen for PTY process exit (e.g. Ctrl+D twice) → same code path as ⏹ button */
   async function initExitListener() {
     unlistenExit = await listen<string>("pty-exit", (event) => {
@@ -423,8 +424,6 @@ export function useTerminalManager(
       pollTimer = null;
     }
     unlistenExit?.();
-    unlistenDrop?.();
-    hideDropOverlay();
     monitor.stopAll();
     for (const [ptyId] of liveSessions) {
       api.ptyKill(ptyId).catch(() => {});
@@ -454,7 +453,6 @@ export function useTerminalManager(
     resetView,
     initPtyListener,
     initExitListener,
-    initDragDrop,
     cleanup,
   };
 }
