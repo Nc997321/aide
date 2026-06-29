@@ -2,6 +2,7 @@
 import { ref, computed } from "vue";
 import WindowControls from "./WindowControls.vue";
 import type { SessionStatus } from "../../composables/useSessionState";
+import type { RunConfig } from "../../types";
 
 interface ActiveSessionInfo {
   id: string;
@@ -14,12 +15,16 @@ const props = defineProps<{
   projectName?: string;
   gitBranch?: string;
   activeSessions?: ActiveSessionInfo[];
+  runConfigs?: RunConfig[];
+  activeRunConfig?: RunConfig | null;
 }>();
 
 const emit = defineEmits<{
   "open-palette": [];
   "select-session": [session: ActiveSessionInfo];
   "run-project": [];
+  "select-run-config": [id: string];
+  "edit-run-configs": [];
 }>();
 
 function onSelectSession(s: ActiveSessionInfo) {
@@ -48,6 +53,26 @@ function showPanel() {
 }
 function hidePanel() {
   closeTimer = setTimeout(() => { panelOpen.value = false; }, 150);
+}
+
+// Run config dropdown
+const configDropOpen = ref(false);
+let configCloseTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showConfigDrop() {
+  if (configCloseTimer) { clearTimeout(configCloseTimer); configCloseTimer = null; }
+  configDropOpen.value = true;
+}
+function hideConfigDrop() {
+  configCloseTimer = setTimeout(() => { configDropOpen.value = false; }, 150);
+}
+function selectConfig(id: string) {
+  configDropOpen.value = false;
+  emit("select-run-config", id);
+}
+function openEditor() {
+  configDropOpen.value = false;
+  emit("edit-run-configs");
 }
 
 const runningCount = computed(() =>
@@ -79,8 +104,73 @@ const runningCount = computed(() =>
         {{ gitBranch }}
       </span>
 
+      <!-- Run config selector: shown when configs exist for this workspace -->
+      <template v-if="projectName && runConfigs && runConfigs.length > 0">
+        <div
+          class="run-group"
+          @mouseenter="showConfigDrop"
+          @mouseleave="hideConfigDrop"
+        >
+          <!-- Config name selector -->
+          <button
+            class="run-config-sel"
+            v-tooltip="'切换运行配置'"
+            @click.stop="configDropOpen = !configDropOpen"
+          >
+            <span class="run-config-name">{{ activeRunConfig?.name ?? '─' }}</span>
+            <svg class="run-config-chevron" width="8" height="5" viewBox="0 0 8 5" fill="currentColor">
+              <path d="M0.5 0.5L4 4L7.5 0.5"/>
+            </svg>
+          </button>
+
+          <!-- Run button -->
+          <button
+            class="run-play-btn"
+            v-tooltip="'运行'"
+            @click.stop="$emit('run-project')"
+          >
+            <svg width="8" height="8" viewBox="0 0 10 10" fill="currentColor">
+              <polygon points="2,1 9,5 2,9"/>
+            </svg>
+          </button>
+
+          <!-- Config dropdown panel -->
+          <Transition name="config-drop">
+            <div
+              v-if="configDropOpen"
+              class="config-drop-panel"
+              @mouseenter="showConfigDrop"
+              @mouseleave="hideConfigDrop"
+            >
+              <div
+                v-for="cfg in runConfigs"
+                :key="cfg.id"
+                class="config-drop-item"
+                :class="{ active: cfg.id === activeRunConfig?.id }"
+                @click="selectConfig(cfg.id)"
+              >
+                <span class="config-drop-check">{{ cfg.id === activeRunConfig?.id ? '✓' : '' }}</span>
+                <span class="config-drop-col">
+                  <span class="config-drop-name">{{ cfg.name }}</span>
+                  <span class="config-drop-cmd">{{ cfg.command }}</span>
+                </span>
+              </div>
+              <div class="config-drop-sep" />
+              <div class="config-drop-action" @click="openEditor">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                </svg>
+                编辑运行配置…
+              </div>
+            </div>
+          </Transition>
+        </div>
+      </template>
+
+      <!-- Fallback run button when no configs detected yet -->
       <button
-        v-if="projectName"
+        v-else-if="projectName"
         class="titlebar-run-btn"
         v-tooltip="'运行项目'"
         @click.stop="$emit('run-project')"
@@ -408,6 +498,167 @@ const runningCount = computed(() =>
 
 .activity-panel-enter-from,
 .activity-panel-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* ── Run config group ── */
+
+.run-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  overflow: visible;
+}
+
+.run-config-sel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px 3px 8px;
+  background: none;
+  border: none;
+  border-right: 1px solid var(--aide-border);
+  border-radius: 0;
+  color: var(--aide-text-primary);
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s;
+  max-width: 130px;
+}
+.run-config-sel:hover {
+  background: var(--aide-surface-hover);
+}
+
+.run-config-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100px;
+}
+
+.run-config-chevron {
+  flex-shrink: 0;
+  opacity: 0.5;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5;
+}
+
+.run-play-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: none;
+  border: none;
+  color: var(--aide-success);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.run-play-btn:hover {
+  background: color-mix(in srgb, var(--aide-success) 12%, transparent);
+  color: color-mix(in srgb, var(--aide-success) 150%, white);
+}
+
+/* ── Config dropdown panel ── */
+
+.config-drop-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 240px;
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-surface-hover);
+  border-radius: var(--aide-radius-md);
+  box-shadow: var(--aide-shadow-lg);
+  z-index: 950;
+  overflow: hidden;
+}
+
+.config-drop-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.config-drop-item:hover {
+  background: var(--aide-surface-default);
+}
+.config-drop-item.active .config-drop-name {
+  color: var(--aide-accent, var(--aide-info));
+}
+
+.config-drop-check {
+  width: 12px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--aide-accent, var(--aide-info));
+  margin-top: 1px;
+}
+
+.config-drop-col {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.config-drop-name {
+  font-size: 12px;
+  color: var(--aide-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.config-drop-cmd {
+  font-size: 10.5px;
+  color: var(--aide-text-muted);
+  font-family: 'Consolas', 'Menlo', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.config-drop-sep {
+  height: 1px;
+  background: var(--aide-border);
+  margin: 2px 0;
+}
+
+.config-drop-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  color: var(--aide-text-muted);
+  font-size: 12px;
+  transition: background 0.1s, color 0.1s;
+}
+.config-drop-action:hover {
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
+}
+
+/* ── Dropdown transition ── */
+
+.config-drop-enter-active,
+.config-drop-leave-active {
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.config-drop-enter-from,
+.config-drop-leave-to {
   opacity: 0;
   transform: translateY(-4px);
 }
