@@ -57,6 +57,12 @@ export const api = {
   detectRunTargets(cwd: string): Promise<RunTarget[]> {
     return invoke("detect_run_targets", { cwd });
   },
+  runProcessStart(configId: string, cwd: string, command: string): Promise<string> {
+    return invoke("run_process_start", { configId, cwd, command });
+  },
+  runProcessStop(configId: string): Promise<void> {
+    return invoke("run_process_stop", { configId });
+  },
   readFileContent(path: string): Promise<string> {
     return invoke("read_file_content", { path });
   },

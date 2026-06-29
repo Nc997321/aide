@@ -1,4 +1,4 @@
-import { ref, watch, computed } from "vue";
+import { ref, watch, computed, nextTick } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
@@ -231,6 +231,73 @@ export function useWorkbenchTerminal() {
     }
   }
 
+  function attachSession(id: string, label: string, clearFirst = false): void {
+    ensureSettingsWatchers();
+
+    const existing = sessions.get(id);
+    if (existing) {
+      // Restart case: PTY was re-spawned with same ID; reset terminal state
+      existing.exited = false;
+      if (clearFirst) existing.terminal.clear();
+      syncTabs();
+      switchTo(id);
+      ensurePolling();
+      return;
+    }
+
+    if (!containerEl) return;
+    const s = settingsRef!;
+
+    const terminal = new Terminal({
+      cursorBlink: true,
+      fontSize: s.fontSize,
+      fontFamily: s.fontFamily,
+      theme: catppuccinMochaTheme,
+      allowProposedApi: true,
+    });
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+
+    const div = document.createElement("div");
+    div.className = "wb-term-pane";
+    containerEl.appendChild(div);
+    div.style.display = "";
+    terminal.open(div);
+    fitAddon.fit();
+
+    terminal.onData((data) => {
+      api.ptyWrite(id, data).catch(() => {});
+    });
+
+    const observer = new ResizeObserver(() => {
+      fitAddon.fit();
+      api.ptyResize(id, terminal.rows, terminal.cols).catch(() => {});
+    });
+    observer.observe(div);
+
+    const session: WbSession = {
+      id,
+      label,
+      terminal,
+      fitAddon,
+      div,
+      observer,
+      spawned: true,   // PTY already running on Rust side
+      exited: false,
+      shellName: "",
+    };
+    sessions.set(id, session);
+    syncTabs();
+    switchTo(id);
+    ensurePolling();
+    ensureExitListener();
+
+    // Correct the PTY dimensions to match the actual terminal
+    nextTick(() => {
+      api.ptyResize(id, terminal.rows, terminal.cols).catch(() => {});
+    });
+  }
+
   function changeCwd(cwd: string) {
     const s = sessions.get(activeId.value);
     if (!s || !s.spawned || !cwd) return;
@@ -296,6 +363,7 @@ export function useWorkbenchTerminal() {
     activeExited,
     init,
     createSession,
+    attachSession,
     switchTo,
     closeSession,
     show,
