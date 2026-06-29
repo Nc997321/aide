@@ -1,6 +1,9 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import { useContextMenu } from "../composables/useContextMenu";
 import { fileMenuItems, directoryMenuItems } from "../menus/contextMenus";
+import { useFileClipboard } from "../composables/useFileClipboard";
+import { useModal } from "../composables/useModal";
 
 interface FileEntry {
   name: string;
@@ -27,6 +30,13 @@ const emit = defineEmits<{
 }>();
 
 const { show } = useContextMenu();
+
+const cb = useFileClipboard();
+const modal = useModal();
+const { clipboard, cut, clear, executePaste } = cb;
+
+const isDragOver = ref(false);
+const insertPos = ref<'top' | 'bottom' | null>(null);
 
 interface FileIconDef {
   color: string;
@@ -101,6 +111,81 @@ function onContextMenu(e: MouseEvent) {
   show(e.clientX, e.clientY, items);
 }
 
+function onDragStart(e: DragEvent) {
+  e.dataTransfer!.setData('text/plain', props.node.path);
+  e.dataTransfer!.effectAllowed = 'move';
+  cut(props.node.path);
+}
+
+function onDragOver(e: DragEvent) {
+  e.preventDefault();
+  e.dataTransfer!.dropEffect = 'move';
+  if (props.node.is_dir) {
+    isDragOver.value = true;
+    insertPos.value = null;
+  } else {
+    isDragOver.value = false;
+    insertPos.value = (e.offsetY < 13) ? 'top' : 'bottom';
+  }
+}
+
+function onDragLeave(e: DragEvent) {
+  if (e.relatedTarget && (e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) return;
+  isDragOver.value = false;
+  insertPos.value = null;
+}
+
+function onDragEnd(e: DragEvent) {
+  // 拖拽取消（Esc 或拖到树外），清空剪贴板
+  if (e.dataTransfer?.dropEffect === 'none') clear();
+}
+
+async function onDrop(e: DragEvent) {
+  e.preventDefault();
+  isDragOver.value = false;
+  insertPos.value = null;
+
+  const srcPath = e.dataTransfer!.getData('text/plain');
+  if (!srcPath) return;
+
+  const targetDir = props.node.is_dir ? props.node.path : getParentPath(props.node.path);
+  const srcParent = getParentPath(srcPath);
+  const sep = targetDir.includes("\\") ? "\\" : "/";
+
+  // 拖到自身所在目录，忽略
+  if (targetDir === srcParent || srcPath === targetDir) {
+    clear();
+    return;
+  }
+
+  // 禁止把目录拖到自身子目录
+  if (targetDir.startsWith(srcPath + sep)) {
+    await modal.confirm("操作无效", "不能将文件夹移动到其自身的子目录中", "确定", false);
+    clear();
+    return;
+  }
+
+  const srcName = srcPath.split(/[/\\]/).pop() || srcPath;
+  const targetName = targetDir.split(/[/\\]/).pop() || targetDir;
+  const ok = await modal.confirm(
+    "移动文件",
+    `确定要将「${srcName}」移动到「${targetName}」吗？`,
+    "移动",
+    false,
+  );
+  if (!ok) {
+    clear();
+    return;
+  }
+
+  const refresh = props.onRefreshDir;
+  await executePaste(
+    targetDir,
+    () => refresh(srcParent),
+    () => refresh(targetDir),
+  );
+}
+
 const isExpanded = () => props.expandedDirs.has(props.node.path);
 </script>
 
@@ -108,10 +193,22 @@ const isExpanded = () => props.expandedDirs.has(props.node.path);
   <div>
     <div
       class="tree-node"
-      :class="{ active: node.path === selectedPath }"
+      :class="{
+        active: node.path === selectedPath,
+        'drag-over-folder': isDragOver,
+        'drag-insert-top': insertPos === 'top',
+        'drag-insert-bottom': insertPos === 'bottom',
+        'cut-state': clipboard?.op === 'cut' && clipboard?.path === node.path,
+      }"
       :style="{ paddingLeft: (depth * 18 + 8) + 'px' }"
+      draggable="true"
       @click="handleClick"
       @contextmenu.prevent.stop="onContextMenu"
+      @dragstart="onDragStart"
+      @dragover="onDragOver"
+      @dragleave="onDragLeave"
+      @dragend="onDragEnd"
+      @drop="onDrop"
     >
       <!-- Indent guides -->
       <span
@@ -308,5 +405,42 @@ const isExpanded = () => props.expandedDirs.has(props.node.path);
 
 .node-children {
   position: relative;
+}
+
+/* ── 拖拽视觉 ── */
+
+.tree-node.drag-over-folder {
+  background: var(--aide-accent-subtle);
+  outline: 1px solid var(--aide-accent);
+  outline-offset: -1px;
+}
+
+.tree-node.drag-insert-top::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: var(--aide-accent);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.tree-node.drag-insert-bottom::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: var(--aide-accent);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+/* 被剪切的节点半透明 */
+.tree-node.cut-state {
+  opacity: 0.45;
 }
 </style>
