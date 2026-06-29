@@ -105,8 +105,11 @@ export function useTerminalManager(
         ? e.metaKey && (e.key === "v" || e.key === "V")
         : e.ctrlKey && (e.key === "v" || e.key === "V");
       if (!isPaste) return true;
+      // Stop the browser from natively pasting into xterm's hidden textarea
+      // (would double-paste text) and stop xterm sending \x16 to the PTY.
+      e.preventDefault();
       if (ptyIdRef.current) handlePaste(ptyIdRef.current);
-      return false; // swallow xterm's default (\x16) / browser paste
+      return false;
     };
   }
 
