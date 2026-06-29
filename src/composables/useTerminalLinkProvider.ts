@@ -29,7 +29,9 @@ export function useTerminalLinkProvider({ workspacePath, openFile }: LinkProvide
           const startX = match.index;
           const endX = match.index + match[0].length;
 
-          if (rawPath.startsWith("http://") || rawPath.startsWith("https://")) continue;
+          // 检查匹配是否是 URL 的一部分（前面有 http:// 或 https://）
+          const textBefore = text.slice(0, match.index);
+          if (/https?:\/\/\S*$/.test(textBefore)) continue;
 
           const capturedPath = rawPath;
           const capturedLine = lineNum;
