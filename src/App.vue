@@ -8,6 +8,7 @@ import ModalDialog from "./components/ModalDialog.vue";
 import { defineAsyncComponent } from "vue";
 const FileViewer = defineAsyncComponent(() => import("./components/FileViewer.vue"));
 const SettingsPanel = defineAsyncComponent(() => import("./components/SettingsPanel.vue"));
+const RunConfigsDialog = defineAsyncComponent(() => import("./components/RunConfigsDialog.vue"));
 import GitPanel from "./components/GitPanel.vue";
 import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
 import NotificationBanner from "./components/NotificationBanner.vue";
@@ -28,6 +29,7 @@ import { useSearchProviders } from "./composables/useSearchProviders";
 import { useProviders } from "./composables/useProviders";
 import { useGitWatcher } from "./composables/useGitWatcher";
 import { useRunProject } from "./composables/useRunProject";
+import { useRunConfigs } from "./composables/useRunConfigs";
 import { matchShortcut } from "./utils/shortcut";
 import { applyTheme, themes } from "./themes";
 
@@ -100,6 +102,8 @@ const { settings, update: updateSettings } = useSettings();
 const workbenchHeight = ref(settings.workbenchHeight || Math.floor(window.innerHeight * 0.45));
 const wb = useWorkbenchTerminal();
 const { run: runProject } = useRunProject();
+const { configs: runConfigs, activeConfig: activeRunConfig, load: loadRunConfigs, setActive: setActiveRunConfig } = useRunConfigs();
+const runConfigsDialogVisible = ref(false);
 
 // Persist workbench height changes to settings
 function onWorkbenchHeightChange(v: number) {
@@ -215,6 +219,8 @@ async function onSidebarWsChanged(path: string) {
   terminalPanelRef.value?.resetView();
   await fileTreeRef.value?.loadRoot();
   if (rightTab.value === "git") gitPanelRef.value?.reload();
+  // Load run configurations for this workspace (auto-detects on first open).
+  loadRunConfigs(path, path);
 }
 
 const { setActiveProvider, load: loadProviders } = useProviders();
@@ -234,7 +240,11 @@ function openSettings() {
 }
 
 function onRunProject() {
-  runProject(workspacePath.value);
+  runProject();
+}
+
+function onSelectRunConfig(id: string) {
+  setActiveRunConfig(id);
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -342,9 +352,13 @@ onUnmounted(() => {
       :project-name="projectName"
       :git-branch="currentBranch"
       :active-sessions="activeSessionList"
+      :run-configs="runConfigs"
+      :active-run-config="activeRunConfig"
       @open-palette="paletteOpen = true"
       @select-session="(s) => sidebarRef?.selectSessionFromWorkspace(s.wsKey, s.id)"
       @run-project="onRunProject"
+      @select-run-config="onSelectRunConfig"
+      @edit-run-configs="runConfigsDialogVisible = true"
     />
 
     <div class="app-layout" :class="{ 'is-dragging': leftResize.isDragging.value || rightResize.isDragging.value }">
@@ -426,6 +440,7 @@ onUnmounted(() => {
       <ContextMenu />
       <ModalDialog />
       <SettingsPanel v-if="settingsVisible" :initial-tab="settingsInitialTab" @close="settingsVisible = false" />
+      <RunConfigsDialog v-if="runConfigsDialogVisible" @close="runConfigsDialogVisible = false" />
       <FileViewer />
       <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
     </div>
