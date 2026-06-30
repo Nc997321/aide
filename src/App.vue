@@ -35,6 +35,9 @@ import { matchShortcut } from "./utils/shortcut";
 import { applyTheme, themes } from "./themes";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useFileViewer } from "./composables/useFileViewer";
+import { useRecent } from "./composables/useRecent";
+import { timeAgo } from "./utils/time";
+import type { PaletteResult } from "./ui/ACommandPalette.vue";
 
 const leftCollapsed = ref(false);
 const rightCollapsed = ref(false);
@@ -227,6 +230,15 @@ async function onSidebarWsChanged(path: string) {
   loadRunConfigs(path, path);
 }
 
+/** 把绝对路径转成相对当前工作区的展示路径；不在工作区内则原样返回。 */
+function relPath(p: string): string {
+  const root = workspacePath.value;
+  if (root && p.toLowerCase().startsWith(root.toLowerCase())) {
+    return p.slice(root.length).replace(/^[\\/]+/, "");
+  }
+  return p;
+}
+
 const { setActiveProvider, load: loadProviders } = useProviders();
 
 async function onProviderSwitch(providerId: string) {
@@ -355,6 +367,39 @@ onMounted(async () => {
         ...r,
         group: r.icon === "\u{1F4DD}" ? "会话" : r.icon === "\u{1F4C4}" ? "文件" : "其他",
       }));
+    });
+  });
+
+  // 把「最近访问」注入面板：空查询时展示最近会话 + 最近文件
+  nextTick(() => {
+    paletteRef.value?.setRecentFn(async (): Promise<PaletteResult[]> => {
+      const { sessions, files } = useRecent();
+      const out: PaletteResult[] = [];
+      for (const s of sessions.value) {
+        out.push({
+          id: "rs-" + s.session_id,
+          label: s.name,
+          description: `${s.ws_name} · ${timeAgo(s.ts)}`,
+          icon: "\u{1F4DD}",
+          group: "最近会话",
+          action: () => {
+            sidebarRef.value?.selectSessionFromWorkspace(s.ws_key, s.session_id);
+          },
+        });
+      }
+      for (const f of files.value) {
+        out.push({
+          id: "rf-" + f.path,
+          label: f.name,
+          description: `${relPath(f.path)} · ${timeAgo(f.ts)}`,
+          icon: "\u{1F4C4}",
+          group: "最近文件",
+          action: () => {
+            useFileViewer().open(f.path);
+          },
+        });
+      }
+      return out;
     });
   });
 
