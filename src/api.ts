@@ -32,6 +32,14 @@ export const api = {
     return invoke("pty_spawn_shell", { sessionId, rows, cols, cwd, shell });
   },
 
+  // 剪贴板（文件 / 图片粘贴进 Claude TUI）
+  clipboardReadFiles(): Promise<string[]> {
+    return invoke("clipboard_read_files");
+  },
+  clipboardReadImage(): Promise<string | null> {
+    return invoke("clipboard_read_image");
+  },
+
   // 文件
   getProjectInfo(): Promise<ProjectInfo> {
     return invoke("get_project_info");

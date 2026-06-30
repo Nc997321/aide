@@ -10,6 +10,7 @@ pub mod marketplace;
 pub mod provider;
 pub mod run_configs;
 pub mod run_process;
+pub mod clipboard;
 
 use serde::{Deserialize, Serialize};
 use std::fs;

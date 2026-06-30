@@ -195,6 +195,9 @@ pub fn run() {
             // Run process lifecycle commands
             commands::run_process::run_process_start,
             commands::run_process::run_process_stop,
+            // Clipboard paste (files / images) into the Claude TUI
+            commands::clipboard::clipboard_read_files,
+            commands::clipboard::clipboard_read_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -83,7 +83,6 @@ const {
   resetView,
   initPtyListener,
   initExitListener,
-  initDragDrop,
   cleanup,
 } = useTerminalManager(
   stackRef,
@@ -157,7 +156,6 @@ onMounted(async () => {
   window.addEventListener("keydown", onWindowKeydown);
   await initPtyListener();
   await initExitListener();
-  await initDragDrop();
   await nextTick();
   showSession(props.sessionId);
   await loadPreviewContent(props.sessionId);
@@ -224,29 +222,6 @@ onUnmounted(() => {
 .terminal-container .xterm-viewport::-webkit-scrollbar { width: 6px; }
 .terminal-container .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
 .terminal-container .xterm-viewport::-webkit-scrollbar-thumb { background: var(--aide-surface-default); border-radius: 3px; }
-
-/* ── File drop overlay ── */
-
-.terminal-drop-overlay {
-  position: absolute; inset: 0; z-index: 25;
-  display: flex; align-items: center; justify-content: center;
-  background: color-mix(in srgb, var(--aide-bg-base) 85%, transparent);
-  border: 2px dashed var(--aide-accent);
-  border-radius: var(--aide-radius-md);
-  margin: 8px;
-  animation: drop-fade-in 0.15s ease-out;
-  pointer-events: none;
-}
-.terminal-drop-overlay__inner {
-  display: flex; flex-direction: column; align-items: center; gap: 10px;
-  color: var(--aide-accent);
-  font-size: 14px; font-weight: 500;
-}
-.terminal-drop-overlay__inner svg { opacity: 0.8; }
-@keyframes drop-fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
 
 /* ── Session loader overlay ── */
 
