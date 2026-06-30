@@ -64,6 +64,7 @@ export interface AppSettings {
   keybindings: Keybindings;
   theme: string;
   openWithExtensions: string[];
+  recentLimit: number;
 }
 
 export interface ChangeFile {
@@ -151,4 +152,26 @@ export interface RunTarget {
   name: string;
   cwd: string;
   command: string;
+}
+
+// ── Recent access types ──
+// 字段名与 Rust 序列化保持一致（snake_case）。
+
+export interface RecentSession {
+  ws_key: string;
+  ws_name: string;
+  session_id: string;
+  name: string;
+  ts: number;
+}
+
+export interface RecentFile {
+  path: string;
+  name: string;
+  ts: number;
+}
+
+export interface RecentView {
+  sessions: RecentSession[];
+  files: RecentFile[];
 }

@@ -14,6 +14,7 @@ const defaults: AppSettings = {
   },
   theme: "warm-dark",
   openWithExtensions: [],
+  recentLimit: 10,
 };
 
 // Module-level reactive singleton — shared across TerminalPanel and SettingsPanel
@@ -33,6 +34,7 @@ export function useSettings() {
       settings.keybindings = s.keybindings ?? defaults.keybindings;
       settings.theme = s.theme ?? defaults.theme;
       settings.openWithExtensions = s.openWithExtensions ?? defaults.openWithExtensions;
+      settings.recentLimit = s.recentLimit ?? defaults.recentLimit;
     } catch (_) {
       // Keep defaults on error
     }
@@ -49,6 +51,7 @@ export function useSettings() {
     if (partial.workbenchHeight !== undefined) settings.workbenchHeight = partial.workbenchHeight;
     if (partial.keybindings !== undefined) settings.keybindings = { ...settings.keybindings, ...partial.keybindings };
     if (partial.theme !== undefined) settings.theme = partial.theme;
+    if (partial.recentLimit !== undefined) settings.recentLimit = partial.recentLimit;
     // Persist asynchronously
     try {
       await api.setSettings(partial);

@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem,
   ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
-  GrepMatch, ProviderConfig, RunConfig, RunTarget,
+  GrepMatch, ProviderConfig, RunConfig, RunTarget, RecentView,
 } from "./types";
 
 export const api = {
@@ -205,5 +205,22 @@ export const api = {
   },
   setWorkspace(key: string, path: string): Promise<void> {
     return invoke("set_workspace", { key, path });
+  },
+
+  // 最近访问
+  recordRecentSession(wsKey: string, wsName: string, sessionId: string, name: string): Promise<void> {
+    return invoke("record_recent_session", { wsKey, wsName, sessionId, name });
+  },
+  recordRecentFile(wsKey: string, path: string, name: string): Promise<void> {
+    return invoke("record_recent_file", { wsKey, path, name });
+  },
+  listRecent(wsKey: string): Promise<RecentView> {
+    return invoke("list_recent", { wsKey });
+  },
+  removeRecentSession(sessionId: string): Promise<void> {
+    return invoke("remove_recent_session", { sessionId });
+  },
+  clearRecent(category?: "sessions" | "files"): Promise<void> {
+    return invoke("clear_recent", { category: category ?? null });
   },
 };
