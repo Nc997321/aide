@@ -143,6 +143,77 @@ pub fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+// ── Tauri 命令 ──
+
+#[tauri::command]
+pub fn record_recent_session(
+    ws_key: String,
+    ws_name: String,
+    session_id: String,
+    name: String,
+) -> Result<(), String> {
+    let entry = RecentSession { ws_key, ws_name, session_id, name, ts: now_ms() };
+    let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
+    push_session(&mut guard, entry, current_limit());
+    save_recent_file(&guard)
+}
+
+#[tauri::command]
+pub fn record_recent_file(ws_key: String, path: String, name: String) -> Result<(), String> {
+    let entry = RecentFile { path, name, ts: now_ms() };
+    let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
+    push_file(&mut guard, &ws_key, entry, current_limit());
+    save_recent_file(&guard)
+}
+
+#[tauri::command]
+pub fn list_recent(ws_key: String) -> Result<RecentView, String> {
+    let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
+    let limit = current_limit();
+    let mut need_save = prune_stale(&mut guard, &ws_key);
+    if guard.sessions.len() > limit {
+        guard.sessions.truncate(limit);
+        need_save = true;
+    }
+    if let Some(list) = guard.files.get_mut(&ws_key) {
+        if list.len() > limit {
+            list.truncate(limit);
+            need_save = true;
+        }
+    }
+    if need_save {
+        save_recent_file(&guard)?;
+    }
+    let files = guard.files.get(&ws_key).cloned().unwrap_or_default();
+    let sessions = guard.sessions.clone();
+    Ok(RecentView { sessions, files })
+}
+
+#[tauri::command]
+pub fn remove_recent_session(session_id: String) -> Result<(), String> {
+    let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
+    let before = guard.sessions.len();
+    guard.sessions.retain(|s| s.session_id != session_id);
+    if guard.sessions.len() != before {
+        save_recent_file(&guard)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_recent(category: Option<String>) -> Result<(), String> {
+    let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
+    match category.as_deref() {
+        Some("sessions") => guard.sessions.clear(),
+        Some("files") => guard.files.clear(),
+        _ => {
+            guard.sessions.clear();
+            guard.files.clear();
+        }
+    }
+    save_recent_file(&guard)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

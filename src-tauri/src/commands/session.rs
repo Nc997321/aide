@@ -193,6 +193,9 @@ pub fn delete_session(
         }
     }
 
+    // 同步移除「最近访问」中已删会话（双保险，配合 list_recent 自愈）。
+    let _ = super::recent::remove_recent_session(id);
+
     Ok(())
 }
 

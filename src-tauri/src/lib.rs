@@ -239,6 +239,12 @@ pub fn run() {
             // Clipboard paste (files / images) into the Claude TUI
             commands::clipboard::clipboard_read_files,
             commands::clipboard::clipboard_read_image,
+            // Recent access
+            commands::recent::record_recent_session,
+            commands::recent::record_recent_file,
+            commands::recent::list_recent,
+            commands::recent::remove_recent_session,
+            commands::recent::clear_recent,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
