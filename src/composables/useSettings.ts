@@ -13,6 +13,7 @@ const defaults: AppSettings = {
     searchOpen: "Ctrl+P",
   },
   theme: "warm-dark",
+  openWithExtensions: [],
 };
 
 // Module-level reactive singleton — shared across TerminalPanel and SettingsPanel
@@ -31,6 +32,7 @@ export function useSettings() {
       settings.workbenchHeight = s.workbenchHeight ?? defaults.workbenchHeight;
       settings.keybindings = s.keybindings ?? defaults.keybindings;
       settings.theme = s.theme ?? defaults.theme;
+      settings.openWithExtensions = s.openWithExtensions ?? defaults.openWithExtensions;
     } catch (_) {
       // Keep defaults on error
     }
@@ -53,5 +55,12 @@ export function useSettings() {
     } catch (_) { /* best effort */ }
   }
 
-  return { settings, loaded, load, update };
+  // 专门路径：openWithExtensions 需同步 HKCU 注册表，走 set_open_with_extensions
+  // 而非通用 set_settings，保证设置与「打开方式」注册原子一致。失败抛出供调用方回滚。
+  async function setOpenWithExtensions(exts: string[]): Promise<void> {
+    await api.setOpenWithExtensions(exts);
+    settings.openWithExtensions = exts;
+  }
+
+  return { settings, loaded, load, update, setOpenWithExtensions };
 }

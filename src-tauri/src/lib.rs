@@ -1,8 +1,12 @@
 mod commands;
 mod pty;
 
+use std::path::PathBuf;
+
+use commands::file_assoc::PendingOpenFile;
 use commands::WorkspaceState;
 use pty::PtyManager;
+use tauri::{Emitter, Manager};
 
 fn init_logging() {
     let log_dir = commands::our_config_dir().join("log");
@@ -46,6 +50,16 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        // 聚合二次启动：资源管理器「打开方式 → Aide」以 `aide.exe <path>` 唤起，
+        // 由首个实例接收 argv 并 emit 事件给前端预览。
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if let Some(p) = argv.get(1) {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.set_focus();
+                }
+                let _ = app.emit("open-file-preview", p.clone());
+            }
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
@@ -61,6 +75,7 @@ pub fn run() {
         )
         .manage(manager)
         .manage(workspace_state)
+        .manage(PendingOpenFile(std::sync::Mutex::new(None)))
         .setup(|app| {
             // Create the main window programmatically so we can set file_drop_enabled = false.
             // On Windows, Tauri's built-in OLE Drop Target intercepts all drag-and-drop messages
@@ -83,6 +98,20 @@ pub fn run() {
 
             #[cfg(target_os = "windows")]
             apply_window_theme(app);
+
+            // 冷启动带参：首次即被 `aide.exe <path>` 唤起时，single-instance 回调
+            // 不会触发（首个实例），这里把路径暂存到 PendingOpenFile，前端 mount
+            // 时通过 consume_pending_open_file 取走兜底；同时 emit 一份，若前端
+            // 已就绪也能直接收到。
+            if let Some(p) = std::env::args().nth(1) {
+                if PathBuf::from(&p).is_file() {
+                    if let Ok(mut g) = app.state::<PendingOpenFile>().0.lock() {
+                        *g = Some(p.clone());
+                    }
+                    let _ = app.emit("open-file-preview", p);
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -100,6 +129,10 @@ pub fn run() {
             commands::filesystem::read_file_content,
             commands::filesystem::read_file_binary,
             commands::filesystem::write_file_content,
+            commands::file_assoc::consume_pending_open_file,
+            commands::file_assoc::register_open_with,
+            commands::file_assoc::unregister_open_with,
+            commands::file_assoc::set_open_with_extensions,
             commands::filesystem::delete_file,
             commands::filesystem::create_file,
             commands::filesystem::create_dir,

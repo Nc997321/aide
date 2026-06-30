@@ -23,7 +23,7 @@ const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 
 // ── Settings (通用) ──
 
-const { settings, update } = useSettings();
+const { settings, update, setOpenWithExtensions } = useSettings();
 const fontSizeLocal = ref(settings.fontSize);
 const fontFamilyLocal = ref(settings.fontFamily);
 const notificationsEnabledLocal = ref(settings.notificationsEnabled);
@@ -97,6 +97,34 @@ function onThemeChange(themeId: string) {
   if (tokens) {
     applyTheme(tokens);
     update({ theme: themeId });
+  }
+}
+
+// ── Windows「打开方式」 ──
+// 勾选扩展名 → 后端 set_open_with_extensions 落盘 + 同步 HKCU 注册表。
+// 非 Windows 平台后端为空实现，UI 仅作占位。
+
+const OPEN_WITH_GROUPS: Array<{ label: string; exts: string[] }> = [
+  { label: "图片", exts: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif", "ico"] },
+  { label: "文本 / 代码", exts: ["md", "mdx", "txt", "log", "json", "toml", "yaml", "yml", "ts", "js", "vue", "rs", "py", "go", "java"] },
+];
+
+const openWithExtsLocal = ref<string[]>([...settings.openWithExtensions]);
+const openWithError = ref("");
+
+async function onToggleOpenWith(ext: string, checked: boolean) {
+  const prev = [...openWithExtsLocal.value];
+  const next = checked
+    ? Array.from(new Set([...openWithExtsLocal.value, ext]))
+    : openWithExtsLocal.value.filter((e) => e !== ext);
+  openWithExtsLocal.value = next;
+  openWithError.value = "";
+  try {
+    await setOpenWithExtensions(next);
+  } catch (e) {
+    // 注册表/落盘失败：回滚本地勾选，保留 settings 不变
+    openWithExtsLocal.value = prev;
+    openWithError.value = `注册失败：${String(e)}`;
   }
 }
 
@@ -329,6 +357,29 @@ function onOverlayClick(e: MouseEvent) {
                     {{ keybindingDefs.find(d => d.key === pair[1])?.label }}
                     {{ i < keybindingConflicts.length - 1 ? '、' : '' }}
                   </span>
+                </div>
+              </div>
+
+              <!-- ── Windows「打开方式」 ── -->
+              <div class="settings-section">
+                <div class="section-title">Windows「打开方式」</div>
+                <span class="field-hint">
+                  将 Aide 加入资源管理器「打开方式」列表，右键即可用 Aide 预览文件。
+                  仅当前用户、不修改默认程序。预览模式下「跳转到定义」不可用。
+                </span>
+                <div v-if="openWithError" class="open-with-error">⚠ {{ openWithError }}</div>
+                <div v-for="group in OPEN_WITH_GROUPS" :key="group.label" class="open-with-group">
+                  <div class="open-with-group-label">{{ group.label }}</div>
+                  <div class="open-with-exts">
+                    <label v-for="ext in group.exts" :key="ext" class="open-with-ext">
+                      <input
+                        type="checkbox"
+                        :checked="openWithExtsLocal.includes(ext)"
+                        @change="onToggleOpenWith(ext, ($event.target as HTMLInputElement).checked)"
+                      />
+                      <span>.{{ ext }}</span>
+                    </label>
+                  </div>
                 </div>
               </div>
             </div>
@@ -823,6 +874,43 @@ function onOverlayClick(e: MouseEvent) {
   font-size: 13px;
   color: var(--aide-text-secondary);
   flex-shrink: 0;
+}
+
+/* ── Windows「打开方式」 ── */
+.open-with-group {
+  margin-top: 12px;
+}
+
+.open-with-group-label {
+  font-size: 11px;
+  color: var(--aide-text-muted);
+  margin-bottom: 6px;
+}
+
+.open-with-exts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.open-with-ext {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--aide-text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.open-with-ext input[type="checkbox"] {
+  cursor: pointer;
+}
+
+.open-with-error {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--aide-danger);
 }
 
 .kb-control {

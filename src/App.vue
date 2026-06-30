@@ -33,6 +33,8 @@ import { useRunProcess } from "./composables/useRunProcess";
 import { useRunConfigs } from "./composables/useRunConfigs";
 import { matchShortcut } from "./utils/shortcut";
 import { applyTheme, themes } from "./themes";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useFileViewer } from "./composables/useFileViewer";
 
 const leftCollapsed = ref(false);
 const rightCollapsed = ref(false);
@@ -100,6 +102,9 @@ const terminalPanelRef = ref<InstanceType<typeof TerminalPanel> | null>(null);
 const workspacePath = ref("");
 const projectName = ref("");
 const { settings, update: updateSettings } = useSettings();
+
+// 「打开方式」事件监听句柄，onUnmounted 时释放
+let unlistenOpenFile: UnlistenFn | null = null;
 const workbenchHeight = ref(settings.workbenchHeight || Math.floor(window.innerHeight * 0.45));
 const wb = useWorkbenchTerminal();
 const { run: runProject } = useRunProject();
@@ -352,11 +357,26 @@ onMounted(async () => {
       }));
     });
   });
+
+  // ── 「打开方式」预览接线 ──
+  // 热启动：single-instance 回调 emit "open-file-preview"
+  // 冷启动：consume_pending_open_file 取回 setup 暂存的待预览路径兜底
+  const { open: openFileViewer } = useFileViewer();
+  try {
+    const pending = await api.consumePendingOpenFile();
+    if (pending) openFileViewer(pending);
+  } catch (_) { /* best effort */ }
+  try {
+    unlistenOpenFile = await listen<string>("open-file-preview", (e) => {
+      if (e.payload) openFileViewer(e.payload);
+    });
+  } catch (_) { /* best effort */ }
 });
 
 onUnmounted(() => {
   window.removeEventListener("keydown", handleKeydown, { capture: true });
   wb.dispose();
+  unlistenOpenFile?.();
 });
 </script>
 

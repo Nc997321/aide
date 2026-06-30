@@ -63,6 +63,7 @@ export interface AppSettings {
   workbenchHeight: number;
   keybindings: Keybindings;
   theme: string;
+  openWithExtensions: string[];
 }
 
 export interface ChangeFile {

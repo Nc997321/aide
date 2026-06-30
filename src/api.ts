@@ -80,6 +80,19 @@ export const api = {
   writeFileContent(path: string, content: string): Promise<void> {
     return invoke("write_file_content", { path, content });
   },
+  // Windows「打开方式」集成
+  consumePendingOpenFile(): Promise<string | null> {
+    return invoke("consume_pending_open_file");
+  },
+  setOpenWithExtensions(extensions: string[]): Promise<void> {
+    return invoke("set_open_with_extensions", { extensions });
+  },
+  registerOpenWith(extensions: string[]): Promise<void> {
+    return invoke("register_open_with", { extensions });
+  },
+  unregisterOpenWith(extensions: string[]): Promise<void> {
+    return invoke("unregister_open_with", { extensions });
+  },
   deleteFile(path: string): Promise<void> {
     return invoke("delete_file", { path });
   },

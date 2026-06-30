@@ -45,6 +45,10 @@ pub struct AppSettings {
     pub keybindings: Keybindings,
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// 已注册到 Windows「打开方式」的扩展名（小写、无前导点）。
+    /// 持久化于此，`set_open_with_extensions` 负责同步注册表。
+    #[serde(default)]
+    pub open_with_extensions: Vec<String>,
 }
 
 fn default_font_size() -> u32 { 14 }
@@ -65,6 +69,7 @@ impl Default for AppSettings {
             workbench_height: 0,
             keybindings: Keybindings::default(),
             theme: default_theme(),
+            open_with_extensions: Vec::new(),
         }
     }
 }
