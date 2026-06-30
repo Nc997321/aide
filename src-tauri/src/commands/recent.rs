@@ -127,10 +127,14 @@ static RECENT: Lazy<Mutex<RecentState>> = Lazy::new(|| Mutex::new(load_recent_fi
 // ── 辅助 ──
 
 /// 从主 config.json 读取 recent_limit，默认 10。
+///
+/// `set_settings` 收的是 `serde_json::Value`，Tauri 不会转换 Value 内部的 key，
+/// 前端发 camelCase `recentLimit` 就以 `recentLimit` 落盘；这里按落盘约定取
+/// camelCase，并保留 snake_case 兜底以防手动编辑/旧格式。
 pub fn current_limit() -> usize {
     let cfg = super::settings::load_config();
     cfg.get("settings")
-        .and_then(|s| s.get("recent_limit"))
+        .and_then(|s| s.get("recentLimit").or_else(|| s.get("recent_limit")))
         .and_then(|v| v.as_u64())
         .unwrap_or(10) as usize
 }
