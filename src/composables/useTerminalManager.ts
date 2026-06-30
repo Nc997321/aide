@@ -26,7 +26,8 @@ interface LiveSession {
 export function useTerminalManager(
   stackRef: { value: HTMLDivElement | undefined },
   previewRef: { value: HTMLDivElement | undefined },
-  onSessionUpdated: (newId?: string) => void,
+  /** Called once the real session UUID is known — the first time the outside world sees it. */
+  onSessionReady: (session: { id: string; name: string }) => void,
   onShowPreview: (sid: string) => void,
   onTerminalReady?: (terminal: Terminal) => void,
 ) {
@@ -201,10 +202,6 @@ export function useTerminalManager(
         terminal.writeln("按 Ctrl+L 刷新，或点击 ⏹ 停止。");
         monitor.setSessionState(sid, "stopped");
       });
-
-    if (ptyId.startsWith("new_")) {
-      scheduleMigration(ptyId);
-    }
   }
 
   function destroyLiveSession(ptyId: string) {
@@ -237,72 +234,60 @@ export function useTerminalManager(
     destroyLiveSession(ptyId);
   }
 
-  async function scheduleMigration(placeholderId: string) {
-    // Wait 3 seconds for Claude Code to start and create its session
-    // metadata file (~/.claude/sessions/<pid>.json).
-    await new Promise((r) => setTimeout(r, 3000));
-    if (!liveSessions.has(placeholderId)) return;
+  /**
+   * Create a brand-new Claude session and start it.
+   *
+   * `new_xxx` is purely internal — it never leaves this function.
+   * The outside world only learns the real UUID via `onSessionReady`.
+   */
+  async function createAndStartSession(name: string): Promise<void> {
+    const placeholderId = `new_${Date.now()}`;
+    const sinceMs = Date.now();
 
-    const sinceMs = parseInt(placeholderId.replace("new_", ""), 10) || 0;
-    let knownIds = new Set<string>();
+    // Immediately show the loading terminal in the UI
+    startClaude(placeholderId);
 
-    // Retry up to 3 times: the real session metadata may not be written
-    // yet when the first attempt runs.  knownIds tracks all candidates
-    // seen so far so that stale sessions from a previous run on the same
-    // placeholder are excluded from later attempts.
-    for (let attempt = 0; attempt < 3; attempt++) {
+    // Poll every 500 ms (up to 15 s) for the real UUID Claude Code creates.
+    // find_sessions_since only reads ~/.claude/sessions/*.json (no .jsonl scans),
+    // filters by workspace CWD and startedAt > sinceMs on the Rust side —
+    // much cheaper than listSessions() which reads every conversation file.
+    for (let attempt = 0; attempt < 30; attempt++) {
+      await new Promise<void>((r) => setTimeout(r, 500));
+
+      // User stopped the session before we found the UUID — abort silently
       if (!liveSessions.has(placeholderId)) return;
+
       try {
-        const sessions = await api.listSessions();
-        const candidates = sessions.filter((s) =>
-          !s.id.startsWith("new_") &&
-          !liveSessions.has(s.id) &&
-          !Array.from(ptyToDisplay.values()).includes(s.id) &&
-          !knownIds.has(s.id),
+        const candidates = await api.findSessionsSince(sinceMs);
+        const realId = candidates.find(
+          (id) =>
+            !Array.from(ptyToDisplay.values()).includes(id) &&
+            !liveSessions.has(id),
         );
 
-        // Sort by timestamp descending, pick the newest candidate
-        candidates.sort((a, b) => {
-          const aMs = a.timestamp < 1_000_000_000_000
-            ? a.timestamp * 1000 : a.timestamp;
-          const bMs = b.timestamp < 1_000_000_000_000
-            ? b.timestamp * 1000 : b.timestamp;
-          return bMs - aMs;
-        });
-        const real = candidates[0];
+        if (realId) {
+          // Atomically swap internal maps: placeholder → real UUID.
+          // IMPORTANT: do NOT call pty_rename_session on the Rust side.
+          // The onData handler and ResizeObserver in startClaude() capture
+          // the placeholder PTY key in their closures. Renaming on the Rust
+          // side would break input because pty_write("new_xxx") can no longer
+          // find the PTY (it would have been moved to the real UUID).
+          ptyToDisplay.set(placeholderId, realId);
+          liveDisplayIds.delete(placeholderId);
+          liveDisplayIds.add(realId);
+          monitor.migrateState(placeholderId, realId);
 
-        if (real) {
-          const realMs = real.timestamp < 1_000_000_000_000
-            ? real.timestamp * 1000 : real.timestamp;
-          if (realMs > sinceMs && liveSessions.has(placeholderId)) {
-            ptyToDisplay.set(placeholderId, real.id);
-            liveDisplayIds.delete(placeholderId);
-            liveDisplayIds.add(real.id);
-            // Atomically migrate session status + internal tracking state from
-            // the placeholder key to the real UUID, so the title-bar count
-            // stays correct and Enter/idle tracking continues uninterrupted.
-            monitor.migrateState(placeholderId, real.id);
-            // IMPORTANT: do NOT call pty_rename_session on the Rust side.
-            // The onData handler and ResizeObserver in startClaude() capture
-            // the placeholder PTY key in their closures. Renaming on the Rust
-            // side breaks input because pty_write("new_xxx") can no longer
-            // find the PTY (it was moved to the real UUID in Rust's HashMap).
-            onSessionUpdated(real.id);
-            return; // migration complete
-          }
+          // Persist the user-chosen name (Claude Code auto-generates its own)
+          api.renameSession(realId, name).catch(() => {});
+
+          // Real UUID exposed to the outside world for the first time
+          onSessionReady({ id: realId, name });
+          return;
         }
-
-        // Record all known session IDs for exclusion in next attempt
-        for (const s of sessions) {
-          if (!s.id.startsWith("new_")) knownIds.add(s.id);
-        }
-      } catch (_) { /* best effort */ }
-
-      // Wait before next retry (skip after last attempt)
-      if (attempt < 2) {
-        await new Promise((r) => setTimeout(r, 3000));
-      }
+      } catch (_) {}
     }
+    // Timed out — Claude never created a session file (install issue, etc.)
+    // The terminal still shows the error message from ptySpawnClaude.catch().
   }
 
   /** Seconds to keep the loader after first PTY data — bridges the gap
@@ -449,6 +434,7 @@ export function useTerminalManager(
     currentSid: () => currentSid,
     showSession,
     startClaude,
+    createAndStartSession,
     stopClaude,
     destroyLiveSession,
     resetView,

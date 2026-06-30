@@ -17,6 +17,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "session-changed": [id: string];
+  "new-session": [name: string];
   "workspace-changed": [path: string];
   "open-settings": [];
   "open-workbench": [];
@@ -84,19 +85,10 @@ async function loadSessions() {
   loading.value = true;
   const wsKey = activeWorkspace.value;
 
-  // Save the active placeholder session so it survives the refresh
-  const currentList = sessionsByWorkspace.value[wsKey] ?? [];
-  const activePlaceholder = (props.activeSessionId?.startsWith("new_"))
-    ? currentList.find(s => s.id === props.activeSessionId)
-    : null;
-
   try {
     const loaded = await api.listSessions();
-    const filtered = loaded.filter(s => !s.id.startsWith("new_"));
-    if (activePlaceholder) {
-      filtered.unshift(activePlaceholder);
-    }
-    sessionsByWorkspace.value[wsKey] = filtered;
+    // Exclude any stale new_xxx entries that may exist from previous runs
+    sessionsByWorkspace.value[wsKey] = loaded.filter(s => !s.id.startsWith("new_"));
   } catch (_e) {
     sessionsByWorkspace.value[wsKey] = [];
   }
@@ -105,10 +97,10 @@ async function loadSessions() {
 
   const list = sessionsByWorkspace.value[wsKey] ?? [];
   if (list.length === 0) {
-    await newSession();
+    newSession();
     return;
   }
-  if (!props.activeSessionId || props.activeSessionId.startsWith("new_")) {
+  if (!props.activeSessionId) {
     emit("session-changed", list[0].id);
   }
 }
@@ -206,7 +198,17 @@ async function switchWorkspace(ws: WorkspaceInfo) {
 async function renameSession(id: string, name: string) {
   try {
     await api.renameSession(id, name);
-    await loadSessions();
+    // Update in-memory list directly — avoids a full reload that would
+    // clobber any optimistic state not yet persisted on disk.
+    const wsKey = activeWorkspace.value;
+    const list = sessionsByWorkspace.value[wsKey] ?? [];
+    const idx = list.findIndex(s => s.id === id);
+    if (idx !== -1) {
+      list.splice(idx, 1, { ...list[idx], name });
+      sessionsByWorkspace.value[wsKey] = [...list];
+    } else {
+      await loadSessions();
+    }
   } catch (_e) { /* ignore */ }
 }
 
@@ -219,27 +221,9 @@ function onSessionContextMenu(e: MouseEvent, id: string) {
   );
 }
 
-async function newSession() {
-  const wsKey = activeWorkspace.value;
+function newSession() {
   const name = `新会话 ${new Date().toLocaleTimeString()}`;
-  try {
-    const s = await api.createSession(name);
-    const list = sessionsByWorkspace.value[wsKey] ?? [];
-    list.unshift(s);
-    sessionsByWorkspace.value[wsKey] = list;
-    emit("session-changed", s.id);
-  } catch (_e) {
-    const s: Session = {
-      id: Date.now().toString(),
-      name,
-      timestamp: Date.now(),
-      last_message: "",
-    };
-    const list = sessionsByWorkspace.value[wsKey] ?? [];
-    list.unshift(s);
-    sessionsByWorkspace.value[wsKey] = list;
-    emit("session-changed", s.id);
-  }
+  emit("new-session", name);
 }
 
 onUnmounted(() => {
@@ -269,40 +253,19 @@ onMounted(async () => {
 });
 
 /**
- * Replace a placeholder session (new_xxx) with the real session after migration.
- * Does an in-place swap without triggering a full list reload or loading indicator.
+ * Add a newly confirmed session (real UUID) to the top of the active workspace list.
+ * Called by App.vue once `createAndStartSession` resolves the real UUID.
  */
-async function migrateSession(oldId: string, newId: string) {
+function addSession(session: Session) {
   const wsKey = activeWorkspace.value;
   const list = sessionsByWorkspace.value[wsKey] ?? [];
-  const idx = list.findIndex(s => s.id === oldId);
-  if (idx === -1) return;
-
-  const placeholder = list[idx];
-
-  // Persist the placeholder's custom name under the real session ID,
-  // so it survives page reloads (otherwise listSessions returns "未命名"
-  // from Claude Code's auto-generated metadata).
-  try {
-    await api.renameSession(newId, placeholder.name);
-  } catch (_) { /* best effort */ }
-
-  try {
-    const all = await api.listSessions();
-    const real = all.find(s => s.id === newId);
-    if (real) {
-      real.name = placeholder.name; // use our name, not Claude Code's
-      list.splice(idx, 1, real);
-      sessionsByWorkspace.value[wsKey] = [...list];
-    } else {
-      await loadSessions();
-    }
-  } catch (_) {
-    await loadSessions();
+  if (!list.some(s => s.id === session.id)) {
+    list.unshift(session);
+    sessionsByWorkspace.value[wsKey] = [...list];
   }
 }
 
-defineExpose({ newSession, loadSessions, migrateSession, selectSessionFromWorkspace, sessionsByWorkspace });
+defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace, sessionsByWorkspace });
 </script>
 
 <template>

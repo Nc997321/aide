@@ -111,6 +111,9 @@ export const api = {
   listSessions(): Promise<Session[]> {
     return invoke("list_sessions");
   },
+  findSessionsSince(sinceMs: number): Promise<string[]> {
+    return invoke("find_sessions_since", { sinceMs });
+  },
   listSessionsForWorkspace(wsKey: string): Promise<Session[]> {
     return invoke("list_sessions_for_workspace", { wsKey });
   },

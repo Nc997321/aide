@@ -560,3 +560,59 @@ fn our_session_name(session_id: &str) -> Option<String> {
     }
     None
 }
+
+/// Lightweight session discovery used during new-session polling.
+///
+/// Scans only `~/.claude/sessions/` (small JSON metadata, no .jsonl reads) and
+/// returns IDs of sessions whose `startedAt > since_ms` that belong to the
+/// current workspace. Results are sorted newest-first so the caller can pick the
+/// first ID that isn't already mapped to an active PTY.
+#[tauri::command]
+pub fn find_sessions_since(
+    workspace_state: State<'_, WorkspaceState>,
+    since_ms: u64,
+) -> Result<Vec<String>, String> {
+    let sessions_dir = claude_sessions_dir();
+    if !sessions_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let root = project_root_for_commands(&workspace_state);
+    let root_normalized = normalize_path_for_compare(&root.to_string_lossy());
+
+    let read_dir = fs::read_dir(&sessions_dir)
+        .map_err(|e| format!("Failed to read sessions dir: {}", e))?;
+
+    let mut candidates: Vec<(String, u64)> = Vec::new();
+
+    for entry in read_dir {
+        let Ok(entry) = entry else { continue; };
+        let path = entry.path();
+        if !path.extension().map(|e| e == "json").unwrap_or(false) {
+            continue;
+        }
+
+        let Ok(content) = fs::read_to_string(&path) else { continue; };
+        let Ok(v) = serde_json::from_str::<Value>(&content) else { continue; };
+
+        let started_at = v.get("startedAt").and_then(|t| t.as_u64()).unwrap_or(0);
+        if started_at <= since_ms {
+            continue;
+        }
+
+        let session_cwd = v.get("cwd").and_then(|c| c.as_str()).unwrap_or("");
+        if normalize_path_for_compare(session_cwd) != root_normalized {
+            continue;
+        }
+
+        let session_id = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
+        if session_id.is_empty() || session_id.starts_with("new_") {
+            continue;
+        }
+
+        candidates.push((session_id.to_string(), started_at));
+    }
+
+    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+    Ok(candidates.into_iter().map(|(id, _)| id).collect())
+}

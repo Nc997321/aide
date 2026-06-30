@@ -201,17 +201,14 @@ function onSessionChanged(id: string) {
   activeSessionId.value = id;
 }
 
-async function onSessionUpdated(newId?: string) {
-  if (newId) {
-    // Migration: swap the placeholder entry in-place instead of reloading
-    // the entire list (avoids the loading indicator flash).
-    const oldId = activeSessionId.value;
-    activeSessionId.value = newId;
-    await nextTick();
-    await sidebarRef.value?.migrateSession(oldId, newId);
-  } else {
-    await sidebarRef.value?.loadSessions();
-  }
+async function onSessionReady(id: string, name: string) {
+  // Real UUID is known for the first time — add to sidebar and switch to it.
+  sidebarRef.value?.addSession({ id, name, timestamp: Date.now(), last_message: "" });
+  activeSessionId.value = id;
+}
+
+async function onNewSession(name: string) {
+  terminalPanelRef.value?.createSession(name);
 }
 
 async function onSidebarWsChanged(path: string) {
@@ -404,6 +401,7 @@ onUnmounted(() => {
           ref="sidebarRef"
           :active-session-id="activeSessionId"
           @session-changed="onSessionChanged"
+          @new-session="onNewSession"
           @workspace-changed="onSidebarWsChanged"
           @open-settings="openSettings"
           @open-workbench="wb.toggle(workspacePath)"
@@ -426,7 +424,7 @@ onUnmounted(() => {
           ref="terminalPanelRef"
           :session-id="activeSessionId"
           :workspace-path="workspacePath"
-          @session-updated="onSessionUpdated"
+          @session-ready="onSessionReady"
         />
       </div>
 

@@ -9,7 +9,7 @@ import { api } from "../api";
 import "xterm/css/xterm.css";
 
 const props = defineProps<{ sessionId: string; workspacePath: string }>();
-const emit = defineEmits<{ "session-updated": [newId?: string] }>();
+const emit = defineEmits<{ "session-ready": [id: string, name: string] }>();
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -22,7 +22,7 @@ const previewRef = ref<HTMLDivElement>();
 const previewHtml = ref("");
 
 async function loadPreviewContent(sid: string) {
-  if (sid.startsWith("new_")) {
+  if (!sid) {
     previewHtml.value = "";
     return;
   }
@@ -78,13 +78,20 @@ const {
   currentSid,
   showSession,
   startClaude,
+  createAndStartSession,
   stopClaude,
   resetView,
   initPtyListener,
   initExitListener,
   initDragDrop,
   cleanup,
-} = useTerminalManager(stackRef, previewRef, (newId) => emit("session-updated", newId), loadPreviewContent, registerTo);
+} = useTerminalManager(
+  stackRef,
+  previewRef,
+  ({ id, name }) => emit("session-ready", id, name),
+  loadPreviewContent,
+  registerTo,
+);
 
 // ── Toolbar state ──
 
@@ -101,7 +108,6 @@ const displayName = ref("");
 const sessionName = computed(() => {
   const sid = props.sessionId;
   if (!sid) return "";
-  if (sid.startsWith("new_")) return "新会话";
   return displayName.value || sid.substring(0, 8);
 });
 
@@ -135,12 +141,10 @@ function onPreviewClick() {
 watch(() => props.sessionId, async (newId) => {
   showSession(newId);
   if (newId) await loadPreviewContent(newId);
-  // Look up display name for the toolbar
-  if (newId && !newId.startsWith("new_")) {
+  if (newId) {
     try {
       const sessions = await api.listSessions();
-      const s = sessions.find(sess => sess.id === newId);
-      displayName.value = s?.name || "";
+      displayName.value = sessions.find(s => s.id === newId)?.name || "";
     } catch { displayName.value = ""; }
   } else {
     displayName.value = "";
@@ -164,7 +168,11 @@ function restartSession(sid: string) {
   setTimeout(() => startClaude(sid), 300);
 }
 
-defineExpose({ restartSession, resetView });
+function createSession(name: string) {
+  createAndStartSession(name);
+}
+
+defineExpose({ restartSession, resetView, createSession });
 
 onUnmounted(() => {
   window.removeEventListener("keydown", onWindowKeydown);
@@ -195,11 +203,7 @@ onUnmounted(() => {
         tabindex="0"
         @keydown="onPreviewKeydown"
       >
-        <div v-if="props.sessionId && props.sessionId.startsWith('new_')" class="preview-empty" @click="onPreviewClick">
-          <div class="preview-empty__title">New Session</div>
-          <div class="preview-empty__hint">Press Enter or click Start</div>
-        </div>
-        <template v-else-if="previewHtml">
+        <template v-if="previewHtml">
           <div class="preview-messages" v-html="previewHtml"></div>
           <div class="preview-footer" @click="onPreviewClick">Press Enter to continue</div>
         </template>
