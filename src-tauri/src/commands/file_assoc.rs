@@ -1,4 +1,4 @@
-//! Windows「打开方式」集成：注册表注册 + 冷启动 pending 路径。
+//! Windows「打开方式」集成：把 Aide 注册为「已注册应用程序」。
 //!
 //! 资源管理器右键「打开方式 → Aide」会以 `aide.exe <path>` 二次启动；
 //! `tauri-plugin-single-instance` 把 argv 转发到首个实例，由 `lib.rs` 的回调
@@ -6,10 +6,15 @@
 //! 不会触发，故 setup 把路径暂存到 `PendingOpenFile`，前端 mount 时通过
 //! `consume_pending_open_file` 取走兜底。
 //!
-//! 注册表全部写在 HKCU（per-user、免管理员、不抢默认程序）：
-//! - ProgID `Software\Classes\Aide.File` + `shell\open\command = "<exe>" "%1"`
-//! - 每个扩展名 `.xxx\OpenWithProgids` 下加值名 `Aide.File`（空字符串）→
-//!   仅让 Aide 出现在「打开方式」列表，不改默认程序。
+//! 注册表全部写在 HKCU（per-user、免管理员、不抢默认程序）。仅写
+//! `OpenWithProgids` 的裸 ProgID 会被 Windows 当成低优先级、埋在「其他应用」
+//! 末尾甚至要展开「更多应用」才看得见。这里做完整的「已注册应用程序」注册：
+//! - ProgID `Software\Classes\Aide.File`（FriendlyAppName + shell\open\command）
+//! - 应用注册 `Software\Classes\Applications\<exe>`（FriendlyAppName + command）
+//! - `RegisteredApplications\Aide` → `Applications\<exe>\Capabilities`
+//!   （ApplicationName + FileAssociations\.ext = Aide.File）
+//! - 每个扩展名：`OpenWithProgids\Aide.File` + `OpenWithList\<exe>`
+//! 写完调 `SHChangeNotify(SHCNE_ASSOCCHANGED)` 刷新 shell 缓存，立即生效。
 
 use std::sync::Mutex;
 
@@ -21,7 +26,8 @@ use super::settings::{load_config, save_config};
 pub struct PendingOpenFile(pub Mutex<Option<String>>);
 
 const PROG_ID: &str = "Aide.File";
-const PROG_ID_LABEL: &str = "Aide File";
+const APP_NAME: &str = "Aide";
+const APP_DESCRIPTION: &str = "Claude Code 桌面壳";
 
 #[tauri::command]
 pub fn consume_pending_open_file(state: State<'_, PendingOpenFile>) -> Option<String> {
@@ -45,20 +51,22 @@ fn current_exe_string() -> Result<String, String> {
 }
 
 #[cfg(windows)]
-fn ensure_prog_id(exe: &str) -> Result<(), String> {
-    use winreg::{enums::*, RegKey};
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (prog, _) = hkcu
-        .create_subkey(format!("Software\\Classes\\{}", PROG_ID))
-        .map_err(|e| format!("Failed to create ProgID: {}", e))?;
-    prog.set_value("", &PROG_ID_LABEL)
-        .map_err(|e| format!("Failed to set ProgID label: {}", e))?;
-    let (icon, _) = prog
+fn exe_filename(exe: &str) -> String {
+    std::path::Path::new(exe)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "aide.exe".to_string())
+}
+
+/// 写 shell\open\command 与 DefaultIcon 到一个已存在的 key。
+#[cfg(windows)]
+fn write_open_command(key: &winreg::RegKey, exe: &str) -> Result<(), String> {
+    let (icon, _) = key
         .create_subkey("DefaultIcon")
         .map_err(|e| format!("Failed to create DefaultIcon: {}", e))?;
     icon.set_value("", &format!("{},0", exe))
         .map_err(|e| format!("Failed to set icon: {}", e))?;
-    let (cmd, _) = prog
+    let (cmd, _) = key
         .create_subkey("shell\\open\\command")
         .map_err(|e| format!("Failed to create shell\\open\\command: {}", e))?;
     cmd.set_value("", &format!("\"{}\" \"%1\"", exe))
@@ -66,35 +74,134 @@ fn ensure_prog_id(exe: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 注册 ProgID、Applications\<exe>、Capabilities 外壳、RegisteredApplications。
 #[cfg(windows)]
-fn register_ext(ext: &str) -> Result<(), String> {
+fn ensure_app_registration(exe: &str) -> Result<(), String> {
     use winreg::{enums::*, RegKey};
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (ext_key, _) = hkcu
-        .create_subkey(format!("Software\\Classes\\.{}", ext))
-        .map_err(|e| format!("Failed to create .{}: {}", ext, e))?;
-    let (owls, _) = ext_key
-        .create_subkey("OpenWithProgids")
-        .map_err(|e| format!("Failed to create OpenWithProgids: {}", e))?;
-    // 空字符串 REG_SZ：仅注册到「打开方式」列表，不改默认程序。
-    owls.set_value(PROG_ID, &"")
-        .map_err(|e| format!("Failed to set OpenWithProgids: {}", e))?;
+    let exe_name = exe_filename(exe);
+
+    // ProgID Aide.File
+    let (prog, _) = hkcu
+        .create_subkey(format!("Software\\Classes\\{}", PROG_ID))
+        .map_err(|e| format!("Failed to create ProgID: {}", e))?;
+    prog.set_value("", &"Aide File")
+        .map_err(|e| format!("Failed to set ProgID label: {}", e))?;
+    prog.set_value("FriendlyAppName", &APP_NAME)
+        .map_err(|e| format!("Failed to set FriendlyAppName: {}", e))?;
+    write_open_command(&prog, exe)?;
+
+    // Applications\<exe> —— 让 Windows 把 exe 识别为「应用程序」，给出友好名称
+    let app_path = format!("Software\\Classes\\Applications\\{}", exe_name);
+    let (app, _) = hkcu
+        .create_subkey(&app_path)
+        .map_err(|e| format!("Failed to create Applications key: {}", e))?;
+    app.set_value("FriendlyAppName", &APP_NAME)
+        .map_err(|e| format!("Failed to set app FriendlyAppName: {}", e))?;
+    write_open_command(&app, exe)?;
+
+    // Capabilities 外壳（FileAssociations 的每个扩展名在 register_ext 里填）
+    let caps_path = format!("{}\\Capabilities", app_path);
+    let (caps, _) = hkcu
+        .create_subkey(&caps_path)
+        .map_err(|e| format!("Failed to create Capabilities: {}", e))?;
+    caps.set_value("ApplicationName", &APP_NAME)
+        .map_err(|e| format!("Failed to set ApplicationName: {}", e))?;
+    caps.set_value("ApplicationDescription", &APP_DESCRIPTION)
+        .map_err(|e| format!("Failed to set ApplicationDescription: {}", e))?;
+    let _ = caps.create_subkey("FileAssociations");
+
+    // RegisteredApplications —— 进入「已注册应用程序」名单，优先级提升
+    let (ra, _) = hkcu
+        .create_subkey("Software\\RegisteredApplications")
+        .map_err(|e| format!("Failed to open RegisteredApplications: {}", e))?;
+    ra.set_value(APP_NAME, &caps_path)
+        .map_err(|e| format!("Failed to set RegisteredApplications: {}", e))?;
+
     Ok(())
 }
 
 #[cfg(windows)]
-fn unregister_ext(ext: &str) -> Result<(), String> {
+fn register_ext(ext: &str, exe: &str) -> Result<(), String> {
     use winreg::{enums::*, RegKey};
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let owls = hkcu
-        .open_subkey_with_flags(
-            format!("Software\\Classes\\.{}\\OpenWithProgids", ext),
-            KEY_WRITE,
-        )
-        .map_err(|e| format!("Failed to open .{}\\OpenWithProgids: {}", ext, e))?;
-    owls.delete_value(PROG_ID)
-        .map_err(|e| format!("Failed to delete OpenWithProgids value: {}", e))?;
+    let exe_name = exe_filename(exe);
+
+    let (ext_key, _) = hkcu
+        .create_subkey(format!("Software\\Classes\\.{}", ext))
+        .map_err(|e| format!("Failed to create .{}: {}", ext, e))?;
+
+    // OpenWithProgids：裸 ProgID 入口（兜底）
+    let (owp, _) = ext_key
+        .create_subkey("OpenWithProgids")
+        .map_err(|e| format!("Failed to create OpenWithProgids: {}", e))?;
+    owp.set_value(PROG_ID, &"")
+        .map_err(|e| format!("Failed to set OpenWithProgids: {}", e))?;
+
+    // OpenWithList\<exe>：经典入口，配合 Applications\<exe> 显示友好名称
+    let (owl, _) = ext_key
+        .create_subkey("OpenWithList")
+        .map_err(|e| format!("Failed to create OpenWithList: {}", e))?;
+    owl.set_value(&exe_name, &"")
+        .map_err(|e| format!("Failed to set OpenWithList: {}", e))?;
+
+    // Capabilities\FileAssociations\.ext = ProgID
+    let fa_path = format!(
+        "Software\\Classes\\Applications\\{}\\Capabilities\\FileAssociations",
+        exe_name
+    );
+    let (fa, _) = hkcu
+        .create_subkey(&fa_path)
+        .map_err(|e| format!("Failed to create FileAssociations: {}", e))?;
+    fa.set_value(format!(".{}", ext), &PROG_ID)
+        .map_err(|e| format!("Failed to set FileAssociations value: {}", e))?;
+
     Ok(())
+}
+
+#[cfg(windows)]
+fn unregister_ext(ext: &str, exe: &str) -> Result<(), String> {
+    use winreg::{enums::*, RegKey};
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let exe_name = exe_filename(exe);
+
+    // OpenWithProgids\Aide.File
+    if let Ok(owp) = hkcu.open_subkey_with_flags(
+        format!("Software\\Classes\\.{}\\OpenWithProgids", ext),
+        KEY_WRITE,
+    ) {
+        let _ = owp.delete_value(PROG_ID);
+    }
+    // OpenWithList\<exe>
+    if let Ok(owl) = hkcu.open_subkey_with_flags(
+        format!("Software\\Classes\\.{}\\OpenWithList", ext),
+        KEY_WRITE,
+    ) {
+        let _ = owl.delete_value(&exe_name);
+    }
+    // Capabilities\FileAssociations\.ext
+    if let Ok(fa) = hkcu.open_subkey_with_flags(
+        format!(
+            "Software\\Classes\\Applications\\{}\\Capabilities\\FileAssociations",
+            exe_name
+        ),
+        KEY_WRITE,
+    ) {
+        let _ = fa.delete_value(format!(".{}", ext));
+    }
+    Ok(())
+}
+
+/// 写完注册表后通知 shell 刷新文件关联缓存，让「打开方式」立即看到新条目，
+/// 不必重启 explorer。
+#[cfg(windows)]
+fn notify_assoc_changed() {
+    use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
+    // SAFETY: SHChangeNotify 用 null 指针 + SHCNE_ASSOCCHANGED 表示全局关联变更，
+    // 无需有效 PIDL，是文档允许的调用形式。
+    unsafe {
+        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
+    }
 }
 
 #[tauri::command]
@@ -103,10 +210,11 @@ pub fn register_open_with(extensions: Vec<String>) -> Result<(), String> {
     #[cfg(windows)]
     {
         let exe = current_exe_string()?;
-        ensure_prog_id(&exe)?;
+        ensure_app_registration(&exe)?;
         for e in &exts {
-            register_ext(e)?;
+            register_ext(e, &exe)?;
         }
+        notify_assoc_changed();
     }
     let _ = exts;
     Ok(())
@@ -117,10 +225,11 @@ pub fn unregister_open_with(extensions: Vec<String>) -> Result<(), String> {
     let exts: Vec<String> = extensions.iter().filter_map(|e| sanitize_ext(e)).collect();
     #[cfg(windows)]
     {
+        let exe = current_exe_string()?;
         for e in &exts {
-            // 注销时扩展名可能已不存在，忽略其错误以保证幂等。
-            let _ = unregister_ext(e);
+            let _ = unregister_ext(e, &exe);
         }
+        notify_assoc_changed();
     }
     let _ = exts;
     Ok(())
@@ -148,7 +257,10 @@ pub fn set_open_with_extensions(new_exts: Vec<String>) -> Result<(), String> {
         .collect();
 
     // 落盘 open_with_extensions
-    let mut merged = config.get("settings").cloned().unwrap_or(serde_json::json!({}));
+    let mut merged = config
+        .get("settings")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
     merged["open_with_extensions"] =
         serde_json::to_value(&new_exts).map_err(|e| e.to_string())?;
     config["settings"] = merged;

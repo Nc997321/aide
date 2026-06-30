@@ -36,6 +36,8 @@ png = "0.17"
 clipboard-win = "5"
 # HKCU 注册表写入：把 Aide 加入「打开方式」列表（per-user、免管理员）
 winreg = "0.55"
+# SHChangeNotify：写完注册表后通知 shell 刷新文件关联缓存（复用 tauri 已拉的版本）
+windows = { version = "0.61", features = ["Win32_UI_Shell"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.2"
