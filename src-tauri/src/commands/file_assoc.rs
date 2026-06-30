@@ -235,7 +235,7 @@ pub fn unregister_open_with(extensions: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-/// 原子地更新 `open_with_extensions` 设置并按 diff 同步注册表。
+/// 原子地更新 `openWithExtensions` 设置并按 diff 同步注册表。
 ///
 /// 不走通用 `set_settings`：那条路是字段级 merge、不感知注册表副作用，
 /// 会让设置与注册表脱钩。这里先落盘再 diff 旧/新集合，新增注册、移除注销。
@@ -247,21 +247,26 @@ pub fn set_open_with_extensions(new_exts: Vec<String>) -> Result<(), String> {
     if config.is_null() {
         config = serde_json::json!({});
     }
+    // 读取旧值：优先 camelCase（新约定），回退 snake_case（旧 config.json）。
     let old: Vec<String> = config
         .get("settings")
-        .and_then(|s| s.get("open_with_extensions"))
+        .and_then(|s| s.get("openWithExtensions").or_else(|| s.get("open_with_extensions")))
         .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
         .unwrap_or_default()
         .into_iter()
         .filter_map(|e| sanitize_ext(&e))
         .collect();
 
-    // 落盘 open_with_extensions
+    // 落盘 openWithExtensions（与 AppSettings 的 serde rename 约定一致）
     let mut merged = config
         .get("settings")
         .cloned()
         .unwrap_or(serde_json::json!({}));
-    merged["open_with_extensions"] =
+    // 迁移：若残留旧 snake_case key，先清掉，避免双键并存。
+    if let Some(obj) = merged.as_object_mut() {
+        obj.remove("open_with_extensions");
+    }
+    merged["openWithExtensions"] =
         serde_json::to_value(&new_exts).map_err(|e| e.to_string())?;
     config["settings"] = merged;
     save_config(&config)?;

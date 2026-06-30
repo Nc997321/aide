@@ -12,6 +12,7 @@ use once_cell::sync::Lazy;
 static PENDING_NOTIFICATION: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Keybindings {
     #[serde(default = "default_search_open")]
     pub search_open: String,
@@ -28,6 +29,7 @@ impl Default for Keybindings {
 fn default_search_open() -> String { "Ctrl+P".to_string() }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     #[serde(default = "default_font_size")]
     pub font_size: u32,
@@ -47,7 +49,8 @@ pub struct AppSettings {
     pub theme: String,
     /// 已注册到 Windows「打开方式」的扩展名（小写、无前导点）。
     /// 持久化于此，`set_open_with_extensions` 负责同步注册表。
-    #[serde(default)]
+    /// `alias` 兼容落盘为 snake_case 的旧 config.json。
+    #[serde(default, alias = "open_with_extensions")]
     pub open_with_extensions: Vec<String>,
     /// 「最近访问」每类列表保留条数（会话与文件共用），默认 10。
     #[serde(default = "default_recent_limit")]
@@ -163,5 +166,56 @@ pub fn get_pending_notification() -> Option<String> {
         guard.take()
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `set_settings` 收的是 `serde_json::Value`，Tauri 不转换 Value 内部 key，
+    /// 前端发 camelCase 就以 camelCase 落盘。`AppSettings` 用 `rename_all = "camelCase"`
+    /// 后，`get_settings` 必须能按 camelCase 反序列化多词字段，且再序列化仍出 camelCase。
+    #[test]
+    fn app_settings_round_trips_camel_case() {
+        let json = r#"{
+            "fontSize": 16,
+            "fontFamily": "mono",
+            "notificationsEnabled": false,
+            "proxy": "p",
+            "shellPath": "s",
+            "workbenchHeight": 100,
+            "keybindings": { "searchOpen": "Ctrl+P" },
+            "theme": "warm-dark",
+            "openWithExtensions": [".rs"],
+            "recentLimit": 3
+        }"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.font_size, 16);
+        assert_eq!(s.workbench_height, 100);
+        assert_eq!(s.recent_limit, 3);
+        assert_eq!(s.open_with_extensions, vec![".rs".to_string()]);
+        assert_eq!(s.keybindings.search_open, "Ctrl+P");
+
+        // 再序列化必须仍是 camelCase（前端按 camelCase 读）
+        let out = serde_json::to_string(&s).unwrap();
+        assert!(out.contains("\"fontSize\":16"), "fontSize key must be camelCase: {out}");
+        assert!(out.contains("\"workbenchHeight\":100"), "{out}");
+        assert!(out.contains("\"recentLimit\":3"), "{out}");
+        assert!(out.contains("\"openWithExtensions\""), "{out}");
+        assert!(out.contains("\"searchOpen\":\"Ctrl+P\""), "{out}");
+        // 不应出现 snake_case 多词键
+        assert!(!out.contains("font_size"));
+        assert!(!out.contains("workbench_height"));
+        assert!(!out.contains("recent_limit"));
+    }
+
+    /// 旧 config.json 把 `open_with_extensions` 落盘为 snake_case；`alias` 让新代码
+    /// 仍能读旧数据，避免迁移丢失「打开方式」扩展名。
+    #[test]
+    fn app_settings_reads_legacy_snake_case_open_with_extensions() {
+        let json = r#"{"open_with_extensions": [".py"]}"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.open_with_extensions, vec![".py".to_string()]);
     }
 }
