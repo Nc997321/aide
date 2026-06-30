@@ -181,6 +181,49 @@ fn should_skip_dir(name: &str) -> bool {
     ) || name.starts_with('.')
 }
 
+/// Walk src/main/java (and src/main/kotlin) inside a Maven/Gradle module
+/// looking for the class annotated with @SpringBootApplication.
+/// Returns the fully-qualified class name, e.g. "com.example.MyApp".
+fn find_spring_boot_main_class(module_root: &Path) -> Option<String> {
+    for src_dir in &["src/main/java", "src/main/kotlin"] {
+        let src = module_root.join(src_dir);
+        if src.is_dir() {
+            if let Some(cls) = scan_spring_main(&src) {
+                return Some(cls);
+            }
+        }
+    }
+    None
+}
+
+fn scan_spring_main(dir: &Path) -> Option<String> {
+    let Ok(entries) = fs::read_dir(dir) else { return None; };
+    let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            if let Some(cls) = scan_spring_main(&path) { return Some(cls); }
+        } else {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ext != "java" && ext != "kt" { continue; }
+            let content = fs::read_to_string(&path).unwrap_or_default();
+            if !content.contains("@SpringBootApplication") { continue; }
+            // Java/Kotlin: public class name always equals file stem.
+            let class_name = path.file_stem()?.to_str()?.to_string();
+            let pkg_re = Regex::new(r"^package\s+([\w.]+)").unwrap();
+            let package = content.lines()
+                .find_map(|l| pkg_re.captures(l.trim()).and_then(|c| c.get(1).map(|m| m.as_str().to_string())))
+                .unwrap_or_default();
+            return Some(if package.is_empty() {
+                class_name
+            } else {
+                format!("{}.{}", package, class_name)
+            });
+        }
+    }
+    None
+}
+
 // -- Concrete detectors --
 
 // Priority 100 -- Tauri desktop app (package.json + src-tauri/Cargo.toml)
@@ -222,7 +265,10 @@ impl ProjectDetector for MavenMultiModuleDetector {
                 let sub_pom = read_file(&sub, "pom.xml");
                 // Only generate targets for runnable modules.
                 let cmd = if sub_pom.contains("spring-boot") {
-                    format!("mvn -pl {} -am spring-boot:run", module)
+                    let main_flag = find_spring_boot_main_class(&sub)
+                        .map(|cls| format!(" -Dspring-boot.run.main-class={}", cls))
+                        .unwrap_or_default();
+                    format!("mvn -pl {} -am spring-boot:run{}", module, main_flag)
                 } else if sub_pom.contains("exec-maven-plugin") {
                     format!("mvn -pl {} -am exec:java", module)
                 } else {
@@ -281,10 +327,13 @@ impl ProjectDetector for SpringBootMavenDetector {
         content.contains("spring-boot") && !content.contains("<modules>")
     }
     fn build_targets(&self, root: &Path) -> Vec<RunTarget> {
+        let main_flag = find_spring_boot_main_class(root)
+            .map(|cls| format!(" -Dspring-boot.run.main-class={}", cls))
+            .unwrap_or_default();
         vec![RunTarget {
             name: dir_name(root),
             cwd: root.to_string_lossy().to_string(),
-            command: "mvn spring-boot:run".to_string(),
+            command: format!("mvn spring-boot:run{}", main_flag),
         }]
     }
 }
