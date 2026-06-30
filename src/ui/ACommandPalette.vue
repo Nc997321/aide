@@ -35,6 +35,12 @@ function setSearchFn(fn: (q: string, limit: number) => Promise<PaletteResult[]>)
   searchFn = fn;
 }
 
+let recentFn: (() => Promise<PaletteResult[]>) | null = null;
+
+function setRecentFn(fn: () => Promise<PaletteResult[]>) {
+  recentFn = fn;
+}
+
 const grouped = computed(() => {
   const groups: Record<string, PaletteResult[]> = {};
   for (const r of results.value) {
@@ -44,13 +50,30 @@ const grouped = computed(() => {
   return groups;
 });
 
+const emptyHint = computed(() =>
+  query.value.trim() ? "无匹配结果" : "暂无最近访问",
+);
+
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 watch(query, (q) => {
   if (debounceTimer) clearTimeout(debounceTimer);
   if (!q.trim()) {
-    results.value = [];
-    selectedIndex.value = 0;
+    // 空查询：展示最近访问
+    if (recentFn) {
+      recentFn()
+        .then((r) => {
+          results.value = r;
+          selectedIndex.value = 0;
+        })
+        .catch(() => {
+          results.value = [];
+          selectedIndex.value = 0;
+        });
+    } else {
+      results.value = [];
+      selectedIndex.value = 0;
+    }
     return;
   }
   debounceTimer = setTimeout(async () => {
@@ -69,6 +92,14 @@ watch(
       selectedIndex.value = 0;
       await nextTick();
       inputRef.value?.focus();
+      if (recentFn) {
+        try {
+          results.value = await recentFn();
+          selectedIndex.value = 0;
+        } catch {
+          results.value = [];
+        }
+      }
     }
   },
 );
@@ -103,7 +134,7 @@ function onOverlayClick(e: MouseEvent) {
   }
 }
 
-defineExpose({ setSearchFn });
+defineExpose({ setSearchFn, setRecentFn });
 </script>
 
 <template>
@@ -140,6 +171,7 @@ defineExpose({ setSearchFn });
               </div>
             </template>
           </div>
+          <div v-else class="a-palette-empty">{{ emptyHint }}</div>
         </div>
       </div>
     </Transition>
@@ -200,6 +232,13 @@ defineExpose({ setSearchFn });
 .a-palette-results {
   overflow-y: auto;
   padding: 6px;
+}
+
+.a-palette-empty {
+  padding: 18px;
+  text-align: center;
+  color: var(--aide-text-muted);
+  font-size: 12px;
 }
 
 .a-palette-section {
