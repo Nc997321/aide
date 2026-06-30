@@ -2,7 +2,7 @@ import type { Terminal, ILink } from "xterm";
 import { api } from "../api";
 
 const FILE_PATH_RE =
-  /((?:[\w./\\-]+[/\\])?[\w.-]+\.(ts|tsx|vue|rs|js|jsx|css|scss|json|md|toml|yaml|yml|sh|py))(:\d+)?/g;
+  /((?:[\w./\\-]+[/\\])?[\w.-]+\.(ts|tsx|vue|rs|js|jsx|css|scss|json|md|toml|yaml|yml|sh|py|java|kt|xml|gradle|go|c|cpp|h|hpp|rb|php|swift|cs|proto|sql|env|lock))(:\d+)?/g;
 
 interface LinkProviderOptions {
   workspacePath: () => string;

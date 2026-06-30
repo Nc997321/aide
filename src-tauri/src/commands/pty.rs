@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, State};
 
 use crate::pty::PtyManager;
-use super::{WorkspaceState, project_root_for_commands, encode_project_path, claude_projects_dir};
+use super::{WorkspaceState, project_root_for_commands, find_session_jsonl_globally};
 
 #[tauri::command]
 pub fn pty_write(manager: State<'_, PtyManager>, session_id: String, data: String) -> Result<(), String> {
@@ -42,7 +42,7 @@ pub fn pty_spawn_claude(
     let resume_id = if session_id.starts_with("new_") {
         None
     } else {
-        find_claude_session_jsonl(&session_id, &project_root)
+        find_claude_session_jsonl(&session_id)
     };
 
     if let Some(ref id) = resume_id {
@@ -77,15 +77,19 @@ pub fn poll_pty_output(manager: State<'_, PtyManager>, session_id: String) -> Re
     manager.poll_output(&session_id)
 }
 
-fn find_claude_session_jsonl(session_id: &str, project_root: &PathBuf) -> Option<String> {
-    let encoded = encode_project_path(&project_root.to_string_lossy());
-    let jsonl_path = claude_projects_dir()
-        .join(&encoded)
-        .join(format!("{}.jsonl", session_id));
-    if jsonl_path.exists() {
-        Some(session_id.to_string())
-    } else {
+/// Decide whether Aide should pass `--resume <id>` when spawning Claude.
+///
+/// Claude's `--resume <id>` is global, so we look the transcript up by id
+/// across every project folder rather than re-encoding the cwd. Otherwise,
+/// when the .jsonl lives under a folder whose encoding differs from the
+/// cwd-encoding Aide would compute (see `find_session_jsonl_globally`), Aide
+/// would fail to find it, skip `--resume`, and silently start a brand-new
+/// session instead of continuing the one the user clicked.
+fn find_claude_session_jsonl(session_id: &str) -> Option<String> {
+    if find_session_jsonl_globally(session_id).is_empty() {
         None
+    } else {
+        Some(session_id.to_string())
     }
 }
 

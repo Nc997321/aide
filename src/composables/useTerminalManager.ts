@@ -14,6 +14,7 @@ interface LiveSession {
   terminal: Terminal;
   fitAddon: FitAddon;
   observer: ResizeObserver;
+  resizeTimer: ReturnType<typeof setTimeout> | null;
   loadingDiv: HTMLDivElement | null;
   loaderTimer: ReturnType<typeof setTimeout> | null;
   /** True while the user is in an IME composition session (e.g. Chinese/Japanese input).
@@ -209,7 +210,7 @@ export function useTerminalManager(
 
     const { terminal, fitAddon } = makeTerminal();
     terminal.open(div);
-    fitAddon.fit();
+    requestAnimationFrame(() => fitAddon.fit());
 
     // Bind the ptyId into the paste key handler stashed on this terminal.
     const ptyIdRef = (terminal as unknown as { __aidePtyIdRef?: { current: string } }).__aidePtyIdRef;
@@ -224,8 +225,12 @@ export function useTerminalManager(
     });
 
     const observer = new ResizeObserver(() => {
-      fitAddon.fit();
-      api.ptyResize(ptyId, terminal.rows, terminal.cols).catch(() => {});
+      if (ls.resizeTimer) clearTimeout(ls.resizeTimer);
+      ls.resizeTimer = setTimeout(() => {
+        ls.resizeTimer = null;
+        fitAddon.fit();
+        api.ptyResize(ptyId, terminal.rows, terminal.cols).catch(() => {});
+      }, 50);
     });
     observer.observe(div);
 
@@ -233,7 +238,7 @@ export function useTerminalManager(
     const loadingDiv = createLoadingOverlay();
     div.appendChild(loadingDiv);
 
-    const ls: LiveSession = { div, terminal, fitAddon, observer, loadingDiv, loaderTimer: null, isComposing: false, pendingBuffer: "" };
+    const ls: LiveSession = { div, terminal, fitAddon, observer, resizeTimer: null, loadingDiv, loaderTimer: null, isComposing: false, pendingBuffer: "" };
     liveSessions.set(ptyId, ls);
 
     // IME composition tracking — pause terminal writes while user is composing
@@ -273,6 +278,7 @@ export function useTerminalManager(
   function destroyLiveSession(ptyId: string) {
     const ls = liveSessions.get(ptyId);
     if (!ls) return;
+    if (ls.resizeTimer) clearTimeout(ls.resizeTimer);
     if (ls.loaderTimer) clearTimeout(ls.loaderTimer);
     ls.observer.disconnect();
     ls.terminal.dispose();

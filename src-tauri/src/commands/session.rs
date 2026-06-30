@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use tauri::State;
 
-use super::{Session, ChatMessageItem, LastEventInfo, ChangeRoundData, WorkspaceState, project_root_for_commands, encode_project_path, claude_projects_dir, claude_sessions_dir, our_sessions_dir};
+use super::{Session, ChatMessageItem, LastEventInfo, ChangeRoundData, WorkspaceState, project_root_for_commands, find_session_jsonl_globally, claude_projects_dir, claude_sessions_dir, our_sessions_dir};
 
 #[tauri::command]
 pub fn list_sessions(
@@ -149,7 +149,7 @@ pub fn create_session(name: String) -> Result<Session, String> {
 
 #[tauri::command]
 pub fn delete_session(
-    workspace_state: State<'_, WorkspaceState>,
+    _workspace_state: State<'_, WorkspaceState>,
     id: String,
 ) -> Result<(), String> {
     let our_path = our_sessions_dir().join(format!("{}.json", id));
@@ -157,11 +157,21 @@ pub fn delete_session(
         fs::remove_file(&our_path).map_err(|e| format!("Failed to delete metadata: {}", e))?;
     }
 
-    let root = project_root_for_commands(&workspace_state);
-    let encoded = encode_project_path(&root.to_string_lossy());
-    let jsonl_path = claude_projects_dir().join(&encoded).join(format!("{}.jsonl", id));
-    if jsonl_path.exists() {
-        fs::remove_file(&jsonl_path).map_err(|e| format!("Failed to delete session file: {}", e))?;
+    // Remove the transcript wherever Claude actually stored it. `claude --resume
+    // <id>` is global, so a session's .jsonl may live under a project folder whose
+    // encoding differs from the cwd-encoding Aide would compute (e.g. Claude once
+    // encoded '.' as '-' while Aide keeps it). Searching by id across all project
+    // folders — instead of re-encoding the cwd — guarantees we delete the real
+    // file rather than silently no-op'ing and leaving it resumable.
+    for jsonl in super::find_session_jsonl_globally(&id) {
+        fs::remove_file(&jsonl).map_err(|e| format!("Failed to delete session file: {}", e))?;
+        // Drop the per-session sibling directory (<id>/, holds subagent transcripts)
+        // if Claude created one next to the .jsonl.
+        if let Some(dir) = jsonl.parent().map(|p| p.join(&id)) {
+            if dir.is_dir() {
+                let _ = fs::remove_dir_all(&dir);
+            }
+        }
     }
 
     let ses_dir = claude_sessions_dir();
@@ -209,18 +219,12 @@ pub fn rename_session(id: String, name: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn load_messages(
-    workspace_state: State<'_, WorkspaceState>,
+    _workspace_state: State<'_, WorkspaceState>,
     session_id: String,
 ) -> Result<Vec<ChatMessageItem>, String> {
-    let root = project_root_for_commands(&workspace_state);
-    let encoded = encode_project_path(&root.to_string_lossy());
-    let jsonl_path = claude_projects_dir()
-        .join(&encoded)
-        .join(format!("{}.jsonl", session_id));
-
-    if !jsonl_path.exists() {
+    let Some(jsonl_path) = find_session_jsonl_globally(&session_id).into_iter().next() else {
         return Ok(Vec::new());
-    }
+    };
 
     let file = fs::File::open(&jsonl_path)
         .map_err(|e| format!("Failed to open session file: {}", e))?;
@@ -272,18 +276,12 @@ fn normalize_path_for_compare(p: &str) -> String {
 
 #[tauri::command]
 pub fn session_last_event(
-    workspace_state: State<'_, WorkspaceState>,
+    _workspace_state: State<'_, WorkspaceState>,
     session_id: String,
 ) -> Result<LastEventInfo, String> {
-    let root = project_root_for_commands(&workspace_state);
-    let encoded = encode_project_path(&root.to_string_lossy());
-    let jsonl_path = claude_projects_dir()
-        .join(&encoded)
-        .join(format!("{}.jsonl", session_id));
-
-    if !jsonl_path.exists() {
+    let Some(jsonl_path) = find_session_jsonl_globally(&session_id).into_iter().next() else {
         return Ok(LastEventInfo { event_type: None, stop_reason: None, timestamp: None });
-    }
+    };
 
     let file = fs::File::open(&jsonl_path)
         .map_err(|e| format!("Failed to open session file: {}", e))?;
@@ -338,18 +336,12 @@ pub fn save_session_changes(session_id: String, rounds: Vec<ChangeRoundData>) ->
 
 #[tauri::command]
 pub fn session_jsonl_size(
-    workspace_state: State<'_, WorkspaceState>,
+    _workspace_state: State<'_, WorkspaceState>,
     session_id: String,
 ) -> Result<u64, String> {
-    let root = project_root_for_commands(&workspace_state);
-    let encoded = encode_project_path(&root.to_string_lossy());
-    let jsonl_path = claude_projects_dir()
-        .join(&encoded)
-        .join(format!("{}.jsonl", session_id));
-
-    if !jsonl_path.exists() {
+    let Some(jsonl_path) = find_session_jsonl_globally(&session_id).into_iter().next() else {
         return Ok(0);
-    }
+    };
 
     let metadata = fs::metadata(&jsonl_path)
         .map_err(|e| format!("Failed to read jsonl metadata: {}", e))?;
@@ -359,19 +351,13 @@ pub fn session_jsonl_size(
 
 #[tauri::command]
 pub fn session_truncate_jsonl(
-    workspace_state: State<'_, WorkspaceState>,
+    _workspace_state: State<'_, WorkspaceState>,
     session_id: String,
     byte_pos: u64,
 ) -> Result<(), String> {
-    let root = project_root_for_commands(&workspace_state);
-    let encoded = encode_project_path(&root.to_string_lossy());
-    let jsonl_path = claude_projects_dir()
-        .join(&encoded)
-        .join(format!("{}.jsonl", session_id));
-
-    if !jsonl_path.exists() {
+    let Some(jsonl_path) = find_session_jsonl_globally(&session_id).into_iter().next() else {
         return Ok(());
-    }
+    };
 
     let file = fs::OpenOptions::new()
         .write(true)

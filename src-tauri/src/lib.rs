@@ -49,17 +49,24 @@ pub fn run() {
         *workspace_state.key.lock().unwrap() = Some(key);
     }
 
-    tauri::Builder::default()
-        // 聚合二次启动：资源管理器「打开方式 → Aide」以 `aide.exe <path>` 唤起，
-        // 由首个实例接收 argv 并 emit 事件给前端预览。
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            if let Some(p) = argv.get(1) {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.set_focus();
-                }
-                let _ = app.emit("open-file-preview", p.clone());
+    let builder = tauri::Builder::default();
+    // 聚合二次启动：资源管理器「打开方式 → Aide」以 `aide.exe <path>` 唤起，
+    // 由首个实例接收 argv 并 emit 事件给前端预览。
+    //
+    // 仅 release 启用：dev/debug 构建与已安装的 release 共用同一 identifier
+    // （com.aide.app），若 debug 也注册单实例，`pnpm tauri dev` 的新实例会被
+    // 转发给正在运行的安装版并立即退出，开发期无法与安装版并存。
+    #[cfg(not(debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        if let Some(p) = argv.get(1) {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_focus();
             }
-        }))
+            let _ = app.emit("open-file-preview", p.clone());
+        }
+    }));
+
+    builder
         .plugin(tauri_plugin_shell::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
