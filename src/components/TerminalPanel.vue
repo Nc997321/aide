@@ -4,6 +4,7 @@ import { useSessionState } from "../composables/useSessionState";
 import { useTerminalManager } from "../composables/useTerminalManager";
 import { useTerminalLinkProvider } from "../composables/useTerminalLinkProvider";
 import { useFileViewer } from "../composables/useFileViewer";
+import { useRecent } from "../composables/useRecent";
 import { AToolbar, AStatusDot, AButton } from "../ui";
 import { api } from "../api";
 import "xterm/css/xterm.css";
@@ -116,7 +117,17 @@ const isLive = computed(() => liveDisplayIds.has(props.sessionId));
 
 function tryStartClaude() {
   const sid = props.sessionId;
-  if (sid && !liveDisplayIds.has(sid)) startClaude(sid);
+  if (sid && !liveDisplayIds.has(sid)) {
+    startClaude(sid);
+    // 会话真正启动才入最近列表：用当前工作区 + 已解析的会话名。
+    recordStarted(sid);
+  }
+}
+
+/** 记录已启动会话到最近列表（best-effort，不阻断启动主流程）。 */
+function recordStarted(sid: string) {
+  const name = (sid === props.sessionId && displayName.value) ? displayName.value : sid.substring(0, 8);
+  void useRecent().recordCurrentSession(sid, name);
 }
 
 function onPreviewKeydown(e: KeyboardEvent) {
@@ -163,7 +174,10 @@ onMounted(async () => {
 
 function restartSession(sid: string) {
   stopClaude(sid);
-  setTimeout(() => startClaude(sid), 300);
+  setTimeout(() => {
+    startClaude(sid);
+    recordStarted(sid);
+  }, 300);
 }
 
 function createSession(name: string) {

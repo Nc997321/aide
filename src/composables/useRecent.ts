@@ -24,15 +24,12 @@ export function useRecent() {
     }
   }
 
-  /** 记录最近会话（显式传 ws，支持跨工作区选择）。 */
-  async function recordSession(
-    wsKey: string,
-    wsName: string,
-    sessionId: string,
-    name: string,
-  ): Promise<void> {
+  /** 记录最近会话：用当前工作区（启动前选择已切到该会话所属 ws）。
+   *  仅在会话"启动"时调用——只预览未启动的会话不入最近列表。 */
+  async function recordCurrentSession(sessionId: string, name: string): Promise<void> {
+    if (!currentWsKey.value) return;
     try {
-      await api.recordRecentSession(wsKey, wsName, sessionId, name);
+      await api.recordRecentSession(currentWsKey.value, currentWsName.value, sessionId, name);
       await refresh();
     } catch {
       // best effort
@@ -72,7 +69,7 @@ export function useRecent() {
     currentWsKey: readonly(currentWsKey),
     currentWsName: readonly(currentWsName),
     refresh,
-    recordSession,
+    recordCurrentSession,
     recordFile,
     setCurrentWs,
     clear,

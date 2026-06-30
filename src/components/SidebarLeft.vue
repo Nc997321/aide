@@ -109,7 +109,7 @@ async function loadWsSessions(wsKey: string) {
 const { show } = useContextMenu();
 const { state: sessionState } = useSessionState();
 const { updateAvailable, latestVersion, downloadUrl, dismissUpdate } = useUpdate();
-const { setCurrentWs, recordSession } = useRecent();
+const { setCurrentWs } = useRecent();
 
 // ── Provider selector ──
 const {
@@ -139,9 +139,10 @@ function onProviderClickOutside(e: MouseEvent) {
 }
 
 
-// Select a session from a potentially different workspace
+// Select a session from a potentially different workspace.
+// 仅切换+预览，不记录最近会话——只有真正"启动"（spawn PTY）的会话才入列，
+// 记录在 TerminalPanel.startClaude 触发路径与 App.onSessionReady 完成。
 async function selectSessionFromWorkspace(wsKey: string, sessionId: string) {
-  let wsName = "";
   if (wsKey !== activeWorkspace.value) {
     // Switch to the workspace first
     const ws = workspaces.value.find(w => w.key === wsKey);
@@ -156,19 +157,9 @@ async function selectSessionFromWorkspace(wsKey: string, sessionId: string) {
       if (!sessionsByWorkspace.value[wsKey]) {
         await loadSessions();
       }
-      wsName = ws.name;
     }
-  } else {
-    const ws = workspaces.value.find(w => w.key === wsKey);
-    wsName = ws?.name ?? "";
   }
   emit("session-changed", sessionId);
-  // 记录最近会话（用其所属工作区，而非当前工作区）
-  const list = sessionsByWorkspace.value[wsKey] ?? [];
-  const s = list.find(x => x.id === sessionId);
-  if (wsName) {
-    void recordSession(wsKey, wsName, sessionId, s?.name ?? sessionId);
-  }
 }
 
 function openUpdate() {

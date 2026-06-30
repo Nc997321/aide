@@ -213,6 +213,8 @@ async function onSessionReady(id: string, name: string) {
   // Real UUID is known for the first time — add to sidebar and switch to it.
   sidebarRef.value?.addSession({ id, name, timestamp: Date.now(), last_message: "" });
   activeSessionId.value = id;
+  // 新会话已启动（PTY spawn 完成），记入最近会话。
+  void useRecent().recordCurrentSession(id, name);
 }
 
 async function onNewSession(name: string) {
