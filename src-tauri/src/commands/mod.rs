@@ -12,6 +12,7 @@ pub mod run_configs;
 pub mod run_process;
 pub mod clipboard;
 pub mod file_assoc;
+pub mod recent;
 
 use serde::{Deserialize, Serialize};
 use std::fs;
