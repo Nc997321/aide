@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from "vue";
+import { timeAgo } from "../utils/time";
 import { useContextMenu } from "../composables/useContextMenu";
 import { useSessionState } from "../composables/useSessionState";
 import { useUpdate } from "../composables/useUpdate";
@@ -60,17 +61,6 @@ function wsSessions(wsKey: string): Session[] {
   return list.filter(
     (s) => s.name.toLowerCase().includes(q) || s.last_message.toLowerCase().includes(q),
   );
-}
-
-function timeAgo(ts: number): string {
-  const diff = Date.now() - ts;
-  const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `${mins}分钟前`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}小时前`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}天前`;
-  return `${Math.floor(days / 7)}周前`;
 }
 
 async function loadWorkspaces() {
