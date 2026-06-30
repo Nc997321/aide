@@ -30,12 +30,19 @@ const notificationsEnabledLocal = ref(settings.notificationsEnabled);
 const proxyLocal = ref(settings.proxy);
 const shellPathLocal = ref(settings.shellPath);
 const searchOpenLocal = ref(settings.keybindings.searchOpen);
+const recentLimitLocal = ref(settings.recentLimit);
 
 watch(fontSizeLocal, (v) => { settings.fontSize = v; update({ fontSize: v }); });
 watch(fontFamilyLocal, (v) => { settings.fontFamily = v; update({ fontFamily: v }); });
 watch(notificationsEnabledLocal, (v) => { settings.notificationsEnabled = v; update({ notificationsEnabled: v }); });
 watch(proxyLocal, (v) => { settings.proxy = v; update({ proxy: v }); });
 watch(shellPathLocal, (v) => { settings.shellPath = v; update({ shellPath: v }); });
+watch(recentLimitLocal, (v) => {
+  const clamped = Math.max(1, Math.min(50, Math.floor(v) || 10));
+  recentLimitLocal.value = clamped;
+  settings.recentLimit = clamped;
+  update({ recentLimit: clamped });
+});
 
 // ── Keybindings ──
 
@@ -272,6 +279,21 @@ function onOverlayClick(e: MouseEvent) {
                     <input v-model="notificationsEnabledLocal" type="checkbox" />
                     <span class="toggle-track"></span>
                   </label>
+                </div>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">最近访问保留条数</label>
+                <div class="field-control">
+                  <input
+                    v-model.number="recentLimitLocal"
+                    type="number"
+                    min="1"
+                    max="50"
+                    class="text-input"
+                    style="width: 80px"
+                  />
+                  <span class="field-hint">会话与文件各保留的最近条数（1–50）</span>
                 </div>
               </div>
 
