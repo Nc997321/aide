@@ -1,5 +1,6 @@
 import { ref, readonly } from "vue";
 import { api } from "../api";
+import { useRecent } from "./useRecent";
 import { imageMimeFromPath } from "../utils/imageMime";
 
 // Module-level singletons
@@ -63,6 +64,9 @@ export function useFileViewer() {
     } catch {
       // project root detection is best-effort
     }
+    // 记录最近访问文件（best effort，绝不阻断打开主流程）
+    const baseName = path.split(/[\\/]/).filter(Boolean).pop() || path;
+    void useRecent().recordFile(path, baseName);
     visible.value = true;
   }
 

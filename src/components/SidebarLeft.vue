@@ -5,6 +5,7 @@ import { useContextMenu } from "../composables/useContextMenu";
 import { useSessionState } from "../composables/useSessionState";
 import { useUpdate } from "../composables/useUpdate";
 import { useProviders } from "../composables/useProviders";
+import { useRecent } from "../composables/useRecent";
 import { sessionMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
 import { open } from "@tauri-apps/plugin-shell";
@@ -108,6 +109,7 @@ async function loadWsSessions(wsKey: string) {
 const { show } = useContextMenu();
 const { state: sessionState } = useSessionState();
 const { updateAvailable, latestVersion, downloadUrl, dismissUpdate } = useUpdate();
+const { setCurrentWs, recordSession } = useRecent();
 
 // ── Provider selector ──
 const {
@@ -139,6 +141,7 @@ function onProviderClickOutside(e: MouseEvent) {
 
 // Select a session from a potentially different workspace
 async function selectSessionFromWorkspace(wsKey: string, sessionId: string) {
+  let wsName = "";
   if (wsKey !== activeWorkspace.value) {
     // Switch to the workspace first
     const ws = workspaces.value.find(w => w.key === wsKey);
@@ -148,13 +151,24 @@ async function selectSessionFromWorkspace(wsKey: string, sessionId: string) {
       } catch (_e) { return; }
       activeWorkspace.value = ws.key;
       emit("workspace-changed", ws.name);
+      await setCurrentWs(ws.key, ws.name);
       // Load sessions for the new active workspace if not already loaded
       if (!sessionsByWorkspace.value[wsKey]) {
         await loadSessions();
       }
+      wsName = ws.name;
     }
+  } else {
+    const ws = workspaces.value.find(w => w.key === wsKey);
+    wsName = ws?.name ?? "";
   }
   emit("session-changed", sessionId);
+  // 记录最近会话（用其所属工作区，而非当前工作区）
+  const list = sessionsByWorkspace.value[wsKey] ?? [];
+  const s = list.find(x => x.id === sessionId);
+  if (wsName) {
+    void recordSession(wsKey, wsName, sessionId, s?.name ?? sessionId);
+  }
 }
 
 function openUpdate() {
@@ -182,6 +196,7 @@ async function switchWorkspace(ws: WorkspaceInfo) {
   activeWorkspace.value = ws.key;
   expandedWorkspaces.value.add(ws.key);
   emit("workspace-changed", ws.name);
+  await setCurrentWs(ws.key, ws.name);
   await loadSessions();
 }
 
@@ -230,6 +245,7 @@ onMounted(async () => {
       if (ws.name === info.root) {
         activeWorkspace.value = ws.key;
         expandedWorkspaces.value.add(ws.key);
+        await setCurrentWs(ws.key, ws.name);
         break;
       }
     }
