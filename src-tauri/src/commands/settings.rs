@@ -49,6 +49,9 @@ pub struct AppSettings {
     /// 持久化于此，`set_open_with_extensions` 负责同步注册表。
     #[serde(default)]
     pub open_with_extensions: Vec<String>,
+    /// 「最近访问」每类列表保留条数（会话与文件共用），默认 10。
+    #[serde(default = "default_recent_limit")]
+    pub recent_limit: u32,
 }
 
 fn default_font_size() -> u32 { 14 }
@@ -57,6 +60,7 @@ fn default_font_family() -> String {
 }
 fn default_notifications_enabled() -> bool { true }
 fn default_theme() -> String { "warm-dark".to_string() }
+fn default_recent_limit() -> u32 { 10 }
 
 impl Default for AppSettings {
     fn default() -> Self {
@@ -70,6 +74,7 @@ impl Default for AppSettings {
             keybindings: Keybindings::default(),
             theme: default_theme(),
             open_with_extensions: Vec::new(),
+            recent_limit: default_recent_limit(),
         }
     }
 }
