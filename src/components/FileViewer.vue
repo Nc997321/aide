@@ -6,7 +6,7 @@ import CodeEditor from "./CodeEditor.vue";
 import { hljs, extToLang, highlightCode } from "../utils/highlight";
 import { marked } from "../utils/markdown";
 
-const { visible, filePath, content, language, error, editing, editContent, saving, close, startEdit, save, cancelEdit, projectRoot, openAndScrollTo } = useFileViewer();
+const { visible, filePath, content, imageUrl, language, error, editing, editContent, saving, close, startEdit, save, cancelEdit, projectRoot, openAndScrollTo } = useFileViewer();
 
 const goto = useGotoDefinition();
 const gotoPopoverRef = ref<HTMLElement | null>(null);
@@ -88,6 +88,8 @@ const isMarkdown = computed(() => {
 });
 
 const isDiff = computed(() => language.value === "diff");
+
+const isImage = computed(() => !!imageUrl.value);
 
 const diffHighlighted = computed(() => {
   if (!content.value) return "";
@@ -173,7 +175,7 @@ function getLanguageLabel(): string {
           <span class="viewer-lang">{{ getLanguageLabel() }}</span>
           <span class="viewer-path" v-tooltip="filePath">{{ filePath }}</span>
           <button
-            v-if="!error"
+            v-if="!error && !isImage"
             class="viewer-btn"
             :class="{ primary: editing }"
             :disabled="content.length > 1_000_000"
@@ -187,6 +189,9 @@ function getLanguageLabel(): string {
         </div>
         <div ref="viewerBodyRef" class="viewer-body">
           <div v-if="error" class="viewer-error">{{ error }}</div>
+          <div v-else-if="isImage" class="viewer-image-wrap">
+            <img :src="imageUrl" class="viewer-image" :alt="fileName" />
+          </div>
           <div v-else-if="editing" class="viewer-editor">
             <CodeEditor
               ref="codeEditorRef"
@@ -361,6 +366,27 @@ function getLanguageLabel(): string {
   padding: 24px;
   color: var(--aide-danger);
   font-size: 13px;
+}
+
+.viewer-image-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow: auto;
+  background: var(--aide-bg-deep);
+}
+
+.viewer-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  /* SVG 等无固定尺寸的图也能合理缩放 */
+  width: auto;
+  height: auto;
 }
 
 .viewer-editor {

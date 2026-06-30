@@ -98,6 +98,7 @@ pub fn run() {
             commands::filesystem::list_directory,
             commands::filesystem::file_open,
             commands::filesystem::read_file_content,
+            commands::filesystem::read_file_binary,
             commands::filesystem::write_file_content,
             commands::filesystem::delete_file,
             commands::filesystem::create_file,

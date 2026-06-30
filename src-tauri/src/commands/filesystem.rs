@@ -127,6 +127,29 @@ pub fn read_file_content(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))
 }
 
+/// 以原始字节读取文件，供前端通过 Blob URL 预览图片等二进制资源。
+///
+/// 文本预览走 `read_file_content`，但 `fs::read_to_string` 要求合法 UTF-8，
+/// 二进制图片（PNG/JPG/GIF/WEBP…）会以 "stream did not contain valid UTF-8" 失败。
+/// 这里返回 `ipc::Response`（原始字节），前端用 `new Blob(...)` + `URL.createObjectURL`
+/// 直接喂给 `<img>`，无需 base64、无需新增依赖、无需 asset 协议 scope 配置。
+const IMAGE_PREVIEW_MAX_BYTES: u64 = 20_000_000;
+
+#[tauri::command]
+pub fn read_file_binary(path: String) -> Result<tauri::ipc::Response, String> {
+    let p = PathBuf::from(&path);
+    let meta = fs::metadata(&p).map_err(|e| format!("Failed to read file: {}", e))?;
+    if meta.len() > IMAGE_PREVIEW_MAX_BYTES {
+        return Err(format!(
+            "File too large to preview ({} bytes > {} limit)",
+            meta.len(),
+            IMAGE_PREVIEW_MAX_BYTES
+        ));
+    }
+    let bytes = fs::read(&p).map_err(|e| format!("Failed to read file: {}", e))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 #[tauri::command]
 pub fn write_file_content(path: String, content: String) -> Result<(), String> {
     fs::write(&path, content).map_err(|e| format!("Failed to write file: {}", e))

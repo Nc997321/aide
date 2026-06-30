@@ -1,10 +1,12 @@
 import { ref, readonly } from "vue";
 import { api } from "../api";
+import { imageMimeFromPath } from "../utils/imageMime";
 
 // Module-level singletons
 const visible = ref(false);
 const filePath = ref("");
 const content = ref("");
+const imageUrl = ref("");
 const language = ref("");
 const error = ref("");
 const editing = ref(false);
@@ -12,21 +14,46 @@ const editContent = ref("");
 const saving = ref(false);
 const projectRoot = ref("");
 
+// 跟踪当前图片的 Blob URL 以便释放；非响应式，仅用于清理。
+let currentBlobUrl = "";
+
+function revokeBlobUrl() {
+  if (currentBlobUrl) {
+    URL.revokeObjectURL(currentBlobUrl);
+    currentBlobUrl = "";
+  }
+  imageUrl.value = "";
+}
+
 export function useFileViewer() {
   async function open(path: string, opts?: { content?: string; language?: string }) {
     filePath.value = path;
     error.value = "";
     content.value = "";
+    revokeBlobUrl();
     language.value = opts?.language || "";
     editing.value = false;
     editContent.value = "";
     if (opts?.content !== undefined) {
       content.value = opts.content;
     } else {
-      try {
-        content.value = await api.readFileContent(path);
-      } catch (e) {
-        error.value = String(e);
+      const mime = imageMimeFromPath(path);
+      if (mime) {
+        // 图片：读取原始字节并构造 Blob URL，避免 UTF-8 解码失败。
+        try {
+          const buf = await api.readFileBinary(path);
+          const blob = new Blob([buf], { type: mime });
+          currentBlobUrl = URL.createObjectURL(blob);
+          imageUrl.value = currentBlobUrl;
+        } catch (e) {
+          error.value = String(e);
+        }
+      } else {
+        try {
+          content.value = await api.readFileContent(path);
+        } catch (e) {
+          error.value = String(e);
+        }
       }
     }
     // Auto-detect project root for goto-definition
@@ -65,6 +92,7 @@ export function useFileViewer() {
     visible.value = false;
     content.value = "";
     editing.value = false;
+    revokeBlobUrl();
   }
 
   // 跳转到目标文件，自动进入编辑模式并返回目标行
@@ -87,6 +115,7 @@ export function useFileViewer() {
     visible: readonly(visible),
     filePath: readonly(filePath),
     content: readonly(content),
+    imageUrl: readonly(imageUrl),
     language: readonly(language),
     error: readonly(error),
     editing: readonly(editing),

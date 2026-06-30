@@ -74,6 +74,9 @@ export const api = {
   readFileContent(path: string): Promise<string> {
     return invoke("read_file_content", { path });
   },
+  readFileBinary(path: string): Promise<ArrayBuffer> {
+    return invoke("read_file_binary", { path });
+  },
   writeFileContent(path: string, content: string): Promise<void> {
     return invoke("write_file_content", { path, content });
   },
