@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useContextMenu } from "../composables/useContextMenu";
 import { fileMenuItems, directoryMenuItems } from "../menus/contextMenus";
 import { useFileClipboard } from "../composables/useFileClipboard";
@@ -196,6 +196,29 @@ async function onDrop(e: DragEvent) {
 }
 
 const isExpanded = () => props.expandedDirs.has(props.node.path);
+
+const hovered = ref(false);
+const nameEl = ref<HTMLSpanElement | null>(null);
+const isOverflow = ref(false);
+
+onMounted(() => {
+  const el = nameEl.value;
+  if (!el) return;
+  const check = () => {
+    if (hovered.value) return;
+    isOverflow.value = el.scrollWidth > el.clientWidth + 1;
+  };
+  check();
+  const ro = new ResizeObserver(check);
+  ro.observe(el);
+  onUnmounted(() => ro.disconnect());
+});
+
+const nodePadding = computed(() =>
+  hovered.value && isOverflow.value
+    ? props.depth * 6 + 8
+    : props.depth * 18 + 8
+);
 </script>
 
 <template>
@@ -209,10 +232,12 @@ const isExpanded = () => props.expandedDirs.has(props.node.path);
         'drag-insert-bottom': insertPos === 'bottom',
         'cut-state': clipboard?.op === 'cut' && clipboard?.path === node.path,
       }"
-      :style="{ paddingLeft: (depth * 18 + 8) + 'px' }"
+      :style="{ paddingLeft: nodePadding + 'px' }"
       draggable="true"
       @click="handleClick"
       @contextmenu.prevent.stop="onContextMenu"
+      @mouseenter="hovered = true"
+      @mouseleave="hovered = false"
       @dragstart="onDragStart"
       @dragover="onDragOver"
       @dragleave="onDragLeave"
@@ -270,7 +295,7 @@ const isExpanded = () => props.expandedDirs.has(props.node.path);
       </svg>
 
       <!-- Name -->
-      <span class="node-name" v-tooltip="node.path">{{ node.name }}</span>
+      <span ref="nameEl" class="node-name">{{ node.name }}</span>
     </div>
 
     <!-- Children with subtle background layer -->
@@ -308,7 +333,7 @@ const isExpanded = () => props.expandedDirs.has(props.node.path);
   position: relative;
   border-radius: 4px;
   margin: 0 4px;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: padding-left 0.2s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, color 0.15s ease;
   height: 26px;
 }
 
