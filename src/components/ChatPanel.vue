@@ -186,7 +186,7 @@ async function handlePaste(e: ClipboardEvent) {
 async function handleSend() {
   const text = inputText.value.trim();
   const hasImages = pendingImages.value.length > 0;
-  if ((!text && !hasImages) || isBusyVal.value || !props.sessionId) return;
+  if ((!text && !hasImages) || isBusyVal.value) return;
 
   let finalPrompt = text;
   const slashMatch = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
@@ -213,7 +213,7 @@ async function handleSend() {
   <div class="chat-panel">
     <div class="chat-header">
       <AStatusDot :status="currentStatus" />
-      <span class="chat-header-name">{{ sessionName || sessionId || '未选择会话' }}</span>
+      <span class="chat-header-name">{{ sessionName || sessionId || '新对话' }}</span>
       <button
         v-if="isLive"
         class="chat-stop-btn"
@@ -271,7 +271,7 @@ async function handleSend() {
           class="chat-input"
           placeholder="输入消息…"
           rows="3"
-          :disabled="isBusyVal || !sessionId"
+          :disabled="isBusyVal"
           @keydown.enter.exact.prevent="(slashDropdownVisible && filteredSkills.length) ? selectSkill(filteredSkills[slashSelectedIndex]) : handleSend()"
           @keydown.enter.shift.exact.prevent="insertAtCursor('\n')"
           @keydown.tab="handleTabKey"
@@ -282,7 +282,7 @@ async function handleSend() {
         />
         <button
           class="chat-send-btn"
-          :disabled="isBusyVal || !sessionId || (!inputText.trim() && !pendingImages.length)"
+          :disabled="isBusyVal || (!inputText.trim() && !pendingImages.length)"
           @click="handleSend"
         >
           发送

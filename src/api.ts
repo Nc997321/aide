@@ -152,8 +152,8 @@ export const api = {
   loadMessages(sessionId: string): Promise<ChatMessageItem[]> {
     return invoke("load_messages", { sessionId });
   },
-  createSession(name: string): Promise<Session> {
-    return invoke("create_session", { name });
+  createSession(id: string, name: string): Promise<Session> {
+    return invoke("create_session", { id, name });
   },
   deleteSession(id: string): Promise<void> {
     return invoke("delete_session", { id });
@@ -161,8 +161,8 @@ export const api = {
   renameSession(id: string, name: string): Promise<void> {
     return invoke("rename_session", { id, name });
   },
-  migrateSession(oldId: string, newId: string): Promise<void> {
-    return invoke("migrate_session", { oldId, newId });
+  renameSidecarSession(oldId: string, newId: string): Promise<void> {
+    return invoke("rename_sidecar_session", { oldId, newId });
   },
   sessionLastEvent(sessionId: string): Promise<LastEventInfo> {
     return invoke("session_last_event", { sessionId });

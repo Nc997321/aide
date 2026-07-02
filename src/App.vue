@@ -10,7 +10,7 @@ const SettingsPanel = defineAsyncComponent(() => import("./components/SettingsPa
 const RunConfigsDialog = defineAsyncComponent(() => import("./components/RunConfigsDialog.vue"));
 import ChatPanel from "./components/ChatPanel.vue";
 import PermissionDialog from "./components/PermissionDialog.vue";
-import { useChatSession } from "./composables/useChatSession";
+import { useChatSession, isPendingSession } from "./composables/useChatSession";
 import type { ImageAttachment } from "./composables/useChatSession";
 import GitPanel from "./components/GitPanel.vue";
 import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
@@ -68,7 +68,7 @@ const activeSessionList = computed<ActiveSessionInfo[]>(() => {
     const info = lookup.get(id);
     result.push({
       id,
-      name: info?.name || (id.startsWith("new_") ? "新会话" : id.slice(0, 8)),
+      name: info?.name || (isPendingSession(id) ? "新会话" : id.slice(0, 8)),
       status,
       wsKey: info?.wsKey || "",
     });
@@ -104,17 +104,22 @@ const paletteRef = ref<InstanceType<typeof ACommandPalette> | null>(null);
 const activeSessionId = ref("");
 const chatSessionIdRef = ref<string | null>(null);
 watch(activeSessionId, (v) => { chatSessionIdRef.value = v || null; }, { immediate: true });
-const { pendingPermission, respondPermission, messages, isBusy, sendMessage, interrupt, stopSession, onSessionMigrated } = useChatSession(chatSessionIdRef);
+/** "新建会话"点击时用户输入/生成的名字，等真正创建时（onSessionCreated）才用上。 */
+const pendingSessionName = ref("");
+const { pendingPermission, respondPermission, messages, isBusy, sendMessage, interrupt, stopSession, onSessionCreated } = useChatSession(chatSessionIdRef);
 
-// 会话 ID 迁移（new_ 草稿 → SDK UUID）：更新侧栏条目与当前选中项，
-// 迁移完成后才记入最近访问（真实 UUID，避免幽灵 new_ 条目）。
-onSessionMigrated((oldId, newId) => {
-  sidebarRef.value?.migrateSessionId(oldId, newId);
-  if (activeSessionId.value === oldId) {
-    activeSessionId.value = newId;
+// 会话首次创建：临时 key 拿到 SDK 确认的真实 id，这时才第一次落盘——
+// 写元数据、加侧栏、记最近访问。之前什么都没写过，不存在"迁移"这一步。
+onSessionCreated((tempId, realId) => {
+  const name = pendingSessionName.value || realId.substring(0, 8);
+  pendingSessionName.value = "";
+  void api.createSession(realId, name).then((session) => {
+    sidebarRef.value?.addSession({ id: session.id, name: session.name, timestamp: session.timestamp, last_message: "" });
+    void useRecent().recordCurrentSession(session.id, session.name);
+  });
+  if (activeSessionId.value === tempId) {
+    activeSessionId.value = realId;
   }
-  const name = activeSessionName.value || newId.substring(0, 8);
-  void useRecent().recordCurrentSession(newId, name);
 });
 const activeSessionName = computed(() => {
   if (!activeSessionId.value) return "";
@@ -234,11 +239,11 @@ function onSessionChanged(id: string) {
   activeSessionId.value = id;
 }
 
-async function onNewSession(name: string) {
-  const session = await api.createSession(name);
-  sidebarRef.value?.addSession({ id: session.id, name: session.name, timestamp: session.timestamp, last_message: "" });
-  activeSessionId.value = session.id;
-  // 最近访问的记录延后到 onSessionMigrated（拿到真实 UUID 后）
+function onNewSession(name: string) {
+  // 只清空选中项，打开空白可输入面板；不落盘、不进侧栏。真正创建推迟到
+  // 用户发出第一条消息、SDK 用 session_init 确认真实 id 之后（onSessionCreated）。
+  pendingSessionName.value = name;
+  activeSessionId.value = "";
 }
 
 async function onSidebarWsChanged(path: string) {
@@ -513,7 +518,10 @@ onUnmounted(() => {
           :messages="messages"
           :is-busy="isBusy"
           class="h-full"
-          @send="(prompt: string, images?: ImageAttachment[]) => sendMessage(prompt, images)"
+          @send="async (prompt: string, images?: ImageAttachment[]) => {
+            const sid = await sendMessage(prompt, images);
+            if (sid) activeSessionId = sid;
+          }"
           @interrupt="interrupt"
           @stop="stopSession"
         />

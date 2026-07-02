@@ -104,3 +104,14 @@ pub async fn stop_chat_session(
     sidecar_mgr.kill(&session_id);
     Ok(())
 }
+
+/// 临时 key → SDK 真实 session id：只改 sidecar 进程注册表这一个内存态。
+/// 临时 key 从未落盘，这里不需要再触碰任何文件（对比旧版 migrate_session）。
+#[tauri::command]
+pub fn rename_sidecar_session(
+    old_id: String,
+    new_id: String,
+    sidecar_mgr: State<'_, SidecarManager>,
+) -> Result<(), String> {
+    sidecar_mgr.rename(&old_id, &new_id)
+}

@@ -98,25 +98,33 @@ describe("useChatSession per-session store", () => {
     expect(call?.[1]).toMatchObject({ resumeId: "0f6d9a2e-1234-4abc-9def-000000000001" });
   });
 
-  it("new_ 草稿会话首次发送不带 resume；session_init 后触发迁移，alias 转发在途事件", async () => {
-    const sid = ref<string | null>("new_123");
+  it("sessionId 为空时首次发送现场生成临时 key，不带 resume；session_init 后触发首次创建，alias 转发在途事件", async () => {
+    const sid = ref<string | null>(null);
     const chat = useChatSession(sid);
-    const migrated = vi.fn();
-    chat.onSessionMigrated(migrated);
+    const created = vi.fn();
+    chat.onSessionCreated(created);
     await flush();
-    await chat.sendMessage("first");
+
+    const tempId = await chat.sendMessage("first");
+    expect(tempId).toBeTruthy();
 
     const sendCall = invokeMock.mock.calls.find((c) => c[0] === "send_message");
-    expect((sendCall?.[1] as { resumeId?: string | null }).resumeId).toBeNull();
+    expect(sendCall?.[1]).toMatchObject({ sessionId: tempId, resumeId: null });
 
-    emit({ type: "session_init", sdk_session_id: "sdk-uuid-1", session_id: "new_123" });
+    emit({ type: "session_init", sdk_session_id: "sdk-uuid-1", session_id: tempId as string });
     await flush();
 
-    expect(invokeMock.mock.calls.some((c) => c[0] === "migrate_session")).toBe(true);
-    expect(migrated).toHaveBeenCalledWith("new_123", "sdk-uuid-1");
+    expect(
+      invokeMock.mock.calls.some(
+        (c) => c[0] === "rename_sidecar_session" && (c[1] as { oldId?: string })?.oldId === tempId,
+      ),
+    ).toBe(true);
+    // create_session/addSession/recordCurrentSession 现在是 App.vue 的职责，
+    // 不在这个 composable 里发生——这里只验证运行时状态搬迁 + 回调触发。
+    expect(created).toHaveBeenCalledWith(tempId, "sdk-uuid-1");
 
-    // 迁移后旧 ID 事件经 alias 路由到新 store
-    emit({ type: "text_delta", delta: "after", session_id: "new_123" });
+    // 首次创建后旧临时 key 事件经 alias 路由到新 store
+    emit({ type: "text_delta", delta: "after", session_id: tempId as string });
     sid.value = "sdk-uuid-1";
     await flush();
     const blocks = chat.messages.value.flatMap((m) => m.blocks);

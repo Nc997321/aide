@@ -1,5 +1,6 @@
 import { ref, watch } from "vue";
 import { useSessionState } from "./useSessionState";
+import { isPendingSession } from "./useChatSession";
 import { useModal } from "./useModal";
 import { api } from "../api";
 import type { ChangeRound, ChangeFile } from "../types";
@@ -21,7 +22,7 @@ export function useConversationChanges(sessionId: () => string) {
   /** Persist rounds to disk */
   async function save() {
     const sid = currentSid;
-    if (!sid || sid.startsWith("new_")) return;
+    if (!sid || isPendingSession(sid)) return;
     try {
       await api.saveSessionChanges(sid, rounds.value);
     } catch (_) { /* best effort */ }
@@ -31,7 +32,7 @@ export function useConversationChanges(sessionId: () => string) {
   watch(
     () => sessionId(),
     async (newSid) => {
-      if (!newSid || newSid === currentSid || newSid.startsWith("new_")) return;
+      if (!newSid || newSid === currentSid || isPendingSession(newSid)) return;
       currentSid = newSid;
       roundCounter = 0;
       lastState = "";
@@ -54,7 +55,7 @@ export function useConversationChanges(sessionId: () => string) {
    */
   async function takeSnapshot() {
     const sid = currentSid;
-    if (!sid || sid.startsWith("new_")) return;
+    if (!sid || isPendingSession(sid)) return;
     try {
       pendingRewindPosition = await api.sessionJsonlSize(sid);
       const current = await api.gitDiffFiles();

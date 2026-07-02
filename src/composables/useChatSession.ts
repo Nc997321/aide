@@ -27,12 +27,12 @@ interface SessionStore {
 // 每会话独立 store：前台/后台事件走同一条写入路径，切换会话零拷贝。
 
 const stores = reactive<Record<string, SessionStore>>({});
-/** aide_session_id → sdk_session_id（会话续接） */
-const sdkSessionMap = new Map<string, string>();
-/** 迁移窗口期：旧 ID → 新 ID（Rust rename 完成前的在途事件转发） */
+/** 迁移窗口期：旧 key → 新 id（Rust rename 完成前的在途事件转发） */
 const aliasMap = new Map<string, string>();
-/** 迁移回调（App.vue 注册，更新侧栏与 activeSessionId） */
-const migrationCallbacks = new Set<(oldId: string, newId: string) => void>();
+/** 尚未被 SDK 确认的临时 key（纯内存，从未落盘）。resume 判定与 hydrate 跳过都靠它。 */
+const pendingSids = new Set<string>();
+/** 会话首次创建回调（App.vue 注册：写元数据、加入侧栏、记入最近访问） */
+const sessionCreatedCallbacks = new Set<(tempId: string, realId: string) => void>();
 
 let globalUnlisten: (() => void) | null = null;
 
@@ -49,8 +49,9 @@ function resolveSid(raw: string): string {
   return aliasMap.get(raw) ?? raw;
 }
 
-function isDraftId(sid: string): boolean {
-  return sid.startsWith("new_");
+/** 尚未被 SDK 确认的临时 key：没有磁盘落地，resume/hydrate 都要跳过。 */
+export function isPendingSession(sid: string | null | undefined): boolean {
+  return !!sid && pendingSids.has(sid);
 }
 
 /** 取续写目标：最后一条消息是流式 assistant 就续写，否则新建 */
@@ -73,30 +74,29 @@ function finishStreaming(store: SessionStore) {
   if (last?.streaming) last.streaming = false;
 }
 
-async function migrateStore(oldId: string, newId: string) {
+/** 临时 key 首次被 SDK 确认为真实 session id：原地搬迁运行时状态，
+ *  再交给 App.vue 去做真正的"创建"（写元数据 / 加侧栏 / 记最近访问）。
+ *  临时 key 从未落盘，这里不需要触碰任何文件。 */
+async function finalizeSession(tempId: string, realId: string) {
   // 1. 前端立即换 key + 建 alias，兜住 Rust rename 完成前的在途事件
-  aliasMap.set(oldId, newId);
-  if (stores[oldId]) {
-    stores[newId] = stores[oldId];
-    delete stores[oldId];
+  aliasMap.set(tempId, realId);
+  pendingSids.delete(tempId);
+  if (stores[tempId]) {
+    stores[realId] = stores[tempId];
+    delete stores[tempId];
   }
-  if (sessionState[oldId]) {
-    setSessionState(newId, sessionState[oldId]);
-    removeSessionState(oldId);
+  if (sessionState[tempId]) {
+    setSessionState(realId, sessionState[tempId]);
+    removeSessionState(tempId);
   }
-  const sdk = sdkSessionMap.get(oldId);
-  if (sdk) {
-    sdkSessionMap.set(newId, sdk);
-    sdkSessionMap.delete(oldId);
-  }
-  // 2. Rust 侧迁移（sidecar 注册表 / 名字元数据 / 变更记录 / 最近访问）
+  // 2. Rust 侧只需要重命名 sidecar 进程注册表（内存态，无 IO）
   try {
-    await invoke("migrate_session", { oldId, newId });
+    await invoke("rename_sidecar_session", { oldId: tempId, newId: realId });
   } catch (e) {
-    console.warn("migrate_session failed:", e);
+    console.warn("rename_sidecar_session failed:", e);
   }
-  // 3. 通知 App.vue 更新侧栏与 activeSessionId
-  for (const cb of migrationCallbacks) cb(oldId, newId);
+  // 3. 通知 App.vue：这是第一次创建，去写元数据、加侧栏、记最近访问
+  for (const cb of sessionCreatedCallbacks) cb(tempId, realId);
 }
 
 function handleChatEvent(e: Record<string, unknown>) {
@@ -108,11 +108,8 @@ function handleChatEvent(e: Record<string, unknown>) {
   switch (e["type"]) {
     case "session_init": {
       const sdkSid = e["sdk_session_id"] as string | undefined;
-      if (sdkSid) {
-        sdkSessionMap.set(sid, sdkSid);
-        if (isDraftId(sid) && sdkSid !== sid) {
-          void migrateStore(sid, sdkSid);
-        }
+      if (sdkSid && isPendingSession(sid) && sdkSid !== sid) {
+        void finalizeSession(sid, sdkSid);
       }
       setSessionState(sid, "running");
       break;
@@ -199,7 +196,7 @@ async function ensureGlobalListener() {
 
 async function hydrate(sid: string) {
   const store = getStore(sid);
-  if (store.hydrated || store.messages.length > 0 || isDraftId(sid)) {
+  if (store.hydrated || store.messages.length > 0 || isPendingSession(sid)) {
     store.hydrated = true;
     return;
   }
@@ -226,9 +223,9 @@ async function hydrate(sid: string) {
 /** 仅测试用：清空模块级状态 */
 export function __resetForTest() {
   for (const k of Object.keys(stores)) delete stores[k];
-  sdkSessionMap.clear();
+  pendingSids.clear();
   aliasMap.clear();
-  migrationCallbacks.clear();
+  sessionCreatedCallbacks.clear();
   globalUnlisten?.();
   globalUnlisten = null;
 }
@@ -248,13 +245,26 @@ export function useChatSession(sessionId: Ref<string | null>) {
     { immediate: true },
   );
 
+  /**
+   * 发消息。若当前没有 session id（"新建会话"打开的空白面板），现场生成一个
+   * 纯内存临时 key 并返回给调用方——App.vue 用它更新 activeSessionId。真正的
+   * "创建会话"（写元数据 / 加侧栏 / 记最近访问）推迟到 SDK 用 session_init 确认
+   * 真实 id 之后才发生，见 finalizeSession。
+   *
+   * invoke("send_message") 不在这里 await 到底：新会话要等 Rust 侧现拉起 Node
+   * 子进程，等它返回才把 sid 交给调用方会让首条消息在 UI 上有明显卡顿。这里只
+   * await 到本地状态就绪，IPC 调用后台完成，失败走 .catch 兜底。
+   */
   async function sendMessage(
     prompt: string,
     images?: ImageAttachment[],
     resumeId?: string,
-  ) {
-    const sid = sessionId.value;
-    if (!sid) return;
+  ): Promise<string | undefined> {
+    let sid = sessionId.value;
+    if (!sid) {
+      sid = crypto.randomUUID();
+      pendingSids.add(sid);
+    }
     await ensureGlobalListener();
 
     const store = getStore(sid);
@@ -277,16 +287,23 @@ export function useChatSession(sessionId: Ref<string | null>) {
       timestamp: Date.now(),
     });
 
-    // resume 解析：显式传入 > 运行期映射 > 历史会话用自身 ID（重启后续接的关键）
-    const resolvedResumeId =
-      resumeId ?? sdkSessionMap.get(sid) ?? (isDraftId(sid) ? undefined : sid);
+    // resume：显式传入 > 已被 SDK 确认的 id 本身（aide id 就是 sdk id，无需查表）
+    const resolvedResumeId = resumeId ?? (isPendingSession(sid) ? undefined : sid);
+    const finalSid = sid;
 
-    await invoke("send_message", {
-      sessionId: sid,
+    invoke("send_message", {
+      sessionId: finalSid,
       prompt,
       images: images?.length ? images : null,
       resumeId: resolvedResumeId ?? null,
+    }).catch((e) => {
+      console.warn("send_message failed:", e);
+      const s = getStore(resolveSid(finalSid));
+      s.isBusy = false;
+      setSessionState(resolveSid(finalSid), "stopped");
     });
+
+    return sid;
   }
 
   async function respondPermission(id: string, approved: boolean) {
@@ -326,8 +343,8 @@ export function useChatSession(sessionId: Ref<string | null>) {
     }
   }
 
-  function onSessionMigrated(cb: (oldId: string, newId: string) => void) {
-    migrationCallbacks.add(cb);
+  function onSessionCreated(cb: (tempId: string, realId: string) => void) {
+    sessionCreatedCallbacks.add(cb);
   }
 
   return {
@@ -338,6 +355,6 @@ export function useChatSession(sessionId: Ref<string | null>) {
     respondPermission,
     interrupt,
     stopSession,
-    onSessionMigrated,
+    onSessionCreated,
   };
 }

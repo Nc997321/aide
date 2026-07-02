@@ -78,8 +78,7 @@ async function loadSessions() {
 
   try {
     const loaded = await api.listSessions();
-    // Exclude any stale new_xxx entries that may exist from previous runs
-    sessionsByWorkspace.value[wsKey] = loaded.filter(s => !s.id.startsWith("new_"));
+    sessionsByWorkspace.value[wsKey] = loaded;
   } catch (_e) {
     sessionsByWorkspace.value[wsKey] = [];
   }
@@ -250,9 +249,10 @@ onMounted(async () => {
 });
 
 /**
- * Add a new draft session (new_<ts> id) to the top of the active workspace list.
- * Called by App.vue after create_session; the id is later swapped to the SDK
- * UUID via migrateSessionId once the first session_init event arrives.
+ * Add a newly-created session to the top of the active workspace list.
+ * Called by App.vue's onSessionCreated once the SDK has confirmed a real
+ * session id (see CLAUDE.md「会话 ID 生命周期」) — sessions never appear here
+ * before that, so there's no draft id to swap out later.
  */
 function addSession(session: Session) {
   const wsKey = activeWorkspace.value;
@@ -263,21 +263,7 @@ function addSession(session: Session) {
   }
 }
 
-/**
- * 会话 ID 迁移（new_ 草稿 → SDK UUID）：原地替换侧栏条目 ID，保留名字与位置。
- * 不能 loadSessions()——props 异步传播会把旧条目加回来（见 CLAUDE.md 关键约定）。
- */
-function migrateSessionId(oldId: string, newId: string) {
-  const wsKey = activeWorkspace.value;
-  const list = sessionsByWorkspace.value[wsKey] ?? [];
-  const idx = list.findIndex(s => s.id === oldId);
-  if (idx !== -1) {
-    list.splice(idx, 1, { ...list[idx], id: newId });
-    sessionsByWorkspace.value[wsKey] = [...list];
-  }
-}
-
-defineExpose({ newSession, loadSessions, addSession, migrateSessionId, selectSessionFromWorkspace, sessionsByWorkspace });
+defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace, sessionsByWorkspace });
 </script>
 
 <template>

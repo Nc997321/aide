@@ -90,7 +90,7 @@ pub fn list_sessions(
                     }
 
                     let session_id = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
-                    if session_id.is_empty() || session_id.starts_with("new_") {
+                    if session_id.is_empty() {
                         continue;
                     }
 
@@ -121,8 +121,11 @@ pub fn list_sessions(
     Ok(sessions)
 }
 
+/// 创建会话元数据。调用方传入 id——发消息、拿到 SDK 返回的真实 session id
+/// 之后才会调用这个命令（见 CLAUDE.md「会话 ID 生命周期」），所以这里的 id
+/// 从一开始就是终身 id，不存在草稿 id 需要事后改名的情况。
 #[tauri::command]
-pub fn create_session(name: String) -> Result<Session, String> {
+pub fn create_session(id: String, name: String) -> Result<Session, String> {
     use std::time::{SystemTime, UNIX_EPOCH};
     let dir = our_sessions_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create sessions dir: {}", e))?;
@@ -131,8 +134,6 @@ pub fn create_session(name: String) -> Result<Session, String> {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
-
-    let id = format!("new_{}", timestamp);
 
     let meta = serde_json::json!({ "id": id, "name": name, "createdAt": timestamp });
     let path = dir.join(format!("{}.json", id));
@@ -195,49 +196,6 @@ pub fn delete_session(
 
     // 同步移除「最近访问」中已删会话（双保险，配合 list_recent 自愈）。
     let _ = super::recent::remove_recent_session(id);
-
-    Ok(())
-}
-
-/// 会话 ID 迁移：new_<ts> 草稿 ID → SDK 真实 UUID。
-/// 一次性迁移所有落点：sidecar 注册表、名字元数据、变更轮次、最近访问。
-/// 幂等：任何落点不存在都静默跳过。
-#[tauri::command]
-pub fn migrate_session(
-    old_id: String,
-    new_id: String,
-    sidecar_mgr: State<'_, crate::sidecar::SidecarManager>,
-) -> Result<(), String> {
-    if old_id == new_id {
-        return Ok(());
-    }
-    // 1. sidecar 注册表（必须最先做：后续 send_message 按 new_id 找进程）
-    sidecar_mgr.rename(&old_id, &new_id)?;
-
-    // 2. 名字元数据 <old>.json → <new>.json，重写内部 id 字段
-    let dir = our_sessions_dir();
-    let old_meta = dir.join(format!("{}.json", old_id));
-    if old_meta.exists() {
-        if let Ok(content) = fs::read_to_string(&old_meta) {
-            if let Ok(mut v) = serde_json::from_str::<Value>(&content) {
-                v["id"] = Value::String(new_id.clone());
-                let new_meta = dir.join(format!("{}.json", new_id));
-                fs::write(&new_meta, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?)
-                    .map_err(|e| format!("Failed to write migrated meta: {}", e))?;
-                let _ = fs::remove_file(&old_meta);
-            }
-        }
-    }
-
-    // 3. 变更轮次 <old>-changes.json → <new>-changes.json
-    let old_changes = dir.join(format!("{}-changes.json", old_id));
-    if old_changes.exists() {
-        let new_changes = dir.join(format!("{}-changes.json", new_id));
-        let _ = fs::rename(&old_changes, &new_changes);
-    }
-
-    // 4. 最近访问
-    let _ = super::recent::rename_recent_session(&old_id, &new_id);
 
     Ok(())
 }
@@ -436,7 +394,7 @@ pub fn list_sessions_for_workspace(ws_key: String) -> Result<Vec<Session>, Strin
                 let session_id = path.file_stem()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
-                if session_id.is_empty() || session_id.starts_with("new_") {
+                if session_id.is_empty() {
                     continue;
                 }
 
@@ -486,7 +444,7 @@ pub fn list_sessions_for_workspace(ws_key: String) -> Result<Vec<Session>, Strin
                     }
 
                     let session_id = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
-                    if session_id.is_empty() || session_id.starts_with("new_") {
+                    if session_id.is_empty() {
                         continue;
                     }
 
@@ -638,7 +596,7 @@ pub fn find_sessions_since(
         }
 
         let session_id = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
-        if session_id.is_empty() || session_id.starts_with("new_") {
+        if session_id.is_empty() {
             continue;
         }
 
@@ -647,4 +605,29 @@ pub fn find_sessions_since(
 
     candidates.sort_by(|a, b| b.1.cmp(&a.1));
     Ok(candidates.into_iter().map(|(id, _)| id).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_session_writes_metadata_under_caller_supplied_id() {
+        // 回归：create_session 不再自造 new_<ts> id，必须原样用调用方传入的
+        // （真实）id 落盘——这个 id 就是终身 id，没有事后改名这一步。
+        let id = "test-fixed-id-aa11bb22".to_string();
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        let _ = fs::remove_file(&path); // 防止上次失败留下的残留
+
+        let session = create_session(id.clone(), "测试会话".to_string()).unwrap();
+        assert_eq!(session.id, id);
+        assert_eq!(session.name, "测试会话");
+
+        let content = fs::read_to_string(&path).expect("metadata file should exist");
+        let v: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(v.get("id").and_then(|x| x.as_str()), Some(id.as_str()));
+        assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("测试会话"));
+
+        let _ = fs::remove_file(&path);
+    }
 }

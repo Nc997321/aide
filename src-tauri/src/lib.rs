@@ -156,7 +156,6 @@ pub fn run() {
             commands::session::create_session,
             commands::session::delete_session,
             commands::session::rename_session,
-            commands::session::migrate_session,
             commands::session::load_messages,
             commands::session::session_last_event,
             commands::session::load_session_changes,
@@ -253,6 +252,7 @@ pub fn run() {
             commands::chat::permission_response,
             commands::chat::interrupt_session,
             commands::chat::stop_chat_session,
+            commands::chat::rename_sidecar_session,
             // Plugin skills scanning
             commands::shell::scan_plugin_skills,
         ])
