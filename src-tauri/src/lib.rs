@@ -1,11 +1,13 @@
 mod commands;
-mod pty;
+mod shell;
+mod sidecar;
+mod conversation;
+mod skills;
 
 use std::path::PathBuf;
 
 use commands::file_assoc::PendingOpenFile;
 use commands::WorkspaceState;
-use pty::PtyManager;
 use tauri::{Emitter, Manager};
 
 fn init_logging() {
@@ -38,7 +40,7 @@ pub fn run() {
         default_hook(info);
     }));
 
-    let manager = PtyManager::new();
+    let shell_manager = shell::ShellManager::new();
     let saved_key = commands::load_workspace_config();
     let workspace_state = WorkspaceState::new();
     if let Some(key) = saved_key {
@@ -80,7 +82,9 @@ pub fn run() {
                 )
                 .build(),
         )
-        .manage(manager)
+        .manage(shell_manager)
+        .manage(sidecar::SidecarManager::new())
+        .manage(skills::SkillRegistry::new())
         .manage(workspace_state)
         .manage(PendingOpenFile(std::sync::Mutex::new(None)))
         .setup(|app| {
@@ -122,14 +126,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::pty::pty_write,
-            commands::pty::pty_resize,
-            commands::pty::pty_spawn_claude,
-            commands::pty::pty_kill,
-            commands::pty::pty_has_session,
-            commands::pty::pty_rename_session,
-            commands::pty::poll_pty_output,
-            commands::pty::pty_spawn_shell,
+            commands::shell::pty_write,
+            commands::shell::pty_resize,
+            commands::shell::pty_kill,
+            commands::shell::poll_pty_output,
+            commands::shell::pty_spawn_shell,
             commands::filesystem::get_project_info,
             commands::filesystem::list_directory,
             commands::filesystem::file_open,
@@ -245,6 +246,13 @@ pub fn run() {
             commands::recent::list_recent,
             commands::recent::remove_recent_session,
             commands::recent::clear_recent,
+            // Chat (Agent SDK)
+            commands::chat::send_message,
+            commands::chat::permission_response,
+            commands::chat::interrupt_session,
+            commands::chat::stop_chat_session,
+            // Plugin skills scanning
+            commands::shell::scan_plugin_skills,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
