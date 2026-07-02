@@ -1,6 +1,6 @@
 # CLAUDE.md — Aide
 
-非官方桌面应用，用 Tauri v2 + Vue 3 为 Claude Code CLI 提供带会话管理和文件树的终端桌面壳。
+非官方桌面应用，用 Tauri v2 + Vue 3 为 Claude Agent SDK 提供带会话管理和文件树的 Chat 桌面壳（Node.js sidecar 驱动对话，不再是 xterm 套壳终端）。
 
 详细架构见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，非必要不读取。
 
@@ -16,6 +16,14 @@
 | 样式 | Tailwind CSS 3 + Catppuccin 暗色主题，全项目三角箭头统一 `font-size: 14px` |
 | 包管理 | pnpm |
 | Rust 编译 | MSVC 工具链（VS Build Tools 2022） |
+
+## 架构红线：跨平台 + 多 Agent 抽象
+
+1. **跨平台**：当前主力平台是 Windows，但所有新代码必须兼容 macOS/Linux——路径拼接用 `PathBuf`/`path.join`（不硬编码 `\\`）、平台特有逻辑（如 `creation_flags`）必须 `#[cfg(windows)]` 隔离、shell 脚本 dev.ps1 / dev.sh 保持功能对等。
+2. **多 Agent（Provider）抽象**：未来要接入 Claude 以外的 agent（OpenAI/Gemini 等）。因此：
+   - **前端 Vue 层和 Rust 层必须保持 provider-agnostic**：只依赖统一的 `ChatEvent` / `SidecarCommand` IPC 协议（`agent-sidecar/src/types.ts` 与前端 `types/chat.ts` 镜像），不出现 Anthropic/Claude 专属类型或字段。
+   - **Claude 专属逻辑只允许存在于 `agent-sidecar/`**（如 Anthropic 消息格式、Agent SDK 调用、SKILL 机制）。新 provider 的接入方式是新增一个 sidecar（或 Rust HTTP 客户端），输出同一套 `ChatEvent`。
+   - 修改 IPC 协议时，先想清楚该字段是否所有 provider 都能提供；provider 专属信息放扩展字段，不污染核心协议。
 
 ## ⚠️ Windows 必读坑点：`CREATE_NO_WINDOW`
 
@@ -42,7 +50,11 @@ aide/
 │   ├── App.vue                 # 三栏布局 + 标题栏 + 右面板 Tab（文件/Git）+ 工作区桥接
 │   ├── components/
 │   │   ├── SidebarLeft.vue     # 会话列表 + 功能区
-│   │   ├── TerminalPanel.vue   # xterm.js 终端（直播多例 + 预览单例）
+│   │   ├── ChatPanel.vue       # Chat 主界面（消息流 + 输入区 + skills 补全 + 停止按钮）
+│   │   ├── ChatMessage.vue     # 单条消息渲染（Markdown + 工具卡片 + 图片 + 路径点击跳转）
+│   │   ├── ToolCallBlock.vue   # 工具调用卡片（可折叠）/ BashOutputBlock.vue（xterm 只读输出）
+│   │   ├── PermissionDialog.vue # 工具权限确认弹窗
+│   │   ├── WorkbenchTerminal.vue # 工作台 shell 终端（xterm + shell.rs PTY）
 │   │   ├── FileTree.vue        # 文件树（懒加载递归）
 │   │   ├── ChangeLogPanel.vue  # 会话变更面板（轮次分组 + 撤回）
 │   │   ├── GitPanel.vue        # Git 看板（分支/变更/提交历史/diff）
@@ -54,8 +66,7 @@ aide/
 │   │   ├── customizations/     # CustomizationList / Detail / Panel
 │   │   └── marketplace/        # MarketplaceTab / PluginCard
 │   ├── composables/
-│   │   ├── useTerminalManager.ts  # 终端生命周期（liveSessions + PTY I/O + 迁移 + 显隐）
-│   │   ├── useSessionMonitor.ts   # 会话状态检测（esc to interrupt 信号）
+│   │   ├── useChatSession.ts      # 对话核心（每会话独立 store + 事件路由 + resume + ID 迁移）
 │   │   ├── useSessionState.ts     # 会话运行状态（模块级 reactive 单例）
 │   │   ├── useConversationChanges.ts # 变更追踪（轮次分组 + 撤回）
 │   │   ├── useGit.ts              # Git 状态（模块级单例）
@@ -79,11 +90,15 @@ aide/
 │   ├── types/                  # customization + marketplace 类型
 │   ├── api/                    # customization / marketplace / git API
 │   └── menus/contextMenus.ts   # 右键菜单配置（工厂函数）
+├── agent-sidecar/              # Node.js sidecar：Claude Agent SDK 调用（Claude 专属逻辑只能在这）
+│   └── src/                    # index.ts（stdin/stdout JSON lines）/ mapper / permissions / generator
 ├── src-tauri/src/
 │   ├── lib.rs                  # Tauri Builder：注册 state + commands
-│   ├── pty.rs                  # 多会话 PTY 管理器
+│   ├── sidecar.rs              # sidecar 进程管理（spawn/send/kill/rename + 事件转发）
+│   ├── shell.rs                # 工作台终端 PTY
 │   └── commands/
-│       ├── pty.rs / filesystem.rs / git.rs
+│       ├── chat.rs             # send_message / permission_response / interrupt / stop
+│       ├── filesystem.rs / git.rs
 │       ├── session.rs / workspace.rs / settings.rs
 │       ├── customizations.rs   # 25 命令，5 种类型 × CRUD+toggle
 │       └── marketplace.rs      # fetch/install/uninstall/list-installed
@@ -92,8 +107,10 @@ aide/
 
 ## 关键约定
 
-- **非 scoped 样式**：`TerminalPanel.vue` 中动态 DOM（`terminal-container`、`xterm`、`session-loader`）的样式必须放非 scoped `<style>` 块，否则 Vite scoped hash 导致样式不生效。
+- **非 scoped 样式**：xterm 动态 DOM（`WorkbenchTerminal.vue`、`BashOutputBlock.vue`）的样式必须放非 scoped `<style>` 块，否则 Vite scoped hash 导致样式不生效。
 - **通知不依赖插件**：直接用 `notify-rust`（`notify_send` 命令），强制 `app_id("com.aide.app")`，绕过 tauri-plugin-notification dev 模式跳过 app_id 的 bug。
-- **状态检测信号**：依赖终端尾部 `esc to interrupt` 文本判断 Claude 是否工作中；`>` 提示符常驻，不能用于状态判断。
-- **PTY key 不能重命名**：`startClaude()` 闭包捕获了 placeholder ID（`new_xxx`），Rust 侧 HashMap key 必须始终保持 placeholder，通过 `ptyToDisplay` 映射到真实 UUID。
-- **session ID 迁移**：新建会话用 `new_<timestamp>` 占位，3 秒后 `scheduleMigration()` 扫描找到真实 UUID，`onSessionUpdated` 用 `splice` 原地替换侧栏条目（不能直接 `loadSessions()`，Vue props 异步传播会导致 placeholder 被重新添加）。
+- **会话 ID 生命周期**：新会话用 `new_<timestamp>` 草稿 ID；首次 `session_init` 事件到达后前端调 `migrate_session` 一次性迁移四个落点（sidecar 注册表 / 名字元数据 / 变更记录 / 最近访问），此后 aide ID == SDK session ID。侧栏用 `migrateSessionId` 原地 splice 换 ID（不能 `loadSessions()`，props 异步传播会把旧条目加回来）。历史会话续接：`sendMessage` 的 resume 三级兜底（显式传入 > 运行期 sdkSessionMap > 自身 ID）。
+- **状态语义**：`running`（生成中）/ `attention`（等权限确认）/ `waiting`（sidecar 存活空闲，message_stop 后）/ `stopped`（进程不在）。通知、任务栏进度、变更捕获都依赖 `running→waiting` 转换，不要把 message_stop 改成 stopped。
+- **stderr 不是错误**：sidecar stderr 只进日志与 8 行尾部缓冲，仅进程意外退出时才发一条 error 事件（Node warning 曾被误报成错误导致会话假死）。
+- **每会话独立 store**：`useChatSession` 的消息按 session_id 路由到模块级 store，前台/后台同一条写入路径；禁止「切换会话时拷贝缓存」的写法（曾导致跨会话数据污染）。
+- **release 打包**：`tauri.conf.json` resources 带上 `agent-sidecar/sidecar.js`（esbuild 全量 bundle）+ `claude.exe`（SDK 平台包里的原生 CLI，运行时经 `AIDE_CLAUDE_EXE` → `pathToClaudeCodeExecutable` 传给 SDK）。目前资源路径是 win32-x64 的，其他平台发布时需按平台调整。运行环境需要系统 Node ≥ 18（或设 `AIDE_NODE_PATH`）。

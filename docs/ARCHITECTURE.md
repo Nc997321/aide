@@ -1,102 +1,73 @@
 # Aide — 架构详解
 
-## 交互模型：全屏终端
+## 交互模型：Chat UI + Agent SDK sidecar
 
-中心面板为 xterm.js 终端，通过 PTY 直接运行 Claude Code 交互模式（不带 `-p`）。**不再使用聊天气泡**——终端内 Claude 的 TUI 原样渲染，权限审批、工具使用均为原生体验。
+中心面板为聊天气泡流（`ChatPanel.vue`），对话由 Node.js sidecar 里的 Claude Agent SDK `query()` 驱动，不再是 xterm 套壳终端。工具调用渲染为可折叠卡片（`ToolCallBlock`），Bash 输出内嵌只读 xterm 块，权限审批走 `PermissionDialog` 弹窗。工作台 shell 终端（`WorkbenchTerminal` + `shell.rs` PTY）与对话无关，仍保留。
 
-## 多终端架构
-
-**预览终端**（单例）：所有无 PTY 的会话共用同一个 xterm 实例，展示静态历史文本。`props.sessionId` 切换时清屏重新渲染。
-
-**直播终端**（多例）：每个启动 Claude 的会话各自持有独立的 xterm 实例 + DOM div。互不干扰，各自保留滚动缓冲区。两个终端 div 都放在 `.terminal-stack` wrapper 内，通过 `display: none` 切显隐。
+## 三层结构
 
 ```
-.live terminal A              .live terminal B
-  div.terminal-container        div.terminal-container
-    xterm.open()                  xterm.open()
-    onData → pty_write(A)        onData → pty_write(B)
-    ← poll_pty_output(A)         ← poll_pty_output(B)
+前端 Vue (WebView)
+  ChatPanel.vue / ChatMessage.vue / PermissionDialog.vue
+  useChatSession.ts        ← 全局 chat-event 监听 + 每会话独立 store
+        ↕ Tauri events / invoke
+Rust (Tauri backend)
+  sidecar.rs               ← 每会话一个 sidecar 进程：spawn/send/kill/rename
+  commands/chat.rs         ← send_message / permission_response / interrupt / stop
+        ↕ stdin/stdout JSON lines（SidecarCommand / ChatEvent）
+Node.js sidecar (agent-sidecar/)
+  index.ts                 ← @anthropic-ai/claude-agent-sdk query()，流式输入模式
+                              canUseTool 回调 → 权限确认（signal abort → 取消）
 ```
+
+**Provider 抽象**：前端与 Rust 只认 `ChatEvent`/`SidecarCommand` 协议；Anthropic 专属逻辑（消息格式、SDK 调用）只存在于 `agent-sidecar/`。接入新厂商 = 新增一个输出同协议的 sidecar。
 
 ## 数据流
 
 ```
-用户键盘 → live terminal.onData → api.ptyWrite(ptyId, data)
-  → Rust PtyManager.write(ptyId) → PTY stdin → claude 进程
-    → claude stdout → PTY reader thread
-      → Arc<Mutex<String>> output_buffer
-        ← 前端 setInterval(100ms) → api.pollPtyOutput(ptyId) 拉取
-          → terminal.write(data)
-
-进程退出检测：
-  Rust child.wait() 阻塞 → 进程退出 → HashMap 清理
-    → emit("pty-exit", {session_id})
-      → initExitListener → stopClaude() → destroyLiveSession() → 预览模式
+用户发送 → useChatSession.sendMessage
+  → invoke("send_message")（首次自动 spawn sidecar，注入 provider/代理环境变量）
+    → sidecar stdin {"cmd":"send", prompt, images?, session_id?}
+      → SDK query() 事件流 → mapper.ts 映射为 ChatEvent
+        → stdout JSON line → sidecar.rs reader 任务
+          → 补 session_id 字段 → app.emit("chat-event")
+            → useChatSession 全局监听 → 按 session_id 路由到对应 store
 ```
 
-**拉取模式而非推送**：PTY 输出通过共享缓冲区 + 前端 100ms 轮询传递，不走 IPC 事件推送。避免大量输出（Plan mode、/compact）淹没 WebView 事件循环。唯一 IPC 推送是 `pty-exit`（低频且关键）。
+**事件即推送**：ChatEvent 是低频结构化事件（文本块/工具边界/权限/结束），不存在旧 PTY 时代淹没事件循环的问题，无需轮询。
+
+**每会话独立 store**：`stores[sessionId] = { messages, isBusy, pendingPermission, hydrated }`（模块级 reactive）。前台/后台会话走同一条写入路径，切换会话零拷贝；历史懒加载（`hydrate` 读 `.jsonl` 一次）。
 
 ## 会话状态指示器
 
-四种状态，通过 `useSessionState`（模块级 `reactive` 单例）跨组件共享：
+四种状态，通过 `useSessionState`（模块级 `reactive` 单例）跨组件共享，由 ChatEvent **精确驱动**（不再解析终端文本）：
 
-| 状态 | 侧栏显示 | 触发条件 |
-|------|---------|----------|
-| `stopped` | 无标识 | PTY 不存在 / 进程退出 / 被停止 |
-| `running` | 绿色光带从右到左扫过 | 用户按 Enter / 终端出现 `esc to interrupt` |
-| `waiting` | 右侧绿色边框 | 终端不再显示 `esc to interrupt` |
-| `attention` | 琥珀色光带扫过 | 终端出现 `[y/n]` 权限审批提示 |
+| 状态 | 触发事件 |
+|------|---------|
+| `running` | sendMessage 发出 / session_init / 权限批准后 |
+| `attention` | permission_request（等用户确认） |
+| `waiting` | message_stop（sidecar 存活空闲）/ interrupt |
+| `stopped` | error / 进程意外退出 / stop_chat_session |
 
-**核心信号：`esc to interrupt`**。Claude Code TUI 只在真正处理轮次时（思考/流式输出/调用工具）在底部显示此文本，轮次结束即消失。`>` 提示符是常驻的，无法用于判断完成。
+通知、任务栏进度、回焦横幅、变更轮次捕获都由 `running/attention → waiting` 转换驱动（`useNotification`、`useConversationChanges`）。
 
-**判定逻辑**（`useSessionMonitor.ts`，每 800ms 同步轮询终端尾部 30 行）：
-1. 权限关键词 → `attention`
-2. 命中 `esc to interrupt` → `running`，标记 `sawWorking`
-3. 未命中（Claude 空闲）：
-   - 若本轮 `sawWorking` → 连续 `IDLE_CONFIRM_TICKS`(2) 次才转 `waiting`（防瞬时空隙误判）
-   - 若从未 `sawWorking` → 距上次 Enter 超过 `STARTUP_GRACE_MS`(2500ms) 才转 `waiting`（兼顾慢启动）
-- 用户按 Enter → 立即 `running`，`recordEnter` 重置 `sawWorking`/`idleStreak`
-- 进程退出 → `stopped`（`destroyLiveSession` 显式设置）
+## Sidecar 管理（Rust 侧）
 
-通知由状态转换驱动（`useNotification` watch `running/attention → waiting`）。空 Enter 不误发通知：用户按 Enter 时窗口必为聚焦态，`isFocused` 守卫拦截。
+`SidecarManager` 维护 `HashMap<String, SidecarSession>`，每会话一个 Node 进程：
 
-## PTY 管理（Rust 侧）
+- **stdout reader 任务**：逐行解析 JSON → 注入 `session_id`（读共享 `Arc<Mutex<String>>`，rename 后立即生效）→ `emit("chat-event")`。流结束且非主动 kill → 发一条 `error` 事件（附 stderr 尾部）解除前端 isBusy。
+- **stderr reader 任务**：只 `eprintln!` + 存 8 行尾部环形缓冲。**stderr 不是错误**——Node warning 不会打断会话。
+- **rename(old, new)**：会话 ID 迁移时重挂 HashMap key + 更新共享 sid。
 
-`PtyManager` 维护 `HashMap<String, PtySession>`，每个会话独立持有 PTY。切换会话时不杀进程，只切换终端显隐。
+## 会话 ID 生命周期
 
-**双线程模型**：
-- **reader 线程**：`read()` 循环 → 追加到 `Arc<Mutex<String>>` 共享缓冲区，前端通过 `poll_pty_output` 拉取并清空
-- **waiter 线程**：`child.wait()` 阻塞等待进程退出 → 清理 HashMap → `emit("pty-exit")`。reader 的 EOF 检测不可靠（PTY 不保证子进程退出时关闭管道），waiter 才是退出检测的权威来源
+1. 新建会话：`create_session` 生成草稿 ID `new_<timestamp>`（此时还没有 SDK 会话）。
+2. 首条消息发出 → sidecar 首个 `session_init` 事件携带 `sdk_session_id`。
+3. 前端 `migrateStore`：立即换 store key + 写 `aliasMap`（兜住 Rust rename 完成前仍带旧 ID 的在途事件）→ invoke `migrate_session`。
+4. Rust `migrate_session` 一次性迁移四个落点：sidecar 注册表（最先）、`~/.claude-code-desktop/sessions/<id>.json` 名字元数据、`<id>-changes.json` 变更轮次、`recent.json`。
+5. `onSessionMigrated` 回调 → 侧栏 `migrateSessionId` 原地 splice 换 ID + `activeSessionId` 同步 + 记入最近访问。**不能 `loadSessions()`**——props 异步传播会把旧条目加回来。
 
-## 前端状态
-
-| 变量 | 所属模块 | 说明 |
-|------|---------|------|
-| `liveSessions` | `useTerminalManager` | 直播终端表，key 是 PTY 侧 session ID（placeholder） |
-| `ptyToDisplay` | `useTerminalManager` | `new_xxx` → 真实 UUID 的迁移映射 |
-| `liveDisplayIds` | `useTerminalManager` | reactive Set，驱动关闭按钮显隐 |
-| `pollTimer` | `useTerminalManager` | PTY 输出轮询定时器（100ms 间隔） |
-| `checking` | `useSessionMonitor` | Set 互斥锁，防止 async 轮询竞态 |
-| `settings` | `useSettings` | 模块级 reactive 单例，字号/字体/通知开关 |
-| `isFocused` | `useWindowFocus` | 模块级 ref，窗口焦点状态 |
-| `props.sessionId` | TerminalPanel | 当前显示哪个会话（唯一真相源） |
-
-**切换流程**：
-```
-watch(sessionId) → showSession(sid) + loadPreviewContent(sid)
-  ├─ liveSessions 有 PTY → 显示对应 div，fit()
-  └─ 没有 PTY → 显示 HTML 预览 div + 加载消息历史
-```
-
-## 会话 ID 迁移
-
-`startClaude()` 用 placeholder `new_<timestamp>` 创建 PTY → 3 秒后 `scheduleMigration()` 开始扫描（最多重试 3 次，间隔 3 秒）→ 调 `listSessions()` 找到真实 UUID → 更新 `ptyToDisplay` 映射 → `onSessionUpdated` 刷新侧栏。
-
-重试用 `knownIds` Set 记录已知会话，只匹配新出现的会话，避免匹配到遗留旧会话。
-
-**迁移后侧栏刷新**：`onSessionUpdated(realId)` 先 `activeSessionId = realId`，再 `await nextTick()`，然后 `migrateSession(oldId, newId)` 用 `splice` 原地替换占位符条目。**不能直接调 `loadSessions()`**——Vue props 传播是异步的，`loadSessions()` 读 `props.activeSessionId` 时拿的仍是旧值，导致占位符被重新添加。
-
-**为什么不能 `pty_rename_session`**：`startClaude()` 的 `terminal.onData` 和 `ResizeObserver` 闭包捕获了 placeholder ID，所有 `ptyWrite`/`ptyResize` 都用 `new_xxx` 发到 Rust。若把 HashMap key 改成真实 UUID，闭包发的旧 key 就找不到 PTY，输入和 resize 全部静默失败。
+此后 aide ID == SDK session ID。**续接**：`sendMessage` 的 resume 三级兜底——显式传入 > 运行期 `sdkSessionMap` > 自身 ID（重启后点开历史会话靠第三级；SDK `forkSession` 默认 false，resume 延续同一 session ID）。
 
 ## 会话系统 — 适配 Claude Code 存储
 
@@ -162,7 +133,7 @@ n.auto_icon();
 n.summary(&title).body(&body).show();
 ```
 
-触发链：`checkSessionState()` 检测 `esc to interrupt` 消失 → `setSessionState("waiting")` → `useNotification` watch 触发 → 检查 `loaded && notificationsEnabled && !isFocused` → `api.notifySend()`。
+触发链：sidecar `message_stop` 事件 → `useChatSession` `setSessionState("waiting")` → `useNotification` watch 触发 → 检查 `loaded && notificationsEnabled && !isFocused` → `api.notifySend()`。
 
 ## 标题栏搜索
 
@@ -170,15 +141,16 @@ n.summary(&title).body(&body).show();
 
 ## Tauri Commands 速查
 
-### PTY
+### Chat（Agent SDK）
 | 命令 | 参数 | 说明 |
 |------|------|------|
-| `pty_spawn_claude` | `rows, cols, session_id` | 启动 `claude --resume <id>` |
-| `pty_write` | `session_id, data` | 键盘输入 → PTY stdin |
-| `pty_resize` | `session_id, rows, cols` | 同步 PTY 行列 |
-| `pty_kill` | `session_id` | 关闭 Claude 进程 |
-| `pty_has_session` | `session_id` | 检查是否有活 PTY |
-| `poll_pty_output` | `session_id` | 拉取并清空输出缓冲区（100ms 轮询） |
+| `send_message` | `session_id, prompt, images?, resume_id?` | 首次自动 spawn sidecar，转发 send 指令 |
+| `permission_response` | `session_id, id, approved` | 解除 canUseTool 阻塞 |
+| `interrupt_session` | `session_id` | SDK query.interrupt() |
+| `stop_chat_session` | `session_id` | kill sidecar 进程 |
+| `migrate_session` | `old_id, new_id` | 会话 ID 迁移（注册表/元数据/变更/最近访问） |
+
+（工作台终端另有 `pty_*` 命令走 `shell.rs`，与对话无关。）
 
 ### 文件系统
 | 命令 | 说明 |
