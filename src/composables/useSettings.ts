@@ -17,7 +17,7 @@ const defaults: AppSettings = {
   recentLimit: 10,
 };
 
-// Module-level reactive singleton — shared across TerminalPanel and SettingsPanel
+// Module-level reactive singleton — shared across ChatPanel and SettingsPanel
 const settings = reactive<AppSettings>({ ...defaults });
 const loaded = ref(false);
 

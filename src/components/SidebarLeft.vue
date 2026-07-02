@@ -140,8 +140,8 @@ function onProviderClickOutside(e: MouseEvent) {
 
 
 // Select a session from a potentially different workspace.
-// 仅切换+预览，不记录最近会话——只有真正"启动"（spawn PTY）的会话才入列，
-// 记录在 TerminalPanel.startClaude 触发路径与 App.onSessionReady 完成。
+// 仅切换+预览，不记录最近会话——只有真正"启动"（Agent SDK send_message）的会话才入列，
+// 记录在 App.onNewSession 完成。
 async function selectSessionFromWorkspace(wsKey: string, sessionId: string) {
   if (wsKey !== activeWorkspace.value) {
     // Switch to the workspace first

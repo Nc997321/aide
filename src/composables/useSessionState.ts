@@ -2,7 +2,7 @@ import { reactive } from "vue";
 
 export type SessionStatus = "stopped" | "running" | "waiting" | "attention";
 
-// Module-level reactive singleton — shared across TerminalPanel and SidebarLeft
+// Module-level reactive singleton — shared across ChatPanel and SidebarLeft
 const state = reactive<Record<string, SessionStatus>>({});
 
 export function useSessionState() {
