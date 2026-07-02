@@ -79,6 +79,9 @@ export const api = {
   readFileContent(path: string): Promise<string> {
     return invoke("read_file_content", { path });
   },
+  readFileBase64(path: string): Promise<string> {
+    return invoke("read_file_base64", { path });
+  },
   readFileBinary(path: string): Promise<ArrayBuffer> {
     return invoke("read_file_binary", { path });
   },

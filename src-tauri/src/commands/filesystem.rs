@@ -127,6 +127,13 @@ pub fn read_file_content(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))
 }
 
+#[tauri::command]
+pub fn read_file_base64(path: String) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
 /// 以原始字节读取文件，供前端通过 Blob URL 预览图片等二进制资源。
 ///
 /// 文本预览走 `read_file_content`，但 `fs::read_to_string` 要求合法 UTF-8，
@@ -433,4 +440,30 @@ pub fn grep_symbol(word: String, cwd: String, source_ext: Option<String>) -> Res
 #[tauri::command]
 pub fn file_exists(path: String) -> bool {
     std::path::Path::new(&path).exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_read_file_base64_roundtrip() {
+        let dir = std::env::temp_dir().join("aide_test_b64");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("test.png");
+        let bytes: &[u8] = &[137, 80, 78, 71, 13, 10, 26, 10]; // PNG magic bytes
+        fs::write(&path, bytes).unwrap();
+
+        let result = read_file_base64(path.to_string_lossy().to_string()).unwrap();
+        use base64::Engine;
+        let decoded = base64::engine::general_purpose::STANDARD.decode(&result).unwrap();
+        assert_eq!(decoded, bytes);
+    }
+
+    #[test]
+    fn test_read_file_base64_missing_file() {
+        let result = read_file_base64("/nonexistent/path/img.png".to_string());
+        assert!(result.is_err());
+    }
 }

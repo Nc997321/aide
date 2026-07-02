@@ -135,6 +135,7 @@ pub fn run() {
             commands::filesystem::list_directory,
             commands::filesystem::file_open,
             commands::filesystem::read_file_content,
+            commands::filesystem::read_file_base64,
             commands::filesystem::read_file_binary,
             commands::filesystem::write_file_content,
             commands::file_assoc::consume_pending_open_file,
