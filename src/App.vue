@@ -515,6 +515,7 @@ onUnmounted(() => {
           class="h-full"
           @send="(prompt: string, images?: ImageAttachment[]) => sendMessage(prompt, images)"
           @interrupt="interrupt"
+          @stop="stopSession"
         />
       </div>
 

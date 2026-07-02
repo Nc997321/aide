@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, computed, onMounted } from "vue";
+import { ref, watch, nextTick, computed } from "vue";
 import type { ComputedRef } from "vue";
 import ChatMessage from "./ChatMessage.vue";
 import type { ChatMessage as ChatMessageType, TextBlock } from "@/types/chat";
@@ -8,6 +8,8 @@ import { api } from "@/api";
 import { resolvePastePayload } from "@/utils/paste";
 import { peekFileClipboard } from "@/composables/useFileClipboard";
 import type { ImageAttachment } from "@/composables/useChatSession";
+import { useSessionState } from "@/composables/useSessionState";
+import AStatusDot from "@/ui/AStatusDot.vue";
 
 const props = defineProps<{
   sessionId: string | null;
@@ -20,7 +22,16 @@ const props = defineProps<{
 const emit = defineEmits<{
   send: [prompt: string, images?: ImageAttachment[]];
   interrupt: [];
+  stop: [];
 }>();
+
+const { state: sessionState } = useSessionState();
+const currentStatus = computed(() => {
+  const sid = props.sessionId;
+  if (!sid) return "stopped" as const;
+  return (sessionState[sid] || "stopped") as "stopped" | "running" | "waiting" | "attention";
+});
+const isLive = computed(() => currentStatus.value !== "stopped");
 
 const isBusyVal = computed(() =>
   typeof props.isBusy === "boolean" ? props.isBusy : props.isBusy.value
@@ -46,15 +57,30 @@ const pendingImages = ref<Array<ImageAttachment & { previewUrl: string }>>([]);
 const scrollEl = ref<HTMLDivElement>();
 const textareaEl = ref<HTMLTextAreaElement>();
 
-onMounted(async () => {
-  try {
-    skillList.value = await api.scanPluginSkills(props.workspacePath ?? "");
-  } catch {
-    // 静默失败，autocomplete 不显示
-  }
-});
+// skills 随工作区变化重扫（onMounted 时 workspacePath 往往还是空串）
+watch(
+  () => props.workspacePath,
+  async (ws) => {
+    try {
+      skillList.value = await api.scanPluginSkills(ws ?? "");
+    } catch {
+      skillList.value = [];
+    }
+  },
+  { immediate: true },
+);
+
+// 用户向上滚动时暂停自动置底，回到底部附近恢复
+const autoScroll = ref(true);
+
+function onScroll() {
+  const el = scrollEl.value;
+  if (!el) return;
+  autoScroll.value = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+}
 
 function scrollToBottom() {
+  if (!autoScroll.value) return;
   nextTick(() => {
     if (scrollEl.value) scrollEl.value.scrollTop = scrollEl.value.scrollHeight;
   });
@@ -81,8 +107,12 @@ watch(inputText, (val) => {
   }
 });
 
-// 切换会话时清空待发图片
-watch(() => props.sessionId, () => { pendingImages.value = []; });
+// 切换会话时清空待发图片、恢复自动置底
+watch(() => props.sessionId, () => {
+  pendingImages.value = [];
+  autoScroll.value = true;
+  scrollToBottom();
+});
 
 function selectSkill(skill: SkillMeta | undefined) {
   if (!skill) return;
@@ -182,10 +212,17 @@ async function handleSend() {
 <template>
   <div class="chat-panel">
     <div class="chat-header">
+      <AStatusDot :status="currentStatus" />
       <span class="chat-header-name">{{ sessionName || sessionId || '未选择会话' }}</span>
+      <button
+        v-if="isLive"
+        class="chat-stop-btn"
+        title="停止会话进程"
+        @click="emit('stop')"
+      >⏹ 停止</button>
     </div>
 
-    <div ref="scrollEl" class="chat-messages">
+    <div ref="scrollEl" class="chat-messages" @scroll.passive="onScroll">
       <div v-if="messagesVal.length === 0" class="chat-empty">
         开始新对话
       </div>
@@ -272,8 +309,26 @@ async function handleSend() {
   color: var(--aide-text-muted);
   display: flex;
   align-items: center;
+  gap: 8px;
   min-height: 36px;
   flex-shrink: 0;
+}
+
+.chat-stop-btn {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  color: var(--aide-danger);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s;
+}
+
+.chat-stop-btn:hover {
+  background: var(--aide-surface-hover);
 }
 
 .chat-header-name {

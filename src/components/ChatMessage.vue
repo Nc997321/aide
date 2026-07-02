@@ -11,7 +11,7 @@ const props = defineProps<{
 }>();
 
 const isUser = computed(() => props.message.role === "user");
-const { open } = useFileViewer();
+const { open, openAndScrollTo } = useFileViewer();
 
 const FILE_PATH_RE = /^((?:[\w./\\-]+[/\\])?[\w.-]+\.(ts|tsx|vue|rs|js|jsx|css|scss|json|md|toml|yaml|yml|sh|py|java|kt|xml|gradle|go|c|cpp|h|hpp|rb|php|swift|cs|proto|sql|env|lock))(:\d+)?$/;
 
@@ -22,13 +22,18 @@ function handleTextClick(e: MouseEvent) {
   const match = text.match(FILE_PATH_RE);
   if (!match) return;
   const filePath = match[1];
+  const line = match[3] ? parseInt(match[3].slice(1), 10) : undefined;
   const isAbsolute = filePath.startsWith("/") || /^[A-Za-z]:[\\/]/.test(filePath);
   const fullPath = isAbsolute
     ? filePath
     : props.workspacePath
     ? `${props.workspacePath}/${filePath}`.replace(/\\/g, "/")
     : filePath;
-  open(fullPath);
+  if (line !== undefined) {
+    openAndScrollTo(fullPath, line);
+  } else {
+    open(fullPath);
+  }
 }
 </script>
 
