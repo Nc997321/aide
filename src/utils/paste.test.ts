@@ -3,31 +3,53 @@ import { resolvePastePayload } from "./paste";
 import type { ClipboardEntry } from "../composables/useFileClipboard";
 
 describe("resolvePastePayload", () => {
-  it("uses OS files first", () => {
-    expect(resolvePastePayload(["C:\\a.png", "C:\\b.txt"], null, null, "x"))
-      .toBe("@C:\\a.png @C:\\b.txt ");
+  it("splits OS files: text files become @path, image files become imagePaths", () => {
+    const r = resolvePastePayload(["C:\\a.png", "C:\\b.ts"], null, null, "x");
+    expect(r.text).toBe("@C:\\b.ts ");
+    expect(r.imagePaths).toEqual(["C:\\a.png"]);
   });
 
-  it("uses image when no files", () => {
-    expect(resolvePastePayload([], "/tmp/aide-clipboard/img-1.png", null, "x"))
-      .toBe("@/tmp/aide-clipboard/img-1.png ");
+  it("all OS files are images: text is empty, all go to imagePaths", () => {
+    const r = resolvePastePayload(["C:\\a.png", "C:\\b.jpg"], null, null, "x");
+    expect(r.text).toBe("");
+    expect(r.imagePaths).toEqual(["C:\\a.png", "C:\\b.jpg"]);
   });
 
-  it("uses in-app clipboard entry when no files/image", () => {
+  it("all OS files are text: imagePaths is empty", () => {
+    const r = resolvePastePayload(["C:\\a.ts", "C:\\b.rs"], null, null, "x");
+    expect(r.text).toBe("@C:\\a.ts @C:\\b.rs ");
+    expect(r.imagePaths).toEqual([]);
+  });
+
+  it("clipboard image goes to imagePaths, text is empty", () => {
+    const r = resolvePastePayload([], "/tmp/aide-clipboard/img-1.png", null, "x");
+    expect(r.text).toBe("");
+    expect(r.imagePaths).toEqual(["/tmp/aide-clipboard/img-1.png"]);
+  });
+
+  it("in-app copy entry becomes @path text, no imagePaths", () => {
     const entry: ClipboardEntry = { op: "copy", path: "/proj/f.ts" };
-    expect(resolvePastePayload([], null, entry, "x")).toBe("@/proj/f.ts ");
+    const r = resolvePastePayload([], null, entry, "x");
+    expect(r.text).toBe("@/proj/f.ts ");
+    expect(r.imagePaths).toEqual([]);
   });
 
-  it("ignores in-app cut entry", () => {
+  it("in-app cut entry is ignored, falls through to plain text", () => {
     const entry: ClipboardEntry = { op: "cut", path: "/proj/f.ts" };
-    expect(resolvePastePayload([], null, entry, "fallback")).toBe("fallback");
+    const r = resolvePastePayload([], null, entry, "fallback");
+    expect(r.text).toBe("fallback");
+    expect(r.imagePaths).toEqual([]);
   });
 
-  it("falls back to text", () => {
-    expect(resolvePastePayload([], null, null, "hello\nworld")).toBe("hello\nworld");
+  it("plain text fallback", () => {
+    const r = resolvePastePayload([], null, null, "hello\nworld");
+    expect(r.text).toBe("hello\nworld");
+    expect(r.imagePaths).toEqual([]);
   });
 
-  it("returns empty when nothing available", () => {
-    expect(resolvePastePayload([], null, null, "")).toBe("");
+  it("empty everything returns empty resolution", () => {
+    const r = resolvePastePayload([], null, null, "");
+    expect(r.text).toBe("");
+    expect(r.imagePaths).toEqual([]);
   });
 });

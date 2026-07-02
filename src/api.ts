@@ -3,13 +3,11 @@ import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem,
   ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
   GrepMatch, ProviderConfig, RunConfig, RunTarget, RecentView,
+  SkillMeta,
 } from "./types";
 
 export const api = {
-  // PTY
-  ptySpawnClaude(sessionId: string, rows: number, cols: number): Promise<void> {
-    return invoke("pty_spawn_claude", { sessionId, rows, cols });
-  },
+  // Shell (workbench terminal)
   ptyWrite(sessionId: string, data: string): Promise<void> {
     return invoke("pty_write", { sessionId, data });
   },
@@ -19,17 +17,24 @@ export const api = {
   ptyKill(sessionId: string): Promise<void> {
     return invoke("pty_kill", { sessionId });
   },
-  ptyHasSession(sessionId: string): Promise<boolean> {
-    return invoke("pty_has_session", { sessionId });
-  },
-  ptyRenameSession(oldId: string, newId: string): Promise<void> {
-    return invoke("pty_rename_session", { oldId, newId });
-  },
   pollPtyOutput(sessionId: string): Promise<string> {
     return invoke("poll_pty_output", { sessionId });
   },
   ptySpawnShell(sessionId: string, rows: number, cols: number, cwd: string, shell: string): Promise<void> {
     return invoke("pty_spawn_shell", { sessionId, rows, cols, cwd, shell });
+  },
+
+  // Chat (Agent SDK)
+  stopChatSession(sessionId: string): Promise<void> {
+    return invoke("stop_chat_session", { sessionId });
+  },
+  interruptSession(sessionId: string): Promise<void> {
+    return invoke("interrupt_session", { sessionId });
+  },
+
+  // Plugin skills
+  scanPluginSkills(cwd: string, provider?: string): Promise<SkillMeta[]> {
+    return invoke("scan_plugin_skills", { cwd, provider: provider ?? null });
   },
 
   // 剪贴板（文件 / 图片粘贴进 Claude TUI）
@@ -73,6 +78,9 @@ export const api = {
   },
   readFileContent(path: string): Promise<string> {
     return invoke("read_file_content", { path });
+  },
+  readFileBase64(path: string): Promise<string> {
+    return invoke("read_file_base64", { path });
   },
   readFileBinary(path: string): Promise<ArrayBuffer> {
     return invoke("read_file_binary", { path });

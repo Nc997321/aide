@@ -28,6 +28,8 @@ regex = "1"
 arboard = "1"
 percent-encoding = "2"
 png = "0.17"
+dirs = "5"
+base64 = "0.22"
 
 # Clipboard file-path reading is platform-specific; declare the platform-only
 # crates in target-specific sections so a Windows build doesn't try to compile

@@ -129,7 +129,7 @@ export function useConversationChanges(sessionId: () => string) {
           true,
         );
         if (!ok) return;
-        await api.ptyKill(sid);
+        await api.stopChatSession(sid);
       }
 
       // Truncate .jsonl to the position before this round started

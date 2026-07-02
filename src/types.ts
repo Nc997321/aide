@@ -175,3 +175,6 @@ export interface RecentView {
   sessions: RecentSession[];
   files: RecentFile[];
 }
+
+// ── Skill types ──
+export type { SkillMeta } from "./types/skill";

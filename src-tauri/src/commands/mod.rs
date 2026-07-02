@@ -1,4 +1,4 @@
-pub mod pty;
+pub mod shell;
 pub mod filesystem;
 pub mod git;
 pub mod session;
@@ -13,6 +13,7 @@ pub mod run_process;
 pub mod clipboard;
 pub mod file_assoc;
 pub mod recent;
+pub mod chat;
 
 use serde::{Deserialize, Serialize};
 use std::fs;

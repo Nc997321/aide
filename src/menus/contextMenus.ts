@@ -17,21 +17,14 @@ export function fileMenuItems(
   path: string,
   projectRoot: string,
   onDeleted?: () => void,
-  sessionId?: string,
+  _sessionId?: string,
 ): MenuItem[] {
   const fileName = path.split(/[/\\]/).pop() || path;
   const viewer = useFileViewer();
-  const relPath = path.startsWith(projectRoot)
-    ? path.slice(projectRoot.length).replace(/^[/\\]/, "").replace(/\\/g, "/")
-    : path.replace(/\\/g, "/");
   return [
     { label: "查看/编辑", action: () => viewer.open(path) },
     { label: "其他方式打开", action: () => api.fileOpen(path) },
     { label: "在文件资源管理器中打开", action: () => api.showInExplorer(path) },
-    ...(sessionId ? [{
-      label: "添加到对话",
-      action: () => api.ptyWrite(sessionId, `@${relPath} `).catch(() => {}),
-    }] : []),
     { label: "复制路径", action: () => navigator.clipboard.writeText(path) },
     {
       label: "复制相对路径",

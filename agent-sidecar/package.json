@@ -1,0 +1,19 @@
+{
+  "name": "agent-sidecar",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/sidecar.js",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node18 --outfile=dist/sidecar.js --external:@anthropic-ai/claude-code --external:undici",
+    "dev": "npx tsx src/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "latest",
+    "undici": "^8.5.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

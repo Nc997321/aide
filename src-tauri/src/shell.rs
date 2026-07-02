@@ -14,16 +14,16 @@ const WRITE_QUEUE_CAP: usize = 256;
 
 /// Shape of the `pty-exit` payload emitted when a session's child exits.
 enum ExitPayload {
-    /// `{"session_id": "..."}` — used by Claude and workbench-shell sessions.
+    /// `{"session_id": "..."}` — used by workbench-shell sessions.
     Plain,
     /// `{"session_id":"...","success":bool}` — used by run-config sessions,
     /// whose UI reports whether the command succeeded.
     Run,
 }
 
-struct PtySession {
+struct ShellSession {
     master: Box<dyn MasterPty + Send>,
-    /// Bounded sender into the session's writer thread. `pty_write` performs a
+    /// Bounded sender into the session's writer thread. `shell_write` performs a
     /// non-blocking `try_send`, so a full queue (hung process) drops the input
     /// instead of stalling the Tauri main thread or the shared `sessions` mutex.
     writer_tx: SyncSender<String>,
@@ -34,26 +34,20 @@ struct PtySession {
     output_buffer: Arc<Mutex<String>>,
 }
 
-pub struct PtyManager {
-    sessions: Arc<Mutex<HashMap<String, PtySession>>>,
+pub struct ShellManager {
+    sessions: Arc<Mutex<HashMap<String, ShellSession>>>,
 }
 
-impl PtyManager {
+impl ShellManager {
     pub fn new() -> Self {
-        PtyManager {
+        ShellManager {
             sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    /// Common launch path shared by `spawn_command`, `spawn_shell`, and
-    /// `spawn_run_command`. Builds the PTY, spawns the child, and starts the
-    /// three per-session worker threads (reader / writer / waiter).
-    ///
-    /// The writer thread is the crux of the "hung process can't freeze the
-    /// app" fix: `write_all` + `flush` run on a worker thread that holds no
-    /// locks, so a wedged foreground process stalls only that one session's
-    /// queue — never the Tauri main thread and never the shared `sessions`
-    /// mutex (which would otherwise freeze every other terminal too).
+    /// Common launch path shared by `spawn_shell` and `spawn_run_command`.
+    /// Builds the PTY, spawns the child, and starts the three per-session
+    /// worker threads (reader / writer / waiter).
     fn launch(
         &self,
         session_id: &str,
@@ -79,10 +73,6 @@ impl PtyManager {
 
         drop(pty_pair.slave);
 
-        // Split off a killer BEFORE `child` moves into the waiter thread, so
-        // `kill_session` can signal the process from the main thread while the
-        // waiter is blocked in `wait()`. This is the portable_pty-blessed way
-        // to kill a child whose owner thread is stuck in a blocking wait.
         let killer = Arc::new(Mutex::new(child.clone_killer()));
 
         let master = pty_pair.master;
@@ -96,7 +86,7 @@ impl PtyManager {
             let mut sessions = self.sessions.lock().map_err(|e| e.to_string())?;
             sessions.insert(
                 session_id.to_string(),
-                PtySession {
+                ShellSession {
                     master,
                     writer_tx,
                     killer: killer.clone(),
@@ -106,8 +96,7 @@ impl PtyManager {
         }
 
         // Reader thread — appends PTY output to a shared buffer the frontend
-        // polls via `poll_pty_output`. Pull-based so the JS event loop controls
-        // the data rate and is never flooded regardless of output volume.
+        // polls via `poll_pty_output`.
         let buf_for_reader = output_buffer.clone();
         thread::spawn(move || {
             let mut buf = [0u8; 65536];
@@ -125,10 +114,6 @@ impl PtyManager {
         });
 
         // Writer thread — owns the PTY writer and drains the bounded queue.
-        // This is what keeps a hung foreground process from freezing the app:
-        // blocking `write_all`/`flush` happen here, on a worker thread holding
-        // no locks — never on the Tauri main thread and never under the shared
-        // `sessions` mutex.
         thread::spawn(move || {
             while let Ok(data) = writer_rx.recv() {
                 if writer.write_all(data.as_bytes()).is_err() || writer.flush().is_err() {
@@ -137,11 +122,7 @@ impl PtyManager {
             }
         });
 
-        // Waiter thread — blocking `wait()` for instant, reliable exit
-        // detection. Safe to block here: it owns `child` and holds no lock
-        // during the wait. `kill_session` signals the child via the cloned
-        // killer, which both unblocks `wait()` (process terminated) and the
-        // writer thread's stalled `write_all` (input pipe torn down).
+        // Waiter thread — blocking `wait()` for instant, reliable exit detection.
         let sessions = self.sessions.clone();
         let sid = session_id.to_string();
         let app_waiter = app_handle;
@@ -164,38 +145,7 @@ impl PtyManager {
         Ok(())
     }
 
-    /// Spawn a command in a PTY, scoped to a session_id.
-    /// If a PTY already exists for this session_id, it is killed first.
-    pub fn spawn_command(
-        &self,
-        session_id: &str,
-        command: &str,
-        args: &[&str],
-        cwd: &PathBuf,
-        rows: u16,
-        cols: u16,
-        env_vars: HashMap<String, String>,
-        app_handle: AppHandle,
-    ) -> Result<(), String> {
-        // On Windows, npm global packages are .cmd wrappers (the bare name
-        // resolves to a shell script, not a valid Win32 exe — error 193).
-        #[cfg(target_os = "windows")]
-        let resolved = format!("{}.cmd", command);
-        #[cfg(not(target_os = "windows"))]
-        let resolved = command.to_string();
-
-        let mut cmd = CommandBuilder::new(&resolved);
-        cmd.args(args);
-        cmd.cwd(cwd);
-        for (key, value) in &env_vars {
-            cmd.env(key, value);
-        }
-
-        self.launch(session_id, cmd, command, rows, cols, app_handle, ExitPayload::Plain)
-    }
-
     /// Spawn an arbitrary shell program in a PTY (for the workbench terminal).
-    /// Unlike `spawn_command`, this does NOT append `.cmd` on Windows —
     /// `program` must already be a resolved path (e.g. from `which`).
     pub fn spawn_shell(
         &self,
@@ -256,14 +206,7 @@ impl PtyManager {
         Ok(())
     }
 
-    /// Write to the PTY for a specific session.
-    ///
-    /// Non-blocking by design: it clones the bounded sender under a brief lock
-    /// (released before any IO), then `try_send`s. If the process isn't
-    /// consuming stdin (hung), the queue is full and the input is dropped
-    /// rather than blocking the caller — this is what prevents a wedged
-    /// foreground process from stalling the Tauri main thread or any other
-    /// session.
+    /// Write to the PTY for a specific session (non-blocking).
     pub fn write(&self, session_id: &str, data: &str) -> Result<(), String> {
         let tx = {
             let sessions = self.sessions.lock().map_err(|e| e.to_string())?;
@@ -277,14 +220,6 @@ impl PtyManager {
     }
 
     /// Kill a specific session's PTY.
-    ///
-    /// Actually terminates the child process — closing the ConPty master does
-    /// NOT kill the process on Windows, so without an explicit `kill()` a hung
-    /// process would outlive the session, leaking the waiter thread (blocked in
-    /// `wait()`) and the writer thread (blocked in `write_all`). The cloned
-    /// killer signals the child, which unblocks both threads; dropping the
-    /// session then closes the master (unblocking the reader) and the sender
-    /// (letting the writer thread finish).
     pub fn kill_session(&self, session_id: &str) {
         let session = {
             let mut sessions = match self.sessions.lock() {
@@ -297,35 +232,11 @@ impl PtyManager {
             if let Ok(mut killer) = session.killer.lock() {
                 let _ = killer.kill();
             }
-            // `session` drops here: master closed (reader unblocks), writer_tx
-            // dropped (writer thread drains then exits once the killed child
-            // tears down the input pipe). The waiter thread's `wait()` returns
-            // because the child was killed; it no-ops its map remove and emits
-            // `pty-exit`.
         }
-    }
-
-    /// Re-key a session's PTY (used when "new_xxx" → real UUID)
-    pub fn rename_session(&self, old_id: &str, new_id: &str) {
-        if let Ok(mut sessions) = self.sessions.lock() {
-            if let Some(session) = sessions.remove(old_id) {
-                sessions.insert(new_id.to_string(), session);
-            }
-        }
-    }
-
-    /// Check if a session has a live PTY
-    pub fn has_session(&self, session_id: &str) -> bool {
-        self.sessions
-            .lock()
-            .map(|s| s.contains_key(session_id))
-            .unwrap_or(false)
     }
 
     /// Drain accumulated PTY output for a session.
     /// Returns the buffered data and clears the buffer.
-    /// The frontend calls this on a polling interval instead of receiving
-    /// push events, giving it full control over the data consumption rate.
     pub fn poll_output(&self, session_id: &str) -> Result<String, String> {
         let sessions = self.sessions.lock().map_err(|e| e.to_string())?;
         if let Some(session) = sessions.get(session_id) {

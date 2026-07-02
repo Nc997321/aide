@@ -28,3 +28,14 @@ export type {
   PluginEntry,
   InstalledPlugin,
 } from "./marketplace";
+
+export type {
+  MessageRole,
+  TextBlock,
+  ToolCallBlock,
+  ContentBlock,
+  ChatMessage,
+  PermissionRequest,
+} from "./chat";
+
+export type { SkillMeta } from "./skill";
