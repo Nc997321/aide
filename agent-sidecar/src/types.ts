@@ -5,6 +5,7 @@ export type ChatEvent =
   | { type: "tool_use_start"; id: string; name: string; input: unknown }
   | { type: "tool_result"; id: string; content: string; is_error: boolean }
   | { type: "permission_request"; id: string; name: string; input: unknown }
+  | { type: "permission_cancelled"; id: string }
   | { type: "message_stop"; stop_reason: string; cost_usd: number | null }
   | { type: "error"; message: string };
 

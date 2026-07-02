@@ -25,9 +25,6 @@ let currentQuery: Awaited<ReturnType<typeof query>> | null = null;
 let sessionId: string | undefined;
 
 async function startLoop(cwd?: string) {
-  const originalCwd = process.cwd();
-  if (cwd) process.chdir(cwd);
-
   try {
     // 出错后继续循环，等待下一条消息（避免 queue 无消费者）
     while (true) {
@@ -39,6 +36,7 @@ async function startLoop(cwd?: string) {
             canUseTool: permMgr.makeCallback(emit) as any,
             settingSources: ["project", "user"],
             skills: "all",
+            ...(cwd ? { cwd } : {}),
             ...(sessionId ? { resume: sessionId } : {}),
           },
         });
@@ -62,7 +60,6 @@ async function startLoop(cwd?: string) {
     }
   } finally {
     currentQuery = null;
-    if (cwd) process.chdir(originalCwd);
   }
 }
 
