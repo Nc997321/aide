@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import SidebarLeft from "./components/SidebarLeft.vue";
-import TerminalPanel from "./components/TerminalPanel.vue";
 import FileTree from "./components/FileTree.vue";
 import ChangeLogPanel from "./components/ChangeLogPanel.vue";
 import ContextMenu from "./components/ContextMenu.vue";
@@ -9,6 +8,10 @@ import { defineAsyncComponent } from "vue";
 const FileViewer = defineAsyncComponent(() => import("./components/FileViewer.vue"));
 const SettingsPanel = defineAsyncComponent(() => import("./components/SettingsPanel.vue"));
 const RunConfigsDialog = defineAsyncComponent(() => import("./components/RunConfigsDialog.vue"));
+import ChatPanel from "./components/ChatPanel.vue";
+import PermissionDialog from "./components/PermissionDialog.vue";
+import { useChatSession } from "./composables/useChatSession";
+import type { ImageAttachment } from "./composables/useChatSession";
 import GitPanel from "./components/GitPanel.vue";
 import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
 import NotificationBanner from "./components/NotificationBanner.vue";
@@ -99,9 +102,20 @@ const titleBarRef = ref<InstanceType<typeof TitleBar> | null>(null);
 const paletteOpen = ref(false);
 const paletteRef = ref<InstanceType<typeof ACommandPalette> | null>(null);
 const activeSessionId = ref("");
+const chatSessionIdRef = ref<string | null>(null);
+watch(activeSessionId, (v) => { chatSessionIdRef.value = v || null; }, { immediate: true });
+const { pendingPermission, respondPermission, messages, isBusy, sendMessage, interrupt } = useChatSession(chatSessionIdRef);
+const activeSessionName = computed(() => {
+  if (!activeSessionId.value) return "";
+  const allSessions = sidebarRef.value?.sessionsByWorkspace ?? {};
+  for (const list of Object.values(allSessions)) {
+    const found = (list as { id: string; name: string }[]).find(s => s.id === activeSessionId.value);
+    if (found) return found.name;
+  }
+  return "";
+});
 const settingsVisible = ref(false);
 const settingsInitialTab = ref<string | undefined>(undefined);
-const terminalPanelRef = ref<InstanceType<typeof TerminalPanel> | null>(null);
 const workspacePath = ref("");
 const projectName = ref("");
 const { settings, update: updateSettings } = useSettings();
@@ -209,23 +223,17 @@ function onSessionChanged(id: string) {
   activeSessionId.value = id;
 }
 
-async function onSessionReady(id: string, name: string) {
-  // Real UUID is known for the first time — add to sidebar and switch to it.
-  sidebarRef.value?.addSession({ id, name, timestamp: Date.now(), last_message: "" });
-  activeSessionId.value = id;
-  // 新会话已启动（PTY spawn 完成），记入最近会话。
-  void useRecent().recordCurrentSession(id, name);
-}
-
 async function onNewSession(name: string) {
-  terminalPanelRef.value?.createSession(name);
+  const session = await api.createSession(name);
+  sidebarRef.value?.addSession({ id: session.id, name: session.name, timestamp: session.timestamp, last_message: "" });
+  activeSessionId.value = session.id;
+  void useRecent().recordCurrentSession(session.id, session.name);
 }
 
 async function onSidebarWsChanged(path: string) {
   workspacePath.value = path;
   projectName.value = path.split(/[\\/]/).filter(Boolean).pop() || path;
   activeSessionId.value = "";
-  terminalPanelRef.value?.resetView();
   await fileTreeRef.value?.loadRoot();
   if (rightTab.value === "git") gitPanelRef.value?.reload();
   // Load run configurations for this workspace (auto-detects on first open).
@@ -487,11 +495,15 @@ onUnmounted(() => {
 
       <!-- Center panel -->
       <div class="panel-center">
-        <TerminalPanel
-          ref="terminalPanelRef"
-          :session-id="activeSessionId"
+        <ChatPanel
+          :session-id="activeSessionId || null"
+          :session-name="activeSessionName"
           :workspace-path="workspacePath"
-          @session-ready="onSessionReady"
+          :messages="messages"
+          :is-busy="isBusy"
+          class="h-full"
+          @send="(prompt: string, images?: ImageAttachment[]) => sendMessage(prompt, images)"
+          @interrupt="interrupt"
         />
       </div>
 
@@ -529,6 +541,10 @@ onUnmounted(() => {
       <RunConfigsDialog v-if="runConfigsDialogVisible" @close="runConfigsDialogVisible = false" />
       <FileViewer />
       <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
+      <PermissionDialog
+        :permission="pendingPermission"
+        @respond="(id: string, approved: boolean) => respondPermission(id, approved)"
+      />
     </div>
 
     <ACommandPalette
@@ -587,6 +603,7 @@ onUnmounted(() => {
 .panel-center {
   height: 100%;
   min-width: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   background-color: var(--aide-bg-base);
