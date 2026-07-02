@@ -19630,6 +19630,23 @@ var PermissionManager = class {
 };
 
 // src/mapper.ts
+function buildUserMessage(prompt, images) {
+  if (images.length === 0) {
+    return { role: "user", content: prompt };
+  }
+  const blocks = images.map((img) => ({
+    type: "image",
+    source: {
+      type: "base64",
+      media_type: img.mediaType,
+      data: img.data
+    }
+  }));
+  if (prompt) {
+    blocks.push({ type: "text", text: prompt });
+  }
+  return { role: "user", content: blocks };
+}
 function mapSdkMessage(msg, emit2) {
   if (msg.type === "system" && msg.subtype === "init") {
     emit2({ type: "session_init", session_id: msg.session_id });
@@ -19730,7 +19747,7 @@ rl2.on("line", (line) => {
     }
     queue.push({
       type: "user",
-      message: { role: "user", content: cmd.prompt },
+      message: buildUserMessage(cmd.prompt, cmd.images ?? []),
       parent_tool_use_id: null
     });
   } else if (cmd.cmd === "permission_response") {

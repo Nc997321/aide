@@ -3,7 +3,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ChatEvent, SidecarCommand } from "./types.js";
 import { MessageQueue } from "./generator.js";
 import { PermissionManager } from "./permissions.js";
-import { mapSdkMessage } from "./mapper.js";
+import { mapSdkMessage, buildUserMessage } from "./mapper.js";
 
 function emit(event: ChatEvent) {
   process.stdout.write(JSON.stringify(event) + "\n");
@@ -85,7 +85,7 @@ rl.on("line", (line) => {
     }
     queue.push({
       type: "user",
-      message: { role: "user", content: cmd.prompt },
+      message: buildUserMessage(cmd.prompt, cmd.images ?? []),
       parent_tool_use_id: null,
     } as any);
   } else if (cmd.cmd === "permission_response") {
