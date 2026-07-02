@@ -19,6 +19,24 @@ $env:INCLUDE = "$sdkInclude\ucrt;$sdkInclude\um;$sdkInclude\shared"
 Write-Host "=== Claude Code Desktop ===" -ForegroundColor Cyan
 Write-Host "MSVC: $msvcBin"
 Write-Host "SDK:  $sdkVer"
+
+# ── agent-sidecar 构建 ──
+Push-Location "$PSScriptRoot\agent-sidecar"
+if (-not (Test-Path node_modules)) {
+    Write-Host "[aide] 安装 agent-sidecar 依赖..." -ForegroundColor Cyan
+    npm install
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[aide] npm install 失败——如果是网络问题请开启代理后重试" -ForegroundColor Red
+        Pop-Location; exit 1
+    }
+}
+npm run build
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[aide] sidecar 构建失败" -ForegroundColor Red
+    Pop-Location; exit 1
+}
+Pop-Location
+
 Write-Host "Starting Tauri dev server..." -ForegroundColor Green
 Write-Host ""
 
