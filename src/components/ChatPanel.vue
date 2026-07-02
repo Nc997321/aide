@@ -120,11 +120,28 @@ async function handlePaste(e: ClipboardEvent) {
   }
 }
 
-function handleSend() {
+async function handleSend() {
   const text = inputText.value.trim();
   if (!text || isBusyVal.value || !props.sessionId) return;
+
+  let finalPrompt = text;
+  const slashMatch = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
+  if (slashMatch) {
+    const skillName = slashMatch[1];
+    const userText = (slashMatch[2] ?? "").trim();
+    const skill = skillList.value.find((s) => s.name === skillName);
+    if (skill) {
+      try {
+        const content = await api.readFileContent(skill.filePath);
+        finalPrompt = userText ? `${content}\n\n---\n\n${userText}` : content;
+      } catch {
+        // 读取失败则原样发送
+      }
+    }
+  }
+
   inputText.value = "";
-  emit("send", text);
+  emit("send", finalPrompt);
 }
 </script>
 
