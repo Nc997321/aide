@@ -1,4 +1,4 @@
-import { ref, computed, watch, type Ref } from "vue";
+import { computed, reactive, watch, type Ref } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import type {
@@ -15,223 +15,238 @@ export interface ImageAttachment {
   mediaType: string;
 }
 
-// ── 模块级单例 ─────────────────────────────────────────────────────────────
+interface SessionStore {
+  messages: ChatMessage[];
+  isBusy: boolean;
+  pendingPermission: PermissionRequest | null;
+  /** 是否已从磁盘加载过历史 */
+  hydrated: boolean;
+}
 
-// aide_session_id → sdk_session_id（用于会话续接）
+// ── 模块级单例状态 ─────────────────────────────────────────────────────────
+// 每会话独立 store：前台/后台事件走同一条写入路径，切换会话零拷贝。
+
+const stores = reactive<Record<string, SessionStore>>({});
+/** aide_session_id → sdk_session_id（会话续接） */
 const sdkSessionMap = new Map<string, string>();
+/** 迁移窗口期：旧 ID → 新 ID（Rust rename 完成前的在途事件转发） */
+const aliasMap = new Map<string, string>();
+/** 迁移回调（App.vue 注册，更新侧栏与 activeSessionId） */
+const migrationCallbacks = new Set<(oldId: string, newId: string) => void>();
 
-// 每个会话的消息历史缓存（内存级，重启清空）
-const sessionMessageCache = new Map<string, ChatMessage[]>();
-
-// 每个运行中会话的事件处理器（模块级，不绑定到任何组件实例）
-type SessionHandlers = {
-  onEvent: (e: Record<string, unknown>) => void;
-};
-const sessionHandlers = new Map<string, SessionHandlers>();
-
-// 全局 chat-event 监听器（只注册一次）
 let globalUnlisten: (() => void) | null = null;
+
+const { setSessionState, removeSessionState, state: sessionState } = useSessionState();
+
+function getStore(sid: string): SessionStore {
+  if (!stores[sid]) {
+    stores[sid] = { messages: [], isBusy: false, pendingPermission: null, hydrated: false };
+  }
+  return stores[sid];
+}
+
+function resolveSid(raw: string): string {
+  return aliasMap.get(raw) ?? raw;
+}
+
+function isDraftId(sid: string): boolean {
+  return sid.startsWith("new_");
+}
+
+/** 取续写目标：最后一条消息是流式 assistant 就续写，否则新建 */
+function getOrCreateAssistant(store: SessionStore): ChatMessage {
+  const last = store.messages[store.messages.length - 1];
+  if (last && last.role === "assistant" && last.streaming) return last;
+  const msg: ChatMessage = {
+    id: crypto.randomUUID(),
+    role: "assistant",
+    blocks: [],
+    timestamp: Date.now(),
+    streaming: true,
+  };
+  store.messages.push(msg);
+  return msg;
+}
+
+function finishStreaming(store: SessionStore) {
+  const last = store.messages[store.messages.length - 1];
+  if (last?.streaming) last.streaming = false;
+}
+
+async function migrateStore(oldId: string, newId: string) {
+  // 1. 前端立即换 key + 建 alias，兜住 Rust rename 完成前的在途事件
+  aliasMap.set(oldId, newId);
+  if (stores[oldId]) {
+    stores[newId] = stores[oldId];
+    delete stores[oldId];
+  }
+  if (sessionState[oldId]) {
+    setSessionState(newId, sessionState[oldId]);
+    removeSessionState(oldId);
+  }
+  const sdk = sdkSessionMap.get(oldId);
+  if (sdk) {
+    sdkSessionMap.set(newId, sdk);
+    sdkSessionMap.delete(oldId);
+  }
+  // 2. Rust 侧迁移（sidecar 注册表 / 名字元数据 / 变更记录 / 最近访问）
+  try {
+    await invoke("migrate_session", { oldId, newId });
+  } catch (e) {
+    console.warn("migrate_session failed:", e);
+  }
+  // 3. 通知 App.vue 更新侧栏与 activeSessionId
+  for (const cb of migrationCallbacks) cb(oldId, newId);
+}
+
+function handleChatEvent(e: Record<string, unknown>) {
+  const raw = e["session_id"] as string | undefined;
+  if (!raw) return;
+  const sid = resolveSid(raw);
+  const store = getStore(sid);
+
+  switch (e["type"]) {
+    case "session_init": {
+      const sdkSid = e["sdk_session_id"] as string | undefined;
+      if (sdkSid) {
+        sdkSessionMap.set(sid, sdkSid);
+        if (isDraftId(sid) && sdkSid !== sid) {
+          void migrateStore(sid, sdkSid);
+        }
+      }
+      setSessionState(sid, "running");
+      break;
+    }
+    case "text_delta": {
+      const msg = getOrCreateAssistant(store);
+      const last = msg.blocks[msg.blocks.length - 1];
+      if (last?.type === "text") {
+        (last as TextBlock).text += e["delta"] as string;
+      } else {
+        msg.blocks.push({ type: "text", text: e["delta"] as string });
+      }
+      break;
+    }
+    case "tool_use_start": {
+      const msg = getOrCreateAssistant(store);
+      msg.blocks.push({
+        type: "tool_call",
+        id: e["id"] as string,
+        name: e["name"] as string,
+        input: e["input"],
+        isPending: true,
+      } as ToolCallBlock);
+      break;
+    }
+    case "tool_result": {
+      const block = store.messages
+        .flatMap((m) => m.blocks)
+        .find(
+          (b): b is ToolCallBlock =>
+            b.type === "tool_call" && (b as ToolCallBlock).id === e["id"],
+        );
+      if (block) {
+        block.result = e["content"] as string;
+        block.isError = e["is_error"] as boolean;
+        block.isPending = false;
+      }
+      break;
+    }
+    case "permission_request": {
+      store.pendingPermission = {
+        id: e["id"] as string,
+        name: e["name"] as string,
+        input: e["input"],
+      };
+      setSessionState(sid, "attention");
+      break;
+    }
+    case "permission_cancelled": {
+      if (store.pendingPermission?.id === e["id"]) {
+        store.pendingPermission = null;
+      }
+      break;
+    }
+    case "message_stop": {
+      finishStreaming(store);
+      store.isBusy = false;
+      // waiting = sidecar 存活但空闲 → 通知/横幅/变更捕获依赖 running→waiting 转换
+      setSessionState(sid, "waiting");
+      break;
+    }
+    case "error": {
+      finishStreaming(store);
+      store.isBusy = false;
+      store.pendingPermission = null;
+      store.messages.push({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        blocks: [{ type: "text", text: `Error: ${e["message"]}` }],
+        timestamp: Date.now(),
+      });
+      setSessionState(sid, "stopped");
+      break;
+    }
+  }
+}
 
 async function ensureGlobalListener() {
   if (globalUnlisten) return;
   globalUnlisten = await listen<Record<string, unknown>>("chat-event", (event) => {
-    const e = event.payload;
-    const sid = e["session_id"] as string | undefined;
-    if (!sid) return;
-    sessionHandlers.get(sid)?.onEvent(e);
+    handleChatEvent(event.payload);
   });
 }
 
-const { setSessionState } = useSessionState();
-
-function deepCopyMessages(msgs: ChatMessage[]): ChatMessage[] {
-  return msgs.map((msg) => ({
-    ...msg,
-    blocks: msg.blocks.map((b) => ({ ...b })),
-  }));
+async function hydrate(sid: string) {
+  const store = getStore(sid);
+  if (store.hydrated || store.messages.length > 0 || isDraftId(sid)) {
+    store.hydrated = true;
+    return;
+  }
+  store.hydrated = true;
+  try {
+    const items = await invoke<Array<{ role: string; content: string; timestamp: number }>>(
+      "load_messages",
+      { sessionId: sid },
+    );
+    if (!Array.isArray(items)) return;
+    // hydrate 期间可能已有实时消息进来：历史插到最前
+    const history: ChatMessage[] = items.map((item) => ({
+      id: crypto.randomUUID(),
+      role: (item.role === "claude" ? "assistant" : item.role) as "user" | "assistant",
+      blocks: [{ type: "text" as const, text: item.content }],
+      timestamp: item.timestamp,
+    }));
+    store.messages.unshift(...history);
+  } catch (e) {
+    console.warn("Failed to load messages:", e);
+  }
 }
 
-// ── useChatSession（单例调用，在 App.vue 顶层使用）─────────────────────────
+/** 仅测试用：清空模块级状态 */
+export function __resetForTest() {
+  for (const k of Object.keys(stores)) delete stores[k];
+  sdkSessionMap.clear();
+  aliasMap.clear();
+  migrationCallbacks.clear();
+  globalUnlisten?.();
+  globalUnlisten = null;
+}
+
+// ── useChatSession（App.vue 顶层单例调用）───────────────────────────────────
 
 export function useChatSession(sessionId: Ref<string | null>) {
-  const messages = ref<ChatMessage[]>([]);
-  const isBusy = ref(false);
-  const pendingPermission = ref<PermissionRequest | null>(null);
-  let currentAssistantMsg: ChatMessage | null = null;
+  void ensureGlobalListener();
 
-  function getOrCreateAssistant(): ChatMessage {
-    if (
-      !currentAssistantMsg ||
-      messages.value[messages.value.length - 1] !== currentAssistantMsg
-    ) {
-      currentAssistantMsg = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        blocks: [],
-        timestamp: Date.now(),
-      };
-      messages.value.push(currentAssistantMsg);
-    }
-    return currentAssistantMsg;
-  }
+  const current = computed(() => (sessionId.value ? getStore(sessionId.value) : null));
 
-  function saveToCache(sid: string) {
-    if (messages.value.length > 0) {
-      sessionMessageCache.set(sid, deepCopyMessages(messages.value));
-    }
-  }
-
-  async function loadFromCache(sid: string) {
-    let cached = sessionMessageCache.get(sid);
-    if (!cached) {
-      try {
-        const items = await invoke<Array<{ role: string; content: string; timestamp: number }>>(
-          "load_messages", { sessionId: sid }
-        );
-        if (sessionId.value !== sid) return;
-        cached = items.map((item) => ({
-          id: crypto.randomUUID(),
-          role: (item.role === "claude" ? "assistant" : item.role) as "user" | "assistant",
-          blocks: [{ type: "text" as const, text: item.content }],
-          timestamp: item.timestamp,
-        }));
-        sessionMessageCache.set(sid, cached);
-      } catch (e) {
-        console.warn("Failed to load messages:", e);
-        if (sessionId.value !== sid) return;
-        cached = [];
-      }
-    }
-    if (sessionId.value !== sid) return;
-    messages.value = deepCopyMessages(cached);
-    isBusy.value = false;
-    pendingPermission.value = null;
-    currentAssistantMsg = null;
-  }
-
-  function registerHandlers(sid: string) {
-    sessionHandlers.set(sid, {
-      onEvent(e) {
-        switch (e["type"]) {
-          case "session_init": {
-            const sdkSid = e["sdk_session_id"] as string | undefined;
-            if (sdkSid) sdkSessionMap.set(sid, sdkSid);
-            setSessionState(sid, "running");
-            break;
-          }
-          case "text_delta": {
-            // 只有当前展示的会话才实时更新 messages ref
-            if (sessionId.value === sid) {
-              const msg = getOrCreateAssistant();
-              const last = msg.blocks[msg.blocks.length - 1];
-              if (last?.type === "text") {
-                (last as TextBlock).text += e["delta"] as string;
-              } else {
-                msg.blocks.push({ type: "text", text: e["delta"] as string });
-              }
-            } else {
-              // 后台会话：直接追加到缓存
-              const cached = sessionMessageCache.get(sid);
-              if (cached) {
-                const last = cached[cached.length - 1];
-                if (last?.role === "assistant") {
-                  const lastBlock = last.blocks[last.blocks.length - 1];
-                  if (lastBlock?.type === "text") {
-                    (lastBlock as TextBlock).text += e["delta"] as string;
-                  } else {
-                    last.blocks.push({ type: "text", text: e["delta"] as string });
-                  }
-                }
-              }
-            }
-            break;
-          }
-          case "tool_use_start": {
-            if (sessionId.value === sid) {
-              const msg = getOrCreateAssistant();
-              msg.blocks.push({
-                type: "tool_call",
-                id: e["id"] as string,
-                name: e["name"] as string,
-                input: e["input"],
-                isPending: true,
-              } as ToolCallBlock);
-            }
-            break;
-          }
-          case "tool_result": {
-            if (sessionId.value === sid) {
-              const block = messages.value
-                .flatMap((m) => m.blocks)
-                .find((b): b is ToolCallBlock =>
-                  b.type === "tool_call" && (b as ToolCallBlock).id === e["id"]
-                );
-              if (block) {
-                block.result = e["content"] as string;
-                block.isError = e["is_error"] as boolean;
-                block.isPending = false;
-              }
-            }
-            break;
-          }
-          case "permission_request": {
-            if (sessionId.value === sid) {
-              pendingPermission.value = {
-                id: e["id"] as string,
-                name: e["name"] as string,
-                input: e["input"],
-              };
-            }
-            setSessionState(sid, "attention");
-            break;
-          }
-          case "message_stop": {
-            if (sessionId.value === sid) {
-              currentAssistantMsg = null;
-              isBusy.value = false;
-            }
-            setSessionState(sid, "stopped");
-            saveToCache(sid);
-            sessionHandlers.delete(sid);
-            break;
-          }
-          case "error": {
-            if (sessionId.value === sid) {
-              currentAssistantMsg = null;
-              isBusy.value = false;
-              messages.value.push({
-                id: crypto.randomUUID(),
-                role: "assistant",
-                blocks: [{ type: "text", text: `Error: ${e["message"]}` }],
-                timestamp: Date.now(),
-              });
-            }
-            setSessionState(sid, "stopped");
-            saveToCache(sid);
-            sessionHandlers.delete(sid);
-            break;
-          }
-        }
-      },
-    });
-  }
-
-  // 切换会话时保存旧历史、加载新历史
-  watch(sessionId, async (newSid, oldSid) => {
-    if (oldSid) saveToCache(oldSid);
-    if (newSid) {
-      await loadFromCache(newSid);
-      // 如果该会话仍在运行（有处理器），同步 isBusy
-      if (sessionHandlers.has(newSid)) {
-        isBusy.value = true;
-      }
-    } else {
-      messages.value = [];
-      isBusy.value = false;
-      pendingPermission.value = null;
-      currentAssistantMsg = null;
-    }
-  }, { immediate: true });
+  watch(
+    sessionId,
+    (sid) => {
+      if (sid) void hydrate(sid);
+    },
+    { immediate: true },
+  );
 
   async function sendMessage(
     prompt: string,
@@ -240,13 +255,12 @@ export function useChatSession(sessionId: Ref<string | null>) {
   ) {
     const sid = sessionId.value;
     if (!sid) return;
-
     await ensureGlobalListener();
 
-    isBusy.value = true;
+    const store = getStore(sid);
+    store.isBusy = true;
     setSessionState(sid, "running");
 
-    // 构建消息历史块（图片在前，文字在后）
     const blocks: (ImageBlock | TextBlock)[] = [
       ...(images ?? []).map((img): ImageBlock => ({
         type: "image",
@@ -255,28 +269,31 @@ export function useChatSession(sessionId: Ref<string | null>) {
       })),
       ...(prompt ? [{ type: "text" as const, text: prompt }] : []),
     ];
-    messages.value.push({
+    finishStreaming(store); // 上一条 assistant 不再续写
+    store.messages.push({
       id: crypto.randomUUID(),
       role: "user",
       blocks,
       timestamp: Date.now(),
     });
-    currentAssistantMsg = null;
 
-    registerHandlers(sid);
-    const resolvedResumeId = resumeId ?? sdkSessionMap.get(sid);
+    // resume 解析：显式传入 > 运行期映射 > 历史会话用自身 ID（重启后续接的关键）
+    const resolvedResumeId =
+      resumeId ?? sdkSessionMap.get(sid) ?? (isDraftId(sid) ? undefined : sid);
+
     await invoke("send_message", {
       sessionId: sid,
       prompt,
       images: images?.length ? images : null,
-      resumeId: resolvedResumeId,
+      resumeId: resolvedResumeId ?? null,
     });
   }
 
   async function respondPermission(id: string, approved: boolean) {
     const sid = sessionId.value;
     if (!sid) return;
-    pendingPermission.value = null;
+    const store = getStore(sid);
+    store.pendingPermission = null;
     setSessionState(sid, "running");
     await invoke("permission_response", { sessionId: sid, id, approved });
   }
@@ -284,19 +301,43 @@ export function useChatSession(sessionId: Ref<string | null>) {
   async function interrupt() {
     const sid = sessionId.value;
     if (!sid) return;
-    isBusy.value = false;
-    currentAssistantMsg = null;
-    setSessionState(sid, "stopped");
-    sessionHandlers.delete(sid);
-    await invoke("interrupt_session", { sessionId: sid });
+    const store = getStore(sid);
+    try {
+      await invoke("interrupt_session", { sessionId: sid });
+    } finally {
+      store.isBusy = false;
+      store.pendingPermission = null;
+      finishStreaming(store);
+      setSessionState(sid, "waiting"); // sidecar 仍存活
+    }
+  }
+
+  async function stopSession() {
+    const sid = sessionId.value;
+    if (!sid) return;
+    const store = getStore(sid);
+    try {
+      await invoke("stop_chat_session", { sessionId: sid });
+    } finally {
+      store.isBusy = false;
+      store.pendingPermission = null;
+      finishStreaming(store);
+      setSessionState(sid, "stopped");
+    }
+  }
+
+  function onSessionMigrated(cb: (oldId: string, newId: string) => void) {
+    migrationCallbacks.add(cb);
   }
 
   return {
-    messages: computed(() => messages.value),
-    isBusy,
-    pendingPermission,
+    messages: computed(() => current.value?.messages ?? []),
+    isBusy: computed(() => current.value?.isBusy ?? false),
+    pendingPermission: computed(() => current.value?.pendingPermission ?? null),
     sendMessage,
     respondPermission,
     interrupt,
+    stopSession,
+    onSessionMigrated,
   };
 }

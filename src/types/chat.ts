@@ -28,6 +28,8 @@ export interface ChatMessage {
   role: MessageRole;
   blocks: ContentBlock[];
   timestamp: number;
+  /** assistant 消息正在流式生成中（用于续写判定，替代对象身份比较） */
+  streaming?: boolean;
 }
 
 export interface PermissionRequest {
