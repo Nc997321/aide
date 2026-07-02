@@ -56,16 +56,24 @@ pub fn push_file(state: &mut RecentState, ws_key: &str, e: RecentFile, limit: us
     }
 }
 
+/// 会话存活检查的新鲜度宽限：SDK 在 session_init 后要过几秒才写出首个 jsonl，
+/// 宽限期内的条目跳过 jsonl 存活检查，否则 record→refresh→prune 竞态会把
+/// 刚入列的会话当死会话剪掉。
+pub const PRUNE_GRACE_MS: u64 = 10 * 60 * 1000;
+
 /// 用外部提供的存活判定函数清理失效会话与当前 ws_key 的失效文件，返回是否有变化。
 pub fn prune_stale_with(
     state: &mut RecentState,
     ws_key: &str,
+    now_ms: u64,
     session_alive: impl Fn(&str) -> bool,
     file_alive: impl Fn(&str) -> bool,
 ) -> bool {
     let mut changed = false;
     let before = state.sessions.len();
-    state.sessions.retain(|s| session_alive(&s.session_id));
+    state.sessions.retain(|s| {
+        now_ms.saturating_sub(s.ts) < PRUNE_GRACE_MS || session_alive(&s.session_id)
+    });
     if state.sessions.len() != before {
         changed = true;
     }
@@ -101,6 +109,7 @@ pub fn prune_stale(state: &mut RecentState, ws_key: &str) -> bool {
     prune_stale_with(
         state,
         ws_key,
+        now_ms(),
         |id| !find_session_jsonl_globally(id).is_empty(),
         |p| Path::new(p).metadata().is_ok(),
     )
@@ -310,13 +319,28 @@ mod tests {
         push_session(&mut st, sess("dead", 2), 10);
         push_file(&mut st, "k", file("/exists", 1), 10);
         push_file(&mut st, "k", file("/gone", 2), 10);
-        let changed = prune_stale_with(&mut st, "k", |id| id == "alive", |p| p == "/exists");
+        let now = PRUNE_GRACE_MS + 100; // 条目 ts 均为 1/2，已过宽限期
+        let changed = prune_stale_with(&mut st, "k", now, |id| id == "alive", |p| p == "/exists");
         assert!(changed);
         assert_eq!(st.sessions.len(), 1);
         assert_eq!(st.sessions[0].session_id, "alive");
         let list = st.files.get("k").unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].path, "/exists");
+    }
+
+    #[test]
+    fn prune_stale_spares_fresh_sessions_without_jsonl() {
+        // 回归：session_init 时记录的会话，SDK 还没写出首个 jsonl，
+        // record→refresh→prune 竞态曾把刚入列的条目当死会话剪掉。
+        let mut st = RecentState::default();
+        let now: u64 = 1_800_000_000_000;
+        push_session(&mut st, sess("fresh", now - 5_000), 10); // 5 秒前记录
+        push_session(&mut st, sess("old-dead", now - PRUNE_GRACE_MS - 1), 10);
+        let changed = prune_stale_with(&mut st, "k", now, |_| false, |_| true);
+        assert!(changed);
+        assert_eq!(st.sessions.len(), 1);
+        assert_eq!(st.sessions[0].session_id, "fresh");
     }
 
     #[test]
@@ -349,7 +373,7 @@ mod tests {
         let mut st = RecentState::default();
         push_session(&mut st, sess("a", 1), 10);
         push_file(&mut st, "k", file("/a", 1), 10);
-        let changed = prune_stale_with(&mut st, "k", |_| true, |_| true);
+        let changed = prune_stale_with(&mut st, "k", PRUNE_GRACE_MS + 100, |_| true, |_| true);
         assert!(!changed);
     }
 }
