@@ -7,6 +7,7 @@ import type { SkillMeta } from "@/types";
 import { api } from "@/api";
 import { resolvePastePayload } from "@/utils/paste";
 import { peekFileClipboard } from "@/composables/useFileClipboard";
+import type { ImageAttachment } from "@/composables/useChatSession";
 
 const props = defineProps<{
   sessionId: string | null;
@@ -17,7 +18,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  send: [prompt: string];
+  send: [prompt: string, images?: ImageAttachment[]];
   interrupt: [];
 }>();
 
@@ -41,6 +42,7 @@ const filteredSkills = computed(() => {
     .filter((s) => s.name.toLowerCase().includes(q))
     .slice(0, 8);
 });
+const pendingImages = ref<Array<ImageAttachment & { previewUrl: string }>>([]);
 const scrollEl = ref<HTMLDivElement>();
 const textareaEl = ref<HTMLTextAreaElement>();
 
@@ -78,6 +80,9 @@ watch(inputText, (val) => {
     slashDropdownVisible.value = false;
   }
 });
+
+// 切换会话时清空待发图片
+watch(() => props.sessionId, () => { pendingImages.value = []; });
 
 function selectSkill(skill: SkillMeta | undefined) {
   if (!skill) return;
@@ -127,8 +132,22 @@ async function handlePaste(e: ClipboardEvent) {
       api.clipboardReadFiles(),
       api.clipboardReadImage(),
     ]);
-    const payload = resolvePastePayload(files, img, peekFileClipboard(), plainText);
-    if (payload) insertAtCursor(payload);
+    const { text, imagePaths } = resolvePastePayload(files, img, peekFileClipboard(), plainText);
+    if (text) insertAtCursor(text);
+    for (const imgPath of imagePaths) {
+      try {
+        const data = await api.readFileBase64(imgPath);
+        const mediaType = imgPath.toLowerCase().endsWith(".png") ? "image/png"
+          : imgPath.toLowerCase().endsWith(".gif") ? "image/gif"
+          : imgPath.toLowerCase().endsWith(".webp") ? "image/webp"
+          : "image/jpeg";
+        pendingImages.value.push({
+          data,
+          mediaType,
+          previewUrl: `data:${mediaType};base64,${data}`,
+        });
+      } catch { /* 静默失败 */ }
+    }
   } catch {
     if (plainText) insertAtCursor(plainText);
   }
@@ -136,7 +155,8 @@ async function handlePaste(e: ClipboardEvent) {
 
 async function handleSend() {
   const text = inputText.value.trim();
-  if (!text || isBusyVal.value || !props.sessionId) return;
+  const hasImages = pendingImages.value.length > 0;
+  if ((!text && !hasImages) || isBusyVal.value || !props.sessionId) return;
 
   let finalPrompt = text;
   const slashMatch = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
@@ -148,14 +168,14 @@ async function handleSend() {
       try {
         const content = await api.readFileContent(skill.filePath);
         finalPrompt = userText ? `${content}\n\n---\n\n${userText}` : content;
-      } catch {
-        // 读取失败则原样发送
-      }
+      } catch { /* 读取失败则原样发送 */ }
     }
   }
 
+  const images = pendingImages.value.map(({ data, mediaType }) => ({ data, mediaType }));
   inputText.value = "";
-  emit("send", finalPrompt);
+  pendingImages.value = [];
+  emit("send", finalPrompt, images.length ? images : undefined);
 }
 </script>
 
@@ -183,6 +203,17 @@ async function handleSend() {
     </div>
 
     <div class="chat-input-area">
+      <!-- Image attachment strip -->
+      <div v-if="pendingImages.length" class="image-attachment-strip">
+        <div
+          v-for="(img, i) in pendingImages"
+          :key="i"
+          class="image-thumb"
+        >
+          <img :src="img.previewUrl" class="image-thumb-img" alt="附图" />
+          <button class="image-thumb-remove" @click="pendingImages.splice(i, 1)">×</button>
+        </div>
+      </div>
       <!-- Slash command dropdown -->
       <div v-if="filteredSkills.length" class="skill-dropdown">
         <div
@@ -214,7 +245,7 @@ async function handleSend() {
         />
         <button
           class="chat-send-btn"
-          :disabled="isBusyVal || !sessionId || !inputText.trim()"
+          :disabled="isBusyVal || !sessionId || (!inputText.trim() && !pendingImages.length)"
           @click="handleSend"
         >
           发送
@@ -414,5 +445,51 @@ async function handleSend() {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+}
+
+.image-attachment-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 0 6px;
+}
+
+.image-thumb {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--aide-radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--aide-border);
+  flex-shrink: 0;
+}
+
+.image-thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.image-thumb-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+}
+
+.image-thumb-remove:hover {
+  background: var(--aide-danger);
 }
 </style>
