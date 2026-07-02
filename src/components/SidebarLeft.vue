@@ -250,8 +250,9 @@ onMounted(async () => {
 });
 
 /**
- * Add a newly confirmed session (real UUID) to the top of the active workspace list.
- * Called by App.vue once `createAndStartSession` resolves the real UUID.
+ * Add a new draft session (new_<ts> id) to the top of the active workspace list.
+ * Called by App.vue after create_session; the id is later swapped to the SDK
+ * UUID via migrateSessionId once the first session_init event arrives.
  */
 function addSession(session: Session) {
   const wsKey = activeWorkspace.value;
@@ -262,7 +263,21 @@ function addSession(session: Session) {
   }
 }
 
-defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace, sessionsByWorkspace });
+/**
+ * 会话 ID 迁移（new_ 草稿 → SDK UUID）：原地替换侧栏条目 ID，保留名字与位置。
+ * 不能 loadSessions()——props 异步传播会把旧条目加回来（见 CLAUDE.md 关键约定）。
+ */
+function migrateSessionId(oldId: string, newId: string) {
+  const wsKey = activeWorkspace.value;
+  const list = sessionsByWorkspace.value[wsKey] ?? [];
+  const idx = list.findIndex(s => s.id === oldId);
+  if (idx !== -1) {
+    list.splice(idx, 1, { ...list[idx], id: newId });
+    sessionsByWorkspace.value[wsKey] = [...list];
+  }
+}
+
+defineExpose({ newSession, loadSessions, addSession, migrateSessionId, selectSessionFromWorkspace, sessionsByWorkspace });
 </script>
 
 <template>

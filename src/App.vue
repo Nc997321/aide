@@ -104,7 +104,18 @@ const paletteRef = ref<InstanceType<typeof ACommandPalette> | null>(null);
 const activeSessionId = ref("");
 const chatSessionIdRef = ref<string | null>(null);
 watch(activeSessionId, (v) => { chatSessionIdRef.value = v || null; }, { immediate: true });
-const { pendingPermission, respondPermission, messages, isBusy, sendMessage, interrupt } = useChatSession(chatSessionIdRef);
+const { pendingPermission, respondPermission, messages, isBusy, sendMessage, interrupt, stopSession, onSessionMigrated } = useChatSession(chatSessionIdRef);
+
+// 会话 ID 迁移（new_ 草稿 → SDK UUID）：更新侧栏条目与当前选中项，
+// 迁移完成后才记入最近访问（真实 UUID，避免幽灵 new_ 条目）。
+onSessionMigrated((oldId, newId) => {
+  sidebarRef.value?.migrateSessionId(oldId, newId);
+  if (activeSessionId.value === oldId) {
+    activeSessionId.value = newId;
+  }
+  const name = activeSessionName.value || newId.substring(0, 8);
+  void useRecent().recordCurrentSession(newId, name);
+});
 const activeSessionName = computed(() => {
   if (!activeSessionId.value) return "";
   const allSessions = sidebarRef.value?.sessionsByWorkspace ?? {};
@@ -227,7 +238,7 @@ async function onNewSession(name: string) {
   const session = await api.createSession(name);
   sidebarRef.value?.addSession({ id: session.id, name: session.name, timestamp: session.timestamp, last_message: "" });
   activeSessionId.value = session.id;
-  void useRecent().recordCurrentSession(session.id, session.name);
+  // 最近访问的记录延后到 onSessionMigrated（拿到真实 UUID 后）
 }
 
 async function onSidebarWsChanged(path: string) {

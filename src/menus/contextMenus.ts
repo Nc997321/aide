@@ -173,6 +173,8 @@ export function sessionMenuItems(
           true,
         );
         if (!ok) return;
+        // 运行中的 sidecar 先杀掉，避免进程泄漏 & 删除后 jsonl 被重新写回
+        await api.stopChatSession(id).catch(() => {});
         await api.deleteSession(id);
         onDeleted();
       },
