@@ -33,7 +33,7 @@ impl SidecarManager {
         env_vars: HashMap<String, String>,
         app_handle: AppHandle,
     ) -> Result<(), String> {
-        let sidecar_js = Self::resolve_sidecar_path()?;
+        let sidecar_js = Self::resolve_sidecar_path(&app_handle)?;
         let node_bin = std::env::var("AIDE_NODE_PATH").unwrap_or_else(|_| "node".to_string());
 
         let mut cmd = tokio::process::Command::new(&node_bin);
@@ -45,6 +45,21 @@ impl SidecarManager {
 
         for (k, v) in &env_vars {
             cmd.env(k, v);
+        }
+
+        // release：原生 CLI 随 app 分发在资源目录，路径通过环境变量传给 sidecar
+        // （SDK options.pathToClaudeCodeExecutable）；dev 模式由 SDK 从
+        // agent-sidecar/node_modules 自行解析，不设该变量。
+        #[cfg(not(debug_assertions))]
+        {
+            use tauri::Manager;
+            if let Ok(res_dir) = app_handle.path().resource_dir() {
+                let exe_name = if cfg!(windows) { "claude.exe" } else { "claude" };
+                let claude_exe = res_dir.join("agent-sidecar").join(exe_name);
+                if claude_exe.exists() {
+                    cmd.env("AIDE_CLAUDE_EXE", &claude_exe);
+                }
+            }
         }
 
         #[cfg(windows)]
@@ -158,9 +173,10 @@ impl SidecarManager {
         Ok(())
     }
 
-    fn resolve_sidecar_path() -> Result<PathBuf, String> {
+    fn resolve_sidecar_path(app: &AppHandle) -> Result<PathBuf, String> {
         #[cfg(debug_assertions)]
         {
+            let _ = app;
             let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
             let path = manifest.parent().unwrap().join("agent-sidecar/dist/sidecar.js");
             if path.exists() {
@@ -173,8 +189,13 @@ impl SidecarManager {
         }
         #[cfg(not(debug_assertions))]
         {
-            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            Ok(exe.parent().unwrap().join("agent-sidecar.js"))
+            use tauri::Manager;
+            let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
+            let path = resource_dir.join("agent-sidecar").join("sidecar.js");
+            if path.exists() {
+                return Ok(path);
+            }
+            Err(format!("Sidecar resource missing: {:?}", path))
         }
     }
 }

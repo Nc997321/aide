@@ -37,6 +37,11 @@ async function startLoop(cwd?: string) {
             settingSources: ["project", "user"],
             skills: "all",
             ...(cwd ? { cwd } : {}),
+            // release 打包：Rust 侧把随 app 分发的原生 CLI 路径通过环境变量传入；
+            // 未设置时 SDK 从 node_modules 解析（dev 模式）
+            ...(process.env.AIDE_CLAUDE_EXE
+              ? { pathToClaudeCodeExecutable: process.env.AIDE_CLAUDE_EXE }
+              : {}),
             ...(sessionId ? { resume: sessionId } : {}),
           },
         });
