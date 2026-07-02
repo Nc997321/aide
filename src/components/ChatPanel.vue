@@ -93,6 +93,20 @@ function handleTabKey(e: KeyboardEvent) {
   }
 }
 
+function handleArrowUp(e: KeyboardEvent) {
+  if (slashDropdownVisible.value) {
+    e.preventDefault();
+    slashSelectedIndex.value = Math.max(0, slashSelectedIndex.value - 1);
+  }
+}
+
+function handleArrowDown(e: KeyboardEvent) {
+  if (slashDropdownVisible.value) {
+    e.preventDefault();
+    slashSelectedIndex.value = Math.min(filteredSkills.value.length - 1, slashSelectedIndex.value + 1);
+  }
+}
+
 function insertAtCursor(text: string) {
   const ta = textareaEl.value;
   if (!ta) { inputText.value += text; return; }
@@ -191,11 +205,11 @@ async function handleSend() {
           rows="3"
           :disabled="isBusyVal || !sessionId"
           @keydown.enter.exact.prevent="(slashDropdownVisible && filteredSkills.length) ? selectSkill(filteredSkills[slashSelectedIndex]) : handleSend()"
-          @keydown.enter.shift.exact.prevent="inputText += '\n'"
+          @keydown.enter.shift.exact.prevent="insertAtCursor('\n')"
           @keydown.tab="handleTabKey"
           @keydown.escape="slashDropdownVisible = false"
-          @keydown.up.prevent="slashDropdownVisible && (slashSelectedIndex = Math.max(0, slashSelectedIndex - 1))"
-          @keydown.down.prevent="slashDropdownVisible && (slashSelectedIndex = Math.min(filteredSkills.length - 1, slashSelectedIndex + 1))"
+          @keydown.up="handleArrowUp"
+          @keydown.down="handleArrowDown"
           @paste="handlePaste"
         />
         <button
