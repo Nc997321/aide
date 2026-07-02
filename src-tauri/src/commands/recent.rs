@@ -79,6 +79,23 @@ pub fn prune_stale_with(
     changed
 }
 
+/// 把 recent 列表里 old_id 的会话条目改成 new_id（去重：若 new_id 已存在则移除 old 条目）。
+pub fn rename_session_entry(state: &mut RecentState, old_id: &str, new_id: &str) -> bool {
+    if state.sessions.iter().any(|s| s.session_id == new_id) {
+        let before = state.sessions.len();
+        state.sessions.retain(|s| s.session_id != old_id);
+        return state.sessions.len() != before;
+    }
+    let mut changed = false;
+    for s in state.sessions.iter_mut() {
+        if s.session_id == old_id {
+            s.session_id = new_id.to_string();
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// 生产环境清理：会话按 jsonl 是否存在判定，文件按路径 metadata 判定。
 pub fn prune_stale(state: &mut RecentState, ws_key: &str) -> bool {
     prune_stale_with(
@@ -145,6 +162,15 @@ pub fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64
+}
+
+/// 会话 ID 迁移时同步 recent（供 session::migrate_session 调用，非 Tauri 命令）。
+pub fn rename_recent_session(old_id: &str, new_id: &str) -> Result<(), String> {
+    let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
+    if rename_session_entry(&mut guard, old_id, new_id) {
+        save_recent_file(&guard)?;
+    }
+    Ok(())
 }
 
 // ── Tauri 命令 ──
@@ -291,6 +317,31 @@ mod tests {
         let list = st.files.get("k").unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].path, "/exists");
+    }
+
+    #[test]
+    fn rename_session_entry_renames_matching() {
+        let mut st = RecentState::default();
+        push_session(&mut st, sess("new_1", 1), 10);
+        assert!(rename_session_entry(&mut st, "new_1", "uuid-a"));
+        assert_eq!(st.sessions[0].session_id, "uuid-a");
+    }
+
+    #[test]
+    fn rename_session_entry_dedupes_when_target_exists() {
+        let mut st = RecentState::default();
+        push_session(&mut st, sess("uuid-a", 1), 10);
+        push_session(&mut st, sess("new_1", 2), 10);
+        assert!(rename_session_entry(&mut st, "new_1", "uuid-a"));
+        assert_eq!(st.sessions.len(), 1);
+        assert_eq!(st.sessions[0].session_id, "uuid-a");
+    }
+
+    #[test]
+    fn rename_session_entry_noop_when_absent() {
+        let mut st = RecentState::default();
+        push_session(&mut st, sess("x", 1), 10);
+        assert!(!rename_session_entry(&mut st, "new_1", "uuid-a"));
     }
 
     #[test]

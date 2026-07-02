@@ -156,6 +156,7 @@ pub fn run() {
             commands::session::create_session,
             commands::session::delete_session,
             commands::session::rename_session,
+            commands::session::migrate_session,
             commands::session::load_messages,
             commands::session::session_last_event,
             commands::session::load_session_changes,

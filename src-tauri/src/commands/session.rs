@@ -199,6 +199,49 @@ pub fn delete_session(
     Ok(())
 }
 
+/// 会话 ID 迁移：new_<ts> 草稿 ID → SDK 真实 UUID。
+/// 一次性迁移所有落点：sidecar 注册表、名字元数据、变更轮次、最近访问。
+/// 幂等：任何落点不存在都静默跳过。
+#[tauri::command]
+pub fn migrate_session(
+    old_id: String,
+    new_id: String,
+    sidecar_mgr: State<'_, crate::sidecar::SidecarManager>,
+) -> Result<(), String> {
+    if old_id == new_id {
+        return Ok(());
+    }
+    // 1. sidecar 注册表（必须最先做：后续 send_message 按 new_id 找进程）
+    sidecar_mgr.rename(&old_id, &new_id)?;
+
+    // 2. 名字元数据 <old>.json → <new>.json，重写内部 id 字段
+    let dir = our_sessions_dir();
+    let old_meta = dir.join(format!("{}.json", old_id));
+    if old_meta.exists() {
+        if let Ok(content) = fs::read_to_string(&old_meta) {
+            if let Ok(mut v) = serde_json::from_str::<Value>(&content) {
+                v["id"] = Value::String(new_id.clone());
+                let new_meta = dir.join(format!("{}.json", new_id));
+                fs::write(&new_meta, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?)
+                    .map_err(|e| format!("Failed to write migrated meta: {}", e))?;
+                let _ = fs::remove_file(&old_meta);
+            }
+        }
+    }
+
+    // 3. 变更轮次 <old>-changes.json → <new>-changes.json
+    let old_changes = dir.join(format!("{}-changes.json", old_id));
+    if old_changes.exists() {
+        let new_changes = dir.join(format!("{}-changes.json", new_id));
+        let _ = fs::rename(&old_changes, &new_changes);
+    }
+
+    // 4. 最近访问
+    let _ = super::recent::rename_recent_session(&old_id, &new_id);
+
+    Ok(())
+}
+
 #[tauri::command]
 pub fn rename_session(id: String, name: String) -> Result<(), String> {
     let dir = our_sessions_dir();
