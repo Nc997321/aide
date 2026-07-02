@@ -109,7 +109,7 @@ aide/
 
 - **非 scoped 样式**：xterm 动态 DOM（`WorkbenchTerminal.vue`、`BashOutputBlock.vue`）的样式必须放非 scoped `<style>` 块，否则 Vite scoped hash 导致样式不生效。
 - **通知不依赖插件**：直接用 `notify-rust`（`notify_send` 命令），强制 `app_id("com.aide.app")`，绕过 tauri-plugin-notification dev 模式跳过 app_id 的 bug。
-- **会话 ID 生命周期**：新会话用 `new_<timestamp>` 草稿 ID；首次 `session_init` 事件到达后前端调 `migrate_session` 一次性迁移四个落点（sidecar 注册表 / 名字元数据 / 变更记录 / 最近访问），此后 aide ID == SDK session ID。侧栏用 `migrateSessionId` 原地 splice 换 ID（不能 `loadSessions()`，props 异步传播会把旧条目加回来）。历史会话续接：`sendMessage` 的 resume 三级兜底（显式传入 > 运行期 sdkSessionMap > 自身 ID）。
+- **会话 ID 生命周期（延迟创建）**：点"新建会话"只清空 `activeSessionId`，打开空白面板，不落盘、不进侧栏。首次发消息时若无 session id，`useChatSession.ts` 现场生成一个纯内存临时 key（`crypto.randomUUID()`，记入 `pendingSids`），不落盘直接调 `send_message`。SDK 首次 `session_init` 带回真实 id 后才是"创建"真正发生的时刻：Rust `rename_sidecar_session` 原地改 sidecar 进程注册表（内存操作，无 IO），前端 `finalizeSession` 原地搬迁 `stores`/`sessionState`，随后 `onSessionCreated` 回调里 App.vue 才第一次调 `create_session(id, name)` 写元数据、`addSession` 加侧栏、`recordCurrentSession` 记最近访问。此后 aide ID 永远等于 SDK session ID，不再改名。历史会话续接：resume 直接用 `sid` 本身（`isPendingSession(sid) ? undefined : sid`），无需任何映射表。若发消息后从未等到 `session_init`（进程崩溃等），什么都不落盘，不留孤儿文件。
 - **状态语义**：`running`（生成中）/ `attention`（等权限确认）/ `waiting`（sidecar 存活空闲，message_stop 后）/ `stopped`（进程不在）。通知、任务栏进度、变更捕获都依赖 `running→waiting` 转换，不要把 message_stop 改成 stopped。
 - **stderr 不是错误**：sidecar stderr 只进日志与 8 行尾部缓冲，仅进程意外退出时才发一条 error 事件（Node warning 曾被误报成错误导致会话假死）。
 - **每会话独立 store**：`useChatSession` 的消息按 session_id 路由到模块级 store，前台/后台同一条写入路径；禁止「切换会话时拷贝缓存」的写法（曾导致跨会话数据污染）。

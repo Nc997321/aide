@@ -57,17 +57,18 @@ Node.js sidecar (agent-sidecar/)
 
 - **stdout reader 任务**：逐行解析 JSON → 注入 `session_id`（读共享 `Arc<Mutex<String>>`，rename 后立即生效）→ `emit("chat-event")`。流结束且非主动 kill → 发一条 `error` 事件（附 stderr 尾部）解除前端 isBusy。
 - **stderr reader 任务**：只 `eprintln!` + 存 8 行尾部环形缓冲。**stderr 不是错误**——Node warning 不会打断会话。
-- **rename(old, new)**：会话 ID 迁移时重挂 HashMap key + 更新共享 sid。
+- **rename(old, new)**：临时 key → 真实 SDK id 时重挂 HashMap key + 更新共享 sid（纯内存操作，无 IO）。
 
-## 会话 ID 生命周期
+## 会话 ID 生命周期（延迟创建）
 
-1. 新建会话：`create_session` 生成草稿 ID `new_<timestamp>`（此时还没有 SDK 会话）。
-2. 首条消息发出 → sidecar 首个 `session_init` 事件携带 `sdk_session_id`。
-3. 前端 `migrateStore`：立即换 store key + 写 `aliasMap`（兜住 Rust rename 完成前仍带旧 ID 的在途事件）→ invoke `migrate_session`。
-4. Rust `migrate_session` 一次性迁移四个落点：sidecar 注册表（最先）、`~/.claude-code-desktop/sessions/<id>.json` 名字元数据、`<id>-changes.json` 变更轮次、`recent.json`。
-5. `onSessionMigrated` 回调 → 侧栏 `migrateSessionId` 原地 splice 换 ID + `activeSessionId` 同步 + 记入最近访问。**不能 `loadSessions()`**——props 异步传播会把旧条目加回来。
+不预先分配任何身份，"创建会话"这件事推迟到第一次真正发消息、拿到 SDK 返回的真实 session id 之后再做——没有草稿阶段，就没有"事后改名"这一步：
 
-此后 aide ID == SDK session ID。**续接**：`sendMessage` 的 resume 三级兜底——显式传入 > 运行期 `sdkSessionMap` > 自身 ID（重启后点开历史会话靠第三级；SDK `forkSession` 默认 false，resume 延续同一 session ID）。
+1. 点"新建会话"：前端只清空 `activeSessionId`，打开空白可输入面板。**不调用任何 Tauri 命令，不落盘，不进侧栏。**
+2. 用户发送第一条消息：若当前无 session id，`useChatSession.ts` 现场生成一个纯内存临时 key（`crypto.randomUUID()`，记入 `pendingSids`），建本地 store 并调 `send_message`——这一步同样不落盘，只是 Rust `SidecarManager` HashMap 和前端 `stores`/`sessionState` 的运行时 key。
+3. sidecar 首个 `session_init` 事件携带 `sdk_session_id` → 前端 `finalizeSession`：原地搬迁 `stores`/`sessionState`（写 `aliasMap` 兜住 Rust rename 完成前仍带旧 key 的在途事件）→ invoke `rename_sidecar_session`（只改 sidecar 进程注册表这一个内存态）→ 从 `pendingSids` 移除 → 触发 `onSessionCreated` 回调。
+4. App.vue 的 `onSessionCreated(tempId, realId)`：**这时才第一次落盘**——`create_session(realId, name)` 写 `~/.claude-code-desktop/sessions/<id>.json` 名字元数据、`sidebarRef.addSession(...)` 加侧栏、`recordCurrentSession` 记最近访问。
+
+此后 aide ID 永远等于 SDK session ID，不再改名。**续接**：`sendMessage` 的 resume 直接用 `sid` 本身（`isPendingSession(sid) ? undefined : sid`，无需任何映射表；重启后点开历史会话同样直接传自身 ID；SDK `forkSession` 默认 false，resume 延续同一 session ID）。若发消息后从未等到 `session_init`（进程崩溃、网络失败等），全程没有写盘、没有侧栏条目、没有最近访问记录——失败的尝试不留痕迹。
 
 ## 会话系统 — 适配 Claude Code 存储
 
@@ -148,7 +149,7 @@ n.summary(&title).body(&body).show();
 | `permission_response` | `session_id, id, approved` | 解除 canUseTool 阻塞 |
 | `interrupt_session` | `session_id` | SDK query.interrupt() |
 | `stop_chat_session` | `session_id` | kill sidecar 进程 |
-| `migrate_session` | `old_id, new_id` | 会话 ID 迁移（注册表/元数据/变更/最近访问） |
+| `rename_sidecar_session` | `old_id, new_id` | 临时 key → 真实 SDK id，只改 sidecar 进程注册表（内存态） |
 
 （工作台终端另有 `pty_*` 命令走 `shell.rs`，与对话无关。）
 
@@ -179,7 +180,7 @@ n.summary(&title).body(&body).show();
 |------|------|
 | `list_sessions` | 扫描 `.jsonl` + pid JSON + Aide 元数据 |
 | `load_messages` | 解析 `.jsonl` 提取 user/assistant 文本 |
-| `create_session` | placeholder `new_<timestamp>` |
+| `create_session` | `id, name` — 调用方传入真实 id（首次 `session_init` 之后才调用，见「会话 ID 生命周期」） |
 | `delete_session` / `rename_session` | 删除 / 重命名 |
 | `list_workspaces` | 扫描 `~/.claude/projects/`，DFS 解析真实路径 |
 | `set_workspace` | 存 key + path 到 config.json |
