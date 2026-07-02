@@ -79,10 +79,18 @@ watch(inputText, (val) => {
   }
 });
 
-function selectSkill(skill: SkillMeta) {
+function selectSkill(skill: SkillMeta | undefined) {
+  if (!skill) return;
   inputText.value = "/" + skill.name + " ";
   slashDropdownVisible.value = false;
   nextTick(() => textareaEl.value?.focus());
+}
+
+function handleTabKey(e: KeyboardEvent) {
+  if (slashDropdownVisible.value && filteredSkills.value.length) {
+    e.preventDefault();
+    selectSkill(filteredSkills.value[slashSelectedIndex.value]);
+  }
 }
 
 function insertAtCursor(text: string) {
@@ -165,9 +173,9 @@ function handleSend() {
           placeholder="输入消息…"
           rows="3"
           :disabled="isBusyVal || !sessionId"
-          @keydown.enter.exact.prevent="slashDropdownVisible ? selectSkill(filteredSkills[slashSelectedIndex]) : handleSend()"
+          @keydown.enter.exact.prevent="(slashDropdownVisible && filteredSkills.length) ? selectSkill(filteredSkills[slashSelectedIndex]) : handleSend()"
           @keydown.enter.shift.exact.prevent="inputText += '\n'"
-          @keydown.tab.prevent="slashDropdownVisible && filteredSkills.length ? selectSkill(filteredSkills[slashSelectedIndex]) : undefined"
+          @keydown.tab="handleTabKey"
           @keydown.escape="slashDropdownVisible = false"
           @keydown.up.prevent="slashDropdownVisible && (slashSelectedIndex = Math.max(0, slashSelectedIndex - 1))"
           @keydown.down.prevent="slashDropdownVisible && (slashSelectedIndex = Math.min(filteredSkills.length - 1, slashSelectedIndex + 1))"
