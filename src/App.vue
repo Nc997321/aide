@@ -107,7 +107,7 @@ const chatSessionIdRef = ref<string | null>(null);
 watch(activeSessionId, (v) => { chatSessionIdRef.value = v || null; }, { immediate: true });
 /** "新建会话"点击时用户输入/生成的名字，等真正创建时（onSessionCreated）才用上。 */
 const pendingSessionName = ref("");
-const { pendingPermission, respondPermission, messages, isBusy, models, currentModel, totalCostUsd, contextUsage, sendMessage, interrupt, stopSession, onSessionCreated, setModel } = useChatSession(chatSessionIdRef);
+const { pendingPermission, respondPermission, messages, isBusy, models, currentModel, totalCostUsd, contextUsage, tasks, sendMessage, interrupt, stopSession, onSessionCreated, setModel } = useChatSession(chatSessionIdRef);
 
 // 会话首次创建：临时 key 拿到 SDK 确认的真实 id，这时才第一次落盘——
 // 写元数据、加侧栏、记最近访问。之前什么都没写过，不存在"迁移"这一步。
@@ -522,6 +522,7 @@ onUnmounted(() => {
           :current-model="currentModel"
           :total-cost-usd="totalCostUsd"
           :context-usage="contextUsage"
+          :tasks="tasks"
           class="h-full"
           @send="async (prompt: string, images?: ImageAttachment[], initialModel?: string, mentions?: FileMentionResolution) => {
             const sid = await sendMessage(prompt, images, undefined, initialModel, mentions);

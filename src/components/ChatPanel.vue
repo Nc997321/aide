@@ -2,7 +2,8 @@
 import { ref, watch, nextTick, computed, onMounted } from "vue";
 import type { ComputedRef } from "vue";
 import ChatMessage from "./ChatMessage.vue";
-import type { ChatMessage as ChatMessageType, ContextUsage, ModelOption, TextBlock } from "@/types/chat";
+import TaskListPanel from "./TaskListPanel.vue";
+import type { ChatMessage as ChatMessageType, ContextUsage, ModelOption, TaskItem, TextBlock } from "@/types/chat";
 import type { SkillMeta } from "@/types";
 import { api } from "@/api";
 import { resolvePastePayload } from "@/utils/paste";
@@ -24,6 +25,7 @@ const props = defineProps<{
   currentModel?: string;
   totalCostUsd?: number;
   contextUsage?: ContextUsage | null;
+  tasks?: TaskItem[];
 }>();
 
 const emit = defineEmits<{
@@ -292,6 +294,8 @@ async function handleSend() {
         @click="emit('stop')"
       >⏹ 停止</button>
     </div>
+
+    <TaskListPanel v-if="props.tasks && props.tasks.length > 0" :tasks="props.tasks" />
 
     <div ref="scrollEl" class="chat-messages" @scroll.passive="onScroll">
       <div v-if="messagesVal.length === 0" class="chat-empty">
