@@ -5,7 +5,7 @@ import type {
   GrepMatch, ProviderConfig, RunConfig, RunTarget, RecentView,
   SkillMeta,
 } from "./types";
-import type { ModelOption } from "./types/chat";
+import type { ModelOption, PermissionModeOption } from "./types/chat";
 
 export const api = {
   // Shell (workbench terminal)
@@ -37,6 +37,12 @@ export const api = {
   },
   getDefaultModels(): Promise<ModelOption[]> {
     return invoke("get_default_models");
+  },
+  setPermissionMode(sessionId: string, mode: string): Promise<void> {
+    return invoke("set_permission_mode", { sessionId, mode });
+  },
+  getDefaultPermissionModes(): Promise<PermissionModeOption[]> {
+    return invoke("get_default_permission_modes");
   },
 
   // Plugin skills

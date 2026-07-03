@@ -5,6 +5,7 @@ import type {
   ChatMessage,
   ContextUsage,
   ModelOption,
+  PermissionModeOption,
   PermissionRequest,
   SubagentBlock,
   TaskItem,
@@ -18,6 +19,23 @@ import type { FileMentionResolution } from "../utils/fileMentions";
 export interface ImageAttachment {
   data: string;
   mediaType: string;
+}
+
+/** 一次发送的完整负载——sendMessage 直发与忙碌排队共用同一形状。 */
+export interface SendOptions {
+  images?: ImageAttachment[];
+  resumeId?: string;
+  initialModel?: string;
+  mentions?: FileMentionResolution;
+  /** 当前选中的权限模式（不透明字符串，sidecar 解释语义），随每条消息透传 */
+  permissionMode?: string;
+}
+
+interface QueuedSend {
+  prompt: string;
+  images?: ImageAttachment[];
+  mentions?: FileMentionResolution;
+  permissionMode?: string;
 }
 
 interface SessionStore {
@@ -36,6 +54,12 @@ interface SessionStore {
   contextUsage: ContextUsage | null;
   /** 当前任务清单——sidecar 每次变化后整体覆盖，不做增量合并 */
   tasks: TaskItem[];
+  /** 可切换的权限模式列表（sidecar 广播，纯展示字符串） */
+  permissionModes: PermissionModeOption[];
+  /** 当前生效的权限模式 value；空串表示还没从 sidecar 学到 */
+  currentPermissionMode: string;
+  /** 忙碌时排队的待发消息——message_stop 后按序自动续发 */
+  queued: QueuedSend[];
 }
 
 // ── 模块级单例状态 ─────────────────────────────────────────────────────────
@@ -46,6 +70,8 @@ const stores = reactive<Record<string, SessionStore>>({});
  *  运行里，任意一个会话第一次连上 SDK 学到的列表，其他还没起进程的
  *  会话/新面板都能直接借用，不用每个会话各自重新学一遍。 */
 const sharedModels = ref<ModelOption[]>([]);
+/** 权限模式清单同理是 sidecar 实现级别的事实，跨会话共享。 */
+const sharedPermissionModes = ref<PermissionModeOption[]>([]);
 /** 迁移窗口期：旧 key → 新 id（Rust rename 完成前的在途事件转发） */
 const aliasMap = new Map<string, string>();
 /** 尚未被 SDK 确认的临时 key（纯内存，从未落盘）。resume 判定与 hydrate 跳过都靠它。 */
@@ -69,6 +95,9 @@ function getStore(sid: string): SessionStore {
       totalCostUsd: 0,
       contextUsage: null,
       tasks: [],
+      permissionModes: [],
+      currentPermissionMode: "",
+      queued: [],
     };
   }
   return stores[sid];
@@ -126,6 +155,68 @@ async function finalizeSession(tempId: string, realId: string) {
   }
   // 3. 通知 App.vue：这是第一次创建，去写元数据、加侧栏、记最近访问
   for (const cb of sessionCreatedCallbacks) cb(tempId, realId);
+}
+
+/**
+ * 把一条消息真正推进 UI 并发给 Rust——sendMessage 直发和忙碌队列 flush 走同一条
+ * 路径，保证两种入口的渲染/状态副作用完全一致。
+ *
+ * invoke("send_message") 不 await 到底：新会话要等 Rust 侧现拉起 Node 子进程，
+ * 等它返回会让首条消息在 UI 上有明显卡顿。这里只做本地状态就绪，IPC 后台完成，
+ * 失败走 .catch 兜底。
+ */
+function dispatchSend(sid: string, item: QueuedSend, resumeId?: string, initialModel?: string) {
+  const store = getStore(sid);
+  store.isBusy = true;
+  setSessionState(sid, "running");
+
+  // @path 引用展开出来的文件内容不进用户气泡的文本——渲染成独立的、类似
+  // 工具调用的折叠卡片（复用 ToolCallBlock.vue 对 name:"Read" 的现有渲染），
+  // 避免用户自己打的字和引用文件内容混在一个气泡里。发给模型的内容仍然
+  // 完整（mentions.sendText），只是本地显示时拆开。
+  const blocks: (ImageBlock | TextBlock | ToolCallBlock)[] = [
+    ...(item.images ?? []).map((img): ImageBlock => ({
+      type: "image",
+      data: img.data,
+      mediaType: img.mediaType,
+    })),
+    ...(item.prompt ? [{ type: "text" as const, text: item.prompt }] : []),
+    ...(item.mentions?.resolved ?? []).map((m): ToolCallBlock => ({
+      type: "tool_call",
+      id: crypto.randomUUID(),
+      name: "Read",
+      input: { file_path: m.path },
+      result: m.content,
+      isError: false,
+      isPending: false,
+    })),
+  ];
+  finishStreaming(store); // 上一条 assistant 不再续写
+  store.messages.push({
+    id: crypto.randomUUID(),
+    role: "user",
+    blocks,
+    timestamp: Date.now(),
+  });
+
+  const sendText = item.mentions?.sendText ?? item.prompt;
+  invoke("send_message", {
+    sessionId: sid,
+    prompt: sendText,
+    images: item.images?.length ? item.images : null,
+    resumeId: resumeId ?? null,
+    // 只在这个 sidecar 进程还没起来时（第一条消息）有意义，Rust 侧只在
+    // spawn 分支用它覆盖 provider 默认模型；之后切模型走 setModel()。
+    initialModel: initialModel || null,
+    // 每条消息都带当前选中的权限模式，sidecar 侧幂等（同值跳过）
+    permissionMode: item.permissionMode || null,
+  }).catch((e) => {
+    console.warn("send_message failed:", e);
+    const s = getStore(resolveSid(sid));
+    s.isBusy = false;
+    s.queued.length = 0;
+    setSessionState(resolveSid(sid), "stopped");
+  });
 }
 
 function handleChatEvent(e: Record<string, unknown>) {
@@ -211,6 +302,12 @@ function handleChatEvent(e: Record<string, unknown>) {
       store.tasks = e["tasks"] as TaskItem[];
       break;
     }
+    case "permission_modes_available": {
+      store.permissionModes = e["modes"] as PermissionModeOption[];
+      store.currentPermissionMode = e["current"] as string;
+      sharedPermissionModes.value = store.permissionModes;
+      break;
+    }
     case "subagent_start": {
       const msg = getOrCreateAssistant(store);
       msg.blocks.push({
@@ -244,6 +341,14 @@ function handleChatEvent(e: Record<string, unknown>) {
         if (last?.role === "assistant") last.usage = usage;
       }
       finishStreaming(store);
+      // 忙碌期间排队的消息：这一轮结束立即续发下一条，状态保持 running，
+      // 队列排空后才落回 waiting（通知/横幅依赖 running→waiting 转换，
+      // 排队中不该触发"已完成"通知）。
+      const next = store.queued.shift();
+      if (next) {
+        dispatchSend(sid, next, isPendingSession(sid) ? undefined : sid);
+        break;
+      }
       store.isBusy = false;
       // waiting = sidecar 存活但空闲 → 通知/横幅/变更捕获依赖 running→waiting 转换
       setSessionState(sid, "waiting");
@@ -253,6 +358,7 @@ function handleChatEvent(e: Record<string, unknown>) {
       finishStreaming(store);
       store.isBusy = false;
       store.pendingPermission = null;
+      store.queued.length = 0;
       store.messages.push({
         id: crypto.randomUUID(),
         role: "assistant",
@@ -305,6 +411,7 @@ export function __resetForTest() {
   aliasMap.clear();
   sessionCreatedCallbacks.clear();
   sharedModels.value = [];
+  sharedPermissionModes.value = [];
   globalUnlisten?.();
   globalUnlisten = null;
 }
@@ -330,17 +437,10 @@ export function useChatSession(sessionId: Ref<string | null>) {
    * "创建会话"（写元数据 / 加侧栏 / 记最近访问）推迟到 SDK 用 session_init 确认
    * 真实 id 之后才发生，见 finalizeSession。
    *
-   * invoke("send_message") 不在这里 await 到底：新会话要等 Rust 侧现拉起 Node
-   * 子进程，等它返回才把 sid 交给调用方会让首条消息在 UI 上有明显卡顿。这里只
-   * await 到本地状态就绪，IPC 调用后台完成，失败走 .catch 兜底。
+   * 会话忙碌（上一轮还在生成）时不打断：进排队队列，message_stop 后按序自动
+   * 续发——和交互式 CLI 边生成边打字排队的行为对齐。
    */
-  async function sendMessage(
-    prompt: string,
-    images?: ImageAttachment[],
-    resumeId?: string,
-    initialModel?: string,
-    mentions?: FileMentionResolution,
-  ): Promise<string | undefined> {
+  async function sendMessage(prompt: string, opts: SendOptions = {}): Promise<string | undefined> {
     let sid = sessionId.value;
     if (!sid) {
       sid = crypto.randomUUID();
@@ -349,58 +449,20 @@ export function useChatSession(sessionId: Ref<string | null>) {
     await ensureGlobalListener();
 
     const store = getStore(sid);
-    store.isBusy = true;
-    setSessionState(sid, "running");
-
-    // @path 引用展开出来的文件内容不进用户气泡的文本——渲染成独立的、类似
-    // 工具调用的折叠卡片（复用 ToolCallBlock.vue 对 name:"Read" 的现有渲染），
-    // 避免用户自己打的字和引用文件内容混在一个气泡里。发给模型的内容仍然
-    // 完整（mentions.sendText），只是本地显示时拆开。
-    const blocks: (ImageBlock | TextBlock | ToolCallBlock)[] = [
-      ...(images ?? []).map((img): ImageBlock => ({
-        type: "image",
-        data: img.data,
-        mediaType: img.mediaType,
-      })),
-      ...(prompt ? [{ type: "text" as const, text: prompt }] : []),
-      ...(mentions?.resolved ?? []).map((m): ToolCallBlock => ({
-        type: "tool_call",
-        id: crypto.randomUUID(),
-        name: "Read",
-        input: { file_path: m.path },
-        result: m.content,
-        isError: false,
-        isPending: false,
-      })),
-    ];
-    finishStreaming(store); // 上一条 assistant 不再续写
-    store.messages.push({
-      id: crypto.randomUUID(),
-      role: "user",
-      blocks,
-      timestamp: Date.now(),
-    });
+    const item: QueuedSend = {
+      prompt,
+      images: opts.images,
+      mentions: opts.mentions,
+      permissionMode: opts.permissionMode,
+    };
+    if (store.isBusy) {
+      store.queued.push(item);
+      return sid;
+    }
 
     // resume：显式传入 > 已被 SDK 确认的 id 本身（aide id 就是 sdk id，无需查表）
-    const resolvedResumeId = resumeId ?? (isPendingSession(sid) ? undefined : sid);
-    const finalSid = sid;
-    const sendText = mentions?.sendText ?? prompt;
-
-    invoke("send_message", {
-      sessionId: finalSid,
-      prompt: sendText,
-      images: images?.length ? images : null,
-      resumeId: resolvedResumeId ?? null,
-      // 只在这个 sidecar 进程还没起来时（第一条消息）有意义，Rust 侧只在
-      // spawn 分支用它覆盖 provider 默认模型；之后切模型走 setModel()。
-      initialModel: initialModel || null,
-    }).catch((e) => {
-      console.warn("send_message failed:", e);
-      const s = getStore(resolveSid(finalSid));
-      s.isBusy = false;
-      setSessionState(resolveSid(finalSid), "stopped");
-    });
-
+    const resolvedResumeId = opts.resumeId ?? (isPendingSession(sid) ? undefined : sid);
+    dispatchSend(sid, item, resolvedResumeId, opts.initialModel);
     return sid;
   }
 
@@ -422,6 +484,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
     } finally {
       store.isBusy = false;
       store.pendingPermission = null;
+      store.queued.length = 0; // 用户主动打断：排队消息一并作废
       finishStreaming(store);
       setSessionState(sid, "waiting"); // sidecar 仍存活
     }
@@ -436,6 +499,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
     } finally {
       store.isBusy = false;
       store.pendingPermission = null;
+      store.queued.length = 0;
       finishStreaming(store);
       setSessionState(sid, "stopped");
     }
@@ -453,6 +517,24 @@ export function useChatSession(sessionId: Ref<string | null>) {
     await invoke("set_model", { sessionId: sid, model });
   }
 
+  /** 切权限模式：进程活着就即时生效（sidecar 回发事件同步下拉），进程还没
+   *  起来时静默失败——模式会随下一条消息的 permission_mode 字段带过去。 */
+  async function setPermissionMode(mode: string) {
+    const sid = sessionId.value;
+    if (!sid) return;
+    try {
+      await invoke("set_permission_mode", { sessionId: sid, mode });
+    } catch {
+      // 无活进程：等 send 携带
+    }
+  }
+
+  /** 撤掉一条还没发出去的排队消息。 */
+  function removeQueued(index: number) {
+    const store = current.value;
+    if (store) store.queued.splice(index, 1);
+  }
+
   return {
     messages: computed(() => current.value?.messages ?? []),
     isBusy: computed(() => current.value?.isBusy ?? false),
@@ -466,11 +548,19 @@ export function useChatSession(sessionId: Ref<string | null>) {
     totalCostUsd: computed(() => current.value?.totalCostUsd ?? 0),
     contextUsage: computed(() => current.value?.contextUsage ?? null),
     tasks: computed(() => current.value?.tasks ?? []),
+    permissionModes: computed(() => {
+      const own = current.value?.permissionModes;
+      return own?.length ? own : sharedPermissionModes.value;
+    }),
+    currentPermissionMode: computed(() => current.value?.currentPermissionMode ?? ""),
+    queuedPrompts: computed(() => (current.value?.queued ?? []).map((q) => q.prompt)),
     sendMessage,
     respondPermission,
     interrupt,
     stopSession,
     onSessionCreated,
     setModel,
+    setPermissionMode,
+    removeQueued,
   };
 }

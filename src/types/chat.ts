@@ -47,6 +47,13 @@ export interface ModelOption {
   displayName: string;
 }
 
+/** 权限模式选项——同 ModelOption：value 是 provider 自己认的不透明标识，
+ *  语义由 sidecar 解释，跟 agent-sidecar/src/types.ts 里的同名类型镜像。 */
+export interface PermissionModeOption {
+  value: string;
+  displayName: string;
+}
+
 /** 当前会话的上下文窗口用量——每轮结束后由 sidecar 刷新一次。 */
 export interface ContextUsage {
   totalTokens: number;

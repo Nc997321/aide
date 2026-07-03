@@ -3,14 +3,14 @@ import { ref, watch, nextTick, computed, onMounted } from "vue";
 import type { ComputedRef } from "vue";
 import ChatMessage from "./ChatMessage.vue";
 import TaskListPanel from "./TaskListPanel.vue";
-import type { ChatMessage as ChatMessageType, ContextUsage, ModelOption, TaskItem, TextBlock } from "@/types/chat";
+import type { ChatMessage as ChatMessageType, ContextUsage, ModelOption, PermissionModeOption, TaskItem, TextBlock } from "@/types/chat";
 import type { SkillMeta } from "@/types";
 import { api } from "@/api";
 import { resolvePastePayload } from "@/utils/paste";
 import { resolveFileMentions } from "@/utils/fileMentions";
 import type { FileMentionResolution } from "@/utils/fileMentions";
 import { peekFileClipboard } from "@/composables/useFileClipboard";
-import type { ImageAttachment } from "@/composables/useChatSession";
+import type { ImageAttachment, SendOptions } from "@/composables/useChatSession";
 import { useSessionState } from "@/composables/useSessionState";
 import { useProviders } from "@/composables/useProviders";
 import AStatusDot from "@/ui/AStatusDot.vue";
@@ -26,13 +26,19 @@ const props = defineProps<{
   totalCostUsd?: number;
   contextUsage?: ContextUsage | null;
   tasks?: TaskItem[];
+  permissionModes?: PermissionModeOption[];
+  currentPermissionMode?: string;
+  /** 忙碌时排队的待发消息文本（顺序即发送顺序） */
+  queuedPrompts?: string[];
 }>();
 
 const emit = defineEmits<{
-  send: [prompt: string, images?: ImageAttachment[], initialModel?: string, mentions?: FileMentionResolution];
+  send: [prompt: string, opts: SendOptions];
   interrupt: [];
   stop: [];
   "set-model": [model: string];
+  "set-permission-mode": [mode: string];
+  "remove-queued": [index: number];
 }>();
 
 const { state: sessionState } = useSessionState();
@@ -43,11 +49,17 @@ const { activeProvider } = useProviders();
 // 填的） > 静态默认列表（读本地文件，不起进程，见 get_default_models），
 // 让用户进会话就能选模型，不用等发完第一条消息。
 const defaultModels = ref<ModelOption[]>([]);
+const defaultPermissionModes = ref<PermissionModeOption[]>([]);
 onMounted(async () => {
   try {
     defaultModels.value = await api.getDefaultModels();
   } catch {
     // 读不到就不兜底，下拉直接不显示——不影响其他功能
+  }
+  try {
+    defaultPermissionModes.value = await api.getDefaultPermissionModes();
+  } catch {
+    // 同上
   }
 });
 
@@ -88,6 +100,34 @@ function handleModelChange(value: string) {
   // 会话还没开始时 useChatSession.setModel 是无会话可发的空操作，安全；
   // 真正生效靠 handleSend 把 selectedModel 带进第一条消息。
   emit("set-model", value);
+}
+
+// ── 权限模式（plan / acceptEdits / default）——和模型下拉同一套模式：
+// 会话没起进程时用静态兜底清单，用户的选择随每条消息的 permission_mode 带走；
+// 进程活着时切换走运行时命令，显示状态靠 sidecar 回发的事件坐实。
+const displayPermissionModes = computed<PermissionModeOption[]>(() =>
+  props.permissionModes?.length ? props.permissionModes : defaultPermissionModes.value,
+);
+
+const selectedPermissionMode = ref("");
+
+function applyDefaultPermissionMode(modes: PermissionModeOption[]) {
+  if (selectedPermissionMode.value || !modes.length) return;
+  selectedPermissionMode.value = modes[0].value; // 清单首项即 provider 默认模式
+}
+
+watch(() => props.currentPermissionMode, (v) => { if (v) selectedPermissionMode.value = v; });
+watch(displayPermissionModes, applyDefaultPermissionMode, { immediate: true });
+watch(() => props.sessionId, (sid) => {
+  if (!sid) {
+    selectedPermissionMode.value = "";
+    applyDefaultPermissionMode(displayPermissionModes.value);
+  }
+});
+
+function handlePermissionModeChange(value: string) {
+  selectedPermissionMode.value = value;
+  emit("set-permission-mode", value);
 }
 const currentStatus = computed(() => {
   const sid = props.sessionId;
@@ -249,7 +289,8 @@ async function handlePaste(e: ClipboardEvent) {
 async function handleSend() {
   const text = inputText.value.trim();
   const hasImages = pendingImages.value.length > 0;
-  if ((!text && !hasImages) || isBusyVal.value) return;
+  // 忙碌时不再拦截：useChatSession 会把消息排队，message_stop 后按序续发
+  if (!text && !hasImages) return;
 
   let finalPrompt = text;
   const slashMatch = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
@@ -276,9 +317,14 @@ async function handleSend() {
   const images = pendingImages.value.map(({ data, mediaType }) => ({ data, mediaType }));
   inputText.value = "";
   pendingImages.value = [];
-  // Rust 只在 sidecar 进程还没起来时才会用这个值（见 chat.rs），已有会话时
-  // 无害地被忽略，不需要在这里判断"是否已有会话"。
-  emit("send", finalPrompt, images.length ? images : undefined, selectedModel.value || undefined, mentionResolution);
+  emit("send", finalPrompt, {
+    images: images.length ? images : undefined,
+    // Rust 只在 sidecar 进程还没起来时才会用这个值（见 chat.rs），已有会话时
+    // 无害地被忽略，不需要在这里判断"是否已有会话"。
+    initialModel: selectedModel.value || undefined,
+    mentions: mentionResolution,
+    permissionMode: selectedPermissionMode.value || undefined,
+  });
 }
 </script>
 
@@ -330,6 +376,14 @@ async function handleSend() {
       </div>
       <!-- 输入框、图片缩略图、模型工具栏放进同一个带边框的盒子里，工具栏焊在底部——
            不再是"模型栏单独一行浮在输入框上方"，避免贴图片时模型栏被顶得到处跑。 -->
+      <!-- 忙碌时排队的消息：还没发出去，可随时撤掉 -->
+      <div v-if="queuedPrompts?.length" class="queued-strip">
+        <div v-for="(p, i) in queuedPrompts" :key="i" class="queued-item">
+          <span class="queued-item-tag">排队</span>
+          <span class="queued-item-text">{{ p }}</span>
+          <button class="queued-item-remove" title="撤回这条排队消息" @click="emit('remove-queued', i)">×</button>
+        </div>
+      </div>
       <div class="chat-input-box">
         <div v-if="pendingImages.length" class="image-attachment-strip">
           <div
@@ -345,9 +399,8 @@ async function handleSend() {
           ref="textareaEl"
           v-model="inputText"
           class="chat-input"
-          placeholder="输入消息…"
+          :placeholder="isBusyVal ? '生成中，发送的消息将排队…' : '输入消息…'"
           rows="3"
-          :disabled="isBusyVal"
           @keydown.enter.exact.prevent="(slashDropdownVisible && filteredSkills.length) ? selectSkill(filteredSkills[slashSelectedIndex]) : handleSend()"
           @keydown.enter.shift.exact.prevent="insertAtCursor('\n')"
           @keydown.tab="handleTabKey"
@@ -365,6 +418,15 @@ async function handleSend() {
           >
             <option v-for="m in displayModels" :key="m.value" :value="m.value">{{ m.displayName }}</option>
           </select>
+          <select
+            v-if="displayPermissionModes.length"
+            class="chat-model-select"
+            :value="selectedPermissionMode"
+            title="权限模式"
+            @change="handlePermissionModeChange(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="m in displayPermissionModes" :key="m.value" :value="m.value">{{ m.displayName }}</option>
+          </select>
           <div
             v-if="props.contextUsage"
             class="chat-ctx-usage"
@@ -379,10 +441,10 @@ async function handleSend() {
           <span class="chat-cost-total">会话费用 ${{ (props.totalCostUsd ?? 0).toFixed(4) }}</span>
           <button
             class="chat-send-btn"
-            :disabled="isBusyVal || (!inputText.trim() && !pendingImages.length)"
+            :disabled="!inputText.trim() && !pendingImages.length"
             @click="handleSend"
           >
-            发送
+            {{ isBusyVal ? "排队" : "发送" }}
           </button>
         </div>
       </div>
@@ -658,6 +720,56 @@ async function handleSend() {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+}
+
+.queued-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.queued-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--aide-text-secondary);
+  background: var(--aide-surface-default);
+  border: 1px dashed var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+}
+
+.queued-item-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--aide-text-muted);
+  background: var(--aide-bg-deep);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.queued-item-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queued-item-remove {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.queued-item-remove:hover {
+  color: var(--aide-danger);
 }
 
 .image-attachment-strip {
