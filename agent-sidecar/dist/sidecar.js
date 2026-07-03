@@ -45466,6 +45466,72 @@ var PermissionManager = class {
   }
 };
 
+// src/tasks.ts
+var TASK_TOOL_NAMES = /* @__PURE__ */ new Set(["TaskCreate", "TaskUpdate", "TaskGet", "TaskList"]);
+var TASK_STATUSES = /* @__PURE__ */ new Set(["pending", "in_progress", "completed"]);
+var TaskTracker = class {
+  tasks = /* @__PURE__ */ new Map();
+  pendingCreates = /* @__PURE__ */ new Map();
+  /** 记录这 4 个工具的 tool_use_id，好在对应 tool_result 到达时判断要不要吞掉。 */
+  trackedIds = /* @__PURE__ */ new Set();
+  static isTaskTool(name) {
+    return TASK_TOOL_NAMES.has(name);
+  }
+  /** 返回 true 时调用方应该发一次 tasks_update 快照。 */
+  handleToolUse(id2, name, input) {
+    this.trackedIds.add(id2);
+    const record = input && typeof input === "object" ? input : {};
+    if (name === "TaskCreate") {
+      const activeForm = typeof record.activeForm === "string" ? record.activeForm : void 0;
+      this.pendingCreates.set(id2, { subject: String(record.subject ?? ""), activeForm });
+      return false;
+    }
+    if (name === "TaskUpdate") {
+      const taskId = record.taskId ?? record.id ?? record.task_id;
+      if (!taskId) return false;
+      const existing = this.tasks.get(taskId);
+      if (!existing) return false;
+      if (record.status === "deleted") {
+        this.tasks.delete(taskId);
+        return true;
+      }
+      if (typeof record.status === "string" && TASK_STATUSES.has(record.status)) {
+        existing.status = record.status;
+      }
+      if (typeof record.subject === "string") existing.subject = record.subject;
+      const activeForm = record.activeForm ?? record.active_form;
+      if (typeof activeForm === "string") existing.activeForm = activeForm;
+      return true;
+    }
+    return false;
+  }
+  /** tracked=false 表示这不是任务工具的结果，调用方应照旧转发通用 tool_result；
+   *  changed=true 表示状态变了，调用方应该发一次 tasks_update 快照。 */
+  handleToolResult(id2, content) {
+    if (!this.trackedIds.delete(id2)) return { tracked: false, changed: false };
+    const pending = this.pendingCreates.get(id2);
+    if (!pending) return { tracked: true, changed: false };
+    this.pendingCreates.delete(id2);
+    try {
+      const parsed = JSON.parse(content);
+      const taskId = parsed.task?.id;
+      if (!taskId) return { tracked: true, changed: false };
+      this.tasks.set(taskId, {
+        id: taskId,
+        subject: parsed.task?.subject ?? pending.subject,
+        status: "pending",
+        activeForm: pending.activeForm
+      });
+      return { tracked: true, changed: true };
+    } catch {
+      return { tracked: true, changed: false };
+    }
+  }
+  snapshot() {
+    return [...this.tasks.values()];
+  }
+};
+
 // src/mapper.ts
 function buildUserMessage(prompt, images) {
   if (images.length === 0) {
@@ -45484,7 +45550,7 @@ function buildUserMessage(prompt, images) {
   }
   return { role: "user", content: blocks };
 }
-function mapSdkMessage(msg, emit2) {
+function mapSdkMessage(msg, emit2, tasks) {
   if (msg.type === "system" && msg.subtype === "init") {
     emit2({ type: "session_init", session_id: msg.session_id });
     return;
@@ -45494,7 +45560,13 @@ function mapSdkMessage(msg, emit2) {
       if (block.type === "text") {
         emit2({ type: "text_delta", delta: block.text });
       } else if (block.type === "tool_use") {
-        emit2({ type: "tool_use_start", id: block.id, name: block.name, input: block.input });
+        if (TaskTracker.isTaskTool(block.name)) {
+          if (tasks.handleToolUse(block.id, block.name, block.input)) {
+            emit2({ type: "tasks_update", tasks: tasks.snapshot() });
+          }
+        } else {
+          emit2({ type: "tool_use_start", id: block.id, name: block.name, input: block.input });
+        }
       }
     }
     return;
@@ -45503,7 +45575,13 @@ function mapSdkMessage(msg, emit2) {
     for (const block of msg.message.content) {
       if (block.type === "tool_result") {
         const content = Array.isArray(block.content) ? block.content.map((c) => c.text ?? "").join("") : String(block.content ?? "");
-        emit2({ type: "tool_result", id: block.tool_use_id, content, is_error: block.is_error ?? false });
+        const outcome = tasks.handleToolResult(block.tool_use_id, content);
+        if (outcome.changed) {
+          emit2({ type: "tasks_update", tasks: tasks.snapshot() });
+        }
+        if (!outcome.tracked) {
+          emit2({ type: "tool_result", id: block.tool_use_id, content, is_error: block.is_error ?? false });
+        }
       }
     }
     return;
@@ -45543,6 +45621,7 @@ if (proxyUrl) {
 }
 var queue = new MessageQueue();
 var permMgr = new PermissionManager();
+var taskTracker = new TaskTracker();
 var currentQuery = null;
 var sessionId;
 var currentModel = "";
@@ -45596,7 +45675,7 @@ async function startLoop(cwd) {
         });
         currentQuery = q;
         for await (const msg of q) {
-          mapSdkMessage(msg, emit);
+          mapSdkMessage(msg, emit, taskTracker);
           if (msg.type === "system" && msg.subtype === "init") {
             sessionId = msg.session_id;
             void emitModelsAvailable(q);
