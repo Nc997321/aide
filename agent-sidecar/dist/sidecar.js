@@ -45448,13 +45448,15 @@ var PermissionManager = class {
       };
     };
   }
+  /** 返回被响应的工具名（无此 pending 时返回 undefined）——入口层用它识别
+   *  "ExitPlanMode 被批准"这类需要联动会话状态的特殊工具。 */
   resolve(id2, approved, always) {
     const entry = this.pending.get(id2);
-    if (!entry) return;
+    if (!entry) return void 0;
     this.pending.delete(id2);
     if (!approved || !always) {
       entry.resolve({ approved });
-      return;
+      return entry.toolName;
     }
     const updatedPermissions = entry.suggestions?.length ? entry.suggestions : [{
       type: "addRules",
@@ -45463,6 +45465,7 @@ var PermissionManager = class {
       destination: "projectSettings"
     }];
     entry.resolve({ approved, updatedPermissions });
+    return entry.toolName;
   }
 };
 
@@ -45577,10 +45580,17 @@ function mapSdkMessage(msg, emit2, tasks, subagents) {
     emit2({ type: "session_init", session_id: msg.session_id });
     return;
   }
+  if (msg.type === "stream_event") {
+    const ev2 = msg.event;
+    if (ev2?.type === "content_block_delta" && ev2.delta?.type === "text_delta" && ev2.delta.text) {
+      emit2({ type: "text_delta", delta: ev2.delta.text });
+    }
+    return;
+  }
   if (msg.type === "assistant" && msg.message?.content) {
     for (const block of msg.message.content) {
       if (block.type === "text") {
-        emit2({ type: "text_delta", delta: block.text });
+        continue;
       } else if (block.type === "tool_use") {
         if (SubagentTracker.isSubagentTool(block.name)) {
           const { agentName, description } = subagents.handleToolUse(block.id, block.input);
@@ -45658,6 +45668,30 @@ var currentModel = "";
 var lastConcreteModel = "";
 var lastModels = [];
 var aliasByResolvedPrefix = [];
+var PERMISSION_MODES = [
+  { value: "default", displayName: "\u9ED8\u8BA4\u6743\u9650" },
+  { value: "acceptEdits", displayName: "\u81EA\u52A8\u63A5\u53D7\u7F16\u8F91" },
+  { value: "plan", displayName: "Plan \u6A21\u5F0F" }
+];
+var currentPermissionMode = "default";
+function emitPermissionModes() {
+  emit({ type: "permission_modes_available", modes: PERMISSION_MODES, current: currentPermissionMode });
+}
+function applyPermissionMode(mode) {
+  if (!PERMISSION_MODES.some((m) => m.value === mode)) return;
+  if (mode === currentPermissionMode) return;
+  const q = currentQuery;
+  if (q) {
+    q.setPermissionMode(mode).then(() => {
+      currentPermissionMode = mode;
+      emitPermissionModes();
+    }).catch(() => {
+    });
+  } else {
+    currentPermissionMode = mode;
+    emitPermissionModes();
+  }
+}
 async function emitModelsAvailable(q) {
   try {
     const init = await q.initializationResult();
@@ -45692,11 +45726,16 @@ async function startLoop(cwd) {
         const q = DMe({
           prompt: queue[Symbol.asyncIterator](),
           options: {
-            permissionMode: "default",
+            permissionMode: currentPermissionMode,
             canUseTool: permMgr.makeCallback(emit),
             settingSources: ["project", "user"],
             allowedTools: ["Agent", "Task"],
             skills: "all",
+            // 真流式：文本以 stream_event 增量到达，mapper 只转发 text_delta、
+            // 跳过最终 assistant 消息里的整块文本（两处必须同开同关）。
+            includePartialMessages: true,
+            // 出错重建 query 时保留用户已切换的模型，不回落到 env 默认值
+            ...currentModel ? { model: currentModel } : {},
             ...cwd ? { cwd } : {},
             // release 打包：Rust 侧把随 app 分发的原生 CLI 路径通过环境变量传入；
             // 未设置时 SDK 从 node_modules 解析（dev 模式）
@@ -45738,6 +45777,7 @@ async function startLoop(cwd) {
 }
 var rl2 = readline.createInterface({ input: process.stdin });
 var loopStarted = false;
+emitPermissionModes();
 rl2.on("line", (line) => {
   let cmd;
   try {
@@ -45747,6 +45787,7 @@ rl2.on("line", (line) => {
   }
   if (cmd.cmd === "send") {
     if (cmd.session_id) sessionId = cmd.session_id;
+    if (cmd.permission_mode) applyPermissionMode(cmd.permission_mode);
     if (!loopStarted) {
       loopStarted = true;
       startLoop(cmd.cwd);
@@ -45757,10 +45798,15 @@ rl2.on("line", (line) => {
       parent_tool_use_id: null
     });
   } else if (cmd.cmd === "permission_response") {
-    permMgr.resolve(cmd.id, cmd.approved, cmd.always);
+    const toolName = permMgr.resolve(cmd.id, cmd.approved, cmd.always);
+    if (cmd.approved && toolName === "ExitPlanMode") {
+      applyPermissionMode("default");
+    }
   } else if (cmd.cmd === "interrupt") {
     currentQuery?.interrupt().catch(() => {
     });
+  } else if (cmd.cmd === "set_permission_mode") {
+    applyPermissionMode(cmd.mode);
   } else if (cmd.cmd === "set_model") {
     currentQuery?.setModel(cmd.model).then(() => {
       currentModel = cmd.model;
