@@ -52,13 +52,15 @@ export class PermissionManager {
     };
   }
 
-  resolve(id: string, approved: boolean, always?: boolean) {
+  /** 返回被响应的工具名（无此 pending 时返回 undefined）——入口层用它识别
+   *  "ExitPlanMode 被批准"这类需要联动会话状态的特殊工具。 */
+  resolve(id: string, approved: boolean, always?: boolean): string | undefined {
     const entry = this.pending.get(id);
-    if (!entry) return;
+    if (!entry) return undefined;
     this.pending.delete(id);
     if (!approved || !always) {
       entry.resolve({ approved });
-      return;
+      return entry.toolName;
     }
     const updatedPermissions: PermissionUpdate[] = entry.suggestions?.length
       ? entry.suggestions
@@ -69,5 +71,6 @@ export class PermissionManager {
           destination: "projectSettings",
         }];
     entry.resolve({ approved, updatedPermissions });
+    return entry.toolName;
   }
 }

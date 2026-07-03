@@ -92,6 +92,59 @@ describe("mapSdkMessage routing for Task tools", () => {
   });
 });
 
+describe("mapSdkMessage streaming (includePartialMessages)", () => {
+  function streamTextDelta(text: string, parentToolUseId: string | null = null) {
+    return {
+      type: "stream_event",
+      parent_tool_use_id: parentToolUseId,
+      event: { type: "content_block_delta", delta: { type: "text_delta", text } },
+    };
+  }
+
+  it("forwards stream_event text deltas as text_delta", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(streamTextDelta("你"), (e) => events.push(e), new TaskTracker(), new SubagentTracker());
+    mapSdkMessage(streamTextDelta("好"), (e) => events.push(e), new TaskTracker(), new SubagentTracker());
+    expect(events).toEqual([
+      { type: "text_delta", delta: "你" },
+      { type: "text_delta", delta: "好" },
+    ]);
+  });
+
+  it("skips the final assistant text block (already streamed as deltas)", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(assistantText("完整文本"), (e) => events.push(e), new TaskTracker(), new SubagentTracker());
+    expect(events).toEqual([]);
+  });
+
+  it("still emits tool_use_start for tool_use blocks in a mixed assistant message", () => {
+    const events: ChatEvent[] = [];
+    const msg = {
+      type: "assistant",
+      message: {
+        content: [
+          { type: "text", text: "先说两句" },
+          { type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } },
+        ],
+      },
+    };
+    mapSdkMessage(msg, (e) => events.push(e), new TaskTracker(), new SubagentTracker());
+    expect(events).toEqual([{ type: "tool_use_start", id: "t1", name: "Bash", input: { command: "ls" } }]);
+  });
+
+  it("ignores non-text deltas (e.g. thinking_delta) and subagent stream events", () => {
+    const events: ChatEvent[] = [];
+    const thinking = {
+      type: "stream_event",
+      parent_tool_use_id: null,
+      event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "内心戏" } },
+    };
+    mapSdkMessage(thinking, (e) => events.push(e), new TaskTracker(), new SubagentTracker());
+    mapSdkMessage(streamTextDelta("子代理文本", "a1"), (e) => events.push(e), new TaskTracker(), new SubagentTracker());
+    expect(events).toEqual([]);
+  });
+});
+
 describe("mapSdkMessage routing for subagent tools", () => {
   it("emits subagent_start instead of tool_use_start for the Agent tool", () => {
     const events: ChatEvent[] = [];

@@ -14,6 +14,13 @@ export interface ModelOption {
   displayName: string;
 }
 
+// 权限模式——同 ModelOption：value 是 provider 自己认的模式标识（Claude 的
+// "default"/"plan"/"acceptEdits"），核心协议只当不透明字符串透传，不解释语义。
+export interface PermissionModeOption {
+  value: string;
+  displayName: string;
+}
+
 /** 待办任务项——provider-agnostic，任何 agent 的"任务追踪"能力都映射成这个形状。 */
 export interface TaskItem {
   id: string;
@@ -34,6 +41,7 @@ export type ChatEvent =
   | { type: "permission_cancelled"; id: string }
   | { type: "message_stop"; stop_reason: string; total_cost_usd: number | null; usage: TurnUsage | null }
   | { type: "models_available"; models: ModelOption[]; current: string }
+  | { type: "permission_modes_available"; modes: PermissionModeOption[]; current: string }
   | { type: "context_usage"; total_tokens: number; max_tokens: number; percentage: number }
   | { type: "tasks_update"; tasks: TaskItem[] }
   | { type: "error"; message: string };
@@ -46,7 +54,8 @@ export interface ImageAttachment {
 
 // Rust → Sidecar（每行一个 JSON，从 stdin 读取）
 export type SidecarCommand =
-  | { cmd: "send"; prompt: string; images?: ImageAttachment[]; session_id?: string; cwd?: string }
+  | { cmd: "send"; prompt: string; images?: ImageAttachment[]; session_id?: string; cwd?: string; permission_mode?: string }
   | { cmd: "permission_response"; id: string; approved: boolean; always?: boolean }
   | { cmd: "interrupt" }
-  | { cmd: "set_model"; model: string };
+  | { cmd: "set_model"; model: string }
+  | { cmd: "set_permission_mode"; mode: string };

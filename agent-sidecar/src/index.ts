@@ -1,6 +1,6 @@
 import * as readline from "readline";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { ChatEvent, ModelOption, SidecarCommand } from "./types.js";
+import type { ChatEvent, ModelOption, PermissionModeOption, SidecarCommand } from "./types.js";
 import { MessageQueue } from "./generator.js";
 import { PermissionManager } from "./permissions.js";
 import { TaskTracker } from "./tasks.js";
@@ -35,6 +35,39 @@ let lastModels: ModelOption[] = [];
 // 内部用：alias(value) → resolvedModel 前缀，用来把 assistant 消息里的具体
 // wire model id（如 "claude-sonnet-5-20260101"）反查回下拉里对应的别名选项。
 let aliasByResolvedPrefix: { value: string; resolvedPrefix: string }[] = [];
+
+// Claude 专属的权限模式清单（bypassPermissions 需要额外的危险开关，不提供）。
+// 前端只拿到 value/displayName，语义完全由本 sidecar 解释。
+const PERMISSION_MODES: PermissionModeOption[] = [
+  { value: "default", displayName: "默认权限" },
+  { value: "acceptEdits", displayName: "自动接受编辑" },
+  { value: "plan", displayName: "Plan 模式" },
+];
+// 同模型选择：只存内存，不落盘；重开会话回落到 default。
+let currentPermissionMode = "default";
+
+function emitPermissionModes() {
+  emit({ type: "permission_modes_available", modes: PERMISSION_MODES, current: currentPermissionMode });
+}
+
+/** 切权限模式：query 已在跑就走 SDK 运行时接口（成功才广播）；还没起 query
+ *  时只改本地状态（startLoop 创建 query 时带上），立即广播让前端下拉同步。 */
+function applyPermissionMode(mode: string) {
+  if (!PERMISSION_MODES.some((m) => m.value === mode)) return;
+  if (mode === currentPermissionMode) return;
+  const q = currentQuery;
+  if (q) {
+    q.setPermissionMode(mode as any)
+      .then(() => {
+        currentPermissionMode = mode;
+        emitPermissionModes();
+      })
+      .catch(() => {});
+  } else {
+    currentPermissionMode = mode;
+    emitPermissionModes();
+  }
+}
 
 async function emitModelsAvailable(q: Awaited<ReturnType<typeof query>>) {
   try {
@@ -82,11 +115,16 @@ async function startLoop(cwd?: string) {
         const q = query({
           prompt: queue[Symbol.asyncIterator](),
           options: {
-            permissionMode: "default",
+            permissionMode: currentPermissionMode as any,
             canUseTool: permMgr.makeCallback(emit) as any,
             settingSources: ["project", "user"],
             allowedTools: ["Agent", "Task"],
             skills: "all",
+            // 真流式：文本以 stream_event 增量到达，mapper 只转发 text_delta、
+            // 跳过最终 assistant 消息里的整块文本（两处必须同开同关）。
+            includePartialMessages: true,
+            // 出错重建 query 时保留用户已切换的模型，不回落到 env 默认值
+            ...(currentModel ? { model: currentModel } : {}),
             ...(cwd ? { cwd } : {}),
             // release 打包：Rust 侧把随 app 分发的原生 CLI 路径通过环境变量传入；
             // 未设置时 SDK 从 node_modules 解析（dev 模式）
@@ -139,6 +177,9 @@ async function startLoop(cwd?: string) {
 const rl = readline.createInterface({ input: process.stdin });
 let loopStarted = false;
 
+// 进程一起来就广播一次模式清单——前端不用等第一条消息就能渲染下拉框
+emitPermissionModes();
+
 rl.on("line", (line) => {
   let cmd: SidecarCommand;
   try {
@@ -149,6 +190,8 @@ rl.on("line", (line) => {
 
   if (cmd.cmd === "send") {
     if (cmd.session_id) sessionId = cmd.session_id;
+    // 先应用随消息带来的权限模式，再起 loop——首条消息选的模式要进 query 初始选项
+    if (cmd.permission_mode) applyPermissionMode(cmd.permission_mode);
     if (!loopStarted) {
       loopStarted = true;
       startLoop(cmd.cwd);
@@ -159,9 +202,16 @@ rl.on("line", (line) => {
       parent_tool_use_id: null,
     } as any);
   } else if (cmd.cmd === "permission_response") {
-    permMgr.resolve(cmd.id, cmd.approved, cmd.always);
+    const toolName = permMgr.resolve(cmd.id, cmd.approved, cmd.always);
+    // Plan 模式的出口：ExitPlanMode 被批准 = 用户认可计划、进入执行——SDK 不会
+    // 自己切模式（那是交互式 CLI 的 TUI 行为），这里显式切回 default。
+    if (cmd.approved && toolName === "ExitPlanMode") {
+      applyPermissionMode("default");
+    }
   } else if (cmd.cmd === "interrupt") {
     currentQuery?.interrupt().catch(() => {});
+  } else if (cmd.cmd === "set_permission_mode") {
+    applyPermissionMode(cmd.mode);
   } else if (cmd.cmd === "set_model") {
     currentQuery
       ?.setModel(cmd.model)

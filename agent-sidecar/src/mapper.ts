@@ -38,17 +38,29 @@ export function mapSdkMessage(
   tasks: TaskTracker,
   subagents: SubagentTracker,
 ) {
-  if (msg.parent_tool_use_id) return; // 子代理内部消息：v1 不做嵌套直播，直接丢弃
+  if (msg.parent_tool_use_id) return; // 子代理内部消息（含其 stream_event）：v1 不做嵌套直播，直接丢弃
 
   if (msg.type === "system" && msg.subtype === "init") {
     emit({ type: "session_init", session_id: msg.session_id });
     return;
   }
 
+  // 真流式：query 开了 includePartialMessages，文本以 stream_event 的
+  // text_delta 逐字到达；thinking_delta 等其他增量类型不进对话流。
+  if (msg.type === "stream_event") {
+    const ev = msg.event;
+    if (ev?.type === "content_block_delta" && ev.delta?.type === "text_delta" && ev.delta.text) {
+      emit({ type: "text_delta", delta: ev.delta.text });
+    }
+    return;
+  }
+
   if (msg.type === "assistant" && msg.message?.content) {
     for (const block of msg.message.content) {
       if (block.type === "text") {
-        emit({ type: "text_delta", delta: block.text });
+        // 文本已经在 stream_event 阶段逐字发过了（includePartialMessages 由
+        // index.ts 无条件开启），整块再发一遍会导致前端重复渲染——只跳过。
+        continue;
       } else if (block.type === "tool_use") {
         if (SubagentTracker.isSubagentTool(block.name)) {
           const { agentName, description } = subagents.handleToolUse(block.id, block.input);
