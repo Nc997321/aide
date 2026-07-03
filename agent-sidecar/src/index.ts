@@ -4,6 +4,7 @@ import type { ChatEvent, ModelOption, SidecarCommand } from "./types.js";
 import { MessageQueue } from "./generator.js";
 import { PermissionManager } from "./permissions.js";
 import { TaskTracker } from "./tasks.js";
+import { SubagentTracker } from "./subagents.js";
 import { mapSdkMessage, buildUserMessage } from "./mapper.js";
 
 function emit(event: ChatEvent) {
@@ -23,6 +24,7 @@ if (proxyUrl) {
 const queue = new MessageQueue();
 const permMgr = new PermissionManager();
 const taskTracker = new TaskTracker();
+const subagentTracker = new SubagentTracker();
 let currentQuery: Awaited<ReturnType<typeof query>> | null = null;
 let sessionId: string | undefined;
 // 模型选择只存内存，不落盘——重开会话回落到 provider 默认模型。
@@ -83,6 +85,7 @@ async function startLoop(cwd?: string) {
             permissionMode: "default",
             canUseTool: permMgr.makeCallback(emit) as any,
             settingSources: ["project", "user"],
+            allowedTools: ["Agent", "Task"],
             skills: "all",
             ...(cwd ? { cwd } : {}),
             // release 打包：Rust 侧把随 app 分发的原生 CLI 路径通过环境变量传入；
@@ -96,7 +99,7 @@ async function startLoop(cwd?: string) {
         currentQuery = q;
 
         for await (const msg of q) {
-          mapSdkMessage(msg, emit, taskTracker);
+          mapSdkMessage(msg, emit, taskTracker, subagentTracker);
           if ((msg as any).type === "system" && (msg as any).subtype === "init") {
             sessionId = (msg as any).session_id;
             void emitModelsAvailable(q);

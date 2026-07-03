@@ -260,3 +260,57 @@ describe("useChatSession per-session store", () => {
     expect(chatB.currentModel.value).toBe("");
   });
 });
+
+describe("useChatSession subagent events", () => {
+  beforeEach(() => {
+    __resetForTest();
+    invokeMock.mockClear();
+    invokeMock.mockResolvedValue(undefined);
+    const { state, removeSessionState } = useSessionState();
+    for (const k of Object.keys(state)) removeSessionState(k);
+  });
+
+  it("subagent_start 推入一个 pending 的 subagent 块，subagent_end 按 id 回填结果", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("帮我调研一下 XXX");
+
+    emit({
+      type: "subagent_start",
+      id: "a1",
+      agentName: "general-purpose",
+      description: "调研 XXX",
+      session_id: "uuid-a",
+    });
+    await flush();
+
+    type SubagentTestBlock = {
+      agentName?: string;
+      description?: string;
+      isPending: boolean;
+      result?: string;
+      isError?: boolean;
+    };
+
+    let block = chat.messages.value
+      .flatMap((m) => m.blocks)
+      .find((b) => b.type === "subagent") as SubagentTestBlock | undefined;
+    expect(block).toMatchObject({ agentName: "general-purpose", description: "调研 XXX", isPending: true });
+    expect(block?.result).toBeUndefined();
+
+    emit({
+      type: "subagent_end",
+      id: "a1",
+      result: "调研结论：……",
+      is_error: false,
+      session_id: "uuid-a",
+    });
+    await flush();
+
+    block = chat.messages.value
+      .flatMap((m) => m.blocks)
+      .find((b) => b.type === "subagent") as SubagentTestBlock | undefined;
+    expect(block).toMatchObject({ isPending: false, result: "调研结论：……", isError: false });
+  });
+});

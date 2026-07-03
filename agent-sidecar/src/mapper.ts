@@ -1,6 +1,7 @@
 import type { MessageParam } from "@anthropic-ai/sdk/resources";
 import type { ChatEvent, ImageAttachment, TurnUsage } from "./types.js";
 import { TaskTracker } from "./tasks.js";
+import { SubagentTracker } from "./subagents.js";
 
 /**
  * Build a Claude-SDK MessageParam from a prompt + optional image attachments.
@@ -31,7 +32,14 @@ export function buildUserMessage(
   return { role: "user", content: blocks as any };
 }
 
-export function mapSdkMessage(msg: any, emit: (e: ChatEvent) => void, tasks: TaskTracker) {
+export function mapSdkMessage(
+  msg: any,
+  emit: (e: ChatEvent) => void,
+  tasks: TaskTracker,
+  subagents: SubagentTracker,
+) {
+  if (msg.parent_tool_use_id) return; // 子代理内部消息：v1 不做嵌套直播，直接丢弃
+
   if (msg.type === "system" && msg.subtype === "init") {
     emit({ type: "session_init", session_id: msg.session_id });
     return;
@@ -42,7 +50,10 @@ export function mapSdkMessage(msg: any, emit: (e: ChatEvent) => void, tasks: Tas
       if (block.type === "text") {
         emit({ type: "text_delta", delta: block.text });
       } else if (block.type === "tool_use") {
-        if (TaskTracker.isTaskTool(block.name)) {
+        if (SubagentTracker.isSubagentTool(block.name)) {
+          const { agentName, description } = subagents.handleToolUse(block.id, block.input);
+          emit({ type: "subagent_start", id: block.id, agentName, description });
+        } else if (TaskTracker.isTaskTool(block.name)) {
           if (tasks.handleToolUse(block.id, block.name, block.input)) {
             emit({ type: "tasks_update", tasks: tasks.snapshot() });
           }
@@ -60,6 +71,10 @@ export function mapSdkMessage(msg: any, emit: (e: ChatEvent) => void, tasks: Tas
         const content = Array.isArray(block.content)
           ? block.content.map((c: any) => c.text ?? "").join("")
           : String(block.content ?? "");
+        if (subagents.handleToolResult(block.tool_use_id)) {
+          emit({ type: "subagent_end", id: block.tool_use_id, result: content, is_error: block.is_error ?? false });
+          continue;
+        }
         const outcome = tasks.handleToolResult(block.tool_use_id, content);
         if (outcome.changed) {
           emit({ type: "tasks_update", tasks: tasks.snapshot() });

@@ -3,6 +3,7 @@ import { computed } from "vue";
 import type { ChatMessage } from "@/types/chat";
 import { marked } from "@/utils/markdown";
 import ToolCallBlock from "./ToolCallBlock.vue";
+import SubagentCallBlock from "./SubagentCallBlock.vue";
 import { useFileViewer } from "@/composables/useFileViewer";
 
 const props = defineProps<{
@@ -56,6 +57,10 @@ function handleTextClick(e: MouseEvent) {
           :src="`data:${(block as any).mediaType};base64,${(block as any).data}`"
           class="msg-image"
           alt="附图"
+        />
+        <SubagentCallBlock
+          v-else-if="block.type === 'subagent'"
+          :block="(block as any)"
         />
       </template>
       <div v-if="!isUser && message.usage" class="msg-usage">

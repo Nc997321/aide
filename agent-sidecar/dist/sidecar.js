@@ -45532,6 +45532,27 @@ var TaskTracker = class {
   }
 };
 
+// src/subagents.ts
+var SUBAGENT_TOOL_NAMES = /* @__PURE__ */ new Set(["Agent", "Task"]);
+var SubagentTracker = class {
+  active = /* @__PURE__ */ new Set();
+  static isSubagentTool(name) {
+    return SUBAGENT_TOOL_NAMES.has(name);
+  }
+  /** tool_use 到达时调用：agentName/description 从 input 里立即可得，不用等 tool_result。 */
+  handleToolUse(id2, input) {
+    this.active.add(id2);
+    const record = input && typeof input === "object" ? input : {};
+    const agentName = typeof record.subagent_type === "string" ? record.subagent_type : "agent";
+    const description = typeof record.description === "string" ? record.description : "";
+    return { agentName, description };
+  }
+  /** 返回 true 表示这个 tool_use_id 属于子代理调用，调用方应发 subagent_end 而非通用 tool_result。 */
+  handleToolResult(id2) {
+    return this.active.delete(id2);
+  }
+};
+
 // src/mapper.ts
 function buildUserMessage(prompt, images) {
   if (images.length === 0) {
@@ -45550,7 +45571,8 @@ function buildUserMessage(prompt, images) {
   }
   return { role: "user", content: blocks };
 }
-function mapSdkMessage(msg, emit2, tasks) {
+function mapSdkMessage(msg, emit2, tasks, subagents) {
+  if (msg.parent_tool_use_id) return;
   if (msg.type === "system" && msg.subtype === "init") {
     emit2({ type: "session_init", session_id: msg.session_id });
     return;
@@ -45560,7 +45582,10 @@ function mapSdkMessage(msg, emit2, tasks) {
       if (block.type === "text") {
         emit2({ type: "text_delta", delta: block.text });
       } else if (block.type === "tool_use") {
-        if (TaskTracker.isTaskTool(block.name)) {
+        if (SubagentTracker.isSubagentTool(block.name)) {
+          const { agentName, description } = subagents.handleToolUse(block.id, block.input);
+          emit2({ type: "subagent_start", id: block.id, agentName, description });
+        } else if (TaskTracker.isTaskTool(block.name)) {
           if (tasks.handleToolUse(block.id, block.name, block.input)) {
             emit2({ type: "tasks_update", tasks: tasks.snapshot() });
           }
@@ -45575,6 +45600,10 @@ function mapSdkMessage(msg, emit2, tasks) {
     for (const block of msg.message.content) {
       if (block.type === "tool_result") {
         const content = Array.isArray(block.content) ? block.content.map((c) => c.text ?? "").join("") : String(block.content ?? "");
+        if (subagents.handleToolResult(block.tool_use_id)) {
+          emit2({ type: "subagent_end", id: block.tool_use_id, result: content, is_error: block.is_error ?? false });
+          continue;
+        }
         const outcome = tasks.handleToolResult(block.tool_use_id, content);
         if (outcome.changed) {
           emit2({ type: "tasks_update", tasks: tasks.snapshot() });
@@ -45622,6 +45651,7 @@ if (proxyUrl) {
 var queue = new MessageQueue();
 var permMgr = new PermissionManager();
 var taskTracker = new TaskTracker();
+var subagentTracker = new SubagentTracker();
 var currentQuery = null;
 var sessionId;
 var currentModel = "";
@@ -45665,6 +45695,7 @@ async function startLoop(cwd) {
             permissionMode: "default",
             canUseTool: permMgr.makeCallback(emit),
             settingSources: ["project", "user"],
+            allowedTools: ["Agent", "Task"],
             skills: "all",
             ...cwd ? { cwd } : {},
             // release 打包：Rust 侧把随 app 分发的原生 CLI 路径通过环境变量传入；
@@ -45675,7 +45706,7 @@ async function startLoop(cwd) {
         });
         currentQuery = q;
         for await (const msg of q) {
-          mapSdkMessage(msg, emit, taskTracker);
+          mapSdkMessage(msg, emit, taskTracker, subagentTracker);
           if (msg.type === "system" && msg.subtype === "init") {
             sessionId = msg.session_id;
             void emitModelsAvailable(q);
