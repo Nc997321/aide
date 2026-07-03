@@ -3,6 +3,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ChatEvent, ModelOption, SidecarCommand } from "./types.js";
 import { MessageQueue } from "./generator.js";
 import { PermissionManager } from "./permissions.js";
+import { TaskTracker } from "./tasks.js";
 import { mapSdkMessage, buildUserMessage } from "./mapper.js";
 
 function emit(event: ChatEvent) {
@@ -21,6 +22,7 @@ if (proxyUrl) {
 
 const queue = new MessageQueue();
 const permMgr = new PermissionManager();
+const taskTracker = new TaskTracker();
 let currentQuery: Awaited<ReturnType<typeof query>> | null = null;
 let sessionId: string | undefined;
 // 模型选择只存内存，不落盘——重开会话回落到 provider 默认模型。
@@ -94,7 +96,7 @@ async function startLoop(cwd?: string) {
         currentQuery = q;
 
         for await (const msg of q) {
-          mapSdkMessage(msg, emit);
+          mapSdkMessage(msg, emit, taskTracker);
           if ((msg as any).type === "system" && (msg as any).subtype === "init") {
             sessionId = (msg as any).session_id;
             void emitModelsAvailable(q);
