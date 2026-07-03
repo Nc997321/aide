@@ -93,3 +93,10 @@ html, body, #app {
   opacity: 1;
 }
 
+/* ── Diff 行着色（FileViewer 的 git diff 视图 + ToolCallBlock 的 Edit 工具 diff 共用）── */
+.aide-diff-add { color: var(--aide-success); background: color-mix(in srgb, var(--aide-success) 4%, transparent); display: block; }
+.aide-diff-del { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 4%, transparent); display: block; }
+.aide-diff-hunk { color: var(--aide-info); display: block; }
+.aide-diff-meta { color: var(--aide-warning); display: block; }
+.aide-diff-ctx { color: var(--aide-text-muted); display: block; }
+

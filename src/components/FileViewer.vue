@@ -94,14 +94,14 @@ const isImage = computed(() => !!imageUrl.value);
 const diffHighlighted = computed(() => {
   if (!content.value) return "";
   return content.value.split("\n").map((line) => {
-    let cls = "diff-ctx";
-    if (line.startsWith("+") && !line.startsWith("+++")) cls = "diff-add";
-    else if (line.startsWith("-") && !line.startsWith("---")) cls = "diff-del";
-    else if (line.startsWith("@@")) cls = "diff-hunk";
+    let cls = "aide-diff-ctx";
+    if (line.startsWith("+") && !line.startsWith("+++")) cls = "aide-diff-add";
+    else if (line.startsWith("-") && !line.startsWith("---")) cls = "aide-diff-del";
+    else if (line.startsWith("@@")) cls = "aide-diff-hunk";
     else if (line.startsWith("diff ") || line.startsWith("index ") ||
              line.startsWith("--- ") || line.startsWith("+++ ") ||
              line.startsWith("new file") || line.startsWith("deleted file"))
-      cls = "diff-meta";
+      cls = "aide-diff-meta";
     return `<span class="${cls}">${escapeHtml(line)}</span>`;
   }).join("\n");
 });
@@ -697,7 +697,7 @@ function getLanguageLabel(): string {
 .viewer-markdown pre code.hljs .hljs-link { color: #89b4fa; text-decoration: underline; }
 .viewer-markdown pre code.hljs .hljs-deletion { color: #f38ba8; }
 
-/* ── Diff viewer ── */
+/* ── Diff viewer（着色规则见 src/styles/global.css 的 aide-diff-*）── */
 .viewer-diff {
   display: block;
   padding: 12px 16px;
@@ -709,9 +709,4 @@ function getLanguageLabel(): string {
   white-space: pre;
   tab-size: 4;
 }
-.viewer-diff .diff-add { color: var(--aide-success); background: color-mix(in srgb, var(--aide-success) 4%, transparent); display: block; }
-.viewer-diff .diff-del { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 4%, transparent); display: block; }
-.viewer-diff .diff-hunk { color: var(--aide-info); display: block; }
-.viewer-diff .diff-meta { color: var(--aide-warning); display: block; }
-.viewer-diff .diff-ctx { color: var(--aide-text-muted); display: block; }
 </style>
