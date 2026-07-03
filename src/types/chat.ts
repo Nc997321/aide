@@ -21,7 +21,17 @@ export interface ImageBlock {
   mediaType: string; // "image/png" | ...
 }
 
-export type ContentBlock = TextBlock | ToolCallBlock | ImageBlock;
+export interface SubagentBlock {
+  type: "subagent";
+  id: string;
+  agentName: string;
+  description: string;
+  result?: string;
+  isError?: boolean;
+  isPending: boolean;
+}
+
+export type ContentBlock = TextBlock | ToolCallBlock | ImageBlock | SubagentBlock;
 
 export interface TurnUsage {
   inputTokens: number;
