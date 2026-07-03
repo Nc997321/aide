@@ -1,0 +1,5 @@
+[
+  { "value": "default", "displayName": "默认权限" },
+  { "value": "acceptEdits", "displayName": "自动接受编辑" },
+  { "value": "plan", "displayName": "Plan 模式" }
+]

@@ -252,7 +252,9 @@ pub fn run() {
             commands::chat::permission_response,
             commands::chat::interrupt_session,
             commands::chat::set_model,
+            commands::chat::set_permission_mode,
             commands::chat::get_default_models,
+            commands::chat::get_default_permission_modes,
             commands::chat::stop_chat_session,
             commands::chat::rename_sidecar_session,
             // Plugin skills scanning

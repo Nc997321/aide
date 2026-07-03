@@ -15,6 +15,7 @@ pub async fn send_message(
     images: Option<Vec<serde_json::Value>>,
     resume_id: Option<String>,
     initial_model: Option<String>,
+    permission_mode: Option<String>,
     sidecar_mgr: State<'_, SidecarManager>,
     workspace_state: State<'_, WorkspaceState>,
     app_handle: tauri::AppHandle,
@@ -80,6 +81,13 @@ pub async fn send_message(
     if let Some(rid) = resume_id {
         cmd["session_id"] = json!(rid);
     }
+    // 每条消息都带当前选中的权限模式：sidecar 侧幂等（同值跳过），
+    // 首条消息借此把模式带进 query 初始选项。Rust 不理解模式语义，无脑透传。
+    if let Some(mode) = permission_mode {
+        if !mode.is_empty() {
+            cmd["permission_mode"] = json!(mode);
+        }
+    }
     sidecar_mgr.send(&session_id, &cmd).await
 }
 
@@ -123,6 +131,16 @@ pub async fn set_model(
 }
 
 #[tauri::command]
+pub async fn set_permission_mode(
+    session_id: String,
+    mode: String,
+    sidecar_mgr: State<'_, SidecarManager>,
+) -> Result<(), String> {
+    let cmd = json!({ "cmd": "set_permission_mode", "mode": mode });
+    sidecar_mgr.send(&session_id, &cmd).await
+}
+
+#[tauri::command]
 pub async fn stop_chat_session(
     session_id: String,
     sidecar_mgr: State<'_, SidecarManager>,
@@ -154,27 +172,35 @@ fn apply_initial_model_override(env_vars: &mut HashMap<String, String>, initial_
     }
 }
 
-fn resolve_default_models_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+/// agent-sidecar 名下的静态数据文件：dev 从源码目录读，release 从打包资源读。
+fn resolve_sidecar_data_path(app: &tauri::AppHandle, file_name: &str) -> Result<PathBuf, String> {
     #[cfg(debug_assertions)]
     {
         let _ = app;
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let path = manifest.parent().unwrap().join("agent-sidecar/default-models.json");
+        let path = manifest.parent().unwrap().join("agent-sidecar").join(file_name);
         if path.exists() {
             return Ok(path);
         }
-        Err(format!("default-models.json not found at {:?}", path))
+        Err(format!("{} not found at {:?}", file_name, path))
     }
     #[cfg(not(debug_assertions))]
     {
         use tauri::Manager;
         let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
-        let path = resource_dir.join("agent-sidecar").join("default-models.json");
+        let path = resource_dir.join("agent-sidecar").join(file_name);
         if path.exists() {
             return Ok(path);
         }
-        Err(format!("default-models.json resource missing: {:?}", path))
+        Err(format!("{} resource missing: {:?}", file_name, path))
     }
+}
+
+fn read_sidecar_data_json(app: &tauri::AppHandle, file_name: &str) -> Result<serde_json::Value, String> {
+    let path = resolve_sidecar_data_path(app, file_name)?;
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read {}: {}", file_name, e))?;
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse {}: {}", file_name, e))
 }
 
 /// 会话还没连上 SDK 之前的兜底模型列表——纯静态数据，读文件不起进程。数据本身
@@ -184,10 +210,14 @@ fn resolve_default_models_path(app: &tauri::AppHandle) -> Result<PathBuf, String
 /// 是同一类已知例外（见 docs/ARCHITECTURE.md「已知技术债」）。
 #[tauri::command]
 pub fn get_default_models(app_handle: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    let path = resolve_default_models_path(&app_handle)?;
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read default models: {}", e))?;
-    serde_json::from_str(&content).map_err(|e| format!("Failed to parse default models: {}", e))
+    read_sidecar_data_json(&app_handle, "default-models.json")
+}
+
+/// 会话还没连上 SDK 之前的兜底权限模式清单——同 get_default_models 的已知例外：
+/// 数据归 agent-sidecar 所有，Rust 只做不关心内容的透传。
+#[tauri::command]
+pub fn get_default_permission_modes(app_handle: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    read_sidecar_data_json(&app_handle, "default-permission-modes.json")
 }
 
 #[cfg(test)]

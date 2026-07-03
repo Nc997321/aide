@@ -21,7 +21,8 @@
     "resources": {
       "../agent-sidecar/dist/sidecar.js": "agent-sidecar/sidecar.js",
       "../agent-sidecar/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe": "agent-sidecar/claude.exe",
-      "../agent-sidecar/default-models.json": "agent-sidecar/default-models.json"
+      "../agent-sidecar/default-models.json": "agent-sidecar/default-models.json",
+      "../agent-sidecar/default-permission-modes.json": "agent-sidecar/default-permission-modes.json"
     },
     "icon": [
       "icons/32x32.png",
