@@ -10,7 +10,7 @@ import { sessionMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
 import { open } from "@tauri-apps/plugin-shell";
 import { getVersion } from "@tauri-apps/api/app";
-import { ACard, AStatusDot } from "../ui";
+import { AStatusDot } from "../ui";
 import type { Session, WorkspaceInfo } from "../types";
 
 const props = defineProps<{
@@ -62,6 +62,34 @@ function wsSessions(wsKey: string): Session[] {
   return list.filter(
     (s) => s.name.toLowerCase().includes(q) || s.last_message.toLowerCase().includes(q),
   );
+}
+
+// ── 会话折叠（VS Code 式）：每个工作区默认只露前 N 条，其余收进
+// 「另外 N 个」展开行；搜索时展示全部命中，折叠只作用于默认视图。
+const SESSION_PREVIEW_COUNT = 3;
+const showAllSessions = ref(new Set<string>());
+
+function sessionsCollapsed(wsKey: string): boolean {
+  return !searchQuery.value.trim() && !showAllSessions.value.has(wsKey);
+}
+
+function visibleSessions(wsKey: string): Session[] {
+  const list = wsSessions(wsKey);
+  return sessionsCollapsed(wsKey) ? list.slice(0, SESSION_PREVIEW_COUNT) : list;
+}
+
+function hiddenSessionCount(wsKey: string): number {
+  return sessionsCollapsed(wsKey)
+    ? Math.max(0, wsSessions(wsKey).length - SESSION_PREVIEW_COUNT)
+    : 0;
+}
+
+function toggleShowAllSessions(wsKey: string) {
+  if (showAllSessions.value.has(wsKey)) {
+    showAllSessions.value.delete(wsKey);
+  } else {
+    showAllSessions.value.add(wsKey);
+  }
 }
 
 async function loadWorkspaces() {
@@ -315,22 +343,35 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
           >
             暂无会话
           </div>
-          <ACard
-            v-for="s in wsSessions(ws.key)"
+          <div
+            v-for="s in visibleSessions(ws.key)"
             :key="s.id"
-            :active="props.activeSessionId === s.id"
-            :glow-color="sessionState[s.id] === 'running' ? 'var(--aide-success)' : undefined"
-            class="session-card"
+            class="session-item"
+            :class="{ active: props.activeSessionId === s.id }"
             @click="selectSessionFromWorkspace(ws.key, s.id)"
             @contextmenu.prevent="onSessionContextMenu($event, s.id)"
           >
-            <div class="session-card-header">
+            <div class="session-item-header">
               <AStatusDot :status="sessionState[s.id] || 'stopped'" />
               <span class="session-name">{{ s.name }}</span>
               <span class="session-time">{{ timeAgo(s.timestamp) }}</span>
             </div>
-            <div class="session-preview">{{ s.last_message }}</div>
-          </ACard>
+            <div v-if="s.last_message" class="session-preview">{{ s.last_message }}</div>
+          </div>
+          <div
+            v-if="hiddenSessionCount(ws.key) > 0"
+            class="session-more"
+            @click="toggleShowAllSessions(ws.key)"
+          >
+            另外 {{ hiddenSessionCount(ws.key) }} 个
+          </div>
+          <div
+            v-else-if="showAllSessions.has(ws.key) && wsSessions(ws.key).length > SESSION_PREVIEW_COUNT"
+            class="session-more"
+            @click="toggleShowAllSessions(ws.key)"
+          >
+            收起
+          </div>
         </template>
       </template>
     </div>
@@ -543,28 +584,49 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   letter-spacing: 0.3px;
 }
 
-/* ── Session card ── */
+/* ── Session item ──
+   与工作区行同一套扁平语言（VS Code 式列表行）：缩进挂在工作区名下、
+   透明底 + 悬停浅底 + 选中 accent 淡底，不再是凸起卡片。 */
 
-.session-card {
-  margin-bottom: 6px;
+.session-item {
+  padding: 5px 10px 6px;
+  margin: 1px 6px 1px 24px;
+  border-radius: var(--aide-radius-sm);
   cursor: pointer;
+  transition: background 0.12s;
 }
 
-.session-card-header {
+.session-item:hover {
+  background: var(--aide-surface-default);
+}
+
+.session-item.active {
+  background: var(--aide-accent-subtle);
+}
+
+.session-item.active .session-name {
+  color: var(--aide-accent);
+}
+
+.session-item-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
+  gap: 7px;
 }
 
 .session-name {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
-  color: var(--aide-text-primary);
+  color: var(--aide-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+  transition: color 0.12s;
+}
+
+.session-item:hover .session-name {
+  color: var(--aide-text-primary);
 }
 
 .session-time {
@@ -574,12 +636,29 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 }
 
 .session-preview {
+  margin-top: 2px;
+  padding-left: 15px; /* 与状态点后的标题文字对齐 */
   font-size: 11px;
   color: var(--aide-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   line-height: 1.4;
+}
+
+.session-more {
+  margin: 1px 6px 3px 24px;
+  padding: 4px 10px 4px 25px;
+  font-size: 11px;
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  border-radius: var(--aide-radius-sm);
+  transition: all 0.12s;
+}
+
+.session-more:hover {
+  color: var(--aide-accent);
+  background: var(--aide-surface-default);
 }
 
 .session-empty.muted {
