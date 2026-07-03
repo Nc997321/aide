@@ -1,28 +1,41 @@
 <script setup lang="ts">
-import { watch, onMounted, onUnmounted } from "vue";
+import { ref, watch, onMounted, onUnmounted } from "vue";
 import { useFileViewer, type FileWindowState } from "../composables/useFileViewer";
 import FileWindow from "./fileviewer/FileWindow.vue";
 
 /**
  * 文件窗口管理层。单窗口渲染在 fileviewer/FileWindow.vue。
  *
- * 层覆盖整个 aide 视口（Teleport 到 body），但自身 pointer-events:none——
- * 只有窗口本体可交互，文件树/会话栏/聊天区在窗口之间的空隙里照常可点，
- * 窗口可以铺满乃至挤占整个界面，不受聊天区边界约束。
+ * 层挂在 App.vue 的 .app-layout 内（绝对定位）：左边到 aide 最左缘
+ * （允许盖住会话侧栏），右边止于文件树侧栏边界——文件树始终可点，
+ * 可以连续从里面开文件。侧栏宽度可拖动调节、可折叠，边界不能信 CSS
+ * 变量（折叠只改元素宽度不改 grid 轨道），用 ResizeObserver 量
+ * .panel-center 的真实右缘。
  *
  * 布局是平铺式（tiling）而非「聚焦+最小化」：
- * - 无主窗时所有窗口按视口宽高比均分网格，随数量增多变小；
+ * - 无主窗时所有窗口按区域宽高比均分网格，随数量增多变小；
  * - 点某个窗口 → 它恢复默认弹窗大小靠左，其余窗口在右侧剩余空间里
  *   实际缩小平铺（仍是完整窗口，不是缩略条）；
- * - 拖标题栏可随意挪动；开/关/切主窗会重新自动平铺（覆盖手动位置）。
+ * - 拖标题栏可随意挪动；开/关/切主窗/边界变化会重新自动平铺。
  */
 
 const { windows, focusedId, focusWindow } = useFileViewer();
 
 const MARGIN = 12;
-const TOP = 44;   // 让出自定义标题栏
-const BOTTOM = 10;
 const DEFAULT_W = 900; // 单窗/主窗的默认弹窗宽度上限
+
+const layerRef = ref<HTMLElement | null>(null);
+/** 窗口活动区实时尺寸（app-layout 左缘 → panel-center 右缘），驱动平铺和拖拽钳制 */
+const layerSize = ref({ w: 0, h: 0 });
+
+function measureBounds() {
+  const layout = layerRef.value?.parentElement;
+  const center = layout?.querySelector(":scope > .panel-center");
+  if (!layout || !center) return;
+  const lr = layout.getBoundingClientRect();
+  const cr = center.getBoundingClientRect();
+  layerSize.value = { w: Math.max(0, Math.round(cr.right - lr.left)), h: Math.round(lr.height) };
+}
 
 function tileGrid(wins: FileWindowState[], x: number, y: number, w: number, h: number) {
   const n = wins.length;
@@ -45,16 +58,16 @@ function tileGrid(wins: FileWindowState[], x: number, y: number, w: number, h: n
 function retile() {
   const wins = windows.value;
   const n = wins.length;
-  if (!n) return;
+  if (!n || !layerSize.value.w) return;
   const ax = MARGIN;
-  const ay = TOP;
-  const aw = window.innerWidth - MARGIN * 2;
-  const ah = window.innerHeight - TOP - BOTTOM;
+  const ay = MARGIN;
+  const aw = layerSize.value.w - MARGIN * 2;
+  const ah = layerSize.value.h - MARGIN * 2;
 
   if (n === 1) {
     const w0 = wins[0];
-    w0.w = Math.min(DEFAULT_W, Math.round(aw * 0.82));
-    w0.h = Math.round(ah * 0.94);
+    w0.w = Math.min(DEFAULT_W, Math.round(aw * 0.9));
+    w0.h = Math.round(ah * 0.96);
     w0.x = ax + Math.round((aw - w0.w) / 2);
     w0.y = ay + Math.round((ah - w0.h) / 2);
     return;
@@ -63,31 +76,43 @@ function retile() {
   const focused = wins.find((w) => w.id === focusedId.value);
   if (focused) {
     // 主窗恢复默认弹窗大小靠左，其余在右侧剩余空间里平铺缩小
-    focused.w = Math.min(DEFAULT_W, Math.round(aw * 0.6));
+    focused.w = Math.min(DEFAULT_W, Math.round(aw * 0.62));
     focused.h = ah;
     focused.x = ax;
     focused.y = ay;
     const rest = wins.filter((w) => w !== focused);
     const rx = ax + focused.w + MARGIN;
-    const rw = Math.max(window.innerWidth - MARGIN - rx, 220);
+    const rw = Math.max(ax + aw - rx, 200);
     tileGrid(rest, rx, ay, rw, ah);
   } else {
     tileGrid(wins, ax, ay, aw, ah);
   }
 }
 
+let resizeObserver: ResizeObserver | null = null;
+
+onMounted(() => {
+  const layout = layerRef.value?.parentElement;
+  const center = layout?.querySelector(":scope > .panel-center");
+  if (!layout || !center) return;
+  // panel-center 尺寸变（两侧侧栏拖动/折叠、窗口缩放）→ 右边界变；
+  // app-layout 变 → 整体高宽变。两个都观察，回调里统一重量。
+  resizeObserver = new ResizeObserver(() => measureBounds());
+  resizeObserver.observe(layout);
+  resizeObserver.observe(center);
+  measureBounds();
+});
+
+onUnmounted(() => {
+  resizeObserver?.disconnect();
+  resizeObserver = null;
+});
+
 watch(
-  () => [windows.value.length, focusedId.value] as const,
+  () => [windows.value.length, focusedId.value, layerSize.value] as const,
   () => retile(),
   { immediate: true },
 );
-
-function onResize() {
-  retile();
-}
-
-onMounted(() => window.addEventListener("resize", onResize));
-onUnmounted(() => window.removeEventListener("resize", onResize));
 
 /**
  * 点到非主窗 → 它成为主窗（恢复默认大小）。capture 阶段拦截，避免这一下
@@ -104,28 +129,31 @@ function onWindowMousedown(e: MouseEvent, win: FileWindowState) {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="windows.length" class="fv-layer">
-      <div
-        v-for="w in windows"
-        :key="w.id"
-        class="fv-win"
-        :class="{ 'fv-win--focused': w.id === focusedId }"
-        :style="{ left: w.x + 'px', top: w.y + 'px', width: w.w + 'px', height: w.h + 'px' }"
-        @mousedown.capture="onWindowMousedown($event, w)"
-      >
-        <FileWindow :win="w" />
-      </div>
+  <!-- 容器常驻（ResizeObserver 挂靠），无窗口时 pointer-events:none 不挡任何交互 -->
+  <div ref="layerRef" class="fv-layer" :style="{ width: layerSize.w + 'px' }">
+    <div
+      v-for="w in windows"
+      :key="w.id"
+      class="fv-win"
+      :class="{ 'fv-win--focused': w.id === focusedId }"
+      :style="{ left: w.x + 'px', top: w.y + 'px', width: w.w + 'px', height: w.h + 'px' }"
+      @mousedown.capture="onWindowMousedown($event, w)"
+    >
+      <FileWindow :win="w" :bounds="layerSize" />
     </div>
-  </Teleport>
+  </div>
 </template>
 
 <style scoped>
 .fv-layer {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  /* 右边界不用 inset：宽度由 measureBounds 实测（止于文件树侧栏） */
+  z-index: 40;
   pointer-events: none;
+  overflow: hidden;
 }
 
 .fv-win {

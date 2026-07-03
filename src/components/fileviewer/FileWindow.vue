@@ -10,6 +10,8 @@ import { marked } from "../../utils/markdown";
 
 const props = defineProps<{
   win: FileWindowState;
+  /** 窗口活动区（中央面板）的实时尺寸，拖拽钳制用 */
+  bounds: { w: number; h: number };
 }>();
 
 const { closeWindow, save, openAndScrollTo, projectRoot, gotoOwnerId } = useFileViewer();
@@ -106,9 +108,9 @@ function onHeaderPointerDown(e: PointerEvent) {
   const offsetY = e.clientY - props.win.y;
   dragging.value = true;
   const onMove = (ev: PointerEvent) => {
-    // 至少留 80px 宽、整条标题栏高度在视口内，窗口永远拖得回来
-    props.win.x = Math.min(Math.max(ev.clientX - offsetX, 80 - props.win.w), window.innerWidth - 80);
-    props.win.y = Math.min(Math.max(ev.clientY - offsetY, 36), window.innerHeight - 48);
+    // 钳在中央面板内：至少留 80px 宽、整条标题栏可抓，窗口永远拖得回来
+    props.win.x = Math.min(Math.max(ev.clientX - offsetX, 80 - props.win.w), props.bounds.w - 80);
+    props.win.y = Math.min(Math.max(ev.clientY - offsetY, 0), props.bounds.h - 40);
   };
   const onUp = () => {
     dragging.value = false;

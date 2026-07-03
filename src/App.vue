@@ -566,12 +566,13 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- 文件窗口层：左缘起、止于文件树侧栏（可盖会话侧栏），边界随侧栏拖动实测 -->
+      <FileViewer />
+
       <ContextMenu />
       <ModalDialog />
       <SettingsPanel v-if="settingsVisible" :initial-tab="settingsInitialTab" @close="settingsVisible = false" />
       <RunConfigsDialog v-if="runConfigsDialogVisible" @close="runConfigsDialogVisible = false" />
-      <!-- 文件窗口层：自带 Teleport 覆盖全视口，无遮罩，窗口间空隙照常可点 -->
-      <FileViewer />
       <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
       <PermissionDialog
         :permission="pendingPermission"
@@ -596,6 +597,7 @@ onUnmounted(() => {
 }
 
 .app-layout {
+  position: relative; /* 文件窗口层（FileViewer）的定位锚点 */
   display: grid;
   grid-template-columns:
     var(--aide-left-w, 280px)
