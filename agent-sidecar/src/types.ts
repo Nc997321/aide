@@ -14,6 +14,14 @@ export interface ModelOption {
   displayName: string;
 }
 
+/** 待办任务项——provider-agnostic，任何 agent 的"任务追踪"能力都映射成这个形状。 */
+export interface TaskItem {
+  id: string;
+  subject: string;
+  status: "pending" | "in_progress" | "completed";
+  activeForm?: string;
+}
+
 // Sidecar → Rust（每行一个 JSON，写入 stdout）
 export type ChatEvent =
   | { type: "session_init"; session_id: string }
@@ -25,6 +33,7 @@ export type ChatEvent =
   | { type: "message_stop"; stop_reason: string; total_cost_usd: number | null; usage: TurnUsage | null }
   | { type: "models_available"; models: ModelOption[]; current: string }
   | { type: "context_usage"; total_tokens: number; max_tokens: number; percentage: number }
+  | { type: "tasks_update"; tasks: TaskItem[] }
   | { type: "error"; message: string };
 
 // Provider-agnostic image attachment — same shape used by all future AI providers
