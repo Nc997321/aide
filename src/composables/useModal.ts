@@ -1,12 +1,14 @@
 import { ref, readonly } from "vue";
 
 const visible = ref(false);
-const mode = ref<"prompt" | "confirm">("confirm");
+const mode = ref<"prompt" | "confirm" | "choice">("confirm");
 const title = ref("");
 const message = ref("");
 const inputValue = ref("");
 const placeholder = ref("");
 const confirmLabel = ref("确定");
+/** choice 模式的第二动作按钮（如「放弃修改」），confirm/prompt 模式不显示 */
+const altLabel = ref("");
 const danger = ref(false);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -52,13 +54,45 @@ export function useModal() {
     });
   }
 
+  /**
+   * 三选对话框：主动作 / 次动作 / 取消。返回 "confirm" | "alt" | "cancel"。
+   * 用于「保存并关闭 / 放弃修改 / 取消」这类不能二值化的抉择。
+   */
+  function choice(
+    choiceTitle: string,
+    choiceMessage: string,
+    labels: { confirmLabel: string; altLabel: string; danger?: boolean },
+  ): Promise<"confirm" | "alt" | "cancel"> {
+    return new Promise((resolve) => {
+      resolver = resolve;
+      mode.value = "choice";
+      title.value = choiceTitle;
+      message.value = choiceMessage;
+      inputValue.value = "";
+      placeholder.value = "";
+      confirmLabel.value = labels.confirmLabel;
+      altLabel.value = labels.altLabel;
+      danger.value = labels.danger || false;
+      visible.value = true;
+    });
+  }
+
   function submit() {
     visible.value = false;
     if (mode.value === "prompt") {
       resolver?.(inputValue.value.trim() || null);
+    } else if (mode.value === "choice") {
+      resolver?.("confirm");
     } else {
       resolver?.(true);
     }
+    resolver = null;
+  }
+
+  /** choice 模式的次动作 */
+  function submitAlt() {
+    visible.value = false;
+    resolver?.("alt");
     resolver = null;
   }
 
@@ -66,6 +100,8 @@ export function useModal() {
     visible.value = false;
     if (mode.value === "prompt") {
       resolver?.(null);
+    } else if (mode.value === "choice") {
+      resolver?.("cancel");
     } else {
       resolver?.(false);
     }
@@ -80,10 +116,13 @@ export function useModal() {
     inputValue,
     placeholder: readonly(placeholder),
     confirmLabel: readonly(confirmLabel),
+    altLabel: readonly(altLabel),
     danger: readonly(danger),
     prompt,
     confirm,
+    choice,
     submit,
+    submitAlt,
     cancel,
   };
 }

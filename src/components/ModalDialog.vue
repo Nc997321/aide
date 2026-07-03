@@ -10,8 +10,10 @@ const {
   inputValue,
   placeholder,
   confirmLabel,
+  altLabel,
   danger,
   submit,
+  submitAlt,
   cancel,
 } = useModal();
 
@@ -57,6 +59,9 @@ function onOverlayClick(e: MouseEvent) {
 
         <div class="modal-actions">
           <button class="modal-btn btn-cancel" @click="cancel">取消</button>
+          <button v-if="mode === 'choice'" class="modal-btn btn-alt" @click="submitAlt">
+            {{ altLabel }}
+          </button>
           <button
             class="modal-btn btn-confirm"
             :class="{ danger }"
@@ -164,6 +169,15 @@ function onOverlayClick(e: MouseEvent) {
 .btn-cancel:hover {
   background: var(--aide-surface-hover);
   color: var(--aide-text-primary);
+}
+
+.btn-alt {
+  background: transparent;
+  color: var(--aide-danger);
+  border-color: color-mix(in srgb, var(--aide-danger) 35%, transparent);
+}
+.btn-alt:hover {
+  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
 }
 
 .btn-confirm {

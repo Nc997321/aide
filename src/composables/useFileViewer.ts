@@ -36,6 +36,11 @@ export interface FileWindowState {
   mdMode: MarkdownMode;
   /** 挂载后要滚到的行号，FileWindow 消费后置回 null */
   scrollToLine: number | null;
+  /** 窗口几何（px，视口坐标）——自动平铺由 FileViewer 层计算，拖拽直接改 x/y */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
 
 const MAX_EDITABLE_SIZE = 1_000_000;
@@ -105,8 +110,13 @@ export function useFileViewer() {
       readonly: isVirtual,
       virtual: isVirtual,
       isMarkdown: !isVirtual && isMarkdownPath(path),
-      mdMode: "split",
+      // Markdown 默认全预览，编辑/分屏由用户按需切
+      mdMode: "preview",
       scrollToLine: null,
+      x: 0,
+      y: 0,
+      w: 0,
+      h: 0,
     };
 
     if (isVirtual) {

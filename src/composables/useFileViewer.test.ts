@@ -21,7 +21,7 @@ describe("useFileViewer 多窗口 store", () => {
     vi.clearAllMocks();
   });
 
-  it("打开文件默认可编辑（非只读），markdown 默认分屏", async () => {
+  it("打开文件默认可编辑（非只读），markdown 默认全预览", async () => {
     const v = useFileViewer();
     await v.open("src/App.vue");
     await v.open("README.md");
@@ -30,7 +30,7 @@ describe("useFileViewer 多窗口 store", () => {
     expect(code.readonly).toBe(false);
     expect(code.editContent).toBe("content of src/App.vue");
     expect(md.isMarkdown).toBe(true);
-    expect(md.mdMode).toBe("split");
+    expect(md.mdMode).toBe("preview");
   });
 
   it("同一路径重复打开不产生副本，而是聚焦已有窗口", async () => {

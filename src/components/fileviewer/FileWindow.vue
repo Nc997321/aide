@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, watch, ref, nextTick } from "vue";
-import { useFileViewer, isWindowDirty, type FileWindowState, type MarkdownMode } from "../../composables/useFileViewer";
+import { useFileViewer, isWindowDirty } from "../../composables/useFileViewer";
+import type { FileWindowState, MarkdownMode } from "../../composables/useFileViewer";
 import { useGotoDefinition } from "../../composables/useGotoDefinition";
 import { useModal } from "../../composables/useModal";
 import CodeEditor from "../CodeEditor.vue";
@@ -78,25 +79,51 @@ const renderedMarkdown = computed(() => {
   }
 });
 
-// ── 关闭（脏窗口先确认）──
+// ── 关闭：干净直接关；脏文件让用户选「保存并关闭 / 放弃修改 / 取消」──
 async function requestClose() {
   if (dirty.value) {
-    const ok = await modal.confirm(
+    const res = await modal.choice(
       "关闭文件",
-      `「${props.win.fileName}」有未保存的修改，关闭将丢弃这些修改。`,
-      "丢弃并关闭",
-      true,
+      `「${props.win.fileName}」有未保存的修改。`,
+      { confirmLabel: "保存并关闭", altLabel: "放弃修改" },
     );
-    if (!ok) return;
+    if (res === "cancel") return;
+    if (res === "confirm") {
+      await save(props.win.id);
+      if (isWindowDirty(props.win)) return; // 保存失败（error 已显示），别静默丢内容
+    }
   }
   closeWindow(props.win.id);
 }
 
+// ── 标题栏拖拽：随意挪动窗口（自动平铺会在开/关/切主窗时重新接管）──
+const dragging = ref(false);
+
+function onHeaderPointerDown(e: PointerEvent) {
+  if (e.button !== 0) return;
+  if ((e.target as HTMLElement).closest("button")) return; // 按钮不当拖拽把手
+  const offsetX = e.clientX - props.win.x;
+  const offsetY = e.clientY - props.win.y;
+  dragging.value = true;
+  const onMove = (ev: PointerEvent) => {
+    // 至少留 80px 宽、整条标题栏高度在视口内，窗口永远拖得回来
+    props.win.x = Math.min(Math.max(ev.clientX - offsetX, 80 - props.win.w), window.innerWidth - 80);
+    props.win.y = Math.min(Math.max(ev.clientY - offsetY, 36), window.innerHeight - 48);
+  };
+  const onUp = () => {
+    dragging.value = false;
+    window.removeEventListener("pointermove", onMove);
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp, { once: true });
+}
+
 // ── 跳转到指定行（聊天文件链接 / 跳转定义落点）──
+// markdown 默认全预览没有编辑器，行号挂起，等用户切到编辑/分屏时再消费。
 watch(
-  () => props.win.scrollToLine,
-  async (line) => {
-    if (line == null || !editorActive.value) return;
+  () => [props.win.scrollToLine, editorActive.value] as const,
+  async ([line, active]) => {
+    if (line == null || !active) return;
     await nextTick();
     await codeEditorRef.value?.waitReady();
     codeEditorRef.value?.scrollToLine(line);
@@ -163,8 +190,8 @@ function onKeydown(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="fw-window" tabindex="-1" @keydown="onKeydown">
-    <div class="fw-header">
+  <div class="fw-window" :class="{ 'fw-window--dragging': dragging }" tabindex="-1" @keydown="onKeydown">
+    <div class="fw-header" @pointerdown="onHeaderPointerDown">
       <span v-if="dirty" class="fw-dirty" title="有未保存的修改">●</span>
       <span class="fw-title">{{ win.fileName }}</span>
       <span class="fw-lang">{{ languageLabel }}</span>
@@ -289,6 +316,12 @@ function onKeydown(e: KeyboardEvent) {
   border-bottom: 1px solid var(--aide-surface-hover);
   flex-shrink: 0;
   min-width: 0;
+  cursor: move; /* 标题栏即拖拽把手 */
+  user-select: none;
+}
+
+.fw-window--dragging {
+  box-shadow: var(--aide-shadow-lg), 0 0 0 1px color-mix(in srgb, var(--aide-accent) 40%, transparent);
 }
 
 .fw-dirty {
