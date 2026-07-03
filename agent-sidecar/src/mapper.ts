@@ -1,5 +1,6 @@
 import type { MessageParam } from "@anthropic-ai/sdk/resources";
 import type { ChatEvent, ImageAttachment, TurnUsage } from "./types.js";
+import { TaskTracker } from "./tasks.js";
 
 /**
  * Build a Claude-SDK MessageParam from a prompt + optional image attachments.
@@ -30,7 +31,7 @@ export function buildUserMessage(
   return { role: "user", content: blocks as any };
 }
 
-export function mapSdkMessage(msg: any, emit: (e: ChatEvent) => void) {
+export function mapSdkMessage(msg: any, emit: (e: ChatEvent) => void, tasks: TaskTracker) {
   if (msg.type === "system" && msg.subtype === "init") {
     emit({ type: "session_init", session_id: msg.session_id });
     return;
@@ -41,7 +42,13 @@ export function mapSdkMessage(msg: any, emit: (e: ChatEvent) => void) {
       if (block.type === "text") {
         emit({ type: "text_delta", delta: block.text });
       } else if (block.type === "tool_use") {
-        emit({ type: "tool_use_start", id: block.id, name: block.name, input: block.input });
+        if (TaskTracker.isTaskTool(block.name)) {
+          if (tasks.handleToolUse(block.id, block.name, block.input)) {
+            emit({ type: "tasks_update", tasks: tasks.snapshot() });
+          }
+        } else {
+          emit({ type: "tool_use_start", id: block.id, name: block.name, input: block.input });
+        }
       }
     }
     return;
@@ -53,7 +60,13 @@ export function mapSdkMessage(msg: any, emit: (e: ChatEvent) => void) {
         const content = Array.isArray(block.content)
           ? block.content.map((c: any) => c.text ?? "").join("")
           : String(block.content ?? "");
-        emit({ type: "tool_result", id: block.tool_use_id, content, is_error: block.is_error ?? false });
+        const outcome = tasks.handleToolResult(block.tool_use_id, content);
+        if (outcome.changed) {
+          emit({ type: "tasks_update", tasks: tasks.snapshot() });
+        }
+        if (!outcome.tracked) {
+          emit({ type: "tool_result", id: block.tool_use_id, content, is_error: block.is_error ?? false });
+        }
       }
     }
     return;
