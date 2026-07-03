@@ -2,6 +2,7 @@
 import { ref, computed } from "vue";
 import type { ToolCallBlock } from "@/types/chat";
 import BashOutputBlock from "./BashOutputBlock.vue";
+import { parseEditInput, buildEditDiffLines, type EditDiffStats } from "@/utils/editDiff";
 
 const props = defineProps<{ block: ToolCallBlock }>();
 const expanded = ref(false);
@@ -13,6 +14,15 @@ const statusIcon = computed(() => {
 });
 
 const isBash = computed(() => props.block.name === "Bash");
+
+/** Edit 工具且非错误时的 diff 数据；null 表示回退到普通结果文本展示。 */
+const editDiff = computed<EditDiffStats | null>(() => {
+  if (props.block.name !== "Edit" || props.block.isError) return null;
+  const parsed = parseEditInput(props.block.input);
+  if (!parsed) return null;
+  return buildEditDiffLines(parsed);
+});
+
 const inputSummary = computed(() => {
   const input = props.block.input as Record<string, unknown>;
   if (props.block.name === "Bash") return String(input?.command ?? "");
@@ -28,10 +38,15 @@ const inputSummary = computed(() => {
       <span class="tool-status">{{ statusIcon }}</span>
       <span class="tool-name">{{ block.name }}</span>
       <span class="tool-summary">{{ inputSummary }}</span>
+      <span v-if="editDiff" class="tool-diff-stat">
+        <span class="stat-add">+{{ editDiff.addCount }}</span>
+        <span class="stat-del">-{{ editDiff.delCount }}</span>
+      </span>
       <span class="tool-chevron">{{ expanded ? "▲" : "▼" }}</span>
     </button>
     <div v-if="expanded" class="tool-body">
       <BashOutputBlock v-if="isBash && block.result" :content="block.result" :is-error="block.isError ?? false" />
+      <pre v-else-if="editDiff" class="tool-result tool-diff"><span v-for="(line, i) in editDiff.lines" :key="i" :class="line.cls">{{ line.text }}</span></pre>
       <pre v-else-if="block.result" class="tool-result">{{ block.result }}</pre>
       <div v-else class="tool-pending">等待结果…</div>
     </div>
@@ -105,6 +120,26 @@ const inputSummary = computed(() => {
   font-size: 11px;
   color: var(--aide-text-secondary);
   margin: 0;
+}
+
+.tool-diff {
+  white-space: pre;
+}
+
+.tool-diff-stat {
+  flex-shrink: 0;
+  display: flex;
+  gap: 4px;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 11px;
+}
+
+.stat-add {
+  color: var(--aide-success);
+}
+
+.stat-del {
+  color: var(--aide-danger);
 }
 
 .tool-pending {
