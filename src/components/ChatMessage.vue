@@ -5,6 +5,7 @@ import { marked } from "@/utils/markdown";
 import ToolCallBlock from "./ToolCallBlock.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
 import { useFileViewer } from "@/composables/useFileViewer";
+import { parseFileLink, resolveFileLinkPath } from "@/utils/fileLink";
 
 const props = defineProps<{
   message: ChatMessage;
@@ -14,24 +15,16 @@ const props = defineProps<{
 const isUser = computed(() => props.message.role === "user");
 const { open, openAndScrollTo } = useFileViewer();
 
-const FILE_PATH_RE = /^((?:[\w./\\-]+[/\\])?[\w.-]+\.(ts|tsx|vue|rs|js|jsx|css|scss|json|md|toml|yaml|yml|sh|py|java|kt|xml|gradle|go|c|cpp|h|hpp|rb|php|swift|cs|proto|sql|env|lock))(:\d+)?$/;
-
+// 只响应渲染期已判定为文件的 code（见 utils/markdown.ts codespan 渲染器 +
+// utils/fileLink.ts 判定规则），点击层不再自己做路径识别。
 function handleTextClick(e: MouseEvent) {
-  const codeEl = (e.target as HTMLElement).closest("code");
+  const codeEl = (e.target as HTMLElement).closest("code.aide-file-link");
   if (!codeEl) return;
-  const text = codeEl.textContent?.trim() ?? "";
-  const match = text.match(FILE_PATH_RE);
-  if (!match) return;
-  const filePath = match[1];
-  const line = match[3] ? parseInt(match[3].slice(1), 10) : undefined;
-  const isAbsolute = filePath.startsWith("/") || /^[A-Za-z]:[\\/]/.test(filePath);
-  const fullPath = isAbsolute
-    ? filePath
-    : props.workspacePath
-    ? `${props.workspacePath}/${filePath}`.replace(/\\/g, "/")
-    : filePath;
-  if (line !== undefined) {
-    openAndScrollTo(fullPath, line);
+  const link = parseFileLink(codeEl.textContent?.trim() ?? "");
+  if (!link) return;
+  const fullPath = resolveFileLinkPath(link.path, props.workspacePath);
+  if (link.line !== undefined) {
+    openAndScrollTo(fullPath, link.line);
   } else {
     open(fullPath);
   }
@@ -115,10 +108,14 @@ function handleTextClick(e: MouseEvent) {
   background: var(--aide-bg-deep);
   padding: 1px 5px;
   border-radius: 3px;
+}
+/* 只有渲染期判定为文件路径的 code 才呈现可点击态 */
+.msg-text :deep(code.aide-file-link) {
   cursor: pointer;
+  color: var(--aide-accent);
   transition: background 0.12s, color 0.12s;
 }
-.msg-text :deep(code:hover) {
+.msg-text :deep(code.aide-file-link:hover) {
   background: var(--aide-accent);
   color: var(--aide-text-on-accent);
 }
