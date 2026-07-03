@@ -61,7 +61,7 @@ aide/
 │   │   ├── ContextMenu.vue     # 全局右键菜单（Teleport to body）
 │   │   ├── ModalDialog.vue     # 通用弹窗
 │   │   ├── SettingsPanel.vue   # 设置弹窗（通用/扩展/市场，680×520px）
-│   │   ├── FileViewer.vue      # 文件查看器（高亮 + Markdown + 编辑）
+│   │   ├── FileViewer.vue      # 文件窗口管理层（多窗口平铺/聚焦，子实现在 fileviewer/FileWindow.vue）
 │   │   ├── titlebar/           # TitleBar / SearchBox / WindowControls
 │   │   ├── customizations/     # CustomizationList / Detail / Panel
 │   │   └── marketplace/        # MarketplaceTab / PluginCard
@@ -71,7 +71,7 @@ aide/
 │   │   ├── useConversationChanges.ts # 变更追踪（轮次分组 + 撤回）
 │   │   ├── useGit.ts              # Git 状态（模块级单例）
 │   │   ├── useSettings.ts         # 设置（模块级 reactive 单例）
-│   │   ├── useFileViewer.ts       # 文件查看器状态层
+│   │   ├── useFileViewer.ts       # 文件窗口状态层（多窗口，默认可编辑，md 三态）
 │   │   ├── useContextMenu.ts      # 右键菜单状态层
 │   │   ├── useModal.ts            # 弹窗状态层
 │   │   ├── useWindowFocus.ts      # 窗口焦点跟踪

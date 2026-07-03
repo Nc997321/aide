@@ -536,6 +536,8 @@ onUnmounted(() => {
           @set-permission-mode="setPermissionMode"
           @remove-queued="removeQueued"
         />
+        <!-- 文件窗口层：只覆盖聊天区，左右侧栏（会话/文件树）保持可交互 -->
+        <FileViewer />
       </div>
 
       <!-- Right resize handle -->
@@ -570,7 +572,6 @@ onUnmounted(() => {
       <ModalDialog />
       <SettingsPanel v-if="settingsVisible" :initial-tab="settingsInitialTab" @close="settingsVisible = false" />
       <RunConfigsDialog v-if="runConfigsDialogVisible" @close="runConfigsDialogVisible = false" />
-      <FileViewer />
       <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
       <PermissionDialog
         :permission="pendingPermission"
@@ -632,6 +633,7 @@ onUnmounted(() => {
 }
 
 .panel-center {
+  position: relative; /* 文件窗口层（FileViewer）的定位锚点 */
   height: 100%;
   min-width: 0;
   overflow: hidden;

@@ -3,40 +3,115 @@ import { api } from "../api";
 import { useRecent } from "./useRecent";
 import { imageMimeFromPath } from "../utils/imageMime";
 
-// Module-level singletons
-const visible = ref(false);
-const filePath = ref("");
-const content = ref("");
-const imageUrl = ref("");
-const language = ref("");
-const error = ref("");
-const editing = ref(false);
-const editContent = ref("");
-const saving = ref(false);
+/**
+ * 多窗口文件查看/编辑器的状态层。
+ *
+ * - 每个打开的文件是一个独立窗口（FileWindowState），可同时开多个，
+ *   平铺/聚焦布局由 FileViewer.vue（管理层）负责，这里只管数据。
+ * - 默认直接可编辑（看齐 VS Code）；只读的三种情况：图片、注入内容的
+ *   虚拟视图（git diff 等）、超过 MAX_EDITABLE_SIZE 的大文件。
+ * - Markdown 有三种视图模式：全编辑 / 分屏（编辑+实时预览，默认）/ 全预览。
+ */
+
+export type MarkdownMode = "edit" | "split" | "preview";
+
+export interface FileWindowState {
+  id: string;
+  filePath: string;
+  fileName: string;
+  /** 磁盘内容基线——保存成功后同步，用于 dirty 判定 */
+  content: string;
+  /** 编辑器实时内容 */
+  editContent: string;
+  imageUrl: string;
+  /** 显式注入的语言标识（如 "diff"），空串走扩展名推断 */
+  language: string;
+  error: string;
+  saving: boolean;
+  /** 图片 / 虚拟内容 / 大文件——不挂编辑器 */
+  readonly: boolean;
+  /** 内容由调用方注入（无磁盘对应物，不可保存） */
+  virtual: boolean;
+  isMarkdown: boolean;
+  mdMode: MarkdownMode;
+  /** 挂载后要滚到的行号，FileWindow 消费后置回 null */
+  scrollToLine: number | null;
+}
+
+const MAX_EDITABLE_SIZE = 1_000_000;
+
+// ── 模块级单例状态 ──
+const windows = ref<FileWindowState[]>([]);
+/** 聚焦窗口：恢复默认弹窗大小居中，其余缩进底部小条；null = 平铺全览 */
+const focusedId = ref<string | null>(null);
 const projectRoot = ref("");
+/** goto-definition 浮层归属的窗口（useGotoDefinition 是单例，浮层只在触发它的窗口里渲染） */
+const gotoOwnerId = ref<string | null>(null);
 
-// 跟踪当前图片的 Blob URL 以便释放；非响应式，仅用于清理。
-let currentBlobUrl = "";
+// 每窗口图片 Blob URL，关窗时释放；非响应式，仅用于清理。
+const blobUrls = new Map<string, string>();
 
-function revokeBlobUrl() {
-  if (currentBlobUrl) {
-    URL.revokeObjectURL(currentBlobUrl);
-    currentBlobUrl = "";
+function fileNameOf(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() || path;
+}
+
+function isMarkdownPath(path: string): boolean {
+  const ext = fileNameOf(path).split(".").pop()?.toLowerCase() || "";
+  return ext === "md" || ext === "mdx";
+}
+
+export function isWindowDirty(win: FileWindowState): boolean {
+  return !win.readonly && !win.error && !win.imageUrl && win.editContent !== win.content;
+}
+
+async function detectProjectRoot() {
+  try {
+    const info = await api.getProjectInfo();
+    projectRoot.value = info.root;
+  } catch {
+    // best-effort，找不到只影响跳转定义
   }
-  imageUrl.value = "";
 }
 
 export function useFileViewer() {
+  /**
+   * 打开文件。同一磁盘路径已开着 → 聚焦已有窗口（文件树重复点击不产生副本）；
+   * 注入内容的虚拟视图（git diff）同路径重开 → 原窗口内容就地刷新。
+   * 新窗口加入平铺全览（取消聚焦），窗口随数量增多平均变小。
+   */
   async function open(path: string, opts?: { content?: string; language?: string }) {
-    filePath.value = path;
-    error.value = "";
-    content.value = "";
-    revokeBlobUrl();
-    language.value = opts?.language || "";
-    editing.value = false;
-    editContent.value = "";
-    if (opts?.content !== undefined) {
-      content.value = opts.content;
+    const isVirtual = opts?.content !== undefined;
+    const existing = windows.value.find((w) => w.filePath === path && w.virtual === isVirtual);
+    if (existing) {
+      if (isVirtual) {
+        existing.content = opts!.content!;
+        existing.editContent = opts!.content!;
+        existing.language = opts?.language || existing.language;
+      }
+      focusedId.value = existing.id;
+      return;
+    }
+
+    const win: FileWindowState = {
+      id: crypto.randomUUID(),
+      filePath: path,
+      fileName: fileNameOf(path),
+      content: "",
+      editContent: "",
+      imageUrl: "",
+      language: opts?.language || "",
+      error: "",
+      saving: false,
+      readonly: isVirtual,
+      virtual: isVirtual,
+      isMarkdown: !isVirtual && isMarkdownPath(path),
+      mdMode: "split",
+      scrollToLine: null,
+    };
+
+    if (isVirtual) {
+      win.content = opts!.content!;
+      win.editContent = win.content;
     } else {
       const mime = imageMimeFromPath(path);
       if (mime) {
@@ -44,89 +119,95 @@ export function useFileViewer() {
         try {
           const buf = await api.readFileBinary(path);
           const blob = new Blob([buf], { type: mime });
-          currentBlobUrl = URL.createObjectURL(blob);
-          imageUrl.value = currentBlobUrl;
+          const url = URL.createObjectURL(blob);
+          blobUrls.set(win.id, url);
+          win.imageUrl = url;
+          win.readonly = true;
         } catch (e) {
-          error.value = String(e);
+          win.error = String(e);
         }
       } else {
         try {
-          content.value = await api.readFileContent(path);
+          win.content = await api.readFileContent(path);
+          win.editContent = win.content;
+          if (win.content.length > MAX_EDITABLE_SIZE) win.readonly = true;
         } catch (e) {
-          error.value = String(e);
+          win.error = String(e);
         }
       }
+      // 记录最近访问文件（best effort，绝不阻断打开主流程）
+      void useRecent().recordFile(path, win.fileName);
     }
-    // Auto-detect project root for goto-definition
-    try {
-      const info = await api.getProjectInfo();
-      projectRoot.value = info.root;
-    } catch {
-      // project root detection is best-effort
-    }
-    // 记录最近访问文件（best effort，绝不阻断打开主流程）
-    const baseName = path.split(/[\\/]/).filter(Boolean).pop() || path;
-    void useRecent().recordFile(path, baseName);
-    visible.value = true;
+
+    void detectProjectRoot();
+    windows.value.push(win);
+    // 新窗口进平铺全览，让所有已开窗口一起可见
+    focusedId.value = null;
   }
 
-  function startEdit() {
-    editContent.value = content.value;
-    editing.value = true;
-  }
-
-  async function save() {
-    saving.value = true;
-    try {
-      await api.writeFileContent(filePath.value, editContent.value);
-      content.value = editContent.value;
-      editing.value = false;
-    } catch (e) {
-      error.value = String(e);
-    }
-    saving.value = false;
-  }
-
-  function cancelEdit() {
-    editing.value = false;
-    editContent.value = "";
-  }
-
-  function close() {
-    visible.value = false;
-    content.value = "";
-    editing.value = false;
-    revokeBlobUrl();
-  }
-
-  // 跳转到目标文件，自动进入编辑模式并返回目标行
+  /** 打开并滚动到目标行（聊天文件链接 / 跳转定义共用入口） */
   async function openAndScrollTo(targetPath: string, line: number) {
-    // close current viewer
-    visible.value = false;
-    // brief delay to allow state reset
-    await new Promise(r => setTimeout(r, 50));
-    // open target in preview mode first
     await open(targetPath);
-    // auto-enter edit mode so CodeEditor mounts and can scroll
-    if (content.value && !error.value && content.value.length <= 1_000_000) {
-      editContent.value = content.value;
-      editing.value = true;
+    const win = windows.value.find((w) => w.filePath === targetPath && !w.virtual);
+    if (!win) return;
+    if (!win.readonly && !win.error) win.scrollToLine = line;
+    focusedId.value = win.id;
+  }
+
+  function closeWindow(id: string) {
+    const idx = windows.value.findIndex((w) => w.id === id);
+    if (idx === -1) return;
+    const url = blobUrls.get(id);
+    if (url) {
+      URL.revokeObjectURL(url);
+      blobUrls.delete(id);
     }
-    return { line };
+    windows.value.splice(idx, 1);
+    if (focusedId.value === id) focusedId.value = null;
+    if (gotoOwnerId.value === id) gotoOwnerId.value = null;
+  }
+
+  function focusWindow(id: string) {
+    focusedId.value = id;
+  }
+
+  /** 回到平铺全览 */
+  function unfocus() {
+    focusedId.value = null;
+  }
+
+  async function save(id: string) {
+    const win = windows.value.find((w) => w.id === id);
+    if (!win || win.readonly || win.saving) return;
+    win.saving = true;
+    try {
+      await api.writeFileContent(win.filePath, win.editContent);
+      win.content = win.editContent;
+    } catch (e) {
+      win.error = String(e);
+    }
+    win.saving = false;
+  }
+
+  /** 仅测试用 */
+  function __resetForTest() {
+    for (const w of [...windows.value]) closeWindow(w.id);
+    projectRoot.value = "";
+    gotoOwnerId.value = null;
   }
 
   return {
-    visible: readonly(visible),
-    filePath: readonly(filePath),
-    content: readonly(content),
-    imageUrl: readonly(imageUrl),
-    language: readonly(language),
-    error: readonly(error),
-    editing: readonly(editing),
-    editContent,
-    saving: readonly(saving),
-    open, close, startEdit, save, cancelEdit,
+    // 窗口对象需要被组件层直接改（编辑器 v-model / mdMode 切换），不包 readonly
+    windows,
+    focusedId: readonly(focusedId),
     projectRoot: readonly(projectRoot),
+    gotoOwnerId,
+    open,
     openAndScrollTo,
+    closeWindow,
+    focusWindow,
+    unfocus,
+    save,
+    __resetForTest,
   };
 }

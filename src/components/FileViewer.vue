@@ -1,712 +1,199 @@
 <script setup lang="ts">
-import { computed, watch, ref, nextTick } from "vue";
-import { useFileViewer } from "../composables/useFileViewer";
-import { useGotoDefinition } from "../composables/useGotoDefinition";
-import CodeEditor from "./CodeEditor.vue";
-import { hljs, extToLang, highlightCode } from "../utils/highlight";
-import { marked } from "../utils/markdown";
+import { computed } from "vue";
+import { useFileViewer, isWindowDirty } from "../composables/useFileViewer";
+import FileWindow from "./fileviewer/FileWindow.vue";
 
-const { visible, filePath, content, imageUrl, language, error, editing, editContent, saving, close, startEdit, save, cancelEdit, projectRoot, openAndScrollTo } = useFileViewer();
+/**
+ * 文件窗口管理层（Windows 任务视图式）。单窗口渲染在 fileviewer/FileWindow.vue。
+ *
+ * 挂载在 App.vue 的 .panel-center 内（绝对定位），只覆盖聊天区——
+ * 左侧会话栏和右侧文件树始终可见可点，可以连续从文件树开多个文件。
+ *
+ * 两种布局：
+ * - 平铺全览（focusedId 为 null）：所有窗口按 ⌈√n⌉ 列的网格平均分格，
+ *   窗口随数量增多而变小；单窗口时即默认弹窗大小居中。
+ * - 聚焦：点某个平铺窗口 → 它恢复默认弹窗大小居中，其余缩成底部小条；
+ *   点小条切换聚焦，「平铺全部」回到全览。
+ */
 
-const goto = useGotoDefinition();
-const gotoPopoverRef = ref<HTMLElement | null>(null);
-const codeEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null);
+const { windows, focusedId, focusWindow, unfocus } = useFileViewer();
 
-// 处理跳转到定义
-async function onGotoDefinition(payload: { word: string; filePath: string; line: number }) {
-  const root = projectRoot.value;
-  const sep = root.includes("\\") ? "\\" : "/";
-  const relPath = payload.filePath.startsWith(root)
-    ? payload.filePath.slice(root.length + sep.length).replace(/\\/g, "/")
-    : "";
-  const ext = payload.filePath.split(".").pop()?.toLowerCase() || "";
-  await goto.search(payload.word, root, { sourceFile: relPath, sourceLine: payload.line, sourceExt: ext });
-}
+const focusedWin = computed(() => windows.value.find((w) => w.id === focusedId.value) ?? null);
+const stripWins = computed(() => windows.value.filter((w) => w.id !== focusedId.value));
+const gridCols = computed(() => Math.ceil(Math.sqrt(windows.value.length)));
 
-// 搜索所有引用（从浮层空状态触发）
-async function onSearchAllReferences() {
-  await goto.searchAllReferences(goto.searchWord.value, projectRoot.value);
-}
-
-// 处理选中跳转结果
-async function onGotoResultSelect(match: { file: string; line: number }) {
-  goto.dismiss();
-  // 构建绝对路径
-  const separator = projectRoot.value.includes("\\") ? "\\" : "/";
-  const targetPath = projectRoot.value + separator + match.file.replace(/\//g, separator);
-  const result = await openAndScrollTo(targetPath, match.line);
-  // Wait for CodeEditor's async createEditor() to finish before scrolling
-  await codeEditorRef.value?.waitReady();
-  codeEditorRef.value?.scrollToLine(result.line);
-}
-
-// 在浮层上用键盘导航
-function onGotoKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") {
-    e.stopPropagation();
-    goto.dismiss();
-  } else if (e.key === "ArrowDown") {
-    e.preventDefault();
-    goto.selectNext();
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    goto.selectPrev();
-  } else if (e.key === "Enter") {
-    e.preventDefault();
-    const selected = goto.getSelected();
-    if (selected) {
-      onGotoResultSelect(selected);
-    }
-  }
-}
-
-const codeRef = ref<HTMLElement | null>(null);
-const viewerBodyRef = ref<HTMLElement | null>(null);
-
-async function handleStartEdit() {
-  let targetLine = 1;
-  if (viewerBodyRef.value && content.value) {
-    const { scrollTop, scrollHeight } = viewerBodyRef.value;
-    if (scrollHeight > 0) {
-      const totalLines = content.value.split('\n').length;
-      targetLine = Math.max(1, Math.ceil((scrollTop / scrollHeight) * totalLines));
-    }
-  }
-  startEdit();
-  await nextTick();
-  await codeEditorRef.value?.waitReady();
-  codeEditorRef.value?.scrollToLine(targetLine, { cursor: false });
-}
-
-const fileName = computed(() => {
-  return filePath.value.split(/[/\\]/).pop() || filePath.value;
-});
-
-const isMarkdown = computed(() => {
-  const ext = fileName.value.split(".").pop()?.toLowerCase() || "";
-  return ext === "md" || ext === "mdx";
-});
-
-const isDiff = computed(() => language.value === "diff");
-
-const isImage = computed(() => !!imageUrl.value);
-
-const diffHighlighted = computed(() => {
-  if (!content.value) return "";
-  return content.value.split("\n").map((line) => {
-    let cls = "aide-diff-ctx";
-    if (line.startsWith("+") && !line.startsWith("+++")) cls = "aide-diff-add";
-    else if (line.startsWith("-") && !line.startsWith("---")) cls = "aide-diff-del";
-    else if (line.startsWith("@@")) cls = "aide-diff-hunk";
-    else if (line.startsWith("diff ") || line.startsWith("index ") ||
-             line.startsWith("--- ") || line.startsWith("+++ ") ||
-             line.startsWith("new file") || line.startsWith("deleted file"))
-      cls = "aide-diff-meta";
-    return `<span class="${cls}">${escapeHtml(line)}</span>`;
-  }).join("\n");
-});
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-const highlighted = computed(() => {
-  if (!content.value) return "";
-  const ext = fileName.value.split(".").pop()?.toLowerCase() || "";
-  return highlightCode(content.value, ext);
-});
-
-const renderedMarkdown = computed(() => {
-  if (!content.value) return "";
-  try {
-    return marked.parse(content.value) as string;
-  } catch {
-    return content.value;
-  }
-});
-
-watch(visible, async (v) => {
-  if (v) {
-    await nextTick();
-    codeRef.value?.scrollTo(0, 0);
-  }
-});
-
-watch(goto.visible, (v) => {
-  if (v) {
-    nextTick(() => gotoPopoverRef.value?.focus());
-  }
-});
-
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") {
-    if (editing.value) {
-      cancelEdit();
-    } else {
-      close();
-    }
-  }
-  if (e.key === "s" && (e.ctrlKey || e.metaKey)) {
-    e.preventDefault();
-    if (editing.value) {
-      save();
-    }
-  }
-}
-
-function onOverlayClick(e: MouseEvent) {
-  if ((e.target as HTMLElement).classList.contains("viewer-overlay")) {
-    close();
-  }
-}
-
-function getLanguageLabel(): string {
-  const ext = fileName.value.split(".").pop()?.toLowerCase() || "";
-  return extToLang[ext] || ext || "text";
+/** 平铺格里点到非交互空隙以外的窗口（多窗时）→ 聚焦它。capture 阶段拦截，
+ *  避免这一下点击顺带落进编辑器改了光标位置。 */
+function onGridCellMousedown(e: MouseEvent, id: string) {
+  if (windows.value.length <= 1) return;
+  e.preventDefault();
+  e.stopPropagation();
+  focusWindow(id);
 }
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="visible" class="viewer-overlay" @click="onOverlayClick" @keydown="onKeydown">
-      <div class="viewer-dialog" @click.stop>
-        <div class="viewer-header">
-          <span class="viewer-title">{{ fileName }}</span>
-          <span class="viewer-lang">{{ getLanguageLabel() }}</span>
-          <span class="viewer-path" v-tooltip="filePath">{{ filePath }}</span>
-          <button
-            v-if="!error && !isImage"
-            class="viewer-btn"
-            :class="{ primary: editing }"
-            :disabled="content.length > 1_000_000"
-            v-tooltip="content.length > 1_000_000 ? '文件过大，不支持编辑' : ''"
-            @click="editing ? save() : handleStartEdit()"
-          >
-            {{ editing ? '保存' : '编辑' }}
-          </button>
-          <span v-if="editing" class="viewer-hint">Esc 取消 · Ctrl+S 保存</span>
-          <button class="viewer-close" @click="close">&times;</button>
-        </div>
-        <div ref="viewerBodyRef" class="viewer-body">
-          <div v-if="error" class="viewer-error">{{ error }}</div>
-          <div v-else-if="isImage" class="viewer-image-wrap">
-            <img :src="imageUrl" class="viewer-image" :alt="fileName" />
-          </div>
-          <div v-else-if="editing" class="viewer-editor">
-            <CodeEditor
-              ref="codeEditorRef"
-              v-model="editContent"
-              :filePath="filePath"
-              @goto-definition="onGotoDefinition"
-            />
-            <!-- 跳转结果浮层 -->
-            <div v-if="goto.visible.value" ref="gotoPopoverRef" tabindex="-1" class="goto-popover" @keydown="onGotoKeydown">
-              <div class="goto-popover-header">
-                <span class="goto-popover-title">「{{ goto.searchWord.value }}」的定义</span>
-                <button class="goto-popover-close" @click="goto.dismiss()">&times;</button>
-              </div>
-              <div class="goto-popover-body">
-                <template v-if="goto.results.value.length === 0">
-                  <div class="goto-popover-empty">
-                    未找到定义 · <span class="goto-popover-hint" @click="onSearchAllReferences">搜索所有引用</span>
-                  </div>
-                </template>
-                <template v-else>
-                  <div
-                    v-for="(match, idx) in goto.results.value"
-                    :key="`${match.file}:${match.line}`"
-                    class="goto-popover-item"
-                    :class="{ active: idx === goto.selectedIndex.value }"
-                    @click="onGotoResultSelect(match)"
-                  >
-                    <span class="goto-item-path">{{ match.file }}:{{ match.line }}</span>
-                    <span class="goto-item-tag" :class="'tag-' + match.match_type">{{ match.match_type }}</span>
-                    <span class="goto-item-content">{{ match.content }}</span>
-                  </div>
-                </template>
-              </div>
-            </div>
-          </div>
-          <div v-else-if="isMarkdown" ref="codeRef" class="viewer-markdown" v-html="renderedMarkdown"></div>
-          <pre v-else-if="isDiff"><code ref="codeRef" class="viewer-code viewer-diff" v-html="diffHighlighted"></code></pre>
-          <pre v-else><code ref="codeRef" class="viewer-code" v-html="highlighted"></code></pre>
-        </div>
+  <div v-if="windows.length" class="fv-layer">
+    <!-- 平铺全览 -->
+    <div
+      v-if="!focusedWin"
+      class="fv-grid"
+      :class="{ 'fv-grid--single': windows.length === 1 }"
+      :style="{ '--fv-cols': gridCols }"
+    >
+      <div
+        v-for="w in windows"
+        :key="w.id"
+        class="fv-cell"
+        :class="{ 'fv-cell--thumb': windows.length > 1 }"
+        @mousedown.capture="onGridCellMousedown($event, w.id)"
+      >
+        <FileWindow :win="w" />
       </div>
     </div>
-  </Teleport>
+
+    <!-- 聚焦模式 -->
+    <template v-else>
+      <div class="fv-focused">
+        <FileWindow :win="focusedWin" />
+      </div>
+      <div v-if="stripWins.length" class="fv-strip">
+        <div
+          v-for="w in stripWins"
+          :key="w.id"
+          class="fv-strip-tile"
+          v-tooltip="w.filePath"
+          @click="focusWindow(w.id)"
+        >
+          <span v-if="isWindowDirty(w)" class="fv-strip-dirty">●</span>
+          <span class="fv-strip-name">{{ w.fileName }}</span>
+        </div>
+        <div class="fv-strip-tile fv-strip-tile--restore" @click="unfocus()">⊞ 平铺全部</div>
+      </div>
+    </template>
+  </div>
 </template>
 
 <style scoped>
-.viewer-overlay {
-  position: fixed;
+.fv-layer {
+  position: absolute;
   inset: 0;
-  background: var(--aide-bg-overlay);
+  z-index: 40;
+  pointer-events: none;
+}
+
+/* ── 平铺全览 ── */
+
+.fv-grid {
+  display: grid;
+  height: 100%;
+  padding: 14px;
+  gap: 12px;
+  grid-template-columns: repeat(var(--fv-cols), minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+
+.fv-grid--single {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
-  animation: fadeIn 0.12s ease;
+  padding: 20px;
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+.fv-grid--single .fv-cell {
+  width: min(94%, 900px);
+  height: 96%;
 }
 
-.viewer-dialog {
-  background: var(--aide-surface-default);
-  border: 1px solid var(--aide-surface-hover);
-  border-radius: var(--aide-radius-lg);
-  width: min(90vw, 900px);
-  height: 85vh;
-  display: flex;
-  flex-direction: column;
-  box-shadow: var(--aide-shadow-lg);
-  animation: scaleIn 0.15s ease;
+.fv-cell {
+  pointer-events: auto;
+  min-width: 0;
+  min-height: 0;
+  animation: fv-scale-in 0.15s ease;
 }
 
-@keyframes scaleIn {
-  from { opacity: 0; transform: scale(0.95); }
+/* 多窗平铺时是"缩略窗"：悬停浮起提示可点 */
+.fv-cell--thumb {
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.fv-cell--thumb:hover {
+  transform: scale(1.015);
+}
+
+@keyframes fv-scale-in {
+  from { opacity: 0; transform: scale(0.96); }
   to { opacity: 1; transform: scale(1); }
 }
 
-.viewer-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--aide-surface-hover);
-  flex-shrink: 0;
-}
+/* ── 聚焦模式 ── */
 
-.viewer-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--aide-text-primary);
-}
-
-.viewer-lang {
-  font-size: 10px;
-  color: var(--aide-text-muted);
-  background: var(--aide-bg-deep);
-  padding: 2px 8px;
-  border-radius: 4px;
-  text-transform: uppercase;
-}
-
-.viewer-path {
-  flex: 1;
-  font-size: 11px;
-  color: var(--aide-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.viewer-close {
-  background: none;
-  border: none;
-  color: var(--aide-text-secondary);
-  font-size: 20px;
-  cursor: pointer;
-  padding: 0 4px;
-  line-height: 1;
-  border-radius: 4px;
-  transition: all 0.15s ease;
-}
-.viewer-close:hover {
-  color: var(--aide-text-primary);
-  background: var(--aide-surface-hover);
-}
-
-.viewer-btn {
-  background: var(--aide-bg-deep);
-  border: 1px solid var(--aide-surface-hover);
-  color: var(--aide-text-secondary);
-  padding: 4px 12px;
-  border-radius: 4px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-.viewer-btn:hover {
-  background: var(--aide-surface-hover);
-  color: var(--aide-text-primary);
-}
-.viewer-btn.primary {
-  background: var(--aide-accent);
-  color: var(--aide-text-on-accent);
-  border-color: var(--aide-accent);
-}
-.viewer-btn.primary:hover {
-  opacity: 0.9;
-}
-.viewer-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.viewer-hint {
-  flex: 1;
-  text-align: right;
-  font-size: 11px;
-  color: var(--aide-text-muted);
-}
-
-.viewer-body {
-  flex: 1;
-  overflow: auto;
-  padding: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.viewer-error {
-  padding: 24px;
-  color: var(--aide-danger);
-  font-size: 13px;
-}
-
-.viewer-image-wrap {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  overflow: auto;
-  background: var(--aide-bg-deep);
-}
-
-.viewer-image {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-  border-radius: 6px;
-  /* SVG 等无固定尺寸的图也能合理缩放 */
-  width: auto;
-  height: auto;
-}
-
-.viewer-editor {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  position: relative;
-}
-
-.viewer-code {
-  display: block;
-  padding: 16px;
-  margin: 0;
-  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--aide-text-primary);
-  white-space: pre;
-  tab-size: 4;
-}
-
-/* ── Goto popover ── */
-
-.goto-popover {
+.fv-focused {
   position: absolute;
+  left: 50%;
+  top: calc(50% - 26px);
+  transform: translate(-50%, -50%);
+  width: min(92%, 900px);
+  height: calc(96% - 52px);
+  pointer-events: auto;
+  animation: fv-scale-in 0.15s ease;
+}
+
+.fv-strip {
+  position: absolute;
+  left: 0;
+  right: 0;
   bottom: 8px;
-  left: 8px;
-  right: 8px;
-  max-height: 280px;
-  background: var(--aide-surface-default);
-  border: 1px solid var(--aide-surface-hover);
-  border-radius: 8px;
-  box-shadow: var(--aide-shadow-md);
-  z-index: 10;
   display: flex;
-  flex-direction: column;
-  animation: slideUp 0.12s ease;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
+  overflow-x: auto;
+  pointer-events: auto;
 }
 
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.goto-popover-header {
+.fv-strip-tile {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--aide-surface-hover);
-  flex-shrink: 0;
-}
-
-.goto-popover-title {
-  font-size: 12px;
-  color: var(--aide-text-secondary);
-}
-
-.goto-popover-close {
-  background: none;
-  border: none;
-  color: var(--aide-text-muted);
-  font-size: 16px;
-  cursor: pointer;
-  padding: 0 4px;
-  line-height: 1;
-  border-radius: 4px;
-}
-.goto-popover-close:hover {
-  color: var(--aide-text-primary);
-  background: var(--aide-surface-hover);
-}
-
-.goto-popover-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px 0;
-}
-
-.goto-popover-empty {
-  padding: 16px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--aide-text-muted);
-}
-
-.goto-popover-hint {
-  color: var(--aide-accent);
-  cursor: pointer;
-}
-
-.goto-popover-item {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
+  gap: 5px;
+  max-width: 200px;
   padding: 6px 12px;
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  box-shadow: var(--aide-shadow-sm);
   cursor: pointer;
-  transition: background 0.12s ease-out;
+  flex-shrink: 0;
+  transition: all 0.12s;
 }
-.goto-popover-item:hover,
-.goto-popover-item.active {
+
+.fv-strip-tile:hover {
   background: var(--aide-surface-hover);
+  border-color: color-mix(in srgb, var(--aide-accent) 35%, transparent);
 }
 
-.goto-item-path {
-  font-size: 11px;
-  color: var(--aide-accent);
-  white-space: nowrap;
-  flex-shrink: 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 40%;
-}
-
-.goto-item-tag {
-  font-size: 9px;
-  padding: 1px 5px;
-  border-radius: 3px;
-  text-transform: uppercase;
-  flex-shrink: 0;
-  background: var(--aide-bg-deep);
-  color: var(--aide-text-muted);
-}
-.goto-item-tag.tag-fn,
-.goto-item-tag.tag-function,
-.goto-item-tag.tag-def {
-  background: color-mix(in srgb, var(--aide-success) 15%, transparent);
-  color: var(--aide-success);
-}
-.goto-item-tag.tag-class {
-  background: color-mix(in srgb, var(--aide-info) 15%, transparent);
-  color: var(--aide-accent);
-}
-.goto-item-tag.tag-const {
-  background: color-mix(in srgb, var(--aide-warning) 15%, transparent);
+.fv-strip-dirty {
   color: var(--aide-warning);
+  font-size: 10px;
+  flex-shrink: 0;
 }
 
-.goto-item-content {
-  font-size: 11px;
-  color: var(--aide-text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;
-}
-</style>
-
-<!-- Highlight.js theme overrides (unscoped — applied to generated markup) -->
-<style>
-/* We register hljs classes globally so the vue scoped attr doesn't break them */
-.viewer-code .hljs-keyword,
-.viewer-code .hljs-selector-tag,
-.viewer-code .hljs-type { color: #cba6f7; }        /* mauve */
-.viewer-code .hljs-string,
-.viewer-code .hljs-addition,
-.viewer-code .hljs-regexp { color: #a6e3a1; }      /* green */
-.viewer-code .hljs-number,
-.viewer-code .hljs-literal,
-.viewer-code .hljs-variable,
-.viewer-code .hljs-template-variable,
-.viewer-code .hljs-tag .hljs-attr { color: #fab387; } /* peach */
-.viewer-code .hljs-comment,
-.viewer-code .hljs-quote { color: #6c7086; font-style: italic; }
-.viewer-code .hljs-title,
-.viewer-code .hljs-title.class_,
-.viewer-code .hljs-title.class_.inherited__,
-.viewer-code .hljs-title.function_ { color: #89b4fa; } /* blue */
-.viewer-code .hljs-meta,
-.viewer-code .hljs-meta .hljs-keyword,
-.viewer-code .hljs-section { color: #89b4fa; }
-.viewer-code .hljs-attr,
-.viewer-code .hljs-attribute,
-.viewer-code .hljs-property { color: #89dceb; }    /* sky */
-.viewer-code .hljs-built_in,
-.viewer-code .hljs-symbol,
-.viewer-code .hljs-params { color: #f9e2af; }      /* yellow */
-.viewer-code .hljs-tag,
-.viewer-code .hljs-selector-class,
-.viewer-code .hljs-selector-id { color: #f38ba8; } /* red */
-.viewer-code .hljs-emphasis { font-style: italic; }
-.viewer-code .hljs-strong { font-weight: bold; }
-.viewer-code .hljs-link { color: #89b4fa; text-decoration: underline; }
-.viewer-code .hljs-deletion { color: #f38ba8; }
-
-/* ── Markdown rendered content ── */
-.viewer-markdown {
-  padding: 24px 32px;
-  font-size: 14px;
-  line-height: 1.75;
-  color: var(--aide-text-primary);
-}
-
-.viewer-markdown h1 { font-size: 1.6em; font-weight: 600; margin: 1.2em 0 0.6em; border-bottom: 1px solid var(--aide-surface-hover); padding-bottom: 0.3em; }
-.viewer-markdown h1:first-child { margin-top: 0; }
-.viewer-markdown h2 { font-size: 1.35em; font-weight: 600; margin: 1.1em 0 0.5em; border-bottom: 1px solid var(--aide-surface-hover); padding-bottom: 0.25em; }
-.viewer-markdown h2:first-child { margin-top: 0; }
-.viewer-markdown h3 { font-size: 1.15em; font-weight: 600; margin: 1em 0 0.4em; }
-.viewer-markdown h3:first-child { margin-top: 0; }
-.viewer-markdown h4 { font-size: 1em; font-weight: 600; margin: 0.9em 0 0.3em; }
-.viewer-markdown h4:first-child { margin-top: 0; }
-
-.viewer-markdown p { margin: 0.6em 0; }
-.viewer-markdown a { color: var(--aide-accent); text-decoration: none; }
-.viewer-markdown a:hover { text-decoration: underline; }
-
-.viewer-markdown ul, .viewer-markdown ol { padding-left: 1.5em; margin: 0.5em 0; }
-.viewer-markdown li { margin: 0.2em 0; }
-.viewer-markdown li > input[type="checkbox"] { margin-right: 6px; }
-
-.viewer-markdown blockquote {
-  margin: 0.6em 0;
-  padding: 4px 14px;
-  border-left: 3px solid var(--aide-accent);
-  color: var(--aide-text-secondary);
-  background: var(--aide-bg-deep);
-  border-radius: 0 4px 4px 0;
-}
-
-.viewer-markdown code {
-  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
-  font-size: 0.9em;
-  background: var(--aide-bg-deep);
-  padding: 2px 6px;
-  border-radius: 4px;
-  color: var(--aide-warning);
-}
-
-.viewer-markdown pre {
-  margin: 0.8em 0;
-  border-radius: 8px;
-  overflow: hidden;
-}
-.viewer-markdown pre code {
-  display: block;
-  padding: 14px 18px;
-  font-size: 12.5px;
-  line-height: 1.55;
-  color: var(--aide-text-primary);
-  background: var(--aide-bg-deep);
-  border-radius: 8px;
-  overflow-x: auto;
-}
-
-.viewer-markdown table {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 0.8em 0;
-}
-.viewer-markdown th, .viewer-markdown td {
-  border: 1px solid var(--aide-surface-hover);
-  padding: 8px 12px;
-  text-align: left;
-}
-.viewer-markdown th {
-  background: var(--aide-bg-deep);
-  font-weight: 600;
-}
-.viewer-markdown tr:nth-child(even) td {
-  background: var(--aide-border-subtle);
-}
-
-.viewer-markdown hr {
-  border: none;
-  border-top: 1px solid var(--aide-surface-hover);
-  margin: 1em 0;
-}
-
-.viewer-markdown img {
-  max-width: 100%;
-  border-radius: 6px;
-}
-
-/* marked uses these classes for hljs code in markdown */
-.viewer-markdown pre code.hljs .hljs-keyword,
-.viewer-markdown pre code.hljs .hljs-selector-tag,
-.viewer-markdown pre code.hljs .hljs-type { color: #cba6f7; }
-.viewer-markdown pre code.hljs .hljs-string,
-.viewer-markdown pre code.hljs .hljs-addition,
-.viewer-markdown pre code.hljs .hljs-regexp { color: #a6e3a1; }
-.viewer-markdown pre code.hljs .hljs-number,
-.viewer-markdown pre code.hljs .hljs-literal,
-.viewer-markdown pre code.hljs .hljs-variable,
-.viewer-markdown pre code.hljs .hljs-template-variable,
-.viewer-markdown pre code.hljs .hljs-tag .hljs-attr { color: #fab387; }
-.viewer-markdown pre code.hljs .hljs-comment,
-.viewer-markdown pre code.hljs .hljs-quote { color: #6c7086; font-style: italic; }
-.viewer-markdown pre code.hljs .hljs-title,
-.viewer-markdown pre code.hljs .hljs-title.class_,
-.viewer-markdown pre code.hljs .hljs-title.class_.inherited__,
-.viewer-markdown pre code.hljs .hljs-title.function_ { color: #89b4fa; }
-.viewer-markdown pre code.hljs .hljs-meta,
-.viewer-markdown pre code.hljs .hljs-meta .hljs-keyword,
-.viewer-markdown pre code.hljs .hljs-section { color: #89b4fa; }
-.viewer-markdown pre code.hljs .hljs-attr,
-.viewer-markdown pre code.hljs .hljs-attribute,
-.viewer-markdown pre code.hljs .hljs-property { color: #89dceb; }
-.viewer-markdown pre code.hljs .hljs-built_in,
-.viewer-markdown pre code.hljs .hljs-symbol,
-.viewer-markdown pre code.hljs .hljs-params { color: #f9e2af; }
-.viewer-markdown pre code.hljs .hljs-tag,
-.viewer-markdown pre code.hljs .hljs-selector-class,
-.viewer-markdown pre code.hljs .hljs-selector-id { color: #f38ba8; }
-.viewer-markdown pre code.hljs .hljs-emphasis { font-style: italic; }
-.viewer-markdown pre code.hljs .hljs-strong { font-weight: bold; }
-.viewer-markdown pre code.hljs .hljs-link { color: #89b4fa; text-decoration: underline; }
-.viewer-markdown pre code.hljs .hljs-deletion { color: #f38ba8; }
-
-/* ── Diff viewer（着色规则见 src/styles/global.css 的 aide-diff-*）── */
-.viewer-diff {
-  display: block;
-  padding: 12px 16px;
-  margin: 0;
-  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
+.fv-strip-name {
   font-size: 12px;
-  line-height: 1.6;
+  color: var(--aide-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fv-strip-tile:hover .fv-strip-name {
   color: var(--aide-text-primary);
-  white-space: pre;
-  tab-size: 4;
+}
+
+.fv-strip-tile--restore .fv-strip-name,
+.fv-strip-tile--restore {
+  color: var(--aide-text-muted);
+  font-size: 12px;
 }
 </style>
