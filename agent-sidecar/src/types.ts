@@ -28,6 +28,8 @@ export type ChatEvent =
   | { type: "text_delta"; delta: string }
   | { type: "tool_use_start"; id: string; name: string; input: unknown }
   | { type: "tool_result"; id: string; content: string; is_error: boolean }
+  | { type: "subagent_start"; id: string; agentName: string; description: string }
+  | { type: "subagent_end"; id: string; result: string; is_error: boolean }
   | { type: "permission_request"; id: string; name: string; input: unknown }
   | { type: "permission_cancelled"; id: string }
   | { type: "message_stop"; stop_reason: string; total_cost_usd: number | null; usage: TurnUsage | null }
