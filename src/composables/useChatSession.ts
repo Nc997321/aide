@@ -6,6 +6,7 @@ import type {
   ContextUsage,
   ModelOption,
   PermissionRequest,
+  TaskItem,
   TextBlock,
   ToolCallBlock,
   ImageBlock,
@@ -32,6 +33,8 @@ interface SessionStore {
   totalCostUsd: number;
   /** 上下文窗口用量——每轮结束后由 sidecar 刷新；null 表示还没收到过 */
   contextUsage: ContextUsage | null;
+  /** 当前任务清单——sidecar 每次变化后整体覆盖，不做增量合并 */
+  tasks: TaskItem[];
 }
 
 // ── 模块级单例状态 ─────────────────────────────────────────────────────────
@@ -64,6 +67,7 @@ function getStore(sid: string): SessionStore {
       currentModel: "",
       totalCostUsd: 0,
       contextUsage: null,
+      tasks: [],
     };
   }
   return stores[sid];
@@ -200,6 +204,10 @@ function handleChatEvent(e: Record<string, unknown>) {
         maxTokens: e["max_tokens"] as number,
         percentage: e["percentage"] as number,
       };
+      break;
+    }
+    case "tasks_update": {
+      store.tasks = e["tasks"] as TaskItem[];
       break;
     }
     case "message_stop": {
@@ -434,6 +442,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
     currentModel: computed(() => current.value?.currentModel ?? ""),
     totalCostUsd: computed(() => current.value?.totalCostUsd ?? 0),
     contextUsage: computed(() => current.value?.contextUsage ?? null),
+    tasks: computed(() => current.value?.tasks ?? []),
     sendMessage,
     respondPermission,
     interrupt,

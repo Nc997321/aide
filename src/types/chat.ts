@@ -44,6 +44,14 @@ export interface ContextUsage {
   percentage: number;
 }
 
+/** 待办任务项——provider-agnostic，跟 agent-sidecar/src/types.ts 里的同名类型镜像。 */
+export interface TaskItem {
+  id: string;
+  subject: string;
+  status: "pending" | "in_progress" | "completed";
+  activeForm?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
