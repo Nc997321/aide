@@ -187,6 +187,10 @@ n.summary(&title).body(&body).show();
 | `get_settings` / `set_settings` | 读写设置（合并，不覆盖 workspace） |
 | `notify_send` | 直接发系统通知 |
 
+**已知技术债**：`list_sessions`/`load_messages`/`session_last_event` 直接解析 `~/.claude/projects/*.jsonl`——这是 Claude Code CLI 专属的 transcript 格式（`isMeta`/`interruptedMessageId`/`isCompactSummary`/`origin.kind` 等字段），绕开了 sidecar 的 `ChatEvent` 协议，是 Rust 层里唯一对 Claude 专属格式有直接认知的地方。接入非 Claude provider 时，历史加载这条路径需要重新设计（例如把"读历史"也交给各 provider 的 sidecar，经统一协议吐给 Rust），不能照搬现在直接读文件的做法。
+
+`get_default_models` 是同一类例外，但边界更干净：它只读 `agent-sidecar/default-models.json` 这一份纯数据文件（会话开始前没有活的 SDK 连接时，聊天面板顶部模型下拉的静态兜底列表），原样透传 `serde_json::Value`，不解析、不引用任何 Claude 专属字段名——数据内容是 Claude 的模型别名，但这份数据物理上归 `agent-sidecar` 所有，Rust 代码本身不出现任何 provider 专属知识。接入新 provider 时，这个文件和读取方式需要对应换成该 provider 自己的默认模型数据。
+
 ### 自定义（25 命令）
 `list/get/create/update/delete/toggle_agent`（skill/hook/mcp_server 同 pattern）。指令用 `get/save_global_instructions` + `get/save_project_instructions`。
 

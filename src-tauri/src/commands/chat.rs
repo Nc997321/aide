@@ -5,6 +5,8 @@ use crate::commands::{WorkspaceState, project_root_for_commands};
 use crate::commands::provider::{load_active_provider, provider_to_env_vars};
 use crate::commands::settings::get_settings;
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 
 #[tauri::command]
 pub async fn send_message(
@@ -12,6 +14,7 @@ pub async fn send_message(
     prompt: String,
     images: Option<Vec<serde_json::Value>>,
     resume_id: Option<String>,
+    initial_model: Option<String>,
     sidecar_mgr: State<'_, SidecarManager>,
     workspace_state: State<'_, WorkspaceState>,
     app_handle: tauri::AppHandle,
@@ -23,6 +26,10 @@ pub async fn send_message(
         } else {
             HashMap::new()
         };
+
+        // 会话面板里对话开始前选的模型，只在这里（新建 sidecar 进程）生效一次，
+        // 覆盖 provider 配置的默认值；之后切模型走运行时的 set_model 命令。
+        apply_initial_model_override(&mut env_vars, initial_model);
 
         // 从系统全局环境变量读取认证信息和代理
         for var in &[
@@ -81,10 +88,19 @@ pub async fn permission_response(
     session_id: String,
     id: String,
     approved: bool,
+    always: Option<bool>,
     sidecar_mgr: State<'_, SidecarManager>,
 ) -> Result<(), String> {
-    let cmd = json!({ "cmd": "permission_response", "id": id, "approved": approved });
+    let cmd = build_permission_response_cmd(&id, approved, always);
     sidecar_mgr.send(&session_id, &cmd).await
+}
+
+/// 「总是允许」把 `always: true` 原样透传给 sidecar——sidecar 侧的 PermissionManager
+/// 据此决定是否把这次调用的规则（SDK suggestions 或兜底的整工具名规则）附加到
+/// PermissionResult.updatedPermissions 上，交给 SDK 自己落盘到项目
+/// `.claude/settings.json`。Rust 这层只做无脑透传，不理解 always 的语义。
+fn build_permission_response_cmd(id: &str, approved: bool, always: Option<bool>) -> serde_json::Value {
+    json!({ "cmd": "permission_response", "id": id, "approved": approved, "always": always })
 }
 
 #[tauri::command]
@@ -93,6 +109,16 @@ pub async fn interrupt_session(
     sidecar_mgr: State<'_, SidecarManager>,
 ) -> Result<(), String> {
     let cmd = json!({ "cmd": "interrupt" });
+    sidecar_mgr.send(&session_id, &cmd).await
+}
+
+#[tauri::command]
+pub async fn set_model(
+    session_id: String,
+    model: String,
+    sidecar_mgr: State<'_, SidecarManager>,
+) -> Result<(), String> {
+    let cmd = json!({ "cmd": "set_model", "model": model });
     sidecar_mgr.send(&session_id, &cmd).await
 }
 
@@ -114,4 +140,99 @@ pub fn rename_sidecar_session(
     sidecar_mgr: State<'_, SidecarManager>,
 ) -> Result<(), String> {
     sidecar_mgr.rename(&old_id, &new_id)
+}
+
+/// 新建 sidecar 进程时，把面板里选的模型转成 CLI 认的 `ANTHROPIC_MODEL` 环境变量，
+/// 覆盖 provider 配置的默认值——CLI 启动时读这个变量决定用哪个模型，这条路径
+/// 在 `provider_to_env_vars` 里对 provider 默认模型已经用过，这里只是同一机制上
+/// 再叠一层"这次对话显式选的模型"优先级更高。
+fn apply_initial_model_override(env_vars: &mut HashMap<String, String>, initial_model: Option<String>) {
+    if let Some(model) = initial_model {
+        if !model.is_empty() {
+            env_vars.insert("ANTHROPIC_MODEL".to_string(), model);
+        }
+    }
+}
+
+fn resolve_default_models_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    #[cfg(debug_assertions)]
+    {
+        let _ = app;
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let path = manifest.parent().unwrap().join("agent-sidecar/default-models.json");
+        if path.exists() {
+            return Ok(path);
+        }
+        Err(format!("default-models.json not found at {:?}", path))
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        use tauri::Manager;
+        let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
+        let path = resource_dir.join("agent-sidecar").join("default-models.json");
+        if path.exists() {
+            return Ok(path);
+        }
+        Err(format!("default-models.json resource missing: {:?}", path))
+    }
+}
+
+/// 会话还没连上 SDK 之前的兜底模型列表——纯静态数据，读文件不起进程。数据本身
+/// 是 Claude 专属的模型别名（'sonnet'/'opus' 等），但物理上归 agent-sidecar 所有
+/// （`agent-sidecar/default-models.json`），Rust 这层只做不关心内容的透传，
+/// 不违反"核心层不出现 provider 专属知识"的红线——和读 Claude 的 .jsonl transcript
+/// 是同一类已知例外（见 docs/ARCHITECTURE.md「已知技术债」）。
+#[tauri::command]
+pub fn get_default_models(app_handle: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let path = resolve_default_models_path(&app_handle)?;
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read default models: {}", e))?;
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse default models: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 回归：面板里选的模型必须真的落到 CLI 认的 ANTHROPIC_MODEL 环境变量上，
+    // 并且优先级高于 provider 配置的默认值——否则"对话前选模型"就是摆设。
+    #[test]
+    fn initial_model_overrides_provider_default() {
+        let mut env_vars = HashMap::new();
+        env_vars.insert("ANTHROPIC_MODEL".to_string(), "opus".to_string());
+        apply_initial_model_override(&mut env_vars, Some("haiku".to_string()));
+        assert_eq!(env_vars.get("ANTHROPIC_MODEL"), Some(&"haiku".to_string()));
+    }
+
+    #[test]
+    fn no_initial_model_leaves_provider_default_untouched() {
+        let mut env_vars = HashMap::new();
+        env_vars.insert("ANTHROPIC_MODEL".to_string(), "opus".to_string());
+        apply_initial_model_override(&mut env_vars, None);
+        assert_eq!(env_vars.get("ANTHROPIC_MODEL"), Some(&"opus".to_string()));
+    }
+
+    #[test]
+    fn empty_initial_model_is_ignored() {
+        let mut env_vars = HashMap::new();
+        apply_initial_model_override(&mut env_vars, Some(String::new()));
+        assert!(!env_vars.contains_key("ANTHROPIC_MODEL"));
+    }
+
+    // 回归：点「总是允许」时 always:true 必须原样进到发给 sidecar 的 JSON 里，
+    // 否则 sidecar 侧的持久化规则永远不会被触发。
+    #[test]
+    fn permission_response_cmd_forwards_always_true() {
+        let cmd = build_permission_response_cmd("perm-1", true, Some(true));
+        assert_eq!(cmd["cmd"], "permission_response");
+        assert_eq!(cmd["id"], "perm-1");
+        assert_eq!(cmd["approved"], true);
+        assert_eq!(cmd["always"], true);
+    }
+
+    #[test]
+    fn permission_response_cmd_defaults_always_to_null() {
+        let cmd = build_permission_response_cmd("perm-2", true, None);
+        assert!(cmd["always"].is_null());
+    }
 }

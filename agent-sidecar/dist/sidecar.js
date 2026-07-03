@@ -45425,28 +45425,44 @@ var PermissionManager = class {
     return async (toolName, input, opts) => {
       const id2 = randomUUID();
       emit2({ type: "permission_request", id: id2, name: toolName, input });
-      const approved = await new Promise((resolve) => {
-        this.pending.set(id2, resolve);
+      const decision = await new Promise((resolve) => {
+        this.pending.set(id2, { resolve, toolName, suggestions: opts?.suggestions });
         opts?.signal?.addEventListener(
           "abort",
           () => {
             if (this.pending.delete(id2)) {
               emit2({ type: "permission_cancelled", id: id2 });
-              resolve(false);
+              resolve({ approved: false });
             }
           },
           { once: true }
         );
       });
-      return approved ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: "\u7528\u6237\u62D2\u7EDD" };
+      if (!decision.approved) {
+        return { behavior: "deny", message: "\u7528\u6237\u62D2\u7EDD" };
+      }
+      return {
+        behavior: "allow",
+        updatedInput: input,
+        ...decision.updatedPermissions ? { updatedPermissions: decision.updatedPermissions } : {}
+      };
     };
   }
-  resolve(id2, approved) {
-    const resolve = this.pending.get(id2);
-    if (resolve) {
-      this.pending.delete(id2);
-      resolve(approved);
+  resolve(id2, approved, always) {
+    const entry = this.pending.get(id2);
+    if (!entry) return;
+    this.pending.delete(id2);
+    if (!approved || !always) {
+      entry.resolve({ approved });
+      return;
     }
+    const updatedPermissions = entry.suggestions?.length ? entry.suggestions : [{
+      type: "addRules",
+      rules: [{ toolName: entry.toolName }],
+      behavior: "allow",
+      destination: "projectSettings"
+    }];
+    entry.resolve({ approved, updatedPermissions });
   }
 };
 
@@ -45493,10 +45509,24 @@ function mapSdkMessage(msg, emit2) {
     return;
   }
   if (msg.type === "result") {
+    const modelUsage = msg.modelUsage;
+    const entries = modelUsage ? Object.values(modelUsage) : [];
+    let usage = null;
+    if (entries.length > 0) {
+      usage = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUsd: 0 };
+      for (const m of entries) {
+        usage.inputTokens += m.inputTokens ?? 0;
+        usage.outputTokens += m.outputTokens ?? 0;
+        usage.cacheReadInputTokens += m.cacheReadInputTokens ?? 0;
+        usage.cacheCreationInputTokens += m.cacheCreationInputTokens ?? 0;
+        usage.costUsd += m.costUSD ?? 0;
+      }
+    }
     emit2({
       type: "message_stop",
       stop_reason: msg.subtype === "success" ? "end_turn" : msg.subtype,
-      cost_usd: msg.total_cost_usd ?? null
+      total_cost_usd: msg.total_cost_usd ?? null,
+      usage
     });
     return;
   }
@@ -45515,6 +45545,37 @@ var queue = new MessageQueue();
 var permMgr = new PermissionManager();
 var currentQuery = null;
 var sessionId;
+var currentModel = "";
+var lastConcreteModel = "";
+var lastModels = [];
+var aliasByResolvedPrefix = [];
+async function emitModelsAvailable(q) {
+  try {
+    const init = await q.initializationResult();
+    lastModels = init.models.map((m) => ({ value: m.value, displayName: m.displayName }));
+    aliasByResolvedPrefix = init.models.filter((m) => m.resolvedModel).map((m) => ({ value: m.value, resolvedPrefix: m.resolvedModel }));
+    emit({ type: "models_available", models: lastModels, current: currentModel });
+  } catch {
+  }
+}
+function resolveDropdownValue(concreteModel) {
+  const hit = aliasByResolvedPrefix.find(
+    (a) => concreteModel === a.resolvedPrefix || concreteModel.startsWith(`${a.resolvedPrefix}-`)
+  );
+  return hit ? hit.value : concreteModel;
+}
+async function emitContextUsage(q) {
+  try {
+    const usage = await q.getContextUsage();
+    emit({
+      type: "context_usage",
+      total_tokens: usage.totalTokens,
+      max_tokens: usage.maxTokens,
+      percentage: usage.percentage
+    });
+  } catch {
+  }
+}
 async function startLoop(cwd) {
   try {
     while (true) {
@@ -45538,6 +45599,19 @@ async function startLoop(cwd) {
           mapSdkMessage(msg, emit);
           if (msg.type === "system" && msg.subtype === "init") {
             sessionId = msg.session_id;
+            void emitModelsAvailable(q);
+          } else if (
+            // 主线程（非子代理）assistant 消息自带实际用的模型——SDK 没有别的渠道
+            // 告诉我们"没手动切换时默认用的是哪个"，只能从这里坐实。
+            msg.type === "assistant" && !msg.parent_tool_use_id && msg.message?.model && msg.message.model !== lastConcreteModel
+          ) {
+            lastConcreteModel = msg.message.model;
+            currentModel = resolveDropdownValue(lastConcreteModel);
+            if (lastModels.length > 0) {
+              emit({ type: "models_available", models: lastModels, current: currentModel });
+            }
+          } else if (msg.type === "result") {
+            void emitContextUsage(q);
           }
         }
         break;
@@ -45573,9 +45647,15 @@ rl2.on("line", (line) => {
       parent_tool_use_id: null
     });
   } else if (cmd.cmd === "permission_response") {
-    permMgr.resolve(cmd.id, cmd.approved);
+    permMgr.resolve(cmd.id, cmd.approved, cmd.always);
   } else if (cmd.cmd === "interrupt") {
     currentQuery?.interrupt().catch(() => {
+    });
+  } else if (cmd.cmd === "set_model") {
+    currentQuery?.setModel(cmd.model).then(() => {
+      currentModel = cmd.model;
+      emit({ type: "models_available", models: lastModels, current: currentModel });
+    }).catch(() => {
     });
   }
 });

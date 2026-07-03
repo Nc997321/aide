@@ -50,7 +50,7 @@ describe("useChatSession per-session store", () => {
     // 切到 B，A 在后台完成
     sid.value = "uuid-b";
     await flush();
-    emit({ type: "message_stop", stop_reason: "end_turn", cost_usd: null, session_id: "uuid-a" });
+    emit({ type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null, session_id: "uuid-a" });
     await flush();
 
     // B 的消息列表必须为空（load_messages mock 返回 undefined → 空历史）
@@ -156,7 +156,7 @@ describe("useChatSession per-session store", () => {
     await chat.sendMessage("q");
     expect(state["uuid-a"]).toBe("running");
 
-    emit({ type: "message_stop", stop_reason: "end_turn", cost_usd: null, session_id: "uuid-a" });
+    emit({ type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null, session_id: "uuid-a" });
     await flush();
     expect(state["uuid-a"]).toBe("waiting");
     expect(chat.isBusy.value).toBe(false);
@@ -178,5 +178,85 @@ describe("useChatSession per-session store", () => {
     emit({ type: "permission_cancelled", id: "p1", session_id: "uuid-a" });
     await flush();
     expect(chat.pendingPermission.value).toBeNull();
+  });
+
+  it("models_available 更新可选模型列表和当前选中项", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    expect(chat.models.value).toEqual([]);
+
+    emit({
+      type: "models_available",
+      models: [{ value: "sonnet", displayName: "Sonnet" }, { value: "opus", displayName: "Opus" }],
+      current: "sonnet",
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.models.value).toEqual([{ value: "sonnet", displayName: "Sonnet" }, { value: "opus", displayName: "Opus" }]);
+    expect(chat.currentModel.value).toBe("sonnet");
+  });
+
+  it("context_usage 更新会话的上下文窗口用量", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    expect(chat.contextUsage.value).toBeNull();
+
+    emit({
+      type: "context_usage",
+      total_tokens: 52000,
+      max_tokens: 100000,
+      percentage: 52,
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.contextUsage.value).toEqual({ totalTokens: 52000, maxTokens: 100000, percentage: 52 });
+  });
+
+  it("message_stop 带 usage 时挂到最后一条 assistant 消息，并累加会话总费用", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    emit({ type: "text_delta", delta: "回复", session_id: "uuid-a" });
+    await flush();
+
+    const usage = {
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      costUsd: 0.0123,
+    };
+    emit({ type: "message_stop", stop_reason: "end_turn", total_cost_usd: 0.0123, usage, session_id: "uuid-a" });
+    await flush();
+
+    expect(chat.totalCostUsd.value).toBe(0.0123);
+    const last = chat.messages.value[chat.messages.value.length - 1];
+    expect(last.role).toBe("assistant");
+    expect(last.usage).toEqual(usage);
+    expect(last.streaming).toBe(false);
+  });
+
+  it("模型列表是 provider 级别的事实，尚未连上 SDK 的会话也能借用别的会话学到的列表", async () => {
+    const sidA = ref<string | null>("uuid-a");
+    const chatA = useChatSession(sidA);
+    await flush();
+    emit({
+      type: "models_available",
+      models: [{ value: "sonnet", displayName: "Sonnet" }],
+      current: "sonnet",
+      session_id: "uuid-a",
+    });
+    await flush();
+
+    // uuid-b 从没收到过 models_available，但打开时应该直接看到 A 学到的列表
+    const sidB = ref<string | null>("uuid-b");
+    const chatB = useChatSession(sidB);
+    await flush();
+    expect(chatB.models.value).toEqual([{ value: "sonnet", displayName: "Sonnet" }]);
+    // 但 B 自己还没选过模型，不应该被 A 的选择污染
+    expect(chatB.currentModel.value).toBe("");
   });
 });

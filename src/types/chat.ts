@@ -23,6 +23,27 @@ export interface ImageBlock {
 
 export type ContentBlock = TextBlock | ToolCallBlock | ImageBlock;
 
+export interface TurnUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  costUsd: number;
+}
+
+/** 纯展示用的模型选项——值和名字完全由 provider 决定，核心层不关心具体是什么模型 */
+export interface ModelOption {
+  value: string;
+  displayName: string;
+}
+
+/** 当前会话的上下文窗口用量——每轮结束后由 sidecar 刷新一次。 */
+export interface ContextUsage {
+  totalTokens: number;
+  maxTokens: number;
+  percentage: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -30,6 +51,8 @@ export interface ChatMessage {
   timestamp: number;
   /** assistant 消息正在流式生成中（用于续写判定，替代对象身份比较） */
   streaming?: boolean;
+  /** 这条 assistant 消息这一轮的 token 用量 + 费用 */
+  usage?: TurnUsage;
 }
 
 export interface PermissionRequest {

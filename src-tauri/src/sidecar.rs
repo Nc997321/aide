@@ -43,6 +43,20 @@ impl SidecarManager {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
+        // claude.exe 内部给 Bash 工具 spawn 的 Git Bash 是非交互式启动
+        // （`bash -c "command"`），不会 source shell profile；Git for Windows
+        // 默认只把 `Git\cmd` 写进持久化的系统/用户 PATH，真正装 ls/grep/cat 等
+        // coreutils 的 `Git\usr\bin` 只在交互式终端会话里被它自己的 profile
+        // 脚本临时加上。旧版走 xterm/PTY 起交互式终端时这个缺口被盖住了；现在
+        // sidecar 是 Node 子进程直接管道通信，没有终端层兜底，PATH 完全靠
+        // 继承，必须显式把 usr\bin 塞进去，不能赌用户机器的持久化 PATH 配置对。
+        #[cfg(windows)]
+        {
+            if let Some(path) = windows_path_with_git_usr_bin() {
+                cmd.env("PATH", path);
+            }
+        }
+
         for (k, v) in &env_vars {
             cmd.env(k, v);
         }
@@ -197,5 +211,70 @@ impl SidecarManager {
             }
             Err(format!("Sidecar resource missing: {:?}", path))
         }
+    }
+}
+
+/// 用现有 PATH 里能找到的 `git.exe` 定位 Git for Windows 安装根目录，
+/// 拼出装 ls/grep/cat 等 coreutils 的 `usr\bin` 子目录。找不到 git 或者
+/// 目录不存在时返回 `None`——这种情况下不去动 PATH，交给继承的原样传递。
+#[cfg(windows)]
+fn windows_path_with_git_usr_bin() -> Option<String> {
+    let git_exe = which::which("git").ok()?;
+    let git_cmd_dir = git_exe.parent()?; // .../Git/cmd
+    let git_root = git_cmd_dir.parent()?; // .../Git
+    let usr_bin = git_root.join("usr").join("bin");
+    if !usr_bin.is_dir() {
+        return None;
+    }
+    let current_path = std::env::var("PATH").unwrap_or_default();
+    Some(prepend_path_entry(&current_path, &usr_bin.to_string_lossy()))
+}
+
+/// 把 `extra` 前置进 Windows PATH（`;` 分隔），已存在则原样返回。
+/// 提成纯函数方便测试，不依赖真实文件系统/环境变量。
+#[cfg(windows)]
+fn prepend_path_entry(path: &str, extra: &str) -> String {
+    if extra.is_empty() {
+        return path.to_string();
+    }
+    let already_present = path.split(';').any(|p| p.eq_ignore_ascii_case(extra));
+    if already_present {
+        path.to_string()
+    } else if path.is_empty() {
+        extra.to_string()
+    } else {
+        format!("{extra};{path}")
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepend_path_entry_adds_when_missing() {
+        let result = prepend_path_entry("C:\\Windows;C:\\Windows\\System32", "C:\\Git\\usr\\bin");
+        assert_eq!(result, "C:\\Git\\usr\\bin;C:\\Windows;C:\\Windows\\System32");
+    }
+
+    #[test]
+    fn prepend_path_entry_skips_when_already_present() {
+        let path = "C:\\Git\\usr\\bin;C:\\Windows";
+        let result = prepend_path_entry(path, "C:\\Git\\usr\\bin");
+        assert_eq!(result, path);
+    }
+
+    #[test]
+    fn prepend_path_entry_is_case_insensitive() {
+        // Windows 路径大小写不敏感——同一目录不该因为大小写不同被当成"缺失"重复加。
+        let path = "c:\\git\\usr\\bin;C:\\Windows";
+        let result = prepend_path_entry(path, "C:\\Git\\usr\\bin");
+        assert_eq!(result, path);
+    }
+
+    #[test]
+    fn prepend_path_entry_handles_empty_path() {
+        let result = prepend_path_entry("", "C:\\Git\\usr\\bin");
+        assert_eq!(result, "C:\\Git\\usr\\bin");
     }
 }

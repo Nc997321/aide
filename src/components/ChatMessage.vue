@@ -58,6 +58,9 @@ function handleTextClick(e: MouseEvent) {
           alt="附图"
         />
       </template>
+      <div v-if="!isUser && message.usage" class="msg-usage">
+        {{ message.usage.inputTokens }}→{{ message.usage.outputTokens }} tokens · ${{ message.usage.costUsd.toFixed(4) }}
+      </div>
     </div>
   </div>
 </template>
@@ -154,6 +157,12 @@ function handleTextClick(e: MouseEvent) {
   border: none;
   border-top: 1px solid var(--aide-border);
   margin: 8px 0;
+}
+
+.msg-usage {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--aide-text-secondary);
 }
 
 .msg-image {

@@ -7,7 +7,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  respond: [id: string, approved: boolean];
+  respond: [id: string, approved: boolean, always?: boolean];
 }>();
 
 const inputSummary = computed(() => {
@@ -31,6 +31,9 @@ const inputSummary = computed(() => {
         <div class="perm-actions">
           <button class="perm-btn perm-btn--deny" @click="emit('respond', permission.id, false)">
             拒绝
+          </button>
+          <button class="perm-btn perm-btn--always" @click="emit('respond', permission.id, true, true)">
+            总是允许
           </button>
           <button class="perm-btn perm-btn--allow" @click="emit('respond', permission.id, true)">
             允许
@@ -109,6 +112,17 @@ const inputSummary = computed(() => {
 
 .perm-btn--deny:hover {
   background: var(--aide-surface-hover);
+}
+
+.perm-btn--always {
+  background: var(--aide-surface-default);
+  color: var(--aide-text-secondary);
+  border: 1px solid var(--aide-border);
+}
+
+.perm-btn--always:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
 }
 
 .perm-btn--allow {

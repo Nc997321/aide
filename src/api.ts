@@ -5,6 +5,7 @@ import type {
   GrepMatch, ProviderConfig, RunConfig, RunTarget, RecentView,
   SkillMeta,
 } from "./types";
+import type { ModelOption } from "./types/chat";
 
 export const api = {
   // Shell (workbench terminal)
@@ -30,6 +31,12 @@ export const api = {
   },
   interruptSession(sessionId: string): Promise<void> {
     return invoke("interrupt_session", { sessionId });
+  },
+  setModel(sessionId: string, model: string): Promise<void> {
+    return invoke("set_model", { sessionId, model });
+  },
+  getDefaultModels(): Promise<ModelOption[]> {
+    return invoke("get_default_models");
   },
 
   // Plugin skills

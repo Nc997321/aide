@@ -244,6 +244,13 @@ pub fn load_messages(
                 "assistant" => "claude",
                 _ => continue,
             };
+            // "user" 类型 JSONL 行不都是人类打字:Skill 注入(isMeta)、中断占位符
+            // (interruptedMessageId)、压缩摘要(isCompactSummary)、后台任务通知
+            // (origin.kind = "task-notification")都以 role:"user" 落盘,但不是
+            // 人说的话——不过滤会把这些内容渲染成用户气泡,造成"这不是我说的"的假象。
+            if role == "user" && is_synthetic_user_entry(&v) {
+                continue;
+            }
             if let Some(content_val) = v.get("message").and_then(|m| m.get("content")) {
                 let text = if let Some(s) = content_val.as_str() {
                     s.to_string()
@@ -268,6 +275,29 @@ pub fn load_messages(
     }
 
     Ok(messages)
+}
+
+/// Whether a raw JSONL "user"-type entry is SDK/CLI-synthesized rather than
+/// something the human actually typed (Skill injections, interrupt
+/// placeholders, compaction summaries, background task notifications).
+/// Confirmed against real transcripts: genuine typed messages never carry
+/// these markers, and carrying one is never a byproduct of genuine input.
+fn is_synthetic_user_entry(v: &Value) -> bool {
+    if v.get("isMeta").and_then(|b| b.as_bool()).unwrap_or(false) {
+        return true;
+    }
+    if v.get("interruptedMessageId").is_some() {
+        return true;
+    }
+    if v.get("isCompactSummary").and_then(|b| b.as_bool()).unwrap_or(false) {
+        return true;
+    }
+    if let Some(kind) = v.get("origin").and_then(|o| o.get("kind")).and_then(|k| k.as_str()) {
+        if kind != "human" {
+            return true;
+        }
+    }
+    false
 }
 
 /// Normalize a filesystem path so two paths pointing to the same location
@@ -629,5 +659,26 @@ mod tests {
         assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("测试会话"));
 
         let _ = fs::remove_file(&path);
+    }
+
+    // 回归：真实会话记录里，Skill 注入(isMeta)、中断占位符
+    // (interruptedMessageId)、压缩摘要(isCompactSummary)、后台任务通知
+    // (origin.kind != "human") 都以 role:"user" 落盘，但都不是人类真正打的字——
+    // 曾经被 load_messages 原样当用户消息渲染，在 UI 上显示成"用户说的话"。
+    #[test]
+    fn synthetic_user_entries_are_detected() {
+        assert!(is_synthetic_user_entry(&serde_json::json!({ "isMeta": true })));
+        assert!(is_synthetic_user_entry(&serde_json::json!({ "interruptedMessageId": "msg_1" })));
+        assert!(is_synthetic_user_entry(&serde_json::json!({ "isCompactSummary": true })));
+        assert!(is_synthetic_user_entry(&serde_json::json!({ "origin": { "kind": "task-notification" } })));
+    }
+
+    #[test]
+    fn genuine_human_entries_are_not_filtered() {
+        // 新版 SDK：显式标注 origin.kind == "human"
+        assert!(!is_synthetic_user_entry(&serde_json::json!({ "origin": { "kind": "human" } })));
+        // 旧版 transcript：没有 origin 字段，也没有任何合成标记——必须保留，
+        // 否则会把老会话里的真实提问全部隐藏掉。
+        assert!(!is_synthetic_user_entry(&serde_json::json!({})));
     }
 }

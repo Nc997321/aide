@@ -1,5 +1,5 @@
 import type { MessageParam } from "@anthropic-ai/sdk/resources";
-import type { ChatEvent, ImageAttachment } from "./types.js";
+import type { ChatEvent, ImageAttachment, TurnUsage } from "./types.js";
 
 /**
  * Build a Claude-SDK MessageParam from a prompt + optional image attachments.
@@ -60,10 +60,30 @@ export function mapSdkMessage(msg: any, emit: (e: ChatEvent) => void) {
   }
 
   if (msg.type === "result") {
+    const modelUsage = msg.modelUsage as Record<string, {
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheReadInputTokens?: number;
+      cacheCreationInputTokens?: number;
+      costUSD?: number;
+    }> | undefined;
+    const entries = modelUsage ? Object.values(modelUsage) : [];
+    let usage: TurnUsage | null = null;
+    if (entries.length > 0) {
+      usage = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUsd: 0 };
+      for (const m of entries) {
+        usage.inputTokens += m.inputTokens ?? 0;
+        usage.outputTokens += m.outputTokens ?? 0;
+        usage.cacheReadInputTokens += m.cacheReadInputTokens ?? 0;
+        usage.cacheCreationInputTokens += m.cacheCreationInputTokens ?? 0;
+        usage.costUsd += m.costUSD ?? 0;
+      }
+    }
     emit({
       type: "message_stop",
       stop_reason: msg.subtype === "success" ? "end_turn" : msg.subtype,
-      cost_usd: msg.total_cost_usd ?? null,
+      total_cost_usd: msg.total_cost_usd ?? null,
+      usage,
     });
     return;
   }

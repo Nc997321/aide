@@ -1,14 +1,17 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, computed } from "vue";
+import { ref, watch, nextTick, computed, onMounted } from "vue";
 import type { ComputedRef } from "vue";
 import ChatMessage from "./ChatMessage.vue";
-import type { ChatMessage as ChatMessageType, TextBlock } from "@/types/chat";
+import type { ChatMessage as ChatMessageType, ContextUsage, ModelOption, TextBlock } from "@/types/chat";
 import type { SkillMeta } from "@/types";
 import { api } from "@/api";
 import { resolvePastePayload } from "@/utils/paste";
+import { resolveFileMentions } from "@/utils/fileMentions";
+import type { FileMentionResolution } from "@/utils/fileMentions";
 import { peekFileClipboard } from "@/composables/useFileClipboard";
 import type { ImageAttachment } from "@/composables/useChatSession";
 import { useSessionState } from "@/composables/useSessionState";
+import { useProviders } from "@/composables/useProviders";
 import AStatusDot from "@/ui/AStatusDot.vue";
 
 const props = defineProps<{
@@ -17,15 +20,73 @@ const props = defineProps<{
   workspacePath?: string;
   messages: ComputedRef<ChatMessageType[]> | ChatMessageType[];
   isBusy: { value: boolean } | boolean;
+  models?: ModelOption[];
+  currentModel?: string;
+  totalCostUsd?: number;
+  contextUsage?: ContextUsage | null;
 }>();
 
 const emit = defineEmits<{
-  send: [prompt: string, images?: ImageAttachment[]];
+  send: [prompt: string, images?: ImageAttachment[], initialModel?: string, mentions?: FileMentionResolution];
   interrupt: [];
   stop: [];
+  "set-model": [model: string];
 }>();
 
 const { state: sessionState } = useSessionState();
+const { activeProvider } = useProviders();
+
+// 会话还没开始时没有活的 sidecar 进程，SDK 的 models_available 事件还没发生，
+// props.models 是空的——依次退化：provider 设置里配置的 knownModels（用户自己
+// 填的） > 静态默认列表（读本地文件，不起进程，见 get_default_models），
+// 让用户进会话就能选模型，不用等发完第一条消息。
+const defaultModels = ref<ModelOption[]>([]);
+onMounted(async () => {
+  try {
+    defaultModels.value = await api.getDefaultModels();
+  } catch {
+    // 读不到就不兜底，下拉直接不显示——不影响其他功能
+  }
+});
+
+const preSessionModels = computed<ModelOption[]>(() => {
+  const known = activeProvider.value.knownModels;
+  return known.length ? known.map((v) => ({ value: v, displayName: v })) : defaultModels.value;
+});
+const displayModels = computed(() => (props.models?.length ? props.models : preSessionModels.value));
+
+/** 本地选中值：随 props.currentModel（SDK 坐实/切换确认）同步；
+ *  会话开始前没有 props.currentModel，用户选的先存在这，随第一条消息带走。 */
+const selectedModel = ref("");
+
+/** 下拉框必须始终有一个真实生效的选中值——不能只是视觉上落在第一个
+ *  <option> 上而 selectedModel 仍是空串，否则 handleSend 里 `selectedModel.value
+ *  || undefined` 不会把它带进 initialModel，导致下拉框显示的模型和实际启动
+ *  sidecar 用的模型对不上。优先用 provider 配置里显式指定的默认模型（若在
+ *  当前可选列表里），否则退化到列表第一项。 */
+function applyDefaultModel(models: ModelOption[]) {
+  if (selectedModel.value || !models.length) return;
+  const providerDefault = activeProvider.value.model;
+  selectedModel.value = providerDefault && models.some((m) => m.value === providerDefault)
+    ? providerDefault
+    : models[0].value;
+}
+
+watch(() => props.currentModel, (v) => { if (v) selectedModel.value = v; });
+watch(displayModels, applyDefaultModel, { immediate: true });
+watch(() => props.sessionId, (sid) => {
+  if (!sid) {
+    selectedModel.value = "";
+    applyDefaultModel(displayModels.value);
+  }
+});
+
+function handleModelChange(value: string) {
+  selectedModel.value = value;
+  // 会话还没开始时 useChatSession.setModel 是无会话可发的空操作，安全；
+  // 真正生效靠 handleSend 把 selectedModel 带进第一条消息。
+  emit("set-model", value);
+}
 const currentStatus = computed(() => {
   const sid = props.sessionId;
   if (!sid) return "stopped" as const;
@@ -202,10 +263,20 @@ async function handleSend() {
     }
   }
 
+  // headless 的 query() 不会像交互式终端那样把 @path 自动展开成文件内容——
+  // 那是 TUI 按键输入层的行为，这里必须自己在发送前把引用的文件读出来拼进
+  // 发给模型的文本里，否则模型收到的只是字面量文本，读不读全凭它自己判断
+  // （见踩坑记录）。展开后的内容不进 finalPrompt（用户气泡显示用的原文），
+  // 只进 mentionResolution.sendText（发给模型用）——避免文件内容和用户
+  // 自己打的字混在一个气泡里，读起来很差。
+  const mentionResolution = await resolveFileMentions(finalPrompt, api.readFileContent);
+
   const images = pendingImages.value.map(({ data, mediaType }) => ({ data, mediaType }));
   inputText.value = "";
   pendingImages.value = [];
-  emit("send", finalPrompt, images.length ? images : undefined);
+  // Rust 只在 sidecar 进程还没起来时才会用这个值（见 chat.rs），已有会话时
+  // 无害地被忽略，不需要在这里判断"是否已有会话"。
+  emit("send", finalPrompt, images.length ? images : undefined, selectedModel.value || undefined, mentionResolution);
 }
 </script>
 
@@ -240,17 +311,6 @@ async function handleSend() {
     </div>
 
     <div class="chat-input-area">
-      <!-- Image attachment strip -->
-      <div v-if="pendingImages.length" class="image-attachment-strip">
-        <div
-          v-for="(img, i) in pendingImages"
-          :key="i"
-          class="image-thumb"
-        >
-          <img :src="img.previewUrl" class="image-thumb-img" alt="附图" />
-          <button class="image-thumb-remove" @click="pendingImages.splice(i, 1)">×</button>
-        </div>
-      </div>
       <!-- Slash command dropdown -->
       <div v-if="filteredSkills.length" class="skill-dropdown">
         <div
@@ -264,7 +324,19 @@ async function handleSend() {
           <span class="skill-item-desc">{{ skill.description }}</span>
         </div>
       </div>
-      <div class="chat-input-row">
+      <!-- 输入框、图片缩略图、模型工具栏放进同一个带边框的盒子里，工具栏焊在底部——
+           不再是"模型栏单独一行浮在输入框上方"，避免贴图片时模型栏被顶得到处跑。 -->
+      <div class="chat-input-box">
+        <div v-if="pendingImages.length" class="image-attachment-strip">
+          <div
+            v-for="(img, i) in pendingImages"
+            :key="i"
+            class="image-thumb"
+          >
+            <img :src="img.previewUrl" class="image-thumb-img" alt="附图" />
+            <button class="image-thumb-remove" @click="pendingImages.splice(i, 1)">×</button>
+          </div>
+        </div>
         <textarea
           ref="textareaEl"
           v-model="inputText"
@@ -280,13 +352,35 @@ async function handleSend() {
           @keydown.down="handleArrowDown"
           @paste="handlePaste"
         />
-        <button
-          class="chat-send-btn"
-          :disabled="isBusyVal || (!inputText.trim() && !pendingImages.length)"
-          @click="handleSend"
-        >
-          发送
-        </button>
+        <div class="chat-toolbar">
+          <select
+            v-if="displayModels.length"
+            class="chat-model-select"
+            :value="selectedModel"
+            @change="handleModelChange(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="m in displayModels" :key="m.value" :value="m.value">{{ m.displayName }}</option>
+          </select>
+          <div
+            v-if="props.contextUsage"
+            class="chat-ctx-usage"
+            :title="`上下文用量：${props.contextUsage.totalTokens.toLocaleString()} / ${props.contextUsage.maxTokens.toLocaleString()} tokens`"
+          >
+            <span class="chat-ctx-label">ctx</span>
+            <div class="chat-ctx-bar">
+              <div class="chat-ctx-bar-fill" :style="{ width: props.contextUsage.percentage + '%' }" />
+            </div>
+            <span class="chat-ctx-percent">{{ Math.round(props.contextUsage.percentage) }}%</span>
+          </div>
+          <span class="chat-cost-total">会话费用 ${{ (props.totalCostUsd ?? 0).toFixed(4) }}</span>
+          <button
+            class="chat-send-btn"
+            :disabled="isBusyVal || (!inputText.trim() && !pendingImages.length)"
+            @click="handleSend"
+          >
+            发送
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -393,32 +487,91 @@ async function handleSend() {
   position: relative;
 }
 
-.chat-input-row {
+/* 统一的带边框输入盒子——图片缩略图、文本框、模型工具栏都在里面，
+   焦点样式挂在盒子本身（:focus-within），不是内层 textarea 单独一圈边框。 */
+.chat-input-box {
   display: flex;
-  gap: 8px;
-}
-
-.chat-input {
-  flex: 1;
-  resize: none;
+  flex-direction: column;
   border-radius: var(--aide-radius-sm);
   background: var(--aide-surface-default);
   border: 1px solid var(--aide-border);
+  transition: border-color 0.15s;
+}
+
+.chat-input-box:focus-within {
+  border-color: var(--aide-accent);
+}
+
+.chat-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--aide-border);
+  font-size: 12px;
+  color: var(--aide-text-secondary);
+}
+
+.chat-model-select {
+  background: transparent;
+  color: var(--aide-text-secondary);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  font-size: 12px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.chat-ctx-usage {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--aide-text-muted);
+}
+
+.chat-ctx-label {
+  white-space: nowrap;
+}
+
+.chat-ctx-bar {
+  width: 48px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--aide-surface-hover);
+  overflow: hidden;
+}
+
+.chat-ctx-bar-fill {
+  height: 100%;
+  background: var(--aide-accent);
+  transition: width 0.2s;
+}
+
+.chat-ctx-percent {
+  white-space: nowrap;
+  min-width: 28px;
+}
+
+.chat-cost-total {
+  white-space: nowrap;
+  margin-right: auto;
+}
+
+.chat-input {
+  resize: none;
+  border: none;
+  background: transparent;
   padding: 8px 12px;
   font-size: 13px;
   color: var(--aide-text-primary);
   outline: none;
   font-family: inherit;
   line-height: 1.5;
-  transition: border-color 0.15s;
 }
 
 .chat-input::placeholder {
   color: var(--aide-text-muted);
-}
-
-.chat-input:focus {
-  border-color: var(--aide-accent);
 }
 
 .chat-input:disabled {
@@ -432,6 +585,7 @@ async function handleSend() {
   color: var(--aide-text-on-accent);
   border: none;
   padding: 0 16px;
+  height: 24px;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -506,7 +660,7 @@ async function handleSend() {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 4px 0 6px;
+  padding: 10px 12px 0;
 }
 
 .image-thumb {
