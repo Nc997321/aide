@@ -6,6 +6,7 @@ import type {
   ContextUsage,
   ModelOption,
   PermissionRequest,
+  SubagentBlock,
   TaskItem,
   TextBlock,
   ToolCallBlock,
@@ -208,6 +209,28 @@ function handleChatEvent(e: Record<string, unknown>) {
     }
     case "tasks_update": {
       store.tasks = e["tasks"] as TaskItem[];
+      break;
+    }
+    case "subagent_start": {
+      const msg = getOrCreateAssistant(store);
+      msg.blocks.push({
+        type: "subagent",
+        id: e["id"] as string,
+        agentName: e["agentName"] as string,
+        description: e["description"] as string,
+        isPending: true,
+      } as SubagentBlock);
+      break;
+    }
+    case "subagent_end": {
+      const block = store.messages
+        .flatMap((m) => m.blocks)
+        .find((b): b is SubagentBlock => b.type === "subagent" && (b as SubagentBlock).id === e["id"]);
+      if (block) {
+        block.result = e["result"] as string;
+        block.isError = e["is_error"] as boolean;
+        block.isPending = false;
+      }
       break;
     }
     case "message_stop": {
