@@ -45441,21 +45441,22 @@ var PermissionManager = class {
       if (!decision.approved) {
         return { behavior: "deny", message: "\u7528\u6237\u62D2\u7EDD" };
       }
+      const updatedInput = toolName === "AskUserQuestion" && decision.answers ? { questions: input?.questions, answers: decision.answers } : input;
       return {
         behavior: "allow",
-        updatedInput: input,
+        updatedInput,
         ...decision.updatedPermissions ? { updatedPermissions: decision.updatedPermissions } : {}
       };
     };
   }
   /** 返回被响应的工具名（无此 pending 时返回 undefined）——入口层用它识别
    *  "ExitPlanMode 被批准"这类需要联动会话状态的特殊工具。 */
-  resolve(id2, approved, always) {
+  resolve(id2, approved, always, answers) {
     const entry = this.pending.get(id2);
     if (!entry) return void 0;
     this.pending.delete(id2);
     if (!approved || !always) {
-      entry.resolve({ approved });
+      entry.resolve({ approved, answers });
       return entry.toolName;
     }
     const updatedPermissions = entry.suggestions?.length ? entry.suggestions : [{
@@ -45464,7 +45465,7 @@ var PermissionManager = class {
       behavior: "allow",
       destination: "projectSettings"
     }];
-    entry.resolve({ approved, updatedPermissions });
+    entry.resolve({ approved, updatedPermissions, answers });
     return entry.toolName;
   }
 };
@@ -45879,7 +45880,7 @@ rl2.on("line", (line) => {
       parent_tool_use_id: null
     });
   } else if (cmd.cmd === "permission_response") {
-    const toolName = permMgr.resolve(cmd.id, cmd.approved, cmd.always);
+    const toolName = permMgr.resolve(cmd.id, cmd.approved, cmd.always, cmd.answers);
     if (cmd.approved && toolName === "ExitPlanMode") {
       applyPermissionMode("default");
     }

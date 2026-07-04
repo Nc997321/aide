@@ -528,14 +528,21 @@ export function useChatSession(sessionId: Ref<string | null>) {
     return sid;
   }
 
-  async function respondPermission(id: string, approved: boolean, always?: boolean) {
+  /** answers：仅 AskUserQuestion 场景（问题文本 → 选中答案的不透明映射），
+   *  由 PermissionDialog.vue 收集，这里只透传，语义由 sidecar 解释。 */
+  async function respondPermission(
+    id: string,
+    approved: boolean,
+    always?: boolean,
+    answers?: Record<string, string>,
+  ) {
     const sid = sessionId.value;
     if (!sid) return;
     const store = getStore(sid);
     store.pendingPermission = null;
     setSessionState(sid, "running");
     armStalled(sid); // 权限批准后恢复生成 → 重启软超时计时
-    await invoke("permission_response", { sessionId: sid, id, approved, always });
+    await invoke("permission_response", { sessionId: sid, id, approved, always, answers });
   }
 
   async function interrupt() {

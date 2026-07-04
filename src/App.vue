@@ -577,7 +577,7 @@ onUnmounted(() => {
       <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
       <PermissionDialog
         :permission="pendingPermission"
-        @respond="(id: string, approved: boolean, always?: boolean) => respondPermission(id, approved, always)"
+        @respond="(id: string, approved: boolean, always?: boolean, answers?: Record<string, string>) => respondPermission(id, approved, always, answers)"
       />
     </div>
 

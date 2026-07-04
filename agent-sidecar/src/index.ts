@@ -229,7 +229,7 @@ rl.on("line", (line) => {
       parent_tool_use_id: null,
     } as any);
   } else if (cmd.cmd === "permission_response") {
-    const toolName = permMgr.resolve(cmd.id, cmd.approved, cmd.always);
+    const toolName = permMgr.resolve(cmd.id, cmd.approved, cmd.always, cmd.answers);
     // Plan 模式的出口：ExitPlanMode 被批准 = 用户认可计划、进入执行——SDK 不会
     // 自己切模式（那是交互式 CLI 的 TUI 行为），这里显式切回 default。
     if (cmd.approved && toolName === "ExitPlanMode") {

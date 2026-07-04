@@ -97,18 +97,31 @@ pub async fn permission_response(
     id: String,
     approved: bool,
     always: Option<bool>,
+    answers: Option<HashMap<String, String>>,
     sidecar_mgr: State<'_, SidecarManager>,
 ) -> Result<(), String> {
-    let cmd = build_permission_response_cmd(&id, approved, always);
+    let cmd = build_permission_response_cmd(&id, approved, always, answers);
     sidecar_mgr.send(&session_id, &cmd).await
 }
 
 /// 「总是允许」把 `always: true` 原样透传给 sidecar——sidecar 侧的 PermissionManager
 /// 据此决定是否把这次调用的规则（SDK suggestions 或兜底的整工具名规则）附加到
 /// PermissionResult.updatedPermissions 上，交给 SDK 自己落盘到项目
-/// `.claude/settings.json`。Rust 这层只做无脑透传，不理解 always 的语义。
-fn build_permission_response_cmd(id: &str, approved: bool, always: Option<bool>) -> serde_json::Value {
-    json!({ "cmd": "permission_response", "id": id, "approved": approved, "always": always })
+/// `.claude/settings.json`。`answers` 仅 AskUserQuestion 场景使用（问题文本 →
+/// 选中答案的不透明映射，由 sidecar 重组进 updatedInput）。Rust 这层对两者都只做
+/// 无脑透传，不理解语义；answers 为 None 时干脆不带这个键，保持普通工具批准的
+/// JSON 形状不变。
+fn build_permission_response_cmd(
+    id: &str,
+    approved: bool,
+    always: Option<bool>,
+    answers: Option<HashMap<String, String>>,
+) -> serde_json::Value {
+    let mut cmd = json!({ "cmd": "permission_response", "id": id, "approved": approved, "always": always });
+    if let Some(a) = answers {
+        cmd["answers"] = json!(a);
+    }
+    cmd
 }
 
 #[tauri::command]
@@ -253,7 +266,7 @@ mod tests {
     // 否则 sidecar 侧的持久化规则永远不会被触发。
     #[test]
     fn permission_response_cmd_forwards_always_true() {
-        let cmd = build_permission_response_cmd("perm-1", true, Some(true));
+        let cmd = build_permission_response_cmd("perm-1", true, Some(true), None);
         assert_eq!(cmd["cmd"], "permission_response");
         assert_eq!(cmd["id"], "perm-1");
         assert_eq!(cmd["approved"], true);
@@ -262,7 +275,24 @@ mod tests {
 
     #[test]
     fn permission_response_cmd_defaults_always_to_null() {
-        let cmd = build_permission_response_cmd("perm-2", true, None);
+        let cmd = build_permission_response_cmd("perm-2", true, None, None);
         assert!(cmd["always"].is_null());
+    }
+
+    // 回归：AskUserQuestion 批准时 answers 必须原样进到 JSON 里，否则 sidecar
+    // 没法把用户选择重组进 updatedInput，模型只会看到"用户没有回答"。
+    #[test]
+    fn permission_response_cmd_forwards_answers() {
+        let mut answers = HashMap::new();
+        answers.insert("用什么颜色？".to_string(), "蓝色".to_string());
+        let cmd = build_permission_response_cmd("perm-3", true, None, Some(answers));
+        assert_eq!(cmd["answers"]["用什么颜色？"], "蓝色");
+    }
+
+    // 普通工具批准（无 answers）不该在 JSON 里凭空长出 answers 键。
+    #[test]
+    fn permission_response_cmd_omits_answers_key_when_none() {
+        let cmd = build_permission_response_cmd("perm-4", true, None, None);
+        assert!(cmd.get("answers").is_none());
     }
 }

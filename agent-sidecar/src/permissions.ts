@@ -6,6 +6,9 @@ interface Decision {
   approved: boolean;
   /** 只在 approved && always 时有值：附加到 PermissionResult 上让 SDK 落盘持久化。 */
   updatedPermissions?: PermissionUpdate[];
+  /** 仅 AskUserQuestion：问题文本 → 用户选中的答案（多选已 join，或自由文本）。
+   *  批准时据此重组 updatedInput，而不是像其他工具那样原样透传 input。 */
+  answers?: Record<string, string>;
 }
 
 interface PendingEntry {
@@ -44,9 +47,16 @@ export class PermissionManager {
       if (!decision.approved) {
         return { behavior: "deny" as const, message: "用户拒绝" };
       }
+      // AskUserQuestion：SDK 要求把答案重组进 updatedInput（{questions, answers}），
+      // 不能像其他工具那样原样透传 input——这是它与普通工具批准语义唯一的分歧点，
+      // 只在这里（sidecar 内）体现，Rust/前端全程只搬运不透明的 answers 字符串映射。
+      const updatedInput: Record<string, unknown> =
+        toolName === "AskUserQuestion" && decision.answers
+          ? { questions: (input as { questions?: unknown } | undefined)?.questions, answers: decision.answers }
+          : (input as Record<string, unknown>);
       return {
         behavior: "allow" as const,
-        updatedInput: input as Record<string, unknown>,
+        updatedInput,
         ...(decision.updatedPermissions ? { updatedPermissions: decision.updatedPermissions } : {}),
       };
     };
@@ -54,12 +64,12 @@ export class PermissionManager {
 
   /** 返回被响应的工具名（无此 pending 时返回 undefined）——入口层用它识别
    *  "ExitPlanMode 被批准"这类需要联动会话状态的特殊工具。 */
-  resolve(id: string, approved: boolean, always?: boolean): string | undefined {
+  resolve(id: string, approved: boolean, always?: boolean, answers?: Record<string, string>): string | undefined {
     const entry = this.pending.get(id);
     if (!entry) return undefined;
     this.pending.delete(id);
     if (!approved || !always) {
-      entry.resolve({ approved });
+      entry.resolve({ approved, answers });
       return entry.toolName;
     }
     const updatedPermissions: PermissionUpdate[] = entry.suggestions?.length
@@ -70,7 +80,7 @@ export class PermissionManager {
           behavior: "allow",
           destination: "projectSettings",
         }];
-    entry.resolve({ approved, updatedPermissions });
+    entry.resolve({ approved, updatedPermissions, answers });
     return entry.toolName;
   }
 }
