@@ -59,6 +59,9 @@ interface SessionStore {
   permissionModes: PermissionModeOption[];
   /** 当前生效的权限模式 value；空串表示还没从 sidecar 学到 */
   currentPermissionMode: string;
+  /** SDK 权威 slash commands 清单；null 表示本会话还没收到过（会话未开始，
+   *  或 provider 不支持该概念）。一旦非 null，下拉框数据源单向切换，不回退。 */
+  slashCommands: string[] | null;
   /** 忙碌时排队的待发消息——message_stop 后按序自动续发 */
   queued: QueuedSend[];
 }
@@ -108,6 +111,7 @@ function getStore(sid: string): SessionStore {
       tasks: [],
       permissionModes: [],
       currentPermissionMode: "",
+      slashCommands: null,
       queued: [],
     };
   }
@@ -335,6 +339,10 @@ function handleChatEvent(e: Record<string, unknown>) {
       store.permissionModes = e["modes"] as PermissionModeOption[];
       store.currentPermissionMode = e["current"] as string;
       sharedPermissionModes.value = store.permissionModes;
+      break;
+    }
+    case "slash_commands_available": {
+      store.slashCommands = e["commands"] as string[];
       break;
     }
     case "subagent_start": {
@@ -623,6 +631,10 @@ export function useChatSession(sessionId: Ref<string | null>) {
       return own?.length ? own : sharedPermissionModes.value;
     }),
     currentPermissionMode: computed(() => current.value?.currentPermissionMode ?? ""),
+    /** null 表示本会话还没收到过 SDK 权威清单——不做跨会话共享兜底
+     *  （跟 models/permissionModes 不同：这里的兜底走 ChatPanel 里的
+     *  useSlashCommands 本地扫描，而不是借用别的会话学到的列表）。 */
+    slashCommands: computed(() => current.value?.slashCommands ?? null),
     /** 账号级订阅额度/速率——跨会话共享，null 时 UI 隐藏。 */
     rateLimit: computed(() => sharedRateLimit.value),
     queuedPrompts: computed(() => (current.value?.queued ?? []).map((q) => q.prompt)),

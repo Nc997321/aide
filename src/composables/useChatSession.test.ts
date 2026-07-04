@@ -262,6 +262,21 @@ describe("useChatSession per-session store", () => {
     expect(chat.currentModel.value).toBe("sonnet");
   });
 
+  it("slash_commands_available 更新会话的命令清单", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    expect(chat.slashCommands.value).toBeNull();
+
+    emit({
+      type: "slash_commands_available",
+      commands: ["compact", "clear", "review-pr"],
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.slashCommands.value).toEqual(["compact", "clear", "review-pr"]);
+  });
+
   it("context_usage 更新会话的上下文窗口用量", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);

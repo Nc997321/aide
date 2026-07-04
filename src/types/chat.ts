@@ -54,6 +54,12 @@ export interface PermissionModeOption {
   displayName: string;
 }
 
+// Sidecar → Rust → 前端 的部分事件（本文件仅镜像消费端需要的形状，非完整协议）
+export type ChatEvent =
+  | { type: "permission_modes_available"; modes: PermissionModeOption[]; current: string }
+  // 会话建立时 SDK 回传的权威 slash commands 清单；跟 agent-sidecar/src/types.ts 镜像。
+  | { type: "slash_commands_available"; commands: string[] };
+
 /** 当前会话的上下文窗口用量——每轮结束后由 sidecar 刷新一次。 */
 export interface ContextUsage {
   totalTokens: number;
