@@ -194,25 +194,25 @@ function openUpdate() {
 }
 
 async function switchWorkspace(ws: WorkspaceInfo) {
-  const isCurrentActive = ws.key === activeWorkspace.value;
-
-  if (isCurrentActive) {
-    // Clicking the active workspace: toggle expand/collapse
-    if (expandedWorkspaces.value.has(ws.key)) {
-      expandedWorkspaces.value.delete(ws.key);
-    } else {
-      expandedWorkspaces.value.add(ws.key);
-    }
+  // 工作区头部点击 = 纯展开/收起开关（VS Code 语义），与激活态无关：
+  // 若收起也要求先激活，两个展开的工作区来回点时第一下会被"抢激活"
+  // 消耗掉，收起就得点两下。激活切换只在展开非活动工作区时顺带发生，
+  // 或通过点击其下的会话条目（selectSessionFromWorkspace）。
+  if (expandedWorkspaces.value.has(ws.key)) {
+    expandedWorkspaces.value.delete(ws.key);
     return;
   }
 
-  // Clicking a non-active workspace: switch to it + expand
-  // (old workspace stays expanded if it was expanded before)
+  expandedWorkspaces.value.add(ws.key);
+  if (ws.key === activeWorkspace.value) return;
+
   try {
     await api.setWorkspace(ws.key, ws.name);
-  } catch (_e) { return; }
+  } catch (_e) {
+    expandedWorkspaces.value.delete(ws.key);
+    return;
+  }
   activeWorkspace.value = ws.key;
-  expandedWorkspaces.value.add(ws.key);
   emit("workspace-changed", ws.name);
   await setCurrentWs(ws.key, ws.name);
   await loadSessions();
