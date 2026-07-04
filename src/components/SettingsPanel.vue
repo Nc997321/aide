@@ -249,7 +249,7 @@ function onOverlayClick(e: MouseEvent) {
             <!-- ── 通用 Tab ── -->
             <div v-if="activeTab === 'general'" class="tab-general">
               <div class="settings-field">
-                <label class="field-label">终端字号</label>
+                <label class="field-label">代码字号</label>
                 <div class="field-control">
                   <input
                     v-model.number="fontSizeLocal"
@@ -260,15 +260,17 @@ function onOverlayClick(e: MouseEvent) {
                   />
                   <span class="field-value">{{ fontSizeLocal }}px</span>
                 </div>
+                <span class="field-hint">作用于文件编辑器与工作台终端</span>
               </div>
 
               <div class="settings-field">
-                <label class="field-label">终端字体</label>
+                <label class="field-label">代码字体</label>
                 <input
                   v-model="fontFamilyLocal"
                   class="text-input"
-                  placeholder="输入字体名称..."
+                  placeholder="输入等宽字体名称..."
                 />
+                <span class="field-hint">作用于文件编辑器与工作台终端，建议等宽字体</span>
               </div>
 
               <div class="settings-field">

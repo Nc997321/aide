@@ -4,15 +4,13 @@ use std::collections::HashMap;
 
 use super::settings::{load_config, save_config};
 
+/// TUI 时代通过 `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` 把 Claude 别名
+/// 偷偷映射到第三方模型的机制已移除——SDK 版模型下拉直接展示供应商的真实
+/// 模型 id。只保留子代理模型指定（`CLAUDE_CODE_SUBAGENT_MODEL`，合法能力）。
+/// 旧配置里的 opus/sonnet/haiku 字段 serde 反序列化时自动忽略。
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderModelMappings {
-    #[serde(default)]
-    pub opus: String,
-    #[serde(default)]
-    pub sonnet: String,
-    #[serde(default)]
-    pub haiku: String,
     #[serde(default)]
     pub subagent: String,
 }
@@ -48,9 +46,6 @@ pub fn provider_to_env_vars(p: &ProviderConfig) -> HashMap<String, String> {
         ("ANTHROPIC_API_KEY", &p.api_key),
         ("ANTHROPIC_AUTH_TOKEN", &p.auth_token),
         ("ANTHROPIC_MODEL", &p.model),
-        ("ANTHROPIC_DEFAULT_OPUS_MODEL", &p.model_mappings.opus),
-        ("ANTHROPIC_DEFAULT_SONNET_MODEL", &p.model_mappings.sonnet),
-        ("ANTHROPIC_DEFAULT_HAIKU_MODEL", &p.model_mappings.haiku),
         ("CLAUDE_CODE_SUBAGENT_MODEL", &p.model_mappings.subagent),
         ("CLAUDE_CODE_EFFORT_LEVEL", &p.effort_level),
     ];

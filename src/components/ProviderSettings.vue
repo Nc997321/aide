@@ -23,9 +23,6 @@ const form = ref({
   apiKey: "",
   authToken: "",
   model: "",
-  opus: "",
-  sonnet: "",
-  haiku: "",
   subagent: "",
   effortLevel: "",
   knownModels: [] as string[],
@@ -34,7 +31,6 @@ const form = ref({
 const showApiKey = ref(false);
 const showAuthToken = ref(false);
 const newModelTag = ref("");
-const showMappings = ref(false);
 
 function loadForm(p: ProviderConfig) {
   form.value = {
@@ -44,16 +40,12 @@ function loadForm(p: ProviderConfig) {
     apiKey: p.apiKey,
     authToken: p.authToken,
     model: p.model,
-    opus: p.modelMappings.opus,
-    sonnet: p.modelMappings.sonnet,
-    haiku: p.modelMappings.haiku,
     subagent: p.modelMappings.subagent,
     effortLevel: p.effortLevel,
     knownModels: [...p.knownModels],
   };
   showApiKey.value = false;
   showAuthToken.value = false;
-  showMappings.value = false;
 }
 
 function selectProvider(id: string) {
@@ -75,9 +67,6 @@ async function handleAdd() {
 async function handleSave() {
   if (!selectedId.value) return;
   const mappings: ProviderModelMappings = {
-    opus: form.value.opus,
-    sonnet: form.value.sonnet,
-    haiku: form.value.haiku,
     subagent: form.value.subagent,
   };
   await updateProvider(selectedId.value, {
@@ -248,36 +237,21 @@ function knownModelsForDatalist(): string[] {
           </select>
         </div>
 
-        <!-- Model mappings (collapsible) -->
-        <div class="form-section">
-          <button class="section-toggle" @click="showMappings = !showMappings">
-            <svg class="toggle-arrow" :class="{ open: showMappings }" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            模型映射
-          </button>
-
-          <div v-if="showMappings" class="mapping-fields">
-            <div class="mapping-row">
-              <span class="mapping-label">Opus</span>
-              <input v-model="form.opus" class="text-input" placeholder="留空不覆盖" />
-            </div>
-            <div class="mapping-row">
-              <span class="mapping-label">Sonnet</span>
-              <input v-model="form.sonnet" class="text-input" placeholder="留空不覆盖" />
-            </div>
-            <div class="mapping-row">
-              <span class="mapping-label">Haiku</span>
-              <input v-model="form.haiku" class="text-input" placeholder="留空不覆盖" />
-            </div>
-            <div class="mapping-row">
-              <span class="mapping-label">Subagent</span>
-              <input v-model="form.subagent" class="text-input" placeholder="留空不覆盖" />
-            </div>
-          </div>
+        <div class="form-field">
+          <label>子代理模型</label>
+          <input
+            v-model="form.subagent"
+            class="text-input"
+            list="known-models-list"
+            placeholder="留空跟随主模型"
+          />
+          <span class="form-hint">子代理（并行任务）单独用的模型，通常选便宜快的</span>
         </div>
 
-        <!-- Known models tags -->
+        <!-- 模型列表：会话面板模型下拉的数据源（真实模型 id，不做别名映射） -->
         <div class="form-section">
-          <label>已知模型</label>
+          <label>模型列表</label>
+          <span class="form-hint">会话面板的模型下拉从这里取，填该供应商的真实模型 id</span>
           <div class="tags-area">
             <span
               v-for="(m, idx) in form.knownModels"
@@ -518,64 +492,16 @@ select.text-input {
   background: var(--aide-surface-default);
 }
 
-/* ── Mappings ── */
-
 .form-section {
   border-top: 1px solid var(--aide-surface-default);
   padding-top: 10px;
 }
 
-.section-toggle {
-  background: none;
-  border: none;
-  color: var(--aide-text-secondary);
-  cursor: pointer;
-  font-size: 12px;
-  font-family: inherit;
-  padding: 4px 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  transition: color 0.12s;
-}
-
-.section-toggle:hover {
-  color: var(--aide-text-primary);
-}
-
-.toggle-arrow {
-  transition: transform 0.15s;
-  display: inline-flex;
-  flex-shrink: 0;
-  color: var(--aide-text-muted);
-}
-
-.toggle-arrow.open {
-  transform: rotate(90deg);
-}
-
-.mapping-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.mapping-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.mapping-label {
+.form-hint {
+  display: block;
   font-size: 11px;
   color: var(--aide-text-muted);
-  width: 56px;
-  flex-shrink: 0;
-}
-
-.mapping-row .text-input {
-  flex: 1;
+  margin: 4px 0 6px;
 }
 
 /* ── Tags ── */

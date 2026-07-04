@@ -76,10 +76,9 @@ export interface ChangeFile {
 
 // ── Provider types ──
 
+/** TUI 时代的 opus/sonnet/haiku 别名欺骗映射已移除——SDK 版下拉直接展示
+ *  供应商的真实模型 id（knownModels）。只保留子代理模型指定（合法 CLI 能力）。 */
 export interface ProviderModelMappings {
-  opus: string;
-  sonnet: string;
-  haiku: string;
   subagent: string;
 }
 

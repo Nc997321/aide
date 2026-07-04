@@ -42,7 +42,7 @@ const emit = defineEmits<{
 }>();
 
 const { state: sessionState } = useSessionState();
-const { activeProvider } = useProviders();
+const { activeProvider, SYSTEM_DEFAULT_ID } = useProviders();
 
 // 会话还没开始时没有活的 sidecar 进程，SDK 的 models_available 事件还没发生，
 // props.models 是空的——依次退化：provider 设置里配置的 knownModels（用户自己
@@ -63,11 +63,23 @@ onMounted(async () => {
   }
 });
 
-const preSessionModels = computed<ModelOption[]>(() => {
-  const known = activeProvider.value.knownModels;
-  return known.length ? known.map((v) => ({ value: v, displayName: v })) : defaultModels.value;
+/** 第三方供应商自己的真实模型列表：配置里的默认模型 + 模型列表（去重） */
+const providerModels = computed<ModelOption[]>(() => {
+  const p = activeProvider.value;
+  const vals = [...new Set([...(p.model ? [p.model] : []), ...p.knownModels])];
+  return vals.map((v) => ({ value: v, displayName: v }));
 });
-const displayModels = computed(() => (props.models?.length ? props.models : preSessionModels.value));
+
+const displayModels = computed<ModelOption[]>(() => {
+  // 第三方供应商：下拉展示真实模型 id，始终以供应商配置为准——SDK 回发的
+  // 是 Claude 的 opus/sonnet 别名列表，对第三方是假象（TUI 时代的别名
+  // 欺骗机制已移除），选了还可能打到不存在的模型。
+  if (activeProvider.value.id !== SYSTEM_DEFAULT_ID) {
+    return providerModels.value;
+  }
+  // 系统默认（真 Claude）：SDK 学到的列表 > 静态兜底
+  return props.models?.length ? props.models : defaultModels.value;
+});
 
 /** 本地选中值：随 props.currentModel（SDK 坐实/切换确认）同步；
  *  会话开始前没有 props.currentModel，用户选的先存在这，随第一条消息带走。 */
@@ -93,6 +105,11 @@ watch(() => props.sessionId, (sid) => {
     selectedModel.value = "";
     applyDefaultModel(displayModels.value);
   }
+});
+// 切供应商后旧选择大概率不在新列表里，重置回新供应商的默认模型
+watch(() => activeProvider.value.id, () => {
+  selectedModel.value = "";
+  applyDefaultModel(displayModels.value);
 });
 
 function handleModelChange(value: string) {

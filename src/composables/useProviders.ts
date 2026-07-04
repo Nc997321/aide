@@ -16,7 +16,7 @@ const systemDefault: ProviderConfig = {
   apiKey: "",
   authToken: "",
   model: "",
-  modelMappings: { opus: "", sonnet: "", haiku: "", subagent: "" },
+  modelMappings: { subagent: "" },
   effortLevel: "",
   knownModels: [],
 };
@@ -61,7 +61,7 @@ async function addProvider(partial: Partial<ProviderConfig> = {}): Promise<Provi
     apiKey: partial.apiKey ?? "",
     authToken: partial.authToken ?? "",
     model: partial.model ?? "",
-    modelMappings: partial.modelMappings ?? { opus: "", sonnet: "", haiku: "", subagent: "" },
+    modelMappings: partial.modelMappings ?? { subagent: "" },
     effortLevel: partial.effortLevel ?? "",
     knownModels: partial.knownModels ?? [],
   };
