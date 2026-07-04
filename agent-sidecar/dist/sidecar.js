@@ -45574,6 +45574,67 @@ function buildUserMessage(prompt, images) {
   }
   return { role: "user", content: blocks };
 }
+function describeResultError(msg) {
+  const parts = [];
+  const status = msg.api_error_status;
+  if (status === 401 || status === 403) {
+    parts.push("\u8BA4\u8BC1\u5931\u8D25\uFF1A\u672A\u767B\u5F55\uFF0C\u6216 API \u5BC6\u94A5 / \u4EE4\u724C\u65E0\u6548");
+  } else if (status === 429) {
+    parts.push("\u8BF7\u6C42\u88AB\u9650\u6D41\u6216\u989D\u5EA6\u5DF2\u7528\u5C3D\uFF08HTTP 429\uFF09");
+  } else if (typeof status === "number") {
+    parts.push(`\u63A5\u53E3\u8FD4\u56DE\u9519\u8BEF\uFF08HTTP ${status}\uFF09`);
+  }
+  const errs = Array.isArray(msg.errors) ? msg.errors.filter(Boolean) : [];
+  if (errs.length > 0) {
+    parts.push(errs.map((e) => String(e)).join("\uFF1B"));
+  } else if (typeof msg.result === "string" && msg.result.trim()) {
+    parts.push(msg.result.trim());
+  }
+  if (parts.length === 0) {
+    const bySubtype = {
+      error_during_execution: "\u6267\u884C\u8FC7\u7A0B\u4E2D\u51FA\u9519",
+      error_max_turns: "\u5DF2\u8FBE\u5230\u6700\u5927\u56DE\u5408\u6570\u4E0A\u9650",
+      error_max_budget_usd: "\u5DF2\u8FBE\u5230\u9884\u7B97\uFF08\u82B1\u8D39\uFF09\u4E0A\u9650",
+      error_max_structured_output_retries: "\u7ED3\u6784\u5316\u8F93\u51FA\u91CD\u8BD5\u6B21\u6570\u7528\u5C3D"
+    };
+    parts.push(bySubtype[msg.subtype] ?? `\u4F1A\u8BDD\u5F02\u5E38\u7ED3\u675F\uFF08${msg.subtype}\uFF09`);
+  }
+  return parts.join(" \u2014 ");
+}
+function buildRateLimitEvent(usage) {
+  const subscription = typeof usage?.subscription_type === "string" ? usage.subscription_type : null;
+  const windows = [];
+  const rl3 = usage?.rate_limits;
+  if (usage?.rate_limits_available !== false && rl3) {
+    const push = (key, label, w) => {
+      if (w && typeof w.utilization === "number") {
+        windows.push({
+          key,
+          label,
+          utilization: Math.min(100, Math.max(0, w.utilization)),
+          resets_at: isoToMs(w.resets_at)
+        });
+      }
+    };
+    push("five_hour", "5 \u5C0F\u65F6", rl3.five_hour);
+    push("seven_day", "7 \u5929", rl3.seven_day);
+    push("seven_day_opus", "7 \u5929 Opus", rl3.seven_day_opus);
+    push("seven_day_sonnet", "7 \u5929 Sonnet", rl3.seven_day_sonnet);
+    push("seven_day_oauth_apps", "7 \u5929 OAuth", rl3.seven_day_oauth_apps);
+    if (Array.isArray(rl3.model_scoped)) {
+      for (const m of rl3.model_scoped) {
+        push(`model:${m?.display_name ?? "?"}`, String(m?.display_name ?? "\u6A21\u578B"), m);
+      }
+    }
+    if (rl3.extra_usage) push("extra_usage", "\u8D85\u989D", rl3.extra_usage);
+  }
+  return { type: "rate_limit", subscription, windows };
+}
+function isoToMs(iso) {
+  if (typeof iso !== "string" || !iso) return null;
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? null : t;
+}
 function mapSdkMessage(msg, emit2, tasks, subagents) {
   if (msg.parent_tool_use_id) return;
   if (msg.type === "system" && msg.subtype === "init") {
@@ -45626,6 +45687,10 @@ function mapSdkMessage(msg, emit2, tasks, subagents) {
     return;
   }
   if (msg.type === "result") {
+    if (msg.is_error === true || msg.subtype !== "success") {
+      emit2({ type: "error", message: describeResultError(msg), fatal: false });
+      return;
+    }
     const modelUsage = msg.modelUsage;
     const entries = modelUsage ? Object.values(modelUsage) : [];
     let usage = null;
@@ -45721,6 +45786,19 @@ async function emitContextUsage(q) {
   } catch {
   }
 }
+var RATE_LIMIT_MIN_INTERVAL_MS = 15e3;
+var lastRateLimitAt = 0;
+async function emitRateLimit(q) {
+  if (Date.now() - lastRateLimitAt < RATE_LIMIT_MIN_INTERVAL_MS) return;
+  try {
+    const anyQ = q;
+    if (typeof anyQ.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== "function") return;
+    const usage = await anyQ.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET();
+    lastRateLimitAt = Date.now();
+    emit(buildRateLimitEvent(usage));
+  } catch {
+  }
+}
 async function startLoop(cwd) {
   try {
     while (true) {
@@ -45763,6 +45841,7 @@ async function startLoop(cwd) {
             }
           } else if (msg.type === "result") {
             void emitContextUsage(q);
+            void emitRateLimit(q);
           }
         }
         break;

@@ -1,5 +1,5 @@
 import type { MessageParam } from "@anthropic-ai/sdk/resources";
-import type { ChatEvent, ImageAttachment, TurnUsage } from "./types.js";
+import type { ChatEvent, ImageAttachment, RateLimitWindow, TurnUsage } from "./types.js";
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
 
@@ -30,6 +30,94 @@ export function buildUserMessage(
     blocks.push({ type: "text", text: prompt });
   }
   return { role: "user", content: blocks as any };
+}
+
+/**
+ * 把一条"错误 result"翻译成给用户看的中文说明。
+ *
+ * SDK 在鉴权失败/额度超限/达上限等情况下不会抛异常，而是正常产出一条
+ * `result` 消息（`SDKResultError` 或带 `is_error:true` 的 success），错误细节
+ * 散落在 `errors[]` / `result` / `api_error_status` / `subtype` 上。这里按
+ * 优先级归并：先给常见 HTTP 状态一句人话，再附上 SDK 的原始错误文本兜底。
+ */
+export function describeResultError(msg: any): string {
+  const parts: string[] = [];
+
+  const status = msg.api_error_status as number | null | undefined;
+  if (status === 401 || status === 403) {
+    parts.push("认证失败：未登录，或 API 密钥 / 令牌无效");
+  } else if (status === 429) {
+    parts.push("请求被限流或额度已用尽（HTTP 429）");
+  } else if (typeof status === "number") {
+    parts.push(`接口返回错误（HTTP ${status}）`);
+  }
+
+  const errs = Array.isArray(msg.errors) ? (msg.errors as unknown[]).filter(Boolean) : [];
+  if (errs.length > 0) {
+    parts.push(errs.map((e) => String(e)).join("；"));
+  } else if (typeof msg.result === "string" && msg.result.trim()) {
+    parts.push(msg.result.trim());
+  }
+
+  if (parts.length === 0) {
+    const bySubtype: Record<string, string> = {
+      error_during_execution: "执行过程中出错",
+      error_max_turns: "已达到最大回合数上限",
+      error_max_budget_usd: "已达到预算（花费）上限",
+      error_max_structured_output_retries: "结构化输出重试次数用尽",
+    };
+    parts.push(bySubtype[msg.subtype as string] ?? `会话异常结束（${msg.subtype}）`);
+  }
+
+  return parts.join(" — ");
+}
+
+/**
+ * 把 SDK `/usage`（`usage_EXPERIMENTAL_…()`）的结构化响应折成 provider-agnostic 的
+ * `rate_limit` 事件——这是订阅额度的正确数据源（每个窗口 utilization 明确 0-100、
+ * 带 ISO 重置时间、一次给全部并行窗口）。以前用的 `rate_limit_event` 只报单窗口
+ * 且 utilization 是 0-1（导致 76% 显示成 1%），已弃用。
+ *
+ * `rate_limits_available` 为 false（API Key / Bedrock / Vertex / 三方）时 windows 为空，
+ * 前端据此隐藏。Claude 专属的窗口词汇（five_hour/seven_day_opus…）在这里翻成人话，
+ * 挡在 sidecar 内不进核心协议。
+ */
+export function buildRateLimitEvent(usage: any): ChatEvent {
+  const subscription: string | null =
+    typeof usage?.subscription_type === "string" ? usage.subscription_type : null;
+  const windows: RateLimitWindow[] = [];
+  const rl = usage?.rate_limits;
+  if (usage?.rate_limits_available !== false && rl) {
+    const push = (key: string, label: string, w: any) => {
+      if (w && typeof w.utilization === "number") {
+        windows.push({
+          key,
+          label,
+          utilization: Math.min(100, Math.max(0, w.utilization)),
+          resets_at: isoToMs(w.resets_at),
+        });
+      }
+    };
+    push("five_hour", "5 小时", rl.five_hour);
+    push("seven_day", "7 天", rl.seven_day);
+    push("seven_day_opus", "7 天 Opus", rl.seven_day_opus);
+    push("seven_day_sonnet", "7 天 Sonnet", rl.seven_day_sonnet);
+    push("seven_day_oauth_apps", "7 天 OAuth", rl.seven_day_oauth_apps);
+    if (Array.isArray(rl.model_scoped)) {
+      for (const m of rl.model_scoped) {
+        push(`model:${m?.display_name ?? "?"}`, String(m?.display_name ?? "模型"), m);
+      }
+    }
+    if (rl.extra_usage) push("extra_usage", "超额", rl.extra_usage);
+  }
+  return { type: "rate_limit", subscription, windows };
+}
+
+/** ISO 8601 时间串 → unix 毫秒；空或非法返回 null。 */
+function isoToMs(iso: unknown): number | null {
+  if (typeof iso !== "string" || !iso) return null;
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? null : t;
 }
 
 export function mapSdkMessage(
@@ -100,6 +188,13 @@ export function mapSdkMessage(
   }
 
   if (msg.type === "result") {
+    // 错误 result（鉴权/额度/达上限等）SDK 不抛异常，会走到这里。以前和成功一样
+    // 压成 message_stop，错误细节全被吞掉 → 前端静默落 waiting，用户"发消息没反应"。
+    // 现在路由到 error 通道（fatal:false，进程仍存活可重试），前端会渲染错误气泡。
+    if (msg.is_error === true || msg.subtype !== "success") {
+      emit({ type: "error", message: describeResultError(msg), fatal: false });
+      return;
+    }
     const modelUsage = msg.modelUsage as Record<string, {
       inputTokens?: number;
       outputTokens?: number;

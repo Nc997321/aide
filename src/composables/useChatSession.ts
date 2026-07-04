@@ -7,6 +7,7 @@ import type {
   ModelOption,
   PermissionModeOption,
   PermissionRequest,
+  RateLimitInfo,
   SubagentBlock,
   TaskItem,
   TextBlock,
@@ -72,6 +73,9 @@ const stores = reactive<Record<string, SessionStore>>({});
 const sharedModels = ref<ModelOption[]>([]);
 /** 权限模式清单同理是 sidecar 实现级别的事实，跨会话共享。 */
 const sharedPermissionModes = ref<PermissionModeOption[]>([]);
+/** 订阅额度/速率是账号级别的事实，跨会话共享——任意会话收到的最新一条即当前状态。
+ *  null 表示还没收到过（非订阅计费或 provider 不报配额时永远为 null，UI 隐藏）。 */
+const sharedRateLimit = ref<RateLimitInfo | null>(null);
 /** 迁移窗口期：旧 key → 新 id（Rust rename 完成前的在途事件转发） */
 const aliasMap = new Map<string, string>();
 /** 尚未被 SDK 确认的临时 key（纯内存，从未落盘）。resume 判定与 hydrate 跳过都靠它。 */
@@ -311,6 +315,20 @@ function handleChatEvent(e: Record<string, unknown>) {
     }
     case "tasks_update": {
       store.tasks = e["tasks"] as TaskItem[];
+      break;
+    }
+    case "rate_limit": {
+      // 账号级配额，跨会话共享——最新一条即当前状态；windows 空表示非订阅/不报配额。
+      const rawWindows = (e["windows"] as Array<Record<string, unknown>> | undefined) ?? [];
+      sharedRateLimit.value = {
+        subscription: (e["subscription"] as string | null) ?? null,
+        windows: rawWindows.map((w) => ({
+          key: w["key"] as string,
+          label: w["label"] as string,
+          utilization: w["utilization"] as number,
+          resetsAt: (w["resets_at"] as number | null) ?? null,
+        })),
+      };
       break;
     }
     case "permission_modes_available": {
@@ -598,6 +616,8 @@ export function useChatSession(sessionId: Ref<string | null>) {
       return own?.length ? own : sharedPermissionModes.value;
     }),
     currentPermissionMode: computed(() => current.value?.currentPermissionMode ?? ""),
+    /** 账号级订阅额度/速率——跨会话共享，null 时 UI 隐藏。 */
+    rateLimit: computed(() => sharedRateLimit.value),
     queuedPrompts: computed(() => (current.value?.queued ?? []).map((q) => q.prompt)),
     sendMessage,
     respondPermission,

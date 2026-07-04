@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mapSdkMessage } from "./mapper.js";
+import { mapSdkMessage, describeResultError, buildRateLimitEvent } from "./mapper.js";
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
 import type { ChatEvent } from "./types.js";
@@ -142,6 +142,96 @@ describe("mapSdkMessage streaming (includePartialMessages)", () => {
     mapSdkMessage(thinking, (e) => events.push(e), new TaskTracker(), new SubagentTracker());
     mapSdkMessage(streamTextDelta("子代理文本", "a1"), (e) => events.push(e), new TaskTracker(), new SubagentTracker());
     expect(events).toEqual([]);
+  });
+});
+
+describe("mapSdkMessage error results (未登录 / 额度上限 不再静默)", () => {
+  const tasks = () => new TaskTracker();
+  const subs = () => new SubagentTracker();
+
+  it("routes an error-subtype result to the error channel instead of message_stop", () => {
+    const events: ChatEvent[] = [];
+    // SDKResultError 形状没有 api_error_status，错误细节在 errors[] 里。
+    mapSdkMessage(
+      { type: "result", subtype: "error_during_execution", is_error: true, errors: ["API Error: 401 Unauthorized"] },
+      (e) => events.push(e),
+      tasks(),
+      subs(),
+    );
+    expect(events).toEqual([
+      { type: "error", message: "API Error: 401 Unauthorized", fatal: false },
+    ]);
+  });
+
+  it("treats a success-subtype result with is_error:true as an error too (429 quota)", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      { type: "result", subtype: "success", is_error: true, api_error_status: 429, result: "rate limit exceeded" },
+      (e) => events.push(e),
+      tasks(),
+      subs(),
+    );
+    expect(events).toEqual([
+      { type: "error", message: "请求被限流或额度已用尽（HTTP 429） — rate limit exceeded", fatal: false },
+    ]);
+  });
+
+  it("still emits message_stop for a clean successful result", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      { type: "result", subtype: "success", is_error: false, total_cost_usd: 0.01 },
+      (e) => events.push(e),
+      tasks(),
+      subs(),
+    );
+    expect(events).toEqual([
+      { type: "message_stop", stop_reason: "end_turn", total_cost_usd: 0.01, usage: null },
+    ]);
+  });
+
+  it("describeResultError falls back to a subtype label when no detail is present", () => {
+    expect(describeResultError({ subtype: "error_max_turns" })).toBe("已达到最大回合数上限");
+  });
+});
+
+describe("buildRateLimitEvent (订阅额度可见化，多窗口)", () => {
+  it("folds all parallel windows with 0-100 utilization and ISO reset → ms", () => {
+    const ev: any = buildRateLimitEvent({
+      subscription_type: "max",
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 42, resets_at: "2026-07-04T20:00:00.000Z" },
+        seven_day: { utilization: 76, resets_at: "2026-07-10T00:00:00.000Z" },
+        seven_day_opus: { utilization: 91, resets_at: null },
+        seven_day_sonnet: null,
+        model_scoped: [{ display_name: "Fable", utilization: 12, resets_at: null }],
+      },
+    });
+    expect(ev.type).toBe("rate_limit");
+    expect(ev.subscription).toBe("max");
+    expect(ev.windows).toEqual([
+      { key: "five_hour", label: "5 小时", utilization: 42, resets_at: Date.parse("2026-07-04T20:00:00.000Z") },
+      { key: "seven_day", label: "7 天", utilization: 76, resets_at: Date.parse("2026-07-10T00:00:00.000Z") },
+      { key: "seven_day_opus", label: "7 天 Opus", utilization: 91, resets_at: null },
+      { key: "model:Fable", label: "Fable", utilization: 12, resets_at: null },
+    ]);
+  });
+
+  it("emits empty windows when rate limits are unavailable (API key / 3P)", () => {
+    const ev: any = buildRateLimitEvent({ subscription_type: null, rate_limits_available: false, rate_limits: null });
+    expect(ev).toEqual({ type: "rate_limit", subscription: null, windows: [] });
+  });
+
+  it("clamps utilization into 0-100 and skips windows with non-numeric utilization", () => {
+    const ev: any = buildRateLimitEvent({
+      subscription_type: "pro",
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 130, resets_at: null },   // clamp → 100
+        seven_day: { utilization: null, resets_at: null },  // skipped
+      },
+    });
+    expect(ev.windows).toEqual([{ key: "five_hour", label: "5 小时", utilization: 100, resets_at: null }]);
   });
 });
 

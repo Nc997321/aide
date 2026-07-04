@@ -21,6 +21,15 @@ export interface PermissionModeOption {
   displayName: string;
 }
 
+/** 单个额度窗口——provider-agnostic：utilization 归一到 0-100（已用百分比），
+ *  resets_at 是 unix 毫秒（拿不到为 null），label 由 sidecar 翻成人话。 */
+export interface RateLimitWindow {
+  key: string;
+  label: string;
+  utilization: number;
+  resets_at: number | null;
+}
+
 /** 待办任务项——provider-agnostic，任何 agent 的"任务追踪"能力都映射成这个形状。 */
 export interface TaskItem {
   id: string;
@@ -43,6 +52,10 @@ export type ChatEvent =
   | { type: "models_available"; models: ModelOption[]; current: string }
   | { type: "permission_modes_available"; modes: PermissionModeOption[]; current: string }
   | { type: "context_usage"; total_tokens: number; max_tokens: number; percentage: number }
+  // 订阅额度/速率可见化——provider-agnostic：一次带回全部并行窗口（5 小时 / 7 天 /
+  // 各模型周窗等）。utilization 统一 0-100，label 由各 sidecar 翻成人话，核心协议
+  // 不认识具体配额类型。subscription 为订阅档位（pro/max…），API Key/三方为 null。
+  | { type: "rate_limit"; subscription: string | null; windows: RateLimitWindow[] }
   | { type: "tasks_update"; tasks: TaskItem[] }
   // fatal:false = 可恢复错误（进程仍存活、继续等下一条消息）；缺省/true = 致命。
   // 前端据此决定落 waiting+warning（红点）还是 stopped（灰点）。

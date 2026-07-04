@@ -5,7 +5,7 @@ import { MessageQueue } from "./generator.js";
 import { PermissionManager } from "./permissions.js";
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
-import { mapSdkMessage, buildUserMessage } from "./mapper.js";
+import { mapSdkMessage, buildUserMessage, buildRateLimitEvent } from "./mapper.js";
 
 function emit(event: ChatEvent) {
   process.stdout.write(JSON.stringify(event) + "\n");
@@ -112,6 +112,25 @@ async function emitContextUsage(q: Awaited<ReturnType<typeof query>>) {
   }
 }
 
+// 订阅额度：查 SDK `/usage` 结构化端点（会打 claude.ai usage 接口）。节流到至少
+// 隔 RATE_LIMIT_MIN_INTERVAL_MS 才查一次，避免每轮都打网络。API Key / 三方 provider
+// 或 SDK 版本不支持时静默跳过（响应里 rate_limits_available=false → windows 为空）。
+const RATE_LIMIT_MIN_INTERVAL_MS = 15_000;
+let lastRateLimitAt = 0;
+async function emitRateLimit(q: Awaited<ReturnType<typeof query>>) {
+  if (Date.now() - lastRateLimitAt < RATE_LIMIT_MIN_INTERVAL_MS) return;
+  try {
+    // 实验性 API，名字带 DO_NOT_RELY——用可选链 + try/catch 兜底，缺了就跳过。
+    const anyQ = q as any;
+    if (typeof anyQ.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== "function") return;
+    const usage = await anyQ.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET();
+    lastRateLimitAt = Date.now();
+    emit(buildRateLimitEvent(usage));
+  } catch {
+    // 实验性/不支持/非订阅会话：跳过，前端 windows 为空即隐藏
+  }
+}
+
 async function startLoop(cwd?: string) {
   try {
     // 出错后继续循环，等待下一条消息（避免 queue 无消费者）
@@ -160,8 +179,9 @@ async function startLoop(cwd?: string) {
               emit({ type: "models_available", models: lastModels, current: currentModel });
             }
           } else if ((msg as any).type === "result") {
-            // 每轮结束后上下文用量才稳定，这里查一次刷新进度条
+            // 每轮结束后上下文用量才稳定，这里查一次刷新进度条 + 订阅额度
             void emitContextUsage(q);
+            void emitRateLimit(q);
           }
         }
         // for await 正常结束（queue closed）

@@ -3,7 +3,7 @@ import { ref, watch, nextTick, computed, onMounted } from "vue";
 import type { ComputedRef } from "vue";
 import ChatMessage from "./ChatMessage.vue";
 import TaskListPanel from "./TaskListPanel.vue";
-import type { ChatMessage as ChatMessageType, ContextUsage, ModelOption, PermissionModeOption, TaskItem, TextBlock } from "@/types/chat";
+import type { ChatMessage as ChatMessageType, ContextUsage, ModelOption, PermissionModeOption, RateLimitInfo, TaskItem, TextBlock } from "@/types/chat";
 import type { SkillMeta } from "@/types";
 import { api } from "@/api";
 import { resolvePastePayload } from "@/utils/paste";
@@ -25,6 +25,8 @@ const props = defineProps<{
   currentModel?: string;
   totalCostUsd?: number;
   contextUsage?: ContextUsage | null;
+  /** 账号级订阅额度/速率；null 时不显示 */
+  rateLimit?: RateLimitInfo | null;
   tasks?: TaskItem[];
   permissionModes?: PermissionModeOption[];
   currentPermissionMode?: string;
@@ -125,6 +127,36 @@ function handleModelChange(value: string) {
 const displayPermissionModes = computed<PermissionModeOption[]>(() =>
   props.permissionModes?.length ? props.permissionModes : defaultPermissionModes.value,
 );
+
+// 订阅额度展示：把每个并行窗口折成一个小徽标（已用% + 状态色 + 重置时间）。
+// 按已用比例降序（最吃紧的排前面），空则不显示。
+const rateLimitWindows = computed(() => {
+  const wins = props.rateLimit?.windows ?? [];
+  return [...wins]
+    .sort((a, b) => b.utilization - a.utilization)
+    .map((w) => {
+      const pct = Math.round(w.utilization);
+      const status = pct >= 100 ? "exceeded" : pct >= 80 ? "warning" : "ok";
+      const resetText = formatResetTime(w.resetsAt);
+      const parts = [`${w.label} 额度已用 ${pct}%`];
+      if (resetText) parts.push(`${resetText}重置`);
+      if (status === "exceeded") parts.push("已达上限");
+      return { key: w.key, label: w.label, pct, status, title: parts.join(" · ") };
+    });
+});
+
+/** resetsAt 可能是秒或毫秒的 unix 时间戳——启发式归一到毫秒后折成"还剩 Xh/Xm"。 */
+function formatResetTime(resetsAt: number | null): string | null {
+  if (typeof resetsAt !== "number" || resetsAt <= 0) return null;
+  const ms = resetsAt < 1e12 ? resetsAt * 1000 : resetsAt; // < 1e12 视作秒
+  const diff = ms - Date.now();
+  if (diff <= 0) return null;
+  const mins = Math.round(diff / 60000);
+  if (mins < 60) return `约 ${mins} 分钟后`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `约 ${hours} 小时后`;
+  return `约 ${Math.round(hours / 24)} 天后`;
+}
 
 const selectedPermissionMode = ref("");
 
@@ -457,6 +489,20 @@ async function handleSend() {
             </div>
             <span class="chat-ctx-percent">{{ Math.round(props.contextUsage.percentage) }}%</span>
           </div>
+          <div
+            v-for="w in rateLimitWindows"
+            :key="w.key"
+            class="chat-quota"
+            :class="`chat-quota--${w.status}`"
+            :title="w.title"
+          >
+            <span class="chat-quota-dot" />
+            <span class="chat-quota-label">{{ w.label }}</span>
+            <div class="chat-ctx-bar">
+              <div class="chat-ctx-bar-fill" :style="{ width: w.pct + '%' }" />
+            </div>
+            <span class="chat-ctx-percent">{{ w.pct }}%</span>
+          </div>
           <span class="chat-cost-total">会话费用 ${{ (props.totalCostUsd ?? 0).toFixed(4) }}</span>
           <button
             class="chat-send-btn"
@@ -637,6 +683,40 @@ async function handleSend() {
   white-space: nowrap;
   min-width: 28px;
 }
+
+.chat-quota {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--aide-text-muted);
+  cursor: default;
+}
+
+.chat-quota-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--aide-accent);
+}
+
+.chat-quota-label {
+  white-space: nowrap;
+}
+
+/* 归一化状态色：ok 走强调色、warning 橙、exceeded 红（点 + 进度条同步变色）。 */
+.chat-quota--warning .chat-quota-dot,
+.chat-quota--warning .chat-ctx-bar-fill {
+  background: #e0a400;
+}
+.chat-quota--warning .chat-quota-label { color: #e0a400; }
+
+.chat-quota--exceeded .chat-quota-dot,
+.chat-quota--exceeded .chat-ctx-bar-fill {
+  background: var(--aide-danger, #e05561);
+}
+.chat-quota--exceeded .chat-quota-label { color: var(--aide-danger, #e05561); font-weight: 600; }
 
 .chat-cost-total {
   white-space: nowrap;

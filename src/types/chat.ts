@@ -61,6 +61,22 @@ export interface ContextUsage {
   percentage: number;
 }
 
+/** 单个额度窗口——跟 agent-sidecar/src/types.ts 的 RateLimitWindow 镜像。
+ *  utilization 为已用百分比 0-100，resetsAt 是 unix 毫秒。 */
+export interface RateLimitWindow {
+  key: string;
+  label: string;
+  utilization: number;
+  resetsAt: number | null;
+}
+
+/** 订阅额度/速率——provider-agnostic，跟 sidecar 的 rate_limit 事件镜像。
+ *  windows 为空表示非订阅计费或 provider 不报配额，UI 隐藏。 */
+export interface RateLimitInfo {
+  subscription: string | null;
+  windows: RateLimitWindow[];
+}
+
 /** 待办任务项——provider-agnostic，跟 agent-sidecar/src/types.ts 里的同名类型镜像。 */
 export interface TaskItem {
   id: string;
