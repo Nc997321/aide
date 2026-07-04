@@ -167,6 +167,71 @@ describe("useChatSession per-session store", () => {
     expect(state["uuid-a"]).toBe("stopped");
   });
 
+  it("可恢复错误(fatal:false)落 waiting + health warning，状态点投影为红(warning)", async () => {
+    const { state, health, dotTone } = useSessionState();
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    emit({ type: "error", message: "boom", fatal: false, session_id: "uuid-a" });
+    await flush();
+    // 进程仍活 → 活跃度落 waiting（不再谎报 stopped），健康度 warning，投影红点
+    expect(state["uuid-a"]).toBe("waiting");
+    expect(health["uuid-a"]).toBe("warning");
+    expect(dotTone("uuid-a")).toBe("warning");
+    expect(chat.isBusy.value).toBe(false);
+  });
+
+  it("红点(warning)在下一条消息发出时清除，回到 running/绿", async () => {
+    const { health, dotTone } = useSessionState();
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    emit({ type: "error", message: "boom", fatal: false, session_id: "uuid-a" });
+    await flush();
+    expect(dotTone("uuid-a")).toBe("warning");
+
+    await chat.sendMessage("q2");
+    expect(health["uuid-a"]).toBe("ok");
+    expect(dotTone("uuid-a")).toBe("running");
+  });
+
+  it("stalled(橙)在新事件到达后回落为 ok——事件证伪“卡住”", async () => {
+    vi.useFakeTimers();
+    try {
+      const { health, dotTone } = useSessionState();
+      const sid = ref<string | null>("uuid-a");
+      const chat = useChatSession(sid);
+      await flush();
+      await chat.sendMessage("q");
+      // running 后连续 90s 无事件 → stalled（橙）
+      vi.advanceTimersByTime(90_000);
+      expect(health["uuid-a"]).toBe("stalled");
+      expect(dotTone("uuid-a")).toBe("stalled");
+      // 新事件到达 → 证伪卡住，回落 ok，投影回 running（绿）
+      emit({ type: "text_delta", delta: "又活了", session_id: "uuid-a" });
+      await flush();
+      expect(health["uuid-a"]).toBe("ok");
+      expect(dotTone("uuid-a")).toBe("running");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("session_dead 置 stopped(灰)并解除忙碌", async () => {
+    const { state, dotTone } = useSessionState();
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    emit({ type: "session_dead", reason: "heartbeat_timeout", session_id: "uuid-a" });
+    await flush();
+    expect(state["uuid-a"]).toBe("stopped");
+    expect(dotTone("uuid-a")).toBe("stopped");
+    expect(chat.isBusy.value).toBe(false);
+  });
+
   it("permission_cancelled 清掉挂起的对话框", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);

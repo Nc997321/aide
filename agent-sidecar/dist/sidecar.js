@@ -45653,6 +45653,8 @@ function mapSdkMessage(msg, emit2, tasks, subagents) {
 function emit(event) {
   process.stdout.write(JSON.stringify(event) + "\n");
 }
+var HEARTBEAT_INTERVAL_MS = 5e3;
+setInterval(() => emit({ type: "heartbeat" }), HEARTBEAT_INTERVAL_MS).unref();
 var proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy;
 if (proxyUrl) {
   const { ProxyAgent, setGlobalDispatcher } = await Promise.resolve().then(() => __toESM(require_undici(), 1));
@@ -45767,7 +45769,7 @@ async function startLoop(cwd) {
       } catch (e) {
         currentQuery = null;
         if (e?.name !== "AbortError") {
-          emit({ type: "error", message: String(e?.message ?? e) });
+          emit({ type: "error", message: String(e?.message ?? e), fatal: false });
         }
       }
     }

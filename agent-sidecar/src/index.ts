@@ -11,6 +11,11 @@ function emit(event: ChatEvent) {
   process.stdout.write(JSON.stringify(event) + "\n");
 }
 
+// 存活心跳：每 5s 一次。Rust 侧读到任意 stdout 行（含心跳）即证明进程存活并重置
+// 看门狗；连续 15s 无任何行 → 判死。unref() 让心跳本身不阻止进程自然退出。
+const HEARTBEAT_INTERVAL_MS = 5_000;
+setInterval(() => emit({ type: "heartbeat" }), HEARTBEAT_INTERVAL_MS).unref();
+
 const proxyUrl =
   process.env.HTTPS_PROXY ||
   process.env.HTTP_PROXY ||
@@ -164,7 +169,9 @@ async function startLoop(cwd?: string) {
       } catch (e: any) {
         currentQuery = null;
         if (e?.name !== "AbortError") {
-          emit({ type: "error", message: String(e?.message ?? e) });
+          // 进程在此 catch 后继续循环、等下一条消息——是可恢复错误，非致命。
+          // 标 fatal:false，前端落 waiting+warning（红点）而非 stopped。
+          emit({ type: "error", message: String(e?.message ?? e), fatal: false });
         }
         // AbortError（用户中断）或普通错误后继续循环，等待下一条消息
       }

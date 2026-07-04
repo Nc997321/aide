@@ -26,6 +26,7 @@
   --aide-success: #8bc48a;
   --aide-warning: #e8c374;
   --aide-danger: #e87070;
+  --aide-stalled: #e0955c;
   --aide-info: #7eb8d8;
   --aide-border: rgba(255, 255, 255, 0.06);
   --aide-border-subtle: rgba(255, 255, 255, 0.03);
