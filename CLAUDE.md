@@ -41,6 +41,21 @@ cmd.args(…);
 
 涉及文件：`git.rs`、`marketplace.rs`、`filesystem.rs`、以及未来任何 spawn 外部进程的代码。
 
+## ⚠️ Windows 必读坑点：`resource_dir()` 的 `\\?\` verbatim 路径
+
+**Tauri `app.path().resource_dir()` 在 Windows 上返回带 `\\?\` 前缀的 verbatim（扩展长度）路径。凡是要把这种路径当入口脚本 / 可执行文件传给外部进程（尤其 `node`），传出前必须 `dunce::simplified()` 剥掉前缀**，否则 node 的 `realpathSync` 处理不了 `\\?\`，会在 `run_main` 引导阶段一路退化到 `lstat 'C:'` → `EISDIR` 崩溃。
+
+典型现象：`pnpm tauri dev` 一切正常（dev 走 `CARGO_MANIFEST_DIR` 普通路径），**打包后一发消息就"会话进程已退出"**（release 才走 `resource_dir()`）。崩的是 sidecar 自己的 `node sidecar.js`，不是 claude.exe。
+
+```rust
+let path = resource_dir.join("agent-sidecar").join("sidecar.js");
+// ✗ cmd.arg(&path)                              // \\?\C:\... → node 崩 EISDIR 'C:'
+// ✓ cmd.arg(dunce::simplified(&path))           // C:\... 正常
+cmd.env("AIDE_CLAUDE_EXE", dunce::simplified(&claude_exe)); // SDK 会 spawn 它，同样要剥
+```
+
+只用 Rust `fs::read_to_string` 读的资源路径不受影响（std 能吃 `\\?\`）——只有**传给外部进程**的才要剥。涉及文件：`sidecar.rs`（`resolve_sidecar_path`、`AIDE_CLAUDE_EXE`）、以及未来任何把资源路径交给子进程的代码。复现：`node "\\?\C:\...\sidecar.js"` 必崩，`node "C:\...\sidecar.js"` 正常。
+
 ## 项目结构
 
 ```

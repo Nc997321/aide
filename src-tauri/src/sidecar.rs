@@ -73,7 +73,9 @@ impl SidecarManager {
                 let exe_name = if cfg!(windows) { "claude.exe" } else { "claude" };
                 let claude_exe = res_dir.join("agent-sidecar").join(exe_name);
                 if claude_exe.exists() {
-                    cmd.env("AIDE_CLAUDE_EXE", &claude_exe);
+                    // 同 sidecar.js：SDK 会把这个路径 spawn 成子进程，同样要剥掉
+                    // Windows `\\?\` 前缀，否则原生 CLI 启动时会踩同一个坑。
+                    cmd.env("AIDE_CLAUDE_EXE", dunce::simplified(&claude_exe));
                 }
             }
         }
@@ -225,7 +227,10 @@ impl SidecarManager {
             let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
             let path = resource_dir.join("agent-sidecar").join("sidecar.js");
             if path.exists() {
-                return Ok(path);
+                // resource_dir() 在 Windows 上带 `\\?\` verbatim 前缀；node 拿它当入口
+                // 脚本时 realpathSync 处理不了该前缀会 `lstat 'C:'` 崩在 run_main。
+                // simplified() 在能安全去前缀时去掉（非 Windows 为 no-op）。
+                return Ok(dunce::simplified(&path).to_path_buf());
             }
             Err(format!("Sidecar resource missing: {:?}", path))
         }

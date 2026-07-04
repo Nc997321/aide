@@ -30,6 +30,9 @@ percent-encoding = "2"
 png = "0.17"
 dirs = "5"
 base64 = "0.22"
+# 剥掉 Windows `resource_dir()` 返回的 `\\?\` verbatim 前缀，避免把扩展长度路径
+# 传给外部进程（node 的 realpathSync 处理不了 `\\?\`，会退化到 lstat 'C:' 崩溃）。
+dunce = "1"
 
 # Clipboard file-path reading is platform-specific; declare the platform-only
 # crates in target-specific sections so a Windows build doesn't try to compile

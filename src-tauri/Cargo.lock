@@ -37,6 +37,7 @@ dependencies = [
  "base64 0.22.1",
  "clipboard-win 5.4.1",
  "dirs 5.0.1",
+ "dunce",
  "ignore",
  "notify-rust",
  "objc2 0.2.7",
