@@ -1,7 +1,16 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import { useProviders } from "../composables/useProviders";
+import ThemedSelect from "./ThemedSelect.vue";
 import type { ProviderConfig, ProviderModelMappings } from "../types";
+
+const effortOptions = [
+  { value: "", label: "默认" },
+  { value: "LOW", label: "LOW" },
+  { value: "MEDIUM", label: "MEDIUM" },
+  { value: "HIGH", label: "HIGH" },
+  { value: "MAX", label: "MAX" },
+];
 
 const {
   allProviders,
@@ -228,13 +237,7 @@ function knownModelsForDatalist(): string[] {
 
         <div class="form-field">
           <label>Effort Level</label>
-          <select v-model="form.effortLevel" class="text-input">
-            <option value="">默认</option>
-            <option value="LOW">LOW</option>
-            <option value="MEDIUM">MEDIUM</option>
-            <option value="HIGH">HIGH</option>
-            <option value="MAX">MAX</option>
-          </select>
+          <ThemedSelect v-model="form.effortLevel" :options="effortOptions" block />
         </div>
 
         <div class="form-field">

@@ -3,6 +3,7 @@ import { ref, watch, nextTick, computed, onMounted } from "vue";
 import type { ComputedRef } from "vue";
 import ChatMessage from "./ChatMessage.vue";
 import TaskListPanel from "./TaskListPanel.vue";
+import ThemedSelect from "./ThemedSelect.vue";
 import type { ChatMessage as ChatMessageType, ContextUsage, ModelOption, PermissionModeOption, RateLimitInfo, TaskItem, TextBlock } from "@/types/chat";
 import type { SkillMeta } from "@/types";
 import { api } from "@/api";
@@ -87,6 +88,11 @@ const displayModels = computed<ModelOption[]>(() => {
  *  会话开始前没有 props.currentModel，用户选的先存在这，随第一条消息带走。 */
 const selectedModel = ref("");
 
+/** ThemedSelect 需要 {value,label}，把 {value,displayName} 映射过去 */
+const modelSelectOptions = computed(() =>
+  displayModels.value.map((m) => ({ value: m.value, label: m.displayName })),
+);
+
 /** 下拉框必须始终有一个真实生效的选中值——不能只是视觉上落在第一个
  *  <option> 上而 selectedModel 仍是空串，否则 handleSend 里 `selectedModel.value
  *  || undefined` 不会把它带进 initialModel，导致下拉框显示的模型和实际启动
@@ -126,6 +132,11 @@ function handleModelChange(value: string) {
 // 进程活着时切换走运行时命令，显示状态靠 sidecar 回发的事件坐实。
 const displayPermissionModes = computed<PermissionModeOption[]>(() =>
   props.permissionModes?.length ? props.permissionModes : defaultPermissionModes.value,
+);
+
+/** ThemedSelect 需要 {value,label} */
+const permissionModeSelectOptions = computed(() =>
+  displayPermissionModes.value.map((m) => ({ value: m.value, label: m.displayName })),
 );
 
 // 订阅额度展示：把每个并行窗口折成一个小徽标（已用% + 状态色 + 重置时间）。
@@ -461,23 +472,20 @@ async function handleSend() {
           @paste="handlePaste"
         />
         <div class="chat-toolbar">
-          <select
+          <ThemedSelect
             v-if="displayModels.length"
-            class="chat-model-select"
-            :value="selectedModel"
-            @change="handleModelChange(($event.target as HTMLSelectElement).value)"
-          >
-            <option v-for="m in displayModels" :key="m.value" :value="m.value">{{ m.displayName }}</option>
-          </select>
-          <select
+            :model-value="selectedModel"
+            :options="modelSelectOptions"
+            title="模型"
+            @update:model-value="handleModelChange"
+          />
+          <ThemedSelect
             v-if="displayPermissionModes.length"
-            class="chat-model-select"
-            :value="selectedPermissionMode"
+            :model-value="selectedPermissionMode"
+            :options="permissionModeSelectOptions"
             title="权限模式"
-            @change="handlePermissionModeChange(($event.target as HTMLSelectElement).value)"
-          >
-            <option v-for="m in displayPermissionModes" :key="m.value" :value="m.value">{{ m.displayName }}</option>
-          </select>
+            @update:model-value="handlePermissionModeChange"
+          />
           <div
             v-if="props.contextUsage"
             class="chat-ctx-usage"
@@ -523,7 +531,7 @@ async function handleSend() {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  background: var(--aide-bg-base);
+  background: var(--aide-bg-deep);
   color: var(--aide-text-primary);
 }
 
@@ -641,16 +649,6 @@ async function handleSend() {
   border-top: 1px solid var(--aide-border);
   font-size: 12px;
   color: var(--aide-text-secondary);
-}
-
-.chat-model-select {
-  background: transparent;
-  color: var(--aide-text-secondary);
-  border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-sm);
-  font-size: 12px;
-  padding: 2px 6px;
-  cursor: pointer;
 }
 
 .chat-ctx-usage {

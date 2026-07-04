@@ -6,6 +6,12 @@ import CustomizationList from "./customizations/CustomizationList.vue";
 import CustomizationDetail from "./customizations/CustomizationDetail.vue";
 import MarketplaceTab from "./marketplace/MarketplaceTab.vue";
 import ProviderSettings from "./ProviderSettings.vue";
+import ThemedSelect from "./ThemedSelect.vue";
+
+const themeOptions = [
+  { value: "warm-dark", label: "Warm Dark" },
+  { value: "catppuccin", label: "Catppuccin Mocha" },
+];
 import { formatShortcut, detectConflicts } from "../utils/shortcut";
 import { applyTheme, themes } from "../themes";
 
@@ -320,14 +326,11 @@ function onOverlayClick(e: MouseEvent) {
 
               <div class="settings-field">
                 <label class="field-label">主题</label>
-                <select
-                  class="settings-select"
-                  :value="settings.theme"
-                  @change="onThemeChange(($event.target as HTMLSelectElement).value)"
-                >
-                  <option value="warm-dark">Warm Dark</option>
-                  <option value="catppuccin">Catppuccin Mocha</option>
-                </select>
+                <ThemedSelect
+                  :model-value="settings.theme"
+                  :options="themeOptions"
+                  @update:model-value="onThemeChange"
+                />
               </div>
 
               <!-- ── Keybindings ── -->
@@ -675,21 +678,6 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .text-input:focus {
-  border-color: var(--aide-accent);
-}
-
-.settings-select {
-  background: var(--aide-surface-default);
-  border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-sm);
-  padding: 6px 10px;
-  color: var(--aide-text-primary);
-  font-size: 12px;
-  font-family: inherit;
-  outline: none;
-  cursor: pointer;
-}
-.settings-select:focus {
   border-color: var(--aide-accent);
 }
 
