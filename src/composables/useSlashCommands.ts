@@ -1,6 +1,6 @@
 import { ref, watch, computed, type Ref, type ComputedRef } from "vue";
-import { api } from "@/api";
-import type { SkillMeta } from "@/types";
+import { api } from "../api";
+import type { SkillMeta } from "../types";
 
 /** useSlashCommands 对外暴露的下拉选项形状——纯 UI 派生数据，不进入
  *  核心 ChatEvent 协议，所以就近定义在这里，不放进 types/chat.ts。 */
