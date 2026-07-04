@@ -30,8 +30,10 @@ defineProps<{
   animation: a-dot-pulse 2s ease-in-out infinite;
 }
 
+/* 空闲：蓝（--aide-info）。不用 --aide-accent——暖色主题里 accent 是金色，
+   会和 attention 的黄撞色，也不符合“蓝=空闲”的语义。 */
 .a-status-dot--waiting {
-  background: var(--aide-accent);
+  background: var(--aide-info);
 }
 
 .a-status-dot--attention {
