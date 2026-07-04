@@ -2,6 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex as TokioMutex;
@@ -11,7 +12,8 @@ use serde_json::Value;
 
 struct SidecarSession {
     stdin: Arc<TokioMutex<ChildStdin>>,
-    child: Child,
+    /// Arc 化：reader 看门狗任务与 kill() 都需要收割进程，共享同一句柄。
+    child: Arc<TokioMutex<Child>>,
     killed: Arc<AtomicBool>,
     /// 会话 ID 共享句柄：rename 后 reader 任务发出的事件立刻携带新 ID
     sid: Arc<Mutex<String>>,
@@ -87,6 +89,7 @@ impl SidecarManager {
         ));
         let stdout = child.stdout.take().ok_or("No stdout")?;
         let stderr = child.stderr.take().ok_or("No stderr")?;
+        let child = Arc::new(TokioMutex::new(child));
 
         let killed = Arc::new(AtomicBool::new(false));
         let sid_shared = Arc::new(Mutex::new(session_id.clone()));
@@ -97,37 +100,47 @@ impl SidecarManager {
         let tail_handle = Arc::clone(&stderr_tail);
         let app = app_handle.clone();
         let killed_clone = Arc::clone(&killed);
+        let child_for_kill = Arc::clone(&child);
         tokio::spawn(async move {
+            // 心跳看门狗：sidecar 每 5s 发一行（含心跳），任意行在 15s 内到达即证明
+            // 进程存活；连续 15s 无任何行 = 事件循环卡死/进程失联 → 判死。
+            const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(15);
             let mut reader = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                if let Ok(mut event) = serde_json::from_str::<Value>(&line) {
-                    let current_sid = sid_handle.lock().unwrap().clone();
-                    if let Some(obj) = event.as_object_mut() {
-                        if obj.get("type").and_then(|t| t.as_str()) == Some("session_init") {
-                            if let Some(sdk_sid) = obj.get("session_id").cloned() {
-                                obj.insert("sdk_session_id".to_string(), sdk_sid);
-                            }
+            let reason: &str = loop {
+                match tokio::time::timeout(HEARTBEAT_TIMEOUT, reader.next_line()).await {
+                    Ok(Ok(Some(line))) => {
+                        let Ok(mut event) = serde_json::from_str::<Value>(&line) else { continue };
+                        // 心跳只用来喂看门狗（收到即已重置 timeout），不转发前端避免刷屏。
+                        if event.get("type").and_then(|t| t.as_str()) == Some("heartbeat") {
+                            continue;
                         }
-                        obj.insert("session_id".to_string(), Value::String(current_sid));
+                        let current_sid = sid_handle.lock().unwrap().clone();
+                        if let Some(obj) = event.as_object_mut() {
+                            if obj.get("type").and_then(|t| t.as_str()) == Some("session_init") {
+                                if let Some(sdk_sid) = obj.get("session_id").cloned() {
+                                    obj.insert("sdk_session_id".to_string(), sdk_sid);
+                                }
+                            }
+                            obj.insert("session_id".to_string(), Value::String(current_sid));
+                        }
+                        let _ = app.emit("chat-event", event);
                     }
-                    let _ = app.emit("chat-event", event);
+                    Ok(Ok(None)) | Ok(Err(_)) => break "exit", // EOF / 读错误：进程已退出
+                    Err(_) => break "heartbeat_timeout",       // 15s 无任何行：卡死/失联
                 }
-            }
-            // 只有非主动 kill 才通知前端解除 isBusy
-            if !killed_clone.load(Ordering::Relaxed) {
-                let current_sid = sid_handle.lock().unwrap().clone();
-                let tail: Vec<String> = tail_handle.lock().unwrap().iter().cloned().collect();
-                let detail = if tail.is_empty() {
-                    String::new()
-                } else {
-                    format!("\n{}", tail.join("\n"))
-                };
-                let exit_event = serde_json::json!({
-                    "type": "error",
-                    "message": format!("Sidecar process exited unexpectedly{detail}"),
-                    "session_id": current_sid
-                });
-                let _ = app.emit("chat-event", exit_event);
+            };
+
+            // 两条判死路径统一只发一次 session_dead：
+            // - 看门狗超时：先上报，再收割僵尸进程（EOF 路径进程已死，无需收割）；
+            //   随后置 killed 抑制可能的 EOF 二次上报。
+            // - 意外退出：仅当非用户主动 kill 时上报（主动 kill 已置 killed，保持静默）。
+            if reason == "heartbeat_timeout" {
+                emit_session_dead(&app, &sid_handle, &tail_handle, reason);
+                killed_clone.store(true, Ordering::Relaxed);
+                let mut c = child_for_kill.lock().await;
+                let _ = c.start_kill();
+            } else if !killed_clone.load(Ordering::Relaxed) {
+                emit_session_dead(&app, &sid_handle, &tail_handle, reason);
             }
         });
 
@@ -165,10 +178,15 @@ impl SidecarManager {
         guard.write_all(line.as_bytes()).await.map_err(|e| e.to_string())
     }
 
-    pub fn kill(&self, session_id: &str) {
-        if let Some(mut s) = self.sessions.lock().unwrap().remove(session_id) {
+    pub async fn kill(&self, session_id: &str) {
+        // 先从注册表摘除并在锁外收割：std::Mutex 不可跨 await 持有。
+        let removed = self.sessions.lock().unwrap().remove(session_id);
+        if let Some(s) = removed {
+            // 先置 killed 再杀：reader 随后的 EOF 会因 killed=true 而不再上报
+            // session_dead（用户主动停止不是意外死亡）。
             s.killed.store(true, Ordering::Relaxed);
-            let _ = s.child.start_kill();
+            let mut child = s.child.lock().await;
+            let _ = child.start_kill();
         }
     }
 
@@ -212,6 +230,27 @@ impl SidecarManager {
             Err(format!("Sidecar resource missing: {:?}", path))
         }
     }
+}
+
+/// 合成并发出 session_dead 事件——统一 reader EOF 与看门狗超时两条判死路径的上报
+/// 格式。session_id 现取自共享句柄（rename 后即为新 id）；detail 携带 stderr 尾部
+/// 用于诊断，无尾部时为 null。
+fn emit_session_dead(
+    app: &AppHandle,
+    sid_handle: &Arc<Mutex<String>>,
+    tail_handle: &Arc<Mutex<VecDeque<String>>>,
+    reason: &str,
+) {
+    let current_sid = sid_handle.lock().unwrap().clone();
+    let tail: Vec<String> = tail_handle.lock().unwrap().iter().cloned().collect();
+    let detail = if tail.is_empty() { None } else { Some(tail.join("\n")) };
+    let event = serde_json::json!({
+        "type": "session_dead",
+        "reason": reason,
+        "detail": detail,
+        "session_id": current_sid,
+    });
+    let _ = app.emit("chat-event", event);
 }
 
 /// 用现有 PATH 里能找到的 `git.exe` 定位 Git for Windows 安装根目录，

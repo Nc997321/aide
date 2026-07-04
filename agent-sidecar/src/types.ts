@@ -44,7 +44,14 @@ export type ChatEvent =
   | { type: "permission_modes_available"; modes: PermissionModeOption[]; current: string }
   | { type: "context_usage"; total_tokens: number; max_tokens: number; percentage: number }
   | { type: "tasks_update"; tasks: TaskItem[] }
-  | { type: "error"; message: string };
+  // fatal:false = 可恢复错误（进程仍存活、继续等下一条消息）；缺省/true = 致命。
+  // 前端据此决定落 waiting+warning（红点）还是 stopped（灰点）。
+  | { type: "error"; message: string; fatal?: boolean }
+  // 存活心跳：sidecar 每 5s 发一次，由 Rust 消费并重置看门狗，不转发到前端。
+  | { type: "heartbeat" }
+  // 进程死亡：由 Rust（非 sidecar）合成——reader EOF 或看门狗超时。session_id 由
+  // Rust 注入；detail 携带 stderr 尾部用于诊断。列在此处以统一 chat-event 协议真相源。
+  | { type: "session_dead"; reason: "exit" | "heartbeat_timeout"; detail?: string };
 
 // Provider-agnostic image attachment — same shape used by all future AI providers
 export interface ImageAttachment {

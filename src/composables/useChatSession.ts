@@ -81,7 +81,14 @@ const sessionCreatedCallbacks = new Set<(tempId: string, realId: string) => void
 
 let globalUnlisten: (() => void) | null = null;
 
-const { setSessionState, removeSessionState, state: sessionState } = useSessionState();
+const {
+  setSessionState,
+  setSessionHealth,
+  removeSessionState,
+  armStalled,
+  state: sessionState,
+  health: sessionHealth,
+} = useSessionState();
 
 function getStore(sid: string): SessionStore {
   if (!stores[sid]) {
@@ -145,6 +152,7 @@ async function finalizeSession(tempId: string, realId: string) {
   }
   if (sessionState[tempId]) {
     setSessionState(realId, sessionState[tempId]);
+    if (sessionHealth[tempId]) setSessionHealth(realId, sessionHealth[tempId]);
     removeSessionState(tempId);
   }
   // 2. Rust 侧只需要重命名 sidecar 进程注册表（内存态，无 IO）
@@ -169,6 +177,9 @@ function dispatchSend(sid: string, item: QueuedSend, resumeId?: string, initialM
   const store = getStore(sid);
   store.isBusy = true;
   setSessionState(sid, "running");
+  // 新一轮开始：清掉上轮可能残留的 warning（红点），并起软超时表。
+  setSessionHealth(sid, "ok");
+  armStalled(sid);
 
   // @path 引用展开出来的文件内容不进用户气泡的文本——渲染成独立的、类似
   // 工具调用的折叠卡片（复用 ToolCallBlock.vue 对 name:"Read" 的现有渲染），
@@ -365,10 +376,43 @@ function handleChatEvent(e: Record<string, unknown>) {
         blocks: [{ type: "text", text: `Error: ${e["message"]}` }],
         timestamp: Date.now(),
       });
+      // fatal:false = 可恢复错误，sidecar 进程仍存活等下一条 → 落 waiting + 红点，
+      // 不再谎报 stopped（灰点）。缺省/true 按致命处理（兼容未重建的旧 bundle）。
+      if (e["fatal"] === false) {
+        setSessionState(sid, "waiting");
+        setSessionHealth(sid, "warning");
+      } else {
+        setSessionState(sid, "stopped");
+      }
+      break;
+    }
+    case "session_dead": {
+      // 进程真的没了（Rust 侧 reader EOF 或心跳看门狗超时合成）。
+      finishStreaming(store);
+      store.isBusy = false;
+      store.pendingPermission = null;
+      store.queued.length = 0;
+      const reason = e["reason"] as string | undefined;
+      const detail = e["detail"] as string | undefined;
+      const label =
+        reason === "heartbeat_timeout"
+          ? "会话无响应，已终止进程"
+          : "会话进程已退出";
+      store.messages.push({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        blocks: [{ type: "text", text: detail ? `${label}\n${detail}` : label }],
+        timestamp: Date.now(),
+      });
       setSessionState(sid, "stopped");
       break;
     }
   }
+
+  // 任意事件到达都证伪“卡住”：清掉 stalled 橙点（warning 红点不在此清，只在下条消息清）。
+  if (sessionHealth[sid] === "stalled") setSessionHealth(sid, "ok");
+  // running 期间据事件重置软超时；连续静默 STALLED_MS 才会重新判 stalled。
+  if (sessionState[sid] === "running") armStalled(sid);
 }
 
 async function ensureGlobalListener() {
@@ -472,6 +516,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
     const store = getStore(sid);
     store.pendingPermission = null;
     setSessionState(sid, "running");
+    armStalled(sid); // 权限批准后恢复生成 → 重启软超时计时
     await invoke("permission_response", { sessionId: sid, id, approved, always });
   }
 

@@ -145,7 +145,7 @@ pub async fn stop_chat_session(
     session_id: String,
     sidecar_mgr: State<'_, SidecarManager>,
 ) -> Result<(), String> {
-    sidecar_mgr.kill(&session_id);
+    sidecar_mgr.kill(&session_id).await;
     Ok(())
 }
 

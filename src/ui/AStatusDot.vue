@@ -1,11 +1,14 @@
 <script setup lang="ts">
+import type { DotTone } from "../composables/useSessionState";
+
+// tone 是活跃度轴 × 健康度轴的投影结果（见 useSessionState.dotTone），不是原始状态。
 defineProps<{
-  status: "stopped" | "running" | "waiting" | "attention";
+  tone: DotTone;
 }>();
 </script>
 
 <template>
-  <span class="a-status-dot" :class="`a-status-dot--${status}`" />
+  <span class="a-status-dot" :class="`a-status-dot--${tone}`" />
 </template>
 
 <style scoped>
@@ -34,6 +37,20 @@ defineProps<{
 .a-status-dot--attention {
   background: var(--aide-warning);
   box-shadow: 0 0 6px color-mix(in srgb, var(--aide-warning) 50%, transparent);
+  animation: a-dot-pulse 2s ease-in-out infinite;
+}
+
+/* 健康度轴：可恢复错误 → 红 */
+.a-status-dot--warning {
+  background: var(--aide-danger);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--aide-danger) 50%, transparent);
+  animation: a-dot-pulse 2s ease-in-out infinite;
+}
+
+/* 健康度轴：疑似卡住 → 橙 */
+.a-status-dot--stalled {
+  background: var(--aide-stalled);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--aide-stalled) 50%, transparent);
   animation: a-dot-pulse 2s ease-in-out infinite;
 }
 

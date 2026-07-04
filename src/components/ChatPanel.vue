@@ -41,7 +41,7 @@ const emit = defineEmits<{
   "remove-queued": [index: number];
 }>();
 
-const { state: sessionState } = useSessionState();
+const { state: sessionState, dotTone } = useSessionState();
 const { activeProvider, SYSTEM_DEFAULT_ID } = useProviders();
 
 // 会话还没开始时没有活的 sidecar 进程，SDK 的 models_available 事件还没发生，
@@ -152,6 +152,8 @@ const currentStatus = computed(() => {
   return (sessionState[sid] || "stopped") as "stopped" | "running" | "waiting" | "attention";
 });
 const isLive = computed(() => currentStatus.value !== "stopped");
+// 状态点用两轴投影（含红/橙健康度），isLive 仍只看活跃度轴。
+const currentTone = computed(() => (props.sessionId ? dotTone(props.sessionId) : "stopped"));
 
 const isBusyVal = computed(() =>
   typeof props.isBusy === "boolean" ? props.isBusy : props.isBusy.value
@@ -348,7 +350,7 @@ async function handleSend() {
 <template>
   <div class="chat-panel">
     <div class="chat-header">
-      <AStatusDot :status="currentStatus" />
+      <AStatusDot :tone="currentTone" />
       <span class="chat-header-name">{{ sessionName || sessionId || '新对话' }}</span>
       <button
         v-if="isLive"

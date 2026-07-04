@@ -134,7 +134,7 @@ async function loadWsSessions(wsKey: string) {
 }
 
 const { show } = useContextMenu();
-const { state: sessionState } = useSessionState();
+const { dotTone } = useSessionState();
 const { updateAvailable, latestVersion, downloadUrl, dismissUpdate } = useUpdate();
 const { setCurrentWs } = useRecent();
 
@@ -352,7 +352,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
             @contextmenu.prevent="onSessionContextMenu($event, s.id)"
           >
             <div class="session-item-header">
-              <AStatusDot :status="sessionState[s.id] || 'stopped'" />
+              <AStatusDot :tone="dotTone(s.id)" />
               <span class="session-name">{{ s.name }}</span>
               <span class="session-time">{{ timeAgo(s.timestamp) }}</span>
             </div>
