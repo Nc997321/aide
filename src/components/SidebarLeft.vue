@@ -10,7 +10,7 @@ import { sessionMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
 import { open } from "@tauri-apps/plugin-shell";
 import { getVersion } from "@tauri-apps/api/app";
-import { AStatusDot } from "../ui";
+import { ACard, AStatusDot } from "../ui";
 import type { Session, WorkspaceInfo } from "../types";
 
 const props = defineProps<{
@@ -134,7 +134,7 @@ async function loadWsSessions(wsKey: string) {
 }
 
 const { show } = useContextMenu();
-const { dotTone } = useSessionState();
+const { state: sessionState, dotTone } = useSessionState();
 const { updateAvailable, latestVersion, downloadUrl, dismissUpdate } = useUpdate();
 const { setCurrentWs } = useRecent();
 
@@ -343,21 +343,22 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
           >
             暂无会话
           </div>
-          <div
+          <ACard
             v-for="s in visibleSessions(ws.key)"
             :key="s.id"
-            class="session-item"
-            :class="{ active: props.activeSessionId === s.id }"
+            :active="props.activeSessionId === s.id"
+            :glow-color="sessionState[s.id] === 'running' ? 'var(--aide-success)' : undefined"
+            class="session-card"
             @click="selectSessionFromWorkspace(ws.key, s.id)"
             @contextmenu.prevent="onSessionContextMenu($event, s.id)"
           >
-            <div class="session-item-header">
+            <div class="session-card-header">
               <AStatusDot :tone="dotTone(s.id)" />
               <span class="session-name">{{ s.name }}</span>
               <span class="session-time">{{ timeAgo(s.timestamp) }}</span>
             </div>
             <div v-if="s.last_message" class="session-preview">{{ s.last_message }}</div>
-          </div>
+          </ACard>
           <div
             v-if="hiddenSessionCount(ws.key) > 0"
             class="session-more"
@@ -584,49 +585,31 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   letter-spacing: 0.3px;
 }
 
-/* ── Session item ──
-   与工作区行同一套扁平语言（VS Code 式列表行）：缩进挂在工作区名下、
-   透明底 + 悬停浅底 + 选中 accent 淡底，不再是凸起卡片。 */
+/* ── Session card ──
+   工匠质感卡片（复用 ACard 凸起卡片语言：raised 底 + 描边 + 圆角 + 内边距 +
+   悬停阴影 + 选中 accent 渐变 + 运行时左侧 glow 光条）。布局保持 VS Code 式对齐：
+   左缩进挂在工作区名下、右留白使卡片整体比工作区行窄；卡片间留呼吸间距。 */
 
-.session-item {
-  padding: 5px 10px 6px;
-  margin: 1px 6px 1px 24px;
-  border-radius: var(--aide-radius-sm);
+.session-card {
+  margin: 0 10px 6px 24px;
   cursor: pointer;
-  transition: background 0.12s;
 }
 
-.session-item:hover {
-  background: var(--aide-surface-default);
-}
-
-.session-item.active {
-  background: var(--aide-accent-subtle);
-}
-
-.session-item.active .session-name {
-  color: var(--aide-accent);
-}
-
-.session-item-header {
+.session-card-header {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
+  margin-bottom: 4px;
 }
 
 .session-name {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
-  color: var(--aide-text-secondary);
+  color: var(--aide-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
-  transition: color 0.12s;
-}
-
-.session-item:hover .session-name {
-  color: var(--aide-text-primary);
 }
 
 .session-time {
@@ -636,8 +619,6 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 }
 
 .session-preview {
-  margin-top: 2px;
-  padding-left: 15px; /* 与状态点后的标题文字对齐 */
   font-size: 11px;
   color: var(--aide-text-muted);
   overflow: hidden;
