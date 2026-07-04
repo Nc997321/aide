@@ -130,6 +130,10 @@ export function mapSdkMessage(
 
   if (msg.type === "system" && msg.subtype === "init") {
     emit({ type: "session_init", session_id: msg.session_id });
+    // undefined（旧版 CLI/无此概念）不发；[] 是 SDK 明确给的空清单，正常发。
+    if (Array.isArray(msg.slash_commands)) {
+      emit({ type: "slash_commands_available", commands: msg.slash_commands });
+    }
     return;
   }
 

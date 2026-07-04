@@ -292,3 +292,43 @@ describe("mapSdkMessage routing for subagent tools", () => {
     expect(events).toEqual([]);
   });
 });
+
+describe("mapSdkMessage system/init → slash_commands_available", () => {
+  function systemInit(sessionId: string, slashCommands?: unknown) {
+    return {
+      type: "system",
+      subtype: "init",
+      session_id: sessionId,
+      ...(slashCommands !== undefined ? { slash_commands: slashCommands } : {}),
+    };
+  }
+
+  it("slash_commands 是数组时，session_init 之外多发一条 slash_commands_available", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      systemInit("s1", ["clear", "compact", "code-review"]),
+      (e) => events.push(e),
+      new TaskTracker(),
+      new SubagentTracker(),
+    );
+    expect(events).toEqual([
+      { type: "session_init", session_id: "s1" },
+      { type: "slash_commands_available", commands: ["clear", "compact", "code-review"] },
+    ]);
+  });
+
+  it("slash_commands 是空数组时，仍然发出（不是缺省不发）", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(systemInit("s1", []), (e) => events.push(e), new TaskTracker(), new SubagentTracker());
+    expect(events).toEqual([
+      { type: "session_init", session_id: "s1" },
+      { type: "slash_commands_available", commands: [] },
+    ]);
+  });
+
+  it("slash_commands 字段缺失时（旧版 CLI），只发 session_init", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(systemInit("s1"), (e) => events.push(e), new TaskTracker(), new SubagentTracker());
+    expect(events).toEqual([{ type: "session_init", session_id: "s1" }]);
+  });
+});

@@ -51,6 +51,9 @@ export type ChatEvent =
   | { type: "message_stop"; stop_reason: string; total_cost_usd: number | null; usage: TurnUsage | null }
   | { type: "models_available"; models: ModelOption[]; current: string }
   | { type: "permission_modes_available"; modes: PermissionModeOption[]; current: string }
+  // 会话建立时 SDK 回传的权威 slash commands 清单（内置命令 + skills + 自定义命令），
+  // 仅当 SDK 提供该字段时才发（见 mapper.ts 的 Array.isArray 判断）。
+  | { type: "slash_commands_available"; commands: string[] }
   | { type: "context_usage"; total_tokens: number; max_tokens: number; percentage: number }
   // 订阅额度/速率可见化——provider-agnostic：一次带回全部并行窗口（5 小时 / 7 天 /
   // 各模型周窗等）。utilization 统一 0-100，label 由各 sidecar 翻成人话，核心协议
