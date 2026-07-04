@@ -73,6 +73,45 @@ export function describeResultError(msg: any): string {
 }
 
 /**
+ * 内部占位模型 id 的形状：CLI 在额度耗尽等状态下会本地生成占位 assistant
+ * 消息（如"你已达到额度上限"），其 `message.model` 有时是尖括号包裹的内部
+ * 记号（如 `<synthetic>`），不是任何真实可选模型——和 session.rs 里
+ * `is_synthetic_user_entry` 过滤的 isMeta/interruptedMessageId 是同一类
+ * "本地生成、非真实模型输出"的占位条目，只是这次出现在 assistant 侧的
+ * model 字段上。真实模型 id（别名如 "sonnet"，或具体 wire id 如
+ * "claude-sonnet-5-20260101"）从不带尖括号。
+ */
+function isPlaceholderModelId(id: string | undefined | null): boolean {
+  return typeof id === "string" && /^<.*>$/.test(id.trim());
+}
+
+/**
+ * 一条 assistant 消息报的 `message.model` 是否可以被采信为"当前生效模型"。
+ *
+ * 两种情况绝不能采信，否则会污染 index.ts 里持久化的 `currentModel`，而
+ * `currentModel` 一旦被污染就会作为显式 `model` 参数带进下一轮 query——
+ * 请求一个不存在的模型，API 报 model_not_found，而这条错误回声本身还是一条
+ * assistant 消息、`message.model` 还是同一个占位符，会被再次"采信"一遍，
+ * 自锁死循环，直到整个会话进程重启：
+ *
+ * - `msg.error` 存在：这轮是失败回声（如 model_not_found），不代表模型真的
+ *   在这个 id 下工作过。
+ * - `message.model` 是占位符形状（`isPlaceholderModelId`）：本地生成的占位
+ *   通知，不是真实模型输出。
+ */
+export function isAdoptableAssistantModel(msg: any): boolean {
+  if (msg?.error) return false;
+  const model = msg?.message?.model;
+  return typeof model === "string" && model.trim().length > 0 && !isPlaceholderModelId(model);
+}
+
+/** 模型下拉框可选列表过滤：剔除 CLI 报上来的内部占位符条目（value 或
+ *  displayName 呈占位符形状），不让用户能选中一个根本不是真实模型的选项。 */
+export function filterSelectableModels<T extends { value: string; displayName: string }>(models: T[]): T[] {
+  return models.filter((m) => !isPlaceholderModelId(m.value) && !isPlaceholderModelId(m.displayName));
+}
+
+/**
  * 把 SDK `/usage`（`usage_EXPERIMENTAL_…()`）的结构化响应折成 provider-agnostic 的
  * `rate_limit` 事件——这是订阅额度的正确数据源（每个窗口 utilization 明确 0-100、
  * 带 ISO 重置时间、一次给全部并行窗口）。以前用的 `rate_limit_event` 只报单窗口

@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { mapSdkMessage, describeResultError, buildRateLimitEvent } from "./mapper.js";
+import {
+  mapSdkMessage,
+  describeResultError,
+  buildRateLimitEvent,
+  isAdoptableAssistantModel,
+  filterSelectableModels,
+} from "./mapper.js";
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
 import type { ChatEvent } from "./types.js";
@@ -330,5 +336,47 @@ describe("mapSdkMessage system/init → slash_commands_available", () => {
     const events: ChatEvent[] = [];
     mapSdkMessage(systemInit("s1"), (e) => events.push(e), new TaskTracker(), new SubagentTracker());
     expect(events).toEqual([{ type: "session_init", session_id: "s1" }]);
+  });
+});
+
+// 回归：额度耗尽期间 CLI 会本地生成占位 assistant 消息（如"你已达到额度上限"），
+// 其 message.model 可能是内部占位符（尖括号包裹，如 "<synthetic>"），不是真实
+// 可选模型；一条带 error 的 assistant 消息也只是失败回声，不代表"现在真的在用
+// 这个模型"。这两类消息以前被 index.ts 无条件采信为"当前生效模型"并写回下一轮
+// query 的显式 model 参数，导致额度恢复后所有请求都显式请求一个不存在的模型、
+// 永久 404（且错误回声的 model 字段还是同一个占位符，越修越锁死，直到整个会话
+// 进程重启）。
+describe("isAdoptableAssistantModel（过滤占位符模型 / 错误回声，防止污染 currentModel）", () => {
+  it("正常 assistant 消息的具体 wire model id 可采信", () => {
+    expect(isAdoptableAssistantModel({ message: { model: "claude-sonnet-5-20260101" } })).toBe(true);
+  });
+
+  it("尖括号包裹的内部占位符（如额度耗尽时的 <synthetic>）不可采信", () => {
+    expect(isAdoptableAssistantModel({ message: { model: "<synthetic>" } })).toBe(false);
+  });
+
+  it("带 error 字段的 assistant 消息（如 model_not_found 回声）不可采信，即使 model 字段本身看起来正常", () => {
+    expect(
+      isAdoptableAssistantModel({ error: "model_not_found", message: { model: "claude-sonnet-5-20260101" } }),
+    ).toBe(false);
+  });
+
+  it("model 字段缺失或为空串时不可采信", () => {
+    expect(isAdoptableAssistantModel({ message: {} })).toBe(false);
+    expect(isAdoptableAssistantModel({ message: { model: "" } })).toBe(false);
+  });
+});
+
+describe("filterSelectableModels（模型下拉框过滤内部占位符）", () => {
+  it("保留正常模型，剔除 value 或 displayName 是尖括号占位符的条目", () => {
+    const models = [
+      { value: "sonnet", displayName: "Sonnet" },
+      { value: "<synthetic>", displayName: "<synthetic>" },
+      { value: "opus", displayName: "Opus" },
+    ];
+    expect(filterSelectableModels(models)).toEqual([
+      { value: "sonnet", displayName: "Sonnet" },
+      { value: "opus", displayName: "Opus" },
+    ]);
   });
 });

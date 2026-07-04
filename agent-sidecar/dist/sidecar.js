@@ -45602,6 +45602,17 @@ function describeResultError(msg) {
   }
   return parts.join(" \u2014 ");
 }
+function isPlaceholderModelId(id2) {
+  return typeof id2 === "string" && /^<.*>$/.test(id2.trim());
+}
+function isAdoptableAssistantModel(msg) {
+  if (msg?.error) return false;
+  const model = msg?.message?.model;
+  return typeof model === "string" && model.trim().length > 0 && !isPlaceholderModelId(model);
+}
+function filterSelectableModels(models) {
+  return models.filter((m) => !isPlaceholderModelId(m.value) && !isPlaceholderModelId(m.displayName));
+}
 function buildRateLimitEvent(usage) {
   const subscription = typeof usage?.subscription_type === "string" ? usage.subscription_type : null;
   const windows = [];
@@ -45640,6 +45651,9 @@ function mapSdkMessage(msg, emit2, tasks, subagents) {
   if (msg.parent_tool_use_id) return;
   if (msg.type === "system" && msg.subtype === "init") {
     emit2({ type: "session_init", session_id: msg.session_id });
+    if (Array.isArray(msg.slash_commands)) {
+      emit2({ type: "slash_commands_available", commands: msg.slash_commands });
+    }
     return;
   }
   if (msg.type === "stream_event") {
@@ -45763,8 +45777,9 @@ function applyPermissionMode(mode) {
 async function emitModelsAvailable(q) {
   try {
     const init = await q.initializationResult();
-    lastModels = init.models.map((m) => ({ value: m.value, displayName: m.displayName }));
-    aliasByResolvedPrefix = init.models.filter((m) => m.resolvedModel).map((m) => ({ value: m.value, resolvedPrefix: m.resolvedModel }));
+    const selectable = filterSelectableModels(init.models);
+    lastModels = selectable.map((m) => ({ value: m.value, displayName: m.displayName }));
+    aliasByResolvedPrefix = selectable.filter((m) => m.resolvedModel).map((m) => ({ value: m.value, resolvedPrefix: m.resolvedModel }));
     emit({ type: "models_available", models: lastModels, current: currentModel });
   } catch {
   }
@@ -45832,8 +45847,12 @@ async function startLoop(cwd) {
             void emitModelsAvailable(q);
           } else if (
             // 主线程（非子代理）assistant 消息自带实际用的模型——SDK 没有别的渠道
-            // 告诉我们"没手动切换时默认用的是哪个"，只能从这里坐实。
-            msg.type === "assistant" && !msg.parent_tool_use_id && msg.message?.model && msg.message.model !== lastConcreteModel
+            // 告诉我们"没手动切换时默认用的是哪个"，只能从这里坐实。但错误回声
+            // （msg.error，如 model_not_found）和本地生成的占位通知（额度耗尽时
+            // model 字段可能是 "<synthetic>" 这类内部记号）都不代表"真的在用这个
+            // 模型"——采信会把 currentModel 污染成一个不存在的模型 id，之后每轮
+            // 都显式请求它而永久 404，见 isAdoptableAssistantModel 的注释。
+            msg.type === "assistant" && !msg.parent_tool_use_id && isAdoptableAssistantModel(msg) && msg.message.model !== lastConcreteModel
           ) {
             lastConcreteModel = msg.message.model;
             currentModel = resolveDropdownValue(lastConcreteModel);

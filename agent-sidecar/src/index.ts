@@ -5,7 +5,13 @@ import { MessageQueue } from "./generator.js";
 import { PermissionManager } from "./permissions.js";
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
-import { mapSdkMessage, buildUserMessage, buildRateLimitEvent } from "./mapper.js";
+import {
+  mapSdkMessage,
+  buildUserMessage,
+  buildRateLimitEvent,
+  isAdoptableAssistantModel,
+  filterSelectableModels,
+} from "./mapper.js";
 
 function emit(event: ChatEvent) {
   process.stdout.write(JSON.stringify(event) + "\n");
@@ -77,8 +83,11 @@ function applyPermissionMode(mode: string) {
 async function emitModelsAvailable(q: Awaited<ReturnType<typeof query>>) {
   try {
     const init = await q.initializationResult();
-    lastModels = init.models.map((m) => ({ value: m.value, displayName: m.displayName }));
-    aliasByResolvedPrefix = init.models
+    // 剔除 CLI 报上来的内部占位符条目（如额度耗尽期间出现的 "<synthetic>"）——
+    // 那不是真实可选模型，选中它会导致后续请求显式要一个不存在的模型而 404。
+    const selectable = filterSelectableModels(init.models);
+    lastModels = selectable.map((m) => ({ value: m.value, displayName: m.displayName }));
+    aliasByResolvedPrefix = selectable
       .filter((m) => m.resolvedModel)
       .map((m) => ({ value: m.value, resolvedPrefix: m.resolvedModel as string }));
     emit({ type: "models_available", models: lastModels, current: currentModel });
@@ -167,10 +176,14 @@ async function startLoop(cwd?: string) {
             void emitModelsAvailable(q);
           } else if (
             // 主线程（非子代理）assistant 消息自带实际用的模型——SDK 没有别的渠道
-            // 告诉我们"没手动切换时默认用的是哪个"，只能从这里坐实。
+            // 告诉我们"没手动切换时默认用的是哪个"，只能从这里坐实。但错误回声
+            // （msg.error，如 model_not_found）和本地生成的占位通知（额度耗尽时
+            // model 字段可能是 "<synthetic>" 这类内部记号）都不代表"真的在用这个
+            // 模型"——采信会把 currentModel 污染成一个不存在的模型 id，之后每轮
+            // 都显式请求它而永久 404，见 isAdoptableAssistantModel 的注释。
             (msg as any).type === "assistant" &&
             !(msg as any).parent_tool_use_id &&
-            (msg as any).message?.model &&
+            isAdoptableAssistantModel(msg) &&
             (msg as any).message.model !== lastConcreteModel
           ) {
             lastConcreteModel = (msg as any).message.model;
