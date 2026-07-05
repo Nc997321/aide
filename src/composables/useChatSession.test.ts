@@ -294,7 +294,7 @@ describe("useChatSession per-session store", () => {
     expect(chat.contextUsage.value).toEqual({ totalTokens: 52000, maxTokens: 100000, percentage: 52 });
   });
 
-  it("message_stop 带 usage 时挂到最后一条 assistant 消息，并累加会话总费用", async () => {
+  it("message_stop 带 usage 时挂到最后一条 assistant 消息", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);
     await flush();
@@ -312,7 +312,6 @@ describe("useChatSession per-session store", () => {
     emit({ type: "message_stop", stop_reason: "end_turn", total_cost_usd: 0.0123, usage, session_id: "uuid-a" });
     await flush();
 
-    expect(chat.totalCostUsd.value).toBe(0.0123);
     const last = chat.messages.value[chat.messages.value.length - 1];
     expect(last.role).toBe("assistant");
     expect(last.usage).toEqual(usage);
@@ -368,6 +367,8 @@ describe("useChatSession subagent events", () => {
     type SubagentTestBlock = {
       agentName?: string;
       description?: string;
+      model?: string;
+      steps: { toolName: string; input: unknown }[];
       isPending: boolean;
       result?: string;
       isError?: boolean;
@@ -376,8 +377,24 @@ describe("useChatSession subagent events", () => {
     let block = chat.messages.value
       .flatMap((m) => m.blocks)
       .find((b) => b.type === "subagent") as SubagentTestBlock | undefined;
-    expect(block).toMatchObject({ agentName: "general-purpose", description: "调研 XXX", isPending: true });
+    expect(block).toMatchObject({ agentName: "general-purpose", description: "调研 XXX", isPending: true, steps: [] });
     expect(block?.result).toBeUndefined();
+
+    emit({
+      type: "subagent_progress",
+      id: "a1",
+      toolName: "Read",
+      input: { file_path: "x.ts" },
+      model: "claude-sonnet-5-20260101",
+      session_id: "uuid-a",
+    });
+    await flush();
+
+    block = chat.messages.value
+      .flatMap((m) => m.blocks)
+      .find((b) => b.type === "subagent") as SubagentTestBlock | undefined;
+    expect(block?.steps).toEqual([{ toolName: "Read", input: { file_path: "x.ts" } }]);
+    expect(block?.model).toBe("claude-sonnet-5-20260101");
 
     emit({
       type: "subagent_end",

@@ -45,8 +45,26 @@ export type ChatEvent =
   | { type: "tool_use_start"; id: string; name: string; input: unknown }
   | { type: "tool_result"; id: string; content: string; is_error: boolean }
   | { type: "subagent_start"; id: string; agentName: string; description: string }
+  // 子代理内部的"轻量步骤摘要"：只报它调用了哪个工具+入参，不转发子代理内部的文本/
+  // thinking（完整嵌套 transcript 属于 v2，见 mapper.ts 的 forwardSubagentText 讨论）。
+  // model 只在第一次能坐实时带一次，之后同一个 id 不再重复。
+  | { type: "subagent_progress"; id: string; toolName: string; input: unknown; model?: string }
   | { type: "subagent_end"; id: string; result: string; is_error: boolean }
-  | { type: "permission_request"; id: string; name: string; input: unknown }
+  // alwaysAllowLabel：sidecar 已经把 SDK 的 suggestions 解读成一句人话（比如 Edit
+  // 工具常见的"自动接受编辑（本次会话）"，而不是笼统的"总是允许"——两者后果差异很大：
+  // 前者是切权限模式且不落盘，后者是给某工具加一条持久化规则），前端只管展示这句话，
+  // 不需要也不应该重新解释 Claude 专属的 PermissionUpdate 结构。缺省时前端自己兜底
+  // 显示"总是允许"。
+  // fromSubagent：这次请求是不是子代理内部发起的（而不是主线程）——没有它，用户会
+  // 在毫无上下文的情况下突然看到一个权限框弹出来，不知道是谁在问。缺省表示来自主线程。
+  | {
+      type: "permission_request";
+      id: string;
+      name: string;
+      input: unknown;
+      alwaysAllowLabel?: string;
+      fromSubagent?: { id: string; agentName: string };
+    }
   | { type: "permission_cancelled"; id: string }
   | { type: "message_stop"; stop_reason: string; total_cost_usd: number | null; usage: TurnUsage | null }
   | { type: "models_available"; models: ModelOption[]; current: string }

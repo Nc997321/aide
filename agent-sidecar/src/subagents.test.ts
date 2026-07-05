@@ -48,3 +48,57 @@ describe("SubagentTracker lifecycle", () => {
     expect(t.handleToolResult("ghost")).toBe(false);
   });
 });
+
+describe("SubagentTracker.isActive / claimModelReport", () => {
+  it("isActive is true only between handleToolUse and handleToolResult", () => {
+    const t = new SubagentTracker();
+    expect(t.isActive("u1")).toBe(false);
+    t.handleToolUse("u1", { subagent_type: "general-purpose", description: "x" });
+    expect(t.isActive("u1")).toBe(true);
+    t.handleToolResult("u1");
+    expect(t.isActive("u1")).toBe(false);
+  });
+
+  it("claimModelReport grants the report exactly once for an active id", () => {
+    const t = new SubagentTracker();
+    t.handleToolUse("u1", { subagent_type: "general-purpose", description: "x" });
+    expect(t.claimModelReport("u1")).toBe(true);
+    expect(t.claimModelReport("u1")).toBe(false);
+  });
+
+  it("claimModelReport refuses ids that are not active", () => {
+    const t = new SubagentTracker();
+    expect(t.claimModelReport("ghost")).toBe(false);
+  });
+
+  it("a new tool_use with the same id after a prior result can claim the report again", () => {
+    const t = new SubagentTracker();
+    t.handleToolUse("u1", { subagent_type: "general-purpose", description: "x" });
+    expect(t.claimModelReport("u1")).toBe(true);
+    t.handleToolResult("u1");
+    t.handleToolUse("u1", { subagent_type: "general-purpose", description: "y" });
+    expect(t.claimModelReport("u1")).toBe(true);
+  });
+});
+
+// 回归：权限弹窗要标注"这是哪个子代理在问"（见 permissions.ts 的 fromSubagent），
+// 靠 canUseTool 收到的 agentID 反查这里存的 agentName——getAgentName 就是这条反查路径。
+describe("SubagentTracker.getAgentName", () => {
+  it("returns the agentName recorded at handleToolUse while the id is active", () => {
+    const t = new SubagentTracker();
+    t.handleToolUse("u1", { subagent_type: "code-reviewer", description: "审查 PR" });
+    expect(t.getAgentName("u1")).toBe("code-reviewer");
+  });
+
+  it("returns undefined for an id it never saw (调用方应兜底成通用文案，而不是报错)", () => {
+    const t = new SubagentTracker();
+    expect(t.getAgentName("ghost")).toBeUndefined();
+  });
+
+  it("forgets the name once the subagent call resolves (handleToolResult)", () => {
+    const t = new SubagentTracker();
+    t.handleToolUse("u1", { subagent_type: "code-reviewer", description: "审查 PR" });
+    t.handleToolResult("u1");
+    expect(t.getAgentName("u1")).toBeUndefined();
+  });
+});

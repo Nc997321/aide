@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use tauri::State;
 
-use super::{Session, ChatMessageItem, LastEventInfo, ChangeRoundData, WorkspaceState, project_root_for_commands, find_session_jsonl_globally, claude_projects_dir, claude_sessions_dir, our_sessions_dir};
+use super::{Session, ChatMessageItem, HistoryBlock, LastEventInfo, ChangeRoundData, WorkspaceState, project_root_for_commands, find_session_jsonl_globally, claude_projects_dir, claude_sessions_dir, our_sessions_dir};
 
 #[tauri::command]
 pub fn list_sessions(
@@ -233,48 +233,125 @@ pub fn load_messages(
     let file = fs::File::open(&jsonl_path)
         .map_err(|e| format!("Failed to open session file: {}", e))?;
     let reader = BufReader::new(file);
+    let lines: Vec<String> = reader
+        .lines()
+        .enumerate()
+        .map(|(i, l)| l.map_err(|e| format!("Read error at line {}: {}", i, e)))
+        .collect::<Result<_, _>>()?;
 
-    let mut messages: Vec<ChatMessageItem> = Vec::new();
-    for (i, line) in reader.lines().enumerate() {
-        let line = line.map_err(|e| format!("Read error at line {}: {}", i, e))?;
-        if let Ok(v) = serde_json::from_str::<Value>(&line) {
-            let msg_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
-            let role = match msg_type {
-                "user" => "user",
-                "assistant" => "claude",
-                _ => continue,
-            };
-            // "user" 类型 JSONL 行不都是人类打字:Skill 注入(isMeta)、中断占位符
-            // (interruptedMessageId)、压缩摘要(isCompactSummary)、后台任务通知
-            // (origin.kind = "task-notification")都以 role:"user" 落盘,但不是
-            // 人说的话——不过滤会把这些内容渲染成用户气泡,造成"这不是我说的"的假象。
-            if role == "user" && is_synthetic_user_entry(&v) {
+    Ok(parse_transcript_lines(&lines))
+}
+
+/// Agent/Task 是子代理调用（CC v2.1.63 把 Task 改名成 Agent，两个都认，跟
+/// agent-sidecar/src/subagents.ts 的 SUBAGENT_TOOL_NAMES 保持同一份清单——两边
+/// 语言不同没法共享常量，靠注释手动同步）。这次历史重建不管子代理：它们内部的
+/// 分步进度 Claude CLI 从不落盘，做了也补不全，维持原有降级行为——整段跳过。
+const SUBAGENT_TOOL_NAMES: [&str; 2] = ["Agent", "Task"];
+
+/// 把 Claude CLI 落盘的会话 `.jsonl`（每行一条消息）解析成前端要渲染的历史消息，
+/// 按原始顺序重建 text/tool_call 两种内容块（`HistoryBlock`）。从 `load_messages`
+/// 抽出来是纯函数、不摸文件系统，方便直接拿假 transcript 单测。
+///
+/// 两遍扫描：tool_result 落在稍后（也可能更早，顺序不保证）的另一行 user 消息里，
+/// 必须先扫一遍全量建好 `tool_use_id → (content, is_error)` 的表，再回填进对应的
+/// tool_call 块，不能假设 tool_result 总跟在 tool_use 后面紧挨着那一行。
+fn parse_transcript_lines(lines: &[String]) -> Vec<ChatMessageItem> {
+    let mut tool_results: std::collections::HashMap<String, (String, bool)> =
+        std::collections::HashMap::new();
+    for line in lines {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        if v.get("type").and_then(|t| t.as_str()) != Some("user") {
+            continue;
+        }
+        let Some(arr) = v
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+        else {
+            continue;
+        };
+        for block in arr {
+            if block.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
                 continue;
             }
-            if let Some(content_val) = v.get("message").and_then(|m| m.get("content")) {
-                let text = if let Some(s) = content_val.as_str() {
-                    s.to_string()
-                } else if let Some(arr) = content_val.as_array() {
-                    let texts: Vec<&str> = arr.iter()
-                        .filter(|c| c.get("type").and_then(|t| t.as_str()) == Some("text"))
-                        .filter_map(|c| c.get("text").and_then(|t| t.as_str()))
-                        .collect();
-                    texts.join("\n")
-                } else {
-                    continue;
-                };
-                if !text.is_empty() {
-                    messages.push(ChatMessageItem {
-                        role: role.to_string(),
-                        content: text,
-                        timestamp: i as u64,
-                    });
-                }
-            }
+            let Some(tool_use_id) = block.get("tool_use_id").and_then(|t| t.as_str()) else {
+                continue;
+            };
+            let is_error = block.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false);
+            let content = match block.get("content") {
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Array(parts)) => parts
+                    .iter()
+                    .filter_map(|c| c.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(""),
+                _ => String::new(),
+            };
+            tool_results.insert(tool_use_id.to_string(), (content, is_error));
         }
     }
 
-    Ok(messages)
+    let mut messages: Vec<ChatMessageItem> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let msg_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        let role = match msg_type {
+            "user" => "user",
+            "assistant" => "claude",
+            _ => continue,
+        };
+        // "user" 类型 JSONL 行不都是人类打字:Skill 注入(isMeta)、中断占位符
+        // (interruptedMessageId)、压缩摘要(isCompactSummary)、后台任务通知
+        // (origin.kind = "task-notification")都以 role:"user" 落盘,但不是
+        // 人说的话——不过滤会把这些内容渲染成用户气泡,造成"这不是我说的"的假象。
+        if role == "user" && is_synthetic_user_entry(&v) {
+            continue;
+        }
+        let Some(content_val) = v.get("message").and_then(|m| m.get("content")) else {
+            continue;
+        };
+
+        let blocks: Vec<HistoryBlock> = if let Some(s) = content_val.as_str() {
+            if s.is_empty() {
+                Vec::new()
+            } else {
+                vec![HistoryBlock::Text { text: s.to_string() }]
+            }
+        } else if let Some(arr) = content_val.as_array() {
+            arr.iter()
+                .filter_map(|block| match block.get("type").and_then(|t| t.as_str()) {
+                    Some("text") => block
+                        .get("text")
+                        .and_then(|t| t.as_str())
+                        .map(|t| HistoryBlock::Text { text: t.to_string() }),
+                    Some("tool_use") => {
+                        let id = block.get("id").and_then(|t| t.as_str())?.to_string();
+                        let name = block.get("name").and_then(|t| t.as_str())?.to_string();
+                        if SUBAGENT_TOOL_NAMES.contains(&name.as_str()) {
+                            return None;
+                        }
+                        let input = block.get("input").cloned().unwrap_or(Value::Null);
+                        let (result, is_error) = tool_results
+                            .get(&id)
+                            .map(|(c, e)| (Some(c.clone()), Some(*e)))
+                            .unwrap_or((None, None));
+                        Some(HistoryBlock::ToolCall { id, name, input, result, is_error })
+                    }
+                    // 图片等其余 block 类型：维持原有降级行为，暂不重建。
+                    _ => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        if blocks.is_empty() {
+            continue;
+        }
+        messages.push(ChatMessageItem { role: role.to_string(), blocks, timestamp: i as u64 });
+    }
+
+    messages
 }
 
 /// Whether a raw JSONL "user"-type entry is SDK/CLI-synthesized rather than
@@ -680,5 +757,135 @@ mod tests {
         // 旧版 transcript：没有 origin 字段，也没有任何合成标记——必须保留，
         // 否则会把老会话里的真实提问全部隐藏掉。
         assert!(!is_synthetic_user_entry(&serde_json::json!({})));
+    }
+
+    // 回归：重启/切回会话后，历史里的工具调用（Bash/Edit 等）之前被整段丢弃，只剩
+    // 纯文字——根因是旧实现只保留 content 数组里 type=="text" 的 block。这组测试
+    // 验证 parse_transcript_lines 按原始顺序重建 text/tool_call 两种块，且正确把
+    // 稍后一行 user 消息里的 tool_result 回填进对应的 tool_call。
+    mod parse_transcript_lines_tests {
+        use super::*;
+
+        fn line(v: serde_json::Value) -> String {
+            v.to_string()
+        }
+
+        #[test]
+        fn plain_text_messages_still_work_unchanged() {
+            let lines = vec![
+                line(serde_json::json!({
+                    "type": "user",
+                    "message": { "content": "你好" },
+                })),
+                line(serde_json::json!({
+                    "type": "assistant",
+                    "message": { "content": [{ "type": "text", "text": "你好，有什么可以帮你？" }] },
+                })),
+            ];
+            let messages = parse_transcript_lines(&lines);
+            assert_eq!(messages.len(), 2);
+            assert_eq!(messages[0].role, "user");
+            assert!(matches!(&messages[0].blocks[..], [HistoryBlock::Text { text }] if text == "你好"));
+            assert_eq!(messages[1].role, "claude");
+            assert!(
+                matches!(&messages[1].blocks[..], [HistoryBlock::Text { text }] if text == "你好，有什么可以帮你？")
+            );
+        }
+
+        #[test]
+        fn tool_use_is_reconstructed_and_filled_in_by_a_later_tool_result_line() {
+            let lines = vec![
+                line(serde_json::json!({
+                    "type": "assistant",
+                    "message": { "content": [
+                        { "type": "text", "text": "我看一下这个文件" },
+                        { "type": "tool_use", "id": "t1", "name": "Read", "input": { "file_path": "a.ts" } },
+                    ] },
+                })),
+                // tool_result 落在稍后一行的 user 消息里，且这一行没有真人文字，
+                // 不该单独变成一条用户气泡。
+                line(serde_json::json!({
+                    "type": "user",
+                    "message": { "content": [
+                        { "type": "tool_result", "tool_use_id": "t1", "content": "文件内容……", "is_error": false },
+                    ] },
+                })),
+            ];
+            let messages = parse_transcript_lines(&lines);
+            assert_eq!(messages.len(), 1, "纯 tool_result 的 user 行不应该单独变成一条消息");
+            assert_eq!(messages[0].blocks.len(), 2);
+            assert!(matches!(&messages[0].blocks[0], HistoryBlock::Text { text } if text == "我看一下这个文件"));
+            match &messages[0].blocks[1] {
+                HistoryBlock::ToolCall { id, name, result, is_error, .. } => {
+                    assert_eq!(id, "t1");
+                    assert_eq!(name, "Read");
+                    assert_eq!(result.as_deref(), Some("文件内容……"));
+                    assert_eq!(*is_error, Some(false));
+                }
+                other => panic!("expected ToolCall block, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn tool_use_without_a_matching_tool_result_keeps_result_as_none() {
+            // 会话在工具还没返回结果时就中断/崩溃——历史里应该显示"没有结果"，
+            // 而不是凭空编一个，也不该因为找不到结果就整段丢弃。
+            let lines = vec![line(serde_json::json!({
+                "type": "assistant",
+                "message": { "content": [
+                    { "type": "tool_use", "id": "t1", "name": "Bash", "input": { "command": "ls" } },
+                ] },
+            }))];
+            let messages = parse_transcript_lines(&lines);
+            assert_eq!(messages.len(), 1);
+            match &messages[0].blocks[0] {
+                HistoryBlock::ToolCall { result, is_error, .. } => {
+                    assert_eq!(*result, None);
+                    assert_eq!(*is_error, None);
+                }
+                other => panic!("expected ToolCall block, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn subagent_tool_calls_are_dropped_not_reconstructed() {
+            // 明确不在这次修复范围内：Agent/Task 子代理调用维持原有降级行为——
+            // 整段跳过，不出现在历史里（分步进度 Claude CLI 从不落盘，做了也补不全）。
+            for tool_name in ["Agent", "Task"] {
+                let lines = vec![line(serde_json::json!({
+                    "type": "assistant",
+                    "message": { "content": [
+                        { "type": "tool_use", "id": "a1", "name": tool_name, "input": { "subagent_type": "general-purpose" } },
+                    ] },
+                }))];
+                let messages = parse_transcript_lines(&lines);
+                assert!(messages.is_empty(), "{tool_name} 应该被整段丢弃");
+            }
+        }
+
+        #[test]
+        fn subagent_call_is_dropped_but_sibling_text_in_the_same_message_is_kept() {
+            let lines = vec![line(serde_json::json!({
+                "type": "assistant",
+                "message": { "content": [
+                    { "type": "text", "text": "我先看看情况" },
+                    { "type": "tool_use", "id": "a1", "name": "Agent", "input": { "subagent_type": "general-purpose" } },
+                ] },
+            }))];
+            let messages = parse_transcript_lines(&lines);
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0].blocks.len(), 1);
+            assert!(matches!(&messages[0].blocks[0], HistoryBlock::Text { text } if text == "我先看看情况"));
+        }
+
+        #[test]
+        fn synthetic_user_entries_are_still_skipped() {
+            let lines = vec![line(serde_json::json!({
+                "type": "user",
+                "isMeta": true,
+                "message": { "content": "这是 Skill 注入，不是人打的" },
+            }))];
+            assert!(parse_transcript_lines(&lines).is_empty());
+        }
     }
 }

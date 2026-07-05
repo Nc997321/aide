@@ -3,6 +3,7 @@ import { ref, computed } from "vue";
 import type { ToolCallBlock } from "@/types/chat";
 import BashOutputBlock from "./BashOutputBlock.vue";
 import { parseEditInput, buildEditDiffLines, type EditDiffStats } from "@/utils/editDiff";
+import { summarizeToolInput } from "@/utils/toolSummary";
 
 const props = defineProps<{ block: ToolCallBlock }>();
 const expanded = ref(false);
@@ -23,13 +24,7 @@ const editDiff = computed<EditDiffStats | null>(() => {
   return buildEditDiffLines(parsed);
 });
 
-const inputSummary = computed(() => {
-  const input = props.block.input as Record<string, unknown>;
-  if (props.block.name === "Bash") return String(input?.command ?? "");
-  if (["Read", "Write", "Edit"].includes(props.block.name))
-    return String(input?.file_path ?? "");
-  return JSON.stringify(input).slice(0, 80);
-});
+const inputSummary = computed(() => summarizeToolInput(props.block.name, props.block.input));
 </script>
 
 <template>

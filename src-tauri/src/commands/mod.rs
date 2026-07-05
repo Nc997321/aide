@@ -38,10 +38,37 @@ pub struct Session {
     pub last_message: String,
 }
 
+/// 历史消息里的一个内容块——`load_messages` 解析会话 `.jsonl` 时按原始顺序重建，
+/// 跟前端 `src/types/chat.ts` 的 `ContentBlock` 判别式联合镜像（`type` 字段一致）。
+/// 目前只重建 text/tool_call 两种；子代理（Agent/Task）调用和图片维持原有降级
+/// 行为——整段跳过，不出现在历史里（子代理内部的分步进度 Claude CLI 从不落盘，
+/// 做了也补不全，图片重建暂不在这次修复范围）。
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type")]
+pub enum HistoryBlock {
+    #[serde(rename = "text")]
+    Text { text: String },
+    // 注意：容器级 rename_all 只管 tag（variant 名）大小写，不会顺带改变 variant
+    // 内部字段名——is_error → isError 必须在这个 variant 上单独再声明一次
+    // rename_all，否则会原样落盘成 snake_case，前端读不出来（已被回归测试
+    // history_block_serializes_to_the_shape_the_frontend_expects 坐实过一次）。
+    #[serde(rename = "tool_call", rename_all = "camelCase")]
+    ToolCall {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+        /// 来自同一份 transcript 里稍后（也可能是更早，顺序不保证）出现的
+        /// tool_result；找不到匹配的 tool_use_id 时为 None（这次会话记录不全，
+        /// 或者本身就是最后一条尚未返回结果的调用）。
+        result: Option<String>,
+        is_error: Option<bool>,
+    },
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatMessageItem {
     pub role: String,
-    pub content: String,
+    pub blocks: Vec<HistoryBlock>,
     pub timestamp: u64,
 }
 
@@ -270,5 +297,36 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         assert!(find_session_jsonl_in(&root, "no-such-id").is_empty());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    // 回归：HistoryBlock 的线上 JSON 形状要跟前端 src/types/chat.ts 的 ContentBlock
+    // 判别式联合镜像——`type` 取值和字段名（尤其 is_error → isError）一旦跑偏，
+    // 前端 hydrate() 就会认不出这个 block，历史消息又会静默退化成纯文字。
+    #[test]
+    fn history_block_serializes_to_the_shape_the_frontend_expects() {
+        let text = HistoryBlock::Text { text: "hi".to_string() };
+        assert_eq!(
+            serde_json::to_value(&text).unwrap(),
+            serde_json::json!({ "type": "text", "text": "hi" }),
+        );
+
+        let tool_call = HistoryBlock::ToolCall {
+            id: "t1".to_string(),
+            name: "Bash".to_string(),
+            input: serde_json::json!({ "command": "ls" }),
+            result: Some("ok".to_string()),
+            is_error: Some(false),
+        };
+        assert_eq!(
+            serde_json::to_value(&tool_call).unwrap(),
+            serde_json::json!({
+                "type": "tool_call",
+                "id": "t1",
+                "name": "Bash",
+                "input": { "command": "ls" },
+                "result": "ok",
+                "isError": false,
+            }),
+        );
     }
 }

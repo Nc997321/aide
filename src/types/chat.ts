@@ -21,11 +21,21 @@ export interface ImageBlock {
   mediaType: string; // "image/png" | ...
 }
 
+/** 子代理内部的一步——只报工具名+入参（轻量摘要），不含子代理内部的文本/thinking。 */
+export interface SubagentStep {
+  toolName: string;
+  input: unknown;
+}
+
 export interface SubagentBlock {
   type: "subagent";
   id: string;
   agentName: string;
   description: string;
+  /** 子代理具体跑在哪个模型上——只在 sidecar 第一次坐实时才有值，之后不会变。 */
+  model?: string;
+  /** 运行期间收到的步骤时间线，按到达顺序追加；用于展开态展示实时进度。 */
+  steps: SubagentStep[];
   result?: string;
   isError?: boolean;
   isPending: boolean;
@@ -100,4 +110,10 @@ export interface PermissionRequest {
   id: string;
   name: string;
   input: unknown;
+  /** "总是允许"按钮该显示的文案——由 sidecar 解读 SDK 的建议后翻成人话（比如
+   *  Edit 工具常见的"自动接受编辑（本次会话）"），缺省时兜底显示"总是允许"。 */
+  alwaysAllowLabel?: string;
+  /** 这次请求是不是某个子代理内部发起的（而不是主线程）——缺省表示来自主线程。
+   *  没有它，用户会在毫无上下文的情况下突然看到权限框弹出来，不知道是谁在问。 */
+  fromSubagent?: { id: string; agentName: string };
 }

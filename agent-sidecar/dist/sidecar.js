@@ -45419,12 +45419,40 @@ var MessageQueue = class {
 
 // src/permissions.ts
 import { randomUUID } from "node:crypto";
+function describeAlwaysAllow(suggestions) {
+  if (!suggestions?.length) return void 0;
+  const modeUpdate = suggestions.find(
+    (s) => s.type === "setMode"
+  );
+  if (!modeUpdate) return "\u603B\u662F\u5141\u8BB8";
+  const modeLabels = {
+    acceptEdits: "\u81EA\u52A8\u63A5\u53D7\u7F16\u8F91\uFF08\u672C\u6B21\u4F1A\u8BDD\uFF09",
+    bypassPermissions: "\u81EA\u52A8\u6A21\u5F0F\uFF1A\u8DF3\u8FC7\u6240\u6709\u786E\u8BA4\uFF08\u672C\u6B21\u4F1A\u8BDD\uFF09",
+    plan: "\u5207\u6362\u5230 Plan \u6A21\u5F0F",
+    dontAsk: "\u672C\u6B21\u4F1A\u8BDD\u4E0D\u518D\u8BE2\u95EE\uFF08\u672A\u9884\u5148\u5141\u8BB8\u7684\u4ECD\u4F1A\u62D2\u7EDD\uFF09",
+    auto: "\u672C\u6B21\u4F1A\u8BDD\u4EA4\u7ED9\u6A21\u578B\u81EA\u52A8\u5224\u65AD",
+    default: "\u6062\u590D\u9ED8\u8BA4\u6743\u9650\u6A21\u5F0F"
+  };
+  return modeLabels[modeUpdate.mode] ?? `\u5207\u6362\u6743\u9650\u6A21\u5F0F\uFF1A${modeUpdate.mode}\uFF08\u672C\u6B21\u4F1A\u8BDD\uFF09`;
+}
 var PermissionManager = class {
   pending = /* @__PURE__ */ new Map();
-  makeCallback(emit2) {
+  /** subagents 可选：用来把 canUseTool 收到的 agentID（子代理内部工具请求权限时
+   *  SDK 附带的标识）翻成人看得懂的 agentName，让权限弹窗标注"这是哪个子代理在问"
+   *  而不是让用户在毫无上下文的情况下面对一个突然弹出的框。不传时该功能静默关闭
+   *  （fromSubagent 字段永不出现），不影响原有批准/拒绝流程。 */
+  makeCallback(emit2, subagents) {
     return async (toolName, input, opts) => {
       const id2 = randomUUID();
-      emit2({ type: "permission_request", id: id2, name: toolName, input });
+      const fromSubagent = opts?.agentID ? { id: opts.agentID, agentName: subagents?.getAgentName(opts.agentID) ?? "\u5B50\u4EE3\u7406" } : void 0;
+      emit2({
+        type: "permission_request",
+        id: id2,
+        name: toolName,
+        input,
+        alwaysAllowLabel: describeAlwaysAllow(opts?.suggestions),
+        ...fromSubagent ? { fromSubagent } : {}
+      });
       const decision = await new Promise((resolve) => {
         this.pending.set(id2, { resolve, toolName, suggestions: opts?.suggestions });
         opts?.signal?.addEventListener(
@@ -45540,6 +45568,11 @@ var TaskTracker = class {
 var SUBAGENT_TOOL_NAMES = /* @__PURE__ */ new Set(["Agent", "Task"]);
 var SubagentTracker = class {
   active = /* @__PURE__ */ new Set();
+  /** 已经报过 model 的 id 集合——同一个子代理调用只带一次 model 字段，避免每步重复发送。 */
+  modelReported = /* @__PURE__ */ new Set();
+  /** id（这次 Agent/Task tool_use 的 id）→ agentName——权限弹窗要标注"这是哪个子代理
+   *  在问"时，靠 canUseTool 回调收到的 agentID 反查这里，拿到人看得懂的名字。 */
+  names = /* @__PURE__ */ new Map();
   static isSubagentTool(name) {
     return SUBAGENT_TOOL_NAMES.has(name);
   }
@@ -45549,11 +45582,34 @@ var SubagentTracker = class {
     const record = input && typeof input === "object" ? input : {};
     const agentName = typeof record.subagent_type === "string" ? record.subagent_type : "agent";
     const description = typeof record.description === "string" ? record.description : "";
+    this.names.set(id2, agentName);
     return { agentName, description };
   }
   /** 返回 true 表示这个 tool_use_id 属于子代理调用，调用方应发 subagent_end 而非通用 tool_result。 */
   handleToolResult(id2) {
+    this.modelReported.delete(id2);
+    this.names.delete(id2);
     return this.active.delete(id2);
+  }
+  /** 按 id 查子代理名字——canUseTool 回调收到的 `agentID`（子代理内部工具请求权限时
+   *  SDK 附带的标识）借此翻成人看得懂的 agentName。查不到（id 不认识/子代理已结束）
+   *  时返回 undefined，调用方自己兜底成通用文案，不假设这个 id 一定认识。 */
+  getAgentName(id2) {
+    return this.names.get(id2);
+  }
+  /** 某个 parent_tool_use_id 当前是否对应一个仍在运行的子代理调用——子代理内部
+   *  消息（mapper.ts 里带 parent_tool_use_id 的那些）据此过滤掉不认识的 id（防御性，
+   *  正常情况下 SDK 给的 parent_tool_use_id 必然对应一个我们正追踪着的调用）。 */
+  isActive(id2) {
+    return this.active.has(id2);
+  }
+  /** 子代理内部第一条可采信 assistant 消息的 model 只报一次：调用方应先确认这条
+   *  消息确实可采信（如 isAdoptableAssistantModel），再调用本方法申领"上报名额"——
+   *  返回 true 才把 model 字段带上，避免占位符/错误回声消耗掉唯一一次上报机会。 */
+  claimModelReport(id2) {
+    if (!this.active.has(id2) || this.modelReported.has(id2)) return false;
+    this.modelReported.add(id2);
+    return true;
   }
 };
 
@@ -45647,13 +45703,41 @@ function isoToMs(iso) {
   const t = Date.parse(iso);
   return Number.isNaN(t) ? null : t;
 }
+function emitSubagentProgress(msg, emit2, subagents) {
+  const parentId = msg.parent_tool_use_id;
+  if (!subagents.isActive(parentId)) return;
+  if (msg.type !== "assistant" || !msg.message?.content) return;
+  const toolUses = msg.message.content.filter((b3) => b3.type === "tool_use");
+  if (toolUses.length === 0) return;
+  const model = isAdoptableAssistantModel(msg) && subagents.claimModelReport(parentId) ? msg.message.model : void 0;
+  toolUses.forEach((block, i) => {
+    emit2({
+      type: "subagent_progress",
+      id: parentId,
+      toolName: block.name,
+      input: block.input,
+      ...i === 0 && model ? { model } : {}
+    });
+  });
+}
 function mapSdkMessage(msg, emit2, tasks, subagents) {
-  if (msg.parent_tool_use_id) return;
+  if (msg.parent_tool_use_id) {
+    emitSubagentProgress(msg, emit2, subagents);
+    return;
+  }
   if (msg.type === "system" && msg.subtype === "init") {
     emit2({ type: "session_init", session_id: msg.session_id });
     if (Array.isArray(msg.slash_commands)) {
       emit2({ type: "slash_commands_available", commands: msg.slash_commands });
     }
+    return;
+  }
+  if (msg.type === "system" && msg.subtype === "local_command_output") {
+    const content = typeof msg.content === "string" ? msg.content.trim() : "";
+    if (content) {
+      emit2({ type: "text_delta", delta: content });
+    }
+    emit2({ type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
     return;
   }
   if (msg.type === "stream_event") {
@@ -45753,7 +45837,8 @@ var aliasByResolvedPrefix = [];
 var PERMISSION_MODES = [
   { value: "default", displayName: "\u9ED8\u8BA4\u6743\u9650" },
   { value: "acceptEdits", displayName: "\u81EA\u52A8\u63A5\u53D7\u7F16\u8F91" },
-  { value: "plan", displayName: "Plan \u6A21\u5F0F" }
+  { value: "plan", displayName: "Plan \u6A21\u5F0F" },
+  { value: "bypassPermissions", displayName: "\u81EA\u52A8\u6A21\u5F0F\uFF08\u8DF3\u8FC7\u6240\u6709\u786E\u8BA4\uFF0C\u8BF7\u8C28\u614E\u4F7F\u7528\uFF09" }
 ];
 var currentPermissionMode = "default";
 function emitPermissionModes() {
@@ -45823,7 +45908,12 @@ async function startLoop(cwd) {
           prompt: queue[Symbol.asyncIterator](),
           options: {
             permissionMode: currentPermissionMode,
-            canUseTool: permMgr.makeCallback(emit),
+            // bypassPermissions（自动模式）是 SDK 的"跳过所有权限确认"能力，必须显式
+            // 打开这个危险开关才允许使用——否则运行时 setPermissionMode("bypassPermissions")
+            // 会失败。这里恒开的只是"能力闸门"，实际是否跳过完全由 permissionMode 决定：
+            // 非 bypass 模式下工具照常走 canUseTool 确认，开关本身不放宽任何权限。
+            allowDangerouslySkipPermissions: true,
+            canUseTool: permMgr.makeCallback(emit, subagentTracker),
             settingSources: ["project", "user"],
             allowedTools: ["Agent", "Task"],
             skills: "all",

@@ -98,6 +98,11 @@ function submitAnswers() {
   emit("respond", props.permission.id, true, undefined, answers);
 }
 
+/** "总是允许"按钮本身要不要用警示色——目前只有它会切到 bypassPermissions
+ *  （本次会话跳过所有工具确认）这种最激进的模式时才标红，其余（addRules/
+ *  acceptEdits 等）维持普通按钮观感，不过度报警。 */
+const isAlwaysAllowDangerous = computed(() => (props.permission?.alwaysAllowLabel ?? "").startsWith("自动模式"));
+
 const inputSummary = computed(() => {
   if (!props.permission) return "";
   const input = props.permission.input as Record<string, unknown>;
@@ -117,6 +122,12 @@ const inputSummary = computed(() => {
           <template v-else-if="isQuestion">Claude 有问题要问你</template>
           <template v-else>允许工具调用：<span class="perm-tool-name">{{ permission.name }}</span></template>
         </h3>
+        <!-- 标注这次请求是主线程还是某个子代理发起的——没有它，子代理跑到一半突然
+             弹出权限框，用户完全不知道是谁在问（子代理没有独立窗口，只有一张可折叠
+             的进度卡片，很容易被当成"平白无故弹出来的"）。 -->
+        <div v-if="permission.fromSubagent" class="perm-subagent-badge">
+          🧩 来自子代理：{{ permission.fromSubagent.agentName }}
+        </div>
         <!-- plan 来自本会话模型输出，信任边界与 ChatMessage 的 v-html="marked.parse(...)" 完全一致 -->
         <div v-if="isPlanApproval" class="perm-plan" v-html="planHtml" />
         <div v-else-if="isQuestion" class="perm-questions">
@@ -171,8 +182,13 @@ const inputSummary = computed(() => {
             <button class="perm-btn perm-btn--deny" @click="emit('respond', permission.id, false)">
               {{ isPlanApproval ? "继续修改计划" : "拒绝" }}
             </button>
-            <button v-if="!isPlanApproval" class="perm-btn perm-btn--always" @click="emit('respond', permission.id, true, true)">
-              总是允许
+            <button
+              v-if="!isPlanApproval"
+              class="perm-btn perm-btn--always"
+              :class="{ 'perm-btn--always-danger': isAlwaysAllowDangerous }"
+              @click="emit('respond', permission.id, true, true)"
+            >
+              {{ permission.alwaysAllowLabel ?? "总是允许" }}
             </button>
             <button class="perm-btn perm-btn--allow" @click="emit('respond', permission.id, true)">
               {{ isPlanApproval ? "批准并开始执行" : "允许" }}
@@ -213,6 +229,16 @@ const inputSummary = computed(() => {
 
 .perm-tool-name {
   color: var(--aide-accent);
+}
+
+.perm-subagent-badge {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--aide-text-muted);
+  background: var(--aide-surface-default);
+  border-radius: 999px;
+  padding: 2px 10px;
+  margin-bottom: 10px;
 }
 
 .perm-dialog--plan,
@@ -412,6 +438,18 @@ const inputSummary = computed(() => {
 .perm-btn--always:hover {
   background: var(--aide-surface-hover);
   color: var(--aide-text-primary);
+}
+
+/* 会切到 bypassPermissions（跳过所有确认）时标红，其余 addRules/acceptEdits
+ * 等场景维持普通按钮观感，不过度报警。 */
+.perm-btn--always-danger {
+  border-color: var(--aide-danger);
+  color: var(--aide-danger);
+}
+
+.perm-btn--always-danger:hover {
+  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
+  color: var(--aide-danger);
 }
 
 .perm-btn--allow {

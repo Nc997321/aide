@@ -151,6 +151,40 @@ describe("mapSdkMessage streaming (includePartialMessages)", () => {
   });
 });
 
+describe("mapSdkMessage local slash commands (/clear, /compact 等本地命令)", () => {
+  // 根因：SDK 对 /clear /compact 这类本地命令是"绕过模型、绕过 result"的——
+  // 只落一条 { type: "system", subtype: "local_command_output" }，SDK 自己的类型注释
+  // 写明"Displayed as assistant-style text in the transcript"。mapSdkMessage 之前完全
+  // 没有这个分支，五个 if 全部落空、函数直接 return undefined——用户发 /clear 后界面
+  // 悄无声息：没有确认气泡，也没有 message_stop 把 running 状态收掉。
+  it("renders local_command_output as assistant text + closes the turn", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      { type: "system", subtype: "local_command_output", content: "已清空上下文。", uuid: "u1", session_id: "s1" },
+      (e) => events.push(e),
+      new TaskTracker(),
+      new SubagentTracker(),
+    );
+    expect(events).toEqual([
+      { type: "text_delta", delta: "已清空上下文。" },
+      { type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null },
+    ]);
+  });
+
+  it("ignores an empty/whitespace-only local_command_output content (nothing to show)", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      { type: "system", subtype: "local_command_output", content: "   ", uuid: "u2", session_id: "s1" },
+      (e) => events.push(e),
+      new TaskTracker(),
+      new SubagentTracker(),
+    );
+    expect(events).toEqual([
+      { type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null },
+    ]);
+  });
+});
+
 describe("mapSdkMessage error results (未登录 / 额度上限 不再静默)", () => {
   const tasks = () => new TaskTracker();
   const subs = () => new SubagentTracker();
@@ -289,13 +323,85 @@ describe("mapSdkMessage routing for subagent tools", () => {
     ]);
   });
 
-  it("drops messages carrying parent_tool_use_id (subagent-internal messages)", () => {
+  it("drops subagent-internal messages for an id we never saw start (defensive, shouldn't happen in practice)", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
     mapSdkMessage(assistantText("子代理内部的思考文本", "a1"), (e) => events.push(e), tasks, subagents);
     mapSdkMessage(assistantToolUse("inner1", "Read", { file_path: "x.ts" }, "a1"), (e) => events.push(e), tasks, subagents);
     expect(events).toEqual([]);
+  });
+
+  it("emits subagent_progress for a tracked subagent's internal tool_use, ignoring pure text/thinking", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    mapSdkMessage(
+      assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
+      (e) => events.push(e),
+      tasks,
+      subagents,
+    );
+    events.length = 0;
+    // 子代理内部一条纯文本消息：v1 不直播文本，忽略。
+    mapSdkMessage(assistantText("我先看看仓库结构", "a1"), (e) => events.push(e), tasks, subagents);
+    expect(events).toEqual([]);
+    // 子代理内部真正调用了工具：应转成 subagent_progress，而不是 tool_use_start。
+    mapSdkMessage(assistantToolUse("inner1", "Read", { file_path: "x.ts" }, "a1"), (e) => events.push(e), tasks, subagents);
+    expect(events).toEqual([
+      { type: "subagent_progress", id: "a1", toolName: "Read", input: { file_path: "x.ts" } },
+    ]);
+  });
+
+  it("attaches model on the first adoptable subagent-internal assistant message, only once", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    mapSdkMessage(
+      assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
+      (e) => events.push(e),
+      tasks,
+      subagents,
+    );
+    events.length = 0;
+    const step1 = {
+      type: "assistant",
+      parent_tool_use_id: "a1",
+      message: { model: "claude-sonnet-5-20260101", content: [{ type: "tool_use", id: "inner1", name: "Read", input: { file_path: "x.ts" } }] },
+    };
+    const step2 = {
+      type: "assistant",
+      parent_tool_use_id: "a1",
+      message: { model: "claude-sonnet-5-20260101", content: [{ type: "tool_use", id: "inner2", name: "Bash", input: { command: "ls" } }] },
+    };
+    mapSdkMessage(step1, (e) => events.push(e), tasks, subagents);
+    mapSdkMessage(step2, (e) => events.push(e), tasks, subagents);
+    expect(events).toEqual([
+      { type: "subagent_progress", id: "a1", toolName: "Read", input: { file_path: "x.ts" }, model: "claude-sonnet-5-20260101" },
+      { type: "subagent_progress", id: "a1", toolName: "Bash", input: { command: "ls" } },
+    ]);
+  });
+
+  it("does not attach a placeholder/error-echo model to subagent progress", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    mapSdkMessage(
+      assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
+      (e) => events.push(e),
+      tasks,
+      subagents,
+    );
+    events.length = 0;
+    const placeholderStep = {
+      type: "assistant",
+      parent_tool_use_id: "a1",
+      message: { model: "<synthetic>", content: [{ type: "tool_use", id: "inner1", name: "Read", input: { file_path: "x.ts" } }] },
+    };
+    mapSdkMessage(placeholderStep, (e) => events.push(e), tasks, subagents);
+    expect(events).toEqual([
+      { type: "subagent_progress", id: "a1", toolName: "Read", input: { file_path: "x.ts" } },
+    ]);
   });
 });
 

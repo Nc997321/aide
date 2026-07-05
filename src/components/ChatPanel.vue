@@ -14,6 +14,8 @@ import { peekFileClipboard } from "@/composables/useFileClipboard";
 import type { ImageAttachment, SendOptions } from "@/composables/useChatSession";
 import { useSessionState } from "@/composables/useSessionState";
 import { useProviders } from "@/composables/useProviders";
+import { useQuickActions } from "@/composables/useQuickActions";
+import type { QuickAction } from "@/composables/useQuickActions";
 import AStatusDot from "@/ui/AStatusDot.vue";
 
 const props = defineProps<{
@@ -24,7 +26,6 @@ const props = defineProps<{
   isBusy: { value: boolean } | boolean;
   models?: ModelOption[];
   currentModel?: string;
-  totalCostUsd?: number;
   contextUsage?: ContextUsage | null;
   /** 账号级订阅额度/速率；null 时不显示 */
   rateLimit?: RateLimitInfo | null;
@@ -46,6 +47,9 @@ const emit = defineEmits<{
 
 const { state: sessionState, dotTone } = useSessionState();
 const { activeProvider, SYSTEM_DEFAULT_ID } = useProviders();
+// 工具栏快捷操作（/compact /clear）：composable 早就写好且有单测，但从没接到
+// UI 上过——之前工具栏里完全看不到这两个按钮。见 handleQuickAction。
+const { actions: quickActions } = useQuickActions();
 
 // 会话还没开始时没有活的 sidecar 进程，SDK 的 models_available 事件还没发生，
 // props.models 是空的——依次退化：provider 设置里配置的 knownModels（用户自己
@@ -388,6 +392,15 @@ async function handleSend() {
     permissionMode: selectedPermissionMode.value || undefined,
   });
 }
+
+// 快捷操作直接发送——跟手打消息走同一条路径（忙碌排队/权限模式透传都免费拿到），
+// 不做二次确认：/compact /clear 都不破坏磁盘上的历史数据。
+function handleQuickAction(action: QuickAction) {
+  emit("send", action.prompt, {
+    initialModel: selectedModel.value || undefined,
+    permissionMode: selectedPermissionMode.value || undefined,
+  });
+}
 </script>
 
 <template>
@@ -479,13 +492,33 @@ async function handleSend() {
             title="模型"
             @update:model-value="handleModelChange"
           />
-          <ThemedSelect
+          <div
             v-if="displayPermissionModes.length"
-            :model-value="selectedPermissionMode"
-            :options="permissionModeSelectOptions"
-            title="权限模式"
-            @update:model-value="handlePermissionModeChange"
-          />
+            class="perm-mode-wrap"
+            :class="{ 'perm-mode-wrap--auto': selectedPermissionMode === 'bypassPermissions' }"
+          >
+            <ThemedSelect
+              :model-value="selectedPermissionMode"
+              :options="permissionModeSelectOptions"
+              title="权限模式"
+              @update:model-value="handlePermissionModeChange"
+            />
+            <span
+              v-if="selectedPermissionMode === 'bypassPermissions'"
+              class="perm-auto-badge"
+              title="已跳过所有工具权限确认（含本会话派生的所有子代理，子代理会继承此模式且不能单独覆盖），仅本会话生效；切换/新建会话会恢复默认权限模式"
+            >⚠️ 自动</span>
+          </div>
+          <div v-if="quickActions.length" class="chat-quick-actions">
+            <button
+              v-for="qa in quickActions"
+              :key="qa.id"
+              type="button"
+              class="chat-quick-action-btn"
+              :title="qa.prompt"
+              @click="handleQuickAction(qa)"
+            >{{ qa.label }}</button>
+          </div>
           <div
             v-if="props.contextUsage"
             class="chat-ctx-usage"
@@ -511,7 +544,6 @@ async function handleSend() {
             </div>
             <span class="chat-ctx-percent">{{ w.pct }}%</span>
           </div>
-          <span class="chat-cost-total">会话费用 ${{ (props.totalCostUsd ?? 0).toFixed(4) }}</span>
           <button
             class="chat-send-btn"
             :disabled="!inputText.trim() && !pendingImages.length"
@@ -651,6 +683,47 @@ async function handleSend() {
   color: var(--aide-text-secondary);
 }
 
+/* 自动模式（bypassPermissions）常驻警示：不用一次性确认框，而是选中期间持续
+ * 可见的红色信号，提醒当前会话正在跳过所有工具权限确认。 */
+.perm-mode-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.perm-mode-wrap--auto :deep(.themed-select) {
+  border-color: var(--aide-danger);
+  color: var(--aide-danger);
+}
+
+.perm-auto-badge {
+  font-size: 11px;
+  color: var(--aide-danger);
+  white-space: nowrap;
+}
+
+.chat-quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-quick-action-btn {
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  background: transparent;
+  color: var(--aide-text-secondary);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chat-quick-action-btn:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
+}
+
 .chat-ctx-usage {
   display: flex;
   align-items: center;
@@ -716,11 +789,6 @@ async function handleSend() {
 }
 .chat-quota--exceeded .chat-quota-label { color: var(--aide-danger, #e05561); font-weight: 600; }
 
-.chat-cost-total {
-  white-space: nowrap;
-  margin-right: auto;
-}
-
 .chat-input {
   resize: none;
   border: none;
@@ -743,6 +811,9 @@ async function handleSend() {
 }
 
 .chat-send-btn {
+  /* 原来靠 .chat-cost-total 的 margin-right: auto 把发送按钮推到工具栏最右侧；
+   * 去掉费用展示后这条移到这里，保持发送按钮始终靠右的布局不变。 */
+  margin-left: auto;
   border-radius: var(--aide-radius-sm);
   background: var(--aide-accent);
   color: var(--aide-text-on-accent);

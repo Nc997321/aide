@@ -47,14 +47,18 @@ let lastModels: ModelOption[] = [];
 // wire model id（如 "claude-sonnet-5-20260101"）反查回下拉里对应的别名选项。
 let aliasByResolvedPrefix: { value: string; resolvedPrefix: string }[] = [];
 
-// Claude 专属的权限模式清单（bypassPermissions 需要额外的危险开关，不提供）。
-// 前端只拿到 value/displayName，语义完全由本 sidecar 解释。
+// Claude 专属的权限模式清单。bypassPermissions（SDK 里跳过所有 canUseTool 确认的
+// "自动模式"）现在暴露出来，但刻意只存内存（见下方 currentPermissionMode 注释）：
+// 选中只对当前会话生效，切会话/重开进程一律回落 default，不做任何持久化，前端
+// 还会在选中时给出持续的醒目提示（危险信号靠 UI 常驻可见，而不是靠一次性确认框）。
 const PERMISSION_MODES: PermissionModeOption[] = [
   { value: "default", displayName: "默认权限" },
   { value: "acceptEdits", displayName: "自动接受编辑" },
   { value: "plan", displayName: "Plan 模式" },
+  { value: "bypassPermissions", displayName: "自动模式（跳过所有确认，请谨慎使用）" },
 ];
-// 同模型选择：只存内存，不落盘；重开会话回落到 default。
+// 同模型选择：只存内存，不落盘；重开会话回落到 default——bypassPermissions 因此
+// 天然是"会话级临时开关"，不会意外沿用到下一个会话。
 let currentPermissionMode = "default";
 
 function emitPermissionModes() {
@@ -149,7 +153,12 @@ async function startLoop(cwd?: string) {
           prompt: queue[Symbol.asyncIterator](),
           options: {
             permissionMode: currentPermissionMode as any,
-            canUseTool: permMgr.makeCallback(emit) as any,
+            // bypassPermissions（自动模式）是 SDK 的"跳过所有权限确认"能力，必须显式
+            // 打开这个危险开关才允许使用——否则运行时 setPermissionMode("bypassPermissions")
+            // 会失败。这里恒开的只是"能力闸门"，实际是否跳过完全由 permissionMode 决定：
+            // 非 bypass 模式下工具照常走 canUseTool 确认，开关本身不放宽任何权限。
+            allowDangerouslySkipPermissions: true,
+            canUseTool: permMgr.makeCallback(emit, subagentTracker) as any,
             settingSources: ["project", "user"],
             allowedTools: ["Agent", "Task"],
             skills: "all",

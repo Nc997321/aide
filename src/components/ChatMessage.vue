@@ -4,6 +4,7 @@ import type { ChatMessage } from "@/types/chat";
 import { marked } from "@/utils/markdown";
 import ToolCallBlock from "./ToolCallBlock.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
+import TurnUsageBadge from "./TurnUsageBadge.vue";
 import { useFileViewer } from "@/composables/useFileViewer";
 import { parseFileLink, resolveFileLinkPath } from "@/utils/fileLink";
 
@@ -56,9 +57,7 @@ function handleTextClick(e: MouseEvent) {
           :block="(block as any)"
         />
       </template>
-      <div v-if="!isUser && message.usage" class="msg-usage">
-        {{ message.usage.inputTokens }}→{{ message.usage.outputTokens }} tokens · ${{ message.usage.costUsd.toFixed(4) }}
-      </div>
+      <TurnUsageBadge v-if="!isUser && message.usage" class="msg-usage" :usage="message.usage" />
     </div>
   </div>
 </template>

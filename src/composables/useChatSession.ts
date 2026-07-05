@@ -16,6 +16,7 @@ import type {
 } from "../types/chat";
 import { useSessionState } from "./useSessionState";
 import type { FileMentionResolution } from "../utils/fileMentions";
+import type { HistoryBlock } from "../types";
 
 export interface ImageAttachment {
   data: string;
@@ -49,8 +50,6 @@ interface SessionStore {
   models: ModelOption[];
   /** 当前选中的模型 value；空串表示跟随 provider 默认 */
   currentModel: string;
-  /** 本会话累计费用（美元） */
-  totalCostUsd: number;
   /** 上下文窗口用量——每轮结束后由 sidecar 刷新；null 表示还没收到过 */
   contextUsage: ContextUsage | null;
   /** 当前任务清单——sidecar 每次变化后整体覆盖，不做增量合并 */
@@ -106,7 +105,6 @@ function getStore(sid: string): SessionStore {
       hydrated: false,
       models: [],
       currentModel: "",
-      totalCostUsd: 0,
       contextUsage: null,
       tasks: [],
       permissionModes: [],
@@ -293,6 +291,8 @@ function handleChatEvent(e: Record<string, unknown>) {
         id: e["id"] as string,
         name: e["name"] as string,
         input: e["input"],
+        alwaysAllowLabel: e["alwaysAllowLabel"] as string | undefined,
+        fromSubagent: e["fromSubagent"] as { id: string; agentName: string } | undefined,
       };
       setSessionState(sid, "attention");
       break;
@@ -352,8 +352,19 @@ function handleChatEvent(e: Record<string, unknown>) {
         id: e["id"] as string,
         agentName: e["agentName"] as string,
         description: e["description"] as string,
+        steps: [],
         isPending: true,
       } as SubagentBlock);
+      break;
+    }
+    case "subagent_progress": {
+      const block = store.messages
+        .flatMap((m) => m.blocks)
+        .find((b): b is SubagentBlock => b.type === "subagent" && (b as SubagentBlock).id === e["id"]);
+      if (block) {
+        block.steps.push({ toolName: e["toolName"] as string, input: e["input"] });
+        if (e["model"]) block.model = e["model"] as string;
+      }
       break;
     }
     case "subagent_end": {
@@ -368,10 +379,6 @@ function handleChatEvent(e: Record<string, unknown>) {
       break;
     }
     case "message_stop": {
-      const totalCostUsd = e["total_cost_usd"] as number | null;
-      if (totalCostUsd !== null && totalCostUsd !== undefined) {
-        store.totalCostUsd = totalCostUsd;
-      }
       const usage = e["usage"] as ChatMessage["usage"] | null;
       if (usage) {
         const last = store.messages[store.messages.length - 1];
@@ -456,7 +463,7 @@ async function hydrate(sid: string) {
   }
   store.hydrated = true;
   try {
-    const items = await invoke<Array<{ role: string; content: string; timestamp: number }>>(
+    const items = await invoke<Array<{ role: string; blocks: HistoryBlock[]; timestamp: number }>>(
       "load_messages",
       { sessionId: sid },
     );
@@ -465,13 +472,31 @@ async function hydrate(sid: string) {
     const history: ChatMessage[] = items.map((item) => ({
       id: crypto.randomUUID(),
       role: (item.role === "claude" ? "assistant" : item.role) as "user" | "assistant",
-      blocks: [{ type: "text" as const, text: item.content }],
+      blocks: item.blocks.map(historyBlockToContentBlock),
       timestamp: item.timestamp,
     }));
     store.messages.unshift(...history);
   } catch (e) {
     console.warn("Failed to load messages:", e);
   }
+}
+
+/** Rust 侧重建的历史 block → 前端渲染用的 ContentBlock。tool_call 历史消息永远是
+ *  "已完成"状态（isPending: false）——它来自一份早就落盘的 transcript，不会再有
+ *  新的 tool_result 追上来。 */
+function historyBlockToContentBlock(block: HistoryBlock): TextBlock | ToolCallBlock {
+  if (block.type === "tool_call") {
+    return {
+      type: "tool_call",
+      id: block.id,
+      name: block.name,
+      input: block.input,
+      result: block.result ?? undefined,
+      isError: block.isError ?? undefined,
+      isPending: false,
+    };
+  }
+  return { type: "text", text: block.text };
 }
 
 /** 仅测试用：清空模块级状态 */
@@ -623,7 +648,6 @@ export function useChatSession(sessionId: Ref<string | null>) {
       return own?.length ? own : sharedModels.value;
     }),
     currentModel: computed(() => current.value?.currentModel ?? ""),
-    totalCostUsd: computed(() => current.value?.totalCostUsd ?? 0),
     contextUsage: computed(() => current.value?.contextUsage ?? null),
     tasks: computed(() => current.value?.tasks ?? []),
     permissionModes: computed(() => {

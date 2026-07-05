@@ -159,13 +159,50 @@ function isoToMs(iso: unknown): number | null {
   return Number.isNaN(t) ? null : t;
 }
 
+/**
+ * 子代理内部消息（`parent_tool_use_id` 非空）：只提炼"轻量步骤摘要"——它调用了
+ * 哪个工具、入参是什么——不转发子代理内部的文本/thinking（完整嵌套 transcript
+ * 属于 v2，对应 SDK 的 `forwardSubagentText` 选项，本项目未开启）。
+ *
+ * 这条路径以前是无条件 `return`（见本文件历史版本），导致子代理执行期间前端
+ * 完全收不到任何事件：一是看不到进度，二是 useSessionState 的 90 秒软超时靠"任意
+ * 事件重置计时器"判断是否卡住（useChatSession.ts），子代理跑得稍久就会被误判成
+ * "stalled"（疑似卡住的橙点）。现在哪怕只发工具步骤，也足够让前端知道"还活着"。
+ *
+ * 顺带在第一条可采信的 assistant 消息上把 `message.model` 带一次，让前端知道这个
+ * 子代理具体跑在哪个模型上（`claimModelReport` 保证只报一次）。
+ */
+function emitSubagentProgress(msg: any, emit: (e: ChatEvent) => void, subagents: SubagentTracker) {
+  const parentId = msg.parent_tool_use_id as string;
+  if (!subagents.isActive(parentId)) return; // 防御性：理论上不会出现不认识的 id
+  if (msg.type !== "assistant" || !msg.message?.content) return;
+  const toolUses = (msg.message.content as any[]).filter((b) => b.type === "tool_use");
+  if (toolUses.length === 0) return; // 纯文本/thinking：v1 不直播，等下一条带工具调用的消息
+  const model =
+    isAdoptableAssistantModel(msg) && subagents.claimModelReport(parentId)
+      ? (msg.message.model as string)
+      : undefined;
+  toolUses.forEach((block, i) => {
+    emit({
+      type: "subagent_progress",
+      id: parentId,
+      toolName: block.name,
+      input: block.input,
+      ...(i === 0 && model ? { model } : {}),
+    });
+  });
+}
+
 export function mapSdkMessage(
   msg: any,
   emit: (e: ChatEvent) => void,
   tasks: TaskTracker,
   subagents: SubagentTracker,
 ) {
-  if (msg.parent_tool_use_id) return; // 子代理内部消息（含其 stream_event）：v1 不做嵌套直播，直接丢弃
+  if (msg.parent_tool_use_id) {
+    emitSubagentProgress(msg, emit, subagents);
+    return;
+  }
 
   if (msg.type === "system" && msg.subtype === "init") {
     emit({ type: "session_init", session_id: msg.session_id });
@@ -173,6 +210,21 @@ export function mapSdkMessage(
     if (Array.isArray(msg.slash_commands)) {
       emit({ type: "slash_commands_available", commands: msg.slash_commands });
     }
+    return;
+  }
+
+  // 本地 slash 命令（/clear /compact /usage 等）：SDK 自己拦截、绕过模型，只落一条
+  // system/local_command_output（SDK 类型注释原话："Displayed as assistant-style
+  // text in the transcript"），既不会有 assistant 消息也不会有 result——这里必须补上
+  // 这条通路，否则用户发 /clear 后界面毫无反应：没有确认文案，running 状态也永远
+  // 等不到 message_stop 收尾。复用现有 text_delta + message_stop（而不是新增一个
+  // Claude 专属事件类型）——协议层不关心"本地命令"这个概念是不是 Claude 独有的。
+  if (msg.type === "system" && msg.subtype === "local_command_output") {
+    const content = typeof msg.content === "string" ? msg.content.trim() : "";
+    if (content) {
+      emit({ type: "text_delta", delta: content });
+    }
+    emit({ type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
     return;
   }
 
