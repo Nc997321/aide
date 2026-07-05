@@ -63,10 +63,11 @@ pub async fn send_message(
 
     // 连接身份（base_url/api_key/auth_token/代理）相对存活进程 spawn 时的快照
     // 漂移了，或者该 session 压根没有存活进程：都需要（重新）拉起子进程。
-    // 已有进程会先被 kill——kill() 内部先置 killed=true 再杀，reader 任务的
+    // 已有进程会先被 kill——kill() 内部先置 killed=true 再杀，读者任务的
     // EOF 不会误报 session_dead（跟用户主动点"停止"走的是同一条静默路径）。
     // 新进程沿用已有的 resume_id（前端对非 pending 会话恒定带 sid 作为
     // resume_id）续上 SDK 侧的会话历史，对用户透明。
+
     if sidecar_mgr.needs_respawn(&session_id, &env_vars) {
         if sidecar_mgr.has_session(&session_id) {
             sidecar_mgr.kill(&session_id).await;

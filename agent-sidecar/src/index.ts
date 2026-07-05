@@ -149,6 +149,18 @@ async function startLoop(cwd?: string) {
     // 出错后继续循环，等待下一条消息（避免 queue 无消费者）
     while (true) {
       try {
+        // 构造显式 env 传给 CLI subprocess：process.env 作为基础（保证 PATH/HOME 等
+        // 系统变量不丢），再把 provider 的连接参数叠上去——这样即使 CLI 从 session
+        // 文件里读到了旧 provider 的缓存配置，这里显式传入的值也会覆盖它。
+        const cliEnv: Record<string, string | undefined> = { ...process.env };
+        for (const k of [
+          "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+          "ANTHROPIC_MODEL", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_SUBAGENT_MODEL",
+          "CLAUDE_CODE_EFFORT_LEVEL",
+          "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy",
+        ]) {
+          if (process.env[k]) cliEnv[k] = process.env[k];
+        }
         const q = query({
           prompt: queue[Symbol.asyncIterator](),
           options: {
@@ -174,6 +186,7 @@ async function startLoop(cwd?: string) {
               ? { pathToClaudeCodeExecutable: process.env.AIDE_CLAUDE_EXE }
               : {}),
             ...(sessionId ? { resume: sessionId } : {}),
+            env: cliEnv,
           },
         });
         currentQuery = q;
