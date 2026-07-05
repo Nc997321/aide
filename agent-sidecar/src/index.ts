@@ -185,7 +185,12 @@ async function startLoop(cwd?: string) {
             ...(process.env.AIDE_CLAUDE_EXE
               ? { pathToClaudeCodeExecutable: process.env.AIDE_CLAUDE_EXE }
               : {}),
-            ...(sessionId ? { resume: sessionId } : {}),
+            // forkSession=true：resume 旧会话时自动 fork 出新 session，保留旧会话
+            // 对话历史但用新 provider 配置——CLI resume 时会从 session 文件读取创建时
+            // 缓存的 provider 配置（base_url/api_key/model），覆盖 process.env 里的
+            // 新值，导致切换供应商后仍用旧 base_url 返回 404。fork 绕过这个问题：
+            // 新 session 文件不会缓存旧 provider 的配置。
+            ...(sessionId ? { resume: sessionId, forkSession: true } : {}),
             env: cliEnv,
           },
         });
