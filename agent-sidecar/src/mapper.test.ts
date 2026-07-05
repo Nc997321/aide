@@ -403,6 +403,77 @@ describe("mapSdkMessage routing for subagent tools", () => {
       { type: "subagent_progress", id: "a1", toolName: "Read", input: { file_path: "x.ts" } },
     ]);
   });
+
+  it("forwards a tracked subagent's stream_event text_delta as subagent_text_delta", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    mapSdkMessage(
+      assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
+      (e) => events.push(e),
+      tasks,
+      subagents,
+    );
+    events.length = 0;
+    const delta = {
+      type: "stream_event",
+      parent_tool_use_id: "a1",
+      event: { type: "content_block_delta", delta: { type: "text_delta", text: "我先看" } },
+    };
+    mapSdkMessage(delta, (e) => events.push(e), tasks, subagents);
+    expect(events).toEqual([{ type: "subagent_text_delta", id: "a1", delta: "我先看" }]);
+  });
+
+  it("forwards a tracked subagent's stream_event thinking_delta as subagent_thinking_delta", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    mapSdkMessage(
+      assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
+      (e) => events.push(e),
+      tasks,
+      subagents,
+    );
+    events.length = 0;
+    const delta = {
+      type: "stream_event",
+      parent_tool_use_id: "a1",
+      event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "内心戏" } },
+    };
+    mapSdkMessage(delta, (e) => events.push(e), tasks, subagents);
+    expect(events).toEqual([{ type: "subagent_thinking_delta", id: "a1", delta: "内心戏" }]);
+  });
+
+  it("ignores a subagent stream_event for an id we never saw start (defensive)", () => {
+    const events: ChatEvent[] = [];
+    const delta = {
+      type: "stream_event",
+      parent_tool_use_id: "ghost",
+      event: { type: "content_block_delta", delta: { type: "text_delta", text: "不该出现" } },
+    };
+    mapSdkMessage(delta, (e) => events.push(e), new TaskTracker(), new SubagentTracker());
+    expect(events).toEqual([]);
+  });
+
+  it("still ignores pure thinking blocks in a full subagent assistant message (already streamed as deltas)", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    mapSdkMessage(
+      assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
+      (e) => events.push(e),
+      tasks,
+      subagents,
+    );
+    events.length = 0;
+    const msg = {
+      type: "assistant",
+      parent_tool_use_id: "a1",
+      message: { content: [{ type: "thinking", thinking: "内心戏" }] },
+    };
+    mapSdkMessage(msg, (e) => events.push(e), tasks, subagents);
+    expect(events).toEqual([]);
+  });
 });
 
 describe("mapSdkMessage system/init → slash_commands_available", () => {

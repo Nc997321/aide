@@ -45,9 +45,12 @@ export type ChatEvent =
   | { type: "tool_use_start"; id: string; name: string; input: unknown }
   | { type: "tool_result"; id: string; content: string; is_error: boolean }
   | { type: "subagent_start"; id: string; agentName: string; description: string }
-  // 子代理内部的"轻量步骤摘要"：只报它调用了哪个工具+入参，不转发子代理内部的文本/
-  // thinking（完整嵌套 transcript 属于 v2，见 mapper.ts 的 forwardSubagentText 讨论）。
-  // model 只在第一次能坐实时带一次，之后同一个 id 不再重复。
+  // 子代理内部逐字流式增量——语义对齐主线程的 text_delta（stream_event 的 text_delta）。
+  // thinking 主线程目前不转发，但这条子代理专属通道独立开放，不受此限制（v2）。
+  | { type: "subagent_text_delta"; id: string; delta: string }
+  | { type: "subagent_thinking_delta"; id: string; delta: string }
+  // 子代理内部的"工具调用摘要"：报它调用了哪个工具+入参。model 只在第一次能坐实时
+  // 带一次，之后同一个 id 不再重复。
   | { type: "subagent_progress"; id: string; toolName: string; input: unknown; model?: string }
   | { type: "subagent_end"; id: string; result: string; is_error: boolean }
   // alwaysAllowLabel：sidecar 已经把 SDK 的 suggestions 解读成一句人话（比如 Edit

@@ -160,14 +160,13 @@ function isoToMs(iso: unknown): number | null {
 }
 
 /**
- * 子代理内部消息（`parent_tool_use_id` 非空）：只提炼"轻量步骤摘要"——它调用了
- * 哪个工具、入参是什么——不转发子代理内部的文本/thinking（完整嵌套 transcript
- * 属于 v2，对应 SDK 的 `forwardSubagentText` 选项，本项目未开启）。
+ * 子代理内部消息（`parent_tool_use_id` 非空）：转发文本/thinking 的逐字增量（对齐
+ * 主线程 stream_event 的粒度），以及工具调用摘要——三者按到达顺序穿插，前端据此
+ * 拼出"子代理具体在做什么"的完整时间线（v2，取代 v1 的"只报工具调用摘要"）。
  *
- * 这条路径以前是无条件 `return`（见本文件历史版本），导致子代理执行期间前端
- * 完全收不到任何事件：一是看不到进度，二是 useSessionState 的 90 秒软超时靠"任意
- * 事件重置计时器"判断是否卡住（useChatSession.ts），子代理跑得稍久就会被误判成
- * "stalled"（疑似卡住的橙点）。现在哪怕只发工具步骤，也足够让前端知道"还活着"。
+ * 明确不支持嵌套子代理（子代理内部再调用 Task/Agent 工具）：那种情况会落进下面的
+ * `toolUses` 分支，当成一次普通工具调用报出去（`toolName: "Agent"`），不递归展开
+ * 其内部活动——这个场景现在用不到，按 YAGNI 不做。
  *
  * 顺带在第一条可采信的 assistant 消息上把 `message.model` 带一次，让前端知道这个
  * 子代理具体跑在哪个模型上（`claimModelReport` 保证只报一次）。
@@ -175,9 +174,23 @@ function isoToMs(iso: unknown): number | null {
 function emitSubagentProgress(msg: any, emit: (e: ChatEvent) => void, subagents: SubagentTracker) {
   const parentId = msg.parent_tool_use_id as string;
   if (!subagents.isActive(parentId)) return; // 防御性：理论上不会出现不认识的 id
+
+  // 逐字流式：子代理内部的 text_delta / thinking_delta 增量。
+  if (msg.type === "stream_event") {
+    const ev = msg.event;
+    if (ev?.type === "content_block_delta") {
+      if (ev.delta?.type === "text_delta" && ev.delta.text) {
+        emit({ type: "subagent_text_delta", id: parentId, delta: ev.delta.text });
+      } else if (ev.delta?.type === "thinking_delta" && ev.delta.thinking) {
+        emit({ type: "subagent_thinking_delta", id: parentId, delta: ev.delta.thinking });
+      }
+    }
+    return;
+  }
+
   if (msg.type !== "assistant" || !msg.message?.content) return;
   const toolUses = (msg.message.content as any[]).filter((b) => b.type === "tool_use");
-  if (toolUses.length === 0) return; // 纯文本/thinking：v1 不直播，等下一条带工具调用的消息
+  if (toolUses.length === 0) return; // 纯文本/thinking：已经在 stream_event 阶段逐字发过，这里跳过避免重复渲染
   const model =
     isAdoptableAssistantModel(msg) && subagents.claimModelReport(parentId)
       ? (msg.message.model as string)
