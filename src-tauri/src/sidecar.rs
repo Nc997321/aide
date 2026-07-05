@@ -8,6 +8,7 @@ use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex as TokioMutex;
 use tauri::{AppHandle, Emitter};
 use serde_json::Value;
+use crate::commands::provider::should_respawn;
 
 
 struct SidecarSession {
@@ -17,6 +18,9 @@ struct SidecarSession {
     killed: Arc<AtomicBool>,
     /// 会话 ID 共享句柄：rename 后 reader 任务发出的事件立刻携带新 ID
     sid: Arc<Mutex<String>>,
+    /// spawn 时使用的完整 env_vars 快照，供 `needs_respawn` 检测连接身份漂移
+    /// （供应商切换后 base_url/api_key 是否还跟这次 spawn 时一致）。
+    env_vars: HashMap<String, String>,
 }
 
 pub struct SidecarManager {
@@ -162,7 +166,7 @@ impl SidecarManager {
 
         self.sessions.lock().unwrap().insert(
             session_id,
-            SidecarSession { stdin, child, killed, sid: sid_shared },
+            SidecarSession { stdin, child, killed, sid: sid_shared, env_vars },
         );
         Ok(())
     }
@@ -194,6 +198,15 @@ impl SidecarManager {
 
     pub fn has_session(&self, session_id: &str) -> bool {
         self.sessions.lock().unwrap().contains_key(session_id)
+    }
+
+    /// 判断该 session 是否需要重启子进程：没有存活进程，或者存活进程 spawn
+    /// 时的 env 快照跟当前 provider 配置算出来的 env_vars 相比，连接身份
+    /// （base_url/api_key/auth_token/代理）发生了漂移。纯决策委托给
+    /// `provider::should_respawn`，这里只负责从会话表里取快照，粘合逻辑。
+    pub fn needs_respawn(&self, session_id: &str, env_vars: &HashMap<String, String>) -> bool {
+        let sessions = self.sessions.lock().unwrap();
+        should_respawn(sessions.get(session_id).map(|s| &s.env_vars), env_vars)
     }
 
     /// 把运行中会话从 old_id 重命名为 new_id：重挂 HashMap key 并更新共享 sid，
@@ -291,17 +304,19 @@ fn prepend_path_entry(path: &str, extra: &str) -> String {
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    #[cfg(windows)]
     fn prepend_path_entry_adds_when_missing() {
         let result = prepend_path_entry("C:\\Windows;C:\\Windows\\System32", "C:\\Git\\usr\\bin");
         assert_eq!(result, "C:\\Git\\usr\\bin;C:\\Windows;C:\\Windows\\System32");
     }
 
     #[test]
+    #[cfg(windows)]
     fn prepend_path_entry_skips_when_already_present() {
         let path = "C:\\Git\\usr\\bin;C:\\Windows";
         let result = prepend_path_entry(path, "C:\\Git\\usr\\bin");
@@ -309,6 +324,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn prepend_path_entry_is_case_insensitive() {
         // Windows 路径大小写不敏感——同一目录不该因为大小写不同被当成"缺失"重复加。
         let path = "c:\\git\\usr\\bin;C:\\Windows";
@@ -317,8 +333,19 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn prepend_path_entry_handles_empty_path() {
         let result = prepend_path_entry("", "C:\\Git\\usr\\bin");
         assert_eq!(result, "C:\\Git\\usr\\bin");
+    }
+
+    /// 全新 session（sessions 表里没有）必须判定需要重启——这是 spawn 分支
+    /// 依赖的基础用例，不需要真的起子进程也能验证。
+    #[test]
+    fn needs_respawn_true_for_unknown_session() {
+        let mgr = SidecarManager::new();
+        let mut env = HashMap::new();
+        env.insert("ANTHROPIC_BASE_URL".to_string(), "https://api.anthropic.com".to_string());
+        assert!(mgr.needs_respawn("no-such-session", &env));
     }
 }
