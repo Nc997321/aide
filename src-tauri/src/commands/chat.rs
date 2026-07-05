@@ -20,48 +20,63 @@ pub async fn send_message(
     workspace_state: State<'_, WorkspaceState>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    if !sidecar_mgr.has_session(&session_id) {
-        let cwd = project_root_for_commands(&workspace_state);
-        let mut env_vars: HashMap<String, String> = if let Some(provider) = load_active_provider() {
-            provider_to_env_vars(&provider)
-        } else {
-            HashMap::new()
-        };
+    // env_vars 每次发消息前都无条件重新计算（provider 配置只是读一次 JSON 文件，
+    // 代价可忽略）：这是修复"切换供应商后已存活进程还在用旧 base_url"这个 bug
+    // 的关键——旧代码只在 `!has_session` 分支里算一次，进程活着就再也不会重新
+    // 读取 provider 配置，导致切换供应商对已存活会话形同虚设。
+    let mut env_vars: HashMap<String, String> = if let Some(provider) = load_active_provider() {
+        provider_to_env_vars(&provider)
+    } else {
+        HashMap::new()
+    };
 
-        // 会话面板里对话开始前选的模型，只在这里（新建 sidecar 进程）生效一次，
-        // 覆盖 provider 配置的默认值；之后切模型走运行时的 set_model 命令。
-        apply_initial_model_override(&mut env_vars, initial_model);
-
-        // 从系统全局环境变量读取认证信息和代理
-        for var in &[
-            "ANTHROPIC_AUTH_TOKEN",
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_BASE_URL",
-            "CLAUDE_CONFIG_DIR",
-            "HTTP_PROXY",
-            "HTTPS_PROXY",
-            "http_proxy",
-            "https_proxy",
-            "ALL_PROXY",
-            "all_proxy",
-        ] {
-            if !env_vars.contains_key(*var) {
-                if let Ok(val) = std::env::var(var) {
-                    if !val.is_empty() {
-                        env_vars.insert(var.to_string(), val);
-                    }
+    // 从系统全局环境变量读取认证信息和代理（provider 未覆盖的字段兜底）
+    for var in &[
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "CLAUDE_CONFIG_DIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ] {
+        if !env_vars.contains_key(*var) {
+            if let Ok(val) = std::env::var(var) {
+                if !val.is_empty() {
+                    env_vars.insert(var.to_string(), val);
                 }
             }
         }
+    }
 
-        if let Ok(s) = get_settings() {
-            if !s.proxy.is_empty() {
-                env_vars.insert("HTTP_PROXY".to_string(), s.proxy.clone());
-                env_vars.insert("HTTPS_PROXY".to_string(), s.proxy.clone());
-                env_vars.insert("http_proxy".to_string(), s.proxy.clone());
-                env_vars.insert("https_proxy".to_string(), s.proxy);
-            }
+    if let Ok(s) = get_settings() {
+        if !s.proxy.is_empty() {
+            env_vars.insert("HTTP_PROXY".to_string(), s.proxy.clone());
+            env_vars.insert("HTTPS_PROXY".to_string(), s.proxy.clone());
+            env_vars.insert("http_proxy".to_string(), s.proxy.clone());
+            env_vars.insert("https_proxy".to_string(), s.proxy);
         }
+    }
+
+    // 连接身份（base_url/api_key/auth_token/代理）相对存活进程 spawn 时的快照
+    // 漂移了，或者该 session 压根没有存活进程：都需要（重新）拉起子进程。
+    // 已有进程会先被 kill——kill() 内部先置 killed=true 再杀，reader 任务的
+    // EOF 不会误报 session_dead（跟用户主动点"停止"走的是同一条静默路径）。
+    // 新进程沿用已有的 resume_id（前端对非 pending 会话恒定带 sid 作为
+    // resume_id）续上 SDK 侧的会话历史，对用户透明。
+    if sidecar_mgr.needs_respawn(&session_id, &env_vars) {
+        if sidecar_mgr.has_session(&session_id) {
+            sidecar_mgr.kill(&session_id).await;
+        }
+        let cwd = project_root_for_commands(&workspace_state);
+        // 会话面板里当前选中的模型，覆盖 provider 配置的默认值；之后切模型走
+        // 运行时的 set_model 命令。首次 spawn 和「漂移触发的重新 spawn」都走
+        // 这一行——后者天然会带上用户切换供应商时刚选的新模型（前端每条消息
+        // 都带 initialModel，只是旧代码只在首次 spawn 时用到）。
+        apply_initial_model_override(&mut env_vars, initial_model);
         sidecar_mgr.spawn(session_id.clone(), cwd, env_vars, app_handle)?;
     }
 
