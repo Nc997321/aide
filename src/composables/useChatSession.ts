@@ -31,6 +31,9 @@ export interface SendOptions {
   mentions?: FileMentionResolution;
   /** 当前选中的权限模式（不透明字符串，sidecar 解释语义），随每条消息透传 */
   permissionMode?: string;
+  /** 忙碌时置真=打断插队：中断当前这轮生成、立刻把本条作为新一轮发出
+   *  （丢弃本轮已生成内容，这是"插队"语义）；缺省/假=排队合并。 */
+  jumpQueue?: boolean;
 }
 
 interface QueuedSend {
@@ -82,6 +85,14 @@ const sharedRateLimit = ref<RateLimitInfo | null>(null);
 const aliasMap = new Map<string, string>();
 /** 尚未被 SDK 确认的临时 key（纯内存，从未落盘）。resume 判定与 hydrate 跳过都靠它。 */
 const pendingSids = new Set<string>();
+/** 每会话最近一次派发的用户提问文本——变更面板给轮次做标题用（见
+ *  useConversationChanges.captureChanges）。只读快照，纯展示。 */
+const lastDispatchedPrompt: Record<string, string> = {};
+
+/** 取某会话最近派发的用户提问（无则空串）。 */
+export function getLastDispatchedPrompt(sid: string): string {
+  return lastDispatchedPrompt[sid] ?? "";
+}
 /** 会话首次创建回调（App.vue 注册：写元数据、加入侧栏、记入最近访问） */
 const sessionCreatedCallbacks = new Set<(tempId: string, realId: string) => void>();
 
@@ -120,6 +131,31 @@ function resolveSid(raw: string): string {
   return aliasMap.get(raw) ?? raw;
 }
 
+/**
+ * 把忙碌期间攒下的多条排队消息合并成一次派发——本轮指令结束后作为「同一轮对话」
+ * 一次性交给模型，而不是一条条各起一轮（后者慢且把一段连续意图割裂成多次问答）。
+ *
+ * - prompt（用户气泡显示原文）与 sendText（发给模型，已含 @文件展开内容）分别按
+ *   空行拼接，各自保持自己那条的展开结果。
+ * - resolved（@文件折叠卡片）、images 直接顺序合并。
+ * - permissionMode 取最后一条里显式带的（最近一次选择优先）。
+ */
+function mergeQueued(items: QueuedSend[]): QueuedSend {
+  if (items.length === 1) return items[0];
+  const SEP = "\n\n";
+  const prompt = items.map((i) => i.prompt).filter((t) => t).join(SEP);
+  const sendText = items.map((i) => i.mentions?.sendText ?? i.prompt).filter((t) => t).join(SEP);
+  const resolved = items.flatMap((i) => i.mentions?.resolved ?? []);
+  const images = items.flatMap((i) => i.images ?? []);
+  const permissionMode = [...items].reverse().find((i) => i.permissionMode)?.permissionMode;
+  return {
+    prompt,
+    images: images.length ? images : undefined,
+    mentions: { sendText, resolved },
+    permissionMode,
+  };
+}
+
 /** 尚未被 SDK 确认的临时 key：没有磁盘落地，resume/hydrate 都要跳过。 */
 export function isPendingSession(sid: string | null | undefined): boolean {
   return !!sid && pendingSids.has(sid);
@@ -156,6 +192,10 @@ async function finalizeSession(tempId: string, realId: string) {
     stores[realId] = stores[tempId];
     delete stores[tempId];
   }
+  if (lastDispatchedPrompt[tempId] !== undefined) {
+    lastDispatchedPrompt[realId] = lastDispatchedPrompt[tempId];
+    delete lastDispatchedPrompt[tempId];
+  }
   if (sessionState[tempId]) {
     setSessionState(realId, sessionState[tempId]);
     if (sessionHealth[tempId]) setSessionHealth(realId, sessionHealth[tempId]);
@@ -182,6 +222,8 @@ async function finalizeSession(tempId: string, realId: string) {
 function dispatchSend(sid: string, item: QueuedSend, resumeId?: string, initialModel?: string) {
   const store = getStore(sid);
   store.isBusy = true;
+  // 记下本次派发的用户提问，供变更面板给轮次做标题（图片消息无文本时兜底占位）。
+  lastDispatchedPrompt[sid] = item.prompt || (item.images?.length ? "[图片]" : "");
   setSessionState(sid, "running");
   // 新一轮开始：清掉上轮可能残留的 warning（红点），并起软超时表。
   setSessionHealth(sid, "ok");
@@ -385,17 +427,27 @@ function handleChatEvent(e: Record<string, unknown>) {
         if (last?.role === "assistant") last.usage = usage;
       }
       finishStreaming(store);
-      // 忙碌期间排队的消息：这一轮结束立即续发下一条，状态保持 running，
-      // 队列排空后才落回 waiting（通知/横幅依赖 running→waiting 转换，
-      // 排队中不该触发"已完成"通知）。
-      const next = store.queued.shift();
-      if (next) {
-        dispatchSend(sid, next, isPendingSession(sid) ? undefined : sid);
+      // 忙碌期间排队的消息：这一轮结束立即把「全部」排队消息合并成一条续发
+      // （当成同一轮对话，效率更高、意图更连贯），状态保持 running 不落 waiting
+      // （通知/横幅依赖 running→waiting 转换，排队续发中不该触发"已完成"通知）。
+      if (store.queued.length > 0) {
+        const merged = mergeQueued(store.queued.splice(0));
+        dispatchSend(sid, merged, isPendingSession(sid) ? undefined : sid);
         break;
       }
       store.isBusy = false;
       // waiting = sidecar 存活但空闲 → 通知/横幅/变更捕获依赖 running→waiting 转换
       setSessionState(sid, "waiting");
+      break;
+    }
+    case "notification": {
+      // 非致命通知（如供应商切换后会话迁移提示）
+      store.messages.push({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        blocks: [{ type: "text", text: `${e["message"]}` }],
+        timestamp: Date.now(),
+      });
       break;
     }
     case "error": {
@@ -532,8 +584,9 @@ export function useChatSession(sessionId: Ref<string | null>) {
    * "创建会话"（写元数据 / 加侧栏 / 记最近访问）推迟到 SDK 用 session_init 确认
    * 真实 id 之后才发生，见 finalizeSession。
    *
-   * 会话忙碌（上一轮还在生成）时不打断：进排队队列，message_stop 后按序自动
-   * 续发——和交互式 CLI 边生成边打字排队的行为对齐。
+   * 会话忙碌（上一轮还在生成）时不打断：进排队队列，本轮 message_stop 后把「全部」
+   * 排队消息合并成一条一次性续发（当成同一轮对话，见 mergeQueued）——排队期间用户
+   * 仍可在输入区看到并撤回它们。
    */
   async function sendMessage(prompt: string, opts: SendOptions = {}): Promise<string | undefined> {
     let sid = sessionId.value;
@@ -551,8 +604,19 @@ export function useChatSession(sessionId: Ref<string | null>) {
       permissionMode: opts.permissionMode,
     };
     if (store.isBusy) {
-      store.queued.push(item);
-      return sid;
+      if (!opts.jumpQueue) {
+        store.queued.push(item);
+        return sid;
+      }
+      // 打断插队：立刻终止当前这一轮生成（本轮已产出内容会被丢弃——这正是"插队"
+      // 的语义；SDK 层 interrupt 后会话仍存活，以 resume 续起下一轮），随后把本条
+      // 当作新一轮马上发出。此前已排队的消息保留，会在这一轮结束后照常合并续发。
+      try {
+        await invoke("interrupt_session", { sessionId: sid });
+      } catch (e) {
+        console.warn("interrupt before jump-send failed:", e);
+      }
+      finishStreaming(store);
     }
 
     // resume：显式传入 > 已被 SDK 确认的 id 本身（aide id 就是 sdk id，无需查表）

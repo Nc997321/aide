@@ -84,6 +84,8 @@ export type ChatEvent =
   // fatal:false = 可恢复错误（进程仍存活、继续等下一条消息）；缺省/true = 致命。
   // 前端据此决定落 waiting+warning（红点）还是 stopped（灰点）。
   | { type: "error"; message: string; fatal?: boolean }
+  // 非致命通知：提示性消息（如供应商切换后会话迁移），前端展示为 info 样式。
+  | { type: "notification"; message: string; notification_type: string }
   // 存活心跳：sidecar 每 5s 发一次，由 Rust 消费并重置看门狗，不转发到前端。
   | { type: "heartbeat" }
   // 进程死亡：由 Rust（非 sidecar）合成——reader EOF 或看门狗超时。session_id 由

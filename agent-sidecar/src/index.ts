@@ -60,6 +60,9 @@ const PERMISSION_MODES: PermissionModeOption[] = [
 // 同模型选择：只存内存，不落盘；重开会话回落到 default——bypassPermissions 因此
 // 天然是"会话级临时开关"，不会意外沿用到下一个会话。
 let currentPermissionMode = "default";
+// forkSession=true 时标记：下一个 session_init 如果 session ID 变了就是 fork，
+// 发一条通知告知用户会话已因供应商切换而迁移。
+let pendingFork = false;
 
 function emitPermissionModes() {
   emit({ type: "permission_modes_available", modes: PERMISSION_MODES, current: currentPermissionMode });
@@ -190,7 +193,7 @@ async function startLoop(cwd?: string) {
             // 缓存的 provider 配置（base_url/api_key/model），覆盖 process.env 里的
             // 新值，导致切换供应商后仍用旧 base_url 返回 404。fork 绕过这个问题：
             // 新 session 文件不会缓存旧 provider 的配置。
-            ...(sessionId ? { resume: sessionId, forkSession: true } : {}),
+            ...(sessionId ? (pendingFork = true, { resume: sessionId, forkSession: true }) : {}),
             env: cliEnv,
           },
         });
@@ -199,7 +202,17 @@ async function startLoop(cwd?: string) {
         for await (const msg of q) {
           mapSdkMessage(msg, emit, taskTracker, subagentTracker);
           if ((msg as any).type === "system" && (msg as any).subtype === "init") {
-            sessionId = (msg as any).session_id;
+            const newSid = (msg as any).session_id as string | undefined;
+            // forkSession 触发时 SDK 返回了新 session ID——通知用户会话已迁移
+            if (pendingFork && newSid && newSid !== sessionId) {
+              emit({
+                type: "notification",
+                message: "已切换供应商，对话历史已迁移到新会话。",
+                notification_type: "provider_switch",
+              } as any);
+              pendingFork = false;
+            }
+            sessionId = newSid;
             void emitModelsAvailable(q);
           } else if (
             // 主线程（非子代理）assistant 消息自带实际用的模型——SDK 没有别的渠道
@@ -228,6 +241,7 @@ async function startLoop(cwd?: string) {
         break;
       } catch (e: any) {
         currentQuery = null;
+        pendingFork = false;
         if (e?.name !== "AbortError") {
           // 进程在此 catch 后继续循环、等下一条消息——是可恢复错误，非致命。
           // 标 fatal:false，前端落 waiting+warning（红点）而非 stopped。
