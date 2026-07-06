@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import type { SubagentBlock } from "@/types/chat";
+import type { SubagentBlock, SubagentEntry } from "@/types/chat";
 import { summarizeToolInput } from "@/utils/toolSummary";
 
 const props = defineProps<{ block: SubagentBlock }>();
@@ -12,8 +12,8 @@ const statusIcon = computed(() => {
   return "✅";
 });
 
-function stepSummary(step: { toolName: string; input: unknown }): string {
-  return summarizeToolInput(step.toolName, step.input);
+function stepSummary(entry: Extract<SubagentEntry, { type: "tool" }>): string {
+  return summarizeToolInput(entry.toolName, entry.input);
 }
 </script>
 
@@ -25,20 +25,23 @@ function stepSummary(step: { toolName: string; input: unknown }): string {
       <span class="subagent-name">{{ block.agentName }}</span>
       <span v-if="block.model" class="subagent-model" :title="`子代理使用的模型：${block.model}`">{{ block.model }}</span>
       <span class="subagent-desc">{{ block.description }}</span>
-      <span v-if="block.isPending && block.steps.length" class="subagent-step-count">
-        {{ block.steps.length }} 步
+      <span v-if="block.isPending && block.entries.length" class="subagent-step-count">
+        {{ block.entries.length }} 项
       </span>
       <span class="subagent-chevron">{{ expanded ? "▲" : "▼" }}</span>
     </button>
     <div v-if="expanded" class="subagent-body">
-      <ol v-if="block.steps.length" class="subagent-steps">
-        <li v-for="(step, i) in block.steps" :key="i" class="subagent-step">
-          <span class="step-tool">{{ step.toolName }}</span>
-          <span class="step-summary">{{ stepSummary(step) }}</span>
+      <ol v-if="block.entries.length" class="subagent-entries">
+        <li v-for="(entry, i) in block.entries" :key="i" class="subagent-entry" :class="`entry-${entry.type}`">
+          <template v-if="entry.type === 'tool'">
+            <span class="step-tool">{{ entry.toolName }}</span>
+            <span class="step-summary">{{ stepSummary(entry) }}</span>
+          </template>
+          <p v-else class="entry-text-body">{{ entry.text }}</p>
         </li>
       </ol>
       <pre v-if="block.result" class="subagent-result">{{ block.result }}</pre>
-      <div v-else-if="!block.steps.length" class="subagent-pending">子代理执行中…</div>
+      <div v-else-if="!block.entries.length" class="subagent-pending">子代理执行中…</div>
     </div>
   </div>
 </template>
@@ -126,20 +129,23 @@ function stepSummary(step: { toolName: string; input: unknown }): string {
   padding: 6px 8px;
 }
 
-.subagent-steps {
+.subagent-entries {
   margin: 0 0 6px;
   padding-left: 16px;
-  max-height: 160px;
+  max-height: 240px;
   overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
-.subagent-step {
+.subagent-entry {
+  font-size: 11px;
+}
+
+.subagent-entry.entry-tool {
   display: flex;
   gap: 6px;
-  font-size: 11px;
 }
 
 .step-tool {
@@ -154,6 +160,20 @@ function stepSummary(step: { toolName: string; input: unknown }): string {
   white-space: nowrap;
   font-family: 'Cascadia Code', 'Consolas', monospace;
   color: var(--aide-text-muted);
+}
+
+.entry-text-body {
+  margin: 0;
+  white-space: pre-wrap;
+  color: var(--aide-text-secondary);
+}
+
+/* thinking 弱化样式，呼应原生 CLI 里 thinking 的视觉弱化处理——一眼能跟正式回复
+ * 的文本区分开，不用去读内容就知道"这是内心戏还是真的在说话"。 */
+.subagent-entry.entry-thinking .entry-text-body {
+  color: var(--aide-text-muted);
+  font-style: italic;
+  opacity: 0.85;
 }
 
 .subagent-result {
