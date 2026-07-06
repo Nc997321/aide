@@ -83,8 +83,9 @@ aide/
 │   │   └── marketplace/        # MarketplaceTab / PluginCard
 │   ├── composables/
 │   │   ├── useChatSession.ts      # 对话核心（每会话独立 store + 事件路由 + resume + ID 迁移）
-│   │   ├── usePaneLayout.ts       # 分屏布局树状态层（预览 tab/全局唯一/聚焦；纯树操作在 paneLayout/tree.ts，按工作区持久化在 paneLayout/persistence.ts）
+│   │   ├── usePaneLayout.ts       # 分屏布局树状态层（预览 tab/全局唯一/聚焦/MRU 切换；纯树操作在 paneLayout/tree.ts，全局单份持久化在 paneLayout/persistence.ts）
 │   │   ├── useSessionNames.ts     # 会话 id → 显示名注册表（侧栏写入，tab 栏/面板头只读）
+│   │   ├── useSessionWorkspaces.ts # 会话 id → 所属工作区注册表（混合 tab 的 sidecar cwd / tab 工作区后缀标识）
 │   │   ├── useSessionState.ts     # 会话运行状态（模块级 reactive 单例）
 │   │   ├── useConversationChanges.ts # 变更追踪（轮次分组 + 撤回）
 │   │   ├── useGit.ts              # Git 状态（模块级单例）

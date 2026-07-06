@@ -18,6 +18,8 @@ import {
   type PaneNode,
 } from "./paneLayout/tree";
 import { useSessionState } from "./useSessionState";
+import { useSessionNames } from "./useSessionNames";
+import { useSessionWorkspaces } from "./useSessionWorkspaces";
 import { getLastDispatchedPrompt } from "./useChatSession";
 
 /**
@@ -75,6 +77,24 @@ function commitRoot(newRoot: PaneNode | null) {
 function activateTab(group: GroupNode, tabId: string) {
   group.activeTabId = tabId;
   layout.focusedGroupId = group.id;
+  if (!mruFrozen) touchMru(tabId);
+}
+
+// ── MRU 切换（OS Alt+Tab 语义）────────────────────────────────────────────────
+// 全局按「最近使用」排序的 tab 栈：按住 Ctrl 连按 Tab 沿栈回溯（回溯期间冻结
+// 栈序），松开 Ctrl 提交——快速按一次即在最近两个会话间往返。栈里只存 tab id，
+// 已关闭的 tab 在取用时惰性过滤，不做同步清理。
+
+const MRU_CAP = 64;
+const mru: string[] = [];
+let mruFrozen = false;
+let mruWalk: { list: string[]; pointer: number } | null = null;
+
+function touchMru(tabId: string) {
+  const i = mru.indexOf(tabId);
+  if (i !== -1) mru.splice(i, 1);
+  mru.unshift(tabId);
+  if (mru.length > MRU_CAP) mru.length = MRU_CAP;
 }
 
 export function usePaneLayout() {
@@ -230,13 +250,49 @@ export function usePaneLayout() {
     if (group && group.tabs.some((t) => t.id === tabId)) activateTab(group, tabId);
   }
 
-  /** 聚焦组内按序切 tab（Ctrl+Tab / Ctrl+Shift+Tab），单 tab 时无操作。 */
-  function cycleTab(delta: 1 | -1) {
-    const group = focusedGroup();
-    if (group.tabs.length < 2) return;
-    const idx = group.tabs.findIndex((t) => t.id === group.activeTabId);
-    const next = group.tabs[(idx + delta + group.tabs.length) % group.tabs.length];
-    group.activeTabId = next.id;
+  /**
+   * MRU 切换步进（Ctrl+Tab / Ctrl+Shift+Tab，OS Alt+Tab 语义，跨组全局）。
+   * 首次按下开始回溯（冻结 MRU 栈序），后续按键沿列表走；松开 Ctrl 时
+   * 调 endMruSwitch 提交。已关闭 tab 惰性过滤。
+   */
+  function mruSwitch(delta: 1 | -1) {
+    if (!mruWalk) {
+      const currentId = focusedGroup().activeTabId;
+      const valid = (id: string) => !!findTabById(layout.root, id);
+      const seen = new Set<string>(currentId ? [currentId] : []);
+      const list: string[] = currentId ? [currentId] : [];
+      for (const id of mru) {
+        if (!seen.has(id) && valid(id)) {
+          seen.add(id);
+          list.push(id);
+        }
+      }
+      // MRU 栈没盖到的 tab（如恢复布局后从未点过的）按视觉序垫底，保证全部可达
+      for (const g of listGroups(layout.root)) {
+        for (const t of g.tabs) {
+          if (!seen.has(t.id)) {
+            seen.add(t.id);
+            list.push(t.id);
+          }
+        }
+      }
+      if (list.length < 2) return;
+      mruWalk = { list, pointer: 0 };
+      mruFrozen = true;
+    }
+    const { list } = mruWalk;
+    mruWalk.pointer = (mruWalk.pointer + delta + list.length) % list.length;
+    const hit = findTabById(layout.root, list[mruWalk.pointer]);
+    if (hit) activateTab(hit.group, hit.tab.id);
+  }
+
+  /** 结束 MRU 回溯（Ctrl 松开）：解冻栈序并把落点提到栈顶。 */
+  function endMruSwitch() {
+    if (!mruWalk) return;
+    mruWalk = null;
+    mruFrozen = false;
+    const currentId = focusedGroup().activeTabId;
+    if (currentId) touchMru(currentId);
   }
 
   function setSizes(splitId: string, sizes: number[]) {
@@ -251,7 +307,15 @@ export function usePaneLayout() {
   }
 
   function serialize(): LayoutSnapshot | null {
-    return toSnapshot(layout.root, layout.focusedGroupId);
+    const { names } = useSessionNames();
+    const { workspaceOf } = useSessionWorkspaces();
+    return toSnapshot(layout.root, layout.focusedGroupId, (sid) => {
+      const ws = workspaceOf(sid);
+      return {
+        ...(names[sid] ? { name: names[sid] } : {}),
+        ...(ws ? { wsKey: ws.wsKey, wsPath: ws.wsPath } : {}),
+      };
+    });
   }
 
   /** 快照恢复；结构非法/剔除后为空 → 回退空白布局。返回是否成功恢复。 */
@@ -291,7 +355,8 @@ export function usePaneLayout() {
     takePendingName,
     focusGroup,
     setActiveTab,
-    cycleTab,
+    mruSwitch,
+    endMruSwitch,
     setSizes,
     reset,
     serialize,
@@ -305,4 +370,7 @@ export function __resetPaneLayoutForTest(startedProbe?: (sid: string) => boolean
   layout.root = s.root;
   layout.focusedGroupId = s.focusedGroupId;
   isStarted = startedProbe ?? defaultIsStarted;
+  mru.length = 0;
+  mruFrozen = false;
+  mruWalk = null;
 }

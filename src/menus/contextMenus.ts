@@ -153,20 +153,14 @@ export function sessionMenuItems(
   id: string,
   onRenamed: (name: string) => void,
   onDeleted: () => void,
-  /** 会话属于当前活动工作区时才提供 tab/分屏打开项（跨工作区打开需先切换，走单击路径） */
-  opts?: { openInPane?: boolean },
 ): MenuItem[] {
   const pane = usePaneLayout();
-  const openItems: MenuItem[] = opts?.openInPane
-    ? [
-        { label: "在新标签页打开", action: () => pane.openSessionInNewTab(id) },
-        { label: "在右侧分屏打开", action: () => pane.openSessionInSplit(id, "horizontal") },
-        { label: "在下方分屏打开", action: () => pane.openSessionInSplit(id, "vertical") },
-        sep(),
-      ]
-    : [];
   return [
-    ...openItems,
+    // 混合 tab 布局：任意工作区的会话都可直接开 tab/分屏，cwd 跟会话归属走
+    { label: "在新标签页打开", action: () => pane.openSessionInNewTab(id) },
+    { label: "在右侧分屏打开", action: () => pane.openSessionInSplit(id, "horizontal") },
+    { label: "在下方分屏打开", action: () => pane.openSessionInSplit(id, "vertical") },
+    sep(),
     {
       label: "重命名",
       action: async () => {

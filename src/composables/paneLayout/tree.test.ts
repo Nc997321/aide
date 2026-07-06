@@ -5,6 +5,7 @@ import {
   createTab,
   findTabBySession,
   listGroups,
+  listSnapshotTabs,
   normalize,
   parseSnapshot,
   removeTab,
@@ -242,7 +243,22 @@ describe("快照序列化与恢复", () => {
     const g = groupWith("a");
     g.tabs.push(createTab(null, "草稿"));
     const snap = toSnapshot(g, g.id)!;
-    expect(snap.root).toEqual({ type: "group", tabs: ["a"], active: 0 });
+    expect(snap.root).toEqual({ type: "group", tabs: [{ sessionId: "a" }], active: 0 });
+  });
+
+  it("v2：meta 解析器把名字/工作区归属写进快照，restore 后 listSnapshotTabs 可取回", () => {
+    const g = groupWith("a", "b");
+    const snap = toSnapshot(g, g.id, (sid) =>
+      sid === "a" ? { name: "会话A", wsKey: "C--proj", wsPath: "C:\\proj" } : {},
+    )!;
+    const tabs = listSnapshotTabs(snap);
+    expect(tabs).toEqual([
+      { sessionId: "a", name: "会话A", wsKey: "C--proj", wsPath: "C:\\proj" },
+      { sessionId: "b" },
+    ]);
+    // 经 parse 往返不丢字段
+    const reparsed = parseSnapshot(JSON.parse(JSON.stringify(snap)))!;
+    expect(listSnapshotTabs(reparsed)).toEqual(tabs);
   });
 
   it("restore 剔除无效会话，组空则连组消失", () => {
@@ -256,13 +272,13 @@ describe("快照序列化与恢复", () => {
 
   it("restore 全局去重：同一会话出现两次保首个", () => {
     const snap = parseSnapshot({
-      version: 1,
+      version: 2,
       focusedGroup: 0,
       root: {
         type: "split", direction: "horizontal", sizes: [0.5, 0.5],
         children: [
-          { type: "group", tabs: ["a"], active: 0 },
-          { type: "group", tabs: ["a", "b"], active: 0 },
+          { type: "group", tabs: [{ sessionId: "a" }], active: 0 },
+          { type: "group", tabs: [{ sessionId: "a" }, { sessionId: "b" }], active: 0 },
         ],
       },
     })!;
@@ -279,8 +295,8 @@ describe("快照序列化与恢复", () => {
 
   it("focusedGroup 下标越界被钳到最后一组", () => {
     const snap = parseSnapshot({
-      version: 1, focusedGroup: 99,
-      root: { type: "group", tabs: ["a"], active: 0 },
+      version: 2, focusedGroup: 99,
+      root: { type: "group", tabs: [{ sessionId: "a" }], active: 0 },
     })!;
     const back = restoreSnapshot(snap)!;
     expect(back.focusedGroupId).toBe(listGroups(back.root)[0].id);
@@ -288,19 +304,22 @@ describe("快照序列化与恢复", () => {
 });
 
 describe("parseSnapshot 防御式校验", () => {
+  const tabA = { sessionId: "a" };
   const bad: unknown[] = [
     null,
     42,
     "{}",
     {},
-    { version: 2, focusedGroup: 0, root: { type: "group", tabs: ["a"], active: 0 } },
-    { version: 1, focusedGroup: -1, root: { type: "group", tabs: ["a"], active: 0 } },
-    { version: 1, focusedGroup: 0, root: { type: "group", tabs: [], active: 0 } },
-    { version: 1, focusedGroup: 0, root: { type: "group", tabs: [""], active: 0 } },
-    { version: 1, focusedGroup: 0, root: { type: "group", tabs: ["a"], active: "x" } },
-    { version: 1, focusedGroup: 0, root: { type: "split", direction: "diagonal", sizes: [1], children: [] } },
-    { version: 1, focusedGroup: 0, root: { type: "split", direction: "horizontal", sizes: [1], children: [{ type: "group", tabs: ["a"], active: 0 }] } },
-    { version: 1, focusedGroup: 0, root: { type: "nope" } },
+    // v1（按工作区分份的旧格式，tabs 是字符串数组）整体作废
+    { version: 1, focusedGroup: 0, root: { type: "group", tabs: ["a"], active: 0 } },
+    { version: 3, focusedGroup: 0, root: { type: "group", tabs: [tabA], active: 0 } },
+    { version: 2, focusedGroup: -1, root: { type: "group", tabs: [tabA], active: 0 } },
+    { version: 2, focusedGroup: 0, root: { type: "group", tabs: [], active: 0 } },
+    { version: 2, focusedGroup: 0, root: { type: "group", tabs: [{ sessionId: "" }], active: 0 } },
+    { version: 2, focusedGroup: 0, root: { type: "group", tabs: [tabA], active: "x" } },
+    { version: 2, focusedGroup: 0, root: { type: "split", direction: "diagonal", sizes: [1], children: [] } },
+    { version: 2, focusedGroup: 0, root: { type: "split", direction: "horizontal", sizes: [1], children: [{ type: "group", tabs: [tabA], active: 0 }] } },
+    { version: 2, focusedGroup: 0, root: { type: "nope" } },
   ];
 
   it.each(bad.map((v, i) => [i, v] as const))("非法输入 #%i → null", (_i, v) => {
@@ -309,12 +328,12 @@ describe("parseSnapshot 防御式校验", () => {
 
   it("合法输入解析成功，缺失/非法 sizes 均分", () => {
     const snap = parseSnapshot({
-      version: 1, focusedGroup: 0,
+      version: 2, focusedGroup: 0,
       root: {
         type: "split", direction: "vertical", sizes: ["x", null],
         children: [
-          { type: "group", tabs: ["a"], active: 0 },
-          { type: "group", tabs: ["b"], active: 5 },
+          { type: "group", tabs: [{ sessionId: "a" }], active: 0 },
+          { type: "group", tabs: [{ sessionId: "b" }], active: 5 },
         ],
       },
     });
@@ -323,16 +342,16 @@ describe("parseSnapshot 防御式校验", () => {
   });
 
   it("超深嵌套（防御上限）→ null", () => {
-    let node: Record<string, unknown> = { type: "group", tabs: ["a"], active: 0 };
+    let node: Record<string, unknown> = { type: "group", tabs: [{ sessionId: "a" }], active: 0 };
     for (let i = 0; i < 40; i++) {
       node = {
         type: "split",
         direction: i % 2 ? "horizontal" : "vertical",
         sizes: [0.5, 0.5],
-        children: [node, { type: "group", tabs: [`s${i}`], active: 0 }],
+        children: [node, { type: "group", tabs: [{ sessionId: `s${i}` }], active: 0 }],
       };
     }
-    expect(parseSnapshot({ version: 1, focusedGroup: 0, root: node })).toBeNull();
+    expect(parseSnapshot({ version: 2, focusedGroup: 0, root: node })).toBeNull();
   });
 });
 

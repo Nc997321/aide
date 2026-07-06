@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, inject, ref, type Ref } from "vue";
 import { useSessionState } from "../../composables/useSessionState";
 import { useSessionNames } from "../../composables/useSessionNames";
+import { useSessionWorkspaces, workspaceLabelFromPath } from "../../composables/useSessionWorkspaces";
+import { WORKSPACE_PATH_KEY } from "./keys";
 import { AStatusDot } from "../../ui";
 import type { GroupNode, TabItem } from "../../composables/paneLayout/tree";
 
@@ -24,6 +26,22 @@ const emit = defineEmits<{
 
 const { state: sessionState, dotTone } = useSessionState();
 const { displayName } = useSessionNames();
+const { workspaceOf } = useSessionWorkspaces();
+const activeWorkspacePath = inject<Ref<string>>(WORKSPACE_PATH_KEY, ref(""));
+
+/** 跨工作区标识：会话不属于当前活动工作区时返回其工作区短名，否则空串。
+ *  Windows 路径大小写不敏感，比较统一转小写。 */
+function wsSuffix(tab: TabItem): string {
+  if (!tab.sessionId) return "";
+  const ws = workspaceOf(tab.sessionId);
+  if (!ws?.wsPath) return "";
+  if (ws.wsPath.toLowerCase() === activeWorkspacePath.value.toLowerCase()) return "";
+  return workspaceLabelFromPath(ws.wsPath);
+}
+
+function wsFullPath(tab: TabItem): string {
+  return (tab.sessionId && workspaceOf(tab.sessionId)?.wsPath) || "";
+}
 
 /** 激活 tab 的会话进程是否存活（决定停止按钮显隐，只看活跃度轴） */
 const activeLive = computed(() => {
@@ -68,6 +86,11 @@ function onAuxClick(e: MouseEvent, tab: TabItem) {
       >
         <AStatusDot v-if="tab.sessionId" :tone="dotTone(tab.sessionId)" />
         <span class="pane-tab__label" :title="label(tab)">{{ label(tab) }}</span>
+        <span
+          v-if="wsSuffix(tab)"
+          class="pane-tab__ws"
+          :title="wsFullPath(tab)"
+        >· {{ wsSuffix(tab) }}</span>
         <button
           class="pane-tab__close"
           v-tooltip="'关闭'"
@@ -155,6 +178,18 @@ function onAuxClick(e: MouseEvent, tab: TabItem) {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+/* 跨工作区后缀：淡色小字，不参与省略挤压（保住辨识度） */
+.pane-tab__ws {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--aide-text-muted);
+  opacity: 0.75;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pane-tab__close {

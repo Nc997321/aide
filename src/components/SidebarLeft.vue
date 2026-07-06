@@ -7,6 +7,7 @@ import { useUpdate } from "../composables/useUpdate";
 import { useProviders } from "../composables/useProviders";
 import { useRecent } from "../composables/useRecent";
 import { useSessionNames } from "../composables/useSessionNames";
+import { useSessionWorkspaces } from "../composables/useSessionWorkspaces";
 import { sessionMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
 import { open } from "@tauri-apps/plugin-shell";
@@ -109,6 +110,7 @@ async function loadSessions() {
     const loaded = await api.listSessions();
     sessionsByWorkspace.value[wsKey] = loaded;
     sessionNames.setFromSessions(loaded);
+    registerSessionWs(loaded, wsKey);
   } catch (_e) {
     sessionsByWorkspace.value[wsKey] = [];
   }
@@ -131,6 +133,7 @@ async function loadWsSessions(wsKey: string) {
     const loaded = await api.listSessionsForWorkspace(wsKey);
     sessionsByWorkspace.value[wsKey] = loaded;
     sessionNames.setFromSessions(loaded);
+    registerSessionWs(loaded, wsKey);
   } catch (_e) {
     sessionsByWorkspace.value[wsKey] = [];
   }
@@ -138,7 +141,15 @@ async function loadWsSessions(wsKey: string) {
 
 const { show } = useContextMenu();
 const sessionNames = useSessionNames();
+const sessionWs = useSessionWorkspaces();
 const { state: sessionState, dotTone } = useSessionState();
+
+/** 把某工作区的一批会话记入归属注册表（tab 后缀标识 / sidecar cwd 依赖它）。 */
+function registerSessionWs(list: Session[], wsKey: string) {
+  const wsPath = workspaces.value.find((w) => w.key === wsKey)?.name ?? "";
+  if (!wsPath) return;
+  sessionWs.setMany(list, { wsKey, wsPath });
+}
 const { updateAvailable, latestVersion, downloadUrl, dismissUpdate } = useUpdate();
 const { setCurrentWs } = useRecent();
 
@@ -256,15 +267,13 @@ async function renameSession(id: string, name: string) {
   } catch (_e) { /* ignore */ }
 }
 
-function onSessionContextMenu(e: MouseEvent, wsKey: string, id: string) {
+function onSessionContextMenu(e: MouseEvent, id: string) {
   e.preventDefault();
+  // 混合 tab 布局：任何工作区的会话都可以直接开 tab/分屏（cwd 跟会话走）
   show(
     e.clientX,
     e.clientY,
-    sessionMenuItems(id, (name: string) => renameSession(id, name), loadSessions, {
-      // tab/分屏打开只对当前活动工作区的会话开放；跨工作区先单击切换再操作
-      openInPane: wsKey === activeWorkspace.value,
-    }),
+    sessionMenuItems(id, (name: string) => renameSession(id, name), loadSessions),
   );
 }
 
@@ -314,6 +323,7 @@ function addSession(session: Session) {
     sessionsByWorkspace.value[wsKey] = [...list];
   }
   sessionNames.setName(session.id, session.name);
+  registerSessionWs([session], wsKey);
 }
 
 defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace, switchToWorkspaceByKey, sessionsByWorkspace });
@@ -375,7 +385,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
             :glow-color="sessionState[s.id] === 'running' ? 'var(--aide-success)' : undefined"
             class="session-card"
             @click="selectSessionFromWorkspace(ws.key, s.id)"
-            @contextmenu.prevent="onSessionContextMenu($event, ws.key, s.id)"
+            @contextmenu.prevent="onSessionContextMenu($event, s.id)"
           >
             <div class="session-card-header">
               <AStatusDot :tone="dotTone(s.id)" />

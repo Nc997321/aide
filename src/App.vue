@@ -244,8 +244,7 @@ function onNewSession(name: string) {
 async function onSidebarWsChanged(path: string) {
   workspacePath.value = path;
   projectName.value = path.split(/[\\/]/).filter(Boolean).pop() || path;
-  // 旧工作区布局落盘，恢复新工作区布局（无快照则回到单组空白 tab）
-  void paneLayoutPersistence.switchWorkspace(path);
+  // 混合 tab 布局：切换活动工作区不动聊天区的 tab（布局是全局一份）
   await fileTreeRef.value?.loadRoot();
   if (rightTab.value === "git") gitPanelRef.value?.reload();
   // Load run configurations for this workspace (auto-detects on first open).
@@ -350,11 +349,12 @@ function handleKeydown(e: KeyboardEvent) {
     paneLayout.closeActiveTab();
     return;
   }
-  // Ctrl+Tab / Ctrl+Shift+Tab：聚焦组内循环切 tab（固定键位，WebView 无默认占用）
+  // Ctrl+Tab / Ctrl+Shift+Tab：OS Alt+Tab 语义的 MRU 会话切换（跨分屏组全局）。
+  // 按住 Ctrl 连按 Tab 沿最近使用列表回溯，松开 Ctrl 提交（见 handleKeyup）。
   if (e.ctrlKey && !e.altKey && !e.metaKey && e.key === "Tab") {
     e.preventDefault();
     e.stopPropagation();
-    paneLayout.cycleTab(e.shiftKey ? -1 : 1);
+    paneLayout.mruSwitch(e.shiftKey ? -1 : 1);
     return;
   }
 
@@ -366,11 +366,17 @@ function handleKeydown(e: KeyboardEvent) {
   }
 }
 
+function handleKeyup(e: KeyboardEvent) {
+  // Ctrl 松开 = MRU 回溯提交（无回溯在途时是 no-op）
+  if (e.key === "Control") paneLayout.endMruSwitch();
+}
+
 onMounted(async () => {
   // Apply default theme before any rendering
   applyTheme(themes["warm-dark"]);
 
   window.addEventListener("keydown", handleKeydown, { capture: true });
+  window.addEventListener("keyup", handleKeyup, { capture: true });
 
   // Load persisted settings
   const { load: loadSettings } = useSettings();
@@ -394,7 +400,7 @@ onMounted(async () => {
   // Start git fingerprint watcher (auto-refresh on external changes)
   useGitWatcher();
 
-  // 布局持久化：先装 watch（debounce 落盘），初始工作区确定后恢复其快照
+  // 布局持久化：先装 watch（debounce 落盘），工作区确定后恢复全局快照
   paneLayoutPersistence.install();
 
   // Seed workbench cwd from the current project root.
@@ -404,7 +410,7 @@ onMounted(async () => {
       workspacePath.value = info.root;
       projectName.value = info.name;
       loadRunConfigs(info.root, info.root);
-      void paneLayoutPersistence.switchWorkspace(info.root);
+      void paneLayoutPersistence.restoreAtStartup();
     }
   } catch (_) { /* best effort */ }
 
@@ -479,6 +485,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener("keydown", handleKeydown, { capture: true });
+  window.removeEventListener("keyup", handleKeyup, { capture: true });
   wb.dispose();
   unlistenOpenFile?.();
 });

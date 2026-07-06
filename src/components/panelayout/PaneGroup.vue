@@ -5,6 +5,7 @@ import PaneTabBar from "./PaneTabBar.vue";
 import { usePaneLayout } from "../../composables/usePaneLayout";
 import { useChatSession, type SendOptions } from "../../composables/useChatSession";
 import { useContextMenu } from "../../composables/useContextMenu";
+import { useSessionWorkspaces } from "../../composables/useSessionWorkspaces";
 import { paneTabMenuItems } from "../../menus/contextMenus";
 import { WORKSPACE_PATH_KEY } from "./keys";
 import type { GroupNode } from "../../composables/paneLayout/tree";
@@ -48,6 +49,14 @@ const {
 
 const workspacePath = inject<Ref<string>>(WORKSPACE_PATH_KEY, ref(""));
 
+// 混合 tab：面板内的路径展示/文件引用以会话自己的工作区为基准，
+// 没有归属记录（空白新会话）才回落当前活动工作区。
+const { workspaceOf } = useSessionWorkspaces();
+const effectiveWorkspacePath = computed(() => {
+  const sid = activeTab.value?.sessionId;
+  return (sid && workspaceOf(sid)?.wsPath) || workspacePath.value;
+});
+
 /**
  * 发送 = 会话启动：空白 tab 现场绑定临时 id（真实 id 由 App.vue 的
  * onSessionCreated 经 rebindSession 换上），预览 tab 随派发转正。
@@ -87,7 +96,7 @@ function onNewTab() {
     />
     <ChatPanel
       :session-id="activeTab?.sessionId ?? null"
-      :workspace-path="workspacePath"
+      :workspace-path="effectiveWorkspacePath"
       :messages="messages"
       :is-busy="isBusy"
       :models="models"

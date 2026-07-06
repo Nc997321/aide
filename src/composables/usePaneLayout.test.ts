@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { usePaneLayout, __resetPaneLayoutForTest } from "./usePaneLayout";
-import { listGroups, type GroupNode, type SplitNode } from "./paneLayout/tree";
+import { listGroups, listSnapshotTabs, type GroupNode, type SplitNode } from "./paneLayout/tree";
+import { useSessionNames } from "./useSessionNames";
+import { useSessionWorkspaces } from "./useSessionWorkspaces";
 
 /** 「已启动」判定注入：测试里显式指定哪些会话算已启动 */
 const started = new Set<string>();
@@ -189,18 +191,62 @@ describe("会话 id 生命周期接线", () => {
 });
 
 describe("tab 切换与聚焦", () => {
-  it("cycleTab 组内循环切换", () => {
+  it("MRU 切换：快速按一次在最近两个会话间往返（OS Alt+Tab 语义）", () => {
     const pl = usePaneLayout();
     ["a", "b", "c"].forEach((s) => {
       pl.openSession(s);
       started.add(s);
       pl.promoteTab(s);
-    });
+    }); // 激活顺序 a→b→c，MRU: c,b,a
     expect(pl.activeSessionId.value).toBe("c");
-    pl.cycleTab(1);
-    expect(pl.activeSessionId.value).toBe("a"); // 尾部回绕
-    pl.cycleTab(-1);
+    pl.mruSwitch(1);
+    pl.endMruSwitch();
+    expect(pl.activeSessionId.value).toBe("b"); // 回到最近用过的
+    pl.mruSwitch(1);
+    pl.endMruSwitch();
+    expect(pl.activeSessionId.value).toBe("c"); // 再按一次弹回来（往返）
+  });
+
+  it("MRU 切换：按住不放连按沿最近使用列表回溯，松开才提交栈序", () => {
+    const pl = usePaneLayout();
+    ["a", "b", "c"].forEach((s) => {
+      pl.openSession(s);
+      started.add(s);
+      pl.promoteTab(s);
+    }); // MRU: c,b,a
+    pl.mruSwitch(1); // → b（回溯中，栈序冻结）
+    pl.mruSwitch(1); // → a
+    expect(pl.activeSessionId.value).toBe("a");
+    pl.mruSwitch(-1); // Shift 反向 → b
+    expect(pl.activeSessionId.value).toBe("b");
+    pl.endMruSwitch(); // 提交：MRU 变为 b,c,a
+    pl.mruSwitch(1);
+    pl.endMruSwitch();
     expect(pl.activeSessionId.value).toBe("c");
+  });
+
+  it("MRU 切换跨分屏组，且已关闭的 tab 被惰性跳过", () => {
+    const pl = usePaneLayout();
+    pl.openSession("a");
+    started.add("a");
+    pl.promoteTab("a");
+    pl.openSessionInSplit("b", "horizontal"); // b 在右组，MRU: b,a
+    pl.openSession("c"); // 落在聚焦的右组
+    started.add("c");
+    pl.promoteTab("c"); // MRU: c,b,a
+    pl.closeSessionTab("b");
+    pl.mruSwitch(1);
+    pl.endMruSwitch();
+    expect(pl.activeSessionId.value).toBe("a"); // b 已关，跳到 a（在另一组，聚焦跟随）
+    expect(groups().find((g) => g.id === pl.layout.focusedGroupId)!.tabs.some((t) => t.sessionId === "a")).toBe(true);
+  });
+
+  it("只有一个 tab 时 MRU 切换是 no-op", () => {
+    const pl = usePaneLayout();
+    pl.openSession("a");
+    pl.mruSwitch(1);
+    pl.endMruSwitch();
+    expect(pl.activeSessionId.value).toBe("a");
   });
 
   it("setActiveTab 同时聚焦该组", () => {
@@ -231,6 +277,17 @@ describe("serialize / restore", () => {
     expect(groups()).toHaveLength(2);
     expect((pl.layout.root as SplitNode).direction).toBe("vertical");
     expect(pl.activeSessionId.value).toBe("s2"); // 聚焦组恢复
+  });
+
+  it("serialize 携带注册表里的名字与工作区归属（快照 v2）", () => {
+    const pl = usePaneLayout();
+    useSessionNames().setName("sx", "会话X");
+    useSessionWorkspaces().setWorkspace("sx", { wsKey: "C--proj-x", wsPath: "C:\\proj\\x" });
+    pl.openSession("sx");
+    const snap = pl.serialize()!;
+    expect(listSnapshotTabs(snap)).toEqual([
+      { sessionId: "sx", name: "会话X", wsKey: "C--proj-x", wsPath: "C:\\proj\\x" },
+    ]);
   });
 
   it("restore 全部失效 → 回退空白并返回 false", () => {

@@ -16,6 +16,7 @@ import type {
   ImageBlock,
 } from "../types/chat";
 import { useSessionState } from "./useSessionState";
+import { useSessionWorkspaces } from "./useSessionWorkspaces";
 import type { FileMentionResolution } from "../utils/fileMentions";
 import type { HistoryBlock } from "../types";
 
@@ -296,9 +297,13 @@ function dispatchSend(
   });
 
   const sendText = item.mentions?.sendText ?? item.prompt;
+  // 混合 tab：会话可能归属别的工作区，sidecar 必须在它自己的项目目录里跑。
+  // 注册表没有记录（新会话）时传 null，Rust 侧回落当前活动工作区。
+  const sessionWs = useSessionWorkspaces().workspaceOf(sid);
   invoke("send_message", {
     sessionId: sid,
     prompt: sendText,
+    workspaceRoot: sessionWs?.wsPath || null,
     images: item.images?.length ? item.images : null,
     resumeId: resumeId ?? null,
     // 只在这个 sidecar 进程还没起来时（第一条消息）有意义，Rust 侧只在

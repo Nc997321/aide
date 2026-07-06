@@ -278,17 +278,30 @@ export function setSplitSizes(root: PaneNode, splitId: string, sizes: number[]):
   split.sizes = normalizeSizes(sizes, split.children.length);
 }
 
-// ── 持久化快照 ───────────────────────────────────────────────────────────────
+// ── 持久化快照（v2）──────────────────────────────────────────────────────────
 // 只存会话引用与结构：空白 tab、pendingName、预览标记、运行时 id 都不入快照。
 // activeTab / focusedGroup 用索引表达，restore 时重建全部 id。
+// v2 起每个 tab 附带会话名与工作区归属（混合 tab 布局：恢复时不依赖侧栏
+// 懒加载就能显示名字/工作区后缀、校验会话存在性、给 sidecar 传正确 cwd）。
+
+export interface SnapshotTab {
+  sessionId: string;
+  /** 会话显示名快照（恢复后作为注册表种子，侧栏加载后会覆盖为权威值） */
+  name?: string;
+  /** 所属工作区（编码 key + 根路径）；缺省 = 恢复时视为当前工作区 */
+  wsKey?: string;
+  wsPath?: string;
+}
 
 export interface SnapshotGroup {
   type: "group";
-  /** 各 tab 的 session id（快照里不存在空白 tab） */
-  tabs: string[];
+  tabs: SnapshotTab[];
   /** 激活 tab 在 tabs 里的下标 */
   active: number;
 }
+
+/** 序列化时由调用方注入的会话元信息解析器（名字/工作区来自模块级注册表） */
+export type SessionMetaResolver = (sessionId: string) => Omit<SnapshotTab, "sessionId">;
 
 export interface SnapshotSplit {
   type: "split";
@@ -300,14 +313,18 @@ export interface SnapshotSplit {
 export type SnapshotNode = SnapshotGroup | SnapshotSplit;
 
 export interface LayoutSnapshot {
-  version: 1;
+  version: 2;
   root: SnapshotNode;
   /** 聚焦组在 listGroups 视觉序中的下标 */
   focusedGroup: number;
 }
 
 /** 序列化。剔除空白 tab 后整棵树没有任何会话 → 返回 null（无须持久化）。 */
-export function toSnapshot(root: PaneNode, focusedGroupId: string): LayoutSnapshot | null {
+export function toSnapshot(
+  root: PaneNode,
+  focusedGroupId: string,
+  resolveMeta: SessionMetaResolver = () => ({}),
+): LayoutSnapshot | null {
   const snap = (n: PaneNode): SnapshotNode | null => {
     if (n.type === "group") {
       const tabs = n.tabs.filter((t) => t.sessionId !== null);
@@ -315,7 +332,7 @@ export function toSnapshot(root: PaneNode, focusedGroupId: string): LayoutSnapsh
       const activeIdx = tabs.findIndex((t) => t.id === n.activeTabId);
       return {
         type: "group",
-        tabs: tabs.map((t) => t.sessionId as string),
+        tabs: tabs.map((t) => ({ sessionId: t.sessionId as string, ...resolveMeta(t.sessionId as string) })),
         active: activeIdx === -1 ? tabs.length - 1 : activeIdx,
       };
     }
@@ -335,21 +352,34 @@ export function toSnapshot(root: PaneNode, focusedGroupId: string): LayoutSnapsh
   const snapRoot = snap(root);
   if (!snapRoot) return null;
   const focusedGroup = Math.max(0, listGroups(root).findIndex((g) => g.id === focusedGroupId));
-  return { version: 1, root: snapRoot, focusedGroup };
+  return { version: 2, root: snapRoot, focusedGroup };
 }
 
 const MAX_SNAPSHOT_DEPTH = 32;
 
-/** 结构校验：任何字段缺失/类型不符/超深/空孩子 → null（调用方回退空白布局）。 */
+/** 结构校验：任何字段缺失/类型不符/超深/空孩子 → null（调用方回退空白布局）。
+ *  只认 v2；v1（按工作区分份的旧格式）直接作废，回退空白布局。 */
 export function parseSnapshot(v: unknown): LayoutSnapshot | null {
   if (typeof v !== "object" || v === null) return null;
   const o = v as Record<string, unknown>;
-  if (o["version"] !== 1) return null;
+  if (o["version"] !== 2) return null;
   const focusedGroup = o["focusedGroup"];
   if (typeof focusedGroup !== "number" || !Number.isInteger(focusedGroup) || focusedGroup < 0) return null;
   const root = parseNode(o["root"], 0);
   if (!root) return null;
-  return { version: 1, root, focusedGroup };
+  return { version: 2, root, focusedGroup };
+}
+
+function parseSnapshotTab(v: unknown): SnapshotTab | null {
+  if (typeof v !== "object" || v === null) return null;
+  const o = v as Record<string, unknown>;
+  const sessionId = o["sessionId"];
+  if (typeof sessionId !== "string" || !sessionId) return null;
+  const tab: SnapshotTab = { sessionId };
+  if (typeof o["name"] === "string") tab.name = o["name"];
+  if (typeof o["wsKey"] === "string") tab.wsKey = o["wsKey"];
+  if (typeof o["wsPath"] === "string") tab.wsPath = o["wsPath"];
+  return tab;
 }
 
 function parseNode(v: unknown, depth: number): SnapshotNode | null {
@@ -357,11 +387,17 @@ function parseNode(v: unknown, depth: number): SnapshotNode | null {
   if (typeof v !== "object" || v === null) return null;
   const o = v as Record<string, unknown>;
   if (o["type"] === "group") {
-    const tabs = o["tabs"];
-    if (!Array.isArray(tabs) || tabs.length === 0 || !tabs.every((t) => typeof t === "string" && t)) return null;
+    const rawTabs = o["tabs"];
+    if (!Array.isArray(rawTabs) || rawTabs.length === 0) return null;
+    const tabs: SnapshotTab[] = [];
+    for (const t of rawTabs) {
+      const parsed = parseSnapshotTab(t);
+      if (!parsed) return null;
+      tabs.push(parsed);
+    }
     const active = o["active"];
     if (typeof active !== "number" || !Number.isInteger(active)) return null;
-    return { type: "group", tabs: tabs as string[], active };
+    return { type: "group", tabs, active };
   }
   if (o["type"] === "split") {
     const dir = o["direction"];
@@ -401,11 +437,11 @@ export function restoreSnapshot(
     if (n.type === "group") {
       const kept: TabItem[] = [];
       let activeId: string | null = null;
-      n.tabs.forEach((sid, i) => {
-        if (seen.has(sid)) return;
-        if (validSessionIds && !validSessionIds.has(sid)) return;
-        seen.add(sid);
-        const tab = createTab(sid);
+      n.tabs.forEach((t, i) => {
+        if (seen.has(t.sessionId)) return;
+        if (validSessionIds && !validSessionIds.has(t.sessionId)) return;
+        seen.add(t.sessionId);
+        const tab = createTab(t.sessionId);
         kept.push(tab);
         if (i === n.active) activeId = tab.id;
       });
@@ -426,4 +462,15 @@ export function restoreSnapshot(
   const groups = listGroups(root);
   const focused = groups[Math.min(snapshot.focusedGroup, groups.length - 1)];
   return { root, focusedGroupId: focused.id };
+}
+
+/** 平铺列出快照里的全部 tab（注册表 seed / 按工作区校验用）。 */
+export function listSnapshotTabs(snapshot: LayoutSnapshot): SnapshotTab[] {
+  const out: SnapshotTab[] = [];
+  const walk = (n: SnapshotNode) => {
+    if (n.type === "group") out.push(...n.tabs);
+    else n.children.forEach(walk);
+  };
+  walk(snapshot.root);
+  return out;
 }

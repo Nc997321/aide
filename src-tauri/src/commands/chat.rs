@@ -20,6 +20,9 @@ pub async fn send_message(
     // （当前工具调用跑完）自己决定何时真正 interrupt，见 agent-sidecar/src/index.ts
     // 的 jump_queue 处理。
     jump_queue: Option<bool>,
+    // 会话所属工作区根路径（混合 tab 布局：跨工作区会话必须在自己的项目目录里
+    // 跑，而不是当前活动工作区）。缺省 = 新会话，归属当前活动工作区。
+    workspace_root: Option<String>,
     sidecar_mgr: State<'_, SidecarManager>,
     workspace_state: State<'_, WorkspaceState>,
     app_handle: tauri::AppHandle,
@@ -83,7 +86,7 @@ pub async fn send_message(
         if had_live_session {
             sidecar_mgr.kill(&session_id).await;
         }
-        let cwd = project_root_for_commands(&workspace_state);
+        let cwd = session_cwd(&workspace_root, &workspace_state);
         // 会话面板里当前选中的模型，覆盖 provider 配置的默认值；之后切模型走
         // 运行时的 set_model 命令。首次 spawn 和「漂移触发的重新 spawn」都走
         // 这一行——后者天然会带上用户切换供应商时刚选的新模型（前端每条消息
@@ -95,7 +98,7 @@ pub async fn send_message(
     // 切换；单纯没有存活进程（新会话/重开历史对话）不算。
     let provider_switched = respawned && had_live_session;
 
-    let cwd = project_root_for_commands(&workspace_state)
+    let cwd = session_cwd(&workspace_root, &workspace_state)
         .to_string_lossy()
         .to_string();
     let mut cmd = json!({
@@ -207,6 +210,18 @@ pub fn rename_sidecar_session(
     sidecar_mgr: State<'_, SidecarManager>,
 ) -> Result<(), String> {
     sidecar_mgr.rename(&old_id, &new_id)
+}
+
+/// 会话实际生效的工作目录：显式归属（混合 tab 的跨工作区会话）优先，
+/// 否则回落当前活动工作区。空串视同缺省。
+fn session_cwd(
+    workspace_root: &Option<String>,
+    workspace_state: &State<'_, WorkspaceState>,
+) -> PathBuf {
+    match workspace_root {
+        Some(root) if !root.is_empty() => PathBuf::from(root),
+        _ => project_root_for_commands(workspace_state),
+    }
 }
 
 /// 新建 sidecar 进程时，把面板里选的模型转成 CLI 认的 `ANTHROPIC_MODEL` 环境变量，
