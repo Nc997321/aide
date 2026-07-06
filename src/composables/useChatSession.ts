@@ -104,6 +104,11 @@ export function getLastDispatchedPrompt(sid: string): string {
 const sessionCreatedCallbacks = new Set<(tempId: string, realId: string) => void>();
 
 let globalUnlisten: (() => void) | null = null;
+/** 注册中/已注册的监听 promise——防重入必须存 promise 而不是存结果：
+ *  多个 useChatSession 实例（App.vue + 各分屏组）同一 tick 并发调用时，
+ *  只判 globalUnlisten 会在首个 await listen() 完成前全部穿过空检查，
+ *  重复注册监听器 → 每条流式事件被处理多遍（消息内容成对重复事故）。 */
+let listenerPromise: Promise<() => void> | null = null;
 
 const {
   setSessionState,
@@ -543,11 +548,16 @@ function handleChatEvent(e: Record<string, unknown>) {
   if (sessionState[sid] === "running") armStalled(sid);
 }
 
-async function ensureGlobalListener() {
-  if (globalUnlisten) return;
-  globalUnlisten = await listen<Record<string, unknown>>("chat-event", (event) => {
-    handleChatEvent(event.payload);
-  });
+function ensureGlobalListener(): Promise<() => void> {
+  if (!listenerPromise) {
+    listenerPromise = listen<Record<string, unknown>>("chat-event", (event) => {
+      handleChatEvent(event.payload);
+    }).then((unlisten) => {
+      globalUnlisten = unlisten;
+      return unlisten;
+    });
+  }
+  return listenerPromise;
 }
 
 async function hydrate(sid: string) {
@@ -604,6 +614,7 @@ export function __resetForTest() {
   sharedPermissionModes.value = [];
   globalUnlisten?.();
   globalUnlisten = null;
+  listenerPromise = null;
 }
 
 // ── useChatSession（App.vue 顶层单例调用）───────────────────────────────────

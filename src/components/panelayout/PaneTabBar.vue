@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { useSessionState } from "../../composables/useSessionState";
 import { useSessionNames } from "../../composables/useSessionNames";
 import { AStatusDot } from "../../ui";
@@ -17,10 +18,18 @@ const emit = defineEmits<{
   promote: [tabId: string];
   context: [tabId: string, x: number, y: number];
   "new-tab": [];
+  /** 停止激活 tab 的会话进程（原 ChatPanel 头部按钮，头部并入 tab 栏后迁到这里） */
+  stop: [];
 }>();
 
-const { dotTone } = useSessionState();
+const { state: sessionState, dotTone } = useSessionState();
 const { displayName } = useSessionNames();
+
+/** 激活 tab 的会话进程是否存活（决定停止按钮显隐，只看活跃度轴） */
+const activeLive = computed(() => {
+  const tab = props.group.tabs.find((t) => t.id === props.group.activeTabId);
+  return !!tab?.sessionId && (sessionState[tab.sessionId] ?? "stopped") !== "stopped";
+});
 
 function label(tab: TabItem): string {
   if (tab.sessionId) return displayName(tab.sessionId);
@@ -70,6 +79,14 @@ function onAuxClick(e: MouseEvent, tab: TabItem) {
     </div>
     <button class="pane-tab-new" v-tooltip="'新建会话 tab'" @click="emit('new-tab')">
       <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 1V9M1 5H9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+    </button>
+    <button
+      v-if="activeLive"
+      class="pane-tab-stop"
+      v-tooltip="'停止会话进程'"
+      @click="emit('stop')"
+    >
+      <svg width="9" height="9" viewBox="0 0 9 9"><rect x="1" y="1" width="7" height="7" rx="1" fill="currentColor"/></svg>
     </button>
   </div>
 </template>
@@ -182,5 +199,23 @@ function onAuxClick(e: MouseEvent, tab: TabItem) {
 .pane-tab-new:hover {
   background: var(--aide-surface-hover);
   color: var(--aide-text-primary);
+}
+
+.pane-tab-stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  flex-shrink: 0;
+  margin-left: auto; /* 靠右：组级动作区 */
+  border: none;
+  background: transparent;
+  color: var(--aide-danger);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.pane-tab-stop:hover {
+  background: var(--aide-surface-hover);
 }
 </style>

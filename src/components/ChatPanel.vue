@@ -12,15 +12,12 @@ import { resolveFileMentions } from "@/utils/fileMentions";
 import type { FileMentionResolution } from "@/utils/fileMentions";
 import { peekFileClipboard } from "@/composables/useFileClipboard";
 import type { ImageAttachment, SendOptions } from "@/composables/useChatSession";
-import { useSessionState } from "@/composables/useSessionState";
 import { useProviders } from "@/composables/useProviders";
 import { useQuickActions } from "@/composables/useQuickActions";
 import type { QuickAction } from "@/composables/useQuickActions";
-import AStatusDot from "@/ui/AStatusDot.vue";
 
 const props = defineProps<{
   sessionId: string | null;
-  sessionName?: string;
   workspacePath?: string;
   messages: ComputedRef<ChatMessageType[]> | ChatMessageType[];
   isBusy: { value: boolean } | boolean;
@@ -39,13 +36,11 @@ const props = defineProps<{
 const emit = defineEmits<{
   send: [prompt: string, opts: SendOptions];
   interrupt: [];
-  stop: [];
   "set-model": [model: string];
   "set-permission-mode": [mode: string];
   "remove-queued": [index: number];
 }>();
 
-const { state: sessionState, dotTone } = useSessionState();
 const { activeProvider, SYSTEM_DEFAULT_ID } = useProviders();
 // 工具栏快捷操作（/compact /clear）：composable 早就写好且有单测，但从没接到
 // UI 上过——之前工具栏里完全看不到这两个按钮。见 handleQuickAction。
@@ -193,15 +188,6 @@ function handlePermissionModeChange(value: string) {
   selectedPermissionMode.value = value;
   emit("set-permission-mode", value);
 }
-const currentStatus = computed(() => {
-  const sid = props.sessionId;
-  if (!sid) return "stopped" as const;
-  return (sessionState[sid] || "stopped") as "stopped" | "running" | "waiting" | "attention";
-});
-const isLive = computed(() => currentStatus.value !== "stopped");
-// 状态点用两轴投影（含红/橙健康度），isLive 仍只看活跃度轴。
-const currentTone = computed(() => (props.sessionId ? dotTone(props.sessionId) : "stopped"));
-
 const isBusyVal = computed(() =>
   typeof props.isBusy === "boolean" ? props.isBusy : props.isBusy.value
 );
@@ -415,17 +401,6 @@ function handleQuickAction(action: QuickAction) {
 
 <template>
   <div class="chat-panel">
-    <div class="chat-header">
-      <AStatusDot :tone="currentTone" />
-      <span class="chat-header-name">{{ sessionName || sessionId || '新对话' }}</span>
-      <button
-        v-if="isLive"
-        class="chat-stop-btn"
-        title="停止会话进程"
-        @click="emit('stop')"
-      >⏹ 停止</button>
-    </div>
-
     <TaskListPanel v-if="props.tasks && props.tasks.length > 0" :tasks="props.tasks" />
 
     <div ref="scrollEl" class="chat-messages" @scroll.passive="onScroll">
@@ -582,41 +557,6 @@ function handleQuickAction(action: QuickAction) {
   overflow: hidden;
   background: var(--aide-bg-deep);
   color: var(--aide-text-primary);
-}
-
-.chat-header {
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--aide-border);
-  font-size: 12px;
-  color: var(--aide-text-muted);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  flex-shrink: 0;
-}
-
-.chat-stop-btn {
-  margin-left: auto;
-  background: none;
-  border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-sm);
-  color: var(--aide-danger);
-  font-size: 11px;
-  padding: 2px 8px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.12s;
-}
-
-.chat-stop-btn:hover {
-  background: var(--aide-surface-hover);
-}
-
-.chat-header-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .chat-messages {

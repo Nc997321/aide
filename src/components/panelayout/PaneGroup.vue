@@ -5,7 +5,6 @@ import PaneTabBar from "./PaneTabBar.vue";
 import { usePaneLayout } from "../../composables/usePaneLayout";
 import { useChatSession, type SendOptions } from "../../composables/useChatSession";
 import { useContextMenu } from "../../composables/useContextMenu";
-import { useSessionNames } from "../../composables/useSessionNames";
 import { paneTabMenuItems } from "../../menus/contextMenus";
 import { WORKSPACE_PATH_KEY } from "./keys";
 import type { GroupNode } from "../../composables/paneLayout/tree";
@@ -21,7 +20,6 @@ const props = defineProps<{ group: GroupNode }>();
 
 const pl = usePaneLayout();
 const { show: showContextMenu } = useContextMenu();
-const { displayName } = useSessionNames();
 
 const focused = computed(() => pl.layout.focusedGroupId === props.group.id);
 const activeTab = computed(
@@ -49,12 +47,6 @@ const {
 } = useChatSession(sessionIdRef);
 
 const workspacePath = inject<Ref<string>>(WORKSPACE_PATH_KEY, ref(""));
-
-const sessionName = computed(() => {
-  const tab = activeTab.value;
-  if (!tab) return "";
-  return tab.sessionId ? displayName(tab.sessionId) : tab.pendingName || "";
-});
 
 /**
  * 发送 = 会话启动：空白 tab 现场绑定临时 id（真实 id 由 App.vue 的
@@ -91,10 +83,10 @@ function onNewTab() {
       @promote="(id: string) => pl.promoteTabById(props.group.id, id)"
       @context="onTabContext"
       @new-tab="onNewTab"
+      @stop="stopSession"
     />
     <ChatPanel
       :session-id="activeTab?.sessionId ?? null"
-      :session-name="sessionName"
       :workspace-path="workspacePath"
       :messages="messages"
       :is-busy="isBusy"
@@ -109,7 +101,6 @@ function onNewTab() {
       class="pane-group__chat"
       @send="onSend"
       @interrupt="interrupt"
-      @stop="stopSession"
       @set-model="setModel"
       @set-permission-mode="setPermissionMode"
       @remove-queued="removeQueued"
