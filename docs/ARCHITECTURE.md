@@ -138,7 +138,7 @@ n.summary(&title).body(&body).show();
 
 ## 标题栏搜索
 
-`SearchBox.vue`：`Ctrl+P` 聚焦，搜索源通过 `SearchProvider` 接口插件化注册（`useSearchProviders`）。内置 `SessionProvider`（模糊匹配会话名）和 `FileProvider`（递归遍历目录树，缓存 30s）。结果面板 Teleport to body，↑↓/Enter/Esc 键盘导航。选中文件 → `useFileViewer().open()`。
+`SearchBox.vue`：`Ctrl+P` 聚焦，搜索源通过 `SearchProvider` 接口插件化注册（`useSearchProviders`）。内置 `SessionProvider`（模糊匹配会话名）和 `FileProvider`（按查询实时调服务端 `find_files_by_name`，`ignore` crate 尊重 .gitignore，无客户端缓存）。结果面板 Teleport to body，↑↓/Enter/Esc 键盘导航。选中文件 → `useFileViewer().open()`。
 
 ## Tauri Commands 速查
 

@@ -1,6 +1,6 @@
 import { api } from "../api";
 import { useFileViewer } from "./useFileViewer";
-import type { Session, FileEntry } from "../types";
+import type { Session } from "../types";
 
 // ── Search provider interface ──
 
@@ -93,48 +93,15 @@ function createSessionProvider(
 }
 
 // ── Built-in: File search provider ──
-
-let fileCache: { files: FileEntry[]; timestamp: number } | null = null;
-const FILE_CACHE_TTL = 30000; // 30 seconds
-const MAX_FILES = 500; // stop recursing after hitting this limit
-
-/**
- * Recursively walk directory tree to collect all files.
- * Stops at MAX_FILES to avoid excessive I/O for huge projects.
- */
-async function walkFiles(dirPath: string, count: { n: number }): Promise<FileEntry[]> {
-  if (count.n >= MAX_FILES) return [];
-  try {
-    const entries = await api.listDirectory(dirPath);
-    const files: FileEntry[] = [];
-    for (const entry of entries) {
-      if (count.n >= MAX_FILES) break;
-      if (entry.is_dir) {
-        const children = await walkFiles(entry.path, count);
-        files.push(...children);
-      } else {
-        count.n++;
-        files.push(entry);
-      }
-    }
-    return files;
-  } catch {
-    return [];
-  }
-}
-
-async function getWorkspaceFiles(workspacePath: string): Promise<FileEntry[]> {
-  if (fileCache && Date.now() - fileCache.timestamp < FILE_CACHE_TTL) {
-    return fileCache.files;
-  }
-  try {
-    const files = await walkFiles(workspacePath, { n: 0 });
-    fileCache = { files, timestamp: Date.now() };
-    return files;
-  } catch {
-    return [];
-  }
-}
+//
+// 文件检索走服务端 `find_files_by_name`（Rust，spawn_blocking + ignore crate）：
+//  - 尊重 .gitignore / .git/info/exclude / 全局 gitignore，target/、.idea/、*.iml、
+//    *.class、log/ 等被 ignore 的垃圾天然不进结果；
+//  - 遍历整棵树（max_depth=20），cap 只限"匹配数"，不会因目录靠后而漏文件——
+//    旧实现客户端 walkFiles 把"已访问文件数"卡在 500，大项目深层文件全搜不到；
+//  - ignore crate 是 ripgrep 同款，3k 文件遍历几十毫秒且不卡主线程；
+//  - palette 已 150ms 防抖，按查询实时检索无需客户端缓存，无脏数据。
+// 复用 useFileResolver 同一条检索路径（单一事实源）。
 
 function createFileProvider(
   getWorkspacePath: () => string,
@@ -146,46 +113,29 @@ function createFileProvider(
     async search(query, limit) {
       const wsPath = getWorkspacePath();
       if (!wsPath) return [];
+      // 多取一些候选再截到 limit，保证排序头部质量（服务端已按 exact_suffix > exact > partial 排好）。
+      const fetchLimit = Math.max(limit, 50);
+      let paths: string[];
       try {
-        const files = await getWorkspaceFiles(wsPath);
-        // Score: exact filename match > path contains > filename contains
-        const scored = files
-          .map(f => {
-            const name = f.name.toLowerCase();
-            const path = f.path.toLowerCase();
-            let score = 0;
-            if (name === query) score = 3;
-            else if (name.startsWith(query)) score = 2;
-            else if (name.includes(query)) score = 1;
-            else if (path.includes(query)) score = 0.5;
-            return { file: f, score };
-          })
-          .filter(x => x.score > 0)
-          .sort((a, b) => b.score - a.score)
-          .slice(0, limit);
-
-        return scored.map(x => ({
-          id: x.file.path,
-          label: x.file.name,
-          description: x.file.path,
-          icon: "📄",
-          action: () => {
-            const viewer = useFileViewer();
-            viewer.open(x.file.path);
-          },
-        }));
+        paths = await api.findFilesByName(query, wsPath, fetchLimit);
       } catch {
         return [];
       }
+      return paths.slice(0, limit).map(p => {
+        const name = p.replace(/\\/g, "/").split("/").pop() || p;
+        return {
+          id: p,
+          label: name,
+          description: p,
+          icon: "📄",
+          action: () => {
+            const viewer = useFileViewer();
+            viewer.open(p);
+          },
+        };
+      });
     },
   };
-}
-
-/**
- * Invalidate the file cache (call when workspace changes or files are modified).
- */
-function invalidateFileCache() {
-  fileCache = null;
 }
 
 /**
@@ -207,5 +157,5 @@ function getProviders(): SearchProvider[] {
 }
 
 export function useSearchProviders() {
-  return { register, unregister, search, getProviders, initProviders, invalidateFileCache };
+  return { register, unregister, search, getProviders, initProviders };
 }
