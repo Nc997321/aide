@@ -106,7 +106,7 @@ const chatSessionIdRef = ref<string | null>(null);
 watch(activeSessionId, (v) => { chatSessionIdRef.value = v || null; }, { immediate: true });
 /** "新建会话"点击时用户输入/生成的名字，等真正创建时（onSessionCreated）才用上。 */
 const pendingSessionName = ref("");
-const { pendingPermission, respondPermission, messages, isBusy, models, currentModel, contextUsage, rateLimit, tasks, permissionModes, currentPermissionMode, queuedPrompts, sendMessage, interrupt, stopSession, onSessionCreated, setModel, setPermissionMode, removeQueued } = useChatSession(chatSessionIdRef);
+const { pendingPermission, pendingPermissionCount, respondPermission, messages, isBusy, models, currentModel, contextUsage, rateLimit, tasks, permissionModes, currentPermissionMode, queuedPrompts, sendMessage, interrupt, stopSession, onSessionCreated, setModel, setPermissionMode, removeQueued } = useChatSession(chatSessionIdRef);
 
 // 会话首次创建：临时 key 拿到 SDK 确认的真实 id，这时才第一次落盘——
 // 写元数据、加侧栏、记最近访问。之前什么都没写过，不存在"迁移"这一步。
@@ -576,6 +576,7 @@ onUnmounted(() => {
       <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
       <PermissionDialog
         :permission="pendingPermission"
+        :queue-count="pendingPermissionCount"
         @respond="(id: string, approved: boolean, always?: boolean, answers?: Record<string, string>) => respondPermission(id, approved, always, answers)"
       />
     </div>

@@ -248,9 +248,15 @@ function onScroll() {
   autoScroll.value = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
 }
 
+// 按帧节流：读 scrollHeight 会强制整个消息容器同步布局（成本 ∝ 会话历史 DOM
+// 体积），流式期间每个增量都触发一次的话，光这一项就能压垮 UI 线程。合并到
+// 每帧至多一次；rAF 回调晚于 Vue 的微任务渲染批次，天然拿到更新后的 DOM。
+let scrollQueued = false;
 function scrollToBottom() {
-  if (!autoScroll.value) return;
-  nextTick(() => {
+  if (!autoScroll.value || scrollQueued) return;
+  scrollQueued = true;
+  requestAnimationFrame(() => {
+    scrollQueued = false;
     if (scrollEl.value) scrollEl.value.scrollTop = scrollEl.value.scrollHeight;
   });
 }
@@ -352,7 +358,10 @@ async function handlePaste(e: ClipboardEvent) {
   }
 }
 
-async function handleSend() {
+/** jumpQueue=true 时对应"插队发送"按钮：不排队，交给 sidecar 在安全边界
+ *  （当前工具调用跑完）打断当前这轮再发出——见 useChatSession.ts 的 SendOptions
+ *  注释。其余逻辑跟普通发送完全一致，避免两套构造消息的代码。 */
+async function handleSend(jumpQueue = false) {
   const text = inputText.value.trim();
   const hasImages = pendingImages.value.length > 0;
   // 忙碌时不再拦截：useChatSession 会把消息排队，message_stop 后按序续发
@@ -390,6 +399,7 @@ async function handleSend() {
     initialModel: selectedModel.value || undefined,
     mentions: mentionResolution,
     permissionMode: selectedPermissionMode.value || undefined,
+    jumpQueue: jumpQueue || undefined,
   });
 }
 
@@ -545,9 +555,16 @@ function handleQuickAction(action: QuickAction) {
             <span class="chat-ctx-percent">{{ w.pct }}%</span>
           </div>
           <button
+            v-if="isBusyVal"
+            class="chat-jump-btn"
+            title="插队发送：不用等这轮生成结束，sidecar 会在当前工具调用跑完后立刻打断、优先发出这条"
+            :disabled="!inputText.trim() && !pendingImages.length"
+            @click="handleSend(true)"
+          >插队</button>
+          <button
             class="chat-send-btn"
             :disabled="!inputText.trim() && !pendingImages.length"
-            @click="handleSend"
+            @click="handleSend()"
           >
             {{ isBusyVal ? "排队" : "发送" }}
           </button>
@@ -810,9 +827,40 @@ function handleQuickAction(action: QuickAction) {
   cursor: not-allowed;
 }
 
-.chat-send-btn {
+.chat-jump-btn {
   /* 原来靠 .chat-cost-total 的 margin-right: auto 把发送按钮推到工具栏最右侧；
-   * 去掉费用展示后这条移到这里，保持发送按钮始终靠右的布局不变。 */
+   * 去掉费用展示后这条移到这里，保持发送/插队按钮组始终靠右的布局不变。只有
+   * 忙碌时才渲染这个按钮，所以 margin-left:auto 落在它上面；空闲时它不存在，
+   * .chat-send-btn 自己的 margin-left:auto 兜底（见下面）。 */
+  margin-left: auto;
+  border-radius: var(--aide-radius-sm);
+  background: transparent;
+  color: var(--aide-accent);
+  border: 1px solid var(--aide-accent);
+  padding: 0 12px;
+  height: 24px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+  white-space: nowrap;
+}
+
+.chat-jump-btn:hover:not(:disabled) {
+  background: var(--aide-accent);
+  color: var(--aide-text-on-accent);
+}
+
+.chat-jump-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.chat-send-btn {
+  /* 插队按钮只在忙碌时渲染并吃掉 margin-left:auto；空闲时它不存在，这里的
+   * auto 顶上，保持发送按钮始终靠右的布局不变。两者同时存在时这条不生效
+   * （flex 的 auto margin 只有第一个吃到的元素生效），靠 .chat-toolbar 的
+   * gap 分隔即可。 */
   margin-left: auto;
   border-radius: var(--aide-radius-sm);
   background: var(--aide-accent);

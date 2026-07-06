@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from "vue";
+import { ref, watch, onMounted, onUnmounted } from "vue";
 import TreeNodeItem from "./TreeNodeItem.vue";
 import { useContextMenu } from "../composables/useContextMenu";
 import { useFileViewer } from "../composables/useFileViewer";
@@ -7,9 +7,10 @@ import { useSessionState } from "../composables/useSessionState";
 import { fileTreeAreaMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
 import { useFileClipboard, getParentPath } from "../composables/useFileClipboard";
-import type { FileEntry } from "../types";
+import type { FileEntry, WorkspaceInfo } from "../types";
 
 const props = defineProps<{ sessionId: string }>();
+const emit = defineEmits<{ "switch-workspace": [wsKey: string] }>();
 
 const projectInfo = ref({ root: "...", name: "...", branch: "" });
 const treeData = ref<FileEntry[]>([]);
@@ -212,15 +213,79 @@ async function onTreeKeydown(e: KeyboardEvent) {
   }
 }
 
+// ── 工作区（项目）切换器 ───────────────────────────────────────────────────
+// path-bar 上的项目名即切换入口：点开列出所有工作区，选中后把 wsKey 抛给
+// App.vue，由侧栏（单一数据源）执行真正切换并广播 workspace-changed，避免
+// 文件树自己 setWorkspace 造成侧栏 activeWorkspace 与实际工作区脱节。
+const wsDropdownOpen = ref(false);
+const wsLoading = ref(false);
+const workspaceList = ref<WorkspaceInfo[]>([]);
+const wsSwitcherRef = ref<HTMLElement>();
+
+async function toggleWsDropdown() {
+  if (wsDropdownOpen.value) {
+    wsDropdownOpen.value = false;
+    return;
+  }
+  wsDropdownOpen.value = true;
+  wsLoading.value = true;
+  try {
+    workspaceList.value = await api.listWorkspaces();
+  } catch {
+    workspaceList.value = [];
+  }
+  wsLoading.value = false;
+}
+
+function wsLabel(ws: WorkspaceInfo): string {
+  return ws.name.split(/[\\/]/).filter(Boolean).pop() || ws.name;
+}
+
+function onSelectWorkspace(ws: WorkspaceInfo) {
+  wsDropdownOpen.value = false;
+  if (ws.missing || ws.name === projectInfo.value.root) return;
+  emit("switch-workspace", ws.key);
+}
+
+function onWsClickOutside(e: MouseEvent) {
+  if (wsSwitcherRef.value && !wsSwitcherRef.value.contains(e.target as Node)) {
+    wsDropdownOpen.value = false;
+  }
+}
+onMounted(() => document.addEventListener("click", onWsClickOutside));
+onUnmounted(() => document.removeEventListener("click", onWsClickOutside));
+
 defineExpose({ loadRoot });
 </script>
 
 <template>
   <div class="file-tree">
     <div class="path-bar">
-      <div class="path-left">
-        <span v-if="projectInfo.branch" class="path-branch">{{ projectInfo.branch }}</span>
-        <span v-else class="path-hint">{{ projectInfo.name }}</span>
+      <div ref="wsSwitcherRef" class="ws-switcher">
+        <button class="ws-trigger" v-tooltip="projectInfo.root" @click.stop="toggleWsDropdown">
+          <svg class="ws-folder" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          <span class="ws-project-name">{{ projectInfo.name }}</span>
+          <span v-if="projectInfo.branch" class="path-branch">{{ projectInfo.branch }}</span>
+          <svg class="ws-chevron" :class="{ open: wsDropdownOpen }" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 3.5L5 6L7.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div v-if="wsDropdownOpen" class="ws-dropdown">
+          <div v-if="wsLoading" class="ws-dropdown-status">加载中…</div>
+          <template v-else>
+            <button
+              v-for="ws in workspaceList"
+              :key="ws.key"
+              class="ws-option"
+              :class="{ active: ws.name === projectInfo.root, missing: ws.missing }"
+              :disabled="ws.missing"
+              v-tooltip="ws.missing ? '路径已失效' : ws.name"
+              @click="onSelectWorkspace(ws)"
+            >
+              <span class="ws-option-name">{{ wsLabel(ws) }}</span>
+              <span v-if="ws.name === projectInfo.root" class="ws-option-check">✓</span>
+            </button>
+            <div v-if="workspaceList.length === 0" class="ws-dropdown-status">无其它项目</div>
+          </template>
+        </div>
       </div>
       <button class="hidden-toggle" :class="{ active: showHidden }" @click.stop="toggleHidden" v-tooltip="showHidden ? '隐藏隐藏文件' : '显示隐藏文件'">
         <svg v-if="!showHidden" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -278,14 +343,50 @@ defineExpose({ loadRoot });
   flex-shrink: 0;
 }
 
-.path-left {
+.ws-switcher {
+  position: relative;
+  min-width: 0;
+  flex: 1;
+}
+
+.ws-trigger {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
-  color: var(--aide-text-secondary);
-  overflow: hidden;
+  max-width: 100%;
+  background: none;
+  border: none;
   padding: 2px 6px;
+  border-radius: var(--aide-radius-sm);
+  cursor: pointer;
+  color: var(--aide-text-secondary);
+  transition: background 0.15s, color 0.15s;
+}
+.ws-trigger:hover {
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
+}
+
+.ws-folder {
+  flex-shrink: 0;
+  color: var(--aide-text-muted);
+}
+
+.ws-project-name {
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-chevron {
+  flex-shrink: 0;
+  color: var(--aide-text-muted);
+  transition: transform 0.15s;
+}
+.ws-chevron.open {
+  transform: rotate(180deg);
 }
 
 .path-branch {
@@ -301,9 +402,68 @@ defineExpose({ loadRoot });
   white-space: nowrap;
 }
 
-.path-hint {
+.ws-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 200px;
+  max-width: 320px;
+  max-height: 320px;
+  overflow-y: auto;
+  z-index: 200;
+  padding: 4px;
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  box-shadow: var(--aide-shadow-lg);
+}
+
+.ws-dropdown-status {
+  padding: 8px 10px;
   font-size: 11px;
   color: var(--aide-text-muted);
+  text-align: center;
+}
+
+.ws-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: none;
+  border-radius: var(--aide-radius-sm);
+  cursor: pointer;
+  color: var(--aide-text-secondary);
+  font-size: 12px;
+  text-align: left;
+  transition: background 0.12s, color 0.12s;
+}
+.ws-option:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
+}
+.ws-option.active {
+  color: var(--aide-accent);
+}
+.ws-option.missing {
+  opacity: 0.45;
+  cursor: not-allowed;
+  text-decoration: line-through;
+}
+
+.ws-option-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-option-check {
+  flex-shrink: 0;
+  color: var(--aide-accent);
+  font-size: 11px;
 }
 
 .hidden-toggle {

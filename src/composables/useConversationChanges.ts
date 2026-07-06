@@ -1,6 +1,6 @@
 import { ref, watch } from "vue";
 import { useSessionState } from "./useSessionState";
-import { isPendingSession } from "./useChatSession";
+import { isPendingSession, getLastDispatchedPrompt } from "./useChatSession";
 import { useModal } from "./useModal";
 import { api } from "../api";
 import type { ChangeRound, ChangeFile } from "../types";
@@ -103,7 +103,8 @@ export function useConversationChanges(sessionId: () => string) {
       const time = now.toLocaleTimeString();
       const rewindTo = pendingRewindPosition ?? undefined;
       pendingRewindPosition = null;
-      rounds.value.push({ index: roundCounter, time, files, rewindTo });
+      const prompt = getLastDispatchedPrompt(currentSid) || undefined;
+      rounds.value.push({ index: roundCounter, time, files, rewindTo, prompt });
       await save();
     } catch (_) { /* best effort */ }
   }

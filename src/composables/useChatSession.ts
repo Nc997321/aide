@@ -32,8 +32,10 @@ export interface SendOptions {
   mentions?: FileMentionResolution;
   /** 当前选中的权限模式（不透明字符串，sidecar 解释语义），随每条消息透传 */
   permissionMode?: string;
-  /** 忙碌时置真=打断插队：中断当前这轮生成、立刻把本条作为新一轮发出
-   *  （丢弃本轮已生成内容，这是"插队"语义）；缺省/假=排队合并。 */
+  /** 忙碌时置真=插队：不会立刻打断当前这一轮——sidecar 会等到安全边界（当前
+   *  正在执行的工具调用跑完，没有工具在跑就是立刻）才真正 interrupt，本轮已
+   *  产出的内容不会被丢弃，只是"抢在这轮结束之后、其余排队消息之前"发出；
+   *  缺省/假=普通排队，跟其余排队消息一样等这轮自然结束后合并续发。 */
   jumpQueue?: boolean;
 }
 
@@ -47,7 +49,11 @@ interface QueuedSend {
 interface SessionStore {
   messages: ChatMessage[];
   isBusy: boolean;
-  pendingPermission: PermissionRequest | null;
+  /** 挂起的权限请求队列（FIFO，弹窗永远显示队头）。必须是队列而不是单槽：
+   *  模型并行调用多个工具时，sidecar 的 canUseTool 会被并发调用、同时发来
+   *  多条 permission_request——单槽覆盖会让先到的请求永远失去 UI 载体，
+   *  sidecar 侧对应的 Promise 永不 resolve，整轮卡死（并行 Read 卡死事故）。 */
+  pendingPermissions: PermissionRequest[];
   /** 是否已从磁盘加载过历史 */
   hydrated: boolean;
   /** 可切换的模型列表（provider 决定，纯展示字符串） */
@@ -113,7 +119,7 @@ function getStore(sid: string): SessionStore {
     stores[sid] = {
       messages: [],
       isBusy: false,
-      pendingPermission: null,
+      pendingPermissions: [],
       hydrated: false,
       models: [],
       currentModel: "",
@@ -239,7 +245,13 @@ async function finalizeSession(tempId: string, realId: string) {
  * 等它返回会让首条消息在 UI 上有明显卡顿。这里只做本地状态就绪，IPC 后台完成，
  * 失败走 .catch 兜底。
  */
-function dispatchSend(sid: string, item: QueuedSend, resumeId?: string, initialModel?: string) {
+function dispatchSend(
+  sid: string,
+  item: QueuedSend,
+  resumeId?: string,
+  initialModel?: string,
+  jumpQueue?: boolean,
+) {
   const store = getStore(sid);
   store.isBusy = true;
   // 记下本次派发的用户提问，供变更面板给轮次做标题（图片消息无文本时兜底占位）。
@@ -289,6 +301,9 @@ function dispatchSend(sid: string, item: QueuedSend, resumeId?: string, initialM
     initialModel: initialModel || null,
     // 每条消息都带当前选中的权限模式，sidecar 侧幂等（同值跳过）
     permissionMode: item.permissionMode || null,
+    // 插队：不在这里打断，原样透传给 sidecar，由它在安全边界（当前工具调用
+    // 跑完）自己决定何时真正 interrupt——见 jumpQueue 分支的调用处。
+    jumpQueue: jumpQueue || null,
   }).catch((e) => {
     console.warn("send_message failed:", e);
     const s = getStore(resolveSid(sid));
@@ -349,20 +364,18 @@ function handleChatEvent(e: Record<string, unknown>) {
       break;
     }
     case "permission_request": {
-      store.pendingPermission = {
+      store.pendingPermissions.push({
         id: e["id"] as string,
         name: e["name"] as string,
         input: e["input"],
         alwaysAllowLabel: e["alwaysAllowLabel"] as string | undefined,
         fromSubagent: e["fromSubagent"] as { id: string; agentName: string } | undefined,
-      };
+      });
       setSessionState(sid, "attention");
       break;
     }
     case "permission_cancelled": {
-      if (store.pendingPermission?.id === e["id"]) {
-        store.pendingPermission = null;
-      }
+      store.pendingPermissions = store.pendingPermissions.filter((p) => p.id !== e["id"]);
       break;
     }
     case "models_available": {
@@ -483,7 +496,7 @@ function handleChatEvent(e: Record<string, unknown>) {
     case "error": {
       finishStreaming(store);
       store.isBusy = false;
-      store.pendingPermission = null;
+      store.pendingPermissions = [];
       store.queued.length = 0;
       store.messages.push({
         id: crypto.randomUUID(),
@@ -505,7 +518,7 @@ function handleChatEvent(e: Record<string, unknown>) {
       // 进程真的没了（Rust 侧 reader EOF 或心跳看门狗超时合成）。
       finishStreaming(store);
       store.isBusy = false;
-      store.pendingPermission = null;
+      store.pendingPermissions = [];
       store.queued.length = 0;
       const reason = e["reason"] as string | undefined;
       const detail = e["detail"] as string | undefined;
@@ -633,25 +646,19 @@ export function useChatSession(sessionId: Ref<string | null>) {
       mentions: opts.mentions,
       permissionMode: opts.permissionMode,
     };
-    if (store.isBusy) {
-      if (!opts.jumpQueue) {
-        store.queued.push(item);
-        return sid;
-      }
-      // 打断插队：立刻终止当前这一轮生成（本轮已产出内容会被丢弃——这正是"插队"
-      // 的语义；SDK 层 interrupt 后会话仍存活，以 resume 续起下一轮），随后把本条
-      // 当作新一轮马上发出。此前已排队的消息保留，会在这一轮结束后照常合并续发。
-      try {
-        await invoke("interrupt_session", { sessionId: sid });
-      } catch (e) {
-        console.warn("interrupt before jump-send failed:", e);
-      }
-      finishStreaming(store);
+    if (store.isBusy && !opts.jumpQueue) {
+      store.queued.push(item);
+      return sid;
     }
+    // 插队：不在前端直接 interrupt_session——那会立刻腰斩当前这一轮，可能砍在
+    // 一次还没跑完的工具调用中间（丢弃本轮已产出内容）。改成把 jumpQueue 标记
+    // 原样透传给 sidecar，由它在安全边界（当前工具调用跑完）自己判断何时真正
+    // 打断，见 dispatchSend → send_message → agent-sidecar/src/index.ts 的
+    // jump_queue 处理。此前已排队的消息保留，会在插队这轮结束后照常合并续发。
 
     // resume：显式传入 > 已被 SDK 确认的 id 本身（aide id 就是 sdk id，无需查表）
     const resolvedResumeId = opts.resumeId ?? (isPendingSession(sid) ? undefined : sid);
-    dispatchSend(sid, item, resolvedResumeId, opts.initialModel);
+    dispatchSend(sid, item, resolvedResumeId, opts.initialModel, opts.jumpQueue);
     return sid;
   }
 
@@ -666,9 +673,13 @@ export function useChatSession(sessionId: Ref<string | null>) {
     const sid = sessionId.value;
     if (!sid) return;
     const store = getStore(sid);
-    store.pendingPermission = null;
-    setSessionState(sid, "running");
-    armStalled(sid); // 权限批准后恢复生成 → 重启软超时计时
+    store.pendingPermissions = store.pendingPermissions.filter((p) => p.id !== id);
+    // 并发权限请求逐条确认：队列还有剩余时保持 attention（弹窗随队头自动切到
+    // 下一条），全部清空才回到 running。
+    if (store.pendingPermissions.length === 0) {
+      setSessionState(sid, "running");
+      armStalled(sid); // 权限批准后恢复生成 → 重启软超时计时
+    }
     await invoke("permission_response", { sessionId: sid, id, approved, always, answers });
   }
 
@@ -680,7 +691,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       await invoke("interrupt_session", { sessionId: sid });
     } finally {
       store.isBusy = false;
-      store.pendingPermission = null;
+      store.pendingPermissions = [];
       store.queued.length = 0; // 用户主动打断：排队消息一并作废
       finishStreaming(store);
       setSessionState(sid, "waiting"); // sidecar 仍存活
@@ -695,7 +706,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       await invoke("stop_chat_session", { sessionId: sid });
     } finally {
       store.isBusy = false;
-      store.pendingPermission = null;
+      store.pendingPermissions = [];
       store.queued.length = 0;
       finishStreaming(store);
       setSessionState(sid, "stopped");
@@ -735,7 +746,10 @@ export function useChatSession(sessionId: Ref<string | null>) {
   return {
     messages: computed(() => current.value?.messages ?? []),
     isBusy: computed(() => current.value?.isBusy ?? false),
-    pendingPermission: computed(() => current.value?.pendingPermission ?? null),
+    /** 弹窗只显示队头一条；确认后队列前移，下一条自动顶上。 */
+    pendingPermission: computed(() => current.value?.pendingPermissions[0] ?? null),
+    /** 挂起的权限请求总数（含队头）——弹窗用它提示"后面还排着 N 条"。 */
+    pendingPermissionCount: computed(() => current.value?.pendingPermissions.length ?? 0),
     // 这个会话自己学到的列表优先；还没连上真实 SDK 时借用别的会话学到的缓存。
     models: computed(() => {
       const own = current.value?.models;

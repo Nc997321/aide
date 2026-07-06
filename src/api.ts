@@ -120,6 +120,9 @@ export const api = {
   fileExists(path: string): Promise<boolean> {
     return invoke("file_exists", { path });
   },
+  findFilesByName(query: string, cwd: string, limit?: number): Promise<string[]> {
+    return invoke("find_files_by_name", { query, cwd, limit: limit ?? null });
+  },
   copyFile(src: string, dest: string): Promise<void> {
     return invoke("copy_file", { src, dest });
   },

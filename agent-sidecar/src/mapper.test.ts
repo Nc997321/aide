@@ -8,6 +8,7 @@ import {
 } from "./mapper.js";
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
+import { ToolLifecycleTracker } from "./toolLifecycle.js";
 import type { ChatEvent } from "./types.js";
 
 function assistantToolUse(id: string, name: string, input: unknown, parentToolUseId?: string) {
@@ -38,7 +39,8 @@ describe("mapSdkMessage routing for Task tools", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
-    mapSdkMessage(assistantToolUse("t1", "TaskCreate", { subject: "写测试" }), (e) => events.push(e), tasks, subagents);
+    const tools = new ToolLifecycleTracker();
+    mapSdkMessage(assistantToolUse("t1", "TaskCreate", { subject: "写测试" }), (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([]);
   });
 
@@ -46,7 +48,8 @@ describe("mapSdkMessage routing for Task tools", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
-    mapSdkMessage(assistantToolUse("t1", "Bash", { command: "ls" }), (e) => events.push(e), tasks, subagents);
+    const tools = new ToolLifecycleTracker();
+    mapSdkMessage(assistantToolUse("t1", "Bash", { command: "ls" }), (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([{ type: "tool_use_start", id: "t1", name: "Bash", input: { command: "ls" } }]);
   });
 
@@ -54,12 +57,14 @@ describe("mapSdkMessage routing for Task tools", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
-    mapSdkMessage(assistantToolUse("t1", "TaskCreate", { subject: "写测试" }), (e) => events.push(e), tasks, subagents);
+    const tools = new ToolLifecycleTracker();
+    mapSdkMessage(assistantToolUse("t1", "TaskCreate", { subject: "写测试" }), (e) => events.push(e), tasks, subagents, tools);
     mapSdkMessage(
       userToolResult("t1", JSON.stringify({ task: { id: "task-1", subject: "写测试" } })),
       (e) => events.push(e),
       tasks,
       subagents,
+      tools,
     );
     expect(events).toEqual([
       { type: "tasks_update", tasks: [{ id: "task-1", subject: "写测试", status: "pending", activeForm: undefined }] },
@@ -70,12 +75,14 @@ describe("mapSdkMessage routing for Task tools", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
-    mapSdkMessage(assistantToolUse("t1", "TaskCreate", { subject: "写测试" }), (e) => events.push(e), tasks, subagents);
+    const tools = new ToolLifecycleTracker();
+    mapSdkMessage(assistantToolUse("t1", "TaskCreate", { subject: "写测试" }), (e) => events.push(e), tasks, subagents, tools);
     mapSdkMessage(
       userToolResult("t1", JSON.stringify({ task: { id: "task-1", subject: "写测试" } })),
       (e) => events.push(e),
       tasks,
       subagents,
+      tools,
     );
     events.length = 0;
     mapSdkMessage(
@@ -83,6 +90,7 @@ describe("mapSdkMessage routing for Task tools", () => {
       (e) => events.push(e),
       tasks,
       subagents,
+      tools,
     );
     expect(events).toEqual([
       { type: "tasks_update", tasks: [{ id: "task-1", subject: "写测试", status: "in_progress", activeForm: undefined }] },
@@ -93,7 +101,8 @@ describe("mapSdkMessage routing for Task tools", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
-    mapSdkMessage(userToolResult("t9", "ok"), (e) => events.push(e), tasks, subagents);
+    const tools = new ToolLifecycleTracker();
+    mapSdkMessage(userToolResult("t9", "ok"), (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([{ type: "tool_result", id: "t9", content: "ok", is_error: false }]);
   });
 });
@@ -109,8 +118,8 @@ describe("mapSdkMessage streaming (includePartialMessages)", () => {
 
   it("forwards stream_event text deltas as text_delta", () => {
     const events: ChatEvent[] = [];
-    mapSdkMessage(streamTextDelta("你"), (e) => events.push(e), new TaskTracker(), new SubagentTracker());
-    mapSdkMessage(streamTextDelta("好"), (e) => events.push(e), new TaskTracker(), new SubagentTracker());
+    mapSdkMessage(streamTextDelta("你"), (e) => events.push(e), new TaskTracker(), new SubagentTracker(), new ToolLifecycleTracker());
+    mapSdkMessage(streamTextDelta("好"), (e) => events.push(e), new TaskTracker(), new SubagentTracker(), new ToolLifecycleTracker());
     expect(events).toEqual([
       { type: "text_delta", delta: "你" },
       { type: "text_delta", delta: "好" },
@@ -119,7 +128,7 @@ describe("mapSdkMessage streaming (includePartialMessages)", () => {
 
   it("skips the final assistant text block (already streamed as deltas)", () => {
     const events: ChatEvent[] = [];
-    mapSdkMessage(assistantText("完整文本"), (e) => events.push(e), new TaskTracker(), new SubagentTracker());
+    mapSdkMessage(assistantText("完整文本"), (e) => events.push(e), new TaskTracker(), new SubagentTracker(), new ToolLifecycleTracker());
     expect(events).toEqual([]);
   });
 
@@ -134,7 +143,7 @@ describe("mapSdkMessage streaming (includePartialMessages)", () => {
         ],
       },
     };
-    mapSdkMessage(msg, (e) => events.push(e), new TaskTracker(), new SubagentTracker());
+    mapSdkMessage(msg, (e) => events.push(e), new TaskTracker(), new SubagentTracker(), new ToolLifecycleTracker());
     expect(events).toEqual([{ type: "tool_use_start", id: "t1", name: "Bash", input: { command: "ls" } }]);
   });
 
@@ -145,8 +154,8 @@ describe("mapSdkMessage streaming (includePartialMessages)", () => {
       parent_tool_use_id: null,
       event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "内心戏" } },
     };
-    mapSdkMessage(thinking, (e) => events.push(e), new TaskTracker(), new SubagentTracker());
-    mapSdkMessage(streamTextDelta("子代理文本", "a1"), (e) => events.push(e), new TaskTracker(), new SubagentTracker());
+    mapSdkMessage(thinking, (e) => events.push(e), new TaskTracker(), new SubagentTracker(), new ToolLifecycleTracker());
+    mapSdkMessage(streamTextDelta("子代理文本", "a1"), (e) => events.push(e), new TaskTracker(), new SubagentTracker(), new ToolLifecycleTracker());
     expect(events).toEqual([]);
   });
 });
@@ -164,6 +173,7 @@ describe("mapSdkMessage local slash commands (/clear, /compact 等本地命令)"
       (e) => events.push(e),
       new TaskTracker(),
       new SubagentTracker(),
+      new ToolLifecycleTracker(),
     );
     expect(events).toEqual([
       { type: "text_delta", delta: "已清空上下文。" },
@@ -178,6 +188,7 @@ describe("mapSdkMessage local slash commands (/clear, /compact 等本地命令)"
       (e) => events.push(e),
       new TaskTracker(),
       new SubagentTracker(),
+      new ToolLifecycleTracker(),
     );
     expect(events).toEqual([
       { type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null },
@@ -188,6 +199,7 @@ describe("mapSdkMessage local slash commands (/clear, /compact 等本地命令)"
 describe("mapSdkMessage error results (未登录 / 额度上限 不再静默)", () => {
   const tasks = () => new TaskTracker();
   const subs = () => new SubagentTracker();
+  const tools = () => new ToolLifecycleTracker();
 
   it("routes an error-subtype result to the error channel instead of message_stop", () => {
     const events: ChatEvent[] = [];
@@ -197,6 +209,7 @@ describe("mapSdkMessage error results (未登录 / 额度上限 不再静默)", 
       (e) => events.push(e),
       tasks(),
       subs(),
+      tools(),
     );
     expect(events).toEqual([
       { type: "error", message: "API Error: 401 Unauthorized", fatal: false },
@@ -210,6 +223,7 @@ describe("mapSdkMessage error results (未登录 / 额度上限 不再静默)", 
       (e) => events.push(e),
       tasks(),
       subs(),
+      tools(),
     );
     expect(events).toEqual([
       { type: "error", message: "请求被限流或额度已用尽（HTTP 429） — rate limit exceeded", fatal: false },
@@ -223,6 +237,7 @@ describe("mapSdkMessage error results (未登录 / 额度上限 不再静默)", 
       (e) => events.push(e),
       tasks(),
       subs(),
+      tools(),
     );
     expect(events).toEqual([
       { type: "message_stop", stop_reason: "end_turn", total_cost_usd: 0.01, usage: null },
@@ -231,6 +246,63 @@ describe("mapSdkMessage error results (未登录 / 额度上限 不再静默)", 
 
   it("describeResultError falls back to a subtype label when no detail is present", () => {
     expect(describeResultError({ subtype: "error_max_turns" })).toBe("已达到最大回合数上限");
+  });
+
+  // 回归：点插队/中断后弹出红色 "Error: [ede_diagnostic] result_type=user ..."——
+  // 这是 CLI 打断转录时塞进 result.errors 的内部诊断面包屑，CLI 官方 UI 按
+  // "[ede_diagnostic]" 前缀过滤，不是给用户看的错误。主动打断的 result（subtype
+  // error_during_execution 且无任何用户可读错误细节）应压成 message_stop 正常收轮。
+  it("主动打断的 result（只有 ede_diagnostic 面包屑）压成 message_stop，不弹错误气泡", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      {
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        total_cost_usd: 0.02,
+        errors: ["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use"],
+      },
+      (e) => events.push(e),
+      tasks(),
+      subs(),
+      tools(),
+    );
+    expect(events).toEqual([
+      { type: "message_stop", stop_reason: "interrupted", total_cost_usd: 0.02, usage: null },
+    ]);
+  });
+
+  it("真实错误混着 ede_diagnostic 面包屑时仍走错误通道，但把面包屑滤掉", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      {
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: ["[ede_diagnostic] turn aborted (abort) stop_reason=tool_use", "API Error: 500 Internal Server Error"],
+      },
+      (e) => events.push(e),
+      tasks(),
+      subs(),
+      tools(),
+    );
+    expect(events).toEqual([
+      { type: "error", message: "API Error: 500 Internal Server Error", fatal: false },
+    ]);
+  });
+
+  it("带 api_error_status 的 error_during_execution 不算良性中断，照常报错", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      { type: "result", subtype: "error_during_execution", is_error: true, api_error_status: 500, errors: [] },
+      (e) => events.push(e),
+      tasks(),
+      subs(),
+      tools(),
+    );
+    expect(events).toEqual([
+      { type: "error", message: "接口返回错误（HTTP 500）", fatal: false },
+    ]);
   });
 });
 
@@ -280,11 +352,13 @@ describe("mapSdkMessage routing for subagent tools", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
     mapSdkMessage(
       assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
       (e) => events.push(e),
       tasks,
       subagents,
+      tools,
     );
     expect(events).toEqual([
       { type: "subagent_start", id: "a1", agentName: "general-purpose", description: "调研 XXX" },
@@ -295,11 +369,13 @@ describe("mapSdkMessage routing for subagent tools", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
     mapSdkMessage(
       assistantToolUse("a1", "Task", { subagent_type: "general-purpose", description: "调研 XXX" }),
       (e) => events.push(e),
       tasks,
       subagents,
+      tools,
     );
     expect(events).toEqual([
       { type: "subagent_start", id: "a1", agentName: "general-purpose", description: "调研 XXX" },
@@ -310,14 +386,16 @@ describe("mapSdkMessage routing for subagent tools", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
     mapSdkMessage(
       assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
       (e) => events.push(e),
       tasks,
       subagents,
+      tools,
     );
     events.length = 0;
-    mapSdkMessage(userToolResult("a1", "调研结论：……"), (e) => events.push(e), tasks, subagents);
+    mapSdkMessage(userToolResult("a1", "调研结论：……"), (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([
       { type: "subagent_end", id: "a1", result: "调研结论：……", is_error: false },
     ]);
@@ -327,8 +405,9 @@ describe("mapSdkMessage routing for subagent tools", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
-    mapSdkMessage(assistantText("子代理内部的思考文本", "a1"), (e) => events.push(e), tasks, subagents);
-    mapSdkMessage(assistantToolUse("inner1", "Read", { file_path: "x.ts" }, "a1"), (e) => events.push(e), tasks, subagents);
+    const tools = new ToolLifecycleTracker();
+    mapSdkMessage(assistantText("子代理内部的思考文本", "a1"), (e) => events.push(e), tasks, subagents, tools);
+    mapSdkMessage(assistantToolUse("inner1", "Read", { file_path: "x.ts" }, "a1"), (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([]);
   });
 
@@ -336,18 +415,20 @@ describe("mapSdkMessage routing for subagent tools", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
     mapSdkMessage(
       assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
       (e) => events.push(e),
       tasks,
       subagents,
+      tools,
     );
     events.length = 0;
     // 子代理内部一条纯文本消息：v1 不直播文本，忽略。
-    mapSdkMessage(assistantText("我先看看仓库结构", "a1"), (e) => events.push(e), tasks, subagents);
+    mapSdkMessage(assistantText("我先看看仓库结构", "a1"), (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([]);
     // 子代理内部真正调用了工具：应转成 subagent_progress，而不是 tool_use_start。
-    mapSdkMessage(assistantToolUse("inner1", "Read", { file_path: "x.ts" }, "a1"), (e) => events.push(e), tasks, subagents);
+    mapSdkMessage(assistantToolUse("inner1", "Read", { file_path: "x.ts" }, "a1"), (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([
       { type: "subagent_progress", id: "a1", toolName: "Read", input: { file_path: "x.ts" } },
     ]);
@@ -357,11 +438,13 @@ describe("mapSdkMessage routing for subagent tools", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
     mapSdkMessage(
       assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
       (e) => events.push(e),
       tasks,
       subagents,
+      tools,
     );
     events.length = 0;
     const step1 = {
@@ -374,8 +457,8 @@ describe("mapSdkMessage routing for subagent tools", () => {
       parent_tool_use_id: "a1",
       message: { model: "claude-sonnet-5-20260101", content: [{ type: "tool_use", id: "inner2", name: "Bash", input: { command: "ls" } }] },
     };
-    mapSdkMessage(step1, (e) => events.push(e), tasks, subagents);
-    mapSdkMessage(step2, (e) => events.push(e), tasks, subagents);
+    mapSdkMessage(step1, (e) => events.push(e), tasks, subagents, tools);
+    mapSdkMessage(step2, (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([
       { type: "subagent_progress", id: "a1", toolName: "Read", input: { file_path: "x.ts" }, model: "claude-sonnet-5-20260101" },
       { type: "subagent_progress", id: "a1", toolName: "Bash", input: { command: "ls" } },
@@ -386,11 +469,13 @@ describe("mapSdkMessage routing for subagent tools", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
     mapSdkMessage(
       assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
       (e) => events.push(e),
       tasks,
       subagents,
+      tools,
     );
     events.length = 0;
     const placeholderStep = {
@@ -398,7 +483,7 @@ describe("mapSdkMessage routing for subagent tools", () => {
       parent_tool_use_id: "a1",
       message: { model: "<synthetic>", content: [{ type: "tool_use", id: "inner1", name: "Read", input: { file_path: "x.ts" } }] },
     };
-    mapSdkMessage(placeholderStep, (e) => events.push(e), tasks, subagents);
+    mapSdkMessage(placeholderStep, (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([
       { type: "subagent_progress", id: "a1", toolName: "Read", input: { file_path: "x.ts" } },
     ]);
@@ -408,11 +493,13 @@ describe("mapSdkMessage routing for subagent tools", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
     mapSdkMessage(
       assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
       (e) => events.push(e),
       tasks,
       subagents,
+      tools,
     );
     events.length = 0;
     const delta = {
@@ -420,7 +507,7 @@ describe("mapSdkMessage routing for subagent tools", () => {
       parent_tool_use_id: "a1",
       event: { type: "content_block_delta", delta: { type: "text_delta", text: "我先看" } },
     };
-    mapSdkMessage(delta, (e) => events.push(e), tasks, subagents);
+    mapSdkMessage(delta, (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([{ type: "subagent_text_delta", id: "a1", delta: "我先看" }]);
   });
 
@@ -428,11 +515,13 @@ describe("mapSdkMessage routing for subagent tools", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
     mapSdkMessage(
       assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
       (e) => events.push(e),
       tasks,
       subagents,
+      tools,
     );
     events.length = 0;
     const delta = {
@@ -440,7 +529,7 @@ describe("mapSdkMessage routing for subagent tools", () => {
       parent_tool_use_id: "a1",
       event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "内心戏" } },
     };
-    mapSdkMessage(delta, (e) => events.push(e), tasks, subagents);
+    mapSdkMessage(delta, (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([{ type: "subagent_thinking_delta", id: "a1", delta: "内心戏" }]);
   });
 
@@ -451,7 +540,7 @@ describe("mapSdkMessage routing for subagent tools", () => {
       parent_tool_use_id: "ghost",
       event: { type: "content_block_delta", delta: { type: "text_delta", text: "不该出现" } },
     };
-    mapSdkMessage(delta, (e) => events.push(e), new TaskTracker(), new SubagentTracker());
+    mapSdkMessage(delta, (e) => events.push(e), new TaskTracker(), new SubagentTracker(), new ToolLifecycleTracker());
     expect(events).toEqual([]);
   });
 
@@ -459,11 +548,13 @@ describe("mapSdkMessage routing for subagent tools", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
     mapSdkMessage(
       assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
       (e) => events.push(e),
       tasks,
       subagents,
+      tools,
     );
     events.length = 0;
     const msg = {
@@ -471,7 +562,7 @@ describe("mapSdkMessage routing for subagent tools", () => {
       parent_tool_use_id: "a1",
       message: { content: [{ type: "thinking", thinking: "内心戏" }] },
     };
-    mapSdkMessage(msg, (e) => events.push(e), tasks, subagents);
+    mapSdkMessage(msg, (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([]);
   });
 });
@@ -493,6 +584,7 @@ describe("mapSdkMessage system/init → slash_commands_available", () => {
       (e) => events.push(e),
       new TaskTracker(),
       new SubagentTracker(),
+      new ToolLifecycleTracker(),
     );
     expect(events).toEqual([
       { type: "session_init", session_id: "s1" },
@@ -502,7 +594,7 @@ describe("mapSdkMessage system/init → slash_commands_available", () => {
 
   it("slash_commands 是空数组时，仍然发出（不是缺省不发）", () => {
     const events: ChatEvent[] = [];
-    mapSdkMessage(systemInit("s1", []), (e) => events.push(e), new TaskTracker(), new SubagentTracker());
+    mapSdkMessage(systemInit("s1", []), (e) => events.push(e), new TaskTracker(), new SubagentTracker(), new ToolLifecycleTracker());
     expect(events).toEqual([
       { type: "session_init", session_id: "s1" },
       { type: "slash_commands_available", commands: [] },
@@ -511,7 +603,7 @@ describe("mapSdkMessage system/init → slash_commands_available", () => {
 
   it("slash_commands 字段缺失时（旧版 CLI），只发 session_init", () => {
     const events: ChatEvent[] = [];
-    mapSdkMessage(systemInit("s1"), (e) => events.push(e), new TaskTracker(), new SubagentTracker());
+    mapSdkMessage(systemInit("s1"), (e) => events.push(e), new TaskTracker(), new SubagentTracker(), new ToolLifecycleTracker());
     expect(events).toEqual([{ type: "session_init", session_id: "s1" }]);
   });
 });

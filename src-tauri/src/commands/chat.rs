@@ -16,6 +16,10 @@ pub async fn send_message(
     resume_id: Option<String>,
     initial_model: Option<String>,
     permission_mode: Option<String>,
+    // 忙碌时的"插队"：不在这里直接打断，原样透传给 sidecar，由它在安全边界
+    // （当前工具调用跑完）自己决定何时真正 interrupt，见 agent-sidecar/src/index.ts
+    // 的 jump_queue 处理。
+    jump_queue: Option<bool>,
     sidecar_mgr: State<'_, SidecarManager>,
     workspace_state: State<'_, WorkspaceState>,
     app_handle: tauri::AppHandle,
@@ -67,9 +71,16 @@ pub async fn send_message(
     // EOF 不会误报 session_dead（跟用户主动点"停止"走的是同一条静默路径）。
     // 新进程沿用已有的 resume_id（前端对非 pending 会话恒定带 sid 作为
     // resume_id）续上 SDK 侧的会话历史，对用户透明。
-
-    if sidecar_mgr.needs_respawn(&session_id, &env_vars) {
-        if sidecar_mgr.has_session(&session_id) {
+    //
+    // had_live_session 单独记下来：区分"这个会话本来就没有存活进程"（新会话/
+    // 重新打开一个历史对话——sidecar 里的 session_id 变量也是首次赋值，不该
+    // fork）和"有存活进程，但连接身份漂移了，必须杀掉重开"（真正的供应商切换，
+    // 才需要 fork 绕开 CLI session 文件里缓存的旧供应商配置）。两者对
+    // `needs_respawn` 而言都是 true，只有这里能分辨。
+    let had_live_session = sidecar_mgr.has_session(&session_id);
+    let respawned = sidecar_mgr.needs_respawn(&session_id, &env_vars);
+    if respawned {
+        if had_live_session {
             sidecar_mgr.kill(&session_id).await;
         }
         let cwd = project_root_for_commands(&workspace_state);
@@ -80,6 +91,9 @@ pub async fn send_message(
         apply_initial_model_override(&mut env_vars, initial_model);
         sidecar_mgr.spawn(session_id.clone(), cwd, env_vars, app_handle)?;
     }
+    // 只有"本来就有存活进程、因为连接身份漂移才被杀掉重开"才是真正的供应商
+    // 切换；单纯没有存活进程（新会话/重开历史对话）不算。
+    let provider_switched = respawned && had_live_session;
 
     let cwd = project_root_for_commands(&workspace_state)
         .to_string_lossy()
@@ -103,6 +117,12 @@ pub async fn send_message(
         if !mode.is_empty() {
             cmd["permission_mode"] = json!(mode);
         }
+    }
+    if provider_switched {
+        cmd["provider_switched"] = json!(true);
+    }
+    if jump_queue == Some(true) {
+        cmd["jump_queue"] = json!(true);
     }
     sidecar_mgr.send(&session_id, &cmd).await
 }

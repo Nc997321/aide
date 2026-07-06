@@ -54,6 +54,8 @@ export interface ChangeRound {
   time: string;
   files: ChangeFile[];
   rewindTo?: number;
+  /** 本轮对应的用户提问，作为变更面板轮次标题 */
+  prompt?: string;
 }
 
 export interface Keybindings {

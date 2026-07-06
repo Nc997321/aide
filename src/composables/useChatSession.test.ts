@@ -232,6 +232,52 @@ describe("useChatSession per-session store", () => {
     expect(chat.isBusy.value).toBe(false);
   });
 
+  it("并行工具调用的多条 permission_request 排队逐条确认，不互相覆盖（P0 并行权限卡死回归）", async () => {
+    const { state } = useSessionState();
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+
+    // 模型并行调用两个 Read，sidecar 并发发来两条请求
+    emit({ type: "permission_request", id: "p1", name: "Read", input: { file_path: "a.java" }, session_id: "uuid-a" });
+    emit({ type: "permission_request", id: "p2", name: "Read", input: { file_path: "b.java" }, session_id: "uuid-a" });
+    await flush();
+
+    // 弹窗显示队头 p1，p2 排队等待而不是把 p1 覆盖掉
+    expect(chat.pendingPermission.value?.id).toBe("p1");
+    expect(chat.pendingPermissionCount.value).toBe(2);
+
+    // 确认 p1 后 p2 自动顶上，队列未清空前保持 attention
+    await chat.respondPermission("p1", true);
+    await flush();
+    expect(chat.pendingPermission.value?.id).toBe("p2");
+    expect(chat.pendingPermissionCount.value).toBe(1);
+    expect(state["uuid-a"]).toBe("attention");
+
+    // 全部确认完才回到 running
+    await chat.respondPermission("p2", true);
+    await flush();
+    expect(chat.pendingPermission.value).toBeNull();
+    expect(chat.pendingPermissionCount.value).toBe(0);
+    expect(state["uuid-a"]).toBe("running");
+  });
+
+  it("permission_cancelled 只移除对应 id，队列里其余请求不受影响", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    emit({ type: "permission_request", id: "p1", name: "Read", input: {}, session_id: "uuid-a" });
+    emit({ type: "permission_request", id: "p2", name: "Read", input: {}, session_id: "uuid-a" });
+    await flush();
+
+    emit({ type: "permission_cancelled", id: "p1", session_id: "uuid-a" });
+    await flush();
+    expect(chat.pendingPermission.value?.id).toBe("p2");
+    expect(chat.pendingPermissionCount.value).toBe(1);
+  });
+
   it("permission_cancelled 清掉挂起的对话框", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);

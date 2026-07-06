@@ -45443,6 +45443,9 @@ var PermissionManager = class {
    *  （fromSubagent 字段永不出现），不影响原有批准/拒绝流程。 */
   makeCallback(emit2, subagents) {
     return async (toolName, input, opts) => {
+      if (opts?.signal?.aborted) {
+        return { behavior: "deny", message: "\u5DF2\u4E2D\u65AD" };
+      }
       const id2 = randomUUID();
       const fromSubagent = opts?.agentID ? { id: opts.agentID, agentName: subagents?.getAgentName(opts.agentID) ?? "\u5B50\u4EE3\u7406" } : void 0;
       emit2({
@@ -45454,7 +45457,12 @@ var PermissionManager = class {
         ...fromSubagent ? { fromSubagent } : {}
       });
       const decision = await new Promise((resolve) => {
-        this.pending.set(id2, { resolve, toolName, suggestions: opts?.suggestions });
+        this.pending.set(id2, {
+          resolve,
+          toolName,
+          suggestions: opts?.suggestions,
+          emitCancelled: () => emit2({ type: "permission_cancelled", id: id2 })
+        });
         opts?.signal?.addEventListener(
           "abort",
           () => {
@@ -45477,15 +45485,15 @@ var PermissionManager = class {
       };
     };
   }
-  /** 返回被响应的工具名（无此 pending 时返回 undefined）——入口层用它识别
-   *  "ExitPlanMode 被批准"这类需要联动会话状态的特殊工具。 */
+  /** 结算一次权限响应（无此 pending 时返回 undefined）——入口层用返回值识别
+   *  "ExitPlanMode 被批准"和"总是允许切换了权限模式"这类需要联动会话状态的情况。 */
   resolve(id2, approved, always, answers) {
     const entry = this.pending.get(id2);
     if (!entry) return void 0;
     this.pending.delete(id2);
     if (!approved || !always) {
       entry.resolve({ approved, answers });
-      return entry.toolName;
+      return { toolName: entry.toolName };
     }
     const updatedPermissions = entry.suggestions?.length ? entry.suggestions : [{
       type: "addRules",
@@ -45494,7 +45502,31 @@ var PermissionManager = class {
       destination: "projectSettings"
     }];
     entry.resolve({ approved, updatedPermissions, answers });
-    return entry.toolName;
+    const appliedMode = updatedPermissions.find(
+      (u) => u.type === "setMode"
+    )?.mode;
+    this.autoApproveCovered(entry.toolName, updatedPermissions, appliedMode);
+    return { toolName: entry.toolName, ...appliedMode ? { appliedMode } : {} };
+  }
+  /** "总是允许"后连带放行队列里已被新授权**定义上必然覆盖**的挂起请求——
+   *  SDK 对已发出的 canUseTool 不会用新规则重新评估，不放行就得用户逐条再点。
+   *  只处理两种能静态断定覆盖关系的情况：
+   *  - 切到 bypassPermissions（会话级跳过一切确认）→ 放行全部；
+   *  - 落盘了裸工具名 allow 规则（无 ruleContent 限定）→ 放行同名工具。
+   *  带 ruleContent（按目录/命令前缀等）的规则不放行：匹配语义在 CLI 内部，
+   *  这里重新实现一遍容易放宽授权，宁可让用户多确认一次。 */
+  autoApproveCovered(toolName, updates, appliedMode) {
+    const coversAll = appliedMode === "bypassPermissions";
+    const coversSameTool = updates.some(
+      (u) => u.type === "addRules" && u.behavior === "allow" && u.rules.some((r) => r.toolName === toolName && !r.ruleContent)
+    );
+    if (!coversAll && !coversSameTool) return;
+    for (const [pid, p] of [...this.pending]) {
+      if (!coversAll && p.toolName !== toolName) continue;
+      this.pending.delete(pid);
+      p.resolve({ approved: true });
+      p.emitCancelled();
+    }
   }
 };
 
@@ -45613,6 +45645,95 @@ var SubagentTracker = class {
   }
 };
 
+// src/toolLifecycle.ts
+var ToolLifecycleTracker = class {
+  inFlight = /* @__PURE__ */ new Set();
+  onToolUse(id2) {
+    this.inFlight.add(id2);
+  }
+  onToolResult(id2) {
+    this.inFlight.delete(id2);
+  }
+  isIdle() {
+    return this.inFlight.size === 0;
+  }
+  /** 清空账本。必须在每轮结束（result）和中断/出错后调用：一轮被 interrupt
+   *  腰斩时，在飞工具的 tool_result 永远不会到达，不清空的话账本永不归零，
+   *  之后所有"插队"的安全边界判断恒为 false，插队静默失效。 */
+  reset() {
+    this.inFlight.clear();
+  }
+};
+
+// src/jumpQueue.ts
+var JumpQueueController = class {
+  pending = null;
+  request(req) {
+    this.pending = req;
+  }
+  has() {
+    return this.pending !== null;
+  }
+  /** 取出并清空当前记录的插队请求（无则返回 null）。 */
+  take() {
+    const req = this.pending;
+    this.pending = null;
+    return req;
+  }
+};
+
+// src/deltaCoalescer.ts
+var COALESCABLE_TYPES = /* @__PURE__ */ new Set([
+  "text_delta",
+  "subagent_text_delta",
+  "subagent_thinking_delta"
+]);
+var FLUSH_INTERVAL_MS = 40;
+function isDeltaEvent(event) {
+  return COALESCABLE_TYPES.has(event.type);
+}
+function keyOf(event) {
+  const id2 = "id" in event ? event.id : "";
+  return `${event.type}:${id2}`;
+}
+var DeltaCoalescer = class {
+  constructor(sink, intervalMs = FLUSH_INTERVAL_MS) {
+    this.sink = sink;
+    this.intervalMs = intervalMs;
+  }
+  /** 窗口内待冲刷的增量组，保持到达顺序；同 key 只会出现在相邻位置时合并。 */
+  pending = [];
+  timer = null;
+  push(event) {
+    if (!isDeltaEvent(event)) {
+      this.flush();
+      this.sink(event);
+      return;
+    }
+    const last = this.pending[this.pending.length - 1];
+    if (last && keyOf(last) === keyOf(event)) {
+      last.delta += event.delta;
+    } else {
+      this.pending.push({ ...event });
+    }
+    if (this.timer === null) {
+      this.timer = setTimeout(() => this.flush(), this.intervalMs);
+      this.timer.unref?.();
+    }
+  }
+  /** 按到达顺序输出缓冲中的所有增量组并清空窗口定时器。 */
+  flush() {
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    if (this.pending.length === 0) return;
+    const groups = this.pending;
+    this.pending = [];
+    for (const g of groups) this.sink(g);
+  }
+};
+
 // src/mapper.ts
 function buildUserMessage(prompt, images) {
   if (images.length === 0) {
@@ -45631,6 +45752,15 @@ function buildUserMessage(prompt, images) {
   }
   return { role: "user", content: blocks };
 }
+function meaningfulResultErrors(msg) {
+  return Array.isArray(msg.errors) ? msg.errors.filter(Boolean).filter((e) => !String(e).startsWith("[ede_diagnostic]")) : [];
+}
+function isBenignAbortResult(msg) {
+  if (msg.subtype !== "error_during_execution") return false;
+  if (typeof msg.api_error_status === "number") return false;
+  if (typeof msg.result === "string" && msg.result.trim()) return false;
+  return meaningfulResultErrors(msg).length === 0;
+}
 function describeResultError(msg) {
   const parts = [];
   const status = msg.api_error_status;
@@ -45641,7 +45771,7 @@ function describeResultError(msg) {
   } else if (typeof status === "number") {
     parts.push(`\u63A5\u53E3\u8FD4\u56DE\u9519\u8BEF\uFF08HTTP ${status}\uFF09`);
   }
-  const errs = Array.isArray(msg.errors) ? msg.errors.filter(Boolean) : [];
+  const errs = meaningfulResultErrors(msg);
   if (errs.length > 0) {
     parts.push(errs.map((e) => String(e)).join("\uFF1B"));
   } else if (typeof msg.result === "string" && msg.result.trim()) {
@@ -45706,6 +45836,17 @@ function isoToMs(iso) {
 function emitSubagentProgress(msg, emit2, subagents) {
   const parentId = msg.parent_tool_use_id;
   if (!subagents.isActive(parentId)) return;
+  if (msg.type === "stream_event") {
+    const ev2 = msg.event;
+    if (ev2?.type === "content_block_delta") {
+      if (ev2.delta?.type === "text_delta" && ev2.delta.text) {
+        emit2({ type: "subagent_text_delta", id: parentId, delta: ev2.delta.text });
+      } else if (ev2.delta?.type === "thinking_delta" && ev2.delta.thinking) {
+        emit2({ type: "subagent_thinking_delta", id: parentId, delta: ev2.delta.thinking });
+      }
+    }
+    return;
+  }
   if (msg.type !== "assistant" || !msg.message?.content) return;
   const toolUses = msg.message.content.filter((b3) => b3.type === "tool_use");
   if (toolUses.length === 0) return;
@@ -45720,7 +45861,7 @@ function emitSubagentProgress(msg, emit2, subagents) {
     });
   });
 }
-function mapSdkMessage(msg, emit2, tasks, subagents) {
+function mapSdkMessage(msg, emit2, tasks, subagents, tools) {
   if (msg.parent_tool_use_id) {
     emitSubagentProgress(msg, emit2, subagents);
     return;
@@ -45752,6 +45893,7 @@ function mapSdkMessage(msg, emit2, tasks, subagents) {
       if (block.type === "text") {
         continue;
       } else if (block.type === "tool_use") {
+        tools.onToolUse(block.id);
         if (SubagentTracker.isSubagentTool(block.name)) {
           const { agentName, description } = subagents.handleToolUse(block.id, block.input);
           emit2({ type: "subagent_start", id: block.id, agentName, description });
@@ -45769,6 +45911,7 @@ function mapSdkMessage(msg, emit2, tasks, subagents) {
   if (msg.type === "user" && msg.message?.content) {
     for (const block of msg.message.content) {
       if (block.type === "tool_result") {
+        tools.onToolResult(block.tool_use_id);
         const content = Array.isArray(block.content) ? block.content.map((c) => c.text ?? "").join("") : String(block.content ?? "");
         if (subagents.handleToolResult(block.tool_use_id)) {
           emit2({ type: "subagent_end", id: block.tool_use_id, result: content, is_error: block.is_error ?? false });
@@ -45787,6 +45930,15 @@ function mapSdkMessage(msg, emit2, tasks, subagents) {
   }
   if (msg.type === "result") {
     if (msg.is_error === true || msg.subtype !== "success") {
+      if (isBenignAbortResult(msg)) {
+        emit2({
+          type: "message_stop",
+          stop_reason: "interrupted",
+          total_cost_usd: msg.total_cost_usd ?? null,
+          usage: null
+        });
+        return;
+      }
       emit2({ type: "error", message: describeResultError(msg), fatal: false });
       return;
     }
@@ -45814,8 +45966,11 @@ function mapSdkMessage(msg, emit2, tasks, subagents) {
 }
 
 // src/index.ts
-function emit(event) {
+var coalescer = new DeltaCoalescer((event) => {
   process.stdout.write(JSON.stringify(event) + "\n");
+});
+function emit(event) {
+  coalescer.push(event);
 }
 var HEARTBEAT_INTERVAL_MS = 5e3;
 setInterval(() => emit({ type: "heartbeat" }), HEARTBEAT_INTERVAL_MS).unref();
@@ -45828,6 +45983,8 @@ var queue = new MessageQueue();
 var permMgr = new PermissionManager();
 var taskTracker = new TaskTracker();
 var subagentTracker = new SubagentTracker();
+var toolLifecycle = new ToolLifecycleTracker();
+var jumpQueueCtl = new JumpQueueController();
 var currentQuery = null;
 var sessionId;
 var currentModel = "";
@@ -45841,11 +45998,25 @@ var PERMISSION_MODES = [
   { value: "bypassPermissions", displayName: "\u81EA\u52A8\u6A21\u5F0F\uFF08\u8DF3\u8FC7\u6240\u6709\u786E\u8BA4\uFF0C\u8BF7\u8C28\u614E\u4F7F\u7528\uFF09" }
 ];
 var currentPermissionMode = "default";
+var pendingFork = false;
+var shouldForkNextConnect = false;
+var turnActive = false;
+var EXTRA_MODE_LABELS = {
+  dontAsk: "\u672C\u6B21\u4F1A\u8BDD\u4E0D\u518D\u8BE2\u95EE",
+  auto: "\u81EA\u52A8\u5224\u65AD\uFF08\u672C\u6B21\u4F1A\u8BDD\uFF09"
+};
 function emitPermissionModes() {
-  emit({ type: "permission_modes_available", modes: PERMISSION_MODES, current: currentPermissionMode });
+  const modes = PERMISSION_MODES.some((m) => m.value === currentPermissionMode) ? PERMISSION_MODES : [
+    ...PERMISSION_MODES,
+    {
+      value: currentPermissionMode,
+      displayName: EXTRA_MODE_LABELS[currentPermissionMode] ?? currentPermissionMode
+    }
+  ];
+  emit({ type: "permission_modes_available", modes, current: currentPermissionMode });
 }
 function applyPermissionMode(mode) {
-  if (!PERMISSION_MODES.some((m) => m.value === mode)) return;
+  if (!PERMISSION_MODES.some((m) => m.value === mode) && !(mode in EXTRA_MODE_LABELS)) return;
   if (mode === currentPermissionMode) return;
   const q = currentQuery;
   if (q) {
@@ -45904,6 +46075,24 @@ async function startLoop(cwd) {
   try {
     while (true) {
       try {
+        const cliEnv = { ...process.env };
+        for (const k3 of [
+          "ANTHROPIC_BASE_URL",
+          "ANTHROPIC_API_KEY",
+          "ANTHROPIC_AUTH_TOKEN",
+          "ANTHROPIC_MODEL",
+          "CLAUDE_CONFIG_DIR",
+          "CLAUDE_CODE_SUBAGENT_MODEL",
+          "CLAUDE_CODE_EFFORT_LEVEL",
+          "HTTP_PROXY",
+          "HTTPS_PROXY",
+          "http_proxy",
+          "https_proxy",
+          "ALL_PROXY",
+          "all_proxy"
+        ]) {
+          if (process.env[k3]) cliEnv[k3] = process.env[k3];
+        }
         const q = DMe({
           prompt: queue[Symbol.asyncIterator](),
           options: {
@@ -45926,14 +46115,54 @@ async function startLoop(cwd) {
             // release 打包：Rust 侧把随 app 分发的原生 CLI 路径通过环境变量传入；
             // 未设置时 SDK 从 node_modules 解析（dev 模式）
             ...process.env.AIDE_CLAUDE_EXE ? { pathToClaudeCodeExecutable: process.env.AIDE_CLAUDE_EXE } : {},
-            ...sessionId ? { resume: sessionId } : {}
+            // forkSession=true：resume 旧会话时自动 fork 出新 session，保留旧会话
+            // 对话历史但用新 provider 配置——CLI resume 时会从 session 文件读取创建时
+            // 缓存的 provider 配置（base_url/api_key/model），覆盖 process.env 里的
+            // 新值，导致切换供应商后仍用旧 base_url 返回 404。fork 绕过这个问题：
+            // 新 session 文件不会缓存旧 provider 的配置。只有 Rust 显式判定这次是
+            // 供应商真的漂移了才 fork（shouldForkNextConnect）——单纯 resume（包括
+            // 中断/错误触发的内部重连、或重开一个历史会话）一律走普通 resume，
+            // 不会误分裂出新 session 也不会误报"已切换供应商"。
+            ...sessionId ? shouldForkNextConnect ? (pendingFork = true, { resume: sessionId, forkSession: true }) : { resume: sessionId } : {},
+            env: cliEnv
           }
         });
         currentQuery = q;
+        shouldForkNextConnect = false;
         for await (const msg of q) {
-          mapSdkMessage(msg, emit, taskTracker, subagentTracker);
+          if (msg.type === "result") {
+            turnActive = false;
+            const jump = jumpQueueCtl.take();
+            if (jump) {
+              toolLifecycle.reset();
+              if (jump.permissionMode) applyPermissionMode(jump.permissionMode);
+              queue.push({
+                type: "user",
+                message: buildUserMessage(jump.prompt, jump.images ?? []),
+                parent_tool_use_id: null
+              });
+              turnActive = true;
+              void emitContextUsage(q);
+              void emitRateLimit(q);
+              continue;
+            }
+          }
+          mapSdkMessage(msg, emit, taskTracker, subagentTracker, toolLifecycle);
+          if (jumpQueueCtl.has() && toolLifecycle.isIdle()) {
+            currentQuery?.interrupt().catch(() => {
+            });
+          }
           if (msg.type === "system" && msg.subtype === "init") {
-            sessionId = msg.session_id;
+            const newSid = msg.session_id;
+            if (pendingFork && newSid && newSid !== sessionId) {
+              emit({
+                type: "notification",
+                message: "\u5DF2\u5207\u6362\u4F9B\u5E94\u5546\uFF0C\u5BF9\u8BDD\u5386\u53F2\u5DF2\u8FC1\u79FB\u5230\u65B0\u4F1A\u8BDD\u3002",
+                notification_type: "provider_switch"
+              });
+              pendingFork = false;
+            }
+            sessionId = newSid;
             void emitModelsAvailable(q);
           } else if (
             // 主线程（非子代理）assistant 消息自带实际用的模型——SDK 没有别的渠道
@@ -45950,6 +46179,7 @@ async function startLoop(cwd) {
               emit({ type: "models_available", models: lastModels, current: currentModel });
             }
           } else if (msg.type === "result") {
+            toolLifecycle.reset();
             void emitContextUsage(q);
             void emitRateLimit(q);
           }
@@ -45957,8 +46187,21 @@ async function startLoop(cwd) {
         break;
       } catch (e) {
         currentQuery = null;
+        pendingFork = false;
+        turnActive = false;
+        toolLifecycle.reset();
         if (e?.name !== "AbortError") {
           emit({ type: "error", message: String(e?.message ?? e), fatal: false });
+        }
+        const jump = jumpQueueCtl.take();
+        if (jump) {
+          if (jump.permissionMode) applyPermissionMode(jump.permissionMode);
+          queue.push({
+            type: "user",
+            message: buildUserMessage(jump.prompt, jump.images ?? []),
+            parent_tool_use_id: null
+          });
+          turnActive = true;
         }
       }
     }
@@ -45978,19 +46221,44 @@ rl2.on("line", (line) => {
   }
   if (cmd.cmd === "send") {
     if (cmd.session_id) sessionId = cmd.session_id;
-    if (cmd.permission_mode) applyPermissionMode(cmd.permission_mode);
+    if (cmd.provider_switched) shouldForkNextConnect = true;
     if (!loopStarted) {
       loopStarted = true;
+      if (cmd.permission_mode) applyPermissionMode(cmd.permission_mode);
       startLoop(cmd.cwd);
+      queue.push({
+        type: "user",
+        message: buildUserMessage(cmd.prompt, cmd.images ?? []),
+        parent_tool_use_id: null
+      });
+      turnActive = true;
+      return;
     }
+    if (cmd.jump_queue && currentQuery && turnActive) {
+      jumpQueueCtl.request({
+        prompt: cmd.prompt,
+        images: cmd.images,
+        permissionMode: cmd.permission_mode
+      });
+      if (toolLifecycle.isIdle()) {
+        currentQuery.interrupt().catch(() => {
+        });
+      }
+      return;
+    }
+    if (cmd.permission_mode) applyPermissionMode(cmd.permission_mode);
     queue.push({
       type: "user",
       message: buildUserMessage(cmd.prompt, cmd.images ?? []),
       parent_tool_use_id: null
     });
+    turnActive = true;
   } else if (cmd.cmd === "permission_response") {
-    const toolName = permMgr.resolve(cmd.id, cmd.approved, cmd.always, cmd.answers);
-    if (cmd.approved && toolName === "ExitPlanMode") {
+    const outcome = permMgr.resolve(cmd.id, cmd.approved, cmd.always, cmd.answers);
+    if (outcome?.appliedMode) {
+      currentPermissionMode = outcome.appliedMode;
+      emitPermissionModes();
+    } else if (cmd.approved && outcome?.toolName === "ExitPlanMode") {
       applyPermissionMode("default");
     }
   } else if (cmd.cmd === "interrupt") {

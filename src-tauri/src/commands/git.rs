@@ -269,20 +269,22 @@ pub async fn git_unstage_file(
 /// Checking HEAD (not the index) avoids false positives from ephemeral files
 /// that were staged by `git add -A` but never committed.
 #[tauri::command]
-pub fn git_has_file(
+pub async fn git_has_file(
     workspace_state: State<'_, WorkspaceState>,
     path: String,
 ) -> Result<bool, String> {
     let root = project_root_for_commands(&workspace_state);
-    // 1. Check disk
-    if root.join(&path).exists() {
-        return Ok(true);
-    }
-    // 2. Check HEAD commit (was the file ever committed?)
-    if git_run(&["cat-file", "-e", &format!("HEAD:{}", path)], &root).is_ok() {
-        return Ok(true);
-    }
-    Ok(false)
+    // git_run 会阻塞等子进程 + 抢全局 GIT_LOCK（超时上限 15s）——同步 command
+    // 跑在主线程上意味着窗口级卡死，必须和其他 git 命令一样走 blocking 线程。
+    git_run_blocking(move || {
+        // 1. Check disk
+        if root.join(&path).exists() {
+            return Ok(true);
+        }
+        // 2. Check HEAD commit (was the file ever committed?)
+        Ok(git_run(&["cat-file", "-e", &format!("HEAD:{}", path)], &root).is_ok())
+    })
+    .await
 }
 
 #[tauri::command]

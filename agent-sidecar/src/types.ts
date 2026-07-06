@@ -100,7 +100,23 @@ export interface ImageAttachment {
 
 // Rust → Sidecar（每行一个 JSON，从 stdin 读取）
 export type SidecarCommand =
-  | { cmd: "send"; prompt: string; images?: ImageAttachment[]; session_id?: string; cwd?: string; permission_mode?: string }
+  | {
+      cmd: "send";
+      prompt: string;
+      images?: ImageAttachment[];
+      session_id?: string;
+      cwd?: string;
+      permission_mode?: string;
+      // Rust 显式判定"这次 spawn/resume 是因为供应商连接身份真的漂移了"才带 true——
+      // 单纯"这个会话当前没有存活进程"（新会话/重开历史对话）不会带这个字段。
+      // sidecar 只在收到它时才在下一次建 query() 时 forkSession，避免把每一次
+      // 中断/错误触发的内部重连都误判成供应商切换（见 index.ts pendingFork 用法）。
+      provider_switched?: boolean;
+      // 忙碌时的"插队"标记：sidecar 不会立刻打断当前这一轮，而是记下来，等当前
+      // 正在执行的工具调用跑完（安全边界）才真正 interrupt，避免腰斩一次进行中的
+      // 工具执行（见 jumpQueue.ts / toolLifecycle.ts）。
+      jump_queue?: boolean;
+    }
   // answers：仅 AskUserQuestion 场景使用（问题文本 → 选中答案/自由文本的不透明映射），
   // 其他工具的批准永远不带这个字段。核心协议不解释内容，只搬运。
   | { cmd: "permission_response"; id: string; approved: boolean; always?: boolean; answers?: Record<string, string> }

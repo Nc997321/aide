@@ -127,6 +127,9 @@ pub struct ChangeRoundData {
     pub files: Vec<ChangeFileData>,
     #[serde(default)]
     pub rewind_to: Option<u64>,
+    /// 本轮对应的用户提问（变更面板轮次标题用）；旧数据无此字段，默认空。
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 
 // ── WorkspaceState ──

@@ -17,6 +17,10 @@ interface QuestionSpec {
 
 const props = defineProps<{
   permission: PermissionRequest | null;
+  /** 挂起的权限请求总数（含当前显示的这条）。模型并行调用多个工具时会同时
+   *  发来多条请求，弹窗按队列逐条确认——大于 1 时提示用户后面还排着几条，
+   *  避免"确认完一条又弹一条"显得像 bug。 */
+  queueCount?: number;
 }>();
 
 const emit = defineEmits<{
@@ -111,16 +115,61 @@ const inputSummary = computed(() => {
   if (props.permission.name === "WebFetch") return `URL：${input?.url ?? ""}`;
   return JSON.stringify(input, null, 2).slice(0, 200);
 });
+
+// ── 可拖动浮层 ─────────────────────────────────────────────────────────────
+// 不再用全屏遮罩挡住对话：弹窗是一个浮在右侧偏上的面板，标题栏即拖拽把手，
+// 用户可随时把它挪开继续看/滚对话内容，避免"看不到上下文就盲目确认"。
+const dragOffset = reactive({ x: 0, y: 0 });
+let dragStart: { mx: number; my: number; ox: number; oy: number } | null = null;
+
+function onDragStart(e: MouseEvent) {
+  dragStart = { mx: e.clientX, my: e.clientY, ox: dragOffset.x, oy: dragOffset.y };
+  window.addEventListener("mousemove", onDragMove);
+  window.addEventListener("mouseup", onDragEnd);
+  e.preventDefault();
+}
+function onDragMove(e: MouseEvent) {
+  if (!dragStart) return;
+  dragOffset.x = dragStart.ox + (e.clientX - dragStart.mx);
+  dragOffset.y = dragStart.oy + (e.clientY - dragStart.my);
+}
+function onDragEnd() {
+  dragStart = null;
+  window.removeEventListener("mousemove", onDragMove);
+  window.removeEventListener("mouseup", onDragEnd);
+}
+
+// 每个新权限请求都复位到默认位置——否则上一次拖到边角后，新弹窗会沿用旧偏移
+// 甚至跑到可视区外找不到。
+watch(
+  () => props.permission?.id,
+  () => {
+    dragOffset.x = 0;
+    dragOffset.y = 0;
+  },
+);
+
+const dialogStyle = computed(() => ({
+  transform: `translateX(-50%) translate(${dragOffset.x}px, ${dragOffset.y}px)`,
+}));
 </script>
 
 <template>
   <Teleport to="body">
     <div v-if="permission" class="perm-overlay">
-      <div class="perm-dialog" :class="{ 'perm-dialog--plan': isPlanApproval, 'perm-dialog--question': isQuestion }">
-        <h3 class="perm-title">
-          <template v-if="isPlanApproval">批准执行计划？</template>
-          <template v-else-if="isQuestion">Claude 有问题要问你</template>
-          <template v-else>允许工具调用：<span class="perm-tool-name">{{ permission.name }}</span></template>
+      <div
+        class="perm-dialog"
+        :class="{ 'perm-dialog--plan': isPlanApproval, 'perm-dialog--question': isQuestion }"
+        :style="dialogStyle"
+      >
+        <h3 class="perm-title perm-drag-handle" @mousedown="onDragStart">
+          <svg class="perm-drag-grip" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>
+          <span class="perm-title-text">
+            <template v-if="isPlanApproval">批准执行计划？</template>
+            <template v-else-if="isQuestion">Claude 有问题要问你</template>
+            <template v-else>允许工具调用：<span class="perm-tool-name">{{ permission.name }}</span></template>
+          </span>
+          <span v-if="(queueCount ?? 0) > 1" class="perm-queue-badge">还有 {{ (queueCount ?? 0) - 1 }} 条待确认</span>
         </h3>
         <!-- 标注这次请求是主线程还是某个子代理发起的——没有它，子代理跑到一半突然
              弹出权限框，用户完全不知道是谁在问（子代理没有独立窗口，只有一张可折叠
@@ -201,18 +250,24 @@ const inputSummary = computed(() => {
 </template>
 
 <style scoped>
+/* 不再铺满全屏遮罩——容器本身不吃点击（pointer-events:none），对话内容保持
+ * 可见且可滚动；只有弹窗本体接收交互。这样用户能一边看上下文一边确认。 */
 .perm-overlay {
   position: fixed;
   inset: 0;
   z-index: 9000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--aide-bg-overlay);
+  pointer-events: none;
 }
 
 .perm-dialog {
+  pointer-events: auto;
+  position: fixed;
+  top: 12vh;
+  left: 50%;
+  /* transform 由 :style 绑定（居中 -50% + 拖拽偏移）合成 */
   width: 480px;
+  max-height: 80vh;
+  overflow-y: auto;
   border-radius: var(--aide-radius-md);
   background: var(--aide-bg-raised);
   border: 1px solid var(--aide-border);
@@ -221,10 +276,39 @@ const inputSummary = computed(() => {
 }
 
 .perm-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
   font-weight: 600;
   color: var(--aide-text-primary);
   margin-bottom: 8px;
+}
+
+.perm-drag-handle {
+  cursor: move;
+  user-select: none;
+}
+
+.perm-drag-grip {
+  flex-shrink: 0;
+  color: var(--aide-text-muted);
+}
+
+.perm-title-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.perm-queue-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--aide-text-muted);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  padding: 1px 6px;
+  white-space: nowrap;
 }
 
 .perm-tool-name {

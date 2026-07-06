@@ -106,7 +106,7 @@ aide/
 │   ├── api/                    # customization / marketplace / git API
 │   └── menus/contextMenus.ts   # 右键菜单配置（工厂函数）
 ├── agent-sidecar/              # Node.js sidecar：Claude Agent SDK 调用（Claude 专属逻辑只能在这）
-│   └── src/                    # index.ts（stdin/stdout JSON lines）/ mapper / permissions / generator
+│   └── src/                    # index.ts（stdin/stdout JSON lines）/ mapper / permissions / generator / deltaCoalescer
 ├── src-tauri/src/
 │   ├── lib.rs                  # Tauri Builder：注册 state + commands
 │   ├── sidecar.rs              # sidecar 进程管理（spawn/send/kill/rename + 事件转发）
@@ -122,6 +122,8 @@ aide/
 
 ## 关键约定
 
+- **sidecar 事件出口必须过 delta 合并层**：所有 stdout 事件统一经 `deltaCoalescer.ts` 输出——逐字 `*_delta` 在 40ms 窗口内按 key 拼接（几百条/秒 → ≤25 条/秒），非增量事件先冲刷缓冲再透传保序。未来新 provider 的 sidecar 同样要接这一层，禁止绕过它直写 stdout（逐字事件洪峰 × 前端每增量全量重渲染曾导致整窗 30s+ 卡死）。前端配套约定：已定稿文本块走 `renderMarkdown()` 缓存（`utils/markdown.ts`），流式尾块才直接 `marked.parse`；滚动置底必须 rAF 节流（读 `scrollHeight` 强制全容器布局）。
+- **同步 command 禁止重 IO**：Tauri 非 async command 跑在主线程上，遍历/大文件读取/等子进程都会把窗口卡成「未响应」——这类命令一律 `async fn` + `spawn_blocking`（现有示例：`grep_symbol`、`find_files_by_name`、`git_has_file`、`load_messages`、`list_sessions`、`session_last_event`）。
 - **非 scoped 样式**：xterm 动态 DOM（`WorkbenchTerminal.vue`、`BashOutputBlock.vue`）的样式必须放非 scoped `<style>` 块，否则 Vite scoped hash 导致样式不生效。
 - **通知不依赖插件**：直接用 `notify-rust`（`notify_send` 命令），强制 `app_id("com.aide.app")`，绕过 tauri-plugin-notification dev 模式跳过 app_id 的 bug。
 - **会话 ID 生命周期（延迟创建）**：点"新建会话"只清空 `activeSessionId`，打开空白面板，不落盘、不进侧栏。首次发消息时若无 session id，`useChatSession.ts` 现场生成一个纯内存临时 key（`crypto.randomUUID()`，记入 `pendingSids`），不落盘直接调 `send_message`。SDK 首次 `session_init` 带回真实 id 后才是"创建"真正发生的时刻：Rust `rename_sidecar_session` 原地改 sidecar 进程注册表（内存操作，无 IO），前端 `finalizeSession` 原地搬迁 `stores`/`sessionState`，随后 `onSessionCreated` 回调里 App.vue 才第一次调 `create_session(id, name)` 写元数据、`addSession` 加侧栏、`recordCurrentSession` 记最近访问。此后 aide ID 永远等于 SDK session ID，不再改名。历史会话续接：resume 直接用 `sid` 本身（`isPendingSession(sid) ? undefined : sid`），无需任何映射表。若发消息后从未等到 `session_init`（进程崩溃等），什么都不落盘，不留孤儿文件。

@@ -142,3 +142,120 @@ describe("PermissionManager — fromSubagent（标注这次请求来自哪个子
     expect((events[0] as any).fromSubagent).toEqual({ id: "a1", agentName: "子代理" });
   });
 });
+
+/** 搭一个带事件收集的 manager + 回调，下面几组测试共用。 */
+function setup() {
+  const events: ChatEvent[] = [];
+  const mgr = new PermissionManager();
+  const callback = mgr.makeCallback((e) => events.push(e));
+  const requestIds = () =>
+    events.filter((e) => e.type === "permission_request").map((e) => (e as any).id as string);
+  const cancelledIds = () =>
+    events.filter((e) => e.type === "permission_cancelled").map((e) => (e as any).id as string);
+  return { events, mgr, callback, requestIds, cancelledIds };
+}
+
+// 回归：用户反馈"权限按钮永远不会自动变"——CLI 会根据回答（如「总是允许」携带的
+// setMode 建议）自动切权限模式，但 sidecar 此前不知道模式变了、也不广播。resolve
+// 现在返回 appliedMode，入口层据此对齐 currentPermissionMode 并广播给前端下拉。
+describe("PermissionManager — resolve 返回 ResolveOutcome（模式联动 + 队列连带放行）", () => {
+  it("信号已中止时直接拒绝，不发 permission_request、不挂 Promise（永久悬置回归）", async () => {
+    const { callback, events } = setup();
+    const ac = new AbortController();
+    ac.abort();
+    const result = await callback("Read", { file_path: "a.ts" }, { signal: ac.signal });
+    expect(result).toMatchObject({ behavior: "deny" });
+    expect(events).toEqual([]);
+  });
+
+  it("普通批准：返回工具名、无 appliedMode", async () => {
+    const { mgr, callback, requestIds } = setup();
+    const p = callback("Bash", { command: "ls" }, {});
+    const outcome = mgr.resolve(requestIds()[0], true);
+    expect(outcome).toEqual({ toolName: "Bash" });
+    expect(((await p) as any).behavior).toBe("allow");
+  });
+
+  it("总是允许携带 setMode 建议：返回 appliedMode，供入口层广播（模式按钮不自动变的根治回归）", async () => {
+    const { mgr, callback, requestIds } = setup();
+    const p = callback("Edit", { file_path: "a.ts" }, {
+      suggestions: [{ type: "setMode", mode: "acceptEdits", destination: "session" }],
+    });
+    const outcome = mgr.resolve(requestIds()[0], true, true);
+    expect(outcome).toEqual({ toolName: "Edit", appliedMode: "acceptEdits" });
+    const result = (await p) as any;
+    expect(result.behavior).toBe("allow");
+    expect(result.updatedPermissions).toEqual([
+      { type: "setMode", mode: "acceptEdits", destination: "session" },
+    ]);
+  });
+
+  it("总是允许落盘裸工具名规则：连带放行队列中同名工具，异名工具保持挂起", async () => {
+    const { mgr, callback, requestIds, cancelledIds } = setup();
+    // 无 suggestions → resolve 时落盘裸 {toolName:"Read"} allow 规则，定义上覆盖一切 Read
+    const p1 = callback("Read", { file_path: "a.java" }, {});
+    const p2 = callback("Read", { file_path: "b.java" }, {});
+    let bashSettled = false;
+    void callback("Bash", { command: "ls" }, {}).then(() => { bashSettled = true; });
+
+    const [id1, id2] = requestIds();
+    mgr.resolve(id1, true, true);
+
+    // 同名 Read 被连带放行（不重复携带 updatedPermissions），并通知前端出队
+    expect(((await p1) as any).behavior).toBe("allow");
+    const r2 = (await p2) as any;
+    expect(r2.behavior).toBe("allow");
+    expect(r2.updatedPermissions).toBeUndefined();
+    expect(cancelledIds()).toEqual([id2]);
+    // Bash 与新规则无关，必须仍等用户确认
+    await Promise.resolve();
+    expect(bashSettled).toBe(false);
+  });
+
+  it("总是允许切到 bypassPermissions：连带放行队列中全部挂起请求", async () => {
+    const { mgr, callback, requestIds, cancelledIds } = setup();
+    const p1 = callback("Edit", { file_path: "a.ts" }, {
+      suggestions: [{ type: "setMode", mode: "bypassPermissions", destination: "session" }],
+    });
+    const p2 = callback("Bash", { command: "ls" }, {});
+    const [id1, id2] = requestIds();
+
+    const outcome = mgr.resolve(id1, true, true);
+    expect(outcome?.appliedMode).toBe("bypassPermissions");
+    expect(((await p1) as any).behavior).toBe("allow");
+    expect(((await p2) as any).behavior).toBe("allow");
+    expect(cancelledIds()).toEqual([id2]);
+  });
+
+  it("带 ruleContent 的规则（按目录/前缀限定）不连带放行——匹配语义在 CLI 内部，宁可多确认一次", async () => {
+    const { mgr, callback, requestIds, cancelledIds } = setup();
+    const p1 = callback("Read", { file_path: "C:/proj/a.java" }, {
+      suggestions: [{
+        type: "addRules",
+        rules: [{ toolName: "Read", ruleContent: "C:/proj/**" }],
+        behavior: "allow",
+        destination: "projectSettings",
+      }],
+    });
+    let secondSettled = false;
+    void callback("Read", { file_path: "D:/other/b.java" }, {}).then(() => { secondSettled = true; });
+
+    mgr.resolve(requestIds()[0], true, true);
+    expect(((await p1) as any).behavior).toBe("allow");
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+    expect(cancelledIds()).toEqual([]);
+  });
+
+  it("拒绝不触发连带放行，其余请求原样挂起", async () => {
+    const { mgr, callback, requestIds } = setup();
+    const p1 = callback("Read", { file_path: "a.java" }, {});
+    let secondSettled = false;
+    void callback("Read", { file_path: "b.java" }, {}).then(() => { secondSettled = true; });
+
+    mgr.resolve(requestIds()[0], false);
+    expect(((await p1) as any).behavior).toBe("deny");
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+  });
+});

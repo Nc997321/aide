@@ -5,20 +5,30 @@ use tauri::State;
 
 use super::{Session, ChatMessageItem, HistoryBlock, LastEventInfo, ChangeRoundData, WorkspaceState, project_root_for_commands, find_session_jsonl_globally, claude_projects_dir, claude_sessions_dir, our_sessions_dir};
 
+/// 扫描目录 + 每个会话读一次 .jsonl 取末条消息，工作区会话多时是实打实的重 IO；
+/// 同步 command 跑在主线程上会卡窗口，这里主线程只取工作区快照，扫描进 blocking 线程。
 #[tauri::command]
-pub fn list_sessions(
+pub async fn list_sessions(
     workspace_state: State<'_, WorkspaceState>,
 ) -> Result<Vec<Session>, String> {
-    let mut sessions: Vec<Session> = Vec::new();
-
-    let encoded = if let Ok(key_guard) = workspace_state.key.lock() {
-        match key_guard.as_ref() {
+    let encoded = match workspace_state.key.lock() {
+        Ok(guard) => match guard.as_ref() {
             Some(key) => key.clone(),
-            None => return Ok(sessions),
-        }
-    } else {
-        return Ok(sessions);
+            None => return Ok(Vec::new()),
+        },
+        Err(_) => return Ok(Vec::new()),
     };
+    let root = project_root_for_commands(&workspace_state);
+    tokio::task::spawn_blocking(move || list_sessions_blocking(encoded, root))
+        .await
+        .map_err(|e| format!("list_sessions task panicked: {}", e))?
+}
+
+fn list_sessions_blocking(
+    encoded: String,
+    root: std::path::PathBuf,
+) -> Result<Vec<Session>, String> {
+    let mut sessions: Vec<Session> = Vec::new();
     let proj_dir = claude_projects_dir().join(&encoded);
 
     // Scan .jsonl files if the project directory exists (created after first
@@ -72,7 +82,6 @@ pub fn list_sessions(
     // Second pass: scan ~/.claude/sessions/ for sessions that have metadata
     // but no .jsonl file yet (Claude started, no conversation happened).
     // These sessions won't appear in the project dir scan above.
-    let root = project_root_for_commands(&workspace_state);
     let root_normalized = normalize_path_for_compare(&root.to_string_lossy());
     let sessions_dir = claude_sessions_dir();
     if sessions_dir.exists() {
@@ -221,11 +230,19 @@ pub fn rename_session(id: String, name: String) -> Result<(), String> {
         .map_err(|e| format!("Failed to write: {}", e))
 }
 
+/// transcript 会随会话增长到多 MB，整读 + 逐行解析必须离开主线程（切会话时触发，
+/// 同步跑等于切一次长会话卡一次窗口）。
 #[tauri::command]
-pub fn load_messages(
+pub async fn load_messages(
     _workspace_state: State<'_, WorkspaceState>,
     session_id: String,
 ) -> Result<Vec<ChatMessageItem>, String> {
+    tokio::task::spawn_blocking(move || load_messages_blocking(session_id))
+        .await
+        .map_err(|e| format!("load_messages task panicked: {}", e))?
+}
+
+fn load_messages_blocking(session_id: String) -> Result<Vec<ChatMessageItem>, String> {
     let Some(jsonl_path) = find_session_jsonl_globally(&session_id).into_iter().next() else {
         return Ok(Vec::new());
     };
@@ -385,11 +402,18 @@ fn normalize_path_for_compare(p: &str) -> String {
         .to_lowercase()
 }
 
+/// 同 load_messages：整读 .jsonl 再反向扫描，转 blocking 线程。
 #[tauri::command]
-pub fn session_last_event(
+pub async fn session_last_event(
     _workspace_state: State<'_, WorkspaceState>,
     session_id: String,
 ) -> Result<LastEventInfo, String> {
+    tokio::task::spawn_blocking(move || session_last_event_blocking(session_id))
+        .await
+        .map_err(|e| format!("session_last_event task panicked: {}", e))?
+}
+
+fn session_last_event_blocking(session_id: String) -> Result<LastEventInfo, String> {
     let Some(jsonl_path) = find_session_jsonl_globally(&session_id).into_iter().next() else {
         return Ok(LastEventInfo { event_type: None, stop_reason: None, timestamp: None });
     };

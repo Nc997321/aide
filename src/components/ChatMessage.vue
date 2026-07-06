@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ChatMessage } from "@/types/chat";
-import { marked } from "@/utils/markdown";
+import { marked, renderMarkdown } from "@/utils/markdown";
 import ToolCallBlock from "./ToolCallBlock.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
 import TurnUsageBadge from "./TurnUsageBadge.vue";
-import { useFileViewer } from "@/composables/useFileViewer";
-import { parseFileLink, resolveFileLinkPath } from "@/utils/fileLink";
+import { useFileResolver } from "@/composables/useFileResolver";
+import { parseFileLink } from "@/utils/fileLink";
 
 const props = defineProps<{
   message: ChatMessage;
@@ -14,21 +14,25 @@ const props = defineProps<{
 }>();
 
 const isUser = computed(() => props.message.role === "user");
-const { open, openAndScrollTo } = useFileViewer();
+const { openResolved } = useFileResolver();
 
 // 只响应渲染期已判定为文件的 code（见 utils/markdown.ts codespan 渲染器 +
-// utils/fileLink.ts 判定规则），点击层不再自己做路径识别。
+// utils/fileLink.ts 判定规则），点击层不再自己做路径识别。openResolved 会先探测
+// 路径是否存在，不存在时在工作区内搜索（带加载态，多命中弹选择框）。
+/** 文本块 → HTML：已定稿的块走 renderMarkdown 缓存（重渲染零解析成本）；
+ *  流式中的最后一块每个增量都在变，进缓存只会塞满垃圾键——直接解析。 */
+function blockHtml(text: string, index: number): string {
+  const streamingTail =
+    !!props.message.streaming && index === props.message.blocks.length - 1;
+  return streamingTail ? (marked.parse(text) as string) : renderMarkdown(text);
+}
+
 function handleTextClick(e: MouseEvent) {
   const codeEl = (e.target as HTMLElement).closest("code.aide-file-link");
   if (!codeEl) return;
   const link = parseFileLink(codeEl.textContent?.trim() ?? "");
   if (!link) return;
-  const fullPath = resolveFileLinkPath(link.path, props.workspacePath);
-  if (link.line !== undefined) {
-    openAndScrollTo(fullPath, link.line);
-  } else {
-    open(fullPath);
-  }
+  void openResolved(link.path, props.workspacePath, link.line);
 }
 </script>
 
@@ -39,7 +43,7 @@ function handleTextClick(e: MouseEvent) {
         <div
           v-if="block.type === 'text'"
           class="msg-text"
-          v-html="marked.parse(block.text)"
+          v-html="blockHtml(block.text, i)"
           @click="handleTextClick"
         />
         <ToolCallBlock

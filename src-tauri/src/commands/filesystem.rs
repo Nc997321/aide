@@ -282,8 +282,16 @@ fn code_family(ext: &str) -> Option<&'static [&'static str]> {
     }
 }
 
+/// 同步（非 async）command 在 Tauri 里跑在主线程上——全工作区遍历这种重 IO
+/// 会把窗口整个卡成"未响应"。这里只做线程搬运，真正的遍历在 blocking 线程池。
 #[tauri::command]
-pub fn grep_symbol(word: String, cwd: String, source_ext: Option<String>) -> Result<Vec<GrepMatch>, String> {
+pub async fn grep_symbol(word: String, cwd: String, source_ext: Option<String>) -> Result<Vec<GrepMatch>, String> {
+    tokio::task::spawn_blocking(move || grep_symbol_blocking(word, cwd, source_ext))
+        .await
+        .map_err(|e| format!("grep_symbol task panicked: {}", e))?
+}
+
+fn grep_symbol_blocking(word: String, cwd: String, source_ext: Option<String>) -> Result<Vec<GrepMatch>, String> {
     if word.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -440,6 +448,93 @@ pub fn grep_symbol(word: String, cwd: String, source_ext: Option<String>) -> Res
 #[tauri::command]
 pub fn file_exists(path: String) -> bool {
     std::path::Path::new(&path).exists()
+}
+
+/// 按文件名（或带目录段的路径片段）在工作区内搜索匹配文件，返回绝对路径列表。
+///
+/// 聊天里的文件链接常常只给出部分路径（相对某个子目录、或仅文件名），直接拼到
+/// 工作区根下打不开。这里遵守 .gitignore 遍历，先收集 basename 完全相等的结果
+/// （若查询含目录段，rel 路径以查询结尾的排在最前），再补 basename 包含查询的
+/// 模糊结果，供前端在 0/1/多 命中时分别处理（多命中弹选择框）。
+/// 同 grep_symbol：遍历必须离开主线程（聊天里点一个文件链接就会触发一次搜索，
+/// 大仓库上同步跑等于点一下卡死一次）。
+#[tauri::command]
+pub async fn find_files_by_name(query: String, cwd: String, limit: Option<usize>) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || find_files_by_name_blocking(query, cwd, limit))
+        .await
+        .map_err(|e| format!("find_files_by_name task panicked: {}", e))?
+}
+
+fn find_files_by_name_blocking(query: String, cwd: String, limit: Option<usize>) -> Result<Vec<String>, String> {
+    let q = query.trim().replace('\\', "/");
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let q_lower = q.to_lowercase();
+    let q_base = q_lower.rsplit('/').next().unwrap_or(&q_lower).to_string();
+    let has_dir = q_lower.contains('/');
+    let cap = limit.unwrap_or(50).min(500);
+
+    let walker = WalkBuilder::new(&cwd)
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .max_depth(Some(20))
+        .build();
+
+    // exact_suffix: basename 相等且 rel 路径以查询结尾（最强匹配）
+    // exact: 仅 basename 相等
+    // partial: basename 包含查询片段
+    let mut exact_suffix: Vec<String> = Vec::new();
+    let mut exact: Vec<String> = Vec::new();
+    let mut partial: Vec<String> = Vec::new();
+
+    for entry in walker {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let base = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        if base.is_empty() {
+            continue;
+        }
+        let full = path.to_string_lossy().to_string();
+
+        if base == q_base {
+            if has_dir {
+                let rel = path
+                    .strip_prefix(&cwd)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .replace('\\', "/")
+                    .to_lowercase();
+                if rel.ends_with(&q_lower) {
+                    exact_suffix.push(full);
+                } else {
+                    exact.push(full);
+                }
+            } else {
+                exact.push(full);
+            }
+        } else if base.contains(&q_base) {
+            partial.push(full);
+        }
+
+        if exact_suffix.len() + exact.len() >= cap {
+            break;
+        }
+    }
+
+    let mut results = exact_suffix;
+    results.extend(exact);
+    results.extend(partial);
+    results.truncate(cap);
+    Ok(results)
 }
 
 #[cfg(test)]

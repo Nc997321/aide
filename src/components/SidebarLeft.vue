@@ -206,16 +206,32 @@ async function switchWorkspace(ws: WorkspaceInfo) {
   expandedWorkspaces.value.add(ws.key);
   if (ws.key === activeWorkspace.value) return;
 
+  const ok = await activateWorkspace(ws);
+  if (!ok) expandedWorkspaces.value.delete(ws.key);
+}
+
+/** 真正把某个工作区设为活动：setWorkspace + 更新本地状态 + 广播 workspace-changed。
+ *  switchWorkspace（侧栏点头）与 switchToWorkspaceByKey（文件树切换器）共用。 */
+async function activateWorkspace(ws: WorkspaceInfo): Promise<boolean> {
+  if (ws.missing) return false;
   try {
     await api.setWorkspace(ws.key, ws.name);
   } catch (_e) {
-    expandedWorkspaces.value.delete(ws.key);
-    return;
+    return false;
   }
   activeWorkspace.value = ws.key;
+  expandedWorkspaces.value.add(ws.key);
   emit("workspace-changed", ws.name);
   await setCurrentWs(ws.key, ws.name);
   await loadSessions();
+  return true;
+}
+
+/** 供文件树 path-bar 切换器调用：按 key 激活工作区（已是活动则忽略）。 */
+async function switchToWorkspaceByKey(wsKey: string) {
+  if (wsKey === activeWorkspace.value) return;
+  const ws = workspaces.value.find((w) => w.key === wsKey);
+  if (ws) await activateWorkspace(ws);
 }
 
 async function renameSession(id: string, name: string) {
@@ -291,7 +307,7 @@ function addSession(session: Session) {
   }
 }
 
-defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace, sessionsByWorkspace });
+defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace, switchToWorkspaceByKey, sessionsByWorkspace });
 </script>
 
 <template>

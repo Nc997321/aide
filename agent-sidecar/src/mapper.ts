@@ -2,6 +2,7 @@ import type { MessageParam } from "@anthropic-ai/sdk/resources";
 import type { ChatEvent, ImageAttachment, RateLimitWindow, TurnUsage } from "./types.js";
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
+import { ToolLifecycleTracker } from "./toolLifecycle.js";
 
 /**
  * Build a Claude-SDK MessageParam from a prompt + optional image attachments.
@@ -32,6 +33,28 @@ export function buildUserMessage(
   return { role: "user", content: blocks as any };
 }
 
+/** result.errors 里用户可读的条目——`[ede_diagnostic]` 开头的是 CLI 塞的内部
+ *  诊断面包屑（中断/截断时描述转录状态），CLI 官方 UI 同样按这个前缀过滤，
+ *  不是给用户看的错误。 */
+function meaningfulResultErrors(msg: any): unknown[] {
+  return Array.isArray(msg.errors)
+    ? (msg.errors as unknown[]).filter(Boolean).filter((e) => !String(e).startsWith("[ede_diagnostic]"))
+    : [];
+}
+
+/**
+ * 主动打断（用户点"中断"、插队截断）产生的 result：subtype 固定是
+ * error_during_execution，但没有任何用户可读的错误信息（errors 里最多只有
+ * [ede_diagnostic] 内部面包屑）。这不是错误，是打断的正常产物——路由成
+ * message_stop 而不是错误气泡，否则每次中断都弹一条红色 Error。
+ */
+export function isBenignAbortResult(msg: any): boolean {
+  if (msg.subtype !== "error_during_execution") return false;
+  if (typeof msg.api_error_status === "number") return false;
+  if (typeof msg.result === "string" && msg.result.trim()) return false;
+  return meaningfulResultErrors(msg).length === 0;
+}
+
 /**
  * 把一条"错误 result"翻译成给用户看的中文说明。
  *
@@ -52,7 +75,7 @@ export function describeResultError(msg: any): string {
     parts.push(`接口返回错误（HTTP ${status}）`);
   }
 
-  const errs = Array.isArray(msg.errors) ? (msg.errors as unknown[]).filter(Boolean) : [];
+  const errs = meaningfulResultErrors(msg);
   if (errs.length > 0) {
     parts.push(errs.map((e) => String(e)).join("；"));
   } else if (typeof msg.result === "string" && msg.result.trim()) {
@@ -211,6 +234,7 @@ export function mapSdkMessage(
   emit: (e: ChatEvent) => void,
   tasks: TaskTracker,
   subagents: SubagentTracker,
+  tools: ToolLifecycleTracker,
 ) {
   if (msg.parent_tool_use_id) {
     emitSubagentProgress(msg, emit, subagents);
@@ -258,6 +282,9 @@ export function mapSdkMessage(
         // index.ts 无条件开启），整块再发一遍会导致前端重复渲染——只跳过。
         continue;
       } else if (block.type === "tool_use") {
+        // 插队安全边界判断的账本：不管是普通工具、Task/Agent 子代理还是内置
+        // Task* 工具，从主线程视角都是"一步指令，结果没回来之前不能打断"。
+        tools.onToolUse(block.id);
         if (SubagentTracker.isSubagentTool(block.name)) {
           const { agentName, description } = subagents.handleToolUse(block.id, block.input);
           emit({ type: "subagent_start", id: block.id, agentName, description });
@@ -276,6 +303,7 @@ export function mapSdkMessage(
   if (msg.type === "user" && msg.message?.content) {
     for (const block of msg.message.content) {
       if (block.type === "tool_result") {
+        tools.onToolResult(block.tool_use_id);
         const content = Array.isArray(block.content)
           ? block.content.map((c: any) => c.text ?? "").join("")
           : String(block.content ?? "");
@@ -300,6 +328,17 @@ export function mapSdkMessage(
     // 压成 message_stop，错误细节全被吞掉 → 前端静默落 waiting，用户"发消息没反应"。
     // 现在路由到 error 通道（fatal:false，进程仍存活可重试），前端会渲染错误气泡。
     if (msg.is_error === true || msg.subtype !== "success") {
+      // 主动打断的 result 不是错误——压成 message_stop 正常收轮，
+      // 不弹红色错误气泡（见 isBenignAbortResult 注释）。
+      if (isBenignAbortResult(msg)) {
+        emit({
+          type: "message_stop",
+          stop_reason: "interrupted",
+          total_cost_usd: msg.total_cost_usd ?? null,
+          usage: null,
+        });
+        return;
+      }
       emit({ type: "error", message: describeResultError(msg), fatal: false });
       return;
     }

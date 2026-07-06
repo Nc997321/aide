@@ -149,6 +149,7 @@ pub fn run() {
             commands::filesystem::detect_run_command,
             commands::filesystem::grep_symbol,
             commands::filesystem::file_exists,
+            commands::filesystem::find_files_by_name,
             commands::filesystem::copy_file,
             commands::filesystem::move_file,
             commands::session::list_sessions,

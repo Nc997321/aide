@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useConversationChanges } from "../composables/useConversationChanges";
+import type { ChangeRound } from "../composables/useConversationChanges";
 import { useFileViewer } from "../composables/useFileViewer";
 import { api } from "../api";
 
@@ -8,6 +9,20 @@ const props = defineProps<{ sessionId: string }>();
 
 const { rounds, revertRound, revertSingleFile } = useConversationChanges(() => props.sessionId);
 const fileViewer = useFileViewer();
+
+// 连续无变更轮次 > 2 时，中间折叠成一行省略号，点击可展开
+const NOCHANGE_COLLAPSE_THRESHOLD = 2;
+
+type RenderItem =
+  | { kind: "round"; round: ChangeRound }
+  | { kind: "collapsed"; key: string; hiddenCount: number };
+
+const expandedGroups = ref<Set<string>>(new Set());
+
+function expandGroup(key: string) {
+  expandedGroups.value.add(key);
+  expandedGroups.value = new Set(expandedGroups.value);
+}
 
 const projectRoot = ref("");
 
@@ -33,6 +48,33 @@ const totalFiles = computed(() => {
 });
 
 const displayedRounds = computed(() => [...rounds.value].reverse());
+
+const renderItems = computed<RenderItem[]>(() => {
+  const list = displayedRounds.value;
+  const items: RenderItem[] = [];
+  let i = 0;
+  while (i < list.length) {
+    if (list[i].files.length > 0) {
+      items.push({ kind: "round", round: list[i] });
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < list.length && list[j].files.length === 0) j++;
+    const group = list.slice(i, j);
+    const groupKey = String(group[0].index);
+    if (group.length > NOCHANGE_COLLAPSE_THRESHOLD && !expandedGroups.value.has(groupKey)) {
+      const hidden = group.slice(1, -1);
+      items.push({ kind: "round", round: group[0] });
+      items.push({ kind: "collapsed", key: groupKey, hiddenCount: hidden.length });
+      items.push({ kind: "round", round: group[group.length - 1] });
+    } else {
+      for (const r of group) items.push({ kind: "round", round: r });
+    }
+    i = j;
+  }
+  return items;
+});
 </script>
 
 <template>
@@ -48,38 +90,51 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
         <div class="changelog-empty">暂无变更记录</div>
       </template>
       <template v-else>
-        <div v-for="round in displayedRounds" :key="round.index" class="changelog-round">
-          <div class="changelog-round-header">
-            <span class="changelog-round-label">轮 {{ round.index }}</span>
-            <span class="changelog-round-time">{{ round.time }}</span>
-            <button
-              v-if="round.files.length > 0"
-              class="changelog-round-revert"
-              v-tooltip="'撤回本轮'"
-              @click="revertRound(round)"
-            ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button>
-          </div>
-          <div v-if="round.files.length === 0" class="changelog-nochange">无变更</div>
+        <template v-for="item in renderItems" :key="item.kind === 'round' ? `r-${item.round.index}` : `c-${item.key}`">
           <div
-            v-for="f in round.files"
-            :key="f.path"
-            class="changelog-file"
-            @click="openFile(resolvePath(f.path))"
-          >
-            <span class="changelog-file-status" :class="f.status === 'A' ? 'status-A' : 'status-M'">{{ f.status || 'M' }}</span>
-            <span class="changelog-file-path" v-tooltip="f.path">{{ f.path }}</span>
-            <span v-if="f.additions > 0 || f.deletions > 0" class="changelog-file-stats">
-              <span v-if="f.additions > 0" class="stat-add">+{{ f.additions }}</span>
-              <span v-if="f.additions > 0 && f.deletions > 0" class="stat-sep"> </span>
-              <span v-if="f.deletions > 0" class="stat-del">-{{ f.deletions }}</span>
-            </span>
-            <button
-              class="changelog-file-revert"
-              v-tooltip="'撤回此文件'"
-              @click.stop="revertSingleFile(round, f.path)"
-            ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button>
+            v-if="item.kind === 'collapsed'"
+            class="changelog-collapsed"
+            v-tooltip="`展开 ${item.hiddenCount} 轮无变更记录`"
+            @click="expandGroup(item.key)"
+          >⋯ {{ item.hiddenCount }} 轮无变更 ⋯</div>
+          <div v-else class="changelog-round">
+            <div class="changelog-round-header">
+              <span class="changelog-round-label">轮 {{ item.round.index }}</span>
+              <span
+                class="changelog-round-title"
+                :class="{ 'changelog-round-title--empty': !item.round.prompt }"
+                v-tooltip="item.round.prompt || undefined"
+              >{{ item.round.prompt || '（无提问记录）' }}</span>
+              <button
+                v-if="item.round.files.length > 0"
+                class="changelog-round-revert"
+                v-tooltip="'撤回本轮'"
+                @click="revertRound(item.round)"
+              ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button>
+            </div>
+            <div class="changelog-round-time">{{ item.round.time }}</div>
+            <div v-if="item.round.files.length === 0" class="changelog-nochange">无变更</div>
+            <div
+              v-for="f in item.round.files"
+              :key="f.path"
+              class="changelog-file"
+              @click="openFile(resolvePath(f.path))"
+            >
+              <span class="changelog-file-status" :class="f.status === 'A' ? 'status-A' : 'status-M'">{{ f.status || 'M' }}</span>
+              <span class="changelog-file-path" v-tooltip="f.path">{{ f.path }}</span>
+              <span v-if="f.additions > 0 || f.deletions > 0" class="changelog-file-stats">
+                <span v-if="f.additions > 0" class="stat-add">+{{ f.additions }}</span>
+                <span v-if="f.additions > 0 && f.deletions > 0" class="stat-sep"> </span>
+                <span v-if="f.deletions > 0" class="stat-del">-{{ f.deletions }}</span>
+              </span>
+              <button
+                class="changelog-file-revert"
+                v-tooltip="'撤回此文件'"
+                @click.stop="revertSingleFile(item.round, f.path)"
+              ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button>
+            </div>
           </div>
-        </div>
+        </template>
       </template>
     </div>
   </div>
@@ -162,13 +217,31 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
 }
 
 .changelog-round-label {
+  flex-shrink: 0;
   font-weight: 600;
   color: var(--aide-accent);
 }
 
-.changelog-round-time {
+.changelog-round-title {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--aide-text-secondary);
+}
+
+.changelog-round-title--empty {
   color: var(--aide-text-muted);
+  font-style: italic;
+}
+
+.changelog-round-time {
+  padding: 0 12px 4px;
+  font-size: 10px;
+  color: var(--aide-text-muted);
+  background: var(--aide-bg-deep);
 }
 
 .changelog-round-revert {
@@ -207,6 +280,20 @@ const displayedRounds = computed(() => [...rounds.value].reverse());
   font-size: 11px;
   color: var(--aide-text-muted);
   font-style: italic;
+}
+
+.changelog-collapsed {
+  padding: 4px 12px;
+  font-size: 10px;
+  color: var(--aide-text-muted);
+  text-align: center;
+  cursor: pointer;
+  border-bottom: 1px solid var(--aide-border-subtle);
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.changelog-collapsed:hover {
+  color: var(--aide-text-secondary);
+  background: var(--aide-surface-default);
 }
 
 .changelog-file-status {
