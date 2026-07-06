@@ -21,11 +21,12 @@ export interface ImageBlock {
   mediaType: string; // "image/png" | ...
 }
 
-/** 子代理内部的一步——只报工具名+入参（轻量摘要），不含子代理内部的文本/thinking。 */
-export interface SubagentStep {
-  toolName: string;
-  input: unknown;
-}
+/** 子代理内部时间线上的一项——按到达顺序混排文本/thinking 增量累积的段落，以及
+ *  一次完整的工具调用（工具调用没有"增量"概念，一次到位）。 */
+export type SubagentEntry =
+  | { type: "text"; text: string }
+  | { type: "thinking"; text: string }
+  | { type: "tool"; toolName: string; input: unknown };
 
 export interface SubagentBlock {
   type: "subagent";
@@ -34,8 +35,8 @@ export interface SubagentBlock {
   description: string;
   /** 子代理具体跑在哪个模型上——只在 sidecar 第一次坐实时才有值，之后不会变。 */
   model?: string;
-  /** 运行期间收到的步骤时间线，按到达顺序追加；用于展开态展示实时进度。 */
-  steps: SubagentStep[];
+  /** 运行期间收到的时间线，按到达顺序追加；用于展开态还原"子代理具体做了什么"。 */
+  entries: SubagentEntry[];
   result?: string;
   isError?: boolean;
   isPending: boolean;

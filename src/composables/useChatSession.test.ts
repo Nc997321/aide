@@ -349,7 +349,7 @@ describe("useChatSession subagent events", () => {
     for (const k of Object.keys(state)) removeSessionState(k);
   });
 
-  it("subagent_start 推入一个 pending 的 subagent 块，subagent_end 按 id 回填结果", async () => {
+  it("subagent_start 推入一个 pending 的 subagent 块，subagent_progress/subagent_end 按 id 更新", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);
     await flush();
@@ -368,7 +368,7 @@ describe("useChatSession subagent events", () => {
       agentName?: string;
       description?: string;
       model?: string;
-      steps: { toolName: string; input: unknown }[];
+      entries: { type: string; toolName?: string; input?: unknown; text?: string }[];
       isPending: boolean;
       result?: string;
       isError?: boolean;
@@ -377,7 +377,7 @@ describe("useChatSession subagent events", () => {
     let block = chat.messages.value
       .flatMap((m) => m.blocks)
       .find((b) => b.type === "subagent") as SubagentTestBlock | undefined;
-    expect(block).toMatchObject({ agentName: "general-purpose", description: "调研 XXX", isPending: true, steps: [] });
+    expect(block).toMatchObject({ agentName: "general-purpose", description: "调研 XXX", isPending: true, entries: [] });
     expect(block?.result).toBeUndefined();
 
     emit({
@@ -393,7 +393,7 @@ describe("useChatSession subagent events", () => {
     block = chat.messages.value
       .flatMap((m) => m.blocks)
       .find((b) => b.type === "subagent") as SubagentTestBlock | undefined;
-    expect(block?.steps).toEqual([{ toolName: "Read", input: { file_path: "x.ts" } }]);
+    expect(block?.entries).toEqual([{ type: "tool", toolName: "Read", input: { file_path: "x.ts" } }]);
     expect(block?.model).toBe("claude-sonnet-5-20260101");
 
     emit({
@@ -409,5 +409,32 @@ describe("useChatSession subagent events", () => {
       .flatMap((m) => m.blocks)
       .find((b) => b.type === "subagent") as SubagentTestBlock | undefined;
     expect(block).toMatchObject({ isPending: false, result: "调研结论：……", isError: false });
+  });
+
+  it("subagent_text_delta/subagent_thinking_delta 逐字累积，类型切换或穿插工具调用时另起一项", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("帮我调研一下 XXX");
+    emit({ type: "subagent_start", id: "a1", agentName: "general-purpose", description: "调研 XXX", session_id: "uuid-a" });
+
+    emit({ type: "subagent_text_delta", id: "a1", delta: "我", session_id: "uuid-a" });
+    emit({ type: "subagent_text_delta", id: "a1", delta: "先看看", session_id: "uuid-a" });
+    emit({ type: "subagent_thinking_delta", id: "a1", delta: "要不要先读 README", session_id: "uuid-a" });
+    emit({ type: "subagent_progress", id: "a1", toolName: "Read", input: { file_path: "README.md" }, session_id: "uuid-a" });
+    emit({ type: "subagent_text_delta", id: "a1", delta: "看完了", session_id: "uuid-a" });
+    await flush();
+
+    const block = chat.messages.value
+      .flatMap((m) => m.blocks)
+      .find((b) => b.type === "subagent") as
+      | { entries: { type: string; text?: string; toolName?: string; input?: unknown }[] }
+      | undefined;
+    expect(block?.entries).toEqual([
+      { type: "text", text: "我先看看" },
+      { type: "thinking", text: "要不要先读 README" },
+      { type: "tool", toolName: "Read", input: { file_path: "README.md" } },
+      { type: "text", text: "看完了" },
+    ]);
   });
 });

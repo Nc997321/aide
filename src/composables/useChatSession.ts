@@ -9,6 +9,7 @@ import type {
   PermissionRequest,
   RateLimitInfo,
   SubagentBlock,
+  SubagentEntry,
   TaskItem,
   TextBlock,
   ToolCallBlock,
@@ -179,6 +180,25 @@ function getOrCreateAssistant(store: SessionStore): ChatMessage {
 function finishStreaming(store: SessionStore) {
   const last = store.messages[store.messages.length - 1];
   if (last?.streaming) last.streaming = false;
+}
+
+/** 子代理逐字增量累积：跟主线程 text_delta 同一套模式——最后一项同类型就原地追加，
+ *  否则另起一项（类型切换，或被一次工具调用打断了连续的文本/thinking 段落）。 */
+function appendSubagentTextEntry(block: SubagentBlock, kind: "text" | "thinking", delta: string) {
+  const last = block.entries[block.entries.length - 1];
+  if (kind === "text") {
+    if (last && last.type === "text") {
+      last.text += delta;
+      return;
+    }
+    block.entries.push({ type: "text", text: delta });
+    return;
+  }
+  if (last && last.type === "thinking") {
+    last.text += delta;
+    return;
+  }
+  block.entries.push({ type: "thinking", text: delta });
 }
 
 /** 临时 key 首次被 SDK 确认为真实 session id：原地搬迁运行时状态，
@@ -394,9 +414,19 @@ function handleChatEvent(e: Record<string, unknown>) {
         id: e["id"] as string,
         agentName: e["agentName"] as string,
         description: e["description"] as string,
-        steps: [],
+        entries: [],
         isPending: true,
       } as SubagentBlock);
+      break;
+    }
+    case "subagent_text_delta":
+    case "subagent_thinking_delta": {
+      const block = store.messages
+        .flatMap((m) => m.blocks)
+        .find((b): b is SubagentBlock => b.type === "subagent" && (b as SubagentBlock).id === e["id"]);
+      if (block) {
+        appendSubagentTextEntry(block, e["type"] === "subagent_text_delta" ? "text" : "thinking", e["delta"] as string);
+      }
       break;
     }
     case "subagent_progress": {
@@ -404,7 +434,7 @@ function handleChatEvent(e: Record<string, unknown>) {
         .flatMap((m) => m.blocks)
         .find((b): b is SubagentBlock => b.type === "subagent" && (b as SubagentBlock).id === e["id"]);
       if (block) {
-        block.steps.push({ toolName: e["toolName"] as string, input: e["input"] });
+        block.entries.push({ type: "tool", toolName: e["toolName"] as string, input: e["input"] });
         if (e["model"]) block.model = e["model"] as string;
       }
       break;
