@@ -35,7 +35,6 @@ const fontFamilyLocal = ref(settings.fontFamily);
 const notificationsEnabledLocal = ref(settings.notificationsEnabled);
 const proxyLocal = ref(settings.proxy);
 const shellPathLocal = ref(settings.shellPath);
-const searchOpenLocal = ref(settings.keybindings.searchOpen);
 const recentLimitLocal = ref(settings.recentLimit);
 
 watch(fontSizeLocal, (v) => { settings.fontSize = v; update({ fontSize: v }); });
@@ -56,7 +55,21 @@ const recordingKey = ref<string | null>(null);
 
 const keybindingDefs: Array<{ key: string; label: string }> = [
   { key: "searchOpen", label: "打开搜索" },
+  { key: "paneSplitRight", label: "会话 tab 向右拆分" },
+  { key: "paneSplitDown", label: "会话 tab 向下拆分" },
+  { key: "paneCloseTab", label: "关闭会话 tab" },
 ];
+
+const keybindingDefaults: Record<string, string> = {
+  searchOpen: "Ctrl+P",
+  paneSplitRight: "Ctrl+\\",
+  paneSplitDown: "Ctrl+Shift+\\",
+  paneCloseTab: "Ctrl+W",
+};
+
+function keybindingValue(key: string): string {
+  return settings.keybindings[key as keyof typeof settings.keybindings] || "";
+}
 
 const keybindingConflicts = computed(() => {
   const bindings: Record<string, string> = {};
@@ -81,9 +94,6 @@ function onRecordKeydown(e: KeyboardEvent) {
     (kb as any)[recordingKey.value] = shortcut;
     settings.keybindings = kb;
     update({ keybindings: kb });
-    switch (recordingKey.value) {
-      case "searchOpen": searchOpenLocal.value = shortcut; break;
-    }
   }
   recordingKey.value = null;
 }
@@ -93,14 +103,10 @@ function onRecordBlur() {
 }
 
 function resetKeybinding(key: string) {
-  const defaults = { searchOpen: "Ctrl+P" };
   const kb = { ...settings.keybindings };
-  (kb as any)[key] = (defaults as any)[key];
+  (kb as any)[key] = keybindingDefaults[key] ?? "";
   settings.keybindings = kb;
   update({ keybindings: kb });
-  switch (key) {
-    case "searchOpen": searchOpenLocal.value = "Ctrl+P"; break;
-  }
 }
 
 // ── Theme ──
@@ -347,7 +353,7 @@ function onOverlayClick(e: MouseEvent) {
                     <input
                       class="kb-input"
                       :class="{ recording: recordingKey === def.key }"
-                      :value="def.key === 'searchOpen' ? searchOpenLocal : ''"
+                      :value="keybindingValue(def.key)"
                       readonly
                       :placeholder="recordingKey === def.key ? '按下快捷键...' : ''"
                       @click="startRecording(def.key)"

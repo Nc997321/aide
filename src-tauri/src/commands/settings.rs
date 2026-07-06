@@ -16,17 +16,32 @@ static PENDING_NOTIFICATION: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::n
 pub struct Keybindings {
     #[serde(default = "default_search_open")]
     pub search_open: String,
+    /// 聊天区：当前 tab 向右拆分
+    #[serde(default = "default_pane_split_right")]
+    pub pane_split_right: String,
+    /// 聊天区：当前 tab 向下拆分
+    #[serde(default = "default_pane_split_down")]
+    pub pane_split_down: String,
+    /// 聊天区：关闭当前 tab
+    #[serde(default = "default_pane_close_tab")]
+    pub pane_close_tab: String,
 }
 
 impl Default for Keybindings {
     fn default() -> Self {
         Self {
             search_open: default_search_open(),
+            pane_split_right: default_pane_split_right(),
+            pane_split_down: default_pane_split_down(),
+            pane_close_tab: default_pane_close_tab(),
         }
     }
 }
 
 fn default_search_open() -> String { "Ctrl+P".to_string() }
+fn default_pane_split_right() -> String { "Ctrl+\\".to_string() }
+fn default_pane_split_down() -> String { "Ctrl+Shift+\\".to_string() }
+fn default_pane_close_tab() -> String { "Ctrl+W".to_string() }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +70,9 @@ pub struct AppSettings {
     /// 「最近访问」每类列表保留条数（会话与文件共用），默认 10。
     #[serde(default = "default_recent_limit")]
     pub recent_limit: u32,
+    /// 聊天区分屏布局快照——前端不透明数据（按工作区键控），Rust 只负责存取。
+    #[serde(default)]
+    pub pane_layouts: Value,
 }
 
 fn default_font_size() -> u32 { 14 }
@@ -78,6 +96,7 @@ impl Default for AppSettings {
             theme: default_theme(),
             open_with_extensions: Vec::new(),
             recent_limit: default_recent_limit(),
+            pane_layouts: Value::Null,
         }
     }
 }

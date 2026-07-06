@@ -6,6 +6,7 @@ import { useSessionState } from "../composables/useSessionState";
 import { useUpdate } from "../composables/useUpdate";
 import { useProviders } from "../composables/useProviders";
 import { useRecent } from "../composables/useRecent";
+import { useSessionNames } from "../composables/useSessionNames";
 import { sessionMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
 import { open } from "@tauri-apps/plugin-shell";
@@ -107,6 +108,7 @@ async function loadSessions() {
   try {
     const loaded = await api.listSessions();
     sessionsByWorkspace.value[wsKey] = loaded;
+    sessionNames.setFromSessions(loaded);
   } catch (_e) {
     sessionsByWorkspace.value[wsKey] = [];
   }
@@ -128,12 +130,14 @@ async function loadWsSessions(wsKey: string) {
   try {
     const loaded = await api.listSessionsForWorkspace(wsKey);
     sessionsByWorkspace.value[wsKey] = loaded;
+    sessionNames.setFromSessions(loaded);
   } catch (_e) {
     sessionsByWorkspace.value[wsKey] = [];
   }
 }
 
 const { show } = useContextMenu();
+const sessionNames = useSessionNames();
 const { state: sessionState, dotTone } = useSessionState();
 const { updateAvailable, latestVersion, downloadUrl, dismissUpdate } = useUpdate();
 const { setCurrentWs } = useRecent();
@@ -248,15 +252,19 @@ async function renameSession(id: string, name: string) {
     } else {
       await loadSessions();
     }
+    sessionNames.setName(id, name);
   } catch (_e) { /* ignore */ }
 }
 
-function onSessionContextMenu(e: MouseEvent, id: string) {
+function onSessionContextMenu(e: MouseEvent, wsKey: string, id: string) {
   e.preventDefault();
   show(
     e.clientX,
     e.clientY,
-    sessionMenuItems(id, (name: string) => renameSession(id, name), loadSessions),
+    sessionMenuItems(id, (name: string) => renameSession(id, name), loadSessions, {
+      // tab/分屏打开只对当前活动工作区的会话开放；跨工作区先单击切换再操作
+      openInPane: wsKey === activeWorkspace.value,
+    }),
   );
 }
 
@@ -305,6 +313,7 @@ function addSession(session: Session) {
     list.unshift(session);
     sessionsByWorkspace.value[wsKey] = [...list];
   }
+  sessionNames.setName(session.id, session.name);
 }
 
 defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace, switchToWorkspaceByKey, sessionsByWorkspace });
@@ -366,7 +375,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
             :glow-color="sessionState[s.id] === 'running' ? 'var(--aide-success)' : undefined"
             class="session-card"
             @click="selectSessionFromWorkspace(ws.key, s.id)"
-            @contextmenu.prevent="onSessionContextMenu($event, s.id)"
+            @contextmenu.prevent="onSessionContextMenu($event, ws.key, s.id)"
           >
             <div class="session-card-header">
               <AStatusDot :tone="dotTone(s.id)" />

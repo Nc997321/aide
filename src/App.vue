@@ -8,10 +8,12 @@ import { defineAsyncComponent } from "vue";
 const FileViewer = defineAsyncComponent(() => import("./components/FileViewer.vue"));
 const SettingsPanel = defineAsyncComponent(() => import("./components/SettingsPanel.vue"));
 const RunConfigsDialog = defineAsyncComponent(() => import("./components/RunConfigsDialog.vue"));
-import ChatPanel from "./components/ChatPanel.vue";
+import PaneLayout from "./components/PaneLayout.vue";
 import PermissionDialog from "./components/PermissionDialog.vue";
 import { useChatSession, isPendingSession } from "./composables/useChatSession";
-import type { SendOptions } from "./composables/useChatSession";
+import { usePaneLayout } from "./composables/usePaneLayout";
+import { usePaneLayoutPersistence } from "./composables/paneLayout/persistence";
+import { useSessionNames } from "./composables/useSessionNames";
 import GitPanel from "./components/GitPanel.vue";
 import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
 import NotificationBanner from "./components/NotificationBanner.vue";
@@ -101,34 +103,27 @@ const gitPanelRef = ref<InstanceType<typeof GitPanel> | null>(null);
 const titleBarRef = ref<InstanceType<typeof TitleBar> | null>(null);
 const paletteOpen = ref(false);
 const paletteRef = ref<InstanceType<typeof ACommandPalette> | null>(null);
-const activeSessionId = ref("");
-const chatSessionIdRef = ref<string | null>(null);
-watch(activeSessionId, (v) => { chatSessionIdRef.value = v || null; }, { immediate: true });
-/** "新建会话"点击时用户输入/生成的名字，等真正创建时（onSessionCreated）才用上。 */
-const pendingSessionName = ref("");
-const { pendingPermission, pendingPermissionCount, respondPermission, messages, isBusy, models, currentModel, contextUsage, rateLimit, tasks, permissionModes, currentPermissionMode, queuedPrompts, sendMessage, interrupt, stopSession, onSessionCreated, setModel, setPermissionMode, removeQueued } = useChatSession(chatSessionIdRef);
+// 「当前会话」= 聚焦分屏组激活 tab 的会话——布局层的计算属性，所有下游
+// （右面板 / 权限弹窗 / 标题栏 / 侧栏高亮）沿用旧的单一 activeSessionId 语义。
+const paneLayout = usePaneLayout();
+const paneLayoutPersistence = usePaneLayoutPersistence();
+const activeSessionId = paneLayout.activeSessionId;
+const chatSessionIdRef = computed(() => activeSessionId.value || null);
+// App 级 useChatSession 只服务全局权限弹窗（store 是模块级的，多实例零成本；
+// ChatPanel 的完整接线在 panelayout/PaneGroup.vue 内各组自治）。
+const { pendingPermission, pendingPermissionCount, respondPermission, onSessionCreated } = useChatSession(chatSessionIdRef);
 
 // 会话首次创建：临时 key 拿到 SDK 确认的真实 id，这时才第一次落盘——
 // 写元数据、加侧栏、记最近访问。之前什么都没写过，不存在"迁移"这一步。
+// tab 绑定同步换成真实 id；空白面板预起的名字存放在 tab 上（takePendingName）。
 onSessionCreated((tempId, realId) => {
-  const name = pendingSessionName.value || realId.substring(0, 8);
-  pendingSessionName.value = "";
+  paneLayout.rebindSession(tempId, realId);
+  const name = paneLayout.takePendingName(realId) || realId.substring(0, 8);
+  useSessionNames().setName(realId, name);
   void api.createSession(realId, name).then((session) => {
     sidebarRef.value?.addSession({ id: session.id, name: session.name, timestamp: session.timestamp, last_message: "" });
     void useRecent().recordCurrentSession(session.id, session.name);
   });
-  if (activeSessionId.value === tempId) {
-    activeSessionId.value = realId;
-  }
-});
-const activeSessionName = computed(() => {
-  if (!activeSessionId.value) return "";
-  const allSessions = sidebarRef.value?.sessionsByWorkspace ?? {};
-  for (const list of Object.values(allSessions)) {
-    const found = (list as { id: string; name: string }[]).find(s => s.id === activeSessionId.value);
-    if (found) return found.name;
-  }
-  return "";
 });
 const settingsVisible = ref(false);
 const settingsInitialTab = ref<string | undefined>(undefined);
@@ -236,20 +231,21 @@ const rightTabs = computed<Tab[]>(() => [
 ]);
 
 function onSessionChanged(id: string) {
-  activeSessionId.value = id;
+  // 打开语义（预览覆盖/全局唯一聚焦）由布局层统一裁决
+  paneLayout.openSession(id);
 }
 
 function onNewSession(name: string) {
-  // 只清空选中项，打开空白可输入面板；不落盘、不进侧栏。真正创建推迟到
+  // 打开空白可输入面板（预览 tab）；不落盘、不进侧栏。真正创建推迟到
   // 用户发出第一条消息、SDK 用 session_init 确认真实 id 之后（onSessionCreated）。
-  pendingSessionName.value = name;
-  activeSessionId.value = "";
+  paneLayout.openBlankTab(name);
 }
 
 async function onSidebarWsChanged(path: string) {
   workspacePath.value = path;
   projectName.value = path.split(/[\\/]/).filter(Boolean).pop() || path;
-  activeSessionId.value = "";
+  // 旧工作区布局落盘，恢复新工作区布局（无快照则回到单组空白 tab）
+  void paneLayoutPersistence.switchWorkspace(path);
   await fileTreeRef.value?.loadRoot();
   if (rightTab.value === "git") gitPanelRef.value?.reload();
   // Load run configurations for this workspace (auto-detects on first open).
@@ -333,6 +329,35 @@ function handleKeydown(e: KeyboardEvent) {
     wb.hide();
     return;
   }
+
+  // ── 聊天区分屏/tab 快捷键（可在设置里改键） ──
+  const kb = settings.keybindings;
+  if (matchShortcut(e, kb?.paneSplitRight || "Ctrl+\\")) {
+    e.preventDefault();
+    e.stopPropagation();
+    paneLayout.splitFocusedGroup("horizontal");
+    return;
+  }
+  if (matchShortcut(e, kb?.paneSplitDown || "Ctrl+Shift+\\")) {
+    e.preventDefault();
+    e.stopPropagation();
+    paneLayout.splitFocusedGroup("vertical");
+    return;
+  }
+  if (matchShortcut(e, kb?.paneCloseTab || "Ctrl+W")) {
+    e.preventDefault();
+    e.stopPropagation();
+    paneLayout.closeActiveTab();
+    return;
+  }
+  // Ctrl+Tab / Ctrl+Shift+Tab：聚焦组内循环切 tab（固定键位，WebView 无默认占用）
+  if (e.ctrlKey && !e.altKey && !e.metaKey && e.key === "Tab") {
+    e.preventDefault();
+    e.stopPropagation();
+    paneLayout.cycleTab(e.shiftKey ? -1 : 1);
+    return;
+  }
+
   // Ctrl+N: new session
   if (e.ctrlKey && (e.code === "KeyN" || e.key === "n")) {
     e.preventDefault();
@@ -369,10 +394,18 @@ onMounted(async () => {
   // Start git fingerprint watcher (auto-refresh on external changes)
   useGitWatcher();
 
+  // 布局持久化：先装 watch（debounce 落盘），初始工作区确定后恢复其快照
+  paneLayoutPersistence.install();
+
   // Seed workbench cwd from the current project root.
   try {
     const info = await api.getProjectInfo();
-    if (info?.root) { workspacePath.value = info.root; projectName.value = info.name; loadRunConfigs(info.root, info.root); }
+    if (info?.root) {
+      workspacePath.value = info.root;
+      projectName.value = info.name;
+      loadRunConfigs(info.root, info.root);
+      void paneLayoutPersistence.switchWorkspace(info.root);
+    }
   } catch (_) { /* best effort */ }
 
   // Initialize search providers for the title bar search box
@@ -381,7 +414,7 @@ onMounted(async () => {
     async () => {
       try { return await api.listSessions(); } catch { return []; }
     },
-    (sessionId) => { activeSessionId.value = sessionId; },
+    (sessionId) => { paneLayout.openSession(sessionId); },
     () => workspacePath.value,
   );
 
@@ -509,33 +542,9 @@ onUnmounted(() => {
         @mousedown="leftResize.onMousedown"
       />
 
-      <!-- Center panel -->
+      <!-- Center panel: 多 tab + 任意分屏（每组自治接线见 panelayout/PaneGroup.vue） -->
       <div class="panel-center">
-        <ChatPanel
-          :session-id="activeSessionId || null"
-          :session-name="activeSessionName"
-          :workspace-path="workspacePath"
-          :messages="messages"
-          :is-busy="isBusy"
-          :models="models"
-          :current-model="currentModel"
-          :context-usage="contextUsage"
-          :rate-limit="rateLimit"
-          :tasks="tasks"
-          :permission-modes="permissionModes"
-          :current-permission-mode="currentPermissionMode"
-          :queued-prompts="queuedPrompts"
-          class="h-full"
-          @send="async (prompt: string, opts: SendOptions) => {
-            const sid = await sendMessage(prompt, opts);
-            if (sid) activeSessionId = sid;
-          }"
-          @interrupt="interrupt"
-          @stop="stopSession"
-          @set-model="setModel"
-          @set-permission-mode="setPermissionMode"
-          @remove-queued="removeQueued"
-        />
+        <PaneLayout :workspace-path="workspacePath" class="h-full" />
       </div>
 
       <!-- Right resize handle -->

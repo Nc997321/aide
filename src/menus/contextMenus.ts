@@ -2,6 +2,7 @@ import type { MenuItem } from "../composables/useContextMenu";
 import { useModal } from "../composables/useModal";
 import { useFileViewer } from "../composables/useFileViewer";
 import { useFileClipboard, getParentPath } from "../composables/useFileClipboard";
+import { usePaneLayout } from "../composables/usePaneLayout";
 import { api } from "../api";
 
 function sep(): MenuItem {
@@ -152,8 +153,20 @@ export function sessionMenuItems(
   id: string,
   onRenamed: (name: string) => void,
   onDeleted: () => void,
+  /** 会话属于当前活动工作区时才提供 tab/分屏打开项（跨工作区打开需先切换，走单击路径） */
+  opts?: { openInPane?: boolean },
 ): MenuItem[] {
+  const pane = usePaneLayout();
+  const openItems: MenuItem[] = opts?.openInPane
+    ? [
+        { label: "在新标签页打开", action: () => pane.openSessionInNewTab(id) },
+        { label: "在右侧分屏打开", action: () => pane.openSessionInSplit(id, "horizontal") },
+        { label: "在下方分屏打开", action: () => pane.openSessionInSplit(id, "vertical") },
+        sep(),
+      ]
+    : [];
   return [
+    ...openItems,
     {
       label: "重命名",
       action: async () => {
@@ -176,8 +189,22 @@ export function sessionMenuItems(
         // 运行中的 sidecar 先杀掉，避免进程泄漏 & 删除后 jsonl 被重新写回
         await api.stopChatSession(id).catch(() => {});
         await api.deleteSession(id);
+        pane.closeSessionTab(id); // 分屏里开着的 tab 一并关掉
         onDeleted();
       },
     },
+  ];
+}
+
+// ── Pane tab context menu（聊天区分屏组的 tab 右键） ──
+
+export function paneTabMenuItems(groupId: string, tabId: string): MenuItem[] {
+  const pane = usePaneLayout();
+  return [
+    { label: "向右拆分", action: () => pane.splitFocusedGroup("horizontal", groupId) },
+    { label: "向下拆分", action: () => pane.splitFocusedGroup("vertical", groupId) },
+    sep(),
+    { label: "关闭", action: () => pane.closeTab(groupId, tabId) },
+    { label: "关闭其他", action: () => pane.closeOtherTabs(groupId, tabId) },
   ];
 }

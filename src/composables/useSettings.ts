@@ -11,10 +11,14 @@ const defaults: AppSettings = {
   workbenchHeight: 0,
   keybindings: {
     searchOpen: "Ctrl+P",
+    paneSplitRight: "Ctrl+\\",
+    paneSplitDown: "Ctrl+Shift+\\",
+    paneCloseTab: "Ctrl+W",
   },
   theme: "warm-dark",
   openWithExtensions: [],
   recentLimit: 10,
+  paneLayouts: {},
 };
 
 // Module-level reactive singleton — shared across ChatPanel and SettingsPanel
@@ -31,10 +35,13 @@ export function useSettings() {
       settings.proxy = s.proxy ?? defaults.proxy;
       settings.shellPath = s.shellPath ?? defaults.shellPath;
       settings.workbenchHeight = s.workbenchHeight ?? defaults.workbenchHeight;
-      settings.keybindings = s.keybindings ?? defaults.keybindings;
+      // 旧配置缺新键位时逐字段补默认值（整体 ?? 会让老用户拿不到新增快捷键）
+      settings.keybindings = { ...defaults.keybindings, ...(s.keybindings ?? {}) };
       settings.theme = s.theme ?? defaults.theme;
       settings.openWithExtensions = s.openWithExtensions ?? defaults.openWithExtensions;
       settings.recentLimit = s.recentLimit ?? defaults.recentLimit;
+      settings.paneLayouts =
+        s.paneLayouts && typeof s.paneLayouts === "object" ? s.paneLayouts : {};
     } catch (_) {
       // Keep defaults on error
     }
@@ -52,6 +59,7 @@ export function useSettings() {
     if (partial.keybindings !== undefined) settings.keybindings = { ...settings.keybindings, ...partial.keybindings };
     if (partial.theme !== undefined) settings.theme = partial.theme;
     if (partial.recentLimit !== undefined) settings.recentLimit = partial.recentLimit;
+    if (partial.paneLayouts !== undefined) settings.paneLayouts = partial.paneLayouts;
     // Persist asynchronously
     try {
       await api.setSettings(partial);

@@ -65,6 +65,7 @@ aide/
 │   ├── App.vue                 # 三栏布局 + 标题栏 + 右面板 Tab（文件/Git）+ 工作区桥接
 │   ├── components/
 │   │   ├── SidebarLeft.vue     # 会话列表 + 功能区
+│   │   ├── PaneLayout.vue      # 聊天区多 tab + 任意分屏组织层（子实现在 panelayout/：PaneSplit 递归渲染 / PaneGroup 组内自治接线 / PaneTabBar）
 │   │   ├── ChatPanel.vue       # Chat 主界面（消息流 + 输入区 + skills 补全 + 停止按钮）
 │   │   ├── ChatMessage.vue     # 单条消息渲染（Markdown + 工具卡片 + 图片 + 路径点击跳转）
 │   │   ├── ToolCallBlock.vue   # 工具调用卡片（可折叠）/ BashOutputBlock.vue（xterm 只读输出）
@@ -82,6 +83,8 @@ aide/
 │   │   └── marketplace/        # MarketplaceTab / PluginCard
 │   ├── composables/
 │   │   ├── useChatSession.ts      # 对话核心（每会话独立 store + 事件路由 + resume + ID 迁移）
+│   │   ├── usePaneLayout.ts       # 分屏布局树状态层（预览 tab/全局唯一/聚焦；纯树操作在 paneLayout/tree.ts，按工作区持久化在 paneLayout/persistence.ts）
+│   │   ├── useSessionNames.ts     # 会话 id → 显示名注册表（侧栏写入，tab 栏/面板头只读）
 │   │   ├── useSessionState.ts     # 会话运行状态（模块级 reactive 单例）
 │   │   ├── useConversationChanges.ts # 变更追踪（轮次分组 + 撤回）
 │   │   ├── useGit.ts              # Git 状态（模块级单例）

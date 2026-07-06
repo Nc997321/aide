@@ -60,6 +60,12 @@ export interface ChangeRound {
 
 export interface Keybindings {
   searchOpen: string;
+  /** 聊天区：当前 tab 向右拆分 */
+  paneSplitRight: string;
+  /** 聊天区：当前 tab 向下拆分 */
+  paneSplitDown: string;
+  /** 聊天区：关闭当前 tab */
+  paneCloseTab: string;
 }
 
 export interface AppSettings {
@@ -73,6 +79,8 @@ export interface AppSettings {
   theme: string;
   openWithExtensions: string[];
   recentLimit: number;
+  /** 聊天区分屏布局快照，按工作区路径键控（结构见 paneLayout/tree.ts 的 LayoutSnapshot） */
+  paneLayouts: Record<string, unknown>;
 }
 
 export interface ChangeFile {

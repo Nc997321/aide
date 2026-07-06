@@ -32,7 +32,9 @@ export function matchShortcut(e: KeyboardEvent, shortcut: string): boolean {
   const keyMatch =
     key === defKey ||
     (defKey === "space" && key === " ") ||
-    (defKey === "`" && (key === "`" || key === "dead"));
+    (defKey === "`" && (key === "`" || key === "dead")) ||
+    // 反斜杠：Shift 组合在多数键盘布局上 e.key 变成 "|"，用物理键码兜底
+    (defKey === "\\" && (key === "\\" || key === "|" || e.code === "Backslash"));
   return (
     keyMatch &&
     e.ctrlKey === def.ctrl &&
