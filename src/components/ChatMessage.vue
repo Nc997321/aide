@@ -177,9 +177,18 @@ function handleTextClick(e: MouseEvent) {
   background: none;
   padding: 0;
 }
+/* Tailwind preflight 把 ul/ol 的 list-style 统一清成 none，仅补 padding 会
+   导致有序列表看不到 1./2./3. 编号、无序列表看不到圆点——这里显式复原标记。 */
 .msg-text :deep(ul), .msg-text :deep(ol) {
   padding-left: 20px;
   margin: 4px 0;
+  list-style-position: outside;
+}
+.msg-text :deep(ul) {
+  list-style-type: disc;
+}
+.msg-text :deep(ol) {
+  list-style-type: decimal;
 }
 .msg-text :deep(li) {
   margin: 2px 0;
