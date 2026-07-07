@@ -7,12 +7,15 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { useSettings } from "../composables/useSettings";
 import { useModal } from "../composables/useModal";
 import { ctrlHoverHighlight } from "../extensions/cmCtrlHover";
+import { cmScrollMemory, type ScrollMemoryOptions } from "../extensions/cmScrollMemory";
 
 const { settings } = useSettings();
 
 const props = defineProps<{
   filePath: string;
   modelValue: string;
+  /** 滚动位置记忆（会话级）；不传则不记 */
+  scrollMemory?: ScrollMemoryOptions;
 }>();
 
 const emit = defineEmits<{
@@ -131,6 +134,7 @@ async function createEditor() {
       oneDark,
       updateListener,
       ctrlHoverHighlight(),
+      ...(props.scrollMemory ? [cmScrollMemory(props.scrollMemory)] : []),
       EditorView.domEventHandlers({
         click(event, view) {
           if (event.ctrlKey || event.metaKey) {

@@ -2,6 +2,7 @@ import { createApp } from "vue";
 import App from "./App.vue";
 import "./styles/global.css";
 import { vTooltip } from "./directives/tooltip";
+import { vScrollMemory } from "./directives/scrollMemory";
 
 // ── Global error capture → Rust tracing log ──
 
@@ -30,4 +31,5 @@ window.addEventListener("unhandledrejection", (e) => {
 
 const app = createApp(App);
 app.directive("tooltip", vTooltip);
+app.directive("scroll-memory", vScrollMemory);
 app.mount("#app");

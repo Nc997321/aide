@@ -172,11 +172,28 @@ watch(
 async function refreshAllExpanded() {
   // Small delay to let useConversationChanges.captureChanges finish git ops
   await new Promise((r) => setTimeout(r, 300));
-  const saved = new Set(expandedDirs.value);
-  await loadRoot();
-  // loadRoot resets expandedDirs to just root; restore and reload recursively
-  expandedDirs.value = saved;
-  await loadExpandedDescendants(projectInfo.value.root);
+  // 原地刷新：不重置 expandedDirs、不触发 loading 闪烁，只逐目录重载子节点，
+  // 保持视觉展开状态。旧的 loadRoot() 推倒重建会把 expandedDirs 清成 [root]，
+  // 再用 loadExpandedDescendants(root) 恢复——但 root 不在 treeData 中
+  // （treeData 存的是 root 的直属子节点），findNode 返回 null 直接退出，
+  // 导致已展开目录的 children 不被重载，出现"按钮展开、内容收起"的错位。
+  try {
+    projectInfo.value = await api.getProjectInfo();
+  } catch {
+    // 项目信息刷新失败不阻断树刷新
+  }
+  // 重载 root 直属子节点（loadChildren(root) 整体替换 treeData）
+  await loadChildren(projectInfo.value.root);
+  // 自顶向下补加载已展开目录的子节点
+  await reloadExpandedDescendants(treeData.value);
+}
+
+async function reloadExpandedDescendants(nodes: FileEntry[]) {
+  for (const node of nodes) {
+    if (!node.is_dir || !expandedDirs.value.has(node.path)) continue;
+    await loadChildren(node.path);
+    if (node.children) await reloadExpandedDescendants(node.children);
+  }
 }
 
 function getSelectedNodeIsDir(): boolean {

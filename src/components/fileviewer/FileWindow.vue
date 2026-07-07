@@ -22,6 +22,19 @@ const gotoPopoverRef = ref<HTMLElement | null>(null);
 const codeEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null);
 
 const dirty = computed(() => isWindowDirty(props.win));
+
+// ── 滚动位置记忆（会话级，重启即忘）──
+// 同一文件的编辑器 / 预览 / 只读 pre 滚动度量不同，key 按视图类型分开；
+// 虚拟视图（git diff）可能与真实文件同路径，加前缀隔离。
+function scrollKey(kind: string): string {
+  return `${props.win.virtual ? "virtual:" : ""}${props.win.filePath}#${kind}`;
+}
+
+// 编辑器侧：有显式跳行请求挂起时放弃恢复，让跳行赢（cmScrollMemory 创建时求值）
+const cmScrollMemoryOpts = {
+  key: scrollKey("cm"),
+  shouldRestore: () => props.win.scrollToLine == null,
+};
 const isImage = computed(() => !!props.win.imageUrl);
 const isDiff = computed(() => props.win.language === "diff");
 /** 是否挂编辑器：非只读、非图片、非错误；markdown 全预览模式下也不挂 */
@@ -232,12 +245,13 @@ function onKeydown(e: KeyboardEvent) {
       </div>
 
       <!-- 只读：diff / 大文件 / 虚拟内容 -->
-      <pre v-else-if="win.readonly && isDiff" class="fw-pre"><code class="viewer-code viewer-diff" v-html="diffHighlighted"></code></pre>
-      <pre v-else-if="win.readonly" class="fw-pre"><code class="viewer-code" v-html="highlighted"></code></pre>
+      <pre v-else-if="win.readonly && isDiff" v-scroll-memory="scrollKey('pre')" class="fw-pre"><code class="viewer-code viewer-diff" v-html="diffHighlighted"></code></pre>
+      <pre v-else-if="win.readonly" v-scroll-memory="scrollKey('pre')" class="fw-pre"><code class="viewer-code" v-html="highlighted"></code></pre>
 
       <!-- Markdown 全预览 -->
       <div
         v-else-if="win.isMarkdown && win.mdMode === 'preview'"
+        v-scroll-memory="scrollKey('md-preview')"
         class="fw-scroll viewer-markdown"
         v-html="renderedMarkdown"
       ></div>
@@ -249,10 +263,12 @@ function onKeydown(e: KeyboardEvent) {
             ref="codeEditorRef"
             v-model="win.editContent"
             :filePath="win.filePath"
+            :scrollMemory="cmScrollMemoryOpts"
             @goto-definition="onGotoDefinition"
           />
         </div>
-        <div class="fw-split-pane fw-scroll viewer-markdown" v-html="renderedMarkdown"></div>
+        <!-- 分屏预览是半宽，换行位置与全预览不同，滚动位置分开记 -->
+        <div v-scroll-memory="scrollKey('md-split-preview')" class="fw-split-pane fw-scroll viewer-markdown" v-html="renderedMarkdown"></div>
       </div>
 
       <!-- 默认：直接可编辑（含 Markdown 全编辑） -->
@@ -261,6 +277,7 @@ function onKeydown(e: KeyboardEvent) {
           ref="codeEditorRef"
           v-model="win.editContent"
           :filePath="win.filePath"
+          :scrollMemory="cmScrollMemoryOpts"
           @goto-definition="onGotoDefinition"
         />
       </div>
