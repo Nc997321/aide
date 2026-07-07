@@ -3,8 +3,10 @@ import { computed } from "vue";
 import type { ChatMessage } from "@/types/chat";
 import { marked, renderMarkdown } from "@/utils/markdown";
 import ToolCallBlock from "./ToolCallBlock.vue";
+import ToolCallGroup from "./ToolCallGroup.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
 import TurnUsageBadge from "./TurnUsageBadge.vue";
+import { segmentBlocks, type Segment } from "@/utils/blockSegments";
 import { useFileResolver } from "@/composables/useFileResolver";
 import { parseFileLink } from "@/utils/fileLink";
 
@@ -16,11 +18,26 @@ const props = defineProps<{
 const isUser = computed(() => props.message.role === "user");
 const { openResolved } = useFileResolver();
 
+/** user 消息不分组（@mention 的 tool_call 是附件展示，保持逐条）；
+ *  assistant 消息连续 tool_call 聚成墨线组（spec·分组行为）。 */
+const segments = computed<Segment[]>(() =>
+  isUser.value
+    ? props.message.blocks.map((block, index) => ({ kind: "block" as const, block, index }))
+    : segmentBlocks(props.message.blocks),
+);
+
+/** 组是否"活着"：消息还在流式生成，且该组是最后一段（新工具块会继续追加进组）。 */
+function isLiveGroup(seg: Segment): boolean {
+  if (seg.kind !== "tool_group" || !props.message.streaming) return false;
+  return seg.index + seg.blocks.length === props.message.blocks.length;
+}
+
 // 只响应渲染期已判定为文件的 code（见 utils/markdown.ts codespan 渲染器 +
 // utils/fileLink.ts 判定规则），点击层不再自己做路径识别。openResolved 会先探测
 // 路径是否存在，不存在时在工作区内搜索（带加载态，多命中弹选择框）。
 /** 文本块 → HTML：已定稿的块走 renderMarkdown 缓存（重渲染零解析成本）；
- *  流式中的最后一块每个增量都在变，进缓存只会塞满垃圾键——直接解析。 */
+ *  流式中的最后一块每个增量都在变，进缓存只会塞满垃圾键——直接解析。
+ *  index 是块在原 blocks 里的下标（Segment.index），分段化后判定依据不变。 */
 function blockHtml(text: string, index: number): string {
   const streamingTail =
     !!props.message.streaming && index === props.message.blocks.length - 1;
@@ -38,27 +55,32 @@ function handleTextClick(e: MouseEvent) {
 
 <template>
   <div :class="['msg-row', isUser ? 'msg-row--user' : 'msg-row--assistant']">
-    <div :class="['msg-bubble', isUser ? 'msg-bubble--user' : 'msg-bubble--assistant']">
-      <template v-for="(block, i) in message.blocks" :key="i">
+    <div :class="isUser ? 'msg-bubble msg-bubble--user' : 'msg-turn'">
+      <template v-for="seg in segments" :key="seg.index">
+        <ToolCallGroup
+          v-if="seg.kind === 'tool_group'"
+          :blocks="seg.blocks"
+          :live="isLiveGroup(seg)"
+        />
         <div
-          v-if="block.type === 'text'"
+          v-else-if="seg.block.type === 'text'"
           class="msg-text"
-          v-html="blockHtml(block.text, i)"
+          v-html="blockHtml(seg.block.text, seg.index)"
           @click="handleTextClick"
         />
         <ToolCallBlock
-          v-else-if="block.type === 'tool_call'"
-          :block="(block as any)"
+          v-else-if="seg.block.type === 'tool_call'"
+          :block="(seg.block as any)"
         />
         <img
-          v-else-if="block.type === 'image'"
-          :src="`data:${(block as any).mediaType};base64,${(block as any).data}`"
+          v-else-if="seg.block.type === 'image'"
+          :src="`data:${(seg.block as any).mediaType};base64,${(seg.block as any).data}`"
           class="msg-image"
           alt="附图"
         />
         <SubagentCallBlock
-          v-else-if="block.type === 'subagent'"
-          :block="(block as any)"
+          v-else-if="seg.block.type === 'subagent'"
+          :block="(seg.block as any)"
         />
       </template>
       <TurnUsageBadge v-if="!isUser && message.usage" class="msg-usage" :usage="message.usage" />
@@ -94,9 +116,30 @@ function handleTextClick(e: MouseEvent) {
   color: var(--aide-text-on-accent);
 }
 
-.msg-bubble--assistant {
-  background: var(--aide-surface-default);
+/* 通页书脊（spec·B2）：assistant 正文直接落在页面上，
+ * 一条铜色书脊纵贯整个回合（正文 + 工具墨线 + 用量）。 */
+.msg-turn {
+  max-width: 94%;
+  min-width: 0;
+  border-left: 2px solid rgba(212, 165, 116, 0.45);
+  padding: 2px 0 2px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.7;
   color: var(--aide-text-primary);
+  word-break: break-word;
+}
+
+/* user 铜底气泡里的 mention 墨线行：默认 muted 色在铜底上对比度不够，压成深色 */
+.msg-bubble--user :deep(.ti-row),
+.msg-bubble--user :deep(.ti-name),
+.msg-bubble--user :deep(.ti-summary) {
+  color: var(--aide-text-on-accent);
+}
+.msg-bubble--user :deep(.ti-dot) {
+  background: var(--aide-text-on-accent);
 }
 
 .msg-text :deep(p) {
