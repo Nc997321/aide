@@ -67,8 +67,9 @@ aide/
 │   │   ├── SidebarLeft.vue     # 会话列表 + 功能区
 │   │   ├── PaneLayout.vue      # 聊天区多 tab + 任意分屏组织层（子实现在 panelayout/：PaneSplit 递归渲染 / PaneGroup 组内自治接线 / PaneTabBar）
 │   │   ├── ChatPanel.vue       # Chat 主界面（消息流 + 输入区 + skills 补全 + 停止按钮）
-│   │   ├── ChatMessage.vue     # 单条消息渲染（Markdown + 工具卡片 + 图片 + 路径点击跳转）
-│   │   ├── ToolCallBlock.vue   # 工具调用卡片（可折叠）/ BashOutputBlock.vue（xterm 只读输出）
+│   │   ├── ChatMessage.vue     # 单条消息渲染（通页书脊布局 + Markdown + 墨线工具组 + 图片 + 路径点击跳转）
+│   │   ├── ToolCallGroup.vue   # 连续工具调用的墨线折叠组（默认收起 + 流式实时摘要）
+│   │   ├── ToolCallBlock.vue   # 单条工具调用墨线行（可展开）/ BashOutputBlock.vue（xterm 只读输出）
 │   │   ├── PermissionDialog.vue # 工具权限确认弹窗
 │   │   ├── WorkbenchTerminal.vue # 工作台 shell 终端（xterm + shell.rs PTY）
 │   │   ├── FileTree.vue        # 文件树（懒加载递归）
@@ -101,6 +102,7 @@ aide/
 │   │   ├── useSearchProviders.ts  # 标题栏搜索源注册表
 │   │   └── useWindowControls.ts   # 窗口操作封装
 │   ├── utils/
+│   │   ├── blockSegments.ts    # 消息 blocks → 渲染分段（连续 tool_call 聚组）纯函数
 │   │   ├── highlight.ts        # hljs 初始化 + extToLang + highlightCode()
 │   │   ├── markdown.ts         # marked 初始化 + escapeHtml()
 │   │   ├── errors.ts           # Git 错误解析（Rust CODE → 用户消息）
