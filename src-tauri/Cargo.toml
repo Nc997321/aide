@@ -33,6 +33,8 @@ base64 = "0.22"
 # 剥掉 Windows `resource_dir()` 返回的 `\\?\` verbatim 前缀，避免把扩展长度路径
 # 传给外部进程（node 的 realpathSync 处理不了 `\\?\`，会退化到 lstat 'C:' 崩溃）。
 dunce = "1"
+# 卡死诊断黑匣子：冻结期采样 aide 进程家族的 CPU/内存（仅 system 特性，减编译面）
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 
 # Clipboard file-path reading is platform-specific; declare the platform-only
 # crates in target-specific sections so a Windows build doesn't try to compile

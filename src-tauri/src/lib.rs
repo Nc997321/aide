@@ -1,4 +1,5 @@
 mod commands;
+mod diagnostics;
 mod shell;
 mod sidecar;
 mod conversation;
@@ -83,6 +84,7 @@ pub fn run() {
                 .build(),
         )
         .manage(shell_manager)
+        .manage(diagnostics::DiagnosticsState::new())
         .manage(sidecar::SidecarManager::new())
         .manage(skills::SkillRegistry::new())
         .manage(workspace_state)
@@ -109,6 +111,9 @@ pub fn run() {
 
             #[cfg(target_os = "windows")]
             apply_window_theme(app);
+
+            // 卡死诊断黑匣子 watchdog（须在主窗口创建之后：要解析 HWND）
+            diagnostics::start(app.handle());
 
             // 冷启动带参：首次即被 `aide.exe <path>` 唤起时，single-instance 回调
             // 不会触发（首个实例），这里把路径暂存到 PendingOpenFile，前端 mount
@@ -260,6 +265,9 @@ pub fn run() {
             commands::chat::rename_sidecar_session,
             // Plugin skills scanning
             commands::shell::scan_plugin_skills,
+            // 卡死诊断黑匣子
+            diagnostics::diag_heartbeat,
+            diagnostics::diag_freeze_supplement,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

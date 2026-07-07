@@ -3,6 +3,7 @@ import App from "./App.vue";
 import "./styles/global.css";
 import { vTooltip } from "./directives/tooltip";
 import { vScrollMemory } from "./directives/scrollMemory";
+import { startDiagnostics } from "./composables/useDiagnostics";
 
 // ── Global error capture → Rust tracing log ──
 
@@ -33,3 +34,6 @@ const app = createApp(App);
 app.directive("tooltip", vTooltip);
 app.directive("scroll-memory", vScrollMemory);
 app.mount("#app");
+
+// 卡死诊断黑匣子：心跳 + 指标采集（Rust watchdog 检测断流落盘报告）
+startDiagnostics();

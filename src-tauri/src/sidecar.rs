@@ -121,6 +121,16 @@ impl SidecarManager {
                             continue;
                         }
                         let current_sid = sid_handle.lock().unwrap().clone();
+                        // 诊断黑匣子：chat-event 出口按秒计数（挂在 provider-agnostic
+                        // 协议层，纯内存微秒级，不触碰转发逻辑）
+                        {
+                            use tauri::Manager;
+                            if let Some(diag) =
+                                app.try_state::<crate::diagnostics::DiagnosticsState>()
+                            {
+                                diag.record_chat_event(&current_sid);
+                            }
+                        }
                         if let Some(obj) = event.as_object_mut() {
                             if obj.get("type").and_then(|t| t.as_str()) == Some("session_init") {
                                 if let Some(sdk_sid) = obj.get("session_id").cloned() {

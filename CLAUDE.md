@@ -100,13 +100,15 @@ aide/
 │   │   ├── useCustomizations.ts   # 扩展 CRUD + toggle
 │   │   ├── useMarketplace.ts      # 插件市场
 │   │   ├── useSearchProviders.ts  # 标题栏搜索源注册表
-│   │   └── useWindowControls.ts   # 窗口操作封装
+│   │   ├── useWindowControls.ts   # 窗口操作封装
+│   │   └── useDiagnostics.ts      # 卡死黑匣子前端采集主控（心跳 + longtask/面包屑/事件循环延迟采集 + 自愈补交）
 │   ├── utils/
 │   │   ├── blockSegments.ts    # 消息 blocks → 渲染分段（连续 tool_call 聚组）纯函数
 │   │   ├── highlight.ts        # hljs 初始化 + extToLang + highlightCode()
 │   │   ├── markdown.ts         # marked 初始化 + escapeHtml()
 │   │   ├── errors.ts           # Git 错误解析（Rust CODE → 用户消息）
-│   │   └── shortcut.ts         # 快捷键解析/匹配/冲突检测
+│   │   ├── shortcut.ts         # 快捷键解析/匹配/冲突检测
+│   │   └── diagnostics/        # 黑匣子采集器：eventLoopLag / longTasks / breadcrumbs（纯状态层，无 DOM 依赖）
 │   ├── api.ts                  # Tauri invoke 类型安全封装层
 │   ├── types.ts                # 集中类型定义
 │   ├── types/                  # customization + marketplace 类型
@@ -116,8 +118,9 @@ aide/
 │   └── src/                    # index.ts（stdin/stdout JSON lines）/ mapper / permissions / generator / deltaCoalescer
 ├── src-tauri/src/
 │   ├── lib.rs                  # Tauri Builder：注册 state + commands
-│   ├── sidecar.rs              # sidecar 进程管理（spawn/send/kill/rename + 事件转发）
+│   ├── sidecar.rs              # sidecar 进程管理（spawn/send/kill/rename + 事件转发；chat-event 出口挂黑匣子计数钩子）
 │   ├── shell.rs                # 工作台终端 PTY
+│   ├── diagnostics.rs          # 卡死黑匣子主控：DiagInner state + diag_heartbeat / diag_freeze_supplement 命令 + sidecar 计数入口（子实现在 diagnostics/：watchdog 独立线程 / ring 环形缓冲 / report 报告落盘）
 │   └── commands/
 │       ├── chat.rs             # send_message / permission_response / interrupt / stop
 │       ├── filesystem.rs / git.rs
@@ -129,6 +132,7 @@ aide/
 
 ## 关键约定
 
+- **卡死诊断黑匣子（Freeze Flight Recorder）**：偶发「未响应」难复现，靠常驻黑匣子抓现场。前端 `useDiagnostics` 每 500ms 发 `diag_heartbeat`（携带 event loop 延迟 / longtask 摘要 / 用户面包屑增量）；Rust `diagnostics/watchdog.rs` 是独立 `std::thread`（不占 Tauri 主线程、不进 tokio runtime，谁卡它都活着），心跳断流 ≥2s → 冻结期每 500ms 主动采样 aide 进程家族 CPU/内存（`sysinfo`，仅冻结期跑、空闲零成本）+ 主线程 no-op 探针积压 + Windows `IsHungAppWindow`；心跳恢复后把环形缓冲 + 采样帧落盘成 `~/.claude-code-desktop/diagnostics/freeze-<epoch>.json`（保留最新 20 份）。前端恢复后自愈补交冻结期 longtask 明细 + 面包屑快照（`diag_freeze_supplement`，30s 内合并进报告）。防误报：首心跳前不检测、`document.hidden` 时两边都抑制、watchdog 自身 tick 缺口 >5s 判系统休眠并标 `suspected_sleep`。对现有代码侵入仅四处（`lib.rs`/`sidecar.rs`/`main.ts`/`Cargo.toml`），其余纯新增可整体摘除；计数钩子挂在 provider-agnostic 的 `chat-event` 出口。设计文档 `docs/superpowers/specs/2026-07-08-freeze-diagnostics-design.md`。复发卡死后把 diagnostics 目录下最新报告丢给 Claude 分析。
 - **sidecar 事件出口必须过 delta 合并层**：所有 stdout 事件统一经 `deltaCoalescer.ts` 输出——逐字 `*_delta` 在 40ms 窗口内按 key 拼接（几百条/秒 → ≤25 条/秒），非增量事件先冲刷缓冲再透传保序。未来新 provider 的 sidecar 同样要接这一层，禁止绕过它直写 stdout（逐字事件洪峰 × 前端每增量全量重渲染曾导致整窗 30s+ 卡死）。前端配套约定：已定稿文本块走 `renderMarkdown()` 缓存（`utils/markdown.ts`），流式尾块才直接 `marked.parse`；滚动置底必须 rAF 节流（读 `scrollHeight` 强制全容器布局）；消息列表禁止全量进 v-for——必须过 `useMessageWindow` 尾部窗口（数据层全量在 store，渲染层只挂尾部 N 条、上滚扩窗；切会话时新旧会话全量拆建 DOM 曾整窗未响应数十秒）；未标语言的代码围栏超 10KB 不做 `highlightAuto`（12 种语言各跑一遍的自动检测是挂载卡顿放大器）。
 - **同步 command 禁止重 IO**：Tauri 非 async command 跑在主线程上，遍历/大文件读取/等子进程都会把窗口卡成「未响应」——这类命令一律 `async fn` + `spawn_blocking`（现有示例：`grep_symbol`、`find_files_by_name`、`git_has_file`、`load_messages`、`list_sessions`、`session_last_event`）。
 - **非 scoped 样式**：xterm 动态 DOM（`WorkbenchTerminal.vue`、`BashOutputBlock.vue`）的样式必须放非 scoped `<style>` 块，否则 Vite scoped hash 导致样式不生效。
