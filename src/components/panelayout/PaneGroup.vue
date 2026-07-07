@@ -39,12 +39,15 @@ const {
   permissionModes,
   currentPermissionMode,
   queuedPrompts,
+  pendingPermission,
+  pendingPermissionCount,
   sendMessage,
   interrupt,
   stopSession,
   setModel,
   setPermissionMode,
   removeQueued,
+  respondPermission,
 } = useChatSession(sessionIdRef);
 
 const workspacePath = inject<Ref<string>>(WORKSPACE_PATH_KEY, ref(""));
@@ -107,12 +110,15 @@ function onNewTab() {
       :permission-modes="permissionModes"
       :current-permission-mode="currentPermissionMode"
       :queued-prompts="queuedPrompts"
+      :permission="pendingPermission"
+      :permission-queue-count="pendingPermissionCount"
       class="pane-group__chat"
       @send="onSend"
       @interrupt="interrupt"
       @set-model="setModel"
       @set-permission-mode="setPermissionMode"
       @remove-queued="removeQueued"
+      @respond-permission="(id: string, approved: boolean, always?: boolean, answers?: Record<string, string>) => respondPermission(id, approved, always, answers)"
     />
   </div>
 </template>

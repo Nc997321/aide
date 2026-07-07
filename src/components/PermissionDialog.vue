@@ -40,6 +40,19 @@ const isPlanApproval = computed(() => props.permission?.name === "ExitPlanMode")
  *  {id, name, input} / (id, approved, always?, answers?) 的通用形状。 */
 const isQuestion = computed(() => props.permission?.name === "AskUserQuestion");
 
+/** 三种确认口吻用同一枚"火漆印"图钉，用图形区分种类：工具调用=锁、
+ *  计划批准=清单、澄清提问=问号——不按具体工具名再细分图标，换新工具/
+ *  第三方 provider 接入时也不用维护一张图标映射表。 */
+const kind = computed<"plan" | "question" | "tool">(() =>
+  isPlanApproval.value ? "plan" : isQuestion.value ? "question" : "tool",
+);
+
+const eyebrowLabel = computed(() => {
+  if (kind.value === "plan") return "计划待批准";
+  if (kind.value === "question") return "需要澄清";
+  return "工具调用请求";
+});
+
 const planHtml = computed(() => {
   if (!isPlanApproval.value) return "";
   const input = props.permission?.input as Record<string, unknown> | undefined;
@@ -107,197 +120,255 @@ function submitAnswers() {
  *  acceptEdits 等）维持普通按钮观感，不过度报警。 */
 const isAlwaysAllowDangerous = computed(() => (props.permission?.alwaysAllowLabel ?? "").startsWith("自动模式"));
 
-const inputSummary = computed(() => {
-  if (!props.permission) return "";
-  const input = props.permission.input as Record<string, unknown>;
-  if (props.permission.name === "Bash") return `命令：${input?.command ?? ""}`;
-  if (["Write", "Edit"].includes(props.permission.name)) return `文件：${input?.file_path ?? ""}`;
-  if (props.permission.name === "WebFetch") return `URL：${input?.url ?? ""}`;
-  return JSON.stringify(input, null, 2).slice(0, 200);
+/** sidecar 送来的 alwaysAllowLabel 常带一段括注的生效范围，例如
+ *  "自动接受编辑（本次会话）"——原来整句塞进一个按钮，中文括号会在任意
+ *  宽度截断处折行，观感很差。这里按"主文案 +（范围说明）"拆成两行，
+ *  拆不出括注（如默认的"总是允许"）就只显示主文案。 */
+const alwaysSplit = computed(() => {
+  const label = props.permission?.alwaysAllowLabel ?? "总是允许";
+  const m = label.match(/^(.*)（(.+)）$/);
+  return m ? { main: m[1], caption: m[2] } : { main: label, caption: null as string | null };
 });
 
-// ── 可拖动浮层 ─────────────────────────────────────────────────────────────
-// 不再用全屏遮罩挡住对话：弹窗是一个浮在右侧偏上的面板，标题栏即拖拽把手，
-// 用户可随时把它挪开继续看/滚对话内容，避免"看不到上下文就盲目确认"。
-const dragOffset = reactive({ x: 0, y: 0 });
-let dragStart: { mx: number; my: number; ox: number; oy: number } | null = null;
-
-function onDragStart(e: MouseEvent) {
-  dragStart = { mx: e.clientX, my: e.clientY, ox: dragOffset.x, oy: dragOffset.y };
-  window.addEventListener("mousemove", onDragMove);
-  window.addEventListener("mouseup", onDragEnd);
-  e.preventDefault();
-}
-function onDragMove(e: MouseEvent) {
-  if (!dragStart) return;
-  dragOffset.x = dragStart.ox + (e.clientX - dragStart.mx);
-  dragOffset.y = dragStart.oy + (e.clientY - dragStart.my);
-}
-function onDragEnd() {
-  dragStart = null;
-  window.removeEventListener("mousemove", onDragMove);
-  window.removeEventListener("mouseup", onDragEnd);
+interface InputRow {
+  label: string;
+  value: string;
 }
 
-// 每个新权限请求都复位到默认位置——否则上一次拖到边角后，新弹窗会沿用旧偏移
-// 甚至跑到可视区外找不到。
-watch(
-  () => props.permission?.id,
-  () => {
-    dragOffset.x = 0;
-    dragOffset.y = 0;
-  },
-);
+/** 常见工具的输入拆成"标签 + 值"两列（值用等宽字体单独一行展示，长命令/
+ *  长路径不再和标签挤在同一行文本里）；认不出的工具名退回原始 JSON。 */
+const inputRows = computed<InputRow[] | null>(() => {
+  if (!props.permission) return null;
+  const input = props.permission.input as Record<string, unknown>;
+  const name = props.permission.name;
+  if (name === "Bash") return [{ label: "命令", value: String(input?.command ?? "") }];
+  if (name === "Write" || name === "Edit") return [{ label: "文件", value: String(input?.file_path ?? "") }];
+  if (name === "WebFetch") return [{ label: "URL", value: String(input?.url ?? "") }];
+  return null;
+});
 
-const dialogStyle = computed(() => ({
-  transform: `translateX(-50%) translate(${dragOffset.x}px, ${dragOffset.y}px)`,
-}));
+const inputJson = computed(() => {
+  if (!props.permission || inputRows.value) return "";
+  return JSON.stringify(props.permission.input, null, 2).slice(0, 200);
+});
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="permission" class="perm-overlay">
-      <div
-        class="perm-dialog"
-        :class="{ 'perm-dialog--plan': isPlanApproval, 'perm-dialog--question': isQuestion }"
-        :style="dialogStyle"
-      >
-        <h3 class="perm-title perm-drag-handle" @mousedown="onDragStart">
-          <svg class="perm-drag-grip" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>
-          <span class="perm-title-text">
-            <template v-if="isPlanApproval">批准执行计划？</template>
+  <div v-if="permission" class="perm-dock">
+    <div class="perm-dialog">
+      <div class="perm-head">
+        <span class="perm-seal" :class="`perm-seal--${kind}`" aria-hidden="true">
+          <svg v-if="kind === 'tool'" width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" stroke="currentColor" stroke-width="1.3" />
+            <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+          </svg>
+          <svg v-else-if="kind === 'plan'" width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path d="M3 4.5h10M3 8h10M3 11.5h6.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+          </svg>
+          <span v-else class="perm-seal-glyph">?</span>
+        </span>
+        <div class="perm-head-text">
+          <span class="perm-eyebrow">{{ eyebrowLabel }}</span>
+          <span class="perm-title-main">
+            <template v-if="isPlanApproval">批准执行这份计划？</template>
             <template v-else-if="isQuestion">Claude 有问题要问你</template>
-            <template v-else>允许工具调用：<span class="perm-tool-name">{{ permission.name }}</span></template>
+            <template v-else><code class="perm-tool-chip">{{ permission.name }}</code></template>
           </span>
-          <span v-if="(queueCount ?? 0) > 1" class="perm-queue-badge">还有 {{ (queueCount ?? 0) - 1 }} 条待确认</span>
-        </h3>
-        <!-- 标注这次请求是主线程还是某个子代理发起的——没有它，子代理跑到一半突然
-             弹出权限框，用户完全不知道是谁在问（子代理没有独立窗口，只有一张可折叠
-             的进度卡片，很容易被当成"平白无故弹出来的"）。 -->
-        <div v-if="permission.fromSubagent" class="perm-subagent-badge">
-          🧩 来自子代理：{{ permission.fromSubagent.agentName }}
         </div>
-        <!-- plan 来自本会话模型输出，信任边界与 ChatMessage 的 v-html="marked.parse(...)" 完全一致 -->
-        <div v-if="isPlanApproval" class="perm-plan" v-html="planHtml" />
-        <div v-else-if="isQuestion" class="perm-questions">
-          <div v-for="(q, qi) in questions" :key="q.question" class="perm-question">
-            <div class="perm-question-head">
-              <span class="perm-question-chip">{{ q.header }}</span>
-              <span class="perm-question-text">{{ q.question }}</span>
-            </div>
-            <div class="perm-options">
-              <button
-                v-for="opt in q.options"
-                :key="opt.label"
-                type="button"
-                class="perm-option"
-                :class="{ 'perm-option--selected': !useFreeText[qi] && selections[qi]?.includes(opt.label) }"
-                @click="toggleOption(qi, opt.label, q.multiSelect)"
-              >
-                <div class="perm-option-label">{{ opt.label }}</div>
-                <div class="perm-option-desc">{{ opt.description }}</div>
-              </button>
-              <button
-                type="button"
-                class="perm-option perm-option--other"
-                :class="{ 'perm-option--selected': useFreeText[qi] }"
-                @click="selectFreeText(qi)"
-              >
-                <div class="perm-option-label">其他…</div>
-              </button>
-            </div>
-            <input
-              v-if="useFreeText[qi]"
-              v-model="freeText[qi]"
-              type="text"
-              class="perm-freetext"
-              placeholder="输入你的回答"
-            />
+        <span v-if="(queueCount ?? 0) > 1" class="perm-queue-badge">还有 {{ (queueCount ?? 0) - 1 }} 条待确认</span>
+      </div>
+      <!-- 标注这次请求是主线程还是某个子代理发起的——没有它，子代理跑到一半突然
+           弹出权限框，用户完全不知道是谁在问（子代理没有独立窗口，只有一张可折叠
+           的进度卡片，很容易被当成"平白无故弹出来的"）。 -->
+      <div v-if="permission.fromSubagent" class="perm-subagent-badge">
+        🧩 来自子代理：{{ permission.fromSubagent.agentName }}
+      </div>
+      <!-- plan 来自本会话模型输出，信任边界与 ChatMessage 的 v-html="marked.parse(...)" 完全一致 -->
+      <div v-if="isPlanApproval" class="perm-plan" v-html="planHtml" />
+      <div v-else-if="isQuestion" class="perm-questions">
+        <div v-for="(q, qi) in questions" :key="q.question" class="perm-question">
+          <div class="perm-question-head">
+            <span class="perm-question-chip">{{ q.header }}</span>
+            <span class="perm-question-text">{{ q.question }}</span>
           </div>
-        </div>
-        <pre v-else class="perm-input">{{ inputSummary }}</pre>
-        <div class="perm-actions">
-          <template v-if="isQuestion">
-            <button class="perm-btn perm-btn--deny" @click="emit('respond', permission.id, false)">跳过</button>
+          <div class="perm-options">
             <button
-              class="perm-btn perm-btn--allow"
-              :disabled="!canSubmitQuestions"
-              @click="submitAnswers"
+              v-for="opt in q.options"
+              :key="opt.label"
+              type="button"
+              class="perm-option"
+              :class="{ 'perm-option--selected': !useFreeText[qi] && selections[qi]?.includes(opt.label) }"
+              @click="toggleOption(qi, opt.label, q.multiSelect)"
             >
-              提交回答
-            </button>
-          </template>
-          <template v-else>
-            <button class="perm-btn perm-btn--deny" @click="emit('respond', permission.id, false)">
-              {{ isPlanApproval ? "继续修改计划" : "拒绝" }}
+              <div class="perm-option-label">{{ opt.label }}</div>
+              <div class="perm-option-desc">{{ opt.description }}</div>
             </button>
             <button
-              v-if="!isPlanApproval"
-              class="perm-btn perm-btn--always"
-              :class="{ 'perm-btn--always-danger': isAlwaysAllowDangerous }"
-              @click="emit('respond', permission.id, true, true)"
+              type="button"
+              class="perm-option perm-option--other"
+              :class="{ 'perm-option--selected': useFreeText[qi] }"
+              @click="selectFreeText(qi)"
             >
-              {{ permission.alwaysAllowLabel ?? "总是允许" }}
+              <div class="perm-option-label">其他…</div>
             </button>
-            <button class="perm-btn perm-btn--allow" @click="emit('respond', permission.id, true)">
-              {{ isPlanApproval ? "批准并开始执行" : "允许" }}
-            </button>
-          </template>
+          </div>
+          <input
+            v-if="useFreeText[qi]"
+            v-model="freeText[qi]"
+            type="text"
+            class="perm-freetext"
+            placeholder="输入你的回答"
+          />
         </div>
       </div>
+      <div v-else class="perm-input">
+        <div v-if="inputRows" class="perm-input-rows">
+          <div v-for="row in inputRows" :key="row.label" class="perm-input-row">
+            <span class="perm-input-label">{{ row.label }}</span>
+            <code class="perm-input-value">{{ row.value }}</code>
+          </div>
+        </div>
+        <pre v-else class="perm-input-raw">{{ inputJson }}</pre>
+      </div>
+      <div class="perm-actions">
+        <template v-if="isQuestion">
+          <button class="perm-btn perm-btn--ghost" @click="emit('respond', permission.id, false)">跳过</button>
+          <button
+            class="perm-btn perm-btn--solid"
+            :disabled="!canSubmitQuestions"
+            @click="submitAnswers"
+          >
+            提交回答
+          </button>
+        </template>
+        <template v-else>
+          <button class="perm-btn perm-btn--ghost" @click="emit('respond', permission.id, false)">
+            {{ isPlanApproval ? "继续修改计划" : "拒绝" }}
+          </button>
+          <div class="perm-actions-primary">
+            <button
+              v-if="!isPlanApproval"
+              class="perm-btn perm-btn--outline"
+              :class="{ 'perm-btn--outline-danger': isAlwaysAllowDangerous }"
+              @click="emit('respond', permission.id, true, true)"
+            >
+              <span class="perm-btn-main">{{ alwaysSplit.main }}</span>
+              <span v-if="alwaysSplit.caption" class="perm-btn-caption">{{ alwaysSplit.caption }}</span>
+            </button>
+            <button class="perm-btn perm-btn--solid" @click="emit('respond', permission.id, true)">
+              {{ isPlanApproval ? "批准并开始执行" : "允许" }}
+            </button>
+          </div>
+        </template>
+      </div>
     </div>
-  </Teleport>
+  </div>
 </template>
 
 <style scoped>
-/* 不再铺满全屏遮罩——容器本身不吃点击（pointer-events:none），对话内容保持
- * 可见且可滚动；只有弹窗本体接收交互。这样用户能一边看上下文一边确认。 */
-.perm-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 9000;
-  pointer-events: none;
+/* 不再是 Teleport 到 body 的悬浮卡片——直接嵌在 ChatPanel 的消息区和输入框
+ * 之间（见 ChatPanel.vue），随文档流占据自己的一块空间。.chat-messages 是
+ * flex:1，这块一出现，消息区自动让出高度，永远不会盖住正文；也因此不再需要
+ * 拖拽把手（没有什么可挡的，不用挪开）、不再需要算悬浮坐标。
+ *
+ * 两侧留白跟 .chat-input-area 的左右 padding（12px）对齐，让它读作一张
+ * 独立的卡片"浮"在消息区和输入框之间，而不是一块贴死两侧边框、生硬撑满
+ * 整个面板宽度的色块。顶边用一条更粗的铜色描边（呼应 ChatMessage 里
+ * "通页书脊"的配色）跟其余三边的普通描边区分，暗示这是当前这轮对话需要
+ * 用户落笔的地方。整块限高自滚动，避免一份长 plan 或多道问题把输入框
+ * 顶出可视区。 */
+.perm-dock {
+  flex-shrink: 0;
+  max-height: 45vh;
+  overflow-y: auto;
+  margin: 8px 12px 10px;
+  border: 1px solid var(--aide-border);
+  border-top: 2px solid rgba(212, 165, 116, 0.55);
+  border-radius: var(--aide-radius-md);
+  background: var(--aide-bg-raised);
+  box-shadow: var(--aide-shadow-lg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .perm-dock {
+    animation: perm-rise 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+}
+
+@keyframes perm-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .perm-dialog {
-  pointer-events: auto;
-  position: fixed;
-  top: 12vh;
-  left: 50%;
-  /* transform 由 :style 绑定（居中 -50% + 拖拽偏移）合成 */
-  width: 480px;
-  max-height: 80vh;
-  overflow-y: auto;
-  border-radius: var(--aide-radius-md);
-  background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border);
-  box-shadow: var(--aide-shadow-lg);
-  padding: 20px;
+  padding: 14px 16px;
 }
 
-.perm-title {
+.perm-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+/* "火漆印"：三种确认口吻共用同一枚圆角图钉，靠内部图形区分种类——
+ * 呼应整个应用"铜色 + 墨线"的手写账本气质，而不是通用系统警告图标。 */
+.perm-seal {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--aide-radius-sm);
+  background: var(--aide-accent-subtle);
+  color: var(--aide-accent);
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+}
+
+.perm-seal-glyph {
   font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.perm-head-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.perm-eyebrow {
+  font-size: 10px;
   font-weight: 600;
-  color: var(--aide-text-primary);
-  margin-bottom: 8px;
-}
-
-.perm-drag-handle {
-  cursor: move;
-  user-select: none;
-}
-
-.perm-drag-grip {
-  flex-shrink: 0;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--aide-text-muted);
 }
 
-.perm-title-text {
-  flex: 1;
-  min-width: 0;
+.perm-title-main {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--aide-text-primary);
+  line-height: 1.4;
+}
+
+.perm-tool-chip {
+  display: inline-block;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--aide-accent);
+  background: var(--aide-accent-subtle);
+  border-radius: var(--aide-radius-sm);
+  padding: 1px 7px;
 }
 
 .perm-queue-badge {
@@ -311,10 +382,6 @@ const dialogStyle = computed(() => ({
   white-space: nowrap;
 }
 
-.perm-tool-name {
-  color: var(--aide-accent);
-}
-
 .perm-subagent-badge {
   display: inline-block;
   font-size: 11px;
@@ -325,15 +392,7 @@ const dialogStyle = computed(() => ({
   margin-bottom: 10px;
 }
 
-.perm-dialog--plan,
-.perm-dialog--question {
-  width: 640px;
-  max-width: calc(100vw - 48px);
-}
-
 .perm-questions {
-  max-height: 60vh;
-  overflow: auto;
   margin-bottom: 16px;
 }
 
@@ -426,8 +485,6 @@ const dialogStyle = computed(() => ({
 }
 
 .perm-plan {
-  max-height: 50vh;
-  overflow: auto;
   border-radius: var(--aide-radius-sm);
   background: var(--aide-bg-deep);
   border: 1px solid var(--aide-border);
@@ -474,76 +531,150 @@ const dialogStyle = computed(() => ({
   margin: 6px 0;
 }
 
+/* 输入摘要：左边一道细铜线（同 ChatMessage 的 blockquote/书脊语言），
+ * 标签和值分两行——避免长命令/长路径的等宽字体和"命令："这样的中文
+ * 标签挤在同一行里，前几个字被截没。 */
 .perm-input {
+  border-left: 2px solid var(--aide-accent);
+  background: var(--aide-bg-deep);
+  border-radius: 0 var(--aide-radius-sm) var(--aide-radius-sm) 0;
+  padding: 8px 12px;
+  margin-bottom: 16px;
   max-height: 128px;
   overflow: auto;
-  border-radius: var(--aide-radius-sm);
-  background: var(--aide-bg-deep);
-  border: 1px solid var(--aide-border);
-  padding: 8px 12px;
-  font-size: 12px;
+}
+
+.perm-input-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.perm-input-row + .perm-input-row {
+  padding-top: 8px;
+  border-top: 1px solid var(--aide-border-subtle, var(--aide-border));
+}
+
+.perm-input-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--aide-text-muted);
+  margin-bottom: 3px;
+}
+
+.perm-input-value {
+  display: block;
   font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 12px;
+  color: var(--aide-text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.perm-input-raw {
+  margin: 0;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 12px;
   color: var(--aide-text-secondary);
   white-space: pre-wrap;
   word-break: break-all;
-  margin-bottom: 16px;
 }
 
 .perm-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.perm-actions-primary {
+  display: flex;
+  align-items: center;
   gap: 8px;
 }
 
 .perm-btn {
   border-radius: var(--aide-radius-sm);
-  border: none;
+  border: 1px solid transparent;
   padding: 6px 16px;
   font-size: 13px;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 
-.perm-btn--deny {
-  background: var(--aide-surface-default);
+/* 拒绝：视觉上最不显眼的一个，独立放在按钮组左侧（对面才是允许/总是允许），
+ * 拉开物理距离——不是"三个按钮挤一排全靠颜色分辨"，误点成本更低。 */
+.perm-btn--ghost {
+  background: transparent;
+  color: var(--aide-text-muted);
+}
+
+.perm-btn--ghost:hover {
+  background: var(--aide-surface-hover);
   color: var(--aide-text-secondary);
 }
 
-.perm-btn--deny:hover {
-  background: var(--aide-surface-hover);
-}
-
-.perm-btn--always {
-  background: var(--aide-surface-default);
+/* 总是允许/自动接受：描边按钮，主文案 + 生效范围小字分两行——
+ * 拆分逻辑见脚本里的 alwaysSplit，修掉了长文案在按钮里硬折行的问题。 */
+.perm-btn--outline {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 5px 14px;
+  border-color: var(--aide-border);
+  background: transparent;
   color: var(--aide-text-secondary);
-  border: 1px solid var(--aide-border);
 }
 
-.perm-btn--always:hover {
-  background: var(--aide-surface-hover);
+.perm-btn--outline:hover {
+  border-color: var(--aide-accent);
   color: var(--aide-text-primary);
+}
+
+.perm-btn-main {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.perm-btn-caption {
+  font-size: 10px;
+  color: var(--aide-text-muted);
+  line-height: 1.2;
 }
 
 /* 会切到 bypassPermissions（跳过所有确认）时标红，其余 addRules/acceptEdits
  * 等场景维持普通按钮观感，不过度报警。 */
-.perm-btn--always-danger {
+.perm-btn--outline-danger {
   border-color: var(--aide-danger);
   color: var(--aide-danger);
 }
 
-.perm-btn--always-danger:hover {
+.perm-btn--outline-danger .perm-btn-caption {
+  color: var(--aide-danger);
+  opacity: 0.75;
+}
+
+.perm-btn--outline-danger:hover {
   background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
   color: var(--aide-danger);
 }
 
-.perm-btn--allow {
+.perm-btn--solid {
   background: var(--aide-accent);
+  border-color: var(--aide-accent);
   color: var(--aide-text-on-accent);
-  font-weight: 500;
+  font-weight: 600;
 }
 
-.perm-btn--allow:hover {
+.perm-btn--solid:hover {
   background: var(--aide-accent-hover);
+  border-color: var(--aide-accent-hover);
 }
 
 .perm-btn:disabled {

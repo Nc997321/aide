@@ -4,7 +4,8 @@ import type { ComputedRef } from "vue";
 import ChatMessage from "./ChatMessage.vue";
 import TaskListPanel from "./TaskListPanel.vue";
 import ThemedSelect from "./ThemedSelect.vue";
-import type { ChatMessage as ChatMessageType, ContextUsage, ModelOption, PermissionModeOption, RateLimitInfo, TaskItem, TextBlock } from "@/types/chat";
+import PermissionDialog from "./PermissionDialog.vue";
+import type { ChatMessage as ChatMessageType, ContextUsage, ModelOption, PermissionModeOption, PermissionRequest, RateLimitInfo, TaskItem, TextBlock } from "@/types/chat";
 import type { SkillMeta } from "@/types";
 import { api } from "@/api";
 import { resolvePastePayload } from "@/utils/paste";
@@ -32,6 +33,10 @@ const props = defineProps<{
   currentPermissionMode?: string;
   /** 忙碌时排队的待发消息文本（顺序即发送顺序） */
   queuedPrompts?: string[];
+  /** 本会话待确认的权限/提问请求——渲染在消息区和输入框之间（见模板），
+   *  不是浮层，见 PermissionDialog.vue 顶部注释。 */
+  permission?: PermissionRequest | null;
+  permissionQueueCount?: number;
 }>();
 
 const emit = defineEmits<{
@@ -40,6 +45,7 @@ const emit = defineEmits<{
   "set-model": [model: string];
   "set-permission-mode": [mode: string];
   "remove-queued": [index: number];
+  "respond-permission": [id: string, approved: boolean, always?: boolean, answers?: Record<string, string>];
 }>();
 
 const { activeProvider, SYSTEM_DEFAULT_ID } = useProviders();
@@ -457,6 +463,15 @@ function handleQuickAction(action: QuickAction) {
         <button class="chat-interrupt-btn" @click="emit('interrupt')">中断</button>
       </div>
     </div>
+
+    <!-- 权限确认 / AskUserQuestion：挤在消息区和输入框之间，占真实布局空间而
+         不是悬浮遮挡——上面 .chat-messages 是 flex:1，这块一出现就自动让出
+         高度，正文和输入框都不会被盖住。 -->
+    <PermissionDialog
+      :permission="permission ?? null"
+      :queue-count="permissionQueueCount"
+      @respond="(id: string, approved: boolean, always?: boolean, answers?: Record<string, string>) => emit('respond-permission', id, approved, always, answers)"
+    />
 
     <div class="chat-input-area">
       <!-- Slash command dropdown -->

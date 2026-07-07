@@ -9,7 +9,6 @@ const FileViewer = defineAsyncComponent(() => import("./components/FileViewer.vu
 const SettingsPanel = defineAsyncComponent(() => import("./components/SettingsPanel.vue"));
 const RunConfigsDialog = defineAsyncComponent(() => import("./components/RunConfigsDialog.vue"));
 import PaneLayout from "./components/PaneLayout.vue";
-import PermissionDialog from "./components/PermissionDialog.vue";
 import { useChatSession, isPendingSession } from "./composables/useChatSession";
 import { usePaneLayout } from "./composables/usePaneLayout";
 import { usePaneLayoutPersistence } from "./composables/paneLayout/persistence";
@@ -108,10 +107,11 @@ const paletteRef = ref<InstanceType<typeof ACommandPalette> | null>(null);
 const paneLayout = usePaneLayout();
 const paneLayoutPersistence = usePaneLayoutPersistence();
 const activeSessionId = paneLayout.activeSessionId;
-const chatSessionIdRef = computed(() => activeSessionId.value || null);
-// App 级 useChatSession 只服务全局权限弹窗（store 是模块级的，多实例零成本；
-// ChatPanel 的完整接线在 panelayout/PaneGroup.vue 内各组自治）。
-const { pendingPermission, pendingPermissionCount, respondPermission, onSessionCreated } = useChatSession(chatSessionIdRef);
+// App 级 useChatSession 只用来拿全局单例的 onSessionCreated 回调（module 级
+// Set，跟传入的 session id 无关）——权限弹窗已经下沉进每个 PaneGroup 自己的
+// ChatPanel（消息区和输入框之间，见 ChatPanel.vue/PermissionDialog.vue），
+// 不再需要在这里为它单独绑定"聚焦会话"。
+const { onSessionCreated } = useChatSession(computed(() => null));
 
 // 会话首次创建：临时 key 拿到 SDK 确认的真实 id，这时才第一次落盘——
 // 写元数据、加侧栏、记最近访问。之前什么都没写过，不存在"迁移"这一步。
@@ -590,11 +590,6 @@ onUnmounted(() => {
       <SettingsPanel v-if="settingsVisible" :initial-tab="settingsInitialTab" @close="settingsVisible = false" />
       <RunConfigsDialog v-if="runConfigsDialogVisible" @close="runConfigsDialogVisible = false" />
       <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
-      <PermissionDialog
-        :permission="pendingPermission"
-        :queue-count="pendingPermissionCount"
-        @respond="(id: string, approved: boolean, always?: boolean, answers?: Record<string, string>) => respondPermission(id, approved, always, answers)"
-      />
     </div>
 
     <ACommandPalette
