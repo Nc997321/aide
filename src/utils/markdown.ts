@@ -4,12 +4,24 @@ import { parseFileLink } from "./fileLink";
 
 export const marked = new Marked({ gfm: true, breaks: false });
 
+/** 未标语言的围栏走 highlightAuto 会把文本用全部注册语言(12 种)各跑一遍再挑
+ *  最优——大块时是首次挂载卡顿的放大器,超阈值直接转义纯文本。标了语言的
+ *  单语言高亮便宜得多,给一个宽松上限兜底极端体积。 */
+const AUTO_HIGHLIGHT_MAX_CHARS = 10_000;
+const LABELED_HIGHLIGHT_MAX_CHARS = 100_000;
+
 marked.use({
   renderer: {
     code({ text, lang }: { text: string; lang?: string }) {
       if (lang && hljs.getLanguage(lang)) {
+        if (text.length > LABELED_HIGHLIGHT_MAX_CHARS) {
+          return `<pre><code class="hljs language-${lang}">${escapeHtml(text)}</code></pre>`;
+        }
         const result = hljs.highlight(text, { language: lang });
         return `<pre><code class="hljs language-${lang}">${result.value}</code></pre>`;
+      }
+      if (text.length > AUTO_HIGHLIGHT_MAX_CHARS) {
+        return `<pre><code class="hljs">${escapeHtml(text)}</code></pre>`;
       }
       const result = hljs.highlightAuto(text);
       return `<pre><code class="hljs">${result.value}</code></pre>`;

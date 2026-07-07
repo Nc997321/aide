@@ -12,6 +12,7 @@ import { resolveFileMentions } from "@/utils/fileMentions";
 import type { FileMentionResolution } from "@/utils/fileMentions";
 import { peekFileClipboard } from "@/composables/useFileClipboard";
 import type { ImageAttachment, SendOptions } from "@/composables/useChatSession";
+import { useMessageWindow } from "@/composables/useMessageWindow";
 import { useProviders } from "@/composables/useProviders";
 import { useQuickActions } from "@/composables/useQuickActions";
 import type { QuickAction } from "@/composables/useQuickActions";
@@ -195,6 +196,33 @@ const messagesVal = computed(() =>
   Array.isArray(props.messages) ? props.messages : props.messages.value
 );
 
+// 窗口化渲染:store 里的消息全量在场,但进 v-for 建 DOM 的只有尾部一个有界
+// 窗口——长会话一次性挂载全史(几万 DOM 节点 + 全量 Markdown/高亮)曾把切
+// 会话的首帧卡成整窗未响应。向上滚动/点击顶部入口逐步扩窗,见 useMessageWindow。
+const { visible: visibleMessages, hiddenCount, expandOlder } = useMessageWindow(
+  () => messagesVal.value,
+  () => props.sessionId,
+);
+
+/** 扩窗 + 滚动锚定:上方插入内容会把当前可视内容往下顶,读扩窗前后的
+ *  scrollHeight 差把 scrollTop 补回去,保持视觉位置不跳。强制布局(读
+ *  scrollHeight)只发生在用户主动翻旧消息时,不在流式热路径上。 */
+let expandingOlder = false;
+async function expandOlderAnchored() {
+  const el = scrollEl.value;
+  if (!el || expandingOlder || hiddenCount.value === 0) return;
+  expandingOlder = true;
+  try {
+    const prevHeight = el.scrollHeight;
+    const prevTop = el.scrollTop;
+    expandOlder();
+    await nextTick();
+    el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
+  } finally {
+    expandingOlder = false;
+  }
+}
+
 const inputText = ref("");
 const skillList = ref<SkillMeta[]>([]);
 const slashDropdownVisible = ref(false);
@@ -232,6 +260,9 @@ function onScroll() {
   const el = scrollEl.value;
   if (!el) return;
   autoScroll.value = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  // 滚到接近顶部 = 想看更早的消息:扩窗(带锚定)。只在用户真实滚动时触发,
+  // 挂载/置底不产生 scrollTop≈0 的 scroll 事件,不会误触发。
+  if (el.scrollTop < 80 && hiddenCount.value > 0) void expandOlderAnchored();
 }
 
 // 按帧节流：读 scrollHeight 会强制整个消息容器同步布局（成本 ∝ 会话历史 DOM
@@ -407,8 +438,15 @@ function handleQuickAction(action: QuickAction) {
       <div v-if="messagesVal.length === 0" class="chat-empty">
         开始新对话
       </div>
+      <button
+        v-if="hiddenCount > 0"
+        class="chat-history-gate"
+        @click="expandOlderAnchored"
+      >
+        上方还有 {{ hiddenCount }} 条历史消息 · 点击或继续上滚加载
+      </button>
       <ChatMessage
-        v-for="msg in messagesVal"
+        v-for="msg in visibleMessages"
         :key="msg.id"
         :message="msg"
         :workspace-path="workspacePath"
@@ -573,6 +611,26 @@ function handleQuickAction(action: QuickAction) {
   justify-content: center;
   font-size: 13px;
   color: var(--aide-text-muted);
+}
+
+/* 窗口化渲染的顶部入口:窗口上方还有未挂载的历史时显示 */
+.chat-history-gate {
+  display: block;
+  width: calc(100% - 24px);
+  margin: 0 12px 4px;
+  padding: 5px 0;
+  border: 1px dashed var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  background: transparent;
+  color: var(--aide-text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.chat-history-gate:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-secondary);
 }
 
 .chat-thinking {

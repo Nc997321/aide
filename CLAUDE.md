@@ -83,6 +83,7 @@ aide/
 │   │   └── marketplace/        # MarketplaceTab / PluginCard
 │   ├── composables/
 │   │   ├── useChatSession.ts      # 对话核心（每会话独立 store + 事件路由 + resume + ID 迁移）
+│   │   ├── useMessageWindow.ts    # 消息列表窗口化渲染（尾部 N 条 + 上滚扩窗，反向分页）
 │   │   ├── usePaneLayout.ts       # 分屏布局树状态层（预览 tab/全局唯一/聚焦/MRU 切换；纯树操作在 paneLayout/tree.ts，全局单份持久化在 paneLayout/persistence.ts）
 │   │   ├── useSessionNames.ts     # 会话 id → 显示名注册表（侧栏写入，tab 栏/面板头只读）
 │   │   ├── useSessionWorkspaces.ts # 会话 id → 所属工作区注册表（混合 tab 的 sidecar cwd / tab 工作区后缀标识）
@@ -126,7 +127,7 @@ aide/
 
 ## 关键约定
 
-- **sidecar 事件出口必须过 delta 合并层**：所有 stdout 事件统一经 `deltaCoalescer.ts` 输出——逐字 `*_delta` 在 40ms 窗口内按 key 拼接（几百条/秒 → ≤25 条/秒），非增量事件先冲刷缓冲再透传保序。未来新 provider 的 sidecar 同样要接这一层，禁止绕过它直写 stdout（逐字事件洪峰 × 前端每增量全量重渲染曾导致整窗 30s+ 卡死）。前端配套约定：已定稿文本块走 `renderMarkdown()` 缓存（`utils/markdown.ts`），流式尾块才直接 `marked.parse`；滚动置底必须 rAF 节流（读 `scrollHeight` 强制全容器布局）。
+- **sidecar 事件出口必须过 delta 合并层**：所有 stdout 事件统一经 `deltaCoalescer.ts` 输出——逐字 `*_delta` 在 40ms 窗口内按 key 拼接（几百条/秒 → ≤25 条/秒），非增量事件先冲刷缓冲再透传保序。未来新 provider 的 sidecar 同样要接这一层，禁止绕过它直写 stdout（逐字事件洪峰 × 前端每增量全量重渲染曾导致整窗 30s+ 卡死）。前端配套约定：已定稿文本块走 `renderMarkdown()` 缓存（`utils/markdown.ts`），流式尾块才直接 `marked.parse`；滚动置底必须 rAF 节流（读 `scrollHeight` 强制全容器布局）；消息列表禁止全量进 v-for——必须过 `useMessageWindow` 尾部窗口（数据层全量在 store，渲染层只挂尾部 N 条、上滚扩窗；切会话时新旧会话全量拆建 DOM 曾整窗未响应数十秒）；未标语言的代码围栏超 10KB 不做 `highlightAuto`（12 种语言各跑一遍的自动检测是挂载卡顿放大器）。
 - **同步 command 禁止重 IO**：Tauri 非 async command 跑在主线程上，遍历/大文件读取/等子进程都会把窗口卡成「未响应」——这类命令一律 `async fn` + `spawn_blocking`（现有示例：`grep_symbol`、`find_files_by_name`、`git_has_file`、`load_messages`、`list_sessions`、`session_last_event`）。
 - **非 scoped 样式**：xterm 动态 DOM（`WorkbenchTerminal.vue`、`BashOutputBlock.vue`）的样式必须放非 scoped `<style>` 块，否则 Vite scoped hash 导致样式不生效。
 - **通知不依赖插件**：直接用 `notify-rust`（`notify_send` 命令），强制 `app_id("com.aide.app")`，绕过 tauri-plugin-notification dev 模式跳过 app_id 的 bug。
