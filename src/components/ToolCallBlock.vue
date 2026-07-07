@@ -23,7 +23,7 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
 
 <template>
   <div class="tool-item">
-    <button class="ti-row" @click="expanded = !expanded">
+    <button class="ti-row" :aria-expanded="expanded" @click="expanded = !expanded">
       <span
         :class="['ti-dot', block.isPending ? 'ti-dot--run' : block.isError ? 'ti-dot--err' : '']"
       ></span>

@@ -46,7 +46,7 @@ const runningSummary = computed(() =>
 <template>
   <div class="tool-group">
     <span :class="['tg-node', running ? 'tg-node--live' : '']"></span>
-    <button class="tg-summary" @click="expanded = !expanded">
+    <button class="tg-summary" :aria-expanded="expanded" @click="expanded = !expanded">
       <template v-if="running">
         正在执行 <span class="tg-name">{{ running.name }}</span>
         <span class="tg-kinds">{{ runningSummary }}</span>
