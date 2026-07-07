@@ -116,6 +116,16 @@ function handleTextClick(e: MouseEvent) {
   color: var(--aide-text-on-accent);
 }
 
+/* App.vue 的 .app-layout 为防止拖拽分栏/标签时误选界面文字，全局设了
+ * user-select: none；该属性可继承，会一路传导到消息正文导致整段对话
+ * 都无法选中复制。这里在消息容器局部恢复，子内容（代码块、工具调用块等）
+ * 会随继承一并变回可选，不影响其余界面元素的防误选行为。 */
+.msg-bubble,
+.msg-turn {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 /* 通页书脊（spec·B2）：assistant 正文直接落在页面上，
  * 一条铜色书脊纵贯整个回合（正文 + 工具墨线 + 用量）。 */
 .msg-turn {
