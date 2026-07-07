@@ -365,6 +365,20 @@ fn parse_transcript_lines(lines: &[String]) -> Vec<ChatMessageItem> {
         if blocks.is_empty() {
             continue;
         }
+        // 同一回合的 assistant 在 transcript 里逐 chunk 各占一行（一段文本、一次
+        // 工具调用各一行），回合之间必有真实 user 行隔开（tool_result-only 和合成
+        // user 行在上面已被跳过，不会误隔断）。连续的 assistant 行合并回一条消息，
+        // 对齐实时路径「一个回合一条 assistant 消息」的形状——否则重开历史会话时
+        // 一个回合的连续工具调用被拆成 N 条消息，前端的消息内分组（ToolCallGroup）
+        // 各自成组，摘要退化成 N 个「1 次工具调用」。
+        if role == "claude" {
+            if let Some(last) = messages.last_mut() {
+                if last.role == "claude" {
+                    last.blocks.extend(blocks);
+                    continue;
+                }
+            }
+        }
         messages.push(ChatMessageItem { role: role.to_string(), blocks, timestamp: i as u64 });
     }
 
@@ -910,6 +924,63 @@ mod tests {
                 "message": { "content": "这是 Skill 注入，不是人打的" },
             }))];
             assert!(parse_transcript_lines(&lines).is_empty());
+        }
+
+        #[test]
+        fn consecutive_assistant_lines_merge_into_one_message() {
+            // 同一回合的 assistant 在 transcript 里逐 chunk 各占一行（一段文本、
+            // 一次工具调用各一行），中间还穿插 tool_result 的 user 行（会被跳过）。
+            // 这些行必须合并回一条消息，否则前端的消息内工具分组（ToolCallGroup）
+            // 会把一个回合的连续调用拆成 N 个「1 次工具调用」的组。
+            let lines = vec![
+                line(serde_json::json!({
+                    "type": "user",
+                    "message": { "content": "帮我看看" },
+                })),
+                line(serde_json::json!({
+                    "type": "assistant",
+                    "message": { "content": [{ "type": "text", "text": "先读文件。" }] },
+                })),
+                line(serde_json::json!({
+                    "type": "assistant",
+                    "message": { "content": [{ "type": "tool_use", "id": "t1", "name": "Read", "input": { "file_path": "a.java" } }] },
+                })),
+                line(serde_json::json!({
+                    "type": "user",
+                    "message": { "content": [{ "type": "tool_result", "tool_use_id": "t1", "content": "ok" }] },
+                })),
+                line(serde_json::json!({
+                    "type": "assistant",
+                    "message": { "content": [{ "type": "tool_use", "id": "t2", "name": "Read", "input": { "file_path": "b.java" } }] },
+                })),
+                line(serde_json::json!({
+                    "type": "assistant",
+                    "message": { "content": [{ "type": "text", "text": "结论。" }] },
+                })),
+                line(serde_json::json!({
+                    "type": "user",
+                    "message": { "content": "下一个问题" },
+                })),
+                line(serde_json::json!({
+                    "type": "assistant",
+                    "message": { "content": [{ "type": "text", "text": "好的。" }] },
+                })),
+            ];
+
+            let messages = parse_transcript_lines(&lines);
+
+            let roles: Vec<&str> = messages.iter().map(|m| m.role.as_str()).collect();
+            assert_eq!(roles, vec!["user", "claude", "user", "claude"], "真实 user 行仍然隔断回合");
+            // 第一回合的 4 个 chunk（text + tool_use + tool_use + text）合并进一条消息
+            assert_eq!(messages[1].blocks.len(), 4);
+            // tool_result 回填不受合并影响
+            match &messages[1].blocks[1] {
+                HistoryBlock::ToolCall { id, result, .. } => {
+                    assert_eq!(id, "t1");
+                    assert_eq!(result.as_deref(), Some("ok"));
+                }
+                other => panic!("expected tool_call, got {other:?}"),
+            }
         }
     }
 }
