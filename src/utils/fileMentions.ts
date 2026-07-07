@@ -57,3 +57,35 @@ export async function resolveFileMentions(
   const sendText = sections.length ? `${text}\n\n${sections.join("\n\n")}` : text;
   return { sendText, resolved };
 }
+
+export interface MentionSplit {
+  /** 去掉引用展开段之后的用户原文（即当初 resolveFileMentions 收到的 text）。 */
+  displayText: string;
+  /** 拆出来的引用段，顺序与文中出现顺序一致。 */
+  sections: ResolvedMention[];
+}
+
+/**
+ * `resolveFileMentions` 的逆操作：把 `sendText` 拆回「用户原文 + 引用段」。
+ *
+ * 用途：SDK transcript 落盘的用户消息就是 sendText 本身，重开历史会话时只有
+ * 这一份文本可用——不拆的话整个文件原文会灌进用户气泡（直发路径不受影响，
+ * 它有 resolved 单独渲染附件卡片）。生成和解析放同一个文件，标记格式只有
+ * 这一处真相源；改包裹格式时两个函数必须一起动。
+ *
+ * 头尾标记的路径必须一致才算一段（backreference 校验），既防误伤用户碰巧打出
+ * 的类似文本，也让非贪婪匹配在正确的结束标记处停下。
+ */
+export function splitMentionSections(text: string): MentionSplit {
+  const sections: ResolvedMention[] = [];
+  const displayText = text
+    .replace(
+      /\n*--- 引用文件：(.+) ---\n([\s\S]*?)\n--- 文件结束：\1 ---/g,
+      (_match, path: string, content: string) => {
+        sections.push({ path, content });
+        return "";
+      },
+    )
+    .trim();
+  return sections.length ? { displayText, sections } : { displayText: text, sections: [] };
+}

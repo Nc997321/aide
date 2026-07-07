@@ -17,7 +17,7 @@ import type {
 } from "../types/chat";
 import { useSessionState } from "./useSessionState";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
-import type { FileMentionResolution } from "../utils/fileMentions";
+import { splitMentionSections, type FileMentionResolution } from "../utils/fileMentions";
 import type { HistoryBlock } from "../types";
 
 export interface ImageAttachment {
@@ -582,7 +582,7 @@ async function hydrate(sid: string) {
     const history: ChatMessage[] = items.map((item) => ({
       id: crypto.randomUUID(),
       role: (item.role === "claude" ? "assistant" : item.role) as "user" | "assistant",
-      blocks: item.blocks.map(historyBlockToContentBlock),
+      blocks: item.blocks.flatMap((b) => historyBlockToContentBlocks(b, item.role === "user")),
       timestamp: item.timestamp,
     }));
     store.messages.unshift(...history);
@@ -593,10 +593,18 @@ async function hydrate(sid: string) {
 
 /** Rust 侧重建的历史 block → 前端渲染用的 ContentBlock。tool_call 历史消息永远是
  *  "已完成"状态（isPending: false）——它来自一份早就落盘的 transcript，不会再有
- *  新的 tool_result 追上来。 */
-function historyBlockToContentBlock(block: HistoryBlock): TextBlock | ToolCallBlock {
+ *  新的 tool_result 追上来。
+ *
+ *  user 文本块要额外拆引用段：transcript 落盘的用户消息是 sendText（原文 +
+ *  @mention 展开的文件内容，见 fileMentions.ts），不拆的话整个文件原文会灌进
+ *  用户气泡。拆回「原文 text 块 + N 个 Read 附件卡片」，与直发路径
+ *  （dispatchSend 里 mentions.resolved 的渲染）保持同一形状。 */
+function historyBlockToContentBlocks(
+  block: HistoryBlock,
+  isUser: boolean,
+): (TextBlock | ToolCallBlock)[] {
   if (block.type === "tool_call") {
-    return {
+    return [{
       type: "tool_call",
       id: block.id,
       name: block.name,
@@ -604,9 +612,22 @@ function historyBlockToContentBlock(block: HistoryBlock): TextBlock | ToolCallBl
       result: block.result ?? undefined,
       isError: block.isError ?? undefined,
       isPending: false,
-    };
+    }];
   }
-  return { type: "text", text: block.text };
+  if (!isUser) return [{ type: "text", text: block.text }];
+  const { displayText, sections } = splitMentionSections(block.text);
+  return [
+    ...(displayText ? [{ type: "text" as const, text: displayText }] : []),
+    ...sections.map((s): ToolCallBlock => ({
+      type: "tool_call",
+      id: crypto.randomUUID(),
+      name: "Read",
+      input: { file_path: s.path },
+      result: s.content,
+      isError: false,
+      isPending: false,
+    })),
+  ];
 }
 
 /** 仅测试用：清空模块级状态 */

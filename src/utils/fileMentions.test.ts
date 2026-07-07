@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { extractFileMentions, resolveFileMentions } from "./fileMentions";
+import { extractFileMentions, resolveFileMentions, splitMentionSections } from "./fileMentions";
 
 describe("extractFileMentions", () => {
   it("extracts a single @path", () => {
@@ -64,5 +64,64 @@ describe("resolveFileMentions", () => {
       { path: "/a.md", content: "content A" },
       { path: "/b.md", content: "content B" },
     ]);
+  });
+});
+
+describe("splitMentionSections", () => {
+  it("returns text unchanged when there are no marker sections", () => {
+    expect(splitMentionSections("普通消息，没有引用")).toEqual({
+      displayText: "普通消息，没有引用",
+      sections: [],
+    });
+  });
+
+  it("strips a single section out of displayText and returns it structured", () => {
+    const text = "@C:\\todo.md 看下这个\n\n--- 引用文件：C:\\todo.md ---\n- [ ] 待办 1\n--- 文件结束：C:\\todo.md ---";
+    expect(splitMentionSections(text)).toEqual({
+      displayText: "@C:\\todo.md 看下这个",
+      sections: [{ path: "C:\\todo.md", content: "- [ ] 待办 1" }],
+    });
+  });
+
+  it("round-trips what resolveFileMentions generates, including multiple sections", async () => {
+    const readFile = vi.fn()
+      .mockResolvedValueOnce("content A\n多行")
+      .mockResolvedValueOnce("content B");
+    const { sendText } = await resolveFileMentions("对比 @/a.md 和 @/b.md", readFile);
+    expect(splitMentionSections(sendText)).toEqual({
+      displayText: "对比 @/a.md 和 @/b.md",
+      sections: [
+        { path: "/a.md", content: "content A\n多行" },
+        { path: "/b.md", content: "content B" },
+      ],
+    });
+  });
+
+  it("ignores a section whose head/tail paths don't match (not our marker)", () => {
+    const text = "正文\n\n--- 引用文件：/a.md ---\n内容\n--- 文件结束：/b.md ---";
+    expect(splitMentionSections(text)).toEqual({ displayText: text, sections: [] });
+  });
+
+  it("keeps marker-embedded content intact when file content itself contains a fence line", () => {
+    // 引用的文件内容里恰好有一行长得像结束标记但路径不同——非贪婪匹配会在
+    // 第一个"路径一致"的结束标记处停下，这里验证不会把后续真实段落吞掉。
+    const text = [
+      "看看",
+      "",
+      "--- 引用文件：/a.md ---",
+      "第一段",
+      "--- 文件结束：/a.md ---",
+      "",
+      "--- 引用文件：/b.md ---",
+      "第二段",
+      "--- 文件结束：/b.md ---",
+    ].join("\n");
+    expect(splitMentionSections(text)).toEqual({
+      displayText: "看看",
+      sections: [
+        { path: "/a.md", content: "第一段" },
+        { path: "/b.md", content: "第二段" },
+      ],
+    });
   });
 });
