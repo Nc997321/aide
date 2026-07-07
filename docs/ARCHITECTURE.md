@@ -2,7 +2,7 @@
 
 ## 交互模型：Chat UI + Agent SDK sidecar
 
-中心面板为聊天气泡流（`ChatPanel.vue`），对话由 Node.js sidecar 里的 Claude Agent SDK `query()` 驱动，不再是 xterm 套壳终端。工具调用渲染为墨线行组（`ToolCallGroup`/`ToolCallBlock`），连续工具调用默认收起摘要，Bash 输出内嵌只读 xterm 块，权限审批走 `PermissionDialog` 弹窗。工作台 shell 终端（`WorkbenchTerminal` + `shell.rs` PTY）与对话无关，仍保留。
+中心面板为消息流（`ChatPanel.vue`，assistant 通页书脊布局、user 铜底气泡），对话由 Node.js sidecar 里的 Claude Agent SDK `query()` 驱动，不再是 xterm 套壳终端。工具调用渲染为墨线行组（`ToolCallGroup`/`ToolCallBlock`），连续工具调用默认收起摘要，Bash 输出内嵌只读 xterm 块，权限审批走 `PermissionDialog` 弹窗。工作台 shell 终端（`WorkbenchTerminal` + `shell.rs` PTY）与对话无关，仍保留。
 
 ## 三层结构
 
