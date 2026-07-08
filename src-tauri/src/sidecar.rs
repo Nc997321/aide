@@ -152,6 +152,14 @@ impl SidecarManager {
                             }
                             obj.insert("session_id".to_string(), Value::String(current_sid));
                         }
+                        // 常驻轨迹：每条 chat-event emit 记一笔（reader worker 线程）。
+                        // 低 CPU 主线程 park 常在 emit 跨线程编组到 WebView 主线程期间
+                        // 发作——轨迹尾部最后一条 emit 即撞墙前最后发生的事。
+                        crate::diagnostics::trace::record(
+                            "emit",
+                            event.get("type").and_then(|t| t.as_str()).unwrap_or("unknown"),
+                            "worker",
+                        );
                         let _ = app.emit("chat-event", event);
                     }
                     Ok(Ok(None)) | Ok(Err(_)) => break "exit", // EOF / 读错误：进程已退出
@@ -303,6 +311,7 @@ fn emit_session_dead(
     let current_sid = sid_handle.lock().unwrap().clone();
     let tail: Vec<String> = tail_handle.lock().unwrap().iter().cloned().collect();
     let detail = if tail.is_empty() { None } else { Some(tail.join("\n")) };
+    crate::diagnostics::trace::record("session", reason, "worker");
     let event = serde_json::json!({
         "type": "session_dead",
         "reason": reason,

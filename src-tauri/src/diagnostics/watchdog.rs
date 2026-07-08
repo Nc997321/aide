@@ -27,9 +27,10 @@ use sysinfo::{ProcessesToUpdate, System};
 use tauri::{AppHandle, Manager};
 
 use super::report::{
-    self, FreezeInfo, FreezeReport, FreezeSample, MainThreadProbe, ProcessSample, ReportMeta,
-    RingSnapshot,
+    self, FreezeInfo, FreezeReport, FreezeSample, MainThreadProbe, ParkFrameRecord,
+    ProcessSample, ReportMeta, RingSnapshot,
 };
+use super::stackwalk;
 use super::{DiagnosticsState, DiagInner};
 
 /// watchdog 检查周期 = 冻结期采样周期
@@ -76,6 +77,7 @@ fn run(app: AppHandle) {
         last_latency_us: AtomicU64::new(0),
     });
     let hwnd = resolve_hwnd(&app);
+    let main_tid = resolve_main_thread_id(&app);
 
     let mut sys = System::new();
     let mut freeze: Option<ActiveFreeze> = None;
@@ -124,13 +126,13 @@ fn run(app: AppHandle) {
                 // 立即预热一次进程表：sysinfo 的 cpu_usage 是两次刷新间的差值，
                 // 预热让下一帧就有有效 CPU 数据
                 let _ = sample_processes(&mut sys);
-                fz.samples.push(make_sample(&mut sys, &probe, &hwnd));
+                fz.samples.push(make_sample(&mut sys, &probe, &hwnd, &main_tid));
                 fz.path = flush_report(&inner, &fz, false, false);
                 freeze = Some(fz);
             }
             Some(fz) if gap_ms >= FREEZE_GAP_MS => {
                 if fz.samples.len() < MAX_SAMPLES {
-                    fz.samples.push(make_sample(&mut sys, &probe, &hwnd));
+                    fz.samples.push(make_sample(&mut sys, &probe, &hwnd, &main_tid));
                 }
                 fz.tick_since_flush += 1;
                 if fz.tick_since_flush >= FLUSH_EVERY_TICKS {
@@ -163,8 +165,22 @@ fn post_probe(app: &AppHandle, probe: &Arc<ProbeState>) {
     }
 }
 
-fn make_sample(sys: &mut System, probe: &ProbeState, hwnd: &AtomicIsize) -> FreezeSample {
+fn make_sample(
+    sys: &mut System,
+    probe: &ProbeState,
+    hwnd: &AtomicIsize,
+    main_tid: &AtomicU32,
+) -> FreezeSample {
     let stuck = super::current_stuck_command();
+    // 跨线程抓主线程顶帧：SuspendThread + GetThreadContext + 解析模块名。
+    // stuck_command 看不到的框架路径（emit 投递 / 事件循环 / 锁 / 系统调用）靠这帧点名。
+    // 非目标平台 / 抓取失败为 None，不污染报告。
+    let park = stackwalk::capture_main_thread_park(main_tid.load(Ordering::Relaxed))
+        .map(|f| ParkFrameRecord {
+            module: f.module,
+            address: f.address,
+            offset: f.offset,
+        });
     FreezeSample {
         t: report::epoch_ms(),
         processes: sample_processes(sys),
@@ -173,6 +189,7 @@ fn make_sample(sys: &mut System, probe: &ProbeState, hwnd: &AtomicIsize) -> Free
             last_latency_ms: probe.last_latency_us.load(Ordering::Relaxed) as f64 / 1000.0,
             stuck_command: stuck.map(|(name, _)| name.to_string()),
             stuck_for_ms: stuck.map(|(_, dur)| dur.as_millis() as u64),
+            park,
         },
         is_hung_window: is_hung_window(hwnd.load(Ordering::Relaxed)),
     }
@@ -230,6 +247,7 @@ fn flush_report(
         ring: RingSnapshot {
             heartbeats: inner.heartbeats.lock().unwrap().to_vec(),
             event_rates: inner.event_rates.lock().unwrap().snapshot(),
+            trace: super::trace::snapshot(),
         },
         frontend: None,
     };
@@ -294,6 +312,28 @@ fn resolve_hwnd(app: &AppHandle) -> Arc<AtomicIsize> {
         });
     }
     hwnd
+}
+
+/// 主线程 OS TID：冻结期跨线程抓栈用（OpenThread + SuspendThread）。在主线程
+/// 调 GetCurrentThreadId 记下，watchdog 据此挂起主线程走栈。非 Windows 为 0（抓栈
+/// 函数自行返回 None）。
+fn resolve_main_thread_id(app: &AppHandle) -> Arc<AtomicU32> {
+    let tid = Arc::new(AtomicU32::new(0));
+    #[cfg(windows)]
+    {
+        let tid_c = Arc::clone(&tid);
+        let _ = app.run_on_main_thread(move || {
+            // SAFETY: GetCurrentThreadId 无副作用，仅返回调用线程的 OS TID。
+            tid_c.store(unsafe { GetCurrentThreadId() }, Ordering::Relaxed);
+        });
+    }
+    tid
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetCurrentThreadId() -> u32;
 }
 
 /// Windows：问操作系统这个窗口是否已被判定「未响应」（≥5s 不处理消息）。

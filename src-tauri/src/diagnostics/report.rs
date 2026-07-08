@@ -13,7 +13,10 @@ use serde::{Deserialize, Serialize};
 /// v2：`EventRateBucket` 增补 `bytes`/`maxBytes`/`maxBytesType`/`types`——
 /// 旧版只记条数，抓不到「哪条巨型 payload 把渲染烧炸」，2026-07-08 第三次
 /// 真实冻结（前端渲染风暴、stuck_command 全 null）后补上。
-pub const SCHEMA_VERSION: u32 = 2;
+/// v3：`ring.trace` 常驻操作轨迹——2026-07-08 第四次真实冻结（低 CPU 主线程
+/// park 在埋点命令之外，stuckCommand 全 null 定不到帧；另有一次同类卡 21.9min）
+/// 后补上，记录撞墙前最后一串命令/emit/会话事件的时间线。
+pub const SCHEMA_VERSION: u32 = 3;
 /// 目录里最多保留的报告份数（按文件名里的 epoch 排序，淘汰最旧）。
 pub const KEEP_REPORTS: usize = 20;
 
@@ -79,6 +82,22 @@ pub struct EventRateBucket {
     pub types: BTreeMap<String, u32>,
 }
 
+/// 常驻操作轨迹里的一条：主线程命令 enter/exit、chat-event emit、会话生命周期。
+/// 飞行记录仪时间线——冻结报告保留撞墙前最后一串事件，用来定位主线程 park 在
+/// 埋点命令之外（stuckCommand 为空）时「最后发生了什么」。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceEvent {
+    /// epoch ms
+    pub t: u64,
+    /// "beat"（主线程存活脉冲）| "cmd_enter" | "cmd_exit" | "emit" | "session"
+    pub kind: &'static str,
+    /// 命令名 / 事件类型 / 详情
+    pub name: String,
+    /// 发生线程标签："main"（同步命令跑主线程）| "worker"（sidecar reader 等）
+    pub thread: &'static str,
+}
+
 /// 冻结期间 watchdog 主动采的一帧。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -117,6 +136,26 @@ pub struct MainThreadProbe {
     /// 该命令已经跑了多久（ms）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stuck_for_ms: Option<u64>,
+    /// 主线程 native 栈顶帧：跨线程 SuspendThread + GetThreadContext 抓 Rip → 解析
+    /// 模块名 + 偏移。`stuckCommand` 看不到框架/未埋点路径（emit 投递、事件循环、
+    /// 锁）时，这帧直接点名主线程 park 在哪——`module` 区分 webview2 运行时 DLL
+    /// （ExecuteScript 卡）/ aide.exe（tao-wry-tauri 编译进宿主）/ ntdll|kernelbase
+    /// （系统调用等待）。仅 Windows，非 Windows / 抓取失败为 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub park: Option<ParkFrameRecord>,
+}
+
+/// 主线程 native 顶帧（冻结期跨线程抓）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParkFrameRecord {
+    /// 模块 basename（如 `msedgewebview2.dll`、`aide.exe`、`ntdll.dll`）；抓不到为 None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
+    /// 停在的指令地址（绝对）
+    pub address: u64,
+    /// 相对模块基址的偏移（module_base 为 0 时为 0）
+    pub offset: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -175,6 +214,8 @@ pub struct FreezeInfo {
 pub struct RingSnapshot {
     pub heartbeats: Vec<HeartbeatEntry>,
     pub event_rates: Vec<EventRateBucket>,
+    /// 常驻操作轨迹（旧→新）：撞墙前最后一串命令/emit/会话事件。
+    pub trace: Vec<TraceEvent>,
 }
 
 // ── 落盘 / 保留 / 合并 ───────────────────────────────────────────────
@@ -345,7 +386,7 @@ mod tests {
                 recovered: true,
             },
             samples: vec![],
-            ring: RingSnapshot { heartbeats: vec![], event_rates: vec![] },
+            ring: RingSnapshot { heartbeats: vec![], event_rates: vec![], trace: vec![] },
             frontend: None,
         }
     }

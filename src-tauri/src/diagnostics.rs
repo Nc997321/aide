@@ -17,6 +17,8 @@
 
 mod report;
 mod ring;
+mod stackwalk;
+pub mod trace;
 mod watchdog;
 
 use std::collections::{BTreeMap, HashMap};
@@ -154,8 +156,13 @@ static CURRENT_COMMAND: Mutex<Option<(&'static str, Instant)>> = Mutex::new(None
 
 /// 同步命令入口调用：`let _g = diagnostics::trace_command("git_log");`
 /// 只用于确认会做重 IO / 遍历 / 等子进程的同步命令，轻量命令不必埋（噪音无益）。
+///
+/// 两件事：① 写单槽 `CURRENT_COMMAND`（冻结时报告 `stuckCommand` 点名当前卡在
+/// 哪条命令，guard 卡死不 Drop 正好留住名字）；② 往常驻轨迹环记 `cmd_enter`，
+/// guard Drop 时记 `cmd_exit`——命令跑在主线程，enter 有、exit 无 = 卡在这条。
 pub fn trace_command(name: &'static str) -> CommandGuard {
     *CURRENT_COMMAND.lock().unwrap() = Some((name, Instant::now()));
+    trace::record("cmd_enter", name, "main");
     CommandGuard(name)
 }
 
@@ -168,6 +175,8 @@ impl Drop for CommandGuard {
         if matches!(slot.as_ref(), Some((name, _)) if *name == self.0) {
             *slot = None;
         }
+        drop(slot);
+        trace::record("cmd_exit", self.0, "main");
     }
 }
 
@@ -186,6 +195,9 @@ pub fn current_stuck_command() -> Option<(&'static str, Duration)> {
 /// 渲染主线程上发出，任何重操作都会污染测量。
 #[tauri::command]
 pub fn diag_heartbeat(state: State<DiagnosticsState>, payload: HeartbeatPayload) {
+    // 主线程存活脉冲：diag_heartbeat 是跑在主线程的同步命令，每 500ms 一次。
+    // 轨迹里这串 beat 一旦断，就是主线程 park 的时刻，紧随其后的那条即触发点。
+    trace::record("beat", "", "main");
     let inner = &state.0;
     inner.hidden.store(payload.hidden, Ordering::Relaxed);
     *inner.last_heartbeat.lock().unwrap() = Some(Instant::now());

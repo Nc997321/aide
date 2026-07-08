@@ -4,7 +4,13 @@ version = "0.2.6"
 edition = "2021"
 
 [dependencies]
-tauri = { version = "2", features = ["tracing"] }
+# 不开 tauri 的 `tracing` feature：它会让 wry 的 eval_script 编译成阻塞版
+# （getter! = send_user_message + rx.recv），worker 每次 app.emit 都同步等主线程
+# 处理 EvaluateScript 并回执——主线程一 park，读 sidecar stdout 的 tokio task 跟着
+# 卡 → sidecar 管道回压 → 后端被拖死、彻底 wedge。去掉后 emit 退回 fire-and-forget
+# （send_user_message 变体），worker 不再因主线程卡而死等，后端能跑完、重启可恢复。
+# aide 自带的 `tracing = "0.1"` crate 不受影响，只丢掉 Tauri 内部插桩（本就没用）。
+tauri = { version = "2", features = [] }
 
 tauri-plugin-shell = "2"
 
@@ -44,7 +50,18 @@ clipboard-win = "5"
 # HKCU 注册表写入：把 Aide 加入「打开方式」列表（per-user、免管理员）
 winreg = "0.55"
 # SHChangeNotify：写完注册表后通知 shell 刷新文件关联缓存（复用 tauri 已拉的版本）
-windows = { version = "0.61", features = ["Win32_UI_Shell"] }
+# 卡死诊断：Win32_System_Threading（OpenThread/SuspendThread/GetThreadContext 跨线程抓主线程栈）
+#   + Win32_System_Diagnostics_Debug（CONTEXT/StackWalk 相关；CONTEXT 顶帧解析）
+#   + Win32_System_Kernel（CONTEXT 类型，与 Debug 共同 gated）
+#   + Win32_System_ProcessStatus（GetModuleFileNameExW 解析停在哪模块）
+windows = { version = "0.61", features = [
+    "Win32_UI_Shell",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Kernel",
+    "Win32_System_ProcessStatus",
+    "Win32_Foundation",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.2"
