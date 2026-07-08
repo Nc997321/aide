@@ -4,15 +4,21 @@
 //! - 空闲态：每 tick 只做一次心跳缺口比较 + 投一枚主线程 no-op 探针（微秒级）；
 //! - 心跳断流 ≥ `FREEZE_GAP_MS` → 冻结采样模式：每 tick 采一帧
 //!   进程 CPU/内存（aide 全家族）+ 主线程探针积压 + IsHungAppWindow（Windows）；
-//! - 心跳恢复 → 组装报告落盘（环形缓冲 + 冻结期采样帧）。
+//! - **飞行记录仪落盘**：冻结进行中每 `FLUSH_EVERY_TICKS` 个 tick（≈2s）
+//!   原子重写同一份报告文件（文件名按 `started` 锚定，稳定不变）。
+//!   进程被强杀时最后一次成功写入留在磁盘上——这才是黑匣子该有的样子，
+//!   而不是等「恢复」才写（实际症状是永不恢复、一直未响应直到被强杀）。
+//! - 心跳真恢复 → 最终一次 flush（`recovered=true`），前端 30s 内补交明细。
 //!
-//! 防误报：
+//! 防误报 / 防噪声：
 //! - 首心跳前不判定（前端还没起）；
 //! - `hidden` 心跳期间不判定（浏览器节流后台定时器，可退化到分钟级）；
 //! - watchdog 自己的 tick 缺口 > `SUSPEND_GAP_MS` 说明整机休眠/挂起，
-//!   进行中的冻结标记 `suspected_sleep` 收尾，不新开冻结。
+//!   进行中的冻结标 `suspected_sleep` 收尾，不新开冻结；
+//! - 因 hidden 收尾或恢复且时长 < `MIN_REPORT_MS` 的短冻结丢弃（节流伪影/抖动）。
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -32,8 +38,13 @@ const TICK_MS: u64 = 500;
 pub const FREEZE_GAP_MS: u64 = 2000;
 /// watchdog 自身 tick 缺口超过此值 = 系统休眠/挂起
 const SUSPEND_GAP_MS: u64 = 5000;
-/// 冻结采样帧上限（500ms × 600 = 5 分钟，再长只计时不再采样）
+/// 冻结采样帧上限（500ms × 600 = 5 分钟，再长只更新头部计时不再采新帧）
 const MAX_SAMPLES: usize = 600;
+/// 冻结进行中每多少个 tick 落一次盘（4 × 500ms = 2s）
+const FLUSH_EVERY_TICKS: u32 = 4;
+/// 短于此时长（ms）的冻结丢弃——隐藏节流伪影 / 抖动，不值得留档。
+/// 真正的「一直未响应」远超此值，且其报告在强杀前早已增量落盘，不受此过滤影响。
+const MIN_REPORT_MS: u64 = 4000;
 
 /// 主线程探针的共享状态：watchdog 投递、主线程闭包回执。
 struct ProbeState {
@@ -47,6 +58,9 @@ struct ActiveFreeze {
     started_epoch: u64,
     detected_gap_ms: u64,
     samples: Vec<FreezeSample>,
+    /// 已落盘报告路径（按 started 锚定，增量重写同一文件）
+    path: Option<PathBuf>,
+    tick_since_flush: u32,
 }
 
 pub fn spawn(app: AppHandle) {
@@ -76,7 +90,7 @@ fn run(app: AppHandle) {
         if suspended {
             // 整机休眠恢复：进行中的冻结按 suspected_sleep 收尾，不新开
             if let Some(fz) = freeze.take() {
-                finalize(&inner, fz, true);
+                close_freeze(&inner, fz, true, false);
             }
             continue;
         }
@@ -89,10 +103,9 @@ fn run(app: AppHandle) {
         };
 
         if inner.hidden.load(Ordering::Relaxed) {
-            // 窗口隐藏：定时器被浏览器节流，缺口不可信。
-            // 隐藏标志本身来自心跳 → 前端活着，进行中的冻结正常收尾。
+            // 窗口隐藏：定时器被浏览器节流，缺口不可信。停止监测，收尾进行中的冻结。
             if let Some(fz) = freeze.take() {
-                finalize(&inner, fz, false);
+                close_freeze(&inner, fz, false, false);
             }
             continue;
         }
@@ -105,22 +118,30 @@ fn run(app: AppHandle) {
                     started_epoch: report::epoch_ms().saturating_sub(gap_ms),
                     detected_gap_ms: gap_ms,
                     samples: Vec::new(),
+                    path: None,
+                    tick_since_flush: 0,
                 };
                 // 立即预热一次进程表：sysinfo 的 cpu_usage 是两次刷新间的差值，
                 // 预热让下一帧就有有效 CPU 数据
                 let _ = sample_processes(&mut sys);
                 fz.samples.push(make_sample(&mut sys, &probe, &hwnd));
+                fz.path = flush_report(&inner, &fz, false, false);
                 freeze = Some(fz);
             }
             Some(fz) if gap_ms >= FREEZE_GAP_MS => {
                 if fz.samples.len() < MAX_SAMPLES {
                     fz.samples.push(make_sample(&mut sys, &probe, &hwnd));
                 }
+                fz.tick_since_flush += 1;
+                if fz.tick_since_flush >= FLUSH_EVERY_TICKS {
+                    fz.path = flush_report(&inner, fz, false, false);
+                    fz.tick_since_flush = 0;
+                }
             }
             Some(_) => {
-                // 心跳恢复 → 落盘
+                // 心跳恢复 → 最终落盘（recovered=true），前端随后补交明细
                 let fz = freeze.take().expect("freeze checked Some");
-                finalize(&inner, fz, false);
+                close_freeze(&inner, fz, false, true);
             }
             None => {}
         }
@@ -180,7 +201,14 @@ fn sample_processes(sys: &mut System) -> Vec<ProcessSample> {
     out
 }
 
-fn finalize(inner: &DiagInner, fz: ActiveFreeze, suspected_sleep: bool) {
+/// 组装并落盘一份报告。返回报告路径（按 started 锚定，增量重写同一文件）。
+/// `recovered=true` 表示心跳已恢复、是一次完整收尾的瞬时冻结。
+fn flush_report(
+    inner: &DiagInner,
+    fz: &ActiveFreeze,
+    suspected_sleep: bool,
+    recovered: bool,
+) -> Option<PathBuf> {
     let ended = report::epoch_ms();
     let report = FreezeReport {
         meta: ReportMeta::current(),
@@ -190,8 +218,9 @@ fn finalize(inner: &DiagInner, fz: ActiveFreeze, suspected_sleep: bool) {
             duration_ms: ended.saturating_sub(fz.started_epoch),
             detected_gap_ms: fz.detected_gap_ms,
             suspected_sleep,
+            recovered,
         },
-        samples: fz.samples,
+        samples: fz.samples.clone(),
         ring: RingSnapshot {
             heartbeats: inner.heartbeats.lock().unwrap().to_vec(),
             event_rates: inner.event_rates.lock().unwrap().snapshot(),
@@ -201,15 +230,46 @@ fn finalize(inner: &DiagInner, fz: ActiveFreeze, suspected_sleep: bool) {
     let dir = crate::commands::our_config_dir().join("diagnostics");
     match report::write_report(&dir, &report) {
         Ok(path) => {
-            tracing::warn!(
-                "diag: freeze report written ({}ms): {}",
-                report.freeze.duration_ms,
-                path.display()
-            );
-            *inner.last_report.lock().unwrap() = Some((path, Instant::now()));
+            if recovered {
+                tracing::warn!(
+                    "diag: freeze recovered after {}ms: {}",
+                    report.freeze.duration_ms,
+                    path.display()
+                );
+            } else {
+                tracing::warn!(
+                    "diag: freeze ongoing ({}ms, {} samples): {}",
+                    report.freeze.duration_ms,
+                    report.samples.len(),
+                    path.display()
+                );
+            }
+            *inner.last_report.lock().unwrap() = Some((path.clone(), Instant::now()));
+            Some(path)
         }
-        Err(e) => tracing::error!("diag: failed to write freeze report: {e}"),
+        Err(e) => {
+            tracing::error!("diag: failed to write freeze report: {e}");
+            None
+        }
     }
+}
+
+/// 收尾一次冻结。短冻结（非恢复、非休眠、< MIN_REPORT_MS）丢弃，避免节流伪影噪声。
+fn close_freeze(inner: &DiagInner, fz: ActiveFreeze, suspected_sleep: bool, recovered: bool) {
+    let duration = report::epoch_ms().saturating_sub(fz.started_epoch);
+    if !recovered && !suspected_sleep && duration < MIN_REPORT_MS {
+        if let Some(p) = &fz.path {
+            let _ = std::fs::remove_file(p);
+        }
+        let mut lr = inner.last_report.lock().unwrap();
+        if let Some((p, _)) = lr.as_ref() {
+            if fz.path.as_ref() == Some(p) {
+                *lr = None;
+            }
+        }
+        return;
+    }
+    flush_report(inner, &fz, suspected_sleep, recovered);
 }
 
 /// 主窗口 HWND（Windows 判「未响应」用）。在主线程解析一次，存成整数共享。

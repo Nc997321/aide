@@ -132,15 +132,19 @@ impl ReportMeta {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FreezeInfo {
-    /// 最后一次心跳的 epoch ms（冻结起点的最佳近似）
+    /// 最后一次心跳的 epoch ms（冻结起点的最佳近似，也用作报告文件名锚点）
     pub started: u64,
-    /// 心跳恢复的 epoch ms
+    /// 报告落盘时刻的 epoch ms。
+    /// 永不恢复的卡死里这是「最后一次增量 flush」的时刻，不是真正的恢复时刻。
     pub ended: u64,
     pub duration_ms: u64,
     /// 判定时的心跳缺口（ms）
     pub detected_gap_ms: u64,
     /// watchdog 自身 tick 也被长时间挂起——报告可能是系统休眠误报
     pub suspected_sleep: bool,
+    /// true = 心跳已恢复、一次完整收尾的瞬时冻结；
+    /// false = 报告写于冻结进行中，进程很可能被强杀，ended 只是最后一次 flush 时刻。
+    pub recovered: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -159,17 +163,22 @@ pub fn epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn report_filename(epoch_ms: u64) -> String {
-    format!("freeze-{epoch_ms}.json")
+fn report_filename(started_epoch: u64) -> String {
+    format!("freeze-{started_epoch}.json")
 }
 
 /// 落盘一份报告并执行保留策略，返回报告路径。
+///
+/// 文件名按 `started` 锚定（一次冻结一个稳定文件名），冻结进行中可增量重写同一文件。
+/// 写入用「临时文件 + rename」原子替换，保证进程被强杀时不会留下半截 JSON。
 pub fn write_report(dir: &Path, report: &FreezeReport) -> std::io::Result<PathBuf> {
     fs::create_dir_all(dir)?;
-    let path = dir.join(report_filename(report.freeze.ended));
+    let path = dir.join(report_filename(report.freeze.started));
     let json = serde_json::to_string_pretty(report)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    fs::write(&path, json)?;
+    let tmp = dir.join(format!(".freeze-{}.json.tmp", report.freeze.started));
+    fs::write(&tmp, &json)?;
+    fs::rename(&tmp, &path)?;
     prune_reports(dir, KEEP_REPORTS)?;
     Ok(path)
 }
@@ -239,15 +248,16 @@ pub fn family_of(root: u32, parents: &HashMap<u32, u32>) -> HashSet<u32> {
 mod tests {
     use super::*;
 
-    fn sample_report(ended: u64) -> FreezeReport {
+    fn sample_report(started: u64, ended: u64) -> FreezeReport {
         FreezeReport {
             meta: ReportMeta::current(),
             freeze: FreezeInfo {
-                started: ended.saturating_sub(5000),
+                started,
                 ended,
-                duration_ms: 5000,
+                duration_ms: ended.saturating_sub(started),
                 detected_gap_ms: 2100,
                 suspected_sleep: false,
+                recovered: true,
             },
             samples: vec![],
             ring: RingSnapshot { heartbeats: vec![], event_rates: vec![] },
@@ -282,29 +292,47 @@ mod tests {
     #[test]
     fn write_and_prune_keeps_newest() {
         let dir = temp_dir("prune");
+        // 每份报告 started 递增；文件名按 started 锚定
         for i in 0..5u64 {
-            write_report(&dir, &sample_report(1000 + i)).unwrap();
+            let started = 100_000 + i * 10;
+            write_report(&dir, &sample_report(started, started + 5000)).unwrap();
         }
         prune_reports(&dir, 2).unwrap();
         let mut names: Vec<String> = fs::read_dir(&dir)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".json"))
             .collect();
         names.sort();
-        assert_eq!(names, vec!["freeze-1003.json", "freeze-1004.json"]);
+        assert_eq!(names, vec!["freeze-100030.json", "freeze-100040.json"]);
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn merge_supplement_adds_frontend_field() {
         let dir = temp_dir("merge");
-        let path = write_report(&dir, &sample_report(42)).unwrap();
+        let path = write_report(&dir, &sample_report(420_000, 425_000)).unwrap();
         merge_supplement(&path, serde_json::json!({ "gapMs": 3000 })).unwrap();
         let merged: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(merged["frontend"]["gapMs"], 3000);
         // 原有字段不受影响
         assert_eq!(merged["freeze"]["durationMs"], 5000);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_report_is_atomic_no_tmp_leftover() {
+        let dir = temp_dir("atomic");
+        let path = write_report(&dir, &sample_report(7, 12)).unwrap();
+        assert_eq!(path.file_name().unwrap().to_string_lossy(), "freeze-7.json");
+        // 不残留临时文件
+        let leftovers: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(".freeze-"))
+            .collect();
+        assert!(leftovers.is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
 

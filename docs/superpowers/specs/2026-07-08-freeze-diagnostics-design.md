@@ -6,13 +6,18 @@
 ## 背景与目标
 
 窗口「未响应」问题已修复两轮（2026-07-06 事件洪峰 × O(n²) 渲染；07-07 切会话全量挂载），
-但仍有**偶发、无规律、无法复现**的卡死。打地鼠式修复不可持续，需要一个**常驻黑匣子**：
+但仍有**偶发、无规律、无法复现**的卡死。关键症状：**卡死后难以恢复，窗口一直处于未响应状态，
+直到用户在任务管理器里强杀进程**——不是瞬时卡顿。打地鼠式修复不可持续，需要一个**常驻黑匣子**：
 
-- dev 与 release 构建都运行，完全自给自足（自采集、自落盘，不依赖 devtools）；
-- 平时低开销记录环形缓冲，**自动检测卡死、事发当时主动采样、恢复后自动落盘**诊断报告；
+- dev 与 release 构建都运行，完全自给足（自采集、自落盘，不依赖 devtools）；
+- 平时低开销记录环形缓冲，**自动检测卡死、事发当时主动采样、冻结进行中即增量落盘**——
+  进程被强杀时最后一次成功写入留在磁盘上（飞行记录仪模式，而非「等恢复才写」）；
 - 报告事后交给 Claude 分析，定位根因。
 
-核心难点：WebView 卡死时它自己没法记录自己 → **检测者必须站在被监控者外面**（Rust 独立线程）。
+核心难点有二：
+1. WebView 卡死时它自己没法记录自己 → **检测者必须站在被监控者外面**（Rust 独立线程）；
+2. 永不恢复的卡死没有「结束时刻」可触发落盘 → **必须在冻结进行中持续写盘**（每 ~2s 增量
+   重写同一文件，临时文件 + rename 原子替换，强杀不留半截 JSON）。
 
 ## 总体架构
 
@@ -46,10 +51,14 @@ src/
      - `sysinfo`：aide 主进程 + 全部后代进程（含 msedgewebview2 渲染进程、node sidecar）的 CPU%/内存；
      - 主线程探针：`run_on_main_thread` 投 no-op 测响应延迟，积压计数（探针发出未返回数）区分「主线程卡」vs「渲染进程卡」；
      - Windows：`IsHungAppWindow(hwnd)`（user32），与系统「未响应」判定互相印证；`#[cfg(windows)]` 隔离。
-   - 心跳恢复 → 组装报告（冻结起止/时长 + 冻结期采样帧 + 环形缓冲快照）落盘。
+   - **冻结进行中每 ~2s（4 个 tick）原子重写同一份报告文件**（文件名按 `started` 锚定，
+     临时文件 + rename）。进程被强杀时最后一次成功写入留在磁盘上，`recovered=false`。
+   - 心跳真恢复 → 最终一次 flush 标 `recovered=true`。
 4. 前端心跳定时器自身检测到断档 ≥ 2s（自己刚从卡死中恢复）→ 调 `diag_freeze_supplement`
    补交冻结期间的 longtask 明细（PerformanceObserver 在卡死期间照常记录，恢复后可读）+
    面包屑快照。Rust 把补交合并进最近 30s 内的报告文件。
+   **注意**：永不恢复的卡死里前端也永不恢复，补交永不发出——所以补交是「锦上添花」，
+   真正的现场证据来自 watchdog 侧的进程采样帧，这部分不依赖前端恢复。
 
 ## 关键判定逻辑
 
@@ -59,7 +68,16 @@ src/
   `hidden: false` 心跳恢复检测。
 - **系统休眠防误报**：watchdog 测自己的 tick 漂移，若单次 tick 间隔 > 5s（自己也被挂起 =
   系统级休眠/挂起），重置心跳基线而不是判冻结。
-- **状态机**：`Idle → Frozen(采样中) → Idle(落盘)`，一次冻结一份报告，不重入。
+- **状态机**：`Idle → Frozen(采样中, 进行中增量落盘) → Idle(最终落盘 or 丢弃)`，一次冻结一个文件（按 `started` 锚定），不重入。
+
+## 落盘时机（关键）
+
+| 场景 | 落盘行为 | 报告里的标记 |
+|---|---|---|
+| 永不恢复、被强杀 | 冻结进行中每 ~2s 增量重写，强杀后磁盘留最后一份 | `recovered=false`，`ended`=最后一次 flush 时刻 |
+| 自行恢复的瞬时卡 | 恢复时最终一次 flush | `recovered=true`，`ended`=恢复时刻；前端 30s 内补交 `frontend` 字段 |
+| 系统休眠挂起 | tick 缺口 >5s 时收尾 | `suspected_sleep=true` |
+| 隐藏窗口收尾 | 窗口隐藏时收尾；时长 <4s 丢弃 | 短的丢弃，长的 `recovered=false` |
 
 ## 诊断报告
 
@@ -67,7 +85,7 @@ src/
 - 内容：
   ```
   meta:     app 版本 / debug|release / OS / 报告 schema 版本
-  freeze:   开始·结束 epoch_ms、时长、检测时心跳缺口、suspected_sleep 标记
+  freeze:   开始·结束 epoch_ms、时长、检测时心跳缺口、suspected_sleep 标记、recovered 标记
   samples:  冻结期每 500ms 一帧 [{ t, processes[{pid,name,cpu,mem}], mainThreadProbe{pendingCount,lastLatencyMs}, isHungWindow? }]
   ring:     最近 ~2.5 分钟 { heartbeats[（含指标与面包屑）], eventRates[{tSec,sessionId,count}] }
   frontend: 补交部分 { gapMs, longTasks[{start,duration,attribution}], crumbs[] }（可能缺失，标记 pending）
@@ -85,8 +103,9 @@ src/
 
 - cargo（`--lib`，绕杀软锁）：ring 容量/顺序；报告序列化与 prune；后代进程过滤（纯函数 + 假 parent 表）；休眠防误报判定。
 - vitest：eventLoopLag drain（fake timers）；breadcrumbs 环容量与标签提取；longTasks 摘要 drain（mock PerformanceObserver）。
-- 手工验证：devtools console 跑 `const t=Date.now();while(Date.now()-t<3000){}` 阻塞渲染线程 3s，
-  确认 diagnostics 目录出现报告且 frontend 补交已合并。
+- 手工验证：
+  1. 模拟**瞬时恢复**：devtools console 跑 `const t=Date.now();while(Date.now()-t<3000){}` 阻塞渲染线程 3s，确认 diagnostics 目录出现报告（`recovered=true`）且 frontend 补交已合并；
+  2. 模拟**永不恢复**：跑 `const t=Date.now();while(Date.now()-t<60000){}` 阻塞 60s 期间，2s 后即应看到 diagnostics 目录出现报告且每 ~2s 更新（文件 mtime 变化），`recovered=false`；随后从任务管理器强杀 aide.exe，确认报告文件保留在磁盘、JSON 完整可解析。
 
 ## 非目标（YAGNI）
 
