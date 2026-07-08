@@ -164,12 +164,15 @@ fn post_probe(app: &AppHandle, probe: &Arc<ProbeState>) {
 }
 
 fn make_sample(sys: &mut System, probe: &ProbeState, hwnd: &AtomicIsize) -> FreezeSample {
+    let stuck = super::current_stuck_command();
     FreezeSample {
         t: report::epoch_ms(),
         processes: sample_processes(sys),
         main_thread: MainThreadProbe {
             pending: probe.pending.load(Ordering::Relaxed),
             last_latency_ms: probe.last_latency_us.load(Ordering::Relaxed) as f64 / 1000.0,
+            stuck_command: stuck.map(|(name, _)| name.to_string()),
+            stuck_for_ms: stuck.map(|(_, dur)| dur.as_millis() as u64),
         },
         is_hung_window: is_hung_window(hwnd.load(Ordering::Relaxed)),
     }

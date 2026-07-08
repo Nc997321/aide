@@ -483,11 +483,22 @@ pub fn save_session_changes(session_id: String, rounds: Vec<ChangeRoundData>) ->
     fs::write(&path, content).map_err(|e| format!("Failed to write: {}", e))
 }
 
+/// 每轮对话结束都会调用一次（takeSnapshot 记录撤回锚点），必须 async——同步版本
+/// 曾在诊断黑匣子里被实锤为 Rust 主线程冻结的嫌疑对象：`find_session_jsonl_globally`
+/// 遍历 `~/.claude/projects/` 是同步磁盘 IO，杀软实时扫描 / 磁盘争抢时可能被拖到
+/// 秒级甚至更久，堵在 Tauri 主线程上会连累所有后续命令排队（详见 CLAUDE.md「同步
+/// command 禁止重 IO」）。同名兄弟 `session_last_event` 早已是 async，这两个是漏网之鱼。
 #[tauri::command]
-pub fn session_jsonl_size(
+pub async fn session_jsonl_size(
     _workspace_state: State<'_, WorkspaceState>,
     session_id: String,
 ) -> Result<u64, String> {
+    tokio::task::spawn_blocking(move || session_jsonl_size_blocking(session_id))
+        .await
+        .map_err(|e| format!("session_jsonl_size task panicked: {}", e))?
+}
+
+fn session_jsonl_size_blocking(session_id: String) -> Result<u64, String> {
     let Some(jsonl_path) = find_session_jsonl_globally(&session_id).into_iter().next() else {
         return Ok(0);
     };
@@ -499,11 +510,17 @@ pub fn session_jsonl_size(
 }
 
 #[tauri::command]
-pub fn session_truncate_jsonl(
+pub async fn session_truncate_jsonl(
     _workspace_state: State<'_, WorkspaceState>,
     session_id: String,
     byte_pos: u64,
 ) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || session_truncate_jsonl_blocking(session_id, byte_pos))
+        .await
+        .map_err(|e| format!("session_truncate_jsonl task panicked: {}", e))?
+}
+
+fn session_truncate_jsonl_blocking(session_id: String, byte_pos: u64) -> Result<(), String> {
     let Some(jsonl_path) = find_session_jsonl_globally(&session_id).into_iter().next() else {
         return Ok(());
     };
@@ -521,9 +538,19 @@ pub fn session_truncate_jsonl(
 
 /// List sessions for a specific workspace by its encoded key, without relying
 /// on the current WorkspaceState. Used by the frontend to load sessions for
-/// non-active (but expanded) workspaces.
+/// non-active (but expanded) workspaces (侧栏展开工作区 / 分屏布局恢复).
+///
+/// 同 `list_sessions`：扫目录 + 逐会话读 .jsonl/JSON 元数据是重同步 IO，必须
+/// async + spawn_blocking，否则堵主线程（诊断黑匣子实锤过同类命令 `session_jsonl_size`
+/// 堵死主线程 30s+，这个命令逻辑更重，是同一类风险，一并修）。
 #[tauri::command]
-pub fn list_sessions_for_workspace(ws_key: String) -> Result<Vec<Session>, String> {
+pub async fn list_sessions_for_workspace(ws_key: String) -> Result<Vec<Session>, String> {
+    tokio::task::spawn_blocking(move || list_sessions_for_workspace_blocking(ws_key))
+        .await
+        .map_err(|e| format!("list_sessions_for_workspace task panicked: {}", e))?
+}
+
+fn list_sessions_for_workspace_blocking(ws_key: String) -> Result<Vec<Session>, String> {
     let mut sessions: Vec<Session> = Vec::new();
 
     let proj_dir = claude_projects_dir().join(&ws_key);

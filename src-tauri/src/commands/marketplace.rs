@@ -241,8 +241,14 @@ fn marketplace_cache_dir() -> PathBuf {
 
 // ── Commands ──
 
+/// 同步命令 + `git clone` 子进程 + 网络 = 理论上可无限期阻塞主线程（网络慢/大
+/// 仓库），没有超时保护。埋 trace_command：真堵住时诊断报告能直接点名，不用再
+/// 靠「看进程列表猜」（2026-07-08 diag_freeze 报告首次实锤主线程被同步命令堵死
+/// 之后补上，同批连带修的还有 session_jsonl_size 等）。暂不改 async——涉及子
+/// 进程生命周期与代理配置，留作单独评估。
 #[tauri::command]
 pub fn fetch_marketplace(url: String) -> Result<Vec<PluginEntry>, String> {
+    let _trace = crate::diagnostics::trace_command("fetch_marketplace");
     let cache_dir = marketplace_cache_dir();
 
     // Clean any stale cache
@@ -315,8 +321,10 @@ pub fn fetch_marketplace(url: String) -> Result<Vec<PluginEntry>, String> {
     Ok(plugins)
 }
 
+/// 同步命令 + git clone 子进程，同 fetch_marketplace 的风险，见其上注释。
 #[tauri::command]
 pub fn install_plugin(repo_url: String, name: String) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("install_plugin");
     let target_dir = plugins_dir().join(&name);
 
     if target_dir.exists() {

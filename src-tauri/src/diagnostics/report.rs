@@ -94,6 +94,12 @@ pub struct MainThreadProbe {
     pub pending: u32,
     /// 最近一次探针往返延迟（ms）
     pub last_latency_ms: f64,
+    /// 当前卡在哪条同步命令上（`trace_command` 埋点，未埋点的命令测不到）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stuck_command: Option<String>,
+    /// 该命令已经跑了多久（ms）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stuck_for_ms: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]

@@ -863,10 +863,13 @@ pub async fn git_push(
     Ok(())
 }
 
+/// 每 3s 轮询一次（useGitWatcher.ts），递归遍历 `.git/refs`——持续高频的同步
+/// 命令，埋 trace_command 便于诊断报告点名（同批见 marketplace.rs 顶部注释）。
 #[tauri::command]
 pub fn git_fingerprint(
     workspace_state: State<'_, WorkspaceState>,
 ) -> Result<String, String> {
+    let _trace = crate::diagnostics::trace_command("git_fingerprint");
     let root = project_root_for_commands(&workspace_state);
     let git_dir = root.join(".git");
     if !git_dir.exists() {

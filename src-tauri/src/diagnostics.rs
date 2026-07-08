@@ -6,11 +6,14 @@
 //! 冻结期主动采样，恢复后自动落盘 JSON 报告到
 //! `~/.claude-code-desktop/diagnostics/`。
 //!
-//! 对外只有四个接口：
+//! 对外接口：
 //! - `DiagnosticsState`：Tauri managed state；
 //! - `start()`：setup 里启动 watchdog；
 //! - `diag_heartbeat` / `diag_freeze_supplement`：前端命令；
-//! - `DiagnosticsState::record_chat_event()`：sidecar 事件出口计数钩子。
+//! - `DiagnosticsState::record_chat_event()`：sidecar 事件出口计数钩子；
+//! - `trace_command()`：同步命令入口埋点，冻结时报告直接点名卡在哪条命令上
+//!   （2026-07-08 首次真实冻结实锤主线程被同步命令堵死后补上，见
+//!   `docs/superpowers/specs/2026-07-08-freeze-diagnostics-design.md`）。
 
 mod report;
 mod ring;
@@ -104,6 +107,48 @@ pub fn start(app: &AppHandle) {
     watchdog::spawn(app.clone());
 }
 
+// ── 同步命令埋点：冻结时报告直接点名卡在哪条命令上 ──────────────────
+//
+// Tauri 非 async command 在本项目里跑在主线程上（见 CLAUDE.md「同步 command
+// 禁止重 IO」），单线程串行执行——同一时刻至多一条同步命令在跑，不存在并发/
+// 重入，全局单槽足够。`trace_command` 在命令入口写入自己的名字，返回的 guard
+// 在命令返回/panic 时（RAII）清空；若命令卡死在中间，guard 的 Drop 永远不会
+// 执行，槽位正好把肇事命令的名字留住。
+//
+// 关键：`CURRENT_COMMAND` 这把锁本身从不长期持有（trace_command 写完立刻释放），
+// 所以哪怕主线程被卡命令堵死，watchdog 线程读这把锁完全不受影响——这正是
+// 2026-07-08 首次真实冻结报告拿不到「卡在哪条命令」这一环之后补上的（当时只能
+// 靠 isHungWindow + processes 间接判定是主线程被堵，定不到具体命令）。
+static CURRENT_COMMAND: Mutex<Option<(&'static str, Instant)>> = Mutex::new(None);
+
+/// 同步命令入口调用：`let _g = diagnostics::trace_command("git_log");`
+/// 只用于确认会做重 IO / 遍历 / 等子进程的同步命令，轻量命令不必埋（噪音无益）。
+pub fn trace_command(name: &'static str) -> CommandGuard {
+    *CURRENT_COMMAND.lock().unwrap() = Some((name, Instant::now()));
+    CommandGuard(name)
+}
+
+pub struct CommandGuard(&'static str);
+
+impl Drop for CommandGuard {
+    fn drop(&mut self) {
+        let mut slot = CURRENT_COMMAND.lock().unwrap();
+        // 只清自己：防御性检查，避免（理论上不该发生的）重入把别人的记录清掉。
+        if matches!(slot.as_ref(), Some((name, _)) if *name == self.0) {
+            *slot = None;
+        }
+    }
+}
+
+/// watchdog 冻结期采样调用：当前卡在哪条命令、已经跑了多久。
+pub fn current_stuck_command() -> Option<(&'static str, Duration)> {
+    CURRENT_COMMAND
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|(name, started)| (*name, started.elapsed()))
+}
+
 // ── 前端命令 ────────────────────────────────────────────────────────
 
 /// 前端每 500ms 一次的心跳。纯内存写入，必须保持轻——它本身就在被测的
@@ -176,5 +221,27 @@ mod tests {
         // 第二次快照不新增桶（counts 已清空）
         assert_eq!(first.len(), second.len());
         assert_eq!(first.iter().map(|b| b.count).sum::<u32>(), 5);
+    }
+
+    // trace_command 用模块级 static，cargo test 默认并行跑测试线程——把所有
+    // 断言放进同一个测试函数，避免不同测试互相踩 CURRENT_COMMAND 导致 flaky。
+    #[test]
+    fn trace_command_lifecycle_and_guard_scoping() {
+        {
+            let _g = trace_command("test_command_a");
+            let (name, dur) = current_stuck_command().expect("guard 存活期间应有值");
+            assert_eq!(name, "test_command_a");
+            assert!(dur.as_millis() < 1000, "刚开始计时应该很短");
+        } // guard drop
+        assert!(current_stuck_command().is_none(), "guard drop 后应清空");
+
+        // 手动 drop 后再开始新的一条，新记录不受旧 guard 影响
+        let ga = trace_command("cmd_a");
+        drop(ga);
+        let gb = trace_command("cmd_b");
+        let (name, _) = current_stuck_command().unwrap();
+        assert_eq!(name, "cmd_b");
+        drop(gb);
+        assert!(current_stuck_command().is_none());
     }
 }

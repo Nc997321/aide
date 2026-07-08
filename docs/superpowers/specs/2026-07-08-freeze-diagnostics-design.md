@@ -133,6 +133,37 @@ informative），非家族的 WebView 进程仅当本帧 `cpu > 0` 且未超 `MA
   1. 模拟**瞬时恢复**：devtools console 跑 `const t=Date.now();while(Date.now()-t<3000){}` 阻塞渲染线程 3s，确认 diagnostics 目录出现报告（`recovered=true`）且 frontend 补交已合并；
   2. 模拟**永不恢复**：跑 `const t=Date.now();while(Date.now()-t<60000){}` 阻塞 60s 期间，2s 后即应看到 diagnostics 目录出现报告且每 ~2s 更新（文件 mtime 变化），`recovered=false`；随后从任务管理器强杀 aide.exe，确认报告文件保留在磁盘、JSON 完整可解析。
 
+## 首次真实冻结事故复盘（2026-07-08）
+
+黑匣子上线当天即抓到一次真实（非手工模拟）冻结，release 构建，`durationMs: 31601`。
+
+**判读**：
+- `mainThreadProbe.pending` 从 4 单调涨到 56、从未回落；`lastLatencyMs` 全程锁死在同一个值
+  ——两个信号独立指向同一结论：**Rust/Tauri 主线程被堵死**，不是渲染进程忙（这次
+  `aide.exe` CPU 全程 0~55% 抖动，不是持续高位死循环特征）。
+- `isHungWindow` 冻结开始约 2.5s 后从 `false` 转 `true` 并保持——Windows 系统级判定与
+  我们的心跳判定独立吻合。
+- `eventRates` 显示冻结前一秒 chat 事件冲到 15 条/秒（一轮密集回复正在收尾）。
+
+**根因排查**：`useConversationChanges.ts` 的 `takeSnapshot()` 在每轮对话开始都会调
+`session_jsonl_size`；这条命令当时是**同步 command**，内部 `find_session_jsonl_globally`
+遍历 `~/.claude/projects/` 属同步磁盘 IO——精确复现 CLAUDE.md「同步 command 禁止重 IO」
+要防的模式。同名兄弟 `session_last_event` 早已是 async，`session_jsonl_size` /
+`session_truncate_jsonl` 是漏网之鱼；顺带发现 `list_sessions_for_workspace`（侧栏展开
+工作区 / 分屏布局恢复触发）也是同一个坑，逻辑比前两者更重。三者已改
+`async fn` + `spawn_blocking`（`session.rs`）。
+
+**诊断能力缺口与补强**：报告能明确判定「是不是主线程被堵」，但**定不到具体是哪条命令**
+——`mainThreadProbe` 的探针只是 no-op，不知道主线程在跑什么。补上 `trace_command()` 埋点
+（`diagnostics.rs`）：全局单槽 `CURRENT_COMMAND: Mutex<Option<(&str, Instant)>>`，同步命令
+入口写入名字，RAII guard 在返回/panic 时清空；命令卡死时 guard 不执行 Drop，槽位正好留住
+肇事命令名。watchdog 冻结采样时读取，写入 `FreezeSample.mainThread.stuckCommand` /
+`stuckForMs`。刻意不做地毯式埋点（119 条同步命令里绝大多数是轻量的，盲铺是噪音）：
+只埋了 `fetch_marketplace` / `install_plugin`（git clone 子进程 + 网络，无超时保护，
+风险最高且暂不改 async——涉及子进程生命周期与代理配置，留作单独评估）和
+`git_fingerprint`（3s 高频轮询 + 递归遍历 refs）。后续同类冻结如果指向其他同步命令，
+按同样模式精确补埋点，不预先猜测。
+
 ## 非目标（YAGNI）
 
 - 应用内可视化诊断面板（黑匣子抓到现场、问题解决后再议）；
