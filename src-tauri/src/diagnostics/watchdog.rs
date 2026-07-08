@@ -177,6 +177,7 @@ fn make_sample(sys: &mut System, probe: &ProbeState, hwnd: &AtomicIsize) -> Free
 
 /// 采样诊断目标进程的 CPU/内存：aide 进程家族（node sidecar / git 等子进程）
 /// + WebView2 运行时进程（渲染/GPU——按名匹配，因为它们不可靠地挂在 aide 进程树下）。
+/// 每帧按活跃度裁剪，丢掉别的 app 的空闲 WebView 进程以控制报告体积。
 /// 只在冻结期被调用——空闲态零成本。
 fn sample_processes(sys: &mut System) -> Vec<ProcessSample> {
     sys.refresh_processes(ProcessesToUpdate::All, true);
@@ -187,10 +188,12 @@ fn sample_processes(sys: &mut System) -> Vec<ProcessSample> {
         .filter_map(|(pid, p)| p.parent().map(|pp| (pid.as_u32(), pp.as_u32())))
         .collect();
     let family = report::family_of(me, &parents);
-    let mut out: Vec<ProcessSample> = sys
+    let candidates: Vec<ProcessSample> = sys
         .processes()
         .iter()
-        .filter(|(pid, p)| report::is_diagnostic_target(pid.as_u32(), &p.name().to_string_lossy(), &family))
+        .filter(|(pid, p)| {
+            report::is_diagnostic_target(pid.as_u32(), &p.name().to_string_lossy(), &family)
+        })
         .map(|(pid, p)| ProcessSample {
             pid: pid.as_u32(),
             name: p.name().to_string_lossy().into_owned(),
@@ -198,8 +201,7 @@ fn sample_processes(sys: &mut System) -> Vec<ProcessSample> {
             mem: p.memory(),
         })
         .collect();
-    out.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
-    out
+    report::select_frame_processes(candidates, &family, report::MAX_WEBVIEW_PER_FRAME)
 }
 
 /// 组装并落盘一份报告。返回报告路径（按 started 锚定，增量重写同一文件）。

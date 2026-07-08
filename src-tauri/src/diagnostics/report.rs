@@ -253,18 +253,57 @@ const WEBVIEW_PROC_NAMES: &[&str] = &["msedgewebview2.exe"];
 #[cfg(not(target_os = "windows"))]
 const WEBVIEW_PROC_NAMES: &[&str] = &[];
 
+/// 是否 WebView 运行时进程（按名匹配，大小写不敏感）。纯函数。
+pub fn is_webview_runtime(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    WEBVIEW_PROC_NAMES.iter().any(|n| lower == *n)
+}
+
 /// 一个进程是否值得采样进诊断报告。
 /// - 在 aide 进程家族内（自身 + 后代：node sidecar、git 等）；**或**
 /// - 是 WebView 运行时进程（按名匹配，绕过不可靠的父链）。
 ///
-/// 纯函数，便于单测。其他 app 的 WebView 进程可能混入，但它们通常空闲、
-/// 按 CPU 降序排列后自然沉底，不影响找出忙的那个。
+/// 纯函数，便于单测。这只是「候选」判定——每帧再由 `select_frame_processes`
+/// 按活跃度裁剪，避免把别的 app 的大量空闲 WebView 进程每帧都记一遍撑爆报告。
 pub fn is_diagnostic_target(pid: u32, name: &str, family: &HashSet<u32>) -> bool {
     if family.contains(&pid) {
         return true;
     }
-    let lower = name.to_ascii_lowercase();
-    WEBVIEW_PROC_NAMES.iter().any(|n| lower == *n)
+    is_webview_runtime(name)
+}
+
+/// 每帧最多保留的非家族 WebView 进程条数（兜底，防机器上大量微活跃 WebView 进程）。
+pub const MAX_WEBVIEW_PER_FRAME: usize = 10;
+
+/// 从一批候选进程里选出本帧要落盘的，控制报告体积。
+///
+/// 规则（已按 CPU 降序，输出的肇事者排前）：
+/// - aide 家族内（含宿主、node sidecar、git 等）：**全保留**——它们数量少、
+///   且即便瞬时 0% CPU 也 informative（宿主没忙是关键证据）；
+/// - 非家族的 WebView 进程（别的 app 的渲染进程也按名混入）：仅当本帧
+///   `cpu > 0` 且未超 `MAX_WEBVIEW_PER_FRAME` 才保留。
+///
+/// 丢掉的是别的 app 那些全程 0% CPU 的空闲 WebView 进程——它们不是肇事者。
+/// 渲染层 0% CPU 的死锁型卡死仍由「心跳断流 + 前端 longtask」层捕获，不靠
+/// 进程 CPU 区分（29 个空闲进程里哪个是我们的无法区分）。
+pub fn select_frame_processes(
+    mut candidates: Vec<ProcessSample>,
+    family: &HashSet<u32>,
+    max_webview: usize,
+) -> Vec<ProcessSample> {
+    candidates.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
+    let mut out = Vec::with_capacity(candidates.len());
+    let mut webview_kept = 0usize;
+    for p in candidates {
+        if family.contains(&p.pid) {
+            out.push(p);
+        } else if p.cpu > 0.0 && webview_kept < max_webview {
+            out.push(p);
+            webview_kept += 1;
+        }
+        // 否则：别的 app 的空闲 WebView 进程，丢弃
+    }
+    out
 }
 
 #[cfg(test)]
@@ -327,6 +366,53 @@ mod tests {
         }
         assert!(!is_diagnostic_target(5, "explorer.exe", &family)); // 无关进程
         assert!(!is_diagnostic_target(6, "msedge.exe", &family)); // Edge 浏览器，不是 WebView2
+    }
+
+    fn ps(pid: u32, name: &str, cpu: f32, mem: u64) -> ProcessSample {
+        ProcessSample { pid, name: name.into(), cpu, mem }
+    }
+
+    #[test]
+    fn select_keeps_family_regardless_of_cpu() {
+        // aide(1) 0% CPU 也保留（宿主没忙是关键证据）；node(2) 0% 保留
+        let family: HashSet<u32> = [1, 2].into_iter().collect();
+        let cands = vec![ps(1, "aide.exe", 0.0, 50_000_000), ps(2, "node.exe", 0.0, 30_000_000)];
+        let out = select_frame_processes(cands, &family, 10);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn select_drops_idle_other_app_webview_keeps_busy_one() {
+        // 家族只有 aide(1)；webview 3088 忙(98%)、其余 28 个 0% 是别的 app 的
+        let family: HashSet<u32> = [1].into_iter().collect();
+        let mut cands = vec![ps(1, "aide.exe", 5.0, 52_000_000), ps(3088, "msedgewebview2.exe", 98.0, 171_000_000)];
+        for pid in [100u32, 101, 102, 103, 104, 105] {
+            cands.push(ps(pid, "msedgewebview2.exe", 0.0, 10_000_000));
+        }
+        let out = select_frame_processes(cands, &family, 10);
+        let pids: Vec<u32> = out.iter().map(|p| p.pid).collect();
+        // 忙的渲染进程留下、aide 留下；6 个 0% 的别的 app 进程全丢
+        assert!(pids.contains(&3088));
+        assert!(pids.contains(&1));
+        assert!(!pids.contains(&100));
+        assert_eq!(out.len(), 2);
+        // 按_cpu 降序：98 在前
+        assert_eq!(out[0].pid, 3088);
+    }
+
+    #[test]
+    fn select_caps_active_webview_at_max() {
+        // 15 个 WebView 进程都微活跃(2%)，cap=10 时只留前 10 + aide
+        let family: HashSet<u32> = [1].into_iter().collect();
+        let mut cands = vec![ps(1, "aide.exe", 3.0, 50_000_000)];
+        for pid in 200u32..215 {
+            cands.push(ps(pid, "msedgewebview2.exe", 2.0, 40_000_000));
+        }
+        let out = select_frame_processes(cands, &family, 10);
+        // aide(1) + 10 个 webview = 11
+        assert_eq!(out.len(), 11);
+        assert!(out.iter().any(|p| p.pid == 1));
+        assert_eq!(out.iter().filter(|p| p.name == "msedgewebview2.exe").count(), 10);
     }
 
     #[test]

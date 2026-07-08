@@ -107,6 +107,17 @@ aide.exe 的直接子进程，家族规则能抓到；唯独 WebView2 不行。
 `mainThread.pending=0` + `isHungWindow=false` 的签名已能在「看不到渲染进程」时仍判定为渲染层卡死，
 但补上渲染进程 CPU 后，能看到它单核满载，证据闭环。
 
+**第二轮手工验证（同一 while 测试）确认盲区修复：pid 3088 msedgewebview2.exe 全程
+94~102% CPU = busy-loop 的渲染进程，肇事者被精确锁定。** 但暴露新问题：报告 206KB，
+因为按名匹配把机器上 ~29 个 msedgewebview2.exe（多为别的 app 的空闲进程）每帧都记了一遍。
+
+**体积控制修正**：新增纯函数 `select_frame_processes(candidates, family, max_webview)`——
+每帧按 CPU 降序，aide 家族（宿主 + node sidecar + git 等）全保留（数量少、瞬时 0% 也
+informative），非家族的 WebView 进程仅当本帧 `cpu > 0` 且未超 `MAX_WEBVIEW_PER_FRAME=10`
+才保留。丢掉的是别的 app 全程 0% CPU 的空闲进程，非肇事者。渲染层 0% CPU 的死锁型卡死
+仍由「心跳断流 + 前端 longtask」层捕获，不靠进程 CPU 区分（N 个空闲进程里哪个是我们的
+无法区分）。报告体积从 ~200KB 降到 ~40KB。
+
 ## 开销预算
 
 - 前端：100ms 一次的时间戳比较 + 500ms 一次的 invoke（payload 通常 < 300B）；
