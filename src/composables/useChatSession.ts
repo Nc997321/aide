@@ -343,7 +343,13 @@ function handleChatEvent(e: Record<string, unknown>) {
     case "session_init": {
       const sdkSid = e["sdk_session_id"] as string | undefined;
       if (sdkSid && isPendingSession(sid) && sdkSid !== sid) {
+        // 临时 key 首次被 SDK 确认：finalizeSession 同步段已把 running 盖到 realId
+        // 并 removeSessionState(tempId)。这里不能再 setSessionState(sid, ...)——
+        // sid 是过期的 tempId，写回去会在 sessionStateMap 里留下孤儿条目，
+        // 右上角"活跃会话"因此出现一个点进去空白的会话。realId 的 running 由
+        // finalizeSession 负责，本分支直接结束。
         void finalizeSession(sid, sdkSid);
+        break;
       }
       setSessionState(sid, "running");
       break;
