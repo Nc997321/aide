@@ -17,6 +17,8 @@ import type {
 } from "../types/chat";
 import { useSessionState } from "./useSessionState";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
+import { useSessionProviders } from "./useSessionProviders";
+import { useProviders } from "./useProviders";
 import { splitMentionSections, type FileMentionResolution } from "../utils/fileMentions";
 import type { HistoryBlock } from "../types";
 
@@ -119,6 +121,12 @@ const {
   state: sessionState,
   health: sessionHealth,
 } = useSessionState();
+
+// 会话 → spawn 时 provider 绑定：存活会话锁定初始 provider，全局切换不影响它；
+// stop_session 清绑定，下次发消息才用新 provider。见 useSessionProviders 注释。
+const { setProvider, clearProvider, migrateProvider } = useSessionProviders();
+// 当前全局 active provider id——仅用于在 spawn 前（会话不存活时）给新会话盖戳。
+const { activeProviderId } = useProviders();
 
 function getStore(sid: string): SessionStore {
   if (!stores[sid]) {
@@ -233,6 +241,8 @@ async function finalizeSession(tempId: string, realId: string) {
     if (sessionHealth[tempId]) setSessionHealth(realId, sessionHealth[tempId]);
     removeSessionState(tempId);
   }
+  // provider 绑定也跟着搬迁：临时 id 在 sendMessage 时已盖戳，拿到真实 id 后不能丢
+  migrateProvider(tempId, realId);
   // 2. Rust 侧只需要重命名 sidecar 进程注册表（内存态，无 IO）
   try {
     await invoke("rename_sidecar_session", { oldId: tempId, newId: realId });
@@ -695,6 +705,15 @@ export function useChatSession(sessionId: Ref<string | null>) {
 
     // resume：显式传入 > 已被 SDK 确认的 id 本身（aide id 就是 sdk id，无需查表）
     const resolvedResumeId = opts.resumeId ?? (isPendingSession(sid) ? undefined : sid);
+
+    // 即将 spawn（会话不存活：新会话 / stop 后续发 / 重开历史）→ 给这次会话盖戳
+    // 当前全局 active provider，让模型下拉在存活期间锁定它，全局切换不影响。
+    // 与 Rust `!has_session` 对齐：busy（含插队）= 存活 → 不盖戳，沿用旧绑定。
+    const status = sessionState[sid];
+    if (!status || status === "stopped") {
+      setProvider(sid, activeProviderId.value);
+    }
+
     dispatchSend(sid, item, resolvedResumeId, opts.initialModel, opts.jumpQueue);
     return sid;
   }
@@ -747,6 +766,9 @@ export function useChatSession(sessionId: Ref<string | null>) {
       store.queued.length = 0;
       finishStreaming(store);
       setSessionState(sid, "stopped");
+      // 释放 provider 绑定：下拉随即回落到全局 active provider，体现"stop 后供应商
+      // 才改变"；下次发消息会重新盖戳当前 active provider 并用它 spawn。
+      clearProvider(sid);
     }
   }
 

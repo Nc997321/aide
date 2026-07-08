@@ -98,6 +98,7 @@ export function useProviders() {
     activeProviderId,
     displayList,
     activeProvider,
+    systemDefault,
     loaded,
     load,
     addProvider,

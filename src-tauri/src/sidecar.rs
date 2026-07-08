@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,7 +8,7 @@ use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex as TokioMutex;
 use tauri::{AppHandle, Emitter};
 use serde_json::Value;
-use crate::commands::provider::should_respawn;
+use crate::commands::provider::connection_fingerprint;
 
 
 struct SidecarSession {
@@ -18,18 +18,25 @@ struct SidecarSession {
     killed: Arc<AtomicBool>,
     /// 会话 ID 共享句柄：rename 后 reader 任务发出的事件立刻携带新 ID
     sid: Arc<Mutex<String>>,
-    /// spawn 时使用的完整 env_vars 快照，供 `needs_respawn` 检测连接身份漂移
-    /// （供应商切换后 base_url/api_key 是否还跟这次 spawn 时一致）。
-    env_vars: HashMap<String, String>,
 }
 
 pub struct SidecarManager {
     sessions: Mutex<HashMap<String, SidecarSession>>,
+    /// 每个 session **spawn 时**的连接身份指纹（base_url/api_key/auth_token/代理 子集，
+    /// 见 `provider::connection_fingerprint`）。与 `sessions` 不同，这份表**跨 kill
+    /// 持久**——`kill` 不删它：用户点 stop 后 respawn 时，`connection_drifted` 拿它
+    /// 跟当前 provider 配置比，判断是不是"换着 provider 续一个旧会话"，决定要不要
+    /// fork 绕开 CLI session 文件里缓存的旧 provider 配置（避免 404 回归）。
+    /// 存活会话永不 respawn，所以这份表只在 `!has_session` 分支被读。
+    fingerprints: Mutex<HashMap<String, BTreeMap<String, String>>>,
 }
 
 impl SidecarManager {
     pub fn new() -> Self {
-        Self { sessions: Mutex::new(HashMap::new()) }
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+            fingerprints: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn spawn(
@@ -181,9 +188,16 @@ impl SidecarManager {
         });
 
         self.sessions.lock().unwrap().insert(
-            session_id,
-            SidecarSession { stdin, child, killed, sid: sid_shared, env_vars },
+            session_id.clone(),
+            SidecarSession { stdin, child, killed, sid: sid_shared },
         );
+        // 记录这次 spawn 的连接身份指纹（跨 kill 持久）：后续 stop 后 respawn 时
+        // `connection_drifted` 靠它判断是否换了 provider。env_vars 此后不再被借用，
+        // 这里顺手算指纹是最后一次使用。
+        self.fingerprints
+            .lock()
+            .unwrap()
+            .insert(session_id, connection_fingerprint(&env_vars));
         Ok(())
     }
 
@@ -216,22 +230,33 @@ impl SidecarManager {
         self.sessions.lock().unwrap().contains_key(session_id)
     }
 
-    /// 判断该 session 是否需要重启子进程：没有存活进程，或者存活进程 spawn
-    /// 时的 env 快照跟当前 provider 配置算出来的 env_vars 相比，连接身份
-    /// （base_url/api_key/auth_token/代理）发生了漂移。纯决策委托给
-    /// `provider::should_respawn`，这里只负责从会话表里取快照，粘合逻辑。
-    pub fn needs_respawn(&self, session_id: &str, env_vars: &HashMap<String, String>) -> bool {
-        let sessions = self.sessions.lock().unwrap();
-        should_respawn(sessions.get(session_id).map(|s| &s.env_vars), env_vars)
+    /// 该 session 是否"resume 一个先前用别的 provider 起过的会话"：持久化指纹存在
+    /// 且与当前 desired env 的连接身份不一致。**仅在 `!has_session` 分支调用**
+    /// （存活会话永不 respawn，根本不会走到这）：用于决定 respawn 时要不要让
+    /// sidecar forkSession 绕开 CLI session 文件里缓存的旧 provider 配置。
+    /// 全新会话（无持久化指纹）→ false，普通新建；同 provider stop 后续发 → false，
+    /// 普通 resume；换了 provider stop 后续发 → true，fork。
+    pub fn connection_drifted(&self, session_id: &str, env_vars: &HashMap<String, String>) -> bool {
+        let fps = self.fingerprints.lock().unwrap();
+        match fps.get(session_id) {
+            None => false,
+            Some(old) => *old != connection_fingerprint(env_vars),
+        }
     }
 
     /// 把运行中会话从 old_id 重命名为 new_id：重挂 HashMap key 并更新共享 sid，
-    /// 之后 reader 任务发出的事件立即携带新 ID。old 不存在时静默成功（幂等）。
+    /// 之后 reader 任务发出的事件立即携带新 ID。fingerprints 注册表同步迁移，
+    /// 保证 temp id → SDK 真实 id 后连接身份指纹不丢。old 不存在时静默成功（幂等）。
     pub fn rename(&self, old_id: &str, new_id: &str) -> Result<(), String> {
         let mut sessions = self.sessions.lock().unwrap();
         if let Some(session) = sessions.remove(old_id) {
             *session.sid.lock().unwrap() = new_id.to_string();
             sessions.insert(new_id.to_string(), session);
+        }
+        drop(sessions);
+        let mut fps = self.fingerprints.lock().unwrap();
+        if let Some(fp) = fps.remove(old_id) {
+            fps.insert(new_id.to_string(), fp);
         }
         Ok(())
     }
@@ -355,13 +380,63 @@ mod tests {
         assert_eq!(result, "C:\\Git\\usr\\bin");
     }
 
-    /// 全新 session（sessions 表里没有）必须判定需要重启——这是 spawn 分支
-    /// 依赖的基础用例，不需要真的起子进程也能验证。
+    fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    /// 全新会话没有持久化指纹 → connection_drifted 返回 false（普通新建，不 fork）。
     #[test]
-    fn needs_respawn_true_for_unknown_session() {
+    fn connection_drifted_false_for_brand_new_session() {
         let mgr = SidecarManager::new();
-        let mut env = HashMap::new();
-        env.insert("ANTHROPIC_BASE_URL".to_string(), "https://api.anthropic.com".to_string());
-        assert!(mgr.needs_respawn("no-such-session", &env));
+        let env = env(&[("ANTHROPIC_BASE_URL", "https://api.anthropic.com")]);
+        assert!(!mgr.connection_drifted("no-such-session", &env));
+    }
+
+    /// 持久化指纹与当前 env 连接身份一致（同 provider stop 后续发）→ 不 fork。
+    /// 直接往 fingerprints 注册表塞一条模拟"先前 spawn 过"，避免真起子进程。
+    #[test]
+    fn connection_drifted_false_when_same_provider_resume() {
+        let mgr = SidecarManager::new();
+        let fp = connection_fingerprint(&env(&[
+            ("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+            ("ANTHROPIC_API_KEY", "key-a"),
+        ]));
+        mgr.fingerprints.lock().unwrap().insert("s1".to_string(), fp);
+        let desired = env(&[
+            ("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+            ("ANTHROPIC_API_KEY", "key-a"),
+            ("ANTHROPIC_MODEL", "claude-sonnet-5"), // 模型不算连接身份
+        ]);
+        assert!(!mgr.connection_drifted("s1", &desired));
+    }
+
+    /// 持久化指纹与当前 env base_url 不一致（换了 provider stop 后续发）→ fork。
+    #[test]
+    fn connection_drifted_true_when_provider_switched() {
+        let mgr = SidecarManager::new();
+        let fp = connection_fingerprint(&env(&[
+            ("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+            ("ANTHROPIC_API_KEY", "key-a"),
+        ]));
+        mgr.fingerprints.lock().unwrap().insert("s1".to_string(), fp);
+        let desired = env(&[
+            ("ANTHROPIC_BASE_URL", "https://provider-b.example.com"),
+            ("ANTHROPIC_API_KEY", "key-b"),
+        ]);
+        assert!(mgr.connection_drifted("s1", &desired));
+    }
+
+    /// kill 不清 fingerprints：stop 后指纹仍在，才能在 respawn 时比对。
+    /// 这里只验注册表本身不随 sessions 清空而丢——kill 的进程收割另走集成路径。
+    #[test]
+    fn fingerprints_survive_session_removal() {
+        let mgr = SidecarManager::new();
+        let fp = connection_fingerprint(&env(&[("ANTHROPIC_BASE_URL", "https://api.anthropic.com")]));
+        mgr.fingerprints.lock().unwrap().insert("s1".to_string(), fp.clone());
+        // 模拟 kill 只动 sessions 表（真实 kill 也是如此）
+        mgr.sessions.lock().unwrap().remove("s1");
+        assert!(mgr.fingerprints.lock().unwrap().contains_key("s1"));
+        let desired = env(&[("ANTHROPIC_BASE_URL", "https://provider-b.example.com")]);
+        assert!(mgr.connection_drifted("s1", &desired));
     }
 }

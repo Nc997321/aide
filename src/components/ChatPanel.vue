@@ -15,6 +15,8 @@ import { peekFileClipboard } from "@/composables/useFileClipboard";
 import type { ImageAttachment, SendOptions } from "@/composables/useChatSession";
 import { useMessageWindow } from "@/composables/useMessageWindow";
 import { useProviders } from "@/composables/useProviders";
+import { useSessionProviders } from "@/composables/useSessionProviders";
+import type { ProviderConfig } from "@/types";
 import { useQuickActions } from "@/composables/useQuickActions";
 import type { QuickAction } from "@/composables/useQuickActions";
 
@@ -48,7 +50,18 @@ const emit = defineEmits<{
   "respond-permission": [id: string, approved: boolean, always?: boolean, answers?: Record<string, string>];
 }>();
 
-const { activeProvider, SYSTEM_DEFAULT_ID } = useProviders();
+const { activeProviderId, allProviders, systemDefault, SYSTEM_DEFAULT_ID } = useProviders();
+const { providerOf } = useSessionProviders();
+
+// 会话所属 provider：存活会话锁定它 spawn 那一刻的 provider（存在 useSessionProviders
+// 注册表里），全局切换供应商不影响已启动会话的模型下拉；没有绑定（新会话/已 stop/
+// 重开历史）时回落到全局 active provider——这正是"stop_session 后供应商才改变"的
+// 体现。下拉的选项列表与默认选中都跟 sessionProvider 走，不再跟 activeProvider。
+const sessionProvider = computed<ProviderConfig>(() => {
+  const id = (props.sessionId && providerOf(props.sessionId)) ?? activeProviderId.value;
+  if (id === SYSTEM_DEFAULT_ID) return systemDefault;
+  return allProviders.value.find((p) => p.id === id) ?? systemDefault;
+});
 // 工具栏快捷操作（/compact /clear）：composable 早就写好且有单测，但从没接到
 // UI 上过——之前工具栏里完全看不到这两个按钮。见 handleQuickAction。
 const { actions: quickActions } = useQuickActions();
@@ -72,9 +85,10 @@ onMounted(async () => {
   }
 });
 
-/** 第三方供应商自己的真实模型列表：配置里的默认模型 + 模型列表（去重） */
+/** 第三方供应商自己的真实模型列表：配置里的默认模型 + 模型列表（去重）。
+ *  跟 sessionProvider 走——存活会话用 spawn 时的 provider，不受全局切换影响。 */
 const providerModels = computed<ModelOption[]>(() => {
-  const p = activeProvider.value;
+  const p = sessionProvider.value;
   const vals = [...new Set([...(p.model ? [p.model] : []), ...p.knownModels])];
   return vals.map((v) => ({ value: v, displayName: v }));
 });
@@ -83,7 +97,7 @@ const displayModels = computed<ModelOption[]>(() => {
   // 第三方供应商：下拉展示真实模型 id，始终以供应商配置为准——SDK 回发的
   // 是 Claude 的 opus/sonnet 别名列表，对第三方是假象（TUI 时代的别名
   // 欺骗机制已移除），选了还可能打到不存在的模型。
-  if (activeProvider.value.id !== SYSTEM_DEFAULT_ID) {
+  if (sessionProvider.value.id !== SYSTEM_DEFAULT_ID) {
     return providerModels.value;
   }
   // 系统默认（真 Claude）：SDK 学到的列表 > 静态兜底
@@ -106,7 +120,7 @@ const modelSelectOptions = computed(() =>
  *  当前可选列表里），否则退化到列表第一项。 */
 function applyDefaultModel(models: ModelOption[]) {
   if (selectedModel.value || !models.length) return;
-  const providerDefault = activeProvider.value.model;
+  const providerDefault = sessionProvider.value.model;
   selectedModel.value = providerDefault && models.some((m) => m.value === providerDefault)
     ? providerDefault
     : models[0].value;
@@ -120,8 +134,10 @@ watch(() => props.sessionId, (sid) => {
     applyDefaultModel(displayModels.value);
   }
 });
-// 切供应商后旧选择大概率不在新列表里，重置回新供应商的默认模型
-watch(() => activeProvider.value.id, () => {
+// 会话所属 provider 变了（全局切换影响到非存活会话，或 stop_session 释放了绑定），
+// 旧选择大概率不在新列表里，重置回新 provider 的默认模型。存活会话的 sessionProvider
+// 锁在 spawn 时的 provider，全局切换不会触发这个 watcher——模型下拉不受影响。
+watch(() => sessionProvider.value.id, () => {
   selectedModel.value = "";
   applyDefaultModel(displayModels.value);
 });
