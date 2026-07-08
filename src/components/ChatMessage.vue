@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ChatMessage } from "@/types/chat";
-import { marked, renderMarkdown } from "@/utils/markdown";
+import { renderStreaming, renderMarkdown } from "@/utils/markdown";
 import ToolCallBlock from "./ToolCallBlock.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
@@ -35,13 +35,15 @@ function isLiveGroup(seg: Segment): boolean {
 // 只响应渲染期已判定为文件的 code（见 utils/markdown.ts codespan 渲染器 +
 // utils/fileLink.ts 判定规则），点击层不再自己做路径识别。openResolved 会先探测
 // 路径是否存在，不存在时在工作区内搜索（带加载态，多命中弹选择框）。
-/** 文本块 → HTML：已定稿的块走 renderMarkdown 缓存（重渲染零解析成本）；
- *  流式中的最后一块每个增量都在变，进缓存只会塞满垃圾键——直接解析。
+/** 文本块 → HTML：已定稿的块走 renderMarkdown 缓存（重渲染零解析成本，含语法
+ *  高亮）；流式中的最后一块每个增量都在变，走 renderStreaming——结构照常实时
+ *  渲染，唯独代码围栏不跑 hljs（每个增量重高亮成长中的大围栏是 O(n²) 卡死放大器，
+ *  见 utils/markdown.ts）。块定稿后自然切回 renderMarkdown 补上高亮。
  *  index 是块在原 blocks 里的下标（Segment.index），分段化后判定依据不变。 */
 function blockHtml(text: string, index: number): string {
   const streamingTail =
     !!props.message.streaming && index === props.message.blocks.length - 1;
-  return streamingTail ? (marked.parse(text) as string) : renderMarkdown(text);
+  return streamingTail ? renderStreaming(text) : renderMarkdown(text);
 }
 
 function handleTextClick(e: MouseEvent) {
