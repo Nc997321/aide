@@ -69,6 +69,7 @@ mod tests {
 
 #[command]
 pub fn clipboard_read_files() -> Vec<String> {
+    let _trace = crate::diagnostics::trace_command("clipboard_read_files");
     read_clipboard_files_impl()
 }
 
@@ -170,6 +171,7 @@ fn read_clipboard_files_impl() -> Vec<String> {
 
 #[command]
 pub fn clipboard_read_image() -> Option<String> {
+    let _trace = crate::diagnostics::trace_command("clipboard_read_image");
     read_clipboard_image_impl()
 }
 

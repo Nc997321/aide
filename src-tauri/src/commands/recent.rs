@@ -165,6 +165,7 @@ pub fn record_recent_session(
     session_id: String,
     name: String,
 ) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("record_recent_session");
     let entry = RecentSession { ws_key, ws_name, session_id, name, ts: now_ms() };
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
     push_session(&mut guard, entry, current_limit());
@@ -173,6 +174,7 @@ pub fn record_recent_session(
 
 #[tauri::command]
 pub fn record_recent_file(ws_key: String, path: String, name: String) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("record_recent_file");
     let entry = RecentFile { path, name, ts: now_ms() };
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
     push_file(&mut guard, &ws_key, entry, current_limit());
@@ -181,6 +183,7 @@ pub fn record_recent_file(ws_key: String, path: String, name: String) -> Result<
 
 #[tauri::command]
 pub fn list_recent(ws_key: String) -> Result<RecentView, String> {
+    let _trace = crate::diagnostics::trace_command("list_recent");
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
     let limit = current_limit();
     let mut need_save = prune_stale(&mut guard, &ws_key);
@@ -204,6 +207,7 @@ pub fn list_recent(ws_key: String) -> Result<RecentView, String> {
 
 #[tauri::command]
 pub fn remove_recent_session(session_id: String) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("remove_recent_session");
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
     let before = guard.sessions.len();
     guard.sessions.retain(|s| s.session_id != session_id);
@@ -215,6 +219,7 @@ pub fn remove_recent_session(session_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn clear_recent(category: Option<String>) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("clear_recent");
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
     match category.as_deref() {
         Some("sessions") => guard.sessions.clear(),

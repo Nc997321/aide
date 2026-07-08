@@ -14,6 +14,7 @@ pub fn run_process_start(
     pty_manager: State<'_, ShellManager>,
     app: AppHandle,
 ) -> Result<String, String> {
+    let _trace = crate::diagnostics::trace_command("run_process_start");
     let session_id = run_session_id(&config_id);
     let cwd_path = PathBuf::from(&cwd);
     pty_manager.spawn_run_command(&session_id, &cwd_path, &command, 24, 80, app)?;
@@ -25,6 +26,7 @@ pub fn run_process_stop(
     config_id: String,
     pty_manager: State<'_, ShellManager>,
 ) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("run_process_stop");
     let session_id = run_session_id(&config_id);
     pty_manager.kill_session(&session_id);
     Ok(())

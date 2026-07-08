@@ -15,6 +15,7 @@ use super::{FileEntry, GrepMatch, WorkspaceState, project_root_for_commands, det
 pub fn get_project_info(
     workspace_state: State<'_, WorkspaceState>,
 ) -> Result<ProjectInfo, String> {
+    let _trace = crate::diagnostics::trace_command("get_project_info");
     let root = project_root_for_commands(&workspace_state);
 
     Ok(ProjectInfo {
@@ -29,6 +30,7 @@ pub fn get_project_info(
 
 #[tauri::command]
 pub fn file_open(path: String) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("file_open");
     #[cfg(target_os = "windows")]
     {
         let mut cmd = Command::new("cmd");
@@ -49,6 +51,7 @@ pub fn file_open(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn show_in_explorer(path: String) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("show_in_explorer");
     let p = PathBuf::from(&path);
     #[cfg(target_os = "windows")]
     {

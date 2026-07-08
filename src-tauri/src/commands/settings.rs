@@ -125,6 +125,7 @@ pub fn save_config(v: &Value) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_settings() -> Result<AppSettings, String> {
+    let _trace = crate::diagnostics::trace_command("get_settings");
     let config = load_config();
     if let Some(settings) = config.get("settings") {
         serde_json::from_value::<AppSettings>(settings.clone())
@@ -136,6 +137,7 @@ pub fn get_settings() -> Result<AppSettings, String> {
 
 #[tauri::command]
 pub fn set_settings(settings: Value) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("set_settings");
     let mut config = load_config();
     if config.is_null() {
         config = serde_json::json!({});
@@ -160,6 +162,7 @@ pub fn set_settings(settings: Value) -> Result<(), String> {
 /// Optionally stores session_id for click-to-navigate support.
 #[tauri::command]
 pub fn notify_send(title: String, body: String, session_id: Option<String>) {
+    let _trace = crate::diagnostics::trace_command("notify_send");
     // Store session_id for later retrieval when window is activated
     if let Some(ref sid) = session_id {
         if let Ok(mut guard) = PENDING_NOTIFICATION.lock() {

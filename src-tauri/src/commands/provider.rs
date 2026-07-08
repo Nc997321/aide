@@ -120,6 +120,7 @@ pub fn load_active_provider() -> Option<ProviderConfig> {
 
 #[tauri::command]
 pub fn get_providers() -> Result<Vec<ProviderConfig>, String> {
+    let _trace = crate::diagnostics::trace_command("get_providers");
     let config = load_config();
     if let Some(arr) = config.get("providers").and_then(|v| v.as_array()) {
         let mut out = Vec::new();
@@ -136,6 +137,7 @@ pub fn get_providers() -> Result<Vec<ProviderConfig>, String> {
 
 #[tauri::command]
 pub fn set_providers(providers: Vec<ProviderConfig>) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("set_providers");
     let mut config = load_config();
     if config.is_null() {
         config = serde_json::json!({});
@@ -147,6 +149,7 @@ pub fn set_providers(providers: Vec<ProviderConfig>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_active_provider_id() -> Result<String, String> {
+    let _trace = crate::diagnostics::trace_command("get_active_provider_id");
     let config = load_config();
     let id = config
         .get("active_provider")
@@ -158,6 +161,7 @@ pub fn get_active_provider_id() -> Result<String, String> {
 
 #[tauri::command]
 pub fn set_active_provider_id(provider_id: String) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("set_active_provider_id");
     let mut config = load_config();
     if config.is_null() {
         config = serde_json::json!({});

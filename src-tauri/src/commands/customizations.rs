@@ -67,6 +67,7 @@ fn save_settings(v: &serde_json::Value) -> Result<(), String> {
 
 #[tauri::command]
 pub fn list_agents() -> Result<Vec<CustomizationItem>, String> {
+    let _trace = crate::diagnostics::trace_command("list_agents");
     let dir = agents_dir();
     if !dir.exists() {
         return Ok(vec![]);
@@ -113,6 +114,7 @@ pub fn list_agents() -> Result<Vec<CustomizationItem>, String> {
 
 #[tauri::command]
 pub fn get_agent(id: String) -> Result<CustomizationItem, String> {
+    let _trace = crate::diagnostics::trace_command("get_agent");
     let path = agents_dir().join(format!("{}.md", id));
     if !path.exists() {
         return Err(format!("Agent '{}' not found", id));
@@ -134,6 +136,7 @@ pub fn get_agent(id: String) -> Result<CustomizationItem, String> {
 
 #[tauri::command]
 pub fn create_agent(data: serde_json::Value) -> Result<CustomizationItem, String> {
+    let _trace = crate::diagnostics::trace_command("create_agent");
     let name = data["name"].as_str().unwrap_or("unnamed");
     let description = data["description"].as_str().unwrap_or("");
     let model = data["model"].as_str().unwrap_or("haiku");
@@ -162,6 +165,7 @@ pub fn create_agent(data: serde_json::Value) -> Result<CustomizationItem, String
 
 #[tauri::command]
 pub fn update_agent(id: String, data: serde_json::Value) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("update_agent");
     let path = agents_dir().join(format!("{}.md", id));
     if !path.exists() {
         return Err(format!("Agent '{}' not found", id));
@@ -187,6 +191,7 @@ pub fn update_agent(id: String, data: serde_json::Value) -> Result<(), String> {
 
 #[tauri::command]
 pub fn delete_agent(id: String) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("delete_agent");
     let path = agents_dir().join(format!("{}.md", id));
     if !path.exists() {
         return Err(format!("Agent '{}' not found", id));
@@ -196,6 +201,7 @@ pub fn delete_agent(id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn toggle_agent(id: String, enabled: bool) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("toggle_agent");
     let dir = agents_dir();
     let enabled_path = dir.join(format!("{}.md", id));
     let disabled_path = dir.join(format!("{}.md.disabled", id));
@@ -220,6 +226,7 @@ pub fn toggle_agent(id: String, enabled: bool) -> Result<(), String> {
 
 #[tauri::command]
 pub fn list_skills() -> Result<Vec<CustomizationItem>, String> {
+    let _trace = crate::diagnostics::trace_command("list_skills");
     let dir = skills_dir();
     if !dir.exists() {
         return Ok(vec![]);
@@ -278,6 +285,7 @@ pub fn list_skills() -> Result<Vec<CustomizationItem>, String> {
 
 #[tauri::command]
 pub fn get_skill(id: String) -> Result<CustomizationItem, String> {
+    let _trace = crate::diagnostics::trace_command("get_skill");
     let path = skills_dir().join(&id);
     let skill_md = path.join("SKILL.md");
     if !skill_md.exists() {
@@ -314,6 +322,7 @@ pub fn get_skill(id: String) -> Result<CustomizationItem, String> {
 
 #[tauri::command]
 pub fn create_skill(data: serde_json::Value) -> Result<CustomizationItem, String> {
+    let _trace = crate::diagnostics::trace_command("create_skill");
     let name = data["name"].as_str().unwrap_or("unnamed");
     let description = data["description"].as_str().unwrap_or("");
 
@@ -342,6 +351,7 @@ pub fn create_skill(data: serde_json::Value) -> Result<CustomizationItem, String
 
 #[tauri::command]
 pub fn update_skill(id: String, data: serde_json::Value) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("update_skill");
     let dir = skills_dir().join(&id);
     let skill_md = dir.join("SKILL.md");
     if !skill_md.exists() {
@@ -362,6 +372,7 @@ pub fn update_skill(id: String, data: serde_json::Value) -> Result<(), String> {
 
 #[tauri::command]
 pub fn delete_skill(id: String) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("delete_skill");
     let dir = skills_dir().join(&id);
     if !dir.exists() {
         return Err(format!("Skill '{}' not found", id));
@@ -371,6 +382,7 @@ pub fn delete_skill(id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn toggle_skill(id: String, enabled: bool) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("toggle_skill");
     let dir = skills_dir().join(&id);
     let enabled_path = dir.join("SKILL.md");
     let disabled_path = dir.join("SKILL.md.disabled");
@@ -395,6 +407,7 @@ pub fn toggle_skill(id: String, enabled: bool) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_global_instructions() -> Result<CustomizationItem, String> {
+    let _trace = crate::diagnostics::trace_command("get_global_instructions");
     let path = global_claude_md_path();
     let content = if path.exists() {
         fs::read_to_string(&path).unwrap_or_default()
@@ -415,6 +428,7 @@ pub fn get_global_instructions() -> Result<CustomizationItem, String> {
 
 #[tauri::command]
 pub fn save_global_instructions(content: String) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("save_global_instructions");
     let path = global_claude_md_path();
     let dir = path.parent().unwrap();
     fs::create_dir_all(dir).map_err(|e| format!("Failed to create directory: {}", e))?;
@@ -423,6 +437,7 @@ pub fn save_global_instructions(content: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_project_instructions(ws: tauri::State<'_, WorkspaceState>) -> Result<CustomizationItem, String> {
+    let _trace = crate::diagnostics::trace_command("get_project_instructions");
     let path = project_claude_md_path(&ws);
     let content = if path.exists() {
         fs::read_to_string(&path).unwrap_or_default()
@@ -443,6 +458,7 @@ pub fn get_project_instructions(ws: tauri::State<'_, WorkspaceState>) -> Result<
 
 #[tauri::command]
 pub fn save_project_instructions(content: String, ws: tauri::State<'_, WorkspaceState>) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("save_project_instructions");
     let path = project_claude_md_path(&ws);
     fs::write(&path, content).map_err(|e| format!("Failed to write project instructions: {}", e))
 }
@@ -451,6 +467,7 @@ pub fn save_project_instructions(content: String, ws: tauri::State<'_, Workspace
 
 #[tauri::command]
 pub fn list_hooks() -> Result<Vec<CustomizationItem>, String> {
+    let _trace = crate::diagnostics::trace_command("list_hooks");
     let settings = load_settings();
     let hooks = settings.get("hooks").cloned().unwrap_or(serde_json::json!({}));
 
@@ -488,6 +505,7 @@ pub fn list_hooks() -> Result<Vec<CustomizationItem>, String> {
 
 #[tauri::command]
 pub fn create_hook(data: serde_json::Value) -> Result<CustomizationItem, String> {
+    let _trace = crate::diagnostics::trace_command("create_hook");
     let event = data["event"].as_str().unwrap_or("PostToolUse");
     let matcher = data["matcher"].as_str().unwrap_or("");
     let command = data["command"].as_str().unwrap_or("");
@@ -543,6 +561,7 @@ pub fn create_hook(data: serde_json::Value) -> Result<CustomizationItem, String>
 
 #[tauri::command]
 pub fn update_hook(id: String, data: serde_json::Value) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("update_hook");
     // Parse event and index from id (format: "event_index")
     let parts: Vec<&str> = id.splitn(2, '_').collect();
     if parts.len() != 2 {
@@ -578,6 +597,7 @@ pub fn update_hook(id: String, data: serde_json::Value) -> Result<(), String> {
 
 #[tauri::command]
 pub fn delete_hook(id: String) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("delete_hook");
     let parts: Vec<&str> = id.splitn(2, '_').collect();
     if parts.len() != 2 {
         return Err(format!("Invalid hook id: {}", id));
@@ -601,6 +621,7 @@ pub fn delete_hook(id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn toggle_hook(id: String, enabled: bool) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("toggle_hook");
     let parts: Vec<&str> = id.splitn(2, '_').collect();
     if parts.len() != 2 {
         return Err(format!("Invalid hook id: {}", id));
@@ -638,6 +659,7 @@ pub fn toggle_hook(id: String, enabled: bool) -> Result<(), String> {
 
 #[tauri::command]
 pub fn list_mcp_servers() -> Result<Vec<CustomizationItem>, String> {
+    let _trace = crate::diagnostics::trace_command("list_mcp_servers");
     let settings = load_settings();
     let mcp_servers = settings.get("mcpServers").cloned().unwrap_or(serde_json::json!({}));
 
@@ -672,6 +694,7 @@ pub fn list_mcp_servers() -> Result<Vec<CustomizationItem>, String> {
 
 #[tauri::command]
 pub fn create_mcp_server(data: serde_json::Value) -> Result<CustomizationItem, String> {
+    let _trace = crate::diagnostics::trace_command("create_mcp_server");
     let name = data["name"].as_str().unwrap_or("unnamed");
     let command = data["command"].as_str().unwrap_or("");
     let args = data["args"].clone();
@@ -705,6 +728,7 @@ pub fn create_mcp_server(data: serde_json::Value) -> Result<CustomizationItem, S
 
 #[tauri::command]
 pub fn update_mcp_server(id: String, data: serde_json::Value) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("update_mcp_server");
     let mut settings = load_settings();
     let mcp_servers = settings
         .as_object_mut()
@@ -729,6 +753,7 @@ pub fn update_mcp_server(id: String, data: serde_json::Value) -> Result<(), Stri
 
 #[tauri::command]
 pub fn delete_mcp_server(id: String) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("delete_mcp_server");
     let mut settings = load_settings();
     if let Some(mcp_servers) = settings.get_mut("mcpServers") {
         if let Some(obj) = mcp_servers.as_object_mut() {
@@ -740,6 +765,7 @@ pub fn delete_mcp_server(id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn toggle_mcp_server(id: String, enabled: bool) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("toggle_mcp_server");
     let mut settings = load_settings();
     if let Some(mcp_servers) = settings.get_mut("mcpServers") {
         if let Some(config) = mcp_servers.get_mut(&id) {

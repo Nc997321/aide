@@ -206,6 +206,7 @@ fn notify_assoc_changed() {
 
 #[tauri::command]
 pub fn register_open_with(extensions: Vec<String>) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("register_open_with");
     let exts: Vec<String> = extensions.iter().filter_map(|e| sanitize_ext(e)).collect();
     #[cfg(windows)]
     {
@@ -222,6 +223,7 @@ pub fn register_open_with(extensions: Vec<String>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn unregister_open_with(extensions: Vec<String>) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("unregister_open_with");
     let exts: Vec<String> = extensions.iter().filter_map(|e| sanitize_ext(e)).collect();
     #[cfg(windows)]
     {
@@ -241,6 +243,7 @@ pub fn unregister_open_with(extensions: Vec<String>) -> Result<(), String> {
 /// 会让设置与注册表脱钩。这里先落盘再 diff 旧/新集合，新增注册、移除注销。
 #[tauri::command]
 pub fn set_open_with_extensions(new_exts: Vec<String>) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("set_open_with_extensions");
     let new_exts: Vec<String> = new_exts.iter().filter_map(|e| sanitize_ext(e)).collect();
 
     let mut config = load_config();

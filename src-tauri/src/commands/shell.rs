@@ -64,6 +64,7 @@ pub fn pty_spawn_shell(
     cwd: String,
     shell: String,
 ) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("pty_spawn_shell");
     let program = resolve_shell(&shell)?;
     let cwd_path = PathBuf::from(&cwd);
     manager.spawn_shell(&session_id, &program, &[], &cwd_path, rows, cols, app_handle)
