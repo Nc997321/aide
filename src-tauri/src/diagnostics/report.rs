@@ -223,8 +223,8 @@ pub fn merge_supplement(path: &Path, supplement: serde_json::Value) -> std::io::
 
 /// 从 pid→parent 表中筛出 `root` 自身 + 全部后代。
 ///
-/// 沿 parent 链上溯判断归属（链长上限防环）。WebView2 渲染进程、
-/// node sidecar、git 子进程都是 aide 主进程的后代。
+/// 沿 parent 链上溯判断归属（链长上限防环）。node sidecar、git 子进程都是
+/// aide 主进程的后代，靠这条规则能抓到。
 pub fn family_of(root: u32, parents: &HashMap<u32, u32>) -> HashSet<u32> {
     let mut family = HashSet::new();
     family.insert(root);
@@ -242,6 +242,29 @@ pub fn family_of(root: u32, parents: &HashMap<u32, u32>) -> HashSet<u32> {
         }
     }
     family
+}
+
+/// WebView2 运行时进程名：渲染/GPU/浏览器进程都是它。
+/// 这些进程**不可靠地挂在 aide.exe 的进程树下**（经 COM/broker 拉起，父进程
+/// 往往不是宿主），family_of 抓不到它们——而它们恰恰是渲染卡死的肇事者。
+/// 所以对它们用名字匹配兜底，不依赖父链。
+#[cfg(target_os = "windows")]
+const WEBVIEW_PROC_NAMES: &[&str] = &["msedgewebview2.exe"];
+#[cfg(not(target_os = "windows"))]
+const WEBVIEW_PROC_NAMES: &[&str] = &[];
+
+/// 一个进程是否值得采样进诊断报告。
+/// - 在 aide 进程家族内（自身 + 后代：node sidecar、git 等）；**或**
+/// - 是 WebView 运行时进程（按名匹配，绕过不可靠的父链）。
+///
+/// 纯函数，便于单测。其他 app 的 WebView 进程可能混入，但它们通常空闲、
+/// 按 CPU 降序排列后自然沉底，不影响找出忙的那个。
+pub fn is_diagnostic_target(pid: u32, name: &str, family: &HashSet<u32>) -> bool {
+    if family.contains(&pid) {
+        return true;
+    }
+    let lower = name.to_ascii_lowercase();
+    WEBVIEW_PROC_NAMES.iter().any(|n| lower == *n)
 }
 
 #[cfg(test)]
@@ -287,6 +310,23 @@ mod tests {
         let parents: HashMap<u32, u32> = [(2, 3), (3, 2)].into_iter().collect();
         let family = family_of(1, &parents);
         assert_eq!(family, [1].into_iter().collect());
+    }
+
+    #[test]
+    fn is_diagnostic_target_catches_family_and_webview_by_name() {
+        // aide(1) 的家族 = {1,2}；进程 3(msedgewebview2.exe) 不在家族里
+        // （WebView2 经 broker 拉起，父进程不是宿主），但必须按名抓到。
+        let parents: HashMap<u32, u32> = [(2, 1)].into_iter().collect();
+        let family = family_of(1, &parents);
+        assert!(is_diagnostic_target(1, "aide.exe", &family)); // 自身
+        assert!(is_diagnostic_target(2, "node.exe", &family)); // 后代
+        #[cfg(target_os = "windows")]
+        {
+            assert!(is_diagnostic_target(3, "msedgewebview2.exe", &family)); // 按名，不在家族
+            assert!(is_diagnostic_target(4, "MsEdgeWebView2.exe", &family)); // 大小写不敏感
+        }
+        assert!(!is_diagnostic_target(5, "explorer.exe", &family)); // 无关进程
+        assert!(!is_diagnostic_target(6, "msedge.exe", &family)); // Edge 浏览器，不是 WebView2
     }
 
     #[test]

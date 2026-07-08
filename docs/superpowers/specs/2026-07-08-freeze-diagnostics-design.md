@@ -92,6 +92,21 @@ src/
   ```
 - 环形缓冲容量：心跳 300 条（~2.5min）、事件速率 180 桶（3min）、面包屑随心跳走（每条心跳 ≤ 若干条增量）。
 
+## 诊断目标进程的筛选（2026-07-08 手工验证发现并修正）
+
+首次手工验证（`while` 阻塞渲染线程 60s + 强杀）暴露了一个盲区：报告的 `processes` 里
+**只有 aide.exe、CPU 仅 5~15%，看不到 msedgewebview2.exe 渲染进程**——而后者才是肇事者。
+
+根因：`family_of` 靠父进程链判断归属，但 **WebView2 运行时进程经 COM/broker 拉起，
+父进程不是宿主 aide.exe**，不在其进程树下，被家族过滤排除掉了。node sidecar / git 是
+aide.exe 的直接子进程，家族规则能抓到；唯独 WebView2 不行。
+
+修正：新增纯函数 `is_diagnostic_target(pid, name, family)`——在 aide 家族内 **或** 进程名
+匹配 WebView 运行时（Windows `msedgewebview2.exe`，大小写不敏感；非 Windows 为空集）。
+其他 app 的 WebView2 进程可能混入，但通常空闲、按 CPU 降序排列后自然沉底，不影响找出忙的那个。
+`mainThread.pending=0` + `isHungWindow=false` 的签名已能在「看不到渲染进程」时仍判定为渲染层卡死，
+但补上渲染进程 CPU 后，能看到它单核满载，证据闭环。
+
 ## 开销预算
 
 - 前端：100ms 一次的时间戳比较 + 500ms 一次的 invoke（payload 通常 < 300B）；

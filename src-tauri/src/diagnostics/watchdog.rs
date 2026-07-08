@@ -175,7 +175,8 @@ fn make_sample(sys: &mut System, probe: &ProbeState, hwnd: &AtomicIsize) -> Free
     }
 }
 
-/// aide 主进程 + 全部后代进程（WebView2 渲染进程、node sidecar、git…）的 CPU/内存。
+/// 采样诊断目标进程的 CPU/内存：aide 进程家族（node sidecar / git 等子进程）
+/// + WebView2 运行时进程（渲染/GPU——按名匹配，因为它们不可靠地挂在 aide 进程树下）。
 /// 只在冻结期被调用——空闲态零成本。
 fn sample_processes(sys: &mut System) -> Vec<ProcessSample> {
     sys.refresh_processes(ProcessesToUpdate::All, true);
@@ -189,7 +190,7 @@ fn sample_processes(sys: &mut System) -> Vec<ProcessSample> {
     let mut out: Vec<ProcessSample> = sys
         .processes()
         .iter()
-        .filter(|(pid, _)| family.contains(&pid.as_u32()))
+        .filter(|(pid, p)| report::is_diagnostic_target(pid.as_u32(), &p.name().to_string_lossy(), &family))
         .map(|(pid, p)| ProcessSample {
             pid: pid.as_u32(),
             name: p.name().to_string_lossy().into_owned(),
