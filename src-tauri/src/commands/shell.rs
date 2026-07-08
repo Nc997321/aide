@@ -70,11 +70,14 @@ pub fn pty_spawn_shell(
 }
 
 #[tauri::command]
-pub fn scan_plugin_skills(
+pub async fn scan_plugin_skills(
     provider: Option<String>,
     cwd: String,
-    registry: tauri::State<'_, crate::skills::SkillRegistry>,
-) -> Vec<crate::skills::SkillMeta> {
-    let path = std::path::Path::new(&cwd);
-    registry.list(provider.as_deref(), path)
+    registry: tauri::State<'_, std::sync::Arc<crate::skills::SkillRegistry>>,
+) -> Result<Vec<crate::skills::SkillMeta>, String> {
+    let reg = registry.inner().clone();
+    let path = std::path::Path::new(&cwd).to_path_buf();
+    tokio::task::spawn_blocking(move || reg.list(provider.as_deref(), &path))
+        .await
+        .map_err(|e| format!("scan_plugin_skills task panicked: {}", e))
 }

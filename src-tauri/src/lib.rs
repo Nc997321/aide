@@ -86,7 +86,7 @@ pub fn run() {
         .manage(shell_manager)
         .manage(diagnostics::DiagnosticsState::new())
         .manage(sidecar::SidecarManager::new())
-        .manage(skills::SkillRegistry::new())
+        .manage(std::sync::Arc::new(skills::SkillRegistry::new()))
         .manage(workspace_state)
         .manage(PendingOpenFile(std::sync::Mutex::new(None)))
         .setup(|app| {
