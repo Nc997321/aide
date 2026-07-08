@@ -46,6 +46,8 @@ pub fn save_run_configs(ws_key: String, configs: Vec<RunConfig>) -> Result<(), S
 }
 
 #[tauri::command]
-pub fn detect_run_targets(cwd: String) -> Result<Vec<RunTarget>, String> {
-    Ok(detect_targets(Path::new(&cwd)))
+pub async fn detect_run_targets(cwd: String) -> Result<Vec<RunTarget>, String> {
+    tokio::task::spawn_blocking(move || Ok(detect_targets(Path::new(&cwd))))
+        .await
+        .map_err(|e| format!("detect_run_targets task panicked: {}", e))?
 }

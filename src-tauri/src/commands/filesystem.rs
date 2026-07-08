@@ -77,12 +77,20 @@ pub fn show_in_explorer(path: String) -> Result<(), String> {
 // ── Project run-command detection ──────────────────────────────────────────
 
 #[tauri::command]
-pub fn detect_run_command(cwd: String) -> Result<Option<String>, String> {
-    Ok(super::detectors::detect_command_for_path(Path::new(&cwd)))
+pub async fn detect_run_command(cwd: String) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || Ok(super::detectors::detect_command_for_path(Path::new(&cwd))))
+        .await
+        .map_err(|e| format!("detect_run_command task panicked: {}", e))?
 }
 
 #[tauri::command]
-pub fn list_directory(path: String, show_hidden: Option<bool>) -> Result<Vec<FileEntry>, String> {
+pub async fn list_directory(path: String, show_hidden: Option<bool>) -> Result<Vec<FileEntry>, String> {
+    tokio::task::spawn_blocking(move || list_directory_blocking(path, show_hidden))
+        .await
+        .map_err(|e| format!("list_directory task panicked: {}", e))?
+}
+
+fn list_directory_blocking(path: String, show_hidden: Option<bool>) -> Result<Vec<FileEntry>, String> {
     let dir = PathBuf::from(&path);
     if !dir.is_dir() {
         return Err(format!("Not a directory: {}", path));
@@ -122,16 +130,27 @@ pub fn list_directory(path: String, show_hidden: Option<bool>) -> Result<Vec<Fil
     Ok(entries)
 }
 
+/// 文件读取/写入/复制/删除一律 async + spawn_blocking：大文件 / 大目录 / 跨盘复制 /
+/// 递归删除是同步重 IO，跑在 Tauri 主线程上会被杀软实时扫描或磁盘争抢拖到秒级，
+/// 把窗口整卡成「未响应」（2026-07-08 两轮真实冻结实锤同类反模式
+/// `session_jsonl_size` / `save_session_changes`）。见 CLAUDE.md「同步 command 禁止
+/// 重 IO / 重 CPU」。
 #[tauri::command]
-pub fn read_file_content(path: String) -> Result<String, String> {
-    fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))
+pub async fn read_file_content(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e)))
+        .await
+        .map_err(|e| format!("read_file_content task panicked: {}", e))?
 }
 
 #[tauri::command]
-pub fn read_file_base64(path: String) -> Result<String, String> {
-    use base64::Engine;
-    let bytes = fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
-    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+pub async fn read_file_base64(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        use base64::Engine;
+        let bytes = fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
+        Ok::<String, String>(base64::engine::general_purpose::STANDARD.encode(&bytes))
+    })
+        .await
+        .map_err(|e| format!("read_file_base64 task panicked: {}", e))?
 }
 
 /// 以原始字节读取文件，供前端通过 Blob URL 预览图片等二进制资源。
@@ -143,36 +162,46 @@ pub fn read_file_base64(path: String) -> Result<String, String> {
 const IMAGE_PREVIEW_MAX_BYTES: u64 = 20_000_000;
 
 #[tauri::command]
-pub fn read_file_binary(path: String) -> Result<tauri::ipc::Response, String> {
-    let p = PathBuf::from(&path);
-    let meta = fs::metadata(&p).map_err(|e| format!("Failed to read file: {}", e))?;
-    if meta.len() > IMAGE_PREVIEW_MAX_BYTES {
-        return Err(format!(
-            "File too large to preview ({} bytes > {} limit)",
-            meta.len(),
-            IMAGE_PREVIEW_MAX_BYTES
-        ));
-    }
-    let bytes = fs::read(&p).map_err(|e| format!("Failed to read file: {}", e))?;
-    Ok(tauri::ipc::Response::new(bytes))
+pub async fn read_file_binary(path: String) -> Result<tauri::ipc::Response, String> {
+    tokio::task::spawn_blocking(move || {
+        let p = PathBuf::from(&path);
+        let meta = fs::metadata(&p).map_err(|e| format!("Failed to read file: {}", e))?;
+        if meta.len() > IMAGE_PREVIEW_MAX_BYTES {
+            return Err(format!(
+                "File too large to preview ({} bytes > {} limit)",
+                meta.len(),
+                IMAGE_PREVIEW_MAX_BYTES
+            ));
+        }
+        let bytes = fs::read(&p).map_err(|e| format!("Failed to read file: {}", e))?;
+        Ok(tauri::ipc::Response::new(bytes))
+    })
+    .await
+    .map_err(|e| format!("read_file_binary task panicked: {}", e))?
 }
 
 #[tauri::command]
-pub fn write_file_content(path: String, content: String) -> Result<(), String> {
-    fs::write(&path, content).map_err(|e| format!("Failed to write file: {}", e))
+pub async fn write_file_content(path: String, content: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || fs::write(&path, content).map_err(|e| format!("Failed to write file: {}", e)))
+        .await
+        .map_err(|e| format!("write_file_content task panicked: {}", e))?
 }
 
 #[tauri::command]
-pub fn delete_file(path: String) -> Result<(), String> {
-    let p = PathBuf::from(&path);
-    if !p.exists() {
-        return Ok(());
-    }
-    if p.is_dir() {
-        fs::remove_dir_all(&p).map_err(|e| format!("Failed to delete directory: {}", e))
-    } else {
-        fs::remove_file(&p).map_err(|e| format!("Failed to delete file: {}", e))
-    }
+pub async fn delete_file(path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let p = PathBuf::from(&path);
+        if !p.exists() {
+            return Ok(());
+        }
+        if p.is_dir() {
+            fs::remove_dir_all(&p).map_err(|e| format!("Failed to delete directory: {}", e))
+        } else {
+            fs::remove_file(&p).map_err(|e| format!("Failed to delete file: {}", e))
+        }
+    })
+    .await
+    .map_err(|e| format!("delete_file task panicked: {}", e))?
 }
 
 #[tauri::command]
@@ -210,46 +239,54 @@ fn copy_dir_recursive(src: &std::path::Path, dest: &std::path::Path) -> Result<(
 }
 
 #[tauri::command]
-pub fn copy_file(src: String, dest: String) -> Result<(), String> {
-    let src_path = PathBuf::from(&src);
-    let dest_path = PathBuf::from(&dest);
-    if dest_path.exists() {
-        let name = dest_path.file_name().unwrap_or_default().to_string_lossy().to_string();
-        return Err(format!("EXISTS:{}", name));
-    }
-    if src_path.is_dir() {
-        copy_dir_recursive(&src_path, &dest_path)
-    } else {
-        fs::copy(&src_path, &dest_path)
-            .map(|_| ())
-            .map_err(|e| format!("Failed to copy: {}", e))
-    }
+pub async fn copy_file(src: String, dest: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let src_path = PathBuf::from(&src);
+        let dest_path = PathBuf::from(&dest);
+        if dest_path.exists() {
+            let name = dest_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            return Err(format!("EXISTS:{}", name));
+        }
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dest_path)
+        } else {
+            fs::copy(&src_path, &dest_path)
+                .map(|_| ())
+                .map_err(|e| format!("Failed to copy: {}", e))
+        }
+    })
+    .await
+    .map_err(|e| format!("copy_file task panicked: {}", e))?
 }
 
 #[tauri::command]
-pub fn move_file(src: String, dest: String) -> Result<(), String> {
-    let src_path = PathBuf::from(&src);
-    let dest_path = PathBuf::from(&dest);
-    if dest_path.exists() {
-        let name = dest_path.file_name().unwrap_or_default().to_string_lossy().to_string();
-        return Err(format!("EXISTS:{}", name));
-    }
-    // 同盘快速路径
-    if fs::rename(&src_path, &dest_path).is_ok() {
-        return Ok(());
-    }
-    // 跨盘 fallback：复制后删除源
-    if src_path.is_dir() {
-        copy_dir_recursive(&src_path, &dest_path)?;
-        fs::remove_dir_all(&src_path)
-            .map_err(|e| format!("Failed to remove source dir: {}", e))?;
-    } else {
-        fs::copy(&src_path, &dest_path)
-            .map_err(|e| format!("Failed to copy: {}", e))?;
-        fs::remove_file(&src_path)
-            .map_err(|e| format!("Failed to remove source: {}", e))?;
-    }
-    Ok(())
+pub async fn move_file(src: String, dest: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let src_path = PathBuf::from(&src);
+        let dest_path = PathBuf::from(&dest);
+        if dest_path.exists() {
+            let name = dest_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            return Err(format!("EXISTS:{}", name));
+        }
+        // 同盘快速路径
+        if fs::rename(&src_path, &dest_path).is_ok() {
+            return Ok(());
+        }
+        // 跨盘 fallback：复制后删除源
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dest_path)?;
+            fs::remove_dir_all(&src_path)
+                .map_err(|e| format!("Failed to remove source dir: {}", e))?;
+        } else {
+            fs::copy(&src_path, &dest_path)
+                .map_err(|e| format!("Failed to copy: {}", e))?;
+            fs::remove_file(&src_path)
+                .map_err(|e| format!("Failed to remove source: {}", e))?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("move_file task panicked: {}", e))?
 }
 
 // ── grep_symbol: project-wide symbol search for code navigation ──
@@ -542,23 +579,23 @@ mod tests {
     use super::*;
     use std::fs;
 
-    #[test]
-    fn test_read_file_base64_roundtrip() {
+    #[tokio::test]
+    async fn test_read_file_base64_roundtrip() {
         let dir = std::env::temp_dir().join("aide_test_b64");
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("test.png");
         let bytes: &[u8] = &[137, 80, 78, 71, 13, 10, 26, 10]; // PNG magic bytes
         fs::write(&path, bytes).unwrap();
 
-        let result = read_file_base64(path.to_string_lossy().to_string()).unwrap();
+        let result = read_file_base64(path.to_string_lossy().to_string()).await.unwrap();
         use base64::Engine;
         let decoded = base64::engine::general_purpose::STANDARD.decode(&result).unwrap();
         assert_eq!(decoded, bytes);
     }
 
-    #[test]
-    fn test_read_file_base64_missing_file() {
-        let result = read_file_base64("/nonexistent/path/img.png".to_string());
+    #[tokio::test]
+    async fn test_read_file_base64_missing_file() {
+        let result = read_file_base64("/nonexistent/path/img.png".to_string()).await;
         assert!(result.is_err());
     }
 }
