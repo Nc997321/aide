@@ -3,14 +3,17 @@
 //! 报告是黑匣子的最终产物——一份自包含 JSON，事后交给 Claude 分析。
 //! 文件名 `freeze-<epoch_ms>.json`，目录只保留最新 `KEEP_REPORTS` 份。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 /// 报告 schema 版本：字段有不兼容变化时 +1，分析端据此区分。
-pub const SCHEMA_VERSION: u32 = 1;
+/// v2：`EventRateBucket` 增补 `bytes`/`maxBytes`/`maxBytesType`/`types`——
+/// 旧版只记条数，抓不到「哪条巨型 payload 把渲染烧炸」，2026-07-08 第三次
+/// 真实冻结（前端渲染风暴、stuck_command 全 null）后补上。
+pub const SCHEMA_VERSION: u32 = 2;
 /// 目录里最多保留的报告份数（按文件名里的 epoch 排序，淘汰最旧）。
 pub const KEEP_REPORTS: usize = 20;
 
@@ -53,6 +56,12 @@ pub struct HeartbeatEntry {
 }
 
 /// 每秒每会话的 chat-event 计数桶。
+///
+/// count 只回答「多不多」；渲染风暴的真凶往往是**单条巨型 payload**（一大坨
+/// tool_result、或流式尾块涨成的超大 text_delta），所以还记 wire 字节的总和 /
+/// 单条峰值 / 峰值来自哪个 type，外加类型分布——冻结那一秒的桶直接点名是
+/// 「文本增量洪峰」还是「巨型 tool_result」。字节取自 sidecar stdout 原始行长度
+/// （provider-agnostic，不额外序列化，微秒级）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventRateBucket {
@@ -60,6 +69,14 @@ pub struct EventRateBucket {
     pub t_sec: u64,
     pub session_id: String,
     pub count: u32,
+    /// 本秒本会话所有事件的 wire 字节总和
+    pub bytes: u64,
+    /// 本秒本会话单条最大事件字节数（点名巨型 payload）
+    pub max_bytes: u64,
+    /// 贡献 `max_bytes` 的事件类型
+    pub max_bytes_type: String,
+    /// 本秒本会话事件类型分布（type → 条数），BTreeMap 保证落盘顺序稳定
+    pub types: BTreeMap<String, u32>,
 }
 
 /// 冻结期间 watchdog 主动采的一帧。

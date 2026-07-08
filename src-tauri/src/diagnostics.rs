@@ -19,7 +19,7 @@ mod report;
 mod ring;
 mod watchdog;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -62,15 +62,31 @@ impl DiagnosticsState {
     }
 
     /// sidecar `chat-event` 出口计数钩子：纯内存，微秒级。
-    pub fn record_chat_event(&self, session_id: &str) {
-        self.0.event_rates.lock().unwrap().record(session_id);
+    /// `event_type` 取自 provider-agnostic 协议的 `type` 字段，`bytes` 是 sidecar
+    /// stdout 原始行字节数（不额外序列化）——冻结报告据此点名巨型 payload。
+    pub fn record_chat_event(&self, session_id: &str, event_type: &str, bytes: u64) {
+        self.0
+            .event_rates
+            .lock()
+            .unwrap()
+            .record(session_id, event_type, bytes);
     }
 }
 
-/// 每秒每会话的 chat-event 计数：当前秒在 HashMap 累加，跨秒冲进环。
+/// 当前秒某会话的累积：条数 + 字节总和 + 单条峰值（及其类型）+ 类型分布。
+#[derive(Default)]
+struct SessionAccum {
+    count: u32,
+    bytes: u64,
+    max_bytes: u64,
+    max_bytes_type: String,
+    types: BTreeMap<String, u32>,
+}
+
+/// 每秒每会话的 chat-event 计量：当前秒在 HashMap 累加，跨秒冲进环。
 pub struct EventRates {
     current_sec: u64,
-    counts: HashMap<String, u32>,
+    counts: HashMap<String, SessionAccum>,
     ring: Ring<EventRateBucket>,
 }
 
@@ -79,19 +95,34 @@ impl EventRates {
         Self { current_sec: 0, counts: HashMap::new(), ring: Ring::new(cap) }
     }
 
-    fn record(&mut self, session_id: &str) {
+    fn record(&mut self, session_id: &str, event_type: &str, bytes: u64) {
         let sec = report::epoch_ms() / 1000;
         if sec != self.current_sec {
             self.flush();
             self.current_sec = sec;
         }
-        *self.counts.entry(session_id.to_string()).or_default() += 1;
+        let a = self.counts.entry(session_id.to_string()).or_default();
+        a.count += 1;
+        a.bytes += bytes;
+        if bytes > a.max_bytes {
+            a.max_bytes = bytes;
+            a.max_bytes_type = event_type.to_string();
+        }
+        *a.types.entry(event_type.to_string()).or_default() += 1;
     }
 
     fn flush(&mut self) {
         let sec = self.current_sec;
-        for (session_id, count) in self.counts.drain() {
-            self.ring.push(EventRateBucket { t_sec: sec, session_id, count });
+        for (session_id, a) in self.counts.drain() {
+            self.ring.push(EventRateBucket {
+                t_sec: sec,
+                session_id,
+                count: a.count,
+                bytes: a.bytes,
+                max_bytes: a.max_bytes,
+                max_bytes_type: a.max_bytes_type,
+                types: a.types,
+            });
         }
     }
 
@@ -191,16 +222,28 @@ pub async fn diag_freeze_supplement(
 mod tests {
     use super::*;
 
+    /// 手工累加一条事件，绕开真实时钟——测试直接驱动 record 的等价内部路径。
+    fn bump(rates: &mut EventRates, session: &str, ty: &str, bytes: u64) {
+        let a = rates.counts.entry(session.into()).or_default();
+        a.count += 1;
+        a.bytes += bytes;
+        if bytes > a.max_bytes {
+            a.max_bytes = bytes;
+            a.max_bytes_type = ty.into();
+        }
+        *a.types.entry(ty.into()).or_default() += 1;
+    }
+
     #[test]
     fn event_rates_buckets_by_second_and_session() {
         let mut rates = EventRates::new(10);
         // 手工驱动，不依赖真实时钟跨秒
         rates.current_sec = 100;
-        *rates.counts.entry("s1".into()).or_default() += 3;
-        *rates.counts.entry("s2".into()).or_default() += 1;
+        for _ in 0..3 { bump(&mut rates, "s1", "text_delta", 10); }
+        bump(&mut rates, "s2", "text_delta", 10);
         rates.flush();
         rates.current_sec = 101;
-        *rates.counts.entry("s1".into()).or_default() += 2;
+        for _ in 0..2 { bump(&mut rates, "s1", "text_delta", 10); }
 
         let mut snap = rates.snapshot();
         snap.sort_by_key(|b| (b.t_sec, b.session_id.clone()));
@@ -212,10 +255,29 @@ mod tests {
     }
 
     #[test]
+    fn event_rates_tracks_bytes_peak_and_types() {
+        let mut rates = EventRates::new(10);
+        rates.current_sec = 200;
+        bump(&mut rates, "s1", "text_delta", 100);
+        bump(&mut rates, "s1", "tool_result", 50_000); // 巨型 payload
+        bump(&mut rates, "s1", "text_delta", 200);
+
+        let snap = rates.snapshot();
+        assert_eq!(snap.len(), 1);
+        let b = &snap[0];
+        assert_eq!(b.count, 3);
+        assert_eq!(b.bytes, 50_300);
+        assert_eq!(b.max_bytes, 50_000);
+        assert_eq!(b.max_bytes_type, "tool_result"); // 峰值来自巨型 tool_result
+        assert_eq!(b.types.get("text_delta"), Some(&2));
+        assert_eq!(b.types.get("tool_result"), Some(&1));
+    }
+
+    #[test]
     fn snapshot_is_repeatable_without_double_counting() {
         let mut rates = EventRates::new(10);
         rates.current_sec = 50;
-        *rates.counts.entry("s1".into()).or_default() += 5;
+        for _ in 0..5 { bump(&mut rates, "s1", "text_delta", 10); }
         let first = rates.snapshot();
         let second = rates.snapshot();
         // 第二次快照不新增桶（counts 已清空）

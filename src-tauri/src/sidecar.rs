@@ -121,14 +121,20 @@ impl SidecarManager {
                             continue;
                         }
                         let current_sid = sid_handle.lock().unwrap().clone();
-                        // 诊断黑匣子：chat-event 出口按秒计数（挂在 provider-agnostic
-                        // 协议层，纯内存微秒级，不触碰转发逻辑）
+                        // 诊断黑匣子：chat-event 出口按秒计量（挂在 provider-agnostic
+                        // 协议层，纯内存微秒级，不触碰转发逻辑）。除条数外记事件类型 +
+                        // wire 字节数（原始行长度，不额外序列化），冻结报告据此点名
+                        // 哪条巨型 payload / 哪种事件洪峰把渲染烧炸。
                         {
                             use tauri::Manager;
                             if let Some(diag) =
                                 app.try_state::<crate::diagnostics::DiagnosticsState>()
                             {
-                                diag.record_chat_event(&current_sid);
+                                let event_type = event
+                                    .get("type")
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or("unknown");
+                                diag.record_chat_event(&current_sid, event_type, line.len() as u64);
                             }
                         }
                         if let Some(obj) = event.as_object_mut() {
