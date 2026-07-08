@@ -461,8 +461,20 @@ fn session_last_event_blocking(session_id: String) -> Result<LastEventInfo, Stri
     Ok(LastEventInfo { event_type: None, stop_reason: None, timestamp: None })
 }
 
+/// 每轮 Claude 回完都会调用一次（`useConversationChanges.captureChanges → save`），
+/// 把累积的全部 `rounds` 序列化落盘。同步版是 2026-07-08 第二次真实冻结的根因：
+/// `serde_json::to_string_pretty(&rounds)`（随会话变长，CPU 满核序列化）+ `fs::write`
+/// （杀软实时扫描/磁盘争抢时可拖到 27s）两段式堵死 Tauri 主线程，报告实锤 `pending`
+/// 单调涨 + `aide.exe` 首帧 100% CPU。和 `session_jsonl_size` 同一类反模式（见
+/// CLAUDE.md「同步 command 禁止重 IO」），一并改 async + spawn_blocking。
 #[tauri::command]
-pub fn load_session_changes(session_id: String) -> Result<Vec<ChangeRoundData>, String> {
+pub async fn load_session_changes(session_id: String) -> Result<Vec<ChangeRoundData>, String> {
+    tokio::task::spawn_blocking(move || load_session_changes_blocking(session_id))
+        .await
+        .map_err(|e| format!("load_session_changes task panicked: {}", e))?
+}
+
+fn load_session_changes_blocking(session_id: String) -> Result<Vec<ChangeRoundData>, String> {
     let path = our_sessions_dir().join(format!("{}-changes.json", session_id));
     if !path.exists() {
         return Ok(Vec::new());
@@ -474,7 +486,13 @@ pub fn load_session_changes(session_id: String) -> Result<Vec<ChangeRoundData>, 
 }
 
 #[tauri::command]
-pub fn save_session_changes(session_id: String, rounds: Vec<ChangeRoundData>) -> Result<(), String> {
+pub async fn save_session_changes(session_id: String, rounds: Vec<ChangeRoundData>) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || save_session_changes_blocking(session_id, rounds))
+        .await
+        .map_err(|e| format!("save_session_changes task panicked: {}", e))?
+}
+
+fn save_session_changes_blocking(session_id: String, rounds: Vec<ChangeRoundData>) -> Result<(), String> {
     let dir = our_sessions_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create dir: {}", e))?;
     let path = dir.join(format!("{}-changes.json", session_id));

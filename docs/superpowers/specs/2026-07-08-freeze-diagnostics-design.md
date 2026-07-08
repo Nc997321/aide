@@ -170,3 +170,37 @@ informative），非家族的 WebView 进程仅当本帧 `cpu > 0` 且未超 `MA
 - 独立监控进程；
 - 崩溃（进程退出）诊断——已有 panic hook + tracing 日志覆盖；
 - 诊断数据上报/回传——纯本地文件。
+
+## 第二次真实冻结事故复盘（2026-07-08，首修后约 1.5h）
+
+`freeze-1783482401072.json`，release 构建，`durationMs: 26970`，`recovered: false`
+（强杀）。三信号依旧一致指向**主线程被堵**：`mainThreadProbe.pending` 4→48 单调涨、
+`lastLatencyMs` 全程锁 0.073、`isHungWindow` 3.2s 后转 true。但**特征与首次不同**：
+
+- **首帧 `aide.exe` 100% CPU**（满核），下一帧降到 5.7% 但主线程仍堵——典型的 **CPU 烧 →
+  IO 堵** 两段式。首次 `session_jsonl_size` 是纯目录遍历 IO，`aide.exe` CPU 一直很低（等
+  磁盘），全程没有 100% CPU 那一帧。这直接说明本次是**另一个根因**，不是 `session_jsonl_size`
+  复发。
+- `mainThread.stuckCommand = None` 全程——首修埋的 `fetch_marketplace`/`install_plugin`/
+  `git_fingerprint` 都不是它（也侧面证明本次不是这三个）。
+- 前端最后一帧 `lagMax=0`、无 longtask，冻结前一秒事件率安静（2-3/秒，一轮刚收尾）——
+  触发在 Rust 侧、瞬时发生，排除渲染洪峰。
+
+**根因排查**：逐命令审 `useConversationChanges.ts` 的每轮调用链——`captureChanges` 在
+`running/attention → waiting`（每轮 Claude 回完）触发，调 `await save()` → 同步
+`save_session_changes`。该命令在主线程上对**累积的全部 `rounds`** 跑
+`serde_json::to_string_pretty`（随会话变长，CPU 满核）+ `fs::write`（杀软实时扫描/磁盘争抢
+可拖到 27s）——序列化对应首帧 100% CPU，写盘对应其后 CPU 掉但主线程仍堵。同名兄弟
+`load_session_changes`（切会话时同步读 + `serde_json::from_str`，CPU 解析）同病。
+
+**诚实说明**：`recovered=false` 无前端补交（crumbs/longtasks），无法 100% 拍死就是这条；
+但它是每轮必调、同步、CPU+IO、且未被埋点的唯一一条——属「无悔修复」（无论是不是它都该改，
+和 `session_jsonl_size` 同类反模式）。
+
+**已修**：`save_session_changes` / `load_session_changes` 改 `async fn` +
+`spawn_blocking`（`session.rs`），序列化与落盘全离主线程。前端早已 `await`，无需改动。
+**诊断反思**：`trace_command` 只对同步命令有意义——async 命令的 spawn_blocking 任务不在
+主线程，guard 在 dispatch 后立刻 drop，抓不到。所以本轮没有为这两条补埋点（埋了也无效），
+直接用 async 消除主线程阻塞这一类。若改 async 后仍复发同类主线程冻结且 `stuckCommand=None`，
+则说明根因是**仍未识别的另一条同步命令**，应继续按「逐调用链审 → 精确改 async」推进，
+而非扩大 trace_command（它只覆盖刻意保留同步的高风险命令）。
