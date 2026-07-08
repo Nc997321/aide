@@ -96,6 +96,18 @@ const rightResize = useResizable({
   max: 500,
   direction: "right",
 });
+
+/** grid 轨道宽度的单一数据源：折叠态直接决定轨道本身，而不是只改子元素
+ *  自身的 CSS 宽度——子元素默认按轨道 stretch，不需要再单独设 !important
+ *  宽度。收起需要联动 .panel-center 的真实包围盒变化，FileViewer 的悬浮
+ *  窗口层靠 ResizeObserver 量 .panel-center 才能正确重新平铺（见
+ *  FileViewer.vue 顶部注释）——轨道不真的变，那层就量不到变化。 */
+const gridTemplateColumns = computed(() => {
+  const left = leftCollapsed.value ? "10px" : "var(--aide-left-w, 280px)";
+  const right = rightCollapsed.value ? "10px" : "var(--aide-right-w, 300px)";
+  return `${left} 1px minmax(400px, 1fr) 1px ${right}`;
+});
+
 const sidebarRef = ref<InstanceType<typeof SidebarLeft> | null>(null);
 const fileTreeRef = ref<InstanceType<typeof FileTree> | null>(null);
 const gitPanelRef = ref<InstanceType<typeof GitPanel> | null>(null);
@@ -510,7 +522,11 @@ onUnmounted(() => {
       @edit-run-configs="runConfigsDialogVisible = true"
     />
 
-    <div class="app-layout" :class="{ 'is-dragging': leftResize.isDragging.value || rightResize.isDragging.value }">
+    <div
+      class="app-layout"
+      :class="{ 'is-dragging': leftResize.isDragging.value || rightResize.isDragging.value }"
+      :style="{ gridTemplateColumns }"
+    >
       <NotificationBanner
         :sessions="pendingSessionInfos"
         :visible="bannerVisible"
@@ -544,7 +560,7 @@ onUnmounted(() => {
       <!-- Left resize handle -->
       <div
         v-show="!leftCollapsed"
-        class="resize-handle"
+        class="resize-handle resize-handle-left"
         :class="{ active: leftResize.isDragging.value }"
         @mousedown="leftResize.onMousedown"
       />
@@ -557,7 +573,7 @@ onUnmounted(() => {
       <!-- Right resize handle -->
       <div
         v-show="!rightCollapsed"
-        class="resize-handle"
+        class="resize-handle resize-handle-right"
         :class="{ active: rightResize.isDragging.value }"
         @mousedown="rightResize.onMousedown"
       />
@@ -575,7 +591,12 @@ onUnmounted(() => {
           <ATabBar :tabs="rightTabs" v-model="rightTab" />
 
           <div class="tab-content">
-            <FileTree v-show="rightTab === 'files'" ref="fileTreeRef" :session-id="activeSessionId" />
+            <FileTree
+              v-show="rightTab === 'files'"
+              ref="fileTreeRef"
+              :session-id="activeSessionId"
+              @switch-workspace="(wsKey) => sidebarRef?.switchToWorkspaceByKey(wsKey)"
+            />
             <ChangeLogPanel v-show="rightTab === 'changes'" :session-id="activeSessionId" />
             <GitPanel v-show="rightTab === 'git'" ref="gitPanelRef" />
           </div>
@@ -611,12 +632,8 @@ onUnmounted(() => {
 .app-layout {
   position: relative; /* 文件窗口层（FileViewer）的定位锚点 */
   display: grid;
-  grid-template-columns:
-    var(--aide-left-w, 280px)
-    1px
-    minmax(400px, 1fr)
-    1px
-    var(--aide-right-w, 300px);
+  /* 轨道宽度（含折叠态）由 gridTemplateColumns 计算属性通过 :style 绑定，
+     单一数据源见 <script> 里的注释——这里不再写死，避免两处 grid 定义打架。 */
   grid-template-rows: 1fr;
   flex: 1;
   min-height: 0;
@@ -630,7 +647,14 @@ onUnmounted(() => {
   cursor: col-resize;
 }
 
+/* 五个轨道靠 grid-column 显式钉住，不依赖 DOM 书写顺序的自动布局——
+   两侧的 resize-handle 收起时 v-show 会从文档流里摘掉（display:none 的元素
+   不参与 grid 自动放置），少了一个参与放置的元素，后面所有兄弟就会顺位
+   往前占位：panel-center 顶替进第 2 条（分隔线）轨道、panel-right 顶替进
+   第 4 条，各自被压成 1px，聊天区整个视觉消失。显式钉死列号后，任何一侧
+   隐藏都不会牵动其余四个的位置。 */
 .panel-left {
+  grid-column: 1;
   height: 100%;
   background-color: var(--aide-bg-deep);
   border-right: 1px solid var(--aide-border);
@@ -641,12 +665,8 @@ onUnmounted(() => {
   min-width: 0;
 }
 
-.panel-left.collapsed {
-  width: 10px !important;
-  min-width: 10px;
-}
-
 .panel-center {
+  grid-column: 3;
   height: 100%;
   min-width: 0;
   overflow: hidden;
@@ -656,6 +676,7 @@ onUnmounted(() => {
 }
 
 .panel-right {
+  grid-column: 5;
   height: 100%;
   background-color: var(--aide-bg-deep);
   border-left: 1px solid var(--aide-border);
@@ -666,17 +687,20 @@ onUnmounted(() => {
   min-width: 0;
 }
 
-.panel-right.collapsed {
-  width: 10px !important;
-  min-width: 10px;
-}
-
 .resize-handle {
   width: 1px;
   background: var(--aide-border);
   cursor: col-resize;
   position: relative;
   transition: background 0.15s ease;
+}
+
+.resize-handle-left {
+  grid-column: 2;
+}
+
+.resize-handle-right {
+  grid-column: 4;
 }
 
 .resize-handle::after {
