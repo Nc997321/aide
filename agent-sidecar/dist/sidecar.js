@@ -45533,6 +45533,10 @@ var PermissionManager = class {
 // src/tasks.ts
 var TASK_TOOL_NAMES = /* @__PURE__ */ new Set(["TaskCreate", "TaskUpdate", "TaskGet", "TaskList"]);
 var TASK_STATUSES = /* @__PURE__ */ new Set(["pending", "in_progress", "completed"]);
+function extractCreatedTaskId(content) {
+  const m = content.match(/Task\s+#?(\d+)\s+created successfully/i);
+  return m ? m[1] : void 0;
+}
 var TaskTracker = class {
   tasks = /* @__PURE__ */ new Map();
   pendingCreates = /* @__PURE__ */ new Map();
@@ -45576,20 +45580,15 @@ var TaskTracker = class {
     const pending = this.pendingCreates.get(id2);
     if (!pending) return { tracked: true, changed: false };
     this.pendingCreates.delete(id2);
-    try {
-      const parsed = JSON.parse(content);
-      const taskId = parsed.task?.id;
-      if (!taskId) return { tracked: true, changed: false };
-      this.tasks.set(taskId, {
-        id: taskId,
-        subject: parsed.task?.subject ?? pending.subject,
-        status: "pending",
-        activeForm: pending.activeForm
-      });
-      return { tracked: true, changed: true };
-    } catch {
-      return { tracked: true, changed: false };
-    }
+    const taskId = extractCreatedTaskId(content);
+    if (!taskId) return { tracked: true, changed: false };
+    this.tasks.set(taskId, {
+      id: taskId,
+      subject: pending.subject,
+      status: "pending",
+      activeForm: pending.activeForm
+    });
+    return { tracked: true, changed: true };
   }
   snapshot() {
     return [...this.tasks.values()];

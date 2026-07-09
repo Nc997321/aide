@@ -60,14 +60,14 @@ describe("mapSdkMessage routing for Task tools", () => {
     const tools = new ToolLifecycleTracker();
     mapSdkMessage(assistantToolUse("t1", "TaskCreate", { subject: "写测试" }), (e) => events.push(e), tasks, subagents, tools);
     mapSdkMessage(
-      userToolResult("t1", JSON.stringify({ task: { id: "task-1", subject: "写测试" } })),
+      userToolResult("t1", "Task #1 created successfully: 写测试"),
       (e) => events.push(e),
       tasks,
       subagents,
       tools,
     );
     expect(events).toEqual([
-      { type: "tasks_update", tasks: [{ id: "task-1", subject: "写测试", status: "pending", activeForm: undefined }] },
+      { type: "tasks_update", tasks: [{ id: "1", subject: "写测试", status: "pending", activeForm: undefined }] },
     ]);
   });
 
@@ -78,7 +78,7 @@ describe("mapSdkMessage routing for Task tools", () => {
     const tools = new ToolLifecycleTracker();
     mapSdkMessage(assistantToolUse("t1", "TaskCreate", { subject: "写测试" }), (e) => events.push(e), tasks, subagents, tools);
     mapSdkMessage(
-      userToolResult("t1", JSON.stringify({ task: { id: "task-1", subject: "写测试" } })),
+      userToolResult("t1", "Task #1 created successfully: 写测试"),
       (e) => events.push(e),
       tasks,
       subagents,
@@ -86,14 +86,14 @@ describe("mapSdkMessage routing for Task tools", () => {
     );
     events.length = 0;
     mapSdkMessage(
-      assistantToolUse("t2", "TaskUpdate", { taskId: "task-1", status: "in_progress" }),
+      assistantToolUse("t2", "TaskUpdate", { taskId: "1", status: "in_progress" }),
       (e) => events.push(e),
       tasks,
       subagents,
       tools,
     );
     expect(events).toEqual([
-      { type: "tasks_update", tasks: [{ id: "task-1", subject: "写测试", status: "in_progress", activeForm: undefined }] },
+      { type: "tasks_update", tasks: [{ id: "1", subject: "写测试", status: "in_progress", activeForm: undefined }] },
     ]);
   });
 
