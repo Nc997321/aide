@@ -513,6 +513,8 @@ onUnmounted(() => {
       :run-configs="runConfigs"
       :active-run-config="activeRunConfig"
       :run-status="runStatus"
+      :left-collapsed="leftCollapsed"
+      :right-collapsed="rightCollapsed"
       @open-palette="paletteOpen = true"
       @select-session="(s) => sidebarRef?.selectSessionFromWorkspace(s.wsKey, s.id)"
       @run-project="onRunProject"
@@ -520,6 +522,8 @@ onUnmounted(() => {
       @restart-project="onRestartProject"
       @select-run-config="onSelectRunConfig"
       @edit-run-configs="runConfigsDialogVisible = true"
+      @toggle-left="leftCollapsed = !leftCollapsed"
+      @toggle-right="rightCollapsed = !rightCollapsed"
     />
 
     <div
@@ -536,13 +540,6 @@ onUnmounted(() => {
 
       <!-- Left panel -->
       <div class="panel-left" :class="{ collapsed: leftCollapsed }">
-        <div
-          class="collapse-toggle collapse-toggle-left"
-          v-tooltip="leftCollapsed ? '展开侧栏' : '收起侧栏'"
-          @click.stop="leftCollapsed = !leftCollapsed"
-        >
-          <svg class="collapse-arrow-svg" :style="{ transform: leftCollapsed ? 'rotate(0deg)' : 'rotate(180deg)' }" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3.5 1.5L7 5L3.5 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </div>
         <SidebarLeft
           v-show="!leftCollapsed"
           ref="sidebarRef"
@@ -580,13 +577,6 @@ onUnmounted(() => {
 
       <!-- Right panel -->
       <div class="panel-right" :class="{ collapsed: rightCollapsed }">
-        <div
-          class="collapse-toggle collapse-toggle-right"
-          v-tooltip="rightCollapsed ? '展开侧栏' : '收起侧栏'"
-          @click.stop="rightCollapsed = !rightCollapsed"
-        >
-          <svg class="collapse-arrow-svg" :style="{ transform: rightCollapsed ? 'rotate(180deg)' : 'rotate(0deg)' }" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3.5 1.5L7 5L3.5 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </div>
         <div v-show="!rightCollapsed" class="panel-right-inner">
           <ATabBar :tabs="rightTabs" v-model="rightTab" />
 
@@ -718,7 +708,7 @@ onUnmounted(() => {
   box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 20%, transparent);
 }
 
-/* ── Collapse toggles (hover-reveal centered strip) ── */
+/* ── Right panel inner ── */
 
 .panel-right-inner {
   display: flex;
@@ -732,76 +722,5 @@ onUnmounted(() => {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-}
-
-.collapse-toggle {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 20px;
-  height: clamp(72px, 15%, 180px);
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-  z-index: 20;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.collapse-toggle::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  width: 10px;
-  height: 100%;
-  background: var(--aide-surface-default);
-  border-radius: 3px;
-  transition: background-color 0.15s ease;
-}
-
-.collapse-toggle:hover {
-  opacity: 1;
-}
-
-.collapse-toggle:hover::before {
-  background: var(--aide-surface-hover);
-}
-
-.collapse-toggle-left {
-  right: 0;
-  justify-content: flex-end;
-}
-
-.collapse-toggle-left::before {
-  right: 0;
-  border-radius: 3px 0 0 3px;
-}
-
-.collapse-toggle-right {
-  left: 0;
-  justify-content: flex-start;
-}
-
-.collapse-toggle-right::before {
-  left: 0;
-  border-radius: 0 3px 3px 0;
-}
-
-.collapse-arrow-svg {
-  position: relative;
-  z-index: 1;
-  color: var(--aide-text-muted);
-  transition: color 0.15s ease, transform 0.2s ease;
-  pointer-events: none;
-  margin: 0 2px;
-}
-
-.collapse-toggle:hover .collapse-arrow-svg {
-  color: var(--aide-text-primary);
-}
-
-.panel-left.collapsed .collapse-toggle,
-.panel-right.collapsed .collapse-toggle {
-  opacity: 1;
 }
 </style>

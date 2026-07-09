@@ -1,14 +1,15 @@
-# 决策记录:流式 chat-event 改走 sidecar SSE(方案 B)
+# 决策记录:流式 chat-event 搬离主线程 emit 路径
 
 **日期**:2026-07-09
-**状态**:决策记录(讨论结论 + 备选根治方案);**尚未实施**,待「主线程 park 帧抓取」结果决定是否落地。
+**状态**:已选定**方案 C(内存缓冲 + 同步轮询)**为根治方案,在 `v1` 分支实施中;方案 B(SSE)降为兜底。本文记录根因、调查、三方案对比与决策。
 **关联**:`docs/superpowers/specs/2026-07-08-freeze-diagnostics-design.md`(卡死黑匣子)、记忆条 `aide-session-init-freeze-rootcause.md`。
+**当前 git**:master 已推 `53418ef`(诊断三件套:native 栈捕获 + 去 tauri/tracing 止血 + emit 轨迹环);`v1` 分支已从 master 建出、干净,用于实施 C。过渡 build(含 stackwalk+tracing 止血)在 `src-tauri/target/release/bundle/nsis/Aide_0.2.6_x64-setup.exe`。
 
 ---
 
 ## 1. 这份文档要回答什么
 
-记录 2026-07-09 一轮对话的结论:**为什么要考虑把流式 chat-event 从「Tauri emit(主线程 ExecuteScript)」改走「sidecar 自起 loopback SSE、前端 EventSource 直连」(下称方案 B)**,以及 B 的优缺点。**不含具体实施步骤**(那是另一份 plan 的事),只记录**来龙去脉、权衡、决策框架**。
+记录 2026-07-09 一轮对话的结论:**为什么把流式 chat-event 从「Tauri emit(主线程 ExecuteScript)」搬走**,以及最终选定**方案 C(内存缓冲 + 同步轮询)**、把 **方案 B(sidecar SSE)**降为兜底。**不含具体实施步骤**(那是 plan 的事),只记录**来龙去脉、权衡、决策框架**。
 
 ## 2. 起因:卡死根因定位到「emit 投递路径」
 
@@ -100,6 +101,60 @@
 
 ## 9. 本文档边界
 
-- **记录**:讨论结论、B 的来龙去脉、优缺点、决策框架。
-- **不记录**:B 的具体实施(port 怎么选、SSE 端点怎么写、CSP 怎么配、token 怎么传、回放缓冲多大、sidecar 改哪些文件)——那是确认走 B 后另起的实施 plan 的事。
-- **当前状态**:未实施;等 stackwalk 那一帧的结果决定走 A(便宜)还是 B(根治)。
+- **记录**:讨论结论、三方案来龙去脉、优缺点、决策框架、选定 C。
+- **不记录**:C/B 的具体实施步骤——那是 plan 的事。
+- **当前状态**:已选定 C,在 `v1` 分支实施;B 为兜底。
+
+---
+
+## 10. 方案 C(选定):内存缓冲 + 同步轮询
+
+讨论后期发现一个**不开端口、纯原生、且能根治观测到的两类卡死**的方案,定为首选。
+
+### 10.1 关键洞察:inline 同步命令路径是可靠的
+
+§3 说"所有原生 Rust→JS 都走 ExecuteScript",但**主线程 inline 的 ExecuteScript(同步命令的响应)从卡死统计上从不触发**——证据:`diag_heartbeat` 是同步命令、每 500ms 一次、整场几千次,两份报告里它**一直稳到撞墙前一瞬**。而卡的全是 worker 跨线程 `app.emit`。所以真正触发的是**跨线程编组(proxy.send_event → 主线程被唤醒处理)**,不是 ExecuteScript 本身。
+
+→ 启示:**让 chat-event 不再跨线程 emit,改由前端用同步命令 inline 拉内存缓冲**(走心跳那条稳的路),就把触发路径整体搬走,且不开端口。
+
+### 10.2 设计
+
+```
+现在:  sidecar stdout → worker → app.emit → [主线程跨线程 ExecuteScript] → 前端   ← 卡死点
+方案C: sidecar stdout → worker → push 进 Arc<Mutex<VecDeque<ChatEvent>>>(纯内存,无 emit、无编组)
+       前端每 200~500ms invoke("poll_chat_events")[同步命令] → 主线程 inline 排空缓冲 → 返回 → 前端喂给同一个 handleChatEvent
+       SDK 照常把完整回复写进 session 文件(resume 靠它,不变)
+```
+
+要点:
+- worker 不再调 `app.emit`(sidecar.rs:163),改 `buffer.push(event)`(加锁纳秒级,无 IO、无序列化、不过主线程)。
+- 新增同步命令 `poll_chat_events`:主线程 inline 排空缓冲返回 `Vec<ChatEvent>`(走心跳同款可靠 inline 路径)。**限批**(每次最多 ~50 条,没取完前端立刻再 poll)避免大 batch 在主线程序列化卡顿。
+- 缓冲**有上限**(如 1000)+ 溢出**丢最旧 + 落一条 warn 事件**让前端知道有缺口(异常时才触发,正常 500ms 间隔只存 ~12 条)。
+- 把 **heartbeat 并进 poll**(poll 时顺带上报 lagMax/longtask),省一次 invoke,空闲频率不增。
+- 前端:`listen("chat-event")` 换成定时轮询,结果喂给**同一个 `handleChatEvent`**(业务逻辑、多会话 session_id 路由全不动)。
+- resume 不受影响(历史会话走 load_messages,不经实时缓冲)。
+
+### 10.3 为什么 C 比 B 适合本项目
+
+| | C(内存缓冲+同步轮询) | B(sidecar SSE) |
+|---|---|---|
+| 开端口 | **否** | 是(攻击面/杀软/防火墙/CSP) |
+| 安装/打包 | **零新增** | 有端口相关负担 |
+| 修 session_init 那类(非 delta init 事件) | **修**(init 也进缓冲,不走 emit) | 修(走 SSE) |
+| 修 mid-stream 文本类 | **修** | 修 |
+| 主线程负载 | **更少**(唤醒 25/秒→2-5/秒,去编组) | 主线程不在路径(更彻底) |
+| 实时性 | 无(200~500ms 轮询延迟) | 有(流式) |
+| 复杂度 | 中(缓冲+poll+限批+溢出兜底) | 中高(SSE+token+CSP+重连回放) |
+
+C 的关键优势:**安装零负担(不开端口)**,且**同样修两类卡死**(session_init + mid-stream)。B 唯一比 C 强的是"保留实时 + 主线程更彻底退出",但代价是端口那堆事。本项目选 C。
+
+### 10.4 C 的边界(诚实)
+
+- **修的是 chat-event 触发的那类卡死**(=现在 10/天全部来源),根除。
+- **主线程仍是单点**:非 chat 的罕见触发(单实例回调、open-file-preview 等 emit)+ 同步 IO 命令(create_session 写文件被杀软拖等)**仍可能卡**。这不是"现在的卡死",是潜伏的、罕见的另一类,靠**§8 的同步 IO 整改(task#3)配 C 一起清**。
+- **高置信但推断式**:C 根治建立在"触发=跨线程编组"推断上(强证据:心跳 inline 从不卡)。即便推断错(触发其实是 ExecuteScript 本身),C 的轮询响应走的是 inline ExecuteScript(心跳同款,经验上稳)→ 仍不卡。所以两种解读下 C 都修。上线后观察 + stackwalk 报告确认。
+- **UX 代价**:200~500ms 显示延迟(含 session_init 延后建会话、permission_request 延后弹窗半秒)。可调轮询间隔平衡。
+
+### 10.5 下一步
+
+在 `v1` 分支写 C 的实施 plan 并执行:缓冲 + 同步 poll + 限批 + 溢出兜底 + heartbeat 并进 poll + 去掉 worker emit + 配 task#3 同步 IO async 化。改完 build 试,观察卡死是否归零;stackwalk 报告若 `mainThread.park` 不再出现 chat-emit 相关帧即确认根除。

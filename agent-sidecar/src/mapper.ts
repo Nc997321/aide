@@ -213,7 +213,16 @@ function emitSubagentProgress(msg: any, emit: (e: ChatEvent) => void, subagents:
 
   if (msg.type !== "assistant" || !msg.message?.content) return;
   const toolUses = (msg.message.content as any[]).filter((b) => b.type === "tool_use");
-  if (toolUses.length === 0) return; // 纯文本/thinking：已经在 stream_event 阶段逐字发过，这里跳过避免重复渲染
+  if (toolUses.length === 0) {
+    // includePartialMessages 关闭后没有 stream_event 逐字增量，子代理的完整文本
+    // 须在此一次性补发（否则子代理回复文本丢失）。
+    for (const block of msg.message.content) {
+      if (block.type === "text" && block.text) {
+        emit({ type: "subagent_text_delta", id: parentId, delta: block.text });
+      }
+    }
+    return;
+  }
   const model =
     isAdoptableAssistantModel(msg) && subagents.claimModelReport(parentId)
       ? (msg.message.model as string)
@@ -278,8 +287,10 @@ export function mapSdkMessage(
   if (msg.type === "assistant" && msg.message?.content) {
     for (const block of msg.message.content) {
       if (block.type === "text") {
-        // 文本已经在 stream_event 阶段逐字发过了（includePartialMessages 由
-        // index.ts 无条件开启），整块再发一遍会导致前端重复渲染——只跳过。
+        // includePartialMessages 关闭后没有 stream_event 逐字增量，整块文本在此
+        // 一次性发出（否则助手回复文本丢失）。partial 开启时会被逐字增量抢先、
+        // 这里再发会重复——但 index.ts 现在不开 partial，所以这是唯一来源。
+        if (block.text) emit({ type: "text_delta", delta: block.text });
         continue;
       } else if (block.type === "tool_use") {
         // 插队安全边界判断的账本：不管是普通工具、Task/Agent 子代理还是内置

@@ -60,14 +60,14 @@ describe("mapSdkMessage routing for Task tools", () => {
     const tools = new ToolLifecycleTracker();
     mapSdkMessage(assistantToolUse("t1", "TaskCreate", { subject: "写测试" }), (e) => events.push(e), tasks, subagents, tools);
     mapSdkMessage(
-      userToolResult("t1", JSON.stringify({ task: { id: "task-1", subject: "写测试" } })),
+      userToolResult("t1", "Task #1 created successfully: 写测试"),
       (e) => events.push(e),
       tasks,
       subagents,
       tools,
     );
     expect(events).toEqual([
-      { type: "tasks_update", tasks: [{ id: "task-1", subject: "写测试", status: "pending", activeForm: undefined }] },
+      { type: "tasks_update", tasks: [{ id: "1", subject: "写测试", status: "pending", activeForm: undefined }] },
     ]);
   });
 
@@ -78,7 +78,7 @@ describe("mapSdkMessage routing for Task tools", () => {
     const tools = new ToolLifecycleTracker();
     mapSdkMessage(assistantToolUse("t1", "TaskCreate", { subject: "写测试" }), (e) => events.push(e), tasks, subagents, tools);
     mapSdkMessage(
-      userToolResult("t1", JSON.stringify({ task: { id: "task-1", subject: "写测试" } })),
+      userToolResult("t1", "Task #1 created successfully: 写测试"),
       (e) => events.push(e),
       tasks,
       subagents,
@@ -86,14 +86,14 @@ describe("mapSdkMessage routing for Task tools", () => {
     );
     events.length = 0;
     mapSdkMessage(
-      assistantToolUse("t2", "TaskUpdate", { taskId: "task-1", status: "in_progress" }),
+      assistantToolUse("t2", "TaskUpdate", { taskId: "1", status: "in_progress" }),
       (e) => events.push(e),
       tasks,
       subagents,
       tools,
     );
     expect(events).toEqual([
-      { type: "tasks_update", tasks: [{ id: "task-1", subject: "写测试", status: "in_progress", activeForm: undefined }] },
+      { type: "tasks_update", tasks: [{ id: "1", subject: "写测试", status: "in_progress", activeForm: undefined }] },
     ]);
   });
 
@@ -126,13 +126,15 @@ describe("mapSdkMessage streaming (includePartialMessages)", () => {
     ]);
   });
 
-  it("skips the final assistant text block (already streamed as deltas)", () => {
+  it("emits the final assistant text block as one text_delta (partial off)", () => {
     const events: ChatEvent[] = [];
     mapSdkMessage(assistantText("完整文本"), (e) => events.push(e), new TaskTracker(), new SubagentTracker(), new ToolLifecycleTracker());
-    expect(events).toEqual([]);
+    expect(events).toEqual([
+      { type: "text_delta", delta: "完整文本" },
+    ]);
   });
 
-  it("still emits tool_use_start for tool_use blocks in a mixed assistant message", () => {
+  it("emits text_delta then tool_use_start for a mixed assistant message (partial off)", () => {
     const events: ChatEvent[] = [];
     const msg = {
       type: "assistant",
@@ -144,7 +146,10 @@ describe("mapSdkMessage streaming (includePartialMessages)", () => {
       },
     };
     mapSdkMessage(msg, (e) => events.push(e), new TaskTracker(), new SubagentTracker(), new ToolLifecycleTracker());
-    expect(events).toEqual([{ type: "tool_use_start", id: "t1", name: "Bash", input: { command: "ls" } }]);
+    expect(events).toEqual([
+      { type: "text_delta", delta: "先说两句" },
+      { type: "tool_use_start", id: "t1", name: "Bash", input: { command: "ls" } },
+    ]);
   });
 
   it("ignores non-text deltas (e.g. thinking_delta) and subagent stream events", () => {
@@ -411,7 +416,7 @@ describe("mapSdkMessage routing for subagent tools", () => {
     expect(events).toEqual([]);
   });
 
-  it("emits subagent_progress for a tracked subagent's internal tool_use, ignoring pure text/thinking", () => {
+  it("emits subagent_text_delta for a tracked subagent's pure text, then subagent_progress for its tool_use (partial off)", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
@@ -424,9 +429,12 @@ describe("mapSdkMessage routing for subagent tools", () => {
       tools,
     );
     events.length = 0;
-    // 子代理内部一条纯文本消息：v1 不直播文本，忽略。
+    // 子代理内部一条纯文本消息：partial 关闭后没有逐字增量，整块一次性发出。
     mapSdkMessage(assistantText("我先看看仓库结构", "a1"), (e) => events.push(e), tasks, subagents, tools);
-    expect(events).toEqual([]);
+    expect(events).toEqual([
+      { type: "subagent_text_delta", id: "a1", delta: "我先看看仓库结构" },
+    ]);
+    events.length = 0;
     // 子代理内部真正调用了工具：应转成 subagent_progress，而不是 tool_use_start。
     mapSdkMessage(assistantToolUse("inner1", "Read", { file_path: "x.ts" }, "a1"), (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([

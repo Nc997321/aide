@@ -8,6 +8,15 @@ interface PendingCreate {
   activeForm?: string;
 }
 
+/** 从 TaskCreate 的 tool_result content 提取分配到的 taskId。
+ *  SDK 0.3.197 起 tool_result 是纯文本 "Task #N created successfully: <subject>"
+ *  （0.3.142 文档所述的 JSON { task: { id, subject } } 形状已不再使用）。
+ *  无法匹配时返回 undefined，调用方静默丢弃，不影响主对话流。纯函数，单独测试。 */
+export function extractCreatedTaskId(content: string): string | undefined {
+  const m = content.match(/Task\s+#?(\d+)\s+created successfully/i);
+  return m ? m[1] : undefined;
+}
+
 export interface ToolResultOutcome {
   /** true 表示这个 tool_use_id 属于 Task 工具，调用方不应再转发通用 tool_result 事件。 */
   tracked: boolean;
@@ -69,20 +78,15 @@ export class TaskTracker {
     if (!pending) return { tracked: true, changed: false }; // TaskUpdate/TaskGet/TaskList 的结果
     this.pendingCreates.delete(id);
 
-    try {
-      const parsed = JSON.parse(content) as { task?: { id?: string; subject?: string } };
-      const taskId = parsed.task?.id;
-      if (!taskId) return { tracked: true, changed: false };
-      this.tasks.set(taskId, {
-        id: taskId,
-        subject: parsed.task?.subject ?? pending.subject,
-        status: "pending",
-        activeForm: pending.activeForm,
-      });
-      return { tracked: true, changed: true };
-    } catch {
-      return { tracked: true, changed: false }; // 解析失败静默丢弃，不影响主对话流
-    }
+    const taskId = extractCreatedTaskId(content);
+    if (!taskId) return { tracked: true, changed: false }; // 解析失败静默丢弃，不影响主对话流
+    this.tasks.set(taskId, {
+      id: taskId,
+      subject: pending.subject,
+      status: "pending",
+      activeForm: pending.activeForm,
+    });
+    return { tracked: true, changed: true };
   }
 
   snapshot(): TaskItem[] {

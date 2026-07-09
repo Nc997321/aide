@@ -58,15 +58,18 @@ let lastModels: ModelOption[] = [];
 // wire model id（如 "claude-sonnet-5-20260101"）反查回下拉里对应的别名选项。
 let aliasByResolvedPrefix: { value: string; resolvedPrefix: string }[] = [];
 
-// Claude 专属的权限模式清单。bypassPermissions（SDK 里跳过所有 canUseTool 确认的
-// "自动模式"）现在暴露出来，但刻意只存内存（见下方 currentPermissionMode 注释）：
-// 选中只对当前会话生效，切会话/重开进程一律回落 default，不做任何持久化，前端
-// 还会在选中时给出持续的醒目提示（危险信号靠 UI 常驻可见，而不是靠一次性确认框）。
+// Claude 专属的权限模式清单。注意命名区分：bypassPermissions 是"跳过所有确认"
+// （无脑放行，最危险），auto 是"模型分类器逐个判断"（相对安全）——两者都带"自动"
+// 味道但语义不同，文案刻意分开避免混淆。这两个 escalating 模式都刻意只存内存
+// （见下方 currentPermissionMode 注释）：选中只对当前会话生效，切会话/重开进程
+// 一律回落 default，不做任何持久化，bypassPermissions 还会在选中时给出持续的
+// 醒目提示（危险信号靠 UI 常驻可见，而不是靠一次性确认框）。
 const PERMISSION_MODES: PermissionModeOption[] = [
   { value: "default", displayName: "默认权限" },
   { value: "acceptEdits", displayName: "自动接受编辑" },
   { value: "plan", displayName: "Plan 模式" },
-  { value: "bypassPermissions", displayName: "自动模式（跳过所有确认，请谨慎使用）" },
+  { value: "auto", displayName: "Auto：模型自动判断" },
+  { value: "bypassPermissions", displayName: "跳过所有确认（危险）" },
 ];
 // 同模型选择：只存内存，不落盘；重开会话回落到 default——bypassPermissions 因此
 // 天然是"会话级临时开关"，不会意外沿用到下一个会话。
@@ -87,9 +90,10 @@ let turnActive = false;
 
 // SDK 还认识但不放进常驻下拉清单的模式（"总是允许"的 setMode 建议可能切过去）。
 // 广播时若当前模式不在常驻清单里，用这里的文案动态补一项，避免下拉显示空白。
+// auto 已升入常驻清单（PERMISSION_MODES），这里不再保留；dontAsk 维持只被动出现，
+// 不让用户主动锁死工具面（避免误选后整轮工具被静默拒绝却无可见反馈）。
 const EXTRA_MODE_LABELS: Record<string, string> = {
   dontAsk: "本次会话不再询问",
-  auto: "自动判断（本次会话）",
 };
 
 function emitPermissionModes() {
@@ -207,18 +211,21 @@ async function startLoop(cwd?: string) {
           prompt: queue[Symbol.asyncIterator](),
           options: {
             permissionMode: currentPermissionMode as any,
-            // bypassPermissions（自动模式）是 SDK 的"跳过所有权限确认"能力，必须显式
-            // 打开这个危险开关才允许使用——否则运行时 setPermissionMode("bypassPermissions")
+            // bypassPermissions 是 SDK 的"跳过所有权限确认"能力，必须显式打开这个
+            // 危险开关才允许使用——否则运行时 setPermissionMode("bypassPermissions")
             // 会失败。这里恒开的只是"能力闸门"，实际是否跳过完全由 permissionMode 决定：
             // 非 bypass 模式下工具照常走 canUseTool 确认，开关本身不放宽任何权限。
+            // （auto 模式走模型分类器，不需要这个开关，但恒开对它无副作用。）
             allowDangerouslySkipPermissions: true,
             canUseTool: permMgr.makeCallback(emit, subagentTracker) as any,
             settingSources: ["project", "user"],
             allowedTools: ["Agent", "Task"],
             skills: "all",
-            // 真流式：文本以 stream_event 增量到达，mapper 只转发 text_delta、
-            // 跳过最终 assistant 消息里的整块文本（两处必须同开同关）。
-            includePartialMessages: true,
+            // 关闭实时流式：文本不再以 stream_event 逐字到达，mapper 改为把最终
+            // assistant 消息里的整块文本一次性发出（mapper 两处 skip→emit，必须同关）。
+            // 目的：砍掉高频 per-token app.emit → 跨线程编组，降低主线程卡死概率
+            //（详见 docs/discussions/2026-07-09-sidecar-sse-streaming-architecture.md）。
+            includePartialMessages: false,
             // 出错重建 query 时保留用户已切换的模型，不回落到 env 默认值
             ...(currentModel ? { model: currentModel } : {}),
             ...(cwd ? { cwd } : {}),
