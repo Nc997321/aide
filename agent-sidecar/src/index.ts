@@ -216,9 +216,11 @@ async function startLoop(cwd?: string) {
             settingSources: ["project", "user"],
             allowedTools: ["Agent", "Task"],
             skills: "all",
-            // 真流式：文本以 stream_event 增量到达，mapper 只转发 text_delta、
-            // 跳过最终 assistant 消息里的整块文本（两处必须同开同关）。
-            includePartialMessages: true,
+            // 关闭实时流式：文本不再以 stream_event 逐字到达，mapper 改为把最终
+            // assistant 消息里的整块文本一次性发出（mapper 两处 skip→emit，必须同关）。
+            // 目的：砍掉高频 per-token app.emit → 跨线程编组，降低主线程卡死概率
+            //（详见 docs/discussions/2026-07-09-sidecar-sse-streaming-architecture.md）。
+            includePartialMessages: false,
             // 出错重建 query 时保留用户已切换的模型，不回落到 env 默认值
             ...(currentModel ? { model: currentModel } : {}),
             ...(cwd ? { cwd } : {}),

@@ -45849,7 +45849,14 @@ function emitSubagentProgress(msg, emit2, subagents) {
   }
   if (msg.type !== "assistant" || !msg.message?.content) return;
   const toolUses = msg.message.content.filter((b3) => b3.type === "tool_use");
-  if (toolUses.length === 0) return;
+  if (toolUses.length === 0) {
+    for (const block of msg.message.content) {
+      if (block.type === "text" && block.text) {
+        emit2({ type: "subagent_text_delta", id: parentId, delta: block.text });
+      }
+    }
+    return;
+  }
   const model = isAdoptableAssistantModel(msg) && subagents.claimModelReport(parentId) ? msg.message.model : void 0;
   toolUses.forEach((block, i) => {
     emit2({
@@ -45891,6 +45898,7 @@ function mapSdkMessage(msg, emit2, tasks, subagents, tools) {
   if (msg.type === "assistant" && msg.message?.content) {
     for (const block of msg.message.content) {
       if (block.type === "text") {
+        if (block.text) emit2({ type: "text_delta", delta: block.text });
         continue;
       } else if (block.type === "tool_use") {
         tools.onToolUse(block.id);
@@ -46106,9 +46114,11 @@ async function startLoop(cwd) {
             settingSources: ["project", "user"],
             allowedTools: ["Agent", "Task"],
             skills: "all",
-            // 真流式：文本以 stream_event 增量到达，mapper 只转发 text_delta、
-            // 跳过最终 assistant 消息里的整块文本（两处必须同开同关）。
-            includePartialMessages: true,
+            // 关闭实时流式：文本不再以 stream_event 逐字到达，mapper 改为把最终
+            // assistant 消息里的整块文本一次性发出（mapper 两处 skip→emit，必须同关）。
+            // 目的：砍掉高频 per-token app.emit → 跨线程编组，降低主线程卡死概率
+            //（详见 docs/discussions/2026-07-09-sidecar-sse-streaming-architecture.md）。
+            includePartialMessages: false,
             // 出错重建 query 时保留用户已切换的模型，不回落到 env 默认值
             ...currentModel ? { model: currentModel } : {},
             ...cwd ? { cwd } : {},
