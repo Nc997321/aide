@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
 import WindowControls from "./WindowControls.vue";
+import SidebarToggle from "./SidebarToggle.vue";
 import type { SessionStatus } from "../../composables/useSessionState";
 import type { RunConfig } from "../../types";
 
@@ -18,6 +19,8 @@ const props = defineProps<{
   runConfigs?: RunConfig[];
   activeRunConfig?: RunConfig | null;
   runStatus?: "idle" | "running" | "stopped" | "crashed";
+  leftCollapsed?: boolean;
+  rightCollapsed?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -28,6 +31,8 @@ const emit = defineEmits<{
   "edit-run-configs": [];
   "stop-project": [];
   "restart-project": [];
+  "toggle-left": [];
+  "toggle-right": [];
 }>();
 
 function onSelectSession(s: ActiveSessionInfo) {
@@ -109,6 +114,12 @@ const runDotClass = computed(() => {
         <span class="titlebar-sep">/</span>
         <span class="titlebar-project">{{ projectName }}</span>
       </template>
+
+      <SidebarToggle
+        side="left"
+        :collapsed="!!leftCollapsed"
+        @toggle="$emit('toggle-left')"
+      />
 
       <span v-if="gitBranch" class="titlebar-branch">
         <svg class="titlebar-branch-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -262,6 +273,11 @@ const runDotClass = computed(() => {
           </div>
         </Transition>
       </div>
+      <SidebarToggle
+        side="right"
+        :collapsed="!!rightCollapsed"
+        @toggle="$emit('toggle-right')"
+      />
       <WindowControls />
     </div>
   </div>
