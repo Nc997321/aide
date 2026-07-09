@@ -117,8 +117,9 @@ function submitAnswers() {
 
 /** "总是允许"按钮本身要不要用警示色——目前只有它会切到 bypassPermissions
  *  （本次会话跳过所有工具确认）这种最激进的模式时才标红，其余（addRules/
- *  acceptEdits 等）维持普通按钮观感，不过度报警。 */
-const isAlwaysAllowDangerous = computed(() => (props.permission?.alwaysAllowLabel ?? "").startsWith("自动模式"));
+ *  acceptEdits 等）维持普通按钮观感，不过度报警。按 sidecar 给 bypassPermissions
+ *  的 alwaysAllowLabel 前缀「跳过所有确认」判定（auto 模式走分类器、不在此列）。 */
+const isAlwaysAllowDangerous = computed(() => (props.permission?.alwaysAllowLabel ?? "").startsWith("跳过所有确认"));
 
 /** sidecar 送来的 alwaysAllowLabel 常带一段括注的生效范围，例如
  *  "自动接受编辑（本次会话）"——原来整句塞进一个按钮，中文括号会在任意

@@ -47,7 +47,7 @@ function describeAlwaysAllow(suggestions?: PermissionUpdate[]): string | undefin
   if (!modeUpdate) return "总是允许";
   const modeLabels: Record<string, string> = {
     acceptEdits: "自动接受编辑（本次会话）",
-    bypassPermissions: "自动模式：跳过所有确认（本次会话）",
+    bypassPermissions: "跳过所有确认（本次会话）",
     plan: "切换到 Plan 模式",
     dontAsk: "本次会话不再询问（未预先允许的仍会拒绝）",
     auto: "本次会话交给模型自动判断",

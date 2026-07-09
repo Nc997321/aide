@@ -549,7 +549,7 @@ function handleQuickAction(action: QuickAction) {
           <div
             v-if="displayPermissionModes.length"
             class="perm-mode-wrap"
-            :class="{ 'perm-mode-wrap--auto': selectedPermissionMode === 'bypassPermissions' }"
+            :class="{ 'perm-mode-wrap--bypass': selectedPermissionMode === 'bypassPermissions' }"
           >
             <ThemedSelect
               :model-value="selectedPermissionMode"
@@ -559,9 +559,9 @@ function handleQuickAction(action: QuickAction) {
             />
             <span
               v-if="selectedPermissionMode === 'bypassPermissions'"
-              class="perm-auto-badge"
+              class="perm-bypass-badge"
               title="已跳过所有工具权限确认（含本会话派生的所有子代理，子代理会继承此模式且不能单独覆盖），仅本会话生效；切换/新建会话会恢复默认权限模式"
-            >⚠️ 自动</span>
+            >⚠️ 跳过确认</span>
           </div>
           <div v-if="quickActions.length" class="chat-quick-actions">
             <button
@@ -729,20 +729,21 @@ function handleQuickAction(action: QuickAction) {
   color: var(--aide-text-secondary);
 }
 
-/* 自动模式（bypassPermissions）常驻警示：不用一次性确认框，而是选中期间持续
- * 可见的红色信号，提醒当前会话正在跳过所有工具权限确认。 */
+/* bypassPermissions（跳过所有确认）常驻警示：不用一次性确认框，而是选中期间持续
+ * 可见的红色信号，提醒当前会话正在跳过所有工具权限确认。注意类名用 --bypass 而非
+ * --auto：auto 是另一个独立的权限模式（模型分类器判断），不要和这里的危险模式混淆。 */
 .perm-mode-wrap {
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
 
-.perm-mode-wrap--auto :deep(.themed-select) {
+.perm-mode-wrap--bypass :deep(.themed-select) {
   border-color: var(--aide-danger);
   color: var(--aide-danger);
 }
 
-.perm-auto-badge {
+.perm-bypass-badge {
   font-size: 11px;
   color: var(--aide-danger);
   white-space: nowrap;

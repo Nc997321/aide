@@ -65,7 +65,7 @@ describe("PermissionManager — AskUserQuestion answers 重组", () => {
   });
 });
 
-// 回归：用户反馈"点了总是允许，还得手动切自动模式"——根因是按钮永远显示同一句
+// 回归：用户反馈"点了总是允许，还得手动切跳过确认模式"——根因是按钮永远显示同一句
 // "总是允许"，掩盖了 SDK 实际建议的是"给这个工具加规则"还是"整个会话切权限模式"
 // （比如 Edit 常见的 setMode → acceptEdits，session 级、不落盘）。这里验证
 // permission_request 事件如实带出 alwaysAllowLabel，前端按钮据此换文案，而不是
@@ -102,7 +102,7 @@ describe("PermissionManager — alwaysAllowLabel 如实反映 suggestions（不�
     mgr.makeCallback((e) => events.push(e))("Bash", { command: "rm -rf x" }, {
       suggestions: [{ type: "setMode", mode: "bypassPermissions", destination: "session" }],
     });
-    expect((events[0] as any).alwaysAllowLabel).toBe("自动模式：跳过所有确认（本次会话）");
+    expect((events[0] as any).alwaysAllowLabel).toBe("跳过所有确认（本次会话）");
   });
 });
 

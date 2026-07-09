@@ -45427,7 +45427,7 @@ function describeAlwaysAllow(suggestions) {
   if (!modeUpdate) return "\u603B\u662F\u5141\u8BB8";
   const modeLabels = {
     acceptEdits: "\u81EA\u52A8\u63A5\u53D7\u7F16\u8F91\uFF08\u672C\u6B21\u4F1A\u8BDD\uFF09",
-    bypassPermissions: "\u81EA\u52A8\u6A21\u5F0F\uFF1A\u8DF3\u8FC7\u6240\u6709\u786E\u8BA4\uFF08\u672C\u6B21\u4F1A\u8BDD\uFF09",
+    bypassPermissions: "\u8DF3\u8FC7\u6240\u6709\u786E\u8BA4\uFF08\u672C\u6B21\u4F1A\u8BDD\uFF09",
     plan: "\u5207\u6362\u5230 Plan \u6A21\u5F0F",
     dontAsk: "\u672C\u6B21\u4F1A\u8BDD\u4E0D\u518D\u8BE2\u95EE\uFF08\u672A\u9884\u5148\u5141\u8BB8\u7684\u4ECD\u4F1A\u62D2\u7EDD\uFF09",
     auto: "\u672C\u6B21\u4F1A\u8BDD\u4EA4\u7ED9\u6A21\u578B\u81EA\u52A8\u5224\u65AD",
@@ -46002,15 +46002,15 @@ var PERMISSION_MODES = [
   { value: "default", displayName: "\u9ED8\u8BA4\u6743\u9650" },
   { value: "acceptEdits", displayName: "\u81EA\u52A8\u63A5\u53D7\u7F16\u8F91" },
   { value: "plan", displayName: "Plan \u6A21\u5F0F" },
-  { value: "bypassPermissions", displayName: "\u81EA\u52A8\u6A21\u5F0F\uFF08\u8DF3\u8FC7\u6240\u6709\u786E\u8BA4\uFF0C\u8BF7\u8C28\u614E\u4F7F\u7528\uFF09" }
+  { value: "auto", displayName: "Auto\uFF1A\u6A21\u578B\u81EA\u52A8\u5224\u65AD" },
+  { value: "bypassPermissions", displayName: "\u8DF3\u8FC7\u6240\u6709\u786E\u8BA4\uFF08\u5371\u9669\uFF09" }
 ];
 var currentPermissionMode = "default";
 var pendingFork = false;
 var shouldForkNextConnect = false;
 var turnActive = false;
 var EXTRA_MODE_LABELS = {
-  dontAsk: "\u672C\u6B21\u4F1A\u8BDD\u4E0D\u518D\u8BE2\u95EE",
-  auto: "\u81EA\u52A8\u5224\u65AD\uFF08\u672C\u6B21\u4F1A\u8BDD\uFF09"
+  dontAsk: "\u672C\u6B21\u4F1A\u8BDD\u4E0D\u518D\u8BE2\u95EE"
 };
 function emitPermissionModes() {
   const modes = PERMISSION_MODES.some((m) => m.value === currentPermissionMode) ? PERMISSION_MODES : [
@@ -46104,10 +46104,11 @@ async function startLoop(cwd) {
           prompt: queue[Symbol.asyncIterator](),
           options: {
             permissionMode: currentPermissionMode,
-            // bypassPermissions（自动模式）是 SDK 的"跳过所有权限确认"能力，必须显式
-            // 打开这个危险开关才允许使用——否则运行时 setPermissionMode("bypassPermissions")
+            // bypassPermissions 是 SDK 的"跳过所有权限确认"能力，必须显式打开这个
+            // 危险开关才允许使用——否则运行时 setPermissionMode("bypassPermissions")
             // 会失败。这里恒开的只是"能力闸门"，实际是否跳过完全由 permissionMode 决定：
             // 非 bypass 模式下工具照常走 canUseTool 确认，开关本身不放宽任何权限。
+            // （auto 模式走模型分类器，不需要这个开关，但恒开对它无副作用。）
             allowDangerouslySkipPermissions: true,
             canUseTool: permMgr.makeCallback(emit, subagentTracker),
             settingSources: ["project", "user"],
