@@ -1,7 +1,10 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use qdrant_edge::*;
 use serde_json::json;
+
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 use crate::codegraph::types::{Confidence, IndexedPoint, SymbolDef};
 
@@ -16,7 +19,7 @@ pub struct CodeShard {
 impl CodeShard {
     /// Create a fresh shard in `dir`. Fails if `dir` already contains shard data.
     pub fn create(dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        let _ = fs_err::create_dir_all(dir);
+        fs_err::create_dir_all(dir)?;
         let config = EdgeConfigBuilder::new()
             .on_disk_payload(true)
             .vector(
@@ -79,9 +82,6 @@ impl CodeShard {
 
     /// Bulk-upsert indexed points. Each point gets an auto-incremented numeric ID.
     pub fn upsert_symbols(&self, points: &[IndexedPoint]) -> Result<(), Box<dyn std::error::Error>> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
         let qpoints: Vec<PointStructPersisted> = points
             .iter()
             .map(|p| {
@@ -118,9 +118,6 @@ impl CodeShard {
         &self,
         points: &[(IndexedPoint, Vec<f32>)],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
         let qpoints: Vec<PointStructPersisted> = points
             .iter()
             .map(|(p, vec)| {
@@ -203,7 +200,10 @@ impl CodeShard {
                         column: payload["column"].as_u64().unwrap_or(0) as usize,
                         parent: payload["parent"].as_str().map(|s| s.to_string()),
                     },
-                    confidence: Confidence::Semantic,
+                    confidence: match payload["source"].as_str() {
+                        Some("structure") => Confidence::Structure,
+                        _ => Confidence::Semantic,
+                    },
                     score: Some(r.score),
                 }
             })
