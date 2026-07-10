@@ -74,14 +74,17 @@ let indexBuildTriggered = false;
 async function detectProjectRoot() {
   try {
     const info = await api.getProjectInfo();
+    console.log("[codegraph] detectProjectRoot: root=", info.root);
     projectRoot.value = info.root;
-    // Fire-and-forget index build — never blocks the editor
     if (!indexBuildTriggered && info.root) {
       indexBuildTriggered = true;
-      api.codegraphBuildIndex(info.root).catch(() => { /* best-effort */ });
+      console.log("[codegraph] triggering index build for", info.root);
+      api.codegraphBuildIndex(info.root)
+        .then((r) => console.log("[codegraph] build done:", r))
+        .catch((e) => console.error("[codegraph] build failed:", e));
     }
-  } catch {
-    // best-effort，找不到只影响跳转定义
+  } catch (e) {
+    console.error("[codegraph] detectProjectRoot failed:", e);
   }
 }
 
