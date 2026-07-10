@@ -4,6 +4,7 @@ pub mod shard;
 pub mod embed;
 pub mod parser;
 pub mod query;
+pub mod symbols;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
