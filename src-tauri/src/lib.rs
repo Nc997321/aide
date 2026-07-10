@@ -1,3 +1,4 @@
+mod codegraph;
 mod commands;
 mod diagnostics;
 mod shell;
