@@ -45,16 +45,12 @@ pub async fn codegraph_build_index(
 
     let index_dir = root.join(".aide").join("index").join("qdrant");
 
-    // Create or load shard (with corruption recovery: if load fails, remove + recreate)
-    let shard = if index_dir.exists() {
-        shard::CodeShard::load(&index_dir).unwrap_or_else(|_| {
-            tracing::warn!("codegraph: shard corrupt, rebuilding");
-            let _ = std::fs::remove_dir_all(&index_dir);
-            shard::CodeShard::create(&index_dir).expect("Failed to create shard after recovery")
-        })
-    } else {
-        shard::CodeShard::create(&index_dir).map_err(|e| format!("Failed to create index: {}", e))?
-    };
+    // Always start fresh on full rebuild — avoids stale data from previous builds
+    if index_dir.exists() {
+        let _ = std::fs::remove_dir_all(&index_dir);
+    }
+    let shard = shard::CodeShard::create(&index_dir)
+        .map_err(|e| format!("Failed to create index: {}", e))?;
 
     let (total, elapsed) = indexer::index_all(
         &root,
