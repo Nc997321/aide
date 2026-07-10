@@ -17,7 +17,7 @@ use store::embed_and_store;
 pub fn index_all(
     project_root: &Path,
     shard: &CodeShard,
-    embedder: &Embedder,
+    embedder: Option<&Embedder>,
     parser_manager: &ParserManager,
 ) -> Result<(usize, u64), Box<dyn std::error::Error>> {
     let start = Instant::now();
@@ -26,6 +26,7 @@ pub fn index_all(
     let files = walk::walk_source_files(project_root, &ext_refs);
 
     let mut total_symbols = 0usize;
+    let mut total_files = 0usize;
 
     for file_path in &files {
         let source = match std::fs::read_to_string(file_path) {
@@ -37,20 +38,24 @@ pub fn index_all(
         if symbols.is_empty() {
             continue;
         }
-        match embed_and_store(&symbols, embedder, shard) {
-            Ok(count) => total_symbols += count,
-            Err(e) => {
-                tracing::warn!("codegraph: embed failed for {}: {}", file_path.display(), e);
+        total_files += 1;
+        // Embedding is optional — structure layer works without it
+        if let Some(embedder) = embedder {
+            match embed_and_store(&symbols, embedder, shard) {
+                Ok(count) => total_symbols += count,
+                Err(e) => {
+                    tracing::warn!("codegraph: embed failed for {}: {}", file_path.display(), e);
+                }
             }
         }
     }
 
     let elapsed = start.elapsed().as_millis() as u64;
     tracing::info!(
-        "codegraph: indexed {} symbols in {} files ({:.1}s)",
-        total_symbols,
-        files.len(),
-        elapsed as f64 / 1000.0
+        "codegraph: indexed {} files ({:.1}s){}",
+        total_files,
+        elapsed as f64 / 1000.0,
+        if embedder.is_some() { format!(", {} symbols embedded", total_symbols) } else { String::new() }
     );
     Ok((total_symbols, elapsed))
 }
@@ -60,8 +65,12 @@ pub fn index_file(
     file_path: &Path,
     project_root: &Path,
     shard: &CodeShard,
-    embedder: &Embedder,
+    embedder: Option<&Embedder>,
     parser_manager: &ParserManager,
 ) -> Result<usize, Box<dyn std::error::Error>> {
-    store::reindex_file(file_path, project_root, shard, embedder, parser_manager)
+    if let Some(embedder) = embedder {
+        store::reindex_file(file_path, project_root, shard, embedder, parser_manager)
+    } else {
+        Ok(0)
+    }
 }

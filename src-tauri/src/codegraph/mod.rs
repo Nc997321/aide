@@ -37,10 +37,13 @@ pub async fn codegraph_build_index(
 ) -> Result<serde_json::Value, String> {
     let root = PathBuf::from(&project_root);
 
-    // Initialize embedder on first call
+    // Initialize embedder on first call — non-fatal: structure layer still works without it
     let mut g = state.lock().map_err(|e| e.to_string())?;
     if g.embedder.is_none() {
-        g.embedder = Some(embed::Embedder::new().map_err(|e| format!("Failed to load embedding model: {}", e))?);
+        match embed::Embedder::new() {
+            Ok(e) => { g.embedder = Some(e); }
+            Err(e) => { tracing::warn!("codegraph: embedding model unavailable, semantic search disabled: {}", e); }
+        }
     }
 
     let index_dir = root.join(".aide").join("index").join("qdrant");
@@ -55,7 +58,7 @@ pub async fn codegraph_build_index(
     let (total, elapsed) = indexer::index_all(
         &root,
         &shard,
-        g.embedder.as_ref().unwrap(),
+        g.embedder.as_ref(),
         &g.parser_manager,
     )
     .map_err(|e| format!("Indexing failed: {}", e))?;
@@ -67,6 +70,7 @@ pub async fn codegraph_build_index(
     Ok(serde_json::json!({
         "total_symbols": total,
         "elapsed_ms": elapsed,
+        "has_embeddings": g.embedder.is_some(),
     }))
 }
 
