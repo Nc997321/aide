@@ -218,6 +218,9 @@ export interface QueryResult {
 }
 
 export interface BuildIndexResult {
+  scanned_files: number;
+  files_with_symbols: number;
   total_symbols: number;
   elapsed_ms: number;
+  has_embeddings: boolean;
 }

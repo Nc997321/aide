@@ -19,7 +19,7 @@ pub fn index_all(
     shard: &CodeShard,
     embedder: Option<&Embedder>,
     parser_manager: &ParserManager,
-) -> Result<(usize, u64), Box<dyn std::error::Error>> {
+) -> Result<(usize, usize, usize, u64), Box<dyn std::error::Error>> { // (scanned, with_symbols, embedded, elapsed_ms)
     let start = Instant::now();
     let extensions = parser_manager.supported_extensions();
     let ext_refs: Vec<&str> = extensions.iter().map(|s| *s).collect();
@@ -60,7 +60,7 @@ pub fn index_all(
         elapsed as f64 / 1000.0,
         if embedder.is_some() { String::new() } else { " [no embedding model]".into() }
     );
-    Ok((total_symbols, elapsed))
+    Ok((parsed_files, total_files, total_symbols, elapsed))
 }
 
 /// Incremental index update for a single file.

@@ -55,7 +55,7 @@ pub async fn codegraph_build_index(
     let shard = shard::CodeShard::create(&index_dir)
         .map_err(|e| format!("Failed to create index: {}", e))?;
 
-    let (total, elapsed) = indexer::index_all(
+    let (scanned, with_symbols, embedded, elapsed) = indexer::index_all(
         &root,
         &shard,
         g.embedder.as_ref(),
@@ -68,7 +68,9 @@ pub async fn codegraph_build_index(
     g.index_ready = true;
 
     Ok(serde_json::json!({
-        "total_symbols": total,
+        "scanned_files": scanned,
+        "files_with_symbols": with_symbols,
+        "total_symbols": embedded,
         "elapsed_ms": elapsed,
         "has_embeddings": g.embedder.is_some(),
     }))
