@@ -327,6 +327,16 @@ export function usePaneLayout() {
     }
     layout.root = restored.root;
     layout.focusedGroupId = restored.focusedGroupId;
+    // 恢复的 tab 一律非预览（tree 层设计），但若聚焦组激活 tab
+    // 的会话未启动，把它标回预览 tab——否则 openSession 预览覆盖
+    // 逻辑对未启动会话不生效，每次点击侧栏都会新建 tab。
+    const fg = findGroup(layout.root, layout.focusedGroupId);
+    if (fg && fg.activeTabId) {
+      const activeTab = fg.tabs.find(t => t.id === fg.activeTabId);
+      if (activeTab?.sessionId && !isStarted(activeTab.sessionId)) {
+        fg.previewTabId = fg.activeTabId;
+      }
+    }
     return true;
   }
 
