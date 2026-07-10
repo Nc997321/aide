@@ -23,7 +23,7 @@
 
 ### 初始语言支持
 
-第一阶段 tree-sitter 解析器覆盖：Java、TypeScript/JavaScript、Python。其他语言文件结构层静默跳过（全走语义层），后续按需添加解析器。
+第一阶段 tree-sitter 解析器覆盖：Java、TypeScript/JavaScript、Python、Rust、Vue。其他语言文件结构层静默跳过（全走语义层），后续按需添加解析器。
 
 ## 目标场景
 
