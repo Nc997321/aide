@@ -193,3 +193,31 @@ export interface RecentView {
 
 // ── Skill types ──
 export type { SkillMeta } from "./types/skill";
+
+// ── CodeGraph types ──
+
+export type SymbolKind =
+  | "Function" | "Method" | "Class" | "Field"
+  | "Interface" | "Enum" | "Variable";
+
+export type Confidence = "Structure" | "Semantic";
+
+export interface SymbolDef {
+  name: string;
+  kind: SymbolKind;
+  file: string;
+  line: number;
+  column: number;
+  parent: string | null;
+}
+
+export interface QueryResult {
+  symbol: SymbolDef;
+  confidence: Confidence;
+  score: number | null;
+}
+
+export interface BuildIndexResult {
+  total_symbols: number;
+  elapsed_ms: number;
+}

@@ -3,7 +3,7 @@ import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem,
   ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
   GrepMatch, ProviderConfig, RunConfig, RunTarget, RecentView,
-  SkillMeta,
+  SkillMeta, BuildIndexResult, QueryResult,
 } from "./types";
 import type { ModelOption, PermissionModeOption } from "./types/chat";
 
@@ -249,5 +249,22 @@ export const api = {
   },
   clearRecent(category?: "sessions" | "files"): Promise<void> {
     return invoke("clear_recent", { category: category ?? null });
+  },
+
+  // CodeGraph — enhanced code navigation
+  codegraphBuildIndex(projectRoot: string): Promise<BuildIndexResult> {
+    return invoke("codegraph_build_index", { projectRoot });
+  },
+  codegraphGotoDefinition(
+    word: string,
+    file: string,
+    line: number,
+    column: number,
+    projectRoot: string,
+  ): Promise<QueryResult[]> {
+    return invoke("codegraph_goto_definition", { word, file, line, column, projectRoot });
+  },
+  codegraphClose(projectRoot: string): Promise<void> {
+    return invoke("codegraph_close", { projectRoot });
   },
 };
