@@ -173,7 +173,11 @@ async function onSearchAllReferences() {
 
 function jumpToResult(item: QueryResult) {
   goto.dismiss();
-  openAndScrollTo(item.symbol.file, item.symbol.line);
+  const root = projectRoot.value;
+  if (!root) return;
+  const separator = root.includes("\\") ? "\\" : "/";
+  const fullPath = root + separator + item.symbol.file.replace(/\//g, separator);
+  openAndScrollTo(fullPath, item.symbol.line);
 }
 
 function onGotoKeydown(e: KeyboardEvent) {
