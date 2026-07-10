@@ -90,6 +90,9 @@ pub fn run() {
         .manage(std::sync::Arc::new(skills::SkillRegistry::new()))
         .manage(workspace_state)
         .manage(PendingOpenFile(std::sync::Mutex::new(None)))
+        .manage(std::sync::Arc::new(std::sync::Mutex::new(
+            codegraph::CodeGraphState::new(),
+        )))
         .setup(|app| {
             // Create the main window programmatically so we can set file_drop_enabled = false.
             // On Windows, Tauri's built-in OLE Drop Target intercepts all drag-and-drop messages
@@ -266,6 +269,10 @@ pub fn run() {
             commands::chat::rename_sidecar_session,
             // Plugin skills scanning
             commands::shell::scan_plugin_skills,
+            // Code graph
+            codegraph::codegraph_build_index,
+            codegraph::codegraph_goto_definition,
+            codegraph::codegraph_close,
             // 卡死诊断黑匣子
             diagnostics::diag_heartbeat,
             diagnostics::diag_freeze_supplement,
