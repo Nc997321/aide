@@ -42,6 +42,16 @@ dunce = "1"
 # 卡死诊断黑匣子：冻结期采样 aide 进程家族的 CPU/内存（仅 system 特性，减编译面）
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 
+# CodeGraph: embedded vector DB, ONNX embedding inference, syntax parsing
+qdrant-edge = "0.6"
+fastembed = "4"
+tree-sitter = "0.24"
+tree-sitter-java = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-rust = "0.23"
+tree-sitter-vue = "0.0"
+
 # Clipboard file-path reading is platform-specific; declare the platform-only
 # crates in target-specific sections so a Windows build doesn't try to compile
 # macOS-only crates (and vice versa). arboard (images) is cross-platform above.
