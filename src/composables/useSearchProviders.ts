@@ -138,10 +138,46 @@ function createFileProvider(
   };
 }
 
+// ── Built-in: CodeGraph symbol search provider ──
+
+function createCodegraphProvider(
+  getWorkspacePath: () => string,
+): SearchProvider {
+  return {
+    id: "codegraph",
+    label: "符号",
+    priority: 5, // after sessions (0) and files (1)
+    async search(query, limit) {
+      if (!query.trim() || query.trim().length < 2) return [];
+      const projectRoot = getWorkspacePath();
+      if (!projectRoot) return [];
+      try {
+        const results = await api.codegraphGotoDefinition(
+          query, "", 0, 0, projectRoot,
+        );
+        return results.slice(0, limit).map((r) => ({
+          id: `${r.symbol.file}:${r.symbol.line}:${r.symbol.name}`,
+          label: r.symbol.name,
+          description: `${r.confidence === "Structure" ? "精确" : "语义"} · ${r.symbol.file}:${r.symbol.line}`,
+          icon: r.confidence === "Structure" ? "\u{1F517}" : "\u{1F50D}",
+          action() {
+            const separator = projectRoot.includes("\\") ? "\\" : "/";
+            const fullPath = projectRoot + separator + r.symbol.file.replace(/\//g, separator);
+            useFileViewer().openAndScrollTo(fullPath, r.symbol.line);
+          },
+        }));
+      } catch {
+        return [];
+      }
+    },
+  };
+}
+
 /**
- * Initialize the search provider registry with the built-in session and file providers.
- * Call once from App.vue during mount, passing callback functions so the providers
- * can interact with the rest of the app without direct component dependencies.
+ * Initialize the search provider registry with the built-in session, file,
+ * and codegraph providers. Call once from App.vue during mount, passing
+ * callback functions so the providers can interact with the rest of the app
+ * without direct component dependencies.
  */
 function initProviders(
   getSessionList: () => Promise<Session[]>,
@@ -150,6 +186,7 @@ function initProviders(
 ) {
   register(createSessionProvider(getSessionList, onSessionSelect));
   register(createFileProvider(getWorkspacePath));
+  register(createCodegraphProvider(getWorkspacePath));
 }
 
 function getProviders(): SearchProvider[] {

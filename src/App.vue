@@ -442,7 +442,7 @@ onMounted(async () => {
       const rawResults = await searchProviders(q, limit);
       return rawResults.map((r) => ({
         ...r,
-        group: r.icon === "\u{1F4DD}" ? "会话" : r.icon === "\u{1F4C4}" ? "文件" : "其他",
+        group: r.icon === "\u{1F4DD}" ? "会话" : r.icon === "\u{1F4C4}" ? "文件" : (r.icon === "\u{1F517}" || r.icon === "\u{1F50D}") ? "符号" : "其他",
       }));
     });
   });
