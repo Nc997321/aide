@@ -71,11 +71,12 @@ clone `Arc<State>` → 在 blocking 任务里离线走完 walk + parse + extract
 **磁盘布局**
 ```
 <project_root>/.aide/index/
-├── qdrant/        # Qdrant Edge shard（mmap）
+├── qdrant/        # Qdrant Edge shard（mmap，语义向量）
+├── symbols.json   # 序列化的 SymbolTable（内存精确查找的持久化）
 └── meta.json      # { version, model_name, indexed_at(epoch), symbol_count }
 ```
 
-**打开/加载（M1）**：打开项目时，若 `qdrant/` 存在 + `meta.model_name` 匹配当前模型 + 无源文件 mtime 晚于 `indexed_at` → `CodeShard::load` + 从 shard payload 回灌 `SymbolTable`（scroll 全部点，payload 已含 name/kind/file/line/column/parent，可完整重建 `SymbolDef`）；否则全量 rebuild。
+**打开/加载（M1）**：打开项目时，若 `qdrant/` + `symbols.json` 存在 + `meta.model_name` 匹配当前模型 + 无源文件 mtime 晚于 `indexed_at` → `CodeShard::load` + 从 `symbols.json` 反序列化回灌 `SymbolTable`（免全量 re-parse）；否则全量 rebuild。选用独立 `symbols.json` 而非 scroll shard payload：`SymbolTable` 本就全 serde 可序列化，落盘/加载各约 10 行、零 qdrant 分页耦合。代价是 `symbols.json` 与 shard 需在同一事务点一起写/删（build/reindex/close 三处保持一致）。
 
 **切项目（M2）**：`detectProjectRoot` 的模块级 `bool` 守卫改成记 `lastIndexedRoot: string`，root 变化即对新 root 触发 build（build 内部 swap 自然替换旧 shard，修好"查错 shard"）。
 
