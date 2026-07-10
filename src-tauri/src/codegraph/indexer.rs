@@ -27,19 +27,20 @@ pub fn index_all(
 
     let mut total_symbols = 0usize;
     let mut total_files = 0usize;
+    let mut parsed_files = 0usize;
 
     for file_path in &files {
         let source = match std::fs::read_to_string(file_path) {
             Ok(s) => s,
-            Err(_) => continue,
+            Err(e) => { tracing::warn!("codegraph: read failed {}: {}", file_path.display(), e); continue; }
         };
         let (symbols, _call_edges) =
             extract_symbols(file_path, &source, parser_manager, project_root);
+        parsed_files += 1;
         if symbols.is_empty() {
             continue;
         }
         total_files += 1;
-        // Embedding is optional — structure layer works without it
         if let Some(embedder) = embedder {
             match embed_and_store(&symbols, embedder, shard) {
                 Ok(count) => total_symbols += count,
@@ -52,10 +53,12 @@ pub fn index_all(
 
     let elapsed = start.elapsed().as_millis() as u64;
     tracing::info!(
-        "codegraph: indexed {} files ({:.1}s){}",
+        "codegraph: scanned {} files, {} with symbols, {} embedded ({:.1}s){}",
+        parsed_files,
         total_files,
+        total_symbols,
         elapsed as f64 / 1000.0,
-        if embedder.is_some() { format!(", {} symbols embedded", total_symbols) } else { String::new() }
+        if embedder.is_some() { String::new() } else { " [no embedding model]".into() }
     );
     Ok((total_symbols, elapsed))
 }
