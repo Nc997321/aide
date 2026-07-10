@@ -4,6 +4,7 @@ import { useFileViewer, isWindowDirty } from "../../composables/useFileViewer";
 import type { FileWindowState, MarkdownMode } from "../../composables/useFileViewer";
 import { useGotoDefinition } from "../../composables/useGotoDefinition";
 import { useModal } from "../../composables/useModal";
+import type { QueryResult } from "../../types";
 import CodeEditor from "../CodeEditor.vue";
 import { extToLang, highlightCode } from "../../utils/highlight";
 import { marked } from "../../utils/markdown";
@@ -159,17 +160,20 @@ async function onGotoDefinition(payload: { word: string; filePath: string; line:
     : "";
   const ext = payload.filePath.split(".").pop()?.toLowerCase() || "";
   await goto.search(payload.word, root, { sourceFile: relPath, sourceLine: payload.line, sourceExt: ext });
+
+  // Auto-jump on single result
+  if (goto.results.value.length === 1) {
+    jumpToResult(goto.results.value[0]);
+  }
 }
 
 async function onSearchAllReferences() {
   await goto.searchAllReferences(goto.searchWord.value, projectRoot.value);
 }
 
-async function onGotoResultSelect(match: { file: string; line: number }) {
+function jumpToResult(item: QueryResult) {
   goto.dismiss();
-  const separator = projectRoot.value.includes("\\") ? "\\" : "/";
-  const targetPath = projectRoot.value + separator + match.file.replace(/\//g, separator);
-  await openAndScrollTo(targetPath, match.line);
+  openAndScrollTo(item.symbol.file, item.symbol.line);
 }
 
 function onGotoKeydown(e: KeyboardEvent) {
@@ -185,7 +189,7 @@ function onGotoKeydown(e: KeyboardEvent) {
   } else if (e.key === "Enter") {
     e.preventDefault();
     const selected = goto.getSelected();
-    if (selected) onGotoResultSelect(selected);
+    if (selected) jumpToResult(selected);
   }
 }
 
@@ -296,15 +300,18 @@ function onKeydown(e: KeyboardEvent) {
           </template>
           <template v-else>
             <div
-              v-for="(match, idx) in goto.results.value"
-              :key="`${match.file}:${match.line}`"
-              class="goto-popover-item"
-              :class="{ active: idx === goto.selectedIndex.value }"
-              @click="onGotoResultSelect(match)"
+              v-for="(item, idx) in goto.results.value"
+              :key="`${item.symbol.file}:${item.symbol.line}:${idx}`"
+              class="goto-result-item"
+              :class="{ selected: idx === goto.selectedIndex.value }"
+              @click="jumpToResult(item)"
             >
-              <span class="goto-item-path">{{ match.file }}:{{ match.line }}</span>
-              <span class="goto-item-tag" :class="'tag-' + match.match_type">{{ match.match_type }}</span>
-              <span class="goto-item-content">{{ match.content }}</span>
+              <span class="goto-confidence" :class="item.confidence === 'Structure' ? 'conf-structure' : 'conf-semantic'">
+                {{ item.confidence === 'Structure' ? '[精确]' : `[语义·${item.score != null ? Math.round(item.score * 100) : '?'}%]` }}
+              </span>
+              <span class="goto-name">{{ item.symbol.name }}</span>
+              <span v-if="item.symbol.parent" class="goto-parent">· {{ item.symbol.parent }}</span>
+              <span class="goto-file">{{ item.symbol.file }}:{{ item.symbol.line }}</span>
             </div>
           </template>
         </div>
@@ -599,7 +606,7 @@ function onKeydown(e: KeyboardEvent) {
   cursor: pointer;
 }
 
-.goto-popover-item {
+.goto-result-item {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -607,53 +614,39 @@ function onKeydown(e: KeyboardEvent) {
   cursor: pointer;
   transition: background 0.12s ease-out;
 }
-.goto-popover-item:hover,
-.goto-popover-item.active {
+.goto-result-item:hover,
+.goto-result-item.selected {
   background: var(--aide-surface-hover);
 }
 
-.goto-item-path {
+.goto-confidence {
   font-size: 11px;
-  color: var(--aide-accent);
-  white-space: nowrap;
+  margin-right: 6px;
   flex-shrink: 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 40%;
+}
+.conf-structure { color: #a6e3a1; }
+.conf-semantic { color: #f9e2af; }
+
+.goto-name {
+  font-size: 12px;
+  color: var(--aide-text-primary);
+  font-weight: 500;
+  white-space: nowrap;
 }
 
-.goto-item-tag {
-  font-size: 9px;
-  padding: 1px 5px;
-  border-radius: 3px;
-  text-transform: uppercase;
-  flex-shrink: 0;
-  background: var(--aide-bg-deep);
+.goto-parent {
+  font-size: 11px;
   color: var(--aide-text-muted);
-}
-.goto-item-tag.tag-fn,
-.goto-item-tag.tag-function,
-.goto-item-tag.tag-def {
-  background: color-mix(in srgb, var(--aide-success) 15%, transparent);
-  color: var(--aide-success);
-}
-.goto-item-tag.tag-class {
-  background: color-mix(in srgb, var(--aide-info) 15%, transparent);
-  color: var(--aide-accent);
-}
-.goto-item-tag.tag-const {
-  background: color-mix(in srgb, var(--aide-warning) 15%, transparent);
-  color: var(--aide-warning);
+  white-space: nowrap;
 }
 
-.goto-item-content {
+.goto-file {
   font-size: 11px;
-  color: var(--aide-text-secondary);
+  color: var(--aide-accent);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;
+  margin-left: auto;
 }
 </style>
 
