@@ -1,12 +1,13 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use qdrant_edge::*;
-use serde_json::json;
+use serde_json::{json, Value};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-use crate::codegraph::types::{Confidence, IndexedPoint, SymbolDef};
+use crate::codegraph::types::{Confidence, IndexedPoint, QueryResult, SymbolDef};
 
 const VECTOR_NAME: &str = "code-snippet";
 const VECTOR_DIM: usize = 384;
@@ -19,26 +20,34 @@ pub struct CodeShard {
 impl CodeShard {
     /// Create a fresh shard in `dir`. Fails if `dir` already contains shard data.
     pub fn create(dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        fs_err::create_dir_all(dir)?;
-        let config = EdgeConfigBuilder::new()
-            .on_disk_payload(true)
-            .vector(
-                VECTOR_NAME,
-                EdgeVectorParamsBuilder::new(VECTOR_DIM, Distance::Cosine)
-                    .on_disk(true)
-                    .build(),
-            )
-            .optimizers(EdgeOptimizersConfig {
+        std::fs::create_dir_all(dir)?;
+
+        let config = EdgeConfig {
+            on_disk_payload: true,
+            vectors: HashMap::from([(
+                VECTOR_NAME.to_string(),
+                EdgeVectorParams {
+                    size: VECTOR_DIM,
+                    distance: Distance::Cosine,
+                    on_disk: Some(true),
+                    multivector_config: None,
+                    datatype: None,
+                    quantization_config: None,
+                    hnsw_config: None,
+                },
+            )]),
+            sparse_vectors: HashMap::new(),
+            hnsw_config: Default::default(),
+            quantization_config: None,
+            optimizers: EdgeOptimizersConfig {
                 deleted_threshold: Some(0.2),
                 vacuum_min_vector_number: Some(100),
                 default_segment_number: Some(2),
-                ..Default::default()
-            })
-            .wal_options(WalOptions {
-                segment_capacity: 4 * 1024 * 1024,
-                ..Default::default()
-            })
-            .build();
+                max_segment_size: None,
+                indexing_threshold: None,
+                prevent_unoptimized: None,
+            },
+        };
 
         let inner = EdgeShard::new(dir, config)?;
 
@@ -66,13 +75,14 @@ impl CodeShard {
 
     /// Open an existing shard from disk.
     pub fn load(dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        let config = EdgeConfigBuilder::new()
-            .on_disk_payload(true)
-            .wal_options(WalOptions {
-                segment_capacity: 4 * 1024 * 1024,
-                ..Default::default()
-            })
-            .build();
+        let config = EdgeConfig {
+            on_disk_payload: true,
+            vectors: HashMap::new(),
+            sparse_vectors: HashMap::new(),
+            hnsw_config: Default::default(),
+            quantization_config: None,
+            optimizers: EdgeOptimizersConfig::default(),
+        };
         let inner = EdgeShard::load(dir, Some(config))?;
         Ok(Self {
             inner,
@@ -89,21 +99,22 @@ impl CodeShard {
                 // We embed empty vectors here — the actual vector is set by the caller
                 // after embedding. For structure-layer points with no vector, use zeros.
                 let vec = vec![0.0f32; VECTOR_DIM];
-                PointStruct::new(
-                    id,
-                    Vectors::new_named([(VECTOR_NAME, vec)]),
-                    json!({
-                        "name": p.symbol.name,
-                        "kind": format!("{:?}", p.symbol.kind),
-                        "file": p.symbol.file,
-                        "line": p.symbol.line,
-                        "column": p.symbol.column,
-                        "parent": p.symbol.parent,
-                        "source": match p.source { Confidence::Structure => "structure", Confidence::Semantic => "semantic" },
-                        "code_snippet": p.code_snippet,
-                    }),
-                )
-                .into()
+                let payload_map = json!({
+                    "name": p.symbol.name,
+                    "kind": format!("{:?}", p.symbol.kind),
+                    "file": p.symbol.file,
+                    "line": p.symbol.line,
+                    "column": p.symbol.column,
+                    "parent": p.symbol.parent,
+                    "source": match p.source { Confidence::Structure => "structure", Confidence::Semantic => "semantic" },
+                    "code_snippet": p.code_snippet,
+                });
+
+                PointStructPersisted {
+                    id: id.into(),
+                    vector: build_named_vector(VECTOR_NAME, vec),
+                    payload: payload_from_value(payload_map),
+                }
             })
             .collect();
 
@@ -122,21 +133,22 @@ impl CodeShard {
             .iter()
             .map(|(p, vec)| {
                 let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-                PointStruct::new(
-                    id,
-                    Vectors::new_named([(VECTOR_NAME, vec.clone())]),
-                    json!({
-                        "name": p.symbol.name,
-                        "kind": format!("{:?}", p.symbol.kind),
-                        "file": p.symbol.file,
-                        "line": p.symbol.line,
-                        "column": p.symbol.column,
-                        "parent": p.symbol.parent,
-                        "source": match p.source { Confidence::Structure => "structure", Confidence::Semantic => "semantic" },
-                        "code_snippet": p.code_snippet,
-                    }),
-                )
-                .into()
+                let payload_map = json!({
+                    "name": p.symbol.name,
+                    "kind": format!("{:?}", p.symbol.kind),
+                    "file": p.symbol.file,
+                    "line": p.symbol.line,
+                    "column": p.symbol.column,
+                    "parent": p.symbol.parent,
+                    "source": match p.source { Confidence::Structure => "structure", Confidence::Semantic => "semantic" },
+                    "code_snippet": p.code_snippet,
+                });
+
+                PointStructPersisted {
+                    id: id.into(),
+                    vector: build_named_vector(VECTOR_NAME, vec.clone()),
+                    payload: payload_from_value(payload_map),
+                }
             })
             .collect();
 
@@ -190,17 +202,24 @@ impl CodeShard {
         let query_results: Vec<QueryResult> = results
             .iter()
             .map(|r| {
-                let payload = &r.payload;
+                let name = get_payload_str(&r.payload, "name").unwrap_or_default();
+                let kind = get_payload_str(&r.payload, "kind").unwrap_or_else(|| "Variable".to_string());
+                let file = get_payload_str(&r.payload, "file").unwrap_or_default();
+                let line = get_payload_u64(&r.payload, "line").unwrap_or(0) as usize;
+                let column = get_payload_u64(&r.payload, "column").unwrap_or(0) as usize;
+                let parent = get_payload_str(&r.payload, "parent");
+                let source = get_payload_str(&r.payload, "source");
+
                 QueryResult {
                     symbol: SymbolDef {
-                        name: payload["name"].as_str().unwrap_or("").to_string(),
-                        kind: parse_kind(payload["kind"].as_str().unwrap_or("Variable")),
-                        file: payload["file"].as_str().unwrap_or("").to_string(),
-                        line: payload["line"].as_u64().unwrap_or(0) as usize,
-                        column: payload["column"].as_u64().unwrap_or(0) as usize,
-                        parent: payload["parent"].as_str().map(|s| s.to_string()),
+                        name,
+                        kind: parse_kind(&kind),
+                        file,
+                        line,
+                        column,
+                        parent,
                     },
-                    confidence: match payload["source"].as_str() {
+                    confidence: match source.as_deref() {
                         Some("structure") => Confidence::Structure,
                         _ => Confidence::Semantic,
                     },
@@ -217,6 +236,39 @@ impl CodeShard {
         self.inner.optimize()?;
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for converting between serde_json / qdrant payload types
+// ---------------------------------------------------------------------------
+
+/// Build a `VectorStructPersisted` with a single named dense vector.
+fn build_named_vector(name: &str, vec: Vec<f32>) -> VectorStructPersisted {
+    let mut map = HashMap::new();
+    map.insert(name.to_string(), VectorPersisted::Dense(vec));
+    VectorStructPersisted::Named(map)
+}
+
+/// Wrap a `serde_json::Value::Object` into qdrant's `Payload(newtype)`.
+fn payload_from_value(value: Value) -> Option<Payload> {
+    value.as_object().map(|obj| Payload(obj.clone()))
+}
+
+/// Extract a string value from an `Option<Payload>` by key.
+fn get_payload_str(payload: &Option<Payload>, key: &str) -> Option<String> {
+    payload
+        .as_ref()
+        .and_then(|p| p.0.get(key))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
+/// Extract a u64 value from an `Option<Payload>` by key.
+fn get_payload_u64(payload: &Option<Payload>, key: &str) -> Option<u64> {
+    payload
+        .as_ref()
+        .and_then(|p| p.0.get(key))
+        .and_then(|v| v.as_u64())
 }
 
 fn parse_kind(s: &str) -> crate::codegraph::types::SymbolKind {
