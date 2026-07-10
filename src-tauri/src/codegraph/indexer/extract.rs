@@ -53,7 +53,10 @@ fn extract_from_node(
         // ── Definition nodes ──
         "class_declaration" | "class_definition" => {
             if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node.utf8_text(source.as_bytes()).unwrap_or("");
+                let name = match name_node.utf8_text(source.as_bytes()) {
+                    Ok(n) => n,
+                    Err(_) => return,
+                };
                 let start = node.start_position();
                 symbols.push(IndexedPoint {
                     symbol: SymbolDef {
@@ -83,7 +86,10 @@ fn extract_from_node(
 
         "interface_declaration" | "interface_definition" => {
             if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node.utf8_text(source.as_bytes()).unwrap_or("");
+                let name = match name_node.utf8_text(source.as_bytes()) {
+                    Ok(n) => n,
+                    Err(_) => return,
+                };
                 let start = node.start_position();
                 symbols.push(IndexedPoint {
                     symbol: SymbolDef {
@@ -102,7 +108,10 @@ fn extract_from_node(
 
         "enum_declaration" | "enum_definition" => {
             if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node.utf8_text(source.as_bytes()).unwrap_or("");
+                let name = match name_node.utf8_text(source.as_bytes()) {
+                    Ok(n) => n,
+                    Err(_) => return,
+                };
                 let start = node.start_position();
                 symbols.push(IndexedPoint {
                     symbol: SymbolDef {
@@ -123,7 +132,10 @@ fn extract_from_node(
         | "method_definition" | "function_definition"
         | "function_item" | "constructor_declaration" => {
             if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node.utf8_text(source.as_bytes()).unwrap_or("");
+                let name = match name_node.utf8_text(source.as_bytes()) {
+                    Ok(n) => n,
+                    Err(_) => return,
+                };
                 let start = node.start_position();
                 let kind = if parent_class.is_some() || kind.contains("method") {
                     SymbolKind::Method
@@ -148,7 +160,10 @@ fn extract_from_node(
         "field_declaration" | "variable_declarator"
         | "public_field_definition" | "property_definition" => {
             if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node.utf8_text(source.as_bytes()).unwrap_or("");
+                let name = match name_node.utf8_text(source.as_bytes()) {
+                    Ok(n) => n,
+                    Err(_) => return,
+                };
                 let start = node.start_position();
                 symbols.push(IndexedPoint {
                     symbol: SymbolDef {
@@ -170,7 +185,10 @@ fn extract_from_node(
             if let Some(name_node) = node.child_by_field_name("name")
                 .or_else(|| node.child_by_field_name("function"))
             {
-                let callee = name_node.utf8_text(source.as_bytes()).unwrap_or("");
+                let callee = match name_node.utf8_text(source.as_bytes()) {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
                 let start = node.start_position();
                 call_edges.push(CallEdge {
                     caller: String::new(), // resolved by context (current function)
@@ -197,7 +215,8 @@ fn node_text_snippet(node: &Node, source: &str) -> String {
     let text = node.utf8_text(source.as_bytes()).unwrap_or("");
     // Take first 512 chars — long enough for embedding, short enough to be cheap
     if text.len() > 512 {
-        format!("{}...", &text[..509])
+        let boundary = text.floor_char_boundary(509);
+        format!("{}...", &text[..boundary])
     } else {
         text.to_string()
     }

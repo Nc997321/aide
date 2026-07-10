@@ -10,7 +10,7 @@ pub fn walk_source_files(
     let exts: Vec<&str> = supported_extensions.to_vec();
     WalkBuilder::new(project_root)
         .standard_filters(true) // respect .gitignore, .ignore, etc.
-        .hidden(false)          // skip hidden files/dirs
+        .hidden(false)          // include hidden files (extension filter still applies)
         .build()
         .filter_map(|entry| {
             let entry = entry.ok()?;
