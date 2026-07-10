@@ -26,7 +26,7 @@ pub fn structure_lookup(
 
     let root_node = tree.root_node();
     let mut results: Vec<QueryResult> = Vec::new();
-    find_definitions_for_word(&root_node, word, file_path, &source, &mut results);
+    find_definitions_for_word(&root_node, word, file_path, &source, &mut results, 0);
 
     // Deduplicate by (file, line, name)
     results.sort_by(|a, b| {
@@ -53,13 +53,17 @@ fn find_definitions_for_word(
     file: &str,
     source: &str,
     results: &mut Vec<QueryResult>,
+    depth: usize,
 ) {
+    if depth > 1000 {
+        return;
+    }
     let kind = node.kind();
 
     if is_definition_kind(kind) {
         if let Some(name_node) = node.child_by_field_name("name") {
-            let name = name_node.utf8_text(source.as_bytes()).unwrap_or("");
-            if name == word {
+            if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
+                if name == word {
                 let start = node.start_position();
                 let mut parent_class: Option<String> = None;
                 // Try to find containing class
@@ -71,7 +75,10 @@ fn find_definitions_for_word(
                         || pk == "interface_declaration" || pk == "interface_definition"
                     {
                         if let Some(pn) = p.child_by_field_name("name") {
-                            parent_class = Some(pn.utf8_text(source.as_bytes()).unwrap_or("").to_string());
+                            parent_class = match pn.utf8_text(source.as_bytes()) {
+                                Ok(n) => Some(n.to_string()),
+                                Err(_) => continue,
+                            };
                         }
                         break;
                     }
@@ -90,6 +97,7 @@ fn find_definitions_for_word(
                     score: None,
                 });
             }
+            }
         }
     }
 
@@ -98,8 +106,8 @@ fn find_definitions_for_word(
         if let Some(name_node) = node.child_by_field_name("name")
             .or_else(|| node.child_by_field_name("function"))
         {
-            let callee = name_node.utf8_text(source.as_bytes()).unwrap_or("");
-            if callee == word {
+            if let Ok(callee) = name_node.utf8_text(source.as_bytes()) {
+                if callee == word {
                 let start = node.start_position();
                 results.push(QueryResult {
                     symbol: SymbolDef {
@@ -114,12 +122,13 @@ fn find_definitions_for_word(
                     score: None,
                 });
             }
+            }
         }
     }
 
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
-            find_definitions_for_word(&child, word, file, source, results);
+            find_definitions_for_word(&child, word, file, source, results, depth + 1);
         }
     }
 }

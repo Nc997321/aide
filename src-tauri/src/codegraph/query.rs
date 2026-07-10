@@ -34,8 +34,7 @@ pub fn query_goto_definition(
         let ctx = format!("{} in file {} at line {}", word, file, line);
         match semantic::semantic_search(&ctx, embedder, shard, 10) {
             Ok(mut semantic_results) => {
-                // Deduplicate: if semantic result matches a known structure symbol,
-                // absorb it (don't show duplicate)
+                // Sort by score descending (best match first)
                 semantic_results.sort_by(|a, b| {
                     b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
                 });
