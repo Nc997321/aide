@@ -7,7 +7,7 @@ const visible = ref(false);
 const results = ref<QueryResult[]>([]);
 const selectedIndex = ref(0);
 const searchWord = ref("");
-const currentFilePath = ref("");
+
 const targetProjectRoot = ref("");
 const isGrepFallback = ref(false);
 
@@ -113,6 +113,7 @@ export function useGotoDefinition() {
     results.value = [];
     selectedIndex.value = 0;
     visible.value = true;
+    isGrepFallback.value = false;
 
     // Try CodeGraph with broader scope (no current-file filter)
     try {
