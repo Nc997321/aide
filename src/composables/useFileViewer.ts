@@ -69,10 +69,17 @@ export function isWindowDirty(win: FileWindowState): boolean {
   return !win.readonly && !win.error && !win.imageUrl && win.editContent !== win.content;
 }
 
+let indexBuildTriggered = false;
+
 async function detectProjectRoot() {
   try {
     const info = await api.getProjectInfo();
     projectRoot.value = info.root;
+    // Fire-and-forget index build — never blocks the editor
+    if (!indexBuildTriggered && info.root) {
+      indexBuildTriggered = true;
+      api.codegraphBuildIndex(info.root).catch(() => { /* best-effort */ });
+    }
   } catch {
     // best-effort，找不到只影响跳转定义
   }
