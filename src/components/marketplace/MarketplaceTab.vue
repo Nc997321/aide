@@ -2,6 +2,7 @@
 import { onMounted } from "vue";
 import { useMarketplace } from "../../composables/useMarketplace";
 import MarketplacePluginCard from "./MarketplacePluginCard.vue";
+import Icon from "../Icon.vue";
 import type { PluginEntry } from "../../types/marketplace";
 
 const emit = defineEmits<{
@@ -91,7 +92,7 @@ function handleUninstall(name: string) {
 
     <!-- Empty: no plugins loaded -->
     <div v-else-if="filteredPlugins.length === 0 && searchQuery.trim() === ''" class="empty">
-      <div class="empty-icon">📦</div>
+      <div class="empty-icon"><Icon name="package" :size="32" /></div>
       <div class="empty-text">暂无可用的插件</div>
       <div class="empty-hint">检查市场源或稍后重试</div>
       <button class="empty-retry" @click="handleRetry">重新加载</button>
@@ -99,7 +100,7 @@ function handleUninstall(name: string) {
 
     <!-- Empty: search no results -->
     <div v-else-if="filteredPlugins.length === 0" class="empty">
-      <div class="empty-icon">🔍</div>
+      <div class="empty-icon"><Icon name="search" :size="32" /></div>
       <div class="empty-text">没有匹配的插件</div>
       <div class="empty-hint">尝试调整搜索关键词</div>
     </div>
@@ -267,7 +268,10 @@ function handleUninstall(name: string) {
 }
 
 .empty-icon {
-  font-size: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--aide-accent);
   margin-bottom: 10px;
 }
 

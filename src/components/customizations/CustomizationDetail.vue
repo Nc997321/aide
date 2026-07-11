@@ -3,6 +3,7 @@ import { ref, watch } from "vue";
 import type { CustomizationType, CustomizationItem } from "../../types/customization";
 import { CUSTOMIZATION_CATEGORIES } from "../../composables/useCustomizations";
 import { useModal } from "../../composables/useModal";
+import Icon from "../Icon.vue";
 
 const props = defineProps<{
   type: CustomizationType;
@@ -62,7 +63,7 @@ function handleCancel() {
   <div class="customization-detail">
     <!-- Header -->
     <div class="detail-header">
-      <span class="detail-icon">{{ category?.icon }}</span>
+      <span class="detail-icon"><Icon :name="category?.icon ?? ''" :size="18" /></span>
       <span class="detail-name">{{ item?.name }}</span>
       <div class="detail-actions">
         <button
@@ -134,7 +135,7 @@ function handleCancel() {
 }
 
 .detail-icon {
-  font-size: 18px;
+  color: var(--aide-accent);
 }
 
 .detail-name {

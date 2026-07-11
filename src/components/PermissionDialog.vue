@@ -2,6 +2,7 @@
 import { computed, reactive, watch } from "vue";
 import type { PermissionRequest } from "@/types/chat";
 import { marked } from "@/utils/markdown";
+import Icon from "./Icon.vue";
 
 interface QuestionOption {
   label: string;
@@ -181,8 +182,10 @@ const inputJson = computed(() => {
       <!-- 标注这次请求是主线程还是某个子代理发起的——没有它，子代理跑到一半突然
            弹出权限框，用户完全不知道是谁在问（子代理没有独立窗口，只有一张可折叠
            的进度卡片，很容易被当成"平白无故弹出来的"）。 -->
+      <!-- 来自子代理：方括号与 SubagentCallBlock 节点同形——消息流里见过这个括号，
+           这里就懂「这条权限来自那条括号子线程」，跨表面呼应，不靠拼图块 emoji 暗示。 -->
       <div v-if="permission.fromSubagent" class="perm-subagent-badge">
-        🧩 来自子代理：{{ permission.fromSubagent.agentName }}
+        <Icon class="perm-subagent-bracket" name="bracket" :size="13" :stroke-width="1.6" /> 来自子代理：{{ permission.fromSubagent.agentName }}
       </div>
       <!-- plan 来自本会话模型输出，信任边界与 ChatMessage 的 v-html="marked.parse(...)" 完全一致 -->
       <div v-if="isPlanApproval" class="perm-plan" v-html="planHtml" />
@@ -391,6 +394,10 @@ const inputJson = computed(() => {
   border-radius: 999px;
   padding: 2px 10px;
   margin-bottom: 10px;
+}
+/* 方括号标铜：与 SubagentCallBlock 节点同色，跨表面呼应子代理来源（文字仍 muted） */
+.perm-subagent-bracket {
+  color: var(--aide-accent);
 }
 
 .perm-questions {

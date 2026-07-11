@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import type { TaskItem } from "@/types/chat";
+import Icon from "./Icon.vue";
 
 const props = defineProps<{ tasks: TaskItem[] }>();
 
-function statusIcon(status: TaskItem["status"]): string {
-  if (status === "completed") return "✅";
-  if (status === "in_progress") return "🔧";
-  return "⬜";
+/** 状态 → Icon.vue 字形 key。进行中带呼吸动画，复用主线程工具步的执行中语义。 */
+function iconKey(status: TaskItem["status"]): string {
+  if (status === "completed") return "task-done";
+  if (status === "in_progress") return "task-run";
+  return "task-pending";
 }
 
 function displayText(task: TaskItem): string {
@@ -22,7 +24,7 @@ function displayText(task: TaskItem): string {
       class="task-item"
       :class="`task-item-${task.status}`"
     >
-      <span class="task-icon">{{ statusIcon(task.status) }}</span>
+      <Icon class="task-icon" :name="iconKey(task.status)" :size="13" :pulse="task.status === 'in_progress'" />
       <span class="task-text">{{ displayText(task) }}</span>
     </div>
   </div>
@@ -42,7 +44,7 @@ function displayText(task: TaskItem): string {
 .task-item {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   color: var(--aide-text-secondary);
 }
 
@@ -58,7 +60,7 @@ function displayText(task: TaskItem): string {
 
 .task-icon {
   flex-shrink: 0;
-  font-size: 11px;
+  color: var(--aide-accent);
 }
 
 .task-text {

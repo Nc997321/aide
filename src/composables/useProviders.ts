@@ -24,7 +24,7 @@ const systemDefaultMappings = ref<ProviderModelMappings>(emptyMappings());
 const systemDefault: ProviderConfig = {
   id: SYSTEM_DEFAULT_ID,
   name: "系统默认",
-  icon: "🖥",
+  icon: "provider",
   baseUrl: "",
   apiKey: "",
   authToken: "",
@@ -80,7 +80,7 @@ async function addProvider(partial: Partial<ProviderConfig> = {}): Promise<Provi
   const p: ProviderConfig = {
     id: generateId(),
     name: partial.name ?? "新供应商",
-    icon: partial.icon ?? "🤖",
+    icon: partial.icon ?? "provider",
     baseUrl: partial.baseUrl ?? "",
     apiKey: partial.apiKey ?? "",
     authToken: partial.authToken ?? "",

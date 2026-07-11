@@ -2,6 +2,7 @@
 import type { CustomizationType, CustomizationItem } from "../../types/customization";
 import { CUSTOMIZATION_CATEGORIES } from "../../composables/useCustomizations";
 import { useModal } from "../../composables/useModal";
+import Icon from "../Icon.vue";
 
 const props = defineProps<{
   type: CustomizationType;
@@ -42,7 +43,7 @@ function handleToggle(id: string, event: Event) {
 
     <!-- Empty -->
     <div v-else-if="items.length === 0" class="empty">
-      <div class="empty-icon">{{ category?.icon }}</div>
+      <div class="empty-icon"><Icon :name="category?.icon ?? ''" :size="32" /></div>
       <div class="empty-text">暂无{{ category?.label }}</div>
       <button class="create-btn" @click="handleCreate">创建第一个</button>
     </div>
@@ -97,7 +98,7 @@ function handleToggle(id: string, event: Event) {
 }
 
 .empty-icon {
-  font-size: 32px;
+  color: var(--aide-accent);
   margin-bottom: 12px;
 }
 
