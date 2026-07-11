@@ -131,17 +131,17 @@ var require_timers = __commonJS({
       let idx = 0;
       let len = fastTimers.length;
       while (idx < len) {
-        const timer = fastTimers[idx];
-        if (timer._state === PENDING) {
-          timer._idleStart = fastNow - TICK_MS;
-          timer._state = ACTIVE;
-        } else if (timer._state === ACTIVE && fastNow >= timer._idleStart + timer._idleTimeout) {
-          timer._state = TO_BE_CLEARED;
-          timer._idleStart = -1;
-          timer._onTimeout(timer._timerArg);
+        const timer2 = fastTimers[idx];
+        if (timer2._state === PENDING) {
+          timer2._idleStart = fastNow - TICK_MS;
+          timer2._state = ACTIVE;
+        } else if (timer2._state === ACTIVE && fastNow >= timer2._idleStart + timer2._idleTimeout) {
+          timer2._state = TO_BE_CLEARED;
+          timer2._idleStart = -1;
+          timer2._onTimeout(timer2._timerArg);
         }
-        if (timer._state === TO_BE_CLEARED) {
-          timer._state = NOT_IN_LIST;
+        if (timer2._state === TO_BE_CLEARED) {
+          timer2._state = NOT_IN_LIST;
           if (--len !== 0) {
             fastTimers[idx] = fastTimers[len];
           }
@@ -13323,7 +13323,7 @@ var require_mock_utils = __commonJS({
         return true;
       }
       let aborted = false;
-      let timer = null;
+      let timer2 = null;
       const controller = {
         paused: false,
         rawHeaders: null,
@@ -13339,17 +13339,17 @@ var require_mock_utils = __commonJS({
             return;
           }
           aborted = true;
-          if (timer !== null) {
-            clearTimeout(timer);
-            timer = null;
+          if (timer2 !== null) {
+            clearTimeout(timer2);
+            timer2 = null;
           }
           handler.onResponseError?.(controller, reason);
         }
       };
       handler.onRequestStart?.(controller, null);
       if (typeof delay === "number" && delay > 0) {
-        timer = setTimeout(() => {
-          timer = null;
+        timer2 = setTimeout(() => {
+          timer2 = null;
           handleReply(this[kDispatches]);
         }, delay);
       } else {
@@ -45604,6 +45604,9 @@ var SubagentTracker = class {
   /** id（这次 Agent/Task tool_use 的 id）→ agentName——权限弹窗要标注"这是哪个子代理
    *  在问"时，靠 canUseTool 回调收到的 agentID 反查这里，拿到人看得懂的名字。 */
   names = /* @__PURE__ */ new Map();
+  /** async 子代理的 .output 回放元数据：id → { agentId, outputFile }。
+   *  launch-ack 时注册，task-notification 完成时清理。 */
+  asyncMeta = /* @__PURE__ */ new Map();
   static isSubagentTool(name) {
     return SUBAGENT_TOOL_NAMES.has(name);
   }
@@ -45644,6 +45647,18 @@ var SubagentTracker = class {
     if (!this.active.has(id2) || this.modelReported.has(id2)) return false;
     this.modelReported.add(id2);
     return true;
+  }
+  /** async launch-ack 时调用：记下 .output 路径，id 保持 active（不关）。 */
+  registerAsync(id2, agentId, outputFile) {
+    this.asyncMeta.set(id2, { agentId, outputFile });
+  }
+  getAsyncOutputFile(id2) {
+    return this.asyncMeta.get(id2)?.outputFile;
+  }
+  /** task-notification 完成时调用：清 async 元数据 + 关 active（复用 handleToolResult）。 */
+  handleAsyncResult(id2) {
+    this.asyncMeta.delete(id2);
+    return this.handleToolResult(id2);
   }
 };
 
@@ -45735,6 +45750,9 @@ var DeltaCoalescer = class {
     for (const g of groups) this.sink(g);
   }
 };
+
+// src/subagentOutputTail.ts
+import { existsSync as existsSync2, openSync as openSync2, readSync as readSync2, statSync as statSync2, closeSync as closeSync2 } from "node:fs";
 
 // src/mapper.ts
 function buildUserMessage(prompt, images) {
@@ -45835,6 +45853,49 @@ function isoToMs(iso) {
   const t = Date.parse(iso);
   return Number.isNaN(t) ? null : t;
 }
+function parseAsyncLaunchAck(content) {
+  const agentMatch = content.match(/agentId:\s*([a-z0-9]+)/);
+  const fileMatch = content.match(/output_file:\s*(.+?\.output)(?:\r?\n|$)/);
+  if (!agentMatch || !fileMatch) return null;
+  return { agentId: agentMatch[1], outputFile: fileMatch[1] };
+}
+function parseTaskNotification(content) {
+  if (!content.startsWith("<task-notification>")) return null;
+  const id2 = content.match(/<tool-use-id>([^<]*)<\/tool-use-id>/)?.[1];
+  if (!id2) return null;
+  const status = content.match(/<status>([^<]*)<\/status>/)?.[1] ?? "completed";
+  const result = content.match(/<result>([\s\S]*?)<\/result>/)?.[1] ?? content.match(/<summary>([^<]*)<\/summary>/)?.[1] ?? "";
+  return { toolUseId: id2, status, result };
+}
+function emitSubagentBlocks(msg, id2, emit2, claimModel) {
+  if (msg.type === "user" && msg.message?.content) {
+    for (const block of msg.message.content) {
+      if (block.type !== "tool_result") continue;
+      const content = Array.isArray(block.content) ? block.content.map((c) => c.text ?? "").join("") : String(block.content ?? "");
+      emit2({ type: "subagent_tool_result", id: id2, toolUseId: block.tool_use_id, content, is_error: block.is_error ?? false });
+    }
+    return;
+  }
+  if (msg.type !== "assistant" || !msg.message?.content) return;
+  const toolUses = msg.message.content.filter((b3) => b3.type === "tool_use");
+  if (toolUses.length === 0) {
+    for (const block of msg.message.content) {
+      if (block.type === "text" && block.text) emit2({ type: "subagent_text_delta", id: id2, delta: block.text });
+    }
+    return;
+  }
+  const model = claimModel() ? msg.message.model : void 0;
+  toolUses.forEach((block, i) => {
+    emit2({
+      type: "subagent_progress",
+      id: id2,
+      toolUseId: block.id,
+      toolName: block.name,
+      input: block.input,
+      ...i === 0 && model ? { model } : {}
+    });
+  });
+}
 function emitSubagentProgress(msg, emit2, subagents) {
   const parentId = msg.parent_tool_use_id;
   if (!subagents.isActive(parentId)) return;
@@ -45849,41 +45910,7 @@ function emitSubagentProgress(msg, emit2, subagents) {
     }
     return;
   }
-  if (msg.type === "user" && msg.message?.content) {
-    for (const block of msg.message.content) {
-      if (block.type !== "tool_result") continue;
-      const content = Array.isArray(block.content) ? block.content.map((c) => c.text ?? "").join("") : String(block.content ?? "");
-      emit2({
-        type: "subagent_tool_result",
-        id: parentId,
-        toolUseId: block.tool_use_id,
-        content,
-        is_error: block.is_error ?? false
-      });
-    }
-    return;
-  }
-  if (msg.type !== "assistant" || !msg.message?.content) return;
-  const toolUses = msg.message.content.filter((b3) => b3.type === "tool_use");
-  if (toolUses.length === 0) {
-    for (const block of msg.message.content) {
-      if (block.type === "text" && block.text) {
-        emit2({ type: "subagent_text_delta", id: parentId, delta: block.text });
-      }
-    }
-    return;
-  }
-  const model = isAdoptableAssistantModel(msg) && subagents.claimModelReport(parentId) ? msg.message.model : void 0;
-  toolUses.forEach((block, i) => {
-    emit2({
-      type: "subagent_progress",
-      id: parentId,
-      toolUseId: block.id,
-      toolName: block.name,
-      input: block.input,
-      ...i === 0 && model ? { model } : {}
-    });
-  });
+  emitSubagentBlocks(msg, parentId, emit2, () => isAdoptableAssistantModel(msg) && subagents.claimModelReport(parentId));
 }
 function mapSdkMessage(msg, emit2, tasks, subagents, tools) {
   if (msg.parent_tool_use_id) {
@@ -45933,11 +45960,39 @@ function mapSdkMessage(msg, emit2, tasks, subagents, tools) {
     }
     return;
   }
+  if (msg.type === "user" && msg.message && typeof msg.message.content === "string") {
+    const note = parseTaskNotification(msg.message.content);
+    if (note) {
+      if (subagents.isActive(note.toolUseId)) {
+        stopOutputTail(note.toolUseId);
+        subagents.handleAsyncResult(note.toolUseId);
+        emit2({ type: "subagent_end", id: note.toolUseId, result: note.result, is_error: note.status !== "completed" });
+      }
+      return;
+    }
+  }
+  if (msg.type === "queue-operation" && msg.operation === "enqueue" && typeof msg.content === "string") {
+    const note = parseTaskNotification(msg.content);
+    if (note && subagents.isActive(note.toolUseId)) {
+      stopOutputTail(note.toolUseId);
+      subagents.handleAsyncResult(note.toolUseId);
+      emit2({ type: "subagent_end", id: note.toolUseId, result: note.result, is_error: note.status !== "completed" });
+    }
+    return;
+  }
   if (msg.type === "user" && msg.message?.content) {
     for (const block of msg.message.content) {
       if (block.type === "tool_result") {
         tools.onToolResult(block.tool_use_id);
         const content = Array.isArray(block.content) ? block.content.map((c) => c.text ?? "").join("") : String(block.content ?? "");
+        const ack = parseAsyncLaunchAck(content);
+        if (ack && subagents.isActive(block.tool_use_id)) {
+          subagents.registerAsync(block.tool_use_id, ack.agentId, ack.outputFile);
+          emit2({ type: "subagent_async_launched", id: block.tool_use_id, agentId: ack.agentId, outputFile: ack.outputFile });
+          startOutputTail(block.tool_use_id, ack.outputFile, emit2, (_tailId) => {
+          });
+          continue;
+        }
         if (subagents.handleToolResult(block.tool_use_id)) {
           emit2({ type: "subagent_end", id: block.tool_use_id, result: content, is_error: block.is_error ?? false });
           continue;
@@ -45988,6 +46043,96 @@ function mapSdkMessage(msg, emit2, tasks, subagents, tools) {
     });
     return;
   }
+}
+
+// src/subagentOutputTail.ts
+function parseOutputLine(line, id2, emit2, claimModel) {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+  let msg;
+  try {
+    msg = JSON.parse(trimmed);
+  } catch {
+    return;
+  }
+  emitSubagentBlocks(msg, id2, emit2, claimModel);
+}
+var OutputTail = class {
+  constructor(id2, outputFile, emit2, onStop) {
+    this.id = id2;
+    this.outputFile = outputFile;
+    this.emit = emit2;
+    this.onStop = onStop;
+  }
+  offset = 0;
+  leftover = "";
+  modelClaimed = false;
+  stopped = false;
+  tick() {
+    if (this.stopped) return;
+    if (!existsSync2(this.outputFile)) return;
+    let fd2;
+    try {
+      const st = statSync2(this.outputFile);
+      if (st.size < this.offset) {
+        this.offset = 0;
+        this.leftover = "";
+      }
+      if (st.size === this.offset) return;
+      fd2 = openSync2(this.outputFile, "r");
+      const buf = Buffer.allocUnsafe(st.size - this.offset);
+      readSync2(fd2, buf, 0, buf.length, this.offset);
+      this.offset = st.size;
+      const data = this.leftover + buf.toString("utf8");
+      const lines = data.split(/\r?\n/);
+      this.leftover = lines.pop() ?? "";
+      const claimModel = () => this.modelClaimed ? false : this.modelClaimed = true;
+      for (const line of lines) parseOutputLine(line, this.id, this.emit, claimModel);
+    } finally {
+      if (fd2 !== void 0) closeSync2(fd2);
+    }
+  }
+  stop() {
+    this.stopped = true;
+  }
+};
+var tails = /* @__PURE__ */ new Map();
+var timer;
+function startOutputTail(id2, outputFile, emit2, onStop) {
+  if (tails.has(id2)) return;
+  tails.set(id2, new OutputTail(id2, outputFile, emit2, onStop));
+  ensureTimer();
+}
+function stopOutputTail(id2) {
+  const t = tails.get(id2);
+  if (t) {
+    t.stop();
+    tails.delete(id2);
+  }
+  if (tails.size === 0 && timer) {
+    clearInterval(timer);
+    timer = void 0;
+  }
+}
+function stopAllOutputTails() {
+  for (const t of tails.values()) t.stop();
+  tails.clear();
+  if (timer) {
+    clearInterval(timer);
+    timer = void 0;
+  }
+}
+function ensureTimer() {
+  if (timer) return;
+  timer = setInterval(() => {
+    for (const t of tails.values()) {
+      try {
+        t.tick();
+      } catch {
+      }
+    }
+  }, 600);
+  if (typeof timer.unref === "function") timer.unref();
 }
 
 // src/index.ts
@@ -46304,6 +46449,7 @@ rl2.on("line", (line) => {
 });
 rl2.on("close", () => {
   queue.close();
+  stopAllOutputTails();
   process.exit(0);
 });
 /*! Bundled license information:
