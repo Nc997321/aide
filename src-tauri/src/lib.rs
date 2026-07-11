@@ -90,9 +90,7 @@ pub fn run() {
         .manage(std::sync::Arc::new(skills::SkillRegistry::new()))
         .manage(workspace_state)
         .manage(PendingOpenFile(std::sync::Mutex::new(None)))
-        .manage(std::sync::Arc::new(std::sync::Mutex::new(
-            codegraph::CodeGraphState::new(),
-        )))
+        .manage(std::sync::Arc::new(codegraph::CodeGraphState::new()))
         .setup(|app| {
             // Create the main window programmatically so we can set file_drop_enabled = false.
             // On Windows, Tauri's built-in OLE Drop Target intercepts all drag-and-drop messages

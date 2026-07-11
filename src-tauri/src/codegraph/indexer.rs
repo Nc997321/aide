@@ -2,10 +2,12 @@ pub mod extract;
 pub mod store;
 pub mod walk;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::codegraph::embed::Embedder;
+use crate::codegraph::meta::{now_epoch, Meta, META_VERSION};
 use crate::codegraph::parser::ParserManager;
 use crate::codegraph::shard::CodeShard;
 use crate::codegraph::symbols::SymbolTable;
@@ -13,6 +15,12 @@ use crate::codegraph::types::IndexedPoint;
 
 use extract::extract_symbols;
 use store::embed_and_store;
+
+const MODEL_NAME: &str = "all-MiniLM-L6-v2";
+
+fn index_dir(project_root: &Path) -> PathBuf {
+    project_root.join(".aide").join("index")
+}
 
 /// Full index build: walk project, parse all files, embed, store.
 /// Returns total symbol count and elapsed milliseconds.
@@ -124,6 +132,64 @@ pub fn collect_symbols(
         all_points.extend(points);
     }
     (table, all_points, stats)
+}
+
+/// Full rebuild: fresh shard + SymbolTable, persisted to disk. Never holds any
+/// lock — caller swaps the returned artifacts into state under a brief write lock.
+pub fn build_project_index(
+    project_root: &Path,
+    embedder: Option<&Embedder>,
+    parser_manager: &ParserManager,
+) -> Result<(SymbolTable, Arc<CodeShard>, BuildStats), Box<dyn std::error::Error>> {
+    let base = index_dir(project_root);
+    let qdir = base.join("qdrant");
+    if qdir.exists() {
+        let _ = std::fs::remove_dir_all(&qdir);
+    }
+    std::fs::create_dir_all(&base)?;
+    let shard = CodeShard::create(&qdir)?;
+
+    let (table, points, stats) = collect_symbols(project_root, parser_manager);
+
+    if let Some(embedder) = embedder {
+        // embed & store in file-sized batches to cap peak memory
+        for chunk in points.chunks(256) {
+            if let Err(e) = embed_and_store(chunk, embedder, &shard) {
+                tracing::warn!("codegraph: embed batch failed: {}", e);
+            }
+        }
+    }
+
+    // Persist SymbolTable + meta (same transaction point as shard).
+    let _ = table.save_json(&base.join("symbols.json"));
+    let _ = Meta {
+        version: META_VERSION,
+        model_name: MODEL_NAME.to_string(),
+        indexed_at: now_epoch(),
+        symbol_count: table.len(),
+    }
+    .save(&base.join("meta.json"));
+
+    Ok((table, Arc::new(shard), stats))
+}
+
+/// Fast path: reuse on-disk index if fresh. None → caller must full-rebuild.
+pub fn load_project_index(
+    project_root: &Path,
+    parser_manager: &ParserManager,
+) -> Option<(SymbolTable, Arc<CodeShard>)> {
+    let base = index_dir(project_root);
+    let meta = Meta::load(&base.join("meta.json"))?;
+    if meta.model_name != MODEL_NAME {
+        return None;
+    }
+    let exts = parser_manager.supported_extensions();
+    if crate::codegraph::meta::is_stale(project_root, meta.indexed_at, &exts) {
+        return None;
+    }
+    let table = SymbolTable::load_json(&base.join("symbols.json"))?;
+    let shard = CodeShard::load(&base.join("qdrant")).ok()?;
+    Some((table, Arc::new(shard)))
 }
 
 #[cfg(test)]
