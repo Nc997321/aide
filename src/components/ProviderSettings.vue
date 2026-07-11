@@ -20,10 +20,15 @@ const {
   addProvider,
   updateProvider,
   deleteProvider,
+  saveSystemDefaultMappings,
+  systemDefaultMappings,
   SYSTEM_DEFAULT_ID,
 } = useProviders();
 
 const selectedId = ref<string | null>(null);
+// 是否在编辑系统默认——系统默认只配模型变量 5 字段，认证走系统 env 兜底，
+// 故表单隐藏 name/icon/baseUrl/apiKey/authToken/模型列表/Effort。
+const isSystemDefault = ref(false);
 
 const form = ref({
   name: "",
@@ -31,7 +36,10 @@ const form = ref({
   baseUrl: "",
   apiKey: "",
   authToken: "",
-  model: "",
+  anthropicModel: "",
+  defaultOpusModel: "",
+  defaultSonnetModel: "",
+  defaultHaikuModel: "",
   subagent: "",
   effortLevel: "",
   knownModels: [] as string[],
@@ -42,13 +50,18 @@ const showAuthToken = ref(false);
 const newModelTag = ref("");
 
 function loadForm(p: ProviderConfig) {
+  // anthropicModel 兼容旧配置：权威源是 modelMappings.anthropicModel，旧配置只有
+  // 顶层 model（Rust 端 migrate_provider_model 已迁移，这里 || p.model 兜底）
   form.value = {
     name: p.name,
     icon: p.icon,
     baseUrl: p.baseUrl,
     apiKey: p.apiKey,
     authToken: p.authToken,
-    model: p.model,
+    anthropicModel: p.modelMappings.anthropicModel || p.model,
+    defaultOpusModel: p.modelMappings.defaultOpusModel,
+    defaultSonnetModel: p.modelMappings.defaultSonnetModel,
+    defaultHaikuModel: p.modelMappings.defaultHaikuModel,
     subagent: p.modelMappings.subagent,
     effortLevel: p.effortLevel,
     knownModels: [...p.knownModels],
@@ -59,10 +72,24 @@ function loadForm(p: ProviderConfig) {
 
 function selectProvider(id: string) {
   if (id === SYSTEM_DEFAULT_ID) {
-    selectedId.value = null;
+    // 系统默认：精简表单，只载入模型变量 5 字段
+    selectedId.value = SYSTEM_DEFAULT_ID;
+    isSystemDefault.value = true;
+    const m = systemDefaultMappings.value;
+    form.value = {
+      name: "", icon: "", baseUrl: "", apiKey: "", authToken: "",
+      anthropicModel: m.anthropicModel,
+      defaultOpusModel: m.defaultOpusModel,
+      defaultSonnetModel: m.defaultSonnetModel,
+      defaultHaikuModel: m.defaultHaikuModel,
+      subagent: m.subagent,
+      effortLevel: "",
+      knownModels: [],
+    };
     return;
   }
   selectedId.value = id;
+  isSystemDefault.value = false;
   const p = allProviders.value.find((x) => x.id === id);
   if (p) loadForm(p);
 }
@@ -76,15 +103,25 @@ async function handleAdd() {
 async function handleSave() {
   if (!selectedId.value) return;
   const mappings: ProviderModelMappings = {
+    anthropicModel: form.value.anthropicModel,
+    defaultOpusModel: form.value.defaultOpusModel,
+    defaultSonnetModel: form.value.defaultSonnetModel,
+    defaultHaikuModel: form.value.defaultHaikuModel,
     subagent: form.value.subagent,
   };
+  if (isSystemDefault.value) {
+    await saveSystemDefaultMappings(mappings);
+    return;
+  }
   await updateProvider(selectedId.value, {
     name: form.value.name,
     icon: form.value.icon,
     baseUrl: form.value.baseUrl,
     apiKey: form.value.apiKey,
     authToken: form.value.authToken,
-    model: form.value.model,
+    // model 顶层字段已废弃（权威源在 modelMappings.anthropicModel），这里同步写入
+    // 仅为兼容侧栏 pi-model 显示，Rust 端不再读它
+    model: form.value.anthropicModel,
     modelMappings: mappings,
     effortLevel: form.value.effortLevel,
     knownModels: form.value.knownModels,
@@ -164,12 +201,17 @@ function knownModelsForDatalist(): string[] {
     <!-- Right: edit form -->
     <div v-if="selectedId" class="provider-form">
       <div class="form-scroll">
-        <div class="form-field">
+        <!-- 系统默认提示：系统默认认证走系统 env 兜底，不可配连接参数 -->
+        <div v-if="isSystemDefault" class="sys-default-hint">
+          系统默认供应商：认证（API Key / Base URL 等）走系统环境变量兜底，此处仅配置模型变量。
+        </div>
+
+        <div v-if="!isSystemDefault" class="form-field">
           <label>名称</label>
           <input v-model="form.name" class="text-input" placeholder="如 DeepSeek" />
         </div>
 
-        <div class="form-field">
+        <div v-if="!isSystemDefault" class="form-field">
           <label>图标</label>
           <input
             v-model="form.icon"
@@ -179,7 +221,7 @@ function knownModelsForDatalist(): string[] {
           />
         </div>
 
-        <div class="form-field">
+        <div v-if="!isSystemDefault" class="form-field">
           <label>Base URL</label>
           <input
             v-model="form.baseUrl"
@@ -188,7 +230,7 @@ function knownModelsForDatalist(): string[] {
           />
         </div>
 
-        <div class="form-field">
+        <div v-if="!isSystemDefault" class="form-field">
           <label>API Key</label>
           <div class="secret-row">
             <input
@@ -203,7 +245,7 @@ function knownModelsForDatalist(): string[] {
           </div>
         </div>
 
-        <div class="form-field">
+        <div v-if="!isSystemDefault" class="form-field">
           <label>Auth Token</label>
           <div class="secret-row">
             <input
@@ -218,41 +260,69 @@ function knownModelsForDatalist(): string[] {
           </div>
         </div>
 
-        <div class="form-field">
-          <label>模型名称</label>
-          <input
-            v-model="form.model"
-            class="text-input"
-            list="known-models-list"
-            placeholder="如 deepseek-v4-pro"
-          />
-          <datalist id="known-models-list">
-            <option
-              v-for="m in knownModelsForDatalist()"
-              :key="m"
-              :value="m"
+        <!-- 模型变量：5 个 Claude env 变量统一块。自定义 provider 和系统默认都显示。 -->
+        <div class="form-section">
+          <label>模型变量</label>
+          <span class="form-hint">Claude 专属模型 env 变量，换 provider 时整块重写</span>
+
+          <div class="form-field model-var-field">
+            <label>默认模型</label>
+            <input
+              v-model="form.anthropicModel"
+              class="text-input"
+              list="known-models-list"
+              placeholder="留空用 provider 默认"
             />
-          </datalist>
+          </div>
+
+          <div class="form-field model-var-field">
+            <label>Opus 别名映射</label>
+            <input
+              v-model="form.defaultOpusModel"
+              class="text-input"
+              placeholder="留空不映射"
+            />
+          </div>
+
+          <div class="form-field model-var-field">
+            <label>Sonnet 别名映射</label>
+            <input
+              v-model="form.defaultSonnetModel"
+              class="text-input"
+              placeholder="留空不映射"
+            />
+            <span class="form-hint">子代理模型填 sonnet 别名时，用它解析成具体模型 id</span>
+          </div>
+
+          <div class="form-field model-var-field">
+            <label>Haiku 别名映射</label>
+            <input
+              v-model="form.defaultHaikuModel"
+              class="text-input"
+              placeholder="留空不映射"
+            />
+            <span class="form-hint">子代理模型填 haiku 别名时，用它解析成具体模型 id</span>
+          </div>
+
+          <div class="form-field model-var-field">
+            <label>子代理模型</label>
+            <input
+              v-model="form.subagent"
+              class="text-input"
+              list="known-models-list"
+              placeholder="留空跟随主模型"
+            />
+            <span class="form-hint">子代理（并行任务）单独用的模型，通常选便宜快的</span>
+          </div>
         </div>
 
-        <div class="form-field">
+        <div v-if="!isSystemDefault" class="form-field">
           <label>Effort Level</label>
           <ThemedSelect v-model="form.effortLevel" :options="effortOptions" block />
         </div>
 
-        <div class="form-field">
-          <label>子代理模型</label>
-          <input
-            v-model="form.subagent"
-            class="text-input"
-            list="known-models-list"
-            placeholder="留空跟随主模型"
-          />
-          <span class="form-hint">子代理（并行任务）单独用的模型，通常选便宜快的</span>
-        </div>
-
         <!-- 模型列表：会话面板模型下拉的数据源（真实模型 id，不做别名映射） -->
-        <div class="form-section">
+        <div v-if="!isSystemDefault" class="form-section">
           <label>模型列表</label>
           <span class="form-hint">会话面板的模型下拉从这里取，填该供应商的真实模型 id</span>
           <div class="tags-area">
@@ -276,7 +346,7 @@ function knownModelsForDatalist(): string[] {
 
       <!-- Action buttons -->
       <div class="form-actions">
-        <button class="btn-delete" @click="handleDelete">删除</button>
+        <button v-if="!isSystemDefault" class="btn-delete" @click="handleDelete">删除</button>
         <button class="btn-save" @click="handleSave">保存</button>
       </div>
     </div>
@@ -498,6 +568,23 @@ select.text-input {
 .form-section {
   border-top: 1px solid var(--aide-surface-default);
   padding-top: 10px;
+}
+
+.sys-default-hint {
+  font-size: 11px;
+  color: var(--aide-text-muted);
+  background: var(--aide-surface-default);
+  border-radius: var(--aide-radius-sm);
+  padding: 8px 10px;
+  line-height: 1.5;
+}
+
+/* 模型变量分组内的字段：比顶层字段略紧凑 */
+.model-var-field {
+  margin-top: 10px;
+}
+.model-var-field:first-of-type {
+  margin-top: 4px;
 }
 
 .form-hint {

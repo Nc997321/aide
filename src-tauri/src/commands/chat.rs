@@ -2,7 +2,7 @@ use tauri::State;
 use serde_json::json;
 use crate::sidecar::SidecarManager;
 use crate::commands::{WorkspaceState, project_root_for_commands};
-use crate::commands::provider::{load_active_provider, provider_to_env_vars};
+use crate::commands::provider::{load_active_provider, provider_to_env_vars, system_default_mappings_to_env};
 use crate::commands::settings::get_settings;
 use std::collections::HashMap;
 use std::fs;
@@ -42,7 +42,10 @@ pub async fn send_message(
         let mut env_vars: HashMap<String, String> = if let Some(provider) = load_active_provider() {
             provider_to_env_vars(&provider)
         } else {
-            HashMap::new()
+            // 系统默认：认证走系统 env 兜底（下方 ANTHROPIC_AUTH_TOKEN 等补注），
+            // 但模型变量 5 字段可配（CLAUDE_CODE_SUBAGENT_MODEL 等）——否则子代理
+            // 全继承主会话模型。见 provider.rs system_default_mappings_to_env。
+            system_default_mappings_to_env()
         };
 
         // 从系统全局环境变量读取认证信息和代理（provider 未覆盖的字段兜底）

@@ -236,6 +236,8 @@ pub fn run() {
             commands::provider::set_providers,
             commands::provider::get_active_provider_id,
             commands::provider::set_active_provider_id,
+            commands::provider::get_system_default_model_mappings,
+            commands::provider::set_system_default_model_mappings,
             // Marketplace commands
             commands::marketplace::fetch_marketplace,
             commands::marketplace::install_plugin,

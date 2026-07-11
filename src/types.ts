@@ -92,9 +92,19 @@ export interface ChangeFile {
 
 // ── Provider types ──
 
-/** TUI 时代的 opus/sonnet/haiku 别名欺骗映射已移除——SDK 版下拉直接展示
- *  供应商的真实模型 id（knownModels）。只保留子代理模型指定（合法 CLI 能力）。 */
+/** Claude 专属的模型 env 变量映射——5 个变量统一在此，换 provider 时整块重写。
+ *  与会话面板模型下拉（真实模型 id + 运行时 set_model 切换）互补：本块是 spawn 时
+ *  env 变量层的默认值 + 别名→具体模型映射。Rust 端 provider.rs 注入逻辑单一入口。 */
 export interface ProviderModelMappings {
+  /** 默认模型 → ANTHROPIC_MODEL（原 provider.model，已迁入此处） */
+  anthropicModel: string;
+  /** opus 别名→具体模型 → ANTHROPIC_DEFAULT_OPUS_MODEL */
+  defaultOpusModel: string;
+  /** sonnet 别名→具体模型 → ANTHROPIC_DEFAULT_SONNET_MODEL */
+  defaultSonnetModel: string;
+  /** haiku 别名→具体模型 → ANTHROPIC_DEFAULT_HAIKU_MODEL */
+  defaultHaikuModel: string;
+  /** 子代理模型 → CLAUDE_CODE_SUBAGENT_MODEL */
   subagent: string;
 }
 

@@ -1,12 +1,25 @@
 import { ref, computed } from "vue";
 import { api } from "../api";
-import type { ProviderConfig } from "../types";
+import type { ProviderConfig, ProviderModelMappings } from "../types";
 
 const SYSTEM_DEFAULT_ID = "__system_default__";
+
+const emptyMappings = (): ProviderModelMappings => ({
+  anthropicModel: "",
+  defaultOpusModel: "",
+  defaultSonnetModel: "",
+  defaultHaikuModel: "",
+  subagent: "",
+});
 
 const allProviders = ref<ProviderConfig[]>([]);
 const activeProviderId = ref<string>(SYSTEM_DEFAULT_ID);
 const loaded = ref(false);
+
+// 系统默认的模型变量映射——独立持久化（与 providers 数组并列），系统默认不是
+// provider 条目但需要可配，否则子代理全继承主会话模型。systemDefault.modelMappings
+// 由本 ref 驱动。
+const systemDefaultMappings = ref<ProviderModelMappings>(emptyMappings());
 
 const systemDefault: ProviderConfig = {
   id: SYSTEM_DEFAULT_ID,
@@ -16,7 +29,7 @@ const systemDefault: ProviderConfig = {
   apiKey: "",
   authToken: "",
   model: "",
-  modelMappings: { subagent: "" },
+  modelMappings: emptyMappings(),
   effortLevel: "",
   knownModels: [],
 };
@@ -40,16 +53,25 @@ function generateId(): string {
 
 async function load(): Promise<void> {
   try {
-    const [providers, id] = await Promise.all([
+    const [providers, id, sysMappings] = await Promise.all([
       api.getProviders(),
       api.getActiveProviderId(),
+      api.getSystemDefaultModelMappings(),
     ]);
     allProviders.value = providers;
     activeProviderId.value = id;
+    systemDefaultMappings.value = sysMappings;
+    systemDefault.modelMappings = sysMappings;
   } catch {
     // keep defaults
   }
   loaded.value = true;
+}
+
+async function saveSystemDefaultMappings(mappings: ProviderModelMappings): Promise<void> {
+  await api.setSystemDefaultModelMappings(mappings);
+  systemDefaultMappings.value = { ...mappings };
+  systemDefault.modelMappings = { ...mappings };
 }
 
 async function addProvider(partial: Partial<ProviderConfig> = {}): Promise<ProviderConfig> {
@@ -61,7 +83,7 @@ async function addProvider(partial: Partial<ProviderConfig> = {}): Promise<Provi
     apiKey: partial.apiKey ?? "",
     authToken: partial.authToken ?? "",
     model: partial.model ?? "",
-    modelMappings: partial.modelMappings ?? { subagent: "" },
+    modelMappings: partial.modelMappings ?? emptyMappings(),
     effortLevel: partial.effortLevel ?? "",
     knownModels: partial.knownModels ?? [],
   };
@@ -99,12 +121,14 @@ export function useProviders() {
     displayList,
     activeProvider,
     systemDefault,
+    systemDefaultMappings,
     loaded,
     load,
     addProvider,
     updateProvider,
     deleteProvider,
     setActiveProvider,
+    saveSystemDefaultMappings,
     SYSTEM_DEFAULT_ID,
   };
 }

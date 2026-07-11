@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem,
   ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
-  GrepMatch, ProviderConfig, RunConfig, RunTarget, RecentView,
+  GrepMatch, ProviderConfig, ProviderModelMappings, RunConfig, RunTarget, RecentView,
   SkillMeta, BuildIndexResult, QueryResult,
 } from "./types";
 import type { ModelOption, PermissionModeOption } from "./types/chat";
@@ -224,6 +224,12 @@ export const api = {
   },
   setActiveProviderId(providerId: string): Promise<void> {
     return invoke("set_active_provider_id", { providerId });
+  },
+  getSystemDefaultModelMappings(): Promise<ProviderModelMappings> {
+    return invoke("get_system_default_model_mappings");
+  },
+  setSystemDefaultModelMappings(mappings: ProviderModelMappings): Promise<void> {
+    return invoke("set_system_default_model_mappings", { mappings });
   },
 
   // 工作区

@@ -4,13 +4,33 @@ use std::collections::{BTreeMap, HashMap};
 
 use super::settings::{load_config, save_config};
 
-/// TUI 时代通过 `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` 把 Claude 别名
-/// 偷偷映射到第三方模型的机制已移除——SDK 版模型下拉直接展示供应商的真实
-/// 模型 id。只保留子代理模型指定（`CLAUDE_CODE_SUBAGENT_MODEL`，合法能力）。
-/// 旧配置里的 opus/sonnet/haiku 字段 serde 反序列化时自动忽略。
+/// Claude 专属的模型 env 变量映射——5 个变量统一在此，换 provider 时整块重写，
+/// 不污染调用方（chat.rs 只调 provider_to_env_vars / system_default_mappings_to_env）。
+///
+/// 与会话面板模型下拉（models_available + set_model 运行时切换）互补：下拉是
+/// "用户在 UI 选真实模型 id 并运行时切换"，本块是"spawn 时 env 变量层的默认值 +
+/// 别名→具体模型映射"。两者不冲突——apply_initial_model_override 最后覆盖
+/// ANTHROPIC_MODEL，会话面板选的模型优先级最高。
+///
+/// - anthropicModel      → ANTHROPIC_MODEL（spawn 时默认模型）
+/// - defaultOpusModel    → ANTHROPIC_DEFAULT_OPUS_MODEL（opus 别名→具体模型）
+/// - defaultSonnetModel  → ANTHROPIC_DEFAULT_SONNET_MODEL（sonnet 别名→具体模型）
+/// - defaultHaikuModel   → ANTHROPIC_DEFAULT_HAIKU_MODEL（haiku 别名→具体模型）
+/// - subagent            → CLAUDE_CODE_SUBAGENT_MODEL（子代理模型）
+///
+/// default*Model 的用途：子代理模型填 opus/sonnet/haiku 别名时，CLI 靠这些解析成
+/// 具体模型 id（尤其第三方 provider，别名叫 sonnet 但实际模型 id 不同）。
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderModelMappings {
+    #[serde(default)]
+    pub anthropic_model: String,
+    #[serde(default)]
+    pub default_opus_model: String,
+    #[serde(default)]
+    pub default_sonnet_model: String,
+    #[serde(default)]
+    pub default_haiku_model: String,
     #[serde(default)]
     pub subagent: String,
 }
@@ -29,6 +49,9 @@ pub struct ProviderConfig {
     pub api_key: String,
     #[serde(default)]
     pub auth_token: String,
+    /// 已废弃：模型默认值的权威源改到 `model_mappings.anthropic_model`。字段保留
+    /// 仅用于读旧配置——`migrate_provider_model` 在反序列化后把非空的顶层 model
+    /// 回填到 anthropic_model。新写入不再读它（provider_to_env_vars 只看 model_mappings）。
     #[serde(default)]
     pub model: String,
     #[serde(default)]
@@ -39,15 +62,16 @@ pub struct ProviderConfig {
     pub known_models: Vec<String>,
 }
 
-pub fn provider_to_env_vars(p: &ProviderConfig) -> HashMap<String, String> {
+/// 把模型变量映射注入 env（5 个变量，非空才注入）。Claude 专属——自定义 provider
+/// 和系统默认两条 spawn 路径共用本函数，注入逻辑单一入口。
+fn mappings_to_env(m: &ProviderModelMappings) -> HashMap<String, String> {
     let mut env = HashMap::new();
     let pairs: &[(&str, &str)] = &[
-        ("ANTHROPIC_BASE_URL", &p.base_url),
-        ("ANTHROPIC_API_KEY", &p.api_key),
-        ("ANTHROPIC_AUTH_TOKEN", &p.auth_token),
-        ("ANTHROPIC_MODEL", &p.model),
-        ("CLAUDE_CODE_SUBAGENT_MODEL", &p.model_mappings.subagent),
-        ("CLAUDE_CODE_EFFORT_LEVEL", &p.effort_level),
+        ("ANTHROPIC_MODEL", &m.anthropic_model),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", &m.default_opus_model),
+        ("ANTHROPIC_DEFAULT_SONNET_MODEL", &m.default_sonnet_model),
+        ("ANTHROPIC_DEFAULT_HAIKU_MODEL", &m.default_haiku_model),
+        ("CLAUDE_CODE_SUBAGENT_MODEL", &m.subagent),
     ];
     for (key, val) in pairs {
         if !val.is_empty() {
@@ -55,6 +79,32 @@ pub fn provider_to_env_vars(p: &ProviderConfig) -> HashMap<String, String> {
         }
     }
     env
+}
+
+pub fn provider_to_env_vars(p: &ProviderConfig) -> HashMap<String, String> {
+    let mut env = HashMap::new();
+    let pairs: &[(&str, &str)] = &[
+        ("ANTHROPIC_BASE_URL", &p.base_url),
+        ("ANTHROPIC_API_KEY", &p.api_key),
+        ("ANTHROPIC_AUTH_TOKEN", &p.auth_token),
+        ("CLAUDE_CODE_EFFORT_LEVEL", &p.effort_level),
+    ];
+    for (key, val) in pairs {
+        if !val.is_empty() {
+            env.insert(key.to_string(), val.to_string());
+        }
+    }
+    env.extend(mappings_to_env(&p.model_mappings));
+    env
+}
+
+/// 旧配置把默认模型放在 ProviderConfig.model 顶层；新结构统一到
+/// model_mappings.anthropic_model。反序列化后做一次性迁移：顶层 model 非空且
+/// anthropic_model 为空时回填，避免旧配置丢失默认模型。
+fn migrate_provider_model(p: &mut ProviderConfig) {
+    if !p.model.is_empty() && p.model_mappings.anthropic_model.is_empty() {
+        p.model_mappings.anthropic_model = p.model.clone();
+    }
 }
 
 /// 决定子进程是否需要因连接身份变化而重启的字段白名单：base_url / api_key /
@@ -96,8 +146,9 @@ pub fn load_active_provider() -> Option<ProviderConfig> {
     }
     let providers = config.get("providers").and_then(|v| v.as_array())?;
     for p in providers {
-        if let Ok(pc) = serde_json::from_value::<ProviderConfig>(p.clone()) {
+        if let Ok(mut pc) = serde_json::from_value::<ProviderConfig>(p.clone()) {
             if pc.id == active_id {
+                migrate_provider_model(&mut pc);
                 return Some(pc);
             }
         }
@@ -112,7 +163,8 @@ pub fn get_providers() -> Result<Vec<ProviderConfig>, String> {
     if let Some(arr) = config.get("providers").and_then(|v| v.as_array()) {
         let mut out = Vec::new();
         for item in arr {
-            if let Ok(p) = serde_json::from_value::<ProviderConfig>(item.clone()) {
+            if let Ok(mut p) = serde_json::from_value::<ProviderConfig>(item.clone()) {
+                migrate_provider_model(&mut p);
                 out.push(p);
             }
         }
@@ -155,4 +207,111 @@ pub fn set_active_provider_id(provider_id: String) -> Result<(), String> {
     }
     config["active_provider"] = Value::String(provider_id);
     save_config(&config)
+}
+
+// ── 系统默认 provider 的模型变量映射 ──
+//
+// 系统默认不是 provider 条目（认证走系统 env 兜底，load_active_provider 返回 None），
+// 但模型变量需要可配——否则用系统默认的用户摸不到 CLAUDE_CODE_SUBAGENT_MODEL，
+// 子代理全继承主会话模型（见 chat.rs spawn 合并点 None 分支）。
+// 独立存储在 config["system_default_model_mappings"]，与 providers 数组并列。
+
+fn load_system_default_mappings() -> ProviderModelMappings {
+    load_config()
+        .get("system_default_model_mappings")
+        .and_then(|v| serde_json::from_value::<ProviderModelMappings>(v.clone()).ok())
+        .unwrap_or_default()
+}
+
+/// spawn 时 load_active_provider 返回 None 走这条路径：读系统默认模型变量映射
+/// 注入 5 个 env。复用 mappings_to_env，与自定义 provider 同一注入逻辑。
+pub fn system_default_mappings_to_env() -> HashMap<String, String> {
+    mappings_to_env(&load_system_default_mappings())
+}
+
+#[tauri::command]
+pub fn get_system_default_model_mappings() -> Result<ProviderModelMappings, String> {
+    let _trace = crate::diagnostics::trace_command("get_system_default_model_mappings");
+    Ok(load_system_default_mappings())
+}
+
+#[tauri::command]
+pub fn set_system_default_model_mappings(mappings: ProviderModelMappings) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("set_system_default_model_mappings");
+    let mut config = load_config();
+    if config.is_null() {
+        config = serde_json::json!({});
+    }
+    config["system_default_model_mappings"] =
+        serde_json::to_value(&mappings).map_err(|e| format!("Serialize error: {}", e))?;
+    save_config(&config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider_with(model: String, anthropic: String) -> ProviderConfig {
+        ProviderConfig {
+            id: "x".to_string(),
+            name: String::new(),
+            icon: String::new(),
+            base_url: String::new(),
+            api_key: String::new(),
+            auth_token: String::new(),
+            model,
+            model_mappings: ProviderModelMappings {
+                anthropic_model: anthropic,
+                ..Default::default()
+            },
+            effort_level: String::new(),
+            known_models: Vec::new(),
+        }
+    }
+
+    /// 旧配置把默认模型放在顶层 model，新结构统一到 model_mappings.anthropic_model。
+    /// 反序列化后迁移：顶层 model 非空且 anthropic_model 为空 → 回填，避免丢默认模型。
+    #[test]
+    fn migrate_backfills_legacy_top_level_model() {
+        let mut p = provider_with("claude-sonnet-5".to_string(), String::new());
+        migrate_provider_model(&mut p);
+        assert_eq!(p.model_mappings.anthropic_model, "claude-sonnet-5");
+        assert_eq!(p.model, "claude-sonnet-5"); // 原顶层值保留不丢
+    }
+
+    /// anthropic_model 已有值时，旧顶层 model 不覆盖（新配置权威优先）。
+    #[test]
+    fn migrate_skips_when_anthropic_model_already_set() {
+        let mut p = provider_with("legacy".to_string(), "new".to_string());
+        migrate_provider_model(&mut p);
+        assert_eq!(p.model_mappings.anthropic_model, "new");
+    }
+
+    /// 注入逻辑：5 字段非空才注入，空的不进 env。自定义 provider 和系统默认共用。
+    #[test]
+    fn mappings_to_env_skips_empty_injects_nonempty() {
+        let m = ProviderModelMappings {
+            anthropic_model: "claude-sonnet-5".to_string(),
+            default_sonnet_model: "claude-sonnet-5".to_string(),
+            ..Default::default()
+        };
+        let env = mappings_to_env(&m);
+        assert_eq!(env.get("ANTHROPIC_MODEL"), Some(&"claude-sonnet-5".to_string()));
+        assert_eq!(
+            env.get("ANTHROPIC_DEFAULT_SONNET_MODEL"),
+            Some(&"claude-sonnet-5".to_string())
+        );
+        // 空字段不注入
+        assert!(env.get("ANTHROPIC_DEFAULT_OPUS_MODEL").is_none());
+        assert!(env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL").is_none());
+        assert!(env.get("CLAUDE_CODE_SUBAGENT_MODEL").is_none());
+    }
+
+    /// ProviderModelMappings 全空时 mappings_to_env 不注入任何 env（系统默认未配置的
+    /// 安全默认——不会污染 spawn env）。
+    #[test]
+    fn mappings_to_env_empty_yields_nothing() {
+        let env = mappings_to_env(&ProviderModelMappings::default());
+        assert!(env.is_empty());
+    }
 }
