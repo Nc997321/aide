@@ -521,4 +521,32 @@ describe("useChatSession subagent events", () => {
       { type: "text", text: "看完了" },
     ]);
   });
+
+  it("subagent_async_launched 标记后台运行中（保持 pending），后续回放事件正常累积", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("帮我调研 XXX");
+    emit({ type: "subagent_start", id: "a1", agentName: "general-purpose", description: "调研 XXX", session_id: "uuid-a" });
+    emit({ type: "subagent_async_launched", id: "a1", agentId: "ab99", outputFile: "C:\\x\\ab99.output", session_id: "uuid-a" });
+    await flush();
+
+    let block: any = chat.messages.value.flatMap((m) => m.blocks).find((b) => b.type === "subagent");
+    expect(block?.isPending).toBe(true);
+    expect(block?.asyncLaunched).toEqual({ agentId: "ab99", outputFile: "C:\\x\\ab99.output" });
+
+    // sidecar tail 回放的工具链经现有 subagent_progress handler 累积
+    emit({ type: "subagent_progress", id: "a1", toolUseId: "t1", toolName: "Read", input: { file_path: "x.ts" }, model: "glm-5.2", session_id: "uuid-a" });
+    await flush();
+    block = chat.messages.value.flatMap((m) => m.blocks).find((b) => b.type === "subagent") as any;
+    expect(block?.entries).toEqual([{ type: "tool", toolUseId: "t1", toolName: "Read", input: { file_path: "x.ts" } }]);
+    expect(block?.model).toBe("glm-5.2");
+
+    // task-notification 收尾
+    emit({ type: "subagent_end", id: "a1", result: "结论…", is_error: false, session_id: "uuid-a" });
+    await flush();
+    block = chat.messages.value.flatMap((m) => m.blocks).find((b) => b.type === "subagent") as any;
+    expect(block?.isPending).toBe(false);
+    expect(block?.result).toBe("结论…");
+  });
 });

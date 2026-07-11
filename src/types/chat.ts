@@ -44,6 +44,9 @@ export interface SubagentBlock {
   result?: string;
   isError?: boolean;
   isPending: boolean;
+  /** async（后台）子代理：launch-ack 到达后标记，UI 显示「后台运行中」。
+   *  回放的工具链/模型由 sidecar tail 经 subagent_progress 等事件推，与 sync 同路。 */
+  asyncLaunched?: { agentId: string; outputFile: string };
 }
 
 export type ContentBlock = TextBlock | ToolCallBlock | ImageBlock | SubagentBlock;

@@ -470,6 +470,15 @@ function handleChatEvent(e: Record<string, unknown>) {
       }
       break;
     }
+    case "subagent_async_launched": {
+      const block = store.messages
+        .flatMap((m) => m.blocks)
+        .find((b): b is SubagentBlock => b.type === "subagent" && (b as SubagentBlock).id === e["id"]);
+      if (block) {
+        block.asyncLaunched = { agentId: e["agentId"] as string, outputFile: e["outputFile"] as string };
+      }
+      break;
+    }
     case "subagent_progress": {
       const block = store.messages
         .flatMap((m) => m.blocks)

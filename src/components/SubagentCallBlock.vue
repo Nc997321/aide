@@ -88,7 +88,9 @@ function toggleStep(i: number): void {
         </li>
       </ol>
       <pre v-if="block.result" class="subagent-result">{{ block.result }}</pre>
-      <div v-else-if="!block.entries.length" class="subagent-pending">子代理执行中…</div>
+      <div v-else-if="!block.entries.length" class="subagent-pending">
+        {{ block.asyncLaunched ? "子代理后台运行中…" : "子代理执行中…" }}
+      </div>
     </div>
   </div>
 </template>
