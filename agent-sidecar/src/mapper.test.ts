@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   mapSdkMessage,
   describeResultError,
@@ -9,6 +9,7 @@ import {
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
 import { ToolLifecycleTracker } from "./toolLifecycle.js";
+import * as tailMod from "./subagentOutputTail.js";
 import type { ChatEvent } from "./types.js";
 
 function assistantToolUse(id: string, name: string, input: unknown, parentToolUseId?: string) {
@@ -756,6 +757,65 @@ describe("mapSdkMessage routing for subagent tools", () => {
     ]);
     expect(subagents.isActive("a1")).toBe(true);
     expect(subagents.getAsyncOutputFile("a1")).toBe("C:\\Users\\John Doe\\AppData\\Local\\Temp\\claude\\proj\\sess\\tasks\\ab99381a4a2eb9ccd.output");
+  });
+
+  it("task-notification（user 字符串 content）发 subagent_end，结果取 <result>，停 tail", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
+    // 先把 a1 起成 async 子代理
+    mapSdkMessage(
+      assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
+      (e) => events.push(e),
+      tasks,
+      subagents,
+      tools,
+    );
+    events.length = 0;
+    const spy = vi.spyOn(tailMod, "stopOutputTail");
+    // task-notification：user 消息，content 是 XML 字符串
+    const note = {
+      type: "user",
+      message: { role: "user", content: "<task-notification>\n<task-id>ab99</task-id>\n<tool-use-id>a1</tool-use-id>\n<output-file>C:\\x\\ab99.output</output-file>\n<status>completed</status>\n<summary>Agent \"…\" finished</summary>\n<result>调研结论：用了 Vue3+Tauri。</result>\n<usage><subagent_tokens>100</subagent_tokens></usage>\n</task-notification>" },
+      origin: { kind: "task-notification" },
+    };
+    mapSdkMessage(note, (e) => events.push(e), tasks, subagents, tools);
+    expect(events).toEqual([{ type: "subagent_end", id: "a1", result: "调研结论：用了 Vue3+Tauri。", is_error: false }]);
+    expect(subagents.isActive("a1")).toBe(false);
+    expect(spy).toHaveBeenCalledWith("a1");
+    spy.mockRestore();
+  });
+
+  it("task-notification status 非 completed → is_error:true", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
+    mapSdkMessage(
+      assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "x" }),
+      (e) => events.push(e),
+      tasks,
+      subagents,
+      tools,
+    );
+    events.length = 0;
+    const note = {
+      type: "user",
+      message: { role: "user", content: "<task-notification>\n<tool-use-id>a1</tool-use-id>\n<status>failed</status>\n<result>model 不存在</result>\n</task-notification>" },
+    };
+    mapSdkMessage(note, (e) => events.push(e), tasks, subagents, tools);
+    expect(events).toEqual([{ type: "subagent_end", id: "a1", result: "model 不存在", is_error: true }]);
+  });
+
+  it("普通 user 文本消息（非 task-notification）不被误当完成", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
+    const plain = { type: "user", message: { role: "user", content: "用户随手打的一句话" } };
+    mapSdkMessage(plain, (e) => events.push(e), tasks, subagents, tools);
+    expect(events).toEqual([]);
   });
 });
 

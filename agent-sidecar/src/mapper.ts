@@ -3,7 +3,7 @@ import type { ChatEvent, ImageAttachment, RateLimitWindow, TurnUsage } from "./t
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
 import { ToolLifecycleTracker } from "./toolLifecycle.js";
-import { startOutputTail } from "./subagentOutputTail.js";
+import { startOutputTail, stopOutputTail } from "./subagentOutputTail.js";
 
 /**
  * Build a Claude-SDK MessageParam from a prompt + optional image attachments.
@@ -196,6 +196,23 @@ export function parseAsyncLaunchAck(content: string): { agentId: string; outputF
 }
 
 /**
+ * 解析 SDK 注入的 <task-notification> XML，提取 tool-use-id / status / result。
+ * async 子代理完成时，SDK 会往父会话消息流塞一条 content 是这段 XML 字符串的
+ * type:"user" 消息（不是通常的 block 数组）——这是 .output 转录文件之外唯一
+ * 靠谱的"完成"信号（.output 本身没有 end_turn/result 标记）。
+ * content 不以 <task-notification> 开头 → 返回 null（普通用户消息不误判）。
+ * result 缺省取 <summary> 兜底，再缺省空串。
+ */
+export function parseTaskNotification(content: string): { toolUseId: string; status: string; result: string } | null {
+  if (!content.startsWith("<task-notification>")) return null;
+  const id = content.match(/<tool-use-id>([^<]*)<\/tool-use-id>/)?.[1];
+  if (!id) return null;
+  const status = content.match(/<status>([^<]*)<\/status>/)?.[1] ?? "completed";
+  const result = content.match(/<result>([\s\S]*?)<\/result>/)?.[1] ?? content.match(/<summary>([^<]*)<\/summary>/)?.[1] ?? "";
+  return { toolUseId: id, status, result };
+}
+
+/**
  * 解析子代理的 assistant/user 消息块并转发为 subagent_progress / subagent_tool_result /
  * subagent_text_delta。assistant 与 user 两条分支被 .output 回放和流式 emitSubagentProgress
  * 共用——区别只在消息来源（流式带 parent_tool_use_id vs .output 自身 transcript），块结构相同。
@@ -349,6 +366,35 @@ export function mapSdkMessage(
           emit({ type: "tool_use_start", id: block.id, name: block.name, input: block.input });
         }
       }
+    }
+    return;
+  }
+
+  // async 子代理完成信号：SDK 往父会话塞一条 content 是 XML 字符串（而非 block 数组）
+  // 的 type:"user" 消息。必须在下面的 block 数组循环之前判断——content 是字符串时
+  // `for...of` 会逐字符遍历，产生的"block"全是单字符、匹配不到任何 block.type，之前
+  // 这条消息因此被悄悄丢弃，async 子代理卡片永远停在 launch-ack 假结束。
+  if (msg.type === "user" && msg.message && typeof msg.message.content === "string") {
+    const note = parseTaskNotification(msg.message.content);
+    if (note) {
+      if (subagents.isActive(note.toolUseId)) {
+        stopOutputTail(note.toolUseId);
+        subagents.handleAsyncResult(note.toolUseId);
+        emit({ type: "subagent_end", id: note.toolUseId, result: note.result, is_error: note.status !== "completed" });
+      }
+      return;
+    }
+    // 其它字符串 content（普通用户输入等）：当前主流程不处理，保持现状丢弃。
+  }
+
+  // 防御性兜底：SDK 有时会以内部队列日志 type:"queue-operation"/operation:"enqueue"
+  // 携带同一段 task-notification XML（这条通路不保证一定流到 sidecar），同样解析处理。
+  if (msg.type === "queue-operation" && msg.operation === "enqueue" && typeof msg.content === "string") {
+    const note = parseTaskNotification(msg.content);
+    if (note && subagents.isActive(note.toolUseId)) {
+      stopOutputTail(note.toolUseId);
+      subagents.handleAsyncResult(note.toolUseId);
+      emit({ type: "subagent_end", id: note.toolUseId, result: note.result, is_error: note.status !== "completed" });
     }
     return;
   }
