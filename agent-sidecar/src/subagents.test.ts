@@ -14,25 +14,30 @@ describe("SubagentTracker.isSubagentTool", () => {
 });
 
 describe("SubagentTracker lifecycle", () => {
-  it("extracts agentName/description from input on handleToolUse", () => {
+  it("extracts agentName/description/prompt from input on handleToolUse", () => {
     const t = new SubagentTracker();
     const result = t.handleToolUse("u1", {
       subagent_type: "general-purpose",
       description: "调研 XXX 的实现方式",
+      prompt: "调研 XXX 的实现方式，给出可行方案与文件清单",
     });
-    expect(result).toEqual({ agentName: "general-purpose", description: "调研 XXX 的实现方式" });
+    expect(result).toEqual({
+      agentName: "general-purpose",
+      description: "调研 XXX 的实现方式",
+      prompt: "调研 XXX 的实现方式，给出可行方案与文件清单",
+    });
   });
 
-  it("defaults agentName to 'agent' and description to '' when input is missing fields", () => {
+  it("defaults agentName to 'agent' and description/prompt to '' when input is missing fields", () => {
     const t = new SubagentTracker();
     const result = t.handleToolUse("u1", {});
-    expect(result).toEqual({ agentName: "agent", description: "" });
+    expect(result).toEqual({ agentName: "agent", description: "", prompt: "" });
   });
 
   it("defaults safely when input is not an object", () => {
     const t = new SubagentTracker();
     const result = t.handleToolUse("u1", null);
-    expect(result).toEqual({ agentName: "agent", description: "" });
+    expect(result).toEqual({ agentName: "agent", description: "", prompt: "" });
   });
 
   it("handleToolResult returns true and clears a tracked id", () => {

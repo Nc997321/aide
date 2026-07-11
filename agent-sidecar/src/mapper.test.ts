@@ -406,6 +406,65 @@ describe("mapSdkMessage routing for subagent tools", () => {
     ]);
   });
 
+  it("emits subagent_start with prompt when the Agent tool input carries one", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
+    mapSdkMessage(
+      assistantToolUse("a1", "Agent", {
+        subagent_type: "general-purpose",
+        description: "实现 Task 1",
+        prompt: "You are implementing Task 1: ...",
+      }),
+      (e) => events.push(e),
+      tasks,
+      subagents,
+      tools,
+    );
+    expect(events).toEqual([
+      {
+        type: "subagent_start",
+        id: "a1",
+        agentName: "general-purpose",
+        description: "实现 Task 1",
+        prompt: "You are implementing Task 1: ...",
+      },
+    ]);
+  });
+
+  it("emits subagent_tool_result for a subagent-internal tool_result, keyed by inner tool_use id", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
+    mapSdkMessage(
+      assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
+      (e) => events.push(e),
+      tasks,
+      subagents,
+      tools,
+    );
+    events.length = 0;
+    // 子代理内部调了 inner1:Read，随后 user 消息回填该工具的产出（带 parent_tool_use_id）。
+    mapSdkMessage(assistantToolUse("inner1", "Read", { file_path: "x.ts" }, "a1"), (e) => events.push(e), tasks, subagents, tools);
+    events.length = 0;
+    mapSdkMessage(
+      {
+        type: "user",
+        parent_tool_use_id: "a1",
+        message: { content: [{ type: "tool_result", tool_use_id: "inner1", content: "文件内容……" }] },
+      },
+      (e) => events.push(e),
+      tasks,
+      subagents,
+      tools,
+    );
+    expect(events).toEqual([
+      { type: "subagent_tool_result", id: "a1", toolUseId: "inner1", content: "文件内容……", is_error: false },
+    ]);
+  });
+
   it("drops subagent-internal messages for an id we never saw start (defensive, shouldn't happen in practice)", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
@@ -438,7 +497,7 @@ describe("mapSdkMessage routing for subagent tools", () => {
     // 子代理内部真正调用了工具：应转成 subagent_progress，而不是 tool_use_start。
     mapSdkMessage(assistantToolUse("inner1", "Read", { file_path: "x.ts" }, "a1"), (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([
-      { type: "subagent_progress", id: "a1", toolName: "Read", input: { file_path: "x.ts" } },
+      { type: "subagent_progress", id: "a1", toolUseId: "inner1", toolName: "Read", input: { file_path: "x.ts" } },
     ]);
   });
 
@@ -468,8 +527,8 @@ describe("mapSdkMessage routing for subagent tools", () => {
     mapSdkMessage(step1, (e) => events.push(e), tasks, subagents, tools);
     mapSdkMessage(step2, (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([
-      { type: "subagent_progress", id: "a1", toolName: "Read", input: { file_path: "x.ts" }, model: "claude-sonnet-5-20260101" },
-      { type: "subagent_progress", id: "a1", toolName: "Bash", input: { command: "ls" } },
+      { type: "subagent_progress", id: "a1", toolUseId: "inner1", toolName: "Read", input: { file_path: "x.ts" }, model: "claude-sonnet-5-20260101" },
+      { type: "subagent_progress", id: "a1", toolUseId: "inner2", toolName: "Bash", input: { command: "ls" } },
     ]);
   });
 
@@ -493,7 +552,7 @@ describe("mapSdkMessage routing for subagent tools", () => {
     };
     mapSdkMessage(placeholderStep, (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([
-      { type: "subagent_progress", id: "a1", toolName: "Read", input: { file_path: "x.ts" } },
+      { type: "subagent_progress", id: "a1", toolUseId: "inner1", toolName: "Read", input: { file_path: "x.ts" } },
     ]);
   });
 

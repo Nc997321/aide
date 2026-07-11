@@ -14,14 +14,17 @@ export class SubagentTracker {
     return SUBAGENT_TOOL_NAMES.has(name);
   }
 
-  /** tool_use 到达时调用：agentName/description 从 input 里立即可得，不用等 tool_result。 */
-  handleToolUse(id: string, input: unknown): { agentName: string; description: string } {
+  /** tool_use 到达时调用：agentName/description/prompt 从 input 里立即可得，不用等 tool_result。
+   *  prompt 是主代理派发时塞进 Agent 工具 input 的完整任务描述（如 superpowers 的 implementer
+   *  契约），非空才回——空字符串不进事件，前端不渲染派发指令区。 */
+  handleToolUse(id: string, input: unknown): { agentName: string; description: string; prompt: string } {
     this.active.add(id);
     const record = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
     const agentName = typeof record.subagent_type === "string" ? record.subagent_type : "agent";
     const description = typeof record.description === "string" ? record.description : "";
+    const prompt = typeof record.prompt === "string" ? record.prompt : "";
     this.names.set(id, agentName);
-    return { agentName, description };
+    return { agentName, description, prompt };
   }
 
   /** 返回 true 表示这个 tool_use_id 属于子代理调用，调用方应发 subagent_end 而非通用 tool_result。 */

@@ -453,6 +453,8 @@ function handleChatEvent(e: Record<string, unknown>) {
         id: e["id"] as string,
         agentName: e["agentName"] as string,
         description: e["description"] as string,
+        // task prompt 非空才带（主代理派发时塞进 Agent 工具 input 的完整任务描述）
+        prompt: e["prompt"] ? (e["prompt"] as string) : undefined,
         entries: [],
         isPending: true,
       } as SubagentBlock);
@@ -473,8 +475,32 @@ function handleChatEvent(e: Record<string, unknown>) {
         .flatMap((m) => m.blocks)
         .find((b): b is SubagentBlock => b.type === "subagent" && (b as SubagentBlock).id === e["id"]);
       if (block) {
-        block.entries.push({ type: "tool", toolName: e["toolName"] as string, input: e["input"] });
+        block.entries.push({
+          type: "tool",
+          toolUseId: e["toolUseId"] as string,
+          toolName: e["toolName"] as string,
+          input: e["input"],
+        });
         if (e["model"]) block.model = e["model"] as string;
+      }
+      break;
+    }
+    case "subagent_tool_result": {
+      // 子代理内部某次工具的产出，按 toolUseId 回填到对应步骤——让步骤能显示输出，
+      // 不只是工具名+入参摘要。找不到对应步骤（tool_use 没采到/乱序）时静默丢弃。
+      const block = store.messages
+        .flatMap((m) => m.blocks)
+        .find((b): b is SubagentBlock => b.type === "subagent" && (b as SubagentBlock).id === e["id"]);
+      if (block) {
+        const toolUseId = e["toolUseId"] as string;
+        const entry = block.entries.find(
+          (en): en is Extract<SubagentEntry, { type: "tool" }> =>
+            en.type === "tool" && en.toolUseId === toolUseId,
+        );
+        if (entry) {
+          entry.result = e["content"] as string;
+          entry.isError = e["is_error"] as boolean;
+        }
       }
       break;
     }

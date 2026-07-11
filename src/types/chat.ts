@@ -22,17 +22,21 @@ export interface ImageBlock {
 }
 
 /** 子代理内部时间线上的一项——按到达顺序混排文本/thinking 增量累积的段落，以及
- *  一次完整的工具调用（工具调用没有"增量"概念，一次到位）。 */
+ *  一次完整的工具调用（工具调用没有"增量"概念，一次到位）。tool 项的 toolUseId 是该
+ *  调用在子代理内部的 id，sidecar 的 subagent_tool_result 据此把产出回填到 result。 */
 export type SubagentEntry =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "tool"; toolName: string; input: unknown };
+  | { type: "tool"; toolUseId: string; toolName: string; input: unknown; result?: string; isError?: boolean };
 
 export interface SubagentBlock {
   type: "subagent";
   id: string;
   agentName: string;
   description: string;
+  /** 主代理派发时塞进 Agent 工具 input 的完整任务描述（task prompt，如 superpowers 的
+   *  implementer 契约）——非空时展开态顶部渲染"派发指令"区。 */
+  prompt?: string;
   /** 子代理具体跑在哪个模型上——只在 sidecar 第一次坐实时才有值，之后不会变。 */
   model?: string;
   /** 运行期间收到的时间线，按到达顺序追加；用于展开态还原"子代理具体做了什么"。 */

@@ -406,15 +406,26 @@ describe("useChatSession subagent events", () => {
       id: "a1",
       agentName: "general-purpose",
       description: "调研 XXX",
+      prompt: "调研 XXX 的实现，给出方案与文件清单",
       session_id: "uuid-a",
     });
     await flush();
 
+    type SubagentTestEntry = {
+      type: string;
+      toolUseId?: string;
+      toolName?: string;
+      input?: unknown;
+      text?: string;
+      result?: string;
+      isError?: boolean;
+    };
     type SubagentTestBlock = {
       agentName?: string;
       description?: string;
+      prompt?: string;
       model?: string;
-      entries: { type: string; toolName?: string; input?: unknown; text?: string }[];
+      entries: SubagentTestEntry[];
       isPending: boolean;
       result?: string;
       isError?: boolean;
@@ -423,12 +434,19 @@ describe("useChatSession subagent events", () => {
     let block = chat.messages.value
       .flatMap((m) => m.blocks)
       .find((b) => b.type === "subagent") as SubagentTestBlock | undefined;
-    expect(block).toMatchObject({ agentName: "general-purpose", description: "调研 XXX", isPending: true, entries: [] });
+    expect(block).toMatchObject({
+      agentName: "general-purpose",
+      description: "调研 XXX",
+      prompt: "调研 XXX 的实现，给出方案与文件清单",
+      isPending: true,
+      entries: [],
+    });
     expect(block?.result).toBeUndefined();
 
     emit({
       type: "subagent_progress",
       id: "a1",
+      toolUseId: "inner1",
       toolName: "Read",
       input: { file_path: "x.ts" },
       model: "claude-sonnet-5-20260101",
@@ -439,8 +457,28 @@ describe("useChatSession subagent events", () => {
     block = chat.messages.value
       .flatMap((m) => m.blocks)
       .find((b) => b.type === "subagent") as SubagentTestBlock | undefined;
-    expect(block?.entries).toEqual([{ type: "tool", toolName: "Read", input: { file_path: "x.ts" } }]);
+    expect(block?.entries).toEqual([
+      { type: "tool", toolUseId: "inner1", toolName: "Read", input: { file_path: "x.ts" } },
+    ]);
     expect(block?.model).toBe("claude-sonnet-5-20260101");
+
+    // 子代理内部工具的产出按 toolUseId 回填到对应步骤
+    emit({
+      type: "subagent_tool_result",
+      id: "a1",
+      toolUseId: "inner1",
+      content: "文件内容……",
+      is_error: false,
+      session_id: "uuid-a",
+    });
+    await flush();
+
+    block = chat.messages.value
+      .flatMap((m) => m.blocks)
+      .find((b) => b.type === "subagent") as SubagentTestBlock | undefined;
+    expect(block?.entries).toEqual([
+      { type: "tool", toolUseId: "inner1", toolName: "Read", input: { file_path: "x.ts" }, result: "文件内容……", isError: false },
+    ]);
 
     emit({
       type: "subagent_end",
@@ -467,19 +505,19 @@ describe("useChatSession subagent events", () => {
     emit({ type: "subagent_text_delta", id: "a1", delta: "我", session_id: "uuid-a" });
     emit({ type: "subagent_text_delta", id: "a1", delta: "先看看", session_id: "uuid-a" });
     emit({ type: "subagent_thinking_delta", id: "a1", delta: "要不要先读 README", session_id: "uuid-a" });
-    emit({ type: "subagent_progress", id: "a1", toolName: "Read", input: { file_path: "README.md" }, session_id: "uuid-a" });
+    emit({ type: "subagent_progress", id: "a1", toolUseId: "inner1", toolName: "Read", input: { file_path: "README.md" }, session_id: "uuid-a" });
     emit({ type: "subagent_text_delta", id: "a1", delta: "看完了", session_id: "uuid-a" });
     await flush();
 
     const block = chat.messages.value
       .flatMap((m) => m.blocks)
       .find((b) => b.type === "subagent") as
-      | { entries: { type: string; text?: string; toolName?: string; input?: unknown }[] }
+      | { entries: { type: string; text?: string; toolUseId?: string; toolName?: string; input?: unknown }[] }
       | undefined;
     expect(block?.entries).toEqual([
       { type: "text", text: "我先看看" },
       { type: "thinking", text: "要不要先读 README" },
-      { type: "tool", toolName: "Read", input: { file_path: "README.md" } },
+      { type: "tool", toolUseId: "inner1", toolName: "Read", input: { file_path: "README.md" } },
       { type: "text", text: "看完了" },
     ]);
   });

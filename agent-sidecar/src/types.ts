@@ -44,14 +44,19 @@ export type ChatEvent =
   | { type: "text_delta"; delta: string }
   | { type: "tool_use_start"; id: string; name: string; input: unknown }
   | { type: "tool_result"; id: string; content: string; is_error: boolean }
-  | { type: "subagent_start"; id: string; agentName: string; description: string }
+  | { type: "subagent_start"; id: string; agentName: string; description: string; prompt?: string }
   // 子代理内部逐字流式增量——语义对齐主线程的 text_delta（stream_event 的 text_delta）。
   // thinking 主线程目前不转发，但这条子代理专属通道独立开放，不受此限制（v2）。
   | { type: "subagent_text_delta"; id: string; delta: string }
   | { type: "subagent_thinking_delta"; id: string; delta: string }
-  // 子代理内部的"工具调用摘要"：报它调用了哪个工具+入参。model 只在第一次能坐实时
-  // 带一次，之后同一个 id 不再重复。
-  | { type: "subagent_progress"; id: string; toolName: string; input: unknown; model?: string }
+  // 子代理内部的"工具调用摘要"：报它调用了哪个工具+入参。toolUseId 是该工具调用在子代理
+  // 内部的 id（不是 parent id），用于把后续 subagent_tool_result 的产出回填到对应步骤。
+  // model 只在第一次能坐实时带一次，之后同一个 id 不再重复。prompt 只在非空时带（主代理
+  // 派发时塞进 Agent 工具 input 的完整任务描述，如 superpowers 的 implementer 契约）。
+  | { type: "subagent_progress"; id: string; toolUseId: string; toolName: string; input: unknown; model?: string }
+  // 子代理内部某次工具调用的产出（子代理 user 消息里的 tool_result，带 parent_tool_use_id）。
+  // 按 toolUseId 回填到对应步骤，让前端能看到子代理每步工具的输出，而不只是工具名+入参摘要。
+  | { type: "subagent_tool_result"; id: string; toolUseId: string; content: string; is_error: boolean }
   | { type: "subagent_end"; id: string; result: string; is_error: boolean }
   // alwaysAllowLabel：sidecar 已经把 SDK 的 suggestions 解读成一句人话（比如 Edit
   // 工具常见的"自动接受编辑（本次会话）"，而不是笼统的"总是允许"——两者后果差异很大：

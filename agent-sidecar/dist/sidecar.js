@@ -45607,14 +45607,17 @@ var SubagentTracker = class {
   static isSubagentTool(name) {
     return SUBAGENT_TOOL_NAMES.has(name);
   }
-  /** tool_use 到达时调用：agentName/description 从 input 里立即可得，不用等 tool_result。 */
+  /** tool_use 到达时调用：agentName/description/prompt 从 input 里立即可得，不用等 tool_result。
+   *  prompt 是主代理派发时塞进 Agent 工具 input 的完整任务描述（如 superpowers 的 implementer
+   *  契约），非空才回——空字符串不进事件，前端不渲染派发指令区。 */
   handleToolUse(id2, input) {
     this.active.add(id2);
     const record = input && typeof input === "object" ? input : {};
     const agentName = typeof record.subagent_type === "string" ? record.subagent_type : "agent";
     const description = typeof record.description === "string" ? record.description : "";
+    const prompt = typeof record.prompt === "string" ? record.prompt : "";
     this.names.set(id2, agentName);
-    return { agentName, description };
+    return { agentName, description, prompt };
   }
   /** 返回 true 表示这个 tool_use_id 属于子代理调用，调用方应发 subagent_end 而非通用 tool_result。 */
   handleToolResult(id2) {
@@ -45846,6 +45849,20 @@ function emitSubagentProgress(msg, emit2, subagents) {
     }
     return;
   }
+  if (msg.type === "user" && msg.message?.content) {
+    for (const block of msg.message.content) {
+      if (block.type !== "tool_result") continue;
+      const content = Array.isArray(block.content) ? block.content.map((c) => c.text ?? "").join("") : String(block.content ?? "");
+      emit2({
+        type: "subagent_tool_result",
+        id: parentId,
+        toolUseId: block.tool_use_id,
+        content,
+        is_error: block.is_error ?? false
+      });
+    }
+    return;
+  }
   if (msg.type !== "assistant" || !msg.message?.content) return;
   const toolUses = msg.message.content.filter((b3) => b3.type === "tool_use");
   if (toolUses.length === 0) {
@@ -45861,6 +45878,7 @@ function emitSubagentProgress(msg, emit2, subagents) {
     emit2({
       type: "subagent_progress",
       id: parentId,
+      toolUseId: block.id,
       toolName: block.name,
       input: block.input,
       ...i === 0 && model ? { model } : {}
@@ -45902,8 +45920,8 @@ function mapSdkMessage(msg, emit2, tasks, subagents, tools) {
       } else if (block.type === "tool_use") {
         tools.onToolUse(block.id);
         if (SubagentTracker.isSubagentTool(block.name)) {
-          const { agentName, description } = subagents.handleToolUse(block.id, block.input);
-          emit2({ type: "subagent_start", id: block.id, agentName, description });
+          const { agentName, description, prompt } = subagents.handleToolUse(block.id, block.input);
+          emit2({ type: "subagent_start", id: block.id, agentName, description, ...prompt ? { prompt } : {} });
         } else if (TaskTracker.isTaskTool(block.name)) {
           if (tasks.handleToolUse(block.id, block.name, block.input)) {
             emit2({ type: "tasks_update", tasks: tasks.snapshot() });

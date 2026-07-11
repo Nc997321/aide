@@ -211,6 +211,26 @@ function emitSubagentProgress(msg: any, emit: (e: ChatEvent) => void, subagents:
     return;
   }
 
+  // 子代理内部的工具产出：user 消息（带 parent_tool_use_id）里的 tool_result block。
+  // 按 tool_use_id（子代理内部那次工具调用的 id）发 subagent_tool_result，前端据此把产出
+  // 回填到对应步骤——否则子代理步骤只看得到工具名+入参摘要、看不到每步输出。
+  if (msg.type === "user" && msg.message?.content) {
+    for (const block of msg.message.content) {
+      if (block.type !== "tool_result") continue;
+      const content = Array.isArray(block.content)
+        ? block.content.map((c: any) => c.text ?? "").join("")
+        : String(block.content ?? "");
+      emit({
+        type: "subagent_tool_result",
+        id: parentId,
+        toolUseId: block.tool_use_id,
+        content,
+        is_error: block.is_error ?? false,
+      });
+    }
+    return;
+  }
+
   if (msg.type !== "assistant" || !msg.message?.content) return;
   const toolUses = (msg.message.content as any[]).filter((b) => b.type === "tool_use");
   if (toolUses.length === 0) {
@@ -231,6 +251,7 @@ function emitSubagentProgress(msg: any, emit: (e: ChatEvent) => void, subagents:
     emit({
       type: "subagent_progress",
       id: parentId,
+      toolUseId: block.id,
       toolName: block.name,
       input: block.input,
       ...(i === 0 && model ? { model } : {}),
@@ -297,8 +318,8 @@ export function mapSdkMessage(
         // Task* 工具，从主线程视角都是"一步指令，结果没回来之前不能打断"。
         tools.onToolUse(block.id);
         if (SubagentTracker.isSubagentTool(block.name)) {
-          const { agentName, description } = subagents.handleToolUse(block.id, block.input);
-          emit({ type: "subagent_start", id: block.id, agentName, description });
+          const { agentName, description, prompt } = subagents.handleToolUse(block.id, block.input);
+          emit({ type: "subagent_start", id: block.id, agentName, description, ...(prompt ? { prompt } : {}) });
         } else if (TaskTracker.isTaskTool(block.name)) {
           if (tasks.handleToolUse(block.id, block.name, block.input)) {
             emit({ type: "tasks_update", tasks: tasks.snapshot() });
