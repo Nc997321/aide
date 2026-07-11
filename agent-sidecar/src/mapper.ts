@@ -3,6 +3,7 @@ import type { ChatEvent, ImageAttachment, RateLimitWindow, TurnUsage } from "./t
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
 import { ToolLifecycleTracker } from "./toolLifecycle.js";
+import { startOutputTail } from "./subagentOutputTail.js";
 
 /**
  * Build a Claude-SDK MessageParam from a prompt + optional image attachments.
@@ -195,16 +196,66 @@ export function parseAsyncLaunchAck(content: string): { agentId: string; outputF
 }
 
 /**
+ * 解析子代理的 assistant/user 消息块并转发为 subagent_progress / subagent_tool_result /
+ * subagent_text_delta。assistant 与 user 两条分支被 .output 回放和流式 emitSubagentProgress
+ * 共用——区别只在消息来源（流式带 parent_tool_use_id vs .output 自身 transcript），块结构相同。
+ * stream_event 逐字增量不在此（流式专属，.output 里没有）。
+ * claimModel：返回 true 表示「这次能坐实 model 并只报一次」——流式用 claimModelReport，
+ *   .output 回放用自己的 once 闭包（见 subagentOutputTail.ts）。
+ */
+export function emitSubagentBlocks(
+  msg: any,
+  id: string,
+  emit: (e: ChatEvent) => void,
+  claimModel: () => boolean,
+) {
+  // 子代理内部的工具产出：user 消息里的 tool_result block。按 tool_use_id（子代理
+  // 内部那次工具调用的 id）发 subagent_tool_result，前端据此把产出回填到对应步骤——
+  // 否则子代理步骤只看得到工具名+入参摘要、看不到每步输出。
+  if (msg.type === "user" && msg.message?.content) {
+    for (const block of msg.message.content) {
+      if (block.type !== "tool_result") continue;
+      const content = Array.isArray(block.content)
+        ? block.content.map((c: any) => c.text ?? "").join("")
+        : String(block.content ?? "");
+      emit({ type: "subagent_tool_result", id, toolUseId: block.tool_use_id, content, is_error: block.is_error ?? false });
+    }
+    return;
+  }
+  if (msg.type !== "assistant" || !msg.message?.content) return;
+  const toolUses = (msg.message.content as any[]).filter((b) => b.type === "tool_use");
+  const model = claimModel() ? (msg.message.model as string) : undefined;
+  if (toolUses.length === 0) {
+    // includePartialMessages 关闭后没有 stream_event 逐字增量，子代理的完整文本
+    // 须在此一次性补发（否则子代理回复文本丢失）。
+    for (const block of msg.message.content) {
+      if (block.type === "text" && block.text) emit({ type: "subagent_text_delta", id, delta: block.text });
+    }
+    return;
+  }
+  toolUses.forEach((block, i) => {
+    emit({
+      type: "subagent_progress",
+      id,
+      toolUseId: block.id,
+      toolName: block.name,
+      input: block.input,
+      ...(i === 0 && model ? { model } : {}),
+    });
+  });
+}
+
+/**
  * 子代理内部消息（`parent_tool_use_id` 非空）：转发文本/thinking 的逐字增量（对齐
  * 主线程 stream_event 的粒度），以及工具调用摘要——三者按到达顺序穿插，前端据此
  * 拼出"子代理具体在做什么"的完整时间线（v2，取代 v1 的"只报工具调用摘要"）。
  *
- * 明确不支持嵌套子代理（子代理内部再调用 Task/Agent 工具）：那种情况会落进下面的
- * `toolUses` 分支，当成一次普通工具调用报出去（`toolName: "Agent"`），不递归展开
- * 其内部活动——这个场景现在用不到，按 YAGNI 不做。
+ * 明确不支持嵌套子代理（子代理内部再调用 Task/Agent 工具）：那种情况会落进
+ * `emitSubagentBlocks` 的 `toolUses` 分支，当成一次普通工具调用报出去
+ * （`toolName: "Agent"`），不递归展开其内部活动——这个场景现在用不到，按 YAGNI 不做。
  *
- * 顺带在第一条可采信的 assistant 消息上把 `message.model` 带一次，让前端知道这个
- * 子代理具体跑在哪个模型上（`claimModelReport` 保证只报一次）。
+ * assistant/user 两条分支委托给 `emitSubagentBlocks`（.output 回放复用同一份解析）；
+ * 这里只保留 stream_event 逐字增量分支——.output 里没有这类事件。
  */
 function emitSubagentProgress(msg: any, emit: (e: ChatEvent) => void, subagents: SubagentTracker) {
   const parentId = msg.parent_tool_use_id as string;
@@ -223,52 +274,7 @@ function emitSubagentProgress(msg: any, emit: (e: ChatEvent) => void, subagents:
     return;
   }
 
-  // 子代理内部的工具产出：user 消息（带 parent_tool_use_id）里的 tool_result block。
-  // 按 tool_use_id（子代理内部那次工具调用的 id）发 subagent_tool_result，前端据此把产出
-  // 回填到对应步骤——否则子代理步骤只看得到工具名+入参摘要、看不到每步输出。
-  if (msg.type === "user" && msg.message?.content) {
-    for (const block of msg.message.content) {
-      if (block.type !== "tool_result") continue;
-      const content = Array.isArray(block.content)
-        ? block.content.map((c: any) => c.text ?? "").join("")
-        : String(block.content ?? "");
-      emit({
-        type: "subagent_tool_result",
-        id: parentId,
-        toolUseId: block.tool_use_id,
-        content,
-        is_error: block.is_error ?? false,
-      });
-    }
-    return;
-  }
-
-  if (msg.type !== "assistant" || !msg.message?.content) return;
-  const toolUses = (msg.message.content as any[]).filter((b) => b.type === "tool_use");
-  if (toolUses.length === 0) {
-    // includePartialMessages 关闭后没有 stream_event 逐字增量，子代理的完整文本
-    // 须在此一次性补发（否则子代理回复文本丢失）。
-    for (const block of msg.message.content) {
-      if (block.type === "text" && block.text) {
-        emit({ type: "subagent_text_delta", id: parentId, delta: block.text });
-      }
-    }
-    return;
-  }
-  const model =
-    isAdoptableAssistantModel(msg) && subagents.claimModelReport(parentId)
-      ? (msg.message.model as string)
-      : undefined;
-  toolUses.forEach((block, i) => {
-    emit({
-      type: "subagent_progress",
-      id: parentId,
-      toolUseId: block.id,
-      toolName: block.name,
-      input: block.input,
-      ...(i === 0 && model ? { model } : {}),
-    });
-  });
+  emitSubagentBlocks(msg, parentId, emit, () => isAdoptableAssistantModel(msg) && subagents.claimModelReport(parentId));
 }
 
 export function mapSdkMessage(
@@ -358,6 +364,10 @@ export function mapSdkMessage(
         if (ack && subagents.isActive(block.tool_use_id)) {
           subagents.registerAsync(block.tool_use_id, ack.agentId, ack.outputFile);
           emit({ type: "subagent_async_launched", id: block.tool_use_id, agentId: ack.agentId, outputFile: ack.outputFile });
+          startOutputTail(block.tool_use_id, ack.outputFile, emit, (_tailId) => {
+            // 无增长超时兜底由 Task 3 的 task-notification 主路径收尾；此处仅做安全网：
+            // tail 自身不判定 done，只负责进度回放。stopOutputTail 由 task-notification 分支调。
+          });
           continue;
         }
         // sync 子代理或其他工具的结果

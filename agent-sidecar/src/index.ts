@@ -8,6 +8,7 @@ import { SubagentTracker } from "./subagents.js";
 import { ToolLifecycleTracker } from "./toolLifecycle.js";
 import { JumpQueueController } from "./jumpQueue.js";
 import { DeltaCoalescer } from "./deltaCoalescer.js";
+import { stopAllOutputTails } from "./subagentOutputTail.js";
 import {
   mapSdkMessage,
   buildUserMessage,
@@ -447,5 +448,6 @@ rl.on("line", (line) => {
 
 rl.on("close", () => {
   queue.close();
+  stopAllOutputTails(); // 进程退出前停掉所有 .output 轮询定时器，避免泄漏
   process.exit(0);
 });
