@@ -683,6 +683,35 @@ describe("mapSdkMessage routing for subagent tools", () => {
     expect(events).toEqual([{ type: "subagent_end", id: "a1", result: "调研结论：用了 Vue3+Tauri。", is_error: false }]);
     expect(subagents.isActive("a1")).toBe(false);
   });
+
+  it("async launch-ack 的 output_file 路径含空格时仍能正确提取（Windows profile 名含空格的情形）", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
+    mapSdkMessage(
+      assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
+      (e) => events.push(e),
+      tasks,
+      subagents,
+      tools,
+    );
+    events.length = 0;
+    // async launch-ack with a space-containing path (Windows profile "John Doe")
+    const launchAckWithSpaces = {
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "a1", content: "Async agent launched successfully. agentId: ab99381a4a2eb9ccd (internal ID …) The agent is working in the background. output_file: C:\\Users\\John Doe\\AppData\\Local\\Temp\\claude\\proj\\sess\\tasks\\ab99381a4a2eb9ccd.output\nDo NOT Read this file via the shell tool …" }],
+      },
+    };
+    mapSdkMessage(launchAckWithSpaces, (e) => events.push(e), tasks, subagents, tools);
+    expect(events).toEqual([
+      { type: "subagent_async_launched", id: "a1", agentId: "ab99381a4a2eb9ccd", outputFile: "C:\\Users\\John Doe\\AppData\\Local\\Temp\\claude\\proj\\sess\\tasks\\ab99381a4a2eb9ccd.output" },
+    ]);
+    expect(subagents.isActive("a1")).toBe(true);
+    expect(subagents.getAsyncOutputFile("a1")).toBe("C:\\Users\\John Doe\\AppData\\Local\\Temp\\claude\\proj\\sess\\tasks\\ab99381a4a2eb9ccd.output");
+  });
 });
 
 describe("mapSdkMessage system/init → slash_commands_available", () => {

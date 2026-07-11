@@ -189,7 +189,7 @@ function isoToMs(iso: unknown): number | null {
  */
 export function parseAsyncLaunchAck(content: string): { agentId: string; outputFile: string } | null {
   const agentMatch = content.match(/agentId:\s*([a-z0-9]+)/);
-  const fileMatch = content.match(/output_file:\s*(\S+\.output)/);
+  const fileMatch = content.match(/output_file:\s*(.+?\.output)(?:\r?\n|$)/);
   if (!agentMatch || !fileMatch) return null;
   return { agentId: agentMatch[1], outputFile: fileMatch[1] };
 }
