@@ -7,6 +7,7 @@ vi.mock("../api", () => ({
     writeFileContent: vi.fn(async () => undefined),
     getProjectInfo: vi.fn(async () => ({ root: "C:/proj" })),
     codegraphBuildIndex: vi.fn(async () => undefined),
+    codegraphClose: vi.fn(async () => undefined),
     codegraphReindexFile: vi.fn(async () => undefined),
   },
 }));
@@ -105,5 +106,21 @@ describe("useFileViewer 多窗口 store", () => {
     await v.save(win.id);
     expect(api.writeFileContent).toHaveBeenCalledWith("proj/A.ts", "changed");
     expect(api.codegraphReindexFile).toHaveBeenCalledWith("C:/proj", "proj/A.ts");
+  });
+
+  it("切换 project root 触发重建并关闭上一个索引", async () => {
+    vi.mocked(api.getProjectInfo).mockImplementation(async () => ({ root: "proj/one", name: "one", branch: "main" }));
+    const v = useFileViewer();
+    await v.open("proj/one/A.ts");
+    await vi.waitFor(() =>
+      expect(api.codegraphBuildIndex).toHaveBeenCalledWith("proj/one"),
+    );
+
+    vi.mocked(api.getProjectInfo).mockImplementation(async () => ({ root: "proj/two", name: "two", branch: "main" }));
+    await v.open("proj/two/B.ts");
+    await vi.waitFor(() => {
+      expect(api.codegraphClose).toHaveBeenCalledWith("proj/one");
+      expect(api.codegraphBuildIndex).toHaveBeenCalledWith("proj/two");
+    });
   });
 });

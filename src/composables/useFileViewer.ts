@@ -69,22 +69,22 @@ export function isWindowDirty(win: FileWindowState): boolean {
   return !win.readonly && !win.error && !win.imageUrl && win.editContent !== win.content;
 }
 
-let indexBuildTriggered = false;
+let lastIndexedRoot = "";
 
 async function detectProjectRoot() {
   try {
     const info = await api.getProjectInfo();
-    console.log("[codegraph] detectProjectRoot: root=", info.root);
     projectRoot.value = info.root;
-    if (!indexBuildTriggered && info.root) {
-      indexBuildTriggered = true;
-      console.log("[codegraph] triggering index build for", info.root);
-      api.codegraphBuildIndex(info.root)
-        .then((r) => console.log("[codegraph] build done:", r))
-        .catch((e) => console.error("[codegraph] build failed:", e));
+    if (info.root && info.root !== lastIndexedRoot) {
+      const previous = lastIndexedRoot;
+      lastIndexedRoot = info.root;
+      if (previous) {
+        void api.codegraphClose(previous).catch(() => {});
+      }
+      void api.codegraphBuildIndex(info.root).catch(() => {});
     }
-  } catch (e) {
-    console.error("[codegraph] detectProjectRoot failed:", e);
+  } catch {
+    // best effort; goto falls back to grep
   }
 }
 
@@ -218,6 +218,7 @@ export function useFileViewer() {
     for (const w of [...windows.value]) closeWindow(w.id);
     projectRoot.value = "";
     gotoOwnerId.value = null;
+    lastIndexedRoot = "";
   }
 
   return {
