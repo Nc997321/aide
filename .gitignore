@@ -33,3 +33,7 @@ PLANS.md
 
 # Superpowers brainstorming mockups
 .superpowers/
+
+# CodeGraph index & embedding model cache
+.aide/
+src-tauri/.fastembed_cache/

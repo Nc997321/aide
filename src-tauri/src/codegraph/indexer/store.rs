@@ -2,8 +2,9 @@ use crate::codegraph::embed::Embedder;
 use crate::codegraph::shard::CodeShard;
 use crate::codegraph::types::IndexedPoint;
 
-/// Embed and store a batch of symbols into the shard.
-/// On embed timeout (5s per chunk), the symbol is skipped without blocking the batch.
+/// Embed a batch of symbols and upsert them into the shard.
+/// Returns the number of points stored. Caller batches in fixed-size chunks
+/// (e.g. 256) to cap peak memory during a full build.
 pub fn embed_and_store(
     points: &[IndexedPoint],
     embedder: &Embedder,
