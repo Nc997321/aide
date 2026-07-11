@@ -188,3 +188,43 @@ pub async fn codegraph_close(
     .await
     .map_err(|e| format!("join error: {}", e))?
 }
+
+/// Tauri command: incrementally re-index a single file after it is saved.
+///
+/// No-op if no index is built or the file's project does not match the active
+/// index. Runs in `spawn_blocking`; holds the write lock only for the brief
+/// reindex of one file (drop stale → re-parse → embed → re-persist).
+#[tauri::command]
+pub async fn codegraph_reindex_file(
+    project_root: String,
+    file: String,
+    state: tauri::State<'_, std::sync::Arc<CodeGraphState>>,
+) -> Result<(), String> {
+    let st = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let root = PathBuf::from(&project_root);
+        let abs = PathBuf::from(&file);
+
+        // Only reindex if it belongs to the active project.
+        let mut guard = st.inner.write().map_err(|e| e.to_string())?;
+        let pi = match guard.as_mut() {
+            Some(pi) if pi.project_root == root => pi,
+            _ => return Ok(()),
+        };
+        let emb = st.embedder.lock().map_err(|e| e.to_string())?;
+        // Clone the shard Arc out so reindex_one borrows &mut pi.symbols
+        // without aliasing the shard reference.
+        let shard = pi.shard.clone();
+        indexer::reindex_one(
+            &root,
+            &abs,
+            &mut pi.symbols,
+            &shard,
+            emb.as_ref(),
+            &st.parser_manager,
+        )
+        .map_err(|e| format!("reindex failed: {}", e))
+    })
+    .await
+    .map_err(|e| format!("join error: {}", e))?
+}

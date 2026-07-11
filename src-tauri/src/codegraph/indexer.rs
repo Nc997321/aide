@@ -192,6 +192,55 @@ pub fn load_project_index(
     Some((table, Arc::new(shard)))
 }
 
+/// Incremental: drop a file's symbols/points, re-parse it, update table + shard,
+/// then re-persist symbols.json + meta so disk stays in sync with the live table.
+/// `abs_file` is absolute; it is stripped against `project_root` for the shard
+/// key. A missing file is treated as deletion only (table + shard cleared).
+pub fn reindex_one(
+    project_root: &Path,
+    abs_file: &Path,
+    table: &mut SymbolTable,
+    shard: &CodeShard,
+    embedder: Option<&Embedder>,
+    parser_manager: &ParserManager,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let rel = abs_file
+        .strip_prefix(project_root)
+        .unwrap_or(abs_file)
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    // remove stale entries for this file
+    table.remove_file(&rel);
+    shard.delete_by_file(&rel)?;
+
+    let source = match std::fs::read_to_string(abs_file) {
+        Ok(s) => s,
+        Err(_) => return Ok(()), // file gone → deletion only
+    };
+    let (points, _edges) = extract::extract_symbols(abs_file, &source, parser_manager, project_root);
+    for p in &points {
+        table.insert(p.symbol.clone());
+    }
+    if let Some(embedder) = embedder {
+        for chunk in points.chunks(256) {
+            let _ = store::embed_and_store(chunk, embedder, shard);
+        }
+    }
+
+    // Re-persist symbols.json + meta (keep disk in sync with live table).
+    let base = project_root.join(".aide").join("index");
+    let _ = table.save_json(&base.join("symbols.json"));
+    let _ = crate::codegraph::meta::Meta {
+        version: crate::codegraph::meta::META_VERSION,
+        model_name: MODEL_NAME.to_string(),
+        indexed_at: crate::codegraph::meta::now_epoch(),
+        symbol_count: table.len(),
+    }
+    .save(&base.join("meta.json"));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::codegraph::parser::ParserManager;

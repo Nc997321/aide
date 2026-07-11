@@ -273,4 +273,7 @@ export const api = {
   codegraphClose(projectRoot: string): Promise<void> {
     return invoke("codegraph_close", { projectRoot });
   },
+  codegraphReindexFile(projectRoot: string, file: string): Promise<void> {
+    return invoke("codegraph_reindex_file", { projectRoot, file });
+  },
 };

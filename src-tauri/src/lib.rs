@@ -273,6 +273,7 @@ pub fn run() {
             codegraph::codegraph_build_index,
             codegraph::codegraph_goto_definition,
             codegraph::codegraph_close,
+            codegraph::codegraph_reindex_file,
             // 卡死诊断黑匣子
             diagnostics::diag_heartbeat,
             diagnostics::diag_freeze_supplement,

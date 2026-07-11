@@ -203,6 +203,10 @@ export function useFileViewer() {
     try {
       await api.writeFileContent(win.filePath, win.editContent);
       win.content = win.editContent;
+      // 增量更新 codegraph 索引（best-effort，绝不阻断保存主流程）
+      if (projectRoot.value) {
+        void api.codegraphReindexFile(projectRoot.value, win.filePath).catch(() => {});
+      }
     } catch (e) {
       win.error = String(e);
     }

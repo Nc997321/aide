@@ -6,6 +6,8 @@ vi.mock("../api", () => ({
     readFileBinary: vi.fn(async () => new ArrayBuffer(0)),
     writeFileContent: vi.fn(async () => undefined),
     getProjectInfo: vi.fn(async () => ({ root: "C:/proj" })),
+    codegraphBuildIndex: vi.fn(async () => undefined),
+    codegraphReindexFile: vi.fn(async () => undefined),
   },
 }));
 vi.mock("./useRecent", () => ({
@@ -91,5 +93,17 @@ describe("useFileViewer 多窗口 store", () => {
     const v = useFileViewer();
     await v.open("big.ts");
     expect(v.windows.value[0].readonly).toBe(true);
+  });
+
+  it("save 触发该文件的 codegraph 增量 reindex", async () => {
+    const v = useFileViewer();
+    await v.open("proj/A.ts");
+    // detectProjectRoot 是 fire-and-forget；等它把 projectRoot 置好
+    await vi.waitFor(() => expect(v.projectRoot.value).toBe("C:/proj"));
+    const win = v.windows.value.find((w) => w.filePath === "proj/A.ts")!;
+    win.editContent = "changed";
+    await v.save(win.id);
+    expect(api.writeFileContent).toHaveBeenCalledWith("proj/A.ts", "changed");
+    expect(api.codegraphReindexFile).toHaveBeenCalledWith("C:/proj", "proj/A.ts");
   });
 });
