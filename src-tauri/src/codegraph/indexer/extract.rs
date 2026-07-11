@@ -159,24 +159,28 @@ fn extract_from_node(
 
         "field_declaration" | "variable_declarator"
         | "public_field_definition" | "property_definition" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = match name_node.utf8_text(source.as_bytes()) {
-                    Ok(n) => n,
-                    Err(_) => return,
-                };
-                let start = node.start_position();
-                symbols.push(IndexedPoint {
-                    symbol: SymbolDef {
-                        name: name.to_string(),
-                        kind: if parent_class.is_some() { SymbolKind::Field } else { SymbolKind::Variable },
-                        file: file.to_string(),
-                        line: start.row + 1,
-                        column: start.column + 1,
-                        parent: parent_class.map(|s| s.to_string()),
-                    },
-                    source: Confidence::Structure,
-                    code_snippet: node_text_snippet(node, source),
-                });
+            // Only index class-level fields; skip function-local const/let to avoid
+            // flooding the table with locals (Mo3).
+            if parent_class.is_some() {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = match name_node.utf8_text(source.as_bytes()) {
+                        Ok(n) => n,
+                        Err(_) => return,
+                    };
+                    let start = node.start_position();
+                    symbols.push(IndexedPoint {
+                        symbol: SymbolDef {
+                            name: name.to_string(),
+                            kind: SymbolKind::Field,
+                            file: file.to_string(),
+                            line: start.row + 1,
+                            column: start.column + 1,
+                            parent: parent_class.map(|s| s.to_string()),
+                        },
+                        source: Confidence::Structure,
+                        code_snippet: node_text_snippet(node, source),
+                    });
+                }
             }
         }
 
@@ -185,10 +189,11 @@ fn extract_from_node(
             if let Some(name_node) = node.child_by_field_name("name")
                 .or_else(|| node.child_by_field_name("function"))
             {
-                let callee = match name_node.utf8_text(source.as_bytes()) {
+                let raw = match name_node.utf8_text(source.as_bytes()) {
                     Ok(s) => s,
                     Err(_) => return,
                 };
+                let callee = callee_leaf_name(raw);
                 let start = node.start_position();
                 call_edges.push(CallEdge {
                     caller: String::new(), // resolved by context (current function)
@@ -210,6 +215,12 @@ fn extract_from_node(
     }
 }
 
+/// For `foo.bar()` the callee text is `foo.bar`; the user clicks `bar`, so
+/// index the trailing identifier only (Mo5).
+fn callee_leaf_name(raw: &str) -> &str {
+    raw.rsplit(['.', ':']).next().unwrap_or(raw).trim()
+}
+
 /// Get a short text snippet from a node for embedding purposes.
 fn node_text_snippet(node: &Node, source: &str) -> String {
     let text = node.utf8_text(source.as_bytes()).unwrap_or("");
@@ -219,5 +230,35 @@ fn node_text_snippet(node: &Node, source: &str) -> String {
         format!("{}...", &text[..boundary])
     } else {
         text.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegraph::parser::ParserManager;
+    use std::path::Path;
+
+    fn names(src: &str, file: &str) -> Vec<String> {
+        let pm = ParserManager::new();
+        let (pts, _) = extract_symbols(Path::new(file), src, &pm, Path::new(""));
+        pts.into_iter().map(|p| p.symbol.name).collect()
+    }
+
+    #[test]
+    fn skips_function_local_variables() {
+        // `total` is a local inside a function → must NOT be indexed.
+        let src = "function calc() { const total = 1 + 2; return total; }";
+        let got = names(src, "x.ts");
+        assert!(got.contains(&"calc".to_string()), "function itself indexed");
+        assert!(!got.contains(&"total".to_string()), "local var must be skipped");
+    }
+
+    #[test]
+    fn indexes_class_fields() {
+        let src = "class Repo { private db = 1; save() {} }";
+        let got = names(src, "Repo.ts");
+        assert!(got.contains(&"Repo".to_string()));
+        assert!(got.contains(&"save".to_string()));
     }
 }
