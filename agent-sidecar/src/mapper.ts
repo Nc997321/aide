@@ -183,6 +183,18 @@ function isoToMs(iso: unknown): number | null {
 }
 
 /**
+ * 识别 async 子代理的 launch-ack 文本，提取 agentId 与 .output 路径。
+ * launch-ack 形如：「Async agent launched successfully. agentId: <hex> … output_file: <path>.output\nDo NOT Read …」。
+ * sync 子代理的 tool_result content 不含 `agentId:`/`output_file:` 签名 → 返回 null。
+ */
+export function parseAsyncLaunchAck(content: string): { agentId: string; outputFile: string } | null {
+  const agentMatch = content.match(/agentId:\s*([a-z0-9]+)/);
+  const fileMatch = content.match(/output_file:\s*(\S+\.output)/);
+  if (!agentMatch || !fileMatch) return null;
+  return { agentId: agentMatch[1], outputFile: fileMatch[1] };
+}
+
+/**
  * 子代理内部消息（`parent_tool_use_id` 非空）：转发文本/thinking 的逐字增量（对齐
  * 主线程 stream_event 的粒度），以及工具调用摘要——三者按到达顺序穿插，前端据此
  * 拼出"子代理具体在做什么"的完整时间线（v2，取代 v1 的"只报工具调用摘要"）。
@@ -339,6 +351,16 @@ export function mapSdkMessage(
         const content = Array.isArray(block.content)
           ? block.content.map((c: any) => c.text ?? "").join("")
           : String(block.content ?? "");
+        // 优先检查 async launch-ack 签名（agentId: + output_file:）。命中则是子代理刚起步
+        // 的回执，不是结果——不调 handleToolResult（保持 active），发 subagent_async_launched
+        // 让后续 tail 回放 .output 文件。
+        const ack = parseAsyncLaunchAck(content);
+        if (ack && subagents.isActive(block.tool_use_id)) {
+          subagents.registerAsync(block.tool_use_id, ack.agentId, ack.outputFile);
+          emit({ type: "subagent_async_launched", id: block.tool_use_id, agentId: ack.agentId, outputFile: ack.outputFile });
+          continue;
+        }
+        // sync 子代理或其他工具的结果
         if (subagents.handleToolResult(block.tool_use_id)) {
           emit({ type: "subagent_end", id: block.tool_use_id, result: content, is_error: block.is_error ?? false });
           continue;

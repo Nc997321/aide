@@ -57,6 +57,10 @@ export type ChatEvent =
   // 子代理内部某次工具调用的产出（子代理 user 消息里的 tool_result，带 parent_tool_use_id）。
   // 按 toolUseId 回填到对应步骤，让前端能看到子代理每步工具的输出，而不只是工具名+入参摘要。
   | { type: "subagent_tool_result"; id: string; toolUseId: string; content: string; is_error: boolean }
+  // async（后台）子代理的 launch-ack：Agent 工具 tool_result 立即返回「Async agent
+  // launched … agentId: … output_file: …」。此时子代理才刚起步，不能当结束——发这个
+  // 事件告诉前端「在后台跑」，并带上 .output 路径，sidecar 的 tail 据此回放内部活动。
+  | { type: "subagent_async_launched"; id: string; agentId: string; outputFile: string }
   | { type: "subagent_end"; id: string; result: string; is_error: boolean }
   // alwaysAllowLabel：sidecar 已经把 SDK 的 suggestions 解读成一句人话（比如 Edit
   // 工具常见的"自动接受编辑（本次会话）"，而不是笼统的"总是允许"——两者后果差异很大：

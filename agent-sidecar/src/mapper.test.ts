@@ -632,6 +632,57 @@ describe("mapSdkMessage routing for subagent tools", () => {
     mapSdkMessage(msg, (e) => events.push(e), tasks, subagents, tools);
     expect(events).toEqual([]);
   });
+
+  it("async launch-ack tool_result 发 subagent_async_launched 而非 subagent_end，并注册 agentId+outputFile", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
+    mapSdkMessage(
+      assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
+      (e) => events.push(e),
+      tasks,
+      subagents,
+      tools,
+    );
+    events.length = 0;
+    // async launch-ack：Agent 工具的 tool_result 立即返回这条文本
+    const launchAck = {
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "a1", content: "Async agent launched successfully. agentId: ab99381a4a2eb9ccd (internal ID …) The agent is working in the background. output_file: C:\\Users\\x\\AppData\\Local\\Temp\\claude\\proj\\sess\\tasks\\ab99381a4a2eb9ccd.output\nDo NOT Read this file via the shell tool …" }],
+      },
+    };
+    mapSdkMessage(launchAck, (e) => events.push(e), tasks, subagents, tools);
+    expect(events).toEqual([
+      { type: "subagent_async_launched", id: "a1", agentId: "ab99381a4a2eb9ccd", outputFile: "C:\\Users\\x\\AppData\\Local\\Temp\\claude\\proj\\sess\\tasks\\ab99381a4a2eb9ccd.output" },
+    ]);
+    expect(subagents.isActive("a1")).toBe(true); // 没被 launch-ack 关掉
+    expect(subagents.getAsyncOutputFile("a1")).toBe("C:\\Users\\x\\AppData\\Local\\Temp\\claude\\proj\\sess\\tasks\\ab99381a4a2eb9ccd.output");
+  });
+
+  it("sync 子代理 tool_result（无 launch-ack 签名）仍走 subagent_end，不被误判 async", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
+    mapSdkMessage(
+      assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
+      (e) => events.push(e),
+      tasks,
+      subagents,
+      tools,
+    );
+    events.length = 0;
+    const syncResult = {
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "a1", content: "调研结论：用了 Vue3+Tauri。" }] },
+    };
+    mapSdkMessage(syncResult, (e) => events.push(e), tasks, subagents, tools);
+    expect(events).toEqual([{ type: "subagent_end", id: "a1", result: "调研结论：用了 Vue3+Tauri。", is_error: false }]);
+    expect(subagents.isActive("a1")).toBe(false);
+  });
 });
 
 describe("mapSdkMessage system/init → slash_commands_available", () => {

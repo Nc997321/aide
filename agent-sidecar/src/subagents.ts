@@ -9,6 +9,9 @@ export class SubagentTracker {
   /** id（这次 Agent/Task tool_use 的 id）→ agentName——权限弹窗要标注"这是哪个子代理
    *  在问"时，靠 canUseTool 回调收到的 agentID 反查这里，拿到人看得懂的名字。 */
   private names = new Map<string, string>();
+  /** async 子代理的 .output 回放元数据：id → { agentId, outputFile }。
+   *  launch-ack 时注册，task-notification 完成时清理。 */
+  private asyncMeta = new Map<string, { agentId: string; outputFile: string }>();
 
   static isSubagentTool(name: string): boolean {
     return SUBAGENT_TOOL_NAMES.has(name);
@@ -55,5 +58,20 @@ export class SubagentTracker {
     if (!this.active.has(id) || this.modelReported.has(id)) return false;
     this.modelReported.add(id);
     return true;
+  }
+
+  /** async launch-ack 时调用：记下 .output 路径，id 保持 active（不关）。 */
+  registerAsync(id: string, agentId: string, outputFile: string): void {
+    this.asyncMeta.set(id, { agentId, outputFile });
+  }
+
+  getAsyncOutputFile(id: string): string | undefined {
+    return this.asyncMeta.get(id)?.outputFile;
+  }
+
+  /** task-notification 完成时调用：清 async 元数据 + 关 active（复用 handleToolResult）。 */
+  handleAsyncResult(id: string): boolean {
+    this.asyncMeta.delete(id);
+    return this.handleToolResult(id);
   }
 }
