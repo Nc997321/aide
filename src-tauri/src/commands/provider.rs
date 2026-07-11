@@ -58,6 +58,15 @@ pub struct ProviderConfig {
     pub model_mappings: ProviderModelMappings,
     #[serde(default)]
     pub effort_level: String,
+    /// → CLAUDE_CODE_AUTO_COMPACT_WINDOW：auto-compact 计算用的上下文容量（token 数），
+    /// 默认取模型上下文窗口（200K/1M，Sonnet 5 自带阈值）。填低值（如 500000）可提前
+    /// 触发压缩，上限为模型实际窗口。空 = 不注入 = CLI 自带默认。
+    #[serde(default)]
+    pub auto_compact_window: String,
+    /// → CLAUDE_AUTOCOMPACT_PCT_OVERRIDE：1–100，作用在 auto_compact_window 之上微调
+    /// 触发时机。空 = 不注入 = CLI 自带默认百分比。
+    #[serde(default)]
+    pub autocompact_pct_override: String,
     #[serde(default)]
     pub known_models: Vec<String>,
 }
@@ -88,6 +97,8 @@ pub fn provider_to_env_vars(p: &ProviderConfig) -> HashMap<String, String> {
         ("ANTHROPIC_API_KEY", &p.api_key),
         ("ANTHROPIC_AUTH_TOKEN", &p.auth_token),
         ("CLAUDE_CODE_EFFORT_LEVEL", &p.effort_level),
+        ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", &p.auto_compact_window),
+        ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", &p.autocompact_pct_override),
     ];
     for (key, val) in pairs {
         if !val.is_empty() {
@@ -265,6 +276,8 @@ mod tests {
                 ..Default::default()
             },
             effort_level: String::new(),
+            auto_compact_window: String::new(),
+            autocompact_pct_override: String::new(),
             known_models: Vec::new(),
         }
     }
@@ -313,5 +326,34 @@ mod tests {
     fn mappings_to_env_empty_yields_nothing() {
         let env = mappings_to_env(&ProviderModelMappings::default());
         assert!(env.is_empty());
+    }
+
+    /// auto_compact_window / autocompact_pct_override 非空时注入对应 env，空时不注入
+    /// （空 = CLI 自带默认，与 effort_level 同一注入契约）。
+    #[test]
+    fn provider_to_env_vars_injects_auto_compact_when_nonempty() {
+        let p = ProviderConfig {
+            auto_compact_window: "500000".to_string(),
+            autocompact_pct_override: "80".to_string(),
+            ..provider_with(String::new(), String::new())
+        };
+        let env = provider_to_env_vars(&p);
+        assert_eq!(
+            env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW"),
+            Some(&"500000".to_string())
+        );
+        assert_eq!(
+            env.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"),
+            Some(&"80".to_string())
+        );
+    }
+
+    /// 两个字段为空时不注入，避免污染 spawn env（旧配置无此字段时的安全默认）。
+    #[test]
+    fn provider_to_env_vars_omits_auto_compact_when_empty() {
+        let p = provider_with(String::new(), String::new());
+        let env = provider_to_env_vars(&p);
+        assert!(env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW").is_none());
+        assert!(env.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE").is_none());
     }
 }

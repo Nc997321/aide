@@ -118,6 +118,10 @@ export interface ProviderConfig {
   model: string;
   modelMappings: ProviderModelMappings;
   effortLevel: string;
+  /** → CLAUDE_CODE_AUTO_COMPACT_WINDOW：auto-compact 计算用上下文容量（token 数）。空 = CLI 默认 */
+  autoCompactWindow: string;
+  /** → CLAUDE_AUTOCOMPACT_PCT_OVERRIDE：1–100，作用在 window 之上微调触发时机。空 = CLI 默认 */
+  autocompactPctOverride: string;
   knownModels: string[];
 }
 

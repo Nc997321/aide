@@ -31,6 +31,8 @@ const systemDefault: ProviderConfig = {
   model: "",
   modelMappings: emptyMappings(),
   effortLevel: "",
+  autoCompactWindow: "",
+  autocompactPctOverride: "",
   knownModels: [],
 };
 
@@ -85,6 +87,8 @@ async function addProvider(partial: Partial<ProviderConfig> = {}): Promise<Provi
     model: partial.model ?? "",
     modelMappings: partial.modelMappings ?? emptyMappings(),
     effortLevel: partial.effortLevel ?? "",
+    autoCompactWindow: partial.autoCompactWindow ?? "",
+    autocompactPctOverride: partial.autocompactPctOverride ?? "",
     knownModels: partial.knownModels ?? [],
   };
   allProviders.value = [...allProviders.value, p];

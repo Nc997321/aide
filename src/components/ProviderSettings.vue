@@ -42,6 +42,8 @@ const form = ref({
   defaultHaikuModel: "",
   subagent: "",
   effortLevel: "",
+  autoCompactWindow: "",
+  autocompactPctOverride: "",
   knownModels: [] as string[],
 });
 
@@ -64,6 +66,8 @@ function loadForm(p: ProviderConfig) {
     defaultHaikuModel: p.modelMappings.defaultHaikuModel,
     subagent: p.modelMappings.subagent,
     effortLevel: p.effortLevel,
+    autoCompactWindow: p.autoCompactWindow,
+    autocompactPctOverride: p.autocompactPctOverride,
     knownModels: [...p.knownModels],
   };
   showApiKey.value = false;
@@ -84,6 +88,8 @@ function selectProvider(id: string) {
       defaultHaikuModel: m.defaultHaikuModel,
       subagent: m.subagent,
       effortLevel: "",
+      autoCompactWindow: "",
+      autocompactPctOverride: "",
       knownModels: [],
     };
     return;
@@ -124,6 +130,8 @@ async function handleSave() {
     model: form.value.anthropicModel,
     modelMappings: mappings,
     effortLevel: form.value.effortLevel,
+    autoCompactWindow: form.value.autoCompactWindow,
+    autocompactPctOverride: form.value.autocompactPctOverride,
     knownModels: form.value.knownModels,
   });
 }
@@ -319,6 +327,38 @@ function knownModelsForDatalist(): string[] {
         <div v-if="!isSystemDefault" class="form-field">
           <label>Effort Level</label>
           <ThemedSelect v-model="form.effortLevel" :options="effortOptions" block />
+        </div>
+
+        <!-- 自动压缩：CLAUDE_CODE_AUTO_COMPACT_WINDOW + CLAUDE_AUTOCOMPACT_PCT_OVERRIDE。
+             空字段不注入 env，CLI 走自带默认。仅自定义 provider 显示（与 Effort Level 一致）。 -->
+        <div v-if="!isSystemDefault" class="form-section">
+          <label>自动压缩</label>
+          <span class="form-hint">Claude Code CLI auto-compact 阈值调优，留空走 CLI 默认</span>
+
+          <div class="form-field model-var-field">
+            <label>压缩窗口 (tokens)</label>
+            <input
+              v-model="form.autoCompactWindow"
+              class="text-input"
+              type="number"
+              min="1"
+              placeholder="留空用模型上下文窗口（200K/1M）"
+            />
+            <span class="form-hint">填 token 数（如 500000）提前触发压缩，上限为模型实际窗口</span>
+          </div>
+
+          <div class="form-field model-var-field">
+            <label>触发百分比 (%)</label>
+            <input
+              v-model="form.autocompactPctOverride"
+              class="text-input"
+              type="number"
+              min="1"
+              max="100"
+              placeholder="留空用 CLI 默认百分比"
+            />
+            <span class="form-hint">1–100，作用在窗口之上微调触发时机</span>
+          </div>
         </div>
 
         <!-- 模型列表：会话面板模型下拉的数据源（真实模型 id，不做别名映射） -->

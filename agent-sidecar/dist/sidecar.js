@@ -46254,6 +46254,8 @@ async function startLoop(cwd) {
           "CLAUDE_CONFIG_DIR",
           "CLAUDE_CODE_SUBAGENT_MODEL",
           "CLAUDE_CODE_EFFORT_LEVEL",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
           "HTTP_PROXY",
           "HTTPS_PROXY",
           "http_proxy",
