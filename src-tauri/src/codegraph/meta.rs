@@ -51,7 +51,13 @@ pub fn is_stale(project_root: &Path, indexed_at: u64, exts: &[&str]) -> bool {
         if let Ok(meta) = path.metadata() {
             if let Ok(modified) = meta.modified() {
                 if let Ok(d) = modified.duration_since(UNIX_EPOCH) {
-                    if d.as_secs() > indexed_at {
+                    // `>=` (not `>`): file mtime has sub-second precision but
+                    // `indexed_at` is truncated to whole seconds. A file changed
+                    // in the same wall-clock second as the build but after it
+                    // must still count as stale. Conservative: may trigger one
+                    // extra rebuild when a file predates the build in the same
+                    // second — safe and cheap.
+                    if d.as_secs() >= indexed_at {
                         return true;
                     }
                 }

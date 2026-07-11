@@ -94,14 +94,22 @@ pub fn build_project_index(
     }
 
     // Persist SymbolTable + meta (same transaction point as shard).
-    let _ = table.save_json(&base.join("symbols.json"));
-    let _ = Meta {
+    // Permission errors are expected (`.aide/` may be read-only) and silent,
+    // but other failures (disk full, FS error) are logged so they're observable
+    // — otherwise a silently failing persist would force a full rebuild on
+    // every open with no diagnostic trail.
+    if let Err(e) = table.save_json(&base.join("symbols.json")) {
+        tracing::warn!("codegraph: symbols.json persist failed: {}", e);
+    }
+    let meta = Meta {
         version: META_VERSION,
         model_name: MODEL_NAME.to_string(),
         indexed_at: now_epoch(),
         symbol_count: table.len(),
+    };
+    if let Err(e) = meta.save(&base.join("meta.json")) {
+        tracing::warn!("codegraph: meta.json persist failed: {}", e);
     }
-    .save(&base.join("meta.json"));
 
     Ok((table, Arc::new(shard), stats))
 }
@@ -162,15 +170,20 @@ pub fn reindex_one(
     }
 
     // Re-persist symbols.json + meta (keep disk in sync with live table).
+    // Permission errors silent (read-only `.aide/`); other FS errors logged.
     let base = project_root.join(".aide").join("index");
-    let _ = table.save_json(&base.join("symbols.json"));
-    let _ = crate::codegraph::meta::Meta {
+    if let Err(e) = table.save_json(&base.join("symbols.json")) {
+        tracing::warn!("codegraph: symbols.json re-persist failed: {}", e);
+    }
+    let meta = crate::codegraph::meta::Meta {
         version: crate::codegraph::meta::META_VERSION,
         model_name: MODEL_NAME.to_string(),
         indexed_at: crate::codegraph::meta::now_epoch(),
         symbol_count: table.len(),
+    };
+    if let Err(e) = meta.save(&base.join("meta.json")) {
+        tracing::warn!("codegraph: meta.json re-persist failed: {}", e);
     }
-    .save(&base.join("meta.json"));
     Ok(())
 }
 

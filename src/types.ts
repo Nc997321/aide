@@ -228,9 +228,11 @@ export interface QueryResult {
 }
 
 export interface BuildIndexResult {
-  scanned_files: number;
-  files_with_symbols: number;
+  /** true = reused a fresh on-disk index; false = full rebuild. */
+  loaded: boolean;
   total_symbols: number;
-  elapsed_ms: number;
-  has_embeddings: boolean;
+  /** Present only on a full rebuild (loaded === false). */
+  scanned_files?: number;
+  files_with_symbols?: number;
+  has_embeddings?: boolean;
 }

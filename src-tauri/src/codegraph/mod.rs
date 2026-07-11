@@ -192,8 +192,14 @@ pub async fn codegraph_close(
 /// Tauri command: incrementally re-index a single file after it is saved.
 ///
 /// No-op if no index is built or the file's project does not match the active
-/// index. Runs in `spawn_blocking`; holds the write lock only for the brief
-/// reindex of one file (drop stale → re-parse → embed → re-persist).
+/// index. Runs in `spawn_blocking`. The write lock is held for the whole
+/// single-file reindex (drop stale → re-parse → embed → re-persist): this
+/// serializes Qdrant shard access (concurrent `search` + `upsert` on the same
+/// `Arc<CodeShard>` is not guaranteed safe), at the cost of briefly blocking
+/// goto queries during the embed. For a typical file (tens of symbols) the
+/// embed is well under 100ms; a pathologically large file could block for
+/// longer. Acceptable for a save-triggered (non-hot) path — revisit if manual
+/// E2E shows goto lag on save of large files.
 #[tauri::command]
 pub async fn codegraph_reindex_file(
     project_root: String,
