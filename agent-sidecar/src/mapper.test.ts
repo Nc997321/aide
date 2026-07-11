@@ -532,6 +532,51 @@ describe("mapSdkMessage routing for subagent tools", () => {
     ]);
   });
 
+  // 回归：emitSubagentBlocks 以前对纯文本消息也无条件调用 claimModel()——即使这条
+  // 消息走的是 toolUses.length === 0 的早退分支、model 根本用不上。子代理先说一句
+  // 文本（很常见，如"我先看看…"）再调工具时，这次文本消息会把一次性的"报一次
+  // model"名额悄悄吞掉，导致后面真正携带 tool_use 的消息永远拿不到 model 字段。
+  it("子代理先发纯文本消息（带 model）不消耗一次性名额，随后的 tool_use 消息仍能拿到 model", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
+    mapSdkMessage(
+      assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研 XXX" }),
+      (e) => events.push(e),
+      tasks,
+      subagents,
+      tools,
+    );
+    events.length = 0;
+    const textStep = {
+      type: "assistant",
+      parent_tool_use_id: "a1",
+      message: { model: "claude-sonnet-5-20260101", content: [{ type: "text", text: "我先看看仓库结构" }] },
+    };
+    const toolStep = {
+      type: "assistant",
+      parent_tool_use_id: "a1",
+      message: {
+        model: "claude-sonnet-5-20260101",
+        content: [{ type: "tool_use", id: "inner1", name: "Read", input: { file_path: "x.ts" } }],
+      },
+    };
+    mapSdkMessage(textStep, (e) => events.push(e), tasks, subagents, tools);
+    mapSdkMessage(toolStep, (e) => events.push(e), tasks, subagents, tools);
+    expect(events).toEqual([
+      { type: "subagent_text_delta", id: "a1", delta: "我先看看仓库结构" },
+      {
+        type: "subagent_progress",
+        id: "a1",
+        toolUseId: "inner1",
+        toolName: "Read",
+        input: { file_path: "x.ts" },
+        model: "claude-sonnet-5-20260101",
+      },
+    ]);
+  });
+
   it("does not attach a placeholder/error-echo model to subagent progress", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();

@@ -224,15 +224,18 @@ export function emitSubagentBlocks(
   }
   if (msg.type !== "assistant" || !msg.message?.content) return;
   const toolUses = (msg.message.content as any[]).filter((b) => b.type === "tool_use");
-  const model = claimModel() ? (msg.message.model as string) : undefined;
   if (toolUses.length === 0) {
     // includePartialMessages 关闭后没有 stream_event 逐字增量，子代理的完整文本
-    // 须在此一次性补发（否则子代理回复文本丢失）。
+    // 须在此一次性补发（否则子代理回复文本丢失）。注意：绝不能在这条分支里调用
+    // claimModel()——纯文本消息用不上 model，若在此调用会把"报一次 model"的一次性
+    // 名额白白吞掉，导致子代理先说文本再调工具时，真正携带 tool_use 的消息永远
+    // 拿不到 model（回归见 mapper.test.ts）。
     for (const block of msg.message.content) {
       if (block.type === "text" && block.text) emit({ type: "subagent_text_delta", id, delta: block.text });
     }
     return;
   }
+  const model = claimModel() ? (msg.message.model as string) : undefined;
   toolUses.forEach((block, i) => {
     emit({
       type: "subagent_progress",
