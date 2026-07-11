@@ -1,11 +1,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use qdrant_edge::*;
 use serde_json::{json, Value};
-
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 use crate::codegraph::types::{Confidence, IndexedPoint, QueryResult, SymbolDef};
 
@@ -67,6 +64,14 @@ impl CodeShard {
             }),
         ))?;
 
+        // Create keyword index on symbol name for exact cross-file structure lookup
+        inner.update(UpdateOperation::FieldIndexOperation(
+            FieldIndexOperations::CreateIndex(CreateIndex {
+                field_name: "name".try_into().unwrap(),
+                field_schema: Some(PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword)),
+            }),
+        ))?;
+
         Ok(Self {
             inner,
             dir: dir.to_path_buf(),
@@ -77,7 +82,18 @@ impl CodeShard {
     pub fn load(dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let config = EdgeConfig {
             on_disk_payload: true,
-            vectors: HashMap::new(),
+            vectors: HashMap::from([(
+                VECTOR_NAME.to_string(),
+                EdgeVectorParams {
+                    size: VECTOR_DIM,
+                    distance: Distance::Cosine,
+                    on_disk: Some(true),
+                    multivector_config: None,
+                    datatype: None,
+                    quantization_config: None,
+                    hnsw_config: None,
+                },
+            )]),
             sparse_vectors: HashMap::new(),
             hnsw_config: Default::default(),
             quantization_config: None,
@@ -90,40 +106,6 @@ impl CodeShard {
         })
     }
 
-    /// Bulk-upsert indexed points. Each point gets an auto-incremented numeric ID.
-    pub fn upsert_symbols(&self, points: &[IndexedPoint]) -> Result<(), Box<dyn std::error::Error>> {
-        let qpoints: Vec<PointStructPersisted> = points
-            .iter()
-            .map(|p| {
-                let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-                // We embed empty vectors here — the actual vector is set by the caller
-                // after embedding. For structure-layer points with no vector, use zeros.
-                let vec = vec![0.0f32; VECTOR_DIM];
-                let payload_map = json!({
-                    "name": p.symbol.name,
-                    "kind": format!("{:?}", p.symbol.kind),
-                    "file": p.symbol.file,
-                    "line": p.symbol.line,
-                    "column": p.symbol.column,
-                    "parent": p.symbol.parent,
-                    "source": match p.source { Confidence::Structure => "structure", Confidence::Semantic => "semantic" },
-                    "code_snippet": p.code_snippet,
-                });
-
-                PointStructPersisted {
-                    id: id.into(),
-                    vector: build_named_vector(VECTOR_NAME, vec),
-                    payload: payload_from_value(payload_map),
-                }
-            })
-            .collect();
-
-        self.inner.update(UpdateOperation::PointOperation(
-            PointOperations::UpsertPoints(PointInsertOperations::PointsList(qpoints)),
-        ))?;
-        Ok(())
-    }
-
     /// Upsert points that already have their vectors computed.
     pub fn upsert_with_vectors(
         &self,
@@ -132,7 +114,7 @@ impl CodeShard {
         let qpoints: Vec<PointStructPersisted> = points
             .iter()
             .map(|(p, vec)| {
-                let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+                let id = stable_point_id(&p.symbol.file, p.symbol.line, p.symbol.column, &p.symbol.name);
                 let payload_map = json!({
                     "name": p.symbol.name,
                     "kind": format!("{:?}", p.symbol.kind),
@@ -281,5 +263,33 @@ fn parse_kind(s: &str) -> crate::codegraph::types::SymbolKind {
         "Interface" => SymbolKind::Interface,
         "Enum" => SymbolKind::Enum,
         _ => SymbolKind::Variable,
+    }
+}
+
+/// Deterministic 64-bit point ID from a symbol's identity. Makes upsert
+/// idempotent so incremental re-index and reload never collide.
+fn stable_point_id(file: &str, line: usize, column: usize, name: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    file.hash(&mut h);
+    line.hash(&mut h);
+    column.hash(&mut h);
+    name.hash(&mut h);
+    h.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stable_point_id;
+
+    #[test]
+    fn point_id_is_deterministic_and_distinct() {
+        let a1 = stable_point_id("a.java", 10, 5, "save");
+        let a2 = stable_point_id("a.java", 10, 5, "save");
+        let b = stable_point_id("a.java", 11, 5, "save");
+        let c = stable_point_id("b.java", 10, 5, "save");
+        assert_eq!(a1, a2, "same symbol must hash identically (idempotent upsert)");
+        assert_ne!(a1, b, "different line must differ");
+        assert_ne!(a1, c, "different file must differ");
     }
 }
