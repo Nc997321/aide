@@ -1,5 +1,6 @@
 import { ref, readonly } from "vue";
 import { api } from "../api";
+import { useNotifications } from "./useNotifications";
 import type { BuildProgress, BuildIndexResult } from "../types";
 
 /**
@@ -21,6 +22,8 @@ import type { BuildProgress, BuildIndexResult } from "../types";
  *
  * 渲染层（FileTree.vue）只读 `building` + `progress`，不关心 poll 生命周期。
  */
+
+const { push, dismiss, notifications, registerActionHandler } = useNotifications();
 
 const progress = ref<BuildProgress>({ active: false, done: 0, total: 0, current: "", index_ready: false });
 const building = ref(false);
@@ -61,9 +64,9 @@ function startPoll() {
 
 /**
  * 跟踪一次 build：启 poll 拉中间进度，Promise 落定（成功/失败）时停 poll。
- * 调用方把 `api.codegraphBuildIndex(...)` 的 Promise 传进来即可。
+ * 失败/可恢复分支额外 push 通知到通知中心；完全成功时自愈 dismiss 同源旧通知。
  */
-function trackBuild(p: Promise<BuildIndexResult>) {
+function trackBuild(p: Promise<BuildIndexResult>, root: string) {
   startPoll();
   p.then(
     (r) => {
@@ -74,18 +77,39 @@ function trackBuild(p: Promise<BuildIndexResult>) {
       if (r) {
         if (r.loaded) {
           console.info("[codegraph] reused existing index:", r);
+          // 快速路径复用既有索引也算完全成功：自愈同 root 旧通知。
+          selfHeal(root);
         } else if (r.has_embeddings === false) {
           console.warn(
             `[codegraph] build done but embeddings NOT completed — semantic search disabled, structure layer ok. embed_status: ${r.embed_status ?? "(unknown)"}`,
             r,
           );
+          push({
+            severity: "warning",
+            source: "codegraph",
+            title: "语义搜索不可用",
+            body: `embedder 未就绪：\`${r.embed_status ?? "unknown"}\`。结构层正常。`,
+            timestamp: Date.now(),
+            dedupKey: `codegraph:embed:${root}`,
+            action: { label: "重建索引" },
+          });
         } else if (r.total_symbols === 0) {
           console.warn(
             `[codegraph] build done but 0 symbols collected (scanned_files=${r.scanned_files}, files_with_symbols=${r.files_with_symbols}). Either the walk found no supported source files, or extract found no symbols. Check the project root and supported extensions.`,
             r,
           );
+          push({
+            severity: "warning",
+            source: "codegraph",
+            title: "未索引到任何符号",
+            body: `扫描 \`${r.scanned_files ?? 0}\` 个文件。检查项目根目录与支持的扩展名。`,
+            timestamp: Date.now(),
+            dedupKey: `codegraph:empty:${root}`,
+          });
         } else {
           console.info("[codegraph] build done with embeddings:", r);
+          // 完全成功：自愈——dismiss 同 root 的旧 codegraph 通知
+          selfHeal(root);
         }
       }
       stopPoll();
@@ -94,9 +118,26 @@ function trackBuild(p: Promise<BuildIndexResult>) {
       // fire-and-forget 语义，但落盘到 console 便于排查（如 spawn_blocking panic
       // 转成 join error 的场景，否则静默吞掉、进度条只闪一下就消失）。
       console.warn("[codegraph] build failed:", e);
+      push({
+        severity: "error",
+        source: "codegraph",
+        title: "向量索引构建失败",
+        body: `${String(e ?? "未知错误")} 结构层精确跳转仍可用，语义搜索不可用。`,
+        timestamp: Date.now(),
+        dedupKey: `codegraph:build:${root}`,
+      });
       stopPoll();
     },
   );
+}
+
+/** 完全成功后自愈：dismiss 同 root 的所有 codegraph:*:<root> 未读项。 */
+function selfHeal(root: string) {
+  for (const n of notifications.value) {
+    if (n.source === "codegraph" && n.dedupKey?.endsWith(`:${root}`)) {
+      dismiss(n.id);
+    }
+  }
 }
 
 /**
@@ -116,9 +157,7 @@ function ensureIndex(root: string) {
   // 完成（flush+drop，旧 embed 已停）再启 build，build 开头会把 build_cancel 复位
   // 为 false，竞争消除。
   const build = () =>
-    trackBuild(
-      api.codegraphBuildIndex(root).catch(() => ({ loaded: false, total_symbols: 0 })),
-    );
+    trackBuild(api.codegraphBuildIndex(root), root);
   if (previous) {
     void api
       .codegraphClose(previous)
@@ -165,10 +204,17 @@ async function rescan(root: string) {
  */
 function rebuild(root: string) {
   if (!root) return;
-  trackBuild(
-    api.codegraphBuildIndex(root, true).catch(() => ({ loaded: false, total_symbols: 0 })),
-  );
+  trackBuild(api.codegraphBuildIndex(root, true), root);
 }
+
+// 注册「重建索引」action：dedupKey 形如 codegraph:<kind>:<root>，末段为 root。
+// Windows 路径含 C:\... → split(":") 得 ["codegraph","<kind>","C","\..."]，
+// slice(2).join(":") 还原为 "C:\..."。模块顶层注册一次即可。
+registerActionHandler("codegraph", (n) => {
+  if (!n.dedupKey) return;
+  const root = n.dedupKey.split(":").slice(2).join(":");
+  if (root) rebuild(root);
+});
 
 /** 仅测试用：清 timer、复位状态、清守卫，防 interval 跨用例泄漏。 */
 function __resetForTest() {
