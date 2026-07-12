@@ -34,6 +34,9 @@ PLANS.md
 # Superpowers brainstorming mockups
 .superpowers/
 
+# 本地设计预览（字形/排版试作，不入库）
+_design_preview/
+
 # CodeGraph index & embedding model cache
 .aide/
 src-tauri/.fastembed_cache/
