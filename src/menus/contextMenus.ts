@@ -190,6 +190,26 @@ export function sessionMenuItems(
   ];
 }
 
+// ── Workspace context menu（侧栏工作区行右键） ──
+
+export function workspaceMenuItems(
+  ws: { key: string; name: string; missing: boolean },
+  onActivate?: () => void,
+  onRemove?: () => void,
+): MenuItem[] {
+  return [
+    ...(ws.missing ? [] : [{ label: "切换到此工作区", action: () => onActivate?.() }]),
+    { label: "在文件资源管理器中打开", action: () => api.showInExplorer(ws.name) },
+    { label: "复制路径", action: () => navigator.clipboard.writeText(ws.name) },
+    sep(),
+    {
+      label: "从列表移除…",
+      danger: true,
+      action: () => onRemove?.(),
+    },
+  ];
+}
+
 // ── Pane tab context menu（聊天区分屏组的 tab 右键） ──
 
 export function paneTabMenuItems(groupId: string, tabId: string): MenuItem[] {
