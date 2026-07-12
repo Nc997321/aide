@@ -4,6 +4,7 @@ import type {
   ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
   GrepMatch, ProviderConfig, ProviderModelMappings, RunConfig, RunTarget, RecentView,
   SkillMeta, BuildIndexResult, BuildProgress, RescanResult, QueryResult,
+  AppNotification, NotificationRecord,
 } from "./types";
 import type { ModelOption, PermissionModeOption } from "./types/chat";
 
@@ -205,6 +206,14 @@ export const api = {
   },
   getPendingNotification(): Promise<string | null> {
     return invoke("get_pending_notification");
+  },
+
+  // 通知中心持久化
+  loadNotifications(): Promise<NotificationRecord[]> {
+    return invoke("load_notifications");
+  },
+  saveNotifications(records: NotificationRecord[]): Promise<void> {
+    return invoke("save_notifications", { records });
   },
 
   // 设置

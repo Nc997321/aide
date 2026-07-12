@@ -292,3 +292,39 @@ export interface RescanResult {
   /** reindex 失败的文件数（逐文件 warn）。 */
   errors: number;
 }
+
+// ── 通知中心 ──
+
+export type NotificationSeverity = "error" | "warning" | "info";
+
+export interface NotificationAction {
+  label: string;
+  url?: string;
+}
+
+/** 前端运行时通知（含 read 状态）。 */
+export interface AppNotification {
+  id: string;
+  severity: NotificationSeverity;
+  source: string;
+  title: string;
+  body?: string;
+  timestamp: number;
+  dedupKey?: string;
+  count?: number;
+  action?: NotificationAction;
+  read: boolean;
+}
+
+/** 落盘记录（无 read，info 不落盘）。镜像 Rust NotificationRecord。 */
+export interface NotificationRecord {
+  id: string;
+  severity: "error" | "warning";
+  source: string;
+  title: string;
+  body?: string;
+  timestamp: number;
+  dedupKey?: string;
+  count?: number;
+  action?: NotificationAction;
+}
