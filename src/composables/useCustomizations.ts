@@ -12,31 +12,32 @@ export const CUSTOMIZATION_CATEGORIES: CustomizationCategory[] = [
   {
     type: "agent",
     label: "智能体",
-    icon: "🤖",
+    // icon = Icon.vue 的字形 key（见 utils/icons.ts），不再是 emoji 字符
+    icon: "agent",
     description: "管理 Claude Code 智能体配置",
   },
   {
     type: "skill",
     label: "技能",
-    icon: "🎯",
+    icon: "skill",
     description: "管理 Claude Code 技能脚本",
   },
   {
     type: "instruction",
     label: "指令",
-    icon: "📝",
+    icon: "instruction",
     description: "编辑全局和项目指令",
   },
   {
     type: "hook",
     label: "钩构",
-    icon: "🪝",
+    icon: "hook",
     description: "管理事件钩子配置",
   },
   {
     type: "mcp_server",
     label: "MCP 服务器",
-    icon: "🔌",
+    icon: "mcp",
     description: "管理 MCP 服务器连接",
   },
 ];

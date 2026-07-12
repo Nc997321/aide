@@ -7,6 +7,7 @@ import CustomizationDetail from "./customizations/CustomizationDetail.vue";
 import MarketplaceTab from "./marketplace/MarketplaceTab.vue";
 import ProviderSettings from "./ProviderSettings.vue";
 import ThemedSelect from "./ThemedSelect.vue";
+import Icon from "./Icon.vue";
 
 const themeOptions = [
   { value: "warm-dark", label: "Warm Dark" },
@@ -216,7 +217,7 @@ function onOverlayClick(e: MouseEvent) {
         <!-- Header -->
         <div class="dialog-header">
           <span class="dialog-title">设置</span>
-          <button class="dialog-close" @click="emit('close')">✕</button>
+          <button class="dialog-close" @click="emit('close')"><Icon name="close" :size="13" :stroke-width="1.4" /></button>
         </div>
 
         <div class="dialog-body">
@@ -227,7 +228,7 @@ function onOverlayClick(e: MouseEvent) {
               :class="{ active: activeTab === 'general' }"
               @click="activeTab = 'general'"
             >
-              <span class="nav-icon">⚙</span>
+              <Icon class="nav-icon" name="general" :size="16" />
               <span class="nav-label">通用</span>
             </button>
             <button
@@ -235,7 +236,7 @@ function onOverlayClick(e: MouseEvent) {
               :class="{ active: activeTab === 'providers' }"
               @click="activeTab = 'providers'"
             >
-              <span class="nav-icon">🧠</span>
+              <Icon class="nav-icon" name="model" :size="16" />
               <span class="nav-label">模型</span>
             </button>
             <button
@@ -243,7 +244,7 @@ function onOverlayClick(e: MouseEvent) {
               :class="{ active: activeTab === 'extensions' }"
               @click="activeTab = 'extensions'"
             >
-              <span class="nav-icon">🧩</span>
+              <Icon class="nav-icon" name="extension" :size="16" />
               <span class="nav-label">扩展</span>
             </button>
             <button
@@ -251,7 +252,7 @@ function onOverlayClick(e: MouseEvent) {
               :class="{ active: activeTab === 'marketplace' }"
               @click="activeTab = 'marketplace'"
             >
-              <span class="nav-icon">🏪</span>
+              <Icon class="nav-icon" name="market" :size="16" />
               <span class="nav-label">市场</span>
             </button>
           </nav>
@@ -371,20 +372,20 @@ function onOverlayClick(e: MouseEvent) {
                       v-tooltip="'录制新快捷键'"
                       @click="startRecording(def.key)"
                     >
-                      🖱
+                      <Icon name="cursor" :size="13" />
                     </button>
                     <button
                       class="kb-reset-btn"
                       v-tooltip="'恢复默认'"
                       @click="resetKeybinding(def.key)"
                     >
-                      ↺
+                      <Icon name="reset" :size="13" />
                     </button>
                   </div>
                 </div>
 
                 <div v-if="keybindingConflicts.length > 0" class="kb-conflict-warn">
-                  ⚠ 快捷键冲突：
+                  <Icon name="warning" :size="13" /> 快捷键冲突：
                   <span v-for="(pair, i) in keybindingConflicts" :key="i">
                     {{ keybindingDefs.find(d => d.key === pair[0])?.label }} 与
                     {{ keybindingDefs.find(d => d.key === pair[1])?.label }}
@@ -400,7 +401,7 @@ function onOverlayClick(e: MouseEvent) {
                   将 Aide 加入资源管理器「打开方式」列表，右键即可用 Aide 预览文件。
                   仅当前用户、不修改默认程序。预览模式下「跳转到定义」不可用。
                 </span>
-                <div v-if="openWithError" class="open-with-error">⚠ {{ openWithError }}</div>
+                <div v-if="openWithError" class="open-with-error"><Icon name="warning" :size="13" /> {{ openWithError }}</div>
                 <div v-for="group in OPEN_WITH_GROUPS" :key="group.label" class="open-with-group">
                   <div class="open-with-group-label">{{ group.label }}</div>
                   <div class="open-with-exts">
@@ -426,7 +427,7 @@ function onOverlayClick(e: MouseEvent) {
             <div v-else-if="activeTab === 'extensions'" class="tab-extensions">
               <!-- Back button (when not at category root) -->
               <div v-if="activeType" class="ext-back">
-                <button class="back-btn" @click="handleBack">← {{ categories.find(c => c.type === activeType)?.label || '返回' }}</button>
+                <button class="back-btn" @click="handleBack"><Icon name="back" :size="13" /> {{ categories.find(c => c.type === activeType)?.label || '返回' }}</button>
               </div>
 
               <!-- Category grid -->
@@ -437,7 +438,7 @@ function onOverlayClick(e: MouseEvent) {
                   class="category-card"
                   @click="selectCategory(cat.type)"
                 >
-                  <span class="cat-icon">{{ cat.icon }}</span>
+                  <Icon class="cat-icon" :name="cat.icon" :size="20" />
                   <div class="cat-info">
                     <div class="cat-label">{{ cat.label }}</div>
                     <div class="cat-desc">{{ cat.description }}</div>
@@ -536,11 +537,13 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .dialog-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: none;
   border: none;
   color: var(--aide-text-muted);
   cursor: pointer;
-  font-size: 14px;
   padding: 4px 8px;
   border-radius: 4px;
   transition: all 0.12s;
@@ -601,10 +604,9 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .nav-icon {
-  font-size: 14px;
   width: 18px;
-  text-align: center;
   flex-shrink: 0;
+  color: var(--aide-accent);
 }
 
 .nav-label {
@@ -757,6 +759,9 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   background: none;
   border: none;
   color: var(--aide-text-secondary);
@@ -801,10 +806,9 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .cat-icon {
-  font-size: 20px;
   width: 28px;
-  text-align: center;
   flex-shrink: 0;
+  color: var(--aide-accent);
 }
 
 .cat-info {
@@ -979,12 +983,14 @@ function onOverlayClick(e: MouseEvent) {
 
 .kb-record-btn,
 .kb-reset-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: none;
   border: none;
   color: var(--aide-text-muted);
   cursor: pointer;
-  font-size: 11px;
-  padding: 2px 4px;
+  padding: 2px 5px;
   border-radius: 3px;
   transition: all 0.12s;
   font-family: inherit;

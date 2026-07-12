@@ -2,6 +2,7 @@
 import { ref, computed } from "vue";
 import WindowControls from "./WindowControls.vue";
 import SidebarToggle from "./SidebarToggle.vue";
+import Icon from "../Icon.vue";
 import type { SessionStatus } from "../../composables/useSessionState";
 import type { RunConfig } from "../../types";
 
@@ -237,10 +238,7 @@ const runDotClass = computed(() => {
 
     <!-- Center: search trigger -->
     <button class="titlebar-search-trigger" @click="$emit('open-palette')">
-      <svg class="titlebar-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="11" cy="11" r="8"/>
-        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-      </svg>
+      <Icon class="titlebar-search-icon" name="search" :size="13" />
       <span class="titlebar-search-text">搜索...</span>
       <kbd class="titlebar-search-kbd">Ctrl+P</kbd>
     </button>

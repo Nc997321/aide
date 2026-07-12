@@ -82,7 +82,7 @@ function createSessionProvider(
           id: s.id,
           label: s.name,
           description: s.last_message || undefined,
-          icon: "📝",
+          icon: "session",
           action: () => onSelect(s.id),
         }));
       } catch {
@@ -127,7 +127,7 @@ function createFileProvider(
           id: p,
           label: name,
           description: p,
-          icon: "📄",
+          icon: "file",
           action: () => {
             const viewer = useFileViewer();
             viewer.open(p);
@@ -159,7 +159,7 @@ function createCodegraphProvider(
           id: `${r.symbol.file}:${r.symbol.line}:${r.symbol.name}`,
           label: r.symbol.name,
           description: `${r.confidence === "Structure" ? "精确" : "语义"} · ${r.symbol.file}:${r.symbol.line}`,
-          icon: r.confidence === "Structure" ? "\u{1F517}" : "\u{1F50D}",
+          icon: r.confidence === "Structure" ? "link" : "search",
           action() {
             const separator = projectRoot.includes("\\") ? "\\" : "/";
             const fullPath = projectRoot + separator + r.symbol.file.replace(/\//g, separator);

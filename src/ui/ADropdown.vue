@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, watch } from "vue";
+import IconOrChar from "../components/IconOrChar.vue";
 
 export interface DropdownItem {
   id: string;
@@ -51,7 +52,7 @@ onUnmounted(() => {
             class="a-dropdown__item"
             @click="emit('select', item.id)"
           >
-            <span v-if="item.icon" class="a-dropdown__icon">{{ item.icon }}</span>
+            <span v-if="item.icon" class="a-dropdown__icon"><IconOrChar :text="item.icon" :size="13" /></span>
             <span class="a-dropdown__label">{{ item.label }}</span>
           </div>
         </template>
@@ -91,9 +92,12 @@ onUnmounted(() => {
 }
 
 .a-dropdown__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 13px;
   width: 18px;
-  text-align: center;
+  flex-shrink: 0;
 }
 
 .a-dropdown__divider {

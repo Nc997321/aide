@@ -442,7 +442,7 @@ onMounted(async () => {
       const rawResults = await searchProviders(q, limit);
       return rawResults.map((r) => ({
         ...r,
-        group: r.icon === "\u{1F4DD}" ? "会话" : r.icon === "\u{1F4C4}" ? "文件" : (r.icon === "\u{1F517}" || r.icon === "\u{1F50D}") ? "符号" : "其他",
+        group: r.icon === "session" ? "会话" : r.icon === "file" ? "文件" : (r.icon === "link" || r.icon === "search") ? "符号" : "其他",
       }));
     });
   });
@@ -457,7 +457,7 @@ onMounted(async () => {
           id: "rs-" + s.session_id,
           label: s.name,
           description: `${s.ws_name} · ${timeAgo(s.ts)}`,
-          icon: "\u{1F4DD}",
+          icon: "session",
           group: "最近会话",
           action: () => {
             sidebarRef.value?.selectSessionFromWorkspace(s.ws_key, s.session_id);
@@ -469,7 +469,7 @@ onMounted(async () => {
           id: "rf-" + f.path,
           label: f.name,
           description: `${relPath(f.path)} · ${timeAgo(f.ts)}`,
-          icon: "\u{1F4C4}",
+          icon: "file",
           group: "最近文件",
           action: () => {
             useFileViewer().open(f.path);

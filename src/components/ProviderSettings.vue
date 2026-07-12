@@ -2,6 +2,9 @@
 import { ref, watch } from "vue";
 import { useProviders } from "../composables/useProviders";
 import ThemedSelect from "./ThemedSelect.vue";
+import IconOrChar from "./IconOrChar.vue";
+import Icon from "./Icon.vue";
+import { PROVIDER_GLYPHS } from "@/utils/icons";
 import type { ProviderConfig, ProviderModelMappings } from "../types";
 
 const effortOptions = [
@@ -181,7 +184,7 @@ function knownModelsForDatalist(): string[] {
         }"
         @click="selectProvider(p.id)"
       >
-        <span class="pi-icon">{{ p.icon }}</span>
+        <span class="pi-icon"><IconOrChar :text="p.icon" :size="16" /></span>
         <div class="pi-info">
           <div class="pi-name">{{ p.name }}</div>
           <div v-if="p.model" class="pi-model">{{ p.model }}</div>
@@ -221,12 +224,19 @@ function knownModelsForDatalist(): string[] {
 
         <div v-if="!isSystemDefault" class="form-field">
           <label>图标</label>
-          <input
-            v-model="form.icon"
-            class="text-input icon-input"
-            maxlength="2"
-            placeholder="单个 emoji"
-          />
+          <div class="icon-picker">
+            <button
+              v-for="g in PROVIDER_GLYPHS"
+              :key="g"
+              type="button"
+              class="icon-picker-opt"
+              :class="{ 'icon-picker-opt--active': form.icon === g }"
+              :title="g"
+              @click="form.icon = g"
+            >
+              <Icon :name="g" :size="18" />
+            </button>
+          </div>
         </div>
 
         <div v-if="!isSystemDefault" class="form-field">
@@ -393,7 +403,7 @@ function knownModelsForDatalist(): string[] {
 
     <!-- Empty state -->
     <div v-else class="provider-empty">
-      <div class="empty-icon">🧠</div>
+      <div class="empty-icon"><Icon name="provider" :size="32" /></div>
       <div class="empty-text">选择一个供应商进行编辑</div>
       <div class="empty-hint">或点击"+ 添加供应商"创建新的</div>
     </div>
@@ -438,10 +448,13 @@ function knownModelsForDatalist(): string[] {
 }
 
 .pi-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 16px;
   width: 22px;
-  text-align: center;
   flex-shrink: 0;
+  color: var(--aide-accent);
 }
 
 .pi-info {
@@ -573,10 +586,34 @@ select.text-input {
   cursor: pointer;
 }
 
-.icon-input {
-  width: 60px;
-  text-align: center;
-  font-size: 16px;
+/* 图标选择器：6 个铜线字形候选，选中即设为 provider icon key。
+ * 存量 emoji icon 仍由 IconOrChar 在列表里原样渲染，用户选一个字形即替换。 */
+.icon-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.icon-picker-opt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--aide-radius-sm);
+  border: 1px solid var(--aide-border);
+  background: var(--aide-bg-base);
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+.icon-picker-opt:hover {
+  border-color: var(--aide-accent);
+  color: var(--aide-accent);
+}
+.icon-picker-opt--active {
+  border-color: var(--aide-accent);
+  background: var(--aide-accent-subtle);
+  color: var(--aide-accent);
 }
 
 .secret-row {
@@ -744,8 +781,11 @@ select.text-input {
 }
 
 .empty-icon {
-  font-size: 32px;
-  opacity: 0.5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--aide-accent);
+  opacity: 0.6;
 }
 
 .empty-text {

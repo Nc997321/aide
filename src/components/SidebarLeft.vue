@@ -13,6 +13,8 @@ import { api } from "../api";
 import { open } from "@tauri-apps/plugin-shell";
 import { getVersion } from "@tauri-apps/api/app";
 import { ACard, AStatusDot } from "../ui";
+import IconOrChar from "./IconOrChar.vue";
+import Icon from "./Icon.vue";
 import type { Session, WorkspaceInfo } from "../types";
 
 const props = defineProps<{
@@ -424,7 +426,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
     <!-- Status bar: provider + actions -->
     <div ref="providerSelectorRef" class="status-bar">
       <div class="status-bar-provider" @click="toggleProviderDropdown">
-        <span class="status-bar-provider-icon">{{ activeProvider.icon }}</span>
+        <span class="status-bar-provider-icon"><IconOrChar :text="activeProvider.icon" :size="13" /></span>
         <span class="status-bar-provider-name">{{ activeProvider.name }}</span>
         <svg class="status-bar-chevron" :class="{ open: providerDropdownOpen }" width="10" height="10" viewBox="0 0 10 10" fill="none">
           <path d="M2.5 4L5 6.5L7.5 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
@@ -455,13 +457,13 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
           :class="{ active: p.id === activeProviderId }"
           @click="onProviderSelect(p.id)"
         >
-          <span class="provider-opt-icon">{{ p.icon }}</span>
+          <span class="provider-opt-icon"><IconOrChar :text="p.icon" :size="14" /></span>
           <span class="provider-opt-name">{{ p.name }}</span>
           <span v-if="p.id === activeProviderId" class="provider-opt-check">✓</span>
         </div>
         <div class="provider-divider"></div>
         <div class="provider-option" @click="providerDropdownOpen = false; emit('open-settings-providers')">
-          <span class="provider-opt-icon">⚙</span>
+          <span class="provider-opt-icon"><Icon name="general" :size="14" /></span>
           <span class="provider-opt-name">管理供应商…</span>
         </div>
       </div>
@@ -775,8 +777,12 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 }
 
 .status-bar-provider-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 13px;
   flex-shrink: 0;
+  color: var(--aide-accent);
 }
 
 .status-bar-provider-name {
@@ -865,10 +871,13 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 }
 
 .provider-opt-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 14px;
   width: 18px;
-  text-align: center;
   flex-shrink: 0;
+  color: var(--aide-accent);
 }
 
 .provider-opt-name {

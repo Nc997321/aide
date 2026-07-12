@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, computed } from "vue";
+import IconOrChar from "../components/IconOrChar.vue";
+import Icon from "../components/Icon.vue";
 
 export interface PaletteResult {
   id: string;
@@ -143,7 +145,7 @@ defineExpose({ setSearchFn, setRecentFn });
       <div v-if="open" class="a-palette-overlay" @click="onOverlayClick">
         <div class="a-palette-box">
           <div class="a-palette-input-row">
-            <span class="a-palette-icon">&#x1F50D;</span>
+            <span class="a-palette-icon"><Icon name="search" :size="15" /></span>
             <input
               ref="inputRef"
               v-model="query"
@@ -163,7 +165,7 @@ defineExpose({ setSearchFn, setRecentFn });
                 @click="item.action(); emit('close')"
                 @mouseenter="selectedIndex = results.indexOf(item)"
               >
-                <span class="a-palette-item-icon">{{ item.icon || '&#x1F4C4;' }}</span>
+                <span class="a-palette-item-icon"><IconOrChar :text="item.icon || 'file'" :size="14" /></span>
                 <div class="a-palette-item-text">
                   <div class="a-palette-item-label">{{ item.label }}</div>
                   <div v-if="item.description" class="a-palette-item-desc">{{ item.description }}</div>
@@ -211,8 +213,10 @@ defineExpose({ setSearchFn, setRecentFn });
 }
 
 .a-palette-icon {
-  font-size: 16px;
+  display: inline-flex;
+  align-items: center;
   color: var(--aide-text-muted);
+  flex-shrink: 0;
 }
 
 .a-palette-input {
@@ -266,11 +270,13 @@ defineExpose({ setSearchFn, setRecentFn });
 }
 
 .a-palette-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 14px;
   width: 20px;
-  text-align: center;
-  color: var(--aide-text-muted);
   flex-shrink: 0;
+  color: var(--aide-accent);
 }
 
 .a-palette-item-text {
