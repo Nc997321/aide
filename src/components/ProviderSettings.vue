@@ -135,8 +135,11 @@ async function handleSave() {
     model: form.value.anthropicModel,
     modelMappings: mappings,
     effortLevel: form.value.effortLevel,
-    autoCompactWindow: form.value.autoCompactWindow,
-    autocompactPctOverride: form.value.autocompactPctOverride,
+    // 这两个 input 是 type="number"，Vue 3 的 vModelText 对 type==="number" 会自动
+    // looseToNumber 成 JS number（即使没加 .number 修饰符）。Rust 侧字段是 String，
+    // 传数字会让 set_providers 整个反序列化失败、保存静默丢失——这里强制转字符串。
+    autoCompactWindow: String(form.value.autoCompactWindow ?? ""),
+    autocompactPctOverride: String(form.value.autocompactPctOverride ?? ""),
     knownModels: form.value.knownModels,
   });
 }
