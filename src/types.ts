@@ -240,3 +240,19 @@ export interface BuildIndexResult {
   files_with_symbols?: number;
   has_embeddings?: boolean;
 }
+
+/** 粗粒度构建进度，前端 poll 拉取（不走 app.emit，避历史跨线程 emit 卡死）。 */
+export interface BuildProgress {
+  /** 是否正在构建。false = 空闲/已完成，前端据此停 poll。 */
+  active: boolean;
+  /** 已 embed 的符号数。 */
+  done: number;
+  /** 总符号数。 */
+  total: number;
+  /** 当前阶段/文件的可读描述（"扫描文件树..." / "解析 src/foo.ts (123/456)"
+   *  / "嵌入符号 1340/2000" / "写盘..."），用于构建可观测性。 */
+  current: string;
+  /** 结构层（精确跳转）是否已就绪。Phase1 swap 后 true，即使语义层 embed 还在
+   *  后台跑——用户此时已能用精确跳转，不必干等。前端据此显示"已就绪"标记。 */
+  index_ready: boolean;
+}

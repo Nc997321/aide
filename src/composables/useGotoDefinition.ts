@@ -10,6 +10,8 @@ const searchWord = ref("");
 
 const targetProjectRoot = ref("");
 const isGrepFallback = ref(false);
+/** 当前浮层模式：search()=定义，searchAllReferences()=引用。决定标题文案。 */
+const mode = ref<"definition" | "references">("definition");
 
 let lastProjectRoot = "";
 let lastSourceExt = "";
@@ -30,6 +32,7 @@ export function useGotoDefinition() {
     selectedIndex.value = 0;
     visible.value = true;
     isGrepFallback.value = false;
+    mode.value = "definition";
 
     // 1. Try CodeGraph first
     try {
@@ -65,7 +68,10 @@ export function useGotoDefinition() {
           m => !(m.file === source.sourceFile && m.line === source.sourceLine),
         );
       }
-      // Convert GrepMatch[] to QueryResult[] for unified rendering
+      // Convert GrepMatch[] to QueryResult[] for unified rendering.
+      // grep 是 word-boundary 精确文本匹配，既非 tree-sitter 结构层也非向量语义层；
+      // 这里 confidence/score 仅是为满足 QueryResult 类型的占位，渲染层走
+      // isGrepFallback 标志显示 [匹配] 标签，不读这俩字段——勿据此判断"是定义"。
       results.value = matches.slice(0, 20).map(m => ({
         symbol: {
           name: word,
@@ -114,6 +120,7 @@ export function useGotoDefinition() {
     selectedIndex.value = 0;
     visible.value = true;
     isGrepFallback.value = false;
+    mode.value = "references";
 
     // Try CodeGraph with broader scope (no current-file filter)
     try {
@@ -130,6 +137,7 @@ export function useGotoDefinition() {
     isGrepFallback.value = true;
     try {
       const matches = await api.grepSymbol(word, projectRoot, lastSourceExt || undefined);
+      // 同 search() 的 grep 兜底：confidence/score 是类型占位，渲染走 isGrepFallback。
       results.value = matches.map(m => ({
         symbol: {
           name: word,
@@ -153,6 +161,7 @@ export function useGotoDefinition() {
     selectedIndex: readonly(selectedIndex),
     searchWord: readonly(searchWord),
     isGrepFallback: readonly(isGrepFallback),
+    mode: readonly(mode),
     search,
     searchAllReferences,
     dismiss,

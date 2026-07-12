@@ -9,7 +9,7 @@ const emit = defineEmits<{
 }>();
 
 const path = ref("");
-const error = ref("");
+const error = defineModel<string>("error", { default: "" });
 
 function close() {
   emit("update:visible", false);

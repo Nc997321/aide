@@ -24,6 +24,8 @@ const {
   updateProvider,
   deleteProvider,
   saveSystemDefaultMappings,
+  refreshSystemDefaultModels,
+  refreshing,
   systemDefaultMappings,
   SYSTEM_DEFAULT_ID,
 } = useProviders();
@@ -288,6 +290,7 @@ function knownModelsForDatalist(): string[] {
             <input
               v-model="form.anthropicModel"
               class="text-input"
+              :readonly="isSystemDefault"
               list="known-models-list"
               placeholder="留空用 provider 默认"
             />
@@ -298,6 +301,7 @@ function knownModelsForDatalist(): string[] {
             <input
               v-model="form.defaultOpusModel"
               class="text-input"
+              :readonly="isSystemDefault"
               placeholder="留空不映射"
             />
           </div>
@@ -307,6 +311,7 @@ function knownModelsForDatalist(): string[] {
             <input
               v-model="form.defaultSonnetModel"
               class="text-input"
+              :readonly="isSystemDefault"
               placeholder="留空不映射"
             />
             <span class="form-hint">子代理模型填 sonnet 别名时，用它解析成具体模型 id</span>
@@ -317,6 +322,7 @@ function knownModelsForDatalist(): string[] {
             <input
               v-model="form.defaultHaikuModel"
               class="text-input"
+              :readonly="isSystemDefault"
               placeholder="留空不映射"
             />
             <span class="form-hint">子代理模型填 haiku 别名时，用它解析成具体模型 id</span>
@@ -327,6 +333,7 @@ function knownModelsForDatalist(): string[] {
             <input
               v-model="form.subagent"
               class="text-input"
+              :readonly="isSystemDefault"
               list="known-models-list"
               placeholder="留空跟随主模型"
             />
@@ -397,7 +404,15 @@ function knownModelsForDatalist(): string[] {
       <!-- Action buttons -->
       <div class="form-actions">
         <button v-if="!isSystemDefault" class="btn-delete" @click="handleDelete">删除</button>
-        <button class="btn-save" @click="handleSave">保存</button>
+        <button v-if="!isSystemDefault" class="btn-save" @click="handleSave">保存</button>
+        <button
+          v-if="isSystemDefault"
+          class="btn-refresh"
+          :disabled="refreshing"
+          @click="refreshSystemDefaultModels"
+        >
+          {{ refreshing ? "刷新中..." : "手动刷新" }}
+        </button>
       </div>
     </div>
 
@@ -766,6 +781,25 @@ select.text-input {
 
 .btn-save:hover {
   filter: brightness(1.1);
+}
+
+.btn-refresh {
+  background: color-mix(in srgb, var(--aide-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-accent) 40%, transparent);
+  color: var(--aide-accent);
+  padding: 6px 16px;
+  border-radius: var(--aide-radius-sm);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  transition: all 0.12s;
+}
+.btn-refresh:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-refresh:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--aide-accent) 22%, transparent);
 }
 
 /* ── Empty state ── */

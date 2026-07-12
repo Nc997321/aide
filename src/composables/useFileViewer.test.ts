@@ -9,6 +9,7 @@ vi.mock("../api", () => ({
     codegraphBuildIndex: vi.fn(async () => undefined),
     codegraphClose: vi.fn(async () => undefined),
     codegraphReindexFile: vi.fn(async () => undefined),
+    codegraphBuildProgress: vi.fn(async () => ({ active: false, done: 0, total: 0, current: "", index_ready: false })),
   },
 }));
 vi.mock("./useRecent", () => ({

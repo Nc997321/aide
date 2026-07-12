@@ -1,6 +1,7 @@
 import { ref, readonly } from "vue";
 import { api } from "../api";
 import { useRecent } from "./useRecent";
+import { useCodeGraphProgress } from "./useCodeGraphProgress";
 import { imageMimeFromPath } from "../utils/imageMime";
 
 /**
@@ -69,20 +70,13 @@ export function isWindowDirty(win: FileWindowState): boolean {
   return !win.readonly && !win.error && !win.imageUrl && win.editContent !== win.content;
 }
 
-let lastIndexedRoot = "";
-
 async function detectProjectRoot() {
   try {
     const info = await api.getProjectInfo();
     projectRoot.value = info.root;
-    if (info.root && info.root !== lastIndexedRoot) {
-      const previous = lastIndexedRoot;
-      lastIndexedRoot = info.root;
-      if (previous) {
-        void api.codegraphClose(previous).catch(() => {});
-      }
-      void api.codegraphBuildIndex(info.root).catch(() => {});
-    }
+    // 构建触发统一走 ensureIndex（lastIndexedRoot 守卫防重复）。
+    // 这里是打开文件时的兜底；主触发点在 FileTree.loadRoot（项目加载锚点）。
+    if (info.root) useCodeGraphProgress().ensureIndex(info.root);
   } catch {
     // best effort; goto falls back to grep
   }
@@ -218,7 +212,7 @@ export function useFileViewer() {
     for (const w of [...windows.value]) closeWindow(w.id);
     projectRoot.value = "";
     gotoOwnerId.value = null;
-    lastIndexedRoot = "";
+    useCodeGraphProgress().__resetForTest();
   }
 
   return {

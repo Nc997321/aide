@@ -36,6 +36,10 @@ percent-encoding = "2"
 png = "0.17"
 dirs = "5"
 base64 = "0.22"
+# HTTP 客户端：启动时调 Anthropic GET /v1/models 拉最新模型列表覆盖"系统默认"
+# （provider.rs::refresh_system_default_models）。选 ureq 而非 reqwest——轻量同步、
+# 无 async-runtime 依赖、配 spawn_blocking 包同步 IO；rustls 跨平台免 OpenSSL。
+ureq = { version = "2", features = ["json", "tls"] }
 # 剥掉 Windows `resource_dir()` 返回的 `\\?\` verbatim 前缀，避免把扩展长度路径
 # 传给外部进程（node 的 realpathSync 处理不了 `\\?\`，会退化到 lstat 'C:' 崩溃）。
 dunce = "1"

@@ -13,7 +13,6 @@ use crate::codegraph::symbols::SymbolTable;
 use crate::codegraph::types::IndexedPoint;
 
 use extract::extract_symbols;
-use store::embed_and_store;
 
 const MODEL_NAME: &str = "all-MiniLM-L6-v2";
 
@@ -31,20 +30,38 @@ pub struct BuildStats {
 /// Parse the whole project into an in-memory SymbolTable + the points that
 /// will be embedded into the shard. Pure w.r.t. shard/embedder — testable
 /// without ONNX or Qdrant.
+///
+/// `on_status` is an optional callback invoked with a human-readable description
+/// of the current step ("扫描文件树..." / "解析 <path> (i/N)"). Lets the command
+/// layer report what's happening to the frontend for observability — so a slow
+/// build is debuggable ("stuck parsing node_modules/X" vs "embed is just slow").
 pub fn collect_symbols(
     project_root: &Path,
     parser_manager: &ParserManager,
+    on_status: Option<&dyn Fn(&str)>,
 ) -> (SymbolTable, Vec<IndexedPoint>, BuildStats) {
     let exts = parser_manager.supported_extensions();
     let ext_refs: Vec<&str> = exts.iter().copied().collect();
+    if let Some(f) = on_status {
+        f("扫描文件树...");
+    }
     let files = walk::walk_source_files(project_root, &ext_refs);
+    let total_files = files.len();
 
     let mut table = SymbolTable::new();
     let mut all_points: Vec<IndexedPoint> = Vec::new();
     let mut stats = BuildStats::default();
 
-    for file_path in &files {
+    for (i, file_path) in files.iter().enumerate() {
         stats.scanned_files += 1;
+        if let Some(f) = on_status {
+            f(&format!(
+                "解析 {} ({}/{})",
+                file_path.display(),
+                i + 1,
+                total_files
+            ));
+        }
         let source = match std::fs::read_to_string(file_path) {
             Ok(s) => s,
             Err(e) => {
@@ -67,13 +84,24 @@ pub fn collect_symbols(
     (table, all_points, stats)
 }
 
-/// Full rebuild: fresh shard + SymbolTable, persisted to disk. Never holds any
-/// lock — caller swaps the returned artifacts into state under a brief write lock.
-pub fn build_project_index(
+/// Phase 1 of a full rebuild: walk + parse + create shard + persist symbols/meta.
+/// Returns the symbol table, an empty shard, the collected points (for the
+/// caller to embed in Phase 2), and build stats. **Does not embed** — embedding
+/// is the caller's job (see `store::embed_and_store`).
+///
+/// Splitting structure-collect from embed lets the command layer swap the
+/// structure-layer index in *before* embedding, so goto-definition (which uses
+/// the in-memory `SymbolTable`, not the shard) works immediately without
+/// waiting for the slow ONNX embed. The embedder fills the shard in the
+/// background; `embed_ready` is flipped only after embed completes.
+///
+/// `on_status` is invoked with a human-readable step description ("扫描文件树..."
+/// / "解析 <path> (i/N)") for build observability.
+pub fn build_structure_index(
     project_root: &Path,
-    embedder: Option<&Embedder>,
     parser_manager: &ParserManager,
-) -> Result<(SymbolTable, Arc<CodeShard>, BuildStats), Box<dyn std::error::Error>> {
+    on_status: Option<&dyn Fn(&str)>,
+) -> Result<(SymbolTable, Arc<CodeShard>, Vec<IndexedPoint>, BuildStats), Box<dyn std::error::Error>> {
     let base = index_dir(project_root);
     let qdir = base.join("qdrant");
     if qdir.exists() {
@@ -82,22 +110,12 @@ pub fn build_project_index(
     std::fs::create_dir_all(&base)?;
     let shard = CodeShard::create(&qdir)?;
 
-    let (table, points, stats) = collect_symbols(project_root, parser_manager);
+    let (table, points, stats) = collect_symbols(project_root, parser_manager, on_status);
 
-    if let Some(embedder) = embedder {
-        // embed & store in file-sized batches to cap peak memory
-        for chunk in points.chunks(256) {
-            if let Err(e) = embed_and_store(chunk, embedder, &shard) {
-                tracing::warn!("codegraph: embed batch failed: {}", e);
-            }
-        }
-    }
-
-    // Persist SymbolTable + meta (same transaction point as shard).
-    // Permission errors are expected (`.aide/` may be read-only) and silent,
-    // but other failures (disk full, FS error) are logged so they're observable
-    // — otherwise a silently failing persist would force a full rebuild on
-    // every open with no diagnostic trail.
+    // Persist SymbolTable + meta at structure-layer readiness (not waiting for
+    // embed). Permission errors expected (`.aide/` may be read-only); other FS
+    // errors logged so a silently failing persist is observable — otherwise it
+    // forces a full rebuild every open with no diagnostic trail.
     if let Err(e) = table.save_json(&base.join("symbols.json")) {
         tracing::warn!("codegraph: symbols.json persist failed: {}", e);
     }
@@ -111,7 +129,7 @@ pub fn build_project_index(
         tracing::warn!("codegraph: meta.json persist failed: {}", e);
     }
 
-    Ok((table, Arc::new(shard), stats))
+    Ok((table, Arc::new(shard), points, stats))
 }
 
 /// Fast path: reuse on-disk index if fresh. None → caller must full-rebuild.
@@ -203,7 +221,7 @@ mod tests {
             "class OrderService { void save() {} }").unwrap();
 
         let pm = ParserManager::new();
-        let (table, points, stats) = collect_symbols(&dir, &pm);
+        let (table, points, stats) = collect_symbols(&dir, &pm, None);
 
         // `save` defined in two files → both reachable
         assert_eq!(table.lookup("save").len(), 2);

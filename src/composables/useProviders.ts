@@ -21,6 +21,10 @@ const loaded = ref(false);
 // 由本 ref 驱动。
 const systemDefaultMappings = ref<ProviderModelMappings>(emptyMappings());
 
+// refresh 系统默认模型变量的 loading 状态——模块级（与 systemDefaultMappings
+// 同级），App.vue 启动时拉取和 ProviderSettings 的"手动刷新"按钮共享同一实例。
+const refreshing = ref(false);
+
 const systemDefault: ProviderConfig = {
   id: SYSTEM_DEFAULT_ID,
   name: "系统默认",
@@ -74,6 +78,23 @@ async function saveSystemDefaultMappings(mappings: ProviderModelMappings): Promi
   await api.setSystemDefaultModelMappings(mappings);
   systemDefaultMappings.value = { ...mappings };
   systemDefault.modelMappings = { ...mappings };
+}
+
+// 调 Anthropic GET /v1/models 拉最新模型，让 Rust 侧按省钱档映射覆盖"系统默认"
+// 5 字段并写回 config。失败时保留旧 systemDefaultMappings 不动（Rust 侧无认证
+// 返回旧值、网络/解析错误返回 Err）。启动时 fire-and-forget 调，刷新按钮 await。
+async function refreshSystemDefaultModels(): Promise<void> {
+  refreshing.value = true;
+  try {
+    const mappings = await api.refreshSystemDefaultModels();
+    systemDefaultMappings.value = { ...mappings };
+    systemDefault.modelMappings = { ...mappings };
+  } catch (e) {
+    // 保留旧值；Rust 侧已记日志，前端仅 warn 不阻塞 UI
+    console.warn("刷新系统默认模型列表失败:", e);
+  } finally {
+    refreshing.value = false;
+  }
 }
 
 async function addProvider(partial: Partial<ProviderConfig> = {}): Promise<ProviderConfig> {
@@ -133,6 +154,8 @@ export function useProviders() {
     deleteProvider,
     setActiveProvider,
     saveSystemDefaultMappings,
+    refreshSystemDefaultModels,
+    refreshing,
     SYSTEM_DEFAULT_ID,
   };
 }

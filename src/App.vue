@@ -157,10 +157,12 @@ const runConfigsDialogVisible = ref(false);
 
 // ── Workspace dialogs ──
 const openFolderVisible = ref(false);
+const openFolderError = ref("");
 const removeWsVisible = ref(false);
 const removeWsTarget = ref<WorkspaceInfo | null>(null);
 
 async function onOpenFolder() {
+  openFolderError.value = "";
   openFolderVisible.value = true;
 }
 
@@ -168,9 +170,10 @@ async function onOpenFolderConfirm(path: string) {
   try {
     await sidebarRef.value?.openWorkspaceFolder(path);
     openFolderVisible.value = false;
+    openFolderError.value = "";
   } catch (e: any) {
-    const msg = typeof e === "string" ? e : (e?.message ?? "打开目录失败");
-    alert(msg);
+    openFolderError.value = typeof e === "string" ? e : (e?.message ?? "打开目录失败");
+    // 保持弹窗打开，错误条由 dialog 内 v-model:error 显示
   }
 }
 
@@ -646,7 +649,7 @@ onUnmounted(() => {
 
       <ContextMenu />
       <ModalDialog />
-      <OpenFolderDialog v-model:visible="openFolderVisible" @confirm="onOpenFolderConfirm" />
+      <OpenFolderDialog v-model:visible="openFolderVisible" v-model:error="openFolderError" @confirm="onOpenFolderConfirm" />
       <RemoveWorkspaceDialog
         v-model:visible="removeWsVisible"
         :workspace="removeWsTarget"
