@@ -144,6 +144,66 @@ fn save_workspace_config(path: &str) -> Result<(), String> {
     super::settings::save_config(&config)
 }
 
+#[tauri::command]
+pub async fn remove_workspace(
+    workspace_state: State<'_, WorkspaceState>,
+    key: String,
+    mode: String,
+) -> Result<(), String> {
+    match mode.as_str() {
+        "hide" => {
+            let mut config = super::settings::load_config();
+            hide_in_config(&mut config, &key);
+            super::settings::save_config(&config)?;
+        }
+        "delete" => {
+            let key_clone = key.clone();
+            tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+                let dir = claude_projects_dir().join(&key_clone);
+                if dir.exists() {
+                    std::fs::remove_dir_all(&dir)?;
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|e| format!("删除任务失败: {}", e))?
+            .map_err(|e| format!("删除目录失败: {}", e))?;
+            // 已删，从黑名单移除（若曾被隐藏）
+            let mut config = super::settings::load_config();
+            unhide_in_config(&mut config, &key);
+            super::settings::save_config(&config)?;
+        }
+        _ => return Err(format!("invalid mode: {}", mode)),
+    }
+    // 若移除的是当前激活工作区，清空激活
+    let is_active = workspace_state
+        .key
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_deref() == Some(&key);
+    if is_active {
+        {
+            let mut k = workspace_state.key.lock().map_err(|e| e.to_string())?;
+            *k = None;
+        }
+        {
+            let mut p = workspace_state.path.lock().map_err(|e| e.to_string())?;
+            *p = None;
+        }
+        let mut config = super::settings::load_config();
+        clear_active_in_config(&mut config);
+        super::settings::save_config(&config)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn unhide_workspace(key: String) -> Result<(), String> {
+    let mut config = super::settings::load_config();
+    unhide_in_config(&mut config, &key);
+    super::settings::save_config(&config)
+}
+
 pub fn resolve_path_from_key(key: &str) -> Option<String> {
     let mut chars = key.chars();
     let drive = chars.next()?;

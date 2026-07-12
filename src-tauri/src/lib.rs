@@ -174,6 +174,8 @@ pub fn run() {
             commands::workspace::list_workspaces,
             commands::workspace::set_workspace,
             commands::workspace::create_workspace,
+            commands::workspace::remove_workspace,
+            commands::workspace::unhide_workspace,
             commands::settings::get_settings,
             commands::settings::set_settings,
             commands::settings::notify_send,
