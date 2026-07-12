@@ -13,6 +13,14 @@ const themeOptions = [
   { value: "warm-dark", label: "Warm Dark" },
   { value: "catppuccin", label: "Catppuccin Mocha" },
 ];
+const cgBackendOptions = [
+  { value: "fastembed", label: "fastembed（本地 ONNX）" },
+  { value: "http", label: "HTTP（Ollama / 云端）" },
+];
+const cgFormatOptions = [
+  { value: "ollama", label: "ollama（/api/embed）" },
+  { value: "openai", label: "openai（/v1/embeddings）" },
+];
 import { formatShortcut, detectConflicts } from "../utils/shortcut";
 import { applyTheme, themes } from "../themes";
 
@@ -24,13 +32,13 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-type Tab = "general" | "providers" | "extensions" | "marketplace";
+type Tab = "general" | "providers" | "extensions" | "marketplace" | "codegraph";
 
 const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 
 // ── Settings (通用) ──
 
-const { settings, update, setOpenWithExtensions } = useSettings();
+const { settings, update, setOpenWithExtensions, setCodegraphEmbedder } = useSettings();
 const fontSizeLocal = ref(settings.fontSize);
 const fontFamilyLocal = ref(settings.fontFamily);
 const notificationsEnabledLocal = ref(settings.notificationsEnabled);
@@ -48,6 +56,38 @@ watch(recentLimitLocal, (v) => {
   recentLimitLocal.value = clamped;
   settings.recentLimit = clamped;
   update({ recentLimit: clamped });
+});
+
+// ── CodeGraph embedding 后端 ──
+// 整块写入：任一字段变动都把完整的 codegraphEmbedder 回写后端。下次 build
+// 读新配置；model_name/dim 变 → meta 不匹配 → 自动全量重建（KISS，无 reinit 命令）。
+
+const cgBackend = ref(settings.codegraphEmbedder.backend);
+const cgBaseUrl = ref(settings.codegraphEmbedder.baseUrl);
+const cgApiKey = ref(settings.codegraphEmbedder.apiKey);
+const cgModel = ref(settings.codegraphEmbedder.model);
+const cgFormat = ref(settings.codegraphEmbedder.format);
+const cgDim = ref(settings.codegraphEmbedder.dim);
+
+function flushCodegraphEmbedder() {
+  setCodegraphEmbedder({
+    backend: cgBackend.value,
+    baseUrl: cgBaseUrl.value,
+    apiKey: cgApiKey.value,
+    model: cgModel.value,
+    format: cgFormat.value,
+    dim: cgDim.value,
+  });
+}
+watch(cgBackend, flushCodegraphEmbedder);
+watch(cgBaseUrl, flushCodegraphEmbedder);
+watch(cgApiKey, flushCodegraphEmbedder);
+watch(cgModel, flushCodegraphEmbedder);
+watch(cgFormat, flushCodegraphEmbedder);
+watch(cgDim, (v) => {
+  const clamped = Math.max(0, Math.floor(v) || 0);
+  cgDim.value = clamped;
+  flushCodegraphEmbedder();
 });
 
 // ── Keybindings ──
@@ -254,6 +294,14 @@ function onOverlayClick(e: MouseEvent) {
             >
               <Icon class="nav-icon" name="market" :size="16" />
               <span class="nav-label">市场</span>
+            </button>
+            <button
+              class="nav-item"
+              :class="{ active: activeTab === 'codegraph' }"
+              @click="activeTab = 'codegraph'"
+            >
+              <Icon class="nav-icon" name="cube" :size="16" />
+              <span class="nav-label">代码索引</span>
             </button>
           </nav>
 
@@ -470,8 +518,92 @@ function onOverlayClick(e: MouseEvent) {
             </div>
 
             <!-- ── 市场 Tab ── -->
-            <div v-else class="tab-marketplace">
+            <div v-else-if="activeTab === 'marketplace'" class="tab-marketplace">
               <MarketplaceTab @go-settings="activeTab = 'general'" />
+            </div>
+
+            <!-- ── 代码索引 Tab ── -->
+            <div v-else class="tab-codegraph">
+              <div class="settings-field">
+                <label class="field-label">Embedding 后端</label>
+                <ThemedSelect
+                  :model-value="cgBackend"
+                  :options="cgBackendOptions"
+                  @update:model-value="(v: string) => (cgBackend = v as 'fastembed' | 'http')"
+                />
+                <span class="field-hint">
+                  fastembed = 本地 ONNX 离线推理（首次会下载模型）；http = Ollama / OpenAI 兼容云端，速度更快
+                </span>
+              </div>
+
+              <template v-if="cgBackend === 'http'">
+                <div class="settings-field">
+                  <label class="field-label">API 格式</label>
+                  <ThemedSelect
+                    :model-value="cgFormat"
+                    :options="cgFormatOptions"
+                    @update:model-value="(v: string) => (cgFormat = v as 'ollama' | 'openai')"
+                  />
+                  <span class="field-hint">
+                    ollama：原生 /api/embed（本地或远程 Ollama）；openai：/v1/embeddings（OpenAI / Jina 等兼容）
+                  </span>
+                </div>
+
+                <div class="settings-field">
+                  <label class="field-label">服务地址</label>
+                  <input
+                    v-model="cgBaseUrl"
+                    class="text-input"
+                    placeholder="http://localhost:11434（Ollama）或 https://api.openai.com"
+                  />
+                  <span class="field-hint">Ollama 本地默认 http://localhost:11434，也支持远程 HTTP 地址</span>
+                </div>
+
+                <div class="settings-field">
+                  <label class="field-label">API Key</label>
+                  <input
+                    v-model="cgApiKey"
+                    class="text-input"
+                    type="password"
+                    placeholder="OpenAI / Jina 必填；Ollama 原生可空"
+                  />
+                </div>
+
+                <div class="settings-field">
+                  <label class="field-label">模型</label>
+                  <input
+                    v-model="cgModel"
+                    class="text-input"
+                    placeholder="nomic-embed-text（Ollama）/ text-embedding-3-small（OpenAI）"
+                  />
+                </div>
+
+                <div class="settings-field">
+                  <label class="field-label">向量维度</label>
+                  <div class="field-control">
+                    <input
+                      v-model.number="cgDim"
+                      type="number"
+                      min="0"
+                      class="text-input"
+                      style="width: 100px"
+                    />
+                    <span class="field-hint">0 = 自动从首次响应探测；nomic-embed-text=768，text-embedding-3-small=1536</span>
+                  </div>
+                </div>
+              </template>
+
+              <div v-else class="cg-info">
+                <span class="field-hint">
+                  本地 ONNX 推理（all-MiniLM-L6-v2，384 维）。首次使用会从 HuggingFace 下载 ~23MB 模型到本地缓存。
+                  慢（约 50 符号/秒）但离线可用——结构层（精确跳转）始终先就绪，语义搜索后台补全。
+                </span>
+              </div>
+
+              <div class="cg-rebuild-note">
+                <Icon name="warning" :size="13" />
+                切换后端或模型会触发全量重建索引（向量维度 / 模型空间不兼容）。
+              </div>
             </div>
           </div>
         </div>
@@ -851,6 +983,32 @@ function onOverlayClick(e: MouseEvent) {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+/* ── CodeGraph tab ── */
+
+.tab-codegraph {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.cg-info {
+  margin-top: 4px;
+  margin-bottom: 16px;
+}
+
+.cg-rebuild-note {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--aide-radius-md);
+  background: color-mix(in srgb, var(--aide-warning) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-warning) 25%, transparent);
+  font-size: 11px;
+  color: var(--aide-warning);
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* ── Scrollbar ── */

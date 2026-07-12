@@ -7,6 +7,7 @@ pub mod settings;
 pub mod customizations;
 pub mod detectors;
 pub mod marketplace;
+pub mod proxy;
 pub mod provider;
 pub mod run_configs;
 pub mod run_process;

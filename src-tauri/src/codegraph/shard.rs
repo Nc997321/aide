@@ -7,7 +7,6 @@ use serde_json::{json, Value};
 use crate::codegraph::types::{Confidence, IndexedPoint, QueryResult, SymbolDef};
 
 const VECTOR_NAME: &str = "code-snippet";
-const VECTOR_DIM: usize = 384;
 
 pub struct CodeShard {
     inner: EdgeShard,
@@ -16,7 +15,10 @@ pub struct CodeShard {
 
 impl CodeShard {
     /// Create a fresh shard in `dir`. Fails if `dir` already contains shard data.
-    pub fn create(dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+    /// `dim` is the embedder's vector dimensionality — a shard built for one dim
+    /// cannot serve another, so a backend/model switch (different dim) forces a
+    /// full rebuild (the caller wipes `qdrant/` before create).
+    pub fn create(dir: &Path, dim: usize) -> Result<Self, Box<dyn std::error::Error>> {
         std::fs::create_dir_all(dir)?;
 
         let config = EdgeConfig {
@@ -24,7 +26,7 @@ impl CodeShard {
             vectors: HashMap::from([(
                 VECTOR_NAME.to_string(),
                 EdgeVectorParams {
-                    size: VECTOR_DIM,
+                    size: dim,
                     distance: Distance::Cosine,
                     on_disk: Some(true),
                     multivector_config: None,
@@ -78,14 +80,15 @@ impl CodeShard {
         })
     }
 
-    /// Open an existing shard from disk.
-    pub fn load(dir: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+    /// Open an existing shard from disk. `dim` must match the dimension the shard
+    /// was created with — callers validate this against `meta.json` before load.
+    pub fn load(dir: &Path, dim: usize) -> Result<Self, Box<dyn std::error::Error>> {
         let config = EdgeConfig {
             on_disk_payload: true,
             vectors: HashMap::from([(
                 VECTOR_NAME.to_string(),
                 EdgeVectorParams {
-                    size: VECTOR_DIM,
+                    size: dim,
                     distance: Distance::Cosine,
                     on_disk: Some(true),
                     multivector_config: None,

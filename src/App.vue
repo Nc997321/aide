@@ -42,6 +42,9 @@ import { useFileViewer } from "./composables/useFileViewer";
 import { useRecent } from "./composables/useRecent";
 import { timeAgo } from "./utils/time";
 import type { PaletteResult } from "./ui/ACommandPalette.vue";
+import OpenFolderDialog from "./components/OpenFolderDialog.vue";
+import RemoveWorkspaceDialog from "./components/RemoveWorkspaceDialog.vue";
+import type { WorkspaceInfo } from "./types";
 
 const leftCollapsed = ref(false);
 const rightCollapsed = ref(false);
@@ -151,6 +154,49 @@ const { run: runProject } = useRunProject();
 const { runStatus, start: startRunProcess, stop: stopRunProcess, restart: restartRunProcess } = useRunProcess();
 const { configs: runConfigs, activeConfig: activeRunConfig, load: loadRunConfigs, setActive: setActiveRunConfig } = useRunConfigs();
 const runConfigsDialogVisible = ref(false);
+
+// ── Workspace dialogs ──
+const openFolderVisible = ref(false);
+const openFolderError = ref("");
+const removeWsVisible = ref(false);
+const removeWsTarget = ref<WorkspaceInfo | null>(null);
+
+async function onOpenFolder() {
+  openFolderError.value = "";
+  openFolderVisible.value = true;
+}
+
+async function onOpenFolderConfirm(path: string) {
+  try {
+    await sidebarRef.value?.openWorkspaceFolder(path);
+    openFolderVisible.value = false;
+    openFolderError.value = "";
+  } catch (e: any) {
+    openFolderError.value = typeof e === "string" ? e : (e?.message ?? "打开目录失败");
+    // 保持弹窗打开，错误条由 dialog 内 v-model:error 显示
+  }
+}
+
+function onRemoveWorkspace(ws: WorkspaceInfo) {
+  removeWsTarget.value = ws;
+  removeWsVisible.value = true;
+}
+
+async function onRemoveWorkspaceConfirm(mode: "hide" | "delete") {
+  const ws = removeWsTarget.value;
+  if (!ws) return;
+  try {
+    const ok = await sidebarRef.value?.removeWorkspaceByKey(ws.key, mode);
+    if (!ok && mode === "delete") {
+      alert("该工作区有正在运行的会话，请先停止再移除。");
+    }
+  } catch (e: any) {
+    const msg = typeof e === "string" ? e : (e?.message ?? "移除工作区失败");
+    alert(msg);
+  }
+  removeWsVisible.value = false;
+  removeWsTarget.value = null;
+}
 
 // Persist workbench height changes to settings
 function onWorkbenchHeightChange(v: number) {
@@ -272,7 +318,7 @@ function relPath(p: string): string {
   return p;
 }
 
-const { setActiveProvider, load: loadProviders } = useProviders();
+const { setActiveProvider, load: loadProviders, refreshSystemDefaultModels } = useProviders();
 
 async function onProviderSwitch(providerId: string) {
   await setActiveProvider(providerId);
@@ -401,7 +447,10 @@ onMounted(async () => {
 
   // Load provider configuration
   await loadProviders();
-
+  // 启动时拉最新模型覆盖"系统默认"5 字段——fire-and-forget 不 await，UI 先渲染，
+  // 拉完响应式刷新 systemDefaultMappings（ProviderSettings 系统默认下 5 字段只读）。
+  // 无认证/网络失败时 Rust 侧保留旧值，前端不阻塞。
+  void refreshSystemDefaultModels();
   // Start tracking window focus for notifications
   const { init: initWindowFocus } = useWindowFocus();
   initWindowFocus();
@@ -524,6 +573,7 @@ onUnmounted(() => {
       @edit-run-configs="runConfigsDialogVisible = true"
       @toggle-left="leftCollapsed = !leftCollapsed"
       @toggle-right="rightCollapsed = !rightCollapsed"
+      @open-folder="onOpenFolder"
     />
 
     <div
@@ -551,6 +601,7 @@ onUnmounted(() => {
           @open-workbench="wb.toggle(workspacePath)"
           @provider-switch="onProviderSwitch"
           @open-settings-providers="openSettingsProviders"
+          @remove-workspace="onRemoveWorkspace"
         />
       </div>
 
@@ -598,6 +649,12 @@ onUnmounted(() => {
 
       <ContextMenu />
       <ModalDialog />
+      <OpenFolderDialog v-model:visible="openFolderVisible" v-model:error="openFolderError" @confirm="onOpenFolderConfirm" />
+      <RemoveWorkspaceDialog
+        v-model:visible="removeWsVisible"
+        :workspace="removeWsTarget"
+        @confirm="onRemoveWorkspaceConfirm"
+      />
       <SettingsPanel v-if="settingsVisible" :initial-tab="settingsInitialTab" @close="settingsVisible = false" />
       <RunConfigsDialog v-if="runConfigsDialogVisible" @close="runConfigsDialogVisible = false" />
       <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />

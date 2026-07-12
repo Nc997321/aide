@@ -81,6 +81,23 @@ export interface AppSettings {
   recentLimit: number;
   /** 聊天区分屏布局快照，按工作区路径键控（结构见 paneLayout/tree.ts 的 LayoutSnapshot） */
   paneLayouts: Record<string, unknown>;
+  /** CodeGraph embedding 后端配置（fastembed 本地 / http 远程）。默认 fastembed。 */
+  codegraphEmbedder: CodeGraphEmbedderConfig;
+}
+
+/** CodeGraph embedding 后端配置。`backend` 选 fastembed（本地 ONNX）或 http
+ *  （Ollama 本地/远程、OpenAI 兼容云端）。http 分支按 `format` 组请求/解响应。
+ *  切后端或模型会触发全量重建索引（向量维度/模型空间不兼容）。 */
+export interface CodeGraphEmbedderConfig {
+  backend: "fastembed" | "http";
+  /** backend === "http" 时以下字段生效： */
+  baseUrl: string;
+  /** OpenAI/Jina 必填；Ollama 原生可空 */
+  apiKey: string;
+  model: string;
+  format: "ollama" | "openai";
+  /** 模型向量维度，0 = 自动从首次响应探测 */
+  dim: number;
 }
 
 export interface ChangeFile {
@@ -239,4 +256,39 @@ export interface BuildIndexResult {
   scanned_files?: number;
   files_with_symbols?: number;
   has_embeddings?: boolean;
+  /** Exact reason embed didn't complete (full rebuild only): "ok" | "no_embedder: ..."
+   *  | "probe_failed: ..." | "probe_empty" | "dim_unresolved (dim=0)" | "cancelled at N/M"
+   *  | "batch_errors: N ..." | "incomplete: ...". Surfaced so the frontend can show
+   *  why semantic search is unavailable without relying on tracing logs. */
+  embed_status?: string;
+}
+
+/** 粗粒度构建进度，前端 poll 拉取（不走 app.emit，避历史跨线程 emit 卡死）。 */
+export interface BuildProgress {
+  /** 是否正在构建。false = 空闲/已完成，前端据此停 poll。 */
+  active: boolean;
+  /** 已 embed 的符号数。 */
+  done: number;
+  /** 总符号数。 */
+  total: number;
+  /** 当前阶段/文件的可读描述（"扫描文件树..." / "解析 src/foo.ts (123/456)"
+   *  / "嵌入符号 1340/2000" / "写盘..."），用于构建可观测性。 */
+  current: string;
+  /** 结构层（精确跳转）是否已就绪。Phase1 swap 后 true，即使语义层 embed 还在
+   *  后台跑——用户此时已能用精确跳转，不必干等。前端据此显示"已就绪"标记。 */
+  index_ready: boolean;
+}
+
+/** 增量重扫结果（`codegraph_rescan`）。只 reindex mtime > indexed_at 的文件。 */
+export interface RescanResult {
+  /** true = 当前有匹配 root 的活跃索引。false = 无索引/根不匹配，本次 no-op。 */
+  active_index: boolean;
+  /** 语义层是否就绪（embed_ready）。false 时 rescan 跳过（后台 embed 没跑完）。 */
+  embed_ready?: boolean;
+  /** walk 找到的改动文件数（mtime > indexed_at）。 */
+  changed_files: number;
+  /** 实际成功 reindex 的文件数。 */
+  rescanned_files: number;
+  /** reindex 失败的文件数（逐文件 warn）。 */
+  errors: number;
 }

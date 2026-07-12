@@ -7,7 +7,7 @@ use crate::codegraph::types::IndexedPoint;
 /// (e.g. 256) to cap peak memory during a full build.
 pub fn embed_and_store(
     points: &[IndexedPoint],
-    embedder: &Embedder,
+    embedder: &dyn Embedder,
     shard: &CodeShard,
 ) -> Result<usize, Box<dyn std::error::Error>> {
     if points.is_empty() {

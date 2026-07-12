@@ -293,13 +293,16 @@ function onKeydown(e: KeyboardEvent) {
       <!-- 跳转结果浮层 -->
       <div v-if="gotoActive" ref="gotoPopoverRef" tabindex="-1" class="goto-popover" @keydown="onGotoKeydown">
         <div class="goto-popover-header">
-          <span class="goto-popover-title">「{{ goto.searchWord.value }}」的定义</span>
+          <span class="goto-popover-title">「{{ goto.searchWord.value }}」的{{ goto.mode.value === 'references' ? '引用' : '定义' }}</span>
           <button class="goto-popover-close" @click="goto.dismiss()">&times;</button>
         </div>
         <div class="goto-popover-body">
           <template v-if="goto.results.value.length === 0">
             <div class="goto-popover-empty">
-              未找到定义 · <span class="goto-popover-hint" @click="onSearchAllReferences">搜索所有引用</span>
+              <template v-if="goto.mode.value === 'references'">未找到引用</template>
+              <template v-else>
+                未找到定义 · <span class="goto-popover-hint" @click="onSearchAllReferences">搜索所有引用</span>
+              </template>
             </div>
           </template>
           <template v-else>
@@ -310,8 +313,15 @@ function onKeydown(e: KeyboardEvent) {
               :class="{ selected: idx === goto.selectedIndex.value }"
               @click="jumpToResult(item)"
             >
-              <span class="goto-confidence" :class="item.confidence === 'Structure' ? 'conf-structure' : 'conf-semantic'">
-                {{ item.confidence === 'Structure' ? '[精确]' : `[语义·${item.score != null ? Math.round(item.score * 100) : '?'}%]` }}
+              <span
+                class="goto-confidence"
+                :class="goto.isGrepFallback.value
+                  ? 'conf-text'
+                  : (item.confidence === 'Structure' ? 'conf-structure' : 'conf-semantic')"
+              >
+                <template v-if="goto.isGrepFallback.value">[匹配]</template>
+                <template v-else-if="item.confidence === 'Structure'">[精确]</template>
+                <template v-else>[语义·{{ item.score != null ? Math.round(item.score * 100) : '?' }}%]</template>
               </span>
               <span class="goto-name">{{ item.symbol.name }}</span>
               <span v-if="item.symbol.parent" class="goto-parent">· {{ item.symbol.parent }}</span>
@@ -630,6 +640,8 @@ function onKeydown(e: KeyboardEvent) {
 }
 .conf-structure { color: #a6e3a1; }
 .conf-semantic { color: #f9e2af; }
+/* grep 文本兜底：精确文本匹配但非 AST 结构层，用中性色与 [精确]/[语义] 区分 */
+.conf-text { color: var(--aide-text-secondary); }
 
 .goto-name {
   font-size: 12px;

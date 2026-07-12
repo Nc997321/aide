@@ -6,7 +6,7 @@ use std::process::Command;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use super::{claude_home, config_path};
+use super::claude_home;
 
 // ── Types (API response) ──
 
@@ -114,83 +114,6 @@ impl From<RawPluginEntry> for PluginEntry {
     }
 }
 
-// ── Git proxy helpers ──
-
-/// Try to detect the system proxy on Windows.
-/// Checks: git global config → HTTPS_PROXY env var → common local ports.
-fn detect_proxy() -> Option<String> {
-    // 1. Scan common local proxy ports FIRST (most reliable — needs to be live)
-    let common_ports = [7890u16, 10809, 7891, 1080, 8118, 8080];
-    for port in &common_ports {
-        if let Ok(_stream) = std::net::TcpStream::connect_timeout(
-            &format!("127.0.0.1:{}", port).parse().unwrap(),
-            std::time::Duration::from_millis(300),
-        ) {
-            return Some(format!("http://127.0.0.1:{}", port));
-        }
-    }
-
-    // 2. Check environment variables (and verify reachable)
-    for var in &["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
-        if let Ok(val) = std::env::var(var) {
-            if !val.is_empty() && is_proxy_reachable(&val) {
-                return Some(val);
-            }
-        }
-    }
-
-    // 3. Check git global config (only if still reachable)
-    {
-        let mut git_cmd = Command::new("git");
-        git_cmd.args(["config", "--global", "http.proxy"]);
-        #[cfg(windows)]
-        { git_cmd.creation_flags(0x08000000); }
-        if let Ok(output) = git_cmd.output() {
-            let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !val.is_empty() && is_proxy_reachable(&val) {
-                return Some(val);
-            }
-        }
-    }
-
-    // 4. Check app settings (user-configured proxy in the settings panel)
-    let cfg_path = config_path();
-    if cfg_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&cfg_path) {
-            if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(proxy) = config
-                    .get("settings")
-                    .and_then(|s| s.get("proxy"))
-                    .and_then(|p| p.as_str())
-                {
-                    if !proxy.is_empty() && is_proxy_reachable(proxy) {
-                        return Some(proxy.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    None
-}
-
-/// Parse proxy URL and verify it's actually reachable via TCP.
-fn is_proxy_reachable(proxy: &str) -> bool {
-    // Parse "http://host:port" or "socks5://host:port"
-    let addr = proxy
-        .trim()
-        .trim_start_matches("http://")
-        .trim_start_matches("https://")
-        .trim_start_matches("socks5://")
-        .trim_end_matches('/');
-    // addr should be "host:port"
-    if let Ok(sock) = addr.parse::<std::net::SocketAddr>() {
-        if std::net::TcpStream::connect_timeout(&sock, std::time::Duration::from_millis(500)).is_ok() {
-            return true;
-        }
-    }
-    false
-}
 
 /// Classify a git clone error and return a prefixed error string.
 /// The prefix is a machine-readable code; the frontend maps it to
@@ -219,7 +142,7 @@ fn git_clone(url: &str, target: &std::path::Path) -> Result<std::process::Output
     { cmd.creation_flags(0x08000000); }
 
     // Apply proxy if detected
-    if let Some(ref proxy) = detect_proxy() {
+    if let Some(ref proxy) = super::proxy::detect_proxy() {
         cmd.arg("-c");
         cmd.arg(format!("http.proxy={}", proxy));
         cmd.arg("-c");

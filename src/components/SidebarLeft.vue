@@ -8,7 +8,8 @@ import { useProviders } from "../composables/useProviders";
 import { useRecent } from "../composables/useRecent";
 import { useSessionNames } from "../composables/useSessionNames";
 import { useSessionWorkspaces } from "../composables/useSessionWorkspaces";
-import { sessionMenuItems } from "../menus/contextMenus";
+import { sessionMenuItems, workspaceMenuItems } from "../menus/contextMenus";
+import { useWorkspaces } from "../composables/useWorkspaces";
 import { api } from "../api";
 import { open } from "@tauri-apps/plugin-shell";
 import { getVersion } from "@tauri-apps/api/app";
@@ -25,14 +26,15 @@ const emit = defineEmits<{
   "session-changed": [id: string];
   "new-session": [name: string];
   "workspace-changed": [path: string];
+  "remove-workspace": [ws: WorkspaceInfo];
   "open-settings": [];
   "open-workbench": [];
   "provider-switch": [providerId: string];
   "open-settings-providers": [];
 }>();
 
+const { workspaces, activeKey: wsActiveKey, refresh: refreshWorkspaces, openFolder, removeWorkspace: removeWs } = useWorkspaces();
 const sessionsByWorkspace = ref<Record<string, Session[]>>({});
-const workspaces = ref<WorkspaceInfo[]>([]);
 const activeWorkspace = ref("");
 const expandedWorkspaces = ref(new Set<string>());
 const searchQuery = ref("");
@@ -97,11 +99,7 @@ function toggleShowAllSessions(wsKey: string) {
 }
 
 async function loadWorkspaces() {
-  try {
-    workspaces.value = await api.listWorkspaces();
-  } catch (_e) {
-    workspaces.value = [];
-  }
+  await refreshWorkspaces();
 }
 
 async function loadSessions() {
@@ -251,6 +249,45 @@ async function switchToWorkspaceByKey(wsKey: string) {
   if (ws) await activateWorkspace(ws);
 }
 
+/** TitleBar「打开目录」确认后调用：登记目录为工作区 → 激活 → 广播 workspace-changed。
+ *  由 App.vue 经 defineExpose 触发。 */
+async function openWorkspaceFolder(path: string): Promise<boolean> {
+  let info: WorkspaceInfo;
+  try {
+    info = await openFolder(path);
+  } catch (e) {
+    throw e;
+  }
+  activeWorkspace.value = info.key;
+  expandedWorkspaces.value.add(info.key);
+  emit("workspace-changed", info.name);
+  await setCurrentWs(info.key, info.name);
+  await loadSessions();
+  return true;
+}
+
+/** 移除工作区（hide/delete）。delete 前检查该工作区是否有 running 会话。 */
+async function removeWorkspaceByKey(key: string, mode: "hide" | "delete"): Promise<boolean> {
+  if (mode === "delete") {
+    // 阻止删除有正在运行会话的工作区
+    const list = sessionsByWorkspace.value[key] ?? [];
+    if (list.some(s => sessionState[s.id] === "running")) {
+      return false;
+    }
+  }
+  const wasActive = key === activeWorkspace.value;
+  await removeWs(key, mode);
+  // 从本地 UI 状态清理
+  expandedWorkspaces.value.delete(key);
+  delete sessionsByWorkspace.value[key];
+  if (wasActive) {
+    activeWorkspace.value = "";
+    // 回落空态：清当前会话预览
+    emit("session-changed", "");
+  }
+  return true;
+}
+
 async function renameSession(id: string, name: string) {
   try {
     await api.renameSession(id, name);
@@ -276,6 +313,20 @@ function onSessionContextMenu(e: MouseEvent, id: string) {
     e.clientX,
     e.clientY,
     sessionMenuItems(id, (name: string) => renameSession(id, name), loadSessions),
+  );
+}
+
+function onWorkspaceContextMenu(e: MouseEvent, ws: WorkspaceInfo) {
+  e.preventDefault();
+  e.stopPropagation();
+  show(
+    e.clientX,
+    e.clientY,
+    workspaceMenuItems(
+      ws,
+      () => activateWorkspace(ws),
+      () => emit("remove-workspace", ws),
+    ),
   );
 }
 
@@ -328,7 +379,7 @@ function addSession(session: Session) {
   registerSessionWs([session], wsKey);
 }
 
-defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace, switchToWorkspaceByKey, sessionsByWorkspace });
+defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace, switchToWorkspaceByKey, sessionsByWorkspace, openWorkspaceFolder, removeWorkspaceByKey });
 </script>
 
 <template>
@@ -356,6 +407,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
           }"
           v-tooltip="ws.missing ? `路径不存在，目录可能已被移动或删除：${ws.key}` : ''"
           @click="ws.missing ? undefined : switchWorkspace(ws)"
+          @contextmenu="onWorkspaceContextMenu($event, ws)"
         >
           <svg v-if="!ws.missing" class="ws-chevron" :class="{ expanded: expandedWorkspaces.has(ws.key) }" width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>

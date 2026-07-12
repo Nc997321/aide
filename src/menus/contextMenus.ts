@@ -122,8 +122,12 @@ export function directoryMenuItems(
 
 // ── File tree blank area ──
 
-export function fileTreeAreaMenuItems(rootPath: string, onRefresh: () => void): MenuItem[] {
-  return [
+export function fileTreeAreaMenuItems(
+  rootPath: string,
+  onRefresh: () => void,
+  codegraph?: { rescan: (root: string) => void; rebuild: (root: string) => void },
+): MenuItem[] {
+  const items: MenuItem[] = [
     { label: "刷新", action: onRefresh },
     sep(),
     {
@@ -145,6 +149,16 @@ export function fileTreeAreaMenuItems(rootPath: string, onRefresh: () => void): 
       },
     },
   ];
+  if (codegraph) {
+    items.push(
+      sep(),
+      // 增量：只 reindex mtime>indexed_at 的改动文件，保留其余符号/向量。快。
+      { label: "更新索引（仅改动文件）", action: () => codegraph.rescan(rootPath) },
+      // 全量：force=true 跳过快速路径，走版本化目录 + 进度条从头重建。
+      { label: "全量重建索引", action: () => codegraph.rebuild(rootPath) },
+    );
+  }
+  return items;
 }
 
 // ── Session context menu ──
@@ -186,6 +200,26 @@ export function sessionMenuItems(
         pane.closeSessionTab(id); // 分屏里开着的 tab 一并关掉
         onDeleted();
       },
+    },
+  ];
+}
+
+// ── Workspace context menu（侧栏工作区行右键） ──
+
+export function workspaceMenuItems(
+  ws: { key: string; name: string; missing: boolean },
+  onActivate?: () => void,
+  onRemove?: () => void,
+): MenuItem[] {
+  return [
+    ...(ws.missing ? [] : [{ label: "切换到此工作区", action: () => onActivate?.() }]),
+    { label: "在文件资源管理器中打开", action: () => api.showInExplorer(ws.name) },
+    { label: "复制路径", action: () => navigator.clipboard.writeText(ws.name) },
+    sep(),
+    {
+      label: "从列表移除…",
+      danger: true,
+      action: () => onRemove?.(),
     },
   ];
 }
