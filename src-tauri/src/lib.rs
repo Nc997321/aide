@@ -284,6 +284,9 @@ pub fn run() {
             // 卡死诊断黑匣子
             diagnostics::diag_heartbeat,
             diagnostics::diag_freeze_supplement,
+            // 通知中心持久化
+            commands::notifications::load_notifications,
+            commands::notifications::save_notifications,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

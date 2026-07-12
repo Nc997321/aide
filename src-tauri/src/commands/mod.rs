@@ -15,6 +15,7 @@ pub mod clipboard;
 pub mod file_assoc;
 pub mod recent;
 pub mod chat;
+pub mod notifications;
 
 use serde::{Deserialize, Serialize};
 use std::fs;
