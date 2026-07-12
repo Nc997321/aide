@@ -3,7 +3,7 @@ import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem,
   ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
   GrepMatch, ProviderConfig, ProviderModelMappings, RunConfig, RunTarget, RecentView,
-  SkillMeta, BuildIndexResult, QueryResult,
+  SkillMeta, BuildIndexResult, BuildProgress, QueryResult,
 } from "./types";
 import type { ModelOption, PermissionModeOption } from "./types/chat";
 
@@ -64,6 +64,9 @@ export const api = {
   },
   listDirectory(path: string, showHidden?: boolean): Promise<FileEntry[]> {
     return invoke("list_directory", { path, showHidden: showHidden ?? false });
+  },
+  listFsRoots(): Promise<FileEntry[]> {
+    return invoke("list_fs_roots");
   },
   fileOpen(path: string): Promise<void> {
     return invoke("file_open", { path });
@@ -231,6 +234,9 @@ export const api = {
   setSystemDefaultModelMappings(mappings: ProviderModelMappings): Promise<void> {
     return invoke("set_system_default_model_mappings", { mappings });
   },
+  refreshSystemDefaultModels(): Promise<ProviderModelMappings> {
+    return invoke("refresh_system_default_models");
+  },
 
   // 工作区
   listWorkspaces(): Promise<WorkspaceInfo[]> {
@@ -238,6 +244,15 @@ export const api = {
   },
   setWorkspace(key: string, path: string): Promise<void> {
     return invoke("set_workspace", { key, path });
+  },
+  createWorkspace(path: string): Promise<WorkspaceInfo> {
+    return invoke("create_workspace", { path });
+  },
+  removeWorkspace(key: string, mode: "hide" | "delete"): Promise<void> {
+    return invoke("remove_workspace", { key, mode });
+  },
+  unhideWorkspace(key: string): Promise<void> {
+    return invoke("unhide_workspace", { key });
   },
 
   // 最近访问
@@ -275,5 +290,9 @@ export const api = {
   },
   codegraphReindexFile(projectRoot: string, file: string): Promise<void> {
     return invoke("codegraph_reindex_file", { projectRoot, file });
+  },
+  /** 粗粒度构建进度（纯原子读，同步 inline 命令）。前端定时 poll。 */
+  codegraphBuildProgress(): Promise<BuildProgress> {
+    return invoke("codegraph_build_progress");
   },
 };
