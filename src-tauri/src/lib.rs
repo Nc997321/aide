@@ -173,6 +173,7 @@ pub fn run() {
             commands::session::find_sessions_since,
             commands::workspace::list_workspaces,
             commands::workspace::set_workspace,
+            commands::workspace::create_workspace,
             commands::settings::get_settings,
             commands::settings::set_settings,
             commands::settings::notify_send,
@@ -236,6 +237,7 @@ pub fn run() {
             commands::provider::set_active_provider_id,
             commands::provider::get_system_default_model_mappings,
             commands::provider::set_system_default_model_mappings,
+            commands::provider::refresh_system_default_models,
             // Marketplace commands
             commands::marketplace::fetch_marketplace,
             commands::marketplace::install_plugin,
@@ -274,6 +276,7 @@ pub fn run() {
             codegraph::codegraph_goto_definition,
             codegraph::codegraph_close,
             codegraph::codegraph_reindex_file,
+            codegraph::codegraph_build_progress,
             // 卡死诊断黑匣子
             diagnostics::diag_heartbeat,
             diagnostics::diag_freeze_supplement,

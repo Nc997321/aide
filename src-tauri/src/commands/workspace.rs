@@ -98,6 +98,38 @@ pub fn set_workspace(
     Ok(())
 }
 
+#[tauri::command]
+pub fn create_workspace(
+    workspace_state: State<'_, WorkspaceState>,
+    path: String,
+) -> Result<WorkspaceInfo, String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("目录不存在: {}", path));
+    }
+    let key = path_to_key(&path);
+    // 建编码目录（幂等：已存在不报错）
+    let dir = claude_projects_dir().join(&key);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建工作区目录失败: {}", e))?;
+    // 重新登记 = 自动从黑名单移除
+    {
+        let mut config = super::settings::load_config();
+        unhide_in_config(&mut config, &key);
+        super::settings::save_config(&config)?;
+    }
+    // 激活（与 set_workspace 等价）
+    {
+        let mut k = workspace_state.key.lock().map_err(|e| e.to_string())?;
+        *k = Some(key.clone());
+    }
+    {
+        let mut pp = workspace_state.path.lock().map_err(|e| e.to_string())?;
+        *pp = Some(PathBuf::from(path.clone()));
+    }
+    let _ = save_workspace_config(&key);
+    Ok(WorkspaceInfo { key, name: path, missing: false })
+}
+
 pub fn load_workspace_config() -> Option<String> {
     let config = super::settings::load_config();
     config.get("workspace").and_then(|w| w.as_str()).map(|s| s.to_string())
