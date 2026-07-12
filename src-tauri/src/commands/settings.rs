@@ -1,10 +1,18 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
+use std::path::Path;
 use std::sync::Mutex;
 
 use super::config_path;
 use once_cell::sync::Lazy;
+
+/// 串行化所有 config「读→改→写」临界区的全局锁。单纯的原子写只能防崩溃半截
+/// 文件，防不了两个写入方在杀软拖慢 `fs::write` 时互相覆盖——曾导致用户新增的
+/// provider 被异步 `refresh_system_default_models` 的陈旧快照覆盖丢失。所有要改
+/// config 并写回的命令必须走 `with_config_mut`；纯读用 `load_config`（原子写
+/// 保证读到的是完整旧值或新值，不会读到半截）。
+static CONFIG_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 /// Global state to store the most recent notification's session ID.
 /// When the app window is activated (e.g., by clicking the toast),
@@ -146,6 +154,9 @@ impl Default for AppSettings {
 }
 
 /// Read the full config JSON. Returns Value::Null if the file doesn't exist.
+///
+/// 纯读不取锁——`save_config` 走 temp+rename 原子替换，读到的要么是完整的旧值
+/// 要么是完整的新值，绝不会读到半截。要改并写回必须用 `with_config_mut`。
 pub fn load_config() -> Value {
     let path = config_path();
     if path.exists() {
@@ -158,13 +169,66 @@ pub fn load_config() -> Value {
     Value::Null
 }
 
-/// Write the full config JSON back to disk.
+/// Write the full config JSON back to disk atomically（temp + rename）。
+///
+/// 崩溃/强杀不会留下半截损坏的 config.json——原文件只在 rename 成功的一刻被
+/// 替换。杀软锁定目标文件时 rename 重试几次（锁通常瞬态）；仍失败则保留原文件
+/// 并报错，最坏是本次改动没保存，而不是把整个 config 写坏。**不取锁**——并发
+/// 安全由 `with_config_mut` 在外层临界区保证；直接成对调用 `load_config` +
+/// `save_config` 是不安全的，应改用 `with_config_mut`。
 pub fn save_config(v: &Value) -> Result<(), String> {
     let path = config_path();
-    let dir = path.parent().unwrap();
+    let dir = path.parent().ok_or_else(|| "config path has no parent".to_string())?;
     fs::create_dir_all(dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
-    fs::write(&path, serde_json::to_string_pretty(v).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("Failed to write config: {}", e))
+    let json = serde_json::to_string_pretty(v).map_err(|e| format!("Serialize config: {}", e))?;
+    let tmp = path.with_extension("json.tmp");
+    // 先写临时文件——失败说明磁盘/权限问题，不碰原文件。
+    fs::write(&tmp, &json).map_err(|e| format!("Failed to write config temp: {}", e))?;
+    if let Err(e) = persist_file(&tmp, &path) {
+        // rename 始终失败：清理临时文件，原文件未动。
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// 原子替换：同文件系统 rename 是原子的。Windows 上杀软锁目标文件时 rename
+/// 失败，重试几次（锁通常瞬态）；都失败则保留原文件。
+fn persist_file(tmp: &Path, dest: &Path) -> Result<(), String> {
+    if let Err(e) = fs::rename(tmp, dest) {
+        #[cfg(windows)]
+        {
+            for _ in 0..4 {
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                if fs::rename(tmp, dest).is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+        return Err(format!(
+            "Failed to atomically replace config (file may be locked by antivirus): {}",
+            e
+        ));
+    }
+    Ok(())
+}
+
+/// 在一把全局锁内完成 load → modify → save，把「读旧值→改→写回」做成临界区。
+/// 防止两个 config 写入方在杀软拖慢写盘时互相覆盖（曾导致新增的 provider 被异步
+/// refresh 的陈旧快照覆盖丢失）。闭包返回的值原样透传。`config` 为空时初始化为
+/// `{}`，闭包可直接 `config["key"] = ...`。
+pub fn with_config_mut<F, R>(f: F) -> Result<R, String>
+where
+    F: FnOnce(&mut Value) -> Result<R, String>,
+{
+    let _guard = CONFIG_LOCK.lock().map_err(|e| e.to_string())?;
+    let mut config = load_config();
+    if config.is_null() {
+        config = serde_json::json!({});
+    }
+    let r = f(&mut config)?;
+    save_config(&config)?;
+    Ok(r)
 }
 
 #[tauri::command]
@@ -182,23 +246,21 @@ pub fn get_settings() -> Result<AppSettings, String> {
 #[tauri::command]
 pub fn set_settings(settings: Value) -> Result<(), String> {
     let _trace = crate::diagnostics::trace_command("set_settings");
-    let mut config = load_config();
-    if config.is_null() {
-        config = serde_json::json!({});
-    }
-    // Merge incoming settings fields into the existing "settings" sub-object
-    let existing = config
-        .get("settings")
-        .cloned()
-        .unwrap_or(serde_json::json!({}));
-    let mut merged = existing;
-    if let Some(obj) = settings.as_object() {
-        for (k, v) in obj {
-            merged[k] = v.clone();
+    with_config_mut(move |config| {
+        // Merge incoming settings fields into the existing "settings" sub-object
+        let existing = config
+            .get("settings")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+        let mut merged = existing;
+        if let Some(obj) = settings.as_object() {
+            for (k, v) in obj {
+                merged[k] = v.clone();
+            }
         }
-    }
-    config["settings"] = merged;
-    save_config(&config)
+        config["settings"] = merged;
+        Ok(())
+    })
 }
 
 /// Send a desktop notification with the correct AppUserModelID,

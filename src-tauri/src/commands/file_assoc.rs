@@ -20,7 +20,7 @@ use std::sync::Mutex;
 
 use tauri::State;
 
-use super::settings::{load_config, save_config};
+use super::settings::with_config_mut;
 
 /// 冷启动时由 setup 存入、前端 mount 时消费的待预览路径。
 pub struct PendingOpenFile(pub Mutex<Option<String>>);
@@ -246,36 +246,34 @@ pub fn set_open_with_extensions(new_exts: Vec<String>) -> Result<(), String> {
     let _trace = crate::diagnostics::trace_command("set_open_with_extensions");
     let new_exts: Vec<String> = new_exts.iter().filter_map(|e| sanitize_ext(e)).collect();
 
-    let mut config = load_config();
-    if config.is_null() {
-        config = serde_json::json!({});
-    }
-    // 读取旧值：优先 camelCase（新约定），回退 snake_case（旧 config.json）。
-    let old: Vec<String> = config
-        .get("settings")
-        .and_then(|s| s.get("openWithExtensions").or_else(|| s.get("open_with_extensions")))
-        .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|e| sanitize_ext(&e))
-        .collect();
+    let (added, removed) = with_config_mut(move |config| {
+        // 读取旧值：优先 camelCase（新约定），回退 snake_case（旧 config.json）。
+        let old: Vec<String> = config
+            .get("settings")
+            .and_then(|s| s.get("openWithExtensions").or_else(|| s.get("open_with_extensions")))
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|e| sanitize_ext(&e))
+            .collect();
 
-    // 落盘 openWithExtensions（与 AppSettings 的 serde rename 约定一致）
-    let mut merged = config
-        .get("settings")
-        .cloned()
-        .unwrap_or(serde_json::json!({}));
-    // 迁移：若残留旧 snake_case key，先清掉，避免双键并存。
-    if let Some(obj) = merged.as_object_mut() {
-        obj.remove("open_with_extensions");
-    }
-    merged["openWithExtensions"] =
-        serde_json::to_value(&new_exts).map_err(|e| e.to_string())?;
-    config["settings"] = merged;
-    save_config(&config)?;
+        // 落盘 openWithExtensions（与 AppSettings 的 serde rename 约定一致）
+        let mut merged = config
+            .get("settings")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+        // 迁移：若残留旧 snake_case key，先清掉，避免双键并存。
+        if let Some(obj) = merged.as_object_mut() {
+            obj.remove("open_with_extensions");
+        }
+        merged["openWithExtensions"] =
+            serde_json::to_value(&new_exts).map_err(|e| e.to_string())?;
+        config["settings"] = merged;
 
-    let added: Vec<String> = new_exts.iter().filter(|e| !old.contains(e)).cloned().collect();
-    let removed: Vec<String> = old.iter().filter(|e| !new_exts.contains(e)).cloned().collect();
+        let added: Vec<String> = new_exts.iter().filter(|e| !old.contains(e)).cloned().collect();
+        let removed: Vec<String> = old.iter().filter(|e| !new_exts.contains(e)).cloned().collect();
+        Ok((added, removed))
+    })?;
     if !added.is_empty() {
         register_open_with(added)?;
     }

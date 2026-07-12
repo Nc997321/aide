@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 
 use super::proxy::detect_proxy;
-use super::settings::{load_config, save_config};
+use super::settings::{load_config, with_config_mut};
 use std::time::Duration;
 
 /// Claude 专属的模型 env 变量映射——5 个变量统一在此，换 provider 时整块重写，
@@ -190,13 +190,11 @@ pub fn get_providers() -> Result<Vec<ProviderConfig>, String> {
 #[tauri::command]
 pub fn set_providers(providers: Vec<ProviderConfig>) -> Result<(), String> {
     let _trace = crate::diagnostics::trace_command("set_providers");
-    let mut config = load_config();
-    if config.is_null() {
-        config = serde_json::json!({});
-    }
-    config["providers"] =
-        serde_json::to_value(&providers).map_err(|e| format!("Serialize error: {}", e))?;
-    save_config(&config)
+    with_config_mut(move |config| {
+        config["providers"] =
+            serde_json::to_value(&providers).map_err(|e| format!("Serialize error: {}", e))?;
+        Ok(())
+    })
 }
 
 #[tauri::command]
@@ -214,12 +212,10 @@ pub fn get_active_provider_id() -> Result<String, String> {
 #[tauri::command]
 pub fn set_active_provider_id(provider_id: String) -> Result<(), String> {
     let _trace = crate::diagnostics::trace_command("set_active_provider_id");
-    let mut config = load_config();
-    if config.is_null() {
-        config = serde_json::json!({});
-    }
-    config["active_provider"] = Value::String(provider_id);
-    save_config(&config)
+    with_config_mut(move |config| {
+        config["active_provider"] = Value::String(provider_id);
+        Ok(())
+    })
 }
 
 // ── 系统默认 provider 的模型变量映射 ──
@@ -251,13 +247,12 @@ pub fn get_system_default_model_mappings() -> Result<ProviderModelMappings, Stri
 #[tauri::command]
 pub fn set_system_default_model_mappings(mappings: ProviderModelMappings) -> Result<(), String> {
     let _trace = crate::diagnostics::trace_command("set_system_default_model_mappings");
-    let mut config = load_config();
-    if config.is_null() {
-        config = serde_json::json!({});
-    }
-    config["system_default_model_mappings"] =
+    let mappings_val =
         serde_json::to_value(&mappings).map_err(|e| format!("Serialize error: {}", e))?;
-    save_config(&config)
+    with_config_mut(move |config| {
+        config["system_default_model_mappings"] = mappings_val;
+        Ok(())
+    })
 }
 
 // ── 启动时拉最新模型覆盖"系统默认" ──
@@ -322,14 +317,13 @@ pub async fn refresh_system_default_models() -> Result<ProviderModelMappings, St
         // 4. 映射省钱档
         let mappings = parse_models_response(&body)?;
 
-        // 5. 持久化
-        let mut config = load_config();
-        if config.is_null() {
-            config = serde_json::json!({});
-        }
-        config["system_default_model_mappings"] =
+        // 5. 持久化（走临界区，与 set_providers/set_settings 串行，避免陈旧快照覆盖）
+        let mappings_val =
             serde_json::to_value(&mappings).map_err(|e| format!("Serialize error: {}", e))?;
-        save_config(&config)?;
+        with_config_mut(move |config| {
+            config["system_default_model_mappings"] = mappings_val;
+            Ok(())
+        })?;
 
         Ok(mappings)
     })

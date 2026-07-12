@@ -39,8 +39,9 @@ pub async fn send_message(
     });
 
     if !sidecar_mgr.has_session(&session_id) {
-        let mut env_vars: HashMap<String, String> = if let Some(provider) = load_active_provider() {
-            provider_to_env_vars(&provider)
+        let active_provider = load_active_provider();
+        let mut env_vars: HashMap<String, String> = if let Some(ref provider) = active_provider {
+            provider_to_env_vars(provider)
         } else {
             // 系统默认：认证走系统 env 兜底（下方 ANTHROPIC_AUTH_TOKEN 等补注），
             // 但模型变量 5 字段可配（CLAUDE_CODE_SUBAGENT_MODEL 等）——否则子代理
@@ -48,19 +49,37 @@ pub async fn send_message(
             system_default_mappings_to_env()
         };
 
-        // 从系统全局环境变量读取认证信息和代理（provider 未覆盖的字段兜底）
-        for var in &[
-            "ANTHROPIC_AUTH_TOKEN",
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_BASE_URL",
-            "CLAUDE_CONFIG_DIR",
-            "HTTP_PROXY",
-            "HTTPS_PROXY",
-            "http_proxy",
-            "https_proxy",
-            "ALL_PROXY",
-            "all_proxy",
-        ] {
+        // 从系统全局环境变量兜底。**认证三元组（AUTH_TOKEN/API_KEY/BASE_URL）只对
+        // 系统默认 provider 兜底**——自定义 provider 是用户显式配置的连接身份，留空
+        // = 不设，绝不能拿系统里别的 Anthropic 账号 token 兜底进来，否则会和 provider
+        // 的 api_key 冲突（SDK 里 AUTH_TOKEN/Bearer 优先级高于 API_KEY/x-api-key），
+        // 把官方 token 带到第三方 base_url 返回 403。CLAUDE_CONFIG_DIR 和代理类是
+        // 环境级配置、与认证身份无关，两种 provider 都兜底。
+        let fallback_keys: &[&str] = if active_provider.is_some() {
+            &[
+                "CLAUDE_CONFIG_DIR",
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "ALL_PROXY",
+                "all_proxy",
+            ]
+        } else {
+            &[
+                "ANTHROPIC_AUTH_TOKEN",
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_BASE_URL",
+                "CLAUDE_CONFIG_DIR",
+                "HTTP_PROXY",
+                "HTTPS_PROXY",
+                "http_proxy",
+                "https_proxy",
+                "ALL_PROXY",
+                "all_proxy",
+            ]
+        };
+        for var in fallback_keys {
             if !env_vars.contains_key(*var) {
                 if let Ok(val) = std::env::var(var) {
                     if !val.is_empty() {

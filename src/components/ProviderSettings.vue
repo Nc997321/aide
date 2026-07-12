@@ -248,6 +248,7 @@ function knownModelsForDatalist(): string[] {
             class="text-input"
             placeholder="https://api.example.com/anthropic"
           />
+          <span class="form-hint">第三方 Anthropic 兼容端点（GLM/DeepSeek/聚合站等）填这里；同时建议在下方填 Auth Token 而非 API Key</span>
         </div>
 
         <div v-if="!isSystemDefault" class="form-field">
@@ -263,6 +264,7 @@ function knownModelsForDatalist(): string[] {
               {{ showApiKey ? "🙈" : "👁" }}
             </button>
           </div>
+          <span class="form-hint">对应 <code>x-api-key</code> 头。Anthropic 官方端点用这个；多数第三方端点用下方 Auth Token</span>
         </div>
 
         <div v-if="!isSystemDefault" class="form-field">
@@ -278,6 +280,7 @@ function knownModelsForDatalist(): string[] {
               {{ showAuthToken ? "🙈" : "👁" }}
             </button>
           </div>
+          <span class="form-hint">对应 <code>Authorization: Bearer</code> 头。GLM/OpenAI 兼容等第三方端点通常填这里；与 API Key 二选一，同时填会以本字段为准</span>
         </div>
 
         <!-- 模型变量：5 个 Claude env 变量统一块。自定义 provider 和系统默认都显示。 -->
@@ -338,6 +341,7 @@ function knownModelsForDatalist(): string[] {
               placeholder="留空跟随主模型"
             />
             <span class="form-hint">子代理（并行任务）单独用的模型，通常选便宜快的</span>
+            <span class="form-hint">仅对当前激活的供应商生效——系统默认下填的不会作用到自定义供应商的会话</span>
           </div>
         </div>
 
@@ -413,6 +417,9 @@ function knownModelsForDatalist(): string[] {
         >
           {{ refreshing ? "刷新中..." : "手动刷新" }}
         </button>
+      </div>
+      <div v-if="!isSystemDefault" class="respawn-hint">
+        修改连接身份（Base URL / API Key / Auth Token）或模型变量后，正在运行的会话不会自动应用——需停止该会话后重新发送才会用上新配置。
       </div>
     </div>
 
@@ -800,6 +807,15 @@ select.text-input {
 }
 .btn-refresh:hover:not(:disabled) {
   background: color-mix(in srgb, var(--aide-accent) 22%, transparent);
+}
+
+/* 编辑后需 respawn 才生效的提示 */
+.respawn-hint {
+  padding: 6px 16px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--aide-text-muted);
+  border-top: 1px solid var(--aide-surface-default);
 }
 
 /* ── Empty state ── */

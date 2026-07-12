@@ -119,11 +119,10 @@ pub fn create_workspace(
     let dir = claude_projects_dir().join(&key);
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建工作区目录失败: {}", e))?;
     // 重新登记 = 自动从黑名单移除
-    {
-        let mut config = super::settings::load_config();
-        unhide_in_config(&mut config, &key);
-        super::settings::save_config(&config)?;
-    }
+    super::settings::with_config_mut(|config| {
+        unhide_in_config(config, &key);
+        Ok(())
+    })?;
     // 激活（与 set_workspace 等价）
     {
         let mut k = workspace_state.key.lock().map_err(|e| e.to_string())?;
@@ -143,12 +142,10 @@ pub fn load_workspace_config() -> Option<String> {
 }
 
 fn save_workspace_config(path: &str) -> Result<(), String> {
-    let mut config = super::settings::load_config();
-    if config.is_null() {
-        config = serde_json::json!({});
-    }
-    config["workspace"] = serde_json::Value::String(path.to_string());
-    super::settings::save_config(&config)
+    super::settings::with_config_mut(|config| {
+        config["workspace"] = serde_json::Value::String(path.to_string());
+        Ok(())
+    })
 }
 
 #[tauri::command]
@@ -159,9 +156,10 @@ pub async fn remove_workspace(
 ) -> Result<(), String> {
     match mode.as_str() {
         "hide" => {
-            let mut config = super::settings::load_config();
-            hide_in_config(&mut config, &key);
-            super::settings::save_config(&config)?;
+            super::settings::with_config_mut(|config| {
+                hide_in_config(config, &key);
+                Ok(())
+            })?;
         }
         "delete" => {
             let key_clone = key.clone();
@@ -176,9 +174,10 @@ pub async fn remove_workspace(
             .map_err(|e| format!("删除任务失败: {}", e))?
             .map_err(|e| format!("删除目录失败: {}", e))?;
             // 已删，从黑名单移除（若曾被隐藏）
-            let mut config = super::settings::load_config();
-            unhide_in_config(&mut config, &key);
-            super::settings::save_config(&config)?;
+            super::settings::with_config_mut(|config| {
+                unhide_in_config(config, &key);
+                Ok(())
+            })?;
         }
         _ => return Err(format!("invalid mode: {}", mode)),
     }
@@ -197,18 +196,20 @@ pub async fn remove_workspace(
             let mut p = workspace_state.path.lock().map_err(|e| e.to_string())?;
             *p = None;
         }
-        let mut config = super::settings::load_config();
-        clear_active_in_config(&mut config);
-        super::settings::save_config(&config)?;
+        super::settings::with_config_mut(|config| {
+            clear_active_in_config(config);
+            Ok(())
+        })?;
     }
     Ok(())
 }
 
 #[tauri::command]
 pub fn unhide_workspace(key: String) -> Result<(), String> {
-    let mut config = super::settings::load_config();
-    unhide_in_config(&mut config, &key);
-    super::settings::save_config(&config)
+    super::settings::with_config_mut(|config| {
+        unhide_in_config(config, &key);
+        Ok(())
+    })
 }
 
 pub fn resolve_path_from_key(key: &str) -> Option<String> {
