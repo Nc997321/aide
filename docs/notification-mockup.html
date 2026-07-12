@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Aide · 通知中心 mockup</title>
+<style>
+  :root {
+    --aide-bg-deep: #1a1a22;
+    --aide-bg-base: #22222e;
+    --aide-bg-raised: #2a2a38;
+    --aide-surface-default: #32323f;
+    --aide-surface-hover: #3a3a4a;
+    --aide-surface-active: #44445a;
+    --aide-text-primary: #d8d4cf;
+    --aide-text-secondary: #a8a4a0;
+    --aide-text-muted: #6b6762;
+    --aide-text-on-accent: #1a1a22;
+    --aide-accent: #d4a574;
+    --aide-accent-hover: #e0b584;
+    --aide-accent-subtle: rgba(212, 165, 116, 0.12);
+    --aide-success: #8bc48a;
+    --aide-warning: #e8c374;
+    --aide-danger: #e87070;
+    --aide-stalled: #e0955c;
+    --aide-info: #7eb8d8;
+    --aide-border: rgba(255, 255, 255, 0.06);
+    --aide-border-subtle: rgba(255, 255, 255, 0.03);
+    --aide-shadow-sm: 0 1px 3px rgba(0,0,0,0.25), 0 1px 2px rgba(0,0,0,0.15);
+    --aide-shadow-md: 0 4px 12px rgba(0,0,0,0.3), 0 1px 4px rgba(0,0,0,0.2);
+    --aide-shadow-lg: 0 12px 40px rgba(0,0,0,0.45), 0 4px 12px rgba(0,0,0,0.25);
+    --aide-radius-sm: 4px;
+    --aide-radius-md: 8px;
+    --aide-radius-lg: 12px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    background: var(--aide-bg-base);
+    color: var(--aide-text-primary);
+    font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--aide-surface-hover); border-radius: 3px; }
+
+  .page { padding: 32px 40px 80px; max-width: 980px; margin: 0 auto; }
+  .page-intro { color: var(--aide-text-muted); font-size: 12px; line-height: 1.6; margin-bottom: 28px; max-width: 640px; }
+  .page-intro h1 { color: var(--aide-text-primary); font-size: 18px; font-weight: 600; margin-bottom: 8px; letter-spacing: 0.2px; }
+  .page-intro code { background: var(--aide-surface-default); padding: 1px 6px; border-radius: 4px; color: var(--aide-accent); font-family: 'Consolas', monospace; font-size: 11px; }
+
+  /* ── Titlebar context (shared) ── */
+  .titlebar {
+    display: flex; align-items: center; height: 42px;
+    background: linear-gradient(180deg, var(--aide-border-subtle) 0%, transparent 100%), var(--aide-bg-deep);
+    border-bottom: 1px solid var(--aide-border);
+    padding: 0 0 0 14px;
+    border-radius: var(--aide-radius-md) var(--aide-radius-md) 0 0;
+  }
+  .titlebar-logo { display: flex; align-items: center; gap: 6px; }
+  .titlebar-logo-icon { width: 16px; height: 16px; background: var(--aide-accent); border-radius: 4px; }
+  .titlebar-logo-text { font-size: 12px; font-weight: 700; color: var(--aide-text-secondary); letter-spacing: 0.5px; }
+  .titlebar-sep { color: var(--aide-text-muted); font-size: 12px; opacity: 0.4; margin: 0 8px; }
+  .titlebar-project { font-size: 12px; font-weight: 500; color: var(--aide-text-primary); }
+  .titlebar-right { margin-left: auto; display: flex; align-items: center; height: 100%; gap: 0; }
+
+  /* Activity indicator (existing) */
+  .activity { display: flex; align-items: center; gap: 5px; padding: 0 12px; height: 100%; cursor: default; }
+  .activity-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--aide-success); box-shadow: 0 0 6px color-mix(in srgb, var(--aide-success) 50%, transparent); animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 0.6; } 50% { opacity: 1; } }
+  .activity-count { font-size: 11px; font-weight: 600; color: var(--aide-text-secondary); min-width: 12px; }
+
+  /* ── Bell (the new entry point) ── */
+  .bell-wrap { position: relative; }
+  .bell-btn {
+    display: flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; margin: 0 4px;
+    background: none; border: 1px solid transparent; border-radius: var(--aide-radius-sm);
+    color: var(--aide-text-muted); cursor: pointer; transition: all 0.12s; position: relative;
+  }
+  .bell-btn:hover { color: var(--aide-text-primary); background: var(--aide-surface-default); }
+  .bell-btn.has-unread { color: var(--aide-text-secondary); }
+  .bell-badge {
+    position: absolute; top: 3px; right: 3px;
+    min-width: 14px; height: 14px; padding: 0 4px;
+    background: var(--aide-danger); color: #fff;
+    font-size: 9px; font-weight: 700; line-height: 14px; text-align: center;
+    border-radius: 7px; border: 1.5px solid var(--aide-bg-deep);
+  }
+  .window-controls { display: flex; align-items: center; gap: 8px; padding: 0 12px; }
+  .wc-dot { width: 11px; height: 11px; border-radius: 50%; }
+  .wc-min { background: #e8c374; }
+  .wc-max { background: #8bc48a; }
+  .wc-close { background: #e87070; }
+
+  /* ── Variant scaffolding ── */
+  .variant { margin-bottom: 44px; }
+  .variant-label {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--aide-text-muted); margin: 0 0 14px 2px;
+  }
+  .variant-tag {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.3px; text-transform: none;
+    color: var(--aide-accent); background: var(--aide-accent-subtle);
+    padding: 2px 8px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--aide-accent) 20%, transparent);
+  }
+  .variant-note { color: var(--aide-text-muted); font-size: 11px; font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+  /* dropdown container shared */
+  .dropdown {
+    position: relative;
+    width: 360px;
+    background: var(--aide-bg-raised);
+    border: 1px solid var(--aide-border);
+    border-radius: var(--aide-radius-md);
+    box-shadow: var(--aide-shadow-lg);
+    z-index: 900;
+    margin-left: auto;
+    margin-right: 10px;
+    margin-top: 6px;
+    overflow: hidden;
+  }
+  .dropdown-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--aide-border);
+    background: linear-gradient(180deg, var(--aide-border-subtle) 0%, transparent 100%), var(--aide-bg-raised);
+  }
+  .dropdown-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: var(--aide-text-muted); }
+  .dropdown-title .count { color: var(--aide-accent); margin-left: 6px; }
+  .dropdown-clear {
+    background: none; border: none; color: var(--aide-text-muted);
+    font-size: 11px; cursor: pointer; padding: 2px 6px; border-radius: var(--aide-radius-sm);
+    font-family: inherit; transition: all 0.12s;
+  }
+  .dropdown-clear:hover { color: var(--aide-text-primary); background: var(--aide-surface-default); }
+  .dropdown-body { max-height: 420px; overflow-y: auto; }
+  .dropdown-empty { padding: 28px 16px; text-align: center; color: var(--aide-text-muted); font-size: 12px; }
+
+  .sev-bar { width: 3px; flex-shrink: 0; border-radius: 2px; align-self: stretch; }
+  .sev-bar.error  { background: var(--aide-danger); }
+  .sev-bar.warning { background: var(--aide-warning); }
+  .sev-bar.info   { background: var(--aide-info); }
+  .sev-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .sev-dot.error { background: var(--aide-danger); box-shadow: 0 0 5px color-mix(in srgb, var(--aide-danger) 45%, transparent); }
+  .sev-dot.warning { background: var(--aide-warning); }
+  .sev-dot.info { background: var(--aide-info); }
+
+  .src-tag {
+    font-size: 9.5px; font-weight: 600; letter-spacing: 0.3px;
+    color: var(--aide-text-muted); background: var(--aide-surface-default);
+    padding: 1px 6px; border-radius: 8px; text-transform: uppercase;
+  }
+  .meta-time { font-size: 10px; color: var(--aide-text-muted); flex-shrink: 0; }
+  .dismiss-x {
+    width: 18px; height: 18px; display: flex; align-items: center; justify-content: center;
+    color: var(--aide-text-muted); cursor: pointer; border-radius: var(--aide-radius-sm);
+    font-size: 12px; opacity: 0; transition: all 0.12s; flex-shrink: 0;
+  }
+  .row:hover .dismiss-x { opacity: 1; }
+  .dismiss-x:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+  .action-link {
+    font-size: 11px; color: var(--aide-accent); cursor: pointer;
+    background: none; border: none; padding: 2px 0; font-family: inherit;
+    text-decoration: none; transition: color 0.12s;
+  }
+  .action-link:hover { color: var(--aide-accent-hover); text-decoration: underline; }
+  .action-btn {
+    font-size: 11px; color: var(--aide-accent); cursor: pointer;
+    background: var(--aide-accent-subtle);
+    border: 1px solid color-mix(in srgb, var(--aide-accent) 22%, transparent);
+    padding: 3px 10px; border-radius: var(--aide-radius-sm); font-family: inherit;
+    transition: all 0.12s;
+  }
+  .action-btn:hover { background: color-mix(in srgb, var(--aide-accent) 18%, transparent); border-color: color-mix(in srgb, var(--aide-accent) 35%, transparent); }
+  .body-text { font-size: 11.5px; color: var(--aide-text-secondary); line-height: 1.5; }
+  .body-text .muted { color: var(--aide-text-muted); }
+  .body-text code { background: var(--aide-surface-default); padding: 0 4px; border-radius: 3px; font-family: 'Consolas', monospace; font-size: 10.5px; color: var(--aide-text-secondary); }
+
+  /* ════════════════ Variant A — 墨线 ink-line ════════════════ */
+  .vA .row {
+    display: flex; align-items: stretch; gap: 0;
+    padding: 10px 0 10px 0; border-bottom: 1px solid var(--aide-border);
+    transition: background 0.1s;
+  }
+  .vA .row:last-child { border-bottom: none; }
+  .vA .row:hover { background: color-mix(in srgb, var(--aide-surface-default) 50%, transparent); }
+  .vA .row-inner { flex: 1; min-width: 0; padding: 0 12px; display: flex; flex-direction: column; gap: 4px; }
+  .vA .row-top { display: flex; align-items: center; gap: 8px; }
+  .vA .row-title { font-size: 12.5px; font-weight: 600; color: var(--aide-text-primary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .vA .row-foot { display: flex; align-items: center; gap: 8px; margin-top: 1px; }
+  .vA .row-actions { display: flex; align-items: center; gap: 10px; }
+  .vA .sev-bar { margin-right: 0; }
+
+  /* ════════════════ Variant B — 卡片 card stack ════════════════ */
+  .vB .dropdown-body { padding: 8px; display: flex; flex-direction: column; gap: 8px; background: var(--aide-bg-base); }
+  .vB .card {
+    background: var(--aide-bg-raised);
+    border: 1px solid var(--aide-border);
+    border-radius: var(--aide-radius-md);
+    padding: 11px 12px;
+    transition: border-color 0.12s, background 0.12s;
+    position: relative;
+  }
+  .vB .card:hover { border-color: var(--aide-surface-hover); background: color-mix(in srgb, var(--aide-surface-default) 30%, var(--aide-bg-raised)); }
+  .vB .card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+  .vB .card-title { font-size: 12.5px; font-weight: 600; color: var(--aide-text-primary); flex: 1; }
+  .vB .card-body { font-size: 11.5px; color: var(--aide-text-secondary); line-height: 1.5; margin-bottom: 8px; }
+  .vB .card-foot { display: flex; align-items: center; gap: 8px; }
+  .vB .card-foot .spacer { flex: 1; }
+  .vB .card .dismiss-x { opacity: 1; position: absolute; top: 8px; right: 8px; }
+
+  /* ════════════════ Variant C — 分组 grouped ════════════════ */
+  .vC .group-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px 6px;
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--aide-text-muted);
+    border-bottom: 1px solid var(--aide-border);
+    background: linear-gradient(180deg, var(--aide-border-subtle), transparent);
+  }
+  .vC .group-head .gcount { color: var(--aide-text-secondary); font-weight: 600; }
+  .vC .group-head.error .gdot { background: var(--aide-danger); }
+  .vC .group-head.warning .gdot { background: var(--aide-warning); }
+  .vC .group-head .gdot { width: 6px; height: 6px; border-radius: 50%; }
+  .vC .row {
+    display: flex; align-items: stretch; gap: 0;
+    padding: 9px 0; border-bottom: 1px solid var(--aide-border);
+    transition: background 0.1s;
+  }
+  .vC .row:last-child { border-bottom: none; }
+  .vC .row:hover { background: color-mix(in srgb, var(--aide-surface-default) 50%, transparent); }
+  .vC .row-inner { flex: 1; min-width: 0; padding: 0 12px; display: flex; flex-direction: column; gap: 3px; }
+  .vC .row-top { display: flex; align-items: center; gap: 8px; }
+  .vC .row-title { font-size: 12.5px; font-weight: 600; color: var(--aide-text-primary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .vC .row-foot { display: flex; align-items: center; gap: 8px; }
+  .vC .row-actions { display: flex; align-items: center; gap: 10px; }
+
+  .bell-icon { width: 15px; height: 15px; }
+  .pick {
+    margin-top: 10px; padding: 10px 14px;
+    background: color-mix(in srgb, var(--aide-accent) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--aide-accent) 18%, transparent);
+    border-radius: var(--aide-radius-md);
+    color: var(--aide-text-secondary); font-size: 12px; line-height: 1.6;
+  }
+  .pick strong { color: var(--aide-accent); }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="page-intro">
+    <h1>通知中心 · 下拉面板 mockup</h1>
+    三种样式，都用项目现有的 <code>--aide-*</code> token，无新颜色。挑一个最贴合的，或指出要混搭的元素。<br>
+    内容是 v1 唯一源（向量索引）的三条真实样例：构建失败 / 语义搜索不可用 / 未索引到符号。<br>
+    铃铛在标题栏右侧 activity 指示器旁，有未读时亮红点徽标。
+  </div>
+
+  <!-- Titlebar with bell, shown once for context -->
+  <div class="variant-label">
+    标题栏入口（三种共用）
+    <span class="variant-tag">bell</span>
+    <span class="variant-note">无未读时灰色、有未读时红点 + 计数</span>
+  </div>
+  <div class="titlebar">
+    <div class="titlebar-logo">
+      <div class="titlebar-logo-icon"></div>
+      <span class="titlebar-logo-text">Aide</span>
+    </div>
+    <span class="titlebar-sep">/</span>
+    <span class="titlebar-project">aide</span>
+    <div class="titlebar-right">
+      <div class="activity"><span class="activity-dot"></span><span class="activity-count">2</span></div>
+      <div class="bell-wrap">
+        <button class="bell-btn has-unread">
+          <svg class="bell-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+          </svg>
+          <span class="bell-badge">3</span>
+        </button>
+      </div>
+      <div class="window-controls">
+        <span class="wc-dot wc-min"></span>
+        <span class="wc-dot wc-max"></span>
+        <span class="wc-dot wc-close"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ Variant A — 墨线 ═══════════ -->
+  <div class="variant">
+    <div class="variant-label">
+      方案 A — 墨线（ink-line）
+      <span class="variant-tag">推荐</span>
+      <span class="variant-note">左侧 3px 严重度色条，呼应 ChatMessage/ToolCallBlock 的墨线语言</span>
+    </div>
+    <div class="dropdown vA">
+      <div class="dropdown-header">
+        <span class="dropdown-title">通知<span class="count">3</span></span>
+        <button class="dropdown-clear">全部清除</button>
+      </div>
+      <div class="dropdown-body">
+
+        <div class="row">
+          <div class="sev-bar error"></div>
+          <div class="row-inner">
+            <div class="row-top">
+              <span class="row-title">向量索引构建失败</span>
+              <span class="meta-time">刚刚</span>
+            </div>
+            <div class="body-text">spawn_blocking panic：<span class="muted">结构层精确跳转仍可用，语义搜索不可用。</span></div>
+            <div class="row-foot">
+              <span class="src-tag">codegraph</span>
+              <div class="row-actions">
+                <button class="action-link">查看日志</button>
+              </div>
+            </div>
+          </div>
+          <div class="dismiss-x" style="margin-right:6px;align-self:center;">✕</div>
+        </div>
+
+        <div class="row">
+          <div class="sev-bar warning"></div>
+          <div class="row-inner">
+            <div class="row-top">
+              <span class="row-title">语义搜索不可用</span>
+              <span class="meta-time">2 分钟前</span>
+            </div>
+            <div class="body-text">embedder 未就绪：FastEmbed 模型未下载。<span class="muted">结构层正常。</span></div>
+            <div class="row-foot">
+              <span class="src-tag">codegraph</span>
+              <div class="row-actions">
+                <button class="action-btn">重建索引</button>
+              </div>
+            </div>
+          </div>
+          <div class="dismiss-x" style="margin-right:6px;align-self:center;">✕</div>
+        </div>
+
+        <div class="row">
+          <div class="sev-bar warning"></div>
+          <div class="row-inner">
+            <div class="row-top">
+              <span class="row-title">未索引到任何符号</span>
+              <span class="meta-time">1 小时前</span>
+            </div>
+            <div class="body-text">扫描 0 个文件。<span class="muted">检查项目根目录与支持的扩展名。</span></div>
+            <div class="row-foot">
+              <span class="src-tag">codegraph</span>
+              <div class="row-actions"></div>
+            </div>
+          </div>
+          <div class="dismiss-x" style="margin-right:6px;align-self:center;">✕</div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ Variant B — 卡片 ═══════════ -->
+  <div class="variant">
+    <div class="variant-label">
+      方案 B — 卡片（card stack）
+      <span class="variant-note">每条独立凸起卡片，呼应侧栏会话卡的工匠质感语言</span>
+    </div>
+    <div class="dropdown vB">
+      <div class="dropdown-header">
+        <span class="dropdown-title">通知<span class="count">3</span></span>
+        <button class="dropdown-clear">全部清除</button>
+      </div>
+      <div class="dropdown-body">
+
+        <div class="card">
+          <div class="card-top">
+            <span class="sev-dot error"></span>
+            <span class="card-title">向量索引构建失败</span>
+          </div>
+          <div class="card-body">spawn_blocking panic：结构层精确跳转仍可用，语义搜索不可用。</div>
+          <div class="card-foot">
+            <span class="src-tag">codegraph</span>
+            <span class="meta-time">刚刚</span>
+            <span class="spacer"></span>
+            <button class="action-link">查看日志</button>
+          </div>
+          <div class="dismiss-x">✕</div>
+        </div>
+
+        <div class="card">
+          <div class="card-top">
+            <span class="sev-dot warning"></span>
+            <span class="card-title">语义搜索不可用</span>
+          </div>
+          <div class="card-body">embedder 未就绪：FastEmbed 模型未下载。结构层正常。</div>
+          <div class="card-foot">
+            <span class="src-tag">codegraph</span>
+            <span class="meta-time">2 分钟前</span>
+            <span class="spacer"></span>
+            <button class="action-btn">重建索引</button>
+          </div>
+          <div class="dismiss-x">✕</div>
+        </div>
+
+        <div class="card">
+          <div class="card-top">
+            <span class="sev-dot warning"></span>
+            <span class="card-title">未索引到任何符号</span>
+          </div>
+          <div class="card-body">扫描 0 个文件。检查项目根目录与支持的扩展名。</div>
+          <div class="card-foot">
+            <span class="src-tag">codegraph</span>
+            <span class="meta-time">1 小时前</span>
+          </div>
+          <div class="dismiss-x">✕</div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ Variant C — 分组 ═══════════ -->
+  <div class="variant">
+    <div class="variant-label">
+      方案 C — 分组（by severity）
+      <span class="variant-note">按严重度分组，错误/警告各自成块；列表变长时更结构化</span>
+    </div>
+    <div class="dropdown vC">
+      <div class="dropdown-header">
+        <span class="dropdown-title">通知<span class="count">3</span></span>
+        <button class="dropdown-clear">全部清除</button>
+      </div>
+      <div class="dropdown-body">
+
+        <div class="group-head error"><span class="gdot"></span>错误<span class="gcount">1</span></div>
+        <div class="row">
+          <div class="sev-bar error"></div>
+          <div class="row-inner">
+            <div class="row-top">
+              <span class="row-title">向量索引构建失败</span>
+              <span class="meta-time">刚刚</span>
+            </div>
+            <div class="body-text">spawn_blocking panic：<span class="muted">结构层精确跳转仍可用，语义搜索不可用。</span></div>
+            <div class="row-foot">
+              <span class="src-tag">codegraph</span>
+              <div class="row-actions"><button class="action-link">查看日志</button></div>
+            </div>
+          </div>
+          <div class="dismiss-x" style="margin-right:6px;align-self:center;">✕</div>
+        </div>
+
+        <div class="group-head warning"><span class="gdot"></span>警告<span class="gcount">2</span></div>
+        <div class="row">
+          <div class="sev-bar warning"></div>
+          <div class="row-inner">
+            <div class="row-top">
+              <span class="row-title">语义搜索不可用</span>
+              <span class="meta-time">2 分钟前</span>
+            </div>
+            <div class="body-text">embedder 未就绪：FastEmbed 模型未下载。<span class="muted">结构层正常。</span></div>
+            <div class="row-foot">
+              <span class="src-tag">codegraph</span>
+              <div class="row-actions"><button class="action-btn">重建索引</button></div>
+            </div>
+          </div>
+          <div class="dismiss-x" style="margin-right:6px;align-self:center;">✕</div>
+        </div>
+        <div class="row">
+          <div class="sev-bar warning"></div>
+          <div class="row-inner">
+            <div class="row-top">
+              <span class="row-title">未索引到任何符号</span>
+              <span class="meta-time">1 小时前</span>
+            </div>
+            <div class="body-text">扫描 0 个文件。<span class="muted">检查项目根目录与支持的扩展名。</span></div>
+            <div class="row-foot">
+              <span class="src-tag">codegraph</span>
+              <div class="row-actions"></div>
+            </div>
+          </div>
+          <div class="dismiss-x" style="margin-right:6px;align-self:center;">✕</div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <div class="pick">
+    <strong>怎么挑：</strong>告诉我「A / B / C」，或「A 但用 B 的 action 按钮」「C 但去掉分组头」这类混搭。<br>
+    <strong>我的推荐：A</strong>——墨线语言和 ChatMessage/ToolCallBlock 的工具组折叠一脉相承，最像同一个 app；B 的卡片间隙偏大、在 360px 窄面板里三条就显得拥挤；C 的分组头在 v1 列表很短时是多余结构（以后通知源多了再切 C 不迟）。
+  </div>
+</div>
+</body>
+</html>
