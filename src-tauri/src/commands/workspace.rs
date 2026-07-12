@@ -4,6 +4,22 @@ use tauri::State;
 
 use super::{WorkspaceInfo, WorkspaceState, claude_projects_dir};
 
+/// 路径 → 编码 key：把 : \ / 替换为 -，与 Claude CLI
+/// `~/.claude/projects/` 目录命名一致。
+pub fn path_to_key(path: &str) -> String {
+    path.chars()
+        .map(|c| match c {
+            ':' | '\\' | '/' => '-',
+            other => other,
+        })
+        .collect()
+}
+
+/// 从工作区列表里滤掉黑名单中的 key（隐藏语义）。
+pub fn filter_hidden(infos: Vec<WorkspaceInfo>, hidden: &[String]) -> Vec<WorkspaceInfo> {
+    infos.into_iter().filter(|w| !hidden.contains(&w.key)).collect()
+}
+
 #[tauri::command]
 pub fn list_workspaces() -> Result<Vec<WorkspaceInfo>, String> {
     let dir = claude_projects_dir();
@@ -68,6 +84,56 @@ pub fn resolve_path_from_key(key: &str) -> Option<String> {
         return if PathBuf::from(&path).exists() { Some(path) } else { None };
     }
     try_decode(&format!("{}:\\", drive), &rest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::WorkspaceInfo;
+
+    #[test]
+    fn path_to_key_windows_path() {
+        assert_eq!(path_to_key(r"C:\Users\yangx\proj"), "C--Users-yangx-proj");
+    }
+
+    #[test]
+    fn path_to_key_unix_path() {
+        assert_eq!(path_to_key("/Users/x/proj"), "-Users-x-proj");
+    }
+
+    #[test]
+    fn path_to_key_preserves_other_chars() {
+        // 空格、中文、点不替换
+        assert_eq!(path_to_key(r"C:\my project\文档.git"), "C--my project-文档.git");
+    }
+
+    #[test]
+    fn filter_hidden_empty_passthrough() {
+        let infos = vec![sample("k1"), sample("k2")];
+        let hidden: Vec<String> = vec![];
+        assert_eq!(filter_hidden(infos, &hidden).len(), 2);
+    }
+
+    #[test]
+    fn filter_hidden_filters_matching() {
+        let infos = vec![sample("k1"), sample("k2"), sample("k3")];
+        let hidden = vec!["k2".to_string()];
+        let out = filter_hidden(infos, &hidden);
+        assert_eq!(out.iter().map(|w| w.key.clone()).collect::<Vec<_>>(), vec!["k1", "k3"]);
+    }
+
+    #[test]
+    fn filter_hidden_multiple() {
+        let infos = vec![sample("a"), sample("b"), sample("c")];
+        let hidden = vec!["a".to_string(), "c".to_string()];
+        let out = filter_hidden(infos, &hidden);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].key, "b");
+    }
+
+    fn sample(key: &str) -> WorkspaceInfo {
+        WorkspaceInfo { key: key.to_string(), name: key.to_string(), missing: false }
+    }
 }
 
 fn try_decode(prefix: &str, remaining: &str) -> Option<String> {
