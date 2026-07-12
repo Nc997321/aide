@@ -31,16 +31,18 @@ pub fn hidden_keys(config: &serde_json::Value) -> Vec<String> {
 
 /// 把 key 加入黑名单（幂等）。config 缺字段时自动创建。
 pub fn hide_in_config(config: &mut serde_json::Value, key: &str) {
-    if config.is_null() {
+    if !config.is_object() {
+        // null or corrupted (string/array/etc.) — normalize to an empty object
         *config = serde_json::json!({});
     }
-    let map = config.as_object_mut().expect("config must be an object");
-    let arr = map
-        .entry("hiddenWorkspaces".to_string())
-        .or_insert_with(|| serde_json::json!([]));
-    if let serde_json::Value::Array(a) = arr {
-        if !a.iter().any(|v| v.as_str() == Some(key)) {
-            a.push(serde_json::json!(key));
+    if let Some(map) = config.as_object_mut() {
+        let arr = map
+            .entry("hiddenWorkspaces".to_string())
+            .or_insert_with(|| serde_json::json!([]));
+        if let serde_json::Value::Array(a) = arr {
+            if !a.iter().any(|v| v.as_str() == Some(key)) {
+                a.push(serde_json::json!(key));
+            }
         }
     }
 }

@@ -182,9 +182,14 @@ function onRemoveWorkspace(ws: WorkspaceInfo) {
 async function onRemoveWorkspaceConfirm(mode: "hide" | "delete") {
   const ws = removeWsTarget.value;
   if (!ws) return;
-  const ok = await sidebarRef.value?.removeWorkspaceByKey(ws.key, mode);
-  if (!ok && mode === "delete") {
-    alert("该工作区有正在运行的会话，请先停止再移除。");
+  try {
+    const ok = await sidebarRef.value?.removeWorkspaceByKey(ws.key, mode);
+    if (!ok && mode === "delete") {
+      alert("该工作区有正在运行的会话，请先停止再移除。");
+    }
+  } catch (e: any) {
+    const msg = typeof e === "string" ? e : (e?.message ?? "移除工作区失败");
+    alert(msg);
   }
   removeWsVisible.value = false;
   removeWsTarget.value = null;
@@ -310,7 +315,7 @@ function relPath(p: string): string {
   return p;
 }
 
-const { setActiveProvider, load: loadProviders } = useProviders();
+const { setActiveProvider, load: loadProviders, refreshSystemDefaultModels } = useProviders();
 
 async function onProviderSwitch(providerId: string) {
   await setActiveProvider(providerId);
@@ -439,6 +444,10 @@ onMounted(async () => {
 
   // Load provider configuration
   await loadProviders();
+  // 启动时拉最新模型覆盖"系统默认"5 字段——fire-and-forget 不 await，UI 先渲染，
+  // 拉完响应式刷新 systemDefaultMappings（ProviderSettings 系统默认下 5 字段只读）。
+  // 无认证/网络失败时 Rust 侧保留旧值，前端不阻塞。
+  void refreshSystemDefaultModels();
   // Start tracking window focus for notifications
   const { init: initWindowFocus } = useWindowFocus();
   initWindowFocus();
