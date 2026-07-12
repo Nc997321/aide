@@ -20,6 +20,45 @@ pub fn filter_hidden(infos: Vec<WorkspaceInfo>, hidden: &[String]) -> Vec<Worksp
     infos.into_iter().filter(|w| !hidden.contains(&w.key)).collect()
 }
 
+/// 读 config 里的 hiddenWorkspaces 黑名单。
+pub fn hidden_keys(config: &serde_json::Value) -> Vec<String> {
+    config
+        .get("hiddenWorkspaces")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default()
+}
+
+/// 把 key 加入黑名单（幂等）。config 缺字段时自动创建。
+pub fn hide_in_config(config: &mut serde_json::Value, key: &str) {
+    if config.is_null() {
+        *config = serde_json::json!({});
+    }
+    let map = config.as_object_mut().expect("config must be an object");
+    let arr = map
+        .entry("hiddenWorkspaces".to_string())
+        .or_insert_with(|| serde_json::json!([]));
+    if let serde_json::Value::Array(a) = arr {
+        if !a.iter().any(|v| v.as_str() == Some(key)) {
+            a.push(serde_json::json!(key));
+        }
+    }
+}
+
+/// 把 key 从黑名单移除（不存在则 noop）。
+pub fn unhide_in_config(config: &mut serde_json::Value, key: &str) {
+    if let Some(serde_json::Value::Array(a)) = config.get_mut("hiddenWorkspaces") {
+        a.retain(|v| v.as_str() != Some(key));
+    }
+}
+
+/// 清掉 config 的 workspace（激活）字段。
+pub fn clear_active_in_config(config: &mut serde_json::Value) {
+    if let Some(obj) = config.as_object_mut() {
+        obj.remove("workspace");
+    }
+}
+
 #[tauri::command]
 pub fn list_workspaces() -> Result<Vec<WorkspaceInfo>, String> {
     let dir = claude_projects_dir();
@@ -129,6 +168,63 @@ mod tests {
         let out = filter_hidden(infos, &hidden);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].key, "b");
+    }
+
+    // ── Task 2: hiddenWorkspaces config 纯函数 ──
+
+    #[test]
+    fn hidden_keys_missing_field_returns_empty() {
+        let cfg = serde_json::json!({});
+        assert!(hidden_keys(&cfg).is_empty());
+    }
+
+    #[test]
+    fn hidden_keys_reads_array() {
+        let cfg = serde_json::json!({ "hiddenWorkspaces": ["a", "b"] });
+        assert_eq!(hidden_keys(&cfg), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn hide_in_config_adds_key() {
+        let mut cfg = serde_json::json!({ "hiddenWorkspaces": ["a"] });
+        hide_in_config(&mut cfg, "b");
+        assert_eq!(hidden_keys(&cfg), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn hide_in_config_idempotent() {
+        let mut cfg = serde_json::json!({ "hiddenWorkspaces": ["a"] });
+        hide_in_config(&mut cfg, "a");
+        assert_eq!(hidden_keys(&cfg).len(), 1);
+    }
+
+    #[test]
+    fn hide_in_config_creates_field_if_absent() {
+        let mut cfg = serde_json::json!({});
+        hide_in_config(&mut cfg, "x");
+        assert_eq!(hidden_keys(&cfg), vec!["x".to_string()]);
+    }
+
+    #[test]
+    fn unhide_in_config_removes_key() {
+        let mut cfg = serde_json::json!({ "hiddenWorkspaces": ["a", "b"] });
+        unhide_in_config(&mut cfg, "a");
+        assert_eq!(hidden_keys(&cfg), vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn unhide_in_config_missing_key_noop() {
+        let mut cfg = serde_json::json!({ "hiddenWorkspaces": ["a"] });
+        unhide_in_config(&mut cfg, "zzz");
+        assert_eq!(hidden_keys(&cfg), vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn clear_active_in_config_removes_workspace_field() {
+        let mut cfg = serde_json::json!({ "workspace": "k1", "other": 1 });
+        clear_active_in_config(&mut cfg);
+        assert!(cfg.get("workspace").is_none());
+        assert_eq!(cfg.get("other").and_then(|v| v.as_i64()), Some(1));
     }
 
     fn sample(key: &str) -> WorkspaceInfo {
