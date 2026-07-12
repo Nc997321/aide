@@ -12,8 +12,12 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::our_config_dir;
+
+/// 并发 save 的 tmp 文件名递增后缀，保证每次写各自独立的 tmp，互不踩踏。
+static SAVE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// 落盘条数软上限。超出按 timestamp 降序淘汰最旧。
 pub const PERSIST_LIMIT: usize = 100;
@@ -83,7 +87,10 @@ pub fn save_notifications_file(records: Vec<NotificationRecord>) -> Result<(), S
     let p = notifications_path();
     let dir = p.parent().ok_or_else(|| "notifications.json has no parent".to_string())?;
     fs::create_dir_all(dir).map_err(|e| format!("create config dir: {e}"))?;
-    let tmp = p.with_extension("json.tmp");
+    // 每个 save 用唯一 tmp 名（monotonic 后缀），并发 save 互不共享 tmp，
+    // 避免交错写造成 JSON 损坏（最后 rename 胜出，落盘的是完整有效快照）。
+    let seq = SAVE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = p.with_extension(format!("json.tmp.{seq}"));
     let body = serde_json::to_string_pretty(&persisted).map_err(|e| e.to_string())?;
     fs::write(&tmp, body).map_err(|e| format!("write tmp: {e}"))?;
     fs::rename(&tmp, &p).map_err(|e| format!("rename: {e}"))?;

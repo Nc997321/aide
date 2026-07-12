@@ -122,6 +122,14 @@ export function useNotifications() {
       if (notifications.value.length !== before) flushSaveNow();
     },
 
+    dismissMany(ids: string[]): void {
+      if (ids.length === 0) return;
+      const idSet = new Set(ids);
+      const before = notifications.value.length;
+      notifications.value = notifications.value.filter((n) => !idSet.has(n.id));
+      if (notifications.value.length !== before) flushSaveNow();
+    },
+
     clearAll(): void {
       if (notifications.value.length === 0) return;
       notifications.value = [];

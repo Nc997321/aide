@@ -23,7 +23,7 @@ import type { BuildProgress, BuildIndexResult } from "../types";
  * 渲染层（FileTree.vue）只读 `building` + `progress`，不关心 poll 生命周期。
  */
 
-const { push, dismiss, notifications, registerActionHandler } = useNotifications();
+const { push, dismiss, dismissMany, notifications, registerActionHandler } = useNotifications();
 
 const progress = ref<BuildProgress>({ active: false, done: 0, total: 0, current: "", index_ready: false });
 const building = ref(false);
@@ -131,13 +131,15 @@ function trackBuild(p: Promise<BuildIndexResult>, root: string) {
   );
 }
 
-/** 完全成功后自愈：dismiss 同 root 的所有 codegraph:*:<root> 未读项。 */
+/** 完全成功后自愈：dismiss 同 root 的所有 codegraph:*:<root> 未读项（一次批量，单次落盘）。 */
 function selfHeal(root: string) {
+  const ids: string[] = [];
   for (const n of notifications.value) {
     if (n.source === "codegraph" && n.dedupKey?.endsWith(`:${root}`)) {
-      dismiss(n.id);
+      ids.push(n.id);
     }
   }
+  if (ids.length > 0) dismissMany(ids);
 }
 
 /**
