@@ -12,9 +12,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
 
-use crate::codegraph::embed::Embedder;
+use crate::codegraph::embed::{Embedder, FastEmbedEmbedder, HttpEmbedder, HttpEmbedderConfig, HttpFormat};
+use crate::codegraph::meta::Meta;
 use crate::codegraph::shard::CodeShard;
 use crate::codegraph::symbols::SymbolTable;
+use crate::commands::settings::CodeGraphEmbedderConfig;
 
 /// Snapshot of a fully-built project index, swapped atomically into state.
 ///
@@ -43,7 +45,15 @@ pub struct ProjectIndex {
 /// a `spawn_blocking` closure (a `State<'_, _>` cannot cross that boundary).
 pub struct CodeGraphState {
     inner: RwLock<Option<ProjectIndex>>,
-    embedder: Mutex<Option<Embedder>>,
+    /// Lazily-initialized embedder, created from the configured backend on the
+    /// first build (and re-created when the config's model_name changes). Trait
+    /// object so the rest of CodeGraph is backend-agnostic.
+    embedder: Mutex<Option<Box<dyn Embedder>>>,
+    /// Cache of the configured embedder's `model_name()` + `dim()`, so a config
+    /// change (backend/model switch) is detected without re-creating the
+    /// embedder just to read its identity. Cleared together with `embedder`
+    /// when a new config requires a different backend.
+    embedder_model: Mutex<Option<(String, usize)>>,
     parser_manager: parser::ParserManager,
     /// Coarse build progress for the frontend to poll (no app.emit — see memory:
     /// cross-thread emit park主线程). Updated from the build's spawn_blocking
@@ -66,6 +76,7 @@ impl CodeGraphState {
         Self {
             inner: RwLock::new(None),
             embedder: Mutex::new(None),
+            embedder_model: Mutex::new(None),
             parser_manager: parser::ParserManager::new(),
             build_active: AtomicBool::new(false),
             build_done: AtomicUsize::new(0),
@@ -74,6 +85,91 @@ impl CodeGraphState {
             build_cancel: AtomicBool::new(false),
         }
     }
+}
+
+/// Build a concrete embedder from a config. Match on `backend`:
+/// - `fastembed` → local ONNX (may download a model on first use).
+/// - `http` → HTTP embedder (Ollama / OpenAI-compatible), format selects the wire shape.
+///
+/// Returns `Ok(Box<dyn Embedder>)` on success. A fastembed init failure or an
+/// invalid http config yields an `Err`; the caller logs and proceeds without an
+/// embedder (structure layer still works — semantic search is just unavailable).
+fn make_embedder(cfg: &CodeGraphEmbedderConfig) -> Result<Box<dyn Embedder>, String> {
+    match cfg.backend.as_str() {
+        "http" => {
+            if cfg.base_url.trim().is_empty() {
+                return Err("http embedder: baseUrl is empty".into());
+            }
+            if cfg.model.trim().is_empty() {
+                return Err("http embedder: model is empty".into());
+            }
+            let format = match cfg.format.as_str() {
+                "openai" => HttpFormat::Openai,
+                _ => HttpFormat::Ollama,
+            };
+            let http_cfg = HttpEmbedderConfig {
+                base_url: cfg.base_url.clone(),
+                api_key: cfg.api_key.clone(),
+                model: cfg.model.clone(),
+                format,
+                dim: cfg.dim as usize,
+            };
+            HttpEmbedder::new(http_cfg)
+                .map(|e| Box::new(e) as Box<dyn Embedder>)
+                .map_err(|e| format!("http embedder init failed: {}", e))
+        }
+        _ => {
+            // "fastembed" or anything else → default local backend.
+            FastEmbedEmbedder::new()
+                .map(|e| Box::new(e) as Box<dyn Embedder>)
+                .map_err(|e| format!("fastembed init failed: {}", e))
+        }
+    }
+}
+
+/// Compute the identity (`model_name`, `dim`) a configured embedder *would*
+/// have, **without** constructing it. Used by the build path to short-circuit
+/// the on-disk index reuse check: if the cached embedder identity matches the
+/// config, we can reuse `load_project_index`; if not, we drop the cached
+/// embedder and rebuild.
+///
+/// For `fastembed` this is a constant (`fastembed:all-MiniLM-L6-v2`, 384). For
+/// `http` the model_name is the backend prefix only (`ollama` / `openai`) — the
+/// concrete model is in the request body, not the identity — and dim is the
+/// configured value (or 0 = auto-probe, in which case the on-disk meta's dim
+/// is compared against 0 and never matches a real dim, forcing a rebuild on
+/// the first build after switching to auto-probe; subsequent builds match
+/// because meta is then stamped with the probed dim).
+fn config_embedder_identity(cfg: &CodeGraphEmbedderConfig) -> (String, usize) {
+    match cfg.backend.as_str() {
+        "http" => {
+            let name = match cfg.format.as_str() {
+                "openai" => "openai",
+                _ => "ollama",
+            };
+            (name.to_string(), cfg.dim as usize)
+        }
+        _ => ("fastembed:all-MiniLM-L6-v2".to_string(), 384),
+    }
+}
+
+/// Read the codegraph embedder config from the app config file. The block lives
+/// at `config["settings"]["codegraphEmbedder"]` (a field of `AppSettings`).
+/// Returns the default (fastembed) if the file or block is missing — zero-config
+/// out of the box. Best-effort: malformed JSON → default, logged, never panics.
+fn load_embedder_config() -> CodeGraphEmbedderConfig {
+    use crate::commands::settings::load_config;
+    let config = load_config();
+    let Some(cg) = config
+        .get("settings")
+        .and_then(|s| s.get("codegraphEmbedder"))
+    else {
+        return CodeGraphEmbedderConfig::default();
+    };
+    serde_json::from_value::<CodeGraphEmbedderConfig>(cg.clone()).unwrap_or_else(|e| {
+        tracing::warn!("codegraph: invalid embedder config, using default: {}", e);
+        CodeGraphEmbedderConfig::default()
+    })
 }
 
 /// Tauri command: build (or load) the full index for a project.
@@ -88,42 +184,125 @@ impl CodeGraphState {
 ///   (close / project switch). Semantic search is gated on `embed_ready` to
 ///   avoid concurrent upsert+search on the same shard.
 ///
+/// Embedder backend is read from the app config (`settings.codegraphEmbedder`)
+/// on every build; a config change (backend / model / dim) drops the cached
+/// embedder and forces a full rebuild because the on-disk meta won't match.
+///
 /// Heavy IO/CPU runs in `spawn_blocking` off the Tauri main thread. Load-or-
 /// build: reuse a fresh on-disk index when available (embed already complete),
-/// else full-rebuild.
+/// else full-rebuild. `force = true` skips the fast path and full-rebuilds
+/// unconditionally (manual「全量重建」button).
 #[tauri::command]
 pub async fn codegraph_build_index(
     project_root: String,
+    force: Option<bool>,
     state: tauri::State<'_, std::sync::Arc<CodeGraphState>>,
 ) -> Result<serde_json::Value, String> {
+    let force = force.unwrap_or(false);
     let st = state.inner().clone();
     tokio::task::spawn_blocking(move || {
         let root = PathBuf::from(&project_root);
+        let cfg = load_embedder_config();
+        // Cheap pre-construction identity implied by the config (backend + model
+        // + configured dim). Used to decide whether the *cached* embedder is still
+        // valid without constructing a new one — constructing fastembed loads the
+        // ONNX model, which we avoid when the config hasn't changed.
+        let want_id = config_embedder_identity(&cfg);
 
-        // Fast path: reuse fresh on-disk index (embed already complete).
-        if let Some((table, shard)) = indexer::load_project_index(&root, &st.parser_manager) {
-            let n = table.len();
-            *st.inner.write().map_err(|e| e.to_string())? = Some(ProjectIndex {
-                project_root: root,
-                symbols: table,
-                shard,
-                indexed_at: SystemTime::now(),
-                embed_ready: Arc::new(AtomicBool::new(true)),
-            });
-            return Ok(serde_json::json!({ "loaded": true, "total_symbols": n }));
-        }
-
-        // Ensure embedder (best-effort; structure layer works without it).
+        // Ensure the cached embedder matches the config; (re)create if missing or
+        // if the cached identity differs from what the config implies. After
+        // (re)creation, cache the embedder's *authoritative* identity (read via the
+        // trait methods) so the cache is the single source of truth, not the
+        // estimate — for http with dim=0 (auto-probe) this caches dim 0 until the
+        // probe resolves the real dim below.
+        // `embed_status` captures the exact reason embed didn't complete, surfaced
+        // in the build result JSON so the frontend can show it without relying on
+        // tracing logs (which may be filtered by RUST_LOG or scrolled off).
+        let mut embed_status = String::new();
         let has_emb = {
             let mut emb = st.embedder.lock().map_err(|e| e.to_string())?;
-            if emb.is_none() {
-                match Embedder::new() {
-                    Ok(e) => *emb = Some(e),
-                    Err(e) => tracing::warn!("codegraph: embedder unavailable: {}", e),
+            let mut emb_model = st.embedder_model.lock().map_err(|e| e.to_string())?;
+            let needs_recreate = match emb_model.as_ref() {
+                None => true,
+                Some(id) => *id != want_id,
+            };
+            if needs_recreate {
+                *emb = None;
+                match make_embedder(&cfg) {
+                    Ok(e) => {
+                        *emb_model = Some((e.model_name().to_string(), e.dim()));
+                        *emb = Some(e);
+                    }
+                    Err(e) => {
+                        tracing::warn!("codegraph: embedder unavailable: {}", e);
+                        embed_status = format!("no_embedder: {}", e);
+                        *emb_model = None;
+                    }
                 }
             }
             emb.is_some()
         };
+
+        // Read the authoritative identity from the cache (populated above from the
+        // trait methods). Resolve the effective dim: fastembed → 384 (constant);
+        // http configured dim → that value; http dim=0 (auto-probe) → must probe
+        // with one embed call before building the shard, since the shard is sized
+        // to a fixed dim.
+        let (model_name, mut dim) = st
+            .embedder_model
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone()
+            .unwrap_or_else(|| (String::new(), 0));
+        if has_emb && dim == 0 {
+            // Auto-probe: embed a single sentinel text to learn the dimension.
+            // Done under the embedder lock; on failure we log and fall back to no
+            // embedder (structure layer still works).
+            let probe = {
+                let emb = st.embedder.lock().map_err(|e| e.to_string())?;
+                match emb.as_ref() {
+                    Some(e) => crate::codegraph::embed::embed_one(e.as_ref(), "probe"),
+                    None => Ok(Vec::new()),
+                }
+            };
+            match probe {
+                Ok(v) if !v.is_empty() => {
+                    dim = v.len();
+                    // Lock in the probed dim in the cache so subsequent builds
+                    // reuse the embedder (cache identity now matches the real dim).
+                    if let Ok(mut emb_model) = st.embedder_model.lock() {
+                        *emb_model = Some((model_name.clone(), dim));
+                    }
+                }
+                Ok(_) => {
+                    tracing::warn!("codegraph: embedder probe returned empty vector");
+                    embed_status = "probe_empty".to_string();
+                }
+                Err(e) => {
+                    tracing::warn!("codegraph: embedder probe failed: {}", e);
+                    embed_status = format!("probe_failed: {}", e);
+                }
+            }
+        }
+
+        // Fast path: reuse fresh on-disk index whose meta matches this embedder
+        // (model_name + dim). A backend/model/dim switch won't match → full rebuild.
+        // Skipped when `force` (manual 全量重建).
+        if !force {
+            if let Some((table, shard)) =
+                indexer::load_project_index(&root, &st.parser_manager, &model_name, dim)
+            {
+                let n = table.len();
+                *st.inner.write().map_err(|e| e.to_string())? = Some(ProjectIndex {
+                    project_root: root,
+                    symbols: table,
+                    shard,
+                    indexed_at: SystemTime::now(),
+                    embed_ready: Arc::new(AtomicBool::new(true)),
+                });
+                return Ok(serde_json::json!({ "loaded": true, "total_symbols": n }));
+            }
+        }
 
         st.build_cancel.store(false, Ordering::Relaxed);
         st.build_active.store(true, Ordering::Relaxed);
@@ -134,10 +313,34 @@ pub async fn codegraph_build_index(
             }
         };
 
+        // Process-start orphan cleanup: if `inner` is empty (fresh process, no
+        // live CodeShard in memory and no in-flight goto Arc clones), it's safe
+        // to remove leftover `qdrant-*` dirs from previous builds. We keep the
+        // meta-pointed dir as a conservative fallback (if this rebuild fails, the
+        // old index remains loadable on next start — though stale, it's not gone).
+        // When `inner` is Some (same-process rebuild after a config change), we
+        // skip cleanup: the old shard is still live (its Arc is in inner + maybe
+        // goto clones), so its dir must not be touched — it'll be cleaned on the
+        // next process start.
+        let inner_is_none = st.inner.read().map(|g| g.is_none()).unwrap_or(true);
+        if inner_is_none {
+            let base = indexer::index_dir(&root);
+            let keep = Meta::load(&base.join("meta.json"))
+                .map(|m| m.shard_dir)
+                .unwrap_or_else(|| "qdrant".to_string());
+            indexer::cleanup_orphan_shard_dirs(&base, &keep);
+        }
+
         // Phase 1: collect symbols + create shard + persist. Returns points for Phase 2.
+        // If dim is still 0 (no embedder + auto-probe never resolved), we can't size
+        // a shard — skip semantic layer entirely (structure layer still built).
+        let can_embed = has_emb && dim > 0;
+        let build_dim = if can_embed { dim } else { 384 };
         let (table, shard, points, stats) = indexer::build_structure_index(
             &root,
             &st.parser_manager,
+            build_dim,
+            &model_name,
             Some(&on_status),
         )
         .map_err(|e| format!("Indexing failed: {}", e))?;
@@ -162,15 +365,17 @@ pub async fn codegraph_build_index(
         st.build_done.store(0, Ordering::Relaxed);
         on_status(&format!("嵌入符号 0/{}", total));
         let mut embedded = 0usize;
-        if has_emb {
+        let mut batch_errors = 0usize;
+        if can_embed {
             let emb = st.embedder.lock().map_err(|e| e.to_string())?;
             if let Some(embedder) = emb.as_ref() {
                 for chunk in points.chunks(256) {
                     if st.build_cancel.load(Ordering::Relaxed) {
                         break;
                     }
-                    if let Err(e) = indexer::store::embed_and_store(chunk, embedder, &shard) {
+                    if let Err(e) = indexer::store::embed_and_store(chunk, embedder.as_ref(), &shard) {
                         tracing::warn!("codegraph: embed batch failed: {}", e);
+                        batch_errors = batch_errors.saturating_add(1);
                     }
                     embedded = embedded.saturating_add(chunk.len());
                     st.build_done.store(embedded, Ordering::Relaxed);
@@ -178,9 +383,28 @@ pub async fn codegraph_build_index(
                 }
             }
         }
-        let completed = !st.build_cancel.load(Ordering::Relaxed) && embedded >= total;
+        let cancelled = st.build_cancel.load(Ordering::Relaxed);
+        let completed = !cancelled && can_embed && embedded >= total;
         if completed {
             embed_ready.store(true, Ordering::Relaxed);
+        }
+        // Fill embed_status with the precise reason if embed didn't complete.
+        if embed_status.is_empty() {
+            if !can_embed {
+                embed_status = if !has_emb {
+                    "no_embedder".to_string()
+                } else {
+                    format!("dim_unresolved (dim={})", dim)
+                };
+            } else if cancelled {
+                embed_status = format!("cancelled at {}/{}", embedded, total);
+            } else if batch_errors > 0 {
+                embed_status = format!("batch_errors: {} (embedded {}/{})", batch_errors, embedded, total);
+            } else if !completed {
+                embed_status = format!("incomplete: embedded {}/{}", embedded, total);
+            } else {
+                embed_status = "ok".to_string();
+            }
         }
         st.build_active.store(false, Ordering::Relaxed);
         if let Ok(mut g) = st.build_current.lock() {
@@ -193,6 +417,7 @@ pub async fn codegraph_build_index(
             "files_with_symbols": stats.files_with_symbols,
             "total_symbols": n,
             "has_embeddings": completed,
+            "embed_status": embed_status,
         }))
     })
     .await
@@ -215,7 +440,9 @@ pub async fn codegraph_goto_definition(
 ) -> Result<Vec<types::QueryResult>, String> {
     let st = state.inner().clone();
     tokio::task::spawn_blocking(move || {
-        // 1. structure (exact, cross-file) under a read lock; clone shard Arc out.
+        // 1. structure (exact, cross-file) under a read lock; clone shard Arc out
+        // atomically with embed_ready (TOCTOU: reading them under separate locks
+        // could swap in a mid-embed shard after we passed the embed_ready gate).
         let (structure, shard_arc, embed_ready) = {
             let guard = st.inner.read().map_err(|e| e.to_string())?;
             match guard.as_ref() {
@@ -240,7 +467,7 @@ pub async fn codegraph_goto_definition(
         // lock embedder, embed word, search shard (read lock already dropped).
         let emb = st.embedder.lock().map_err(|e| e.to_string())?;
         if let Some(embedder) = emb.as_ref() {
-            match query::semantic::semantic_search(&word, embedder, &shard_arc, 10) {
+            match query::semantic::semantic_search(&word, embedder.as_ref(), &shard_arc, 10) {
                 Ok(mut r) => {
                     r.sort_by(|a, b| {
                         b.score
@@ -322,7 +549,17 @@ pub async fn codegraph_reindex_file(
         if !pi.embed_ready.load(Ordering::Relaxed) {
             return Ok(());
         }
+        // Read the cached embedder identity (model_name + dim) to stamp into the
+        // re-persisted meta. Falls back to the fastembed default if no embedder
+        // is configured (structure-only build) — matches what build stamped.
+        let (model_name, dim) = st
+            .embedder_model
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone()
+            .unwrap_or_else(|| ("fastembed:all-MiniLM-L6-v2".to_string(), 384));
         let emb = st.embedder.lock().map_err(|e| e.to_string())?;
+        let embedder_ref: Option<&dyn Embedder> = emb.as_ref().map(|b| b.as_ref());
         // Clone the shard Arc out so reindex_one borrows &mut pi.symbols
         // without aliasing the shard reference.
         let shard = pi.shard.clone();
@@ -331,10 +568,134 @@ pub async fn codegraph_reindex_file(
             &abs,
             &mut pi.symbols,
             &shard,
-            emb.as_ref(),
+            embedder_ref,
+            &model_name,
+            dim,
             &st.parser_manager,
         )
         .map_err(|e| format!("reindex failed: {}", e))
+    })
+    .await
+    .map_err(|e| format!("join error: {}", e))?
+}
+
+/// Tauri command: incrementally rescan changed files (manual「更新索引」button).
+///
+/// Walks the project, finds source files with mtime > the index's `indexed_at`,
+/// and reindexes only those via `reindex_one` (drop stale symbols → re-parse →
+/// re-embed that file). Unchanged files keep their existing symbols/vectors —
+/// this is the "hot reload" path, fast when only a few files changed (edited in
+/// an external editor, or `git pull` brought new code).
+///
+/// No-op if no index is built, the root doesn't match, or the background embed
+/// hasn't finished (embed_ready=false — the build will pick up changes via the
+/// next full rebuild's is_stale check). Runs in `spawn_blocking`; per-file write
+/// locks are released between files so goto queries can interleave.
+#[tauri::command]
+pub async fn codegraph_rescan(
+    project_root: String,
+    state: tauri::State<'_, std::sync::Arc<CodeGraphState>>,
+) -> Result<serde_json::Value, String> {
+    let st = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let root = PathBuf::from(&project_root);
+        // Snapshot indexed_at + embed_ready under a read lock; bail if no index
+        // or the active index is for a different root.
+        let indexed_at = {
+            let guard = st.inner.read().map_err(|e| e.to_string())?;
+            match guard.as_ref() {
+                None => {
+                    return Ok(serde_json::json!({
+                        "active_index": false,
+                        "rescanned_files": 0,
+                    }));
+                }
+                Some(pi) => {
+                    if pi.project_root != root {
+                        return Ok(serde_json::json!({
+                            "active_index": false,
+                            "rescanned_files": 0,
+                        }));
+                    }
+                    if !pi.embed_ready.load(Ordering::Relaxed) {
+                        return Ok(serde_json::json!({
+                            "active_index": true,
+                            "embed_ready": false,
+                            "rescanned_files": 0,
+                        }));
+                    }
+                    pi.indexed_at
+                }
+            }
+        };
+
+        // Walk + find changed files (mtime strictly after indexed_at — built
+        // during this index's lifetime). Same walk as the build (gitignore +
+        // junk-dir blacklist + max-filesize), so rescan sees exactly the files
+        // the build would.
+        let exts = st.parser_manager.supported_extensions();
+        let ext_refs: Vec<&str> = exts.iter().copied().collect();
+        let files = indexer::walk::walk_source_files(&root, &ext_refs);
+        let changed: Vec<PathBuf> = files
+            .into_iter()
+            .filter(|f| {
+                f.metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .map(|mt| mt > indexed_at)
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        let (model_name, dim) = st
+            .embedder_model
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clone()
+            .unwrap_or_else(|| ("fastembed:all-MiniLM-L6-v2".to_string(), 384));
+
+        let mut rescanned = 0usize;
+        let mut errors = 0usize;
+        for abs in &changed {
+            // Per-file write lock (released at end of iteration) so goto can
+            // interleave between files. Same inner→embedder lock order as
+            // reindex_file (build never holds both, so no deadlock cycle).
+            let mut guard = st.inner.write().map_err(|e| e.to_string())?;
+            let pi = match guard.as_mut() {
+                Some(pi) => pi,
+                None => break, // index closed mid-rescan — stop
+            };
+            if !pi.embed_ready.load(Ordering::Relaxed) {
+                break;
+            }
+            let emb = st.embedder.lock().map_err(|e| e.to_string())?;
+            let embedder_ref: Option<&dyn Embedder> = emb.as_ref().map(|b| b.as_ref());
+            let shard = pi.shard.clone();
+            match indexer::reindex_one(
+                &root,
+                abs,
+                &mut pi.symbols,
+                &shard,
+                embedder_ref,
+                &model_name,
+                dim,
+                &st.parser_manager,
+            ) {
+                Ok(_) => rescanned += 1,
+                Err(e) => {
+                    tracing::warn!("codegraph: rescan reindex failed {}: {}", abs.display(), e);
+                    errors += 1;
+                }
+            }
+        }
+
+        Ok(serde_json::json!({
+            "active_index": true,
+            "embed_ready": true,
+            "changed_files": changed.len(),
+            "rescanned_files": rescanned,
+            "errors": errors,
+        }))
     })
     .await
     .map_err(|e| format!("join error: {}", e))?

@@ -43,6 +43,45 @@ fn default_pane_split_right() -> String { "Ctrl+\\".to_string() }
 fn default_pane_split_down() -> String { "Ctrl+Shift+\\".to_string() }
 fn default_pane_close_tab() -> String { "Ctrl+W".to_string() }
 
+/// Embedding backend selector for CodeGraph. `fastembed` = local ONNX (zero
+/// config, downloads a model on first use); `http` = any HTTP embedding service
+/// (Ollama local/remote, OpenAI/Jina cloud — selected by `format`).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeGraphEmbedderConfig {
+    #[serde(default = "default_cg_backend")]
+    pub backend: String,
+    /// backend == "http" fields (ignored when backend == "fastembed"):
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default = "default_cg_model")]
+    pub model: String,
+    #[serde(default = "default_cg_format")]
+    pub format: String,
+    /// 0 = auto-probe from the first successful embedding response.
+    #[serde(default)]
+    pub dim: u32,
+}
+
+fn default_cg_backend() -> String { "fastembed".to_string() }
+fn default_cg_model() -> String { "nomic-embed-text".to_string() }
+fn default_cg_format() -> String { "ollama".to_string() }
+
+impl Default for CodeGraphEmbedderConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_cg_backend(),
+            base_url: String::new(),
+            api_key: String::new(),
+            model: default_cg_model(),
+            format: default_cg_format(),
+            dim: 0,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -73,6 +112,10 @@ pub struct AppSettings {
     /// 聊天区分屏布局快照——前端不透明数据（按工作区键控），Rust 只负责存取。
     #[serde(default)]
     pub pane_layouts: Value,
+    /// CodeGraph embedding 后端配置（fastembed / http）。默认 fastembed
+    /// 零配置开箱即用；切 http 走 Ollama / OpenAI 兼容云端。
+    #[serde(default)]
+    pub codegraph_embedder: CodeGraphEmbedderConfig,
 }
 
 fn default_font_size() -> u32 { 14 }
@@ -97,6 +140,7 @@ impl Default for AppSettings {
             open_with_extensions: Vec::new(),
             recent_limit: default_recent_limit(),
             pane_layouts: Value::Null,
+            codegraph_embedder: CodeGraphEmbedderConfig::default(),
         }
     }
 }
@@ -239,5 +283,38 @@ mod tests {
         let json = r#"{"open_with_extensions": [".py"]}"#;
         let s: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(s.open_with_extensions, vec![".py".to_string()]);
+    }
+
+    /// CodeGraph embedder 配置随 AppSettings 落盘/读取，camelCase 一致；缺省
+    /// 块回填默认 fastembed 后端（旧 config.json 没有这一字段时）。
+    #[test]
+    fn codegraph_embedder_config_round_trip_and_default() {
+        // 缺 codegraphEmbedder 块 → 默认 fastembed
+        let s: AppSettings = serde_json::from_str(r#"{"fontSize":14}"#).unwrap();
+        assert_eq!(s.codegraph_embedder.backend, "fastembed");
+        assert_eq!(s.codegraph_embedder.format, "ollama");
+
+        // 完整 http 配置 round-trip
+        let json = r#"{
+            "fontSize": 14,
+            "codegraphEmbedder": {
+                "backend": "http",
+                "baseUrl": "http://localhost:11434",
+                "apiKey": "sk-x",
+                "model": "nomic-embed-text",
+                "format": "ollama",
+                "dim": 768
+            }
+        }"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.codegraph_embedder.backend, "http");
+        assert_eq!(s.codegraph_embedder.base_url, "http://localhost:11434");
+        assert_eq!(s.codegraph_embedder.model, "nomic-embed-text");
+        assert_eq!(s.codegraph_embedder.format, "ollama");
+        assert_eq!(s.codegraph_embedder.dim, 768);
+
+        let out = serde_json::to_string(&s).unwrap();
+        assert!(out.contains("\"codegraphEmbedder\""), "{out}");
+        assert!(out.contains("\"baseUrl\":\"http://localhost:11434\""), "{out}");
     }
 }

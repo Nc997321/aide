@@ -1,4 +1,4 @@
-use crate::codegraph::embed::Embedder;
+use crate::codegraph::embed::{embed_one, Embedder};
 use crate::codegraph::shard::CodeShard;
 use crate::codegraph::types::QueryResult;
 
@@ -6,10 +6,10 @@ use crate::codegraph::types::QueryResult;
 /// Embeds the query text and returns top-K semantically similar results.
 pub fn semantic_search(
     query_text: &str,
-    embedder: &Embedder,
+    embedder: &dyn Embedder,
     shard: &CodeShard,
     limit: usize,
 ) -> Result<Vec<QueryResult>, Box<dyn std::error::Error>> {
-    let vector = embedder.embed_one(query_text)?;
+    let vector = embed_one(embedder, query_text)?;
     shard.search(&vector, limit, None)
 }

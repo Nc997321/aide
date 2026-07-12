@@ -169,7 +169,14 @@ const { show } = useContextMenu();
 
 function onAreaContextMenu(e: MouseEvent) {
   e.preventDefault();
-  show(e.clientX, e.clientY, fileTreeAreaMenuItems(projectInfo.value.root, loadRoot));
+  show(
+    e.clientX,
+    e.clientY,
+    fileTreeAreaMenuItems(projectInfo.value.root, loadRoot, {
+      rescan: (root: string) => cg.rescan(root),
+      rebuild: (root: string) => cg.rebuild(root),
+    }),
+  );
 }
 
 // Refresh file tree when the active session finishes a response round
@@ -567,7 +574,9 @@ defineExpose({ loadRoot });
 
 /* ── CodeGraph 构建进度条（方案 A：底部条）──
    全部用主题 CSS 变量，Warm Dark / Catppuccin 自动切换。
-   分段方块是 signature：一格一格点亮，呼应符号逐个被索引。 */
+   分段方块是 signature：一格一格点亮，呼应符号逐个被索引。
+   活跃色用主题 accent（Warm Dark = 工匠黄铜 #d4a574），不是 success 绿——
+   与 Warm Dark 的主题色一致。 */
 .cgp-bar {
   flex-shrink: 0;
   border-top: 1px solid var(--aide-border);
@@ -591,7 +600,7 @@ defineExpose({ loadRoot });
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--aide-success);
+  background: var(--aide-accent);
   flex-shrink: 0;
   animation: cgp-breathe 1.6s ease-in-out infinite;
 }
@@ -600,7 +609,7 @@ defineExpose({ loadRoot });
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
-  color: var(--aide-success);
+  color: var(--aide-accent);
   cursor: help;
 }
 @keyframes cgp-breathe {
@@ -623,12 +632,12 @@ defineExpose({ loadRoot });
   transition: background 0.25s ease;
 }
 .cgp-seg.on {
-  background: var(--aide-success);
+  background: var(--aide-accent);
 }
 .cgp-pct {
   font-family: ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
   font-size: 12px;
-  color: var(--aide-success);
+  color: var(--aide-accent);
   font-weight: 500;
   min-width: 38px;
   text-align: right;

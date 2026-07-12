@@ -3,7 +3,7 @@ import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem,
   ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
   GrepMatch, ProviderConfig, ProviderModelMappings, RunConfig, RunTarget, RecentView,
-  SkillMeta, BuildIndexResult, BuildProgress, QueryResult,
+  SkillMeta, BuildIndexResult, BuildProgress, RescanResult, QueryResult,
 } from "./types";
 import type { ModelOption, PermissionModeOption } from "./types/chat";
 
@@ -273,8 +273,8 @@ export const api = {
   },
 
   // CodeGraph — enhanced code navigation
-  codegraphBuildIndex(projectRoot: string): Promise<BuildIndexResult> {
-    return invoke("codegraph_build_index", { projectRoot });
+  codegraphBuildIndex(projectRoot: string, force = false): Promise<BuildIndexResult> {
+    return invoke("codegraph_build_index", { projectRoot, force });
   },
   codegraphGotoDefinition(
     word: string,
@@ -290,6 +290,10 @@ export const api = {
   },
   codegraphReindexFile(projectRoot: string, file: string): Promise<void> {
     return invoke("codegraph_reindex_file", { projectRoot, file });
+  },
+  /** 增量重扫：只 reindex mtime > indexed_at 的文件（手动「更新索引」）。 */
+  codegraphRescan(projectRoot: string): Promise<RescanResult> {
+    return invoke("codegraph_rescan", { projectRoot });
   },
   /** 粗粒度构建进度（纯原子读，同步 inline 命令）。前端定时 poll。 */
   codegraphBuildProgress(): Promise<BuildProgress> {

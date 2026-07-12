@@ -12,6 +12,25 @@ pub struct Meta {
     pub model_name: String,
     pub indexed_at: u64, // unix epoch seconds
     pub symbol_count: usize,
+    /// Vector dimension the shard was built with. `#[serde(default)]` so old
+    /// meta.json (pre-pluggable-embedder, always 384) still deserializes; a
+    /// missing dim is treated as 0 and forces a rebuild against the configured
+    /// embedder's real dim (load_project_index checks equality).
+    #[serde(default)]
+    pub dim: usize,
+    /// Name of the directory under `.aide/index/` holding this build's shard
+    /// (e.g. `qdrant-1700000000-3`). `#[serde(default = "legacy_shard_dir")]`
+    /// so old meta.json (which used the implicit `qdrant` dir) still loads.
+    /// Versioned dirs mean a rebuild NEVER wipes a live shard's directory —
+    /// EdgeShard::drop flushes to disk on Drop, and wiping a still-referenced
+    /// dir made Drop panic (build-thread swap + in-flight goto Arc clones).
+    #[serde(default = "legacy_shard_dir")]
+    pub shard_dir: String,
+}
+
+/// Legacy shard dir name used before versioned dirs existed.
+fn legacy_shard_dir() -> String {
+    "qdrant".to_string()
 }
 
 impl Meta {
@@ -81,11 +100,23 @@ mod tests {
             model_name: "all-MiniLM-L6-v2".into(),
             indexed_at: 1_000,
             symbol_count: 3,
+            dim: 384,
+            shard_dir: "qdrant-1".into(),
         };
         m.save(&path).unwrap();
         let loaded = Meta::load(&path).unwrap();
         assert_eq!(loaded.symbol_count, 3);
         assert_eq!(loaded.model_name, "all-MiniLM-L6-v2");
+        assert_eq!(loaded.dim, 384);
+        assert_eq!(loaded.shard_dir, "qdrant-1");
+
+        // Old meta.json without `dim`/`shard_dir` deserializes to defaults
+        // (0 / "qdrant") — load path treats 0 dim as "unknown" forcing a rebuild,
+        // and legacy shard_dir "qdrant" still loads the pre-versioned dir.
+        std::fs::write(&path, r#"{"version":1,"model_name":"x","indexed_at":1,"symbol_count":1}"#).unwrap();
+        let legacy = Meta::load(&path).unwrap();
+        assert_eq!(legacy.dim, 0);
+        assert_eq!(legacy.shard_dir, "qdrant");
 
         // a source file with mtime now (>> 1000) → stale
         std::fs::write(dir.join("A.java"), "class A {}").unwrap();
