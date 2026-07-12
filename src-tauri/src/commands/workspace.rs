@@ -60,24 +60,29 @@ pub fn clear_active_in_config(config: &mut serde_json::Value) {
 }
 
 #[tauri::command]
-pub fn list_workspaces() -> Result<Vec<WorkspaceInfo>, String> {
-    let dir = claude_projects_dir();
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut workspaces = Vec::new();
-    let read_dir = fs::read_dir(&dir).map_err(|e| format!("Failed to read projects dir: {}", e))?;
-    for entry in read_dir {
-        let Ok(entry) = entry else { continue; };
-        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            let key = entry.file_name().to_string_lossy().to_string();
-            let resolved = resolve_path_from_key(&key);
-            let missing = resolved.is_none();
-            let name = resolved.unwrap_or_else(|| key.clone());
-            workspaces.push(WorkspaceInfo { key, name, missing });
+pub async fn list_workspaces() -> Result<Vec<WorkspaceInfo>, String> {
+    tokio::task::spawn_blocking(|| {
+        let dir = claude_projects_dir();
+        if !dir.exists() {
+            return Ok(Vec::new());
         }
-    }
-    Ok(workspaces)
+        let mut workspaces = Vec::new();
+        let read_dir = fs::read_dir(&dir).map_err(|e| format!("Failed to read projects dir: {}", e))?;
+        for entry in read_dir {
+            let Ok(entry) = entry else { continue; };
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                let key = entry.file_name().to_string_lossy().to_string();
+                let resolved = resolve_path_from_key(&key);
+                let missing = resolved.is_none();
+                let name = resolved.unwrap_or_else(|| key.clone());
+                workspaces.push(WorkspaceInfo { key, name, missing });
+            }
+        }
+        let hidden = hidden_keys(&super::settings::load_config());
+        Ok(filter_hidden(workspaces, &hidden))
+    })
+    .await
+    .map_err(|e| format!("list_workspaces panicked: {}", e))?
 }
 
 #[tauri::command]

@@ -133,6 +133,48 @@ fn list_directory_blocking(path: String, show_hidden: Option<bool>) -> Result<Ve
     Ok(entries)
 }
 
+#[tauri::command]
+pub async fn list_fs_roots() -> Result<Vec<FileEntry>, String> {
+    tokio::task::spawn_blocking(|| {
+        let mut roots = Vec::new();
+        #[cfg(target_os = "windows")]
+        {
+            for b in b'A'..=b'Z' {
+                let drive = format!("{}:\\", b as char);
+                if std::path::Path::new(&drive).is_dir() {
+                    roots.push(FileEntry {
+                        name: format!("{}:", b as char),
+                        path: drive,
+                        is_dir: true,
+                        children: None,
+                    });
+                }
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            roots.push(FileEntry {
+                name: "/".to_string(),
+                path: "/".to_string(),
+                is_dir: true,
+                children: None,
+            });
+            if let Some(home) = super::user_home() {
+                let hp = home.to_string_lossy().into_owned();
+                roots.push(FileEntry {
+                    name: "Home".to_string(),
+                    path: hp,
+                    is_dir: true,
+                    children: None,
+                });
+            }
+        }
+        Ok(roots)
+    })
+    .await
+    .map_err(|e| format!("list_fs_roots panicked: {}", e))?
+}
+
 /// 文件读取/写入/复制/删除一律 async + spawn_blocking：大文件 / 大目录 / 跨盘复制 /
 /// 递归删除是同步重 IO，跑在 Tauri 主线程上会被杀软实时扫描或磁盘争抢拖到秒级，
 /// 把窗口整卡成「未响应」（2026-07-08 两轮真实冻结实锤同类反模式

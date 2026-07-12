@@ -140,6 +140,7 @@ pub fn run() {
             commands::shell::pty_spawn_shell,
             commands::filesystem::get_project_info,
             commands::filesystem::list_directory,
+            commands::filesystem::list_fs_roots,
             commands::filesystem::file_open,
             commands::filesystem::read_file_content,
             commands::filesystem::read_file_base64,
