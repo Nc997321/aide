@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from "vue";
+import { ref, onMounted } from "vue";
 import { api } from "../api";
 import type { FileEntry } from "../types";
 
@@ -74,16 +74,16 @@ function selectNode(node: TreeNode) {
   path.value = node.path;
 }
 
-function goUp() {
+async function goUp() {
   if (!path.value) return;
   const parts = path.value.replace(/[\\/]+$/, "").split(/[\\/]/);
   parts.pop();
-  const parent = parts.join("\\");
+  const sep = path.value.includes("\\") ? "\\" : "/";
+  const parent = parts.join(sep);
   if (parent) {
     selectedPath.value = parent;
     path.value = parent;
-    // 重新以 parent 为根展开
-    expandRoot(parent);
+    await expandRoot(parent);
   }
 }
 
