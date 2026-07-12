@@ -2,6 +2,7 @@
 import { ref, computed } from "vue";
 import WindowControls from "./WindowControls.vue";
 import SidebarToggle from "./SidebarToggle.vue";
+import NotificationBell from "./NotificationBell.vue";
 import Icon from "../Icon.vue";
 import type { SessionStatus } from "../../composables/useSessionState";
 import type { RunConfig } from "../../types";
@@ -258,6 +259,7 @@ const runDotClass = computed(() => {
 
     <!-- Right: activity indicator + window controls -->
     <div class="titlebar-right">
+      <NotificationBell />
       <div
         v-if="(activeSessions ?? []).length > 0"
         class="titlebar-activity"
