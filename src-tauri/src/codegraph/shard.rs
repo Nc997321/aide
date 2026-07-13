@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use qdrant_edge::*;
 use serde_json::{json, Value};
@@ -10,7 +10,6 @@ const VECTOR_NAME: &str = "code-snippet";
 
 pub struct CodeShard {
     inner: EdgeShard,
-    dir: PathBuf,
 }
 
 impl CodeShard {
@@ -76,7 +75,6 @@ impl CodeShard {
 
         Ok(Self {
             inner,
-            dir: dir.to_path_buf(),
         })
     }
 
@@ -105,7 +103,6 @@ impl CodeShard {
         let inner = EdgeShard::load(dir, Some(config))?;
         Ok(Self {
             inner,
-            dir: dir.to_path_buf(),
         })
     }
 

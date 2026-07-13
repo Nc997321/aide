@@ -39,6 +39,8 @@ impl SymbolTable {
         self.by_name.values().map(|v| v.len()).sum()
     }
 
+    /// Conventional companion to `len()` (clippy `len_without_is_empty` requires it).
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.by_name.is_empty()
     }

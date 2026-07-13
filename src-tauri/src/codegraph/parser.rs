@@ -52,11 +52,6 @@ impl ParserManager {
         self.languages.get(ext)
     }
 
-    /// Check if this file extension is supported.
-    pub fn supports_extension(&self, ext: &str) -> bool {
-        self.languages.contains_key(ext)
-    }
-
     /// List all supported extensions.
     pub fn supported_extensions(&self) -> Vec<&str> {
         self.extensions.iter().map(|(ext, _)| *ext).collect()
@@ -74,17 +69,6 @@ impl ParserManager {
             .and_then(|e| e.to_str())
             .unwrap_or("");
         let language = self.get_language(ext)?;
-        let mut parser = Parser::new();
-        parser.set_language(language).ok()?;
-        parser.parse(source, None)
-    }
-
-    /// Parse with a specific language (used when extension is ambiguous).
-    pub fn parse_with_language(
-        &self,
-        language: &Language,
-        source: &str,
-    ) -> Option<Tree> {
         let mut parser = Parser::new();
         parser.set_language(language).ok()?;
         parser.parse(source, None)
