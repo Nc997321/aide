@@ -19,7 +19,7 @@ import { useSessionProviders } from "@/composables/useSessionProviders";
 import type { ProviderConfig } from "@/types";
 import { useQuickActions } from "@/composables/useQuickActions";
 import type { QuickAction } from "@/composables/useQuickActions";
-import { setChatPaneWidth } from "@/composables/useChatPaneWidth";
+import { setChatPaneRect } from "@/composables/useChatPaneWidth";
 
 const props = defineProps<{
   sessionId: string | null;
@@ -56,7 +56,10 @@ const rootEl = ref<HTMLElement | null>(null);
 let widthObserver: ResizeObserver | null = null;
 
 function reportWidth() {
-  if (props.focused && rootEl.value) setChatPaneWidth(rootEl.value.clientWidth);
+  if (props.focused && rootEl.value) {
+    const r = rootEl.value.getBoundingClientRect();
+    setChatPaneRect(r.left, r.width);
+  }
 }
 
 onMounted(() => {

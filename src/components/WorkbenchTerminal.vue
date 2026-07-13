@@ -8,8 +8,15 @@ const props = defineProps<{ workspaceKey: string; cwd: string; height: number }>
 const emit = defineEmits<{ "update:height": [v: number] }>();
 
 const wb = useWorkbenchTerminal();
-const { chatPaneWidth } = useChatPaneWidth();
-const pillWidth = computed(() => chatPaneWidth.value > 0 ? `${chatPaneWidth.value}px` : "calc(100% - 20px)");
+const { chatPaneWidth, chatPaneLeft } = useChatPaneWidth();
+// pill 左缘/宽度对齐聚焦对话框：测得值后严格贴齐（左缘=对话框左缘，宽=对话框宽），
+// 而不是在整窗居中——侧栏把对话框右推，居中的 pill 会比对话框偏右。未测得时兜底整窗 10px 边距。
+const pillStyle = computed(() => {
+  if (chatPaneWidth.value > 0) {
+    return { height: props.height + "px", left: `${chatPaneLeft.value}px`, width: `${chatPaneWidth.value}px` };
+  }
+  return { height: props.height + "px", left: "10px", width: "calc(100% - 20px)" };
+});
 const containerRef = ref<HTMLDivElement>();
 
 onMounted(() => {
@@ -20,19 +27,31 @@ onUnmounted(() => {
   // wb.dispose() is called by App.vue — don't call here.
 });
 
+// 首次打开某工作空间的终端面板时自动建一个 shell——用户点终端就是要用，不必再点"新建终端"。
+function ensureActiveTerminal() {
+  if (wb.tabs.value.length === 0 && props.workspaceKey) {
+    wb.createSession(props.workspaceKey, props.cwd);
+  }
+}
+
 watch(() => wb.visible.value, async (v) => {
-  if (v) {
-    await nextTick();
-    // 无条件同步：activeId 为空（目标工作空间无终端）时 switchTo("") 隐藏所有
-    // pane，露出空状态。否则关闭态下切到空工作空间再打开会透出上个工作空间的 pane。
+  if (!v) return;
+  await nextTick();
+  if (wb.tabs.value.length === 0) {
+    ensureActiveTerminal();   // createSession 内部已 switchTo 显示新 pane
+  } else {
     wb.switchTo(wb.activeId.value);
   }
 });
 
 watch(() => wb.activeId.value, (id) => {
-  if (wb.visible.value) {
-    nextTick(() => wb.switchTo(id));
+  if (!wb.visible.value) return;
+  if (!id && wb.tabs.value.length === 0) {
+    // 面板开着时切到无终端工作空间：同样自动建；不可再 switchTo("")，否则会把刚建的 pane 藏掉
+    ensureActiveTerminal();
+    return;
   }
+  nextTick(() => wb.switchTo(id));
 });
 
 const activeTabKind = computed<"shell" | "run" | undefined>(() => {
@@ -64,7 +83,7 @@ function onHeaderDragStart(e: MouseEvent) {
 
 <template>
   <div class="workbench-overlay" :class="{ 'workbench-overlay--hidden': !wb.visible.value }">
-    <div class="workbench-pill" :class="{ 'is-shown': wb.visible.value }" :style="{ height: props.height + 'px', width: pillWidth }">
+    <div class="workbench-pill" :class="{ 'is-shown': wb.visible.value }" :style="pillStyle">
       <div class="workbench-header" @mousedown="onHeaderDragStart">
         <div class="wb-tabs">
           <div
@@ -85,13 +104,6 @@ function onHeaderDragStart(e: MouseEvent) {
         </div>
       </div>
       <div ref="containerRef" class="wb-container">
-        <div
-          v-if="wb.visible.value && wb.tabs.value.length === 0"
-          class="wb-empty"
-        >
-          <div class="wb-empty__title">该工作空间还没有终端</div>
-          <button class="wb-empty__btn" @click.stop="addTerminal">新建终端</button>
-        </div>
         <div
           v-if="wb.activeExited.value && activeTabKind === 'shell'"
           class="workbench-exited"
@@ -263,24 +275,6 @@ function onHeaderDragStart(e: MouseEvent) {
 .wb-term-pane .xterm-viewport { scrollbar-width: thin; scrollbar-color: var(--aide-surface-default) transparent; }
 .wb-term-pane .xterm-viewport::-webkit-scrollbar { width: 6px; }
 .wb-term-pane .xterm-viewport::-webkit-scrollbar-thumb { background: var(--aide-surface-default); border-radius: 3px; }
-
-/* ── Empty state ── */
-
-.wb-empty {
-  position: absolute; inset: 0;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 10px; color: var(--aide-text-muted);
-}
-.wb-empty__title { font-size: 13px; }
-.wb-empty__btn {
-  background: var(--aide-surface-hover);
-  color: var(--aide-text-primary);
-  border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-sm);
-  padding: 6px 16px; font-size: 13px; cursor: pointer;
-  transition: background 0.12s;
-}
-.wb-empty__btn:hover { background: var(--aide-surface-default); }
 
 /* ── Shell exited overlay ── */
 
