@@ -93,9 +93,13 @@ pub fn fetch_marketplace(url: String) -> Result<Vec<PluginEntry>, String> {
         };
         let content =
             fs::read_to_string(&path).map_err(|e| format!("Failed to read registry: {}", e))?;
-        let manifest: sources::RegistryManifest = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse marketplace JSON: {}", e))?;
-        let plugins: Vec<PluginEntry> = manifest.plugins.into_iter().map(Into::into).collect();
+        let manifest = sources::parse_marketplace_json(&content)?;
+        let plugins: Vec<PluginEntry> = manifest.plugins.into_iter().map(|p| PluginEntry {
+            name: p.name,
+            description: p.description.unwrap_or_default(),
+            repo: p.repository.unwrap_or_default(),
+            homepage: p.homepage.unwrap_or_default(),
+        }).collect();
         return Ok(plugins);
     }
 
