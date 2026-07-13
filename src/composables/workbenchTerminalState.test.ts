@@ -6,6 +6,7 @@ import {
   addTab,
   removeTab,
   markExited,
+  setShellName,
   hasTabs,
   workspaceKeyOf,
   allSessionIds,
@@ -99,5 +100,15 @@ describe("workbenchTerminalState", () => {
     addTab("WS_A", { id: s, label: "dev", shellName: "", exited: false, kind: "run" });
     setActiveWorkspace("WS_A");
     expect(tabs.value[0].kind).toBe("run");
+  });
+
+  it("setShellName 更新对应 tab 的 shellName，不存在的 id 安全无操作", () => {
+    const id = genSessionId("WS_A");
+    addTab("WS_A", { id, label: "term", shellName: "", exited: false, kind: "shell" });
+    setActiveWorkspace("WS_A");
+    expect(tabs.value.find(t => t.id === id)?.shellName).toBe("");
+    setShellName(id, "PowerShell 7");
+    expect(tabs.value.find(t => t.id === id)?.shellName).toBe("PowerShell 7");
+    expect(() => setShellName("nonexistent", "bash")).not.toThrow();
   });
 });

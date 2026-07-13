@@ -18,6 +18,7 @@ import {
   allSessionIds,
   workspaceKeyOf,
   setActiveTab,
+  setShellName,
   tabs as coreTabs,
   activeId as coreActiveId,
   activeExited as coreActiveExited,
@@ -206,6 +207,7 @@ export function useWorkbenchTerminal() {
       s.shellName = stg.shellPath
         ? deriveShellName(stg.shellPath)
         : (navigator.platform.toLowerCase().includes("win") ? "PowerShell" : "bash");
+      setShellName(id, s.shellName);
       s.spawned = true;
       if (initialCommand) {
         // Give the shell a moment to print its prompt before we send input
@@ -214,6 +216,7 @@ export function useWorkbenchTerminal() {
       }
     } catch (e) {
       s.terminal.writeln(`\r\nFailed to start shell: ${e}`);
+      markExited(id);
     }
   }
 

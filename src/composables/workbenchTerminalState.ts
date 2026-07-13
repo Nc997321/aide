@@ -124,6 +124,14 @@ export function setActiveTab(workspaceKey: string, id: string): void {
   if (g && g.tabs.some(t => t.id === id)) { g.activeId = id; _wbVersion.value++; }
 }
 
+/** 更新某 tab 的 shellName（spawn 成功后用）。找不到则无操作。 */
+export function setShellName(sessionId: string, shellName: string): void {
+  for (const g of groups.values()) {
+    const t = g.tabs.find(t => t.id === sessionId);
+    if (t) { t.shellName = shellName; _wbVersion.value++; return; }
+  }
+}
+
 /** 复位某 tab 的 exited 标记（run 重启 / shell 重启用）。找不到则无操作。 */
 export function clearExited(sessionId: string): void {
   for (const g of groups.values()) {
