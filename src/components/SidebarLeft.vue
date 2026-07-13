@@ -350,6 +350,9 @@ onMounted(async () => {
     for (const ws of workspaces.value) {
       if (ws.name === info.root) {
         activeWorkspace.value = ws.key;
+        wsActiveKey.value = ws.key;   // 同步共享 activeKey：启动时若只设本地 ref，
+        // 首个终端会被归到空 key（activeWorkspaceKey 仍为 null → :workspace-key="''"），
+        // 之后首次侧栏切换才真正设 activeKey，把那个终端遗弃成孤儿——切回去就"没了"。
         expandedWorkspaces.value.add(ws.key);
         await setCurrentWs(ws.key, ws.name);
         break;
