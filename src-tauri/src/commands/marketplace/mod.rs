@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
+pub mod sources;
+pub mod install;
+pub mod manifest;
 
 use super::claude_home;
 
@@ -32,133 +32,20 @@ pub struct InstalledPlugin {
     pub author: String,
     #[serde(default)]
     pub repo_url: String,
-    #[serde(default)]
     pub path: String,
     pub installed_at: u64,
 }
 
-// ── Raw deserialization types for official marketplace.json ──
-// source can be:
-//   { source: "url",        url: "https://github.com/..." }         — external plugin
-//   { source: "git-subdir", url: "owner/repo", path: "...", ... }   — subdir of another repo
-//   "./relative/path"                                                — bundled in marketplace
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum RawSource {
-    Object {
-        #[serde(default)]
-        source: String,
-        #[serde(default)]
-        url: String,
-        #[serde(default)]
-        #[allow(dead_code)]
-        path: String,
-    },
-    Bundled(String),       // "./relative/path" string
+/// 桥接清单路径：sidecar 经 env `AIDE_ENABLED_PLUGINS_FILE` 读它。
+pub fn enabled_plugins_manifest_path() -> PathBuf {
+    super::our_config_dir().join("enabled-plugins.json")
 }
 
-#[derive(Debug, Deserialize)]
-struct RawPluginEntry {
-    name: String,
-    #[serde(default)]
-    description: String,
-    source: Option<RawSource>,
-    #[serde(default)]
-    homepage: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct RegistryManifest {
-    plugins: Vec<RawPluginEntry>,
-}
-
-// ── Plugin manifest (for installed plugins) ──
-
-#[derive(Debug, Deserialize)]
-struct PluginManifest {
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    author: String,
-}
-
-// ── Conversion ──
-
-impl From<RawPluginEntry> for PluginEntry {
-    fn from(raw: RawPluginEntry) -> Self {
-        let repo = match raw.source {
-            Some(RawSource::Object { ref url, path: _, ref source, .. }) => {
-                // "url" type: url is the full git clone URL
-                // "git-subdir" type: url is "owner/repo", construct full GitHub URL
-                if source == "git-subdir" && !url.starts_with("http") {
-                    // url looks like "owner/repo" — prepend github.com
-                    format!("https://github.com/{}.git", url.trim_end_matches('/'))
-                } else {
-                    url.clone()
-                }
-            }
-            Some(RawSource::Bundled(path)) => path,
-            None => String::new(),
-        };
-        PluginEntry {
-            name: raw.name,
-            description: raw.description,
-            repo,
-            homepage: raw.homepage,
-        }
-    }
-}
-
-
-/// Classify a git clone error and return a prefixed error string.
-/// The prefix is a machine-readable code; the frontend maps it to
-/// user-facing messages and actions.
-fn git_err(stderr: &str) -> String {
-    let code = if stderr.contains("Could not connect")
-        || stderr.contains("Failed to connect")
-        || stderr.contains("Could not resolve")
-    {
-        "NETWORK_FAILURE"
-    } else if stderr.contains("not found") || stderr.contains("remote: Repository") {
-        "REPO_NOT_FOUND"
-    } else if stderr.contains("timeout") || stderr.contains("timed out") {
-        "TIMEOUT"
-    } else {
-        "UNKNOWN_ERROR"
-    };
-    format!("{}: {}", code, stderr.trim())
-}
-
-/// Run git clone with optional proxy and return output.
-fn git_clone(url: &str, target: &std::path::Path) -> Result<std::process::Output, std::io::Error> {
-    let mut cmd = Command::new("git");
-    cmd.args(["clone", "--depth", "1"]);
-    #[cfg(windows)]
-    { cmd.creation_flags(0x08000000); }
-
-    // Apply proxy if detected
-    if let Some(ref proxy) = super::proxy::detect_proxy() {
-        cmd.arg("-c");
-        cmd.arg(format!("http.proxy={}", proxy));
-        cmd.arg("-c");
-        cmd.arg(format!("https.proxy={}", proxy));
-    }
-
-    cmd.arg(url).arg(target).output()
-}
-
-// ── Paths ──
-
-fn plugins_dir() -> PathBuf {
+pub fn plugins_dir() -> PathBuf {
     claude_home().join("plugins")
 }
 
-fn marketplace_cache_dir() -> PathBuf {
+pub fn marketplace_cache_dir() -> PathBuf {
     super::our_config_dir().join("marketplace-cache")
 }
 
@@ -183,12 +70,12 @@ pub fn fetch_marketplace(url: String) -> Result<Vec<PluginEntry>, String> {
         .map_err(|e| format!("Failed to create marketplace cache dir: {}", e))?;
 
     // Shallow clone (auto proxy detection)
-    let output = git_clone(&url, &cache_dir)
+    let output = install::git_clone(&url, &cache_dir)
         .map_err(|e| format!("Failed to run git clone: {}. Is Git installed?", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Git 克隆失败: {}", git_err(&stderr)));
+        return Err(format!("Git 克隆失败: {}", install::git_err(&stderr)));
     }
 
     // 1. Try .claude-plugin/marketplace.json → registry.json → plugins.json
@@ -206,7 +93,7 @@ pub fn fetch_marketplace(url: String) -> Result<Vec<PluginEntry>, String> {
         };
         let content =
             fs::read_to_string(&path).map_err(|e| format!("Failed to read registry: {}", e))?;
-        let manifest: RegistryManifest = serde_json::from_str(&content)
+        let manifest: sources::RegistryManifest = serde_json::from_str(&content)
             .map_err(|e| format!("Failed to parse marketplace JSON: {}", e))?;
         let plugins: Vec<PluginEntry> = manifest.plugins.into_iter().map(Into::into).collect();
         return Ok(plugins);
@@ -225,12 +112,12 @@ pub fn fetch_marketplace(url: String) -> Result<Vec<PluginEntry>, String> {
                 continue;
             }
             if let Ok(content) = fs::read_to_string(&manifest_path) {
-                if let Ok(manifest) = serde_json::from_str::<PluginManifest>(&content) {
+                if let Ok(manifest) = serde_json::from_str::<manifest::PluginManifest>(&content) {
                     let name = path
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default();
-                    let repo = get_remote_url(&path).unwrap_or_else(|| url.clone());
+                    let repo = install::get_remote_url(&path).unwrap_or_else(|| url.clone());
                     plugins.push(PluginEntry {
                         name: name.clone(),
                         description: manifest.description,
@@ -257,7 +144,7 @@ pub fn install_plugin(repo_url: String, name: String) -> Result<(), String> {
     fs::create_dir_all(plugins_dir())
         .map_err(|e| format!("Failed to create plugins directory: {}", e))?;
 
-    let output = git_clone(&repo_url, &target_dir)
+    let output = install::git_clone(&repo_url, &target_dir)
         .map_err(|e| format!("Failed to run git clone: {}. Is Git installed?", e))?;
 
     if !output.status.success() {
@@ -265,7 +152,7 @@ pub fn install_plugin(repo_url: String, name: String) -> Result<(), String> {
         if target_dir.exists() {
             let _ = fs::remove_dir_all(&target_dir);
         }
-        return Err(format!("Git 克隆失败: {}", git_err(&stderr)));
+        return Err(format!("Git 克隆失败: {}", install::git_err(&stderr)));
     }
 
     let manifest_path = target_dir.join(".claude-plugin").join("plugin.json");
@@ -311,7 +198,7 @@ pub fn list_installed_plugins() -> Result<Vec<InstalledPlugin>, String> {
             let manifest_path = path.join(".claude-plugin").join("plugin.json");
             let (title, description, author) = if manifest_path.exists() {
                 if let Ok(content) = fs::read_to_string(&manifest_path) {
-                    if let Ok(manifest) = serde_json::from_str::<PluginManifest>(&content) {
+                    if let Ok(manifest) = serde_json::from_str::<manifest::PluginManifest>(&content) {
                         (
                             if manifest.title.is_empty() {
                                 manifest.name.clone()
@@ -336,7 +223,7 @@ pub fn list_installed_plugins() -> Result<Vec<InstalledPlugin>, String> {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
 
-            let repo_url = get_remote_url(&path).unwrap_or_default();
+            let repo_url = install::get_remote_url(&path).unwrap_or_default();
             let installed_at = fs::metadata(&path)
                 .ok()
                 .and_then(|m| m.modified().ok())
@@ -357,21 +244,4 @@ pub fn list_installed_plugins() -> Result<Vec<InstalledPlugin>, String> {
     }
 
     Ok(plugins)
-}
-
-fn get_remote_url(path: &std::path::Path) -> Option<String> {
-    let mut cmd = Command::new("git");
-    cmd.args(["remote", "get-url", "origin"])
-        .current_dir(path);
-    #[cfg(windows)]
-    { cmd.creation_flags(0x08000000); }
-    let output = cmd.output().ok()?;
-
-    if output.status.success() {
-        let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !url.is_empty() {
-            return Some(url);
-        }
-    }
-    None
 }
