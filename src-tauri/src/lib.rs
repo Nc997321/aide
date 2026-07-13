@@ -243,9 +243,11 @@ pub fn run() {
             commands::provider::refresh_system_default_models,
             // Marketplace commands
             commands::marketplace::install::fetch_marketplace,
-            commands::marketplace::install_plugin,
-            commands::marketplace::uninstall_plugin,
-            commands::marketplace::list_installed_plugins,
+            commands::marketplace::install::install_plugin,
+            commands::marketplace::install::uninstall_plugin,
+            commands::marketplace::install::list_installed_plugins,
+            commands::marketplace::install::refresh_marketplace,
+            commands::marketplace::install::update_plugin,
             commands::marketplace::list_marketplace_sources,
             commands::marketplace::set_marketplace_enabled,
             // Run configuration commands
