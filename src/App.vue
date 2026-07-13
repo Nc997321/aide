@@ -24,6 +24,7 @@ import { useResizable } from "./composables/useResizable";
 import { useConversationChanges } from "./composables/useConversationChanges";
 import { useWorkbenchTerminal } from "./composables/useWorkbenchTerminal";
 import { api } from "./api";
+import { marketplaceApi } from "./api/marketplace";
 import { ref, onMounted, onUnmounted, nextTick, watch, computed } from "vue";
 import { useSettings } from "./composables/useSettings";
 import { useWindowFocus } from "./composables/useWindowFocus";
@@ -544,6 +545,41 @@ onMounted(async () => {
       if (e.payload) openFileViewer(e.payload);
     });
   } catch (_) { /* best effort */ }
+
+  // 启动后台静默检查插件市场更新（方案 B：只通知，不自动应用）
+  void (async () => {
+    try {
+      const sources = await marketplaceApi.listMarketplaceSources();
+      const enabled = sources.filter((x) => x.enabled);
+      if (enabled.length === 0) return;
+      let failed = 0;
+      for (const s of enabled) {
+        try { await marketplaceApi.refreshMarketplace(s.id); }
+        catch { failed++; }
+      }
+      // 全部启用源都失败 → 通知拉取失败
+      if (failed === enabled.length) {
+        await api.notifySend("市场更新拉取失败", "无法连接市场源，请检查网络或代理。");
+        return;
+      }
+      // 比对已装插件版本，统计有更新的数量
+      const installed = await marketplaceApi.listInstalledPlugins();
+      let updates = 0;
+      for (const s of enabled) {
+        try {
+          const list = await marketplaceApi.fetchMarketplace(s.id);
+          for (const p of list) {
+            if (p.version && installed.some((i) => i.market === p.marketName && i.name === p.name && i.version !== p.version)) {
+              updates++;
+            }
+          }
+        } catch { /* 单源失败已在上方统计 */ }
+      }
+      if (updates > 0) {
+        await api.notifySend(`${updates} 个插件有更新`, "打开设置 → 市场查看并更新。");
+      }
+    } catch { /* 静默：启动检查不应影响主流程 */ }
+  })();
 });
 
 onUnmounted(() => {
