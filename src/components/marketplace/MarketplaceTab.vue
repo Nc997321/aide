@@ -1,35 +1,37 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useMarketplace } from "../../composables/useMarketplace";
 import MarketplacePluginCard from "./MarketplacePluginCard.vue";
 import Icon from "../Icon.vue";
-import type { PluginEntry } from "../../types/marketplace";
 
 const emit = defineEmits<{
   "go-settings": [];
 }>();
 
 const {
+  sources,
+  plugins,
+  filteredPlugins,
+  hiddenCount,
+  installedPlugins,
   loading,
   error,
   errorActions,
   searchQuery,
-  filteredPlugins,
-  isInstalled,
-  isInstalling,
+  fetchSources,
   fetchPlugins,
   refreshInstalled,
-  installPlugin,
-  uninstallPlugin,
+  setSourceEnabled,
+  refreshSource,
 } = useMarketplace();
 
+const activeCategory = ref("all");
+const showHidden = ref(false);
+
 onMounted(async () => {
+  await fetchSources();
   await Promise.all([fetchPlugins(), refreshInstalled()]);
 });
-
-function handleRetry() {
-  fetchPlugins();
-}
 
 function handleAction(kind: string) {
   switch (kind) {
@@ -42,13 +44,74 @@ function handleAction(kind: string) {
   }
 }
 
-function handleInstall(entry: PluginEntry) {
-  installPlugin(entry);
+function sourceLabel(id: string): string {
+  switch (id) {
+    case "claude-plugins-official":
+      return "Anthropic 官方";
+    case "claude-community":
+      return "社区";
+    default:
+      return id;
+  }
 }
 
-function handleUninstall(name: string) {
-  uninstallPlugin(name);
+function countOf(sourceId: string): number {
+  return plugins.value.filter((p) => p.sourceId === sourceId).length;
 }
+
+const categoryLabelMap: Record<string, string> = {
+  "cat-external": "外部集成",
+  "cat-code": "代码智能",
+  "cat-dev": "开发工作流",
+  "cat-security": "安全",
+  "cat-style": "输出样式",
+  "cat-agent": "Agent",
+  "cat-mcp": "MCP",
+  "cat-hook": "Hook",
+  "cat-skill": "Skill",
+  "cat-tool": "工具",
+  "cat-utility": "实用工具",
+  "cat-integration": "集成",
+  "cat-workflow": "工作流",
+};
+
+function categoryLabel(key: string): string {
+  return categoryLabelMap[key] || key;
+}
+
+const categories = computed(() => {
+  const map = new Map<string, number>();
+  for (const p of plugins.value) {
+    if (p.category) {
+      map.set(p.category, (map.get(p.category) || 0) + 1);
+    }
+  }
+  const entries = Array.from(map.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([key, count]) => ({ key, label: categoryLabel(key), count }));
+  return [
+    { key: "all", label: "全部", count: plugins.value.length },
+    ...entries,
+  ];
+});
+
+const visiblePlugins = computed(() => {
+  let result = filteredPlugins.value;
+  if (activeCategory.value !== "all") {
+    result = result.filter((p) => p.category === activeCategory.value);
+  }
+  return result;
+});
+
+const activeRepo = computed(() => sources.value.find((s) => s.enabled)?.repo ?? "");
+
+const enabledCount = computed(() => {
+  let count = 0;
+  for (const [, plugin] of installedPlugins.value) {
+    if (plugin.enabled) count++;
+  }
+  return count;
+});
 </script>
 
 <template>
@@ -69,53 +132,100 @@ function handleUninstall(name: string) {
       </div>
     </div>
 
-    <!-- Search bar -->
-    <div class="search-bar">
-      <input
-        v-model="searchQuery"
-        class="search-input"
-        placeholder="搜索插件名称、描述或标签..."
-      />
-    </div>
-
-    <!-- Loading: skeleton cards -->
-    <div v-if="loading" class="plugin-list">
-      <div v-for="i in 4" :key="i" class="skeleton-card">
-        <div class="skel-body">
-          <div class="skel-line skel-title"></div>
-          <div class="skel-line skel-desc"></div>
-          <div class="skel-line skel-tags"></div>
+    <div class="main-head">
+      <div class="row">
+        <div>
+          <h1>插件市场</h1>
+          <div class="sub">从固定源发现插件。安装后，skills / agents / hooks / MCP 在会话中生效。</div>
         </div>
-        <div class="skel-btn"></div>
+        <div class="search">
+          <span class="ic">⌕</span>
+          <input v-model="searchQuery" placeholder="搜索插件名或描述…" />
+        </div>
       </div>
     </div>
 
-    <!-- Empty: no plugins loaded -->
-    <div v-else-if="filteredPlugins.length === 0 && searchQuery.trim() === ''" class="empty">
-      <div class="empty-icon"><Icon name="package" :size="32" /></div>
-      <div class="empty-text">暂无可用的插件</div>
-      <div class="empty-hint">检查市场源或稍后重试</div>
-      <button class="empty-retry" @click="handleRetry">重新加载</button>
+    <div class="sources">
+      <span class="lbl">源</span>
+      <div
+        v-for="s in sources"
+        :key="s.id"
+        class="chip"
+        :class="{ on: s.enabled }"
+        @click="setSourceEnabled(s.id, !s.enabled)"
+      >
+        <span class="dot"></span>
+        <span class="nm">{{ sourceLabel(s.id) }}</span>
+        <span class="cnt">{{ countOf(s.id) }}</span>
+        <span class="refr" v-tooltip="'刷新此源'" @click.stop="refreshSource(s.id)">⟳</span>
+        <span class="switch" v-tooltip="'开/关'" @click.stop="setSourceEnabled(s.id, !s.enabled)"></span>
+      </div>
+      <span class="src-hint">固定源，不可自加 · <code>{{ activeRepo }}</code></span>
     </div>
 
-    <!-- Empty: search no results -->
-    <div v-else-if="filteredPlugins.length === 0" class="empty">
-      <div class="empty-icon"><Icon name="search" :size="32" /></div>
-      <div class="empty-text">没有匹配的插件</div>
-      <div class="empty-hint">尝试调整搜索关键词</div>
+    <div class="list">
+      <div class="filter-row">
+        <span
+          v-for="c in categories"
+          :key="c.key"
+          class="ftag"
+          :class="{ active: activeCategory === c.key }"
+          @click="activeCategory = c.key"
+        >
+          {{ c.label }}<span class="n">{{ c.count }}</span>
+        </span>
+      </div>
+
+      <div v-if="hiddenCount > 0" class="hidden-row" @click="showHidden = !showHidden">
+        已隐藏 {{ hiddenCount }} 个 Aide 不可用的插件
+        <span class="caret">{{ showHidden ? "▾" : "▸" }}</span>
+      </div>
+
+      <div v-if="showHidden && hiddenCount > 0" class="hidden-detail">
+        组件清单在安装后由 SDK 自动发现
+      </div>
+
+      <!-- Loading: skeleton cards -->
+      <div v-if="loading" class="plugin-list">
+        <div v-for="i in 4" :key="i" class="skeleton-card">
+          <div class="skel-body">
+            <div class="skel-line skel-title"></div>
+            <div class="skel-line skel-desc"></div>
+            <div class="skel-line skel-tags"></div>
+          </div>
+          <div class="skel-btn"></div>
+        </div>
+      </div>
+
+      <!-- Empty: no plugins loaded -->
+      <div v-else-if="visiblePlugins.length === 0 && searchQuery.trim() === ''" class="empty">
+        <div class="empty-icon"><Icon name="package" :size="32" /></div>
+        <div class="empty-text">暂无可用的插件</div>
+        <div class="empty-hint">检查市场源或稍后重试</div>
+        <button class="empty-retry" @click="fetchPlugins">重新加载</button>
+      </div>
+
+      <!-- Empty: search no results -->
+      <div v-else-if="visiblePlugins.length === 0" class="empty">
+        <div class="empty-icon"><Icon name="search" :size="32" /></div>
+        <div class="empty-text">没有匹配的插件</div>
+        <div class="empty-hint">尝试调整搜索关键词</div>
+      </div>
+
+      <!-- Plugin list -->
+      <div v-else class="plugin-list">
+        <MarketplacePluginCard
+          v-for="p in visiblePlugins"
+          :key="p.name"
+          :entry="p"
+        />
+      </div>
     </div>
 
-    <!-- Plugin list -->
-    <div v-else class="plugin-list">
-      <MarketplacePluginCard
-        v-for="entry in filteredPlugins"
-        :key="entry.name"
-        :plugin="entry"
-        :is-installed="isInstalled(entry.name)"
-        :is-installing="isInstalling(entry.name)"
-        @install="handleInstall"
-        @uninstall="handleUninstall"
-      />
+    <div class="foot">
+      <span class="pill">{{ installedPlugins.size }} 已安装</span><span class="sep">·</span>
+      <span class="pill">{{ enabledCount }} 已启用</span><span class="sep">·</span>
+      <span>启用变更在下一次消息往返生效</span>
     </div>
   </div>
 </template>
@@ -181,40 +291,263 @@ function handleUninstall(name: string) {
   background: color-mix(in srgb, var(--aide-info) 12%, transparent);
 }
 
+/* ── Main head ── */
+
+.main-head {
+  flex: 0 0 auto;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid var(--aide-border);
+}
+
+.main-head .row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.main-head h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.main-head .sub {
+  color: var(--aide-text-secondary);
+  font-size: 12px;
+  margin-top: 3px;
+}
+
 /* ── Search ── */
 
-.search-bar {
-  margin-bottom: 8px;
-  flex-shrink: 0;
+.search {
+  position: relative;
+  flex: 0 0 280px;
 }
 
-.search-input {
+.search input {
   width: 100%;
-  box-sizing: border-box;
-  background: var(--aide-bg-base);
-  border: 1px solid var(--aide-surface-hover);
-  border-radius: var(--aide-radius-md);
-  padding: 8px 12px;
-  font-size: 12px;
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
   color: var(--aide-text-primary);
-  outline: none;
   font-family: inherit;
-  transition: border-color 0.15s;
+  font-size: 12.5px;
+  padding: 7px 10px 7px 30px;
+  outline: none;
+  box-sizing: border-box;
 }
 
-.search-input::placeholder {
+.search input:focus {
+  border-color: color-mix(in srgb, var(--aide-accent) 45%, transparent);
+  box-shadow: 0 0 0 3px var(--aide-accent-subtle);
+}
+
+.search input::placeholder {
   color: var(--aide-text-muted);
 }
 
-.search-input:focus {
-  border-color: var(--aide-accent);
+.search .ic {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--aide-text-muted);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+/* ── Sources bar ── */
+
+.sources {
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--aide-border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sources .lbl {
+  color: var(--aide-text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-right: 2px;
+}
+
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border);
+  border-radius: 20px;
+  padding: 6px 8px 6px 12px;
+  transition: border-color 0.15s, background 0.15s;
+  cursor: pointer;
+}
+
+.chip.on {
+  border-color: color-mix(in srgb, var(--aide-accent) 45%, transparent);
+  background: var(--aide-accent-subtle);
+}
+
+.chip .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--aide-text-muted);
+  flex: 0 0 auto;
+}
+
+.chip.on .dot {
+  background: var(--aide-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--aide-success) 18%, transparent);
+}
+
+.chip .nm {
+  font-size: 12.5px;
+  color: var(--aide-text-secondary);
+  font-weight: 500;
+}
+
+.chip.on .nm {
+  color: var(--aide-text-primary);
+}
+
+.chip .cnt {
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--aide-text-muted);
+  background: var(--aide-bg-deep);
+  padding: 1px 7px;
+  border-radius: 10px;
+}
+
+.chip.on .cnt {
+  color: var(--aide-accent);
+}
+
+.chip .refr {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  border: 1px solid transparent;
+  font-size: 14px;
+}
+
+.chip .refr:hover {
+  color: var(--aide-accent);
+  border-color: var(--aide-border);
+}
+
+.switch {
+  width: 30px;
+  height: 17px;
+  border-radius: 10px;
+  background: var(--aide-border);
+  position: relative;
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: background 0.15s;
+}
+
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--aide-text-primary);
+  transition: left 0.15s, background 0.15s;
+}
+
+.chip.on .switch {
+  background: var(--aide-accent);
+}
+
+.chip.on .switch::after {
+  left: 15px;
+  background: var(--aide-text-on-accent);
+}
+
+.src-hint {
+  margin-left: auto;
+  color: var(--aide-text-muted);
+  font-size: 11.5px;
+}
+
+.src-hint code {
+  font-family: inherit;
+  color: var(--aide-text-secondary);
 }
 
 /* ── Plugin list ── */
 
-.plugin-list {
+.list {
   flex: 1;
   overflow-y: auto;
+  padding: 8px 22px 22px;
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0 6px;
+  flex-wrap: wrap;
+}
+
+.ftag {
+  font-size: 11.5px;
+  color: var(--aide-text-secondary);
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border);
+  border-radius: 14px;
+  padding: 3px 11px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.ftag.active {
+  color: var(--aide-accent);
+  border-color: color-mix(in srgb, var(--aide-accent) 45%, transparent);
+  background: var(--aide-accent-subtle);
+}
+
+.ftag .n {
+  font-family: inherit;
+  color: var(--aide-text-muted);
+  margin-left: 5px;
+}
+
+.hidden-row {
+  font-size: 11.5px;
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  padding: 6px 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hidden-row .caret {
+  font-size: 14px;
+}
+
+.hidden-detail {
+  font-size: 11px;
+  color: var(--aide-text-muted);
+  padding: 4px 0 8px;
 }
 
 /* ── Skeleton ── */
@@ -238,9 +571,21 @@ function handleUninstall(name: string) {
   animation: pulse 1.5s ease-in-out infinite;
 }
 
-.skel-title { width: 60%; margin-bottom: 8px; }
-.skel-desc { width: 80%; margin-bottom: 8px; height: 10px; }
-.skel-tags { width: 40%; height: 10px; }
+.skel-title {
+  width: 60%;
+  margin-bottom: 8px;
+}
+
+.skel-desc {
+  width: 80%;
+  margin-bottom: 8px;
+  height: 10px;
+}
+
+.skel-tags {
+  width: 40%;
+  height: 10px;
+}
 
 .skel-btn {
   width: 60px;
@@ -251,8 +596,13 @@ function handleUninstall(name: string) {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 0.7; }
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.7;
+  }
 }
 
 /* ── Empty ── */
@@ -301,17 +651,40 @@ function handleUninstall(name: string) {
   filter: brightness(1.1);
 }
 
+/* ── Footer ── */
+
+.foot {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--aide-border);
+  padding: 8px 22px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--aide-bg-deep);
+  font-size: 11px;
+  color: var(--aide-text-muted);
+}
+
+.foot .pill {
+  font-family: inherit;
+  color: var(--aide-text-secondary);
+}
+
+.foot .sep {
+  color: var(--aide-border);
+}
+
 /* ── Scrollbar ── */
 
-.plugin-list::-webkit-scrollbar {
+.list::-webkit-scrollbar {
   width: 4px;
 }
 
-.plugin-list::-webkit-scrollbar-track {
+.list::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.plugin-list::-webkit-scrollbar-thumb {
+.list::-webkit-scrollbar-thumb {
   background: var(--aide-surface-hover);
   border-radius: 2px;
 }
