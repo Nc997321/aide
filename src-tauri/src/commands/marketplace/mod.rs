@@ -109,32 +109,38 @@ fn with_config_mut_settings<F: FnOnce(&mut serde_json::Map<String, serde_json::V
 }
 
 #[tauri::command]
-pub fn set_plugin_enabled(marketplace: String, plugin: String, enabled: bool) -> Result<(), String> {
-    let key = format!("{plugin}@{marketplace}");
-    with_config_mut_settings(|s| {
-        let m = s.entry("enabledPlugins").or_insert(serde_json::json!({}));
-        if let Some(obj) = m.as_object_mut() {
-            obj.insert(key.clone(), serde_json::json!(enabled));
-        }
-        Ok::<_, String>(())
-    })?;
-    write_enabled_plugins_manifest()
+pub async fn set_plugin_enabled(marketplace: String, plugin: String, enabled: bool) -> Result<(), String> {
+    // 重 IO（config 读写 + cache 目录扫描 + 清单落盘）→ spawn_blocking，不占主线程
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let key = format!("{plugin}@{marketplace}");
+        with_config_mut_settings(|s| {
+            let m = s.entry("enabledPlugins").or_insert(serde_json::json!({}));
+            if let Some(obj) = m.as_object_mut() {
+                obj.insert(key.clone(), serde_json::json!(enabled));
+            }
+            Ok::<_, String>(())
+        })?;
+        write_enabled_plugins_manifest()
+    }).await.map_err(|e| e.to_string())?
 }
 
 // ── Commands ──
 
 #[tauri::command]
-pub fn list_marketplace_sources() -> Result<Vec<sources::SourceInfo>, String> {
-    let s = crate::commands::settings::load_config();
-    let enabled: Vec<String> = s.get("settings").and_then(|x| x["enabledMarketplaces"].as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-        .unwrap_or_default();
-    let list = sources::FIXED_SOURCES.iter().map(|(id, repo, name, def)| {
-        let never_set = enabled.is_empty();
-        let on = enabled.iter().any(|e| e == id) || (never_set && *def);
-        sources::SourceInfo { id: id.to_string(), name: name.to_string(), repo: repo.to_string(), enabled: on }
-    }).collect();
-    Ok(list)
+pub async fn list_marketplace_sources() -> Result<Vec<sources::SourceInfo>, String> {
+    // 读 config 文件 → spawn_blocking，不占主线程
+    tokio::task::spawn_blocking(|| -> Result<Vec<sources::SourceInfo>, String> {
+        let s = crate::commands::settings::load_config();
+        let enabled: Vec<String> = s.get("settings").and_then(|x| x["enabledMarketplaces"].as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+        let list = sources::FIXED_SOURCES.iter().map(|(id, repo, name, def)| {
+            let never_set = enabled.is_empty();
+            let on = enabled.iter().any(|e| e == id) || (never_set && *def);
+            sources::SourceInfo { id: id.to_string(), name: name.to_string(), repo: repo.to_string(), enabled: on }
+        }).collect();
+        Ok(list)
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -146,16 +152,19 @@ pub async fn get_plugin_details(source_id: String, plugin_name: String) -> Resul
 }
 
 #[tauri::command]
-pub fn set_marketplace_enabled(source_id: String, enabled: bool) -> Result<(), String> {
-    crate::commands::settings::with_config_mut(|cfg| {
-        let settings = cfg["settings"].as_object_mut().ok_or("settings missing")?;
-        let arr = settings.entry("enabledMarketplaces").or_insert(serde_json::json!([]));
-        let a = arr.as_array_mut().ok_or("enabledMarketplaces not array")?;
-        let has = a.iter().any(|v| v.as_str() == Some(&source_id));
-        if enabled && !has { a.push(serde_json::json!(source_id)); }
-        if !enabled { a.retain(|v| v.as_str() != Some(&source_id)); }
-        Ok(())
-    })
+pub async fn set_marketplace_enabled(source_id: String, enabled: bool) -> Result<(), String> {
+    // config 读写 → spawn_blocking，不占主线程
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        crate::commands::settings::with_config_mut(|cfg| {
+            let settings = cfg["settings"].as_object_mut().ok_or("settings missing")?;
+            let arr = settings.entry("enabledMarketplaces").or_insert(serde_json::json!([]));
+            let a = arr.as_array_mut().ok_or("enabledMarketplaces not array")?;
+            let has = a.iter().any(|v| v.as_str() == Some(&source_id));
+            if enabled && !has { a.push(serde_json::json!(source_id)); }
+            if !enabled { a.retain(|v| v.as_str() != Some(&source_id)); }
+            Ok(())
+        })
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]

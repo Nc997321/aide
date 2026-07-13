@@ -218,6 +218,9 @@ fn resolve_and_install(source_id: &str, market: &str, plugin: &str, entry: &crat
         crate::commands::marketplace::sources::RawSource::Npm { .. } => {
             return Err("NPM_UNSUPPORTED: npm 源插件暂不支持安装".into());
         }
+        crate::commands::marketplace::sources::RawSource::Unknown => {
+            return Err("SOURCE_TYPE_UNSUPPORTED: 未知的插件源类型".into());
+        }
         crate::commands::marketplace::sources::RawSource::Relative(rel) => {
             let rel = crate::commands::marketplace::sources::resolve_relative(rel, plugin_root);
             let from = crate::commands::marketplace::source_cache_dir(source_id)

@@ -40,6 +40,9 @@ pub enum RawSource {
     Url { url: String, r#ref: Option<String>, sha: Option<String> },
     GitSubdir { url: String, path: String, r#ref: Option<String>, sha: Option<String> },
     Npm { package: String, version: Option<String> },
+    /// 未知源类型：marketplace.json 出现了 schema 未覆盖的 source.kind。
+    /// 列表期照常展示（可用性按内联组件字段判定），安装期以 SOURCE_TYPE_UNSUPPORTED 拒绝。
+    Unknown,
 }
 
 #[derive(Debug, Default)]
@@ -149,7 +152,7 @@ fn parse_source(s: &Value) -> RawSource {
             package: s["package"].as_str().unwrap_or("").to_string(),
             version: s["version"].as_str().map(String::from),
         },
-        _ => RawSource::Relative(String::new()), // 未知：留空相对路径，安装时报 SOURCE_TYPE_UNSUPPORTED
+        _ => RawSource::Unknown, // 未知源类型：安装期报 SOURCE_TYPE_UNSUPPORTED（见 resolve_and_install）
     }
 }
 
@@ -221,5 +224,15 @@ mod tests {
         let m = parse_marketplace_json(j).unwrap();
         assert_eq!(m.plugins[0].category.as_deref(), Some("development"));
         assert!(matches!(m.plugins[0].source.as_ref().unwrap(), RawSource::Relative(s) if s=="./plugins/agent-sdk-dev"));
+    }
+
+    #[test]
+    fn unknown_source_kind_parses_to_unknown_not_relative() {
+        // 未知 source.kind 不应静默退化为空 Relative（会触发整目录 copy），而应保留为 Unknown，
+        // 安装期由 resolve_and_install 以 SOURCE_TYPE_UNSUPPORTED 拒绝。列表期照常展示。
+        let j = r#"{"name":"m","owner":{"name":"o"},"plugins":[
+          {"name":"weird","source":{"source":"future-kind","repo":"o/r"}}]}"#;
+        let m = parse_marketplace_json(j).unwrap();
+        assert!(matches!(m.plugins[0].source.as_ref().unwrap(), RawSource::Unknown));
     }
 }
