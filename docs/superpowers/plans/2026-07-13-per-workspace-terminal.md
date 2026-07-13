@@ -187,17 +187,22 @@ interface WorkspaceGroup {
 
 // 模块级单例状态：工作空间 -> 终端分组
 const groups = new Map<string, WorkspaceGroup>();
-const activeWorkspaceKey = ref<string>("");
+const activeWorkspaceKeyRef = ref<string>("");
 let wbCounter = 0;
 
 export function resetWorkbenchState(): void {
   groups.clear();
-  activeWorkspaceKey.value = "";
+  activeWorkspaceKeyRef.value = "";
   wbCounter = 0;
 }
 
 export function setActiveWorkspace(key: string): void {
-  activeWorkspaceKey.value = key;
+  activeWorkspaceKeyRef.value = key;
+}
+
+/** 读取当前激活工作空间 key（DOM 层判断显示哪组用）。 */
+export function activeWorkspaceKey(): string {
+  return activeWorkspaceKeyRef.value;
 }
 
 /** 生成带工作空间归属的全局唯一 session_id（不复用序号）。 */
@@ -275,11 +280,25 @@ export function killWorkspace(key: string): string[] {
   return ids;
 }
 
+/** 切换某工作空间组内的激活 tab（点击 tab 时用）。 */
+export function setActiveTab(workspaceKey: string, id: string): void {
+  const g = groups.get(workspaceKey);
+  if (g && g.tabs.some(t => t.id === id)) g.activeId = id;
+}
+
+/** 复位某 tab 的 exited 标记（run 重启 / shell 重启用）。找不到则无操作。 */
+export function clearExited(sessionId: string): void {
+  for (const g of groups.values()) {
+    const t = g.tabs.find(t => t.id === sessionId);
+    if (t) { t.exited = false; return; }
+  }
+}
+
 // 派生（给 UI）：只反映当前激活工作空间
-export const tabs = computed<WbTabInfo[]>(() => groups.get(activeWorkspaceKey.value)?.tabs ?? []);
-export const activeId = computed<string>(() => groups.get(activeWorkspaceKey.value)?.activeId ?? "");
+export const tabs = computed<WbTabInfo[]>(() => groups.get(activeWorkspaceKeyRef.value)?.tabs ?? []);
+export const activeId = computed<string>(() => groups.get(activeWorkspaceKeyRef.value)?.activeId ?? "");
 export const activeExited = computed<boolean>(() => {
-  const g = groups.get(activeWorkspaceKey.value);
+  const g = groups.get(activeWorkspaceKeyRef.value);
   if (!g) return false;
   return g.tabs.find(t => t.id === g.activeId)?.exited ?? false;
 });
@@ -329,13 +348,16 @@ import { buildXtermTheme } from "../utils/xterm";
 import { themes } from "../themes";
 import {
   setActiveWorkspace as coreSetActiveWorkspace,
+  activeWorkspaceKey,
   genSessionId,
   addTab,
   removeTab,
   markExited,
+  clearExited,
   killWorkspace,
   allSessionIds,
   workspaceKeyOf,
+  setActiveTab,
   tabs as coreTabs,
   activeId as coreActiveId,
   activeExited as coreActiveExited,
@@ -438,43 +460,7 @@ function createSession(workspaceKey: string, cwd: string, initialCommand?: strin
 
 - [ ] **Step 4: 重写 `switchTo`（按工作空间 + 激活 tab 双层判断）**
 
-替换第 187-196 行：
-
-```typescript
-function switchTo(id: string) {
-  // 只在 id 属于当前激活工作空间时才显示它；否则仅记激活（核心 activeId 由 addTab/点击驱动）
-  for (const [, s] of sessions) {
-    s.div.style.display = "none";
-  }
-  const s = sessions.get(id);
-  if (s && workspaceKeyOf(id) === coreActiveId.value === undefined ? false : true) {
-    // 显示前提：该 session 的工作空间 == 当前激活工作空间，且面板可见
-  }
-  if (s && visible.value) {
-    s.div.style.display = "";
-    s.fitAddon.fit();
-    s.terminal.focus();
-  }
-  // 把核心该组激活 tab 设为 id（通过 addTab 已设；这里切 tab 也需更新核心 activeId）
-  setActiveTabInCore(id);
-}
-```
-
-> 注：核心没有暴露 `setActiveTab`。补一个轻量函数。见 Step 4b。
-
-- [ ] **Step 4b: 核心补 `setActiveTab(workspaceKey, id)`**
-
-回到 `src/composables/workbenchTerminalState.ts`，新增并导出：
-
-```typescript
-/** 切换某工作空间组内的激活 tab（点击 tab 时用）。 */
-export function setActiveTab(workspaceKey: string, id: string): void {
-  const g = groups.get(workspaceKey);
-  if (g && g.tabs.some(t => t.id === id)) g.activeId = id;
-}
-```
-
-并把 Step 4 的 `switchTo` 收尾改成：
+替换第 187-196 行。核心已在 Task 1 导出 `setActiveTab`/`activeWorkspaceKey`，直接用：
 
 ```typescript
 function switchTo(id: string) {
@@ -482,7 +468,7 @@ function switchTo(id: string) {
   const wk = workspaceKeyOf(id);
   if (wk) setActiveTab(wk, id);
   const s = sessions.get(id);
-  if (s && wk === /* 当前激活工作空间 */ currentActiveWorkspace() && visible.value) {
+  if (s && wk === activeWorkspaceKey() && visible.value) {
     s.div.style.display = "";
     s.fitAddon.fit();
     s.terminal.focus();
@@ -490,19 +476,7 @@ function switchTo(id: string) {
 }
 ```
 
-核心补一个 `activeWorkspaceKey` 导出（Step 3 已有 `activeWorkspaceKey` ref，但未导出）。在核心文件加：
-
-```typescript
-export function activeWorkspaceKey(): string { return activeWorkspaceKeyRef.value; }
-```
-（把内部 ref 改名为 `activeWorkspaceKeyRef` 以免与导出函数撞名；`setActiveWorkspace` 内部用 `activeWorkspaceKeyRef.value = key`。`tabs`/`activeId`/`activeExited` computed 引用 `activeWorkspaceKeyRef`。）
-
-DOM 层加：
-
-```typescript
-function currentActiveWorkspace(): string { return activeWorkspaceKey(); }
-```
-（从核心 import `activeWorkspaceKey`。）
+> 语义：先把所有 pane 隐藏；把核心里该 session 所属组的激活 tab 设为 id；仅当该 session 属于当前激活工作空间**且**面板可见时才显示它并 fit/focus。切到非当前工作空间的 tab 不会显示（但核心 activeId 已更新，切回该工作空间时它就是激活的）。
 
 - [ ] **Step 5: 重写 `closeSession`（用核心 removeTab）**
 
@@ -512,16 +486,16 @@ function currentActiveWorkspace(): string { return activeWorkspaceKey(); }
 function closeSession(id: string) {
   const s = sessions.get(id);
   if (!s) return;
+  const wk = s.workspaceKey;            // 先存，removeTab 后 workspaceKeyOf 查不到
   api.ptyKill(id).catch(() => {});
   s.observer.disconnect();
   s.terminal.dispose();
   s.div.remove();
   sessions.delete(id);
   removeTab(id);
-  // 若删的是当前激活，切到该组剩下的最后一个（核心已回退 activeId；同步显示）
-  const wk = workspaceKeyOf(id); // 删除后已查不到，用 s.workspaceKey
+  // 若删的是当前激活工作空间的 tab，切到该组剩下的最后一个（核心已回退 activeId；同步显示）
   const newActive = coreActiveId.value;
-  if (newActive && s.workspaceKey === currentActiveWorkspace()) switchTo(newActive);
+  if (newActive && wk === activeWorkspaceKey()) switchTo(newActive);
   if (allSessionIds().length === 0) {
     stopPolling();
     visible.value = false;
@@ -539,7 +513,7 @@ function attachSession(workspaceKey: string, id: string, label: string, clearFir
   const existing = sessions.get(id);
   if (existing) {
     existing.spawned = true;
-    markRunNotExited(id); // 见下：run 重启时把 exited 复位
+    clearExited(id); // run 重启时把 exited 复位（核心已导出 clearExited）
     if (clearFirst) existing.terminal.clear();
     setActiveTab(workspaceKey, id);
     switchTo(id);
@@ -575,17 +549,7 @@ function attachSession(workspaceKey: string, id: string, label: string, clearFir
 }
 ```
 
-`markRunNotExited`：核心没有"复位 exited"，run 重启时需要。核心补一个 `clearExited(sessionId)`：
-
-```typescript
-export function clearExited(sessionId: string): void {
-  for (const g of groups.values()) {
-    const t = g.tabs.find(t => t.id === sessionId);
-    if (t) { t.exited = false; return; }
-  }
-}
-```
-DOM 层 `markRunNotExited` 就是 `clearExited` 的别名 import。把 Step 6 里 `markRunNotExited(id)` 改为 `clearExited(id)`。
+> 核心已在 Task 1 导出 `setActiveTab` 和 `clearExited`，DOM 层直接 import 使用，无需再改核心。
 
 - [ ] **Step 7: 删 `changeCwd`，重写 `show`/`toggle`（不再自动 createSession）**
 
@@ -1113,6 +1077,6 @@ Expected: 全绿。
 
 **占位符扫描：** 无 TBD/TODO；Step 6 Task 6 Step 1 给了定位策略（优先找显式 remove 处理点）而非空泛"处理一下"。
 
-**类型一致性：** `attachSession` 签名在 Task 2 Step 6 定义为 `(workspaceKey, id, label, clearFirst?)`，Task 5 Step 2 调用一致；`WbTabInfo.kind` 在核心定义 `"shell"|"run"`，Task 4 Step 3 的 `activeTabKind` 类型一致；`setActiveTab`/`clearExited`/`activeWorkspaceKey()` 在 Task 2 Step 4b/6/4b 补齐并被引用——一致。
+**类型一致性：** `attachSession` 签名在 Task 2 Step 6 定义为 `(workspaceKey, id, label, clearFirst?)`，Task 5 Step 2 调用一致；`WbTabInfo.kind` 在核心定义 `"shell"|"run"`，Task 4 Step 3 的 `activeTabKind` 类型一致；`setActiveTab`/`clearExited`/`activeWorkspaceKey()` 均在 Task 1 核心导出，Task 2 直接 import 引用——一致。
 
 **Scope：** 单一实现计划，七任务顺序依赖清晰，每个任务有独立可测交付。
