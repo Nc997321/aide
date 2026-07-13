@@ -74,6 +74,10 @@ impl SidecarManager {
             cmd.env(k, v);
         }
 
+        // 插件桥接清单：sidecar 读它构建 SDK options.plugins
+        let manifest = crate::commands::marketplace::enabled_plugins_manifest_path();
+        cmd.env("AIDE_ENABLED_PLUGINS_FILE", dunce::simplified(&manifest));
+
         // release：原生 CLI 随 app 分发在资源目录，路径通过环境变量传给 sidecar
         // （SDK options.pathToClaudeCodeExecutable）；dev 模式由 SDK 从
         // agent-sidecar/node_modules 自行解析，不设该变量。
