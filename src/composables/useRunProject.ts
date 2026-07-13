@@ -9,7 +9,7 @@ export function useRunProject() {
     wb.visible.value = true;
     // Small delay so the workbench slide-in animation starts before terminal mounts.
     await new Promise<void>(r => setTimeout(r, 80));
-    wb.createSession(cfg.cwd, cfg.command);
+    wb.createSession(cfg.cwd, cfg.cwd, cfg.command);
   }
 
   async function run() {

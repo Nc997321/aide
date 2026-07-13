@@ -1,4 +1,4 @@
-import { ref, watch, computed, nextTick } from "vue";
+import { ref, watch, nextTick } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
@@ -6,33 +6,41 @@ import { api } from "../api";
 import { useSettings } from "./useSettings";
 import { buildXtermTheme } from "../utils/xterm";
 import { themes } from "../themes";
+import {
+  setActiveWorkspace as coreSetActiveWorkspace,
+  activeWorkspaceKey,
+  genSessionId,
+  addTab,
+  removeTab,
+  markExited,
+  clearExited,
+  killWorkspace,
+  allSessionIds,
+  workspaceKeyOf,
+  setActiveTab,
+  tabs as coreTabs,
+  activeId as coreActiveId,
+  activeExited as coreActiveExited,
+  resetWorkbenchState,
+  type WbTabKind,
+} from "./workbenchTerminalState";
 
-export interface WbTab {
-  id: string;
-  label: string;
-  shellName: string;
-  exited: boolean;
-}
-
+// 仅保留 xterm/div 物理对象；tab 元数据/分组/激活全在核心
 interface WbSession {
   id: string;
-  label: string;
+  workspaceKey: string;   // 冗余存一份，便于 display 判断 & dispose
+  kind: WbTabKind;
+  shellName: string;
   terminal: Terminal;
   fitAddon: FitAddon;
   div: HTMLDivElement;
   observer: ResizeObserver;
   spawned: boolean;
-  exited: boolean;
-  shellName: string;
 }
 
-// Module-level state shared across all useWorkbenchTerminal() calls.
-const sessions = new Map<string, WbSession>();
-const tabs = ref<WbTab[]>([]);
-const activeId = ref("");
+const sessions = new Map<string, WbSession>();   // sessionId -> xterm/div
 const visible = ref(false);
 let containerEl: HTMLDivElement | null = null;
-let nextIdx = 1;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let unlistenExit: UnlistenFn | null = null;
 
@@ -77,15 +85,6 @@ function deriveShellName(path: string): string {
   return base;
 }
 
-function syncTabs() {
-  tabs.value = Array.from(sessions.values()).map(s => ({
-    id: s.id,
-    label: s.label,
-    shellName: s.shellName,
-    exited: s.exited,
-  }));
-}
-
 function ensurePolling() {
   if (pollTimer) return;
   pollTimer = setInterval(async () => {
@@ -107,13 +106,15 @@ function ensureExitListener() {
   if (unlistenExit) return;
   listen<string>("pty-exit", (event) => {
     try {
-      const p = JSON.parse(event.payload);
+      const p = JSON.parse(event.payload) as { session_id: string };
+      // 物理对象：标记并清理 DOM
       const s = sessions.get(p.session_id);
       if (s) {
-        s.exited = true;
         s.spawned = false;
-        syncTabs();
+        // run tab 的 DOM 也保留到关闭按钮触发；shell 标 exited 让 UI 显示覆盖层
       }
+      // 元数据：标 exited（核心 tabs 反映）
+      markExited(p.session_id);
     } catch (_) { /* ignore */ }
   }).then((fn) => { unlistenExit = fn; });
 }
@@ -121,25 +122,20 @@ function ensureExitListener() {
 export function useWorkbenchTerminal() {
   ensureSettingsWatchers();
 
-  const activeExited = computed(() => {
-    const tab = tabs.value.find(t => t.id === activeId.value);
-    return tab?.exited ?? false;
-  });
-
   function init(container: HTMLDivElement) {
     containerEl = container;
   }
 
-  function createSession(cwd: string, initialCommand?: string): string {
+  function createSession(workspaceKey: string, cwd: string, initialCommand?: string): string {
     if (!containerEl) return "";
-    const id = `__wb_${nextIdx++}__`;
-    const s = settingsRef!;
+    const id = genSessionId(workspaceKey);
+    const stg = settingsRef!;
 
     const terminal = new Terminal({
       cursorBlink: true,
-      fontSize: s.fontSize,
-      fontFamily: s.fontFamily,
-      theme: buildXtermTheme(themes[settingsRef?.theme || "warm-dark"]),
+      fontSize: stg.fontSize,
+      fontFamily: stg.fontFamily,
+      theme: buildXtermTheme(themes[stg.theme || "warm-dark"]),
       allowProposedApi: true,
     });
     const fitAddon = new FitAddon();
@@ -149,69 +145,53 @@ export function useWorkbenchTerminal() {
     div.className = "wb-term-pane";
     div.style.display = "none";
     containerEl.appendChild(div);
-    // Must be visible before open(): display:none causes offsetWidth=0 and wrong cols.
     div.style.display = "";
     terminal.open(div);
     fitAddon.fit();
 
-    terminal.onData((data) => {
-      api.ptyWrite(id, data).catch(() => {});
-    });
-
+    terminal.onData((data) => { api.ptyWrite(id, data).catch(() => {}); });
     const observer = new ResizeObserver(() => {
       fitAddon.fit();
       api.ptyResize(id, terminal.rows, terminal.cols).catch(() => {});
     });
     observer.observe(div);
 
-    const session: WbSession = {
-      id,
-      label: initialCommand || `${nextIdx - 1}`,
-      terminal,
-      fitAddon,
-      div,
-      observer,
-      spawned: false,
-      exited: false,
-      shellName: "",
-    };
+    const session: WbSession = { id, workspaceKey, kind: "shell", shellName: "", terminal, fitAddon, div, observer, spawned: false };
     sessions.set(id, session);
+    addTab(workspaceKey, { id, label: initialCommand || "", shellName: "", exited: false, kind: "shell" });
     switchTo(id);
     spawnShell(id, cwd, initialCommand);
     ensurePolling();
     ensureExitListener();
-
     return id;
   }
 
   function switchTo(id: string) {
     for (const [, s] of sessions) s.div.style.display = "none";
+    const wk = workspaceKeyOf(id);
+    if (wk) setActiveTab(wk, id);
     const s = sessions.get(id);
-    if (s) {
+    if (s && wk === activeWorkspaceKey() && visible.value) {
       s.div.style.display = "";
       s.fitAddon.fit();
       s.terminal.focus();
     }
-    activeId.value = id;
   }
 
   function closeSession(id: string) {
     const s = sessions.get(id);
     if (!s) return;
+    const wk = s.workspaceKey;            // 先存，removeTab 后 workspaceKeyOf 查不到
     api.ptyKill(id).catch(() => {});
     s.observer.disconnect();
     s.terminal.dispose();
     s.div.remove();
     sessions.delete(id);
-    syncTabs();
-
-    if (activeId.value === id) {
-      const remaining = Array.from(sessions.keys());
-      activeId.value = remaining.length > 0 ? remaining[remaining.length - 1] : "";
-      if (activeId.value) switchTo(activeId.value);
-    }
-
-    if (sessions.size === 0) {
+    removeTab(id);
+    // 若删的是当前激活工作空间的 tab，切到该组剩下的最后一个（核心已回退 activeId；同步显示）
+    const newActive = coreActiveId.value;
+    if (newActive && wk === activeWorkspaceKey()) switchTo(newActive);
+    if (allSessionIds().length === 0) {
       stopPolling();
       visible.value = false;
     }
@@ -227,7 +207,6 @@ export function useWorkbenchTerminal() {
         ? deriveShellName(stg.shellPath)
         : (navigator.platform.toLowerCase().includes("win") ? "PowerShell" : "bash");
       s.spawned = true;
-      syncTabs();
       if (initialCommand) {
         // Give the shell a moment to print its prompt before we send input
         await new Promise<void>(r => setTimeout(r, 400));
@@ -235,117 +214,74 @@ export function useWorkbenchTerminal() {
       }
     } catch (e) {
       s.terminal.writeln(`\r\nFailed to start shell: ${e}`);
-      s.exited = true;
-      syncTabs();
     }
   }
 
-  function attachSession(id: string, label: string, clearFirst = false): void {
+  function attachSession(workspaceKey: string, id: string, label: string, clearFirst = false): void {
     ensureSettingsWatchers();
-
     const existing = sessions.get(id);
     if (existing) {
-      // Restart case: PTY was re-spawned with same ID; reset terminal state
-      existing.exited = false;
       existing.spawned = true;
+      clearExited(id); // run 重启时把 exited 复位（核心已导出 clearExited）
       if (clearFirst) existing.terminal.clear();
-      syncTabs();
+      setActiveTab(workspaceKey, id);
       switchTo(id);
       ensurePolling();
       return;
     }
-
     if (!containerEl) return;
-    const s = settingsRef!;
-
+    const stg = settingsRef!;
     const terminal = new Terminal({
-      cursorBlink: true,
-      fontSize: s.fontSize,
-      fontFamily: s.fontFamily,
-      theme: buildXtermTheme(themes[settingsRef?.theme || "warm-dark"]),
-      allowProposedApi: true,
+      cursorBlink: true, fontSize: stg.fontSize, fontFamily: stg.fontFamily,
+      theme: buildXtermTheme(themes[stg.theme || "warm-dark"]), allowProposedApi: true,
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
-
     const div = document.createElement("div");
     div.className = "wb-term-pane";
     containerEl.appendChild(div);
     div.style.display = "";
     terminal.open(div);
     fitAddon.fit();
-
-    terminal.onData((data) => {
-      api.ptyWrite(id, data).catch(() => {});
-    });
-
+    terminal.onData((data) => { api.ptyWrite(id, data).catch(() => {}); });
     const observer = new ResizeObserver(() => {
-      fitAddon.fit();
-      api.ptyResize(id, terminal.rows, terminal.cols).catch(() => {});
+      fitAddon.fit(); api.ptyResize(id, terminal.rows, terminal.cols).catch(() => {});
     });
     observer.observe(div);
-
-    const session: WbSession = {
-      id,
-      label,
-      terminal,
-      fitAddon,
-      div,
-      observer,
-      spawned: true,   // PTY already running on Rust side
-      exited: false,
-      shellName: "",
-    };
+    const session: WbSession = { id, workspaceKey, kind: "run", shellName: "", terminal, fitAddon, div, observer, spawned: true };
     sessions.set(id, session);
-    syncTabs();
+    addTab(workspaceKey, { id, label, shellName: "", exited: false, kind: "run" });
     switchTo(id);
     ensurePolling();
     ensureExitListener();
-
-    // Correct the PTY dimensions to match the actual terminal
-    nextTick(() => {
-      api.ptyResize(id, terminal.rows, terminal.cols).catch(() => {});
-    });
+    nextTick(() => { api.ptyResize(id, terminal.rows, terminal.cols).catch(() => {}); });
   }
 
-  function changeCwd(cwd: string) {
-    const s = sessions.get(activeId.value);
-    if (!s || !s.spawned || !cwd) return;
-    api.ptyWrite(s.id, `cd "${cwd}"\r`).catch(() => {});
-  }
-
-  async function show(cwd: string) {
+  async function show() {
     visible.value = true;
-    if (sessions.size === 0) {
-      createSession(cwd);
-    } else {
-      ensurePolling();
-    }
+    ensurePolling();
     setTimeout(() => {
-      const s = sessions.get(activeId.value);
+      const s = sessions.get(coreActiveId.value);
       if (s) { s.fitAddon.fit(); s.terminal.focus(); }
     }, 200);
   }
 
-  function hide() {
-    visible.value = false;
-  }
+  function hide() { visible.value = false; }
 
-  async function toggle(cwd: string) {
+  function toggle() {
     if (visible.value) hide();
-    else await show(cwd);
+    else show();
   }
 
   function clear() {
-    const s = sessions.get(activeId.value);
+    const s = sessions.get(coreActiveId.value);
     if (s) s.terminal.clear();
   }
 
   async function restart(id: string, cwd: string) {
     const s = sessions.get(id);
-    if (!s) return;
-    s.exited = false;
-    syncTabs();
+    if (!s || s.kind !== "shell") return;   // run tab 不在此重启
+    clearExited(id);
     await spawnShell(id, cwd);
     s.terminal.focus();
   }
@@ -361,16 +297,29 @@ export function useWorkbenchTerminal() {
       s.div.remove();
     }
     sessions.clear();
-    tabs.value = [];
-    activeId.value = "";
+    resetWorkbenchState();
     containerEl = null;
+  }
+
+  function killWorkspaceTerminals(workspaceKey: string) {
+    const ids = killWorkspace(workspaceKey); // 核心返回待 kill 的 id
+    for (const id of ids) {
+      const s = sessions.get(id);
+      if (s) {
+        api.ptyKill(id).catch(() => {});
+        s.observer.disconnect();
+        s.terminal.dispose();
+        s.div.remove();
+        sessions.delete(id);
+      }
+    }
   }
 
   return {
     visible,
-    tabs,
-    activeId,
-    activeExited,
+    tabs: coreTabs,
+    activeId: coreActiveId,
+    activeExited: coreActiveExited,
     init,
     createSession,
     attachSession,
@@ -380,8 +329,9 @@ export function useWorkbenchTerminal() {
     hide,
     toggle,
     clear,
-    changeCwd,
     restart,
     dispose,
+    killWorkspaceTerminals,
+    setActiveWorkspace: coreSetActiveWorkspace,
   };
 }

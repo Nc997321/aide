@@ -17,10 +17,6 @@ onUnmounted(() => {
   // wb.dispose() is called by App.vue — don't call here.
 });
 
-watch(() => props.cwd, (newCwd) => {
-  wb.changeCwd(newCwd);
-});
-
 watch(() => wb.visible.value, async (v) => {
   if (v) {
     await nextTick();
@@ -31,7 +27,7 @@ watch(() => wb.visible.value, async (v) => {
 });
 
 function addTerminal() {
-  wb.createSession(props.cwd);
+  wb.createSession(props.cwd, props.cwd);
 }
 
 function onHeaderDragStart(e: MouseEvent) {

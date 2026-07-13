@@ -39,7 +39,7 @@ export function useRunProcess() {
     // Show workbench and attach a terminal tab for the spawned PTY
     wb.visible.value = true;
     await new Promise<void>(r => setTimeout(r, 80));
-    wb.attachSession(sessionId, config.name);
+    wb.attachSession(config.cwd, sessionId, config.name);
   }
 
   async function stop(): Promise<void> {
@@ -60,7 +60,7 @@ export function useRunProcess() {
       runStatus.value = "running";
 
       wb.visible.value = true;
-      wb.attachSession(sessionId, config.name, true /* clearFirst */);
+      wb.attachSession(config.cwd, sessionId, config.name, true /* clearFirst */);
     } finally {
       isRestarting = false;
     }

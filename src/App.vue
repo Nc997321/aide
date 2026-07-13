@@ -314,6 +314,11 @@ async function onSidebarWsChanged(path: string) {
   loadRunConfigs(path, path);
 }
 
+// Sync workbench terminal's active workspace when switching workspaces
+watch(() => workspacePath.value, (v) => {
+  wb.setActiveWorkspace(v);
+});
+
 /** 把绝对路径转成相对当前工作区的展示路径；不在工作区内则原样返回。 */
 function relPath(p: string): string {
   const root = workspacePath.value;
@@ -377,7 +382,7 @@ function handleKeydown(e: KeyboardEvent) {
   if (e.ctrlKey && (e.code === "Backquote" || e.key === "`")) {
     e.preventDefault();
     e.stopPropagation();
-    wb.toggle(workspacePath.value);
+    wb.toggle();
     return;
   }
 
@@ -484,6 +489,9 @@ onMounted(async () => {
       void paneLayoutPersistence.restoreAtStartup();
     }
   } catch (_) { /* best effort */ }
+
+  // Sync workbench terminal's active workspace with the current project root
+  wb.setActiveWorkspace(workspacePath.value);
 
   // Initialize search providers for the title bar search box
   const { initProviders: initSearchProviders, search: searchProviders } = useSearchProviders();
@@ -663,7 +671,7 @@ onUnmounted(() => {
           @new-session="onNewSession"
           @workspace-changed="onSidebarWsChanged"
           @open-settings="openSettings"
-          @open-workbench="wb.toggle(workspacePath)"
+          @open-workbench="wb.toggle()"
           @provider-switch="onProviderSwitch"
           @open-settings-providers="openSettingsProviders"
           @remove-workspace="onRemoveWorkspace"
