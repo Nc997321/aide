@@ -25810,6 +25810,7 @@ ${captureLines}` : capture.stack;
 
 // src/index.ts
 import * as readline from "readline";
+import { existsSync as existsSync3, readFileSync as readFileSync2 } from "node:fs";
 
 // node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
 import { createRequire as Gz } from "node:module";
@@ -46149,6 +46150,16 @@ if (proxyUrl) {
   const { ProxyAgent, setGlobalDispatcher } = await Promise.resolve().then(() => __toESM(require_undici(), 1));
   setGlobalDispatcher(new ProxyAgent(proxyUrl));
 }
+function buildPluginsOption() {
+  const file = process.env.AIDE_ENABLED_PLUGINS_FILE;
+  if (!file) return [];
+  try {
+    const arr = JSON.parse(readFileSync2(file, "utf8"));
+    return arr.filter((e) => e.path && existsSync3(e.path)).map((e) => ({ type: "local", path: e.path }));
+  } catch {
+    return [];
+  }
+}
 var queue = new MessageQueue();
 var permMgr = new PermissionManager();
 var taskTracker = new TaskTracker();
@@ -46279,6 +46290,7 @@ async function startLoop(cwd) {
             settingSources: ["project", "user"],
             allowedTools: ["Agent", "Task"],
             skills: "all",
+            plugins: buildPluginsOption(),
             // 关闭实时流式：文本不再以 stream_event 逐字到达，mapper 改为把最终
             // assistant 消息里的整块文本一次性发出（mapper 两处 skip→emit，必须同关）。
             // 目的：砍掉高频 per-token app.emit → 跨线程编组，降低主线程卡死概率

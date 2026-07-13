@@ -1,4 +1,5 @@
 import * as readline from "readline";
+import { existsSync, readFileSync } from "node:fs";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { ChatEvent, ModelOption, PermissionModeOption, SidecarCommand } from "./types.js";
 import { MessageQueue } from "./generator.js";
@@ -40,6 +41,21 @@ const proxyUrl =
 if (proxyUrl) {
   const { ProxyAgent, setGlobalDispatcher } = await import("undici");
   setGlobalDispatcher(new ProxyAgent(proxyUrl));
+}
+
+/** 读 Rust 维护的 enabled-plugins.json，构建 SDK options.plugins。每次 query()
+ *  构造前重读——启用/禁用/更新在下一次消息往返生效。 */
+function buildPluginsOption(): { type: "local"; path: string }[] {
+  const file = process.env.AIDE_ENABLED_PLUGINS_FILE;
+  if (!file) return [];
+  try {
+    const arr = JSON.parse(readFileSync(file, "utf8")) as { path: string }[];
+    return arr
+      .filter((e) => e.path && existsSync(e.path))
+      .map((e) => ({ type: "local" as const, path: e.path }));
+  } catch {
+    return []; // 文件不存在/解析失败：不阻塞会话
+  }
 }
 
 const queue = new MessageQueue();
@@ -223,6 +239,7 @@ async function startLoop(cwd?: string) {
             settingSources: ["project", "user"],
             allowedTools: ["Agent", "Task"],
             skills: "all",
+            plugins: buildPluginsOption(),
             // 关闭实时流式：文本不再以 stream_event 逐字到达，mapper 改为把最终
             // assistant 消息里的整块文本一次性发出（mapper 两处 skip→emit，必须同关）。
             // 目的：砍掉高频 per-token app.emit → 跨线程编组，降低主线程卡死概率
