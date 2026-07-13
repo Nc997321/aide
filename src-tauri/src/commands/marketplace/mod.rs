@@ -57,10 +57,68 @@ pub fn source_cache_dir(source_id: &str) -> PathBuf {
     marketplace_cache_dir().join(source_id)
 }
 
-/// Task 6 实现：扫 cache 最新版本 + 过滤 enabled=true → 写 enabled-plugins.json
-/// 本 Task 先放空实现保证编译，Task 6 完善。
+#[derive(Serialize)]
+struct EnabledPluginEntry { name: String, marketplace: String, path: String }
+
+/// 扫 cache 最新版本 + 过滤 enabled=true → 写 enabled-plugins.json
 pub fn write_enabled_plugins_manifest() -> Result<(), String> {
+    let cfg = crate::commands::settings::load_config();
+    let enabled: std::collections::BTreeMap<String, bool> = cfg.get("settings")
+        .and_then(|s| s["enabledPlugins"].as_object())
+        .map(|o| o.iter().filter_map(|(k, v)| v.as_bool().map(|b| (k.clone(), b))).collect())
+        .unwrap_or_default();
+    let cache = plugins_dir().join("cache");
+    let mut entries = Vec::new();
+    if let Ok(markets) = std::fs::read_dir(&cache) {
+        for mk in markets.flatten() {
+            let market = mk.file_name().to_string_lossy().to_string();
+            if let Ok(plugins) = std::fs::read_dir(mk.path()) {
+                for p in plugins.flatten() {
+                    let plugin = p.file_name().to_string_lossy().to_string();
+                    let key = format!("{plugin}@{market}");
+                    if enabled.get(&key) != Some(&true) { continue; }
+                    if let Some(latest) = install::latest_version_dir(&p.path()) {
+                        entries.push(EnabledPluginEntry {
+                            name: plugin.clone(),
+                            marketplace: market.clone(),
+                            path: latest.to_string_lossy().to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    let json = serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())?;
+    atomic_write(&enabled_plugins_manifest_path(), &json)
+}
+
+fn atomic_write(path: &std::path::Path, content: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, content).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn with_config_mut_settings<F: FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> Result<(), String>>(f: F) -> Result<(), String> {
+    crate::commands::settings::with_config_mut(|cfg| {
+        if cfg["settings"].is_null() { cfg["settings"] = serde_json::json!({}); }
+        let s = cfg["settings"].as_object_mut().ok_or("settings not object")?;
+        f(s)
+    })
+}
+
+#[tauri::command]
+pub fn set_plugin_enabled(marketplace: String, plugin: String, enabled: bool) -> Result<(), String> {
+    let key = format!("{plugin}@{marketplace}");
+    with_config_mut_settings(|s| {
+        let m = s.entry("enabledPlugins").or_insert(serde_json::json!({}));
+        if let Some(obj) = m.as_object_mut() {
+            obj.insert(key.clone(), serde_json::json!(enabled));
+        }
+        Ok::<_, String>(())
+    })?;
+    write_enabled_plugins_manifest()
 }
 
 // ── Commands ──
@@ -90,4 +148,14 @@ pub fn set_marketplace_enabled(source_id: String, enabled: bool) -> Result<(), S
         if !enabled { a.retain(|v| v.as_str() != Some(&source_id)); }
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn manifest_path_under_config_dir() {
+        let p = enabled_plugins_manifest_path();
+        assert!(p.to_string_lossy().contains("enabled-plugins.json"));
+    }
 }
