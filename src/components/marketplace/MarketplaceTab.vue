@@ -23,6 +23,7 @@ const {
   refreshInstalled,
   setSourceEnabled,
   refreshSource,
+  getInstalled,
 } = useMarketplace();
 
 const activeCategory = ref("all");
@@ -86,6 +87,12 @@ function categoryLabel(key: string): string {
   return categoryLabelMap[key] || key;
 }
 
+// 当前已加载源中已安装的数量：与「已安装」视图实际显示条数一致，
+// 避免徽标 N 与列表条数错配（installedPlugins.size 含禁用源的已装项，会偏多）。
+const installedVisibleCount = computed(() =>
+  plugins.value.filter((p) => getInstalled(p.marketName, p.name)).length,
+);
+
 const categories = computed(() => {
   const map = new Map<string, number>();
   for (const p of plugins.value) {
@@ -96,16 +103,25 @@ const categories = computed(() => {
   const entries = Array.from(map.entries())
     .sort((a, b) => b[1] - a[1])
     .map(([key, count]) => ({ key, label: categoryLabel(key), count }));
-  return [
+  const all = [
     { key: "all", label: "全部", count: plugins.value.length },
     ...entries,
   ];
+  // 0 安装时不占位（面板空间有限）；「已安装」作为伪分类置于最前，单选互斥。
+  if (installedVisibleCount.value > 0) {
+    all.unshift({ key: "installed", label: "已安装", count: installedVisibleCount.value });
+  }
+  return all;
 });
 
 const visiblePlugins = computed(() => {
+  const cat = activeCategory.value;
+  if (cat === "installed") {
+    return filteredPlugins.value.filter((p) => getInstalled(p.marketName, p.name));
+  }
   let result = filteredPlugins.value;
-  if (activeCategory.value !== "all") {
-    result = result.filter((p) => p.category === activeCategory.value);
+  if (cat !== "all") {
+    result = result.filter((p) => p.category === cat);
   }
   return result;
 });
@@ -198,6 +214,13 @@ const enabledCount = computed(() => {
           </div>
           <div class="skel-btn"></div>
         </div>
+      </div>
+
+      <!-- Empty: installed view, none installed -->
+      <div v-else-if="activeCategory === 'installed' && visiblePlugins.length === 0 && searchQuery.trim() === ''" class="empty">
+        <div class="empty-icon"><Icon name="package" :size="32" /></div>
+        <div class="empty-text">还没有安装任何插件</div>
+        <div class="empty-hint">在上方选「全部」浏览市场，点「安装」即可</div>
       </div>
 
       <!-- Empty: no plugins loaded -->
