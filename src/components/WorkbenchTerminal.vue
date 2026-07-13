@@ -29,6 +29,12 @@ watch(() => wb.visible.value, async (v) => {
   }
 });
 
+watch(() => wb.activeId.value, (id) => {
+  if (wb.visible.value) {
+    nextTick(() => wb.switchTo(id));
+  }
+});
+
 const activeTabKind = computed<"shell" | "run" | undefined>(() => {
   const t = wb.tabs.value.find(t => t.id === wb.activeId.value);
   return t?.kind;
