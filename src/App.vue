@@ -25,6 +25,7 @@ import { useConversationChanges } from "./composables/useConversationChanges";
 import { useWorkbenchTerminal } from "./composables/useWorkbenchTerminal";
 import { api } from "./api";
 import { marketplaceApi } from "./api/marketplace";
+import { useNotifications } from "./composables/useNotifications";
 import { ref, onMounted, onUnmounted, nextTick, watch, computed } from "vue";
 import { useSettings } from "./composables/useSettings";
 import { useWindowFocus } from "./composables/useWindowFocus";
@@ -144,6 +145,7 @@ onSessionCreated((tempId, realId) => {
 });
 const settingsVisible = ref(false);
 const settingsInitialTab = ref<string | undefined>(undefined);
+const { push: pushNotification, registerActionHandler } = useNotifications();
 const workspacePath = ref("");
 const projectName = ref("");
 const { settings, update: updateSettings } = useSettings();
@@ -334,6 +336,11 @@ function openSettingsProviders() {
 
 function openSettings() {
   settingsInitialTab.value = undefined;
+  settingsVisible.value = true;
+}
+
+function openSettingsMarket() {
+  settingsInitialTab.value = "marketplace";
   settingsVisible.value = true;
 }
 
@@ -546,7 +553,11 @@ onMounted(async () => {
     });
   } catch (_) { /* best effort */ }
 
+  // 注册「查看」动作：市场更新通知点击 → 打开设置 → 市场标签页
+  registerActionHandler("marketplace", () => openSettingsMarket());
+
   // 启动后台静默检查插件市场更新（方案 B：只通知，不自动应用）
+  // 通知走应用内通知中心（右上角铃铛），不走系统通知。
   void (async () => {
     try {
       const sources = await marketplaceApi.listMarketplaceSources();
@@ -557,9 +568,16 @@ onMounted(async () => {
         try { await marketplaceApi.refreshMarketplace(s.id); }
         catch { failed++; }
       }
-      // 全部启用源都失败 → 通知拉取失败
+      // 全部启用源都失败 → 通知拉取失败（warning 落盘，重启仍可见）
       if (failed === enabled.length) {
-        await api.notifySend("市场更新拉取失败", "无法连接市场源，请检查网络或代理。");
+        pushNotification({
+          severity: "warning",
+          source: "marketplace",
+          title: "市场更新拉取失败",
+          body: "无法连接市场源，请检查网络或代理。",
+          timestamp: Date.now(),
+          dedupKey: "marketplace:fetch-failed",
+        });
         return;
       }
       // 比对已装插件版本，统计有更新的数量
@@ -575,8 +593,17 @@ onMounted(async () => {
           }
         } catch { /* 单源失败已在上方统计 */ }
       }
+      // 有更新 → 通知（info 仅内存；「查看」动作经 registerActionHandler 打开市场标签页）
       if (updates > 0) {
-        await api.notifySend(`${updates} 个插件有更新`, "打开设置 → 市场查看并更新。");
+        pushNotification({
+          severity: "info",
+          source: "marketplace",
+          title: `${updates} 个插件有更新`,
+          body: "点击「查看」打开市场更新。",
+          timestamp: Date.now(),
+          dedupKey: "marketplace:updates",
+          action: { label: "查看" },
+        });
       }
     } catch { /* 静默：启动检查不应影响主流程 */ }
   })();
