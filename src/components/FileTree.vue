@@ -373,7 +373,7 @@ defineExpose({ loadRoot });
         <i
           v-if="cg.progress.value.index_ready"
           class="cgp-ready"
-          title="精确跳转已就绪 · 语义搜索后台补全中"
+          v-tooltip="'精确跳转已就绪 · 语义搜索后台补全中'"
         >✓</i>
         <i v-else class="cgp-dot"></i>
         <span class="cgp-status" :title="cg.progress.value.current">{{ cgStatus }}</span>

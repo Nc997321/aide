@@ -121,7 +121,7 @@ onUnmounted(() => {
     type="button"
     class="themed-select"
     :class="{ disabled, active: open, block }"
-    :title="title"
+    v-tooltip="title"
     :disabled="disabled"
     @click="toggle"
   >

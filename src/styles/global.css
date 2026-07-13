@@ -9,6 +9,11 @@
 }
 
 :root {
+  /* 首屏兜底（与下方 --aide-* 暖色字面量同性质：applyTheme 运行前的默认 warm-dark 值）。
+   * applyTheme 会按当前主题的 colorScheme token 覆盖这条——加亮色主题时只需在
+   * 该主题文件里给 colorScheme: "light"，这里不用动。作用：让原生表单控件
+   * （复选框/单选框/未显式主题化的 input/滚动条角）按暗色渲染，避免未勾选白底。 */
+  color-scheme: dark;
   --aide-bg-deep: #1a1a22;
   --aide-bg-base: #22222e;
   --aide-bg-raised: #2a2a38;

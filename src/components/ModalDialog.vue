@@ -58,7 +58,7 @@ function onOverlayClick(e: MouseEvent) {
         </div>
 
         <div class="modal-actions">
-          <button class="modal-btn btn-cancel" @click="cancel">取消</button>
+          <button v-if="mode !== 'notice'" class="modal-btn btn-cancel" @click="cancel">取消</button>
           <button v-if="mode === 'choice'" class="modal-btn btn-alt" @click="submitAlt">
             {{ altLabel }}
           </button>

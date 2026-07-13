@@ -127,7 +127,7 @@ function bodyParts(body: string | undefined): Array<{ t: "text" | "code"; v: str
                 </div>
               </div>
             </div>
-            <button class="notif-dismiss" title="忽略" @click.stop="dismiss(n.id)">✕</button>
+            <button class="notif-dismiss" v-tooltip="'忽略'" @click.stop="dismiss(n.id)">✕</button>
           </div>
         </div>
       </div>

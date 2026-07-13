@@ -190,7 +190,7 @@ async function createEditor() {
           height: "100%",
           fontSize: "var(--cm-font-size)",
           fontFamily: "var(--cm-font-family)",
-          backgroundColor: "var(--aide-bg-base)",
+          backgroundColor: "var(--aide-bg-deep)",
           color: "var(--aide-text-primary)",
         },
         ".cm-scroller": {
@@ -231,7 +231,145 @@ async function createEditor() {
           color: "var(--aide-text-primary) !important",
           border: "1px solid var(--aide-surface-hover) !important",
         },
-      }),
+        // ── 搜索面板 / goto-line 对话框（@codemirror/search，basicSetup 已含）──
+        // 真实 DOM（读 @codemirror/search 源码确认）：面板是 .cm-panel.cm-search
+        // （不是 .cm-panel-search）；按钮是 .cm-button；输入框是 .cm-textfield；
+        // 复选框是裸 <input type=checkbox> 包在 <label> 里（没有 .cm-checkbox 类）；
+        // 关闭按钮是 [name=close]（没有 .cm-button 类）；goto-line 对话框是
+        // .cm-dialog + .cm-dialog-close。{ dark: true } 已让 CodeMirror 自带 &dark
+        // 默认值生效，下面再用 --aide 精修到项目配色。
+        ".cm-panels": {
+          backgroundColor: "var(--aide-bg-deep) !important",
+          color: "var(--aide-text-primary) !important",
+        },
+        ".cm-panels-top": {
+          borderBottom: "1px solid var(--aide-border) !important",
+        },
+        ".cm-panels-bottom": {
+          borderTop: "1px solid var(--aide-border) !important",
+        },
+        ".cm-dialog": {
+          backgroundColor: "var(--aide-bg-deep) !important",
+          color: "var(--aide-text-primary) !important",
+        },
+        ".cm-dialog-close": {
+          color: "var(--aide-text-muted) !important",
+        },
+        ".cm-dialog-close:hover": {
+          color: "var(--aide-text-primary) !important",
+        },
+        ".cm-panel": {
+          backgroundColor: "var(--aide-bg-deep) !important",
+          color: "var(--aide-text-primary) !important",
+          border: "1px solid var(--aide-border) !important",
+        },
+        ".cm-panel.cm-search": {
+          padding: "6px 8px !important",
+        },
+        ".cm-textfield": {
+          backgroundColor: "var(--aide-bg-base) !important",
+          border: "1px solid var(--aide-surface-hover) !important",
+          color: "var(--aide-text-primary) !important",
+          borderRadius: "var(--aide-radius-sm) !important",
+          padding: "2px 6px !important",
+          fontSize: "12px !important",
+        },
+        ".cm-textfield:focus": {
+          borderColor: "var(--aide-accent) !important",
+          outline: "none !important",
+        },
+        ".cm-button": {
+          backgroundImage: "none !important",
+          backgroundColor: "transparent !important",
+          border: "1px solid var(--aide-surface-hover) !important",
+          color: "var(--aide-text-secondary) !important",
+          borderRadius: "var(--aide-radius-sm) !important",
+          padding: "2px 8px !important",
+          fontSize: "12px !important",
+        },
+        ".cm-button:hover": {
+          backgroundColor: "var(--aide-surface-hover) !important",
+          color: "var(--aide-text-primary) !important",
+        },
+        ".cm-button:active": {
+          backgroundColor: "var(--aide-surface-active) !important",
+        },
+        // 关闭按钮（无 .cm-button 类，靠 name 属性定位）
+        ".cm-panel [name=close]": {
+          color: "var(--aide-text-muted) !important",
+          fontSize: "14px !important",
+        },
+        ".cm-panel [name=close]:hover": {
+          color: "var(--aide-text-primary) !important",
+        },
+        // 复选框：<label><input type=checkbox> 文本</label>，label 里没有 .cm-checkbox
+        ".cm-panel label": {
+          color: "var(--aide-text-muted) !important",
+          fontSize: "12px !important",
+        },
+        ".cm-panel input[type=checkbox]": {
+          accentColor: "var(--aide-accent) !important",
+        },
+        // ── 自动补全（@codemirror/autocomplete，basicSetup 已含）──
+        // 真实 DOM（读源码确认）：tooltip 是 .cm-tooltip.cm-tooltip-autocomplete；
+        // 内部 <ul> 无 cm-completionList 类（仅有 cm-completionListIncompleteTop/
+        // Bottom 表示未取完）；<li> 默认无类名（role=option，选中靠 aria-selected）；
+        // 命中文字是 .cm-completionMatchedText（不是 cm-completion-matched）。
+        ".cm-tooltip-autocomplete": {
+          backgroundColor: "var(--aide-bg-deep) !important",
+          border: "1px solid var(--aide-surface-hover) !important",
+          boxShadow: "var(--aide-shadow-md) !important",
+        },
+        ".cm-tooltip-autocomplete ul": {
+          padding: "2px !important",
+          fontSize: "12.5px !important",
+        },
+        ".cm-tooltip-autocomplete li": {
+          padding: "2px 8px !important",
+          color: "var(--aide-text-secondary) !important",
+        },
+        ".cm-tooltip-autocomplete li:hover, .cm-tooltip-autocomplete li[aria-selected]": {
+          backgroundColor: "var(--aide-surface-hover) !important",
+          color: "var(--aide-text-primary) !important",
+        },
+        // 分组分隔条（<completion-section> 自定义元素），默认 silver 边
+        ".cm-tooltip-autocomplete completion-section": {
+          borderBottomColor: "var(--aide-border) !important",
+          color: "var(--aide-text-muted) !important",
+        },
+        ".cm-completionLabel": {
+          color: "var(--aide-text-primary) !important",
+        },
+        ".cm-completionIcon": {
+          color: "var(--aide-text-muted) !important",
+        },
+        ".cm-completionDetail": {
+          color: "var(--aide-text-muted) !important",
+          fontStyle: "italic !important",
+        },
+        ".cm-completionMatchedText": {
+          color: "var(--aide-accent) !important",
+        },
+        ".cm-completionInfo": {
+          backgroundColor: "var(--aide-bg-raised) !important",
+          border: "1px solid var(--aide-surface-hover) !important",
+          color: "var(--aide-text-secondary) !important",
+        },
+        // ── 诊断 / lint（@codemirror/lint）──
+        ".cm-diagnostic": {
+          backgroundColor: "var(--aide-bg-deep) !important",
+          color: "var(--aide-text-secondary) !important",
+          borderLeft: "3px solid var(--aide-danger) !important",
+          padding: "4px 8px !important",
+          fontSize: "12px !important",
+        },
+        ".cm-diagnostic-warning": {
+          borderLeftColor: "var(--aide-warning) !important",
+        },
+        ".cm-diagnostic-error": {
+          borderLeftColor: "var(--aide-danger) !important",
+        },
+      }, { dark: true }),
     ],
     parent: mountEl.value,
   });

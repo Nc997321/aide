@@ -27,6 +27,7 @@ import { api } from "./api";
 import { ref, onMounted, onUnmounted, nextTick, watch, computed } from "vue";
 import { useSettings } from "./composables/useSettings";
 import { useWindowFocus } from "./composables/useWindowFocus";
+import { useModal } from "./composables/useModal";
 import { useNotification, pendingSessions, clearPending } from "./composables/useNotification";
 import { useGit } from "./composables/useGit";
 import { useSearchProviders } from "./composables/useSearchProviders";
@@ -188,11 +189,11 @@ async function onRemoveWorkspaceConfirm(mode: "hide" | "delete") {
   try {
     const ok = await sidebarRef.value?.removeWorkspaceByKey(ws.key, mode);
     if (!ok && mode === "delete") {
-      alert("该工作区有正在运行的会话，请先停止再移除。");
+      await notice("无法移除", "该工作区有正在运行的会话，请先停止再移除。", "知道了");
     }
   } catch (e: any) {
     const msg = typeof e === "string" ? e : (e?.message ?? "移除工作区失败");
-    alert(msg);
+    await notice("移除工作区失败", msg, "知道了");
   }
   removeWsVisible.value = false;
   removeWsTarget.value = null;
@@ -206,6 +207,7 @@ function onWorkbenchHeightChange(v: number) {
 
 // ── Notification banner for completed sessions ──
 const { isFocused } = useWindowFocus();
+const { notice } = useModal();
 const bannerVisible = ref(false);
 
 interface PendingSessionInfo {

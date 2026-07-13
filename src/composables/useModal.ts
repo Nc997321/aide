@@ -1,7 +1,7 @@
 import { ref, readonly } from "vue";
 
 const visible = ref(false);
-const mode = ref<"prompt" | "confirm" | "choice">("confirm");
+const mode = ref<"prompt" | "confirm" | "choice" | "notice">("confirm");
 const title = ref("");
 const message = ref("");
 const inputValue = ref("");
@@ -77,12 +77,33 @@ export function useModal() {
     });
   }
 
+  /**
+   * 单按钮告知对话框（替代 window.alert）。只有一个"知道了"按钮，
+   * 点确定 / 关 overlay / Esc 都 resolve（没有"取消"语义）。返回 void。
+   * 用于只能告知、无需用户抉择的场景（如错误提示）。
+   */
+  function notice(noticeTitle: string, noticeMessage: string, label?: string): Promise<void> {
+    return new Promise((resolve) => {
+      resolver = resolve;
+      mode.value = "notice";
+      title.value = noticeTitle;
+      message.value = noticeMessage;
+      inputValue.value = "";
+      placeholder.value = "";
+      confirmLabel.value = label || "知道了";
+      danger.value = false;
+      visible.value = true;
+    });
+  }
+
   function submit() {
     visible.value = false;
     if (mode.value === "prompt") {
       resolver?.(inputValue.value.trim() || null);
     } else if (mode.value === "choice") {
       resolver?.("confirm");
+    } else if (mode.value === "notice") {
+      resolver?.(undefined);
     } else {
       resolver?.(true);
     }
@@ -102,6 +123,8 @@ export function useModal() {
       resolver?.(null);
     } else if (mode.value === "choice") {
       resolver?.("cancel");
+    } else if (mode.value === "notice") {
+      resolver?.(undefined);
     } else {
       resolver?.(false);
     }
@@ -121,6 +144,7 @@ export function useModal() {
     prompt,
     confirm,
     choice,
+    notice,
     submit,
     submitAlt,
     cancel,

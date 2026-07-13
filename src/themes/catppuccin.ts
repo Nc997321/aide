@@ -1,6 +1,8 @@
 import type { ThemeTokens } from "./tokens";
 
 export const catppuccin: ThemeTokens = {
+  colorScheme: "dark",
+
   bgDeep:    "#11111b",
   bgBase:    "#1e1e2e",
   bgRaised:  "#313244",

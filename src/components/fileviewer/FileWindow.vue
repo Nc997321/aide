@@ -215,7 +215,7 @@ function onKeydown(e: KeyboardEvent) {
 <template>
   <div class="fw-window" :class="{ 'fw-window--dragging': dragging }" tabindex="-1" @keydown="onKeydown">
     <div class="fw-header" @pointerdown="onHeaderPointerDown">
-      <span v-if="dirty" class="fw-dirty" title="有未保存的修改">●</span>
+      <span v-if="dirty" class="fw-dirty" v-tooltip="'有未保存的修改'">●</span>
       <span class="fw-title">{{ win.fileName }}</span>
       <span class="fw-lang">{{ languageLabel }}</span>
       <span v-if="win.readonly && !isImage" class="fw-readonly-badge">只读</span>

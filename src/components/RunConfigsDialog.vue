@@ -114,10 +114,10 @@ async function close() {
         <!-- Left: config list -->
         <div class="rcd-left">
           <div class="rcd-toolbar">
-            <button class="rcd-tool" title="新建" @click="addNew">＋</button>
+            <button class="rcd-tool" v-tooltip="'新建'" @click="addNew">＋</button>
             <button
               class="rcd-tool rcd-tool-danger"
-              title="删除"
+              v-tooltip="'删除'"
               :disabled="!selected"
               @click="deleteSelected"
             >－</button>

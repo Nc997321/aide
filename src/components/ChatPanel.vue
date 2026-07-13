@@ -524,7 +524,7 @@ function handleQuickAction(action: QuickAction) {
         <div v-for="(p, i) in queuedPrompts" :key="i" class="queued-item">
           <span class="queued-item-tag">排队</span>
           <span class="queued-item-text">{{ p }}</span>
-          <button class="queued-item-remove" title="撤回这条排队消息" @click="emit('remove-queued', i)">×</button>
+          <button class="queued-item-remove" v-tooltip="'撤回这条排队消息'" @click="emit('remove-queued', i)">×</button>
         </div>
       </div>
       <div class="chat-input-box">
@@ -574,7 +574,7 @@ function handleQuickAction(action: QuickAction) {
             <span
               v-if="selectedPermissionMode === 'bypassPermissions'"
               class="perm-bypass-badge"
-              title="已跳过所有工具权限确认（含本会话派生的所有子代理，子代理会继承此模式且不能单独覆盖），仅本会话生效；切换/新建会话会恢复默认权限模式"
+              v-tooltip="'已跳过所有工具权限确认（含本会话派生的所有子代理，子代理会继承此模式且不能单独覆盖），仅本会话生效；切换/新建会话会恢复默认权限模式'"
             >⚠️ 跳过确认</span>
           </div>
           <div v-if="quickActions.length" class="chat-quick-actions">
@@ -615,7 +615,7 @@ function handleQuickAction(action: QuickAction) {
           <button
             v-if="isBusyVal"
             class="chat-jump-btn"
-            title="插队发送：不用等这轮生成结束，sidecar 会在当前工具调用跑完后立刻打断、优先发出这条"
+            v-tooltip="'插队发送：不用等这轮生成结束，sidecar 会在当前工具调用跑完后立刻打断、优先发出这条'"
             :disabled="!inputText.trim() && !pendingImages.length"
             @click="handleSend(true)"
           >插队</button>
@@ -724,7 +724,7 @@ function handleQuickAction(action: QuickAction) {
   display: flex;
   flex-direction: column;
   border-radius: var(--aide-radius-sm);
-  background: var(--aide-surface-default);
+  background: var(--aide-bg-deep);
   border: 1px solid var(--aide-border);
   transition: border-color 0.15s;
 }

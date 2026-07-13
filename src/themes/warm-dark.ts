@@ -1,6 +1,8 @@
 import type { ThemeTokens } from "./tokens";
 
 export const warmDark: ThemeTokens = {
+  colorScheme: "dark",
+
   bgDeep:    "#1a1a22",
   bgBase:    "#22222e",
   bgRaised:  "#2a2a38",
