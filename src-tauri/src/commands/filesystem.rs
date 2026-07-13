@@ -139,6 +139,18 @@ pub async fn list_fs_roots() -> Result<Vec<FileEntry>, String> {
         let mut roots = Vec::new();
         #[cfg(target_os = "windows")]
         {
+            // Home 快速入口置顶，方便直达用户项目目录
+            if let Some(home) = super::user_home() {
+                let hp = home.to_string_lossy().into_owned();
+                if std::path::Path::new(&hp).is_dir() {
+                    roots.push(FileEntry {
+                        name: "Home".to_string(),
+                        path: hp,
+                        is_dir: true,
+                        children: None,
+                    });
+                }
+            }
             for b in b'A'..=b'Z' {
                 let drive = format!("{}:\\", b as char);
                 if std::path::Path::new(&drive).is_dir() {
