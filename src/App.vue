@@ -195,6 +195,8 @@ async function onRemoveWorkspaceConfirm(mode: "hide" | "delete") {
     const ok = await sidebarRef.value?.removeWorkspaceByKey(ws.key, mode);
     if (!ok && mode === "delete") {
       await notice("无法移除", "该工作区有正在运行的会话，请先停止再移除。", "知道了");
+    } else if (mode === "delete") {
+      wb.killWorkspaceTerminals(ws.key);
     }
   } catch (e: any) {
     const msg = typeof e === "string" ? e : (e?.message ?? "移除工作区失败");
