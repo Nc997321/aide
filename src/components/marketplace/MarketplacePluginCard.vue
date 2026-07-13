@@ -1,15 +1,12 @@
 <script setup lang="ts">
 import type { PluginEntry } from "../../types/marketplace";
 import { computed } from "vue";
+import { marketplaceApi } from "../../api/marketplace";
 import { useMarketplace } from "../../composables/useMarketplace";
 import { useModal } from "../../composables/useModal";
 
 const props = defineProps<{
   entry: PluginEntry;
-}>();
-
-const emit = defineEmits<{
-  "open-detail": [];
 }>();
 
 const {
@@ -74,13 +71,33 @@ async function onInstall() {
   }
   installPlugin(props.entry);
 }
+
+const compLabel = (t: string): string => ({
+  skills: "Skills", commands: "Commands", agents: "Agents", hooks: "Hooks",
+  mcp_servers: "MCP", lsp_servers: "LSP", output_styles: "输出样式",
+  themes: "主题", monitors: "后台监控",
+} as Record<string,string>)[t] ?? t;
+
+async function openDetail() {
+  try {
+    const d = await marketplaceApi.getPluginDetails(props.entry.sourceId, props.entry.name);
+    if (d.components.length === 0) {
+      await useModal().notice(props.entry.name, "组件清单在安装后由 SDK 自动发现。");
+      return;
+    }
+    const lines = d.components.map(c => `${compLabel(c.type)}：${c.available ? "可用" : "在 Aide 中不可用"}`);
+    const allUnavailable = d.components.every(c => !c.available);
+    const prefix = allUnavailable ? "此插件在 Aide 中不可用\n\n" : "";
+    await useModal().notice(props.entry.name, prefix + lines.join("\n"));
+  } catch { /* best-effort: detail fetch failure must not block */ }
+}
 </script>
 
 <template>
   <div class="card">
     <div>
       <div class="top">
-        <span class="name" @click="emit('open-detail')">{{ entry.displayName || entry.name }}</span>
+        <span class="name" @click="openDetail">{{ entry.displayName || entry.name }}</span>
         <span class="ver">v{{ entry.version || "—" }}</span>
         <span class="badge" :class="badgeClass">{{ sourceLabel }}</span>
         <span v-if="entry.category" class="cat">{{ entry.category }}</span>

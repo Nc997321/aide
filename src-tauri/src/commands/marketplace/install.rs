@@ -122,7 +122,7 @@ fn cache_install_path(plugins_root: &str, market: &str, plugin: &str, version: &
 fn plugins_cache_root() -> std::path::PathBuf { crate::commands::marketplace::plugins_dir().join("cache") }
 
 /// 从已缓存的源 marketplace.json 里按 plugin 名查条目
-fn lookup_entry(source_id: &str, plugin_name: &str) -> Result<(String, crate::commands::marketplace::sources::RawPluginEntry), String> {
+pub(crate) fn lookup_entry(source_id: &str, plugin_name: &str) -> Result<(String, crate::commands::marketplace::sources::RawPluginEntry), String> {
     let cache = crate::commands::marketplace::source_cache_dir(source_id);
     let mjson = cache.join(".claude-plugin").join("marketplace.json");
     let content = std::fs::read_to_string(&mjson).map_err(|e| format!("源未拉取或读取失败: {e}"))?;
