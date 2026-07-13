@@ -23,9 +23,9 @@ onUnmounted(() => {
 watch(() => wb.visible.value, async (v) => {
   if (v) {
     await nextTick();
-    if (wb.tabs.value.length > 0 && wb.activeId.value) {
-      wb.switchTo(wb.activeId.value);
-    }
+    // 无条件同步：activeId 为空（目标工作空间无终端）时 switchTo("") 隐藏所有
+    // pane，露出空状态。否则关闭态下切到空工作空间再打开会透出上个工作空间的 pane。
+    wb.switchTo(wb.activeId.value);
   }
 });
 
