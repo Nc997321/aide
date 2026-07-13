@@ -575,7 +575,7 @@ defineExpose({ loadRoot });
 /* ── CodeGraph 构建进度条（方案 A：底部条）──
    全部用主题 CSS 变量，Warm Dark / Catppuccin 自动切换。
    分段方块是 signature：一格一格点亮，呼应符号逐个被索引。
-   活跃色用主题 accent（Warm Dark = 工匠黄铜 #d4a574），不是 success 绿——
+   活跃色用主题 accent（Warm Dark = 工匠黄铜），不是 success 绿——
    与 Warm Dark 的主题色一致。 */
 .cgp-bar {
   flex-shrink: 0;

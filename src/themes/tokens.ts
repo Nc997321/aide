@@ -34,4 +34,8 @@ export interface ThemeTokens {
   radiusLg: string;
 
   spaceUnit: string;
+
+  stalled: string;
+  syntaxKeyword: string;
+  syntaxNumber: string;
 }

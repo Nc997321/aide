@@ -57,7 +57,7 @@ async function onConfirm() {
 }
 @keyframes scaleIn { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
 .of-header { font-size: 14px; font-weight: 600; color: var(--aide-text-primary); margin-bottom: 12px; }
-.of-error { font-size: 12px; color: var(--aide-error, #f38ba8); margin-top: 8px; }
+.of-error { font-size: 12px; color: var(--aide-danger); margin-top: 8px; }
 .of-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .of-btn { padding: 7px 16px; border-radius: var(--aide-radius-md); font-size: 13px; cursor: pointer; font-family: inherit; border: 1px solid var(--aide-surface-hover); }
 .of-btn.cancel { background: transparent; color: var(--aide-text-secondary); }

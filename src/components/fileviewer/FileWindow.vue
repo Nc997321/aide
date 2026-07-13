@@ -638,8 +638,8 @@ function onKeydown(e: KeyboardEvent) {
   margin-right: 6px;
   flex-shrink: 0;
 }
-.conf-structure { color: #a6e3a1; }
-.conf-semantic { color: #f9e2af; }
+.conf-structure { color: var(--aide-success); }
+.conf-semantic { color: var(--aide-warning); }
 /* grep 文本兜底：精确文本匹配但非 AST 结构层，用中性色与 [精确]/[语义] 区分 */
 .conf-text { color: var(--aide-text-secondary); }
 
@@ -682,37 +682,82 @@ function onKeydown(e: KeyboardEvent) {
 
 .viewer-code .hljs-keyword,
 .viewer-code .hljs-selector-tag,
-.viewer-code .hljs-type { color: #cba6f7; }        /* mauve */
+.viewer-code .hljs-type,
+.viewer-markdown pre code.hljs .hljs-keyword,
+.viewer-markdown pre code.hljs .hljs-selector-tag,
+.viewer-markdown pre code.hljs .hljs-type { color: var(--aide-syntax-keyword); }
+
 .viewer-code .hljs-string,
 .viewer-code .hljs-addition,
-.viewer-code .hljs-regexp { color: #a6e3a1; }      /* green */
+.viewer-code .hljs-regexp,
+.viewer-markdown pre code.hljs .hljs-string,
+.viewer-markdown pre code.hljs .hljs-addition,
+.viewer-markdown pre code.hljs .hljs-regexp { color: var(--aide-success); }
+
 .viewer-code .hljs-number,
 .viewer-code .hljs-literal,
 .viewer-code .hljs-variable,
 .viewer-code .hljs-template-variable,
-.viewer-code .hljs-tag .hljs-attr { color: #fab387; } /* peach */
+.viewer-code .hljs-tag .hljs-attr,
+.viewer-markdown pre code.hljs .hljs-number,
+.viewer-markdown pre code.hljs .hljs-literal,
+.viewer-markdown pre code.hljs .hljs-variable,
+.viewer-markdown pre code.hljs .hljs-template-variable,
+.viewer-markdown pre code.hljs .hljs-tag .hljs-attr { color: var(--aide-syntax-number); }
+
 .viewer-code .hljs-comment,
-.viewer-code .hljs-quote { color: #6c7086; font-style: italic; }
+.viewer-code .hljs-quote,
+.viewer-markdown pre code.hljs .hljs-comment,
+.viewer-markdown pre code.hljs .hljs-quote { color: var(--aide-text-muted); font-style: italic; }
+
 .viewer-code .hljs-title,
 .viewer-code .hljs-title.class_,
 .viewer-code .hljs-title.class_.inherited__,
-.viewer-code .hljs-title.function_ { color: #89b4fa; } /* blue */
+.viewer-code .hljs-title.function_,
+.viewer-markdown pre code.hljs .hljs-title,
+.viewer-markdown pre code.hljs .hljs-title.class_,
+.viewer-markdown pre code.hljs .hljs-title.class_.inherited__,
+.viewer-markdown pre code.hljs .hljs-title.function_ { color: var(--aide-accent); }
+
 .viewer-code .hljs-meta,
 .viewer-code .hljs-meta .hljs-keyword,
-.viewer-code .hljs-section { color: #89b4fa; }
+.viewer-code .hljs-section,
+.viewer-markdown pre code.hljs .hljs-meta,
+.viewer-markdown pre code.hljs .hljs-meta .hljs-keyword,
+.viewer-markdown pre code.hljs .hljs-section { color: var(--aide-accent); }
+
 .viewer-code .hljs-attr,
 .viewer-code .hljs-attribute,
-.viewer-code .hljs-property { color: #89dceb; }    /* sky */
+.viewer-code .hljs-property,
+.viewer-markdown pre code.hljs .hljs-attr,
+.viewer-markdown pre code.hljs .hljs-attribute,
+.viewer-markdown pre code.hljs .hljs-property { color: var(--aide-info); }
+
 .viewer-code .hljs-built_in,
 .viewer-code .hljs-symbol,
-.viewer-code .hljs-params { color: #f9e2af; }      /* yellow */
+.viewer-code .hljs-params,
+.viewer-markdown pre code.hljs .hljs-built_in,
+.viewer-markdown pre code.hljs .hljs-symbol,
+.viewer-markdown pre code.hljs .hljs-params { color: var(--aide-warning); }
+
 .viewer-code .hljs-tag,
 .viewer-code .hljs-selector-class,
-.viewer-code .hljs-selector-id { color: #f38ba8; } /* red */
-.viewer-code .hljs-emphasis { font-style: italic; }
-.viewer-code .hljs-strong { font-weight: bold; }
-.viewer-code .hljs-link { color: #89b4fa; text-decoration: underline; }
-.viewer-code .hljs-deletion { color: #f38ba8; }
+.viewer-code .hljs-selector-id,
+.viewer-markdown pre code.hljs .hljs-tag,
+.viewer-markdown pre code.hljs .hljs-selector-class,
+.viewer-markdown pre code.hljs .hljs-selector-id { color: var(--aide-danger); }
+
+.viewer-code .hljs-emphasis,
+.viewer-markdown pre code.hljs .hljs-emphasis { font-style: italic; }
+
+.viewer-code .hljs-strong,
+.viewer-markdown pre code.hljs .hljs-strong { font-weight: bold; }
+
+.viewer-code .hljs-link,
+.viewer-markdown pre code.hljs .hljs-link { color: var(--aide-accent); text-decoration: underline; }
+
+.viewer-code .hljs-deletion,
+.viewer-markdown pre code.hljs .hljs-deletion { color: var(--aide-danger); }
 
 /* ── Markdown rendered content ── */
 .viewer-markdown {
@@ -801,41 +846,6 @@ function onKeydown(e: KeyboardEvent) {
   max-width: 100%;
   border-radius: 6px;
 }
-
-/* marked uses these classes for hljs code in markdown */
-.viewer-markdown pre code.hljs .hljs-keyword,
-.viewer-markdown pre code.hljs .hljs-selector-tag,
-.viewer-markdown pre code.hljs .hljs-type { color: #cba6f7; }
-.viewer-markdown pre code.hljs .hljs-string,
-.viewer-markdown pre code.hljs .hljs-addition,
-.viewer-markdown pre code.hljs .hljs-regexp { color: #a6e3a1; }
-.viewer-markdown pre code.hljs .hljs-number,
-.viewer-markdown pre code.hljs .hljs-literal,
-.viewer-markdown pre code.hljs .hljs-variable,
-.viewer-markdown pre code.hljs .hljs-template-variable,
-.viewer-markdown pre code.hljs .hljs-tag .hljs-attr { color: #fab387; }
-.viewer-markdown pre code.hljs .hljs-comment,
-.viewer-markdown pre code.hljs .hljs-quote { color: #6c7086; font-style: italic; }
-.viewer-markdown pre code.hljs .hljs-title,
-.viewer-markdown pre code.hljs .hljs-title.class_,
-.viewer-markdown pre code.hljs .hljs-title.class_.inherited__,
-.viewer-markdown pre code.hljs .hljs-title.function_ { color: #89b4fa; }
-.viewer-markdown pre code.hljs .hljs-meta,
-.viewer-markdown pre code.hljs .hljs-meta .hljs-keyword,
-.viewer-markdown pre code.hljs .hljs-section { color: #89b4fa; }
-.viewer-markdown pre code.hljs .hljs-attr,
-.viewer-markdown pre code.hljs .hljs-attribute,
-.viewer-markdown pre code.hljs .hljs-property { color: #89dceb; }
-.viewer-markdown pre code.hljs .hljs-built_in,
-.viewer-markdown pre code.hljs .hljs-symbol,
-.viewer-markdown pre code.hljs .hljs-params { color: #f9e2af; }
-.viewer-markdown pre code.hljs .hljs-tag,
-.viewer-markdown pre code.hljs .hljs-selector-class,
-.viewer-markdown pre code.hljs .hljs-selector-id { color: #f38ba8; }
-.viewer-markdown pre code.hljs .hljs-emphasis { font-style: italic; }
-.viewer-markdown pre code.hljs .hljs-strong { font-weight: bold; }
-.viewer-markdown pre code.hljs .hljs-link { color: #89b4fa; text-decoration: underline; }
-.viewer-markdown pre code.hljs .hljs-deletion { color: #f38ba8; }
 
 /* ── Diff viewer（着色规则见 src/styles/global.css 的 aide-diff-*）── */
 .viewer-diff {

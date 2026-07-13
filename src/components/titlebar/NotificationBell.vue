@@ -150,7 +150,7 @@ function bodyParts(body: string | undefined): Array<{ t: "text" | "code"; v: str
 .bell-badge {
   position: absolute; top: 3px; right: 3px;
   min-width: 14px; height: 14px; padding: 0 4px;
-  background: var(--aide-danger); color: #fff;
+  background: var(--aide-danger); color: var(--aide-text-on-accent);
   font-size: 9px; font-weight: 700; line-height: 14px; text-align: center;
   border-radius: 7px; border: 1.5px solid var(--aide-bg-deep);
 }

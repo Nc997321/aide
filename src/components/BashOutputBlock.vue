@@ -1,29 +1,24 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, watch, ref } from "vue";
+import { onMounted, onBeforeUnmount, watch, ref, nextTick } from "vue";
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
+import { buildXtermTheme } from "../utils/xterm";
+import { themes } from "../themes";
+import { useSettings } from "../composables/useSettings";
 
 const props = defineProps<{ content: string; isError: boolean }>();
 const containerRef = ref<HTMLDivElement>();
 let terminal: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 
-function getThemeColors() {
-  const style = getComputedStyle(document.documentElement);
-  return {
-    background: style.getPropertyValue("--aide-bg-deep").trim() || "#1a1a22",
-    foreground: style.getPropertyValue("--aide-text-primary").trim() || "#d8d4cf",
-    cursor: style.getPropertyValue("--aide-accent").trim() || "#d4a574",
-    selectionBackground: style.getPropertyValue("--aide-surface-active").trim() || "#44445a",
-  };
-}
+const { settings } = useSettings();
 
 onMounted(() => {
   if (!containerRef.value) return;
   terminal = new Terminal({
     rows: 10,
     cols: 80,
-    theme: getThemeColors(),
+    theme: buildXtermTheme(themes[settings.theme] || themes["warm-dark"]),
     scrollback: 1000,
     disableStdin: true,
     fontSize: 12,
@@ -43,6 +38,11 @@ onBeforeUnmount(() => {
 watch(() => props.content, (val) => {
   terminal?.clear();
   terminal?.write(val.replace(/\n/g, "\r\n"));
+});
+
+watch(() => settings.theme, async () => {
+  await nextTick();
+  if (terminal) terminal.options.theme = buildXtermTheme(themes[settings.theme] || themes["warm-dark"]);
 });
 </script>
 

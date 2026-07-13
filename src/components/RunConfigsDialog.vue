@@ -301,8 +301,8 @@ async function close() {
   color: var(--aide-text-primary);
 }
 .rcd-tool-danger:hover {
-  background: color-mix(in srgb, var(--aide-error, #e07a6e) 15%, transparent);
-  color: var(--aide-error, #e07a6e);
+  background: color-mix(in srgb, var(--aide-danger) 15%, transparent);
+  color: var(--aide-danger);
 }
 .rcd-tool:disabled {
   opacity: 0.35;

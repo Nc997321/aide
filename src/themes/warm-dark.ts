@@ -36,4 +36,8 @@ export const warmDark: ThemeTokens = {
   radiusLg: "12px",
 
   spaceUnit: "4px",
+
+  stalled:       "#e0955c",
+  syntaxKeyword: "#b09bc8",
+  syntaxNumber:  "#e8a87c",
 };

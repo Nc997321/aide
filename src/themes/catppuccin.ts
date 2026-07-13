@@ -36,4 +36,8 @@ export const catppuccin: ThemeTokens = {
   radiusLg: "12px",
 
   spaceUnit: "4px",
+
+  stalled:       "#fab387",
+  syntaxKeyword: "#cba6f7",
+  syntaxNumber:  "#fab387",
 };

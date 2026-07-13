@@ -708,7 +708,7 @@ function handleQuickAction(action: QuickAction) {
 }
 
 .chat-interrupt-btn:hover {
-  color: #ff9090;
+  color: color-mix(in srgb, var(--aide-danger) 85%, white);
 }
 
 .chat-input-area {
@@ -840,15 +840,15 @@ function handleQuickAction(action: QuickAction) {
 /* 归一化状态色：ok 走强调色、warning 橙、exceeded 红（点 + 进度条同步变色）。 */
 .chat-quota--warning .chat-quota-dot,
 .chat-quota--warning .chat-ctx-bar-fill {
-  background: #e0a400;
+  background: var(--aide-warning);
 }
-.chat-quota--warning .chat-quota-label { color: #e0a400; }
+.chat-quota--warning .chat-quota-label { color: var(--aide-warning); }
 
 .chat-quota--exceeded .chat-quota-dot,
 .chat-quota--exceeded .chat-ctx-bar-fill {
-  background: var(--aide-danger, #e05561);
+  background: var(--aide-danger);
 }
-.chat-quota--exceeded .chat-quota-label { color: var(--aide-danger, #e05561); font-weight: 600; }
+.chat-quota--exceeded .chat-quota-label { color: var(--aide-danger); font-weight: 600; }
 
 .chat-input {
   resize: none;

@@ -67,7 +67,7 @@ const wsName = () => {
 }
 .rw-header { font-size: 14px; font-weight: 600; color: var(--aide-text-primary); margin-bottom: 12px; }
 .rw-opt { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 13px; color: var(--aide-text-secondary); cursor: pointer; }
-.rw-warn { margin-top: 10px; font-size: 12px; color: var(--aide-error, #f38ba8); }
+.rw-warn { margin-top: 10px; font-size: 12px; color: var(--aide-danger); }
 .rw-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .rw-btn { padding: 7px 16px; border-radius: var(--aide-radius-md); font-size: 13px; cursor: pointer; font-family: inherit; border: 1px solid var(--aide-surface-hover); }
 .rw-btn.cancel { background: transparent; color: var(--aide-text-secondary); }

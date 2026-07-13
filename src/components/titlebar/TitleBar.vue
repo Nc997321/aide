@@ -755,7 +755,7 @@ const runDotClass = computed(() => {
 }
 
 .run-dot-crashed {
-  background: var(--aide-error, #f38ba8);
+  background: var(--aide-danger);
 }
 
 @keyframes run-dot-pulse {
@@ -773,13 +773,13 @@ const runDotClass = computed(() => {
   height: 26px;
   background: none;
   border: none;
-  color: var(--aide-error, #f38ba8);
+  color: var(--aide-danger);
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.12s, color 0.12s;
 }
 .run-stop-btn:hover {
-  background: color-mix(in srgb, var(--aide-error, #f38ba8) 12%, transparent);
+  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
 }
 
 /* ── Restart button ── */

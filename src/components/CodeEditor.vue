@@ -3,9 +3,13 @@ import { ref, watch, onMounted, onUnmounted, computed } from "vue";
 import { EditorView, basicSetup } from "codemirror";
 import { keymap } from "@codemirror/view";
 import { searchKeymap } from "@codemirror/search";
-import { oneDark } from "@codemirror/theme-one-dark";
+import { Compartment } from "@codemirror/state";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
 import { useSettings } from "../composables/useSettings";
 import { useModal } from "../composables/useModal";
+import { themes } from "../themes";
+import type { ThemeTokens } from "../themes/tokens";
 import { ctrlHoverHighlight } from "../extensions/cmCtrlHover";
 import { cmScrollMemory, type ScrollMemoryOptions } from "../extensions/cmScrollMemory";
 
@@ -36,6 +40,24 @@ const ext = computed(() => {
   const parts = props.filePath.split(".");
   return parts.length > 1 ? parts.pop()!.toLowerCase() : "";
 });
+
+function createHighlightStyle(t: ThemeTokens): HighlightStyle {
+  return HighlightStyle.define([
+    { tag: tags.keyword, color: t.syntaxKeyword },
+    { tag: [tags.typeName, tags.definition(tags.typeName)], color: t.syntaxKeyword },
+    { tag: tags.string, color: t.success },
+    { tag: tags.number, color: t.syntaxNumber },
+    { tag: [tags.variableName, tags.literal, tags.bool, tags.null], color: t.syntaxNumber },
+    { tag: tags.comment, color: t.textMuted, fontStyle: "italic" },
+    { tag: [tags.function(tags.variableName), tags.labelName], color: t.accent },
+    { tag: [tags.propertyName, tags.attributeName], color: t.info },
+    { tag: [tags.className, tags.definition(tags.className)], color: t.warning },
+    { tag: tags.invalid, color: t.danger },
+    { tag: [tags.bracket, tags.separator], color: t.textSecondary },
+  ]);
+}
+
+const themeCompartment = new Compartment();
 
 async function loadLanguageExtension() {
   const e = ext.value;
@@ -131,7 +153,7 @@ async function createEditor() {
         ...searchKeymap,
         { key: "Mod-g", run: openGoToLine },
       ]),
-      oneDark,
+      themeCompartment.of(syntaxHighlighting(createHighlightStyle(themes[settings.theme] || themes["warm-dark"]))),
       updateListener,
       ctrlHoverHighlight(),
       ...(props.scrollMemory ? [cmScrollMemory(props.scrollMemory)] : []),
@@ -168,6 +190,8 @@ async function createEditor() {
           height: "100%",
           fontSize: "var(--cm-font-size)",
           fontFamily: "var(--cm-font-family)",
+          backgroundColor: "var(--aide-bg-base)",
+          color: "var(--aide-text-primary)",
         },
         ".cm-scroller": {
           overflow: "auto",
@@ -181,7 +205,7 @@ async function createEditor() {
           backgroundColor: "var(--aide-surface-default)",
         },
         ".cm-activeLine": {
-          backgroundColor: "rgba(255, 255, 255, 0.03)",
+          backgroundColor: "color-mix(in srgb, var(--aide-text-primary) 3%, transparent)",
         },
         ".cm-selectionBackground": {
           backgroundColor: "var(--aide-surface-hover) !important",
@@ -190,17 +214,17 @@ async function createEditor() {
           borderLeftColor: "var(--aide-text-primary)",
         },
         ".cm-searchMatch": {
-          backgroundColor: "rgba(249, 226, 175, 0.3)",
+          backgroundColor: "color-mix(in srgb, var(--aide-warning) 30%, transparent)",
         },
         ".cm-searchMatch.cm-searchMatch-selected": {
-          backgroundColor: "rgba(249, 226, 175, 0.5)",
+          backgroundColor: "color-mix(in srgb, var(--aide-warning) 50%, transparent)",
         },
         ".cm-matchingBracket": {
-          backgroundColor: "rgba(137, 180, 250, 0.15)",
+          backgroundColor: "color-mix(in srgb, var(--aide-accent) 15%, transparent)",
           outline: "1px solid var(--aide-accent)",
         },
         ".cm-nonmatchingBracket": {
-          backgroundColor: "rgba(243, 139, 168, 0.15)",
+          backgroundColor: "color-mix(in srgb, var(--aide-danger) 15%, transparent)",
         },
         ".cm-tooltip": {
           backgroundColor: "var(--aide-surface-default) !important",
@@ -228,6 +252,17 @@ watch(
   [() => settings.fontSize, () => settings.fontFamily],
   () => applyFontSettings()
 );
+
+// ── React to theme changes: rebuild HighlightStyle with resolved CSS var colors ──
+watch(() => settings.theme, () => {
+  if (view) {
+    view.dispatch({
+      effects: themeCompartment.reconfigure(
+        syntaxHighlighting(createHighlightStyle(themes[settings.theme] || themes["warm-dark"]))
+      )
+    });
+  }
+});
 
 function openGoToLine(target: EditorView): boolean {
   const { prompt: modalPrompt } = useModal();

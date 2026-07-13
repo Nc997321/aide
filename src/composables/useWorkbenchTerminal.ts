@@ -4,7 +4,8 @@ import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { api } from "../api";
 import { useSettings } from "./useSettings";
-import { catppuccinMochaTheme } from "../utils/xterm";
+import { buildXtermTheme } from "../utils/xterm";
+import { themes } from "../themes";
 
 export interface WbTab {
   id: string;
@@ -52,6 +53,14 @@ function ensureSettingsWatchers() {
   watch(() => settings.fontFamily, (v) => {
     for (const [, s] of sessions) {
       s.terminal.options.fontFamily = v;
+    }
+  });
+  watch(() => settings.theme, async () => {
+    await nextTick();
+    for (const [, s] of sessions) {
+      if (s.terminal) {
+        s.terminal.options.theme = buildXtermTheme(themes[settings.theme] || themes["warm-dark"]);
+      }
     }
   });
 }
@@ -130,7 +139,7 @@ export function useWorkbenchTerminal() {
       cursorBlink: true,
       fontSize: s.fontSize,
       fontFamily: s.fontFamily,
-      theme: catppuccinMochaTheme,
+      theme: buildXtermTheme(themes[settingsRef?.theme || "warm-dark"]),
       allowProposedApi: true,
     });
     const fitAddon = new FitAddon();
@@ -253,7 +262,7 @@ export function useWorkbenchTerminal() {
       cursorBlink: true,
       fontSize: s.fontSize,
       fontFamily: s.fontFamily,
-      theme: catppuccinMochaTheme,
+      theme: buildXtermTheme(themes[settingsRef?.theme || "warm-dark"]),
       allowProposedApi: true,
     });
     const fitAddon = new FitAddon();
