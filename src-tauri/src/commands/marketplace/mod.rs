@@ -5,8 +5,6 @@ pub mod sources;
 pub mod install;
 pub mod manifest;
 
-use super::claude_home;
-
 // ── Types (API response) ──
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -45,8 +43,12 @@ pub fn enabled_plugins_manifest_path() -> PathBuf {
     super::our_config_dir().join("enabled-plugins.json")
 }
 
+/// 已安装插件本体所在目录：Aide 自己的配置目录下（`~/.claude-code-desktop/plugins/`），
+/// **不是** Claude CLI 的 `~/.claude/plugins/`。这样 Aide 不依赖 CLI 是否安装，
+/// 也避免和 CLI 的 `installed_plugins.json` 账本混用同一物理目录导致双加载。
+/// SDK 经 `options.plugins` 显式注入绝对路径加载，不关心目录位置。
 pub fn plugins_dir() -> PathBuf {
-    claude_home().join("plugins")
+    super::our_config_dir().join("plugins")
 }
 
 pub fn marketplace_cache_dir() -> PathBuf {
