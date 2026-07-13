@@ -75,6 +75,8 @@ if (!ctrl) {
   display: flex; align-items: center; gap: 4px; padding: 3px 6px;
   border-radius: 4px; cursor: pointer; font-size: 12px;
   color: var(--aide-text-secondary);
+  /* 阻止双击展开时浏览器默认选词（选中目录名文本） */
+  user-select: none;
 }
 .tree-node:hover { background: var(--aide-surface-hover); }
 .tree-node.selected {

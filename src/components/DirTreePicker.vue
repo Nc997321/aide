@@ -131,7 +131,11 @@ async function jumpToRoot(rootPath: string) {
 </template>
 
 <style scoped>
-.dir-picker { display: flex; flex-direction: column; gap: 8px; min-height: 240px; }
+.dir-picker {
+  display: flex; flex-direction: column; gap: 8px;
+  /* 填满弹框分配的高度并允许收缩，让 tree-scroll 内部滚动而非撑爆弹框 */
+  flex: 1 1 auto; min-height: 0;
+}
 .addr-bar { display: flex; gap: 6px; }
 .addr-input {
   flex: 1; box-sizing: border-box;
@@ -156,7 +160,9 @@ async function jumpToRoot(rootPath: string) {
 .root-chip:hover { background: var(--aide-surface-hover); }
 .root-chip.active { border-color: var(--aide-accent); color: var(--aide-accent); }
 .tree-scroll {
-  flex: 1; overflow-y: auto; border: 1px solid var(--aide-border);
+  /* min-height:0 是 flex 子项能滚动而非撑高的关键 */
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  border: 1px solid var(--aide-border);
   border-radius: var(--aide-radius-md); padding: 6px; background: var(--aide-bg-base);
 }
 </style>
