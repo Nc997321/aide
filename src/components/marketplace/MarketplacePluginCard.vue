@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { PluginEntry } from "../../types/marketplace";
 import { computed } from "vue";
-import { marketplaceApi } from "../../api/marketplace";
+import { open } from "@tauri-apps/plugin-shell";
 import { useMarketplace } from "../../composables/useMarketplace";
 import { useModal } from "../../composables/useModal";
 
@@ -73,24 +73,25 @@ async function onInstall() {
   installPlugin(props.entry);
 }
 
-const compLabel = (t: string): string => ({
-  skills: "Skills", commands: "Commands", agents: "Agents", hooks: "Hooks",
-  mcp_servers: "MCP", lsp_servers: "LSP", output_styles: "输出样式",
-  themes: "主题", monitors: "后台监控",
-} as Record<string,string>)[t] ?? t;
+// 固定源 → GitHub 仓库（entry.repository/homepage 缺失时的详情兜底）。
+const SOURCE_REPO: Record<string, string> = {
+  "claude-plugins-official": "anthropics/claude-plugins-official",
+  "claude-community": "anthropics/claude-plugins-community",
+};
 
-async function openDetail() {
-  try {
-    const d = await marketplaceApi.getPluginDetails(props.entry.sourceId, props.entry.name);
-    if (d.components.length === 0) {
-      await useModal().notice(props.entry.name, "组件清单在安装后由 SDK 自动发现。");
-      return;
-    }
-    const lines = d.components.map(c => `${compLabel(c.type)}：${c.available ? "可用" : "在 Aide 中不可用"}`);
-    const allUnavailable = d.components.every(c => !c.available);
-    const prefix = allUnavailable ? "此插件在 Aide 中不可用\n\n" : "";
-    await useModal().notice(props.entry.name, prefix + lines.join("\n"));
-  } catch { /* best-effort: detail fetch failure must not block */ }
+// 详情链接：优先插件自带的 repository / homepage（绝对 URL），否则回退到所属市场源的仓库。
+const detailUrl = computed(() => {
+  const r = props.entry.repository;
+  const h = props.entry.homepage;
+  if (/^https?:\/\//i.test(r)) return r;
+  if (/^https?:\/\//i.test(h)) return h;
+  const repo = SOURCE_REPO[props.entry.sourceId];
+  return repo ? `https://github.com/${repo}` : "";
+});
+
+function openGit() {
+  const url = detailUrl.value;
+  if (url) void open(url);
 }
 </script>
 
@@ -98,7 +99,7 @@ async function openDetail() {
   <div class="card">
     <div>
       <div class="top">
-        <span class="name" @click="openDetail">{{ entry.displayName || entry.name }}</span>
+        <span class="name" v-tooltip="'在 GitHub 查看详情'" @click="openGit">{{ entry.displayName || entry.name }}</span>
         <span class="ver">v{{ entry.version || "—" }}</span>
         <span class="badge" :class="badgeClass">{{ sourceLabel }}</span>
         <span v-if="entry.category" class="cat">{{ entry.category }}</span>
@@ -171,6 +172,15 @@ async function openDetail() {
   font-weight: 600;
   color: var(--aide-text-primary);
   cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 2px;
+  transition: text-decoration-color 0.12s, color 0.12s;
+}
+
+.card .name:hover {
+  color: var(--aide-accent);
+  text-decoration-color: var(--aide-accent);
 }
 
 .card .ver {
@@ -214,8 +224,12 @@ async function openDetail() {
   color: var(--aide-text-secondary);
   font-size: 12.5px;
   margin-top: 6px;
-  max-width: 62ch;
   line-height: 1.5;
+  /* 市场面板空间有限：描述最多两行，超出截断，详情点名称去 GitHub。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .caveat {

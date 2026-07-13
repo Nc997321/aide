@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { PluginEntry, InstalledPlugin, SourceInfo, PluginDetails } from "../types/marketplace";
+import type { PluginEntry, InstalledPlugin, SourceInfo } from "../types/marketplace";
 
 export const marketplaceApi = {
   listMarketplaceSources(): Promise<SourceInfo[]> { return invoke("list_marketplace_sources"); },
@@ -20,8 +20,5 @@ export const marketplaceApi = {
   listInstalledPlugins(): Promise<InstalledPlugin[]> { return invoke("list_installed_plugins"); },
   setPluginEnabled(marketplace: string, plugin: string, enabled: boolean): Promise<void> {
     return invoke("set_plugin_enabled", { marketplace, plugin, enabled });
-  },
-  getPluginDetails(sourceId: string, pluginName: string): Promise<PluginDetails> {
-    return invoke("get_plugin_details", { sourceId, pluginName });
   },
 };

@@ -30,13 +30,3 @@ export interface SourceInfo {
   repo: string;
   enabled: boolean;
 }
-
-export interface PluginComponentInfo {
-  type: string;
-  available: boolean;
-}
-
-export interface PluginDetails {
-  name: string;
-  components: PluginComponentInfo[];
-}

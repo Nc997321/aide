@@ -1,5 +1,3 @@
-use serde::Serialize;
-
 use crate::commands::marketplace::sources::RawPluginEntry;
 
 // ── Availability classification (list-time) ──
@@ -37,36 +35,4 @@ pub fn classify_availability(entry: &RawPluginEntry) -> (String, Vec<String>) {
         return ("mixed".into(), unsupported_present);
     }
     ("unavailable".into(), unsupported_present)
-}
-
-// ── Detail structs (detail-time) ──
-
-#[derive(Serialize)]
-pub struct PluginComponent {
-    #[serde(rename = "type")]
-    pub r#type: String,
-    pub available: bool,
-}
-
-#[derive(Serialize)]
-pub struct PluginDetails {
-    pub name: String,
-    pub components: Vec<PluginComponent>,
-}
-
-/// Detail-time component list from a marketplace entry's inline fields.
-/// available = type is in the SDK-supported set.
-pub fn build_details_from_entry(entry: &RawPluginEntry) -> PluginDetails {
-    let fields = [
-        "skills", "commands", "agents", "hooks", "mcp_servers",
-        "lsp_servers", "output_styles", "themes", "monitors",
-    ];
-    let components = fields.into_iter()
-        .filter(|f| has(entry, f))
-        .map(|f| PluginComponent {
-            r#type: f.to_string(),
-            available: SUPPORTED.contains(&f),
-        })
-        .collect();
-    PluginDetails { name: entry.name.clone(), components }
 }

@@ -160,14 +160,6 @@ pub async fn list_marketplace_sources() -> Result<Vec<sources::SourceInfo>, Stri
 }
 
 #[tauri::command]
-pub async fn get_plugin_details(source_id: String, plugin_name: String) -> Result<manifest::PluginDetails, String> {
-    tokio::task::spawn_blocking(move || -> Result<manifest::PluginDetails, String> {
-        let (_market, entry) = install::lookup_entry(&source_id, &plugin_name)?;
-        Ok(manifest::build_details_from_entry(&entry))
-    }).await.map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
 pub async fn set_marketplace_enabled(source_id: String, enabled: bool) -> Result<(), String> {
     // config 读写 → spawn_blocking，不占主线程
     tokio::task::spawn_blocking(move || -> Result<(), String> {
