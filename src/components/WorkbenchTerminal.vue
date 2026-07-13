@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick, watch } from "vue";
+import { ref, onMounted, onUnmounted, nextTick, watch, computed } from "vue";
 import { useWorkbenchTerminal } from "../composables/useWorkbenchTerminal";
+import { useChatPaneWidth } from "../composables/useChatPaneWidth";
 import "xterm/css/xterm.css";
 
-const props = defineProps<{ cwd: string; height: number }>();
+const props = defineProps<{ workspaceKey: string; cwd: string; height: number }>();
 const emit = defineEmits<{ "update:height": [v: number] }>();
 
 const wb = useWorkbenchTerminal();
+const { chatPaneWidth } = useChatPaneWidth();
+const pillWidth = computed(() => chatPaneWidth.value > 0 ? `${chatPaneWidth.value}px` : "calc(100% - 20px)");
 const containerRef = ref<HTMLDivElement>();
 
 onMounted(() => {
@@ -26,8 +29,13 @@ watch(() => wb.visible.value, async (v) => {
   }
 });
 
+const activeTabKind = computed<"shell" | "run" | undefined>(() => {
+  const t = wb.tabs.value.find(t => t.id === wb.activeId.value);
+  return t?.kind;
+});
+
 function addTerminal() {
-  wb.createSession(props.cwd, props.cwd);
+  wb.createSession(props.workspaceKey, props.cwd);
 }
 
 function onHeaderDragStart(e: MouseEvent) {
@@ -50,7 +58,7 @@ function onHeaderDragStart(e: MouseEvent) {
 
 <template>
   <div class="workbench-overlay" :class="{ 'workbench-overlay--hidden': !wb.visible.value }">
-    <div class="workbench-pill" :class="{ 'is-shown': wb.visible.value }" :style="{ height: props.height + 'px' }">
+    <div class="workbench-pill" :class="{ 'is-shown': wb.visible.value }" :style="{ height: props.height + 'px', width: pillWidth }">
       <div class="workbench-header" @mousedown="onHeaderDragStart">
         <div class="wb-tabs">
           <div
@@ -72,7 +80,14 @@ function onHeaderDragStart(e: MouseEvent) {
       </div>
       <div ref="containerRef" class="wb-container">
         <div
-          v-if="wb.activeExited.value"
+          v-if="wb.visible.value && wb.tabs.value.length === 0"
+          class="wb-empty"
+        >
+          <div class="wb-empty__title">该工作空间还没有终端</div>
+          <button class="wb-empty__btn" @click.stop="addTerminal">新建终端</button>
+        </div>
+        <div
+          v-if="wb.activeExited.value && activeTabKind === 'shell'"
           class="workbench-exited"
           tabindex="0"
           @keydown.enter.prevent="wb.restart(wb.activeId.value, props.cwd)"
@@ -242,6 +257,24 @@ function onHeaderDragStart(e: MouseEvent) {
 .wb-term-pane .xterm-viewport { scrollbar-width: thin; scrollbar-color: var(--aide-surface-default) transparent; }
 .wb-term-pane .xterm-viewport::-webkit-scrollbar { width: 6px; }
 .wb-term-pane .xterm-viewport::-webkit-scrollbar-thumb { background: var(--aide-surface-default); border-radius: 3px; }
+
+/* ── Empty state ── */
+
+.wb-empty {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; color: var(--aide-text-muted);
+}
+.wb-empty__title { font-size: 13px; }
+.wb-empty__btn {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  padding: 6px 16px; font-size: 13px; cursor: pointer;
+  transition: background 0.12s;
+}
+.wb-empty__btn:hover { background: var(--aide-surface-default); }
 
 /* ── Shell exited overlay ── */
 

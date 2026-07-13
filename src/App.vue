@@ -43,6 +43,7 @@ import { applyTheme, themes } from "./themes";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useFileViewer } from "./composables/useFileViewer";
 import { useRecent } from "./composables/useRecent";
+import { useWorkspaces } from "./composables/useWorkspaces";
 import { timeAgo } from "./utils/time";
 import type { PaletteResult } from "./ui/ACommandPalette.vue";
 import OpenFolderDialog from "./components/OpenFolderDialog.vue";
@@ -146,6 +147,7 @@ onSessionCreated((tempId, realId) => {
 const settingsVisible = ref(false);
 const settingsInitialTab = ref<string | undefined>(undefined);
 const { push: pushNotification, registerActionHandler } = useNotifications();
+const { activeKey: activeWorkspaceKey } = useWorkspaces();
 const workspacePath = ref("");
 const projectName = ref("");
 const { settings, update: updateSettings } = useSettings();
@@ -315,8 +317,8 @@ async function onSidebarWsChanged(path: string) {
 }
 
 // Sync workbench terminal's active workspace when switching workspaces
-watch(() => workspacePath.value, (v) => {
-  wb.setActiveWorkspace(v);
+watch(activeWorkspaceKey, (k) => {
+  if (k) wb.setActiveWorkspace(k);
 });
 
 /** 把绝对路径转成相对当前工作区的展示路径；不在工作区内则原样返回。 */
@@ -491,7 +493,7 @@ onMounted(async () => {
   } catch (_) { /* best effort */ }
 
   // Sync workbench terminal's active workspace with the current project root
-  wb.setActiveWorkspace(workspacePath.value);
+  if (activeWorkspaceKey.value) wb.setActiveWorkspace(activeWorkspaceKey.value);
 
   // Initialize search providers for the title bar search box
   const { initProviders: initSearchProviders, search: searchProviders } = useSearchProviders();
@@ -730,7 +732,7 @@ onUnmounted(() => {
       />
       <SettingsPanel v-if="settingsVisible" :initial-tab="settingsInitialTab" @close="settingsVisible = false" />
       <RunConfigsDialog v-if="runConfigsDialogVisible" @close="runConfigsDialogVisible = false" />
-      <WorkbenchTerminal :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
+      <WorkbenchTerminal :workspace-key="activeWorkspaceKey ?? ''" :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
     </div>
 
     <ACommandPalette
