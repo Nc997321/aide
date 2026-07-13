@@ -193,6 +193,7 @@ async function selectSessionFromWorkspace(wsKey: string, sessionId: string) {
         await api.setWorkspace(ws.key, ws.name);
       } catch (_e) { return; }
       activeWorkspace.value = ws.key;
+      wsActiveKey.value = ws.key;   // 同步共享 activeKey，供终端分组/run tab 归属等消费方感知切换
       emit("workspace-changed", ws.name);
       await setCurrentWs(ws.key, ws.name);
       // Load sessions for the new active workspace if not already loaded
@@ -235,6 +236,7 @@ async function activateWorkspace(ws: WorkspaceInfo): Promise<boolean> {
     return false;
   }
   activeWorkspace.value = ws.key;
+  wsActiveKey.value = ws.key;   // 同步共享 activeKey，供终端分组/run tab 归属等消费方感知切换
   expandedWorkspaces.value.add(ws.key);
   emit("workspace-changed", ws.name);
   await setCurrentWs(ws.key, ws.name);
