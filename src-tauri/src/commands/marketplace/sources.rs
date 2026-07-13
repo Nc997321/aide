@@ -39,6 +39,9 @@ pub enum RawSource {
     Github { repo: String, r#ref: Option<String>, sha: Option<String> },
     Url { url: String, r#ref: Option<String>, sha: Option<String> },
     GitSubdir { url: String, path: String, r#ref: Option<String>, sha: Option<String> },
+    // npm 源：安装期以 NPM_UNSUPPORTED 拒绝；package/version 按官方 schema 解析保留
+    //（前端 ERROR_MAP 用固定文案，附加 detail 不会到达 UI，故字段值暂不消费）。
+    #[allow(dead_code)]
     Npm { package: String, version: Option<String> },
     /// 未知源类型：marketplace.json 出现了 schema 未覆盖的 source.kind。
     /// 列表期照常展示（可用性按内联组件字段判定），安装期以 SOURCE_TYPE_UNSUPPORTED 拒绝。
@@ -53,10 +56,13 @@ pub struct RawPluginEntry {
     pub display_name: Option<String>,
     pub description: Option<String>,
     pub version: Option<String>,
+    // author/tags 按官方 marketplace.json schema 解析保留，暂未透传到 PluginEntry。
+    #[allow(dead_code)]
     pub author: Option<Value>,
     pub homepage: Option<String>,
     pub repository: Option<String>,
     pub category: Option<String>,
+    #[allow(dead_code)]
     pub tags: Option<Vec<String>>,
     pub default_enabled: Option<bool>,
     // 内联组件字段（仅判断有无，内容透传给详情页）
@@ -79,6 +85,8 @@ pub struct MarketplaceMetadata {
 #[derive(Debug, Default)]
 pub struct MarketplaceManifest {
     pub name: String,
+    // owner 按官方 schema 解析保留，暂未消费。
+    #[allow(dead_code)]
     pub owner: Option<Value>,
     pub plugins: Vec<RawPluginEntry>,
     pub metadata: Option<MarketplaceMetadata>,

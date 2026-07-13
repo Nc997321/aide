@@ -19,7 +19,7 @@ pub async fn fetch_marketplace(source_id: String) -> Result<Vec<PluginEntry>, St
         if !cache.exists() {
             std::fs::create_dir_all(cache.parent().unwrap_or(&cache)).map_err(|e| e.to_string())?;
             let url = format!("https://github.com/{}.git", repo);
-            git_clone(&url, &cache).map_err(|e| format!("git clone 失败: {e}"))?;
+            git_clone(&url, &cache)?;
         }
         let mjson = cache.join(".claude-plugin").join("marketplace.json");
         let content = std::fs::read_to_string(&mjson)
@@ -78,8 +78,10 @@ pub(super) fn git_err(stderr: &str) -> String {
     format!("{}: {}", code, stderr.trim())
 }
 
-/// Run git clone with optional proxy and return output.
-pub(super) fn git_clone(url: &str, target: &std::path::Path) -> Result<std::process::Output, std::io::Error> {
+/// 浅克隆 git 仓库（带代理探测）。成功返回 Ok(())；git 进程非零退出或启动失败
+/// 一律经 git_err 分类为结构化错误码（NETWORK_FAILURE/REPO_NOT_FOUND/TIMEOUT/...），
+/// 供前端 ERROR_MAP 映射为可操作动作（如 REPO_NOT_FOUND → "切换市场源"）。
+pub(super) fn git_clone(url: &str, target: &std::path::Path) -> Result<(), String> {
     let mut cmd = Command::new("git");
     cmd.args(["clone", "--depth", "1"]);
     #[cfg(windows)]
@@ -93,28 +95,18 @@ pub(super) fn git_clone(url: &str, target: &std::path::Path) -> Result<std::proc
         cmd.arg(format!("https.proxy={}", proxy));
     }
 
-    cmd.arg(url).arg(target).output()
-}
-
-pub(super) fn get_remote_url(path: &std::path::Path) -> Option<String> {
-    let mut cmd = Command::new("git");
-    cmd.args(["remote", "get-url", "origin"])
-        .current_dir(path);
-    #[cfg(windows)]
-    { cmd.creation_flags(0x08000000); }
-    let output = cmd.output().ok()?;
-
-    if output.status.success() {
-        let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !url.is_empty() {
-            return Some(url);
-        }
+    let out = cmd.arg(url).arg(target).output()
+        .map_err(|e| format!("UNKNOWN_ERROR: git clone 启动失败: {e}"))?;
+    if !out.status.success() {
+        return Err(git_err(&String::from_utf8_lossy(&out.stderr)));
     }
-    None
+    Ok(())
 }
 
 // ── Task 5: cache 三级目录安装 + 版本解析 + 刷新/更新/卸载 ──
 
+/// 仅用于测试：断言 cache 三级目录布局。生产代码直接 `plugins_cache_root().join(market).join(plugin).join(version)`。
+#[cfg(test)]
 fn cache_install_path(plugins_root: &str, market: &str, plugin: &str, version: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(plugins_root).join("cache").join(market).join(plugin).join(version)
 }
@@ -160,7 +152,7 @@ fn run_git(args: &[String], cwd: &std::path::Path) -> Result<(), String> {
     cmd.args(args).current_dir(cwd);
     #[cfg(windows)] { cmd.creation_flags(0x08000000); }
     let out = cmd.output().map_err(|e| e.to_string())?;
-    if !out.status.success() { return Err(format!("git {:?} 失败: {}", args, String::from_utf8_lossy(&out.stderr))); }
+    if !out.status.success() { return Err(git_err(&String::from_utf8_lossy(&out.stderr))); }
     Ok(())
 }
 
@@ -374,7 +366,7 @@ pub async fn refresh_marketplace(source_id: String) -> Result<(), String> {
         } else {
             std::fs::create_dir_all(cache.parent().unwrap_or(&cache)).map_err(|e| e.to_string())?;
             let url = format!("https://github.com/{}.git", repo);
-            git_clone(&url, &cache).map_err(|e| format!("git clone 失败: {e}"))?;
+            git_clone(&url, &cache)?;
         }
         Ok(())
     }).await.map_err(|e| e.to_string())?
