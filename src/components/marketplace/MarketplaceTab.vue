@@ -27,6 +27,8 @@ const {
 
 const activeCategory = ref("all");
 const showHidden = ref(false);
+const sourcesRef = ref<HTMLElement | null>(null);
+const highlightSources = ref(false);
 
 onMounted(async () => {
   await fetchSources();
@@ -40,6 +42,11 @@ function handleAction(kind: string) {
       break;
     case "go-proxy-settings":
       emit("go-settings");
+      break;
+    case "go-marketplace-settings":
+      sourcesRef.value?.scrollIntoView({ behavior: "smooth", block: "start" });
+      highlightSources.value = true;
+      setTimeout(() => { highlightSources.value = false; }, 1000);
       break;
   }
 }
@@ -145,7 +152,7 @@ const enabledCount = computed(() => {
       </div>
     </div>
 
-    <div class="sources">
+    <div ref="sourcesRef" class="sources" :class="{ highlight: highlightSources }">
       <span class="lbl">源</span>
       <div
         v-for="s in sources"
@@ -367,6 +374,12 @@ const enabledCount = computed(() => {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.sources.highlight {
+  border-color: color-mix(in srgb, var(--aide-accent) 45%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--aide-accent) 25%, transparent);
+  transition: border-color .2s, box-shadow .2s;
 }
 
 .sources .lbl {

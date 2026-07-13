@@ -27,6 +27,14 @@ const ERROR_MAP: Record<string, { message: string; actions: ErrorAction["kind"][
     message: "仓库不存在或已被移除。",
     actions: ["retry", "go-marketplace-settings"],
   },
+  NPM_UNSUPPORTED: {
+    message: "npm 源插件暂不支持安装。",
+    actions: ["retry"],
+  },
+  SOURCE_TYPE_UNSUPPORTED: {
+    message: "未知的插件源类型。",
+    actions: ["retry"],
+  },
   // Push-specific errors
   REJECTED: {
     message: "推送被拒绝，本地分支落后于远程。请先拉取远程更新，或强制推送覆盖。",
