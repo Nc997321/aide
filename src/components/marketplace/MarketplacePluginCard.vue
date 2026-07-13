@@ -1,179 +1,318 @@
 <script setup lang="ts">
 import type { PluginEntry } from "../../types/marketplace";
 import { computed } from "vue";
-import { open } from "@tauri-apps/plugin-shell";
+import { useMarketplace } from "../../composables/useMarketplace";
+import { useModal } from "../../composables/useModal";
 
 const props = defineProps<{
-  plugin: PluginEntry;
-  isInstalled: boolean;
-  isInstalling: boolean;
+  entry: PluginEntry;
 }>();
 
 const emit = defineEmits<{
-  install: [entry: PluginEntry];
-  uninstall: [name: string];
+  "open-detail": [];
 }>();
 
-const isInstallable = computed(() =>
-  props.plugin.repo.startsWith("http://") || props.plugin.repo.startsWith("https://")
-);
+const {
+  getInstalled,
+  hasUpdate,
+  isInstalling,
+  installPlugin,
+  uninstallPlugin,
+  updatePlugin,
+  setEnabled,
+} = useMarketplace();
 
-const buttonLabel = computed(() => {
-  if (!isInstallable.value) return "内置";
-  if (props.isInstalling && props.isInstalled) return "卸载中...";
-  if (props.isInstalling) return "安装中...";
-  if (props.isInstalled) return "已安装";
-  return "安装";
+const installed = computed(() => getInstalled(props.entry.marketName, props.entry.name));
+
+const statusClass = computed(() => {
+  if (installed.value && installed.value.enabled) return "on";
+  return "off";
 });
 
-const buttonClass = computed(() => {
-  if (!isInstallable.value) return "btn-builtin";
-  if (props.isInstalling) return "btn-disabled";
-  if (props.isInstalled) return "btn-installed";
-  return "btn-install";
+const statusText = computed(() => {
+  if (installed.value && installed.value.enabled) return "已启用";
+  if (installed.value && !installed.value.enabled) return "已禁用";
+  return "未安装";
 });
 
-function handleClick() {
-  if (props.isInstalling || !isInstallable.value) return;
-  if (props.isInstalled) {
-    emit("uninstall", props.plugin.name);
-  } else {
-    emit("install", props.plugin);
+const sourceLabel = computed(() => {
+  switch (props.entry.sourceId) {
+    case "claude-plugins-official":
+      return "官方";
+    case "claude-community":
+      return "社区";
+    default:
+      return props.entry.sourceId;
   }
+});
+
+const badgeClass = computed(() => {
+  return props.entry.sourceId === "claude-plugins-official" ? "official" : "community";
+});
+
+const caveatText = computed(() => {
+  const mapComp: Record<string, string> = {
+    lsp_servers: "LSP",
+    output_styles: "输出样式",
+    themes: "主题",
+    monitors: "后台监控",
+    mcp_servers: "MCP",
+  };
+  return (
+    props.entry.unsupported.map((c) => mapComp[c] || c).join("、") +
+    " 在 Aide 中不可用"
+  );
+});
+
+async function onInstall() {
+  if (props.entry.sourceId === "claude-community") {
+    const ok = await useModal().confirm(
+      "安装社区插件",
+      "此插件将执行代码，请确认信任来源。",
+    );
+    if (!ok) return;
+  }
+  installPlugin(props.entry);
 }
 </script>
 
 <template>
-  <div class="plugin-card" :class="{ installed: isInstalled }">
-    <div class="card-body">
-      <div class="card-header">
-        <span class="plugin-name">{{ plugin.name }}</span>
+  <div class="card">
+    <div>
+      <div class="top">
+        <span class="name" @click="emit('open-detail')">{{ entry.displayName || entry.name }}</span>
+        <span class="ver">v{{ entry.version || "—" }}</span>
+        <span class="badge" :class="badgeClass">{{ sourceLabel }}</span>
+        <span v-if="entry.category" class="cat">{{ entry.category }}</span>
       </div>
-      <div v-if="plugin.description" class="plugin-desc">{{ plugin.description }}</div>
-      <div v-if="plugin.homepage" class="plugin-link">
-        <button class="link-btn" @click.stop="open(plugin.homepage)">查看详情 ↗</button>
+      <div class="desc">{{ entry.description }}</div>
+      <span v-if="entry.availability === 'mixed'" class="caveat">{{ caveatText }}</span>
+      <span v-else-if="entry.availability === 'unavailable'" class="caveat unavailable-caveat">在 Aide 中不可用</span>
+    </div>
+    <div class="actions">
+      <div class="status" :class="statusClass"><span class="d"></span>{{ statusText }}</div>
+      <div class="btns">
+        <button
+          v-if="hasUpdate(entry)"
+          class="btn"
+          @click="updatePlugin(entry)"
+        >更新</button>
+        <button
+          v-if="!installed"
+          class="btn primary"
+          :disabled="entry.availability === 'unavailable' || isInstalling(entry.name)"
+          @click="onInstall"
+        >安装</button>
+        <button
+          v-else-if="installed.enabled"
+          class="btn"
+          @click="setEnabled({ market: entry.marketName, name: entry.name }, false)"
+        >禁用</button>
+        <button
+          v-else
+          class="btn primary"
+          @click="setEnabled({ market: entry.marketName, name: entry.name }, true)"
+        >启用</button>
+        <button
+          v-if="installed"
+          class="btn danger"
+          @click="uninstallPlugin({ market: entry.marketName, name: entry.name })"
+        >卸载</button>
       </div>
     </div>
-    <button
-      :class="['install-btn', buttonClass]"
-      :disabled="isInstalling"
-      @click="handleClick"
-    >
-      {{ buttonLabel }}
-    </button>
   </div>
 </template>
 
 <style scoped>
-.plugin-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px;
-  border-radius: 8px;
-  transition: background 0.15s ease;
-}
-
-.plugin-card:hover {
+.card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 18px;
   background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-md);
+  padding: 14px 16px;
+  margin-top: 10px;
+  transition: border-color 0.15s, background 0.15s;
 }
 
-.plugin-card.installed {
-  border-left: 2px solid var(--aide-success);
-  padding-left: 10px;
+.card:hover {
+  border-color: var(--aide-border);
+  background: var(--aide-surface-hover);
 }
 
-.card-body {
-  flex: 1;
-  min-width: 0;
+.card .top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-.card-header {
-  margin-bottom: 4px;
-}
-
-.plugin-name {
-  font-size: 13px;
-  font-weight: 500;
+.card .name {
+  font-size: 14px;
+  font-weight: 600;
   color: var(--aide-text-primary);
+  cursor: pointer;
 }
 
-.plugin-desc {
-  font-size: 12px;
+.card .ver {
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--aide-text-muted);
+}
+
+.badge {
+  font-family: inherit;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  padding: 1.5px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--aide-border);
   color: var(--aide-text-secondary);
-  line-height: 1.45;
-  margin-bottom: 4px;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
-.plugin-link {
-  font-size: 11px;
-}
-
-.link-btn {
-  background: none;
-  border: none;
+.badge.official {
   color: var(--aide-accent);
-  cursor: pointer;
-  padding: 0;
+  border-color: color-mix(in srgb, var(--aide-accent) 45%, transparent);
+  background: var(--aide-accent-subtle);
+}
+
+.badge.community {
+  color: var(--aide-info);
+  border-color: color-mix(in srgb, var(--aide-info) 35%, transparent);
+  background: color-mix(in srgb, var(--aide-info) 10%, transparent);
+}
+
+.cat {
+  font-size: 10.5px;
+  color: var(--aide-text-secondary);
+  background: var(--aide-bg-deep);
+  border: 1px solid var(--aide-border);
+  padding: 1.5px 7px;
+  border-radius: 4px;
+}
+
+.card .desc {
+  color: var(--aide-text-secondary);
+  font-size: 12.5px;
+  margin-top: 6px;
+  max-width: 62ch;
+  line-height: 1.5;
+}
+
+.caveat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
   font-size: 11px;
-  font-family: inherit;
+  color: var(--aide-warning);
+  background: color-mix(in srgb, var(--aide-warning) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-warning) 30%, transparent);
+  padding: 2px 8px;
+  border-radius: 4px;
 }
 
-.link-btn:hover {
-  text-decoration: underline;
+.caveat::before {
+  content: "▸";
+  font-size: 14px;
 }
 
-/* ── Install button ── */
+.caveat.unavailable-caveat {
+  color: var(--aide-text-muted);
+  background: color-mix(in srgb, var(--aide-text-muted) 10%, transparent);
+  border-color: color-mix(in srgb, var(--aide-text-muted) 30%, transparent);
+}
 
-.install-btn {
-  flex-shrink: 0;
-  padding: 4px 12px;
-  border-radius: var(--aide-radius-sm);
-  font-size: 12px;
-  cursor: pointer;
-  font-family: inherit;
-  transition: all 0.12s;
+.caveat.unavailable-caveat::before {
+  content: "▸";
+  font-size: 14px;
+}
+
+.card .actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 8px;
+}
+
+.status {
+  font-size: 11.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   white-space: nowrap;
 }
 
-.btn-install {
-  background: var(--aide-accent);
-  border: 1px solid var(--aide-accent);
-  color: var(--aide-text-on-accent);
+.status .d {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
 }
 
-.btn-install:hover {
-  filter: brightness(1.15);
+.status.on .d {
+  background: var(--aide-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--aide-success) 16%, transparent);
 }
 
-.btn-installed {
-  background: transparent;
-  border: 1px solid var(--aide-success);
+.status.off .d {
+  background: var(--aide-text-muted);
+}
+
+.status.on {
   color: var(--aide-success);
 }
 
-.btn-installed:hover {
-  background: color-mix(in srgb, var(--aide-success) 10%, transparent);
+.status.off {
+  color: var(--aide-text-muted);
+}
+
+.btns {
+  display: flex;
+  gap: 8px;
+}
+
+.btn {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 14px;
+  border-radius: var(--aide-radius-sm);
+  cursor: pointer;
+  border: 1px solid var(--aide-border);
+  background: var(--aide-bg-raised);
+  color: var(--aide-text-primary);
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.btn:hover {
+  background: var(--aide-surface-hover);
+  border-color: var(--aide-text-muted);
+}
+
+.btn.primary {
+  background: var(--aide-accent);
+  border-color: var(--aide-accent);
+  color: var(--aide-text-on-accent);
+}
+
+.btn.primary:hover {
+  background: var(--aide-accent-hover);
+}
+
+.btn.danger {
   color: var(--aide-danger);
+  border-color: color-mix(in srgb, var(--aide-danger) 30%, transparent);
+}
+
+.btn.danger:hover {
+  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
   border-color: var(--aide-danger);
 }
 
-.btn-disabled {
-  background: transparent;
-  border: 1px solid var(--aide-surface-hover);
-  color: var(--aide-text-muted);
+.btn[disabled] {
+  opacity: 0.45;
   cursor: not-allowed;
-}
-
-.btn-builtin {
-  background: transparent;
-  border: 1px solid var(--aide-surface-default);
-  color: var(--aide-text-muted);
-  font-size: 11px;
-  cursor: default;
 }
 </style>
