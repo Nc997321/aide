@@ -1,4 +1,28 @@
+use serde::Serialize;
 use serde_json::Value;
+
+// ── SourceInfo for fixed marketplace sources ──
+
+#[derive(Debug, Serialize, Clone)]
+pub struct SourceInfo {
+    pub id: String,
+    pub name: String,
+    pub repo: String,
+    pub enabled: bool,
+}
+
+/// 固定预置市场源（不可自加）。(source_id, owner/repo, 默认市场名, 默认启用)
+pub const FIXED_SOURCES: &[(&str, &str, &str, bool)] = &[
+    ("claude-plugins-official", "anthropics/claude-plugins-official", "claude-plugins-official", true),
+    ("claude-community", "anthropics/claude-plugins-community", "claude-community", true),
+];
+
+pub fn default_market_name(source_id: &str) -> Option<&'static str> {
+    FIXED_SOURCES.iter().find(|(id, _, _, _)| *id == source_id).map(|(_, _, n, _)| *n)
+}
+pub fn fixed_repo(source_id: &str) -> Option<&'static str> {
+    FIXED_SOURCES.iter().find(|(id, _, _, _)| *id == source_id).map(|(_, r, _, _)| *r)
+}
 
 // ── Raw deserialization types for official marketplace.json ──
 // source can be:

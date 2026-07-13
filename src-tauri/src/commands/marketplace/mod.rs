@@ -49,6 +49,10 @@ pub fn marketplace_cache_dir() -> PathBuf {
     super::our_config_dir().join("marketplace-cache")
 }
 
+pub fn source_cache_dir(source_id: &str) -> PathBuf {
+    marketplace_cache_dir().join(source_id)
+}
+
 // ── Commands ──
 
 /// 同步命令 + `git clone` 子进程 + 网络 = 理论上可无限期阻塞主线程（网络慢/大
@@ -248,4 +252,31 @@ pub fn list_installed_plugins() -> Result<Vec<InstalledPlugin>, String> {
     }
 
     Ok(plugins)
+}
+
+#[tauri::command]
+pub fn list_marketplace_sources() -> Result<Vec<sources::SourceInfo>, String> {
+    let s = crate::commands::settings::load_config();
+    let enabled: Vec<String> = s.get("settings").and_then(|x| x["enabledMarketplaces"].as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let list = sources::FIXED_SOURCES.iter().map(|(id, repo, name, def)| {
+        let never_set = enabled.is_empty();
+        let on = enabled.iter().any(|e| e == id) || (never_set && *def);
+        sources::SourceInfo { id: id.to_string(), name: name.to_string(), repo: repo.to_string(), enabled: on }
+    }).collect();
+    Ok(list)
+}
+
+#[tauri::command]
+pub fn set_marketplace_enabled(source_id: String, enabled: bool) -> Result<(), String> {
+    crate::commands::settings::with_config_mut(|cfg| {
+        let settings = cfg["settings"].as_object_mut().ok_or("settings missing")?;
+        let arr = settings.entry("enabledMarketplaces").or_insert(serde_json::json!([]));
+        let a = arr.as_array_mut().ok_or("enabledMarketplaces not array")?;
+        let has = a.iter().any(|v| v.as_str() == Some(&source_id));
+        if enabled && !has { a.push(serde_json::json!(source_id)); }
+        if !enabled { a.retain(|v| v.as_str() != Some(&source_id)); }
+        Ok(())
+    })
 }

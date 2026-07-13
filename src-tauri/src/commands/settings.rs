@@ -124,6 +124,12 @@ pub struct AppSettings {
     /// 零配置开箱即用；切 http 走 Ollama / OpenAI 兼容云端。
     #[serde(default)]
     pub codegraph_embedder: CodeGraphEmbedderConfig,
+    /// 已启用的固定市场源 source_id 列表（默认空；前端首次进入可写默认两条）。
+    #[serde(default)]
+    pub enabled_marketplaces: Vec<String>,
+    /// 已装插件的启用开关：key = "<plugin>@<market>"。
+    #[serde(default)]
+    pub enabled_plugins: std::collections::BTreeMap<String, bool>,
 }
 
 fn default_font_size() -> u32 { 14 }
@@ -149,6 +155,8 @@ impl Default for AppSettings {
             recent_limit: default_recent_limit(),
             pane_layouts: Value::Null,
             codegraph_embedder: CodeGraphEmbedderConfig::default(),
+            enabled_marketplaces: Vec::new(),
+            enabled_plugins: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -345,6 +353,22 @@ mod tests {
         let json = r#"{"open_with_extensions": [".py"]}"#;
         let s: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(s.open_with_extensions, vec![".py".to_string()]);
+    }
+
+    /// 市场源启用字段 round-trip + 缺省回填。
+    #[test]
+    fn marketplace_enabled_fields_round_trip() {
+        let json = r#"{"fontSize":14,"enabledMarketplaces":["claude-plugins-official"],"enabledPlugins":{"github@claude-plugins-official":true}}"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.enabled_marketplaces, vec!["claude-plugins-official"]);
+        assert_eq!(s.enabled_plugins.get("github@claude-plugins-official"), Some(&true));
+        let out = serde_json::to_string(&s).unwrap();
+        assert!(out.contains("\"enabledMarketplaces\""), "{out}");
+        assert!(out.contains("\"enabledPlugins\""), "{out}");
+        // 缺字段回填默认
+        let s2: AppSettings = serde_json::from_str(r#"{"fontSize":14}"#).unwrap();
+        assert!(s2.enabled_marketplaces.is_empty());
+        assert!(s2.enabled_plugins.is_empty());
     }
 
     /// CodeGraph embedder 配置随 AppSettings 落盘/读取，camelCase 一致；缺省

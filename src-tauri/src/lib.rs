@@ -246,6 +246,8 @@ pub fn run() {
             commands::marketplace::install_plugin,
             commands::marketplace::uninstall_plugin,
             commands::marketplace::list_installed_plugins,
+            commands::marketplace::list_marketplace_sources,
+            commands::marketplace::set_marketplace_enabled,
             // Run configuration commands
             commands::run_configs::list_run_configs,
             commands::run_configs::save_run_configs,
