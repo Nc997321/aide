@@ -110,8 +110,6 @@ const visiblePlugins = computed(() => {
   return result;
 });
 
-const activeRepo = computed(() => sources.value.find((s) => s.enabled)?.repo ?? "");
-
 const enabledCount = computed(() => {
   let count = 0;
   for (const [, plugin] of installedPlugins.value) {
@@ -143,7 +141,6 @@ const enabledCount = computed(() => {
       <div class="row">
         <div>
           <h1>插件市场</h1>
-          <div class="sub">从固定源发现插件。安装后，skills / agents / hooks / MCP 在会话中生效。</div>
         </div>
         <div class="search">
           <span class="ic">⌕</span>
@@ -167,7 +164,6 @@ const enabledCount = computed(() => {
         <span class="refr" v-tooltip="'刷新此源'" @click.stop="refreshSource(s.id)">⟳</span>
         <span class="switch" v-tooltip="'开/关'" @click.stop="setSourceEnabled(s.id, !s.enabled)"></span>
       </div>
-      <span class="src-hint">固定源，不可自加 · <code>{{ activeRepo }}</code></span>
     </div>
 
     <div class="list">
@@ -318,12 +314,6 @@ const enabledCount = computed(() => {
   font-size: 17px;
   font-weight: 600;
   letter-spacing: 0.01em;
-}
-
-.main-head .sub {
-  color: var(--aide-text-secondary);
-  font-size: 12px;
-  margin-top: 3px;
 }
 
 /* ── Search ── */
@@ -491,17 +481,6 @@ const enabledCount = computed(() => {
 .chip.on .switch::after {
   left: 15px;
   background: var(--aide-text-on-accent);
-}
-
-.src-hint {
-  margin-left: auto;
-  color: var(--aide-text-muted);
-  font-size: 11.5px;
-}
-
-.src-hint code {
-  font-family: inherit;
-  color: var(--aide-text-secondary);
 }
 
 /* ── Plugin list ── */
