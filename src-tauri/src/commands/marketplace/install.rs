@@ -406,7 +406,7 @@ pub async fn list_installed_plugins() -> Result<Vec<crate::commands::marketplace
                 let key = format!("{plugin}@{market}");
                 let installed_at = std::fs::metadata(&latest).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
                 out.push(crate::commands::marketplace::InstalledPlugin {
-                    name: plugin.clone(), market: market.clone(), version: ver, display_name: display, description: desc, author, path: latest.to_string_lossy().to_string(), installed_at, enabled: *enabled_map.get(&key).unwrap_or(&false),
+                    name: plugin.clone(), market: market.clone(), version: ver, display_name: display, description: desc, author, path: latest.to_string_lossy().to_string(), installed_at, enabled: super::plugin_enabled(&enabled_map, &key),
                 });
             }
         }

@@ -60,7 +60,18 @@ pub fn source_cache_dir(source_id: &str) -> PathBuf {
 #[derive(Serialize)]
 struct EnabledPluginEntry { name: String, marketplace: String, path: String }
 
-/// 扫 cache 最新版本 + 过滤 enabled=true → 写 enabled-plugins.json
+/// 一个已安装插件是否启用。键不存在 = 启用（与安装时 `default_enabled.unwrap_or(true)`
+/// 对齐：插件出现在 cache 里即视为已安装且启用，除非用户显式置 false）。
+///
+/// 这解决了「CLI/SDK 直接装进 cache 的插件在 Aide 里显示已禁用」的问题——它们从未经
+/// Aide 的 install 按钮写入 enabledPlugins 映射，旧逻辑用 `unwrap_or(false)`/`!= Some(&true)`
+/// 把「不在映射里」当成禁用，既与安装默认启用矛盾，又导致这些插件不被注入 sidecar。
+/// `list_installed_plugins` 与 `write_enabled_plugins_manifest` 共用此判定，保持一致。
+fn plugin_enabled(enabled: &std::collections::BTreeMap<String, bool>, key: &str) -> bool {
+    enabled.get(key) != Some(&false)
+}
+
+/// 扫 cache 最新版本 + 过滤启用项 → 写 enabled-plugins.json
 pub fn write_enabled_plugins_manifest() -> Result<(), String> {
     let cfg = crate::commands::settings::load_config();
     let enabled: std::collections::BTreeMap<String, bool> = cfg.get("settings")
@@ -76,7 +87,7 @@ pub fn write_enabled_plugins_manifest() -> Result<(), String> {
                 for p in plugins.flatten() {
                     let plugin = p.file_name().to_string_lossy().to_string();
                     let key = format!("{plugin}@{market}");
-                    if enabled.get(&key) != Some(&true) { continue; }
+                    if !plugin_enabled(&enabled, &key) { continue; }
                     if let Some(latest) = install::latest_version_dir(&p.path()) {
                         entries.push(EnabledPluginEntry {
                             name: plugin.clone(),
@@ -191,6 +202,26 @@ mod tests {
     fn manifest_path_under_config_dir() {
         let p = enabled_plugins_manifest_path();
         assert!(p.to_string_lossy().contains("enabled-plugins.json"));
+    }
+
+    /// 回归：CLI/SDK 直接装进 cache 的插件未经 Aide install 按钮写入 enabledPlugins 映射，
+    /// 旧逻辑 `unwrap_or(false)` 把「不在映射里」当成禁用。现在键不存在 = 启用。
+    #[test]
+    fn plugin_enabled_treats_absent_as_enabled() {
+        let empty: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
+        // 空 map（CLI 装的、未经 Aide install）→ 启用
+        assert!(plugin_enabled(&empty, "superpowers@claude-plugins-official"));
+        // 显式 true → 启用
+        let mut m = std::collections::BTreeMap::new();
+        m.insert("a@m".into(), true);
+        assert!(plugin_enabled(&m, "a@m"));
+        // 显式 false → 禁用（用户手动禁用）
+        m.insert("a@m".into(), false);
+        assert!(!plugin_enabled(&m, "a@m"));
+        // 别的键存在、本键缺失 → 仍启用
+        m.remove("a@m");
+        m.insert("other@m".into(), false);
+        assert!(plugin_enabled(&m, "a@m"));
     }
 
     /// 回归：关闭一个默认启用的源不应让其他默认源跟着关，也不应回弹为开。
