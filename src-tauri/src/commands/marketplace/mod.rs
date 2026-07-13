@@ -38,21 +38,34 @@ pub struct InstalledPlugin {
     pub enabled: bool,
 }
 
+/// Claude Agent SDK 专属产物根目录：`~/.claude-code-desktop/claude-agent-sdk/`。
+///
+/// 把 Claude 专属的插件/市场缓存/启用清单收拢到这个命名空间下，与 Aide 自身的
+/// 配置（config.json、diagnostics、notifications 等）分离。为后续接入其他 agent
+/// （OpenAI/Gemini 等）打底——每个 agent 各占一个同级子目录，互不干扰。
+/// Agent SDK 经 `options.plugins=[{type:"local",path:<绝对路径>}]` 显式注入加载，
+/// **不自动扫描任何固定目录**（见 docs/reference/agent-sdk-plugins.md），故路径放哪儿都行。
+fn claude_agent_sdk_dir() -> PathBuf {
+    super::our_config_dir().join("claude-agent-sdk")
+}
+
 /// 桥接清单路径：sidecar 经 env `AIDE_ENABLED_PLUGINS_FILE` 读它。
+/// `~/.claude-code-desktop/claude-agent-sdk/enabled-plugins.json`
 pub fn enabled_plugins_manifest_path() -> PathBuf {
-    super::our_config_dir().join("enabled-plugins.json")
+    claude_agent_sdk_dir().join("enabled-plugins.json")
 }
 
-/// 已安装插件本体所在目录：Aide 自己的配置目录下（`~/.claude-code-desktop/plugins/`），
-/// **不是** Claude CLI 的 `~/.claude/plugins/`。这样 Aide 不依赖 CLI 是否安装，
+/// 已安装插件本体所在目录：`~/.claude-code-desktop/claude-agent-sdk/plugins/`。
+/// **不是** Claude CLI 的 `~/.claude/plugins/`——Aide 不依赖 CLI 是否安装，
 /// 也避免和 CLI 的 `installed_plugins.json` 账本混用同一物理目录导致双加载。
-/// SDK 经 `options.plugins` 显式注入绝对路径加载，不关心目录位置。
 pub fn plugins_dir() -> PathBuf {
-    super::our_config_dir().join("plugins")
+    claude_agent_sdk_dir().join("plugins")
 }
 
+/// 市场源仓库克隆目录（marketplace.json 来源）：
+/// `~/.claude-code-desktop/claude-agent-sdk/marketplace-cache/`
 pub fn marketplace_cache_dir() -> PathBuf {
-    super::our_config_dir().join("marketplace-cache")
+    claude_agent_sdk_dir().join("marketplace-cache")
 }
 
 pub fn source_cache_dir(source_id: &str) -> PathBuf {

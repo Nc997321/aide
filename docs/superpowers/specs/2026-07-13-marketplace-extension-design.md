@@ -42,7 +42,7 @@
 
 ### 3.2 安装与启用语义
 
-- **安装** = 取插件源（git clone / 稀疏克隆 / 从源 cache 拷贝）到 `~/.claude/plugins/cache/<市场>/<插件>/<版本>/`。安装后的启用状态尊重 `defaultEnabled`（优先级：marketplace 条目 > 插件 `plugin.json`，默认 true）——官方有些插件声明 `defaultEnabled:false`，装上即为「已禁用」，由用户主动启用，避免无谓的上下文成本。
+- **安装** = 取插件源（git clone / 稀疏克隆 / 从源 cache 拷贝）到 `~/.claude-code-desktop/claude-agent-sdk/plugins/cache/<市场>/<插件>/<版本>/`（Claude 专属产物收拢在 `claude-agent-sdk/` 命名空间下，不蹭 CLI 的 `~/.claude/plugins/`）。安装后的启用状态尊重 `defaultEnabled`（优先级：marketplace 条目 > 插件 `plugin.json`，默认 true）——官方有些插件声明 `defaultEnabled:false`，装上即为「已禁用」，由用户主动启用，避免无谓的上下文成本。
 - **启用/禁用** = 文件留在磁盘，只切是否加载（**省上下文成本**，对应官方 `defaultEnabled:false` 语义）。变更在**下一次消息往返**生效，不打断当前对话（v1 有意简化）。
 - **卸载** = 删 cache 目录 + 清启用键。
 - 安装官方插件（用户原始诉求）的落点：进市场页，「Anthropic 官方」默认就开，直接看到官方插件，点安装即可——无需 CLI、无需自加源。
@@ -98,8 +98,8 @@ commands/marketplace/
 └── manifest.rs  // plugin.json 读取（组件清单用于 UI「将安装」展示 + 可用性判断）
 ```
 
-- `marketplace-cache` 由单目录改为按源名分目录 `~/.claude-code-desktop/marketplace-cache/<source-id>/`（支持多源并存）。
-- 插件落 `~/.claude/plugins/cache/<market-name>/<plugin>/<version>/`（`market-name` 取自 `marketplace.json.name`，与 CLI 一致）。
+- `marketplace-cache` 由单目录改为按源名分目录 `~/.claude-code-desktop/claude-agent-sdk/marketplace-cache/<source-id>/`（支持多源并存）。
+- 插件落 `~/.claude-code-desktop/claude-agent-sdk/plugins/cache/<market-name>/<plugin>/<version>/`（`market-name` 取自 `marketplace.json.name`；与 CLI 的 `~/.claude/plugins/` 物理隔离，避免双加载）。
 - 所有 `git` spawn 保留 `CREATE_NO_WINDOW (0x08000000)` + 代理检测（`commands/proxy.rs`）。
 - 重 IO 命令改 **async + spawn_blocking**（遵循 CLAUDE.md「重 IO 一律 async」红线）：`fetch_marketplace` / `refresh_marketplace` / `install_plugin` / `update_plugin` / `uninstall_plugin` / `list_installed_plugins`。`State` 注册成 `Arc<T>`，闭包内 `state.inner().clone()`。纯设置/内存命令（`list_marketplace_sources` / `set_marketplace_enabled` / `set_plugin_enabled`）保持同步。async 命令不埋 `trace_command`（按 CLAUDE.md 规矩）。
 
@@ -140,7 +140,7 @@ commands/marketplace/
 
 ### 4.3 sidecar 桥接
 
-- Rust 维护 `~/.claude-code-desktop/enabled-plugins.json`（内容：`[{name, marketplace, path}]`），在任意 enable/disable/install/uninstall/update 后**原子重写**。spawn sidecar 时设 env `AIDE_ENABLED_PLUGINS_FILE` 指向它。
+- Rust 维护 `~/.claude-code-desktop/claude-agent-sdk/enabled-plugins.json`（内容：`[{name, marketplace, path}]`），在任意 enable/disable/install/uninstall/update 后**原子重写**。spawn sidecar 时设 env `AIDE_ENABLED_PLUGINS_FILE` 指向它。
 - `agent-sidecar/src/index.ts` 每次 `query()` 构造前读该文件 → `fs.existsSync(path)` 过滤失效项 → 构建 `options.plugins: [{type:"local", path}]` 传给 SDK。
 - 保留 `skills:"all"`（负责非插件的 user/project skills）。
 - **实现期需验证**：`skills:"all"` 与 `options.plugins` 是否对插件 skills 双重计数；若重复，调整（二选一或依赖 SDK 去重）。
