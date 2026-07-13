@@ -2,6 +2,7 @@ import { ref } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { api } from "../api";
 import { useWorkbenchTerminal } from "./useWorkbenchTerminal";
+import { useWorkspaces } from "./useWorkspaces";
 import type { RunConfig } from "../types";
 
 export type RunStatus = "idle" | "running" | "stopped" | "crashed";
@@ -28,6 +29,8 @@ async function ensureExitListener(): Promise<void> {
 
 export function useRunProcess() {
   const wb = useWorkbenchTerminal();
+  const { activeKey } = useWorkspaces();
+  function currentWs(): string { return activeKey.value ?? ""; }
 
   async function start(config: RunConfig): Promise<void> {
     await ensureExitListener();
@@ -39,7 +42,7 @@ export function useRunProcess() {
     // Show workbench and attach a terminal tab for the spawned PTY
     wb.visible.value = true;
     await new Promise<void>(r => setTimeout(r, 80));
-    wb.attachSession(config.cwd, sessionId, config.name);
+    wb.attachSession(currentWs(), sessionId, config.name);
   }
 
   async function stop(): Promise<void> {
@@ -60,7 +63,7 @@ export function useRunProcess() {
       runStatus.value = "running";
 
       wb.visible.value = true;
-      wb.attachSession(config.cwd, sessionId, config.name, true /* clearFirst */);
+      wb.attachSession(currentWs(), sessionId, config.name, true /* clearFirst */);
     } finally {
       isRestarting = false;
     }
