@@ -126,19 +126,35 @@ pub async fn set_plugin_enabled(marketplace: String, plugin: String, enabled: bo
 
 // ── Commands ──
 
+/// 纯逻辑：据配置状态计算每个固定源的启用状态（与 IO 分离以便单测）。
+///
+/// `configured=false`（`enabledMarketplaces` 键不存在，从未配置）→ 各源取默认值；
+/// `configured=true`（键存在，用户已显式配置）→ 按显式列表，空列表=全关。
+///
+/// 用「键是否存在」而非「数组是否为空」区分这两种状态——否则关闭一个默认启用的
+/// 源后数组仍空，会被误判回「从未配置」而回弹为开。
+fn resolve_source_states(configured: bool, explicit: &[String]) -> Vec<bool> {
+    sources::FIXED_SOURCES.iter().map(|(id, _, _, def)| {
+        if configured { explicit.iter().any(|e| e == id) } else { *def }
+    }).collect()
+}
+
 #[tauri::command]
 pub async fn list_marketplace_sources() -> Result<Vec<sources::SourceInfo>, String> {
     // 读 config 文件 → spawn_blocking，不占主线程
     tokio::task::spawn_blocking(|| -> Result<Vec<sources::SourceInfo>, String> {
         let s = crate::commands::settings::load_config();
-        let enabled: Vec<String> = s.get("settings").and_then(|x| x["enabledMarketplaces"].as_array())
+        let settings = s.get("settings");
+        // 键存在 = 已配置（按字面量，空=全关）；键不存在 = 从未配置（取默认）
+        let configured = settings.and_then(|x| x.get("enabledMarketplaces")).is_some();
+        let explicit: Vec<String> = settings.and_then(|x| x["enabledMarketplaces"].as_array())
             .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default();
-        let list = sources::FIXED_SOURCES.iter().map(|(id, repo, name, def)| {
-            let never_set = enabled.is_empty();
-            let on = enabled.iter().any(|e| e == id) || (never_set && *def);
-            sources::SourceInfo { id: id.to_string(), name: name.to_string(), repo: repo.to_string(), enabled: on }
-        }).collect();
+        let states = resolve_source_states(configured, &explicit);
+        let list = sources::FIXED_SOURCES.iter().zip(states.into_iter())
+            .map(|((id, repo, name, _), on)| sources::SourceInfo {
+                id: id.to_string(), name: name.to_string(), repo: repo.to_string(), enabled: on,
+            }).collect();
         Ok(list)
     }).await.map_err(|e| e.to_string())?
 }
@@ -157,8 +173,17 @@ pub async fn set_marketplace_enabled(source_id: String, enabled: bool) -> Result
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         crate::commands::settings::with_config_mut(|cfg| {
             let settings = cfg["settings"].as_object_mut().ok_or("settings missing")?;
+            // 首次配置（键此前不存在）→ 先用默认启用源播种，再应用本次显式选择。
+            // 否则关闭一个默认启用的源时，它从未入表，retain 无效，数组仍空，
+            // list_marketplace_sources 会按「从未配置」把所有默认源重新点亮。
+            let first_config = !settings.contains_key("enabledMarketplaces");
             let arr = settings.entry("enabledMarketplaces").or_insert(serde_json::json!([]));
             let a = arr.as_array_mut().ok_or("enabledMarketplaces not array")?;
+            if first_config {
+                for (id, _, _, def) in sources::FIXED_SOURCES.iter() {
+                    if *def { a.push(serde_json::json!(id)); }
+                }
+            }
             let has = a.iter().any(|v| v.as_str() == Some(&source_id));
             if enabled && !has { a.push(serde_json::json!(source_id)); }
             if !enabled { a.retain(|v| v.as_str() != Some(&source_id)); }
@@ -174,5 +199,33 @@ mod tests {
     fn manifest_path_under_config_dir() {
         let p = enabled_plugins_manifest_path();
         assert!(p.to_string_lossy().contains("enabled-plugins.json"));
+    }
+
+    /// 回归：关闭一个默认启用的源不应让其他默认源跟着关，也不应回弹为开。
+    /// 根因曾是把「数组为空」当作「从未配置」，导致关闭默认源后 list 仍返回开。
+    #[test]
+    fn source_enabled_resolution_distinguishes_unconfigured_from_all_off() {
+        // 两个固定源都默认开
+        let official = "claude-plugins-official";
+        let community = "claude-community";
+        assert!(sources::FIXED_SOURCES.iter().any(|(id, _, _, def)| *id == official && *def));
+        assert!(sources::FIXED_SOURCES.iter().any(|(id, _, _, def)| *id == community && *def));
+
+        // 从未配置（键不存在）→ 取默认：两者都开
+        let s = resolve_source_states(false, &[]);
+        assert_eq!(s, vec![true, true]);
+
+        // 首次配置播种后关闭 community → 显式列表只剩 official
+        let explicit: Vec<String> = vec![official.to_string()];
+        let s = resolve_source_states(true, &explicit);
+        assert_eq!(s, vec![true, false], "official on, community off");
+
+        // 全部显式关闭 → 空列表，但已配置 → 全关（不回弹为默认开）
+        let s = resolve_source_states(true, &[]);
+        assert_eq!(s, vec![false, false], "configured+empty = all off, not defaults");
+
+        // 重新只开 official
+        let s = resolve_source_states(true, &vec![official.to_string()]);
+        assert_eq!(s, vec![true, false]);
     }
 }
