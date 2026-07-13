@@ -242,7 +242,7 @@ pub fn run() {
             commands::provider::set_system_default_model_mappings,
             commands::provider::refresh_system_default_models,
             // Marketplace commands
-            commands::marketplace::fetch_marketplace,
+            commands::marketplace::install::fetch_marketplace,
             commands::marketplace::install_plugin,
             commands::marketplace::uninstall_plugin,
             commands::marketplace::list_installed_plugins,

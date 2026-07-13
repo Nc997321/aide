@@ -213,4 +213,13 @@ mod tests {
         assert!(m.plugins[0].skills.is_none());
         assert!(m.plugins[1].skills.is_some() && m.plugins[1].lsp_servers.is_some());
     }
+
+    #[test]
+    fn parses_real_official_entry_shape() {
+        let j = r#"{"name":"claude-plugins-official","owner":{"name":"Anthropic"},"plugins":[
+          {"name":"agent-sdk-dev","source":"./plugins/agent-sdk-dev","category":"development","homepage":"x"}]}"#;
+        let m = parse_marketplace_json(j).unwrap();
+        assert_eq!(m.plugins[0].category.as_deref(), Some("development"));
+        assert!(matches!(m.plugins[0].source.as_ref().unwrap(), RawSource::Relative(s) if s=="./plugins/agent-sdk-dev"));
+    }
 }
