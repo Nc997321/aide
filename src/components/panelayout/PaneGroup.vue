@@ -98,6 +98,7 @@ function onNewTab() {
       @stop="stopSession"
     />
     <ChatPanel
+      :focused="focused"
       :session-id="activeTab?.sessionId ?? null"
       :workspace-path="effectiveWorkspacePath"
       :messages="messages"

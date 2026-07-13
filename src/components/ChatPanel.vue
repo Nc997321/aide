@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, computed, onMounted } from "vue";
+import { ref, watch, nextTick, computed, onMounted, onUnmounted } from "vue";
 import type { ComputedRef } from "vue";
 import ChatMessage from "./ChatMessage.vue";
 import TaskListPanel from "./TaskListPanel.vue";
@@ -19,6 +19,7 @@ import { useSessionProviders } from "@/composables/useSessionProviders";
 import type { ProviderConfig } from "@/types";
 import { useQuickActions } from "@/composables/useQuickActions";
 import type { QuickAction } from "@/composables/useQuickActions";
+import { setChatPaneWidth } from "@/composables/useChatPaneWidth";
 
 const props = defineProps<{
   sessionId: string | null;
@@ -39,6 +40,7 @@ const props = defineProps<{
    *  不是浮层，见 PermissionDialog.vue 顶部注释。 */
   permission?: PermissionRequest | null;
   permissionQueueCount?: number;
+  focused?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -49,6 +51,23 @@ const emit = defineEmits<{
   "remove-queued": [index: number];
   "respond-permission": [id: string, approved: boolean, always?: boolean, answers?: Record<string, string>];
 }>();
+
+const rootEl = ref<HTMLElement | null>(null);
+let widthObserver: ResizeObserver | null = null;
+
+function reportWidth() {
+  if (props.focused && rootEl.value) setChatPaneWidth(rootEl.value.clientWidth);
+}
+
+onMounted(() => {
+  reportWidth();
+  if (typeof ResizeObserver !== "undefined") {
+    widthObserver = new ResizeObserver(() => reportWidth());
+    if (rootEl.value) widthObserver.observe(rootEl.value);
+  }
+});
+onUnmounted(() => { widthObserver?.disconnect(); widthObserver = null; });
+watch(() => props.focused, () => reportWidth());
 
 const { activeProviderId, allProviders, systemDefault, SYSTEM_DEFAULT_ID } = useProviders();
 const { providerOf } = useSessionProviders();
@@ -467,7 +486,7 @@ function handleQuickAction(action: QuickAction) {
 </script>
 
 <template>
-  <div class="chat-panel">
+  <div ref="rootEl" class="chat-panel">
     <TaskListPanel v-if="props.tasks && props.tasks.length > 0" :tasks="props.tasks" />
 
     <div ref="scrollEl" class="chat-messages" @scroll.passive="onScroll">
