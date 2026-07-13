@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Aide · 市场（原型）</title>
+<style>
+  :root{
+    /* Aide warm-dark token system — warm near-blacks, honey-amber accent */
+    --aide-bg-deep:#15120f;
+    --aide-bg:#1d1915;
+    --aide-surface:#272220;
+    --aide-surface-raised:#2f2a25;
+    --aide-surface-hover:#342e28;
+    --aide-border:#3a332c;
+    --aide-border-strong:#483f37;
+    --aide-text:#ece4d6;
+    --aide-text-muted:#a89d8b;
+    --aide-text-faint:#6e6557;
+    --aide-accent:#e0a45a;
+    --aide-accent-soft:rgba(224,164,90,.14);
+    --aide-accent-line:rgba(224,164,90,.42);
+    --aide-success:#9bb86a;
+    --aide-warning:#d9a441;
+    --aide-danger:#cf7a6a;
+    --aide-danger-soft:rgba(207,122,106,.12);
+    --aide-info:#7fa6c4;
+    --aide-radius:8px;
+    --aide-radius-sm:6px;
+    --aide-arrow:14px;
+    --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+    --font-mono:"Cascadia Code","JetBrains Mono","SF Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:linear-gradient(135deg,#100d0b,#181410);
+    color:var(--aide-text);
+    font-family:var(--font-ui);
+    font-size:13px;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+    display:flex;align-items:center;justify-content:center;
+    padding:24px;
+    color-scheme:dark;
+  }
+
+  /* ── app window ── */
+  .window{
+    width:min(1040px,100%);
+    height:88vh;max-height:760px;
+    background:var(--aide-bg);
+    border:1px solid var(--aide-border-strong);
+    border-radius:12px;
+    box-shadow:0 30px 80px rgba(0,0,0,.6),0 2px 0 rgba(255,255,255,.03) inset;
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+  .titlebar{
+    height:38px;flex:0 0 auto;
+    display:flex;align-items:center;gap:14px;
+    padding:0 14px;
+    background:var(--aide-bg-deep);
+    border-bottom:1px solid var(--aide-border);
+    -webkit-app-region:drag;
+  }
+  .traffic{display:flex;gap:8px}
+  .traffic span{width:11px;height:11px;border-radius:50%;display:block}
+  .traffic .c1{background:#cf7a6a}.traffic .c2{background:#d9a441}.traffic .c3{background:#9bb86a}
+  .titlebar .title{color:var(--aide-text-muted);font-size:12px;letter-spacing:.02em}
+  .titlebar .crumb{color:var(--aide-text-faint);font-size:12px}
+  .titlebar .crumb b{color:var(--aide-text);font-weight:600}
+
+  /* ── body: nav + main ── */
+  .body{flex:1;display:flex;min-height:0}
+  .nav{
+    flex:0 0 168px;
+    background:var(--aide-bg-deep);
+    border-right:1px solid var(--aide-border);
+    padding:14px 8px;
+    display:flex;flex-direction:column;gap:2px;
+    overflow:auto;
+  }
+  .nav .group-label{
+    font-size:10.5px;text-transform:uppercase;letter-spacing:.12em;
+    color:var(--aide-text-faint);padding:10px 10px 6px;
+  }
+  .nav a{
+    color:var(--aide-text-muted);text-decoration:none;
+    padding:7px 10px;border-radius:var(--aide-radius-sm);
+    font-size:12.5px;display:flex;align-items:center;gap:8px;
+    cursor:default;
+  }
+  .nav a .ar{font-size:var(--aide-arrow);color:var(--aide-text-faint);width:12px}
+  .nav a.active{background:var(--aide-accent-soft);color:var(--aide-accent)}
+  .nav a.active .ar{color:var(--aide-accent)}
+
+  /* ── main ── */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;padding:0}
+  .main-head{
+    flex:0 0 auto;
+    padding:18px 22px 14px;
+    border-bottom:1px solid var(--aide-border);
+  }
+  .main-head .row{display:flex;align-items:center;justify-content:space-between;gap:16px}
+  .main-head h1{margin:0;font-size:17px;font-weight:600;letter-spacing:.01em}
+  .main-head .sub{color:var(--aide-text-muted);font-size:12px;margin-top:3px}
+  .search{
+    position:relative;flex:0 0 280px;
+  }
+  .search input{
+    width:100%;background:var(--aide-surface);
+    border:1px solid var(--aide-border);border-radius:var(--aide-radius-sm);
+    color:var(--aide-text);font-family:var(--font-ui);font-size:12.5px;
+    padding:7px 10px 7px 30px;outline:none;
+  }
+  .search input:focus{border-color:var(--aide-accent-line);box-shadow:0 0 0 3px var(--aide-accent-soft)}
+  .search input::placeholder{color:var(--aide-text-faint)}
+  .search .ic{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--aide-text-faint);font-size:13px}
+
+  /* ── source bar (the signature element) ── */
+  .sources{
+    padding:14px 22px;
+    border-bottom:1px solid var(--aide-border);
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  }
+  .sources .lbl{color:var(--aide-text-faint);font-size:11px;text-transform:uppercase;letter-spacing:.1em;margin-right:2px}
+  .chip{
+    display:flex;align-items:center;gap:9px;
+    background:var(--aide-surface);border:1px solid var(--aide-border);
+    border-radius:20px;padding:6px 8px 6px 12px;
+    transition:border-color .15s,background .15s;
+  }
+  .chip.on{border-color:var(--aide-accent-line);background:var(--aide-accent-soft)}
+  .chip .dot{width:8px;height:8px;border-radius:50%;background:var(--aide-text-faint);flex:0 0 auto}
+  .chip.on .dot{background:var(--aide-success);box-shadow:0 0 0 3px rgba(155,184,106,.18)}
+  .chip .nm{font-size:12.5px;color:var(--aide-text-muted);font-weight:500}
+  .chip.on .nm{color:var(--aide-text)}
+  .chip .cnt{font-family:var(--font-mono);font-size:11px;color:var(--aide-text-faint);background:var(--aide-bg-deep);padding:1px 7px;border-radius:10px}
+  .chip.on .cnt{color:var(--aide-accent)}
+  .chip .caret{font-size:var(--aide-arrow);color:var(--aide-text-faint);cursor:pointer;width:14px;text-align:center}
+  .chip .refr{width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:50%;color:var(--aide-text-faint);cursor:pointer;border:1px solid transparent}
+  .chip .refr:hover{color:var(--aide-accent);border-color:var(--aide-border)}
+  .switch{width:30px;height:17px;border-radius:10px;background:var(--aide-border-strong);position:relative;cursor:pointer;flex:0 0 auto;transition:background .15s}
+  .switch::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:var(--aide-text);transition:left .15s,background .15s}
+  .chip.on .switch{background:var(--aide-accent)}
+  .chip.on .switch::after{left:15px;background:#fff}
+  .src-hint{margin-left:auto;color:var(--aide-text-faint);font-size:11.5px}
+  .src-hint code{font-family:var(--font-mono);color:var(--aide-text-muted)}
+
+  /* ── plugin list ── */
+  .list{flex:1;overflow:auto;padding:8px 22px 22px}
+  .filter-row{display:flex;align-items:center;gap:8px;padding:10px 0 6px;flex-wrap:wrap}
+  .ftag{
+    font-size:11.5px;color:var(--aide-text-muted);background:var(--aide-surface);
+    border:1px solid var(--aide-border);border-radius:14px;padding:3px 11px;cursor:pointer;
+  }
+  .ftag.active{color:var(--aide-accent);border-color:var(--aide-accent-line);background:var(--aide-accent-soft)}
+  .ftag .n{font-family:var(--font-mono);color:var(--aide-text-faint);margin-left:5px}
+
+  .card{
+    display:grid;grid-template-columns:1fr auto;gap:6px 18px;
+    background:var(--aide-surface);
+    border:1px solid var(--aide-border);border-radius:var(--aide-radius);
+    padding:14px 16px;margin-top:10px;
+    transition:border-color .15s,background .15s;
+  }
+  .card:hover{border-color:var(--aide-border-strong);background:var(--aide-surface-hover)}
+  .card .top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .card .name{font-size:14px;font-weight:600;color:var(--aide-text)}
+  .card .ver{font-family:var(--font-mono);font-size:11px;color:var(--aide-text-faint)}
+  .badge{
+    font-family:var(--font-mono);font-size:10.5px;letter-spacing:.02em;
+    padding:1.5px 7px;border-radius:4px;border:1px solid var(--aide-border);
+    color:var(--aide-text-muted);
+  }
+  .badge.official{color:var(--aide-accent);border-color:var(--aide-accent-line);background:var(--aide-accent-soft)}
+  .badge.community{color:var(--aide-info);border-color:rgba(127,166,196,.35);background:rgba(127,166,196,.1)}
+  .cat{font-size:10.5px;color:var(--aide-text-muted);background:var(--aide-bg-deep);border:1px solid var(--aide-border);padding:1.5px 7px;border-radius:4px}
+  .card .desc{color:var(--aide-text-muted);font-size:12.5px;margin-top:6px;max-width:62ch}
+  .caveat{
+    display:inline-flex;align-items:center;gap:5px;
+    margin-top:8px;font-size:11px;color:var(--aide-warning);
+    background:rgba(217,164,65,.1);border:1px solid rgba(217,164,65,.3);
+    padding:2px 8px;border-radius:4px;
+  }
+  .caveat::before{content:"▸";font-size:var(--aide-arrow)}
+  .card .actions{display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:8px}
+  .status{font-size:11.5px;display:flex;align-items:center;gap:6px;white-space:nowrap}
+  .status .d{width:7px;height:7px;border-radius:50%}
+  .status.on .d{background:var(--aide-success);box-shadow:0 0 0 3px rgba(155,184,106,.16)}
+  .status.off .d{background:var(--aide-text-faint)}
+  .status.on{color:var(--aide-success)}
+  .status.off{color:var(--aide-text-faint)}
+  .btns{display:flex;gap:8px}
+  .btn{
+    font-family:var(--font-ui);font-size:12px;font-weight:500;
+    padding:6px 14px;border-radius:var(--aide-radius-sm);cursor:pointer;
+    border:1px solid var(--aide-border-strong);background:var(--aide-surface-raised);color:var(--aide-text);
+    transition:background .12s,border-color .12s;
+  }
+  .btn:hover{background:var(--aide-surface-hover);border-color:var(--aide-text-faint)}
+  .btn.primary{background:var(--aide-accent);border-color:var(--aide-accent);color:#1d1915}
+  .btn.primary:hover{background:#ecb46a}
+  .btn.danger{color:var(--aide-danger);border-color:rgba(207,122,106,.3)}
+  .btn.danger:hover{background:var(--aide-danger-soft);border-color:var(--aide-danger)}
+  .btn[disabled]{opacity:.45;cursor:not-allowed}
+  .card.npm .name{color:var(--aide-text-muted)}
+  .card.npm .install-note{margin-top:6px;font-size:11.5px;color:var(--aide-text-faint)}
+
+  /* footer status strip */
+  .foot{
+    flex:0 0 auto;border-top:1px solid var(--aide-border);
+    padding:8px 22px;display:flex;align-items:center;gap:14px;
+    background:var(--aide-bg-deep);font-size:11px;color:var(--aide-text-faint);
+  }
+  .foot .pill{font-family:var(--font-mono);color:var(--aide-text-muted)}
+  .foot .sep{color:var(--aide-border-strong)}
+
+  /* tiny on-load interaction for review */
+  .note{position:fixed;left:24px;bottom:20px;background:var(--aide-surface);border:1px solid var(--aide-border);border-radius:var(--aide-radius);padding:10px 14px;font-size:11.5px;color:var(--aide-text-muted);max-width:260px;line-height:1.5;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+  .note b{color:var(--aide-accent)}
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar">
+    <div class="traffic"><span class="c1"></span><span class="c2"></span><span class="c3"></span></div>
+    <div class="title">Aide</div>
+    <div class="crumb">设置 / <b>市场</b></div>
+  </div>
+
+  <div class="body">
+    <nav class="nav">
+      <div class="group-label">设置</div>
+      <a><span class="ar">▸</span>通用</a>
+      <a><span class="ar">▸</span>外观</a>
+      <a><span class="ar">▸</span>编辑器</a>
+      <a class="active"><span class="ar">▶</span>市场</a>
+      <a><span class="ar">▸</span>供应商</a>
+      <a><span class="ar">▸</span>代码索引</a>
+      <a><span class="ar">▸</span>快捷键</a>
+      <div class="group-label">关于</div>
+      <a><span class="ar">▸</span>检查更新</a>
+    </nav>
+
+    <main class="main">
+      <div class="main-head">
+        <div class="row">
+          <div>
+            <h1>插件市场</h1>
+            <div class="sub">从固定源发现插件。安装后，skills / agents / hooks / MCP 在会话中生效。</div>
+          </div>
+          <div class="search">
+            <span class="ic">⌕</span>
+            <input id="q" placeholder="搜索插件名或描述…">
+          </div>
+        </div>
+      </div>
+
+      <!-- source bar: the signature element -->
+      <div class="sources">
+        <span class="lbl">源</span>
+        <div class="chip on" data-src="official">
+          <span class="dot"></span>
+          <span class="nm">Anthropic 官方</span>
+          <span class="cnt">12</span>
+          <span class="caret">▾</span>
+          <span class="refr" title="刷新此源">⟳</span>
+          <span class="switch" title="开/关"></span>
+        </div>
+        <div class="chip on" data-src="community">
+          <span class="dot"></span>
+          <span class="nm">社区</span>
+          <span class="cnt">48</span>
+          <span class="caret">▾</span>
+          <span class="refr" title="刷新此源">⟳</span>
+          <span class="switch" title="开/关"></span>
+        </div>
+        <span class="src-hint">固定源，不可自加 · <code>claude-plugins-official</code></span>
+      </div>
+
+      <div class="list" id="list">
+        <div class="filter-row">
+          <span class="ftag active" data-f="all">全部<span class="n">60</span></span>
+          <span class="ftag" data-f="cat-external">外部集成<span class="n">7</span></span>
+          <span class="ftag" data-f="cat-code">代码智能<span class="n">11</span></span>
+          <span class="ftag" data-f="cat-dev">开发工作流<span class="n">9</span></span>
+          <span class="ftag" data-f="cat-security">安全<span class="n">3</span></span>
+          <span class="ftag" data-f="cat-style">输出样式<span class="n">4</span></span>
+        </div>
+
+        <!-- installed + enabled -->
+        <div class="card" data-cat="cat-external">
+          <div>
+            <div class="top">
+              <span class="name">github</span>
+              <span class="ver">v1.2.0</span>
+              <span class="badge official">官方</span>
+              <span class="cat">外部集成</span>
+            </div>
+            <div class="desc">GitHub 集成：PR / issue 操作、仓库浏览、代码搜索，通过预配置 MCP server 连接。</div>
+          </div>
+          <div class="actions">
+            <div class="status on"><span class="d"></span>已启用</div>
+            <div class="btns">
+              <button class="btn">禁用</button>
+              <button class="btn danger">卸载</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- not installed -->
+        <div class="card" data-cat="cat-security">
+          <div>
+            <div class="top">
+              <span class="name">security-guidance</span>
+              <span class="ver">v1.0.2</span>
+              <span class="badge official">官方</span>
+              <span class="cat">安全</span>
+            </div>
+            <div class="desc">审查每次代码改动是否存在常见漏洞，并在同一会话里指示 Claude 修复发现的问题。</div>
+          </div>
+          <div class="actions">
+            <div class="status off"><span class="d"></span>未安装</div>
+            <div class="btns"><button class="btn primary">安装</button></div>
+          </div>
+        </div>
+
+        <!-- installed + disabled -->
+        <div class="card" data-cat="cat-dev">
+          <div>
+            <div class="top">
+              <span class="name">commit-commands</span>
+              <span class="ver">v0.4.1</span>
+              <span class="badge official">官方</span>
+              <span class="cat">开发工作流</span>
+            </div>
+            <div class="desc">Git 提交工作流：暂存、生成提交信息、提交、推送与 PR 创建。</div>
+          </div>
+          <div class="actions">
+            <div class="status off"><span class="d"></span>已禁用</div>
+            <div class="btns">
+              <button class="btn primary">启用</button>
+              <button class="btn danger">卸载</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- LSP plugin: caveat -->
+        <div class="card" data-cat="cat-code">
+          <div>
+            <div class="top">
+              <span class="name">rust-analyzer-lsp</span>
+              <span class="ver">v1.1.0</span>
+              <span class="badge official">官方</span>
+              <span class="cat">代码智能</span>
+            </div>
+            <div class="desc">为 Rust 项目配置 rust-analyzer 语言服务器，提供跳转定义 / 查找引用 / 即时诊断。</div>
+            <span class="caveat">LSP 能力在 Aide 中不可用，仅 skills / agents 部分生效</span>
+          </div>
+          <div class="actions">
+            <div class="status off"><span class="d"></span>未安装</div>
+            <div class="btns"><button class="btn primary">安装</button></div>
+          </div>
+        </div>
+
+        <!-- output-style plugin: caveat -->
+        <div class="card" data-cat="cat-style">
+          <div>
+            <div class="top">
+              <span class="name">explanatory-output-style</span>
+              <span class="ver">v1.0.0</span>
+              <span class="badge official">官方</span>
+              <span class="cat">输出样式</span>
+            </div>
+            <div class="desc">在回答中加入关于实现选择的教育性解释。</div>
+            <span class="caveat">输出样式在 Aide 中不可用</span>
+          </div>
+          <div class="actions">
+            <div class="status off"><span class="d"></span>未安装</div>
+            <div class="btns"><button class="btn primary">安装</button></div>
+          </div>
+        </div>
+
+        <!-- community plugin -->
+        <div class="card" data-cat="cat-dev">
+          <div>
+            <div class="top">
+              <span class="name">pr-review-toolkit</span>
+              <span class="ver">v0.3.0</span>
+              <span class="badge community">社区</span>
+              <span class="cat">开发工作流</span>
+            </div>
+            <div class="desc">用于审查拉取请求的专门 agents 集合。</div>
+          </div>
+          <div class="actions">
+            <div class="status off"><span class="d"></span>未安装</div>
+            <div class="btns"><button class="btn primary">安装</button></div>
+          </div>
+        </div>
+
+        <!-- npm source: unsupported -->
+        <div class="card npm" data-cat="cat-dev">
+          <div>
+            <div class="top">
+              <span class="name">fancy-formatter</span>
+              <span class="ver">npm</span>
+              <span class="badge community">社区</span>
+              <span class="cat">开发工作流</span>
+            </div>
+            <div class="desc">通过 npm 分发的代码格式化工具。</div>
+            <div class="install-note">npm 源插件暂不支持安装</div>
+          </div>
+          <div class="actions">
+            <div class="status off"><span class="d"></span>不可安装</div>
+            <div class="btns"><button class="btn" disabled>安装</button></div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="foot">
+        <span class="pill">3 已安装</span><span class="sep">·</span>
+        <span class="pill">2 已启用</span><span class="sep">·</span>
+        <span>启用变更在下一次消息往返生效</span>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div class="note">
+  <b>原型说明</b><br>
+  源芯片可点开关切换；搜索框可过滤；类别标签可筛选。按钮状态仅为视觉演示。
+</div>
+
+<script>
+  // source chip toggle
+  document.querySelectorAll('.chip').forEach(c=>{
+    c.addEventListener('click',e=>{
+      if(e.target.classList.contains('refr')||e.target.classList.contains('caret')) return;
+      c.classList.toggle('on');
+    });
+  });
+  // category filter
+  const ftags=document.querySelectorAll('.ftag');
+  const cards=document.querySelectorAll('.card');
+  ftags.forEach(t=>t.addEventListener('click',()=>{
+    ftags.forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    const f=t.dataset.f;
+    cards.forEach(card=>{
+      card.style.display=(f==='all'||card.dataset.cat===f)?'':'none';
+    });
+  }));
+  // search
+  const q=document.getElementById('q');
+  q.addEventListener('input',()=>{
+    const s=q.value.trim().toLowerCase();
+    cards.forEach(card=>{
+      const txt=card.textContent.toLowerCase();
+      card.style.display=(!s||txt.includes(s))?'':'none';
+    });
+  });
+</script>
+</body>
+</html>
