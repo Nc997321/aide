@@ -596,7 +596,7 @@ function onOverlayClick(e: MouseEvent) {
               <div v-else class="cg-info">
                 <span class="field-hint">
                   本地 ONNX 推理（all-MiniLM-L6-v2，384 维）。首次使用会从 HuggingFace 下载 ~23MB 模型到本地缓存。
-                  慢（约 50 符号/秒）但离线可用——结构层（精确跳转）始终先就绪，语义搜索后台补全。
+                  慢（约 50 个/秒）但离线可用——结构层（精确跳转）始终先就绪，语义搜索后台补全。
                 </span>
               </div>
 

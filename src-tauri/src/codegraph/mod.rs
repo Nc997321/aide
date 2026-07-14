@@ -6,6 +6,7 @@ pub mod parser;
 pub mod query;
 pub mod symbols;
 pub mod meta;
+pub mod guard;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -17,6 +18,22 @@ use crate::codegraph::meta::Meta;
 use crate::codegraph::shard::CodeShard;
 use crate::codegraph::symbols::SymbolTable;
 use crate::commands::settings::CodeGraphEmbedderConfig;
+
+/// Prefix prepended to every text sent to the embedder (both document snippets
+/// and query text, so they share the embedding space).
+///
+/// **Why:** Ollama `bge-m3` deterministically emits a NaN vector for certain
+/// bare code token sequences (a model numerical-overflow bug — not length, not
+/// CRLF, but a specific token pattern), which the server cannot JSON-encode →
+/// HTTP 500 "failed to encode response: json: unsupported value: NaN". One such
+/// snippet fails its whole batch. A short natural-language prefix consistently
+/// avoids the NaN trigger across tested snippets, so batches embed in bulk
+/// (fast) instead of bisecting to skip every offender (slow). The bisection
+/// fallback in `store::embed_and_store` still handles any residual NaN snippet
+/// the prefix doesn't cover.
+pub(crate) fn embed_input(raw: &str) -> String {
+    format!("code: {}", raw)
+}
 
 /// Snapshot of a fully-built project index, swapped atomically into state.
 ///
@@ -63,7 +80,7 @@ pub struct CodeGraphState {
     build_done: AtomicUsize,
     build_total: AtomicUsize,
     /// 当前阶段/文件的可读描述（"扫描文件树..." / "解析 src/foo.ts (123/456)"
-    /// / "嵌入符号 1340/2000" / "写盘..."）。低频更新（每文件/每批一次），用
+    /// / "建立索引 1340/2000" / "写盘..."）。低频更新（每文件/每批一次），用
     /// Mutex 而非 atomic——poll 命令读时极短 lock，纯内存。
     build_current: Mutex<String>,
     /// 取消正在跑的 embed（close/切项目时置 true，embed 循环下一批 check 后 break）。
@@ -303,6 +320,14 @@ pub async fn codegraph_build_index(
                 return Ok(serde_json::json!({ "loaded": true, "total_symbols": n }));
             }
         }
+        // Strict reuse failed (stale / no index / model mismatch). Before
+        // falling back to a full rebuild, try an INCREMENTAL update: if a
+        // compatible old index exists and only a few files changed, reindex just
+        // those instead of rebuilding the whole project. Returns Some(result) on
+        // a successful incremental, None when a full rebuild is required.
+        if let Some(json) = try_incremental_build(&st, &root, &model_name, dim)? {
+            return Ok(json);
+        }
 
         st.build_cancel.store(false, Ordering::Relaxed);
         st.build_active.store(true, Ordering::Relaxed);
@@ -349,13 +374,24 @@ pub async fn codegraph_build_index(
         // is immediately usable; semantic layer waits for Phase 2.
         let embed_ready = Arc::new(AtomicBool::new(false));
         let n = table.len();
-        *st.inner.write().map_err(|e| e.to_string())? = Some(ProjectIndex {
-            project_root: root,
+        let new_index = ProjectIndex {
+            // `root` is cloned (not moved) so it stays usable in the Phase 2
+            // completion block below to re-save `meta.json` with
+            // `embed_complete: true`. One PathBuf clone per build — negligible.
+            project_root: root.clone(),
             symbols: table,
             shard: shard.clone(),
             indexed_at: SystemTime::now(),
             embed_ready: embed_ready.clone(),
-        });
+        };
+        // Lock-safe swap: the OLD index (if any) is returned and dropped
+        // OUTSIDE the write lock with panic guarding. A Qdrant EdgeShard
+        // drop-time flush panic (segment temp files missing — os error 3,
+        // e.g. after antivirus scan / orphan cleanup) used to poison `inner`
+        // here, making every subsequent build return
+        // "poisoned lock: another task failed inside" until process restart.
+        let old_index = guard::swap_returning_old(&st.inner, new_index);
+        guard::drop_catching_panics(old_index, "old project index (build swap)");
 
         // Phase 2: embed the collected points into the shard (background fill).
         // Structure layer is already swapped in and serving goto; this only adds
@@ -363,9 +399,20 @@ pub async fn codegraph_build_index(
         let total = points.len();
         st.build_total.store(total, Ordering::Relaxed);
         st.build_done.store(0, Ordering::Relaxed);
-        on_status(&format!("嵌入符号 0/{}", total));
+        on_status(&format!("建立索引 0/{}", total));
         let mut embedded = 0usize;
         let mut batch_errors = 0usize;
+        // First batch error message — surfaced in `embed_status` so the user
+        // sees the real cause (e.g. Ollama "model not loaded") instead of a
+        // bare `batch_errors: N`.
+        let mut first_err: Option<String> = None;
+        // Stop early after a run of persistent failures. A server-side fault
+        // (Ollama HTTP 500, model unloaded, service down) does not recover by
+        // retrying every remaining batch — it just stalls for tens of seconds
+        // with no new info. Tolerate a single transient hiccup (1 failure),
+        // stop after 2 consecutive.
+        let mut consecutive_failures = 0usize;
+        let mut stopped_early = false;
         if can_embed {
             let emb = st.embedder.lock().map_err(|e| e.to_string())?;
             if let Some(embedder) = emb.as_ref() {
@@ -373,13 +420,28 @@ pub async fn codegraph_build_index(
                     if st.build_cancel.load(Ordering::Relaxed) {
                         break;
                     }
-                    if let Err(e) = indexer::store::embed_and_store(chunk, embedder.as_ref(), &shard) {
-                        tracing::warn!("codegraph: embed batch failed: {}", e);
-                        batch_errors = batch_errors.saturating_add(1);
+                    match indexer::store::embed_and_store(chunk, embedder.as_ref(), &shard) {
+                        Ok(_) => {
+                            consecutive_failures = 0;
+                        }
+                        Err(e) => {
+                            tracing::warn!("codegraph: embed batch failed: {}", e);
+                            batch_errors = batch_errors.saturating_add(1);
+                            first_err.get_or_insert_with(|| e.to_string());
+                            consecutive_failures = consecutive_failures.saturating_add(1);
+                            if consecutive_failures >= 2 {
+                                tracing::warn!(
+                                    "codegraph: embed stopping early after {} consecutive batch failures",
+                                    consecutive_failures
+                                );
+                                stopped_early = true;
+                                break;
+                            }
+                        }
                     }
                     embedded = embedded.saturating_add(chunk.len());
                     st.build_done.store(embedded, Ordering::Relaxed);
-                    on_status(&format!("嵌入符号 {}/{}", embedded, total));
+                    on_status(&format!("建立索引 {}/{}", embedded, total));
                 }
             }
         }
@@ -387,6 +449,22 @@ pub async fn codegraph_build_index(
         let completed = !cancelled && can_embed && embedded >= total;
         if completed {
             embed_ready.store(true, Ordering::Relaxed);
+            // Mark the on-disk meta as embed-complete. Phase 1 wrote
+            // `embed_complete: false`; without flipping it here the shard would
+            // be rejected on every reuse (load_project_index /
+            // load_compatible_index gate on it), forcing a pointless full
+            // rebuild next time. Only the full-rebuild completion path needs
+            // this — the fast-path reuse already has embed_complete=true (it
+            // wouldn't load otherwise) and incremental reindex sets it inside
+            // reindex_one. Re-read the meta we wrote in Phase 1, flip the flag,
+            // re-save — avoids duplicating Meta construction / shard_dir here.
+            let base = indexer::index_dir(&root);
+            if let Some(mut meta) = Meta::load(&base.join("meta.json")) {
+                meta.embed_complete = true;
+                if let Err(e) = meta.save(&base.join("meta.json")) {
+                    tracing::warn!("codegraph: meta.json embed-complete flip failed: {}", e);
+                }
+            }
         }
         // Fill embed_status with the precise reason if embed didn't complete.
         if embed_status.is_empty() {
@@ -399,7 +477,19 @@ pub async fn codegraph_build_index(
             } else if cancelled {
                 embed_status = format!("cancelled at {}/{}", embedded, total);
             } else if batch_errors > 0 {
-                embed_status = format!("batch_errors: {} (embedded {}/{})", batch_errors, embedded, total);
+                let first = first_err
+                    .as_ref()
+                    .map(|e| format!(" — first: {}", e))
+                    .unwrap_or_default();
+                let why = if stopped_early {
+                    format!(
+                        "batch_errors: {} (stopped early, embedded {}/{}){}",
+                        batch_errors, embedded, total, first
+                    )
+                } else {
+                    format!("batch_errors: {} (embedded {}/{}){}", batch_errors, embedded, total, first)
+                };
+                embed_status = why;
             } else if !completed {
                 embed_status = format!("incomplete: embedded {}/{}", embedded, total);
             } else {
@@ -502,11 +592,33 @@ pub async fn codegraph_close(
         // take below). The embed task holds its own shard Arc, so the writes are
         // memory-safe even without cancellation — this just avoids wasting CPU.
         st.build_cancel.store(true, Ordering::Relaxed);
-        if let Some(pi) = st.inner.write().map_err(|e| e.to_string())?.take() {
-            if let Err(e) = pi.shard.optimize() {
-                tracing::warn!("codegraph: optimize on close failed: {}", e);
-            }
-            // symbols.json / meta.json already persisted at build/reindex time.
+        // Take the index OUT of the lock, then drop the write guard immediately
+        // so optimize() + the index drop never run while `inner` is held. A
+        // Qdrant EdgeShard flush panic during optimize/drop used to poison
+        // `inner` here (the close path in the backtrace: mod.rs:454/475).
+        let taken = {
+            let mut guard = match st.inner.write() {
+                Ok(g) => g,
+                // Already poisoned (shouldn't happen with the swap fix above,
+                // but be defensive): nothing live to close.
+                Err(_) => return Ok(()),
+            };
+            guard.take()
+        };
+        if let Some(pi) = taken {
+            // optimize() may itself flush → panic; catch it so close never
+            // unwinds with the lock held.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if let Err(e) = pi.shard.optimize() {
+                    tracing::warn!("codegraph: optimize on close failed: {}", e);
+                }
+            }));
+            // Drop the project index (and its shard) OUTSIDE the lock with
+            // panic guarding — the shard's EdgeShard::drop flush can panic on
+            // IO error. symbols.json / meta.json were already persisted at
+            // build/reindex time, so a suppressed drop panic loses nothing
+            // that can't be rebuilt.
+            guard::drop_catching_panics(pi, "old project index (close)");
         }
         Ok(())
     })
@@ -516,21 +628,32 @@ pub async fn codegraph_close(
 
 /// Tauri command: incrementally re-index a single file after it is saved.
 ///
-/// No-op if no index is built or the file's project does not match the active
-/// index. Runs in `spawn_blocking`. The write lock is held for the whole
-/// single-file reindex (drop stale → re-parse → embed → re-persist): this
-/// serializes Qdrant shard access (concurrent `search` + `upsert` on the same
-/// `Arc<CodeShard>` is not guaranteed safe), at the cost of briefly blocking
-/// goto queries during the embed. For a typical file (tens of symbols) the
-/// embed is well under 100ms; a pathologically large file could block for
-/// longer. Acceptable for a save-triggered (non-hot) path — revisit if manual
-/// E2E shows goto lag on save of large files.
+/// Returns a structured status so the frontend can tell what happened (the
+/// save path used to be fully silent — three no-op gates + the frontend's
+/// `.catch(()=>{})` swallowed success AND failure, so "保存后没有任何反应"
+/// was true whether it updated, skipped, or errored). Possible results:
+///   `{ "reindexed": true }`                       — file re-parsed + re-embedded
+///   `{ "reindexed": false, "skipped": "..." }`    — no-op, with the reason:
+///       `no_active_index`  — no index in memory (not built yet / closed)
+///       `not_in_project`   — active index is for a different project root
+///       `embed_not_ready`  — background embed still running (or stopped early,
+///                            e.g. bge-m3 NaN — semantic layer incomplete); the
+///                            save change is picked up by the next full rebuild
+///   `Err(...)`                                    — reindex ran but failed
+///
+/// No-op gates return `Ok({reindexed:false, skipped})` (NOT a silent `Ok(())`)
+/// so the caller can surface the reason. Runs in `spawn_blocking`. The write
+/// lock is held for the whole single-file reindex (drop stale → re-parse →
+/// embed → re-persist): this serializes Qdrant shard access (concurrent
+/// `search` + `upsert` on the same `Arc<CodeShard>` is not guaranteed safe),
+/// at the cost of briefly blocking goto queries during the embed. For a
+/// typical file (tens of symbols) the embed is well under 100ms.
 #[tauri::command]
 pub async fn codegraph_reindex_file(
     project_root: String,
     file: String,
     state: tauri::State<'_, std::sync::Arc<CodeGraphState>>,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     let st = state.inner().clone();
     tokio::task::spawn_blocking(move || {
         let root = PathBuf::from(&project_root);
@@ -540,14 +663,36 @@ pub async fn codegraph_reindex_file(
         let mut guard = st.inner.write().map_err(|e| e.to_string())?;
         let pi = match guard.as_mut() {
             Some(pi) if pi.project_root == root => pi,
-            _ => return Ok(()),
+            Some(_) => {
+                tracing::info!(
+                    "codegraph: save reindex skipped (not_in_project) file={} active_root!={:?}",
+                    abs.display(),
+                    root
+                );
+                return Ok(serde_json::json!({ "reindexed": false, "skipped": "not_in_project" }));
+            }
+            None => {
+                tracing::info!(
+                    "codegraph: save reindex skipped (no_active_index) file={}",
+                    abs.display()
+                );
+                return Ok(serde_json::json!({ "reindexed": false, "skipped": "no_active_index" }));
+            }
         };
         // Skip while the background embed is still filling the shard — concurrent
         // upsert (embed) + upsert (reindex) on the same shard isn't guaranteed
         // safe by Qdrant Edge. The save-triggered change is picked up by the next
-        // full rebuild (is_stale mtime check); skipping here is safe.
+        // full rebuild (is_stale mtime check); skipping here is safe. This also
+        // covers a build whose embed STOPPED EARLY (e.g. bge-m3 NaN) — embed_ready
+        // never flips true, so every save is a no-op until a clean rebuild
+        // completes. Surfacing `embed_not_ready` makes that visible instead of
+        // silent.
         if !pi.embed_ready.load(Ordering::Relaxed) {
-            return Ok(());
+            tracing::info!(
+                "codegraph: save reindex skipped (embed_not_ready) file={}",
+                abs.display()
+            );
+            return Ok(serde_json::json!({ "reindexed": false, "skipped": "embed_not_ready" }));
         }
         // Read the cached embedder identity (model_name + dim) to stamp into the
         // re-persisted meta. Falls back to the fastembed default if no embedder
@@ -573,7 +718,9 @@ pub async fn codegraph_reindex_file(
             dim,
             &st.parser_manager,
         )
-        .map_err(|e| format!("reindex failed: {}", e))
+        .map_err(|e| format!("reindex failed: {}", e))?;
+        tracing::info!("codegraph: save reindex ok file={}", abs.display());
+        Ok(serde_json::json!({ "reindexed": true }))
     })
     .await
     .map_err(|e| format!("join error: {}", e))?
@@ -733,4 +880,251 @@ pub fn codegraph_build_progress(
         "current": current,
         "index_ready": index_ready,
     })
+}
+
+/// Attempt an incremental reindex: if a compatible on-disk index exists and
+/// only a small set of files changed since its `indexed_at`, load the old
+/// index as a base and reindex just the changed files (fast) instead of
+/// rebuilding from scratch. Returns `Some(build-result JSON)` on a successful
+/// incremental update, or `None` when a full rebuild is required (no reusable
+/// base, model/dim mismatch, or too many files changed). Called by
+/// `codegraph_build_index` after the strict reuse path fails.
+fn try_incremental_build(
+    st: &std::sync::Arc<CodeGraphState>,
+    root: &std::path::Path,
+    model_name: &str,
+    dim: usize,
+) -> Result<Option<serde_json::Value>, String> {
+    // 1. Load a compatible on-disk index, IGNORING staleness. None → no
+    //    reusable base (no meta / model·dim mismatch / unloadable) → full rebuild.
+    let (table, shard, meta) = match indexer::load_compatible_index(root, model_name, dim) {
+        Some(x) => x,
+        None => return Ok(None),
+    };
+    // 2. Find changed files + total (one walk).
+    let exts = st.parser_manager.supported_extensions();
+    let ext_refs: Vec<&str> = exts.iter().copied().collect();
+    let (changed, total) = indexer::changed_files_since(root, &ext_refs, meta.indexed_at);
+    // 3. Threshold: too many changes → a clean full rebuild is faster and
+    //    avoids reusing a possibly-dirty old shard.
+    if !indexer::decide_increment(changed.len(), total) {
+        tracing::info!(
+            "codegraph: incremental skipped ({} of {} files changed > threshold) → full rebuild",
+            changed.len(),
+            total
+        );
+        return Ok(None);
+    }
+    // 4. Swap the old index in (embed_ready=true, reusing the old vectors).
+    let embed_ready = Arc::new(AtomicBool::new(true));
+    let new_index = ProjectIndex {
+        project_root: root.to_path_buf(),
+        symbols: table,
+        shard: shard.clone(),
+        indexed_at: SystemTime::now(),
+        embed_ready: embed_ready.clone(),
+    };
+    let old = guard::swap_returning_old(&st.inner, new_index);
+    guard::drop_catching_panics(old, "old project index (incremental swap)");
+    // 5. Reindex each changed file (per-file write lock, same pattern as
+    //    `codegraph_rescan`). `reindex_one` re-persists symbols.json + meta.json
+    //    (indexed_at=now) on each file, so disk stays in sync with the live table.
+    st.build_cancel.store(false, Ordering::Relaxed);
+    let mut rescanned = 0usize;
+    let mut errors = 0usize;
+    for abs in &changed {
+        if st.build_cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let mut guard = st.inner.write().map_err(|e| e.to_string())?;
+        let pi = match guard.as_mut() {
+            Some(pi) => pi,
+            None => break, // index closed mid-rescan
+        };
+        if !pi.embed_ready.load(Ordering::Relaxed) {
+            break;
+        }
+        let emb = st.embedder.lock().map_err(|e| e.to_string())?;
+        let embedder_ref: Option<&dyn Embedder> = emb.as_ref().map(|b| b.as_ref());
+        let shard2 = pi.shard.clone();
+        match indexer::reindex_one(
+            root,
+            abs,
+            &mut pi.symbols,
+            &shard2,
+            embedder_ref,
+            model_name,
+            dim,
+            &st.parser_manager,
+        ) {
+            Ok(_) => rescanned += 1,
+            Err(e) => {
+                tracing::warn!("codegraph: incremental reindex failed {}: {}", abs.display(), e);
+                errors += 1;
+            }
+        }
+    }
+    let cancelled = st.build_cancel.load(Ordering::Relaxed);
+    let n = {
+        let g = st.inner.read().map_err(|e| e.to_string())?;
+        g.as_ref().map(|pi| pi.symbols.len()).unwrap_or(0)
+    };
+    let status = format!(
+        "incremental ({} reindexed{}{})",
+        rescanned,
+        if errors > 0 {
+            format!(", {} errors", errors)
+        } else {
+            String::new()
+        },
+        if cancelled { ", cancelled" } else { "" }
+    );
+    Ok(Some(serde_json::json!({
+        "loaded": false,
+        "incremental": true,
+        "rescanned_files": rescanned,
+        "total_symbols": n,
+        "has_embeddings": true,
+        "embed_status": status,
+    })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegraph::types::{Confidence, IndexedPoint, SymbolDef, SymbolKind};
+
+    /// Incremental path: a project with an existing on-disk index, one file
+    /// changed → `try_incremental_build` reindexes only that file (not a full
+    /// rebuild). Verifies it returns `Some(incremental=true, rescanned=1)`.
+    #[test]
+    fn try_incremental_build_reindexes_only_changed_files() {
+        let dir = std::env::temp_dir().join(format!("cg_incr_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // 5 files so 1 change = 20% (within the incremental threshold).
+        std::fs::write(dir.join("a.ts"), "class A { save() {} }").unwrap();
+        std::fs::write(dir.join("b.ts"), "class B { save() {} }").unwrap();
+        std::fs::write(dir.join("c.ts"), "class C { save() {} }").unwrap();
+        std::fs::write(dir.join("d.ts"), "class D { save() {} }").unwrap();
+        std::fs::write(dir.join("e.ts"), "class E { save() {} }").unwrap();
+        let pm = crate::codegraph::parser::ParserManager::new();
+        // Build an on-disk structure index. Drop the shard so its dir is
+        // released before we re-load it.
+        {
+            let (_t, shard, _p, _s) =
+                crate::codegraph::indexer::build_structure_index(&dir, &pm, 4, "test-model", None)
+                    .unwrap();
+            drop(shard);
+        }
+        // `build_structure_index` writes `embed_complete: false` (Phase 1 only).
+        // Simulate Phase 2 embed completion so `load_compatible_index` will
+        // reuse the shard — mirroring production, where the build flips this to
+        // true only after the embed loop finishes.
+        {
+            let base = crate::codegraph::indexer::index_dir(&dir);
+            let mut m = crate::codegraph::meta::Meta::load(&base.join("meta.json")).unwrap();
+            m.embed_complete = true;
+            m.save(&base.join("meta.json")).unwrap();
+        }
+        // Sleep past the index's second-granularity indexed_at so the post-build
+        // mutation is detected (changed_files_since uses `mtime > indexed_at`).
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        // Mutate a.ts → only file changed since the build.
+        std::fs::write(dir.join("a.ts"), "class A { save() {} load() {} }").unwrap();
+        let st = std::sync::Arc::new(CodeGraphState::new());
+        let res = try_incremental_build(&st, &dir, "test-model", 4).unwrap();
+        assert!(res.is_some(), "incremental must succeed for a small change");
+        let json = res.unwrap();
+        assert_eq!(json["incremental"], serde_json::Value::Bool(true));
+        assert_eq!(
+            json["rescanned_files"],
+            serde_json::json!(1),
+            "only a.ts changed"
+        );
+        // Drain the swapped-in index so its shard dir is released before cleanup.
+        let taken = st.inner.write().unwrap().take();
+        guard::drop_catching_panics(taken, "incremental test cleanup");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// End-to-end regression for the poisoned-lock root cause. This is the
+    /// exact build-swap path: the old `ProjectIndex` holds a `CodeShard` whose
+    /// directory has been wiped (antivirus / orphan-cleanup race → `os error 3`),
+    /// so its `EdgeShard::drop` flush **panics** — the same panic production
+    /// logs showed at `qdrant-edge edge/mod.rs:168` from `codegraph_build_index`
+    /// and `codegraph_close`.
+    ///
+    /// The build path swaps in a new index via `guard::swap_returning_old`
+    /// (old moved OUTSIDE the lock) + `guard::drop_catching_panics` (panic
+    /// caught), so `inner` must NOT poison — the next write succeeds. Before
+    /// the fix, the old index was dropped INSIDE the write lock
+    /// (`*st.inner.write() = Some(new)`), the flush panic poisoned `inner`, and
+    /// every subsequent build returned "poisoned lock: another task failed
+    /// inside" until process restart — the persistent "向量索引构建失败".
+    #[test]
+    fn build_swap_keeps_inner_unpoisoned_when_old_shard_dir_wiped() {
+        let dir = std::env::temp_dir().join(format!("cg_e2e_poison_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // Old shard with real data so it has segments to flush on drop.
+        let old_dir = dir.join("old-shard");
+        let old_shard = CodeShard::create(&old_dir, 384).unwrap();
+        let pt = IndexedPoint {
+            symbol: SymbolDef {
+                name: "foo".into(),
+                kind: SymbolKind::Function,
+                file: "a.ts".into(),
+                line: 1,
+                column: 1,
+                parent: None,
+            },
+            source: Confidence::Structure,
+            code_snippet: "function foo() {}".into(),
+        };
+        old_shard
+            .upsert_with_vectors(&[(pt, vec![0.0f32; 384])])
+            .unwrap();
+        let old_index = ProjectIndex {
+            project_root: dir.clone(),
+            symbols: SymbolTable::new(),
+            shard: Arc::new(old_shard),
+            indexed_at: SystemTime::now(),
+            embed_ready: Arc::new(AtomicBool::new(true)),
+        };
+        // Wipe the old shard's dir — its drop will now flush-panic.
+        let _ = std::fs::remove_dir_all(&old_dir);
+
+        let st = CodeGraphState::new();
+        // The old (doomed) index lives in state before a rebuild swaps it out.
+        *st.inner.write().unwrap() = Some(old_index);
+
+        // New shard/index to swap in (build Phase 1).
+        let new_dir = dir.join("new-shard");
+        let new_shard = CodeShard::create(&new_dir, 384).unwrap();
+        let new_index = ProjectIndex {
+            project_root: dir.clone(),
+            symbols: SymbolTable::new(),
+            shard: Arc::new(new_shard),
+            indexed_at: SystemTime::now(),
+            embed_ready: Arc::new(AtomicBool::new(false)),
+        };
+
+        // The exact build-swap sequence used by `codegraph_build_index` Phase 1.
+        let old = guard::swap_returning_old(&st.inner, new_index);
+        guard::drop_catching_panics(old, "old project index (build swap)");
+
+        // The lock must NOT be poisoned: a subsequent write must succeed. This
+        // is exactly what failed before the fix — every build after the first
+        // drop panic returned "poisoned lock: another task failed inside".
+        assert!(
+            st.inner.write().is_ok(),
+            "inner lock must not be poisoned after the old shard drop panic"
+        );
+
+        // Cleanup: drain the new index without poisoning (its dir is intact,
+        // but use the same safe path for uniformity).
+        let live = st.inner.write().unwrap().take();
+        guard::drop_catching_panics(live, "new project index (test cleanup)");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

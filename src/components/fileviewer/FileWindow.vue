@@ -15,7 +15,7 @@ const props = defineProps<{
   bounds: { w: number; h: number };
 }>();
 
-const { closeWindow, save, openAndScrollTo, projectRoot, gotoOwnerId } = useFileViewer();
+const { closeWindow, save, openAndScrollTo, projectRoot, gotoOwnerId, indexHintWinId } = useFileViewer();
 const goto = useGotoDefinition();
 const modal = useModal();
 
@@ -23,6 +23,8 @@ const gotoPopoverRef = ref<HTMLElement | null>(null);
 const codeEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null);
 
 const dirty = computed(() => isWindowDirty(props.win));
+/** 本窗口是否正在显示「索引已更新」轻量提示（保存成功增量更新后闪现 ~1.5s） */
+const showIndexHint = computed(() => indexHintWinId.value === props.win.id);
 
 // ── 滚动位置记忆（会话级，重启即忘）──
 // 同一文件的编辑器 / 预览 / 只读 pre 滚动度量不同，key 按视图类型分开；
@@ -217,6 +219,9 @@ function onKeydown(e: KeyboardEvent) {
     <div class="fw-header" @pointerdown="onHeaderPointerDown">
       <span v-if="dirty" class="fw-dirty" v-tooltip="'有未保存的修改'">●</span>
       <span class="fw-title">{{ win.fileName }}</span>
+      <transition name="fw-index-hint-fade">
+        <span v-if="showIndexHint" key="hint" class="fw-index-hint" aria-live="polite">索引已更新</span>
+      </transition>
       <span class="fw-lang">{{ languageLabel }}</span>
       <span v-if="win.readonly && !isImage" class="fw-readonly-badge">只读</span>
       <span class="fw-path" v-tooltip="win.filePath">{{ win.filePath }}</span>
@@ -368,6 +373,27 @@ function onKeydown(e: KeyboardEvent) {
   color: var(--aide-warning);
   font-size: 11px;
   flex-shrink: 0;
+}
+
+/* 保存成功增量更新索引后的轻量提示：标题栏闪一条「索引已更新」，~1.5s 自消失。
+   不进通知中心（成功是常态），用 success 语义色。transition 控制淡入淡出。 */
+.fw-index-hint {
+  font-size: 10px;
+  color: var(--aide-success);
+  background: color-mix(in srgb, var(--aide-success) 14%, transparent);
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.fw-index-hint-fade-enter-active,
+.fw-index-hint-fade-leave-active {
+  transition: opacity 0.25s ease;
+}
+.fw-index-hint-fade-enter-from,
+.fw-index-hint-fade-leave-to {
+  opacity: 0;
 }
 
 .fw-title {

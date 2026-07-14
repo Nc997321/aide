@@ -271,7 +271,25 @@ impl HttpEmbedder {
         if self.format == HttpFormat::Openai && !self.api_key.is_empty() {
             req = req.set("Authorization", &format!("Bearer {}", self.api_key));
         }
-        let resp = req.send_json(body)?;
+        // ureq turns 4xx/5xx into `Err(Status, Response)` at `send_json` time.
+        // We must read that response body here — otherwise the error surfaced
+        // to the user is a bare "status code 500" with no Ollama/OpenAI reason,
+        // making the failure undiagnosable (the symptom: "语义搜索不可用" with
+        // `embed_status: batch_errors` and no cause).
+        let resp = match req.send_json(body) {
+            Ok(r) => r,
+            Err(ureq::Error::Status(status, response)) => {
+                let val: serde_json::Value =
+                    response.into_json().unwrap_or(serde_json::Value::Null);
+                return Err(format!(
+                    "embedding endpoint returned {}: {}",
+                    status,
+                    extract_error_message(&val)
+                )
+                .into());
+            }
+            Err(e) => return Err(e.into()),
+        };
         let status = resp.status();
         let val: serde_json::Value = resp.into_json()?;
         if status >= 400 {

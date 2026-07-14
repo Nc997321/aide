@@ -2,6 +2,7 @@ import { ref, readonly } from "vue";
 import { api } from "../api";
 import { useRecent } from "./useRecent";
 import { useCodeGraphProgress } from "./useCodeGraphProgress";
+import { useNotifications } from "./useNotifications";
 import { imageMimeFromPath } from "../utils/imageMime";
 
 /**
@@ -57,6 +58,15 @@ const gotoOwnerId = ref<string | null>(null);
 // 每窗口图片 Blob URL，关窗时释放；非响应式，仅用于清理。
 const blobUrls = new Map<string, string>();
 
+// ── 保存触发的「索引已更新」轻量提示 ──
+// 保存成功增量更新索引后，在编辑器窗口附近短暂闪一条提示（约 1.5s 自消失），
+// 不进通知中心（成功是常态，进通知中心会刷屏）。只有失败 / embed 未就绪
+// 这类需要用户知晓的情况才走 useNotifications 进通知中心（见 save()）。
+// 单例：同一时刻只显示最近一次保存的提示；新保存覆盖旧的（重置计时）。
+const indexHintWinId = ref<string | null>(null);
+let indexHintTimer: ReturnType<typeof setTimeout> | null = null;
+const { push: pushNotification } = useNotifications();
+
 function fileNameOf(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() || path;
 }
@@ -68,6 +78,20 @@ function isMarkdownPath(path: string): boolean {
 
 export function isWindowDirty(win: FileWindowState): boolean {
   return !win.readonly && !win.error && !win.imageUrl && win.editContent !== win.content;
+}
+
+/**
+ * 闪一条「索引已更新」轻量提示，绑定到指定窗口。约 1.5s 后自消失；
+ * 新一次保存会覆盖旧的（清旧计时、重置），故同时只有一个窗口显示。
+ */
+function showIndexHint(winId: string) {
+  indexHintWinId.value = winId;
+  if (indexHintTimer) clearTimeout(indexHintTimer);
+  indexHintTimer = setTimeout(() => {
+    // 仅当仍是本窗口时清，避免被更新的提示误清
+    if (indexHintWinId.value === winId) indexHintWinId.value = null;
+    indexHintTimer = null;
+  }, 1500);
 }
 
 async function detectProjectRoot() {
@@ -197,9 +221,46 @@ export function useFileViewer() {
     try {
       await api.writeFileContent(win.filePath, win.editContent);
       win.content = win.editContent;
-      // 增量更新 codegraph 索引（best-effort，绝不阻断保存主流程）
+      // 增量更新 codegraph 索引（best-effort，绝不阻断保存主流程）。
+      // 后端返回结构化状态：更新成功 / 被跳过（带原因）/ 失败。
+      // 反馈分流：
+      //   · reindexed:true        → 轻量提示「索引已更新」(~1.5s 自消失，不进通知中心)
+      //   · skipped:embed_not_ready → 进通知中心（语义搜索不可用，需用户知晓）
+      //   · skipped:no_active_index / not_in_project → 静默（文件不在索引范围，常态）
+      //   · reject (失败)         → 进通知中心（error）
       if (projectRoot.value) {
-        void api.codegraphReindexFile(projectRoot.value, win.filePath).catch(() => {});
+        api
+          .codegraphReindexFile(projectRoot.value, win.filePath)
+          .then((r) => {
+            if (!r) return;
+            if (r.reindexed) {
+              console.info(`[codegraph] 保存已增量更新索引：${win.filePath}`);
+              showIndexHint(win.id);
+            } else if (r.skipped === "embed_not_ready") {
+              console.info(`[codegraph] 保存未触发索引更新（embed_not_ready）：${win.filePath}`);
+              pushNotification({
+                severity: "warning",
+                source: "codegraph",
+                title: "语义索引未就绪",
+                body: "保存时未更新语义索引：embed 尚未完成（后台构建中 / embedder 早停）。结构层精确跳转仍可用。",
+                timestamp: Date.now(),
+                dedupKey: `codegraph:save:embed_not_ready:${projectRoot.value}`,
+              });
+            } else if (r.skipped) {
+              console.info(`[codegraph] 保存未触发索引更新（${r.skipped}）：${win.filePath}`);
+            }
+          })
+          .catch((e) => {
+            console.warn(`[codegraph] 保存增量更新失败：${win.filePath}`, e);
+            pushNotification({
+              severity: "error",
+              source: "codegraph",
+              title: "保存更新索引失败",
+              body: `${win.fileName}: ${String(e)}`,
+              timestamp: Date.now(),
+              dedupKey: `codegraph:save:err:${win.filePath}`,
+            });
+          });
       }
     } catch (e) {
       win.error = String(e);
@@ -212,6 +273,11 @@ export function useFileViewer() {
     for (const w of [...windows.value]) closeWindow(w.id);
     projectRoot.value = "";
     gotoOwnerId.value = null;
+    if (indexHintTimer) {
+      clearTimeout(indexHintTimer);
+      indexHintTimer = null;
+    }
+    indexHintWinId.value = null;
     useCodeGraphProgress().__resetForTest();
   }
 
@@ -221,6 +287,8 @@ export function useFileViewer() {
     focusedId: readonly(focusedId),
     projectRoot: readonly(projectRoot),
     gotoOwnerId,
+    /** 当前显示「索引已更新」提示的窗口 id（null = 无）；FileWindow 按 win.id 匹配渲染 */
+    indexHintWinId: readonly(indexHintWinId),
     open,
     openAndScrollTo,
     closeWindow,

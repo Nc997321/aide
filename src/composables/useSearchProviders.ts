@@ -145,7 +145,7 @@ function createCodegraphProvider(
 ): SearchProvider {
   return {
     id: "codegraph",
-    label: "符号",
+    label: "代码定义",
     priority: 5, // after sessions (0) and files (1)
     async search(query, limit) {
       if (!query.trim() || query.trim().length < 2) return [];
@@ -158,7 +158,7 @@ function createCodegraphProvider(
         return results.slice(0, limit).map((r) => ({
           id: `${r.symbol.file}:${r.symbol.line}:${r.symbol.name}`,
           label: r.symbol.name,
-          description: `${r.confidence === "Structure" ? "精确" : "语义"} · ${r.symbol.file}:${r.symbol.line}`,
+          description: `${r.confidence === "Structure" ? "精确" : "相似"} · ${r.symbol.file}:${r.symbol.line}`,
           icon: r.confidence === "Structure" ? "link" : "search",
           action() {
             const separator = projectRoot.includes("\\") ? "\\" : "/";
