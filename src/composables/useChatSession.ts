@@ -883,11 +883,15 @@ export function useChatSession(sessionId: Ref<string | null>) {
   async function sendBtw(prompt: string, opts: { lightweight: boolean; permissionMode?: string } = { lightweight: true }) {
     const sid = sessionId.value;
     if (!sid) {
-      console.warn("sendBtw 需要一个存活的主会话作为 fork 源");
+      // 无存活主会话可 fork:不静默返回(那会让 ChatPanel 已弹的"已切回"toast 变成误导)。
+      // 进 error 态,抽屉展示原因。正常路径下 ChatPanel 已在 !sessionId 时禁用了 btw
+      // 切换项,这里是停止主会话后又点 btw 的兜底。
+      useBtwSession().failBtw(prompt, "需要先发送一条消息开始主对话，才能顺便问一下");
       return;
     }
     const btwId = crypto.randomUUID();
-    pendingSids.add(btwId);
+    // btw 事件经 isBtwSid(btwpTempId) 路由,不参与主对话的 pending/finalize 流程,
+    // 故不进 pendingSids(此前 add 后成功路径从不 delete,是残余泄漏)。
     const sessionWs = useSessionWorkspaces().workspaceOf(sid);
     const cwd = sessionWs?.wsPath || "";
     const store = getStore(sid);
@@ -902,14 +906,9 @@ export function useChatSession(sessionId: Ref<string | null>) {
         timestamp: Date.now(),
       });
     });
-    // 启动失败(主会话已死/spawn 失败)不能留卡死抽屉 + 泄漏临时 id:回滚 pendingSids + 清 btw store。
-    try {
-      await btw.startBtw({ tempId: btwId, forkFrom: sid, prompt, cwd, lightweight: opts.lightweight, permissionMode: opts.permissionMode });
-    } catch (e) {
-      pendingSids.delete(btwId);
-      await btw.cleanup();
-      console.error("btw 启动失败:", e);
-    }
+    // startBtw 内部把 fork 失败(主会话未就绪 / spawn 失败)转成 store.status="error",
+    // 由抽屉展示原因——不抛、不静默 cleanup(那会抹掉失败只剩误导性 toast)。
+    await btw.startBtw({ tempId: btwId, forkFrom: sid, prompt, cwd, lightweight: opts.lightweight, permissionMode: opts.permissionMode });
   }
 
   return {

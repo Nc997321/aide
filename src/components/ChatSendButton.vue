@@ -23,8 +23,12 @@ const props = withDefaults(
     actions?: QuickAction[];
     /** btw 模式是否激活。 */
     btwActive?: boolean;
+    /** btw 不可用（无存活主会话可 fork）：菜单项置灰 + tooltip 说明原因，点击无反应。 */
+    btwDisabled?: boolean;
+    /** btw 置灰时 hover 显示的原因。 */
+    btwDisabledReason?: string;
   }>(),
-  { disabled: false, busy: false, actions: () => [], btwActive: false },
+  { disabled: false, busy: false, actions: () => [], btwActive: false, btwDisabled: false, btwDisabledReason: "" },
 );
 
 const emit = defineEmits<{
@@ -74,6 +78,13 @@ function toggleMenu() {
 
 function choose(action: QuickAction) {
   emit("select", action);
+  open.value = false;
+}
+
+function onToggleBtw() {
+  // 置灰时静默:原因由 tooltip 给出,不切换、不关菜单(让用户继续看提示)。
+  if (props.btwDisabled) return;
+  emit("toggle-btw");
   open.value = false;
 }
 
@@ -149,10 +160,12 @@ onUnmounted(() => {
           <button
             type="button"
             class="chat-send-menu-item"
-            :class="{ 'is-on': props.btwActive }"
+            :class="{ 'is-on': props.btwActive, 'is-disabled': props.btwDisabled }"
             role="menuitemcheckbox"
             :aria-checked="props.btwActive"
-            @click="emit('toggle-btw'); open = false"
+            :aria-disabled="props.btwDisabled"
+            v-tooltip="props.btwDisabled ? props.btwDisabledReason : undefined"
+            @click="onToggleBtw"
           >
             <span class="chat-send-menu-icon">↳</span>
             <span class="chat-send-menu-label">顺便问一下</span>
@@ -300,6 +313,15 @@ onUnmounted(() => {
 .chat-send-menu-item.is-on {
   background: var(--aide-accent-subtle);
   color: var(--aide-accent);
+}
+/* 置灰(如无存活主会话时 btw 不可用):仍可 hover 出 tooltip,但不亮起、不响应点击 */
+.chat-send-menu-item.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.chat-send-menu-item.is-disabled:hover {
+  background: transparent;
+  color: var(--aide-text-secondary);
 }
 .chat-send-menu-check {
   margin-left: auto;

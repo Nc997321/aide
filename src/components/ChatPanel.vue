@@ -295,9 +295,35 @@ function showBtwRevertToast() {
   clearTimeout(btwToastTimer);
   btwToastTimer = window.setTimeout(() => (btwRevertToast.value = false), 1600);
 }
+function playBtwRevertFlash() {
+  const box = rootEl.value?.querySelector(".chat-input-box") as HTMLElement | null;
+  if (!box) return;
+  box.classList.remove("btw-revert-flash");
+  void box.offsetWidth; // 重启动画
+  box.classList.add("btw-revert-flash");
+  setTimeout(() => box.classList.remove("btw-revert-flash"), 800);
+}
 
 const btw = useBtwSession();
-const btwDrawerVisible = computed(() => !!btw.store.value.question || btw.store.value.isBusy || btw.store.value.done);
+// 抽屉可见性走 status 生命周期:idle 隐藏,starting/running/done/error 都展示
+// (此前不含 error,起不来时抽屉不出现、只剩误导性 toast)
+const btwDrawerVisible = computed(() => btw.store.value.status !== "idle");
+// 一次性回弹确认:只在支线真正进入 running 才弹"已切回主对话"+flash。
+// 失败(error)不弹成功提示,原因在抽屉里展示——修掉"没抽屉却弹已切回"的误导。
+const awaitingBtwLaunch = ref(false);
+watch(
+  () => btw.store.value.status,
+  (st) => {
+    if (!awaitingBtwLaunch.value) return;
+    if (st === "running") {
+      awaitingBtwLaunch.value = false;
+      playBtwRevertFlash();
+      showBtwRevertToast();
+    } else if (st === "error") {
+      awaitingBtwLaunch.value = false;
+    }
+  },
+);
 function closeBtw() { btw.cleanup(); }
 function stopBtw() { btw.cleanup(); }
 
@@ -467,19 +493,14 @@ async function handleSend(jumpQueue = false) {
   if (!text && !hasImages) return;
 
   if (btwMode.value) {
-    // btw 一次性:发完自动切回主对话输入,视觉突出(回弹)
+    // btw 一次性:发完自动切回主对话输入。回弹确认(回弹动画 + "已切回"toast)
+    // 不在这里乐观触发——等支线真正进入 running 才确认(见上面 status 的 watch),
+    // 否则 fork 失败时也会弹"已切回主对话输入"造成误导。
     emit("send-btw", text, { lightweight: btwLightweight.value });
     inputText.value = "";
     pendingImages.value = [];
-    const box = rootEl.value?.querySelector(".chat-input-box") as HTMLElement | null;
     btwMode.value = false; // 横幅收起、按钮复原
-    if (box) {
-      box.classList.remove("btw-revert-flash");
-      void box.offsetWidth; // 重启动画
-      box.classList.add("btw-revert-flash");
-      setTimeout(() => box.classList.remove("btw-revert-flash"), 800);
-    }
-    showBtwRevertToast();
+    awaitingBtwLaunch.value = true;
     return;
   }
 
@@ -696,6 +717,8 @@ async function handleQuickAction(action: QuickAction) {
             :busy="isBusyVal"
             :actions="quickActions"
             :btw-active="btwMode"
+            :btw-disabled="!props.sessionId"
+            :btw-disabled-reason="'先发送一条消息开始主对话，才能顺便问一下'"
             @send="handleSend()"
             @toggle-btw="btwMode = !btwMode"
             @select="handleQuickAction"
