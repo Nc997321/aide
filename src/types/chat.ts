@@ -55,9 +55,14 @@ export interface SubagentBlock {
  *  不进 IPC 协议（SidecarCommand/ChatEvent），是前端独有的展示块。 */
 export interface ActionBlock {
   type: "action";
-  actionId: string; // "compact" | "clear" | ...
-  label: string; // 胶囊显示文本，如「压缩上下文」
-  icon?: string; // 胶囊前缀图标（字符或 SVG 名），可选
+  actionId: string; // "compact" | "clear" | "btw" | ...
+  label: string; // 胶囊/批注显示文本
+  icon?: string; // 胶囊前缀图标（字符或 SVG 名），btw 用 "↳"
+  // btw 批注扩展(仅 actionId==='btw' 使用):可折叠页边批注,展开看结论全文。
+  // 其余 action(/compact /clear)忽略这些字段,仍走原药丸胶囊渲染。
+  foldable?: boolean;
+  body?: string; // 结论全文
+  hint?: string; // 折叠头尾部提示,如"不进上下文"
 }
 
 export type ContentBlock = TextBlock | ToolCallBlock | ImageBlock | SubagentBlock | ActionBlock;
