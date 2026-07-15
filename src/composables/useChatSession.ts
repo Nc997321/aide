@@ -883,10 +883,10 @@ export function useChatSession(sessionId: Ref<string | null>) {
   async function sendBtw(prompt: string, opts: { lightweight: boolean; permissionMode?: string } = { lightweight: true }) {
     const sid = sessionId.value;
     if (!sid) {
-      // 无存活主会话可 fork:不静默返回(那会让 ChatPanel 已弹的"已切回"toast 变成误导)。
-      // 进 error 态,抽屉展示原因。正常路径下 ChatPanel 已在 !sessionId 时禁用了 btw
-      // 切换项,这里是停止主会话后又点 btw 的兜底。
-      useBtwSession().failBtw(prompt, "需要先发送一条消息开始主对话，才能顺便问一下");
+      // 无主会话可 fork:ChatPanel 已在 !sessionId 时禁用 btw 切换项,正常走不到这里。
+      // 兜底(在已启动会话切了 btw 模式后,又切到空白 tab 发送):静默 no-op——
+      // 不弹误导性 toast(乐观 toast 已移除),也不拉单例抽屉污染其它窗口。
+      console.warn("sendBtw 需要一个存活的主会话作为 fork 源");
       return;
     }
     const btwId = crypto.randomUUID();

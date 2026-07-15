@@ -305,9 +305,12 @@ function playBtwRevertFlash() {
 }
 
 const btw = useBtwSession();
-// 抽屉可见性走 status 生命周期:idle 隐藏,starting/running/done/error 都展示
-// (此前不含 error,起不来时抽屉不出现、只剩误导性 toast)
-const btwDrawerVisible = computed(() => btw.store.value.status !== "idle");
+// 抽屉可见性:status 非 idle 且本窗口的活动会话正是被 fork 的那个主会话。
+// btw store 是全局单例,但抽屉 per-ChatPanel 挂载——只看 status 会让任意窗口触发
+// 时所有窗口的抽屉一起弹出。ownerSessionId 把抽屉绑回触发它的那个会话窗口。
+const btwDrawerVisible = computed(
+  () => btw.store.value.status !== "idle" && btw.store.value.ownerSessionId !== null && btw.store.value.ownerSessionId === props.sessionId,
+);
 // 一次性回弹确认:只在支线真正进入 running 才弹"已切回主对话"+flash。
 // 失败(error)不弹成功提示,原因在抽屉里展示——修掉"没抽屉却弹已切回"的误导。
 const awaitingBtwLaunch = ref(false);

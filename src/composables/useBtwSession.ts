@@ -5,7 +5,12 @@ import type { ActionBlock } from "../types/chat";
 /** btw 支线对话的轻量 store——单例:同一时间只一个 btw(v1)。
  *  status 生命周期:idle(无)→starting(已发 fork 命令)→running(sidecar 应答中)
  *  →done(结论已插入批注)/error(起不来或中途死)。UI 据此决定抽屉可见性、
- *  且只在 running 才向用户确认"已切回主对话"(失败不弹误导性成功提示)。 */
+ *  且只在 running 才向用户确认"已切回主对话"(失败不弹误导性成功提示)。
+ *
+ *  ownerSessionId:这个 btw 是从哪个主会话 fork 出来的。抽屉是 per-ChatPanel
+ *  挂载的,但 store 是全局单例——若可见性只看 status,任何一个窗口触发都会让
+ *  所有窗口的抽屉一起弹出。用 ownerSessionId 把抽屉绑回触发它的那个会话窗口:
+ *  只有当前活动会话 === ownerSessionId 的 ChatPanel 才显示抽屉。 */
 type BtwStatus = "idle" | "starting" | "running" | "error" | "done";
 
 interface BtwState {
@@ -15,23 +20,17 @@ interface BtwState {
   error: string | null;
   question: string;
   status: BtwStatus;
+  ownerSessionId: string | null; // 被 fork 的主会话 sid;null=idle
 }
 
-const IDLE: BtwState = { messages: [], isBusy: false, done: false, error: null, question: "", status: "idle" };
+const IDLE: BtwState = { messages: [], isBusy: false, done: false, error: null, question: "", status: "idle", ownerSessionId: null };
 const state = ref<BtwState>({ ...IDLE });
 let btwTempId: string | null = null;
 let btwRealId: string | null = null; // session_init 后的 fork id
 let onDoneCb: ((block: ActionBlock) => void) | null = null;
 
 function resetState(question: string) {
-  state.value = { messages: [], isBusy: true, done: false, error: null, question, status: "starting" };
-}
-
-/** 预置失败(无存活主会话等前置不满足):不 spawn,直接进 error 态让抽屉展示原因。 */
-function failBtw(question: string, msg: string) {
-  btwTempId = null;
-  btwRealId = null;
-  state.value = { messages: [], isBusy: false, done: false, error: msg, question, status: "error" };
+  state.value = { messages: [], isBusy: true, done: false, error: null, question, status: "starting", ownerSessionId: null };
 }
 
 /** useChatSession.handleChatEvent 调:判断事件是否属于当前 btw。 */
@@ -54,6 +53,7 @@ async function startBtw(opts: StartBtwOpts) {
   btwTempId = opts.tempId;
   btwRealId = null;
   resetState(opts.prompt); // status="starting":抽屉已可见,显示问题
+  state.value.ownerSessionId = opts.forkFrom; // 抽屉只绑回这个主会话所在窗口
   try {
     await invoke("start_btw_session", {
       btwId: opts.tempId,
@@ -145,7 +145,6 @@ export function useBtwSession() {
     store: computed(() => state.value),
     isBtwSid,
     startBtw,
-    failBtw,
     handleBtwEvent,
     cleanup,
     setOnDone,
