@@ -82,6 +82,27 @@ function handleTextClick(e: MouseEvent) {
           v-else-if="seg.block.type === 'tool_call'"
           :block="(seg.block as any)"
         />
+        <!-- btw 页边批注：可折叠、视觉权重远低于真实消息，读起来是"贴在边上的便签" -->
+        <div
+          v-else-if="seg.block.type === 'action' && seg.block.actionId === 'btw'"
+          class="msg-row--note"
+        >
+          <details class="btw-note">
+            <summary class="btw-note-head">
+              <span class="btw-note-caret tri"></span>
+              <span class="btw-note-glyph tri">↳</span>
+              <span class="btw-note-tag">btw</span>
+              <span class="btw-note-q">{{ seg.block.label }}</span>
+              <span class="btw-note-sep">·</span>
+              <span class="btw-note-hint">{{ seg.block.hint ?? '不进上下文' }}</span>
+            </summary>
+            <div class="btw-note-body">
+              <div>{{ seg.block.body }}</div>
+              <div class="btw-note-warn">↳ 这是支线结论,不会进入主对话上下文。</div>
+            </div>
+          </details>
+        </div>
+        <!-- 原 action 药丸(压缩/清空上下文) -->
         <span
           v-else-if="seg.block.type === 'action'"
           class="msg-action-chip"
@@ -288,4 +309,32 @@ function handleTextClick(e: MouseEvent) {
   margin: 4px 0;
   cursor: pointer;
 }
+
+/* btw 页边批注：右对齐、虚线 accent 边、默认折叠 */
+.msg-row--note { display: flex; justify-content: flex-end; padding: 2px 12px; }
+.btw-note {
+  max-width: 70%; border: 1px dashed var(--aide-accent); border-radius: var(--aide-radius-md);
+  background: color-mix(in srgb, var(--aide-accent) 6%, transparent); overflow: hidden;
+}
+.btw-note-head {
+  display: flex; align-items: center; gap: 7px; padding: 5px 11px; cursor: pointer;
+  list-style: none; font-size: 12px; color: var(--aide-accent);
+}
+.btw-note-head::-webkit-details-marker { display: none; }
+.btw-note-caret {
+  border-left: 4px solid transparent; border-right: 4px solid transparent;
+  border-top: 5px solid var(--aide-accent); opacity: 0.7; transition: transform 0.15s;
+}
+.btw-note[open] .btw-note-caret { transform: rotate(90deg); }
+.btw-note-glyph { color: var(--aide-accent); }
+.btw-note-tag {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.04em; padding: 1px 6px;
+  border-radius: 999px; border: 1px solid var(--aide-accent); color: var(--aide-accent);
+}
+.btw-note-q { color: var(--aide-text-secondary); font-size: 12px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.btw-note-sep { color: var(--aide-text-muted); }
+.btw-note-hint { font-size: 10px; color: var(--aide-text-muted); display: flex; align-items: center; gap: 4px; }
+.btw-note-hint::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--aide-success); }
+.btw-note-body { padding: 2px 12px 9px; font-size: 12px; line-height: 1.6; color: var(--aide-text-secondary); border-top: 1px dashed var(--aide-border); }
+.btw-note-warn { font-size: 11px; color: var(--aide-text-muted); margin-top: 7px; }
 </style>
