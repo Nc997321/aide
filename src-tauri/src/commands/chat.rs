@@ -162,13 +162,17 @@ pub async fn start_btw_session(
     cwd: String,
     lightweight: bool,
     permission_mode: Option<String>,
+    // btw 默认走便宜快的模型(前端传 haiku);None/空串则退化到 provider 默认。
+    // 仅 spawn 时生效一次,语义与 send_message 的 initial_model 一致。
+    model: Option<String>,
     app_handle: tauri::AppHandle,
     sidecar_mgr: State<'_, SidecarManager>,
 ) -> Result<(), String> {
     if !sidecar_mgr.has_session(&fork_from) {
         return Err(format!("主对话未就绪,无法顺便问(fork_from 未存活): {fork_from}"));
     }
-    let env_vars = build_sidecar_env_vars();
+    let mut env_vars = build_sidecar_env_vars();
+    apply_initial_model_override(&mut env_vars, model);
     sidecar_mgr.spawn(btw_id.clone(), PathBuf::from(&cwd), env_vars, app_handle)?;
     let cmd = build_btw_send_cmd(&fork_from, &prompt, &cwd, lightweight, &permission_mode);
     sidecar_mgr.send(&btw_id, &cmd).await

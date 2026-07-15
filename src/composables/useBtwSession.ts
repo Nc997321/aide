@@ -21,16 +21,17 @@ interface BtwState {
   question: string;
   status: BtwStatus;
   ownerSessionId: string | null; // 被 fork 的主会话 sid;null=idle
+  model: string; // 这条支线实际跑的模型别名(抽屉展示用);空串=idle
 }
 
-const IDLE: BtwState = { messages: [], isBusy: false, done: false, error: null, question: "", status: "idle", ownerSessionId: null };
+const IDLE: BtwState = { messages: [], isBusy: false, done: false, error: null, question: "", status: "idle", ownerSessionId: null, model: "" };
 const state = ref<BtwState>({ ...IDLE });
 let btwTempId: string | null = null;
 let btwRealId: string | null = null; // session_init 后的 fork id
 let onDoneCb: ((block: ActionBlock) => void) | null = null;
 
 function resetState(question: string) {
-  state.value = { messages: [], isBusy: true, done: false, error: null, question, status: "starting", ownerSessionId: null };
+  state.value = { messages: [], isBusy: true, done: false, error: null, question, status: "starting", ownerSessionId: null, model: "" };
 }
 
 /** useChatSession.handleChatEvent 调:判断事件是否属于当前 btw。 */
@@ -45,6 +46,7 @@ interface StartBtwOpts {
   cwd: string;
   lightweight: boolean;
   permissionMode?: string;
+  model?: string;
 }
 
 async function startBtw(opts: StartBtwOpts) {
@@ -54,6 +56,7 @@ async function startBtw(opts: StartBtwOpts) {
   btwRealId = null;
   resetState(opts.prompt); // status="starting":抽屉已可见,显示问题
   state.value.ownerSessionId = opts.forkFrom; // 抽屉只绑回这个主会话所在窗口
+  state.value.model = opts.model ?? ""; // 抽屉展示这条支线用的模型
   try {
     await invoke("start_btw_session", {
       btwId: opts.tempId,
@@ -62,6 +65,7 @@ async function startBtw(opts: StartBtwOpts) {
       cwd: opts.cwd,
       lightweight: opts.lightweight,
       permissionMode: opts.permissionMode ?? null,
+      model: opts.model ?? null,
     });
     state.value.status = "running"; // sidecar 已接收命令,确认 fork 成功
   } catch (e) {

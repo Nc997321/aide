@@ -49,7 +49,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   send: [prompt: string, opts: SendOptions];
-  "send-btw": [prompt: string, opts: { lightweight: boolean }];
+  "send-btw": [prompt: string, opts: { lightweight: boolean; model?: string }];
   interrupt: [];
   "set-model": [model: string];
   "set-permission-mode": [mode: string];
@@ -184,6 +184,12 @@ watch(() => sessionProvider.value.id, () => {
 });
 
 function handleModelChange(value: string) {
+  // btw 模式下模型选择器只决定这条支线用什么模型,不回写主会话(主会话模型不变,
+  // 发送后 btwMode 关闭,选择器自动回到主会话模型)。
+  if (btwMode.value) {
+    btwModel.value = value;
+    return;
+  }
   selectedModel.value = value;
   // 会话还没开始时 useChatSession.setModel 是无会话可发的空操作，安全；
   // 真正生效靠 handleSend 把 selectedModel 带进第一条消息。
@@ -288,6 +294,21 @@ async function expandOlderAnchored() {
 
 const btwMode = ref(false);
 const btwLightweight = ref(true);
+// btw 默认走便宜快的模型:进入 btw 模式时置为 haiku(若当前 provider 没列出 haiku,
+// 退化到主会话当前模型,避免下拉显示一个不存在的值)。btw 期间模型选择器显示它,
+// 用户可临时改这条支线的模型(不回写主会话);发送后 btwMode 关闭,选择器自动回到主会话模型。
+const btwModel = ref("haiku");
+const btwDefaultModel = computed(() =>
+  modelSelectOptions.value.some((m) => m.value === "haiku")
+    ? "haiku"
+    : selectedModel.value || modelSelectOptions.value[0]?.value || "haiku",
+);
+function toggleBtw() {
+  btwMode.value = !btwMode.value;
+  if (btwMode.value) btwModel.value = btwDefaultModel.value;
+}
+// 输入框模型选择器显示值:btw 期间显示支线模型,否则显示主会话模型
+const displayedModel = computed(() => (btwMode.value ? btwModel.value : selectedModel.value));
 const btwRevertToast = ref(false);
 let btwToastTimer: number | undefined;
 function showBtwRevertToast() {
@@ -311,6 +332,12 @@ const btw = useBtwSession();
 const btwDrawerVisible = computed(
   () => btw.store.value.status !== "idle" && btw.store.value.ownerSessionId !== null && btw.store.value.ownerSessionId === props.sessionId,
 );
+// 抽屉标题里"· btw"那块小字换成这条支线实际用的模型名(查下拉 displayName,查不到回落原值)
+const btwModelLabel = computed(() => {
+  const v = btw.store.value.model;
+  if (!v) return "btw";
+  return modelSelectOptions.value.find((m) => m.value === v)?.label ?? v;
+});
 // 一次性回弹确认:只在支线真正进入 running 才弹"已切回主对话"+flash。
 // 失败(error)不弹成功提示,原因在抽屉里展示——修掉"没抽屉却弹已切回"的误导。
 const awaitingBtwLaunch = ref(false);
@@ -499,7 +526,7 @@ async function handleSend(jumpQueue = false) {
     // btw 一次性:发完自动切回主对话输入。回弹确认(回弹动画 + "已切回"toast)
     // 不在这里乐观触发——等支线真正进入 running 才确认(见上面 status 的 watch),
     // 否则 fork 失败时也会弹"已切回主对话输入"造成误导。
-    emit("send-btw", text, { lightweight: btwLightweight.value });
+    emit("send-btw", text, { lightweight: btwLightweight.value, model: btwModel.value });
     inputText.value = "";
     pendingImages.value = [];
     btwMode.value = false; // 横幅收起、按钮复原
@@ -661,7 +688,7 @@ async function handleQuickAction(action: QuickAction) {
         <div class="chat-toolbar">
           <ThemedSelect
             v-if="displayModels.length"
-            :model-value="selectedModel"
+            :model-value="displayedModel"
             :options="modelSelectOptions"
             title="模型"
             @update:model-value="handleModelChange"
@@ -723,7 +750,7 @@ async function handleQuickAction(action: QuickAction) {
             :btw-disabled="!props.sessionId"
             :btw-disabled-reason="'先发送一条消息开始主对话，才能顺便问一下'"
             @send="handleSend()"
-            @toggle-btw="btwMode = !btwMode"
+            @toggle-btw="toggleBtw"
             @select="handleQuickAction"
           />
         </div>
@@ -735,6 +762,7 @@ async function handleQuickAction(action: QuickAction) {
     <BtwDrawer
       :visible="btwDrawerVisible"
       :lightweight="btwLightweight"
+      :model-label="btwModelLabel"
       @update:lightweight="btwLightweight = $event"
       @close="closeBtw"
       @stop="stopBtw"

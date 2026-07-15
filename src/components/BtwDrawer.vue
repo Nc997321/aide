@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import { useBtwSession } from "@/composables/useBtwSession";
 
-const props = defineProps<{ visible: boolean; lightweight: boolean }>();
+const props = defineProps<{ visible: boolean; lightweight: boolean; modelLabel: string }>();
 const emit = defineEmits<{
   (e: "close"): void;
   (e: "stop"): void;
@@ -22,7 +22,7 @@ const text = computed(() => store.value.messages.join(""));
       </div>
       <div class="btw-head">
         <div class="btw-title-row">
-          <div class="btw-title"><span class="btw-fork">↳</span> 顺便问一下 <span class="btw-pill">· btw</span></div>
+          <div class="btw-title"><span class="btw-fork">↳</span> 顺便问一下 <span class="btw-pill">· {{ props.modelLabel }}</span></div>
           <div class="btw-ctrl">
             <div class="btw-seg" role="group">
               <button :aria-pressed="props.lightweight" @click="emit('update:lightweight', true)" :disabled="store.isBusy">轻量</button>
