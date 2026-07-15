@@ -10,6 +10,7 @@ import { ToolLifecycleTracker } from "./toolLifecycle.js";
 import { JumpQueueController } from "./jumpQueue.js";
 import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { stopAllOutputTails } from "./subagentOutputTail.js";
+import { btwQueryOverrides, forkResumeOptions } from "./btwOptions.js";
 import {
   mapSdkMessage,
   buildUserMessage,
@@ -104,6 +105,11 @@ let shouldForkNextConnect = false;
 // 轮外（消息刚好赶在上一轮结束后的竞态窗口到达）→ 没有轮可打断，interrupt
 // 会空打、插队消息永远滞留，必须退化成普通消息直接入队。
 let turnActive = false;
+// btw 支线模式:首条 send 带 btw:true 时置真,整个进程生命周期有效(btw 进程是一次性
+// 的,跑完即被前端 kill,无需复位)。fork 用 shouldForkNextConnect 复用既有机制,但
+// btw 走 fork 时不发"已切换供应商"通知(用 btwMode 抑制 pendingFork)。
+let btwMode = false;
+let lightweightMode = false;
 
 // SDK 还认识但不放进常驻下拉清单的模式（"总是允许"的 setMode 建议可能切过去）。
 // 广播时若当前模式不在常驻清单里，用这里的文案动态补一项，避免下拉显示空白。
@@ -237,7 +243,10 @@ async function startLoop(cwd?: string) {
             allowDangerouslySkipPermissions: true,
             canUseTool: permMgr.makeCallback(emit, subagentTracker) as any,
             settingSources: ["project", "user"],
-            allowedTools: ["Agent", "Task"],
+            // 轻量 btw:禁工具;其余情况(主对话/btw 完整)保持 Agent/Task 自动批准
+            ...(lightweightMode
+              ? { allowedTools: [] as string[] }
+              : { allowedTools: ["Agent", "Task"] }),
             skills: "all",
             plugins: buildPluginsOption(),
             // 关闭实时流式：文本不再以 stream_event 逐字到达，mapper 改为把最终
@@ -253,19 +262,14 @@ async function startLoop(cwd?: string) {
             ...(process.env.AIDE_CLAUDE_EXE
               ? { pathToClaudeCodeExecutable: process.env.AIDE_CLAUDE_EXE }
               : {}),
-            // forkSession=true：resume 旧会话时自动 fork 出新 session，保留旧会话
-            // 对话历史但用新 provider 配置——CLI resume 时会从 session 文件读取创建时
-            // 缓存的 provider 配置（base_url/api_key/model），覆盖 process.env 里的
-            // 新值，导致切换供应商后仍用旧 base_url 返回 404。fork 绕过这个问题：
-            // 新 session 文件不会缓存旧 provider 的配置。只有 Rust 显式判定这次是
-            // 供应商真的漂移了才 fork（shouldForkNextConnect）——单纯 resume（包括
-            // 中断/错误触发的内部重连、或重开一个历史会话）一律走普通 resume，
-            // 不会误分裂出新 session 也不会误报"已切换供应商"。
+            // fork:btw 与供应商切换都走 fork;btw 时抑制"已切换供应商"通知
+            // (pendingFork 只在非 btw 时置真)。
             ...(sessionId
               ? shouldForkNextConnect
-                ? (pendingFork = true, { resume: sessionId, forkSession: true })
+                ? (btwMode ? {} : (pendingFork = true, {}), { resume: sessionId, forkSession: true })
                 : { resume: sessionId }
               : {}),
+            ...btwQueryOverrides(btwMode, lightweightMode),
             env: cliEnv,
           },
         });
@@ -396,6 +400,12 @@ rl.on("line", (line) => {
     // Rust 显式告知这次 resume 是供应商连接身份真的漂移了，才允许下一次建
     // query() 时 forkSession——见 shouldForkNextConnect 声明处的注释。
     if (cmd.provider_switched) shouldForkNextConnect = true;
+    // btw:fork 主会话(复用 shouldForkNextConnect 机制) + 记 lightweight 供 startLoop 用
+    if (cmd.btw) {
+      shouldForkNextConnect = true;
+      btwMode = true;
+      lightweightMode = !!cmd.lightweight;
+    }
 
     if (!loopStarted) {
       loopStarted = true;

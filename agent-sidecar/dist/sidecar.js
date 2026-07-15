@@ -46136,6 +46136,13 @@ function ensureTimer() {
   if (typeof timer.unref === "function") timer.unref();
 }
 
+// src/btwOptions.ts
+function btwQueryOverrides(btwMode2, lightweight) {
+  if (!btwMode2) return {};
+  if (lightweight) return { persistSession: false, tools: [], allowedTools: [] };
+  return { persistSession: false };
+}
+
 // src/index.ts
 var coalescer = new DeltaCoalescer((event) => {
   process.stdout.write(JSON.stringify(event) + "\n");
@@ -46183,6 +46190,8 @@ var currentPermissionMode = "default";
 var pendingFork = false;
 var shouldForkNextConnect = false;
 var turnActive = false;
+var btwMode = false;
+var lightweightMode = false;
 var EXTRA_MODE_LABELS = {
   dontAsk: "\u672C\u6B21\u4F1A\u8BDD\u4E0D\u518D\u8BE2\u95EE"
 };
@@ -46288,7 +46297,8 @@ async function startLoop(cwd) {
             allowDangerouslySkipPermissions: true,
             canUseTool: permMgr.makeCallback(emit, subagentTracker),
             settingSources: ["project", "user"],
-            allowedTools: ["Agent", "Task"],
+            // 轻量 btw:禁工具;其余情况(主对话/btw 完整)保持 Agent/Task 自动批准
+            ...lightweightMode ? { allowedTools: [] } : { allowedTools: ["Agent", "Task"] },
             skills: "all",
             plugins: buildPluginsOption(),
             // 关闭实时流式：文本不再以 stream_event 逐字到达，mapper 改为把最终
@@ -46302,15 +46312,10 @@ async function startLoop(cwd) {
             // release 打包：Rust 侧把随 app 分发的原生 CLI 路径通过环境变量传入；
             // 未设置时 SDK 从 node_modules 解析（dev 模式）
             ...process.env.AIDE_CLAUDE_EXE ? { pathToClaudeCodeExecutable: process.env.AIDE_CLAUDE_EXE } : {},
-            // forkSession=true：resume 旧会话时自动 fork 出新 session，保留旧会话
-            // 对话历史但用新 provider 配置——CLI resume 时会从 session 文件读取创建时
-            // 缓存的 provider 配置（base_url/api_key/model），覆盖 process.env 里的
-            // 新值，导致切换供应商后仍用旧 base_url 返回 404。fork 绕过这个问题：
-            // 新 session 文件不会缓存旧 provider 的配置。只有 Rust 显式判定这次是
-            // 供应商真的漂移了才 fork（shouldForkNextConnect）——单纯 resume（包括
-            // 中断/错误触发的内部重连、或重开一个历史会话）一律走普通 resume，
-            // 不会误分裂出新 session 也不会误报"已切换供应商"。
-            ...sessionId ? shouldForkNextConnect ? (pendingFork = true, { resume: sessionId, forkSession: true }) : { resume: sessionId } : {},
+            // fork:btw 与供应商切换都走 fork;btw 时抑制"已切换供应商"通知
+            // (pendingFork 只在非 btw 时置真)。
+            ...sessionId ? shouldForkNextConnect ? (btwMode ? {} : (pendingFork = true, {}), { resume: sessionId, forkSession: true }) : { resume: sessionId } : {},
+            ...btwQueryOverrides(btwMode, lightweightMode),
             env: cliEnv
           }
         });
@@ -46409,6 +46414,11 @@ rl2.on("line", (line) => {
   if (cmd.cmd === "send") {
     if (cmd.session_id) sessionId = cmd.session_id;
     if (cmd.provider_switched) shouldForkNextConnect = true;
+    if (cmd.btw) {
+      shouldForkNextConnect = true;
+      btwMode = true;
+      lightweightMode = !!cmd.lightweight;
+    }
     if (!loopStarted) {
       loopStarted = true;
       if (cmd.permission_mode) applyPermissionMode(cmd.permission_mode);

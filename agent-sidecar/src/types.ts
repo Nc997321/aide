@@ -125,6 +125,12 @@ export type SidecarCommand =
       // 正在执行的工具调用跑完（安全边界）才真正 interrupt，避免腰斩一次进行中的
       // 工具执行（见 jumpQueue.ts / toolLifecycle.ts）。
       jump_queue?: boolean;
+      // btw 支线对话:命中 → 下一次建 query() 时 resume session_id + forkSession:true
+      // (fork 出带主上下文副本的新 session,主会话 JSONL 不被改动)。同时 persistSession
+      // :false(阅后即弃,不落盘)。lightweight=true → 禁用所有工具(纯问答、省 token)。
+      // 这是 Claude SDK 专属能力,但字段语义中性:未来 provider 各自在 sidecar 实现 fork。
+      btw?: boolean;
+      lightweight?: boolean;
     }
   // answers：仅 AskUserQuestion 场景使用（问题文本 → 选中答案/自由文本的不透明映射），
   // 其他工具的批准永远不带这个字段。核心协议不解释内容，只搬运。
