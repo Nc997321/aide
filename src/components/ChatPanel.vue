@@ -340,7 +340,10 @@ const btw = useBtwSession();
 // btw store 是全局单例,但抽屉 per-ChatPanel 挂载——只看 status 会让任意窗口触发
 // 时所有窗口的抽屉一起弹出。ownerSessionId 把抽屉绑回触发它的那个会话窗口。
 const btwDrawerVisible = computed(
-  () => btw.store.value.status !== "idle" && btw.store.value.ownerSessionId !== null && btw.store.value.ownerSessionId === props.sessionId,
+  () => btw.store.value.status !== "idle"
+    && !btw.store.value.minimized
+    && btw.store.value.ownerSessionId !== null
+    && btw.store.value.ownerSessionId === props.sessionId,
 );
 // 抽屉标题里"· btw"那块小字换成这条支线实际用的模型名(查下拉 displayName,查不到回落原值)
 const btwModelLabel = computed(() => {
@@ -364,7 +367,9 @@ watch(
     }
   },
 );
-function closeBtw() { btw.cleanup(); }
+// 「关闭」=最小化:抽屉收起,sidecar 继续后台跑,跑完结论照样作为批注插进主对话。
+// 不杀进程;真正的 teardown(cleanup)只在开新 btw 替换旧实例时发生。
+function closeBtw() { btw.minimize(); }
 
 const inputText = ref("");
 const skillList = ref<SkillMeta[]>([]);

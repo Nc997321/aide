@@ -52,4 +52,21 @@ describe("useBtwSession routing", () => {
     await cleanup();
     expect(isBtwSid("c")).toBe(false);
   });
+
+  // 「关闭」=最小化:抽屉收起,但 sidecar 继续后台跑。最小化绝不杀进程——
+  // 跑完结论照样经 onDone 插进主对话,用户在主对话批注里看到结果。
+  it("minimize hides drawer but keeps sidecar alive; conclusion still inserts on done", async () => {
+    const { startBtw, minimize, isBtwSid, store, setOnDone, handleBtwEvent } = useBtwSession();
+    const done = vi.fn();
+    setOnDone(done);
+    await startBtw({ tempId: "m1", forkFrom: "main", prompt: "q", cwd: "/r", lightweight: true });
+    minimize();
+    // 最小化只置标志,进程仍存活(事件仍路由)、抽屉该因此隐藏。
+    expect(isBtwSid("m1")).toBe(true);
+    expect(store.value.minimized).toBe(true);
+    // 后台跑完:onDone 照常把结论插进主对话。
+    handleBtwEvent({ session_id: "m1", type: "text_delta", delta: "bg-answer" });
+    handleBtwEvent({ session_id: "m1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
+    expect(done).toHaveBeenCalledWith(expect.objectContaining({ body: "bg-answer" }));
+  });
 });

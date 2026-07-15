@@ -22,16 +22,19 @@ interface BtwState {
   status: BtwStatus;
   ownerSessionId: string | null; // 被 fork 的主会话 sid;null=idle
   model: string; // 这条支线实际跑的模型别名(抽屉展示用);空串=idle
+  minimized: boolean; // 用户点了「关闭」=最小化:抽屉收起,但 sidecar 继续后台跑,
+  // 跑完结论照样经 onDone 插进主对话。最小化不杀进程;真正的 teardown 是 cleanup。
 }
 
-const IDLE: BtwState = { messages: [], isBusy: false, done: false, error: null, question: "", status: "idle", ownerSessionId: null, model: "" };
+const IDLE: BtwState = { messages: [], isBusy: false, done: false, error: null, question: "", status: "idle", ownerSessionId: null, model: "", minimized: false };
 const state = ref<BtwState>({ ...IDLE });
 let btwTempId: string | null = null;
 let btwRealId: string | null = null; // session_init 后的 fork id
 let onDoneCb: ((block: ActionBlock) => void) | null = null;
 
 function resetState(question: string) {
-  state.value = { messages: [], isBusy: true, done: false, error: null, question, status: "starting", ownerSessionId: null, model: "" };
+  // 新支线:show drawer(最小化标志清掉),starting 态。ownerSessionId/model 由 startBtw 补。
+  state.value = { messages: [], isBusy: true, done: false, error: null, question, status: "starting", ownerSessionId: null, model: "", minimized: false };
 }
 
 /** useChatSession.handleChatEvent 调:判断事件是否属于当前 btw。 */
@@ -79,6 +82,13 @@ async function startBtw(opts: StartBtwOpts) {
 
 function setOnDone(cb: (block: ActionBlock) => void) {
   onDoneCb = cb;
+}
+
+/** 「关闭」=最小化:抽屉收起,但 sidecar 继续在后台跑(不杀进程)。跑完结论照样经
+ *  onDone 插进主对话,用户在主对话的批注里看到结果。真正的 teardown(杀进程+清
+ *  store)是 cleanup——只在开新 btw(单实例替换)时调,最小化期间绝不调。 */
+function minimize() {
+  state.value.minimized = true;
 }
 
 function handleBtwEvent(e: Record<string, unknown>) {
@@ -150,6 +160,7 @@ export function useBtwSession() {
     startBtw,
     handleBtwEvent,
     cleanup,
+    minimize,
     setOnDone,
   };
 }
