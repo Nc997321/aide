@@ -21,13 +21,16 @@ const props = withDefaults(
     busy?: boolean;
     /** 菜单项数据源；为空时不渲染 ▾。 */
     actions?: QuickAction[];
+    /** btw 模式是否激活。 */
+    btwActive?: boolean;
   }>(),
-  { disabled: false, busy: false, actions: () => [] },
+  { disabled: false, busy: false, actions: () => [], btwActive: false },
 );
 
 const emit = defineEmits<{
   (e: "send"): void;
   (e: "select", action: QuickAction): void;
+  (e: "toggle-btw"): void;
 }>();
 
 const open = ref(false);
@@ -143,6 +146,19 @@ onUnmounted(() => {
           :style="[menuStyle, positioned ? {} : { visibility: 'hidden' }]"
           role="menu"
         >
+          <button
+            type="button"
+            class="chat-send-menu-item"
+            :class="{ 'is-on': props.btwActive }"
+            role="menuitemcheckbox"
+            :aria-checked="props.btwActive"
+            @click="emit('toggle-btw'); open = false"
+          >
+            <span class="chat-send-menu-icon">↳</span>
+            <span class="chat-send-menu-label">顺便问一下</span>
+            <span v-if="props.btwActive" class="chat-send-menu-check">✓</span>
+          </button>
+          <div v-if="actions.length" class="chat-send-menu-sep"></div>
           <button
             v-for="a in actions"
             :key="a.id"
@@ -279,5 +295,19 @@ onUnmounted(() => {
 .chat-send-pop-leave-to {
   opacity: 0;
   transform: scale(0.97);
+}
+
+.chat-send-menu-item.is-on {
+  background: var(--aide-accent-subtle);
+  color: var(--aide-accent);
+}
+.chat-send-menu-check {
+  margin-left: auto;
+  font-size: 12px;
+}
+.chat-send-menu-sep {
+  height: 1px;
+  background: var(--aide-border);
+  margin: 4px 2px;
 }
 </style>
