@@ -294,15 +294,25 @@ async function expandOlderAnchored() {
 
 const btwMode = ref(false);
 const btwLightweight = ref(true);
-// btw 默认走便宜快的模型:进入 btw 模式时置为 haiku(若当前 provider 没列出 haiku,
-// 退化到主会话当前模型,避免下拉显示一个不存在的值)。btw 期间模型选择器显示它,
-// 用户可临时改这条支线的模型(不回写主会话);发送后 btwMode 关闭,选择器自动回到主会话模型。
+// btw 默认走便宜快的模型。但「便宜快」在不同 provider 下名字不同,必须按 provider 解析:
+//  - 第三方供应商:选项列表装的是真实模型 id(deepseek-v4-flash),不是 Claude 别名。
+//    "haiku" 字面量永远不在列表里(见 providerModels 的收口规则)。所以走供应商配的
+//    defaultHaikuModel 映射——用户把 haiku 映到的那个真实 id,它一定在选项列表里
+//    (providerModels 就是这么收来的)。这也是用户在设置里表达「我的便宜快模型是哪个」
+//    的唯一入口。
+//  - 系统默认(真 Claude):defaultHaikuModel 为空,选项列表本身就是别名列表,
+//    "haiku" 直接命中。
+//  - 兜底:两者都没有就退到主会话当前模型(绝不让下拉显示一个不存在的值)。
+// btw 期间模型选择器显示它,用户可临时改这条支线的模型(不回写主会话);
+// 发送后 btwMode 关闭,选择器自动回到主会话模型。
 const btwModel = ref("haiku");
-const btwDefaultModel = computed(() =>
-  modelSelectOptions.value.some((m) => m.value === "haiku")
-    ? "haiku"
-    : selectedModel.value || modelSelectOptions.value[0]?.value || "haiku",
-);
+const btwDefaultModel = computed(() => {
+  const opts = modelSelectOptions.value;
+  const haikuMapping = sessionProvider.value.modelMappings?.defaultHaikuModel;
+  if (haikuMapping && opts.some((m) => m.value === haikuMapping)) return haikuMapping;
+  if (opts.some((m) => m.value === "haiku")) return "haiku";
+  return selectedModel.value || opts[0]?.value || "haiku";
+});
 function toggleBtw() {
   btwMode.value = !btwMode.value;
   if (btwMode.value) btwModel.value = btwDefaultModel.value;
@@ -736,7 +746,7 @@ async function handleQuickAction(action: QuickAction) {
             <span class="chat-ctx-percent">{{ w.pct }}%</span>
           </div>
           <button
-            v-if="isBusyVal"
+            v-if="isBusyVal && !btwMode"
             class="chat-jump-btn"
             v-tooltip="'插队发送：不用等这轮生成结束，sidecar 会在当前工具调用跑完后立刻打断、优先发出这条'"
             :disabled="!inputText.trim() && !pendingImages.length"
@@ -744,7 +754,7 @@ async function handleQuickAction(action: QuickAction) {
           >插队</button>
           <ChatSendButton
             :disabled="!inputText.trim() && !pendingImages.length"
-            :busy="isBusyVal"
+            :busy="isBusyVal && !btwMode"
             :actions="quickActions"
             :btw-active="btwMode"
             :btw-disabled="!props.sessionId"
