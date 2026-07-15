@@ -49,7 +49,18 @@ export interface SubagentBlock {
   asyncLaunched?: { agentId: string; outputFile: string };
 }
 
-export type ContentBlock = TextBlock | ToolCallBlock | ImageBlock | SubagentBlock;
+/** 用户侧「动作胶囊」——由工具栏快捷操作（压缩/清空上下文等）触发。底层仍把
+ *  对应的斜杠命令（/compact /clear）当普通 prompt 发给 sidecar，这里只是纯展示：
+ *  把「用户做了一次操作」渲染成区别于普通发言的胶囊气泡，而非裸露的 /compact 文本。
+ *  不进 IPC 协议（SidecarCommand/ChatEvent），是前端独有的展示块。 */
+export interface ActionBlock {
+  type: "action";
+  actionId: string; // "compact" | "clear" | ...
+  label: string; // 胶囊显示文本，如「压缩上下文」
+  icon?: string; // 胶囊前缀图标（字符或 SVG 名），可选
+}
+
+export type ContentBlock = TextBlock | ToolCallBlock | ImageBlock | SubagentBlock | ActionBlock;
 
 export interface TurnUsage {
   inputTokens: number;

@@ -4,6 +4,7 @@ import type { ComputedRef } from "vue";
 import ChatMessage from "./ChatMessage.vue";
 import TaskListPanel from "./TaskListPanel.vue";
 import ThemedSelect from "./ThemedSelect.vue";
+import ChatSendButton from "./ChatSendButton.vue";
 import PermissionDialog from "./PermissionDialog.vue";
 import type { ChatMessage as ChatMessageType, ContextUsage, ModelOption, PermissionModeOption, PermissionRequest, RateLimitInfo, TaskItem, TextBlock } from "@/types/chat";
 import type { SkillMeta } from "@/types";
@@ -19,6 +20,7 @@ import { useSessionProviders } from "@/composables/useSessionProviders";
 import type { ProviderConfig } from "@/types";
 import { useQuickActions } from "@/composables/useQuickActions";
 import type { QuickAction } from "@/composables/useQuickActions";
+import { useModal } from "@/composables/useModal";
 import { setChatPaneRect } from "@/composables/useChatPaneWidth";
 
 const props = defineProps<{
@@ -478,12 +480,24 @@ async function handleSend(jumpQueue = false) {
   });
 }
 
-// 快捷操作直接发送——跟手打消息走同一条路径（忙碌排队/权限模式透传都免费拿到），
-// 不做二次确认：/compact /clear 都不破坏磁盘上的历史数据。
-function handleQuickAction(action: QuickAction) {
+// 快捷操作（压缩/清空上下文）：跟手打消息走同一条路径（忙碌排队/权限模式透传都
+// 免费拿到），但用户气泡渲染成动作胶囊（emit 时带 action 描述符，见
+// useChatSession.dispatchSend）。/clear 不可逆，执行前弹 useModal.confirm 二次确认；
+// /compact 可逆，直接发。取消确认则什么都不发、不入队、不推气泡。
+async function handleQuickAction(action: QuickAction) {
+  if (action.confirm) {
+    const ok = await useModal().confirm(
+      action.label,
+      "将清空当前会话上下文，不可撤销。是否继续？",
+      "清空",
+      true,
+    );
+    if (!ok) return;
+  }
   emit("send", action.prompt, {
     initialModel: selectedModel.value || undefined,
     permissionMode: selectedPermissionMode.value || undefined,
+    action: { id: action.id, label: action.label, icon: action.icon },
   });
 }
 </script>
@@ -599,16 +613,6 @@ function handleQuickAction(action: QuickAction) {
               v-tooltip="'已跳过所有工具权限确认（含本会话派生的所有子代理，子代理会继承此模式且不能单独覆盖），仅本会话生效；切换/新建会话会恢复默认权限模式'"
             >⚠️ 跳过确认</span>
           </div>
-          <div v-if="quickActions.length" class="chat-quick-actions">
-            <button
-              v-for="qa in quickActions"
-              :key="qa.id"
-              type="button"
-              class="chat-quick-action-btn"
-              :title="qa.prompt"
-              @click="handleQuickAction(qa)"
-            >{{ qa.label }}</button>
-          </div>
           <div
             v-if="props.contextUsage"
             class="chat-ctx-usage"
@@ -641,13 +645,13 @@ function handleQuickAction(action: QuickAction) {
             :disabled="!inputText.trim() && !pendingImages.length"
             @click="handleSend(true)"
           >插队</button>
-          <button
-            class="chat-send-btn"
+          <ChatSendButton
             :disabled="!inputText.trim() && !pendingImages.length"
-            @click="handleSend()"
-          >
-            {{ isBusyVal ? "排队" : "发送" }}
-          </button>
+            :busy="isBusyVal"
+            :actions="quickActions"
+            @send="handleSend()"
+            @select="handleQuickAction"
+          />
         </div>
       </div>
     </div>
@@ -785,28 +789,6 @@ function handleQuickAction(action: QuickAction) {
   white-space: nowrap;
 }
 
-.chat-quick-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.chat-quick-action-btn {
-  border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-sm);
-  background: transparent;
-  color: var(--aide-text-secondary);
-  font-size: 11px;
-  padding: 2px 8px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.chat-quick-action-btn:hover {
-  background: var(--aide-surface-hover);
-  color: var(--aide-text-primary);
-}
-
 .chat-ctx-usage {
   display: flex;
   align-items: center;
@@ -897,7 +879,7 @@ function handleQuickAction(action: QuickAction) {
   /* 原来靠 .chat-cost-total 的 margin-right: auto 把发送按钮推到工具栏最右侧；
    * 去掉费用展示后这条移到这里，保持发送/插队按钮组始终靠右的布局不变。只有
    * 忙碌时才渲染这个按钮，所以 margin-left:auto 落在它上面；空闲时它不存在，
-   * .chat-send-btn 自己的 margin-left:auto 兜底（见下面）。 */
+   * .chat-send-split 自己的 margin-left:auto 兜底（见下面）。 */
   margin-left: auto;
   border-radius: var(--aide-radius-sm);
   background: transparent;
@@ -922,32 +904,12 @@ function handleQuickAction(action: QuickAction) {
   cursor: not-allowed;
 }
 
-.chat-send-btn {
-  /* 插队按钮只在忙碌时渲染并吃掉 margin-left:auto；空闲时它不存在，这里的
-   * auto 顶上，保持发送按钮始终靠右的布局不变。两者同时存在时这条不生效
-   * （flex 的 auto margin 只有第一个吃到的元素生效），靠 .chat-toolbar 的
-   * gap 分隔即可。 */
+/* 分裂式发送按钮（ChatSendButton 根元素）：插队按钮只在忙碌时渲染并吃掉
+ * margin-left:auto；空闲时它不存在，这里的 auto 顶上，保持发送按钮始终靠右。
+ * 两者同时存在时这条不生效（flex 的 auto margin 只有第一个吃到的元素生效），
+ * 靠 .chat-toolbar 的 gap 分隔即可。按钮自身的外观在 ChatSendButton.vue 内。 */
+.chat-send-split {
   margin-left: auto;
-  border-radius: var(--aide-radius-sm);
-  background: var(--aide-accent);
-  color: var(--aide-text-on-accent);
-  border: none;
-  padding: 0 16px;
-  height: 24px;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s, opacity 0.15s;
-  white-space: nowrap;
-}
-
-.chat-send-btn:hover:not(:disabled) {
-  background: var(--aide-accent-hover);
-}
-
-.chat-send-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
 .skill-dropdown {

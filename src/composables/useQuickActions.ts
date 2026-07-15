@@ -5,11 +5,15 @@ export interface QuickAction {
   id: string;
   label: string;
   prompt: string;
+  /** 胶囊气泡前缀图标（字符）。 */
+  icon?: string;
+  /** true = 执行前弹 useModal.confirm 二次确认（用于不可逆操作，如 /clear）。 */
+  confirm?: boolean;
 }
 
 const actions: QuickAction[] = [
-  { id: "compact", label: "压缩上下文", prompt: "/compact" },
-  { id: "clear", label: "清空上下文", prompt: "/clear" },
+  { id: "compact", label: "压缩上下文", prompt: "/compact", icon: "✦" },
+  { id: "clear", label: "清空上下文", prompt: "/clear", icon: "⌫", confirm: true },
 ];
 
 function register(action: QuickAction) {

@@ -14,6 +14,7 @@ import type {
   TextBlock,
   ToolCallBlock,
   ImageBlock,
+  ActionBlock,
 } from "../types/chat";
 import { useSessionState } from "./useSessionState";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
@@ -40,6 +41,10 @@ export interface SendOptions {
    *  产出的内容不会被丢弃，只是"抢在这轮结束之后、其余排队消息之前"发出；
    *  缺省/假=普通排队，跟其余排队消息一样等这轮自然结束后合并续发。 */
   jumpQueue?: boolean;
+  /** 工具栏快捷操作（压缩/清空上下文）：存在时用户气泡渲染成动作胶囊（见
+   *  ActionBlock），而发给 sidecar 的 prompt 仍是 opts 对应的斜杠命令——显示
+   *  与命令解耦。 */
+  action?: { id: string; label: string; icon?: string };
 }
 
 interface QueuedSend {
@@ -47,6 +52,7 @@ interface QueuedSend {
   images?: ImageAttachment[];
   mentions?: FileMentionResolution;
   permissionMode?: string;
+  action?: { id: string; label: string; icon?: string };
 }
 
 interface SessionStore {
@@ -271,33 +277,44 @@ function dispatchSend(
   const store = getStore(sid);
   store.isBusy = true;
   // 记下本次派发的用户提问，供变更面板给轮次做标题（图片消息无文本时兜底占位）。
-  lastDispatchedPrompt[sid] = item.prompt || (item.images?.length ? "[图片]" : "");
+  // 动作胶囊用 label 做标题更可读，底层 prompt 是 /compact 这种斜杠命令。
+  lastDispatchedPrompt[sid] =
+    item.action?.label || item.prompt || (item.images?.length ? "[图片]" : "");
   setSessionState(sid, "running");
   // 新一轮开始：清掉上轮可能残留的 warning（红点），并起软超时表。
   setSessionHealth(sid, "ok");
   armStalled(sid);
 
-  // @path 引用展开出来的文件内容不进用户气泡的文本——渲染成独立的、类似
-  // 工具调用的折叠卡片（复用 ToolCallBlock.vue 对 name:"Read" 的现有渲染），
+  // 动作胶囊：用户气泡只放一个 ActionBlock（胶囊显示 label/icon），不再混文本/
+  // 图片/引用——发给 sidecar 的仍是 item.prompt（/compact /clear），显示与命令解耦。
+  // 普通消息：@path 引用展开出来的文件内容不进用户气泡的文本——渲染成独立的、
+  // 类似工具调用的折叠卡片（复用 ToolCallBlock.vue 对 name:"Read" 的现有渲染），
   // 避免用户自己打的字和引用文件内容混在一个气泡里。发给模型的内容仍然
   // 完整（mentions.sendText），只是本地显示时拆开。
-  const blocks: (ImageBlock | TextBlock | ToolCallBlock)[] = [
-    ...(item.images ?? []).map((img): ImageBlock => ({
-      type: "image",
-      data: img.data,
-      mediaType: img.mediaType,
-    })),
-    ...(item.prompt ? [{ type: "text" as const, text: item.prompt }] : []),
-    ...(item.mentions?.resolved ?? []).map((m): ToolCallBlock => ({
-      type: "tool_call",
-      id: crypto.randomUUID(),
-      name: "Read",
-      input: { file_path: m.path },
-      result: m.content,
-      isError: false,
-      isPending: false,
-    })),
-  ];
+  const blocks: (ImageBlock | TextBlock | ToolCallBlock | ActionBlock)[] = item.action
+    ? [{
+        type: "action",
+        actionId: item.action.id,
+        label: item.action.label,
+        icon: item.action.icon,
+      }]
+    : [
+        ...(item.images ?? []).map((img): ImageBlock => ({
+          type: "image",
+          data: img.data,
+          mediaType: img.mediaType,
+        })),
+        ...(item.prompt ? [{ type: "text" as const, text: item.prompt }] : []),
+        ...(item.mentions?.resolved ?? []).map((m): ToolCallBlock => ({
+          type: "tool_call",
+          id: crypto.randomUUID(),
+          name: "Read",
+          input: { file_path: m.path },
+          result: m.content,
+          isError: false,
+          isPending: false,
+        })),
+      ];
   finishStreaming(store); // 上一条 assistant 不再续写
   store.messages.push({
     id: crypto.randomUUID(),
@@ -535,8 +552,17 @@ function handleChatEvent(e: Record<string, unknown>) {
       // （当成同一轮对话，效率更高、意图更连贯），状态保持 running 不落 waiting
       // （通知/横幅依赖 running→waiting 转换，排队续发中不该触发"已完成"通知）。
       if (store.queued.length > 0) {
-        const merged = mergeQueued(store.queued.splice(0));
-        dispatchSend(sid, merged, isPendingSession(sid) ? undefined : sid);
+        const items = store.queued.splice(0);
+        // 动作（/compact /clear）必须独占一轮——斜杠命令只在它是整条用户消息时
+        // 才被 SDK 拦截，与文本合并会失效。队列里含动作时逐条独发，纯文本仍合并。
+        if (items.some((i) => i.action)) {
+          for (const it of items) {
+            dispatchSend(sid, it, isPendingSession(sid) ? undefined : sid);
+          }
+        } else {
+          const merged = mergeQueued(items);
+          dispatchSend(sid, merged, isPendingSession(sid) ? undefined : sid);
+        }
         break;
       }
       store.isBusy = false;
@@ -733,6 +759,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       images: opts.images,
       mentions: opts.mentions,
       permissionMode: opts.permissionMode,
+      action: opts.action,
     };
     if (store.isBusy && !opts.jumpQueue) {
       store.queued.push(item);

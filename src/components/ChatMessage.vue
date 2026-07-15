@@ -16,6 +16,14 @@ const props = defineProps<{
 }>();
 
 const isUser = computed(() => props.message.role === "user");
+/** 整条用户消息只有一个 ActionBlock 时，不套铜底气泡——胶囊自身带边框/底色，
+ *  套在 accent 实心底上会糊成一团。直接作为右对齐的胶囊落在消息行里。 */
+const isActionChip = computed(
+  () =>
+    isUser.value &&
+    props.message.blocks.length === 1 &&
+    props.message.blocks[0].type === "action",
+);
 const { openResolved } = useFileResolver();
 
 /** user 消息不分组（@mention 的 tool_call 是附件展示，保持逐条）；
@@ -57,7 +65,7 @@ function handleTextClick(e: MouseEvent) {
 
 <template>
   <div :class="['msg-row', isUser ? 'msg-row--user' : 'msg-row--assistant']">
-    <div :class="isUser ? 'msg-bubble msg-bubble--user' : 'msg-turn'">
+    <div :class="isActionChip ? 'msg-action-wrap' : (isUser ? 'msg-bubble msg-bubble--user' : 'msg-turn')">
       <template v-for="seg in segments" :key="seg.index">
         <ToolCallGroup
           v-if="seg.kind === 'tool_group'"
@@ -74,6 +82,13 @@ function handleTextClick(e: MouseEvent) {
           v-else-if="seg.block.type === 'tool_call'"
           :block="(seg.block as any)"
         />
+        <span
+          v-else-if="seg.block.type === 'action'"
+          class="msg-action-chip"
+        >
+          <span v-if="seg.block.icon" class="msg-action-chip-icon">{{ seg.block.icon }}</span>
+          <span class="msg-action-chip-label">{{ seg.block.label }}</span>
+        </span>
         <img
           v-else-if="seg.block.type === 'image'"
           :src="`data:${(seg.block as any).mediaType};base64,${(seg.block as any).data}`"
@@ -116,6 +131,37 @@ function handleTextClick(e: MouseEvent) {
 .msg-bubble--user {
   background: var(--aide-accent);
   color: var(--aide-text-on-accent);
+}
+
+/* 动作胶囊（压缩/清空上下文等）：区别于普通用户气泡——半透明 accent 底 + accent
+ * 描边 + accent 文字，圆角药丸。底色由 accent token 派生（color-mix），不硬编码 hex。 */
+.msg-action-wrap {
+  display: inline-flex;
+  max-width: 85%;
+}
+
+.msg-action-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--aide-accent);
+  background: color-mix(in srgb, var(--aide-accent) 15%, transparent);
+  color: var(--aide-accent);
+  font-size: 13px;
+  line-height: 1.6;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.msg-action-chip-icon {
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.msg-action-chip-label {
+  white-space: nowrap;
 }
 
 /* App.vue 的 .app-layout 为防止拖拽分栏/标签时误选界面文字，全局设了

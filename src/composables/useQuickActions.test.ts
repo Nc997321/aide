@@ -5,8 +5,8 @@ describe("useQuickActions", () => {
   it("默认注册表包含 compact 和 clear，形状稳定", () => {
     const { actions } = useQuickActions();
     expect(actions).toEqual([
-      { id: "compact", label: "压缩上下文", prompt: "/compact" },
-      { id: "clear", label: "清空上下文", prompt: "/clear" },
+      { id: "compact", label: "压缩上下文", prompt: "/compact", icon: "✦" },
+      { id: "clear", label: "清空上下文", prompt: "/clear", icon: "⌫", confirm: true },
     ]);
   });
 
