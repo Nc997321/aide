@@ -22,6 +22,7 @@ import { useSessionProviders } from "./useSessionProviders";
 import { useProviders } from "./useProviders";
 import { splitMentionSections, type FileMentionResolution } from "../utils/fileMentions";
 import type { HistoryBlock } from "../types";
+import { useBtwSession } from "./useBtwSession";
 
 export interface ImageAttachment {
   data: string;
@@ -353,6 +354,12 @@ function dispatchSend(
 function handleChatEvent(e: Record<string, unknown>) {
   const raw = e["session_id"] as string | undefined;
   if (!raw) return;
+  // btw 事件路由到独立 store,不进主对话 store(隔离红线)
+  const btw = useBtwSession();
+  if (btw.isBtwSid(raw)) {
+    btw.handleBtwEvent(e);
+    return;
+  }
   const sid = resolveSid(raw);
   const store = getStore(sid);
 
@@ -870,6 +877,34 @@ export function useChatSession(sessionId: Ref<string | null>) {
     if (store) store.queued.splice(index, 1);
   }
 
+  /** 顺便问一下:fork 当前主会话开一个隔离子对话。一次性——发送后由 ChatPanel
+   *  负责复位 btw 模式视觉。结论以 ActionBlock(actionId:'btw')回插本会话 store
+   *  末尾(前端可见、不进 SDK resume 上下文,见 ChatMessage 渲染)。 */
+  async function sendBtw(prompt: string, opts: { lightweight: boolean; permissionMode?: string } = { lightweight: true }) {
+    const sid = sessionId.value;
+    if (!sid) {
+      console.warn("sendBtw 需要一个存活的主会话作为 fork 源");
+      return;
+    }
+    const btwId = crypto.randomUUID();
+    pendingSids.add(btwId);
+    const sessionWs = useSessionWorkspaces().workspaceOf(sid);
+    const cwd = sessionWs?.wsPath || "";
+    const store = getStore(sid);
+    const btw = useBtwSession();
+    btw.setOnDone((block) => {
+      // 结论回插主对话:作为一条只含 ActionBlock 的用户消息(与 /compact /clear 同形),
+      // ChatMessage 检测 actionId==='btw' 渲染为页边批注。
+      store.messages.push({
+        id: crypto.randomUUID(),
+        role: "user",
+        blocks: [block],
+        timestamp: Date.now(),
+      });
+    });
+    await btw.startBtw({ tempId: btwId, forkFrom: sid, prompt, cwd, lightweight: opts.lightweight, permissionMode: opts.permissionMode });
+  }
+
   return {
     messages: computed(() => current.value?.messages ?? []),
     isBusy: computed(() => current.value?.isBusy ?? false),
@@ -898,6 +933,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
     rateLimit: computed(() => sharedRateLimit.value),
     queuedPrompts: computed(() => (current.value?.queued ?? []).map((q) => q.prompt)),
     sendMessage,
+    sendBtw,
     respondPermission,
     interrupt,
     stopSession,
