@@ -365,7 +365,6 @@ watch(
   },
 );
 function closeBtw() { btw.cleanup(); }
-function stopBtw() { btw.cleanup(); }
 
 const inputText = ref("");
 const skillList = ref<SkillMeta[]>([]);
@@ -775,7 +774,6 @@ async function handleQuickAction(action: QuickAction) {
       :model-label="btwModelLabel"
       @update:lightweight="btwLightweight = $event"
       @close="closeBtw"
-      @stop="stopBtw"
     />
   </div>
 </template>
