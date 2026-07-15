@@ -277,6 +277,7 @@ pub fn run() {
             commands::chat::get_default_permission_modes,
             commands::chat::stop_chat_session,
             commands::chat::rename_sidecar_session,
+            commands::chat::start_btw_session,
             // Plugin skills scanning
             commands::shell::scan_plugin_skills,
             // Code graph

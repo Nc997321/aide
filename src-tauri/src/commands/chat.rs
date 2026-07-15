@@ -39,64 +39,7 @@ pub async fn send_message(
     });
 
     if !sidecar_mgr.has_session(&session_id) {
-        let active_provider = load_active_provider();
-        let mut env_vars: HashMap<String, String> = if let Some(ref provider) = active_provider {
-            provider_to_env_vars(provider)
-        } else {
-            // 系统默认：认证走系统 env 兜底（下方 ANTHROPIC_AUTH_TOKEN 等补注），
-            // 但模型变量 5 字段可配（CLAUDE_CODE_SUBAGENT_MODEL 等）——否则子代理
-            // 全继承主会话模型。见 provider.rs system_default_mappings_to_env。
-            system_default_mappings_to_env()
-        };
-
-        // 从系统全局环境变量兜底。**认证三元组（AUTH_TOKEN/API_KEY/BASE_URL）只对
-        // 系统默认 provider 兜底**——自定义 provider 是用户显式配置的连接身份，留空
-        // = 不设，绝不能拿系统里别的 Anthropic 账号 token 兜底进来，否则会和 provider
-        // 的 api_key 冲突（SDK 里 AUTH_TOKEN/Bearer 优先级高于 API_KEY/x-api-key），
-        // 把官方 token 带到第三方 base_url 返回 403。CLAUDE_CONFIG_DIR 和代理类是
-        // 环境级配置、与认证身份无关，两种 provider 都兜底。
-        let fallback_keys: &[&str] = if active_provider.is_some() {
-            &[
-                "CLAUDE_CONFIG_DIR",
-                "HTTP_PROXY",
-                "HTTPS_PROXY",
-                "http_proxy",
-                "https_proxy",
-                "ALL_PROXY",
-                "all_proxy",
-            ]
-        } else {
-            &[
-                "ANTHROPIC_AUTH_TOKEN",
-                "ANTHROPIC_API_KEY",
-                "ANTHROPIC_BASE_URL",
-                "CLAUDE_CONFIG_DIR",
-                "HTTP_PROXY",
-                "HTTPS_PROXY",
-                "http_proxy",
-                "https_proxy",
-                "ALL_PROXY",
-                "all_proxy",
-            ]
-        };
-        for var in fallback_keys {
-            if !env_vars.contains_key(*var) {
-                if let Ok(val) = std::env::var(var) {
-                    if !val.is_empty() {
-                        env_vars.insert(var.to_string(), val);
-                    }
-                }
-            }
-        }
-
-        if let Ok(s) = get_settings() {
-            if !s.proxy.is_empty() {
-                env_vars.insert("HTTP_PROXY".to_string(), s.proxy.clone());
-                env_vars.insert("HTTPS_PROXY".to_string(), s.proxy.clone());
-                env_vars.insert("http_proxy".to_string(), s.proxy.clone());
-                env_vars.insert("https_proxy".to_string(), s.proxy);
-            }
-        }
+        let mut env_vars = build_sidecar_env_vars();
 
         // 在 spawn upsert 新指纹之前读旧指纹：判断这是不是"换着 provider 续一个
         // 旧会话"（stop 后切了供应商再续发）。若是，通知 sidecar forkSession 绕开
@@ -206,6 +149,31 @@ pub async fn stop_chat_session(
     Ok(())
 }
 
+/// 启动一个 btw 支线 sidecar 进程:fork 主会话(fork_from)当前状态,跑一个隔离
+/// 的"顺便问一下"支线。btw_id 由前端生成(纯内存临时 key,落 pendingSids,不进
+/// 侧栏/不写元数据)。spawn 复用 SidecarManager::spawn(CREATE_NO_WINDOW /
+/// dunce::simplified 等跨平台约束自动满足),再发首条带 btw:true 的 send 命令。
+/// 主会话必须存活(has_session),否则报错——fork 依赖主会话的持久化状态。
+#[tauri::command]
+pub async fn start_btw_session(
+    btw_id: String,
+    fork_from: String,
+    prompt: String,
+    cwd: String,
+    lightweight: bool,
+    permission_mode: Option<String>,
+    app_handle: tauri::AppHandle,
+    sidecar_mgr: State<'_, SidecarManager>,
+) -> Result<(), String> {
+    if !sidecar_mgr.has_session(&fork_from) {
+        return Err(format!("主对话未就绪,无法顺便问(fork_from 未存活): {fork_from}"));
+    }
+    let env_vars = build_sidecar_env_vars();
+    sidecar_mgr.spawn(btw_id.clone(), PathBuf::from(&cwd), env_vars, app_handle)?;
+    let cmd = build_btw_send_cmd(&fork_from, &prompt, &cwd, lightweight, &permission_mode);
+    sidecar_mgr.send(&btw_id, &cmd).await
+}
+
 /// 临时 key → SDK 真实 session id：只改 sidecar 进程注册表这一个内存态。
 /// 临时 key 从未落盘，这里不需要再触碰任何文件（对比旧版 migrate_session）。
 #[tauri::command]
@@ -227,6 +195,88 @@ fn session_cwd(
         Some(root) if !root.is_empty() => PathBuf::from(root),
         _ => project_root_for_commands(workspace_state),
     }
+}
+
+/// 构造 sidecar spawn 用的 env:active provider 的连接参数 + 系统 env 兜底 +
+/// settings 代理。send_message 与 start_btw_session 共用,保证 btw 进程与主
+/// sidecar 用同一套 provider 配置(否则 fork 出来的支线会打到错误 endpoint)。
+fn build_sidecar_env_vars() -> HashMap<String, String> {
+    let active_provider = load_active_provider();
+    let mut env_vars: HashMap<String, String> = if let Some(ref provider) = active_provider {
+        provider_to_env_vars(provider)
+    } else {
+        system_default_mappings_to_env()
+    };
+
+    let fallback_keys: &[&str] = if active_provider.is_some() {
+        &[
+            "CLAUDE_CONFIG_DIR",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+        ]
+    } else {
+        &[
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            "CLAUDE_CONFIG_DIR",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+        ]
+    };
+    for var in fallback_keys {
+        if !env_vars.contains_key(*var) {
+            if let Ok(val) = std::env::var(var) {
+                if !val.is_empty() {
+                    env_vars.insert(var.to_string(), val);
+                }
+            }
+        }
+    }
+
+    if let Ok(s) = get_settings() {
+        if !s.proxy.is_empty() {
+            env_vars.insert("HTTP_PROXY".to_string(), s.proxy.clone());
+            env_vars.insert("HTTPS_PROXY".to_string(), s.proxy.clone());
+            env_vars.insert("http_proxy".to_string(), s.proxy.clone());
+            env_vars.insert("https_proxy".to_string(), s.proxy);
+        }
+    }
+    env_vars
+}
+
+/// btw 首条 send 命令:fork 主会话(session_id=主 sid)+ btw:true + lightweight。
+/// Rust 不感知 forkSession 语义,只透传 btw 标记,由 sidecar 解释(见 agent-sidecar
+/// /src/index.ts)。cwd/permission_mode 原样透传,空 permission_mode 不带键。
+fn build_btw_send_cmd(
+    fork_from: &str,
+    prompt: &str,
+    cwd: &str,
+    lightweight: bool,
+    permission_mode: &Option<String>,
+) -> serde_json::Value {
+    let mut cmd = json!({
+        "cmd": "send",
+        "prompt": prompt,
+        "cwd": cwd,
+        "session_id": fork_from,
+        "btw": true,
+        "lightweight": lightweight,
+    });
+    if let Some(mode) = permission_mode {
+        if !mode.is_empty() {
+            cmd["permission_mode"] = json!(mode);
+        }
+    }
+    cmd
 }
 
 /// 新建 sidecar 进程时，把面板里选的模型转成 CLI 认的 `ANTHROPIC_MODEL` 环境变量，
@@ -350,5 +400,32 @@ mod tests {
     fn permission_response_cmd_omits_answers_key_when_none() {
         let cmd = build_permission_response_cmd("perm-4", true, None, None);
         assert!(cmd.get("answers").is_none());
+    }
+
+    // btw:fork 主会话的 send 命令必须带 session_id(主 sid)+ btw:true + lightweight,
+    // 且 cwd/prompt 透传。permission_mode 仅非空时带。
+    #[test]
+    fn btw_send_cmd_forks_from_main_session() {
+        let cmd = build_btw_send_cmd("main-sid", "顺便问下 X", "/repo", true, &None);
+        assert_eq!(cmd["cmd"], "send");
+        assert_eq!(cmd["session_id"], "main-sid");
+        assert_eq!(cmd["btw"], true);
+        assert_eq!(cmd["lightweight"], true);
+        assert_eq!(cmd["prompt"], "顺便问下 X");
+        assert_eq!(cmd["cwd"], "/repo");
+        assert!(cmd.get("permission_mode").is_none());
+    }
+
+    #[test]
+    fn btw_send_cmd_full_mode_carries_permission_mode() {
+        let cmd = build_btw_send_cmd("main-sid", "q", "/repo", false, &Some("default".to_string()));
+        assert_eq!(cmd["lightweight"], false);
+        assert_eq!(cmd["permission_mode"], "default");
+    }
+
+    #[test]
+    fn btw_send_cmd_empty_permission_mode_omitted() {
+        let cmd = build_btw_send_cmd("main-sid", "q", "/repo", true, &Some(String::new()));
+        assert!(cmd.get("permission_mode").is_none());
     }
 }
