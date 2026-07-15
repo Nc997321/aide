@@ -345,6 +345,15 @@ const btwDrawerVisible = computed(
     && btw.store.value.ownerSessionId !== null
     && btw.store.value.ownerSessionId === props.sessionId,
 );
+// 最小化后,支线还在后台跑(starting/running)或出错时,在本窗口浮一个可点开重展
+// 抽屉的小标。跑完(done)结论已进主对话批注,不再浮——免得常驻打扰。
+const btwBgChipVisible = computed(
+  () => btw.store.value.minimized
+    && !btw.store.value.done
+    && btw.store.value.status !== "idle"
+    && btw.store.value.ownerSessionId !== null
+    && btw.store.value.ownerSessionId === props.sessionId,
+);
 // 抽屉标题里"· btw"那块小字换成这条支线实际用的模型名(查下拉 displayName,查不到回落原值)
 const btwModelLabel = computed(() => {
   const v = btw.store.value.model;
@@ -370,6 +379,8 @@ watch(
 // 「关闭」=最小化:抽屉收起,sidecar 继续后台跑,跑完结论照样作为批注插进主对话。
 // 不杀进程;真正的 teardown(cleanup)只在开新 btw 替换旧实例时发生。
 function closeBtw() { btw.minimize(); }
+// 点浮标重展抽屉(最小化的逆操作)。仅清标志、不动进程。
+function reopenBtw() { btw.reopen(); }
 
 const inputText = ref("");
 const skillList = ref<SkillMeta[]>([]);
@@ -667,6 +678,18 @@ async function handleQuickAction(action: QuickAction) {
           <button class="queued-item-remove" v-tooltip="'撤回这条排队消息'" @click="emit('remove-queued', i)">×</button>
         </div>
       </div>
+      <!-- 最小化后支线仍在后台跑:浮一个可点开重展抽屉的小标(done 后结论已进批注,不再浮) -->
+      <Transition name="btw-chip">
+        <button
+          v-if="btwBgChipVisible"
+          class="btw-bg-chip"
+          v-tooltip="'支线还在后台跑,点开重展抽屉'"
+          @click="reopenBtw"
+        >
+          <span class="btw-bg-chip-glyph">↳</span> btw 后台运行中
+          <span class="btw-bg-chip-pulse"></span>
+        </button>
+      </Transition>
       <div class="chat-input-box" :class="{ 'btw-mode': btwMode }">
         <Transition name="btw-banner">
           <div v-if="btwMode" class="btw-mode-banner">
@@ -1229,4 +1252,24 @@ async function handleQuickAction(action: QuickAction) {
 .btw-banner-enter-from, .btw-banner-leave-to { opacity: 0; max-height: 0; }
 .btw-toast-enter-active, .btw-toast-leave-active { transition: opacity 0.2s, transform 0.2s; }
 .btw-toast-enter-from, .btw-toast-leave-to { opacity: 0; transform: translate(-50%, 4px); }
+
+/* 最小化后重展抽屉的入口浮标:支线仍在后台跑时显示,点开重展。 */
+.btw-bg-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin: 0 0 8px auto; padding: 4px 11px;
+  background: color-mix(in srgb, var(--aide-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-accent) 40%, transparent);
+  color: var(--aide-accent); font-size: 11.5px;
+  border-radius: 999px; cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.btw-bg-chip:hover { background: color-mix(in srgb, var(--aide-accent) 20%, transparent); border-color: var(--aide-accent); }
+.btw-bg-chip-glyph { font-size: 13px; line-height: 1; }
+.btw-bg-chip-pulse {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--aide-accent);
+  animation: btw-chip-pulse 1.4s ease-in-out infinite;
+}
+@keyframes btw-chip-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+.btw-chip-enter-active, .btw-chip-leave-active { transition: opacity 0.18s, transform 0.18s; }
+.btw-chip-enter-from, .btw-chip-leave-to { opacity: 0; transform: translateY(4px); }
 </style>

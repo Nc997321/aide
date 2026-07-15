@@ -91,6 +91,11 @@ function minimize() {
   state.value.minimized = true;
 }
 
+/** 重展抽屉:最小化的逆操作。用户点了浮标想再看流式输出时调。仅清标志、不动进程。 */
+function reopen() {
+  state.value.minimized = false;
+}
+
 function handleBtwEvent(e: Record<string, unknown>) {
   switch (e["type"]) {
     case "session_init": {
@@ -161,6 +166,7 @@ export function useBtwSession() {
     handleBtwEvent,
     cleanup,
     minimize,
+    reopen,
     setOnDone,
   };
 }

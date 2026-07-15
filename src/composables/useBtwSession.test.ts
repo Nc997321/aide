@@ -69,4 +69,15 @@ describe("useBtwSession routing", () => {
     handleBtwEvent({ session_id: "m1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
     expect(done).toHaveBeenCalledWith(expect.objectContaining({ body: "bg-answer" }));
   });
+
+  // 重展抽屉:最小化的逆操作。仅清标志、进程不动。
+  it("reopen clears minimized without touching the sidecar", async () => {
+    const { startBtw, minimize, reopen, isBtwSid, store } = useBtwSession();
+    await startBtw({ tempId: "r1", forkFrom: "main", prompt: "q", cwd: "/r", lightweight: true });
+    minimize();
+    expect(store.value.minimized).toBe(true);
+    reopen();
+    expect(store.value.minimized).toBe(false);
+    expect(isBtwSid("r1")).toBe(true); // 进程仍存活
+  });
 });
