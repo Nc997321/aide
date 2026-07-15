@@ -19,7 +19,7 @@ const text = computed(() => store.value.messages.join(""));
       <div class="btw-drawer-stripe"></div>
       <div class="btw-banner">
         <span class="btw-bi">↳</span> 这条支线不进入主对话上下文
-        <span class="btw-blight">轻量 · 极少 token</span>
+        <span class="btw-blight">{{ props.lightweight ? "轻量 · 极少 token" : "完整 · 带工具" }}</span>
       </div>
       <div class="btw-head">
         <div class="btw-title"><span class="btw-fork">↳</span> 顺便问一下 <span class="btw-pill">· btw</span></div>

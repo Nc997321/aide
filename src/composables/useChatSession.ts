@@ -902,7 +902,14 @@ export function useChatSession(sessionId: Ref<string | null>) {
         timestamp: Date.now(),
       });
     });
-    await btw.startBtw({ tempId: btwId, forkFrom: sid, prompt, cwd, lightweight: opts.lightweight, permissionMode: opts.permissionMode });
+    // 启动失败(主会话已死/spawn 失败)不能留卡死抽屉 + 泄漏临时 id:回滚 pendingSids + 清 btw store。
+    try {
+      await btw.startBtw({ tempId: btwId, forkFrom: sid, prompt, cwd, lightweight: opts.lightweight, permissionMode: opts.permissionMode });
+    } catch (e) {
+      pendingSids.delete(btwId);
+      await btw.cleanup();
+      console.error("btw 启动失败:", e);
+    }
   }
 
   return {
