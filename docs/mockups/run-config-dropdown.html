@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="warm-dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=900, initial-scale=1" />
+<title>Aide · 运行配置下拉 原型</title>
+<style>
+  /* ── Aide warm-dark 真实 token（取自 src/themes/warm-dark.ts）── */
+  :root {
+    --aide-bg-deep:    #1a1a22;
+    --aide-bg-base:    #22222e;
+    --aide-bg-raised:  #2a2a38;
+    --aide-surface-default: #32323f;
+    --aide-surface-hover:   #3a3a4a;
+    --aide-surface-active:  #44445a;
+    --aide-text-primary:   #d8d4cf;
+    --aide-text-secondary: #a8a4a0;
+    --aide-text-muted:     #6b6762;
+    --aide-text-on-accent: #1a1a22;
+    --aide-accent:      #d4a574;
+    --aide-accent-hover:#e0b584;
+    --aide-accent-subtle: rgba(212,165,116,0.12);
+    --aide-success: #8bc48a;
+    --aide-warning: #e8c374;
+    --aide-danger:  #e87070;
+    --aide-info:    #7eb8d8;
+    --aide-border:       rgba(255,255,255,0.06);
+    --aide-border-subtle:rgba(255,255,255,0.03);
+    --aide-shadow-lg: 0 12px 40px rgba(0,0,0,0.45), 0 4px 12px rgba(0,0,0,0.25);
+    --aide-radius-sm: 4px;
+    --aide-radius-md: 8px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--aide-bg-base);
+    color: var(--aide-text-primary);
+    font: 13px/1.45 -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── 标题栏（42px，复刻 TitleBar.vue）── */
+  .titlebar {
+    height: 42px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 10px 0 12px;
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--aide-bg-base) 75%, transparent), transparent 60%),
+      var(--aide-bg-deep);
+    border-bottom: 1px solid var(--aide-border);
+    user-select: none;
+  }
+  .tb-logo { display: flex; align-items: center; gap: 7px; }
+  .tb-logo-mark {
+    width: 16px; height: 16px; border-radius: 5px;
+    background: linear-gradient(135deg, var(--aide-accent), #b98c5a);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 50%, transparent);
+  }
+  .tb-logo-text { font-weight: 600; letter-spacing: 0.4px; color: var(--aide-text-primary); }
+  .tb-sep { width: 1px; height: 16px; background: var(--aide-border); }
+  .tb-project { font-weight: 600; color: var(--aide-text-primary); }
+  .tb-branch {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 8px; border-radius: var(--aide-radius-sm);
+    background: var(--aide-surface-default);
+    color: var(--aide-text-secondary); font-size: 12px;
+  }
+  .tb-branch svg { opacity: 0.7; }
+
+  /* 运行组 */
+  .run-group { position: relative; display: flex; align-items: center; gap: 2px; margin-left: 6px; }
+  .run-config-sel {
+    display: inline-flex; align-items: center; gap: 7px;
+    height: 26px; padding: 0 8px;
+    background: var(--aide-surface-default);
+    border: 1px solid transparent; border-radius: var(--aide-radius-sm);
+    color: var(--aide-text-primary); cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .run-config-sel:hover { background: var(--aide-surface-hover); }
+  .run-config-sel.open { background: var(--aide-surface-hover); border-color: var(--aide-border); }
+  .run-config-name { font-size: 12px; max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .run-config-chevron { opacity: 0.5; transition: transform 0.14s; }
+  .run-config-sel.open .run-config-chevron { transform: rotate(180deg); }
+
+  .run-icon-btn {
+    display: flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; background: none; border: none; cursor: pointer;
+    color: var(--aide-success); border-radius: var(--aide-radius-sm);
+    transition: background 0.12s, color 0.12s;
+  }
+  .run-icon-btn:hover { background: color-mix(in srgb, var(--aide-success) 12%, transparent); }
+  .run-icon-btn.stop { color: var(--aide-danger); }
+  .run-icon-btn.stop:hover { background: color-mix(in srgb, var(--aide-danger) 12%, transparent); }
+  .run-icon-btn.restart { color: var(--aide-text-secondary); }
+  .run-icon-btn.restart:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+
+  .tb-spacer { flex: 1; }
+
+  .tb-search {
+    display: inline-flex; align-items: center; gap: 8px;
+    height: 26px; padding: 0 10px; min-width: 220px;
+    background: var(--aide-surface-default); border: 1px solid transparent;
+    border-radius: var(--aide-radius-sm); color: var(--aide-text-muted); cursor: pointer;
+  }
+  .tb-search:hover { background: var(--aide-surface-hover); }
+  .tb-search-kbd {
+    margin-left: auto; padding: 1px 5px; font-size: 10px;
+    background: var(--aide-bg-deep); border-radius: 3px; color: var(--aide-text-muted);
+  }
+  .tb-win { display: flex; gap: 8px; margin-left: 8px; color: var(--aide-text-muted); }
+  .tb-win span { width: 12px; height: 12px; display: inline-block; }
+
+  /* ── 下拉面板 ── */
+  .config-drop-panel {
+    position: absolute;
+    top: calc(100% + 6px); left: 0;
+    width: 320px;
+    background: var(--aide-bg-raised);
+    border: 1px solid var(--aide-surface-hover);
+    border-radius: var(--aide-radius-md);
+    box-shadow: var(--aide-shadow-lg);
+    z-index: 950;
+    overflow: hidden;          /* 圆角裁剪，但列表内部自己滚 */
+    display: flex; flex-direction: column;
+  }
+  .cdrop-enter { animation: cdrop 0.14s ease; }
+  @keyframes cdrop { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+  .cdrop-search {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 11px;
+    border-bottom: 1px solid var(--aide-border);
+  }
+  .cdrop-search svg { color: var(--aide-text-muted); flex-shrink: 0; }
+  .cdrop-search input {
+    flex: 1; border: none; outline: none; background: transparent;
+    color: var(--aide-text-primary); font-size: 12.5px;
+  }
+  .cdrop-search input::placeholder { color: var(--aide-text-muted); }
+  .cdrop-search .count {
+    font-size: 10.5px; color: var(--aide-text-muted); flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cdrop-list {
+    max-height: 320px; overflow-y: auto; overscroll-behavior: contain;
+    padding: 4px 0;
+    scrollbar-width: thin; scrollbar-color: var(--aide-surface-active) transparent;
+  }
+  .cdrop-list::-webkit-scrollbar { width: 8px; }
+  .cdrop-list::-webkit-scrollbar-thumb { background: var(--aide-surface-active); border-radius: 4px; border: 2px solid var(--aide-bg-raised); }
+  .cdrop-list::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--aide-surface-active) 60%, var(--aide-text-muted)); }
+
+  .cdrop-item {
+    display: flex; align-items: center; gap: 9px;
+    padding: 6px 11px; cursor: pointer;
+    position: relative;
+    transition: background 0.1s;
+  }
+  .cdrop-item:hover, .cdrop-item.kbd-hl { background: var(--aide-surface-default); }
+  .cdrop-item.active .cdrop-name { color: var(--aide-accent); }
+
+  .cdrop-name {
+    flex: 1; font-size: 12.5px; color: var(--aide-text-primary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .cdrop-check { width: 12px; flex-shrink: 0; font-size: 11px; color: var(--aide-accent); text-align: center; }
+  .cdrop-run {
+    width: 20px; height: 20px; flex-shrink: 0;
+    display: none; align-items: center; justify-content: center;
+    border: none; background: transparent; cursor: pointer;
+    color: var(--aide-success); border-radius: 4px;
+  }
+  .cdrop-item:hover .cdrop-run, .cdrop-item.kbd-hl .cdrop-run { display: flex; }
+  .cdrop-run:hover { background: color-mix(in srgb, var(--aide-success) 14%, transparent); }
+
+  /* 自定义 tooltip：悬停行看完整命令（不依赖原生 title）*/
+  .cdrop-item .cdrop-tip {
+    position: absolute; left: 50%; bottom: calc(100% + 6px);
+    transform: translateX(-50%);
+    max-width: 420px; white-space: pre;
+    padding: 5px 9px; font-size: 10.5px;
+    font-family: "Consolas","Menlo",monospace;
+    background: var(--aide-bg-deep); color: var(--aide-text-secondary);
+    border: 1px solid var(--aide-border); border-radius: 5px;
+    box-shadow: var(--aide-shadow-lg);
+    pointer-events: none; opacity: 0; transition: opacity 0.12s; z-index: 960;
+  }
+  .cdrop-item:hover .cdrop-tip { opacity: 1; }
+
+  .cdrop-sep { height: 1px; background: var(--aide-border); margin: 3px 0; }
+  .cdrop-action {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 11px; cursor: pointer;
+    color: var(--aide-text-muted); font-size: 12px;
+    transition: background 0.1s, color 0.1s;
+  }
+  .cdrop-action:hover { background: var(--aide-surface-default); color: var(--aide-text-primary); }
+  .cdrop-foot {
+    padding: 6px 11px; border-top: 1px solid var(--aide-border);
+    font-size: 10.5px; color: var(--aide-text-muted);
+    display: flex; gap: 12px; align-items: center;
+  }
+  .cdrop-foot kbd {
+    font-family: inherit; font-size: 10px;
+    background: var(--aide-bg-deep); border: 1px solid var(--aide-border);
+    border-radius: 3px; padding: 0 4px; color: var(--aide-text-secondary);
+  }
+
+  .cdrop-empty {
+    padding: 22px 12px; text-align: center; color: var(--aide-text-muted); font-size: 12px;
+  }
+
+  /* ── 应用正文（占位，给下拉一个真实背景）── */
+  .body {
+    height: calc(100vh - 42px);
+    background:
+      radial-gradient(900px 500px at 20% -10%, color-mix(in srgb, var(--aide-bg-raised) 70%, transparent), transparent),
+      var(--aide-bg-base);
+    padding: 70px 48px; overflow: auto;
+  }
+  .hint-card {
+    max-width: 560px;
+    background: var(--aide-bg-raised); border: 1px solid var(--aide-border);
+    border-radius: var(--aide-radius-md); padding: 20px 22px;
+    box-shadow: var(--aide-shadow-lg);
+  }
+  .hint-card h1 { margin: 0 0 4px; font-size: 16px; letter-spacing: 0.3px; }
+  .hint-card .sub { color: var(--aide-text-muted); font-size: 12px; margin-bottom: 16px; }
+  .hint-card ul { margin: 0; padding-left: 18px; color: var(--aide-text-secondary); }
+  .hint-card li { margin: 7px 0; line-height: 1.5; }
+  .hint-card li b { color: var(--aide-text-primary); }
+  .hint-card .accent { color: var(--aide-accent); }
+  .hint-card .ok { color: var(--aide-success); }
+
+  /* toast */
+  .toast {
+    position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(12px);
+    background: var(--aide-bg-deep); border: 1px solid var(--aide-border);
+    color: var(--aide-text-primary); font-size: 12px;
+    padding: 8px 14px; border-radius: 6px; box-shadow: var(--aide-shadow-lg);
+    opacity: 0; transition: opacity 0.18s, transform 0.18s; pointer-events: none; z-index: 9999;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--aide-success); margin-right: 8px; vertical-align: middle; }
+</style>
+</head>
+<body>
+
+<!-- ── 标题栏 ── -->
+<div class="titlebar">
+  <div class="tb-logo">
+    <div class="tb-logo-mark"></div>
+    <span class="tb-logo-text">Aide</span>
+  </div>
+  <div class="tb-sep"></div>
+  <span class="tb-project">iotPlatform</span>
+  <span class="tb-branch">
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+      <circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 9a9 9 0 0 0 9 9"/>
+    </svg>
+    main
+  </span>
+
+  <!-- 运行组：下拉锚点 -->
+  <div class="run-group" id="runGroup">
+    <button class="run-config-sel" id="selBtn" aria-haspopup="listbox" aria-expanded="false">
+      <span class="run-config-name" id="selName">─</span>
+      <svg class="run-config-chevron" width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M0.5 0.5L4 4L7.5 0.5"/>
+      </svg>
+    </button>
+    <button class="run-icon-btn" id="mainPlayBtn" title="运行活动配置"></button>
+    <button class="run-icon-btn restart" id="mainRestartBtn" title="重启活动配置" style="display:none">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="1 4 1 10 7 10"/><path d="M3.5 15a9 9 0 1 0 .5-3.1"/>
+      </svg>
+    </button>
+
+    <!-- 下拉面板 -->
+    <div class="config-drop-panel cdrop-enter" id="panel" hidden>
+      <div class="cdrop-search">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
+        </svg>
+        <input id="search" type="text" placeholder="筛选运行配置…" autocomplete="off" spellcheck="false" />
+        <span class="count" id="count"></span>
+      </div>
+      <div class="cdrop-list" id="list" role="listbox"></div>
+      <div class="cdrop-sep"></div>
+      <div class="cdrop-action" id="editBtn">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+          <path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+        </svg>
+        编辑运行配置…
+      </div>
+      <div class="cdrop-foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+        <span><kbd>Enter</kbd> 运行</span>
+        <span><kbd>Esc</kbd> 关闭</span>
+        <span style="margin-left:auto">输入即筛选</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="tb-spacer"></div>
+
+  <div class="tb-search">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
+    </svg>
+    搜索…
+    <span class="tb-search-kbd">Ctrl+P</span>
+  </div>
+
+  <div class="tb-win">
+    <svg width="11" height="11" viewBox="0 0 11 11"><rect x="0" y="5" width="11" height="1" fill="currentColor"/></svg>
+    <svg width="11" height="11" viewBox="0 0 11 11"><rect x="0.5" y="0.5" width="10" height="9" fill="none" stroke="currentColor"/></svg>
+    <svg width="11" height="11" viewBox="0 0 11 11" stroke="currentColor" stroke-width="1.2"><path d="M1 1 L10 10 M10 1 L1 10"/></svg>
+  </div>
+</div>
+
+<!-- ── 正文说明 ── -->
+<div class="body">
+  <div class="hint-card">
+    <h1>运行配置下拉 · 交互原型</h1>
+    <div class="sub">点击标题栏左侧 <span class="accent">● iotPlatform ▾</span> 试试看 — 这是可交互的</div>
+    <ul>
+      <li><b>17 个模块全部可见</b>：列表 <code>max-height:320px</code> + 内部滚动，不再被裁掉。</li>
+      <li><b>搜索筛选</b>：在框里输入 <code>eureka</code> / <code>service</code> 立即收窄。</li>
+      <li><b>每行可单独运行</b>：鼠标悬停某行，右侧出现 <span class="ok">▶</span>，点它直接运行该模块（不改变当前活动配置）。</li>
+      <li><b>点行名 = 设为活动配置</b>（左侧 ✓ + 名字变 <span class="accent">accent</span> 色，沿用现在的选中样式），主 <span class="ok">▶</span> / ⏹ / ↻ 按钮作用于活动配置。</li>
+      <li><b>运行状态只看主按钮</b>：启动前是绿色 <span class="ok">▶</span> 三角，启动后变红色 ⏹ 方块——列表里不再放状态点。</li>
+      <li><b>悬停看完整命令</b>：鼠标停在行上会浮出 <code>mvn -pl … && java -jar …</code>，列表本身不再铺满长命令。</li>
+      <li><b>键盘</b>：↑↓ 移动高亮、Enter 运行高亮项、Esc 关闭。</li>
+    </ul>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  // ── 数据：iotPlatform 的 17 个检测出的运行配置 ──
+  const CONFIGS = [
+    "eureka-10001","eureka-10002","eureka-10003","rtuConfigService","rtuParamService",
+    "dataItemConfigService","collectorsDataService","common","deviceDataService","gateway-9000",
+    "pestService","subscribeService","userService","cameraService","farmMachineService",
+    "apiService","manufacturerService"
+  ].map(name => ({
+    id: name,
+    name,
+    command: `mvn -pl ${name} -am -DskipTests package && java -jar ${name}/target/${name}.jar`
+  }));
+
+  // 状态：active = 默认/主按钮作用对象；running = 当前在跑的（可不同于 active）
+  let activeId = "userService";
+  let runningId = "eureka-10001";
+  let open = false;
+  let query = "";
+  let hl = 0; // 高亮索引（在过滤后列表中）
+
+  const $ = id => document.getElementById(id);
+  const list = $("list"), panel = $("panel"), search = $("search"), count = $("count");
+  const selBtn = $("selBtn"), selName = $("selName");
+  const mainPlay = $("mainPlayBtn"), mainRestart = $("mainRestartBtn");
+
+  const escapeHtml = s => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+
+  function filtered() {
+    const q = query.trim().toLowerCase();
+    return q ? CONFIGS.filter(c => c.name.toLowerCase().includes(q)) : CONFIGS.slice();
+  }
+
+  function render() {
+    const items = filtered();
+    count.textContent = query ? `${items.length}/${CONFIGS.length}` : `${CONFIGS.length}`;
+    if (items.length === 0) {
+      list.innerHTML = `<div class="cdrop-empty">没有匹配「${escapeHtml(query)}」的配置</div>`;
+      return;
+    }
+    if (hl >= items.length) hl = items.length - 1;
+    list.innerHTML = items.map((c, i) => {
+      const isActive = c.id === activeId;
+      // 选中样式沿用现在的：左侧 ✓ + 活动项名走 accent；不显示运行状态点
+      return `
+      <div class="cdrop-item ${isActive ? "active" : ""} ${i === hl ? "kbd-hl" : ""}" data-id="${c.id}" data-idx="${i}" role="option">
+        <span class="cdrop-check">${isActive ? "✓" : ""}</span>
+        <span class="cdrop-name">${escapeHtml(c.name)}</span>
+        <button class="cdrop-run" data-id="${c.id}" aria-label="运行 ${escapeHtml(c.name)}">
+          <svg width="9" height="9" viewBox="0 0 10 10" fill="currentColor"><polygon points="2,1 9,5 2,9"/></svg>
+        </button>
+        <span class="cdrop-tip">${escapeHtml(c.command)}</span>
+      </div>`;
+    }).join("");
+  }
+
+  function renderSelector() {
+    const a = CONFIGS.find(c => c.id === activeId);
+    selName.textContent = a ? a.name : "─";
+    // 主按钮：在跑→显示停止方块；否则显示播放三角
+    if (runningId) {
+      mainPlay.classList.add("stop");
+      mainPlay.innerHTML = `<svg width="9" height="9" viewBox="0 0 8 8" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="0.6"/></svg>`;
+      mainRestart.style.display = "flex";
+    } else {
+      mainPlay.classList.remove("stop");
+      mainPlay.innerHTML = `<svg width="9" height="9" viewBox="0 0 10 10" fill="currentColor"><polygon points="2,1 9,5 2,9"/></svg>`;
+      mainRestart.style.display = "none";
+    }
+  }
+
+  function openPanel() {
+    open = true; panel.hidden = false; selBtn.classList.add("open");
+    selBtn.setAttribute("aria-expanded", "true");
+    query = ""; search.value = ""; hl = 0; render();
+    setTimeout(() => search.focus(), 30);
+  }
+  function closePanel() {
+    open = false; panel.hidden = true; selBtn.classList.remove("open");
+    selBtn.setAttribute("aria-expanded", "false");
+  }
+  function togglePanel() { open ? closePanel() : openPanel(); }
+
+  function setActive(id) {
+    activeId = id; renderSelector(); render();
+    toast(`已选为活动配置：${id}`);
+  }
+  function runDirect(id) {
+    runningId = id; renderSelector(); render();
+    toast(`→ 运行 ${id}`);
+  }
+
+  let toastTimer;
+  function toast(msg) {
+    const t = $("toast");
+    t.innerHTML = `<span class="dot"></span>${escapeHtml(msg)}`;
+    t.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove("show"), 1600);
+  }
+
+  // ── 事件 ──
+  selBtn.addEventListener("click", e => { e.stopPropagation(); togglePanel(); });
+  $("editBtn").addEventListener("click", e => { e.stopPropagation(); closePanel(); toast("（原型）打开运行配置编辑器"); });
+
+  list.addEventListener("click", e => {
+    const runBtn = e.target.closest(".cdrop-run");
+    if (runBtn) { e.stopPropagation(); runDirect(runBtn.dataset.id); return; }
+    const item = e.target.closest(".cdrop-item");
+    if (item) { e.stopPropagation(); setActive(item.dataset.id); }
+  });
+
+  list.addEventListener("mouseover", e => {
+    const item = e.target.closest(".cdrop-item");
+    if (item) { hl = +item.dataset.idx; syncHl(); }
+  });
+
+  search.addEventListener("input", () => { query = search.value; hl = 0; render(); });
+
+  function syncHl() {
+    list.querySelectorAll(".cdrop-item").forEach(el => {
+      el.classList.toggle("kbd-hl", +el.dataset.idx === hl);
+    });
+    scrollHl();
+  }
+  function scrollHl() {
+    const cur = list.querySelector(".kbd-hl");
+    if (cur) cur.scrollIntoView({ block: "nearest" });
+  }
+
+  document.addEventListener("keydown", e => {
+    if (!open) return;
+    const items = filtered();
+    if (e.key === "Escape") { e.preventDefault(); closePanel(); selBtn.focus(); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); hl = Math.min(hl + 1, items.length - 1); render(); scrollHl(); return; }
+    if (e.key === "ArrowUp")   { e.preventDefault(); hl = Math.max(hl - 1, 0); render(); scrollHl(); return; }
+    if (e.key === "Enter")     { e.preventDefault(); const c = items[hl]; if (c) runDirect(c.id); return; }
+  });
+
+  // 点外部关闭
+  document.addEventListener("click", e => {
+    if (open && !e.target.closest("#runGroup")) closePanel();
+  });
+
+  // 主按钮：在跑→停止；否则运行活动配置
+  mainPlay.addEventListener("click", e => {
+    e.stopPropagation();
+    if (runningId) { runningId = null; renderSelector(); render(); toast(`■ 已停止 ${activeId}`); }
+    else { runDirect(activeId); }
+  });
+  mainRestart.addEventListener("click", e => {
+    e.stopPropagation(); runDirect(activeId);
+  });
+
+  // 初始
+  renderSelector();
+  // 默认就打开，让用户一眼看到效果
+  openPanel();
+</script>
+</body>
+</html>

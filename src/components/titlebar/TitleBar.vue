@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from "vue";
 import WindowControls from "./WindowControls.vue";
 import SidebarToggle from "./SidebarToggle.vue";
 import NotificationBell from "./NotificationBell.vue";
@@ -28,7 +28,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   "open-palette": [];
   "select-session": [session: ActiveSessionInfo];
-  "run-project": [];
+  "run-project": [id?: string];
   "select-run-config": [id: string];
   "edit-run-configs": [];
   "stop-project": [];
@@ -66,25 +66,76 @@ function hidePanel() {
   closeTimer = setTimeout(() => { panelOpen.value = false; }, 150);
 }
 
-// Run config dropdown
+// Run config dropdown — click-to-open, searchable, keyboard-navigable.
+// Running state is shown only by the main play/stop button (green ▶ idle /
+// red ⏹ running); no per-row or selector status dots.
 const configDropOpen = ref(false);
-let configCloseTimer: ReturnType<typeof setTimeout> | null = null;
+const runQuery = ref("");
+const highlightIndex = ref(0);
+const searchInput = ref<HTMLInputElement | null>(null);
+const listRef = ref<HTMLElement | null>(null);
 
-function showConfigDrop() {
-  if (configCloseTimer) { clearTimeout(configCloseTimer); configCloseTimer = null; }
+const showSearch = computed(() => (props.runConfigs?.length ?? 0) > 6);
+const filteredConfigs = computed(() => {
+  const q = runQuery.value.trim().toLowerCase();
+  const all = props.runConfigs ?? [];
+  return q ? all.filter(c => c.name.toLowerCase().includes(q)) : all;
+});
+
+function openConfigDrop() {
   configDropOpen.value = true;
+  runQuery.value = "";
+  highlightIndex.value = 0;
+  nextTick(() => searchInput.value?.focus());
 }
-function hideConfigDrop() {
-  configCloseTimer = setTimeout(() => { configDropOpen.value = false; }, 150);
+function closeConfigDrop() {
+  configDropOpen.value = false;
+}
+function toggleConfigDrop() {
+  if (configDropOpen.value) closeConfigDrop(); else openConfigDrop();
 }
 function selectConfig(id: string) {
-  configDropOpen.value = false;
   emit("select-run-config", id);
+  closeConfigDrop();
+}
+// Run a specific config directly from its row's ▶ button, without changing
+// the active/default config the main play button targets.
+function runDirect(id: string) {
+  emit("run-project", id);
+  closeConfigDrop();
 }
 function openEditor() {
-  configDropOpen.value = false;
+  closeConfigDrop();
   emit("edit-run-configs");
 }
+function onQueryInput() {
+  highlightIndex.value = 0;
+}
+function onDropKeydown(e: KeyboardEvent) {
+  const items = filteredConfigs.value;
+  if (e.key === "Escape") { e.preventDefault(); closeConfigDrop(); return; }
+  if (e.key === "ArrowDown") { e.preventDefault(); highlightIndex.value = Math.min(highlightIndex.value + 1, items.length - 1); return; }
+  if (e.key === "ArrowUp")   { e.preventDefault(); highlightIndex.value = Math.max(highlightIndex.value - 1, 0); return; }
+  if (e.key === "Enter")     { e.preventDefault(); const c = items[highlightIndex.value]; if (c) runDirect(c.id); return; }
+}
+
+// Keep the highlighted row scrolled into view while navigating by keyboard.
+watch([highlightIndex, filteredConfigs], () => {
+  if (!configDropOpen.value) return;
+  nextTick(() => {
+    const el = listRef.value?.querySelector<HTMLElement>(".cdrop-item.kbd-hl");
+    el?.scrollIntoView({ block: "nearest" });
+  });
+});
+
+// Click outside the run-group closes the dropdown.
+function onDocClick(e: MouseEvent) {
+  if (!configDropOpen.value) return;
+  const t = e.target as HTMLElement | null;
+  if (t && !t.closest(".run-group")) closeConfigDrop();
+}
+onMounted(() => document.addEventListener("click", onDocClick));
+onUnmounted(() => document.removeEventListener("click", onDocClick));
 
 const runningCount = computed(() =>
   (props.activeSessions ?? []).filter(s => s.status === "running").length
@@ -94,14 +145,6 @@ const isRunning = computed(() => props.runStatus === "running");
 const showRestartBtn = computed(() =>
   props.runStatus === "running" || props.runStatus === "stopped" || props.runStatus === "crashed"
 );
-const runDotClass = computed(() => {
-  switch (props.runStatus) {
-    case "running":  return "run-dot run-dot-running";
-    case "stopped":  return "run-dot run-dot-stopped";
-    case "crashed":  return "run-dot run-dot-crashed";
-    default:         return "";
-  }
-});
 </script>
 
 <template>
@@ -136,20 +179,16 @@ const runDotClass = computed(() => {
 
       <!-- Run config selector: shown when configs exist for this workspace -->
       <template v-if="projectName && runConfigs && runConfigs.length > 0">
-        <div
-          class="run-group"
-          @mouseenter="showConfigDrop"
-          @mouseleave="hideConfigDrop"
-        >
-          <!-- Config name selector — includes status dot -->
+        <div class="run-group" @click.stop>
+          <!-- Config name selector (running state is shown by the play/stop button) -->
           <button
             class="run-config-sel"
+            :class="{ open: configDropOpen }"
             v-tooltip="'切换运行配置'"
-            @click.stop="configDropOpen = !configDropOpen"
+            @click.stop="toggleConfigDrop"
           >
-            <span v-if="runDotClass" :class="runDotClass" />
             <span class="run-config-name">{{ activeRunConfig?.name ?? '─' }}</span>
-            <svg class="run-config-chevron" width="8" height="5" viewBox="0 0 8 5" fill="currentColor">
+            <svg class="run-config-chevron" :class="{ open: configDropOpen }" width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M0.5 0.5L4 4L7.5 0.5"/>
             </svg>
           </button>
@@ -191,34 +230,57 @@ const runDotClass = computed(() => {
             </svg>
           </button>
 
-          <!-- Config dropdown panel -->
+          <!-- Config dropdown panel: search + scrollable list + footer -->
           <Transition name="config-drop">
-            <div
-              v-if="configDropOpen"
-              class="config-drop-panel"
-              @mouseenter="showConfigDrop"
-              @mouseleave="hideConfigDrop"
-            >
-              <div
-                v-for="cfg in runConfigs"
-                :key="cfg.id"
-                class="config-drop-item"
-                :class="{ active: cfg.id === activeRunConfig?.id }"
-                @click="selectConfig(cfg.id)"
-              >
-                <span class="config-drop-check">{{ cfg.id === activeRunConfig?.id ? '✓' : '' }}</span>
-                <span class="config-drop-col">
-                  <span class="config-drop-name">{{ cfg.name }}</span>
-                  <span class="config-drop-cmd">{{ cfg.command }}</span>
-                </span>
+            <div v-if="configDropOpen" class="config-drop-panel" @click.stop>
+              <div v-if="showSearch" class="cdrop-search">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
+                </svg>
+                <input
+                  ref="searchInput"
+                  v-model="runQuery"
+                  type="text"
+                  placeholder="筛选运行配置…"
+                  autocomplete="off"
+                  spellcheck="false"
+                  @input="onQueryInput"
+                  @keydown="onDropKeydown"
+                />
+                <span class="cdrop-count">{{ filteredConfigs.length }}/{{ runConfigs!.length }}</span>
               </div>
-              <div class="config-drop-sep" />
-              <div class="config-drop-action" @click="openEditor">
+
+              <div ref="listRef" class="cdrop-list">
+                <div
+                  v-for="(cfg, i) in filteredConfigs"
+                  :key="cfg.id"
+                  class="cdrop-item"
+                  :class="{ active: cfg.id === activeRunConfig?.id, 'kbd-hl': i === highlightIndex }"
+                  v-tooltip="cfg.command"
+                  @click="selectConfig(cfg.id)"
+                  @mouseenter="highlightIndex = i"
+                >
+                  <span class="cdrop-check">{{ cfg.id === activeRunConfig?.id ? '✓' : '' }}</span>
+                  <span class="cdrop-name">{{ cfg.name }}</span>
+                  <button class="cdrop-run" @click.stop="runDirect(cfg.id)">
+                    <svg width="9" height="9" viewBox="0 0 10 10" fill="currentColor"><polygon points="2,1 9,5 2,9"/></svg>
+                  </button>
+                </div>
+                <div v-if="filteredConfigs.length === 0" class="cdrop-empty">没有匹配的运行配置</div>
+              </div>
+
+              <div class="cdrop-sep" />
+              <div class="cdrop-action" @click="openEditor">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                   <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                 </svg>
                 编辑运行配置…
+              </div>
+              <div v-if="showSearch" class="cdrop-foot">
+                <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+                <span><kbd>Enter</kbd> 运行</span>
+                <span><kbd>Esc</kbd> 关闭</span>
               </div>
             </div>
           </Transition>
@@ -606,6 +668,9 @@ const runDotClass = computed(() => {
 .run-config-sel:hover {
   background: var(--aide-surface-hover);
 }
+.run-config-sel.open {
+  background: var(--aide-surface-hover);
+}
 
 .run-config-name {
   overflow: hidden;
@@ -620,6 +685,10 @@ const runDotClass = computed(() => {
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5;
+  transition: transform 0.14s ease;
+}
+.run-config-chevron.open {
+  transform: rotate(180deg);
 }
 
 .run-play-btn {
@@ -641,86 +710,174 @@ const runDotClass = computed(() => {
 }
 
 /* ── Config dropdown panel ── */
+/* Click-to-open, searchable, keyboard-navigable. Running state is shown only
+   by the main play/stop button — no per-row or selector status dots here. */
 
 .config-drop-panel {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
-  min-width: 240px;
+  width: 300px;
   background: var(--aide-bg-raised);
   border: 1px solid var(--aide-surface-hover);
   border-radius: var(--aide-radius-md);
   box-shadow: var(--aide-shadow-lg);
   z-index: 950;
-  overflow: hidden;
+  overflow: hidden;            /* clip to rounded corners; the list scrolls inside */
+  display: flex;
+  flex-direction: column;
 }
 
-.config-drop-item {
+.cdrop-search {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
-  padding: 7px 12px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--aide-border);
+}
+.cdrop-search svg {
+  color: var(--aide-text-muted);
+  flex-shrink: 0;
+}
+.cdrop-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--aide-text-primary);
+  font-size: 12.5px;
+  font-family: inherit;
+}
+.cdrop-search input::placeholder {
+  color: var(--aide-text-muted);
+}
+.cdrop-count {
+  font-size: 10.5px;
+  color: var(--aide-text-muted);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.cdrop-list {
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--aide-surface-active) transparent;
+}
+.cdrop-list::-webkit-scrollbar {
+  width: 8px;
+}
+.cdrop-list::-webkit-scrollbar-thumb {
+  background: var(--aide-surface-active);
+  border-radius: 4px;
+  border: 2px solid var(--aide-bg-raised);
+}
+.cdrop-list::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--aide-surface-active) 60%, var(--aide-text-muted));
+}
+
+.cdrop-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 11px;
   cursor: pointer;
   transition: background 0.1s;
 }
-.config-drop-item:hover {
+.cdrop-item:hover,
+.cdrop-item.kbd-hl {
   background: var(--aide-surface-default);
 }
-.config-drop-item.active .config-drop-name {
+.cdrop-item.active .cdrop-name {
   color: var(--aide-accent, var(--aide-info));
 }
 
-.config-drop-check {
+.cdrop-check {
   width: 12px;
   flex-shrink: 0;
   font-size: 11px;
   color: var(--aide-accent, var(--aide-info));
-  margin-top: 1px;
+  text-align: center;
 }
 
-.config-drop-col {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-.config-drop-name {
-  font-size: 12px;
+.cdrop-name {
+  flex: 1;
+  font-size: 12.5px;
   color: var(--aide-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.config-drop-cmd {
-  font-size: 10.5px;
-  color: var(--aide-text-muted);
-  font-family: 'Consolas', 'Menlo', monospace;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.cdrop-run {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--aide-success);
+  border-radius: 4px;
+}
+.cdrop-item:hover .cdrop-run,
+.cdrop-item.kbd-hl .cdrop-run {
+  display: flex;
+}
+.cdrop-run:hover {
+  background: color-mix(in srgb, var(--aide-success) 14%, transparent);
 }
 
-.config-drop-sep {
+.cdrop-empty {
+  padding: 22px 12px;
+  text-align: center;
+  color: var(--aide-text-muted);
+  font-size: 12px;
+}
+
+.cdrop-sep {
   height: 1px;
   background: var(--aide-border);
-  margin: 2px 0;
+  margin: 3px 0;
 }
 
-.config-drop-action {
+.cdrop-action {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 12px;
+  padding: 7px 11px;
   cursor: pointer;
   color: var(--aide-text-muted);
   font-size: 12px;
   transition: background 0.1s, color 0.1s;
 }
-.config-drop-action:hover {
+.cdrop-action:hover {
   background: var(--aide-surface-default);
   color: var(--aide-text-primary);
+}
+
+.cdrop-foot {
+  padding: 6px 11px;
+  border-top: 1px solid var(--aide-border);
+  font-size: 10.5px;
+  color: var(--aide-text-muted);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.cdrop-foot kbd {
+  font-family: inherit;
+  font-size: 10px;
+  background: var(--aide-bg-deep);
+  border: 1px solid var(--aide-border);
+  border-radius: 3px;
+  padding: 0 4px;
+  color: var(--aide-text-secondary);
 }
 
 /* ── Dropdown transition ── */
@@ -733,34 +890,6 @@ const runDotClass = computed(() => {
 .config-drop-leave-to {
   opacity: 0;
   transform: translateY(-4px);
-}
-
-/* ── Run status dot ── */
-
-.run-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.run-dot-running {
-  background: var(--aide-success);
-  box-shadow: 0 0 5px color-mix(in srgb, var(--aide-success) 60%, transparent);
-  animation: run-dot-pulse 2s ease-in-out infinite;
-}
-
-.run-dot-stopped {
-  background: var(--aide-text-muted);
-}
-
-.run-dot-crashed {
-  background: var(--aide-danger);
-}
-
-@keyframes run-dot-pulse {
-  0%, 100% { opacity: 0.7; }
-  50% { opacity: 1; }
 }
 
 /* ── Stop button ── */

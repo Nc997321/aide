@@ -353,12 +353,14 @@ function openSettingsMarket() {
   settingsVisible.value = true;
 }
 
-async function onRunProject() {
-  const cfg = activeRunConfig.value;
+async function onRunProject(id?: string) {
+  // When `id` is provided (the dropdown row's inline ▶), run that specific
+  // config without changing the active/default one. Otherwise run the active
+  // config, falling back to the legacy workbench send when none is set.
+  const cfg = id ? runConfigs.value.find(c => c.id === id) : activeRunConfig.value;
   if (cfg) {
     await startRunProcess(cfg);
-  } else {
-    // Fallback: no config detected, use legacy workbench send
+  } else if (!id) {
     runProject();
   }
 }
@@ -400,8 +402,16 @@ function handleKeydown(e: KeyboardEvent) {
     return;
   }
 
-  // Esc: collapse workbench if visible (but don't steal from other overlays)
-  if (e.key === "Escape" && wb.visible.value && !settingsVisible.value && !paletteOpen.value) {
+  // Esc: collapse workbench if visible (but don't steal from other overlays:
+  // settings, palette, or the titlebar run-config dropdown).
+  const fromRunDropdown = e.target instanceof Element && !!e.target.closest(".config-drop-panel");
+  if (
+    e.key === "Escape" &&
+    wb.visible.value &&
+    !settingsVisible.value &&
+    !paletteOpen.value &&
+    !fromRunDropdown
+  ) {
     wb.hide();
     return;
   }
