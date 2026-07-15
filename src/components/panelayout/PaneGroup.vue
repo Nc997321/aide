@@ -42,6 +42,7 @@ const {
   pendingPermission,
   pendingPermissionCount,
   sendMessage,
+  sendBtw,
   interrupt,
   stopSession,
   setModel,
@@ -71,6 +72,10 @@ async function onSend(prompt: string, opts: SendOptions) {
   if (!sid) return;
   if (tab.sessionId !== sid) pl.bindSession(tab.id, sid);
   pl.promoteTab(sid);
+}
+
+function onSendBtw(prompt: string, opts: { lightweight: boolean }) {
+  sendBtw(prompt, opts);
 }
 
 function onTabContext(tabId: string, x: number, y: number) {
@@ -115,6 +120,7 @@ function onNewTab() {
       :permission-queue-count="pendingPermissionCount"
       class="pane-group__chat"
       @send="onSend"
+      @send-btw="onSendBtw"
       @interrupt="interrupt"
       @set-model="setModel"
       @set-permission-mode="setPermissionMode"

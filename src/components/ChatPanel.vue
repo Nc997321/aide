@@ -47,6 +47,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   send: [prompt: string, opts: SendOptions];
+  "send-btw": [prompt: string, opts: { lightweight: boolean }];
   interrupt: [];
   "set-model": [model: string];
   "set-permission-mode": [mode: string];
@@ -283,6 +284,16 @@ async function expandOlderAnchored() {
   }
 }
 
+const btwMode = ref(false);
+const btwLightweight = ref(true);
+const btwRevertToast = ref(false);
+let btwToastTimer: number | undefined;
+function showBtwRevertToast() {
+  btwRevertToast.value = true;
+  clearTimeout(btwToastTimer);
+  btwToastTimer = window.setTimeout(() => (btwRevertToast.value = false), 1600);
+}
+
 const inputText = ref("");
 const skillList = ref<SkillMeta[]>([]);
 const slashDropdownVisible = ref(false);
@@ -444,6 +455,23 @@ async function handleSend(jumpQueue = false) {
   // 忙碌时不再拦截：useChatSession 会把消息排队，message_stop 后按序续发
   if (!text && !hasImages) return;
 
+  if (btwMode.value) {
+    // btw 一次性:发完自动切回主对话输入,视觉突出(回弹)
+    emit("send-btw", text, { lightweight: btwLightweight.value });
+    inputText.value = "";
+    pendingImages.value = [];
+    const box = rootEl.value?.querySelector(".chat-input-box") as HTMLElement | null;
+    btwMode.value = false; // 横幅收起、按钮复原
+    if (box) {
+      box.classList.remove("btw-revert-flash");
+      void box.offsetWidth; // 重启动画
+      box.classList.add("btw-revert-flash");
+      setTimeout(() => box.classList.remove("btw-revert-flash"), 800);
+    }
+    showBtwRevertToast();
+    return;
+  }
+
   let finalPrompt = text;
   const slashMatch = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
   if (slashMatch) {
@@ -563,7 +591,14 @@ async function handleQuickAction(action: QuickAction) {
           <button class="queued-item-remove" v-tooltip="'撤回这条排队消息'" @click="emit('remove-queued', i)">×</button>
         </div>
       </div>
-      <div class="chat-input-box">
+      <div class="chat-input-box" :class="{ 'btw-mode': btwMode }">
+        <Transition name="btw-banner">
+          <div v-if="btwMode" class="btw-mode-banner">
+            <span class="btw-banner-glyph">↳</span>
+            <span class="btw-banner-text"><b>顺便问一下</b> · 不进入主对话 · 阅后即弃</span>
+            <button type="button" class="btw-banner-x" @click="btwMode = false" v-tooltip="'退出 btw 模式'">×</button>
+          </div>
+        </Transition>
         <div v-if="pendingImages.length" class="image-attachment-strip">
           <div
             v-for="(img, i) in pendingImages"
@@ -578,7 +613,7 @@ async function handleQuickAction(action: QuickAction) {
           ref="textareaEl"
           v-model="inputText"
           class="chat-input"
-          :placeholder="isBusyVal ? '生成中，发送的消息将排队…' : '输入消息…'"
+          :placeholder="btwMode ? '顺便问一下,不进入主对话…' : (isBusyVal ? '生成中，发送的消息将排队…' : '输入消息…')"
           rows="3"
           @keydown.enter.exact.prevent="(slashDropdownVisible && filteredSkills.length) ? selectSkill(filteredSkills[slashSelectedIndex]) : handleSend()"
           @keydown.enter.shift.exact.prevent="insertAtCursor('\n')"
@@ -649,11 +684,16 @@ async function handleQuickAction(action: QuickAction) {
             :disabled="!inputText.trim() && !pendingImages.length"
             :busy="isBusyVal"
             :actions="quickActions"
+            :btw-active="btwMode"
             @send="handleSend()"
+            @toggle-btw="btwMode = !btwMode"
             @select="handleQuickAction"
           />
         </div>
       </div>
+      <Transition name="btw-toast">
+        <div v-if="btwRevertToast" class="btw-revert-toast">已切回主对话输入</div>
+      </Transition>
     </div>
   </div>
 </template>
@@ -1061,4 +1101,46 @@ async function handleQuickAction(action: QuickAction) {
 .image-thumb-remove:hover {
   background: var(--aide-danger);
 }
+
+/* ── btw 模式 ── */
+.btw-mode-banner {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  font-size: 11px;
+  color: var(--aide-accent);
+  background: color-mix(in srgb, var(--aide-accent) 8%, transparent);
+  border-bottom: 1px solid var(--aide-border-subtle);
+}
+.btw-banner-glyph { font-size: 14px; line-height: 1; }
+.btw-banner-text { flex: 1; }
+.btw-banner-text b { color: var(--aide-accent); }
+.btw-banner-x {
+  background: none; border: none; color: var(--aide-accent);
+  font-size: 14px; cursor: pointer; opacity: 0.8; line-height: 1;
+}
+.btw-banner-x:hover { opacity: 1; }
+.chat-input-box.btw-mode {
+  border-color: var(--aide-accent);
+  box-shadow: 0 0 0 2px var(--aide-accent-subtle);
+}
+.chat-input-box.btw-revert-flash { animation: btw-revert-flash 0.8s ease-out; }
+@keyframes btw-revert-flash {
+  0% { border-color: var(--aide-accent); box-shadow: 0 0 0 3px var(--aide-accent-subtle); }
+  40% { border-color: var(--aide-accent); box-shadow: 0 0 0 3px var(--aide-accent-subtle); }
+  100% { border-color: var(--aide-border); box-shadow: none; }
+}
+.btw-revert-toast {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: 100%; margin-bottom: 6px;
+  background: var(--aide-bg-raised); border: 1px solid var(--aide-accent);
+  color: var(--aide-accent); font-size: 11px; padding: 4px 12px;
+  border-radius: 999px; box-shadow: var(--aide-shadow-md);
+  z-index: 40; pointer-events: none; white-space: nowrap;
+}
+.btw-banner-enter-active, .btw-banner-leave-active { transition: opacity 0.2s, max-height 0.25s; overflow: hidden; }
+.btw-banner-enter-from, .btw-banner-leave-to { opacity: 0; max-height: 0; }
+.btw-toast-enter-active, .btw-toast-leave-active { transition: opacity 0.2s, transform 0.2s; }
+.btw-toast-enter-from, .btw-toast-leave-to { opacity: 0; transform: translate(-50%, 4px); }
 </style>
