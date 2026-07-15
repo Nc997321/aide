@@ -26,6 +26,18 @@ pub struct Meta {
     /// dir made Drop panic (build-thread swap + in-flight goto Arc clones).
     #[serde(default = "legacy_shard_dir")]
     pub shard_dir: String,
+    /// Whether the semantic-layer embedding finished for this shard. Written
+    /// `false` at structure-layer persist (Phase 1, before embed) and `true`
+    /// only after Phase 2 embed completes (or after an incremental reindex,
+    /// which preserves the prior complete vectors). `#[serde(default)]` so
+    /// old meta.json (which never tracked this) deserializes as `false` → the
+    /// index is treated as incomplete and rebuilt, never reused. This prevents
+    /// reusing a shard from a build that was cancelled mid-embed — such a shard
+    /// has incomplete vectors AND an inconsistent field index, so operating on
+    /// it (delete_by_file / upsert) panics inside qdrant (`value not found in
+    /// value_to_points`) and surfaces as a `join error` build failure.
+    #[serde(default)]
+    pub embed_complete: bool,
 }
 
 /// Legacy shard dir name used before versioned dirs existed.
@@ -102,6 +114,7 @@ mod tests {
             symbol_count: 3,
             dim: 384,
             shard_dir: "qdrant-1".into(),
+            embed_complete: true,
         };
         m.save(&path).unwrap();
         let loaded = Meta::load(&path).unwrap();

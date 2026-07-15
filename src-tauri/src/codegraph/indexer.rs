@@ -157,6 +157,13 @@ pub fn build_structure_index(
         symbol_count: table.len(),
         dim,
         shard_dir: shard_dir_name,
+        // Phase 1: structure layer persisted, embedding NOT started/finished.
+        // Flipped to true only after the Phase 2 embed completes (see
+        // `codegraph_build_index`) or after an incremental reindex (which keeps
+        // the prior complete vectors). A cancelled build leaves this false → the
+        // shard is never reused (load_*_index check it), avoiding qdrant panics
+        // on an inconsistent half-built shard.
+        embed_complete: false,
     };
     if let Err(e) = meta.save(&base.join("meta.json")) {
         tracing::warn!("codegraph: meta.json persist failed: {}", e);
@@ -188,6 +195,75 @@ pub fn cleanup_orphan_shard_dirs(base: &Path, keep: &str) {
     }
 }
 
+/// Decide whether an incremental reindex is worthwhile given how many files
+/// changed vs. the total. Incremental (reindex only the changed files, reuse
+/// the rest) is faster than a full rebuild only when the delta is small; past
+/// a threshold a clean full rebuild is both faster and avoids reusing a
+/// possibly-dirty old shard. Rule: changed ≤ 20% of total AND changed ≤ 200
+/// → incremental (true); otherwise full rebuild (false).
+pub fn decide_increment(changed: usize, total: usize) -> bool {
+    // ≤20% of files AND ≤200 files. `changed*5 <= total` avoids floating-point
+    // and handles total==0 (only changed==0 satisfies 0<=0).
+    changed * 5 <= total && changed <= 200
+}
+
+/// Walk source files and return those modified after `indexed_at`, plus the
+/// total source-file count. One walk serves both the delta list (for
+/// `reindex_one`) and the threshold (`decide_increment`). Mirrors
+/// `is_stale`/`rescan` mtime semantics (`>`, strict — `indexed_at` is second
+/// granularity, file mtimes are sub-second).
+pub fn changed_files_since(
+    project_root: &Path,
+    exts: &[&str],
+    indexed_at: u64,
+) -> (Vec<PathBuf>, usize) {
+    use std::time::UNIX_EPOCH;
+    let files = walk::walk_source_files(project_root, exts);
+    let total = files.len();
+    let changed: Vec<PathBuf> = files
+        .into_iter()
+        .filter(|f| {
+            f.metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|mt| mt.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() > indexed_at)
+                .unwrap_or(false)
+        })
+        .collect();
+    (changed, total)
+}
+
+/// Load a compatible on-disk index **ignoring staleness**. Returns the
+/// `SymbolTable`, the `CodeShard`, and the `Meta` (whose `indexed_at` drives
+/// the changed-files delta) if the on-disk meta matches the configured
+/// embedder (`model_name` + `dim`) AND `symbols.json` + shard are loadable.
+/// Unlike `load_project_index`, this does NOT check `is_stale` — used by the
+/// incremental build path to load the old index as a base to reindex only the
+/// changed files. Returns `None` when there is no reusable base (no meta,
+/// model/dim mismatch, or symbols/shard unloadable) → caller must full-rebuild.
+pub fn load_compatible_index(
+    project_root: &Path,
+    expect_model: &str,
+    expect_dim: usize,
+) -> Option<(SymbolTable, Arc<CodeShard>, Meta)> {
+    let base = index_dir(project_root);
+    let meta = Meta::load(&base.join("meta.json"))?;
+    if meta.model_name != expect_model || meta.dim != expect_dim {
+        return None;
+    }
+    // Never reuse an incomplete shard (build cancelled mid-embed): it has partial
+    // vectors and an inconsistent field index → reindex_one's delete_by_file
+    // panics in qdrant (`value not found in value_to_points`). Force a full
+    // rebuild instead, which creates a fresh clean shard.
+    if !meta.embed_complete {
+        return None;
+    }
+    let table = SymbolTable::load_json(&base.join("symbols.json"))?;
+    let shard = CodeShard::load(&base.join(&meta.shard_dir), expect_dim).ok()?;
+    Some((table, Arc::new(shard), meta))
+}
+
 /// Fast path: reuse on-disk index if fresh and compatible with the configured
 /// embedder. None → caller must full-rebuild.
 ///
@@ -206,6 +282,11 @@ pub fn load_project_index(
     let base = index_dir(project_root);
     let meta = Meta::load(&base.join("meta.json"))?;
     if meta.model_name != expect_model || meta.dim != expect_dim {
+        return None;
+    }
+    // Never reuse an incomplete shard (build cancelled mid-embed): it has partial
+    // vectors and an inconsistent field index → operating on it panics in qdrant.
+    if !meta.embed_complete {
         return None;
     }
     let exts = parser_manager.supported_extensions();
@@ -275,6 +356,11 @@ pub fn reindex_one(
         symbol_count: table.len(),
         dim,
         shard_dir,
+        // Incremental reindex runs only on an already-embed-complete shard
+        // (load_*_index gate on embed_complete), and it preserves the prior
+        // complete vectors while re-embedding the changed file's symbols. So
+        // the shard stays embed-complete after reindex.
+        embed_complete: true,
     };
     if let Err(e) = meta.save(&base.join("meta.json")) {
         tracing::warn!("codegraph: meta.json re-persist failed: {}", e);
@@ -285,7 +371,140 @@ pub fn reindex_one(
 #[cfg(test)]
 mod tests {
     use crate::codegraph::parser::ParserManager;
-    use super::{collect_symbols, cleanup_orphan_shard_dirs};
+    use super::{collect_symbols, cleanup_orphan_shard_dirs, decide_increment};
+
+    #[test]
+    fn decide_increment_small_delta_is_incremental() {
+        assert!(decide_increment(0, 100), "no changes → incremental");
+        assert!(decide_increment(5, 100), "5% → incremental");
+        assert!(decide_increment(20, 100), "exactly 20% → incremental (boundary)");
+        assert!(decide_increment(0, 0), "empty project, no changes → incremental");
+    }
+
+    #[test]
+    fn decide_increment_large_fraction_is_full_rebuild() {
+        assert!(!decide_increment(21, 100), "21% > 20% → full rebuild");
+        assert!(!decide_increment(50, 100), "50% → full rebuild");
+        assert!(!decide_increment(3, 10), "30% → full rebuild (small project)");
+    }
+
+    #[test]
+    fn decide_increment_over_absolute_cap_is_full_rebuild() {
+        assert!(!decide_increment(201, 100_000), ">200 absolute → full rebuild");
+        assert!(decide_increment(200, 100_000), "exactly 200 → incremental (boundary)");
+    }
+
+    #[test]
+    fn changed_files_since_returns_all_when_index_is_old() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let dir = std::env::temp_dir().join(format!("cg_changed_old_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.ts"), "export const x = 1;").unwrap();
+        std::fs::write(dir.join("b.ts"), "export const y = 2;").unwrap();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let (changed, total) = super::changed_files_since(&dir, &["ts"], now - 1000);
+        assert_eq!(total, 2, "total source files");
+        assert_eq!(changed.len(), 2, "both files are newer than the old index");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn changed_files_since_returns_none_when_index_newer_than_all_files() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let dir = std::env::temp_dir().join(format!("cg_changed_new_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.ts"), "export const x = 1;").unwrap();
+        std::fs::write(dir.join("b.ts"), "export const y = 2;").unwrap();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let (changed, total) = super::changed_files_since(&dir, &["ts"], now + 1000);
+        assert_eq!(total, 2);
+        assert!(changed.is_empty(), "no file is newer than the future index");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_compatible_index_loads_stale_index_ignoring_staleness() {
+        let dir = std::env::temp_dir().join(format!("cg_compat_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.ts"), "class A { save() {} }").unwrap();
+        let pm = ParserManager::new();
+        // Build an on-disk index (structure layer + shard + meta). Drop the
+        // returned shard so its dir is released on disk before we re-load it.
+        {
+            let (_table, shard, _points, _stats) =
+                super::build_structure_index(&dir, &pm, 4, "test-model", None).unwrap();
+            drop(shard);
+        }
+        // Phase 1 writes `embed_complete: false`; flip it to true to simulate a
+        // finished embed — `load_compatible_index` rejects incomplete shards.
+        {
+            let base = super::index_dir(&dir);
+            let mut m = crate::codegraph::meta::Meta::load(&base.join("meta.json")).unwrap();
+            m.embed_complete = true;
+            m.save(&base.join("meta.json")).unwrap();
+        }
+        // Mutate a file → index is now stale (is_stale would be true).
+        std::fs::write(dir.join("a.ts"), "class A { save() {} load() {} }").unwrap();
+        // load_compatible_index must still load it (ignores staleness).
+        let loaded = super::load_compatible_index(&dir, "test-model", 4);
+        assert!(loaded.is_some(), "stale but compatible index must load");
+        let (t, _s, meta) = loaded.unwrap();
+        assert_eq!(meta.model_name, "test-model");
+        assert_eq!(meta.dim, 4);
+        assert!(t.len() > 0, "loaded table must have symbols");
+        drop(_s);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_compatible_index_none_on_model_or_dim_mismatch_or_missing_meta() {
+        let dir = std::env::temp_dir().join(format!("cg_compat_none_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.ts"), "class A { save() {} }").unwrap();
+        let pm = ParserManager::new();
+        super::build_structure_index(&dir, &pm, 4, "test-model", None).unwrap();
+        // model mismatch → None
+        assert!(super::load_compatible_index(&dir, "other-model", 4).is_none(), "model mismatch");
+        // dim mismatch → None
+        assert!(super::load_compatible_index(&dir, "test-model", 999).is_none(), "dim mismatch");
+        // no meta → None
+        std::fs::remove_file(dir.join(".aide/index/meta.json")).unwrap();
+        assert!(super::load_compatible_index(&dir, "test-model", 4).is_none(), "missing meta");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_compatible_index_none_when_embed_incomplete() {
+        // A shard left by a build cancelled mid-embed has `embed_complete: false`
+        // (exactly what `build_structure_index` writes). Reusing it would let
+        // `reindex_one`'s `delete_by_file` hit qdrant's
+        // `value not found in value_to_points` panic → `join error`. Both loaders
+        // must reject it and force a full rebuild instead.
+        let dir = std::env::temp_dir().join(format!("cg_incomplete_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.ts"), "class A { save() {} }").unwrap();
+        let pm = ParserManager::new();
+        {
+            let (_t, shard, _p, _s) =
+                super::build_structure_index(&dir, &pm, 4, "test-model", None).unwrap();
+            drop(shard);
+        }
+        // meta.json now has embed_complete=false (Phase 1 only) — must NOT load.
+        assert!(
+            super::load_compatible_index(&dir, "test-model", 4).is_none(),
+            "an embed-incomplete shard must not be reused"
+        );
+        assert!(
+            super::load_project_index(&dir, &pm, "test-model", 4).is_none(),
+            "load_project_index must also reject an embed-incomplete shard"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn collect_builds_cross_file_table() {

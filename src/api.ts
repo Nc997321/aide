@@ -297,7 +297,10 @@ export const api = {
   codegraphClose(projectRoot: string): Promise<void> {
     return invoke("codegraph_close", { projectRoot });
   },
-  codegraphReindexFile(projectRoot: string, file: string): Promise<void> {
+  codegraphReindexFile(
+    projectRoot: string,
+    file: string,
+  ): Promise<{ reindexed: boolean; skipped?: string } | undefined> {
     return invoke("codegraph_reindex_file", { projectRoot, file });
   },
   /** 增量重扫：只 reindex mtime > indexed_at 的文件（手动「更新索引」）。 */

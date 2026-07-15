@@ -523,7 +523,7 @@ onMounted(async () => {
       const rawResults = await searchProviders(q, limit);
       return rawResults.map((r) => ({
         ...r,
-        group: r.icon === "session" ? "会话" : r.icon === "file" ? "文件" : (r.icon === "link" || r.icon === "search") ? "符号" : "其他",
+        group: r.icon === "session" ? "会话" : r.icon === "file" ? "文件" : (r.icon === "link" || r.icon === "search") ? "代码定义" : "其他",
       }));
     });
   });

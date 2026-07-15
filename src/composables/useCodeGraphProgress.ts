@@ -101,7 +101,7 @@ function trackBuild(p: Promise<BuildIndexResult>, root: string) {
           push({
             severity: "warning",
             source: "codegraph",
-            title: "未索引到任何符号",
+            title: "未索引到任何代码定义",
             body: `扫描 \`${r.scanned_files ?? 0}\` 个文件。检查项目根目录与支持的扩展名。`,
             timestamp: Date.now(),
             dedupKey: `codegraph:empty:${root}`,

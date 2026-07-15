@@ -10,6 +10,8 @@ vi.mock("../api", () => ({
     codegraphClose: vi.fn(async () => undefined),
     codegraphReindexFile: vi.fn(async () => undefined),
     codegraphBuildProgress: vi.fn(async () => ({ active: false, done: 0, total: 0, current: "", index_ready: false })),
+    loadNotifications: vi.fn(async () => []),
+    saveNotifications: vi.fn(async () => undefined),
   },
 }));
 vi.mock("./useRecent", () => ({
@@ -17,6 +19,7 @@ vi.mock("./useRecent", () => ({
 }));
 
 import { useFileViewer, isWindowDirty } from "./useFileViewer";
+import { useNotifications } from "./useNotifications";
 import { api } from "../api";
 
 describe("useFileViewer 多窗口 store", () => {
@@ -107,6 +110,45 @@ describe("useFileViewer 多窗口 store", () => {
     await v.save(win.id);
     expect(api.writeFileContent).toHaveBeenCalledWith("proj/A.ts", "changed");
     expect(api.codegraphReindexFile).toHaveBeenCalledWith("C:/proj", "proj/A.ts");
+  });
+
+  it("save reindex 成功时在对应窗口闪现「索引已更新」提示（不进通知中心）", async () => {
+    vi.mocked(api.codegraphReindexFile).mockResolvedValueOnce({ reindexed: true });
+    const { notifications } = useNotifications();
+    const before = notifications.value.filter((n) => n.source === "codegraph").length;
+    const v = useFileViewer();
+    await v.open("proj/A.ts");
+    await vi.waitFor(() => expect(v.projectRoot.value).toBe("C:/proj"));
+    const win = v.windows.value.find((w) => w.filePath === "proj/A.ts")!;
+    win.editContent = "changed";
+    await v.save(win.id);
+    // reindex 是 fire-and-forget；等 .then 把提示挂上
+    await vi.waitFor(() => expect(v.indexHintWinId.value).toBe(win.id));
+    // 成功是常态，不进通知中心：codegraph 通知数量不应增长
+    expect(notifications.value.filter((n) => n.source === "codegraph").length).toBe(before);
+  });
+
+  it("save reindex 返回 embed_not_ready 时进通知中心（warning），不闪现提示", async () => {
+    vi.mocked(api.codegraphReindexFile).mockResolvedValueOnce({
+      reindexed: false,
+      skipped: "embed_not_ready",
+    });
+    const { notifications } = useNotifications();
+    const v = useFileViewer();
+    await v.open("proj/B.ts");
+    await vi.waitFor(() => expect(v.projectRoot.value).toBe("C:/proj"));
+    const win = v.windows.value.find((w) => w.filePath === "proj/B.ts")!;
+    win.editContent = "changed";
+    await v.save(win.id);
+    await vi.waitFor(() => {
+      const n = notifications.value.find(
+        (x) => x.source === "codegraph" && x.dedupKey?.startsWith("codegraph:save:embed_not_ready:"),
+      );
+      expect(n).toBeTruthy();
+      expect(n!.severity).toBe("warning");
+    });
+    // embed_not_ready 不算成功，不闪现提示
+    expect(v.indexHintWinId.value).toBeNull();
   });
 
   it("切换 project root 触发重建并关闭上一个索引", async () => {
