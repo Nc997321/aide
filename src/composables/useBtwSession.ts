@@ -106,7 +106,6 @@ function handleBtwEvent(e: Record<string, unknown>) {
           icon: "↳",
           foldable: true,
           body: conclusion,
-          hint: "不进上下文",
         };
         onDoneCb(block);
       }

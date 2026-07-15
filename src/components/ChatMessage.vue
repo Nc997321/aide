@@ -93,8 +93,6 @@ function handleTextClick(e: MouseEvent) {
               <span class="btw-note-glyph tri">↳</span>
               <span class="btw-note-tag">btw</span>
               <span class="btw-note-q">{{ seg.block.label }}</span>
-              <span class="btw-note-sep">·</span>
-              <span class="btw-note-hint">{{ seg.block.hint ?? '不进上下文' }}</span>
             </summary>
             <div class="btw-note-body">
               <div>{{ seg.block.body }}</div>
@@ -332,9 +330,6 @@ function handleTextClick(e: MouseEvent) {
   border-radius: 999px; border: 1px solid var(--aide-accent); color: var(--aide-accent);
 }
 .btw-note-q { color: var(--aide-text-secondary); font-size: 12px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.btw-note-sep { color: var(--aide-text-muted); }
-.btw-note-hint { font-size: 10px; color: var(--aide-text-muted); display: flex; align-items: center; gap: 4px; }
-.btw-note-hint::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--aide-success); }
 .btw-note-body { padding: 2px 12px 9px; font-size: 12px; line-height: 1.6; color: var(--aide-text-secondary); border-top: 1px dashed var(--aide-border); }
 .btw-note-warn { font-size: 11px; color: var(--aide-text-muted); margin-top: 7px; }
 </style>

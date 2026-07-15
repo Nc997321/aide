@@ -19,19 +19,20 @@ const text = computed(() => store.value.messages.join(""));
       <div class="btw-drawer-stripe"></div>
       <div class="btw-banner">
         <span class="btw-bi">↳</span> 这条支线不进入主对话上下文
-        <span class="btw-blight">{{ props.lightweight ? "轻量 · 极少 token" : "完整 · 带工具" }}</span>
       </div>
       <div class="btw-head">
-        <div class="btw-title"><span class="btw-fork">↳</span> 顺便问一下 <span class="btw-pill">· btw</span></div>
-        <div class="btw-sub">从主对话 fork 副本开跑 · 来回不回写主对话 · 跑完即弃</div>
-        <div class="btw-ctrl">
-          <div class="btw-seg" role="group">
-            <button :aria-pressed="props.lightweight" @click="emit('update:lightweight', true)" :disabled="store.isBusy">轻量</button>
-            <button :aria-pressed="!props.lightweight" @click="emit('update:lightweight', false)" :disabled="store.isBusy">完整</button>
+        <div class="btw-title-row">
+          <div class="btw-title"><span class="btw-fork">↳</span> 顺便问一下 <span class="btw-pill">· btw</span></div>
+          <div class="btw-ctrl">
+            <div class="btw-seg" role="group">
+              <button :aria-pressed="props.lightweight" @click="emit('update:lightweight', true)" :disabled="store.isBusy">轻量</button>
+              <button :aria-pressed="!props.lightweight" @click="emit('update:lightweight', false)" :disabled="store.isBusy">完整</button>
+            </div>
+            <!-- 单一自适应按钮:思考中=停止(杀 sidecar);结束/出错=关闭(关抽屉,顺手停掉已空闲的 sidecar)。
+                 所以不存在"思考中误点关闭"——思考中根本不显示关闭。 -->
+            <button v-if="store.isBusy" class="btw-btn btw-danger" @click="emit('stop')">停止</button>
+            <button v-if="!store.isBusy" class="btw-btn" @click="emit('close')">关闭</button>
           </div>
-          <span class="btw-spacer"></span>
-          <button v-if="store.isBusy" class="btw-btn btw-danger" @click="emit('stop')">停止</button>
-          <button v-if="!store.isBusy" class="btw-btn" @click="emit('close')">关闭</button>
         </div>
       </div>
       <div class="btw-body">
@@ -41,8 +42,6 @@ const text = computed(() => store.value.messages.join(""));
       </div>
       <div v-if="store.done" class="btw-foot">
         <span class="btw-ok">已作为批注插入主对话</span>
-        <span class="btw-spacer"></span>
-        <button class="btw-btn" @click="emit('close')">关闭</button>
       </div>
     </aside>
   </Transition>
@@ -63,19 +62,16 @@ const text = computed(() => store.value.messages.join(""));
   border-bottom: 1px solid var(--aide-border);
 }
 .btw-bi { font-size: 14px; line-height: 1; }
-.btw-blight { margin-left: auto; color: var(--aide-text-muted); display: flex; align-items: center; gap: 5px; }
-.btw-blight::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--aide-success); }
 .btw-head { padding: 11px 14px 11px 17px; border-bottom: 1px solid var(--aide-border); }
-.btw-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--aide-text-primary); }
+.btw-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.btw-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--aide-text-primary); min-width: 0; }
 .btw-fork { color: var(--aide-accent); font-size: 14px; }
 .btw-pill { font-size: 11px; color: var(--aide-text-muted); font-weight: 400; }
-.btw-sub { font-size: 11px; color: var(--aide-text-muted); margin: 4px 0 0 22px; line-height: 1.5; }
-.btw-ctrl { display: flex; align-items: center; gap: 7px; margin: 10px 0 0 22px; }
+.btw-ctrl { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
 .btw-seg { display: inline-flex; border: 1px solid var(--aide-border); border-radius: 999px; overflow: hidden; }
 .btw-seg button { background: none; border: 0; color: var(--aide-text-muted); padding: 3px 11px; font-size: 11px; cursor: pointer; }
 .btw-seg button[aria-pressed="true"] { background: var(--aide-accent-subtle); color: var(--aide-accent); }
 .btw-seg button:disabled { opacity: 0.5; cursor: default; }
-.btw-spacer { flex: 1; }
 .btw-btn { border: 1px solid var(--aide-border); background: transparent; color: var(--aide-text-secondary); border-radius: var(--aide-radius-sm); padding: 4px 10px; font-size: 12px; cursor: pointer; }
 .btw-btn:hover { border-color: var(--aide-accent); color: var(--aide-accent); }
 .btw-danger:hover { border-color: var(--aide-danger); color: var(--aide-danger); }
