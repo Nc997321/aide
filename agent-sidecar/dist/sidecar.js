@@ -46142,6 +46142,10 @@ function btwQueryOverrides(btwMode2, lightweight) {
   if (lightweight) return { persistSession: false, tools: [], allowedTools: [] };
   return { persistSession: false };
 }
+function forkResumeOptions(sessionId2, shouldFork) {
+  if (!sessionId2) return {};
+  return shouldFork ? { resume: sessionId2, forkSession: true } : { resume: sessionId2 };
+}
 
 // src/index.ts
 var coalescer = new DeltaCoalescer((event) => {
@@ -46285,6 +46289,7 @@ async function startLoop(cwd) {
         ]) {
           if (process.env[k3]) cliEnv[k3] = process.env[k3];
         }
+        if (sessionId && shouldForkNextConnect && !btwMode) pendingFork = true;
         const q = DMe({
           prompt: queue[Symbol.asyncIterator](),
           options: {
@@ -46312,9 +46317,7 @@ async function startLoop(cwd) {
             // release 打包：Rust 侧把随 app 分发的原生 CLI 路径通过环境变量传入；
             // 未设置时 SDK 从 node_modules 解析（dev 模式）
             ...process.env.AIDE_CLAUDE_EXE ? { pathToClaudeCodeExecutable: process.env.AIDE_CLAUDE_EXE } : {},
-            // fork:btw 与供应商切换都走 fork;btw 时抑制"已切换供应商"通知
-            // (pendingFork 只在非 btw 时置真)。
-            ...sessionId ? shouldForkNextConnect ? (btwMode ? {} : (pendingFork = true, {}), { resume: sessionId, forkSession: true }) : { resume: sessionId } : {},
+            ...forkResumeOptions(sessionId ?? "", shouldForkNextConnect),
             ...btwQueryOverrides(btwMode, lightweightMode),
             env: cliEnv
           }

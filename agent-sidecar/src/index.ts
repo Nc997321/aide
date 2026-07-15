@@ -231,6 +231,10 @@ async function startLoop(cwd?: string) {
         ]) {
           if (process.env[k]) cliEnv[k] = process.env[k];
         }
+        // fork:btw 与供应商切换都走 forkSession;只有非 btw 的 fork 才置 pendingFork
+        // (触发"已切换供应商"通知),btw 安静 fork。side-effect 放在调用处,保持
+        // forkResumeOptions 纯函数性。
+        if (sessionId && shouldForkNextConnect && !btwMode) pendingFork = true;
         const q = query({
           prompt: queue[Symbol.asyncIterator](),
           options: {
@@ -262,13 +266,7 @@ async function startLoop(cwd?: string) {
             ...(process.env.AIDE_CLAUDE_EXE
               ? { pathToClaudeCodeExecutable: process.env.AIDE_CLAUDE_EXE }
               : {}),
-            // fork:btw 与供应商切换都走 fork;btw 时抑制"已切换供应商"通知
-            // (pendingFork 只在非 btw 时置真)。
-            ...(sessionId
-              ? shouldForkNextConnect
-                ? (btwMode ? {} : (pendingFork = true, {}), { resume: sessionId, forkSession: true })
-                : { resume: sessionId }
-              : {}),
+            ...forkResumeOptions(sessionId ?? "", shouldForkNextConnect),
             ...btwQueryOverrides(btwMode, lightweightMode),
             env: cliEnv,
           },
