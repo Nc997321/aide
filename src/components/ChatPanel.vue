@@ -22,6 +22,8 @@ import { useQuickActions } from "@/composables/useQuickActions";
 import type { QuickAction } from "@/composables/useQuickActions";
 import { useModal } from "@/composables/useModal";
 import { setChatPaneRect } from "@/composables/useChatPaneWidth";
+import BtwDrawer from "./BtwDrawer.vue";
+import { useBtwSession } from "@/composables/useBtwSession";
 
 const props = defineProps<{
   sessionId: string | null;
@@ -294,6 +296,11 @@ function showBtwRevertToast() {
   btwToastTimer = window.setTimeout(() => (btwRevertToast.value = false), 1600);
 }
 
+const btw = useBtwSession();
+const btwDrawerVisible = computed(() => !!btw.store.value.question || btw.store.value.isBusy || btw.store.value.done);
+function closeBtw() { btw.cleanup(); }
+function stopBtw() { btw.cleanup(); }
+
 const inputText = ref("");
 const skillList = ref<SkillMeta[]>([]);
 const slashDropdownVisible = ref(false);
@@ -370,11 +377,15 @@ watch(inputText, (val) => {
   }
 });
 
-// 切换会话时清空待发图片、恢复自动置底
+// 切换会话时清空待发图片、恢复自动置底、清理 btw 支线
 watch(() => props.sessionId, () => {
   pendingImages.value = [];
   autoScroll.value = true;
   scrollToBottom();
+  // 切主会话 → btw 抽屉关、进程清理
+  if (btw.store.value.question || btw.store.value.isBusy || btw.store.value.done) {
+    btw.cleanup();
+  }
 });
 
 function selectSkill(skill: SkillMeta | undefined) {
@@ -695,11 +706,19 @@ async function handleQuickAction(action: QuickAction) {
         <div v-if="btwRevertToast" class="btw-revert-toast">已切回主对话输入</div>
       </Transition>
     </div>
+    <BtwDrawer
+      :visible="btwDrawerVisible"
+      :lightweight="btwLightweight"
+      @update:lightweight="btwLightweight = $event"
+      @close="closeBtw"
+      @stop="stopBtw"
+    />
   </div>
 </template>
 
 <style scoped>
 .chat-panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;

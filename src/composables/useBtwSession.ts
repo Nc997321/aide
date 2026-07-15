@@ -111,6 +111,7 @@ async function cleanup() {
   }
   btwTempId = null;
   btwRealId = null;
+  state.value = { messages: [], isBusy: false, done: false, error: null, question: "" };
 }
 
 export function useBtwSession() {
