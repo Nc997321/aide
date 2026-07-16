@@ -209,6 +209,24 @@ function finishStreaming(store: SessionStore) {
   if (last?.streaming) last.streaming = false;
 }
 
+/** 会话终止时重置运行态：流式收尾 + 清忙碌/权限/排队/任务列表。
+ *
+ *  三处终止路径（stopSession / session_dead / error fatal:true）共用，让
+ *  「会话停止时该清什么」只有一处定义。尤其 store.tasks——sidecar 进程死后
+ *  不再发 tasks_update，若不清，顶部 in_progress TODO 会冻结在最后一条快照、
+ *  一直脉冲（TaskListPanel 的 pulse 只看 status），误导用户以为还在跑。
+ *
+ *  error 的可恢复分支（fatal:false）进程仍活、任务可能继续更新，传
+ *  clearTasks=false 保留任务列表；缺省/true 一律清。
+ */
+function resetRuntimeState(store: SessionStore, clearTasks = true) {
+  finishStreaming(store);
+  store.isBusy = false;
+  store.pendingPermissions = [];
+  store.queued.length = 0;
+  if (clearTasks) store.tasks = [];
+}
+
 /** 子代理逐字增量累积：跟主线程 text_delta 同一套模式——最后一项同类型就原地追加，
  *  否则另起一项（类型切换，或被一次工具调用打断了连续的文本/thinking 段落）。 */
 function appendSubagentTextEntry(block: SubagentBlock, kind: "text" | "thinking", delta: string) {
@@ -588,18 +606,16 @@ function handleChatEvent(e: Record<string, unknown>) {
       break;
     }
     case "error": {
-      finishStreaming(store);
-      store.isBusy = false;
-      store.pendingPermissions = [];
-      store.queued.length = 0;
+      // fatal:false = 可恢复错误，sidecar 进程仍存活等下一条 → 保留任务列表（可能继续更新）；
+      // 缺省/true 按致命处理（进程已死）→ 清任务，兼容未重建的旧 bundle。
+      resetRuntimeState(store, e["fatal"] !== false);
       store.messages.push({
         id: crypto.randomUUID(),
         role: "assistant",
         blocks: [{ type: "text", text: `Error: ${e["message"]}` }],
         timestamp: Date.now(),
       });
-      // fatal:false = 可恢复错误，sidecar 进程仍存活等下一条 → 落 waiting + 红点，
-      // 不再谎报 stopped（灰点）。缺省/true 按致命处理（兼容未重建的旧 bundle）。
+      // fatal:false 落 waiting + 红点，不再谎报 stopped（灰点）。
       if (e["fatal"] === false) {
         setSessionState(sid, "waiting");
         setSessionHealth(sid, "warning");
@@ -610,10 +626,7 @@ function handleChatEvent(e: Record<string, unknown>) {
     }
     case "session_dead": {
       // 进程真的没了（Rust 侧 reader EOF 或心跳看门狗超时合成）。
-      finishStreaming(store);
-      store.isBusy = false;
-      store.pendingPermissions = [];
-      store.queued.length = 0;
+      resetRuntimeState(store);
       const reason = e["reason"] as string | undefined;
       const detail = e["detail"] as string | undefined;
       const label =
@@ -836,10 +849,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
     try {
       await invoke("stop_chat_session", { sessionId: sid });
     } finally {
-      store.isBusy = false;
-      store.pendingPermissions = [];
-      store.queued.length = 0;
-      finishStreaming(store);
+      resetRuntimeState(store);
       setSessionState(sid, "stopped");
       // 释放 provider 绑定：下拉随即回落到全局 active provider，体现"stop 后供应商
       // 才改变"；下次发消息会重新盖戳当前 active provider 并用它 spawn。
