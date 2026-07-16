@@ -549,4 +549,81 @@ describe("useChatSession subagent events", () => {
     expect(block?.isPending).toBe(false);
     expect(block?.result).toBe("结论…");
   });
+
+  // 回归：正在进行中的 TODO，会话 stop/退出后顶部不应一直冻结在 in_progress
+  // 脉冲——sidecar 进程死后不再发 tasks_update，前端 store.tasks 若不清就会保留
+  // 最后一条快照，in_progress 任务永远不完成、一直脉冲，误导用户以为还在跑。
+  // 终止路径(session_dead / error fatal:true / stopSession)必须清空 tasks。
+  it("session_dead 清空 tasks，in_progress TODO 不残留", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    emit({
+      type: "tasks_update",
+      tasks: [{ id: "1", subject: "正在做", status: "in_progress", activeForm: "正在做" }],
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.tasks.value).toHaveLength(1);
+    expect(chat.tasks.value[0].status).toBe("in_progress");
+
+    emit({ type: "session_dead", session_id: "uuid-a" });
+    await flush();
+    expect(chat.tasks.value).toEqual([]);
+  });
+
+  it("error 致命(fatal:true/缺省)清空 tasks", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    emit({
+      type: "tasks_update",
+      tasks: [{ id: "1", subject: "做", status: "in_progress" }],
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.tasks.value).toHaveLength(1);
+
+    emit({ type: "error", message: "boom", session_id: "uuid-a" });
+    await flush();
+    expect(chat.tasks.value).toEqual([]);
+  });
+
+  it("error 可恢复(fatal:false)不清空 tasks——进程仍活，任务可能继续更新", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    emit({
+      type: "tasks_update",
+      tasks: [{ id: "1", subject: "做", status: "in_progress" }],
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.tasks.value).toHaveLength(1);
+
+    emit({ type: "error", message: "boom", fatal: false, session_id: "uuid-a" });
+    await flush();
+    expect(chat.tasks.value).toHaveLength(1);
+  });
+
+  it("stopSession 清空 tasks", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    emit({
+      type: "tasks_update",
+      tasks: [{ id: "1", subject: "做", status: "in_progress" }],
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.tasks.value).toHaveLength(1);
+
+    await chat.stopSession();
+    await flush();
+    expect(chat.tasks.value).toEqual([]);
+  });
 });
