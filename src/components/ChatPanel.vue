@@ -24,6 +24,7 @@ import { useModal } from "@/composables/useModal";
 import { setChatPaneRect } from "@/composables/useChatPaneWidth";
 import BtwDrawer from "./BtwDrawer.vue";
 import { useBtwSession } from "@/composables/useBtwSession";
+import { pickModelValue } from "@/utils/modelSelect";
 
 const props = defineProps<{
   sessionId: string | null;
@@ -154,20 +155,40 @@ const modelSelectOptions = computed(() =>
   displayModels.value.map((m) => ({ value: m.value, label: m.displayName })),
 );
 
-/** 下拉框必须始终有一个真实生效的选中值——不能只是视觉上落在第一个
+/** 下拉框必须始终有一个「在当前可选项里」的选中值——不能只是视觉上落在第一个
  *  <option> 上而 selectedModel 仍是空串，否则 handleSend 里 `selectedModel.value
  *  || undefined` 不会把它带进 initialModel，导致下拉框显示的模型和实际启动
- *  sidecar 用的模型对不上。优先用 provider 配置里显式指定的默认模型（若在
- *  当前可选列表里），否则退化到列表第一项。 */
+ *  sidecar 用的模型对不上；更不能让 selectedModel 落到一个不在列表里的值
+ *  （ThemedSelect 找不到匹配项会显示空）。
+ *
+ *  解析统一走 pickModelValue：保证返回值 ∈ 列表（列表空才返回 ""）。这里
+ *  sdkCurrent 传 "" —— applyDefaultModel 只在「列表变更 / 会话/provider 重置」
+ *  时负责选默认值，不采信 SDK 回报的当前模型（那是 currentModel watcher 的
+ *  职责）；尤其 provider 切换时 props.currentModel 可能还是旧 provider 的值，
+ *  在此采信会把旧模型带进新 provider 的下拉。 */
 function applyDefaultModel(models: ModelOption[]) {
-  if (selectedModel.value || !models.length) return;
-  const providerDefault = sessionProvider.value.model;
-  selectedModel.value = providerDefault && models.some((m) => m.value === providerDefault)
-    ? providerDefault
-    : models[0].value;
+  selectedModel.value = pickModelValue(
+    models,
+    selectedModel.value,
+    "",
+    sessionProvider.value.model,
+  );
 }
 
-watch(() => props.currentModel, (v) => { if (v) selectedModel.value = v; });
+/** SDK 在每轮 assistant 消息后回报当前模型（models_available.current）。
+ *  仅当它落在当前可选项里才采信——第三方 provider 下 sidecar 回报的常是
+ *  Claude 别名（sonnet/opus）或对不上的 id，不在真实模型 id 列表里，采信它
+ *  会让下拉显示空；此时保留用户已选的真实 id。existing 仍在列表里则保留之，
+ *  否则退化到 provider 默认 / 首项，绝不空。 */
+watch(() => props.currentModel, () => {
+  const next = pickModelValue(
+    displayModels.value,
+    selectedModel.value,
+    props.currentModel ?? "",
+    sessionProvider.value.model,
+  );
+  if (next !== selectedModel.value) selectedModel.value = next;
+});
 watch(displayModels, applyDefaultModel, { immediate: true });
 watch(() => props.sessionId, (sid) => {
   if (!sid) {
