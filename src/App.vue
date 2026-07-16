@@ -157,7 +157,7 @@ let unlistenOpenFile: UnlistenFn | null = null;
 const workbenchHeight = ref(settings.workbenchHeight || Math.floor(window.innerHeight * 0.45));
 const wb = useWorkbenchTerminal();
 const { run: runProject } = useRunProject();
-const { runStatus, start: startRunProcess, stop: stopRunProcess, restart: restartRunProcess } = useRunProcess();
+const { runStates, start: startRunProcess, stop: stopRunProcess, restart: restartRunProcess } = useRunProcess();
 const { configs: runConfigs, activeConfig: activeRunConfig, load: loadRunConfigs, setActive: setActiveRunConfig } = useRunConfigs();
 const runConfigsDialogVisible = ref(false);
 
@@ -364,9 +364,8 @@ function openSettingsJava() {
 }
 
 async function onRunProject(id?: string) {
-  // When `id` is provided (the dropdown row's inline ▶), run that specific
-  // config without changing the active/default one. Otherwise run the active
-  // config, falling back to the legacy workbench send when none is set.
+  // 从下拉行 ▶（带 id）直接跑该配置；主按钮 ▶（无 id）跑当前选中的。多模块可
+  // 并行——启动一个不会停掉另一个。无 active 且无 id 时回退到旧 workbench send。
   const cfg = id ? runConfigs.value.find(c => c.id === id) : activeRunConfig.value;
   if (cfg) {
     await startRunProcess(cfg);
@@ -375,8 +374,11 @@ async function onRunProject(id?: string) {
   }
 }
 
-async function onStopProject() {
-  await stopRunProcess();
+async function onStopProject(id?: string) {
+  // 停止指定配置（下拉行的 ⏹ 带 id）；主按钮的 ⏹ 不带 id → 停当前选中的。
+  // 只停这一个，不影响其他并行模块。
+  const targetId = id ?? activeRunConfig.value?.id;
+  if (targetId) await stopRunProcess(targetId);
 }
 
 async function onRestartProject() {
@@ -703,7 +705,7 @@ onUnmounted(() => {
       :active-sessions="activeSessionList"
       :run-configs="runConfigs"
       :active-run-config="activeRunConfig"
-      :run-status="runStatus"
+      :run-states="runStates"
       :left-collapsed="leftCollapsed"
       :right-collapsed="rightCollapsed"
       @open-palette="paletteOpen = true"

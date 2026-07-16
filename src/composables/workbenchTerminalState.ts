@@ -140,6 +140,16 @@ export function clearExited(sessionId: string): void {
   }
 }
 
+// run 进程重启守卫：run 的 session_id 是确定性的 `run__{config_id}`，restart 复用
+// 同一 id。老进程被 kill 后发出的 pty-exit 与新进程共用此 id——若不跳过，会在
+// 重启后的终端误写「[进程已退出]」并把新会话 spawned 置 false（停掉轮询）。
+// useRunProcess.restart 在 kill 前标记、新进程起来后清除；useWorkbenchTerminal
+// 的 pty-exit 处理据此跳过这条陈旧退出事件。
+const restartingSessions = new Set<string>();
+export function markRunRestarting(sessionId: string): void { restartingSessions.add(sessionId); }
+export function markRunRestarted(sessionId: string): void { restartingSessions.delete(sessionId); }
+export function isRunRestarting(sessionId: string): boolean { return restartingSessions.has(sessionId); }
+
 // 派生（给 UI）：只反映当前激活工作空间
 // 读 _wbVersion 让 computed 在 groups Map 变更时重新求值
 export const tabs = computed<WbTabInfo[]>(() => { void _wbVersion.value; return groups.get(activeWorkspaceKeyRef.value)?.tabs ?? []; });

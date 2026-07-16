@@ -14,6 +14,7 @@ import {
   removeTab,
   markExited,
   clearExited,
+  isRunRestarting,
   killWorkspace,
   allSessionIds,
   workspaceKeyOf,
@@ -107,12 +108,26 @@ function ensureExitListener() {
   if (unlistenExit) return;
   listen<string>("pty-exit", (event) => {
     try {
-      const p = JSON.parse(event.payload) as { session_id: string };
+      const p = JSON.parse(event.payload) as { session_id: string; success?: boolean };
       // 物理对象：标记并清理 DOM
       const s = sessions.get(p.session_id);
       if (s) {
+        // run 重启中收到的 pty-exit 是被 kill 的老进程发的（与新进程共用同一
+        // session_id）——整条忽略：不写退出行、不置 spawned=false（否则停掉新
+        // 进程轮询）、不 markExited。新进程的退出会另发一条 pty-exit。
+        if (s.kind === "run" && isRunRestarting(s.id)) return;
         s.spawned = false;
-        // run tab 的 DOM 也保留到关闭按钮触发；shell 标 exited 让 UI 显示覆盖层
+        // run tab：不套 shell 的退出覆盖层（覆盖层会盖住程序输出且要交互重启），
+        // 改为在 xterm 末尾直接写一行退出提示——程序自己的 BUILD SUCCESS/FAILURE
+        // 已说明成败，这里只标「进程到此结束」的边界，让用户一眼看出已退出而非卡死。
+        // 先尽力冲刷尾部输出再写退出行：Rust waiter 是先移除 session 再 emit，尾部
+        // 可能尚未经过 100ms 轮询；spawned=false 后轮询不再碰此 session，由这里收尾。
+        if (s.kind === "run") {
+          void api.pollPtyOutput(s.id).then((tail) => {
+            if (tail) s.terminal.write(tail);
+            s.terminal.write("\r\n\x1b[36m[进程已退出]\x1b[0m\r\n");
+          });
+        }
       }
       // 元数据：标 exited（核心 tabs 反映）
       markExited(p.session_id);

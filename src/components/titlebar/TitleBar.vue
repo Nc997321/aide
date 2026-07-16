@@ -5,6 +5,7 @@ import SidebarToggle from "./SidebarToggle.vue";
 import NotificationBell from "./NotificationBell.vue";
 import Icon from "../Icon.vue";
 import type { SessionStatus } from "../../composables/useSessionState";
+import type { RunStatus } from "../../composables/useRunProcess";
 import type { RunConfig } from "../../types";
 
 interface ActiveSessionInfo {
@@ -20,7 +21,9 @@ const props = defineProps<{
   activeSessions?: ActiveSessionInfo[];
   runConfigs?: RunConfig[];
   activeRunConfig?: RunConfig | null;
-  runStatus?: "idle" | "running" | "stopped" | "crashed";
+  // 每配置独立运行状态（键 = RunConfig.id）——支持多模块并行。主按钮显示
+  // 「选中配置」的状态，下拉每行显示「该行配置」的状态，互不干扰。
+  runStates?: Record<string, RunStatus>;
   leftCollapsed?: boolean;
   rightCollapsed?: boolean;
 }>();
@@ -31,7 +34,7 @@ const emit = defineEmits<{
   "run-project": [id?: string];
   "select-run-config": [id: string];
   "edit-run-configs": [];
-  "stop-project": [];
+  "stop-project": [id?: string];
   "restart-project": [];
   "toggle-left": [];
   "toggle-right": [];
@@ -67,8 +70,8 @@ function hidePanel() {
 }
 
 // Run config dropdown — click-to-open, searchable, keyboard-navigable.
-// Running state is shown only by the main play/stop button (green ▶ idle /
-// red ⏹ running); no per-row or selector status dots.
+// 运行状态按配置独立跟踪（runStates: configId -> RunStatus），支持多模块并行：
+// 主按钮反映「选中配置」的状态，下拉每行反映「该行配置」的状态，互不干扰。
 const configDropOpen = ref(false);
 const runQuery = ref("");
 const highlightIndex = ref(0);
@@ -141,10 +144,27 @@ const runningCount = computed(() =>
   (props.activeSessions ?? []).filter(s => s.status === "running").length
 );
 
-const isRunning = computed(() => props.runStatus === "running");
-const showRestartBtn = computed(() =>
-  props.runStatus === "running" || props.runStatus === "stopped" || props.runStatus === "crashed"
+// 取某配置的运行状态（缺省 idle——从未启动过）。
+function statusOf(cfgId: string | undefined): RunStatus {
+  if (!cfgId) return "idle";
+  return props.runStates?.[cfgId] ?? "idle";
+}
+// 主按钮绑定「选中配置」的状态：running 显 ⏹（停它），否则显 ▶（跑它，不影响
+// 其他并行模块）。切到没启动的配置 → ▶，正是预期。
+const selectedStatus = computed<RunStatus>(() =>
+  props.activeRunConfig ? statusOf(props.activeRunConfig.id) : "idle"
 );
+const isRunning = computed(() => selectedStatus.value === "running");
+// 重启只对选中的、且已跑过（running/stopped/crashed）的配置有意义。
+const showRestartBtn = computed(() =>
+  selectedStatus.value === "running" ||
+  selectedStatus.value === "stopped" ||
+  selectedStatus.value === "crashed"
+);
+// 某行是否正在跑（供下拉每行常驻显示停止态）。
+function isRowRunning(cfg: RunConfig): boolean {
+  return statusOf(cfg.id) === "running";
+}
 </script>
 
 <template>
@@ -255,14 +275,19 @@ const showRestartBtn = computed(() =>
                   v-for="(cfg, i) in filteredConfigs"
                   :key="cfg.id"
                   class="cdrop-item"
-                  :class="{ active: cfg.id === activeRunConfig?.id, 'kbd-hl': i === highlightIndex }"
+                  :class="{ active: cfg.id === activeRunConfig?.id, 'kbd-hl': i === highlightIndex, running: isRowRunning(cfg) }"
                   v-tooltip="cfg.command"
                   @click="selectConfig(cfg.id)"
                   @mouseenter="highlightIndex = i"
                 >
                   <span class="cdrop-check">{{ cfg.id === activeRunConfig?.id ? '✓' : '' }}</span>
                   <span class="cdrop-name">{{ cfg.name }}</span>
-                  <button class="cdrop-run" @click.stop="runDirect(cfg.id)">
+                  <!-- 该行正在跑：常驻停止按钮（不靠 hover 显隐），点了停掉它；
+                       否则照旧 hover/键盘高亮才显的 ▶ 运行按钮。 -->
+                  <button v-if="isRowRunning(cfg)" class="cdrop-stop" @click.stop="$emit('stop-project', cfg.id)">
+                    <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="0.5"/></svg>
+                  </button>
+                  <button v-else class="cdrop-run" @click.stop="runDirect(cfg.id)">
                     <svg width="9" height="9" viewBox="0 0 10 10" fill="currentColor"><polygon points="2,1 9,5 2,9"/></svg>
                   </button>
                 </div>
@@ -831,6 +856,29 @@ const showRestartBtn = computed(() =>
 }
 .cdrop-run:hover {
   background: color-mix(in srgb, var(--aide-success) 14%, transparent);
+}
+
+/* 正在跑的配置行：停止按钮常驻可见（不靠 hover 显隐），danger 色；行名加粗，
+   让用户一眼看出这行在跑（而非卡在 hover 才显的 ▶ 运行按钮）。 */
+.cdrop-stop {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--aide-danger);
+  border-radius: 4px;
+}
+.cdrop-stop:hover {
+  background: color-mix(in srgb, var(--aide-danger) 14%, transparent);
+}
+.cdrop-item.running .cdrop-name {
+  color: var(--aide-text-primary);
+  font-weight: 600;
 }
 
 .cdrop-empty {
