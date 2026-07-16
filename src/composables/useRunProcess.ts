@@ -34,7 +34,7 @@ export function useRunProcess() {
 
   async function start(config: RunConfig): Promise<void> {
     await ensureExitListener();
-    const sessionId = await api.runProcessStart(config.id, config.cwd, config.command);
+    const sessionId = await api.runProcessStart(config.id, config.cwd, config.command, config.env ?? {});
     runningConfigId.value = config.id;
     activeSessionId.value = sessionId;
     runStatus.value = "running";
@@ -57,7 +57,7 @@ export function useRunProcess() {
       await api.runProcessStop(config.id).catch(() => {});
       // Brief pause to let the old PTY flush before reopening with the same ID
       await new Promise<void>(r => setTimeout(r, 150));
-      const sessionId = await api.runProcessStart(config.id, config.cwd, config.command);
+      const sessionId = await api.runProcessStart(config.id, config.cwd, config.command, config.env ?? {});
       runningConfigId.value = config.id;
       activeSessionId.value = sessionId;
       runStatus.value = "running";

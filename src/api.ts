@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem,
   ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
-  GrepMatch, ProviderConfig, ProviderModelMappings, RunConfig, RunTarget, RecentView,
+  GrepMatch, ProviderConfig, ProviderModelMappings, RunConfig, RunTarget, JdkEntry, RecentView,
   SkillMeta, BuildIndexResult, BuildProgress, RescanResult, QueryResult,
   AppNotification, NotificationRecord,
 } from "./types";
@@ -79,16 +79,16 @@ export const api = {
     return invoke("detect_run_command", { cwd });
   },
   listRunConfigs(wsKey: string): Promise<RunConfig[]> {
-    return invoke("list_run_configs", { ws_key: wsKey });
+    return invoke("list_run_configs", { wsKey });
   },
   saveRunConfigs(wsKey: string, configs: RunConfig[]): Promise<void> {
-    return invoke("save_run_configs", { ws_key: wsKey, configs });
+    return invoke("save_run_configs", { wsKey, configs });
   },
   detectRunTargets(cwd: string): Promise<RunTarget[]> {
     return invoke("detect_run_targets", { cwd });
   },
-  runProcessStart(configId: string, cwd: string, command: string): Promise<string> {
-    return invoke("run_process_start", { configId, cwd, command });
+  runProcessStart(configId: string, cwd: string, command: string, env: Record<string, string>): Promise<string> {
+    return invoke("run_process_start", { configId, cwd, command, env });
   },
   runProcessStop(configId: string): Promise<void> {
     return invoke("run_process_stop", { configId });
@@ -222,6 +222,14 @@ export const api = {
   },
   setSettings(settings: Partial<AppSettings>): Promise<void> {
     return invoke("set_settings", { settings });
+  },
+
+  // JDK 注册表（按项目选 JDK）
+  scanJdks(): Promise<JdkEntry[]> {
+    return invoke("scan_jdks");
+  },
+  resolveJdk(path: string): Promise<JdkEntry | null> {
+    return invoke("resolve_jdk", { path });
   },
 
   // 供应商

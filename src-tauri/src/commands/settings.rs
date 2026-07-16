@@ -130,6 +130,15 @@ pub struct AppSettings {
     /// 已装插件的启用开关：key = "<plugin>@<market>"。
     #[serde(default)]
     pub enabled_plugins: std::collections::BTreeMap<String, bool>,
+    /// JDK 注册表：本机已登记的 JDK（扫描 + 手动添加），供运行配置按项目选
+    /// JDK 版本。机器级资源（非按工作区）。前端 settings 管理；Rust 只存取。
+    #[serde(default)]
+    pub jdk_registry: Vec<super::jdk::JdkEntry>,
+    /// 「检测到 Java 项目但运行配置未选 JDK」提示的「稍后」关闭记录——按工作区
+    /// 路径键控。落盘到 config.json（非 localStorage），重启不丢。Rust 只存取，
+    /// 语义/判定全在前端。一旦该工作区任一 Java 运行配置选了 JDK，前端即不再提示。
+    #[serde(default)]
+    pub jdk_prompt_dismissed: Vec<String>,
 }
 
 fn default_font_size() -> u32 { 14 }
@@ -157,6 +166,8 @@ impl Default for AppSettings {
             codegraph_embedder: CodeGraphEmbedderConfig::default(),
             enabled_marketplaces: Vec::new(),
             enabled_plugins: std::collections::BTreeMap::new(),
+            jdk_registry: Vec::new(),
+            jdk_prompt_dismissed: Vec::new(),
         }
     }
 }
@@ -402,5 +413,29 @@ mod tests {
         let out = serde_json::to_string(&s).unwrap();
         assert!(out.contains("\"codegraphEmbedder\""), "{out}");
         assert!(out.contains("\"baseUrl\":\"http://localhost:11434\""), "{out}");
+    }
+
+    /// JDK 注册表随 AppSettings 落盘/读取，camelCase 一致；缺字段回填空。
+    #[test]
+    fn jdk_registry_round_trip_and_default() {
+        // 缺 jdkRegistry → 默认空
+        let s: AppSettings = serde_json::from_str(r#"{"fontSize":14}"#).unwrap();
+        assert!(s.jdk_registry.is_empty());
+
+        let json = r#"{
+            "fontSize": 14,
+            "jdkRegistry": [
+                {"name":"jdk-21","version":"21","path":"C:\\Program Files\\Java\\jdk-21"},
+                {"name":"jdk-8","version":"8","path":"C:\\Program Files\\Java\\jdk-8"}
+            ]
+        }"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.jdk_registry.len(), 2);
+        assert_eq!(s.jdk_registry[0].version, "21");
+        assert_eq!(s.jdk_registry[1].name, "jdk-8");
+
+        let out = serde_json::to_string(&s).unwrap();
+        assert!(out.contains("\"jdkRegistry\""), "{out}");
+        assert!(out.contains("\"path\":\"C:\\\\Program Files\\\\Java\\\\jdk-21\""), "{out}");
     }
 }

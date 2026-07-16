@@ -11,6 +11,7 @@ pub mod proxy;
 pub mod provider;
 pub mod run_configs;
 pub mod run_process;
+pub mod jdk;
 pub mod clipboard;
 pub mod file_assoc;
 pub mod recent;

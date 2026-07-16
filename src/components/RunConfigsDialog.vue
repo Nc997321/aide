@@ -1,12 +1,22 @@
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
 import { useRunConfigs } from "../composables/useRunConfigs";
+import { useSettings } from "../composables/useSettings";
+import ThemedSelect from "./ThemedSelect.vue";
+import Icon from "./Icon.vue";
 import type { RunConfig, RunTarget } from "../types";
 
-const emit = defineEmits<{ close: [] }>();
+const emit = defineEmits<{
+  close: [];
+  /** JDK 注册表为空（或用户点「管理 JDK」）→ 请求父级打开设置 → Java tab 扫描。
+   *  不直接开设置：打开方式由 App.vue 统一控制（settingsVisible/initialTab），
+   *  且设置 z-index 1100 覆盖在本对话框之上，扫描完关闭即回到此处选 JDK。 */
+  "open-settings-java": [];
+}>();
 
 const { configs, activeId, add, update, remove, detectAndAdd, addTargets, currentWsKey } =
   useRunConfigs();
+const { settings } = useSettings();
 
 // ── List selection ──────────────────────────────────────────────────────────
 const selectedId = ref(activeId.value || configs.value[0]?.id || "");
@@ -38,9 +48,29 @@ const isDirty = computed(
   () => selected.value && (
     draft.value.name !== selected.value.name ||
     draft.value.cwd !== selected.value.cwd ||
-    draft.value.command !== selected.value.command
+    draft.value.command !== selected.value.command ||
+    (draft.value.env?.JAVA_HOME ?? "") !== (selected.value.env?.JAVA_HOME ?? "")
   )
 );
+
+// ── JDK 选择器（按项目选 JDK）──
+// 列注册表条目 + 「(系统默认)」。选中 → draft.env 注入 JAVA_HOME；选系统默认 → 清掉。
+// env 还可承载其它键，这里只动 JAVA_HOME，保留其余。
+const jdkOptions = computed(() => [
+  { value: "", label: "(系统默认)" },
+  ...(settings.jdkRegistry ?? []).map(e => ({
+    value: e.path,
+    label: `${e.name} · Java ${e.version}`,
+  })),
+]);
+const selectedJdkPath = computed(() => draft.value.env?.JAVA_HOME ?? "");
+
+function onPickJdk(path: string) {
+  const env: Record<string, string> = { ...(draft.value.env ?? {}) };
+  if (path) env.JAVA_HOME = path;
+  else delete env.JAVA_HOME;
+  draft.value.env = Object.keys(env).length ? env : undefined;
+}
 
 async function save() {
   if (!selected.value) return;
@@ -166,6 +196,35 @@ async function close() {
               <label>命令</label>
               <input v-model="draft.command" type="text" placeholder="mvn spring-boot:run" />
               <span class="rcd-hint">在工作目录中执行的 shell 命令</span>
+            </div>
+
+            <div class="rcd-field">
+              <label>JDK</label>
+              <ThemedSelect
+                :model-value="selectedJdkPath"
+                :options="jdkOptions"
+                block
+                @update:model-value="onPickJdk"
+              />
+              <div class="rcd-jdk-hint">
+                <span v-if="jdkOptions.length > 1" class="rcd-hint">选中 JDK → 启动时注入 JAVA_HOME（系统全局不变）</span>
+                <button
+                  v-else
+                  class="rcd-link-btn rcd-link-btn-warn"
+                  @click="emit('open-settings-java')"
+                >
+                  <Icon name="java" :size="12" />
+                  <span>尚未登记 JDK，前往扫描</span>
+                  <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true">
+                    <path d="M2 5h6M5.5 2.5L8 5L5.5 7.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+                <button
+                  v-if="jdkOptions.length > 1"
+                  class="rcd-link-btn"
+                  @click="emit('open-settings-java')"
+                >管理 JDK</button>
+              </div>
             </div>
 
             <div class="rcd-save-row">
@@ -416,6 +475,41 @@ async function close() {
 .rcd-hint {
   font-size: 10.5px;
   color: var(--aide-text-muted);
+}
+
+/* JDK 字段下的提示行：说明文字 + 跳转按钮（去设置扫描 / 管理 JDK） */
+.rcd-jdk-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 1px;
+}
+
+/* 跳转链接式按钮：无原生浏览器外观，主题化、可点。 */
+.rcd-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 10.5px;
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  transition: color 0.12s;
+}
+.rcd-link-btn:hover {
+  color: var(--aide-accent, var(--aide-info));
+}
+.rcd-link-btn-warn {
+  color: var(--aide-warning);
+  font-size: 11px;
+}
+.rcd-link-btn-warn:hover {
+  color: var(--aide-warning);
+  opacity: 0.85;
 }
 
 .rcd-save-row {

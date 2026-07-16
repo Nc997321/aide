@@ -2,6 +2,8 @@
 import { ref, watch, onMounted, computed } from "vue";
 import { useSettings } from "../composables/useSettings";
 import { useCustomizations } from "../composables/useCustomizations";
+import { api } from "../api";
+import type { JdkEntry } from "../types";
 import CustomizationList from "./customizations/CustomizationList.vue";
 import CustomizationDetail from "./customizations/CustomizationDetail.vue";
 import MarketplaceTab from "./marketplace/MarketplaceTab.vue";
@@ -32,13 +34,13 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-type Tab = "general" | "providers" | "extensions" | "marketplace" | "codegraph";
+type Tab = "general" | "providers" | "extensions" | "marketplace" | "codegraph" | "java";
 
 const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 
 // ── Settings (通用) ──
 
-const { settings, update, setOpenWithExtensions, setCodegraphEmbedder } = useSettings();
+const { settings, update, setOpenWithExtensions, setCodegraphEmbedder, setJdkRegistry } = useSettings();
 const fontSizeLocal = ref(settings.fontSize);
 const fontFamilyLocal = ref(settings.fontFamily);
 const notificationsEnabledLocal = ref(settings.notificationsEnabled);
@@ -89,6 +91,70 @@ watch(cgDim, (v) => {
   cgDim.value = clamped;
   flushCodegraphEmbedder();
 });
+
+// ── JDK 注册表（按项目选 JDK）──
+// 机器级资源：扫描本机已装 JDK + 手动登记，存 AppSettings.jdkRegistry。
+// 运行配置编辑器据此列出可选 JDK；选某条 → 该配置 env 注入 JAVA_HOME。
+// 扫描结果与现有注册表按 path 去重合并（保留用户手动加的条目），整块写回。
+
+const jdkScanning = ref(false);
+const jdkScanMsg = ref("");
+const manualPath = ref("");
+const manualName = ref("");
+const jdkResolving = ref(false);
+
+function jdkEntries(): JdkEntry[] {
+  return settings.jdkRegistry ?? [];
+}
+
+async function scanJdks() {
+  jdkScanning.value = true;
+  jdkScanMsg.value = "";
+  try {
+    const found = await api.scanJdks();
+    // 按 path 去重合并：扫描结果覆盖同 path 条目（版本可能更新），保留扫描未覆盖的手动条目
+    const byPath = new Map<string, JdkEntry>();
+    for (const e of jdkEntries()) byPath.set(e.path, e);
+    for (const e of found) byPath.set(e.path, e);
+    const merged = Array.from(byPath.values());
+    await setJdkRegistry(merged);
+    jdkScanMsg.value = `扫描完成，发现 ${found.length} 个 JDK（共 ${merged.length} 个已登记）`;
+  } catch (e) {
+    jdkScanMsg.value = `扫描失败：${e}`;
+  } finally {
+    jdkScanning.value = false;
+  }
+}
+
+async function addManualJdk() {
+  const p = manualPath.value.trim();
+  if (!p) return;
+  jdkResolving.value = true;
+  try {
+    const resolved = await api.resolveJdk(p);
+    if (!resolved) {
+      jdkScanMsg.value = `未在 ${p} 找到有效的 JDK（缺少 release 文件）`;
+      return;
+    }
+    // 用户给名优先，否则用解析出的目录名
+    const name = manualName.value.trim() || resolved.name;
+    const entry: JdkEntry = { name, version: resolved.version, path: resolved.path };
+    // 同 path 替换，避免重复
+    const filtered = jdkEntries().filter(e => e.path !== entry.path);
+    await setJdkRegistry([...filtered, entry]);
+    manualPath.value = "";
+    manualName.value = "";
+    jdkScanMsg.value = `已添加 ${name}（Java ${resolved.version}）`;
+  } catch (e) {
+    jdkScanMsg.value = `添加失败：${e}`;
+  } finally {
+    jdkResolving.value = false;
+  }
+}
+
+async function removeJdk(path: string) {
+  await setJdkRegistry(jdkEntries().filter(e => e.path !== path));
+}
 
 // ── Keybindings ──
 
@@ -302,6 +368,14 @@ function onOverlayClick(e: MouseEvent) {
             >
               <Icon class="nav-icon" name="cube" :size="16" />
               <span class="nav-label">代码索引</span>
+            </button>
+            <button
+              class="nav-item"
+              :class="{ active: activeTab === 'java' }"
+              @click="activeTab = 'java'"
+            >
+              <Icon class="nav-icon" name="java" :size="16" />
+              <span class="nav-label">Java</span>
             </button>
           </nav>
 
@@ -523,7 +597,7 @@ function onOverlayClick(e: MouseEvent) {
             </div>
 
             <!-- ── 代码索引 Tab ── -->
-            <div v-else class="tab-codegraph">
+            <div v-else-if="activeTab === 'codegraph'" class="tab-codegraph">
               <div class="settings-field">
                 <label class="field-label">Embedding 后端</label>
                 <ThemedSelect
@@ -605,6 +679,76 @@ function onOverlayClick(e: MouseEvent) {
                 切换后端或模型会触发全量重建索引（向量维度 / 模型空间不兼容）。
               </div>
             </div>
+
+            <!-- ── Java / JDK Tab ── -->
+            <div v-else class="tab-java">
+              <div class="jdk-intro">
+                <span class="field-hint">
+                  登记 JDK 注册表（机器级，所有工作区共享）。在运行配置里按项目选不同 JDK，
+                  启动时注入 JAVA_HOME——系统全局环境保持不动，Java 8 与 21 项目可并行编译。
+                </span>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">扫描已安装 JDK</label>
+                <div class="jdk-scan-row">
+                  <button
+                    class="jdk-scan-btn"
+                    :disabled="jdkScanning"
+                    @click="scanJdks"
+                  >
+                    <svg v-if="jdkScanning" class="jdk-spin" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+                      <path d="M6 1.5a4.5 4.5 0 1 0 4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                    <span>{{ jdkScanning ? "扫描中…" : "扫描本机 JDK" }}</span>
+                  </button>
+                  <span v-if="jdkScanMsg" class="jdk-scan-msg">{{ jdkScanMsg }}</span>
+                </div>
+                <span class="field-hint">扫描 Program Files / .jdks / sdkman 等常见安装位置（读取 release 文件取版本，不启动子进程）</span>
+              </div>
+
+              <div v-if="jdkEntries().length > 0" class="settings-field">
+                <label class="field-label">已登记 JDK（{{ jdkEntries().length }}）</label>
+                <div class="jdk-list">
+                  <div v-for="jdk in jdkEntries()" :key="jdk.path" class="jdk-item">
+                    <div class="jdk-item-main">
+                      <span class="jdk-item-name">{{ jdk.name }}</span>
+                      <span class="jdk-item-version">Java {{ jdk.version }}</span>
+                    </div>
+                    <span class="jdk-item-path" v-tooltip="jdk.path">{{ jdk.path }}</span>
+                    <button
+                      class="jdk-remove"
+                      v-tooltip="'移除'"
+                      @click="removeJdk(jdk.path)"
+                    >－</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">手动添加</label>
+                <div class="jdk-manual-row">
+                  <input
+                    v-model="manualName"
+                    class="text-input jdk-manual-name"
+                    placeholder="名称（可空，默认取目录名）"
+                  />
+                  <input
+                    v-model="manualPath"
+                    class="text-input jdk-manual-path"
+                    placeholder="JDK home 路径，如 C:\Program Files\Java\jdk-21"
+                  />
+                  <button
+                    class="jdk-scan-btn"
+                    :disabled="jdkResolving || !manualPath.trim()"
+                    @click="addManualJdk"
+                  >
+                    <span>{{ jdkResolving ? "校验中…" : "添加" }}</span>
+                  </button>
+                </div>
+                <span class="field-hint">填 JDK home（含 release 文件的目录）→ 自动校验并解析版本号</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -622,7 +766,10 @@ function onOverlayClick(e: MouseEvent) {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  /* 1100：高于 RunConfigsDialog(1000)，使「从运行配置对话框跳转来扫描 JDK」时
+   * 设置面板覆盖在对话框之上；对话框保持在下方挂载，靠 reactive 单例
+   * settings.jdkRegistry 扫描后自动刷新下拉选项，关闭设置即回到对话框选 JDK。 */
+  z-index: 1100;
   animation: fadeIn 0.12s ease;
 }
 
@@ -1009,6 +1156,142 @@ function onOverlayClick(e: MouseEvent) {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* ── Java / JDK tab ── */
+
+.tab-java {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.jdk-intro {
+  margin-bottom: 18px;
+}
+
+.jdk-scan-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.jdk-scan-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--aide-radius-md);
+  background: var(--aide-accent, var(--aide-info));
+  color: var(--aide-bg-deep);
+  border: none;
+  font-size: 12.5px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+.jdk-scan-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.jdk-scan-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.jdk-spin {
+  animation: jdk-spin 0.8s linear infinite;
+}
+@keyframes jdk-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .jdk-spin { animation: none; }
+}
+
+.jdk-scan-msg {
+  font-size: 12px;
+  color: var(--aide-text-muted);
+}
+
+.jdk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.jdk-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-md);
+  background: var(--aide-bg-base);
+}
+
+.jdk-item-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.jdk-item-name {
+  font-size: 13px;
+  color: var(--aide-text-primary);
+  font-weight: 500;
+}
+
+.jdk-item-version {
+  font-size: 11px;
+  color: var(--aide-accent, var(--aide-info));
+  padding: 1px 6px;
+  border-radius: var(--aide-radius-sm);
+  background: color-mix(in srgb, var(--aide-accent, var(--aide-info)) 12%, transparent);
+}
+
+.jdk-item-path {
+  flex: 1;
+  font-size: 11px;
+  color: var(--aide-text-muted);
+  font-family: 'Consolas', 'Menlo', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.jdk-remove {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--aide-radius-sm);
+  color: var(--aide-text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.jdk-remove:hover {
+  background: color-mix(in srgb, var(--aide-danger) 15%, transparent);
+  color: var(--aide-danger);
+}
+
+.jdk-manual-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.jdk-manual-name {
+  width: 160px;
+  flex-shrink: 0;
+}
+.jdk-manual-path {
+  flex: 1;
 }
 
 /* ── Scrollbar ── */

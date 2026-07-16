@@ -1,6 +1,6 @@
 import { reactive, ref } from "vue";
 import { api } from "../api";
-import type { AppSettings, CodeGraphEmbedderConfig } from "../types";
+import type { AppSettings, CodeGraphEmbedderConfig, JdkEntry } from "../types";
 
 const defaults: AppSettings = {
   fontSize: 14,
@@ -27,6 +27,8 @@ const defaults: AppSettings = {
     format: "ollama",
     dim: 0,
   },
+  jdkRegistry: [],
+  jdkPromptDismissed: [],
 };
 
 // Module-level reactive singleton — shared across ChatPanel and SettingsPanel
@@ -55,6 +57,8 @@ export function useSettings() {
         ...defaults.codegraphEmbedder,
         ...(s.codegraphEmbedder ?? {}),
       };
+      settings.jdkRegistry = s.jdkRegistry ?? defaults.jdkRegistry;
+      settings.jdkPromptDismissed = s.jdkPromptDismissed ?? defaults.jdkPromptDismissed;
     } catch (_) {
       // Keep defaults on error
     }
@@ -90,6 +94,28 @@ export function useSettings() {
     } catch (_) { /* best effort */ }
   }
 
+  // 专门路径：jdkRegistry 整块更新（扫描/添加/删除时一次性写回整块，避免
+  // 逐条 partial 多次落盘）。机器级资源，运行配置编辑器据此列出可选 JDK。
+  async function setJdkRegistry(entries: JdkEntry[]): Promise<void> {
+    settings.jdkRegistry = entries;
+    try {
+      await api.setSettings({ jdkRegistry: entries });
+    } catch (_) { /* best effort */ }
+  }
+
+  // 「检测到 Java 项目」提示的「稍后」关闭：把工作区键加入落盘的 dismissal 列表。
+  // 存 config.json 而非 localStorage——重启 / WebView2 清缓存都不丢。整块写回，
+  // 避免并发 append 互相覆盖（与 setJdkRegistry 同模式）。
+  async function dismissJdkPrompt(wsKey: string): Promise<void> {
+    const list = settings.jdkPromptDismissed ?? [];
+    if (list.includes(wsKey)) return;
+    const next = [...list, wsKey];
+    settings.jdkPromptDismissed = next;
+    try {
+      await api.setSettings({ jdkPromptDismissed: next });
+    } catch (_) { /* best effort */ }
+  }
+
   // 专门路径：openWithExtensions 需同步 HKCU 注册表，走 set_open_with_extensions
   // 而非通用 set_settings，保证设置与「打开方式」注册原子一致。失败抛出供调用方回滚。
   async function setOpenWithExtensions(exts: string[]): Promise<void> {
@@ -97,5 +123,5 @@ export function useSettings() {
     settings.openWithExtensions = exts;
   }
 
-  return { settings, loaded, load, update, setOpenWithExtensions, setCodegraphEmbedder };
+  return { settings, loaded, load, update, setOpenWithExtensions, setCodegraphEmbedder, setJdkRegistry, dismissJdkPrompt };
 }

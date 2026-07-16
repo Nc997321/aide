@@ -1,5 +1,5 @@
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, SyncSender};
@@ -167,11 +167,17 @@ impl ShellManager {
     /// Spawn a user run-config command in a PTY via the system shell.
     /// On Windows: `cmd /c <command>`. On Unix: `sh -c <command>`.
     /// The waiter thread emits `pty-exit` with `{"session_id":"...","success":bool}`.
+    ///
+    /// `env`：注入子进程的环境变量（覆盖继承的系统值）。目前用于按项目选 JDK：
+    /// 含 `JAVA_HOME` 时自动把 `<JAVA_HOME>/bin` 前置到 `PATH`，让裸 `java -jar`
+    /// 和 `mvn`（mvn.cmd 用 JAVA_HOME 找 java）都解析到该 JDK；若 env 已显式带
+    /// `PATH` 则不干预，尊重调用方。无 env 时子进程原样继承系统环境（旧行为）。
     pub fn spawn_run_command(
         &self,
         session_id: &str,
         cwd: &PathBuf,
         command: &str,
+        env: &BTreeMap<String, String>,
         rows: u16,
         cols: u16,
         app_handle: AppHandle,
@@ -190,6 +196,18 @@ impl ShellManager {
         let mut cmd = CommandBuilder::new(&shell_bin);
         cmd.args(&shell_args);
         cmd.cwd(cwd);
+
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        if !env.contains_key("PATH") {
+            if let Some(jh) = env.get("JAVA_HOME").filter(|s| !s.is_empty()) {
+                let sep = if cfg!(windows) { ";" } else { ":" };
+                let cur_path = std::env::var("PATH").unwrap_or_default();
+                let new_path = prepend_java_bin_to_path(jh, &cur_path, sep);
+                cmd.env("PATH", new_path);
+            }
+        }
 
         self.launch(session_id, cmd, command, rows, cols, app_handle, ExitPayload::Run)
     }
@@ -246,5 +264,43 @@ impl ShellManager {
         } else {
             Ok(String::new())
         }
+    }
+}
+
+/// 把 `<java_home>/bin` 前置到现有 `PATH`，使子进程解析 `java`/`mvn` 等命令时
+/// 优先命中该 JDK 的可执行文件。纯函数（无 IO），便于单测。
+/// `sep` 是平台路径分隔符：Windows `;`、Unix `:`。
+pub(crate) fn prepend_java_bin_to_path(java_home: &str, cur_path: &str, sep: &str) -> String {
+    let bin = PathBuf::from(java_home).join("bin");
+    match cur_path.is_empty() {
+        false => format!("{}{}{}", bin.display(), sep, cur_path),
+        true => bin.display().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepend_java_bin_to_path_windows_sep() {
+        // 用 PathBuf 计算期望值，使断言与平台实际分隔符一致（Windows `\`）
+        let bin = PathBuf::from("C:\\jdks\\jdk-21").join("bin");
+        let expected = format!("{};{}", bin.display(), "C:\\Windows;C:\\other");
+        assert_eq!(prepend_java_bin_to_path("C:\\jdks\\jdk-21", "C:\\Windows;C:\\other", ";"), expected);
+    }
+
+    #[test]
+    fn prepend_java_bin_to_path_unix_sep() {
+        let bin = PathBuf::from("/jdks/jdk-21").join("bin");
+        let expected = format!("{}:{}", bin.display(), "/usr/bin:/bin");
+        assert_eq!(prepend_java_bin_to_path("/jdks/jdk-21", "/usr/bin:/bin", ":"), expected);
+    }
+
+    #[test]
+    fn prepend_java_bin_to_path_empty_current() {
+        // 空现有 PATH 时不能留尾随分隔符
+        let bin = PathBuf::from("/jdks/jdk-8").join("bin");
+        assert_eq!(prepend_java_bin_to_path("/jdks/jdk-8", "", ":"), bin.display().to_string());
     }
 }

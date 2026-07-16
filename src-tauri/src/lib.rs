@@ -255,6 +255,9 @@ pub fn run() {
             commands::run_configs::list_run_configs,
             commands::run_configs::save_run_configs,
             commands::run_configs::detect_run_targets,
+            // JDK registry (scan / resolve) — per-project JDK injection
+            commands::jdk::scan_jdks,
+            commands::jdk::resolve_jdk,
             // Run process lifecycle commands
             commands::run_process::run_process_start,
             commands::run_process::run_process_stop,

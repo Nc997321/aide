@@ -83,6 +83,14 @@ export interface AppSettings {
   paneLayouts: Record<string, unknown>;
   /** CodeGraph embedding 后端配置（fastembed 本地 / http 远程）。默认 fastembed。 */
   codegraphEmbedder: CodeGraphEmbedderConfig;
+  /** JDK 注册表：本机已登记的 JDK（扫描 + 手动添加），供运行配置按项目选 JDK。
+   *  机器级资源，非按工作区。 */
+  jdkRegistry?: JdkEntry[];
+  /** 「检测到 Java 项目但运行配置未选 JDK」提示的「稍后」关闭记录——按工作区路径键控。
+   *  落盘到 config.json（非 localStorage），重启不丢、WebView2 清缓存也不丢。
+   *  仅对「点了稍后却一直不配 JDK」的用户抑制重复弹窗；一旦该工作区任一 Java
+   *  运行配置选了 JDK，needsJdk 即为 false，本列表对该键再无意义。 */
+  jdkPromptDismissed?: string[];
 }
 
 /** CodeGraph embedding 后端配置。`backend` 选 fastembed（本地 ONNX）或 http
@@ -192,12 +200,24 @@ export interface RunConfig {
   name: string;
   cwd: string;
   command: string;
+  /** 启动该配置时注入子进程的环境变量（覆盖系统继承值）。目前用于按项目选
+   *  JDK：存 `JAVA_HOME`，Rust spawn 时再据此前置 `bin` 到 `PATH`。可选——
+   *  旧配置无此字段，缺省即不注入（走系统全局环境，旧行为不变）。 */
+  env?: Record<string, string>;
 }
 
 export interface RunTarget {
   name: string;
   cwd: string;
   command: string;
+}
+
+/** 一个已登记的 JDK（机器级，存于 AppSettings.jdkRegistry）。`version` 为主版本
+ *  号字符串（"21"/"8"），从 JDK home 的 `release` 文件解析。 */
+export interface JdkEntry {
+  name: string;
+  version: string;
+  path: string;
 }
 
 // ── Recent access types ──

@@ -150,7 +150,7 @@ const { push: pushNotification, registerActionHandler } = useNotifications();
 const { activeKey: activeWorkspaceKey } = useWorkspaces();
 const workspacePath = ref("");
 const projectName = ref("");
-const { settings, update: updateSettings } = useSettings();
+const { settings, update: updateSettings, dismissJdkPrompt: persistJdkDismissal } = useSettings();
 
 // 「打开方式」事件监听句柄，onUnmounted 时释放
 let unlistenOpenFile: UnlistenFn | null = null;
@@ -214,7 +214,7 @@ function onWorkbenchHeightChange(v: number) {
 
 // ── Notification banner for completed sessions ──
 const { isFocused } = useWindowFocus();
-const { notice } = useModal();
+const { notice, choice } = useModal();
 const bannerVisible = ref(false);
 
 interface PendingSessionInfo {
@@ -315,7 +315,9 @@ async function onSidebarWsChanged(path: string) {
   await fileTreeRef.value?.loadRoot();
   if (rightTab.value === "git") gitPanelRef.value?.reload();
   // Load run configurations for this workspace (auto-detects on first open).
-  loadRunConfigs(path, path);
+  await loadRunConfigs(path, path);
+  // 加载完再判断是否需要预防式 JDK 提示（await 保证 runConfigs 已就绪）。
+  void maybePromptJdk(path);
 }
 
 // Sync workbench terminal's active workspace when switching workspaces
@@ -353,6 +355,14 @@ function openSettingsMarket() {
   settingsVisible.value = true;
 }
 
+/** 打开设置 → Java / JDK tab。从运行配置对话框（JDK 注册表为空时的「前往扫描」
+ *  按钮）或预防式提示触发。z-index 1100 使设置覆盖在对话框之上，扫描完关闭
+ *  即回到对话框——jdkRegistry 是 reactive 单例，对话框下拉自动刷新。 */
+function openSettingsJava() {
+  settingsInitialTab.value = "java";
+  settingsVisible.value = true;
+}
+
 async function onRunProject(id?: string) {
   // When `id` is provided (the dropdown row's inline ▶), run that specific
   // config without changing the active/default one. Otherwise run the active
@@ -377,6 +387,50 @@ async function onRestartProject() {
 
 function onSelectRunConfig(id: string) {
   setActiveRunConfig(id);
+}
+
+// ── 预防式 JDK 提示（缺 JDK 才弹）──
+// 工作区加载后，若存在「Java 命令但未选 JDK」的运行配置且本工作区未 dismiss 过，
+// 弹一次 choice 引导用户去配置（直接打开运行配置对话框——那里有 JDK 选择器，
+// 注册表为空时还有「前往扫描」快捷跳转）。「稍后」关闭记录落盘到 config.json
+// （AppSettings.jdkPromptDismissed，按 wsKey 键控），而非 localStorage——重启 / 清
+// WebView2 缓存都不丢。判定「Java 命令」看命令字含 mvn/gradle/gradlew/java，零 IO、
+// 足够准（javascript/javadoc 等 \b 边界不命中）。
+
+function isJavaCommand(cmd: string): boolean {
+  return /\b(mvn|gradlew?|java)\b/i.test(cmd);
+}
+
+/** 工作区加载后调用：满足条件则弹一次「去配置 JDK」。 */
+async function maybePromptJdk(wsKey: string): Promise<void> {
+  if (!wsKey) return;
+  // 切换工作区竞态：加载期间用户又切走 → 不弹（避免给错工作区弹窗）
+  if (workspacePath.value !== wsKey) return;
+  // 引导式语义：仅当该工作区「有 Java 配置且没有任何一个选过 JDK」时才提示。
+  // 这是一次性引导（让用户知道有按项目选 JDK 这回事），而非逐模块盯梢——多模块
+  // 项目里用户通常只跑其中几个，给任一模块选过 JDK 即视为已了解该功能，不再催；
+  // 其余模块真跑时若版本不符会有明确 Java 报错，无需反复弹窗。
+  const javaConfigs = runConfigs.value.filter((c) => isJavaCommand(c.command));
+  const needsJdk =
+    javaConfigs.length > 0 && javaConfigs.every((c) => !c.env?.JAVA_HOME);
+  if (!needsJdk) return;
+  if ((settings.jdkPromptDismissed ?? []).includes(wsKey)) return;
+
+  const registryEmpty = (settings.jdkRegistry ?? []).length === 0;
+  const message = registryEmpty
+    ? "检测到 Java 项目，运行配置尚未选择 JDK，启动时可能因版本不匹配报错。需先扫描本机 JDK。"
+    : "检测到 Java 项目，运行配置尚未选择 JDK，启动时可能因版本不匹配报错。";
+  const result = await choice("检测到 Java 项目", message, {
+    confirmLabel: "去配置 JDK",
+    altLabel: "稍后",
+  });
+  // choice 返回 "confirm" | "alt" | "cancel"。confirm → 开对话框；其余 → 落盘 dismiss。
+  // 弹窗期间用户可能又切走工作区，开对话框前再校验一次当前工作区一致。
+  if (result === "confirm" && workspacePath.value === wsKey) {
+    runConfigsDialogVisible.value = true;
+  } else {
+    void persistJdkDismissal(wsKey);
+  }
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -499,7 +553,8 @@ onMounted(async () => {
     if (info?.root) {
       workspacePath.value = info.root;
       projectName.value = info.name;
-      loadRunConfigs(info.root, info.root);
+      await loadRunConfigs(info.root, info.root);
+      void maybePromptJdk(info.root);
       void paneLayoutPersistence.restoreAtStartup();
     }
   } catch (_) { /* best effort */ }
@@ -743,7 +798,11 @@ onUnmounted(() => {
         @confirm="onRemoveWorkspaceConfirm"
       />
       <SettingsPanel v-if="settingsVisible" :initial-tab="settingsInitialTab" @close="settingsVisible = false" />
-      <RunConfigsDialog v-if="runConfigsDialogVisible" @close="runConfigsDialogVisible = false" />
+      <RunConfigsDialog
+        v-if="runConfigsDialogVisible"
+        @close="runConfigsDialogVisible = false"
+        @open-settings-java="openSettingsJava"
+      />
       <WorkbenchTerminal :workspace-key="activeWorkspaceKey ?? ''" :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
     </div>
 

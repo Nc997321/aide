@@ -70,6 +70,8 @@ export const GLYPHS: Record<string, string> = {
   // ── marketplace 空态 ──
   /** 包裹：marketplace 空态（无可用插件） */
   package: '<path d="M8 2.5L13 5v6L8 13.5L3 11V5z"/><path d="M3 5l5 2.5 5-2.5M8 7.5v6"/>',
+  /** 咖啡杯：JDK / Java（双关——Java 即咖啡） */
+  java: '<path d="M4.5 6H11l-0.5 7a1 1 0 0 1-1 0.9H6a1 1 0 0 1-1-0.9Z"/><path d="M11 7.5h1.3a1.4 1.4 0 0 1 0 2.8H11"/><path d="M6.4 4.2c-.5-.5-.5-1.2 0-1.9M8.4 4.2c-.5-.5-.5-1.2 0-1.9"/>',
 };
 
 /** provider 图标选择器可选的字形（供应商"头像"候选集） */
