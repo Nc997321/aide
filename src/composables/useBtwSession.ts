@@ -134,12 +134,14 @@ function handleBtwEvent(e: Record<string, unknown>) {
       state.value.isBusy = false;
       state.value.status = "error";
       state.value.error = e["message"] as string;
+      state.value.minimized = false; // 出错必须露出来:别让最小化把错误吞掉
       break;
     }
     case "session_dead": {
       state.value.isBusy = false;
       state.value.status = "error";
       state.value.error = "支线进程已退出";
+      state.value.minimized = false;
       break;
     }
   }

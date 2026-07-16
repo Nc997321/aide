@@ -345,12 +345,12 @@ const btwDrawerVisible = computed(
     && btw.store.value.ownerSessionId !== null
     && btw.store.value.ownerSessionId === props.sessionId,
 );
-// 最小化后,支线还在后台跑(starting/running)或出错时,在本窗口浮一个可点开重展
-// 抽屉的小标。跑完(done)结论已进主对话批注,不再浮——免得常驻打扰。
+// 最小化后,支线还在后台跑(starting/running)时浮一个可点开重展抽屉的小标。
+// 出错会强制取消最小化(见 useBtwSession error 分支)把错误露出来,所以这里只
+// 盖真正在跑的情况;跑完(done)结论已进主对话批注,不再浮。
 const btwBgChipVisible = computed(
   () => btw.store.value.minimized
-    && !btw.store.value.done
-    && btw.store.value.status !== "idle"
+    && btw.store.value.isBusy
     && btw.store.value.ownerSessionId !== null
     && btw.store.value.ownerSessionId === props.sessionId,
 );
@@ -376,9 +376,15 @@ watch(
     }
   },
 );
-// 「关闭」=最小化:抽屉收起,sidecar 继续后台跑,跑完结论照样作为批注插进主对话。
-// 不杀进程;真正的 teardown(cleanup)只在开新 btw 替换旧实例时发生。
-function closeBtw() { btw.minimize(); }
+// 「关闭」按状态分两种语义:
+//  - 还在跑(starting/running):最小化——抽屉收起,sidecar 继续后台跑,跑完结论
+//    照样作为批注插进主对话(不杀进程,用户要的就是这个)。
+//  - 已结束/出错(done/error):teardown——杀残留 sidecar(出错时可能挂着一个僵
+//    尸进程)、reset 回 idle。否则 error 态会卡在抽屉里关不掉、进程也赖着不死。
+function closeBtw() {
+  if (btw.store.value.isBusy) btw.minimize();
+  else btw.cleanup();
+}
 // 点浮标重展抽屉(最小化的逆操作)。仅清标志、不动进程。
 function reopenBtw() { btw.reopen(); }
 

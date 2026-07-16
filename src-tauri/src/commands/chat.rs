@@ -1,7 +1,7 @@
 use tauri::State;
 use serde_json::json;
 use crate::sidecar::SidecarManager;
-use crate::commands::{WorkspaceState, project_root_for_commands};
+use crate::commands::{WorkspaceState, project_root_for_commands, find_session_jsonl_globally};
 use crate::commands::provider::{load_active_provider, provider_to_env_vars, system_default_mappings_to_env};
 use crate::commands::settings::get_settings;
 use std::collections::HashMap;
@@ -153,7 +153,12 @@ pub async fn stop_chat_session(
 /// 的"顺便问一下"支线。btw_id 由前端生成(纯内存临时 key,落 pendingSids,不进
 /// 侧栏/不写元数据)。spawn 复用 SidecarManager::spawn(CREATE_NO_WINDOW /
 /// dunce::simplified 等跨平台约束自动满足),再发首条带 btw:true 的 send 命令。
-/// 主会话必须存活(has_session),否则报错——fork 依赖主会话的持久化状态。
+///
+/// fork 源判据:主会话 sidecar 进程存活 **或** 它在磁盘上有历史 transcript 文件。
+/// 后者覆盖「续接历史对话但本轮还没发新消息」的场景——主 sidecar 没起,但
+/// transcript 在,SDK 的 fork(resume:<sid> + forkSession:true)读的是文件,照样
+/// 能带着完整历史上下文分叉。两者都没有(全新空白会话)才真的没法 fork——
+/// 不过全新空白会话 sessionId 为 null,前端已禁用 btw,正常走不到这里。
 #[tauri::command]
 pub async fn start_btw_session(
     btw_id: String,
@@ -168,8 +173,8 @@ pub async fn start_btw_session(
     app_handle: tauri::AppHandle,
     sidecar_mgr: State<'_, SidecarManager>,
 ) -> Result<(), String> {
-    if !sidecar_mgr.has_session(&fork_from) {
-        return Err(format!("主对话未就绪,无法顺便问(fork_from 未存活): {fork_from}"));
+    if !sidecar_mgr.has_session(&fork_from) && find_session_jsonl_globally(&fork_from).is_empty() {
+        return Err(format!("主对话未就绪,无法顺便问(fork_from 既无存活进程也无历史 transcript): {fork_from}"));
     }
     let mut env_vars = build_sidecar_env_vars();
     apply_initial_model_override(&mut env_vars, model);

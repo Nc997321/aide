@@ -80,4 +80,16 @@ describe("useBtwSession routing", () => {
     expect(store.value.minimized).toBe(false);
     expect(isBtwSid("r1")).toBe(true); // 进程仍存活
   });
+
+  // 出错必须露出来:即便用户已最小化,错误也得把抽屉顶出来,不能在后台静默吞掉。
+  it("error while minimized surfaces the drawer (un-minimizes)", async () => {
+    const { startBtw, minimize, handleBtwEvent, store } = useBtwSession();
+    await startBtw({ tempId: "e1", forkFrom: "main", prompt: "q", cwd: "/r", lightweight: true });
+    minimize();
+    expect(store.value.minimized).toBe(true);
+    handleBtwEvent({ session_id: "e1", type: "error", message: "boom" });
+    expect(store.value.status).toBe("error");
+    expect(store.value.minimized).toBe(false); // 强制顶出抽屉
+    expect(store.value.error).toBe("boom");
+  });
 });
