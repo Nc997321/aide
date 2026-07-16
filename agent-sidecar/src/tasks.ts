@@ -92,4 +92,15 @@ export class TaskTracker {
   snapshot(): TaskItem[] {
     return [...this.tasks.values()];
   }
+
+  /** 清空全部任务状态——已落地的任务、待解析的 TaskCreate、以及已登记的
+   *  工具 id。在每轮用户消息开始时调用，让新一轮的 TODO 覆盖旧轮而不是追加
+   *  （TaskTracker 的 Map 默认只增不清，旧轮已完成的任务会一直留在快照里，
+   *  导致顶部 TODO 越积越长）。reset 后迟到的旧 tool_result 不会被当作任务
+   *  工具的结果吞掉（trackedIds 已清），而是回退为通用 tool_result 路径。 */
+  reset(): void {
+    this.tasks.clear();
+    this.pendingCreates.clear();
+    this.trackedIds.clear();
+  }
 }

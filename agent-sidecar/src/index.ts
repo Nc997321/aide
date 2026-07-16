@@ -405,6 +405,14 @@ rl.on("line", (line) => {
       lightweightMode = !!cmd.lightweight;
     }
 
+    // 新一轮用户消息开始：清掉上一轮的 TODO 快照。TaskTracker 的 Map 默认只增
+    // 不清，旧轮已完成的任务会一直留在 snapshot() 里，跨轮累积成「新轮 TODO 追加
+    // 在旧轮后面」而非覆盖——顶部 TODO 越来越长。这里在每条用户消息进来时 reset，
+    // 并立即发一条空快照让前端清空；本轮模型再 TaskCreate 时自然只列本轮的新任务。
+    // （btw 走独立 sidecar 进程，这里的 reset 不影响主会话的任务列表。）
+    taskTracker.reset();
+    emit({ type: "tasks_update", tasks: [] });
+
     if (!loopStarted) {
       loopStarted = true;
       // 先应用随消息带来的权限模式，再起 loop——首条消息选的模式要进 query 初始选项
