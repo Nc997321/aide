@@ -131,3 +131,58 @@ describe("TaskTracker unrelated tool results", () => {
     expect(t.handleToolResult("unknown", "ok")).toEqual({ tracked: false, changed: false });
   });
 });
+
+describe("TaskTracker.reset", () => {
+  // 回归：顶部 TODO 跨轮累积根因——TaskTracker 的 Map 只增不清，旧轮已完成
+  // 的 task 一直留在 snapshot() 里。新一轮用户消息开始时必须 reset，让新一轮
+  // 的 TODO 覆盖旧轮而不是追加。
+  it("clears all resolved tasks", () => {
+    const t = new TaskTracker();
+    t.handleToolUse("u1", "TaskCreate", { subject: "旧轮任务" });
+    t.handleToolResult("u1", "Task #1 created successfully: 旧轮任务");
+    t.handleToolUse("u2", "TaskUpdate", { taskId: "1", status: "completed" });
+    expect(t.snapshot()).toHaveLength(1);
+
+    t.reset();
+
+    expect(t.snapshot()).toEqual([]);
+  });
+
+  it("clears pending creates (in-flight TaskCreate without a result yet)", () => {
+    const t = new TaskTracker();
+    t.handleToolUse("u1", "TaskCreate", { subject: "还没拿到 id 的任务" });
+    expect(t.snapshot()).toEqual([]);
+
+    t.reset();
+
+    // reset 后即使迟到的 tool_result 到达，也不应再把旧轮任务加回来
+    const outcome = t.handleToolResult("u1", "Task #1 created successfully: 还没拿到 id 的任务");
+    expect(outcome).toEqual({ tracked: false, changed: false });
+    expect(t.snapshot()).toEqual([]);
+  });
+
+  it("clears tracked ids so a stray late tool_result for an old tool_use is not swallowed", () => {
+    const t = new TaskTracker();
+    t.handleToolUse("u1", "TaskCreate", { subject: "旧轮" });
+    t.handleToolUse("u2", "TaskList", {});
+
+    t.reset();
+
+    // reset 后这些 id 不再被认作任务工具的结果，应回退为 tracked:false（通用 tool_result）
+    expect(t.handleToolResult("u2", JSON.stringify({ tasks: [] }))).toEqual({ tracked: false, changed: false });
+  });
+
+  it("allows building a fresh task list after reset (new round replaces, not appends)", () => {
+    const t = new TaskTracker();
+    t.handleToolUse("u1", "TaskCreate", { subject: "旧轮任务" });
+    t.handleToolResult("u1", "Task #1 created successfully: 旧轮任务");
+
+    t.reset();
+
+    t.handleToolUse("u3", "TaskCreate", { subject: "新轮任务" });
+    t.handleToolResult("u3", "Task #2 created successfully: 新轮任务");
+    expect(t.snapshot()).toEqual([
+      { id: "2", subject: "新轮任务", status: "pending", activeForm: undefined },
+    ]);
+  });
+});
