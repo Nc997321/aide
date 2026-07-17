@@ -221,6 +221,7 @@ pub fn run() {
             commands::customizations::update_skill,
             commands::customizations::delete_skill,
             commands::customizations::toggle_skill,
+            commands::customizations::list_instructions,
             commands::customizations::get_global_instructions,
             commands::customizations::save_global_instructions,
             commands::customizations::get_project_instructions,

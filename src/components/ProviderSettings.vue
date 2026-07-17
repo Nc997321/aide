@@ -343,7 +343,8 @@ function knownModelsForDatalist(): string[] {
               list="known-models-list"
               placeholder="留空跟随主模型"
             />
-            <span class="form-hint">子代理（并行任务）单独用的模型，通常选便宜快的</span>
+            <span class="form-hint">主代理未指定模型时子代理的兜底，通常选便宜快的——主代理显式派发（如 sonnet）时以派发为准</span>
+            <span class="form-hint">填具体模型 id 建议与上方某个别名映射保持一致；对不上别名的独立 id 会退回全局钉死（显式派发不生效）</span>
             <span class="form-hint">仅对当前激活的供应商生效——系统默认下填的不会作用到自定义供应商的会话</span>
           </div>
         </div>

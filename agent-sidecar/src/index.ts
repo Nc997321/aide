@@ -12,6 +12,7 @@ import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { stopAllOutputTails } from "./subagentOutputTail.js";
 import { btwQueryOverrides, forkResumeOptions } from "./btwOptions.js";
 import { applyModelSwitch } from "./modelSwitch.js";
+import { cliSubagentModelEnvValue, makeSubagentModelHook } from "./subagentModelDefault.js";
 import {
   mapSdkMessage,
   buildUserMessage,
@@ -114,6 +115,12 @@ let turnActive = false;
 // btw 走 fork 时不发"已切换供应商"通知(用 btwMode 抑制 pendingFork)。
 let btwMode = false;
 let lightweightMode = false;
+
+// 子代理默认模型（provider 配置的 CLAUDE_CODE_SUBAGENT_MODEL）：主代理派发子代理未
+// 显式指定 model 时经 PreToolUse hook 注入别名兜底；显式指定则放行（动态选择优先）。
+// env 在 CLI 里是优先级最高的硬覆盖，会压死逐次动态选择，故 spawn 给 CLI 时压成
+// "inherit"（见下方 cliEnv 构造）。null = 未配置/值无法别名化（后者保留 env 硬钉死）。
+const subagentModelHook = makeSubagentModelHook(process.env);
 
 // SDK 还认识但不放进常驻下拉清单的模式（"总是允许"的 setMode 建议可能切过去）。
 // 广播时若当前模式不在常驻清单里，用这里的文案动态补一项，避免下拉显示空白。
@@ -235,6 +242,13 @@ async function startLoop(cwd?: string) {
         ]) {
           if (process.env[k]) cliEnv[k] = process.env[k];
         }
+        // CLAUDE_CODE_SUBAGENT_MODEL 在 CLI 内是优先级最高的硬覆盖（高于 Agent 工具
+        // 调用的 model 参数）——原样透传会把主代理的逐次动态派发（如 "sonnet"）全压成
+        // 配置值。默认模型改由 PreToolUse hook 按「未指定才注入」动态下发（见
+        // subagentModelDefault.ts），这里压成 "inherit" 放行动态（无法别名化的
+        // 独立全 id 除外——那种配置只能维持 env 硬钉死）。同时压掉从用户 shell
+        // 泄漏进 aide 进程、再经 {...process.env} 混进来的同名 env。
+        cliEnv.CLAUDE_CODE_SUBAGENT_MODEL = cliSubagentModelEnvValue(process.env);
         // fork:btw 与供应商切换都走 forkSession;只有非 btw 的 fork 才置 pendingFork
         // (触发"已切换供应商"通知),btw 安静 fork。side-effect 放在调用处,保持
         // forkResumeOptions 纯函数性。
@@ -257,6 +271,17 @@ async function startLoop(cwd?: string) {
               : { allowedTools: ["Agent", "Task"] }),
             skills: "all",
             plugins: buildPluginsOption(),
+            // 子代理默认模型兜底：Agent/Task 工具输入无 model 时注入别名（详见
+            // subagentModelDefault.ts 顶部注释）。matcher 锚定全名，防止误匹配
+            // TaskCreate/TaskGet 等任务清单工具。hook 只带 updatedInput 不带
+            // permissionDecision——纯输入替换，不碰权限流（allowedTools 自动批准照旧）。
+            ...(subagentModelHook
+              ? {
+                  hooks: {
+                    PreToolUse: [{ matcher: "^(Agent|Task)$", hooks: [subagentModelHook] }],
+                  },
+                }
+              : {}),
             // 关闭实时流式：文本不再以 stream_event 逐字到达，mapper 改为把最终
             // assistant 消息里的整块文本一次性发出（mapper 两处 skip→emit，必须同关）。
             // 目的：砍掉高频 per-token app.emit → 跨线程编组，降低主线程卡死概率

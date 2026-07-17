@@ -18,10 +18,17 @@ use std::time::Duration;
 /// - defaultOpusModel    → ANTHROPIC_DEFAULT_OPUS_MODEL（opus 别名→具体模型）
 /// - defaultSonnetModel  → ANTHROPIC_DEFAULT_SONNET_MODEL（sonnet 别名→具体模型）
 /// - defaultHaikuModel   → ANTHROPIC_DEFAULT_HAIKU_MODEL（haiku 别名→具体模型）
-/// - subagent            → CLAUDE_CODE_SUBAGENT_MODEL（子代理模型）
+/// - subagent            → CLAUDE_CODE_SUBAGENT_MODEL（子代理默认模型——只是配置载体）
 ///
 /// default*Model 的用途：子代理模型填 opus/sonnet/haiku 别名时，CLI 靠这些解析成
-/// 具体模型 id（尤其第三方 provider，别名叫 sonnet 但实际模型 id 不同）。
+/// 具体模型 id（尤其第三方 provider，别名叫 sonnet 但实际模型 id 不同）；sidecar 把
+/// subagent 全 id 反查成别名时也靠它们（subagentModelDefault.ts 的折算表）。
+///
+/// 注意 CLAUDE_CODE_SUBAGENT_MODEL 在 CLI 内是优先级最高的硬覆盖（高于 Agent 工具
+/// 调用的 model 参数）——sidecar 不会把它原样透传给 CLI，而是压成 "inherit" 放行
+/// 主代理的逐次动态派发，配置值改由 PreToolUse hook 按「未指定才注入别名」下发
+/// （详见 agent-sidecar/src/subagentModelDefault.ts 顶部注释）。本函数只管把配置
+/// 值送进 sidecar 进程 env，语义转换全在 sidecar。
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderModelMappings {

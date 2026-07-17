@@ -46191,6 +46191,49 @@ function applyModelSwitch(p) {
   });
 }
 
+// src/subagentModelDefault.ts
+var SUBAGENT_MODEL_ALIASES = ["sonnet", "opus", "haiku", "fable"];
+var ALIAS_TARGET_ENVS = [
+  ["sonnet", "ANTHROPIC_DEFAULT_SONNET_MODEL"],
+  ["opus", "ANTHROPIC_DEFAULT_OPUS_MODEL"],
+  ["haiku", "ANTHROPIC_DEFAULT_HAIKU_MODEL"],
+  ["fable", "ANTHROPIC_DEFAULT_FABLE_MODEL"]
+];
+function deriveSubagentModelDefault(env) {
+  const raw = (env.CLAUDE_CODE_SUBAGENT_MODEL ?? "").trim();
+  if (!raw || raw === "inherit") return { kind: "none" };
+  const lowered = raw.toLowerCase();
+  if (SUBAGENT_MODEL_ALIASES.includes(lowered)) {
+    return { kind: "alias", alias: lowered };
+  }
+  for (const [alias, envKey] of ALIAS_TARGET_ENVS) {
+    const target = (env[envKey] ?? "").trim();
+    if (target && target === raw) return { kind: "alias", alias };
+  }
+  return { kind: "raw", value: raw };
+}
+function cliSubagentModelEnvValue(env) {
+  const d = deriveSubagentModelDefault(env);
+  return d.kind === "raw" ? d.value : "inherit";
+}
+function makeSubagentModelHook(env) {
+  const d = deriveSubagentModelDefault(env);
+  if (d.kind !== "alias") return null;
+  return async (input) => {
+    if (input.hook_event_name !== "PreToolUse") return {};
+    const toolInput = input.tool_input;
+    if (!toolInput || typeof toolInput !== "object" || Array.isArray(toolInput)) return {};
+    const record = toolInput;
+    if (typeof record.model === "string" && record.model) return {};
+    return {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        updatedInput: { ...record, model: d.alias }
+      }
+    };
+  };
+}
+
 // src/index.ts
 var coalescer = new DeltaCoalescer((event) => {
   process.stdout.write(JSON.stringify(event) + "\n");
@@ -46240,6 +46283,7 @@ var shouldForkNextConnect = false;
 var turnActive = false;
 var btwMode = false;
 var lightweightMode = false;
+var subagentModelHook = makeSubagentModelHook(process.env);
 var EXTRA_MODE_LABELS = {
   dontAsk: "\u672C\u6B21\u4F1A\u8BDD\u4E0D\u518D\u8BE2\u95EE"
 };
@@ -46333,6 +46377,7 @@ async function startLoop(cwd) {
         ]) {
           if (process.env[k3]) cliEnv[k3] = process.env[k3];
         }
+        cliEnv.CLAUDE_CODE_SUBAGENT_MODEL = cliSubagentModelEnvValue(process.env);
         if (sessionId && shouldForkNextConnect && !btwMode) pendingFork = true;
         const q = DMe({
           prompt: queue[Symbol.asyncIterator](),
@@ -46350,6 +46395,15 @@ async function startLoop(cwd) {
             ...lightweightMode ? { allowedTools: [] } : { allowedTools: ["Agent", "Task"] },
             skills: "all",
             plugins: buildPluginsOption(),
+            // 子代理默认模型兜底：Agent/Task 工具输入无 model 时注入别名（详见
+            // subagentModelDefault.ts 顶部注释）。matcher 锚定全名，防止误匹配
+            // TaskCreate/TaskGet 等任务清单工具。hook 只带 updatedInput 不带
+            // permissionDecision——纯输入替换，不碰权限流（allowedTools 自动批准照旧）。
+            ...subagentModelHook ? {
+              hooks: {
+                PreToolUse: [{ matcher: "^(Agent|Task)$", hooks: [subagentModelHook] }]
+              }
+            } : {},
             // 关闭实时流式：文本不再以 stream_event 逐字到达，mapper 改为把最终
             // assistant 消息里的整块文本一次性发出（mapper 两处 skip→emit，必须同关）。
             // 目的：砍掉高频 per-token app.emit → 跨线程编组，降低主线程卡死概率

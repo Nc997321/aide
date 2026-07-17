@@ -129,7 +129,9 @@ export interface ProviderModelMappings {
   defaultSonnetModel: string;
   /** haiku 别名→具体模型 → ANTHROPIC_DEFAULT_HAIKU_MODEL */
   defaultHaikuModel: string;
-  /** 子代理模型 → CLAUDE_CODE_SUBAGENT_MODEL */
+  /** 子代理默认模型 → CLAUDE_CODE_SUBAGENT_MODEL。注意：该 env 在 CLI 里是硬覆盖，
+   *  sidecar 不透传给 CLI，而是折算成别名经 PreToolUse hook 在「主代理未指定 model」
+   *  时注入——这里是"未指定时的兜底"，不是"钉死所有子代理"。 */
   subagent: string;
 }
 
