@@ -43,6 +43,17 @@ export interface DiffEntry {
   deletions: number;
 }
 
+/** git_diff_pair 返回的新旧双份原文（serde camelCase 镜像） */
+export interface DiffPair {
+  oldText: string;
+  newText: string;
+  oldLabel: string;
+  newLabel: string;
+  status: "added" | "modified" | "deleted";
+  isBinary: boolean;
+  eolOnly: boolean;
+}
+
 export interface LastEventInfo {
   event_type: string | null;
   stop_reason: string | null;

@@ -4,12 +4,13 @@ import { EditorView, basicSetup } from "codemirror";
 import { keymap } from "@codemirror/view";
 import { searchKeymap } from "@codemirror/search";
 import { Compartment } from "@codemirror/state";
-import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { tags } from "@lezer/highlight";
+import { syntaxHighlighting } from "@codemirror/language";
 import { useSettings } from "../composables/useSettings";
 import { useModal } from "../composables/useModal";
 import { themes } from "../themes";
 import type { ThemeTokens } from "../themes/tokens";
+import { createHighlightStyle } from "../utils/cmHighlight";
+import { loadLanguageExtension } from "../utils/cmLanguage";
 import { ctrlHoverHighlight } from "../extensions/cmCtrlHover";
 import { cmScrollMemory, type ScrollMemoryOptions } from "../extensions/cmScrollMemory";
 
@@ -41,80 +42,7 @@ const ext = computed(() => {
   return parts.length > 1 ? parts.pop()!.toLowerCase() : "";
 });
 
-function createHighlightStyle(t: ThemeTokens): HighlightStyle {
-  return HighlightStyle.define([
-    { tag: tags.keyword, color: t.syntaxKeyword },
-    { tag: [tags.typeName, tags.definition(tags.typeName)], color: t.syntaxKeyword },
-    { tag: tags.string, color: t.success },
-    { tag: tags.number, color: t.syntaxNumber },
-    { tag: [tags.variableName, tags.literal, tags.bool, tags.null], color: t.syntaxNumber },
-    { tag: tags.comment, color: t.textMuted, fontStyle: "italic" },
-    { tag: [tags.function(tags.variableName), tags.labelName], color: t.accent },
-    { tag: [tags.propertyName, tags.attributeName], color: t.info },
-    { tag: [tags.className, tags.definition(tags.className)], color: t.warning },
-    { tag: tags.invalid, color: t.danger },
-    { tag: [tags.bracket, tags.separator], color: t.textSecondary },
-  ]);
-}
-
 const themeCompartment = new Compartment();
-
-async function loadLanguageExtension() {
-  const e = ext.value;
-  try {
-    switch (e) {
-      case "ts":
-      case "tsx":
-      case "js":
-      case "jsx": {
-        const { javascript } = await import("@codemirror/lang-javascript");
-        const isTs = e === "ts" || e === "tsx";
-        const isJsx = e === "tsx" || e === "jsx";
-        return javascript({ typescript: isTs, jsx: isJsx });
-      }
-      case "rs": {
-        const { rust } = await import("@codemirror/lang-rust");
-        return rust();
-      }
-      case "java": {
-        const { java } = await import("@codemirror/lang-java");
-        return java();
-      }
-      case "py": {
-        const { python } = await import("@codemirror/lang-python");
-        return python();
-      }
-      case "json": {
-        const { json } = await import("@codemirror/lang-json");
-        return json();
-      }
-      case "md":
-      case "mdx": {
-        const { markdown } = await import("@codemirror/lang-markdown");
-        return markdown();
-      }
-      case "html":
-      case "htm": {
-        const { html } = await import("@codemirror/lang-html");
-        return html();
-      }
-      case "css":
-      case "scss":
-      case "less": {
-        const { css } = await import("@codemirror/lang-css");
-        return css();
-      }
-      case "vue": {
-        const { vue } = await import("@codemirror/lang-vue");
-        return vue();
-      }
-      default:
-        return [];
-    }
-  } catch {
-    return [];
-  }
-}
 
 // ── Editor lifecycle ──
 
@@ -132,7 +60,7 @@ async function createEditor() {
     view = null;
   }
 
-  const langExt = await loadLanguageExtension();
+  const langExt = await loadLanguageExtension(ext.value);
 
   // Abort if a newer call has started
   if (id !== createId) return;
