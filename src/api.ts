@@ -33,8 +33,18 @@ export const api = {
   interruptSession(sessionId: string): Promise<void> {
     return invoke("interrupt_session", { sessionId });
   },
-  setModel(sessionId: string, model: string): Promise<void> {
+  /** 切换存活会话的模型；返回 false = 无活进程（选择随下一条消息 initialModel
+   *  生效，调用方应走 deferred 提示路径）。 */
+  setModel(sessionId: string, model: string): Promise<boolean> {
     return invoke("set_model", { sessionId, model });
+  },
+  /** 记住/读回会话的模型选择（会话元数据，重启不丢）——与运行时 set_model 互补：
+   *  这个管「下次进会话恢复什么」，set_model 管「当前进程切到什么」。 */
+  setSessionModel(id: string, model: string): Promise<void> {
+    return invoke("set_session_model", { id, model });
+  },
+  sessionModel(id: string): Promise<string | null> {
+    return invoke("session_model", { id });
   },
   getDefaultModels(): Promise<ModelOption[]> {
     return invoke("get_default_models");

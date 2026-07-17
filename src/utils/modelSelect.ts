@@ -32,3 +32,9 @@ export function pickModelValue(
   if (has(providerDefault)) return providerDefault;
   return models[0].value;
 }
+
+/** value 是否在当前可选模型列表里——恢复会话记忆的模型、采信 remembered
+ *  候选前的统一校验（换过 provider 后旧记忆不在新列表里，必须不采信）。 */
+export function isModelInList(models: ModelOption[], value: string | null | undefined): boolean {
+  return !!value && models.some((m) => m.value === value);
+}

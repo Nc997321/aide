@@ -24,7 +24,11 @@ import { useModal } from "@/composables/useModal";
 import { setChatPaneRect } from "@/composables/useChatPaneWidth";
 import BtwDrawer from "./BtwDrawer.vue";
 import { useBtwSession } from "@/composables/useBtwSession";
-import { pickModelValue } from "@/utils/modelSelect";
+import { pickModelValue, isModelInList } from "@/utils/modelSelect";
+import { isPendingSession } from "@/composables/useChatSession";
+import AToast from "@/ui/AToast.vue";
+import { useToast } from "@/composables/useToast";
+import type { ModelSwitchResult } from "@/types/chat";
 
 const props = defineProps<{
   sessionId: string | null;
@@ -33,6 +37,8 @@ const props = defineProps<{
   isBusy: { value: boolean } | boolean;
   models?: ModelOption[];
   currentModel?: string;
+  /** 模型切换坐实回执（sidecar 运行时路径发出）——据此弹成功/失败瞬时提示 */
+  modelSwitchResult?: ModelSwitchResult | null;
   contextUsage?: ContextUsage | null;
   /** 账号级订阅额度/速率；null 时不显示 */
   rateLimit?: RateLimitInfo | null;
@@ -155,6 +161,21 @@ const modelSelectOptions = computed(() =>
   displayModels.value.map((m) => ({ value: m.value, label: m.displayName })),
 );
 
+/** 打开会话时从元数据读回的模型记忆（null = 没记过/还没读回）——
+ *  作为「provider 默认」之前的一档候选参与默认值解析：这个会话上次
+ *  用什么模型，重开（含重启 app）后选择器还是它。 */
+const rememberedModel = ref<string | null>(null);
+/** 用户在当前会话视图里手动改过选择 = true——异步恢复读回时不得覆盖用户操作。 */
+let modelTouchedByUser = false;
+
+/** remembered 优先于 provider 默认；但它不在当前列表里（停会话期间换了
+ *  provider）时不采信，退回 provider 默认。 */
+function modelFallback(models: ModelOption[]): string {
+  return isModelInList(models, rememberedModel.value)
+    ? (rememberedModel.value as string)
+    : sessionProvider.value.model;
+}
+
 /** 下拉框必须始终有一个「在当前可选项里」的选中值——不能只是视觉上落在第一个
  *  <option> 上而 selectedModel 仍是空串，否则 handleSend 里 `selectedModel.value
  *  || undefined` 不会把它带进 initialModel，导致下拉框显示的模型和实际启动
@@ -171,7 +192,7 @@ function applyDefaultModel(models: ModelOption[]) {
     models,
     selectedModel.value,
     "",
-    sessionProvider.value.model,
+    modelFallback(models),
   );
 }
 
@@ -179,27 +200,64 @@ function applyDefaultModel(models: ModelOption[]) {
  *  仅当它落在当前可选项里才采信——第三方 provider 下 sidecar 回报的常是
  *  Claude 别名（sonnet/opus）或对不上的 id，不在真实模型 id 列表里，采信它
  *  会让下拉显示空；此时保留用户已选的真实 id。existing 仍在列表里则保留之，
- *  否则退化到 provider 默认 / 首项，绝不空。 */
+ *  否则退化到 记忆/provider 默认 / 首项，绝不空。 */
 watch(() => props.currentModel, () => {
   const next = pickModelValue(
     displayModels.value,
     selectedModel.value,
     props.currentModel ?? "",
-    sessionProvider.value.model,
+    modelFallback(displayModels.value),
   );
   if (next !== selectedModel.value) selectedModel.value = next;
-});
-watch(displayModels, applyDefaultModel, { immediate: true });
-watch(() => props.sessionId, (sid) => {
-  if (!sid) {
-    selectedModel.value = "";
-    applyDefaultModel(displayModels.value);
+  // 坐实模型持久化（重开会话恢复的数据来源）：只记选择器能显示的值（在列表
+  //  里）。第三方 provider 下 sidecar 会把 wire id 解析成 Claude 别名（实测
+  //  kimi：kimi-for-coding → "haiku"），别名不在真实 id 列表里——记了恢复
+  //  不出来，还会盖掉用户真实选择。
+  const sid = props.sessionId;
+  if (sid && !isPendingSession(sid) && isModelInList(displayModels.value, props.currentModel)) {
+    void api.setSessionModel(sid, props.currentModel as string).catch(() => {});
   }
 });
+watch(displayModels, applyDefaultModel, { immediate: true });
+watch(
+  () => props.sessionId,
+  async (sid) => {
+    modelTouchedByUser = false;
+    rememberedModel.value = null;
+    if (!sid) {
+      selectedModel.value = "";
+      applyDefaultModel(displayModels.value);
+      return;
+    }
+    // 新建（pending）会话：选择是用户刚做的/随 initialModel 走的，不恢复不重置；
+    // 存活会话：SDK 坐实值（currentModel watcher）优先，不插手。
+    if (isPendingSession(sid) || props.currentModel) return;
+    // 打开的是停止/历史会话：先清掉上个会话的残留选择、落默认（记忆还没读回），
+    // 再异步恢复这个会话记住的模型。
+    selectedModel.value = "";
+    applyDefaultModel(displayModels.value);
+    const remembered = await api.sessionModel(sid).catch(() => null);
+    // 读回期间切走了别的会话，或用户已经手动改过选择 → 放弃恢复
+    if (props.sessionId !== sid || modelTouchedByUser) return;
+    rememberedModel.value = remembered;
+    // 记忆的模型在列表里才直接选中——不能再走 applyDefaultModel：此刻
+    // selectedModel 占着上面落的占位默认，它会以 existing 身份在 pickModelValue
+    // 里压过 remembered（回归：停止会话切回来选择器永远停在默认模型）。
+    // 不在列表（停会话期间换过 provider）则维持刚落的默认。
+    if (isModelInList(displayModels.value, remembered)) {
+      selectedModel.value = remembered as string;
+    }
+  },
+  { immediate: true },
+);
 // 会话所属 provider 变了（全局切换影响到非存活会话，或 stop_session 释放了绑定），
 // 旧选择大概率不在新列表里，重置回新 provider 的默认模型。存活会话的 sessionProvider
 // 锁在 spawn 时的 provider，全局切换不会触发这个 watcher——模型下拉不受影响。
 watch(() => sessionProvider.value.id, () => {
+  // 当前选择在新 provider 的列表里仍然有效就保留——启动竞态：provider 配置异步
+  // 加载完成时 id 从系统默认翻成真实 provider，若无脑清空，用户刚选好（还没
+  // 发送）的模型会被擦回默认，下一条消息的 initialModel 就带错了模型。
+  if (isModelInList(displayModels.value, selectedModel.value)) return;
   selectedModel.value = "";
   applyDefaultModel(displayModels.value);
 });
@@ -211,11 +269,38 @@ function handleModelChange(value: string) {
     btwModel.value = value;
     return;
   }
+  modelTouchedByUser = true;
   selectedModel.value = value;
   // 会话还没开始时 useChatSession.setModel 是无会话可发的空操作，安全；
   // 真正生效靠 handleSend 把 selectedModel 带进第一条消息。
   emit("set-model", value);
 }
+
+// 模型切换回执 → 瞬时提示：sidecar 运行时坐实（成功 = CLI 已接受；失败 = 被
+// 驳回，下拉已被回滚广播拉回旧值）；未启动会话走本地 deferred 回执（无活
+// sidecar，选择随下一条消息 initialModel 生效）。此前切换成败在 UI 上完全
+// 无法区分。watch seq 而不是整个对象引用：连续两次切同一个模型也要照样弹。
+const { toastState, showToast } = useToast();
+watch(
+  () => props.modelSwitchResult?.seq,
+  (seq) => {
+    const r = props.modelSwitchResult;
+    if (!seq || !r) return;
+    // 过期回执不弹：切 tab 离开时 watcher 会随 prop 切换重新触发（seq 从
+    // undefined 变回 N），没有这道新鲜度判断，几分钟前切别的会话时的旧提示
+    // 会在回到这个 tab 时再弹一遍。
+    if (Date.now() - r.at > 5000) return;
+    if (r.deferred) {
+      showToast(`已选定 ${r.display}，将在发送后生效`, "info");
+    } else {
+      showToast(
+        r.ok ? `模型已切换为 ${r.display}` : `模型切换失败：${r.error ?? "未知原因"}`,
+        r.ok ? "success" : "danger",
+        r.ok ? undefined : 4200, // 失败原因要读完，留久一点
+      );
+    }
+  },
+);
 
 // ── 权限模式（plan / acceptEdits / default）——和模型下拉同一套模式：
 // 会话没起进程时用静态兜底清单，用户的选择随每条消息的 permission_mode 带走；
@@ -664,6 +749,7 @@ async function handleQuickAction(action: QuickAction) {
         :key="msg.id"
         :message="msg"
         :workspace-path="workspacePath"
+        :models="displayModels"
       />
       <div v-if="isBusyVal" class="chat-thinking">
         <span class="chat-thinking-dot">●</span>
@@ -822,6 +908,7 @@ async function handleQuickAction(action: QuickAction) {
       <Transition name="btw-toast">
         <div v-if="btwRevertToast" class="btw-revert-toast">已切回主对话输入</div>
       </Transition>
+      <AToast :state="toastState" />
     </div>
     <BtwDrawer
       :visible="btwDrawerVisible"

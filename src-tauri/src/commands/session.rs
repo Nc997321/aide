@@ -230,6 +230,57 @@ pub fn rename_session(id: String, name: String) -> Result<(), String> {
         .map_err(|e| format!("Failed to write: {}", e))
 }
 
+/// 记住会话的模型选择：merge 写进会话元数据 `<id>.json` 的 `model` 字段
+/// （与 rename_session 同一模式），重开会话/重启 app 后由前端恢复选择器。
+/// model 为空 = 清除（跟随 provider 默认）。磁盘 IO 离开主线程（杀软扫描
+/// 小文件也可能堵，见 CLAUDE.md「同步 command 禁止重 IO」）。
+#[tauri::command]
+pub async fn set_session_model(id: String, model: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let dir = our_sessions_dir();
+        fs::create_dir_all(&dir).map_err(|e| format!("Failed to create sessions dir: {}", e))?;
+        let path = dir.join(format!("{}.json", id));
+
+        let mut v: Value = if path.exists() {
+            let content = fs::read_to_string(&path)
+                .map_err(|e| format!("Failed to read: {}", e))?;
+            serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?
+        } else {
+            serde_json::json!({ "id": id })
+        };
+        if model.is_empty() {
+            v.as_object_mut().map(|o| o.remove("model"));
+        } else {
+            v["model"] = Value::String(model);
+        }
+
+        fs::write(&path, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("Failed to write: {}", e))
+    })
+    .await
+    .map_err(|e| format!("set_session_model task panicked: {}", e))?
+}
+
+/// 读回会话记住的模型选择；没有元数据文件或没记过 → None。
+#[tauri::command]
+pub async fn session_model(id: String) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = fs::read_to_string(&path).map_err(|e| format!("Failed to read: {}", e))?;
+        let v: Value = serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?;
+        Ok(v
+            .get("model")
+            .and_then(|m| m.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string()))
+    })
+    .await
+    .map_err(|e| format!("session_model task panicked: {}", e))?
+}
+
 /// transcript 会随会话增长到多 MB，整读 + 逐行解析必须离开主线程（切会话时触发，
 /// 同步跑等于切一次长会话卡一次窗口）。
 #[tauri::command]
@@ -819,6 +870,44 @@ mod tests {
         assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("测试会话"));
 
         let _ = fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn session_model_roundtrip_and_preserves_other_fields() {
+        // 回归：模型选择记进会话元数据并能读回；merge 写不能冲掉 name 等既有字段。
+        let id = "test-model-aa11bb22".to_string();
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        let _ = fs::remove_file(&path);
+
+        create_session(id.clone(), "模型会话".to_string()).unwrap();
+        assert_eq!(session_model(id.clone()).await.unwrap(), None);
+
+        set_session_model(id.clone(), "sonnet".to_string()).await.unwrap();
+        assert_eq!(session_model(id.clone()).await.unwrap(), Some("sonnet".to_string()));
+
+        // name 字段必须还活着（merge 而非覆盖）
+        let content = fs::read_to_string(&path).unwrap();
+        let v: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("模型会话"));
+
+        // 覆盖写 + 清空（清空后读回 None）
+        set_session_model(id.clone(), "opus".to_string()).await.unwrap();
+        assert_eq!(session_model(id.clone()).await.unwrap(), Some("opus".to_string()));
+        set_session_model(id.clone(), String::new()).await.unwrap();
+        assert_eq!(session_model(id.clone()).await.unwrap(), None);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn session_model_returns_none_for_unknown_session() {
+        // 没记过的会话 → None，前端据此走默认选择逻辑
+        assert_eq!(
+            session_model("test-model-never-exists-aa11bb22".to_string())
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     // 回归：真实会话记录里，Skill 注入(isMeta)、中断占位符

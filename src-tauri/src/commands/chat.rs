@@ -125,9 +125,15 @@ pub async fn set_model(
     session_id: String,
     model: String,
     sidecar_mgr: State<'_, SidecarManager>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
+    // 无活进程（停止/历史会话）不算错误：返回 false 让前端走「随下一条消息
+    // initialModel 生效」的 deferred 路径并给出回执提示——此前用 Err
+    // （"Session not found"）表达，前端只能靠吞错分辨，未启动切换因此毫无提示。
+    if !sidecar_mgr.has_session(&session_id) {
+        return Ok(false);
+    }
     let cmd = json!({ "cmd": "set_model", "model": model });
-    sidecar_mgr.send(&session_id, &cmd).await
+    sidecar_mgr.send(&session_id, &cmd).await.map(|_| true)
 }
 
 #[tauri::command]

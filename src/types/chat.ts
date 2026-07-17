@@ -81,6 +81,23 @@ export interface ModelOption {
   displayName: string;
 }
 
+/** 模型切换的坐实回执——跟 agent-sidecar/src/types.ts 的 model_switch_result 事件
+ *  镜像（前端侧补一个 seq：单调递增，连续两次切同一个模型也能触发 watcher）。
+ *  ok:false 时 error 带驳回原因，下拉已被 sidecar 的回滚广播拉回旧值。 */
+export interface ModelSwitchResult {
+  ok: boolean;
+  model: string;
+  display: string;
+  error?: string;
+  seq: number;
+  /** 事件到达前端的本地时间戳——面板据它判断新鲜度：切 tab 回来时旧回执
+   *  会重新进入 watcher（seq 从 undefined 变回 N），靠它抑制过期提示。 */
+  at: number;
+  /** true = 未启动会话的本地 deferred 回执（无活 sidecar 可坐实，选择随下一条
+   *  消息的 initialModel 生效）；缺省/false = sidecar 运行时坐实回执。 */
+  deferred?: boolean;
+}
+
 /** 权限模式选项——同 ModelOption：value 是 provider 自己认的不透明标识，
  *  语义由 sidecar 解释，跟 agent-sidecar/src/types.ts 里的同名类型镜像。 */
 export interface PermissionModeOption {
@@ -128,6 +145,11 @@ export interface ChatMessage {
   streaming?: boolean;
   /** 这条 assistant 消息这一轮的 token 用量 + 费用 */
   usage?: TurnUsage;
+  /** 这条回答实际使用的模型（API 落盘 wire 标识，比模型自报可靠）——由
+   *  sidecar 盖在消息首个块事件上；历史消息（transcript 重建）没有。 */
+  model?: string;
+  /** sidecar 给的展示建议（别名）：在可选项列表里才采用，否则展示 model 原文。 */
+  modelLabel?: string;
 }
 
 export interface PermissionRequest {

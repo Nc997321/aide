@@ -54,6 +54,63 @@ describe("mapSdkMessage routing for Task tools", () => {
     expect(events).toEqual([{ type: "tool_use_start", id: "t1", name: "Bash", input: { command: "ls" } }]);
   });
 
+  it("主线程 assistant 消息：wire model 只盖在首个块事件上，label 走注入的解析器", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
+    const msg = {
+      type: "assistant",
+      message: {
+        model: "claude-sonnet-5-20260101",
+        content: [
+          { type: "text", text: "第一段" },
+          { type: "text", text: "第二段" },
+        ],
+      },
+    };
+    mapSdkMessage(msg, (e) => events.push(e), tasks, subagents, tools, (w) => `alias-of-${w}`);
+    expect(events).toEqual([
+      { type: "text_delta", delta: "第一段", model: "claude-sonnet-5-20260101", modelLabel: "alias-of-claude-sonnet-5-20260101" },
+      { type: "text_delta", delta: "第二段" },
+    ]);
+  });
+
+  it("首块是工具调用时 model 盖在 tool_use_start 上；不传解析器则 label 即 wire 原文", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
+    const msg = {
+      type: "assistant",
+      message: { model: "kimi-for-coding", content: [{ type: "tool_use", id: "t1", name: "Bash", input: {} }] },
+    };
+    mapSdkMessage(msg, (e) => events.push(e), tasks, subagents, tools);
+    expect(events).toEqual([
+      { type: "tool_use_start", id: "t1", name: "Bash", input: {}, model: "kimi-for-coding", modelLabel: "kimi-for-coding" },
+    ]);
+  });
+
+  it("占位符/错误回声的 model 不盖章（不会把 <synthetic> 显示到消息上）", () => {
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
+    mapSdkMessage(
+      { type: "assistant", message: { model: "<synthetic>", content: [{ type: "text", text: "x" }] } },
+      (e) => events.push(e), tasks, subagents, tools,
+    );
+    mapSdkMessage(
+      { type: "assistant", error: "model_not_found", message: { model: "claude-x", content: [{ type: "text", text: "y" }] } },
+      (e) => events.push(e), tasks, subagents, tools,
+    );
+    expect(events).toEqual([
+      { type: "text_delta", delta: "x" },
+      { type: "text_delta", delta: "y" },
+    ]);
+  });
+
+
   it("emits tasks_update after TaskCreate's tool_result resolves, without a generic tool_result", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();

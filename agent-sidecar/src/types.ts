@@ -41,10 +41,14 @@ export interface TaskItem {
 // Sidecar → Rust（每行一个 JSON，写入 stdout）
 export type ChatEvent =
   | { type: "session_init"; session_id: string }
-  | { type: "text_delta"; delta: string }
-  | { type: "tool_use_start"; id: string; name: string; input: unknown }
+  // model/modelLabel：本条 assistant 消息的真实 wire model（API 实际调用标识）——
+  // 只盖在每条消息的首个块事件上（后续块事件不带）。modelLabel 是 sidecar 按
+  // 别名表给出的展示建议（系统默认下是 "sonnet" 这类；第三方常解析出 Claude
+  // 别名，前端按「在可选项列表里」校验，不在列回退 model 原文）。
+  | { type: "text_delta"; delta: string; model?: string; modelLabel?: string }
+  | { type: "tool_use_start"; id: string; name: string; input: unknown; model?: string; modelLabel?: string }
   | { type: "tool_result"; id: string; content: string; is_error: boolean }
-  | { type: "subagent_start"; id: string; agentName: string; description: string; prompt?: string }
+  | { type: "subagent_start"; id: string; agentName: string; description: string; prompt?: string; model?: string; modelLabel?: string }
   // 子代理内部逐字流式增量——语义对齐主线程的 text_delta（stream_event 的 text_delta）。
   // thinking 主线程目前不转发，但这条子代理专属通道独立开放，不受此限制（v2）。
   | { type: "subagent_text_delta"; id: string; delta: string }
@@ -80,6 +84,11 @@ export type ChatEvent =
   | { type: "permission_cancelled"; id: string }
   | { type: "message_stop"; stop_reason: string; total_cost_usd: number | null; usage: TurnUsage | null }
   | { type: "models_available"; models: ModelOption[]; current: string }
+  // 模型切换的坐实回执——只在用户显式 set_model 后由 sidecar 运行时路径发出
+  // （init/assistant 坐实、query 未起的本地落账都不发），让前端能给出
+  // 「成功/失败」瞬时提示。ok:false 时 error 带 CLI 驳回原因，下拉已被回滚
+  // 广播拉回旧值。display 是喂给提示文案的人类可读名（displayName，兜底 value）。
+  | { type: "model_switch_result"; ok: boolean; model: string; display: string; error?: string }
   | { type: "permission_modes_available"; modes: PermissionModeOption[]; current: string }
   // 会话建立时 SDK 回传的权威 slash commands 清单（内置命令 + skills + 自定义命令），
   // 仅当 SDK 提供该字段时才发（见 mapper.ts 的 Array.isArray 判断）。

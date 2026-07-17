@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { pickModelValue } from "./modelSelect";
+import { pickModelValue, isModelInList } from "./modelSelect";
 import type { ModelOption } from "../types/chat";
 
 const opts = (vals: string[]): ModelOption[] =>
@@ -59,5 +59,35 @@ describe("pickModelValue", () => {
   it("sdkCurrent 为空串时不采信，退化到 existing/provider/first", () => {
     const models = opts(["sonnet", "opus"]);
     expect(pickModelValue(models, "", "", "")).toBe("sonnet");
+  });
+
+  // ── 回归：会话模型记忆恢复。existing 优先级高于 providerDefault 槽位——
+  //    恢复 remembered 时若先落过占位默认（existing 被占），remembered 会永远
+  //    输掉（停止会话切回来选择器停在默认模型的根因）。所以 ChatPanel 的恢复
+  //    通道必须用 isModelInList 校验后直接选中，而不是再过一遍 pickModelValue。
+  it("existing 优先级高于 providerDefault 槽位（恢复通道不能直接复用此函数）", () => {
+    const models = opts(["default-model", "kimi-for-coding"]);
+    expect(pickModelValue(models, "default-model", "", "kimi-for-coding")).toBe("default-model");
+    // 正确姿势：existing 为空时 providerDefault 槽位才生效
+    expect(pickModelValue(models, "", "", "kimi-for-coding")).toBe("kimi-for-coding");
+  });
+});
+
+describe("isModelInList", () => {
+  it("在列表里（含 remembered 恢复场景的真实 id）", () => {
+    const models = opts(["default-model", "kimi-for-coding"]);
+    expect(isModelInList(models, "kimi-for-coding")).toBe(true);
+  });
+
+  it("不在列表里（换过 provider 的旧记忆）→ false，调用方退默认", () => {
+    const models = opts(["new-provider-model"]);
+    expect(isModelInList(models, "kimi-for-coding")).toBe(false);
+  });
+
+  it("空值/空列表 → false", () => {
+    expect(isModelInList(opts(["sonnet"]), "")).toBe(false);
+    expect(isModelInList(opts(["sonnet"]), null)).toBe(false);
+    expect(isModelInList(opts(["sonnet"]), undefined)).toBe(false);
+    expect(isModelInList([], "sonnet")).toBe(false);
   });
 });

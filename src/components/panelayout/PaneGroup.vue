@@ -33,6 +33,7 @@ const {
   isBusy,
   models,
   currentModel,
+  modelSwitchResult,
   contextUsage,
   rateLimit,
   tasks,
@@ -110,6 +111,7 @@ function onNewTab() {
       :is-busy="isBusy"
       :models="models"
       :current-model="currentModel"
+      :model-switch-result="modelSwitchResult"
       :context-usage="contextUsage"
       :rate-limit="rateLimit"
       :tasks="tasks"

@@ -303,6 +303,9 @@ export function mapSdkMessage(
   tasks: TaskTracker,
   subagents: SubagentTracker,
   tools: ToolLifecycleTracker,
+  /** 把 wire model id 解析成展示建议（别名）——index.ts 传 resolveDropdownValue；
+   *  缺省（测试等）时 modelLabel 即 wire 原文。 */
+  resolveModelLabel?: (wire: string) => string,
 ) {
   if (msg.parent_tool_use_id) {
     emitSubagentProgress(msg, emit, subagents);
@@ -344,12 +347,23 @@ export function mapSdkMessage(
   }
 
   if (msg.type === "assistant" && msg.message?.content) {
+    // 真实 wire model 随本条消息的首个块事件带给前端——消息气泡据此显示
+    // 「这条回答出自哪个模型」（API 落盘标识，比模型自报身份可靠）。占位符/
+    // 错误回声的 model 不可采信（isAdoptableAssistantModel），不盖章。
+    const wire = isAdoptableAssistantModel(msg) ? (msg.message.model as string) : undefined;
+    const label = wire ? (resolveModelLabel?.(wire) ?? wire) : undefined;
+    let stamped = false;
+    const withModel = <T extends Record<string, unknown>>(e: T): T => {
+      if (!wire || stamped) return e;
+      stamped = true;
+      return { ...e, model: wire, modelLabel: label };
+    };
     for (const block of msg.message.content) {
       if (block.type === "text") {
         // includePartialMessages 关闭后没有 stream_event 逐字增量，整块文本在此
         // 一次性发出（否则助手回复文本丢失）。partial 开启时会被逐字增量抢先、
         // 这里再发会重复——但 index.ts 现在不开 partial，所以这是唯一来源。
-        if (block.text) emit({ type: "text_delta", delta: block.text });
+        if (block.text) emit(withModel({ type: "text_delta", delta: block.text }));
         continue;
       } else if (block.type === "tool_use") {
         // 插队安全边界判断的账本：不管是普通工具、Task/Agent 子代理还是内置
@@ -357,13 +371,13 @@ export function mapSdkMessage(
         tools.onToolUse(block.id);
         if (SubagentTracker.isSubagentTool(block.name)) {
           const { agentName, description, prompt } = subagents.handleToolUse(block.id, block.input);
-          emit({ type: "subagent_start", id: block.id, agentName, description, ...(prompt ? { prompt } : {}) });
+          emit(withModel({ type: "subagent_start", id: block.id, agentName, description, ...(prompt ? { prompt } : {}) }));
         } else if (TaskTracker.isTaskTool(block.name)) {
           if (tasks.handleToolUse(block.id, block.name, block.input)) {
             emit({ type: "tasks_update", tasks: tasks.snapshot() });
           }
         } else {
-          emit({ type: "tool_use_start", id: block.id, name: block.name, input: block.input });
+          emit(withModel({ type: "tool_use_start", id: block.id, name: block.name, input: block.input }));
         }
       }
     }

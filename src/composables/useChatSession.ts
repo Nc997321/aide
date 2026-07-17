@@ -5,6 +5,7 @@ import type {
   ChatMessage,
   ContextUsage,
   ModelOption,
+  ModelSwitchResult,
   PermissionModeOption,
   PermissionRequest,
   RateLimitInfo,
@@ -70,6 +71,9 @@ interface SessionStore {
   models: ModelOption[];
   /** 当前选中的模型 value；空串表示跟随 provider 默认 */
   currentModel: string;
+  /** 最近一次模型切换的坐实回执（sidecar model_switch_result）；null 表示
+   *  本会话还没切过。seq 单调递增，连续相同结果也能触发 watcher。 */
+  modelSwitchResult: ModelSwitchResult | null;
   /** 上下文窗口用量——每轮结束后由 sidecar 刷新；null 表示还没收到过 */
   contextUsage: ContextUsage | null;
   /** 当前任务清单——sidecar 每次变化后整体覆盖，不做增量合并 */
@@ -144,6 +148,7 @@ function getStore(sid: string): SessionStore {
       hydrated: false,
       models: [],
       currentModel: "",
+      modelSwitchResult: null,
       contextUsage: null,
       tasks: [],
       permissionModes: [],
@@ -202,6 +207,14 @@ function getOrCreateAssistant(store: SessionStore): ChatMessage {
   };
   store.messages.push(msg);
   return msg;
+}
+
+/** 把 sidecar 盖在块事件上的真实模型（wire id + 展示建议）盖到消息上——
+ *  一轮多个块事件只有首个带（后续不带），已盖过就不再覆盖。 */
+function stampMessageModel(msg: ChatMessage, e: Record<string, unknown>) {
+  if (msg.model || !e["model"]) return;
+  msg.model = e["model"] as string;
+  msg.modelLabel = (e["modelLabel"] as string) || (e["model"] as string);
 }
 
 function finishStreaming(store: SessionStore) {
@@ -398,6 +411,7 @@ function handleChatEvent(e: Record<string, unknown>) {
     }
     case "text_delta": {
       const msg = getOrCreateAssistant(store);
+      stampMessageModel(msg, e);
       const last = msg.blocks[msg.blocks.length - 1];
       if (last?.type === "text") {
         (last as TextBlock).text += e["delta"] as string;
@@ -408,6 +422,7 @@ function handleChatEvent(e: Record<string, unknown>) {
     }
     case "tool_use_start": {
       const msg = getOrCreateAssistant(store);
+      stampMessageModel(msg, e);
       msg.blocks.push({
         type: "tool_call",
         id: e["id"] as string,
@@ -450,6 +465,23 @@ function handleChatEvent(e: Record<string, unknown>) {
       store.models = e["models"] as ModelOption[];
       store.currentModel = e["current"] as string;
       sharedModels.value = store.models;
+      // 注意：坐实模型的持久化不在这里做——current 可能是 sidecar 解析出的
+      // Claude 别名（第三方 wire id → "haiku"/"sonnet"），不经验证落盘会污染
+      // 会话记忆。持久化在 ChatPanel 的 currentModel watcher：只记在当前
+      // 可选项列表里的值（恢复得出来的值才值得记）。
+      break;
+    }
+    case "model_switch_result": {
+      // 模型切换坐实回执——只有用户显式切换才收到（init/assistant 坐实不发），
+      // 交给面板弹瞬时提示。seq 单调递增：连续两次切同一个模型也触发 watcher。
+      store.modelSwitchResult = {
+        ok: e["ok"] as boolean,
+        model: e["model"] as string,
+        display: (e["display"] as string) || (e["model"] as string),
+        error: e["error"] as string | undefined,
+        seq: (store.modelSwitchResult?.seq ?? 0) + 1,
+        at: Date.now(),
+      };
       break;
     }
     case "context_usage": {
@@ -490,6 +522,7 @@ function handleChatEvent(e: Record<string, unknown>) {
     }
     case "subagent_start": {
       const msg = getOrCreateAssistant(store);
+      stampMessageModel(msg, e);
       msg.blocks.push({
         type: "subagent",
         id: e["id"] as string,
@@ -862,11 +895,35 @@ export function useChatSession(sessionId: Ref<string | null>) {
   }
 
   /** 切换模型只影响下一条消息，SDK 原生保证；不做本地乐观更新，
-   *  显示状态靠 sidecar 主动回发的 models_available 事件同步。 */
+   *  显示状态靠 sidecar 主动回发的 models_available 事件同步。回执提示两条路：
+   *  进程活着 → sidecar 运行时坐实后发 model_switch_result；进程没起 →
+   *  Rust 返回 false，这里本地合成 deferred 回执（选择随下一条消息的
+   *  initialModel 生效）——两条路都给用户可见反馈，不允许静默。
+   *  用户显式选择立即持久化（停止中的会话没有广播渠道，靠这次写入记住）。 */
   async function setModel(model: string) {
     const sid = sessionId.value;
     if (!sid) return;
-    await invoke("set_model", { sessionId: sid, model });
+    if (!isPendingSession(sid)) {
+      void invoke("set_session_model", { id: sid, model }).catch(() => {});
+    }
+    let delivered = false;
+    try {
+      delivered = await invoke<boolean>("set_model", { sessionId: sid, model });
+    } catch {
+      // has_session 到 send 之间进程刚好死掉：视同 deferred，下一条消息 respawn
+      // 时 initialModel 照样带上，提示语义不变
+    }
+    if (!delivered) {
+      const store = getStore(sid);
+      store.modelSwitchResult = {
+        ok: true,
+        model,
+        display: store.models.find((m) => m.value === model)?.displayName ?? model,
+        deferred: true,
+        seq: (store.modelSwitchResult?.seq ?? 0) + 1,
+        at: Date.now(),
+      };
+    }
   }
 
   /** 切权限模式：进程活着就即时生效（sidecar 回发事件同步下拉），进程还没
@@ -934,6 +991,8 @@ export function useChatSession(sessionId: Ref<string | null>) {
       return own?.length ? own : sharedModels.value;
     }),
     currentModel: computed(() => current.value?.currentModel ?? ""),
+    /** 模型切换坐实回执（含 seq），面板据此弹成功/失败提示；null 表示没切过。 */
+    modelSwitchResult: computed(() => current.value?.modelSwitchResult ?? null),
     contextUsage: computed(() => current.value?.contextUsage ?? null),
     tasks: computed(() => current.value?.tasks ?? []),
     permissionModes: computed(() => {

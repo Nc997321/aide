@@ -308,6 +308,99 @@ describe("useChatSession per-session store", () => {
     expect(chat.currentModel.value).toBe("sonnet");
   });
 
+  it("text_delta 携带 model 时盖到消息上，一轮内后续事件不重复覆盖", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+
+    emit({ type: "text_delta", delta: "好", model: "kimi-for-coding-highspeed", modelLabel: "sonnet", session_id: "uuid-a" });
+    await flush();
+    let msg = chat.messages.value[chat.messages.value.length - 1];
+    expect(msg.model).toBe("kimi-for-coding-highspeed");
+    expect(msg.modelLabel).toBe("sonnet");
+
+    // 后续块事件（不带 model / 或工具事件）不得覆盖已盖的值
+    emit({ type: "text_delta", delta: "的", session_id: "uuid-a" });
+    emit({ type: "tool_use_start", id: "t1", name: "Bash", input: {}, session_id: "uuid-a" });
+    await flush();
+    msg = chat.messages.value[chat.messages.value.length - 1];
+    expect(msg.model).toBe("kimi-for-coding-highspeed");
+  });
+
+  it("model_switch_result 落 store 且 seq 单调递增（连续切同一模型也触发 watcher）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    expect(chat.modelSwitchResult.value).toBeNull();
+
+    emit({ type: "model_switch_result", ok: true, model: "opus", display: "Opus", session_id: "uuid-a" });
+    await flush();
+    expect(chat.modelSwitchResult.value).toMatchObject({ ok: true, model: "opus", display: "Opus", seq: 1 });
+    expect(typeof chat.modelSwitchResult.value?.at).toBe("number");
+
+    // 第二次切同一个模型：seq 递增，内容相同也算新回执
+    emit({ type: "model_switch_result", ok: true, model: "opus", display: "Opus", session_id: "uuid-a" });
+    await flush();
+    expect(chat.modelSwitchResult.value?.seq).toBe(2);
+
+    // 失败回执带驳回原因
+    emit({ type: "model_switch_result", ok: false, model: "k3", display: "k3", error: "model_not_found", session_id: "uuid-a" });
+    await flush();
+    expect(chat.modelSwitchResult.value).toMatchObject({ ok: false, model: "k3", display: "k3", error: "model_not_found", seq: 3 });
+  });
+
+  it("models_available 不在此层持久化（current 可能是别名，持久化归 ChatPanel 在列校验）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+
+    emit({
+      type: "models_available",
+      models: [{ value: "sonnet", displayName: "Sonnet" }],
+      current: "sonnet",
+      session_id: "uuid-a",
+    });
+    await flush();
+    // 回归：sidecar 会把第三方 wire id 解析成 Claude 别名广播，本层不做
+    // 在列校验，持久化别名会污染会话记忆（恢复必然失败）——故本层一律不写。
+    expect(invokeMock).not.toHaveBeenCalledWith("set_session_model", expect.anything());
+    expect(chat.currentModel.value).toBe("sonnet");
+  });
+
+  it("setModel 持久化用户选择（用户的选项必然在列表里；停止中的会话靠这次写入记住）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+
+    await chat.setModel("opus");
+    expect(invokeMock).toHaveBeenCalledWith("set_session_model", { id: "uuid-a", model: "opus" });
+    expect(invokeMock).toHaveBeenCalledWith("set_model", { sessionId: "uuid-a", model: "opus" });
+  });
+
+  it("set_model 未投递（无活进程）→ 本地合成 deferred 回执驱动面板提示", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    // Rust 返回 false = 无活进程（invokeMock 缺省 resolve undefined，同为假值）
+    await chat.setModel("kimi-for-coding-highspeed");
+    expect(chat.modelSwitchResult.value).toMatchObject({
+      ok: true,
+      model: "kimi-for-coding-highspeed",
+      deferred: true,
+      seq: 1,
+    });
+  });
+
+  it("set_model 已投递（进程存活）→ 不合成回执，等 sidecar 坐实事件", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    invokeMock.mockImplementation(async (cmd: string) => (cmd === "set_model" ? true : undefined));
+    await chat.setModel("opus");
+    expect(chat.modelSwitchResult.value).toBeNull();
+  });
+
   it("slash_commands_available 更新会话的命令清单", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);

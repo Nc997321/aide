@@ -11,6 +11,7 @@ import { JumpQueueController } from "./jumpQueue.js";
 import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { stopAllOutputTails } from "./subagentOutputTail.js";
 import { btwQueryOverrides, forkResumeOptions } from "./btwOptions.js";
+import { applyModelSwitch } from "./modelSwitch.js";
 import {
   mapSdkMessage,
   buildUserMessage,
@@ -67,8 +68,11 @@ const toolLifecycle = new ToolLifecycleTracker();
 const jumpQueueCtl = new JumpQueueController();
 let currentQuery: Awaited<ReturnType<typeof query>> | null = null;
 let sessionId: string | undefined;
-// 模型选择只存内存，不落盘——重开会话回落到 provider 默认模型。
-let currentModel = "";
+// 模型选择只存内存，由前端持久化到会话元数据（重开会话时经 initialModel →
+// ANTHROPIC_MODEL env 恢复回来）。初始值取 env：本进程就是被指定用某个模型
+// spawn 的（Rust apply_initial_model_override），init 广播因此能立刻坐实选择器，
+// 而不是等第一条 assistant 消息。
+let currentModel = process.env.ANTHROPIC_MODEL ?? "";
 /** 最近一次从 assistant 消息里坐实的具体 wire model id，用来判断是否需要重新映射+广播。 */
 let lastConcreteModel = "";
 let lastModels: ModelOption[] = [];
@@ -298,7 +302,7 @@ async function startLoop(cwd?: string) {
               continue;
             }
           }
-          mapSdkMessage(msg, emit, taskTracker, subagentTracker, toolLifecycle);
+          mapSdkMessage(msg, emit, taskTracker, subagentTracker, toolLifecycle, resolveDropdownValue);
           // 插队安全边界：每处理完一条消息就检查一次——工具跑完（账本归零）的
           // 那一刻，如果还有一条插队消息在等，立刻打断这一轮，不用等到下一条
           // 消息才发现。
@@ -470,13 +474,16 @@ rl.on("line", (line) => {
   } else if (cmd.cmd === "set_permission_mode") {
     applyPermissionMode(cmd.mode);
   } else if (cmd.cmd === "set_model") {
-    currentQuery
-      ?.setModel(cmd.model)
-      .then(() => {
-        currentModel = cmd.model;
-        emit({ type: "models_available", models: lastModels, current: currentModel });
-      })
-      .catch(() => {});
+    applyModelSwitch({
+      model: cmd.model,
+      query: currentQuery,
+      models: lastModels,
+      currentModel,
+      emit,
+      commit: (m) => {
+        currentModel = m;
+      },
+    });
   }
 });
 

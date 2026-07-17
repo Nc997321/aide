@@ -45923,7 +45923,7 @@ function emitSubagentProgress(msg, emit2, subagents) {
   }
   emitSubagentBlocks(msg, parentId, emit2, () => isAdoptableAssistantModel(msg) && subagents.claimModelReport(parentId));
 }
-function mapSdkMessage(msg, emit2, tasks, subagents, tools) {
+function mapSdkMessage(msg, emit2, tasks, subagents, tools, resolveModelLabel) {
   if (msg.parent_tool_use_id) {
     emitSubagentProgress(msg, emit2, subagents);
     return;
@@ -45951,21 +45951,29 @@ function mapSdkMessage(msg, emit2, tasks, subagents, tools) {
     return;
   }
   if (msg.type === "assistant" && msg.message?.content) {
+    const wire = isAdoptableAssistantModel(msg) ? msg.message.model : void 0;
+    const label = wire ? resolveModelLabel?.(wire) ?? wire : void 0;
+    let stamped = false;
+    const withModel = (e) => {
+      if (!wire || stamped) return e;
+      stamped = true;
+      return { ...e, model: wire, modelLabel: label };
+    };
     for (const block of msg.message.content) {
       if (block.type === "text") {
-        if (block.text) emit2({ type: "text_delta", delta: block.text });
+        if (block.text) emit2(withModel({ type: "text_delta", delta: block.text }));
         continue;
       } else if (block.type === "tool_use") {
         tools.onToolUse(block.id);
         if (SubagentTracker.isSubagentTool(block.name)) {
           const { agentName, description, prompt } = subagents.handleToolUse(block.id, block.input);
-          emit2({ type: "subagent_start", id: block.id, agentName, description, ...prompt ? { prompt } : {} });
+          emit2(withModel({ type: "subagent_start", id: block.id, agentName, description, ...prompt ? { prompt } : {} }));
         } else if (TaskTracker.isTaskTool(block.name)) {
           if (tasks.handleToolUse(block.id, block.name, block.input)) {
             emit2({ type: "tasks_update", tasks: tasks.snapshot() });
           }
         } else {
-          emit2({ type: "tool_use_start", id: block.id, name: block.name, input: block.input });
+          emit2(withModel({ type: "tool_use_start", id: block.id, name: block.name, input: block.input }));
         }
       }
     }
@@ -46157,6 +46165,32 @@ function forkResumeOptions(sessionId2, shouldFork) {
   return shouldFork ? { resume: sessionId2, forkSession: true } : { resume: sessionId2 };
 }
 
+// src/modelSwitch.ts
+function applyModelSwitch(p) {
+  if (!p.model || p.model === p.currentModel) return;
+  const display = p.models.find((m) => m.value === p.model)?.displayName ?? p.model;
+  const broadcast = (current) => p.emit({ type: "models_available", models: p.models, current });
+  if (!p.query) {
+    p.commit(p.model);
+    broadcast(p.model);
+    return;
+  }
+  p.query.setModel(p.model).then(() => {
+    p.commit(p.model);
+    broadcast(p.model);
+    p.emit({ type: "model_switch_result", ok: true, model: p.model, display });
+  }).catch((e) => {
+    broadcast(p.currentModel);
+    p.emit({
+      type: "model_switch_result",
+      ok: false,
+      model: p.model,
+      display,
+      error: String(e?.message ?? e)
+    });
+  });
+}
+
 // src/index.ts
 var coalescer = new DeltaCoalescer((event) => {
   process.stdout.write(JSON.stringify(event) + "\n");
@@ -46189,7 +46223,7 @@ var toolLifecycle = new ToolLifecycleTracker();
 var jumpQueueCtl = new JumpQueueController();
 var currentQuery = null;
 var sessionId;
-var currentModel = "";
+var currentModel = process.env.ANTHROPIC_MODEL ?? "";
 var lastConcreteModel = "";
 var lastModels = [];
 var aliasByResolvedPrefix = [];
@@ -46352,7 +46386,7 @@ async function startLoop(cwd) {
               continue;
             }
           }
-          mapSdkMessage(msg, emit, taskTracker, subagentTracker, toolLifecycle);
+          mapSdkMessage(msg, emit, taskTracker, subagentTracker, toolLifecycle, resolveDropdownValue);
           if (jumpQueueCtl.has() && toolLifecycle.isIdle()) {
             currentQuery?.interrupt().catch(() => {
             });
@@ -46479,10 +46513,15 @@ rl2.on("line", (line) => {
   } else if (cmd.cmd === "set_permission_mode") {
     applyPermissionMode(cmd.mode);
   } else if (cmd.cmd === "set_model") {
-    currentQuery?.setModel(cmd.model).then(() => {
-      currentModel = cmd.model;
-      emit({ type: "models_available", models: lastModels, current: currentModel });
-    }).catch(() => {
+    applyModelSwitch({
+      model: cmd.model,
+      query: currentQuery,
+      models: lastModels,
+      currentModel,
+      emit,
+      commit: (m) => {
+        currentModel = m;
+      }
     });
   }
 });

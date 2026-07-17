@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { ChatMessage } from "@/types/chat";
+import type { ChatMessage, ModelOption } from "@/types/chat";
 import { renderStreaming, renderMarkdown } from "@/utils/markdown";
 import ToolCallBlock from "./ToolCallBlock.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
@@ -9,13 +9,28 @@ import TurnUsageBadge from "./TurnUsageBadge.vue";
 import { segmentBlocks, type Segment } from "@/utils/blockSegments";
 import { useFileResolver } from "@/composables/useFileResolver";
 import { parseFileLink } from "@/utils/fileLink";
+import { isModelInList } from "@/utils/modelSelect";
 
 const props = defineProps<{
   message: ChatMessage;
   workspacePath?: string;
+  /** 当前会话的可选模型列表——模型徽标的别名建议要在列表里才采用，
+   *  否则回退 wire 原文（第三方 sidecar 会建议出 Claude 别名，不在真实
+   *  id 列表里，采信会显示用户不认识的值）。 */
+  models?: ModelOption[];
 }>();
 
 const isUser = computed(() => props.message.role === "user");
+
+/** 模型徽标文案：sidecar 的别名建议在列采信（系统默认 → "sonnet"），
+ *  否则用 wire 原文（第三方真实 id，如 kimi-for-coding-highspeed）——
+ *  无论如何显示的都是 API 落盘标识，不是模型自报身份。 */
+const modelBadge = computed(() => {
+  const m = props.message;
+  if (isUser.value || !m.model) return "";
+  const label = m.modelLabel ?? m.model;
+  return isModelInList(props.models ?? [], label) ? label : m.model;
+});
 /** 整条用户消息只有一个 ActionBlock 时，不套铜底气泡——胶囊自身带边框/底色，
  *  套在 accent 实心底上会糊成一团。直接作为右对齐的胶囊落在消息行里。 */
 const isActionChip = computed(
@@ -119,7 +134,14 @@ function handleTextClick(e: MouseEvent) {
           :block="(seg.block as any)"
         />
       </template>
-      <TurnUsageBadge v-if="!isUser && message.usage" class="msg-usage" :usage="message.usage" />
+      <div v-if="!isUser && (modelBadge || message.usage)" class="msg-meta">
+        <span
+          v-if="modelBadge"
+          class="msg-model"
+          v-tooltip="'本条回答实际使用的模型（API 落盘标识）——问模型「你是什么模型」得到的自报身份不可靠，以这里为准'"
+        >{{ modelBadge }}</span>
+        <TurnUsageBadge v-if="message.usage" class="msg-usage" :usage="message.usage" />
+      </div>
     </div>
   </div>
 </template>
@@ -291,6 +313,26 @@ function handleTextClick(e: MouseEvent) {
   border: none;
   border-top: 1px solid var(--aide-border);
   margin: 8px 0;
+}
+
+.msg-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.msg-model {
+  font-size: 10.5px;
+  color: var(--aide-text-muted);
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+.msg-meta .msg-usage {
+  margin-top: 0;
 }
 
 .msg-usage {
