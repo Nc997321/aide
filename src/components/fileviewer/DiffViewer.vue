@@ -167,6 +167,7 @@ async function createView() {
       parent: mountEl.value,
     });
   }
+  applyFontSettings();
 }
 
 function destroyView() {
@@ -174,6 +175,12 @@ function destroyView() {
   mergeView = null;
   unifiedView?.destroy();
   unifiedView = null;
+}
+
+function applyFontSettings() {
+  if (!mountEl.value) return;
+  mountEl.value.style.setProperty("--cm-font-size", `${settings.fontSize}px`);
+  mountEl.value.style.setProperty("--cm-font-family", settings.fontFamily);
 }
 
 /** hunk 跳转：split 模式作用于 b（新）侧编辑器；StateCommand 直接吃 EditorView */
@@ -200,6 +207,12 @@ watch(
     mergeView?.b.dispatch({ effects: effect });
     unifiedView?.dispatch({ effects: effect });
   },
+);
+
+// 字体设置变化 → 重新下发到挂载容器（跟随 CodeEditor 的同款 watch）
+watch(
+  [() => settings.fontSize, () => settings.fontFamily],
+  () => applyFontSettings(),
 );
 
 // 同路径重开 → pair 被就地替换 → 重建视图
