@@ -549,6 +549,121 @@ fn status_from_numstat(additions: &str, deletions: &str) -> String {
     }
 }
 
+// ── Diff pair：编辑器级 diff 查看器的数据层 ──
+
+#[derive(Debug, serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffPair {
+    pub old_text: String,
+    pub new_text: String,
+    pub old_label: String,
+    pub new_label: String,
+    pub status: String, // "added" | "modified" | "deleted"
+    pub is_binary: bool,
+    pub eol_only: bool,
+}
+
+/// 统一行尾为 LF：CRLF/LF 翻转不该让 merge 视图每行都标变更。
+fn normalize_eol(s: &str) -> String {
+    s.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn looks_binary(bytes: &[u8]) -> bool {
+    bytes.iter().take(8192).any(|b| *b == 0)
+}
+
+/// `git show <rev>:<path>`；blob 不存在（未跟踪 / 该 rev 无此文件）→ None。
+fn show_blob(rev_path: &str, root: &std::path::Path) -> Result<Option<Vec<u8>>, String> {
+    let out = git_run(&["show", rev_path], root)?;
+    if out.status.success() {
+        Ok(Some(out.stdout))
+    } else {
+        Ok(None)
+    }
+}
+
+/// 三种场景取数：未暂存 = HEAD vs 磁盘；已暂存 = HEAD vs 索引；提交 = h^ vs h。
+/// 返回前两侧都做行尾归一化；归一化后相等但原文不等 → eol_only。
+fn build_diff_pair(
+    root: &std::path::Path,
+    path: &str,
+    staged: bool,
+    commit_hash: Option<&str>,
+) -> Result<DiffPair, String> {
+    let (old_raw, new_raw, old_label, new_label) = if let Some(h) = commit_hash {
+        let short = &h[..7.min(h.len())];
+        (
+            show_blob(&format!("{}^:{}", h, path), root)?,
+            show_blob(&format!("{}:{}", h, path), root)?,
+            format!("{}^", short),
+            short.to_string(),
+        )
+    } else if staged {
+        (
+            show_blob(&format!("HEAD:{}", path), root)?,
+            show_blob(&format!(":{}", path), root)?,
+            "HEAD".to_string(),
+            "已暂存".to_string(),
+        )
+    } else {
+        (
+            show_blob(&format!("HEAD:{}", path), root)?,
+            std::fs::read(root.join(path)).ok(),
+            "HEAD".to_string(),
+            "工作区".to_string(),
+        )
+    };
+
+    let is_binary = old_raw.as_deref().map(looks_binary).unwrap_or(false)
+        || new_raw.as_deref().map(looks_binary).unwrap_or(false);
+
+    let old_str = old_raw.map(|b| String::from_utf8_lossy(&b).into_owned());
+    let new_str = new_raw.map(|b| String::from_utf8_lossy(&b).into_owned());
+
+    let status = match (&old_str, &new_str) {
+        (None, Some(_)) => "added",
+        (Some(_), None) => "deleted",
+        // 两侧皆空（如未跟踪的空文件）：按磁盘存在性兜底
+        (None, None) => {
+            if root.join(path).exists() { "added" } else { "deleted" }
+        }
+        (Some(_), Some(_)) => "modified",
+    };
+
+    let old_raw_str = old_str.unwrap_or_default();
+    let new_raw_str = new_str.unwrap_or_default();
+    let old_text = normalize_eol(&old_raw_str);
+    let new_text = normalize_eol(&new_raw_str);
+    let eol_only = old_text == new_text && old_raw_str != new_raw_str;
+
+    Ok(DiffPair {
+        old_text,
+        new_text,
+        old_label,
+        new_label,
+        status: status.to_string(),
+        is_binary,
+        eol_only,
+    })
+}
+
+#[tauri::command]
+pub async fn git_diff_pair(
+    workspace_state: State<'_, WorkspaceState>,
+    path: String,
+    staged: Option<bool>,
+    commit_hash: Option<String>,
+) -> Result<DiffPair, String> {
+    let root = project_root_for_commands(&workspace_state);
+    if !root.join(".git").exists() {
+        return Err("Not a git repository".into());
+    }
+    git_run_blocking(move || {
+        build_diff_pair(&root, &path, staged.unwrap_or(false), commit_hash.as_deref())
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn git_diff_content(
     workspace_state: State<'_, WorkspaceState>,
@@ -909,4 +1024,140 @@ pub fn git_fingerprint(
     let stash = mtime_ms(&git_dir.join("refs").join("stash"));
 
     Ok(format!("{}-{}-{}-{}-{}-{}", head, index, fetch_head, refs_heads, refs_remotes, stash))
+}
+
+#[cfg(test)]
+mod diff_pair_tests {
+    use super::*;
+    use std::process::Command;
+
+    fn git(root: &std::path::Path, args: &[&str]) {
+        let out = Command::new("git").args(args).current_dir(root).output().unwrap();
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// 每个测试独立目录（可并行）；关 autocrlf 保证行尾可控。
+    fn setup_repo(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("aide_diffpair_test_{}", name));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init"]);
+        git(&root, &["config", "user.email", "test@example.com"]);
+        git(&root, &["config", "user.name", "Test"]);
+        git(&root, &["config", "core.autocrlf", "false"]);
+        root
+    }
+
+    #[test]
+    fn modified_unstaged_returns_head_vs_worktree() {
+        let root = setup_repo("modified");
+        std::fs::write(root.join("a.txt"), "line1\nline2\nline3\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "v1"]);
+        std::fs::write(root.join("a.txt"), "line1\nCHANGED\nline3\n").unwrap();
+
+        let pair = build_diff_pair(&root, "a.txt", false, None).unwrap();
+        assert_eq!(pair.status, "modified");
+        assert!(pair.old_text.contains("line2"));
+        assert!(pair.new_text.contains("CHANGED"));
+        assert_eq!(pair.old_label, "HEAD");
+        assert_eq!(pair.new_label, "工作区");
+        assert!(!pair.eol_only);
+        assert!(!pair.is_binary);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn staged_returns_head_vs_index() {
+        let root = setup_repo("staged");
+        std::fs::write(root.join("a.txt"), "v1\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "v1"]);
+        std::fs::write(root.join("a.txt"), "v2\n").unwrap();
+        git(&root, &["add", "a.txt"]);
+
+        let pair = build_diff_pair(&root, "a.txt", true, None).unwrap();
+        assert_eq!(pair.status, "modified");
+        assert_eq!(pair.old_text, "v1\n");
+        assert_eq!(pair.new_text, "v2\n");
+        assert_eq!(pair.new_label, "已暂存");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn commit_returns_parent_vs_commit() {
+        let root = setup_repo("commit");
+        std::fs::write(root.join("a.txt"), "v1\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "v1"]);
+        std::fs::write(root.join("a.txt"), "v2\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "v2"]);
+        let head = String::from_utf8_lossy(
+            &Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&root)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+
+        let pair = build_diff_pair(&root, "a.txt", false, Some(&head)).unwrap();
+        assert_eq!(pair.old_text, "v1\n");
+        assert_eq!(pair.new_text, "v2\n");
+        assert_eq!(pair.status, "modified");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn untracked_file_is_added_with_empty_old() {
+        let root = setup_repo("untracked");
+        std::fs::write(root.join("a.txt"), "seed\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "init"]);
+        std::fs::write(root.join("new.txt"), "brand new\n").unwrap();
+
+        let pair = build_diff_pair(&root, "new.txt", false, None).unwrap();
+        assert_eq!(pair.status, "added");
+        assert_eq!(pair.old_text, "");
+        assert_eq!(pair.new_text, "brand new\n");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn deleted_file_is_deleted_with_empty_new() {
+        let root = setup_repo("deleted");
+        std::fs::write(root.join("a.txt"), "gone\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "v1"]);
+        std::fs::remove_file(root.join("a.txt")).unwrap();
+
+        let pair = build_diff_pair(&root, "a.txt", false, None).unwrap();
+        assert_eq!(pair.status, "deleted");
+        assert_eq!(pair.old_text, "gone\n");
+        assert_eq!(pair.new_text, "");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn crlf_only_difference_sets_eol_only() {
+        let root = setup_repo("eol");
+        std::fs::write(root.join("a.txt"), "line1\nline2\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "v1"]);
+        // 同一内容换成 CRLF——正是"假新文件"bug 的真实场景
+        std::fs::write(root.join("a.txt"), "line1\r\nline2\r\n").unwrap();
+
+        let pair = build_diff_pair(&root, "a.txt", false, None).unwrap();
+        assert!(pair.eol_only);
+        assert_eq!(pair.old_text, pair.new_text); // 归一化后相等
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
