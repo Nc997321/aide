@@ -6,6 +6,7 @@ import { useGotoDefinition } from "../../composables/useGotoDefinition";
 import { useModal } from "../../composables/useModal";
 import type { QueryResult } from "../../types";
 import CodeEditor from "../CodeEditor.vue";
+import DiffViewer from "./DiffViewer.vue";
 import { extToLang, highlightCode } from "../../utils/highlight";
 import { marked } from "../../utils/markdown";
 
@@ -39,7 +40,6 @@ const cmScrollMemoryOpts = {
   shouldRestore: () => props.win.scrollToLine == null,
 };
 const isImage = computed(() => !!props.win.imageUrl);
-const isDiff = computed(() => props.win.language === "diff");
 /** 是否挂编辑器：非只读、非图片、非错误；markdown 全预览模式下也不挂 */
 const editorActive = computed(
   () =>
@@ -66,25 +66,6 @@ const highlighted = computed(() => {
   const ext = props.win.fileName.split(".").pop()?.toLowerCase() || "";
   return highlightCode(props.win.content, ext);
 });
-
-const diffHighlighted = computed(() => {
-  if (!props.win.content) return "";
-  return props.win.content.split("\n").map((line) => {
-    let cls = "aide-diff-ctx";
-    if (line.startsWith("+") && !line.startsWith("+++")) cls = "aide-diff-add";
-    else if (line.startsWith("-") && !line.startsWith("---")) cls = "aide-diff-del";
-    else if (line.startsWith("@@")) cls = "aide-diff-hunk";
-    else if (line.startsWith("diff ") || line.startsWith("index ") ||
-             line.startsWith("--- ") || line.startsWith("+++ ") ||
-             line.startsWith("new file") || line.startsWith("deleted file"))
-      cls = "aide-diff-meta";
-    return `<span class="${cls}">${escapeHtml(line)}</span>`;
-  }).join("\n");
-});
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
 
 // Markdown 实时预览：渲染编辑器里的内容而不是磁盘基线，分屏时所见即所得
 const renderedMarkdown = computed(() => {
@@ -258,7 +239,7 @@ function onKeydown(e: KeyboardEvent) {
       </div>
 
       <!-- 只读：diff / 大文件 / 虚拟内容 -->
-      <pre v-else-if="win.readonly && isDiff" v-scroll-memory="scrollKey('pre')" class="fw-pre"><code class="viewer-code viewer-diff" v-html="diffHighlighted"></code></pre>
+      <DiffViewer v-else-if="win.diffPair" :pair="win.diffPair" :filePath="win.filePath" />
       <pre v-else-if="win.readonly" v-scroll-memory="scrollKey('pre')" class="fw-pre"><code class="viewer-code" v-html="highlighted"></code></pre>
 
       <!-- Markdown 全预览 -->
@@ -871,18 +852,5 @@ function onKeydown(e: KeyboardEvent) {
 .viewer-markdown img {
   max-width: 100%;
   border-radius: 6px;
-}
-
-/* ── Diff viewer（着色规则见 src/styles/global.css 的 aide-diff-*）── */
-.viewer-diff {
-  display: block;
-  padding: 12px 16px;
-  margin: 0;
-  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--aide-text-primary);
-  white-space: pre;
-  tab-size: 4;
 }
 </style>

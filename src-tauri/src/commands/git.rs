@@ -665,58 +665,6 @@ pub async fn git_diff_pair(
 }
 
 #[tauri::command]
-pub async fn git_diff_content(
-    workspace_state: State<'_, WorkspaceState>,
-    path: String,
-    staged: Option<bool>,
-    commit_hash: Option<String>,
-) -> Result<String, String> {
-    let root = project_root_for_commands(&workspace_state);
-    if !root.join(".git").exists() {
-        return Err("Not a git repository".into());
-    }
-
-    // git diff + fallback file read in one blocking task
-    git_run_blocking(move || {
-        let mut args: Vec<&str> = vec!["diff"];
-        if staged.unwrap_or(false) {
-            args.push("--cached");
-        }
-        let hash_flag;
-        if let Some(ref h) = commit_hash {
-            hash_flag = format!("{}^!", h);
-            args.push(&hash_flag);
-        }
-        args.push("--");
-        args.push(&path);
-
-        let output = git_run(&args, &root)
-            .map_err(|e| format!("Failed to run git diff: {}", e))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        if !stdout.is_empty() {
-            return Ok(stdout);
-        }
-
-        // Fallback: new file — synthesise a diff from its content
-        let file_path = root.join(&path);
-        if file_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&file_path) {
-                let mut result = String::new();
-                result.push_str(&format!("diff --git a/{} b/{}\n", path, path));
-                result.push_str("new file mode 100644\n");
-                result.push_str(&format!("--- /dev/null\n+++ b/{}\n", path));
-                for line in content.lines() {
-                    result.push_str(&format!("+{}\n", line));
-                }
-                return Ok(result);
-            }
-        }
-        Ok("No changes".to_string())
-    }).await
-}
-
-#[tauri::command]
 pub async fn git_branches(
     workspace_state: State<'_, WorkspaceState>,
 ) -> Result<Vec<BranchInfo>, String> {

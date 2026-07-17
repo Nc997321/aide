@@ -4,7 +4,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { useGit } from "../composables/useGit";
 import { useFileViewer } from "../composables/useFileViewer";
 import { useModal } from "../composables/useModal";
+import { useToast } from "../composables/useToast";
+import AToast from "../ui/AToast.vue";
 import { parseGitError } from "../utils/errors";
+import type { DiffPair } from "../types";
 
 const {
   commits,
@@ -45,6 +48,7 @@ const {
 
 const fileViewer = useFileViewer();
 const { confirm: confirmDialog, prompt: promptDialog } = useModal();
+const { toastState, showToast } = useToast();
 
 const branchDropdownOpen = ref(false);
 const switchError = ref("");
@@ -139,10 +143,10 @@ async function openDiffInViewer(relPath: string, staged?: boolean, commitHash?: 
     const params: Record<string, unknown> = { path: relPath };
     if (staged !== undefined) params.staged = staged;
     if (commitHash) params.commitHash = commitHash;
-    const content = await invoke<string>("git_diff_content", params);
-    fileViewer.open(relPath, { content, language: "diff" });
+    const pair = await invoke<DiffPair>("git_diff_pair", params);
+    fileViewer.open(relPath, { diffPair: pair });
   } catch (e) {
-    fileViewer.open(relPath, { content: `Failed to load diff: ${e}`, language: "diff" });
+    showToast(`加载 diff 失败：${typeof e === "string" ? e : (e as Error).message || e}`, "danger");
   }
 }
 
@@ -494,12 +498,14 @@ defineExpose({ reload: loadAll });
       </div>
     </div>
   </div>
+  <AToast :state="toastState" />
 </template>
 
 <style scoped>
 .git-panel {
   display: flex;
   flex-direction: column;
+  position: relative;
   height: 100%;
   background: var(--aide-bg-deep);
   overflow: hidden;

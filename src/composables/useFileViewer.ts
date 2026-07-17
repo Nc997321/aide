@@ -4,6 +4,7 @@ import { useRecent } from "./useRecent";
 import { useCodeGraphProgress } from "./useCodeGraphProgress";
 import { useNotifications } from "./useNotifications";
 import { imageMimeFromPath } from "../utils/imageMime";
+import type { DiffPair } from "../types";
 
 /**
  * 多窗口文件查看/编辑器的状态层。
@@ -28,6 +29,8 @@ export interface FileWindowState {
   imageUrl: string;
   /** 显式注入的语言标识（如 "diff"），空串走扩展名推断 */
   language: string;
+  /** git diff 对比数据（virtual 窗口专用）；存在则渲染 DiffViewer */
+  diffPair: DiffPair | null;
   error: string;
   saving: boolean;
   /** 图片 / 虚拟内容 / 大文件——不挂编辑器 */
@@ -112,11 +115,13 @@ export function useFileViewer() {
    * 注入内容的虚拟视图（git diff）同路径重开 → 原窗口内容就地刷新。
    * 新窗口加入平铺全览（取消聚焦），窗口随数量增多平均变小。
    */
-  async function open(path: string, opts?: { content?: string; language?: string }) {
-    const isVirtual = opts?.content !== undefined;
+  async function open(path: string, opts?: { content?: string; language?: string; diffPair?: DiffPair }) {
+    const isVirtual = opts?.content !== undefined || opts?.diffPair !== undefined;
     const existing = windows.value.find((w) => w.filePath === path && w.virtual === isVirtual);
     if (existing) {
-      if (isVirtual) {
+      if (opts?.diffPair) {
+        existing.diffPair = opts.diffPair;
+      } else if (isVirtual) {
         existing.content = opts!.content!;
         existing.editContent = opts!.content!;
         existing.language = opts?.language || existing.language;
@@ -133,6 +138,7 @@ export function useFileViewer() {
       editContent: "",
       imageUrl: "",
       language: opts?.language || "",
+      diffPair: opts?.diffPair || null,
       error: "",
       saving: false,
       readonly: isVirtual,
@@ -148,8 +154,10 @@ export function useFileViewer() {
     };
 
     if (isVirtual) {
-      win.content = opts!.content!;
-      win.editContent = win.content;
+      if (!opts?.diffPair) {
+        win.content = opts!.content!;
+        win.editContent = win.content;
+      }
     } else {
       const mime = imageMimeFromPath(path);
       if (mime) {

@@ -14,7 +14,6 @@ const loading = ref(false);
 const expandedCommit = ref<string | null>(null);
 const commitDetail = ref<CommitDetail | null>(null);
 const detailLoading = ref(false);
-const viewingDiff = ref<{ path: string; content: string; loading: boolean } | null>(null);
 const pushing = ref(false);
 const pushError = ref("");
 const pulling = ref(false);
@@ -110,20 +109,6 @@ async function toggleCommit(hash: string) {
     } finally {
         detailLoading.value = false;
     }
-}
-
-async function viewDiff(path: string, staged?: boolean, commitHash?: string) {
-    viewingDiff.value = { path, content: "", loading: true };
-    try {
-        const content = await invoke<string>("git_diff_content", { path, staged, commitHash });
-        viewingDiff.value = { path, content, loading: false };
-    } catch (e) {
-        viewingDiff.value = { path, content: `Failed to load diff: ${e}`, loading: false };
-    }
-}
-
-function closeDiff() {
-    viewingDiff.value = null;
 }
 
 async function switchBranch(branch: string) {
@@ -232,7 +217,6 @@ export function useGit() {
         expandedCommit,
         commitDetail,
         detailLoading,
-        viewingDiff,
         loadAll,
         loadCommits,
         loadStatus,
@@ -240,8 +224,6 @@ export function useGit() {
         loadUnpushed,
         refreshAfterAction,
         toggleCommit,
-        viewDiff,
-        closeDiff,
         switchBranch,
         createBranch,
         deleteBranch,
