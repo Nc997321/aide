@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from "vue";
 import WindowControls from "./WindowControls.vue";
 import SidebarToggle from "./SidebarToggle.vue";
 import NotificationBell from "./NotificationBell.vue";
+import AppLogo from "../AppLogo.vue";
 import Icon from "../Icon.vue";
 import type { SessionStatus } from "../../composables/useSessionState";
 import type { RunStatus } from "../../composables/useRunProcess";
@@ -172,7 +173,7 @@ function isRowRunning(cfg: RunConfig): boolean {
     <!-- Left: brand + project context -->
     <div class="titlebar-left" data-tauri-drag-region>
       <div class="titlebar-logo" data-tauri-drag-region>
-        <img class="titlebar-logo-icon" src="/icon.png" alt="Aide" />
+        <AppLogo :size="15" />
         <span class="titlebar-logo-text">Aide</span>
       </div>
 
@@ -410,14 +411,8 @@ function isRowRunning(cfg: RunConfig): boolean {
 .titlebar-logo {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   flex-shrink: 0;
-}
-
-.titlebar-logo-icon {
-  width: 16px;
-  height: 16px;
-  object-fit: contain;
 }
 
 .titlebar-logo-text {
@@ -451,12 +446,14 @@ function isRowRunning(cfg: RunConfig): boolean {
   font-weight: 500;
   color: var(--aide-text-muted);
   background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border);
   padding: 2px 8px 2px 5px;
-  border-radius: 10px;
+  border-radius: 99px;
   max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  box-shadow: var(--aide-highlight-inset);
 }
 
 .titlebar-branch-icon {
@@ -500,7 +497,8 @@ function isRowRunning(cfg: RunConfig): boolean {
   font-size: 12px;
   font-family: inherit;
   cursor: pointer;
-  transition: all 0.15s;
+  box-shadow: var(--aide-highlight-inset);
+  transition: all var(--aide-ease-t);
 }
 
 .titlebar-search-trigger:hover {
@@ -581,11 +579,12 @@ function isRowRunning(cfg: RunConfig): boolean {
   min-width: 200px;
   max-width: 280px;
   background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-surface-hover);
+  border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-md);
-  box-shadow: var(--aide-shadow-lg);
+  box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
   padding: 6px 0;
   z-index: 900;
+  backdrop-filter: var(--aide-surface-blur);
 }
 
 .activity-panel-header {
@@ -652,7 +651,7 @@ function isRowRunning(cfg: RunConfig): boolean {
 
 .activity-panel-enter-active,
 .activity-panel-leave-active {
-  transition: opacity 0.12s ease, transform 0.12s ease;
+  transition: opacity var(--aide-ease-t), transform var(--aide-ease-t);
 }
 
 .activity-panel-enter-from,
@@ -672,6 +671,7 @@ function isRowRunning(cfg: RunConfig): boolean {
   border: 1px solid var(--aide-border);
   border-radius: var(--aide-radius-sm);
   overflow: visible;
+  box-shadow: var(--aide-highlight-inset);
 }
 
 .run-config-sel {
@@ -744,13 +744,14 @@ function isRowRunning(cfg: RunConfig): boolean {
   left: 0;
   width: 300px;
   background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-surface-hover);
+  border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-md);
-  box-shadow: var(--aide-shadow-lg);
+  box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
   z-index: 950;
-  overflow: hidden;            /* clip to rounded corners; the list scrolls inside */
+  overflow: hidden;
   display: flex;
   flex-direction: column;
+  backdrop-filter: var(--aide-surface-blur);
 }
 
 .cdrop-search {
@@ -932,7 +933,7 @@ function isRowRunning(cfg: RunConfig): boolean {
 
 .config-drop-enter-active,
 .config-drop-leave-active {
-  transition: opacity 0.12s ease, transform 0.12s ease;
+  transition: opacity var(--aide-ease-t), transform var(--aide-ease-t);
 }
 .config-drop-enter-from,
 .config-drop-leave-to {

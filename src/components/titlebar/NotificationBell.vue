@@ -142,7 +142,7 @@ function bodyParts(body: string | undefined): Array<{ t: "text" | "code"; v: str
   display: flex; align-items: center; justify-content: center;
   width: 30px; height: 30px; margin: 0 4px;
   background: none; border: 1px solid transparent; border-radius: var(--aide-radius-sm);
-  color: var(--aide-text-muted); cursor: pointer; position: relative; transition: all 0.12s;
+  color: var(--aide-text-muted); cursor: pointer; position: relative; transition: all var(--aide-ease-t);
 }
 .bell-btn:hover { color: var(--aide-text-primary); background: var(--aide-surface-default); }
 .bell-btn.has-unread { color: var(--aide-text-secondary); }
@@ -159,10 +159,11 @@ function bodyParts(body: string | undefined): Array<{ t: "text" | "code"; v: str
   position: absolute; top: calc(100% + 6px); right: 0;
   width: 360px;
   background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border);
+  border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-md);
-  box-shadow: var(--aide-shadow-lg);
+  box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
   z-index: 900; overflow: hidden;
+  backdrop-filter: var(--aide-surface-blur);
 }
 .notif-header {
   display: flex; align-items: center; justify-content: space-between;
@@ -236,7 +237,7 @@ function bodyParts(body: string | undefined): Array<{ t: "text" | "code"; v: str
 .notif-dismiss:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
 
 /* 下拉过渡 */
-.notif-drop-enter-active, .notif-drop-leave-active { transition: opacity 0.12s ease, transform 0.12s ease; }
+.notif-drop-enter-active, .notif-drop-leave-active { transition: opacity var(--aide-ease-t), transform var(--aide-ease-t); }
 .notif-drop-enter-from, .notif-drop-leave-to { opacity: 0; transform: translateY(-4px); }
 
 @media (prefers-reduced-motion: reduce) {

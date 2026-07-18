@@ -95,41 +95,58 @@ function onHandleMousedown(e: MouseEvent, idx: number) {
   overflow: hidden;
 }
 
-/* 与 App.vue 侧栏分隔条同一套视觉语言 */
+/* 分隔条：默认 1px 细线，hover/拖拽时 3px accent 发光线 */
 .pane-split__handle {
-  flex: 0 0 1px;
-  background: var(--aide-border);
+  flex: none;
   position: relative;
-  transition: background 0.15s ease;
 }
 
 .pane-split--h > .pane-split__handle {
+  width: 5px;
   cursor: col-resize;
 }
 
 .pane-split--v > .pane-split__handle {
+  height: 5px;
   cursor: row-resize;
 }
 
 .pane-split__handle::after {
   content: "";
   position: absolute;
-  inset: 0;
+  background: var(--aide-border-subtle);
+  transition: all 0.12s;
 }
 
+/* 水平布局（子元素横向排列）：分隔条是竖线 */
 .pane-split--h > .pane-split__handle::after {
-  left: -3px;
-  right: -3px;
+  left: 2px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
 }
 
+/* 垂直布局（子元素纵向堆叠）：分隔条是横线 */
 .pane-split--v > .pane-split__handle::after {
-  top: -3px;
-  bottom: -3px;
+  left: 0;
+  right: 0;
+  top: 2px;
+  height: 1px;
 }
 
-.pane-split__handle:hover,
-.pane-split__handle--active {
+.pane-split--h > .pane-split__handle:hover::after,
+.pane-split--h > .pane-split__handle--active::after {
+  width: 3px;
+  left: 1px;
   background: var(--aide-accent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 20%, transparent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 50%, transparent);
+}
+
+.pane-split--v > .pane-split__handle:hover::after,
+.pane-split--v > .pane-split__handle--active::after {
+  height: 3px;
+  top: 1px;
+  background: var(--aide-accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 50%, transparent);
 }
 </style>

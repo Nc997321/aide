@@ -93,24 +93,24 @@ function handleDismiss() {
   z-index: 100;
   min-width: 280px;
   max-width: 400px;
-  background: var(--aide-surface-default);
-  border: 1px solid var(--aide-surface-hover);
-  border-radius: 8px;
-  box-shadow: var(--aide-shadow-md);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--aide-info) 10%, transparent), color-mix(in srgb, var(--aide-info) 4%, transparent));
+  border: 1px solid color-mix(in srgb, var(--aide-info) 25%, transparent);
+  border-radius: var(--aide-radius-md);
+  box-shadow: var(--aide-shadow-md), var(--aide-highlight-inset);
   overflow: hidden;
 }
 
 .banner-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  background: var(--aide-bg-deep);
-  border-bottom: 1px solid var(--aide-surface-hover);
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--aide-border-subtle);
 }
 
 .banner-icon {
   font-size: 14px;
+  color: var(--aide-info);
 }
 
 .banner-title {
@@ -124,11 +124,11 @@ function handleDismiss() {
   background: none;
   border: none;
   color: var(--aide-text-muted);
-  font-size: 18px;
+  font-size: 11px;
   cursor: pointer;
   padding: 0 4px;
   line-height: 1;
-  transition: color 0.15s;
+  transition: color var(--aide-ease-t);
 }
 .banner-close:hover {
   color: var(--aide-text-primary);
@@ -142,18 +142,19 @@ function handleDismiss() {
 .banner-session {
   padding: 10px 12px;
   cursor: pointer;
-  border-bottom: 1px solid var(--aide-surface-hover);
-  transition: background 0.15s;
+  border-bottom: 1px solid var(--aide-border-subtle);
+  transition: background var(--aide-ease-t);
 }
 .banner-session:last-child {
   border-bottom: none;
 }
 .banner-session:hover {
-  background: var(--aide-surface-hover);
+  background: var(--aide-surface-default);
 }
 
 .session-name {
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 500;
   color: var(--aide-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -172,7 +173,7 @@ function handleDismiss() {
 /* Transition */
 .banner-slide-enter-active,
 .banner-slide-leave-active {
-  transition: transform 0.3s ease, opacity 0.3s ease;
+  transition: transform var(--aide-ease-t), opacity var(--aide-ease-t);
 }
 .banner-slide-enter-from,
 .banner-slide-leave-to {

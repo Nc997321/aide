@@ -147,17 +147,19 @@ function openGit() {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 6px 18px;
-  background: var(--aide-surface-default);
-  border: 1px solid var(--aide-border);
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border-subtle);
   border-radius: var(--aide-radius-md);
   padding: 14px 16px;
   margin-top: 10px;
-  transition: border-color 0.15s, background 0.15s;
+  box-shadow: var(--aide-highlight-inset);
+  transition: border-color var(--aide-ease-t), background var(--aide-ease-t), box-shadow var(--aide-ease-t);
 }
 
 .card:hover {
-  border-color: var(--aide-border);
-  background: var(--aide-surface-hover);
+  border-color: var(--aide-border-strong);
+  background: var(--aide-surface-default);
+  box-shadow: var(--aide-highlight-inset), var(--aide-shadow-md);
 }
 
 .card .top {

@@ -87,7 +87,7 @@ const dividerX = computed(() => (props.side === "left" ? 5 : 11));
   cursor: pointer;
   flex-shrink: 0;
   padding: 0;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition: background var(--aide-ease-t), border-color var(--aide-ease-t);
 }
 
 .sidebar-toggle:hover {
@@ -115,7 +115,7 @@ const dividerX = computed(() => (props.side === "left" ? 5 : 11));
 /* 窄半：展开态高亮 accent，收起态低对比半透明 */
 .narrow {
   fill: var(--aide-accent);
-  transition: fill 0.12s ease;
+  transition: fill var(--aide-ease-t);
 }
 
 .sidebar-toggle.collapsed .narrow {

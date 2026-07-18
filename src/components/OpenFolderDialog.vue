@@ -51,20 +51,19 @@ async function onConfirm() {
 }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 .of-dialog {
-  background: var(--aide-surface-default); border: 1px solid var(--aide-surface-hover);
+  background: var(--aide-bg-raised); border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-lg); padding: 18px 20px;
-  min-width: 420px; max-width: 560px; box-shadow: var(--aide-shadow-lg);
-  /* 弹框上限视口高度，内容用 flex 列布局，树在内部滚动，确认按钮始终可见 */
+  min-width: 420px; max-width: 560px; box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
   max-height: 90vh; display: flex; flex-direction: column;
-  animation: scaleIn 0.15s ease;
+  animation: scaleIn var(--aide-ease-t);
 }
 @keyframes scaleIn { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
 .of-header { flex-shrink: 0; font-size: 14px; font-weight: 600; color: var(--aide-text-primary); margin-bottom: 12px; user-select: none; }
 .of-error { flex-shrink: 0; font-size: 12px; color: var(--aide-danger); margin-top: 8px; }
 .of-actions { flex-shrink: 0; display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-.of-btn { padding: 7px 16px; border-radius: var(--aide-radius-md); font-size: 13px; cursor: pointer; font-family: inherit; border: 1px solid var(--aide-surface-hover); }
+.of-btn { padding: 7px 16px; border-radius: var(--aide-radius-md); font-size: 13px; cursor: pointer; font-family: inherit; border: 1px solid var(--aide-border); transition: all var(--aide-ease-t); }
 .of-btn.cancel { background: transparent; color: var(--aide-text-secondary); }
-.of-btn.cancel:hover { background: var(--aide-surface-hover); }
-.of-btn.confirm { background: var(--aide-accent); border-color: var(--aide-accent); color: var(--aide-text-on-accent); }
-.of-btn.confirm:hover { filter: brightness(1.1); }
+.of-btn.cancel:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+.of-btn.confirm { background: var(--aide-accent-gradient); border-color: transparent; color: var(--aide-text-on-accent); box-shadow: var(--aide-accent-glow); }
+.of-btn.confirm:hover { filter: brightness(1.07); }
 </style>

@@ -51,7 +51,7 @@ onMounted(() => {
   border: none;
   color: var(--aide-text-muted);
   cursor: pointer;
-  transition: all 0.12s;
+  transition: all var(--aide-ease-t);
   font-family: inherit;
 }
 

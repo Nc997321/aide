@@ -67,7 +67,7 @@ function handleToggle(id: string, event: Event) {
           @click="handleToggle(item.id, $event)"
           v-tooltip="item.enabled ? '禁用' : '启用'"
         >
-          {{ item.enabled ? '✓' : '○' }}
+          {{ item.enabled ? '启用' : '停用' }}
         </button>
       </div>
     </div>
@@ -169,18 +169,21 @@ function handleToggle(id: string, event: Event) {
 }
 
 .toggle-btn {
-  background: none;
-  border: 1px solid var(--aide-surface-default);
-  color: var(--aide-text-muted);
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border);
+  color: var(--aide-text-secondary);
+  padding: 2px 10px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
-  display: flex;
+  font-size: 10px;
+  font-weight: 600;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s;
+  transition: all var(--aide-ease-t);
+  font-family: inherit;
+  min-width: 42px;
+  height: auto;
 }
 
 .toggle-btn:hover {
@@ -189,9 +192,9 @@ function handleToggle(id: string, event: Event) {
 }
 
 .toggle-btn.active {
-  background: var(--aide-accent);
-  border-color: var(--aide-accent);
-  color: var(--aide-text-on-accent);
+  background: color-mix(in srgb, var(--aide-success) 13%, transparent);
+  border-color: color-mix(in srgb, var(--aide-success) 28%, transparent);
+  color: var(--aide-success);
 }
 
 .add-bar {

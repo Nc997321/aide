@@ -781,16 +781,17 @@ function onOverlayClick(e: MouseEvent) {
 /* ── Dialog ── */
 
 .settings-dialog {
-  background: var(--aide-bg-deep);
-  border: 1px solid var(--aide-surface-hover);
-  border-radius: 12px;
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border-strong);
+  border-radius: var(--aide-radius-lg);
   width: 680px;
   height: 520px;
   display: flex;
   flex-direction: column;
-  box-shadow: var(--aide-shadow-lg);
-  animation: scaleIn 0.15s ease;
+  box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
+  animation: scaleIn var(--aide-ease-t);
   overflow: hidden;
+  backdrop-filter: var(--aide-surface-blur);
 }
 
 @keyframes scaleIn {
@@ -805,8 +806,9 @@ function onOverlayClick(e: MouseEvent) {
   align-items: center;
   justify-content: space-between;
   padding: 14px 20px;
-  border-bottom: 1px solid var(--aide-surface-default);
+  border-bottom: 1px solid var(--aide-border-subtle);
   flex-shrink: 0;
+  background: linear-gradient(180deg, var(--aide-border-subtle) 0%, transparent 100%), var(--aide-bg-raised);
 }
 
 .dialog-title {
@@ -845,29 +847,29 @@ function onOverlayClick(e: MouseEvent) {
 /* ── Left nav ── */
 
 .side-nav {
-  width: 120px;
+  width: 150px;
   flex-shrink: 0;
   background: var(--aide-bg-deep);
-  padding: 8px;
+  padding: 10px 6px;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  border-right: 1px solid var(--aide-surface-default);
+  border-right: 1px solid var(--aide-border-subtle);
 }
 
 .nav-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
-  border-radius: var(--aide-radius-md);
+  padding: 7px 10px;
+  border-radius: var(--aide-radius-sm);
   border: none;
   background: transparent;
   color: var(--aide-text-secondary);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12px;
   font-family: inherit;
-  transition: all 0.12s;
+  transition: all var(--aide-ease-t);
   text-align: left;
   width: 100%;
 }
@@ -878,8 +880,10 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .nav-item.active {
-  background: var(--aide-surface-default);
+  background: var(--aide-accent-subtle);
   color: var(--aide-text-primary);
+  font-weight: 500;
+  box-shadow: inset 2px 0 0 var(--aide-accent);
 }
 
 .nav-icon {

@@ -128,11 +128,12 @@ function handleToggle(id: string, enabled: boolean) {
   max-height: 70vh;
   display: flex;
   flex-direction: column;
-  background: var(--aide-bg-deep);
-  border: 1px solid var(--aide-surface-default);
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border-strong);
   border-radius: 12px;
-  box-shadow: var(--aide-shadow-lg);
+  box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
   z-index: 1000;
+  backdrop-filter: var(--aide-surface-blur);
 }
 
 .panel-header {

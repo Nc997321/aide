@@ -534,6 +534,8 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
 .sidebar-header {
@@ -603,6 +605,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 
 .workspace-item.expanded {
   color: var(--aide-text-primary);
+  box-shadow: var(--aide-highlight-inset);
 }
 
 .ws-chevron {
@@ -893,17 +896,22 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   left: 6px;
   right: 6px;
   background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border);
+  border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-md);
-  box-shadow: var(--aide-shadow-md);
+  box-shadow: var(--aide-shadow-md), var(--aide-highlight-inset);
   z-index: 100;
   padding: 4px;
-  animation: dropdown-up 0.12s ease-out;
+  backdrop-filter: var(--aide-surface-blur);
+  animation: dropdown-up var(--aide-ease-t);
 }
 
 @keyframes dropdown-up {
   from { opacity: 0; transform: translateY(4px) scale(0.97); }
   to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.provider-dropdown {
+  animation: dropdown-up var(--aide-ease-t);
 }
 
 .provider-option {

@@ -61,18 +61,19 @@ const wsName = () => {
   display: flex; align-items: center; justify-content: center; z-index: 1100;
 }
 .rw-dialog {
-  background: var(--aide-surface-default); border: 1px solid var(--aide-surface-hover);
+  background: var(--aide-bg-raised); border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-lg); padding: 18px 22px;
-  min-width: 360px; max-width: 440px; box-shadow: var(--aide-shadow-lg);
+  min-width: 360px; max-width: 440px;
+  box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
 }
 .rw-header { font-size: 14px; font-weight: 600; color: var(--aide-text-primary); margin-bottom: 12px; }
 .rw-opt { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 13px; color: var(--aide-text-secondary); cursor: pointer; }
 .rw-warn { margin-top: 10px; font-size: 12px; color: var(--aide-danger); }
 .rw-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-.rw-btn { padding: 7px 16px; border-radius: var(--aide-radius-md); font-size: 13px; cursor: pointer; font-family: inherit; border: 1px solid var(--aide-surface-hover); }
+.rw-btn { padding: 7px 16px; border-radius: var(--aide-radius-md); font-size: 13px; cursor: pointer; font-family: inherit; border: 1px solid var(--aide-border); transition: all var(--aide-ease-t); }
 .rw-btn.cancel { background: transparent; color: var(--aide-text-secondary); }
-.rw-btn.cancel:hover { background: var(--aide-surface-hover); }
-.rw-btn.confirm { background: var(--aide-accent); border-color: var(--aide-accent); color: var(--aide-text-on-accent); }
-.rw-btn.confirm.danger { background: var(--aide-danger); border-color: var(--aide-danger); }
-.rw-btn.confirm:hover { filter: brightness(1.1); }
+.rw-btn.cancel:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+.rw-btn.confirm { background: var(--aide-accent-gradient); border-color: transparent; color: var(--aide-text-on-accent); box-shadow: var(--aide-accent-glow); }
+.rw-btn.confirm.danger { background: var(--aide-danger); border-color: transparent; box-shadow: none; }
+.rw-btn.confirm:hover { filter: brightness(1.07); }
 </style>

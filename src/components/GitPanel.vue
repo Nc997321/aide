@@ -511,6 +511,8 @@ defineExpose({ reload: loadAll });
   height: 100%;
   background: var(--aide-bg-deep);
   overflow: hidden;
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
 .branch-bar {
@@ -525,15 +527,17 @@ defineExpose({ reload: loadAll });
 .branch-dropdown-wrapper { position: relative; }
 
 .branch-btn {
-  display: flex; align-items: center; gap: 4px;
-  background: var(--aide-bg-deep); border: 1px solid var(--aide-surface-hover);
-  border-radius: var(--aide-radius-sm); padding: 4px 10px; cursor: pointer;
-  font-size: 12px; color: var(--aide-text-primary); font-family: inherit; transition: background 0.12s;
+  display: flex; align-items: center; gap: 6px;
+  background: var(--aide-accent-subtle);
+  border: 1px solid color-mix(in srgb, var(--aide-accent) 25%, transparent);
+  border-radius: 99px; padding: 3px 10px; cursor: pointer;
+  font-size: 11px; color: var(--aide-accent); font-weight: 600;
+  font-family: inherit; transition: background var(--aide-ease-t), border-color var(--aide-ease-t);
 }
-.branch-btn:hover { background: var(--aide-surface-default); }
-.branch-icon { font-size: 14px; color: var(--aide-accent); }
-.branch-name { font-weight: 500; }
-.branch-arrow { color: var(--aide-text-muted); flex-shrink: 0; }
+.branch-btn:hover { background: color-mix(in srgb, var(--aide-accent) 18%, transparent); border-color: color-mix(in srgb, var(--aide-accent) 40%, transparent); }
+.branch-icon { font-size: 13px; color: var(--aide-accent); }
+.branch-name { font-weight: 600; }
+.branch-arrow { color: var(--aide-accent); flex-shrink: 0; opacity: 0.7; }
 
 .branch-dropdown {
   position: absolute; top: 100%; left: 0; margin-top: 3px;

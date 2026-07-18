@@ -148,6 +148,8 @@ const renderItems = computed<RenderItem[]>(() => {
   min-height: 0;
   background: var(--aide-bg-deep);
   overflow: hidden;
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
 /* ── Header ── */
@@ -265,14 +267,16 @@ const renderItems = computed<RenderItem[]>(() => {
 .changelog-file {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 12px;
+  gap: 9px;
+  padding: 6px 10px;
   font-size: 12px;
+  border-radius: var(--aide-radius-sm);
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
 .changelog-file:hover {
   background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
 }
 
 .changelog-nochange {
@@ -323,6 +327,8 @@ const renderItems = computed<RenderItem[]>(() => {
   white-space: nowrap;
   color: var(--aide-text-secondary);
   font-size: 12px;
+  font-family: "JetBrains Mono", "Cascadia Code", "Fira Code", "Consolas", monospace;
+  font-size: 11.5px;
 }
 
 .changelog-file-stats {

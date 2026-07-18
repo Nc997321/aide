@@ -34,38 +34,81 @@ function displayText(task: TaskItem): string {
 .task-list-panel {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px 12px;
+  gap: 0;
+  padding: 4px 10px;
   border-bottom: 1px solid var(--aide-border);
-  background: var(--aide-bg-raised);
+  background: var(--aide-bg-base);
   font-size: 12px;
 }
 
 .task-item {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 7px 10px;
   color: var(--aide-text-secondary);
+  border-radius: var(--aide-radius-sm);
+}
+
+.task-item + .task-item {
+  border-top: 1px solid var(--aide-border-subtle);
 }
 
 .task-item-completed {
   color: var(--aide-text-muted);
+}
+
+.task-item-completed .task-text {
+  color: var(--aide-text-muted);
   text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--aide-text-muted) 60%, transparent);
 }
 
 .task-item-in_progress {
+  color: var(--aide-text-primary);
+}
+
+.task-item-in_progress .task-text {
   color: var(--aide-text-primary);
   font-weight: 600;
 }
 
 .task-icon {
   flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  margin-top: 1px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  transition: all var(--aide-ease-t);
+}
+
+/* Completed: gradient + glow checkbox */
+.task-item-completed .task-icon {
+  background: var(--aide-accent-gradient);
+  color: var(--aide-text-on-accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 40%, transparent);
+}
+
+/* In progress: accent ring */
+.task-item-in_progress .task-icon {
   color: var(--aide-accent);
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--aide-accent) 20%, transparent);
+}
+
+/* Pending: muted border */
+.task-item-pending .task-icon {
+  color: transparent;
+  border: 1.5px solid var(--aide-text-muted);
 }
 
 .task-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
 }
 </style>

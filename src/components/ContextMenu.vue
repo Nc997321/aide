@@ -86,7 +86,9 @@ onUnmounted(() => {
             :class="{ disabled: item.disabled, danger: item.danger }"
             @click="onItemClick(item)"
           >
+            <span v-if="item.icon" class="ctx-icon">{{ item.icon }}</span>
             <span class="ctx-label">{{ item.label }}</span>
+            <span v-if="item.kbd" class="ctx-kbd">{{ item.kbd }}</span>
           </div>
         </template>
       </div>
@@ -99,13 +101,14 @@ onUnmounted(() => {
   position: fixed;
   z-index: 9999;
   min-width: 168px;
-  max-width: 220px;
-  background: var(--aide-bg-deep);
-  border: 1px solid var(--aide-surface-default);
-  border-radius: 8px;
-  padding: 4px;
-  box-shadow: var(--aide-shadow-lg);
+  max-width: 260px;
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border-strong);
+  border-radius: var(--aide-radius-lg);
+  padding: 5px;
+  box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
   overflow: hidden;
+  backdrop-filter: var(--aide-surface-blur);
 }
 
 .ctx-item {
@@ -138,21 +141,38 @@ onUnmounted(() => {
   opacity: 0.5;
 }
 
+.ctx-icon {
+  width: 15px;
+  text-align: center;
+  opacity: 0.75;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.ctx-kbd {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--aide-text-muted);
+  font-family: "JetBrains Mono", "Cascadia Code", "Consolas", monospace;
+  flex-shrink: 0;
+}
+
 .ctx-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
 }
 
 .ctx-separator {
   height: 1px;
-  margin: 4px 8px;
-  background: var(--aide-surface-default);
+  margin: 5px 8px;
+  background: var(--aide-border-subtle);
 }
 
 /* Transition */
 .ctx-menu-enter-active {
-  transition: opacity 0.12s, transform 0.12s;
+  transition: opacity var(--aide-ease-t), transform var(--aide-ease-t);
 }
 .ctx-menu-leave-active {
   transition: opacity 0.08s, transform 0.08s;

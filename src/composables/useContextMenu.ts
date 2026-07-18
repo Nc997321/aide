@@ -6,6 +6,10 @@ export interface MenuItem {
   separator?: boolean;
   disabled?: boolean;
   danger?: boolean;
+  /** Icon glyph (single character or emoji) shown before the label */
+  icon?: string;
+  /** Keyboard shortcut hint shown right-aligned */
+  kbd?: string;
 }
 
 // Module-level singletons — all callers share the same refs

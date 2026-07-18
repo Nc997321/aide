@@ -399,6 +399,8 @@ defineExpose({ loadRoot });
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
 .path-bar {

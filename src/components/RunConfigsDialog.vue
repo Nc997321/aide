@@ -268,7 +268,7 @@ async function close() {
 .rcd-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--aide-bg-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -277,14 +277,14 @@ async function close() {
 
 .rcd-dialog {
   position: relative;
-  background: var(--aide-bg-deep);
-  border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-md);
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border-strong);
+  border-radius: var(--aide-radius-lg);
   width: 660px;
   max-height: 80vh;
   display: flex;
   flex-direction: column;
-  box-shadow: var(--aide-shadow-lg);
+  box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
   overflow: hidden;
 }
 
