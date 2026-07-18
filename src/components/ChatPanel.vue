@@ -2,6 +2,7 @@
 import { ref, watch, nextTick, computed, onMounted, onUnmounted } from "vue";
 import type { ComputedRef } from "vue";
 import ChatMessage from "./ChatMessage.vue";
+import AppLogo from "./AppLogo.vue";
 import TaskListPanel from "./TaskListPanel.vue";
 import ThemedSelect from "./ThemedSelect.vue";
 import ChatSendButton from "./ChatSendButton.vue";
@@ -370,6 +371,20 @@ const isBusyVal = computed(() =>
 const messagesVal = computed(() =>
   Array.isArray(props.messages) ? props.messages : props.messages.value
 );
+
+// 思考状态行计时器：isBusyVal 为 true 时每秒递增，离开/卸载时清理。
+const thinkingElapsed = ref(0);
+let thinkingTimer: ReturnType<typeof setInterval> | null = null;
+watch(isBusyVal, (busy) => {
+  if (busy) {
+    thinkingElapsed.value = 0;
+    thinkingTimer = setInterval(() => thinkingElapsed.value++, 1000);
+  } else if (thinkingTimer) {
+    clearInterval(thinkingTimer);
+    thinkingTimer = null;
+  }
+});
+onUnmounted(() => { if (thinkingTimer) clearInterval(thinkingTimer); });
 
 // 窗口化渲染:store 里的消息全量在场,但进 v-for 建 DOM 的只有尾部一个有界
 // 窗口——长会话一次性挂载全史(几万 DOM 节点 + 全量 Markdown/高亮)曾把切
@@ -752,8 +767,9 @@ async function handleQuickAction(action: QuickAction) {
         :models="displayModels"
       />
       <div v-if="isBusyVal" class="chat-thinking">
-        <span class="chat-thinking-dot">●</span>
-        Claude 正在思考…
+        <AppLogo :size="15" animated />
+        <span>Claude 正在思考…</span>
+        <span class="chat-thinking-time">{{ thinkingElapsed }}s</span>
         <button class="chat-interrupt-btn" @click="emit('interrupt')">中断</button>
       </div>
     </div>
@@ -976,28 +992,30 @@ async function handleQuickAction(action: QuickAction) {
   color: var(--aide-text-muted);
 }
 
-.chat-thinking-dot {
-  animation: pulse 1s infinite;
-  color: var(--aide-accent);
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+.chat-thinking-time {
+  color: var(--aide-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .chat-interrupt-btn {
-  margin-left: 4px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 12px;
+  margin-left: auto;
+  padding: 3.5px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  border-radius: var(--aide-radius-sm);
+  border: 1px solid color-mix(in srgb, var(--aide-danger) 32%, transparent);
+  background: transparent;
   color: var(--aide-danger);
-  padding: 0 4px;
+  cursor: pointer;
+  transition: all var(--aide-ease-t);
 }
 
 .chat-interrupt-btn:hover {
-  color: color-mix(in srgb, var(--aide-danger) 85%, white);
+  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--aide-danger) 55%, transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--aide-danger) 22%, transparent);
 }
 
 .chat-input-area {
