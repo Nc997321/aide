@@ -54,33 +54,42 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
 </template>
 
 <style scoped>
+/* 工具调用块：GALLERY .toolcall 卡片化头行 + chevron 旋转 + 状态色 */
 .tool-item {
   font-size: 11.5px;
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-md);
+  background: var(--aide-bg-base);
+  overflow: hidden;
+  box-shadow: var(--aide-highlight-inset);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
+}
+
+.tool-item + .tool-item {
+  margin-top: 10px;
 }
 
 .ti-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   width: 100%;
-  padding: 3px 4px 3px 0;
+  padding: 8px 12px;
   background: none;
   border: none;
   cursor: pointer;
   text-align: left;
-  color: var(--aide-text-muted);
-  border-radius: var(--aide-radius-sm);
-  transition: color 0.12s;
+  font-size: 12px;
+  color: var(--aide-text-secondary);
+  transition: background var(--aide-ease-t);
 }
 
 .ti-row:hover {
-  color: var(--aide-text-secondary);
-}
-.ti-row:hover .ti-name {
-  color: var(--aide-text-primary);
+  background: var(--aide-surface-default);
 }
 
-/* 状态节点：完成灰点 / 失败红点 / 执行中铜色呼吸点（spec·图标语言） */
+/* 状态节点：完成灰点 / 失败红点 / 执行中 warning 色 */
 .ti-dot {
   width: 5px;
   height: 5px;
@@ -92,17 +101,12 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
   background: var(--aide-danger);
 }
 .ti-dot--run {
-  background: var(--aide-accent);
-  animation: ti-pulse 1.2s ease-in-out infinite;
-}
-@keyframes ti-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  background: var(--aide-warning);
 }
 
 .ti-name {
   font-weight: 600;
-  color: var(--aide-text-secondary);
+  color: var(--aide-text-primary);
   flex-shrink: 0;
   min-width: 38px;
 }
@@ -113,9 +117,12 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 11px;
+  color: var(--aide-text-muted);
 }
 
 .ti-diff {
+  margin-left: auto;
   flex-shrink: 0;
   display: flex;
   gap: 4px;
@@ -127,18 +134,18 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
 
 .ti-chev {
   flex-shrink: 0;
+  font-size: 9px;
   color: var(--aide-text-muted);
-  transition: transform 0.12s;
+  transition: transform var(--aide-ease-t);
 }
 .ti-chev--open {
   transform: rotate(90deg);
 }
 
-/* 展开区：铜色点线左标尺，正文渲染逻辑不变 */
+/* 展开体：GALLERY .tc-body — bg-deep 井 + 内凹 */
 .ti-body {
-  margin: 2px 0 6px 2px;
-  padding: 6px 8px 6px 11px;
-  border-left: 1px dotted rgba(212, 165, 116, 0.25);
+  border-top: 1px solid var(--aide-border-subtle);
+  background: var(--aide-bg-deep);
 }
 
 .ti-result {
@@ -146,15 +153,19 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
   overflow: auto;
   white-space: pre-wrap;
   font-family: 'Cascadia Code', 'Consolas', monospace;
-  font-size: 11px;
+  font-size: 11.5px;
+  line-height: 1.7;
   color: var(--aide-text-secondary);
   margin: 0;
+  padding: 11px 14px;
 }
 .ti-diff-view {
   white-space: pre;
+  padding: 6px 0;
 }
 
 .ti-pending {
+  padding: 11px 14px;
   font-style: italic;
   color: var(--aide-text-muted);
 }

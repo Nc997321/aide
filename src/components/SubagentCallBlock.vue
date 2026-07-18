@@ -111,81 +111,57 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
 </template>
 
 <style scoped>
-/* 子代理块 = 主线程墨线的一条分支。
- * 左侧铜色细线 + 方括号节点（分支括号）标识嵌套子线程；展开后整条子线程时间线
- * （派发指令 → 工具步 → 最终产出）挂在虚线铜色左尺上，工具步复用 ToolCallBlock
- * 的墨线渲染。所有色值/圆角走现有 token，零 emoji，箭头全 SVG。 */
+/* 子代理：GALLERY .subagent — info 左边条 + 渐变背景 + 嵌套虚线 */
 .sa {
   position: relative;
   display: flex;
   align-items: stretch;
   margin: 4px 0;
   font-size: 11.5px;
+  border: 1px solid var(--aide-border-subtle);
+  border-left: 3px solid var(--aide-info);
+  border-radius: var(--aide-radius-md);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--aide-info) 5%, transparent), var(--aide-bg-base) 40%);
+  overflow: hidden;
+  box-shadow: var(--aide-highlight-inset);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
-/* ── 分支括号 ── */
+/* GALLERY 子代理不再需要左侧括号节点，改用 info 色左边条 */
 .sa-rail {
-  flex-shrink: 0;
-  position: relative;
-  width: 9px;
-  margin-right: 7px;
-  border-left: 1px solid rgba(212, 165, 116, 0.35);
-}
-.sa-node {
-  position: absolute;
-  left: -1px;
-  top: 0;
-  width: 9px;
-  height: 9px;
-  box-sizing: border-box;
-  /* 方括号节点：上 + 左 + 下三边描边、右边开口，字面即「围合一个子线程」。
-     左描边压在 .sa-rail 的铜色垂线上共线（left:-1），顶在行顶（top:0），
-     读作「分支自此处离开主脊、向右展开」——垂线自方括号底向下延伸进时间线，无上桩。
-     尖角（无圆角）与 ToolCallGroup 的圆环节点形成形状对比。 */
-  border-top: 1.5px solid var(--aide-accent);
-  border-left: 1.5px solid var(--aide-accent);
-  border-bottom: 1.5px solid var(--aide-accent);
-}
-/* 完成 = 空心铜括号（组级，区别于工具步的灰点）；运行 = 实心铜括号呼吸；出错 = 实心红括号。
- * 两级状态用色区分层级：组级节点铜、内部工具步灰（ToolCallBlock）。 */
-.sa--done .sa-node { background: var(--aide-bg-base); }
-.sa--run .sa-node {
-  background: var(--aide-accent);
-  animation: sa-pulse 1.2s ease-in-out infinite;
-}
-.sa--err .sa-node {
-  background: var(--aide-danger);
-  border-color: var(--aide-danger);
-}
-@keyframes sa-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(212, 165, 116, 0.5); }
-  50% { opacity: 0.55; box-shadow: 0 0 0 4px rgba(212, 165, 116, 0); }
+  display: none;
 }
 
-.sa-content { flex: 1; min-width: 0; }
+.sa-content {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 0;
+}
 
-/* ── 折叠行 ── */
+/* 折叠行：复用 GALLERY .tc-head 卡片头行 */
 .sa-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 9px;
   width: 100%;
-  padding: 3px 2px;
+  padding: 8px 12px;
   background: none;
   border: none;
   cursor: pointer;
   text-align: left;
-  color: var(--aide-text-muted);
-  border-radius: var(--aide-radius-sm);
-  transition: color 0.12s;
+  font-size: 12px;
+  color: var(--aide-text-secondary);
+  transition: background var(--aide-ease-t);
 }
-.sa-head:hover { color: var(--aide-text-secondary); }
-.sa-head:hover .sa-desc { color: var(--aide-text-secondary); }
+.sa-head:hover {
+  background: var(--aide-surface-default);
+}
 
 .sa-role {
   flex-shrink: 0;
-  font-weight: 500;
-  color: var(--aide-text-muted);
+  font-weight: 600;
+  color: var(--aide-text-primary);
 }
 .sa-type {
   flex-shrink: 0;
@@ -197,8 +173,9 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--aide-accent);
-  background: var(--aide-accent-subtle);
+  color: var(--aide-info);
+  background: color-mix(in srgb, var(--aide-info) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-info) 25%, transparent);
   border-radius: 3px;
   padding: 1px 5px;
 }
@@ -209,7 +186,10 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--aide-text-muted);
-  transition: color 0.12s;
+  transition: color var(--aide-ease-t);
+}
+.sa-head:hover .sa-desc {
+  color: var(--aide-text-secondary);
 }
 .sa-model {
   flex-shrink: 0;
@@ -228,45 +208,64 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
 }
 .sa-chev {
   flex-shrink: 0;
+  font-size: 9px;
   color: var(--aide-text-muted);
-  transition: transform 0.12s;
+  transition: transform var(--aide-ease-t);
 }
-.sa-chev--open { transform: rotate(90deg); }
+.sa-chev--open {
+  transform: rotate(90deg);
+}
 
-/* ── 子线程时间线：虚线铜色左尺，承载派发指令 → 工具步 → 最终产出 ── */
+/* 子线程时间线：GALLERY .sa-nested 嵌套虚线缩进 */
 .sa-timeline {
-  margin: 4px 0 2px 2px;
-  padding: 1px 0 5px 10px;
-  border-left: 1px dotted rgba(212, 165, 116, 0.22);
+  margin: 0 12px 10px 22px;
+  border-left: 1px dashed color-mix(in srgb, var(--aide-info) 30%, transparent);
+  padding-left: 12px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
 }
 
-/* 派发指令行：时间线首项，可折叠 */
-.sa-prompt { display: flex; flex-direction: column; gap: 4px; }
+/* 嵌套工具头行：GALLERY .sa-nested .tc-head */
+.sa-timeline :deep(.ti-row) {
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-sm);
+  background: var(--aide-bg-deep);
+}
+
+/* 派发指令行 */
+.sa-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 .sa-prompt-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 2px 4px;
+  padding: 8px 12px;
   background: none;
-  border: none;
+  border: 1px solid var(--aide-border-subtle);
   border-radius: var(--aide-radius-sm);
   cursor: pointer;
   color: var(--aide-text-secondary);
   font-family: inherit;
   font-size: 11px;
   text-align: left;
-  transition: background 0.1s, color 0.1s;
+  transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
 .sa-prompt-toggle:hover {
-  background: var(--aide-accent-subtle);
+  background: color-mix(in srgb, var(--aide-info) 8%, transparent);
   color: var(--aide-text-primary);
 }
-.sa-prompt-glyph { flex-shrink: 0; color: var(--aide-text-muted); }
-.sa-prompt-label { flex: 1; }
+.sa-prompt-glyph {
+  flex-shrink: 0;
+  color: var(--aide-text-muted);
+}
+.sa-prompt-label {
+  flex: 1;
+}
 .sa-prompt-body {
   margin: 0;
   max-height: 260px;
@@ -275,14 +274,13 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
   font-size: 11px;
   font-family: 'Cascadia Code', 'Consolas', monospace;
   color: var(--aide-text-secondary);
-  background: var(--aide-bg-base);
-  border: 1px solid var(--aide-border);
+  background: var(--aide-bg-deep);
+  border: 1px solid var(--aide-border-subtle);
   border-radius: var(--aide-radius-sm);
   padding: 6px 8px;
   line-height: 1.5;
 }
 
-/* thinking 弱化，呼应原生 CLI 的内心戏处理 */
 .sa-text {
   margin: 0;
   font-size: 11px;
@@ -298,7 +296,6 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
   opacity: 0.85;
 }
 
-/* 最终产出：时间线尾端，子线程的收束 */
 .sa-result {
   margin: 4px 0 0;
   max-height: 240px;
@@ -313,15 +310,13 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
   color: var(--aide-text-muted);
 }
 
-/* 键盘可达：两个 toggle 的聚焦环走铜色，与墨线语言同源 */
 .sa-head:focus-visible,
 .sa-prompt-toggle:focus-visible {
-  outline: 1px solid var(--aide-accent);
+  outline: 1px solid var(--aide-info);
   outline-offset: 1px;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sa--run .sa-node { animation: none; }
   .sa-chev { transition: none; }
 }
 </style>

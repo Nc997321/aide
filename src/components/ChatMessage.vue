@@ -169,9 +169,13 @@ function handleTextClick(e: MouseEvent) {
   word-break: break-word;
 }
 
+/* 用户气泡：GALLERY「聊天碎片」——渐变浮起表面 + 顶光内描边 + 不对称左下圆角 */
 .msg-bubble--user {
-  background: var(--aide-accent);
-  color: var(--aide-text-on-accent);
+  background: linear-gradient(180deg, var(--aide-surface-default), var(--aide-bg-raised));
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-lg) var(--aide-radius-lg) var(--aide-radius-lg) 5px;
+  color: var(--aide-text-primary);
+  box-shadow: var(--aide-shadow-sm), var(--aide-highlight-inset);
 }
 
 /* 动作胶囊（压缩/清空上下文等）：区别于普通用户气泡——半透明 accent 底 + accent
@@ -258,7 +262,7 @@ function handleTextClick(e: MouseEvent) {
 .msg-text :deep(code.aide-file-link) {
   cursor: pointer;
   color: var(--aide-accent);
-  transition: background 0.12s, color 0.12s;
+  transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
 .msg-text :deep(code.aide-file-link:hover) {
   background: var(--aide-accent);
@@ -322,12 +326,19 @@ function handleTextClick(e: MouseEvent) {
   margin-top: 4px;
 }
 
+/* 模型徽标：GALLERY badge accent 调 */
 .msg-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 10.5px;
-  color: var(--aide-text-muted);
-  border: 1px solid var(--aide-border-subtle);
-  border-radius: 999px;
-  padding: 1px 8px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--aide-accent);
+  background: var(--aide-accent-subtle);
+  border: 1px solid color-mix(in srgb, var(--aide-accent) 28%, transparent);
+  border-radius: var(--aide-radius-sm);
+  padding: 2.5px 9px;
   white-space: nowrap;
 }
 
@@ -335,10 +346,12 @@ function handleTextClick(e: MouseEvent) {
   margin-top: 0;
 }
 
+/* 用量行：GALLERY 要求 tabular-nums */
 .msg-usage {
   margin-top: 4px;
-  font-size: 11px;
-  color: var(--aide-text-secondary);
+  font-size: 10.5px;
+  color: var(--aide-text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .msg-image {
@@ -363,7 +376,7 @@ function handleTextClick(e: MouseEvent) {
 .btw-note-head::-webkit-details-marker { display: none; }
 .btw-note-caret {
   border-left: 4px solid transparent; border-right: 4px solid transparent;
-  border-top: 5px solid var(--aide-accent); opacity: 0.7; transition: transform 0.15s;
+  border-top: 5px solid var(--aide-accent); opacity: 0.7; transition: transform var(--aide-ease-t);
 }
 .btw-note[open] .btw-note-caret { transform: rotate(90deg); }
 .btw-note-glyph { color: var(--aide-accent); }

@@ -945,13 +945,31 @@ async function handleQuickAction(action: QuickAction) {
   overflow: hidden;
   background: var(--aide-bg-deep);
   color: var(--aide-text-primary);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
 .chat-messages {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: 8px 0;
+}
+
+/* 对话区顶部环境光晕：pointer-events none，层级不压内容 */
+.chat-messages::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--aide-ambient-glow);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.chat-messages > * {
+  position: relative;
+  z-index: 1;
 }
 
 .chat-empty {
@@ -975,7 +993,7 @@ async function handleQuickAction(action: QuickAction) {
   color: var(--aide-text-muted);
   font-size: 11px;
   cursor: pointer;
-  transition: background 0.1s, color 0.1s;
+  transition: all var(--aide-ease-t);
 }
 
 .chat-history-gate:hover {
@@ -1033,7 +1051,7 @@ async function handleQuickAction(action: QuickAction) {
   border-radius: var(--aide-radius-sm);
   background: var(--aide-bg-deep);
   border: 1px solid var(--aide-border);
-  transition: border-color 0.15s;
+  transition: all var(--aide-ease-t);
 }
 
 .chat-input-box:focus-within {
@@ -1093,7 +1111,7 @@ async function handleQuickAction(action: QuickAction) {
 .chat-ctx-bar-fill {
   height: 100%;
   background: var(--aide-accent);
-  transition: width 0.2s;
+  transition: width var(--aide-ease-t);
 }
 
 .chat-ctx-percent {
@@ -1171,7 +1189,7 @@ async function handleQuickAction(action: QuickAction) {
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s, opacity 0.15s;
+  transition: all var(--aide-ease-t);
   white-space: nowrap;
 }
 

@@ -41,34 +41,189 @@ const text = computed(() => store.value.messages.join(""));
 </template>
 
 <style scoped>
+/* /btw 浮层：GALLERY .btw 壳层 — accentSubtle 头部 + border-strong + shadow-lg */
 .btw-drawer {
-  position: absolute; top: 0; right: 0; bottom: 0; width: 320px;
-  display: flex; flex-direction: column;
-  background: var(--aide-bg-raised); border-left: 1px solid var(--aide-accent);
-  box-shadow: var(--aide-shadow-lg); z-index: 20;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  background: var(--aide-bg-raised);
+  border-left: 1px solid var(--aide-border-strong);
+  border-radius: var(--aide-radius-lg) 0 0 var(--aide-radius-lg);
+  box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
+  z-index: 20;
+  overflow: hidden;
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
-.btw-drawer-stripe { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--aide-accent); }
-.btw-head { padding: 11px 14px 11px 17px; border-bottom: 1px solid var(--aide-border); }
-.btw-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.btw-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--aide-text-primary); min-width: 0; }
-.btw-fork { color: var(--aide-accent); font-size: 14px; }
-.btw-pill { font-size: 11px; color: var(--aide-text-muted); font-weight: 400; }
-.btw-seg-row { margin-top: 9px; }
-.btw-seg { display: inline-flex; border: 1px solid var(--aide-border); border-radius: 999px; overflow: hidden; }
-.btw-seg button { background: none; border: 0; color: var(--aide-text-muted); padding: 3px 11px; font-size: 11px; cursor: pointer; }
-.btw-seg button[aria-pressed="true"] { background: var(--aide-accent-subtle); color: var(--aide-accent); }
-.btw-seg button:disabled { opacity: 0.5; cursor: default; }
-.btw-btn { border: 1px solid var(--aide-border); background: transparent; color: var(--aide-text-secondary); border-radius: var(--aide-radius-sm); padding: 4px 10px; font-size: 12px; cursor: pointer; flex-shrink: 0; }
-.btw-btn:hover { border-color: var(--aide-accent); color: var(--aide-accent); }
-.btw-body { flex: 1; overflow: auto; padding: 13px 14px 13px 17px; display: flex; flex-direction: column; gap: 12px; }
-.btw-q { font-size: 12.5px; color: var(--aide-text-secondary); border-left: 2px solid var(--aide-border); padding-left: 9px; }
-.btw-a { font-size: 12.5px; line-height: 1.6; color: var(--aide-text-primary); white-space: pre-wrap; word-break: break-word; }
-.btw-cursor { display: inline-block; width: 6px; height: 13px; vertical-align: -2px; background: var(--aide-accent); animation: btw-blink 1s steps(2, start) infinite; }
-@keyframes btw-blink { 50% { opacity: 0; } }
-.btw-err { font-size: 12px; color: var(--aide-danger); }
-.btw-foot { display: flex; align-items: center; gap: 9px; padding: 9px 14px 9px 17px; border-top: 1px solid var(--aide-border); background: color-mix(in srgb, var(--aide-success) 6%, transparent); }
-.btw-ok { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--aide-success); }
-.btw-ok::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--aide-success); }
-.btw-drawer-enter-active, .btw-drawer-leave-active { transition: transform 0.2s ease, opacity 0.2s ease; }
-.btw-drawer-enter-from, .btw-drawer-leave-to { transform: translateX(20px); opacity: 0; }
+
+.btw-drawer-stripe {
+  display: none;
+}
+
+/* 头部：GALLERY .bw-head */
+.btw-head {
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--aide-border-subtle);
+  background: var(--aide-accent-subtle);
+}
+
+.btw-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.btw-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--aide-accent);
+  min-width: 0;
+}
+
+.btw-fork {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.btw-pill {
+  font-size: 10.5px;
+  color: var(--aide-text-muted);
+  font-weight: 400;
+}
+
+.btw-seg-row {
+  margin-top: 8px;
+}
+
+.btw-seg {
+  display: inline-flex;
+  border: 1px solid var(--aide-border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.btw-seg button {
+  background: none;
+  border: 0;
+  color: var(--aide-text-muted);
+  padding: 3px 11px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all var(--aide-ease-t);
+}
+
+.btw-seg button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--aide-accent) 15%, transparent);
+  color: var(--aide-accent);
+}
+
+.btw-seg button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btw-btn {
+  border: 1px solid var(--aide-border);
+  background: transparent;
+  color: var(--aide-text-secondary);
+  border-radius: var(--aide-radius-sm);
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--aide-ease-t);
+  flex-shrink: 0;
+}
+
+.btw-btn:hover {
+  border-color: var(--aide-accent);
+  color: var(--aide-accent);
+}
+
+.btw-body {
+  flex: 1;
+  overflow: auto;
+  padding: 10px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.btw-q {
+  font-size: 12px;
+  color: var(--aide-text-secondary);
+  border-left: 2px solid var(--aide-border);
+  padding-left: 9px;
+}
+
+.btw-a {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--aide-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.btw-cursor {
+  display: inline-block;
+  width: 6px;
+  height: 13px;
+  vertical-align: -2px;
+  background: var(--aide-accent);
+  animation: btw-blink 1s steps(2, start) infinite;
+}
+
+@keyframes btw-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.btw-err {
+  font-size: 12px;
+  color: var(--aide-danger);
+}
+
+.btw-foot {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  border-top: 1px solid var(--aide-border);
+  background: color-mix(in srgb, var(--aide-success) 6%, transparent);
+}
+
+.btw-ok {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--aide-success);
+}
+
+.btw-ok::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--aide-success);
+}
+
+.btw-drawer-enter-active,
+.btw-drawer-leave-active {
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.btw-drawer-enter-from,
+.btw-drawer-leave-to {
+  transform: translateX(20px);
+  opacity: 0;
+}
 </style>

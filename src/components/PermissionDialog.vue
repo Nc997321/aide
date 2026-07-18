@@ -270,27 +270,19 @@ const inputJson = computed(() => {
 </template>
 
 <style scoped>
-/* 不再是 Teleport 到 body 的悬浮卡片——直接嵌在 ChatPanel 的消息区和输入框
- * 之间（见 ChatPanel.vue），随文档流占据自己的一块空间。.chat-messages 是
- * flex:1，这块一出现，消息区自动让出高度，永远不会盖住正文；也因此不再需要
- * 拖拽把手（没有什么可挡的，不用挪开）、不再需要算悬浮坐标。
- *
- * 两侧留白跟 .chat-input-area 的左右 padding（12px）对齐，让它读作一张
- * 独立的卡片"浮"在消息区和输入框之间，而不是一块贴死两侧边框、生硬撑满
- * 整个面板宽度的色块。顶边用一条更粗的铜色描边（呼应 ChatMessage 里
- * "通页书脊"的配色）跟其余三边的普通描边区分，暗示这是当前这轮对话需要
- * 用户落笔的地方。整块限高自滚动，避免一份长 plan 或多道问题把输入框
- * 顶出可视区。 */
+/* 权限请求：GALLERY .perm — warning 渐变氛围框 + 图标盘 + mono 命令井 + 按钮行 */
 .perm-dock {
   flex-shrink: 0;
   max-height: 45vh;
   overflow-y: auto;
   margin: 8px 12px 10px;
-  border: 1px solid var(--aide-border);
-  border-top: 2px solid rgba(212, 165, 116, 0.55);
-  border-radius: var(--aide-radius-md);
-  background: var(--aide-bg-raised);
-  box-shadow: var(--aide-shadow-lg);
+  border: 1px solid color-mix(in srgb, var(--aide-warning) 25%, transparent);
+  border-radius: var(--aide-radius-lg);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--aide-warning) 5%, transparent), var(--aide-bg-base));
+  box-shadow: var(--aide-highlight-inset), 0 0 24px color-mix(in srgb, var(--aide-warning) 7%, transparent);
+  overflow: hidden;
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -311,28 +303,33 @@ const inputJson = computed(() => {
 }
 
 .perm-dialog {
-  padding: 14px 16px;
+  padding: 0;
 }
 
 .perm-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
-  margin-bottom: 10px;
+  padding: 12px 14px;
 }
 
-/* "火漆印"：三种确认口吻共用同一枚圆角图钉，靠内部图形区分种类——
- * 呼应整个应用"铜色 + 墨线"的手写账本气质，而不是通用系统警告图标。 */
+/* 图标盘：GALLERY .perm-ico */
 .perm-seal {
   flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--aide-radius-sm);
-  background: var(--aide-accent-subtle);
-  color: var(--aide-accent);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--aide-warning) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-warning) 35%, transparent);
   display: flex;
   align-items: center;
   justify-content: center;
+  color: var(--aide-warning);
+  font-size: 13px;
+}
+
+.perm-seal svg {
+  color: var(--aide-warning);
 }
 
 .perm-seal-glyph {
@@ -346,19 +343,16 @@ const inputJson = computed(() => {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 1px;
 }
 
 .perm-eyebrow {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 11px;
   color: var(--aide-text-muted);
 }
 
 .perm-title-main {
-  font-size: 13.5px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--aide-text-primary);
   line-height: 1.4;
@@ -369,8 +363,9 @@ const inputJson = computed(() => {
   font-family: 'Cascadia Code', 'Consolas', monospace;
   font-size: 12.5px;
   font-weight: 600;
-  color: var(--aide-accent);
-  background: var(--aide-accent-subtle);
+  color: var(--aide-warning);
+  background: color-mix(in srgb, var(--aide-warning) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-warning) 25%, transparent);
   border-radius: var(--aide-radius-sm);
   padding: 1px 7px;
 }
@@ -387,27 +382,96 @@ const inputJson = computed(() => {
 }
 
 .perm-subagent-badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   color: var(--aide-text-muted);
-  background: var(--aide-surface-default);
+  background: color-mix(in srgb, var(--aide-warning) 5%, transparent);
   border-radius: 999px;
   padding: 2px 10px;
-  margin-bottom: 10px;
+  margin: 0 14px 10px;
 }
-/* 方括号标铜：与 SubagentCallBlock 节点同色，跨表面呼应子代理来源（文字仍 muted） */
+
 .perm-subagent-bracket {
-  color: var(--aide-accent);
+  color: var(--aide-warning);
+}
+
+/* mono 命令井：GALLERY .perm-cmd */
+.perm-input {
+  margin: 0 14px 12px;
+  padding: 10px 12px;
+  background: var(--aide-bg-deep);
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-sm);
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 11.5px;
+  color: var(--aide-text-secondary);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, .3);
+  max-height: 128px;
+  overflow: auto;
+}
+
+.perm-input-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.perm-input-row + .perm-input-row {
+  padding-top: 8px;
+  border-top: 1px solid var(--aide-border-subtle, var(--aide-border));
+}
+
+.perm-input-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--aide-text-muted);
+  margin-bottom: 3px;
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
+}
+
+.perm-input-value {
+  display: block;
+  font-size: 12px;
+  color: var(--aide-text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.perm-input-raw {
+  margin: 0;
+  font-size: 12px;
+  color: var(--aide-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.perm-plan {
+  margin: 0 14px 12px;
+  padding: 10px 14px;
+  background: var(--aide-bg-deep);
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-sm);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--aide-text-secondary);
+  max-height: 200px;
+  overflow: auto;
 }
 
 .perm-questions {
-  margin-bottom: 16px;
+  margin: 0 14px 12px;
 }
 
 .perm-question + .perm-question {
-  margin-top: 18px;
-  padding-top: 18px;
-  border-top: 1px solid var(--aide-border);
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--aide-warning) 15%, transparent);
 }
 
 .perm-question-head {
@@ -423,8 +487,8 @@ const inputJson = computed(() => {
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 999px;
-  background: var(--aide-surface-default);
-  color: var(--aide-text-muted);
+  background: color-mix(in srgb, var(--aide-warning) 10%, transparent);
+  color: var(--aide-warning);
 }
 
 .perm-question-text {
@@ -446,16 +510,17 @@ const inputJson = computed(() => {
   background: var(--aide-bg-deep);
   padding: 8px 12px;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition: all var(--aide-ease-t);
 }
 
 .perm-option:hover {
-  border-color: var(--aide-accent);
+  border-color: var(--aide-warning);
+  background: color-mix(in srgb, var(--aide-warning) 5%, transparent);
 }
 
 .perm-option--selected {
-  border-color: var(--aide-accent);
-  background: var(--aide-surface-hover);
+  border-color: var(--aide-warning);
+  background: color-mix(in srgb, var(--aide-warning) 8%, transparent);
 }
 
 .perm-option-label {
@@ -468,11 +533,6 @@ const inputJson = computed(() => {
   font-size: 12px;
   color: var(--aide-text-muted);
   margin-top: 2px;
-}
-
-.perm-option--other .perm-option-label {
-  font-weight: 400;
-  color: var(--aide-text-secondary);
 }
 
 .perm-freetext {
@@ -489,18 +549,123 @@ const inputJson = computed(() => {
 }
 
 .perm-freetext:focus {
-  border-color: var(--aide-accent);
+  border-color: var(--aide-warning);
 }
 
-.perm-plan {
-  border-radius: var(--aide-radius-sm);
-  background: var(--aide-bg-deep);
+/* 按钮行：GALLERY .perm-foot */
+.perm-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.perm-actions-primary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.perm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: var(--aide-radius-md);
   border: 1px solid var(--aide-border);
-  padding: 10px 14px;
-  font-size: 13px;
-  line-height: 1.6;
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
+  font-size: 12.5px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: var(--aide-highlight-inset), var(--aide-shadow-sm);
+  transition: all var(--aide-ease-t);
+  padding: 7px 15px;
+}
+
+.perm-btn:hover:not(:disabled) {
+  background: var(--aide-surface-hover);
+  border-color: var(--aide-border-strong);
+  transform: translateY(-1px);
+}
+
+.perm-btn--ghost {
+  background: transparent;
+  border-color: transparent;
   color: var(--aide-text-secondary);
-  margin-bottom: 16px;
+  box-shadow: none;
+}
+
+.perm-btn--ghost:hover:not(:disabled) {
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
+  transform: translateY(-1px);
+}
+
+.perm-btn--outline {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 5px 14px;
+  border-color: var(--aide-border);
+  background: transparent;
+  color: var(--aide-text-secondary);
+}
+
+.perm-btn--outline:hover:not(:disabled) {
+  border-color: var(--aide-warning);
+  color: var(--aide-text-primary);
+  transform: translateY(-1px);
+}
+
+.perm-btn-main {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.perm-btn-caption {
+  font-size: 10px;
+  color: var(--aide-text-muted);
+  line-height: 1.2;
+}
+
+.perm-btn--outline-danger {
+  border-color: color-mix(in srgb, var(--aide-danger) 35%, transparent);
+  color: var(--aide-danger);
+}
+
+.perm-btn--outline-danger .perm-btn-caption {
+  color: var(--aide-danger);
+  opacity: 0.75;
+}
+
+.perm-btn--outline-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
+  color: var(--aide-danger);
+  transform: translateY(-1px);
+}
+
+.perm-btn--solid {
+  background: var(--aide-accent-gradient);
+  border-color: rgba(255, 255, 255, .22);
+  color: var(--aide-text-on-accent);
+  font-weight: 600;
+  box-shadow: var(--aide-accent-glow), inset 0 1px 0 rgba(255, 255, 255, .32);
+}
+
+.perm-btn--solid:hover:not(:disabled) {
+  filter: brightness(1.07);
+  transform: translateY(-1px);
+}
+
+.perm-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none !important;
 }
 
 .perm-plan :deep(h1),
@@ -537,156 +702,5 @@ const inputJson = computed(() => {
   padding: 8px 10px;
   overflow-x: auto;
   margin: 6px 0;
-}
-
-/* 输入摘要：左边一道细铜线（同 ChatMessage 的 blockquote/书脊语言），
- * 标签和值分两行——避免长命令/长路径的等宽字体和"命令："这样的中文
- * 标签挤在同一行里，前几个字被截没。 */
-.perm-input {
-  border-left: 2px solid var(--aide-accent);
-  background: var(--aide-bg-deep);
-  border-radius: 0 var(--aide-radius-sm) var(--aide-radius-sm) 0;
-  padding: 8px 12px;
-  margin-bottom: 16px;
-  max-height: 128px;
-  overflow: auto;
-}
-
-.perm-input-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.perm-input-row + .perm-input-row {
-  padding-top: 8px;
-  border-top: 1px solid var(--aide-border-subtle, var(--aide-border));
-}
-
-.perm-input-label {
-  display: block;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--aide-text-muted);
-  margin-bottom: 3px;
-}
-
-.perm-input-value {
-  display: block;
-  font-family: 'Cascadia Code', 'Consolas', monospace;
-  font-size: 12px;
-  color: var(--aide-text-primary);
-  white-space: pre-wrap;
-  word-break: break-all;
-  line-height: 1.5;
-}
-
-.perm-input-raw {
-  margin: 0;
-  font-family: 'Cascadia Code', 'Consolas', monospace;
-  font-size: 12px;
-  color: var(--aide-text-secondary);
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.perm-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.perm-actions-primary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.perm-btn {
-  border-radius: var(--aide-radius-sm);
-  border: 1px solid transparent;
-  padding: 6px 16px;
-  font-size: 13px;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
-}
-
-/* 拒绝：视觉上最不显眼的一个，独立放在按钮组左侧（对面才是允许/总是允许），
- * 拉开物理距离——不是"三个按钮挤一排全靠颜色分辨"，误点成本更低。 */
-.perm-btn--ghost {
-  background: transparent;
-  color: var(--aide-text-muted);
-}
-
-.perm-btn--ghost:hover {
-  background: var(--aide-surface-hover);
-  color: var(--aide-text-secondary);
-}
-
-/* 总是允许/自动接受：描边按钮，主文案 + 生效范围小字分两行——
- * 拆分逻辑见脚本里的 alwaysSplit，修掉了长文案在按钮里硬折行的问题。 */
-.perm-btn--outline {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
-  padding: 5px 14px;
-  border-color: var(--aide-border);
-  background: transparent;
-  color: var(--aide-text-secondary);
-}
-
-.perm-btn--outline:hover {
-  border-color: var(--aide-accent);
-  color: var(--aide-text-primary);
-}
-
-.perm-btn-main {
-  font-size: 12.5px;
-  font-weight: 500;
-  line-height: 1.3;
-}
-
-.perm-btn-caption {
-  font-size: 10px;
-  color: var(--aide-text-muted);
-  line-height: 1.2;
-}
-
-/* 会切到 bypassPermissions（跳过所有确认）时标红，其余 addRules/acceptEdits
- * 等场景维持普通按钮观感，不过度报警。 */
-.perm-btn--outline-danger {
-  border-color: var(--aide-danger);
-  color: var(--aide-danger);
-}
-
-.perm-btn--outline-danger .perm-btn-caption {
-  color: var(--aide-danger);
-  opacity: 0.75;
-}
-
-.perm-btn--outline-danger:hover {
-  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
-  color: var(--aide-danger);
-}
-
-.perm-btn--solid {
-  background: var(--aide-accent);
-  border-color: var(--aide-accent);
-  color: var(--aide-text-on-accent);
-  font-weight: 600;
-}
-
-.perm-btn--solid:hover {
-  background: var(--aide-accent-hover);
-  border-color: var(--aide-accent-hover);
-}
-
-.perm-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 </style>

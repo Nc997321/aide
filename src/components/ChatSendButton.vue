@@ -190,58 +190,49 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* 发送按钮 · 分裂按钮：GALLERY .send-split */
 .chat-send-split {
   display: inline-flex;
   align-items: stretch;
+  border-radius: var(--aide-radius-md);
+  box-shadow: var(--aide-accent-glow), inset 0 1px 0 rgba(255, 255, 255, .28);
+}
+
+.chat-send-split button {
+  border: none;
+  background: var(--aide-accent-gradient);
+  color: var(--aide-text-on-accent);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter var(--aide-ease-t);
+}
+
+.chat-send-split button:hover:not(:disabled) {
+  filter: brightness(1.07);
 }
 
 .chat-send-main {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: var(--aide-accent);
-  color: var(--aide-text-on-accent);
-  border: 1px solid var(--aide-accent);
-  border-radius: var(--aide-radius-sm) 0 0 var(--aide-radius-sm);
-  font-size: 13px;
-  padding: 0 12px;
-  height: 24px;
-  cursor: pointer;
-  transition: filter 0.12s ease, opacity 0.12s ease;
-}
-
-.chat-send-main:hover:not(:disabled) {
-  filter: brightness(1.1);
-}
-
-.chat-send-main:disabled {
-  opacity: 0.5;
-  cursor: default;
+  padding: 7px 16px;
+  border-radius: var(--aide-radius-md) 0 0 var(--aide-radius-md);
 }
 
 .chat-send-arrow {
   flex-shrink: 0;
 }
 
-/* ▾ 触发器：与主体共边，左侧用 border-left 分隔 */
 .chat-send-caret {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--aide-accent);
-  color: var(--aide-text-on-accent);
-  border: 1px solid var(--aide-accent);
-  border-left: 1px solid color-mix(in srgb, var(--aide-text-on-accent) 30%, transparent);
-  border-radius: 0 var(--aide-radius-sm) var(--aide-radius-sm) 0;
-  padding: 0 8px;
-  height: 24px;
-  cursor: pointer;
-  transition: filter 0.12s ease;
-}
-
-.chat-send-caret:hover,
-.chat-send-caret.active {
-  filter: brightness(1.15);
+  padding: 7px 10px;
+  border-radius: 0 var(--aide-radius-md) var(--aide-radius-md) 0;
+  border-left: 1px solid rgba(0, 0, 0, .18);
+  font-size: 10px;
 }
 
 .chat-send-caret.active svg {
@@ -249,39 +240,46 @@ onUnmounted(() => {
 }
 
 .chat-send-caret svg {
-  transition: transform 0.15s ease;
+  transition: transform var(--aide-ease-t);
 }
 
-/* ── 弹层（Teleport 到 body）── */
+.chat-send-main:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── 弹层（Teleport 到 body）：GALLERY .menu ── */
 .chat-send-menu {
   position: fixed;
   z-index: 9999;
   min-width: 160px;
-  background: var(--aide-bg-deep);
-  border: 1px solid var(--aide-surface-default);
-  border-radius: 8px;
-  padding: 4px;
-  box-shadow: var(--aide-shadow-lg);
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border-strong);
+  border-radius: var(--aide-radius-lg);
+  padding: 5px;
+  box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
 .chat-send-menu-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   width: 100%;
   padding: 7px 10px;
   border-radius: var(--aide-radius-sm);
   background: transparent;
   border: none;
   color: var(--aide-text-secondary);
-  font-size: 13px;
+  font-size: 12.5px;
   text-align: left;
   cursor: pointer;
-  transition: background 0.12s ease-out, color 0.12s ease-out;
+  transition: all var(--aide-ease-t);
 }
 
 .chat-send-menu-item:hover {
-  background: var(--aide-surface-default);
+  background: var(--aide-surface-hover);
   color: var(--aide-text-primary);
 }
 
@@ -314,7 +312,6 @@ onUnmounted(() => {
   background: var(--aide-accent-subtle);
   color: var(--aide-accent);
 }
-/* 置灰(如无存活主会话时 btw 不可用):仍可 hover 出 tooltip,但不亮起、不响应点击 */
 .chat-send-menu-item.is-disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -329,7 +326,7 @@ onUnmounted(() => {
 }
 .chat-send-menu-sep {
   height: 1px;
-  background: var(--aide-border);
-  margin: 4px 2px;
+  background: var(--aide-border-subtle);
+  margin: 5px 8px;
 }
 </style>

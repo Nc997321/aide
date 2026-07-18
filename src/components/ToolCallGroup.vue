@@ -65,50 +65,57 @@ const runningSummary = computed(() =>
 </template>
 
 <style scoped>
-/* 墨线：1px 铜色垂线 + 行首节点，替代原来的卡片盒子 */
+/* 工具组：GALLERY .tc-group-row 计数胶囊卡片 */
 .tool-group {
   position: relative;
-  border-left: 1px solid rgba(212, 165, 116, 0.35);
-  margin-left: 5px;
-  padding: 2px 0 2px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
+/* 时间线节点在卡片化组中不再显示 */
 .tg-node {
-  position: absolute;
-  left: -5px;
-  top: 9px;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--aide-bg-base);
-  border: 1.5px solid var(--aide-accent);
-}
-.tg-node--live {
-  background: var(--aide-accent);
-  animation: tg-pulse 1.2s ease-in-out infinite;
-}
-@keyframes tg-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(212, 165, 116, 0.5); }
-  50% { opacity: 0.55; box-shadow: 0 0 0 4px rgba(212, 165, 116, 0); }
+  display: none;
 }
 
 .tg-summary {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 9px;
   width: 100%;
   text-align: left;
-  background: none;
-  border: none;
-  cursor: pointer;
   font-size: 12px;
   color: var(--aide-text-secondary);
-  padding: 3px 0;
-  transition: color 0.12s;
+  padding: 8px 12px;
+  background: var(--aide-bg-base);
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-md);
+  cursor: pointer;
+  box-shadow: var(--aide-highlight-inset);
+  transition: background var(--aide-ease-t);
 }
 .tg-summary:hover {
+  background: var(--aide-surface-default);
+}
+
+/* 计数胶囊 */
+.tg-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 6px;
+  border-radius: 99px;
+  background: var(--aide-surface-active);
+  border: 1px solid var(--aide-border);
+  font-size: 10.5px;
+  font-weight: 600;
   color: var(--aide-text-primary);
 }
 
-.tg-n,
 .tg-name {
   color: var(--aide-accent);
   font-weight: 600;
@@ -129,5 +136,6 @@ const runningSummary = computed(() =>
 .tg-items {
   display: flex;
   flex-direction: column;
+  margin-left: 8px;
 }
 </style>
