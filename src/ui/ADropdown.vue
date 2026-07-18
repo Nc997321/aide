@@ -88,8 +88,7 @@ onUnmounted(() => {
   transition: all var(--aide-ease-t);
 }
 
-.a-dropdown__item:hover,
-.a-dropdown__item--active {
+.a-dropdown__item:hover {
   background: var(--aide-surface-hover);
   color: var(--aide-text-primary);
 }
@@ -116,10 +115,10 @@ onUnmounted(() => {
 }
 
 .a-dropdown-enter-active {
-  transition: opacity 0.12s ease-out, transform 0.12s ease-out;
+  transition: opacity var(--aide-ease-t), transform var(--aide-ease-t);
 }
 .a-dropdown-leave-active {
-  transition: opacity 0.08s ease, transform 0.08s ease;
+  transition: opacity var(--aide-ease-t), transform var(--aide-ease-t);
 }
 .a-dropdown-enter-from {
   opacity: 0;

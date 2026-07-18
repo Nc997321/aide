@@ -74,7 +74,7 @@ defineProps<{ state: ToastState }>();
 }
 
 .a-toast-enter-active,
-.a-toast-leave-active { transition: opacity 0.2s, transform 0.2s; }
+.a-toast-leave-active { transition: opacity var(--aide-ease-t), transform var(--aide-ease-t); }
 
 .a-toast-enter-from,
 .a-toast-leave-to { opacity: 0; transform: translate(-50%, 4px); }

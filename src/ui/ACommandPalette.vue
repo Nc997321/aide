@@ -330,7 +330,7 @@ defineExpose({ setSearchFn, setRecentFn });
 
 /* Transitions */
 .a-palette-enter-active {
-  transition: opacity 0.12s ease-out;
+  transition: opacity var(--aide-ease-t);
 }
 
 .a-palette-enter-active .a-palette-box {
@@ -338,11 +338,11 @@ defineExpose({ setSearchFn, setRecentFn });
 }
 
 .a-palette-leave-active {
-  transition: opacity 0.1s ease;
+  transition: opacity var(--aide-ease-t);
 }
 
 .a-palette-leave-active .a-palette-box {
-  transition: transform 0.1s ease, opacity 0.1s ease;
+  transition: transform var(--aide-ease-t), opacity var(--aide-ease-t);
 }
 
 .a-palette-enter-from {

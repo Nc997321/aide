@@ -68,6 +68,10 @@ defineEmits<{
   box-shadow: var(--aide-accent-ring), inset 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
+.a-input.error .a-input__field {
+  border-color: color-mix(in srgb, var(--aide-danger) 55%, transparent);
+}
+
 .a-input__icon + .a-input__field {
   padding-left: 32px;
 }
