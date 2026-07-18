@@ -27,7 +27,7 @@ export interface FileWindowState {
   /** 编辑器实时内容 */
   editContent: string;
   imageUrl: string;
-  /** 显式注入的语言标识（如 "diff"），空串走扩展名推断 */
+  /** 显式注入的语言标识，空串走扩展名推断 */
   language: string;
   /** git diff 对比数据（virtual 窗口专用）；存在则渲染 DiffViewer */
   diffPair: DiffPair | null;

@@ -561,6 +561,7 @@ pub struct DiffPair {
     pub status: String, // "added" | "modified" | "deleted"
     pub is_binary: bool,
     pub eol_only: bool,
+    pub too_big: bool,
 }
 
 /// 统一行尾为 LF：CRLF/LF 翻转不该让 merge 视图每行都标变更。
@@ -584,51 +585,118 @@ fn show_blob(rev_path: &str, root: &std::path::Path) -> Result<Option<Vec<u8>>, 
 
 /// 三种场景取数：未暂存 = HEAD vs 磁盘；已暂存 = HEAD vs 索引；提交 = h^ vs h。
 /// 返回前两侧都做行尾归一化；归一化后相等但原文不等 → eol_only。
+/// 单侧超过 1MB 时标记 too_big 并返回空文本，避免巨大 payload 跨 IPC。
 fn build_diff_pair(
     root: &std::path::Path,
     path: &str,
     staged: bool,
     commit_hash: Option<&str>,
 ) -> Result<DiffPair, String> {
-    let (old_raw, new_raw, old_label, new_label) = if let Some(h) = commit_hash {
+    const MAX_DIFF_BYTES: u64 = 1_000_000;
+
+    let (
+        old_label,
+        new_label,
+        old_exists,
+        new_exists,
+        old_bytes,
+        new_bytes,
+        old_too_big,
+        new_too_big,
+    ) = if let Some(h) = commit_hash {
         let short = &h[..7.min(h.len())];
+        let old = show_blob(&format!("{}^:{}", h, path), root)?;
+        let new = show_blob(&format!("{}:{}", h, path), root)?;
+        let old_exists = old.is_some();
+        let new_exists = new.is_some();
+        let old_too_big = old.as_ref().map(|b| b.len() as u64 > MAX_DIFF_BYTES).unwrap_or(false);
+        let new_too_big = new.as_ref().map(|b| b.len() as u64 > MAX_DIFF_BYTES).unwrap_or(false);
         (
-            show_blob(&format!("{}^:{}", h, path), root)?,
-            show_blob(&format!("{}:{}", h, path), root)?,
             format!("{}^", short),
             short.to_string(),
+            old_exists,
+            new_exists,
+            old,
+            new,
+            old_too_big,
+            new_too_big,
         )
     } else if staged {
+        let old = show_blob(&format!("HEAD:{}", path), root)?;
+        let new = show_blob(&format!(":{}", path), root)?;
+        let old_exists = old.is_some();
+        let new_exists = new.is_some();
+        let old_too_big = old.as_ref().map(|b| b.len() as u64 > MAX_DIFF_BYTES).unwrap_or(false);
+        let new_too_big = new.as_ref().map(|b| b.len() as u64 > MAX_DIFF_BYTES).unwrap_or(false);
         (
-            show_blob(&format!("HEAD:{}", path), root)?,
-            show_blob(&format!(":{}", path), root)?,
             "HEAD".to_string(),
             "已暂存".to_string(),
+            old_exists,
+            new_exists,
+            old,
+            new,
+            old_too_big,
+            new_too_big,
         )
     } else {
+        let old = show_blob(&format!("HEAD:{}", path), root)?;
+        let new_path = root.join(path);
+        let new_exists = new_path.exists();
+        let (new, new_too_big) = if new_exists {
+            let meta = std::fs::metadata(&new_path)
+                .map_err(|e| format!("Failed to read metadata for {}: {}", path, e))?;
+            if meta.len() > MAX_DIFF_BYTES {
+                (None, true)
+            } else {
+                (std::fs::read(&new_path).ok(), false)
+            }
+        } else {
+            (None, false)
+        };
+        let old_exists = old.is_some();
+        let old_too_big = old.as_ref().map(|b| b.len() as u64 > MAX_DIFF_BYTES).unwrap_or(false);
         (
-            show_blob(&format!("HEAD:{}", path), root)?,
-            std::fs::read(root.join(path)).ok(),
             "HEAD".to_string(),
             "工作区".to_string(),
+            old_exists,
+            new_exists,
+            old,
+            new,
+            old_too_big,
+            new_too_big,
         )
     };
 
-    let is_binary = old_raw.as_deref().map(looks_binary).unwrap_or(false)
-        || new_raw.as_deref().map(looks_binary).unwrap_or(false);
+    let too_big = old_too_big || new_too_big;
+    let is_binary = !too_big
+        && (old_bytes.as_deref().map(looks_binary).unwrap_or(false)
+            || new_bytes.as_deref().map(looks_binary).unwrap_or(false));
 
-    let old_str = old_raw.map(|b| String::from_utf8_lossy(&b).into_owned());
-    let new_str = new_raw.map(|b| String::from_utf8_lossy(&b).into_owned());
-
-    let status = match (&old_str, &new_str) {
-        (None, Some(_)) => "added",
-        (Some(_), None) => "deleted",
+    let status = match (old_exists, new_exists) {
+        (false, true) => "added",
+        (true, false) => "deleted",
         // 两侧皆空（如未跟踪的空文件）：按磁盘存在性兜底
-        (None, None) => {
+        (false, false) => {
             if root.join(path).exists() { "added" } else { "deleted" }
         }
-        (Some(_), Some(_)) => "modified",
+        (true, true) => "modified",
     };
+
+    if too_big {
+        return Ok(DiffPair {
+            old_text: String::new(),
+            new_text: String::new(),
+            old_label,
+            new_label,
+            status: status.to_string(),
+            is_binary,
+            eol_only: false,
+            too_big,
+        });
+    }
+
+    let old_str = old_bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
+    let new_str = new_bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
 
     let old_raw_str = old_str.unwrap_or_default();
     let new_raw_str = new_str.unwrap_or_default();
@@ -644,6 +712,7 @@ fn build_diff_pair(
         status: status.to_string(),
         is_binary,
         eol_only,
+        too_big,
     })
 }
 
@@ -1106,6 +1175,22 @@ mod diff_pair_tests {
         let pair = build_diff_pair(&root, "a.txt", false, None).unwrap();
         assert!(pair.eol_only);
         assert_eq!(pair.old_text, pair.new_text); // 归一化后相等
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn oversized_worktree_file_sets_too_big_and_empty_texts() {
+        let root = setup_repo("oversized");
+        std::fs::write(root.join("a.txt"), "small\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "v1"]);
+        std::fs::write(root.join("a.txt"), "x".repeat(1_100_000)).unwrap();
+
+        let pair = build_diff_pair(&root, "a.txt", false, None).unwrap();
+        assert!(pair.too_big);
+        assert_eq!(pair.old_text, "");
+        assert_eq!(pair.new_text, "");
+        assert_eq!(pair.status, "modified");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -40,6 +40,7 @@ const MAX_DIFF_SIZE = 1_000_000;
 
 const tooBig = computed(
   () =>
+    props.pair.tooBig ||
     props.pair.oldText.length > MAX_DIFF_SIZE ||
     props.pair.newText.length > MAX_DIFF_SIZE,
 );
@@ -134,9 +135,9 @@ function readOnlyExts(langExt: Extension): Extension[] {
 }
 
 async function createView() {
-  if (!mountEl.value) return;
   const id = ++createId;
   destroyView();
+  if (showNotice.value || !mountEl.value) return;
 
   const langExt = await loadLanguageExtension(ext.value);
   if (id !== createId) return; // 等待期间已被重建/销毁
@@ -215,10 +216,11 @@ watch(
   () => applyFontSettings(),
 );
 
-// 同路径重开 → pair 被就地替换 → 重建视图
+// 同路径重开 → pair 被就地替换 → 重建视图（flush: post 确保 mountEl 已随 v-if 切换）
 watch(
   () => props.pair,
   () => void createView(),
+  { flush: "post" },
 );
 
 onMounted(() => void createView());

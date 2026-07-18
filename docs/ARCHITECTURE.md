@@ -171,7 +171,7 @@ n.summary(&title).body(&body).show();
 | `git_log` | 提交历史（hash/subject/author/date） |
 | `git_show` | 提交详情 + 文件列表 |
 | `git_branches` / `git_checkout` | 分支列表 / 切换 |
-| `git_diff_content` | 原始 diff 文本（支持 staged/commit） |
+| `git_diff_pair` | 新旧双份原文 diff 数据，支持 staged/commit，含行尾归一化与 1MB 上限 |
 | `git_status` | `--porcelain` 解析 |
 | `git_commit` | 提交，先检查工作区非空 |
 

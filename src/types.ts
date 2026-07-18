@@ -52,6 +52,7 @@ export interface DiffPair {
   status: "added" | "modified" | "deleted";
   isBinary: boolean;
   eolOnly: boolean;
+  tooBig: boolean;
 }
 
 export interface LastEventInfo {

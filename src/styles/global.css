@@ -101,3 +101,8 @@ html, body, #app {
   opacity: 1;
 }
 
+/* 聊天 Edit 工具 diff 行着色——类名由 src/utils/editDiff.ts 产出、ToolCallBlock.vue 渲染。
+   删前先 grep 全 src/，这两个类与 git diff 查看器无关。 */
+.aide-diff-add { color: var(--aide-success); background: color-mix(in srgb, var(--aide-success) 4%, transparent); display: block; }
+.aide-diff-del { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 4%, transparent); display: block; }
+
