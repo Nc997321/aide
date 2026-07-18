@@ -279,10 +279,10 @@ onUnmounted(() => {
 
 /* Transition */
 .themed-select-pop-enter-active {
-  transition: opacity 0.12s, transform 0.12s;
+  transition: opacity var(--aide-ease-t), transform var(--aide-ease-t);
 }
 .themed-select-pop-leave-active {
-  transition: opacity 0.08s, transform 0.08s;
+  transition: opacity var(--aide-ease-t), transform var(--aide-ease-t);
 }
 .themed-select-pop-enter-from,
 .themed-select-pop-leave-to {
