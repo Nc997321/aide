@@ -14,6 +14,7 @@ import Icon from "./Icon.vue";
 const themeOptions = [
   { value: "warm-dark", label: "Warm Dark" },
   { value: "catppuccin", label: "Catppuccin Mocha" },
+  { value: "glass", label: "Glass（experimental）" },
 ];
 const cgBackendOptions = [
   { value: "fastembed", label: "fastembed（本地 ONNX）" },
