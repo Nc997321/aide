@@ -312,15 +312,17 @@ onBeforeUnmount(() => {
 }
 </style>
 
-<!-- merge 容器（.cm-mergeView 等）是编辑器根的祖先，CM 主题块和 scoped 样式都够不到，
-     必须非 scoped（同 xterm 动态 DOM 的既有约定）。包文档明确要求给
-     .cm-mergeView 设 height + overflow 才可滚动。 -->
+<!-- merge 容器（.cm-mergeView）是编辑器根的祖先，CM 主题块和 scoped 样式都够不到，
+     必须非 scoped（同 xterm 动态 DOM 的既有约定）。滚动模型（dist:1109/1188 实锤）：
+     库 baseTheme 对 MergeView 内编辑器强制 height:auto !important + overflowY:visible
+     !important——两侧撑全高、永不自滚；唯一滚动容器是外层 .cm-mergeView（height +
+     overflow:auto），一个滚动条带动两侧（行对齐靠库内建 spacer，无需同步代码）。
+     .cm-mergeViewEditors/.cm-mergeViewEditor 两层禁止钉 100% 高，否则内容被裁、
+     容器撑不出滚动空间。unified 单栏不走这里：mergeTheme 的 .cm-scroller
+     overflow:auto + 编辑器 height:100% 自滚。 -->
 <style>
-.dv-mount .cm-mergeView,
-.dv-mount .cm-mergeViewEditors {
+.dv-mount .cm-mergeView {
   height: 100%;
-}
-.dv-mount .cm-mergeViewEditor {
-  height: 100%;
+  overflow: auto;
 }
 </style>
