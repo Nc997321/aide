@@ -98,6 +98,7 @@ const pickerTitle = computed(() => `找到 ${candidates.value.length} 个匹配�
   align-items: center;
   justify-content: center;
   background: var(--aide-bg-overlay);
+  /* overlay dim — structural, not theme-governed blur */
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
 }

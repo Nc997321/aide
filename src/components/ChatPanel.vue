@@ -383,7 +383,7 @@ watch(isBusyVal, (busy) => {
     clearInterval(thinkingTimer);
     thinkingTimer = null;
   }
-});
+}, { immediate: true });
 onUnmounted(() => { if (thinkingTimer) clearInterval(thinkingTimer); });
 
 // 窗口化渲染:store 里的消息全量在场,但进 v-for 建 DOM 的只有尾部一个有界

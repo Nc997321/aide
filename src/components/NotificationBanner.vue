@@ -96,6 +96,8 @@ function handleDismiss() {
   background: linear-gradient(90deg, color-mix(in srgb, var(--aide-info) 10%, transparent), color-mix(in srgb, var(--aide-info) 4%, transparent));
   border: 1px solid color-mix(in srgb, var(--aide-info) 25%, transparent);
   border-radius: var(--aide-radius-md);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   box-shadow: var(--aide-shadow-md), var(--aide-highlight-inset);
   overflow: hidden;
 }
