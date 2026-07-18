@@ -1,10 +1,11 @@
 import { reactive, ref } from "vue";
 import { api } from "../api";
+import { MONO_FONT_STACK, resolveFontFamily } from "../utils/fonts";
 import type { AppSettings, CodeGraphEmbedderConfig, JdkEntry } from "../types";
 
 const defaults: AppSettings = {
   fontSize: 14,
-  fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+  fontFamily: MONO_FONT_STACK,
   notificationsEnabled: true,
   proxy: "",
   shellPath: "",
@@ -40,7 +41,7 @@ export function useSettings() {
     try {
       const s = await api.getSettings();
       settings.fontSize = s.fontSize ?? defaults.fontSize;
-      settings.fontFamily = s.fontFamily ?? defaults.fontFamily;
+      settings.fontFamily = resolveFontFamily(s.fontFamily);
       settings.notificationsEnabled = s.notificationsEnabled ?? defaults.notificationsEnabled;
       settings.proxy = s.proxy ?? defaults.proxy;
       settings.shellPath = s.shellPath ?? defaults.shellPath;

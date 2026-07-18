@@ -11,6 +11,7 @@
 :root {
   /* 首屏兜底：与 warm-dark 精修值一致，applyTheme 运行前生效。 */
   color-scheme: dark;
+  --aide-font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
   --aide-bg-deep: #141218;
   --aide-bg-base: #1a1820;
   --aide-bg-raised: #221f29;
