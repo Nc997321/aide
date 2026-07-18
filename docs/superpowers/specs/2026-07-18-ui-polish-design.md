@@ -20,7 +20,7 @@
 
 ## 2. 核心架构：主题是 token，组件是实现
 
-### 2.1 ThemeTokens 扩展（9 个新槽位）
+### 2.1 ThemeTokens 扩展
 
 在现有约 26 个槽位基础上新增（`src/themes/tokens.ts`，`apply.ts` 的 camelCase→kebab 写入规则不变）：
 
@@ -32,7 +32,7 @@
 | `accentRing` | 输入框/焦点环 | `0 0 0 2.5px rgba(217,171,120,.32)` |
 | `ambientGlow` | 对话区顶部环境光晕（空间主光源） | `radial-gradient(700px 240px at 50% -60px, rgba(224,181,132,.09), transparent 70%)` |
 | `borderStrong` | 悬停/浮层用第三档边框（现有 border/borderSubtle 之外） | `rgba(255,220,175,.16)` |
-| `ease` / `easeT` | 统一动效曲线与时长 | `cubic-bezier(.2,.8,.2,1)` / `.16s …` |
+| `ease` / `easeT` | 统一动效：`ease` 为曲线本身，`easeT` 为「时长+曲线」快捷写法 | `cubic-bezier(.2,.8,.2,1)` / `.16s cubic-bezier(.2,.8,.2,1)` |
 | `surfaceBlur`（后门） | 面板背景模糊，默认 `"none"` | `"none"` |
 | `ambientScene`（后门） | 应用根层环境场景图，默认 `"none"` | `"none"` |
 
@@ -66,7 +66,7 @@
 一处定义、三处应用（用户明确要求聊天 Edit diff 与 DiffViewer 一致）：
 
 - 删除行 = `--aide-danger` 8% 底 + 85% 混色文字 + 左侧 2px 色条；新增行 = `--aide-success` 7% 底同款；hunk 行 = `--aide-info` 5% 底；上下文行 muted 无底色。
-- 行号槽位同宽（34px）：查看器给真实行号；聊天内联（无原始文件）给 +/− 符号列（26px，同色系半透明）。
+- 行首槽位节奏对齐：查看器给 34px 真实行号列；聊天内联（无原始文件）给 26px 的 +/− 符号列（同色系半透明），两者文字起点视觉对齐。
 - 全部 mono 字体、同字号行高。
 - 实施落点：
   1. `global.css` 的 `.aide-diff-add/del/hunk/meta/ctx` 升级为该语言（聊天 Edit diff 与 FileViewer 文本 diff 共用，一改两处自动一致）；
@@ -89,7 +89,7 @@
 ## 8. 验证
 
 - 设置里切 warm-dark ↔ catppuccin，整窗全部重配色（既有红线验收）。
-- 新增一个内部验证用玻璃 token 主题，切换后组件零改动呈现毛玻璃（验证后门后**不发布**，或标记 experimental）。
+- 新增玻璃 token 主题（标记 experimental，长期保留——后门本就是为它留的），切换后组件零改动呈现毛玻璃。
 - 对照陈列页逐组件验收视觉；动效在 `prefers-reduced-motion` 下全部静止。
 - 性能验收：无 JS 驱动动画；`backdrop-filter` 在现有主题下为 `none`（合成器零开销）；字体子集按需加载，首屏不阻塞。
 - 黑匣子回归：精修后长会话流式渲染无新增冻结（动画全在合成线程）。
