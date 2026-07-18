@@ -66,11 +66,11 @@
 一处定义、三处应用（用户明确要求聊天 Edit diff 与 DiffViewer 一致）：
 
 - 删除行 = `--aide-danger` 8% 底 + 85% 混色文字 + 左侧 2px 色条；新增行 = `--aide-success` 7% 底同款；hunk 行 = `--aide-info` 5% 底；上下文行 muted 无底色。
-- 行首槽位节奏对齐：查看器给 34px 真实行号列；聊天内联（无原始文件）给 26px 的 +/− 符号列（同色系半透明），两者文字起点视觉对齐。
+- **一律不出现 +/− 符号**（用户确认）：查看器给 34px 真实行号列；聊天内联（无原始文件）只有着色行——增删全靠 2px 色条+底色表达，与 DiffView 视觉一致。
 - 全部 mono 字体、同字号行高。
 - 实施落点：
   1. `global.css` 的 `.aide-diff-add/del/hunk/meta/ctx` 升级为该语言（聊天 Edit diff 与 FileViewer 文本 diff 共用，一改两处自动一致）；
-  2. `utils/editDiff.ts` 把 +/− 前缀拆成独立符号列；
+  2. `utils/editDiff.ts` 去掉行文本的 +/− 前缀（`buildEditDiffLines` 输出无前缀纯文本）；FileViewer 的 git 文本 diff 若带行首 +/− 前缀同样去除（行类型已由 cls 表达）；
   3. `DiffViewer.vue` 的 CM merge 主题（`.cm-changedLine` 等）对齐同款透明度/色条。
 
 ## 6. 字体系统

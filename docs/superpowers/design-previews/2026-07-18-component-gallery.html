@@ -285,14 +285,12 @@ body.theme-glass .term { background: rgba(7,9,15,.8); }
 
 /* ── 统一 diff 行语言：DiffViewer（并排/单栏）、聊天 Edit diff、FileViewer 文本 diff 同源 ──
    色号与透明度全场景一致；左侧 2px 色条是「这行变了」的第一视觉信号；
-   行号槽位两处同宽：查看器给真实行号，聊天内联（没有原始文件）给 +/− 符号列。 */
+   一律不出现 +/− 符号——查看器给真实行号，聊天内联（没有原始文件）只有着色行，
+   增删全靠色条+底色表达，与 DiffView 视觉一致。 */
 .dl-row { display: flex; padding: 0 12px 0 0; white-space: pre; color: var(--text-secondary); }
 .dl-row .n { width: 34px; flex: none; text-align: right; padding-right: 10px; color: var(--text-muted); opacity: .5; user-select: none; }
-.dl-row .sign { width: 26px; flex: none; text-align: center; color: var(--text-muted); opacity: .6; user-select: none; }
 .dl-row.del { background: color-mix(in srgb, var(--danger) 8%, transparent); color: color-mix(in srgb, var(--danger) 85%, var(--text-primary)); box-shadow: inset 2px 0 0 var(--danger); }
-.dl-row.del .sign { color: var(--danger); opacity: .85; }
 .dl-row.add { background: color-mix(in srgb, var(--success) 7%, transparent); color: color-mix(in srgb, var(--success) 85%, var(--text-primary)); box-shadow: inset 2px 0 0 var(--success); }
-.dl-row.add .sign { color: var(--success); opacity: .85; }
 .dl-row.hunk { color: var(--info); background: color-mix(in srgb, var(--info) 5%, transparent); font-size: 11px; padding-top: 2px; padding-bottom: 2px; }
 .dl-row.ctx { color: var(--text-muted); }
 
@@ -707,10 +705,10 @@ body.theme-indigo .term { background: #08090d; }
         <div class="tc-head open"><span class="chev">▶</span><span>✎</span><span class="tc-name">Edit</span><span class="tc-cmd">src/composables/useConversationChanges.ts</span><span class="tc-status run">● running</span></div>
         <div class="tc-body"><div class="tc-diff">
           <div class="dl-row hunk">@@ captureChanges(round) @@</div>
-          <div class="dl-row del"><span class="sign">−</span>const json = JSON.stringify(this.rounds, null, 2)</div>
-          <div class="dl-row del"><span class="sign">−</span>await invoke("save_session_changes", { json })</div>
-          <div class="dl-row add"><span class="sign">+</span>// 只追加当前这一轮，不再整份重写</div>
-          <div class="dl-row add"><span class="sign">+</span>await invoke("append_session_change", { round })</div>
+          <div class="dl-row del">const json = JSON.stringify(this.rounds, null, 2)</div>
+          <div class="dl-row del">await invoke("save_session_changes", { json })</div>
+          <div class="dl-row add">// 只追加当前这一轮，不再整份重写</div>
+          <div class="dl-row add">await invoke("append_session_change", { round })</div>
         </div></div>
       </div>
     </div>
