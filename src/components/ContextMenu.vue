@@ -175,7 +175,7 @@ onUnmounted(() => {
   transition: opacity var(--aide-ease-t), transform var(--aide-ease-t);
 }
 .ctx-menu-leave-active {
-  transition: opacity 0.08s, transform 0.08s;
+  transition: opacity var(--aide-ease-t), transform var(--aide-ease-t);
 }
 .ctx-menu-enter-from,
 .ctx-menu-leave-to {

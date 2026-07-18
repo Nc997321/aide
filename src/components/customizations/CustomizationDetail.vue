@@ -124,6 +124,11 @@ function handleCancel() {
   height: 100%;
   display: flex;
   flex-direction: column;
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border-strong);
+  box-shadow: var(--aide-highlight-inset);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
 .detail-header {

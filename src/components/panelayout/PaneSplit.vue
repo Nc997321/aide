@@ -115,7 +115,7 @@ function onHandleMousedown(e: MouseEvent, idx: number) {
   content: "";
   position: absolute;
   background: var(--aide-border-subtle);
-  transition: all 0.12s;
+  transition: all var(--aide-ease-t);
 }
 
 /* 水平布局（子元素横向排列）：分隔条是竖线 */
