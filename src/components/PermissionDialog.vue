@@ -25,7 +25,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  respond: [id: string, approved: boolean, always?: boolean, answers?: Record<string, string>];
+  respond: [id: string, approved: boolean, always?: boolean, answers?: Record<string, string>, nextMode?: string];
 }>();
 
 /** ExitPlanMode = plan 模式的出口确认：呈现的是"批准这份计划"而不是
@@ -250,18 +250,30 @@ const inputJson = computed(() => {
             {{ isPlanApproval ? "继续修改计划" : "拒绝" }}
           </button>
           <div class="perm-actions-primary">
-            <button
-              v-if="!isPlanApproval"
-              class="perm-btn perm-btn--outline"
-              :class="{ 'perm-btn--outline-danger': isAlwaysAllowDangerous }"
-              @click="emit('respond', permission.id, true, true)"
-            >
-              <span class="perm-btn-main">{{ alwaysSplit.main }}</span>
-              <span v-if="alwaysSplit.caption" class="perm-btn-caption">{{ alwaysSplit.caption }}</span>
-            </button>
-            <button class="perm-btn perm-btn--solid" @click="emit('respond', permission.id, true)">
-              {{ isPlanApproval ? "批准并开始执行" : "允许" }}
-            </button>
+            <template v-if="isPlanApproval">
+              <button class="perm-btn perm-btn--outline" @click="emit('respond', permission.id, true, false, undefined, undefined)">
+                批准，手动确认编辑
+              </button>
+              <button class="perm-btn perm-btn--outline" @click="emit('respond', permission.id, true, false, undefined, 'acceptEdits')">
+                批准，自动接受编辑
+              </button>
+              <button class="perm-btn perm-btn--solid" @click="emit('respond', permission.id, true, false, undefined, 'auto')">
+                批准，使用 Auto 模式
+              </button>
+            </template>
+            <template v-else>
+              <button
+                class="perm-btn perm-btn--outline"
+                :class="{ 'perm-btn--outline-danger': isAlwaysAllowDangerous }"
+                @click="emit('respond', permission.id, true, true)"
+              >
+                <span class="perm-btn-main">{{ alwaysSplit.main }}</span>
+                <span v-if="alwaysSplit.caption" class="perm-btn-caption">{{ alwaysSplit.caption }}</span>
+              </button>
+              <button class="perm-btn perm-btn--solid" @click="emit('respond', permission.id, true)">
+                允许
+              </button>
+            </template>
           </div>
         </template>
       </div>
@@ -275,12 +287,12 @@ const inputJson = computed(() => {
   flex-shrink: 0;
   max-height: 45vh;
   overflow-y: auto;
+  overflow-x: hidden;
   margin: 8px 12px 10px;
   border: 1px solid color-mix(in srgb, var(--aide-warning) 25%, transparent);
   border-radius: var(--aide-radius-lg);
   background: linear-gradient(180deg, color-mix(in srgb, var(--aide-warning) 5%, transparent), var(--aide-bg-base));
   box-shadow: var(--aide-highlight-inset), 0 0 24px color-mix(in srgb, var(--aide-warning) 7%, transparent);
-  overflow: hidden;
   backdrop-filter: var(--aide-surface-blur);
   -webkit-backdrop-filter: var(--aide-surface-blur);
 }

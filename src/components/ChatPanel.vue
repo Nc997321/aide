@@ -62,7 +62,7 @@ const emit = defineEmits<{
   "set-model": [model: string];
   "set-permission-mode": [mode: string];
   "remove-queued": [index: number];
-  "respond-permission": [id: string, approved: boolean, always?: boolean, answers?: Record<string, string>];
+  "respond-permission": [id: string, approved: boolean, always?: boolean, answers?: Record<string, string>, nextMode?: string];
 }>();
 
 const rootEl = ref<HTMLElement | null>(null);
@@ -780,7 +780,7 @@ async function handleQuickAction(action: QuickAction) {
     <PermissionDialog
       :permission="permission ?? null"
       :queue-count="permissionQueueCount"
-      @respond="(id: string, approved: boolean, always?: boolean, answers?: Record<string, string>) => emit('respond-permission', id, approved, always, answers)"
+      @respond="(id: string, approved: boolean, always?: boolean, answers?: Record<string, string>, nextMode?: string) => emit('respond-permission', id, approved, always, answers, nextMode)"
     />
 
     <div class="chat-input-area">

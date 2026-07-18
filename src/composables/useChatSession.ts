@@ -846,6 +846,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
     approved: boolean,
     always?: boolean,
     answers?: Record<string, string>,
+    nextMode?: string,
   ) {
     const sid = sessionId.value;
     if (!sid) return;
@@ -857,7 +858,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       setSessionState(sid, "running");
       armStalled(sid); // 权限批准后恢复生成 → 重启软超时计时
     }
-    await invoke("permission_response", { sessionId: sid, id, approved, always, answers });
+    await invoke("permission_response", { sessionId: sid, id, approved, always, answers, nextMode });
   }
 
   async function interrupt() {

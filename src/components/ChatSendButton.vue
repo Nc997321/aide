@@ -129,10 +129,6 @@ onUnmounted(() => {
       @click="emit('send')"
     >
       {{ busy ? "排队" : "发送" }}
-      <svg class="chat-send-arrow" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-        <path d="M6 9.5V2.5M6 2.5L2.5 6M6 2.5L9.5 6" fill="none" stroke="currentColor"
-          stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
     </button>
     <button
       v-if="actions.length"
@@ -221,10 +217,6 @@ onUnmounted(() => {
   gap: 4px;
   padding: 7px 16px;
   border-radius: var(--aide-radius-md) 0 0 var(--aide-radius-md);
-}
-
-.chat-send-arrow {
-  flex-shrink: 0;
 }
 
 .chat-send-caret {

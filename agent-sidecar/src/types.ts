@@ -143,7 +143,7 @@ export type SidecarCommand =
     }
   // answers：仅 AskUserQuestion 场景使用（问题文本 → 选中答案/自由文本的不透明映射），
   // 其他工具的批准永远不带这个字段。核心协议不解释内容，只搬运。
-  | { cmd: "permission_response"; id: string; approved: boolean; always?: boolean; answers?: Record<string, string> }
+  | { cmd: "permission_response"; id: string; approved: boolean; always?: boolean; answers?: Record<string, string>; nextMode?: string }
   | { cmd: "interrupt" }
   | { cmd: "set_model"; model: string }
   | { cmd: "set_permission_mode"; mode: string };

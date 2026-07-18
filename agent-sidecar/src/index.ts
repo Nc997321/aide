@@ -490,9 +490,10 @@ rl.on("line", (line) => {
       currentPermissionMode = outcome.appliedMode;
       emitPermissionModes();
     } else if (cmd.approved && outcome?.toolName === "ExitPlanMode") {
-      // Plan 模式的出口：ExitPlanMode 被普通批准 = 用户认可计划、进入执行——SDK
-      // 不会自己切模式（那是交互式 CLI 的 TUI 行为），这里显式切回 default。
-      applyPermissionMode("default");
+      // Plan 模式的出口：ExitPlanMode 被批准 = 用户认可计划、进入执行——SDK
+      // 不会自己切模式（那是交互式 CLI 的 TUI 行为）。前端可附带 nextMode
+      // 让用户选择执行阶段用什么模式；未带时回落 default。
+      applyPermissionMode(cmd.nextMode || "default");
     }
   } else if (cmd.cmd === "interrupt") {
     currentQuery?.interrupt().catch(() => {});

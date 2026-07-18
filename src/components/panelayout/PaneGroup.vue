@@ -127,7 +127,7 @@ function onNewTab() {
       @set-model="setModel"
       @set-permission-mode="setPermissionMode"
       @remove-queued="removeQueued"
-      @respond-permission="(id: string, approved: boolean, always?: boolean, answers?: Record<string, string>) => respondPermission(id, approved, always, answers)"
+      @respond-permission="(id: string, approved: boolean, always?: boolean, answers?: Record<string, string>, nextMode?: string) => respondPermission(id, approved, always, answers, nextMode)"
     />
   </div>
 </template>

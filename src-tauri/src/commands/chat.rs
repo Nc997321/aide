@@ -85,9 +85,10 @@ pub async fn permission_response(
     approved: bool,
     always: Option<bool>,
     answers: Option<HashMap<String, String>>,
+    next_mode: Option<String>,
     sidecar_mgr: State<'_, SidecarManager>,
 ) -> Result<(), String> {
-    let cmd = build_permission_response_cmd(&id, approved, always, answers);
+    let cmd = build_permission_response_cmd(&id, approved, always, answers, next_mode);
     sidecar_mgr.send(&session_id, &cmd).await
 }
 
@@ -103,10 +104,14 @@ fn build_permission_response_cmd(
     approved: bool,
     always: Option<bool>,
     answers: Option<HashMap<String, String>>,
+    next_mode: Option<String>,
 ) -> serde_json::Value {
     let mut cmd = json!({ "cmd": "permission_response", "id": id, "approved": approved, "always": always });
     if let Some(a) = answers {
         cmd["answers"] = json!(a);
+    }
+    if let Some(mode) = next_mode {
+        cmd["nextMode"] = json!(mode);
     }
     cmd
 }
@@ -387,7 +392,7 @@ mod tests {
     // 否则 sidecar 侧的持久化规则永远不会被触发。
     #[test]
     fn permission_response_cmd_forwards_always_true() {
-        let cmd = build_permission_response_cmd("perm-1", true, Some(true), None);
+        let cmd = build_permission_response_cmd("perm-1", true, Some(true), None, None);
         assert_eq!(cmd["cmd"], "permission_response");
         assert_eq!(cmd["id"], "perm-1");
         assert_eq!(cmd["approved"], true);
@@ -396,7 +401,7 @@ mod tests {
 
     #[test]
     fn permission_response_cmd_defaults_always_to_null() {
-        let cmd = build_permission_response_cmd("perm-2", true, None, None);
+        let cmd = build_permission_response_cmd("perm-2", true, None, None, None);
         assert!(cmd["always"].is_null());
     }
 
@@ -406,15 +411,28 @@ mod tests {
     fn permission_response_cmd_forwards_answers() {
         let mut answers = HashMap::new();
         answers.insert("用什么颜色？".to_string(), "蓝色".to_string());
-        let cmd = build_permission_response_cmd("perm-3", true, None, Some(answers));
+        let cmd = build_permission_response_cmd("perm-3", true, None, Some(answers), None);
         assert_eq!(cmd["answers"]["用什么颜色？"], "蓝色");
     }
 
     // 普通工具批准（无 answers）不该在 JSON 里凭空长出 answers 键。
     #[test]
     fn permission_response_cmd_omits_answers_key_when_none() {
-        let cmd = build_permission_response_cmd("perm-4", true, None, None);
+        let cmd = build_permission_response_cmd("perm-4", true, None, None, None);
         assert!(cmd.get("answers").is_none());
+    }
+
+    // nextMode：批准 ExitPlanMode 时前端附带，指定执行阶段切到什么模式。
+    #[test]
+    fn permission_response_cmd_forwards_next_mode() {
+        let cmd = build_permission_response_cmd("perm-5", true, None, None, Some("auto".to_string()));
+        assert_eq!(cmd["nextMode"], "auto");
+    }
+
+    #[test]
+    fn permission_response_cmd_omits_next_mode_when_none() {
+        let cmd = build_permission_response_cmd("perm-6", true, None, None, None);
+        assert!(cmd.get("nextMode").is_none());
     }
 
     // btw:fork 主会话的 send 命令必须带 session_id(主 sid)+ btw:true + lightweight,
