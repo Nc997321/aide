@@ -51,40 +51,50 @@ function onKeydown(e: KeyboardEvent) {
 <style scoped>
 .a-tab-bar {
   display: flex;
-  padding: 6px 8px 0;
+  padding: 0 8px;
   gap: 2px;
   flex-shrink: 0;
-  border-bottom: 1px solid var(--aide-border);
+  border-bottom: 1px solid var(--aide-border-subtle);
 }
 
 .a-tab {
+  position: relative;
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  padding: 8px 0 8px;
+  gap: 7px;
+  padding: 9px 14px;
   border: none;
   background: transparent;
   color: var(--aide-text-muted);
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 500;
   font-family: inherit;
   cursor: pointer;
-  border-bottom: 2px solid transparent;
   border-radius: var(--aide-radius-sm) var(--aide-radius-sm) 0 0;
-  transition: all 0.15s ease;
+  transition: color var(--aide-ease-t);
 }
 
 .a-tab:hover {
   color: var(--aide-text-secondary);
-  background: var(--aide-border-subtle);
 }
 
 .a-tab--active {
   color: var(--aide-text-primary);
-  border-bottom-color: var(--aide-accent);
-  background: var(--aide-border-subtle);
+  font-weight: 500;
+}
+
+.a-tab--active::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--aide-accent-gradient);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 55%, transparent);
 }
 
 .a-tab__icon {

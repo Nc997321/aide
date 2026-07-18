@@ -24,59 +24,74 @@ withDefaults(
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  border: 1px solid transparent;
-  border-radius: var(--aide-radius-sm);
+  gap: 7px;
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-md);
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
   font-family: inherit;
+  font-size: 12.5px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s ease;
+  box-shadow: var(--aide-highlight-inset), var(--aide-shadow-sm);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
+  transition: all var(--aide-ease-t);
   white-space: nowrap;
 }
 
-.a-btn--md {
-  padding: 4px 12px;
-  font-size: 12px;
-}
-.a-btn--sm {
-  padding: 2px 8px;
-  font-size: 11px;
+.a-btn:hover {
+  background: var(--aide-surface-hover);
+  border-color: var(--aide-border-strong);
+  transform: translateY(-1px);
 }
 
-/* Ghost */
-.a-btn--ghost {
-  background: var(--aide-surface-default);
-  border-color: var(--aide-border);
-  color: var(--aide-text-secondary);
+.a-btn:active {
+  transform: translateY(0);
+  background: var(--aide-surface-active);
 }
-.a-btn--ghost:hover {
-  background: var(--aide-surface-hover);
-  color: var(--aide-text-primary);
+
+.a-btn--md {
+  padding: 7px 15px;
+}
+.a-btn--sm {
+  padding: 4px 11px;
+  font-size: 11.5px;
+  border-radius: var(--aide-radius-sm);
+}
+
+/* Ghost (default) */
+.a-btn--ghost {
+  /* base styles already match the surface button */
 }
 
 /* Primary */
 .a-btn--primary {
-  background: var(--aide-accent);
+  background: var(--aide-accent-gradient);
+  border-color: rgba(255, 255, 255, 0.22);
   color: var(--aide-text-on-accent);
-  box-shadow: var(--aide-shadow-sm);
+  font-weight: 600;
+  box-shadow: var(--aide-accent-glow), inset 0 1px 0 rgba(255, 255, 255, 0.32);
 }
 .a-btn--primary:hover {
-  background: var(--aide-accent-hover);
+  filter: brightness(1.07);
 }
 
 /* Danger */
 .a-btn--danger {
   background: transparent;
-  border-color: color-mix(in srgb, var(--aide-danger) 30%, transparent);
+  border-color: color-mix(in srgb, var(--aide-danger) 35%, transparent);
   color: var(--aide-danger);
+  box-shadow: none;
 }
 .a-btn--danger:hover {
-  background: color-mix(in srgb, var(--aide-danger) 10%, transparent);
+  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
 }
 
 /* Disabled */
 .a-btn--disabled {
-  opacity: 0.5;
-  pointer-events: none;
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none !important;
 }
 </style>

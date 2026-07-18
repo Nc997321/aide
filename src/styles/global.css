@@ -68,8 +68,8 @@ html, body, #app {
 
 /* Scrollbar styling */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -77,12 +77,15 @@ html, body, #app {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--aide-surface-hover);
-  border-radius: 3px;
+  background: var(--aide-surface-active);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--aide-text-muted);
+  background-clip: padding-box;
 }
 
 /* ── Tooltip (v-tooltip directive) ── */
@@ -90,20 +93,22 @@ html, body, #app {
 .aide-tooltip {
   position: fixed;
   z-index: 9999;
-  max-width: 320px;
-  padding: 5px 10px;
+  max-width: 240px;
+  padding: 6px 11px;
   font-size: 12px;
-  line-height: 1.4;
+  line-height: 1.45;
   color: var(--aide-text-primary);
   background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-surface-hover);
+  border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-sm);
-  box-shadow: var(--aide-shadow-md);
+  box-shadow: var(--aide-shadow-md), var(--aide-highlight-inset);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   pointer-events: none;
   white-space: pre-line;
   word-break: break-word;
   opacity: 0;
-  transition: opacity 0.12s ease;
+  transition: opacity var(--aide-ease-t);
 }
 
 .aide-tooltip.visible {

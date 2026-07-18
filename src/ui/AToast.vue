@@ -27,35 +27,55 @@ defineProps<{ state: ToastState }>();
   margin-bottom: 6px;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 10px;
   max-width: min(480px, 90%);
   background: var(--aide-bg-raised);
   border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-md);
   color: var(--aide-text-primary);
-  font-size: 11.5px;
-  padding: 5px 12px;
-  border-radius: 999px;
-  box-shadow: var(--aide-shadow-md);
+  font-size: 12.5px;
+  padding: 10px 14px;
+  box-shadow: var(--aide-shadow-md), var(--aide-highlight-inset);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   z-index: 40;
   pointer-events: none;
+  overflow: hidden;
 }
+
 .a-toast-dot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
   flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
 }
-.a-toast--success .a-toast-dot { background: var(--aide-success); }
-.a-toast--danger .a-toast-dot { background: var(--aide-danger); }
-.a-toast--info .a-toast-dot { background: var(--aide-info); }
-.a-toast--danger { border-color: color-mix(in srgb, var(--aide-danger) 55%, transparent); }
+
+.a-toast--success .a-toast-dot {
+  background: var(--aide-success);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--aide-success) 60%, transparent);
+}
+
+.a-toast--danger .a-toast-dot {
+  background: var(--aide-danger);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--aide-danger) 60%, transparent);
+}
+
+.a-toast--info .a-toast-dot {
+  background: var(--aide-info);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--aide-info) 60%, transparent);
+}
+
 .a-toast-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .a-toast-enter-active,
 .a-toast-leave-active { transition: opacity 0.2s, transform 0.2s; }
+
 .a-toast-enter-from,
 .a-toast-leave-to { opacity: 0; transform: translate(-50%, 4px); }
 </style>

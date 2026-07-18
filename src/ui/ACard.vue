@@ -24,17 +24,24 @@ withDefaults(
 .a-card {
   position: relative;
   background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-md);
-  padding: 10px 12px;
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-lg);
+  padding: 16px;
   overflow: hidden;
-  transition: all 0.15s ease;
+  box-shadow: var(--aide-highlight-inset), var(--aide-shadow-sm);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
+  transition: all var(--aide-ease-t);
+}
+
+.a-card--hoverable {
+  cursor: pointer;
 }
 
 .a-card--hoverable:hover {
-  background: var(--aide-surface-default);
-  border-color: var(--aide-border);
-  box-shadow: var(--aide-shadow-sm);
+  transform: translateY(-2px);
+  border-color: var(--aide-border-strong);
+  box-shadow: var(--aide-highlight-inset), var(--aide-shadow-md);
 }
 
 .a-card--active {
@@ -42,7 +49,7 @@ withDefaults(
   background:
     linear-gradient(135deg, var(--aide-accent-subtle) 0%, transparent 60%),
     var(--aide-bg-raised);
-  box-shadow: var(--aide-shadow-sm);
+  box-shadow: var(--aide-highlight-inset), var(--aide-shadow-sm);
 }
 
 .a-card__glow {

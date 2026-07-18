@@ -85,6 +85,8 @@ function onOverlayClick(e: MouseEvent) {
   justify-content: center;
   z-index: 1100;
   animation: fadeIn 0.12s ease;
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
 }
 
 @keyframes fadeIn {
@@ -93,13 +95,16 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .modal-dialog {
-  background: var(--aide-surface-default);
-  border: 1px solid var(--aide-surface-hover);
+  width: 380px;
+  background: linear-gradient(180deg, var(--aide-bg-raised), var(--aide-bg-base));
+  border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-lg);
-  padding: 20px 24px;
+  padding: 20px;
   min-width: 360px;
   max-width: 440px;
-  box-shadow: var(--aide-shadow-lg);
+  box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   animation: scaleIn 0.15s ease;
 }
 
@@ -116,9 +121,9 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .modal-body {
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--aide-text-secondary);
-  line-height: 1.5;
+  line-height: 1.65;
   margin-bottom: 12px;
 }
 
@@ -129,71 +134,91 @@ function onOverlayClick(e: MouseEvent) {
 .modal-input {
   width: 100%;
   box-sizing: border-box;
-  background: var(--aide-bg-base);
-  border: 1px solid var(--aide-surface-hover);
+  background: var(--aide-bg-deep);
+  border: 1px solid var(--aide-border);
   border-radius: var(--aide-radius-md);
   padding: 8px 12px;
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--aide-text-primary);
   outline: none;
   font-family: inherit;
-  transition: border-color 0.15s;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: all var(--aide-ease-t);
 }
+
 .modal-input::placeholder {
   color: var(--aide-text-muted);
 }
+
 .modal-input:focus {
   border-color: var(--aide-accent);
+  box-shadow: var(--aide-accent-ring), inset 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
 .modal-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 9px;
 }
 
 .modal-btn {
-  padding: 8px 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px 15px;
   border-radius: var(--aide-radius-md);
-  font-size: 13px;
+  font-size: 12.5px;
+  font-weight: 500;
   cursor: pointer;
   font-family: inherit;
-  border: 1px solid var(--aide-surface-hover);
-  transition: all 0.12s;
+  transition: all var(--aide-ease-t);
+  white-space: nowrap;
 }
 
 .btn-cancel {
   background: transparent;
+  border: 1px solid transparent;
   color: var(--aide-text-secondary);
+  box-shadow: none;
 }
+
 .btn-cancel:hover {
-  background: var(--aide-surface-hover);
+  background: var(--aide-surface-default);
   color: var(--aide-text-primary);
 }
 
 .btn-alt {
   background: transparent;
+  border: 1px solid color-mix(in srgb, var(--aide-danger) 35%, transparent);
   color: var(--aide-danger);
-  border-color: color-mix(in srgb, var(--aide-danger) 35%, transparent);
+  box-shadow: none;
 }
+
 .btn-alt:hover {
   background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
 }
 
 .btn-confirm {
-  background: var(--aide-accent);
-  border-color: var(--aide-accent);
+  background: var(--aide-accent-gradient);
+  border: 1px solid rgba(255, 255, 255, 0.22);
   color: var(--aide-text-on-accent);
+  font-weight: 600;
+  box-shadow: var(--aide-accent-glow), inset 0 1px 0 rgba(255, 255, 255, 0.32);
 }
+
 .btn-confirm:hover {
-  filter: brightness(1.1);
+  filter: brightness(1.07);
 }
+
 .btn-confirm.danger {
-  background: var(--aide-danger);
-  border-color: var(--aide-danger);
-  color: var(--aide-text-on-accent);
+  background: transparent;
+  border-color: color-mix(in srgb, var(--aide-danger) 35%, transparent);
+  color: var(--aide-danger);
+  box-shadow: none;
 }
+
 .btn-confirm.danger:hover {
-  filter: brightness(1.1);
+  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
 }
 </style>

@@ -21,24 +21,24 @@ defineProps<{
 }
 
 .a-status-dot--stopped {
-  background: var(--aide-text-muted);
+  background: transparent;
+  border: 1.5px solid var(--aide-text-muted);
 }
 
 .a-status-dot--running {
   background: var(--aide-success);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--aide-success) 50%, transparent);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--aide-success) 80%, transparent);
   animation: a-dot-pulse 2s ease-in-out infinite;
 }
 
-/* 空闲：蓝（--aide-info）。不用 --aide-accent——暖色主题里 accent 是金色，
-   会和 attention 的黄撞色，也不符合“蓝=空闲”的语义。 */
+/* 空闲 */
 .a-status-dot--waiting {
-  background: var(--aide-info);
+  background: var(--aide-text-muted);
 }
 
 .a-status-dot--attention {
   background: var(--aide-warning);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--aide-warning) 50%, transparent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--aide-warning) 60%, transparent);
   animation: a-dot-pulse 2s ease-in-out infinite;
 }
 

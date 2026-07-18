@@ -27,35 +27,48 @@ defineEmits<{
   display: flex;
   align-items: center;
   gap: 8px;
-  background: var(--aide-surface-default);
-  border: 1px solid transparent;
-  border-radius: var(--aide-radius-md);
-  padding: 6px 10px;
-  transition: all 0.15s ease;
-}
-
-.a-input:focus-within {
-  border-color: var(--aide-accent);
-  box-shadow: 0 0 0 2px var(--aide-accent-subtle);
+  position: relative;
+  width: 100%;
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
 .a-input__icon {
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  transform: translateY(-50%);
   font-size: 13px;
   color: var(--aide-text-muted);
+  pointer-events: none;
   flex-shrink: 0;
 }
 
 .a-input__field {
   flex: 1;
-  background: none;
-  border: none;
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--aide-bg-deep);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-md);
   outline: none;
   color: var(--aide-text-primary);
-  font-size: 12px;
+  font-size: 12.5px;
   font-family: inherit;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: all var(--aide-ease-t);
 }
 
 .a-input__field::placeholder {
   color: var(--aide-text-muted);
+}
+
+.a-input__field:focus {
+  border-color: var(--aide-accent);
+  box-shadow: var(--aide-accent-ring), inset 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.a-input__icon + .a-input__field {
+  padding-left: 32px;
 }
 </style>

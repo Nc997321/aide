@@ -41,14 +41,13 @@ defineEmits<{
   display: flex;
   align-items: center;
   gap: 6px;
-  padding-top: 4px;
-  padding-bottom: 4px;
-  padding-right: 8px;
+  padding: 4px 8px;
   border-radius: var(--aide-radius-sm);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--aide-text-secondary);
-  transition: all 0.1s;
+  transition: all var(--aide-ease-t);
+  position: relative;
 }
 
 .a-tree-item:hover {
@@ -58,18 +57,17 @@ defineEmits<{
 
 .a-tree-item--active {
   background: var(--aide-accent-subtle);
-  color: var(--aide-accent);
+  color: var(--aide-text-primary);
+  box-shadow: inset 2px 0 0 var(--aide-accent);
 }
 
 .a-tree-item__arrow {
-  width: 14px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   color: var(--aide-text-muted);
-  transition: transform 0.15s ease, color 0.15s ease;
+  transition: transform var(--aide-ease-t), color var(--aide-ease-t);
   flex-shrink: 0;
   cursor: pointer;
-  border-radius: 3px;
-  padding: 1px;
 }
 
 .a-tree-item__arrow--open {
@@ -77,13 +75,13 @@ defineEmits<{
 }
 
 .a-tree-item__arrow-placeholder {
-  width: 14px;
+  width: 11px;
   flex-shrink: 0;
 }
 
 .a-tree-item__icon {
   font-size: 14px;
-  width: 18px;
+  width: 15px;
   text-align: center;
   flex-shrink: 0;
 }
