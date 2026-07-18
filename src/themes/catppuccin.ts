@@ -28,6 +28,12 @@ export const catppuccin: ThemeTokens = {
 
   border:       "rgba(255, 255, 255, 0.06)",
   borderSubtle: "rgba(255, 255, 255, 0.03)",
+  borderStrong: "rgba(255,255,255,.14)",
+  highlightInset: "inset 0 1px 0 rgba(255,255,255,.06)",
+  accentGradient: "linear-gradient(180deg,#a3c0fb,#89b4fa)",
+  accentGlow: "0 6px 20px rgba(137,180,250,.30)",
+  accentRing: "0 0 0 2.5px rgba(137,180,250,.34)",
+  ambientGlow: "radial-gradient(700px 240px at 50% -60px, rgba(137,180,250,.08), transparent 70%)",
 
   shadowSm: "0 1px 3px rgba(0,0,0,0.25), 0 1px 2px rgba(0,0,0,0.15)",
   shadowMd: "0 4px 12px rgba(0,0,0,0.3), 0 1px 4px rgba(0,0,0,0.2)",
@@ -38,6 +44,11 @@ export const catppuccin: ThemeTokens = {
   radiusLg: "12px",
 
   spaceUnit: "4px",
+
+  ease: "cubic-bezier(.2,.8,.2,1)",
+  easeT: ".16s cubic-bezier(.2,.8,.2,1)",
+  surfaceBlur: "none",
+  ambientScene: "none",
 
   stalled:       "#fab387",
   syntaxKeyword: "#cba6f7",

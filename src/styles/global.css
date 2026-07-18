@@ -9,42 +9,48 @@
 }
 
 :root {
-  /* 首屏兜底（与下方 --aide-* 暖色字面量同性质：applyTheme 运行前的默认 warm-dark 值）。
-   * applyTheme 会按当前主题的 colorScheme token 覆盖这条——加亮色主题时只需在
-   * 该主题文件里给 colorScheme: "light"，这里不用动。作用：让原生表单控件
-   * （复选框/单选框/未显式主题化的 input/滚动条角）按暗色渲染，避免未勾选白底。 */
+  /* 首屏兜底：与 warm-dark 精修值一致，applyTheme 运行前生效。 */
   color-scheme: dark;
-  --aide-bg-deep: #1a1a22;
-  --aide-bg-base: #22222e;
-  --aide-bg-raised: #2a2a38;
-  --aide-bg-overlay: rgba(10, 10, 15, 0.75);
-  --aide-surface-default: #32323f;
-  --aide-surface-hover: #3a3a4a;
-  --aide-surface-active: #44445a;
-  --aide-text-primary: #d8d4cf;
-  --aide-text-secondary: #a8a4a0;
-  --aide-text-muted: #6b6762;
-  --aide-text-on-accent: #1a1a22;
-  --aide-accent: #d4a574;
-  --aide-accent-hover: #e0b584;
-  --aide-accent-subtle: rgba(212, 165, 116, 0.12);
+  --aide-bg-deep: #141218;
+  --aide-bg-base: #1a1820;
+  --aide-bg-raised: #221f29;
+  --aide-bg-overlay: rgba(12,10,16,.72);
+  --aide-surface-default: #292631;
+  --aide-surface-hover: #322e3c;
+  --aide-surface-active: #3d3848;
+  --aide-text-primary: #ece5db;
+  --aide-text-secondary: #b3aa9c;
+  --aide-text-muted: #7d7568;
+  --aide-text-on-accent: #241d15;
+  --aide-accent: #d9ab78;
+  --aide-accent-hover: #e6bd8e;
+  --aide-accent-subtle: rgba(217,171,120,.13);
   --aide-success: #8bc48a;
   --aide-warning: #e8c374;
   --aide-danger: #e87070;
+  --aide-info: #7eb8d8;
+  --aide-border: rgba(255,214,160,.09);
+  --aide-border-subtle: rgba(255,214,160,.045);
+  --aide-border-strong: rgba(255,220,175,.16);
+  --aide-highlight-inset: inset 0 1px 0 rgba(255,235,210,.07);
+  --aide-accent-gradient: linear-gradient(180deg,#e6bd8e,#cf9c66);
+  --aide-accent-glow: 0 6px 20px rgba(212,165,116,.28);
+  --aide-accent-ring: 0 0 0 2.5px rgba(217,171,120,.32);
+  --aide-ambient-glow: radial-gradient(700px 240px at 50% -60px, rgba(224,181,132,.09), transparent 70%);
+  --aide-shadow-sm: 0 1px 2px rgba(0,0,0,.28);
+  --aide-shadow-md: 0 6px 20px rgba(0,0,0,.34), 0 1px 4px rgba(0,0,0,.22);
+  --aide-shadow-lg: 0 18px 56px rgba(0,0,0,.5), 0 4px 14px rgba(0,0,0,.3);
+  --aide-radius-sm: 6px;
+  --aide-radius-md: 9px;
+  --aide-radius-lg: 13px;
+  --aide-space-unit: 4px;
+  --aide-ease: cubic-bezier(.2,.8,.2,1);
+  --aide-ease-t: .16s cubic-bezier(.2,.8,.2,1);
+  --aide-surface-blur: none;
+  --aide-ambient-scene: none;
   --aide-stalled: #e0955c;
   --aide-syntax-keyword: #b09bc8;
   --aide-syntax-number: #e8a87c;
-  --aide-info: #7eb8d8;
-  --aide-border: rgba(255, 255, 255, 0.06);
-  --aide-border-subtle: rgba(255, 255, 255, 0.03);
-  --aide-shadow-sm: 0 1px 3px rgba(0,0,0,0.25), 0 1px 2px rgba(0,0,0,0.15);
-  --aide-shadow-md: 0 4px 12px rgba(0,0,0,0.3), 0 1px 4px rgba(0,0,0,0.2);
-  --aide-shadow-lg: 0 12px 40px rgba(0,0,0,0.45), 0 4px 12px rgba(0,0,0,0.25);
-  --aide-radius-sm: 4px;
-  --aide-radius-md: 8px;
-  --aide-radius-lg: 12px;
-  --aide-space-unit: 4px;
-
 }
 
 html, body, #app {
@@ -52,8 +58,10 @@ html, body, #app {
   width: 100%;
   overflow: hidden;
   background-color: var(--aide-bg-base);
+  /* 玻璃后门：普通主题 ambientScene 为 "none" → 无图像；玻璃主题为极光渐变 */
+  background-image: var(--aide-ambient-scene);
   color: var(--aide-text-primary);
-  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: 'Inter Variable', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   font-size: 13px;
 }
 
@@ -105,4 +113,3 @@ html, body, #app {
    删前先 grep 全 src/，这两个类与 git diff 查看器无关。 */
 .aide-diff-add { color: var(--aide-success); background: color-mix(in srgb, var(--aide-success) 4%, transparent); display: block; }
 .aide-diff-del { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 4%, transparent); display: block; }
-
