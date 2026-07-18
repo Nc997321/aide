@@ -1,0 +1,1118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aide 组件质感精修 · 暖色方向 · 2026-07-18</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   概念验证：质感手法封装在「组件实现」里，颜色与强度全部走 token。
+   切换顶部主题按钮 = 只换 token 值，组件一行不改。
+   ═══════════════════════════════════════════════════════════════ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* ── 主题 A：暖色精修（现有 warm-dark 的质感升级）── */
+body.theme-warm {
+  --bg-deep: #141218;
+  --bg-base: #1a1820;
+  --bg-raised: #221f29;
+  --bg-overlay: rgba(12,10,16,.72);
+  --surface-default: #292631;
+  --surface-hover: #322e3c;
+  --surface-active: #3d3848;
+  --text-primary: #ece5db;
+  --text-secondary: #b3aa9c;
+  --text-muted: #7d7568;
+  --text-on-accent: #241d15;
+  --accent: #d9ab78;
+  --accent-hover: #e6bd8e;
+  --accent-subtle: rgba(217,171,120,.13);
+  --success: #8bc48a;
+  --warning: #e8c374;
+  --danger: #e87070;
+  --info: #7eb8d8;
+  --border: rgba(255,214,160,.09);
+  --border-subtle: rgba(255,214,160,.045);
+  --border-strong: rgba(255,220,175,.16);
+  /* ── 新增质感槽位（本方案的核心提案）── */
+  --highlight-inset: inset 0 1px 0 rgba(255,235,210,.07);
+  --accent-gradient: linear-gradient(180deg, #e6bd8e, #cf9c66);
+  --accent-glow: 0 6px 20px rgba(212,165,116,.28);
+  --accent-ring: 0 0 0 2.5px rgba(217,171,120,.32);
+  --ambient-glow: radial-gradient(700px 240px at 50% -60px, rgba(224,181,132,.09), transparent 70%);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.28);
+  --shadow-md: 0 6px 20px rgba(0,0,0,.34), 0 1px 4px rgba(0,0,0,.22);
+  --shadow-lg: 0 18px 56px rgba(0,0,0,.5), 0 4px 14px rgba(0,0,0,.3);
+  --radius-sm: 6px;
+  --radius-md: 9px;
+  --radius-lg: 13px;
+  --ease: cubic-bezier(.2,.8,.2,1);
+  --ease-t: .16s cubic-bezier(.2,.8,.2,1);
+}
+
+/* ── 主题 B：靛蓝（验证「组件实现主题」——同一套组件只换 token）── */
+body.theme-indigo {
+  --bg-deep: #0c0d11;
+  --bg-base: #101117;
+  --bg-raised: #17181f;
+  --bg-overlay: rgba(8,9,13,.72);
+  --surface-default: #1e2029;
+  --surface-hover: #262935;
+  --surface-active: #303442;
+  --text-primary: #e9eaf0;
+  --text-secondary: #a2a5b3;
+  --text-muted: #616473;
+  --text-on-accent: #ffffff;
+  --accent: #7883f4;
+  --accent-hover: #8b95ff;
+  --accent-subtle: rgba(120,131,244,.15);
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --info: #60c8f0;
+  --border: rgba(255,255,255,.08);
+  --border-subtle: rgba(255,255,255,.045);
+  --border-strong: rgba(255,255,255,.15);
+  /* 同一组质感槽位，不同性格：更锐的顶光、冷色辉光、更小的圆角 */
+  --highlight-inset: inset 0 1px 0 rgba(255,255,255,.08);
+  --accent-gradient: linear-gradient(180deg, #8b95ff, #6a74e8);
+  --accent-glow: 0 4px 18px rgba(120,131,244,.42);
+  --accent-ring: 0 0 0 2.5px rgba(120,131,244,.38);
+  --ambient-glow: radial-gradient(700px 240px at 50% -60px, rgba(120,131,244,.08), transparent 70%);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.35);
+  --shadow-md: 0 6px 20px rgba(0,0,0,.42), 0 1px 4px rgba(0,0,0,.3);
+  --shadow-lg: 0 18px 56px rgba(0,0,0,.6), 0 4px 14px rgba(0,0,0,.4);
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --ease: cubic-bezier(.2,.8,.2,1);
+  --ease-t: .14s cubic-bezier(.2,.8,.2,1);
+}
+
+/* ── 主题 C：玻璃（后门验证——组件零新增代码，只给 alpha 面板 + blur + 环境场景）── */
+body.theme-glass {
+  --bg-deep: rgba(8,10,16,.82);
+  --bg-base: rgba(17,19,29,.52);
+  --bg-raised: rgba(24,26,38,.48);
+  --bg-overlay: rgba(8,10,16,.55);
+  --surface-default: rgba(255,255,255,.06);
+  --surface-hover: rgba(255,255,255,.1);
+  --surface-active: rgba(255,255,255,.14);
+  --text-primary: #eef0f8;
+  --text-secondary: #b9bdd0;
+  --text-muted: #7c8296;
+  --text-on-accent: #eef0ff;
+  --accent: #a5b8ff;
+  --accent-hover: #bcc9ff;
+  --accent-subtle: rgba(150,170,255,.16);
+  --success: #6ee7a8;
+  --warning: #fcd34d;
+  --danger: #f87171;
+  --info: #7dd3fc;
+  --border: rgba(255,255,255,.1);
+  --border-subtle: rgba(255,255,255,.06);
+  --border-strong: rgba(255,255,255,.17);
+  --highlight-inset: inset 0 1px 0 rgba(255,255,255,.12);
+  --accent-gradient: linear-gradient(180deg, rgba(160,180,255,.42), rgba(130,150,255,.3));
+  --accent-glow: 0 4px 18px rgba(140,160,255,.38);
+  --accent-ring: 0 0 0 2.5px rgba(150,170,255,.42);
+  --ambient-glow: radial-gradient(700px 240px at 50% -60px, rgba(150,170,255,.12), transparent 70%);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.3);
+  --shadow-md: 0 8px 24px rgba(0,0,0,.38);
+  --shadow-lg: 0 20px 60px rgba(0,0,0,.55);
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --ease: cubic-bezier(.2,.8,.2,1);
+  --ease-t: .16s cubic-bezier(.2,.8,.2,1);
+  --surface-blur: blur(20px) saturate(150%);
+  --ambient-scene:
+    radial-gradient(560px 380px at 10% -8%, rgba(124,108,255,.32), transparent 65%),
+    radial-gradient(520px 420px at 96% 6%, rgba(64,190,220,.22), transparent 65%),
+    radial-gradient(640px 340px at 60% 112%, rgba(210,110,190,.16), transparent 70%),
+    #0a0b11;
+}
+
+body {
+  background: var(--ambient-scene, var(--bg-deep));
+  color: var(--text-primary);
+  font-family: 'Inter','Noto Sans SC','PingFang SC','Microsoft YaHei',sans-serif;
+  font-size: 13px;
+  transition: background .3s;
+}
+
+/* 后门本体：所有面板容器统一引用 --surface-blur。
+   暖色/靛蓝主题不定义它 → fallback none，零效果零成本；
+   玻璃主题一个值开启全局毛玻璃——这就是「未来玻璃主题 = 只写 token 文件」。 */
+.spec, .card, .menu, .modal, .toast, .palette, .input-box, .think-row, .tree, .toolbar,
+.select, .banner, .toolcall, .tc-group-row, .shell, .settings-shell, .tooltip, .chip,
+.btn, .send-split, .subagent, .perm, .theme-switch, .diff2-head, .diff2, .tm-head, .cm-search {
+  backdrop-filter: var(--surface-blur, none);
+  -webkit-backdrop-filter: var(--surface-blur, none);
+}
+body.theme-glass .term { background: rgba(7,9,15,.8); }
+
+/* ── 页面骨架 ── */
+.page { max-width: 1240px; margin: 0 auto; padding: 30px 32px 70px; }
+.page-head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 14px; }
+.page-head h1 { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
+.page-head .sub { margin-top: 6px; font-size: 12.5px; color: var(--text-muted); line-height: 1.6; max-width: 640px; }
+.theme-switch { display: flex; gap: 4px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 3px; box-shadow: var(--highlight-inset); }
+.theme-switch button { padding: 6px 14px; font-size: 12px; font-weight: 500; border: none; border-radius: calc(var(--radius-md) - 3px); background: transparent; color: var(--text-muted); cursor: pointer; font-family: inherit; transition: all var(--ease-t); }
+.theme-switch button.active { background: var(--surface-active); color: var(--text-primary); box-shadow: var(--highlight-inset), var(--shadow-sm); }
+
+.sec-title { margin: 38px 0 14px; font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--text-muted); display: flex; align-items: center; gap: 10px; }
+.sec-title::after { content: ''; flex: 1; height: 1px; background: var(--border-subtle); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }
+.spec { background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 18px; box-shadow: var(--highlight-inset); }
+.spec.wide { grid-column: 1 / -1; }
+.spec-label { font-size: 11px; font-weight: 600; color: var(--text-muted); letter-spacing: .06em; margin-bottom: 14px; display: flex; justify-content: space-between; }
+.spec-label .en { opacity: .6; font-weight: 400; }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.row + .row { margin-top: 12px; }
+
+/* ═══════════ 按钮 AButton ═══════════ */
+.btn { display: inline-flex; align-items: center; gap: 7px; padding: 7px 15px; font-size: 12.5px; font-weight: 500; font-family: inherit; border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--surface-default); color: var(--text-primary); cursor: pointer; box-shadow: var(--highlight-inset), var(--shadow-sm); transition: all var(--ease-t); }
+.btn:hover { background: var(--surface-hover); border-color: var(--border-strong); transform: translateY(-1px); }
+.btn:active { transform: translateY(0); background: var(--surface-active); }
+.btn.sm { padding: 4px 11px; font-size: 11.5px; border-radius: var(--radius-sm); }
+.btn.primary { background: var(--accent-gradient); border-color: rgba(255,255,255,.22); color: var(--text-on-accent); font-weight: 600; box-shadow: var(--accent-glow), inset 0 1px 0 rgba(255,255,255,.32); }
+.btn.primary:hover { filter: brightness(1.07); transform: translateY(-1px); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--text-secondary); box-shadow: none; }
+.btn.ghost:hover { background: var(--surface-default); color: var(--text-primary); }
+.btn.danger { background: transparent; border-color: color-mix(in srgb, var(--danger) 35%, transparent); color: var(--danger); }
+.btn.danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.btn:disabled { opacity: .45; cursor: not-allowed; transform: none !important; }
+
+/* ═══════════ 输入 AInput ═══════════ */
+.field { width: 100%; padding: 8px 12px; font-size: 12.5px; font-family: inherit; color: var(--text-primary); background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius-md); outline: none; box-shadow: inset 0 1px 3px rgba(0,0,0,.25); transition: all var(--ease-t); }
+.field::placeholder { color: var(--text-muted); }
+.field:focus { border-color: var(--accent); box-shadow: var(--accent-ring), inset 0 1px 3px rgba(0,0,0,.25); }
+.field-wrap { position: relative; width: 100%; }
+.field-wrap .ico { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 13px; pointer-events: none; }
+.field-wrap .field { padding-left: 32px; }
+.field-note { font-size: 11px; color: var(--danger); margin-top: 6px; }
+.field.err { border-color: color-mix(in srgb, var(--danger) 55%, transparent); }
+
+/* ═══════════ 下拉 ADropdown / ThemedSelect ═══════════ */
+.select { display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12.5px; background: var(--surface-default); border: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer; box-shadow: var(--highlight-inset), var(--shadow-sm); transition: all var(--ease-t); }
+.select:hover { background: var(--surface-hover); border-color: var(--border-strong); }
+.select .chev { color: var(--text-muted); font-size: 10px; }
+.menu { width: 230px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); padding: 5px; box-shadow: var(--shadow-lg), var(--highlight-inset); }
+.menu-item { display: flex; align-items: center; gap: 9px; padding: 7px 10px; font-size: 12.5px; border-radius: var(--radius-sm); color: var(--text-secondary); cursor: pointer; transition: all .1s; }
+.menu-item:hover { background: var(--surface-hover); color: var(--text-primary); }
+.menu-item.active { background: var(--accent-subtle); color: var(--text-primary); }
+.menu-item .check { width: 14px; color: var(--accent); font-size: 11px; }
+.menu-item .kbd { margin-left: auto; font-size: 10.5px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+.menu-sep { height: 1px; background: var(--border-subtle); margin: 5px 8px; }
+
+/* ═══════════ 标签页 ATabBar ═══════════ */
+.tabbar { display: flex; align-items: center; border-bottom: 1px solid var(--border-subtle); }
+.tab { position: relative; display: flex; align-items: center; gap: 7px; padding: 9px 14px; font-size: 12.5px; color: var(--text-muted); cursor: pointer; transition: color var(--ease-t); }
+.tab:hover { color: var(--text-secondary); }
+.tab.active { color: var(--text-primary); font-weight: 500; }
+.tab.active::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--accent-gradient); box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 55%, transparent); }
+.tab .x { font-size: 10px; opacity: 0; transition: opacity .12s; }
+.tab:hover .x { opacity: .6; }
+.tab .dirty { width: 5px; height: 5px; border-radius: 50%; background: var(--warning); }
+
+/* ═══════════ 徽标 ABadge / 状态点 AStatusDot ═══════════ */
+.badge { display: inline-flex; align-items: center; gap: 5px; padding: 2.5px 9px; font-size: 10.5px; font-weight: 600; border-radius: var(--radius-sm); letter-spacing: .02em; }
+.badge.accent { background: var(--accent-subtle); color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent); }
+.badge.green { background: color-mix(in srgb, var(--success) 13%, transparent); color: var(--success); border: 1px solid color-mix(in srgb, var(--success) 28%, transparent); }
+.badge.amber { background: color-mix(in srgb, var(--warning) 13%, transparent); color: var(--warning); border: 1px solid color-mix(in srgb, var(--warning) 28%, transparent); }
+.badge.grey { background: var(--surface-default); color: var(--text-secondary); border: 1px solid var(--border); }
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.dot.run { background: var(--success); box-shadow: 0 0 7px color-mix(in srgb, var(--success) 80%, transparent); animation: pulse 2s ease-in-out infinite; }
+.dot.att { background: var(--warning); box-shadow: 0 0 6px color-mix(in srgb, var(--warning) 60%, transparent); }
+.dot.wait { background: var(--text-muted); }
+.dot.stop { background: transparent; border: 1.5px solid var(--text-muted); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+.status-line { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
+
+/* ═══════════ 卡片 ACard ═══════════ */
+.card { background: var(--bg-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 16px; box-shadow: var(--highlight-inset), var(--shadow-sm); transition: all var(--ease-t); cursor: pointer; }
+.card:hover { transform: translateY(-2px); border-color: var(--border-strong); box-shadow: var(--highlight-inset), var(--shadow-md); }
+.card h3 { font-size: 13.5px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.card p { margin-top: 7px; font-size: 12px; line-height: 1.6; color: var(--text-secondary); }
+.card .foot { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; }
+.card .ver { font-size: 10.5px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+
+/* ═══════════ 模态 ModalDialog ═══════════ */
+.overlay { background: var(--bg-overlay); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); border-radius: var(--radius-lg); padding: 34px; display: flex; align-items: center; justify-content: center; }
+.modal { width: 380px; background: linear-gradient(180deg, var(--bg-raised), var(--bg-base)); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg), var(--highlight-inset); padding: 20px; }
+.modal-head { display: flex; gap: 12px; align-items: flex-start; }
+.modal-ico { width: 34px; height: 34px; flex: none; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 15px; background: color-mix(in srgb, var(--warning) 14%, transparent); border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent); }
+.modal h3 { font-size: 14px; font-weight: 600; }
+.modal .body { margin-top: 6px; font-size: 12.5px; line-height: 1.65; color: var(--text-secondary); }
+.modal .foot { margin-top: 18px; display: flex; justify-content: flex-end; gap: 9px; }
+
+/* ═══════════ Toast / Tooltip ═══════════ */
+.toast { display: flex; align-items: center; gap: 10px; padding: 10px 14px; font-size: 12.5px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-md), var(--highlight-inset); position: relative; overflow: hidden; }
+.toast::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.toast.ok::before { background: var(--success); box-shadow: 0 0 10px color-mix(in srgb, var(--success) 60%, transparent); }
+.toast.err::before { background: var(--danger); box-shadow: 0 0 10px color-mix(in srgb, var(--danger) 60%, transparent); }
+.toast.inf::before { background: var(--info); box-shadow: 0 0 10px color-mix(in srgb, var(--info) 60%, transparent); }
+.toast .t-ico-ok { color: var(--success); } .toast .t-ico-err { color: var(--danger); } .toast .t-ico-inf { color: var(--info); }
+.tooltip { display: inline-block; padding: 6px 11px; font-size: 12px; line-height: 1.45; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: var(--shadow-md), var(--highlight-inset); color: var(--text-primary); max-width: 240px; }
+
+/* ═══════════ 命令面板 ACommandPalette ═══════════ */
+.palette { width: 100%; max-width: 480px; margin: 0 auto; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg), var(--highlight-inset); overflow: hidden; }
+.palette-input { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--border-subtle); font-size: 14px; color: var(--text-muted); }
+.palette-group { padding: 8px 8px 4px; font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); }
+.palette-item { display: flex; align-items: center; gap: 10px; margin: 0 6px; padding: 8px 10px; font-size: 13px; border-radius: var(--radius-sm); color: var(--text-secondary); }
+.palette-item.active { background: var(--accent-subtle); color: var(--text-primary); box-shadow: inset 2px 0 0 var(--accent); }
+.palette-item .kbd { margin-left: auto; font-size: 10.5px; padding: 2px 6px; border-radius: 4px; background: var(--surface-default); border: 1px solid var(--border); color: var(--text-muted); font-family: 'JetBrains Mono', monospace; box-shadow: 0 1px 0 var(--border); }
+
+/* ═══════════ 工具调用块 ToolCallBlock（复合） ═══════════ */
+.toolcall { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-base); overflow: hidden; box-shadow: var(--highlight-inset); }
+.toolcall + .toolcall { margin-top: 10px; }
+.tc-head { display: flex; align-items: center; gap: 9px; padding: 8px 12px; font-size: 12px; color: var(--text-secondary); cursor: pointer; transition: background .12s; }
+.tc-head:hover { background: var(--surface-default); }
+.tc-head .chev { font-size: 9px; color: var(--text-muted); transition: transform var(--ease-t); }
+.tc-head.open .chev { transform: rotate(90deg); }
+.tc-name { font-weight: 600; color: var(--text-primary); }
+.tc-cmd { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-status { margin-left: auto; font-size: 11px; flex: none; }
+.tc-status.ok { color: var(--success); }
+.tc-status.run { color: var(--warning); }
+.tc-body { border-top: 1px solid var(--border-subtle); background: var(--bg-deep); }
+.tc-code { padding: 11px 14px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; line-height: 1.7; color: var(--text-secondary); overflow: hidden; }
+.tc-diff { padding: 6px 0; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; line-height: 1.7; }
+
+/* ── 统一 diff 行语言：DiffViewer（并排/单栏）、聊天 Edit diff、FileViewer 文本 diff 同源 ──
+   色号与透明度全场景一致；左侧 2px 色条是「这行变了」的第一视觉信号；
+   行号槽位两处同宽：查看器给真实行号，聊天内联（没有原始文件）给 +/− 符号列。 */
+.dl-row { display: flex; padding: 0 12px 0 0; white-space: pre; color: var(--text-secondary); }
+.dl-row .n { width: 34px; flex: none; text-align: right; padding-right: 10px; color: var(--text-muted); opacity: .5; user-select: none; }
+.dl-row .sign { width: 26px; flex: none; text-align: center; color: var(--text-muted); opacity: .6; user-select: none; }
+.dl-row.del { background: color-mix(in srgb, var(--danger) 8%, transparent); color: color-mix(in srgb, var(--danger) 85%, var(--text-primary)); box-shadow: inset 2px 0 0 var(--danger); }
+.dl-row.del .sign { color: var(--danger); opacity: .85; }
+.dl-row.add { background: color-mix(in srgb, var(--success) 7%, transparent); color: color-mix(in srgb, var(--success) 85%, var(--text-primary)); box-shadow: inset 2px 0 0 var(--success); }
+.dl-row.add .sign { color: var(--success); opacity: .85; }
+.dl-row.hunk { color: var(--info); background: color-mix(in srgb, var(--info) 5%, transparent); font-size: 11px; padding-top: 2px; padding-bottom: 2px; }
+.dl-row.ctx { color: var(--text-muted); }
+
+/* ═══════════ 权限对话框 PermissionDialog ═══════════ */
+.perm { border: 1px solid color-mix(in srgb, var(--warning) 25%, transparent); border-radius: var(--radius-lg); background: linear-gradient(180deg, color-mix(in srgb, var(--warning) 5%, transparent), var(--bg-base)); box-shadow: var(--highlight-inset), 0 0 24px color-mix(in srgb, var(--warning) 7%, transparent); overflow: hidden; }
+.perm-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
+.perm-ico { width: 28px; height: 28px; border-radius: 50%; background: color-mix(in srgb, var(--warning) 15%, transparent); border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent); display: flex; align-items: center; justify-content: center; color: var(--warning); font-size: 13px; flex: none; }
+.perm-title { font-size: 12.5px; font-weight: 600; }
+.perm-sub { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.perm-cmd { margin: 0 14px; padding: 10px 12px; background: var(--bg-deep); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--text-secondary); box-shadow: inset 0 1px 3px rgba(0,0,0,.3); }
+.perm-foot { display: flex; gap: 8px; padding: 12px 14px; justify-content: flex-end; }
+
+/* ═══════════ 设置片段 / 开关 ═══════════ */
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 0; }
+.setting-row + .setting-row { border-top: 1px solid var(--border-subtle); }
+.setting-row .s-label { font-size: 12.5px; font-weight: 500; }
+.setting-row .s-desc { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.switch { width: 36px; height: 20px; border-radius: 99px; background: var(--surface-active); border: 1px solid var(--border); position: relative; cursor: pointer; transition: all var(--ease-t); flex: none; box-shadow: inset 0 1px 3px rgba(0,0,0,.3); }
+.switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--text-secondary); transition: all var(--ease-t); box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+.switch.on { background: var(--accent-gradient); border-color: rgba(255,255,255,.2); box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 35%, transparent), inset 0 1px 0 rgba(255,255,255,.25); }
+.switch.on::after { left: 18px; background: var(--text-on-accent); }
+
+/* ═══════════ 聊天碎片 + 环境光晕 ═══════════ */
+.chat-demo { position: relative; background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 20px; overflow: hidden; }
+.chat-demo::before { content: ''; position: absolute; inset: 0; background: var(--ambient-glow); pointer-events: none; }
+.chat-demo > * { position: relative; }
+.bubble { display: inline-block; max-width: 75%; padding: 10px 14px; font-size: 13px; line-height: 1.65; background: linear-gradient(180deg, var(--surface-default), var(--bg-raised)); border: 1px solid var(--border); border-radius: var(--radius-lg) var(--radius-lg) var(--radius-lg) 5px; color: var(--text-primary); box-shadow: var(--shadow-sm), var(--highlight-inset); }
+.bubble-row { display: flex; justify-content: flex-end; margin-bottom: 16px; }
+.asst-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.usage { font-size: 10.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; margin-top: 10px; }
+
+/* ═══════════ 滚动条 / 空状态 ═══════════ */
+.scroll-demo { height: 120px; overflow-y: scroll; background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 12px; font-size: 12px; color: var(--text-secondary); line-height: 1.9; }
+.scroll-demo::-webkit-scrollbar { width: 8px; }
+.scroll-demo::-webkit-scrollbar-track { background: transparent; }
+.scroll-demo::-webkit-scrollbar-thumb { background: var(--surface-active); border-radius: 99px; border: 2px solid var(--bg-base); }
+.scroll-demo::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+.empty { text-align: center; padding: 28px 12px; }
+.empty .e-ico { width: 44px; height: 44px; margin: 0 auto 12px; border-radius: 50%; background: var(--surface-default); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 18px; color: var(--text-muted); box-shadow: var(--highlight-inset); }
+.empty .e-title { font-size: 13px; font-weight: 500; }
+.empty .e-sub { font-size: 11.5px; color: var(--text-muted); margin: 5px 0 14px; }
+
+/* ═══════════ 质感 token 提案表 ═══════════ */
+.token-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.token-table th { text-align: left; padding: 8px 12px; font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); border-bottom: 1px solid var(--border); }
+.token-table td { padding: 9px 12px; border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); }
+.token-table td:first-child { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--accent); }
+.token-demo { width: 56px; height: 26px; border-radius: var(--radius-sm); background: var(--surface-default); border: 1px solid var(--border); }
+
+/* ═══════════ 工具栏 AToolbar / 图标按钮 ═══════════ */
+.toolbar { display: flex; align-items: center; gap: 2px; background: var(--bg-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 4px; box-shadow: var(--highlight-inset); }
+.tbtn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: none; background: transparent; color: var(--text-muted); border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-family: inherit; transition: all .12s; }
+.tbtn:hover { background: var(--surface-hover); color: var(--text-primary); }
+.tbtn.active { background: var(--accent-subtle); color: var(--accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent); }
+.tb-sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }
+.tb-spacer { flex: 1; }
+
+/* ═══════════ 通知横幅 NotificationBanner ═══════════ */
+.banner { display: flex; align-items: center; gap: 10px; padding: 8px 14px; font-size: 12px; border-radius: var(--radius-md); border: 1px solid; box-shadow: var(--highlight-inset); }
+.banner.info { background: linear-gradient(90deg, color-mix(in srgb, var(--info) 10%, transparent), color-mix(in srgb, var(--info) 4%, transparent)); border-color: color-mix(in srgb, var(--info) 25%, transparent); color: var(--text-primary); }
+.banner.warn { background: linear-gradient(90deg, color-mix(in srgb, var(--warning) 10%, transparent), color-mix(in srgb, var(--warning) 4%, transparent)); border-color: color-mix(in srgb, var(--warning) 25%, transparent); color: var(--text-primary); }
+.banner .b-ico-inf { color: var(--info); } .banner .b-ico-warn { color: var(--warning); }
+.banner .b-act { margin-left: auto; font-size: 11.5px; color: var(--accent); cursor: pointer; font-weight: 500; }
+.banner .b-x { color: var(--text-muted); cursor: pointer; font-size: 11px; }
+
+/* ═══════════ 右键菜单 ContextMenu ═══════════ */
+.menu-item.danger { color: var(--danger); }
+.menu-item.danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+.menu-item .m-ico { width: 15px; text-align: center; opacity: .75; font-size: 12px; }
+
+/* ═══════════ 文件树 FileTree / ATreeItem ═══════════ */
+.tree { font-size: 12.5px; background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 6px; box-shadow: var(--highlight-inset); }
+.tree-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: var(--radius-sm); color: var(--text-secondary); cursor: pointer; transition: background .1s; position: relative; }
+.tree-row:hover { background: var(--surface-default); color: var(--text-primary); }
+.tree-row.sel { background: var(--accent-subtle); color: var(--text-primary); box-shadow: inset 2px 0 0 var(--accent); }
+/* 图标与现行 TreeNodeItem.vue 实现对齐：墨线三角箭头 + 描边文件夹 + 语言色文件字形 */
+.tree-row svg.t-chev { width: 11px; height: 11px; flex: none; color: var(--text-muted); transition: transform var(--ease-t); }
+.tree-row svg.t-chev path { stroke: currentColor; stroke-width: 1.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.tree-row svg.t-chev.open { transform: rotate(90deg); }
+.tree-row .t-chev-sp { width: 11px; flex: none; }
+.tree-row svg.t-folder { width: 15px; height: 15px; flex: none; color: var(--text-muted); transition: color .15s; }
+.tree-row svg.t-folder path { stroke: currentColor; stroke-width: 1.2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.tree-row svg.t-folder.open { color: var(--accent); }
+.tree-row:hover svg.t-folder { color: var(--text-secondary); }
+.tree-row:hover svg.t-folder.open { color: var(--accent); }
+.tree-row svg.t-file { width: 15px; height: 15px; flex: none; }
+.tree-row svg.t-file path { fill: currentColor; opacity: .85; }
+.tree-row .t-ico { width: 15px; text-align: center; flex: none; font-size: 12px; }
+.tree-row.indent1 { padding-left: 24px; } .tree-row.indent2 { padding-left: 40px; }
+.tree-row .git-m { margin-left: auto; font-size: 10px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+.git-m.mod { color: var(--warning); } .git-m.add { color: var(--success); } .git-m.del { color: var(--danger); }
+
+/* ═══════════ 任务列表 TaskListPanel ═══════════ */
+.task { display: flex; align-items: flex-start; gap: 9px; padding: 7px 10px; font-size: 12.5px; border-radius: var(--radius-sm); }
+.task + .task { border-top: 1px solid var(--border-subtle); }
+.task .ck { width: 15px; height: 15px; flex: none; margin-top: 1px; border-radius: 4px; border: 1.5px solid var(--text-muted); display: flex; align-items: center; justify-content: center; font-size: 9px; color: transparent; transition: all var(--ease-t); }
+.task.done .ck { background: var(--accent-gradient); border-color: transparent; color: var(--text-on-accent); box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 40%, transparent); }
+.task.done .t-text { color: var(--text-muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-muted) 60%, transparent); }
+.task.doing .t-text { color: var(--text-primary); }
+.task.doing .ck { border-color: var(--accent); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--accent) 20%, transparent); }
+.task .t-tag { margin-left: auto; font-size: 10px; color: var(--text-muted); flex: none; }
+
+/* ═══════════ 变更记录 / Git 行 ═══════════ */
+.file-row { display: flex; align-items: center; gap: 9px; padding: 6px 10px; font-size: 12.5px; border-radius: var(--radius-sm); color: var(--text-secondary); cursor: pointer; }
+.file-row:hover { background: var(--surface-default); color: var(--text-primary); }
+.file-row .f-path { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-row .f-stat { margin-left: auto; font-size: 10.5px; font-family: 'JetBrains Mono', monospace; flex: none; }
+.f-stat .plus { color: var(--success); } .f-stat .minus { color: var(--danger); }
+.git-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; font-size: 12.5px; font-weight: 600; }
+.git-head .branch { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px; background: var(--accent-subtle); border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent); color: var(--accent); font-size: 11px; font-weight: 600; }
+
+/* ═══════════ 发送按钮 ChatSendButton（分裂按钮） ═══════════ */
+.send-split { display: inline-flex; border-radius: var(--radius-md); box-shadow: var(--accent-glow), inset 0 1px 0 rgba(255,255,255,.28); }
+.send-split button { border: none; background: var(--accent-gradient); color: var(--text-on-accent); font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; transition: filter .12s; }
+.send-split button:hover { filter: brightness(1.07); }
+.send-split .ss-main { padding: 7px 16px; border-radius: var(--radius-md) 0 0 var(--radius-md); }
+.send-split .ss-chev { padding: 7px 10px; border-radius: 0 var(--radius-md) var(--radius-md) 0; border-left: 1px solid rgba(0,0,0,.18); font-size: 10px; }
+
+/* ═══════════ 工具组 ToolCallGroup / 子代理 SubagentCallBlock ═══════════ */
+.tc-group-row { display: flex; align-items: center; gap: 9px; padding: 8px 12px; font-size: 12px; color: var(--text-secondary); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-base); cursor: pointer; box-shadow: var(--highlight-inset); }
+.tc-group-row:hover { background: var(--surface-default); }
+.tc-count { display: inline-flex; align-items: center; justify-content: center; min-width: 19px; height: 19px; padding: 0 6px; border-radius: 99px; background: var(--surface-active); border: 1px solid var(--border); font-size: 10.5px; font-weight: 600; color: var(--text-primary); }
+.subagent { border: 1px solid var(--border-subtle); border-left: 3px solid var(--info); border-radius: var(--radius-md); background: linear-gradient(90deg, color-mix(in srgb, var(--info) 5%, transparent), var(--bg-base) 40%); overflow: hidden; box-shadow: var(--highlight-inset); }
+.subagent .sa-nested { margin: 0 12px 10px 22px; border-left: 1px dashed color-mix(in srgb, var(--info) 30%, transparent); padding-left: 12px; display: flex; flex-direction: column; gap: 6px; }
+.subagent .sa-nested .tc-head { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: var(--bg-deep); }
+
+/* ═══════════ Bash 输出块 BashOutputBlock ═══════════ */
+.bash-out { background: var(--bg-deep); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; box-shadow: inset 0 1px 4px rgba(0,0,0,.35); }
+.bash-out .bo-head { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 10.5px; color: var(--text-muted); background: var(--bg-base); border-bottom: 1px solid var(--border-subtle); letter-spacing: .06em; text-transform: uppercase; font-weight: 600; }
+.bash-out pre { padding: 11px 14px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; line-height: 1.7; color: var(--text-secondary); }
+.ansi-g { color: var(--success); } .ansi-r { color: var(--danger); } .ansi-y { color: var(--warning); } .ansi-dim { color: var(--text-muted); } .ansi-c { color: var(--info); }
+
+/* ═══════════ 编辑器 CodeEditor + CodeMirror 搜索面板 ═══════════ */
+.editor { background: var(--bg-deep); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; box-shadow: var(--highlight-inset); }
+.cm-search { display: flex; align-items: center; gap: 6px; padding: 7px 10px; background: var(--bg-raised); border-bottom: 1px solid var(--border); box-shadow: var(--shadow-sm); }
+.cm-search input { width: 150px; padding: 4px 9px; font-size: 11.5px; font-family: 'JetBrains Mono', monospace; color: var(--text-primary); background: var(--bg-deep); border: 1px solid var(--border); border-radius: var(--radius-sm); outline: none; box-shadow: inset 0 1px 2px rgba(0,0,0,.3); }
+.cm-search input:focus { border-color: var(--accent); box-shadow: var(--accent-ring); }
+.cm-search .cmb { padding: 3px 9px; font-size: 10.5px; background: var(--surface-default); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-secondary); cursor: pointer; font-family: inherit; box-shadow: var(--highlight-inset); }
+.cm-search .cmb:hover { background: var(--surface-hover); color: var(--text-primary); }
+.cm-search .cnt { font-size: 10.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.editor .ed-code { padding: 12px 14px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; line-height: 1.75; color: var(--text-secondary); }
+.ed-code .ln { display: inline-block; width: 26px; color: var(--text-muted); opacity: .5; user-select: none; }
+.ed-hit { background: color-mix(in srgb, var(--warning) 25%, transparent); border-radius: 2px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--warning) 40%, transparent); }
+.ed-hit.cur { background: color-mix(in srgb, var(--warning) 45%, transparent); }
+
+/* ═══════════ 终端 WorkbenchTerminal (xterm) ═══════════ */
+.term { background: #0d0c11; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; box-shadow: inset 0 1px 4px rgba(0,0,0,.4); }
+body.theme-indigo .term { background: #08090d; }
+.term .tm-head { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--bg-base); border-bottom: 1px solid var(--border-subtle); font-size: 11px; color: var(--text-muted); }
+.term .tm-tab { padding: 2px 10px; border-radius: var(--radius-sm); font-size: 10.5px; }
+.term .tm-tab.on { background: var(--surface-active); color: var(--text-primary); box-shadow: var(--highlight-inset); }
+.term pre { padding: 12px 14px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; line-height: 1.7; color: var(--text-secondary); }
+.tm-prompt { color: var(--accent); }
+.tm-caret { display: inline-block; width: 7px; height: 13px; background: var(--accent); vertical-align: -2px; animation: pulse 1.1s steps(1) infinite; box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 70%, transparent); }
+
+/* ═══════════ 并排 diff DiffViewer ═══════════ */
+.diff2 { display: grid; grid-template-columns: 1fr 1fr; background: var(--bg-deep); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; font-family: 'JetBrains Mono', monospace; font-size: 11px; line-height: 1.7; box-shadow: inset 0 1px 4px rgba(0,0,0,.3); }
+.diff2 .dc { padding: 10px 0; }
+.diff2 .dc + .dc { border-left: 1px solid var(--border-subtle); }
+.diff2-head { display: grid; grid-template-columns: 1fr 1fr; background: var(--bg-base); border: 1px solid var(--border-subtle); border-bottom: none; border-radius: var(--radius-md) var(--radius-md) 0 0; font-size: 10.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+.diff2-head > div { padding: 6px 12px; } .diff2-head > div + div { border-left: 1px solid var(--border-subtle); }
+.diff2-wrap .diff2 { border-radius: 0 0 var(--radius-md) var(--radius-md); border-top: none; }
+
+/* ═══════════ 壳层：标题栏 / 侧栏 / 浮层 / 分隔条 ═══════════ */
+.shell { background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--highlight-inset), var(--shadow-md); }
+.sh-titlebar { display: flex; align-items: center; gap: 12px; padding: 0 12px; height: 38px; background: var(--bg-raised); border-bottom: 1px solid var(--border-subtle); box-shadow: var(--highlight-inset); }
+.sh-logo { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; }
+.sh-logo .mark { width: 15px; height: 15px; border-radius: 5px; background: var(--accent-gradient); box-shadow: var(--accent-glow), inset 0 1px 0 rgba(255,255,255,.35); }
+.sh-logo .p { font-weight: 400; font-size: 11px; color: var(--text-muted); }
+.sh-chips { flex: 1; display: flex; justify-content: center; gap: 6px; }
+.sh-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px; font-size: 11px; border-radius: 99px; background: var(--surface-default); border: 1px solid var(--border); color: var(--text-secondary); box-shadow: var(--highlight-inset); }
+.sh-right { display: flex; align-items: center; gap: 4px; }
+.bell { position: relative; }
+.bell .n { position: absolute; top: 1px; right: 0; min-width: 13px; height: 13px; padding: 0 3px; border-radius: 99px; background: var(--danger); color: #fff; font-size: 8.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--bg-raised); }
+.winctl { display: flex; margin-left: 6px; }
+.winctl span { width: 32px; height: 26px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--text-muted); border-radius: 5px; }
+.winctl span:hover { background: var(--surface-hover); color: var(--text-primary); }
+.winctl span.close:hover { background: var(--danger); color: #fff; }
+.sh-body { display: flex; height: 240px; }
+.sh-side { width: 190px; flex: none; border-right: 1px solid var(--border-subtle); padding: 8px 6px; display: flex; flex-direction: column; gap: 2px; }
+.sh-side .side-cap { font-size: 9.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--text-muted); padding: 2px 8px 6px; }
+.sr { display: flex; align-items: flex-start; gap: 8px; padding: 6px 9px; border-radius: var(--radius-sm); font-size: 12px; color: var(--text-secondary); cursor: pointer; }
+.sr:hover { background: var(--surface-default); }
+.sr.on { background: var(--accent-subtle); color: var(--text-primary); box-shadow: inset 2px 0 0 var(--accent); }
+.sr .dot { margin-top: 5px; }
+.sr .sr-meta { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
+.sh-main { flex: 1; position: relative; background: var(--bg-base); }
+.sh-main::before { content: ''; position: absolute; inset: 0; background: var(--ambient-glow); }
+.splitter { width: 5px; flex: none; cursor: col-resize; position: relative; }
+.splitter::after { content: ''; position: absolute; left: 2px; top: 0; bottom: 0; width: 1px; background: var(--border-subtle); transition: all .12s; }
+.splitter:hover::after, .splitter.on::after { width: 3px; left: 1px; background: var(--accent); box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 50%, transparent); }
+.btw { position: absolute; right: 14px; top: 14px; width: 210px; background: var(--bg-raised); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg), var(--highlight-inset); overflow: hidden; }
+.btw .bw-head { display: flex; align-items: center; gap: 7px; padding: 8px 11px; font-size: 11px; font-weight: 600; border-bottom: 1px solid var(--border-subtle); background: var(--accent-subtle); color: var(--accent); }
+.btw .bw-body { padding: 10px 11px; font-size: 11.5px; line-height: 1.6; color: var(--text-secondary); }
+
+/* ═══════════ 设置面板壳 / 表单模态 ═══════════ */
+.settings-shell { display: flex; background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden; height: 220px; box-shadow: var(--highlight-inset); }
+.ss-nav { width: 150px; flex: none; background: var(--bg-deep); border-right: 1px solid var(--border-subtle); padding: 10px 6px; }
+.ss-nav .nv { display: flex; align-items: center; gap: 8px; padding: 7px 10px; font-size: 12px; border-radius: var(--radius-sm); color: var(--text-secondary); cursor: pointer; }
+.ss-nav .nv:hover { background: var(--surface-default); }
+.ss-nav .nv.on { background: var(--accent-subtle); color: var(--text-primary); font-weight: 500; box-shadow: inset 2px 0 0 var(--accent); }
+.ss-content { flex: 1; padding: 14px 18px; }
+.ss-content h4 { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.ss-content .cap { font-size: 10.5px; color: var(--text-muted); margin-bottom: 10px; }
+.form-modal .fld { margin-top: 10px; }
+.form-modal .fld label { display: block; font-size: 11px; font-weight: 500; color: var(--text-secondary); margin-bottom: 5px; }
+
+/* ═══════════ 流式状态行（思考中/中断）+ 品牌标 ═══════════ */
+.think-row { display: flex; align-items: center; gap: 9px; padding: 8px 12px; font-size: 12px; color: var(--text-secondary); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-base); box-shadow: var(--highlight-inset); }
+.think-row + .think-row { margin-top: 8px; }
+.think-row .t-time { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.v-tag { font-size: 10px; padding: 1px 7px; border-radius: 4px; background: var(--surface-default); border: 1px solid var(--border); color: var(--text-muted); flex: none; }
+.btn-interrupt { margin-left: auto; padding: 3.5px 12px; font-size: 11px; font-weight: 500; font-family: inherit; border-radius: var(--radius-sm); border: 1px solid color-mix(in srgb, var(--danger) 32%, transparent); background: transparent; color: var(--danger); cursor: pointer; transition: all var(--ease-t); }
+.btn-interrupt:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); border-color: color-mix(in srgb, var(--danger) 55%, transparent); box-shadow: 0 0 12px color-mix(in srgb, var(--danger) 22%, transparent); }
+
+/* ── 品牌标（四条 3D 弯曲缎带 · 商标 SVG 重建：粗弧+沿弧渐变+内缘高光）── */
+.brand { width: 18px; height: 18px; flex: none; filter: drop-shadow(0 0 7px rgba(168,139,250,.32)); }
+.brand-sm { width: 15px; height: 15px; }
+/* 变体A「轮转」：整体风车缓转，工具执行时加速 */
+.brand-spin { animation: brand-rot 2.8s linear infinite; }
+.brand-spin.fast { animation-duration: 1.1s; }
+@keyframes brand-rot { to { transform: rotate(360deg); } }
+/* 变体B「流光」：缎带静止，conic 渐变在带形蒙版下顺时针流转 */
+:root { --brand-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cg fill='none' stroke='white' stroke-width='14' stroke-linecap='round'%3E%3Cpath d='M21 42.2A30 30 0 0 1 42.2 21'/%3E%3Cpath d='M57.8 21A30 30 0 0 1 79 42.2'/%3E%3Cpath d='M79 57.8A30 30 0 0 1 57.8 79'/%3E%3Cpath d='M42.2 79A30 30 0 0 1 21 57.8'/%3E%3C/g%3E%3C/svg%3E"); }
+@property --ba { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
+.brand-flow { background: conic-gradient(from var(--ba), #f472b6, #22d3ee, #c084fc, #60a5fa, #f472b6); -webkit-mask: var(--brand-mask) center / contain no-repeat; mask: var(--brand-mask) center / contain no-repeat; animation: brand-flow 2.6s linear infinite; }
+.brand-flow.fast { animation-duration: 1.1s; }
+@keyframes brand-flow { to { --ba: 360deg; } }
+/* 变体C「涟漪」：四条缎带依次呼吸，最安静 */
+.brand-ripple > g { transform-box: fill-box; transform-origin: center; animation: blade-pulse 1.6s ease-in-out infinite; }
+.brand-ripple > g:nth-of-type(2) { animation-delay: .2s; }
+.brand-ripple > g:nth-of-type(3) { animation-delay: .4s; }
+.brand-ripple > g:nth-of-type(4) { animation-delay: .6s; }
+@keyframes blade-pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .5; transform: scale(.82); } }
+
+/* ═══════════ 排版标本 ═══════════ */
+.type-row { display: flex; align-items: baseline; gap: 18px; padding: 9px 0; }
+.type-row + .type-row { border-top: 1px solid var(--border-subtle); }
+.type-cap { width: 200px; flex: none; font-size: 11px; color: var(--text-muted); }
+.type-sample.mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body class="theme-warm">
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <h1>Aide 组件质感精修 · 组件层方案</h1>
+      <div class="sub">质感手法（顶光内描边 / 分层阴影 / 渐变强调 / 辉光 / 动效曲线）封装在组件实现里，全部走 token。
+      右侧三个主题按钮：「靛蓝」验证换肤、「玻璃」验证毛玻璃后门——组件一行不改，只换 token 值。这就是「新主题 = 写 token，组件负责实现」。</div>
+    </div>
+    <div class="theme-switch">
+      <button class="active" data-t="theme-warm">暖色 · 精修</button>
+      <button data-t="theme-indigo">靛蓝 · 验证换肤</button>
+      <button data-t="theme-glass">玻璃 · 后门验证</button>
+    </div>
+  </div>
+
+  <!-- ── 排版 ── -->
+  <div class="sec-title">排版 · Typography</div>
+  <div class="grid">
+    <div class="spec wide">
+      <div class="spec-label">字体栈 <span class="en">本地打包 @fontsource，不走 CDN · 替换现行 Segoe UI/雅黑 13px</span></div>
+      <div class="type-row"><span class="type-cap">界面正文 · 13px / 1.65</span><div style="font-size:13px">Aide 是 Agent SDK 的桌面壳，会话、工具、文件一窗完成 <span style="color:var(--text-muted)">— Inter + Noto Sans SC</span></div></div>
+      <div class="type-row"><span class="type-cap">强调标题 · 600 / -0.01em</span><div style="font-size:15px;font-weight:600;letter-spacing:-0.01em">修复流式渲染卡死</div></div>
+      <div class="type-row"><span class="type-cap">微型标签 · 10.5px / 600 / 大写宽距</span><div style="font-size:10.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)">Workspace · Sessions</div></div>
+      <div class="type-row"><span class="type-cap">代码 · JetBrains Mono / 1.7</span><div class="type-sample mono">cargo test --lib → 12 passed in 4.12s</div></div>
+      <div class="type-row"><span class="type-cap">数字 · tabular-nums（用量/计时不跳动）</span><div style="font-variant-numeric:tabular-nums">↑ 12,412 · ↓ 1,238 · 缓存 94.2%</div></div>
+    </div>
+  </div>
+
+  <!-- ── 基础控件 ── -->
+  <div class="sec-title">基础控件 · Controls</div>
+  <div class="grid">
+    <div class="spec">
+      <div class="spec-label">按钮 <span class="en">AButton</span></div>
+      <div class="row">
+        <button class="btn primary">主按钮</button>
+        <button class="btn">默认</button>
+        <button class="btn ghost">幽灵</button>
+        <button class="btn danger">危险</button>
+      </div>
+      <div class="row">
+        <button class="btn primary sm">小的</button>
+        <button class="btn sm">小的</button>
+        <button class="btn sm" disabled>禁用</button>
+        <button class="btn primary">↑ 发送</button>
+      </div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">输入 <span class="en">AInput</span></div>
+      <div class="row"><div class="field-wrap"><span class="ico">⌕</span><input class="field" placeholder="搜索会话、文件、命令…"></div></div>
+      <div class="row"><input class="field" value="专注态：边框 + 辉光环" onfocus="void 0"></div>
+      <div class="row" style="flex-direction:column;align-items:stretch"><input class="field err" value="错误态"><div class="field-note">端口号已被占用，换一个试试。</div></div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">下拉 <span class="en">ThemedSelect / ADropdown</span></div>
+      <div class="row"><span class="select">Sonnet 4.6 <span class="chev">▾</span></span><span class="select">自动接受编辑 <span class="chev">▾</span></span></div>
+      <div class="row"><div class="menu">
+        <div class="menu-item active"><span class="check">✓</span>Sonnet 4.6 <span class="kbd">推荐</span></div>
+        <div class="menu-item"><span class="check"></span>Opus 4.1</div>
+        <div class="menu-item"><span class="check"></span>Haiku 4.5 <span class="kbd">快</span></div>
+        <div class="menu-sep"></div>
+        <div class="menu-item"><span class="check"></span>自定义模型…</div>
+      </div></div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">开关 / 设置行 <span class="en">Settings row</span></div>
+      <div class="setting-row"><div><div class="s-label">冻结诊断黑匣子</div><div class="s-desc">常驻采集现场，卡死时自动落盘</div></div><span class="switch on"></span></div>
+      <div class="setting-row"><div><div class="s-label">完成时系统通知</div><div class="s-desc">running → waiting 时推送</div></div><span class="switch on"></span></div>
+      <div class="setting-row"><div><div class="s-label">遥测上报</div><div class="s-desc">匿名使用统计</div></div><span class="switch"></span></div>
+    </div>
+  </div>
+
+  <!-- ── 导航与反馈 ── -->
+  <div class="sec-title">导航与反馈 · Navigation & Feedback</div>
+  <div class="grid">
+    <div class="spec wide">
+      <div class="spec-label">标签页 <span class="en">ATabBar</span></div>
+      <div class="tabbar">
+        <div class="tab active">ChatPanel.vue <span class="x">✕</span></div>
+        <div class="tab">sidecar.rs <span class="dirty"></span><span class="x">✕</span></div>
+        <div class="tab">tokens.ts <span class="x">✕</span></div>
+        <div class="tab">ARCHITECTURE.md <span class="x">✕</span></div>
+      </div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">徽标 / 状态点 <span class="en">ABadge / AStatusDot</span></div>
+      <div class="row">
+        <span class="badge accent">Sonnet 4.6</span>
+        <span class="badge green">12 passed</span>
+        <span class="badge amber">待确认</span>
+        <span class="badge grey">已停止</span>
+      </div>
+      <div class="row" style="flex-direction:column;align-items:flex-start;gap:9px">
+        <span class="status-line"><span class="dot run"></span>运行中 · 修复流式渲染卡死</span>
+        <span class="status-line"><span class="dot att"></span>等待权限确认 · 插件市场优化</span>
+        <span class="status-line"><span class="dot wait"></span>空闲 · 主题系统重构</span>
+        <span class="status-line"><span class="dot stop"></span>已停止 · 文档更新</span>
+      </div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">轻提示 <span class="en">AToast</span></div>
+      <div class="row"><div class="toast ok"><span class="t-ico-ok">✓</span>模型已切换为 Sonnet 4.6</div></div>
+      <div class="row"><div class="toast err"><span class="t-ico-err">✕</span>切换失败，已回滚到 Opus 4.1</div></div>
+      <div class="row"><div class="toast inf"><span class="t-ico-inf">ℹ</span>已选定，将在发送后生效</div></div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">Tooltip <span class="en">v-tooltip</span></div>
+      <div class="row"><span class="tooltip">会话 ID 生命周期：首次发消息才落盘，此前只是内存临时 key。</span></div>
+      <div class="row"><span class="tooltip">Ctrl+Shift+P 打开命令面板</span></div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">空状态 <span class="en">Empty state</span></div>
+      <div class="empty">
+        <div class="e-ico">◇</div>
+        <div class="e-title">还没有会话</div>
+        <div class="e-sub">新建一个会话，开始与 Agent 对话</div>
+        <button class="btn primary sm">＋ 新建会话</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 容器 ── -->
+  <div class="sec-title">容器 · Surfaces</div>
+  <div class="grid">
+    <div class="spec">
+      <div class="spec-label">卡片 <span class="en">ACard · 插件卡</span></div>
+      <div class="card">
+        <h3>superpowers <span class="badge green">已启用</span></h3>
+        <p>一套完整的技能工作流：头脑风暴 → 设计 → 计划 → 实施，附带系统化调试与代码评审。</p>
+        <div class="foot"><span class="ver">v6.1.1 · claude-plugins-official</span><button class="btn sm">配置</button></div>
+      </div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">模态 <span class="en">ModalDialog</span></div>
+      <div class="overlay">
+        <div class="modal">
+          <div class="modal-head">
+            <div class="modal-ico">⚠</div>
+            <div><h3>移除工作区？</h3><div class="body">「aide」下有 3 个进行中的会话。移除后历史消息保留在磁盘，但会从侧栏消失。</div></div>
+          </div>
+          <div class="foot"><button class="btn ghost">取消</button><button class="btn danger">移除工作区</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="spec wide">
+      <div class="spec-label">命令面板 <span class="en">ACommandPalette</span></div>
+      <div class="palette">
+        <div class="palette-input">⌕ 输入命令或搜索…</div>
+        <div class="palette-group">会话</div>
+        <div class="palette-item active">＋ 新建会话 <span class="kbd">Ctrl N</span></div>
+        <div class="palette-item">⇄ 切换会话 <span class="kbd">Ctrl Tab</span></div>
+        <div class="palette-group">视图</div>
+        <div class="palette-item">◧ 切换左侧栏 <span class="kbd">Ctrl B</span></div>
+        <div class="palette-item">⚙ 打开设置 <span class="kbd">Ctrl ,</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 领域组件 ── -->
+  <div class="sec-title">领域组件 · Domain</div>
+  <div class="grid">
+    <div class="spec wide">
+      <div class="spec-label">工具调用块 <span class="en">ToolCallBlock · 折叠 / 展开 / diff</span></div>
+      <div class="toolcall">
+        <div class="tc-head"><span class="chev">▶</span><span>⚙</span><span class="tc-name">Bash</span><span class="tc-cmd">cargo test --lib</span><span class="tc-status ok">✓ 12 passed · 1.2s</span></div>
+      </div>
+      <div class="toolcall">
+        <div class="tc-head open"><span class="chev">▶</span><span>✎</span><span class="tc-name">Edit</span><span class="tc-cmd">src/composables/useConversationChanges.ts</span><span class="tc-status run">● running</span></div>
+        <div class="tc-body"><div class="tc-diff">
+          <div class="dl-row hunk">@@ captureChanges(round) @@</div>
+          <div class="dl-row del"><span class="sign">−</span>const json = JSON.stringify(this.rounds, null, 2)</div>
+          <div class="dl-row del"><span class="sign">−</span>await invoke("save_session_changes", { json })</div>
+          <div class="dl-row add"><span class="sign">+</span>// 只追加当前这一轮，不再整份重写</div>
+          <div class="dl-row add"><span class="sign">+</span>await invoke("append_session_change", { round })</div>
+        </div></div>
+      </div>
+    </div>
+    <div class="spec wide">
+      <div class="spec-label">权限请求 <span class="en">PermissionDialog</span></div>
+      <div class="perm">
+        <div class="perm-head">
+          <div class="perm-ico">⚠</div>
+          <div><div class="perm-title">Claude 请求执行 Bash 命令</div><div class="perm-sub">修复流式渲染卡死 · 正在等待你的确认</div></div>
+        </div>
+        <div class="perm-cmd">pnpm tauri build --release</div>
+        <div class="perm-foot">
+          <button class="btn ghost sm">始终允许</button>
+          <button class="btn sm">拒绝</button>
+          <button class="btn primary sm">允许</button>
+        </div>
+      </div>
+    </div>
+    <div class="spec wide">
+      <div class="spec-label">聊天氛围 <span class="en">环境光晕 + 气泡 + 用量行</span></div>
+      <div class="chat-demo">
+        <div class="bubble-row"><span class="bubble">帮我看一下 save_session_changes 每轮结束都整份序列化落盘的问题。</span></div>
+        <div class="asst-head"><span class="badge accent">Sonnet 4.6</span><span class="badge grey">已坐实</span></div>
+        <div style="font-size:13px;line-height:1.75;color:var(--text-secondary);max-width:75%">问题在 useConversationChanges.captureChanges——每轮结束都把全量 rounds 重写一遍。改成按轮增量追加写即可……</div>
+        <div class="usage">↑ 12.4k · ↓ 1.2k · 缓存命中 94% · 2.1s</div>
+      </div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">滚动条 <span class="en">Scrollbar</span></div>
+      <div class="scroll-demo">更细的 8px 滚动条，圆角胶囊滑块，与底色留 2px 间隙。<br>hover 时滑块加深。<br>不抢戏，但摸上去是成品。<br>——<br>滚动条是「廉价感」最常见的出处之一：默认灰条一出，所有精修白搭。<br>……<br>……</div>
+    </div>
+  </div>
+
+  <!-- ── 数据展示（补全）── -->
+  <div class="sec-title">数据展示 · Data</div>
+  <div class="grid">
+    <div class="spec">
+      <div class="spec-label">文件树 <span class="en">FileTree / ATreeItem · 图标=现行实现</span></div>
+      <div class="tree">
+        <div class="tree-row">
+          <svg class="t-chev open" viewBox="0 0 12 12"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>
+          <svg class="t-folder open" viewBox="0 0 24 24"><path d="M5 19h14c1.1 0 2-.9 2-2V9c0-1.1-.9-2-2-2h-6.6L10 5H5C3.9 5 3 5.9 3 7v10c0 1.1.9 2 2 2zM3 17l3-8h16l-3 8H3z"/></svg>
+          src
+        </div>
+        <div class="tree-row indent1">
+          <svg class="t-chev open" viewBox="0 0 12 12"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>
+          <svg class="t-folder open" viewBox="0 0 24 24"><path d="M5 19h14c1.1 0 2-.9 2-2V9c0-1.1-.9-2-2-2h-6.6L10 5H5C3.9 5 3 5.9 3 7v10c0 1.1.9 2 2 2zM3 17l3-8h16l-3 8H3z"/></svg>
+          components
+        </div>
+        <div class="tree-row indent2 sel">
+          <span class="t-chev-sp"></span>
+          <svg class="t-file" viewBox="0 0 24 24" style="color:var(--success)"><path d="M2 3h6l4 7 4-7h6L12 21 2 3z"/></svg>
+          ChatPanel.vue<span class="git-m mod">M</span>
+        </div>
+        <div class="tree-row indent2">
+          <span class="t-chev-sp"></span>
+          <svg class="t-file" viewBox="0 0 24 24" style="color:var(--info)"><path d="M3 5h18v14H3V5zm6 3v2h2v7h2V10h2V8H9zm8 0v9h2V8h-2z"/></svg>
+          useChatSession.ts
+        </div>
+        <div class="tree-row indent1">
+          <svg class="t-chev" viewBox="0 0 12 12"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>
+          <svg class="t-folder" viewBox="0 0 24 24"><path d="M3 7c0-1.1.9-2 2-2h4.6L12 7h7c1.1 0 2 .9 2 2v8c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2V7z"/></svg>
+          themes<span class="git-m add">A</span>
+        </div>
+        <div class="tree-row">
+          <svg class="t-chev" viewBox="0 0 12 12"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg>
+          <svg class="t-folder" viewBox="0 0 24 24"><path d="M3 7c0-1.1.9-2 2-2h4.6L12 7h7c1.1 0 2 .9 2 2v8c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2V7z"/></svg>
+          src-tauri
+        </div>
+        <div class="tree-row">
+          <span class="t-chev-sp"></span>
+          <svg class="t-file" viewBox="0 0 24 24" style="color:var(--accent)"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2zm0 3c1.1 0 2 .6 2 1.3 0 .5-.3 1-.8 1.2.7.3 1.3 1.1 1.3 2 0 1.2-1.1 2.2-2.5 2.2S9.5 10.7 9.5 9.5c0-.9.5-1.7 1.3-2C10.3 7.3 10 6.8 10 6.3 10 5.6 10.9 5 12 5zm-3 8h6v2l-3 4-3-4v-2z"/></svg>
+          session_changes.rs
+        </div>
+        <div class="tree-row">
+          <span class="t-chev-sp"></span>
+          <svg class="t-file" viewBox="0 0 24 24" style="color:var(--text-secondary)"><path d="M2 4h20v16H2V4zm3 12V8l3 4 3-4v8h2V8h2v8h2V8h1.5"/></svg>
+          CLAUDE.md<span class="git-m del">D</span>
+        </div>
+      </div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">任务列表 <span class="en">TaskListPanel</span></div>
+      <div class="tree" style="padding:4px">
+        <div class="task done"><span class="ck">✓</span><span class="t-text">定位全量序列化热点</span></div>
+        <div class="task doing"><span class="ck"></span><span class="t-text">改为按轮增量追加写</span><span class="t-tag">进行中</span></div>
+        <div class="task"><span class="ck"></span><span class="t-text">补回归测试</span></div>
+        <div class="task"><span class="ck"></span><span class="t-text">验证 27s 卡顿消失</span></div>
+      </div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">变更记录 / Git <span class="en">ChangeLogPanel / GitPanel</span></div>
+      <div class="git-head"><span class="branch">⌥ master</span><span class="badge green">✓ 干净</span></div>
+      <div class="file-row"><span class="git-m mod">M</span><span class="f-path">src/composables/useConversationChanges.ts</span><span class="f-stat"><span class="plus">+12</span> <span class="minus">−4</span></span></div>
+      <div class="file-row"><span class="git-m mod">M</span><span class="f-path">src-tauri/src/session_changes.rs</span><span class="f-stat"><span class="plus">+38</span> <span class="minus">−21</span></span></div>
+      <div class="file-row"><span class="git-m add">A</span><span class="f-path">docs/superpowers/specs/2026-07-18-ui-polish.md</span><span class="f-stat"><span class="plus">+120</span></span></div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">技能/定制列表 <span class="en">CustomizationList</span></div>
+      <div class="file-row"><span class="t-ico">✦</span><span>brainstorming</span><span class="f-stat"><span class="badge green">启用</span></span></div>
+      <div class="file-row"><span class="t-ico">✦</span><span>systematic-debugging</span><span class="f-stat"><span class="badge green">启用</span></span></div>
+      <div class="file-row"><span class="t-ico">✦</span><span>frontend-design</span><span class="f-stat"><span class="badge grey">停用</span></span></div>
+      <div class="file-row"><span class="t-ico">✦</span><span>writing-plans</span><span class="f-stat"><span class="badge green">启用</span></span></div>
+    </div>
+  </div>
+
+  <!-- ── 工具栏与横幅（补全）── -->
+  <div class="sec-title">工具栏与横幅 · Toolbar & Banner</div>
+  <div class="grid">
+    <div class="spec">
+      <div class="spec-label">工具栏 <span class="en">AToolbar</span></div>
+      <div class="row"><div class="toolbar">
+        <button class="tbtn" title="新建">＋</button>
+        <button class="tbtn" title="刷新">⟳</button>
+        <span class="tb-sep"></span>
+        <button class="tbtn active" title="并排">◫</button>
+        <button class="tbtn" title="统一">☰</button>
+        <span class="tb-spacer"></span>
+        <button class="tbtn" title="更多">⋯</button>
+      </div></div>
+      <div class="row"><div class="toolbar">
+        <button class="tbtn">⟨</button><button class="tbtn">⟩</button>
+        <span class="tb-sep"></span>
+        <button class="tbtn">⌕</button><button class="tbtn">⤢</button>
+      </div></div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">通知横幅 <span class="en">NotificationBanner</span></div>
+      <div class="row"><div class="banner info" style="width:100%"><span class="b-ico-inf">ℹ</span>新版本 v0.9.2 可用<span class="b-act">立即更新</span><span class="b-x">✕</span></div></div>
+      <div class="row"><div class="banner warn" style="width:100%"><span class="b-ico-warn">⚠</span>3 个会话仍在运行，关闭前请确认<span class="b-x">✕</span></div></div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">右键菜单 <span class="en">ContextMenu</span></div>
+      <div class="row"><div class="menu">
+        <div class="menu-item"><span class="m-ico">✎</span>重命名会话<span class="kbd">F2</span></div>
+        <div class="menu-item"><span class="m-ico">⧉</span>复制会话 ID</div>
+        <div class="menu-item"><span class="m-ico">⇱</span>在侧栏置顶</div>
+        <div class="menu-sep"></div>
+        <div class="menu-item danger"><span class="m-ico">🗑</span>删除会话<span class="kbd">Del</span></div>
+      </div></div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">发送按钮 <span class="en">ChatSendButton · 分裂按钮</span></div>
+      <div class="row">
+        <span class="send-split"><button class="ss-main">↑ 发送</button><button class="ss-chev">▾</button></span>
+        <span class="badge grey">顺便问一下 ⇧</span>
+      </div>
+      <div class="row" style="align-items:flex-start"><div class="menu" style="width:200px">
+        <div class="menu-item active"><span class="check">✓</span>发送<span class="kbd">Enter</span></div>
+        <div class="menu-item"><span class="check"></span>顺便问一下<span class="kbd">⇧Enter</span></div>
+        <div class="menu-item"><span class="check"></span>排队发送<span class="kbd">⌃Enter</span></div>
+      </div></div>
+    </div>
+  </div>
+
+  <!-- ── 聊天领域（补全）── -->
+  <div class="sec-title">聊天领域 · Chat Domain</div>
+  <div class="grid">
+    <div class="spec wide">
+      <div class="spec-label">工具组 / 子代理 <span class="en">ToolCallGroup / SubagentCallBlock</span></div>
+      <div class="tc-group-row"><span class="chev" style="font-size:9px;color:var(--text-muted)">▶</span><span class="tc-count">3</span><span>已折叠 3 个工具调用</span><span class="tc-cmd">Read · Grep · Read</span><span class="tc-status ok" style="margin-left:auto">✓</span></div>
+      <div class="subagent" style="margin-top:10px">
+        <div class="tc-head open"><span class="chev">▶</span><span>◆</span><span class="tc-name">Agent · 探索代码索引实现</span><span class="tc-cmd">codegraph embedder…</span><span class="tc-status ok">✓ 4 轮 · 28s</span></div>
+        <div class="sa-nested">
+          <div class="tc-head"><span>⚙</span><span class="tc-name">Grep</span><span class="tc-cmd">FastEmbedEmbedder</span><span class="tc-status ok">✓</span></div>
+          <div class="tc-head"><span>⚙</span><span class="tc-name">Read</span><span class="tc-cmd">codegraph/embedder.rs</span><span class="tc-status ok">✓</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">Bash 输出块 <span class="en">BashOutputBlock</span></div>
+      <div class="bash-out">
+        <div class="bo-head"><span>▸ bash</span><span style="margin-left:auto">exit 0</span></div>
+        <pre><span class="ansi-dim">$</span> cargo test --lib
+<span class="ansi-g">   Compiling</span> aide v0.9.1
+<span class="ansi-g">    Finished</span> test profile <span class="ansi-dim">in 4.12s</span>
+<span class="ansi-g">test result: ok.</span> 12 passed<span class="ansi-dim">; 0 failed</span></pre>
+      </div>
+    </div>
+    <div class="spec wide">
+      <div class="spec-label">流式状态行 · 品牌标动起来 <span class="en">3D 弯曲缎带 · 三个变体选一</span></div>
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px">
+        <svg width="72" height="72" viewBox="0 0 100 100" style="filter:drop-shadow(0 6px 16px rgba(0,0,0,.5))">
+          <defs>
+            <linearGradient id="rg1" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#f472b6"/><stop offset="1" stop-color="#d946ef"/></linearGradient>
+            <linearGradient id="rg2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5eead4"/><stop offset="1" stop-color="#06b6d4"/></linearGradient>
+            <linearGradient id="rg3" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c4b5fd"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient>
+            <linearGradient id="rg4" x1="1" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#93c5fd"/><stop offset="1" stop-color="#4f46e5"/></linearGradient>
+          </defs>
+          <g fill="none" stroke-linecap="round" stroke-width="13.5">
+            <path d="M21 42.2A30 30 0 0 1 42.2 21" stroke="url(#rg1)"/>
+            <path d="M57.8 21A30 30 0 0 1 79 42.2" stroke="url(#rg2)"/>
+            <path d="M79 57.8A30 30 0 0 1 57.8 79" stroke="url(#rg3)"/>
+            <path d="M42.2 79A30 30 0 0 1 21 57.8" stroke="url(#rg4)"/>
+          </g>
+          <g fill="none" stroke="rgba(255,255,255,.32)" stroke-linecap="round" stroke-width="4">
+            <path d="M24.9 43.3A26 26 0 0 1 43.3 24.9"/>
+            <path d="M56.7 24.9A26 26 0 0 1 75.1 43.3"/>
+            <path d="M75.1 56.7A26 26 0 0 1 56.7 75.1"/>
+            <path d="M43.3 75.1A26 26 0 0 1 24.9 56.7"/>
+          </g>
+        </svg>
+        <div style="font-size:11px;color:var(--text-muted);line-height:1.7">按「3D 弯曲缎带」重建：四段圆角弧带 + 沿弧渐变 + 内缘高光模拟立体扭转。<br>这是我按截图的近似重画——把商标源文件（SVG/高清 PNG）给我，实施时原样采用，动画照样接上。</div>
+      </div>
+      <div class="think-row">
+        <svg class="brand brand-spin" viewBox="0 0 100 100">
+          <g fill="none" stroke-linecap="round" stroke-width="13.5">
+            <path d="M21 42.2A30 30 0 0 1 42.2 21" stroke="url(#rg1)"/>
+            <path d="M57.8 21A30 30 0 0 1 79 42.2" stroke="url(#rg2)"/>
+            <path d="M79 57.8A30 30 0 0 1 57.8 79" stroke="url(#rg3)"/>
+            <path d="M42.2 79A30 30 0 0 1 21 57.8" stroke="url(#rg4)"/>
+          </g>
+          <g fill="none" stroke="rgba(255,255,255,.32)" stroke-linecap="round" stroke-width="4">
+            <path d="M24.9 43.3A26 26 0 0 1 43.3 24.9"/>
+            <path d="M56.7 24.9A26 26 0 0 1 75.1 43.3"/>
+            <path d="M75.1 56.7A26 26 0 0 1 56.7 75.1"/>
+            <path d="M43.3 75.1A26 26 0 0 1 24.9 56.7"/>
+          </g>
+        </svg>
+        Claude 正在思考…<span class="t-time">12s</span><span class="v-tag">A · 轮转</span><button class="btn-interrupt">中断</button>
+      </div>
+      <div class="think-row">
+        <span class="brand brand-flow"></span>
+        Claude 正在思考…<span class="t-time">12s</span><span class="v-tag">B · 流光</span><button class="btn-interrupt">中断</button>
+      </div>
+      <div class="think-row">
+        <svg class="brand brand-ripple" viewBox="0 0 100 100">
+          <g><path d="M21 42.2A30 30 0 0 1 42.2 21" fill="none" stroke="url(#rg1)" stroke-width="13.5" stroke-linecap="round"/><path d="M24.9 43.3A26 26 0 0 1 43.3 24.9" fill="none" stroke="rgba(255,255,255,.32)" stroke-width="4" stroke-linecap="round"/></g>
+          <g><path d="M57.8 21A30 30 0 0 1 79 42.2" fill="none" stroke="url(#rg2)" stroke-width="13.5" stroke-linecap="round"/><path d="M56.7 24.9A26 26 0 0 1 75.1 43.3" fill="none" stroke="rgba(255,255,255,.32)" stroke-width="4" stroke-linecap="round"/></g>
+          <g><path d="M79 57.8A30 30 0 0 1 57.8 79" fill="none" stroke="url(#rg3)" stroke-width="13.5" stroke-linecap="round"/><path d="M75.1 56.7A26 26 0 0 1 56.7 75.1" fill="none" stroke="rgba(255,255,255,.32)" stroke-width="4" stroke-linecap="round"/></g>
+          <g><path d="M42.2 79A30 30 0 0 1 21 57.8" fill="none" stroke="url(#rg4)" stroke-width="13.5" stroke-linecap="round"/><path d="M43.3 75.1A26 26 0 0 1 24.9 56.7" fill="none" stroke="rgba(255,255,255,.32)" stroke-width="4" stroke-linecap="round"/></g>
+        </svg>
+        正在执行 Bash · cargo test --lib…<span class="t-time">4s</span><span class="v-tag">C · 涟漪</span><button class="btn-interrupt">中断</button>
+      </div>
+      <div style="margin-top:10px;font-size:11px;color:var(--text-muted)">A 最像风车、动感最强；B「流光」缎带静止、色彩沿四条缎带流转，最贴「流动」且久看不晕（推荐）；C 最安静。工具执行时转速/流速加倍。</div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">用量徽标 <span class="en">TurnUsageBadge</span></div>
+      <div class="row"><span class="badge grey" style="font-variant-numeric:tabular-nums">↑ 12.4k · ↓ 1.2k</span><span class="badge green" style="font-variant-numeric:tabular-nums">缓存 94%</span><span class="badge grey">2.1s</span></div>
+      <div class="row"><span class="tooltip" style="max-width:100%">本轮 token：输入 12,412 / 输出 1,238<br>缓存读取 11,704（94%）· 耗时 2.13s</span></div>
+    </div>
+  </div>
+
+  <!-- ── 编辑器与终端（补全）── -->
+  <div class="sec-title">编辑器与终端 · Editor & Terminal</div>
+  <div class="grid">
+    <div class="spec wide">
+      <div class="spec-label">代码编辑器 <span class="en">CodeEditor · 含 CodeMirror 搜索面板（历史主题化坑点）</span></div>
+      <div class="editor">
+        <div class="cm-search">
+          <input value="save_session_changes">
+          <button class="cmb">Aa</button><button class="cmb">.*</button>
+          <span class="cnt">3/9</span>
+          <button class="cmb">↑</button><button class="cmb">↓</button>
+          <button class="cmb">全部替换</button>
+          <button class="cmb" style="margin-left:auto">✕</button>
+        </div>
+        <div class="ed-code"><span class="ln">41</span><span class="tok-k">async fn</span> <span class="ed-hit">save_session_changes</span>(json: String) {
+<span class="ln">42</span>  <span class="tok-c">// 全量重写 → 27s 主线程阻塞</span>
+<span class="ln">43</span>  fs::write(path, json).<span class="tok-k">await</span>
+<span class="ln">44</span>}
+<span class="ln">45</span>
+<span class="ln">46</span><span class="tok-k">async fn</span> <span class="ed-hit cur">save_session_changes</span>_incremental(round: &amp;Round) {</div>
+      </div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">工作台终端 <span class="en">WorkbenchTerminal · xterm</span></div>
+      <div class="term">
+        <div class="tm-head"><span class="tm-tab on">dev</span><span class="tm-tab">cargo</span><span style="margin-left:auto">powershell</span></div>
+        <pre><span class="tm-prompt">aide ❯</span> pnpm tauri dev
+<span class="ansi-c">   VITE v6.3.5</span>  ready in <span class="ansi-y">412 ms</span>
+<span class="ansi-g">  ➜  Local:   http://localhost:1420/</span>
+<span class="ansi-dim">  Compiling aide v0.9.1</span>
+<span class="ansi-g">   Finished dev profile in 38.2s</span>
+<span class="tm-prompt">aide ❯</span> <span class="tm-caret"></span></pre>
+      </div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">并排 / 单栏 Diff <span class="en">DiffViewer · 行语言与聊天同源</span></div>
+      <div class="diff2-wrap">
+        <div class="diff2-head"><div>原始 · session_changes.rs</div><div>修改后</div></div>
+        <div class="diff2">
+          <div class="dc">
+            <div class="dl-row"><span class="n">88</span>let json =</div>
+            <div class="dl-row del"><span class="n">89</span>  to_string_pretty(&amp;all)</div>
+            <div class="dl-row"><span class="n">90</span>fs::write(path, json)</div>
+          </div>
+          <div class="dc">
+            <div class="dl-row"><span class="n">88</span>let line =</div>
+            <div class="dl-row add"><span class="n">89</span>  to_string(&amp;round)</div>
+            <div class="dl-row"><span class="n">90</span>append(path, line)</div>
+          </div>
+        </div>
+      </div>
+      <div class="diff2-wrap" style="margin-top:10px">
+        <div class="diff2-head" style="grid-template-columns:1fr"><div>单栏模式 ↑↓</div></div>
+        <div class="diff2" style="grid-template-columns:1fr">
+          <div class="dc">
+            <div class="dl-row hunk">@@ -88,4 +88,4 @@ fn persist</div>
+            <div class="dl-row ctx"><span class="n">88</span>let json =</div>
+            <div class="dl-row del"><span class="n">89</span>  to_string_pretty(&amp;all)</div>
+            <div class="dl-row add"><span class="n">89</span>  to_string(&amp;round)</div>
+            <div class="dl-row ctx"><span class="n">90</span>fs::write(path, json)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 壳层（补全）── -->
+  <div class="sec-title">壳层 · App Shell</div>
+  <div class="grid">
+    <div class="spec wide">
+      <div class="spec-label">标题栏 + 侧栏 + 分隔条 + /btw 浮层 <span class="en">TitleBar / SidebarLeft / PaneSplit / BtwDrawer</span></div>
+      <div class="shell">
+        <div class="sh-titlebar">
+          <div class="sh-logo"><svg class="brand brand-sm" viewBox="0 0 100 100" style="filter:none"><g fill="none" stroke-linecap="round" stroke-width="13.5"><path d="M21 42.2A30 30 0 0 1 42.2 21" stroke="url(#rg1)"/><path d="M57.8 21A30 30 0 0 1 79 42.2" stroke="url(#rg2)"/><path d="M79 57.8A30 30 0 0 1 57.8 79" stroke="url(#rg3)"/><path d="M42.2 79A30 30 0 0 1 21 57.8" stroke="url(#rg4)"/></g><g fill="none" stroke="rgba(255,255,255,.32)" stroke-linecap="round" stroke-width="4"><path d="M24.9 43.3A26 26 0 0 1 43.3 24.9"/><path d="M56.7 24.9A26 26 0 0 1 75.1 43.3"/><path d="M75.1 56.7A26 26 0 0 1 56.7 75.1"/><path d="M43.3 75.1A26 26 0 0 1 24.9 56.7"/></g></svg>aide <span class="p">— IdeaProjects\aide</span></div>
+          <div class="sh-chips">
+            <span class="sh-chip"><span class="dot run"></span>修复流式渲染卡死</span>
+            <span class="sh-chip"><span class="dot att"></span>插件市场优化</span>
+          </div>
+          <div class="sh-right">
+            <button class="tbtn bell"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg><span class="n">2</span></button>
+            <div class="winctl"><span>—</span><span>▢</span><span class="close">✕</span></div>
+          </div>
+        </div>
+        <div class="sh-body">
+          <div class="sh-side">
+            <div class="side-cap">工作区</div>
+            <div class="sr on"><span class="dot run"></span><div><div>修复流式渲染卡死</div><div class="sr-meta">Sonnet 4.6 · 2 分钟前</div></div></div>
+            <div class="sr"><span class="dot att"></span><div><div>插件市场优化</div><div class="sr-meta">等待权限确认</div></div></div>
+            <div class="sr"><span class="dot wait"></span><div><div>主题系统重构</div><div class="sr-meta">昨天</div></div></div>
+          </div>
+          <div class="splitter on"></div>
+          <div class="sh-main">
+            <div class="btw">
+              <div class="bw-head">◇ 顺便问一下</div>
+              <div class="bw-body">这个 bug 和上周的渲染卡死是同一个根因吗？<br><span style="color:var(--text-muted);font-size:10.5px">轻量模式 · 不用工具</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">设置面板壳 <span class="en">SettingsPanel</span></div>
+      <div class="settings-shell">
+        <div class="ss-nav">
+          <div class="nv on">◐ 外观</div>
+          <div class="nv">⚙ 通用</div>
+          <div class="nv">◆ Provider</div>
+          <div class="nv">✦ 技能定制</div>
+          <div class="nv">⌗ 代码索引</div>
+        </div>
+        <div class="ss-content">
+          <h4>外观</h4><div class="cap">主题与显示偏好</div>
+          <div class="setting-row" style="padding:8px 0"><div><div class="s-label">主题</div></div><span class="select" style="padding:5px 10px;font-size:11.5px">暖色 · 精修 <span class="chev">▾</span></span></div>
+          <div class="setting-row" style="padding:8px 0"><div><div class="s-label">界面动效</div></div><span class="switch on"></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="spec">
+      <div class="spec-label">表单模态 <span class="en">RunConfigsDialog / ProviderSettings</span></div>
+      <div class="overlay">
+        <div class="modal form-modal" style="width:340px">
+          <h3>新建运行配置</h3>
+          <div class="fld"><label>名称</label><input class="field" value="dev · 前端热更"></div>
+          <div class="fld"><label>命令</label><input class="field" value="pnpm tauri dev" style="font-family:'JetBrains Mono',monospace;font-size:11.5px"></div>
+          <div class="foot"><button class="btn ghost">取消</button><button class="btn primary">保存配置</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 质感 token 提案 ── -->
+  <div class="sec-title">新增质感槽位提案 · ThemeTokens 扩展</div>
+  <div class="grid">
+    <div class="spec wide">
+      <div class="spec-label">以下槽位加入 ThemeTokens，组件内统一引用；旧主题文件补默认值即可</div>
+      <table class="token-table">
+        <tr><th>Token 槽位</th><th>作用</th><th>效果预览</th></tr>
+        <tr><td>highlightInset</td><td>浮起表面的顶部 1px 受光（按钮/卡片/菜单/模态共用）</td><td><div class="token-demo" style="box-shadow:var(--highlight-inset),var(--shadow-sm)"></div></td></tr>
+        <tr><td>accentGradient</td><td>主按钮/选中态/开关的渐变强调（暖色=琥珀渐变，靛蓝=蓝紫渐变）</td><td><div class="token-demo" style="background:var(--accent-gradient)"></div></td></tr>
+        <tr><td>accentGlow</td><td>主按钮与关键焦点的彩色辉光投影</td><td><div class="token-demo" style="background:var(--accent-gradient);box-shadow:var(--accent-glow)"></div></td></tr>
+        <tr><td>accentRing</td><td>输入框/焦点环</td><td><div class="token-demo" style="background:var(--bg-deep);box-shadow:var(--accent-ring)"></div></td></tr>
+        <tr><td>ambientGlow</td><td>对话区顶部的环境光晕，空间的「主光源」</td><td><div class="token-demo" style="background:var(--bg-base);position:relative;overflow:hidden"><div style="position:absolute;inset:0;background:var(--ambient-glow)"></div></div></td></tr>
+        <tr><td>borderStrong</td><td>悬停/浮层用的次强边框（现有 border / borderSubtle 之外补一档）</td><td><div class="token-demo" style="border-color:var(--border-strong)"></div></td></tr>
+        <tr><td>ease / easeT</td><td>统一动效曲线 cubic-bezier(.2,.8,.2,1)，140–160ms</td><td style="font-family:'JetBrains Mono',monospace;font-size:11px">cubic-bezier(.2,.8,.2,1)</td></tr>
+        <tr><td>surfaceBlur <span class="badge grey" style="margin-left:4px">后门</span></td><td>面板背景模糊，默认 "none" 零成本；玻璃主题给 blur+saturate 一处开启全局毛玻璃（点顶部「玻璃」验证）</td><td>—</td></tr>
+        <tr><td>ambientScene <span class="badge grey" style="margin-left:4px">后门</span></td><td>应用根层环境场景（极光渐变画在面板后面），默认 "none" 走 bgDeep 纯色；代码/终端/diff 编辑区用深实底 token 豁免透明</td><td>—</td></tr>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+document.querySelectorAll('.theme-switch button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.theme-switch button').forEach(b => b.classList.toggle('active', b === btn));
+    document.body.className = btn.dataset.t;
+  });
+});
+</script>
+</body>
+</html>
