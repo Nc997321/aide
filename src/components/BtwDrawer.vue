@@ -218,7 +218,7 @@ const text = computed(() => store.value.messages.join(""));
 
 .btw-drawer-enter-active,
 .btw-drawer-leave-active {
-  transition: transform 0.2s ease, opacity 0.2s ease;
+  transition: transform var(--aide-ease-t), opacity var(--aide-ease-t);
 }
 
 .btw-drawer-enter-from,

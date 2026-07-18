@@ -196,6 +196,8 @@ onUnmounted(() => {
   align-items: stretch;
   border-radius: var(--aide-radius-md);
   box-shadow: var(--aide-accent-glow), inset 0 1px 0 rgba(255, 255, 255, .28);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
 .chat-send-split button {

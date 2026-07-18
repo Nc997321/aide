@@ -436,6 +436,7 @@ const inputJson = computed(() => {
 
 .perm-input-value {
   display: block;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
   font-size: 12px;
   color: var(--aide-text-primary);
   white-space: pre-wrap;
@@ -445,6 +446,7 @@ const inputJson = computed(() => {
 
 .perm-input-raw {
   margin: 0;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
   font-size: 12px;
   color: var(--aide-text-secondary);
   white-space: pre-wrap;
