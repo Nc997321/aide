@@ -497,8 +497,10 @@ defineExpose({ reload: loadAll });
         </template>
       </div>
     </div>
+    <!-- AToast 必须留在 .git-panel 内部：组件须保持单根——App.vue 用 v-show 切 tab，
+         多根组件的 v-show 会静默失效（fragment 根的 el 是文本锚点，vShow 读不到 style）。 -->
+    <AToast :state="toastState" />
   </div>
-  <AToast :state="toastState" />
 </template>
 
 <style scoped>
