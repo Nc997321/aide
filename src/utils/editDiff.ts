@@ -37,8 +37,8 @@ export function buildEditDiffLines(edit: EditToolInput): EditDiffStats {
   const delTextLines = edit.old_string.split("\n");
   const addTextLines = edit.new_string.split("\n");
   const lines: DiffLine[] = [
-    ...delTextLines.map((text): DiffLine => ({ text: `-${text}`, cls: "aide-diff-del" })),
-    ...addTextLines.map((text): DiffLine => ({ text: `+${text}`, cls: "aide-diff-add" })),
+    ...delTextLines.map((text): DiffLine => ({ text, cls: "aide-diff-del" })),
+    ...addTextLines.map((text): DiffLine => ({ text, cls: "aide-diff-add" })),
   ];
   return { lines, addCount: addTextLines.length, delCount: delTextLines.length };
 }

@@ -101,7 +101,7 @@ const mergeTheme = EditorView.theme(
       backgroundColor: "color-mix(in srgb, var(--aide-danger) 8%, transparent)",
     },
     "&.cm-merge-b .cm-changedLine, .cm-inlineChangedLine": {
-      backgroundColor: "color-mix(in srgb, var(--aide-success) 8%, transparent)",
+      backgroundColor: "color-mix(in srgb, var(--aide-success) 7%, transparent)",
     },
     ".cm-changedText": {
       backgroundColor: "color-mix(in srgb, var(--aide-warning) 22%, transparent)",
@@ -258,26 +258,38 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--aide-border);
+  padding: 4px 6px;
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-md);
+  box-shadow: var(--aide-highlight-inset);
   flex-shrink: 0;
 }
 .dv-badge {
-  font-size: 11px;
-  padding: 1px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2.5px 9px;
+  font-size: 10.5px;
+  font-weight: 600;
   border-radius: var(--aide-radius-sm);
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
 }
 .dv-badge--added {
   color: var(--aide-success);
   background: color-mix(in srgb, var(--aide-success) 12%, transparent);
+  border-color: color-mix(in srgb, var(--aide-success) 28%, transparent);
 }
 .dv-badge--modified {
   color: var(--aide-info);
   background: color-mix(in srgb, var(--aide-info) 12%, transparent);
+  border-color: color-mix(in srgb, var(--aide-info) 28%, transparent);
 }
 .dv-badge--deleted {
   color: var(--aide-danger);
   background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--aide-danger) 28%, transparent);
 }
 .dv-labels {
   font-size: 12px;
@@ -287,13 +299,20 @@ onBeforeUnmount(() => {
   flex: 1;
 }
 .dv-btn {
-  font-size: 12px;
-  padding: 2px 8px;
-  border: 1px solid var(--aide-surface-hover);
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border: none;
   border-radius: var(--aide-radius-sm);
-  color: var(--aide-text-secondary);
   background: transparent;
+  color: var(--aide-text-muted);
+  font-size: 13px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--aide-highlight-inset);
+  transition: all var(--aide-ease-t);
 }
 .dv-btn:hover {
   background: var(--aide-surface-hover);
