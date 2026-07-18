@@ -2,7 +2,7 @@ mod codegraph;
 mod commands;
 mod diagnostics;
 mod shell;
-mod sidecar;
+mod runtime;
 mod conversation;
 mod skills;
 
@@ -86,7 +86,7 @@ pub fn run() {
         )
         .manage(shell_manager)
         .manage(diagnostics::DiagnosticsState::new())
-        .manage(sidecar::SidecarManager::new())
+        .manage(runtime::AgentRuntimeManager::new())
         .manage(std::sync::Arc::new(skills::SkillRegistry::new()))
         .manage(workspace_state)
         .manage(PendingOpenFile(std::sync::Mutex::new(None)))
@@ -116,6 +116,19 @@ pub fn run() {
 
             // 卡死诊断黑匣子 watchdog（须在主窗口创建之后：要解析 HWND）
             diagnostics::start(app.handle());
+
+            // 启动持久 Agent Runtime（single persistent process，所有会话共享）
+            // tokio::process::Command 需要 reactor——必须跑在 Tokio runtime 上，
+            // setup 闭包是同步的，不能直接调 spawn_runtime。
+            let handle1 = app.handle().clone();
+            let handle2 = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Some(rt) = handle1.try_state::<runtime::AgentRuntimeManager>() {
+                    if let Err(e) = rt.spawn_runtime(handle2) {
+                        eprintln!("[aide] Agent Runtime 启动失败: {e}");
+                    }
+                }
+            });
 
             // 冷启动带参：首次即被 `aide.exe <path>` 唤起时，single-instance 回调
             // 不会触发（首个实例），这里把路径暂存到 PendingOpenFile，前端 mount
@@ -282,7 +295,6 @@ pub fn run() {
             commands::chat::get_default_models,
             commands::chat::get_default_permission_modes,
             commands::chat::stop_chat_session,
-            commands::chat::rename_sidecar_session,
             commands::chat::start_btw_session,
             // Plugin skills scanning
             commands::shell::scan_plugin_skills,

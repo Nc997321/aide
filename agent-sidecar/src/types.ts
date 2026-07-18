@@ -108,7 +108,14 @@ export type ChatEvent =
   | { type: "heartbeat" }
   // 进程死亡：由 Rust（非 sidecar）合成——reader EOF 或看门狗超时。session_id 由
   // Rust 注入；detail 携带 stderr 尾部用于诊断。列在此处以统一 chat-event 协议真相源。
-  | { type: "session_dead"; reason: "exit" | "heartbeat_timeout"; detail?: string };
+  | { type: "session_dead"; reason: "exit" | "heartbeat_timeout"; detail?: string }
+  // Runtime 健康快照：由 SessionManager 每 30s emit 一次，供前端诊断仪表盘消费。
+  | {
+      type: "health";
+      sessions: { active: number; idle: number; stalled: number; total: number };
+      processes: { claudeExeCount: number };
+      timestamp: number;
+    };
 
 // Provider-agnostic image attachment — same shape used by all future AI providers
 export interface ImageAttachment {
@@ -116,34 +123,32 @@ export interface ImageAttachment {
   mediaType: string;  // "image/png" | "image/jpeg" | "image/gif" | "image/webp"
 }
 
-// Rust → Sidecar（每行一个 JSON，从 stdin 读取）
+// Rust → Sidecar（每行一个 JSON，从 stdin 读取）。
+// 所有命令都带 session_id：SessionManager 按它路由到对应 SessionWorker。
 export type SidecarCommand =
   | {
       cmd: "send";
+      session_id: string;
       prompt: string;
       images?: ImageAttachment[];
-      session_id?: string;
       cwd?: string;
       permission_mode?: string;
-      // Rust 显式判定"这次 spawn/resume 是因为供应商连接身份真的漂移了"才带 true——
-      // 单纯"这个会话当前没有存活进程"（新会话/重开历史对话）不会带这个字段。
-      // sidecar 只在收到它时才在下一次建 query() 时 forkSession，避免把每一次
-      // 中断/错误触发的内部重连都误判成供应商切换（见 index.ts pendingFork 用法）。
+      // 供应商连接身份真的漂移了才带 true——下一次 query() 时 forkSession。
       provider_switched?: boolean;
-      // 忙碌时的"插队"标记：sidecar 不会立刻打断当前这一轮，而是记下来，等当前
-      // 正在执行的工具调用跑完（安全边界）才真正 interrupt，避免腰斩一次进行中的
-      // 工具执行（见 jumpQueue.ts / toolLifecycle.ts）。
+      // 忙碌时的"插队"标记：不在当前轮立刻打断，等安全边界再 interrupt。
       jump_queue?: boolean;
-      // btw 支线对话:命中 → 下一次建 query() 时 resume session_id + forkSession:true
-      // (fork 出带主上下文副本的新 session,主会话 JSONL 不被改动)。同时 persistSession
-      // :false(阅后即弃,不落盘)。lightweight=true → 禁用所有工具(纯问答、省 token)。
-      // 这是 Claude SDK 专属能力,但字段语义中性:未来 provider 各自在 sidecar 实现 fork。
+      // btw 支线对话:命中 → 下一次建 query() 时 resume fork_from + forkSession:true。
+      // fork_from 是 fork 源会话 ID（BTW 自己的 session_id 仅用于路由，不传给 SDK）。
       btw?: boolean;
       lightweight?: boolean;
+      fork_from?: string;
+      // per-session provider 连接参数覆盖（ANTHROPIC_BASE_URL / API_KEY 等）。
+      // Runtime 启动后进程 env 不变，不同会话用不同 provider 靠此字段传递。
+      env?: Record<string, string>;
     }
-  // answers：仅 AskUserQuestion 场景使用（问题文本 → 选中答案/自由文本的不透明映射），
-  // 其他工具的批准永远不带这个字段。核心协议不解释内容，只搬运。
-  | { cmd: "permission_response"; id: string; approved: boolean; always?: boolean; answers?: Record<string, string>; nextMode?: string }
-  | { cmd: "interrupt" }
-  | { cmd: "set_model"; model: string }
-  | { cmd: "set_permission_mode"; mode: string };
+  | { cmd: "permission_response"; session_id: string; id: string; approved: boolean; always?: boolean; answers?: Record<string, string>; nextMode?: string }
+  | { cmd: "interrupt"; session_id: string }
+  | { cmd: "set_model"; session_id: string; model: string }
+  | { cmd: "set_permission_mode"; session_id: string; mode: string }
+  // 停止一个会话：Runtime 内部调 worker.stop()（q.close() + 清理），不再由 Rust kill 进程。
+  | { cmd: "session_stop"; session_id: string };

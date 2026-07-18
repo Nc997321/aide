@@ -2,9 +2,10 @@
   "name": "agent-sidecar",
   "version": "0.1.0",
   "type": "module",
-  "main": "dist/sidecar.js",
+  "main": "dist/runtime.js",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node18 --outfile=dist/sidecar.js --banner:js=\"import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\"",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node18 --outfile=dist/runtime.js --banner:js=\"import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\"",
+    "build:exe": "bun build --compile dist/runtime.js --outfile dist/aide-agent.exe",
     "dev": "npx tsx src/index.ts"
   },
   "dependencies": {

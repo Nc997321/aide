@@ -1,6 +1,7 @@
 import { computed, reactive, ref, watch, type Ref } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { useDiagnosticsDashboard } from "@/composables/useDiagnosticsDashboard";
 import type {
   ChatMessage,
   ContextUsage,
@@ -281,12 +282,7 @@ async function finalizeSession(tempId: string, realId: string) {
   }
   // provider 绑定也跟着搬迁：临时 id 在 sendMessage 时已盖戳，拿到真实 id 后不能丢
   migrateProvider(tempId, realId);
-  // 2. Rust 侧只需要重命名 sidecar 进程注册表（内存态，无 IO）
-  try {
-    await invoke("rename_sidecar_session", { oldId: tempId, newId: realId });
-  } catch (e) {
-    console.warn("rename_sidecar_session failed:", e);
-  }
+  // 2. Runtime 内部管理 session 映射（SessionManager 的 Map），不需要 Rust 改名
   // 3. 通知 App.vue：这是第一次创建，去写元数据、加侧栏、记最近访问
   for (const cb of sessionCreatedCallbacks) cb(tempId, realId);
 }
@@ -508,6 +504,11 @@ function handleChatEvent(e: Record<string, unknown>) {
           resetsAt: (w["resets_at"] as number | null) ?? null,
         })),
       };
+      diag.handleRateLimitEvent(sharedRateLimit.value);
+      break;
+    }
+    case "health": {
+      diag.handleHealthEvent(e);
       break;
     }
     case "permission_modes_available": {
@@ -604,6 +605,7 @@ function handleChatEvent(e: Record<string, unknown>) {
       if (usage) {
         const last = store.messages[store.messages.length - 1];
         if (last?.role === "assistant") last.usage = usage;
+        diag.accumulateUsage(usage);
       }
       finishStreaming(store);
       // 忙碌期间排队的消息：这一轮结束立即把「全部」排队消息合并成一条续发
@@ -777,6 +779,9 @@ export function __resetForTest() {
 
 export function useChatSession(sessionId: Ref<string | null>) {
   void ensureGlobalListener();
+
+  // 诊断仪表盘：跨会话聚合健康/费用/速率数据
+  const diag = useDiagnosticsDashboard();
 
   const current = computed(() => (sessionId.value ? getStore(sessionId.value) : null));
 
