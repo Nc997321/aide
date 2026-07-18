@@ -142,10 +142,10 @@ async function createEditor() {
           borderLeftColor: "var(--aide-text-primary)",
         },
         ".cm-searchMatch": {
-          backgroundColor: "color-mix(in srgb, var(--aide-warning) 30%, transparent)",
+          backgroundColor: "color-mix(in srgb, var(--aide-warning) 25%, transparent)",
         },
         ".cm-searchMatch.cm-searchMatch-selected": {
-          backgroundColor: "color-mix(in srgb, var(--aide-warning) 50%, transparent)",
+          backgroundColor: "color-mix(in srgb, var(--aide-warning) 45%, transparent)",
         },
         ".cm-matchingBracket": {
           backgroundColor: "color-mix(in srgb, var(--aide-accent) 15%, transparent)",
@@ -192,28 +192,33 @@ async function createEditor() {
           border: "1px solid var(--aide-border) !important",
         },
         ".cm-panel.cm-search": {
+          backgroundColor: "var(--aide-bg-raised) !important",
+          boxShadow: "var(--aide-shadow-sm) !important",
           padding: "6px 8px !important",
         },
         ".cm-textfield": {
-          backgroundColor: "var(--aide-bg-base) !important",
-          border: "1px solid var(--aide-surface-hover) !important",
+          backgroundColor: "var(--aide-bg-deep) !important",
+          border: "1px solid var(--aide-border) !important",
           color: "var(--aide-text-primary) !important",
           borderRadius: "var(--aide-radius-sm) !important",
           padding: "2px 6px !important",
           fontSize: "12px !important",
+          boxShadow: "inset 0 1px 2px rgba(0,0,0,.3) !important",
         },
         ".cm-textfield:focus": {
           borderColor: "var(--aide-accent) !important",
+          boxShadow: "var(--aide-accent-ring) !important",
           outline: "none !important",
         },
         ".cm-button": {
           backgroundImage: "none !important",
-          backgroundColor: "transparent !important",
-          border: "1px solid var(--aide-surface-hover) !important",
+          backgroundColor: "var(--aide-surface-default) !important",
+          border: "1px solid var(--aide-border) !important",
           color: "var(--aide-text-secondary) !important",
           borderRadius: "var(--aide-radius-sm) !important",
           padding: "2px 8px !important",
           fontSize: "12px !important",
+          boxShadow: "var(--aide-highlight-inset) !important",
         },
         ".cm-button:hover": {
           backgroundColor: "var(--aide-surface-hover) !important",

@@ -67,8 +67,10 @@ const pickerTitle = computed(() => `找到 ${candidates.value.length} 个匹配�
   padding: 8px 14px;
   border-radius: var(--aide-radius-md);
   background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border);
-  box-shadow: var(--aide-shadow-lg);
+  border: 1px solid var(--aide-border-strong);
+  box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   font-size: 12px;
   color: var(--aide-text-secondary);
 }
@@ -96,6 +98,8 @@ const pickerTitle = computed(() => `找到 ${candidates.value.length} 个匹配�
   align-items: center;
   justify-content: center;
   background: var(--aide-bg-overlay);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
 }
 
 .fr-picker {
@@ -106,8 +110,10 @@ const pickerTitle = computed(() => `找到 ${candidates.value.length} 个匹配�
   flex-direction: column;
   border-radius: var(--aide-radius-md);
   background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border);
-  box-shadow: var(--aide-shadow-lg);
+  border: 1px solid var(--aide-border-strong);
+  box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   overflow: hidden;
 }
 

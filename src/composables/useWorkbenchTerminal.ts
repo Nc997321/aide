@@ -5,6 +5,7 @@ import { FitAddon } from "xterm-addon-fit";
 import { api } from "../api";
 import { useSettings } from "./useSettings";
 import { buildXtermTheme } from "../utils/xterm";
+import { MONO_FONT_STACK } from "../utils/fonts";
 import { themes } from "../themes";
 import {
   setActiveWorkspace as coreSetActiveWorkspace,
@@ -62,7 +63,7 @@ function ensureSettingsWatchers() {
   });
   watch(() => settings.fontFamily, (v) => {
     for (const [, s] of sessions) {
-      s.terminal.options.fontFamily = v;
+      s.terminal.options.fontFamily = v || MONO_FONT_STACK;
     }
   });
   watch(() => settings.theme, async () => {
@@ -150,7 +151,7 @@ export function useWorkbenchTerminal() {
     const terminal = new Terminal({
       cursorBlink: true,
       fontSize: stg.fontSize,
-      fontFamily: stg.fontFamily,
+      fontFamily: stg.fontFamily || MONO_FONT_STACK,
       theme: buildXtermTheme(themes[stg.theme || "warm-dark"]),
       allowProposedApi: true,
     });
@@ -250,7 +251,7 @@ export function useWorkbenchTerminal() {
     if (!containerEl) return;
     const stg = settingsRef!;
     const terminal = new Terminal({
-      cursorBlink: true, fontSize: stg.fontSize, fontFamily: stg.fontFamily,
+      cursorBlink: true, fontSize: stg.fontSize, fontFamily: stg.fontFamily || MONO_FONT_STACK,
       theme: buildXtermTheme(themes[stg.theme || "warm-dark"]), allowProposedApi: true,
     });
     const fitAddon = new FitAddon();

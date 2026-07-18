@@ -325,11 +325,13 @@ function onKeydown(e: KeyboardEvent) {
   width: 100%;
   height: 100%;
   background: var(--aide-surface-default);
-  border: 1px solid var(--aide-surface-hover);
+  border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-lg);
   display: flex;
   flex-direction: column;
-  box-shadow: var(--aide-shadow-lg);
+  box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   overflow: hidden;
   outline: none;
 }
@@ -347,7 +349,7 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .fw-window--dragging {
-  box-shadow: var(--aide-shadow-lg), 0 0 0 1px color-mix(in srgb, var(--aide-accent) 40%, transparent);
+  box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset), 0 0 0 1px color-mix(in srgb, var(--aide-accent) 40%, transparent);
 }
 
 .fw-dirty {
