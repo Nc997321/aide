@@ -177,26 +177,20 @@ function isRowRunning(cfg: RunConfig): boolean {
         <span class="titlebar-logo-text">Aide</span>
       </div>
 
-      <template v-if="projectName">
-        <span class="titlebar-sep">/</span>
-        <span class="titlebar-project">{{ projectName }}</span>
-      </template>
-
       <SidebarToggle
         side="left"
         :collapsed="!!leftCollapsed"
         @toggle="$emit('toggle-left')"
       />
 
-      <span v-if="gitBranch" class="titlebar-branch">
-        <svg class="titlebar-branch-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="6" y1="3" x2="6" y2="15"/>
-          <circle cx="18" cy="6" r="3"/>
-          <circle cx="6" cy="18" r="3"/>
-          <path d="M18 9a9 9 0 0 1-9 9"/>
-        </svg>
-        {{ gitBranch }}
-      </span>
+      <!-- 打开目录 / 新建工作空间 -->
+      <button
+        class="titlebar-open-folder-btn"
+        v-tooltip="'打开目录 / 新建工作空间'"
+        @click.stop="$emit('open-folder')"
+      >
+        <span class="titlebar-open-folder-text">打开目录</span>
+      </button>
 
       <!-- Run config selector: shown when configs exist for this workspace -->
       <template v-if="projectName && runConfigs && runConfigs.length > 0">
@@ -325,17 +319,6 @@ function isRowRunning(cfg: RunConfig): boolean {
         </svg>
       </button>
 
-      <!-- 打开目录 / 新建工作空间 -->
-      <button
-        class="titlebar-open-folder-btn"
-        v-tooltip="'打开目录 / 新建工作空间'"
-        @click.stop="$emit('open-folder')"
-      >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M3 7C3 5.89543 3.89543 5 5 5H9.58579C9.851 5 10.1054 5.10536 10.2929 5.29289L12 7H19C20.1046 7 21 7.89543 21 9V17C21 18.1046 20.1046 19 19 19H5C3.89543 19 3 18.1046 3 17V7Z"/>
-          <path d="M3 9L9 9L11 11L21 11"/>
-        </svg>
-      </button>
     </div>
 
     <!-- Center: search trigger -->
@@ -985,13 +968,19 @@ function isRowRunning(cfg: RunConfig): boolean {
 
 .titlebar-open-folder-btn {
   display: flex; align-items: center; justify-content: center;
-  width: 22px; height: 22px; background: none; border: 1px solid transparent;
+  height: 26px; padding: 0 10px; background: none; border: 1px solid var(--aide-border);
   border-radius: var(--aide-radius-sm); color: var(--aide-text-secondary);
   cursor: pointer; flex-shrink: 0; transition: background 0.12s, border-color 0.12s, color 0.12s;
+  font-family: inherit;
 }
 .titlebar-open-folder-btn:hover {
   background: var(--aide-surface-hover);
-  border-color: var(--aide-border);
+  border-color: color-mix(in srgb, var(--aide-text-secondary) 30%, transparent);
   color: var(--aide-text-primary);
+}
+.titlebar-open-folder-text {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 </style>
