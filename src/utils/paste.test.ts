@@ -27,10 +27,17 @@ describe("resolvePastePayload", () => {
     expect(r.imagePaths).toEqual(["/tmp/aide-clipboard/img-1.png"]);
   });
 
-  it("in-app copy entry becomes @path text, no imagePaths", () => {
+  it("in-app copy entry becomes @path text when plain text is empty", () => {
     const entry: ClipboardEntry = { op: "copy", path: "/proj/f.ts" };
-    const r = resolvePastePayload([], null, entry, "x");
+    const r = resolvePastePayload([], null, entry, "");
     expect(r.text).toBe("@/proj/f.ts ");
+    expect(r.imagePaths).toEqual([]);
+  });
+
+  it("plain text wins over in-app copy entry", () => {
+    const entry: ClipboardEntry = { op: "copy", path: "/proj/f.ts" };
+    const r = resolvePastePayload([], null, entry, "hello world");
+    expect(r.text).toBe("hello world");
     expect(r.imagePaths).toEqual([]);
   });
 
