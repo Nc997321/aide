@@ -325,6 +325,17 @@ watch(activeWorkspaceKey, (k) => {
   if (k) wb.setActiveWorkspace(k);
 });
 
+// ── 文件树定位：FileWindow 按钮 → 切到文件标签 → 展开并高亮 ──
+const { revealInTreePath } = useFileViewer();
+watch(revealInTreePath, (path) => {
+  if (!path) return;
+  rightTab.value = "files";
+  nextTick(() => {
+    fileTreeRef.value?.revealFile(path);
+    revealInTreePath.value = null; // 消费后重置
+  });
+});
+
 /** 把绝对路径转成相对当前工作区的展示路径；不在工作区内则原样返回。 */
 function relPath(p: string): string {
   const root = workspacePath.value;

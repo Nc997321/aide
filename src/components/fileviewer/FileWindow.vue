@@ -16,7 +16,7 @@ const props = defineProps<{
   bounds: { w: number; h: number };
 }>();
 
-const { closeWindow, save, openAndScrollTo, projectRoot, gotoOwnerId, indexHintWinId } = useFileViewer();
+const { closeWindow, save, openAndScrollTo, projectRoot, gotoOwnerId, indexHintWinId, revealInTreePath } = useFileViewer();
 const goto = useGotoDefinition();
 const modal = useModal();
 
@@ -193,6 +193,10 @@ function onKeydown(e: KeyboardEvent) {
     void requestClose();
   }
 }
+
+function locateInTree() {
+  revealInTreePath.value = props.win.filePath;
+}
 </script>
 
 <template>
@@ -206,6 +210,23 @@ function onKeydown(e: KeyboardEvent) {
       <span class="fw-lang">{{ languageLabel }}</span>
       <span v-if="win.readonly && !isImage" class="fw-readonly-badge">只读</span>
       <span class="fw-path" v-tooltip="win.filePath">{{ win.filePath }}</span>
+
+      <!-- 在文件树中定位（仅非虚拟文件） -->
+      <button
+        v-if="!win.virtual"
+        class="fw-locate-btn"
+        v-tooltip="'在文件树中定位'"
+        @click.stop="locateInTree"
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"/>
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M12 2v4"/>
+          <path d="M12 18v4"/>
+          <path d="M2 12h4"/>
+          <path d="M18 12h4"/>
+        </svg>
+      </button>
 
       <!-- Markdown 三态：全预览 / 分屏 / 全编辑 -->
       <div v-if="win.isMarkdown && !win.readonly && !win.error" class="fw-md-modes">
@@ -485,6 +506,23 @@ function onKeydown(e: KeyboardEvent) {
 }
 .fw-close:hover {
   color: var(--aide-text-primary);
+  background: var(--aide-surface-hover);
+}
+
+.fw-locate-btn {
+  background: none;
+  border: none;
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+.fw-locate-btn:hover {
+  color: var(--aide-accent);
   background: var(--aide-surface-hover);
 }
 

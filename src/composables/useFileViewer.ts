@@ -57,6 +57,12 @@ const focusedId = ref<string | null>(null);
 const projectRoot = ref("");
 /** goto-definition 浮层归属的窗口（useGotoDefinition 是单例，浮层只在触发它的窗口里渲染） */
 const gotoOwnerId = ref<string | null>(null);
+/**
+ * "在文件树中定位" 信号：FileWindow 按钮写入目标文件路径，
+ * App.vue 侧 watch 消费——切到文件标签 → 调 FileTree.revealFile()。
+ * 消费后重置为 null。
+ */
+const revealInTreePath = ref<string | null>(null);
 
 // 每窗口图片 Blob URL，关窗时释放；非响应式，仅用于清理。
 const blobUrls = new Map<string, string>();
@@ -297,6 +303,8 @@ export function useFileViewer() {
     gotoOwnerId,
     /** 当前显示「索引已更新」提示的窗口 id（null = 无）；FileWindow 按 win.id 匹配渲染 */
     indexHintWinId: readonly(indexHintWinId),
+    /** 在文件树中定位文件路径信号：FileWindow 写入 → App.vue 消费 */
+    revealInTreePath,
     open,
     openAndScrollTo,
     closeWindow,

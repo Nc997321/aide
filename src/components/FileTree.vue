@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, computed } from "vue";
+import { ref, watch, onMounted, onUnmounted, computed, nextTick } from "vue";
 import TreeNodeItem from "./TreeNodeItem.vue";
 import { useContextMenu } from "../composables/useContextMenu";
 import { useFileViewer } from "../composables/useFileViewer";
@@ -301,7 +301,56 @@ function onWsClickOutside(e: MouseEvent) {
 onMounted(() => document.addEventListener("click", onWsClickOutside));
 onUnmounted(() => document.removeEventListener("click", onWsClickOutside));
 
-defineExpose({ loadRoot });
+/**
+ * 在文件树中定位并高亮指定文件：展开所有祖先目录 → 选中 → 滚动到可见。
+ * 由 App.vue 在收到 revealInTreePath 信号时调用。
+ */
+async function revealFile(filePath: string) {
+  if (!filePath || !projectInfo.value.root) return;
+
+  const root = projectInfo.value.root;
+  const sep = root.includes("\\") ? "\\" : "/";
+
+  // 确保 filePath 在项目根目录下
+  if (!filePath.startsWith(root)) return;
+
+  // 计算从根到目标文件的所有祖先目录（不含根、不含文件自身）
+  const relative = filePath.slice(root.length).replace(/^[\\/]/, "");
+  const parts = relative.split(/[\\/]/);
+  const ancestors: string[] = [];
+  for (let i = 0; i < parts.length - 1; i++) {
+    const ancestor = root + sep + parts.slice(0, i + 1).join(sep);
+    ancestors.push(ancestor);
+  }
+
+  // 自顶向下逐层确保展开并加载子节点
+  for (const dir of ancestors) {
+    if (!expandedDirs.value.has(dir)) {
+      expandedDirs.value.add(dir);
+      await loadChildren(dir);
+    } else {
+      // 已展开但子节点可能还没加载（手动 toggle 后未展开过深层）
+      const node = findNode(treeData.value, dir);
+      if (node && !node.children) {
+        await loadChildren(dir);
+      }
+    }
+  }
+
+  // 选中目标文件
+  selectFile(filePath);
+
+  // 等待 Vue 更新 DOM 后滚动到目标节点
+  await nextTick();
+  const treeEl = document.querySelector(".tree-content") as HTMLElement | null;
+  if (!treeEl) return;
+  const activeEl = treeEl.querySelector(".tree-node.active") as HTMLElement | null;
+  if (activeEl) {
+    activeEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+}
+
+defineExpose({ loadRoot, revealFile });
 </script>
 
 <template>
