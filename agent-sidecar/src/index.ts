@@ -327,6 +327,18 @@ async function startLoop(cwd?: string) {
               continue;
             }
           }
+          // 检测模型主动进入计划模式（auto 等模式下 SDK 可能不经 canUseTool
+          // 自动批准 EnterPlanMode）：主线程 assistant 消息里出现 EnterPlanMode
+          // 工具调用时，对齐本地账本并广播。子代理内部不计（不污染主线程模式）。
+          if (
+            (msg as any).type === "assistant" &&
+            !(msg as any).parent_tool_use_id
+          ) {
+            const blocks = (msg as any).message?.content as any[] | undefined;
+            if (blocks?.some((b: any) => b.type === "tool_use" && b.name === "EnterPlanMode")) {
+              applyPermissionMode("plan");
+            }
+          }
           mapSdkMessage(msg, emit, taskTracker, subagentTracker, toolLifecycle, resolveDropdownValue);
           // 插队安全边界：每处理完一条消息就检查一次——工具跑完（账本归零）的
           // 那一刻，如果还有一条插队消息在等，立刻打断这一轮，不用等到下一条
@@ -494,6 +506,9 @@ rl.on("line", (line) => {
       // 不会自己切模式（那是交互式 CLI 的 TUI 行为）。前端可附带 nextMode
       // 让用户选择执行阶段用什么模式；未带时回落 default。
       applyPermissionMode(cmd.nextMode || "default");
+    } else if (cmd.approved && outcome?.toolName === "EnterPlanMode") {
+      // 模型主动进入计划模式（非用户预选）：对齐本地账本并广播，让前端下拉同步
+      applyPermissionMode("plan");
     }
   } else if (cmd.cmd === "interrupt") {
     currentQuery?.interrupt().catch(() => {});

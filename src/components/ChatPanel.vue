@@ -780,7 +780,7 @@ async function handleQuickAction(action: QuickAction) {
     <PermissionDialog
       :permission="permission ?? null"
       :queue-count="permissionQueueCount"
-      @respond="(id: string, approved: boolean, always?: boolean, answers?: Record<string, string>, nextMode?: string) => emit('respond-permission', id, approved, always, answers, nextMode)"
+      @respond="(id: string, approved: boolean, always?: boolean, answers?: Record<string, string>, nextMode?: string) => { if (nextMode) selectedPermissionMode = nextMode; emit('respond-permission', id, approved, always, answers, nextMode); }"
     />
 
     <div class="chat-input-area">
