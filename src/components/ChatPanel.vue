@@ -231,8 +231,22 @@ watch(
       return;
     }
     // 新建（pending）会话：选择是用户刚做的/随 initialModel 走的，不恢复不重置；
-    // 存活会话：SDK 坐实值（currentModel watcher）优先，不插手。
-    if (isPendingSession(sid) || props.currentModel) return;
+    // 存活会话：SDK 坐实值（currentModel watcher）优先。此处显式同步 selectedModel
+    // 而不是简单 return——因为 currentModel watcher 只在值变化时触发，若两个会话
+    // 的 currentModel 碰巧相同（如都用了 deepseek-v4-flash），或组件初始化时
+    // props 初始值不算"变化"，watcher 都不会触发，selectedModel 会停留在旧值。
+    if (isPendingSession(sid) || props.currentModel) {
+      if (props.currentModel) {
+        const next = pickModelValue(
+          displayModels.value,
+          selectedModel.value,
+          props.currentModel,
+          modelFallback(displayModels.value),
+        );
+        if (next !== selectedModel.value) selectedModel.value = next;
+      }
+      return;
+    }
     // 打开的是停止/历史会话：先清掉上个会话的残留选择、落默认（记忆还没读回），
     // 再异步恢复这个会话记住的模型。
     selectedModel.value = "";
