@@ -22,9 +22,26 @@ impl SymbolTable {
         self.by_name.entry(sym.name.clone()).or_default().push(sym);
     }
 
-    /// All definitions matching `name` exactly (cross-file).
+    /// All definitions matching `name` exactly (cross-file, case-sensitive).
     pub fn lookup(&self, name: &str) -> Vec<SymbolDef> {
         self.by_name.get(name).cloned().unwrap_or_default()
+    }
+
+    /// Case-insensitive lookup. Falls back to exact match first (O(1)), then
+    /// scans the table (O(n)) only when the input case differs from stored keys —
+    /// the common path (exact copy-paste / Ctrl+click) stays fast.
+    pub fn lookup_ignore_case(&self, name: &str) -> Vec<SymbolDef> {
+        // Fast path: exact match covers the common case (Ctrl+click, copy-paste).
+        if let Some(hit) = self.by_name.get(name) {
+            return hit.clone();
+        }
+        let lower = name.to_lowercase();
+        for (key, defs) in &self.by_name {
+            if key.to_lowercase() == lower {
+                return defs.clone();
+            }
+        }
+        Vec::new()
     }
 
     /// Drop every symbol belonging to `file` (used on incremental re-index).
@@ -102,5 +119,19 @@ mod tests {
         assert_eq!(loaded.lookup("save").len(), 1);
         assert_eq!(loaded.len(), 1);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn lookup_ignore_case_finds_different_casing() {
+        let mut t = SymbolTable::new();
+        t.insert(sym("ExitPayload", "shell.rs", 16));
+        // Exact case still works.
+        assert_eq!(t.lookup_ignore_case("ExitPayload").len(), 1);
+        // Lowercase input also finds it.
+        assert_eq!(t.lookup_ignore_case("exitpayload").len(), 1);
+        // Uppercase input also finds it.
+        assert_eq!(t.lookup_ignore_case("EXITPAYLOAD").len(), 1);
+        // Unrelated name returns empty.
+        assert_eq!(t.lookup_ignore_case("OtherThing").len(), 0);
     }
 }

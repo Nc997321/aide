@@ -4,11 +4,8 @@ use tree_sitter::{Language, Parser, Tree};
 
 /// Maps file extensions to tree-sitter Language grammars.
 ///
-/// Currently supports 4 languages (Java, TypeScript/JS/TSX, Python, Rust).
-/// Vue is excluded because `tree-sitter-vue` 0.0.3 depends on tree-sitter
-/// 0.20, which is incompatible with the tree-sitter 0.24 API used by all
-/// other grammar crates. Revisit when `tree-sitter-vue` ships a 0.24-
-/// compatible version.
+/// Currently supports 5 language families: Java, TypeScript/JS/TSX, Python,
+/// Rust, and Vue (via script-block extraction — no standalone grammar needed).
 pub struct ParserManager {
     languages: HashMap<String, Language>,
     extensions: Vec<(&'static str, &'static str)>, // (ext, lang_name)
@@ -41,8 +38,10 @@ impl ParserManager {
         languages.insert("rs".into(), tree_sitter_rust::LANGUAGE.into());
         extensions.push(("rs", "rust"));
 
-        // TODO: Vue — `tree-sitter-vue` 0.0.3 uses tree-sitter 0.20 API.
-        // blocked on crate upgrade to tree-sitter 0.24 LanguageFn interface.
+        // Vue — no grammar registered; .vue script blocks are extracted and
+        // parsed as TypeScript in extract_symbols (see extract_vue_sfc).
+        // The extension entry is only needed so walk_source_files picks up .vue files.
+        extensions.push(("vue", "vue"));
 
         Self { languages, extensions }
     }
