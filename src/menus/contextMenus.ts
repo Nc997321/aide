@@ -37,6 +37,16 @@ export function fileMenuItems(
       },
     },
     sep(),
+    {
+      label: "重命名",
+      action: async () => {
+        const newName = await modal.prompt("重命名文件", `「${fileName}」的新名称`, "重命名");
+        if (!newName || newName === fileName) return;
+        const newPath = path.slice(0, path.length - fileName.length) + newName;
+        await api.moveFile(path, newPath);
+        onDeleted?.();
+      },
+    },
     { label: "复制", action: () => cb.copy(path) },
     { label: "剪切", action: () => cb.cut(path) },
     sep(),
@@ -68,6 +78,16 @@ export function directoryMenuItems(
     { label: "展开/折叠", action: onToggle },
     { label: "在文件资源管理器中打开", action: () => api.showInExplorer(path) },
     { label: "复制路径", action: () => navigator.clipboard.writeText(path) },
+    {
+      label: "重命名",
+      action: async () => {
+        const newName = await modal.prompt("重命名文件夹", `「${dirName}」的新名称`, "重命名");
+        if (!newName || newName === dirName) return;
+        const newPath = path.slice(0, path.length - dirName.length) + newName;
+        await api.moveFile(path, newPath);
+        onDeleted?.();
+      },
+    },
     sep(),
     {
       label: "新建文件",
