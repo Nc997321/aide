@@ -88,11 +88,11 @@ let aliasByResolvedPrefix: { value: string; resolvedPrefix: string }[] = [];
 // 一律回落 default，不做任何持久化，bypassPermissions 还会在选中时给出持续的
 // 醒目提示（危险信号靠 UI 常驻可见，而不是靠一次性确认框）。
 const PERMISSION_MODES: PermissionModeOption[] = [
-  { value: "default", displayName: "默认权限" },
-  { value: "acceptEdits", displayName: "自动接受编辑" },
-  { value: "plan", displayName: "Plan 模式" },
-  { value: "auto", displayName: "Auto：模型自动判断" },
-  { value: "bypassPermissions", displayName: "跳过所有确认（危险）" },
+  { value: "default", displayName: "手动模式" },
+  { value: "acceptEdits", displayName: "编辑模式" },
+  { value: "plan", displayName: "计划模式" },
+  { value: "auto", displayName: "自动模式" },
+  { value: "bypassPermissions", displayName: "最高权限" },
 ];
 // 同模型选择：只存内存，不落盘；重开会话回落到 default——bypassPermissions 因此
 // 天然是"会话级临时开关"，不会意外沿用到下一个会话。

@@ -93,7 +93,7 @@ describe("PermissionManager — alwaysAllowLabel 如实反映 suggestions（不�
     mgr.makeCallback((e) => events.push(e))("Edit", { file_path: "x.ts" }, {
       suggestions: [{ type: "setMode", mode: "acceptEdits", destination: "session" }],
     });
-    expect((events[0] as any).alwaysAllowLabel).toBe("自动接受编辑（本次会话）");
+    expect((events[0] as any).alwaysAllowLabel).toBe("编辑模式（本次会话）");
   });
 
   it("suggestions 带 setMode: bypassPermissions 时标成危险文案，供前端标红", async () => {
@@ -102,7 +102,7 @@ describe("PermissionManager — alwaysAllowLabel 如实反映 suggestions（不�
     mgr.makeCallback((e) => events.push(e))("Bash", { command: "rm -rf x" }, {
       suggestions: [{ type: "setMode", mode: "bypassPermissions", destination: "session" }],
     });
-    expect((events[0] as any).alwaysAllowLabel).toBe("跳过所有确认（本次会话）");
+    expect((events[0] as any).alwaysAllowLabel).toBe("最高权限（本次会话）");
   });
 });
 
