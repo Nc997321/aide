@@ -443,7 +443,7 @@ const inputJson = computed(() => {
   text-transform: uppercase;
   color: var(--aide-text-muted);
   margin-bottom: 3px;
-  font-family: 'Inter', 'Noto Sans SC', sans-serif;
+  font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
 .perm-input-value {

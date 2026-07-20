@@ -59,9 +59,6 @@ importers:
       '@fontsource/jetbrains-mono':
         specifier: ^5.2.8
         version: 5.2.8
-      '@fontsource/noto-sans-sc':
-        specifier: ^5.2.9
-        version: 5.2.9
       '@lezer/highlight':
         specifier: ^1.2.3
         version: 1.2.3
@@ -521,9 +518,6 @@ packages:
 
   '@fontsource/jetbrains-mono@5.2.8':
     resolution: {integrity: sha512-6w8/SG4kqvIMu7xd7wt6x3idn1Qux3p9N62s6G3rfldOUYHpWcc2FKrqf+Vo44jRvqWj2oAtTHrZXEP23oSKwQ==}
-
-  '@fontsource/noto-sans-sc@5.2.9':
-    resolution: {integrity: sha512-bTUIWGBgJDpwi5qAr+x0/lcgv80IHTB9vl6s2f6EymZEa7qYV99yNRBZuKFT+SYDKVunZrjCEhWtpxqmbXWl5Q==}
 
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -1774,8 +1768,6 @@ snapshots:
   '@fontsource-variable/inter@5.2.8': {}
 
   '@fontsource/jetbrains-mono@5.2.8': {}
-
-  '@fontsource/noto-sans-sc@5.2.9': {}
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:

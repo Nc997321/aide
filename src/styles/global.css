@@ -62,7 +62,7 @@ html, body, #app {
   /* 玻璃后门：普通主题 ambientScene 为 "none" → 无图像；玻璃主题为极光渐变 */
   background-image: var(--aide-ambient-scene);
   color: var(--aide-text-primary);
-  font-family: 'Inter Variable', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: 'Inter Variable', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   font-size: 13px;
 }
 
