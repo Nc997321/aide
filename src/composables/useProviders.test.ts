@@ -13,6 +13,7 @@ vi.mock("../api", () => ({
 
 import { api } from "../api";
 import { useProviders } from "./useProviders";
+import { useProviderCatalog } from "./useProviderCatalog";
 import type { ProviderConfig } from "../types";
 
 const sd = (overrides: Partial<ProviderConfig> = {}): ProviderConfig => ({
@@ -104,5 +105,49 @@ describe("useProviders — SystemDefault 统一", () => {
     await updateProvider("cpa-local", { authToken: "sk-new" });
     expect(allProviders.value.find((p) => p.id === "cpa-local")?.authToken).toBe("sk-new");
     expect(api.setProviders).toHaveBeenCalled();
+  });
+});
+
+describe("useProviders — kind-aware add", () => {
+  const P = useProviders();
+  const C = useProviderCatalog();
+  const { allProviders, addPresetProvider, addCustomProvider, __resetForTest } = P;
+
+  beforeEach(async () => {
+    P.__resetForTest();
+    C.__resetForTest();
+    (api.getProviders as any).mockReset().mockResolvedValue([]);
+    (api.setProviders as any).mockReset().mockResolvedValue(undefined);
+    (api.getProviderCatalog as any).mockResolvedValue([
+      { kind: "cpa_gpt", name: "CPA 中转", icon: "C", base_url: "http://127.0.0.1:8317", auth_mode: "auth_token", actions: [] },
+      { kind: "ollama", name: "Ollama", icon: "O", base_url: "https://ollama.com", auth_mode: "api_key", actions: [] },
+    ]);
+    await C.loadCatalog();
+  });
+
+  it("addPresetProvider(kind) 创建该 kind 实例，kind 正确，身份从 catalog 富化显示", async () => {
+    const p = await addPresetProvider("cpa_gpt");
+    expect(p.kind).toBe("cpa_gpt");
+    expect(p.name).toBe("CPA 中转");
+    expect(p.baseUrl).toBe("http://127.0.0.1:8317");
+    expect(p.authToken).toBe("");
+    expect(p.id).not.toBe("");
+  });
+
+  it("addPresetProvider 单实例 guard：已存在的 kind 抛错", async () => {
+    await addPresetProvider("cpa_gpt");
+    await expect(addPresetProvider("cpa_gpt")).rejects.toThrow(/已存在|single instance/i);
+  });
+
+  it("addPresetProvider 落盘 setProviders（Rust 会 strip 身份字段，只存 kind+creds+mappings）", async () => {
+    await addPresetProvider("ollama");
+    expect(api.setProviders).toHaveBeenCalledTimes(1);
+  });
+
+  it("addCustomProvider 创建 kind=custom 实例，身份字段留空待用户填", async () => {
+    const p = await addCustomProvider();
+    expect(p.kind).toBe("custom");
+    expect(p.name).toBe("新供应商");
+    expect(p.baseUrl).toBe("");
   });
 });

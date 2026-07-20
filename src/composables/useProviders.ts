@@ -1,6 +1,7 @@
 import { ref, computed } from "vue";
 import { api } from "../api";
-import type { ProviderConfig, ProviderModelMappings } from "../types";
+import type { ProviderConfig, ProviderKind, ProviderModelMappings } from "../types";
+import { useProviderCatalog } from "./useProviderCatalog";
 
 const SYSTEM_DEFAULT_ID = "__system_default__";
 
@@ -88,6 +89,35 @@ async function addProvider(partial: Partial<ProviderConfig> = {}): Promise<Provi
   return p;
 }
 
+/**
+ * 新增预置 kind 实例。单实例约束：同 kind 已存在则抛错（picker 也会置灰，这是双保险）。
+ * 身份字段（name/icon/baseUrl）从 catalog 富化填入——仅显示用；落盘时 Rust strip 只存
+ * kind + 凭证 + mappings + 行为字段。凭证留空待用户填。
+ */
+async function addPresetProvider(kind: ProviderKind): Promise<ProviderConfig> {
+  if (allProviders.value.some((p) => p.kind === kind)) {
+    throw new Error(`该供应商类型已存在（单实例约束）：${kind}`);
+  }
+  const { enrichForDisplay } = useProviderCatalog();
+  const p: ProviderConfig = enrichForDisplay({
+    id: generateId(),
+    kind,
+    name: "", icon: "", baseUrl: "",
+    apiKey: "", authToken: "", model: "",
+    modelMappings: emptyMappings(),
+    effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "",
+    knownModels: [],
+  });
+  allProviders.value = [...allProviders.value, p];
+  await api.setProviders(allProviders.value);
+  return p;
+}
+
+/** 新增 Custom 实例——全部字段可编辑，身份由用户填。 */
+async function addCustomProvider(): Promise<ProviderConfig> {
+  return addProvider({ kind: "custom" });
+}
+
 async function updateProvider(id: string, partial: Partial<ProviderConfig>): Promise<void> {
   const idx = allProviders.value.findIndex((p) => p.id === id);
   if (idx === -1) return;
@@ -147,6 +177,8 @@ export function useProviders() {
     loaded,
     load,
     addProvider,
+    addPresetProvider,
+    addCustomProvider,
     updateProvider,
     deleteProvider,
     setActiveProvider,
