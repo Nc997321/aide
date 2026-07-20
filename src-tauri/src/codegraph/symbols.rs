@@ -23,6 +23,9 @@ impl SymbolTable {
     }
 
     /// All definitions matching `name` exactly (cross-file, case-sensitive).
+    /// 仅测试使用——生产 query 层走 [`lookup_ignore_case`]（大小写不敏感、
+    /// 带精确匹配快速路径）。cfg(test) 避免非 test 构建的 dead_code 警告。
+    #[cfg(test)]
     pub fn lookup(&self, name: &str) -> Vec<SymbolDef> {
         self.by_name.get(name).cloned().unwrap_or_default()
     }
