@@ -114,11 +114,13 @@ describe("useChatSession per-session store", () => {
     emit({ type: "session_init", sdk_session_id: "sdk-uuid-1", session_id: tempId as string });
     await flush();
 
+    // Agent Runtime 重构后：re-key 在 SessionManager 内存里做（worker 的 Map
+    // key 从 tempId 原子迁到 SDK realId），前端 finalizeSession 不再 invoke
+    // rename_sidecar_session（该命令已删除）。确认旧命令不再被调用；首次创建
+    // 由 onSessionCreated 回调通知 App.vue 完成（见下一断言）。
     expect(
-      invokeMock.mock.calls.some(
-        (c) => c[0] === "rename_sidecar_session" && (c[1] as { oldId?: string })?.oldId === tempId,
-      ),
-    ).toBe(true);
+      invokeMock.mock.calls.some((c) => c[0] === "rename_sidecar_session"),
+    ).toBe(false);
     // create_session/addSession/recordCurrentSession 现在是 App.vue 的职责，
     // 不在这个 composable 里发生——这里只验证运行时状态搬迁 + 回调触发。
     expect(created).toHaveBeenCalledWith(tempId, "sdk-uuid-1");
