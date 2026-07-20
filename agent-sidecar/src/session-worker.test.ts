@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { SessionWorker } from "./session-worker.js";
+import { SessionWorker, isStalledRelativeTo } from "./session-worker.js";
 
 /**
  * 验证 SessionWorker 的 fork 源 / 路由键设定逻辑。
@@ -52,5 +52,24 @@ describe("SessionWorker — fork source / routing key invariants", () => {
   it("isStalled() returns false with no query", () => {
     const { worker } = makeWorker();
     expect(worker.isStalled()).toBe(false);
+  });
+
+  it("isStalledRelativeTo: no query → never stalled", () => {
+    expect(isStalledRelativeTo(0, 100_000, false)).toBe(false);
+  });
+
+  it("isStalledRelativeTo: query + <90s since last message → not stalled", () => {
+    expect(isStalledRelativeTo(0, 89_999, true)).toBe(false);
+  });
+
+  it("isStalledRelativeTo: query + >90s since last message → stalled", () => {
+    expect(isStalledRelativeTo(0, 90_001, true)).toBe(true);
+  });
+
+  it("stop() sets stopped flag (startLoop must exit before spawning)", () => {
+    const { worker } = makeWorker();
+    expect(worker._testIsStopped()).toBe(false);
+    worker.stop();
+    expect(worker._testIsStopped()).toBe(true);
   });
 });

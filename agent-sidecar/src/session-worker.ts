@@ -49,6 +49,17 @@ const EXTRA_MODE_LABELS: Record<string, string> = {
   dontAsk: "本次会话不再询问",
 };
 
+/** 卡死判定的纯逻辑——抽出可单测，不依赖 Date.now() / 私有 currentQuery。
+ *  hasQuery: 是否有 SDK query 在跑；lastMessageAt/now: 毫秒时间戳。 */
+export function isStalledRelativeTo(
+  lastMessageAt: number,
+  now: number,
+  hasQuery: boolean,
+): boolean {
+  if (!hasQuery) return false;
+  return now - lastMessageAt > 90_000;
+}
+
 // ---- OutputTail（per-SessionWorker 实例） ----
 
 /** 解析 .output 的一行 JSONL → 子代理事件。 */
@@ -135,6 +146,7 @@ export class SessionWorker {
   private pendingFork = false;
   private shouldForkNextConnect = false;
   private turnActive = false;
+  private stopped = false;
 
   // ---- BTW / 轻量模式 ----
   readonly btwMode: boolean;
@@ -402,7 +414,7 @@ export class SessionWorker {
 
   async startLoop(cwd?: string): Promise<void> {
     try {
-      while (true) {
+      while (!this.stopped) {
         try {
           // 构造显式 env 传给 CLI subprocess
           const cliEnv: Record<string, string | undefined> = { ...process.env };
@@ -465,6 +477,7 @@ export class SessionWorker {
           this.shouldForkNextConnect = false;
 
           for await (const msg of q) {
+            this.lastSdkMessageAt = Date.now();
             if ((msg as any).type === "result") {
               this.turnActive = false;
               const jump = this.jumpQueueCtl.take();
@@ -571,8 +584,7 @@ export class SessionWorker {
   /** 卡死检测：上次 SDK 消息距今超过 90s */
   private lastSdkMessageAt = Date.now();
   isStalled(): boolean {
-    if (!this.currentQuery) return false;
-    return Date.now() - this.lastSdkMessageAt > 90_000;
+    return isStalledRelativeTo(this.lastSdkMessageAt, Date.now(), this.currentQuery !== null);
   }
 
   /** 测试用：暴露 fork 源（SDK resume 的会话 ID）和 fork 标记。 */
@@ -580,8 +592,14 @@ export class SessionWorker {
     return { forkSource: this.resumeSource, shouldFork: this.shouldForkNextConnect };
   }
 
+  /** 测试用：暴露 stopped 标志（验证 stop() 设了标志，startLoop 会退出）。 */
+  _testIsStopped(): boolean {
+    return this.stopped;
+  }
+
   /** 停止会话：关闭 query，释放 claude.exe，清理资源 */
   stop(): void {
+    this.stopped = true;
     this.currentQuery?.close?.();
     this.currentQuery = null;
     this.queue.close();
