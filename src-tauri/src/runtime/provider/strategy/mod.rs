@@ -43,14 +43,15 @@ pub trait ProviderStrategy: Send + Sync {
 
 pub mod custom;
 pub mod system_default;
-// 其余 kind 在 Task 9-10 加：cpa_gpt / ollama / kimi / deepseek
+pub mod cpa_gpt;
+// 其余 kind 在 Task 10 加：ollama / kimi / deepseek
 
 pub fn strategy_for(kind: ProviderKind) -> Box<dyn ProviderStrategy> {
     match kind {
         ProviderKind::Custom => Box::new(custom::CustomStrategy),
         // Task 9-10 填：
         ProviderKind::SystemDefault => Box::new(crate::runtime::provider::strategy::system_default::SystemDefaultStrategy),
-        ProviderKind::CpaGpt => Box::new(custom::CustomStrategy),
+        ProviderKind::CpaGpt => Box::new(crate::runtime::provider::strategy::cpa_gpt::CpaGptStrategy),
         ProviderKind::Ollama => Box::new(custom::CustomStrategy),
         ProviderKind::Kimi => Box::new(custom::CustomStrategy),
         ProviderKind::DeepSeek => Box::new(custom::CustomStrategy),
