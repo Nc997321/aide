@@ -1,8 +1,8 @@
 # Aide — 架构详解
 
-## 交互模型：Chat UI + Agent SDK sidecar
+## 交互模型：Chat UI + Agent SDK runtime
 
-中心面板为消息流（`ChatPanel.vue`，assistant 通页书脊布局、user 铜底气泡），对话由 Node.js sidecar 里的 Claude Agent SDK `query()` 驱动，不再是 xterm 套壳终端。工具调用渲染为墨线行组（`ToolCallGroup`/`ToolCallBlock`），连续工具调用默认收起摘要，Bash 输出内嵌只读 xterm 块，权限审批走 `PermissionDialog` 弹窗。工作台 shell 终端（`WorkbenchTerminal` + `shell.rs` PTY）与对话无关，仍保留。
+中心面板为消息流（`ChatPanel.vue`，assistant 通页书脊布局、user 铜底气泡），对话由 Agent Runtime 里的 Claude Agent SDK `query()` 驱动，不再是 xterm 套壳终端。工具调用渲染为墨线行组（`ToolCallGroup`/`ToolCallBlock`），连续工具调用默认收起摘要，Bash 输出内嵌只读 xterm 块，权限审批走 `PermissionDialog` 弹窗。工作台 shell 终端（`WorkbenchTerminal` + `shell.rs` PTY）与对话无关，仍保留。
 
 ## 三层结构
 
@@ -12,24 +12,25 @@
   useChatSession.ts        ← 全局 chat-event 监听 + 每会话独立 store
         ↕ Tauri events / invoke
 Rust (Tauri backend)
-  sidecar.rs               ← 每会话一个 sidecar 进程：spawn/send/kill/rename
+  runtime.rs               ← 单一持久 aide-agent.exe：spawn_runtime / send / kill_runtime + 连接指纹
   commands/chat.rs         ← send_message / permission_response / interrupt / stop
         ↕ stdin/stdout JSON lines（SidecarCommand / ChatEvent）
-Node.js sidecar (agent-sidecar/)
-  index.ts                 ← @anthropic-ai/claude-agent-sdk query()，流式输入模式
+Agent Runtime (agent-sidecar/)
+  index.ts                 ← 进程入口；SessionManager 按 session_id 多路复用 SessionWorker
+  session-worker.ts        ← 每个 worker 跑 @anthropic-ai/claude-agent-sdk query()，流式输入
                               canUseTool 回调 → 权限确认（signal abort → 取消）
 ```
 
-**Provider 抽象**：前端与 Rust 只认 `ChatEvent`/`SidecarCommand` 协议；Anthropic 专属逻辑（消息格式、SDK 调用）只存在于 `agent-sidecar/`。接入新厂商 = 新增一个输出同协议的 sidecar。
+**Provider 抽象**：前端与 Rust 只认 `ChatEvent`/`SidecarCommand` 协议；Anthropic 专属逻辑（消息格式、SDK 调用）只存在于 `agent-sidecar/`。接入新厂商 = 新增一个输出同协议的 runtime。
 
 ## 数据流
 
 ```
 用户发送 → useChatSession.sendMessage
-  → invoke("send_message")（首次自动 spawn sidecar，注入 provider/代理环境变量）
-    → sidecar stdin {"cmd":"send", prompt, images?, session_id?}
+  → invoke("send_message")（确保 Runtime 已启动，注入 provider/代理环境变量）
+    → Runtime stdin {"cmd":"send", prompt, images?, session_id?}
       → SDK query() 事件流 → mapper.ts 映射为 ChatEvent
-        → stdout JSON line → sidecar.rs reader 任务
+        → stdout JSON line → runtime.rs reader 任务
           → 补 session_id 字段 → app.emit("chat-event")
             → useChatSession 全局监听 → 按 session_id 路由到对应 store
 ```
@@ -46,26 +47,26 @@ Node.js sidecar (agent-sidecar/)
 |------|---------|
 | `running` | sendMessage 发出 / session_init / 权限批准后 |
 | `attention` | permission_request（等用户确认） |
-| `waiting` | message_stop（sidecar 存活空闲）/ interrupt |
+| `waiting` | message_stop（Runtime 存活空闲）/ interrupt |
 | `stopped` | error / 进程意外退出 / stop_chat_session |
 
 通知、任务栏进度、回焦横幅、变更轮次捕获都由 `running/attention → waiting` 转换驱动（`useNotification`、`useConversationChanges`）。
 
-## Sidecar 管理（Rust 侧）
+## Agent Runtime 管理（Rust 侧）
 
-`SidecarManager` 维护 `HashMap<String, SidecarSession>`，每会话一个 Node 进程：
+`AgentRuntimeManager`（`runtime.rs`）启动并持有**单一持久 `aide-agent.exe` 进程**（dev 模式跑 `node runtime.js`，release 直接跑编译好的 `aide-agent.exe`），Rust 不再「每会话一个进程」——只持有该 Runtime 的 stdin / Child 句柄 + 连接身份指纹注册表。SessionWorker 的多路复用发生在 Runtime 进程内部（JS 侧）按 `session_id` 路由：
 
-- **stdout reader 任务**：逐行解析 JSON → 注入 `session_id`（读共享 `Arc<Mutex<String>>`，rename 后立即生效）→ `emit("chat-event")`。流结束且非主动 kill → 发一条 `error` 事件（附 stderr 尾部）解除前端 isBusy。
-- **stderr reader 任务**：只 `eprintln!` + 存 8 行尾部环形缓冲。**stderr 不是错误**——Node warning 不会打断会话。
-- **rename(old, new)**：临时 key → 真实 SDK id 时重挂 HashMap key + 更新共享 sid（纯内存操作，无 IO）。
+- **stdout reader 任务**：逐行解析 JSON → 携带事件自带的 `session_id` → `emit("chat-event")`。Runtime 进程退出且非主动 kill → 发一条 `error` 事件（附 stderr 尾部）解除前端 isBusy。
+- **stderr reader 任务**：只 `eprintln!` + 存 8 行尾部环形缓冲。**stderr 不是错误**——Node/Bun warning 不会打断会话。
+- **连接身份指纹**：每个 session 首次 spawn 时记下 base_url/api_key/auth_token/代理子集，跨 Runtime 重启持久（`kill_runtime` 不删它）；后续 send 时跟当前 provider 配置比对，判断要不要 `forkSession` 绕开 CLI session 文件里缓存的旧 provider 配置。
 
 ## 会话 ID 生命周期（延迟创建）
 
 不预先分配任何身份，"创建会话"这件事推迟到第一次真正发消息、拿到 SDK 返回的真实 session id 之后再做——没有草稿阶段，就没有"事后改名"这一步：
 
 1. 点"新建会话"：前端只清空 `activeSessionId`，打开空白可输入面板。**不调用任何 Tauri 命令，不落盘，不进侧栏。**
-2. 用户发送第一条消息：若当前无 session id，`useChatSession.ts` 现场生成一个纯内存临时 key（`crypto.randomUUID()`，记入 `pendingSids`），建本地 store 并调 `send_message`——这一步同样不落盘，只是 Rust `SidecarManager` HashMap 和前端 `stores`/`sessionState` 的运行时 key。
-3. sidecar 首个 `session_init` 事件携带 `sdk_session_id` → 前端 `finalizeSession`：原地搬迁 `stores`/`sessionState`（写 `aliasMap` 兜住 Rust rename 完成前仍带旧 key 的在途事件）→ invoke `rename_sidecar_session`（只改 sidecar 进程注册表这一个内存态）→ 从 `pendingSids` 移除 → 触发 `onSessionCreated` 回调。
+2. 用户发送第一条消息：若当前无 session id，`useChatSession.ts` 现场生成一个纯内存临时 key（`crypto.randomUUID()`，记入 `pendingSids`），建本地 store 并调 `send_message`——这一步同样不落盘，只是 Rust `AgentRuntimeManager` 指纹注册表和前端 `stores`/`sessionState` 的运行时 key。
+3. Runtime 首个 `session_init` 事件携带 `sdk_session_id` → 前端 `finalizeSession`：原地搬迁 `stores`/`sessionState`（写 `aliasMap` 兜住 Runtime 内 re-key 完成前仍带旧 key 的在途事件）→ 从 `pendingSids` 移除 → 触发 `onSessionCreated` 回调。**re-key 在 Runtime 进程内部 SessionManager 内存里原子完成**（worker 的 Map key 从 tempId 迁到 SDK realId），前端不再 invoke 任何 rename 命令（旧 `rename_sidecar_session` 已删除）。
 4. App.vue 的 `onSessionCreated(tempId, realId)`：**这时才第一次落盘**——`create_session(realId, name)` 写 `~/.claude-code-desktop/sessions/<id>.json` 名字元数据、`sidebarRef.addSession(...)` 加侧栏、`recordCurrentSession` 记最近访问。
 
 此后 aide ID 永远等于 SDK session ID，不再改名。**续接**：`sendMessage` 的 resume 直接用 `sid` 本身（`isPendingSession(sid) ? undefined : sid`，无需任何映射表；重启后点开历史会话同样直接传自身 ID；SDK `forkSession` 默认 false，resume 延续同一 session ID）。若发消息后从未等到 `session_init`（进程崩溃、网络失败等），全程没有写盘、没有侧栏条目、没有最近访问记录——失败的尝试不留痕迹。
@@ -134,7 +135,7 @@ n.auto_icon();
 n.summary(&title).body(&body).show();
 ```
 
-触发链：sidecar `message_stop` 事件 → `useChatSession` `setSessionState("waiting")` → `useNotification` watch 触发 → 检查 `loaded && notificationsEnabled && !isFocused` → `api.notifySend()`。
+触发链：Runtime `message_stop` 事件 → `useChatSession` `setSessionState("waiting")` → `useNotification` watch 触发 → 检查 `loaded && notificationsEnabled && !isFocused` → `api.notifySend()`。
 
 ## 标题栏搜索
 
@@ -145,11 +146,10 @@ n.summary(&title).body(&body).show();
 ### Chat（Agent SDK）
 | 命令 | 参数 | 说明 |
 |------|------|------|
-| `send_message` | `session_id, prompt, images?, resume_id?` | 首次自动 spawn sidecar，转发 send 指令 |
+| `send_message` | `session_id, prompt, images?, resume_id?` | 确保 Runtime 已启动，转发 send 指令 |
 | `permission_response` | `session_id, id, approved` | 解除 canUseTool 阻塞 |
 | `interrupt_session` | `session_id` | SDK query.interrupt() |
-| `stop_chat_session` | `session_id` | kill sidecar 进程 |
-| `rename_sidecar_session` | `old_id, new_id` | 临时 key → 真实 SDK id，只改 sidecar 进程注册表（内存态） |
+| `stop_chat_session` | `session_id` | 发 session_stop 给 Runtime，停掉该会话 worker（不杀进程） |
 
 （工作台终端另有 `pty_*` 命令走 `shell.rs`，与对话无关。）
 
@@ -187,7 +187,7 @@ n.summary(&title).body(&body).show();
 | `get_settings` / `set_settings` | 读写设置（合并，不覆盖 workspace） |
 | `notify_send` | 直接发系统通知 |
 
-**已知技术债**：`list_sessions`/`load_messages`/`session_last_event` 直接解析 `~/.claude/projects/*.jsonl`——这是 Claude Code CLI 专属的 transcript 格式（`isMeta`/`interruptedMessageId`/`isCompactSummary`/`origin.kind` 等字段），绕开了 sidecar 的 `ChatEvent` 协议，是 Rust 层里唯一对 Claude 专属格式有直接认知的地方。接入非 Claude provider 时，历史加载这条路径需要重新设计（例如把"读历史"也交给各 provider 的 sidecar，经统一协议吐给 Rust），不能照搬现在直接读文件的做法。
+**已知技术债**：`list_sessions`/`load_messages`/`session_last_event` 直接解析 `~/.claude/projects/*.jsonl`——这是 Claude Code CLI 专属的 transcript 格式（`isMeta`/`interruptedMessageId`/`isCompactSummary`/`origin.kind` 等字段），绕开了 Runtime 的 `ChatEvent` 协议，是 Rust 层里唯一对 Claude 专属格式有直接认知的地方。接入非 Claude provider 时，历史加载这条路径需要重新设计（例如把"读历史"也交给各 provider 的 runtime，经统一协议吐给 Rust），不能照搬现在直接读文件的做法。
 
 `get_default_models` 是同一类例外，但边界更干净：它只读 `agent-sidecar/default-models.json` 这一份纯数据文件（会话开始前没有活的 SDK 连接时，聊天面板顶部模型下拉的静态兜底列表），原样透传 `serde_json::Value`，不解析、不引用任何 Claude 专属字段名——数据内容是 Claude 的模型别名，但这份数据物理上归 `agent-sidecar` 所有，Rust 代码本身不出现任何 provider 专属知识。接入新 provider 时，这个文件和读取方式需要对应换成该 provider 自己的默认模型数据。
 

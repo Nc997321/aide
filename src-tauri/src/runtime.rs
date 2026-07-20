@@ -259,18 +259,12 @@ impl AgentRuntimeManager {
             // dev: 跑 esbuild bundle 产物，用 node 启动
             let path = manifest.parent().unwrap()
                 .join("agent-sidecar").join("dist").join("runtime.js");
-            // 兼容旧构建产物名
-            let sidecar_path = manifest.parent().unwrap()
-                .join("agent-sidecar").join("dist").join("sidecar.js");
             if path.exists() {
                 return Ok(path);
             }
-            if sidecar_path.exists() {
-                return Ok(sidecar_path);
-            }
             return Err(format!(
-                "Runtime not found at {:?} or {:?}. Run: cd agent-sidecar && npm run build",
-                path, sidecar_path
+                "Runtime not found at {:?}. Run: cd agent-sidecar && pnpm build",
+                path
             ));
         }
         #[cfg(not(debug_assertions))]

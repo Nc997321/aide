@@ -146,7 +146,7 @@ const CONNECTION_ENV_KEYS: &[&str] = &[
 
 /// 从完整环境变量表里只摘出「连接身份」相关字段并按 key 排序（owned），用于
 /// 比较两次 env 快照是不是同一个供应商连接，并可跨 kill 持久存进
-/// `SidecarManager` 的指纹注册表。返回 owned 是因为 env_vars 在 spawn 后即释放，
+/// `AgentRuntimeManager` 的指纹注册表。返回 owned 是因为 env_vars 在 spawn 后即释放，
 /// 指纹要在 stop 后 respawn 时仍可读。
 pub fn connection_fingerprint(env: &HashMap<String, String>) -> BTreeMap<String, String> {
     CONNECTION_ENV_KEYS
