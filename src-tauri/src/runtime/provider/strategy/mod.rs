@@ -12,6 +12,7 @@ pub struct ActionDef {
     pub label: String,
 }
 
+#[derive(Debug)]
 pub enum ActionResult {
     PortProbe { alive: bool, detail: String },
     OpenUrl(String),
@@ -32,7 +33,7 @@ pub trait ProviderStrategy: Send + Sync {
     fn env_vars(&self, cfg: &ProviderConfig) -> HashMap<String, String>;
     /// build_runtime_env_vars 用它决定从进程 env 兜底哪些 key。
     fn fallback_env_keys(&self) -> &'static [&'static str];
-    fn actions(&self) -> &'static [ActionDef] { &[] }
+    fn actions(&self) -> Vec<ActionDef> { Vec::new() }
     fn run_action(&self, cfg: &ProviderConfig, action: &str) -> Result<ActionResult, String> {
         let _ = cfg;
         Err(format!("action '{action}' not supported by {:?} kind", self.kind()))
@@ -41,13 +42,14 @@ pub trait ProviderStrategy: Send + Sync {
 }
 
 pub mod custom;
-// 其余 kind 在 Task 8-10 加：system_default / cpa_gpt / ollama / kimi / deepseek
+pub mod system_default;
+// 其余 kind 在 Task 9-10 加：cpa_gpt / ollama / kimi / deepseek
 
 pub fn strategy_for(kind: ProviderKind) -> Box<dyn ProviderStrategy> {
     match kind {
         ProviderKind::Custom => Box::new(custom::CustomStrategy),
-        // Task 8-10 填：
-        ProviderKind::SystemDefault => Box::new(crate::runtime::provider::strategy::custom::CustomStrategy), // 临时占位，Task 8 替换
+        // Task 9-10 填：
+        ProviderKind::SystemDefault => Box::new(crate::runtime::provider::strategy::system_default::SystemDefaultStrategy),
         ProviderKind::CpaGpt => Box::new(custom::CustomStrategy),
         ProviderKind::Ollama => Box::new(custom::CustomStrategy),
         ProviderKind::Kimi => Box::new(custom::CustomStrategy),
