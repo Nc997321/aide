@@ -117,6 +117,16 @@ pub fn run() {
             // 卡死诊断黑匣子 watchdog（须在主窗口创建之后：要解析 HWND）
             diagnostics::start(app.handle());
 
+            // 注入 release 资源目录给 provider catalog 加载器（dev 走 CARGO_MANIFEST_DIR）
+            #[cfg(not(debug_assertions))]
+            {
+                use tauri::Manager;
+                if let Ok(res_dir) = app.path().resource_dir() {
+                    let catalog_dir = res_dir.join("agent-runtime");
+                    crate::runtime::provider::catalog::set_resource_dir(catalog_dir);
+                }
+            }
+
             // 启动持久 Agent Runtime（single persistent process，所有会话共享）
             // tokio::process::Command 需要 reactor——必须跑在 Tokio runtime 上，
             // setup 闭包是同步的，不能直接调 spawn_runtime。
@@ -265,6 +275,7 @@ pub fn run() {
             commands::provider::get_system_default_model_mappings,
             commands::provider::set_system_default_model_mappings,
             commands::provider::refresh_system_default_models,
+            commands::provider::get_provider_catalog,
             // Marketplace commands
             commands::marketplace::install::fetch_marketplace,
             commands::marketplace::install::install_plugin,

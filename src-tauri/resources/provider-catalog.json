@@ -1,0 +1,42 @@
+[
+  {
+    "kind": "system_default",
+    "name": "Anthropic",
+    "icon": "A",
+    "base_url": "",
+    "auth_mode": "api_key",
+    "actions": ["refresh_models", "view_quota", "test_connection"]
+  },
+  {
+    "kind": "cpa_gpt",
+    "name": "CPA 中转",
+    "icon": "C",
+    "base_url": "http://127.0.0.1:8317",
+    "auth_mode": "auth_token",
+    "actions": ["probe_port", "open_management", "codex_login_status", "test_connection"]
+  },
+  {
+    "kind": "ollama",
+    "name": "Ollama",
+    "icon": "O",
+    "base_url": "https://ollama.com",
+    "auth_mode": "api_key",
+    "actions": ["test_connection"]
+  },
+  {
+    "kind": "kimi",
+    "name": "Kimi",
+    "icon": "K",
+    "base_url": "https://api.kimi.com/coding/",
+    "auth_mode": "api_key",
+    "actions": ["test_connection"]
+  },
+  {
+    "kind": "deepseek",
+    "name": "DeepSeek",
+    "icon": "D",
+    "base_url": "https://api.deepseek.com/anthropic",
+    "auth_mode": "api_key",
+    "actions": ["test_connection"]
+  }
+]

@@ -57,6 +57,7 @@ pub fn build_runtime_env_vars(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::provider::ProviderKind;
 
     fn sdm() -> ProviderModelMappings {
         ProviderModelMappings {
@@ -85,6 +86,7 @@ mod tests {
         // active provider 存在 → fallback 集 不含 ANTHROPIC_*，env 里只该有 provider 直映的
         let p = ProviderConfig {
             id: "x".into(),
+            kind: ProviderKind::Custom,
             name: "".into(), icon: "".into(), base_url: "https://b.example".into(),
             api_key: "k".into(), auth_token: "".into(), model: String::new(),
             model_mappings: ProviderModelMappings::default(),

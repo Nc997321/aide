@@ -22,7 +22,8 @@
       "../agent-sidecar/dist/aide-agent.exe": "agent-runtime/aide-agent.exe",
       "../agent-sidecar/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe": "agent-runtime/claude.exe",
       "../agent-sidecar/default-models.json": "agent-runtime/default-models.json",
-      "../agent-sidecar/default-permission-modes.json": "agent-runtime/default-permission-modes.json"
+      "../agent-sidecar/default-permission-modes.json": "agent-runtime/default-permission-modes.json",
+      "resources/provider-catalog.json": "agent-runtime/provider-catalog.json"
     },
     "icon": [
       "icons/32x32.png",

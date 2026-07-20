@@ -2,13 +2,40 @@
 //! 归位进 runtime 层（原躺 commands/provider.rs，造成 runtime→commands 倒置）。
 //! IPC 薄命令留在 commands/provider.rs，调本模块。
 
+pub mod catalog;
+
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
 use crate::commands::settings::load_config;
 
+/// Provider 类型判别。预置 kind 的 base_url/name/icon 由 catalog 派生、不入 config.json。
+/// `#[default] Custom` 让缺 `kind` 字段的旧配置反序列化成 Custom（迁移后不会缺）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    SystemDefault,
+    CpaGpt,
+    Ollama,
+    Kimi,
+    #[serde(rename = "deepseek")]
+    DeepSeek,
+    #[default]
+    Custom,
+}
+
+impl ProviderKind {
+    /// 预置 kind（在 catalog 里）。Custom 不是预置。
+    // Task 7-12 将按 kind 派发；暂时未调用，保留 API。
+    #[allow(dead_code)]
+    pub fn is_preset(self) -> bool {
+        !matches!(self, ProviderKind::Custom)
+    }
+}
+
 /// Claude 专属的模型 env 变量映射——5 个变量统一在此，换 provider 时整块重写，
-/// 不污染调用方（chat.rs 只调 provider_to_env_vars / system_default_mappings_to_env）。
+/// 不污染调用方（chat.rs 调 runtime::env::build_runtime_env_vars；本模块只暴露
+/// provider_to_env_vars / mappings_to_env / load_* 给 runtime/env.rs 和 commands 层用）。
 ///
 /// 与会话面板模型下拉（models_available + set_model 运行时切换）互补：下拉是
 /// "用户在 UI 选真实模型 id 并运行时切换"，本块是"spawn 时 env 变量层的默认值 +
@@ -49,6 +76,8 @@ pub struct ProviderModelMappings {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfig {
     pub id: String,
+    #[serde(default)]
+    pub kind: ProviderKind,
     #[serde(default)]
     pub name: String,
     #[serde(default)]
@@ -198,6 +227,7 @@ mod tests {
     fn provider_with(model: String, anthropic: String) -> ProviderConfig {
         ProviderConfig {
             id: "x".to_string(),
+            kind: ProviderKind::Custom,
             name: String::new(),
             icon: String::new(),
             base_url: String::new(),

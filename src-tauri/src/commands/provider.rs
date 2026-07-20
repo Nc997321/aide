@@ -215,6 +215,11 @@ fn parse_version(id: &str) -> Vec<u64> {
         .collect()
 }
 
+#[tauri::command]
+pub fn get_provider_catalog() -> Result<Vec<crate::runtime::provider::catalog::CatalogPreset>, String> {
+    Ok(crate::runtime::provider::catalog::catalog().to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
