@@ -253,15 +253,6 @@ export const api = {
   setActiveProviderId(providerId: string): Promise<void> {
     return invoke("set_active_provider_id", { providerId });
   },
-  getSystemDefaultModelMappings(): Promise<ProviderModelMappings> {
-    return invoke("get_system_default_model_mappings");
-  },
-  setSystemDefaultModelMappings(mappings: ProviderModelMappings): Promise<void> {
-    return invoke("set_system_default_model_mappings", { mappings });
-  },
-  refreshSystemDefaultModels(): Promise<ProviderModelMappings> {
-    return invoke("refresh_system_default_models");
-  },
   getProviderCatalog(): Promise<CatalogPreset[]> {
     return invoke("get_provider_catalog");
   },

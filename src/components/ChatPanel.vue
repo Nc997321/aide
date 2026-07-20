@@ -94,8 +94,8 @@ const { providerOf } = useSessionProviders();
 // 体现。下拉的选项列表与默认选中都跟 sessionProvider 走，不再跟 activeProvider。
 const sessionProvider = computed<ProviderConfig>(() => {
   const id = (props.sessionId && providerOf(props.sessionId)) ?? activeProviderId.value;
-  if (id === SYSTEM_DEFAULT_ID) return systemDefault;
-  return allProviders.value.find((p) => p.id === id) ?? systemDefault;
+  if (id === SYSTEM_DEFAULT_ID) return systemDefault.value;
+  return allProviders.value.find((p) => p.id === id) ?? systemDefault.value;
 });
 // 工具栏快捷操作（/compact /clear）：composable 早就写好且有单测，但从没接到
 // UI 上过——之前工具栏里完全看不到这两个按钮。见 handleQuickAction。
