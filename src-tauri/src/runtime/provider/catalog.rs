@@ -44,25 +44,23 @@ fn resolve_path() -> Option<std::path::PathBuf> {
         let p = dir.join("resources").join("provider-catalog.json");
         if p.exists() { return Some(p); }
         // Tauri 把 resources 解到 resource_dir，但 runtime 层拿不到 AppHandle。
-        // 约定：lib.rs setup 里调用 catalog::set_resource_dir 注入一次（见 Step 6）。
-        RESOURCE_DIR.with(|rd| {
-            let dir = rd.borrow().as_ref()?;
-            let p = dir.join("provider-catalog.json");
-            if p.exists() { Some(p) } else { None }
-        })
+        // 由 lib.rs setup 调 set_resource_dir 注入一次（进程全局 OnceLock，worker 线程可见）。
+        if let Some(rd) = RESOURCE_DIR.get() {
+            let p = rd.join("provider-catalog.json");
+            if p.exists() { return Some(p); }
+        }
+        None
     }
 }
 
-#[cfg(not(debug_assertions))]
-thread_local! {
-    static RESOURCE_DIR: std::cell::RefCell<Option<std::path::PathBuf>> =
-        std::cell::RefCell::new(None);
-}
+#[cfg(any(not(debug_assertions), test))]
+static RESOURCE_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
 /// release 模式下由 app 启动时注入资源目录（lib.rs setup 调一次）。
-#[cfg(not(debug_assertions))]
+/// 进程全局 OnceLock——任何线程（含 Tauri worker 线程）都能读到，且重复设置不 panic。
+#[cfg(any(not(debug_assertions), test))]
 pub fn set_resource_dir(dir: std::path::PathBuf) {
-    RESOURCE_DIR.with(|rd| *rd.borrow_mut() = Some(dir));
+    let _ = RESOURCE_DIR.set(dir); // idempotent: 忽略“已设”（setup 只调一次）
 }
 
 fn load() -> Vec<CatalogPreset> {
@@ -135,5 +133,18 @@ mod tests {
     #[test]
     fn resolve_preset_identity_none_for_custom() {
         assert!(resolve_preset_identity(ProviderKind::Custom).is_none());
+    }
+
+    #[test]
+    fn set_resource_dir_is_process_global_and_idempotent() {
+        // 进程全局 OnceLock：set 不 panic，重复 set 静默忽略（setup 只调一次）。
+        // 注意：dev 模式 resolve_path 走 CARGO_MANIFEST_DIR 分支，不读 RESOURCE_DIR，
+        // 所以这个测试只验证 set 机制本身，不验证 resolve_path release 分支。
+        use std::path::PathBuf;
+        set_resource_dir(PathBuf::from("/nonexistent-test-dir"));
+        // 第二次 set 应静默忽略（OnceLock::set 返回 Err，我们丢弃）——不 panic。
+        set_resource_dir(PathBuf::from("/another-test-dir"));
+        // catalog() 仍能加载（dev 模式从 CARGO_MANIFEST_DIR 读，不受影响）。
+        assert!(!catalog().is_empty(), "catalog must not be empty in dev mode");
     }
 }
