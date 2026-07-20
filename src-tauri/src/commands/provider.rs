@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use super::settings::{load_config, with_config_mut};
 use crate::runtime::provider::{
-    active_provider_or_system_default, load_system_default_mappings, migrate_provider_model,
+    active_provider_or_system_default, load_system_default_mappings,
     ProviderConfig, ProviderKind, ProviderModelMappings,
 };
 use crate::runtime::provider::strategy::{strategy_for, ActionResult};
@@ -10,29 +10,13 @@ use crate::runtime::provider::strategy::{strategy_for, ActionResult};
 #[tauri::command]
 pub fn get_providers() -> Result<Vec<ProviderConfig>, String> {
     let _trace = crate::diagnostics::trace_command("get_providers");
-    let config = load_config();
-    if let Some(arr) = config.get("providers").and_then(|v| v.as_array()) {
-        let mut out = Vec::new();
-        for item in arr {
-            if let Ok(mut p) = serde_json::from_value::<ProviderConfig>(item.clone()) {
-                migrate_provider_model(&mut p);
-                out.push(p);
-            }
-        }
-        Ok(out)
-    } else {
-        Ok(Vec::new())
-    }
+    Ok(crate::runtime::provider::load_providers())
 }
 
 #[tauri::command]
 pub fn set_providers(providers: Vec<ProviderConfig>) -> Result<(), String> {
     let _trace = crate::diagnostics::trace_command("set_providers");
-    with_config_mut(move |config| {
-        config["providers"] =
-            serde_json::to_value(&providers).map_err(|e| format!("Serialize error: {}", e))?;
-        Ok(())
-    })
+    crate::runtime::provider::persist_providers(&providers)
 }
 
 #[tauri::command]

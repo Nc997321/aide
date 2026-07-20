@@ -13,24 +13,11 @@ pub fn build_runtime_env_vars(
     active: &ProviderConfig,
     proxy: &str,
 ) -> HashMap<String, String> {
-    use crate::runtime::provider::{provider_to_env_vars, ProviderKind};
-    let mut env_vars = provider_to_env_vars(active);
+    use crate::runtime::provider::strategy::strategy_for;
+    let strat = strategy_for(active.kind);
+    let mut env_vars = strat.env_vars(active);
 
-    let fallback_keys: &[&str] = if active.kind == ProviderKind::SystemDefault {
-        &[
-            "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL",
-            "CLAUDE_CONFIG_DIR",
-            "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
-            "ALL_PROXY", "all_proxy",
-        ]
-    } else {
-        &[
-            "CLAUDE_CONFIG_DIR",
-            "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
-            "ALL_PROXY", "all_proxy",
-        ]
-    };
-    for var in fallback_keys {
+    for var in strat.fallback_env_keys() {
         if !env_vars.contains_key(*var) {
             if let Ok(val) = std::env::var(var) {
                 if !val.is_empty() {

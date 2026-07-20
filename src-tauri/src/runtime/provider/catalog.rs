@@ -96,8 +96,6 @@ pub fn catalog_find(kind: ProviderKind) -> Option<&'static CatalogPreset> {
 }
 
 /// 派生预置 kind 的 (name, icon, base_url)。非预置 kind（Custom）返回 None。
-// Task 7-12 将按 kind 派发；暂时未调用，保留 API。
-#[allow(dead_code)]
 pub fn resolve_preset_identity(kind: ProviderKind) -> Option<(String, String, String)> {
     let p = catalog_find(kind)?;
     Some((p.name.clone(), p.icon.clone(), p.base_url.clone()))

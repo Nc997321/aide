@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
 use crate::commands::settings::load_config;
-use crate::runtime::provider::catalog::catalog_find;
+use crate::runtime::provider::catalog::{catalog_find, resolve_preset_identity};
 
 /// Provider 类型判别。预置 kind 的 base_url/name/icon 由 catalog 派生、不入 config.json。
 /// `#[default] Custom` 让缺 `kind` 字段的旧配置反序列化成 Custom（迁移后不会缺）。
@@ -28,8 +28,6 @@ pub enum ProviderKind {
 
 impl ProviderKind {
     /// 预置 kind（在 catalog 里）。Custom 不是预置。
-    // Task 7-12 将按 kind 派发；暂时未调用，保留 API。
-    #[allow(dead_code)]
     pub fn is_preset(self) -> bool {
         !matches!(self, ProviderKind::Custom)
     }
@@ -157,6 +155,52 @@ pub fn migrate_provider_model(p: &mut ProviderConfig) {
     if !p.model.is_empty() && p.model_mappings.anthropic_model.is_empty() {
         p.model_mappings.anthropic_model = p.model.clone();
     }
+}
+
+/// 预置 kind：从 catalog 派生 base_url/name/icon 填入（内存态，不持久化）。
+pub fn enrich(p: &mut ProviderConfig) {
+    if !p.kind.is_preset() { return; }
+    if let Some((name, icon, base_url)) = resolve_preset_identity(p.kind) {
+        p.name = name;
+        p.icon = icon;
+        p.base_url = base_url;
+    }
+}
+
+/// 预置 kind：清空 base_url/name/icon（持久化前调，保证不入 config.json）。
+pub fn strip(p: &mut ProviderConfig) {
+    if !p.kind.is_preset() { return; }
+    p.name = String::new();
+    p.icon = String::new();
+    p.base_url = String::new();
+}
+
+pub fn load_providers() -> Vec<ProviderConfig> {
+    let config = crate::commands::settings::load_config();
+    let mut out = Vec::new();
+    if let Some(arr) = config.get("providers").and_then(|v| v.as_array()) {
+        for item in arr {
+            if let Ok(mut p) = serde_json::from_value::<ProviderConfig>(item.clone()) {
+                migrate_provider_model(&mut p);
+                enrich(&mut p);
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+pub fn persist_providers(v: &[ProviderConfig]) -> Result<(), String> {
+    use crate::commands::settings::with_config_mut;
+    let stripped: Vec<ProviderConfig> = v.iter().map(|p| {
+        let mut q = p.clone();
+        strip(&mut q);
+        q
+    }).collect();
+    with_config_mut(move |config| {
+        config["providers"] = serde_json::to_value(&stripped).map_err(|e| format!("Serialize error: {}", e))?;
+        Ok(())
+    })
 }
 
 /// 决定子进程是否需要因连接身份变化而重启的字段白名单：base_url / api_key /
@@ -594,5 +638,52 @@ mod tests {
         let env = provider_to_env_vars(&p);
         assert!(env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW").is_none());
         assert!(env.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE").is_none());
+    }
+
+    #[test]
+    fn enrich_fills_preset_identity_from_catalog() {
+        let mut p = ProviderConfig {
+            id: "cpa".into(), kind: ProviderKind::CpaGpt,
+            name: "".into(), icon: "".into(), base_url: "".into(),
+            api_key: "".into(), auth_token: "".into(), model: String::new(),
+            model_mappings: ProviderModelMappings::default(),
+            effort_level: "".into(), auto_compact_window: "".into(),
+            autocompact_pct_override: "".into(), known_models: vec![],
+        };
+        enrich(&mut p);
+        assert_eq!(p.name, "CPA 中转");
+        assert_eq!(p.base_url, "http://127.0.0.1:8317");
+    }
+
+    #[test]
+    fn strip_clears_preset_identity_keeps_custom() {
+        let mut p = ProviderConfig {
+            id: "cpa".into(), kind: ProviderKind::CpaGpt,
+            name: "CPA 中转".into(), icon: "C".into(), base_url: "http://127.0.0.1:8317".into(),
+            api_key: "k".into(), auth_token: "t".into(), model: String::new(),
+            model_mappings: ProviderModelMappings::default(),
+            effort_level: "".into(), auto_compact_window: "".into(),
+            autocompact_pct_override: "".into(), known_models: vec![],
+        };
+        strip(&mut p);
+        assert_eq!(p.name, "");
+        assert_eq!(p.base_url, "");
+        assert_eq!(p.api_key, "k", "credential kept");
+        assert_eq!(p.auth_token, "t");
+    }
+
+    #[test]
+    fn strip_does_not_touch_custom() {
+        let mut p = ProviderConfig {
+            id: "c".into(), kind: ProviderKind::Custom,
+            name: "my".into(), icon: "M".into(), base_url: "https://gw".into(),
+            api_key: "".into(), auth_token: "".into(), model: String::new(),
+            model_mappings: ProviderModelMappings::default(),
+            effort_level: "".into(), auto_compact_window: "".into(),
+            autocompact_pct_override: "".into(), known_models: vec![],
+        };
+        strip(&mut p);
+        assert_eq!(p.name, "my", "custom identity preserved");
+        assert_eq!(p.base_url, "https://gw");
     }
 }
