@@ -142,6 +142,10 @@ export type SidecarCommand =
       btw?: boolean;
       lightweight?: boolean;
       fork_from?: string;
+      // 重开已有会话时带：SDK 据此 resume 已有会话上下文。与 session_id（路由键）
+      // 解耦——session_id 用于 SessionManager 路由，resume_session_id 用于 SDK resume。
+      // 省略=全新会话不 resume。btw 用 fork_from + forkSession，不带这个。
+      resume_session_id?: string;
       // per-session provider 连接参数覆盖（ANTHROPIC_BASE_URL / API_KEY 等）。
       // Runtime 启动后进程 env 不变，不同会话用不同 provider 靠此字段传递。
       env?: Record<string, string>;

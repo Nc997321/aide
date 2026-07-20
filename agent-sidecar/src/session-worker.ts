@@ -116,7 +116,8 @@ export interface SessionWorkerOptions {
   lightweightMode?: boolean;
   initialModel?: string;
   envOverrides?: Record<string, string>;
-  sessionId?: string; // fork 源
+  /** 测试缝：覆盖 SDK query 实现。生产省略用真 query。 */
+  queryFn?: typeof query;
 }
 
 export class SessionWorker {
@@ -165,6 +166,9 @@ export class SessionWorker {
   // ---- 注入的 stdout 输出回调 ----
   private readonly emitToStdout: (event: ChatEvent) => void;
 
+  // ---- 测试缝：可替换的 SDK query 实现 ----
+  private queryFn: typeof query;
+
   constructor(
     routingId: string,
     emitToStdout: (event: ChatEvent) => void,
@@ -172,6 +176,7 @@ export class SessionWorker {
   ) {
     this.emitToStdout = emitToStdout;
     this.routingKey = routingId;
+    this.queryFn = opts.queryFn ?? query;
     this.btwMode = opts.btwMode ?? false;
     this.lightweightMode = opts.lightweightMode ?? false;
     this.cwd = opts.cwd;
@@ -349,6 +354,9 @@ export class SessionWorker {
       // 首条消息：启动 query 循环
       if (!this.currentQuery) {
         if (cmd.permission_mode) this.applyPermissionMode(cmd.permission_mode);
+        // 重开已有会话：resume_session_id → resumeSource，startLoop 据此 resume。
+        // 普通新会话不带这字段，resumeSource 保持空 → 全新会话。
+        if (cmd.resume_session_id) this.resumeSource = cmd.resume_session_id;
         this.startLoop(cmd.cwd ?? this.cwd);
         this.queue.push({
           type: "user",
@@ -439,7 +447,7 @@ export class SessionWorker {
             this.pendingFork = true;
           }
 
-          const q = query({
+          const q = this.queryFn({
             prompt: this.queue[Symbol.asyncIterator](),
             options: {
               permissionMode: this.currentPermissionMode as any,

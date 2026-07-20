@@ -58,45 +58,41 @@ fn current_provider_env() -> HashMap<String, String> {
     build_runtime_env_vars()
 }
 
-#[tauri::command]
-pub async fn send_message(
-    session_id: String,
-    prompt: String,
-    images: Option<Vec<serde_json::Value>>,
+/// 构造 `send` 命令的 JSON（纯函数，可单测）。
+///
+/// 关键：resume_id 进 `resume_session_id` 独立字段，**不覆盖 `session_id`**（路由键）。
+/// SessionManager 按 session_id 路由到/建 worker；SessionWorker 在首条 send（无活 query）
+/// 时把 resume_session_id 赋给 resumeSource，startLoop 的 forkResumeOptions 据此 resume。
+/// 旧行为（resume_id 覆盖 session_id）会让路由键换成真 ID 但 resumeSource 仍空 → 不 resume。
+#[allow(clippy::too_many_arguments)]
+fn build_send_command(
+    session_id: &str,
+    prompt: &str,
+    images: Option<&Vec<serde_json::Value>>,
     resume_id: Option<String>,
     initial_model: Option<String>,
     permission_mode: Option<String>,
     jump_queue: Option<bool>,
     workspace_root: Option<String>,
-    runtime_mgr: State<'_, AgentRuntimeManager>,
-    workspace_state: State<'_, WorkspaceState>,
-) -> Result<(), String> {
-    let cwd = session_cwd(&workspace_root, &workspace_state);
-
-    let provider_env = current_provider_env();
-    // 连接身份漂移检测：fingerprint 存在且与当前 provider 不一致 → fork
-    let provider_switched = runtime_mgr.connection_drifted(&session_id, &provider_env);
-
-    // 首次 send：记录 fingerprint（用于后续 drift 检测）
-    runtime_mgr.upsert_fingerprint(&session_id, &provider_env);
-
+    provider_switched: bool,
+    env_vars: &HashMap<String, String>,
+    cwd: &str,
+) -> serde_json::Value {
     let mut cmd = json!({
         "cmd": "send",
         "session_id": session_id,
         "prompt": prompt,
-        "cwd": cwd.to_string_lossy().to_string(),
-        "env": provider_env,
+        "cwd": cwd,
+        "env": env_vars,
     });
-
     if let Some(imgs) = images {
         if !imgs.is_empty() {
             cmd["images"] = json!(imgs);
         }
     }
     if let Some(rid) = resume_id {
-        cmd["session_id"] = json!(rid);
+        cmd["resume_session_id"] = json!(rid);
     }
-    // 模型覆盖：把 initial_model 写进 env 字段让 SessionWorker 读
     if let Some(ref model) = initial_model {
         if !model.is_empty() {
             if let Some(env) = cmd.get_mut("env").and_then(|e| e.as_object_mut()) {
@@ -115,6 +111,43 @@ pub async fn send_message(
     if provider_switched {
         cmd["provider_switched"] = json!(true);
     }
+    let _ = workspace_root; // cwd 已在外部解析传入
+    cmd
+}
+
+#[tauri::command]
+pub async fn send_message(
+    session_id: String,
+    prompt: String,
+    images: Option<Vec<serde_json::Value>>,
+    resume_id: Option<String>,
+    initial_model: Option<String>,
+    permission_mode: Option<String>,
+    jump_queue: Option<bool>,
+    workspace_root: Option<String>,
+    runtime_mgr: State<'_, AgentRuntimeManager>,
+    workspace_state: State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    let cwd = session_cwd(&workspace_root, &workspace_state);
+    let cwd_str = cwd.to_string_lossy().to_string();
+
+    let provider_env = current_provider_env();
+    let provider_switched = runtime_mgr.connection_drifted(&session_id, &provider_env);
+    runtime_mgr.upsert_fingerprint(&session_id, &provider_env);
+
+    let cmd = build_send_command(
+        &session_id,
+        &prompt,
+        images.as_ref(),
+        resume_id,
+        initial_model,
+        permission_mode,
+        jump_queue,
+        workspace_root,
+        provider_switched,
+        &provider_env,
+        &cwd_str,
+    );
 
     runtime_mgr.send_to_runtime(&cmd).await
 }
@@ -357,5 +390,50 @@ mod tests {
         assert_eq!(cmd["session_id"], btw_id); // BTW 自己的路由键
         assert_eq!(cmd["fork_from"], fork_from); // fork 源独立字段
         assert_ne!(cmd["session_id"], cmd["fork_from"]); // 两者不能相同，否则 worker 路由冲突
+    }
+
+    /// 回归（Bug 2）：resume_id 必须进 resume_session_id 字段，不能覆盖 session_id（路由键）。
+    /// 覆盖了会让 SessionManager 用真 ID 建 worker，但 SessionWorker.resumeSource 仍空 → 不 resume。
+    #[test]
+    fn build_send_command_resume_goes_to_separate_field() {
+        let env: HashMap<String, String> = HashMap::new();
+        let cmd = build_send_command(
+            "main-sid",        // session_id（路由键 = 前端 sid）
+            "继续聊",
+            None,              // images
+            Some("resume-xyz".to_string()), // resume_id
+            None, None, None, None, false, &env,
+            "/tmp",
+        );
+        assert_eq!(cmd["cmd"], "send");
+        assert_eq!(cmd["session_id"], "main-sid");       // 路由键不变
+        assert_eq!(cmd["resume_session_id"], "resume-xyz"); // resume 进独立字段
+        assert!(cmd.get("provider_switched").is_none() || cmd["provider_switched"] == false);
+    }
+
+    /// 回归：无 resume_id 时不出 resume_session_id 字段（普通新会话）。
+    #[test]
+    fn build_send_command_no_resume_field_when_absent() {
+        let env: HashMap<String, String> = HashMap::new();
+        let cmd = build_send_command(
+            "temp-1", "hi", None, None, None, None, None, None, false, &env, "/tmp",
+        );
+        assert_eq!(cmd["session_id"], "temp-1");
+        assert!(cmd.get("resume_session_id").is_none());
+    }
+
+    /// 回归：provider_switched 仍照常带，且不干扰 resume_session_id。
+    #[test]
+    fn build_send_command_provider_switched_and_resume_coexist() {
+        let env: HashMap<String, String> = HashMap::new();
+        let cmd = build_send_command(
+            "main-sid", "hi", None,
+            Some("resume-xyz".to_string()),
+            None, None, None, None,
+            true, &env, "/tmp",
+        );
+        assert_eq!(cmd["session_id"], "main-sid");
+        assert_eq!(cmd["resume_session_id"], "resume-xyz");
+        assert_eq!(cmd["provider_switched"], true);
     }
 }

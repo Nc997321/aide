@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { SessionWorker, isStalledRelativeTo } from "./session-worker.js";
+import type { ChatEvent } from "./types.js";
 
 /**
  * 验证 SessionWorker 的 fork 源 / 路由键设定逻辑。
@@ -71,5 +72,36 @@ describe("SessionWorker — fork source / routing key invariants", () => {
     expect(worker._testIsStopped()).toBe(false);
     worker.stop();
     expect(worker._testIsStopped()).toBe(true);
+  });
+
+  it("send with resume_session_id sets resumeSource (reopen regression)", () => {
+    // queryFn 返回空 async generator——startLoop 立即结束，不 spawn SDK
+    const emptyQuery = (() => (async function* () {})()) as any;
+    const { worker } = makeWorker();
+    (worker as any).queryFn = emptyQuery;
+    worker.handleCommand({
+      cmd: "send",
+      session_id: "real-7",
+      prompt: "继续",
+      cwd: "/tmp",
+      resume_session_id: "real-7",
+      env: {},
+    } as any);
+    // resumeSource 应等于 resume_session_id（startLoop 会据此 resume）
+    expect(worker._testForkState().forkSource).toBe("real-7");
+  });
+
+  it("send without resume_session_id keeps resumeSource empty (brand-new session)", () => {
+    const emptyQuery = (() => (async function* () {})()) as any;
+    const { worker } = makeWorker();
+    (worker as any).queryFn = emptyQuery;
+    worker.handleCommand({
+      cmd: "send",
+      session_id: "temp-7",
+      prompt: "你好",
+      cwd: "/tmp",
+      env: {},
+    } as any);
+    expect(worker._testForkState().forkSource).toBe("");
   });
 });
