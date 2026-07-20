@@ -3,6 +3,7 @@
 //! IPC 薄命令留在 commands/provider.rs，调本模块。
 
 pub mod catalog;
+pub mod strategy;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
