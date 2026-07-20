@@ -597,6 +597,13 @@ export class SessionWorker {
     return this.stopped;
   }
 
+  /** 测试专用：同步触发 emit 链路（→ coalescer → emit 闭包）。
+   *  session_init 是非增量事件，deltaCoalescer.push 同步 flush+透传，
+   *  所以调用后 SessionManager 的 re-key 立即生效。 */
+  _emitForTest(event: ChatEvent): void {
+    this.emit(event);
+  }
+
   /** 停止会话：关闭 query，释放 claude.exe，清理资源 */
   stop(): void {
     this.stopped = true;

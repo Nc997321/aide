@@ -17,9 +17,13 @@ export class SessionManager {
 
   /** 把事件序列化并写入 stdout。注入 session_id 让 Rust 侧 route 到前端。
    *
-   * 关键：session_init 事件的 session_id 是 SDK 返回的真实会话 ID——
-   * 前端 finalizeSession 靠它把临时 key 换成真 ID。这里不能覆盖，否则前端
-   * 拿到的是路由键、永远找不到真 ID，发第二条消息时还在用临时 key、找不到 worker。
+   * session_init 特判：SDK 给的 event.session_id 是真实会话 ID，路由键在
+   * _routing_id——Rust 据此把 session_id 重写回路由键、真 ID 放 sdk_session_id
+   * （btw 的 isBtwSid 靠 session_id=路由键命中，再从 sdk_session_id 取真 ID）。
+   * 其他事件 session_id 即路由键，直接注入。
+   *
+   * 注意：调用方传入的 sessionId 必须是 worker 当前的 routingKey——re-key 后
+   * 自动跟着变（见 getOrCreate 的 emit 闭包，读 worker.routingKey）。
    */
   emitToStdout(sessionId: string, event: ChatEvent): void {
     const out = { ...event } as Record<string, unknown>;
@@ -80,9 +84,21 @@ export class SessionManager {
 
     // 新建 SessionWorker
     const sessionId = sid ?? `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const worker = new SessionWorker(sessionId, (event) => {
-      this.emitToStdout(sessionId, event);
-    }, {
+    let worker: SessionWorker;
+    const emit = (event: ChatEvent) => {
+      // 读 worker.routingKey 而非捕获固定 sessionId——re-key 后事件自动带新 key
+      this.emitToStdout(worker.routingKey, event);
+      // session_init：SDK 确认真实会话 ID，把 worker 从 tempId 原子迁移到 realId，
+      // 与前端 finalizeSession 切到 realId 对齐。否则第二条消息带 realId 进来
+      // getOrCreate 找不到 worker、新建一个全新 SDK 会话，上一轮上下文全丢。
+      if (event.type === "session_init") {
+        const realId = (event as { session_id?: string }).session_id;
+        if (realId && realId !== worker.routingKey) {
+          this.rekeyWorker(worker, worker.routingKey, realId);
+        }
+      }
+    };
+    worker = new SessionWorker(sessionId, emit, {
       cwd: cmd.cwd,
       btwMode: !!(cmd as any).btw,
       lightweightMode: !!(cmd as any).lightweight,
@@ -91,6 +107,26 @@ export class SessionManager {
 
     this.workers.set(sessionId, worker);
     return worker;
+  }
+
+  /** 原子 re-key：从 Map 删旧 key、改 worker.routingKey、写新 key。 */
+  private rekeyWorker(worker: SessionWorker, oldKey: string, newKey: string): void {
+    this.workers.delete(oldKey);
+    worker.routingKey = newKey;
+    this.workers.set(newKey, worker);
+  }
+
+  /** 测试专用：通过 getOrCreate 建 worker 但不调 handleCommand（不 startLoop、
+   *  不 spawn claude.exe）。返回带 re-key emit 闭包的 worker，供测试 emit session_init。
+   *  生产代码不调用。 */
+  __testCreateWorker(tempId: string): SessionWorker {
+    return this.getOrCreate(tempId, {
+      cmd: "send",
+      session_id: tempId,
+      prompt: "",
+      cwd: "/tmp",
+      env: {},
+    } as SidecarCommand & { cmd: "send" });
   }
 
   /** 停止一个会话：关闭 query，释放 claude.exe，从注册表移除。 */
