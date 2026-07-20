@@ -57,7 +57,7 @@
           ></div>
         </div>
         <span class="rl-pct">{{ Math.round(w.utilization) }}%</span>
-        <span class="rl-reset" v-if="w.resets_at">{{ fmtReset(w.resets_at) }}</span>
+        <span class="rl-reset" v-if="w.resetsAt">{{ fmtReset(w.resetsAt) }}</span>
       </div>
     </div>
   </div>

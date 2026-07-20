@@ -5,7 +5,7 @@
   "main": "dist/runtime.js",
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node18 --outfile=dist/runtime.js --banner:js=\"import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\"",
-    "build:exe": "bun build --compile dist/runtime.js --outfile dist/aide-agent.exe",
+    "build:exe": "bun build --compile dist/runtime.js --outfile dist/aide-agent.exe --windows-icon=../src-tauri/icons/icon.ico --windows-title=Aide-Agent --windows-publisher=Aide --windows-version=0.2.6.0 --windows-description=Aide-Agent-Runtime",
     "dev": "npx tsx src/index.ts"
   },
   "dependencies": {
