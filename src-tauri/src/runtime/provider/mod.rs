@@ -191,12 +191,6 @@ pub fn load_system_default_mappings() -> ProviderModelMappings {
         .unwrap_or_default()
 }
 
-/// spawn 时 load_active_provider 返回 None 走这条路径：读系统默认模型变量映射
-/// 注入 5 个 env。复用 mappings_to_env，与自定义 provider 同一注入逻辑。
-pub fn system_default_mappings_to_env() -> HashMap<String, String> {
-    mappings_to_env(&load_system_default_mappings())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8,6 +8,7 @@ use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex as TokioMutex;
 use tauri::{AppHandle, Emitter};
 use serde_json::Value;
+pub mod env;
 pub mod provider;
 use crate::runtime::provider::connection_fingerprint;
 
@@ -41,6 +42,7 @@ impl AgentRuntimeManager {
     pub fn spawn_runtime(
         &self,
         app_handle: AppHandle,
+        env_vars: HashMap<String, String>,
     ) -> Result<(), String> {
         let runtime_path = Self::resolve_runtime_path(&app_handle)?;
         // dev 模式：node runtime.js；release：直接跑 aide-agent.exe
@@ -74,8 +76,7 @@ impl AgentRuntimeManager {
             }
         }
 
-        // 透传 provider 连接参数（首次 spawn 用当前 active provider）
-        let env_vars = crate::commands::chat::build_runtime_env_vars();
+        // 透传 provider 连接参数（由调用方 build_runtime_env_vars 组好传入）
         for (k, v) in &env_vars {
             cmd.env(k, v);
         }

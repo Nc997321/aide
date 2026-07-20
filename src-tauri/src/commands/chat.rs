@@ -2,61 +2,12 @@ use tauri::State;
 use serde_json::json;
 use crate::runtime::AgentRuntimeManager;
 use crate::commands::{WorkspaceState, project_root_for_commands};
-use crate::runtime::provider::{load_active_provider, provider_to_env_vars, system_default_mappings_to_env};
+use crate::runtime::provider::{load_active_provider, load_system_default_mappings};
+use crate::runtime::env::build_runtime_env_vars;
 use crate::commands::settings::get_settings;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-
-/// 构建 Runtime spawn 用的 env vars（初始连接参数）。首次启动时调用一次，
-/// 后续 provider 切换通过 send 命令的 env 字段传递。
-pub fn build_runtime_env_vars() -> HashMap<String, String> {
-    let active_provider = load_active_provider();
-    let mut env_vars: HashMap<String, String> = if let Some(ref provider) = active_provider {
-        provider_to_env_vars(provider)
-    } else {
-        system_default_mappings_to_env()
-    };
-
-    let fallback_keys: &[&str] = if active_provider.is_some() {
-        &[
-            "CLAUDE_CONFIG_DIR",
-            "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
-            "ALL_PROXY", "all_proxy",
-        ]
-    } else {
-        &[
-            "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL",
-            "CLAUDE_CONFIG_DIR",
-            "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
-            "ALL_PROXY", "all_proxy",
-        ]
-    };
-    for var in fallback_keys {
-        if !env_vars.contains_key(*var) {
-            if let Ok(val) = std::env::var(var) {
-                if !val.is_empty() {
-                    env_vars.insert(var.to_string(), val);
-                }
-            }
-        }
-    }
-
-    if let Ok(s) = get_settings() {
-        if !s.proxy.is_empty() {
-            env_vars.insert("HTTP_PROXY".to_string(), s.proxy.clone());
-            env_vars.insert("HTTPS_PROXY".to_string(), s.proxy.clone());
-            env_vars.insert("http_proxy".to_string(), s.proxy.clone());
-            env_vars.insert("https_proxy".to_string(), s.proxy);
-        }
-    }
-    env_vars
-}
-
-/// 获取当前 provider 的连接 env（用于 send 命令携带 per-session env 覆盖）。
-fn current_provider_env() -> HashMap<String, String> {
-    build_runtime_env_vars()
-}
 
 /// 构造 `send` 命令的 JSON（纯函数，可单测）。
 ///
@@ -131,7 +82,10 @@ pub async fn send_message(
     let cwd = session_cwd(&workspace_root, &workspace_state);
     let cwd_str = cwd.to_string_lossy().to_string();
 
-    let provider_env = current_provider_env();
+    let active = load_active_provider();
+    let sdm = load_system_default_mappings();
+    let proxy = get_settings().map(|s| s.proxy).unwrap_or_default();
+    let provider_env = build_runtime_env_vars(active.as_ref(), &sdm, &proxy);
     let provider_switched = runtime_mgr.connection_drifted(&session_id, &provider_env);
     runtime_mgr.upsert_fingerprint(&session_id, &provider_env);
 
@@ -229,7 +183,10 @@ pub async fn start_btw_session(
     model: Option<String>,
     runtime_mgr: State<'_, AgentRuntimeManager>,
 ) -> Result<(), String> {
-    let provider_env = current_provider_env();
+    let active = load_active_provider();
+    let sdm = load_system_default_mappings();
+    let proxy = get_settings().map(|s| s.proxy).unwrap_or_default();
+    let provider_env = build_runtime_env_vars(active.as_ref(), &sdm, &proxy);
 
     // session_id = BTW 自己的路由键（避免与主会话 worker 冲突）；
     // fork_from = fork 源会话（SDK 据此 fork 主会话上下文）。
