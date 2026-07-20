@@ -395,6 +395,21 @@ pub fn migrate(config: &mut serde_json::Value) -> bool {
     final_providers.extend(new_providers);
 
     config["providers"] = serde_json::json!(final_providers);
+    // 修正 active_provider 指向被合并进 SystemDefault 的 provider（空 base_url）的情况：
+    // 被合并的 provider 不在 final_providers 里，active_provider 成悬空引用 → 改写为哨兵。
+    let active = config
+        .get("active_provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if !active.is_empty()
+        && active != "__system_default__"
+        && !final_providers
+            .iter()
+            .any(|p| p.get("id").and_then(|v| v.as_str()) == Some(&active))
+    {
+        config["active_provider"] = serde_json::json!("__system_default__");
+    }
     if has_legacy_sdm {
         config.as_object_mut().map(|o| o.remove("system_default_model_mappings"));
     }
@@ -445,7 +460,9 @@ pub fn ensure_migrated() -> Result<(), String> {
     let path = config_path();
     if path.exists() {
         let bak = path.with_extension("json.bak");
-        let _ = std::fs::copy(&path, &bak);
+        if let Err(e) = std::fs::copy(&path, &bak) {
+            tracing::warn!("config backup failed (migration continues): {e}");
+        }
     }
     save_config(&config)
 }
@@ -685,5 +702,21 @@ mod tests {
         strip(&mut p);
         assert_eq!(p.name, "my", "custom identity preserved");
         assert_eq!(p.base_url, "https://gw");
+    }
+
+    #[test]
+    fn migrate_rewrites_active_provider_when_referenced_provider_merged_away() {
+        let mut c = serde_json::json!({
+            "active_provider": "p3",
+            "providers": [
+                {"id":"p3","base_url":"","api_key":"sk-p3","model":""}
+            ]
+        });
+        assert!(migrate(&mut c), "should migrate");
+        assert_eq!(c["active_provider"], "__system_default__",
+            "dangling active_provider (merged-away p3) must rewrite to sentinel");
+        // p3's creds merged into the SystemDefault entry
+        assert_eq!(c["providers"][0]["id"], "__system_default__");
+        assert_eq!(c["providers"][0]["api_key"], "sk-p3");
     }
 }

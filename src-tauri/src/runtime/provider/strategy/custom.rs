@@ -1,7 +1,5 @@
 //! Custom kind：base_url/name/icon 用户填，无专属操作。
 //! env_vars 直映 cfg（与历史 provider_to_env_vars 完全一致——这是回归基线）。
-//! 以下 dead_code 是 Task 8-10 的脚手架，届时会被真实使用。
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 

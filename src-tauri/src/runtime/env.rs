@@ -1,5 +1,5 @@
 //! Runtime spawn env 组装。从 commands/chat.rs 迁入并改纯函数：
-//! 调用方负责取 active provider / system_default_mappings / proxy 传入，
+//! 调用方负责取 active provider / proxy 传入，
 //! 本函数不做 config I/O，runtime 层不依赖 commands。
 
 use std::collections::HashMap;

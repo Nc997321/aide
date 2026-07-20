@@ -8,13 +8,26 @@ use crate::runtime::provider::{
 use crate::runtime::provider::strategy::{strategy_for, ActionResult, ConnectionStatus, ProviderStrategy};
 
 fn find_provider(id: &str) -> ProviderConfig {
-    if id.is_empty() || id == "__system_default__" {
+    if id.is_empty() {
         return active_provider_or_system_default();
     }
     load_providers()
         .into_iter()
         .find(|p| p.id == id)
         .unwrap_or_else(active_provider_or_system_default)
+}
+
+/// In-place: update the `model_mappings` of the providers[] entry whose id matches.
+/// Pure (no I/O) — caller wraps in with_config_mut. Used by refresh_models persistence.
+fn write_model_mappings(config: &mut serde_json::Value, id: &str, m_val: &serde_json::Value) {
+    if let Some(arr) = config.get_mut("providers").and_then(|v| v.as_array_mut()) {
+        for p in arr.iter_mut() {
+            if p.get("id").and_then(|v| v.as_str()) == Some(id) {
+                p["model_mappings"] = m_val.clone();
+                break;
+            }
+        }
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -153,26 +166,15 @@ pub async fn view_anthropic_quota() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 pub async fn refresh_models(provider_id: String) -> Result<ProviderModelMappings, String> {
-    let pid = provider_id.clone();
     tokio::task::spawn_blocking(move || {
-        let cfg = find_provider(&pid);
+        let cfg = find_provider(&provider_id);
         let strat: Box<dyn ProviderStrategy> = strategy_for(cfg.kind);
         match strat.run_action(&cfg, "refresh_models") {
             Ok(ActionResult::RefreshedModels(m)) => {
                 let id = cfg.id.clone();
-                let is_system_default = cfg.kind == ProviderKind::SystemDefault;
                 let m_val = serde_json::to_value(&m).map_err(|e| e.to_string())?;
                 with_config_mut(move |config| {
-                    if is_system_default {
-                        config["system_default_model_mappings"] = m_val.clone();
-                    } else if let Some(arr) = config.get_mut("providers").and_then(|v| v.as_array_mut()) {
-                        for p in arr.iter_mut() {
-                            if p.get("id").and_then(|v| v.as_str()) == Some(&id) {
-                                p["model_mappings"] = m_val.clone();
-                                break;
-                            }
-                        }
-                    }
+                    write_model_mappings(config, &id, &m_val);
                     Ok(())
                 })?;
                 Ok(m)
@@ -194,4 +196,42 @@ pub async fn refresh_system_default_models() -> Result<ProviderModelMappings, St
 #[tauri::command]
 pub fn get_provider_catalog() -> Result<Vec<crate::runtime::provider::catalog::CatalogPreset>, String> {
     Ok(crate::runtime::provider::catalog::catalog().to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_model_mappings_updates_system_default_entry_not_top_level() {
+        // Regression guard for the Important #2 fix: SystemDefault mappings live in providers[]
+        // (id __system_default__), NOT the dead top-level system_default_model_mappings field.
+        let mut config = serde_json::json!({
+            "providers": [
+                {"id":"__system_default__","kind":"system_default","model_mappings":{"anthropic_model":"old"}},
+                {"id":"cpa","kind":"cpa_gpt","model_mappings":{}}
+            ]
+        });
+        let m_val = serde_json::json!({"anthropic_model":"new-model"});
+        write_model_mappings(&mut config, "__system_default__", &m_val);
+        assert_eq!(config["providers"][0]["model_mappings"]["anthropic_model"], "new-model");
+        // other entry untouched
+        assert_eq!(config["providers"][1]["model_mappings"], serde_json::json!({}));
+        // top-level dead field NOT written
+        assert!(config.get("system_default_model_mappings").is_none());
+    }
+
+    #[test]
+    fn write_model_mappings_updates_named_provider_entry() {
+        let mut config = serde_json::json!({
+            "providers": [
+                {"id":"__system_default__","kind":"system_default","model_mappings":{}},
+                {"id":"cpa","kind":"cpa_gpt","model_mappings":{"anthropic_model":"old"}}
+            ]
+        });
+        let m_val = serde_json::json!({"anthropic_model":"gpt-new"});
+        write_model_mappings(&mut config, "cpa", &m_val);
+        assert_eq!(config["providers"][1]["model_mappings"]["anthropic_model"], "gpt-new");
+        assert_eq!(config["providers"][0]["model_mappings"], serde_json::json!({}));
+    }
 }

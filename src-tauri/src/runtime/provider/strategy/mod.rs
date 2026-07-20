@@ -1,17 +1,19 @@
 //! ProviderStrategy：按 kind dispatch env 组装 / 专属操作 / 连接测试。
 //! env_vars 纯 cfg 派生（不读进程 env）；env 兜底在 runtime::env::build_runtime_env_vars。
-//! 当前 trait 尚未接入调用方，整模块 dead_code 允许。
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 
 use crate::runtime::provider::{mappings_to_env, ProviderConfig, ProviderKind, ProviderModelMappings};
 
+// Task 8-10 脚手架：ActionDef / actions() 届时会被 UI 动作面板使用，当前保留类型契约。
+#[allow(dead_code)]
 pub struct ActionDef {
     pub name: String,
     pub label: String,
 }
 
+// Task 8-10 脚手架：Quota / Ok 等变体用于后续 provider 动作面板，当前保留类型契约。
+#[allow(dead_code)]
 #[derive(Debug, serde::Serialize)]
 pub enum ActionResult {
     PortProbe { alive: bool, detail: String },
@@ -34,6 +36,8 @@ pub trait ProviderStrategy: Send + Sync {
     fn env_vars(&self, cfg: &ProviderConfig) -> HashMap<String, String>;
     /// build_runtime_env_vars 用它决定从进程 env 兜底哪些 key。
     fn fallback_env_keys(&self) -> &'static [&'static str];
+    // Task 8-10 脚手架：动作列表面板届时会调用，当前保留 trait 契约。
+    #[allow(dead_code)]
     fn actions(&self) -> Vec<ActionDef> { Vec::new() }
     fn run_action(&self, cfg: &ProviderConfig, action: &str) -> Result<ActionResult, String> {
         let _ = cfg;
