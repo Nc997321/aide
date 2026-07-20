@@ -129,6 +129,31 @@ export interface ChangeFile {
 
 // ── Provider types ──
 
+/** 与 Rust `ProviderKind` enum 对齐（serde rename_all = "snake_case"）。Custom 是兜底。 */
+export type ProviderKind =
+  | "system_default"
+  | "cpa_gpt"
+  | "ollama"
+  | "kimi"
+  | "deepseek"
+  | "custom";
+
+/** 与 Rust `AuthMode` enum 对齐（serde rename_all = "snake_case"）。 */
+export type AuthMode = "api_key" | "auth_token";
+
+/**
+ * 与 Rust `CatalogPreset` 对齐。⚠️ Rust 此 struct 无 rename_all → 字段 snake_case
+ *（与 ProviderConfig 的 camelCase 不同形）。`base_url`/`auth_mode` 保持 snake。
+ */
+export interface CatalogPreset {
+  kind: ProviderKind;
+  name: string;
+  icon: string;
+  base_url: string;
+  auth_mode: AuthMode;
+  actions: string[];
+}
+
 /** Claude 专属的模型 env 变量映射——5 个变量统一在此，换 provider 时整块重写。
  *  与会话面板模型下拉（真实模型 id + 运行时 set_model 切换）互补：本块是 spawn 时
  *  env 变量层的默认值 + 别名→具体模型映射。Rust 端 provider.rs 注入逻辑单一入口。 */
@@ -149,6 +174,7 @@ export interface ProviderModelMappings {
 
 export interface ProviderConfig {
   id: string;
+  kind: ProviderKind;
   name: string;
   icon: string;
   baseUrl: string;

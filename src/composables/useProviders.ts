@@ -27,6 +27,7 @@ const refreshing = ref(false);
 
 const systemDefault: ProviderConfig = {
   id: SYSTEM_DEFAULT_ID,
+  kind: "system_default",
   name: "系统默认",
   icon: "provider",
   baseUrl: "",
@@ -100,6 +101,7 @@ async function refreshSystemDefaultModels(): Promise<void> {
 async function addProvider(partial: Partial<ProviderConfig> = {}): Promise<ProviderConfig> {
   const p: ProviderConfig = {
     id: generateId(),
+    kind: partial.kind ?? "custom",
     name: partial.name ?? "新供应商",
     icon: partial.icon ?? "provider",
     baseUrl: partial.baseUrl ?? "",
