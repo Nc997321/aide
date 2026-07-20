@@ -109,10 +109,14 @@ export interface SessionWorkerOptions {
 }
 
 export class SessionWorker {
-  // ---- fork 源（SDK resume 的目标会话 ID）。
-  // 构造时为空——普通新会话不 resume。仅在 btw / provider_switched 时从命令里读取。
-  // 注意：这不是 worker 的路由键（路由键由 SessionManager 管理，emit 时注入）。
-  sessionId = "";
+  /** fork/resume 源：SDK 会话 ID。空串=全新会话不 resume。
+   *  仅 btw / provider_switched / 重开会话时设置（在 handleCommand 或 session_init 里）。
+   *  注意：这不是路由键——路由键是 routingKey，由 SessionManager 管理。 */
+  resumeSource = "";
+  /** 当前在 SessionManager.workers Map 里的 key。构造时=tempId，
+   *  session_init 到达后由 SessionManager re-key 成 SDK 真实会话 ID。
+   *  emit 闭包读这个字段注入 session_id，所以 re-key 后事件自动带新 key。 */
+  routingKey: string;
   readonly queue = new MessageQueue();
   readonly permMgr = new PermissionManager();
   readonly taskTracker = new TaskTracker();
@@ -150,13 +154,12 @@ export class SessionWorker {
   private readonly emitToStdout: (event: ChatEvent) => void;
 
   constructor(
-    _routingId: string,
+    routingId: string,
     emitToStdout: (event: ChatEvent) => void,
     opts: SessionWorkerOptions = {},
   ) {
-    // this.sessionId 是 fork 源（SDK resume 的目标），初始为空——普通新会话不 resume。
-    // 路由键 _routingId 仅由 SessionManager 使用，emitToStdout 自动注入。
     this.emitToStdout = emitToStdout;
+    this.routingKey = routingId;
     this.btwMode = opts.btwMode ?? false;
     this.lightweightMode = opts.lightweightMode ?? false;
     this.cwd = opts.cwd;
@@ -311,11 +314,11 @@ export class SessionWorker {
   handleCommand(cmd: SidecarCommand): void {
     if (cmd.cmd === "send") {
       // session_id 在命令里是路由键（SessionManager 用它找 worker）。
-      // this.sessionId 的含义是 fork 源——只在 btw / provider_switched 时
+      // this.resumeSource 的含义是 fork 源——只在 btw / provider_switched 时
       // 才从命令里读取；普通 send 不设（否则 SDK 会尝试 resume 不存在的会话）。
       if (cmd.provider_switched) {
         this.shouldForkNextConnect = true;
-        if (cmd.session_id) this.sessionId = cmd.session_id;
+        if (cmd.session_id) this.resumeSource = cmd.session_id;
       }
 
       if (cmd.btw) {
@@ -324,7 +327,7 @@ export class SessionWorker {
         (this as any).lightweightMode = !!cmd.lightweight;
         // BTW forks from `fork_from`, not `session_id`（session_id 是 BTW 自己的路由键）
         const forkFrom = (cmd as any).fork_from as string | undefined;
-        if (forkFrom) this.sessionId = forkFrom;
+        if (forkFrom) this.resumeSource = forkFrom;
       }
 
       // 新一轮用户消息：清 TODO 快照
@@ -420,7 +423,7 @@ export class SessionWorker {
 
           const subagentModelHook = makeSubagentModelHook(process.env);
 
-          if (this.sessionId && this.shouldForkNextConnect && !this.btwMode) {
+          if (this.resumeSource && this.shouldForkNextConnect && !this.btwMode) {
             this.pendingFork = true;
           }
 
@@ -453,7 +456,7 @@ export class SessionWorker {
               ...(process.env.AIDE_CLAUDE_EXE
                 ? { pathToClaudeCodeExecutable: process.env.AIDE_CLAUDE_EXE }
                 : {}),
-              ...forkResumeOptions(this.sessionId ?? "", this.shouldForkNextConnect),
+              ...forkResumeOptions(this.resumeSource ?? "", this.shouldForkNextConnect),
               ...btwQueryOverrides(this.btwMode, this.lightweightMode),
               env: cliEnv,
             },
@@ -502,7 +505,7 @@ export class SessionWorker {
 
             if ((msg as any).type === "system" && (msg as any).subtype === "init") {
               const newSid = (msg as any).session_id as string | undefined;
-              if (this.pendingFork && newSid && newSid !== this.sessionId) {
+              if (this.pendingFork && newSid && newSid !== this.resumeSource) {
                 this.emit({
                   type: "notification",
                   message: "已切换供应商，对话历史已迁移到新会话。",
@@ -510,7 +513,7 @@ export class SessionWorker {
                 } as any);
                 this.pendingFork = false;
               }
-              this.sessionId = newSid ?? this.sessionId;
+              this.resumeSource = newSid ?? this.resumeSource;
               void this.emitModelsAvailable(q);
             } else if (
               (msg as any).type === "assistant" &&
@@ -574,7 +577,7 @@ export class SessionWorker {
 
   /** 测试用：暴露 fork 源（SDK resume 的会话 ID）和 fork 标记。 */
   _testForkState(): { forkSource: string; shouldFork: boolean } {
-    return { forkSource: this.sessionId, shouldFork: this.shouldForkNextConnect };
+    return { forkSource: this.resumeSource, shouldFork: this.shouldForkNextConnect };
   }
 
   /** 停止会话：关闭 query，释放 claude.exe，清理资源 */
