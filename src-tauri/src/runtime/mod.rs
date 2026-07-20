@@ -8,7 +8,8 @@ use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex as TokioMutex;
 use tauri::{AppHandle, Emitter};
 use serde_json::Value;
-use crate::commands::provider::connection_fingerprint;
+pub mod provider;
+use crate::runtime::provider::connection_fingerprint;
 
 /// 持久 Agent Runtime 管理器（替代 SidecarManager）。
 ///

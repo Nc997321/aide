@@ -2,7 +2,7 @@ use tauri::State;
 use serde_json::json;
 use crate::runtime::AgentRuntimeManager;
 use crate::commands::{WorkspaceState, project_root_for_commands};
-use crate::commands::provider::{load_active_provider, provider_to_env_vars, system_default_mappings_to_env};
+use crate::runtime::provider::{load_active_provider, provider_to_env_vars, system_default_mappings_to_env};
 use crate::commands::settings::get_settings;
 use std::collections::HashMap;
 use std::fs;
