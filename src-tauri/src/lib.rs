@@ -140,13 +140,12 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 if let Some(rt) = handle1.try_state::<runtime::AgentRuntimeManager>() {
                     use crate::runtime::env::build_runtime_env_vars;
-                    use crate::runtime::provider::{load_active_provider, load_system_default_mappings};
-                    let active = load_active_provider();
-                    let sdm = load_system_default_mappings();
+                    use crate::runtime::provider::active_provider_or_system_default;
+                    let active = active_provider_or_system_default();
                     let proxy = crate::commands::settings::get_settings()
                         .map(|s| s.proxy)
                         .unwrap_or_default();
-                    let env_vars = build_runtime_env_vars(active.as_ref(), &sdm, &proxy);
+                    let env_vars = build_runtime_env_vars(&active, &proxy);
                     if let Err(e) = rt.spawn_runtime(handle2, env_vars) {
                         eprintln!("[aide] Agent Runtime 启动失败: {e}");
                     }

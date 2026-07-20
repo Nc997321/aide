@@ -2,7 +2,7 @@ use tauri::State;
 use serde_json::json;
 use crate::runtime::AgentRuntimeManager;
 use crate::commands::{WorkspaceState, project_root_for_commands};
-use crate::runtime::provider::{load_active_provider, load_system_default_mappings};
+use crate::runtime::provider::active_provider_or_system_default;
 use crate::runtime::env::build_runtime_env_vars;
 use crate::commands::settings::get_settings;
 use std::collections::HashMap;
@@ -82,10 +82,9 @@ pub async fn send_message(
     let cwd = session_cwd(&workspace_root, &workspace_state);
     let cwd_str = cwd.to_string_lossy().to_string();
 
-    let active = load_active_provider();
-    let sdm = load_system_default_mappings();
+    let active = active_provider_or_system_default();
     let proxy = get_settings().map(|s| s.proxy).unwrap_or_default();
-    let provider_env = build_runtime_env_vars(active.as_ref(), &sdm, &proxy);
+    let provider_env = build_runtime_env_vars(&active, &proxy);
     let provider_switched = runtime_mgr.connection_drifted(&session_id, &provider_env);
     runtime_mgr.upsert_fingerprint(&session_id, &provider_env);
 
@@ -183,10 +182,9 @@ pub async fn start_btw_session(
     model: Option<String>,
     runtime_mgr: State<'_, AgentRuntimeManager>,
 ) -> Result<(), String> {
-    let active = load_active_provider();
-    let sdm = load_system_default_mappings();
+    let active = active_provider_or_system_default();
     let proxy = get_settings().map(|s| s.proxy).unwrap_or_default();
-    let provider_env = build_runtime_env_vars(active.as_ref(), &sdm, &proxy);
+    let provider_env = build_runtime_env_vars(&active, &proxy);
 
     // session_id = BTW 自己的路由键（避免与主会话 worker 冲突）；
     // fork_from = fork 源会话（SDK 据此 fork 主会话上下文）。

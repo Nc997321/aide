@@ -204,6 +204,22 @@ pub fn load_active_provider() -> Option<ProviderConfig> {
     None
 }
 
+/// 取 active provider；迁移后必返回 Some。异常时返回一个空 SystemDefault 实例兜底。
+pub fn active_provider_or_system_default() -> ProviderConfig {
+    match load_active_provider() {
+        Some(p) => p,
+        None => ProviderConfig {
+            id: "__system_default__".to_string(),
+            kind: ProviderKind::SystemDefault,
+            name: String::new(), icon: String::new(), base_url: String::new(),
+            api_key: String::new(), auth_token: String::new(), model: String::new(),
+            model_mappings: ProviderModelMappings::default(),
+            effort_level: String::new(), auto_compact_window: String::new(),
+            autocompact_pct_override: String::new(), known_models: Vec::new(),
+        },
+    }
+}
+
 // ── 系统默认 provider 的模型变量映射 ──
 //
 // 系统默认不是 provider 条目（认证走系统 env 兜底，load_active_provider 返回 None），
