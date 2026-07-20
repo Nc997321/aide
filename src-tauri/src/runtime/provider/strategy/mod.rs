@@ -12,7 +12,7 @@ pub struct ActionDef {
     pub label: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub enum ActionResult {
     PortProbe { alive: bool, detail: String },
     OpenUrl(String),
@@ -22,6 +22,7 @@ pub enum ActionResult {
     Ok(String),
 }
 
+#[derive(serde::Serialize)]
 pub struct ConnectionStatus {
     pub ok: bool,
     pub detail: String,

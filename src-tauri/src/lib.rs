@@ -278,6 +278,12 @@ pub fn run() {
             commands::provider::set_active_provider_id,
             commands::provider::get_system_default_model_mappings,
             commands::provider::set_system_default_model_mappings,
+            commands::provider::test_provider_connection,
+            commands::provider::cpa_probe_port,
+            commands::provider::cpa_open_management,
+            commands::provider::cpa_login_status,
+            commands::provider::view_anthropic_quota,
+            commands::provider::refresh_models,
             commands::provider::refresh_system_default_models,
             commands::provider::get_provider_catalog,
             // Marketplace commands
