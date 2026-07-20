@@ -156,6 +156,25 @@ pub struct ParkFrameRecord {
     pub address: u64,
     /// 相对模块基址的偏移（module_base 为 0 时为 0）
     pub offset: u64,
+    /// 完整调用链（顶帧在前，最多 32 帧）。仅冻结首帧 `walk_full=true` 时填充——
+    /// park 期间栈静态，重复采同一栈没意义且让报告随帧数膨胀。空表示该帧只抓了顶帧。
+    /// 读法：frames 自底（ntdll/kernelbase 系统调用等待）向顶（WebView2/aide 业务
+    /// 代码）展示主线程被谁一路调到 park 的，区分 emit 投递 / 事件循环 / 锁 / IO。
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<StackFrameRecord>,
+}
+
+/// 调用链中的一帧（冻结首帧 StackWalk64 走出的调用栈）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StackFrameRecord {
+    /// 模块 basename；抓不到为 None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
+    /// 指令地址（绝对）
+    pub address: u64,
+    /// 相对模块基址的偏移
+    pub offset: u64,
 }
 
 #[derive(Debug, Serialize)]

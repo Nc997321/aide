@@ -28,7 +28,7 @@ use tauri::{AppHandle, Manager};
 
 use super::report::{
     self, FreezeInfo, FreezeReport, FreezeSample, MainThreadProbe, ParkFrameRecord,
-    ProcessSample, ReportMeta, RingSnapshot,
+    ProcessSample, ReportMeta, RingSnapshot, StackFrameRecord,
 };
 use super::stackwalk;
 use super::{DiagnosticsState, DiagInner};
@@ -126,13 +126,13 @@ fn run(app: AppHandle) {
                 // 立即预热一次进程表：sysinfo 的 cpu_usage 是两次刷新间的差值，
                 // 预热让下一帧就有有效 CPU 数据
                 let _ = sample_processes(&mut sys);
-                fz.samples.push(make_sample(&mut sys, &probe, &hwnd, &main_tid));
+                fz.samples.push(make_sample(&mut sys, &probe, &hwnd, &main_tid, true));
                 fz.path = flush_report(&inner, &fz, false, false);
                 freeze = Some(fz);
             }
             Some(fz) if gap_ms >= FREEZE_GAP_MS => {
                 if fz.samples.len() < MAX_SAMPLES {
-                    fz.samples.push(make_sample(&mut sys, &probe, &hwnd, &main_tid));
+                    fz.samples.push(make_sample(&mut sys, &probe, &hwnd, &main_tid, false));
                 }
                 fz.tick_since_flush += 1;
                 if fz.tick_since_flush >= FLUSH_EVERY_TICKS {
@@ -170,16 +170,27 @@ fn make_sample(
     probe: &ProbeState,
     hwnd: &AtomicIsize,
     main_tid: &AtomicU32,
+    walk_full: bool,
 ) -> FreezeSample {
     let stuck = super::current_stuck_command();
     // 跨线程抓主线程顶帧：SuspendThread + GetThreadContext + 解析模块名。
     // stuck_command 看不到的框架路径（emit 投递 / 事件循环 / 锁 / 系统调用）靠这帧点名。
+    // walk_full=true 时进一步 StackWalk64 走完整调用链（仅冻结首帧，栈静态）。
     // 非目标平台 / 抓取失败为 None，不污染报告。
-    let park = stackwalk::capture_main_thread_park(main_tid.load(Ordering::Relaxed))
+    let park = stackwalk::capture_main_thread_park(main_tid.load(Ordering::Relaxed), walk_full)
         .map(|f| ParkFrameRecord {
             module: f.module,
             address: f.address,
             offset: f.offset,
+            frames: f
+                .frames
+                .into_iter()
+                .map(|fr| StackFrameRecord {
+                    module: fr.module,
+                    address: fr.address,
+                    offset: fr.offset,
+                })
+                .collect(),
         });
     FreezeSample {
         t: report::epoch_ms(),
