@@ -191,9 +191,6 @@ export const api = {
   renameSession(id: string, name: string): Promise<void> {
     return invoke("rename_session", { id, name });
   },
-  renameSidecarSession(oldId: string, newId: string): Promise<void> {
-    return invoke("rename_sidecar_session", { oldId, newId });
-  },
   sessionLastEvent(sessionId: string): Promise<LastEventInfo> {
     return invoke("session_last_event", { sessionId });
   },

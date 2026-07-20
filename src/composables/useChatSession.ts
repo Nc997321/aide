@@ -1,6 +1,7 @@
 import { computed, reactive, ref, watch, type Ref } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { useDiagnosticsDashboard } from "@/composables/useDiagnosticsDashboard";
 import type {
   ChatMessage,
   ContextUsage,
@@ -102,6 +103,11 @@ const sharedPermissionModes = ref<PermissionModeOption[]>([]);
 /** 订阅额度/速率是账号级别的事实，跨会话共享——任意会话收到的最新一条即当前状态。
  *  null 表示还没收到过（非订阅计费或 provider 不报配额时永远为 null，UI 隐藏）。 */
 const sharedRateLimit = ref<RateLimitInfo | null>(null);
+/** 诊断仪表盘句柄——必须模块级声明：handleChatEvent 是模块级函数，rate_limit /
+ *  health / message_stop 三个 case 都用它累计用量/健康/速率。原先声明在
+ *  useChatSession 函数内部，handleChatEvent 作用域看不到，运行时 ReferenceError
+ *  中断 message_stop → store.isBusy 永远没被置 false → "思考中"常亮。 */
+const diag = useDiagnosticsDashboard();
 /** 迁移窗口期：旧 key → 新 id（Rust rename 完成前的在途事件转发） */
 const aliasMap = new Map<string, string>();
 /** 尚未被 SDK 确认的临时 key（纯内存，从未落盘）。resume 判定与 hydrate 跳过都靠它。 */
@@ -281,12 +287,7 @@ async function finalizeSession(tempId: string, realId: string) {
   }
   // provider 绑定也跟着搬迁：临时 id 在 sendMessage 时已盖戳，拿到真实 id 后不能丢
   migrateProvider(tempId, realId);
-  // 2. Rust 侧只需要重命名 sidecar 进程注册表（内存态，无 IO）
-  try {
-    await invoke("rename_sidecar_session", { oldId: tempId, newId: realId });
-  } catch (e) {
-    console.warn("rename_sidecar_session failed:", e);
-  }
+  // 2. Runtime 内部管理 session 映射（SessionManager 的 Map），不需要 Rust 改名
   // 3. 通知 App.vue：这是第一次创建，去写元数据、加侧栏、记最近访问
   for (const cb of sessionCreatedCallbacks) cb(tempId, realId);
 }
@@ -508,6 +509,11 @@ function handleChatEvent(e: Record<string, unknown>) {
           resetsAt: (w["resets_at"] as number | null) ?? null,
         })),
       };
+      diag.handleRateLimitEvent(sharedRateLimit.value);
+      break;
+    }
+    case "health": {
+      diag.handleHealthEvent(e);
       break;
     }
     case "permission_modes_available": {
@@ -604,15 +610,11 @@ function handleChatEvent(e: Record<string, unknown>) {
       if (usage) {
         const last = store.messages[store.messages.length - 1];
         if (last?.role === "assistant") last.usage = usage;
+        diag.accumulateUsage(usage);
       }
       finishStreaming(store);
-      // 忙碌期间排队的消息：这一轮结束立即把「全部」排队消息合并成一条续发
-      // （当成同一轮对话，效率更高、意图更连贯），状态保持 running 不落 waiting
-      // （通知/横幅依赖 running→waiting 转换，排队续发中不该触发"已完成"通知）。
       if (store.queued.length > 0) {
         const items = store.queued.splice(0);
-        // 动作（/compact /clear）必须独占一轮——斜杠命令只在它是整条用户消息时
-        // 才被 SDK 拦截，与文本合并会失效。队列里含动作时逐条独发，纯文本仍合并。
         if (items.some((i) => i.action)) {
           for (const it of items) {
             dispatchSend(sid, it, isPendingSession(sid) ? undefined : sid);
@@ -624,7 +626,6 @@ function handleChatEvent(e: Record<string, unknown>) {
         break;
       }
       store.isBusy = false;
-      // waiting = sidecar 存活但空闲 → 通知/横幅/变更捕获依赖 running→waiting 转换
       setSessionState(sid, "waiting");
       break;
     }
@@ -777,6 +778,8 @@ export function __resetForTest() {
 
 export function useChatSession(sessionId: Ref<string | null>) {
   void ensureGlobalListener();
+
+  // 诊断仪表盘句柄已提升到模块级（handleChatEvent 要用）——见顶部 const diag。
 
   const current = computed(() => (sessionId.value ? getStore(sessionId.value) : null));
 

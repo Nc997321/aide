@@ -3,7 +3,7 @@ import type { ChatEvent, ImageAttachment, RateLimitWindow, TurnUsage } from "./t
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
 import { ToolLifecycleTracker } from "./toolLifecycle.js";
-import { startOutputTail, stopOutputTail } from "./subagentOutputTail.js";
+import { startOutputTail as globalStartOutputTail, stopOutputTail as globalStopOutputTail } from "./subagentOutputTail.js";
 
 /**
  * Build a Claude-SDK MessageParam from a prompt + optional image attachments.
@@ -306,6 +306,12 @@ export function mapSdkMessage(
   /** 把 wire model id 解析成展示建议（别名）——index.ts 传 resolveDropdownValue；
    *  缺省（测试等）时 modelLabel 即 wire 原文。 */
   resolveModelLabel?: (wire: string) => string,
+  /** SessionWorker 注入的 output tail 回调（per-instance，替代模块级全局）。
+   *  缺省时走全局 subagentOutputTail（旧路径兼容）。 */
+  outputTailHooks?: {
+    start: (id: string, outputFile: string, emit: (e: ChatEvent) => void, onStop: (id: string) => void) => void;
+    stop: (id: string) => void;
+  },
 ) {
   if (msg.parent_tool_use_id) {
     emitSubagentProgress(msg, emit, subagents);
@@ -392,7 +398,7 @@ export function mapSdkMessage(
     const note = parseTaskNotification(msg.message.content);
     if (note) {
       if (subagents.isActive(note.toolUseId)) {
-        stopOutputTail(note.toolUseId);
+        (outputTailHooks?.stop ?? globalStopOutputTail)(note.toolUseId);
         subagents.handleAsyncResult(note.toolUseId);
         emit({ type: "subagent_end", id: note.toolUseId, result: note.result, is_error: note.status !== "completed" });
       }
@@ -406,7 +412,7 @@ export function mapSdkMessage(
   if (msg.type === "queue-operation" && msg.operation === "enqueue" && typeof msg.content === "string") {
     const note = parseTaskNotification(msg.content);
     if (note && subagents.isActive(note.toolUseId)) {
-      stopOutputTail(note.toolUseId);
+      (outputTailHooks?.stop ?? globalStopOutputTail)(note.toolUseId);
       subagents.handleAsyncResult(note.toolUseId);
       emit({ type: "subagent_end", id: note.toolUseId, result: note.result, is_error: note.status !== "completed" });
     }
@@ -427,7 +433,7 @@ export function mapSdkMessage(
         if (ack && subagents.isActive(block.tool_use_id)) {
           subagents.registerAsync(block.tool_use_id, ack.agentId, ack.outputFile);
           emit({ type: "subagent_async_launched", id: block.tool_use_id, agentId: ack.agentId, outputFile: ack.outputFile });
-          startOutputTail(block.tool_use_id, ack.outputFile, emit, (_tailId) => {
+          (outputTailHooks?.start ?? globalStartOutputTail)(block.tool_use_id, ack.outputFile, emit, (_tailId) => {
             // 无增长超时兜底由 Task 3 的 task-notification 主路径收尾；此处仅做安全网：
             // tail 自身不判定 done，只负责进度回放。stopOutputTail 由 task-notification 分支调。
           });

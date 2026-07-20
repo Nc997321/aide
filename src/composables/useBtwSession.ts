@@ -102,8 +102,7 @@ function handleBtwEvent(e: Record<string, unknown>) {
       const sdkSid = e["sdk_session_id"] as string | undefined;
       if (sdkSid && btwTempId && sdkSid !== btwTempId) {
         btwRealId = sdkSid;
-        // Rust 侧 rename 注册表:之后事件携带 fork id(内存态,无 IO)
-        invoke("rename_sidecar_session", { oldId: btwTempId, newId: sdkSid }).catch(() => {});
+        // Runtime 内部管理 session 映射，无需 Rust 侧 rename
         // 注意:btw 不触发 onSessionCreated(不写元数据/不进侧栏)——与主对话 finalizeSession 的区别
       }
       break;

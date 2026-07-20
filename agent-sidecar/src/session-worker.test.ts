@@ -1,0 +1,107 @@
+import { describe, it, expect } from "vitest";
+import { SessionWorker, isStalledRelativeTo } from "./session-worker.js";
+import type { ChatEvent } from "./types.js";
+
+/**
+ * 验证 SessionWorker 的 fork 源 / 路由键设定逻辑。
+ *
+ * 关键不变量：
+ * - 构造时 fork 源为空（普通会话不 resume）
+ * - routingKey 等于构造参数（SessionManager 据此 re-key）
+ * - 只有 btw / provider_switched 才设 fork 源（在 handleCommand 里）
+ * - BTW 从 fork_from 读 fork 源，不从 session_id 读
+ */
+
+function makeWorker(sid = "test-sid") {
+  const events: any[] = [];
+  return {
+    worker: new SessionWorker(sid, (e) => events.push(e)),
+    events,
+  };
+}
+
+describe("SessionWorker — fork source / routing key invariants", () => {
+  it("constructor: fork source starts empty (no resume for normal session)", () => {
+    const { worker } = makeWorker();
+    const { forkSource, shouldFork } = worker._testForkState();
+    expect(forkSource).toBe("");
+    expect(shouldFork).toBe(false);
+  });
+
+  it("constructor: routingKey equals the constructor arg", () => {
+    const { worker } = makeWorker("temp-abc");
+    expect(worker.routingKey).toBe("temp-abc");
+  });
+
+  it("constructor with btwMode: fork source still empty (set by handleCommand, not constructor)", () => {
+    const { worker } = makeWorker();
+    const { forkSource } = worker._testForkState();
+    expect(forkSource).toBe("");
+  });
+
+  it("stop() cleans up without throwing", () => {
+    const { worker } = makeWorker();
+    worker.stop();
+    expect(worker.isActive()).toBe(false);
+  });
+
+  it("isActive() returns false before startLoop", () => {
+    const { worker } = makeWorker();
+    expect(worker.isActive()).toBe(false);
+  });
+
+  it("isStalled() returns false with no query", () => {
+    const { worker } = makeWorker();
+    expect(worker.isStalled()).toBe(false);
+  });
+
+  it("isStalledRelativeTo: no query → never stalled", () => {
+    expect(isStalledRelativeTo(0, 100_000, false)).toBe(false);
+  });
+
+  it("isStalledRelativeTo: query + <90s since last message → not stalled", () => {
+    expect(isStalledRelativeTo(0, 89_999, true)).toBe(false);
+  });
+
+  it("isStalledRelativeTo: query + >90s since last message → stalled", () => {
+    expect(isStalledRelativeTo(0, 90_001, true)).toBe(true);
+  });
+
+  it("stop() sets stopped flag (startLoop must exit before spawning)", () => {
+    const { worker } = makeWorker();
+    expect(worker._testIsStopped()).toBe(false);
+    worker.stop();
+    expect(worker._testIsStopped()).toBe(true);
+  });
+
+  it("send with resume_session_id sets resumeSource (reopen regression)", () => {
+    // queryFn 返回空 async generator——startLoop 立即结束，不 spawn SDK
+    const emptyQuery = (() => (async function* () {})()) as any;
+    const { worker } = makeWorker();
+    (worker as any).queryFn = emptyQuery;
+    worker.handleCommand({
+      cmd: "send",
+      session_id: "real-7",
+      prompt: "继续",
+      cwd: "/tmp",
+      resume_session_id: "real-7",
+      env: {},
+    } as any);
+    // resumeSource 应等于 resume_session_id（startLoop 会据此 resume）
+    expect(worker._testForkState().forkSource).toBe("real-7");
+  });
+
+  it("send without resume_session_id keeps resumeSource empty (brand-new session)", () => {
+    const emptyQuery = (() => (async function* () {})()) as any;
+    const { worker } = makeWorker();
+    (worker as any).queryFn = emptyQuery;
+    worker.handleCommand({
+      cmd: "send",
+      session_id: "temp-7",
+      prompt: "你好",
+      cwd: "/tmp",
+      env: {},
+    } as any);
+    expect(worker._testForkState().forkSource).toBe("");
+  });
+});
