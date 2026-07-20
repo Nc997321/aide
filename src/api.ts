@@ -5,6 +5,7 @@ import type {
   GrepMatch, ProviderConfig, ProviderModelMappings, RunConfig, RunTarget, JdkEntry, RecentView,
   SkillMeta, BuildIndexResult, BuildProgress, RescanResult, QueryResult,
   AppNotification, NotificationRecord,
+  CatalogPreset, PortProbeResult, LoginStatusResult, ConnectionStatus,
 } from "./types";
 import type { ModelOption, PermissionModeOption } from "./types/chat";
 
@@ -260,6 +261,27 @@ export const api = {
   },
   refreshSystemDefaultModels(): Promise<ProviderModelMappings> {
     return invoke("refresh_system_default_models");
+  },
+  getProviderCatalog(): Promise<CatalogPreset[]> {
+    return invoke("get_provider_catalog");
+  },
+  testProviderConnection(providerId: string): Promise<ConnectionStatus> {
+    return invoke("test_provider_connection", { providerId });
+  },
+  cpaProbePort(): Promise<PortProbeResult> {
+    return invoke("cpa_probe_port");
+  },
+  cpaOpenManagement(): Promise<string> {
+    return invoke("cpa_open_management");
+  },
+  cpaLoginStatus(): Promise<LoginStatusResult> {
+    return invoke("cpa_login_status");
+  },
+  viewAnthropicQuota(): Promise<unknown> {
+    return invoke("view_anthropic_quota");
+  },
+  refreshModels(providerId: string): Promise<ProviderModelMappings> {
+    return invoke("refresh_models", { providerId });
   },
 
   // 工作区

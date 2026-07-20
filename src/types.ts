@@ -388,3 +388,12 @@ export interface NotificationRecord {
   count?: number;
   action?: NotificationAction;
 }
+
+// ── Provider action types ──
+
+/** Rust `commands::provider::PortProbeResult`。 */
+export interface PortProbeResult { alive: boolean; detail: string }
+/** Rust `commands::provider::LoginStatusResult`。 */
+export interface LoginStatusResult { logged_in: boolean; detail: string }
+/** Rust `runtime::provider::strategy::ConnectionStatus`——Task 6 实现时读 strategy/mod.rs 核对字段。 */
+export interface ConnectionStatus { ok: boolean; detail: string }
