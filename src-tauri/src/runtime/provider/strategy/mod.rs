@@ -1,11 +1,11 @@
 //! ProviderStrategy：按 kind dispatch env 组装 / 专属操作 / 连接测试。
 //! env_vars 纯 cfg 派生（不读进程 env）；env 兜底在 runtime::env::build_runtime_env_vars。
-//! 以下 dead_code 是 Task 8-10 的脚手架，届时会被真实使用。
+//! 当前 trait 尚未接入调用方，整模块 dead_code 允许。
 #![allow(dead_code)]
 
 use std::collections::HashMap;
 
-use crate::runtime::provider::{ProviderConfig, ProviderKind, ProviderModelMappings};
+use crate::runtime::provider::{mappings_to_env, ProviderConfig, ProviderKind, ProviderModelMappings};
 
 pub struct ActionDef {
     pub name: String,
@@ -41,20 +41,55 @@ pub trait ProviderStrategy: Send + Sync {
     fn test_connection(&self, cfg: &ProviderConfig) -> Result<ConnectionStatus, String>;
 }
 
-pub mod custom;
-pub mod system_default;
+const SMALL_FALLBACK: &[&str] = &[
+    "CLAUDE_CONFIG_DIR",
+    "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+    "ALL_PROXY", "all_proxy",
+];
+
+/// 共享预置策略：base_url 来自 catalog（非空），api_key 认证，仅 test_connection。
+pub(crate) struct PresetStrategy {
+    pub kind: ProviderKind,
+    pub base_url: String,
+}
+
+impl ProviderStrategy for PresetStrategy {
+    fn kind(&self) -> ProviderKind { self.kind }
+    fn env_vars(&self, cfg: &ProviderConfig) -> HashMap<String, String> {
+        let mut env = HashMap::new();
+        env.insert("ANTHROPIC_BASE_URL".into(), self.base_url.clone());
+        if !cfg.api_key.is_empty() { env.insert("ANTHROPIC_API_KEY".into(), cfg.api_key.clone()); }
+        if !cfg.auth_token.is_empty() { env.insert("ANTHROPIC_AUTH_TOKEN".into(), cfg.auth_token.clone()); }
+        if !cfg.effort_level.is_empty() { env.insert("CLAUDE_CODE_EFFORT_LEVEL".into(), cfg.effort_level.clone()); }
+        if !cfg.auto_compact_window.is_empty() { env.insert("CLAUDE_CODE_AUTO_COMPACT_WINDOW".into(), cfg.auto_compact_window.clone()); }
+        if !cfg.autocompact_pct_override.is_empty() { env.insert("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE".into(), cfg.autocompact_pct_override.clone()); }
+        env.extend(mappings_to_env(&cfg.model_mappings));
+        env
+    }
+    fn fallback_env_keys(&self) -> &'static [&'static str] { SMALL_FALLBACK }
+    fn actions(&self) -> Vec<ActionDef> {
+        vec![ActionDef { name: "test_connection".into(), label: "测试连接".into() }]
+    }
+    fn test_connection(&self, cfg: &ProviderConfig) -> Result<ConnectionStatus, String> {
+        common_test_connection(cfg, Some(&self.base_url))
+    }
+}
+
 pub mod cpa_gpt;
-// 其余 kind 在 Task 10 加：ollama / kimi / deepseek
+pub mod custom;
+pub mod deepseek;
+pub mod kimi;
+pub mod ollama;
+pub mod system_default;
 
 pub fn strategy_for(kind: ProviderKind) -> Box<dyn ProviderStrategy> {
     match kind {
         ProviderKind::Custom => Box::new(custom::CustomStrategy),
-        // Task 9-10 填：
         ProviderKind::SystemDefault => Box::new(crate::runtime::provider::strategy::system_default::SystemDefaultStrategy),
         ProviderKind::CpaGpt => Box::new(crate::runtime::provider::strategy::cpa_gpt::CpaGptStrategy),
-        ProviderKind::Ollama => Box::new(custom::CustomStrategy),
-        ProviderKind::Kimi => Box::new(custom::CustomStrategy),
-        ProviderKind::DeepSeek => Box::new(custom::CustomStrategy),
+        ProviderKind::Ollama => crate::runtime::provider::strategy::ollama::strategy(),
+        ProviderKind::Kimi => crate::runtime::provider::strategy::kimi::strategy(),
+        ProviderKind::DeepSeek => crate::runtime::provider::strategy::deepseek::strategy(),
     }
 }
 
@@ -108,11 +143,7 @@ mod tests {
         for k in [ProviderKind::Custom, ProviderKind::SystemDefault, ProviderKind::CpaGpt,
                   ProviderKind::Ollama, ProviderKind::Kimi, ProviderKind::DeepSeek] {
             let s = strategy_for(k);
-            // Custom 是唯一真实实现，kind() 匹配；其余占位返回 CustomStrategy，
-            // kind() 是 Custom 而非输入 kind——Task 8-10 替换后恢复全断言。
-            if k == ProviderKind::Custom {
-                assert_eq!(s.kind(), k);
-            }
+            assert_eq!(s.kind(), k, "strategy_for({:?}) must return a strategy whose kind matches", k);
         }
     }
 }

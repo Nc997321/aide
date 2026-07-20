@@ -91,8 +91,6 @@ pub fn catalog() -> &'static [CatalogPreset] {
     CATALOG.get_or_init(load)
 }
 
-// Task 7-12 将按 kind 查 catalog 派生身份；暂时未调用，保留 API。
-#[allow(dead_code)]
 pub fn catalog_find(kind: ProviderKind) -> Option<&'static CatalogPreset> {
     catalog().iter().find(|p| p.kind == kind)
 }
