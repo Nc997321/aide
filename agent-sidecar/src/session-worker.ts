@@ -82,7 +82,6 @@ class OutputTail {
     private readonly id: string,
     private readonly outputFile: string,
     private readonly emit: (e: ChatEvent) => void,
-    private readonly onStop: (id: string) => void,
   ) {}
   tick(): void {
     if (this.stopped) return;
@@ -293,9 +292,9 @@ export class SessionWorker {
   // OutputTail（per-SessionWorker，替代模块级全局）
   // ================================================================
 
-  startOutputTail(id: string, outputFile: string, onStop: (id: string) => void): void {
+  startOutputTail(id: string, outputFile: string): void {
     if (this.outputTails.has(id)) return;
-    this.outputTails.set(id, new OutputTail(id, outputFile, (e) => this.emit(e), onStop));
+    this.outputTails.set(id, new OutputTail(id, outputFile, (e) => this.emit(e)));
     this.ensureOutputTailTimer();
   }
 
@@ -513,8 +512,8 @@ export class SessionWorker {
               (m) => this.resolveDropdownValue(m),
               {
                 start: (id, outputFile, _emit, _onStop) => {
-                  // SessionWorker 的 emit 已绑定到实例，忽略传入的 emit
-                  this.startOutputTail(id, outputFile, (_onStopId) => {});
+                  // SessionWorker 的 emit 已绑定到实例，忽略传入的 emit/onStop
+                  this.startOutputTail(id, outputFile);
                 },
                 stop: (id) => this.stopOutputTail(id),
               },
