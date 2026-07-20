@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
 use crate::commands::settings::load_config;
+use crate::runtime::provider::catalog::catalog_find;
 
 /// Provider 类型判别。预置 kind 的 base_url/name/icon 由 catalog 派生、不入 config.json。
 /// `#[default] Custom` 让缺 `kind` 字段的旧配置反序列化成 Custom（迁移后不会缺）。
@@ -191,9 +192,6 @@ pub fn load_active_provider() -> Option<ProviderConfig> {
         .get("active_provider")
         .and_then(|v| v.as_str())
         .unwrap_or("__system_default__");
-    if active_id == "__system_default__" {
-        return None;
-    }
     let providers = config.get("providers").and_then(|v| v.as_array())?;
     for p in providers {
         if let Ok(mut pc) = serde_json::from_value::<ProviderConfig>(p.clone()) {
@@ -220,9 +218,270 @@ pub fn load_system_default_mappings() -> ProviderModelMappings {
         .unwrap_or_default()
 }
 
+/// 老配置 provider 顶层 `model` → `model_mappings.anthropic_model` 回填（复用既有逻辑）。
+/// 在 migrate 里对每条迁移后的 provider 跑一遍。
+fn backfill_legacy_model(p: &mut serde_json::Value) {
+    let model = p
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let anthropic = p
+        .get("model_mappings")
+        .and_then(|m| m.get("anthropic_model"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if !model.is_empty() && anthropic.is_empty() {
+        if let Some(obj) = p.get_mut("model_mappings").and_then(|m| m.as_object_mut()) {
+            obj.insert("anthropic_model".to_string(), serde_json::json!(model));
+        }
+    }
+}
+
+/// 按 base_url 匹配预置 kind。空 base_url → SystemDefault。命中预置 → 该 kind。其余 → Custom。
+fn classify_by_base_url(base_url: &str) -> ProviderKind {
+    if base_url.is_empty() {
+        return ProviderKind::SystemDefault;
+    }
+    for kind in [
+        ProviderKind::CpaGpt,
+        ProviderKind::Ollama,
+        ProviderKind::Kimi,
+        ProviderKind::DeepSeek,
+        ProviderKind::SystemDefault,
+    ] {
+        if let Some(preset) = catalog_find(kind) {
+            if preset.base_url.eq_ignore_ascii_case(base_url.trim_end_matches('/')) {
+                return kind;
+            }
+        }
+    }
+    ProviderKind::Custom
+}
+
+/// 检测老 schema 并原地迁移。返回是否改了。idempotent。
+pub fn migrate(config: &mut serde_json::Value) -> bool {
+    let providers_arr = config.get("providers").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let has_legacy_sdm = config.get("system_default_model_mappings").is_some();
+    let all_have_kind = !providers_arr.is_empty()
+        && providers_arr.iter().all(|p| p.get("kind").is_some());
+    if !has_legacy_sdm && all_have_kind {
+        return false; // 已迁移
+    }
+
+    let sdm = config
+        .get("system_default_model_mappings")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    // 合成 SystemDefault 实例（若顶层 sdm 存在 或 哨兵引用它）
+    let mut system_default = serde_json::json!({
+        "id": "__system_default__",
+        "kind": "system_default",
+        "name": "",
+        "icon": "",
+        "base_url": "",
+        "api_key": "",
+        "auth_token": "",
+        "model": "",
+        "model_mappings": sdm,
+        "effort_level": "",
+        "auto_compact_window": "",
+        "autocompact_pct_override": "",
+        "known_models": [],
+    });
+
+    let mut new_providers: Vec<serde_json::Value> = Vec::new();
+
+    for p in &providers_arr {
+        // 已有 kind 的条目原样保留（不应发生在 needs_migration 路径，但稳）
+        if p.get("kind").is_some() {
+            new_providers.push(p.clone());
+            continue;
+        }
+        let base_url = p.get("base_url").and_then(|v| v.as_str()).unwrap_or("");
+        let kind = classify_by_base_url(base_url);
+        match kind {
+            ProviderKind::SystemDefault => {
+                // 合并进 system_default：凭证 / mappings 只在 system_default 空时取
+                merge_into(&mut system_default, p);
+            }
+            ProviderKind::Custom => {
+                let mut q = p.clone();
+                // 补 kind + 确保字段齐全
+                q["kind"] = serde_json::json!("custom");
+                backfill_legacy_model(&mut q);
+                new_providers.push(q);
+            }
+            preset_kind => {
+                let mut q = p.clone();
+                q["kind"] = serde_json::json!(preset_kind);
+                // 丢持久化的 base_url/name/icon（改由 catalog 派生）
+                if let Some(obj) = q.as_object_mut() {
+                    obj.insert("base_url".to_string(), serde_json::json!(""));
+                    obj.insert("name".to_string(), serde_json::json!(""));
+                    obj.insert("icon".to_string(), serde_json::json!(""));
+                }
+                backfill_legacy_model(&mut q);
+                new_providers.push(q);
+            }
+        }
+    }
+
+    // SystemDefault 放首位
+    let mut final_providers = vec![system_default];
+    final_providers.extend(new_providers);
+
+    config["providers"] = serde_json::json!(final_providers);
+    if has_legacy_sdm {
+        config.as_object_mut().map(|o| o.remove("system_default_model_mappings"));
+    }
+    true
+}
+
+/// 把 src 的凭证 / model_mappings 合并进 dst（dst 空才取 src）。
+fn merge_into(dst: &mut serde_json::Value, src: &serde_json::Value) {
+    let dst_obj = match dst.as_object_mut() { Some(o) => o, None => return };
+    let src_obj = match src.as_object() { Some(o) => o, None => return };
+    // 凭证：dst 空才取
+    for key in ["api_key", "auth_token"] {
+        let src_val = src_obj.get(key).and_then(|v| v.as_str()).unwrap_or("");
+        let dst_val = dst_obj.get(key).and_then(|v| v.as_str()).unwrap_or("");
+        if dst_val.is_empty() && !src_val.is_empty() {
+            dst_obj.insert(key.to_string(), serde_json::json!(src_val));
+        }
+    }
+    // model_mappings：逐字段 dst 空才取
+    if let Some(dst_m) = dst_obj.get_mut("model_mappings").and_then(|v| v.as_object_mut()) {
+        if let Some(src_m) = src_obj.get("model_mappings").and_then(|v| v.as_object()) {
+            for (k, v) in src_m {
+                let dst_v = dst_m.get(k).and_then(|x| x.as_str()).unwrap_or("");
+                let src_v = v.as_str().unwrap_or("");
+                if dst_v.is_empty() && !src_v.is_empty() {
+                    dst_m.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
+}
+
+static MIGRATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// I/O 包装：读 config → migrate → 若改了则备份 + 原子写回。idempotent。
+pub fn ensure_migrated() -> Result<(), String> {
+    use crate::commands::config_path;
+    use crate::commands::settings::{load_config, save_config};
+    let _guard = MIGRATE_LOCK.lock().map_err(|e| e.to_string())?;
+    let mut config = load_config();
+    if config.is_null() {
+        config = serde_json::json!({});
+    }
+    if !migrate(&mut config) {
+        return Ok(());
+    }
+    // 备份老 config
+    let path = config_path();
+    if path.exists() {
+        let bak = path.with_extension("json.bak");
+        let _ = std::fs::copy(&path, &bak);
+    }
+    save_config(&config)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn cfg_with_legacy(providers: serde_json::Value, sdm: serde_json::Value) -> serde_json::Value {
+        json!({
+            "active_provider": "__system_default__",
+            "system_default_model_mappings": sdm,
+            "providers": providers,
+        })
+    }
+
+    #[test]
+    fn migrate_idempotent_when_already_new_schema() {
+        let mut c = json!({
+            "active_provider": "__system_default__",
+            "providers": [{"id":"__system_default__","kind":"system_default"}],
+        });
+        assert!(!migrate(&mut c), "already migrated → false");
+    }
+
+    #[test]
+    fn migrate_pure_sentinel_synthesizes_system_default_instance() {
+        let mut c = cfg_with_legacy(json!([]), json!({"anthropic_model":"claude-sonnet-5"}));
+        assert!(migrate(&mut c));
+        let providers = c["providers"].as_array().unwrap();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0]["id"], "__system_default__");
+        assert_eq!(providers[0]["kind"], "system_default");
+        assert_eq!(providers[0]["model_mappings"]["anthropic_model"], "claude-sonnet-5");
+        assert!(c.get("system_default_model_mappings").is_none(), "top-level sdm removed");
+        assert_eq!(c["active_provider"], "__system_default__");
+    }
+
+    #[test]
+    fn migrate_custom_provider_gets_custom_kind_keeps_fields() {
+        let mut c = cfg_with_legacy(
+            json!([{"id":"p1","name":"mygw","icon":"M","base_url":"https://my-gw.example","api_key":"k1","model_mappings":{}}]),
+            json!({}),
+        );
+        assert!(migrate(&mut c));
+        let p1 = &c["providers"].as_array().unwrap()[1]; // [0]=system_default
+        assert_eq!(p1["kind"], "custom");
+        assert_eq!(p1["base_url"], "https://my-gw.example", "custom keeps base_url");
+        assert_eq!(p1["name"], "mygw");
+    }
+
+    #[test]
+    fn migrate_provider_matching_preset_base_url_becomes_preset_kind_strips_identity() {
+        let mut c = cfg_with_legacy(
+            json!([{"id":"p2","name":"whatever","icon":"X","base_url":"http://127.0.0.1:8317","auth_token":"sk-local-cpa","model_mappings":{}}]),
+            json!({}),
+        );
+        assert!(migrate(&mut c));
+        let p2 = &c["providers"].as_array().unwrap()[1];
+        assert_eq!(p2["kind"], "cpa_gpt");
+        assert_eq!(p2["auth_token"], "sk-local-cpa", "credential kept");
+        assert_eq!(p2["base_url"], "", "preset base_url stripped (derived from catalog)");
+        assert_eq!(p2["name"], "", "preset name stripped");
+        assert_eq!(p2["icon"], "", "preset icon stripped");
+    }
+
+    #[test]
+    fn migrate_empty_base_url_provider_merges_into_system_default() {
+        let mut c = cfg_with_legacy(
+            json!([{"id":"p3","base_url":"","api_key":"key-from-empty","model_mappings":{"default_opus_model":"opus-x"}}]),
+            json!({"anthropic_model":"sonnet-y"}),
+        );
+        assert!(migrate(&mut c));
+        let providers = c["providers"].as_array().unwrap();
+        // system_default 合并了 p3 的 api_key；p3 不独立存在
+        assert_eq!(providers.len(), 1, "empty-base_url provider merged, not standalone");
+        assert_eq!(providers[0]["id"], "__system_default__");
+        assert_eq!(providers[0]["kind"], "system_default");
+        assert_eq!(providers[0]["api_key"], "key-from-empty");
+        // model_mappings：顶层 sdm 的 anthropic_model 保留，p3 的 default_opus_model 补进来
+        assert_eq!(providers[0]["model_mappings"]["anthropic_model"], "sonnet-y");
+        assert_eq!(providers[0]["model_mappings"]["default_opus_model"], "opus-x");
+    }
+
+    #[test]
+    fn migrate_legacy_top_level_model_field_backfilled_via_migrate_provider_model() {
+        // 旧 provider 有顶层 model（非 model_mappings.anthropic_model），迁移时回填
+        let mut c = cfg_with_legacy(
+            json!([{"id":"p4","base_url":"https://gw.example","model":"claude-sonnet-4","model_mappings":{}}]),
+            json!({}),
+        );
+        assert!(migrate(&mut c));
+        let p4 = &c["providers"].as_array().unwrap()[1];
+        assert_eq!(p4["kind"], "custom");
+        assert_eq!(p4["model_mappings"]["anthropic_model"], "claude-sonnet-4", "legacy top-level model backfilled");
+    }
 
     fn provider_with(model: String, anthropic: String) -> ProviderConfig {
         ProviderConfig {

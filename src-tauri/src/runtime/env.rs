@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use crate::runtime::provider::{
-    ProviderConfig, ProviderModelMappings, mappings_to_env, provider_to_env_vars,
+    ProviderConfig, ProviderKind, ProviderModelMappings, mappings_to_env, provider_to_env_vars,
 };
 
 /// 组 spawn env：active provider 直映，或 system_default_mappings 注入；
@@ -22,15 +22,16 @@ pub fn build_runtime_env_vars(
         mappings_to_env(system_default_mappings)
     };
 
-    let fallback_keys: &[&str] = if active.is_some() {
+    let active_kind = active.map(|p| p.kind).unwrap_or(ProviderKind::SystemDefault);
+    let fallback_keys: &[&str] = if active_kind == ProviderKind::SystemDefault {
         &[
+            "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL",
             "CLAUDE_CONFIG_DIR",
             "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
             "ALL_PROXY", "all_proxy",
         ]
     } else {
         &[
-            "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL",
             "CLAUDE_CONFIG_DIR",
             "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
             "ALL_PROXY", "all_proxy",
@@ -79,6 +80,23 @@ mod tests {
         let env = build_runtime_env_vars(None, &ProviderModelMappings::default(), "http://127.0.0.1:7890");
         assert_eq!(env.get("HTTP_PROXY"), Some(&"http://127.0.0.1:7890".to_string()));
         assert_eq!(env.get("https_proxy"), Some(&"http://127.0.0.1:7890".to_string()));
+    }
+
+    #[test]
+    fn system_default_kind_uses_large_fallback_set() {
+        // 迁移后 SystemDefault 是真实实例，active.is_some()=true 但 kind=SystemDefault
+        // 必须仍走大 fallback 集（含 ANTHROPIC_*），保住系统 env 认证兜底。
+        // 本测试验证该路径不 panic；具体 env 变量取决于进程环境，不在单元中断言。
+        let p = ProviderConfig {
+            id: "__system_default__".into(),
+            kind: crate::runtime::provider::ProviderKind::SystemDefault,
+            name: "".into(), icon: "".into(), base_url: "".into(),
+            api_key: "".into(), auth_token: "".into(), model: String::new(),
+            model_mappings: ProviderModelMappings::default(),
+            effort_level: "".into(), auto_compact_window: "".into(),
+            autocompact_pct_override: "".into(), known_models: vec![],
+        };
+        let _ = build_runtime_env_vars(Some(&p), &ProviderModelMappings::default(), "");
     }
 
     #[test]

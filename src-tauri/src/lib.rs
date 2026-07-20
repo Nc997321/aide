@@ -127,6 +127,11 @@ pub fn run() {
                 }
             }
 
+            // 迁移老 provider schema（idempotent）——必须在 spawn_runtime 取 env 之前
+            if let Err(e) = crate::runtime::provider::ensure_migrated() {
+                tracing::error!("provider schema migration failed: {e}（继续用旧配置）");
+            }
+
             // 启动持久 Agent Runtime（single persistent process，所有会话共享）
             // tokio::process::Command 需要 reactor——必须跑在 Tokio runtime 上，
             // setup 闭包是同步的，不能直接调 spawn_runtime。
