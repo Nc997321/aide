@@ -1,11 +1,30 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+/**
+ * ProviderSettings —— 供应商设置面板（kind-aware 重构，Task 9）。
+ *
+ * 设计要点：
+ * - 单一 `form` state（深拷贝 selectedProvider），去掉旧 systemDefaultMappings / custom 双套。
+ * - SystemDefault 现在是 kind=system_default 的正常 preset 条目，不再走特殊分支。
+ * - isPreset = kind !== "custom" → name/icon/baseUrl 只读；Custom 全可编辑。
+ * - authMode = presetForKind(kind)?.auth_mode → 预置只显示对应凭证框；Custom 两个都显示。
+ * - handleSave 统一走 updateProvider（含 SystemDefault），落盘出口从旧 saveSystemDefaultMappings
+ *   改为 updateProvider(__system_default__, …)；组装字段与改前逐字段一致（见 task-9-report）。
+ * - 底部挂 ProviderActions 按 kind dispatch（Custom 自动不渲染）。
+ * - "+ 添加" 打开 ProviderCatalogPicker，preset 卡片 + Custom 入口。
+ */
+import { ref, computed, watch, onMounted } from "vue";
 import { useProviders } from "../composables/useProviders";
-import ThemedSelect from "./ThemedSelect.vue";
+import { useProviderCatalog } from "../composables/useProviderCatalog";
+import { useToast } from "../composables/useToast";
+import { useModal } from "../composables/useModal";
+import ProviderActions from "./provider/ProviderActions.vue";
+import ProviderCatalogPicker from "./provider/ProviderCatalogPicker.vue";
 import IconOrChar from "./IconOrChar.vue";
 import Icon from "./Icon.vue";
+import AToast from "../ui/AToast.vue";
+import ThemedSelect from "./ThemedSelect.vue";
 import { PROVIDER_GLYPHS } from "@/utils/icons";
-import type { ProviderConfig, ProviderModelMappings } from "../types";
+import type { ProviderConfig, ProviderKind, ProviderModelMappings } from "../types";
 
 const effortOptions = [
   { value: "", label: "默认" },
@@ -16,163 +35,150 @@ const effortOptions = [
 ];
 
 const {
-  allProviders,
-  activeProviderId,
   displayList,
-  setActiveProvider,
-  addProvider,
+  activeProviderId,
+  load,
   updateProvider,
   deleteProvider,
-  saveSystemDefaultMappings,
-  refreshSystemDefaultModels,
-  refreshing,
-  systemDefaultMappings,
+  setActiveProvider,
+  addPresetProvider,
+  addCustomProvider,
   SYSTEM_DEFAULT_ID,
 } = useProviders();
+const { presetForKind, loadCatalog } = useProviderCatalog();
+const { toastState, showToast } = useToast();
+const modal = useModal();
 
-const selectedId = ref<string | null>(null);
-// 是否在编辑系统默认——系统默认只配模型变量 5 字段，认证走系统 env 兜底，
-// 故表单隐藏 name/icon/baseUrl/apiKey/authToken/模型列表/Effort。
-const isSystemDefault = ref(false);
+const selectedId = ref<string>(SYSTEM_DEFAULT_ID);
+const showPicker = ref(false);
 
-const form = ref({
-  name: "",
-  icon: "",
-  baseUrl: "",
-  apiKey: "",
-  authToken: "",
-  anthropicModel: "",
-  defaultOpusModel: "",
-  defaultSonnetModel: "",
-  defaultHaikuModel: "",
-  subagent: "",
-  effortLevel: "",
-  autoCompactWindow: "",
-  autocompactPctOverride: "",
-  knownModels: [] as string[],
+const selectedProvider = computed<ProviderConfig | undefined>(() =>
+  displayList.value.find((p) => p.id === selectedId.value),
+);
+
+const isPreset = computed(() => selectedProvider.value?.kind !== "custom");
+const isSystemDefault = computed(() => selectedProvider.value?.kind === "system_default");
+const preset = computed(() =>
+  selectedProvider.value ? presetForKind(selectedProvider.value.kind) : undefined,
+);
+// undefined for Custom → 模板里两个凭证框都显示；预置按 auth_mode 只显示一个
+const authMode = computed(() => preset.value?.auth_mode);
+
+// 编辑态：深拷贝 selectedProvider，避免直接改 store。
+// modelMappings / knownModels 单独浅拷贝，防止编辑时 mutate store 引用。
+const form = ref<ProviderConfig | null>(null);
+watch(
+  selectedProvider,
+  (p) => {
+    form.value = p
+      ? {
+          ...p,
+          modelMappings: { ...p.modelMappings },
+          knownModels: [...p.knownModels],
+        }
+      : null;
+    showApiKey.value = false;
+    showAuthToken.value = false;
+  },
+  { immediate: true },
+);
+
+onMounted(() => {
+  void load();
+  void loadCatalog();
 });
 
-const showApiKey = ref(false);
-const showAuthToken = ref(false);
-const newModelTag = ref("");
-
-function loadForm(p: ProviderConfig) {
-  // anthropicModel 兼容旧配置：权威源是 modelMappings.anthropicModel，旧配置只有
-  // 顶层 model（Rust 端 migrate_provider_model 已迁移，这里 || p.model 兜底）
-  form.value = {
-    name: p.name,
-    icon: p.icon,
-    baseUrl: p.baseUrl,
-    apiKey: p.apiKey,
-    authToken: p.authToken,
-    anthropicModel: p.modelMappings.anthropicModel || p.model,
-    defaultOpusModel: p.modelMappings.defaultOpusModel,
-    defaultSonnetModel: p.modelMappings.defaultSonnetModel,
-    defaultHaikuModel: p.modelMappings.defaultHaikuModel,
-    subagent: p.modelMappings.subagent,
-    effortLevel: p.effortLevel,
-    autoCompactWindow: p.autoCompactWindow,
-    autocompactPctOverride: p.autocompactPctOverride,
-    knownModels: [...p.knownModels],
-  };
-  showApiKey.value = false;
-  showAuthToken.value = false;
-}
-
 function selectProvider(id: string) {
-  if (id === SYSTEM_DEFAULT_ID) {
-    // 系统默认：精简表单，只载入模型变量 5 字段
-    selectedId.value = SYSTEM_DEFAULT_ID;
-    isSystemDefault.value = true;
-    const m = systemDefaultMappings.value;
-    form.value = {
-      name: "", icon: "", baseUrl: "", apiKey: "", authToken: "",
-      anthropicModel: m.anthropicModel,
-      defaultOpusModel: m.defaultOpusModel,
-      defaultSonnetModel: m.defaultSonnetModel,
-      defaultHaikuModel: m.defaultHaikuModel,
-      subagent: m.subagent,
-      effortLevel: "",
-      autoCompactWindow: "",
-      autocompactPctOverride: "",
-      knownModels: [],
-    };
-    return;
-  }
   selectedId.value = id;
-  isSystemDefault.value = false;
-  const p = allProviders.value.find((x) => x.id === id);
-  if (p) loadForm(p);
-}
-
-async function handleAdd() {
-  const p = await addProvider();
-  selectedId.value = p.id;
-  loadForm(p);
-}
-
-async function handleSave() {
-  if (!selectedId.value) return;
-  const mappings: ProviderModelMappings = {
-    anthropicModel: form.value.anthropicModel,
-    defaultOpusModel: form.value.defaultOpusModel,
-    defaultSonnetModel: form.value.defaultSonnetModel,
-    defaultHaikuModel: form.value.defaultHaikuModel,
-    subagent: form.value.subagent,
-  };
-  if (isSystemDefault.value) {
-    await saveSystemDefaultMappings(mappings);
-    return;
-  }
-  await updateProvider(selectedId.value, {
-    name: form.value.name,
-    icon: form.value.icon,
-    baseUrl: form.value.baseUrl,
-    apiKey: form.value.apiKey,
-    authToken: form.value.authToken,
-    // model 顶层字段已废弃（权威源在 modelMappings.anthropicModel），这里同步写入
-    // 仅为兼容侧栏 pi-model 显示，Rust 端不再读它
-    model: form.value.anthropicModel,
-    modelMappings: mappings,
-    effortLevel: form.value.effortLevel,
-    // 这两个 input 是 type="number"，Vue 3 的 vModelText 对 type==="number" 会自动
-    // looseToNumber 成 JS number（即使没加 .number 修饰符）。Rust 侧字段是 String，
-    // 传数字会让 set_providers 整个反序列化失败、保存静默丢失——这里强制转字符串。
-    autoCompactWindow: String(form.value.autoCompactWindow ?? ""),
-    autocompactPctOverride: String(form.value.autocompactPctOverride ?? ""),
-    knownModels: form.value.knownModels,
-  });
-}
-
-async function handleDelete() {
-  if (!selectedId.value) return;
-  const id = selectedId.value;
-  selectedId.value = null;
-  await deleteProvider(id);
 }
 
 async function handleActivate(id: string) {
   await setActiveProvider(id);
+  showToast("已切换供应商", "success");
 }
 
+async function handleAdd() {
+  showPicker.value = true;
+}
+
+async function onPickerSelect(kind: ProviderKind) {
+  showPicker.value = false;
+  try {
+    const p = await addPresetProvider(kind);
+    selectedId.value = p.id;
+    showToast("已添加：" + p.name, "success");
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast("添加失败：" + msg, "danger");
+  }
+}
+
+async function onPickerCustom() {
+  showPicker.value = false;
+  try {
+    const p = await addCustomProvider();
+    selectedId.value = p.id;
+    showToast("已添加自定义供应商", "success");
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast("添加失败：" + msg, "danger");
+  }
+}
+
+async function handleSave() {
+  if (!form.value) return;
+  const f = form.value;
+  const mappings: ProviderModelMappings = { ...f.modelMappings };
+  // type="number" input 在 Vue 3 v-model 下会被 looseToNumber 成 JS number；
+  // Rust 侧字段是 String，传数字会让 setProviders 反序列化失败、保存静默丢失——
+  // 这里强制转字符串（保留改前行为）。
+  await updateProvider(f.id, {
+    name: f.name,
+    icon: f.icon,
+    baseUrl: f.baseUrl,
+    apiKey: f.apiKey,
+    authToken: f.authToken,
+    modelMappings: mappings,
+    effortLevel: f.effortLevel,
+    autoCompactWindow: String(f.autoCompactWindow ?? ""),
+    autocompactPctOverride: String(f.autocompactPctOverride ?? ""),
+    knownModels: [...f.knownModels],
+  });
+  showToast("已保存", "success");
+}
+
+async function handleDelete() {
+  if (!selectedProvider.value || isSystemDefault.value) return;
+  const ok = await modal.confirm(
+    "删除供应商",
+    `确定删除「${selectedProvider.value.name}」？`,
+    "删除",
+    true,
+  );
+  if (!ok) return;
+  await deleteProvider(selectedProvider.value.id);
+  selectedId.value = SYSTEM_DEFAULT_ID;
+  showToast("已删除", "info");
+}
+
+// ── known_models 标签管理（保留现有逻辑，改成不可变更新以配合 watch 深拷贝）──
+const newModelTag = ref("");
 function addModelTag() {
+  if (!form.value) return;
   const tag = newModelTag.value.trim();
   if (tag && !form.value.knownModels.includes(tag)) {
-    form.value.knownModels.push(tag);
+    form.value.knownModels = [...form.value.knownModels, tag];
   }
   newModelTag.value = "";
 }
-
 function removeModelTag(idx: number) {
-  form.value.knownModels.splice(idx, 1);
+  if (!form.value) return;
+  form.value.knownModels = form.value.knownModels.filter((_, i) => i !== idx);
 }
 
-// Known models from selected provider for datalist
-function knownModelsForDatalist(): string[] {
-  if (!selectedId.value) return [];
-  const p = allProviders.value.find((x) => x.id === selectedId.value);
-  return p?.knownModels ?? [];
-}
+// 凭据框显隐切换
+const showApiKey = ref(false);
+const showAuthToken = ref(false);
 </script>
 
 <template>
@@ -183,16 +189,15 @@ function knownModelsForDatalist(): string[] {
         v-for="p in displayList"
         :key="p.id"
         class="provider-item"
-        :class="{
-          active: selectedId === p.id,
-          'is-default': p.id === SYSTEM_DEFAULT_ID,
-        }"
+        :class="{ active: selectedId === p.id }"
         @click="selectProvider(p.id)"
       >
         <span class="pi-icon"><IconOrChar :text="p.icon" :size="16" /></span>
         <div class="pi-info">
-          <div class="pi-name">{{ p.name }}</div>
-          <div v-if="p.model" class="pi-model">{{ p.model }}</div>
+          <div class="pi-name">{{ p.name || "(未命名)" }}</div>
+          <div v-if="p.modelMappings.anthropicModel || p.model" class="pi-model">
+            {{ p.modelMappings.anthropicModel || p.model }}
+          </div>
         </div>
         <span
           v-if="activeProviderId === p.id"
@@ -202,7 +207,7 @@ function knownModelsForDatalist(): string[] {
           ✓
         </span>
         <button
-          v-if="p.id !== SYSTEM_DEFAULT_ID && activeProviderId !== p.id"
+          v-else
           class="pi-activate"
           v-tooltip="'设为激活'"
           @click.stop="handleActivate(p.id)"
@@ -215,19 +220,27 @@ function knownModelsForDatalist(): string[] {
     </div>
 
     <!-- Right: edit form -->
-    <div v-if="selectedId" class="provider-form">
+    <div v-if="form" class="provider-form">
       <div class="form-scroll">
-        <!-- 系统默认提示：系统默认认证走系统 env 兜底，不可配连接参数 -->
+        <!-- SystemDefault 提示：认证走系统 env 兜底，仅配置模型变量与凭据 -->
         <div v-if="isSystemDefault" class="sys-default-hint">
-          系统默认供应商：认证（API Key / Base URL 等）走系统环境变量兜底，此处仅配置模型变量。
+          系统默认供应商：认证（API Key / Base URL 等）走系统环境变量兜底，此处可配置模型变量与凭据覆盖。
         </div>
 
-        <div v-if="!isSystemDefault" class="form-field">
+        <!-- 名称：预置只读，Custom 可编辑 -->
+        <div class="form-field">
           <label>名称</label>
-          <input v-model="form.name" class="text-input" placeholder="如 DeepSeek" />
+          <input
+            v-if="!isPreset"
+            v-model="form.name"
+            class="text-input"
+            placeholder="如 DeepSeek"
+          />
+          <div v-else class="readonly-name">{{ form.name }}</div>
         </div>
 
-        <div v-if="!isSystemDefault" class="form-field">
+        <!-- 图标选择器：仅 Custom 可编辑（预置 kind 由 catalog 锁定 icon） -->
+        <div v-if="!isPreset" class="form-field">
           <label>图标</label>
           <div class="icon-picker">
             <button
@@ -244,17 +257,25 @@ function knownModelsForDatalist(): string[] {
           </div>
         </div>
 
-        <div v-if="!isSystemDefault" class="form-field">
+        <!-- Base URL：预置只读，Custom 可编辑 -->
+        <div class="form-field">
           <label>Base URL</label>
           <input
+            v-if="!isPreset"
             v-model="form.baseUrl"
             class="text-input"
             placeholder="https://api.example.com/anthropic"
           />
-          <span class="form-hint">第三方 Anthropic 兼容端点（GLM/DeepSeek/聚合站等）填这里；同时建议在下方填 Auth Token 而非 API Key</span>
+          <div v-else class="readonly-name">
+            {{ form.baseUrl || "(Anthropic 官方端点)" }}
+          </div>
+          <span v-if="!isPreset" class="form-hint">
+            第三方 Anthropic 兼容端点（GLM/DeepSeek/聚合站等）填这里；同时建议在下方填 Auth Token 而非 API Key
+          </span>
         </div>
 
-        <div v-if="!isSystemDefault" class="form-field">
+        <!-- 凭据区：按 auth_mode 渲染。预置只显示一个；Custom（isPreset=false）两个都显示 -->
+        <div v-if="authMode === 'api_key' || !isPreset" class="form-field">
           <label>API Key</label>
           <div class="secret-row">
             <input
@@ -267,10 +288,12 @@ function knownModelsForDatalist(): string[] {
               {{ showApiKey ? "🙈" : "👁" }}
             </button>
           </div>
-          <span class="form-hint">对应 <code>x-api-key</code> 头。Anthropic 官方端点用这个；多数第三方端点用下方 Auth Token</span>
+          <span class="form-hint">
+            对应 <code>x-api-key</code> 头。Anthropic 官方端点用这个；多数第三方端点用下方 Auth Token
+          </span>
         </div>
 
-        <div v-if="!isSystemDefault" class="form-field">
+        <div v-if="authMode === 'auth_token' || !isPreset" class="form-field">
           <label>Auth Token</label>
           <div class="secret-row">
             <input
@@ -283,10 +306,12 @@ function knownModelsForDatalist(): string[] {
               {{ showAuthToken ? "🙈" : "👁" }}
             </button>
           </div>
-          <span class="form-hint">对应 <code>Authorization: Bearer</code> 头。GLM/OpenAI 兼容等第三方端点通常填这里；与 API Key 二选一，同时填会以本字段为准</span>
+          <span class="form-hint">
+            对应 <code>Authorization: Bearer</code> 头。GLM/OpenAI 兼容等第三方端点通常填这里；与 API Key 二选一，同时填会以本字段为准
+          </span>
         </div>
 
-        <!-- 模型变量：5 个 Claude env 变量统一块。自定义 provider 和系统默认都显示。 -->
+        <!-- 模型变量：5 个 Claude env 变量统一块。所有 provider 都可编辑。 -->
         <div class="form-section">
           <label>模型变量</label>
           <span class="form-hint">Claude 专属模型 env 变量，换 provider 时整块重写</span>
@@ -294,9 +319,8 @@ function knownModelsForDatalist(): string[] {
           <div class="form-field model-var-field">
             <label>默认模型</label>
             <input
-              v-model="form.anthropicModel"
+              v-model="form.modelMappings.anthropicModel"
               class="text-input"
-              :readonly="isSystemDefault"
               list="known-models-list"
               placeholder="留空用 provider 默认"
             />
@@ -305,9 +329,8 @@ function knownModelsForDatalist(): string[] {
           <div class="form-field model-var-field">
             <label>Opus 别名映射</label>
             <input
-              v-model="form.defaultOpusModel"
+              v-model="form.modelMappings.defaultOpusModel"
               class="text-input"
-              :readonly="isSystemDefault"
               placeholder="留空不映射"
             />
           </div>
@@ -315,9 +338,8 @@ function knownModelsForDatalist(): string[] {
           <div class="form-field model-var-field">
             <label>Sonnet 别名映射</label>
             <input
-              v-model="form.defaultSonnetModel"
+              v-model="form.modelMappings.defaultSonnetModel"
               class="text-input"
-              :readonly="isSystemDefault"
               placeholder="留空不映射"
             />
             <span class="form-hint">子代理模型填 sonnet 别名时，用它解析成具体模型 id</span>
@@ -326,9 +348,8 @@ function knownModelsForDatalist(): string[] {
           <div class="form-field model-var-field">
             <label>Haiku 别名映射</label>
             <input
-              v-model="form.defaultHaikuModel"
+              v-model="form.modelMappings.defaultHaikuModel"
               class="text-input"
-              :readonly="isSystemDefault"
               placeholder="留空不映射"
             />
             <span class="form-hint">子代理模型填 haiku 别名时，用它解析成具体模型 id</span>
@@ -337,9 +358,8 @@ function knownModelsForDatalist(): string[] {
           <div class="form-field model-var-field">
             <label>子代理模型</label>
             <input
-              v-model="form.subagent"
+              v-model="form.modelMappings.subagent"
               class="text-input"
-              :readonly="isSystemDefault"
               list="known-models-list"
               placeholder="留空跟随主模型"
             />
@@ -349,14 +369,20 @@ function knownModelsForDatalist(): string[] {
           </div>
         </div>
 
-        <div v-if="!isSystemDefault" class="form-field">
+        <!-- Effort Level：所有 provider 都显示（SystemDefault 现为正常 preset） -->
+        <div class="form-field">
           <label>Effort Level</label>
-          <ThemedSelect v-model="form.effortLevel" :options="effortOptions" block />
+          <ThemedSelect
+            :model-value="form.effortLevel"
+            :options="effortOptions"
+            block
+            @update:model-value="form.effortLevel = $event"
+          />
         </div>
 
         <!-- 自动压缩：CLAUDE_CODE_AUTO_COMPACT_WINDOW + CLAUDE_AUTOCOMPACT_PCT_OVERRIDE。
-             空字段不注入 env，CLI 走自带默认。仅自定义 provider 显示（与 Effort Level 一致）。 -->
-        <div v-if="!isSystemDefault" class="form-section">
+             空字段不注入 env，CLI 走自带默认。 -->
+        <div class="form-section">
           <label>自动压缩</label>
           <span class="form-hint">Claude Code CLI auto-compact 阈值调优，留空走 CLI 默认</span>
 
@@ -387,7 +413,7 @@ function knownModelsForDatalist(): string[] {
         </div>
 
         <!-- 模型列表：会话面板模型下拉的数据源（真实模型 id，不做别名映射） -->
-        <div v-if="!isSystemDefault" class="form-section">
+        <div class="form-section">
           <label>模型列表</label>
           <span class="form-hint">会话面板的模型下拉从这里取，填该供应商的真实模型 id</span>
           <div class="tags-area">
@@ -407,22 +433,19 @@ function knownModelsForDatalist(): string[] {
             />
           </div>
         </div>
+
+        <!-- 专属操作区：按 kind dispatch（Custom 不渲染） -->
+        <ProviderActions v-if="selectedProvider" :provider="selectedProvider" />
       </div>
 
       <!-- Action buttons -->
       <div class="form-actions">
-        <button v-if="!isSystemDefault" class="btn-delete" @click="handleDelete">删除</button>
-        <button v-if="!isSystemDefault" class="btn-save" @click="handleSave">保存</button>
-        <button
-          v-if="isSystemDefault"
-          class="btn-refresh"
-          :disabled="refreshing"
-          @click="refreshSystemDefaultModels"
-        >
-          {{ refreshing ? "刷新中..." : "手动刷新" }}
+        <button v-if="!isSystemDefault" class="btn-delete" @click="handleDelete">
+          删除
         </button>
+        <button class="btn-save" @click="handleSave">保存</button>
       </div>
-      <div v-if="!isSystemDefault" class="respawn-hint">
+      <div class="respawn-hint">
         修改连接身份（Base URL / API Key / Auth Token）或模型变量后，正在运行的会话不会自动应用——需停止该会话后重新发送才会用上新配置。
       </div>
     </div>
@@ -433,11 +456,27 @@ function knownModelsForDatalist(): string[] {
       <div class="empty-text">选择一个供应商进行编辑</div>
       <div class="empty-hint">或点击"+ 添加供应商"创建新的</div>
     </div>
+
+    <!-- Toast 锚定在 .provider-settings（position: relative） -->
+    <AToast :state="toastState" />
   </div>
+
+  <ProviderCatalogPicker
+    v-if="showPicker"
+    @select="onPickerSelect"
+    @select-custom="onPickerCustom"
+    @cancel="showPicker = false"
+  />
+
+  <!-- 已知模型 datalist（子代理/默认模型输入的 autocomplete 源） -->
+  <datalist id="known-models-list">
+    <option v-for="m in form?.knownModels ?? []" :key="m" :value="m" />
+  </datalist>
 </template>
 
 <style scoped>
 .provider-settings {
+  position: relative; /* AToast 锚定 */
   display: flex;
   height: 100%;
   gap: 0;
@@ -612,6 +651,14 @@ select.text-input {
   cursor: pointer;
 }
 
+/* 预置只读字段：平铺非输入框外观 */
+.readonly-name {
+  font-size: 13px;
+  color: var(--aide-text-primary);
+  padding: 6px 0;
+  word-break: break-all;
+}
+
 /* 图标选择器：6 个铜线字形候选，选中即设为 provider icon key。
  * 存量 emoji icon 仍由 IconOrChar 在列表里原样渲染，用户选一个字形即替换。 */
 .icon-picker {
@@ -619,6 +666,7 @@ select.text-input {
   flex-wrap: wrap;
   gap: 6px;
 }
+
 .icon-picker-opt {
   display: inline-flex;
   align-items: center;
@@ -632,10 +680,12 @@ select.text-input {
   cursor: pointer;
   transition: border-color 0.12s, color 0.12s, background 0.12s;
 }
+
 .icon-picker-opt:hover {
   border-color: var(--aide-accent);
   color: var(--aide-accent);
 }
+
 .icon-picker-opt--active {
   border-color: var(--aide-accent);
   background: var(--aide-accent-subtle);
@@ -686,6 +736,7 @@ select.text-input {
 .model-var-field {
   margin-top: 10px;
 }
+
 .model-var-field:first-of-type {
   margin-top: 4px;
 }
@@ -792,25 +843,6 @@ select.text-input {
 
 .btn-save:hover {
   filter: brightness(1.1);
-}
-
-.btn-refresh {
-  background: color-mix(in srgb, var(--aide-accent) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--aide-accent) 40%, transparent);
-  color: var(--aide-accent);
-  padding: 6px 16px;
-  border-radius: var(--aide-radius-sm);
-  cursor: pointer;
-  font-size: 12px;
-  font-family: inherit;
-  transition: all 0.12s;
-}
-.btn-refresh:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.btn-refresh:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--aide-accent) 22%, transparent);
 }
 
 /* 编辑后需 respawn 才生效的提示 */
