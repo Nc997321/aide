@@ -446,6 +446,42 @@ async function maybePromptJdk(wsKey: string): Promise<void> {
   }
 }
 
+/** 启动时检测：用户系统有 ~/.claude/ 且尚未迁移 → 弹一次性迁移引导。
+ *  让 Aide 不再依赖系统 Claude CLI，同时把现有配置/历史会话拷到自管理目录。
+ *  参照 maybePromptJdk 的「检测条件 → choice 三选」模式。 */
+async function maybePromptMigration(): Promise<void> {
+  let status;
+  try {
+    status = await api.checkClaudeMigration();
+  } catch {
+    return;
+  }
+  if (!status.legacyExists || status.done || status.dismissed || !status.hasMigratable) return;
+  const result = await choice(
+    "检测到现有 Claude 配置",
+    "发现你已有 ~/.claude/ 配置（MCP 服务器、skills、agents、会话记录等）。"
+      + "是否迁移到 Aide 自管理目录，让 Aide 不再依赖系统 Claude CLI？"
+      + "原 ~/.claude/ 保留不动，可继续与 CLI 并用。",
+    { confirmLabel: "迁移", altLabel: "不再提示" },
+  );
+  if (result === "cancel") return;            // 关闭 = 以后再问（下次启动再弹）
+  if (result === "alt") {
+    await api.dismissClaudeMigration();
+    return;
+  }
+  // confirm → 执行迁移（重 IO，Rust 侧 spawn_blocking）
+  try {
+    const s = await api.migrateClaudeData();
+    await notice(
+      "迁移完成",
+      `已从 ~/.claude/ 迁移到 Aide 自管理目录：拷贝 ${s.copiedCount} 项，跳过 ${s.skippedCount} 项（已存在的保留不动）。原 ~/.claude/ 未改动。`,
+      "知道了",
+    );
+  } catch (e) {
+    await notice("迁移失败", `迁移过程中出错：${e}`, "知道了");
+  }
+}
+
 function handleKeydown(e: KeyboardEvent) {
   // ── App-level shortcuts (fire regardless of focus, including inside xterm.js) ──
 
@@ -568,6 +604,7 @@ onMounted(async () => {
       projectName.value = info.name;
       await loadRunConfigs(info.root, info.root);
       void maybePromptJdk(info.root);
+      void maybePromptMigration();
       void paneLayoutPersistence.restoreAtStartup();
     }
   } catch (_) { /* best effort */ }

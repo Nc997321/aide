@@ -30,6 +30,14 @@ fn init_logging() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 数据目录改名（~/.claude-code-desktop/ → ~/.aide/，原子 rename）必须在
+    // init_logging / load_workspace_config 之前——它们都会触碰 ~/.aide/（建 log/、读
+    // config.json），先 rename 才不会把 ~/.aide/ 提前建出来导致老数据卡住迁不过来。
+    // 失败（杀软锁等）用 eprintln（此时 tracing 还没 init），下次启动重试。
+    if let Err(e) = crate::commands::migration::ensure_aide_data_dir_migrated() {
+        eprintln!("[aide] aide data dir migration failed: {e}");
+    }
+
     init_logging();
 
     // Log panics before the crash dialog appears
@@ -340,6 +348,10 @@ pub fn run() {
             // 通知中心持久化
             commands::notifications::load_notifications,
             commands::notifications::save_notifications,
+            // 一次性迁移：从用户系统 ~/.claude/ 拷到 Aide 自管理目录
+            commands::migration::check_claude_migration,
+            commands::migration::migrate_claude_data,
+            commands::migration::dismiss_claude_migration,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

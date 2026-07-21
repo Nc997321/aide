@@ -67,36 +67,44 @@ Agent Runtime (agent-sidecar/)
 1. 点"新建会话"：前端只清空 `activeSessionId`，打开空白可输入面板。**不调用任何 Tauri 命令，不落盘，不进侧栏。**
 2. 用户发送第一条消息：若当前无 session id，`useChatSession.ts` 现场生成一个纯内存临时 key（`crypto.randomUUID()`，记入 `pendingSids`），建本地 store 并调 `send_message`——这一步同样不落盘，只是 Rust `AgentRuntimeManager` 指纹注册表和前端 `stores`/`sessionState` 的运行时 key。
 3. Runtime 首个 `session_init` 事件携带 `sdk_session_id` → 前端 `finalizeSession`：原地搬迁 `stores`/`sessionState`（写 `aliasMap` 兜住 Runtime 内 re-key 完成前仍带旧 key 的在途事件）→ 从 `pendingSids` 移除 → 触发 `onSessionCreated` 回调。**re-key 在 Runtime 进程内部 SessionManager 内存里原子完成**（worker 的 Map key 从 tempId 迁到 SDK realId），前端不再 invoke 任何 rename 命令（旧 `rename_sidecar_session` 已删除）。
-4. App.vue 的 `onSessionCreated(tempId, realId)`：**这时才第一次落盘**——`create_session(realId, name)` 写 `~/.claude-code-desktop/sessions/<id>.json` 名字元数据、`sidebarRef.addSession(...)` 加侧栏、`recordCurrentSession` 记最近访问。
+4. App.vue 的 `onSessionCreated(tempId, realId)`：**这时才第一次落盘**——`create_session(realId, name)` 写 `~/.aide/sessions/<id>.json` 名字元数据、`sidebarRef.addSession(...)` 加侧栏、`recordCurrentSession` 记最近访问。
 
 此后 aide ID 永远等于 SDK session ID，不再改名。**续接**：`sendMessage` 的 resume 直接用 `sid` 本身（`isPendingSession(sid) ? undefined : sid`，无需任何映射表；重启后点开历史会话同样直接传自身 ID；SDK `forkSession` 默认 false，resume 延续同一 session ID）。若发消息后从未等到 `session_init`（进程崩溃、网络失败等），全程没有写盘、没有侧栏条目、没有最近访问记录——失败的尝试不留痕迹。
 
 ## 会话系统 — 适配 Claude Code 存储
 
+Aide 把 `CLAUDE_CONFIG_DIR` 显式注入 sidecar 指向 `~/.aide/claude/`（见 `runtime/mod.rs` 的 `spawn_runtime`），使内置 claude.exe 把所有自有数据写到 Aide 自管理目录下的 `claude/` 子目录，而非回退到用户系统的 `~/.claude/`——Aide 不依赖系统是否装了 Claude CLI。`claude_home()`（`commands/mod.rs`）即返回此目录，所有 Claude 路径（settings/CLAUDE.md/agents/skills/projects/sessions/plugins）从它派生。
+
 ```
-~/.claude/
-├── sessions/<pid>.json          {pid, sessionId, cwd, name, startedAt, kind}
+~/.aide/claude/                       ← claude_home() / CLAUDE_CONFIG_DIR
+├── sessions/<pid>.json              {pid, sessionId, cwd, name, startedAt, kind}  (claude.exe 写)
 └── projects/<encoded-cwd>/
-    └── <sessionId>.jsonl        每行 JSON event (type: user/assistant/system/...)
+    └── <sessionId>.jsonl             每行 JSON event (type: user/assistant/system/...)  (claude.exe 写)
 ```
 
 路径编码: `C:\path\to\project` → `C--path-to-project`（`:` 和 `\` → `-`）
 
-Aide 自己的元数据: `~/.claude-code-desktop/sessions/<sessionId>.json` — 只存 displayName。
+Aide 自己的元数据: `~/.aide/sessions/<sessionId>.json` — 只存 displayName（与上面 claude.exe 的 `claude/sessions/` 分目录、schema 不同，按所有权分离）。
+
+### 一次性迁移
+
+升级到 `~/.aide/` 的现有用户有两类数据要搬（`commands/migration.rs`）：
+- **Aide 数据目录改名**（启动时自动，`ensure_aide_data_dir_migrated`）：老根 `~/.claude-code-desktop/` 原子 rename 到 `~/.aide/`，在 `run()` 最开头、`init_logging` 之前执行。
+- **Claude CLI 数据迁移**（用户弹窗触发，`migrate_claude_data`）：把用户系统 `~/.claude/` 拷到 `~/.aide/claude/`，拷贝不移动、只补缺失项不覆盖已有（幂等 + 解决「迁移前先开了会话」的边界）。状态记在 `~/.aide/config.json` 顶层 `claudeMigrationDone`/`claudeMigrationDismissed`。
 
 ## 工作区系统
 
 `WorkspaceState` 存两个字段：
-- `key`：encoded 目录名（如 `C--document-owner-cypress-agent`），定位 `~/.claude/projects/<key>/` 下的会话
+- `key`：encoded 目录名（如 `C--document-owner-cypress-agent`），定位 `~/.aide/claude/projects/<key>/` 下的会话
 - `path`：真实文件系统路径，用于文件树、PTY cwd 等文件操作
 
 路径解析（`resolve_path_from_key`）：DFS 搜索文件系统，对每个 `-` 尝试分隔符或字面量，找到磁盘上存在的路径，解决编码有损问题。
 
-持久化：`set_workspace` 时 key 写到 `~/.claude-code-desktop/config.json`，启动时读回。
+持久化：`set_workspace` 时 key 写到 `~/.aide/config.json`，启动时读回。
 
 ## 设置系统
 
-`~/.claude-code-desktop/config.json`：
+`~/.aide/config.json`：
 ```json
 { "workspace": "C-Users-...", "settings": { "font_size": 14, "keybindings": { "searchOpen": "Ctrl+P" }, ... } }
 ```
@@ -109,11 +117,11 @@ Aide 自己的元数据: `~/.claude-code-desktop/sessions/<sessionId>.json` — 
 
 | 类型 | 存储 |
 |------|------|
-| 智能体 | `~/.claude/agents/<name>.md` |
-| 技能 | `~/.claude/skills/<name>/SKILL.md` |
-| 指令 | `~/.claude/CLAUDE.md` + 项目 `CLAUDE.md`（单例） |
-| 钩子 | `~/.claude/settings.json` → `hooks` |
-| MCP 服务器 | `~/.claude/settings.json` → `mcpServers` |
+| 智能体 | `~/.aide/claude/agents/<name>.md` |
+| 技能 | `~/.aide/claude/skills/<name>/SKILL.md` |
+| 指令 | `~/.aide/claude/CLAUDE.md` + 项目 `CLAUDE.md`（单例） |
+| 钩子 | `~/.aide/claude/settings.json` → `hooks` |
+| MCP 服务器 | `~/.aide/claude/settings.json` → `mcpServers` |
 
 已知缺口：toggle 全是 no-op，创建只有 `prompt()` 填名字，类型专属字段未实现。
 

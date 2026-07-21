@@ -38,7 +38,7 @@ pub struct InstalledPlugin {
     pub enabled: bool,
 }
 
-/// Claude Agent SDK 专属产物根目录：`~/.claude-code-desktop/claude-agent-sdk/`。
+/// Claude Agent SDK 专属产物根目录：`~/.aide/claude-agent-sdk/`。
 ///
 /// 把 Claude 专属的插件/市场缓存/启用清单收拢到这个命名空间下，与 Aide 自身的
 /// 配置（config.json、diagnostics、notifications 等）分离。为后续接入其他 agent
@@ -50,12 +50,12 @@ fn claude_agent_sdk_dir() -> PathBuf {
 }
 
 /// 桥接清单路径：sidecar 经 env `AIDE_ENABLED_PLUGINS_FILE` 读它。
-/// `~/.claude-code-desktop/claude-agent-sdk/enabled-plugins.json`
+/// `~/.aide/claude-agent-sdk/enabled-plugins.json`
 pub fn enabled_plugins_manifest_path() -> PathBuf {
     claude_agent_sdk_dir().join("enabled-plugins.json")
 }
 
-/// 已安装插件本体所在目录：`~/.claude-code-desktop/claude-agent-sdk/plugins/`。
+/// 已安装插件本体所在目录：`~/.aide/claude-agent-sdk/plugins/`。
 /// **不是** Claude CLI 的 `~/.claude/plugins/`——Aide 不依赖 CLI 是否安装，
 /// 也避免和 CLI 的 `installed_plugins.json` 账本混用同一物理目录导致双加载。
 pub fn plugins_dir() -> PathBuf {
@@ -63,7 +63,7 @@ pub fn plugins_dir() -> PathBuf {
 }
 
 /// 市场源仓库克隆目录（marketplace.json 来源）：
-/// `~/.claude-code-desktop/claude-agent-sdk/marketplace-cache/`
+/// `~/.aide/claude-agent-sdk/marketplace-cache/`
 pub fn marketplace_cache_dir() -> PathBuf {
     claude_agent_sdk_dir().join("marketplace-cache")
 }

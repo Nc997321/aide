@@ -34,7 +34,6 @@ regex = "1"
 arboard = "1"
 percent-encoding = "2"
 png = "0.17"
-dirs = "5"
 base64 = "0.22"
 # HTTP 客户端：启动时调 Anthropic GET /v1/models 拉最新模型列表覆盖"系统默认"
 # （provider.rs::refresh_system_default_models）。选 ureq 而非 reqwest——轻量同步、

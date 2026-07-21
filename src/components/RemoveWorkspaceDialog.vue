@@ -39,7 +39,7 @@ const wsName = () => {
         </label>
 
         <div v-if="mode === 'delete'" class="rw-warn">
-          ⚠ 将删除 ~/.claude/projects/{{ props.workspace.key }}/ 及其全部会话 transcript
+          ⚠ 将删除 ~/.aide/claude/projects/{{ props.workspace.key }}/ 及其全部会话 transcript
         </div>
 
         <div class="rw-actions">

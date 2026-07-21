@@ -8,7 +8,7 @@ import { reactive } from "vue";
  * App.vue（新会话创建时归属当前工作区）、布局快照恢复（seed）。
  */
 export interface SessionWorkspaceInfo {
-  /** 编码后的工作区 key（`~/.claude/projects/` 目录名） */
+  /** 编码后的工作区 key（`~/.aide/claude/projects/` 目录名） */
   wsKey: string;
   /** 工作区根路径（send_message 的 cwd） */
   wsPath: string;

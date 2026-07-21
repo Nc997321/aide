@@ -389,6 +389,22 @@ export interface NotificationRecord {
   action?: NotificationAction;
 }
 
+// ── 一次性迁移：从用户系统 ~/.claude/ 拷到 Aide 自管理目录 ──
+
+/** Rust `commands::migration::MigrationStatus`。 */
+export interface MigrationStatus {
+  legacyExists: boolean;
+  hasMigratable: boolean;
+  done: boolean;
+  dismissed: boolean;
+}
+
+/** Rust `commands::migration::MigrationSummary`。 */
+export interface MigrationSummary {
+  copiedCount: number;
+  skippedCount: number;
+}
+
 // ── Provider action types ──
 
 /** Rust `commands::provider::PortProbeResult`。 */

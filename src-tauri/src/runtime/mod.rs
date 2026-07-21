@@ -81,6 +81,15 @@ impl AgentRuntimeManager {
             cmd.env(k, v);
         }
 
+        // CLAUDE_CONFIG_DIR：让 claude.exe 把所有自有数据（settings.json / CLAUDE.md /
+        // agents/ / skills/ / projects/ / sessions/ / plugins/）写到 Aide 自管理目录
+        // 下的 claude/ 子目录，而非回退到用户系统的 ~/.claude/。必须注在 env_vars 循环
+        // 之后——build_runtime_env_vars 的 fallback 列表里也含 CLAUDE_CONFIG_DIR，若进程
+        // env 有用户自定义值会被透传进 env_vars，这里显式覆盖以保证始终指向自管理目录。
+        // 与 AIDE_ENABLED_PLUGINS_FILE 同属「Aide 自管理路径 env」，注在同一处。
+        let claude_config_dir = crate::commands::our_config_dir().join("claude");
+        cmd.env("CLAUDE_CONFIG_DIR", dunce::simplified(&claude_config_dir));
+
         // 插件桥接清单
         let manifest = crate::commands::marketplace::enabled_plugins_manifest_path();
         cmd.env("AIDE_ENABLED_PLUGINS_FILE", dunce::simplified(&manifest));
@@ -95,6 +104,31 @@ impl AgentRuntimeManager {
                 if claude_exe.exists() {
                     cmd.env("AIDE_CLAUDE_EXE", dunce::simplified(&claude_exe));
                 }
+            }
+        }
+
+        // dev：SDK 平台包里的 claude.exe 随 agent-sidecar 的 node_modules 安装。
+        // 不设的话 SDK 会 `which claude` 回退到用户系统装的 CLI，违背「Aide 不依赖
+        // 系统 Claude CLI」的目标。CARGO_MANIFEST_DIR 是 src-tauri/，向上出一层到
+        // 项目根，再进 agent-sidecar/node_modules 找平台包。
+        #[cfg(debug_assertions)]
+        {
+            let pkg = if cfg!(target_os = "windows") {
+                "@anthropic-ai/claude-agent-sdk-win32-x64"
+            } else if cfg!(target_os = "macos") {
+                "@anthropic-ai/claude-agent-sdk-darwin-arm64"
+            } else {
+                "@anthropic-ai/claude-agent-sdk-linux-x64"
+            };
+            let exe_name = if cfg!(windows) { "claude.exe" } else { "claude" };
+            let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("agent-sidecar")
+                .join("node_modules")
+                .join(pkg)
+                .join(exe_name);
+            if candidate.exists() {
+                cmd.env("AIDE_CLAUDE_EXE", dunce::simplified(&candidate));
             }
         }
 

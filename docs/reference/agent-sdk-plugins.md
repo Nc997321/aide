@@ -3,8 +3,8 @@
 > 来源：https://code.claude.com/docs/en/agent-sdk/plugins （中文版，2026-07-13 抓取）
 >
 > **为何 vendored**：Aide 的插件市场架构依赖一个关键事实——Agent SDK 的 `options.plugins` **只加载显式传入的本地路径**（`type:"local"` 是 SDK 接受的唯一类型），**不自动扫描** `~/.claude/plugins/`、**不读** CLI 的 `installed_plugins.json`。这决定了：
-> - Aide 把插件装在自己目录 `~/.claude-code-desktop/claude-agent-sdk/plugins/cache/<市场>/<插件>/<版本>/` 是可行的——SDK 读的是 Aide 经 `options.plugins` 注入的绝对路径，不关心目录位置。`claude-agent-sdk/` 命名空间收拢 Claude 专属产物（插件、市场缓存、启用清单），为后续接入其他 agent 打底。
-> - 不存在「SDK 自动加载 CLI 装的插件」造成的双加载：Aide 会话里加载哪些插件，完全由 Aide 的 `enabled-plugins.json` 清单（`~/.claude-code-desktop/claude-agent-sdk/enabled-plugins.json`，sidecar `buildPluginsOption()` 每次 query() 重读）决定。
+> - Aide 把插件装在自己目录 `~/.aide/claude-agent-sdk/plugins/cache/<市场>/<插件>/<版本>/` 是可行的——SDK 读的是 Aide 经 `options.plugins` 注入的绝对路径，不关心目录位置。`claude-agent-sdk/` 命名空间收拢 Claude 专属产物（插件、市场缓存、启用清单），为后续接入其他 agent 打底。
+> - 不存在「SDK 自动加载 CLI 装的插件」造成的双加载：Aide 会话里加载哪些插件，完全由 Aide 的 `enabled-plugins.json` 清单（`~/.aide/claude-agent-sdk/enabled-plugins.json`，sidecar `buildPluginsOption()` 每次 query() 重读）决定。
 > - `settingSources:["user","project"]` 和 `skills:"all"` 加载的是散装 skills/settings/agents，**不加载 plugin 包**；plugin 内的 skills 只有把整个 plugin 目录经 `options.plugins` 注入才出现（自动加 `plugin-name:` 前缀）。
 >
 > 关键证据是文中「使用 plugin skills」节末的 Note：CLI 安装的 plugin 必须手动提供其安装路径才能在 SDK 里用——若 SDK 会自动扫描，这条 Note 就不存在。详见 [marketplace 设计](../superpowers/specs/2026-07-13-marketplace-extension-design.md) 与 `agent-sidecar/src/index.ts` 的 `buildPluginsOption()`。

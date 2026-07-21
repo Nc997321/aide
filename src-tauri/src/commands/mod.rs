@@ -17,6 +17,7 @@ pub mod file_assoc;
 pub mod recent;
 pub mod chat;
 pub mod notifications;
+pub mod migration;
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -188,8 +189,16 @@ pub fn user_home() -> Option<PathBuf> {
         .ok()
 }
 
+/// claude.exe 的「家目录」——所有 Claude 自有数据（settings.json / CLAUDE.md /
+/// agents/ / skills/ / projects/ / sessions/ / plugins/）的根。
+///
+/// 指向 Aide 自管理目录下的 `claude/` 子目录，而非用户系统的 `~/.claude/`：
+/// runtime/mod.rs 会把 `CLAUDE_CONFIG_DIR` 注入 sidecar 指向同一处，使内置
+/// claude.exe 把所有自有数据写到 Aide 自己的目录树里，彻底切断对系统 Claude CLI
+/// 的依赖。用子目录而非顶层是为了与 Aide 自己的 `our_sessions_dir()`
+/// （`~/.aide/sessions/`，schema 不同）按所有权天然分离，零碰撞。
 pub fn claude_home() -> PathBuf {
-    user_home().unwrap_or_else(|| PathBuf::from(".")).join(".claude")
+    our_config_dir().join("claude")
 }
 
 pub fn claude_projects_dir() -> PathBuf {
@@ -200,10 +209,16 @@ pub fn claude_sessions_dir() -> PathBuf {
     claude_home().join("sessions")
 }
 
+/// Aide 自管理配置根目录：`~/.aide/`。
+///
+/// 历史路径是 `~/.claude-code-desktop/`；启动时 `migration::ensure_aide_data_dir_migrated()`
+/// 会把老目录原子 rename 到此处（同文件系统、瞬时、无需用户确认）。所有 Aide 自有数据
+/// （config.json / sessions / recent / notifications / diagnostics / log / claude-agent-sdk/
+/// 以及 claude/ 子目录）都在这棵树下。
 pub fn our_config_dir() -> PathBuf {
     user_home()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".claude-code-desktop")
+        .join(".aide")
 }
 
 pub fn our_sessions_dir() -> PathBuf {
@@ -216,7 +231,7 @@ pub fn config_path() -> PathBuf {
 
 /// Locate a session's transcript(s) by globally-unique session id.
 ///
-/// Claude stores transcripts at `~/.claude/projects/<encoded-cwd>/<id>.jsonl`
+/// Claude stores transcripts at `<claude_home>/projects/<encoded-cwd>/<id>.jsonl`
 /// and `claude --resume <id>` finds them by scanning **every** project folder
 /// for the id — the cwd encoding is irrelevant once you have the id. Aide must
 /// do the same: the folder name Claude actually used can differ from the
@@ -244,7 +259,7 @@ pub fn find_session_jsonl_in(projects_dir: &std::path::Path, id: &str) -> Vec<Pa
     hits
 }
 
-/// `find_session_jsonl_in` scoped to Claude's real `~/.claude/projects/` dir.
+/// `find_session_jsonl_in` scoped to Claude's real `<claude_home>/projects/` dir.
 pub fn find_session_jsonl_globally(id: &str) -> Vec<PathBuf> {
     find_session_jsonl_in(&claude_projects_dir(), id)
 }

@@ -4,7 +4,7 @@
 //!
 //! 常驻低开销记录（环形缓冲），watchdog 线程检测心跳断流，
 //! 冻结期主动采样，恢复后自动落盘 JSON 报告到
-//! `~/.claude-code-desktop/diagnostics/`。
+//! `~/.aide/diagnostics/`。
 //!
 //! 对外接口：
 //! - `DiagnosticsState`：Tauri managed state；

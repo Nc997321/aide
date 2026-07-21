@@ -57,21 +57,18 @@ impl SkillProvider for ClaudeSkillProvider {
 
     fn scan(&self, cwd: &Path) -> Vec<SkillMeta> {
         let mut skills = Vec::new();
-        let home = match dirs::home_dir() {
-            Some(h) => h,
-            None => return skills,
-        };
 
-        // 1. 用户级：~/.claude/skills/*/SKILL.md
-        let user_skills = home.join(".claude").join("skills");
+        // 1. 用户级：<claude_home>/skills/*/SKILL.md（claude_home 指向 Aide 自管理目录
+        //    下的 claude/ 子目录，与 customizations.rs 的 skills_dir() 一致）
+        let user_skills = crate::commands::claude_home().join("skills");
         skills.extend(scan_dir(&user_skills, "user", "claude"));
 
-        // 2. 项目级：{cwd}/.claude/skills/*/SKILL.md
+        // 2. 项目级：{cwd}/.claude/skills/*/SKILL.md（cwd 相对，与 CLAUDE_CONFIG_DIR 无关）
         let project_skills = cwd.join(".claude").join("skills");
         skills.extend(scan_dir(&project_skills, "project", "claude"));
 
-        // 3. 插件级：~/.claude/plugins/cache/{registry}/{plugin}/{version}/skills/*/SKILL.md
-        let plugins_cache = home.join(".claude").join("plugins").join("cache");
+        // 3. 插件级：<claude_home>/plugins/cache/{registry}/{plugin}/{version}/skills/*/SKILL.md
+        let plugins_cache = crate::commands::claude_home().join("plugins").join("cache");
         skills.extend(scan_plugins(&plugins_cache, "claude"));
 
         skills

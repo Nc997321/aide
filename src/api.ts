@@ -6,6 +6,7 @@ import type {
   SkillMeta, BuildIndexResult, BuildProgress, RescanResult, QueryResult,
   AppNotification, NotificationRecord,
   CatalogPreset, PortProbeResult, LoginStatusResult, ConnectionStatus,
+  MigrationStatus, MigrationSummary,
 } from "./types";
 import type { ModelOption, PermissionModeOption } from "./types/chat";
 
@@ -222,6 +223,17 @@ export const api = {
   },
   saveNotifications(records: NotificationRecord[]): Promise<void> {
     return invoke("save_notifications", { records });
+  },
+
+  // 一次性迁移：从用户系统 ~/.claude/ 拷到 Aide 自管理目录
+  checkClaudeMigration(): Promise<MigrationStatus> {
+    return invoke("check_claude_migration");
+  },
+  migrateClaudeData(): Promise<MigrationSummary> {
+    return invoke("migrate_claude_data");
+  },
+  dismissClaudeMigration(): Promise<void> {
+    return invoke("dismiss_claude_migration");
   },
 
   // 设置

@@ -7,7 +7,7 @@
 //! 落盘规则：只存 severity ∈ {error, warning}；不含 read 状态（重启回到未读）；
 //! 软上限 100 条，按 timestamp 降序截断。原子写：tmp + rename。
 //!
-//! 文件：~/.claude-code-desktop/notifications.json（与 diagnostics/recent 同根）。
+//! 文件：~/.aide/notifications.json（与 diagnostics/recent 同根）。
 
 use serde::{Deserialize, Serialize};
 use std::fs;
