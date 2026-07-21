@@ -38,7 +38,9 @@ const systemDefaultMappings = computed<ProviderModelMappings>(
 const activeProvider = computed<ProviderConfig>(() => {
   const found = allProviders.value.find((p) => p.id === activeProviderId.value);
   if (found) return found;
-  return systemDefault.value ?? fallbackSystemDefault();
+  // systemDefault 已是非 undefined 的 ComputedRef<ProviderConfig>（见上 ?? fallbackSystemDefault），
+  // 此处直接返回，不再重复兜底。
+  return systemDefault.value;
 });
 
 // 仅当 providers[] 里竟然没有 SystemDefault 条目时用（异常降级，不崩）
