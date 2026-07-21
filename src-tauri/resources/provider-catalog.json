@@ -20,7 +20,7 @@
     "name": "Ollama",
     "icon": "O",
     "base_url": "https://ollama.com",
-    "auth_mode": "api_key",
+    "auth_mode": "auth_token",
     "actions": ["test_connection"]
   },
   {
@@ -28,7 +28,7 @@
     "name": "Kimi",
     "icon": "K",
     "base_url": "https://api.kimi.com/coding/",
-    "auth_mode": "api_key",
+    "auth_mode": "auth_token",
     "actions": ["test_connection"]
   },
   {
@@ -36,7 +36,7 @@
     "name": "DeepSeek",
     "icon": "D",
     "base_url": "https://api.deepseek.com/anthropic",
-    "auth_mode": "api_key",
+    "auth_mode": "auth_token",
     "actions": ["test_connection"]
   }
 ]
