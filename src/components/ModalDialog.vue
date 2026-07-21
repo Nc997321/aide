@@ -83,7 +83,7 @@ function onOverlayClick(e: MouseEvent) {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1100;
+  z-index: 1200; /* 高于 SettingsPanel 等面板层（1100）：confirm/notice/prompt 从面板内触发时必须盖在面板之上，否则被后渲染的面板遮住。低于 popover/menu/tooltip 层（9000+）。 */
   animation: fadeIn 0.12s ease;
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
