@@ -67,6 +67,12 @@ const authMode = computed(() => preset.value?.auth_mode);
 // 编辑态：深拷贝 selectedProvider，避免直接改 store。
 // modelMappings / knownModels 单独浅拷贝，防止编辑时 mutate store 引用。
 const form = ref<ProviderConfig | null>(null);
+// 凭据框显隐切换——必须在下面的 watch(..., {immediate: true}) 之前声明：
+// immediate 回调在 setup 同步阶段就跑，会重置这俩 ref；若声明在后面会触发 TDZ
+// （ReferenceError: Cannot access 'showApiKey' before initialization），导致整个
+// ProviderSettings 挂载失败（providers tab 空白 + 父 SettingsPanel 关闭按钮失效）。
+const showApiKey = ref(false);
+const showAuthToken = ref(false);
 watch(
   selectedProvider,
   (p) => {
@@ -175,10 +181,6 @@ function removeModelTag(idx: number) {
   if (!form.value) return;
   form.value.knownModels = form.value.knownModels.filter((_, i) => i !== idx);
 }
-
-// 凭据框显隐切换
-const showApiKey = ref(false);
-const showAuthToken = ref(false);
 </script>
 
 <template>
