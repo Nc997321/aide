@@ -812,6 +812,13 @@ function locateInTree() {
   font-size: 14px;
   line-height: 1.75;
   color: var(--aide-text-primary);
+  /* App.vue 的 .app-layout 为防止拖拽分栏/标签时误选界面文字，全局设了
+   * user-select: none；该属性可继承，会一路传导到 markdown 预览正文导致
+   * 整段内容都无法选中复制（与 ChatMessage.vue 同一类问题）。这里在预览
+   * 容器局部恢复，子内容（段落、代码块、表格等）随继承一并变回可选，
+   * 不影响标题栏等其余界面元素的防误选行为。 */
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .viewer-markdown h1 { font-size: 1.6em; font-weight: 600; margin: 1.2em 0 0.6em; border-bottom: 1px solid var(--aide-surface-hover); padding-bottom: 0.3em; }
