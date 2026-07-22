@@ -4,10 +4,13 @@ import { useFileViewer, isWindowDirty } from "../../composables/useFileViewer";
 import type { FileWindowState, MarkdownMode } from "../../composables/useFileViewer";
 import { useGotoDefinition } from "../../composables/useGotoDefinition";
 import { useModal } from "../../composables/useModal";
+import { useNotifications } from "../../composables/useNotifications";
 import type { QueryResult } from "../../types";
+import { api } from "../../api";
 import CodeEditor from "../CodeEditor.vue";
 import DiffViewer from "./DiffViewer.vue";
 import { extToLang, highlightCode } from "../../utils/highlight";
+import { isHtmlFilePath } from "../../utils/fileLink";
 import { marked } from "../../utils/markdown";
 
 const props = defineProps<{
@@ -19,6 +22,7 @@ const props = defineProps<{
 const { closeWindow, save, openAndScrollTo, projectRoot, gotoOwnerId, indexHintWinId, revealInTreePath } = useFileViewer();
 const goto = useGotoDefinition();
 const modal = useModal();
+const { push: pushNotification } = useNotifications();
 
 const gotoPopoverRef = ref<HTMLElement | null>(null);
 const codeEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null);
@@ -40,6 +44,7 @@ const cmScrollMemoryOpts = {
   shouldRestore: () => props.win.scrollToLine == null,
 };
 const isImage = computed(() => !!props.win.imageUrl);
+const canOpenInBrowser = computed(() => !props.win.virtual && isHtmlFilePath(props.win.filePath));
 /** 是否挂编辑器：非只读、非图片、非错误；markdown 全预览模式下也不挂 */
 const editorActive = computed(
   () =>
@@ -197,6 +202,21 @@ function onKeydown(e: KeyboardEvent) {
 function locateInTree() {
   revealInTreePath.value = props.win.filePath;
 }
+
+async function openInBrowser() {
+  try {
+    await api.fileOpen(props.win.filePath);
+  } catch (e) {
+    pushNotification({
+      severity: "error",
+      source: "fileviewer",
+      title: "浏览器打开失败",
+      body: `${props.win.fileName}: ${String(e)}`,
+      timestamp: Date.now(),
+      dedupKey: `fileviewer:open-browser:${props.win.filePath}`,
+    });
+  }
+}
 </script>
 
 <template>
@@ -211,10 +231,23 @@ function locateInTree() {
       <span v-if="win.readonly && !isImage" class="fw-readonly-badge">只读</span>
       <span class="fw-path" v-tooltip="win.filePath">{{ win.filePath }}</span>
 
+      <button
+        v-if="canOpenInBrowser"
+        class="fw-icon-btn"
+        v-tooltip="'在浏览器中打开'"
+        @click.stop="openInBrowser"
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M2 12h20"/>
+          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+        </svg>
+      </button>
+
       <!-- 在文件树中定位（仅非虚拟文件） -->
       <button
         v-if="!win.virtual"
-        class="fw-locate-btn"
+        class="fw-icon-btn"
         v-tooltip="'在文件树中定位'"
         @click.stop="locateInTree"
       >
@@ -509,7 +542,7 @@ function locateInTree() {
   background: var(--aide-surface-hover);
 }
 
-.fw-locate-btn {
+.fw-icon-btn {
   background: none;
   border: none;
   color: var(--aide-text-muted);
@@ -521,7 +554,7 @@ function locateInTree() {
   flex-shrink: 0;
   transition: all 0.15s ease;
 }
-.fw-locate-btn:hover {
+.fw-icon-btn:hover {
   color: var(--aide-accent);
   background: var(--aide-surface-hover);
 }

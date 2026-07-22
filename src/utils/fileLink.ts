@@ -27,6 +27,19 @@ export interface FileLink {
   line?: number;
 }
 
+export function isHttpUrl(path: string): boolean {
+  return /^https?:\/\//i.test(path);
+}
+
+/** HTML 文件使用系统默认浏览器打开；大小写不敏感，忽略查询/片段这类 URL 尾巴。 */
+export function isHtmlFilePath(path: string): boolean {
+  return /\.html?$/i.test(path.split(/[?#]/, 1)[0] ?? path);
+}
+
+export function shouldOpenExternally(path: string): boolean {
+  return isHttpUrl(path) || isHtmlFilePath(path);
+}
+
 /** 文本是文件路径引用则解析出 path/line，否则 null。 */
 export function parseFileLink(text: string): FileLink | null {
   if (!text || text.length > 260) return null; // Windows MAX_PATH，顺带挡长代码串
@@ -35,9 +48,10 @@ export function parseFileLink(text: string): FileLink | null {
   return { path: m[1], line: m[2] ? parseInt(m[2], 10) : undefined };
 }
 
-/** 相对路径挂到工作区根下；绝对路径（POSIX / 盘符）原样返回。 */
+/** 相对路径挂到工作区根下；绝对路径（POSIX / 盘符 / URI）原样返回。 */
 export function resolveFileLinkPath(path: string, workspacePath?: string): string {
-  const isAbsolute = path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
+  const hasScheme = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(path);
+  const isAbsolute = hasScheme || path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
   if (isAbsolute || !workspacePath) return path;
   return `${workspacePath}/${path}`.replace(/\\/g, "/");
 }

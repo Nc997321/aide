@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseFileLink, resolveFileLinkPath } from "./fileLink";
+import { parseFileLink, resolveFileLinkPath, shouldOpenExternally } from "./fileLink";
 
 describe("parseFileLink 文件路径判定", () => {
   it("识别裸文件名与相对路径", () => {
@@ -38,14 +38,26 @@ describe("parseFileLink 文件路径判定", () => {
   });
 });
 
+describe("外部打开判定", () => {
+  it("HTML 文件与 http/https 链接走系统默认程序", () => {
+    expect(shouldOpenExternally("report.html")).toBe(true);
+    expect(shouldOpenExternally("report.htm")).toBe(true);
+    expect(shouldOpenExternally("https://blog.csdn.net/chang100111/article/details/159617774")).toBe(true);
+    expect(shouldOpenExternally("http://localhost:5173")).toBe(true);
+    expect(shouldOpenExternally("src/App.vue")).toBe(false);
+  });
+});
+
 describe("resolveFileLinkPath 路径解析", () => {
   it("相对路径挂到工作区根", () => {
     expect(resolveFileLinkPath("src/App.vue", "C:/proj")).toBe("C:/proj/src/App.vue");
   });
 
-  it("绝对路径原样返回", () => {
+  it("绝对路径与 URI 原样返回", () => {
     expect(resolveFileLinkPath("/etc/hosts", "C:/proj")).toBe("/etc/hosts");
     expect(resolveFileLinkPath("D:\\x\\y.rs", "C:/proj")).toBe("D:\\x\\y.rs");
+    expect(resolveFileLinkPath("file:///C:/proj/report.html", "C:/proj")).toBe("file:///C:/proj/report.html");
+    expect(resolveFileLinkPath("https://example.com/report.html", "C:/proj")).toBe("https://example.com/report.html");
   });
 
   it("无工作区时原样返回相对路径", () => {

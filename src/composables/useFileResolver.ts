@@ -1,7 +1,7 @@
 import { computed, ref } from "vue";
 import { api } from "../api";
 import { useFileViewer } from "./useFileViewer";
-import { resolveFileLinkPath } from "../utils/fileLink";
+import { resolveFileLinkPath, shouldOpenExternally } from "../utils/fileLink";
 
 /**
  * 聊天文件链接的「智能打开」状态层。
@@ -25,12 +25,24 @@ export function useFileResolver() {
   const viewer = useFileViewer();
 
   function doOpen(path: string, line?: number) {
+    if (shouldOpenExternally(path)) {
+      void api.fileOpen(path).catch((e) => {
+        console.warn(`[file-resolver] failed to open externally: ${path}`, e);
+      });
+      return;
+    }
     if (line !== undefined) void viewer.openAndScrollTo(path, line);
     else void viewer.open(path);
   }
 
   async function openResolved(rawPath: string, workspacePath: string | undefined, line?: number) {
     const full = resolveFileLinkPath(rawPath, workspacePath);
+
+    // 纯网页 URL 不需要 fs 探测/工作区搜索，直接交给系统默认浏览器。
+    if (shouldOpenExternally(full) && /^https?:\/\//i.test(full)) {
+      doOpen(full, line);
+      return;
+    }
 
     // 1. 直接命中 → 原有行为
     try {

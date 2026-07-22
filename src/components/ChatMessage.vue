@@ -8,7 +8,7 @@ import SubagentCallBlock from "./SubagentCallBlock.vue";
 import TurnUsageBadge from "./TurnUsageBadge.vue";
 import { segmentBlocks, type Segment } from "@/utils/blockSegments";
 import { useFileResolver } from "@/composables/useFileResolver";
-import { parseFileLink } from "@/utils/fileLink";
+import { parseFileLink, shouldOpenExternally } from "@/utils/fileLink";
 import { isModelInList } from "@/utils/modelSelect";
 
 const props = defineProps<{
@@ -70,7 +70,18 @@ function blockHtml(text: string, index: number): string {
 }
 
 function handleTextClick(e: MouseEvent) {
-  const codeEl = (e.target as HTMLElement).closest("code.aide-file-link");
+  const target = e.target as HTMLElement;
+
+  const anchorEl = target.closest("a[href]");
+  const href = anchorEl?.getAttribute("href")?.trim() ?? "";
+  if (href && shouldOpenExternally(href)) {
+    e.preventDefault();
+    e.stopPropagation();
+    void openResolved(href, props.workspacePath);
+    return;
+  }
+
+  const codeEl = target.closest("code.aide-file-link");
   if (!codeEl) return;
   const link = parseFileLink(codeEl.textContent?.trim() ?? "");
   if (!link) return;

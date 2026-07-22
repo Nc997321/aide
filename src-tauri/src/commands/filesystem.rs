@@ -39,7 +39,14 @@ pub fn file_open(path: String) -> Result<(), String> {
         cmd.spawn()
             .map_err(|e| format!("Failed to open: {}", e))?;
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open: {}", e))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         Command::new("xdg-open")
             .arg(&path)
