@@ -73,6 +73,12 @@ export interface TurnUsage {
   cacheReadInputTokens: number;
   cacheCreationInputTokens: number;
   costUsd: number;
+  /** 本轮是否派发了子代理——前端据此把累计用量拆成"含子代理轮次" vs "纯主会话轮次"。可选，旧 sidecar 不带。 */
+  subagentTurn?: boolean;
+  /** 本轮派发的子代理调用数（subagentTurn 为 true 时带）。可选。 */
+  subagentCount?: number;
+  /** 按模型分桶用量（多模型时带，单模型不带）。key 是 wire model id，前端只展示不解释。可选。 */
+  byModel?: Record<string, TurnUsage>;
 }
 
 /** 纯展示用的模型选项——值和名字完全由 provider 决定，核心层不关心具体是什么模型 */

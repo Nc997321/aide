@@ -605,6 +605,11 @@ function handleChatEvent(e: Record<string, unknown>) {
       }
       break;
     }
+    case "subagent_nesting_warning": {
+      // runtime 检测到子代理嵌套深度超阈值（warn-only，不阻止调用）——推给诊断面板显示。
+      diag.handleNestingWarning({ depth: e["depth"] as number, threshold: e["threshold"] as number });
+      break;
+    }
     case "message_stop": {
       const usage = e["usage"] as ChatMessage["usage"] | null;
       if (usage) {

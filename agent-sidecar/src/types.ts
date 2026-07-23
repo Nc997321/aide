@@ -5,6 +5,18 @@ export interface TurnUsage {
   cacheReadInputTokens: number;
   cacheCreationInputTokens: number;
   costUsd: number;
+  // —— 以下均为可选的诊断归因字段，provider 给不出就不带（不污染核心必填协议）——
+  /** 本轮是否派发了子代理（Agent/Task 类工具）。SDK 的 modelUsage 按模型聚合、不按
+   *  代理拆分，拿不到"父 X / 子代理 Y"的精确 token；这里只标注"本轮含子代理活动"，
+   *  让前端把累计用量拆成"含子代理的轮次" vs "纯主会话轮次"两栏——足以回答
+   *  "25M 里有多少来自触发了子代理的轮次"，不声称知道子代理内部精确 token。 */
+  subagentTurn?: boolean;
+  /** 本轮派发的子代理调用数（subagentTurn 为 true 时才带）。 */
+  subagentCount?: number;
+  /** 按模型分桶的用量——mapper 原本把 modelUsage 各模型条目摊平成上面五个总数，
+   *  现在同时保留分桶，让多模型会话（如子代理用了别的模型）能看到每个模型各烧多少。
+   *  key 是 wire model id（provider 专属字符串，前端只展示不解释）。 */
+  byModel?: Record<string, TurnUsage>;
 }
 
 // 可切换模型——纯展示用的字符串，具体是什么模型完全由 provider 决定，
@@ -66,6 +78,10 @@ export type ChatEvent =
   // 事件告诉前端「在后台跑」，并带上 .output 路径，sidecar 的 tail 据此回放内部活动。
   | { type: "subagent_async_launched"; id: string; agentId: string; outputFile: string }
   | { type: "subagent_end"; id: string; result: string; is_error: boolean }
+  // 子代理嵌套深度软警告（warn-only，不阻止调用）——子代理派子代理时深度超阈值，
+  // 提示成本会指数膨胀。provider-agnostic：不带 Claude 专属字段，任何 provider 的
+  // "子代理套子代理"都能映射成这个形状。depth 是当前嵌套深度，threshold 是告警阈值。
+  | { type: "subagent_nesting_warning"; depth: number; threshold: number }
   // alwaysAllowLabel：sidecar 已经把 SDK 的 suggestions 解读成一句人话（比如 Edit
   // 工具常见的"自动接受编辑（本次会话）"，而不是笼统的"总是允许"——两者后果差异很大：
   // 前者是切权限模式且不落盘，后者是给某工具加一条持久化规则），前端只管展示这句话，

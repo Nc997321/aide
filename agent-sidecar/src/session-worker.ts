@@ -9,6 +9,7 @@ import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { btwQueryOverrides, forkResumeOptions } from "./btwOptions.js";
 import { applyModelSwitch } from "./modelSwitch.js";
 import { cliSubagentModelEnvValue, makeSubagentModelHook } from "./subagentModelDefault.js";
+import { makeSkillGuardHook } from "./skillGuard.js";
 import {
   ImageInputCapabilityCache,
   imageCapabilityKey,
@@ -59,18 +60,7 @@ const EXTRA_MODE_LABELS: Record<string, string> = {
 const IMAGE_INPUT_UNSUPPORTED_MESSAGE =
   "当前模型不支持图片输入，不能读取该图片。请改读 OCR/文本描述、跳过该文件，或切换到支持视觉的模型。";
 
-/** 卡死判定的纯逻辑——抽出可单测，不依赖 Date.now() / 私有 currentQuery。
- *  hasQuery: 是否有 SDK query 在跑；lastMessageAt/now: 毫秒时间戳。 */
-export function isStalledRelativeTo(
-  lastMessageAt: number,
-  now: number,
-  hasQuery: boolean,
-): boolean {
-  if (!hasQuery) return false;
-  return now - lastMessageAt > 90_000;
-}
-
-// ---- OutputTail（per-SessionWorker 实例） ----
+	// ---- OutputTail（per-SessionWorker 实例） ----
 
 /** 解析 .output 的一行 JSONL → 子代理事件。 */
 function parseOutputLine(
@@ -578,6 +568,9 @@ export class SessionWorker {
           cliEnv.CLAUDE_CODE_SUBAGENT_MODEL = cliSubagentModelEnvValue(process.env);
 
           const subagentModelHook = makeSubagentModelHook(process.env);
+          // 子代理重型 skill 守卫：子代理上下文里拦截名单内重型 skill（默认 claude-api），
+          // 防 fan-out × 逐轮重发撑爆 input。返回 null（关闭/名单空）则不注册。
+          const skillGuardHook = makeSkillGuardHook(process.env);
 
           if (this.resumeSource && this.shouldForkNextConnect && !this.btwMode) {
             this.pendingFork = true;
@@ -602,6 +595,9 @@ export class SessionWorker {
                     : []),
                   // 图片 Read 守卫：canUseTool 对只读工具不触发，必须用 hook。
                   { matcher: "^Read$", hooks: [this.makeImageGuardHook()] },
+                  ...(skillGuardHook
+                    ? [{ matcher: "^Skill$", hooks: [skillGuardHook] }]
+                    : []),
                 ],
               },
               includePartialMessages: false,
@@ -620,7 +616,6 @@ export class SessionWorker {
           this.shouldForkNextConnect = false;
 
           for await (const msg of q) {
-            this.lastSdkMessageAt = Date.now();
             if ((msg as any).type === "result") {
               this.turnActive = false;
               if (this.promoteJumpQueue()) {
@@ -718,12 +713,6 @@ export class SessionWorker {
   /** 活跃状态：有 query 在跑 */
   isActive(): boolean {
     return this.currentQuery !== null && this.turnActive;
-  }
-
-  /** 卡死检测：上次 SDK 消息距今超过 90s */
-  private lastSdkMessageAt = Date.now();
-  isStalled(): boolean {
-    return isStalledRelativeTo(this.lastSdkMessageAt, Date.now(), this.currentQuery !== null);
   }
 
   /** 测试用：暴露 fork 源（SDK resume 的会话 ID）和 fork 标记。 */

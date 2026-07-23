@@ -12,6 +12,16 @@ export class SubagentTracker {
   /** async 子代理的 .output 回放元数据：id → { agentId, outputFile }。
    *  launch-ack 时注册，task-notification 完成时清理。 */
   private asyncMeta = new Map<string, { agentId: string; outputFile: string }>();
+  /** 本轮（一条 user 消息 → 一个 result 之间）派发的子代理调用数。handleToolUse 时累加，
+   *  result 到达时由 mapper 调 consumeTurnSubagentCount() 读取并清零——result 时所有
+   *  子代理都已 handleToolResult 从 active 移除，active.size 已为 0，无法据此判断
+   *  "本轮是否派过子代理"，故单独维护这个计数器供用量归因（subagentTurn/subagentCount）。 */
+  private turnDispatchCount = 0;
+  /** tool_use_id → 嵌套深度。顶层（主线程派发）=1；嵌套（子代理派子代理）= 父 depth+1。
+   *  深度来源是 sidechain 消息的 parent_tool_use_id 链（mapper 侧），不是 SubagentStart hook
+   *  （后者不带父 agent_id，算不出精确深度）。顶层 entry 在 handleToolResult 时删除；
+   *  嵌套 entry 随 SubagentTracker 实例 GC（per-session，bounded，不跨会话泄漏）。 */
+  private depthByToolUseId = new Map<string, number>();
 
   static isSubagentTool(name: string): boolean {
     return SUBAGENT_TOOL_NAMES.has(name);
@@ -22,6 +32,8 @@ export class SubagentTracker {
    *  契约），非空才回——空字符串不进事件，前端不渲染派发指令区。 */
   handleToolUse(id: string, input: unknown): { agentName: string; description: string; prompt: string } {
     this.active.add(id);
+    this.turnDispatchCount++;
+    this.depthByToolUseId.set(id, 1); // 顶层子代理（主线程派发）深度 = 1
     const record = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
     const agentName = typeof record.subagent_type === "string" ? record.subagent_type : "agent";
     const description = typeof record.description === "string" ? record.description : "";
@@ -30,10 +42,21 @@ export class SubagentTracker {
     return { agentName, description, prompt };
   }
 
+  /** 嵌套派发：子代理内部又调 Agent/Task 派子代理。parentId = sidechain 消息的
+   *  parent_tool_use_id（即派发方那次 Agent tool_use 的 id），childId = 嵌套那次 Agent
+   *  tool_use 的 id。返回嵌套深度（父 depth + 1；父未知时按 1 兜底，即视为 depth 2）。 */
+  recordNestedSpawn(parentId: string, childId: string): number {
+    const parentDepth = this.depthByToolUseId.get(parentId) ?? 1;
+    const depth = parentDepth + 1;
+    this.depthByToolUseId.set(childId, depth);
+    return depth;
+  }
+
   /** 返回 true 表示这个 tool_use_id 属于子代理调用，调用方应发 subagent_end 而非通用 tool_result。 */
   handleToolResult(id: string): boolean {
     this.modelReported.delete(id);
     this.names.delete(id);
+    this.depthByToolUseId.delete(id); // 顶层 entry 清理；嵌套 entry 随实例 GC
     return this.active.delete(id);
   }
 
@@ -73,5 +96,13 @@ export class SubagentTracker {
   handleAsyncResult(id: string): boolean {
     this.asyncMeta.delete(id);
     return this.handleToolResult(id);
+  }
+
+  /** result 到达时调用：返回本轮派发的子代理数并清零。mapper 据此填 TurnUsage.subagentTurn
+   *  /subagentCount。多次调用只第一次有值（防御性——一轮只应有一个 result）。 */
+  consumeTurnSubagentCount(): number {
+    const n = this.turnDispatchCount;
+    this.turnDispatchCount = 0;
+    return n;
   }
 }

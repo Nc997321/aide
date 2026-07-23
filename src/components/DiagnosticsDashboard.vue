@@ -14,10 +14,6 @@
           <span class="stat-value">{{ health?.sessions?.idle ?? 0 }}</span>
           <span class="stat-label">空闲会话</span>
         </div>
-        <div class="stat" :class="{ warn: (health?.sessions?.stalled ?? 0) > 0 }">
-          <span class="stat-value">{{ health?.sessions?.stalled ?? 0 }}</span>
-          <span class="stat-label">卡死</span>
-        </div>
         <div class="stat">
           <span class="stat-value">{{ health?.processes?.claudeExeCount ?? 0 }}</span>
           <span class="stat-label">claude.exe 进程</span>
@@ -41,6 +37,36 @@
           <span class="stat-value">${{ cumulativeCost.toFixed(4) }}</span>
           <span class="stat-label">费用 (USD)</span>
         </div>
+      </div>
+
+      <!-- 输入归因：SDK 按模型聚合、不按代理拆分，只能在轮级标注"本轮是否派了子代理"。
+           这里把累计输入拆成"含子代理的轮次" vs "纯主会话轮次"——回答"25M 里有多少来自
+           触发了子代理的轮次"，不声称知道子代理内部精确 token。子代理占比高时高亮提示。 -->
+      <div class="breakdown" v-if="cumulativeInputTokens > 0">
+        <div class="breakdown-row">
+          <span class="bd-label">└ 含子代理轮次</span>
+          <span class="bd-value" :class="{ hot: subagentShareHigh }">
+            {{ fmtTokens(subagentTurnInputTokens) }}
+            <span class="bd-pct" v-if="subagentSharePct > 0">({{ subagentSharePct }}%)</span>
+          </span>
+        </div>
+        <div class="breakdown-row">
+          <span class="bd-label">└ 纯主会话轮次</span>
+          <span class="bd-value">{{ fmtTokens(soloInputTokens) }}</span>
+        </div>
+      </div>
+
+      <!-- 按模型分桶：多模型会话（如子代理用了别的模型）才展开。单模型时 sidecar 不带 byModel。 -->
+      <div class="by-model" v-if="modelEntries.length > 1">
+        <div class="by-model-row" v-for="m in modelEntries" :key="m.id">
+          <span class="bm-label" :title="m.id">{{ shortModel(m.id) }}</span>
+          <span class="bm-value">{{ fmtTokens(m.inputTokens) }}</span>
+        </div>
+      </div>
+
+      <!-- 子代理嵌套深度警告（runtime 超阈值时发 subagent_nesting_warning，warn-only 不拦截） -->
+      <div class="nesting-warn" v-if="nestingWarning">
+        ⚠ 子代理嵌套深度 {{ nestingWarning.depth }}（阈值 {{ nestingWarning.threshold }}）—成本会指数膨胀
       </div>
     </div>
 
@@ -72,13 +98,39 @@ const {
   cumulativeCost,
   cumulativeInputTokens,
   cumulativeOutputTokens,
+  subagentTurnInputTokens,
+  byModelCumulative,
+  nestingWarning,
   rateLimit,
 } = useDiagnosticsDashboard();
+
+// 纯主会话轮次的输入 = 总输入 − 含子代理轮次的输入。
+const soloInputTokens = computed(() => Math.max(0, cumulativeInputTokens.value - subagentTurnInputTokens.value));
+// 含子代理轮次的输入占比（%），>60% 时高亮——提示"大头来自 fan-out"。
+const subagentSharePct = computed(() =>
+  cumulativeInputTokens.value > 0
+    ? Math.round((subagentTurnInputTokens.value / cumulativeInputTokens.value) * 100)
+    : 0,
+);
+const subagentShareHigh = computed(() => subagentSharePct.value > 60);
+
+// byModel 分桶转成排序后的数组（按输入降序），只在多模型时展示。
+const modelEntries = computed(() =>
+  Object.entries(byModelCumulative.value)
+    .map(([id, u]) => ({ id, inputTokens: u.inputTokens }))
+    .sort((a, b) => b.inputTokens - a.inputTokens),
+);
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
   if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
   return String(n);
+}
+
+// wire model id 一般很长（claude-sonnet-5-20260101），展示时只保留末段可读部分。
+function shortModel(id: string): string {
+  const seg = id.split("/").pop() ?? id;
+  return seg.length > 28 ? seg.slice(0, 28) + "…" : seg;
 }
 
 function fmtReset(ts: number): string {
@@ -150,6 +202,86 @@ function fmtReset(ts: number): string {
 
 .stat.warn .stat-value {
   color: var(--aide-warning, #f0a020);
+}
+
+/* 输入归因拆分 */
+.breakdown {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--aide-border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.breakdown-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.bd-label {
+  font-size: 11px;
+  color: var(--aide-text-secondary, #888);
+  font-family: ui-monospace, monospace;
+}
+
+.bd-value {
+  font-size: 12px;
+  color: var(--aide-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.bd-value.hot {
+  color: var(--aide-warning, #f0a020);
+  font-weight: 600;
+}
+
+.bd-pct {
+  font-size: 10px;
+  margin-left: 4px;
+  opacity: 0.8;
+}
+
+/* 按模型分桶 */
+.by-model {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--aide-border);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.by-model-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.bm-label {
+  font-size: 11px;
+  color: var(--aide-text-secondary, #888);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bm-value {
+  font-size: 11px;
+  color: var(--aide-text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 嵌套深度警告 */
+.nesting-warn {
+  margin-top: 10px;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--aide-warning, #f0a020);
+  background: color-mix(in srgb, var(--aide-warning, #f0a020) 12%, transparent);
+  border-radius: 6px;
 }
 
 /* rate limit bars */

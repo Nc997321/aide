@@ -222,12 +222,11 @@ export class SessionManager {
     this.healthTimer = setInterval(() => {
       const workers = Array.from(this.workers.values());
       const active = workers.filter(w => w.isActive()).length;
-      const stalled = workers.filter(w => !w.isActive() && w.isStalled()).length;
-      const idle = workers.length - active - stalled;
+      const idle = workers.length - active;
 
       this.emitToStdout("_runtime", {
         type: "health",
-        sessions: { active, idle, stalled: Math.max(0, stalled), total: workers.length },
+        sessions: { active, idle, stalled: 0, total: workers.length },
         processes: { claudeExeCount: active },
         timestamp: Date.now(),
       });

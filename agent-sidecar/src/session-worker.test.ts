@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { SessionWorker, isStalledRelativeTo } from "./session-worker.js";
+import { SessionWorker } from "./session-worker.js";
 import { ImageInputCapabilityCache } from "./imageInputCapability.js";
 import type { ChatEvent } from "./types.js";
 
@@ -327,23 +327,6 @@ describe("SessionWorker — fork source / routing key invariants", () => {
   it("isActive() returns false before startLoop", () => {
     const { worker } = makeWorker();
     expect(worker.isActive()).toBe(false);
-  });
-
-  it("isStalled() returns false with no query", () => {
-    const { worker } = makeWorker();
-    expect(worker.isStalled()).toBe(false);
-  });
-
-  it("isStalledRelativeTo: no query → never stalled", () => {
-    expect(isStalledRelativeTo(0, 100_000, false)).toBe(false);
-  });
-
-  it("isStalledRelativeTo: query + <90s since last message → not stalled", () => {
-    expect(isStalledRelativeTo(0, 89_999, true)).toBe(false);
-  });
-
-  it("isStalledRelativeTo: query + >90s since last message → stalled", () => {
-    expect(isStalledRelativeTo(0, 90_001, true)).toBe(true);
   });
 
   it("stop() sets stopped flag (startLoop must exit before spawning)", () => {
