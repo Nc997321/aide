@@ -154,7 +154,7 @@ pub fn run() {
                         .map(|s| s.proxy)
                         .unwrap_or_default();
                     let env_vars = build_runtime_env_vars(&active, &proxy);
-                    if let Err(e) = rt.spawn_runtime(handle2, env_vars) {
+                    if let Err(e) = rt.ensure_runtime(handle2, env_vars).await {
                         eprintln!("[aide] Agent Runtime 启动失败: {e}");
                     }
                 }
@@ -325,6 +325,7 @@ pub fn run() {
             commands::recent::clear_recent,
             // Chat (Agent SDK)
             commands::chat::send_message,
+            commands::chat::probe_image_input,
             commands::chat::permission_response,
             commands::chat::interrupt_session,
             commands::chat::set_model,

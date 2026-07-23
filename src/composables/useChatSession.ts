@@ -639,6 +639,19 @@ function handleChatEvent(e: Record<string, unknown>) {
       });
       break;
     }
+    case "image_input_rejected": {
+      // sidecar 二次防线：视觉请求从未到达模型，保持当前任务快照并让纯文本可立即续发。
+      resetRuntimeState(store, false);
+      store.messages.push({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        blocks: [{ type: "text", text: String(e["message"]) }],
+        timestamp: Date.now(),
+      });
+      setSessionState(sid, "waiting");
+      setSessionHealth(sid, "warning");
+      break;
+    }
     case "error": {
       // fatal:false = 可恢复错误，sidecar 进程仍存活等下一条 → 保留任务列表（可能继续更新）；
       // 缺省/true 按致命处理（进程已死）→ 清任务，兼容未重建的旧 bundle。

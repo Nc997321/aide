@@ -66,6 +66,46 @@ fn build_send_command(
     cmd
 }
 
+/// 构造 Runtime 内部图片预检命令（纯函数，保持 IPC 载荷可单测）。
+#[cfg(test)]
+fn build_probe_image_input_command(
+    request_id: &str,
+    model: Option<String>,
+    env: &HashMap<String, String>,
+) -> serde_json::Value {
+    json!({
+        "cmd": "probe_image_input",
+        "request_id": request_id,
+        "model": model,
+        "env": env,
+    })
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageInputProbeResult {
+    pub supported: Option<bool>,
+}
+
+#[tauri::command]
+pub async fn probe_image_input(
+    model: Option<String>,
+    app_handle: tauri::AppHandle,
+    runtime_mgr: State<'_, AgentRuntimeManager>,
+) -> Result<ImageInputProbeResult, String> {
+    let active = active_provider_or_system_default();
+    let proxy = get_settings().map(|s| s.proxy).unwrap_or_default();
+    let mut env = build_runtime_env_vars(&active, &proxy);
+    if let Some(model) = model.filter(|value| !value.is_empty()) {
+        env.insert("ANTHROPIC_MODEL".into(), model);
+    }
+
+    runtime_mgr.ensure_runtime(app_handle, env.clone()).await?;
+    Ok(ImageInputProbeResult {
+        supported: runtime_mgr.probe_image_input(env).await?,
+    })
+}
+
 #[tauri::command]
 pub async fn send_message(
     session_id: String,
@@ -390,5 +430,18 @@ mod tests {
         assert_eq!(cmd["session_id"], "main-sid");
         assert_eq!(cmd["resume_session_id"], "resume-xyz");
         assert_eq!(cmd["provider_switched"], true);
+    }
+
+    #[test]
+    fn probe_image_input_cmd_carries_request_model_and_provider_env() {
+        let cmd = build_probe_image_input_command(
+            "probe-1",
+            Some("glm-5.2".into()),
+            &HashMap::from([("ANTHROPIC_BASE_URL".into(), "https://gateway".into())]),
+        );
+        assert_eq!(cmd["cmd"], "probe_image_input");
+        assert_eq!(cmd["request_id"], "probe-1");
+        assert_eq!(cmd["model"], "glm-5.2");
+        assert_eq!(cmd["env"]["ANTHROPIC_BASE_URL"], "https://gateway");
     }
 }

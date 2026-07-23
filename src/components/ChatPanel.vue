@@ -13,6 +13,7 @@ import { api } from "@/api";
 import { resolvePastePayload } from "@/utils/paste";
 import { resolveFileMentions } from "@/utils/fileMentions";
 import type { FileMentionResolution } from "@/utils/fileMentions";
+import { checkImageInputSupport } from "@/utils/imageInputPreflight";
 import { peekFileClipboard } from "@/composables/useFileClipboard";
 import type { ImageAttachment, SendOptions } from "@/composables/useChatSession";
 import { useMessageWindow } from "@/composables/useMessageWindow";
@@ -687,6 +688,12 @@ async function handleSend(jumpQueue = false) {
   const hasImages = pendingImages.value.length > 0;
   // 忙碌时不再拦截：useChatSession 会把消息排队，message_stop 后按序续发
   if (!text && !hasImages) return;
+
+  // 只在有图片时预检；明确不支持则保留输入和附件，未知/临时失败交给 sidecar 二次防线。
+  if (!(await checkImageInputSupport(hasImages, selectedModel.value || undefined, api.probeImageInput))) {
+    showToast("当前模型不支持图片输入。已保留输入内容和图片附件。", "danger");
+    return;
+  }
 
   if (btwMode.value) {
     // btw 一次性:发完自动切回主对话输入。回弹确认(回弹动画 + "已切回"toast)

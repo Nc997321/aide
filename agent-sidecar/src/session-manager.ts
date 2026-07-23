@@ -1,5 +1,22 @@
 import type { ChatEvent, SidecarCommand } from "./types.js";
 import { SessionWorker } from "./session-worker.js";
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import {
+  ImageInputCapabilityCache,
+  imageCapabilityKey,
+  probeImageInput as defaultProbeImageInput,
+} from "./imageInputCapability.js";
+
+type ProbeImageInputFn = typeof defaultProbeImageInput;
+
+export interface SessionManagerOptions {
+  /** 测试缝：覆盖 stdout 写入；生产省略则 JSONL 写 process.stdout。 */
+  emit?: (sessionId: string, event: ChatEvent) => void;
+  /** Runtime 级共享缓存：probe command 与所有 worker 共用同一份。 */
+  imageCapabilityCache?: ImageInputCapabilityCache;
+  /** 测试缝：覆盖真实 SDK probe，避免单测访问 provider。 */
+  probeImageInput?: ProbeImageInputFn;
+}
 
 /**
  * Agent Runtime 的会话管理器。
@@ -12,6 +29,15 @@ import { SessionWorker } from "./session-worker.js";
  */
 export class SessionManager {
   private workers = new Map<string, SessionWorker>();
+  readonly imageCapabilityCache: ImageInputCapabilityCache;
+  private readonly outputOverride?: (sessionId: string, event: ChatEvent) => void;
+  private readonly probeImageInput: ProbeImageInputFn;
+
+  constructor(opts: SessionManagerOptions = {}) {
+    this.imageCapabilityCache = opts.imageCapabilityCache ?? new ImageInputCapabilityCache();
+    this.outputOverride = opts.emit;
+    this.probeImageInput = opts.probeImageInput ?? defaultProbeImageInput;
+  }
 
   // ---- stdout 输出 ----
 
@@ -26,6 +52,11 @@ export class SessionManager {
    * 自动跟着变（见 getOrCreate 的 emit 闭包，读 worker.routingKey）。
    */
   emitToStdout(sessionId: string, event: ChatEvent): void {
+    if (this.outputOverride) {
+      this.outputOverride(sessionId, event);
+      return;
+    }
+
     const out = { ...event } as Record<string, unknown>;
     if (event.type === "session_init") {
       // SDK 已设 session_id = 真实会话 ID，不能覆盖。路由键单独传。
@@ -47,6 +78,11 @@ export class SessionManager {
    * - session_stop：停止并移除 worker
    */
   handleCommand(cmd: SidecarCommand): void {
+    if (cmd.cmd === "probe_image_input") {
+      void this.handleImageInputProbe(cmd);
+      return;
+    }
+
     // session_stop 特殊处理：不需要 getOrCreate，直接查已有 worker 停止
     if (cmd.cmd === "session_stop") {
       this.stopSession(cmd.session_id);
@@ -72,6 +108,27 @@ export class SessionManager {
       }
       worker.handleCommand(cmd);
     }
+  }
+
+  private async handleImageInputProbe(cmd: Extract<SidecarCommand, { cmd: "probe_image_input" }>): Promise<void> {
+    const env = cmd.env ?? {};
+    const model = cmd.model ?? env.ANTHROPIC_MODEL ?? "";
+    const key = imageCapabilityKey(env, model);
+    let supported: boolean | null = null;
+
+    try {
+      supported = await this.imageCapabilityCache.ensure(key, () => (
+        this.probeImageInput(query, { env, model })
+      ));
+    } catch {
+      supported = null;
+    }
+
+    this.emitToStdout("_runtime", {
+      type: "image_input_probe_result",
+      request_id: cmd.request_id,
+      supported,
+    });
   }
 
   // ---- 会话生命周期 ----
@@ -103,6 +160,7 @@ export class SessionManager {
       btwMode: !!(cmd as any).btw,
       lightweightMode: !!(cmd as any).lightweight,
       envOverrides: (cmd as any).env ?? {},
+      imageCapabilityCache: this.imageCapabilityCache,
     });
 
     this.workers.set(sessionId, worker);

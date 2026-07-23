@@ -54,4 +54,10 @@ describe("api provider wrappers — 新增 IPC", () => {
     await api.refreshModels("__system_default__");
     expect(invoke).toHaveBeenCalledWith("refresh_models", { providerId: "__system_default__" });
   });
+
+  it("probeImageInput 透传当前选定模型", async () => {
+    (invoke as any).mockResolvedValue({ supported: false });
+    await api.probeImageInput("glm-5.2");
+    expect(invoke).toHaveBeenCalledWith("probe_image_input", { model: "glm-5.2" });
+  });
 });

@@ -1,4 +1,4 @@
-import type { ChatEvent, ModelOption, PermissionModeOption, SidecarCommand } from "./types.js";
+import type { ChatEvent, ImageAttachment, ModelOption, PermissionModeOption, SidecarCommand } from "./types.js";
 import { MessageQueue } from "./generator.js";
 import { PermissionManager } from "./permissions.js";
 import { TaskTracker } from "./tasks.js";
@@ -10,6 +10,12 @@ import { btwQueryOverrides, forkResumeOptions } from "./btwOptions.js";
 import { applyModelSwitch } from "./modelSwitch.js";
 import { cliSubagentModelEnvValue, makeSubagentModelHook } from "./subagentModelDefault.js";
 import {
+  ImageInputCapabilityCache,
+  imageCapabilityKey,
+  isImagePath,
+  probeImageInput,
+} from "./imageInputCapability.js";
+import {
   mapSdkMessage,
   buildUserMessage,
   buildRateLimitEvent,
@@ -18,6 +24,7 @@ import {
   emitSubagentBlocks,
 } from "./mapper.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import type { HookCallback, HookInput } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, openSync, readSync, statSync, closeSync } from "node:fs";
 import { readFileSync } from "node:fs";
 
@@ -48,6 +55,9 @@ const PERMISSION_MODES: PermissionModeOption[] = [
 const EXTRA_MODE_LABELS: Record<string, string> = {
   dontAsk: "本次会话不再询问",
 };
+
+const IMAGE_INPUT_UNSUPPORTED_MESSAGE =
+  "当前模型不支持图片输入，不能读取该图片。请改读 OCR/文本描述、跳过该文件，或切换到支持视觉的模型。";
 
 /** 卡死判定的纯逻辑——抽出可单测，不依赖 Date.now() / 私有 currentQuery。
  *  hasQuery: 是否有 SDK query 在跑；lastMessageAt/now: 毫秒时间戳。 */
@@ -115,6 +125,8 @@ export interface SessionWorkerOptions {
   lightweightMode?: boolean;
   initialModel?: string;
   envOverrides?: Record<string, string>;
+  /** Runtime 级共享图片输入能力缓存；由 SessionManager 注入，禁止每会话各建一份。 */
+  imageCapabilityCache: ImageInputCapabilityCache;
   /** 测试缝：覆盖 SDK query 实现。生产省略用真 query。 */
   queryFn?: typeof query;
 }
@@ -135,6 +147,7 @@ export class SessionWorker {
   readonly toolLifecycle = new ToolLifecycleTracker();
   readonly jumpQueueCtl = new JumpQueueController();
   readonly coalescer: DeltaCoalescer;
+  readonly imageCapabilityCache: ImageInputCapabilityCache;
 
   // ---- SDK 查询状态 ----
   private currentQuery: Awaited<ReturnType<typeof query>> | null = null;
@@ -167,11 +180,13 @@ export class SessionWorker {
 
   // ---- 测试缝：可替换的 SDK query 实现 ----
   private queryFn: typeof query;
+  /** send 命令串行化：只在存在未完成的异步 send（例如图片 probe）时启用。 */
+  private sendQueue: Promise<void> | null = null;
 
   constructor(
     routingId: string,
     emitToStdout: (event: ChatEvent) => void,
-    opts: SessionWorkerOptions = {},
+    opts: SessionWorkerOptions,
   ) {
     this.emitToStdout = emitToStdout;
     this.routingKey = routingId;
@@ -180,6 +195,8 @@ export class SessionWorker {
     this.lightweightMode = opts.lightweightMode ?? false;
     this.cwd = opts.cwd;
     this.envOverrides = opts.envOverrides ?? {};
+    this.currentModel = opts.initialModel ?? this.envOverrides.ANTHROPIC_MODEL ?? this.currentModel;
+    this.imageCapabilityCache = opts.imageCapabilityCache;
 
     // DeltaCoalescer 的输出经注入回调写 stdout（带上 session_id）
     this.coalescer = new DeltaCoalescer((event) => {
@@ -195,6 +212,85 @@ export class SessionWorker {
 
   private emit(event: ChatEvent): void {
     this.coalescer.push(event);
+  }
+
+  private async imageInputSupported(): Promise<true | false | null> {
+    const model = this.currentModel || this.envOverrides.ANTHROPIC_MODEL || "";
+    const key = imageCapabilityKey(this.envOverrides, model);
+    // probe 的 CLI 子进程需要 PATH/SystemRoot 等基础环境，不能只给 provider 连接参数
+    // （SDK 的 env 选项传了就替换 process.env，不是合并）。这里以 process.env 为底再叠加
+    // per-session provider 覆盖，和主 query 的 cliEnv 构造保持一致。
+    const probeEnv = { ...process.env, ...this.envOverrides };
+    const result = await this.imageCapabilityCache.ensure(
+      key,
+      () => probeImageInput(this.queryFn, { env: probeEnv, model }),
+    );
+    return result;
+  }
+
+  private async guardImageInput(images?: ImageAttachment[]): Promise<boolean> {
+    if (!images?.length) return true;
+    return (await this.imageInputSupported()) !== false;
+  }
+
+  /** 每条 send 都携带 Rust 当前计算出的 provider 环境；在命令真正执行时更新，
+   * 防止等待前一条图片 probe 时提前覆盖其连接身份。 */
+  private applySendRuntimeConfig(env: Record<string, string> | undefined): void {
+    this.envOverrides = env ?? {};
+    const selectedModel = this.envOverrides.ANTHROPIC_MODEL;
+    if (selectedModel) this.currentModel = selectedModel;
+  }
+
+  /** 从当前轮安全边界接入插队消息；会话已关闭时丢弃，禁止向 closed queue 写入。 */
+  private promoteJumpQueue(): boolean {
+    const jump = this.jumpQueueCtl.take();
+    if (!jump || this.stopped) return false;
+    if (jump.permissionMode) this.applyPermissionMode(jump.permissionMode);
+    this.queue.push({
+      type: "user",
+      message: buildUserMessage(jump.prompt, jump.images ?? []),
+      parent_tool_use_id: null,
+    } as any);
+    this.turnActive = true;
+    return true;
+  }
+
+  private makeCanUseToolCallback() {
+    const permissionCallback = this.permMgr.makeCallback(
+      (e) => this.emit(e),
+      this.subagentTracker,
+    );
+    // canUseTool 只对需要授权的工具（Write/Edit/Bash…）触发；Read 这种只读工具 CLI 在
+    // allowDangerouslySkipPermissions 下自动放行、根本不调 canUseTool，所以图片 Read 守卫
+    // 不能放这里——改用 makeImageGuardHook 的 PreToolUse hook（对所有工具都触发）。
+    return async (toolName: string, input: unknown, opts?: unknown) =>
+      permissionCallback(toolName, input, opts as any);
+  }
+
+  /** PreToolUse hook：在 Read 执行前拦截图片路径。hook 对所有工具都触发（含 CLI 自动
+   *  放行的只读工具），不像 canUseTool 只覆盖需授权工具，所以图片 Read 守卫必须放这里。
+   *  返回 permissionDecision:"deny" 会把 permissionDecisionReason 作为工具错误回喂模型，
+   *  模型可据此改读 OCR/文本或跳过，且真实图片字节永不进入会话。 */
+  private makeImageGuardHook(): HookCallback {
+    return async (input: HookInput) => {
+      if (input.hook_event_name !== "PreToolUse") return {};
+      if (input.tool_name !== "Read") return {};
+      const toolInput = input.tool_input;
+      if (!toolInput || typeof toolInput !== "object" || Array.isArray(toolInput)) return {};
+      const fp = (toolInput as Record<string, unknown>).file_path;
+      if (!isImagePath(fp)) return {};
+      const supported = await this.imageInputSupported();
+      if (supported === false) {
+        return {
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse" as const,
+            permissionDecision: "deny" as const,
+            permissionDecisionReason: IMAGE_INPUT_UNSUPPORTED_MESSAGE,
+          },
+        };
+      }
+      return {};
+    };
   }
 
   // ================================================================
@@ -327,66 +423,33 @@ export class SessionWorker {
   // 命令处理（替代原先 index.ts 的 rl.on("line",...)）
   // ================================================================
 
+  private enqueueSend(cmd: Extract<SidecarCommand, { cmd: "send" }>): void {
+    if (this.sendQueue) {
+      const next = this.sendQueue.then(() => this.handleSend(cmd));
+      const tracked = next.catch(() => {});
+      this.sendQueue = tracked;
+      void tracked.finally(() => {
+        if (this.sendQueue === tracked) this.sendQueue = null;
+      });
+      return;
+    }
+
+    const pending = this.handleSend(cmd);
+    if (!cmd.images?.length) {
+      void pending;
+      return;
+    }
+
+    const tracked = pending.catch(() => {});
+    this.sendQueue = tracked;
+    void tracked.finally(() => {
+      if (this.sendQueue === tracked) this.sendQueue = null;
+    });
+  }
+
   handleCommand(cmd: SidecarCommand): void {
     if (cmd.cmd === "send") {
-      // session_id 在命令里是路由键（SessionManager 用它找 worker）。
-      // this.resumeSource 的含义是 fork 源——只在 btw / provider_switched 时
-      // 才从命令里读取；普通 send 不设（否则 SDK 会尝试 resume 不存在的会话）。
-      if (cmd.provider_switched) {
-        this.shouldForkNextConnect = true;
-        if (cmd.session_id) this.resumeSource = cmd.session_id;
-      }
-
-      if (cmd.btw) {
-        this.shouldForkNextConnect = true;
-        (this as any).btwMode = true;
-        (this as any).lightweightMode = !!cmd.lightweight;
-        // BTW forks from `fork_from`, not `session_id`（session_id 是 BTW 自己的路由键）
-        const forkFrom = (cmd as any).fork_from as string | undefined;
-        if (forkFrom) this.resumeSource = forkFrom;
-      }
-
-      // 新一轮用户消息：清 TODO 快照
-      this.taskTracker.reset();
-      this.emit({ type: "tasks_update", tasks: [] });
-
-      // 首条消息：启动 query 循环
-      if (!this.currentQuery) {
-        if (cmd.permission_mode) this.applyPermissionMode(cmd.permission_mode);
-        // 重开已有会话：resume_session_id → resumeSource，startLoop 据此 resume。
-        // 普通新会话不带这字段，resumeSource 保持空 → 全新会话。
-        if (cmd.resume_session_id) this.resumeSource = cmd.resume_session_id;
-        this.startLoop(cmd.cwd ?? this.cwd);
-        this.queue.push({
-          type: "user",
-          message: buildUserMessage(cmd.prompt, cmd.images ?? []),
-          parent_tool_use_id: null,
-        } as any);
-        this.turnActive = true;
-        return;
-      }
-
-      // 插队
-      if (cmd.jump_queue && this.currentQuery && this.turnActive) {
-        this.jumpQueueCtl.request({
-          prompt: cmd.prompt,
-          images: cmd.images,
-          permissionMode: cmd.permission_mode,
-        });
-        if (this.toolLifecycle.isIdle()) {
-          this.currentQuery.interrupt().catch(() => {});
-        }
-        return;
-      }
-
-      // 普通续发
-      if (cmd.permission_mode) this.applyPermissionMode(cmd.permission_mode);
-      this.queue.push({
-        type: "user",
-        message: buildUserMessage(cmd.prompt, cmd.images ?? []),
-        parent_tool_use_id: null,
-      } as any);
-      this.turnActive = true;
+      this.enqueueSend(cmd);
 
     } else if (cmd.cmd === "permission_response") {
       const outcome = this.permMgr.resolve(cmd.id, cmd.approved, cmd.always, cmd.answers);
@@ -416,6 +479,77 @@ export class SessionWorker {
         commit: (m) => { this.currentModel = m; },
       });
     }
+  }
+
+  private async handleSend(cmd: Extract<SidecarCommand, { cmd: "send" }>): Promise<void> {
+    if (this.stopped) return;
+    this.applySendRuntimeConfig(cmd.env);
+
+    if (cmd.images?.length && !(await this.guardImageInput(cmd.images))) {
+      this.emit({ type: "image_input_rejected", message: IMAGE_INPUT_UNSUPPORTED_MESSAGE });
+      return;
+    }
+    // 图片 probe 是异步的；等待期间会话可能已关闭，不能让已移除的 worker 重新启动 query。
+    if (this.stopped) return;
+
+    // session_id 在命令里是路由键（SessionManager 用它找 worker）。
+    // this.resumeSource 的含义是 fork 源——只在 btw / provider_switched 时
+    // 才从命令里读取；普通 send 不设（否则 SDK 会尝试 resume 不存在的会话）。
+    if (cmd.provider_switched) {
+      this.shouldForkNextConnect = true;
+      if (cmd.session_id) this.resumeSource = cmd.session_id;
+    }
+
+    if (cmd.btw) {
+      this.shouldForkNextConnect = true;
+      (this as any).btwMode = true;
+      (this as any).lightweightMode = !!cmd.lightweight;
+      // BTW forks from `fork_from`, not `session_id`（session_id 是 BTW 自己的路由键）
+      const forkFrom = (cmd as any).fork_from as string | undefined;
+      if (forkFrom) this.resumeSource = forkFrom;
+    }
+
+    // 新一轮用户消息：清 TODO 快照
+    this.taskTracker.reset();
+    this.emit({ type: "tasks_update", tasks: [] });
+
+    // 首条消息：启动 query 循环
+    if (!this.currentQuery) {
+      if (cmd.permission_mode) this.applyPermissionMode(cmd.permission_mode);
+      // 重开已有会话：resume_session_id → resumeSource，startLoop 据此 resume。
+      // 普通新会话不带这字段，resumeSource 保持空 → 全新会话。
+      if (cmd.resume_session_id) this.resumeSource = cmd.resume_session_id;
+      this.startLoop(cmd.cwd ?? this.cwd);
+      this.queue.push({
+        type: "user",
+        message: buildUserMessage(cmd.prompt, cmd.images ?? []),
+        parent_tool_use_id: null,
+      } as any);
+      this.turnActive = true;
+      return;
+    }
+
+    // 插队
+    if (cmd.jump_queue && this.currentQuery && this.turnActive) {
+      this.jumpQueueCtl.request({
+        prompt: cmd.prompt,
+        images: cmd.images,
+        permissionMode: cmd.permission_mode,
+      });
+      if (this.toolLifecycle.isIdle()) {
+        this.currentQuery.interrupt().catch(() => {});
+      }
+      return;
+    }
+
+    // 普通续发
+    if (cmd.permission_mode) this.applyPermissionMode(cmd.permission_mode);
+    this.queue.push({
+      type: "user",
+      message: buildUserMessage(cmd.prompt, cmd.images ?? []),
+      parent_tool_use_id: null,
+    } as any);
+    this.turnActive = true;
   }
 
   // ================================================================
@@ -454,23 +588,22 @@ export class SessionWorker {
             options: {
               permissionMode: this.currentPermissionMode as any,
               allowDangerouslySkipPermissions: true,
-              canUseTool: this.permMgr.makeCallback(
-                (e) => this.emit(e),
-                this.subagentTracker,
-              ) as any,
+              canUseTool: this.makeCanUseToolCallback() as any,
               settingSources: ["project", "user"],
               ...(this.lightweightMode
                 ? { allowedTools: [] as string[] }
                 : { allowedTools: ["Agent", "Task"] }),
               skills: "all",
               plugins: buildPluginsOption(),
-              ...(subagentModelHook
-                ? {
-                    hooks: {
-                      PreToolUse: [{ matcher: "^(Agent|Task)$", hooks: [subagentModelHook] }],
-                    },
-                  }
-                : {}),
+              hooks: {
+                PreToolUse: [
+                  ...(subagentModelHook
+                    ? [{ matcher: "^(Agent|Task)$", hooks: [subagentModelHook] }]
+                    : []),
+                  // 图片 Read 守卫：canUseTool 对只读工具不触发，必须用 hook。
+                  { matcher: "^Read$", hooks: [this.makeImageGuardHook()] },
+                ],
+              },
               includePartialMessages: false,
               ...(this.currentModel ? { model: this.currentModel } : {}),
               ...(cwd ? { cwd } : {}),
@@ -490,16 +623,8 @@ export class SessionWorker {
             this.lastSdkMessageAt = Date.now();
             if ((msg as any).type === "result") {
               this.turnActive = false;
-              const jump = this.jumpQueueCtl.take();
-              if (jump) {
+              if (this.promoteJumpQueue()) {
                 this.toolLifecycle.reset();
-                if (jump.permissionMode) this.applyPermissionMode(jump.permissionMode);
-                this.queue.push({
-                  type: "user",
-                  message: buildUserMessage(jump.prompt, jump.images ?? []),
-                  parent_tool_use_id: null,
-                } as any);
-                this.turnActive = true;
                 void this.emitContextUsage(q);
                 void this.emitRateLimit(q);
                 continue;
@@ -578,16 +703,7 @@ export class SessionWorker {
           if (e?.name !== "AbortError") {
             this.emit({ type: "error", message: String(e?.message ?? e), fatal: false });
           }
-          const jump = this.jumpQueueCtl.take();
-          if (jump) {
-            if (jump.permissionMode) this.applyPermissionMode(jump.permissionMode);
-            this.queue.push({
-              type: "user",
-              message: buildUserMessage(jump.prompt, jump.images ?? []),
-              parent_tool_use_id: null,
-            } as any);
-            this.turnActive = true;
-          }
+          this.promoteJumpQueue();
         }
       }
     } finally {
@@ -625,6 +741,21 @@ export class SessionWorker {
    *  所以调用后 SessionManager 的 re-key 立即生效。 */
   _emitForTest(event: ChatEvent): void {
     this.emit(event);
+  }
+
+  /** 测试用：暴露 SDK canUseTool callback，验证权限管理器委托。 */
+  _testCanUseTool() {
+    return this.makeCanUseToolCallback();
+  }
+
+  /** 测试用：暴露图片 Read 守卫的 PreToolUse hook，验证 deny/allow 决策。 */
+  _testImageGuardHook() {
+    return this.makeImageGuardHook();
+  }
+
+  /** 测试用：暴露待发送用户消息数，验证拒绝图片时不会入队。 */
+  _testQueueLength(): number {
+    return ((this.queue as any).queue as unknown[] | undefined)?.length ?? 0;
   }
 
   /** 停止会话：关闭 query，释放 claude.exe，清理资源 */

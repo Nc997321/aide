@@ -184,6 +184,29 @@ describe("useChatSession per-session store", () => {
     expect(chat.isBusy.value).toBe(false);
   });
 
+  it("image_input_rejected 解除 busy，保留会话以发送下一条纯文本", async () => {
+    const { state, health } = useSessionState();
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("分析图片", {
+      images: [{ data: "not-used", mediaType: "image/png" }],
+    });
+    expect(chat.isBusy.value).toBe(true);
+
+    emit({ type: "image_input_rejected", message: "当前模型不支持图片输入", session_id: "uuid-a" });
+    await flush();
+
+    expect(chat.isBusy.value).toBe(false);
+    expect(state["uuid-a"]).toBe("waiting");
+    expect(health["uuid-a"]).toBe("warning");
+    const lastMessage = chat.messages.value[chat.messages.value.length - 1];
+    expect(lastMessage?.blocks).toContainEqual({ type: "text", text: "当前模型不支持图片输入" });
+
+    await chat.sendMessage("只发文本");
+    expect(state["uuid-a"]).toBe("running");
+  });
+
   it("红点(warning)在下一条消息发出时清除，回到 running/绿", async () => {
     const { health, dotTone } = useSessionState();
     const sid = ref<string | null>("uuid-a");

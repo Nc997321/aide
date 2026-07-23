@@ -99,6 +99,10 @@ export type ChatEvent =
   // 不认识具体配额类型。subscription 为订阅档位（pro/max…），API Key/三方为 null。
   | { type: "rate_limit"; subscription: string | null; windows: RateLimitWindow[] }
   | { type: "tasks_update"; tasks: TaskItem[] }
+  // Rust command 应答：仅供运行期 reader 识别 probe_image_input 的结果，不转发为 UI 消息。
+  | { type: "image_input_probe_result"; request_id: string; supported: boolean | null }
+  // 用户消息二次防线：provider-agnostic，不携带厂商专属字段；message 是可直接展示的人类说明。
+  | { type: "image_input_rejected"; message: string }
   // fatal:false = 可恢复错误（进程仍存活、继续等下一条消息）；缺省/true = 致命。
   // 前端据此决定落 waiting+warning（红点）还是 stopped（灰点）。
   | { type: "error"; message: string; fatal?: boolean }
@@ -126,6 +130,12 @@ export interface ImageAttachment {
 // Rust → Sidecar（每行一个 JSON，从 stdin 读取）。
 // 所有命令都带 session_id：SessionManager 按它路由到对应 SessionWorker。
 export type SidecarCommand =
+  | {
+      cmd: "probe_image_input";
+      request_id: string;
+      model?: string;
+      env: Record<string, string>;
+    }
   | {
       cmd: "send";
       session_id: string;

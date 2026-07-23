@@ -7,6 +7,8 @@ node_modules/
 # Build output
 dist/
 src-tauri/target/
+# 任何自定义 cargo target 目录（如验证时 CARGO_TARGET_DIR=target-image-probe-verify）
+src-tauri/target-*/
 
 # IDE
 .idea/
