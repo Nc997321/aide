@@ -7,6 +7,7 @@ import type { JdkEntry } from "../types";
 import CustomizationList from "./customizations/CustomizationList.vue";
 import CustomizationDetail from "./customizations/CustomizationDetail.vue";
 import MarketplaceTab from "./marketplace/MarketplaceTab.vue";
+import DiagnosticsDashboard from "./DiagnosticsDashboard.vue";
 import ProviderSettings from "./ProviderSettings.vue";
 import ThemedSelect from "./ThemedSelect.vue";
 import Icon from "./Icon.vue";
@@ -35,7 +36,7 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-type Tab = "general" | "providers" | "extensions" | "marketplace" | "codegraph" | "java";
+type Tab = "general" | "providers" | "extensions" | "marketplace" | "codegraph" | "java" | "diagnostics";
 
 const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 
@@ -350,6 +351,14 @@ function onOverlayClick(e: MouseEvent) {
               <Icon class="nav-icon" name="java" :size="16" />
               <span class="nav-label">Java</span>
             </button>
+            <button
+              class="nav-item"
+              :class="{ active: activeTab === 'diagnostics' }"
+              @click="activeTab = 'diagnostics'"
+            >
+              <Icon class="nav-icon" name="agent" :size="16" />
+              <span class="nav-label">诊断</span>
+            </button>
           </nav>
 
           <!-- Right content -->
@@ -632,7 +641,7 @@ function onOverlayClick(e: MouseEvent) {
             </div>
 
             <!-- ── Java / JDK Tab ── -->
-            <div v-else class="tab-java">
+            <div v-else-if="activeTab === 'java'" class="tab-java">
               <div class="jdk-intro">
                 <span class="field-hint">
                   登记 JDK 注册表（机器级，所有工作区共享）。在运行配置里按项目选不同 JDK，
@@ -699,6 +708,11 @@ function onOverlayClick(e: MouseEvent) {
                 </div>
                 <span class="field-hint">填 JDK home（含 release 文件的目录）→ 自动校验并解析版本号</span>
               </div>
+            </div>
+
+            <!-- ── 诊断 Tab ── -->
+            <div v-else-if="activeTab === 'diagnostics'" class="tab-diagnostics">
+              <DiagnosticsDashboard />
             </div>
           </div>
         </div>
