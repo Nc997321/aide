@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aide · 权限设置视觉稿</title>
+  <style>
+    /* 静态视觉稿：组件样式仅消费现有 --aide-* token。
+       :root 的值是 warm-dark.ts 的预览注入；正式界面由 applyTheme() 注入同名变量。 */
+    :root {
+      color-scheme: dark;
+      --aide-bg-deep: #141218; --aide-bg-base: #1a1820; --aide-bg-raised: #221f29; --aide-bg-overlay: rgba(12,10,16,.72);
+      --aide-surface-default: #292631; --aide-surface-hover: #322e3c; --aide-surface-active: #3d3848;
+      --aide-text-primary: #ece5db; --aide-text-secondary: #b3aa9c; --aide-text-muted: #7d7568; --aide-text-on-accent: #241d15;
+      --aide-accent: #d9ab78; --aide-accent-hover: #e6bd8e; --aide-accent-subtle: rgba(217,171,120,.13);
+      --aide-success: #8bc48a; --aide-warning: #e8c374; --aide-danger: #e87070; --aide-info: #7eb8d8;
+      --aide-border: rgba(255,214,160,.09); --aide-border-subtle: rgba(255,214,160,.045); --aide-border-strong: rgba(255,220,175,.16);
+      --aide-highlight-inset: inset 0 1px 0 rgba(255,235,210,.07); --aide-accent-gradient: linear-gradient(180deg,#e6bd8e,#cf9c66);
+      --aide-accent-glow: 0 6px 20px rgba(212,165,116,.28); --aide-shadow-sm: 0 1px 2px rgba(0,0,0,.28); --aide-shadow-md: 0 6px 20px rgba(0,0,0,.34), 0 1px 4px rgba(0,0,0,.22); --aide-shadow-lg: 0 18px 56px rgba(0,0,0,.5), 0 4px 14px rgba(0,0,0,.3);
+      --aide-radius-sm: 6px; --aide-radius-md: 9px; --aide-radius-lg: 13px; --aide-ease-t: .16s cubic-bezier(.2,.8,.2,1);
+    }
+    body.catppuccin {
+      --aide-bg-deep: #11111b; --aide-bg-base: #1e1e2e; --aide-bg-raised: #313244; --aide-bg-overlay: rgba(17,17,27,.75);
+      --aide-surface-default: #313244; --aide-surface-hover: #45475a; --aide-surface-active: #585b70;
+      --aide-text-primary: #cdd6f4; --aide-text-secondary: #a6adc8; --aide-text-muted: #6c7086; --aide-text-on-accent: #1e1e2e;
+      --aide-accent: #89b4fa; --aide-accent-hover: #b4d0fb; --aide-accent-subtle: rgba(137,180,250,.12);
+      --aide-success: #a6e3a1; --aide-warning: #f9e2af; --aide-danger: #f38ba8; --aide-info: #89dceb;
+      --aide-border: rgba(255,255,255,.06); --aide-border-subtle: rgba(255,255,255,.03); --aide-border-strong: rgba(255,255,255,.14);
+      --aide-highlight-inset: inset 0 1px 0 rgba(255,255,255,.06); --aide-accent-gradient: linear-gradient(180deg,#a3c0fb,#89b4fa);
+      --aide-accent-glow: 0 6px 20px rgba(137,180,250,.30); --aide-shadow-sm: 0 1px 3px rgba(0,0,0,.25), 0 1px 2px rgba(0,0,0,.15); --aide-shadow-md: 0 4px 12px rgba(0,0,0,.3), 0 1px 4px rgba(0,0,0,.2); --aide-shadow-lg: 0 12px 40px rgba(0,0,0,.45), 0 4px 12px rgba(0,0,0,.25);
+      --aide-radius-sm: 4px; --aide-radius-md: 8px; --aide-radius-lg: 12px;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 960px; background: var(--aide-bg-deep); color: var(--aide-text-primary); font: 13px/1.45 Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+    button, input { font: inherit; } button { color: inherit; }
+    .page { min-height: 100vh; padding: 34px; background: radial-gradient(700px 240px at 50% -80px, var(--aide-accent-subtle), transparent 70%), var(--aide-bg-deep); }
+    .preview-bar { width: 1040px; margin: 0 auto 14px; display: flex; align-items: center; justify-content: space-between; color: var(--aide-text-muted); font-size: 12px; }
+    .preview-bar strong { color: var(--aide-text-secondary); font-weight: 600; }
+    .theme-toggle { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--aide-border); background: var(--aide-bg-base); border-radius: var(--aide-radius-md); box-shadow: var(--aide-highlight-inset); }
+    .theme-toggle button, .scope-tabs button, .nav-item, .icon-btn { border: 0; background: transparent; cursor: pointer; border-radius: var(--aide-radius-sm); transition: background var(--aide-ease-t), color var(--aide-ease-t); }
+    .theme-toggle button { padding: 4px 9px; color: var(--aide-text-muted); font-size: 11px; }
+    .theme-toggle button.active { background: var(--aide-surface-active); color: var(--aide-text-primary); }
+    .settings-shell { width: 1040px; height: 650px; margin: 0 auto; overflow: hidden; display: flex; flex-direction: column; border: 1px solid var(--aide-border-strong); border-radius: var(--aide-radius-lg); background: var(--aide-bg-raised); box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset); }
+    .dialog-header { height: 52px; display: flex; align-items: center; justify-content: space-between; padding: 0 18px 0 20px; border-bottom: 1px solid var(--aide-border-subtle); background: linear-gradient(180deg, var(--aide-border-subtle), transparent), var(--aide-bg-raised); }
+    .dialog-title { font-size: 14px; font-weight: 600; } .dialog-close { color: var(--aide-text-muted); font-size: 19px; padding: 2px 7px; }
+    .dialog-body { min-height: 0; flex: 1; display: flex; }
+    .side-nav { width: 154px; flex: 0 0 auto; padding: 10px 6px; background: var(--aide-bg-deep); border-right: 1px solid var(--aide-border-subtle); }
+    .nav-item { width: 100%; padding: 8px 10px; display: flex; gap: 9px; align-items: center; color: var(--aide-text-secondary); text-align: left; }
+    .nav-item:hover { background: var(--aide-surface-default); color: var(--aide-text-primary); }
+    .nav-item.active { color: var(--aide-text-primary); background: var(--aide-accent-subtle); box-shadow: inset 2px 0 0 var(--aide-accent); }
+    .nav-icon { width: 18px; text-align: center; color: var(--aide-accent); font-size: 15px; }
+    .content { min-width: 0; flex: 1; overflow: auto; padding: 22px; }
+    .content-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+    h1 { margin: 0; font-size: 16px; } .subtext { margin: 4px 0 0; color: var(--aide-text-muted); font-size: 12px; }
+    .primary-btn, .secondary-btn { height: 31px; border-radius: var(--aide-radius-md); padding: 0 12px; cursor: pointer; font-size: 12px; font-weight: 500; }
+    .primary-btn { border: 1px solid color-mix(in srgb, var(--aide-accent) 55%, var(--aide-border)); background: var(--aide-accent-gradient); color: var(--aide-text-on-accent); box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset); }
+    .secondary-btn { border: 1px solid var(--aide-border); background: var(--aide-surface-default); color: var(--aide-text-secondary); box-shadow: var(--aide-highlight-inset), var(--aide-shadow-sm); }
+    .scope-tabs { display: flex; gap: 4px; margin: 20px 0 11px; padding: 3px; border: 1px solid var(--aide-border-subtle); background: var(--aide-bg-base); border-radius: var(--aide-radius-md); width: fit-content; }
+    .scope-tabs button { padding: 5px 10px; color: var(--aide-text-muted); font-size: 11.5px; }
+    .scope-tabs button.active { background: var(--aide-surface-active); color: var(--aide-text-primary); box-shadow: var(--aide-highlight-inset); }
+    .scope-summary { display: flex; gap: 8px; align-items: center; min-height: 38px; padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--aide-info) 25%, var(--aide-border)); background: color-mix(in srgb, var(--aide-info) 7%, var(--aide-bg-base)); border-radius: var(--aide-radius-md); color: var(--aide-text-secondary); font-size: 12px; }
+    .scope-summary .badge { color: var(--aide-info); font-weight: 600; }
+    .rule-list { margin-top: 12px; display: grid; gap: 8px; }
+    .rule-card { position: relative; display: grid; grid-template-columns: 34px minmax(0,1fr) auto; gap: 11px; align-items: center; padding: 12px; border: 1px solid var(--aide-border); border-radius: var(--aide-radius-md); background: var(--aide-bg-base); box-shadow: var(--aide-highlight-inset); }
+    .rule-card:hover { border-color: var(--aide-border-strong); background: var(--aide-surface-default); }
+    .rule-symbol { height: 30px; width: 30px; display: grid; place-items: center; border-radius: var(--aide-radius-sm); font-family: "Cascadia Code", monospace; font-weight: 700; }
+    .allow .rule-symbol { color: var(--aide-success); background: color-mix(in srgb, var(--aide-success) 12%, transparent); } .ask .rule-symbol { color: var(--aide-warning); background: color-mix(in srgb, var(--aide-warning) 12%, transparent); } .deny .rule-symbol { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 12%, transparent); }
+    .rule-title { min-width: 0; display: flex; align-items: center; gap: 8px; } .rule-title code { color: var(--aide-text-primary); font: 600 12px "Cascadia Code", Consolas, monospace; } .rule-meta { margin-top: 3px; overflow: hidden; color: var(--aide-text-muted); font: 11px "Cascadia Code", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .effect { display: inline-flex; min-width: 52px; justify-content: center; padding: 3px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; } .allow .effect { color: var(--aide-success); background: color-mix(in srgb, var(--aide-success) 13%, transparent); } .ask .effect { color: var(--aide-warning); background: color-mix(in srgb, var(--aide-warning) 13%, transparent); } .deny .effect { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 13%, transparent); }
+    .rule-actions { display: flex; gap: 3px; margin-left: 8px; } .icon-btn { width: 26px; height: 26px; color: var(--aide-text-muted); } .icon-btn:hover { color: var(--aide-text-primary); background: var(--aide-surface-hover); }
+    .readonly { opacity: .78; } .readonly::after { content: "受管策略"; position: absolute; top: 8px; right: 10px; color: var(--aide-text-muted); font-size: 10px; }
+    .readonly .rule-actions { display: none; } .readonly .effect { margin-right: 38px; }
+    .priority-note { margin-top: 14px; display: flex; gap: 8px; padding: 10px 12px; border-radius: var(--aide-radius-md); border: 1px solid color-mix(in srgb, var(--aide-warning) 24%, var(--aide-border)); background: color-mix(in srgb, var(--aide-warning) 7%, var(--aide-bg-base)); color: var(--aide-text-secondary); font-size: 11.5px; }
+    .priority-note strong { color: var(--aide-warning); }
+    .toast { position: fixed; left: 50%; bottom: 24px; z-index: 2; transform: translate(-50%, 120px); padding: 9px 12px; border: 1px solid color-mix(in srgb, var(--aide-success) 28%, var(--aide-border)); border-radius: var(--aide-radius-md); background: var(--aide-bg-raised); box-shadow: var(--aide-shadow-md), var(--aide-highlight-inset); color: var(--aide-text-primary); transition: transform var(--aide-ease-t); font-size: 12px; } .toast.show { transform: translate(-50%, 0); }
+    @media (max-width: 1050px) { body { min-width: 0; } .page { padding: 18px; } .preview-bar, .settings-shell { width: 100%; } .settings-shell { height: calc(100vh - 75px); } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="preview-bar">
+      <span><strong>Aide · 权限设置</strong>　静态视觉稿 / 仅验证布局与主题适配</span>
+      <div class="theme-toggle" aria-label="预览主题">
+        <button class="active" data-theme="warm">Warm Dark</button>
+        <button data-theme="cat">Catppuccin</button>
+      </div>
+    </div>
+    <section class="settings-shell" aria-label="Aide 设置">
+      <header class="dialog-header"><span class="dialog-title">设置</span><button class="icon-btn dialog-close" aria-label="关闭">×</button></header>
+      <div class="dialog-body">
+        <nav class="side-nav" aria-label="设置分类">
+          <button class="nav-item"><span class="nav-icon">◉</span>通用</button>
+          <button class="nav-item"><span class="nav-icon">◇</span>模型</button>
+          <button class="nav-item active"><span class="nav-icon">⌁</span>权限</button>
+          <button class="nav-item"><span class="nav-icon">▦</span>扩展</button>
+          <button class="nav-item"><span class="nav-icon">◈</span>市场</button>
+          <button class="nav-item"><span class="nav-icon">⬡</span>代码索引</button>
+          <button class="nav-item"><span class="nav-icon">J</span>Java</button>
+        </nav>
+        <div class="content">
+          <div class="content-head">
+            <div><h1>工具权限</h1><p class="subtext">为 Aide 内的工具调用设置预先允许、每次询问或拒绝规则。</p></div>
+            <button id="add-rule" class="primary-btn">＋ 添加规则</button>
+          </div>
+          <div class="scope-tabs" role="tablist">
+            <button class="active" data-scope="user">用户全局</button>
+            <button data-scope="project">项目共享</button>
+            <button data-scope="local">项目本地</button>
+            <button data-scope="managed">受管策略</button>
+          </div>
+          <div id="scope-summary" class="scope-summary"><span class="badge">用户全局</span><span>写入 <code>~/.aide/settings.json</code>，对所有工作区生效。</span></div>
+          <div id="rule-list" class="rule-list"></div>
+          <div class="priority-note"><strong>优先级</strong><span>受管策略 → 用户全局 → 项目共享 → 项目本地 → 本会话。上层的拒绝规则不能被下层放宽。</span></div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <div id="toast" class="toast" role="status">已创建“每次询问”规则草稿</div>
+  <script>
+    const ruleSets = {
+      user: [
+        { kind: 'allow', symbol: '✓', tool: 'Bash', detail: '命令前缀：pnpm test', effect: '允许' },
+        { kind: 'ask', symbol: '?', tool: 'Write', detail: '路径：**/*', effect: '询问' },
+        { kind: 'deny', symbol: '×', tool: 'Bash', detail: '命令包含：rm -rf', effect: '拒绝' },
+      ],
+      project: [
+        { kind: 'allow', symbol: '✓', tool: 'Bash', detail: '命令前缀：cargo test', effect: '允许' },
+        { kind: 'ask', symbol: '?', tool: 'Edit', detail: '路径：src/**', effect: '询问' },
+      ],
+      local: [
+        { kind: 'allow', symbol: '✓', tool: 'Bash', detail: '命令前缀：pnpm dev', effect: '允许' },
+      ],
+      managed: [
+        { kind: 'deny', symbol: '×', tool: 'Bash', detail: '命令包含：curl | sh', effect: '拒绝', readonly: true },
+        { kind: 'ask', symbol: '?', tool: 'Write', detail: '路径：**/.env*', effect: '询问', readonly: true },
+      ],
+    };
+    const summaries = {
+      user: ['用户全局', '写入 ', '~/.aide/settings.json', '，对所有工作区生效。'],
+      project: ['项目共享', '写入 ', '.aide/settings.json', '，适合提交到 Git 与团队共享。'],
+      local: ['项目本地', '写入 ', '.aide/settings.local.json', '，仅当前机器生效，建议加入 Git 忽略。'],
+      managed: ['受管策略', '由管理员配置，只读。它的拒绝规则始终优先于其他层。'],
+    };
+    let scope = 'user';
+    const list = document.querySelector('#rule-list');
+    const summary = document.querySelector('#scope-summary');
+    function render() {
+      const text = summaries[scope];
+      summary.innerHTML = `<span class="badge">${text[0]}</span><span>${text.slice(1).join('')}</span>`;
+      list.innerHTML = ruleSets[scope].map(rule => `<article class="rule-card ${rule.kind} ${rule.readonly ? 'readonly' : ''}">
+        <span class="rule-symbol">${rule.symbol}</span><div><div class="rule-title"><code>${rule.tool}</code></div><div class="rule-meta">${rule.detail}</div></div>
+        <div style="display:flex;align-items:center"><span class="effect">${rule.effect}</span>${rule.readonly ? '' : '<span class="rule-actions"><button class="icon-btn" aria-label="编辑">✎</button><button class="icon-btn" aria-label="删除">×</button></span>'}</div>
+      </article>`).join('');
+      document.querySelector('#add-rule').style.visibility = scope === 'managed' ? 'hidden' : 'visible';
+    }
+    document.querySelectorAll('[data-scope]').forEach(button => button.addEventListener('click', () => {
+      scope = button.dataset.scope;
+      document.querySelectorAll('[data-scope]').forEach(item => item.classList.toggle('active', item === button));
+      render();
+    }));
+    document.querySelector('#add-rule').addEventListener('click', () => {
+      const toast = document.querySelector('#toast'); toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2600);
+    });
+    document.querySelectorAll('[data-theme]').forEach(button => button.addEventListener('click', () => {
+      const cat = button.dataset.theme === 'cat'; document.body.classList.toggle('catppuccin', cat);
+      document.querySelectorAll('[data-theme]').forEach(item => item.classList.toggle('active', item === button));
+    }));
+    render();
+  </script>
+</body>
+</html>
