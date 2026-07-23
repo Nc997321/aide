@@ -369,6 +369,93 @@ describe("mapSdkMessage error results (未登录 / 额度上限 不再静默)", 
   });
 });
 
+describe("mapSdkMessage usage 归因（subagentTurn / byModel）", () => {
+  const tasks = () => new TaskTracker();
+  const tools = () => new ToolLifecycleTracker();
+
+  function successResult(modelUsage: Record<string, any>, cost = 0.5) {
+    return { type: "result", subtype: "success", is_error: false, total_cost_usd: cost, modelUsage };
+  }
+
+  it("本轮派发了子代理时，message_stop.usage 带 subagentTurn=true + subagentCount", () => {
+    const events: ChatEvent[] = [];
+    const subagents = new SubagentTracker();
+    // 一轮内派发 2 个子代理（assistant Agent tool_use → mapper 调 subagents.handleToolUse 累加计数）
+    mapSdkMessage(assistantToolUse("sa1", "Agent", { description: "a" }), (e) => events.push(e), tasks(), subagents, tools());
+    mapSdkMessage(assistantToolUse("sa2", "Agent", { description: "b" }), (e) => events.push(e), tasks(), subagents, tools());
+    mapSdkMessage(
+      successResult({ "claude-sonnet-5": { inputTokens: 1000, outputTokens: 100, costUSD: 0.01 } }),
+      (e) => events.push(e),
+      tasks(),
+      subagents,
+      tools(),
+    );
+    const stop = events.find((e) => e.type === "message_stop") as any;
+    expect(stop.usage).toMatchObject({ inputTokens: 1000, subagentTurn: true, subagentCount: 2 });
+    // 单模型不带 byModel
+    expect(stop.usage.byModel).toBeUndefined();
+  });
+
+  it("本轮无子代理时，usage 不带 subagentTurn（前端走 solo 分流）", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      successResult({ "claude-sonnet-5": { inputTokens: 200, outputTokens: 20, costUSD: 0.002 } }),
+      (e) => events.push(e),
+      tasks(),
+      new SubagentTracker(),
+      tools(),
+    );
+    const stop = events.find((e) => e.type === "message_stop") as any;
+    expect(stop.usage.subagentTurn).toBeUndefined();
+    expect(stop.usage.subagentCount).toBeUndefined();
+  });
+
+  it("多模型时保留 byModel 分桶，同时给出汇总总数", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      successResult({
+        "claude-sonnet-5": { inputTokens: 1000, outputTokens: 100, cacheReadInputTokens: 50, cacheCreationInputTokens: 10, costUSD: 0.01 },
+        "claude-haiku-4": { inputTokens: 300, outputTokens: 30, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.001 },
+      }),
+      (e) => events.push(e),
+      tasks(),
+      new SubagentTracker(),
+      tools(),
+    );
+    const stop = events.find((e) => e.type === "message_stop") as any;
+    expect(stop.usage.inputTokens).toBe(1300);
+    expect(stop.usage.byModel).toMatchObject({
+      "claude-sonnet-5": { inputTokens: 1000 },
+      "claude-haiku-4": { inputTokens: 300 },
+    });
+  });
+
+  it("error/abort result 也消费掉本轮子代理计数，不泄漏到下一轮", () => {
+    const subagents = new SubagentTracker();
+    const events: ChatEvent[] = [];
+    mapSdkMessage(assistantToolUse("sa1", "Agent", { description: "a" }), (e) => events.push(e), tasks(), subagents, tools());
+    // 本轮以 abort result 收尾（usage:null），计数应被消费
+    mapSdkMessage(
+      { type: "result", subtype: "error_during_execution", is_error: true, total_cost_usd: 0, errors: ["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use"] },
+      (e) => events.push(e),
+      tasks(),
+      subagents,
+      tools(),
+    );
+    // 下一轮无子代理，usage 不应带 subagentTurn
+    events.length = 0;
+    mapSdkMessage(
+      successResult({ "claude-sonnet-5": { inputTokens: 10, outputTokens: 1, costUSD: 0 } }),
+      (e) => events.push(e),
+      tasks(),
+      subagents,
+      tools(),
+    );
+    const stop = events.find((e) => e.type === "message_stop") as any;
+    expect(stop.usage.subagentTurn).toBeUndefined();
+  });
+});
+
 describe("buildRateLimitEvent (订阅额度可见化，多窗口)", () => {
   it("folds all parallel windows with 0-100 utilization and ISO reset → ms", () => {
     const ev: any = buildRateLimitEvent({
@@ -714,7 +801,7 @@ describe("mapSdkMessage routing for subagent tools", () => {
     expect(events).toEqual([]);
   });
 
-  it("still ignores pure thinking blocks in a full subagent assistant message (already streamed as deltas)", () => {
+  it("emits subagent_thinking_delta for thinking blocks in a full subagent assistant message (includePartialMessages off)", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();
     const subagents = new SubagentTracker();
@@ -733,7 +820,10 @@ describe("mapSdkMessage routing for subagent tools", () => {
       message: { content: [{ type: "thinking", thinking: "内心戏" }] },
     };
     mapSdkMessage(msg, (e) => events.push(e), tasks, subagents, tools);
-    expect(events).toEqual([]);
+    // 有流式增量时 thinking 不会以完整块到达（已被 stream_event 的
+    // content_block_delta 逐字转发）；但 includePartialMessages 关闭后
+    // thinking 完整块必须在此补发，否则子代理思考过程永久丢失。
+    expect(events).toEqual([{ type: "subagent_thinking_delta", id: "a1", delta: "内心戏" }]);
   });
 
   it("async launch-ack tool_result 发 subagent_async_launched 而非 subagent_end，并注册 agentId+outputFile", () => {
@@ -956,5 +1046,38 @@ describe("filterSelectableModels（模型下拉框过滤内部占位符）", () 
       { value: "sonnet", displayName: "Sonnet" },
       { value: "opus", displayName: "Opus" },
     ]);
+  });
+});
+
+describe("mapSdkMessage 子代理嵌套软警告（warn-only）", () => {
+  const tasks = () => new TaskTracker();
+  const tools = () => new ToolLifecycleTracker();
+
+  it("顶层派子代理（depth 1）不发警告", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(assistantToolUse("a1", "Agent", { description: "顶层" }), (e) => events.push(e), tasks(), new SubagentTracker(), tools());
+    expect(events.find((e) => e.type === "subagent_nesting_warning")).toBeUndefined();
+  });
+
+  it("子代理内部再派子代理（depth 2 > 阈值 1）触发警告", () => {
+    const events: ChatEvent[] = [];
+    const subagents = new SubagentTracker();
+    mapSdkMessage(assistantToolUse("a1", "Agent", { description: "顶层" }), (e) => events.push(e), tasks(), subagents, tools());
+    events.length = 0;
+    // a1 内部又调 Agent（sidechain，parent_tool_use_id=a1）→ depth 2
+    mapSdkMessage(assistantToolUse("a2", "Agent", { description: "嵌套" }, "a1"), (e) => events.push(e), tasks(), subagents, tools());
+    const warn = events.find((e) => e.type === "subagent_nesting_warning") as any;
+    expect(warn).toBeDefined();
+    expect(warn.depth).toBe(2);
+    expect(warn.threshold).toBe(1);
+  });
+
+  it("子代理内部调非 Agent 工具不发警告", () => {
+    const events: ChatEvent[] = [];
+    const subagents = new SubagentTracker();
+    mapSdkMessage(assistantToolUse("a1", "Agent", { description: "顶层" }), (e) => events.push(e), tasks(), subagents, tools());
+    events.length = 0;
+    mapSdkMessage(assistantToolUse("r1", "Read", { file_path: "x.ts" }, "a1"), (e) => events.push(e), tasks(), subagents, tools());
+    expect(events.find((e) => e.type === "subagent_nesting_warning")).toBeUndefined();
   });
 });

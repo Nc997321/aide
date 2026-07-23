@@ -5,6 +5,14 @@ import { SubagentTracker } from "./subagents.js";
 import { ToolLifecycleTracker } from "./toolLifecycle.js";
 import { startOutputTail as globalStartOutputTail, stopOutputTail as globalStopOutputTail } from "./subagentOutputTail.js";
 
+/** 子代理嵌套深度告警阈值（warn-only，不阻止调用）。深度 > 阈值时发
+ *  subagent_nesting_warning。默认 1 = 子代理一旦派子代理（depth 2）就告警——这是
+ *  fan-out 成本指数膨胀的起点，也是 live 能可靠检测到的层级（更深的嵌套消息会被
+ *  emitSubagentProgress 的 isActive 守卫挡掉，因为嵌套子代理不进 active）。
+ *  env AIDE_SUBAGENT_NESTING_WARN 可覆盖（设 2 则只对 depth 3+ 告警，但深度 3+ live
+ *  不可见，故 >1 才有实际告警输出）。 */
+const NESTING_WARN_THRESHOLD = Number(process.env.AIDE_SUBAGENT_NESTING_WARN) || 1;
+
 /**
  * Build a Claude-SDK MessageParam from a prompt + optional image attachments.
  *
@@ -225,6 +233,10 @@ export function emitSubagentBlocks(
   id: string,
   emit: (e: ChatEvent) => void,
   claimModel: () => boolean,
+  /** 子代理内部又派发子代理（嵌套 Agent/Task tool_use）时的回调，参数是嵌套那次
+   *  tool_use 的 id。emitSubagentProgress 用它算嵌套深度并发 nesting 警告。
+   *  subagentOutputTail 的 .output 回放路径不传（async 回放不告警）。 */
+  onNestedSpawn?: (childToolUseId: string) => void,
 ) {
   // 子代理内部的工具产出：user 消息里的 tool_result block。按 tool_use_id（子代理
   // 内部那次工具调用的 id）发 subagent_tool_result，前端据此把产出回填到对应步骤——
@@ -240,18 +252,25 @@ export function emitSubagentBlocks(
     return;
   }
   if (msg.type !== "assistant" || !msg.message?.content) return;
-  const toolUses = (msg.message.content as any[]).filter((b) => b.type === "tool_use");
-  if (toolUses.length === 0) {
-    // includePartialMessages 关闭后没有 stream_event 逐字增量，子代理的完整文本
-    // 须在此一次性补发（否则子代理回复文本丢失）。注意：绝不能在这条分支里调用
-    // claimModel()——纯文本消息用不上 model，若在此调用会把"报一次 model"的一次性
-    // 名额白白吞掉，导致子代理先说文本再调工具时，真正携带 tool_use 的消息永远
-    // 拿不到 model（回归见 mapper.test.ts）。
-    for (const block of msg.message.content) {
-      if (block.type === "text" && block.text) emit({ type: "subagent_text_delta", id, delta: block.text });
+
+  // includePartialMessages 关闭后没有 stream_event 逐字增量，子代理的完整文本/思考
+  // 须在此一次性补发（否则子代理回复文本/思考丢失）。主线程同理（下方 mapSdkMessage
+  // assistant 分支），这里对齐那头：先遍历所有 block 无条件 emit text/thinking 块，
+  // 再把 tool_use 块独立处理。注意：model 只在携带 tool_use 块的消息才 claim——纯
+  // 文本消息用不上 model，若提前 claim 会把"报一次 model"的一次性名额白白吞掉，导致
+  // 子代理先说文本再调工具时，真正携带 tool_use 的消息永远拿不到 model（回归见
+  // mapper.test.ts）。
+  for (const block of msg.message.content) {
+    if (block.type === "text" && block.text) {
+      emit({ type: "subagent_text_delta", id, delta: block.text });
+    } else if (block.type === "thinking" && block.thinking) {
+      emit({ type: "subagent_thinking_delta", id, delta: block.thinking });
     }
-    return;
   }
+
+  const toolUses = (msg.message.content as any[]).filter((b) => b.type === "tool_use");
+  if (toolUses.length === 0) return;
+
   const model = claimModel() ? (msg.message.model as string) : undefined;
   toolUses.forEach((block, i) => {
     emit({
@@ -262,6 +281,10 @@ export function emitSubagentBlocks(
       input: block.input,
       ...(i === 0 && model ? { model } : {}),
     });
+    // 嵌套派发：子代理内部又调 Agent/Task。在这里通知调用方算深度+告警。
+    if (onNestedSpawn && SubagentTracker.isSubagentTool(block.name)) {
+      onNestedSpawn(block.id);
+    }
   });
 }
 
@@ -294,7 +317,19 @@ function emitSubagentProgress(msg: any, emit: (e: ChatEvent) => void, subagents:
     return;
   }
 
-  emitSubagentBlocks(msg, parentId, emit, () => isAdoptableAssistantModel(msg) && subagents.claimModelReport(parentId));
+  emitSubagentBlocks(
+    msg,
+    parentId,
+    emit,
+    () => isAdoptableAssistantModel(msg) && subagents.claimModelReport(parentId),
+    // 嵌套派发回调：子代理内部又调 Agent/Task → 算深度，超阈值发软警告（warn-only）。
+    (childId) => {
+      const depth = subagents.recordNestedSpawn(parentId, childId);
+      if (depth > NESTING_WARN_THRESHOLD) {
+        emit({ type: "subagent_nesting_warning", depth, threshold: NESTING_WARN_THRESHOLD });
+      }
+    },
+  );
 }
 
 export function mapSdkMessage(
@@ -457,6 +492,10 @@ export function mapSdkMessage(
   }
 
   if (msg.type === "result") {
+    // 本轮派发的子代理数——在任何分支之前读取并清零（一轮一个 result，error/abort
+    // 也要消费掉计数，避免泄漏到下一轮）。result 时子代理都已 handleToolResult 出 active，
+    // 只能靠这个计数器判断"本轮是否含子代理活动"。
+    const subagentCount = subagents.consumeTurnSubagentCount();
     // 错误 result（鉴权/额度/达上限等）SDK 不抛异常，会走到这里。以前和成功一样
     // 压成 message_stop，错误细节全被吞掉 → 前端静默落 waiting，用户"发消息没反应"。
     // 现在路由到 error 通道（fatal:false，进程仍存活可重试），前端会渲染错误气泡。
@@ -482,16 +521,37 @@ export function mapSdkMessage(
       cacheCreationInputTokens?: number;
       costUSD?: number;
     }> | undefined;
-    const entries = modelUsage ? Object.values(modelUsage) : [];
     let usage: TurnUsage | null = null;
-    if (entries.length > 0) {
-      usage = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUsd: 0 };
-      for (const m of entries) {
-        usage.inputTokens += m.inputTokens ?? 0;
-        usage.outputTokens += m.outputTokens ?? 0;
-        usage.cacheReadInputTokens += m.cacheReadInputTokens ?? 0;
-        usage.cacheCreationInputTokens += m.cacheCreationInputTokens ?? 0;
-        usage.costUsd += m.costUSD ?? 0;
+    if (modelUsage) {
+      const entries = Object.entries(modelUsage);
+      const total: TurnUsage = {
+        inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUsd: 0,
+      };
+      // 同时保留按模型分桶——多模型会话（如子代理用了别的模型）能让前端看到每个模型各烧多少。
+      // 单模型时不带 byModel（省得每轮都塞一个只有一项的 map，前端按"键数>1"判断是否展开）。
+      const byModel: Record<string, TurnUsage> = {};
+      for (const [modelId, m] of entries) {
+        const u: TurnUsage = {
+          inputTokens: m.inputTokens ?? 0,
+          outputTokens: m.outputTokens ?? 0,
+          cacheReadInputTokens: m.cacheReadInputTokens ?? 0,
+          cacheCreationInputTokens: m.cacheCreationInputTokens ?? 0,
+          costUsd: m.costUSD ?? 0,
+        };
+        byModel[modelId] = u;
+        total.inputTokens += u.inputTokens;
+        total.outputTokens += u.outputTokens;
+        total.cacheReadInputTokens += u.cacheReadInputTokens;
+        total.cacheCreationInputTokens += u.cacheCreationInputTokens;
+        total.costUsd += u.costUsd;
+      }
+      usage = total;
+      if (subagentCount > 0) {
+        usage.subagentTurn = true;
+        usage.subagentCount = subagentCount;
+      }
+      if (Object.keys(byModel).length > 1) {
+        usage.byModel = byModel;
       }
     }
     emit({
