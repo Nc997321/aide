@@ -3,7 +3,8 @@ import ABadge from "./ABadge.vue";
 
 export interface Tab {
   id: string;
-  label: string;
+  /** 可见文字；省略时为纯图标 tab（仍可作为按钮的无障碍名称）。 */
+  label?: string;
   icon?: string;
   badge?: number;
 }
@@ -38,11 +39,12 @@ function onKeydown(e: KeyboardEvent) {
       :class="{ 'a-tab--active': modelValue === tab.id }"
       role="tab"
       :aria-selected="modelValue === tab.id"
+      :aria-label="tab.label"
       :tabindex="modelValue === tab.id ? 0 : -1"
       @click="emit('update:modelValue', tab.id)"
     >
       <span v-if="tab.icon" class="a-tab__icon" v-html="tab.icon"></span>
-      <span class="a-tab__label">{{ tab.label }}</span>
+      <span v-if="tab.label" class="a-tab__label">{{ tab.label }}</span>
       <ABadge v-if="tab.badge && tab.badge > 0" :value="tab.badge" />
     </button>
   </div>
