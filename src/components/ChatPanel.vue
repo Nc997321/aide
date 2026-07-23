@@ -968,6 +968,12 @@ async function handleQuickAction(action: QuickAction) {
   color: var(--aide-text-primary);
   backdrop-filter: var(--aide-surface-blur);
   -webkit-backdrop-filter: var(--aide-surface-blur);
+  /* 会话区字体的唯一来源：整个聊天面板（消息流正文/输入框/工具栏/slash 下拉/btw 抽屉/
+     权限确认区/toast）统一继承用户配置的等宽字体，不再逐叶子补丁。--aide-font-mono 由
+     useSettings watch 同步成 settings.fontFamily，与编辑器/终端同一来源。代码块与
+     inline code 在 ChatMessage.vue 自带显式 var(--aide-font-mono)，不受影响；CJK 等无
+     JBM 字形的字符由浏览器按等宽回退（与编辑器一致）。 */
+  font-family: var(--aide-font-mono);
 }
 
 .chat-messages {

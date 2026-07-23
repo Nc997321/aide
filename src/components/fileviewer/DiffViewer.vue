@@ -90,7 +90,9 @@ const mergeTheme = EditorView.theme(
       fontFamily: "var(--cm-font-family)",
       height: "100%",
     },
-    ".cm-scroller": { overflow: "auto" },
+    // base 主题在 .cm-scroller 硬设 monospace 会盖掉 & 的 var(--cm-font-family) 继承；
+    // 同名选择器覆盖（用户主题优先级高于 baseTheme），.cm-content/.cm-gutters 跟着继承。
+    ".cm-scroller": { overflow: "auto", fontFamily: "var(--cm-font-family)" },
     ".cm-gutters": {
       backgroundColor: "var(--aide-bg-deep)",
       color: "var(--aide-text-muted)",

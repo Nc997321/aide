@@ -123,6 +123,11 @@ async function createEditor() {
         },
         ".cm-scroller": {
           overflow: "auto",
+          // base 主题在 .cm-scroller 上硬设 font-family: monospace，会盖掉 & 上的
+          // var(--cm-font-family) 继承（.cm-content/.cm-gutters 是其子节点，继承的是
+          // monospace 而非用户字体）。在此同名选择器覆盖——用户主题优先级高于 baseTheme，
+          // 等特异性 + 后注入 → 胜出，子节点随之继承用户字体。
+          fontFamily: "var(--cm-font-family)",
         },
         ".cm-gutters": {
           backgroundColor: "var(--aide-bg-deep)",
