@@ -327,14 +327,14 @@ const renderItems = computed<RenderItem[]>(() => {
   white-space: nowrap;
   color: var(--aide-text-secondary);
   font-size: 12px;
-  font-family: "JetBrains Mono", "Cascadia Code", "Fira Code", "Consolas", monospace;
+  font-family: var(--aide-font-mono);
   font-size: 11.5px;
 }
 
 .changelog-file-stats {
   flex-shrink: 0;
   font-size: 11px;
-  font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+  font-family: var(--aide-font-mono);
 }
 
 .stat-add { color: var(--aide-success); }

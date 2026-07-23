@@ -263,7 +263,7 @@ function handleTextClick(e: MouseEvent) {
   margin-bottom: 0;
 }
 .msg-text :deep(code) {
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--aide-font-mono);
   font-size: 12px;
   background: var(--aide-bg-deep);
   padding: 1px 5px;

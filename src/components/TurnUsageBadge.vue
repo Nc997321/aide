@@ -44,7 +44,7 @@ const tooltip = computed(() => {
   align-items: center;
   gap: 8px;
   font-size: 11px;
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--aide-font-mono);
   cursor: default;
 }
 

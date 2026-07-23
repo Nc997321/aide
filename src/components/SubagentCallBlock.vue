@@ -194,7 +194,7 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
 .sa-model {
   flex-shrink: 0;
   font-size: 10px;
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--aide-font-mono);
   color: var(--aide-text-muted);
   border: 1px solid var(--aide-border);
   border-radius: 4px;
@@ -272,7 +272,7 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
   overflow: auto;
   white-space: pre-wrap;
   font-size: 11px;
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--aide-font-mono);
   color: var(--aide-text-secondary);
   background: var(--aide-bg-deep);
   border: 1px solid var(--aide-border-subtle);

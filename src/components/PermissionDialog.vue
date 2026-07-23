@@ -372,7 +372,7 @@ const inputJson = computed(() => {
 
 .perm-tool-chip {
   display: inline-block;
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--aide-font-mono);
   font-size: 12.5px;
   font-weight: 600;
   color: var(--aide-warning);
@@ -416,7 +416,7 @@ const inputJson = computed(() => {
   background: var(--aide-bg-deep);
   border: 1px solid var(--aide-border-subtle);
   border-radius: var(--aide-radius-sm);
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--aide-font-mono);
   font-size: 11.5px;
   color: var(--aide-text-secondary);
   box-shadow: inset 0 1px 3px rgba(0, 0, 0, .3);
@@ -448,7 +448,7 @@ const inputJson = computed(() => {
 
 .perm-input-value {
   display: block;
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--aide-font-mono);
   font-size: 12px;
   color: var(--aide-text-primary);
   white-space: pre-wrap;
@@ -458,7 +458,7 @@ const inputJson = computed(() => {
 
 .perm-input-raw {
   margin: 0;
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--aide-font-mono);
   font-size: 12px;
   color: var(--aide-text-secondary);
   white-space: pre-wrap;
@@ -703,7 +703,7 @@ const inputJson = computed(() => {
 }
 
 .perm-plan :deep(code) {
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--aide-font-mono);
   font-size: 12px;
   background: var(--aide-surface-default);
   border-radius: 3px;

@@ -22,7 +22,7 @@ onMounted(() => {
     scrollback: 1000,
     disableStdin: true,
     fontSize: 12,
-    fontFamily: "'Cascadia Code', 'Consolas', monospace",
+    fontFamily: settings.fontFamily,
   });
   fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);

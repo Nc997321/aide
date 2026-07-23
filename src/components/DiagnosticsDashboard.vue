@@ -223,7 +223,7 @@ function fmtReset(ts: number): string {
 .bd-label {
   font-size: 11px;
   color: var(--aide-text-secondary, #888);
-  font-family: ui-monospace, monospace;
+  font-family: var(--aide-font-mono);
 }
 
 .bd-value {

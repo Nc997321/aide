@@ -1,4 +1,4 @@
-import { reactive, ref } from "vue";
+import { reactive, ref, watch } from "vue";
 import { api } from "../api";
 import { MONO_FONT_STACK, resolveFontFamily } from "../utils/fonts";
 import type { AppSettings, CodeGraphEmbedderConfig, JdkEntry } from "../types";
@@ -36,12 +36,25 @@ const defaults: AppSettings = {
 const settings = reactive<AppSettings>({ ...defaults });
 const loaded = ref(false);
 
+// Keep --aide-font-mono CSS variable in sync with user's configured fontFamily.
+// Runs immediately so CodeMirror / xterm / hardcoded var() references always see the
+// correct value even before load() completes.
+watch(
+  () => settings.fontFamily,
+  (v) => document.documentElement.style.setProperty("--aide-font-mono", v),
+  { immediate: true }
+);
+
 export function useSettings() {
   async function load(): Promise<void> {
     try {
       const s = await api.getSettings();
       settings.fontSize = s.fontSize ?? defaults.fontSize;
       settings.fontFamily = resolveFontFamily(s.fontFamily);
+      // Persist the upgrade so Rust default never kicks in on subsequent loads
+      if (settings.fontFamily !== (s.fontFamily ?? "")) {
+        update({ fontFamily: settings.fontFamily });
+      }
       settings.notificationsEnabled = s.notificationsEnabled ?? defaults.notificationsEnabled;
       settings.proxy = s.proxy ?? defaults.proxy;
       settings.shellPath = s.shellPath ?? defaults.shellPath;

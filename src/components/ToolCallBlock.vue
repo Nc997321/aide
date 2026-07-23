@@ -116,7 +116,7 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--aide-font-mono);
   font-size: 11px;
   color: var(--aide-text-muted);
 }
@@ -126,7 +126,7 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
   flex-shrink: 0;
   display: flex;
   gap: 4px;
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--aide-font-mono);
   font-size: 11px;
 }
 .stat-add { color: var(--aide-success); }
@@ -152,7 +152,7 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
   max-height: 160px;
   overflow: auto;
   white-space: pre-wrap;
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--aide-font-mono);
   font-size: 11.5px;
   line-height: 1.7;
   color: var(--aide-text-secondary);

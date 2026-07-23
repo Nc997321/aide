@@ -122,7 +122,7 @@ const runningSummary = computed(() =>
 }
 .tg-name,
 .tg-kinds {
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--aide-font-mono);
 }
 .tg-kinds {
   color: var(--aide-text-muted);

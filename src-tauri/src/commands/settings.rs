@@ -143,7 +143,7 @@ pub struct AppSettings {
 
 fn default_font_size() -> u32 { 14 }
 fn default_font_family() -> String {
-    "'Cascadia Code', 'Fira Code', 'Consolas', monospace".to_string()
+    "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace".to_string()
 }
 fn default_notifications_enabled() -> bool { true }
 fn default_theme() -> String { "warm-dark".to_string() }

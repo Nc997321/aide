@@ -645,7 +645,7 @@ defineExpose({ loadRoot, revealFile });
   white-space: nowrap;
   font-size: 11px;
   color: var(--aide-text-secondary);
-  font-family: ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
+  font-family: var(--aide-font-mono);
 }
 .cgp-dot {
   width: 6px;
@@ -686,7 +686,7 @@ defineExpose({ loadRoot, revealFile });
   background: var(--aide-accent);
 }
 .cgp-pct {
-  font-family: ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
+  font-family: var(--aide-font-mono);
   font-size: 12px;
   color: var(--aide-accent);
   font-weight: 500;

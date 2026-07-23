@@ -1224,7 +1224,7 @@ function onOverlayClick(e: MouseEvent) {
   flex: 1;
   font-size: 11px;
   color: var(--aide-text-muted);
-  font-family: 'Consolas', 'Menlo', monospace;
+  font-family: var(--aide-font-mono);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1323,7 +1323,7 @@ function onOverlayClick(e: MouseEvent) {
   font-size: 11px;
   color: var(--aide-text-primary);
   text-align: center;
-  font-family: "'Cascadia Code', 'Fira Code', monospace";
+  font-family: var(--aide-font-mono);
   cursor: pointer;
   transition: border-color 0.15s;
   outline: none;

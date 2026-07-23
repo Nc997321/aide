@@ -709,7 +709,7 @@ defineExpose({ reload: loadAll });
 .status-U { background: color-mix(in srgb, var(--aide-info) 15%, transparent); color: var(--aide-info); }
 
 .git-file-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--aide-text-secondary); }
-.git-file-stats { flex-shrink: 0; font-size: 11px; font-family: "Cascadia Code","Fira Code",Consolas,monospace; }
+.git-file-stats { flex-shrink: 0; font-size: 11px; font-family: var(--aide-font-mono); }
 .stat-add { color: var(--aide-success); } .stat-del { color: var(--aide-danger); } .stat-sep { color: var(--aide-text-muted); }
 
 .git-file-stage { flex-shrink: 0; background: none; border: none; color: var(--aide-success); cursor: pointer; font-size: 14px; font-weight: 700; padding: 1px 5px; border-radius: 3px; font-family: inherit; }

@@ -1266,7 +1266,7 @@ async function handleQuickAction(action: QuickAction) {
   font-weight: 600;
   color: var(--aide-accent);
   flex-shrink: 0;
-  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-family: var(--aide-font-mono);
 }
 
 .skill-item-source {

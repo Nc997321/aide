@@ -144,7 +144,7 @@ const pickerTitle = computed(() => `找到 ${candidates.value.length} 个匹配�
   text-align: left;
   color: var(--aide-text-secondary);
   font-size: 12px;
-  font-family: "Cascadia Code", "Consolas", monospace;
+  font-family: var(--aide-font-mono);
   transition: background 0.12s, color 0.12s;
 }
 .fr-picker-item:hover {

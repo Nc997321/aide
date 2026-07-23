@@ -582,7 +582,7 @@ async function close() {
 .rcd-detect-cmd {
   font-size: 10.5px;
   color: var(--aide-text-muted);
-  font-family: 'Consolas', 'Menlo', monospace;
+  font-family: var(--aide-font-mono);
 }
 .rcd-detect-actions {
   display: flex;

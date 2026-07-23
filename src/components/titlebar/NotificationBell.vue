@@ -209,7 +209,7 @@ function bodyParts(body: string | undefined): Array<{ t: "text" | "code"; v: str
 .notif-row-body { font-size: 11.5px; color: var(--aide-text-secondary); line-height: 1.5; word-break: break-word; }
 .inline-code {
   background: var(--aide-surface-default); padding: 0 4px; border-radius: 3px;
-  font-family: 'Consolas', 'Menlo', monospace; font-size: 10.5px; color: var(--aide-text-secondary);
+  font-family: var(--aide-font-mono); font-size: 10.5px; color: var(--aide-text-secondary);
 }
 .notif-row-foot { display: flex; align-items: center; gap: 8px; margin-top: 1px; }
 .src-tag {

@@ -153,7 +153,7 @@ onUnmounted(() => {
   margin-left: auto;
   font-size: 10.5px;
   color: var(--aide-text-muted);
-  font-family: "JetBrains Mono", "Cascadia Code", "Consolas", monospace;
+  font-family: var(--aide-font-mono);
   flex-shrink: 0;
 }
 

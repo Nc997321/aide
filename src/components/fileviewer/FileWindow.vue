@@ -752,7 +752,7 @@ async function openInBrowser() {
   display: block;
   padding: 16px;
   margin: 0;
-  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
+  font-family: var(--aide-font-mono);
   font-size: 13px;
   line-height: 1.6;
   color: var(--aide-text-primary);
@@ -881,7 +881,7 @@ async function openInBrowser() {
 }
 
 .viewer-markdown code {
-  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", monospace;
+  font-family: var(--aide-font-mono);
   font-size: 0.9em;
   background: var(--aide-bg-deep);
   padding: 2px 6px;
