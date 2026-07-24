@@ -2,21 +2,59 @@
 import { ref, computed } from "vue";
 import type { ToolCallBlock } from "@/types/chat";
 import BashOutputBlock from "./BashOutputBlock.vue";
-import { parseEditInput, buildEditDiffLines, type EditDiffStats } from "@/utils/editDiff";
+import DiffViewer from "./fileviewer/DiffViewer.vue";
+import { buildChangeInfo, locateAnchorLine, type ChangeInfo } from "@/utils/changeCard";
+import { isChangeTool } from "@/utils/blockSegments";
 import { summarizeToolInput } from "@/utils/toolSummary";
+import { useFileResolver } from "@/composables/useFileResolver";
+import { useSettings } from "@/composables/useSettings";
 
-const props = defineProps<{ block: ToolCallBlock }>();
-const expanded = ref(false);
+const props = withDefaults(
+  defineProps<{
+    block: ToolCallBlock;
+    /** 变更类工具（Edit/Write/NotebookEdit）由 ChatMessage 传 true：变更卡默认展开，
+     *  其余调用点（ToolCallGroup / SubagentCallBlock）不传，保持收起。 */
+    defaultExpanded?: boolean;
+    /** 「打开 ↗」定位用；缺省时 openResolved 退化为按原路径直接打开 */
+    workspacePath?: string;
+  }>(),
+  { defaultExpanded: false, workspacePath: undefined },
+);
+
+const expanded = ref(props.defaultExpanded);
+const { openResolved } = useFileResolver();
+const { settings } = useSettings();
 
 const isBash = computed(() => props.block.name === "Bash");
 
-/** Edit 工具且非错误时的 diff 数据；null 表示回退到普通结果文本展示。 */
-const editDiff = computed<EditDiffStats | null>(() => {
-  if (props.block.name !== "Edit" || props.block.isError) return null;
-  const parsed = parseEditInput(props.block.input);
-  if (!parsed) return null;
-  return buildEditDiffLines(parsed);
+/** 变更类工具且非错误时的统一 diff 数据；null 回退到普通结果文本展示。 */
+const changeInfo = computed<ChangeInfo | null>(() => {
+  if (!isChangeTool(props.block.name) || props.block.isError) return null;
+  return buildChangeInfo(props.block.name, props.block.input);
 });
+
+/** DiffViewer 需要定高容器（内部 100% 布局）：按片段行数估算，超高封顶内滚 */
+const changeHeight = computed(() => {
+  const info = changeInfo.value;
+  if (!info) return 0;
+  const lines = Math.max(
+    info.pair.oldText.split("\n").length,
+    info.pair.newText.split("\n").length,
+    1,
+  );
+  const TOOLBAR = 38;
+  const perLine = Math.round(settings.fontSize * 1.6);
+  return Math.min(480, Math.max(120, TOOLBAR + lines * perLine + 16));
+});
+
+/** 「打开 ↗」：在文件查看器中打开并定位到新内容所在行（找不到锚点就只打开） */
+async function openChangeFile(e: MouseEvent) {
+  e.stopPropagation();
+  const info = changeInfo.value;
+  if (!info) return;
+  const line = await locateAnchorLine(info.filePath, info.anchor);
+  void openResolved(info.filePath, props.workspacePath, line);
+}
 
 const inputSummary = computed(() => summarizeToolInput(props.block.name, props.block.input));
 </script>
@@ -29,10 +67,17 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
       ></span>
       <span class="ti-name">{{ block.name }}</span>
       <span class="ti-summary">{{ inputSummary }}</span>
-      <span v-if="editDiff" class="ti-diff">
-        <span class="stat-add">+{{ editDiff.addCount }}</span>
-        <span class="stat-del">-{{ editDiff.delCount }}</span>
+      <span v-if="changeInfo" class="ti-diff">
+        <span class="stat-add">+{{ changeInfo.addCount }}</span>
+        <span v-if="changeInfo.delCount > 0" class="stat-del">-{{ changeInfo.delCount }}</span>
       </span>
+      <span
+        v-if="changeInfo"
+        class="ti-open"
+        v-tooltip="'在文件查看器中打开并定位'"
+        @click="openChangeFile"
+        >打开 ↗</span
+      >
       <svg
         :class="['ti-chev', expanded ? 'ti-chev--open' : '']"
         width="8" height="12" viewBox="0 0 8 12" fill="none" aria-hidden="true"
@@ -46,7 +91,13 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
     </button>
     <div v-if="expanded" class="ti-body">
       <BashOutputBlock v-if="isBash && block.result" :content="block.result" :is-error="block.isError ?? false" />
-      <pre v-else-if="editDiff" class="ti-result ti-diff-view"><span v-for="(line, i) in editDiff.lines" :key="i" :class="line.cls">{{ line.text }}</span></pre>
+      <div
+        v-else-if="changeInfo && !block.isPending"
+        class="ti-change"
+        :style="{ height: `${changeHeight}px` }"
+      >
+        <DiffViewer :pair="changeInfo.pair" :file-path="changeInfo.filePath" initial-mode="unified" />
+      </div>
       <pre v-else-if="block.result" class="ti-result">{{ block.result }}</pre>
       <div v-else class="ti-pending">等待结果…</div>
     </div>
@@ -132,6 +183,20 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
 .stat-add { color: var(--aide-success); }
 .stat-del { color: var(--aide-danger); }
 
+/* 「打开 ↗」：嵌在头行 button 里的短语级链接，stopPropagation 不触发折叠 */
+.ti-open {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--aide-text-muted);
+  padding: 1px 6px;
+  border-radius: var(--aide-radius-sm);
+  transition: all var(--aide-ease-t);
+}
+.ti-open:hover {
+  color: var(--aide-accent);
+  background: var(--aide-surface-hover);
+}
+
 .ti-chev {
   flex-shrink: 0;
   font-size: 9px;
@@ -148,6 +213,11 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
   background: var(--aide-bg-deep);
 }
 
+/* 变更卡的 DiffViewer 容器：定高（script 按行数估算），内部自滚 */
+.ti-change {
+  overflow: hidden;
+}
+
 .ti-result {
   max-height: 160px;
   overflow: auto;
@@ -158,10 +228,6 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
   color: var(--aide-text-secondary);
   margin: 0;
   padding: 11px 14px;
-}
-.ti-diff-view {
-  white-space: pre;
-  padding: 6px 0;
 }
 
 .ti-pending {

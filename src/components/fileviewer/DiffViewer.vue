@@ -21,14 +21,19 @@ import { themes } from "../../themes";
  * 并排（MergeView，默认）/ 单栏（unifiedMergeView）可切，两侧只读。
  * 特例（行尾-only / 二进制 / 超大）不挂 merge 视图，只显示提示。
  */
-const props = defineProps<{
-  pair: DiffPair;
-  filePath: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    pair: DiffPair;
+    filePath: string;
+    /** 初始并排/单栏；默认 split 保持文件查看器现状，对话内变更卡传 unified */
+    initialMode?: "split" | "unified";
+  }>(),
+  { initialMode: "split" },
+);
 
 const { settings } = useSettings();
 
-const mode = ref<"split" | "unified">("split");
+const mode = ref<"split" | "unified">(props.initialMode);
 const mountEl = ref<HTMLElement | null>(null);
 
 let mergeView: MergeView | null = null;

@@ -37,6 +37,25 @@ describe("segmentBlocks", () => {
     expect(segs.map((s) => s.kind)).toEqual(["tool_group", "block", "tool_group", "block", "tool_group"]);
     expect((segs[4] as { blocks: ToolCallBlock[] }).blocks).toHaveLength(2);
   });
+
+  it("变更类工具（Edit/Write/NotebookEdit）不进折叠组，作为独立块透传并切开两侧查询组", () => {
+    const segs = segmentBlocks([
+      tool("Read"), tool("Grep"), tool("Edit"), tool("Write"), tool("NotebookEdit"), tool("Glob"),
+    ]);
+    expect(segs.map((s) => s.kind)).toEqual([
+      "tool_group", "block", "block", "block", "tool_group",
+    ]);
+    expect((segs[0] as { blocks: ToolCallBlock[] }).blocks.map((b) => b.name)).toEqual(["Read", "Grep"]);
+    expect((segs[1] as { block: ToolCallBlock }).block.name).toBe("Edit");
+    expect((segs[2] as { block: ToolCallBlock }).block.name).toBe("Write");
+    expect((segs[3] as { block: ToolCallBlock }).block.name).toBe("NotebookEdit");
+    expect((segs[4] as { blocks: ToolCallBlock[] }).blocks.map((b) => b.name)).toEqual(["Glob"]);
+  });
+
+  it("变更块保留原下标作为 index", () => {
+    const segs = segmentBlocks([text("a"), tool("Read"), tool("Edit")]);
+    expect(segs[2]).toMatchObject({ kind: "block", index: 2 });
+  });
 });
 
 describe("groupStats", () => {

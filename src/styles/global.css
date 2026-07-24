@@ -114,12 +114,3 @@ html, body, #app {
 .aide-tooltip.visible {
   opacity: 1;
 }
-
-/* ── 统一 diff 行语言：DiffViewer（并排/单栏）、聊天 Edit diff、FileViewer 文本 diff 同源 ──
-   色号与透明度全场景一致；左侧 2px 色条是「这行变了」的第一视觉信号；
-   一律不出现 +/− 符号——查看器给真实行号，聊天内联只有着色行，增删全靠色条+底色表达。 */
-.aide-diff-add { color: color-mix(in srgb, var(--aide-success) 85%, var(--aide-text-primary)); background: color-mix(in srgb, var(--aide-success) 7%, transparent); box-shadow: inset 2px 0 0 var(--aide-success); display: block; }
-.aide-diff-del { color: color-mix(in srgb, var(--aide-danger) 85%, var(--aide-text-primary)); background: color-mix(in srgb, var(--aide-danger) 8%, transparent); box-shadow: inset 2px 0 0 var(--aide-danger); display: block; }
-.aide-diff-hunk { color: var(--aide-info); background: color-mix(in srgb, var(--aide-info) 5%, transparent); display: block; }
-.aide-diff-meta { color: var(--aide-warning); display: block; }
-.aide-diff-ctx { color: var(--aide-text-muted); display: block; }

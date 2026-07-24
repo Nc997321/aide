@@ -6,7 +6,7 @@ import ToolCallBlock from "./ToolCallBlock.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
 import TurnUsageBadge from "./TurnUsageBadge.vue";
-import { segmentBlocks, type Segment } from "@/utils/blockSegments";
+import { segmentBlocks, isChangeTool, type Segment } from "@/utils/blockSegments";
 import { useFileResolver } from "@/composables/useFileResolver";
 import { parseFileLink, shouldOpenExternally } from "@/utils/fileLink";
 import { isModelInList } from "@/utils/modelSelect";
@@ -107,6 +107,8 @@ function handleTextClick(e: MouseEvent) {
         <ToolCallBlock
           v-else-if="seg.block.type === 'tool_call'"
           :block="(seg.block as any)"
+          :default-expanded="isChangeTool((seg.block as any).name)"
+          :workspace-path="workspacePath"
         />
         <!-- btw 页边批注：可折叠、视觉权重远低于真实消息，读起来是"贴在边上的便签" -->
         <div
