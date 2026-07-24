@@ -4,6 +4,7 @@ import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { api } from "../api";
 import { useSettings } from "./useSettings";
+import { registerSearch, unregisterSearch, useTerminalSearch } from "./useTerminalSearch";
 import { buildXtermTheme } from "../utils/xterm";
 import { MONO_FONT_STACK } from "../utils/fonts";
 import { themes } from "../themes";
@@ -73,6 +74,7 @@ function ensureSettingsWatchers() {
         s.terminal.options.theme = buildXtermTheme(themes[settings.theme] || themes["warm-dark"]);
       }
     }
+    useTerminalSearch().refreshTheme();
   });
 }
 
@@ -157,6 +159,7 @@ export function useWorkbenchTerminal() {
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
+    registerSearch(id, terminal);
 
     const div = document.createElement("div");
     div.className = "wb-term-pane";
@@ -204,6 +207,7 @@ export function useWorkbenchTerminal() {
     s.terminal.dispose();
     s.div.remove();
     sessions.delete(id);
+    unregisterSearch(id);
     removeTab(id);
     // 若删的是当前激活工作空间的 tab，切到该组剩下的最后一个（核心已回退 activeId；同步显示）
     const newActive = coreActiveId.value;
@@ -256,6 +260,7 @@ export function useWorkbenchTerminal() {
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
+    registerSearch(id, terminal);
     const div = document.createElement("div");
     div.className = "wb-term-pane";
     containerEl.appendChild(div);
@@ -314,6 +319,7 @@ export function useWorkbenchTerminal() {
       s.observer.disconnect();
       s.terminal.dispose();
       s.div.remove();
+      unregisterSearch(id);
     }
     sessions.clear();
     resetWorkbenchState();
@@ -330,6 +336,7 @@ export function useWorkbenchTerminal() {
         s.terminal.dispose();
         s.div.remove();
         sessions.delete(id);
+        unregisterSearch(id);
       }
     }
   }

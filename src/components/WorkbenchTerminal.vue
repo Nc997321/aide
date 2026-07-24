@@ -1,13 +1,35 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick, watch, computed } from "vue";
 import { useWorkbenchTerminal } from "../composables/useWorkbenchTerminal";
+import { useTerminalSearch } from "../composables/useTerminalSearch";
 import { useChatPaneWidth } from "../composables/useChatPaneWidth";
+import TerminalSearchBar from "./workbenchterminal/SearchBar.vue";
 import "xterm/css/xterm.css";
 
 const props = defineProps<{ workspaceKey: string; cwd: string; height: number }>();
 const emit = defineEmits<{ "update:height": [v: number] }>();
 
 const wb = useWorkbenchTerminal();
+const search = useTerminalSearch();
+const searchBarRef = ref<InstanceType<typeof TerminalSearchBar>>();
+
+// 快捷键路由（capture 挂在 pill 上，先于 xterm textarea 处理）：
+// Ctrl+F 打开/重聚焦搜索条；搜索条开着时 Esc 关闭并回焦终端（不开则 Esc 透传给 shell/vim）。
+// 只绑在 pill DOM 内生效——焦点在编辑器/文件窗时 Ctrl+F 仍归 CodeMirror。
+function onPillKeydown(e: KeyboardEvent) {
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && e.code === "KeyF") {
+    e.preventDefault();
+    e.stopPropagation();
+    search.open();
+    nextTick(() => searchBarRef.value?.focusInput());
+    return;
+  }
+  if (e.key === "Escape" && search.visible.value) {
+    e.preventDefault();
+    e.stopPropagation();
+    search.close();
+  }
+}
 const { chatPaneWidth, chatPaneLeft } = useChatPaneWidth();
 // pill 左缘/宽度对齐聚焦对话框：测得值后严格贴齐（左缘=对话框左缘，宽=对话框宽），
 // 而不是在整窗居中——侧栏把对话框右推，居中的 pill 会比对话框偏右。未测得时兜底整窗 10px 边距。
@@ -83,7 +105,7 @@ function onHeaderDragStart(e: MouseEvent) {
 
 <template>
   <div class="workbench-overlay" :class="{ 'workbench-overlay--hidden': !wb.visible.value }">
-    <div class="workbench-pill" :class="{ 'is-shown': wb.visible.value }" :style="pillStyle">
+    <div class="workbench-pill" :class="{ 'is-shown': wb.visible.value }" :style="pillStyle" @keydown.capture="onPillKeydown">
       <div class="workbench-header" @mousedown="onHeaderDragStart">
         <div class="wb-tabs">
           <div
@@ -104,6 +126,7 @@ function onHeaderDragStart(e: MouseEvent) {
         </div>
       </div>
       <div ref="containerRef" class="wb-container">
+        <TerminalSearchBar v-if="search.visible.value" ref="searchBarRef" />
         <div
           v-if="wb.activeExited.value && activeTabKind === 'shell'"
           class="workbench-exited"

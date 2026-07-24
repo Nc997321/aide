@@ -2,7 +2,7 @@ import type { ThemeTokens } from "../themes/tokens";
 
 /** Read a --aide-* CSS var from the document root. Falls back to the raw string
  *  if the var is not set (should never happen at runtime). */
-function cssVar(name: string): string {
+export function cssVar(name: string): string {
   try {
     const val = getComputedStyle(document.documentElement)
       .getPropertyValue(`--aide-${name}`)
