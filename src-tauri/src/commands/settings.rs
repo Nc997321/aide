@@ -143,7 +143,9 @@ pub struct AppSettings {
 
 fn default_font_size() -> u32 { 14 }
 fn default_font_family() -> String {
-    "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace".to_string()
+    // 与前端 utils/fonts.ts MONO_FONT_STACK 保持一致——尾部垫 CJK 回退，
+    // 否则西文 mono 无中文字形，Windows 中文落宋体
+    "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'PingFang SC', 'Microsoft YaHei', monospace".to_string()
 }
 fn default_notifications_enabled() -> bool { true }
 fn default_theme() -> String { "warm-dark".to_string() }
