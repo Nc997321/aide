@@ -48,9 +48,9 @@ const runningSummary = computed(() =>
     <span :class="['tg-node', running ? 'tg-node--live' : '']"></span>
     <button class="tg-summary" :aria-expanded="expanded" @click="expanded = !expanded">
       <template v-if="running">
-        正在执行 <span class="tg-name">{{ running.name }}</span>
+        <span class="tg-label">正在执行</span> <span class="tg-name">{{ running.name }}</span>
         <span class="tg-kinds">{{ runningSummary }}</span>
-        <template v-if="doneCount > 0"> · 已完成 {{ doneCount }}</template>
+        <span v-if="doneCount > 0" class="tg-label"> · 已完成 {{ doneCount }}</span>
       </template>
       <template v-else>
         <span class="tg-n">{{ stats.total }}</span> 次工具调用
@@ -116,18 +116,30 @@ const runningSummary = computed(() =>
   color: var(--aide-text-primary);
 }
 
+/* 固定项不可收缩：收缩压力只落在 .tg-kinds 上，否则长命令会把
+   "正在执行"/工具名挤成逐字竖排（匿名文本项 flex-shrink 默认 1） */
+.tg-label {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .tg-name {
   color: var(--aide-accent);
   font-weight: 600;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .tg-name,
 .tg-kinds {
   font-family: var(--aide-font-mono);
 }
 .tg-kinds {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--aide-text-muted);
-  margin-left: 8px;
-  overflow-wrap: anywhere;
 }
 .tg-err {
   color: var(--aide-danger);
