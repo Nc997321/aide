@@ -3,6 +3,7 @@ import { onMounted, onBeforeUnmount, watch, ref, nextTick } from "vue";
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { buildXtermTheme } from "../utils/xterm";
+import { MONO_FONT_STACK } from "../utils/fonts";
 import { themes } from "../themes";
 import { useSettings } from "../composables/useSettings";
 
@@ -22,7 +23,7 @@ onMounted(() => {
     scrollback: 1000,
     disableStdin: true,
     fontSize: 12,
-    fontFamily: settings.fontFamily,
+    fontFamily: settings.fontFamily || MONO_FONT_STACK,
   });
   fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
