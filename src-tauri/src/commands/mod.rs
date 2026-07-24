@@ -265,7 +265,7 @@ pub fn find_session_jsonl_globally(id: &str) -> Vec<PathBuf> {
 }
 
 // Re-export from workspace module
-pub use workspace::{load_workspace_config, resolve_path_from_key};
+pub use workspace::{load_workspace_config, resolve_path_from_key, resolve_project_dirs};
 
 #[cfg(test)]
 mod tests {

@@ -15,6 +15,30 @@ pub fn path_to_key(path: &str) -> String {
         .collect()
 }
 
+/// 按编码 key 解析实际的项目目录（可能命中多个）。
+///
+/// 新版 Agent SDK / claude.exe 编码 cwd 时把 `.` 也替换为 `-`
+/// （`C--...-chennong4-0`），而 `path_to_key` 保留点号（`C--...-chennong4.0`），
+/// 同一工作区因此可能分裂成两个目录（2026-07-24 实锤：chennong4.0 的新会话
+/// 全部写进 `chennong4-0`，按 `path_to_key` 算出的目录去列会话自然读不到；
+/// 同一案例此前已在 `find_session_jsonl_in` 的注释中记载）。这里按
+/// 「`.` 归一成 `-` 后相等」匹配所有候选目录，调用方合并扫描。
+pub fn resolve_project_dirs(projects_dir: &std::path::Path, key: &str) -> Vec<PathBuf> {
+    let normalized = key.replace('.', "-");
+    let mut dirs = Vec::new();
+    if let Ok(entries) = fs::read_dir(projects_dir) {
+        for entry in entries.flatten() {
+            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            if entry.file_name().to_string_lossy().replace('.', "-") == normalized {
+                dirs.push(entry.path());
+            }
+        }
+    }
+    dirs
+}
+
 /// 从工作区列表里滤掉黑名单中的 key（隐藏语义）。
 pub fn filter_hidden(infos: Vec<WorkspaceInfo>, hidden: &[String]) -> Vec<WorkspaceInfo> {
     infos.into_iter().filter(|w| !hidden.contains(&w.key)).collect()
@@ -244,6 +268,47 @@ mod tests {
     fn path_to_key_preserves_other_chars() {
         // 空格、中文、点不替换
         assert_eq!(path_to_key(r"C:\my project\文档.git"), "C--my project-文档.git");
+    }
+
+    // ── resolve_project_dirs：dot 归一匹配 ──
+
+    #[test]
+    fn resolve_project_dirs_matches_dot_normalized_variants() {
+        let root = std::env::temp_dir().join("aide_ws_test_resolve_project_dirs");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        // 同一工作区的两种编码：Aide 保留点号 / SDK 把点编码成横杠（chennong4.0 实锤案例）
+        fs::create_dir_all(root.join("C--proj-chennong4.0")).unwrap();
+        fs::create_dir_all(root.join("C--proj-chennong4-0")).unwrap();
+        fs::create_dir_all(root.join("C--proj-other")).unwrap();
+
+        let mut dirs = resolve_project_dirs(&root, "C--proj-chennong4.0");
+        dirs.sort();
+        assert_eq!(dirs, vec![root.join("C--proj-chennong4-0"), root.join("C--proj-chennong4.0")]);
+
+        // 反向 key（横杠版）同样命中两个目录
+        assert_eq!(resolve_project_dirs(&root, "C--proj-chennong4-0").len(), 2);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_project_dirs_missing_projects_dir_returns_empty() {
+        let root = std::env::temp_dir().join("aide_ws_test_resolve_missing");
+        let _ = fs::remove_dir_all(&root);
+        assert!(resolve_project_dirs(&root, "whatever").is_empty());
+    }
+
+    #[test]
+    fn resolve_project_dirs_ignores_files() {
+        let root = std::env::temp_dir().join("aide_ws_test_resolve_files");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("C--proj-x.0"), b"not a dir").unwrap();
+
+        assert!(resolve_project_dirs(&root, "C--proj-x.0").is_empty());
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

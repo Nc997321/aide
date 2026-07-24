@@ -24,59 +24,75 @@ pub async fn list_sessions(
         .map_err(|e| format!("list_sessions task panicked: {}", e))?
 }
 
+/// 扫描单个项目目录下的 .jsonl 会话并追加到 sessions（按 session id 去重——
+/// 同一工作区可能因目录编码差异分裂成多个目录，见 `resolve_project_dirs`，
+/// 防御同一份 transcript 出现在多个目录时重复列出）。
+fn scan_project_jsonl_sessions(
+    proj_dir: &std::path::Path,
+    sessions: &mut Vec<Session>,
+) -> Result<(), String> {
+    // 目录可能不存在（工作区登记后还没有任何对话），跳过即可
+    if !proj_dir.exists() {
+        return Ok(());
+    }
+    let read_dir = fs::read_dir(proj_dir)
+        .map_err(|e| format!("Failed to read project dir: {}", e))?;
+
+    for entry in read_dir {
+        let Ok(entry) = entry else { continue; };
+        let path = entry.path();
+        if !path.extension().map(|e| e == "jsonl").unwrap_or(false) {
+            continue;
+        }
+        let session_id = path.file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if session_id.is_empty() || sessions.iter().any(|s| s.id == session_id) {
+            continue;
+        }
+
+        let (name, started_at) = claude_session_meta(&session_id)
+            .unwrap_or_else(|| (session_id.clone(), 0));
+
+        let timestamp = if started_at == 0 {
+            path.metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0)
+        } else {
+            started_at
+        };
+
+        let display_name = our_session_name(&session_id)
+            .unwrap_or(name);
+
+        let last_msg = last_jsonl_message(&path);
+
+        sessions.push(Session {
+            id: session_id,
+            name: display_name,
+            timestamp,
+            last_message: last_msg,
+        });
+    }
+    Ok(())
+}
+
 fn list_sessions_blocking(
     encoded: String,
     root: std::path::PathBuf,
 ) -> Result<Vec<Session>, String> {
     let mut sessions: Vec<Session> = Vec::new();
-    let proj_dir = claude_projects_dir().join(&encoded);
 
     // Scan .jsonl files if the project directory exists (created after first
     // conversation). If it doesn't exist yet, skip to metadata scan — sessions
     // that were started but never had a conversation still have metadata in
     // ~/.claude/sessions/.
-    if proj_dir.exists() {
-        let read_dir = fs::read_dir(&proj_dir)
-            .map_err(|e| format!("Failed to read project dir: {}", e))?;
-
-        for entry in read_dir {
-            let Ok(entry) = entry else { continue; };
-            let path = entry.path();
-            if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
-                let session_id = path.file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                if session_id.is_empty() {
-                    continue;
-                }
-
-                let (name, started_at) = claude_session_meta(&session_id)
-                    .unwrap_or_else(|| (session_id.clone(), 0));
-
-                let timestamp = if started_at == 0 {
-                    path.metadata()
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0)
-                } else {
-                    started_at
-                };
-
-                let display_name = our_session_name(&session_id)
-                    .unwrap_or(name);
-
-                let last_msg = last_jsonl_message(&path);
-
-                sessions.push(Session {
-                    id: session_id,
-                    name: display_name,
-                    timestamp,
-                    last_message: last_msg,
-                });
-            }
-        }
+    // 同一工作区可能因 SDK 编码差异（`.` → `-`）分裂成多个项目目录，全部合并扫描。
+    for proj_dir in super::resolve_project_dirs(&claude_projects_dir(), &encoded) {
+        scan_project_jsonl_sessions(&proj_dir, &mut sessions)?;
     }
 
     // Second pass: scan ~/.claude/sessions/ for sessions that have metadata
@@ -622,48 +638,9 @@ pub async fn list_sessions_for_workspace(ws_key: String) -> Result<Vec<Session>,
 fn list_sessions_for_workspace_blocking(ws_key: String) -> Result<Vec<Session>, String> {
     let mut sessions: Vec<Session> = Vec::new();
 
-    let proj_dir = claude_projects_dir().join(&ws_key);
-
-    if proj_dir.exists() {
-        let read_dir = fs::read_dir(&proj_dir)
-            .map_err(|e| format!("Failed to read project dir: {}", e))?;
-
-        for entry in read_dir {
-            let Ok(entry) = entry else { continue; };
-            let path = entry.path();
-            if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
-                let session_id = path.file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                if session_id.is_empty() {
-                    continue;
-                }
-
-                let (name, started_at) = claude_session_meta(&session_id)
-                    .unwrap_or_else(|| (session_id.clone(), 0));
-
-                let timestamp = if started_at == 0 {
-                    path.metadata()
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0)
-                } else {
-                    started_at
-                };
-
-                let display_name = our_session_name(&session_id).unwrap_or(name);
-                let last_msg = last_jsonl_message(&path);
-
-                sessions.push(Session {
-                    id: session_id,
-                    name: display_name,
-                    timestamp,
-                    last_message: last_msg,
-                });
-            }
-        }
+    // 同 list_sessions_blocking：dot 归一匹配所有候选项目目录，合并扫描。
+    for proj_dir in super::resolve_project_dirs(&claude_projects_dir(), &ws_key) {
+        scan_project_jsonl_sessions(&proj_dir, &mut sessions)?;
     }
 
     // Second pass: scan ~/.claude/sessions/ for sessions with metadata but no .jsonl
