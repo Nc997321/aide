@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aide · 烟灰粉浅色毛玻璃视觉稿</title>
+  <style>
+    :root {
+      --bg: #f3f1f2;
+      --bg-warm: #faf5f4;
+      --glass: rgba(255, 255, 255, 0.58);
+      --glass-strong: rgba(255, 255, 255, 0.78);
+      --glass-soft: rgba(248, 251, 255, 0.48);
+      --line: rgba(124, 137, 154, 0.18);
+      --line-strong: rgba(255, 255, 255, 0.88);
+      --text: #23262d;
+      --muted: #7b8492;
+      --muted-2: #9ca4af;
+      --gold: #CFA6A0;
+      --gold-deep: #A77872;
+      --gold-soft: rgba(207, 166, 160, 0.18);
+      --blue-soft: rgba(207, 166, 160, 0.12);
+      --green: #3f9e69;
+      --danger: #dd6b72;
+      --shadow: 0 18px 55px rgba(93, 108, 128, 0.16), 0 3px 12px rgba(67, 82, 102, 0.06);
+      --shadow-soft: 0 8px 24px rgba(87, 101, 120, 0.1);
+      --radius-xl: 22px;
+      --radius-lg: 16px;
+      --radius-md: 12px;
+      --mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+      --ui: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      min-width: 1180px;
+      height: 100%;
+      overflow: hidden;
+      font-family: var(--ui);
+      color: var(--text);
+      background:
+        radial-gradient(circle at 8% 0%, rgba(255, 255, 255, 0.96) 0 17%, transparent 42%),
+        radial-gradient(circle at 100% 0%, rgba(225, 196, 192, 0.28) 0 15%, transparent 38%),
+        radial-gradient(circle at 72% 100%, rgba(207, 166, 160, 0.18) 0 18%, transparent 42%),
+        linear-gradient(135deg, #faf9fa 0%, #f2eff1 46%, #f8f3f2 100%);
+    }
+
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      pointer-events: none;
+      filter: blur(8px);
+      opacity: .75;
+    }
+
+    body::before {
+      width: 340px;
+      height: 340px;
+      left: -110px;
+      bottom: -120px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(207, 166, 160, .22), transparent 68%);
+    }
+
+    body::after {
+      width: 300px;
+      height: 300px;
+      right: 18%;
+      top: -150px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(207, 166, 160, .18), transparent 70%);
+    }
+
+    button, input, textarea { font: inherit; }
+
+    .app {
+      height: 100vh;
+      padding: 10px;
+      display: grid;
+      grid-template-rows: 44px minmax(0, 1fr);
+      gap: 10px;
+    }
+
+    .glass {
+      background: var(--glass);
+      border: 1px solid var(--line-strong);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(26px) saturate(135%);
+      -webkit-backdrop-filter: blur(26px) saturate(135%);
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: 420px minmax(320px, 1fr) 360px;
+      align-items: center;
+      padding: 0 14px;
+      border-radius: 16px;
+      background: rgba(255,255,255,.55);
+      border: 1px solid rgba(255,255,255,.82);
+      box-shadow: var(--shadow-soft);
+      backdrop-filter: blur(22px) saturate(140%);
+    }
+
+    .brand-row,
+    .top-actions,
+    .toolbar-group,
+    .row-center {
+      display: flex;
+      align-items: center;
+    }
+
+    .brand-row { gap: 10px; }
+
+    .logo {
+      width: 22px;
+      height: 22px;
+      border-radius: 8px;
+      background: conic-gradient(from 210deg, #8d4de8, #2ec0f3, #46d19e, #f4b54f, #f55c8c, #8d4de8);
+      position: relative;
+      box-shadow: 0 6px 14px rgba(115, 87, 210, .24);
+    }
+
+    .logo::after {
+      content: "";
+      position: absolute;
+      inset: 5px;
+      border-radius: 5px;
+      background: rgba(255,255,255,.75);
+      backdrop-filter: blur(4px);
+    }
+
+    .brand {
+      font-weight: 760;
+      letter-spacing: .02em;
+    }
+
+    .pro-badge {
+      color: #946B66;
+      background: rgba(250, 243, 242, .9);
+      border: 1px solid rgba(207, 166, 160, .3);
+      border-radius: 7px;
+      padding: 3px 8px;
+      font-size: 11px;
+      font-weight: 650;
+    }
+
+    .ghost-btn,
+    .icon-btn,
+    .select-btn,
+    .counter-btn {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.48);
+      color: var(--text);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.8);
+      transition: .18s ease;
+      cursor: pointer;
+    }
+
+    .ghost-btn:hover,
+    .icon-btn:hover,
+    .select-btn:hover,
+    .counter-btn:hover {
+      transform: translateY(-1px);
+      background: rgba(255,255,255,.78);
+      border-color: rgba(207, 166, 160, .35);
+    }
+
+    .ghost-btn,
+    .select-btn {
+      height: 32px;
+      border-radius: 10px;
+      padding: 0 12px;
+      font-size: 13px;
+    }
+
+    .search {
+      justify-self: center;
+      width: min(420px, 80%);
+      height: 32px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 0 10px;
+      border-radius: 11px;
+      background: rgba(255,255,255,.55);
+      border: 1px solid rgba(126, 139, 155, .14);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 8px 20px rgba(103,115,132,.08);
+    }
+
+    .search svg { opacity: .55; }
+    .search input {
+      border: 0;
+      outline: 0;
+      flex: 1;
+      background: transparent;
+      color: var(--text);
+      min-width: 0;
+    }
+
+    .search kbd {
+      color: var(--muted);
+      border: 1px solid rgba(123,132,146,.16);
+      background: rgba(255,255,255,.5);
+      border-radius: 6px;
+      padding: 2px 6px;
+      font-size: 10px;
+    }
+
+    .top-actions {
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .top-actions .icon-btn {
+      width: 30px;
+      height: 30px;
+      border-radius: 9px;
+      display: grid;
+      place-items: center;
+      border-color: transparent;
+      background: transparent;
+    }
+
+    .status {
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 6px;
+    }
+
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px rgba(63,158,105,.08); }
+
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 300px minmax(600px, 1fr) 330px;
+      gap: 10px;
+    }
+
+    .panel {
+      min-height: 0;
+      overflow: hidden;
+      border-radius: var(--radius-xl);
+      position: relative;
+    }
+
+    .panel::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      border-radius: inherit;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.82);
+    }
+
+    .left-panel {
+      display: grid;
+      grid-template-rows: 54px 112px minmax(0, 1fr) 48px;
+    }
+
+    .section-header,
+    .explorer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.24);
+    }
+
+    .section-title {
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .new-chat {
+      height: 32px;
+      border: 1px solid rgba(207,166,160,.38);
+      background: linear-gradient(180deg, rgba(255,250,249,.94), rgba(244,229,227,.78));
+      color: #805B56;
+      padding: 0 12px;
+      border-radius: 10px;
+      box-shadow: 0 8px 18px rgba(174,126,120,.11), inset 0 1px 0 white;
+      cursor: pointer;
+    }
+
+    .projects {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      overflow: auto;
+    }
+
+    .tree-row,
+    .project-row,
+    .conversation {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .project-row {
+      gap: 8px;
+      height: 31px;
+      padding: 0 8px;
+      border-radius: 9px;
+      color: #4b5564;
+      cursor: pointer;
+    }
+
+    .project-row:hover { background: rgba(255,255,255,.42); }
+    .project-row.active { color: #292d34; font-weight: 700; }
+
+    .pill-count {
+      margin-left: auto;
+      font-size: 11px;
+      padding: 3px 8px;
+      color: #637082;
+      background: rgba(207, 166, 160, .14);
+      border-radius: 999px;
+    }
+
+    .conversation-list {
+      overflow: auto;
+      padding: 10px 12px 14px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(126,138,154,.25) transparent;
+    }
+
+    .conversation {
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px 12px;
+      margin-bottom: 8px;
+      border-radius: 14px;
+      border: 1px solid rgba(139,151,166,.13);
+      background: rgba(255,255,255,.36);
+      box-shadow: 0 7px 18px rgba(92,108,127,.07), inset 0 1px 0 rgba(255,255,255,.8);
+      cursor: pointer;
+      transition: .18s ease;
+    }
+
+    .conversation:hover { transform: translateY(-1px); background: rgba(255,255,255,.52); }
+    .conversation.active {
+      border-color: rgba(207, 166, 160, .62);
+      background: linear-gradient(135deg, rgba(255,255,255,.72), rgba(246,232,230,.7));
+      box-shadow: 0 10px 25px rgba(168,120,114,.11), inset 0 1px 0 white;
+    }
+
+    .conversation .conv-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      border: 1px solid #9da8b5;
+      margin-top: 5px;
+      flex: none;
+    }
+
+    .conversation.active .conv-dot {
+      background: var(--gold);
+      border-color: #DDBDB8;
+      box-shadow: 0 0 0 4px rgba(207,166,160,.14);
+    }
+
+    .conv-main { min-width: 0; flex: 1; }
+    .conv-title-line { display: flex; gap: 8px; align-items: center; }
+    .conv-title { font-size: 13px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .conv-time { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
+    .conv-preview { margin-top: 5px; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .left-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      border-top: 1px solid var(--line);
+      background: rgba(255,255,255,.25);
+      font-size: 12px;
+      color: #596273;
+    }
+
+    .center-panel {
+      display: grid;
+      grid-template-rows: 43px 1fr 134px;
+    }
+
+    .tabs {
+      display: flex;
+      align-items: end;
+      overflow: hidden;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.2);
+    }
+
+    .tab {
+      height: 42px;
+      max-width: 190px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 13px;
+      color: #6c7481;
+      font-size: 12px;
+      border-left: 1px solid transparent;
+      border-right: 1px solid transparent;
+      cursor: pointer;
+      position: relative;
+    }
+
+    .tab span:not(.tab-dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tab-dot { width: 6px; height: 6px; border: 1px solid #8b95a2; border-radius: 50%; flex: none; }
+    .tab.active {
+      color: #31343b;
+      font-weight: 650;
+      background: rgba(255,255,255,.5);
+      border-color: var(--line);
+      border-radius: 12px 12px 0 0;
+    }
+
+    .tab.active::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 14px;
+      right: 14px;
+      height: 2px;
+      border-radius: 0 0 3px 3px;
+      background: linear-gradient(90deg, #CFA6A0, #E2C5C1);
+    }
+
+    .tab-close { color: #939aa5; font-size: 14px; }
+    .add-tab {
+      width: 28px; height: 28px; border-radius: 50%;
+      border: 1px solid var(--line); background: rgba(255,255,255,.45); cursor: pointer; flex: none;
+      margin: 0 0 7px 6px;
+    }
+
+    .thread {
+      overflow: auto;
+      padding: 12px 22px 28px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(126,138,154,.23) transparent;
+    }
+
+    .tool-strip {
+      height: 38px;
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      margin: 2px 0 15px;
+      padding: 0 14px;
+      border-radius: 11px;
+      background: rgba(245,248,252,.68);
+      border: 1px solid rgba(130,143,159,.13);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.8);
+      font-size: 12px;
+      color: #515a67;
+    }
+
+    .tool-index {
+      width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
+      font-size: 11px; font-weight: 700; background: rgba(102,111,128,.1); color: #566070;
+    }
+
+    .assistant-copy {
+      max-width: 930px;
+      font-size: 13px;
+      line-height: 1.75;
+      color: #30343b;
+    }
+
+    .assistant-copy p { margin: 0 0 10px; }
+    .assistant-copy h3 { margin: 16px 0 8px; font-size: 14px; }
+    .assistant-copy ul, .assistant-copy ol { margin: 4px 0 12px 22px; padding: 0; }
+    .assistant-copy li { margin: 4px 0; }
+    code, .mono { font-family: var(--mono); }
+
+    .command-card {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 42px;
+      padding: 0 14px;
+      margin: 8px 0 10px;
+      border: 1px solid rgba(122,137,155,.15);
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(250,251,253,.82), rgba(241,245,249,.64));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.86);
+      font-size: 11px;
+      color: #667080;
+      overflow: hidden;
+    }
+
+    .command-card strong { color: #2c3138; font-size: 12px; }
+    .command-card code { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .command-card .chev { margin-left: auto; font-size: 18px; color: #9aa3ae; }
+
+    .composer {
+      border-top: 1px solid var(--line);
+      background: rgba(255,255,255,.18);
+      padding: 10px 12px 12px;
+    }
+
+    .input-shell {
+      height: 100%;
+      border-radius: 16px;
+      border: 1px solid rgba(124,137,154,.17);
+      background: rgba(255,255,255,.52);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 10px 24px rgba(78,94,113,.08);
+      display: grid;
+      grid-template-rows: 1fr 38px;
+      overflow: hidden;
+    }
+
+    .input-shell textarea {
+      resize: none;
+      border: 0;
+      outline: 0;
+      padding: 14px 16px 8px;
+      background: transparent;
+      color: var(--text);
+      min-height: 0;
+    }
+
+    .input-shell textarea::placeholder { color: #9da5af; }
+    .composer-footer { display: flex; align-items: center; gap: 8px; padding: 0 8px 8px; }
+    .composer-footer .select-btn { height: 30px; color: #4e5866; }
+
+    .send {
+      margin-left: auto;
+      height: 31px;
+      display: flex;
+      align-items: center;
+      border: 0;
+      border-radius: 10px;
+      overflow: hidden;
+      cursor: pointer;
+      color: #674945;
+      background: linear-gradient(180deg, #E5CBC7, #CFA6A0);
+      box-shadow: 0 9px 20px rgba(160,112,106,.18), inset 0 1px 0 rgba(255,255,255,.72);
+    }
+
+    .send span { padding: 0 17px; font-weight: 700; font-size: 12px; }
+    .send i { width: 31px; height: 31px; display: grid; place-items: center; border-left: 1px solid rgba(103,73,69,.14); font-style: normal; }
+
+    .right-panel {
+      display: grid;
+      grid-template-rows: 48px 44px minmax(0, 1fr);
+    }
+
+    .explorer-tabs {
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.25);
+    }
+
+    .counter-btn {
+      min-width: 54px;
+      height: 32px;
+      border: 0;
+      background: transparent;
+      border-radius: 9px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: #596374;
+      position: relative;
+    }
+
+    .counter-btn.active::after {
+      content: "";
+      position: absolute;
+      bottom: -8px;
+      left: 10px;
+      right: 10px;
+      height: 2px;
+      background: linear-gradient(90deg, #CFA6A0, #E2C5C1);
+      border-radius: 2px;
+    }
+
+    .counter {
+      min-width: 20px;
+      height: 20px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      background: rgba(207,166,160,.14);
+      border: 1px solid rgba(207,166,160,.28);
+    }
+
+    .explorer-header {
+      justify-content: flex-start;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .branch {
+      font-size: 10px;
+      font-weight: 500;
+      color: #758091;
+      background: rgba(255,255,255,.47);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 3px 8px;
+    }
+
+    .file-tree {
+      overflow: auto;
+      padding: 9px 8px 24px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(126,138,154,.23) transparent;
+    }
+
+    .tree-row {
+      height: 29px;
+      gap: 7px;
+      border-radius: 8px;
+      padding: 0 8px 0 calc(8px + var(--depth, 0) * 17px);
+      font-size: 12px;
+      color: #505a69;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .tree-row:hover { background: rgba(255,255,255,.42); }
+    .tree-row.selected {
+      background: linear-gradient(90deg, rgba(226,197,193,.54), rgba(252,246,245,.56));
+      border: 1px solid rgba(207,166,160,.42);
+      box-shadow: inset 2px 0 0 #CFA6A0;
+    }
+
+    .tree-row.hidden + .children { display: none; }
+    .tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tree-meta { margin-left: auto; font-size: 10px; color: var(--green); }
+
+    .icon { width: 14px; height: 14px; flex: none; color: #687486; }
+    .caret { width: 12px; text-align: center; color: #7e8792; font-size: 11px; }
+    .file-icon { color: #cf5360; }
+
+    .modal-toast {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translate(-50%, 20px);
+      opacity: 0;
+      pointer-events: none;
+      padding: 10px 14px;
+      border-radius: 12px;
+      background: rgba(44,48,56,.86);
+      color: white;
+      font-size: 12px;
+      box-shadow: 0 12px 30px rgba(0,0,0,.18);
+      backdrop-filter: blur(12px);
+      transition: .22s ease;
+    }
+
+    .modal-toast.show { transform: translate(-50%, 0); opacity: 1; }
+
+    @media (max-width: 1350px) {
+      .workspace { grid-template-columns: 272px minmax(560px, 1fr) 300px; }
+      .topbar { grid-template-columns: 380px 1fr 300px; }
+      .ghost-btn { padding: 0 9px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand-row">
+        <div class="logo" aria-hidden="true"></div>
+        <div class="brand">Aide</div>
+        <div class="pro-badge">专业版</div>
+        <button class="ghost-btn">打开目录</button>
+        <button class="ghost-btn">cypress-agent⌄</button>
+      </div>
+
+      <label class="search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.8-3.8"></path></svg>
+        <input placeholder="搜索..." />
+        <kbd>Ctrl+P</kbd>
+      </label>
+
+      <div class="top-actions">
+        <button class="icon-btn" title="通知">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M13.7 21a2 2 0 0 1-3.4 0"></path></svg>
+        </button>
+        <div class="status"><span class="dot"></span><span>1</span></div>
+        <button class="icon-btn" title="外观">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z"></path></svg>
+        </button>
+        <button class="icon-btn" title="最小化">—</button>
+        <button class="icon-btn" title="最大化">▢</button>
+        <button class="icon-btn" title="关闭">×</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="panel glass left-panel">
+        <div class="section-header">
+          <span class="section-title">会话</span>
+          <button class="new-chat" id="newChatBtn">新建会话&nbsp;&nbsp; Ctrl+N</button>
+        </div>
+
+        <div class="projects">
+          <div class="project-row"><span class="caret">›</span><span>▱</span><span>allinkit</span></div>
+          <div class="project-row"><span class="caret">›</span><span>▱</span><span>claude-code-skills</span></div>
+          <div class="project-row active"><span class="caret">⌄</span><span>▱</span><span>cypress-agent</span><span class="pill-count">121</span></div>
+        </div>
+
+        <div class="conversation-list" id="conversationList">
+          <div class="conversation">
+            <span class="conv-dot"></span>
+            <div class="conv-main">
+              <div class="conv-title-line"><span class="conv-title">新会话 22:34:00</span><span class="conv-time">12小时前</span></div>
+              <div class="conv-preview">已提交并推送。**commit**：7b...</div>
+            </div>
+          </div>
+          <div class="conversation active">
+            <span class="conv-dot"></span>
+            <div class="conv-main">
+              <div class="conv-title-line"><span class="conv-title">字体修改</span><span class="conv-time">13小时前</span></div>
+            </div>
+          </div>
+          <div class="conversation">
+            <span class="conv-dot"></span>
+            <div class="conv-main"><div class="conv-title-line"><span class="conv-title">新会话 14:05:47</span><span class="conv-time">17小时前</span></div></div>
+          </div>
+          <div class="conversation">
+            <span class="conv-dot"></span>
+            <div class="conv-main"><div class="conv-title-line"><span class="conv-title">48634a09-30b9...</span><span class="conv-time">21小时前</span></div></div>
+          </div>
+          <div class="conversation">
+            <span class="conv-dot"></span>
+            <div class="conv-main"><div class="conv-title-line"><span class="conv-title">额度clade api skil...</span><span class="conv-time">22小时前</span></div></div>
+          </div>
+          <div class="conversation">
+            <span class="conv-dot"></span>
+            <div class="conv-main"><div class="conv-title-line"><span class="conv-title">修复图片报错的问题</span><span class="conv-time">22小时前</span></div></div>
+          </div>
+          <div class="conversation">
+            <span class="conv-dot"></span>
+            <div class="conv-main"><div class="conv-title-line"><span class="conv-title">fea750bb-5d98-...</span><span class="conv-time">23小时前</span></div><div class="conv-preview">输出结果是 'Running target(debu...</div></div>
+          </div>
+          <div class="conversation">
+            <span class="conv-dot"></span>
+            <div class="conv-main"><div class="conv-title-line"><span class="conv-title">Aide独立设置与工具...</span><span class="conv-time">1天前</span></div></div>
+          </div>
+          <div class="conversation">
+            <span class="conv-dot"></span>
+            <div class="conv-main"><div class="conv-title-line"><span class="conv-title">HTML优化</span><span class="conv-time">2天前</span></div></div>
+          </div>
+        </div>
+
+        <div class="left-footer">
+          <span>◔&nbsp; CPA 中转⌄</span>
+          <span>⚙</span>
+        </div>
+      </aside>
+
+      <section class="panel glass center-panel">
+        <div class="tabs" id="tabs">
+          <div class="tab"><span class="tab-dot"></span><span>新会话 09...</span></div>
+          <div class="tab"><span class="tab-dot"></span><span>多光谱导...</span></div>
+          <div class="tab"><span class="tab-dot"></span><span>新会话 09:41:13</span></div>
+          <div class="tab active"><span class="tab-dot"></span><span>字体修改</span><span class="tab-close">×</span></div>
+          <button class="add-tab">＋</button>
+        </div>
+
+        <div class="thread" id="thread">
+          <div class="tool-strip"><span class="tool-index">1</span><span>次工具调用</span><span class="mono">Bash</span><span>×1</span></div>
+
+          <div class="assistant-copy">
+            <p><strong>合并完成（快进），<code>master</code> 现在在 <code>ee7e86c</code>。</strong></p>
+            <p>注意一个情况：本地 <code>master</code> 领先 <code>origin/master</code> 8 个 commit——其中 1 个是我这次的，另外 7 个是你之前本地已有、还没推的提交。推送会把这 8 个一起同步到远端（这 7 个是你自己的工作，正常）。</p>
+            <p>远端是 <code>gitee.com</code>。推送：</p>
+          </div>
+
+          <div class="tool-strip"><span class="tool-index">1</span><span>次工具调用</span><span class="mono">Bash</span><span>×1</span></div>
+
+          <div class="assistant-copy">
+            <p><strong>推送成功：</strong> <code>edaa6a3..ee78e6c</code>&nbsp;&nbsp; <code>master → master</code>。确认 <code>master</code> 与远端同步：</p>
+          </div>
+
+          <div class="tool-strip"><span class="tool-index">1</span><span>次工具调用</span><span class="mono">Bash</span><span>×1</span></div>
+
+          <div class="command-card">
+            <span class="conv-dot" style="margin:0;background:#9aa3ae;border:0"></span>
+            <strong>Bash</strong>
+            <code>cd "C:/document/owner/cypress-agent" && git status -sb | head -3 && echo "=== 我这次提交已上远端 ===" && git log --oneline</code>
+            <span class="chev">›</span>
+          </div>
+
+          <div class="assistant-copy">
+            <p>完成。已合并并推送到远端。</p>
+            <h3>结果：</h3>
+            <ul>
+              <li><code>fix/mono-font-not-applying</code> 快速合并进 <code>master</code></li>
+              <li>推送到 gitee <code>origin/master：edaa6a3..ee78e6c</code>（含我这次的 + 你之前本地 7 个未推的，共 8 个 commit）</li>
+              <li><code>master</code> 与 <code>origin/master</code> 已同步，远端 tip = <code>ee7e86c</code>，JetBrains Mono 在会话区 / 编辑器生效 ✓</li>
+            </ul>
+            <p>工作区里还有两个跟本次无关的残留（一直没动它们）：</p>
+            <ul>
+              <li><code>M src/styles/global.css</code> —— 行尾归一化噪音，git diff 是空的，不是内容改动</li>
+              <li><code>?? nul</code> —— 191 字节杂散垃圾文件</li>
+            </ul>
+            <p>要不要我顺手：</p>
+            <ol>
+              <li>删除已合并的 <code>fix/mono-font-not-applying</code> 分支（已合并，删了无损失）</li>
+              <li>删除 <code>nul</code> 垃圾文件</li>
+            </ol>
+          </div>
+        </div>
+
+        <div class="composer">
+          <div class="input-shell">
+            <textarea id="messageInput" placeholder="输入消息..."></textarea>
+            <div class="composer-footer">
+              <button class="select-btn">gpt-5.5⌄</button>
+              <button class="select-btn">手动模式⌄</button>
+              <button class="send" id="sendBtn"><span>发送</span><i>⌄</i></button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel glass right-panel">
+        <div class="explorer-tabs">
+          <button class="counter-btn active" title="文件">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 6.5h6l2 2h10v10.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+          </button>
+          <button class="counter-btn" title="编辑">
+            <span>✎</span><span class="counter">6</span>
+          </button>
+          <button class="counter-btn" title="分支">
+            <span>⑂</span><span class="counter">2</span>
+          </button>
+        </div>
+
+        <div class="explorer-header">
+          <span>▱</span>
+          <span>cypress-agent</span>
+          <span class="branch">master⌄</span>
+          <span style="margin-left:auto;color:#8b95a2">◉̸</span>
+        </div>
+
+        <div class="file-tree" id="fileTree">
+          <div class="tree-row" style="--depth:0"><span class="caret">›</span><span>▱</span><span class="tree-label">agent-sidecar</span></div>
+          <div class="tree-row folder" style="--depth:0"><span class="caret">⌄</span><span>▱</span><span class="tree-label">docs</span></div>
+          <div class="children">
+            <div class="tree-row" style="--depth:1"><span class="caret">›</span><span>▱</span><span class="tree-label">discussions</span></div>
+            <div class="tree-row" style="--depth:1"><span class="caret">›</span><span>▱</span><span class="tree-label">mockups</span></div>
+            <div class="tree-row" style="--depth:1"><span class="caret">›</span><span>▱</span><span class="tree-label">reference</span></div>
+            <div class="tree-row folder" style="--depth:1"><span class="caret">⌄</span><span>▱</span><span class="tree-label">superpowers</span></div>
+            <div class="children">
+              <div class="tree-row folder" style="--depth:2"><span class="caret">⌄</span><span>▱</span><span class="tree-label">design-previews</span></div>
+              <div class="children">
+                <div class="tree-row" style="--depth:3"><span class="caret"></span><span class="file-icon">▣</span><span class="tree-label">2026-07-18-components.html</span></div>
+                <div class="tree-row selected" style="--depth:3"><span class="caret"></span><span class="file-icon">▣</span><span class="tree-label">2026-07-18-ui-direction.html</span></div>
+                <div class="tree-row" style="--depth:3"><span class="caret"></span><span class="file-icon">▣</span><span class="tree-label">2026-07-22-permissions.html</span></div>
+                <div class="tree-row" style="--depth:3"><span class="caret"></span><span class="file-icon">▣</span><span class="tree-label">codegraph-progress-ui.html</span></div>
+              </div>
+            </div>
+            <div class="tree-row" style="--depth:1"><span class="caret">›</span><span>▱</span><span class="tree-label">plans</span></div>
+            <div class="tree-row" style="--depth:1"><span class="caret">›</span><span>▱</span><span class="tree-label">specs</span></div>
+            <div class="tree-row" style="--depth:1"><span class="caret"></span><span>▦</span><span class="tree-label">ARCHITECTURE.md</span><span class="tree-meta">M↓</span></div>
+            <div class="tree-row" style="--depth:1"><span class="caret"></span><span class="file-icon">▣</span><span class="tree-label">notification-mockup.html</span></div>
+          </div>
+          <div class="tree-row" style="--depth:0"><span class="caret">›</span><span>▱</span><span class="tree-label">public</span></div>
+          <div class="tree-row" style="--depth:0"><span class="caret">›</span><span>▱</span><span class="tree-label">src</span></div>
+          <div class="tree-row folder" style="--depth:0"><span class="caret">⌄</span><span>▱</span><span class="tree-label">src-tauri</span></div>
+          <div class="children">
+            <div class="tree-row" style="--depth:1"><span class="caret"></span><span>▦</span><span class="tree-label">CLAUDE.md</span><span class="tree-meta" style="color:#5086cf">M</span></div>
+            <div class="tree-row" style="--depth:1"><span class="caret"></span><span style="color:#4aa36e">▶</span><span class="tree-label">dev.ps1</span></div>
+            <div class="tree-row" style="--depth:1"><span class="caret"></span><span style="color:#4aa36e">▶</span><span class="tree-label">dev.sh</span></div>
+            <div class="tree-row" style="--depth:1"><span class="caret"></span><span class="file-icon">▣</span><span class="tree-label">index.html</span></div>
+          </div>
+          <div class="tree-row" style="--depth:0"><span class="caret"></span><span>▯</span><span class="tree-label">LICENSE</span></div>
+          <div class="tree-row" style="--depth:0"><span class="caret"></span><span>▯</span><span class="tree-label">nul</span></div>
+          <div class="tree-row" style="--depth:0"><span class="caret"></span><span>{}</span><span class="tree-label">package-lock.json</span></div>
+          <div class="tree-row" style="--depth:0"><span class="caret"></span><span>{}</span><span class="tree-label">package.json</span></div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <div class="modal-toast" id="toast">已发送（视觉稿交互示例）</div>
+
+  <script>
+    document.querySelectorAll('.conversation').forEach(item => {
+      item.addEventListener('click', () => {
+        document.querySelectorAll('.conversation').forEach(el => el.classList.remove('active'));
+        item.classList.add('active');
+      });
+    });
+
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+        tab.classList.add('active');
+      });
+    });
+
+    document.querySelectorAll('.tree-row').forEach(row => {
+      row.addEventListener('click', (event) => {
+        event.stopPropagation();
+        document.querySelectorAll('.tree-row').forEach(el => el.classList.remove('selected'));
+        row.classList.add('selected');
+        if (row.classList.contains('folder')) {
+          const caret = row.querySelector('.caret');
+          const children = row.nextElementSibling;
+          if (children && children.classList.contains('children')) {
+            const hidden = children.style.display === 'none';
+            children.style.display = hidden ? '' : 'none';
+            caret.textContent = hidden ? '⌄' : '›';
+          }
+        }
+      });
+    });
+
+    const toast = document.getElementById('toast');
+    const input = document.getElementById('messageInput');
+    document.getElementById('sendBtn').addEventListener('click', () => {
+      if (!input.value.trim()) return;
+      toast.classList.add('show');
+      input.value = '';
+      setTimeout(() => toast.classList.remove('show'), 1600);
+    });
+
+    document.getElementById('newChatBtn').addEventListener('click', () => {
+      const item = document.createElement('div');
+      item.className = 'conversation active';
+      item.innerHTML = '<span class="conv-dot"></span><div class="conv-main"><div class="conv-title-line"><span class="conv-title">新会话</span><span class="conv-time">刚刚</span></div><div class="conv-preview">开始一个新的 AI 编程会话</div></div>';
+      document.querySelectorAll('.conversation').forEach(el => el.classList.remove('active'));
+      document.getElementById('conversationList').prepend(item);
+      item.addEventListener('click', () => {
+        document.querySelectorAll('.conversation').forEach(el => el.classList.remove('active'));
+        item.classList.add('active');
+      });
+    });
+  </script>
+</body>
+</html>

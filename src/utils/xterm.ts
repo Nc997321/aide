@@ -16,29 +16,30 @@ export function cssVar(name: string): string {
 /** Build an xterm ITheme from active CSS custom properties (--aide-*).
  *  Call this at terminal creation AND on theme switch.
  *  xterm is canvas-rendered, so it must be explicitly re-applied —
- *  CSS var cascade doesn't reach canvas.
+ *  CSS var cascade doesn't reach canvas. 所有 --aide-* 变量在 global.css
+ *  :root 有恒在兜底，cssVar 运行时不应为空，故不再挂暗色 hex fallback。
  *  @param _unused_tokens — kept for API compatibility; function reads CSS vars directly. */
 export function buildXtermTheme(_unused_tokens?: ThemeTokens) {
   return {
-    background: cssVar("bg-deep") || "#141218",
-    foreground: cssVar("text-primary") || "#ece5db",
-    cursor: cssVar("accent") || "#d9ab78",
-    selectionBackground: cssVar("surface-active") || "#3d3848",
-    black: cssVar("surface-hover") || "#322e3c",
-    red: cssVar("danger") || "#e87070",
-    green: cssVar("success") || "#8bc48a",
-    yellow: cssVar("warning") || "#e8c374",
-    blue: cssVar("accent") || "#d9ab78",
-    magenta: cssVar("syntax-keyword") || "#b09bc8",
-    cyan: cssVar("info") || "#7eb8d8",
-    white: cssVar("text-secondary") || "#b3aa9c",
-    brightBlack: cssVar("text-muted") || "#7d7568",
-    brightRed: cssVar("danger") || "#e87070",
-    brightGreen: cssVar("success") || "#8bc48a",
-    brightYellow: cssVar("warning") || "#e8c374",
-    brightBlue: cssVar("accent-hover") || "#e6bd8e",
-    brightMagenta: cssVar("syntax-keyword") || "#b09bc8",
-    brightCyan: cssVar("info") || "#7eb8d8",
-    brightWhite: cssVar("text-primary") || "#ece5db",
+    background: cssVar("bg-deep"),
+    foreground: cssVar("text-primary"),
+    cursor: cssVar("accent"),
+    selectionBackground: cssVar("surface-active"),
+    black: cssVar("surface-hover"),
+    red: cssVar("danger"),
+    green: cssVar("success"),
+    yellow: cssVar("warning"),
+    blue: cssVar("accent"),
+    magenta: cssVar("syntax-keyword"),
+    cyan: cssVar("info"),
+    white: cssVar("text-secondary"),
+    brightBlack: cssVar("text-muted"),
+    brightRed: cssVar("danger"),
+    brightGreen: cssVar("success"),
+    brightYellow: cssVar("warning"),
+    brightBlue: cssVar("accent-hover"),
+    brightMagenta: cssVar("syntax-keyword"),
+    brightCyan: cssVar("info"),
+    brightWhite: cssVar("text-primary"),
   };
 }

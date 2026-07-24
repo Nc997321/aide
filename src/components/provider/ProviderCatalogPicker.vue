@@ -53,7 +53,7 @@ function pick(kind: ProviderKind) {
 </template>
 
 <style scoped>
-.picker-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.picker-overlay { position: fixed; inset: 0; background: var(--aide-bg-overlay); display: flex; align-items: center; justify-content: center; z-index: 100; }
 .picker-card { background: var(--aide-bg-base); border: 1px solid var(--aide-border); border-radius: var(--aide-radius-lg); padding: 20px; width: 460px; max-height: 80vh; overflow: auto; box-shadow: var(--aide-shadow-lg); }
 .picker-title { font-size: 16px; font-weight: 600; color: var(--aide-text-primary); margin-bottom: 16px; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

@@ -31,9 +31,11 @@ defineProps<{
   animation: a-dot-pulse 2s ease-in-out infinite;
 }
 
-/* 空闲 */
+/* 空闲（waiting）：用 info 蓝灰——与 useSessionState 文档「waiting 蓝」及
+ * TitleBar 活动面板的 status-waiting 对齐；灰填充实心与 stopped 空心灰圈
+ * 距离太近，浅底下几乎分不清。 */
 .a-status-dot--waiting {
-  background: var(--aide-text-muted);
+  background: var(--aide-info);
 }
 
 .a-status-dot--attention {

@@ -34,6 +34,8 @@ export interface ThemeTokens {
   shadowSm: string;
   shadowMd: string;
   shadowLg: string;
+  /** 井口/输入框内侧顶部阴影（inset）；暗色主题给黑色系，浅色主题给灰蓝系 */
+  shadowInset: string;
 
   radiusSm: string;
   radiusMd: string;

@@ -93,7 +93,7 @@ const countText = computed(() => {
   font-size: 12px;
   font-family: inherit;
   outline: none;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3); /* structural overlay, not theme-color */
+  box-shadow: var(--aide-shadow-inset);
 }
 .wb-search-input:focus {
   border-color: var(--aide-accent);

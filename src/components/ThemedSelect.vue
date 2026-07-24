@@ -201,7 +201,7 @@ onUnmounted(() => {
   background: var(--aide-bg-deep);
   border-color: var(--aide-border);
   color: var(--aide-text-primary);
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--aide-shadow-inset);
 }
 
 .themed-select.block:hover:not(.disabled),

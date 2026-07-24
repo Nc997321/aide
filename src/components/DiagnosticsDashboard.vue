@@ -154,12 +154,12 @@ function fmtReset(ts: number): string {
 .section-title {
   font-size: 14px;
   font-weight: 600;
-  color: var(--aide-text);
+  color: var(--aide-text-primary);
   margin: 0;
 }
 
 .card {
-  background: var(--aide-surface);
+  background: var(--aide-surface-default);
   border: 1px solid var(--aide-border);
   border-radius: 8px;
   padding: 12px;
@@ -168,7 +168,7 @@ function fmtReset(ts: number): string {
 .card-header {
   font-size: 12px;
   font-weight: 600;
-  color: var(--aide-text-secondary, #888);
+  color: var(--aide-text-secondary);
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -190,18 +190,18 @@ function fmtReset(ts: number): string {
 .stat-value {
   font-size: 18px;
   font-weight: 700;
-  color: var(--aide-text);
+  color: var(--aide-text-primary);
   font-variant-numeric: tabular-nums;
 }
 
 .stat-label {
   font-size: 11px;
-  color: var(--aide-text-secondary, #888);
+  color: var(--aide-text-secondary);
   margin-top: 2px;
 }
 
 .stat.warn .stat-value {
-  color: var(--aide-warning, #f0a020);
+  color: var(--aide-warning);
 }
 
 /* 输入归因拆分 */
@@ -222,18 +222,18 @@ function fmtReset(ts: number): string {
 
 .bd-label {
   font-size: 11px;
-  color: var(--aide-text-secondary, #888);
+  color: var(--aide-text-secondary);
   font-family: var(--aide-font-mono);
 }
 
 .bd-value {
   font-size: 12px;
-  color: var(--aide-text);
+  color: var(--aide-text-primary);
   font-variant-numeric: tabular-nums;
 }
 
 .bd-value.hot {
-  color: var(--aide-warning, #f0a020);
+  color: var(--aide-warning);
   font-weight: 600;
 }
 
@@ -262,7 +262,7 @@ function fmtReset(ts: number): string {
 
 .bm-label {
   font-size: 11px;
-  color: var(--aide-text-secondary, #888);
+  color: var(--aide-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -270,7 +270,7 @@ function fmtReset(ts: number): string {
 
 .bm-value {
   font-size: 11px;
-  color: var(--aide-text);
+  color: var(--aide-text-primary);
   font-variant-numeric: tabular-nums;
 }
 
@@ -279,8 +279,8 @@ function fmtReset(ts: number): string {
   margin-top: 10px;
   padding: 6px 8px;
   font-size: 11px;
-  color: var(--aide-warning, #f0a020);
-  background: color-mix(in srgb, var(--aide-warning, #f0a020) 12%, transparent);
+  color: var(--aide-warning);
+  background: color-mix(in srgb, var(--aide-warning) 12%, transparent);
   border-radius: 6px;
 }
 
@@ -294,7 +294,7 @@ function fmtReset(ts: number): string {
 
 .rl-label {
   font-size: 12px;
-  color: var(--aide-text);
+  color: var(--aide-text-primary);
   min-width: 80px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -304,29 +304,29 @@ function fmtReset(ts: number): string {
 .rl-bar-track {
   flex: 1;
   height: 8px;
-  background: var(--aide-bg-deep, #1a1a2e);
+  background: var(--aide-bg-deep);
   border-radius: 4px;
   overflow: hidden;
 }
 
 .rl-bar-fill {
   height: 100%;
-  background: var(--aide-accent, #4a9eff);
+  background: var(--aide-accent);
   border-radius: 4px;
   transition: width 0.3s ease;
 }
 
 .rl-bar-fill.high {
-  background: var(--aide-warning, #f0a020);
+  background: var(--aide-warning);
 }
 
 .rl-bar-fill.critical {
-  background: var(--aide-danger, #e04040);
+  background: var(--aide-danger);
 }
 
 .rl-pct {
   font-size: 12px;
-  color: var(--aide-text);
+  color: var(--aide-text-primary);
   min-width: 36px;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -334,7 +334,7 @@ function fmtReset(ts: number): string {
 
 .rl-reset {
   font-size: 11px;
-  color: var(--aide-text-secondary, #888);
+  color: var(--aide-text-secondary);
   min-width: 50px;
 }
 </style>

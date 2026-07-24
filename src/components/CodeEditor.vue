@@ -208,8 +208,7 @@ async function createEditor() {
           borderRadius: "var(--aide-radius-sm) !important",
           padding: "2px 6px !important",
           fontSize: "12px !important",
-          /* structural overlay, not theme-color */
-          boxShadow: "inset 0 1px 2px rgba(0,0,0,.3) !important",
+          boxShadow: "var(--aide-shadow-inset) !important",
         },
         ".cm-textfield:focus": {
           borderColor: "var(--aide-accent) !important",

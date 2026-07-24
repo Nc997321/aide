@@ -191,7 +191,7 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: stretch;
   border-radius: var(--aide-radius-md);
-  box-shadow: var(--aide-accent-glow), inset 0 1px 0 rgba(255, 255, 255, .28);
+  box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset);
   backdrop-filter: var(--aide-surface-blur);
   -webkit-backdrop-filter: var(--aide-surface-blur);
 }
@@ -225,7 +225,7 @@ onUnmounted(() => {
   justify-content: center;
   padding: 7px 10px;
   border-radius: 0 var(--aide-radius-md) var(--aide-radius-md) 0;
-  border-left: 1px solid rgba(0, 0, 0, .18);
+  border-left: 1px solid color-mix(in srgb, var(--aide-text-on-accent) 25%, transparent);
   font-size: 10px;
 }
 

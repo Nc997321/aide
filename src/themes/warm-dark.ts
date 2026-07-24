@@ -31,6 +31,7 @@ export const warmDark: ThemeTokens = {
   shadowSm: "0 1px 2px rgba(0,0,0,.28)",
   shadowMd: "0 6px 20px rgba(0,0,0,.34), 0 1px 4px rgba(0,0,0,.22)",
   shadowLg: "0 18px 56px rgba(0,0,0,.5), 0 4px 14px rgba(0,0,0,.3)",
+  shadowInset: "inset 0 1px 3px rgba(0,0,0,.3)",
   radiusSm: "6px",
   radiusMd: "9px",
   radiusLg: "13px",

@@ -142,7 +142,7 @@ function onOverlayClick(e: MouseEvent) {
   color: var(--aide-text-primary);
   outline: none;
   font-family: inherit;
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--aide-shadow-inset);
   transition: all var(--aide-ease-t);
 }
 
@@ -152,7 +152,7 @@ function onOverlayClick(e: MouseEvent) {
 
 .modal-input:focus {
   border-color: var(--aide-accent);
-  box-shadow: var(--aide-accent-ring), inset 0 1px 3px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--aide-accent-ring), var(--aide-shadow-inset);
 }
 
 .modal-actions {
@@ -201,10 +201,10 @@ function onOverlayClick(e: MouseEvent) {
 
 .btn-confirm {
   background: var(--aide-accent-gradient);
-  border: 1px solid rgba(255, 255, 255, 0.22);
+  border: 1px solid var(--aide-border-strong);
   color: var(--aide-text-on-accent);
   font-weight: 600;
-  box-shadow: var(--aide-accent-glow), inset 0 1px 0 rgba(255, 255, 255, 0.32);
+  box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset);
 }
 
 .btn-confirm:hover {

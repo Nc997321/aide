@@ -41,11 +41,6 @@ export function unregisterSearch(id: string) {
   results.delete(id);
 }
 
-/** decorations 要求 #RRGGBB；token 理论上都是 hex，防御性兜底。 */
-function hex6(v: string, fallback: string): string {
-  return /^#[0-9a-fA-F]{6}$/.test(v) ? v : fallback;
-}
-
 /** 把任意 CSS 颜色表达式（含 color-mix）解析成 #RRGGBB：
  *  WebView2/Chromium 的 getComputedStyle 会把 color-mix 算成 rgb()。
  *  用于让 xterm canvas 高亮与 CodeMirror 搜索高亮（warning 25%/45%）严格同色。 */
@@ -70,12 +65,14 @@ function resolveToHex(expr: string, fallback: string): string {
 }
 
 function searchDecorations(): ISearchDecorationOptions {
+  // 兜底中性灰：仅在 token 缺失/解析失败时才会用到（:root 恒有兜底，正常不触发）
+  const neutral = "#808080";
   return {
     // 与 CodeEditor.vue 的 .cm-searchMatch / .cm-searchMatch-selected 同配方
-    matchBackground: resolveToHex("color-mix(in srgb, var(--aide-warning) 25%, var(--aide-bg-deep))", "#4a4238"),
-    matchOverviewRuler: hex6(cssVar("warning"), "#e8c374"),
-    activeMatchBackground: resolveToHex("color-mix(in srgb, var(--aide-warning) 45%, var(--aide-bg-deep))", "#5c5142"),
-    activeMatchColorOverviewRuler: hex6(cssVar("accent"), "#d9ab78"),
+    matchBackground: resolveToHex("color-mix(in srgb, var(--aide-warning) 25%, var(--aide-bg-deep))", neutral),
+    matchOverviewRuler: resolveToHex(cssVar("warning"), neutral),
+    activeMatchBackground: resolveToHex("color-mix(in srgb, var(--aide-warning) 45%, var(--aide-bg-deep))", neutral),
+    activeMatchColorOverviewRuler: resolveToHex(cssVar("accent"), neutral),
   };
 }
 

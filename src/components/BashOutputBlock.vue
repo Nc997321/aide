@@ -59,7 +59,7 @@ watch(() => settings.theme, async () => {
   background: var(--aide-bg-deep);
   border: 1px solid var(--aide-border-subtle);
   overflow: hidden;
-  box-shadow: inset 0 1px 4px rgba(0, 0, 0, .35);
+  box-shadow: var(--aide-shadow-inset);
   display: flex;
   flex-wrap: wrap;
   backdrop-filter: var(--aide-surface-blur);

@@ -38,6 +38,7 @@ export const catppuccin: ThemeTokens = {
   shadowSm: "0 1px 3px rgba(0,0,0,0.25), 0 1px 2px rgba(0,0,0,0.15)",
   shadowMd: "0 4px 12px rgba(0,0,0,0.3), 0 1px 4px rgba(0,0,0,0.2)",
   shadowLg: "0 12px 40px rgba(0,0,0,0.45), 0 4px 12px rgba(0,0,0,0.25)",
+  shadowInset: "inset 0 1px 3px rgba(0,0,0,.3)",
 
   radiusSm: "4px",
   radiusMd: "8px",

@@ -68,10 +68,10 @@ withDefaults(
 /* Primary */
 .a-btn--primary {
   background: var(--aide-accent-gradient);
-  border-color: rgba(255, 255, 255, 0.22);
+  border-color: var(--aide-border-strong);
   color: var(--aide-text-on-accent);
   font-weight: 600;
-  box-shadow: var(--aide-accent-glow), inset 0 1px 0 rgba(255, 255, 255, 0.32);
+  box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset);
 }
 .a-btn--primary:hover {
   filter: brightness(1.07);

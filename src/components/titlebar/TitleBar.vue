@@ -714,7 +714,7 @@ function isRowRunning(cfg: RunConfig): boolean {
 }
 .run-play-btn:hover {
   background: color-mix(in srgb, var(--aide-success) 12%, transparent);
-  color: color-mix(in srgb, var(--aide-success) 150%, white);
+  color: var(--aide-success);
 }
 
 /* ── Config dropdown panel ── */

@@ -419,7 +419,7 @@ const inputJson = computed(() => {
   font-family: var(--aide-font-mono);
   font-size: 11.5px;
   color: var(--aide-text-secondary);
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, .3);
+  box-shadow: var(--aide-shadow-inset);
   max-height: 128px;
   overflow: auto;
 }
@@ -665,10 +665,10 @@ const inputJson = computed(() => {
 
 .perm-btn--solid {
   background: var(--aide-accent-gradient);
-  border-color: rgba(255, 255, 255, .22);
+  border-color: var(--aide-border-strong);
   color: var(--aide-text-on-accent);
   font-weight: 600;
-  box-shadow: var(--aide-accent-glow), inset 0 1px 0 rgba(255, 255, 255, .32);
+  box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset);
 }
 
 .perm-btn--solid:hover:not(:disabled) {

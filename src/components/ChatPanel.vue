@@ -1407,8 +1407,8 @@ async function handleQuickAction(action: QuickAction) {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.6);
-  color: white;
+  background: var(--aide-bg-overlay);
+  color: var(--aide-text-primary);
   border: none;
   cursor: pointer;
   font-size: 11px;

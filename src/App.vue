@@ -562,8 +562,14 @@ function handleKeyup(e: KeyboardEvent) {
 }
 
 onMounted(async () => {
-  // Apply default theme before any rendering
-  applyTheme(themes["warm-dark"]);
+  // 首屏主题：优先 localStorage 缓存的主题 id（上次切换时 SettingsPanel 写入），
+  // 避免浅色主题用户每次启动先闪一帧暗色兜底；无缓存才用 warm-dark。
+  let cachedTheme = "warm-dark";
+  try {
+    const c = localStorage.getItem("aide.theme");
+    if (c && themes[c]) cachedTheme = c;
+  } catch { /* localStorage 不可用时保持兜底 */ }
+  applyTheme(themes[cachedTheme]);
 
   window.addEventListener("keydown", handleKeydown, { capture: true });
   window.addEventListener("keyup", handleKeyup, { capture: true });
@@ -572,10 +578,11 @@ onMounted(async () => {
   const { load: loadSettings } = useSettings();
   await loadSettings();
 
-  // Apply persisted theme (overrides the default warm-dark if user chose differently)
+  // Apply persisted theme (以磁盘设置为准，校正 localStorage 缓存可能过期的情况)
   const themeId = settings.theme || "warm-dark";
   const themeTokens = themes[themeId] || themes["warm-dark"];
   applyTheme(themeTokens);
+  try { localStorage.setItem("aide.theme", themes[themeId] ? themeId : "warm-dark"); } catch { /* ignore */ }
 
   // Load provider configuration
   await loadProviders();

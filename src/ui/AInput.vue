@@ -55,7 +55,7 @@ defineEmits<{
   color: var(--aide-text-primary);
   font-size: 12.5px;
   font-family: inherit;
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--aide-shadow-inset);
   transition: all var(--aide-ease-t);
 }
 
@@ -65,7 +65,7 @@ defineEmits<{
 
 .a-input__field:focus {
   border-color: var(--aide-accent);
-  box-shadow: var(--aide-accent-ring), inset 0 1px 3px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--aide-accent-ring), var(--aide-shadow-inset);
 }
 
 .a-input.error .a-input__field {

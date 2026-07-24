@@ -38,6 +38,7 @@ export const glass: ThemeTokens = {
   shadowSm: "0 1px 2px rgba(0,0,0,.3)",
   shadowMd: "0 8px 24px rgba(0,0,0,.38)",
   shadowLg: "0 20px 60px rgba(0,0,0,.55)",
+  shadowInset: "inset 0 1px 3px rgba(0,0,0,.3)",
 
   radiusSm: "8px",
   radiusMd: "10px",

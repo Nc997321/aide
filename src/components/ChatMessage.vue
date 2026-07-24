@@ -237,7 +237,7 @@ function handleTextClick(e: MouseEvent) {
 .msg-turn {
   max-width: 94%;
   min-width: 0;
-  border-left: 2px solid rgba(212, 165, 116, 0.45);
+  border-left: 2px solid color-mix(in srgb, var(--aide-accent) 45%, transparent);
   padding: 2px 0 2px 18px;
   display: flex;
   flex-direction: column;
@@ -293,6 +293,24 @@ function handleTextClick(e: MouseEvent) {
   background: none;
   padding: 0;
 }
+/* 聊天内代码块 hljs 语法色：与 FileWindow.vue 同一 token 配方 */
+.msg-text :deep(.hljs-keyword),
+.msg-text :deep(.hljs-selector-tag),
+.msg-text :deep(.hljs-type) { color: var(--aide-syntax-keyword); }
+.msg-text :deep(.hljs-string),
+.msg-text :deep(.hljs-addition),
+.msg-text :deep(.hljs-regexp) { color: var(--aide-success); }
+.msg-text :deep(.hljs-number),
+.msg-text :deep(.hljs-literal),
+.msg-text :deep(.hljs-variable),
+.msg-text :deep(.hljs-template-variable) { color: var(--aide-syntax-number); }
+.msg-text :deep(.hljs-comment),
+.msg-text :deep(.hljs-quote) { color: var(--aide-text-muted); font-style: italic; }
+.msg-text :deep(.hljs-title),
+.msg-text :deep(.hljs-title.class_),
+.msg-text :deep(.hljs-title.function_),
+.msg-text :deep(.hljs-section),
+.msg-text :deep(.hljs-meta) { color: var(--aide-accent); }
 /* Tailwind preflight 把 ul/ol 的 list-style 统一清成 none，仅补 padding 会
    导致有序列表看不到 1./2./3. 编号、无序列表看不到圆点——这里显式复原标记。 */
 .msg-text :deep(ul), .msg-text :deep(ol) {

@@ -16,6 +16,7 @@ const themeOptions = [
   { value: "warm-dark", label: "Warm Dark" },
   { value: "catppuccin", label: "Catppuccin Mocha" },
   { value: "glass", label: "Glass（experimental）" },
+  { value: "smoky-pink-glass", label: "Smoky Pink Glass（light）" },
 ];
 const cgBackendOptions = [
   { value: "fastembed", label: "fastembed（本地 ONNX）" },
@@ -225,6 +226,8 @@ function onThemeChange(themeId: string) {
   if (tokens) {
     applyTheme(tokens);
     update({ theme: themeId });
+    // 同步缓存主题 id，供 App.vue 启动时首屏直接应用，避免暗色兜底闪烁
+    try { localStorage.setItem("aide.theme", themeId); } catch { /* ignore */ }
   }
 }
 
