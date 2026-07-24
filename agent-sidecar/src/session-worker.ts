@@ -233,14 +233,20 @@ export class SessionWorker {
 
   /** 从当前轮安全边界接入插队消息；会话已关闭时丢弃，禁止向 closed queue 写入。 */
   private promoteJumpQueue(): boolean {
-    const jump = this.jumpQueueCtl.take();
-    if (!jump || this.stopped) return false;
-    if (jump.permissionMode) this.applyPermissionMode(jump.permissionMode);
-    this.queue.push({
-      type: "user",
-      message: buildUserMessage(jump.prompt, jump.images ?? []),
-      parent_tool_use_id: null,
-    } as any);
+    const jumps = this.jumpQueueCtl.takeAll();
+    if (!jumps.length || this.stopped) return false;
+    // 多条插队逐条 push（不合并）：/compact 这类斜杠命令作为独立用户消息才能
+    // 被 CLI 正确执行；权限模式取最后一条非空值（对齐旧排队合并语义）。
+    const lastMode = [...jumps].reverse().find((j) => j.permissionMode)?.permissionMode;
+    if (lastMode) this.applyPermissionMode(lastMode);
+    for (const jump of jumps) {
+      this.queue.push({
+        type: "user",
+        message: buildUserMessage(jump.prompt, jump.images ?? []),
+        parent_tool_use_id: null,
+      } as any);
+    }
+    this.emit({ type: "jump_promoted" } as any);
     this.turnActive = true;
     return true;
   }
@@ -454,6 +460,8 @@ export class SessionWorker {
       }
 
     } else if (cmd.cmd === "interrupt") {
+      // 用户主动打断：待插队消息一并作废（对齐旧"排队消息作废"语义）
+      this.jumpQueueCtl.clear();
       this.currentQuery?.interrupt().catch(() => {});
 
     } else if (cmd.cmd === "set_permission_mode") {
@@ -528,6 +536,9 @@ export class SessionWorker {
       });
       if (this.toolLifecycle.isIdle()) {
         this.currentQuery.interrupt().catch(() => {});
+      } else {
+        // 有工具在跑：要等安全边界，通知前端显示"待发出"提示条
+        this.emit({ type: "jump_queued", prompt: cmd.prompt } as any);
       }
       return;
     }

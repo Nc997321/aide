@@ -39,7 +39,7 @@ const {
   tasks,
   permissionModes,
   currentPermissionMode,
-  queuedPrompts,
+  pendingJumps,
   pendingPermission,
   pendingPermissionCount,
   sendMessage,
@@ -48,7 +48,6 @@ const {
   stopSession,
   setModel,
   setPermissionMode,
-  removeQueued,
   respondPermission,
 } = useChatSession(sessionIdRef);
 
@@ -117,7 +116,7 @@ function onNewTab() {
       :tasks="tasks"
       :permission-modes="permissionModes"
       :current-permission-mode="currentPermissionMode"
-      :queued-prompts="queuedPrompts"
+      :pending-jumps="pendingJumps"
       :permission="pendingPermission"
       :permission-queue-count="pendingPermissionCount"
       class="pane-group__chat"
@@ -126,7 +125,6 @@ function onNewTab() {
       @interrupt="interrupt"
       @set-model="setModel"
       @set-permission-mode="setPermissionMode"
-      @remove-queued="removeQueued"
       @respond-permission="(id: string, approved: boolean, always?: boolean, answers?: Record<string, string>, nextMode?: string) => respondPermission(id, approved, always, answers, nextMode)"
     />
   </div>

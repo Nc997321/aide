@@ -17,7 +17,8 @@ const props = withDefaults(
   defineProps<{
     /** 主体「发送」是否禁用（输入空且无图片时）。▾ 菜单不受此约束。 */
     disabled?: boolean;
-    /** busy=true 时主体标签显示「排队」而非「发送」。 */
+    /** busy=true 时主体标签显示「插队」而非「发送」——忙碌时发送一律走插队
+     *  （sidecar 在安全边界 interrupt 当前轮后续发）。 */
     busy?: boolean;
     /** 菜单项数据源；为空时不渲染 ▾。 */
     actions?: QuickAction[];
@@ -128,7 +129,7 @@ onUnmounted(() => {
       :disabled="disabled"
       @click="emit('send')"
     >
-      {{ busy ? "排队" : "发送" }}
+      {{ busy ? "插队" : "发送" }}
     </button>
     <button
       v-if="actions.length"

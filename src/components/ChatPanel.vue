@@ -47,8 +47,8 @@ const props = defineProps<{
   tasks?: TaskItem[];
   permissionModes?: PermissionModeOption[];
   currentPermissionMode?: string;
-  /** 忙碌时排队的待发消息文本（顺序即发送顺序） */
-  queuedPrompts?: string[];
+  /** 忙碌时插队、正在 sidecar 里等安全边界的消息原文（顺序即发出顺序） */
+  pendingJumps?: string[];
   /** 本会话待确认的权限/提问请求——渲染在消息区和输入框之间（见模板），
    *  不是浮层，见 PermissionDialog.vue 顶部注释。 */
   permission?: PermissionRequest | null;
@@ -62,7 +62,6 @@ const emit = defineEmits<{
   interrupt: [];
   "set-model": [model: string];
   "set-permission-mode": [mode: string];
-  "remove-queued": [index: number];
   "respond-permission": [id: string, approved: boolean, always?: boolean, answers?: Record<string, string>, nextMode?: string];
 }>();
 
@@ -703,13 +702,12 @@ async function handlePaste(e: ClipboardEvent) {
   }
 }
 
-/** jumpQueue=true 时对应"插队发送"按钮：不排队，交给 sidecar 在安全边界
- *  （当前工具调用跑完）打断当前这轮再发出——见 useChatSession.ts 的 SendOptions
- *  注释。其余逻辑跟普通发送完全一致，避免两套构造消息的代码。 */
-async function handleSend(jumpQueue = false) {
+/** 忙碌时发送 = 插队：不排队，交给 sidecar 在安全边界（当前工具调用跑完）
+ *  打断当前这轮再发出——见 useChatSession.sendMessage 的注释。 */
+async function handleSend() {
   const text = inputText.value.trim();
   const hasImages = pendingImages.value.length > 0;
-  // 忙碌时不再拦截：useChatSession 会把消息排队，message_stop 后按序续发
+  // 忙碌时不再拦截：useChatSession 会带插队标记透传，sidecar 在安全边界续发
   if (!text && !hasImages) return;
 
   // 只在有图片时预检；明确不支持则保留输入和附件，未知/临时失败交给 sidecar 二次防线。
@@ -762,7 +760,6 @@ async function handleSend(jumpQueue = false) {
     initialModel: selectedModel.value || undefined,
     mentions: mentionResolution,
     permissionMode: selectedPermissionMode.value || undefined,
-    jumpQueue: jumpQueue || undefined,
   });
 }
 
@@ -847,12 +844,12 @@ async function handleQuickAction(action: QuickAction) {
       </div>
       <!-- 输入框、图片缩略图、模型工具栏放进同一个带边框的盒子里，工具栏焊在底部——
            不再是"模型栏单独一行浮在输入框上方"，避免贴图片时模型栏被顶得到处跑。 -->
-      <!-- 忙碌时排队的消息：还没发出去，可随时撤掉 -->
-      <div v-if="queuedPrompts?.length" class="queued-strip">
-        <div v-for="(p, i) in queuedPrompts" :key="i" class="queued-item">
-          <span class="queued-item-tag">排队</span>
-          <span class="queued-item-text">{{ p }}</span>
-          <button class="queued-item-remove" v-tooltip="'撤回这条排队消息'" @click="emit('remove-queued', i)">×</button>
+      <!-- 忙碌时插队、正在等安全边界（当前工具跑完）的消息：sidecar 已登记，不可撤回 -->
+      <div v-if="pendingJumps?.length" class="jump-strip">
+        <div v-for="(p, i) in pendingJumps" :key="i" class="jump-item">
+          <span class="jump-item-tag">插队</span>
+          <span class="jump-item-text">{{ p }}</span>
+          <span class="jump-item-hint">等当前工具跑完发出</span>
         </div>
       </div>
       <!-- 最小化后支线仍在后台跑:浮一个可点开重展抽屉的小标(done 后结论已进批注,不再浮) -->
@@ -949,13 +946,6 @@ async function handleQuickAction(action: QuickAction) {
             </div>
             <span class="chat-ctx-percent">{{ w.pct }}%</span>
           </div>
-          <button
-            v-if="isBusyVal && !btwMode"
-            class="chat-jump-btn"
-            v-tooltip="'插队发送：不用等这轮生成结束，sidecar 会在当前工具调用跑完后立刻打断、优先发出这条'"
-            :disabled="!inputText.trim() && !pendingImages.length"
-            @click="handleSend(true)"
-          >插队</button>
           <ChatSendButton
             :disabled="!inputText.trim() && !pendingImages.length"
             :busy="isBusyVal && !btwMode"
@@ -1236,39 +1226,8 @@ async function handleQuickAction(action: QuickAction) {
   cursor: not-allowed;
 }
 
-.chat-jump-btn {
-  /* 原来靠 .chat-cost-total 的 margin-right: auto 把发送按钮推到工具栏最右侧；
-   * 去掉费用展示后这条移到这里，保持发送/插队按钮组始终靠右的布局不变。只有
-   * 忙碌时才渲染这个按钮，所以 margin-left:auto 落在它上面；空闲时它不存在，
-   * .chat-send-split 自己的 margin-left:auto 兜底（见下面）。 */
-  margin-left: auto;
-  border-radius: var(--aide-radius-sm);
-  background: transparent;
-  color: var(--aide-accent);
-  border: 1px solid var(--aide-accent);
-  padding: 0 12px;
-  height: 24px;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all var(--aide-ease-t);
-  white-space: nowrap;
-}
-
-.chat-jump-btn:hover:not(:disabled) {
-  background: var(--aide-accent);
-  color: var(--aide-text-on-accent);
-}
-
-.chat-jump-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-/* 分裂式发送按钮（ChatSendButton 根元素）：插队按钮只在忙碌时渲染并吃掉
- * margin-left:auto；空闲时它不存在，这里的 auto 顶上，保持发送按钮始终靠右。
- * 两者同时存在时这条不生效（flex 的 auto margin 只有第一个吃到的元素生效），
- * 靠 .chat-toolbar 的 gap 分隔即可。按钮自身的外观在 ChatSendButton.vue 内。 */
+/* 分裂式发送按钮（ChatSendButton 根元素）：始终靠右。按钮自身的外观在
+ * ChatSendButton.vue 内。 */
 .chat-send-split {
   margin-left: auto;
 }
@@ -1327,14 +1286,14 @@ async function handleQuickAction(action: QuickAction) {
   flex: 1;
 }
 
-.queued-strip {
+.jump-strip {
   display: flex;
   flex-direction: column;
   gap: 4px;
   margin-bottom: 6px;
 }
 
-.queued-item {
+.jump-item {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1346,35 +1305,26 @@ async function handleQuickAction(action: QuickAction) {
   border-radius: var(--aide-radius-sm);
 }
 
-.queued-item-tag {
+.jump-item-tag {
   flex-shrink: 0;
   font-size: 10px;
-  color: var(--aide-text-muted);
-  background: var(--aide-bg-deep);
+  color: var(--aide-accent);
+  background: var(--aide-accent-subtle);
   padding: 1px 4px;
   border-radius: 3px;
 }
 
-.queued-item-text {
+.jump-item-text {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.queued-item-remove {
+.jump-item-hint {
   flex-shrink: 0;
-  background: none;
-  border: none;
+  font-size: 10px;
   color: var(--aide-text-muted);
-  cursor: pointer;
-  font-size: 13px;
-  padding: 0 2px;
-  line-height: 1;
-}
-
-.queued-item-remove:hover {
-  color: var(--aide-danger);
 }
 
 .image-attachment-strip {

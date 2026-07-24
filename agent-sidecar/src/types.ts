@@ -99,6 +99,11 @@ export type ChatEvent =
     }
   | { type: "permission_cancelled"; id: string }
   | { type: "message_stop"; stop_reason: string; total_cost_usd: number | null; usage: TurnUsage | null }
+  // 插队消息已登记、在等安全边界（当前工具调用跑完）才真正 interrupt——前端据此
+  // 显示"待发出"提示条。prompt 供提示条展示原文。
+  | { type: "jump_queued"; prompt: string }
+  // 待插队消息已全部接入后续轮次（或不再需要提示）——前端清掉提示条。
+  | { type: "jump_promoted" }
   | { type: "models_available"; models: ModelOption[]; current: string }
   // 模型切换的坐实回执——只在用户显式 set_model 后由 sidecar 运行时路径发出
   // （init/assistant 坐实、query 未起的本地落账都不发），让前端能给出
