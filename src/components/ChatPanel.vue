@@ -589,6 +589,29 @@ watch(
   scrollToBottom
 );
 
+// 置底的统一触发器：数据层 watcher 只能枚举「新消息 / 文本增量」，但让滚动条
+// 搁浅的来源远不止这些——
+//   ① 内容增高：变更卡（Edit/Write/NotebookEdit）结果到达时「等待结果…」就地
+//      换成几百 px 的 DiffViewer、图片异步加载、历史扩窗……（观察 contentEl）
+//   ② 视口变化：权限对话框出现/消失、Pane 拖拽、窗口缩放改变 clientHeight——
+//      scrollTop 未被钳位时不产生 scroll 事件，onScroll 不重算、内容盒也没变，
+//      滚动条搁浅在半中腰且 autoScroll 仍是 true（观察 scrollEl）
+// 枚举数据必然挂一漏万，改为在 DOM 层观察这两个症状本身。RO 通知按帧合并、
+// 频率与现有 watcher 同级；autoScroll=false 时 scrollToBottom 自身 no-op，不打扰
+// 翻历史的用户；置底只写 scrollTop 不改两者尺寸，无反馈循环。
+const contentEl = ref<HTMLDivElement>();
+let contentObserver: ResizeObserver | null = null;
+onMounted(() => {
+  if (typeof ResizeObserver === "undefined") return;
+  contentObserver = new ResizeObserver(() => scrollToBottom());
+  if (contentEl.value) contentObserver.observe(contentEl.value);
+  if (scrollEl.value) contentObserver.observe(scrollEl.value);
+});
+onUnmounted(() => {
+  contentObserver?.disconnect();
+  contentObserver = null;
+});
+
 watch(inputText, (val) => {
   const match = val.match(/^\/(\S*)$/); // / 开头且无空格
   if (match) {
@@ -773,25 +796,29 @@ async function handleQuickAction(action: QuickAction) {
       <div v-if="messagesVal.length === 0" class="chat-empty">
         开始新对话
       </div>
-      <button
-        v-if="hiddenCount > 0"
-        class="chat-history-gate"
-        @click="expandOlderAnchored"
-      >
-        上方还有 {{ hiddenCount }} 条历史消息 · 点击或继续上滚加载
-      </button>
-      <ChatMessage
-        v-for="msg in visibleMessages"
-        :key="msg.id"
-        :message="msg"
-        :workspace-path="workspacePath"
-        :models="displayModels"
-      />
-      <div v-if="isBusyVal" class="chat-thinking">
-        <AppLogo :size="15" animated />
-        <span>Claude 正在思考…</span>
-        <span class="chat-thinking-time">{{ thinkingElapsed }}s</span>
-        <button class="chat-interrupt-btn" @click="emit('interrupt')">中断</button>
+      <!-- 内容盒：ResizeObserver 的观察目标（见 script contentObserver），
+           纯布局 wrapper，消息增高的任何来源都会反映为它的盒高变化 -->
+      <div ref="contentEl" class="chat-messages-body">
+        <button
+          v-if="hiddenCount > 0"
+          class="chat-history-gate"
+          @click="expandOlderAnchored"
+        >
+          上方还有 {{ hiddenCount }} 条历史消息 · 点击或继续上滚加载
+        </button>
+        <ChatMessage
+          v-for="msg in visibleMessages"
+          :key="msg.id"
+          :message="msg"
+          :workspace-path="workspacePath"
+          :models="displayModels"
+        />
+        <div v-if="isBusyVal" class="chat-thinking">
+          <AppLogo :size="15" animated />
+          <span>Claude 正在思考…</span>
+          <span class="chat-thinking-time">{{ thinkingElapsed }}s</span>
+          <button class="chat-interrupt-btn" @click="emit('interrupt')">中断</button>
+        </div>
       </div>
     </div>
 
@@ -995,6 +1022,14 @@ async function handleQuickAction(action: QuickAction) {
 }
 
 .chat-messages > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* wrapper 接手原直接子元素的定位/层叠职责：消息从 .chat-messages 的
+   直接子元素降为孙元素后，由本规则补回 position/z-index（内部若有
+   absolute 后代仍以各自消息行为锚点，不受 wrapper 影响） */
+.chat-messages-body > * {
   position: relative;
   z-index: 1;
 }
