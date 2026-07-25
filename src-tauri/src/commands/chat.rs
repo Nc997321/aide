@@ -181,6 +181,16 @@ pub async fn interrupt_session(
 }
 
 #[tauri::command]
+pub async fn stop_bg_task(
+    session_id: String,
+    task_id: String,
+    runtime_mgr: State<'_, AgentRuntimeManager>,
+) -> Result<(), String> {
+    let cmd = json!({ "cmd": "stop_bg_task", "session_id": session_id, "task_id": task_id });
+    runtime_mgr.send_to_runtime(&cmd).await
+}
+
+#[tauri::command]
 pub async fn set_model(
     session_id: String,
     model: String,

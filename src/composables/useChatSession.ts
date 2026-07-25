@@ -17,6 +17,7 @@ import type {
   ToolCallBlock,
   ImageBlock,
   ActionBlock,
+  BgTask,
 } from "../types/chat";
 import { useSessionState } from "./useSessionState";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
@@ -74,6 +75,14 @@ interface SessionStore {
   contextUsage: ContextUsage | null;
   /** 当前任务清单——sidecar 每次变化后整体覆盖，不做增量合并 */
   tasks: TaskItem[];
+  /** 后台 shell 任务列表（bg_task_* 事件累积；按 id upsert，output 增量追加）。
+   *  已结束的任务不立即移除——dock 开着时留着供查看；dock 关闭时清，
+   *  或 dock 关着且无运行中任务时延时自动清（见 toggleBgDock/scheduleBgDockAutoHide）。 */
+  bgTasks: BgTask[];
+  /** 后台任务 dock 面板是否展开（纯 UI 状态，不落盘） */
+  bgDockOpen: boolean;
+  /** dock 里当前选中查看输出的任务 id */
+  bgDockSelectedId: string | null;
   /** 可切换的权限模式列表（sidecar 广播，纯展示字符串） */
   permissionModes: PermissionModeOption[];
   /** 当前生效的权限模式 value；空串表示还没从 sidecar 学到 */
@@ -116,6 +125,73 @@ const lastDispatchedPrompt: Record<string, string> = {};
 export function getLastDispatchedPrompt(sid: string): string {
   return lastDispatchedPrompt[sid] ?? "";
 }
+
+/** 后台任务输出在 store 里的保留上限（超出截头保尾）。 */
+const BG_TASK_OUTPUT_CAP = 256 * 1024;
+/** 后台任务列表上限——超出时淘汰最老的已结束项。 */
+const BG_TASKS_CAP = 50;
+
+/** 切换后台任务 dock 开合。关闭→打开的瞬间清掉「打开前就已结束」的任务（用户确认
+ *  的清理规则：结束不立即移除，下次点开列表时才移除）；打开→关闭同样清掉已结束的
+ *  （查看期已过，没有运行中任务时状态条随之隐藏，不留「✓ 全部完成」僵尸条）。
+ *  selectedId：指定打开后选中的任务（工具卡片「后台运行中」徽章点击时带）——
+ *  dock 已开着时带 selectedId 不关闭，只切选中项。 */
+export function toggleBgDock(sid: string, selectedId?: string): void {
+  const store = getStore(sid);
+  if (store.bgDockOpen) {
+    if (selectedId && store.bgTasks.some((t) => t.id === selectedId)) {
+      store.bgDockSelectedId = selectedId;
+    } else if (!selectedId) {
+      store.bgDockOpen = false;
+      store.bgTasks = store.bgTasks.filter((t) => t.status === "running");
+      if (store.bgTasks.length === 0) store.bgDockSelectedId = null;
+    }
+    return;
+  }
+  clearBgDockAutoHide(sid);
+  store.bgTasks = store.bgTasks.filter((t) => t.status === "running");
+  store.bgDockOpen = true;
+  if (selectedId && store.bgTasks.some((t) => t.id === selectedId)) {
+    store.bgDockSelectedId = selectedId;
+  } else if (!store.bgTasks.some((t) => t.id === store.bgDockSelectedId)) {
+    // 选中项已不在列表：回退到最近一个运行中的，再退到列表末尾
+    store.bgDockSelectedId =
+      [...store.bgTasks].reverse().find((t) => t.status === "running")?.id ??
+      store.bgTasks[store.bgTasks.length - 1]?.id ??
+      null;
+  }
+}
+
+/** dock 关闭状态下全部任务结束后的自动撤条延迟（「✓ 全部完成」短暂停留再消失）。 */
+const BG_DOCK_AUTOHIDE_MS = 4000;
+const bgDockAutoHideTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearBgDockAutoHide(sid: string): void {
+  const t = bgDockAutoHideTimers.get(sid);
+  if (t) {
+    clearTimeout(t);
+    bgDockAutoHideTimers.delete(sid);
+  }
+}
+
+/** dock 关着、且没有运行中任务时，延时清掉已结束任务让状态条自己消失；
+ *  期间有新任务起步或用户点开 dock 则取消（各自入口调 clearBgDockAutoHide）。 */
+function scheduleBgDockAutoHide(sid: string): void {
+  const store = getStore(sid);
+  if (store.bgDockOpen) return;
+  if (store.bgTasks.length === 0 || store.bgTasks.some((t) => t.status === "running")) return;
+  clearBgDockAutoHide(sid);
+  bgDockAutoHideTimers.set(
+    sid,
+    setTimeout(() => {
+      bgDockAutoHideTimers.delete(sid);
+      const s = getStore(sid);
+      if (s.bgDockOpen || s.bgTasks.some((t) => t.status === "running")) return;
+      s.bgTasks = [];
+      s.bgDockSelectedId = null;
+    }, BG_DOCK_AUTOHIDE_MS),
+  );
+}
 /** 会话首次创建回调（App.vue 注册：写元数据、加入侧栏、记入最近访问） */
 const sessionCreatedCallbacks = new Set<(tempId: string, realId: string) => void>();
 
@@ -153,6 +229,9 @@ function getStore(sid: string): SessionStore {
       modelSwitchResult: null,
       contextUsage: null,
       tasks: [],
+      bgTasks: [],
+      bgDockOpen: false,
+      bgDockSelectedId: null,
       permissionModes: [],
       currentPermissionMode: "",
       slashCommands: null,
@@ -466,6 +545,48 @@ function handleChatEvent(e: Record<string, unknown>) {
     }
     case "tasks_update": {
       store.tasks = e["tasks"] as TaskItem[];
+      break;
+    }
+    case "bg_task_started": {
+      // task_started 与后台回执两路信号顺序不保证——按 id upsert 合并。
+      clearBgDockAutoHide(sid); // 新任务起步：取消待执行的自动撤条
+      const id = e["id"] as string;
+      let task = store.bgTasks.find((t) => t.id === id);
+      if (!task) {
+        task = { id, status: "running", output: "", startedAt: Date.now() };
+        store.bgTasks.push(task);
+        // 新任务自动成为 dock 里的选中项（用户最想看的是刚起来的那个）
+        store.bgDockSelectedId = id;
+      }
+      if (e["toolUseId"]) task.toolUseId = e["toolUseId"] as string;
+      if (e["command"]) task.command = e["command"] as string;
+      if (e["description"]) task.description = e["description"] as string;
+      break;
+    }
+    case "bg_task_output": {
+      const task = store.bgTasks.find((t) => t.id === (e["id"] as string));
+      if (!task) break;
+      task.output += e["delta"] as string;
+      // 截头保尾：长跑命令的输出无界增长，超出 256KB 丢掉最旧的部分
+      if (task.output.length > BG_TASK_OUTPUT_CAP) {
+        task.output = task.output.slice(task.output.length - BG_TASK_OUTPUT_CAP);
+      }
+      break;
+    }
+    case "bg_task_ended": {
+      const task = store.bgTasks.find((t) => t.id === (e["id"] as string));
+      if (!task) break;
+      task.status = e["status"] as BgTask["status"];
+      if (e["summary"]) task.summary = e["summary"] as string;
+      task.endedAt = Date.now();
+      // 结束的任务留在列表里（用户可能正看着）——dock 关着且没有运行中任务时，
+      // 短暂停留后自动撤条（scheduleBgDockAutoHide）；dock 开着则等关闭时清。
+      scheduleBgDockAutoHide(sid);
+      // 兜底上限：淘汰最老的已结束项，运行中的不动。
+      if (store.bgTasks.length > BG_TASKS_CAP) {
+        const idx = store.bgTasks.findIndex((t) => t.status !== "running");
+        if (idx >= 0) store.bgTasks.splice(idx, 1);
+      }
       break;
     }
     case "rate_limit": {
@@ -990,6 +1111,15 @@ export function useChatSession(sessionId: Ref<string | null>) {
     /** 账号级订阅额度/速率——跨会话共享，null 时 UI 隐藏。 */
     rateLimit: computed(() => sharedRateLimit.value),
     pendingJumps: computed(() => current.value?.pendingJumps ?? []),
+    bgTasks: computed(() => current.value?.bgTasks ?? []),
+    bgDockOpen: computed(() => current.value?.bgDockOpen ?? false),
+    bgDockSelectedId: computed({
+      get: () => current.value?.bgDockSelectedId ?? null,
+      set: (v) => {
+        const s = current.value;
+        if (s) s.bgDockSelectedId = v;
+      },
+    }),
     sendMessage,
     sendBtw,
     respondPermission,

@@ -7,7 +7,8 @@ import TaskListPanel from "./TaskListPanel.vue";
 import ThemedSelect from "./ThemedSelect.vue";
 import ChatSendButton from "./ChatSendButton.vue";
 import PermissionDialog from "./PermissionDialog.vue";
-import type { ChatMessage as ChatMessageType, ContextUsage, ModelOption, PermissionModeOption, PermissionRequest, RateLimitInfo, TaskItem, TextBlock } from "@/types/chat";
+import BgTaskDock from "./BgTaskDock.vue";
+import type { ChatMessage as ChatMessageType, ContextUsage, ModelOption, PermissionModeOption, PermissionRequest, RateLimitInfo, TaskItem, TextBlock, BgTask } from "@/types/chat";
 import type { SkillMeta } from "@/types";
 import { api } from "@/api";
 import { resolvePastePayload } from "@/utils/paste";
@@ -27,7 +28,7 @@ import { setChatPaneRect } from "@/composables/useChatPaneWidth";
 import BtwDrawer from "./BtwDrawer.vue";
 import { useBtwSession } from "@/composables/useBtwSession";
 import { pickModelValue, isModelInList } from "@/utils/modelSelect";
-import { isPendingSession } from "@/composables/useChatSession";
+import { isPendingSession, toggleBgDock } from "@/composables/useChatSession";
 import AToast from "@/ui/AToast.vue";
 import { useToast } from "@/composables/useToast";
 import type { ModelSwitchResult } from "@/types/chat";
@@ -49,6 +50,10 @@ const props = defineProps<{
   currentPermissionMode?: string;
   /** 忙碌时插队、正在 sidecar 里等安全边界的消息原文（顺序即发出顺序） */
   pendingJumps?: string[];
+  /** 后台 shell 任务列表 + dock 开合状态（useChatSession store 透传） */
+  bgTasks?: BgTask[];
+  bgDockOpen?: boolean;
+  bgDockSelectedId?: string | null;
   /** 本会话待确认的权限/提问请求——渲染在消息区和输入框之间（见模板），
    *  不是浮层，见 PermissionDialog.vue 顶部注释。 */
   permission?: PermissionRequest | null;
@@ -63,6 +68,7 @@ const emit = defineEmits<{
   "set-model": [model: string];
   "set-permission-mode": [mode: string];
   "respond-permission": [id: string, approved: boolean, always?: boolean, answers?: Record<string, string>, nextMode?: string];
+  "update:bgDockSelectedId": [id: string];
 }>();
 
 const rootEl = ref<HTMLElement | null>(null);
@@ -783,6 +789,11 @@ async function handleQuickAction(action: QuickAction) {
     action: { id: action.id, label: action.label, icon: action.icon },
   });
 }
+
+/** 工具卡片「后台运行中」徽章：打开 dock 并选中对应任务（toggleBgDock 已开时只切选中）。 */
+function onOpenBgDock(taskId: string) {
+  if (props.sessionId) toggleBgDock(props.sessionId, taskId);
+}
 </script>
 
 <template>
@@ -809,6 +820,8 @@ async function handleQuickAction(action: QuickAction) {
           :message="msg"
           :workspace-path="workspacePath"
           :models="displayModels"
+          :bg-tasks="bgTasks"
+          @open-bg-dock="onOpenBgDock"
         />
         <div v-if="isBusyVal" class="chat-thinking">
           <AppLogo :size="15" animated />
@@ -826,6 +839,16 @@ async function handleQuickAction(action: QuickAction) {
       :permission="permission ?? null"
       :queue-count="permissionQueueCount"
       @respond="(id: string, approved: boolean, always?: boolean, answers?: Record<string, string>, nextMode?: string) => { if (nextMode) selectedPermissionMode = nextMode; emit('respond-permission', id, approved, always, answers, nextMode); }"
+    />
+
+    <!-- 后台任务 dock：与 PermissionDialog 同款 inline dock——挤压消息区而非浮层。
+         开合/清理语义在 toggleBgDock（结束的任务下次点开才清）。 -->
+    <BgTaskDock
+      :session-id="props.sessionId"
+      :tasks="bgTasks ?? []"
+      :open="bgDockOpen ?? false"
+      :selected-id="bgDockSelectedId ?? null"
+      @update:selected-id="(id: string) => emit('update:bgDockSelectedId', id)"
     />
 
     <div class="chat-input-area">

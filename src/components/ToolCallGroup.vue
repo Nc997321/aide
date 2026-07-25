@@ -5,7 +5,7 @@
  * 展开 = 组内逐条 ToolCallBlock 墨线行。展开状态不持久化，随窗口化卸载重置。
  */
 import { computed, ref } from "vue";
-import type { ToolCallBlock as ToolCallBlockData } from "@/types/chat";
+import type { ToolCallBlock as ToolCallBlockData, BgTask } from "@/types/chat";
 import ToolCallBlock from "./ToolCallBlock.vue";
 import { groupStats } from "@/utils/blockSegments";
 import { summarizeToolInput } from "@/utils/toolSummary";
@@ -14,11 +14,26 @@ const props = defineProps<{
   blocks: ToolCallBlockData[];
   /** 消息仍在流式生成且本组是最后一段——摘要行进入"正在执行"实时态 */
   live?: boolean;
+  /** 后台任务列表（ChatMessage 链透传）——组内 Bash 转入后台时摘要行/卡片显示徽章 */
+  bgTasks?: BgTask[];
+}>();
+
+const emit = defineEmits<{
+  /** 卡片徽章点击：打开后台任务 dock 并选中该任务 */
+  "open-bg-dock": [taskId: string];
 }>();
 
 const expanded = ref(false);
 
 const stats = computed(() => groupStats(props.blocks));
+
+/** 组内转入后台且仍在运行的任务数——收起态摘要行的提示徽标 */
+const bgRunningCount = computed(
+  () =>
+    (props.bgTasks ?? []).filter(
+      (t) => t.status === "running" && props.blocks.some((b) => b.id === t.toolUseId),
+    ).length,
+);
 
 /** 种类分布按次数降序取前 3，剩余归"…" */
 const kindsLabel = computed(() => {
@@ -57,9 +72,16 @@ const runningSummary = computed(() =>
         <span class="tg-kinds">{{ kindsLabel }}</span>
         <span v-if="stats.errorCount > 0" class="tg-err"> · {{ stats.errorCount }} 失败</span>
       </template>
+      <span v-if="bgRunningCount > 0" class="tg-bg">● {{ bgRunningCount }} 后台运行中</span>
     </button>
     <div v-if="expanded" class="tg-items">
-      <ToolCallBlock v-for="b in blocks" :key="b.id" :block="b" />
+      <ToolCallBlock
+        v-for="b in blocks"
+        :key="b.id"
+        :block="b"
+        :bg-tasks="bgTasks"
+        @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
+      />
     </div>
   </div>
 </template>
@@ -143,6 +165,24 @@ const runningSummary = computed(() =>
 }
 .tg-err {
   color: var(--aide-danger);
+}
+
+/* 组内后台任务提示：与 ToolCallBlock 的 ti-bgchip 同一配方 */
+.tg-bg {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 10.5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: var(--aide-info);
+  background: color-mix(in srgb, var(--aide-info) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-info) 25%, transparent);
+  white-space: nowrap;
+  animation: tg-bg-pulse 1.6s infinite;
+}
+@keyframes tg-bg-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 
 .tg-items {

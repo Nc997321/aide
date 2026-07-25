@@ -24,6 +24,7 @@ const COALESCABLE_TYPES: ReadonlySet<string> = new Set([
   "text_delta",
   "subagent_text_delta",
   "subagent_thinking_delta",
+  "bg_task_output",
 ]);
 
 const FLUSH_INTERVAL_MS = 40;
@@ -32,7 +33,7 @@ function isDeltaEvent(event: ChatEvent): event is DeltaEvent {
   return COALESCABLE_TYPES.has(event.type);
 }
 
-/** 合并 key：类型 + 目标 id（主线程 text_delta 无 id，子代理增量按父工具 id 区分）。 */
+/** 合并 key：类型 + 目标 id（主线程 text_delta 无 id，子代理/后台任务增量按各自 id 区分）。 */
 function keyOf(event: DeltaEvent): string {
   const id = "id" in event ? event.id : "";
   return `${event.type}:${id}`;

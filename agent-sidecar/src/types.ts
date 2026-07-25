@@ -82,6 +82,15 @@ export type ChatEvent =
   // 提示成本会指数膨胀。provider-agnostic：不带 Claude 专属字段，任何 provider 的
   // "子代理套子代理"都能映射成这个形状。depth 是当前嵌套深度，threshold 是告警阈值。
   | { type: "subagent_nesting_warning"; depth: number; threshold: number }
+  // —— 后台 shell 任务（provider-agnostic：任何 provider 的"后台运行命令"都能映射成这三个事件）——
+  // started：任务进入后台。id 是任务 id；toolUseId 关联消息流里发起它的工具卡片；
+  // command/description 供列表展示；outputFile 只在确认输出落盘后带（同一 id 可能
+  // 先收到不带 outputFile 的 started、后收到带 outputFile 的 upsert，前端按 id 合并）。
+  | { type: "bg_task_started"; id: string; toolUseId?: string; command?: string; description?: string; outputFile?: string }
+  // 输出增量——纯文本（ANSI 原样透传），过 deltaCoalescer 按 id 合并。
+  | { type: "bg_task_output"; id: string; delta: string }
+  // ended：任务到达终态。summary 是 provider 给的一句话结果摘要；durationMs 取 provider 统计。
+  | { type: "bg_task_ended"; id: string; status: "completed" | "failed" | "stopped"; summary?: string; durationMs?: number }
   // alwaysAllowLabel：sidecar 已经把 SDK 的 suggestions 解读成一句人话（比如 Edit
   // 工具常见的"自动接受编辑（本次会话）"，而不是笼统的"总是允许"——两者后果差异很大：
   // 前者是切权限模式且不落盘，后者是给某工具加一条持久化规则），前端只管展示这句话，
@@ -183,6 +192,9 @@ export type SidecarCommand =
     }
   | { cmd: "permission_response"; session_id: string; id: string; approved: boolean; always?: boolean; answers?: Record<string, string>; nextMode?: string }
   | { cmd: "interrupt"; session_id: string }
+  // 终止一个后台任务（provider-agnostic：任何 provider 的"停掉后台命令"都映射成它）。
+  // 成功后任务会走正常终态通道（bg_task_ended, status:"stopped"），不需要额外回执事件。
+  | { cmd: "stop_bg_task"; session_id: string; task_id: string }
   | { cmd: "set_model"; session_id: string; model: string }
   | { cmd: "set_permission_mode"; session_id: string; mode: string }
   // 停止一个会话：Runtime 内部调 worker.stop()（q.close() + 清理），不再由 Rust kill 进程。

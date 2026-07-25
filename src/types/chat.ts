@@ -142,6 +142,22 @@ export interface TaskItem {
   activeForm?: string;
 }
 
+/** 后台 shell 任务——provider-agnostic，镜像 sidecar 的 bg_task_* 事件流。
+ *  output 是迄今累计的纯文本输出（ANSI 原样，给 xterm 渲染），增量追加、超长截头。
+ *  结束的任务不立即移除（用户可能正看着），下次点开面板时才清理。 */
+export interface BgTask {
+  id: string;
+  /** 发起它的工具卡片 id（消息流里的 Bash tool_call），用于卡片上的「后台运行中」徽章。 */
+  toolUseId?: string;
+  command?: string;
+  description?: string;
+  status: "running" | "completed" | "failed" | "stopped";
+  output: string;
+  summary?: string;
+  startedAt: number;
+  endedAt?: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;

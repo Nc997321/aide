@@ -76,6 +76,24 @@ describe("DeltaCoalescer", () => {
     ]);
   });
 
+  // 后台任务输出是逐段增量：同任务合并、不同任务（或与子代理增量）不互并。
+  it("merges bg_task_output deltas per task id", () => {
+    const { events, sink } = collect();
+    const c = new DeltaCoalescer(sink, 40);
+
+    c.push({ type: "bg_task_output", id: "t1", delta: "line1\n" });
+    c.push({ type: "bg_task_output", id: "t1", delta: "line2\n" });
+    c.push({ type: "bg_task_output", id: "t2", delta: "other\n" });
+    c.push({ type: "bg_task_output", id: "t1", delta: "line3\n" });
+
+    vi.advanceTimersByTime(40);
+    expect(events).toEqual([
+      { type: "bg_task_output", id: "t1", delta: "line1\nline2\n" },
+      { type: "bg_task_output", id: "t2", delta: "other\n" },
+      { type: "bg_task_output", id: "t1", delta: "line3\n" },
+    ]);
+  });
+
   // text 与 thinking 是不同渲染通道（前端样式不同），类型切换必须另起一组。
   it("does not merge text and thinking deltas of the same subagent", () => {
     const { events, sink } = collect();

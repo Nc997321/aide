@@ -35,6 +35,10 @@ export const api = {
   interruptSession(sessionId: string): Promise<void> {
     return invoke("interrupt_session", { sessionId });
   },
+  /** 终止一个后台任务；终态经 bg_task_ended(status:"stopped") 回来，无单独回执。 */
+  stopBgTask(sessionId: string, taskId: string): Promise<void> {
+    return invoke("stop_bg_task", { sessionId, taskId });
+  },
   /** 切换存活会话的模型；返回 false = 无活进程（选择随下一条消息 initialModel
    *  生效，调用方应走 deferred 提示路径）。 */
   setModel(sessionId: string, model: string): Promise<boolean> {

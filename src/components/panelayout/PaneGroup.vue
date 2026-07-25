@@ -42,6 +42,9 @@ const {
   pendingJumps,
   pendingPermission,
   pendingPermissionCount,
+  bgTasks,
+  bgDockOpen,
+  bgDockSelectedId,
   sendMessage,
   sendBtw,
   interrupt,
@@ -117,6 +120,9 @@ function onNewTab() {
       :permission-modes="permissionModes"
       :current-permission-mode="currentPermissionMode"
       :pending-jumps="pendingJumps"
+      :bg-tasks="bgTasks"
+      :bg-dock-open="bgDockOpen"
+      v-model:bg-dock-selected-id="bgDockSelectedId"
       :permission="pendingPermission"
       :permission-queue-count="pendingPermissionCount"
       class="pane-group__chat"

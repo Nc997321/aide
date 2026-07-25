@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import type { ToolCallBlock } from "@/types/chat";
+import type { ToolCallBlock, BgTask } from "@/types/chat";
 import BashOutputBlock from "./BashOutputBlock.vue";
 import DiffViewer from "./fileviewer/DiffViewer.vue";
 import { buildChangeInfo, locateAnchorLine, type ChangeInfo } from "@/utils/changeCard";
@@ -17,15 +17,27 @@ const props = withDefaults(
     defaultExpanded?: boolean;
     /** 「打开 ↗」定位用；缺省时 openResolved 退化为按原路径直接打开 */
     workspacePath?: string;
+    /** 后台任务列表（仅 ChatMessage 链透传）——Bash 卡按 toolUseId 匹配出「后台运行中」徽章 */
+    bgTasks?: BgTask[];
   }>(),
-  { defaultExpanded: false, workspacePath: undefined },
+  { defaultExpanded: false, workspacePath: undefined, bgTasks: undefined },
 );
+
+const emit = defineEmits<{
+  /** 徽章点击：打开后台任务 dock 并选中该任务 */
+  "open-bg-dock": [taskId: string];
+}>();
 
 const expanded = ref(props.defaultExpanded);
 const { openResolved } = useFileResolver();
 const { settings } = useSettings();
 
 const isBash = computed(() => props.block.name === "Bash");
+
+/** 该工具调用转入后台的任务（按 toolUseId 匹配、仍在运行才显示徽章）。 */
+const bgTask = computed(
+  () => props.bgTasks?.find((t) => t.toolUseId === props.block.id && t.status === "running") ?? null,
+);
 
 /** 变更类工具且非错误时的统一 diff 数据；null 回退到普通结果文本展示。 */
 const changeInfo = computed<ChangeInfo | null>(() => {
@@ -67,6 +79,12 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
       ></span>
       <span class="ti-name">{{ block.name }}</span>
       <span class="ti-summary">{{ inputSummary }}</span>
+      <span
+        v-if="bgTask"
+        class="ti-bgchip"
+        v-tooltip="'命令仍在后台运行——点击打开后台任务面板看实时输出'"
+        @click.stop="emit('open-bg-dock', bgTask.id)"
+      >● 后台运行中</span>
       <span v-if="changeInfo" class="ti-diff">
         <span class="stat-add">+{{ changeInfo.addCount }}</span>
         <span v-if="changeInfo.delCount > 0" class="stat-del">-{{ changeInfo.delCount }}</span>
@@ -182,6 +200,27 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
 }
 .stat-add { color: var(--aide-success); }
 .stat-del { color: var(--aide-danger); }
+
+/* 「后台运行中」徽章：Bash 转入后台运行后钉在头行右侧，点击开 dock 看实时输出 */
+.ti-bgchip {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: var(--aide-info);
+  background: color-mix(in srgb, var(--aide-info) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-info) 25%, transparent);
+  white-space: nowrap;
+  animation: ti-bgchip-pulse 1.6s infinite;
+  transition: background var(--aide-ease-t);
+}
+.ti-bgchip:hover {
+  background: color-mix(in srgb, var(--aide-info) 20%, transparent);
+}
+@keyframes ti-bgchip-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
 
 /* 「打开 ↗」：嵌在头行 button 里的短语级链接，stopPropagation 不触发折叠 */
 .ti-open {

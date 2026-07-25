@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { ChatMessage, ModelOption } from "@/types/chat";
+import type { ChatMessage, ModelOption, BgTask } from "@/types/chat";
 import { renderStreaming, renderMarkdown } from "@/utils/markdown";
 import ToolCallBlock from "./ToolCallBlock.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
@@ -18,6 +18,13 @@ const props = defineProps<{
    *  否则回退 wire 原文（第三方 sidecar 会建议出 Claude 别名，不在真实
    *  id 列表里，采信会显示用户不认识的值）。 */
   models?: ModelOption[];
+  /** 后台任务列表——Bash 工具卡片据此显示「后台运行中」徽章（按 toolUseId 匹配） */
+  bgTasks?: BgTask[];
+}>();
+
+const emit = defineEmits<{
+  /** 工具卡片徽章点击：打开后台任务 dock 并选中该任务 */
+  "open-bg-dock": [taskId: string];
 }>();
 
 const isUser = computed(() => props.message.role === "user");
@@ -97,6 +104,8 @@ function handleTextClick(e: MouseEvent) {
           v-if="seg.kind === 'tool_group'"
           :blocks="seg.blocks"
           :live="isLiveGroup(seg)"
+          :bg-tasks="bgTasks"
+          @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
         />
         <div
           v-else-if="seg.block.type === 'text'"
@@ -109,6 +118,8 @@ function handleTextClick(e: MouseEvent) {
           :block="(seg.block as any)"
           :default-expanded="isChangeTool((seg.block as any).name)"
           :workspace-path="workspacePath"
+          :bg-tasks="bgTasks"
+          @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
         />
         <!-- btw 页边批注：可折叠、视觉权重远低于真实消息，读起来是"贴在边上的便签" -->
         <div

@@ -3,6 +3,7 @@ import type { ChatEvent, ImageAttachment, RateLimitWindow, TurnUsage } from "./t
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
 import { ToolLifecycleTracker } from "./toolLifecycle.js";
+import { BgTaskTracker } from "./bgTasks.js";
 import { startOutputTail as globalStartOutputTail, stopOutputTail as globalStopOutputTail } from "./subagentOutputTail.js";
 
 /** 子代理嵌套深度告警阈值（warn-only，不阻止调用）。深度 > 阈值时发
@@ -211,13 +212,16 @@ export function parseAsyncLaunchAck(content: string): { agentId: string; outputF
  * content 不以 <task-notification> 开头 → 返回 null（普通用户消息不误判）。
  * result 缺省取 <summary> 兜底，再缺省空串。
  */
-export function parseTaskNotification(content: string): { toolUseId: string; status: string; result: string } | null {
+export function parseTaskNotification(content: string): { toolUseId: string; status: string; result: string; taskId?: string } | null {
   if (!content.startsWith("<task-notification>")) return null;
   const id = content.match(/<tool-use-id>([^<]*)<\/tool-use-id>/)?.[1];
   if (!id) return null;
   const status = content.match(/<status>([^<]*)<\/status>/)?.[1] ?? "completed";
   const result = content.match(/<result>([\s\S]*?)<\/result>/)?.[1] ?? content.match(/<summary>([^<]*)<\/summary>/)?.[1] ?? "";
-  return { toolUseId: id, status, result };
+  // <task-id>：后台 shell 任务的 id（local_bash 的终态通知带）——async 子代理的
+  // XML 通知没有它（或不需要），调用方按是否存在决定要不要走后台任务通道。
+  const taskId = content.match(/<task-id>([^<]*)<\/task-id>/)?.[1];
+  return { toolUseId: id, status, result, ...(taskId ? { taskId } : {}) };
 }
 
 /**
@@ -347,6 +351,13 @@ export function mapSdkMessage(
     start: (id: string, outputFile: string, emit: (e: ChatEvent) => void, onStop: (id: string) => void) => void;
     stop: (id: string) => void;
   },
+  /** 后台 shell 任务：tracker + 输出 tail 钩子（per-session，SessionWorker 注入）。
+   *  缺省时 task_started/后台回执/task_notification 一律不识别（测试兼容）。 */
+  bgTaskHooks?: {
+    tracker: BgTaskTracker;
+    startTail: (id: string, outputFile: string) => void;
+    stopTail: (id: string) => void;
+  },
 ) {
   if (msg.parent_tool_use_id) {
     emitSubagentProgress(msg, emit, subagents);
@@ -374,6 +385,44 @@ export function mapSdkMessage(
       emit({ type: "text_delta", delta: content });
     }
     emit({ type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
+    return;
+  }
+
+  // 后台 shell 任务起步信号：SDK 在命令转入后台时发 system/task_started。
+  // 注意 CLI 对【前台】Bash 也发这条（task_type 同样是 local_bash）——是否后台由
+  // tracker 按发起 tool_use 的 run_in_background 判定（见 bgTasks.ts 注释）。
+  // 与 Bash 后台回执的到达顺序不保证，两边都按 task_id upsert。
+  if (msg.type === "system" && msg.subtype === "task_started") {
+    const ev = bgTaskHooks?.tracker.registerStarted(msg);
+    if (ev) emit(ev);
+    return;
+  }
+
+  // 后台任务终态信号（structured 通道）。注意：local_bash 的终态实际走
+  // <task-notification> XML 用户消息（下方 user-string 分支，2026-07-25 转录实锤），
+  // 这条 structured system/task_notification 只是防御性兜底——两个通道都按 tracker
+  // 去重（done 守卫），先到先处理。只处理 tracker 里登记过的任务，其余安静忽略。
+  if (msg.type === "system" && msg.subtype === "task_notification") {
+    const ev = bgTaskHooks?.tracker.handleNotification(msg);
+    if (ev) {
+      bgTaskHooks?.stopTail(msg.task_id as string);
+      emit(ev);
+    }
+    return;
+  }
+
+  // task_updated：结构化状态补丁——patch.status 终态是文本通道之外最可靠的信号，
+  // 三个文本通道（回执/XML/TaskOutput）全是逆向格式，这条是 SDK 类型契约里的字段。
+  // task_progress 只是活性心跳（用量/时长），面板不需要，忽略。
+  if (msg.type === "system" && msg.subtype === "task_updated") {
+    const ev = bgTaskHooks?.tracker.handleTaskUpdated(msg);
+    if (ev) {
+      bgTaskHooks?.stopTail(msg.task_id as string);
+      emit(ev);
+    }
+    return;
+  }
+  if (msg.type === "system" && msg.subtype === "task_progress") {
     return;
   }
 
@@ -418,6 +467,9 @@ export function mapSdkMessage(
             emit({ type: "tasks_update", tasks: tasks.snapshot() });
           }
         } else {
+          // Bash 调用的入参顺手登记——若它转入后台，task_started/后台回执要用
+          // command/description 填充面板展示（tracker 内部 FIFO 上限，无泄漏）。
+          if (block.name === "Bash") bgTaskHooks?.tracker.noteBashToolUse(block.id, block.input);
           emit(withModel({ type: "tool_use_start", id: block.id, name: block.name, input: block.input }));
         }
       }
@@ -436,6 +488,14 @@ export function mapSdkMessage(
         (outputTailHooks?.stop ?? globalStopOutputTail)(note.toolUseId);
         subagents.handleAsyncResult(note.toolUseId);
         emit({ type: "subagent_end", id: note.toolUseId, result: note.result, is_error: note.status !== "completed" });
+      } else if (note.taskId && bgTaskHooks?.tracker.has(note.taskId)) {
+        // 后台 shell 任务的终态走同一条 XML 通道（local_bash 实际不发 structured
+        // system/task_notification）——停 tail（finalFlush 冲掉尾巴）再发终态。
+        const ev = bgTaskHooks.tracker.handleXmlNotification(note.taskId, note.status, note.result);
+        if (ev) {
+          bgTaskHooks.stopTail(note.taskId);
+          emit(ev);
+        }
       }
       return;
     }
@@ -450,6 +510,12 @@ export function mapSdkMessage(
       (outputTailHooks?.stop ?? globalStopOutputTail)(note.toolUseId);
       subagents.handleAsyncResult(note.toolUseId);
       emit({ type: "subagent_end", id: note.toolUseId, result: note.result, is_error: note.status !== "completed" });
+    } else if (note?.taskId && bgTaskHooks?.tracker.has(note.taskId)) {
+      const ev = bgTaskHooks.tracker.handleXmlNotification(note.taskId, note.status, note.result);
+      if (ev) {
+        bgTaskHooks.stopTail(note.taskId);
+        emit(ev);
+      }
     }
     return;
   }
@@ -473,6 +539,23 @@ export function mapSdkMessage(
             // tail 自身不判定 done，只负责进度回放。stopOutputTail 由 task-notification 分支调。
           });
           continue;
+        }
+        // 后台 Bash 回执（"Command running in background with ID: … Output is being
+        // written to: …"）：登记任务 + 启动输出 tail，发 bg_task_started upsert。
+        // 不 continue——回执文本同时就是该工具调用的结果，照走下方通用 tool_result
+        // 路径，让消息流里的 Bash 卡片正常收尾（与 CLI 行为一致）。
+        const bgAck = bgTaskHooks?.tracker.registerAck(block.tool_use_id, content);
+        if (bgAck) {
+          emit(bgAck.event);
+          bgTaskHooks?.startTail(bgAck.taskId, bgAck.outputFile);
+        }
+        // TaskOutput(block) 主动等待的流程：结果已同步交给模型，CLI 不一定再注入
+        // XML 通知——工具结果里的 <status> 终态就是该流程的结束信号。同样不 continue，
+        // TaskOutput 自己的工具卡片照常收尾。
+        const bgOut = bgTaskHooks?.tracker.handleTaskOutputResult(content);
+        if (bgOut) {
+          bgTaskHooks?.stopTail(bgOut.taskId);
+          emit(bgOut.event);
         }
         // sync 子代理或其他工具的结果
         if (subagents.handleToolResult(block.tool_use_id)) {

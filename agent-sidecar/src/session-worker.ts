@@ -4,6 +4,8 @@ import { PermissionManager } from "./permissions.js";
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
 import { ToolLifecycleTracker } from "./toolLifecycle.js";
+import { BgTaskTracker } from "./bgTasks.js";
+import { BgTaskTail } from "./bgTaskOutputTail.js";
 import { JumpQueueController } from "./jumpQueue.js";
 import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { btwQueryOverrides, forkResumeOptions } from "./btwOptions.js";
@@ -164,6 +166,11 @@ export class SessionWorker {
   // ---- 输出尾部轮询（per-session，替代模块级全局） ----
   private outputTails = new Map<string, OutputTail>();
   private outputTailTimer: NodeJS.Timeout | undefined;
+
+  // ---- 后台 shell 任务：tracker + 输出 tail（per-session） ----
+  readonly bgTaskTracker = new BgTaskTracker();
+  private bgTaskTails = new Map<string, BgTaskTail>();
+  private bgTaskTailTimer: NodeJS.Timeout | undefined;
 
   // ---- 注入的 stdout 输出回调 ----
   private readonly emitToStdout: (event: ChatEvent) => void;
@@ -416,6 +423,41 @@ export class SessionWorker {
   }
 
   // ================================================================
+  // BgTaskTail（后台 shell 任务输出，per-SessionWorker）
+  // ================================================================
+
+  startBgTaskTail(id: string, outputFile: string): void {
+    if (this.bgTaskTails.has(id)) return; // 幂等：ack 重复到达不重启
+    this.bgTaskTails.set(id, new BgTaskTail(id, outputFile, (e) => this.emit(e)));
+    this.ensureBgTaskTailTimer();
+  }
+
+  stopBgTaskTail(id: string): void {
+    const t = this.bgTaskTails.get(id);
+    if (t) { t.finalFlush(); this.bgTaskTails.delete(id); } // finalFlush 内含 stop
+    if (this.bgTaskTails.size === 0 && this.bgTaskTailTimer) {
+      clearInterval(this.bgTaskTailTimer);
+      this.bgTaskTailTimer = undefined;
+    }
+  }
+
+  stopAllBgTaskTails(): void {
+    for (const t of this.bgTaskTails.values()) t.stop();
+    this.bgTaskTails.clear();
+    if (this.bgTaskTailTimer) { clearInterval(this.bgTaskTailTimer); this.bgTaskTailTimer = undefined; }
+  }
+
+  private ensureBgTaskTailTimer(): void {
+    if (this.bgTaskTailTimer) return;
+    this.bgTaskTailTimer = setInterval(() => {
+      for (const t of this.bgTaskTails.values()) {
+        try { t.tick(); } catch { /* 单条 tail 出错不影响其它 */ }
+      }
+    }, 600);
+    if (typeof (this.bgTaskTailTimer as any).unref === "function") (this.bgTaskTailTimer as any).unref();
+  }
+
+  // ================================================================
   // 命令处理（替代原先 index.ts 的 rl.on("line",...)）
   // ================================================================
 
@@ -463,6 +505,12 @@ export class SessionWorker {
       // 用户主动打断：待插队消息一并作废（对齐旧"排队消息作废"语义）
       this.jumpQueueCtl.clear();
       this.currentQuery?.interrupt().catch(() => {});
+
+    } else if (cmd.cmd === "stop_bg_task") {
+      // 终止后台任务：SDK stopTask 后 CLI 会发 task_notification(status:"stopped")，
+      // 终态走 mapper 既有通道（停 tail + bg_task_ended），这里不合成任何事件。
+      // query 未起（会话还没发过消息）或任务不存在时安静吞掉。
+      this.currentQuery?.stopTask(cmd.task_id).catch(() => {});
 
     } else if (cmd.cmd === "set_permission_mode") {
       this.applyPermissionMode(cmd.mode);
@@ -664,6 +712,11 @@ export class SessionWorker {
                 },
                 stop: (id) => this.stopOutputTail(id),
               },
+              {
+                tracker: this.bgTaskTracker,
+                startTail: (id, outputFile) => this.startBgTaskTail(id, outputFile),
+                stopTail: (id) => this.stopBgTaskTail(id),
+              },
             );
 
             if (this.jumpQueueCtl.has() && this.toolLifecycle.isIdle()) {
@@ -761,9 +814,16 @@ export class SessionWorker {
   /** 停止会话：关闭 query，释放 claude.exe，清理资源 */
   stop(): void {
     this.stopped = true;
+    // 进程没了，running 的后台任务永远等不到结束信号——统一收尾 stopped，
+    // 先停 tail（finalFlush 冲掉尾巴）再发终态，UI 不会留「永远运行中」的僵尸任务。
+    for (const ev of this.bgTaskTracker.stopAllRunning()) {
+      if (ev.type === "bg_task_ended") this.stopBgTaskTail(ev.id);
+      this.emit(ev);
+    }
     this.currentQuery?.close?.();
     this.currentQuery = null;
     this.queue.close();
     this.stopAllOutputTails();
+    this.stopAllBgTaskTails();
   }
 }
