@@ -78,7 +78,9 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
         :class="['ti-dot', block.isPending ? 'ti-dot--run' : block.isError ? 'ti-dot--err' : '']"
       ></span>
       <span class="ti-name">{{ block.name }}</span>
-      <span class="ti-summary">{{ inputSummary }}</span>
+      <!-- bdo dir=ltr：外层容器是 rtl（左侧省略），内层强制路径本身仍按 ltr 排，
+           省略号落在路径头部、文件名始终可见 -->
+      <span class="ti-summary" v-tooltip="inputSummary"><bdo dir="ltr">{{ inputSummary }}</bdo></span>
       <span
         v-if="bgTask"
         class="ti-bgchip"
@@ -182,9 +184,14 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
 
 .ti-summary {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* 左侧省略：长路径保住末尾的文件名（Edit/Write 的 file_path）；
+     text-align:left 保证短文本仍靠左、不右漂 */
+  direction: rtl;
+  text-align: left;
   font-family: var(--aide-font-mono);
   font-size: 11px;
   color: var(--aide-text-muted);

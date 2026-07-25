@@ -64,7 +64,7 @@ const runningSummary = computed(() =>
     <button class="tg-summary" :aria-expanded="expanded" @click="expanded = !expanded">
       <template v-if="running">
         <span class="tg-label">正在执行</span> <span class="tg-name">{{ running.name }}</span>
-        <span class="tg-kinds">{{ runningSummary }}</span>
+        <span class="tg-kinds tg-kinds--path" v-tooltip="runningSummary"><bdo dir="ltr">{{ runningSummary }}</bdo></span>
         <span v-if="doneCount > 0" class="tg-label"> · 已完成 {{ doneCount }}</span>
       </template>
       <template v-else>
@@ -162,6 +162,11 @@ const runningSummary = computed(() =>
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--aide-text-muted);
+}
+/* 正在执行摘要（多为 file_path / 命令）：左侧省略，保住末尾文件名 */
+.tg-kinds--path {
+  direction: rtl;
+  text-align: left;
 }
 .tg-err {
   color: var(--aide-danger);
