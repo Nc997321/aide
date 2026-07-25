@@ -369,6 +369,58 @@ describe("SessionWorker — fork source / routing key invariants", () => {
 });
 
 /**
+ * codegraph MCP 工具注册：SessionWorker 组装的 query options 应带
+ * mcpServers["aide-codegraph"] 和 allowedTools 放行前缀；
+ * AIDE_CODEGRAPH_TOOLS=off 时整体不注册。
+ */
+
+describe("SessionWorker — codegraph MCP registration", () => {
+  it("registers aide-codegraph MCP server and allow rule in query options", async () => {
+    let captured: any;
+    const fakeQuery = ((args: any) => {
+      captured = args?.options ?? args;
+      return (async function* () {})();
+    }) as any;
+    const worker = new SessionWorker("s-cg", () => {}, {
+      imageCapabilityCache: new ImageInputCapabilityCache(),
+      queryFn: fakeQuery,
+      cwd: "/proj",
+    });
+    worker.handleCommand({
+      cmd: "send", session_id: "s-cg", prompt: "你好", cwd: "/proj", env: {}, auto_title: false,
+    } as any);
+    await new Promise((r) => setTimeout(r, 50));
+    worker.stop();
+    expect(captured?.mcpServers?.["aide-codegraph"]).toBeDefined();
+    expect(captured?.allowedTools).toContain("mcp__aide-codegraph");
+  });
+
+  it("AIDE_CODEGRAPH_TOOLS=off skips MCP registration", async () => {
+    process.env.AIDE_CODEGRAPH_TOOLS = "off";
+    try {
+      let captured: any;
+      const fakeQuery = ((args: any) => {
+        captured = args?.options ?? args;
+        return (async function* () {})();
+      }) as any;
+      const worker = new SessionWorker("s-cg-off", () => {}, {
+        imageCapabilityCache: new ImageInputCapabilityCache(),
+        queryFn: fakeQuery,
+        cwd: "/proj",
+      });
+      worker.handleCommand({
+        cmd: "send", session_id: "s-cg-off", prompt: "你好", cwd: "/proj", env: {}, auto_title: false,
+      } as any);
+      await new Promise((r) => setTimeout(r, 50));
+      worker.stop();
+      expect(captured?.mcpServers?.["aide-codegraph"]).toBeUndefined();
+    } finally {
+      delete process.env.AIDE_CODEGRAPH_TOOLS;
+    }
+  });
+});
+
+/**
  * 会话自动命名：全新会话的首个 result 到达后，sidecar 用独立的小模型 query
  * 生成标题并发 session_title 事件。
  *

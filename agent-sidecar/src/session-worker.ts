@@ -13,6 +13,8 @@ import { generateSessionTitle } from "./titleGenerator.js";
 import { applyModelSwitch } from "./modelSwitch.js";
 import { cliSubagentModelEnvValue, makeSubagentModelHook } from "./subagentModelDefault.js";
 import { makeSkillGuardHook } from "./skillGuard.js";
+import { codegraphMcpRegistration, CODEGRAPH_ALLOW_RULE } from "./codegraphTools.js";
+import { cancelAllCodegraphQueries } from "./codegraphClient.js";
 import {
   ImageInputCapabilityCache,
   imageCapabilityKey,
@@ -515,6 +517,7 @@ export class SessionWorker {
     } else if (cmd.cmd === "interrupt") {
       // 用户主动打断：待插队消息一并作废（对齐旧"排队消息作废"语义）
       this.jumpQueueCtl.clear();
+      cancelAllCodegraphQueries("interrupted");
       this.currentQuery?.interrupt().catch(() => {});
 
     } else if (cmd.cmd === "stop_bg_task") {
@@ -656,6 +659,11 @@ export class SessionWorker {
           // 防 fan-out × 逐轮重发撑爆 input。返回 null（关闭/名单空）则不注册。
           const skillGuardHook = makeSkillGuardHook(process.env);
 
+          // codegraph agent 工具：默认注册（AIDE_CODEGRAPH_TOOLS=off 关闭）。
+          // handler 闭包持有本会话的 emit（经 DeltaCoalescer，红线）与 cwd。
+          const effectiveCwd = cwd ?? this.cwd ?? "";
+          const codegraphMcp = codegraphMcpRegistration(effectiveCwd, (e) => this.emit(e));
+
           if (this.resumeSource && this.shouldForkNextConnect && !this.btwMode) {
             this.pendingFork = true;
           }
@@ -669,7 +677,7 @@ export class SessionWorker {
               settingSources: ["project", "user"],
               ...(this.lightweightMode
                 ? { allowedTools: [] as string[] }
-                : { allowedTools: ["Agent", "Task"] }),
+                : { allowedTools: ["Agent", "Task", CODEGRAPH_ALLOW_RULE] }),
               skills: "all",
               plugins: buildPluginsOption(),
               hooks: {
@@ -684,6 +692,7 @@ export class SessionWorker {
                     : []),
                 ],
               },
+              ...(codegraphMcp ? { mcpServers: codegraphMcp as any } : {}),
               includePartialMessages: false,
               ...(this.currentModel ? { model: this.currentModel } : {}),
               ...(cwd ? { cwd } : {}),
@@ -893,6 +902,7 @@ export class SessionWorker {
     this.currentQuery?.close?.();
     this.currentQuery = null;
     this.queue.close();
+    cancelAllCodegraphQueries("session stopped");
     this.stopAllOutputTails();
     this.stopAllBgTaskTails();
   }

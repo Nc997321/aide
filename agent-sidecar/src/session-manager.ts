@@ -6,6 +6,7 @@ import {
   imageCapabilityKey,
   probeImageInput as defaultProbeImageInput,
 } from "./imageInputCapability.js";
+import { resolveCodegraphResult } from "./codegraphClient.js";
 
 type ProbeImageInputFn = typeof defaultProbeImageInput;
 
@@ -80,6 +81,12 @@ export class SessionManager {
   handleCommand(cmd: SidecarCommand): void {
     if (cmd.cmd === "probe_image_input") {
       void this.handleImageInputProbe(cmd);
+      return;
+    }
+
+    // codegraph MCP 工具的 Rust 回包：按 request_id 结算挂起查询，无会话路由。
+    if (cmd.cmd === "codegraph_result") {
+      resolveCodegraphResult(cmd as any);
       return;
     }
 
