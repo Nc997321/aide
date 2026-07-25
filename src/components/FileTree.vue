@@ -311,12 +311,26 @@ async function revealFile(filePath: string) {
   const root = projectInfo.value.root;
   const sep = root.includes("\\") ? "\\" : "/";
 
-  // 确保 filePath 在项目根目录下
-  if (!filePath.startsWith(root)) return;
+  // 打开入口的路径风格不一：文件树点击给的是原生分隔符，会话变更面板 / 聊天
+  // 文件链接给的是统一正斜杠。先归一到树的约定，否则下面的 startsWith 前缀
+  // 检查和 selectFile 全等比较会静默落空（定位无任何反应）。
+  const normalized = filePath.replace(/[\\/]/g, sep);
+
+  // 确保 filePath 在项目根目录下（Windows 路径大小写不敏感，放宽前缀比较）
+  const prefixOk =
+    sep === "\\"
+      ? normalized.toLowerCase().startsWith(root.toLowerCase())
+      : normalized.startsWith(root);
+  if (!prefixOk) return;
 
   // 计算从根到目标文件的所有祖先目录（不含根、不含文件自身）
-  const relative = filePath.slice(root.length).replace(/^[\\/]/, "");
-  const parts = relative.split(/[\\/]/);
+  const relative = normalized.slice(root.length).replace(/^[\\/]/, "");
+  const parts = relative.split(/[\\/]/).filter(Boolean);
+  if (parts.length === 0) return;
+
+  // 用 root + 段重建目标路径，保证与树节点路径（原生分隔符 + root 原始大小写）
+  // 逐字节一致——树节点的选中高亮靠 path 全等匹配
+  const target = root + sep + parts.join(sep);
   const ancestors: string[] = [];
   for (let i = 0; i < parts.length - 1; i++) {
     const ancestor = root + sep + parts.slice(0, i + 1).join(sep);
@@ -338,7 +352,7 @@ async function revealFile(filePath: string) {
   }
 
   // 选中目标文件
-  selectFile(filePath);
+  selectFile(target);
 
   // 等待 Vue 更新 DOM 后滚动到目标节点
   await nextTick();
