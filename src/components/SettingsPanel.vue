@@ -990,11 +990,17 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .toggle input:checked + .toggle-track {
-  background: var(--aide-success);
+  /* 开关是 accentGradient 槽位的既定消费场景（theme-development.md §2.2「主按钮/开关/选中条渐变」），
+     不用 success 绿——浅色主题下绿轨道与主题色割裂 */
+  background: var(--aide-accent-gradient);
 }
 
 .toggle input:checked + .toggle-track::after {
   transform: translateX(16px);
+  /* 滑球落在 accent 渐变轨道上，用 on-accent 前景（深色主题同理：
+     深球压铜/蓝渐变，与主按钮深字同一配方）；未选中态保持 textPrimary */
+  background: var(--aide-text-on-accent);
+  transition: transform 0.15s, background 0.15s;
 }
 
 /* ── Extensions tab ── */

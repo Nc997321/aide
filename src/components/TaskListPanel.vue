@@ -86,10 +86,12 @@ function displayText(task: TaskItem): string {
   transition: all var(--aide-ease-t);
 }
 
-/* Completed: gradient + glow checkbox */
+/* Completed: gradient + glow checkbox。盒体必须是 accent（currentColor→.f 填充），
+   勾由 Icon.vue 的 .k 以 bgDeep 刻反色——暗色主题=铜盒深勾，浅色主题=粉盒浅勾。
+   之前误用 text-on-accent 作盒色，浅色主题下盒子变黑、勾几乎不可见。 */
 .task-item-completed .task-icon {
   background: var(--aide-accent-gradient);
-  color: var(--aide-text-on-accent);
+  color: var(--aide-accent);
   box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 40%, transparent);
 }
 
