@@ -12,6 +12,18 @@ pub const SEMANTIC_MAX_LIMIT: usize = 10;
 /// never a whole function body (token discipline for agent-facing output).
 pub const SNIPPET_CAP: usize = 300;
 
+/// Normalize an agent-supplied symbol name to the leaf segment.
+/// Models naturally pass qualified forms ("PermissionManager.makeCallback",
+/// "this.save", "UserService::save"); the index keys bare names. 2026-07-26
+/// real-app A/B: 2 of the first 3 tool calls missed purely on this form
+/// mismatch, teaching the model the index was incomplete.
+fn leaf_name(name: &str) -> &str {
+    name.rsplit(['.', ':'])
+        .next()
+        .unwrap_or(name)
+        .trim()
+}
+
 /// One intercepted `codegraph_query` event, validated.
 pub struct AgentQueryRequest {
     pub request_id: String,
@@ -75,7 +87,7 @@ pub fn execute_agent_query(
                 return json!({"ok": true, "status": "wrong_project", "results": []});
             }
             if tool == "find_symbol" {
-                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let name = leaf_name(args.get("name").and_then(|v| v.as_str()).unwrap_or(""));
                 let hits = super::query::structure::structure_lookup(name, &pi.symbols, 0);
                 let results: Vec<Value> = hits
                     .into_iter()
@@ -92,7 +104,7 @@ pub fn execute_agent_query(
                     .collect();
                 json!({"ok": true, "status": "ready", "results": results})
             } else {
-                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let name = leaf_name(args.get("name").and_then(|v| v.as_str()).unwrap_or(""));
                 let direction = args.get("direction").and_then(|v| v.as_str()).unwrap_or("callers");
                 let r = if direction == "callees" {
                     super::query::calls::callees(name, &pi.edges, &pi.symbols)
@@ -301,5 +313,22 @@ mod tests {
         let r = execute_agent_query(&st, "nonsense", &json!({}), "/x");
         assert_eq!(r["ok"], false);
         assert_eq!(r["status"], "error");
+    }
+
+    #[test]
+    fn qualified_names_normalize_to_leaf() {
+        assert_eq!(leaf_name("PermissionManager.makeCallback"), "makeCallback");
+        assert_eq!(leaf_name("UserService::save"), "save");
+        assert_eq!(leaf_name("this.save"), "save");
+        assert_eq!(leaf_name("save"), "save");
+        // 端到端：带类名前缀的查询也要命中
+        let (st, dir) = state_with_index("projA");
+        let r = execute_agent_query(&st, "find_symbol", &json!({"name": "SomeClass.save"}), "projA");
+        assert_eq!(r["status"], "ready");
+        assert_eq!(r["results"].as_array().unwrap().len(), 1);
+        let r = execute_agent_query(&st, "call_graph", &json!({"name": "SomeClass.save", "direction": "callers"}), "projA");
+        assert_eq!(r["results"].as_array().unwrap().len(), 1);
+        crate::codegraph::guard::drop_catching_panics(st.inner.write().unwrap().take(), "test");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
