@@ -19,7 +19,7 @@ const props = defineProps<{
   bounds: { w: number; h: number };
 }>();
 
-const { closeWindow, save, openAndScrollTo, projectRoot, gotoOwnerId, indexHintWinId, revealInTreePath } = useFileViewer();
+const { closeWindow, save, projectRoot, gotoOwnerId, indexHintWinId, revealInTreePath, navigateInPlace, navigateBack, navStackHasDirty } = useFileViewer();
 const goto = useGotoDefinition();
 const modal = useModal();
 const { push: pushNotification } = useNotifications();
@@ -83,12 +83,19 @@ const renderedMarkdown = computed(() => {
   }
 });
 
-// ── 关闭：干净直接关；脏文件让用户选「保存并关闭 / 放弃修改 / 取消」──
+// ── 关闭：干净直接关；当前文件或栈内文件有未保存修改时让用户选 ──
+const stackDirty = computed(() => navStackHasDirty(props.win));
+
 async function requestClose() {
-  if (dirty.value) {
+  if (dirty.value || stackDirty.value) {
+    const msg = dirty.value
+      ? stackDirty.value
+        ? `「${props.win.fileName}」和跳转前打开的文件都有未保存的修改。「保存并关闭」只保存当前文件。`
+        : `「${props.win.fileName}」有未保存的修改。`
+      : "跳转前打开的文件有未保存的修改，关闭将丢弃。";
     const res = await modal.choice(
       "关闭文件",
-      `「${props.win.fileName}」有未保存的修改。`,
+      msg,
       { confirmLabel: "保存并关闭", altLabel: "放弃修改" },
     );
     if (res === "cancel") return;
@@ -138,9 +145,12 @@ watch(
 
 // ── goto-definition（useGotoDefinition 是单例，浮层只在触发窗口里渲染）──
 const gotoActive = computed(() => goto.visible.value && gotoOwnerId.value === props.win.id);
+/** 触发跳转时的光标行——压栈时记入 NavEntry，后退回到这一行 */
+const lastSourceLine = ref<number | null>(null);
 
 async function onGotoDefinition(payload: { word: string; filePath: string; line: number }) {
   gotoOwnerId.value = props.win.id;
+  lastSourceLine.value = payload.line;
   const root = projectRoot.value;
   const sep = root.includes("\\") ? "\\" : "/";
   const relPath = payload.filePath.startsWith(root)
@@ -165,7 +175,21 @@ function jumpToResult(item: QueryResult) {
   if (!root) return;
   const separator = root.includes("\\") ? "\\" : "/";
   const fullPath = root + separator + item.symbol.file.replace(/\//g, separator);
-  openAndScrollTo(fullPath, item.symbol.line);
+  // 就地覆盖当前窗口（压栈），不新开窗口；后退箭头逐级弹回
+  void navigateInPlace(props.win.id, fullPath, {
+    line: item.symbol.line,
+    sourceLine: lastSourceLine.value,
+  });
+}
+
+/** 栈顶文件名（后退箭头 tooltip） */
+const backTargetName = computed(() => {
+  const top = props.win.navStack[props.win.navStack.length - 1];
+  return top ? top.filePath.split(/[\\/]/).pop() || top.filePath : "";
+});
+
+function goBack() {
+  void navigateBack(props.win.id);
 }
 
 function onGotoKeydown(e: KeyboardEvent) {
@@ -189,11 +213,14 @@ watch(gotoActive, (v) => {
   if (v) nextTick(() => gotoPopoverRef.value?.focus());
 });
 
-// ── 快捷键：Ctrl+S 保存，Esc 关窗 ──
+// ── 快捷键：Ctrl+S 保存，Esc 关窗，Alt+← 后退（导航栈）──
 function onKeydown(e: KeyboardEvent) {
   if (e.key === "s" && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
     if (dirty.value) void save(props.win.id);
+  } else if (e.key === "ArrowLeft" && e.altKey) {
+    e.preventDefault();
+    goBack();
   } else if (e.key === "Escape") {
     void requestClose();
   }
@@ -222,6 +249,18 @@ async function openInBrowser() {
 <template>
   <div class="fw-window" :class="{ 'fw-window--dragging': dragging }" tabindex="-1" @keydown="onKeydown">
     <div class="fw-header" @pointerdown="onHeaderPointerDown">
+      <!-- 导航栈后退箭头：跳转定义/引用就地覆盖后出现，逐级弹回 -->
+      <button
+        v-if="win.navStack.length > 0"
+        class="fw-icon-btn"
+        v-tooltip="'返回到 ' + backTargetName"
+        @click.stop="goBack"
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M19 12H5"/>
+          <path d="M12 19l-7-7 7-7"/>
+        </svg>
+      </button>
       <span v-if="dirty" class="fw-dirty" v-tooltip="'有未保存的修改'">●</span>
       <span class="fw-title">{{ win.fileName }}</span>
       <transition name="fw-index-hint-fade">

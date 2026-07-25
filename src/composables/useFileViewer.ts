@@ -18,6 +18,19 @@ import type { DiffPair } from "../types";
 
 export type MarkdownMode = "edit" | "split" | "preview";
 
+/** 跳转定义/引用就地导航的后退栈条目：压栈时窗口所显示文件的完整快照 */
+export interface NavEntry {
+  filePath: string;
+  /** 压栈时的编辑内容；与 content 相等表示当时干净 */
+  editContent: string;
+  /** 磁盘基线——恢复后 dirty 判定靠 editContent !== content 自然成立 */
+  content: string;
+  /** 触发跳转时光标所在行（后退落点）；未知为 null */
+  line: number | null;
+  /** markdown 三态随栈恢复 */
+  mdMode: MarkdownMode;
+}
+
 export interface FileWindowState {
   id: string;
   filePath: string;
@@ -41,6 +54,8 @@ export interface FileWindowState {
   mdMode: MarkdownMode;
   /** 挂载后要滚到的行号，FileWindow 消费后置回 null */
   scrollToLine: number | null;
+  /** 跳转定义/引用的后退栈：栈顶 = 上一个位置；空 = 未发生过就地跳转 */
+  navStack: NavEntry[];
   /** 窗口几何（px，视口坐标）——自动平铺由 FileViewer 层计算，拖拽直接改 x/y */
   x: number;
   y: number;
@@ -115,6 +130,58 @@ async function detectProjectRoot() {
   }
 }
 
+/**
+ * 按路径读取文件并填充窗口字段（open / 就地导航共用）。
+ * 重置全部内容相关字段后重新加载：图片走 Blob URL，文本按大小判只读，
+ * 读取失败写 win.error（调用方决定是否允许后退恢复）。
+ */
+async function loadIntoWindow(win: FileWindowState, path: string) {
+  // 旧图片的 Blob URL 先释放（同窗口换文件，避免泄漏）
+  const oldUrl = blobUrls.get(win.id);
+  if (oldUrl) {
+    URL.revokeObjectURL(oldUrl);
+    blobUrls.delete(win.id);
+  }
+
+  win.filePath = path;
+  win.fileName = fileNameOf(path);
+  win.content = "";
+  win.editContent = "";
+  win.imageUrl = "";
+  win.language = "";
+  win.diffPair = null;
+  win.error = "";
+  win.readonly = false;
+  win.isMarkdown = isMarkdownPath(path);
+  win.mdMode = "preview";
+  win.scrollToLine = null;
+
+  const mime = imageMimeFromPath(path);
+  if (mime) {
+    // 图片：读取原始字节并构造 Blob URL，避免 UTF-8 解码失败。
+    try {
+      const buf = await api.readFileBinary(path);
+      const blob = new Blob([buf], { type: mime });
+      const url = URL.createObjectURL(blob);
+      blobUrls.set(win.id, url);
+      win.imageUrl = url;
+      win.readonly = true;
+    } catch (e) {
+      win.error = String(e);
+    }
+  } else {
+    try {
+      win.content = await api.readFileContent(path);
+      win.editContent = win.content;
+      if (win.content.length > MAX_EDITABLE_SIZE) win.readonly = true;
+    } catch (e) {
+      win.error = String(e);
+    }
+  }
+  // 记录最近访问文件（best effort，绝不阻断打开主流程）
+  void useRecent().recordFile(path, win.fileName);
+}
+
 export function useFileViewer() {
   /**
    * 打开文件。同一磁盘路径已开着 → 聚焦已有窗口（文件树重复点击不产生副本）；
@@ -153,6 +220,7 @@ export function useFileViewer() {
       // Markdown 默认全预览，编辑/分屏由用户按需切
       mdMode: "preview",
       scrollToLine: null,
+      navStack: [],
       x: 0,
       y: 0,
       w: 0,
@@ -165,30 +233,8 @@ export function useFileViewer() {
         win.editContent = win.content;
       }
     } else {
-      const mime = imageMimeFromPath(path);
-      if (mime) {
-        // 图片：读取原始字节并构造 Blob URL，避免 UTF-8 解码失败。
-        try {
-          const buf = await api.readFileBinary(path);
-          const blob = new Blob([buf], { type: mime });
-          const url = URL.createObjectURL(blob);
-          blobUrls.set(win.id, url);
-          win.imageUrl = url;
-          win.readonly = true;
-        } catch (e) {
-          win.error = String(e);
-        }
-      } else {
-        try {
-          win.content = await api.readFileContent(path);
-          win.editContent = win.content;
-          if (win.content.length > MAX_EDITABLE_SIZE) win.readonly = true;
-        } catch (e) {
-          win.error = String(e);
-        }
-      }
-      // 记录最近访问文件（best effort，绝不阻断打开主流程）
-      void useRecent().recordFile(path, win.fileName);
+      await loadIntoWindow(win, path);
+      if (opts?.language) win.language = opts.language;
     }
 
     void detectProjectRoot();
@@ -204,6 +250,61 @@ export function useFileViewer() {
     if (!win) return;
     if (!win.readonly && !win.error) win.scrollToLine = line;
     focusedId.value = win.id;
+  }
+
+  /**
+   * 跳转定义/引用的就地导航：不新开窗口，把目标文件灌进同一个窗口，
+   * 当前状态（含未保存修改）压入 navStack，由 navigateBack 逐级弹回。
+   * 目标已在另一窗口打开时退化为聚焦该窗口（保住路径唯一不变量，不入栈）。
+   */
+  async function navigateInPlace(
+    winId: string,
+    targetPath: string,
+    opts: { line: number | null; sourceLine: number | null },
+  ) {
+    const win = windows.value.find((w) => w.id === winId);
+    if (!win || win.virtual) return;
+
+    const other = windows.value.find(
+      (w) => w.id !== winId && w.filePath === targetPath && !w.virtual,
+    );
+    if (other) {
+      if (!other.readonly && !other.error && opts.line != null) other.scrollToLine = opts.line;
+      focusedId.value = other.id;
+      return;
+    }
+
+    win.navStack.push({
+      filePath: win.filePath,
+      editContent: win.editContent,
+      content: win.content,
+      line: opts.sourceLine,
+      mdMode: win.mdMode,
+    });
+    await loadIntoWindow(win, targetPath);
+    if (!win.readonly && !win.error && opts.line != null) win.scrollToLine = opts.line;
+  }
+
+  /**
+   * 后退一步：弹栈顶并就地恢复上一个文件，未保存修改随栈原样带回。
+   * 已知边界：若原路径此刻已在别的窗口打开，不查重、照常恢复
+   * （概率极小；两窗口同路径时保存后者覆盖前者，与主流编辑器一致）。
+   */
+  async function navigateBack(winId: string) {
+    const win = windows.value.find((w) => w.id === winId);
+    if (!win || win.navStack.length === 0) return;
+    const entry = win.navStack.pop()!;
+    await loadIntoWindow(win, entry.filePath);
+    // 磁盘现读可能被压栈后的外部保存改变过——恢复以快照为准，未保存修改不丢
+    win.content = entry.content;
+    win.editContent = entry.editContent;
+    win.mdMode = entry.mdMode;
+    if (!win.readonly && !win.error && entry.line != null) win.scrollToLine = entry.line;
+  }
+
+  /** 栈中是否压着带未保存修改的文件（关窗检查用） */
+  function navStackHasDirty(win: FileWindowState): boolean {
+    return win.navStack.some((e) => e.editContent !== e.content);
   }
 
   function closeWindow(id: string) {
@@ -307,6 +408,9 @@ export function useFileViewer() {
     revealInTreePath,
     open,
     openAndScrollTo,
+    navigateInPlace,
+    navigateBack,
+    navStackHasDirty,
     closeWindow,
     focusWindow,
     unfocus,

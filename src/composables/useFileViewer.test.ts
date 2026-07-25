@@ -166,4 +166,134 @@ describe("useFileViewer 多窗口 store", () => {
       expect(api.codegraphBuildIndex).toHaveBeenCalledWith("proj/two");
     });
   });
+
+  // ── 窗口内导航栈（跳转定义/引用就地覆盖 + 后退）──
+
+  it("navigateInPlace 把目标文件灌进同一窗口并压栈（不新开窗口）", async () => {
+    const v = useFileViewer();
+    await v.open("a.ts");
+    const win = v.windows.value[0];
+    await v.navigateInPlace(win.id, "b.ts", { line: 42, sourceLine: 7 });
+    expect(v.windows.value).toHaveLength(1); // 没有新窗口
+    expect(win.filePath).toBe("b.ts");
+    expect(win.fileName).toBe("b.ts");
+    expect(win.editContent).toBe("content of b.ts");
+    expect(win.scrollToLine).toBe(42);
+    expect(win.navStack).toHaveLength(1);
+    expect(win.navStack[0]).toMatchObject({
+      filePath: "a.ts",
+      editContent: "content of a.ts",
+      content: "content of a.ts",
+      line: 7,
+    });
+  });
+
+  it("navigateBack 弹栈恢复上一个文件与滚动落点", async () => {
+    const v = useFileViewer();
+    await v.open("a.ts");
+    const win = v.windows.value[0];
+    await v.navigateInPlace(win.id, "b.ts", { line: 42, sourceLine: 7 });
+    await v.navigateBack(win.id);
+    expect(win.filePath).toBe("a.ts");
+    expect(win.editContent).toBe("content of a.ts");
+    expect(win.scrollToLine).toBe(7);
+    expect(win.navStack).toHaveLength(0);
+    expect(isWindowDirty(win)).toBe(false);
+  });
+
+  it("脏文件压栈后后退，未保存修改原样恢复（dirty 复现）", async () => {
+    const v = useFileViewer();
+    await v.open("a.ts");
+    const win = v.windows.value[0];
+    win.editContent = "unsaved changes";
+    await v.navigateInPlace(win.id, "b.ts", { line: 1, sourceLine: 3 });
+    expect(isWindowDirty(win)).toBe(false); // b.ts 是干净的新加载
+    await v.navigateBack(win.id);
+    expect(win.editContent).toBe("unsaved changes");
+    expect(win.content).toBe("content of a.ts");
+    expect(isWindowDirty(win)).toBe(true);
+  });
+
+  it("同文件内跳转也压栈，后退回原行", async () => {
+    const v = useFileViewer();
+    await v.open("a.ts");
+    const win = v.windows.value[0];
+    await v.navigateInPlace(win.id, "a.ts", { line: 200, sourceLine: 10 });
+    expect(v.windows.value).toHaveLength(1);
+    expect(win.filePath).toBe("a.ts");
+    expect(win.scrollToLine).toBe(200);
+    expect(win.navStack).toHaveLength(1);
+    await v.navigateBack(win.id);
+    expect(win.filePath).toBe("a.ts");
+    expect(win.scrollToLine).toBe(10);
+    expect(win.navStack).toHaveLength(0);
+  });
+
+  it("目标已在另一窗口打开时退化为聚焦该窗口，本窗口内容与栈不变", async () => {
+    const v = useFileViewer();
+    await v.open("a.ts");
+    await v.open("b.ts");
+    const [wa, wb] = v.windows.value;
+    await v.navigateInPlace(wa.id, "b.ts", { line: 42, sourceLine: 7 });
+    expect(wa.filePath).toBe("a.ts");
+    expect(wa.navStack).toHaveLength(0);
+    expect(v.focusedId.value).toBe(wb.id);
+    expect(wb.scrollToLine).toBe(42);
+  });
+
+  it("目标读取失败：窗口显示错误、栈保留、后退可恢复原文件", async () => {
+    vi.mocked(api.readFileContent).mockImplementation(async (path: string) => {
+      if (path === "bad.ts") throw new Error("read failed");
+      return `content of ${path}`;
+    });
+    const v = useFileViewer();
+    await v.open("a.ts");
+    const win = v.windows.value[0];
+    await v.navigateInPlace(win.id, "bad.ts", { line: 1, sourceLine: 5 });
+    expect(win.error).toBeTruthy();
+    expect(win.navStack).toHaveLength(1);
+    await v.navigateBack(win.id);
+    expect(win.filePath).toBe("a.ts");
+    expect(win.error).toBe("");
+    expect(win.editContent).toBe("content of a.ts");
+    expect(win.navStack).toHaveLength(0);
+  });
+
+  it("markdown 窗口的 mdMode 随栈恢复", async () => {
+    const v = useFileViewer();
+    await v.open("README.md");
+    const win = v.windows.value[0];
+    win.mdMode = "edit";
+    await v.navigateInPlace(win.id, "a.ts", { line: 1, sourceLine: null });
+    expect(win.isMarkdown).toBe(false);
+    await v.navigateBack(win.id);
+    expect(win.isMarkdown).toBe(true);
+    expect(win.mdMode).toBe("edit");
+  });
+
+  it("navStackHasDirty 只在栈内有未保存修改时为真", async () => {
+    const v = useFileViewer();
+    await v.open("a.ts");
+    const win = v.windows.value[0];
+    expect(v.navStackHasDirty(win)).toBe(false);
+    // 干净压栈 → 仍 false
+    await v.navigateInPlace(win.id, "b.ts", { line: 1, sourceLine: 1 });
+    expect(v.navStackHasDirty(win)).toBe(false);
+    // b.ts 改脏再压栈 → true
+    win.editContent = "dirty b";
+    await v.navigateInPlace(win.id, "c.ts", { line: 1, sourceLine: 1 });
+    expect(v.navStackHasDirty(win)).toBe(true);
+    // 弹掉脏 entry → false
+    await v.navigateBack(win.id);
+    expect(v.navStackHasDirty(win)).toBe(false);
+  });
+
+  it("栈空时 navigateBack 是 no-op", async () => {
+    const v = useFileViewer();
+    await v.open("a.ts");
+    const win = v.windows.value[0];
+    await v.navigateBack(win.id);
+    expect(win.filePath).toBe("a.ts");
+    expect(win.editContent).toBe("content of a.ts");
+  });
 });

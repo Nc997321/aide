@@ -13,6 +13,7 @@ import { createHighlightStyle } from "../utils/cmHighlight";
 import { loadLanguageExtension } from "../utils/cmLanguage";
 import { ctrlHoverHighlight } from "../extensions/cmCtrlHover";
 import { cmScrollMemory, type ScrollMemoryOptions } from "../extensions/cmScrollMemory";
+import { parentSyncAnnotation, isUserEdit } from "../utils/cmModelSync";
 
 const { settings } = useSettings();
 
@@ -66,7 +67,10 @@ async function createEditor() {
   if (id !== createId) return;
 
   const updateListener = EditorView.updateListener.of((update) => {
-    if (update.docChanged) {
+    // 只有用户真实编辑才回流 v-model；父层同步（带 parentSyncAnnotation）的
+    // 程序性替换不回流——CM 会把 CRLF 归一化成 \n，回流会让 editContent 偏离
+    // 磁盘基线造成假 dirty（见 utils/cmModelSync.ts）
+    if (update.docChanged && isUserEdit(update.transactions)) {
       const newValue = update.state.doc.toString();
       emit("update:modelValue", newValue);
     }
@@ -370,6 +374,8 @@ watch(
           to: view.state.doc.length,
           insert: newVal,
         },
+        // 父层同步：带注解，updateListener 不把归一化文本回流 v-model
+        annotations: parentSyncAnnotation.of(true),
       });
     }
   }
