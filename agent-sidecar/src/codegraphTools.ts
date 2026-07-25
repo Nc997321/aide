@@ -26,6 +26,50 @@ Grep is for text/pattern search, NOT for locating symbols. These tools are exact
 const SNIPPET_HARD_CAP = 300;
 
 // ---------------------------------------------------------------------------
+// Grep 纠偏 hook（PreToolUse）
+// ---------------------------------------------------------------------------
+
+/**
+ * 为什么需要这个 hook（2026-07-26 三轮 headless A/B 实锤）：MCP instructions
+ * 把工具采纳率从 0 拉到 ~10%，codegraph-explore skill 进入列表也没被主动
+ * 调用——第三方模型（Kimi K2.6）对「自愿遵守」类引导（instructions/skill
+ * 列表/用户 prompt 点名）都不稳定。hook 是 harness 级强制通道：每次 Grep
+ * 命中符号状 pattern 就注入纠偏提示，模型无法「忽略」它，同一轮内即可纠偏。
+ *
+ * 只做 additionalContext 软纠偏，不 deny——日志串/错误消息等文本搜索是
+ * Grep 的合法用途，误伤代价大于收益。
+ */
+const SYMBOLISH_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+/** 判断 Grep pattern 是否像"在找一个符号"（裸标识符，可带 \b 词界）。 */
+export function looksLikeSymbolLookup(pattern: string): boolean {
+  const p = pattern.trim().replace(/\\b/g, "");
+  return SYMBOLISH_RE.test(p) && p.length >= 3;
+}
+
+/** PreToolUse hook（matcher ^Grep$）：符号状 pattern → 注入 codegraph 纠偏提示。 */
+export function makeCodegraphGrepNudgeHook() {
+  return async (input: { hook_event_name?: string; tool_name?: string; tool_input?: unknown }) => {
+    if (input.hook_event_name !== "PreToolUse") return {};
+    if (input.tool_name !== "Grep") return {};
+    const ti = input.tool_input;
+    if (!ti || typeof ti !== "object" || Array.isArray(ti)) return {};
+    const pattern = (ti as Record<string, unknown>).pattern;
+    if (typeof pattern !== "string" || !looksLikeSymbolLookup(pattern)) return {};
+    return {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse" as const,
+        additionalContext:
+          `Note: "${pattern.trim().replace(/\\b/g, "")}" looks like a code symbol, not a text pattern. ` +
+          `For definition/call-chain lookups prefer mcp__aide-codegraph__find_symbol (exact definitions) ` +
+          `or mcp__aide-codegraph__call_graph (callers/callees) FIRST — one call replaces a grep-then-read fan-out. ` +
+          `If those tools report no match or the index is not built, Grep results like this one are the right fallback.`,
+      },
+    };
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 格式化（纯函数，测试直接覆盖）
 // ---------------------------------------------------------------------------
 

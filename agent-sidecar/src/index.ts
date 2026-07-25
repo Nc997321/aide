@@ -1,10 +1,15 @@
 import * as readline from "readline";
 import { SessionManager } from "./session-manager.js";
 import { ensureWindowsBashEnv } from "./winBashEnv.js";
+import { ensureCodegraphSkill } from "./codegraphSkill.js";
 
 // Windows：给 Bash 工具的非交互 bash 注入 BASH_ENV（chcp 65001），
 // 让 Windows 原生 CLI 输出 UTF-8，防 GBK 乱码。内建于 runtime，免用户配置。
 ensureWindowsBashEnv(process.env);
+
+// codegraph-explore skill 落地：任务级触发「探索代码先用索引工具」，
+// 与 MCP instructions 互补。内建于 runtime，免用户配置。
+ensureCodegraphSkill(process.env);
 
 // 过滤 SDK 的 CLAUDE_SDK_CAN_USE_TOOL_SHADOWED 警告。
 // 该警告是 SDK 提醒 canUseTool 不会对 allowedTools 里的裸名（"Agent","Task"）

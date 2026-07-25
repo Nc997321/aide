@@ -13,7 +13,7 @@ import { generateSessionTitle } from "./titleGenerator.js";
 import { applyModelSwitch } from "./modelSwitch.js";
 import { cliSubagentModelEnvValue, makeSubagentModelHook } from "./subagentModelDefault.js";
 import { makeSkillGuardHook } from "./skillGuard.js";
-import { codegraphMcpRegistration, CODEGRAPH_ALLOW_RULE } from "./codegraphTools.js";
+import { codegraphMcpRegistration, CODEGRAPH_ALLOW_RULE, makeCodegraphGrepNudgeHook } from "./codegraphTools.js";
 import { cancelAllCodegraphQueries } from "./codegraphClient.js";
 import {
   ImageInputCapabilityCache,
@@ -689,6 +689,11 @@ export class SessionWorker {
                   { matcher: "^Read$", hooks: [this.makeImageGuardHook()] },
                   ...(skillGuardHook
                     ? [{ matcher: "^Skill$", hooks: [skillGuardHook] }]
+                    : []),
+                  // codegraph Grep 纠偏：符号状 pattern 时注入「先用索引工具」提示。
+                  // 与 MCP 注册同生同灭（AIDE_CODEGRAPH_TOOLS=off 时不挂）。
+                  ...(codegraphMcp
+                    ? [{ matcher: "^Grep$", hooks: [makeCodegraphGrepNudgeHook()] }]
                     : []),
                 ],
               },
