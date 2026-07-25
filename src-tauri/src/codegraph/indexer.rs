@@ -5,6 +5,7 @@ pub mod walk;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::codegraph::edges::EdgeTable;
 use crate::codegraph::embed::Embedder;
 use crate::codegraph::meta::{now_epoch, Meta, META_VERSION};
 use crate::codegraph::parser::ParserManager;
@@ -47,7 +48,7 @@ pub fn collect_symbols(
     project_root: &Path,
     parser_manager: &ParserManager,
     on_status: Option<&dyn Fn(&str)>,
-) -> (SymbolTable, Vec<IndexedPoint>, BuildStats) {
+) -> (SymbolTable, EdgeTable, Vec<IndexedPoint>, BuildStats) {
     let exts = parser_manager.supported_extensions();
     let ext_refs: Vec<&str> = exts.iter().copied().collect();
     if let Some(f) = on_status {
@@ -57,6 +58,7 @@ pub fn collect_symbols(
     let total_files = files.len();
 
     let mut table = SymbolTable::new();
+    let mut edges = EdgeTable::new();
     let mut all_points: Vec<IndexedPoint> = Vec::new();
     let mut stats = BuildStats::default();
 
@@ -77,8 +79,11 @@ pub fn collect_symbols(
                 continue;
             }
         };
-        let (points, _edges) =
+        let (points, file_edges) =
             extract_symbols(file_path, &source, parser_manager, project_root);
+        for e in file_edges {
+            edges.insert(e);
+        }
         if points.is_empty() {
             continue;
         }
@@ -89,7 +94,7 @@ pub fn collect_symbols(
         }
         all_points.extend(points);
     }
-    (table, all_points, stats)
+    (table, edges, all_points, stats)
 }
 
 /// Phase 1 of a full rebuild: walk + parse + create shard + persist symbols/meta.
@@ -118,7 +123,7 @@ pub fn build_structure_index(
     dim: usize,
     model_name: &str,
     on_status: Option<&dyn Fn(&str)>,
-) -> Result<(SymbolTable, Arc<CodeShard>, Vec<IndexedPoint>, BuildStats), Box<dyn std::error::Error>> {
+) -> Result<(SymbolTable, EdgeTable, Arc<CodeShard>, Vec<IndexedPoint>, BuildStats), Box<dyn std::error::Error>> {
     let base = index_dir(project_root);
     std::fs::create_dir_all(&base)?;
 
@@ -141,7 +146,7 @@ pub fn build_structure_index(
     }
     let shard = CodeShard::create(&qdir, dim)?;
 
-    let (table, points, stats) = collect_symbols(project_root, parser_manager, on_status);
+    let (table, edges, points, stats) = collect_symbols(project_root, parser_manager, on_status);
 
     // Persist SymbolTable + meta at structure-layer readiness (not waiting for
     // embed). Permission errors expected (`.aide/` may be read-only); other FS
@@ -149,6 +154,9 @@ pub fn build_structure_index(
     // forces a full rebuild every open with no diagnostic trail.
     if let Err(e) = table.save_json(&base.join("symbols.json")) {
         tracing::warn!("codegraph: symbols.json persist failed: {}", e);
+    }
+    if let Err(e) = edges.save_json(&base.join("edges.json")) {
+        tracing::warn!("codegraph: edges.json persist failed: {}", e);
     }
     let meta = Meta {
         version: META_VERSION,
@@ -169,7 +177,7 @@ pub fn build_structure_index(
         tracing::warn!("codegraph: meta.json persist failed: {}", e);
     }
 
-    Ok((table, Arc::new(shard), points, stats))
+    Ok((table, edges, Arc::new(shard), points, stats))
 }
 
 /// Remove `qdrant*` directories under `base` except the one named `keep`. Only
@@ -246,7 +254,7 @@ pub fn load_compatible_index(
     project_root: &Path,
     expect_model: &str,
     expect_dim: usize,
-) -> Option<(SymbolTable, Arc<CodeShard>, Meta)> {
+) -> Option<(SymbolTable, EdgeTable, Arc<CodeShard>, Meta)> {
     let base = index_dir(project_root);
     let meta = Meta::load(&base.join("meta.json"))?;
     if meta.model_name != expect_model || meta.dim != expect_dim {
@@ -260,8 +268,9 @@ pub fn load_compatible_index(
         return None;
     }
     let table = SymbolTable::load_json(&base.join("symbols.json"))?;
+    let edges = EdgeTable::load_json(&base.join("edges.json"))?;
     let shard = CodeShard::load(&base.join(&meta.shard_dir), expect_dim).ok()?;
-    Some((table, Arc::new(shard), meta))
+    Some((table, edges, Arc::new(shard), meta))
 }
 
 /// Fast path: reuse on-disk index if fresh and compatible with the configured
@@ -278,7 +287,7 @@ pub fn load_project_index(
     parser_manager: &ParserManager,
     expect_model: &str,
     expect_dim: usize,
-) -> Option<(SymbolTable, Arc<CodeShard>)> {
+) -> Option<(SymbolTable, EdgeTable, Arc<CodeShard>)> {
     let base = index_dir(project_root);
     let meta = Meta::load(&base.join("meta.json"))?;
     if meta.model_name != expect_model || meta.dim != expect_dim {
@@ -294,10 +303,11 @@ pub fn load_project_index(
         return None;
     }
     let table = SymbolTable::load_json(&base.join("symbols.json"))?;
+    let edges = EdgeTable::load_json(&base.join("edges.json"))?;
     // Load the shard from the versioned dir recorded in meta (legacy meta without
     // shard_dir defaults to "qdrant").
     let shard = CodeShard::load(&base.join(&meta.shard_dir), expect_dim).ok()?;
-    Some((table, Arc::new(shard)))
+    Some((table, edges, Arc::new(shard)))
 }
 
 /// Incremental: drop a file's symbols/points, re-parse it, update table + shard,
@@ -308,6 +318,7 @@ pub fn reindex_one(
     project_root: &Path,
     abs_file: &Path,
     table: &mut SymbolTable,
+    edges: &mut EdgeTable,
     shard: &CodeShard,
     embedder: Option<&dyn Embedder>,
     model_name: &str,
@@ -322,13 +333,17 @@ pub fn reindex_one(
 
     // remove stale entries for this file
     table.remove_file(&rel);
+    edges.remove_file(&rel);
     shard.delete_by_file(&rel)?;
 
     let source = match std::fs::read_to_string(abs_file) {
         Ok(s) => s,
         Err(_) => return Ok(()), // file gone → deletion only
     };
-    let (points, _edges) = extract::extract_symbols(abs_file, &source, parser_manager, project_root);
+    let (points, file_edges) = extract::extract_symbols(abs_file, &source, parser_manager, project_root);
+    for e in file_edges {
+        edges.insert(e);
+    }
     for p in &points {
         table.insert(p.symbol.clone());
     }
@@ -343,6 +358,9 @@ pub fn reindex_one(
     let base = project_root.join(".aide").join("index");
     if let Err(e) = table.save_json(&base.join("symbols.json")) {
         tracing::warn!("codegraph: symbols.json re-persist failed: {}", e);
+    }
+    if let Err(e) = edges.save_json(&base.join("edges.json")) {
+        tracing::warn!("codegraph: edges.json re-persist failed: {}", e);
     }
     // Preserve the existing shard_dir (reindex writes into the SAME shard, not a
     // new versioned dir). Fall back to the legacy "qdrant" name if meta is gone.
@@ -434,7 +452,7 @@ mod tests {
         // Build an on-disk index (structure layer + shard + meta). Drop the
         // returned shard so its dir is released on disk before we re-load it.
         {
-            let (_table, shard, _points, _stats) =
+            let (_table, _edges, shard, _points, _stats) =
                 super::build_structure_index(&dir, &pm, 4, "test-model", None).unwrap();
             drop(shard);
         }
@@ -451,7 +469,7 @@ mod tests {
         // load_compatible_index must still load it (ignores staleness).
         let loaded = super::load_compatible_index(&dir, "test-model", 4);
         assert!(loaded.is_some(), "stale but compatible index must load");
-        let (t, _s, meta) = loaded.unwrap();
+        let (t, _e, _s, meta) = loaded.unwrap();
         assert_eq!(meta.model_name, "test-model");
         assert_eq!(meta.dim, 4);
         assert!(t.len() > 0, "loaded table must have symbols");
@@ -490,7 +508,7 @@ mod tests {
         std::fs::write(dir.join("a.ts"), "class A { save() {} }").unwrap();
         let pm = ParserManager::new();
         {
-            let (_t, shard, _p, _s) =
+            let (_t, _edges, shard, _p, _s) =
                 super::build_structure_index(&dir, &pm, 4, "test-model", None).unwrap();
             drop(shard);
         }
@@ -512,18 +530,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("UserService.java"),
-            "class UserService { void save() {} }").unwrap();
+            "class UserService { void save() { persist(); } void persist() {} }").unwrap();
         std::fs::write(dir.join("OrderService.java"),
             "class OrderService { void save() {} }").unwrap();
 
         let pm = ParserManager::new();
-        let (table, points, stats) = collect_symbols(&dir, &pm, None);
+        let (table, edges, points, stats) = collect_symbols(&dir, &pm, None);
 
-        // `save` defined in two files → both reachable
         assert_eq!(table.lookup("save").len(), 2);
         assert!(table.lookup("UserService").len() == 1);
         assert!(stats.files_with_symbols == 2);
         assert!(!points.is_empty());
+        // 调用边随符号一起收集：persist 在 save 内被调用
+        let e = edges.callers_of("persist");
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].caller, "save");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn build_persists_edges_json_and_loaders_require_it() {
+        let dir = std::env::temp_dir().join(format!("cg_edges_persist_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.ts"),
+            "function caller() { target(); }\nfunction target() {}\n").unwrap();
+        let pm = ParserManager::new();
+        {
+            let (_t, edges, shard, _p, _s) =
+                super::build_structure_index(&dir, &pm, 4, "test-model", None).unwrap();
+            assert_eq!(edges.callers_of("target").len(), 1);
+            drop(shard);
+        }
+        let base = super::index_dir(&dir);
+        assert!(base.join("edges.json").exists(), "build must persist edges.json");
+        // embed 标记完成后 loader 必须连边一起载回
+        {
+            let mut m = crate::codegraph::meta::Meta::load(&base.join("meta.json")).unwrap();
+            m.embed_complete = true;
+            m.save(&base.join("meta.json")).unwrap();
+        }
+        let (_t, edges, _s, _meta) =
+            super::load_compatible_index(&dir, "test-model", 4).expect("compatible index loads");
+        assert_eq!(edges.callers_of("target").len(), 1, "edges survive persist+load");
+        // edges.json 缺失 → 视为不兼容（旧索引），强制全量重建
+        std::fs::remove_file(base.join("edges.json")).unwrap();
+        assert!(super::load_compatible_index(&dir, "test-model", 4).is_none(),
+            "missing edges.json must force rebuild");
         std::fs::remove_dir_all(&dir).ok();
     }
 

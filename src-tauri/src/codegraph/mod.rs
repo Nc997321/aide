@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
 
+use crate::codegraph::edges::EdgeTable;
 use crate::codegraph::embed::{Embedder, FastEmbedEmbedder, HttpEmbedder, HttpEmbedderConfig, HttpFormat};
 use crate::codegraph::meta::Meta;
 use crate::codegraph::shard::CodeShard;
@@ -48,6 +49,7 @@ pub(crate) fn embed_input(raw: &str) -> String {
 pub struct ProjectIndex {
     pub project_root: PathBuf,
     pub symbols: SymbolTable,
+    pub edges: EdgeTable,
     pub shard: Arc<CodeShard>,
     pub indexed_at: SystemTime,
     pub embed_ready: Arc<AtomicBool>,
@@ -307,13 +309,14 @@ pub async fn codegraph_build_index(
         // (model_name + dim). A backend/model/dim switch won't match → full rebuild.
         // Skipped when `force` (manual 全量重建).
         if !force {
-            if let Some((table, shard)) =
+            if let Some((table, edges, shard)) =
                 indexer::load_project_index(&root, &st.parser_manager, &model_name, dim)
             {
                 let n = table.len();
                 *st.inner.write().map_err(|e| e.to_string())? = Some(ProjectIndex {
                     project_root: root,
                     symbols: table,
+                    edges,
                     shard,
                     indexed_at: SystemTime::now(),
                     embed_ready: Arc::new(AtomicBool::new(true)),
@@ -362,7 +365,7 @@ pub async fn codegraph_build_index(
         // a shard — skip semantic layer entirely (structure layer still built).
         let can_embed = has_emb && dim > 0;
         let build_dim = if can_embed { dim } else { 384 };
-        let (table, shard, points, stats) = indexer::build_structure_index(
+        let (table, edges, shard, points, stats) = indexer::build_structure_index(
             &root,
             &st.parser_manager,
             build_dim,
@@ -381,6 +384,7 @@ pub async fn codegraph_build_index(
             // `embed_complete: true`. One PathBuf clone per build — negligible.
             project_root: root.clone(),
             symbols: table,
+            edges,
             shard: shard.clone(),
             indexed_at: SystemTime::now(),
             embed_ready: embed_ready.clone(),
@@ -713,6 +717,7 @@ pub async fn codegraph_reindex_file(
             &root,
             &abs,
             &mut pi.symbols,
+            &mut pi.edges,
             &shard,
             embedder_ref,
             &model_name,
@@ -823,6 +828,7 @@ pub async fn codegraph_rescan(
                 &root,
                 abs,
                 &mut pi.symbols,
+                &mut pi.edges,
                 &shard,
                 embedder_ref,
                 &model_name,
@@ -898,7 +904,7 @@ fn try_incremental_build(
 ) -> Result<Option<serde_json::Value>, String> {
     // 1. Load a compatible on-disk index, IGNORING staleness. None → no
     //    reusable base (no meta / model·dim mismatch / unloadable) → full rebuild.
-    let (table, shard, meta) = match indexer::load_compatible_index(root, model_name, dim) {
+    let (table, edges, shard, meta) = match indexer::load_compatible_index(root, model_name, dim) {
         Some(x) => x,
         None => return Ok(None),
     };
@@ -921,6 +927,7 @@ fn try_incremental_build(
     let new_index = ProjectIndex {
         project_root: root.to_path_buf(),
         symbols: table,
+        edges,
         shard: shard.clone(),
         indexed_at: SystemTime::now(),
         embed_ready: embed_ready.clone(),
@@ -952,6 +959,7 @@ fn try_incremental_build(
             root,
             abs,
             &mut pi.symbols,
+            &mut pi.edges,
             &shard2,
             embedder_ref,
             model_name,
@@ -1013,7 +1021,7 @@ mod tests {
         // Build an on-disk structure index. Drop the shard so its dir is
         // released before we re-load it.
         {
-            let (_t, shard, _p, _s) =
+            let (_t, _edges, shard, _p, _s) =
                 crate::codegraph::indexer::build_structure_index(&dir, &pm, 4, "test-model", None)
                     .unwrap();
             drop(shard);
@@ -1088,6 +1096,7 @@ mod tests {
         let old_index = ProjectIndex {
             project_root: dir.clone(),
             symbols: SymbolTable::new(),
+            edges: crate::codegraph::edges::EdgeTable::new(),
             shard: Arc::new(old_shard),
             indexed_at: SystemTime::now(),
             embed_ready: Arc::new(AtomicBool::new(true)),
@@ -1105,6 +1114,7 @@ mod tests {
         let new_index = ProjectIndex {
             project_root: dir.clone(),
             symbols: SymbolTable::new(),
+            edges: crate::codegraph::edges::EdgeTable::new(),
             shard: Arc::new(new_shard),
             indexed_at: SystemTime::now(),
             embed_ready: Arc::new(AtomicBool::new(false)),
