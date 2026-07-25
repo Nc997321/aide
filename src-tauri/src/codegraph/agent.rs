@@ -38,6 +38,14 @@ pub fn parse_codegraph_query(event: &Value) -> Option<AgentQueryRequest> {
     })
 }
 
+/// Assemble the stdin command line payload: base payload + request_id + cmd tag.
+pub fn build_result_command(request_id: &str, payload: Value) -> Value {
+    let mut v = payload;
+    v["cmd"] = Value::String("codegraph_result".into());
+    v["request_id"] = Value::String(request_id.into());
+    v
+}
+
 fn err_payload(msg: impl Into<String>) -> Value {
     json!({"ok": false, "status": "error", "error": msg.into()})
 }
@@ -210,6 +218,14 @@ mod tests {
             embed_ready: Arc::new(AtomicBool::new(false)),
         });
         (st, dir)
+    }
+
+    #[test]
+    fn build_result_command_tags_cmd_and_request_id() {
+        let v = build_result_command("r1", json!({"ok": true, "status": "ready", "results": []}));
+        assert_eq!(v["cmd"], "codegraph_result");
+        assert_eq!(v["request_id"], "r1");
+        assert_eq!(v["status"], "ready");
     }
 
     #[test]

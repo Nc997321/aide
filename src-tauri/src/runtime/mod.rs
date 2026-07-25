@@ -173,6 +173,9 @@ impl AgentRuntimeManager {
         let child_for_kill = self.child.lock().unwrap().as_ref().ok_or("child not set")?.clone();
         let image_probe_waiters = Arc::clone(&self.image_probe_waiters);
 
+        // codegraph agent 查询回写通道（reader 拦截 codegraph_query 后用它写回结果）。
+        let stdin_for_agent = self.stdin.lock().unwrap().as_ref().unwrap().clone();
+
         // stderr 尾部缓冲
         let stderr_tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
         let tail_for_reader = Arc::clone(&stderr_tail);
@@ -199,6 +202,35 @@ impl AgentRuntimeManager {
                             if let Some(waiter) = image_probe_waiters.lock().unwrap().remove(request_id) {
                                 let _ = waiter.send(supported);
                             }
+                            continue;
+                        }
+                        // codegraph agent 工具查询：Rust ↔ Runtime 内部 request/response，不转发 Vue。
+                        // 查询在独立任务里跑（spawn_blocking），不阻塞 reader 主循环——慢查询
+                        // （大 shard 搜索 / HTTP embed）不能卡住心跳与其他事件的读取。
+                        if let Some(req) = crate::codegraph::agent::parse_codegraph_query(&event) {
+                            use tauri::Manager;
+                            let app2 = app.clone();
+                            let stdin2 = stdin_for_agent.clone();
+                            tokio::spawn(async move {
+                                let payload = tokio::task::spawn_blocking(move || {
+                                    let body = match app2.try_state::<Arc<crate::codegraph::CodeGraphState>>() {
+                                        Some(st) => crate::codegraph::agent::execute_agent_query(
+                                            st.inner(), &req.tool, &req.args, &req.project_root,
+                                        ),
+                                        None => serde_json::json!({
+                                            "ok": false, "status": "error",
+                                            "error": "codegraph state unavailable",
+                                        }),
+                                    };
+                                    crate::codegraph::agent::build_result_command(&req.request_id, body)
+                                })
+                                .await;
+                                if let Ok(Ok(mut line)) = payload.map(|v| serde_json::to_string(&v)) {
+                                    line.push('\n');
+                                    let mut g = stdin2.lock().await;
+                                    let _ = g.write_all(line.as_bytes()).await;
+                                }
+                            });
                             continue;
                         }
                         // 心跳只喂看门狗，不转发前端
