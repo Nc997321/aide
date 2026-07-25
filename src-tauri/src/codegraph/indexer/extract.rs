@@ -41,6 +41,7 @@ pub fn extract_symbols(
         source,
         &relative_path,
         None,
+        None,
         &mut symbols,
         &mut call_edges,
     );
@@ -53,6 +54,7 @@ fn extract_from_node(
     source: &str,
     file: &str,
     parent_sym: Option<&str>,
+    current_fn: Option<&str>,   // 所属函数/方法名，用于填 CallEdge.caller
     symbols: &mut Vec<IndexedPoint>,
     call_edges: &mut Vec<CallEdge>,
 ) {
@@ -84,7 +86,7 @@ fn extract_from_node(
                 for i in 0..node.child_count() {
                     if let Some(child) = node.child(i) {
                         extract_from_node(
-                            &child, source, file, Some(&parent),
+                            &child, source, file, Some(&parent), current_fn,
                             symbols, call_edges,
                         );
                     }
@@ -163,7 +165,7 @@ fn extract_from_node(
                 for i in 0..node.child_count() {
                     if let Some(child) = node.child(i) {
                         extract_from_node(
-                            &child, source, file, Some(&parent),
+                            &child, source, file, Some(&parent), current_fn,
                             symbols, call_edges,
                         );
                     }
@@ -196,7 +198,7 @@ fn extract_from_node(
                 for i in 0..node.child_count() {
                     if let Some(child) = node.child(i) {
                         extract_from_node(
-                            &child, source, file, Some(&parent),
+                            &child, source, file, Some(&parent), current_fn,
                             symbols, call_edges,
                         );
                     }
@@ -229,7 +231,7 @@ fn extract_from_node(
                 for i in 0..node.child_count() {
                     if let Some(child) = node.child(i) {
                         extract_from_node(
-                            &child, source, file, Some(&parent),
+                            &child, source, file, Some(&parent), current_fn,
                             symbols, call_edges,
                         );
                     }
@@ -252,7 +254,7 @@ fn extract_from_node(
                     for i in 0..node.child_count() {
                         if let Some(child) = node.child(i) {
                             extract_from_node(
-                                &child, source, file, Some(&parent_name),
+                                &child, source, file, Some(&parent_name), current_fn,
                                 symbols, call_edges,
                             );
                         }
@@ -292,6 +294,19 @@ fn extract_from_node(
                     source: Confidence::Structure,
                     code_snippet: symbol_snippet(&name, "fn", node, source),
                 });
+                // Recurse into the body with this function as the enclosing caller,
+                // so call edges inside it record `caller = name`. Nested function
+                // definitions re-shadow current_fn when entered.
+                let fn_name = name.to_string();
+                for i in 0..node.child_count() {
+                    if let Some(child) = node.child(i) {
+                        extract_from_node(
+                            &child, source, file, parent_sym, Some(&fn_name),
+                            symbols, call_edges,
+                        );
+                    }
+                }
+                return; // children already handled
             }
         }
 
@@ -412,7 +427,7 @@ fn extract_from_node(
                 let callee = callee_leaf_name(raw);
                 let start = node.start_position();
                 call_edges.push(CallEdge {
-                    caller: String::new(), // resolved by context (current function)
+                    caller: current_fn.unwrap_or("").to_string(),
                     callee: callee.to_string(),
                     file: file.to_string(),
                     line: start.row + 1,
@@ -426,7 +441,7 @@ fn extract_from_node(
     // Recurse into children (unless early-returned for container nodes above)
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
-            extract_from_node(&child, source, file, parent_sym, symbols, call_edges);
+            extract_from_node(&child, source, file, parent_sym, current_fn, symbols, call_edges);
         }
     }
 }
@@ -507,6 +522,7 @@ fn extract_vue_sfc(
                     &tree.root_node(),
                     &script_content,
                     &relative_path,
+                    None,
                     None,
                     &mut symbols,
                     &mut call_edges,
@@ -637,6 +653,33 @@ mod tests {
         let (_, edges) = extract_symbols(Path::new("test.py"), src, &pm, Path::new(""));
         assert!(edges.iter().any(|e| e.callee == "bar"));
         assert!(edges.iter().any(|e| e.callee == "baz"));
+    }
+
+    #[test]
+    fn call_edges_carry_enclosing_function_as_caller() {
+        let pm = ParserManager::new();
+        let src = "function outer() { inner(); }\nfunction inner() {}\n";
+        let (_points, edges) = extract_symbols(Path::new("a.ts"), src, &pm, Path::new("."));
+        let e = edges.iter().find(|e| e.callee == "inner").expect("edge for inner()");
+        assert_eq!(e.caller, "outer", "call inside outer() must record caller");
+    }
+
+    #[test]
+    fn method_body_call_edges_carry_method_name() {
+        let pm = ParserManager::new();
+        let src = "class A { void m() { helper(); } void helper() {} }";
+        let (_points, edges) = extract_symbols(Path::new("A.java"), src, &pm, Path::new("."));
+        let e = edges.iter().find(|e| e.callee == "helper").expect("edge for helper()");
+        assert_eq!(e.caller, "m");
+    }
+
+    #[test]
+    fn top_level_call_has_empty_caller() {
+        let pm = ParserManager::new();
+        let src = "doThing();\n";
+        let (_points, edges) = extract_symbols(Path::new("a.ts"), src, &pm, Path::new("."));
+        let e = edges.iter().find(|e| e.callee == "doThing").expect("edge for doThing()");
+        assert_eq!(e.caller, "", "module-level call has no enclosing function");
     }
 
     #[test]
