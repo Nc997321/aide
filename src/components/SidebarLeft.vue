@@ -14,6 +14,8 @@ import { api } from "../api";
 import { open } from "@tauri-apps/plugin-shell";
 import { getVersion } from "@tauri-apps/api/app";
 import { ACard, AStatusDot } from "../ui";
+import AToast from "../ui/AToast.vue";
+import { useToast } from "../composables/useToast";
 import IconOrChar from "./IconOrChar.vue";
 import Icon from "./Icon.vue";
 import type { Session, WorkspaceInfo } from "../types";
@@ -140,6 +142,7 @@ async function loadWsSessions(wsKey: string) {
 }
 
 const { show } = useContextMenu();
+const { toastState, showToast } = useToast();
 const sessionNames = useSessionNames();
 const sessionWs = useSessionWorkspaces();
 const { state: sessionState, dotTone } = useSessionState();
@@ -290,31 +293,62 @@ async function removeWorkspaceByKey(key: string, mode: "hide" | "delete"): Promi
   return true;
 }
 
-async function renameSession(id: string, name: string) {
+async function renameSession(wsKey: string, id: string, name: string) {
   try {
     await api.renameSession(id, name);
     // Update in-memory list directly — avoids a full reload that would
     // clobber any optimistic state not yet persisted on disk.
-    const wsKey = activeWorkspace.value;
     const list = sessionsByWorkspace.value[wsKey] ?? [];
     const idx = list.findIndex(s => s.id === id);
     if (idx !== -1) {
       list.splice(idx, 1, { ...list[idx], name });
       sessionsByWorkspace.value[wsKey] = [...list];
     } else {
-      await loadSessions();
+      await loadWsSessions(wsKey);
     }
     sessionNames.setName(id, name);
   } catch (_e) { /* ignore */ }
 }
 
-function onSessionContextMenu(e: MouseEvent, id: string) {
+/** 本地移除会话卡片（乐观删除）：不动滚动、不整表重载，离场动画由 TransitionGroup 播。 */
+function removeSessionLocally(wsKey: string, id: string) {
+  const list = sessionsByWorkspace.value[wsKey] ?? [];
+  const idx = list.findIndex(s => s.id === id);
+  if (idx === -1) return;
+  list.splice(idx, 1);
+  sessionsByWorkspace.value[wsKey] = [...list];
+  // 删空活动工作区时维持 loadSessions 的原行为：自动开一个空白会话
+  if (wsKey === activeWorkspace.value && list.length === 0) newSession();
+}
+
+/** 乐观删除失败回滚：重新拉取该工作区的真实列表 + toast 报错。 */
+function onSessionDeleteFailed(wsKey: string) {
+  loadWsSessions(wsKey);
+  showToast("删除会话失败，列表已恢复", "danger");
+}
+
+/**
+ * 离场收拢起点校准：卡高不固定（有无 preview 行差 ~20px），CSS 无法预知真实高度。
+ * 在 leave 钩子（先于 leave-active 类生效）把真实高度写进 CSS 变量，
+ * 让 max-height 从精确值收拢到 0——若从固定上界（如 100px）起播，
+ * 前段数值大于真实高度时视觉空跑、收拢被压进末段，收尾会有顿挫感。
+ */
+function onSessionAnimLeave(el: Element) {
+  (el as HTMLElement).style.setProperty("--session-leave-h", `${(el as HTMLElement).offsetHeight}px`);
+}
+
+function onSessionContextMenu(e: MouseEvent, wsKey: string, id: string) {
   e.preventDefault();
   // 混合 tab 布局：任何工作区的会话都可以直接开 tab/分屏（cwd 跟会话走）
   show(
     e.clientX,
     e.clientY,
-    sessionMenuItems(id, (name: string) => renameSession(id, name), loadSessions),
+    sessionMenuItems(
+      id,
+      (name: string) => renameSession(wsKey, id, name),
+      () => removeSessionLocally(wsKey, id),
+      () => onSessionDeleteFailed(wsKey),
+    ),
   );
 }
 
@@ -437,22 +471,24 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
           >
             暂无会话
           </div>
-          <ACard
-            v-for="s in visibleSessions(ws.key)"
-            :key="s.id"
-            :active="props.activeSessionId === s.id"
-            :glow-color="sessionState[s.id] === 'running' ? 'var(--aide-success)' : undefined"
-            class="session-card"
-            @click="selectSessionFromWorkspace(ws.key, s.id)"
-            @contextmenu.prevent="onSessionContextMenu($event, s.id)"
-          >
-            <div class="session-card-header">
-              <AStatusDot :tone="dotTone(s.id)" />
-              <span class="session-name">{{ s.name }}</span>
-              <span class="session-time">{{ timeAgo(s.timestamp) }}</span>
-            </div>
-            <div v-if="s.last_message" class="session-preview">{{ s.last_message }}</div>
-          </ACard>
+          <TransitionGroup name="session-anim" tag="div" class="session-anim-group" @leave="onSessionAnimLeave">
+            <ACard
+              v-for="s in visibleSessions(ws.key)"
+              :key="s.id"
+              :active="props.activeSessionId === s.id"
+              :glow-color="sessionState[s.id] === 'running' ? 'var(--aide-success)' : undefined"
+              class="session-card"
+              @click="selectSessionFromWorkspace(ws.key, s.id)"
+              @contextmenu.prevent="onSessionContextMenu($event, ws.key, s.id)"
+            >
+              <div class="session-card-header">
+                <AStatusDot :tone="dotTone(s.id)" />
+                <span class="session-name">{{ s.name }}</span>
+                <span class="session-time">{{ timeAgo(s.timestamp) }}</span>
+              </div>
+              <div v-if="s.last_message" class="session-preview">{{ s.last_message }}</div>
+            </ACard>
+          </TransitionGroup>
           <div
             v-if="hiddenSessionCount(ws.key) > 0"
             class="session-more"
@@ -525,11 +561,14 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
         </div>
       </div>
     </div>
+
+    <AToast :state="toastState" />
   </div>
 </template>
 
 <style scoped>
 .sidebar-left {
+  position: relative; /* AToast 锚定 */
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -690,6 +729,54 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 .session-card {
   margin: 0 10px 6px 24px;
   cursor: pointer;
+}
+
+/* ── 会话卡进出场 / 补位动画（TransitionGroup session-anim）──
+   删除 = 乐观本地移除：卡片淡出+左滑+高度收拢，兄弟卡片平滑上移补位，
+   不再整表 loadSessions（旧写法 loading 闪「加载中...」且 scrollTop 被钳回顶部）。
+   新建会话插入顶部走同一条渲染路径，白得入场淡入。
+   两条硬性细节：
+   1) 所有属性同一时长同一缓动、同一帧到终点——时长错开会出现"先隐身的卡片还在收高度、
+      兄弟慢爬后急停"的收尾顿挫；
+   2) 选择器叠成 .session-card.session-anim-*（0-2-0）压过 ACard 根上的
+      transition: all var(--aide-ease-t)（0-1-0），否则离场过渡被它接管。 */
+.session-card.session-anim-enter-active,
+.session-card.session-anim-leave-active {
+  transition:
+    opacity 0.24s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.24s cubic-bezier(0.4, 0, 0.2, 1),
+    max-height 0.24s cubic-bezier(0.4, 0, 0.2, 1),
+    margin 0.24s cubic-bezier(0.4, 0, 0.2, 1),
+    padding 0.24s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+
+.session-card.session-anim-enter-from {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+.session-card.session-anim-leave-active {
+  /* 收拢期间保持 in-flow（脱离文档流会让兄弟补位丢失布局依据）。
+     起点高度由 @leave 钩子写入 --session-leave-h（真实卡高）——max-height 必须
+     有有限起点（none→0 不可过渡），但不能拍固定上界：上界高于真实卡高时前段
+     空跑、收拢被压进末段，收尾有顿挫感。 */
+  position: relative;
+  max-height: var(--session-leave-h, 100px);
+}
+
+.session-card.session-anim-leave-to {
+  opacity: 0;
+  transform: translateX(-12px);
+  max-height: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.session-anim-move {
+  transition: transform 0.24s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .session-card-header {

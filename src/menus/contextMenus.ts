@@ -188,7 +188,8 @@ export function fileTreeAreaMenuItems(
 export function sessionMenuItems(
   id: string,
   onRenamed: (name: string) => void,
-  onDeleted: () => void,
+  onOptimisticRemove: () => void,
+  onDeleteFailed: () => void,
 ): MenuItem[] {
   const pane = usePaneLayout();
   return [
@@ -216,11 +217,18 @@ export function sessionMenuItems(
           true,
         );
         if (!ok) return;
-        // 运行中的 sidecar 先杀掉，避免进程泄漏 & 删除后 jsonl 被重新写回
-        await api.stopChatSession(id).catch(() => {});
-        await api.deleteSession(id);
+        // 乐观移除：确认后先把卡片从列表里拿掉（离场动画即刻开始），
+        // 后台再真正删除；失败由 onDeleteFailed 回滚列表 + 报错。
+        onOptimisticRemove();
+        try {
+          // 运行中的 sidecar 先杀掉，避免进程泄漏 & 删除后 jsonl 被重新写回
+          await api.stopChatSession(id).catch(() => {});
+          await api.deleteSession(id);
+        } catch {
+          onDeleteFailed();
+          return;
+        }
         pane.closeSessionTab(id); // 分屏里开着的 tab 一并关掉
-        onDeleted();
       },
     },
   ];
