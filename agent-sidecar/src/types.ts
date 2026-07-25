@@ -135,6 +135,14 @@ export type ChatEvent =
   | { type: "session_title"; title: string }
   // Rust command 应答：仅供运行期 reader 识别 probe_image_input 的结果，不转发为 UI 消息。
   | { type: "image_input_probe_result"; request_id: string; supported: boolean | null }
+  // Rust reader 拦截的 agent 代码索引查询（不转发 Vue；响应走 codegraph_result 命令）。
+  | {
+      type: "codegraph_query";
+      request_id: string;
+      tool: string;
+      args: Record<string, unknown>;
+      project_root: string;
+    }
   // 用户消息二次防线：provider-agnostic，不携带厂商专属字段；message 是可直接展示的人类说明。
   | { type: "image_input_rejected"; message: string }
   // fatal:false = 可恢复错误（进程仍存活、继续等下一条消息）；缺省/true = 致命。
@@ -205,4 +213,15 @@ export type SidecarCommand =
   | { cmd: "set_model"; session_id: string; model: string }
   | { cmd: "set_permission_mode"; session_id: string; mode: string }
   // 停止一个会话：Runtime 内部调 worker.stop()（q.close() + 清理），不再由 Rust kill 进程。
-  | { cmd: "session_stop"; session_id: string };
+  | { cmd: "session_stop"; session_id: string }
+  // codegraph agent 查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。
+  | {
+      cmd: "codegraph_result";
+      request_id: string;
+      ok: boolean;
+      status?: string;
+      results?: unknown[];
+      candidates?: number;
+      truncated?: boolean;
+      error?: string;
+    };
