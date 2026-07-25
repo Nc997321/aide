@@ -38,8 +38,8 @@ export function resolvePastePayload(
     return { text: "", imagePaths: [img] };
   }
   // Plain text from the system clipboard always takes priority over the in-app
-  // file-tree clipboard. Otherwise a stale "copy" entry (set by right-click →
-  // "复制" in the file tree) would shadow every subsequent Ctrl+V, making it
+  // file-tree clipboard. Otherwise a stale "copy" entry (set by Ctrl+C in the
+  // file tree) would shadow every subsequent Ctrl+V, making it
   // impossible to paste anything else until the entry is cleared.
   if (text) {
     return { text, imagePaths: [] };

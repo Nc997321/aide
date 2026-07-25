@@ -3,6 +3,7 @@ import { useModal } from "../composables/useModal";
 import { useFileViewer } from "../composables/useFileViewer";
 import { useFileClipboard, getParentPath } from "../composables/useFileClipboard";
 import { usePaneLayout } from "../composables/usePaneLayout";
+import { useMentionInserter } from "../composables/useMentionInserter";
 import { api } from "../api";
 
 function sep(): MenuItem {
@@ -11,6 +12,7 @@ function sep(): MenuItem {
 
 const modal = useModal();
 const cb = useFileClipboard();
+const mentionInserter = useMentionInserter();
 
 // ── File context menu ──
 
@@ -47,7 +49,7 @@ export function fileMenuItems(
         onDeleted?.();
       },
     },
-    { label: "复制", action: () => cb.copy(path) },
+    { label: "添加到对话", action: () => mentionInserter.insertMention(path, false) },
     { label: "剪切", action: () => cb.cut(path) },
     sep(),
     {
@@ -108,7 +110,7 @@ export function directoryMenuItems(
       },
     },
     sep(),
-    { label: "复制", action: () => cb.copy(path) },
+    { label: "添加到对话", action: () => mentionInserter.insertMention(path, true) },
     // 根目录不可剪切
     ...(path !== projectRoot ? [{ label: "剪切", action: () => cb.cut(path) }] : []),
     ...(cb.clipboard.value ? [

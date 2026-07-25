@@ -16,6 +16,8 @@ import { resolveFileMentions } from "@/utils/fileMentions";
 import type { FileMentionResolution } from "@/utils/fileMentions";
 import { checkImageInputSupport } from "@/utils/imageInputPreflight";
 import { peekFileClipboard } from "@/composables/useFileClipboard";
+import { useMentionInserter } from "@/composables/useMentionInserter";
+import { getFileIcon, pathBasename, FOLDER_ICON_PATH } from "@/utils/fileIcons";
 import type { ImageAttachment, SendOptions } from "@/composables/useChatSession";
 import { useMessageWindow } from "@/composables/useMessageWindow";
 import { useProviders } from "@/composables/useProviders";
@@ -628,9 +630,10 @@ watch(inputText, (val) => {
   }
 });
 
-// 切换会话时清空待发图片、恢复自动置底、清理 btw 支线
+// 切换会话时清空待发图片/引用芯片、恢复自动置底、清理 btw 支线
 watch(() => props.sessionId, () => {
   pendingImages.value = [];
+  pendingMentions.value = [];
   autoScroll.value = true;
   scrollToBottom();
   // 切主会话 → btw 抽屉关、进程清理
@@ -645,6 +648,28 @@ function selectSkill(skill: SkillMeta | undefined) {
   slashDropdownVisible.value = false;
   nextTick(() => textareaEl.value?.focus());
 }
+
+// 文件树右键「添加到对话」：所有分屏组的 ChatPanel 都会看到同一个 pending，
+// 但只有聚焦组激活 tab（= 选中的会话，props.focused）消费——多工作区会话
+// 并存时引用芯片只进选中的那个输入框，与其它会话无关。
+const mentionInserter = useMentionInserter();
+/** 输入框上方的文件引用芯片（路径去重）；发送时展开成 @path 前缀拼进 prompt。 */
+const pendingMentions = ref<Array<{ path: string; isDir: boolean }>>([]);
+watch(
+  () => mentionInserter.pending.value?.nonce,
+  () => {
+    if (!props.focused) return;
+    const m = mentionInserter.consumeMention();
+    if (!m) return;
+    if (!pendingMentions.value.some((x) => x.path === m.path)) {
+      pendingMentions.value.push({ path: m.path, isDir: m.isDir });
+    }
+    nextTick(() => textareaEl.value?.focus());
+  },
+);
+const mentionName = pathBasename;
+const mentionIcon = getFileIcon;
+const folderIconPath = FOLDER_ICON_PATH;
 
 function handleTabKey(e: KeyboardEvent) {
   if (slashDropdownVisible.value && filteredSkills.value.length) {
@@ -713,8 +738,13 @@ async function handlePaste(e: ClipboardEvent) {
 async function handleSend() {
   const text = inputText.value.trim();
   const hasImages = pendingImages.value.length > 0;
+  // 引用芯片 → @path 前缀：发送时才展开成文本，走与手打/粘贴 @path 完全相同的
+  // resolveFileMentions 管道（历史 transcript 也因此天然兼容，无需迁移）。
+  const mentionPrefix = pendingMentions.value.length
+    ? pendingMentions.value.map((m) => "@" + m.path).join(" ") + " "
+    : "";
   // 忙碌时不再拦截：useChatSession 会带插队标记透传，sidecar 在安全边界续发
-  if (!text && !hasImages) return;
+  if (!text && !hasImages && !mentionPrefix) return;
 
   // 只在有图片时预检；明确不支持则保留输入和附件，未知/临时失败交给 sidecar 二次防线。
   if (!(await checkImageInputSupport(hasImages, selectedModel.value || undefined, api.probeImageInput))) {
@@ -726,9 +756,11 @@ async function handleSend() {
     // btw 一次性:发完自动切回主对话输入。回弹确认(回弹动画 + "已切回"toast)
     // 不在这里乐观触发——等支线真正进入 running 才确认(见上面 status 的 watch),
     // 否则 fork 失败时也会弹"已切回主对话输入"造成误导。
-    emit("send-btw", text, { lightweight: btwLightweight.value, model: btwModel.value });
+    // 引用芯片在 btw 里只带 @path 字面量（支线没有 mention 展开通道），模型可自行 Read。
+    emit("send-btw", mentionPrefix + text, { lightweight: btwLightweight.value, model: btwModel.value });
     inputText.value = "";
     pendingImages.value = [];
+    pendingMentions.value = [];
     btwMode.value = false; // 横幅收起、按钮复原
     awaitingBtwLaunch.value = true;
     return;
@@ -754,12 +786,13 @@ async function handleSend() {
   // （见踩坑记录）。展开后的内容不进 finalPrompt（用户气泡显示用的原文），
   // 只进 mentionResolution.sendText（发给模型用）——避免文件内容和用户
   // 自己打的字混在一个气泡里，读起来很差。
-  const mentionResolution = await resolveFileMentions(finalPrompt, api.readFileContent);
+  const mentionResolution = await resolveFileMentions(mentionPrefix + finalPrompt, api.readFileContent);
 
   const images = pendingImages.value.map(({ data, mediaType }) => ({ data, mediaType }));
   inputText.value = "";
   pendingImages.value = [];
-  emit("send", finalPrompt, {
+  pendingMentions.value = [];
+  emit("send", mentionPrefix + finalPrompt, {
     images: images.length ? images : undefined,
     // Rust 只在 sidecar 进程还没起来时才会用这个值（见 chat.rs），已有会话时
     // 无害地被忽略，不需要在这里判断"是否已有会话"。
@@ -895,6 +928,33 @@ function onOpenBgDock(taskId: string) {
             <button type="button" class="btw-banner-x" @click="btwMode = false" v-tooltip="'退出 btw 模式'">×</button>
           </div>
         </Transition>
+        <!-- 文件引用芯片（文件树右键「添加到对话」）：发送时展开成 @path 前缀 -->
+        <div v-if="pendingMentions.length" class="mention-strip">
+          <div
+            v-for="(m, i) in pendingMentions"
+            :key="m.path"
+            class="mention-chip"
+            v-tooltip="m.path"
+          >
+            <svg
+              v-if="m.isDir"
+              class="mention-chip-icon mention-chip-icon--folder"
+              width="13" height="13" viewBox="0 0 24 24" fill="none"
+            >
+              <path :d="folderIconPath" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <svg
+              v-else
+              class="mention-chip-icon"
+              :style="{ color: mentionIcon(mentionName(m.path)).color }"
+              width="13" height="13" viewBox="0 0 24 24" fill="none"
+            >
+              <path :d="mentionIcon(mentionName(m.path)).path" fill="currentColor" opacity="0.85"/>
+            </svg>
+            <span class="mention-chip-name">{{ mentionName(m.path) }}</span>
+            <button class="mention-chip-remove" @click="pendingMentions.splice(i, 1)">×</button>
+          </div>
+        </div>
         <div v-if="pendingImages.length" class="image-attachment-strip">
           <div
             v-for="(img, i) in pendingImages"
@@ -970,7 +1030,7 @@ function onOpenBgDock(taskId: string) {
             <span class="chat-ctx-percent">{{ w.pct }}%</span>
           </div>
           <ChatSendButton
-            :disabled="!inputText.trim() && !pendingImages.length"
+            :disabled="!inputText.trim() && !pendingImages.length && !pendingMentions.length"
             :busy="isBusyVal && !btwMode"
             :actions="quickActions"
             :btw-active="btwMode"
@@ -1348,6 +1408,64 @@ function onOpenBgDock(taskId: string) {
   flex-shrink: 0;
   font-size: 10px;
   color: var(--aide-text-muted);
+}
+
+/* ── 文件引用芯片 ── */
+.mention-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px 0;
+}
+
+.mention-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 220px;
+  padding: 3px 5px 3px 7px;
+  border-radius: var(--aide-radius-sm);
+  border: 1px solid var(--aide-border);
+  background: var(--aide-surface-default);
+  font-size: 11px;
+  color: var(--aide-text-secondary);
+  user-select: none;
+}
+
+.mention-chip-icon {
+  flex-shrink: 0;
+}
+
+.mention-chip-icon--folder {
+  color: var(--aide-text-muted);
+}
+
+.mention-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mention-chip-remove {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.mention-chip-remove:hover {
+  background: var(--aide-danger);
+  color: var(--aide-text-primary);
 }
 
 .image-attachment-strip {
