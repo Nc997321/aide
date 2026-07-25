@@ -61,4 +61,9 @@ pub struct QueryResult {
     pub confidence: Confidence,
     /// Relevance score (only meaningful for Semantic results; 0.0–1.0 range).
     pub score: Option<f32>,
+    /// The indexed code snippet (populated from the shard payload on semantic
+    /// hits; None for structure-layer results). `#[serde(default)]` keeps old
+    /// payloads / frontend types backward compatible.
+    #[serde(default)]
+    pub snippet: Option<String>,
 }

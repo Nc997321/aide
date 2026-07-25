@@ -282,6 +282,7 @@ impl CodeShard {
                         _ => Confidence::Semantic,
                     },
                     score: Some(r.score),
+                    snippet: get_payload_str(&r.payload, "code_snippet"),
                 }
             })
             .collect();

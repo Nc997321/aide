@@ -19,6 +19,7 @@ pub fn structure_lookup(
             symbol,
             confidence: Confidence::Structure,
             score: None,
+            snippet: None,
         })
         .collect();
 

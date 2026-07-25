@@ -8,6 +8,7 @@ pub mod symbols;
 pub mod edges;
 pub mod meta;
 pub mod guard;
+pub mod agent;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
