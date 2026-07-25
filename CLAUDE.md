@@ -25,6 +25,10 @@
    - **Claude 专属逻辑只允许存在于 `agent-sidecar/`**（如 Anthropic 消息格式、Agent SDK 调用、SKILL 机制）。新 provider 的接入方式是新增一个 sidecar（或 Rust HTTP 客户端），输出同一套 `ChatEvent`。
    - 修改 IPC 协议时，先想清楚该字段是否所有 provider 都能提供；provider 专属信息放扩展字段，不污染核心协议。
 
+## Claude 配置目录映射：`~/.aide/claude/` 不是 `~/.claude/`
+
+aide 的 Claude Agent SDK 配置目录是 **`~/.aide/claude/`**（settings.json、projects/ 转录、memory、todos 全在这）。官方 Claude Code 文档 / 技能（如 update-config）里写的 `~/.claude/settings.json` 路径，在 aide 里一律映射到 `~/.aide/claude/settings.json`——改错文件不生效。改 aide 的 harness 配置（env、hooks、permissions）时先确认目标是 aide 自己的目录。
+
 ## ⚠️ Windows 必读坑点：`CREATE_NO_WINDOW`
 
 **所有 `Command::new("git")`（或任何 CLI 工具）必须加 `CREATE_NO_WINDOW (0x08000000)` 标志**，否则 Windows 会为每个子进程弹出一个控制台窗口，在 release build 中表现为大量错误弹窗。
@@ -58,6 +62,7 @@ cmd.env("AIDE_CLAUDE_EXE", dunce::simplified(&claude_exe)); // SDK 会 spawn 它
 
 ## 关键约定
 
+- **Bash 工具 UTF-8 内建（winBashEnv）**：`agent-sidecar/src/winBashEnv.ts` 在 sidecar 启动时（仅 Windows）把 `aide-bashrc`（一行 `chcp.com 65001`）落地到配置目录并把 `process.env.BASH_ENV` 指过去——非交互 bash 只读 `BASH_ENV`，SessionWorker 的 cliEnv 以 process.env 为底自然流进 SDK 子进程，Windows 原生 CLI（ping 等）输出即 UTF-8，不再有 GBK 乱码。用户自设 `BASH_ENV` 时尊重不覆盖；写盘失败静默跳过不阻塞会话。注意该文件由 runtime 自动维护（内容漂移会被重写），勿手改。
 - **卡死诊断黑匣子（Freeze Flight Recorder）**：偶发「未响应」难复现（且卡死后**难以恢复、一直未响应直到强杀**），靠常驻黑匣子抓现场。前端 `useDiagnostics` 每 500ms 发 `diag_heartbeat`（携带 event loop 延迟 / longtask 摘要 / 用户面包屑增量）；Rust `diagnostics/watchdog.rs` 是独立 `std::thread`（不占 Tauri 主线程、不进 tokio runtime，谁卡它都活着），心跳断流 ≥2s → 冻结期每 500ms 主动采样 aide 进程家族 CPU/内存（`sysinfo`，仅冻结期跑、空闲零成本）+ 主线程 no-op 探针积压 + Windows `IsHungAppWindow`；**关键：冻结进行中每 ~2s 增量原子重写同一份报告**（文件名按 `started` 锚定，临时文件+rename），进程被强杀时最后一次写入留在磁盘（`recovered=false`），不依赖恢复才写——真正的现场证据来自 watchdog 侧采样帧，不依赖前端恢复。报告落 `~/.aide/diagnostics/freeze-<epoch>.json`（保留最新 20 份）；心跳真恢复时最终 flush 标 `recovered=true`，前端 30s 内自愈补交 longtask 明细 + 面包屑（`diag_freeze_supplement`，锦上添花，永不恢复时不发）。防误报/防噪声：首心跳前不检测、`document.hidden` 时两边都抑制、watchdog 自身 tick 缺口 >5s 判系统休眠标 `suspected_sleep`、时长 <4s 的短冻结丢弃。对现有代码侵入仅四处（`lib.rs`/`runtime.rs`/`main.ts`/`Cargo.toml`），其余纯新增可整体摘除；计数钩子挂在 provider-agnostic 的 `chat-event` 出口。设计文档 `docs/superpowers/specs/2026-07-08-freeze-diagnostics-design.md`。复发卡死后把 diagnostics 目录下最新报告丢给 Claude 分析。
 - **sidecar 事件出口必须过 delta 合并层**：所有 stdout 事件统一经 `deltaCoalescer.ts` 输出——逐字 `*_delta` 在 40ms 窗口内按 key 拼接（几百条/秒 → ≤25 条/秒），非增量事件先冲刷缓冲再透传保序。未来新 provider 的 sidecar 同样要接这一层，禁止绕过它直写 stdout（逐字事件洪峰 × 前端每增量全量重渲染曾导致整窗 30s+ 卡死）。前端配套约定：已定稿文本块走 `renderMarkdown()` 缓存（`utils/markdown.ts`），流式尾块才直接 `marked.parse`；滚动置底必须 rAF 节流（读 `scrollHeight` 强制全容器布局）；消息列表禁止全量进 v-for——必须过 `useMessageWindow` 尾部窗口（数据层全量在 store，渲染层只挂尾部 N 条、上滚扩窗；切会话时新旧会话全量拆建 DOM 曾整窗未响应数十秒）；未标语言的代码围栏超 10KB 不做 `highlightAuto`（12 种语言各跑一遍的自动检测是挂载卡顿放大器）。
 - **聊天滚动置底 = RO 双观察，禁止数据层枚举触发器**：`ChatPanel.vue` 的置底信号来自一个 `ResizeObserver` 同时观察**内容盒**（`.chat-messages-body`，包裹全部消息的纯布局 wrapper）和**滚动容器**（`.chat-messages` 自身）——内容增高（变更卡展开/图片加载/历史扩窗）和视口变化（权限弹窗 dock 挤压/Pane 拖拽/窗口缩放）两个症状源全覆盖；RO 通知按帧合并，回调只走既有的 rAF 节流 `scrollToBottom`（读 `scrollHeight` 强布局，频率与旧 watcher 同级），`autoScroll=false`（用户翻历史）时自身 no-op，置底只写 `scrollTop` 不改两者尺寸、无反馈循环。**教训**：数据层枚举「新消息/文本增量/块状态翻转」必然挂一漏万——Edit/Write 变更卡默认展开时 tool_call 追加在同一条消息内、结果到达就地换成几百 px 的 DiffViewer，两个 watcher 全部失明，滚动条悬在半中腰（2026-07-24 实锤）；权限弹窗挤压视口时 scrollTop 未被钳位则连 scroll 事件都不产生。新增块类型/新弹窗 dock 时**不需要也不允许**再补数据层置底触发器，DOM 层已兜底；两个保留的旧 watcher（`messages.length`、尾块文本长度）只是低成本的前置快路径。排查滚动问题的次序：先确认跑的是新 bundle（本轮"修完不生效"最终证实是旧 bundle 缓存），机制本身曾用同构复现页在 Edge headless（与 WebView2 同引擎）断言 6/6 全过。配套：变更卡（Edit/Write/NotebookEdit）不进 `ToolCallGroup` 折叠组（`blockSegments.isChangeTool`），对话流内默认展开、diff 统一走 `DiffViewer`（禁第二套 diff 渲染，旧 `editDiff.ts` 已删），头行「打开 ↗」经 `locateAnchorLine` 定位到改动行。
