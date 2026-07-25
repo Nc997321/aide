@@ -483,7 +483,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
             >
               <div class="session-card-header">
                 <AStatusDot :tone="dotTone(s.id)" />
-                <span class="session-name">{{ s.name }}</span>
+                <span class="session-name">{{ sessionNames.names[s.id] || s.name }}</span>
                 <span class="session-time">{{ timeAgo(s.timestamp) }}</span>
               </div>
               <div v-if="s.last_message" class="session-preview">{{ s.last_message }}</div>

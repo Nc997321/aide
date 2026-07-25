@@ -745,3 +745,49 @@ describe("useChatSession subagent events", () => {
     expect(chat.tasks.value).toEqual([]);
   });
 });
+
+describe("useChatSession 会话自动命名", () => {
+  beforeEach(async () => {
+    __resetForTest();
+    invokeMock.mockClear();
+    invokeMock.mockResolvedValue(undefined);
+    const { state, removeSessionState } = useSessionState();
+    for (const k of Object.keys(state)) removeSessionState(k);
+    // 名字注册表是模块级单例——清空防跨用例污染
+    const { useSessionNames } = await import("./useSessionNames");
+    for (const k of Object.keys(useSessionNames().names)) delete useSessionNames().names[k];
+  });
+
+  it("session_title 事件触发 auto_rename_session，采纳后更新名字注册表", async () => {
+    const sid = ref<string | null>("uuid-a");
+    useChatSession(sid);
+    await flush();
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "auto_rename_session" ? true : undefined,
+    );
+
+    emit({ type: "session_title", title: "修复登录 Bug", session_id: "uuid-a" });
+    await flush();
+
+    expect(invokeMock).toHaveBeenCalledWith("auto_rename_session", {
+      id: "uuid-a",
+      name: "修复登录 Bug",
+    });
+    const { useSessionNames } = await import("./useSessionNames");
+    expect(useSessionNames().displayName("uuid-a")).toBe("修复登录 Bug");
+  });
+
+  it("auto_rename_session 拒绝（用户已手动改名）时不更新注册表", async () => {
+    const sid = ref<string | null>("uuid-a");
+    useChatSession(sid);
+    await flush();
+    invokeMock.mockResolvedValue(false);
+
+    emit({ type: "session_title", title: "修复登录 Bug", session_id: "uuid-a" });
+    await flush();
+
+    const { useSessionNames } = await import("./useSessionNames");
+    // 注册表没有该 id → 退化为 id 前 8 位
+    expect(useSessionNames().displayName("uuid-a")).toBe("uuid-a");
+  });
+});

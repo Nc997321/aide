@@ -7,6 +7,7 @@ const defaults: AppSettings = {
   fontSize: 14,
   fontFamily: MONO_FONT_STACK,
   notificationsEnabled: true,
+  autoNaming: true,
   proxy: "",
   shellPath: "",
   workbenchHeight: 0,
@@ -56,6 +57,7 @@ export function useSettings() {
         update({ fontFamily: settings.fontFamily });
       }
       settings.notificationsEnabled = s.notificationsEnabled ?? defaults.notificationsEnabled;
+      settings.autoNaming = s.autoNaming ?? defaults.autoNaming;
       settings.proxy = s.proxy ?? defaults.proxy;
       settings.shellPath = s.shellPath ?? defaults.shellPath;
       settings.workbenchHeight = s.workbenchHeight ?? defaults.workbenchHeight;
@@ -84,6 +86,7 @@ export function useSettings() {
     if (partial.fontSize !== undefined) settings.fontSize = partial.fontSize;
     if (partial.fontFamily !== undefined) settings.fontFamily = partial.fontFamily;
     if (partial.notificationsEnabled !== undefined) settings.notificationsEnabled = partial.notificationsEnabled;
+    if (partial.autoNaming !== undefined) settings.autoNaming = partial.autoNaming;
     if (partial.proxy !== undefined) settings.proxy = partial.proxy;
     if (partial.shellPath !== undefined) settings.shellPath = partial.shellPath;
     if (partial.workbenchHeight !== undefined) settings.workbenchHeight = partial.workbenchHeight;

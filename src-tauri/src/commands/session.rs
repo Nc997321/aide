@@ -160,7 +160,7 @@ pub fn create_session(id: String, name: String) -> Result<Session, String> {
         .unwrap()
         .as_millis() as u64;
 
-    let meta = serde_json::json!({ "id": id, "name": name, "createdAt": timestamp });
+    let meta = serde_json::json!({ "id": id, "name": name, "createdAt": timestamp, "nameSource": "auto" });
     let path = dir.join(format!("{}.json", id));
     fs::write(&path, serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?)
         .map_err(|e| format!("Failed to write session: {}", e))?;
@@ -241,9 +241,49 @@ pub fn rename_session(id: String, name: String) -> Result<(), String> {
     } else {
         serde_json::json!({ "id": id, "name": name })
     };
+    // 手动重命名：标记 nameSource=manual，此后自动生成的标题一律不得覆盖
+    // （auto_rename_session 据此拒写）。
+    let mut meta = meta;
+    meta["nameSource"] = Value::String("manual".to_string());
 
     fs::write(&path, serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?)
         .map_err(|e| format!("Failed to write: {}", e))
+}
+
+/// 自动命名（sidecar 首轮对话后生成的会话标题）：仅当用户没手动命名过时采纳。
+/// `nameSource == "manual"` 直接拒写返回 false；缺该字段的旧数据视为 "auto"。
+/// 判断 + 写入收在这一个函数里，防「自动标题生成的几秒内用户恰好手动改名」
+/// 的竞态——前端拿到 true 才更新 UI。
+/// 磁盘 IO 离开主线程（同 set_session_model，见 CLAUDE.md「同步 command 禁止重 IO」）。
+#[tauri::command]
+pub async fn auto_rename_session(id: String, name: String) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || auto_rename_session_blocking(&id, &name))
+        .await
+        .map_err(|e| format!("auto_rename_session task panicked: {}", e))?
+}
+
+fn auto_rename_session_blocking(id: &str, name: &str) -> Result<bool, String> {
+    let dir = our_sessions_dir();
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create sessions dir: {}", e))?;
+    let path = dir.join(format!("{}.json", id));
+
+    let mut v: Value = if path.exists() {
+        let content = fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read: {}", e))?;
+        serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?
+    } else {
+        serde_json::json!({ "id": id })
+    };
+
+    if v.get("nameSource").and_then(|s| s.as_str()) == Some("manual") {
+        return Ok(false);
+    }
+    v["name"] = Value::String(name.to_string());
+    v["nameSource"] = Value::String("auto".to_string());
+
+    fs::write(&path, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("Failed to write: {}", e))?;
+    Ok(true)
 }
 
 /// 记住会话的模型选择：merge 写进会话元数据 `<id>.json` 的 `model` 字段
@@ -845,6 +885,116 @@ mod tests {
         let v: Value = serde_json::from_str(&content).unwrap();
         assert_eq!(v.get("id").and_then(|x| x.as_str()), Some(id.as_str()));
         assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("测试会话"));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn create_session_marks_name_source_auto() {
+        // 自动命名的判定依据：新建的会话名字是默认名（可覆盖），必须标 nameSource=auto。
+        let id = "test-namesource-create-aa11bb22".to_string();
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        let _ = fs::remove_file(&path);
+
+        create_session(id.clone(), "新会话 12:00:00".to_string()).unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+        let v: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(v.get("nameSource").and_then(|x| x.as_str()), Some("auto"));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rename_session_marks_name_source_manual() {
+        // 用户手动改过的名字必须标 manual——自动标题生成回来也不能覆盖它。
+        let id = "test-namesource-rename-aa11bb22".to_string();
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        let _ = fs::remove_file(&path);
+
+        create_session(id.clone(), "新会话 12:00:00".to_string()).unwrap();
+        rename_session(id.clone(), "我自己起的名".to_string()).unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+        let v: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("我自己起的名"));
+        assert_eq!(v.get("nameSource").and_then(|x| x.as_str()), Some("manual"));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn auto_rename_adopts_when_never_named_manually() {
+        let id = "test-autorename-adopt-aa11bb22".to_string();
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        let _ = fs::remove_file(&path);
+
+        create_session(id.clone(), "新会话 12:00:00".to_string()).unwrap();
+        let adopted = auto_rename_session(id.clone(), "修复登录 Bug".to_string())
+            .await
+            .unwrap();
+        assert!(adopted, "auto 命名的会话应采纳自动标题");
+
+        let content = fs::read_to_string(&path).unwrap();
+        let v: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("修复登录 Bug"));
+        assert_eq!(v.get("nameSource").and_then(|x| x.as_str()), Some("auto"));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn auto_rename_refused_after_manual_rename() {
+        // 竞态防线：标题生成要几秒，期间用户可能已手动改名——manual 一律拒写。
+        let id = "test-autorename-refuse-aa11bb22".to_string();
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        let _ = fs::remove_file(&path);
+
+        create_session(id.clone(), "新会话 12:00:00".to_string()).unwrap();
+        rename_session(id.clone(), "我自己起的名".to_string()).unwrap();
+        let adopted = auto_rename_session(id.clone(), "修复登录 Bug".to_string())
+            .await
+            .unwrap();
+        assert!(!adopted, "manual 命名的会话必须拒绝自动标题");
+
+        let content = fs::read_to_string(&path).unwrap();
+        let v: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("我自己起的名"));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn auto_rename_treats_missing_name_source_as_auto() {
+        // 旧数据没有 nameSource 字段——视为 auto（否则老会话永远拿不到自动标题）。
+        let id = "test-autorename-legacy-aa11bb22".to_string();
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        let _ = fs::remove_file(&path);
+
+        let dir = our_sessions_dir();
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&path, serde_json::json!({ "id": id, "name": "旧会话" }).to_string()).unwrap();
+
+        let adopted = auto_rename_session(id.clone(), "旧会话的新标题".to_string())
+            .await
+            .unwrap();
+        assert!(adopted, "缺 nameSource 的旧数据应视为 auto");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn auto_rename_creates_metadata_when_missing() {
+        // 元数据文件还没建（极端时序：标题先于 create_session 到达）也能落盘。
+        let id = "test-autorename-create-aa11bb22".to_string();
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        let _ = fs::remove_file(&path);
+
+        let adopted = auto_rename_session(id.clone(), "直接生成的标题".to_string())
+            .await
+            .unwrap();
+        assert!(adopted);
+        let content = fs::read_to_string(&path).unwrap();
+        let v: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("直接生成的标题"));
 
         let _ = fs::remove_file(&path);
     }

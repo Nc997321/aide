@@ -129,6 +129,10 @@ export type ChatEvent =
   // 不认识具体配额类型。subscription 为订阅档位（pro/max…），API Key/三方为 null。
   | { type: "rate_limit"; subscription: string | null; windows: RateLimitWindow[] }
   | { type: "tasks_update"; tasks: TaskItem[] }
+  // 会话自动命名：首轮对话结束后 sidecar 用小模型生成的会话标题——
+  // provider-agnostic（任何 provider 都能生成标题）。前端仅在用户未手动
+  // 命名过时采纳（auto_rename_session 原子判断），否则忽略。
+  | { type: "session_title"; title: string }
   // Rust command 应答：仅供运行期 reader 识别 probe_image_input 的结果，不转发为 UI 消息。
   | { type: "image_input_probe_result"; request_id: string; supported: boolean | null }
   // 用户消息二次防线：provider-agnostic，不携带厂商专属字段；message 是可直接展示的人类说明。
@@ -189,6 +193,9 @@ export type SidecarCommand =
       // per-session provider 连接参数覆盖（ANTHROPIC_BASE_URL / API_KEY 等）。
       // Runtime 启动后进程 env 不变，不同会话用不同 provider 靠此字段传递。
       env?: Record<string, string>;
+      // 会话自动命名开关（来自设置面板）：false 时首轮后不生成会话标题。
+      // 省略 = 开启。provider-agnostic：标题生成是通用能力。
+      auto_title?: boolean;
     }
   | { cmd: "permission_response"; session_id: string; id: string; approved: boolean; always?: boolean; answers?: Record<string, string>; nextMode?: string }
   | { cmd: "interrupt"; session_id: string }

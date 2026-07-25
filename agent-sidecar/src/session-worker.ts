@@ -9,6 +9,7 @@ import { BgTaskTail } from "./bgTaskOutputTail.js";
 import { JumpQueueController } from "./jumpQueue.js";
 import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { btwQueryOverrides, forkResumeOptions } from "./btwOptions.js";
+import { generateSessionTitle } from "./titleGenerator.js";
 import { applyModelSwitch } from "./modelSwitch.js";
 import { cliSubagentModelEnvValue, makeSubagentModelHook } from "./subagentModelDefault.js";
 import { makeSkillGuardHook } from "./skillGuard.js";
@@ -152,6 +153,16 @@ export class SessionWorker {
   private shouldForkNextConnect = false;
   private turnActive = false;
   private stopped = false;
+
+  // ---- 会话自动命名（首轮后小模型生成标题，见 titleGenerator.ts） ----
+  /** 设置面板开关（send.auto_title 下发），缺省开启。 */
+  private autoTitle = true;
+  /** 每个 worker 只尝试一次（防止 resume/多轮重复生成）。 */
+  private titleAttempted = false;
+  /** 首轮素材收集：新会话首条 send 置 collectingTitle，result 时触发。 */
+  private collectingTitle = false;
+  private titleUserText = "";
+  private titleAssistantText = "";
 
   // ---- BTW / 轻量模式 ----
   readonly btwMode: boolean;
@@ -530,6 +541,7 @@ export class SessionWorker {
   private async handleSend(cmd: Extract<SidecarCommand, { cmd: "send" }>): Promise<void> {
     if (this.stopped) return;
     this.applySendRuntimeConfig(cmd.env);
+    if (cmd.auto_title !== undefined) this.autoTitle = cmd.auto_title;
 
     if (cmd.images?.length && !(await this.guardImageInput(cmd.images))) {
       this.emit({ type: "image_input_rejected", message: IMAGE_INPUT_UNSUPPORTED_MESSAGE });
@@ -565,6 +577,19 @@ export class SessionWorker {
       // 重开已有会话：resume_session_id → resumeSource，startLoop 据此 resume。
       // 普通新会话不带这字段，resumeSource 保持空 → 全新会话。
       if (cmd.resume_session_id) this.resumeSource = cmd.resume_session_id;
+      // 自动命名素材收集：只有「全新会话」（非 resume / 非 btw / 非供应商切换 fork）
+      // 才在首轮后生成标题——老会话已有名字，fork 会话语义上属于源会话。
+      if (
+        this.autoTitle &&
+        !this.titleAttempted &&
+        !cmd.resume_session_id &&
+        !cmd.btw &&
+        !cmd.provider_switched
+      ) {
+        this.collectingTitle = true;
+        this.titleUserText = cmd.prompt;
+        this.titleAssistantText = "";
+      }
       this.startLoop(cmd.cwd ?? this.cwd);
       this.queue.push({
         type: "user",
@@ -677,6 +702,11 @@ export class SessionWorker {
           for await (const msg of q) {
             if ((msg as any).type === "result") {
               this.turnActive = false;
+              // 首轮结束：触发自动命名（fire-and-forget，不阻塞后续轮次）。
+              if (this.collectingTitle) {
+                this.collectingTitle = false;
+                void this.emitSessionTitle();
+              }
               if (this.promoteJumpQueue()) {
                 this.toolLifecycle.reset();
                 void this.emitContextUsage(q);
@@ -721,6 +751,24 @@ export class SessionWorker {
 
             if (this.jumpQueueCtl.has() && this.toolLifecycle.isIdle()) {
               this.currentQuery?.interrupt().catch(() => {});
+            }
+
+            // 自动命名素材：累积首轮主线程 assistant 文本（上限 2000 字，
+            // 防长回复把标题 prompt 撑大；子代理文本不计）。
+            if (
+              this.collectingTitle &&
+              (msg as any).type === "assistant" &&
+              !(msg as any).parent_tool_use_id &&
+              this.titleAssistantText.length < 2000
+            ) {
+              const blocks = (msg as any).message?.content as any[] | undefined;
+              if (Array.isArray(blocks)) {
+                for (const b of blocks) {
+                  if (b?.type === "text" && typeof b.text === "string") {
+                    this.titleAssistantText += b.text;
+                  }
+                }
+              }
             }
 
             if ((msg as any).type === "system" && (msg as any).subtype === "init") {
@@ -768,6 +816,28 @@ export class SessionWorker {
     } finally {
       this.currentQuery = null;
     }
+  }
+
+  // ================================================================
+  // 会话自动命名
+  // ================================================================
+
+  /** 首轮对话结束后台生成会话标题（fire-and-forget）。独立的小模型 query——
+   *  全新 SDK 会话，不占主对话上下文；标题模型默认 haiku，AIDE_TITLE_MODEL
+   *  可覆盖。任何失败（超时/空响应/provider 不支持）generateSessionTitle
+   *  内部静默返回 null，这里就不发事件，会话保留默认名。 */
+  private async emitSessionTitle(): Promise<void> {
+    if (this.titleAttempted) return;
+    this.titleAttempted = true;
+    const title = await generateSessionTitle(this.queryFn, {
+      userText: this.titleUserText,
+      assistantText: this.titleAssistantText,
+      model: process.env.AIDE_TITLE_MODEL || "haiku",
+      env: { ...process.env, ...this.envOverrides },
+      cwd: this.cwd,
+      executablePath: process.env.AIDE_CLAUDE_EXE,
+    });
+    if (title && !this.stopped) this.emit({ type: "session_title", title });
   }
 
   // ================================================================

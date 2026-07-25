@@ -26,6 +26,7 @@ fn build_send_command(
     jump_queue: Option<bool>,
     workspace_root: Option<String>,
     provider_switched: bool,
+    auto_title: bool,
     env_vars: &HashMap<String, String>,
     cwd: &str,
 ) -> serde_json::Value {
@@ -35,6 +36,7 @@ fn build_send_command(
         "prompt": prompt,
         "cwd": cwd,
         "env": env_vars,
+        "auto_title": auto_title,
     });
     if let Some(imgs) = images {
         if !imgs.is_empty() {
@@ -123,10 +125,13 @@ pub async fn send_message(
     let cwd_str = cwd.to_string_lossy().to_string();
 
     let active = active_provider_or_system_default();
-    let proxy = get_settings().map(|s| s.proxy).unwrap_or_default();
+    let settings = get_settings().ok();
+    let proxy = settings.as_ref().map(|s| s.proxy.clone()).unwrap_or_default();
     let provider_env = build_runtime_env_vars(&active, &proxy);
     let provider_switched = runtime_mgr.connection_drifted(&session_id, &provider_env);
     runtime_mgr.upsert_fingerprint(&session_id, &provider_env);
+    // 自动命名开关下发 sidecar（设置读取失败时默认开启）
+    let auto_title = settings.as_ref().map(|s| s.auto_naming).unwrap_or(true);
 
     let cmd = build_send_command(
         &session_id,
@@ -138,6 +143,7 @@ pub async fn send_message(
         jump_queue,
         workspace_root,
         provider_switched,
+        auto_title,
         &provider_env,
         &cwd_str,
     );
@@ -407,7 +413,7 @@ mod tests {
             "继续聊",
             None,              // images
             Some("resume-xyz".to_string()), // resume_id
-            None, None, None, None, false, &env,
+            None, None, None, None, false, true, &env,
             "/tmp",
         );
         assert_eq!(cmd["cmd"], "send");
@@ -421,7 +427,7 @@ mod tests {
     fn build_send_command_no_resume_field_when_absent() {
         let env: HashMap<String, String> = HashMap::new();
         let cmd = build_send_command(
-            "temp-1", "hi", None, None, None, None, None, None, false, &env, "/tmp",
+            "temp-1", "hi", None, None, None, None, None, None, false, true, &env, "/tmp",
         );
         assert_eq!(cmd["session_id"], "temp-1");
         assert!(cmd.get("resume_session_id").is_none());
@@ -435,16 +441,30 @@ mod tests {
             "main-sid", "hi", None,
             Some("resume-xyz".to_string()),
             None, None, None, None,
-            true, &env, "/tmp",
+            true, true, &env, "/tmp",
         );
         assert_eq!(cmd["session_id"], "main-sid");
         assert_eq!(cmd["resume_session_id"], "resume-xyz");
         assert_eq!(cmd["provider_switched"], true);
     }
 
+    /// 自动命名开关（settings.autoNaming）随 send 命令下发给 sidecar：
+    /// false 时 sidecar 首轮后不生成会话标题。
     #[test]
-    fn probe_image_input_cmd_carries_request_model_and_provider_env() {
-        let cmd = build_probe_image_input_command(
+    fn build_send_command_carries_auto_title_flag() {
+        let env: HashMap<String, String> = HashMap::new();
+        let on = build_send_command(
+            "s", "hi", None, None, None, None, None, None, false, true, &env, "/tmp",
+        );
+        assert_eq!(on["auto_title"], true);
+        let off = build_send_command(
+            "s", "hi", None, None, None, None, None, None, false, false, &env, "/tmp",
+        );
+        assert_eq!(off["auto_title"], false);
+    }
+
+    #[test]
+    fn probe_image_input_cmd_carries_request_model_and_provider_env() {        let cmd = build_probe_image_input_command(
             "probe-1",
             Some("glm-5.2".into()),
             &HashMap::from([("ANTHROPIC_BASE_URL".into(), "https://gateway".into())]),

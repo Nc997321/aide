@@ -99,6 +99,10 @@ pub struct AppSettings {
     pub font_family: String,
     #[serde(default = "default_notifications_enabled")]
     pub notifications_enabled: bool,
+    /// 会话自动命名：首轮对话后由 sidecar 用小模型生成会话标题（默认开）。
+    /// 关闭后 send 命令带 auto_title:false，sidecar 不再发起标题生成。
+    #[serde(default = "default_auto_naming")]
+    pub auto_naming: bool,
     #[serde(default)]
     pub proxy: String,
     #[serde(default)]
@@ -148,6 +152,7 @@ fn default_font_family() -> String {
     "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'PingFang SC', 'Microsoft YaHei', monospace".to_string()
 }
 fn default_notifications_enabled() -> bool { true }
+fn default_auto_naming() -> bool { true }
 fn default_theme() -> String { "warm-dark".to_string() }
 fn default_recent_limit() -> u32 { 10 }
 
@@ -157,6 +162,7 @@ impl Default for AppSettings {
             font_size: default_font_size(),
             font_family: default_font_family(),
             notifications_enabled: default_notifications_enabled(),
+            auto_naming: default_auto_naming(),
             proxy: String::new(),
             shell_path: String::new(),
             workbench_height: 0,
@@ -366,6 +372,19 @@ mod tests {
         let json = r#"{"open_with_extensions": [".py"]}"#;
         let s: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(s.open_with_extensions, vec![".py".to_string()]);
+    }
+
+    /// 自动命名开关随 AppSettings 落盘/读取，camelCase 一致；旧 config 缺字段时
+    /// 回填默认 true（功能默认开启）。
+    #[test]
+    fn auto_naming_round_trip_and_default() {
+        let s: AppSettings = serde_json::from_str(r#"{"fontSize":14}"#).unwrap();
+        assert!(s.auto_naming, "旧 config 缺 autoNaming 字段应回填 true");
+
+        let s2: AppSettings = serde_json::from_str(r#"{"autoNaming":false}"#).unwrap();
+        assert!(!s2.auto_naming);
+        let out = serde_json::to_string(&s2).unwrap();
+        assert!(out.contains("\"autoNaming\":false"), "{out}");
     }
 
     /// 市场源启用字段 round-trip + 缺省回填。

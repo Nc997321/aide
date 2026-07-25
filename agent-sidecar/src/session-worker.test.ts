@@ -367,3 +367,111 @@ describe("SessionWorker — fork source / routing key invariants", () => {
     expect(worker._testForkState().forkSource).toBe("");
   });
 });
+
+/**
+ * 会话自动命名：全新会话的首个 result 到达后，sidecar 用独立的小模型 query
+ * 生成标题并发 session_title 事件。
+ *
+ * 关键不变量：
+ * - 只有「全新会话」（非 resume / 非 btw / 非 provider_switched）才生成
+ * - auto_title:false（设置关闭）不生成
+ * - 每个 worker 只尝试一次
+ * - 主对话 query 与标题 query 都是同一个 queryFn：靠 prompt 类型区分
+ *   （主对话是 async iterable，标题是一次性 string）
+ */
+
+/** 主对话假 query：产出一条 assistant 文本 + result 后结束。 */
+function mainTurnMessages() {
+  return [
+    {
+      type: "assistant",
+      parent_tool_use_id: null,
+      message: {
+        model: "claude-sonnet-4-5",
+        content: [{ type: "text", text: "好的，我先看一下登录页的代码。" }],
+      },
+    },
+    { type: "result", subtype: "success", is_error: false },
+  ];
+}
+
+function makeTitleWorker(titleMessages: unknown[]) {
+  const events: any[] = [];
+  const queryFn = ((args: any) => {
+    const msgs = typeof args.prompt === "string" ? titleMessages : mainTurnMessages();
+    return (async function* () {
+      for (const m of msgs) yield m;
+    })();
+  }) as any;
+  const worker = new SessionWorker("s-title", (e) => events.push(e), {
+    imageCapabilityCache: new ImageInputCapabilityCache(),
+    queryFn,
+  });
+  return { worker, events };
+}
+
+async function waitForEvent(events: any[], type: string, timeoutMs = 3000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const hit = events.find((e) => e.type === type);
+    if (hit) return hit;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  return undefined;
+}
+
+describe("SessionWorker — 会话自动命名", () => {
+  it("全新会话首轮 result 后发出 session_title", async () => {
+    const { worker, events } = makeTitleWorker([
+      { type: "assistant", message: { content: [{ type: "text", text: "修复登录 Bug" }] } },
+      { type: "result", subtype: "success" },
+    ]);
+    worker.handleCommand({
+      cmd: "send", session_id: "s-title", prompt: "帮我修登录页 bug", cwd: "/tmp", env: {}, auto_title: true,
+    } as any);
+    const evt = await waitForEvent(events, "session_title");
+    expect(evt).toBeDefined();
+    expect(evt.title).toBe("修复登录 Bug");
+    worker.stop();
+  });
+
+  it("resume 的老会话不生成标题", async () => {
+    const { worker, events } = makeTitleWorker([
+      { type: "assistant", message: { content: [{ type: "text", text: "不该出现" }] } },
+      { type: "result", subtype: "success" },
+    ]);
+    worker.handleCommand({
+      cmd: "send", session_id: "s-title", prompt: "继续", cwd: "/tmp", env: {},
+      resume_session_id: "old-sid", auto_title: true,
+    } as any);
+    // 等主轮跑完（result 已被消费）再断言没有标题事件
+    await new Promise((r) => setTimeout(r, 300));
+    expect(events.some((e) => e.type === "session_title")).toBe(false);
+    worker.stop();
+  });
+
+  it("auto_title:false（设置关闭）不生成标题", async () => {
+    const { worker, events } = makeTitleWorker([
+      { type: "assistant", message: { content: [{ type: "text", text: "不该出现" }] } },
+      { type: "result", subtype: "success" },
+    ]);
+    worker.handleCommand({
+      cmd: "send", session_id: "s-title", prompt: "帮我修登录页 bug", cwd: "/tmp", env: {}, auto_title: false,
+    } as any);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(events.some((e) => e.type === "session_title")).toBe(false);
+    worker.stop();
+  });
+
+  it("标题模型回复为空时静默放弃（不发事件）", async () => {
+    const { worker, events } = makeTitleWorker([
+      { type: "result", subtype: "success" }, // 没有 assistant 文本
+    ]);
+    worker.handleCommand({
+      cmd: "send", session_id: "s-title", prompt: "帮我修登录页 bug", cwd: "/tmp", env: {}, auto_title: true,
+    } as any);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(events.some((e) => e.type === "session_title")).toBe(false);
+    worker.stop();
+  });
+});

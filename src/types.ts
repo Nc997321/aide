@@ -84,6 +84,9 @@ export interface AppSettings {
   fontSize: number;
   fontFamily: string;
   notificationsEnabled: boolean;
+  /** 会话自动命名：首轮对话后由 sidecar 用小模型生成会话标题（默认开）。
+   *  用户手动改过的名字（nameSource=manual）不会被覆盖。 */
+  autoNaming: boolean;
   proxy: string;
   shellPath: string;
   workbenchHeight: number;

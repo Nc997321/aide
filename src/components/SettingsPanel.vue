@@ -47,6 +47,7 @@ const { settings, update, setCodegraphEmbedder, setJdkRegistry } = useSettings()
 const fontSizeLocal = ref(settings.fontSize);
 const fontFamilyLocal = ref(settings.fontFamily);
 const notificationsEnabledLocal = ref(settings.notificationsEnabled);
+const autoNamingLocal = ref(settings.autoNaming);
 const proxyLocal = ref(settings.proxy);
 const shellPathLocal = ref(settings.shellPath);
 const recentLimitLocal = ref(settings.recentLimit);
@@ -54,6 +55,7 @@ const recentLimitLocal = ref(settings.recentLimit);
 watch(fontSizeLocal, (v) => { settings.fontSize = v; update({ fontSize: v }); });
 watch(fontFamilyLocal, (v) => { settings.fontFamily = v; update({ fontFamily: v }); });
 watch(notificationsEnabledLocal, (v) => { settings.notificationsEnabled = v; update({ notificationsEnabled: v }); });
+watch(autoNamingLocal, (v) => { settings.autoNaming = v; update({ autoNaming: v }); });
 watch(proxyLocal, (v) => { settings.proxy = v; update({ proxy: v }); });
 watch(shellPathLocal, (v) => { settings.shellPath = v; update({ shellPath: v }); });
 watch(recentLimitLocal, (v) => {
@@ -399,6 +401,17 @@ function onOverlayClick(e: MouseEvent) {
                   <span class="field-hint">Claude 回复完成后发送通知</span>
                   <label class="toggle">
                     <input v-model="notificationsEnabledLocal" type="checkbox" />
+                    <span class="toggle-track"></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">自动命名会话</label>
+                <div class="toggle-row">
+                  <span class="field-hint">首轮对话后根据内容自动生成会话标题（用户手动改过的名字不会被覆盖）</span>
+                  <label class="toggle">
+                    <input v-model="autoNamingLocal" type="checkbox" />
                     <span class="toggle-track"></span>
                   </label>
                 </div>

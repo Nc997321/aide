@@ -20,6 +20,7 @@ import type {
   BgTask,
 } from "../types/chat";
 import { useSessionState } from "./useSessionState";
+import { useSessionNames } from "./useSessionNames";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
 import { useSessionProviders } from "./useSessionProviders";
 import { useProviders } from "./useProviders";
@@ -545,6 +546,18 @@ function handleChatEvent(e: Record<string, unknown>) {
     }
     case "tasks_update": {
       store.tasks = e["tasks"] as TaskItem[];
+      break;
+    }
+    case "session_title": {
+      // 会话自动命名：sidecar 首轮后生成的标题。是否采纳由 Rust 原子判定
+      // （nameSource==manual 拒写）——返回 true 才更新名字注册表，侧栏卡片
+      // 显示走注册表（SidebarLeft 模板 names[s.id] || s.name），一处更新全局生效。
+      const title = e["title"] as string;
+      if (title) {
+        void invoke<boolean>("auto_rename_session", { id: sid, name: title }).then((adopted) => {
+          if (adopted) useSessionNames().setName(sid, title);
+        }).catch(() => { /* 自动命名失败静默——保留默认名 */ });
+      }
       break;
     }
     case "bg_task_started": {
