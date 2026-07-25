@@ -5,6 +5,7 @@ pub mod embed;
 pub mod parser;
 pub mod query;
 pub mod symbols;
+pub mod edges;
 pub mod meta;
 pub mod guard;
 
