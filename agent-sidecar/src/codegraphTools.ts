@@ -10,6 +10,19 @@ import {
 /** allowedTools 前缀规则：匹配该 server 全部工具，canUseTool 直接跳过（只读工具不弹窗）。 */
 export const CODEGRAPH_ALLOW_RULE = "mcp__aide-codegraph";
 
+/**
+ * MCP instructions 块（initialize 时呈现给模型）。2026-07-26 headless 冒烟实锤：
+ * 没有它时模型对工具视而不见——Claude Code 系统提示对内置 Grep 的偏好极强，
+ * 连 prompt 里直接点名 "Use the find_symbol tool" 都会被无视、照样 Grep；
+ * 加上这段 instructions 后同一 prompt 立刻改用我们的工具。这不是优化是必需品，
+ * 删除或弱化前必须先跑 agent-sidecar/smoke-mcp.ts 验证行为不退化。
+ */
+export const CODEGRAPH_INSTRUCTIONS = `This environment has a PRE-BUILT code index for the current workspace, exposed as the aide-codegraph MCP tools (find_symbol / semantic_search / call_graph). Rules:
+1. When you need to find where a symbol is defined, you MUST call mcp__aide-codegraph__find_symbol FIRST — do NOT use Grep for definition lookup.
+2. When you need callers or callees of a function, you MUST call mcp__aide-codegraph__call_graph FIRST.
+3. When you know what the code does but not its name, use mcp__aide-codegraph__semantic_search.
+Grep is for text/pattern search, NOT for locating symbols. These tools are exact, instant, and far cheaper than a grep-then-read fan-out.`;
+
 const SNIPPET_HARD_CAP = 300;
 
 // ---------------------------------------------------------------------------
@@ -117,6 +130,7 @@ export function codegraphMcpRegistration(
   const server = createSdkMcpServer({
     name: "aide-codegraph",
     version: "1.0.0",
+    instructions: CODEGRAPH_INSTRUCTIONS,
     tools: [
       tool(
         "find_symbol",

@@ -95,4 +95,19 @@ describe("formatToolResponse", () => {
     });
     expect(json).toMatchSnapshot();
   });
+
+  it("server carries MCP instructions steering the model to the tools (2026-07-26 冒烟实锤的必需品)", () => {
+    const spec = codegraphMcpRegistration("/proj", () => {}, {} as NodeJS.ProcessEnv);
+    const seen = new WeakSet();
+    const json = JSON.stringify(spec, (_key, value) => {
+      if (typeof value === "object" && value !== null) {
+        if (seen.has(value)) return "[Circular]";
+        seen.add(value);
+      }
+      return value;
+    });
+    // instructions 缺失时模型会无视工具（连 prompt 直接点名都不用），此处防回归。
+    expect(json).toContain("MUST call mcp__aide-codegraph__find_symbol FIRST");
+    expect(json).toContain("mcp__aide-codegraph__call_graph FIRST");
+  });
 });
