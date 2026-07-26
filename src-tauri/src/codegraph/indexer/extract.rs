@@ -493,17 +493,19 @@ fn symbol_snippet(name: &str, kind_label: &str, node: &Node, source: &str) -> St
 /// Extract symbols from a Vue SFC by isolating the `<script>` block and parsing
 /// it with the TypeScript grammar. Returns empty if no `<script>` block or
 /// parsing fails.
+///
+/// Also synthesizes a component symbol from the SFC **filename**
+/// (PermissionDialog.vue → `PermissionDialog`): `<script setup>` components
+/// declare no named symbol, so without this the component name — the primary
+/// handle a model uses to locate a Vue component — is unfindable in the index
+/// (2026-07-26 real-app A/B: find_symbol("PermissionDialog") missed despite
+/// the file existing, and zero `*Dialog` symbols existed index-wide).
 fn extract_vue_sfc(
     file_path: &Path,
     source: &str,
     parser_manager: &ParserManager,
     project_root: &Path,
 ) -> (Vec<IndexedPoint>, Vec<CallEdge>) {
-    let script_content = match extract_script_block(source) {
-        Some(s) => s,
-        None => return (vec![], vec![]),
-    };
-
     let relative_path = file_path
         .strip_prefix(project_root)
         .unwrap_or(file_path)
@@ -512,6 +514,32 @@ fn extract_vue_sfc(
 
     let mut symbols: Vec<IndexedPoint> = Vec::new();
     let mut call_edges: Vec<CallEdge> = Vec::new();
+
+    // Filename-derived component symbol (even when the SFC has no script block).
+    let stem = file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    if !stem.is_empty() {
+        // Snippet carries a slice of the template so the semantic layer gets
+        // real content to embed, not just a bare name.
+        let template_start = source.find("<template>").unwrap_or(0);
+        let snippet_body: String = source[template_start..].chars().take(300).collect();
+        symbols.push(IndexedPoint {
+            symbol: SymbolDef {
+                name: stem.to_string(),
+                kind: SymbolKind::Class,
+                file: relative_path.clone(),
+                line: 1,
+                column: 1,
+                parent: None,
+            },
+            source: Confidence::Structure,
+            code_snippet: format!("vue component {}: {}", stem, snippet_body),
+        });
+    }
+
+    let script_content = match extract_script_block(source) {
+        Some(s) => s,
+        None => return (symbols, call_edges),
+    };
 
     // Parse the script content with the TypeScript grammar.
     if let Some(ts_lang) = parser_manager.get_language("ts") {
@@ -647,6 +675,32 @@ mod tests {
     }
 
     #[test]
+    fn vue_sfc_yields_component_symbol_from_filename() {
+        let pm = ParserManager::new();
+        let src = "<template><div>{{ msg }}</div></template>\n<script setup lang=\"ts\">\nfunction handleClick() {}\n</script>\n";
+        let (points, _edges) =
+            extract_symbols(Path::new("src/components/PermissionDialog.vue"), src, &pm, Path::new("."));
+        let comp = points
+            .iter()
+            .find(|p| p.symbol.name == "PermissionDialog")
+            .expect("component symbol must be synthesized from filename");
+        assert!(matches!(comp.symbol.kind, SymbolKind::Class));
+        assert_eq!(comp.symbol.file, "src/components/PermissionDialog.vue");
+        assert!(comp.code_snippet.contains("<template>"), "snippet carries template for embedding");
+        // script 内符号不受影响
+        assert!(points.iter().any(|p| p.symbol.name == "handleClick"));
+    }
+
+    #[test]
+    fn vue_sfc_without_script_still_yields_component_symbol() {
+        let pm = ParserManager::new();
+        let src = "<template><div/></template>\n";
+        let (points, _edges) =
+            extract_symbols(Path::new("src/components/BareCard.vue"), src, &pm, Path::new("."));
+        assert!(points.iter().any(|p| p.symbol.name == "BareCard"));
+    }
+
+    #[test]
     fn python_calls_produce_edges() {
         let src = "def foo():\n    bar()\n    obj.baz()";
         let pm = ParserManager::new();
@@ -727,9 +781,10 @@ mod tests {
     }
 
     #[test]
-    fn vue_without_script_returns_empty() {
+    fn vue_without_script_yields_only_component_symbol() {
+        // 无 script 块：只有文件名合成的组件符号，无脚本符号
         let src = "<template><div/></template>\n<style></style>";
         let got = names(src, "Empty.vue");
-        assert!(got.is_empty());
+        assert_eq!(got, vec!["Empty".to_string()]);
     }
 }
