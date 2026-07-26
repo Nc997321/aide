@@ -14,11 +14,20 @@ pub const SNIPPET_CAP: usize = 300;
 
 /// Normalize an agent-supplied symbol name to the leaf segment.
 /// Models naturally pass qualified forms ("PermissionManager.makeCallback",
-/// "this.save", "UserService::save"); the index keys bare names. 2026-07-26
-/// real-app A/B: 2 of the first 3 tool calls missed purely on this form
-/// mismatch, teaching the model the index was incomplete.
+/// "this.save", "UserService::save") and sometimes call forms ("save()",
+/// "obj->save"); the index keys bare names. 2026-07-26 real-app A/B: 2 of the
+/// first 3 tool calls missed purely on this form mismatch, teaching the model
+/// the index was incomplete. Strictly better than no normalization: the index
+/// is name-keyed anyway, so a full-form query can only miss, while the leaf
+/// yields the candidate set (ambiguity is annotated via `candidates`).
 fn leaf_name(name: &str) -> &str {
+    // 先剥调用形式的尾巴："save()" → "save"
+    let name = name.trim().trim_end_matches("()");
+    // 再取叶段："A.b" / "A::b" / "a->b" → "b"
     name.rsplit(['.', ':'])
+        .next()
+        .unwrap_or(name)
+        .rsplit("->")
         .next()
         .unwrap_or(name)
         .trim()
@@ -321,6 +330,10 @@ mod tests {
         assert_eq!(leaf_name("UserService::save"), "save");
         assert_eq!(leaf_name("this.save"), "save");
         assert_eq!(leaf_name("save"), "save");
+        // 调用形式与箭头分隔也要剥
+        assert_eq!(leaf_name("save()"), "save");
+        assert_eq!(leaf_name("this->save"), "save");
+        assert_eq!(leaf_name("SomeClass.save()"), "save");
         // 端到端：带类名前缀的查询也要命中
         let (st, dir) = state_with_index("projA");
         let r = execute_agent_query(&st, "find_symbol", &json!({"name": "SomeClass.save"}), "projA");
