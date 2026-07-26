@@ -65,6 +65,15 @@ export function isBenignAbortResult(msg: any): boolean {
   return meaningfulResultErrors(msg).length === 0;
 }
 
+/** 压缩失败说明直接来自 provider，进入 UI 前压成一行并限长，避免诊断堆栈或
+ * 异常长文本把瞬态状态条撑成大块内容。 */
+function compactErrorText(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.replace(/\s+/g, " ").trim();
+  if (!text) return undefined;
+  return text.slice(0, 320);
+}
+
 /**
  * 把一条"错误 result"翻译成给用户看的中文说明。
  *
@@ -371,6 +380,31 @@ export function mapSdkMessage(
       emit({ type: "slash_commands_available", commands: msg.slash_commands });
     }
     return;
+  }
+
+  // SDK 把上下文压缩作为 system/status 生命周期报告。这里把 Claude 专属字段翻成
+  // provider-agnostic 的 context_compaction；SDK 没有真实可测的完成比例，故不伪造
+  // 百分比。task_progress 是任务/子代理心跳，和压缩无关，保持下方原有的忽略逻辑。
+  if (msg.type === "system" && msg.subtype === "status") {
+    // SDKStatusMessage 不是互斥联合：终态可能和旧的 "compacting" 状态同帧带到。
+    // 因而必须先判终态，避免把失败/完成错误地留在进行中。
+    if (msg.compact_result === "failed" || msg.compact_error) {
+      const error = compactErrorText(msg.compact_error);
+      emit({
+        type: "context_compaction",
+        stage: "failed",
+        ...(error ? { error } : {}),
+      });
+      return;
+    }
+    if (msg.compact_result === "success") {
+      emit({ type: "context_compaction", stage: "completed" });
+      return;
+    }
+    if (msg.status === "compacting") {
+      emit({ type: "context_compaction", stage: "compacting" });
+      return;
+    }
   }
 
   // 本地 slash 命令（/clear /compact /usage 等）：SDK 自己拦截、绕过模型，只落一条

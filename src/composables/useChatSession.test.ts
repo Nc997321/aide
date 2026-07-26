@@ -111,6 +111,9 @@ describe("useChatSession per-session store", () => {
     const sendCall = invokeMock.mock.calls.find((c) => c[0] === "send_message");
     expect(sendCall?.[1]).toMatchObject({ sessionId: tempId, resumeId: null });
 
+    // 真实 id 坐实前到达的压缩状态也必须随同一份 store 迁移，不能留在临时 key。
+    emit({ type: "context_compaction", stage: "compacting", session_id: tempId as string });
+
     emit({ type: "session_init", sdk_session_id: "sdk-uuid-1", session_id: tempId as string });
     await flush();
 
@@ -129,6 +132,7 @@ describe("useChatSession per-session store", () => {
     emit({ type: "text_delta", delta: "after", session_id: tempId as string });
     sid.value = "sdk-uuid-1";
     await flush();
+    expect(chat.contextCompaction.value).toMatchObject({ stage: "compacting" });
     const blocks = chat.messages.value.flatMap((m) => m.blocks);
     expect(blocks.some((b) => b.type === "text" && (b as { text: string }).text === "after")).toBe(true);
   });
@@ -456,6 +460,107 @@ describe("useChatSession per-session store", () => {
     });
     await flush();
     expect(chat.contextUsage.value).toEqual({ totalTokens: 52000, maxTokens: 100000, percentage: 52 });
+  });
+
+  it("context_compaction 只维护会话瞬态状态，失败会保留到下一轮", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    expect(chat.contextCompaction.value).toBeNull();
+    await chat.sendMessage("压缩上下文");
+
+    emit({ type: "context_compaction", stage: "compacting", session_id: "uuid-a" });
+    await flush();
+    const startedAt = chat.contextCompaction.value?.startedAt;
+    expect(chat.contextCompaction.value).toMatchObject({ stage: "compacting" });
+    expect(typeof startedAt).toBe("number");
+    // 状态条不作为 assistant 消息写进消息流。
+    expect(chat.messages.value).toHaveLength(1);
+    expect(chat.messages.value[0]?.role).toBe("user");
+
+    // 重复的进行中事件不应重置已用时长。
+    emit({ type: "context_compaction", stage: "compacting", session_id: "uuid-a" });
+    await flush();
+    expect(chat.contextCompaction.value?.startedAt).toBe(startedAt);
+
+    emit({
+      type: "context_compaction",
+      stage: "failed",
+      error: "压缩服务暂时不可用",
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.contextCompaction.value).toMatchObject({
+      stage: "failed",
+      error: "压缩服务暂时不可用",
+    });
+
+    // 失败不能被紧随其后的 message_stop 一闪而过；下一次真正发起的新轮次才撤掉它。
+    emit({ type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null, session_id: "uuid-a" });
+    await flush();
+    expect(chat.contextCompaction.value).toMatchObject({ stage: "failed" });
+
+    await chat.sendMessage("继续");
+    expect(chat.contextCompaction.value).toBeNull();
+  });
+
+  it("context_compaction 的成功、错误、会话死亡和中断都会撤掉状态条", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+
+    await chat.sendMessage("q");
+    emit({ type: "context_compaction", stage: "compacting", session_id: "uuid-a" });
+    emit({ type: "context_compaction", stage: "completed", session_id: "uuid-a" });
+    await flush();
+    expect(chat.contextCompaction.value).toBeNull();
+
+    emit({ type: "context_compaction", stage: "compacting", session_id: "uuid-a" });
+    emit({ type: "error", message: "boom", fatal: false, session_id: "uuid-a" });
+    await flush();
+    expect(chat.contextCompaction.value).toBeNull();
+
+    await chat.sendMessage("q2");
+    emit({ type: "context_compaction", stage: "compacting", session_id: "uuid-a" });
+    emit({ type: "session_dead", reason: "exit", session_id: "uuid-a" });
+    await flush();
+    expect(chat.contextCompaction.value).toBeNull();
+
+    await chat.sendMessage("q3");
+    emit({ type: "context_compaction", stage: "compacting", session_id: "uuid-a" });
+    await flush();
+    await chat.interrupt();
+    expect(chat.contextCompaction.value).toBeNull();
+  });
+
+  it("忽略闲置会话迟到的 context_compaction 事件", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+
+    emit({ type: "context_compaction", stage: "compacting", session_id: "uuid-a" });
+    await flush();
+    expect(chat.contextCompaction.value).toBeNull();
+
+    await chat.sendMessage("q");
+    emit({ type: "context_compaction", stage: "compacting", session_id: "uuid-a" });
+    emit({ type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null, session_id: "uuid-a" });
+    emit({ type: "context_compaction", stage: "failed", error: "迟到事件", session_id: "uuid-a" });
+    await flush();
+    expect(chat.contextCompaction.value).toBeNull();
+  });
+
+  it("忙碌时排队的新消息不会提前清掉正在压缩的状态条", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+
+    await chat.sendMessage("q");
+    emit({ type: "context_compaction", stage: "compacting", session_id: "uuid-a" });
+    await flush();
+    await chat.sendMessage("排队的下一条");
+
+    expect(chat.contextCompaction.value).toMatchObject({ stage: "compacting" });
   });
 
   it("message_stop 带 usage 时挂到最后一条 assistant 消息", async () => {

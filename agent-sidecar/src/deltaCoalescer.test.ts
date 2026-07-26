@@ -43,6 +43,19 @@ describe("DeltaCoalescer", () => {
     ]);
   });
 
+  it("flushes buffered text before emitting a context compaction status", () => {
+    const { events, sink } = collect();
+    const c = new DeltaCoalescer(sink, 40);
+
+    c.push({ type: "text_delta", delta: "压缩前的最后一句" });
+    c.push({ type: "context_compaction", stage: "compacting" });
+
+    expect(events).toEqual([
+      { type: "text_delta", delta: "压缩前的最后一句" },
+      { type: "context_compaction", stage: "compacting" },
+    ]);
+  });
+
   // 不同 key（主线程文本 vs 子代理文本）不互并，但输出顺序 = 到达顺序。
   it("keeps distinct keys separate while preserving arrival order", () => {
     const { events, sink } = collect();

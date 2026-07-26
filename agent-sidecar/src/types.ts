@@ -124,6 +124,15 @@ export type ChatEvent =
   // 仅当 SDK 提供该字段时才发（见 mapper.ts 的 Array.isArray 判断）。
   | { type: "slash_commands_available"; commands: string[] }
   | { type: "context_usage"; total_tokens: number; max_tokens: number; percentage: number }
+  // 上下文压缩生命周期——provider-agnostic：只表达任何 agent 都可能提供的阶段，
+  // 不把 Claude 的 system/status / compact_result 细节泄露到核心协议。没有真实可测
+  // 百分比时绝不带进度数值；detail/error 仅在 provider 能给出人类可读信息时提供。
+  | {
+      type: "context_compaction";
+      stage: "compacting" | "completed" | "failed";
+      detail?: string;
+      error?: string;
+    }
   // 订阅额度/速率可见化——provider-agnostic：一次带回全部并行窗口（5 小时 / 7 天 /
   // 各模型周窗等）。utilization 统一 0-100，label 由各 sidecar 翻成人话，核心协议
   // 不认识具体配额类型。subscription 为订阅档位（pro/max…），API Key/三方为 null。

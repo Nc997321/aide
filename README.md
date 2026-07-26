@@ -23,6 +23,7 @@ Aide does **not** bundle or redistribute the Claude Code CLI. It is a UI layer o
 ## Features
 
 - **Chat with Claude** — `claude -p --resume <sessionId>` under the hood, rendered as styled chat bubbles
+- **Context compaction feedback** — shows a live, theme-aware status while the agent is compressing context, without inventing a percentage
 - **Session management** — reads directly from `~/.claude/projects/` and `~/.claude/sessions/`, so your conversations stay in sync with the CLI
 - **File tree** — lazy-loaded directory browser, filtered (skips `.`, `node_modules`, `target`, `dist`)
 - **Workspace scanning** — lists all projects you've used Claude with

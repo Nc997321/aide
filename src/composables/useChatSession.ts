@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useDiagnosticsDashboard } from "@/composables/useDiagnosticsDashboard";
 import type {
   ChatMessage,
+  ContextCompactionState,
   ContextUsage,
   ModelOption,
   ModelSwitchResult,
@@ -74,6 +75,8 @@ interface SessionStore {
   modelSwitchResult: ModelSwitchResult | null;
   /** 上下文窗口用量——每轮结束后由 sidecar 刷新；null 表示还没收到过 */
   contextUsage: ContextUsage | null;
+  /** 上下文压缩的短生命周期状态：只驱动活动状态条，不写入消息/历史。 */
+  contextCompaction: ContextCompactionState | null;
   /** 当前任务清单——sidecar 每次变化后整体覆盖，不做增量合并 */
   tasks: TaskItem[];
   /** 后台 shell 任务列表（bg_task_* 事件累积；按 id upsert，output 增量追加）。
@@ -229,6 +232,7 @@ function getStore(sid: string): SessionStore {
       currentModel: "",
       modelSwitchResult: null,
       contextUsage: null,
+      contextCompaction: null,
       tasks: [],
       bgTasks: [],
       bgDockOpen: false,
@@ -292,6 +296,7 @@ function finishStreaming(store: SessionStore) {
 function resetRuntimeState(store: SessionStore, clearTasks = true) {
   finishStreaming(store);
   store.isBusy = false;
+  store.contextCompaction = null;
   store.pendingPermissions = [];
   store.pendingJumps.length = 0;
   if (clearTasks) store.tasks = [];
@@ -359,6 +364,9 @@ function dispatchSend(
   jumpQueue?: boolean,
 ) {
   const store = getStore(sid);
+  // 新轮次不能继承前一轮的压缩提示；但忙碌时这里仅登记插队消息，当前轮
+  // 仍在压缩，不能提前撤掉它的状态条。真正接入下一轮时由 jump_promoted 清理。
+  if (!jumpQueue) store.contextCompaction = null;
   store.isBusy = true;
   // 记下本次派发的用户提问，供变更面板给轮次做标题（图片消息无文本时兜底占位）。
   // 动作胶囊用 label 做标题更可读，底层 prompt 是 /compact 这种斜杠命令。
@@ -544,6 +552,42 @@ function handleChatEvent(e: Record<string, unknown>) {
       };
       break;
     }
+    case "context_compaction": {
+      // 压缩生命周期只属于正在运行的轮次。终态之后偶发到达的旧事件不能把
+      // 状态条重新挂回一个闲置会话。
+      if (!store.isBusy) break;
+      const stage = e["stage"];
+      if (stage === "completed") {
+        // 成功后立即交还给普通思考状态；实际压缩后的窗口变化仍走 context_usage。
+        if (store.contextCompaction) store.contextCompaction = null;
+        break;
+      }
+      if (stage !== "compacting" && stage !== "failed") break;
+
+      const detail = typeof e["detail"] === "string" ? e["detail"] : undefined;
+      const error = typeof e["error"] === "string" ? e["error"] : undefined;
+      const previous = store.contextCompaction;
+      const startedAt =
+        stage === "failed" && previous
+          ? previous.startedAt
+          : stage === "compacting" && previous?.stage === "compacting"
+            ? previous.startedAt
+            : Date.now();
+      const next: ContextCompactionState = {
+        stage,
+        startedAt,
+        ...(detail ? { detail } : {}),
+        ...(error ? { error } : {}),
+      };
+      // Sidecar 若重复报告同一阶段，保留原对象以免无意义地触发状态条重渲染。
+      if (
+        previous?.stage === next.stage
+        && previous.detail === next.detail
+        && previous.error === next.error
+      ) break;
+      store.contextCompaction = next;
+      break;
+    }
     case "tasks_update": {
       store.tasks = e["tasks"] as TaskItem[];
       break;
@@ -723,6 +767,9 @@ function handleChatEvent(e: Record<string, unknown>) {
         diag.accumulateUsage(usage);
       }
       finishStreaming(store);
+      // 失败状态留在会话尾部，直到用户真正发起下一轮，避免被紧随其后的
+      // message_stop 一闪而过；进行中/成功状态仍在本轮结束时撤掉。
+      if (store.contextCompaction?.stage !== "failed") store.contextCompaction = null;
       store.isBusy = false;
       setSessionState(sid, "waiting");
       break;
@@ -735,7 +782,9 @@ function handleChatEvent(e: Record<string, unknown>) {
     case "jump_promoted": {
       // 待插队消息已全部接入后续轮次——清提示条。新轮次由 sidecar 直接发起、不经过
       // dispatchSend，这里把忙碌态补回来（否则按钮区会闪"发送"且没有停止按钮）。
+      // 上一轮若留下失败说明，也不能覆盖已经开始的下一轮。
       store.pendingJumps.length = 0;
+      store.contextCompaction = null;
       store.isBusy = true;
       setSessionState(sid, "running");
       armStalled(sid);
@@ -991,6 +1040,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       await invoke("interrupt_session", { sessionId: sid });
     } finally {
       store.isBusy = false;
+      store.contextCompaction = null;
       store.pendingPermissions = [];
       store.pendingJumps.length = 0; // 用户主动打断：待插队消息一并作废（sidecar 同）
       finishStreaming(store);
@@ -1111,6 +1161,8 @@ export function useChatSession(sessionId: Ref<string | null>) {
     /** 模型切换坐实回执（含 seq），面板据此弹成功/失败提示；null 表示没切过。 */
     modelSwitchResult: computed(() => current.value?.modelSwitchResult ?? null),
     contextUsage: computed(() => current.value?.contextUsage ?? null),
+    /** 只驱动会话尾部的压缩状态条，不属于消息历史。 */
+    contextCompaction: computed(() => current.value?.contextCompaction ?? null),
     tasks: computed(() => current.value?.tasks ?? []),
     permissionModes: computed(() => {
       const own = current.value?.permissionModes;

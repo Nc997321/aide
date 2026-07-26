@@ -118,6 +118,16 @@ export interface ContextUsage {
   percentage: number;
 }
 
+/** 上下文压缩的瞬态展示状态。它不属于 ChatMessage，也不进历史记录；成功事件会
+ * 立即清空它，故前端只需渲染真正仍在进行或需要提示的失败状态。 */
+export interface ContextCompactionState {
+  stage: "compacting" | "failed";
+  /** 首次收到压缩生命周期信号的本地时间，用于展示真实已用时长。 */
+  startedAt: number;
+  detail?: string;
+  error?: string;
+}
+
 /** 单个额度窗口——跟 agent-sidecar/src/types.ts 的 RateLimitWindow 镜像。
  *  utilization 为已用百分比 0-100，resetsAt 是 unix 毫秒。 */
 export interface RateLimitWindow {

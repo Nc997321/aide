@@ -3,12 +3,13 @@ import { ref, watch, nextTick, computed, onMounted, onUnmounted } from "vue";
 import type { ComputedRef } from "vue";
 import ChatMessage from "./ChatMessage.vue";
 import AppLogo from "./AppLogo.vue";
+import ContextCompactionStatus from "./ContextCompactionStatus.vue";
 import TaskListPanel from "./TaskListPanel.vue";
 import ThemedSelect from "./ThemedSelect.vue";
 import ChatSendButton from "./ChatSendButton.vue";
 import PermissionDialog from "./PermissionDialog.vue";
 import BgTaskDock from "./BgTaskDock.vue";
-import type { ChatMessage as ChatMessageType, ContextUsage, ModelOption, PermissionModeOption, PermissionRequest, RateLimitInfo, TaskItem, TextBlock, BgTask } from "@/types/chat";
+import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, ContextUsage, ModelOption, PermissionModeOption, PermissionRequest, RateLimitInfo, TaskItem, TextBlock } from "@/types/chat";
 import type { SkillMeta } from "@/types";
 import { api } from "@/api";
 import { resolvePastePayload } from "@/utils/paste";
@@ -45,6 +46,8 @@ const props = defineProps<{
   /** 模型切换坐实回执（sidecar 运行时路径发出）——据此弹成功/失败瞬时提示 */
   modelSwitchResult?: ModelSwitchResult | null;
   contextUsage?: ContextUsage | null;
+  /** 当前会话的短生命周期压缩状态；不属于消息历史。 */
+  contextCompaction?: ContextCompactionState | null;
   /** 账号级订阅额度/速率；null 时不显示 */
   rateLimit?: RateLimitInfo | null;
   tasks?: TaskItem[];
@@ -390,23 +393,49 @@ function handlePermissionModeChange(value: string) {
 const isBusyVal = computed(() =>
   typeof props.isBusy === "boolean" ? props.isBusy : props.isBusy.value
 );
+const contextCompactionVal = computed(() => props.contextCompaction ?? null);
 const messagesVal = computed(() =>
   Array.isArray(props.messages) ? props.messages : props.messages.value
 );
 
-// 思考状态行计时器：isBusyVal 为 true 时每秒递增，离开/卸载时清理。
-const thinkingElapsed = ref(0);
-let thinkingTimer: ReturnType<typeof setInterval> | null = null;
-watch(isBusyVal, (busy) => {
-  if (busy) {
-    thinkingElapsed.value = 0;
-    thinkingTimer = setInterval(() => thinkingElapsed.value++, 1000);
-  } else if (thinkingTimer) {
-    clearInterval(thinkingTimer);
-    thinkingTimer = null;
+// 通用思考行与压缩状态条共用一个秒级计时器：压缩时以 SDK 生命周期到达的
+// startedAt 为准，普通生成时才从 busy 开始计时。不会额外引入高频更新。
+const activityElapsed = ref(0);
+const busyStartedAt = ref<number | null>(null);
+let activityTimer: ReturnType<typeof setInterval> | null = null;
+
+function activeActivityStartedAt(): number | null {
+  const compaction = contextCompactionVal.value;
+  // 失败条会留在界面中供用户阅读，但它已不是运行态，不能继续每秒刷新。
+  if (compaction) return compaction.stage === "compacting" ? compaction.startedAt : null;
+  return busyStartedAt.value;
+}
+
+function refreshActivityElapsed() {
+  const startedAt = activeActivityStartedAt();
+  activityElapsed.value = startedAt === null ? 0 : Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+}
+
+function syncActivityTimer() {
+  const startedAt = activeActivityStartedAt();
+  if (startedAt === null) {
+    activityElapsed.value = 0;
+    if (activityTimer) {
+      clearInterval(activityTimer);
+      activityTimer = null;
+    }
+    return;
   }
+  refreshActivityElapsed();
+  if (!activityTimer) activityTimer = setInterval(refreshActivityElapsed, 1000);
+}
+
+watch(isBusyVal, (busy) => {
+  busyStartedAt.value = busy ? Date.now() : null;
+  syncActivityTimer();
 }, { immediate: true });
-onUnmounted(() => { if (thinkingTimer) clearInterval(thinkingTimer); });
+watch(contextCompactionVal, syncActivityTimer);
+onUnmounted(() => { if (activityTimer) clearInterval(activityTimer); });
 
 // 窗口化渲染:store 里的消息全量在场,但进 v-for 建 DOM 的只有尾部一个有界
 // 窗口——长会话一次性挂载全史(几万 DOM 节点 + 全量 Markdown/高亮)曾把切
@@ -856,10 +885,16 @@ function onOpenBgDock(taskId: string) {
           :bg-tasks="bgTasks"
           @open-bg-dock="onOpenBgDock"
         />
-        <div v-if="isBusyVal" class="chat-thinking">
+        <ContextCompactionStatus
+          v-if="contextCompactionVal"
+          :status="contextCompactionVal"
+          :elapsed-seconds="activityElapsed"
+          @interrupt="emit('interrupt')"
+        />
+        <div v-else-if="isBusyVal" class="chat-thinking">
           <AppLogo :size="15" animated />
           <span>Claude 正在思考…</span>
-          <span class="chat-thinking-time">{{ thinkingElapsed }}s</span>
+          <span class="chat-thinking-time">{{ activityElapsed }}s</span>
           <button class="chat-interrupt-btn" @click="emit('interrupt')">中断</button>
         </div>
       </div>

@@ -35,6 +35,7 @@ const {
   currentModel,
   modelSwitchResult,
   contextUsage,
+  contextCompaction,
   rateLimit,
   tasks,
   permissionModes,
@@ -115,6 +116,7 @@ function onNewTab() {
       :current-model="currentModel"
       :model-switch-result="modelSwitchResult"
       :context-usage="contextUsage"
+      :context-compaction="contextCompaction"
       :rate-limit="rateLimit"
       :tasks="tasks"
       :permission-modes="permissionModes"

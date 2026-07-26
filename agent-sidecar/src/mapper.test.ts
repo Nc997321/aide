@@ -259,6 +259,87 @@ describe("mapSdkMessage local slash commands (/clear, /compact 等本地命令)"
   });
 });
 
+describe("mapSdkMessage context compaction lifecycle", () => {
+  const tasks = () => new TaskTracker();
+  const subs = () => new SubagentTracker();
+  const tools = () => new ToolLifecycleTracker();
+
+  it("maps the SDK compacting status to the provider-neutral lifecycle event", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      { type: "system", subtype: "status", status: "compacting" },
+      (e) => events.push(e),
+      tasks(),
+      subs(),
+      tools(),
+    );
+
+    expect(events).toEqual([{ type: "context_compaction", stage: "compacting" }]);
+  });
+
+  it("maps compact completion without inventing a percentage", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      { type: "system", subtype: "status", compact_result: "success" },
+      (e) => events.push(e),
+      tasks(),
+      subs(),
+      tools(),
+    );
+
+    expect(events).toEqual([{ type: "context_compaction", stage: "completed" }]);
+  });
+
+  it("maps a compact failure and preserves its provider-supplied explanation", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      { type: "system", subtype: "status", compact_result: "failed", compact_error: "压缩服务暂时不可用" },
+      (e) => events.push(e),
+      tasks(),
+      subs(),
+      tools(),
+    );
+
+    expect(events).toEqual([
+      { type: "context_compaction", stage: "failed", error: "压缩服务暂时不可用" },
+    ]);
+  });
+
+  it("prefers a compact terminal result over a lingering compacting status", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      {
+        type: "system",
+        subtype: "status",
+        status: "compacting",
+        compact_result: "failed",
+        compact_error: "压缩被中止",
+      },
+      (e) => events.push(e),
+      tasks(),
+      subs(),
+      tools(),
+    );
+
+    expect(events).toEqual([
+      { type: "context_compaction", stage: "failed", error: "压缩被中止" },
+    ]);
+  });
+
+  it("ignores unrelated SDK statuses", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      { type: "system", subtype: "status", status: "idle" },
+      (e) => events.push(e),
+      tasks(),
+      subs(),
+      tools(),
+    );
+
+    expect(events).toEqual([]);
+  });
+});
+
 describe("mapSdkMessage error results (未登录 / 额度上限 不再静默)", () => {
   const tasks = () => new TaskTracker();
   const subs = () => new SubagentTracker();
