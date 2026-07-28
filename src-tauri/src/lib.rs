@@ -142,6 +142,9 @@ pub fn run() {
                 if let Ok(res_dir) = app.path().resource_dir() {
                     let catalog_dir = res_dir.join("agent-runtime");
                     crate::runtime::provider::catalog::set_resource_dir(catalog_dir);
+                    // CodeGraph embedding model bundled as a resource (release).
+                    // dev mode resolves via CARGO_MANIFEST_DIR in embed::resolve_model_dir.
+                    crate::codegraph::embed::set_model_resource_dir(res_dir);
                 }
             }
 

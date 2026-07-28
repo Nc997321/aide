@@ -84,10 +84,53 @@ pub fn embed_one(
 // allocation, not computation) and existing indices keep working.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// HF cache layout for all-MiniLM-L6-v2 (same files fastembed used — no re-download).
-/// Located at `~/.cache/huggingface/hub/models--Qdrant--all-MiniLM-L6-v2-onnx/snapshots/<hash>/`.
-/// Held at module scope so both the ort backend (canonical) and the legacy
-/// fastembed backend (removed in a follow-up step) can share it.
+/// Process-global resource dir injected by `lib.rs` setup (release only).
+/// dev mode falls back to `CARGO_MANIFEST_DIR/resources/codegraph-model`.
+static MODEL_RESOURCE_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Called once from `lib.rs` setup (release) to point the embedder at the
+/// bundled model directory. Idempotent. dev mode doesn't call this — it
+/// resolves via `CARGO_MANIFEST_DIR` in `resolve_model_dir`. `allow(dead_code)`
+/// because the only call site is `cfg(not(debug_assertions))` in lib.rs, so
+/// dev/test builds see no caller.
+#[allow(dead_code)]
+pub fn set_model_resource_dir(dir: PathBuf) {
+    let _ = MODEL_RESOURCE_DIR.set(dir); // idempotent: setup 只调一次
+}
+
+/// Resolve the directory containing the 5 model files (model.onnx +
+/// tokenizer.json + config.json + special_tokens_map.json +
+/// tokenizer_config.json). Order:
+/// 1. release: bundled resource dir (set by `set_model_resource_dir`)
+///    → `<resource>/codegraph-model/`
+/// 2. dev: `CARGO_MANIFEST_DIR/resources/codegraph-model/` (source tree)
+/// 3. fallback: HF cache (`~/.cache/huggingface/...`) — keeps the old
+///    zero-config path working for users who already have the model cached,
+///    and is the source the build copies from when bundling resources.
+fn resolve_model_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // 1. release bundled resources
+    if let Some(res) = MODEL_RESOURCE_DIR.get() {
+        let dir = res.join("codegraph-model");
+        if dir.join("model.onnx").exists() {
+            return Ok(dir);
+        }
+    }
+    // 2. dev: source-tree resources (CARGO_MANIFEST_DIR = src-tauri at compile)
+    #[cfg(debug_assertions)]
+    {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("codegraph-model");
+        if dir.join("model.onnx").exists() {
+            return Ok(dir);
+        }
+    }
+    // 3. fallback HF cache
+    model_dir()
+}
+
+/// HF cache layout for all-MiniLM-L6-v2 (the fallback when no bundled
+/// resource exists). Located at `~/.cache/huggingface/hub/models--Qdrant--all-MiniLM-L6-v2-onnx/snapshots/<hash>/`.
 fn model_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let hf_home = std::env::var("HF_HOME")
         .or_else(|_| std::env::var("HOME").map(|h| h + "/.cache/huggingface"))
@@ -139,7 +182,7 @@ impl OrtEmbedder {
     /// from the local HF cache. Arena + memory pattern are disabled on the
     /// session — see the module comment for why this is the root-cause fix.
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let dir = model_dir()?;
+        let dir = resolve_model_dir()?;
         let onnx = std::fs::read(dir.join("model.onnx"))
             .map_err(|e| format!("Failed to read model.onnx from {}: {}", dir.display(), e))?;
         if onnx.is_empty() {
@@ -713,12 +756,12 @@ mod tests {
     /// during development (matched within 1e-4) before fastembed was removed.
     #[test]
     fn ort_embedder_embeds_from_cache() {
-        let dir = match model_dir() {
+        let dir = match resolve_model_dir() {
             Ok(d) => d,
-            Err(_) => return, // no cache dir → skip
+            Err(_) => return, // no model dir → skip
         };
         if !dir.join("model.onnx").exists() {
-            return; // model not downloaded → skip
+            return; // model not present → skip
         }
 
         let ort = OrtEmbedder::new().expect("OrtEmbedder::new failed");

@@ -23,7 +23,12 @@
       "../agent-sidecar/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe": "agent-runtime/claude.exe",
       "../agent-sidecar/default-models.json": "agent-runtime/default-models.json",
       "../agent-sidecar/default-permission-modes.json": "agent-runtime/default-permission-modes.json",
-      "resources/provider-catalog.json": "agent-runtime/provider-catalog.json"
+      "resources/provider-catalog.json": "agent-runtime/provider-catalog.json",
+    "resources/codegraph-model/model.onnx": "codegraph-model/model.onnx",
+    "resources/codegraph-model/tokenizer.json": "codegraph-model/tokenizer.json",
+    "resources/codegraph-model/config.json": "codegraph-model/config.json",
+    "resources/codegraph-model/special_tokens_map.json": "codegraph-model/special_tokens_map.json",
+    "resources/codegraph-model/tokenizer_config.json": "codegraph-model/tokenizer_config.json"
     },
     "icon": [
       "icons/32x32.png",
