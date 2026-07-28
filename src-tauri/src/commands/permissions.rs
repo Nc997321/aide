@@ -12,13 +12,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 use tauri::State;
 
 use crate::commands::WorkspaceState;
 use crate::policy::{
     self, ChainEntry, PermissionMatcher, PermissionRule, PermissionSource,
-    PermissionPolicySnapshot, ToolInvocation,
+    ToolInvocation,
 };
 use crate::runtime::AgentRuntimeManager;
 use crate::settings::{PermissionEffect, SettingsError, SettingsScope, SettingsService, StoredPermissionRule};

@@ -431,6 +431,9 @@ impl SettingsService {
         &self.secrets
     }
 
+    // Test-only assertion helper (used by store_test to verify the in-memory
+    // cache survives atomic-write failures / idempotent migration).
+    #[cfg(test)]
     pub fn cached_theme(&self) -> String {
         self.state
             .read()

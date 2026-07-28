@@ -196,10 +196,14 @@ pub fn all_descriptors() -> &'static [SettingDescriptor] {
     DESCRIPTORS.as_slice()
 }
 
+// Single-descriptor lookups are only used by the settings test modules; the
+// non-test path in `store.rs` calls `all_descriptors().iter().find(...)` inline.
+#[cfg(test)]
 pub fn descriptor(id: &str) -> Option<&'static SettingDescriptor> {
     all_descriptors().iter().find(|entry| entry.id == id)
 }
 
+#[cfg(test)]
 pub fn descriptor_for_legacy_id(legacy_id: &str) -> Option<&'static SettingDescriptor> {
     all_descriptors()
         .iter()

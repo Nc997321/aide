@@ -11,22 +11,23 @@ mod store_test;
 
 #[cfg(test)]
 pub(crate) use descriptors::validate_descriptor_entries;
+// Descriptor query helpers + catalog types are only consumed by the settings
+// test modules (schema_test/store_test). Non-test code in `store.rs` imports
+// `all_descriptors`/`validate_descriptor_catalog` directly from `super::descriptors`,
+// so these re-exports are test-only — gating them avoids `unused_imports` under
+// `cargo build --lib` (which doesn't compile the test harness).
+#[cfg(test)]
 pub use descriptors::{
     all_descriptors, descriptor, descriptor_for_legacy_id, validate_descriptor_catalog,
     SettingDescriptor, SettingValueKind,
 };
-pub use migration::run_legacy_migration;
-pub use schema::{
-    PermissionEffect, PermissionSection, SettingsDocument, SettingsScope, StoredPermissionRule,
-    SETTINGS_SCHEMA_VERSION,
-};
+pub use schema::{PermissionEffect, SettingsScope, StoredPermissionRule};
 #[cfg(test)]
-pub use secrets::MemorySecretStore;
-pub use secrets::{KeyringSecretStore, SecretMutation, SecretStore};
-pub use store::{
-    EffectiveSettings, LayeredDocument, MutationResult, SettingsPaths, SettingsService,
-    SettingsStore,
-};
+pub use schema::{PermissionSection, SettingsDocument};
+#[cfg(test)]
+pub use secrets::{MemorySecretStore, SecretStore};
+pub use secrets::{KeyringSecretStore, SecretMutation};
+pub use store::{SettingsPaths, SettingsService};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingsError {
