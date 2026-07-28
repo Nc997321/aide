@@ -422,8 +422,8 @@ describe("SessionWorker — codegraph MCP registration", () => {
 });
 
 /**
- * 会话自动命名：全新会话的首个 result 到达后，sidecar 用独立的小模型 query
- * 生成标题并发 session_title 事件。
+ * 会话自动命名：全新会话首轮回复开始时（首条主线程 assistant 消息到达），
+ * sidecar 用独立的小模型 query 生成标题并发 session_title 事件。
  *
  * 关键不变量：
  * - 只有「全新会话」（非 resume / 非 btw / 非 provider_switched）才生成
@@ -431,6 +431,7 @@ describe("SessionWorker — codegraph MCP registration", () => {
  * - 每个 worker 只尝试一次
  * - 主对话 query 与标题 query 都是同一个 queryFn：靠 prompt 类型区分
  *   （主对话是 async iterable，标题是一次性 string）
+ * - 触发于首条 assistant 消息而非整轮 result（标题仅基于 userText）
  */
 
 /** 主对话假 query：产出一条 assistant 文本 + result 后结束。 */
@@ -474,7 +475,7 @@ async function waitForEvent(events: any[], type: string, timeoutMs = 3000) {
 }
 
 describe("SessionWorker — 会话自动命名", () => {
-  it("全新会话首轮 result 后发出 session_title", async () => {
+  it("全新会话首轮回复开始即发出 session_title（不等整轮结束）", async () => {
     const { worker, events } = makeTitleWorker([
       { type: "assistant", message: { content: [{ type: "text", text: "修复登录 Bug" }] } },
       { type: "result", subtype: "success" },
@@ -485,6 +486,42 @@ describe("SessionWorker — 会话自动命名", () => {
     const evt = await waitForEvent(events, "session_title");
     expect(evt).toBeDefined();
     expect(evt.title).toBe("修复登录 Bug");
+    worker.stop();
+  });
+
+  it("主轮只产 assistant 不产 result 时仍发出标题（钉住提前触发）", async () => {
+    // 旧行为在 result 时触发——主轮没有 result 就不会发标题；新行为在首条
+    // assistant 消息触发，故即便回复尚未结束（无 result）标题也照发。
+    const events: any[] = [];
+    const titleMessages = [
+      { type: "assistant", message: { content: [{ type: "text", text: "登录修复" }] } },
+      { type: "result", subtype: "success" },
+    ];
+    const queryFn = ((args: any) => {
+      const msgs = typeof args.prompt === "string"
+        ? titleMessages
+        : [
+            // 主轮：只产一条主线程 assistant，不产 result（模拟回复进行中）
+            {
+              type: "assistant",
+              parent_tool_use_id: null,
+              message: { model: "claude-sonnet-4-5", content: [{ type: "text", text: "好的，我看看。" }] },
+            },
+          ];
+      return (async function* () {
+        for (const m of msgs) yield m;
+      })();
+    }) as any;
+    const worker = new SessionWorker("s-title2", (e) => events.push(e), {
+      imageCapabilityCache: new ImageInputCapabilityCache(),
+      queryFn,
+    });
+    worker.handleCommand({
+      cmd: "send", session_id: "s-title2", prompt: "帮我修登录页 bug", cwd: "/tmp", env: {}, auto_title: true,
+    } as any);
+    const evt = await waitForEvent(events, "session_title");
+    expect(evt).toBeDefined();
+    expect(evt.title).toBe("登录修复");
     worker.stop();
   });
 

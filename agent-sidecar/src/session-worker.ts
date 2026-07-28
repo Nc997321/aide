@@ -162,15 +162,14 @@ export class SessionWorker {
   private turnActive = false;
   private stopped = false;
 
-  // ---- 会话自动命名（首轮后小模型生成标题，见 titleGenerator.ts） ----
+  // ---- 会话自动命名（首轮回复开始时小模型生成标题，见 titleGenerator.ts） ----
   /** 设置面板开关（send.auto_title 下发），缺省开启。 */
   private autoTitle = true;
   /** 每个 worker 只尝试一次（防止 resume/多轮重复生成）。 */
   private titleAttempted = false;
-  /** 首轮素材收集：新会话首条 send 置 collectingTitle，result 时触发。 */
+  /** 首轮回复触发：新会话首条 send 置 collectingTitle，收到首条主线程 assistant 消息时触发。 */
   private collectingTitle = false;
   private titleUserText = "";
-  private titleAssistantText = "";
 
   // ---- BTW / 轻量模式 ----
   readonly btwMode: boolean;
@@ -669,8 +668,8 @@ export class SessionWorker {
       // 重开已有会话：resume_session_id → resumeSource，startLoop 据此 resume。
       // 普通新会话不带这字段，resumeSource 保持空 → 全新会话。
       if (cmd.resume_session_id) this.resumeSource = cmd.resume_session_id;
-      // 自动命名素材收集：只有「全新会话」（非 resume / 非 btw / 非供应商切换 fork）
-      // 才在首轮后生成标题——老会话已有名字，fork 会话语义上属于源会话。
+      // 自动命名触发：只有「全新会话」（非 resume / 非 btw / 非供应商切换 fork）
+      // 才在首轮回复开始时生成标题——老会话已有名字，fork 会话语义上属于源会话。
       if (
         this.autoTitle &&
         !this.titleAttempted &&
@@ -680,7 +679,6 @@ export class SessionWorker {
       ) {
         this.collectingTitle = true;
         this.titleUserText = cmd.prompt;
-        this.titleAssistantText = "";
       }
       this.startLoop(cmd.cwd ?? this.cwd);
       this.queue.push({
@@ -823,10 +821,11 @@ export class SessionWorker {
           for await (const msg of q) {
             if ((msg as any).type === "result") {
               this.turnActive = false;
-              // 首轮结束：触发自动命名（fire-and-forget，不阻塞后续轮次）。
+              // 兜底：首轮未收到任何主线程 assistant 消息就结束（出错/空轮），
+              // 放弃命名，仅清理标志，避免泄漏到下一轮。正常流程下标志已在
+              // 首条 assistant 消息时清掉，这里是 no-op。
               if (this.collectingTitle) {
                 this.collectingTitle = false;
-                void this.emitSessionTitle();
               }
               if (this.promoteJumpQueue()) {
                 this.toolLifecycle.reset();
@@ -874,22 +873,18 @@ export class SessionWorker {
               this.currentQuery?.interrupt().catch(() => {});
             }
 
-            // 自动命名素材：累积首轮主线程 assistant 文本（上限 2000 字，
-            // 防长回复把标题 prompt 撑大；子代理文本不计）。
+            // 首轮回复开始：收到第一条主线程 assistant 消息即触发自动命名
+            // （fire-and-forget，不阻塞后续轮次）。提前到"回复时"而非"整轮
+            // 结束的 result"——标题几乎与回复同时出现；标题仅基于用户输入
+            // （userText），不等助手文本。置 false 保证只触发一次；子代理消息
+            // （parent_tool_use_id 非空）不计——它不是主线程回复。
             if (
               this.collectingTitle &&
               (msg as any).type === "assistant" &&
-              !(msg as any).parent_tool_use_id &&
-              this.titleAssistantText.length < 2000
+              !(msg as any).parent_tool_use_id
             ) {
-              const blocks = (msg as any).message?.content as any[] | undefined;
-              if (Array.isArray(blocks)) {
-                for (const b of blocks) {
-                  if (b?.type === "text" && typeof b.text === "string") {
-                    this.titleAssistantText += b.text;
-                  }
-                }
-              }
+              this.collectingTitle = false;
+              void this.emitSessionTitle();
             }
 
             if ((msg as any).type === "system" && (msg as any).subtype === "init") {
@@ -943,16 +938,16 @@ export class SessionWorker {
   // 会话自动命名
   // ================================================================
 
-  /** 首轮对话结束后台生成会话标题（fire-and-forget）。独立的小模型 query——
+  /** 首轮回复开始时后台生成会话标题（fire-and-forget）。独立的小模型 query——
    *  全新 SDK 会话，不占主对话上下文；标题模型默认 haiku，AIDE_TITLE_MODEL
-   *  可覆盖。任何失败（超时/空响应/provider 不支持）generateSessionTitle
-   *  内部静默返回 null，这里就不发事件，会话保留默认名。 */
+   *  可覆盖。标题仅基于用户输入（userText），不等助手回复。任何失败（超时/
+   *  空响应/provider 不支持）generateSessionTitle 内部静默返回 null，这里就
+   *  不发事件，会话保留默认名。 */
   private async emitSessionTitle(): Promise<void> {
     if (this.titleAttempted) return;
     this.titleAttempted = true;
     const title = await generateSessionTitle(this.queryFn, {
       userText: this.titleUserText,
-      assistantText: this.titleAssistantText,
       model: process.env.AIDE_TITLE_MODEL || "haiku",
       env: { ...process.env, ...this.envOverrides },
       cwd: this.cwd,

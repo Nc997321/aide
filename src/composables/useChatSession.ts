@@ -592,7 +592,7 @@ function handleChatEvent(e: Record<string, unknown>) {
       break;
     }
     case "session_title": {
-      // 会话自动命名：sidecar 首轮后生成的标题。是否采纳由 Rust 原子判定
+      // 会话自动命名：sidecar 首轮回复开始时生成的标题。是否采纳由 Rust 原子判定
       // （nameSource==manual 拒写）——返回 true 才更新名字注册表，侧栏卡片
       // 显示走注册表（SidebarLeft 模板 names[s.id] || s.name），一处更新全局生效。
       const title = e["title"] as string;
