@@ -2,12 +2,19 @@ use tauri::State;
 use serde_json::json;
 use crate::runtime::AgentRuntimeManager;
 use crate::commands::{WorkspaceState, project_root_for_commands};
-use crate::runtime::provider::active_provider_or_system_default;
 use crate::runtime::env::build_runtime_env_vars;
 use crate::commands::settings::get_settings;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+
+async fn resolve_active_provider(
+    service: std::sync::Arc<crate::settings::SettingsService>,
+) -> Result<crate::runtime::provider::ProviderConfig, String> {
+    tokio::task::spawn_blocking(move || service.resolve_active_runtime_provider().map_err(|error| error.to_string()))
+        .await
+        .map_err(|error| error.to_string())?
+}
 
 /// 构造 `send` 命令的 JSON（纯函数，可单测）。
 ///
@@ -94,9 +101,10 @@ pub async fn probe_image_input(
     model: Option<String>,
     app_handle: tauri::AppHandle,
     runtime_mgr: State<'_, AgentRuntimeManager>,
+    settings_service: State<'_, std::sync::Arc<crate::settings::SettingsService>>,
 ) -> Result<ImageInputProbeResult, String> {
-    let active = active_provider_or_system_default();
-    let proxy = get_settings().map(|s| s.proxy).unwrap_or_default();
+    let active = resolve_active_provider(settings_service.inner().clone()).await?;
+    let proxy = get_settings(settings_service).await.map(|s| s.proxy).unwrap_or_default();
     let mut env = build_runtime_env_vars(&active, &proxy);
     if let Some(model) = model.filter(|value| !value.is_empty()) {
         env.insert("ANTHROPIC_MODEL".into(), model);
@@ -120,12 +128,16 @@ pub async fn send_message(
     workspace_root: Option<String>,
     runtime_mgr: State<'_, AgentRuntimeManager>,
     workspace_state: State<'_, WorkspaceState>,
+    settings_service: State<'_, std::sync::Arc<crate::settings::SettingsService>>,
 ) -> Result<(), String> {
     let cwd = session_cwd(&workspace_root, &workspace_state);
     let cwd_str = cwd.to_string_lossy().to_string();
 
-    let active = active_provider_or_system_default();
-    let settings = get_settings().ok();
+    let active = resolve_active_provider(settings_service.inner().clone()).await?;
+    // Clone the Arc before `get_settings` takes the `State` by value — the
+    // permission snapshot below still needs the service.
+    let snapshot_service = settings_service.inner().clone();
+    let settings = get_settings(settings_service).await.ok();
     let proxy = settings.as_ref().map(|s| s.proxy.clone()).unwrap_or_default();
     let provider_env = build_runtime_env_vars(&active, &proxy);
     let provider_switched = runtime_mgr.connection_drifted(&session_id, &provider_env);
@@ -133,7 +145,7 @@ pub async fn send_message(
     // 自动命名开关下发 sidecar（设置读取失败时默认开启）
     let auto_title = settings.as_ref().map(|s| s.auto_naming).unwrap_or(true);
 
-    let cmd = build_send_command(
+    let mut cmd = build_send_command(
         &session_id,
         &prompt,
         images.as_ref(),
@@ -147,6 +159,23 @@ pub async fn send_message(
         &provider_env,
         &cwd_str,
     );
+
+    // Attach the permission policy snapshot so the sidecar's PreToolUse hook can
+    // enforce it on the first query. Best-effort: if the snapshot build fails the
+    // send still goes out and the sidecar defers to the provider permission mode.
+    // `snapshot_service` was cloned above (before `get_settings` consumed the State).
+    let snapshot_cwd = cwd.clone();
+    if let Ok(Ok(snapshot)) = tokio::task::spawn_blocking(move || {
+        snapshot_service.permission_snapshot_blocking(Some(&snapshot_cwd))
+    })
+    .await
+    {
+        cmd["permission_policy"] = json!(snapshot);
+    }
+
+    // Register/refresh the session's workspace route so future permission-rule
+    // saves can broadcast `update_permission_policy` to this session.
+    runtime_mgr.register_session_route(&session_id, Some(&cwd));
 
     runtime_mgr.send_to_runtime(&cmd).await
 }
@@ -237,9 +266,10 @@ pub async fn start_btw_session(
     permission_mode: Option<String>,
     model: Option<String>,
     runtime_mgr: State<'_, AgentRuntimeManager>,
+    settings_service: State<'_, std::sync::Arc<crate::settings::SettingsService>>,
 ) -> Result<(), String> {
-    let active = active_provider_or_system_default();
-    let proxy = get_settings().map(|s| s.proxy).unwrap_or_default();
+    let active = resolve_active_provider(settings_service.inner().clone()).await?;
+    let proxy = get_settings(settings_service).await.map(|s| s.proxy).unwrap_or_default();
     let provider_env = build_runtime_env_vars(&active, &proxy);
 
     // session_id = BTW 自己的路由键（避免与主会话 worker 冲突）；

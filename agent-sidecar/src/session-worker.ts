@@ -33,6 +33,9 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { HookCallback, HookInput } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, openSync, readSync, statSync, closeSync } from "node:fs";
 import { readFileSync } from "node:fs";
+import { loadAideInstructions } from "./instructions.js";
+import { evaluatePolicy } from "./policy/evaluate.js";
+import type { PermissionPolicySnapshot } from "./policy/types.js";
 
 // ---- 进程级常量（所有 SessionWorker 共享） ----
 
@@ -137,6 +140,9 @@ export class SessionWorker {
   routingKey: string;
   readonly queue = new MessageQueue();
   readonly permMgr = new PermissionManager();
+  /** Aide 权限策略快照（PreToolUse hook 据此评估）。revision 单调递增，落后于
+   *  当前的快照被忽略；空策略 → 所有工具 defer（回退原权限模式）。 */
+  private permissionPolicy: PermissionPolicySnapshot = { revision: 0, rules: [] };
   readonly taskTracker = new TaskTracker();
   readonly subagentTracker = new SubagentTracker();
   readonly toolLifecycle = new ToolLifecycleTracker();
@@ -306,6 +312,85 @@ export class SessionWorker {
         };
       }
       return {};
+    };
+  }
+
+  // ================================================================
+  // Aide 权限策略
+  // ================================================================
+
+  /** Apply a fresh permission-policy snapshot. Snapshots with `revision`
+   *  strictly less than the current one are ignored (no rollback). The first
+   *  `send` carries the initial snapshot; `update_permission_policy` pushes
+   *  subsequent updates without restarting the worker. */
+  applyPermissionPolicy(snapshot: PermissionPolicySnapshot): void {
+    if (!snapshot || snapshot.revision < this.permissionPolicy.revision) return;
+    this.permissionPolicy = snapshot;
+  }
+
+  /** Authoritative PreToolUse hook: evaluates the Aide policy snapshot before
+   *  any other hook (image guard, skill guard, etc.) runs. `allow`/`deny` are
+   *  returned directly; `ask` opens the human confirmation flow via
+   *  `permMgr.request`; `defer` falls back to the SDK's existing permission
+   *  mode (canUseTool). Applies to every tool including Read.
+   *  `allowDangerouslySkipPermissions` does NOT bypass this hook — the hook is
+   *  registered unconditionally on `matcher: ".*"`. */
+  private makePolicyHook(cwd: string | undefined): HookCallback {
+    return async (input: HookInput) => {
+      if (input.hook_event_name !== "PreToolUse") return {};
+      const toolName = input.tool_name;
+      const toolInput = input.tool_input;
+      if (!toolName) return {};
+      const decision = await evaluatePolicy(this.permissionPolicy, {
+        tool: toolName,
+        input: (toolInput ?? {}) as Record<string, unknown>,
+        cwd: cwd ?? this.cwd,
+      });
+      switch (decision.disposition) {
+        case "allow":
+          return {
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse" as const,
+              permissionDecision: "allow" as const,
+              permissionDecisionReason: decision.reason,
+            },
+          };
+        case "deny":
+          return {
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse" as const,
+              permissionDecision: "deny" as const,
+              permissionDecisionReason: decision.reason,
+            },
+          };
+        case "ask": {
+          const answer = await this.permMgr.request(
+            toolName,
+            toolInput,
+            {},
+            (e) => this.emit(e),
+            this.subagentTracker,
+          );
+          return {
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse" as const,
+              permissionDecision: answer.approved ? ("allow" as const) : ("deny" as const),
+              permissionDecisionReason: answer.approved
+                ? "Aide policy requires confirmation"
+                : "User denied Aide policy confirmation",
+              ...(answer.updatedInput ? { updatedInput: answer.updatedInput } : {}),
+            },
+          };
+        }
+        default:
+          // defer: let the SDK's existing permission flow (canUseTool / mode) decide.
+          return {
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse" as const,
+              permissionDecision: "defer" as const,
+            },
+          };
+      }
     };
   }
 
@@ -503,19 +588,21 @@ export class SessionWorker {
       this.enqueueSend(cmd);
 
     } else if (cmd.cmd === "permission_response") {
-      const outcome = this.permMgr.resolve(cmd.id, cmd.approved, cmd.always, cmd.answers);
-      if (outcome?.appliedMode) {
-        this.currentPermissionMode = outcome.appliedMode;
-        this.emitPermissionModes();
-      } else if (cmd.approved && outcome?.toolName === "ExitPlanMode") {
+      const outcome = this.permMgr.resolve(cmd.id, cmd.approved, cmd.answers);
+      if (cmd.approved && outcome?.toolName === "ExitPlanMode") {
         this.applyPermissionMode(cmd.nextMode || "default");
       } else if (cmd.approved && outcome?.toolName === "EnterPlanMode") {
         // 模型主动进入计划模式（非用户预选）：对齐本地账本并广播，让前端下拉同步
         this.applyPermissionMode("plan");
       }
 
+    } else if (cmd.cmd === "update_permission_policy") {
+      this.applyPermissionPolicy(cmd.policy);
+
     } else if (cmd.cmd === "interrupt") {
-      // 用户主动打断：待插队消息一并作废（对齐旧"排队消息作废"语义）
+      // 用户主动打断：待插队消息一并作废（对齐旧"排队消息作废"语义）；挂起的权限确认
+      // 也一并撤销（policy hook 的 ask 路径没有 SDK signal，靠 cancelAll 兜底）。
+      this.permMgr.cancelAll();
       this.jumpQueueCtl.clear();
       cancelAllCodegraphQueries("interrupted");
       this.currentQuery?.interrupt().catch(() => {});
@@ -545,6 +632,8 @@ export class SessionWorker {
     if (this.stopped) return;
     this.applySendRuntimeConfig(cmd.env);
     if (cmd.auto_title !== undefined) this.autoTitle = cmd.auto_title;
+    // 首条 send 携带的策略快照在 query 起来前落地——PreToolUse hook 首次评估就能用。
+    if (cmd.permission_policy) this.applyPermissionPolicy(cmd.permission_policy);
 
     if (cmd.images?.length && !(await this.guardImageInput(cmd.images))) {
       this.emit({ type: "image_input_rejected", message: IMAGE_INPUT_UNSUPPORTED_MESSAGE });
@@ -668,13 +757,29 @@ export class SessionWorker {
             this.pendingFork = true;
           }
 
+          // Aide 指令加载：不依赖 SDK 文件系统 setting source，自己读 global + project
+          // CLAUDE.md 追加到 preset system prompt。settingSources 必须为空，否则 SDK
+          // 仍会去读 .claude/settings*.json，与 Aide 独立设置体系冲突。
+          const instructions = await loadAideInstructions(
+            effectiveCwd,
+            process.env.CLAUDE_CONFIG_DIR ?? "",
+          );
+          // Aide 权限策略 hook：排在所有其它 PreToolUse hook 之前（含图片守卫），
+          // allowDangerouslySkipPermissions 也不绕过——matcher ".*" 对每个工具都触发。
+          const policyHook = this.makePolicyHook(effectiveCwd);
+
           const q = this.queryFn({
             prompt: this.queue[Symbol.asyncIterator](),
             options: {
               permissionMode: this.currentPermissionMode as any,
               allowDangerouslySkipPermissions: true,
               canUseTool: this.makeCanUseToolCallback() as any,
-              settingSources: ["project", "user"],
+              settingSources: [],
+              systemPrompt: {
+                type: "preset" as const,
+                preset: "claude_code" as const,
+                append: instructions,
+              },
               ...(this.lightweightMode
                 ? { allowedTools: [] as string[] }
                 : { allowedTools: ["Agent", "Task", CODEGRAPH_ALLOW_RULE] }),
@@ -682,6 +787,8 @@ export class SessionWorker {
               plugins: buildPluginsOption(),
               hooks: {
                 PreToolUse: [
+                  // Aide 权限策略是权威前置层，必须最先评估。
+                  { matcher: ".*", hooks: [policyHook] },
                   ...(subagentModelHook
                     ? [{ matcher: "^(Agent|Task)$", hooks: [subagentModelHook] }]
                     : []),
@@ -888,6 +995,16 @@ export class SessionWorker {
   /** 测试用：暴露图片 Read 守卫的 PreToolUse hook，验证 deny/allow 决策。 */
   _testImageGuardHook() {
     return this.makeImageGuardHook();
+  }
+
+  /** 测试用：暴露 Aide 权限策略 PreToolUse hook，验证 allow/deny/ask/defer。 */
+  _testPolicyHook(cwd?: string) {
+    return this.makePolicyHook(cwd);
+  }
+
+  /** 测试用：直接注入策略快照（不经过 send/update_permission_policy 命令路径）。 */
+  _testApplyPermissionPolicy(snapshot: PermissionPolicySnapshot): void {
+    this.applyPermissionPolicy(snapshot);
   }
 
   /** 测试用：暴露待发送用户消息数，验证拒绝图片时不会入队。 */

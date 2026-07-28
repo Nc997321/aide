@@ -18,7 +18,7 @@ import type { ProviderConfig } from "../types";
 
 const sd = (overrides: Partial<ProviderConfig> = {}): ProviderConfig => ({
   id: "__system_default__", kind: "system_default", name: "Anthropic", icon: "A", baseUrl: "",
-  apiKey: "", authToken: "", model: "",
+  apiKeyConfigured: false, authTokenConfigured: false, model: "",
   modelMappings: { anthropicModel: "claude-3", defaultOpusModel: "", defaultSonnetModel: "", defaultHaikuModel: "", subagent: "" },
   effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", knownModels: [],
   ...overrides,
@@ -26,7 +26,7 @@ const sd = (overrides: Partial<ProviderConfig> = {}): ProviderConfig => ({
 
 const cpa = (): ProviderConfig => ({
   id: "cpa-local", kind: "cpa_gpt", name: "CPA 中转", icon: "C", baseUrl: "http://127.0.0.1:8317",
-  apiKey: "", authToken: "sk-local-cpa", model: "",
+  apiKeyConfigured: false, authTokenConfigured: true, model: "",
   modelMappings: { anthropicModel: "", defaultOpusModel: "", defaultSonnetModel: "", defaultHaikuModel: "", subagent: "" },
   effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", knownModels: [],
 });
@@ -102,8 +102,8 @@ describe("useProviders — SystemDefault 统一", () => {
     (api.getProviders as any).mockResolvedValue([sd(), cpa()]);
     (api.getActiveProviderId as any).mockResolvedValue("cpa-local");
     await load();
-    await updateProvider("cpa-local", { authToken: "sk-new" });
-    expect(allProviders.value.find((p) => p.id === "cpa-local")?.authToken).toBe("sk-new");
+    await updateProvider("cpa-local", {}, { authToken: { action: "set", value: "sk-new" } });
+    expect(allProviders.value.find((p) => p.id === "cpa-local")?.authTokenConfigured).toBe(true);
     expect(api.setProviders).toHaveBeenCalled();
   });
 });
@@ -130,7 +130,7 @@ describe("useProviders — kind-aware add", () => {
     expect(p.kind).toBe("cpa_gpt");
     expect(p.name).toBe("CPA 中转");
     expect(p.baseUrl).toBe("http://127.0.0.1:8317");
-    expect(p.authToken).toBe("");
+    expect(p.authTokenConfigured).toBe(false);
     expect(p.id).not.toBe("");
   });
 

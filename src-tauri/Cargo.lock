@@ -62,6 +62,7 @@ dependencies = [
  "dunce",
  "fastembed",
  "ignore",
+ "keyring",
  "notify-rust",
  "objc2 0.2.7",
  "objc2-app-kit 0.2.2",
@@ -3629,6 +3630,16 @@ dependencies = [
  "bitflags 2.13.0",
  "serde",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "keyring"
+version = "3.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eebcc3aff044e5944a8fbaf69eb277d11986064cba30c468730e8b9909fb551c"
+dependencies = [
+ "log",
+ "zeroize",
 ]
 
 [[package]]

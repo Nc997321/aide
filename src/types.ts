@@ -115,8 +115,8 @@ export interface CodeGraphEmbedderConfig {
   backend: "fastembed" | "http";
   /** backend === "http" 时以下字段生效： */
   baseUrl: string;
-  /** OpenAI/Jina 必填；Ollama 原生可空 */
-  apiKey: string;
+  /** Whether a CodeGraph credential exists in the private keychain. */
+  apiKeyConfigured: boolean;
   model: string;
   format: "ollama" | "openai";
   /** 模型向量维度，0 = 自动从首次响应探测 */
@@ -175,14 +175,21 @@ export interface ProviderModelMappings {
   subagent: string;
 }
 
+/** Explicit private-credential mutation sent only with a save request. */
+export type SecretMutation =
+  | { action: "unchanged" }
+  | { action: "set"; value: string }
+  | { action: "clear" };
+
+/** Public provider DTO. Credentials are intentionally represented only as state. */
 export interface ProviderConfig {
   id: string;
   kind: ProviderKind;
   name: string;
   icon: string;
   baseUrl: string;
-  apiKey: string;
-  authToken: string;
+  apiKeyConfigured: boolean;
+  authTokenConfigured: boolean;
   model: string;
   modelMappings: ProviderModelMappings;
   effortLevel: string;
@@ -191,6 +198,12 @@ export interface ProviderConfig {
   /** → CLAUDE_AUTOCOMPACT_PCT_OVERRIDE：1–100，作用在 window 之上微调触发时机。空 = CLI 默认 */
   autocompactPctOverride: string;
   knownModels: string[];
+}
+
+/** Provider write DTO. It never contains a rehydrated credential. */
+export interface ProviderConfigInput extends Omit<ProviderConfig, "apiKeyConfigured" | "authTokenConfigured"> {
+  apiKey: SecretMutation;
+  authToken: SecretMutation;
 }
 
 // ── Git types ──

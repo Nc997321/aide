@@ -8,7 +8,6 @@ pub mod strategy;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-use crate::commands::settings::load_config;
 use crate::runtime::provider::catalog::{catalog_find, resolve_preset_identity};
 
 /// Provider 类型判别。预置 kind 的 base_url/name/icon 由 catalog 派生、不入 config.json。
@@ -82,11 +81,11 @@ pub struct ProviderConfig {
     pub name: String,
     #[serde(default)]
     pub icon: String,
-    #[serde(default)]
+    #[serde(default, alias = "base_url")]
     pub base_url: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty", alias = "api_key")]
     pub api_key: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty", alias = "auth_token")]
     pub auth_token: String,
     /// 已废弃：模型默认值的权威源改到 `model_mappings.anthropic_model`。字段保留
     /// 仅用于读旧配置——`migrate_provider_model` 在反序列化后把非空的顶层 model
@@ -108,6 +107,48 @@ pub struct ProviderConfig {
     pub autocompact_pct_override: String,
     #[serde(default)]
     pub known_models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderConfigView {
+    pub id: String,
+    pub kind: ProviderKind,
+    pub name: String,
+    pub icon: String,
+    pub base_url: String,
+    pub api_key_configured: bool,
+    pub auth_token_configured: bool,
+    pub model: String,
+    pub model_mappings: ProviderModelMappings,
+    pub effort_level: String,
+    pub auto_compact_window: String,
+    pub autocompact_pct_override: String,
+    pub known_models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderConfigInput {
+    pub id: String,
+    #[serde(default)] pub kind: ProviderKind,
+    #[serde(default)] pub name: String,
+    #[serde(default)] pub icon: String,
+    #[serde(default)] pub base_url: String,
+    #[serde(default)] pub api_key: crate::settings::SecretMutation,
+    #[serde(default)] pub auth_token: crate::settings::SecretMutation,
+    #[serde(default)] pub model: String,
+    #[serde(default)] pub model_mappings: ProviderModelMappings,
+    #[serde(default)] pub effort_level: String,
+    #[serde(default)] pub auto_compact_window: String,
+    #[serde(default)] pub autocompact_pct_override: String,
+    #[serde(default)] pub known_models: Vec<String>,
+}
+
+impl ProviderConfig {
+    fn view(self, api_key_configured: bool, auth_token_configured: bool) -> ProviderConfigView {
+        ProviderConfigView { id: self.id, kind: self.kind, name: self.name, icon: self.icon, base_url: self.base_url, api_key_configured, auth_token_configured, model: self.model, model_mappings: self.model_mappings, effort_level: self.effort_level, auto_compact_window: self.auto_compact_window, autocompact_pct_override: self.autocompact_pct_override, known_models: self.known_models }
+    }
 }
 
 /// 把模型变量映射注入 env（5 个变量，非空才注入）。Claude 专属——自定义 provider
@@ -175,32 +216,161 @@ pub fn strip(p: &mut ProviderConfig) {
     p.base_url = String::new();
 }
 
-pub fn load_providers() -> Vec<ProviderConfig> {
-    let config = crate::commands::settings::load_config();
-    let mut out = Vec::new();
-    if let Some(arr) = config.get("providers").and_then(|v| v.as_array()) {
-        for item in arr {
-            if let Ok(mut p) = serde_json::from_value::<ProviderConfig>(item.clone()) {
-                migrate_provider_model(&mut p);
-                enrich(&mut p);
-                out.push(p);
-            }
-        }
+/// Sentinel provider returned when the requested id is not found.
+pub fn system_default_provider() -> ProviderConfig {
+    ProviderConfig {
+        id: "__system_default__".to_string(),
+        kind: ProviderKind::SystemDefault,
+        name: String::new(), icon: String::new(), base_url: String::new(),
+        api_key: String::new(), auth_token: String::new(), model: String::new(),
+        model_mappings: ProviderModelMappings::default(),
+        effort_level: String::new(), auto_compact_window: String::new(),
+        autocompact_pct_override: String::new(), known_models: Vec::new(),
     }
-    out
 }
 
-pub fn persist_providers(v: &[ProviderConfig]) -> Result<(), String> {
-    use crate::commands::settings::with_config_mut;
-    let stripped: Vec<ProviderConfig> = v.iter().map(|p| {
-        let mut q = p.clone();
-        strip(&mut q);
-        q
-    }).collect();
-    with_config_mut(move |config| {
-        config["providers"] = serde_json::to_value(&stripped).map_err(|e| format!("Serialize error: {}", e))?;
+impl crate::settings::SettingsService {
+    pub fn list_provider_views(&self) -> Result<Vec<ProviderConfigView>, crate::settings::SettingsError> {
+        let values = self.effective_document_blocking(None)?.values;
+        let entries = values.get("providers").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+        entries.into_iter().filter_map(|entry| serde_json::from_value::<ProviderConfig>(entry).ok())
+            .map(|mut provider| {
+                migrate_provider_model(&mut provider);
+                enrich(&mut provider);
+                let api = self.secrets().get(&format!("provider/{}/apiKey", provider.id))?.is_some();
+                let token = self.secrets().get(&format!("provider/{}/authToken", provider.id))?.is_some();
+                Ok(provider.view(api, token))
+            }).collect()
+    }
+
+    pub fn resolve_runtime_provider(&self, id: &str) -> Result<ProviderConfig, crate::settings::SettingsError> {
+        let values = self.effective_document_blocking(None)?.values;
+        self.resolve_runtime_provider_from_values(&values, id)
+    }
+
+    pub fn active_provider_id(&self) -> Result<String, crate::settings::SettingsError> {
+        let values = &self.effective_document_blocking(None)?.values;
+        // camelCase first (canonical), then snake_case fallback for legacy config.json keys
+        // that were copied as-is by run_legacy_migration.
+        let id = values
+            .get("activeProvider")
+            .or_else(|| values.get("active_provider"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("__system_default__");
+        Ok(id.to_string())
+    }
+
+    pub fn resolve_active_runtime_provider(&self) -> Result<ProviderConfig, crate::settings::SettingsError> {
+        let doc = self.effective_document_blocking(None)?;
+        let id = doc.values
+            .get("activeProvider")
+            .or_else(|| doc.values.get("active_provider"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("__system_default__");
+        self.resolve_runtime_provider_from_values(&doc.values, id)
+    }
+
+    /// Returns all providers WITH secrets resolved (for action paths that may need creds).
+    /// Mirrors `list_provider_views` but builds `ProviderConfig` with api_key/auth_token.
+    pub fn list_runtime_providers(&self) -> Result<Vec<ProviderConfig>, crate::settings::SettingsError> {
+        let values = self.effective_document_blocking(None)?.values;
+        let entries = values.get("providers").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+        let mut out = Vec::with_capacity(entries.len());
+        for entry in entries {
+            if let Ok(mut provider) = serde_json::from_value::<ProviderConfig>(entry) {
+                provider.api_key = self.secrets().get(&format!("provider/{}/apiKey", provider.id))?.unwrap_or_default();
+                provider.auth_token = self.secrets().get(&format!("provider/{}/authToken", provider.id))?.unwrap_or_default();
+                migrate_provider_model(&mut provider);
+                enrich(&mut provider);
+                out.push(provider);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Persist model_mappings for a single provider entry. Mutates the `providers[]` entry
+    /// whose id matches. If no matching entry, no-op (does NOT create a top-level key).
+    pub fn save_provider_model_mappings(&self, id: &str, mappings: &ProviderModelMappings) -> Result<(), crate::settings::SettingsError> {
+        let m_val = serde_json::to_value(mappings)
+            .map_err(|e| crate::settings::SettingsError::Storage(e.to_string()))?;
+        self.mutate_scope_blocking(crate::settings::SettingsScope::User, None, |document| {
+            if let Some(arr) = document.values.get_mut("providers").and_then(|v| v.as_array_mut()) {
+                for p in arr.iter_mut() {
+                    if p.get("id").and_then(|v| v.as_str()) == Some(id) {
+                        // ProviderConfig uses #[serde(rename_all = "camelCase")],
+                        // so the JSON key is "modelMappings", not "model_mappings".
+                        p["modelMappings"] = m_val.clone();
+                        break;
+                    }
+                }
+            }
+            Ok(())
+        })?;
         Ok(())
-    })
+    }
+
+    fn resolve_runtime_provider_from_values(&self, values: &serde_json::Value, id: &str) -> Result<ProviderConfig, crate::settings::SettingsError> {
+        let entries = values.get("providers").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+        let mut provider = entries.into_iter().filter_map(|entry| serde_json::from_value::<ProviderConfig>(entry).ok())
+            .find(|candidate| candidate.id == id).unwrap_or_else(system_default_provider);
+        provider.api_key = self.secrets().get(&format!("provider/{}/apiKey", provider.id))?.unwrap_or_default();
+        provider.auth_token = self.secrets().get(&format!("provider/{}/authToken", provider.id))?.unwrap_or_default();
+        migrate_provider_model(&mut provider);
+        enrich(&mut provider);
+        Ok(provider)
+    }
+
+    pub fn save_provider_inputs(&self, inputs: Vec<ProviderConfigInput>) -> Result<(), crate::settings::SettingsError> {
+        let mut ids = std::collections::BTreeSet::new();
+        for input in &inputs {
+            if input.id.trim().is_empty() || !ids.insert(input.id.clone()) {
+                return Err(crate::settings::SettingsError::Validation(
+                    "provider ids must be non-empty and unique".to_string(),
+                ));
+            }
+        }
+
+        let mut persisted = Vec::with_capacity(inputs.len());
+        let mut changed_secret_keys = Vec::new();
+        for input in &inputs {
+            for (suffix, mutation) in [("apiKey", &input.api_key), ("authToken", &input.auth_token)] {
+                let key = format!("provider/{}/{}", input.id, suffix);
+                match mutation {
+                    crate::settings::SecretMutation::Unchanged => {},
+                    crate::settings::SecretMutation::Set(value) if value.is_empty() => {},
+                    crate::settings::SecretMutation::Set(value) => {
+                        self.secrets().set(&key, value)?;
+                        changed_secret_keys.push(key);
+                    }
+                    crate::settings::SecretMutation::Clear => {
+                        self.secrets().delete(&key)?;
+                        changed_secret_keys.push(key);
+                    }
+                }
+            }
+            let mut provider = ProviderConfig { id: input.id.clone(), kind: input.kind, name: input.name.clone(), icon: input.icon.clone(), base_url: input.base_url.clone(), api_key: String::new(), auth_token: String::new(), model: input.model.clone(), model_mappings: input.model_mappings.clone(), effort_level: input.effort_level.clone(), auto_compact_window: input.auto_compact_window.clone(), autocompact_pct_override: input.autocompact_pct_override.clone(), known_models: input.known_models.clone() };
+            strip(&mut provider);
+            persisted.push(provider);
+        }
+        if let Err(error) = self.mutate_scope_blocking(crate::settings::SettingsScope::User, None, move |document| {
+            document.values.insert("providers".to_string(), serde_json::to_value(persisted).map_err(|error| crate::settings::SettingsError::Storage(error.to_string()))?);
+            Ok(())
+        }) {
+            if !changed_secret_keys.is_empty() {
+                tracing::warn!(
+                    secret_key_count = changed_secret_keys.len(),
+                    "provider metadata persistence failed after keychain mutation; unreachable orphan credentials may require cleanup"
+                );
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn save_provider_input_for_test(&self, id: &str, secret: &str) -> Result<(), crate::settings::SettingsError> {
+        self.save_provider_inputs(vec![ProviderConfigInput { id: id.to_string(), kind: ProviderKind::Custom, name: "test".to_string(), icon: String::new(), base_url: String::new(), api_key: crate::settings::SecretMutation::Set(secret.to_string()), auth_token: crate::settings::SecretMutation::Unchanged, model: String::new(), model_mappings: ProviderModelMappings::default(), effort_level: String::new(), auto_compact_window: String::new(), autocompact_pct_override: String::new(), known_models: Vec::new() }])
+    }
 }
 
 /// 决定子进程是否需要因连接身份变化而重启的字段白名单：base_url / api_key /
@@ -231,55 +401,7 @@ pub fn connection_fingerprint(env: &HashMap<String, String>) -> BTreeMap<String,
         .collect()
 }
 
-pub fn load_active_provider() -> Option<ProviderConfig> {
-    let config = load_config();
-    let active_id = config
-        .get("active_provider")
-        .and_then(|v| v.as_str())
-        .unwrap_or("__system_default__");
-    let providers = config.get("providers").and_then(|v| v.as_array())?;
-    for p in providers {
-        if let Ok(mut pc) = serde_json::from_value::<ProviderConfig>(p.clone()) {
-            if pc.id == active_id {
-                migrate_provider_model(&mut pc);
-                return Some(pc);
-            }
-        }
-    }
-    None
-}
-
-/// 取 active provider；迁移后必返回 Some。异常时返回一个空 SystemDefault 实例兜底。
-pub fn active_provider_or_system_default() -> ProviderConfig {
-    match load_active_provider() {
-        Some(p) => p,
-        None => ProviderConfig {
-            id: "__system_default__".to_string(),
-            kind: ProviderKind::SystemDefault,
-            name: String::new(), icon: String::new(), base_url: String::new(),
-            api_key: String::new(), auth_token: String::new(), model: String::new(),
-            model_mappings: ProviderModelMappings::default(),
-            effort_level: String::new(), auto_compact_window: String::new(),
-            autocompact_pct_override: String::new(), known_models: Vec::new(),
-        },
-    }
-}
-
-// ── 系统默认 provider 的模型变量映射 ──
-//
-// 系统默认不是 provider 条目（认证走系统 env 兜底，load_active_provider 返回 None），
-// 但模型变量需要可配——否则用系统默认的用户摸不到 CLAUDE_CODE_SUBAGENT_MODEL，
-// 子代理全继承主会话模型（见 chat.rs spawn 合并点 None 分支）。
-// 独立存储在 config["system_default_model_mappings"]，与 providers 数组并列。
-
-pub fn load_system_default_mappings() -> ProviderModelMappings {
-    load_config()
-        .get("system_default_model_mappings")
-        .and_then(|v| serde_json::from_value::<ProviderModelMappings>(v.clone()).ok())
-        .unwrap_or_default()
-}
-
-/// 老配置 provider 顶层 `model` → `model_mappings.anthropic_model` 回填（复用既有逻辑）。
+/// Legacy-only compatibility helper. New runtime paths resolve providers through SettingsService.
 /// 在 migrate 里对每条迁移后的 provider 跑一遍。
 fn backfill_legacy_model(p: &mut serde_json::Value) {
     let model = p
@@ -465,6 +587,26 @@ pub fn ensure_migrated() -> Result<(), String> {
         }
     }
     save_config(&config)
+}
+
+#[cfg(test)]
+mod secret_boundary_tests {
+    use std::sync::Arc;
+
+    use crate::settings::{MemorySecretStore, SettingsPaths, SettingsService};
+
+    #[test]
+    fn provider_view_redacts_credentials_but_runtime_resolution_gets_them() {
+        let root = std::env::temp_dir().join("aide-provider-secret-boundary-red");
+        let secrets = Arc::new(MemorySecretStore::default());
+        let service = SettingsService::new(SettingsPaths::for_test(root), secrets);
+        service.initialize_blocking().unwrap();
+        service.save_provider_input_for_test("p1", "top-secret").unwrap();
+        let view = service.list_provider_views().unwrap();
+        assert!(view[0].api_key_configured);
+        assert!(!serde_json::to_string(&view).unwrap().contains("top-secret"));
+        assert_eq!(service.resolve_runtime_provider("p1").unwrap().api_key, "top-secret");
+    }
 }
 
 #[cfg(test)]

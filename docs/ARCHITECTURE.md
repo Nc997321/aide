@@ -104,14 +104,16 @@ Aide 自己的元数据: `~/.aide/sessions/<sessionId>.json` — 只存 displayN
 
 ## 设置系统
 
-`~/.aide/config.json`：
-```json
-{ "workspace": "C-Users-...", "settings": { "font_size": 14, "keybindings": { "searchOpen": "Ctrl+P" }, ... } }
-```
+Aide 用**分层 settings document + OS 凭据库**取代旧的单一 `~/.aide/config.json`：
 
-`AppSettings` 含 `font_size`, `font_family`, `notifications_enabled`, `proxy`, `shell_path`, `workbench_height`, `keybindings { search_open }`。
+- **分层文件**（高 → 低，低层可覆盖高层非敏感字段）：受管策略（Windows `%ProgramData%/Aide/settings.json` / macOS `/Library/Application Support/Aide/settings.json` / Linux `/etc/aide/settings.json`，只读）→ 用户全局 `~/.aide/settings.json` → 项目共享 `<project>/.aide/settings.json` → 项目本地 `<project>/.aide/settings.local.json` → 会话临时层（仅内存）。所有文档共享 `SettingsDocument { schemaVersion, values, permissions }` 外层，未知 `values` 字段 round-trip 保留。
+- **秘密隔离**：API key / auth token / CodeGraph key 只存 OS 凭据库（`keyring` crate，服务名 `io.aide.desktop`），绝不落 `settings*.json`；公开 DTO 只暴露 `*Configured: boolean`，runtime-only 的已解析 `ProviderConfig`（含明文）只在 Rust 内存。详见 `settings/secrets.rs`。
+- **权限策略**：`allow | ask | deny` 规则按 scope 分层存储，sidecar 在 `PreToolUse` hook 最前置评估。上层 `deny` 不可被下层 `allow` 放宽，无匹配回退 provider permission mode（`defer`）。详见 `policy/`。
+- **配置文件迁移**：首次启动把旧 `~/.aide/config.json` 一次性迁移为 `~/.aide/settings.json`，秘密抽进 keychain，脱敏备份 `config.json.migrated.bak`；迁移幂等（新 document 已存在后不再读旧文件）。
 
-前端 `useSettings` 模块级 reactive 单例；`useTerminalManager` watch `settings.fontSize`/`fontFamily` 即时应用到所有终端。
+`SettingsService`（`settings/mod.rs`）是统一入口：`initialize_blocking` → `effective_document_blocking` → `mutate_scope_blocking`（原子写 + 重算 snapshot + 广播）；Tauri command 仅薄异步 facade（`Arc<SettingsService>` + `spawn_blocking`，禁止同步重 IO）。前端 `useSettings` / `usePermissions` 模块级 reactive 单例；`useTerminalManager` watch `settings.fontSize`/`fontFamily` 即时应用到所有终端。
+
+> 用户文档、文件位置与可写性全表、precedence 规则、7 步手工验收矩阵见 [docs/testing/permission-settings-manual-acceptance.md](testing/permission-settings-manual-acceptance.md)。Aide 不读写或解释 Claude Code 的 `.claude/settings.json` 权限规则。
 
 ## 自定义（扩展）系统
 

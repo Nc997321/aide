@@ -4,6 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
+    "resolveJsonModule": true,
     "outDir": "dist",
     "rootDir": "src",
     "lib": ["ES2022"],

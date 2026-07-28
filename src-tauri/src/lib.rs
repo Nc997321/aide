@@ -5,6 +5,8 @@ mod shell;
 mod runtime;
 mod conversation;
 mod skills;
+mod policy;
+mod settings;
 
 use std::path::PathBuf;
 
@@ -94,12 +96,20 @@ pub fn run() {
         )
         .manage(shell_manager)
         .manage(diagnostics::DiagnosticsState::new())
+        .manage(std::sync::Arc::new(settings::SettingsService::new(
+            settings::SettingsPaths::new().expect("settings paths"),
+            std::sync::Arc::new(settings::KeyringSecretStore::new()),
+        )))
         .manage(runtime::AgentRuntimeManager::new())
         .manage(std::sync::Arc::new(skills::SkillRegistry::new()))
         .manage(workspace_state)
         .manage(PendingOpenFile(std::sync::Mutex::new(None)))
         .manage(std::sync::Arc::new(codegraph::CodeGraphState::new()))
         .setup(|app| {
+            app.state::<std::sync::Arc<settings::SettingsService>>()
+                .initialize_blocking()
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+
             // Create the main window programmatically so we can set file_drop_enabled = false.
             // On Windows, Tauri's built-in OLE Drop Target intercepts all drag-and-drop messages
             // at the Win32 level before WebView2 sees them, which prevents HTML5 dragover /
@@ -148,11 +158,16 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 if let Some(rt) = handle1.try_state::<runtime::AgentRuntimeManager>() {
                     use crate::runtime::env::build_runtime_env_vars;
-                    use crate::runtime::provider::active_provider_or_system_default;
-                    let active = active_provider_or_system_default();
-                    let proxy = crate::commands::settings::get_settings()
-                        .map(|s| s.proxy)
-                        .unwrap_or_default();
+                    let settings_service = handle1.state::<std::sync::Arc<settings::SettingsService>>().inner().clone();
+                    let resolved = tokio::task::spawn_blocking(move || {
+                        let active = settings_service.resolve_active_runtime_provider().map_err(|error| error.to_string())?;
+                        let proxy = crate::commands::settings::public_settings(&settings_service)?.proxy;
+                        Ok::<_, String>((active, proxy))
+                    }).await;
+                    let Ok(Ok((active, proxy))) = resolved else {
+                        eprintln!("[aide] unable to resolve initial provider settings");
+                        return;
+                    };
                     let env_vars = build_runtime_env_vars(&active, &proxy);
                     if let Err(e) = rt.ensure_runtime(handle2, env_vars).await {
                         eprintln!("[aide] Agent Runtime 启动失败: {e}");
@@ -227,6 +242,11 @@ pub fn run() {
             commands::settings::set_settings,
             commands::settings::notify_send,
             commands::settings::get_pending_notification,
+            commands::permissions::get_permission_settings,
+            commands::permissions::create_permission_rule,
+            commands::permissions::update_permission_rule,
+            commands::permissions::delete_permission_rule,
+            commands::permissions::explain_permission_decision,
             commands::git::git_diff_files,
             commands::git::git_stage_all,
             commands::git::git_stage_file,
@@ -285,8 +305,6 @@ pub fn run() {
             commands::provider::set_providers,
             commands::provider::get_active_provider_id,
             commands::provider::set_active_provider_id,
-            commands::provider::get_system_default_model_mappings,
-            commands::provider::set_system_default_model_mappings,
             commands::provider::test_provider_connection,
             commands::provider::cpa_probe_port,
             commands::provider::cpa_open_management,

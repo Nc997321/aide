@@ -1,0 +1,114 @@
+[
+  {
+    "name": "managed deny beats local allow",
+    "rules": [
+      { "id": "m", "scope": "managed", "order": 0, "effect": "deny", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "rm" } },
+      { "id": "l", "scope": "local", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "rm -rf build" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "rm -rf build" } },
+    "expectedDisposition": "deny",
+    "expectedWinner": "m"
+  },
+  {
+    "name": "more specific same-scope rule wins",
+    "rules": [
+      { "id": "a", "scope": "project", "order": 0, "effect": "ask", "tool": "Bash", "matcher": { "kind": "bash", "mode": "all" } },
+      { "id": "b", "scope": "project", "order": 1, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "pnpm test" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "pnpm test --runInBand" } },
+    "expectedDisposition": "allow",
+    "expectedWinner": "b"
+  },
+  {
+    "name": "shell chaining never inherits prefix allow",
+    "rules": [
+      { "id": "a", "scope": "user", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "pnpm test" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "pnpm test && rm -rf /" } },
+    "expectedDisposition": "defer",
+    "expectedWinner": null
+  },
+  {
+    "name": "no matching rule defers",
+    "rules": [
+      { "id": "a", "scope": "user", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "pnpm test" } }
+    ],
+    "invocation": { "tool": "Write", "input": { "file_path": "/tmp/x.txt" } },
+    "expectedDisposition": "defer",
+    "expectedWinner": null
+  },
+  {
+    "name": "field equals exact match allows",
+    "rules": [
+      { "id": "f", "scope": "user", "order": 0, "effect": "allow", "tool": "WebFetch", "matcher": { "kind": "field", "field": "url", "equals": "https://example.com" } }
+    ],
+    "invocation": { "tool": "WebFetch", "input": { "url": "https://example.com" } },
+    "expectedDisposition": "allow",
+    "expectedWinner": "f"
+  },
+  {
+    "name": "field equals rejects partial match",
+    "rules": [
+      { "id": "f", "scope": "user", "order": 0, "effect": "allow", "tool": "WebFetch", "matcher": { "kind": "field", "field": "url", "equals": "https://example.com" } }
+    ],
+    "invocation": { "tool": "WebFetch", "input": { "url": "https://example.com.evil.com" } },
+    "expectedDisposition": "defer",
+    "expectedWinner": null
+  },
+  {
+    "name": "ask effect returns ask",
+    "rules": [
+      { "id": "a", "scope": "user", "order": 0, "effect": "ask", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "pnpm test" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "pnpm test" } },
+    "expectedDisposition": "ask",
+    "expectedWinner": "a"
+  },
+  {
+    "name": "user deny overrides project allow",
+    "rules": [
+      { "id": "u", "scope": "user", "order": 0, "effect": "deny", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "rm" } },
+      { "id": "p", "scope": "project", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "rm -rf build" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "rm -rf build" } },
+    "expectedDisposition": "deny",
+    "expectedWinner": "u"
+  },
+  {
+    "name": "bash contains deny matches substring",
+    "rules": [
+      { "id": "d", "scope": "user", "order": 0, "effect": "deny", "tool": "Bash", "matcher": { "kind": "bash", "mode": "contains", "value": "rm -rf" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "echo hi && rm -rf build" } },
+    "expectedDisposition": "deny",
+    "expectedWinner": "d"
+  },
+  {
+    "name": "tool matcher matches any invocation of tool",
+    "rules": [
+      { "id": "t", "scope": "user", "order": 0, "effect": "allow", "tool": "Read", "matcher": { "kind": "tool" } }
+    ],
+    "invocation": { "tool": "Read", "input": { "file_path": "/tmp/anything.txt" } },
+    "expectedDisposition": "allow",
+    "expectedWinner": "t"
+  },
+  {
+    "name": "managed deny overrides local allow despite lower priority",
+    "rules": [
+      { "id": "l", "scope": "local", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "pnpm test" } },
+      { "id": "m", "scope": "managed", "order": 0, "effect": "deny", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "pnpm test" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "pnpm test" } },
+    "expectedDisposition": "deny",
+    "expectedWinner": "m"
+  },
+  {
+    "name": "prefix allow does not match across semicolon",
+    "rules": [
+      { "id": "a", "scope": "user", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "pnpm test" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "pnpm test; rm -rf build" } },
+    "expectedDisposition": "defer",
+    "expectedWinner": null
+  }
+]

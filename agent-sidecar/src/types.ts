@@ -1,3 +1,5 @@
+import type { PermissionPolicySnapshot } from "./policy/types.js";
+
 // 一轮对话的 token 用量 + 费用（跨该轮用到的所有模型汇总，如子代理另用了别的模型）
 export interface TurnUsage {
   inputTokens: number;
@@ -91,19 +93,15 @@ export type ChatEvent =
   | { type: "bg_task_output"; id: string; delta: string }
   // ended：任务到达终态。summary 是 provider 给的一句话结果摘要；durationMs 取 provider 统计。
   | { type: "bg_task_ended"; id: string; status: "completed" | "failed" | "stopped"; summary?: string; durationMs?: number }
-  // alwaysAllowLabel：sidecar 已经把 SDK 的 suggestions 解读成一句人话（比如 Edit
-  // 工具常见的"自动接受编辑（本次会话）"，而不是笼统的"总是允许"——两者后果差异很大：
-  // 前者是切权限模式且不落盘，后者是给某工具加一条持久化规则），前端只管展示这句话，
-  // 不需要也不应该重新解释 Claude 专属的 PermissionUpdate 结构。缺省时前端自己兜底
-  // 显示"总是允许"。
   // fromSubagent：这次请求是不是子代理内部发起的（而不是主线程）——没有它，用户会
   // 在毫无上下文的情况下突然看到一个权限框弹出来，不知道是谁在问。缺省表示来自主线程。
+  // Aide 权限策略只暴露 allow/deny/ask；"总是允许"的持久化由设置面板的权限规则管理，
+  // 不再在确认弹窗里携带 SDK 专属的 PermissionUpdate / alwaysAllowLabel。
   | {
       type: "permission_request";
       id: string;
       name: string;
       input: unknown;
-      alwaysAllowLabel?: string;
       fromSubagent?: { id: string; agentName: string };
     }
   | { type: "permission_cancelled"; id: string }
@@ -213,8 +211,12 @@ export type SidecarCommand =
       // 会话自动命名开关（来自设置面板）：false 时首轮后不生成会话标题。
       // 省略 = 开启。provider-agnostic：标题生成是通用能力。
       auto_title?: boolean;
+      // 权限策略快照：Rust 在每次设置变更后推送，sidecar 在 PreToolUse 时
+      // 用它做本地策略评估。省略 = 沿用上次快照或空策略（全部 defer）。
+      permission_policy?: PermissionPolicySnapshot;
     }
-  | { cmd: "permission_response"; session_id: string; id: string; approved: boolean; always?: boolean; answers?: Record<string, string>; nextMode?: string }
+  | { cmd: "update_permission_policy"; session_id: string; policy: PermissionPolicySnapshot }
+  | { cmd: "permission_response"; session_id: string; id: string; approved: boolean; answers?: Record<string, string>; nextMode?: string }
   | { cmd: "interrupt"; session_id: string }
   // 终止一个后台任务（provider-agnostic：任何 provider 的"停掉后台命令"都映射成它）。
   // 成功后任务会走正常终态通道（bg_task_ended, status:"stopped"），不需要额外回执事件。

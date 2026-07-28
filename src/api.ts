@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem,
   ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
-  GrepMatch, ProviderConfig, ProviderModelMappings, RunConfig, RunTarget, JdkEntry, RecentView,
+  GrepMatch, ProviderConfig, ProviderConfigInput, ProviderModelMappings, RunConfig, RunTarget, JdkEntry, RecentView,
   SkillMeta, BuildIndexResult, BuildProgress, RescanResult, QueryResult,
   AppNotification, NotificationRecord,
   CatalogPreset, PortProbeResult, LoginStatusResult, ConnectionStatus,
@@ -247,7 +247,7 @@ export const api = {
   getSettings(): Promise<AppSettings> {
     return invoke("get_settings");
   },
-  setSettings(settings: Partial<AppSettings>): Promise<void> {
+  setSettings(settings: Partial<AppSettings> | { codegraphEmbedder: Record<string, unknown> }): Promise<void> {
     return invoke("set_settings", { settings });
   },
 
@@ -263,7 +263,7 @@ export const api = {
   getProviders(): Promise<ProviderConfig[]> {
     return invoke("get_providers");
   },
-  setProviders(providers: ProviderConfig[]): Promise<void> {
+  setProviders(providers: ProviderConfigInput[]): Promise<void> {
     return invoke("set_providers", { providers });
   },
   getActiveProviderId(): Promise<string> {
@@ -359,3 +359,5 @@ export const api = {
     return invoke("codegraph_build_progress");
   },
 };
+
+export { permissionsApi } from "./api/permissions";

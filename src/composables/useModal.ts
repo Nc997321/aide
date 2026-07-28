@@ -1,7 +1,14 @@
-import { ref, readonly } from "vue";
+import { ref, shallowRef, readonly, type Component } from "vue";
+
+export interface CustomModalRequest<T> {
+  title: string;
+  component: Component;
+  props?: Record<string, unknown>;
+  width?: "sm" | "md" | "lg";
+}
 
 const visible = ref(false);
-const mode = ref<"prompt" | "confirm" | "choice" | "notice">("confirm");
+const mode = ref<"prompt" | "confirm" | "choice" | "notice" | "custom">("confirm");
 const title = ref("");
 const message = ref("");
 const inputValue = ref("");
@@ -10,6 +17,9 @@ const confirmLabel = ref("确定");
 /** choice 模式的第二动作按钮（如「放弃修改」），confirm/prompt 模式不显示 */
 const altLabel = ref("");
 const danger = ref(false);
+const component = shallowRef<Component | null>(null);
+const componentProps = ref<Record<string, unknown>>({});
+const width = ref<"sm" | "md" | "lg">("md");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let resolver: ((v: any) => void) | null = null;
@@ -96,7 +106,37 @@ export function useModal() {
     });
   }
 
+  /**
+   * Open a modal that renders an arbitrary Vue component.
+   * The component receives props via `props` and must emit `submit(payload)` or `cancel`.
+   * Returns the submitted payload (T) or null on cancel.
+   */
+  function custom<T>(request: CustomModalRequest<T>): Promise<T | null> {
+    return new Promise((resolve) => {
+      resolver = resolve;
+      mode.value = "custom";
+      title.value = request.title;
+      message.value = "";
+      inputValue.value = "";
+      placeholder.value = "";
+      confirmLabel.value = "确定";
+      altLabel.value = "";
+      danger.value = false;
+      component.value = request.component;
+      componentProps.value = request.props ?? {};
+      width.value = request.width ?? "md";
+      visible.value = true;
+    });
+  }
+
+  function resolveCustom(payload: unknown) {
+    visible.value = false;
+    resolver?.(payload);
+    resolver = null;
+  }
+
   function submit() {
+    if (mode.value === "custom") return;
     visible.value = false;
     if (mode.value === "prompt") {
       resolver?.(inputValue.value.trim() || null);
@@ -125,6 +165,8 @@ export function useModal() {
       resolver?.("cancel");
     } else if (mode.value === "notice") {
       resolver?.(undefined);
+    } else if (mode.value === "custom") {
+      resolver?.(null);
     } else {
       resolver?.(false);
     }
@@ -141,10 +183,15 @@ export function useModal() {
     confirmLabel: readonly(confirmLabel),
     altLabel: readonly(altLabel),
     danger: readonly(danger),
+    component,
+    componentProps: readonly(componentProps),
+    width: readonly(width),
     prompt,
     confirm,
     choice,
     notice,
+    custom,
+    resolveCustom,
     submit,
     submitAlt,
     cancel,

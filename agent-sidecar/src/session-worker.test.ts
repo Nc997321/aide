@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { SessionWorker } from "./session-worker.js";
 import { ImageInputCapabilityCache } from "./imageInputCapability.js";
 import type { ChatEvent } from "./types.js";
+import type { PermissionPolicySnapshot } from "./policy/types.js";
 
 /**
  * 验证 SessionWorker 的 fork 源 / 路由键设定逻辑。
@@ -525,5 +526,140 @@ describe("SessionWorker — 会话自动命名", () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(events.some((e) => e.type === "session_title")).toBe(false);
     worker.stop();
+  });
+});
+
+// ================================================================
+// Task 7: Aide 权限策略 hook + 指令加载
+// ================================================================
+
+function rule(effect: "allow" | "ask" | "deny", tool: string): PermissionPolicySnapshot {
+  return {
+    revision: 1,
+    rules: [{
+      id: "r1", scope: "user", order: 0, effect, tool,
+      matcher: { kind: "tool" },
+      source: { label: "user", readOnly: false },
+    }],
+  };
+}
+
+describe("SessionWorker — Aide 权限策略 PreToolUse hook", () => {
+  it("policy allow → permissionDecision allow (no confirmation)", async () => {
+    const { worker } = makeWorker();
+    worker._testApplyPermissionPolicy(rule("allow", "Bash"));
+    const hook = worker._testPolicyHook("/tmp");
+    const out: any = await hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } } as any);
+    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
+    expect(typeof out.hookSpecificOutput.permissionDecisionReason).toBe("string");
+  });
+
+  it("policy deny → permissionDecision deny (no confirmation)", async () => {
+    const { worker } = makeWorker();
+    worker._testApplyPermissionPolicy(rule("deny", "Bash"));
+    const hook = worker._testPolicyHook("/tmp");
+    const out: any = await hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } } as any);
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+
+  it("empty policy → defer (falls back to SDK permission mode)", async () => {
+    const { worker } = makeWorker();
+    const hook = worker._testPolicyHook("/tmp");
+    const out: any = await hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } } as any);
+    expect(out.hookSpecificOutput.permissionDecision).toBe("defer");
+  });
+
+  it("policy ask emits permission_request and resolves allow when approved", async () => {
+    const { worker, events } = makeWorker();
+    worker._testApplyPermissionPolicy(rule("ask", "Bash"));
+    const hook = worker._testPolicyHook("/tmp");
+    const pending = hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } } as any);
+    await flushPromises();
+    const req = events.find((e: any) => e.type === "permission_request");
+    expect(req).toBeDefined();
+    worker.permMgr.resolve(req.id, true);
+    const out: any = await pending;
+    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
+  });
+
+  it("policy ask resolves deny when the user rejects", async () => {
+    const { worker, events } = makeWorker();
+    worker._testApplyPermissionPolicy(rule("ask", "Bash"));
+    const hook = worker._testPolicyHook("/tmp");
+    const pending = hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } } as any);
+    await flushPromises();
+    const req = events.find((e: any) => e.type === "permission_request");
+    worker.permMgr.resolve(req.id, false);
+    const out: any = await pending;
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+
+  it("policy hook applies to Read too (not just authorize-only tools)", async () => {
+    const { worker } = makeWorker();
+    worker._testApplyPermissionPolicy(rule("deny", "Read"));
+    const hook = worker._testPolicyHook("/tmp");
+    const out: any = await hook({ hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: "x.ts" } } as any);
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+
+  it("applyPermissionPolicy ignores lower revisions (no rollback)", async () => {
+    const { worker } = makeWorker();
+    worker._testApplyPermissionPolicy({ revision: 2, rules: [{ id: "r", scope: "user", order: 0, effect: "deny", tool: "Bash", matcher: { kind: "tool" }, source: { label: "user", readOnly: false } }] });
+    worker._testApplyPermissionPolicy({ revision: 1, rules: [] }); // stale — must be ignored
+    const hook = worker._testPolicyHook("/tmp");
+    const out: any = await hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: {} } as any);
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny"); // revision 2 still active
+  });
+
+  it("policy ask for AskUserQuestion reshapes answers into updatedInput", async () => {
+    const { worker, events } = makeWorker();
+    worker._testApplyPermissionPolicy(rule("ask", "AskUserQuestion"));
+    const hook = worker._testPolicyHook("/tmp");
+    const input = { questions: [{ question: "q", options: [{ label: "a" }] }] };
+    const pending = hook({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion", tool_input: input } as any);
+    await flushPromises();
+    const req = events.find((e: any) => e.type === "permission_request");
+    worker.permMgr.resolve(req.id, true, { q: "a" });
+    const out: any = await pending;
+    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
+    expect(out.hookSpecificOutput.updatedInput).toEqual({ questions: input.questions, answers: { q: "a" } });
+  });
+});
+
+describe("SessionWorker — 指令加载（settingSources:[] + preset systemPrompt）", () => {
+  it("query options use settingSources:[] and preset+append systemPrompt (no Claude settings.json)", async () => {
+    let resolveCapture!: (opts: any) => void;
+    const captured = new Promise<any>((r) => { resolveCapture = r; });
+    const worker = new SessionWorker("sid", () => {}, {
+      cwd: "/tmp",
+      imageCapabilityCache: new ImageInputCapabilityCache(),
+      queryFn: ((args: any) => {
+        resolveCapture(args.options);
+        return (async function* () { /* empty generator */ })() as any;
+      }) as any,
+    });
+    worker.handleCommand({ cmd: "send", session_id: "sid", prompt: "hi", cwd: "/tmp", env: {} } as any);
+    const opts = await captured;
+    expect(opts.settingSources).toEqual([]);
+    expect(opts.systemPrompt).toMatchObject({ type: "preset", preset: "claude_code" });
+    expect(typeof opts.systemPrompt.append).toBe("string");
+    // policy hook is registered first on matcher ".*"
+    expect(opts.hooks.PreToolUse[0].matcher).toBe(".*");
+    worker.stop();
+  });
+
+  it("permission_response no longer carries always (command shape, no updatedPermissions)", async () => {
+    const { worker, events } = makeWorker();
+    // send a permission_request via the policy ask path, then resolve without `always`
+    worker._testApplyPermissionPolicy(rule("ask", "Bash"));
+    const hook = worker._testPolicyHook("/tmp");
+    const pending = hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } } as any);
+    await flushPromises();
+    const req = events.find((e: any) => e.type === "permission_request");
+    // Simulate the Rust permission_response command (no `always` field).
+    worker.handleCommand({ cmd: "permission_response", session_id: "test-sid", id: req.id, approved: true } as any);
+    const out: any = await pending;
+    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
+    expect((out.hookSpecificOutput as any).updatedPermissions).toBeUndefined();
   });
 });

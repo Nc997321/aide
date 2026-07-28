@@ -12,6 +12,10 @@ const {
   confirmLabel,
   altLabel,
   danger,
+  component,
+  componentProps,
+  width,
+  resolveCustom,
   submit,
   submitAlt,
   cancel,
@@ -27,7 +31,7 @@ watch(visible, async (v) => {
 });
 
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === "Enter") submit();
+  if (e.key === "Enter" && mode.value !== "custom") submit();
   if (e.key === "Escape") cancel();
 }
 
@@ -41,7 +45,7 @@ function onOverlayClick(e: MouseEvent) {
 <template>
   <Teleport to="body">
     <div v-if="visible" class="modal-overlay" @click="onOverlayClick" @keydown="onKeydown">
-      <div class="modal-dialog" @click.stop>
+      <div class="modal-dialog" :class="[mode === 'custom' ? width : '']" @click.stop>
         <div class="modal-header">{{ title }}</div>
 
         <div v-if="message" class="modal-body">{{ message }}</div>
@@ -57,7 +61,16 @@ function onOverlayClick(e: MouseEvent) {
           />
         </div>
 
-        <div class="modal-actions">
+        <div v-if="mode === 'custom'" class="modal-custom-body">
+          <component
+            :is="component"
+            v-bind="componentProps"
+            @submit="resolveCustom"
+            @cancel="cancel"
+          />
+        </div>
+
+        <div v-if="mode !== 'custom'" class="modal-actions">
           <button v-if="mode !== 'notice'" class="modal-btn btn-cancel" @click="cancel">取消</button>
           <button v-if="mode === 'choice'" class="modal-btn btn-alt" @click="submitAlt">
             {{ altLabel }}
@@ -108,6 +121,11 @@ function onOverlayClick(e: MouseEvent) {
   animation: scaleIn 0.15s ease;
 }
 
+/* Custom mode width variants */
+.modal-dialog.sm { width: 360px; max-width: 400px; }
+.modal-dialog.md { width: 480px; max-width: 560px; }
+.modal-dialog.lg { width: 640px; max-width: 720px; }
+
 @keyframes scaleIn {
   from { opacity: 0; transform: scale(0.95); }
   to { opacity: 1; transform: scale(1); }
@@ -153,6 +171,10 @@ function onOverlayClick(e: MouseEvent) {
 .modal-input:focus {
   border-color: var(--aide-accent);
   box-shadow: var(--aide-accent-ring), var(--aide-shadow-inset);
+}
+
+.modal-custom-body {
+  margin-bottom: 0;
 }
 
 .modal-actions {

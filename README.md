@@ -109,6 +109,10 @@ User types message
 
 Session data lives in `~/.claude/` (Claude Code's own storage). Aide never duplicates your conversations — it reads and displays what Claude already stores.
 
+## Settings & permissions
+
+Aide keeps its own layered settings (`~/.aide/settings.json` + per-project `.aide/settings.json` / `.aide/settings.local.json` + a read-only managed-policy layer) and stores credentials in the OS keychain — it does **not** read or write Claude Code's `.claude/settings.json` permission rules. Tool permissions (`allow | ask | deny`) are managed from **设置 → 权限** in the app. Precedence rules, file locations, secret handling, and the manual acceptance matrix are in [docs/testing/permission-settings-manual-acceptance.md](docs/testing/permission-settings-manual-acceptance.md); the architecture boundary is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## License
 
 MIT — see [LICENSE](./LICENSE) for details.

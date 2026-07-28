@@ -133,7 +133,7 @@ function onNewTab() {
       @interrupt="interrupt"
       @set-model="setModel"
       @set-permission-mode="setPermissionMode"
-      @respond-permission="(id: string, approved: boolean, always?: boolean, answers?: Record<string, string>, nextMode?: string) => respondPermission(id, approved, always, answers, nextMode)"
+      @respond-permission="(id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string) => respondPermission(id, approved, answers, nextMode)"
     />
   </div>
 </template>

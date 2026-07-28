@@ -2,8 +2,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use tauri::State;
+
+use crate::settings::{SettingsScope, SettingsService};
 use super::config_path;
 use once_cell::sync::Lazy;
 
@@ -63,7 +66,7 @@ pub struct CodeGraphEmbedderConfig {
     #[serde(default)]
     pub base_url: String,
     #[serde(default)]
-    pub api_key: String,
+    pub api_key_configured: bool,
     #[serde(default = "default_cg_model")]
     pub model: String,
     #[serde(default = "default_cg_format")]
@@ -82,7 +85,7 @@ impl Default for CodeGraphEmbedderConfig {
         Self {
             backend: default_cg_backend(),
             base_url: String::new(),
-            api_key: String::new(),
+            api_key_configured: false,
             model: default_cg_model(),
             format: default_cg_format(),
             dim: 0,
@@ -258,36 +261,74 @@ where
     Ok(r)
 }
 
-#[tauri::command]
-pub fn get_settings() -> Result<AppSettings, String> {
-    let _trace = crate::diagnostics::trace_command("get_settings");
-    let config = load_config();
-    if let Some(settings) = config.get("settings") {
-        serde_json::from_value::<AppSettings>(settings.clone())
-            .map_err(|e| format!("Failed to deserialize settings: {}", e))
-    } else {
-        Ok(AppSettings::default())
-    }
+pub(crate) fn public_settings(service: &SettingsService) -> Result<AppSettings, String> {
+    let effective = service.effective_document_blocking(None).map_err(|error| error.to_string())?;
+    let value = effective.values.get("settings").cloned().unwrap_or_else(|| serde_json::json!({}));
+    let mut settings: AppSettings = serde_json::from_value(value)
+        .map_err(|error| format!("Failed to deserialize settings: {error}"))?;
+    settings.codegraph_embedder.api_key_configured = service.secrets()
+        .get("codegraph/default/apiKey").map_err(|error| error.to_string())?.is_some();
+    Ok(settings)
+}
+
+pub(crate) fn resolve_codegraph_embedder(service: &SettingsService) -> Result<RuntimeCodeGraphEmbedderConfig, String> {
+    let settings = public_settings(service)?;
+    Ok(RuntimeCodeGraphEmbedderConfig {
+        backend: settings.codegraph_embedder.backend,
+        base_url: settings.codegraph_embedder.base_url,
+        api_key: service.secrets().get("codegraph/default/apiKey").map_err(|error| error.to_string())?.unwrap_or_default(),
+        model: settings.codegraph_embedder.model,
+        format: settings.codegraph_embedder.format,
+        dim: settings.codegraph_embedder.dim,
+    })
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeCodeGraphEmbedderConfig {
+    pub backend: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub format: String,
+    pub dim: u32,
 }
 
 #[tauri::command]
-pub fn set_settings(settings: Value) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("set_settings");
-    with_config_mut(move |config| {
-        // Merge incoming settings fields into the existing "settings" sub-object
-        let existing = config
-            .get("settings")
-            .cloned()
-            .unwrap_or(serde_json::json!({}));
-        let mut merged = existing;
-        if let Some(obj) = settings.as_object() {
-            for (k, v) in obj {
-                merged[k] = v.clone();
-            }
+pub async fn get_settings(service: State<'_, Arc<SettingsService>>) -> Result<AppSettings, String> {
+    let service = service.inner().clone();
+    tokio::task::spawn_blocking(move || public_settings(&service))
+        .await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn set_settings(settings: Value, service: State<'_, Arc<SettingsService>>) -> Result<(), String> {
+    let service = service.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let mut incoming = settings;
+        let api_key = incoming.get_mut("codegraphEmbedder")
+            .and_then(Value::as_object_mut)
+            .and_then(|embedder| embedder.remove("apiKey"))
+            .map(serde_json::from_value::<crate::settings::SecretMutation>)
+            .transpose().map_err(|error| format!("Invalid API key mutation: {error}"))?
+            .unwrap_or_default();
+        if let Some(embedder) = incoming.get_mut("codegraphEmbedder").and_then(Value::as_object_mut) {
+            embedder.remove("apiKeyConfigured");
         }
-        config["settings"] = merged;
-        Ok(())
-    })
+        service.mutate_scope_blocking(SettingsScope::User, None, |document| {
+            let target = document.values.entry("settings".to_string()).or_insert_with(|| serde_json::json!({}));
+            let target = target.as_object_mut().ok_or_else(|| crate::settings::SettingsError::Validation("settings must be an object".to_string()))?;
+            for (key, value) in incoming.as_object().ok_or_else(|| crate::settings::SettingsError::Validation("settings must be an object".to_string()))? {
+                target.insert(key.clone(), value.clone());
+            }
+            Ok(())
+        }).map_err(|error| error.to_string())?;
+        match api_key {
+            crate::settings::SecretMutation::Unchanged => Ok(()),
+            crate::settings::SecretMutation::Set(value) if value.is_empty() => Ok(()),
+            crate::settings::SecretMutation::Set(value) => service.secrets().set("codegraph/default/apiKey", &value).map_err(|error| error.to_string()),
+            crate::settings::SecretMutation::Clear => service.secrets().delete("codegraph/default/apiKey").map_err(|error| error.to_string()),
+        }
+    }).await.map_err(|error| error.to_string())?
 }
 
 /// Send a desktop notification with the correct AppUserModelID,

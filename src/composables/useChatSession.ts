@@ -511,7 +511,6 @@ function handleChatEvent(e: Record<string, unknown>) {
         id: e["id"] as string,
         name: e["name"] as string,
         input: e["input"],
-        alwaysAllowLabel: e["alwaysAllowLabel"] as string | undefined,
         fromSubagent: e["fromSubagent"] as { id: string; agentName: string } | undefined,
       });
       setSessionState(sid, "attention");
@@ -1015,7 +1014,6 @@ export function useChatSession(sessionId: Ref<string | null>) {
   async function respondPermission(
     id: string,
     approved: boolean,
-    always?: boolean,
     answers?: Record<string, string>,
     nextMode?: string,
   ) {
@@ -1029,7 +1027,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       setSessionState(sid, "running");
       armStalled(sid); // 权限批准后恢复生成 → 重启软超时计时
     }
-    await invoke("permission_response", { sessionId: sid, id, approved, always, answers, nextMode });
+    await invoke("permission_response", { sessionId: sid, id, approved, answers, nextMode });
   }
 
   async function interrupt() {

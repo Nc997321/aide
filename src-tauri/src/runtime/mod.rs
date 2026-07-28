@@ -11,9 +11,20 @@ use serde_json::Value;
 pub mod env;
 pub mod provider;
 use crate::runtime::provider::connection_fingerprint;
+use crate::settings::{SettingsScope, SettingsService};
 
 /// 进程内唯一即可：request id 不跨 Runtime 持久化，也不暴露给前端。
 static NEXT_IMAGE_PROBE_REQUEST: AtomicU64 = AtomicU64::new(1);
+
+/// Per-session routing info used to scope permission-policy broadcasts.
+/// `workspace_root` decides which sessions a project/local policy change
+/// affects; `last_policy_revision` tracks the most recent snapshot pushed to
+/// the sidecar so a runtime restart can be detected and the next `send`
+/// re-attaches a fresh snapshot.
+struct ActiveSessionRoute {
+    workspace_root: Option<PathBuf>,
+    last_policy_revision: u64,
+}
 
 /// 持久 Agent Runtime 管理器（替代 SidecarManager）。
 ///
@@ -32,6 +43,13 @@ pub struct AgentRuntimeManager {
     image_probe_waiters: Arc<Mutex<HashMap<String, oneshot::Sender<Option<bool>>>>>,
     /// 串行化冷启动，避免 setup 和首次预检各自 spawn 一个 Runtime。
     spawn_lock: TokioMutex<()>,
+    /// session_id → 工作区路由。`send_message` 注册/刷新；权限规则保存后
+    /// `broadcast_policy_change` 据此决定哪些 session 收到 `update_permission_policy`。
+    session_routes: Mutex<HashMap<String, ActiveSessionRoute>>,
+    /// 测试缝合：true 时 `send_to_runtime` 把命令录进 `sent_commands` 而非写真实
+    /// stdin（单测里 stdin 永远 None）。生产恒为 false，`sent_commands` 保持空。
+    test_mode: bool,
+    sent_commands: Arc<Mutex<Vec<Value>>>,
 }
 
 impl AgentRuntimeManager {
@@ -43,7 +61,18 @@ impl AgentRuntimeManager {
             fingerprints: Mutex::new(HashMap::new()),
             image_probe_waiters: Arc::new(Mutex::new(HashMap::new())),
             spawn_lock: TokioMutex::new(()),
+            session_routes: Mutex::new(HashMap::new()),
+            test_mode: false,
+            sent_commands: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// 测试专用构造器：`send_to_runtime` 录制命令而非写 stdin。
+    #[cfg(test)]
+    pub fn new_for_test() -> Self {
+        let mut mgr = Self::new();
+        mgr.test_mode = true;
+        mgr
     }
 
     /// 幂等地启动 Runtime；应用冷启动与首个图片预检共享同一把启动锁。
@@ -310,6 +339,10 @@ impl AgentRuntimeManager {
 
     /// 所有命令写同一个 stdin（已带 session_id 字段，Runtime 内部路由）。
     pub async fn send_to_runtime(&self, cmd: &Value) -> Result<(), String> {
+        if self.test_mode {
+            self.sent_commands.lock().unwrap().push(cmd.clone());
+            return Ok(());
+        }
         let stdin = {
             let guard = self.stdin.lock().unwrap();
             guard.as_ref().ok_or("Runtime not spawned")?.clone()
@@ -390,6 +423,85 @@ impl AgentRuntimeManager {
             .lock()
             .unwrap()
             .insert(session_id.to_string(), connection_fingerprint(env_vars));
+    }
+
+    /// 记录/刷新一个 session 的工作区路由（`send_message` 在发出 send 前调用）。
+    /// `cwd` 为 None 时不覆盖已有 workspace_root（保留首条 send 注册的值）。
+    pub fn register_session_route(&self, session_id: &str, cwd: Option<&std::path::Path>) {
+        let mut routes = self.session_routes.lock().unwrap();
+        let entry = routes
+            .entry(session_id.to_string())
+            .or_insert(ActiveSessionRoute {
+                workspace_root: None,
+                last_policy_revision: 0,
+            });
+        if let Some(c) = cwd {
+            entry.workspace_root = Some(c.to_path_buf());
+        }
+    }
+
+    /// 权限规则保存成功后，向受影响的 session 推送新快照。
+    /// user/managed/session 影响所有 session；project/local 只影响同 project root
+    /// 的 session。每条发 `{cmd:"update_permission_policy", session_id, policy}`，
+    /// 走既有 stdin 通道——不新建 stdout event、不动 delta coalescer。Runtime 不存在
+    /// 或已重启时 send 失败静默：route 保留，下一条 send 自动补发新快照。
+    pub async fn broadcast_policy_change(
+        &self,
+        affected_scope: SettingsScope,
+        affected_root: Option<&std::path::Path>,
+        service: &SettingsService,
+    ) {
+        let targets: Vec<(String, Option<PathBuf>)> = {
+            let routes = self.session_routes.lock().unwrap();
+            routes
+                .iter()
+                .filter_map(|(sid, route)| {
+                    let affected = match affected_scope {
+                        SettingsScope::Managed
+                        | SettingsScope::User
+                        | SettingsScope::Session => true,
+                        SettingsScope::Project | SettingsScope::Local => {
+                            route.workspace_root.as_deref() == affected_root
+                        }
+                    };
+                    if affected {
+                        Some((sid.clone(), route.workspace_root.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        for (sid, workspace) in targets {
+            let snapshot = match service.permission_snapshot_blocking(workspace.as_deref()) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let revision = snapshot.revision;
+            let cmd = serde_json::json!({
+                "cmd": "update_permission_policy",
+                "session_id": sid,
+                "policy": snapshot,
+            });
+            if self.send_to_runtime(&cmd).await.is_ok() {
+                if let Some(route) = self.session_routes.lock().unwrap().get_mut(&sid) {
+                    route.last_policy_revision = revision;
+                }
+            }
+        }
+    }
+
+    /// 测试缝合：读取已录制的命令（仅 `new_for_test()` 构造的实例会录制）。
+    #[cfg(test)]
+    pub fn sent_commands(&self) -> Vec<Value> {
+        self.sent_commands.lock().unwrap().clone()
+    }
+
+    /// 测试缝合：清空已录制的命令。
+    #[cfg(test)]
+    pub fn clear_sent_commands(&self) {
+        self.sent_commands.lock().unwrap().clear();
     }
 
     // ---- 路径解析 ----

@@ -18,6 +18,7 @@ pub mod recent;
 pub mod chat;
 pub mod notifications;
 pub mod migration;
+pub mod permissions;
 
 use serde::{Deserialize, Serialize};
 use std::fs;

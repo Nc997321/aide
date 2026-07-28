@@ -25,7 +25,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  respond: [id: string, approved: boolean, always?: boolean, answers?: Record<string, string>, nextMode?: string];
+  respond: [id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string];
 }>();
 
 /** ExitPlanMode = plan 模式的出口确认：呈现的是"批准这份计划"而不是
@@ -38,7 +38,7 @@ const isPlanApproval = computed(() => props.permission?.name === "ExitPlanMode")
  *  这里只负责收集选择、打包成 answers；把 answers 重组进 SDK 要求的 updatedInput
  *  是 Claude 专属语义，留在 sidecar（agent-sidecar/src/permissions.ts）处理——和
  *  ExitPlanMode 一样，前端按工具名特判的只是"用哪种 UI 展示"，协议本身仍是
- *  {id, name, input} / (id, approved, always?, answers?) 的通用形状。 */
+ *  {id, name, input} / (id, approved, answers?, nextMode?) 的通用形状。 */
 const isQuestion = computed(() => props.permission?.name === "AskUserQuestion");
 
 /** 三种确认口吻用同一枚"火漆印"图钉，用图形区分种类：工具调用=锁、
@@ -113,24 +113,8 @@ function submitAnswers() {
   questions.value.forEach((q, i) => {
     answers[q.question] = useFreeText[i] ? freeText[i].trim() : selections[i].join(", ");
   });
-  emit("respond", props.permission.id, true, undefined, answers);
+  emit("respond", props.permission.id, true, answers);
 }
-
-/** "总是允许"按钮本身要不要用警示色——目前只有它会切到 bypassPermissions
- *  （本次会话跳过所有工具确认）这种最激进的模式时才标红，其余（addRules/
- *  acceptEdits 等）维持普通按钮观感，不过度报警。按 sidecar 给 bypassPermissions
- *  的 alwaysAllowLabel 前缀「跳过所有确认」判定（auto 模式走分类器、不在此列）。 */
-const isAlwaysAllowDangerous = computed(() => (props.permission?.alwaysAllowLabel ?? "").startsWith("跳过所有确认"));
-
-/** sidecar 送来的 alwaysAllowLabel 常带一段括注的生效范围，例如
- *  "自动接受编辑（本次会话）"——原来整句塞进一个按钮，中文括号会在任意
- *  宽度截断处折行，观感很差。这里按"主文案 +（范围说明）"拆成两行，
- *  拆不出括注（如默认的"总是允许"）就只显示主文案。 */
-const alwaysSplit = computed(() => {
-  const label = props.permission?.alwaysAllowLabel ?? "总是允许";
-  const m = label.match(/^(.*)（(.+)）$/);
-  return m ? { main: m[1], caption: m[2] } : { main: label, caption: null as string | null };
-});
 
 interface InputRow {
   label: string;
@@ -246,31 +230,23 @@ const inputJson = computed(() => {
           </button>
         </template>
         <template v-else>
-          <button class="perm-btn perm-btn--ghost" @click="emit('respond', permission.id, false)">
+          <button class="perm-btn perm-btn--ghost" data-action="deny" @click="emit('respond', permission.id, false)">
             {{ isPlanApproval ? "继续修改计划" : "拒绝" }}
           </button>
           <div class="perm-actions-primary">
             <template v-if="isPlanApproval">
-              <button class="perm-btn perm-btn--outline" @click="emit('respond', permission.id, true, false, undefined, undefined)">
+              <button class="perm-btn perm-btn--outline" @click="emit('respond', permission.id, true, undefined, undefined)">
                 批准，手动确认编辑
               </button>
-              <button class="perm-btn perm-btn--outline" @click="emit('respond', permission.id, true, false, undefined, 'acceptEdits')">
+              <button class="perm-btn perm-btn--outline" @click="emit('respond', permission.id, true, undefined, 'acceptEdits')">
                 批准，自动接受编辑
               </button>
-              <button class="perm-btn perm-btn--solid" @click="emit('respond', permission.id, true, false, undefined, 'auto')">
+              <button class="perm-btn perm-btn--solid" @click="emit('respond', permission.id, true, undefined, 'auto')">
                 批准，使用 Auto 模式
               </button>
             </template>
             <template v-else>
-              <button
-                class="perm-btn perm-btn--outline"
-                :class="{ 'perm-btn--outline-danger': isAlwaysAllowDangerous }"
-                @click="emit('respond', permission.id, true, true)"
-              >
-                <span class="perm-btn-main">{{ alwaysSplit.main }}</span>
-                <span v-if="alwaysSplit.caption" class="perm-btn-caption">{{ alwaysSplit.caption }}</span>
-              </button>
-              <button class="perm-btn perm-btn--solid" @click="emit('respond', permission.id, true)">
+              <button class="perm-btn perm-btn--solid" data-action="allow" @click="emit('respond', permission.id, true)">
                 允许
               </button>
             </template>

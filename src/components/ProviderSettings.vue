@@ -24,7 +24,7 @@ import Icon from "./Icon.vue";
 import AToast from "../ui/AToast.vue";
 import ThemedSelect from "./ThemedSelect.vue";
 import { PROVIDER_GLYPHS } from "@/utils/icons";
-import type { ProviderConfig, ProviderKind, ProviderModelMappings } from "../types";
+import type { ProviderConfig, ProviderKind, ProviderModelMappings, SecretMutation } from "../types";
 
 const effortOptions = [
   { value: "", label: "默认" },
@@ -71,8 +71,10 @@ const form = ref<ProviderConfig | null>(null);
 // immediate 回调在 setup 同步阶段就跑，会重置这俩 ref；若声明在后面会触发 TDZ
 // （ReferenceError: Cannot access 'showApiKey' before initialization），导致整个
 // ProviderSettings 挂载失败（providers tab 空白 + 父 SettingsPanel 关闭按钮失效）。
-const showApiKey = ref(false);
-const showAuthToken = ref(false);
+const apiKeyInput = ref("");
+const authTokenInput = ref("");
+const apiKeyMutation = ref<SecretMutation>({ action: "unchanged" });
+const authTokenMutation = ref<SecretMutation>({ action: "unchanged" });
 watch(
   selectedProvider,
   (p) => {
@@ -83,8 +85,10 @@ watch(
           knownModels: [...p.knownModels],
         }
       : null;
-    showApiKey.value = false;
-    showAuthToken.value = false;
+    apiKeyInput.value = "";
+    authTokenInput.value = "";
+    apiKeyMutation.value = { action: "unchanged" };
+    authTokenMutation.value = { action: "unchanged" };
   },
   { immediate: true },
 );
@@ -142,14 +146,19 @@ async function handleSave() {
     name: f.name,
     icon: f.icon,
     baseUrl: f.baseUrl,
-    apiKey: f.apiKey,
-    authToken: f.authToken,
     modelMappings: mappings,
     effortLevel: f.effortLevel,
     autoCompactWindow: String(f.autoCompactWindow ?? ""),
     autocompactPctOverride: String(f.autocompactPctOverride ?? ""),
     knownModels: [...f.knownModels],
+  }, {
+    apiKey: apiKeyInput.value ? { action: "set", value: apiKeyInput.value } : apiKeyMutation.value,
+    authToken: authTokenInput.value ? { action: "set", value: authTokenInput.value } : authTokenMutation.value,
   });
+  apiKeyInput.value = "";
+  authTokenInput.value = "";
+  apiKeyMutation.value = { action: "unchanged" };
+  authTokenMutation.value = { action: "unchanged" };
   showToast("已保存", "success");
 }
 
@@ -279,16 +288,17 @@ function removeModelTag(idx: number) {
         <!-- 凭据区：按 auth_mode 渲染。预置只显示一个；Custom（isPreset=false）两个都显示 -->
         <div v-if="authMode === 'api_key' || !isPreset" class="form-field">
           <label>API Key</label>
-          <div class="secret-row">
-            <input
-              v-model="form.apiKey"
-              :type="showApiKey ? 'text' : 'password'"
-              class="text-input"
-              placeholder="留空不设"
-            />
-            <button class="eye-btn" @click="showApiKey = !showApiKey">
-              {{ showApiKey ? "🙈" : "👁" }}
-            </button>
+          <input
+            v-model="apiKeyInput"
+            type="password"
+            autocomplete="new-password"
+            class="text-input"
+            :placeholder="form.apiKeyConfigured ? '已配置；输入新值后替换' : '未配置；输入后保存'"
+          />
+          <div class="secret-state">
+            <span>{{ form.apiKeyConfigured ? '已配置（不会回显）' : '未配置' }}</span>
+            <button v-if="form.apiKeyConfigured" class="secret-clear-btn" @click="apiKeyMutation = { action: 'clear' }">清除</button>
+            <button v-if="apiKeyMutation.action === 'clear'" class="secret-clear-btn" @click="apiKeyMutation = { action: 'unchanged' }">取消清除</button>
           </div>
           <span class="form-hint">
             对应 <code>x-api-key</code> 头。Anthropic 官方端点用这个；多数第三方端点用下方 Auth Token
@@ -297,16 +307,17 @@ function removeModelTag(idx: number) {
 
         <div v-if="authMode === 'auth_token' || !isPreset" class="form-field">
           <label>Auth Token</label>
-          <div class="secret-row">
-            <input
-              v-model="form.authToken"
-              :type="showAuthToken ? 'text' : 'password'"
-              class="text-input"
-              placeholder="留空不设"
-            />
-            <button class="eye-btn" @click="showAuthToken = !showAuthToken">
-              {{ showAuthToken ? "🙈" : "👁" }}
-            </button>
+          <input
+            v-model="authTokenInput"
+            type="password"
+            autocomplete="new-password"
+            class="text-input"
+            :placeholder="form.authTokenConfigured ? '已配置；输入新值后替换' : '未配置；输入后保存'"
+          />
+          <div class="secret-state">
+            <span>{{ form.authTokenConfigured ? '已配置（不会回显）' : '未配置' }}</span>
+            <button v-if="form.authTokenConfigured" class="secret-clear-btn" @click="authTokenMutation = { action: 'clear' }">清除</button>
+            <button v-if="authTokenMutation.action === 'clear'" class="secret-clear-btn" @click="authTokenMutation = { action: 'unchanged' }">取消清除</button>
           </div>
           <span class="form-hint">
             对应 <code>Authorization: Bearer</code> 头。GLM/OpenAI 兼容等第三方端点通常填这里；与 API Key 二选一，同时填会以本字段为准
@@ -694,30 +705,28 @@ select.text-input {
   color: var(--aide-accent);
 }
 
-.secret-row {
-  display: flex;
-  gap: 4px;
-}
-
-.secret-row .text-input {
-  flex: 1;
-}
-
-.eye-btn {
-  background: none;
-  border: 1px solid var(--aide-surface-hover);
-  border-radius: var(--aide-radius-sm);
-  cursor: pointer;
-  font-size: 13px;
-  width: 32px;
+.secret-state {
   display: flex;
   align-items: center;
-  justify-content: center;
-  transition: background 0.12s;
+  gap: 8px;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--aide-text-muted);
 }
 
-.eye-btn:hover {
-  background: var(--aide-surface-default);
+.secret-clear-btn {
+  background: transparent;
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  color: var(--aide-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  padding: 2px 7px;
+}
+
+.secret-clear-btn:hover {
+  border-color: var(--aide-danger);
+  color: var(--aide-danger);
 }
 
 .form-section {

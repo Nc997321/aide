@@ -72,7 +72,7 @@ const emit = defineEmits<{
   interrupt: [];
   "set-model": [model: string];
   "set-permission-mode": [mode: string];
-  "respond-permission": [id: string, approved: boolean, always?: boolean, answers?: Record<string, string>, nextMode?: string];
+  "respond-permission": [id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string];
   "update:bgDockSelectedId": [id: string];
 }>();
 
@@ -906,7 +906,7 @@ function onOpenBgDock(taskId: string) {
     <PermissionDialog
       :permission="permission ?? null"
       :queue-count="permissionQueueCount"
-      @respond="(id: string, approved: boolean, always?: boolean, answers?: Record<string, string>, nextMode?: string) => { if (nextMode) selectedPermissionMode = nextMode; emit('respond-permission', id, approved, always, answers, nextMode); }"
+      @respond="(id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string) => { if (nextMode) selectedPermissionMode = nextMode; emit('respond-permission', id, approved, answers, nextMode); }"
     />
 
     <!-- 后台任务 dock：与 PermissionDialog 同款 inline dock——挤压消息区而非浮层。

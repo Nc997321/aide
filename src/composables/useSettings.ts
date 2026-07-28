@@ -1,7 +1,7 @@
 import { reactive, ref, watch } from "vue";
 import { api } from "../api";
 import { MONO_FONT_STACK, resolveFontFamily } from "../utils/fonts";
-import type { AppSettings, CodeGraphEmbedderConfig, JdkEntry } from "../types";
+import type { AppSettings, CodeGraphEmbedderConfig, JdkEntry, SecretMutation } from "../types";
 
 const defaults: AppSettings = {
   fontSize: 14,
@@ -24,7 +24,7 @@ const defaults: AppSettings = {
   codegraphEmbedder: {
     backend: "fastembed",
     baseUrl: "",
-    apiKey: "",
+    apiKeyConfigured: false,
     model: "nomic-embed-text",
     format: "ollama",
     dim: 0,
@@ -104,11 +104,17 @@ export function useSettings() {
   // 专门路径：codegraphEmbedder 整块更新（backend 下拉切 http/fastembed 时
   // 一次性写回整块，避免逐字段 partial 多次落盘）。下次 build 读新配置，
   // model_name/dim 变 → meta 不匹配 → 自动全量重建，无需额外 reinit 命令。
-  async function setCodegraphEmbedder(cfg: CodeGraphEmbedderConfig): Promise<void> {
-    settings.codegraphEmbedder = cfg;
-    try {
-      await api.setSettings({ codegraphEmbedder: cfg });
-    } catch (_) { /* best effort */ }
+  async function setCodegraphEmbedder(
+    cfg: CodeGraphEmbedderConfig,
+    apiKey: SecretMutation = { action: "unchanged" },
+  ): Promise<void> {
+    await api.setSettings({
+      codegraphEmbedder: { ...cfg, apiKey },
+    });
+    settings.codegraphEmbedder = {
+      ...cfg,
+      apiKeyConfigured: apiKey.action === "clear" ? false : cfg.apiKeyConfigured || apiKey.action === "set",
+    };
   }
 
   // 专门路径：jdkRegistry 整块更新（扫描/添加/删除时一次性写回整块，避免

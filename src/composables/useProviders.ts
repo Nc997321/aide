@@ -1,6 +1,6 @@
 import { ref, computed } from "vue";
 import { api } from "../api";
-import type { ProviderConfig, ProviderKind, ProviderModelMappings } from "../types";
+import type { ProviderConfig, ProviderConfigInput, ProviderKind, ProviderModelMappings, SecretMutation } from "../types";
 import { useProviderCatalog } from "./useProviderCatalog";
 
 const SYSTEM_DEFAULT_ID = "__system_default__";
@@ -47,13 +47,29 @@ const activeProvider = computed<ProviderConfig>(() => {
 function fallbackSystemDefault(): ProviderConfig {
   return {
     id: SYSTEM_DEFAULT_ID, kind: "system_default", name: "系统默认", icon: "provider", baseUrl: "",
-    apiKey: "", authToken: "", model: "", modelMappings: emptyMappings(),
+    apiKeyConfigured: false, authTokenConfigured: false, model: "", modelMappings: emptyMappings(),
     effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", knownModels: [],
   };
 }
 
 function generateId(): string {
   return crypto.randomUUID?.() ?? `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function providerInput(
+  provider: ProviderConfig,
+  mutations: Partial<Pick<ProviderConfigInput, "apiKey" | "authToken">> = {},
+): ProviderConfigInput {
+  const { apiKeyConfigured: _apiKeyConfigured, authTokenConfigured: _authTokenConfigured, ...publicFields } = provider;
+  return {
+    ...publicFields,
+    apiKey: mutations.apiKey ?? { action: "unchanged" },
+    authToken: mutations.authToken ?? { action: "unchanged" },
+  };
+}
+
+async function persist(mutations: Record<string, Partial<Pick<ProviderConfigInput, "apiKey" | "authToken">>> = {}): Promise<void> {
+  await api.setProviders(allProviders.value.map((provider) => providerInput(provider, mutations[provider.id])));
 }
 
 async function load(): Promise<void> {
@@ -77,8 +93,8 @@ async function addProvider(partial: Partial<ProviderConfig> = {}): Promise<Provi
     name: partial.name ?? "新供应商",
     icon: partial.icon ?? "provider",
     baseUrl: partial.baseUrl ?? "",
-    apiKey: partial.apiKey ?? "",
-    authToken: partial.authToken ?? "",
+    apiKeyConfigured: false,
+    authTokenConfigured: false,
     model: partial.model ?? "",
     modelMappings: partial.modelMappings ?? emptyMappings(),
     effortLevel: partial.effortLevel ?? "",
@@ -87,7 +103,7 @@ async function addProvider(partial: Partial<ProviderConfig> = {}): Promise<Provi
     knownModels: partial.knownModels ?? [],
   };
   allProviders.value = [...allProviders.value, p];
-  await api.setProviders(allProviders.value);
+  await persist();
   return p;
 }
 
@@ -105,13 +121,13 @@ async function addPresetProvider(kind: ProviderKind): Promise<ProviderConfig> {
     id: generateId(),
     kind,
     name: "", icon: "", baseUrl: "",
-    apiKey: "", authToken: "", model: "",
+    apiKeyConfigured: false, authTokenConfigured: false, model: "",
     modelMappings: emptyMappings(),
     effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "",
     knownModels: [],
   });
   allProviders.value = [...allProviders.value, p];
-  await api.setProviders(allProviders.value);
+  await persist();
   return p;
 }
 
@@ -120,17 +136,29 @@ async function addCustomProvider(): Promise<ProviderConfig> {
   return addProvider({ kind: "custom" });
 }
 
-async function updateProvider(id: string, partial: Partial<ProviderConfig>): Promise<void> {
+async function updateProvider(
+  id: string,
+  partial: Partial<ProviderConfig>,
+  secrets: Partial<Pick<ProviderConfigInput, "apiKey" | "authToken">> = {},
+): Promise<void> {
   const idx = allProviders.value.findIndex((p) => p.id === id);
   if (idx === -1) return;
-  allProviders.value[idx] = { ...allProviders.value[idx], ...partial };
-  allProviders.value = [...allProviders.value];
-  await api.setProviders(allProviders.value);
+  const current = allProviders.value[idx];
+  const next = {
+    ...current,
+    ...partial,
+    apiKeyConfigured: secrets.apiKey?.action === "clear" ? false : current.apiKeyConfigured || secrets.apiKey?.action === "set",
+    authTokenConfigured: secrets.authToken?.action === "clear" ? false : current.authTokenConfigured || secrets.authToken?.action === "set",
+  };
+  const providers = [...allProviders.value];
+  providers[idx] = next;
+  await api.setProviders(providers.map((provider) => providerInput(provider, provider.id === id ? secrets : undefined)));
+  allProviders.value = providers;
 }
 
 async function deleteProvider(id: string): Promise<void> {
   allProviders.value = allProviders.value.filter((p) => p.id !== id);
-  await api.setProviders(allProviders.value);
+  await persist();
   if (activeProviderId.value === id) {
     activeProviderId.value = SYSTEM_DEFAULT_ID;
     await api.setActiveProviderId(SYSTEM_DEFAULT_ID);

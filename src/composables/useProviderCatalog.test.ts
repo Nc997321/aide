@@ -53,7 +53,7 @@ describe("useProviderCatalog", () => {
     await loadCatalog();
     const p: ProviderConfig = {
       id: "x", kind: "cpa_gpt", name: "", icon: "", baseUrl: "",
-      apiKey: "", authToken: "sk-local", model: "",
+      apiKeyConfigured: false, authTokenConfigured: true, model: "",
       modelMappings: { anthropicModel: "", defaultOpusModel: "", defaultSonnetModel: "", defaultHaikuModel: "", subagent: "" },
       effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", knownModels: [],
     };
@@ -61,7 +61,7 @@ describe("useProviderCatalog", () => {
     expect(enriched.name).toBe("CPA 中转");
     expect(enriched.icon).toBe("C");
     expect(enriched.baseUrl).toBe("http://127.0.0.1:8317");
-    expect(enriched.authToken).toBe("sk-local");
+    expect(enriched.authTokenConfigured).toBe(true);
     expect(enriched.kind).toBe("cpa_gpt");
   });
 
@@ -69,7 +69,7 @@ describe("useProviderCatalog", () => {
     await loadCatalog();
     const p: ProviderConfig = {
       id: "c", kind: "custom", name: "my", icon: "M", baseUrl: "https://gw",
-      apiKey: "k", authToken: "", model: "",
+      apiKeyConfigured: true, authTokenConfigured: false, model: "",
       modelMappings: { anthropicModel: "", defaultOpusModel: "", defaultSonnetModel: "", defaultHaikuModel: "", subagent: "" },
       effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", knownModels: [],
     };
@@ -81,7 +81,7 @@ describe("useProviderCatalog", () => {
   it("enrichForDisplay 在 catalog 未加载时对预置 kind 不崩（返回原样）", () => {
     const p: ProviderConfig = {
       id: "x", kind: "ollama", name: "", icon: "", baseUrl: "",
-      apiKey: "", authToken: "", model: "",
+      apiKeyConfigured: false, authTokenConfigured: false, model: "",
       modelMappings: { anthropicModel: "", defaultOpusModel: "", defaultSonnetModel: "", defaultHaikuModel: "", subagent: "" },
       effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", knownModels: [],
     };

@@ -3,10 +3,11 @@ import { ref, watch, onMounted, computed } from "vue";
 import { useSettings } from "../composables/useSettings";
 import { useCustomizations } from "../composables/useCustomizations";
 import { api } from "../api";
-import type { JdkEntry } from "../types";
+import type { JdkEntry, SecretMutation } from "../types";
 import CustomizationList from "./customizations/CustomizationList.vue";
 import CustomizationDetail from "./customizations/CustomizationDetail.vue";
 import MarketplaceTab from "./marketplace/MarketplaceTab.vue";
+import PermissionsSettings from "./settings/PermissionsSettings.vue";
 import DiagnosticsDashboard from "./DiagnosticsDashboard.vue";
 import ProviderSettings from "./ProviderSettings.vue";
 import ThemedSelect from "./ThemedSelect.vue";
@@ -37,7 +38,7 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-type Tab = "general" | "providers" | "extensions" | "marketplace" | "codegraph" | "java" | "diagnostics";
+type Tab = "general" | "providers" | "permissions" | "extensions" | "marketplace" | "codegraph" | "java" | "diagnostics";
 
 const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 
@@ -71,24 +72,40 @@ watch(recentLimitLocal, (v) => {
 
 const cgBackend = ref(settings.codegraphEmbedder.backend);
 const cgBaseUrl = ref(settings.codegraphEmbedder.baseUrl);
-const cgApiKey = ref(settings.codegraphEmbedder.apiKey);
+// Credentials never join the global settings singleton: this is always blank on load.
+const cgApiKey = ref("");
 const cgModel = ref(settings.codegraphEmbedder.model);
 const cgFormat = ref(settings.codegraphEmbedder.format);
 const cgDim = ref(settings.codegraphEmbedder.dim);
 
-function flushCodegraphEmbedder() {
-  setCodegraphEmbedder({
+function codegraphConfig() {
+  return {
     backend: cgBackend.value,
     baseUrl: cgBaseUrl.value,
-    apiKey: cgApiKey.value,
+    apiKeyConfigured: settings.codegraphEmbedder.apiKeyConfigured,
     model: cgModel.value,
     format: cgFormat.value,
     dim: cgDim.value,
-  });
+  } as const;
+}
+
+function flushCodegraphEmbedder() {
+  void setCodegraphEmbedder(codegraphConfig());
+}
+
+async function saveCodegraphApiKey() {
+  const value = cgApiKey.value;
+  const mutation: SecretMutation = value ? { action: "set", value } : { action: "unchanged" };
+  await setCodegraphEmbedder(codegraphConfig(), mutation);
+  cgApiKey.value = "";
+}
+
+async function clearCodegraphApiKey() {
+  await setCodegraphEmbedder(codegraphConfig(), { action: "clear" });
+  cgApiKey.value = "";
 }
 watch(cgBackend, flushCodegraphEmbedder);
 watch(cgBaseUrl, flushCodegraphEmbedder);
-watch(cgApiKey, flushCodegraphEmbedder);
 watch(cgModel, flushCodegraphEmbedder);
 watch(cgFormat, flushCodegraphEmbedder);
 watch(cgDim, (v) => {
@@ -326,6 +343,14 @@ function onOverlayClick(e: MouseEvent) {
             </button>
             <button
               class="nav-item"
+              :class="{ active: activeTab === 'permissions' }"
+              @click="activeTab = 'permissions'"
+            >
+              <Icon class="nav-icon" name="key" :size="16" />
+              <span class="nav-label">权限</span>
+            </button>
+            <button
+              class="nav-item"
               :class="{ active: activeTab === 'extensions' }"
               @click="activeTab = 'extensions'"
             >
@@ -521,6 +546,9 @@ function onOverlayClick(e: MouseEvent) {
               <ProviderSettings />
             </div>
 
+            <!-- ── 权限 Tab ── -->
+            <PermissionsSettings v-else-if="activeTab === 'permissions'" />
+
             <!-- ── 扩展 Tab ── -->
             <div v-else-if="activeTab === 'extensions'" class="tab-extensions">
               <!-- Back button (when not at category root) -->
@@ -615,8 +643,14 @@ function onOverlayClick(e: MouseEvent) {
                     v-model="cgApiKey"
                     class="text-input"
                     type="password"
-                    placeholder="OpenAI / Jina 必填；Ollama 原生可空"
+                    autocomplete="new-password"
+                    :placeholder="settings.codegraphEmbedder.apiKeyConfigured ? '已配置；输入新值后替换' : 'OpenAI / Jina 必填；Ollama 原生可空'"
                   />
+                  <div class="cg-secret-actions">
+                    <span class="field-hint">{{ settings.codegraphEmbedder.apiKeyConfigured ? '已配置（密钥不会回显）' : '未配置' }}</span>
+                    <button class="cg-secret-btn" :disabled="!cgApiKey" @click="saveCodegraphApiKey">替换</button>
+                    <button v-if="settings.codegraphEmbedder.apiKeyConfigured" class="cg-secret-btn" @click="clearCodegraphApiKey">清除</button>
+                  </div>
                 </div>
 
                 <div class="settings-field">
@@ -1130,6 +1164,31 @@ function onOverlayClick(e: MouseEvent) {
   flex-direction: column;
   gap: 0;
 }
+
+.cg-secret-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.cg-secret-btn {
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  background: var(--aide-bg-base);
+  color: var(--aide-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.cg-secret-btn:hover:not(:disabled) {
+  border-color: var(--aide-accent);
+  color: var(--aide-text-primary);
+}
+
+.cg-secret-btn:disabled { opacity: 0.5; cursor: default; }
 
 .cg-info {
   margin-top: 4px;

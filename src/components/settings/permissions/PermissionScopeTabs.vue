@@ -1,0 +1,83 @@
+<script setup lang="ts">
+import { computed } from "vue";
+import type { PermissionScope, ScopeAvailability } from "@/types/permissions";
+
+const props = defineProps<{
+  scopes: readonly ScopeAvailability[];
+  modelValue: PermissionScope;
+}>();
+const emit = defineEmits<{ (e: "update:modelValue", value: PermissionScope): void }>();
+
+// Fixed display order — must not follow object enumeration. `session` is
+// in-memory only and never shown as a tab, but the LABELS record covers every
+// scope so the type is exhaustive.
+const ORDER: PermissionScope[] = ["user", "project", "local", "managed"];
+const LABELS: Record<PermissionScope, string> = {
+  user: "用户全局",
+  project: "项目共享",
+  local: "项目本地",
+  managed: "受管策略",
+  session: "本会话",
+};
+
+const byScope = computed(() => {
+  const m = new Map<PermissionScope, ScopeAvailability>();
+  for (const s of props.scopes) m.set(s.scope, s);
+  return m;
+});
+
+const ordered = computed(() =>
+  ORDER.map((scope) => byScope.value.get(scope)).filter((s): s is ScopeAvailability => !!s),
+);
+</script>
+
+<template>
+  <div class="scope-tabs" role="tablist">
+    <button
+      v-for="s in ordered"
+      :key="s.scope"
+      class="scope-tab"
+      :class="{ active: s.scope === modelValue }"
+      :data-scope="s.scope"
+      :disabled="!s.editable"
+      role="tab"
+      v-tooltip="s.editable ? '' : s.reason"
+      @click="s.editable && emit('update:modelValue', s.scope)"
+    >
+      {{ LABELS[s.scope] }}
+    </button>
+  </div>
+</template>
+
+<style scoped>
+.scope-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  width: fit-content;
+  border: 1px solid var(--aide-border-subtle);
+  background: var(--aide-bg-base);
+  border-radius: var(--aide-radius-md);
+}
+.scope-tab {
+  padding: 5px 10px;
+  font-size: 11.5px;
+  color: var(--aide-text-muted);
+  border: 0;
+  background: transparent;
+  border-radius: var(--aide-radius-sm);
+  cursor: pointer;
+  transition: background var(--aide-ease-t), color var(--aide-ease-t);
+}
+.scope-tab:hover:not(:disabled) {
+  color: var(--aide-text-primary);
+}
+.scope-tab.active {
+  background: var(--aide-surface-active);
+  color: var(--aide-text-primary);
+}
+.scope-tab:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+</style>
