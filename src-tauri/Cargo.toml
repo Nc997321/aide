@@ -48,7 +48,14 @@ sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 
 # CodeGraph: embedded vector DB, ONNX embedding inference, syntax parsing
 qdrant-edge = "0.6"
-fastembed = "4"
+# 本地 ONNX embedding：直接用 ort 加载 all-MiniLM-L6-v2，禁用 CPU arena + memory_pattern，
+# 避免 fastembed 不暴露 arena 配置导致重建索引时 arena 暴涨不归还 OS（aide.exe 3G→6G）。
+# 必须显式启用 download-binaries + copy-dylibs：fastembed 之前靠自己的 default feature
+# `ort-download-binaries` 间接启用 ort/download-binaries，移除 fastembed 后必须自己显式启用，
+# 否则 ONNX Runtime DLL 消失（编译过、运行/打包崩溃）。copy-dylibs 让 DLL 落输出目录供 release。
+ort = { version = "=2.0.0-rc.9", default-features = false, features = ["ndarray", "download-binaries", "copy-dylibs"] }
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+ndarray = { version = "0.16", default-features = false }
 tree-sitter = "0.23"
 tree-sitter-java = "0.23"
 tree-sitter-typescript = "0.23"

@@ -16,11 +16,11 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
 
 use crate::codegraph::edges::EdgeTable;
-use crate::codegraph::embed::{Embedder, FastEmbedEmbedder, HttpEmbedder, HttpEmbedderConfig, HttpFormat};
+use crate::codegraph::embed::{Embedder, OrtEmbedder, HttpEmbedder, HttpEmbedderConfig, HttpFormat};
 use crate::codegraph::meta::Meta;
 use crate::codegraph::shard::CodeShard;
 use crate::codegraph::symbols::SymbolTable;
-use crate::commands::settings::CodeGraphEmbedderConfig;
+use crate::commands::settings::RuntimeCodeGraphEmbedderConfig;
 
 /// Prefix prepended to every text sent to the embedder (both document snippets
 /// and query text, so they share the embedding space).
@@ -112,10 +112,10 @@ impl CodeGraphState {
 /// - `fastembed` → local ONNX (may download a model on first use).
 /// - `http` → HTTP embedder (Ollama / OpenAI-compatible), format selects the wire shape.
 ///
-/// Returns `Ok(Box<dyn Embedder>)` on success. A fastembed init failure or an
-/// invalid http config yields an `Err`; the caller logs and proceeds without an
-/// embedder (structure layer still works — semantic search is just unavailable).
-fn make_embedder(cfg: &CodeGraphEmbedderConfig) -> Result<Box<dyn Embedder>, String> {
+/// Returns `Ok(Box<dyn Embedder>)` on success. A local ONNX (ort) embedder init
+/// failure or an invalid http config yields an `Err`; the caller logs and proceeds
+/// without an embedder (structure layer still works — semantic search is just unavailable).
+fn make_embedder(cfg: &RuntimeCodeGraphEmbedderConfig) -> Result<Box<dyn Embedder>, String> {
     match cfg.backend.as_str() {
         "http" => {
             if cfg.base_url.trim().is_empty() {
@@ -140,10 +140,13 @@ fn make_embedder(cfg: &CodeGraphEmbedderConfig) -> Result<Box<dyn Embedder>, Str
                 .map_err(|e| format!("http embedder init failed: {}", e))
         }
         _ => {
-            // "fastembed" or anything else → default local backend.
-            FastEmbedEmbedder::new()
+            // "fastembed" backend name or anything else → default local ONNX backend.
+            // Uses OrtEmbedder (ort direct, CPU arena + memory pattern DISABLED) to
+            // avoid the arena-allocator hoarding that ballooned aide.exe to GBs
+            // during index rebuilds. See embed.rs `OrtEmbedder` doc for the root cause.
+            OrtEmbedder::new()
                 .map(|e| Box::new(e) as Box<dyn Embedder>)
-                .map_err(|e| format!("fastembed init failed: {}", e))
+                .map_err(|e| format!("ort embedder init failed: {}", e))
         }
     }
 }
@@ -161,7 +164,7 @@ fn make_embedder(cfg: &CodeGraphEmbedderConfig) -> Result<Box<dyn Embedder>, Str
 /// is compared against 0 and never matches a real dim, forcing a rebuild on
 /// the first build after switching to auto-probe; subsequent builds match
 /// because meta is then stamped with the probed dim).
-fn config_embedder_identity(cfg: &CodeGraphEmbedderConfig) -> (String, usize) {
+fn config_embedder_identity(cfg: &RuntimeCodeGraphEmbedderConfig) -> (String, usize) {
     match cfg.backend.as_str() {
         "http" => {
             let name = match cfg.format.as_str() {
@@ -178,18 +181,10 @@ fn config_embedder_identity(cfg: &CodeGraphEmbedderConfig) -> (String, usize) {
 /// at `config["settings"]["codegraphEmbedder"]` (a field of `AppSettings`).
 /// Returns the default (fastembed) if the file or block is missing — zero-config
 /// out of the box. Best-effort: malformed JSON → default, logged, never panics.
-fn load_embedder_config() -> CodeGraphEmbedderConfig {
-    use crate::commands::settings::load_config;
-    let config = load_config();
-    let Some(cg) = config
-        .get("settings")
-        .and_then(|s| s.get("codegraphEmbedder"))
-    else {
-        return CodeGraphEmbedderConfig::default();
-    };
-    serde_json::from_value::<CodeGraphEmbedderConfig>(cg.clone()).unwrap_or_else(|e| {
-        tracing::warn!("codegraph: invalid embedder config, using default: {}", e);
-        CodeGraphEmbedderConfig::default()
+fn load_embedder_config(service: &crate::settings::SettingsService) -> RuntimeCodeGraphEmbedderConfig {
+    crate::commands::settings::resolve_codegraph_embedder(service).unwrap_or_else(|error| {
+        tracing::warn!("codegraph: invalid embedder config, using default: {error}");
+        RuntimeCodeGraphEmbedderConfig { backend: "fastembed".to_string(), base_url: String::new(), api_key: String::new(), model: "nomic-embed-text".to_string(), format: "ollama".to_string(), dim: 0 }
     })
 }
 
@@ -218,12 +213,14 @@ pub async fn codegraph_build_index(
     project_root: String,
     force: Option<bool>,
     state: tauri::State<'_, std::sync::Arc<CodeGraphState>>,
+    settings_service: tauri::State<'_, std::sync::Arc<crate::settings::SettingsService>>,
 ) -> Result<serde_json::Value, String> {
     let force = force.unwrap_or(false);
     let st = state.inner().clone();
+    let settings_service = settings_service.inner().clone();
     tokio::task::spawn_blocking(move || {
         let root = PathBuf::from(&project_root);
-        let cfg = load_embedder_config();
+        let cfg = load_embedder_config(&settings_service);
         // Cheap pre-construction identity implied by the config (backend + model
         // + configured dim). Used to decide whether the *cached* embedder is still
         // valid without constructing a new one — constructing fastembed loads the

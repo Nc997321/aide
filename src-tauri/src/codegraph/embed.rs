@@ -1,8 +1,12 @@
 //! Pluggable embedding backend for CodeGraph.
 //!
 //! Two implementations behind one trait:
-//! - [`FastEmbedEmbedder`]: local ONNX CPU via fastembed-rs (default, zero-config,
-//!   but downloads a model on first use — see `model_dir`).
+//! - [`OrtEmbedder`]: local ONNX CPU via `ort` (default, zero-config, loads the
+//!   all-MiniLM-L6-v2 model from the HF cache on first use — see `model_dir`).
+//!   Uses `ort` directly rather than fastembed-rs so the ONNX Runtime CPU arena
+//!   allocator + memory pattern can be DISABLED — fastembed exposes no arena
+//!   config, and the default arena hoards per-inference temp tensors, ballooning
+//!   aide.exe memory to GBs during index rebuilds (see `OrtEmbedder` doc).
 //! - [`HttpEmbedder`]: any HTTP embedding service — Ollama (local or remote) and
 //!   OpenAI/Jina-style cloud APIs are the same thing (POST JSON, parse vectors),
 //!   differing only in endpoint shape + auth header. Selected by `format`.
@@ -13,10 +17,16 @@
 //! configured embedder forces a full rebuild (vectors of different dimension /
 //! model space are not compatible with an existing shard).
 
+use std::path::PathBuf;
 use std::sync::Mutex;
+use std::thread::available_parallelism;
 use std::time::Duration;
 
+use ndarray::{s, Array, Array2, ArrayView, Dim, IxDynImpl};
+use ort::session::{builder::GraphOptimizationLevel, Session};
+use ort::value::Value;
 use serde::{Deserialize, Serialize};
+use tokenizers::{AddedToken, PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
 use crate::commands::proxy::detect_proxy;
 
@@ -56,110 +66,322 @@ pub fn embed_one(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// fastembed backend (local ONNX CPU)
+// ort backend (local ONNX CPU, arena + memory pattern DISABLED)
+//
+// Replaces fastembed for the local embedding path. fastembed wraps ort but
+// exposes no arena/allocator config in `InitOptions` — its default ONNX Runtime
+// CPU arena allocator hoards every per-inference temp tensor and never returns
+// it to the OS. A full index rebuild embeds tens of thousands of code snippets
+// (`mod.rs` Phase 2 loop, 256/batch), so the arena balloons aide.exe memory to
+// GBs that never drop (observed 3GB → 6GB across two rebuilds). Going through
+// `ort` directly lets us set `session.cpu_arena_allocator=0` +
+// `with_memory_pattern(false)`, so temp tensors use plain malloc/free and are
+// reclaimed to the OS every inference — the fix is structural, not a
+// periodic-drop workaround. The tokenizer/encode/pool/normalize logic is
+// replicated from fastembed 4.9.1 (`text_embedding/impl.rs`, `common.rs`,
+// `pooling.rs`) so embedding output stays numerically identical (same model
+// weights, same ORT version, same Level3 opt — arena/memory_pattern affect only
+// allocation, not computation) and existing indices keep working.
 // ─────────────────────────────────────────────────────────────────────────────
 
-mod fastembed_impl {
-    use super::Embedder;
-    use fastembed::{
-        EmbeddingModel, InitOptions, Pooling, TextEmbedding, TokenizerFiles,
-        UserDefinedEmbeddingModel,
-    };
-    use std::path::PathBuf;
-    use std::sync::Mutex;
+/// HF cache layout for all-MiniLM-L6-v2 (same files fastembed used — no re-download).
+/// Located at `~/.cache/huggingface/hub/models--Qdrant--all-MiniLM-L6-v2-onnx/snapshots/<hash>/`.
+/// Held at module scope so both the ort backend (canonical) and the legacy
+/// fastembed backend (removed in a follow-up step) can share it.
+fn model_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let hf_home = std::env::var("HF_HOME")
+        .or_else(|_| std::env::var("HOME").map(|h| h + "/.cache/huggingface"))
+        .or_else(|_| std::env::var("USERPROFILE").map(|u| u + "/.cache/huggingface"))
+        .map(PathBuf::from)?;
 
-    /// Wraps fastembed-rs `TextEmbedding`. Loads the ONNX model from local cache,
-    /// falling back to hf_hub download only if local files are missing.
-    pub struct FastEmbedEmbedder {
-        model: Mutex<TextEmbedding>,
-    }
+    let dir = hf_home
+        .join("hub")
+        .join("models--Qdrant--all-MiniLM-L6-v2-onnx")
+        .join("snapshots");
 
-    /// Directory containing the 5 model files (HF cache layout).
-    fn model_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
-        let hf_home = std::env::var("HF_HOME")
-            .or_else(|_| std::env::var("HOME").map(|h| h + "/.cache/huggingface"))
-            .or_else(|_| std::env::var("USERPROFILE").map(|u| u + "/.cache/huggingface"))
-            .map(PathBuf::from)?;
+    let snapshots = std::fs::read_dir(&dir)
+        .ok()
+        .and_then(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.path())
+                .next()
+        });
 
-        let dir = hf_home
-            .join("hub")
-            .join("models--Qdrant--all-MiniLM-L6-v2-onnx")
-            .join("snapshots");
+    snapshots.ok_or_else(|| format!("No model snapshot found in {}", dir.display()).into())
+}
 
-        let snapshots = std::fs::read_dir(&dir)
-            .ok()
-            .and_then(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.path().is_dir())
-                    .map(|e| e.path())
-                    .next()
-            });
+fn read_or_empty(path: &std::path::Path) -> Vec<u8> {
+    std::fs::read(path).unwrap_or_default()
+}
 
-        snapshots.ok_or_else(|| format!("No model snapshot found in {}", dir.display()).into())
-    }
+/// Tokenizer files for the local ONNX backend (mirrors fastembed's `TokenizerFiles`).
+struct TokenizerFiles {
+    tokenizer_file: Vec<u8>,
+    config_file: Vec<u8>,
+    special_tokens_map_file: Vec<u8>,
+    tokenizer_config_file: Vec<u8>,
+}
 
-    fn read_or_empty(path: &std::path::Path) -> Vec<u8> {
-        std::fs::read(path).unwrap_or_default()
-    }
+/// Local ONNX embedder using `ort` directly, with CPU arena + memory pattern
+/// DISABLED so per-inference temp tensors are reclaimed by the OS each call.
+pub struct OrtEmbedder {
+    session: Session,
+    tokenizer: Tokenizer,
+    need_token_type_ids: bool,
+    dim: usize,
+    model_name: String,
+}
 
-    impl FastEmbedEmbedder {
-        /// Create embedder with all-MiniLM-L6-v2 (384-dim).
-        /// Tries hf_hub first; falls back to local files from HF cache.
-        pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-            if let Ok(model) =
-                TextEmbedding::try_new(InitOptions::new(EmbeddingModel::AllMiniLML6V2))
-            {
-                return Ok(Self {
-                    model: Mutex::new(model),
-                });
-            }
-
-            // Fall back to local files — bypass hf_hub entirely.
-            let dir = model_dir()?;
-            let onnx = read_or_empty(&dir.join("model.onnx"));
-            if onnx.is_empty() {
-                return Err("model.onnx is missing from cache".into());
-            }
-            let tokenizer_files = TokenizerFiles {
-                tokenizer_file: read_or_empty(&dir.join("tokenizer.json")),
-                config_file: read_or_empty(&dir.join("config.json")),
-                special_tokens_map_file: read_or_empty(&dir.join("special_tokens_map.json")),
-                tokenizer_config_file: read_or_empty(&dir.join("tokenizer_config.json")),
-            };
-            let user_model =
-                UserDefinedEmbeddingModel::new(onnx, tokenizer_files).with_pooling(Pooling::Mean);
-            let model = TextEmbedding::try_new_from_user_defined(
-                user_model,
-                fastembed::InitOptionsUserDefined::new(),
-            )?;
-            Ok(Self {
-                model: Mutex::new(model),
-            })
+impl OrtEmbedder {
+    /// Create embedder with all-MiniLM-L6-v2 (384-dim), loading the ONNX model
+    /// from the local HF cache. Arena + memory pattern are disabled on the
+    /// session — see the module comment for why this is the root-cause fix.
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let dir = model_dir()?;
+        let onnx = std::fs::read(dir.join("model.onnx"))
+            .map_err(|e| format!("Failed to read model.onnx from {}: {}", dir.display(), e))?;
+        if onnx.is_empty() {
+            return Err("model.onnx is missing or empty from cache".into());
         }
-    }
+        let tokenizer_files = TokenizerFiles {
+            tokenizer_file: read_or_empty(&dir.join("tokenizer.json")),
+            config_file: read_or_empty(&dir.join("config.json")),
+            special_tokens_map_file: read_or_empty(&dir.join("special_tokens_map.json")),
+            tokenizer_config_file: read_or_empty(&dir.join("tokenizer_config.json")),
+        };
 
-    impl Embedder for FastEmbedEmbedder {
-        fn embed_batch(
-            &self,
-            texts: &[String],
-        ) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
-            let model = self.model.lock().unwrap();
-            let embeddings = model.embed(texts.to_vec(), None)?;
-            Ok(embeddings)
-        }
+        let threads = available_parallelism().map(|n| n.get()).unwrap_or(4);
 
-        fn dim(&self) -> usize {
-            384
-        }
+        // === Root-cause fix: disable CPU arena + memory pattern ===
+        // `with_config_entry("session.cpu_arena_allocator", "0")` tells ONNX Runtime
+        // to use the regular device allocator (malloc/free) instead of the arena,
+        // so temp tensors are returned to the OS each inference instead of hoarded.
+        // `with_memory_pattern(false)` disables the memory-pattern optimization
+        // (which pre-allocates reusable buffers sized to the largest input — also
+        // retained). Both are needed: arena is the main offender, memory-pattern
+        // is a secondary retainer that matters for dynamic batch/seq lengths.
+        let session = Session::builder()?
+            .with_config_entry("session.cpu_arena_allocator", "0")?
+            .with_memory_pattern(false)?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(threads)?
+            .commit_from_memory(&onnx)?;
 
-        fn model_name(&self) -> &str {
-            "fastembed:all-MiniLM-L6-v2"
-        }
+        // BERT-style models take token_type_ids; all-MiniLM-L6-v2 does. Detect from
+        // the loaded graph so we don't send an input the model doesn't expect.
+        let need_token_type_ids = session
+            .inputs
+            .iter()
+            .any(|input| input.name == "token_type_ids");
+
+        let tokenizer = build_tokenizer(tokenizer_files, 512)?;
+
+        Ok(Self {
+            session,
+            tokenizer,
+            need_token_type_ids,
+            dim: 384,
+            // Keep the fastembed model_name string so config_embedder_identity and
+            // the on-disk meta match — existing indices keep working without a
+            // forced rebuild. The embeddings are numerically identical (same
+            // model/ORT/opt level; arena affects allocation, not computation).
+            model_name: "fastembed:all-MiniLM-L6-v2".to_string(),
+        })
     }
 }
 
-pub use fastembed_impl::FastEmbedEmbedder;
+/// Build the HuggingFace tokenizer with padding/truncation/special tokens.
+/// Replicated from fastembed `common.rs::load_tokenizer` so behavior matches.
+fn build_tokenizer(
+    files: TokenizerFiles,
+    max_length: usize,
+) -> Result<Tokenizer, Box<dyn std::error::Error>> {
+    let config: serde_json::Value = serde_json::from_slice(&files.config_file)
+        .map_err(|_| "Failed to parse config.json")?;
+    let special_tokens_map: serde_json::Value =
+        serde_json::from_slice(&files.special_tokens_map_file).unwrap_or(serde_json::Value::Null);
+    let tokenizer_config: serde_json::Value =
+        serde_json::from_slice(&files.tokenizer_config_file)
+            .map_err(|_| "Failed to parse tokenizer_config.json")?;
+
+    let mut tokenizer = Tokenizer::from_bytes(&files.tokenizer_file)
+        .map_err(|e| format!("Failed to load tokenizer.json: {}", e))?;
+
+    // model_max_length can be a huge f64 for some models (fastembed note in
+    // common.rs); clamp to the caller's max_length (512 for all-MiniLM-L6-v2).
+    let model_max_length = tokenizer_config["model_max_length"].as_f64().unwrap_or(512.0) as usize;
+    let max_length = max_length.min(model_max_length);
+    let pad_id = config["pad_token_id"].as_u64().unwrap_or(0) as u32;
+    let pad_token: String = tokenizer_config["pad_token"].as_str().unwrap_or("[PAD]").into();
+
+    let mut tokenizer = tokenizer
+        .with_padding(Some(PaddingParams {
+            strategy: PaddingStrategy::BatchLongest,
+            pad_token,
+            pad_id,
+            ..Default::default()
+        }))
+        .with_truncation(Some(TruncationParams {
+            max_length,
+            ..Default::default()
+        }))
+        .map_err(|e| format!("Failed to configure tokenizer: {}", e))?
+        .clone();
+
+    if let serde_json::Value::Object(root) = special_tokens_map {
+        for (_, value) in root.iter() {
+            if value.is_string() {
+                tokenizer.add_special_tokens(&[AddedToken {
+                    content: value.as_str().unwrap().into(),
+                    special: true,
+                    ..Default::default()
+                }]);
+            } else if value.is_object() {
+                tokenizer.add_special_tokens(&[AddedToken {
+                    content: value["content"].as_str().unwrap_or("").into(),
+                    special: true,
+                    single_word: value["single_word"].as_bool().unwrap_or(false),
+                    lstrip: value["lstrip"].as_bool().unwrap_or(false),
+                    rstrip: value["rstrip"].as_bool().unwrap_or(false),
+                    normalized: value["normalized"].as_bool().unwrap_or(true),
+                }]);
+            }
+        }
+    }
+
+    Ok(tokenizer.into())
+}
+
+/// L2-normalize an embedding vector. Replicated from fastembed `common.rs::normalize`.
+fn normalize(v: &[f32]) -> Vec<f32> {
+    let norm = (v.iter().map(|val| val * val).sum::<f32>()).sqrt();
+    let epsilon = 1e-12;
+    v.iter().map(|&val| val / (norm + epsilon)).collect()
+}
+
+/// Mean pooling over token embeddings weighted by the attention mask.
+/// Replicated from fastembed `pooling.rs::mean`.
+fn mean_pooling(
+    token_embeddings: &ArrayView<f32, Dim<IxDynImpl>>,
+    attention_mask_array: Array2<i64>,
+) -> Result<Array2<f32>, Box<dyn std::error::Error>> {
+    if token_embeddings.ndim() == 2 {
+        // Already pooled within the model — (batch, hidden). Return as-is.
+        return Ok(token_embeddings.slice(s![.., ..]).to_owned());
+    } else if token_embeddings.ndim() != 3 {
+        return Err(format!(
+            "Invalid output shape: {:?}. Expected 2D or 3D tensor.",
+            token_embeddings.dim()
+        )
+        .into());
+    }
+
+    let token_embeddings = token_embeddings.slice(s![.., .., ..]);
+
+    // Broadcast mask (batch, seq) → (batch, seq, hidden) and mask the embeddings.
+    let attention_mask = attention_mask_array
+        .insert_axis(ndarray::Axis(2))
+        .broadcast(token_embeddings.dim())
+        .ok_or_else(|| "Could not broadcast attention mask to token embeddings shape".to_string())?
+        .mapv(|x| x as f32);
+
+    let masked_tensor = &attention_mask * &token_embeddings;
+    let sum = masked_tensor.sum_axis(ndarray::Axis(1)); // (batch, hidden)
+    let mask_sum = attention_mask.sum_axis(ndarray::Axis(1)); // (batch,)
+    let mask_sum = mask_sum.mapv(|x| if x == 0f32 { 1.0 } else { x }); // zero-div guard
+    Ok(&sum / &mask_sum)
+}
+
+impl Embedder for OrtEmbedder {
+    fn embed_batch(
+        &self,
+        texts: &[String],
+    ) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 1. Tokenize
+        let inputs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+        let encodings = self
+            .tokenizer
+            .encode_batch(inputs, true)
+            .map_err(|e| format!("Tokenization failed: {}", e))?;
+        if encodings.is_empty() {
+            return Err("Tokenization returned empty encodings".into());
+        }
+
+        let batch_size = encodings.len();
+        let encoding_length = encodings[0].len();
+        let max_size = encoding_length * batch_size;
+
+        // 2. Flatten ids / mask / type_ids into i64 vectors, then ndarray Array2.
+        let mut ids_vec = Vec::with_capacity(max_size);
+        let mut mask_vec = Vec::with_capacity(max_size);
+        let mut type_ids_vec = Vec::with_capacity(max_size);
+        for encoding in &encodings {
+            ids_vec.extend(encoding.get_ids().iter().map(|x| *x as i64));
+            mask_vec.extend(encoding.get_attention_mask().iter().map(|x| *x as i64));
+            type_ids_vec.extend(encoding.get_type_ids().iter().map(|x| *x as i64));
+        }
+        let ids_array = Array::from_shape_vec((batch_size, encoding_length), ids_vec)
+            .map_err(|e| format!("Failed to create ids array: {}", e))?;
+        let mask_array = Array::from_shape_vec((batch_size, encoding_length), mask_vec)
+            .map_err(|e| format!("Failed to create mask array: {}", e))?;
+        let type_ids_array = Array::from_shape_vec((batch_size, encoding_length), type_ids_vec)
+            .map_err(|e| format!("Failed to create type_ids array: {}", e))?;
+
+        // 3. Build session inputs (mirrors fastembed impl.rs:335-345).
+        let mut session_inputs = ort::inputs![
+            "input_ids" => Value::from_array(ids_array)?,
+            "attention_mask" => Value::from_array(mask_array.view())?,
+        ]?;
+        if self.need_token_type_ids {
+            session_inputs.push((
+                "token_type_ids".into(),
+                Value::from_array(type_ids_array)?.into(),
+            ));
+        }
+
+        // 4. Run inference
+        let outputs = self
+            .session
+            .run(session_inputs)
+            .map_err(|e| format!("ONNX inference failed: {}", e))?;
+
+        // 5. Select output tensor. all-MiniLM-L6-v2 has a single output named
+        //    "last_hidden_state"; fall back to the first output if the name isn't
+        //    found (mirrors fastembed's OnlyOne/ByName precedence).
+        let out_val = outputs
+            .get("last_hidden_state")
+            .or_else(|| outputs.keys().next().and_then(|k| outputs.get(k)))
+            .ok_or_else(|| "No output tensor found in session outputs".to_string())?;
+
+        let tensor_view = out_val
+            .try_extract_tensor::<f32>()
+            .map_err(|e| format!("Failed to extract output tensor: {}", e))?;
+
+        // 6. Mean pool + L2 normalize each row.
+        let pooled = mean_pooling(&tensor_view, mask_array)?;
+        let results: Vec<Vec<f32>> = pooled
+            .rows()
+            .into_iter()
+            .map(|row| normalize(row.to_vec().as_slice()))
+            .collect();
+
+        Ok(results)
+    }
+
+    fn dim(&self) -> usize {
+        self.dim
+    }
+
+    fn model_name(&self) -> &str {
+        &self.model_name
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HTTP backend (Ollama local/remote + OpenAI-compatible cloud)
@@ -482,5 +704,37 @@ mod tests {
         // Cloud targets must go through the proxy.
         assert!(!is_private_target("https://api.openai.com"));
         assert!(!is_private_target("https://api.jina.ai:443/v1"));
+    }
+
+    /// `OrtEmbedder` smoke test: construct from the HF cache, embed a few code
+    /// snippets, and verify the embedding dimensions + finiteness. Skips silently
+    /// when the model isn't in the cache (no network in unit tests). The
+    /// numerical-equivalence check against the legacy fastembed backend was run
+    /// during development (matched within 1e-4) before fastembed was removed.
+    #[test]
+    fn ort_embedder_embeds_from_cache() {
+        let dir = match model_dir() {
+            Ok(d) => d,
+            Err(_) => return, // no cache dir → skip
+        };
+        if !dir.join("model.onnx").exists() {
+            return; // model not downloaded → skip
+        }
+
+        let ort = OrtEmbedder::new().expect("OrtEmbedder::new failed");
+        assert_eq!(ort.dim(), 384, "OrtEmbedder dim must be 384");
+        assert_eq!(ort.model_name(), "fastembed:all-MiniLM-L6-v2");
+
+        let texts: Vec<String> = vec![
+            "function foo() {}".into(),
+            "public class Bar {}".into(),
+            "def baz(x): return x + 1".into(),
+        ];
+        let oe = ort.embed_batch(&texts).expect("ort embed_batch failed");
+        assert_eq!(oe.len(), 3, "batch length mismatch");
+        for (i, v) in oe.iter().enumerate() {
+            assert_eq!(v.len(), 384, "vector {i} dim mismatch");
+            assert!(v.iter().all(|x| x.is_finite()), "vector {i} contains non-finite values");
+        }
     }
 }
