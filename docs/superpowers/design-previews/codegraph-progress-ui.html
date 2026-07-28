@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CodeGraph 进度条 · 方案 A · 双主题</title>
+<style>
+  /* ════════ 两套主题真实 token（取自 src/themes/）════════ */
+  .theme-warm {
+    --bgDeep:    #1a1a22;
+    --bgBase:    #22222e;
+    --bgRaised:  #2a2a38;
+    --surface:   #32323f;
+    --surfaceHv: #3a3a4a;
+    --text:      #d8d4cf;
+    --subtext0:  #a8a4a0;
+    --subtext1:  #6b6762;
+    --accent:    #d4a574;
+    --success:   #8bc48a;
+    --warning:   #e8c374;
+    --info:      #7eb8d8;
+    --border:    rgba(255,255,255,0.06);
+    --radius:    12px;
+  }
+  .theme-cat {
+    --bgDeep:    #11111b;
+    --bgBase:    #1e1e2e;
+    --bgRaised:  #313244;
+    --surface:   #313244;
+    --surfaceHv: #45475a;
+    --text:      #cdd6f4;
+    --subtext0:  #a6adc8;
+    --subtext1:  #6c7086;
+    --accent:    #89b4fa;
+    --success:   #a6e3a1;
+    --warning:   #f9e2af;
+    --info:      #89dceb;
+    --border:    rgba(255,255,255,0.06);
+    --radius:    12px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #0c0c12;
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 14px; line-height: 1.5;
+    padding: 40px 24px 80px;
+  }
+
+  .page-head { max-width: 1120px; margin: 0 auto 36px; }
+  .page-head h1 { font-size: 22px; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.01em; color: #e8e8f0; }
+  .page-head p { color: #9090a8; margin: 0; font-size: 13px; }
+  .page-head .legend { margin-top: 14px; display: flex; gap: 18px; flex-wrap: wrap; color: #707088; font-size: 12px; }
+  .page-head .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+  /* ── 两列并排 ── */
+  .pair {
+    max-width: 1120px; margin: 0 auto;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 40px;
+  }
+  .col-head {
+    display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px;
+  }
+  .col-head .name { font-size: 15px; font-weight: 600; color: #e8e8f0; }
+  .col-head .src { font-size: 11px; color: #707088; font-family: ui-monospace, monospace; }
+  .col-head .pill {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 4px; margin-left: auto;
+  }
+  .theme-warm .pill { background: rgba(212,165,116,0.14); color: #d4a574; }
+  .theme-cat  .pill { background: rgba(137,180,250,0.14); color: #89b4fa; }
+
+  .toolbar { display: flex; gap: 8px; margin: 14px 0 20px; }
+  .toolbar button {
+    background: var(--surface); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 11px; font-size: 12px; cursor: pointer; font-family: inherit;
+  }
+  .theme-warm .toolbar button:hover { background: var(--surfaceHv); }
+  .theme-cat  .toolbar button:hover { background: var(--surfaceHv); }
+  .theme-warm .toolbar button.active { background: var(--accent); color: var(--bgDeep); border-color: var(--accent); }
+  .theme-cat  .toolbar button.active { background: var(--accent); color: var(--bgDeep); border-color: var(--accent); }
+
+  /* ── 文件树面板 ── */
+  .file-tree {
+    background: var(--bgBase);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    width: 100%; max-width: 440px;
+    display: flex; flex-direction: column;
+    overflow: hidden; height: 360px;
+  }
+  .path-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 11px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .ws-trigger {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: none; border: none; color: var(--text);
+    cursor: pointer; font: inherit; padding: 0;
+  }
+  .ws-folder { color: var(--warning); }
+  .ws-project-name { font-weight: 500; font-size: 13px; }
+  .path-branch {
+    font-family: ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
+    font-size: 11px; color: var(--accent);
+    background: var(--surface); padding: 1px 6px; border-radius: 4px;
+  }
+  .ws-chevron { color: var(--subtext1); }
+  .hidden-toggle {
+    margin-left: auto; background: none; border: none; color: var(--subtext1);
+    cursor: pointer; padding: 2px; display: inline-flex;
+  }
+  .hidden-toggle:hover { color: var(--text); }
+
+  .tree-content { padding: 6px 4px; flex: 1; font-size: 13px; overflow: hidden; }
+  .tree-row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 8px; border-radius: 4px; color: var(--text); cursor: default;
+  }
+  .tree-row:hover { background: var(--surface); }
+  .tree-row .ic { width: 14px; flex-shrink: 0; color: var(--subtext0); }
+  .tree-row.dir .ic { color: var(--warning); }
+  .tree-row .depth1 { padding-left: 18px; }
+  .tree-row .depth2 { padding-left: 36px; }
+  .tree-row .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tree-row.file.vue .name { color: var(--success); }
+
+  /* ════════ 方案 A：文件树底部条 ════════ */
+  .cgp-a-bar {
+    flex-shrink: 0;
+    border-top: 1px solid var(--border);
+    background: var(--bgRaised);
+    padding: 9px 12px;
+    display: flex; align-items: center; gap: 10px;
+    transition: opacity 0.4s ease;
+  }
+  .cgp-a-bar.done { opacity: 0; pointer-events: none; }
+  .cgp-a-label {
+    font-size: 11px; color: var(--subtext0); flex-shrink: 0;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .cgp-a-label .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+  .cgp-segments { flex: 1; display: flex; gap: 2px; height: 8px; align-items: center; }
+  .cgp-seg { flex: 1; height: 8px; border-radius: 2px; background: var(--surface); transition: background 0.3s ease; }
+  .cgp-seg.on { background: var(--success); }
+  .cgp-a-pct {
+    font-family: ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
+    font-size: 12px; color: var(--success); font-weight: 500;
+    min-width: 38px; text-align: right; flex-shrink: 0;
+  }
+  .cgp-a-bar.is-ready .cgp-a-pct { color: var(--subtext0); }
+
+  @media (max-width: 880px) {
+    .pair { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cgp-a-label .dot { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <h1>CodeGraph 构建进度条 · 方案 A · 双主题对比</h1>
+  <p>方案 A（文件树底部条）在 <b>Warm Dark</b> 与 <b>Catppuccin Mocha</b> 两套项目真实主题下并排渲染。signature：分段方块进度，一格一格点亮，呼应符号逐个被索引。</p>
+  <div class="legend">
+    <span><i class="swatch" style="background:#8bc48a"></i>Warm Dark 已索引</span>
+    <span><i class="swatch" style="background:#a6e3a1"></i>Catppuccin 已索引</span>
+    <span><i class="swatch" style="background:#d4a574"></i>Warm accent（暖金）</span>
+    <span><i class="swatch" style="background:#89b4fa"></i>Catppuccin accent（冷蓝）</span>
+  </div>
+</header>
+
+<div class="pair">
+
+  <!-- ════════ Warm Dark ════════ -->
+  <div class="theme-warm">
+    <div class="col-head">
+      <span class="name">Warm Dark</span>
+      <span class="src">src/themes/warm-dark.ts</span>
+      <span class="pill">暖金 · 暖灰</span>
+    </div>
+    <div class="toolbar" data-toggle="warm">
+      <button class="active" data-state="building">构建中 67%</button>
+      <button data-state="ready">已完成</button>
+    </div>
+
+    <div class="file-tree">
+      <div class="path-bar">
+        <button class="ws-trigger">
+          <svg class="ws-folder" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          <span class="ws-project-name">aide</span>
+          <span class="path-branch">master</span>
+          <svg class="ws-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 3.5L5 6L7.5 3.5" stroke="currentColor" stroke-width="1.4"/></svg>
+        </button>
+        <button class="hidden-toggle">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+
+      <div class="tree-content">
+        <div class="tree-row dir"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span class="name">src</span></div>
+        <div class="tree-row file vue depth1"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg><span class="name">App.vue</span></div>
+        <div class="tree-row dir depth1"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span class="name">composables</span></div>
+        <div class="tree-row file depth2"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg><span class="name">useChatSession.ts</span></div>
+        <div class="tree-row file depth2"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg><span class="name">useGotoDefinition.ts</span></div>
+        <div class="tree-row dir depth1"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span class="name">components</span></div>
+        <div class="tree-row file depth2"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg><span class="name">ChatPanel.vue</span></div>
+        <div class="tree-row dir depth1"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span class="name">codegraph</span></div>
+      </div>
+
+      <div class="cgp-a-bar" data-bar="warm">
+        <span class="cgp-a-label"><i class="dot"></i>代码索引</span>
+        <div class="cgp-segments" data-segments="18" data-fill="12"></div>
+        <span class="cgp-a-pct" data-pct="67">67%</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════ Catppuccin Mocha ════════ -->
+  <div class="theme-cat">
+    <div class="col-head">
+      <span class="name">Catppuccin Mocha</span>
+      <span class="src">src/themes/catppuccin.ts</span>
+      <span class="pill">冷蓝 · 紫灰</span>
+    </div>
+    <div class="toolbar" data-toggle="cat">
+      <button class="active" data-state="building">构建中 67%</button>
+      <button data-state="ready">已完成</button>
+    </div>
+
+    <div class="file-tree">
+      <div class="path-bar">
+        <button class="ws-trigger">
+          <svg class="ws-folder" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          <span class="ws-project-name">aide</span>
+          <span class="path-branch">master</span>
+          <svg class="ws-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 3.5L5 6L7.5 3.5" stroke="currentColor" stroke-width="1.4"/></svg>
+        </button>
+        <button class="hidden-toggle">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+
+      <div class="tree-content">
+        <div class="tree-row dir"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span class="name">src</span></div>
+        <div class="tree-row file vue depth1"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg><span class="name">App.vue</span></div>
+        <div class="tree-row dir depth1"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span class="name">composables</span></div>
+        <div class="tree-row file depth2"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg><span class="name">useChatSession.ts</span></div>
+        <div class="tree-row file depth2"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg><span class="name">useGotoDefinition.ts</span></div>
+        <div class="tree-row dir depth1"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span class="name">components</span></div>
+        <div class="tree-row file depth2"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg><span class="name">ChatPanel.vue</span></div>
+        <div class="tree-row dir depth1"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span class="name">codegraph</span></div>
+      </div>
+
+      <div class="cgp-a-bar" data-bar="cat">
+        <span class="cgp-a-label"><i class="dot"></i>代码索引</span>
+        <div class="cgp-segments" data-segments="18" data-fill="12"></div>
+        <span class="cgp-a-pct" data-pct="67">67%</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  function paint(el, total, filled) {
+    el.innerHTML = "";
+    for (let i = 0; i < total; i++) {
+      const s = document.createElement("div");
+      s.className = "cgp-seg" + (i < filled ? " on" : "");
+      el.appendChild(s);
+    }
+  }
+  document.querySelectorAll("[data-segments]").forEach(el =>
+    paint(el, +el.dataset.segments, +el.dataset.fill));
+
+  document.querySelectorAll(".toolbar").forEach(tb => {
+    tb.addEventListener("click", e => {
+      const btn = e.target.closest("button");
+      if (!btn) return;
+      tb.querySelectorAll("button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      const ready = btn.dataset.state === "ready";
+      const bar = tb.parentElement.querySelector("[data-bar]");
+      const segs = bar.querySelector("[data-segments]");
+      const pct = bar.querySelector("[data-pct]");
+      if (ready) {
+        bar.classList.add("is-ready");
+        paint(segs, +segs.dataset.segments, +segs.dataset.segments);
+        pct.textContent = "就绪";
+        setTimeout(() => bar.classList.add("done"), 1300);
+      } else {
+        bar.classList.remove("is-ready", "done");
+        paint(segs, +segs.dataset.segments, +segs.dataset.fill);
+        pct.textContent = "67%";
+      }
+    });
+  });
+</script>
+
+</body>
+</html>
