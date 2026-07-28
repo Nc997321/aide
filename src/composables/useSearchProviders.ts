@@ -1,24 +1,10 @@
 import { api } from "../api";
-import { useFileViewer } from "./useFileViewer";
 import type { Session } from "../types";
+import { createCodegraphProvider } from "./useSearchProviders/codegraph";
+import type { SearchProvider, SearchResult } from "./useSearchProviders/types";
+import { useFileViewer } from "./useFileViewer";
 
-// ── Search provider interface ──
-
-export interface SearchResult {
-  id: string;
-  label: string;
-  description?: string;
-  icon?: string;
-  /** Called when user selects this result. */
-  action: () => void;
-}
-
-export interface SearchProvider {
-  id: string;
-  label: string; // group label shown in dropdown, e.g. "会话" / "文件"
-  priority: number; // lower = shown first
-  search(query: string, limit: number): Promise<SearchResult[]>;
-}
+export type { SearchProvider, SearchResult } from "./useSearchProviders/types";
 
 // ── Provider registry ──
 
@@ -134,41 +120,6 @@ function createFileProvider(
           },
         };
       });
-    },
-  };
-}
-
-// ── Built-in: CodeGraph symbol search provider ──
-
-function createCodegraphProvider(
-  getWorkspacePath: () => string,
-): SearchProvider {
-  return {
-    id: "codegraph",
-    label: "代码定义",
-    priority: 5, // after sessions (0) and files (1)
-    async search(query, limit) {
-      if (!query.trim() || query.trim().length < 2) return [];
-      const projectRoot = getWorkspacePath();
-      if (!projectRoot) return [];
-      try {
-        const results = await api.codegraphGotoDefinition(
-          query, "", 0, 0, projectRoot,
-        );
-        return results.slice(0, limit).map((r) => ({
-          id: `${r.symbol.file}:${r.symbol.line}:${r.symbol.name}`,
-          label: r.symbol.name,
-          description: `${r.confidence === "Structure" ? "精确" : "相似"} · ${r.symbol.file}:${r.symbol.line}`,
-          icon: r.confidence === "Structure" ? "link" : "search",
-          action() {
-            const separator = projectRoot.includes("\\") ? "\\" : "/";
-            const fullPath = projectRoot + separator + r.symbol.file.replace(/\//g, separator);
-            useFileViewer().openAndScrollTo(fullPath, r.symbol.line);
-          },
-        }));
-      } catch {
-        return [];
-      }
     },
   };
 }

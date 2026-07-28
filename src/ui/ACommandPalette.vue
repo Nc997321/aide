@@ -7,6 +7,8 @@ export interface PaletteResult {
   id: string;
   label: string;
   description?: string;
+  /** Full context shown through the theme-aware v-tooltip directive. */
+  tooltip?: string;
   icon?: string;
   group: string;
   action: () => void;
@@ -160,6 +162,7 @@ defineExpose({ setSearchFn, setRecentFn });
               <div
                 v-for="item in items"
                 :key="item.id"
+                v-tooltip="item.tooltip"
                 class="a-palette-item"
                 :class="{ 'a-palette-item--selected': results.indexOf(item) === selectedIndex }"
                 @click="item.action(); emit('close')"
