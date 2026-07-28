@@ -21,7 +21,11 @@ tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_repr = "0.1"
 serde_json = "1"
-keyring = "3"
+# OS keychain 凭据库后端。keyring v3 把平台后端改成 opt-in feature：不开任何后端
+# feature 时 keychain set 不落盘——auth token/API key 重启即丢，会话 spawn 拿不到
+# ANTHROPIC_AUTH_TOKEN → SDK 报 "Not logged in · Please run /login"。三个平台后端由
+# keyring 内部按编译目标自选，同时开启即可（未命中的平台编译为空）。
+keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent"] }
 portable-pty = "0.8"
 notify-rust = "4"
 tokio = { version = "1", features = ["full"] }
