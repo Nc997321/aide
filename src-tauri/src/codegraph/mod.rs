@@ -38,6 +38,18 @@ pub(crate) fn embed_input(raw: &str) -> String {
     format!("code: {}", raw)
 }
 
+/// Number of code snippets embedded per ONNX forward pass during a full rebuild
+/// (Phase 2) and incremental reindex. Caps the per-batch peak memory: each batch
+/// allocates attention-score tensors of `(batch, heads=8, seq≤512, seq≤512)` per
+/// transformer layer (6 layers for all-MiniLM-L6-v2). At 256/batch this peaks
+/// ~6GB (observed via VMMap as the aide.exe 3-6GB heap balloon during rebuilds);
+/// at 32/batch it peaks ~1.5GB. Combined with disabling the CPU arena
+/// (`DisableCpuMemArena` in `OrtEmbedder::new`), per-batch temp tensors are
+/// malloc/free'd and returned to the OS each batch, so the smaller batch caps
+/// both the peak AND the steady-state. Smaller = safer memory, more batches =
+/// slightly slower rebuild (3739 symbols → ~117 batches vs ~15).
+pub(crate) const EMBED_BATCH_SIZE: usize = 32;
+
 /// Snapshot of a fully-built project index, swapped atomically into state.
 ///
 /// `embed_ready` gates the semantic layer: false while the background embed is
@@ -220,6 +232,23 @@ pub async fn codegraph_build_index(
     let settings_service = settings_service.inner().clone();
     tokio::task::spawn_blocking(move || {
         let root = PathBuf::from(&project_root);
+        // Cancel any in-flight build from a previous workspace/config switch and
+        // wait for it to drain before starting the new one. Without this, the old
+        // spawn_blocking task keeps running — its closure holds the old shard Arc +
+        // collected points + embedder, and switching workspaces mid-build
+        // accumulates concurrent builds = memory leak (RSS climbs with each switch
+        // and never fully drops, because the old Phase 2 loop checks `build_cancel`
+        // but the new build reset it to false). The old task checks `build_cancel`
+        // each Phase 2 batch AND each Phase 1 file (collect_symbols), so it drains
+        // quickly once cancelled. The 10s cap guards against a stuck old task
+        // blocking the new build indefinitely; normally Phase 1 observes the cancel
+        // within a few files and exits well under that.
+        st.build_cancel.store(true, Ordering::Relaxed);
+        let wait_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while st.build_active.load(Ordering::Relaxed) && std::time::Instant::now() < wait_deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        st.build_cancel.store(false, Ordering::Relaxed);
         let cfg = load_embedder_config(&settings_service);
         // Cheap pre-construction identity implied by the config (backend + model
         // + configured dim). Used to decide whether the *cached* embedder is still
@@ -340,17 +369,35 @@ pub async fn codegraph_build_index(
             }
         };
 
-        // Process-start orphan cleanup: if `inner` is empty (fresh process, no
-        // live CodeShard in memory and no in-flight goto Arc clones), it's safe
-        // to remove leftover `qdrant-*` dirs from previous builds. We keep the
+        // Orphan shard-dir cleanup for THIS project. Safe to remove leftover
+        // `qdrant-*` dirs under this project's index dir when no live CodeShard
+        // references this project's index dir — i.e. when `inner` is None (fresh
+        // process) OR holds a DIFFERENT project (workspace switch: the live
+        // CodeShard belongs to the other project's index_dir, so this project's
+        // qdrant-* orphans are referenced by nothing live). We keep the
         // meta-pointed dir as a conservative fallback (if this rebuild fails, the
         // old index remains loadable on next start — though stale, it's not gone).
-        // When `inner` is Some (same-process rebuild after a config change), we
-        // skip cleanup: the old shard is still live (its Arc is in inner + maybe
-        // goto clones), so its dir must not be touched — it'll be cleaned on the
-        // next process start.
-        let inner_is_none = st.inner.read().map(|g| g.is_none()).unwrap_or(true);
-        if inner_is_none {
+        //
+        // Skip only on SAME-project rebuild: the old shard is still live (its
+        // Arc is in inner + maybe goto clones), so its dir must not be touched.
+        // That orphan is cleaned the next time the user switches away and back
+        // (then `same_project_live` is false and cleanup runs).
+        //
+        // History: the original condition was `inner.is_none()`, which only fired
+        // on the very first build of a process. Workspace switching always left
+        // `inner` Some (the previous project's index), so cleanup never ran and
+        // orphan shard dirs accumulated across every switch — observed as two
+        // (or more) `qdrant-*` dirs per project, the older ones orphaned and
+        // never reclaimed. Tracking `same_project_live` instead fires cleanup
+        // on every workspace switch too, since the switched-to project's index
+        // dir holds no live CodeShard.
+        let same_project_live = st
+            .inner
+            .read()
+            .ok()
+            .and_then(|g| g.as_ref().map(|pi| pi.project_root == root))
+            .unwrap_or(false);
+        if !same_project_live {
             let base = indexer::index_dir(&root);
             let keep = Meta::load(&base.join("meta.json"))
                 .map(|m| m.shard_dir)
@@ -369,6 +416,7 @@ pub async fn codegraph_build_index(
             build_dim,
             &model_name,
             Some(&on_status),
+            Some(&st.build_cancel),
         )
         .map_err(|e| format!("Indexing failed: {}", e))?;
 
@@ -419,7 +467,7 @@ pub async fn codegraph_build_index(
         if can_embed {
             let emb = st.embedder.lock().map_err(|e| e.to_string())?;
             if let Some(embedder) = emb.as_ref() {
-                for chunk in points.chunks(256) {
+                for chunk in points.chunks(EMBED_BATCH_SIZE) {
                     if st.build_cancel.load(Ordering::Relaxed) {
                         break;
                     }
@@ -1020,7 +1068,7 @@ mod tests {
         // released before we re-load it.
         {
             let (_t, _edges, shard, _p, _s) =
-                crate::codegraph::indexer::build_structure_index(&dir, &pm, 4, "test-model", None)
+                crate::codegraph::indexer::build_structure_index(&dir, &pm, 4, "test-model", None, None)
                     .unwrap();
             drop(shard);
         }

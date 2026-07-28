@@ -44,10 +44,18 @@ pub struct BuildStats {
 /// of the current step ("扫描文件树..." / "解析 <path> (i/N)"). Lets the command
 /// layer report what's happening to the frontend for observability — so a slow
 /// build is debuggable ("stuck parsing node_modules/X" vs "embed is just slow").
+///
+/// `cancel` is an optional flag checked once per source file; when set, the walk
+/// stops early and returns the symbols collected so far. Lets a workspace switch
+/// cancel an in-flight Phase 1 promptly — Phase 1 doesn't otherwise observe
+/// `build_cancel`, so without this check the old build task runs to completion in
+/// the background, holding its shard Arc + points + embedder (memory leak across
+/// workspace switches).
 pub fn collect_symbols(
     project_root: &Path,
     parser_manager: &ParserManager,
     on_status: Option<&dyn Fn(&str)>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> (SymbolTable, EdgeTable, Vec<IndexedPoint>, BuildStats) {
     let exts = parser_manager.supported_extensions();
     let ext_refs: Vec<&str> = exts.iter().copied().collect();
@@ -63,6 +71,11 @@ pub fn collect_symbols(
     let mut stats = BuildStats::default();
 
     for (i, file_path) in files.iter().enumerate() {
+        if let Some(c) = cancel {
+            if c.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+        }
         stats.scanned_files += 1;
         if let Some(f) = on_status {
             f(&format!(
@@ -123,6 +136,9 @@ pub fn build_structure_index(
     dim: usize,
     model_name: &str,
     on_status: Option<&dyn Fn(&str)>,
+    // Optional cancel flag forwarded to `collect_symbols` so Phase 1 observes a
+    // workspace-switch cancellation (see `collect_symbols` docs).
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<(SymbolTable, EdgeTable, Arc<CodeShard>, Vec<IndexedPoint>, BuildStats), Box<dyn std::error::Error>> {
     let base = index_dir(project_root);
     std::fs::create_dir_all(&base)?;
@@ -146,7 +162,7 @@ pub fn build_structure_index(
     }
     let shard = CodeShard::create(&qdir, dim)?;
 
-    let (table, edges, points, stats) = collect_symbols(project_root, parser_manager, on_status);
+    let (table, edges, points, stats) = collect_symbols(project_root, parser_manager, on_status, cancel);
 
     // Persist SymbolTable + meta at structure-layer readiness (not waiting for
     // embed). Permission errors expected (`.aide/` may be read-only); other FS
@@ -348,7 +364,7 @@ pub fn reindex_one(
         table.insert(p.symbol.clone());
     }
     if let Some(embedder) = embedder {
-        for chunk in points.chunks(256) {
+        for chunk in points.chunks(super::EMBED_BATCH_SIZE) {
             let _ = store::embed_and_store(chunk, embedder, shard);
         }
     }
@@ -390,6 +406,44 @@ pub fn reindex_one(
 mod tests {
     use crate::codegraph::parser::ParserManager;
     use super::{collect_symbols, cleanup_orphan_shard_dirs, decide_increment};
+
+    /// `collect_symbols` must stop after the first file when `cancel` is pre-set,
+    /// returning an empty table. Phase 1 observing the cancel promptly is what lets
+    /// a workspace switch drain an in-flight build instead of letting it run to
+    /// completion holding its shard/points/embedder (the memory leak this guards).
+    #[test]
+    fn collect_symbols_stops_immediately_when_cancelled() {
+        let dir = std::env::temp_dir().join(format!("cg_cancel_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..10 {
+            std::fs::write(dir.join(format!("f{i}.ts")), format!("function g{i}() {{}}")).unwrap();
+        }
+        let pm = ParserManager::new();
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        let (table, _edges, _points, stats) = collect_symbols(&dir, &pm, None, Some(&cancel));
+        assert_eq!(stats.scanned_files, 0, "cancel must stop before scanning any file");
+        assert_eq!(table.len(), 0, "no symbols collected under cancel");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Without cancel, all files are scanned — confirms the cancel check doesn't
+    /// short-circuit the normal path.
+    #[test]
+    fn collect_symbols_scans_all_when_not_cancelled() {
+        let dir = std::env::temp_dir().join(format!("cg_nocancel_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..5 {
+            std::fs::write(dir.join(format!("f{i}.ts")), format!("function g{i}() {{}}")).unwrap();
+        }
+        let pm = ParserManager::new();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let (table, _edges, _points, stats) = collect_symbols(&dir, &pm, None, Some(&cancel));
+        assert_eq!(stats.scanned_files, 5, "all files scanned without cancel");
+        assert_eq!(table.len(), 5, "one symbol per file collected");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn decide_increment_small_delta_is_incremental() {
@@ -453,7 +507,7 @@ mod tests {
         // returned shard so its dir is released on disk before we re-load it.
         {
             let (_table, _edges, shard, _points, _stats) =
-                super::build_structure_index(&dir, &pm, 4, "test-model", None).unwrap();
+                super::build_structure_index(&dir, &pm, 4, "test-model", None, None).unwrap();
             drop(shard);
         }
         // Phase 1 writes `embed_complete: false`; flip it to true to simulate a
@@ -484,7 +538,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.ts"), "class A { save() {} }").unwrap();
         let pm = ParserManager::new();
-        super::build_structure_index(&dir, &pm, 4, "test-model", None).unwrap();
+        super::build_structure_index(&dir, &pm, 4, "test-model", None, None).unwrap();
         // model mismatch → None
         assert!(super::load_compatible_index(&dir, "other-model", 4).is_none(), "model mismatch");
         // dim mismatch → None
@@ -509,7 +563,7 @@ mod tests {
         let pm = ParserManager::new();
         {
             let (_t, _edges, shard, _p, _s) =
-                super::build_structure_index(&dir, &pm, 4, "test-model", None).unwrap();
+                super::build_structure_index(&dir, &pm, 4, "test-model", None, None).unwrap();
             drop(shard);
         }
         // meta.json now has embed_complete=false (Phase 1 only) — must NOT load.
@@ -535,7 +589,7 @@ mod tests {
             "class OrderService { void save() {} }").unwrap();
 
         let pm = ParserManager::new();
-        let (table, edges, points, stats) = collect_symbols(&dir, &pm, None);
+        let (table, edges, points, stats) = collect_symbols(&dir, &pm, None, None);
 
         assert_eq!(table.lookup("save").len(), 2);
         assert!(table.lookup("UserService").len() == 1);
@@ -558,7 +612,7 @@ mod tests {
         let pm = ParserManager::new();
         {
             let (_t, edges, shard, _p, _s) =
-                super::build_structure_index(&dir, &pm, 4, "test-model", None).unwrap();
+                super::build_structure_index(&dir, &pm, 4, "test-model", None, None).unwrap();
             assert_eq!(edges.callers_of("target").len(), 1);
             drop(shard);
         }

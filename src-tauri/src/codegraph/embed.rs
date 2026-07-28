@@ -23,6 +23,7 @@ use std::thread::available_parallelism;
 use std::time::Duration;
 
 use ndarray::{s, Array, Array2, ArrayView, Dim, IxDynImpl};
+use ort::execution_providers::CPUExecutionProvider;
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Value;
 use serde::{Deserialize, Serialize};
@@ -198,14 +199,18 @@ impl OrtEmbedder {
         let threads = available_parallelism().map(|n| n.get()).unwrap_or(4);
 
         // === Root-cause fix: disable CPU arena + memory pattern ===
-        // `with_config_entry("session.cpu_arena_allocator", "0")` tells ONNX Runtime
-        // to use the regular device allocator (malloc/free) instead of the arena,
-        // so temp tensors are returned to the OS each inference instead of hoarded.
+        // 显式注册 CPU EP 并禁用其 arena（CPUExecutionProvider 默认 use_arena=false →
+        // register 调 DisableCpuMemArena）。这才是禁 CPU arena 的正确方式。仅设
+        // `session.cpu_arena_allocator=0` config entry 不够——不显式注册 CPU EP 时
+        // ONNX Runtime 用默认 CPU EP（arena 默认开启），config entry 禁不掉默认 EP 的
+        // arena，重建索引时推理临时张量进 arena 不归还 OS（VMMap 实测 aide.exe heap
+        // 3G 指数级扩张 1G+1G+512M+256M+...）。显式注册 CPUExecutionProvider::default()
+        // 触发 register 调用 DisableCpuMemArena，真正禁用 arena。config entry 保留作兜底。
+        //
         // `with_memory_pattern(false)` disables the memory-pattern optimization
-        // (which pre-allocates reusable buffers sized to the largest input — also
-        // retained). Both are needed: arena is the main offender, memory-pattern
-        // is a secondary retainer that matters for dynamic batch/seq lengths.
+        // (which pre-allocates reusable buffers sized to the largest input).
         let session = Session::builder()?
+            .with_execution_providers([CPUExecutionProvider::default().build()])?
             .with_config_entry("session.cpu_arena_allocator", "0")?
             .with_memory_pattern(false)?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
@@ -779,5 +784,49 @@ mod tests {
             assert_eq!(v.len(), 384, "vector {i} dim mismatch");
             assert!(v.iter().all(|x| x.is_finite()), "vector {i} contains non-finite values");
         }
+    }
+
+    /// 诊断：验证 OrtEmbedder 的 ONNX CPU arena 是否真的被禁用 + batch 32 峰值。
+    ///
+    /// `OrtEmbedder::new` 显式注册 `CPUExecutionProvider::default()`（use_arena=false
+    /// → register 调 `DisableCpuMemArena`）+ `session.cpu_arena_allocator=0` 兜底 +
+    /// `with_memory_pattern(false)`，推理临时张量走 malloc/free 用完即还 OS。本测试
+    /// 跑 30 个 batch（32 文本/批，与 `EMBED_BATCH_SIZE` 一致）embed，用 sysinfo 采样
+    /// 进程 RSS 轨迹，判断：
+    /// - arena 禁用生效 → 每批临时张量归还，RSS 波动不阶梯累积
+    /// - arena 没禁 → 临时张量进 arena 不归还 OS，RSS 随批数阶梯涨
+    /// - batch 32 → 峰值应 ~1.5G（256/batch 峰值 ~6G 的 1/4）
+    ///
+    /// 不硬断言（RSS 含 OS heap 碎片 / 延迟回收噪声，硬阈值会 flaky），打印轨迹
+    /// 供人工判断。跑：
+    /// `cargo test --lib codegraph::embed::tests::ort_arena_memory_trajectory -- --nocapture``
+    #[test]
+    fn ort_arena_memory_trajectory() {
+        let ort = match OrtEmbedder::new() {
+            Ok(o) => o,
+            Err(_) => return, // no model in cache → skip
+        };
+        use sysinfo::{Pid, ProcessesToUpdate, System};
+        let mut sys = System::new();
+        let pid = Pid::from_u32(std::process::id());
+        let mut mem_kb = || {
+            sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+            sys.process(pid).map(|p| p.memory() / 1024).unwrap_or(0)
+        };
+        eprintln!("[arena] baseline RSS: {} KB", mem_kb());
+        for i in 0..30 {
+            // 长文本（接近 512 token 上限）→ 大张量，能真正暴露 arena 是否禁用。
+            // 短文本张量小，arena 即使没禁也只涨到小峰值并复用，RSS 看不出区别（之前误判根因）。
+            let long_body: String = std::iter::repeat("let v = 1; ").take(400).collect();
+            let texts: Vec<String> = (0..32)
+                .map(|j| format!("fn f{j}() {{ {long_body} }}"))
+                .collect();
+            let _ = ort.embed_batch(&texts).unwrap();
+            if i % 5 == 4 {
+                eprintln!("[arena] after batch {}/30: {} KB", i + 1, mem_kb());
+            }
+        }
+        drop(ort);
+        eprintln!("[arena] after drop OrtEmbedder: {} KB", mem_kb());
     }
 }
