@@ -26,11 +26,12 @@ interface PendingEntry {
 /**
  * Reusable, provider-agnostic confirmation queue.
  *
- * This is ONLY reached when the Aide policy hook defers (no policy rule
- * matched) — the policy hook in `session-worker.ts` is the authoritative
- * PreToolUse layer. Here we just run the human confirmation flow: emit a
- * `permission_request`, await `resolve()`, and (for AskUserQuestion) reshape
- * the answers into `updatedInput`.
+ * This is ONLY reached when the Aide policy hook asks (a policy rule matched
+ * with effect `ask`) — the policy hook in `session-worker.ts` is the
+ * authoritative PreToolUse layer; on no-match it returns {} (lets the CLI
+ * proceed), on allow/deny it decides directly. Here we just run the human
+ * confirmation flow: emit a `permission_request`, await `resolve()`, and (for
+ * AskUserQuestion) reshape the answers into `updatedInput`.
  *
  * No `PermissionUpdate`, `updatedPermissions`, `always`, or SDK `suggestions`
  * — Aide owns rule persistence; the SDK settings persistence path is gone.

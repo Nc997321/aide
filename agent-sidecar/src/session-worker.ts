@@ -141,7 +141,7 @@ export class SessionWorker {
   readonly queue = new MessageQueue();
   readonly permMgr = new PermissionManager();
   /** Aide 权限策略快照（PreToolUse hook 据此评估）。revision 单调递增，落后于
-   *  当前的快照被忽略；空策略 → 所有工具 defer（回退原权限模式）。 */
+   *  当前的快照被忽略；空策略 → 无匹配规则 → hook 返回 {}（回退原权限模式）。 */
   private permissionPolicy: PermissionPolicySnapshot = { revision: 0, rules: [] };
   readonly taskTracker = new TaskTracker();
   readonly subagentTracker = new SubagentTracker();
@@ -330,10 +330,13 @@ export class SessionWorker {
   /** Authoritative PreToolUse hook: evaluates the Aide policy snapshot before
    *  any other hook (image guard, skill guard, etc.) runs. `allow`/`deny` are
    *  returned directly; `ask` opens the human confirmation flow via
-   *  `permMgr.request`; `defer` falls back to the SDK's existing permission
-   *  mode (canUseTool). Applies to every tool including Read.
+   *  `permMgr.request`; no-match returns `{}` (no opinion) so the CLI falls
+   *  back to its normal permission flow. Applies to every tool including Read.
    *  `allowDangerouslySkipPermissions` does NOT bypass this hook — the hook is
-   *  registered unconditionally on `matcher: ".*"`. */
+   *  registered unconditionally on `matcher: ".*"`.
+   *  NB: the no-match branch must NOT return `permissionDecision:"defer"` — the
+   *  CLI doesn't honor it and breaks tool execution ("Tool result missing due
+   *  to internal error"). `{}` is the correct "defer to normal flow" response. */
   private makePolicyHook(cwd: string | undefined): HookCallback {
     return async (input: HookInput) => {
       if (input.hook_event_name !== "PreToolUse") return {};
@@ -382,13 +385,14 @@ export class SessionWorker {
           };
         }
         default:
-          // defer: let the SDK's existing permission flow (canUseTool / mode) decide.
-          return {
-            hookSpecificOutput: {
-              hookEventName: "PreToolUse" as const,
-              permissionDecision: "defer" as const,
-            },
-          };
+          // No Aide policy rule matched → return {} (no opinion) so the CLI proceeds
+          // with its normal permission flow (here allowDangerouslySkipPermissions
+          // auto-allows). Do NOT return permissionDecision:"defer": the claude.exe CLI
+          // does NOT honor "defer" from a PreToolUse hook and silently breaks tool
+          // execution — every tool_use comes back as "Tool result missing due to
+          // internal error" (repro confirmed 2026-07-29 vs control). {} leaves the
+          // decision to canUseTool/permissionMode, which is exactly the defer intent.
+          return {};
       }
     };
   }
@@ -992,7 +996,7 @@ export class SessionWorker {
     return this.makeImageGuardHook();
   }
 
-  /** 测试用：暴露 Aide 权限策略 PreToolUse hook，验证 allow/deny/ask/defer。 */
+  /** 测试用：暴露 Aide 权限策略 PreToolUse hook，验证 allow/deny/ask/无匹配({})。 */
   _testPolicyHook(cwd?: string) {
     return this.makePolicyHook(cwd);
   }

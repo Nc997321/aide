@@ -212,7 +212,7 @@ export type SidecarCommand =
       // 省略 = 开启。provider-agnostic：标题生成是通用能力。
       auto_title?: boolean;
       // 权限策略快照：Rust 在每次设置变更后推送，sidecar 在 PreToolUse 时
-      // 用它做本地策略评估。省略 = 沿用上次快照或空策略（全部 defer）。
+      // 用它做本地策略评估。省略 = 沿用上次快照或空策略（无匹配 → hook 不表态）。
       permission_policy?: PermissionPolicySnapshot;
     }
   | { cmd: "update_permission_policy"; session_id: string; policy: PermissionPolicySnapshot }

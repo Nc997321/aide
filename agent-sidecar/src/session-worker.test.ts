@@ -599,11 +599,14 @@ describe("SessionWorker — Aide 权限策略 PreToolUse hook", () => {
     expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
-  it("empty policy → defer (falls back to SDK permission mode)", async () => {
+  it("empty policy → no opinion (falls back to SDK permission flow, NOT defer)", async () => {
     const { worker } = makeWorker();
     const hook = worker._testPolicyHook("/tmp");
     const out: any = await hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } } as any);
-    expect(out.hookSpecificOutput.permissionDecision).toBe("defer");
+    // No rule matched → hook must NOT emit permissionDecision. Returning "defer"
+    // breaks the claude.exe CLI ("Tool result missing due to internal error"); {}
+    // lets the CLI proceed with its normal permission flow (allowDangerouslySkipPermissions).
+    expect(out.hookSpecificOutput?.permissionDecision).toBeUndefined();
   });
 
   it("policy ask emits permission_request and resolves allow when approved", async () => {
