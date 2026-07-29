@@ -61,6 +61,8 @@ export interface FileWindowState {
   y: number;
   w: number;
   h: number;
+  /** 用户已手动调整过尺寸——retile 跳过此窗口，保留用户意图，不再被自动平铺覆盖 */
+  userResized: boolean;
 }
 
 const MAX_EDITABLE_SIZE = 1_000_000;
@@ -225,6 +227,7 @@ export function useFileViewer() {
       y: 0,
       w: 0,
       h: 0,
+      userResized: false,
     };
 
     if (isVirtual) {

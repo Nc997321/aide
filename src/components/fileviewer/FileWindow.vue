@@ -129,6 +129,33 @@ function onHeaderPointerDown(e: PointerEvent) {
   window.addEventListener("pointerup", onUp, { once: true });
 }
 
+// ── 右下角拖拽：调整窗口尺寸。拖完置 userResized，retile 不再覆盖。──
+const MIN_W = 320;
+const MIN_H = 200;
+
+function onResizePointerDown(e: PointerEvent) {
+  if (e.button !== 0) return;
+  e.stopPropagation(); // 不触发标题栏拖拽 / 父层 focus capture
+  const startW = props.win.w;
+  const startH = props.win.h;
+  const startX = e.clientX;
+  const startY = e.clientY;
+  dragging.value = true; // 复用拖拽态：暂停几何过渡
+  const onMove = (ev: PointerEvent) => {
+    const dw = ev.clientX - startX;
+    const dh = ev.clientY - startY;
+    props.win.w = Math.min(Math.max(startW + dw, MIN_W), props.bounds.w - props.win.x);
+    props.win.h = Math.min(Math.max(startH + dh, MIN_H), props.bounds.h - props.win.y);
+  };
+  const onUp = () => {
+    dragging.value = false;
+    props.win.userResized = true;
+    window.removeEventListener("pointermove", onMove);
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp, { once: true });
+}
+
 // ── 跳转到指定行（聊天文件链接 / 跳转定义落点）──
 // markdown 默认全预览没有编辑器，行号挂起，等用户切到编辑/分屏时再消费。
 watch(
@@ -409,6 +436,14 @@ async function openInBrowser() {
           </template>
         </div>
       </div>
+
+      <!-- 右下角尺寸把手：拖拽改 w/h，置 userResized 后 retile 不再覆盖 -->
+      <div class="fw-resize" @pointerdown="onResizePointerDown">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+          <path d="M9 1L1 9" />
+          <path d="M9 5L5 9" />
+        </svg>
+      </div>
     </div>
   </div>
 </template>
@@ -604,6 +639,33 @@ async function openInBrowser() {
   display: flex;
   flex-direction: column;
   position: relative;
+}
+
+/* 右下角尺寸把手：绝对定位贴 .fw-body 右下角，z-index 盖过编辑器 */
+.fw-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 2px;
+  cursor: nwse-resize;
+  color: var(--aide-text-muted);
+  opacity: 0.5;
+  z-index: 30;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+.fw-resize:hover {
+  opacity: 1;
+  color: var(--aide-accent);
+}
+/* 拖拽进行中由 .fw-window--dragging 标记，把手高亮提示正在调尺寸 */
+.fw-window--dragging .fw-resize {
+  opacity: 1;
+  color: var(--aide-accent);
 }
 
 .fw-error {
