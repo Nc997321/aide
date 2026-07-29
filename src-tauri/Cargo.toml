@@ -40,6 +40,11 @@ arboard = "1"
 percent-encoding = "2"
 png = "0.17"
 base64 = "0.22"
+# 文本文件编码兜底解码：read_file_content 原 fs::read_to_string 严格要求合法 UTF-8，
+# GBK/GB18030 的中文 .properties/.java 打不开（"stream did not contain valid UTF-8"）。
+# encoding_rs 纯 Rust、无 std 依赖，覆盖 GB18030/GBK/GB2312/Shift-JIS/Big5/UTF-16，
+# 在 UTF-8 失败时按 GB18030 兜底，BOM 判定 UTF-16/UTF-8 BOM。
+encoding_rs = "0.8"
 # HTTP 客户端：启动时调 Anthropic GET /v1/models 拉最新模型列表覆盖"系统默认"
 # （provider.rs::refresh_system_default_models）。选 ureq 而非 reqwest——轻量同步、
 # 无 async-runtime 依赖、配 spawn_blocking 包同步 IO；rustls 跨平台免 OpenSSL。

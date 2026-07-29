@@ -201,9 +201,107 @@ pub async fn list_fs_roots() -> Result<Vec<FileEntry>, String> {
 /// 重 IO / 重 CPU」。
 #[tauri::command]
 pub async fn read_file_content(path: String) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e)))
+    tokio::task::spawn_blocking(move || read_text_file_with_encoding(&path))
         .await
         .map_err(|e| format!("read_file_content task panicked: {}", e))?
+}
+
+/// 以编码感知方式读取文本文件。
+///
+/// `fs::read_to_string` 严格要求合法 UTF-8，GBK/GB18030 的中文 `.properties`/`.java`
+/// 会以 "stream did not contain valid UTF-8" 失败 → 文件查看器/变更卡/skill 读取全打不开。
+/// IO 与解码分离：磁盘读取后交给纯函数 [`decode_text_bytes`]，便于单测。
+fn read_text_file_with_encoding(path: &str) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    decode_text_bytes(&bytes)
+}
+
+/// 按优先级把原始字节解码为文本（纯函数，无 IO）：
+/// 1. BOM 判定：UTF-16 LE/BE → 对应 UTF-16；UTF-8 BOM → 剥 BOM 后 UTF-8
+/// 2. 无 BOM 先严格 UTF-8（覆盖绝大多数现代文件，且不误伤）
+/// 3. UTF-8 失败 → 若含 NUL 字节判为二进制，返回错误（保留原 read_to_string 的失败语义，
+///    避免把二进制读成满屏 U+FFFD 的乱码文本）
+/// 4. 否则按 GB18030 兜底（GBK/GB2312 超集，覆盖中文 Windows 文件；对任意字节几乎不失败）
+fn decode_text_bytes(bytes: &[u8]) -> Result<String, String> {
+    // 1. BOM 判定
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        // UTF-8 BOM：剥掉 BOM，剩余按 UTF-8 解码（带 BOM 的 UTF-8 一定合法）
+        let s = encoding_rs::UTF_8.decode_without_bom_handling(&bytes[3..]).0;
+        return Ok(s.into_owned());
+    }
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        let s = encoding_rs::UTF_16LE.decode(&bytes[2..]).0;
+        return Ok(s.into_owned());
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        let s = encoding_rs::UTF_16BE.decode(&bytes[2..]).0;
+        return Ok(s.into_owned());
+    }
+
+    // 2. 无 BOM 先严格 UTF-8：std::str::from_utf8 失败说明不是 UTF-8
+    match std::str::from_utf8(bytes) {
+        Ok(s) => Ok(s.to_string()),
+        Err(_) => {
+            // 3. 二进制兜底：含 NUL 字节 → 视为二进制，保留原 read_to_string 的失败语义
+            if bytes.contains(&0x00u8) {
+                return Err("Failed to read file: stream did not contain valid UTF-8 (binary file)".to_string());
+            }
+            // 4. GB18030 兜底（GBK/GB2312 超集）。encoding_rs 的 decode 对任意字节序列
+            //    几乎不失败（无效字节以 U+FFFD 替代），返回 Cow<str>。
+            let s = encoding_rs::GB18030.decode_without_bom_handling(bytes).0;
+            Ok(s.into_owned())
+        }
+    }
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::decode_text_bytes;
+
+    #[test]
+    fn utf8_passthrough() {
+        let s = decode_text_bytes("中文 abc\n".as_bytes()).unwrap();
+        assert_eq!(s, "中文 abc\n");
+    }
+
+    #[test]
+    fn utf8_bom_stripped() {
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice("中文".as_bytes());
+        let s = decode_text_bytes(&bytes).unwrap();
+        assert_eq!(s, "中文");
+    }
+
+    #[test]
+    fn gbk_falls_back_to_gb18030() {
+        // "使用空间数据类型" 的 GBK 字节（取自真实 application-dev.properties）
+        let gbk_bytes = [
+            0xCA, 0xB9, 0xD3, 0xC3, 0xBF, 0xD5, 0xBC, 0xE4, 0xCA, 0xFD, 0xBE, 0xDD, 0xC0, 0xE0,
+            0xD0, 0xCD,
+        ];
+        let s = decode_text_bytes(&gbk_bytes).unwrap();
+        assert_eq!(s, "使用空间数据类型");
+    }
+
+    #[test]
+    fn utf16le_with_bom() {
+        let mut bytes = vec![0xFF, 0xFE];
+        // '中' U+4E2D / '文' U+6587 按 UTF-16LE 小端拼字节
+        for u in ['中' as u32, '文' as u32] {
+            let u = u as u16;
+            bytes.push(u as u8);
+            bytes.push((u >> 8) as u8);
+        }
+        let s = decode_text_bytes(&bytes).unwrap();
+        assert_eq!(s, "中文");
+    }
+
+    #[test]
+    fn binary_with_nul_errors() {
+        // 含 NUL 字节且非 UTF-8 → 视为二进制，返回错误而非乱码
+        let bytes = [0x00u8, 0xFF, 0xFE, 0x80];
+        assert!(decode_text_bytes(&bytes).is_err());
+    }
 }
 
 #[tauri::command]

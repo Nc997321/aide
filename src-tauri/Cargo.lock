@@ -60,6 +60,7 @@ dependencies = [
  "base64 0.22.1",
  "clipboard-win 5.4.1",
  "dunce",
+ "encoding_rs",
  "ignore",
  "keyring",
  "ndarray",
