@@ -721,7 +721,7 @@ onMounted(async () => {
         try {
           const list = await marketplaceApi.fetchMarketplace(s.id);
           for (const p of list) {
-            if (p.version && installed.some((i) => i.market === p.marketName && i.name === p.name && i.version !== p.version)) {
+            if (p.versionId && installed.some((i) => i.market === p.marketName && i.name === p.name && i.versionId !== p.versionId)) {
               updates++;
             }
           }

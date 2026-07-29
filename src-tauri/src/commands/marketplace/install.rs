@@ -1,10 +1,14 @@
 use std::process::Command;
+use std::sync::Arc;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
+use tauri::State;
+
 use crate::commands::marketplace::{sources, manifest, source_cache_dir, PluginEntry};
 use crate::commands::marketplace::sources::{parse_marketplace_json, RawSource};
+use crate::settings::SettingsService;
 
 // ── fetch_marketplace (async, source-aware) ──
 
@@ -29,12 +33,17 @@ pub async fn fetch_marketplace(source_id: String) -> Result<Vec<PluginEntry>, St
         let m = parse_marketplace_json(&content)?;
         let plugins = m.plugins.into_iter().map(|raw| {
             let (avail, unsup) = manifest::classify_availability(&raw);
-            let version = raw.version.clone().unwrap_or_else(|| resolved_version_from_source(&raw.source));
+            // version = 语义版本（marketplace.json 的 version 字段），仅显示用；sha-pinned 为空。
+            // version_id = 安装身份（version 或 short_sha(sha)），与 install_git 落盘的版本目录名
+            // 同源，供 hasUpdate 比对——sha 不暴露给用户。
+            let version = raw.version.clone().unwrap_or_default();
+            let version_id = raw.version.clone().unwrap_or_else(|| resolved_version_from_source(&raw.source));
             PluginEntry {
                 name: raw.name.clone(),
                 display_name: raw.display_name.clone().unwrap_or_else(|| raw.name.clone()),
                 description: raw.description.clone().unwrap_or_default(),
                 version,
+                version_id,
                 source_id: source_id.clone(),
                 market_name: market_name.clone(),
                 category: raw.category.clone().unwrap_or_default(),
@@ -83,19 +92,13 @@ pub(super) fn git_err(stderr: &str) -> String {
 /// 供前端 ERROR_MAP 映射为可操作动作（如 REPO_NOT_FOUND → "切换市场源"）。
 pub(super) fn git_clone(url: &str, target: &std::path::Path) -> Result<(), String> {
     let mut cmd = Command::new("git");
-    cmd.args(["clone", "--depth", "1"]);
     #[cfg(windows)]
     { cmd.creation_flags(0x08000000); }
+    // 代理作为 git 全局 -c 选项，必须置于子命令之前
+    crate::commands::proxy::apply_git_proxy(&mut cmd);
+    cmd.args(["clone", "--depth", "1"]).arg(url).arg(target);
 
-    // Apply proxy if detected
-    if let Some(ref proxy) = crate::commands::proxy::detect_proxy() {
-        cmd.arg("-c");
-        cmd.arg(format!("http.proxy={}", proxy));
-        cmd.arg("-c");
-        cmd.arg(format!("https.proxy={}", proxy));
-    }
-
-    let out = cmd.arg(url).arg(target).output()
+    let out = cmd.output()
         .map_err(|e| format!("UNKNOWN_ERROR: git clone 启动失败: {e}"))?;
     if !out.status.success() {
         return Err(git_err(&String::from_utf8_lossy(&out.stderr)));
@@ -149,8 +152,12 @@ fn copy_dir_recursive(src: &std::path::PathBuf, dst: &std::path::PathBuf) -> Res
 
 fn run_git(args: &[String], cwd: &std::path::Path) -> Result<(), String> {
     let mut cmd = std::process::Command::new("git");
-    cmd.args(args).current_dir(cwd);
+    cmd.current_dir(cwd);
     #[cfg(windows)] { cmd.creation_flags(0x08000000); }
+    // 代理作为 git 全局 -c 选项，必须置于子命令之前；否则插件克隆/拉取直连
+    // github 会挂死（spawn_blocking 阻塞 → 前端「点击更新没反应」）。
+    crate::commands::proxy::apply_git_proxy(&mut cmd);
+    cmd.args(args);
     let out = cmd.output().map_err(|e| e.to_string())?;
     if !out.status.success() { return Err(git_err(&String::from_utf8_lossy(&out.stderr))); }
     Ok(())
@@ -248,31 +255,31 @@ fn resolve_and_install(source_id: &str, market: &str, plugin: &str, entry: &crat
 }
 
 // ── 启用键读写 helpers ──
+// 全部经 SettingsService 落到 settings.json 的 user-scope `settings` 子对象；
+// 旧 config.json 路径（with_config_mut / load_config）迁移后已失效。
 
 fn enabled_key(market: &str, plugin: &str) -> String { format!("{plugin}@{market}") }
 
-fn set_enabled_in_settings(market: &str, plugin: &str, on: bool) {
+fn set_enabled_in_settings(service: &SettingsService, market: &str, plugin: &str, on: bool) {
     let key = enabled_key(market, plugin);
-    let _ = crate::commands::settings::with_config_mut(|cfg| {
-        let s = cfg["settings"].as_object_mut().ok_or("settings missing")?;
+    let _ = crate::commands::marketplace::mutate_user_settings(service, |s| {
         let m = s.entry("enabledPlugins").or_insert(serde_json::json!({}));
         if on { m[&key] = serde_json::json!(true); } else { m[&key] = serde_json::json!(false); }
-        Ok::<_, String>(())
+        Ok(())
     });
 }
 
-fn remove_enabled_in_settings(market: &str, plugin: &str) {
+fn remove_enabled_in_settings(service: &SettingsService, market: &str, plugin: &str) {
     let key = enabled_key(market, plugin);
-    let _ = crate::commands::settings::with_config_mut(|cfg| {
-        if let Some(m) = cfg["settings"]["enabledPlugins"].as_object_mut() { m.remove(&key); }
-        Ok::<_, String>(())
+    let _ = crate::commands::marketplace::mutate_user_settings(service, |s| {
+        if let Some(m) = s["enabledPlugins"].as_object_mut() { m.remove(&key); }
+        Ok(())
     });
 }
 
-/// Task 6 实现：扫 cache 最新版本 + 过滤 enabled=true → 写 enabled-plugins.json
-/// 本 Task 先放空实现，Task 6 完善。
-fn rewrite_enabled_manifest() -> Result<(), String> {
-    crate::commands::marketplace::write_enabled_plugins_manifest()
+/// 扫 cache 最新版本 + 过滤 enabled=true → 写 enabled-plugins.json
+fn rewrite_enabled_manifest(service: &SettingsService) -> Result<(), String> {
+    crate::commands::marketplace::write_enabled_plugins_manifest(service)
 }
 
 fn read_manifest(path: &std::path::PathBuf) -> Option<(String, String, String, String)> {
@@ -325,7 +332,12 @@ fn gc_old_versions(market: &str, plugin: &str) {
 // ── Async commands ──
 
 #[tauri::command]
-pub async fn install_plugin(source_id: String, plugin_name: String) -> Result<(), String> {
+pub async fn install_plugin(
+    source_id: String,
+    plugin_name: String,
+    service: State<'_, Arc<SettingsService>>,
+) -> Result<(), String> {
+    let service = service.inner().clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let (market, entry) = lookup_entry(&source_id, &plugin_name)?;
         let plugin_root = read_marketplace_plugin_root(&source_id);
@@ -338,20 +350,25 @@ pub async fn install_plugin(source_id: String, plugin_name: String) -> Result<()
         }
         // 默认启用状态：defaultEnabled（entry > 无→true）
         let enable = entry.default_enabled.unwrap_or(true);
-        set_enabled_in_settings(&market, &plugin_name, enable);
-        rewrite_enabled_manifest()?;
+        set_enabled_in_settings(&service, &market, &plugin_name, enable);
+        rewrite_enabled_manifest(&service)?;
         Ok(())
     }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub async fn uninstall_plugin(marketplace: String, plugin_name: String) -> Result<(), String> {
+pub async fn uninstall_plugin(
+    marketplace: String,
+    plugin_name: String,
+    service: State<'_, Arc<SettingsService>>,
+) -> Result<(), String> {
+    let service = service.inner().clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let root = plugins_cache_root().join(&marketplace).join(&plugin_name);
         if !root.exists() { return Err(format!("插件 '{}' 未找到", plugin_name)); }
         std::fs::remove_dir_all(&root).map_err(|e| e.to_string())?;
-        remove_enabled_in_settings(&marketplace, &plugin_name);
-        rewrite_enabled_manifest()?;
+        remove_enabled_in_settings(&service, &marketplace, &plugin_name);
+        rewrite_enabled_manifest(&service)?;
         Ok(())
     }).await.map_err(|e| e.to_string())?
 }
@@ -373,24 +390,32 @@ pub async fn refresh_marketplace(source_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn update_plugin(source_id: String, plugin_name: String) -> Result<(), String> {
+pub async fn update_plugin(
+    source_id: String,
+    plugin_name: String,
+    service: State<'_, Arc<SettingsService>>,
+) -> Result<(), String> {
     // 更新 = 用最新条目重装到新版本目录；旧版本目录保留 7 天 GC
+    let service = service.inner().clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let (market, entry) = lookup_entry(&source_id, &plugin_name)?;
         let plugin_root = read_marketplace_plugin_root(&source_id);
         resolve_and_install(&source_id, &market, &plugin_name, &entry, plugin_root.as_deref())?;
         gc_old_versions(&market, &plugin_name);
-        rewrite_enabled_manifest()?;
+        rewrite_enabled_manifest(&service)?;
         Ok(())
     }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub async fn list_installed_plugins() -> Result<Vec<crate::commands::marketplace::InstalledPlugin>, String> {
-    tokio::task::spawn_blocking(|| -> Result<Vec<crate::commands::marketplace::InstalledPlugin>, String> {
-        let cfg = crate::commands::settings::load_config();
-        let enabled_map: std::collections::BTreeMap<String, bool> = cfg.get("settings")
-            .and_then(|s| s["enabledPlugins"].as_object())
+pub async fn list_installed_plugins(
+    service: State<'_, Arc<SettingsService>>,
+) -> Result<Vec<crate::commands::marketplace::InstalledPlugin>, String> {
+    let service = service.inner().clone();
+    tokio::task::spawn_blocking(move || -> Result<Vec<crate::commands::marketplace::InstalledPlugin>, String> {
+        let settings = crate::commands::marketplace::read_user_settings(&service)?.unwrap_or_else(|| serde_json::json!({}));
+        let enabled_map: std::collections::BTreeMap<String, bool> = settings
+            .get("enabledPlugins").and_then(|v| v.as_object())
             .map(|o| o.iter().filter_map(|(k, v)| v.as_bool().map(|b| (k.clone(), b))).collect())
             .unwrap_or_default();
         let root = plugins_cache_root();
@@ -402,11 +427,18 @@ pub async fn list_installed_plugins() -> Result<Vec<crate::commands::marketplace
             for p in plugins.flatten() {
                 let plugin = p.file_name().to_string_lossy().to_string();
                 let Some(latest) = latest_version_dir(&p.path()) else { continue };
-                let (display, desc, author, ver) = read_manifest(&latest).unwrap_or((plugin.clone(), String::new(), String::new(), latest.file_name().unwrap_or_default().to_string_lossy().to_string()));
+                // version = plugin.json 语义版本（显示用）；version_id = 版本目录名
+                // （安装身份，hasUpdate 比对用）。两者分离：sha-pinned 插件的 plugin.json
+                // 语义版本 (如 "6.2.0") 与 marketplace short_sha (如 "44c9b2d6e889") 永不
+                // 相等，若用语义版本比对 hasUpdate 会永真、更新按钮永远亮且点击空操作；
+                // 而用 sha 比对正确，但 sha 对用户无意义，不能当版本号展示。
+                let version_id = latest.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let (display, desc, author, semver) = read_manifest(&latest)
+                    .unwrap_or((plugin.clone(), String::new(), String::new(), String::new()));
                 let key = format!("{plugin}@{market}");
                 let installed_at = std::fs::metadata(&latest).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
                 out.push(crate::commands::marketplace::InstalledPlugin {
-                    name: plugin.clone(), market: market.clone(), version: ver, display_name: display, description: desc, author, path: latest.to_string_lossy().to_string(), installed_at, enabled: super::plugin_enabled(&enabled_map, &key),
+                    name: plugin.clone(), market: market.clone(), version: semver, version_id, display_name: display, description: desc, author, path: latest.to_string_lossy().to_string(), installed_at, enabled: super::plugin_enabled(&enabled_map, &key),
                 });
             }
         }

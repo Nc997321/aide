@@ -100,7 +100,7 @@ function openGit() {
     <div>
       <div class="top">
         <span class="name" v-tooltip="'在 GitHub 查看详情'" @click="openGit">{{ entry.displayName || entry.name }}</span>
-        <span class="ver">v{{ entry.version || "—" }}</span>
+        <span class="ver">v{{ installed?.version || entry.version || "—" }}</span>
         <span class="badge" :class="badgeClass">{{ sourceLabel }}</span>
         <span v-if="entry.category" class="cat">{{ entry.category }}</span>
       </div>

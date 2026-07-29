@@ -12,7 +12,7 @@ use std::process::Command;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use super::config_path;
+use super::our_config_dir;
 
 /// 扫描系统代理：常见本地端口 → `HTTPS_PROXY`/`HTTP_PROXY` env → git 全局配置 →
 /// app settings。每层先验证 TCP 可达再返回。返回 `http://host:port` 形式的代理 URL。
@@ -51,13 +51,17 @@ pub(crate) fn detect_proxy() -> Option<String> {
         }
     }
 
-    // 4. app settings（设置面板里用户配的代理）
-    let cfg_path = config_path();
-    if cfg_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&cfg_path) {
-            if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(proxy) = config
-                    .get("settings")
+    // 4. app settings（设置面板里用户配的代理）——user-scope settings.json。
+    //    `settings.proxy` 描述符作用域仅 USER（descriptors.rs），故直接读 user
+    //    文件即完备，无需 effective-document 合并。迁移前这里读已删除的 config.json
+    //    （`settings.proxy`），迁移后改读 settings.json 的 `values.settings.proxy`。
+    let settings_path = our_config_dir().join("settings.json");
+    if settings_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&settings_path) {
+            if let Ok(doc) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(proxy) = doc
+                    .get("values")
+                    .and_then(|v| v.get("settings"))
                     .and_then(|s| s.get("proxy"))
                     .and_then(|p| p.as_str())
                 {
@@ -70,6 +74,23 @@ pub(crate) fn detect_proxy() -> Option<String> {
     }
 
     None
+}
+
+/// 把 `detect_proxy()` 检测到的代理作为 git 全局 `-c http.proxy/https.proxy` 选项加到
+/// 命令最前（必须在子命令之前才作为 git 全局选项生效）。
+///
+/// marketplace 两条 git 路径共用此函数：
+/// - 源仓库克隆/拉取（`git_clone` → 列表能加载）
+/// - 插件仓库克隆/拉取（`run_git` → `clone_ref_sha`/`clone_subdir` → 安装/更新）
+///
+/// 之前只有 `git_clone` 应用代理、`run_git` 不应用，导致源列表能拉取而插件安装/更新
+/// 直连 github 挂死（前端更新按钮无 updating 态指示，spawn_blocking 一直阻塞 → 表现为
+/// 「点击更新完全没有反应」）。两条路径必须一致走代理。
+pub(crate) fn apply_git_proxy(cmd: &mut Command) {
+    if let Some(ref proxy) = detect_proxy() {
+        cmd.arg("-c").arg(format!("http.proxy={}", proxy));
+        cmd.arg("-c").arg(format!("https.proxy={}", proxy));
+    }
 }
 
 /// 解析代理 URL 并验证 TCP 可达。支持 `http://` / `https://` / `socks5://` 前缀。

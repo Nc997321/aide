@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use tauri::State;
+
+use crate::settings::{SettingsError, SettingsScope, SettingsService};
 
 pub mod sources;
 pub mod install;
@@ -13,7 +18,12 @@ pub struct PluginEntry {
     pub name: String,
     #[serde(default)] pub display_name: String,
     #[serde(default)] pub description: String,
+    /// 给用户看的语义版本（marketplace.json 的 `version` 字段）。sha-pinned 插件
+    /// 此字段为空——marketplace.json 不带语义版本，只有 sha，前端展示时回退 "—"。
     #[serde(default)] pub version: String,
+    /// 安装身份 = marketplace 的 version 或 short_sha(sha)（与 `install_git` 落盘的
+    /// 版本目录名同源）。**仅用于 hasUpdate 比对**，不展示给用户。
+    #[serde(default)] pub version_id: String,
     #[serde(default)] pub source_id: String,
     #[serde(default)] pub market_name: String,
     #[serde(default)] pub category: String,
@@ -25,11 +35,17 @@ pub struct PluginEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]   // display_name→displayName, installed_at→installedAt
+#[serde(rename_all = "camelCase")]   // display_name→displayName, installed_at→installedAt, version_id→versionId
 pub struct InstalledPlugin {
     pub name: String,
     pub market: String,
+    /// 给用户看的语义版本（来自 plugin.json 的 `version` 字段，如 "6.2.0"）。
+    /// 仅用于显示；sha-pinned 插件无 plugin.json version 时为空。
     pub version: String,
+    /// 安装身份 = 版本目录名（sha-pinned 源为 short_sha、version 字段源为 marketplace
+    /// version、relative 源为 "local" 或源 plugin.json version）。**仅用于 hasUpdate
+    /// 比对**（与 `entry.version` 同源，可比），不展示给用户——sha 对用户无意义。
+    pub version_id: String,
     pub display_name: String,
     #[serde(default)] pub description: String,
     #[serde(default)] pub author: String,
@@ -87,10 +103,10 @@ fn plugin_enabled(enabled: &std::collections::BTreeMap<String, bool>, key: &str)
 }
 
 /// 扫 cache 最新版本 + 过滤启用项 → 写 enabled-plugins.json
-pub fn write_enabled_plugins_manifest() -> Result<(), String> {
-    let cfg = crate::commands::settings::load_config();
-    let enabled: std::collections::BTreeMap<String, bool> = cfg.get("settings")
-        .and_then(|s| s["enabledPlugins"].as_object())
+pub fn write_enabled_plugins_manifest(service: &SettingsService) -> Result<(), String> {
+    let settings = read_user_settings(service)?.unwrap_or_else(|| serde_json::json!({}));
+    let enabled: std::collections::BTreeMap<String, bool> = settings
+        .get("enabledPlugins").and_then(|v| v.as_object())
         .map(|o| o.iter().filter_map(|(k, v)| v.as_bool().map(|b| (k.clone(), b))).collect())
         .unwrap_or_default();
     let cache = plugins_dir().join("cache");
@@ -126,27 +142,53 @@ fn atomic_write(path: &std::path::Path, content: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn with_config_mut_settings<F: FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> Result<(), String>>(f: F) -> Result<(), String> {
-    crate::commands::settings::with_config_mut(|cfg| {
-        if cfg["settings"].is_null() { cfg["settings"] = serde_json::json!({}); }
-        let s = cfg["settings"].as_object_mut().ok_or("settings not object")?;
-        f(s)
-    })
+/// 读 user-scope `settings` 子对象的克隆（settings.json 迁移后是唯一真源；
+/// 键缺失返回 None）。市场模块禁止再走 `load_config`/`with_config_mut`——
+/// 旧 config.json 已删除，那条路径会读到 Null 并报 "settings missing"。
+fn read_user_settings(service: &SettingsService) -> Result<Option<serde_json::Value>, String> {
+    let effective = service.effective_document_blocking(None).map_err(|e| e.to_string())?;
+    Ok(effective.values.get("settings").cloned())
+}
+
+/// 在 user-scope `settings` 子对象上做一次原子改写（读→改→校验→写）。
+/// `settings` 键缺失时播种为 `{}`，闭包内可直接 `entry()/insert`。与 `set_settings`
+/// 同一条 `mutate_scope_blocking` 路径，确保落盘到 settings.json 而非复活的 config.json。
+fn mutate_user_settings<F>(service: &SettingsService, f: F) -> Result<(), String>
+where
+    F: FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> Result<(), String>,
+{
+    service.mutate_scope_blocking(SettingsScope::User, None, |document| {
+        let target = document
+            .values
+            .entry("settings".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        let target = target
+            .as_object_mut()
+            .ok_or_else(|| SettingsError::Validation("settings must be an object".to_string()))?;
+        f(target).map_err(SettingsError::Validation)
+    }).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn set_plugin_enabled(marketplace: String, plugin: String, enabled: bool) -> Result<(), String> {
-    // 重 IO（config 读写 + cache 目录扫描 + 清单落盘）→ spawn_blocking，不占主线程
+pub async fn set_plugin_enabled(
+    marketplace: String,
+    plugin: String,
+    enabled: bool,
+    service: State<'_, Arc<SettingsService>>,
+) -> Result<(), String> {
+    // 重 IO（settings 读写 + cache 目录扫描 + 清单落盘）→ spawn_blocking，不占主线程
+    let service = service.inner().clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let key = format!("{plugin}@{marketplace}");
-        with_config_mut_settings(|s| {
+        mutate_user_settings(&service, |s| {
             let m = s.entry("enabledPlugins").or_insert(serde_json::json!({}));
             if let Some(obj) = m.as_object_mut() {
                 obj.insert(key.clone(), serde_json::json!(enabled));
             }
-            Ok::<_, String>(())
+            Ok(())
         })?;
-        write_enabled_plugins_manifest()
+        write_enabled_plugins_manifest(&service)
     }).await.map_err(|e| e.to_string())?
 }
 
@@ -166,14 +208,16 @@ fn resolve_source_states(configured: bool, explicit: &[String]) -> Vec<bool> {
 }
 
 #[tauri::command]
-pub async fn list_marketplace_sources() -> Result<Vec<sources::SourceInfo>, String> {
-    // 读 config 文件 → spawn_blocking，不占主线程
-    tokio::task::spawn_blocking(|| -> Result<Vec<sources::SourceInfo>, String> {
-        let s = crate::commands::settings::load_config();
-        let settings = s.get("settings");
+pub async fn list_marketplace_sources(
+    service: State<'_, Arc<SettingsService>>,
+) -> Result<Vec<sources::SourceInfo>, String> {
+    // 读 settings.json → spawn_blocking，不占主线程
+    let service = service.inner().clone();
+    tokio::task::spawn_blocking(move || -> Result<Vec<sources::SourceInfo>, String> {
+        let settings = read_user_settings(&service)?;
         // 键存在 = 已配置（按字面量，空=全关）；键不存在 = 从未配置（取默认）
-        let configured = settings.and_then(|x| x.get("enabledMarketplaces")).is_some();
-        let explicit: Vec<String> = settings.and_then(|x| x["enabledMarketplaces"].as_array())
+        let configured = settings.as_ref().and_then(|x| x.get("enabledMarketplaces")).is_some();
+        let explicit: Vec<String> = settings.as_ref().and_then(|x| x["enabledMarketplaces"].as_array())
             .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default();
         let states = resolve_source_states(configured, &explicit);
@@ -186,16 +230,20 @@ pub async fn list_marketplace_sources() -> Result<Vec<sources::SourceInfo>, Stri
 }
 
 #[tauri::command]
-pub async fn set_marketplace_enabled(source_id: String, enabled: bool) -> Result<(), String> {
-    // config 读写 → spawn_blocking，不占主线程
+pub async fn set_marketplace_enabled(
+    source_id: String,
+    enabled: bool,
+    service: State<'_, Arc<SettingsService>>,
+) -> Result<(), String> {
+    // settings 读写 → spawn_blocking，不占主线程
+    let service = service.inner().clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
-        crate::commands::settings::with_config_mut(|cfg| {
-            let settings = cfg["settings"].as_object_mut().ok_or("settings missing")?;
+        mutate_user_settings(&service, |s| {
             // 首次配置（键此前不存在）→ 先用默认启用源播种，再应用本次显式选择。
             // 否则关闭一个默认启用的源时，它从未入表，retain 无效，数组仍空，
             // list_marketplace_sources 会按「从未配置」把所有默认源重新点亮。
-            let first_config = !settings.contains_key("enabledMarketplaces");
-            let arr = settings.entry("enabledMarketplaces").or_insert(serde_json::json!([]));
+            let first_config = !s.contains_key("enabledMarketplaces");
+            let arr = s.entry("enabledMarketplaces").or_insert(serde_json::json!([]));
             let a = arr.as_array_mut().ok_or("enabledMarketplaces not array")?;
             if first_config {
                 for (id, _, _, def) in sources::FIXED_SOURCES.iter() {

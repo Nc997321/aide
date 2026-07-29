@@ -65,7 +65,9 @@ function isInstalling(name: string) { return installing.value.has(name); }
 function getInstalled(market: string, name: string) { return installedPlugins.value.get(keyOf(market, name)); }
 function hasUpdate(entry: PluginEntry) {
   const inst = getInstalled(entry.marketName, entry.name);
-  return !!inst && !!entry.version && inst.version !== entry.version;
+  // 比对安装身份（versionId = 版本目录名 / sha）vs marketplace versionId（同源），同源可比。
+  // 不能比语义版本：sha-pinned 插件 inst.version "6.2.0" 与 entry.version "" 永不相等。
+  return !!inst && !!entry.versionId && inst.versionId !== entry.versionId;
 }
 
 async function installPlugin(entry: PluginEntry) {
