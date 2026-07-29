@@ -33,3 +33,43 @@ describe("PermissionDialog — ordinary tool confirmation", () => {
     expect(wrapper.emitted("respond")![0]).toEqual(["p1", false]);
   });
 });
+
+describe("PermissionDialog — 允许并记住", () => {
+  it("无 rememberScope 时不显示记住按钮", () => {
+    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+    expect(wrapper.find('[data-action="remember"]').exists()).toBe(false);
+  });
+
+  it("有 rememberScope 且可推导时显示记住按钮 + 描述行", () => {
+    const wrapper = mount(PermissionDialog, {
+      props: { permission: bashPermission(), rememberScope: "local" },
+    });
+    expect(wrapper.find('[data-action="remember"]').exists()).toBe(true);
+    expect(wrapper.find(".perm-remember-hint").text()).toContain("ls -la");
+  });
+
+  it("点击记住按钮 emit 带 persistRule 的 respond", async () => {
+    const wrapper = mount(PermissionDialog, {
+      props: { permission: bashPermission(), rememberScope: "local" },
+    });
+    await wrapper.get('[data-action="remember"]').trigger("click");
+    const events = wrapper.emitted("respond");
+    expect(events).toBeTruthy();
+    expect(events![0][0]).toBe("p1");
+    expect(events![0][1]).toBe(true);
+    const persist = events![0][4] as { scope: string; rule: { tool: string; matcher: unknown } };
+    expect(persist.scope).toBe("local");
+    expect(persist.rule.tool).toBe("Bash");
+    expect(persist.rule.matcher).toEqual({ kind: "bash", mode: "prefix", value: "ls -la" });
+  });
+
+  it("计划批准不显示记住按钮", () => {
+    const wrapper = mount(PermissionDialog, {
+      props: {
+        permission: { id: "p2", name: "ExitPlanMode", input: { plan: "do X" } },
+        rememberScope: "local",
+      },
+    });
+    expect(wrapper.find('[data-action="remember"]').exists()).toBe(false);
+  });
+});

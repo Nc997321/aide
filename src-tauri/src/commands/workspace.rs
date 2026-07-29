@@ -5,7 +5,7 @@ use tauri::State;
 use super::{WorkspaceInfo, WorkspaceState, claude_projects_dir};
 
 /// 路径 → 编码 key：把 : \ / 替换为 -，与 Claude CLI
-/// `~/.claude/projects/` 目录命名一致。
+/// `~/.aide/claude/projects/` 目录命名一致。
 pub fn path_to_key(path: &str) -> String {
     path.chars()
         .map(|c| match c {

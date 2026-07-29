@@ -89,13 +89,13 @@ fn list_sessions_blocking(
     // Scan .jsonl files if the project directory exists (created after first
     // conversation). If it doesn't exist yet, skip to metadata scan — sessions
     // that were started but never had a conversation still have metadata in
-    // ~/.claude/sessions/.
+    // ~/.aide/claude/sessions/.
     // 同一工作区可能因 SDK 编码差异（`.` → `-`）分裂成多个项目目录，全部合并扫描。
     for proj_dir in super::resolve_project_dirs(&claude_projects_dir(), &encoded) {
         scan_project_jsonl_sessions(&proj_dir, &mut sessions)?;
     }
 
-    // Second pass: scan ~/.claude/sessions/ for sessions that have metadata
+    // Second pass: scan ~/.aide/claude/sessions/ for sessions that have metadata
     // but no .jsonl file yet (Claude started, no conversation happened).
     // These sessions won't appear in the project dir scan above.
     let root_normalized = normalize_path_for_compare(&root.to_string_lossy());
@@ -610,7 +610,7 @@ fn save_session_changes_blocking(session_id: String, rounds: Vec<ChangeRoundData
 
 /// 每轮对话结束都会调用一次（takeSnapshot 记录撤回锚点），必须 async——同步版本
 /// 曾在诊断黑匣子里被实锤为 Rust 主线程冻结的嫌疑对象：`find_session_jsonl_globally`
-/// 遍历 `~/.claude/projects/` 是同步磁盘 IO，杀软实时扫描 / 磁盘争抢时可能被拖到
+/// 遍历 `~/.aide/claude/projects/` 是同步磁盘 IO，杀软实时扫描 / 磁盘争抢时可能被拖到
 /// 秒级甚至更久，堵在 Tauri 主线程上会连累所有后续命令排队（详见 CLAUDE.md「同步
 /// command 禁止重 IO」）。同名兄弟 `session_last_event` 早已是 async，这两个是漏网之鱼。
 #[tauri::command]
@@ -683,7 +683,7 @@ fn list_sessions_for_workspace_blocking(ws_key: String) -> Result<Vec<Session>, 
         scan_project_jsonl_sessions(&proj_dir, &mut sessions)?;
     }
 
-    // Second pass: scan ~/.claude/sessions/ for sessions with metadata but no .jsonl
+    // Second pass: scan ~/.aide/claude/sessions/ for sessions with metadata but no .jsonl
     let root = super::resolve_path_from_key(&ws_key).unwrap_or_default();
     let root_normalized = normalize_path_for_compare(&root);
     let sessions_dir = claude_sessions_dir();
@@ -811,7 +811,7 @@ fn our_session_name(session_id: &str) -> Option<String> {
 
 /// Lightweight session discovery used during new-session polling.
 ///
-/// Scans only `~/.claude/sessions/` (small JSON metadata, no .jsonl reads) and
+/// Scans only `~/.aide/claude/sessions/` (small JSON metadata, no .jsonl reads) and
 /// returns IDs of sessions whose `startedAt > since_ms` that belong to the
 /// current workspace. Results are sorted newest-first so the caller can pick the
 /// first ID that isn't already mapped to an active PTY.

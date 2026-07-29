@@ -12,6 +12,8 @@ import BgTaskDock from "./BgTaskDock.vue";
 import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, ContextUsage, ModelOption, PermissionModeOption, PermissionRequest, RateLimitInfo, TaskItem, TextBlock } from "@/types/chat";
 import type { SkillMeta } from "@/types";
 import { api } from "@/api";
+import { permissionsApi } from "@/api/permissions";
+import type { PermissionRuleDraft, PermissionScope, PermissionSettingsView } from "@/types/permissions";
 import { resolvePastePayload } from "@/utils/paste";
 import type { PasteResolution } from "@/utils/paste";
 import { resolveFileMentions } from "@/utils/fileMentions";
@@ -329,6 +331,71 @@ watch(
     }
   },
 );
+
+// ── 「允许并记住」作用域解析 ──
+// 权限请求出现时拉一次权限设置视图，决定「记住」默认落到哪个作用域（项目本地
+// 优先，不可编辑则回退用户全局），并缓存规则列表供点击时去重。权限请求不频繁，
+// 一次 prompt 一次 get() 可接受。请求消失时清空，避免跨请求串用旧视图。
+const rememberScope = ref<PermissionScope | null>(null);
+let rememberView: PermissionSettingsView | null = null;
+watch(
+  () => props.permission?.id,
+  async (id) => {
+    if (!id || !props.permission) {
+      rememberScope.value = null;
+      rememberView = null;
+      return;
+    }
+    try {
+      const view = await permissionsApi.get();
+      rememberView = view;
+      const local = view.scopes.find((s) => s.scope === "local");
+      const user = view.scopes.find((s) => s.scope === "user");
+      rememberScope.value = local?.editable ? "local" : user?.editable ? "user" : null;
+    } catch {
+      rememberScope.value = null;
+      rememberView = null;
+    }
+  },
+  { immediate: true },
+);
+
+/** 点击「允许并记住」：先落盘 allow 规则（Rust 广播新快照给 sidecar，后续同类调用
+ *  自动放行），再走正常 approve 放行本次。目标作用域已有等价 allow 规则时跳过创建，
+ *  避免重复点击堆积重复规则。落盘失败仍放行本次（不阻塞用户），仅提示。 */
+async function persistRememberRule(scope: PermissionScope, rule: PermissionRuleDraft): Promise<void> {
+  const scopeWord = scope === "local" ? "本项目本地" : scope === "user" ? "用户全局" : scope;
+  try {
+    const view = rememberView ?? (await permissionsApi.get());
+    const key = (r: { effect: string; tool: string; matcher: unknown }) =>
+      `${r.effect}|${r.tool}|${JSON.stringify(r.matcher)}`;
+    const draftKey = key({ effect: "allow", tool: rule.tool, matcher: rule.matcher });
+    const exists = view.rules.some(
+      (r) => r.scope === scope && r.effect === "allow" && key(r) === draftKey,
+    );
+    if (!exists) {
+      await permissionsApi.create(scope, rule);
+    }
+    showToast(`已记住到${scopeWord}，下次自动放行`, "success");
+  } catch (e) {
+    showToast(`记住规则失败：${String((e as Error)?.message ?? e)}（本次仍已放行）`, "danger");
+  }
+}
+
+/** PermissionDialog 的 respond 统一入口：处理「记住」持久化 + 权限模式同步 + 放行。 */
+async function onPermissionRespond(
+  id: string,
+  approved: boolean,
+  answers?: Record<string, string>,
+  nextMode?: string,
+  persistRule?: { scope: PermissionScope; rule: PermissionRuleDraft },
+) {
+  if (nextMode) selectedPermissionMode.value = nextMode;
+  if (approved && persistRule) {
+    await persistRememberRule(persistRule.scope, persistRule.rule);
+  }
+  emit("respond-permission", id, approved, answers, nextMode);
+}
 
 // ── 权限模式（plan / acceptEdits / default）——和模型下拉同一套模式：
 // 会话没起进程时用静态兜底清单，用户的选择随每条消息的 permission_mode 带走；
@@ -995,7 +1062,8 @@ function onOpenBgDock(taskId: string) {
     <PermissionDialog
       :permission="permission ?? null"
       :queue-count="permissionQueueCount"
-      @respond="(id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string) => { if (nextMode) selectedPermissionMode = nextMode; emit('respond-permission', id, approved, answers, nextMode); }"
+      :remember-scope="rememberScope"
+      @respond="onPermissionRespond"
     />
 
     <!-- 后台任务 dock：与 PermissionDialog 同款 inline dock——挤压消息区而非浮层。

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from "vue";
 import type { PermissionRequest } from "@/types/chat";
+import type { PermissionRuleDraft, PermissionScope } from "@/types/permissions";
+import { deriveRememberRule, describeRememberRule } from "@/utils/permissionRuleDerivation";
 import { marked } from "@/utils/markdown";
 import Icon from "./Icon.vue";
 
@@ -22,10 +24,23 @@ const props = defineProps<{
    *  发来多条请求，弹窗按队列逐条确认——大于 1 时提示用户后面还排着几条，
    *  避免"确认完一条又弹一条"显得像 bug。 */
   queueCount?: number;
+  /** 「允许并记住」要落到的作用域（由 ChatPanel 按 scope 可用性解析后传入）。
+   *  为 null 表示无可持久化作用域可用——不显示「记住」按钮。
+   *  仅对工具调用请求有意义（计划批准 / 澄清提问不是工具调用）。 */
+  rememberScope?: PermissionScope | null;
 }>();
 
 const emit = defineEmits<{
-  respond: [id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string];
+  respond: [
+    id: string,
+    approved: boolean,
+    answers?: Record<string, string>,
+    nextMode?: string,
+    /** 仅「允许并记住」按钮带：本次放行 + 把这条 allow 规则持久化到指定作用域。
+     *  ChatPanel 收到后先调 permissionsApi.create 落盘（Rust 广播新快照给 sidecar），
+     *  再走正常 approve。纯前端字段，不进 SidecarCommand 协议。 */
+    persistRule?: { scope: PermissionScope; rule: PermissionRuleDraft },
+  ];
 }>();
 
 /** ExitPlanMode = plan 模式的出口确认：呈现的是"批准这份计划"而不是
@@ -114,6 +129,31 @@ function submitAnswers() {
     answers[q.question] = useFreeText[i] ? freeText[i].trim() : selections[i].join(", ");
   });
   emit("respond", props.permission.id, true, answers);
+}
+
+// ── 「允许并记住」：把这次工具调用就地推导成一条 allow 规则 ──
+// 推导规则按工具分（Bash→命令前缀、文件工具→所在文件夹、WebFetch→完整 URL、
+// 其它→工具级），推不出来（空命令 / 空路径）或没有可持久化作用域时不显示按钮。
+const rememberDraft = computed<PermissionRuleDraft | null>(() =>
+  props.permission ? deriveRememberRule(props.permission.name, props.permission.input) : null,
+);
+const canRemember = computed(
+  () =>
+    !isPlanApproval.value &&
+    !isQuestion.value &&
+    !!rememberDraft.value &&
+    !!props.rememberScope,
+);
+const rememberDescription = computed(() => {
+  if (!rememberDraft.value || !props.rememberScope) return "";
+  return describeRememberRule(rememberDraft.value, props.rememberScope);
+});
+function emitAllowAndRemember() {
+  if (!props.permission || !rememberDraft.value || !props.rememberScope) return;
+  emit("respond", props.permission.id, true, undefined, undefined, {
+    scope: props.rememberScope,
+    rule: rememberDraft.value,
+  });
 }
 
 interface InputRow {
@@ -218,6 +258,9 @@ const inputJson = computed(() => {
         </div>
         <pre v-else class="perm-input-raw">{{ inputJson }}</pre>
       </div>
+      <!-- 「允许并记住」预览：点之前先让用户看清将记住什么、落到哪个作用域。
+           只在工具调用且有可推导规则时出现（计划批准 / 澄清提问不显示）。 -->
+      <div v-if="canRemember" class="perm-remember-hint">{{ rememberDescription }}</div>
       <div class="perm-actions">
         <template v-if="isQuestion">
           <button class="perm-btn perm-btn--ghost" @click="emit('respond', permission.id, false)">跳过</button>
@@ -246,6 +289,14 @@ const inputJson = computed(() => {
               </button>
             </template>
             <template v-else>
+              <button
+                v-if="canRemember"
+                class="perm-btn perm-btn--outline"
+                data-action="remember"
+                @click="emitAllowAndRemember"
+              >
+                允许并记住
+              </button>
               <button class="perm-btn perm-btn--solid" data-action="allow" @click="emit('respond', permission.id, true)">
                 允许
               </button>
@@ -439,6 +490,18 @@ const inputJson = computed(() => {
   color: var(--aide-text-secondary);
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* 「允许并记住」预览行：点之前看清将记住什么。低调次要信息，不抢按钮视觉。 */
+.perm-remember-hint {
+  margin: 0 14px 2px;
+  padding: 6px 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--aide-text-muted);
+  background: color-mix(in srgb, var(--aide-accent) 5%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--aide-accent) 35%, transparent);
+  border-radius: 2px;
 }
 
 .perm-plan {
