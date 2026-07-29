@@ -551,6 +551,34 @@ pub fn file_exists(path: String) -> bool {
     std::path::Path::new(&path).exists()
 }
 
+/// 批量探测路径类型，逐项返回 `"file"` / `"dir"` / `"none"`。
+///
+/// 输入框的 `@path `→mention 芯片转换层用它一次 IPC 拿到多个候选路径的存在性
+/// 与类型（芯片需要 isDir 区分文件/文件夹图标）。`file_exists` 只回 bool 且单个，
+/// 这里批量 + 返回类型。metadata 是 IO，走 `spawn_blocking` 不堵 Tauri 主线程
+/// （CLAUDE.md 红线：同步命令禁重 IO）。
+#[tauri::command]
+pub async fn path_types(paths: Vec<String>) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        paths
+            .iter()
+            .map(|p| match std::fs::metadata(p) {
+                Ok(m) => {
+                    if m.is_dir() {
+                        "dir"
+                    } else {
+                        "file"
+                    }
+                }
+                Err(_) => "none",
+            })
+            .map(String::from)
+            .collect::<Vec<String>>()
+    })
+    .await
+    .map_err(|e| format!("path_types task panicked: {}", e))
+}
+
 /// 按文件名（或带目录段的路径片段）在工作区内搜索匹配文件，返回绝对路径列表。
 ///
 /// 聊天里的文件链接常常只给出部分路径（相对某个子目录、或仅文件名），直接拼到

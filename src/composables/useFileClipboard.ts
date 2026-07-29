@@ -17,6 +17,15 @@ export function peekFileClipboard(): ClipboardEntry | null {
   return clipboard.value;
 }
 
+/** Clear the in-app file clipboard entry. Used by the chat input's drop
+ *  handler after a file-tree node is dragged *into the input* (a reference,
+ *  not a move) so the cut-state doesn't linger and the file isn't later moved
+ *  by a tree "粘贴". Standalone (mirrors peekFileClipboard) so callers don't
+ *  need the useFileClipboard() hook. */
+export function clearFileClipboard(): void {
+  clipboard.value = null;
+}
+
 export function getParentPath(path: string): string {
   const sep = path.includes("\\") ? "\\" : "/";
   const i = path.lastIndexOf(sep);

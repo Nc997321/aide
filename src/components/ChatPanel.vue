@@ -13,10 +13,12 @@ import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, Co
 import type { SkillMeta } from "@/types";
 import { api } from "@/api";
 import { resolvePastePayload } from "@/utils/paste";
+import type { PasteResolution } from "@/utils/paste";
 import { resolveFileMentions } from "@/utils/fileMentions";
 import type { FileMentionResolution } from "@/utils/fileMentions";
 import { checkImageInputSupport } from "@/utils/imageInputPreflight";
-import { peekFileClipboard } from "@/composables/useFileClipboard";
+import { peekFileClipboard, clearFileClipboard } from "@/composables/useFileClipboard";
+import { useInlineMention } from "@/composables/useInlineMention";
 import { useMentionInserter } from "@/composables/useMentionInserter";
 import { getFileIcon, pathBasename, FOLDER_ICON_PATH } from "@/utils/fileIcons";
 import type { ImageAttachment, SendOptions } from "@/composables/useChatSession";
@@ -696,6 +698,20 @@ watch(
     nextTick(() => textareaEl.value?.focus());
   },
 );
+
+// 输入框 `@path `→mention 芯片转换层（与来源无关：手打/粘贴/拖入都走这）。
+// paste/drop 管道把文件引用以 `@path ` 文本插进 textarea，这里统一扫描转换。
+const { onInput: handleMentionInput, scan: scanMentions } = useInlineMention({
+  inputText,
+  textareaEl,
+  workspacePath: () => props.workspacePath ?? "",
+  addMention: (path, isDir) => {
+    if (!pendingMentions.value.some((m) => m.path === path)) {
+      pendingMentions.value.push({ path, isDir });
+    }
+  },
+});
+
 const mentionName = pathBasename;
 const mentionIcon = getFileIcon;
 const folderIconPath = FOLDER_ICON_PATH;
@@ -737,29 +753,102 @@ async function handlePaste(e: ClipboardEvent) {
   e.preventDefault();
   const plainText = e.clipboardData?.getData("text/plain") ?? "";
   try {
-    const [files, img] = await Promise.all([
-      api.clipboardReadFiles(),
-      api.clipboardReadImage(),
-    ]);
-    const { text, imagePaths } = resolvePastePayload(files, img, peekFileClipboard(), plainText);
-    if (text) insertAtCursor(text);
-    for (const imgPath of imagePaths) {
-      try {
-        const data = await api.readFileBase64(imgPath);
-        const mediaType = imgPath.toLowerCase().endsWith(".png") ? "image/png"
-          : imgPath.toLowerCase().endsWith(".gif") ? "image/gif"
-          : imgPath.toLowerCase().endsWith(".webp") ? "image/webp"
-          : "image/jpeg";
-        pendingImages.value.push({
-          data,
-          mediaType,
-          previewUrl: `data:${mediaType};base64,${data}`,
-        });
-      } catch { /* 静默失败 */ }
-    }
+    // 串行读：clipboardReadFiles 与 clipboardReadImage 各自 OpenClipboard，
+    // 同进程并发打开会互斥失败（粘贴偶发为空的真实根因），先 files 后 image。
+    const files = await api.clipboardReadFiles();
+    const img = await api.clipboardReadImage();
+    const res = resolvePastePayload(files, img, peekFileClipboard(), plainText);
+    await applyPasteResolution(res);
   } catch {
     if (plainText) insertAtCursor(plainText);
   }
+}
+
+/** 把 resolvePastePayload 的结果落进输入框：文本→光标插入；图片路径→base64 附件。
+ *  paste 与 drop 共用这条管道，确保两种"把文件弄进输入"的来源行为一致。 */
+async function applyPasteResolution(res: PasteResolution) {
+  if (res.text) {
+    insertAtCursor(res.text);
+    // paste/drop 是程序化改 inputText（insertAtCursor 直接赋值），不触发 textarea
+    // 的 @input 事件——检测器不会自醒。这里插入 @path 文本后主动扫一次，让芯片
+    // 转换立即发生，不必等用户再按键。纯文本扫描无 token 即 no-op。
+    void scanMentions();
+  }
+  for (const imgPath of res.imagePaths) {
+    try {
+      const data = await api.readFileBase64(imgPath);
+      const mediaType = imgPath.toLowerCase().endsWith(".png") ? "image/png"
+        : imgPath.toLowerCase().endsWith(".gif") ? "image/gif"
+        : imgPath.toLowerCase().endsWith(".webp") ? "image/webp"
+        : "image/jpeg";
+      pendingImages.value.push({
+        data,
+        mediaType,
+        previewUrl: `data:${mediaType};base64,${data}`,
+      });
+    } catch { /* 静默失败 */ }
+  }
+}
+
+/** Uint8Array → base64（分块，避免超大文件一次展开爆栈）。 */
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+/** 允许 OS 文件拖入输入框（OLE 已禁用，WebView2 原生 HTML5 DnD 才会触发）。
+ *  preventDefault + dropEffect=copy 消除禁止光标、让 drop 事件落地。 */
+function handleDragOver(e: DragEvent) {
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+}
+
+/** 把拖入的文件接进现有粘贴管道。两路来源：
+ *  - 外部 OS 文件：dataTransfer.files。WebView2 不一定暴露 File.path——有则
+ *    用真实路径（零额外设施），无则读字节落临时盘兜底拿路径。统一走
+ *    resolvePastePayload → @path 引用 / 图片附件。
+ *  - 文件树内部拖入：TreeNodeItem.onDragStart 同时 cut(path) 设了 in-app 剪贴板，
+ *    以其为准（WebView2 下 dataTransfer.getData 偶发返回空）。拖入输入框是
+ *    "引用"不是"移动"，处理后清 cut 态，避免残留半透明与误移。
+ *  文件树→文件树的移动走 TreeNodeItem.onDrop，与此处互不干扰（不同落点）。 */
+async function handleDrop(e: DragEvent) {
+  e.preventDefault();
+  e.stopPropagation();
+  const dt = e.dataTransfer;
+  if (!dt) return;
+
+  const dropped = Array.from(dt.files ?? []);
+  let paths: string[] = [];
+  let entry: ReturnType<typeof peekFileClipboard> = null;
+
+  if (dropped.length > 0) {
+    for (const file of dropped) {
+      const fp = (file as File & { path?: string }).path;
+      if (typeof fp === "string" && fp) {
+        paths.push(fp);
+      } else {
+        try {
+          const buf = new Uint8Array(await file.arrayBuffer());
+          const staged = await api.stageDroppedFile(file.name, encodeBase64(buf));
+          paths.push(staged);
+        } catch { /* 单个文件失败不阻断其余 */ }
+      }
+    }
+  } else {
+    // 内部文件树拖入：onDragStart 调的是 cut(path)，而 resolvePastePayload 只认
+    // copy 条目，所以不把 entry 喂给它——直接把路径推进 paths 走 files 分支
+    // （拖入输入框一律当"引用"，且图片文件能正确转成附件而非 @path）。
+    entry = peekFileClipboard();
+    if (entry) paths.push(entry.path);
+  }
+
+  const res = resolvePastePayload(paths, null, null, "");
+  await applyPasteResolution(res);
+  if (entry) clearFileClipboard();
 }
 
 /** 忙碌时发送 = 插队：不排队，交给 sidecar 在安全边界（当前工具调用跑完）
@@ -955,7 +1044,12 @@ function onOpenBgDock(taskId: string) {
           <span class="btw-bg-chip-pulse"></span>
         </button>
       </Transition>
-      <div class="chat-input-box" :class="{ 'btw-mode': btwMode }">
+      <div
+        class="chat-input-box"
+        :class="{ 'btw-mode': btwMode }"
+        @dragover.prevent="handleDragOver"
+        @drop.prevent="handleDrop"
+      >
         <Transition name="btw-banner">
           <div v-if="btwMode" class="btw-mode-banner">
             <span class="btw-banner-glyph">↳</span>
@@ -1013,6 +1107,7 @@ function onOpenBgDock(taskId: string) {
           @keydown.up="handleArrowUp"
           @keydown.down="handleArrowDown"
           @paste="handlePaste"
+          @input="handleMentionInput"
         />
         <div class="chat-toolbar">
           <ThemedSelect

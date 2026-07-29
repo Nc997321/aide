@@ -218,6 +218,7 @@ pub fn run() {
             commands::filesystem::detect_run_command,
             commands::filesystem::grep_symbol,
             commands::filesystem::file_exists,
+            commands::filesystem::path_types,
             commands::filesystem::find_files_by_name,
             commands::filesystem::copy_file,
             commands::filesystem::move_file,
@@ -339,6 +340,9 @@ pub fn run() {
             // Clipboard paste (files / images) into the Claude TUI
             commands::clipboard::clipboard_read_files,
             commands::clipboard::clipboard_read_image,
+            // Stage an externally-dropped OS file to temp (drop-handler fallback
+            // when WebView2 doesn't expose File.path)
+            commands::clipboard::stage_dropped_file,
             // Recent access
             commands::recent::record_recent_session,
             commands::recent::record_recent_file,

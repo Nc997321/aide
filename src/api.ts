@@ -77,6 +77,10 @@ export const api = {
   clipboardReadImage(): Promise<string | null> {
     return invoke("clipboard_read_image");
   },
+  // 外部拖入的 OS 文件落到临时目录，返回路径（仅当 WebView2 不暴露 File.path 时兜底）
+  stageDroppedFile(name: string, base64: string): Promise<string> {
+    return invoke("stage_dropped_file", { name, base64 });
+  },
 
   // 文件
   getProjectInfo(): Promise<ProjectInfo> {
@@ -142,6 +146,10 @@ export const api = {
   },
   fileExists(path: string): Promise<boolean> {
     return invoke("file_exists", { path });
+  },
+  // 批量探测路径类型（"file"|"dir"|"none"），输入框 @path→mention 芯片转换用
+  pathTypes(paths: string[]): Promise<("file" | "dir" | "none")[]> {
+    return invoke("path_types", { paths });
   },
   findFilesByName(query: string, cwd: string, limit?: number): Promise<string[]> {
     return invoke("find_files_by_name", { query, cwd, limit: limit ?? null });
