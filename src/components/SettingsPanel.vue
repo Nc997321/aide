@@ -799,8 +799,13 @@ function onOverlayClick(e: MouseEvent) {
   background: var(--aide-bg-raised);
   border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-lg);
-  width: 680px;
-  height: 520px;
+  /* 按 aide 窗口百分比计算（overlay Teleport 到 body，vw/vh 即窗口尺寸），
+   * 配 clamp 上下限：小窗不被撑爆（min 保底可读），大窗不铺满屏（max 封顶）。
+   * 原 680×520 在大屏上偏小，现 80vw / 82vh 跟随窗口放大。 */
+  width: clamp(680px, 80vw, 1180px);
+  height: clamp(520px, 82vh, 820px);
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
   display: flex;
   flex-direction: column;
   box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
