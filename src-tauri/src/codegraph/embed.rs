@@ -445,6 +445,29 @@ pub enum HttpFormat {
     Openai,
 }
 
+impl HttpFormat {
+    /// Lowercase wire-format tag, used as the identity prefix in
+    /// `HttpEmbedder::model_name()` and `config_embedder_identity`
+    /// (e.g. `ollama:bge-m3`). Single-sourced here so the embedder and the
+    /// config-identity helper never disagree on the prefix.
+    pub fn prefix(self) -> &'static str {
+        match self {
+            HttpFormat::Ollama => "ollama",
+            HttpFormat::Openai => "openai",
+        }
+    }
+
+    /// Parse the config string (`"ollama"` / `"openai"`). Defaults to Ollama
+    /// for any unrecognized value, matching the lenient config convention used
+    /// throughout the codegraph settings path.
+    pub fn from_config(s: &str) -> Self {
+        match s {
+            "openai" => HttpFormat::Openai,
+            _ => HttpFormat::Ollama,
+        }
+    }
+}
+
 /// Configuration for the HTTP embedder. Mirrors the frontend
 /// `CodeGraphEmbedderConfig` (http branch); deserialized from the app settings
 /// `codegraphEmbedder` block.
@@ -499,6 +522,10 @@ pub struct HttpEmbedder {
     api_key: String,
     model: String,
     format: HttpFormat,
+    /// Cached `model_name()` identity (`<prefix>:<model>`, e.g. `ollama:bge-m3`),
+    /// precomputed in `new` so `model_name()` can return `&str` without cloning.
+    /// Must agree with `config_embedder_identity` — both use `HttpFormat::prefix()`.
+    model_name: String,
     /// Configured dim, or 0 = auto-probe. Once probed, locked in `observed_dim`
     /// so all subsequent batches must match.
     configured_dim: usize,
@@ -519,12 +546,17 @@ impl HttpEmbedder {
                 }
             }
         }
+        // Precompute the identity (`<prefix>:<model>`) so `model_name()` returns
+        // `&str` without per-call allocation, and a model swap changes the
+        // identity (forcing a rebuild) even when the new model has the same dim.
+        let model_name = format!("{}:{}", cfg.format.prefix(), cfg.model);
         Ok(Self {
             agent: builder.build(),
             base_url: cfg.base_url.trim_end_matches('/').to_string(),
             api_key: cfg.api_key,
             model: cfg.model,
             format: cfg.format,
+            model_name,
             configured_dim: cfg.dim,
             observed_dim: Mutex::new(None),
         })
@@ -627,10 +659,7 @@ impl Embedder for HttpEmbedder {
     }
 
     fn model_name(&self) -> &str {
-        match self.format {
-            HttpFormat::Ollama => "ollama",
-            HttpFormat::Openai => "openai",
-        }
+        &self.model_name
     }
 }
 
@@ -752,6 +781,38 @@ mod tests {
         // Cloud targets must go through the proxy.
         assert!(!is_private_target("https://api.openai.com"));
         assert!(!is_private_target("https://api.jina.ai:443/v1"));
+    }
+
+    /// `HttpEmbedder::model_name()` must include the concrete model
+    /// (`ollama:bge-m3`), not just the format prefix — so swapping the
+    /// Ollama/OpenAI model (even to another same-dim model) changes the
+    /// identity and forces a rebuild, rather than silently reusing a shard
+    /// built in a different vector space. Regression guard for the fix that
+    /// brought the impl in line with the trait doc (`ollama:nomic-embed-text`).
+    /// `new` builds a ureq agent but makes no network call, so this is pure.
+    #[test]
+    fn http_embedder_model_name_includes_format_and_model() {
+        let ollama = HttpEmbedder::new(HttpEmbedderConfig {
+            base_url: "http://localhost:11434".into(),
+            api_key: String::new(),
+            model: "bge-m3".into(),
+            format: HttpFormat::Ollama,
+            dim: 1024,
+        })
+        .expect("HttpEmbedder::new failed");
+        assert_eq!(ollama.model_name(), "ollama:bge-m3");
+        assert_eq!(ollama.dim(), 1024);
+
+        let openai = HttpEmbedder::new(HttpEmbedderConfig {
+            base_url: "https://api.openai.com".into(),
+            api_key: "sk-test".into(),
+            model: "text-embedding-3-small".into(),
+            format: HttpFormat::Openai,
+            dim: 1536,
+        })
+        .expect("HttpEmbedder::new failed");
+        assert_eq!(openai.model_name(), "openai:text-embedding-3-small");
+        assert_eq!(openai.dim(), 1536);
     }
 
     /// `OrtEmbedder` smoke test: construct from the HF cache, embed a few code

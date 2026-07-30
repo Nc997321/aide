@@ -39,16 +39,18 @@ pub(crate) fn embed_input(raw: &str) -> String {
 }
 
 /// Number of code snippets embedded per ONNX forward pass during a full rebuild
-/// (Phase 2) and incremental reindex. Caps the per-batch peak memory: each batch
-/// allocates attention-score tensors of `(batch, heads=8, seq≤512, seq≤512)` per
-/// transformer layer (6 layers for all-MiniLM-L6-v2). At 256/batch this peaks
-/// ~6GB (observed via VMMap as the aide.exe 3-6GB heap balloon during rebuilds);
-/// at 32/batch it peaks ~1.5GB. Combined with disabling the CPU arena
-/// (`DisableCpuMemArena` in `OrtEmbedder::new`), per-batch temp tensors are
-/// malloc/free'd and returned to the OS each batch, so the smaller batch caps
-/// both the peak AND the steady-state. Smaller = safer memory, more batches =
-/// slightly slower rebuild (3739 symbols → ~117 batches vs ~15).
-pub(crate) const EMBED_BATCH_SIZE: usize = 32;
+/// (Phase 2) and incremental reindex. Each batch allocates attention-score
+/// tensors of `(batch, heads=8, seq≤512, seq≤512)` per transformer layer (6
+/// layers for all-MiniLM-L6-v2). The old 256/batch figure (~6GB peak, observed
+/// via VMMap as the aide.exe 3-6GB heap balloon during rebuilds) was measured
+/// WITH the default CPU arena hoarding per-inference temp tensors. The arena is
+/// now DISABLED in `OrtEmbedder::new` (`DisableCpuMemArena` +
+/// `cpu_arena_allocator=0` + `with_memory_pattern(false)`), so per-batch temp
+/// tensors are malloc/free'd and returned to the OS each batch — the 256/batch
+/// peak should now be transient, not a hoarded steady-state. Bumped 32→256 to
+/// cut rebuild time (~8x fewer batches; 3739 symbols → ~15 batches vs ~117). If
+/// the transient peak proves too high in dev, drop to 128/64.
+pub(crate) const EMBED_BATCH_SIZE: usize = 256;
 
 /// Snapshot of a fully-built project index, swapped atomically into state.
 ///
@@ -136,10 +138,7 @@ fn make_embedder(cfg: &RuntimeCodeGraphEmbedderConfig) -> Result<Box<dyn Embedde
             if cfg.model.trim().is_empty() {
                 return Err("http embedder: model is empty".into());
             }
-            let format = match cfg.format.as_str() {
-                "openai" => HttpFormat::Openai,
-                _ => HttpFormat::Ollama,
-            };
+            let format = HttpFormat::from_config(&cfg.format);
             let http_cfg = HttpEmbedderConfig {
                 base_url: cfg.base_url.clone(),
                 api_key: cfg.api_key.clone(),
@@ -170,20 +169,22 @@ fn make_embedder(cfg: &RuntimeCodeGraphEmbedderConfig) -> Result<Box<dyn Embedde
 /// embedder and rebuild.
 ///
 /// For `fastembed` this is a constant (`fastembed:all-MiniLM-L6-v2`, 384). For
-/// `http` the model_name is the backend prefix only (`ollama` / `openai`) — the
-/// concrete model is in the request body, not the identity — and dim is the
-/// configured value (or 0 = auto-probe, in which case the on-disk meta's dim
-/// is compared against 0 and never matches a real dim, forcing a rebuild on
+/// `http` the model_name is `<prefix>:<model>` (e.g. `ollama:bge-m3`) — the
+/// concrete model is part of the identity so swapping the Ollama/OpenAI model
+/// (even to another same-dim model) changes the identity and forces a rebuild,
+/// rather than silently reusing a shard built in a different vector space. Dim
+/// is the configured value (or 0 = auto-probe, in which case the on-disk meta's
+/// dim is compared against 0 and never matches a real dim, forcing a rebuild on
 /// the first build after switching to auto-probe; subsequent builds match
 /// because meta is then stamped with the probed dim).
+///
+/// Must agree with `HttpEmbedder::model_name()` — both derive prefix + model
+/// via `HttpFormat::prefix()` / `from_config` so they stay in sync.
 fn config_embedder_identity(cfg: &RuntimeCodeGraphEmbedderConfig) -> (String, usize) {
     match cfg.backend.as_str() {
         "http" => {
-            let name = match cfg.format.as_str() {
-                "openai" => "openai",
-                _ => "ollama",
-            };
-            (name.to_string(), cfg.dim as usize)
+            let name = format!("{}:{}", HttpFormat::from_config(&cfg.format).prefix(), cfg.model);
+            (name, cfg.dim as usize)
         }
         _ => ("fastembed:all-MiniLM-L6-v2".to_string(), 384),
     }
