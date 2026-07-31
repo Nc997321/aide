@@ -68,8 +68,10 @@ const effectiveWorkspacePath = computed(() => {
 /**
  * 发送 = 会话启动：空白 tab 现场绑定临时 id（真实 id 由 App.vue 的
  * onSessionCreated 经 rebindSession 换上），预览 tab 随派发转正。
+ * 零 tab（欢迎态）时先现场建一个空白 tab，之后走同一条路径。
  */
 async function onSend(prompt: string, opts: SendOptions) {
+  if (!activeTab.value) onNewTab();
   const tab = activeTab.value;
   if (!tab) return;
   const sid = await sendMessage(prompt, opts);
@@ -96,16 +98,21 @@ function onNewTab() {
 
 <template>
   <div class="pane-group" @mousedown.capture="pl.focusGroup(props.group.id)">
-    <PaneTabBar
-      :group="props.group"
-      :focused="focused"
-      @select="(id: string) => pl.setActiveTab(props.group.id, id)"
-      @close="(id: string) => pl.closeTab(props.group.id, id)"
-      @promote="(id: string) => pl.promoteTabById(props.group.id, id)"
-      @context="onTabContext"
-      @new-tab="onNewTab"
-      @stop="stopSession"
-    />
+    <!-- 零 tab（欢迎态）时整行 tab 栏不渲染：只剩居中 hero 的 ChatPanel。
+         Transition 包住 v-if：hero → 对话时 tab 栏从顶部滑入，反向滑出。 -->
+    <Transition name="tabbar">
+      <PaneTabBar
+        v-if="props.group.tabs.length"
+        :group="props.group"
+        :focused="focused"
+        @select="(id: string) => pl.setActiveTab(props.group.id, id)"
+        @close="(id: string) => pl.closeTab(props.group.id, id)"
+        @promote="(id: string) => pl.promoteTabById(props.group.id, id)"
+        @context="onTabContext"
+        @new-tab="onNewTab"
+        @stop="stopSession"
+      />
+    </Transition>
     <ChatPanel
       :focused="focused"
       :session-id="activeTab?.sessionId ?? null"
@@ -152,5 +159,25 @@ function onNewTab() {
 .pane-group__chat {
   flex: 1;
   min-height: 0;
+}
+
+/* 零 tab ↔ 有 tab：tab 栏沿顶边滑入/滑出（只动 transform/opacity） */
+.tabbar-enter-active {
+  transition: transform .2s var(--aide-ease), opacity .2s var(--aide-ease);
+}
+.tabbar-leave-active {
+  transition: transform .18s ease, opacity .18s ease;
+}
+.tabbar-enter-from,
+.tabbar-leave-to {
+  transform: translateY(-100%);
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tabbar-enter-active,
+  .tabbar-leave-active {
+    transition: none;
+  }
 }
 </style>

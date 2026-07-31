@@ -1,6 +1,6 @@
 import { computed, reactive } from "vue";
 import {
-  createBlankRoot,
+  createEmptyRoot,
   createTab,
   findGroup,
   findTabById,
@@ -38,12 +38,13 @@ interface LayoutState {
   focusedGroupId: string;
 }
 
-function blankState(pendingName?: string): LayoutState {
-  const root = createBlankRoot(pendingName);
+/** 初始/兜底状态：空根组（零会话欢迎态——无 tab 栏，居中 hero 输入区）。 */
+function emptyState(): LayoutState {
+  const root = createEmptyRoot();
   return { root, focusedGroupId: root.id };
 }
 
-const layout = reactive<LayoutState>(blankState());
+const layout = reactive<LayoutState>(emptyState());
 
 const { state: sessionState } = useSessionState();
 
@@ -66,9 +67,9 @@ function focusedGroup(): GroupNode {
   return first;
 }
 
-/** 树被换根/规范化后的统一收尾：兜底空树 + 修正聚焦引用。 */
+/** 树被换根/规范化后的统一收尾：空树兜底空根组（欢迎态）+ 修正聚焦引用。 */
 function commitRoot(newRoot: PaneNode | null) {
-  layout.root = newRoot ?? blankState().root;
+  layout.root = newRoot ?? createEmptyRoot();
   if (!findGroup(layout.root, layout.focusedGroupId)) {
     layout.focusedGroupId = listGroups(layout.root)[0].id;
   }
@@ -166,6 +167,11 @@ export function usePaneLayout() {
       activateTab(existing.group, existing.tab.id);
       return;
     }
+    // 空根组（欢迎态）上没有可分的内容：退化为直接开进空组
+    if (focusedGroup().tabs.length === 0) {
+      openSession(sessionId);
+      return;
+    }
     const res = splitGroup(layout.root, layout.focusedGroupId, direction, false);
     if (!res) return;
     // 空组约定：splitGroup(moveActiveTab=false) 返回的新组必须立刻塞 tab
@@ -179,7 +185,10 @@ export function usePaneLayout() {
 
   /** tab 右键/快捷键「拆分」：激活 tab 移入新组（组内只剩 1 个 tab 时新组给空白面板）。 */
   function splitFocusedGroup(direction: Direction, groupId?: string) {
-    const res = splitGroup(layout.root, groupId ?? layout.focusedGroupId, direction, true);
+    // 空根组（欢迎态）上没有可拆的内容
+    const target = findGroup(layout.root, groupId ?? layout.focusedGroupId);
+    if (!target || target.tabs.length === 0) return;
+    const res = splitGroup(layout.root, target.id, direction, true);
     if (!res) return;
     commitRoot(res.root);
     layout.focusedGroupId = res.newGroup.id;
@@ -299,9 +308,9 @@ export function usePaneLayout() {
     setSplitSizes(layout.root, splitId, sizes);
   }
 
-  /** 整体重置为单组空白面板（工作区无快照可恢复时）。 */
-  function reset(pendingName?: string) {
-    const s = blankState(pendingName);
+  /** 整体重置为空根组（工作区无快照可恢复时 → 零会话欢迎态）。 */
+  function reset() {
+    const s = emptyState();
     layout.root = s.root;
     layout.focusedGroupId = s.focusedGroupId;
   }
@@ -349,6 +358,9 @@ export function usePaneLayout() {
       const tab = g.tabs.find((t) => t.id === g.activeTabId);
       return tab?.sessionId ?? "";
     }),
+    /** 是否一个 tab 都没有（零会话欢迎态）——此时欢迎页本身就是新建会话页，
+     *  「新建会话」动作（Ctrl+N / 侧栏 +）应 no-op，不再开冗余空白 tab */
+    hasAnyTab: computed(() => listGroups(layout.root).some((g) => g.tabs.length > 0)),
     openSession,
     openBlankTab,
     openSessionInNewTab,
@@ -376,7 +388,7 @@ export function usePaneLayout() {
 
 /** 仅测试用：重置单例状态；可注入「已启动」判定（缺省恢复真实实现）。 */
 export function __resetPaneLayoutForTest(startedProbe?: (sid: string) => boolean) {
-  const s = blankState();
+  const s = emptyState();
   layout.root = s.root;
   layout.focusedGroupId = s.focusedGroupId;
   isStarted = startedProbe ?? defaultIsStarted;

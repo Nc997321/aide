@@ -467,6 +467,57 @@ const messagesVal = computed(() =>
   Array.isArray(props.messages) ? props.messages : props.messages.value
 );
 
+// ── hero（零会话欢迎态）────────────────────────────────────────────────────
+// 判定 = 未绑定会话且无消息：零 tab 布局与「新会话」空白预览 tab 共用这一套
+// 居中样式。hero 不是独立组件——输入盒/工具栏/发送路径全部复用，只是换布局文案。
+const isHero = computed(() => !props.sessionId && messagesVal.value.length === 0);
+const heroWsName = computed(() => {
+  const p = props.workspacePath ?? "";
+  return p.split(/[\\/]/).filter(Boolean).pop() || p;
+});
+const heroModelName = computed(
+  () => displayModels.value.find((m) => m.value === selectedModel.value)?.displayName ?? "",
+);
+
+// 离开 hero 的 FLIP 过渡：状态翻转瞬间（DOM 还没变，flush:"pre"）记录输入盒
+// 位置，布局切到正常对话后让输入盒从旧位置平滑「落」到底部（零 tab → 建 tab
+// 时 tab 栏出现造成的位移也一并被这次 FLIP 覆盖）。只在翻转瞬间量两次 rect、
+// 只动 transform，不碰滚动区——本项目有 O(n²) 渲染/强布局前科，此处保持零负担。
+const inputAreaEl = ref<HTMLElement | null>(null);
+const heroLeaving = ref(false); // 首条消息淡入用的一次性 class
+
+watch(isHero, (now, prev) => {
+  if (!prev || now) return;
+  const el = inputAreaEl.value;
+  const oldTop = el?.getBoundingClientRect().top ?? null;
+  heroLeaving.value = true;
+  setTimeout(() => { heroLeaving.value = false; }, 350);
+  if (oldTop === null) return;
+  void nextTick(() => {
+    const el2 = inputAreaEl.value;
+    if (!el2) return;
+    if (typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const dy = oldTop - el2.getBoundingClientRect().top;
+    if (!dy) return;
+    let done = false;
+    const cleanup = () => {
+      if (done) return;
+      done = true;
+      el2.style.transition = "";
+      el2.style.transform = "";
+      el2.removeEventListener("transitionend", cleanup);
+    };
+    el2.style.transition = "none";
+    el2.style.transform = `translateY(${dy}px)`;
+    requestAnimationFrame(() => {
+      el2.style.transition = "transform .28s var(--aide-ease)";
+      el2.style.transform = "translateY(0)";
+      el2.addEventListener("transitionend", cleanup);
+      setTimeout(cleanup, 450); // transitionend 可能不触发（元素卸载等），兜底清场
+    });
+  });
+}, { flush: "pre" });
+
 // 通用思考行与压缩状态条共用一个秒级计时器：压缩时以 SDK 生命周期到达的
 // startedAt 为准，普通生成时才从 busy 开始计时。不会额外引入高频更新。
 const activityElapsed = ref(0);
@@ -1015,7 +1066,7 @@ function onOpenBgDock(taskId: string) {
 </script>
 
 <template>
-  <div ref="rootEl" class="chat-panel">
+  <div ref="rootEl" class="chat-panel" :class="{ 'chat-panel--hero': isHero, 'chat-panel--hero-leaving': heroLeaving }">
     <TaskListPanel v-if="props.tasks && props.tasks.length > 0" :tasks="props.tasks" />
 
     <div ref="scrollEl" class="chat-messages" @scroll.passive="onScroll">
@@ -1076,7 +1127,20 @@ function onOpenBgDock(taskId: string) {
       @update:selected-id="(id: string) => emit('update:bgDockSelectedId', id)"
     />
 
-    <div class="chat-input-area">
+    <!-- hero 标题区（零会话欢迎态）：logo + 一行纯展示信息，
+         模型/权限模式的实际选择在输入盒工具栏 -->
+    <Transition name="hero-fade">
+      <div v-if="isHero" class="chat-hero-head">
+        <AppLogo :size="56" class="chat-hero-logo" />
+        <div class="chat-hero-title">
+          新会话位于 <span class="chat-hero-ws">{{ heroWsName }}</span>
+          <span class="chat-hero-sep">·</span>
+          使用 <span class="chat-hero-model">{{ heroModelName || "默认模型" }}</span>
+        </div>
+      </div>
+    </Transition>
+
+    <div ref="inputAreaEl" class="chat-input-area">
       <!-- Slash command dropdown -->
       <div v-if="filteredSkills.length" class="skill-dropdown">
         <div
@@ -1166,7 +1230,7 @@ function onOpenBgDock(taskId: string) {
           ref="textareaEl"
           v-model="inputText"
           class="chat-input"
-          :placeholder="btwMode ? '顺便问一下,不进入主对话…' : (isBusyVal ? '生成中，发送的消息将排队…' : '输入消息…')"
+          :placeholder="btwMode ? '顺便问一下,不进入主对话…' : (isBusyVal ? '生成中，发送的消息将排队…' : (isHero ? '你正在解决什么问题？' : '输入消息…'))"
           rows="3"
           @keydown.enter.exact.prevent="(slashDropdownVisible && filteredSkills.length) ? selectSkill(filteredSkills[slashSelectedIndex]) : handleSend()"
           @keydown.enter.shift.exact.prevent="insertAtCursor('\n')"
@@ -1374,6 +1438,107 @@ function onOpenBgDock(taskId: string) {
   padding: 8px 12px;
   flex-shrink: 0;
   position: relative;
+}
+
+/* ── hero（零会话欢迎态）────────────────────────────────────────────
+   同一棵 DOM 换布局：消息区隐藏、输入盒居中放大；进出 hero 的动画只动
+   transform/opacity（FLIP 的 JS 部分见 script 里 isHero 的 watch）。 */
+.chat-panel--hero {
+  justify-content: center;
+}
+
+.chat-panel--hero .chat-messages {
+  display: none;
+}
+
+.chat-hero-head {
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+  user-select: none;
+}
+
+.chat-hero-logo {
+  border-radius: 12px;
+  box-shadow: var(--aide-shadow-md);
+}
+
+.chat-hero-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--aide-text-secondary);
+}
+
+.chat-hero-ws {
+  color: var(--aide-text-primary);
+}
+
+.chat-hero-sep {
+  color: var(--aide-text-muted);
+}
+
+.chat-hero-model {
+  color: var(--aide-accent);
+}
+
+.chat-panel--hero .chat-input-area {
+  flex: none;
+  width: min(680px, 92%);
+  margin: 0 auto;
+  padding: 0;
+  border-top: none;
+  animation: hero-rise .22s var(--aide-ease);
+}
+
+.chat-panel--hero .chat-input-box {
+  box-shadow: var(--aide-shadow-lg);
+}
+
+/* 进入 hero：标题行/输入盒淡入上浮 */
+@keyframes hero-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 离开 hero：消息区淡入（配合 FLIP 的输入盒落底） */
+.chat-panel--hero-leaving .chat-messages {
+  animation: hero-msgs-in .3s var(--aide-ease);
+}
+
+@keyframes hero-msgs-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* hero 标题行进出 */
+.hero-fade-enter-active {
+  transition: opacity .18s var(--aide-ease), transform .18s var(--aide-ease);
+}
+.hero-fade-leave-active {
+  transition: opacity .15s ease;
+}
+.hero-fade-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.hero-fade-leave-to {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-panel--hero .chat-input-area,
+  .chat-panel--hero-leaving .chat-messages {
+    animation: none;
+  }
+  .hero-fade-enter-active,
+  .hero-fade-leave-active {
+    transition: none;
+  }
 }
 
 /* 统一的带边框输入盒子——图片缩略图、文本框、模型工具栏都在里面，

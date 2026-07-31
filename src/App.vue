@@ -354,6 +354,8 @@ function onSessionChanged(id: string) {
 }
 
 function onNewSession(name: string) {
+  // 零会话欢迎态：欢迎页本身就是新建会话页，再开空白 tab 只是冗余
+  if (!paneLayout.hasAnyTab.value) return;
   // 打开空白可输入面板（预览 tab）；不落盘、不进侧栏。真正创建推迟到
   // 用户发出第一条消息、SDK 用 session_init 确认真实 id 之后（onSessionCreated）。
   paneLayout.openBlankTab(name);

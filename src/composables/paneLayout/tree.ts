@@ -6,6 +6,8 @@
  *
  * 所有导出操作维持以下不变量（normalize 强制成立，单测覆盖）：
  *   1. 无空组（组内 tab 清空 → 从父 split 摘除，尺寸并入兄弟）
+ *      —— 唯一例外：整棵树空时 normalize 返回 null，由调用方兜底成空根组
+ *         （createEmptyRoot，零会话欢迎态），split 内仍不允许空组
  *   2. 无单孩子 split（拍平提升孩子）
  *   3. 无嵌套同方向 split（并入父级成多孩子 split，同 VS Code）
  *   4. sizes 与 children 等长且和为 1
@@ -64,12 +66,12 @@ export function createGroup(tabs: TabItem[] = []): GroupNode {
   };
 }
 
-/** 初始/兜底布局：单组 + 一个空白预览 tab（与旧版「空白可输入面板」等价）。 */
-export function createBlankRoot(pendingName?: string): GroupNode {
-  const tab = createTab(null, pendingName);
-  const g = createGroup([tab]);
-  g.previewTabId = tab.id;
-  return g;
+/**
+ * 零会话欢迎态的唯一合法空组：整棵树没有任何 tab 时的根（渲染为居中欢迎页，
+ * 无 tab 栏）。split 内不允许空组——只有根可以是它。
+ */
+export function createEmptyRoot(): GroupNode {
+  return createGroup([]);
 }
 
 // ── 查找 ─────────────────────────────────────────────────────────────────────
@@ -144,7 +146,7 @@ function normalizeSizes(sizes: number[], count: number): number[] {
 
 /**
  * 递归规范化。空组剔除、单孩子 split 拍平、同方向嵌套并入、尺寸归一、组内引用修复。
- * 整棵树空了返回 null（调用方兜底 createBlankRoot）。
+ * 整棵树空了返回 null（调用方兜底 createEmptyRoot——零会话欢迎态）。
  */
 export function normalize(node: PaneNode): PaneNode | null {
   if (node.type === "group") {
