@@ -146,6 +146,10 @@ pub struct AppSettings {
     /// 语义/判定全在前端。一旦该工作区任一 Java 运行配置选了 JDK，前端即不再提示。
     #[serde(default)]
     pub jdk_prompt_dismissed: Vec<String>,
+    /// 左侧会话栏「钉子」固定状态：false（默认）= QQ 式自动隐藏（贴左边缘悬浮
+    /// 滑出、覆盖内容），true = 常驻 dock 推开内容。纯 UI 状态，Rust 只存取。
+    #[serde(default)]
+    pub left_sidebar_pinned: bool,
 }
 
 fn default_font_size() -> u32 { 14 }
@@ -179,6 +183,7 @@ impl Default for AppSettings {
             enabled_plugins: std::collections::BTreeMap::new(),
             jdk_registry: Vec::new(),
             jdk_prompt_dismissed: Vec::new(),
+            left_sidebar_pinned: false,
         }
     }
 }

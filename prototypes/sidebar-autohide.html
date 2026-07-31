@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<!--
+  aide 左侧边栏「自动隐藏 + 钉子固定」交互原型
+  - 默认不固定：侧栏完全隐藏，鼠标贴左边缘滑出（overlay 覆盖内容），移开自动收回
+  - 点击侧栏右上角钉子：固定为常驻 dock（推开内容），再点取消固定恢复自动隐藏
+  配色取自 warm-dark 主题 token
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>aide 侧栏自动隐藏原型</title>
+<style>
+  :root {
+    --bg-deep: #141218;
+    --bg-base: #1a1820;
+    --bg-raised: #221f29;
+    --surface-default: #292631;
+    --surface-hover: #322e3c;
+    --surface-active: #3d3848;
+    --text-primary: #ece5db;
+    --text-secondary: #b3aa9c;
+    --text-muted: #7d7568;
+    --accent: #d9ab78;
+    --accent-subtle: rgba(217,171,120,.13);
+    --border: rgba(255,214,160,.09);
+    --border-subtle: rgba(255,214,160,.045);
+    --shadow-lg: 0 18px 56px rgba(0,0,0,.5), 0 4px 14px rgba(0,0,0,.3);
+    --ease: cubic-bezier(.2,.8,.2,1);
+    --sidebar-w: 260px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    font: 13px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif;
+    overflow: hidden;
+  }
+
+  /* ============ 布局骨架 ============ */
+  .app { display: flex; height: 100vh; position: relative; }
+
+  /* 主内容区 */
+  .main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-base);
+    transition: none;
+  }
+  .main-header {
+    height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+  .chat-body { flex: 1; padding: 24px 32px; overflow: auto; }
+  .bubble {
+    max-width: 560px;
+    padding: 10px 14px;
+    border-radius: 9px;
+    margin-bottom: 14px;
+    background: var(--surface-default);
+    color: var(--text-primary);
+  }
+  .bubble.user { margin-left: auto; background: var(--accent-subtle); }
+  .composer {
+    margin: 0 32px 20px;
+    height: 52px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--bg-raised);
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  /* ============ 左边缘热区（贴边触发） ============ */
+  .edge-hotzone {
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    width: 6px;            /* 触发宽度，可微调 */
+    z-index: 40;
+  }
+  /* 边缘提示细线：未展开时给一点"这里能拉出来"的暗示 */
+  .edge-hint {
+    position: fixed;
+    left: 0; top: 50%;
+    transform: translateY(-50%);
+    width: 3px; height: 64px;
+    border-radius: 0 3px 3px 0;
+    background: var(--text-muted);
+    opacity: .25;
+    z-index: 39;
+    transition: opacity .2s var(--ease), background .2s var(--ease);
+    pointer-events: none;
+  }
+  .edge-hotzone:hover + .edge-hint,
+  body.sidebar-open .edge-hint { opacity: 0; }
+
+  /* ============ 侧栏本体 ============ */
+  .sidebar {
+    width: var(--sidebar-w);
+    background: var(--bg-raised);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    z-index: 50;
+    transition: transform .22s var(--ease), box-shadow .22s var(--ease);
+  }
+
+  /* —— 状态 A：未固定 = 悬浮 overlay —— */
+  .app:not(.pinned) .sidebar {
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    transform: translateX(-100%);      /* 完全隐藏 */
+    box-shadow: none;
+  }
+  .app:not(.pinned) .sidebar.open {
+    transform: translateX(0);
+    box-shadow: var(--shadow-lg);      /* 悬浮投影，浮在内容上 */
+  }
+
+  /* —— 状态 B：固定 = 常驻 dock，推开内容 —— */
+  .app.pinned .sidebar {
+    position: relative;
+    transform: none;
+  }
+
+  /* 侧栏内容（模拟 aide 会话列表） */
+  .sb-header {
+    height: 44px;
+    display: flex;
+    align-items: center;
+    padding: 0 12px 0 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+  }
+  .sb-title { flex: 1; font-weight: 600; font-size: 13px; }
+
+  /* 钉子按钮 */
+  .pin-btn {
+    width: 26px; height: 26px;
+    display: grid; place-items: center;
+    border: none; border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background .15s var(--ease), color .15s var(--ease), transform .2s var(--ease);
+  }
+  .pin-btn:hover { background: var(--surface-hover); color: var(--text-primary); }
+  .pin-btn svg { width: 14px; height: 14px; transition: transform .2s var(--ease); }
+  /* 未固定：钉子斜 45°（"未钉上"）；固定：钉子竖直 + 高亮 */
+  .app:not(.pinned) .pin-btn svg { transform: rotate(45deg); }
+  .app.pinned .pin-btn { color: var(--accent); background: var(--accent-subtle); }
+
+  .sb-search {
+    margin: 10px 12px;
+    height: 30px;
+    border-radius: 6px;
+    background: var(--surface-default);
+    border: 1px solid var(--border-subtle);
+    display: flex; align-items: center;
+    padding: 0 10px;
+    color: var(--text-muted);
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+  .sb-list { flex: 1; overflow: auto; padding: 2px 8px; }
+  .session {
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-bottom: 2px;
+  }
+  .session:hover { background: var(--surface-hover); }
+  .session.active { background: var(--accent-subtle); }
+  .session .name { font-size: 13px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .session .time { font-size: 11px; color: var(--text-muted); }
+
+  .hint-bar {
+    position: fixed;
+    right: 16px; bottom: 14px;
+    font-size: 12px;
+    color: var(--text-muted);
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    z-index: 60;
+  }
+  .hint-bar b { color: var(--accent); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="app" id="app">
+  <!-- 侧栏 -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sb-header">
+      <span class="sb-title">会话</span>
+      <button class="pin-btn" id="pinBtn" title="固定侧栏">
+        <!-- 钉子图标 -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 17v5"/>
+          <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/>
+        </svg>
+      </button>
+    </div>
+    <div class="sb-search">搜索会话…</div>
+    <div class="sb-list" id="sbList"></div>
+  </aside>
+
+  <!-- 主区 -->
+  <main class="main">
+    <div class="main-header">aide — 当前会话 <span style="color:var(--text-muted)">（侧栏状态：<b id="stateLabel" style="color:var(--accent)">自动隐藏</b>）</span></div>
+    <div class="chat-body" id="chatBody"></div>
+    <div class="composer">输入消息…</div>
+  </main>
+</div>
+
+<!-- 贴边热区 + 提示细线（未固定时才需要） -->
+<div class="edge-hotzone" id="hotzone"></div>
+<div class="edge-hint"></div>
+
+<div class="hint-bar">鼠标贴<b>左边缘</b>滑出侧栏 · 点<b>钉子</b>固定 / 取消固定</div>
+
+<script>
+  const app = document.getElementById('app');
+  const sidebar = document.getElementById('sidebar');
+  const hotzone = document.getElementById('hotzone');
+  const pinBtn = document.getElementById('pinBtn');
+  const stateLabel = document.getElementById('stateLabel');
+
+  let pinned = false;
+  let hideTimer = null;
+  const HIDE_DELAY = 250;   // 移开后延迟收回，防闪烁
+  const SHOW_DELAY = 60;    // 贴边后轻微延迟展开，防路过误触
+  let showTimer = null;
+
+  // 模拟数据
+  const sessions = [
+    ['侧栏自动隐藏交互', '刚刚'], ['修复 Windows 弹窗问题', '10:24'],
+    ['CodeGraph embedder 配置', '昨天'], ['主题系统重构讨论', '昨天'],
+    ['release 打包流程', '周二'], ['冻结诊断报告分析', '周一'],
+    ['多 Provider 抽象设计', '上周'], ['用量归因面板', '上周'],
+  ];
+  document.getElementById('sbList').innerHTML = sessions.map((s, i) =>
+    `<div class="session${i === 0 ? ' active' : ''}"><div class="name">${s[0]}</div><div class="time">${s[1]}</div></div>`
+  ).join('');
+  document.getElementById('chatBody').innerHTML =
+    `<div class="bubble user">把左侧边栏改成 QQ 那种自动隐藏的悬浮样式</div>
+     <div class="bubble">好的——默认完全隐藏，鼠标贴左边缘滑出，覆盖在内容上方；侧栏上有钉子按钮可以固定成常驻。</div>
+     <div class="bubble user">先做个原型看看交互</div>
+     <div class="bubble">这就是原型。试试：贴左边缘 → 侧栏滑出；移开 → 自动收回；点钉子 → 固定推开内容。</div>`;
+
+  function openSidebar() {
+    if (pinned) return;
+    clearTimeout(hideTimer);
+    sidebar.classList.add('open');
+    document.body.classList.add('sidebar-open');
+  }
+  function scheduleHide() {
+    if (pinned) return;
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      sidebar.classList.remove('open');
+      document.body.classList.remove('sidebar-open');
+    }, HIDE_DELAY);
+  }
+
+  // 贴边展开（带轻微 intent 延迟）
+  hotzone.addEventListener('mouseenter', () => {
+    clearTimeout(showTimer);
+    showTimer = setTimeout(openSidebar, SHOW_DELAY);
+  });
+  hotzone.addEventListener('mouseleave', () => clearTimeout(showTimer));
+
+  // 侧栏自身 hover 保持展开，移出延迟收回
+  sidebar.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+  sidebar.addEventListener('mouseleave', scheduleHide);
+
+  // 钉子：固定 ↔ 自动隐藏
+  pinBtn.addEventListener('click', () => {
+    pinned = !pinned;
+    app.classList.toggle('pinned', pinned);
+    pinBtn.title = pinned ? '取消固定' : '固定侧栏';
+    stateLabel.textContent = pinned ? '已固定' : '自动隐藏';
+    if (pinned) {
+      clearTimeout(hideTimer);
+      sidebar.classList.remove('open');   // dock 模式不需要 overlay 态
+      document.body.classList.remove('sidebar-open');
+      hotzone.style.display = 'none';     // 固定时无需热区
+    } else {
+      hotzone.style.display = '';
+      scheduleHide();                     // 取消固定后若鼠标不在侧栏上则收回
+    }
+  });
+</script>
+</body>
+</html>

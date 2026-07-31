@@ -106,6 +106,9 @@ export interface AppSettings {
    *  仅对「点了稍后却一直不配 JDK」的用户抑制重复弹窗；一旦该工作区任一 Java
    *  运行配置选了 JDK，needsJdk 即为 false，本列表对该键再无意义。 */
   jdkPromptDismissed?: string[];
+  /** 左侧会话栏「钉子」固定状态：false（默认）= QQ 式自动隐藏（贴左边缘悬浮
+   *  滑出、覆盖内容），true = 常驻 dock 推开内容。 */
+  leftSidebarPinned?: boolean;
 }
 
 /** CodeGraph embedding 后端配置。`backend` 选 fastembed（本地 ONNX）或 http
