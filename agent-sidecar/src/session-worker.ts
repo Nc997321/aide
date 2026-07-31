@@ -11,6 +11,8 @@ import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { btwQueryOverrides, forkResumeOptions } from "./btwOptions.js";
 import { generateSessionTitle } from "./titleGenerator.js";
 import { applyModelSwitch } from "./modelSwitch.js";
+import { applyEffortSwitch, normalizeEffort } from "./effortSwitch.js";
+import type { EffortSettable } from "./effortSwitch.js";
 import { cliSubagentModelEnvValue, makeSubagentModelHook } from "./subagentModelDefault.js";
 import { makeSkillGuardHook } from "./skillGuard.js";
 import { codegraphMcpRegistration, CODEGRAPH_ALLOW_RULE, makeCodegraphGrepNudgeHook } from "./codegraphTools.js";
@@ -30,7 +32,7 @@ import {
   emitSubagentBlocks,
 } from "./mapper.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { HookCallback, HookInput } from "@anthropic-ai/claude-agent-sdk";
+import type { EffortLevel, HookCallback, HookInput } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, openSync, readSync, statSync, closeSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { loadAideInstructions } from "./instructions.js";
@@ -153,6 +155,12 @@ export class SessionWorker {
   // ---- SDK 查询状态 ----
   private currentQuery: Awaited<ReturnType<typeof query>> | null = null;
   private currentModel = process.env.ANTHROPIC_MODEL ?? "";
+  /** 会话级 effort（low/medium/high/xhigh/max，小写）。绝不以 env 形式传给 CLI
+   * （CLAUDE_CODE_EFFORT_LEVEL 会压过 applyFlagSettings、与 options.effort 就高合并，
+   * 2026-08-01 smoke 实锤）——只走 options.effort + applyFlagSettings 两条官方通道。 */
+  private currentEffort = "";
+  /** Stop hook 读到的本轮实际 effort（含静默降级）；message_stop 盖戳后清零。 */
+  private lastStopEffort = "";
   private lastConcreteModel = "";
   private lastModels: ModelOption[] = [];
   private aliasByResolvedPrefix: { value: string; resolvedPrefix: string }[] = [];
@@ -211,6 +219,10 @@ export class SessionWorker {
     this.cwd = opts.cwd;
     this.envOverrides = opts.envOverrides ?? {};
     this.currentModel = opts.initialModel ?? this.envOverrides.ANTHROPIC_MODEL ?? this.currentModel;
+    // provider env 通道携带的 effort 初始值（Rust 把 provider effort_level / 前端选择器
+    // 值都注入 CLAUDE_CODE_EFFORT_LEVEL，与 ANTHROPIC_MODEL 同形）——只作初始值读出来，
+    // 绝不会以 env 形式透传给 CLI（见 currentEffort 字段注释）。
+    this.currentEffort = normalizeEffort(this.envOverrides.CLAUDE_CODE_EFFORT_LEVEL);
     this.imageCapabilityCache = opts.imageCapabilityCache;
 
     // DeltaCoalescer 的输出经注入回调写 stdout（带上 session_id）
@@ -226,7 +238,24 @@ export class SessionWorker {
   // ---- emit 快捷方法 ----
 
   private emit(event: ChatEvent): void {
+    // message_stop 盖本轮 effort 戳：Stop hook 已把 API 侧坐实的档位（含静默降级）
+    // 存进 lastStopEffort（时序：Stop hook → result → message_stop）。读取即清零——
+    // 中断/出错轮次 Stop 不触发时，不会把上一轮的档位泄漏到这一轮。
+    if (event.type === "message_stop") {
+      if (this.lastStopEffort) event.effort = this.lastStopEffort;
+      this.lastStopEffort = "";
+    }
     this.coalescer.push(event);
+  }
+
+  /** Stop hook：回合结束时读 API 侧坐实的本轮 effort（SDK hook input 的 effort.level），
+   *  由 emit 盖到紧随其后的 message_stop 上。模型不支持 effort 时字段缺席 → 不盖戳。 */
+  private makeStopEffortHook(): HookCallback {
+    return async (input) => {
+      const effort = (input as { effort?: { level?: string } }).effort;
+      this.lastStopEffort = effort?.level ?? "";
+      return {};
+    };
   }
 
   private async imageInputSupported(): Promise<true | false | null> {
@@ -254,6 +283,23 @@ export class SessionWorker {
     this.envOverrides = env ?? {};
     const selectedModel = this.envOverrides.ANTHROPIC_MODEL;
     if (selectedModel) this.currentModel = selectedModel;
+    // 前端选择器每条消息都带当前 effort（同 initialModel 语义，同值幂等无回执）；
+    // 没带的调用方回落 provider env 默认。
+    this.applyEffort(this.envOverrides.CLAUDE_CODE_EFFORT_LEVEL);
+  }
+
+  /** set_effort 命令 / send env 通道共用的切换入口：query 未起存本地（startLoop
+   *  建 query 时经 options.effort 带上），在跑走 applyFlagSettings。成败都有回声。 */
+  private applyEffort(raw: string | undefined): void {
+    applyEffortSwitch({
+      effort: raw ?? "",
+      // SDK Query 的 applyFlagSettings 类型把 effortLevel 限在 xhigh 以内；
+      // max 是类型外但运行时可用的值（smoke-effort.ts 验证），这里结构化收窄。
+      query: this.currentQuery as EffortSettable | null,
+      currentEffort: this.currentEffort,
+      emit: (e) => this.emit(e),
+      commit: (v) => { this.currentEffort = v; },
+    });
   }
 
   /** 从当前轮安全边界接入插队消息；会话已关闭时丢弃，禁止向 closed queue 写入。 */
@@ -628,6 +674,9 @@ export class SessionWorker {
         emit: (e) => this.emit(e),
         commit: (m) => { this.currentModel = m; },
       });
+
+    } else if (cmd.cmd === "set_effort") {
+      this.applyEffort(cmd.effort);
     }
   }
 
@@ -733,7 +782,9 @@ export class SessionWorker {
           for (const k of [
             "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
             "ANTHROPIC_MODEL", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_SUBAGENT_MODEL",
-            "CLAUDE_CODE_EFFORT_LEVEL",
+            // 注意：CLAUDE_CODE_EFFORT_LEVEL 刻意不透传——它会压过 applyFlagSettings、
+            // 并与 options.effort 就高合并（2026-08-01 smoke 实锤），会让会话内
+            // effort 切换被 env 搅乱。effort 只走 options.effort + applyFlagSettings。
             "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
             "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy",
           ]) {
@@ -743,6 +794,9 @@ export class SessionWorker {
           for (const [k, v] of Object.entries(this.envOverrides)) {
             if (v) cliEnv[k] = v;
           }
+          // {...process.env} 的扩散和 envOverrides 都可能带进 CLAUDE_CODE_EFFORT_LEVEL
+          // （用户全局 env / Rust provider 注入），必须在最后显式删除。
+          delete cliEnv.CLAUDE_CODE_EFFORT_LEVEL;
           cliEnv.CLAUDE_CODE_SUBAGENT_MODEL = cliSubagentModelEnvValue(process.env);
 
           const subagentModelHook = makeSubagentModelHook(process.env);
@@ -805,10 +859,14 @@ export class SessionWorker {
                     ? [{ matcher: "^Grep$", hooks: [makeCodegraphGrepNudgeHook()] }]
                     : []),
                 ],
+                // 回合结束读本轮实际 effort（含静默降级）→ emit 盖到 message_stop 上。
+                Stop: [{ hooks: [this.makeStopEffortHook()] }],
               },
               ...(codegraphMcp ? { mcpServers: codegraphMcp as any } : {}),
               includePartialMessages: false,
               ...(this.currentModel ? { model: this.currentModel } : {}),
+              // effort 的 spawn 通道（会话中切换走 set_effort → applyFlagSettings）。
+              ...(this.currentEffort ? { effort: this.currentEffort as EffortLevel } : {}),
               ...(cwd ? { cwd } : {}),
               ...(this.cwd && !cwd ? { cwd: this.cwd } : {}),
               ...(process.env.AIDE_CLAUDE_EXE

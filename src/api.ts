@@ -52,6 +52,18 @@ export const api = {
   sessionModel(id: string): Promise<string | null> {
     return invoke("session_model", { id });
   },
+  /** 切换存活会话的 effort；返回 false = 无活进程（选择随下一条消息 env 通道
+   *  生效，与 initialModel 同一语义）。 */
+  setEffort(sessionId: string, effort: string): Promise<boolean> {
+    return invoke("set_effort", { sessionId, effort });
+  },
+  /** 记住/读回会话的 effort 选择（会话元数据，重启不丢）。 */
+  setSessionEffort(id: string, effort: string): Promise<void> {
+    return invoke("set_session_effort", { id, effort });
+  },
+  sessionEffort(id: string): Promise<string | null> {
+    return invoke("session_effort", { id });
+  },
   getDefaultModels(): Promise<ModelOption[]> {
     return invoke("get_default_models");
   },

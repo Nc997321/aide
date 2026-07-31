@@ -337,6 +337,56 @@ pub async fn session_model(id: String) -> Result<Option<String>, String> {
     .map_err(|e| format!("session_model task panicked: {}", e))?
 }
 
+/// 记住会话的 effort 选择：merge 写进会话元数据 `<id>.json` 的 `effort` 字段
+/// （与 set_session_model 同一模式），重开会话/重启 app 后由前端恢复选择器。
+/// effort 为空 = 清除（退回 provider 默认 / high）。磁盘 IO 离开主线程。
+#[tauri::command]
+pub async fn set_session_effort(id: String, effort: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let dir = our_sessions_dir();
+        fs::create_dir_all(&dir).map_err(|e| format!("Failed to create sessions dir: {}", e))?;
+        let path = dir.join(format!("{}.json", id));
+
+        let mut v: Value = if path.exists() {
+            let content = fs::read_to_string(&path)
+                .map_err(|e| format!("Failed to read: {}", e))?;
+            serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?
+        } else {
+            serde_json::json!({ "id": id })
+        };
+        if effort.is_empty() {
+            v.as_object_mut().map(|o| o.remove("effort"));
+        } else {
+            v["effort"] = Value::String(effort);
+        }
+
+        fs::write(&path, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("Failed to write: {}", e))
+    })
+    .await
+    .map_err(|e| format!("set_session_effort task panicked: {}", e))?
+}
+
+/// 读回会话记住的 effort 选择；没有元数据文件或没记过 → None。
+#[tauri::command]
+pub async fn session_effort(id: String) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = fs::read_to_string(&path).map_err(|e| format!("Failed to read: {}", e))?;
+        let v: Value = serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?;
+        Ok(v
+            .get("effort")
+            .and_then(|m| m.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string()))
+    })
+    .await
+    .map_err(|e| format!("session_effort task panicked: {}", e))?
+}
+
 /// transcript 会随会话增长到多 MB，整读 + 逐行解析必须离开主线程（切会话时触发，
 /// 同步跑等于切一次长会话卡一次窗口）。
 #[tauri::command]

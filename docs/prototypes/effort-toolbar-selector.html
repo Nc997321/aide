@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Effort 选择器原型 — 输入框工具栏</title>
+<style>
+  /* 近似 aide warm-dark 主题，仅作原型示意 */
+  :root {
+    --bg-deep: #17130f;
+    --bg: #1e1915;
+    --surface: #26201b;
+    --surface-hover: #322a24;
+    --border: #3d332c;
+    --text: #ece4da;
+    --text-dim: #a89a8c;
+    --text-faint: #7d7166;
+    --accent: #d97757;
+    --accent-soft: rgba(217, 119, 87, 0.16);
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg-deep);
+    color: var(--text);
+    font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+    min-height: 100vh; padding: 48px 24px;
+  }
+  .frame-label { color: var(--text-faint); font-size: 12px; margin-bottom: 8px; align-self: flex-start; max-width: 640px; width: 100%; }
+  .chat-mock {
+    width: 100%; max-width: 640px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .msg {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 10px 14px; color: var(--text-dim);
+  }
+  .msg.user { background: var(--accent-soft); border-color: rgba(217,119,87,.3); color: var(--text); align-self: flex-end; max-width: 80%; }
+
+  /* ===== 输入盒（复刻 .chat-input-box） ===== */
+  .chat-input-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 12px 8px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .chat-input-box:focus-within { border-color: var(--accent); }
+  .chat-input {
+    width: 100%; background: transparent; border: none; outline: none; resize: none;
+    color: var(--text); font: inherit; min-height: 60px;
+  }
+  .chat-input::placeholder { color: var(--text-faint); }
+
+  .chat-toolbar {
+    display: flex; align-items: center; gap: 8px;
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+  }
+  .spacer { flex: 1; }
+
+  /* ===== ThemedSelect 复刻 ===== */
+  .tselect { position: relative; }
+  .tselect-btn {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--text-dim); border-radius: 6px;
+    padding: 3px 8px; font-size: 12px; cursor: pointer;
+    transition: background .12s, color .12s;
+    white-space: nowrap;
+  }
+  .tselect-btn:hover { background: var(--surface-hover); color: var(--text); }
+  .tselect-btn .caret { font-size: 8px; opacity: .6; }
+  .tselect-btn .opt-label { color: var(--text-faint); }
+
+  .tdropdown {
+    position: absolute; bottom: calc(100% + 6px); left: 0;
+    min-width: 100%;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 4px;
+    box-shadow: 0 -6px 24px rgba(0,0,0,.45);
+    display: none; z-index: 10;
+  }
+  .tselect.open .tdropdown { display: block; }
+  .toption {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 10px; border-radius: 5px; cursor: pointer;
+    color: var(--text-dim); font-size: 12px; white-space: nowrap;
+  }
+  .toption:hover { background: var(--surface-hover); color: var(--text); }
+  .toption.active { color: var(--accent); }
+  .toption .check { width: 12px; font-size: 11px; }
+  .toption .hint { margin-left: auto; color: var(--text-faint); font-size: 11px; padding-left: 12px; }
+  .tdivider { height: 1px; background: var(--border); margin: 4px 6px; }
+  .tgroup-label { padding: 4px 10px 2px; font-size: 10px; color: var(--text-faint); letter-spacing: .05em; }
+
+  /* effort 特有：档位小圆点色阶 */
+  .effort-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+  .effort-dot--default { background: var(--text-faint); }
+  .effort-dot--low    { background: #7dc4e4; }
+  .effort-dot--medium { background: #a6da95; }
+  .effort-dot--high   { background: #eed49f; }
+  .effort-dot--xhigh  { background: #f5a97f; }
+  .effort-dot--max    { background: #ed8796; }
+
+  /* 切换后的即时回执（toast 样式示意） */
+  .effort-applied-note {
+    font-size: 11px; color: var(--text-faint);
+    padding: 0 2px; display: none;
+  }
+  .effort-applied-note.show { display: block; }
+
+  .send-btn {
+    background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    width: 26px; height: 26px; cursor: pointer; font-size: 14px;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  /* ===== 每轮 usage 行（输入/输出/费用 + effort 徽标） ===== */
+  .turn-usage {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 11px; color: var(--text-faint);
+    padding: 2px 4px 0;
+  }
+  .turn-usage .sep { opacity: .4; }
+  .turn-effort-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 5px; padding: 1px 7px;
+    font-size: 10px; letter-spacing: .04em; color: var(--text-dim);
+  }
+  .quota-chip {
+    display: flex; align-items: center; gap: 5px;
+    color: var(--text-faint); font-size: 11px;
+  }
+  .quota-bar { width: 36px; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .quota-bar i { display: block; height: 100%; width: 42%; background: #a6da95; }
+</style>
+</head>
+<body>
+
+<div class="frame-label">原型：effort 选择器放进输入框工具栏（模型 / 权限模式旁边）— 点击下拉可交互</div>
+
+<div class="chat-mock">
+  <div class="msg user">帮我把这个函数的复杂度降下来</div>
+  <div class="msg">好的，我先看一下这个函数现在的结构……</div>
+  <!-- ★ 新增：usage 行尾部 effort 徽标（本轮实际生效档位） -->
+  <div class="turn-usage">
+    <span>输入 21.4K</span><span class="sep">·</span>
+    <span>输出 1.2K</span><span class="sep">·</span>
+    <span>$0.13</span><span class="sep">·</span>
+    <span class="turn-effort-badge"><span class="effort-dot effort-dot--max"></span>effort MAX</span>
+  </div>
+  <div class="msg user">这个变量名也顺手改一下</div>
+  <div class="msg">已改名，并同步更新了 3 处引用。</div>
+  <div class="turn-usage">
+    <span>输入 22.1K</span><span class="sep">·</span>
+    <span>输出 340</span><span class="sep">·</span>
+    <span>$0.11</span><span class="sep">·</span>
+    <span class="turn-effort-badge"><span class="effort-dot effort-dot--low"></span>effort LOW</span>
+  </div>
+
+  <div class="chat-input-box">
+    <textarea class="chat-input" placeholder="输入消息…"></textarea>
+    <div class="chat-toolbar">
+      <!-- 模型（既有，示意） -->
+      <div class="tselect">
+        <button class="tselect-btn" type="button">
+          <span>claude-opus-4-8</span><span class="caret">▼</span>
+        </button>
+      </div>
+
+      <!-- ★ 新增：Effort 选择器 -->
+      <div class="tselect" id="effortSelect">
+        <button class="tselect-btn" type="button" id="effortBtn">
+          <span class="effort-dot effort-dot--high" id="effortDot"></span>
+          <span class="opt-label">effort</span>
+          <span id="effortValue">HIGH</span>
+          <span class="caret">▼</span>
+        </button>
+        <div class="tdropdown" id="effortDropdown">
+          <div class="toption" data-v="LOW" data-dot="low">
+            <span class="check"></span><span class="effort-dot effort-dot--low"></span>LOW
+            <span class="hint">最快最省 · 简单任务</span>
+          </div>
+          <div class="toption" data-v="MEDIUM" data-dot="medium">
+            <span class="check"></span><span class="effort-dot effort-dot--medium"></span>MEDIUM
+            <span class="hint">省钱折中</span>
+          </div>
+          <div class="toption" data-v="HIGH" data-dot="high">
+            <span class="check">✓</span><span class="effort-dot effort-dot--high"></span>HIGH
+            <span class="hint">默认档位</span>
+          </div>
+          <div class="toption" data-v="XHIGH" data-dot="xhigh">
+            <span class="check"></span><span class="effort-dot effort-dot--xhigh"></span>XHIGH
+            <span class="hint">编码 / agentic 推荐</span>
+          </div>
+          <div class="toption" data-v="MAX" data-dot="max">
+            <span class="check"></span><span class="effort-dot effort-dot--max"></span>MAX
+            <span class="hint"> hardest 任务 · 可能过度思考</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 权限模式（既有，示意） -->
+      <div class="tselect">
+        <button class="tselect-btn" type="button">
+          <span>默认权限</span><span class="caret">▼</span>
+        </button>
+      </div>
+
+      <div class="spacer"></div>
+
+      <div class="quota-chip"><span>5h</span><div class="quota-bar"><i></i></div><span>42%</span></div>
+      <button class="send-btn" type="button">↑</button>
+    </div>
+  </div>
+  <div class="effort-applied-note" id="appliedNote">✓ effort 已切到 <b id="appliedValue"></b>，从下一轮起生效 · 不影响 prompt 缓存</div>
+</div>
+
+<script>
+  const select = document.getElementById('effortSelect');
+  const btn = document.getElementById('effortBtn');
+  const dropdown = document.getElementById('effortDropdown');
+  const valueEl = document.getElementById('effortValue');
+  const dotEl = document.getElementById('effortDot');
+  const note = document.getElementById('appliedNote');
+  const appliedValue = document.getElementById('appliedValue');
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    select.classList.toggle('open');
+  });
+  document.addEventListener('click', () => select.classList.remove('open'));
+
+  dropdown.querySelectorAll('.toption').forEach(opt => {
+    opt.addEventListener('click', () => {
+      dropdown.querySelectorAll('.toption').forEach(o => o.querySelector('.check').textContent = '');
+      opt.querySelector('.check').textContent = '✓';
+      const v = opt.dataset.v;
+      valueEl.textContent = v;
+      dotEl.className = 'effort-dot effort-dot--' + opt.dataset.dot;
+      select.classList.remove('open');
+      appliedValue.textContent = v;
+      note.classList.add('show');
+      clearTimeout(note._t);
+      note._t = setTimeout(() => note.classList.remove('show'), 4000);
+    });
+  });
+</script>
+
+</body>
+</html>

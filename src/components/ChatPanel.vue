@@ -49,6 +49,10 @@ const props = defineProps<{
   currentModel?: string;
   /** 模型切换坐实回执（sidecar 运行时路径发出）——据此弹成功/失败瞬时提示 */
   modelSwitchResult?: ModelSwitchResult | null;
+  /** sidecar 坐实的当前 effort（effort_changed 事件）；空串 = 还没学到 */
+  currentEffort?: string;
+  /** effort 切换失败回执（sidecar 驳回，选择器已被回滚拉回旧值）——据此弹失败提示 */
+  effortSwitchError?: { message: string; seq: number } | null;
   contextUsage?: ContextUsage | null;
   /** 当前会话的短生命周期压缩状态；不属于消息历史。 */
   contextCompaction?: ContextCompactionState | null;
@@ -75,6 +79,7 @@ const emit = defineEmits<{
   "send-btw": [prompt: string, opts: { lightweight: boolean; model?: string }];
   interrupt: [];
   "set-model": [model: string];
+  "set-effort": [effort: string];
   "set-permission-mode": [mode: string];
   "respond-permission": [id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string];
   "update:bgDockSelectedId": [id: string];
@@ -331,6 +336,82 @@ watch(
     }
   },
 );
+
+// ── Effort 选择器 ──
+// 会话级思考深度：选项固定五档（不像模型有 provider 相关列表/SDK 回报列表），
+// 默认解析顺序：会话记忆（sessionEffort 元数据）→ provider 配置的 effortLevel →
+// "high"。切换经 set-effort 走 sidecar applyFlagSettings 即时生效（SDK 官方中途
+// 通道，不重启进程、实测不碰 prompt 缓存）；进程没起时选择随下一条消息的
+// initialEffort（env 通道）带上。sidecar 坐实/回滚由 props.currentEffort 同步。
+const EFFORT_OPTIONS = [
+  { value: "low", label: "LOW" },
+  { value: "medium", label: "MEDIUM" },
+  { value: "high", label: "HIGH" },
+  { value: "xhigh", label: "XHIGH" },
+  { value: "max", label: "MAX" },
+];
+const selectedEffort = ref("high");
+/** 用户在当前会话视图里手动改过 = true——异步恢复/provider 就绪回调不得覆盖。 */
+let effortTouchedByUser = false;
+
+/** provider 配置的默认档位（设置面板的 effortLevel 是 LOW/MAX 风格大写）；
+ *  没配或非法值 → "high"（用户决定：选择器没有"默认"档，默认就落 high）。 */
+function providerDefaultEffort(): string {
+  const v = (sessionProvider.value.effortLevel ?? "").trim().toLowerCase();
+  return EFFORT_OPTIONS.some((o) => o.value === v) ? v : "high";
+}
+
+function handleEffortChange(value: string) {
+  effortTouchedByUser = true;
+  selectedEffort.value = value;
+  // 会话还没开始时 setEffort 是无会话可发的空操作，安全；真正生效靠
+  // handleSend 把 selectedEffort 带进第一条消息的 initialEffort。
+  emit("set-effort", value);
+}
+
+// sidecar 坐实/回滚同步：失败时选择器被拉回旧值（error toast 由下方 watcher 弹）。
+watch(() => props.currentEffort, (v) => {
+  if (v && v !== selectedEffort.value) selectedEffort.value = v;
+});
+
+// effort 切换失败 → 瞬时提示（同 modelSwitchResult 的新鲜度守卫语义）。
+watch(
+  () => props.effortSwitchError?.seq,
+  (seq) => {
+    if (!seq || !props.effortSwitchError) return;
+    showToast(`effort 切换失败：${props.effortSwitchError.message}`, "danger", 4200);
+  },
+);
+
+// 会话切换：恢复这个会话记住的 effort（没有则落 provider 默认/high）。
+// pending 会话不恢复不重置——选择是用户刚做的/随 initialEffort 走的。
+watch(
+  () => props.sessionId,
+  async (sid) => {
+    effortTouchedByUser = false;
+    if (!sid) {
+      selectedEffort.value = providerDefaultEffort();
+      return;
+    }
+    if (isPendingSession(sid)) return;
+    selectedEffort.value = providerDefaultEffort();
+    const remembered = await api.sessionEffort(sid).catch(() => null);
+    // 读回期间切走了别的会话，或用户已经手动改过 → 放弃恢复
+    if (props.sessionId !== sid || effortTouchedByUser) return;
+    if (remembered && EFFORT_OPTIONS.some((o) => o.value === remembered)) {
+      selectedEffort.value = remembered;
+    }
+  },
+  { immediate: true },
+);
+
+// provider 就绪/切换：只兜底没被用户动过、且不在存活会话里的选择
+// （存活会话的 sessionProvider 锁在 spawn 时的 provider，id 不会变，天然跳过）。
+watch(() => sessionProvider.value.id, () => {
+  if (effortTouchedByUser) return;
+  if (props.sessionId && !isPendingSession(props.sessionId)) return;
+  selectedEffort.value = providerDefaultEffort();
+});
 
 // ── 「允许并记住」作用域解析 ──
 // 权限请求出现时拉一次权限设置视图，决定「记住」默认落到哪个作用域（项目本地
@@ -1033,6 +1114,9 @@ async function handleSend() {
     // Rust 只在 sidecar 进程还没起来时才会用这个值（见 chat.rs），已有会话时
     // 无害地被忽略，不需要在这里判断"是否已有会话"。
     initialModel: selectedModel.value || undefined,
+    // effort 选择器当前值：每条消息都带（存活会话同值幂等），新会话 spawn 时
+    // 是初始档位——没有选择器默认值以外的"隐式 effort"。
+    initialEffort: selectedEffort.value || undefined,
     mentions: mentionResolution,
     permissionMode: selectedPermissionMode.value || undefined,
   });
@@ -1054,6 +1138,7 @@ async function handleQuickAction(action: QuickAction) {
   }
   emit("send", action.prompt, {
     initialModel: selectedModel.value || undefined,
+    initialEffort: selectedEffort.value || undefined,
     permissionMode: selectedPermissionMode.value || undefined,
     action: { id: action.id, label: action.label, icon: action.icon },
   });
@@ -1248,6 +1333,14 @@ function onOpenBgDock(taskId: string) {
             :options="modelSelectOptions"
             title="模型"
             @update:model-value="handleModelChange"
+          />
+          <!-- effort 选择器：会话级思考深度，切换即时生效（sidecar applyFlagSettings，
+               不重启进程、不碰 prompt 缓存）；默认 high -->
+          <ThemedSelect
+            :model-value="selectedEffort"
+            :options="EFFORT_OPTIONS"
+            title="effort（思考深度）：低档省 token、高档想得更深；切换从下一轮起生效，不影响缓存"
+            @update:model-value="handleEffortChange"
           />
           <div
             v-if="displayPermissionModes.length"

@@ -5,7 +5,7 @@
  * 其实左右是两个独立的量（喂给模型的输入 / 模型吐出来的输出），跟网络监控里
  * 下载/上传箭头是同一套视觉语言，不需要额外解释就能看懂方向。
  *
- * 精确数字、cache 命中明细、费用放进 title tooltip，徽章本身只给"量级感"
+ * 精确数字、cache 命中明细、费用放进 tooltip，徽章本身只给"量级感"
  * （36.1k 而不是 36108），细节留给想深究的人去悬停查看。
  */
 import { computed } from "vue";
@@ -31,7 +31,7 @@ const tooltip = computed(() => {
 </script>
 
 <template>
-  <div class="turn-usage" :title="tooltip">
+  <div class="turn-usage" v-tooltip="tooltip">
     <span class="tu-item tu-in">↓ {{ formatCompactNumber(usage.inputTokens) }}</span>
     <span class="tu-item tu-out">↑ {{ formatCompactNumber(usage.outputTokens) }}</span>
     <span class="tu-cost">${{ usage.costUsd.toFixed(4) }}</span>

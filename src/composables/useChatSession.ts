@@ -1,6 +1,7 @@
 import { computed, reactive, ref, watch, type Ref } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { api } from "@/api";
 import { useDiagnosticsDashboard } from "@/composables/useDiagnosticsDashboard";
 import type {
   ChatMessage,
@@ -39,6 +40,9 @@ export interface SendOptions {
   images?: ImageAttachment[];
   resumeId?: string;
   initialModel?: string;
+  /** 当前选中的 effort 档位（low/medium/high/xhigh/max 小写），随每条消息
+   *  透传（与 initialModel 同语义：spawn 时是初始值，存活会话幂等）。 */
+  initialEffort?: string;
   mentions?: FileMentionResolution;
   /** 当前选中的权限模式（不透明字符串，sidecar 解释语义），随每条消息透传 */
   permissionMode?: string;
@@ -73,6 +77,12 @@ interface SessionStore {
   /** 最近一次模型切换的坐实回执（sidecar model_switch_result）；null 表示
    *  本会话还没切过。seq 单调递增，连续相同结果也能触发 watcher。 */
   modelSwitchResult: ModelSwitchResult | null;
+  /** sidecar 坐实的当前 effort 档位（effort_changed 事件）；空串表示还没学到
+   *  （选择器本地值为准，这个用于坐实同步/失败回滚）。 */
+  currentEffort: string;
+  /** effort 切换失败回执（sidecar 驳回，选择器已被回滚广播拉回旧值）——
+   *  seq 单调递增，面板据此弹失败提示。 */
+  effortSwitchError: { message: string; seq: number } | null;
   /** 上下文窗口用量——每轮结束后由 sidecar 刷新；null 表示还没收到过 */
   contextUsage: ContextUsage | null;
   /** 上下文压缩的短生命周期状态：只驱动活动状态条，不写入消息/历史。 */
@@ -231,6 +241,8 @@ function getStore(sid: string): SessionStore {
       models: [],
       currentModel: "",
       modelSwitchResult: null,
+      currentEffort: "",
+      effortSwitchError: null,
       contextUsage: null,
       contextCompaction: null,
       tasks: [],
@@ -362,6 +374,7 @@ function dispatchSend(
   resumeId?: string,
   initialModel?: string,
   jumpQueue?: boolean,
+  initialEffort?: string,
 ) {
   const store = getStore(sid);
   // 新轮次不能继承前一轮的压缩提示；但忙碌时这里仅登记插队消息，当前轮
@@ -428,6 +441,9 @@ function dispatchSend(
     // 只在这个 sidecar 进程还没起来时（第一条消息）有意义，Rust 侧只在
     // spawn 分支用它覆盖 provider 默认模型；之后切模型走 setModel()。
     initialModel: initialModel || null,
+    // effort 选择器当前值（与 initialModel 同一条 env 通道：CLAUDE_CODE_EFFORT_LEVEL）。
+    // 存活会话同值幂等；切换走 setEffort() 即时生效，这里是 deferred 兜底。
+    initialEffort: initialEffort || null,
     // 每条消息都带当前选中的权限模式，sidecar 侧幂等（同值跳过）
     permissionMode: item.permissionMode || null,
     // 插队：不在这里打断，原样透传给 sidecar，由它在安全边界（当前工具调用
@@ -541,6 +557,19 @@ function handleChatEvent(e: Record<string, unknown>) {
         seq: (store.modelSwitchResult?.seq ?? 0) + 1,
         at: Date.now(),
       };
+      break;
+    }
+    case "effort_changed": {
+      // effort 切换坐实/回滚——成功带新值，失败（sidecar 驳回）带回滚后的旧值
+      //  + error。选择器据此同步（失败时弹提示并拉回旧值）。
+      store.currentEffort = e["effort"] as string;
+      const err = e["error"] as string | undefined;
+      if (err) {
+        store.effortSwitchError = {
+          message: err,
+          seq: (store.effortSwitchError?.seq ?? 0) + 1,
+        };
+      }
       break;
     }
     case "context_usage": {
@@ -760,10 +789,16 @@ function handleChatEvent(e: Record<string, unknown>) {
     }
     case "message_stop": {
       const usage = e["usage"] as ChatMessage["usage"] | null;
-      if (usage) {
+      const turnEffort = e["effort"] as string | undefined;
+      if (usage || turnEffort) {
         const last = store.messages[store.messages.length - 1];
-        if (last?.role === "assistant") last.usage = usage;
-        diag.accumulateUsage(usage);
+        if (last?.role === "assistant") {
+          if (usage) last.usage = usage;
+          // 本轮实际生效的 effort（sidecar 从 Stop hook 读到的权威值，含静默
+          // 降级）——usage 行徽标的数据源；模型不支持 effort 时不带。
+          if (turnEffort) last.turnEffort = turnEffort;
+        }
+        if (usage) diag.accumulateUsage(usage);
       }
       finishStreaming(store);
       // 失败状态留在会话尾部，直到用户真正发起下一轮，避免被紧随其后的
@@ -1005,7 +1040,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       setProvider(sid, activeProviderId.value);
     }
 
-    dispatchSend(sid, item, resolvedResumeId, opts.initialModel, jumpQueue);
+    dispatchSend(sid, item, resolvedResumeId, opts.initialModel, jumpQueue, opts.initialEffort);
     return sid;
   }
 
@@ -1109,6 +1144,23 @@ export function useChatSession(sessionId: Ref<string | null>) {
     }
   }
 
+  /** 切 effort：存活会话立即走 sidecar applyFlagSettings（SDK 官方中途切换通道，
+   *  不重启进程、实测不碰 prompt 缓存），坐实/回滚由 effort_changed 事件同步；
+   *  进程没起时静默——选择随下一条消息的 env 通道带上（与 initialModel 同语义）。
+   *  用户显式选择立即持久化（重开会话恢复选择器）。 */
+  async function setEffort(effort: string) {
+    const sid = sessionId.value;
+    if (!sid) return;
+    if (!isPendingSession(sid)) {
+      void api.setSessionEffort(sid, effort).catch(() => {});
+    }
+    try {
+      await api.setEffort(sid, effort);
+    } catch {
+      // 无活进程：等 send 携带
+    }
+  }
+
   /** 顺便问一下:fork 当前主会话开一个隔离子对话。一次性——发送后由 ChatPanel
    *  负责复位 btw 模式视觉。结论以 ActionBlock(actionId:'btw')回插本会话 store
    *  末尾(前端可见、不进 SDK resume 上下文,见 ChatMessage 渲染)。 */
@@ -1158,6 +1210,10 @@ export function useChatSession(sessionId: Ref<string | null>) {
     currentModel: computed(() => current.value?.currentModel ?? ""),
     /** 模型切换坐实回执（含 seq），面板据此弹成功/失败提示；null 表示没切过。 */
     modelSwitchResult: computed(() => current.value?.modelSwitchResult ?? null),
+    /** sidecar 坐实的当前 effort（空串 = 还没学到，选择器以本地值为准）。 */
+    currentEffort: computed(() => current.value?.currentEffort ?? ""),
+    /** effort 切换失败回执（含 seq），面板据此弹失败提示。 */
+    effortSwitchError: computed(() => current.value?.effortSwitchError ?? null),
     contextUsage: computed(() => current.value?.contextUsage ?? null),
     /** 只驱动会话尾部的压缩状态条，不属于消息历史。 */
     contextCompaction: computed(() => current.value?.contextCompaction ?? null),
@@ -1190,6 +1246,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
     stopSession,
     onSessionCreated,
     setModel,
+    setEffort,
     setPermissionMode,
   };
 }

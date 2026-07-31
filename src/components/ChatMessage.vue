@@ -38,6 +38,18 @@ const modelBadge = computed(() => {
   const label = m.modelLabel ?? m.model;
   return isModelInList(props.models ?? [], label) ? label : m.model;
 });
+
+/** 本轮 effort 并进模型徽标（"k3 · HIGH"），与模型名保持同一 accent 色。 */
+const modelBadgeTooltip = computed(() => {
+  const lines: string[] = [];
+  if (modelBadge.value) {
+    lines.push("本条回答实际使用的模型（API 落盘标识）——问模型「你是什么模型」得到的自报身份不可靠，以这里为准");
+  }
+  if (props.message.turnEffort) {
+    lines.push(`本轮 effort：${props.message.turnEffort}（回合结束时 API 侧坐实的实际档位，含静默降级）`);
+  }
+  return lines.join("\n");
+});
 /** 整条用户消息只有一个 ActionBlock 时，不套铜底气泡——胶囊自身带边框/底色，
  *  套在 accent 实心底上会糊成一团。直接作为右对齐的胶囊落在消息行里。 */
 const isActionChip = computed(
@@ -158,12 +170,15 @@ function handleTextClick(e: MouseEvent) {
           :block="(seg.block as any)"
         />
       </template>
-      <div v-if="!isUser && (modelBadge || message.usage)" class="msg-meta">
+      <div v-if="!isUser && (modelBadge || message.turnEffort || message.usage)" class="msg-meta">
         <span
-          v-if="modelBadge"
+          v-if="modelBadge || message.turnEffort"
           class="msg-model"
-          v-tooltip="'本条回答实际使用的模型（API 落盘标识）——问模型「你是什么模型」得到的自报身份不可靠，以这里为准'"
-        >{{ modelBadge }}</span>
+          v-tooltip="modelBadgeTooltip"
+        >{{ modelBadge }}<span
+          v-if="message.turnEffort"
+          class="msg-model-effort"
+        >{{ modelBadge ? "· " : "" }}{{ message.turnEffort.toUpperCase() }}</span></span>
         <TurnUsageBadge v-if="message.usage" class="msg-usage" :usage="message.usage" />
       </div>
     </div>
@@ -386,6 +401,11 @@ function handleTextClick(e: MouseEvent) {
 
 .msg-meta .msg-usage {
   margin-top: 0;
+}
+
+/* 徽标内的 effort 部分：与模型名同 pill 同色，仅字重略作区分 */
+.msg-model-effort {
+  font-weight: 700;
 }
 
 /* 用量行：GALLERY 要求 tabular-nums */

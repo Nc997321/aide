@@ -105,7 +105,12 @@ export type ChatEvent =
       fromSubagent?: { id: string; agentName: string };
     }
   | { type: "permission_cancelled"; id: string }
-  | { type: "message_stop"; stop_reason: string; total_cost_usd: number | null; usage: TurnUsage | null }
+  // effort：本轮实际生效的思考深度（sidecar 从回合结束信号里读到的权威值，
+  // 可能含 provider 侧的静默降级）。可选字段——provider 没有 effort 概念就不带。
+  | { type: "message_stop"; stop_reason: string; total_cost_usd: number | null; usage: TurnUsage | null; effort?: string }
+  // effort 切换的回执/同步广播——用户显式 set_effort 后由 sidecar 发出。成功带新值；
+  // 失败（provider 驳回）带回滚后的旧值 + error。query 未起时本地落账也发（无 error）。
+  | { type: "effort_changed"; effort: string; error?: string }
   // 插队消息已登记、在等安全边界（当前工具调用跑完）才真正 interrupt——前端据此
   // 显示"待发出"提示条。prompt 供提示条展示原文。
   | { type: "jump_queued"; prompt: string }
@@ -222,6 +227,10 @@ export type SidecarCommand =
   // 成功后任务会走正常终态通道（bg_task_ended, status:"stopped"），不需要额外回执事件。
   | { cmd: "stop_bg_task"; session_id: string; task_id: string }
   | { cmd: "set_model"; session_id: string; model: string }
+  // 会话级思考深度切换（provider-agnostic 不透明字符串；Claude sidecar 解释为
+  // low/medium/high/xhigh/max）。首条消息前的初始值走 send 的 env 通道
+  // （CLAUDE_CODE_EFFORT_LEVEL，与 ANTHROPIC_MODEL 同形），这里只管存活会话的切换。
+  | { cmd: "set_effort"; session_id: string; effort: string }
   | { cmd: "set_permission_mode"; session_id: string; mode: string }
   // 停止一个会话：Runtime 内部调 worker.stop()（q.close() + 清理），不再由 Rust kill 进程。
   | { cmd: "session_stop"; session_id: string }

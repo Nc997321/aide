@@ -34,6 +34,8 @@ const {
   models,
   currentModel,
   modelSwitchResult,
+  currentEffort,
+  effortSwitchError,
   contextUsage,
   contextCompaction,
   rateLimit,
@@ -51,6 +53,7 @@ const {
   interrupt,
   stopSession,
   setModel,
+  setEffort,
   setPermissionMode,
   respondPermission,
 } = useChatSession(sessionIdRef);
@@ -122,6 +125,8 @@ function onNewTab() {
       :models="models"
       :current-model="currentModel"
       :model-switch-result="modelSwitchResult"
+      :current-effort="currentEffort"
+      :effort-switch-error="effortSwitchError"
       :context-usage="contextUsage"
       :context-compaction="contextCompaction"
       :rate-limit="rateLimit"
@@ -139,6 +144,7 @@ function onNewTab() {
       @send-btw="onSendBtw"
       @interrupt="interrupt"
       @set-model="setModel"
+      @set-effort="setEffort"
       @set-permission-mode="setPermissionMode"
       @respond-permission="(id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string) => respondPermission(id, approved, answers, nextMode)"
     />

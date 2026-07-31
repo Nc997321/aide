@@ -31,6 +31,7 @@ const effortOptions = [
   { value: "LOW", label: "LOW" },
   { value: "MEDIUM", label: "MEDIUM" },
   { value: "HIGH", label: "HIGH" },
+  { value: "XHIGH", label: "XHIGH" },
   { value: "MAX", label: "MAX" },
 ];
 
@@ -382,15 +383,18 @@ function removeModelTag(idx: number) {
           </div>
         </div>
 
-        <!-- Effort Level：所有 provider 都显示（SystemDefault 现为正常 preset） -->
+        <!-- Effort Level：所有 provider 都显示（SystemDefault 现为正常 preset）。
+             语义：新会话的默认档位——会话开始后由输入框工具栏的选择器接管（随时切换，
+             即时生效）。这里的"默认"= 不在会话级覆盖，让 CLI/模型用自己的默认（high）。 -->
         <div class="form-field">
-          <label>Effort Level</label>
+          <label>Effort Level（新会话默认）</label>
           <ThemedSelect
             :model-value="form.effortLevel"
             :options="effortOptions"
             block
             @update:model-value="form.effortLevel = $event"
           />
+          <span class="form-hint">新开会话的初始档位；会话中可在输入框工具栏随时切换</span>
         </div>
 
         <!-- 自动压缩：CLAUDE_CODE_AUTO_COMPACT_WINDOW + CLAUDE_AUTOCOMPACT_PCT_OVERRIDE。
