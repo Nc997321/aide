@@ -22,6 +22,7 @@ pub struct SettingsPaths {
     local_file_name: String,
     legacy_config: PathBuf,
     legacy_backup: PathBuf,
+    state: PathBuf,
 }
 
 impl SettingsPaths {
@@ -35,6 +36,7 @@ impl SettingsPaths {
             local_file_name: ".aide/settings.local.json".to_string(),
             legacy_config: crate::commands::config_path(),
             legacy_backup: user_config.join("config.json.migrated.bak"),
+            state: crate::commands::state_path(),
         })
     }
 
@@ -47,6 +49,7 @@ impl SettingsPaths {
             local_file_name: ".aide/settings.local.json".to_string(),
             legacy_config: root.join("config.json"),
             legacy_backup: root.join("config.json.migrated.bak"),
+            state: root.join("state.json"),
         }
     }
 
@@ -72,6 +75,11 @@ impl SettingsPaths {
 
     pub fn legacy_backup(&self) -> &Path {
         &self.legacy_backup
+    }
+
+    /// `state.json`——非设置体系运行时状态的家（state 播种的写入目标）。
+    pub fn state(&self) -> &Path {
+        &self.state
     }
 }
 

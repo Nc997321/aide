@@ -20,7 +20,7 @@ use std::sync::Mutex;
 
 use tauri::State;
 
-use super::settings::with_config_mut;
+use super::settings::with_state_mut;
 
 /// 冷启动时由 setup 存入、前端 mount 时消费的待预览路径。
 pub struct PendingOpenFile(pub Mutex<Option<String>>);
@@ -246,7 +246,7 @@ pub fn set_open_with_extensions(new_exts: Vec<String>) -> Result<(), String> {
     let _trace = crate::diagnostics::trace_command("set_open_with_extensions");
     let new_exts: Vec<String> = new_exts.iter().filter_map(|e| sanitize_ext(e)).collect();
 
-    let (added, removed) = with_config_mut(move |config| {
+    let (added, removed) = with_state_mut(move |config| {
         // 读取旧值：优先 camelCase（新约定），回退 snake_case（旧 config.json）。
         let old: Vec<String> = config
             .get("settings")

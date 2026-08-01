@@ -33,8 +33,8 @@ fn init_logging() {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 数据目录改名（~/.claude-code-desktop/ → ~/.aide/，原子 rename）必须在
-    // init_logging / load_workspace_config 之前——它们都会触碰 ~/.aide/（建 log/、读
-    // config.json），先 rename 才不会把 ~/.aide/ 提前建出来导致老数据卡住迁不过来。
+    // init_logging / load_workspace_state 之前——它们都会触碰 ~/.aide/（建 log/、读
+    // state.json），先 rename 才不会把 ~/.aide/ 提前建出来导致老数据卡住迁不过来。
     // 失败（杀软锁等）用 eprintln（此时 tracing 还没 init），下次启动重试。
     if let Err(e) = crate::commands::migration::ensure_aide_data_dir_migrated() {
         eprintln!("[aide] aide data dir migration failed: {e}");
@@ -53,7 +53,16 @@ pub fn run() {
     }));
 
     let shell_manager = shell::ShellManager::new();
-    let saved_key = commands::load_workspace_config();
+    // state.json 播种（legacy config.json → state.json 一次性 key 搬迁）必须在
+    // load_workspace_state 之前——它读的就是 state.json。幂等；失败保留 legacy
+    // 文件，设置迁移清理时会重试。
+    if let Err(e) = commands::settings::seed_state_from_legacy(
+        &commands::config_path(),
+        &commands::state_path(),
+    ) {
+        eprintln!("[aide] state.json seeding failed: {e}");
+    }
+    let saved_key = commands::load_workspace_state();
     let workspace_state = WorkspaceState::new();
     if let Some(key) = saved_key {
         // Resolve the encoded key back to a filesystem path

@@ -3,9 +3,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+use tauri::State;
 
 use super::{find_session_jsonl_globally, our_config_dir};
+use crate::settings::SettingsService;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct RecentSession {
@@ -135,17 +138,15 @@ static RECENT: Lazy<Mutex<RecentState>> = Lazy::new(|| Mutex::new(load_recent_fi
 
 // ── 辅助 ──
 
-/// 从主 config.json 读取 recent_limit，默认 10。
+/// 从设置体系（settings.json）读取 recent_limit，默认 10。
 ///
-/// `set_settings` 收的是 `serde_json::Value`，Tauri 不会转换 Value 内部的 key，
-/// 前端发 camelCase `recentLimit` 就以 `recentLimit` 落盘；这里按落盘约定取
-/// camelCase，并保留 snake_case 兜底以防手动编辑/旧格式。
-pub fn current_limit() -> usize {
-    let cfg = super::settings::load_config();
-    cfg.get("settings")
-        .and_then(|s| s.get("recentLimit").or_else(|| s.get("recent_limit")))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(10) as usize
+/// `set_settings` 落盘到 SettingsService（values.settings.recentLimit），这里必须
+/// 从同一个家读——曾读 config.json 的 settings 子树，设置体系迁移后那个家没了，
+/// 用户改的条数静默失效、永远拿默认 10。
+pub fn current_limit(service: &crate::settings::SettingsService) -> usize {
+    super::settings::public_settings(service)
+        .map(|s| s.recent_limit as usize)
+        .unwrap_or(10)
 }
 
 pub fn now_ms() -> u64 {
@@ -160,6 +161,7 @@ pub fn now_ms() -> u64 {
 
 #[tauri::command]
 pub fn record_recent_session(
+    service: State<'_, Arc<SettingsService>>,
     ws_key: String,
     ws_name: String,
     session_id: String,
@@ -168,24 +170,29 @@ pub fn record_recent_session(
     let _trace = crate::diagnostics::trace_command("record_recent_session");
     let entry = RecentSession { ws_key, ws_name, session_id, name, ts: now_ms() };
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
-    push_session(&mut guard, entry, current_limit());
+    push_session(&mut guard, entry, current_limit(&service));
     save_recent_file(&guard)
 }
 
 #[tauri::command]
-pub fn record_recent_file(ws_key: String, path: String, name: String) -> Result<(), String> {
+pub fn record_recent_file(
+    service: State<'_, Arc<SettingsService>>,
+    ws_key: String,
+    path: String,
+    name: String,
+) -> Result<(), String> {
     let _trace = crate::diagnostics::trace_command("record_recent_file");
     let entry = RecentFile { path, name, ts: now_ms() };
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
-    push_file(&mut guard, &ws_key, entry, current_limit());
+    push_file(&mut guard, &ws_key, entry, current_limit(&service));
     save_recent_file(&guard)
 }
 
 #[tauri::command]
-pub fn list_recent(ws_key: String) -> Result<RecentView, String> {
+pub fn list_recent(ws_key: String, service: State<'_, Arc<SettingsService>>) -> Result<RecentView, String> {
     let _trace = crate::diagnostics::trace_command("list_recent");
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
-    let limit = current_limit();
+    let limit = current_limit(&service);
     let mut need_save = prune_stale(&mut guard, &ws_key);
     if guard.sessions.len() > limit {
         guard.sessions.truncate(limit);

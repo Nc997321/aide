@@ -44,7 +44,7 @@ pub fn filter_hidden(infos: Vec<WorkspaceInfo>, hidden: &[String]) -> Vec<Worksp
     infos.into_iter().filter(|w| !hidden.contains(&w.key)).collect()
 }
 
-/// 读 config 里的 hiddenWorkspaces 黑名单。
+/// 读 state 里的 hiddenWorkspaces 黑名单。
 pub fn hidden_keys(config: &serde_json::Value) -> Vec<String> {
     config
         .get("hiddenWorkspaces")
@@ -53,7 +53,7 @@ pub fn hidden_keys(config: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// 把 key 加入黑名单（幂等）。config 缺字段时自动创建。
+/// 把 key 加入黑名单（幂等）。state 缺字段时自动创建。
 pub fn hide_in_config(config: &mut serde_json::Value, key: &str) {
     if !config.is_object() {
         // null or corrupted (string/array/etc.) — normalize to an empty object
@@ -78,7 +78,7 @@ pub fn unhide_in_config(config: &mut serde_json::Value, key: &str) {
     }
 }
 
-/// 清掉 config 的 workspace（激活）字段。
+/// 清掉 state 的 workspace（激活）字段。
 pub fn clear_active_in_config(config: &mut serde_json::Value) {
     if let Some(obj) = config.as_object_mut() {
         obj.remove("workspace");
@@ -104,7 +104,7 @@ pub async fn list_workspaces() -> Result<Vec<WorkspaceInfo>, String> {
                 workspaces.push(WorkspaceInfo { key, name, missing });
             }
         }
-        let hidden = hidden_keys(&super::settings::load_config());
+        let hidden = hidden_keys(&super::settings::load_state());
         Ok(filter_hidden(workspaces, &hidden))
     })
     .await
@@ -125,7 +125,7 @@ pub fn set_workspace(
         let mut p = workspace_state.path.lock().map_err(|e| e.to_string())?;
         *p = Some(PathBuf::from(path));
     }
-    let _ = save_workspace_config(&key);
+    let _ = save_workspace_state(&key);
     Ok(())
 }
 
@@ -143,7 +143,7 @@ pub fn create_workspace(
     let dir = claude_projects_dir().join(&key);
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建工作区目录失败: {}", e))?;
     // 重新登记 = 自动从黑名单移除
-    super::settings::with_config_mut(|config| {
+    super::settings::with_state_mut(|config| {
         unhide_in_config(config, &key);
         Ok(())
     })?;
@@ -156,17 +156,17 @@ pub fn create_workspace(
         let mut pp = workspace_state.path.lock().map_err(|e| e.to_string())?;
         *pp = Some(PathBuf::from(path.clone()));
     }
-    let _ = save_workspace_config(&key);
+    let _ = save_workspace_state(&key);
     Ok(WorkspaceInfo { key, name: path, missing: false })
 }
 
-pub fn load_workspace_config() -> Option<String> {
-    let config = super::settings::load_config();
+pub fn load_workspace_state() -> Option<String> {
+    let config = super::settings::load_state();
     config.get("workspace").and_then(|w| w.as_str()).map(|s| s.to_string())
 }
 
-fn save_workspace_config(path: &str) -> Result<(), String> {
-    super::settings::with_config_mut(|config| {
+fn save_workspace_state(path: &str) -> Result<(), String> {
+    super::settings::with_state_mut(|config| {
         config["workspace"] = serde_json::Value::String(path.to_string());
         Ok(())
     })
@@ -180,7 +180,7 @@ pub async fn remove_workspace(
 ) -> Result<(), String> {
     match mode.as_str() {
         "hide" => {
-            super::settings::with_config_mut(|config| {
+            super::settings::with_state_mut(|config| {
                 hide_in_config(config, &key);
                 Ok(())
             })?;
@@ -198,7 +198,7 @@ pub async fn remove_workspace(
             .map_err(|e| format!("删除任务失败: {}", e))?
             .map_err(|e| format!("删除目录失败: {}", e))?;
             // 已删，从黑名单移除（若曾被隐藏）
-            super::settings::with_config_mut(|config| {
+            super::settings::with_state_mut(|config| {
                 unhide_in_config(config, &key);
                 Ok(())
             })?;
@@ -220,7 +220,7 @@ pub async fn remove_workspace(
             let mut p = workspace_state.path.lock().map_err(|e| e.to_string())?;
             *p = None;
         }
-        super::settings::with_config_mut(|config| {
+        super::settings::with_state_mut(|config| {
             clear_active_in_config(config);
             Ok(())
         })?;
@@ -230,7 +230,7 @@ pub async fn remove_workspace(
 
 #[tauri::command]
 pub fn unhide_workspace(key: String) -> Result<(), String> {
-    super::settings::with_config_mut(|config| {
+    super::settings::with_state_mut(|config| {
         unhide_in_config(config, &key);
         Ok(())
     })

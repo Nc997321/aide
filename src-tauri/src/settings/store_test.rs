@@ -342,6 +342,47 @@ fn migration_cleanup_is_non_fatal_and_retries_after_a_new_document_exists() {
 }
 
 #[test]
+fn migration_cleanup_moves_live_keys_to_state_and_deletes_legacy() {
+    // legacy config.json 里仍住着非设置体系的 live key（workspace / 迁移标记等）：
+    // 清理时必须先把它们搬到 state.json（missing-only），再整体删除 legacy 文件。
+    // 曾直接整删，导致 claudeMigrationDone 每次启动被抹掉、迁移引导弹窗反复出现。
+    let fixture = TestStore::with_legacy_config(json!({
+        "settings": {"theme": "glass"},
+        "providers": [],
+        "active_provider": "__system_default__",
+        "workspace": "C--proj",
+        "claudeMigrationDone": true,
+        "claudeMigrationDismissed": false
+    }));
+    fixture.service().initialize_blocking().unwrap();
+    assert!(
+        !fixture.paths.legacy_config().exists(),
+        "live key 搬走后 legacy 文件应整体删除"
+    );
+    let text = std::fs::read_to_string(fixture.paths.state()).unwrap();
+    let state: Value = serde_json::from_str(&text).unwrap();
+    assert!(state.get("settings").is_none(), "settings 归设置文档，不进 state");
+    assert!(state.get("providers").is_none(), "providers 归设置文档，不进 state");
+    assert!(state.get("active_provider").is_none());
+    assert_eq!(
+        state.get("workspace").and_then(Value::as_str),
+        Some("C--proj")
+    );
+    assert_eq!(
+        state.get("claudeMigrationDone").and_then(Value::as_bool),
+        Some(true)
+    );
+    // 再来一次启动（重试清理路径）：state.json 不被覆盖、不丢 key
+    fixture.service().initialize_blocking().unwrap();
+    let text = std::fs::read_to_string(fixture.paths.state()).unwrap();
+    let state: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        state.get("claudeMigrationDone").and_then(Value::as_bool),
+        Some(true)
+    );
+}
+
+#[test]
 fn migration_backup_is_redacted_and_unknown_safe_fields_are_preserved() {
     let fixture = TestStore::with_legacy_config(json!({
         "settings": {
