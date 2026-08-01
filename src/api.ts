@@ -188,14 +188,8 @@ export const api = {
   gitDiffFiles(): Promise<DiffEntry[]> {
     return invoke("git_diff_files");
   },
-  gitStageAll(): Promise<void> {
-    return invoke("git_stage_all");
-  },
   gitRevertFile(path: string): Promise<void> {
     return invoke("git_revert_file", { path });
-  },
-  gitHasFile(path: string): Promise<boolean> {
-    return invoke("git_has_file", { path });
   },
 
   // 会话

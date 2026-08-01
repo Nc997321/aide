@@ -243,6 +243,19 @@ export interface GitStatus {
   entries: GitStatusEntry[];
 }
 
+export interface StashEntry {
+  index: number;
+  name: string;
+  message: string;
+  date: string;
+}
+
+export interface AheadBehind {
+  ahead: number;
+  behind: number;
+  hasUpstream: boolean;
+}
+
 // ── Grep types ──
 
 export interface GrepMatch {

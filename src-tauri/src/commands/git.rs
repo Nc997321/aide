@@ -95,6 +95,8 @@ fn unquote_git_path(s: &str) -> String {
 // ── Timeout + Mutex ──
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(15);
+/// fetch/pull/push 等网络操作走更长的超时——大仓库或慢网络下 15s 会误杀。
+const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Serialises all git invocations so concurrent calls never fight over
 /// `.git/index.lock`.  A poisoned lock is treated as a fatal error and
@@ -102,9 +104,14 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(15);
 static GIT_LOCK: Mutex<()> = Mutex::new(());
 
 /// Spawn `git` with the given arguments inside `root`, blocking until it
-/// finishes or `GIT_TIMEOUT` expires.  Uses `.output()` (no manual polling)
-/// and a helper thread for the timeout.
-fn git_run(args: &[&str], root: &std::path::Path) -> Result<std::process::Output, String> {
+/// finishes or `timeout` expires — on timeout the child is **killed** so no
+/// zombie git process is left behind.  stdout/stderr are drained on helper
+/// threads so a chatty child can't deadlock on a full pipe.
+fn git_run_with_timeout(
+    args: &[&str],
+    root: &std::path::Path,
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
     let _guard = GIT_LOCK
         .lock()
         .map_err(|e| format!("Git lock poisoned: {}", e))?;
@@ -118,41 +125,71 @@ fn git_run(args: &[&str], root: &std::path::Path) -> Result<std::process::Output
     #[cfg(windows)]
     { cmd.creation_flags(0x08000000); }
 
-    let child = cmd.spawn().map_err(|e| format!("Failed to spawn git: {}", e))?;
+    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn git: {}", e))?;
 
-    // Spawn a helper thread for wait_with_output; join with a timeout.
-    let handle = std::thread::spawn(move || child.wait_with_output());
+    let mut child_stdout = child.stdout.take().expect("stdout piped");
+    let mut child_stderr = child.stderr.take().expect("stderr piped");
+    let out_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut child_stdout, &mut buf).map(|_| buf)
+    });
+    let err_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut child_stderr, &mut buf).map(|_| buf)
+    });
+
     let start = Instant::now();
-    loop {
-        if handle.is_finished() {
-            return handle
-                .join()
-                .unwrap_or_else(|_| Err(std::io::Error::new(std::io::ErrorKind::Other, "Git thread panicked")))
-                .map_err(|e| format!("Failed to read git output: {}", e));
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = out_handle.join();
+                    let _ = err_handle.join();
+                    return Err(format!(
+                        "Git command 'git {}' timed out after {}s",
+                        args.join(" "),
+                        timeout.as_secs(),
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("Failed to wait on git: {}", e)),
         }
-        if start.elapsed() > GIT_TIMEOUT {
-            return Err(format!(
-                "Git command 'git {}' timed out after {}s",
-                args.join(" "),
-                GIT_TIMEOUT.as_secs(),
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    };
+
+    let stdout = out_handle.join().unwrap_or(Ok(Vec::new())).unwrap_or_default();
+    let stderr = err_handle.join().unwrap_or(Ok(Vec::new())).unwrap_or_default();
+    Ok(std::process::Output { status, stdout, stderr })
+}
+
+/// Default-timeout variant used by all local (non-network) git invocations.
+fn git_run(args: &[&str], root: &std::path::Path) -> Result<std::process::Output, String> {
+    git_run_with_timeout(args, root, GIT_TIMEOUT)
 }
 
 /// Run git inside `tokio::spawn_blocking` so the async handler never blocks
 /// the tokio worker thread.
+async fn git_run_async_timeout(
+    args: Vec<String>,
+    root: std::path::PathBuf,
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
+    tokio::task::spawn_blocking(move || {
+        let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        git_run_with_timeout(&refs, &root, timeout)
+    })
+    .await
+    .map_err(|e| format!("Git task panicked: {}", e))?
+}
+
 async fn git_run_async(
     args: Vec<String>,
     root: std::path::PathBuf,
 ) -> Result<std::process::Output, String> {
-    tokio::task::spawn_blocking(move || {
-        let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        git_run(&refs, &root)
-    })
-    .await
-    .map_err(|e| format!("Git task panicked: {}", e))?
+    git_run_async_timeout(args, root, GIT_TIMEOUT).await
 }
 
 /// Like `git_run_async` but accepts an arbitrary closure that receives `root`
@@ -310,29 +347,6 @@ pub async fn git_unstage_file(
     Ok(())
 }
 
-/// Returns true if the file exists on disk OR is committed in HEAD.
-/// Used by the frontend to decide whether a previous-round change entry is still valid.
-/// Checking HEAD (not the index) avoids false positives from ephemeral files
-/// that were staged by `git add -A` but never committed.
-#[tauri::command]
-pub async fn git_has_file(
-    workspace_state: State<'_, WorkspaceState>,
-    path: String,
-) -> Result<bool, String> {
-    let root = project_root_for_commands(&workspace_state);
-    // git_run 会阻塞等子进程 + 抢全局 GIT_LOCK（超时上限 15s）——同步 command
-    // 跑在主线程上意味着窗口级卡死，必须和其他 git 命令一样走 blocking 线程。
-    git_run_blocking(move || {
-        // 1. Check disk
-        if root.join(&path).exists() {
-            return Ok(true);
-        }
-        // 2. Check HEAD commit (was the file ever committed?)
-        Ok(git_run(&["cat-file", "-e", &format!("HEAD:{}", path)], &root).is_ok())
-    })
-    .await
-}
-
 #[tauri::command]
 pub async fn git_revert_file(
     workspace_state: State<'_, WorkspaceState>,
@@ -346,9 +360,18 @@ pub async fn git_revert_file(
 #[tauri::command]
 pub async fn git_stash(
     workspace_state: State<'_, WorkspaceState>,
+    message: Option<String>,
 ) -> Result<(), String> {
     let root = project_root_for_commands(&workspace_state);
-    let output = git_run_async(vec!["stash".into(), "push".into()], root).await
+    let mut args = vec!["stash".to_string(), "push".to_string()];
+    if let Some(m) = message {
+        let m = m.trim().to_string();
+        if !m.is_empty() {
+            args.push("-m".to_string());
+            args.push(m);
+        }
+    }
+    let output = git_run_async(args, root).await
         .map_err(|e| format!("STASH_FAILED: {}", e))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -360,13 +383,96 @@ pub async fn git_stash(
 #[tauri::command]
 pub async fn git_stash_pop(
     workspace_state: State<'_, WorkspaceState>,
+    index: Option<u32>,
 ) -> Result<(), String> {
     let root = project_root_for_commands(&workspace_state);
-    let output = git_run_async(vec!["stash".into(), "pop".into()], root).await
+    let mut args = vec!["stash".to_string(), "pop".to_string()];
+    if let Some(i) = index {
+        args.push(format!("stash@{{{}}}", i));
+    }
+    let output = git_run_async(args, root).await
         .map_err(|e| format!("STASH_POP_FAILED: {}", e))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("STASH_POP_FAILED: {}", stderr.trim()));
+    }
+    Ok(())
+}
+
+#[derive(Debug, serde::Serialize, Clone)]
+pub struct StashEntry {
+    pub index: u32,
+    pub name: String,
+    pub message: String,
+    pub date: String,
+}
+
+#[tauri::command]
+pub async fn git_stash_list(
+    workspace_state: State<'_, WorkspaceState>,
+) -> Result<Vec<StashEntry>, String> {
+    let root = project_root_for_commands(&workspace_state);
+    if !root.join(".git").exists() {
+        return Ok(Vec::new());
+    }
+    let output = git_run_async(
+        vec!["stash".into(), "list".into(), "--format=%gd|%gs|%cr".into()],
+        root,
+    ).await?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut entries = Vec::new();
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.splitn(3, '|').collect();
+        if parts.len() < 3 { continue; }
+        let name = parts[0].to_string();
+        // stash@{N} → N；解析不出的行跳过（防御性格式变化）
+        let index = name
+            .trim_start_matches("stash@{")
+            .trim_end_matches('}')
+            .parse::<u32>();
+        let Ok(index) = index else { continue; };
+        entries.push(StashEntry {
+            index,
+            name,
+            message: parts[1].to_string(),
+            date: parts[2].to_string(),
+        });
+    }
+    Ok(entries)
+}
+
+#[tauri::command]
+pub async fn git_stash_apply(
+    workspace_state: State<'_, WorkspaceState>,
+    index: u32,
+) -> Result<(), String> {
+    let root = project_root_for_commands(&workspace_state);
+    let output = git_run_async(
+        vec!["stash".into(), "apply".into(), format!("stash@{{{}}}", index)],
+        root,
+    ).await
+        .map_err(|e| format!("STASH_APPLY_FAILED: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("STASH_APPLY_FAILED: {}", stderr.trim()));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_stash_drop(
+    workspace_state: State<'_, WorkspaceState>,
+    index: u32,
+) -> Result<(), String> {
+    let root = project_root_for_commands(&workspace_state);
+    let output = git_run_async(
+        vec!["stash".into(), "drop".into(), format!("stash@{{{}}}", index)],
+        root,
+    ).await
+        .map_err(|e| format!("STASH_DROP_FAILED: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("STASH_DROP_FAILED: {}", stderr.trim()));
     }
     Ok(())
 }
@@ -434,12 +540,13 @@ pub async fn git_pull(
 
     let branch = detect_git_branch(&root);
     if branch.is_empty() {
-        return Err("PULL_FAILED: Cannot detect current branch".into());
+        return Err("DETACHED_HEAD: 当前处于分离 HEAD 状态，请先切换到一个分支再拉取".into());
     }
 
-    let output = git_run_async(
+    let output = git_run_async_timeout(
         vec!["pull".into(), "origin".into(), branch.clone()],
         root,
+        GIT_NETWORK_TIMEOUT,
     ).await.map_err(|e| format!("PULL_FAILED: {}", e))?;
 
     if !output.status.success() {
@@ -458,6 +565,82 @@ pub async fn git_pull(
         return Err(format!("{}: {}", code, combined.trim()));
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn git_fetch(
+    workspace_state: State<'_, WorkspaceState>,
+) -> Result<(), String> {
+    let root = project_root_for_commands(&workspace_state);
+    if !root.join(".git").exists() {
+        return Err("FETCH_FAILED: Not a git repository".into());
+    }
+
+    // Prefer `origin`; fall back to the first configured remote; none → error.
+    let remote = match git_run_async(vec!["remote".into()], root.clone()).await {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let remotes: Vec<&str> = stdout.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+            if remotes.iter().any(|r| *r == "origin") {
+                "origin".to_string()
+            } else if let Some(first) = remotes.first() {
+                first.to_string()
+            } else {
+                return Err("NO_REMOTE: 没有配置任何远程仓库".into());
+            }
+        }
+        _ => return Err("NO_REMOTE: 没有配置任何远程仓库".into()),
+    };
+
+    let output = git_run_async_timeout(
+        vec!["fetch".into(), remote, "--prune".into()],
+        root,
+        GIT_NETWORK_TIMEOUT,
+    ).await.map_err(|e| format!("FETCH_FAILED: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let msg = stderr.trim();
+        let code = if msg.contains("Could not resolve hostname") || msg.contains("unable to access") {
+            "NETWORK_FAILURE"
+        } else {
+            "FETCH_FAILED"
+        };
+        return Err(format!("{}: {}", code, msg));
+    }
+    Ok(())
+}
+
+#[derive(Debug, serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AheadBehind {
+    pub ahead: u32,
+    pub behind: u32,
+    pub has_upstream: bool,
+}
+
+/// `git rev-list --left-right --count @{upstream}...HEAD` →
+/// left = 仅远端（behind），right = 仅本地（ahead）。无 upstream 时全 0。
+#[tauri::command]
+pub async fn git_ahead_behind(
+    workspace_state: State<'_, WorkspaceState>,
+) -> Result<AheadBehind, String> {
+    let root = project_root_for_commands(&workspace_state);
+    if !root.join(".git").exists() {
+        return Ok(AheadBehind { ahead: 0, behind: 0, has_upstream: false });
+    }
+    let output = git_run_async(
+        vec!["rev-list".into(), "--left-right".into(), "--count".into(), "@{upstream}...HEAD".into()],
+        root,
+    ).await?;
+    if !output.status.success() {
+        // 无 upstream 或 detached HEAD
+        return Ok(AheadBehind { ahead: 0, behind: 0, has_upstream: false });
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut parts = stdout.split_whitespace();
+    let behind = parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+    let ahead = parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+    Ok(AheadBehind { ahead, behind, has_upstream: true })
 }
 
 #[tauri::command]
@@ -491,9 +674,10 @@ pub async fn git_log(
     workspace_state: State<'_, WorkspaceState>,
     limit: Option<u32>,
     branch: Option<String>,
+    skip: Option<u32>,
 ) -> Result<Vec<CommitEntry>, String> {
     let root = project_root_for_commands(&workspace_state);
-    info!(root = %root.display(), ?limit, "git_log");
+    info!(root = %root.display(), ?limit, ?skip, "git_log");
     if !root.join(".git").exists() {
         return Ok(Vec::new());
     }
@@ -504,6 +688,11 @@ pub async fn git_log(
         "--format=%H|%s|%an|%ar".to_string(),
         format!("-n{}", limit),
     ];
+    if let Some(s) = skip {
+        if s > 0 {
+            args.push(format!("--skip={}", s));
+        }
+    }
     if let Some(b) = branch {
         args.push(b);
     }
@@ -880,6 +1069,8 @@ pub async fn git_status(
         let x = line.chars().next().unwrap_or(' ');
         let y = line.chars().nth(1).unwrap_or(' ');
         let (staged, status) = match (x, y) {
+            // 未合并（冲突）状态：UU AA DD AU UA DU UD → C(onflict)
+            ('U', 'U') | ('A', 'A') | ('D', 'D') | ('A', 'U') | ('U', 'A') | ('D', 'U') | ('U', 'D') => (false, "C"),
             ('M', ' ') => (true, "M"),
             ('A', ' ') => (true, "A"),
             ('D', ' ') => (true, "D"),
@@ -906,6 +1097,7 @@ pub async fn git_status(
 pub async fn git_commit(
     workspace_state: State<'_, WorkspaceState>,
     message: String,
+    amend: Option<bool>,
 ) -> Result<String, String> {
     let root = project_root_for_commands(&workspace_state);
     if !root.join(".git").exists() {
@@ -914,14 +1106,30 @@ pub async fn git_commit(
 
     // status + commit + rev-parse in one blocking task
     git_run_blocking(move || {
-        let status_out = git_run(&["status", "--porcelain"], &root)
-            .map_err(|e| format!("Failed to run git status: {}", e))?;
-        let stdout = String::from_utf8_lossy(&status_out.stdout);
-        if stdout.trim().is_empty() {
-            return Err("Nothing to commit (working tree clean)".into());
+        let amend = amend.unwrap_or(false);
+        if !amend {
+            let status_out = git_run(&["status", "--porcelain"], &root)
+                .map_err(|e| format!("Failed to run git status: {}", e))?;
+            let stdout = String::from_utf8_lossy(&status_out.stdout);
+            if stdout.trim().is_empty() {
+                return Err("Nothing to commit (working tree clean)".into());
+            }
         }
 
-        let output = git_run(&["commit", "-m", &message], &root)
+        // amend 无 message 时保留原提交信息（--no-edit）；
+        // amend 对工作区干净（纯改 message）也合法，故跳过上面的 precheck。
+        let mut args: Vec<&str> = vec!["commit"];
+        if amend {
+            args.push("--amend");
+            if message.trim().is_empty() {
+                args.push("--no-edit");
+            }
+        }
+        if !message.trim().is_empty() {
+            args.push("-m");
+            args.push(&message);
+        }
+        let output = git_run(&args, &root)
             .map_err(|e| format!("Failed to run git commit: {}", e))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1000,14 +1208,19 @@ pub async fn git_push(
 
     let branch = detect_git_branch(&root);
     if branch.is_empty() {
-        return Err("Could not detect current branch".into());
+        return Err("DETACHED_HEAD: 当前处于分离 HEAD 状态，请先切换到一个分支再推送".into());
     }
 
-    // Detect the default remote (origin or first available)
+    // Prefer `origin`; fall back to the first configured remote.
     let remote = match git_run_async(vec!["remote".into()], root.clone()).await {
         Ok(o) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout);
-            stdout.lines().next().map(|s| s.to_string()).unwrap_or_else(|| "origin".into())
+            let remotes: Vec<&str> = stdout.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+            if remotes.iter().any(|r| *r == "origin") {
+                "origin".to_string()
+            } else {
+                remotes.first().map(|s| s.to_string()).unwrap_or_else(|| "origin".into())
+            }
         }
         _ => "origin".into(),
     };
@@ -1018,7 +1231,7 @@ pub async fn git_push(
     }
 
     info!(%remote, %branch, ?force, "git_push");
-    let output = git_run_async(args, root)
+    let output = git_run_async_timeout(args, root, GIT_NETWORK_TIMEOUT)
     .await
     .map_err(|e| format!("Failed to run git push: {}", e))?;
 

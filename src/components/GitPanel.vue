@@ -13,18 +13,27 @@ const {
   commits,
   branches,
   currentBranch,
+  detachedAt,
   unstagedFiles,
   stagedFiles,
+  conflictFiles,
+  hasConflicts,
+  hasChanges,
   unpushedHashes,
   hasUnpushed,
   unpushedCount,
   projectRoot,
   loading,
+  hasMoreCommits,
+  loadingMore,
   expandedCommit,
   commitDetail,
   detailLoading,
+  stashes,
+  aheadBehind,
   loadAll,
   loadStatus,
+  loadMoreCommits,
   toggleCommit,
   switchBranch,
   createBranch,
@@ -38,12 +47,20 @@ const {
   doPush,
   doForcePush,
   doPull,
+  doFetch,
+  doStashPush,
+  doStashApply,
+  doStashPop,
+  doStashDrop,
   pushing,
   pushError,
   pulling,
   pullError,
+  fetching,
+  fetchError,
   clearPushError,
   clearPullError,
+  clearFetchError,
 } = useGit();
 
 const fileViewer = useFileViewer();
@@ -59,9 +76,17 @@ const pendingDeleteBranch = ref("");
 const stashPopWarning = ref("");
 const changesExpanded = ref(true);
 const commitsExpanded = ref(true);
+const stashExpanded = ref(true);
 const commitMessage = ref("");
 const committing = ref(false);
 const commitError = ref("");
+const amendMode = ref(false);
+
+const branchDisplay = computed(() => {
+  if (currentBranch.value) return currentBranch.value;
+  if (detachedAt.value) return `⚠ detached @${detachedAt.value.slice(0, 7)}`;
+  return "unknown";
+});
 
 onMounted(() => { loadAll(); });
 
@@ -167,16 +192,69 @@ async function onDeleteUntracked(path: string) {
 }
 
 async function onCommit() {
-  if (!commitMessage.value.trim()) return;
+  // amend 模式允许空 message（保留原提交信息）；普通提交必须有 message
+  if (!amendMode.value && !commitMessage.value.trim()) return;
   committing.value = true;
   commitError.value = "";
   try {
-    await doCommit(commitMessage.value.trim());
+    await doCommit(commitMessage.value.trim(), amendMode.value);
     commitMessage.value = "";
+    amendMode.value = false;
   } catch (e) {
     commitError.value = typeof e === "string" ? e : (e as Error).message || "提交失败";
   } finally {
     committing.value = false;
+  }
+}
+
+async function onFetch() {
+  clearFetchError();
+  try {
+    await doFetch();
+  } catch (_) {
+    // error stored in fetchError ref by doFetch
+  }
+}
+
+async function onStashPush() {
+  const msg = await promptDialog("Stash 当前改动", "备注（可选），留空则为默认 WIP", "Stash");
+  // 点取消（null）不执行；空串 = 无备注 stash
+  if (msg === null) return;
+  try {
+    await doStashPush(msg || undefined);
+  } catch (e) {
+    showToast(`Stash 失败：${typeof e === "string" ? e : (e as Error).message || e}`, "danger");
+  }
+}
+
+async function onStashApply(index: number) {
+  try {
+    await doStashApply(index);
+  } catch (e) {
+    showToast(`Apply 失败（可能存在冲突）：${typeof e === "string" ? e : (e as Error).message || e}`, "danger");
+  }
+}
+
+async function onStashPop(index: number) {
+  try {
+    await doStashPop(index);
+  } catch (e) {
+    showToast(`Pop 失败（stash 已保留）：${typeof e === "string" ? e : (e as Error).message || e}`, "danger");
+  }
+}
+
+async function onStashDrop(index: number) {
+  const ok = await confirmDialog(
+    "删除 Stash",
+    `确定要删除 stash@{${index}} 吗？此操作不可撤回。`,
+    "删除",
+    true,
+  );
+  if (!ok) return;
+  try {
+    await doStashDrop(index);
+  } catch (e) {
+    showToast(`Drop 失败：${typeof e === "string" ? e : (e as Error).message || e}`, "danger");
   }
 }
 
@@ -186,6 +264,10 @@ const parsedPushError = computed(() => {
 
 const parsedPullError = computed(() => {
   return pullError.value ? parseGitError(pullError.value) : null;
+});
+
+const parsedFetchError = computed(() => {
+  return fetchError.value ? parseGitError(fetchError.value) : null;
 });
 
 async function onPush() {
@@ -308,7 +390,7 @@ defineExpose({ reload: loadAll });
       <div class="branch-dropdown-wrapper">
         <button class="branch-btn" @click="onToggleBranchDropdown">
           <span class="branch-icon">⎇</span>
-          <span class="branch-name">{{ currentBranch || "unknown" }}</span>
+          <span class="branch-name">{{ branchDisplay }}</span>
           <svg class="branch-arrow" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         <div v-if="branchDropdownOpen" class="branch-dropdown" @mouseleave="branchDropdownOpen = false">
@@ -360,6 +442,11 @@ defineExpose({ reload: loadAll });
       <button class="stash-warning-close" @click="stashPopWarning = ''">✕</button>
     </div>
 
+    <!-- 冲突提示条 -->
+    <div v-if="hasConflicts" class="conflict-banner">
+      <span class="conflict-banner-text">⚠ {{ conflictFiles.length }} 个文件存在合并冲突，解决后 stage 并提交</span>
+    </div>
+
     <!-- Staged -->
     <div v-if="stagedFiles.length > 0" class="git-section">
       <button class="section-header section-header-staged" @click="changesExpanded = !changesExpanded">
@@ -377,12 +464,23 @@ defineExpose({ reload: loadAll });
       </div>
     </div>
 
-    <!-- Commit bar -->
-    <div v-if="stagedFiles.length > 0" class="commit-bar">
-      <input v-model="commitMessage" class="commit-input" placeholder="Commit message..." @keydown.enter="onCommit" />
-      <button class="commit-btn" :disabled="!commitMessage.trim() || committing" @click="onCommit">
-        {{ committing ? "Committing..." : "Commit" }}
+    <!-- Commit bar（amend 模式下无 staged 改动也可用——纯改 message） -->
+    <div v-if="stagedFiles.length > 0 || amendMode" class="commit-bar">
+      <input
+        v-model="commitMessage"
+        class="commit-input"
+        :placeholder="amendMode ? '留空则保留原 message...' : 'Commit message...'"
+        @keydown.enter="onCommit"
+      />
+      <button class="commit-btn" :disabled="(!amendMode && !commitMessage.trim()) || committing" @click="onCommit">
+        {{ committing ? "Committing..." : amendMode ? "Amend" : "Commit" }}
       </button>
+    </div>
+    <div v-if="commits.length > 0 && (stagedFiles.length > 0 || amendMode)" class="amend-row">
+      <label class="amend-label">
+        <input v-model="amendMode" type="checkbox" />
+        Amend 上一次提交
+      </label>
     </div>
     <div v-if="commitError" class="commit-error">{{ commitError }}</div>
 
@@ -407,29 +505,65 @@ defineExpose({ reload: loadAll });
       </div>
     </div>
 
+    <!-- Stash -->
+    <div v-if="stashes.length > 0 || hasChanges" class="git-section">
+      <button class="section-header section-header-stash" @click="stashExpanded = !stashExpanded">
+        <svg class="section-arrow" :class="{ open: stashExpanded }" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="section-title">Stash</span>
+        <span v-if="stashes.length > 0" class="section-badge stash-badge">{{ stashes.length }}</span>
+        <span v-if="hasChanges" class="section-header-action stash-action" v-tooltip="'把当前改动存入 stash'" @click.stop="onStashPush">＋ Stash 当前改动</span>
+      </button>
+      <div v-show="stashExpanded" class="section-body">
+        <div v-if="stashes.length === 0" class="section-empty">No stashes</div>
+        <div v-for="s in stashes" :key="s.index" class="stash-row">
+          <span class="stash-idx">{{ s.name }}</span>
+          <span class="stash-msg" v-tooltip="s.message">{{ s.message }}</span>
+          <span class="stash-date">{{ s.date }}</span>
+          <span class="stash-actions">
+            <button v-tooltip="'应用但保留 stash'" @click="onStashApply(s.index)">Apply</button>
+            <button v-tooltip="'应用并移除该 stash'" @click="onStashPop(s.index)">Pop</button>
+            <button class="stash-drop" v-tooltip="'删除该 stash'" @click="onStashDrop(s.index)">Drop</button>
+          </span>
+        </div>
+      </div>
+    </div>
+
     <!-- Commits -->
     <div class="git-section commits-section">
       <button class="section-header section-header-commits" @click="commitsExpanded = !commitsExpanded">
         <svg class="section-arrow" :class="{ open: commitsExpanded }" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="section-title">Commits</span>
-        <span v-if="hasUnpushed" class="section-badge push-count-badge">{{ unpushedCount }}</span>
+        <span v-if="aheadBehind.ahead > 0" class="section-badge push-count-badge">↑{{ aheadBehind.ahead }}</span>
+        <span v-else-if="hasUnpushed" class="section-badge push-count-badge">{{ unpushedCount }}</span>
         <span v-if="commits.length > 0" class="section-badge commits-badge">{{ commits.length }}</span>
+        <span
+          class="section-header-action fetch-action"
+          :class="{ fetching }"
+          v-tooltip="'git fetch --prune'"
+          @click.stop="onFetch"
+        >
+          {{ fetching ? "Fetching..." : "Fetch ⟳" }}
+        </span>
         <span
           class="section-header-action pull-action"
           :class="{ pulling }"
           @click.stop="onPull"
         >
-          {{ pulling ? "Pulling..." : "Pull ↓" }}
+          {{ pulling ? "Pulling..." : aheadBehind.behind > 0 ? `Pull ↓${aheadBehind.behind}` : "Pull ↓" }}
         </span>
         <span
-          v-if="hasUnpushed"
+          v-if="aheadBehind.ahead > 0 || hasUnpushed"
           class="section-header-action push-action"
           :class="{ pushing }"
           @click.stop="onPush"
         >
-          {{ pushing ? "Pushing..." : "Push ↑" }}
+          {{ pushing ? "Pushing..." : aheadBehind.ahead > 0 ? `Push ↑${aheadBehind.ahead}` : "Push ↑" }}
         </span>
       </button>
+      <div v-if="parsedFetchError" class="fetch-error">
+        <span class="fetch-error-text">{{ parsedFetchError.message }}</span>
+        <button class="fetch-error-close" @click="clearFetchError">✕</button>
+      </div>
       <div v-if="parsedPullError" class="pull-error">
         <span class="pull-error-text">{{ parsedPullError.message }}</span>
         <span class="pull-error-actions">
@@ -494,6 +628,9 @@ defineExpose({ reload: loadAll });
               </div>
             </div>
           </template>
+          <button v-if="hasMoreCommits" class="load-more" :disabled="loadingMore" @click="loadMoreCommits()">
+            {{ loadingMore ? "加载中..." : "加载更多" }}
+          </button>
         </template>
       </div>
     </div>
@@ -599,6 +736,74 @@ defineExpose({ reload: loadAll });
   cursor: pointer; font-size: 11px; padding: 1px 4px; border-radius: 3px; font-family: inherit;
 }
 .stash-warning-close:hover { background: color-mix(in srgb, var(--aide-warning) 15%, transparent); color: var(--aide-warning); }
+
+/* ── 冲突提示条 ── */
+.conflict-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; font-size: 11px; color: var(--aide-danger);
+  background: color-mix(in srgb, var(--aide-danger) 8%, transparent);
+  border-bottom: 1px solid var(--aide-surface-default);
+}
+.conflict-banner-text { flex: 1; line-height: 1.4; }
+
+/* ── Amend 行 ── */
+.amend-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 10px 8px; margin-top: -2px;
+  border-bottom: 1px solid var(--aide-surface-default);
+  font-size: 11px; color: var(--aide-text-muted);
+}
+.amend-label { display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
+.amend-label input { accent-color: var(--aide-accent); }
+
+/* ── Stash 区块 ── */
+.section-header-stash .section-title { color: var(--aide-info); }
+.stash-badge { background: color-mix(in srgb, var(--aide-info) 15%, transparent); color: var(--aide-info); }
+.stash-action:hover { color: var(--aide-info); background: color-mix(in srgb, var(--aide-info) 12%, transparent); }
+.stash-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 10px; font-size: 12px; color: var(--aide-text-secondary);
+}
+.stash-row:hover { background: var(--aide-surface-default); }
+.stash-idx { font-family: var(--aide-font-mono); font-size: 10px; color: var(--aide-info); flex-shrink: 0; }
+.stash-msg { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stash-date { font-size: 10px; color: var(--aide-text-muted); flex-shrink: 0; }
+.stash-actions { display: none; gap: 2px; flex-shrink: 0; }
+.stash-row:hover .stash-actions { display: flex; }
+.stash-actions button {
+  background: none; border: none; font-size: 10px; cursor: pointer;
+  padding: 1px 5px; border-radius: 3px; color: var(--aide-text-muted); font-family: inherit;
+}
+.stash-actions button:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+.stash-actions button.stash-drop:hover { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 12%, transparent); }
+
+/* ── Fetch ── */
+.fetch-action:hover { color: var(--aide-accent); background: color-mix(in srgb, var(--aide-accent) 12%, transparent); }
+.fetch-action.fetching { opacity: 0.5; pointer-events: none; }
+.fetch-error {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 6px 10px; font-size: 11px; color: var(--aide-danger);
+  background: color-mix(in srgb, var(--aide-danger) 8%, transparent); border-bottom: 1px solid var(--aide-surface-default);
+}
+.fetch-error-text { flex: 1; white-space: pre-wrap; word-break: break-all; line-height: 1.4; }
+.fetch-error-close {
+  flex-shrink: 0; background: none; border: none; color: var(--aide-text-muted);
+  cursor: pointer; font-size: 11px; padding: 1px 4px; border-radius: 3px; font-family: inherit;
+}
+.fetch-error-close:hover { background: color-mix(in srgb, var(--aide-danger) 15%, transparent); color: var(--aide-danger); }
+
+/* ── 加载更多 ── */
+.load-more {
+  display: block; width: calc(100% - 20px); margin: 8px 10px; padding: 5px;
+  background: var(--aide-surface-default); border: none; border-radius: 6px;
+  color: var(--aide-text-muted); font-size: 11px; cursor: pointer; font-family: inherit;
+  transition: background 0.12s, color 0.12s;
+}
+.load-more:hover:not(:disabled) { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+.load-more:disabled { opacity: 0.5; cursor: default; }
+
+/* ── 冲突状态字母 ── */
+.status-C { background: color-mix(in srgb, var(--aide-danger) 22%, transparent); color: var(--aide-danger); }
 
 .git-section { border-bottom: 1px solid var(--aide-surface-default); flex-shrink: 0; }
 .commits-section { flex: 1; min-height: 0; display: flex; flex-direction: column; }

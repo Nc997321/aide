@@ -4,6 +4,7 @@ import { useContextMenu } from "../composables/useContextMenu";
 import { fileMenuItems, directoryMenuItems } from "../menus/contextMenus";
 import { useFileClipboard } from "../composables/useFileClipboard";
 import { useModal } from "../composables/useModal";
+import { useGit } from "../composables/useGit";
 import { getFileIcon } from "../utils/fileIcons";
 
 interface FileEntry {
@@ -159,6 +160,30 @@ async function onDrop(e: DragEvent) {
 
 const isExpanded = () => props.expandedDirs.has(props.node.path);
 
+// ── Git 装饰（VSCode 风格：文件变色+字母徽标，目录聚合变色无徽标） ──
+const { fileGitStatus, dirGitStatus } = useGit();
+
+const gitStatusLetter = computed<string | null>(() => {
+  if (props.node.is_dir) return dirGitStatus(props.node.path);
+  return fileGitStatus(props.node.path)?.status ?? null;
+});
+
+/** 变色修饰类：git-m / git-a / git-d / git-u / git-c（目录额外带 git-dir 弱化）。 */
+const gitDecoClass = computed(() => {
+  const s = gitStatusLetter.value;
+  if (!s) return "";
+  const letter = s === "?" ? "u" : s.toLowerCase();
+  return `git-${letter}`;
+});
+
+/** 状态字母徽标——仅文件；后端的 "?" 展示为 U（与 GitPanel 一致）。 */
+const gitBadge = computed(() => {
+  if (props.node.is_dir) return "";
+  const s = gitStatusLetter.value;
+  if (!s) return "";
+  return s === "?" ? "U" : s;
+});
+
 const hovered = ref(false);
 const nameEl = ref<HTMLSpanElement | null>(null);
 const isOverflow = ref(false);
@@ -187,13 +212,17 @@ const nodePadding = computed(() =>
   <div>
     <div
       class="tree-node"
-      :class="{
-        active: node.path === selectedPath,
-        'drag-over-folder': isDragOver,
-        'drag-insert-top': insertPos === 'top',
-        'drag-insert-bottom': insertPos === 'bottom',
-        'cut-state': clipboard?.op === 'cut' && clipboard?.path === node.path,
-      }"
+      :class="[
+        {
+          active: node.path === selectedPath,
+          'drag-over-folder': isDragOver,
+          'drag-insert-top': insertPos === 'top',
+          'drag-insert-bottom': insertPos === 'bottom',
+          'cut-state': clipboard?.op === 'cut' && clipboard?.path === node.path,
+          'git-dir': node.is_dir,
+        },
+        gitDecoClass,
+      ]"
       :style="{ paddingLeft: nodePadding + 'px' }"
       draggable="true"
       @click="handleClick"
@@ -258,6 +287,9 @@ const nodePadding = computed(() =>
 
       <!-- Name -->
       <span ref="nameEl" class="node-name">{{ node.name }}</span>
+
+      <!-- Git status badge（仅文件；目录只靠聚合变色） -->
+      <span v-if="gitBadge" class="node-git-badge" :class="'b-' + gitBadge.toLowerCase()">{{ gitBadge }}</span>
     </div>
 
     <!-- Children with subtle background layer -->
@@ -397,6 +429,43 @@ const nodePadding = computed(() =>
 .tree-node.active .node-name {
   font-weight: 500;
 }
+
+/* ── Git 装饰：文件名变色 + 状态字母徽标（色板与 GitPanel status-* 语义一致） ── */
+
+.tree-node.git-m .node-name { color: var(--aide-warning); }
+.tree-node.git-a .node-name { color: var(--aide-success); }
+.tree-node.git-d .node-name {
+  color: var(--aide-danger);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--aide-danger) 60%, transparent);
+}
+.tree-node.git-u .node-name { color: var(--aide-info); }
+.tree-node.git-c .node-name { color: var(--aide-danger); }
+
+/* 目录聚合色：弱化 75%，与文件区分 */
+.tree-node.git-dir.git-m .node-name { color: color-mix(in srgb, var(--aide-warning) 75%, var(--aide-text-secondary)); }
+.tree-node.git-dir.git-a .node-name { color: color-mix(in srgb, var(--aide-success) 75%, var(--aide-text-secondary)); }
+.tree-node.git-dir.git-d .node-name { color: color-mix(in srgb, var(--aide-danger) 75%, var(--aide-text-secondary)); text-decoration: none; }
+.tree-node.git-dir.git-u .node-name { color: color-mix(in srgb, var(--aide-info) 75%, var(--aide-text-secondary)); }
+.tree-node.git-dir.git-c .node-name { color: color-mix(in srgb, var(--aide-danger) 75%, var(--aide-text-secondary)); }
+
+.node-git-badge {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9.5px;
+  font-weight: 700;
+  border-radius: 3px;
+  font-family: var(--aide-font-mono);
+}
+.node-git-badge.b-m { background: color-mix(in srgb, var(--aide-warning) 15%, transparent); color: var(--aide-warning); }
+.node-git-badge.b-a { background: color-mix(in srgb, var(--aide-success) 15%, transparent); color: var(--aide-success); }
+.node-git-badge.b-d { background: color-mix(in srgb, var(--aide-danger) 15%, transparent); color: var(--aide-danger); }
+.node-git-badge.b-u { background: color-mix(in srgb, var(--aide-info) 15%, transparent); color: var(--aide-info); }
+.node-git-badge.b-c { background: color-mix(in srgb, var(--aide-danger) 25%, transparent); color: var(--aide-danger); }
 
 /* ── Children wrapper (subtle depth layering) ── */
 
