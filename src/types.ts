@@ -344,6 +344,11 @@ export interface BuildIndexResult {
   /** true = reused a fresh on-disk index; false = full rebuild. */
   loaded: boolean;
   total_symbols: number;
+  /** true = resumed an interrupted embed from the per-file checkpoint instead
+   *  of full-rebuilding (previous build died mid-embed). */
+  resumed?: boolean;
+  /** Resume only: files already embedded (skipped via checkpoint). */
+  skipped_embedded_files?: number;
   /** Present only on a full rebuild (loaded === false). */
   scanned_files?: number;
   files_with_symbols?: number;

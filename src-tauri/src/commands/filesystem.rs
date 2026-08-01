@@ -9,23 +9,39 @@ use regex::Regex;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use super::{FileEntry, GrepMatch, WorkspaceState, project_root_for_commands, detect_git_branch, ProjectInfo};
+use super::{FileEntry, GrepMatch, WorkspaceState, detect_git_branch, ProjectInfo};
 
 #[tauri::command]
 pub fn get_project_info(
     workspace_state: State<'_, WorkspaceState>,
 ) -> Result<ProjectInfo, String> {
     let _trace = crate::diagnostics::trace_command("get_project_info");
-    let root = project_root_for_commands(&workspace_state);
-
-    Ok(ProjectInfo {
-        root: root.to_string_lossy().to_string(),
-        name: root
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unknown".to_string()),
-        branch: detect_git_branch(&root),
-    })
+    // 无显式工作区 = 显式空（root/name/branch 全 ""），绝不回退到家目录。
+    // project_root_for_commands 的家目录回退只服务「进程 cwd」类消费者
+    // （chat 会话、git 命令——那里家目录是合理的兜底 cwd）；而本命令的消费
+    // 方是**展示与索引**（FileTree 渲染、CodeGraph ensureIndex），它们必须
+    // 能区分「没打开项目」，否则 FileTree 会把整个家目录渲染出来、CodeGraph
+    // 会索引它（2026-08-01 实锤：405 万符号 / 3GB shard / 每次启动全量
+    // 重扫的永动机）。
+    let root = {
+        let guard = workspace_state.path.lock().map_err(|e| e.to_string())?;
+        guard.as_ref().filter(|p| p.exists()).cloned()
+    };
+    match root {
+        Some(root) => Ok(ProjectInfo {
+            root: root.to_string_lossy().to_string(),
+            name: root
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            branch: detect_git_branch(&root),
+        }),
+        None => Ok(ProjectInfo {
+            root: String::new(),
+            name: String::new(),
+            branch: String::new(),
+        }),
+    }
 }
 
 #[tauri::command]

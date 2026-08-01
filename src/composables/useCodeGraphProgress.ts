@@ -209,6 +209,26 @@ function rebuild(root: string) {
   trackBuild(api.codegraphBuildIndex(root, true), root);
 }
 
+/**
+ * 会话轮次结束后的防抖增量重扫（3s）。
+ *
+ * 背景：Claude 通过 sidecar 的 Edit/Write 改文件不会触发任何索引更新（只有
+ * 在 aide 文件查看器里手动保存才会 reindex）。改动累积超过 20% 阈值后，下
+ * 次构建会退回全量重建。每轮 message_stop 后调一次（防抖合并密集轮次），
+ * rescan 只 reindex mtime 变动的文件，保持 indexed_at 新鲜、索引常新。
+ * 后端在无活跃索引 / embed 未就绪 / 无变更时是廉价 no-op，放心调。
+ */
+let rescanTimer: number | null = null;
+function scheduleRescan() {
+  if (!lastIndexedRoot) return;
+  if (typeof window === "undefined") return; // node/test 环境
+  if (rescanTimer != null) clearTimeout(rescanTimer);
+  rescanTimer = window.setTimeout(() => {
+    rescanTimer = null;
+    void rescan(lastIndexedRoot);
+  }, 3000);
+}
+
 // 注册「重建索引」action：dedupKey 形如 codegraph:<kind>:<root>，末段为 root。
 // Windows 路径含 C:\... → split(":") 得 ["codegraph","<kind>","C","\..."]，
 // slice(2).join(":") 还原为 "C:\..."。模块顶层注册一次即可。
@@ -221,6 +241,10 @@ registerActionHandler("codegraph", (n) => {
 /** 仅测试用：清 timer、复位状态、清守卫，防 interval 跨用例泄漏。 */
 function __resetForTest() {
   stopPoll();
+  if (rescanTimer != null) {
+    clearTimeout(rescanTimer);
+    rescanTimer = null;
+  }
   progress.value = { active: false, done: 0, total: 0, current: "", index_ready: false };
   lastIndexedRoot = "";
 }
@@ -233,6 +257,7 @@ export function useCodeGraphProgress() {
     trackBuild,
     rescan,
     rebuild,
+    scheduleRescan,
     stopPoll,
     __resetForTest,
   };

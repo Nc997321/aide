@@ -142,6 +142,15 @@ async function loadRoot() {
     const info = await api.getProjectInfo();
     projectInfo.value = info;
     const root = info.root;
+    if (!root) {
+      // 无显式工作区（首次使用 / 工作区被删 / 路径失效）：显示空态，绝不
+      // 加载任何目录——历史上这里会回退到家目录，把整个用户目录渲染出来
+      // 并触发 CodeGraph 全量索引（405 万符号 / 3GB 的事故）。
+      treeData.value = [];
+      expandedDirs.value = new Set();
+      loading.value = false;
+      return;
+    }
     // 项目加载锚点：触发 CodeGraph 索引构建（若未建/切项目）。
     // ensureIndex 内部 lastIndexedRoot 守卫 + close 上一个，同一 root 不重复。
     cg.ensureIndex(root);
@@ -211,6 +220,8 @@ async function refreshAllExpanded() {
   } catch {
     // 项目信息刷新失败不阻断树刷新
   }
+  // 无显式工作区时不刷新（root 为空，loadChildren("") 只会报错）。
+  if (!projectInfo.value.root) return;
   // 重载 root 直属子节点（loadChildren(root) 整体替换 treeData）
   await loadChildren(projectInfo.value.root);
   // 自顶向下补加载已展开目录的子节点
@@ -373,7 +384,7 @@ defineExpose({ loadRoot, revealFile });
       <div ref="wsSwitcherRef" class="ws-switcher">
         <button class="ws-trigger" v-tooltip="projectInfo.root" @click.stop="toggleWsDropdown">
           <svg class="ws-folder" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-          <span class="ws-project-name">{{ projectInfo.name }}</span>
+          <span class="ws-project-name">{{ projectInfo.name || "未打开工作区" }}</span>
           <span v-if="projectInfo.branch" class="path-branch">{{ projectInfo.branch }}</span>
           <svg class="ws-chevron" :class="{ open: wsDropdownOpen }" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 3.5L5 6L7.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
@@ -426,7 +437,9 @@ defineExpose({ loadRoot, revealFile });
           @toggle="toggleDir"
           @open="openFile"
         />
-        <div v-if="treeData.length === 0" class="tree-status">目录为空</div>
+        <div v-if="treeData.length === 0" class="tree-status">
+          {{ projectInfo.root ? "目录为空" : "未打开工作区 — 从左侧栏选择一个项目" }}
+        </div>
       </template>
     </div>
 

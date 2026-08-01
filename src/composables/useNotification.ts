@@ -62,7 +62,8 @@ export function useNotification() {
     if (projectName) return projectName;
     try {
       const info = await api.getProjectInfo();
-      projectName = info.name;
+      // 无显式工作区时 name 为 ""——通知标题回退应用名
+      projectName = info.name || "Aide";
       return projectName;
     } catch (_) {
       return "Aide";

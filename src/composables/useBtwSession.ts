@@ -1,6 +1,7 @@
 import { ref, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { ActionBlock } from "../types/chat";
+import { useCodeGraphProgress } from "./useCodeGraphProgress";
 
 /** btw 支线对话的轻量 store——单例:同一时间只一个 btw(v1)。
  *  status 生命周期:idle(无)→starting(已发 fork 命令)→running(sidecar 应答中)
@@ -115,6 +116,8 @@ function handleBtwEvent(e: Record<string, unknown>) {
       state.value.isBusy = false;
       state.value.done = true;
       state.value.status = "done";
+      // btw 支线也可能改了文件——同主对话，防抖增量重扫保持索引新鲜。
+      useCodeGraphProgress().scheduleRescan();
       const conclusion = state.value.messages.join("");
       if (onDoneCb && conclusion) {
         const block: ActionBlock = {
