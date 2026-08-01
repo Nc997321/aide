@@ -196,7 +196,14 @@ impl OrtEmbedder {
             tokenizer_config_file: read_or_empty(&dir.join("tokenizer_config.json")),
         };
 
-        let threads = available_parallelism().map(|n| n.get()).unwrap_or(4);
+        // intra-op 线程 = 核数的一半（clamp 2..=8）。曾经直接用满全部核
+        // （available_parallelism），embed 阶段几分钟全核饱和 → Windows 调度
+        // 没有余量给桌面/WebView，整个系统卡死甚至未响应（2026-08-02 用户
+        // 实测；黑匣子在 embed 期间抓到 freeze 报告，签名吻合）。后台索引
+        // 多跑一会儿完全可接受——结构层（精确跳转）在 embed 前就绪，embed
+        // 有断点续跑——系统响应性优先。
+        let cores = available_parallelism().map(|n| n.get()).unwrap_or(4);
+        let threads = (cores / 2).clamp(2, 8);
 
         // === Root-cause fix: disable CPU arena + memory pattern ===
         // 显式注册 CPU EP 并禁用其 arena（CPUExecutionProvider 默认 use_arena=false →
