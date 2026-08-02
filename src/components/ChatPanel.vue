@@ -1327,7 +1327,7 @@ function onOpenBgDock(taskId: string) {
       </Transition>
       <div
         class="chat-input-box"
-        :class="{ 'btw-mode': btwMode }"
+        :class="{ 'btw-mode': btwMode, 'session-running': isBusyVal }"
         @dragover.prevent="handleDragOver"
         @drop.prevent="handleDrop"
       >
@@ -1710,6 +1710,63 @@ function onOpenBgDock(taskId: string) {
 
 .chat-input-box:focus-within {
   border-color: var(--aide-accent);
+}
+
+/* 运行中聚焦不再整圈 accent 描边——边框保持素色，让彗星环成为唯一的彩色信号 */
+.chat-input-box.session-running:focus-within {
+  border-color: var(--aide-border);
+}
+
+/* 会话运行时输入盒流光（双向对追双彗星 + 柔光晕）：纯 CSS 单伪元素，零 JS。
+   ::before 的 conic 渐变随 @property 角度旋转（两颗彗星相隔 180° 对跑），
+   2 层 mask + exclude 只露出 1px 锐环、精确压盖住边框；光晕用 drop-shadow
+   实现——关键教训：filter 作用于 mask 之后的结果，所以 drop-shadow 严格
+   跟随环形（盒内一笔不画，glass 半透明背景主题也安全）；而 blur 在 mask 前
+   生效、会被 mask 裁出硬边平顶光带（"粗边框"观感的来源），不能用。
+   另注意此 WebView2 只支持单值 mask-composite，3 层以上多值组合整条失效
+   （退化成全叠加、光楔糊满输入框），mask 层数必须 ≤2。
+   渐变淡出端用 color-mix 0% 同色透明，不用 transparent 关键字（透明黑插值
+   会经过发暗中间色、光带显脏）。颜色全走主题 token，空闲时无伪元素零开销。 */
+@property --aide-input-comet {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.chat-input-box.session-running {
+  position: relative;
+  isolation: isolate;
+}
+
+.chat-input-box.session-running::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: var(--aide-radius-sm);
+  pointer-events: none;
+  background: conic-gradient(
+    from var(--aide-input-comet),
+    color-mix(in srgb, var(--aide-accent) 0%, transparent) 0deg,
+    var(--aide-accent) 30deg,
+    var(--aide-accent-hover) 42deg,
+    color-mix(in srgb, var(--aide-accent-hover) 0%, transparent) 55deg,
+    color-mix(in srgb, var(--aide-accent) 0%, transparent) 180deg,
+    var(--aide-accent) 210deg,
+    var(--aide-accent-hover) 222deg,
+    color-mix(in srgb, var(--aide-accent-hover) 0%, transparent) 235deg,
+    color-mix(in srgb, var(--aide-accent) 0%, transparent) 360deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--aide-accent) 85%, transparent));
+  animation: chat-input-comet 3.2s linear infinite;
+}
+
+@keyframes chat-input-comet {
+  to { --aide-input-comet: 360deg; }
 }
 
 .chat-toolbar {

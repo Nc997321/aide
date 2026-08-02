@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>输入框流光边框 — 方案原型</title>
+<style>
+  /* ===== warm-dark 主题 token（与 src/themes/warm-dark.ts 对齐） ===== */
+  :root {
+    --bg-base: #1a1820;
+    --bg-raised: #221f29;
+    --surface: #292631;
+    --text-primary: #ece5db;
+    --text-muted: #7d7568;
+    --accent: #d9ab78;
+    --accent-hover: #e6bd8e;
+    --border: rgba(255,214,160,.09);
+    --radius: 13px;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg-base);
+    color: var(--text-primary);
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    padding: 32px;
+    display: flex; flex-direction: column; gap: 28px;
+    min-height: 100vh;
+  }
+  h1 { font-size: 18px; font-weight: 600; }
+  .hint { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 24px; }
+  .card { display: flex; flex-direction: column; gap: 14px; }
+  .card .name { font-size: 14px; font-weight: 600; }
+  .card .desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+
+  /* ===== 模拟输入框本体（所有方案共用） ===== */
+  .input-wrap {
+    position: relative;
+    border-radius: var(--radius);
+    isolation: isolate;
+  }
+  .input-inner {
+    position: relative;
+    z-index: 1;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    min-height: 76px;
+    font-size: 14px;
+    color: var(--text-muted);
+  }
+  .toolbar {
+    display: flex; gap: 8px; margin-top: 10px; align-items: center;
+    font-size: 11px; color: var(--text-muted);
+  }
+  .chip { background: var(--surface); border-radius: 6px; padding: 3px 8px; }
+
+  /* ========== 方案 A：彗星流光（一段亮光绕边框跑一圈） ========== */
+  @property --ang-a { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+  .fx-a::before {
+    content: ""; position: absolute; inset: -1px; border-radius: var(--radius); z-index: 0;
+    background: conic-gradient(from var(--ang-a),
+      transparent 0deg, transparent 300deg,
+      var(--accent) 330deg, var(--accent-hover) 345deg, transparent 360deg);
+    animation: spin-a 2.6s linear infinite;
+    /* 只露出外圈 1.5px 当边框 */
+    --mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask: var(--mask); mask: var(--mask);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    padding: 1.5px;
+  }
+  @keyframes spin-a { to { --ang-a: 360deg; } }
+
+  /* ========== 方案 B：双向对追（两颗彗星 180° 对跑） ========== */
+  @property --ang-b { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+  .fx-b::before {
+    content: ""; position: absolute; inset: -1px; border-radius: var(--radius); z-index: 0;
+    background: conic-gradient(from var(--ang-b),
+      transparent 0deg, var(--accent) 40deg, transparent 80deg,
+      transparent 180deg, var(--accent) 220deg, transparent 260deg);
+    animation: spin-b 3.2s linear infinite;
+    --mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask: var(--mask); mask: var(--mask);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    padding: 1.5px;
+  }
+  @keyframes spin-b { to { --ang-b: 360deg; } }
+
+  /* ========== 方案 C：整圈渐变流转（整条边框都是渐变色在流动） ========== */
+  @property --ang-c { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+  .fx-c::before {
+    content: ""; position: absolute; inset: -1px; border-radius: var(--radius); z-index: 0;
+    background: conic-gradient(from var(--ang-c),
+      rgba(217,171,120,.15), var(--accent), rgba(230,189,142,.9),
+      var(--accent), rgba(217,171,120,.15));
+    animation: spin-c 4s linear infinite;
+    --mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask: var(--mask); mask: var(--mask);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    padding: 1.5px;
+  }
+  @keyframes spin-c { to { --ang-c: 360deg; } }
+
+  /* ========== 方案 D：彗星 + 外发光（光点跑过时带柔光晕） ========== */
+  @property --ang-d { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+  .fx-d::before {
+    content: ""; position: absolute; inset: -1px; border-radius: var(--radius); z-index: 0;
+    background: conic-gradient(from var(--ang-d),
+      transparent 0deg, transparent 310deg,
+      var(--accent-hover) 340deg, transparent 360deg);
+    animation: spin-d 2.6s linear infinite;
+    --mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask: var(--mask); mask: var(--mask);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    padding: 1.5px;
+  }
+  .fx-d::after {
+    content: ""; position: absolute; inset: -1px; border-radius: var(--radius); z-index: -1;
+    background: conic-gradient(from var(--ang-d),
+      transparent 0deg, transparent 300deg,
+      rgba(230,189,142,.55) 340deg, transparent 360deg);
+    animation: spin-d 2.6s linear infinite;
+    filter: blur(10px);
+  }
+  @keyframes spin-d { to { --ang-d: 360deg; } }
+
+  /* ========== 方案 E：整圈微亮 + 呼吸脉冲（最低调，无光点跑动） ========== */
+  .fx-e::before {
+    content: ""; position: absolute; inset: -1px; border-radius: var(--radius); z-index: 0;
+    background: linear-gradient(135deg, rgba(217,171,120,.5), rgba(217,171,120,.12) 40%, rgba(230,189,142,.45));
+    animation: breathe 2.2s ease-in-out infinite;
+    --mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask: var(--mask); mask: var(--mask);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    padding: 1.5px;
+  }
+  .fx-e::after {
+    content: ""; position: absolute; inset: -4px; border-radius: 16px; z-index: -1;
+    box-shadow: 0 0 18px rgba(217,171,120,.22);
+    animation: breathe 2.2s ease-in-out infinite;
+  }
+  @keyframes breathe { 0%,100% { opacity: .45; } 50% { opacity: 1; } }
+
+  /* ========== 对照：空闲态（无光） ========== */
+  .fx-idle .input-inner { opacity: .9; }
+
+  .row { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+  button {
+    background: var(--surface); color: var(--text-primary); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 14px; font-size: 12px; cursor: pointer;
+  }
+  button:hover { background: #322e3c; }
+</style>
+</head>
+<body>
+
+<div>
+  <h1>会话运行时 · 输入框流光边框方案</h1>
+  <div class="hint">配色取自 warm-dark 主题 accent（#d9ab78）。右下角按钮可一键暂停/播放所有动画，方便看静态效果。</div>
+</div>
+
+<div class="grid">
+
+  <div class="card">
+    <div class="name">方案 A · 彗星流光</div>
+    <div class="desc">一段亮光沿边框匀速跑一整圈，其余边框保持原样。指向性强，「正在工作」的感觉最明显。</div>
+    <div class="input-wrap fx-a">
+      <div class="input-inner">给 Claude 发消息…
+        <div class="toolbar"><span class="chip">Sonnet 5</span><span class="chip">effort: high</span><span>⏵ 运行中</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="name">方案 B · 双向对追</div>
+    <div class="desc">两颗彗星相隔 180° 对向追跑，节奏更活泼，速度可以做得比 A 慢而不显单调。</div>
+    <div class="input-wrap fx-b">
+      <div class="input-inner">给 Claude 发消息…
+        <div class="toolbar"><span class="chip">Sonnet 5</span><span class="chip">effort: high</span><span>⏵ 运行中</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="name">方案 C · 整圈渐变流转</div>
+    <div class="desc">整条边框由明暗渐变构成并整体旋转，没有明显光点，像光环在缓慢流动。华丽但略张扬。</div>
+    <div class="input-wrap fx-c">
+      <div class="input-inner">给 Claude 发消息…
+        <div class="toolbar"><span class="chip">Sonnet 5</span><span class="chip">effort: high</span><span>⏵ 运行中</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="name">方案 D · 彗星 + 柔光晕</div>
+    <div class="desc">在 A 的基础上给光点加一圈模糊外发光，光点经过处有「扫过」的辉光感。最有质感，代价是多一层 blur。</div>
+    <div class="input-wrap fx-d">
+      <div class="input-inner">给 Claude 发消息…
+        <div class="toolbar"><span class="chip">Sonnet 5</span><span class="chip">effort: high</span><span>⏵ 运行中</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="name">方案 E · 呼吸脉冲（低调）</div>
+    <div class="desc">没有跑动光点，整条边框微微发亮并缓慢呼吸 + 淡外晕。最不打扰视线，适合长时间挂着的会话。</div>
+    <div class="input-wrap fx-e">
+      <div class="input-inner">给 Claude 发消息…
+        <div class="toolbar"><span class="chip">Sonnet 5</span><span class="chip">effort: high</span><span>⏵ 运行中</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="name">对照 · 空闲态</div>
+    <div class="desc">会话未运行时的普通输入框，用于对比。</div>
+    <div class="input-wrap fx-idle">
+      <div class="input-inner">给 Claude 发消息…
+        <div class="toolbar"><span class="chip">Sonnet 5</span><span class="chip">effort: high</span><span>空闲</span></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="row">
+  <button id="toggle">⏸ 暂停所有动画</button>
+  <span class="hint" style="margin:0">实现注：A/B/C/D 均为纯 CSS（conic-gradient + @property 旋转 + mask 露出 1.5px 边框），WebView2/Chromium 支持，无需 JS。</span>
+</div>
+
+<script>
+  const btn = document.getElementById('toggle');
+  let paused = false;
+  btn.onclick = () => {
+    paused = !paused;
+    document.querySelectorAll('.input-wrap').forEach(el => {
+      el.style.setProperty('--play', paused ? 'paused' : 'running');
+      el.querySelectorAll('*').forEach(() => {});
+    });
+    document.documentElement.style.setProperty('--play', paused ? 'paused' : 'running');
+    document.querySelectorAll('.fx-a,.fx-b,.fx-c,.fx-d,.fx-e').forEach(el => {
+      el.style.animationPlayState = paused ? 'paused' : 'running';
+      [...el.children].forEach(c => c.style.animationPlayState = paused ? 'paused' : 'running');
+      // ::before/::after 用 CSS 变量控制
+    });
+    document.body.classList.toggle('paused', paused);
+    btn.textContent = paused ? '▶ 播放所有动画' : '⏸ 暂停所有动画';
+  };
+  // 用 body.paused 控制伪元素动画
+  const style = document.createElement('style');
+  style.textContent = `body.paused .input-wrap::before, body.paused .input-wrap::after { animation-play-state: paused !important; }`;
+  document.head.appendChild(style);
+</script>
+
+</body>
+</html>
