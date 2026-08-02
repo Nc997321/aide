@@ -292,6 +292,7 @@ pub async fn start_btw_session(
     lightweight: bool,
     permission_mode: Option<String>,
     model: Option<String>,
+    effort: Option<String>,
     runtime_mgr: State<'_, AgentRuntimeManager>,
     settings_service: State<'_, std::sync::Arc<crate::settings::SettingsService>>,
 ) -> Result<(), String> {
@@ -316,6 +317,15 @@ pub async fn start_btw_session(
         if !m.is_empty() {
             if let Some(env) = cmd.get_mut("env").and_then(|e| e.as_object_mut()) {
                 env.insert("ANTHROPIC_MODEL".to_string(), json!(m));
+            }
+        }
+    }
+    // effort 与普通 send 的 initial_effort 同形：骑 env 通道，worker 只读作初始
+    // currentEffort（options.effort），绝不会以 env 形式透传给 CLI。
+    if let Some(ref effort) = effort {
+        if !effort.is_empty() {
+            if let Some(env) = cmd.get_mut("env").and_then(|e| e.as_object_mut()) {
+                env.insert("CLAUDE_CODE_EFFORT_LEVEL".to_string(), json!(effort));
             }
         }
     }

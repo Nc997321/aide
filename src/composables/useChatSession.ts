@@ -1168,7 +1168,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
   /** 顺便问一下:fork 当前主会话开一个隔离子对话。一次性——发送后由 ChatPanel
    *  负责复位 btw 模式视觉。结论以 ActionBlock(actionId:'btw')回插本会话 store
    *  末尾(前端可见、不进 SDK resume 上下文,见 ChatMessage 渲染)。 */
-  async function sendBtw(prompt: string, opts: { lightweight: boolean; permissionMode?: string; model?: string } = { lightweight: true }) {
+  async function sendBtw(prompt: string, opts: { lightweight: boolean; permissionMode?: string; model?: string; effort?: string } = { lightweight: true }) {
     const sid = sessionId.value;
     if (!sid) {
       // 无主会话可 fork:ChatPanel 已在 !sessionId 时禁用 btw 切换项,正常走不到这里。
@@ -1196,7 +1196,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
     });
     // startBtw 内部把 fork 失败(主会话未就绪 / spawn 失败)转成 store.status="error",
     // 由抽屉展示原因——不抛、不静默 cleanup(那会抹掉失败只剩误导性 toast)。
-    await btw.startBtw({ tempId: btwId, forkFrom: sid, prompt, cwd, lightweight: opts.lightweight, permissionMode: opts.permissionMode, model: opts.model });
+    await btw.startBtw({ tempId: btwId, forkFrom: sid, prompt, cwd, lightweight: opts.lightweight, permissionMode: opts.permissionMode, model: opts.model, effort: opts.effort });
   }
 
   return {

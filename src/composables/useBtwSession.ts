@@ -51,6 +51,7 @@ interface StartBtwOpts {
   lightweight: boolean;
   permissionMode?: string;
   model?: string;
+  effort?: string; // 支线档位（默认 low），骑 env 通道到 sidecar 作初始 effort
 }
 
 async function startBtw(opts: StartBtwOpts) {
@@ -70,6 +71,7 @@ async function startBtw(opts: StartBtwOpts) {
       lightweight: opts.lightweight,
       permissionMode: opts.permissionMode ?? null,
       model: opts.model ?? null,
+      effort: opts.effort ?? null,
     });
     state.value.status = "running"; // sidecar 已接收命令,确认 fork 成功
   } catch (e) {

@@ -83,7 +83,7 @@ async function onSend(prompt: string, opts: SendOptions) {
   pl.promoteTab(sid);
 }
 
-function onSendBtw(prompt: string, opts: { lightweight: boolean }) {
+function onSendBtw(prompt: string, opts: { lightweight: boolean; model?: string; effort?: string }) {
   sendBtw(prompt, opts);
 }
 

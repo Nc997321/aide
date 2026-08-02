@@ -76,7 +76,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   send: [prompt: string, opts: SendOptions];
-  "send-btw": [prompt: string, opts: { lightweight: boolean; model?: string }];
+  "send-btw": [prompt: string, opts: { lightweight: boolean; model?: string; effort?: string }];
   interrupt: [];
   "set-model": [model: string];
   "set-effort": [effort: string];
@@ -362,6 +362,11 @@ function providerDefaultEffort(): string {
 }
 
 function handleEffortChange(value: string) {
+  // btw 模式下 effort 选择器只决定这条支线的档位，不回写主会话（同模型选择器语义）。
+  if (btwMode.value) {
+    btwEffort.value = value;
+    return;
+  }
   effortTouchedByUser = true;
   selectedEffort.value = value;
   // 会话还没开始时 setEffort 是无会话可发的空操作，安全；真正生效靠
@@ -667,28 +672,25 @@ async function expandOlderAnchored() {
 
 const btwMode = ref(false);
 const btwLightweight = ref(true);
-// btw 默认走便宜快的模型。但「便宜快」在不同 provider 下名字不同,必须按 provider 解析:
-//  - 第三方供应商:选项列表装的是真实模型 id(deepseek-v4-flash),不是 Claude 别名。
-//    "haiku" 字面量永远不在列表里(见 providerModels 的收口规则)。所以走供应商配的
-//    defaultHaikuModel 映射——用户把 haiku 映到的那个真实 id,它一定在选项列表里
-//    (providerModels 就是这么收来的)。这也是用户在设置里表达「我的便宜快模型是哪个」
-//    的唯一入口。
-//  - 系统默认(真 Claude):defaultHaikuModel 为空,选项列表本身就是别名列表,
-//    "haiku" 直接命中。
-//  - 兜底:两者都没有就退到主会话当前模型(绝不让下拉显示一个不存在的值)。
-// btw 期间模型选择器显示它,用户可临时改这条支线的模型(不回写主会话);
-// 发送后 btwMode 关闭,选择器自动回到主会话模型。
-const btwModel = ref("haiku");
-const btwDefaultModel = computed(() => {
-  const opts = modelSelectOptions.value;
-  const haikuMapping = sessionProvider.value.modelMappings?.defaultHaikuModel;
-  if (haikuMapping && opts.some((m) => m.value === haikuMapping)) return haikuMapping;
-  if (opts.some((m) => m.value === "haiku")) return "haiku";
-  return selectedModel.value || opts[0]?.value || "haiku";
-});
+// btw 默认继承主会话当前模型（2026-08-02 改：原默认最便宜的 haiku 系/defaultHaikuModel
+// 映射，用户反馈支线回答质量跟不上主会话，索性同源）。btw 期间模型选择器显示它，
+// 用户可临时改这条支线的模型（不回写主会话）；发送后 btwMode 关闭，选择器自动回到
+// 主会话模型。
+const btwModel = ref("");
+const btwDefaultModel = computed(() =>
+  selectedModel.value || modelSelectOptions.value[0]?.value || "",
+);
+// btw 期间 effort 选择器落到最低档 low（一次性支线省 token）——与模型选择器同形：
+// 用户可临时改（只影响这条支线，不回写主会话），发送后 btwMode 关闭，选择器自动
+// 回到主会话之前的档位。
+const btwEffort = ref("low");
+const displayedEffort = computed(() => (btwMode.value ? btwEffort.value : selectedEffort.value));
 function toggleBtw() {
   btwMode.value = !btwMode.value;
-  if (btwMode.value) btwModel.value = btwDefaultModel.value;
+  if (btwMode.value) {
+    btwModel.value = btwDefaultModel.value;
+    btwEffort.value = "low";
+  }
 }
 // 输入框模型选择器显示值:btw 期间显示支线模型,否则显示主会话模型
 const displayedModel = computed(() => (btwMode.value ? btwModel.value : selectedModel.value));
@@ -1074,7 +1076,7 @@ async function handleSend() {
     // 不在这里乐观触发——等支线真正进入 running 才确认(见上面 status 的 watch),
     // 否则 fork 失败时也会弹"已切回主对话输入"造成误导。
     // 引用芯片在 btw 里只带 @path 字面量（支线没有 mention 展开通道），模型可自行 Read。
-    emit("send-btw", mentionPrefix + text, { lightweight: btwLightweight.value, model: btwModel.value });
+    emit("send-btw", mentionPrefix + text, { lightweight: btwLightweight.value, model: btwModel.value, effort: btwEffort.value });
     inputText.value = "";
     pendingImages.value = [];
     pendingMentions.value = [];
@@ -1337,7 +1339,7 @@ function onOpenBgDock(taskId: string) {
           <!-- effort 选择器：会话级思考深度，切换即时生效（sidecar applyFlagSettings，
                不重启进程、不碰 prompt 缓存）；默认 high -->
           <ThemedSelect
-            :model-value="selectedEffort"
+            :model-value="displayedEffort"
             :options="EFFORT_OPTIONS"
             title="effort（思考深度）：低档省 token、高档想得更深；切换从下一轮起生效，不影响缓存"
             @update:model-value="handleEffortChange"

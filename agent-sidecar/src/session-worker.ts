@@ -129,6 +129,8 @@ export interface SessionWorkerOptions {
   imageCapabilityCache: ImageInputCapabilityCache;
   /** 测试缝：覆盖 SDK query 实现。生产省略用真 query。 */
   queryFn?: typeof query;
+  /** btw 支线回合结束自毁回调：worker 自停后由 SessionManager 把自己摘出注册表。 */
+  onSelfStop?: (worker: SessionWorker) => void;
 }
 
 export class SessionWorker {
@@ -203,6 +205,8 @@ export class SessionWorker {
 
   // ---- 测试缝：可替换的 SDK query 实现 ----
   private queryFn: typeof query;
+  /** btw 自毁回调（SessionManager 注入，见 SessionWorkerOptions.onSelfStop）。 */
+  private readonly onSelfStop?: (worker: SessionWorker) => void;
   /** send 命令串行化：只在存在未完成的异步 send（例如图片 probe）时启用。 */
   private sendQueue: Promise<void> | null = null;
 
@@ -214,6 +218,7 @@ export class SessionWorker {
     this.emitToStdout = emitToStdout;
     this.routingKey = routingId;
     this.queryFn = opts.queryFn ?? query;
+    this.onSelfStop = opts.onSelfStop;
     this.btwMode = opts.btwMode ?? false;
     this.lightweightMode = opts.lightweightMode ?? false;
     this.cwd = opts.cwd;
@@ -806,8 +811,12 @@ export class SessionWorker {
 
           // codegraph agent 工具：默认注册（AIDE_CODEGRAPH_TOOLS=off 关闭）。
           // handler 闭包持有本会话的 emit（经 DeltaCoalescer，红线）与 cwd。
+          // 轻量 btw 是纯问答，必须跳过：tools:[] 只禁内建工具，MCP 工具照样进
+          // 工具列表，模型会真去调（2026-08-02 实锤「先看一眼链路」并卡在调用上）。
           const effectiveCwd = cwd ?? this.cwd ?? "";
-          const codegraphMcp = codegraphMcpRegistration(effectiveCwd, (e) => this.emit(e));
+          const codegraphMcp = this.lightweightMode
+            ? null
+            : codegraphMcpRegistration(effectiveCwd, (e) => this.emit(e));
 
           if (this.resumeSource && this.shouldForkNextConnect && !this.btwMode) {
             this.pendingFork = true;
@@ -839,8 +848,10 @@ export class SessionWorker {
               ...(this.lightweightMode
                 ? { allowedTools: [] as string[] }
                 : { allowedTools: ["Agent", "Task", CODEGRAPH_ALLOW_RULE] }),
-              skills: "all",
-              plugins: buildPluginsOption(),
+              // 轻量 btw：skills/plugins 同样关闭（Skill 工具虽被 tools:[] 禁掉，
+              // 但 skill 清单会白进上下文；plugins 可能自带 MCP 工具漏进工具列表）。
+              skills: this.lightweightMode ? [] : "all",
+              plugins: this.lightweightMode ? [] : buildPluginsOption(),
               hooks: {
                 PreToolUse: [
                   // Aide 权限策略是权威前置层，必须最先评估。
@@ -976,6 +987,13 @@ export class SessionWorker {
               this.toolLifecycle.reset();
               void this.emitContextUsage(q);
               void this.emitRateLimit(q);
+              // btw 是一次性支线：回合结束即自毁释放 claude.exe。streaming-input
+              // 的 query 不主动关会连进程一起永远挂着——CLI 的 pid 元数据留在
+              // ~/.aide/claude/sessions/ 被 list_sessions 扫成侧栏幽灵空会话，
+              // 且每条 btw 白占几百 MB（2026-08-02 实锤 pid 9464 挂 12min+）。
+              // message_stop 已在本轮迭代经 mapSdkMessage 发出；setImmediate
+              // 推迟到迭代体外，避免在 for-await 迭代中 close 自己。
+              if (this.btwMode) setImmediate(() => this.selfTeardown());
             }
           }
           // for await 正常结束（queue closed）
@@ -1067,6 +1085,14 @@ export class SessionWorker {
   /** 测试用：暴露待发送用户消息数，验证拒绝图片时不会入队。 */
   _testQueueLength(): number {
     return ((this.queue as any).queue as unknown[] | undefined)?.length ?? 0;
+  }
+
+  /** btw 支线回合结束自毁：关 query/queue 释放 claude.exe，并通知 manager 把自己
+   *  摘出注册表。静默路径——stop() 本身不发 session_dead，前端 done 态不被打扰。 */
+  private selfTeardown(): void {
+    if (this.stopped) return;
+    this.stop();
+    this.onSelfStop?.(this);
   }
 
   /** 停止会话：关闭 query，释放 claude.exe，清理资源 */
