@@ -67,6 +67,11 @@ const EXTRA_MODE_LABELS: Record<string, string> = {
   dontAsk: "本次会话不再询问",
 };
 
+/** 「进入编辑模式」按钮连带放行的工具集：acceptEdits 的语义就是编辑工具自动接受，
+ *  切模式时队列里还挂着的同类请求一并放行——否则一轮并行 3 个 Edit，用户点完
+ *  「进入编辑模式」还得把剩下 2 条逐个点掉，等于没切。 */
+const EDIT_TOOL_NAMES: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
 const IMAGE_INPUT_UNSUPPORTED_MESSAGE =
   "当前模型不支持图片输入，不能读取该图片。请改读 OCR/文本描述、跳过该文件，或切换到支持视觉的模型。";
 
@@ -648,6 +653,12 @@ export class SessionWorker {
       } else if (cmd.approved && outcome?.toolName === "EnterPlanMode") {
         // 模型主动进入计划模式（非用户预选）：对齐本地账本并广播，让前端下拉同步
         this.applyPermissionMode("plan");
+      } else if (cmd.approved && cmd.nextMode) {
+        // 「进入编辑模式」：编辑工具的权限弹窗提供的一劳永逸选项——放行本次 +
+        // 切到 acceptEdits，之后编辑不再逐条确认（对齐 CLI 的 "allow all edits
+        // this session"）。切完把还挂着的其它编辑请求连带放行，别让用户逐条点。
+        this.applyPermissionMode(cmd.nextMode);
+        if (cmd.nextMode === "acceptEdits") this.permMgr.approveMatching(EDIT_TOOL_NAMES);
       }
 
     } else if (cmd.cmd === "update_permission_policy") {

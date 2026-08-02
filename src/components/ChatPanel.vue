@@ -1262,6 +1262,7 @@ function onOpenBgDock(taskId: string) {
       :permission="permission ?? null"
       :queue-count="permissionQueueCount"
       :remember-scope="rememberScope"
+      :current-mode="selectedPermissionMode"
       @respond="onPermissionRespond"
     />
 

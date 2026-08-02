@@ -172,6 +172,27 @@ describe("PermissionManager — resolve / cancelAll（无 always / appliedMode /
     expect(((await p2) as any).behavior).toBe("deny");
     expect(cancelledIds().sort()).toEqual([id1, id2].sort());
   });
+
+  it("approveMatching 只放行匹配工具的挂起请求（切 acceptEdits 连带放行并排 Edit）", async () => {
+    const { mgr, callback, requestIds, cancelledIds } = setup();
+    const pEdit1 = callback("Edit", { file_path: "a.ts" }, {});
+    const pBash = callback("Bash", { command: "ls" }, {});
+    const pEdit2 = callback("Write", { file_path: "b.ts" }, {});
+    let bashSettled = false;
+    void pBash.then(() => { bashSettled = true; });
+    const [idEdit1, , idEdit2] = requestIds();
+
+    const settled = mgr.approveMatching(new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]));
+
+    expect(settled).toBe(2);
+    expect(((await pEdit1) as any).behavior).toBe("allow");
+    expect(((await pEdit2) as any).behavior).toBe("allow");
+    // 连带放行也要通知前端撤下对应弹窗（否则对话框残留）
+    expect(cancelledIds().sort()).toEqual([idEdit1, idEdit2].sort());
+    // 不匹配的请求原样挂起，等用户自己确认
+    await Promise.resolve();
+    expect(bashSettled).toBe(false);
+  });
 });
 
 describe("PermissionManager — request() 直接调用（policy hook 的 ask 路径）", () => {

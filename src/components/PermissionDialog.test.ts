@@ -73,3 +73,55 @@ describe("PermissionDialog — 允许并记住", () => {
     expect(wrapper.find('[data-action="remember"]').exists()).toBe(false);
   });
 });
+
+describe("PermissionDialog — 进入编辑模式", () => {
+  const editPermission = (): PermissionRequest => ({
+    id: "p3",
+    name: "Edit",
+    input: { file_path: "src/a.ts", old_string: "a", new_string: "b" },
+  });
+
+  it("手动模式下编辑工具显示「进入编辑模式」、顶替「允许并记住」", () => {
+    const wrapper = mount(PermissionDialog, {
+      props: { permission: editPermission(), rememberScope: "local", currentMode: "default" },
+    });
+    expect(wrapper.find('[data-action="edit-mode"]').exists()).toBe(true);
+    expect(wrapper.find('[data-action="remember"]').exists()).toBe(false);
+    expect(wrapper.find(".perm-remember-hint").text()).toContain("编辑模式");
+  });
+
+  it("点击「进入编辑模式」emit 带 nextMode=acceptEdits 的放行", async () => {
+    const wrapper = mount(PermissionDialog, {
+      props: { permission: editPermission(), rememberScope: "local", currentMode: "default" },
+    });
+    await wrapper.get('[data-action="edit-mode"]').trigger("click");
+    const events = wrapper.emitted("respond");
+    expect(events).toBeTruthy();
+    expect(events![0]).toEqual(["p3", true, undefined, "acceptEdits"]);
+  });
+
+  it("非编辑工具（Bash）不显示，仍走「允许并记住」", () => {
+    const wrapper = mount(PermissionDialog, {
+      props: { permission: bashPermission(), rememberScope: "local", currentMode: "default" },
+    });
+    expect(wrapper.find('[data-action="edit-mode"]').exists()).toBe(false);
+    expect(wrapper.find('[data-action="remember"]').exists()).toBe(true);
+  });
+
+  it("已在编辑/自动/最高权限模式时不显示（弹窗属 ask 规则例外，回到记住按钮）", () => {
+    for (const mode of ["acceptEdits", "auto", "bypassPermissions"]) {
+      const wrapper = mount(PermissionDialog, {
+        props: { permission: editPermission(), rememberScope: "local", currentMode: mode },
+      });
+      expect(wrapper.find('[data-action="edit-mode"]').exists()).toBe(false);
+      expect(wrapper.find('[data-action="remember"]').exists()).toBe(true);
+    }
+  });
+
+  it("模式还没就位（空串）时按手动模式处理：显示", () => {
+    const wrapper = mount(PermissionDialog, {
+      props: { permission: editPermission(), currentMode: "" },
+    });
+    expect(wrapper.find('[data-action="edit-mode"]').exists()).toBe(true);
+  });
+});
