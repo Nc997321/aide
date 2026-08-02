@@ -3,6 +3,7 @@ import { ref, watch, nextTick, computed, onMounted, onUnmounted } from "vue";
 import type { ComputedRef } from "vue";
 import ChatMessage from "./ChatMessage.vue";
 import AppLogo from "./AppLogo.vue";
+import Icon from "./Icon.vue";
 import ContextCompactionStatus from "./ContextCompactionStatus.vue";
 import TaskListPanel from "./TaskListPanel.vue";
 import ThemedSelect from "./ThemedSelect.vue";
@@ -800,11 +801,20 @@ watch(
 
 // 用户向上滚动时暂停自动置底，回到底部附近恢复
 const autoScroll = ref(true);
+// 「回到底部」悬浮按钮：离底超过 JUMP_SHOW_THRESHOLD 才显示（比 autoScroll 的 48px
+// 阈值宽得多——刚离底几十 px 就浮按钮太吵）；上翻期间来了新消息/流式增量时点
+// 亮铜色小点，点击或手动滚回底部附近时熄灭
+const JUMP_SHOW_THRESHOLD = 200;
+const farFromBottom = ref(false);
+const newWhileAway = ref(false);
 
 function onScroll() {
   const el = scrollEl.value;
   if (!el) return;
-  autoScroll.value = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+  autoScroll.value = dist < 48;
+  farFromBottom.value = dist > JUMP_SHOW_THRESHOLD;
+  if (autoScroll.value) newWhileAway.value = false;
   // 滚到接近顶部 = 想看更早的消息:扩窗(带锚定)。只在用户真实滚动时触发,
   // 挂载/置底不产生 scrollTop≈0 的 scroll 事件,不会误触发。
   if (el.scrollTop < 80 && hiddenCount.value > 0) void expandOlderAnchored();
@@ -823,15 +833,33 @@ function scrollToBottom() {
   });
 }
 
-watch(() => messagesVal.value.length, scrollToBottom);
+// 新消息/流式增量到达：上翻阅读中则点亮「回到底部」的新消息小点；
+// 置底本身仍交给 scrollToBottom（autoScroll=false 时它自己 no-op）
+function onNewContent() {
+  if (!autoScroll.value) newWhileAway.value = true;
+  scrollToBottom();
+}
+
+watch(() => messagesVal.value.length, onNewContent);
 watch(
   () => {
     const last = messagesVal.value[messagesVal.value.length - 1];
     const block = last?.blocks[last.blocks.length - 1];
     return block?.type === "text" ? (block as TextBlock).text.length : 0;
   },
-  scrollToBottom
+  onNewContent
 );
+
+// 点「回到底部」：平滑滚到底并恢复自动置底。先收按钮再滚——平滑滚动途中用户
+// 滚轮打断时 scroll 事件会把按钮按真实距离重新点亮，不会丢状态。
+function jumpToBottom() {
+  const el = scrollEl.value;
+  if (!el) return;
+  newWhileAway.value = false;
+  farFromBottom.value = false;
+  autoScroll.value = true;
+  el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+}
 
 // 置底的统一触发器：数据层 watcher 只能枚举「新消息 / 文本增量」，但让滚动条
 // 搁浅的来源远不止这些——
@@ -882,6 +910,8 @@ watch(() => props.sessionId, () => {
   pendingImages.value = [];
   pendingMentions.value = [];
   autoScroll.value = true;
+  farFromBottom.value = false;
+  newWhileAway.value = false;
   scrollToBottom();
   // 切主会话 → btw 抽屉关、进程清理
   if (btw.store.value.question || btw.store.value.isBusy || btw.store.value.done) {
@@ -1217,7 +1247,11 @@ function onOpenBgDock(taskId: string) {
   <div ref="rootEl" class="chat-panel" :class="{ 'chat-panel--hero': isHero, 'chat-panel--hero-leaving': heroLeaving }">
     <TaskListPanel v-if="props.tasks && props.tasks.length > 0" :tasks="props.tasks" />
 
-    <div ref="scrollEl" class="chat-messages" @scroll.passive="onScroll">
+    <!-- 滚动区 wrapper：接手 .chat-messages 的 flex 占位，并作为「回到底部」
+         悬浮按钮的定位锚点——按钮若直接放进滚动容器会随内容一起滚走；
+         相对 chat-panel 绝对定位又无法自适应输入框/权限区的高度变化 -->
+    <div class="chat-scroll-wrap">
+      <div ref="scrollEl" class="chat-messages" @scroll.passive="onScroll">
       <div v-if="messagesVal.length === 0" class="chat-empty">
         开始新对话
       </div>
@@ -1253,6 +1287,20 @@ function onOpenBgDock(taskId: string) {
           <button class="chat-interrupt-btn" @click="emit('interrupt')">中断</button>
         </div>
       </div>
+      </div>
+
+      <!-- 回到底部：常驻渲染、class 控制显隐，留出淡入/上浮过渡；
+           上翻期间来新消息时尾部亮铜色小点 -->
+      <button
+        class="jump-bottom"
+        :class="{ 'jump-bottom--hidden': !farFromBottom }"
+        title="回到底部"
+        @click="jumpToBottom"
+      >
+        <Icon name="arrow-down" :size="12" :stroke-width="1.6" />
+        <span>回到底部</span>
+        <span v-if="newWhileAway" class="jump-bottom-dot" />
+      </button>
     </div>
 
     <!-- 权限确认 / AskUserQuestion：挤在消息区和输入框之间，占真实布局空间而
@@ -1502,6 +1550,60 @@ function onOpenBgDock(taskId: string) {
   padding: 8px 0;
 }
 
+/* 滚动区 wrapper：占位 + 悬浮按钮定位锚点（见模板注释） */
+.chat-scroll-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 回到底部：居中胶囊，悬浮于滚动区底部上方；显隐走 opacity/transform
+   过渡，hidden 态保留布局不占位（absolute）仅关指针事件 */
+.jump-bottom {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border-strong);
+  box-shadow: var(--aide-shadow-md);
+  color: var(--aide-text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    opacity var(--aide-ease-t),
+    transform var(--aide-ease-t),
+    background var(--aide-ease-t),
+    color var(--aide-ease-t);
+}
+.jump-bottom:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-accent-hover);
+}
+.jump-bottom--hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(8px);
+}
+.jump-bottom-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--aide-accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .jump-bottom { transition: none; }
+}
+
 /* 对话区顶部环境光晕：pointer-events none，层级不压内容 */
 .chat-messages::before {
   content: '';
@@ -1603,7 +1705,9 @@ function onOpenBgDock(taskId: string) {
   justify-content: center;
 }
 
-.chat-panel--hero .chat-messages {
+/* hero 下整条滚动区（含 wrapper）隐藏——wrapper 带 flex:1，只藏
+   .chat-messages 会让它吃掉剩余空间、破坏输入盒居中 */
+.chat-panel--hero .chat-scroll-wrap {
   display: none;
 }
 
