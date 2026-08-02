@@ -185,7 +185,10 @@ impl ShellManager {
         #[cfg(target_os = "windows")]
         let (shell_bin, shell_args): (String, Vec<String>) = (
             std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into()),
-            vec!["/c".into(), command.into()],
+            // chcp 65001：与工作台终端同一 UTF-8 方案（见 commands/shell.rs
+            // utf8_console_args），防中文机器 GBK 代码页下运行输出乱码。
+            // `&` 连接不影响最终退出码（取最后一条命令的）。
+            vec!["/c".into(), format!("chcp 65001 >nul & {}", command)],
         );
         #[cfg(not(target_os = "windows"))]
         let (shell_bin, shell_args): (String, Vec<String>) = (
