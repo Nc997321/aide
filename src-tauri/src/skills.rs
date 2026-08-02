@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 // ── 公共数据类型 ─────────────────────────────────────────────────────────
@@ -67,9 +67,13 @@ impl SkillProvider for ClaudeSkillProvider {
         let project_skills = cwd.join(".claude").join("skills");
         skills.extend(scan_dir(&project_skills, "project", "claude"));
 
-        // 3. 插件级：<claude_home>/plugins/cache/{registry}/{plugin}/{version}/skills/*/SKILL.md
-        let plugins_cache = crate::commands::claude_home().join("plugins").join("cache");
-        skills.extend(scan_plugins(&plugins_cache, "claude"));
+        // 3. 插件级：只列会话真实注入的插件。sidecar 经 env AIDE_ENABLED_PLUGINS_FILE
+        //    读 enabled-plugins.json 清单加载插件（SDK 不自动扫描任何固定目录），
+        //    下拉读同一份清单，保证展示的 == 会话里真实可用的。
+        //    不扫 claude_home/plugins/cache：那是 CLI 风格缓存目录，未启用/已卸载
+        //    插件的残留文件也在里面，扫它会列出会话中根本不存在的 skills。
+        let manifest = crate::commands::marketplace::enabled_plugins_manifest_path();
+        skills.extend(scan_enabled_plugins(&manifest, "claude"));
 
         skills
     }
@@ -104,34 +108,26 @@ fn scan_dir(skills_dir: &Path, source: &str, provider: &str) -> Vec<SkillMeta> {
     result
 }
 
-/// 扫描插件目录：cache/{registry}/{plugin}/{version}/skills/*/SKILL.md
-fn scan_plugins(plugins_cache: &Path, provider: &str) -> Vec<SkillMeta> {
-    let mut result = Vec::new();
-    let Ok(registries) = std::fs::read_dir(plugins_cache) else {
-        return result;
+/// 从 enabled-plugins.json 清单扫描插件 skills：清单条目的 path 指向插件版本目录，
+/// 扫其下 skills/*/SKILL.md。清单缺失/损坏时返回空——此时会话也不会注入任何插件，
+/// 下拉为空正好与会话一致。
+fn scan_enabled_plugins(manifest_path: &Path, provider: &str) -> Vec<SkillMeta> {
+    #[derive(Deserialize)]
+    struct ManifestEntry {
+        name: String,
+        path: String,
+    }
+    let Ok(content) = std::fs::read_to_string(manifest_path) else {
+        return Vec::new();
     };
-    for registry in registries.flatten() {
-        let Ok(plugins) = std::fs::read_dir(registry.path()) else {
-            continue;
-        };
-        for plugin in plugins.flatten() {
-            let plugin_name = plugin.file_name().to_string_lossy().to_string();
-            let source = format!("plugin:{plugin_name}");
-            // 遍历所有版本，取最新（版本号字符串排序即可，只取最大的）
-            let Ok(versions) = std::fs::read_dir(plugin.path()) else {
-                continue;
-            };
-            let mut version_dirs: Vec<PathBuf> = versions
-                .flatten()
-                .filter(|e| e.path().is_dir())
-                .map(|e| e.path())
-                .collect();
-            version_dirs.sort(); // 字符串升序，最后一个即最新
-            if let Some(latest) = version_dirs.last() {
-                let skills_dir = latest.join("skills");
-                result.extend(scan_dir(&skills_dir, &source, provider));
-            }
-        }
+    let Ok(entries) = serde_json::from_str::<Vec<ManifestEntry>>(&content) else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    for entry in entries {
+        let source = format!("plugin:{}", entry.name);
+        let skills_dir = Path::new(&entry.path).join("skills");
+        result.extend(scan_dir(&skills_dir, &source, provider));
     }
     result
 }
@@ -256,6 +252,46 @@ mod tests {
         let skills = scan_dir(&tmp, "user", "claude");
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].name, "my-tool");
+
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn test_scan_enabled_plugins_reads_manifest() {
+        let tmp = std::env::temp_dir().join(format!("aide-test-plugins-{}", std::process::id()));
+        let plugin_dir = tmp.join("superpowers").join("6.2.0");
+        make_skill_dir(
+            &plugin_dir.join("skills"),
+            "brainstorming",
+            "---\nname: brainstorming\ndescription: \"Brainstorm\"\n---\n",
+        );
+        let manifest = tmp.join("enabled-plugins.json");
+        let path_json = plugin_dir.to_string_lossy().replace('\\', "\\\\");
+        fs::write(
+            &manifest,
+            format!(r#"[{{"name":"superpowers","marketplace":"m","path":"{path_json}"}}]"#),
+        )
+        .unwrap();
+
+        let skills = scan_enabled_plugins(&manifest, "claude");
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "brainstorming");
+        assert_eq!(skills[0].source, "plugin:superpowers");
+
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn test_scan_enabled_plugins_missing_or_malformed_manifest() {
+        let tmp =
+            std::env::temp_dir().join(format!("aide-test-plugins-bad-{}", std::process::id()));
+        // 清单不存在 → 空
+        assert!(scan_enabled_plugins(&tmp.join("nope.json"), "claude").is_empty());
+        // 清单损坏 → 空
+        fs::create_dir_all(&tmp).unwrap();
+        let bad = tmp.join("bad.json");
+        fs::write(&bad, "not json").unwrap();
+        assert!(scan_enabled_plugins(&bad, "claude").is_empty());
 
         fs::remove_dir_all(&tmp).unwrap();
     }
