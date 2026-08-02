@@ -90,7 +90,9 @@ describe("SessionWorker — image input capability guard", () => {
     expect(result).toMatchObject({
       hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny" },
     });
-    expect(result!.hookSpecificOutput!.permissionDecisionReason).toContain("不支持图片输入");
+    // HookJSONOutput 的 SDK 类型不含 hookSpecificOutput（联合类型成员），运行时有——
+    // 本文件其它断言一律走 any，这里保持一致。
+    expect((result as any).hookSpecificOutput?.permissionDecisionReason).toContain("不支持图片输入");
     expect(events.some((event) => event.type === "permission_request")).toBe(false);
   });
 

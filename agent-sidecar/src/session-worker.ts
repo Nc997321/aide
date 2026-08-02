@@ -1072,9 +1072,12 @@ export class SessionWorker {
     return this.makeImageGuardHook();
   }
 
-  /** 测试用：暴露 Aide 权限策略 PreToolUse hook，验证 allow/deny/ask/无匹配({})。 */
-  _testPolicyHook(cwd?: string) {
-    return this.makePolicyHook(cwd);
+  /** 测试用：暴露 Aide 权限策略 PreToolUse hook，验证 allow/deny/ask/无匹配({})。
+   *  包装成单参签名：HookCallback 类型上 toolUseID/options 是必填，但策略 hook
+   *  只读 input——与其让十来个测试调用点各补两个占位实参，在这里一次适配。 */
+  _testPolicyHook(cwd?: string): (input: HookInput) => ReturnType<HookCallback> {
+    const hook = this.makePolicyHook(cwd);
+    return (input) => hook(input, undefined, { signal: new AbortController().signal });
   }
 
   /** 测试用：直接注入策略快照（不经过 send/update_permission_policy 命令路径）。 */

@@ -88,7 +88,7 @@ function extractMessageText(msg: unknown): string {
     ].join("\n");
   }
   if (m?.type === "assistant" && Array.isArray(m.message?.content)) {
-    return (m.message!.content as Array<{ type?: string; text?: unknown }>[])
+    return (m.message!.content as { type?: string; text?: unknown }[])
       .filter((b) => b?.type === "text")
       .map((b) => String(b?.text ?? ""))
       .join("\n");
@@ -97,11 +97,16 @@ function extractMessageText(msg: unknown): string {
 }
 
 export async function probeImageInput(
+  // queryFn 签名刻意用 any：调用方传的是 SDK 的 query（prompt: string |
+  // AsyncIterable<SDKUserMessage>、options?: Options），strictFunctionTypes 下
+  // 与这里的最小签名（unknown 元素 / Record<string, unknown>）逆变不兼容。
+  // 探针实际只 yield SDKUserMessage 形状的消息、只把返回值当异步迭代器消费，
+  // any 是诚实的（运行时本就跨泛型边界），比在调用点打两次未知转换干净。
   queryFn: (request: {
-    prompt: AsyncIterable<unknown>;
-    options: Record<string, unknown>;
+    prompt: AsyncIterable<any>;
+    options: any;
   }) => AsyncIterable<unknown>,
-  { env, model }: { env: Record<string, string>; model: string },
+  { env, model }: { env: Record<string, string | undefined>; model: string },
 ): Promise<true | false | null> {
   try {
     const probe = queryFn({
