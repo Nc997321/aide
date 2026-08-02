@@ -23,19 +23,40 @@ interface BtwState {
   status: BtwStatus;
   ownerSessionId: string | null; // 被 fork 的主会话 sid;null=idle
   model: string; // 这条支线实际跑的模型别名(抽屉展示用);空串=idle
+  effort: string; // 这条支线实际跑的 effort 档位(抽屉 pill 展示——直发不进输入模式时选择器看不到它);空串=idle
   minimized: boolean; // 用户点了「关闭」=最小化:抽屉收起,但 sidecar 继续后台跑,
   // 跑完结论照样经 onDone 插进主对话。最小化不杀进程;真正的 teardown 是 cleanup。
 }
 
-const IDLE: BtwState = { messages: [], isBusy: false, done: false, error: null, question: "", status: "idle", ownerSessionId: null, model: "", minimized: false };
+const IDLE: BtwState = { messages: [], isBusy: false, done: false, error: null, question: "", status: "idle", ownerSessionId: null, model: "", effort: "", minimized: false };
 const state = ref<BtwState>({ ...IDLE });
 let btwTempId: string | null = null;
 let btwRealId: string | null = null; // session_init 后的 fork id
 let onDoneCb: ((block: ActionBlock) => void) | null = null;
 
+/** 支线问答记忆：按主会话 id 记全部历史轮次（内存态，app 重启即忘——btw 本来就是
+ *  阅后即弃的临时物）。下一轮 btw 拼进 prompt，支线就能引用此前的问答（2026-08-02）。
+ *  不设轮数/字符上限：正常用法一个会话就几轮，每轮大头开销本是 fork 主会话上下文，
+ *  为假想的病态累积写截断特殊处理不值得。 */
+interface BtwRound {
+  question: string;
+  answer: string;
+}
+const historyByOwner = new Map<string, BtwRound[]>();
+
+/** 把该主会话此前的支线问答拼进本轮 prompt；无历史则原样返回。 */
+function composePrompt(ownerSid: string, prompt: string): string {
+  const history = historyByOwner.get(ownerSid);
+  if (!history?.length) return prompt;
+  const digest = history
+    .map((r, i) => `Q${i + 1}: ${r.question}\nA${i + 1}: ${r.answer}`)
+    .join("\n\n");
+  return `[本次对话此前的支线问答]\n${digest}\n\n[本轮问题]\n${prompt}`;
+}
+
 function resetState(question: string) {
-  // 新支线:show drawer(最小化标志清掉),starting 态。ownerSessionId/model 由 startBtw 补。
-  state.value = { messages: [], isBusy: true, done: false, error: null, question, status: "starting", ownerSessionId: null, model: "", minimized: false };
+  // 新支线:show drawer(最小化标志清掉),starting 态。ownerSessionId/model/effort 由 startBtw 补。
+  state.value = { messages: [], isBusy: true, done: false, error: null, question, status: "starting", ownerSessionId: null, model: "", effort: "", minimized: false };
 }
 
 /** useChatSession.handleChatEvent 调:判断事件是否属于当前 btw。 */
@@ -62,11 +83,13 @@ async function startBtw(opts: StartBtwOpts) {
   resetState(opts.prompt); // status="starting":抽屉已可见,显示问题
   state.value.ownerSessionId = opts.forkFrom; // 抽屉只绑回这个主会话所在窗口
   state.value.model = opts.model ?? ""; // 抽屉展示这条支线用的模型
+  state.value.effort = opts.effort ?? ""; // 抽屉 pill 展示这条支线实际跑的档位
   try {
     await invoke("start_btw_session", {
       btwId: opts.tempId,
       forkFrom: opts.forkFrom,
-      prompt: opts.prompt,
+      // 带上本主会话此前的支线问答（无历史则原样）；抽屉展示的仍是原始问题。
+      prompt: composePrompt(opts.forkFrom, opts.prompt),
       cwd: opts.cwd,
       lightweight: opts.lightweight,
       permissionMode: opts.permissionMode ?? null,
@@ -121,6 +144,12 @@ function handleBtwEvent(e: Record<string, unknown>) {
       // btw 支线也可能改了文件——同主对话，防抖增量重扫保持索引新鲜。
       useCodeGraphProgress().scheduleRescan();
       const conclusion = state.value.messages.join("");
+      // 记入支线记忆（只记有结论的成功轮次；出错/空轮不记，免得污染后续 prompt）。
+      if (conclusion && state.value.ownerSessionId) {
+        const rounds = historyByOwner.get(state.value.ownerSessionId) ?? [];
+        rounds.push({ question: state.value.question, answer: conclusion });
+        historyByOwner.set(state.value.ownerSessionId, rounds);
+      }
       if (onDoneCb && conclusion) {
         const block: ActionBlock = {
           type: "action",
@@ -182,4 +211,5 @@ export function __resetBtwForTest() {
   btwTempId = null;
   btwRealId = null;
   onDoneCb = null;
+  historyByOwner.clear();
 }

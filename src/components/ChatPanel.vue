@@ -730,10 +730,15 @@ const btwBgChipVisible = computed(
     && btw.store.value.ownerSessionId === props.sessionId,
 );
 // 抽屉标题里"· btw"那块小字换成这条支线实际用的模型名(查下拉 displayName,查不到回落原值)
+// + 实际 effort 档位——"/btw 问题"直发不进输入模式,选择器显示的仍是主会话档位,
+// 支线真实跑什么只能看这里(2026-08-02 用户实锤分不清 HIGH 是显示还是实际)。
 const btwModelLabel = computed(() => {
   const v = btw.store.value.model;
-  if (!v) return "btw";
-  return modelSelectOptions.value.find((m) => m.value === v)?.label ?? v;
+  const base = v
+    ? (modelSelectOptions.value.find((m) => m.value === v)?.label ?? v)
+    : "btw";
+  const eff = btw.store.value.effort;
+  return eff ? `${base} · ${eff.toUpperCase()}` : base;
 });
 // 一次性回弹确认:只在支线真正进入 running 才弹"已切回主对话"+flash。
 // 失败(error)不弹成功提示,原因在抽屉里展示——修掉"没抽屉却弹已切回"的误导。
@@ -857,8 +862,18 @@ watch(inputText, (val) => {
     slashFilter.value = match[1];
     slashDropdownVisible.value = true;
     slashSelectedIndex.value = 0;
-  } else {
-    slashDropdownVisible.value = false;
+    return;
+  }
+  slashDropdownVisible.value = false;
+  // 模式类斜杠命令的即时切换（同一监听点，与斜杠下拉共用）："/btw "（命令名 +
+  // 空格）= 点分裂按钮菜单的「顺便问一下」，立即进输入模式并清空，不用等 Enter
+  // （"/btw 问题" 的 Enter 直发分发仍在 handleSend）。prompt 类命令（/compact
+  // /clear）无输入模式，仍由 Enter 执行。
+  const cmd = val.match(/^\/(\S+)\s$/)?.[1];
+  const action = cmd ? quickActions.find((a) => a.command === cmd) : undefined;
+  if (!btwMode.value && action?.kind === "btw") {
+    inputText.value = "";
+    toggleBtw();
   }
 });
 
@@ -1071,6 +1086,42 @@ async function handleSend() {
     return;
   }
 
+  // 斜杠命令统一分发：/name 命中命令注册表（useQuickActions，/... 的唯一事实源）
+  // 就按 kind 执行——prompt 类与点分裂按钮菜单完全同路径（原文发引擎 + 动作胶囊
+  // + 二次确认）；btw 无参数进输入模式、有参数直接发支线。查不到才走 skill /
+  // 普通文本。已在 btw 模式里时不拦（输入本来就是支线内容，/btw 字面量无意义）。
+  if (!btwMode.value) {
+    const cmdMatch = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
+    const action = cmdMatch ? quickActions.find((a) => a.command === cmdMatch[1]) : undefined;
+    if (action) {
+      const args = (cmdMatch![2] ?? "").trim();
+      if (action.kind === "btw") {
+        inputText.value = "";
+        pendingImages.value = [];
+        pendingMentions.value = [];
+        if (!args) {
+          toggleBtw(); // 只切输入模式，等问题
+          return;
+        }
+        emit("send-btw", mentionPrefix + args, {
+          lightweight: btwLightweight.value,
+          model: btwModel.value || btwDefaultModel.value,
+          effort: btwEffort.value,
+        });
+        awaitingBtwLaunch.value = true;
+        return;
+      }
+      // prompt 类：菜单点击与手打同出口；取消确认则保留输入、什么都不发。
+      const sent = await runPromptAction(action, mentionPrefix + text);
+      if (sent) {
+        inputText.value = "";
+        pendingImages.value = [];
+        pendingMentions.value = [];
+      }
+      return;
+    }
+  }
+
   if (btwMode.value) {
     // btw 一次性:发完自动切回主对话输入。回弹确认(回弹动画 + "已切回"toast)
     // 不在这里乐观触发——等支线真正进入 running 才确认(见上面 status 的 watch),
@@ -1126,9 +1177,9 @@ async function handleSend() {
 
 // 快捷操作（压缩/清空上下文）：跟手打消息走同一条路径（忙碌排队/权限模式透传都
 // 免费拿到），但用户气泡渲染成动作胶囊（emit 时带 action 描述符，见
-// useChatSession.dispatchSend）。/clear 不可逆，执行前弹 useModal.confirm 二次确认；
-// /compact 可逆，直接发。取消确认则什么都不发、不入队、不推气泡。
-async function handleQuickAction(action: QuickAction) {
+// useChatSession.dispatchSend）。/clear 不可逆，执行前弹 useModal.confirm 二次确认。
+// 菜单点击与手打 /name 统一走 runPromptAction——取消确认则什么都不发、不入队、不推气泡。
+async function runPromptAction(action: QuickAction, prompt: string): Promise<boolean> {
   if (action.confirm) {
     const ok = await useModal().confirm(
       action.label,
@@ -1136,14 +1187,24 @@ async function handleQuickAction(action: QuickAction) {
       "清空",
       true,
     );
-    if (!ok) return;
+    if (!ok) return false;
   }
-  emit("send", action.prompt, {
+  emit("send", prompt, {
     initialModel: selectedModel.value || undefined,
     initialEffort: selectedEffort.value || undefined,
     permissionMode: selectedPermissionMode.value || undefined,
     action: { id: action.id, label: action.label, icon: action.icon },
   });
+  return true;
+}
+
+/** 分裂按钮菜单选择：btw 是输入模式切换（不发消息），prompt 类与手打 /name 同路径。 */
+async function handleQuickAction(action: QuickAction) {
+  if (action.kind === "btw") {
+    toggleBtw();
+    return;
+  }
+  await runPromptAction(action, "/" + action.command);
 }
 
 /** 工具卡片「后台运行中」徽章：打开 dock 并选中对应任务（toggleBgDock 已开时只切选中）。 */
@@ -1394,7 +1455,6 @@ function onOpenBgDock(taskId: string) {
             :btw-disabled="!props.sessionId"
             :btw-disabled-reason="'先发送一条消息开始主对话，才能顺便问一下'"
             @send="handleSend()"
-            @toggle-btw="toggleBtw"
             @select="handleQuickAction"
           />
         </div>
