@@ -317,9 +317,8 @@ export class SessionWorker {
     const jumps = this.jumpQueueCtl.takeAll();
     if (!jumps.length || this.stopped) return false;
     // 多条插队逐条 push（不合并）：/compact 这类斜杠命令作为独立用户消息才能
-    // 被 CLI 正确执行；权限模式取最后一条非空值（对齐旧排队合并语义）。
-    const lastMode = [...jumps].reverse().find((j) => j.permissionMode)?.permissionMode;
-    if (lastMode) this.applyPermissionMode(lastMode);
+    // 被 CLI 正确执行。权限模式不在此回放——存活期间用户切模式走
+    // set_permission_mode 实时通道已生效，入队快照只会把新模式回退成旧值。
     for (const jump of jumps) {
       this.queue.push({
         type: "user",
@@ -680,6 +679,10 @@ export class SessionWorker {
 
     } else if (cmd.cmd === "set_permission_mode") {
       this.applyPermissionMode(cmd.mode);
+      // 与「进入编辑模式」按钮同语义：切到 acceptEdits 时把切换之前已挂起的
+      // 编辑请求连带放行——否则旧弹窗留在屏幕上，而前端 currentMode 已是
+      // acceptEdits，「进入编辑模式」按钮又被藏起来，用户只能逐条点掉。
+      if (cmd.mode === "acceptEdits") this.permMgr.approveMatching(EDIT_TOOL_NAMES);
 
     } else if (cmd.cmd === "set_model") {
       applyModelSwitch({
@@ -764,7 +767,6 @@ export class SessionWorker {
       this.jumpQueueCtl.request({
         prompt: cmd.prompt,
         images: cmd.images,
-        permissionMode: cmd.permission_mode,
       });
       if (this.toolLifecycle.isIdle()) {
         this.currentQuery.interrupt().catch(() => {});
@@ -775,8 +777,11 @@ export class SessionWorker {
       return;
     }
 
-    // 普通续发
-    if (cmd.permission_mode) this.applyPermissionMode(cmd.permission_mode);
+    // 普通续发。注意不回放 cmd.permission_mode：query 存活期间权限模式由
+    // set_permission_mode 实时通道独占（前端下拉切换必发），消息里带的只是
+    // 发送时刻的快照——handleSend 可能被图片 probe 推迟（enqueueSend 串行化），
+    // 等待期间用户切的新模式会被这里的旧值回退。模式随消息携带只保留给
+    // 上面「首条消息」分支（进程未起时 set_permission_mode 静默失败的兜底）。
     this.queue.push({
       type: "user",
       message: buildUserMessage(cmd.prompt, cmd.images ?? []),

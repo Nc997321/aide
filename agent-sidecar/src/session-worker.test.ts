@@ -820,3 +820,51 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
     expect((out.hookSpecificOutput as any).updatedPermissions).toBeUndefined();
   });
 });
+
+describe("SessionWorker — set_permission_mode acceptEdits flush", () => {
+  it("approves pending edit requests and dismisses their dialogs, leaving other tools pending", async () => {
+    const { worker, events } = makeWorker();
+    const cb = worker._testCanUseTool();
+    // 两条挂起请求：一个编辑工具（应被连带放行）、一个 Bash（不应被动）。
+    const editDecision = cb("Edit", { file_path: "x.ts" }, {} as any);
+    const bashDecision = cb("Bash", { command: "ls" }, {} as any);
+    await flushPromises();
+    const editReq = events.find((e: any) => e.type === "permission_request" && e.name === "Edit");
+    const bashReq = events.find((e: any) => e.type === "permission_request" && e.name === "Bash");
+    expect(editReq).toBeTruthy();
+    expect(bashReq).toBeTruthy();
+
+    worker.handleCommand({ cmd: "set_permission_mode", session_id: "test-sid", mode: "acceptEdits" } as any);
+
+    // 挂起的 Edit 被放行（对齐「进入编辑模式」按钮语义），弹窗经 permission_cancelled 撤下。
+    await expect(editDecision).resolves.toMatchObject({ behavior: "allow" });
+    expect(events.some((e: any) => e.type === "permission_cancelled" && e.id === editReq.id)).toBe(true);
+    // 模式本身已落账并广播。
+    expect(events.some((e: any) => e.type === "permission_modes_available" && e.current === "acceptEdits")).toBe(true);
+    // Bash 不在编辑工具集内：仍挂着，既没放行也没撤弹窗。
+    expect(events.some((e: any) => e.type === "permission_cancelled" && e.id === bashReq.id)).toBe(false);
+    let bashSettled = false;
+    void bashDecision.then(() => { bashSettled = true; });
+    await flushPromises();
+    expect(bashSettled).toBe(false);
+
+    // 收尾：撤掉 Bash 挂起请求，避免悬空 promise。
+    worker.handleCommand({ cmd: "interrupt", session_id: "test-sid" } as any);
+    await expect(bashDecision).resolves.toMatchObject({ behavior: "deny" });
+  });
+
+  it("does not flush pending edits when switching to a non-edit mode", async () => {
+    const { worker, events } = makeWorker();
+    const cb = worker._testCanUseTool();
+    const editDecision = cb("Edit", { file_path: "x.ts" }, {} as any);
+    await flushPromises();
+    const editReq = events.find((e: any) => e.type === "permission_request" && e.name === "Edit");
+
+    worker.handleCommand({ cmd: "set_permission_mode", session_id: "test-sid", mode: "plan" } as any);
+    await flushPromises();
+
+    expect(events.some((e: any) => e.type === "permission_cancelled" && e.id === editReq.id)).toBe(false);
+    worker.handleCommand({ cmd: "interrupt", session_id: "test-sid" } as any);
+    await expect(editDecision).resolves.toMatchObject({ behavior: "deny" });
+  });
+});

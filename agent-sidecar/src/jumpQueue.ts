@@ -3,7 +3,9 @@ import type { ImageAttachment } from "./types.js";
 export interface JumpRequest {
   prompt: string;
   images?: ImageAttachment[];
-  permissionMode?: string;
+  // 刻意不带 permissionMode：插队只发生在进程存活（轮次进行中）时，此时权限模式
+  // 一律走 set_permission_mode 实时通道。若在此快照，promote 时会拿入队时的旧值
+  // 把用户刚切的新模式回退掉（2026-08-02 实锤：切编辑模式后旧 Edit 弹窗不消）。
 }
 
 /**
