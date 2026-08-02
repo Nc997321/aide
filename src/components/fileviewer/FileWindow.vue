@@ -809,9 +809,12 @@ async function openInBrowser() {
   cursor: pointer;
   transition: background 0.12s ease-out;
 }
-.goto-result-item:hover,
-.goto-result-item.selected {
+.goto-result-item:hover {
   background: var(--aide-surface-hover);
+}
+/* 选中态走 accent 色系，与 hover 区分（浅色主题 surface-hover 是白色，选中会看不出来） */
+.goto-result-item.selected {
+  background: var(--aide-accent-subtle);
 }
 
 .goto-confidence {

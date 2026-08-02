@@ -31,6 +31,7 @@
 | `colorScheme` | `"dark"` / `"light"`，决定原生控件明暗（apply.ts 特判，不是 `--aide-*` 变量） |
 | `bgDeep / bgBase / bgRaised / bgOverlay` | 四层底色：深井（输入框/代码井）→ 应用底 → 浮起面 → 遮罩 |
 | `surfaceDefault / surfaceHover / surfaceActive` | 交互表面三态 |
+| `selectionBg` | 文本选中底色（终端/编辑器共用）；浅色主题禁用 surface 系白色，给 accent 色系中透明度 |
 | `textPrimary / textSecondary / textMuted / textOnAccent` | 文字四级 |
 | `accent / accentHover / accentSubtle` | 强调色三态 |
 | `success / warning / danger / info` | 功能色 |

@@ -11,6 +11,7 @@ export const catppuccin: ThemeTokens = {
   surfaceDefault: "#313244",
   surfaceHover:   "#45475a",
   surfaceActive:  "#585b70",
+  selectionBg:    "#585b70",
 
   textPrimary:   "#cdd6f4",
   textSecondary: "#a6adc8",

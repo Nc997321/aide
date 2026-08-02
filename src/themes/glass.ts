@@ -11,6 +11,7 @@ export const glass: ThemeTokens = {
   surfaceDefault: "rgba(255,255,255,.06)",
   surfaceHover: "rgba(255,255,255,.1)",
   surfaceActive: "rgba(255,255,255,.14)",
+  selectionBg: "rgba(255,255,255,.14)",
 
   textPrimary: "#eef0f8",
   textSecondary: "#b9bdd0",

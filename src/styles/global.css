@@ -20,6 +20,7 @@
   --aide-surface-default: #292631;
   --aide-surface-hover: #322e3c;
   --aide-surface-active: #3d3848;
+  --aide-selection-bg: #3d3848;
   --aide-text-primary: #ece5db;
   --aide-text-secondary: #b3aa9c;
   --aide-text-muted: #7d7568;
@@ -66,6 +67,14 @@ html, body, #app {
   color: var(--aide-text-primary);
   font-family: 'Inter Variable', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   font-size: 13px;
+}
+
+/* 普通文本选中底色跟随主题（聊天区/输入框/设置页等 DOM 文本）。
+ * 终端是 canvas、CodeMirror 有自己的 .cm-selectionBackground，都不受此规则影响，
+ * 三者共用 --aide-selection-bg 一个 token。文字颜色不指定，保持原色（深底深字、
+ * 浅底浅字各自的 textPrimary 压在 selectionBg 上均可读）。 */
+::selection {
+  background: var(--aide-selection-bg);
 }
 
 /* Scrollbar styling */
