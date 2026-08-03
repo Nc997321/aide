@@ -37,6 +37,7 @@ import { existsSync, openSync, readSync, statSync, closeSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { loadAideInstructions } from "./instructions.js";
 import { buildProjectSkillOverrides } from "./skillsDiscovery.js";
+import { buildDispatchPluginsOption } from "./dispatchPlugins.js";
 import { evaluatePolicy } from "./policy/evaluate.js";
 import type { PermissionPolicySnapshot } from "./policy/types.js";
 
@@ -880,7 +881,9 @@ export class SessionWorker {
               // 轻量 btw：skills/plugins 同样关闭（Skill 工具虽被 tools:[] 禁掉，
               // 但 skill 清单会白进上下文；plugins 可能自带 MCP 工具漏进工具列表）。
               skills: this.lightweightMode ? [] : "all",
-              plugins: this.lightweightMode ? [] : buildPluginsOption(),
+              plugins: this.lightweightMode
+                ? []
+                : [...buildPluginsOption(), ...buildDispatchPluginsOption(effectiveCwd, trusted, this.lightweightMode)],
               hooks: {
                 PreToolUse: [
                   // Aide 权限策略是权威前置层，必须最先评估。
