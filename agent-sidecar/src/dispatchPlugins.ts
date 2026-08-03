@@ -11,6 +11,7 @@
 // 设计：docs/superpowers/specs/2026-08-03-dispatch-skills-plugins-injection-design.md
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 /** 用户级 plugin name（skill 命名空间前缀 aide-user:）。符合 SDK 正则 ^[A-Za-z0-9][-A-Za-z0-9._]*$。 */
@@ -55,4 +56,37 @@ export function ensureDispatchManifest(pluginRoot: string, name: string): boolea
   } catch {
     return false;
   }
+}
+
+/**
+ * 构建散装 plugin 注入配置：用户级 + 项目级（仅 trusted）。
+ *
+ * - lightweight → []
+ * - 用户级：claude home = process.env.CLAUDE_CONFIG_DIR（fallback ~/.aide/claude，
+ *   与 codegraphSkill.ts:50 同源）。目录存在 + ensureDispatchManifest 成功 → 注入
+ * - 项目级：{cwd}/.aide/claude，仅 trusted。同样门控
+ * - 每条 skipMcpDiscovery:true（散装 plugin 不贡献 MCP，与 Aide strictMcpConfig 隔离）
+ * - 目录不存在 / ensure 失败 → 跳过该条（降级，不阻塞）
+ */
+export function buildDispatchPluginsOption(
+  cwd: string,
+  trusted: boolean,
+  lightweight: boolean,
+): SdkPluginConfig[] {
+  if (lightweight) return [];
+  const out: SdkPluginConfig[] = [];
+
+  const claudeHome = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".aide", "claude");
+  if (existsSync(claudeHome) && ensureDispatchManifest(claudeHome, USER_PLUGIN_NAME)) {
+    out.push({ type: "local", path: claudeHome, skipMcpDiscovery: true });
+  }
+
+  if (trusted) {
+    const projectRoot = join(cwd, ".aide", "claude");
+    if (existsSync(projectRoot) && ensureDispatchManifest(projectRoot, PROJECT_PLUGIN_NAME)) {
+      out.push({ type: "local", path: projectRoot, skipMcpDiscovery: true });
+    }
+  }
+
+  return out;
 }

@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ensureDispatchManifest,
+  buildDispatchPluginsOption,
   USER_PLUGIN_NAME,
   PROJECT_PLUGIN_NAME,
 } from "./dispatchPlugins.js";
@@ -58,5 +59,111 @@ describe("ensureDispatchManifest", () => {
   it("pluginRoot 是文件而非目录时 mkdir 失败返回 false 不抛", () => {
     writeFileSync(join(root, "blocker"), "i am a file");
     expect(ensureDispatchManifest(join(root, "blocker"), USER_PLUGIN_NAME)).toBe(false);
+  });
+});
+
+describe("buildDispatchPluginsOption", () => {
+  let homeDir: string;
+  let cwdDir: string;
+  beforeEach(() => {
+    homeDir = mkdtempSync(join(tmpdir(), "aide-dispatch-home-"));
+    cwdDir = mkdtempSync(join(tmpdir(), "aide-dispatch-cwd-"));
+  });
+  afterEach(() => {
+    rmSync(homeDir, { recursive: true, force: true });
+    rmSync(cwdDir, { recursive: true, force: true });
+  });
+
+  /** 临时设 process.env.CLAUDE_CONFIG_DIR 跑 fn，结束后还原。 */
+  function withConfigDir(dir: string, fn: () => void): void {
+    const old = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = dir;
+    try {
+      fn();
+    } finally {
+      process.env.CLAUDE_CONFIG_DIR = old;
+    }
+  }
+
+  it("lightweight 返回 []（即便目录存在）", () => {
+    mkdirSync(join(homeDir, "skills", "x"), { recursive: true });
+    withConfigDir(homeDir, () => {
+      expect(buildDispatchPluginsOption(cwdDir, true, true)).toEqual([]);
+    });
+  });
+
+  it("!trusted 仅用户级（项目级不注入）", () => {
+    mkdirSync(join(homeDir, "skills", "x"), { recursive: true });
+    mkdirSync(join(cwdDir, ".aide", "claude", "skills", "y"), { recursive: true });
+    withConfigDir(homeDir, () => {
+      const res = buildDispatchPluginsOption(cwdDir, false, false);
+      expect(res).toHaveLength(1);
+      expect(res[0]).toEqual({ type: "local", path: homeDir, skipMcpDiscovery: true });
+    });
+  });
+
+  it("trusted 含用户级 + 项目级两条", () => {
+    mkdirSync(join(homeDir, "skills", "x"), { recursive: true });
+    mkdirSync(join(cwdDir, ".aide", "claude", "skills", "y"), { recursive: true });
+    withConfigDir(homeDir, () => {
+      const res = buildDispatchPluginsOption(cwdDir, true, false);
+      expect(res).toHaveLength(2);
+      expect(res[0]).toEqual({ type: "local", path: homeDir, skipMcpDiscovery: true });
+      expect(res[1]).toEqual({
+        type: "local",
+        path: join(cwdDir, ".aide", "claude"),
+        skipMcpDiscovery: true,
+      });
+    });
+  });
+
+  it("用户级目录不存在 → 跳过用户级，仅项目级", () => {
+    mkdirSync(join(cwdDir, ".aide", "claude", "skills", "y"), { recursive: true });
+    withConfigDir(join(homeDir, "nope"), () => {
+      const res = buildDispatchPluginsOption(cwdDir, true, false);
+      expect(res).toHaveLength(1);
+      expect(res[0].path).toBe(join(cwdDir, ".aide", "claude"));
+    });
+  });
+
+  it("项目级目录不存在 → 跳过项目级，仅用户级", () => {
+    mkdirSync(join(homeDir, "skills", "x"), { recursive: true });
+    withConfigDir(homeDir, () => {
+      const res = buildDispatchPluginsOption(cwdDir, true, false);
+      expect(res).toHaveLength(1);
+      expect(res[0].path).toBe(homeDir);
+    });
+  });
+
+  it("每条都带 skipMcpDiscovery:true", () => {
+    mkdirSync(join(homeDir, "skills", "x"), { recursive: true });
+    mkdirSync(join(cwdDir, ".aide", "claude", "skills", "y"), { recursive: true });
+    withConfigDir(homeDir, () => {
+      const res = buildDispatchPluginsOption(cwdDir, true, false);
+      expect(res.every((r) => r.skipMcpDiscovery === true)).toBe(true);
+    });
+  });
+
+  it("注入会 ensureDispatchManifest 写清单（用户级 aide-user）", () => {
+    mkdirSync(join(homeDir, "skills", "x"), { recursive: true });
+    withConfigDir(homeDir, () => {
+      buildDispatchPluginsOption(cwdDir, false, false);
+      const m = JSON.parse(
+        readFileSync(join(homeDir, ".claude-plugin", "plugin.json"), "utf8"),
+      );
+      expect(m).toEqual({ name: USER_PLUGIN_NAME });
+    });
+  });
+
+  it("trusted 注入会写项目级清单 aide-project", () => {
+    mkdirSync(join(homeDir, "skills", "x"), { recursive: true });
+    mkdirSync(join(cwdDir, ".aide", "claude", "skills", "y"), { recursive: true });
+    withConfigDir(homeDir, () => {
+      buildDispatchPluginsOption(cwdDir, true, false);
+      const m = JSON.parse(
+        readFileSync(join(cwdDir, ".aide", "claude", ".claude-plugin", "plugin.json"), "utf8"),
+      );
+      expect(m).toEqual({ name: PROJECT_PLUGIN_NAME });
+    });
   });
 });
