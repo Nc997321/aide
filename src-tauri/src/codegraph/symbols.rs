@@ -83,7 +83,7 @@ mod tests {
     use crate::codegraph::types::{SymbolDef, SymbolKind};
 
     fn sym(name: &str, file: &str, line: usize) -> SymbolDef {
-        SymbolDef { name: name.into(), kind: SymbolKind::Method, file: file.into(), line, column: 1, parent: None }
+        SymbolDef { name: name.into(), kind: SymbolKind::Method, file: file.into(), line, column: 1, parent: None, end_line: 0 }
     }
 
     #[test]

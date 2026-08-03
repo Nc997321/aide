@@ -124,6 +124,8 @@ export interface CodeGraphEmbedderConfig {
   format: "ollama" | "openai";
   /** 模型向量维度，0 = 自动从首次响应探测 */
   dim: number;
+  /** 语义搜索分数阈值；undefined = 后端按模型自动（fastembed≈0.35，http≈0.55）。范围 0~1，改后立即生效、无需重建。 */
+  scoreThreshold?: number;
 }
 
 export interface ChangeFile {

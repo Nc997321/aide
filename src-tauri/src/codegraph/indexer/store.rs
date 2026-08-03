@@ -133,6 +133,7 @@ mod tests {
                 line,
                 column: 1,
                 parent: None,
+                end_line: 0,
             },
             source: Confidence::Structure,
             code_snippet: snippet.into(),

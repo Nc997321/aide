@@ -242,9 +242,14 @@ impl AgentRuntimeManager {
                             let stdin2 = stdin_for_agent.clone();
                             tokio::spawn(async move {
                                 let payload = tokio::task::spawn_blocking(move || {
+                                    // 阈值按当前 settings 现解析（query-time，不缓存、不重建）。
+                                    let score_threshold = app2
+                                        .try_state::<Arc<crate::settings::SettingsService>>()
+                                        .map(|s| crate::codegraph::query_score_threshold(s.inner()))
+                                        .unwrap_or(0.35);
                                     let body = match app2.try_state::<Arc<crate::codegraph::CodeGraphState>>() {
                                         Some(st) => crate::codegraph::agent::execute_agent_query(
-                                            st.inner(), &req.tool, &req.args, &req.project_root,
+                                            st.inner(), &req.tool, &req.args, &req.project_root, score_threshold,
                                         ),
                                         None => serde_json::json!({
                                             "ok": false, "status": "error",

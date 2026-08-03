@@ -89,7 +89,8 @@ static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
             "baseUrl": "",
             "model": "nomic-embed-text",
             "format": "ollama",
-            "dim": 0
+            "dim": 0,
+            "scoreThreshold": null
         }), SettingValueKind::Object, "codegraph"),
         project("settings.codegraphEmbedder.backend", json!("fastembed"), SettingValueKind::String, "codegraph"),
         project("settings.codegraphEmbedder.baseUrl", json!(""), SettingValueKind::String, "codegraph"),
@@ -97,6 +98,7 @@ static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
         project("settings.codegraphEmbedder.model", json!("nomic-embed-text"), SettingValueKind::String, "codegraph"),
         project("settings.codegraphEmbedder.format", json!("ollama"), SettingValueKind::String, "codegraph"),
         project("settings.codegraphEmbedder.dim", json!(0), SettingValueKind::Number, "codegraph"),
+        project("settings.codegraphEmbedder.scoreThreshold", Value::Null, SettingValueKind::Number, "codegraph"),
         user("settings.enabledMarketplaces", json!([]), SettingValueKind::Array, "marketplace"),
         user("settings.enabledPlugins", json!({}), SettingValueKind::Object, "marketplace"),
         user("settings.jdkRegistry", json!([]), SettingValueKind::Array, "jdk"),

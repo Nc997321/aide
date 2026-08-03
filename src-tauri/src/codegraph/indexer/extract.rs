@@ -77,6 +77,7 @@ fn extract_from_node(
                         line: start.row + 1,
                         column: start.column + 1,
                         parent: None,
+                        end_line: node.end_position().row + 1,
                     },
                     source: Confidence::Structure,
                     code_snippet: symbol_snippet(&name, "class", node, source),
@@ -110,6 +111,7 @@ fn extract_from_node(
                         line: start.row + 1,
                         column: start.column + 1,
                         parent: None,
+                        end_line: node.end_position().row + 1,
                     },
                     source: Confidence::Structure,
                     code_snippet: symbol_snippet(&name, "interface", node, source),
@@ -132,6 +134,7 @@ fn extract_from_node(
                         line: start.row + 1,
                         column: start.column + 1,
                         parent: None,
+                        end_line: node.end_position().row + 1,
                     },
                     source: Confidence::Structure,
                     code_snippet: symbol_snippet(&name, "enum", node, source),
@@ -156,6 +159,7 @@ fn extract_from_node(
                         line: start.row + 1,
                         column: start.column + 1,
                         parent: None,
+                        end_line: node.end_position().row + 1,
                     },
                     source: Confidence::Structure,
                     code_snippet: symbol_snippet(&name, "struct", node, source),
@@ -189,6 +193,7 @@ fn extract_from_node(
                         line: start.row + 1,
                         column: start.column + 1,
                         parent: None,
+                        end_line: node.end_position().row + 1,
                     },
                     source: Confidence::Structure,
                     code_snippet: symbol_snippet(&name, "enum", node, source),
@@ -222,6 +227,7 @@ fn extract_from_node(
                         line: start.row + 1,
                         column: start.column + 1,
                         parent: None,
+                        end_line: node.end_position().row + 1,
                     },
                     source: Confidence::Structure,
                     code_snippet: symbol_snippet(&name, "trait", node, source),
@@ -290,6 +296,7 @@ fn extract_from_node(
                         line: start.row + 1,
                         column: start.column + 1,
                         parent: parent_sym.map(|s| s.to_string()),
+                        end_line: node.end_position().row + 1,
                     },
                     source: Confidence::Structure,
                     code_snippet: symbol_snippet(&name, "fn", node, source),
@@ -330,6 +337,7 @@ fn extract_from_node(
                             line: start.row + 1,
                             column: start.column + 1,
                             parent: parent_sym.map(|s| s.to_string()),
+                            end_line: node.end_position().row + 1,
                         },
                         source: Confidence::Structure,
                         code_snippet: symbol_snippet(&name, "field", node, source),
@@ -354,6 +362,7 @@ fn extract_from_node(
                         line: start.row + 1,
                         column: start.column + 1,
                         parent: parent_sym.map(|s| s.to_string()),
+                        end_line: node.end_position().row + 1,
                     },
                     source: Confidence::Structure,
                     code_snippet: symbol_snippet(&name, "const", node, source),
@@ -381,6 +390,7 @@ fn extract_from_node(
                                 line: start.row + 1,
                                 column: start.column + 1,
                                 parent: parent_sym.map(|s| s.to_string()),
+                                end_line: node.end_position().row + 1,
                             },
                             source: Confidence::Structure,
                             code_snippet: symbol_snippet(&name, "field", node, source),
@@ -406,6 +416,7 @@ fn extract_from_node(
                         line: start.row + 1,
                         column: start.column + 1,
                         parent: parent_sym.map(|s| s.to_string()),
+                        end_line: node.end_position().row + 1,
                     },
                     source: Confidence::Structure,
                     code_snippet: symbol_snippet(&name, "type", node, source),
@@ -530,18 +541,25 @@ fn extract_vue_sfc(
                 line: 1,
                 column: 1,
                 parent: None,
+                end_line: source.lines().count(),
             },
             source: Confidence::Structure,
             code_snippet: format!("vue component {}: {}", stem, snippet_body),
         });
     }
 
-    let script_content = match extract_script_block(source) {
+    let (script_content, script_start_line) = match extract_script_block(source) {
         Some(s) => s,
         None => return (symbols, call_edges),
     };
 
-    // Parse the script content with the TypeScript grammar.
+    // Parse the script content with the TypeScript grammar. Rows tree-sitter
+    // reports are offsets into `script_content`, not SFC line numbers, so we
+    // shift script-derived symbols (and their call edges) by `script_start_line
+    // - 1` to map them onto the SFC's whole-file line numbers. The filename-
+    // derived component symbol (line 1) was pushed above and is left untouched.
+    let before_script = symbols.len();
+    let before_edges = call_edges.len();
     if let Some(ts_lang) = parser_manager.get_language("ts") {
         let mut parser = tree_sitter::Parser::new();
         if parser.set_language(ts_lang).is_ok() {
@@ -558,19 +576,32 @@ fn extract_vue_sfc(
             }
         }
     }
+    let line_offset = script_start_line - 1;
+    for pt in &mut symbols[before_script..] {
+        pt.symbol.line += line_offset;
+        pt.symbol.end_line += line_offset;
+    }
+    for edge in &mut call_edges[before_edges..] {
+        edge.line += line_offset;
+    }
 
     (symbols, call_edges)
 }
 
 /// Extract the text content inside a `<script>` or `<script setup>` tag.
-/// Returns None if no script tag is found.
-fn extract_script_block(source: &str) -> Option<String> {
+/// Returns `(content, start_line)` where `start_line` is the 1-based line of
+/// the script block's first content line within the whole SFC. `extract_vue_sfc`
+/// parses `content` in isolation, so tree-sitter rows are offsets into
+/// `content`, not SFC line numbers — callers add `start_line - 1` to map them
+/// back. Returns None if no script tag is found.
+fn extract_script_block(source: &str) -> Option<(String, usize)> {
     let script_open = source.find("<script")?;
     let tag_end = source[script_open..].find('>')?;
     let content_start = script_open + tag_end + 1;
     let close_tag = source[content_start..].find("</script>")?;
     let content = &source[content_start..content_start + close_tag];
-    Some(content.to_string())
+    let start_line = source[..content_start].bytes().filter(|&b| b == b'\n').count() + 1;
+    Some((content.to_string(), start_line))
 }
 
 // ── Tests ──
@@ -786,5 +817,40 @@ mod tests {
         let src = "<template><div/></template>\n<style></style>";
         let got = names(src, "Empty.vue");
         assert_eq!(got, vec!["Empty".to_string()]);
+    }
+
+    #[test]
+    fn end_line_covers_full_span_for_each_kind() {
+        // 每个 SymbolKind 的 end_line 都应 >= line（来自 tree-sitter end_position）。
+        let src = "class Repo { save() {} }\ninterface IFace { id: number; }\nenum Color { Red, Blue }\nfunction long() {\n  const a = 1;\n  return a;\n}\n";
+        let pm = ParserManager::new();
+        let (points, _) = extract_symbols(Path::new("x.ts"), src, &pm, Path::new(""));
+        for p in &points {
+            assert!(p.symbol.end_line >= p.symbol.line,
+                "{:?} {}: end_line {} < line {}", p.symbol.kind, p.symbol.name, p.symbol.end_line, p.symbol.line);
+        }
+        // class Repo 单行 → end_line == line == 1
+        let repo = points.iter().find(|p| p.symbol.name == "Repo").unwrap();
+        assert_eq!(repo.symbol.line, 1);
+        assert_eq!(repo.symbol.end_line, 1);
+        // function long 跨行 4-7 → end_line == 7
+        let long = points.iter().find(|p| p.symbol.name == "long").unwrap();
+        assert_eq!(long.symbol.line, 4);
+        assert_eq!(long.symbol.end_line, 7, "function long spans lines 4-7");
+    }
+
+    #[test]
+    fn vue_sfc_script_symbols_use_whole_file_line_numbers() {
+        // script block 从第 2 行起；handleClick 在 script block 第 2 行 → SFC 全文第 3 行。
+        // 修复前 handleClick.line 是 script_content 内偏移（2），修复后是 SFC 全文行号（3）。
+        let pm = ParserManager::new();
+        let src = "<template><div/></template>\n<script setup>\nfunction handleClick() {\n  return 1;\n}\n</script>\n";
+        let (points, _edges) = extract_symbols(Path::new("Comp.vue"), src, &pm, Path::new("."));
+        let comp = points.iter().find(|p| p.symbol.name == "Comp").unwrap();
+        assert_eq!(comp.symbol.line, 1, "component symbol at SFC line 1");
+        assert_eq!(comp.symbol.end_line, src.lines().count(), "component spans whole file");
+        let handler = points.iter().find(|p| p.symbol.name == "handleClick").unwrap();
+        assert_eq!(handler.symbol.line, 3, "handleClick at SFC line 3 (script offset corrected)");
+        assert_eq!(handler.symbol.end_line, 5, "handleClick spans SFC lines 3-5");
     }
 }

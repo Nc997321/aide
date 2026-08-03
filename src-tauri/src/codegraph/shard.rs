@@ -189,6 +189,7 @@ impl CodeShard {
                     "line": p.symbol.line,
                     "column": p.symbol.column,
                     "parent": p.symbol.parent,
+                    "end_line": p.symbol.end_line,
                     "source": match p.source { Confidence::Structure => "structure", Confidence::Semantic => "semantic" },
                     "code_snippet": p.code_snippet,
                 });
@@ -265,6 +266,7 @@ impl CodeShard {
                 let file = get_payload_str(&r.payload, "file").unwrap_or_default();
                 let line = get_payload_u64(&r.payload, "line").unwrap_or(0) as usize;
                 let column = get_payload_u64(&r.payload, "column").unwrap_or(0) as usize;
+                let end_line = get_payload_u64(&r.payload, "end_line").unwrap_or(0) as usize;
                 let parent = get_payload_str(&r.payload, "parent");
                 let source = get_payload_str(&r.payload, "source");
 
@@ -275,6 +277,7 @@ impl CodeShard {
                         file,
                         line,
                         column,
+                        end_line,
                         parent,
                     },
                     confidence: match source.as_deref() {
@@ -451,6 +454,7 @@ mod tests {
                 line: 1,
                 column: 1,
                 parent: None,
+                end_line: 0,
             },
             source: Confidence::Structure,
             code_snippet: "function foo() {}".into(),

@@ -60,10 +60,13 @@ export function makeCodegraphGrepNudgeHook() {
       hookSpecificOutput: {
         hookEventName: "PreToolUse" as const,
         additionalContext:
-          `Note: "${pattern.trim().replace(/\\b/g, "")}" looks like a code symbol, not a text pattern. ` +
-          `For definition/call-chain lookups prefer mcp__aide-codegraph__find_symbol (exact definitions) ` +
-          `or mcp__aide-codegraph__call_graph (callers/callees) FIRST — one call replaces a grep-then-read fan-out. ` +
-          `If those tools report no match or the index is not built, Grep results like this one are the right fallback.`,
+          // 2026-08-03 文案迭代：preference→替代，逃生口收窄为"无法命中"（0 结果/索引没建）。
+          // "钉住"语义：有结果（哪怕差）不退 Grep，逼模型啃 find_symbol 而不是逃回 grep 老路。
+          // 大白话描述用途（避免 symbol/调用链 jargon，第三方模型更买账）；工具全名保留供调用。
+          `Note: "${pattern.trim().replace(/\\b/g, "")}" looks like a function/class/variable name you're looking for. ` +
+          `Use mcp__aide-codegraph__find_symbol (to find where it's defined) or mcp__aide-codegraph__call_graph (to find who calls it / what it calls) ` +
+          `INSTEAD OF Grep — do not Grep for this name. ` +
+          `Only fall back to Grep if they return no match or say the index is not built.`,
       },
     };
   };
@@ -112,7 +115,13 @@ export function formatToolResponse(
   if (toolName === "find_symbol") {
     const lines = results.map((r: any) => {
       const parent = r.parent ? ` (${r.parent})` : "";
-      return `${r.kind} ${r.name} — ${r.file}:${r.line}${parent}`;
+      const end = r.end_line && r.end_line > r.line ? `-${r.end_line}` : "";
+      const head = `${r.kind} ${r.name} — ${r.file}:${r.line}${end}${parent}`;
+      // r.source is the symbol's full source sliced by the backend (capped);
+      // absent when the span is missing (old index) or exceeds the cap — then
+      // the agent uses `end` to Read precisely instead.
+      const src = r.source ? `\n${r.source}` : "";
+      return `${head}${src}`;
     });
     return `Definitions (exact, from code index):\n${lines.join("\n")}`;
   }

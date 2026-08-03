@@ -194,11 +194,20 @@ fn config_embedder_identity(cfg: &RuntimeCodeGraphEmbedderConfig) -> (String, us
 /// at `config["settings"]["codegraphEmbedder"]` (a field of `AppSettings`).
 /// Returns the default (fastembed) if the file or block is missing — zero-config
 /// out of the box. Best-effort: malformed JSON → default, logged, never panics.
-fn load_embedder_config(service: &crate::settings::SettingsService) -> RuntimeCodeGraphEmbedderConfig {
+pub(crate) fn load_embedder_config(service: &crate::settings::SettingsService) -> RuntimeCodeGraphEmbedderConfig {
     crate::commands::settings::resolve_codegraph_embedder(service).unwrap_or_else(|error| {
         tracing::warn!("codegraph: invalid embedder config, using default: {error}");
-        RuntimeCodeGraphEmbedderConfig { backend: "fastembed".to_string(), base_url: String::new(), api_key: String::new(), model: "nomic-embed-text".to_string(), format: "ollama".to_string(), dim: 0 }
+        RuntimeCodeGraphEmbedderConfig { backend: "fastembed".to_string(), base_url: String::new(), api_key: String::new(), model: "nomic-embed-text".to_string(), format: "ollama".to_string(), dim: 0, score_threshold: None }
     })
+}
+
+/// Query-time score threshold for `semantic_search`: the user's override
+/// (`codegraphEmbedder.scoreThreshold`) or the per-backend default. Read fresh
+/// each query — the threshold is a pure filter, never touches embeddings, so
+/// changing it takes effect immediately without a rebuild. Reuses
+/// `load_embedder_config`'s invalid-config fallback.
+pub(crate) fn query_score_threshold(service: &crate::settings::SettingsService) -> f32 {
+    query::semantic::effective_score_threshold(&load_embedder_config(service))
 }
 
 /// Tauri command: build (or load) the full index for a project.
@@ -571,8 +580,10 @@ pub async fn codegraph_goto_definition(
     #[allow(unused_variables)] column: usize,
     #[allow(unused_variables)] project_root: String,
     state: tauri::State<'_, std::sync::Arc<CodeGraphState>>,
+    settings_service: tauri::State<'_, std::sync::Arc<crate::settings::SettingsService>>,
 ) -> Result<Vec<types::QueryResult>, String> {
     let st = state.inner().clone();
+    let ss = settings_service.inner().clone();
     tokio::task::spawn_blocking(move || {
         // 1. structure (exact, cross-file) under a read lock; clone shard Arc out
         // atomically with embed_ready (TOCTOU: reading them under separate locks
@@ -601,7 +612,7 @@ pub async fn codegraph_goto_definition(
         // lock embedder, embed word, search shard (read lock already dropped).
         let emb = st.embedder.lock().map_err(|e| e.to_string())?;
         if let Some(embedder) = emb.as_ref() {
-            match query::semantic::semantic_search(&word, embedder.as_ref(), &shard_arc, 10) {
+            match query::semantic::semantic_search(&word, embedder.as_ref(), &shard_arc, 10, query_score_threshold(&ss)) {
                 Ok(mut r) => {
                     r.sort_by(|a, b| {
                         b.score
@@ -1362,6 +1373,7 @@ mod tests {
                 line,
                 column: 1,
                 parent: None,
+                end_line: 0,
             },
             source: Confidence::Structure,
             code_snippet: format!("function {}() {{}}", name),
@@ -1509,6 +1521,7 @@ mod tests {
                 line: 1,
                 column: 1,
                 parent: None,
+                end_line: 0,
             },
             source: Confidence::Structure,
             code_snippet: "function foo() {}".into(),

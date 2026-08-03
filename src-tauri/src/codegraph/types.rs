@@ -34,6 +34,13 @@ pub struct SymbolDef {
     pub column: usize,
     /// Containing class name for methods / fields; None for top-level symbols.
     pub parent: Option<String>,
+    /// 1-based end line of the symbol's full span (inclusive). Lets the agent
+    /// size Read precisely and lets find_symbol slice the full source instead
+    /// of guessing a `limit`. `#[serde(default)]` so old index files (and old
+    /// qdrant payloads) load with end_line = 0 → callers fall back to span-less
+    /// behavior. Extractor fills this from `Node::end_position().row + 1`.
+    #[serde(default)]
+    pub end_line: usize,
 }
 
 /// A directed call edge between two named symbols.

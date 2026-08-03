@@ -77,6 +77,8 @@ const cgApiKey = ref("");
 const cgModel = ref(settings.codegraphEmbedder.model);
 const cgFormat = ref(settings.codegraphEmbedder.format);
 const cgDim = ref(settings.codegraphEmbedder.dim);
+// undefined = 后端按模型自动（fastembed≈0.35，http≈0.55）；用户填了数字则覆盖。
+const cgScoreThreshold = ref<number | undefined>(settings.codegraphEmbedder.scoreThreshold);
 
 function codegraphConfig() {
   return {
@@ -86,6 +88,7 @@ function codegraphConfig() {
     model: cgModel.value,
     format: cgFormat.value,
     dim: cgDim.value,
+    scoreThreshold: cgScoreThreshold.value,
   } as const;
 }
 
@@ -104,6 +107,13 @@ async function clearCodegraphApiKey() {
   await setCodegraphEmbedder(codegraphConfig(), { action: "clear" });
   cgApiKey.value = "";
 }
+
+// 空输入 = undefined（后端按模型自动）；v-model.number 会把空串 coerce 成 0、丢失"自动"
+// 语义，所以手绑 :value/@input。非法/负数归零为 undefined。
+function onScoreThresholdInput(e: Event) {
+  const el = e.target as HTMLInputElement;
+  cgScoreThreshold.value = el.value === "" ? undefined : Number.parseFloat(el.value);
+}
 watch(cgBackend, flushCodegraphEmbedder);
 watch(cgBaseUrl, flushCodegraphEmbedder);
 watch(cgModel, flushCodegraphEmbedder);
@@ -111,6 +121,10 @@ watch(cgFormat, flushCodegraphEmbedder);
 watch(cgDim, (v) => {
   const clamped = Math.max(0, Math.floor(v) || 0);
   cgDim.value = clamped;
+  flushCodegraphEmbedder();
+});
+watch(cgScoreThreshold, (v) => {
+  if (v !== undefined && (Number.isNaN(v) || v < 0)) cgScoreThreshold.value = undefined;
   flushCodegraphEmbedder();
 });
 
@@ -682,6 +696,24 @@ function onOverlayClick(e: MouseEvent) {
                   本地 ONNX 推理（all-MiniLM-L6-v2，384 维）。首次使用会从 HuggingFace 下载 ~23MB 模型到本地缓存。
                   慢（约 50 个/秒）但离线可用——结构层（精确跳转）始终先就绪，语义搜索后台补全。
                 </span>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">语义搜索分数阈值</label>
+                <div class="field-control">
+                  <input
+                    :value="cgScoreThreshold"
+                    @input="onScoreThresholdInput"
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    class="text-input"
+                    style="width: 100px"
+                    placeholder="自动"
+                  />
+                  <span class="field-hint">留空 = 后端按模型自动（fastembed≈0.35，http≈0.55）；范围 0~1，改后立即生效、无需重建索引</span>
+                </div>
               </div>
 
               <div class="cg-rebuild-note">

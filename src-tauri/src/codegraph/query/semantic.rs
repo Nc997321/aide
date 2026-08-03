@@ -1,6 +1,7 @@
 use crate::codegraph::embed::{embed_one, Embedder};
 use crate::codegraph::shard::CodeShard;
 use crate::codegraph::types::QueryResult;
+use crate::commands::settings::RuntimeCodeGraphEmbedderConfig;
 
 /// Vector search via Qdrant Edge.
 /// Embeds the query text and returns top-K semantically similar results.
@@ -10,23 +11,39 @@ use crate::codegraph::types::QueryResult;
 /// queries and documents in the same embedding space, and avoids the bge-m3 NaN
 /// trigger on bare code token sequences.
 ///
-/// Results below `SCORE_THRESHOLD` (cosine similarity) are filtered out — below
-/// this value bge-m3 matches are essentially random noise, especially for
-/// cross-lingual queries (Chinese → English code).
+/// Results below `score_threshold` (cosine similarity) are filtered out. The
+/// threshold is config-driven (`codegraphEmbedder.scoreThreshold`), defaulting
+/// per backend via `default_score_threshold` — 0.55 for `http` (bge-m3-tuned),
+/// 0.35 for `fastembed` (all-MiniLM-L6-v2 scores lower; 0.55 filtered everything).
 pub fn semantic_search(
     query_text: &str,
     embedder: &dyn Embedder,
     shard: &CodeShard,
     limit: usize,
+    score_threshold: f32,
 ) -> Result<Vec<QueryResult>, Box<dyn std::error::Error>> {
-    const SCORE_THRESHOLD: f32 = 0.55;
-
     let prefixed = crate::codegraph::embed_input(query_text);
     let vector = embed_one(embedder, &prefixed)?;
     let mut results = shard.search(&vector, limit * 3, None)?; // fetch more, then filter
-    results.retain(|r| r.score.unwrap_or(0.0) >= SCORE_THRESHOLD);
+    results.retain(|r| r.score.unwrap_or(0.0) >= score_threshold);
     results.truncate(limit);
     Ok(results)
+}
+
+/// 默认分数阈值按 embedder 后端推导：`fastembed`（all-MiniLM-L6-v2，384 维）余弦
+/// 分布偏低（好匹配常落在 0.3–0.5），用 0.35；`http` 后端（bge-m3 等较大模型）用
+/// 0.55——这曾是硬编码常量、专为 bge-m3 调的值。用户可在设置里用 scoreThreshold 覆盖。
+pub fn default_score_threshold(backend: &str) -> f32 {
+    match backend {
+        "http" => 0.55,
+        _ => 0.35,
+    }
+}
+
+/// 生效阈值：用户覆盖（`Some`）优先，否则按 backend 取默认（`None`）。
+pub fn effective_score_threshold(cfg: &RuntimeCodeGraphEmbedderConfig) -> f32 {
+    cfg.score_threshold
+        .unwrap_or_else(|| default_score_threshold(&cfg.backend))
 }
 
 #[cfg(test)]
@@ -35,6 +52,33 @@ mod tests {
     use crate::codegraph::embed::{HttpEmbedder, HttpEmbedderConfig, HttpFormat};
     use crate::codegraph::shard::CodeShard;
     use crate::codegraph::types::{Confidence, IndexedPoint, SymbolDef, SymbolKind};
+    use crate::commands::settings::RuntimeCodeGraphEmbedderConfig;
+
+    fn runtime_cfg(backend: &str, score_threshold: Option<f32>) -> RuntimeCodeGraphEmbedderConfig {
+        RuntimeCodeGraphEmbedderConfig {
+            backend: backend.to_string(),
+            base_url: String::new(),
+            api_key: String::new(),
+            model: String::new(),
+            format: String::new(),
+            dim: 0,
+            score_threshold,
+        }
+    }
+
+    /// 阈值默认按后端推导（fastembed/MiniLM→0.35，http/bge-m3→0.55），用户可覆盖。
+    /// 修复"MiniLM 全零召回"bug 的回归保护——0.55 是 bge-m3 调的，MiniLM 用 0.35。
+    #[test]
+    fn score_threshold_defaults_and_override() {
+        assert_eq!(default_score_threshold("fastembed"), 0.35);
+        assert_eq!(default_score_threshold("http"), 0.55);
+        // None → 按 backend 取默认
+        assert_eq!(effective_score_threshold(&runtime_cfg("fastembed", None)), 0.35);
+        assert_eq!(effective_score_threshold(&runtime_cfg("http", None)), 0.55);
+        // Some(v) → 用户覆盖优先
+        assert_eq!(effective_score_threshold(&runtime_cfg("fastembed", Some(0.42))), 0.42);
+        assert_eq!(effective_score_threshold(&runtime_cfg("http", Some(0.2))), 0.2);
+    }
 
     /// Cross-lingual semantic search: Chinese query → pure Rust code (no Chinese
     /// comments). Verifies bge-m3 can bridge Chinese NL to English code symbols.
@@ -105,6 +149,7 @@ mod tests {
                     line: *line,
                     column: 1,
                     parent: None,
+                    end_line: 0,
                 },
                 source: Confidence::Structure,
                 code_snippet: snippet.to_string(),

@@ -74,6 +74,10 @@ pub struct CodeGraphEmbedderConfig {
     /// 0 = auto-probe from the first successful embedding response.
     #[serde(default)]
     pub dim: u32,
+    /// 语义搜索分数阈值；None = 按 backend 取默认（fastembed/MiniLM≈0.35，http≈0.55）。
+    /// 纯 query-time 过滤器，不碰 embedding，改了立即生效、无需重建索引。
+    #[serde(default)]
+    pub score_threshold: Option<f32>,
 }
 
 fn default_cg_backend() -> String { "fastembed".to_string() }
@@ -89,6 +93,7 @@ impl Default for CodeGraphEmbedderConfig {
             model: default_cg_model(),
             format: default_cg_format(),
             dim: 0,
+            score_threshold: None,
         }
     }
 }
@@ -348,6 +353,7 @@ pub(crate) fn resolve_codegraph_embedder(service: &SettingsService) -> Result<Ru
         model: settings.codegraph_embedder.model,
         format: settings.codegraph_embedder.format,
         dim: settings.codegraph_embedder.dim,
+        score_threshold: settings.codegraph_embedder.score_threshold,
     })
 }
 
@@ -359,6 +365,7 @@ pub(crate) struct RuntimeCodeGraphEmbedderConfig {
     pub model: String,
     pub format: String,
     pub dim: u32,
+    pub score_threshold: Option<f32>,
 }
 
 #[tauri::command]
@@ -580,6 +587,7 @@ mod tests {
         let s: AppSettings = serde_json::from_str(r#"{"fontSize":14}"#).unwrap();
         assert_eq!(s.codegraph_embedder.backend, "fastembed");
         assert_eq!(s.codegraph_embedder.format, "ollama");
+        assert_eq!(s.codegraph_embedder.score_threshold, None);
 
         // 完整 http 配置 round-trip
         let json = r#"{
@@ -590,7 +598,8 @@ mod tests {
                 "apiKey": "sk-x",
                 "model": "nomic-embed-text",
                 "format": "ollama",
-                "dim": 768
+                "dim": 768,
+                "scoreThreshold": 0.5
             }
         }"#;
         let s: AppSettings = serde_json::from_str(json).unwrap();
@@ -599,6 +608,7 @@ mod tests {
         assert_eq!(s.codegraph_embedder.model, "nomic-embed-text");
         assert_eq!(s.codegraph_embedder.format, "ollama");
         assert_eq!(s.codegraph_embedder.dim, 768);
+        assert_eq!(s.codegraph_embedder.score_threshold, Some(0.5));
 
         let out = serde_json::to_string(&s).unwrap();
         assert!(out.contains("\"codegraphEmbedder\""), "{out}");

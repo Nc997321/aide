@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 
 use serde_json::{json, Value};
 
+use crate::codegraph::types::SymbolDef;
 use super::CodeGraphState;
 
 pub const FIND_SYMBOL_CAP: usize = 20;
@@ -80,6 +81,7 @@ pub fn execute_agent_query(
     tool: &str,
     args: &Value,
     project_root: &str,
+    score_threshold: f32,
 ) -> Value {
     let root = PathBuf::from(project_root);
     match tool {
@@ -98,20 +100,32 @@ pub fn execute_agent_query(
             if tool == "find_symbol" {
                 let name = leaf_name(args.get("name").and_then(|v| v.as_str()).unwrap_or(""));
                 let hits = super::query::structure::structure_lookup(name, &pi.symbols, 0);
-                let results: Vec<Value> = hits
+                // Collect owned candidates under the lock, then drop the lock
+                // before the file-IO slice below — slicing reads source files
+                // (blocking IO) and must not extend the read lock hold for
+                // other queries (plan §7.2).
+                let candidates: Vec<SymbolDef> = hits
                     .into_iter()
                     .take(FIND_SYMBOL_CAP)
-                    .map(|r| {
+                    .map(|r| r.symbol)
+                    .collect();
+                drop(guard);
+                let results: Vec<Value> = candidates
+                    .iter()
+                    .map(|s| {
+                        let source = super::query::structure::read_symbol_source(s, &root);
                         json!({
-                            "kind": format!("{:?}", r.symbol.kind),
-                            "name": r.symbol.name,
-                            "file": r.symbol.file,
-                            "line": r.symbol.line,
-                            "parent": r.symbol.parent,
+                            "kind": format!("{:?}", s.kind),
+                            "name": s.name,
+                            "file": s.file,
+                            "line": s.line,
+                            "end_line": s.end_line,
+                            "parent": s.parent,
+                            "source": source,
                         })
                     })
                     .collect();
-                json!({"ok": true, "status": "ready", "results": results})
+                return json!({"ok": true, "status": "ready", "results": results});
             } else {
                 let name = leaf_name(args.get("name").and_then(|v| v.as_str()).unwrap_or(""));
                 let direction = args.get("direction").and_then(|v| v.as_str()).unwrap_or("callers");
@@ -174,7 +188,7 @@ pub fn execute_agent_query(
                 Some(e) => e,
                 None => return json!({"ok": true, "status": "structure_only", "results": []}),
             };
-            match super::query::semantic::semantic_search(query, embedder.as_ref(), &shard, limit) {
+            match super::query::semantic::semantic_search(query, embedder.as_ref(), &shard, limit, score_threshold) {
                 Ok(hits) => {
                     let results: Vec<Value> = hits
                         .into_iter()
@@ -189,6 +203,7 @@ pub fn execute_agent_query(
                                 "kind": format!("{:?}", r.symbol.kind),
                                 "file": r.symbol.file,
                                 "line": r.symbol.line,
+                                "end_line": r.symbol.end_line,
                                 "score": r.score,
                                 "snippet": snippet,
                             })
@@ -213,7 +228,7 @@ mod tests {
     use std::sync::Arc;
 
     fn sym(name: &str, kind: SymbolKind, file: &str, line: usize) -> SymbolDef {
-        SymbolDef { name: name.into(), kind, file: file.into(), line, column: 1, parent: None }
+        SymbolDef { name: name.into(), kind, file: file.into(), line, column: 1, parent: None, end_line: 0 }
     }
 
     /// 造一个只含结构层（embed_ready=false）的活跃索引。
@@ -261,11 +276,11 @@ mod tests {
     #[test]
     fn no_index_and_wrong_project_statuses() {
         let st = CodeGraphState::new();
-        let r = execute_agent_query(&st, "find_symbol", &json!({"name":"save"}), "/proj");
+        let r = execute_agent_query(&st, "find_symbol", &json!({"name":"save"}), "/proj", 0.35);
         assert_eq!(r["status"], "no_index");
 
         let (st, dir) = state_with_index("projA");
-        let r = execute_agent_query(&st, "find_symbol", &json!({"name":"save"}), "projB");
+        let r = execute_agent_query(&st, "find_symbol", &json!({"name":"save"}), "projB", 0.35);
         assert_eq!(r["status"], "wrong_project");
         crate::codegraph::guard::drop_catching_panics(st.inner.write().unwrap().take(), "test");
         std::fs::remove_dir_all(&dir).ok();
@@ -274,7 +289,7 @@ mod tests {
     #[test]
     fn find_symbol_ready_with_results() {
         let (st, dir) = state_with_index("projA");
-        let r = execute_agent_query(&st, "find_symbol", &json!({"name":"save"}), "projA");
+        let r = execute_agent_query(&st, "find_symbol", &json!({"name":"save"}), "projA", 0.35);
         assert_eq!(r["status"], "ready");
         let results = r["results"].as_array().unwrap();
         assert_eq!(results.len(), 1);
@@ -287,7 +302,7 @@ mod tests {
     #[test]
     fn find_symbol_zero_hits_stays_ready() {
         let (st, dir) = state_with_index("projA");
-        let r = execute_agent_query(&st, "find_symbol", &json!({"name":"nope"}), "projA");
+        let r = execute_agent_query(&st, "find_symbol", &json!({"name":"nope"}), "projA", 0.35);
         assert_eq!(r["status"], "ready", "zero hits ≠ index unavailable");
         assert_eq!(r["results"].as_array().unwrap().len(), 0);
         crate::codegraph::guard::drop_catching_panics(st.inner.write().unwrap().take(), "test");
@@ -297,7 +312,7 @@ mod tests {
     #[test]
     fn call_graph_callers_direction() {
         let (st, dir) = state_with_index("projA");
-        let r = execute_agent_query(&st, "call_graph", &json!({"name":"save","direction":"callers"}), "projA");
+        let r = execute_agent_query(&st, "call_graph", &json!({"name":"save","direction":"callers"}), "projA", 0.35);
         assert_eq!(r["status"], "ready");
         let results = r["results"].as_array().unwrap();
         assert_eq!(results.len(), 1);
@@ -310,7 +325,7 @@ mod tests {
     #[test]
     fn semantic_blocked_until_embed_ready() {
         let (st, dir) = state_with_index("projA"); // embed_ready=false
-        let r = execute_agent_query(&st, "semantic_search", &json!({"query":"auth"}), "projA");
+        let r = execute_agent_query(&st, "semantic_search", &json!({"query":"auth"}), "projA", 0.35);
         assert_eq!(r["status"], "structure_only");
         crate::codegraph::guard::drop_catching_panics(st.inner.write().unwrap().take(), "test");
         std::fs::remove_dir_all(&dir).ok();
@@ -319,7 +334,7 @@ mod tests {
     #[test]
     fn unknown_tool_is_error() {
         let st = CodeGraphState::new();
-        let r = execute_agent_query(&st, "nonsense", &json!({}), "/x");
+        let r = execute_agent_query(&st, "nonsense", &json!({}), "/x", 0.35);
         assert_eq!(r["ok"], false);
         assert_eq!(r["status"], "error");
     }
@@ -336,10 +351,10 @@ mod tests {
         assert_eq!(leaf_name("SomeClass.save()"), "save");
         // 端到端：带类名前缀的查询也要命中
         let (st, dir) = state_with_index("projA");
-        let r = execute_agent_query(&st, "find_symbol", &json!({"name": "SomeClass.save"}), "projA");
+        let r = execute_agent_query(&st, "find_symbol", &json!({"name": "SomeClass.save"}), "projA", 0.35);
         assert_eq!(r["status"], "ready");
         assert_eq!(r["results"].as_array().unwrap().len(), 1);
-        let r = execute_agent_query(&st, "call_graph", &json!({"name": "SomeClass.save", "direction": "callers"}), "projA");
+        let r = execute_agent_query(&st, "call_graph", &json!({"name": "SomeClass.save", "direction": "callers"}), "projA", 0.35);
         assert_eq!(r["results"].as_array().unwrap().len(), 1);
         crate::codegraph::guard::drop_catching_panics(st.inner.write().unwrap().take(), "test");
         std::fs::remove_dir_all(&dir).ok();
