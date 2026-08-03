@@ -12,7 +12,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 /** 用户级 plugin name（skill 命名空间前缀 aide-user:）。符合 SDK 正则 ^[A-Za-z0-9][-A-Za-z0-9._]*$。 */
 export const USER_PLUGIN_NAME = "aide-user";
@@ -82,7 +82,7 @@ export function buildDispatchPluginsOption(
   }
 
   if (trusted) {
-    const projectRoot = join(cwd, ".aide", "claude");
+    const projectRoot = resolve(cwd, ".aide", "claude");
     if (existsSync(projectRoot) && ensureDispatchManifest(projectRoot, PROJECT_PLUGIN_NAME)) {
       out.push({ type: "local", path: projectRoot, skipMcpDiscovery: true });
     }
