@@ -79,6 +79,10 @@ export interface TurnUsage {
   subagentCount?: number;
   /** 按模型分桶用量（多模型时带，单模型不带）。key 是 wire model id，前端只展示不解释。可选。 */
   byModel?: Record<string, TurnUsage>;
+  /** 本轮 API 调用数（SDK result.num_turns，turn 级、不按模型拆）。前端 tooltip 据它把
+   *  ↓ 累计输入拆成「N 次 × 平均每次」，让 4.2m 这种数不再反直觉（4.2m ÷ 20 ≈ ctx）。
+   *  >1 才展示分解；N=1 时 ↓ 本就 ≈ ctx。可选，旧 sidecar 不带。 */
+  apiCallCount?: number;
 }
 
 /** 纯展示用的模型选项——值和名字完全由 provider 决定，核心层不关心具体是什么模型 */

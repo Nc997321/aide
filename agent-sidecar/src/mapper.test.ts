@@ -454,8 +454,8 @@ describe("mapSdkMessage usage 归因（subagentTurn / byModel）", () => {
   const tasks = () => new TaskTracker();
   const tools = () => new ToolLifecycleTracker();
 
-  function successResult(modelUsage: Record<string, any>, cost = 0.5) {
-    return { type: "result", subtype: "success", is_error: false, total_cost_usd: cost, modelUsage };
+  function successResult(modelUsage: Record<string, any>, cost = 0.5, numTurns = 1) {
+    return { type: "result", subtype: "success", is_error: false, total_cost_usd: cost, modelUsage, num_turns: numTurns };
   }
 
   it("本轮派发了子代理时，message_stop.usage 带 subagentTurn=true + subagentCount", () => {
@@ -509,6 +509,31 @@ describe("mapSdkMessage usage 归因（subagentTurn / byModel）", () => {
       "claude-sonnet-5": { inputTokens: 1000 },
       "claude-haiku-4": { inputTokens: 300 },
     });
+  });
+
+  it("apiCallCount 透传 result.num_turns（前端据此把 ↓ 累计输入拆成 ×N 分解）", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      // 4.2m 输入 / 20 次调用 = 平均每次 210k ≈ ctx，正是反直觉场景的分解
+      successResult({ "claude-sonnet-5": { inputTokens: 4200000, outputTokens: 30000, costUSD: 0.03 } }, 0.03, 20),
+      (e) => events.push(e),
+      tasks(),
+      new SubagentTracker(),
+      tools(),
+    );
+    const stop = events.find((e) => e.type === "message_stop") as any;
+    expect(stop.usage.apiCallCount).toBe(20);
+    // 默认 num_turns=1（无工具单调用轮）也透传，前端按 >1 才展示分解
+    const events2: ChatEvent[] = [];
+    mapSdkMessage(
+      successResult({ "claude-sonnet-5": { inputTokens: 214352, outputTokens: 500, costUSD: 0.001 } }),
+      (e) => events2.push(e),
+      tasks(),
+      new SubagentTracker(),
+      tools(),
+    );
+    const stop2 = events2.find((e) => e.type === "message_stop") as any;
+    expect(stop2.usage.apiCallCount).toBe(1);
   });
 
   it("error/abort result 也消费掉本轮子代理计数，不泄漏到下一轮", () => {

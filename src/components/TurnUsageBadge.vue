@@ -16,8 +16,16 @@ const props = defineProps<{ usage: TurnUsage }>();
 
 const tooltip = computed(() => {
   const u = props.usage;
+  // apiCallCount>1 时把"输入"折叠成「N 次 × 平均每次」分解——4.2m 这种累计数
+  // 不再反直觉（4.2m ÷ 20 ≈ ctx，每次重发全量上下文）。N=1 时 ↓ 本就 ≈ ctx，不分解。
+  const avg = u.apiCallCount && u.apiCallCount > 1 && u.inputTokens > 0
+    ? Math.round(u.inputTokens / u.apiCallCount)
+    : 0;
+  const inputLine = avg > 0
+    ? `输入 ${u.inputTokens.toLocaleString()} tokens（本轮 ${u.apiCallCount} 次 API 调用 · 平均每次 ~${avg.toLocaleString()} = 每次重发全量上下文）`
+    : `输入 ${u.inputTokens.toLocaleString()} tokens`;
   const lines = [
-    `输入 ${u.inputTokens.toLocaleString()} tokens`,
+    inputLine,
     `输出 ${u.outputTokens.toLocaleString()} tokens（含本轮所有工具调用/子代理产出）`,
   ];
   if (u.cacheReadInputTokens > 0 || u.cacheCreationInputTokens > 0) {

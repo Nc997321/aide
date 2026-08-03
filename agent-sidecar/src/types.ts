@@ -19,6 +19,10 @@ export interface TurnUsage {
    *  现在同时保留分桶，让多模型会话（如子代理用了别的模型）能看到每个模型各烧多少。
    *  key 是 wire model id（provider 专属字符串，前端只展示不解释）。 */
   byModel?: Record<string, TurnUsage>;
+  /** 本轮 API 调用数（= SDK result 的 num_turns，turn 级、不按模型拆）。前端用它把
+   *  ↓ 的累计输入拆成「N 次 × 平均每次」，让 4.2m 这种数不再反直觉（4.2m ÷ 20 ≈ ctx，
+   *  每次重发全量上下文）。旧 sidecar / error result 不带，前端按 >1 才展示分解。 */
+  apiCallCount?: number;
 }
 
 // 可切换模型——纯展示用的字符串，具体是什么模型完全由 provider 决定，
