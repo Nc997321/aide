@@ -6,8 +6,13 @@ import "@fontsource/jetbrains-mono/500.css";
 import "./styles/global.css";
 import { vTooltip } from "./directives/tooltip";
 import { vScrollMemory } from "./directives/scrollMemory";
+import { initPlatform } from "./utils/platform";
 import { startDiagnostics } from "./composables/useDiagnostics";
 import { useNotifications } from "./composables/useNotifications";
+
+// Detect Windows build number early for xterm.js ConPTY integration.
+// Async but non-blocking — terminal creation happens later.
+initPlatform();
 
 // ── Global error capture → Rust tracing log ──
 

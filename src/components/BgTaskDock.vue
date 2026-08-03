@@ -7,6 +7,7 @@ import { toggleBgDock } from "@/composables/useChatSession";
 import { api } from "@/api";
 import { buildXtermTheme } from "../utils/xterm";
 import { MONO_FONT_STACK } from "../utils/fonts";
+import { windowsPtyConfig } from "../utils/platform";
 import { themes } from "../themes";
 import { useSettings } from "../composables/useSettings";
 
@@ -119,12 +120,14 @@ function disposeTerminal() {
 async function initTerminal() {
   await nextTick();
   if (!termEl.value || terminal) return;
+  const wpCfg = windowsPtyConfig();
   terminal = new Terminal({
     theme: buildXtermTheme(themes[settings.theme] || themes["warm-dark"]),
     scrollback: 5000,
     disableStdin: true,
     fontSize: 12,
     fontFamily: settings.fontFamily || MONO_FONT_STACK,
+    ...(wpCfg ? { windowsPty: wpCfg } : {}),
   });
   fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);

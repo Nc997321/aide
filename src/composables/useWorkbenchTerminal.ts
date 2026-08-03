@@ -7,6 +7,7 @@ import { useSettings } from "./useSettings";
 import { registerSearch, unregisterSearch, useTerminalSearch } from "./useTerminalSearch";
 import { buildXtermTheme } from "../utils/xterm";
 import { MONO_FONT_STACK } from "../utils/fonts";
+import { windowsPtyConfig } from "../utils/platform";
 import { themes } from "../themes";
 import {
   setActiveWorkspace as coreSetActiveWorkspace,
@@ -150,12 +151,14 @@ export function useWorkbenchTerminal() {
     const id = genSessionId(workspaceKey);
     const stg = settingsRef!;
 
+    const wpCfg = windowsPtyConfig();
     const terminal = new Terminal({
       cursorBlink: true,
       fontSize: stg.fontSize,
       fontFamily: stg.fontFamily || MONO_FONT_STACK,
       theme: buildXtermTheme(themes[stg.theme || "warm-dark"]),
       allowProposedApi: true,
+      ...(wpCfg ? { windowsPty: wpCfg } : {}),
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
@@ -254,9 +257,11 @@ export function useWorkbenchTerminal() {
     }
     if (!containerEl) return;
     const stg = settingsRef!;
+    const wpCfg2 = windowsPtyConfig();
     const terminal = new Terminal({
       cursorBlink: true, fontSize: stg.fontSize, fontFamily: stg.fontFamily || MONO_FONT_STACK,
       theme: buildXtermTheme(themes[stg.theme || "warm-dark"]), allowProposedApi: true,
+      ...(wpCfg2 ? { windowsPty: wpCfg2 } : {}),
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);

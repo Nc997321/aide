@@ -4,6 +4,7 @@ import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { buildXtermTheme } from "../utils/xterm";
 import { MONO_FONT_STACK } from "../utils/fonts";
+import { windowsPtyConfig } from "../utils/platform";
 import { themes } from "../themes";
 import { useSettings } from "../composables/useSettings";
 
@@ -16,6 +17,7 @@ const { settings } = useSettings();
 
 onMounted(() => {
   if (!containerRef.value) return;
+  const wpCfg = windowsPtyConfig();
   terminal = new Terminal({
     rows: 10,
     cols: 80,
@@ -24,6 +26,7 @@ onMounted(() => {
     disableStdin: true,
     fontSize: 12,
     fontFamily: settings.fontFamily || MONO_FONT_STACK,
+    ...(wpCfg ? { windowsPty: wpCfg } : {}),
   });
   fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
