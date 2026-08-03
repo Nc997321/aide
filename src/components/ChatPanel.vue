@@ -1282,7 +1282,7 @@ function onOpenBgDock(taskId: string) {
         />
         <div v-else-if="isBusyVal" class="chat-thinking">
           <AppLogo :size="15" animated />
-          <span>Claude 正在思考…</span>
+          <span>正在思考…</span>
           <span class="chat-thinking-time">{{ activityElapsed }}s</span>
           <button class="chat-interrupt-btn" @click="emit('interrupt')">中断</button>
         </div>
