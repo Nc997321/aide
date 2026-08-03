@@ -1,6 +1,7 @@
 import { ref, readonly } from "vue";
 import { api } from "../api";
 import { useNotifications } from "./useNotifications";
+import { useWorkspaceTrust } from "./useWorkspaceTrust";
 import type { BuildProgress, BuildIndexResult } from "../types";
 
 /**
@@ -24,12 +25,16 @@ import type { BuildProgress, BuildIndexResult } from "../types";
  */
 
 const { push, dismiss, dismissMany, notifications, registerActionHandler } = useNotifications();
+const { isTrusted, trust } = useWorkspaceTrust();
 
 const progress = ref<BuildProgress>({ active: false, done: 0, total: 0, current: "", index_ready: false });
 const building = ref(false);
 
 let timer: number | null = null;
 let lastIndexedRoot = "";
+// 当前已知「不信任」的 root（memoize，避免每次 ensureIndex 都查一次 state.json）。
+// 信任工作区后由 onWorkspaceTrusted 清空，使下一次 ensureIndex 能真正建索引。
+let untrustedCurrent = "";
 
 function stopPoll() {
   if (timer != null) {
@@ -75,6 +80,12 @@ function trackBuild(p: Promise<BuildIndexResult>, root: string) {
       // http 服务不可达），语义搜索不可用但结构层（精确跳转）正常。
       // r 可能为 undefined（测试 mock / 边界），防御一下不崩。
       if (r) {
+        // 不信任工作区：Rust 门控早退（skipped_untrusted），静默处理——
+        // 「工作区不受信任」通知已由 ensureIndex 发，这里不重复告警。
+        if ((r as any).skipped_untrusted) {
+          stopPoll();
+          return;
+        }
         if (r.loaded) {
           console.info("[codegraph] reused existing index:", r);
           // 快速路径复用既有索引也算完全成功：自愈同 root 旧通知。
@@ -147,8 +158,33 @@ function selfHeal(root: string) {
  * 对新 root 触发 build 并跟踪进度。同一 root 不重复触发（守卫）。
  * build 失败由 trackBuild 内部吞掉，不外泄——fire-and-forget 语义。
  */
-function ensureIndex(root: string) {
+async function ensureIndex(root: string) {
   if (!root || root === lastIndexedRoot) return;
+  if (root === untrustedCurrent) return; // 已知不信任，跳过（信任后 onWorkspaceTrusted 清此标记）
+  // 受信任工作区门控：不信任则不建索引。Rust 侧 codegraph_build_index 也有同一
+  // 门控（防御纵深），前端先挡可省一次 IPC 并通知用户原因。
+  const trusted = await isTrusted(root);
+  if (!trusted) {
+    console.info("[codegraph] ensureIndex skipped (untrusted):", root);
+    untrustedCurrent = root;
+    // 切到不信任工作区：释放上一个索引（若存在），不设 lastIndexedRoot——
+    // 这样信任后再次 ensureIndex 能真正建（不会被 dedup 守卫挡）。
+    if (lastIndexedRoot) {
+      const prev = lastIndexedRoot;
+      lastIndexedRoot = "";
+      void api.codegraphClose(prev).catch(() => {});
+    }
+    push({
+      severity: "warning",
+      source: "codegraph",
+      title: "工作区不受信任",
+      body: "代码索引未加载。信任此工作区后将自动构建。",
+      timestamp: Date.now(),
+      dedupKey: `codegraph:untrusted:${root}`,
+      action: { label: "信任此工作区" },
+    });
+    return;
+  }
   const previous = lastIndexedRoot;
   lastIndexedRoot = root;
   console.info("[codegraph] ensureIndex:", root);
@@ -171,12 +207,23 @@ function ensureIndex(root: string) {
 }
 
 /**
+ * 工作区被信任后调用：清空不信任 memo 与 dedup 守卫，触发索引构建。
+ * 侧栏「信任此工作区」确认后调用，确保索引随即建起来。
+ */
+function onWorkspaceTrusted(root: string) {
+  if (!root) return;
+  untrustedCurrent = "";
+  lastIndexedRoot = ""; // 清 dedup 守卫，让 ensureIndex 真正跑
+  void ensureIndex(root);
+}
+
+/**
  * 增量重扫（手动「更新索引」：只 reindex mtime > indexed_at 的改动文件）。
  * 快——保留未改动文件的符号/向量，只重做改动的。无进度条（通常几秒）；
  * 结果落 console 便于排查。无活跃索引时 no-op。
  */
 async function rescan(root: string) {
-  if (!root) return;
+  if (!root || root === untrustedCurrent) return;
   try {
     const r = await api.codegraphRescan(root);
     if (!r.active_index) {
@@ -205,7 +252,7 @@ async function rescan(root: string) {
  * 用户能看到「嵌入符号 N/M」。用于：怀疑索引损坏、或想强制从零重建。
  */
 function rebuild(root: string) {
-  if (!root) return;
+  if (!root || root === untrustedCurrent) return;
   trackBuild(api.codegraphBuildIndex(root, true), root);
 }
 
@@ -229,11 +276,19 @@ function scheduleRescan() {
   }, 3000);
 }
 
-// 注册「重建索引」action：dedupKey 形如 codegraph:<kind>:<root>，末段为 root。
+// 注册 codegraph 通知 action：dedupKey 形如 codegraph:<kind>:<root>，末段为 root。
 // Windows 路径含 C:\... → split(":") 得 ["codegraph","<kind>","C","\..."]，
-// slice(2).join(":") 还原为 "C:\..."。模块顶层注册一次即可。
+// slice(2).join(":") 还原为 "C:\..."。两种 action：
+// - codegraph:untrusted:<root> →「信任此工作区」（信任后 onWorkspaceTrusted 重建）
+// - 其它（codegraph:build/empty/embed:<root>）→ 重建索引
+// 模块顶层注册一次即可。
 registerActionHandler("codegraph", (n) => {
   if (!n.dedupKey) return;
+  if (n.dedupKey.startsWith("codegraph:untrusted:")) {
+    const root = n.dedupKey.slice("codegraph:untrusted:".length);
+    if (root) void trust(root).then((ok) => { if (ok) onWorkspaceTrusted(root); });
+    return;
+  }
   const root = n.dedupKey.split(":").slice(2).join(":");
   if (root) rebuild(root);
 });
@@ -247,6 +302,7 @@ function __resetForTest() {
   }
   progress.value = { active: false, done: 0, total: 0, current: "", index_ready: false };
   lastIndexedRoot = "";
+  untrustedCurrent = "";
 }
 
 export function useCodeGraphProgress() {
@@ -254,6 +310,7 @@ export function useCodeGraphProgress() {
     progress: readonly(progress),
     building: readonly(building),
     ensureIndex,
+    onWorkspaceTrusted,
     trackBuild,
     rescan,
     rebuild,

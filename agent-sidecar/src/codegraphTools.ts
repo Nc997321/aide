@@ -154,13 +154,17 @@ function textResult(text: string) {
 
 /**
  * 默认注册；AIDE_CODEGRAPH_TOOLS=off 时返回 null（A/B 实测与调试用，不进设置面板）。
- * server 实例 per-worker 构造：handler 闭包持有该会话的 emit 与 cwd。
+ * `trusted=false`（受限模式）时也返回 null：不信任工作区不建索引，注册了 codegraph
+ * MCP 只会诱导模型对必然返回 no_index 的工具空调用。server 实例 per-worker 构造：
+ * handler 闭包持有该会话的 emit 与 cwd。省略 trusted = 信任（向后兼容）。
  */
 export function codegraphMcpRegistration(
   cwd: string,
   emit: (e: ChatEvent) => void,
   env: NodeJS.ProcessEnv = process.env,
+  trusted = true,
 ): Record<string, unknown> | null {
+  if (!trusted) return null;
   if (env.AIDE_CODEGRAPH_TOOLS === "off") return null;
 
   const run = async (

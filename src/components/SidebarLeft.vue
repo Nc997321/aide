@@ -10,6 +10,8 @@ import { useSessionNames } from "../composables/useSessionNames";
 import { useSessionWorkspaces } from "../composables/useSessionWorkspaces";
 import { sessionMenuItems, workspaceMenuItems } from "../menus/contextMenus";
 import { useWorkspaces } from "../composables/useWorkspaces";
+import { useWorkspaceTrust } from "../composables/useWorkspaceTrust";
+import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
 import { api } from "../api";
 import { open } from "@tauri-apps/plugin-shell";
 import { getVersion } from "@tauri-apps/api/app";
@@ -40,11 +42,55 @@ const emit = defineEmits<{
 }>();
 
 const { workspaces, activeKey: wsActiveKey, refresh: refreshWorkspaces, openFolder, removeWorkspace: removeWs } = useWorkspaces();
+const { untrustedPaths, isTrusted, refreshFor: refreshTrust, trust, shouldPrompt, markPrompted } = useWorkspaceTrust();
+const { onWorkspaceTrusted } = useCodeGraphProgress();
 const sessionsByWorkspace = ref<Record<string, Session[]>>({});
 const activeWorkspace = ref("");
 const expandedWorkspaces = ref(new Set<string>());
 const searchQuery = ref("");
 const loading = ref(true);
+
+// ── 工作区信任提示（Variant A 居中模态）── trustPrompt 非 null 时显示。
+// 不信任工作区首次激活时弹一次（maybePromptTrust），「暂不」后本会话不再弹；
+// 工作区行的「不受信任」徽标点击可重开（openTrustPrompt = 回收路径）。
+const trustPrompt = ref<{ path: string; name: string } | null>(null);
+
+/** 检查信任态：不信任且本会话未弹过 → 弹模态。幂等（markPrompted 去重）。 */
+async function maybePromptTrust(ws: WorkspaceInfo): Promise<void> {
+  if (ws.missing || !ws.name) return;
+  if (!shouldPrompt(ws.name)) return;
+  markPrompted(ws.name); // 先标记，避免并发激活重复弹
+  const trusted = await isTrusted(ws.name);
+  if (!trusted) trustPrompt.value = { path: ws.name, name: workspaceLabel(ws) };
+}
+
+function openTrustPrompt(ws: WorkspaceInfo): void {
+  if (ws.missing || !ws.name) return;
+  trustPrompt.value = { path: ws.name, name: workspaceLabel(ws) };
+}
+
+function closeTrustPrompt(): void {
+  trustPrompt.value = null;
+}
+
+/** 信任此工作区：持久化 + 触发索引构建 + 刷新徽标。 */
+async function confirmTrust(): Promise<void> {
+  const p = trustPrompt.value;
+  if (!p) return;
+  trustPrompt.value = null;
+  const ok = await trust(p.path);
+  if (ok) {
+    onWorkspaceTrusted(p.path);
+    void refreshTrust(workspaces.value.map((w) => w.name).filter(Boolean));
+  }
+}
+
+/** 暂不信任：本会话不再弹（徽标仍在，可点击重开）。 */
+function declineTrust(): void {
+  const p = trustPrompt.value;
+  if (p) markPrompted(p.path);
+  trustPrompt.value = null;
+}
 
 // Current active workspace's sessions (backward compat for external callers)
 const sessions = computed(() => sessionsByWorkspace.value[activeWorkspace.value] ?? []);
@@ -203,6 +249,8 @@ async function selectSessionFromWorkspace(wsKey: string, sessionId: string) {
       wsActiveKey.value = ws.key;   // 同步共享 activeKey，供终端分组/run tab 归属等消费方感知切换
       emit("workspace-changed", ws.name);
       await setCurrentWs(ws.key, ws.name);
+      void maybePromptTrust(ws);
+      void refreshTrust(workspaces.value.map((w) => w.name).filter(Boolean));
       // Load sessions for the new active workspace if not already loaded
       if (!sessionsByWorkspace.value[wsKey]) {
         await loadSessions();
@@ -248,6 +296,8 @@ async function activateWorkspace(ws: WorkspaceInfo): Promise<boolean> {
   emit("workspace-changed", ws.name);
   await setCurrentWs(ws.key, ws.name);
   await loadSessions();
+  void maybePromptTrust(ws);
+  void refreshTrust(workspaces.value.map((w) => w.name).filter(Boolean));
   return true;
 }
 
@@ -272,6 +322,8 @@ async function openWorkspaceFolder(path: string): Promise<boolean> {
   emit("workspace-changed", info.name);
   await setCurrentWs(info.key, info.name);
   await loadSessions();
+  void maybePromptTrust(info);
+  void refreshTrust(workspaces.value.map((w) => w.name).filter(Boolean));
   return true;
 }
 
@@ -385,6 +437,7 @@ onMounted(async () => {
   // Find active workspace: match by encoded key derived from get_project_info
   try {
     const info = await api.getProjectInfo();
+    let activeWs: WorkspaceInfo | null = null;
     for (const ws of workspaces.value) {
       if (ws.name === info.root) {
         activeWorkspace.value = ws.key;
@@ -393,11 +446,14 @@ onMounted(async () => {
         // 之后首次侧栏切换才真正设 activeKey，把那个终端遗弃成孤儿——切回去就"没了"。
         expandedWorkspaces.value.add(ws.key);
         await setCurrentWs(ws.key, ws.name);
+        activeWs = ws;
         break;
       }
     }
+    if (activeWs) void maybePromptTrust(activeWs);
   } catch (_) { /* ignore */ }
   await loadSessions();
+  void refreshTrust(workspaces.value.map((w) => w.name).filter(Boolean));
 
   try {
     const { checkUpdate } = useUpdate();
@@ -458,6 +514,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
             active: ws.key === activeWorkspace,
             expanded: expandedWorkspaces.has(ws.key),
             missing: ws.missing,
+            untrusted: !ws.missing && untrustedPaths.has(ws.name),
           }"
           v-tooltip="ws.missing ? `路径不存在，目录可能已被移动或删除：${ws.key}` : ''"
           @click="ws.missing ? undefined : switchWorkspace(ws)"
@@ -476,6 +533,12 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
           <span class="ws-name">{{ workspaceLabel(ws) }}</span>
           <span v-if="ws.missing" class="ws-missing-badge">失效</span>
           <span v-else-if="(sessionsByWorkspace[ws.key] ?? []).length > 0" class="ws-count">{{ (sessionsByWorkspace[ws.key] ?? []).length }}</span>
+          <span
+            v-if="!ws.missing && untrustedPaths.has(ws.name)"
+            class="ws-trust-badge"
+            v-tooltip="'工作区不受信任，点击信任'"
+            @click.stop="openTrustPrompt(ws)"
+          >不受信任</span>
         </div>
 
         <!-- Sessions (for any expanded workspace) -->
@@ -578,6 +641,29 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
     </div>
 
     <AToast :state="toastState" />
+
+    <Teleport to="body">
+      <div v-if="trustPrompt" class="trust-overlay" @click.self="closeTrustPrompt">
+        <div class="trust-modal" role="dialog" aria-modal="true" @click.stop>
+          <div class="trust-shield">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </div>
+          <h3 class="trust-title">是否信任此工作区？</h3>
+          <p class="trust-path">{{ trustPrompt.path }}</p>
+          <p class="trust-desc">不受信任的工作区将以下功能受限：</p>
+          <ul class="trust-list">
+            <li><span class="dot"></span>代码索引（CodeGraph 向量检索）</li>
+            <li><span class="dot"></span>项目 <code>CLAUDE.md</code> 指令</li>
+            <li><span class="dot"></span>项目 <code>.claude/skills/</code> 与 <code>.mcp.json</code></li>
+          </ul>
+          <p class="trust-note">Claude 对话本身不受影响。</p>
+          <div class="trust-actions">
+            <button class="btn secondary" @click="declineTrust">暂不信任</button>
+            <button class="btn primary" @click="confirmTrust">信任此工作区</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -1097,5 +1183,153 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   height: 1px;
   background: var(--aide-border);
   margin: 4px 6px;
+}
+
+/* ── 工作区信任徽标 ── */
+.ws-trust-badge {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--aide-warning);
+  background: color-mix(in srgb, var(--aide-warning) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-warning) 32%, transparent);
+  padding: 1.5px 6px;
+  border-radius: var(--aide-radius-sm);
+  letter-spacing: 0.3px;
+  flex: 0 0 auto;
+  cursor: pointer;
+  transition: background var(--aide-ease-t);
+}
+.ws-trust-badge:hover {
+  background: color-mix(in srgb, var(--aide-warning) 24%, transparent);
+}
+.workspace-item.untrusted:not(.active):not(.expanded) .ws-folder-icon {
+  color: var(--aide-warning);
+}
+
+/* ── 信任提示模态（Variant A 居中）── 经 Teleport 渲染到 body，scoped 仍生效。 */
+.trust-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(12, 10, 16, 0.72);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: trust-fade var(--aide-ease-t);
+}
+@keyframes trust-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.trust-modal {
+  width: 440px;
+  max-width: 100%;
+  background:
+    linear-gradient(180deg, rgba(255, 235, 210, 0.03), transparent 60px),
+    var(--aide-bg-raised);
+  border: 1px solid var(--aide-border-strong);
+  border-radius: var(--aide-radius-lg);
+  box-shadow: var(--aide-shadow-lg);
+  padding: 22px 22px 18px;
+  animation: trust-pop var(--aide-ease-t);
+}
+@keyframes trust-pop {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.trust-shield {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--aide-accent-subtle);
+  border: 1px solid color-mix(in srgb, var(--aide-accent) 30%, transparent);
+  display: grid;
+  place-items: center;
+  color: var(--aide-accent);
+  margin-bottom: 14px;
+}
+.trust-title {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+}
+.trust-path {
+  font-size: 12px;
+  color: var(--aide-text-muted);
+  font-family: "Cascadia Code", "Consolas", monospace;
+  margin: 0 0 12px;
+  word-break: break-all;
+}
+.trust-desc {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--aide-text-secondary);
+}
+.trust-list {
+  margin: 6px 0 12px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.trust-list li {
+  font-size: 12.5px;
+  color: var(--aide-text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.trust-list li .dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--aide-warning);
+  flex: 0 0 auto;
+}
+.trust-list code {
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 11.5px;
+}
+.trust-note {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--aide-text-muted);
+}
+.trust-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+.btn {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--aide-radius-sm);
+  cursor: pointer;
+  border: 1px solid transparent;
+  padding: 8px 16px;
+  transition: all var(--aide-ease-t);
+}
+.btn.secondary {
+  background: var(--aide-surface-default);
+  color: var(--aide-text-secondary);
+  border-color: var(--aide-border-strong);
+}
+.btn.secondary:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
+}
+.btn.primary {
+  background: var(--aide-accent-gradient, linear-gradient(180deg, #e6bd8e, #cf9c66));
+  color: var(--aide-text-on-accent);
+  box-shadow: var(--aide-accent-glow, 0 6px 20px rgba(212, 165, 116, 0.28));
+  border-color: color-mix(in srgb, var(--aide-accent) 40%, transparent);
+}
+.btn.primary:hover {
+  filter: brightness(1.06);
 }
 </style>

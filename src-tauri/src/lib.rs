@@ -253,6 +253,10 @@ pub fn run() {
             commands::workspace::create_workspace,
             commands::workspace::remove_workspace,
             commands::workspace::unhide_workspace,
+            // 工作区信任（Trusted Workspace）
+            commands::workspace::is_workspace_trusted,
+            commands::workspace::trust_workspace,
+            commands::workspace::untrust_workspace,
             commands::settings::get_settings,
             commands::settings::set_settings,
             commands::settings::notify_send,

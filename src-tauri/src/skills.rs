@@ -63,8 +63,10 @@ impl SkillProvider for ClaudeSkillProvider {
         let user_skills = crate::commands::claude_home().join("skills");
         skills.extend(scan_dir(&user_skills, "user", "claude"));
 
-        // 2. 项目级：{cwd}/.claude/skills/*/SKILL.md（cwd 相对，与 CLAUDE_CONFIG_DIR 无关）
-        let project_skills = cwd.join(".claude").join("skills");
+        // 2. 项目级：{cwd}/.aide/claude/skills/*/SKILL.md（Aide 约定：项目数据在 .aide/
+        //    下，与用户级 ~/.aide/claude/skills 同构）。注：SDK 隔离模式（settingSources:[]）
+        //    不自动发现项目 skills，这里仅供 UI 下拉展示与信任门控扫描。
+        let project_skills = cwd.join(".aide").join("claude").join("skills");
         skills.extend(scan_dir(&project_skills, "project", "claude"));
 
         // 3. 插件级：只列会话真实注入的插件。sidecar 经 env AIDE_ENABLED_PLUGINS_FILE

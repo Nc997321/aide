@@ -174,6 +174,10 @@ pub async fn send_message(
         &cwd_str,
     );
 
+    // 工作区信任标志下发给 sidecar：不信任时 startLoop 据此跳过项目 CLAUDE.md /
+    // 项目 .aide/claude/skills/ / 项目 .mcp.json（见 session-worker.ts startLoop）。
+    cmd["trusted"] = json!(crate::commands::workspace::is_path_trusted(&cwd_str));
+
     // Attach the permission policy snapshot so the sidecar's PreToolUse hook can
     // enforce it on the first query. Best-effort: if the snapshot build fails the
     // send still goes out and the sidecar defers to the provider permission mode.
@@ -312,6 +316,8 @@ pub async fn start_btw_session(
         "fork_from": fork_from,
         "env": provider_env,
     });
+    // 工作区信任标志（与 send_message 同语义）。
+    cmd["trusted"] = json!(crate::commands::workspace::is_path_trusted(&cwd));
 
     if let Some(ref m) = model {
         if !m.is_empty() {

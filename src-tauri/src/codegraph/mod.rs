@@ -232,6 +232,17 @@ pub async fn codegraph_build_index(
     let st = state.inner().clone();
     let settings_service = settings_service.inner().clone();
     tokio::task::spawn_blocking(move || {
+        // 受信任工作区门控：不信任则不建/不重建索引。索引不存在时 find_symbol /
+        // call_graph / semantic_search / goto_definition 自然返回 no_index 优雅降级。
+        if !crate::commands::workspace::is_path_trusted(&project_root) {
+            return Ok(serde_json::json!({
+                "loaded": false,
+                "skipped_untrusted": true,
+                "total_symbols": 0,
+                "scanned_files": 0,
+                "files_with_symbols": 0,
+            }));
+        }
         let root = PathBuf::from(&project_root);
         // 家目录/磁盘根这类非项目 root 不再需要特例守卫：展示与索引的入口
         // （get_project_info → FileTree/ensureIndex）已显式区分「无工作区」，
@@ -692,6 +703,11 @@ pub async fn codegraph_reindex_file(
         let root = PathBuf::from(&project_root);
         let abs = PathBuf::from(&file);
 
+        // 受信任工作区门控：不信任则跳过 reindex（索引本就不该存在）。
+        if !crate::commands::workspace::is_path_trusted(&project_root) {
+            return Ok(serde_json::json!({ "reindexed": false, "skipped": "untrusted" }));
+        }
+
         // Only reindex if it belongs to the active project.
         let mut guard = st.inner.write().map_err(|e| e.to_string())?;
         let pi = match guard.as_mut() {
@@ -780,6 +796,14 @@ pub async fn codegraph_rescan(
     let st = state.inner().clone();
     tokio::task::spawn_blocking(move || {
         let root = PathBuf::from(&project_root);
+        // 受信任工作区门控：不信任则跳过 rescan。
+        if !crate::commands::workspace::is_path_trusted(&project_root) {
+            return Ok(serde_json::json!({
+                "active_index": false,
+                "rescanned_files": 0,
+                "skipped": "untrusted",
+            }));
+        }
         // Snapshot indexed_at + embed_ready under a read lock; bail if no index
         // or the active index is for a different root.
         let indexed_at = {

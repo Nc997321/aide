@@ -36,6 +36,7 @@ import type { EffortLevel, HookCallback, HookInput } from "@anthropic-ai/claude-
 import { existsSync, openSync, readSync, statSync, closeSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { loadAideInstructions } from "./instructions.js";
+import { buildProjectSkillOverrides } from "./skillsDiscovery.js";
 import { evaluatePolicy } from "./policy/evaluate.js";
 import type { PermissionPolicySnapshot } from "./policy/types.js";
 
@@ -752,7 +753,7 @@ export class SessionWorker {
         this.collectingTitle = true;
         this.titleUserText = cmd.prompt;
       }
-      this.startLoop(cmd.cwd ?? this.cwd);
+      this.startLoop(cmd.cwd ?? this.cwd, cmd.trusted !== false);
       this.queue.push({
         type: "user",
         message: buildUserMessage(cmd.prompt, cmd.images ?? []),
@@ -794,7 +795,7 @@ export class SessionWorker {
   // 主循环
   // ================================================================
 
-  async startLoop(cwd?: string): Promise<void> {
+  async startLoop(cwd?: string, trusted = true): Promise<void> {
     try {
       while (!this.stopped) {
         try {
@@ -830,9 +831,13 @@ export class SessionWorker {
           // 轻量 btw 是纯问答，必须跳过：tools:[] 只禁内建工具，MCP 工具照样进
           // 工具列表，模型会真去调（2026-08-02 实锤「先看一眼链路」并卡在调用上）。
           const effectiveCwd = cwd ?? this.cwd ?? "";
+          // 受限模式（!trusted）：项目 .aide/claude/skills/ 里的 skill 经
+          // managedSettings.skillOverrides 从模型列表/Skill 工具隐藏——
+          // user/plugin skill 不受影响（skills 仍为 "all"）。
+          const projectSkillOverrides = trusted ? {} : buildProjectSkillOverrides(effectiveCwd);
           const codegraphMcp = this.lightweightMode
             ? null
-            : codegraphMcpRegistration(effectiveCwd, (e) => this.emit(e));
+            : codegraphMcpRegistration(effectiveCwd, (e) => this.emit(e), process.env, trusted);
 
           if (this.resumeSource && this.shouldForkNextConnect && !this.btwMode) {
             this.pendingFork = true;
@@ -844,6 +849,7 @@ export class SessionWorker {
           const instructions = await loadAideInstructions(
             effectiveCwd,
             process.env.CLAUDE_CONFIG_DIR ?? "",
+            trusted,
           );
           // Aide 权限策略 hook：排在所有其它 PreToolUse hook 之前（含图片守卫），
           // allowDangerouslySkipPermissions 也不绕过——matcher ".*" 对每个工具都触发。
@@ -856,6 +862,13 @@ export class SessionWorker {
               allowDangerouslySkipPermissions: true,
               canUseTool: this.makeCanUseToolCallback() as any,
               settingSources: [],
+              // 受限模式（!trusted）：strictMcpConfig 忽略项目 .mcp.json 等外部 MCP
+              // 配置；managedSettings.skillOverrides 隐藏项目 .aide/claude/skills/ 里的 skill。
+              // user 级 / plugin 级不受影响（plugins 经 AIDE_ENABLED_PLUGINS_FILE 注入）。
+              ...(trusted ? {} : { strictMcpConfig: true }),
+              ...(projectSkillOverrides && Object.keys(projectSkillOverrides).length > 0
+                ? { managedSettings: { skillOverrides: projectSkillOverrides } as any }
+                : {}),
               systemPrompt: {
                 type: "preset" as const,
                 preset: "claude_code" as const,

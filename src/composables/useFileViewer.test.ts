@@ -6,6 +6,7 @@ vi.mock("../api", () => ({
     readFileBinary: vi.fn(async () => new ArrayBuffer(0)),
     writeFileContent: vi.fn(async () => undefined),
     getProjectInfo: vi.fn(async () => ({ root: "C:/proj" })),
+    isWorkspaceTrusted: vi.fn(async () => true),
     codegraphBuildIndex: vi.fn(async () => undefined),
     codegraphClose: vi.fn(async () => undefined),
     codegraphReindexFile: vi.fn(async () => undefined),

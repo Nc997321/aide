@@ -216,6 +216,11 @@ export type SidecarCommand =
       // 会话自动命名开关（来自设置面板）：false 时首轮后不生成会话标题。
       // 省略 = 开启。provider-agnostic：标题生成是通用能力。
       auto_title?: boolean;
+      // 工作区信任标志：Rust 在 send_message / start_btw_session 里按 cwd 查
+      // trustedWorkspaces 白名单后注入。true（或省略，向后兼容/测试）= 信任，
+      // 加载项目 CLAUDE.md / .claude/skills/ / .mcp.json；false = 受限模式，
+      // startLoop 据此跳过项目级自动配置。省略时 sidecar 按信任处理。
+      trusted?: boolean;
       // 权限策略快照：Rust 在每次设置变更后推送，sidecar 在 PreToolUse 时
       // 用它做本地策略评估。省略 = 沿用上次快照或空策略（无匹配 → hook 不表态）。
       permission_policy?: PermissionPolicySnapshot;

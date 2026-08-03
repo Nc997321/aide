@@ -78,6 +78,71 @@ pub fn unhide_in_config(config: &mut serde_json::Value, key: &str) {
     }
 }
 
+// ── 工作区信任白名单（trustedWorkspaces）── 与 hiddenWorkspaces 同构 ──
+
+/// 读 state 里的 trustedWorkspaces 白名单。
+pub fn trusted_keys(config: &serde_json::Value) -> Vec<String> {
+    config
+        .get("trustedWorkspaces")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default()
+}
+
+/// 把 key 加入信任白名单（幂等）。state 缺字段时自动创建。
+pub fn trust_in_config(config: &mut serde_json::Value, key: &str) {
+    if !config.is_object() {
+        *config = serde_json::json!({});
+    }
+    if let Some(map) = config.as_object_mut() {
+        let arr = map
+            .entry("trustedWorkspaces".to_string())
+            .or_insert_with(|| serde_json::json!([]));
+        if let serde_json::Value::Array(a) = arr {
+            if !a.iter().any(|v| v.as_str() == Some(key)) {
+                a.push(serde_json::json!(key));
+            }
+        }
+    }
+}
+
+/// 把 key 从信任白名单移除（不存在则 noop）。
+pub fn untrust_in_config(config: &mut serde_json::Value, key: &str) {
+    if let Some(serde_json::Value::Array(a)) = config.get_mut("trustedWorkspaces") {
+        a.retain(|v| v.as_str() != Some(key));
+    }
+}
+
+// ── 信任键归一：点号 → 横杠 ──
+//
+// 同一工作区磁盘上可能是两种编码目录：Aide 的 path_to_key 保留点号
+// (chennong4.0)，SDK 编码把点号也替换成横杠 (chennong4-0)——见
+// resolve_project_dirs 的 dot 归一匹配。信任白名单统一按「点号归一成横杠」
+// 存与查，两种形态塌缩成同一个键，避免「用 ws.key 存、用 path_to_key(cwd)
+// 查」时因编码差异对不上。
+
+/// 路径 → 归一信任键：path_to_key 后再把点号替换成横杠。
+pub fn trust_key_from_path(path: &str) -> String {
+    path_to_key(path).replace('.', "-")
+}
+
+/// 已编码 key → 归一信任键：把点号替换成横杠。
+///
+/// 当前生产路径前端都传 path（走 `trust_key_from_path`），此函数暂无非测试调用方，
+/// 但保留以固化「key 形态（带点号 / 横杠版）也按同一归一塌缩」的契约——
+/// `trust_key_path_and_key_collapse_same_workspace` 据此验证。
+#[allow(dead_code)]
+pub fn trust_key_from_key(key: &str) -> String {
+    key.replace('.', "-")
+}
+
+/// 路径是否在信任白名单内（按归一键比对）。供 CodeGraph / send_message
+/// 等 Rust 侧门控点调用；读 state.json 是轻量 IO，调用方已在 spawn_blocking
+/// 或命令体里。
+pub fn is_path_trusted(path: &str) -> bool {
+    trusted_keys(&super::settings::load_state()).contains(&trust_key_from_path(path))
+}
+
 /// 清掉 state 的 workspace（激活）字段。
 pub fn clear_active_in_config(config: &mut serde_json::Value) {
     if let Some(obj) = config.as_object_mut() {
@@ -236,6 +301,50 @@ pub fn unhide_workspace(key: String) -> Result<(), String> {
     })
 }
 
+// ── 工作区信任（Trusted Workspace）Tauri 命令 ──
+//
+// 路径入参：前端始终拿得到路径（侧栏 ws.name、CodeGraph root），用路径作
+// 身份可彻底回避前端侧的 key 编码问题；Rust 内部 trust_key_from_path 归一。
+// 命令体只做轻量 state.json 读写，走 spawn_blocking 避免在 Tauri 主线程上
+// 做文件 IO（与 list_workspaces / remove_workspace 的 async + spawn_blocking
+// 一致）。
+
+/// 当前路径的工作区是否已信任。
+#[tauri::command]
+pub async fn is_workspace_trusted(path: String) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || is_path_trusted(&path))
+        .await
+        .map_err(|e| format!("is_workspace_trusted panicked: {}", e))
+}
+
+/// 信任一个工作区（按路径，归一后写入白名单）。
+#[tauri::command]
+pub async fn trust_workspace(path: String) -> Result<(), String> {
+    let key = trust_key_from_path(&path);
+    tokio::task::spawn_blocking(move || {
+        super::settings::with_state_mut(|config| {
+            trust_in_config(config, &key);
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|e| format!("trust_workspace panicked: {}", e))?
+}
+
+/// 取消信任一个工作区（按路径）。
+#[tauri::command]
+pub async fn untrust_workspace(path: String) -> Result<(), String> {
+    let key = trust_key_from_path(&path);
+    tokio::task::spawn_blocking(move || {
+        super::settings::with_state_mut(|config| {
+            untrust_in_config(config, &key);
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|e| format!("untrust_workspace panicked: {}", e))?
+}
+
 pub fn resolve_path_from_key(key: &str) -> Option<String> {
     let mut chars = key.chars();
     let drive = chars.next()?;
@@ -390,6 +499,90 @@ mod tests {
         clear_active_in_config(&mut cfg);
         assert!(cfg.get("workspace").is_none());
         assert_eq!(cfg.get("other").and_then(|v| v.as_i64()), Some(1));
+    }
+
+    // ── 信任白名单 trustedWorkspaces 纯函数 ──
+
+    #[test]
+    fn trusted_keys_missing_field_returns_empty() {
+        let cfg = serde_json::json!({});
+        assert!(trusted_keys(&cfg).is_empty());
+    }
+
+    #[test]
+    fn trusted_keys_reads_array() {
+        let cfg = serde_json::json!({ "trustedWorkspaces": ["a", "b"] });
+        assert_eq!(trusted_keys(&cfg), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn trust_in_config_adds_key() {
+        let mut cfg = serde_json::json!({ "trustedWorkspaces": ["a"] });
+        trust_in_config(&mut cfg, "b");
+        assert_eq!(trusted_keys(&cfg), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn trust_in_config_idempotent() {
+        let mut cfg = serde_json::json!({ "trustedWorkspaces": ["a"] });
+        trust_in_config(&mut cfg, "a");
+        assert_eq!(trusted_keys(&cfg).len(), 1);
+    }
+
+    #[test]
+    fn trust_in_config_creates_field_if_absent() {
+        let mut cfg = serde_json::json!({});
+        trust_in_config(&mut cfg, "x");
+        assert_eq!(trusted_keys(&cfg), vec!["x".to_string()]);
+    }
+
+    #[test]
+    fn trust_in_config_preserves_other_state_fields() {
+        let mut cfg = serde_json::json!({ "hiddenWorkspaces": ["h"], "workspace": "k" });
+        trust_in_config(&mut cfg, "x");
+        assert_eq!(trusted_keys(&cfg), vec!["x".to_string()]);
+        assert_eq!(hidden_keys(&cfg), vec!["h".to_string()]);
+        assert_eq!(cfg.get("workspace").and_then(|v| v.as_str()), Some("k"));
+    }
+
+    #[test]
+    fn untrust_in_config_removes_key() {
+        let mut cfg = serde_json::json!({ "trustedWorkspaces": ["a", "b"] });
+        untrust_in_config(&mut cfg, "a");
+        assert_eq!(trusted_keys(&cfg), vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn untrust_in_config_missing_key_noop() {
+        let mut cfg = serde_json::json!({ "trustedWorkspaces": ["a"] });
+        untrust_in_config(&mut cfg, "zzz");
+        assert_eq!(trusted_keys(&cfg), vec!["a".to_string()]);
+    }
+
+    // ── 信任键归一：点号 → 横杠 ──
+
+    #[test]
+    fn trust_key_from_path_dots_normalized() {
+        // path_to_key 保留点号，trust_key_from_path 再把点号归一成横杠
+        assert_eq!(trust_key_from_path(r"C:\proj\chennong4.0"), "C--proj-chennong4-0");
+    }
+
+    #[test]
+    fn trust_key_from_key_dots_normalized() {
+        // 前端传来的 ws.key 可能是带点号的 path_to_key 版本
+        assert_eq!(trust_key_from_key("C--proj-chennong4.0"), "C--proj-chennong4-0");
+    }
+
+    #[test]
+    fn trust_key_path_and_key_collapse_same_workspace() {
+        // 同一工作区的「带点号 key」与「横杠版 key」归一后相等——dot 归一的核心
+        // 保证：用 ws.key（任一形态）存、用 path_to_key(cwd) 查能对上。
+        let via_path = trust_key_from_path(r"C:\proj\chennong4.0");
+        let via_key_dashed = trust_key_from_key("C--proj-chennong4-0");
+        let via_key_dotted = trust_key_from_key("C--proj-chennong4.0");
+        assert_eq!(via_path, "C--proj-chennong4-0");
+        assert_eq!(via_path, via_key_dashed);
+        assert_eq!(via_path, via_key_dotted);
     }
 
     fn sample(key: &str) -> WorkspaceInfo {

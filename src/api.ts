@@ -372,6 +372,17 @@ export const api = {
   codegraphBuildProgress(): Promise<BuildProgress> {
     return invoke("codegraph_build_progress");
   },
+
+  // 工作区信任（Trusted Workspace）— 路径入参，Rust 内部点号归一。
+  isWorkspaceTrusted(path: string): Promise<boolean> {
+    return invoke("is_workspace_trusted", { path });
+  },
+  trustWorkspace(path: string): Promise<void> {
+    return invoke("trust_workspace", { path });
+  },
+  untrustWorkspace(path: string): Promise<void> {
+    return invoke("untrust_workspace", { path });
+  },
 };
 
 export { permissionsApi } from "./api/permissions";

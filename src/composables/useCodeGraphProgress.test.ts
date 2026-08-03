@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../api", () => ({
   api: {
+    isWorkspaceTrusted: vi.fn(async () => true),
     codegraphBuildIndex: vi.fn(async () => ({ loaded: true, total_symbols: 10 })),
     codegraphClose: vi.fn(async () => undefined),
     codegraphRescan: vi.fn(async () => ({
@@ -44,7 +45,7 @@ describe("useCodeGraphProgress", () => {
 
   it("scheduleRescan 防抖：密集调用合并为一次 rescan", async () => {
     const cg = useCodeGraphProgress();
-    cg.ensureIndex("C:/proj");
+    await cg.ensureIndex("C:/proj");
     cg.scheduleRescan();
     cg.scheduleRescan();
     cg.scheduleRescan();
