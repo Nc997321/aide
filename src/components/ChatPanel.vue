@@ -1098,8 +1098,25 @@ async function handleDrop(e: DragEvent) {
 }
 
 /** 忙碌时发送 = 插队：不排队，交给 sidecar 在安全边界（当前工具调用跑完）
- *  打断当前这轮再发出——见 useChatSession.sendMessage 的注释。 */
+ *  打断当前这轮再发出——见 useChatSession.sendMessage 的注释。
+ *
+ *  重入守卫 sending：发图时 checkImageInputSupport 会做一次真实 LLM 往返探测
+ *  （首图约 1s，之后按 endpoint+credential+model 在 sidecar 缓存命中即瞬返），
+ *  探测期间输入框文本/图片尚未清空——若无守卫，这 1s 内连按两次 Enter 会两次
+ *  都读到尚在的输入并各 emit 一次，发出两条消息。finally 复位确保所有早退路径
+ *  （探测不支持 / btw 无参 / skill 读取失败）都能正确解锁，下一次发送可正常进入。 */
+const sending = ref(false);
 async function handleSend() {
+  if (sending.value) return;
+  sending.value = true;
+  try {
+    await performSend();
+  } finally {
+    sending.value = false;
+  }
+}
+
+async function performSend() {
   const text = inputText.value.trim();
   const hasImages = pendingImages.value.length > 0;
   // 引用芯片 → @path 前缀：发送时才展开成文本，走与手打/粘贴 @path 完全相同的
@@ -1497,7 +1514,7 @@ function onOpenBgDock(taskId: string) {
             <span class="chat-ctx-percent">{{ w.pct }}%</span>
           </div>
           <ChatSendButton
-            :disabled="!inputText.trim() && !pendingImages.length && !pendingMentions.length"
+            :disabled="(!inputText.trim() && !pendingImages.length && !pendingMentions.length) || sending"
             :busy="isBusyVal && !btwMode"
             :actions="quickActions"
             :btw-active="btwMode"
