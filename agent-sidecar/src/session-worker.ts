@@ -36,7 +36,6 @@ import type { EffortLevel, HookCallback, HookInput } from "@anthropic-ai/claude-
 import { existsSync, openSync, readSync, statSync, closeSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { loadAideInstructions } from "./instructions.js";
-import { buildProjectSkillOverrides } from "./skillsDiscovery.js";
 import { buildDispatchPluginsOption } from "./dispatchPlugins.js";
 import { evaluatePolicy } from "./policy/evaluate.js";
 import type { PermissionPolicySnapshot } from "./policy/types.js";
@@ -832,10 +831,6 @@ export class SessionWorker {
           // 轻量 btw 是纯问答，必须跳过：tools:[] 只禁内建工具，MCP 工具照样进
           // 工具列表，模型会真去调（2026-08-02 实锤「先看一眼链路」并卡在调用上）。
           const effectiveCwd = cwd ?? this.cwd ?? "";
-          // 受限模式（!trusted）：项目 .aide/claude/skills/ 里的 skill 经
-          // managedSettings.skillOverrides 从模型列表/Skill 工具隐藏——
-          // user/plugin skill 不受影响（skills 仍为 "all"）。
-          const projectSkillOverrides = trusted ? {} : buildProjectSkillOverrides(effectiveCwd);
           const codegraphMcp = this.lightweightMode
             ? null
             : codegraphMcpRegistration(effectiveCwd, (e) => this.emit(e), process.env, trusted);
@@ -863,13 +858,10 @@ export class SessionWorker {
               allowDangerouslySkipPermissions: true,
               canUseTool: this.makeCanUseToolCallback() as any,
               settingSources: [],
-              // 受限模式（!trusted）：strictMcpConfig 忽略项目 .mcp.json 等外部 MCP
-              // 配置；managedSettings.skillOverrides 隐藏项目 .aide/claude/skills/ 里的 skill。
-              // user 级 / plugin 级不受影响（plugins 经 AIDE_ENABLED_PLUGINS_FILE 注入）。
+              // 受限模式（!trusted）：strictMcpConfig 忽略项目 .mcp.json 等外部 MCP 配置；
+              // buildDispatchPluginsOption 不注入项目级散装 plugin（项目 skills/agents
+              // 不进 agent）。user 级不受影响。
               ...(trusted ? {} : { strictMcpConfig: true }),
-              ...(projectSkillOverrides && Object.keys(projectSkillOverrides).length > 0
-                ? { managedSettings: { skillOverrides: projectSkillOverrides } as any }
-                : {}),
               systemPrompt: {
                 type: "preset" as const,
                 preset: "claude_code" as const,
