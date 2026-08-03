@@ -7,13 +7,13 @@ use std::sync::{Arc, Mutex};
 use tauri::State;
 
 use crate::settings::{SettingsScope, SettingsService};
-use super::config_path;
+use super::{config_path, state_path};
 use once_cell::sync::Lazy;
 
-/// 串行化所有 config「读→改→写」临界区的全局锁。单纯的原子写只能防崩溃半截
+/// 串行化所有 state「读→改→写」临界区的全局锁。单纯的原子写只能防崩溃半截
 /// 文件，防不了两个写入方在杀软拖慢 `fs::write` 时互相覆盖——曾导致用户新增的
 /// provider 被异步 `refresh_system_default_models` 的陈旧快照覆盖丢失。所有要改
-/// config 并写回的命令必须走 `with_config_mut`；纯读用 `load_config`（原子写
+/// state 并写回的命令必须走 `with_state_mut`；纯读用 `load_state`（原子写
 /// 保证读到的是完整旧值或新值，不会读到半截）。
 static CONFIG_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
@@ -146,6 +146,10 @@ pub struct AppSettings {
     /// 语义/判定全在前端。一旦该工作区任一 Java 运行配置选了 JDK，前端即不再提示。
     #[serde(default)]
     pub jdk_prompt_dismissed: Vec<String>,
+    /// 左侧会话栏「钉子」固定状态：false（默认）= QQ 式自动隐藏（贴左边缘悬浮
+    /// 滑出、覆盖内容），true = 常驻 dock 推开内容。纯 UI 状态，Rust 只存取。
+    #[serde(default)]
+    pub left_sidebar_pinned: bool,
 }
 
 fn default_font_size() -> u32 { 14 }
@@ -179,18 +183,45 @@ impl Default for AppSettings {
             enabled_plugins: std::collections::BTreeMap::new(),
             jdk_registry: Vec::new(),
             jdk_prompt_dismissed: Vec::new(),
+            left_sidebar_pinned: false,
         }
     }
 }
 
-/// Read the full config JSON. Returns Value::Null if the file doesn't exist.
+/// Read the state JSON (`state.json`). Returns Value::Null if the file doesn't exist.
 ///
-/// 纯读不取锁——`save_config` 走 temp+rename 原子替换，读到的要么是完整的旧值
-/// 要么是完整的新值，绝不会读到半截。要改并写回必须用 `with_config_mut`。
-pub fn load_config() -> Value {
-    let path = config_path();
+/// 纯读不取锁——`save_state` 走 temp+rename 原子替换，读到的要么是完整的旧值
+/// 要么是完整的新值，绝不会读到半截。要改并写回必须用 `with_state_mut`。
+pub fn load_state() -> Value {
+    load_json_at(&state_path())
+}
+
+/// Write the state JSON back to disk atomically（temp + rename）。
+///
+/// 崩溃/强杀不会留下半截损坏的 state.json——原文件只在 rename 成功的一刻被
+/// 替换。杀软锁定目标文件时 rename 重试几次（锁通常瞬态）；仍失败则保留原文件
+/// 并报错，最坏是本次改动没保存，而不是把整个 state 写坏。**不取锁**——并发
+/// 安全由 `with_state_mut` 在外层临界区保证；直接成对调用 `load_state` +
+/// `save_state` 是不安全的，应改用 `with_state_mut`。
+pub fn save_state(v: &Value) -> Result<(), String> {
+    save_json_at(&state_path(), v)
+}
+
+/// 读 legacy `config.json`。仅「读老格式做迁移」的路径使用（provider schema
+/// 迁移 / state 播种 / 设置体系导入）——活状态一律走 `load_state`/`with_state_mut`。
+pub(crate) fn load_legacy_config() -> Value {
+    load_json_at(&config_path())
+}
+
+/// 写回 legacy `config.json`。仅 provider schema 迁移原地规范化老文件（供紧随
+/// 其后的设置迁移/state 播种消费）时使用，新代码不应调用。
+pub(crate) fn save_legacy_config(v: &Value) -> Result<(), String> {
+    save_json_at(&config_path(), v)
+}
+
+fn load_json_at(path: &Path) -> Value {
     if path.exists() {
-        if let Ok(content) = fs::read_to_string(&path) {
+        if let Ok(content) = fs::read_to_string(path) {
             if let Ok(v) = serde_json::from_str::<Value>(&content) {
                 return v;
             }
@@ -199,27 +230,64 @@ pub fn load_config() -> Value {
     Value::Null
 }
 
-/// Write the full config JSON back to disk atomically（temp + rename）。
-///
-/// 崩溃/强杀不会留下半截损坏的 config.json——原文件只在 rename 成功的一刻被
-/// 替换。杀软锁定目标文件时 rename 重试几次（锁通常瞬态）；仍失败则保留原文件
-/// 并报错，最坏是本次改动没保存，而不是把整个 config 写坏。**不取锁**——并发
-/// 安全由 `with_config_mut` 在外层临界区保证；直接成对调用 `load_config` +
-/// `save_config` 是不安全的，应改用 `with_config_mut`。
-pub fn save_config(v: &Value) -> Result<(), String> {
-    let path = config_path();
-    let dir = path.parent().ok_or_else(|| "config path has no parent".to_string())?;
-    fs::create_dir_all(dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
-    let json = serde_json::to_string_pretty(v).map_err(|e| format!("Serialize config: {}", e))?;
+fn save_json_at(path: &Path, v: &Value) -> Result<(), String> {
+    let dir = path.parent().ok_or_else(|| "state path has no parent".to_string())?;
+    fs::create_dir_all(dir).map_err(|e| format!("Failed to create state dir: {}", e))?;
+    let json = serde_json::to_string_pretty(v).map_err(|e| format!("Serialize state: {}", e))?;
     let tmp = path.with_extension("json.tmp");
     // 先写临时文件——失败说明磁盘/权限问题，不碰原文件。
-    fs::write(&tmp, &json).map_err(|e| format!("Failed to write config temp: {}", e))?;
-    if let Err(e) = persist_file(&tmp, &path) {
+    fs::write(&tmp, &json).map_err(|e| format!("Failed to write state temp: {}", e))?;
+    if let Err(e) = persist_file(&tmp, path) {
         // rename 始终失败：清理临时文件，原文件未动。
         let _ = fs::remove_file(&tmp);
         return Err(e);
     }
     Ok(())
+}
+
+/// 新设置体系（`settings.json` descriptor store）已接管的 legacy 顶层 key——
+/// state 播种时跳过，只把其余的 live key 搬到 `state.json`。
+pub(crate) const SETTINGS_OWNED_KEYS: &[&str] = &[
+    "settings",
+    "providers",
+    "activeProvider",
+    "active_provider",
+    "system_default_model_mappings",
+];
+
+/// 一次性把 legacy `config.json` 中的 live key（未被设置体系接管的顶层 key）
+/// 搬到 `state.json`：missing-only 合并（state 已有的 key 不覆盖），幂等。
+///
+/// 两个调用点：①启动早期（任何读 state 的代码之前，lib.rs setup）；②设置迁移
+/// 删除 legacy 文件之前。两处都跑也不会重复——第二处看到 state 已有 key 全跳过。
+/// 返回 Err 时调用方**不得删除 legacy 文件**，留下次启动重试。
+pub fn seed_state_from_legacy(legacy_path: &Path, state_path: &Path) -> Result<(), String> {
+    let legacy = load_json_at(legacy_path);
+    let Some(legacy_obj) = legacy.as_object() else {
+        return Ok(()); // legacy 不存在或不是对象：没什么可搬
+    };
+    let mut state = load_json_at(state_path);
+    if state.is_null() {
+        state = serde_json::json!({});
+    }
+    let state_obj = state
+        .as_object_mut()
+        .ok_or_else(|| format!("{} 不是 JSON 对象，拒绝合并", state_path.display()))?;
+    let mut moved = 0u32;
+    for (key, value) in legacy_obj {
+        if SETTINGS_OWNED_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        if state_obj.contains_key(key) {
+            continue;
+        }
+        state_obj.insert(key.clone(), value.clone());
+        moved += 1;
+    }
+    if moved == 0 {
+        return Ok(());
+    }
+    save_json_at(state_path, &state)
 }
 
 /// 原子替换：同文件系统 rename 是原子的。Windows 上杀软锁目标文件时 rename
@@ -244,20 +312,20 @@ fn persist_file(tmp: &Path, dest: &Path) -> Result<(), String> {
 }
 
 /// 在一把全局锁内完成 load → modify → save，把「读旧值→改→写回」做成临界区。
-/// 防止两个 config 写入方在杀软拖慢写盘时互相覆盖（曾导致新增的 provider 被异步
-/// refresh 的陈旧快照覆盖丢失）。闭包返回的值原样透传。`config` 为空时初始化为
-/// `{}`，闭包可直接 `config["key"] = ...`。
-pub fn with_config_mut<F, R>(f: F) -> Result<R, String>
+/// 防止两个 state 写入方在杀软拖慢写盘时互相覆盖（曾导致新增的 provider 被异步
+/// refresh 的陈旧快照覆盖丢失）。闭包返回的值原样透传。`state` 为空时初始化为
+/// `{}`，闭包可直接 `state["key"] = ...`。
+pub fn with_state_mut<F, R>(f: F) -> Result<R, String>
 where
     F: FnOnce(&mut Value) -> Result<R, String>,
 {
     let _guard = CONFIG_LOCK.lock().map_err(|e| e.to_string())?;
-    let mut config = load_config();
-    if config.is_null() {
-        config = serde_json::json!({});
+    let mut state = load_state();
+    if state.is_null() {
+        state = serde_json::json!({});
     }
-    let r = f(&mut config)?;
-    save_config(&config)?;
+    let r = f(&mut state)?;
+    save_state(&state)?;
     Ok(r)
 }
 
@@ -368,6 +436,66 @@ pub fn get_pending_notification() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn seed_tmp(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("aide_seed_test_{}", name));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn seed_moves_live_keys_and_skips_settings_owned() {
+        let tmp = seed_tmp("moves_live");
+        let legacy = tmp.join("config.json");
+        let state = tmp.join("state.json");
+        fs::write(
+            &legacy,
+            r#"{"settings":{"theme":"glass"},"providers":[],"active_provider":"x","workspace":"C--p","claudeMigrationDone":true}"#,
+        )
+        .unwrap();
+        seed_state_from_legacy(&legacy, &state).unwrap();
+        let seeded: Value =
+            serde_json::from_str(&fs::read_to_string(&state).unwrap()).unwrap();
+        assert!(seeded.get("settings").is_none());
+        assert!(seeded.get("providers").is_none());
+        assert!(seeded.get("active_provider").is_none());
+        assert_eq!(seeded["workspace"], "C--p");
+        assert_eq!(seeded["claudeMigrationDone"], true);
+    }
+
+    #[test]
+    fn seed_is_missing_only_and_idempotent() {
+        let tmp = seed_tmp("missing_only");
+        let legacy = tmp.join("config.json");
+        let state = tmp.join("state.json");
+        fs::write(&legacy, r#"{"workspace":"legacy-ws","extra":1}"#).unwrap();
+        fs::write(&state, r#"{"workspace":"live-ws"}"#).unwrap();
+        seed_state_from_legacy(&legacy, &state).unwrap();
+        let seeded: Value =
+            serde_json::from_str(&fs::read_to_string(&state).unwrap()).unwrap();
+        assert_eq!(seeded["workspace"], "live-ws", "state 已有 key 不覆盖");
+        assert_eq!(seeded["extra"], 1, "缺失 key 补齐");
+        // 第二次跑：内容不变
+        seed_state_from_legacy(&legacy, &state).unwrap();
+        let again: Value =
+            serde_json::from_str(&fs::read_to_string(&state).unwrap()).unwrap();
+        assert_eq!(again, seeded);
+    }
+
+    #[test]
+    fn seed_noops_when_nothing_to_move() {
+        let tmp = seed_tmp("noop");
+        let legacy = tmp.join("config.json");
+        let state = tmp.join("state.json");
+        // legacy 只有设置体系接管的 key → 不创建 state.json
+        fs::write(&legacy, r#"{"settings":{"theme":"glass"}}"#).unwrap();
+        seed_state_from_legacy(&legacy, &state).unwrap();
+        assert!(!state.exists());
+        // legacy 不存在 → Ok 且不创建
+        seed_state_from_legacy(&tmp.join("nope.json"), &state).unwrap();
+        assert!(!state.exists());
+    }
 
     /// `set_settings` 收的是 `serde_json::Value`，Tauri 不转换 Value 内部 key，
     /// 前端发 camelCase 就以 camelCase 落盘。`AppSettings` 用 `rename_all = "camelCase"`

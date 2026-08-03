@@ -20,6 +20,7 @@
   --aide-surface-default: #292631;
   --aide-surface-hover: #322e3c;
   --aide-surface-active: #3d3848;
+  --aide-selection-bg: #3d3848;
   --aide-text-primary: #ece5db;
   --aide-text-secondary: #b3aa9c;
   --aide-text-muted: #7d7568;
@@ -66,6 +67,14 @@ html, body, #app {
   color: var(--aide-text-primary);
   font-family: 'Inter Variable', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   font-size: 13px;
+}
+
+/* 普通文本选中底色跟随主题（聊天区/输入框/设置页等 DOM 文本）。
+ * 终端是 canvas、CodeMirror 有自己的 .cm-selectionBackground，都不受此规则影响，
+ * 三者共用 --aide-selection-bg 一个 token。文字颜色不指定，保持原色（深底深字、
+ * 浅底浅字各自的 textPrimary 压在 selectionBg 上均可读）。 */
+::selection {
+  background: var(--aide-selection-bg);
 }
 
 /* Scrollbar styling */
@@ -115,4 +124,99 @@ html, body, #app {
 
 .aide-tooltip.visible {
   opacity: 1;
+}
+
+/* ── Markdown 正文（.msg-text：聊天消息 / btw 抽屉共用） ──
+   与 utils/markdown.ts 的 marked 渲染输出配套。原定义在 ChatMessage.vue 的
+   scoped 块里，btw 抽屉复用时提到全局——选择器语义不变，仅去掉 scoped 限定。 */
+.msg-text p {
+  margin: 0 0 8px;
+}
+.msg-text p:last-child {
+  margin-bottom: 0;
+}
+.msg-text code {
+  font-family: var(--aide-font-mono);
+  font-size: 12px;
+  background: var(--aide-bg-deep);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+/* 只有渲染期判定为文件路径的 code 才呈现可点击态 */
+.msg-text code.aide-file-link {
+  cursor: pointer;
+  color: var(--aide-accent);
+  transition: background var(--aide-ease-t), color var(--aide-ease-t);
+}
+.msg-text code.aide-file-link:hover {
+  background: var(--aide-accent);
+  color: var(--aide-text-on-accent);
+}
+.msg-text pre {
+  background: var(--aide-bg-deep);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 6px 0;
+}
+.msg-text pre code {
+  background: none;
+  padding: 0;
+}
+/* 代码块 hljs 语法色：与 FileWindow.vue 同一 token 配方 */
+.msg-text .hljs-keyword,
+.msg-text .hljs-selector-tag,
+.msg-text .hljs-type { color: var(--aide-syntax-keyword); }
+.msg-text .hljs-string,
+.msg-text .hljs-addition,
+.msg-text .hljs-regexp { color: var(--aide-success); }
+.msg-text .hljs-number,
+.msg-text .hljs-literal,
+.msg-text .hljs-variable,
+.msg-text .hljs-template-variable { color: var(--aide-syntax-number); }
+.msg-text .hljs-comment,
+.msg-text .hljs-quote { color: var(--aide-text-muted); font-style: italic; }
+.msg-text .hljs-title,
+.msg-text .hljs-title.class_,
+.msg-text .hljs-title.function_,
+.msg-text .hljs-section,
+.msg-text .hljs-meta { color: var(--aide-accent); }
+/* Tailwind preflight 把 ul/ol 的 list-style 统一清成 none，仅补 padding 会
+   导致有序列表看不到 1./2./3. 编号、无序列表看不到圆点——这里显式复原标记。 */
+.msg-text ul, .msg-text ol {
+  padding-left: 20px;
+  margin: 4px 0;
+  list-style-position: outside;
+}
+.msg-text ul {
+  list-style-type: disc;
+}
+.msg-text ol {
+  list-style-type: decimal;
+}
+.msg-text li {
+  margin: 2px 0;
+}
+.msg-text h1, .msg-text h2, .msg-text h3 {
+  margin: 8px 0 4px;
+  font-weight: 600;
+}
+.msg-text blockquote {
+  border-left: 3px solid var(--aide-accent);
+  margin: 6px 0;
+  padding-left: 10px;
+  color: var(--aide-text-secondary);
+}
+.msg-text a {
+  color: var(--aide-accent);
+  text-decoration: none;
+}
+.msg-text a:hover {
+  text-decoration: underline;
+}
+.msg-text hr {
+  border: none;
+  border-top: 1px solid var(--aide-border);
+  margin: 8px 0;
 }

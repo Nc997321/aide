@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<!--
+  aide 零会话欢迎页（hero）交互原型
+  - 初始 = 零 tab 状态：无 tab 栏，居中 hero（标题行 + 大输入框）
+  - 在 hero 里输入并发送（或按 Ctrl+N / 点右上角「＋」占位）→ 现场建「新会话」tab，
+    tab 栏出现，内容区仍是同款居中 hero（统一 hero 样式）
+  - 点 tab 上的 ×（或 Ctrl+W）关掉最后一个 tab → 回到零 tab hero
+  配色取自 warm-dark 主题 token（与 sidebar-autohide.html 同源）
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>aide 零会话欢迎页原型</title>
+<style>
+  :root {
+    --bg-deep: #141218;
+    --bg-base: #1a1820;
+    --bg-raised: #221f29;
+    --surface-default: #292631;
+    --surface-hover: #322e3c;
+    --surface-active: #3d3848;
+    --text-primary: #ece5db;
+    --text-secondary: #b3aa9c;
+    --text-muted: #7d7568;
+    --accent: #d9ab78;
+    --accent-subtle: rgba(217,171,120,.13);
+    --border: rgba(255,214,160,.09);
+    --border-subtle: rgba(255,214,160,.045);
+    --danger: #d97a7a;
+    --shadow-lg: 0 18px 56px rgba(0,0,0,.5), 0 4px 14px rgba(0,0,0,.3);
+    --radius-sm: 3px;
+    --radius: 8px;
+    --ease: cubic-bezier(.2,.8,.2,1);
+    --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei", monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    font: 13px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif;
+    overflow: hidden;
+  }
+
+  /* ============ 窗口骨架 ============ */
+  .app { display: flex; flex-direction: column; height: 100vh; }
+
+  /* 顶栏（仿 aide 标题栏，纯装饰） */
+  .titlebar {
+    height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-deep);
+    color: var(--text-secondary);
+    flex-shrink: 0;
+    user-select: none;
+  }
+  .titlebar .logo { color: var(--accent); font-size: 15px; }
+  .tb-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-default);
+    color: var(--text-secondary);
+    font-size: 12px;
+  }
+  .tb-search {
+    flex: 1; max-width: 480px; margin: 0 auto;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 4px 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--bg-base);
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+  .tb-win { display: flex; gap: 14px; color: var(--text-muted); font-size: 13px; }
+
+  .body { flex: 1; display: flex; min-height: 0; }
+
+  /* ============ 聊天区 ============ */
+  .chat {
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column;
+    background: var(--bg-base);
+  }
+
+  /* tab 栏（零 tab 时整行隐藏） */
+  .tabbar {
+    display: none;
+    align-items: stretch;
+    height: 32px;
+    background: var(--bg-deep);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    user-select: none;
+  }
+  .chat--with-tab .tabbar { display: flex; }
+  .tab {
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 6px 0 10px;
+    max-width: 180px;
+    font-size: 12px;
+    color: var(--text-primary);
+    background: var(--bg-base);
+    border-right: 1px solid var(--border-subtle);
+    border-top: 2px solid var(--accent);
+  }
+  .tab .tab-label { font-style: italic; } /* 预览 tab 斜体 */
+  .tab .tab-close {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px;
+    border: none; border-radius: var(--radius-sm);
+    background: transparent; color: var(--text-muted);
+    cursor: pointer; font-size: 10px;
+  }
+  .tab .tab-close:hover { background: var(--surface-hover); color: var(--text-primary); }
+  .tab-new {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; border: none; background: transparent;
+    color: var(--text-muted); cursor: pointer; font-size: 13px;
+  }
+  .tab-new:hover { background: var(--surface-hover); color: var(--text-primary); }
+
+  /* hero 容器：垂直水平居中 */
+  .hero {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding: 24px;
+    min-height: 0;
+  }
+  .hero-head {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    user-select: none;
+  }
+  .hero-logo {
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.3), 0 1px 4px rgba(0,0,0,.2);
+  }
+  .hero-title {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 14px;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+  }
+  .hero-title .ws { color: var(--text-primary); }
+  .hero-title .sep { color: var(--text-muted); }
+  .hero-title .model { color: var(--accent); }
+
+  /* 输入盒：仿 ChatPanel 的 chat-input-box */
+  .hero-input {
+    width: min(680px, 92%);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-raised);
+    box-shadow: var(--shadow-lg);
+    transition: border-color .15s var(--ease);
+  }
+  .hero-input:focus-within { border-color: var(--accent); }
+  .hero-input textarea {
+    display: block;
+    width: 100%;
+    min-height: 72px;
+    max-height: 200px;
+    padding: 14px 16px 6px;
+    border: none; outline: none; resize: none;
+    background: transparent;
+    color: var(--text-primary);
+    font: 13px/1.7 var(--font-mono);
+  }
+  .hero-input textarea::placeholder { color: var(--text-muted); }
+  .hero-toolbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px 10px;
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 9px;
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    background: var(--surface-default);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    transition: background .12s var(--ease);
+  }
+  .chip:hover { background: var(--surface-hover); color: var(--text-primary); }
+  .chip .caret { font-size: 8px; color: var(--text-muted); }
+  .hero-toolbar .spacer { flex: 1; }
+  .send-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 14px;
+    border: none; border-radius: var(--radius-sm);
+    background: var(--accent);
+    color: #241b10;
+    font-size: 12px;
+    cursor: pointer;
+    transition: filter .12s var(--ease);
+  }
+  .send-btn:hover { filter: brightness(1.1); }
+  .send-btn:disabled { opacity: .45; cursor: default; filter: none; }
+
+  .hero-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    user-select: none;
+  }
+  .hero-hint kbd {
+    padding: 1px 5px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--surface-default);
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+
+  /* ============ 右侧文件树（纯装饰，看整体比例） ============ */
+  .right {
+    width: 300px;
+    flex-shrink: 0;
+    display: flex; flex-direction: column;
+    background: var(--bg-deep);
+    border-left: 1px solid var(--border-subtle);
+  }
+  .right-head {
+    height: 32px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 10px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 12px;
+    user-select: none;
+  }
+  .right-tree { padding: 8px 6px; font-size: 12px; color: var(--text-secondary); }
+  .right-tree .row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+  }
+  .right-tree .row:hover { background: var(--surface-hover); }
+  .right-tree .row .tri { color: var(--text-muted); font-size: 14px; width: 10px; }
+  .right-tree .row .ico { opacity: .8; }
+
+  /* 原型演示控制条（不属于设计稿） */
+  .demo-note {
+    position: fixed;
+    left: 12px; bottom: 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    user-select: none;
+  }
+  .demo-note kbd {
+    padding: 0 4px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--surface-default);
+    font-size: 10px;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- 顶栏 -->
+  <div class="titlebar">
+    <span class="logo">✿</span>
+    <span class="tb-btn">打开目录</span>
+    <span class="tb-btn">aide ⌄</span>
+    <span class="tb-btn">▶</span>
+    <div class="tb-search">🔍 搜索… <span style="margin-left:auto">Ctrl+P</span></div>
+    <div class="tb-win">— ▢ ✕</div>
+  </div>
+
+  <div class="body">
+    <!-- 聊天区 -->
+    <div class="chat" id="chat">
+      <!-- tab 栏：零 tab 时整行不渲染（对应实现里的 v-if="group.tabs.length"） -->
+      <div class="tabbar" id="tabbar">
+        <div class="tab" id="tab">
+          <span class="tab-label" id="tabLabel">新会话</span>
+          <button class="tab-close" title="关闭" onclick="closeTab()">✕</button>
+        </div>
+        <button class="tab-new" title="新建会话 tab" onclick="createTab()">＋</button>
+      </div>
+
+      <!-- hero：零会话 / 空白 tab 共用这一套居中样式 -->
+      <div class="hero">
+        <div class="hero-head">
+          <img class="hero-logo" src="../public/icon.png" alt="Aide" width="56" height="56">
+          <div class="hero-title">
+            新会话位于 <span class="ws">aide</span>
+            <span class="sep">·</span>
+            使用 <span class="model">k3[1m]</span>
+          </div>
+        </div>
+        <div class="hero-input">
+          <textarea id="prompt" placeholder="你正在解决什么问题？"></textarea>
+          <div class="hero-toolbar">
+            <span class="chip">＋</span>
+            <span class="chip">k3[1m] <span class="caret">▼</span></span>
+            <span class="chip">手动模式 <span class="caret">▼</span></span>
+            <span class="spacer"></span>
+            <button class="send-btn" id="sendBtn" onclick="send()">发送 ⏎</button>
+          </div>
+        </div>
+        <div class="hero-hint" id="heroHint">
+          输入消息即创建会话 · <kbd>Ctrl+N</kbd> 新建空白 tab
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧文件树（装饰） -->
+    <div class="right">
+      <div class="right-head">📁 &nbsp;✏️ &nbsp;🌿</div>
+      <div class="right-tree">
+        <div class="row" style="color:var(--text-primary)"><span class="ico">📁</span> aide <span style="color:var(--text-muted);font-size:11px">master ⌄</span></div>
+        <div class="row"><span class="tri">›</span><span class="ico">📂</span> agent-sidecar</div>
+        <div class="row"><span class="tri">›</span><span class="ico">📂</span> docs</div>
+        <div class="row"><span class="tri">›</span><span class="ico">📂</span> prototypes</div>
+        <div class="row"><span class="tri">›</span><span class="ico">📂</span> src</div>
+        <div class="row"><span class="tri">›</span><span class="ico">📂</span> src-tauri</div>
+        <div class="row"><span class="tri"></span><span class="ico">📄</span> CLAUDE.md</div>
+        <div class="row"><span class="tri"></span><span class="ico">📄</span> package.json</div>
+        <div class="row"><span class="tri"></span><span class="ico">📄</span> README.md</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="demo-note">
+  原型演示：<kbd>Ctrl+N</kbd> 建 tab · <kbd>Ctrl+W</kbd> 关 tab · hero 里回车 = 发送并建 tab
+</div>
+
+<script>
+  const chat = document.getElementById('chat');
+  const prompt = document.getElementById('prompt');
+  const tabLabel = document.getElementById('tabLabel');
+  const heroHint = document.getElementById('heroHint');
+
+  function hasTab() { return chat.classList.contains('chat--with-tab'); }
+
+  function createTab(name) {
+    chat.classList.add('chat--with-tab');
+    tabLabel.textContent = name || '新会话 ' + new Date().toLocaleTimeString();
+    heroHint.innerHTML = '空白预览 tab · 发出第一条消息后转正 · <kbd>Ctrl+W</kbd> 关闭';
+    prompt.focus();
+  }
+
+  function closeTab() {
+    chat.classList.remove('chat--with-tab');
+    heroHint.innerHTML = '输入消息即创建会话 · <kbd>Ctrl+N</kbd> 新建空白 tab';
+    prompt.focus();
+  }
+
+  function send() {
+    const text = prompt.value.trim();
+    if (!text) { prompt.focus(); return; }
+    if (!hasTab()) createTab(text.slice(0, 12));
+    tabLabel.style.fontStyle = 'normal'; // 派发即转正
+    prompt.value = '';
+    prompt.placeholder = '输入消息…';
+  }
+
+  prompt.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); createTab(); }
+    if (e.ctrlKey && e.key.toLowerCase() === 'w') { e.preventDefault(); if (hasTab()) closeTab(); }
+  });
+
+  prompt.focus();
+</script>
+</body>
+</html>

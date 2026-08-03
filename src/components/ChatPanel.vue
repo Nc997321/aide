@@ -3,6 +3,7 @@ import { ref, watch, nextTick, computed, onMounted, onUnmounted } from "vue";
 import type { ComputedRef } from "vue";
 import ChatMessage from "./ChatMessage.vue";
 import AppLogo from "./AppLogo.vue";
+import Icon from "./Icon.vue";
 import ContextCompactionStatus from "./ContextCompactionStatus.vue";
 import TaskListPanel from "./TaskListPanel.vue";
 import ThemedSelect from "./ThemedSelect.vue";
@@ -49,6 +50,10 @@ const props = defineProps<{
   currentModel?: string;
   /** 模型切换坐实回执（sidecar 运行时路径发出）——据此弹成功/失败瞬时提示 */
   modelSwitchResult?: ModelSwitchResult | null;
+  /** sidecar 坐实的当前 effort（effort_changed 事件）；空串 = 还没学到 */
+  currentEffort?: string;
+  /** effort 切换失败回执（sidecar 驳回，选择器已被回滚拉回旧值）——据此弹失败提示 */
+  effortSwitchError?: { message: string; seq: number } | null;
   contextUsage?: ContextUsage | null;
   /** 当前会话的短生命周期压缩状态；不属于消息历史。 */
   contextCompaction?: ContextCompactionState | null;
@@ -72,9 +77,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   send: [prompt: string, opts: SendOptions];
-  "send-btw": [prompt: string, opts: { lightweight: boolean; model?: string }];
+  "send-btw": [prompt: string, opts: { lightweight: boolean; model?: string; effort?: string }];
   interrupt: [];
   "set-model": [model: string];
+  "set-effort": [effort: string];
   "set-permission-mode": [mode: string];
   "respond-permission": [id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string];
   "update:bgDockSelectedId": [id: string];
@@ -332,6 +338,87 @@ watch(
   },
 );
 
+// ── Effort 选择器 ──
+// 会话级思考深度：选项固定五档（不像模型有 provider 相关列表/SDK 回报列表），
+// 默认解析顺序：会话记忆（sessionEffort 元数据）→ provider 配置的 effortLevel →
+// "high"。切换经 set-effort 走 sidecar applyFlagSettings 即时生效（SDK 官方中途
+// 通道，不重启进程、实测不碰 prompt 缓存）；进程没起时选择随下一条消息的
+// initialEffort（env 通道）带上。sidecar 坐实/回滚由 props.currentEffort 同步。
+const EFFORT_OPTIONS = [
+  { value: "low", label: "LOW" },
+  { value: "medium", label: "MEDIUM" },
+  { value: "high", label: "HIGH" },
+  { value: "xhigh", label: "XHIGH" },
+  { value: "max", label: "MAX" },
+];
+const selectedEffort = ref("high");
+/** 用户在当前会话视图里手动改过 = true——异步恢复/provider 就绪回调不得覆盖。 */
+let effortTouchedByUser = false;
+
+/** provider 配置的默认档位（设置面板的 effortLevel 是 LOW/MAX 风格大写）；
+ *  没配或非法值 → "high"（用户决定：选择器没有"默认"档，默认就落 high）。 */
+function providerDefaultEffort(): string {
+  const v = (sessionProvider.value.effortLevel ?? "").trim().toLowerCase();
+  return EFFORT_OPTIONS.some((o) => o.value === v) ? v : "high";
+}
+
+function handleEffortChange(value: string) {
+  // btw 模式下 effort 选择器只决定这条支线的档位，不回写主会话（同模型选择器语义）。
+  if (btwMode.value) {
+    btwEffort.value = value;
+    return;
+  }
+  effortTouchedByUser = true;
+  selectedEffort.value = value;
+  // 会话还没开始时 setEffort 是无会话可发的空操作，安全；真正生效靠
+  // handleSend 把 selectedEffort 带进第一条消息的 initialEffort。
+  emit("set-effort", value);
+}
+
+// sidecar 坐实/回滚同步：失败时选择器被拉回旧值（error toast 由下方 watcher 弹）。
+watch(() => props.currentEffort, (v) => {
+  if (v && v !== selectedEffort.value) selectedEffort.value = v;
+});
+
+// effort 切换失败 → 瞬时提示（同 modelSwitchResult 的新鲜度守卫语义）。
+watch(
+  () => props.effortSwitchError?.seq,
+  (seq) => {
+    if (!seq || !props.effortSwitchError) return;
+    showToast(`effort 切换失败：${props.effortSwitchError.message}`, "danger", 4200);
+  },
+);
+
+// 会话切换：恢复这个会话记住的 effort（没有则落 provider 默认/high）。
+// pending 会话不恢复不重置——选择是用户刚做的/随 initialEffort 走的。
+watch(
+  () => props.sessionId,
+  async (sid) => {
+    effortTouchedByUser = false;
+    if (!sid) {
+      selectedEffort.value = providerDefaultEffort();
+      return;
+    }
+    if (isPendingSession(sid)) return;
+    selectedEffort.value = providerDefaultEffort();
+    const remembered = await api.sessionEffort(sid).catch(() => null);
+    // 读回期间切走了别的会话，或用户已经手动改过 → 放弃恢复
+    if (props.sessionId !== sid || effortTouchedByUser) return;
+    if (remembered && EFFORT_OPTIONS.some((o) => o.value === remembered)) {
+      selectedEffort.value = remembered;
+    }
+  },
+  { immediate: true },
+);
+
+// provider 就绪/切换：只兜底没被用户动过、且不在存活会话里的选择
+// （存活会话的 sessionProvider 锁在 spawn 时的 provider，id 不会变，天然跳过）。
+watch(() => sessionProvider.value.id, () => {
+  if (effortTouchedByUser) return;
+  if (props.sessionId && !isPendingSession(props.sessionId)) return;
+  selectedEffort.value = providerDefaultEffort();
+});
+
 // ── 「允许并记住」作用域解析 ──
 // 权限请求出现时拉一次权限设置视图，决定「记住」默认落到哪个作用域（项目本地
 // 优先，不可编辑则回退用户全局），并缓存规则列表供点击时去重。权限请求不频繁，
@@ -467,6 +554,57 @@ const messagesVal = computed(() =>
   Array.isArray(props.messages) ? props.messages : props.messages.value
 );
 
+// ── hero（零会话欢迎态）────────────────────────────────────────────────────
+// 判定 = 未绑定会话且无消息：零 tab 布局与「新会话」空白预览 tab 共用这一套
+// 居中样式。hero 不是独立组件——输入盒/工具栏/发送路径全部复用，只是换布局文案。
+const isHero = computed(() => !props.sessionId && messagesVal.value.length === 0);
+const heroWsName = computed(() => {
+  const p = props.workspacePath ?? "";
+  return p.split(/[\\/]/).filter(Boolean).pop() || p;
+});
+const heroModelName = computed(
+  () => displayModels.value.find((m) => m.value === selectedModel.value)?.displayName ?? "",
+);
+
+// 离开 hero 的 FLIP 过渡：状态翻转瞬间（DOM 还没变，flush:"pre"）记录输入盒
+// 位置，布局切到正常对话后让输入盒从旧位置平滑「落」到底部（零 tab → 建 tab
+// 时 tab 栏出现造成的位移也一并被这次 FLIP 覆盖）。只在翻转瞬间量两次 rect、
+// 只动 transform，不碰滚动区——本项目有 O(n²) 渲染/强布局前科，此处保持零负担。
+const inputAreaEl = ref<HTMLElement | null>(null);
+const heroLeaving = ref(false); // 首条消息淡入用的一次性 class
+
+watch(isHero, (now, prev) => {
+  if (!prev || now) return;
+  const el = inputAreaEl.value;
+  const oldTop = el?.getBoundingClientRect().top ?? null;
+  heroLeaving.value = true;
+  setTimeout(() => { heroLeaving.value = false; }, 350);
+  if (oldTop === null) return;
+  void nextTick(() => {
+    const el2 = inputAreaEl.value;
+    if (!el2) return;
+    if (typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const dy = oldTop - el2.getBoundingClientRect().top;
+    if (!dy) return;
+    let done = false;
+    const cleanup = () => {
+      if (done) return;
+      done = true;
+      el2.style.transition = "";
+      el2.style.transform = "";
+      el2.removeEventListener("transitionend", cleanup);
+    };
+    el2.style.transition = "none";
+    el2.style.transform = `translateY(${dy}px)`;
+    requestAnimationFrame(() => {
+      el2.style.transition = "transform .28s var(--aide-ease)";
+      el2.style.transform = "translateY(0)";
+      el2.addEventListener("transitionend", cleanup);
+      setTimeout(cleanup, 450); // transitionend 可能不触发（元素卸载等），兜底清场
+    });
+  });
+}, { flush: "pre" });
+
 // 通用思考行与压缩状态条共用一个秒级计时器：压缩时以 SDK 生命周期到达的
 // startedAt 为准，普通生成时才从 busy 开始计时。不会额外引入高频更新。
 const activityElapsed = ref(0);
@@ -535,28 +673,25 @@ async function expandOlderAnchored() {
 
 const btwMode = ref(false);
 const btwLightweight = ref(true);
-// btw 默认走便宜快的模型。但「便宜快」在不同 provider 下名字不同,必须按 provider 解析:
-//  - 第三方供应商:选项列表装的是真实模型 id(deepseek-v4-flash),不是 Claude 别名。
-//    "haiku" 字面量永远不在列表里(见 providerModels 的收口规则)。所以走供应商配的
-//    defaultHaikuModel 映射——用户把 haiku 映到的那个真实 id,它一定在选项列表里
-//    (providerModels 就是这么收来的)。这也是用户在设置里表达「我的便宜快模型是哪个」
-//    的唯一入口。
-//  - 系统默认(真 Claude):defaultHaikuModel 为空,选项列表本身就是别名列表,
-//    "haiku" 直接命中。
-//  - 兜底:两者都没有就退到主会话当前模型(绝不让下拉显示一个不存在的值)。
-// btw 期间模型选择器显示它,用户可临时改这条支线的模型(不回写主会话);
-// 发送后 btwMode 关闭,选择器自动回到主会话模型。
-const btwModel = ref("haiku");
-const btwDefaultModel = computed(() => {
-  const opts = modelSelectOptions.value;
-  const haikuMapping = sessionProvider.value.modelMappings?.defaultHaikuModel;
-  if (haikuMapping && opts.some((m) => m.value === haikuMapping)) return haikuMapping;
-  if (opts.some((m) => m.value === "haiku")) return "haiku";
-  return selectedModel.value || opts[0]?.value || "haiku";
-});
+// btw 默认继承主会话当前模型（2026-08-02 改：原默认最便宜的 haiku 系/defaultHaikuModel
+// 映射，用户反馈支线回答质量跟不上主会话，索性同源）。btw 期间模型选择器显示它，
+// 用户可临时改这条支线的模型（不回写主会话）；发送后 btwMode 关闭，选择器自动回到
+// 主会话模型。
+const btwModel = ref("");
+const btwDefaultModel = computed(() =>
+  selectedModel.value || modelSelectOptions.value[0]?.value || "",
+);
+// btw 期间 effort 选择器落到最低档 low（一次性支线省 token）——与模型选择器同形：
+// 用户可临时改（只影响这条支线，不回写主会话），发送后 btwMode 关闭，选择器自动
+// 回到主会话之前的档位。
+const btwEffort = ref("low");
+const displayedEffort = computed(() => (btwMode.value ? btwEffort.value : selectedEffort.value));
 function toggleBtw() {
   btwMode.value = !btwMode.value;
-  if (btwMode.value) btwModel.value = btwDefaultModel.value;
+  if (btwMode.value) {
+    btwModel.value = btwDefaultModel.value;
+    btwEffort.value = "low";
+  }
 }
 // 输入框模型选择器显示值:btw 期间显示支线模型,否则显示主会话模型
 const displayedModel = computed(() => (btwMode.value ? btwModel.value : selectedModel.value));
@@ -596,10 +731,15 @@ const btwBgChipVisible = computed(
     && btw.store.value.ownerSessionId === props.sessionId,
 );
 // 抽屉标题里"· btw"那块小字换成这条支线实际用的模型名(查下拉 displayName,查不到回落原值)
+// + 实际 effort 档位——"/btw 问题"直发不进输入模式,选择器显示的仍是主会话档位,
+// 支线真实跑什么只能看这里(2026-08-02 用户实锤分不清 HIGH 是显示还是实际)。
 const btwModelLabel = computed(() => {
   const v = btw.store.value.model;
-  if (!v) return "btw";
-  return modelSelectOptions.value.find((m) => m.value === v)?.label ?? v;
+  const base = v
+    ? (modelSelectOptions.value.find((m) => m.value === v)?.label ?? v)
+    : "btw";
+  const eff = btw.store.value.effort;
+  return eff ? `${base} · ${eff.toUpperCase()}` : base;
 });
 // 一次性回弹确认:只在支线真正进入 running 才弹"已切回主对话"+flash。
 // 失败(error)不弹成功提示,原因在抽屉里展示——修掉"没抽屉却弹已切回"的误导。
@@ -661,11 +801,20 @@ watch(
 
 // 用户向上滚动时暂停自动置底，回到底部附近恢复
 const autoScroll = ref(true);
+// 「回到底部」悬浮按钮：离底超过 JUMP_SHOW_THRESHOLD 才显示（比 autoScroll 的 48px
+// 阈值宽得多——刚离底几十 px 就浮按钮太吵）；上翻期间来了新消息/流式增量时点
+// 亮铜色小点，点击或手动滚回底部附近时熄灭
+const JUMP_SHOW_THRESHOLD = 200;
+const farFromBottom = ref(false);
+const newWhileAway = ref(false);
 
 function onScroll() {
   const el = scrollEl.value;
   if (!el) return;
-  autoScroll.value = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+  autoScroll.value = dist < 48;
+  farFromBottom.value = dist > JUMP_SHOW_THRESHOLD;
+  if (autoScroll.value) newWhileAway.value = false;
   // 滚到接近顶部 = 想看更早的消息:扩窗(带锚定)。只在用户真实滚动时触发,
   // 挂载/置底不产生 scrollTop≈0 的 scroll 事件,不会误触发。
   if (el.scrollTop < 80 && hiddenCount.value > 0) void expandOlderAnchored();
@@ -684,15 +833,33 @@ function scrollToBottom() {
   });
 }
 
-watch(() => messagesVal.value.length, scrollToBottom);
+// 新消息/流式增量到达：上翻阅读中则点亮「回到底部」的新消息小点；
+// 置底本身仍交给 scrollToBottom（autoScroll=false 时它自己 no-op）
+function onNewContent() {
+  if (!autoScroll.value) newWhileAway.value = true;
+  scrollToBottom();
+}
+
+watch(() => messagesVal.value.length, onNewContent);
 watch(
   () => {
     const last = messagesVal.value[messagesVal.value.length - 1];
     const block = last?.blocks[last.blocks.length - 1];
     return block?.type === "text" ? (block as TextBlock).text.length : 0;
   },
-  scrollToBottom
+  onNewContent
 );
+
+// 点「回到底部」：平滑滚到底并恢复自动置底。先收按钮再滚——平滑滚动途中用户
+// 滚轮打断时 scroll 事件会把按钮按真实距离重新点亮，不会丢状态。
+function jumpToBottom() {
+  const el = scrollEl.value;
+  if (!el) return;
+  newWhileAway.value = false;
+  farFromBottom.value = false;
+  autoScroll.value = true;
+  el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+}
 
 // 置底的统一触发器：数据层 watcher 只能枚举「新消息 / 文本增量」，但让滚动条
 // 搁浅的来源远不止这些——
@@ -723,8 +890,18 @@ watch(inputText, (val) => {
     slashFilter.value = match[1];
     slashDropdownVisible.value = true;
     slashSelectedIndex.value = 0;
-  } else {
-    slashDropdownVisible.value = false;
+    return;
+  }
+  slashDropdownVisible.value = false;
+  // 模式类斜杠命令的即时切换（同一监听点，与斜杠下拉共用）："/btw "（命令名 +
+  // 空格）= 点分裂按钮菜单的「顺便问一下」，立即进输入模式并清空，不用等 Enter
+  // （"/btw 问题" 的 Enter 直发分发仍在 handleSend）。prompt 类命令（/compact
+  // /clear）无输入模式，仍由 Enter 执行。
+  const cmd = val.match(/^\/(\S+)\s$/)?.[1];
+  const action = cmd ? quickActions.find((a) => a.command === cmd) : undefined;
+  if (!btwMode.value && action?.kind === "btw") {
+    inputText.value = "";
+    toggleBtw();
   }
 });
 
@@ -733,6 +910,8 @@ watch(() => props.sessionId, () => {
   pendingImages.value = [];
   pendingMentions.value = [];
   autoScroll.value = true;
+  farFromBottom.value = false;
+  newWhileAway.value = false;
   scrollToBottom();
   // 切主会话 → btw 抽屉关、进程清理
   if (btw.store.value.question || btw.store.value.isBusy || btw.store.value.done) {
@@ -937,12 +1116,48 @@ async function handleSend() {
     return;
   }
 
+  // 斜杠命令统一分发：/name 命中命令注册表（useQuickActions，/... 的唯一事实源）
+  // 就按 kind 执行——prompt 类与点分裂按钮菜单完全同路径（原文发引擎 + 动作胶囊
+  // + 二次确认）；btw 无参数进输入模式、有参数直接发支线。查不到才走 skill /
+  // 普通文本。已在 btw 模式里时不拦（输入本来就是支线内容，/btw 字面量无意义）。
+  if (!btwMode.value) {
+    const cmdMatch = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
+    const action = cmdMatch ? quickActions.find((a) => a.command === cmdMatch[1]) : undefined;
+    if (action) {
+      const args = (cmdMatch![2] ?? "").trim();
+      if (action.kind === "btw") {
+        inputText.value = "";
+        pendingImages.value = [];
+        pendingMentions.value = [];
+        if (!args) {
+          toggleBtw(); // 只切输入模式，等问题
+          return;
+        }
+        emit("send-btw", mentionPrefix + args, {
+          lightweight: btwLightweight.value,
+          model: btwModel.value || btwDefaultModel.value,
+          effort: btwEffort.value,
+        });
+        awaitingBtwLaunch.value = true;
+        return;
+      }
+      // prompt 类：菜单点击与手打同出口；取消确认则保留输入、什么都不发。
+      const sent = await runPromptAction(action, mentionPrefix + text);
+      if (sent) {
+        inputText.value = "";
+        pendingImages.value = [];
+        pendingMentions.value = [];
+      }
+      return;
+    }
+  }
+
   if (btwMode.value) {
     // btw 一次性:发完自动切回主对话输入。回弹确认(回弹动画 + "已切回"toast)
     // 不在这里乐观触发——等支线真正进入 running 才确认(见上面 status 的 watch),
     // 否则 fork 失败时也会弹"已切回主对话输入"造成误导。
     // 引用芯片在 btw 里只带 @path 字面量（支线没有 mention 展开通道），模型可自行 Read。
-    emit("send-btw", mentionPrefix + text, { lightweight: btwLightweight.value, model: btwModel.value });
+    emit("send-btw", mentionPrefix + text, { lightweight: btwLightweight.value, model: btwModel.value, effort: btwEffort.value });
     inputText.value = "";
     pendingImages.value = [];
     pendingMentions.value = [];
@@ -982,6 +1197,9 @@ async function handleSend() {
     // Rust 只在 sidecar 进程还没起来时才会用这个值（见 chat.rs），已有会话时
     // 无害地被忽略，不需要在这里判断"是否已有会话"。
     initialModel: selectedModel.value || undefined,
+    // effort 选择器当前值：每条消息都带（存活会话同值幂等），新会话 spawn 时
+    // 是初始档位——没有选择器默认值以外的"隐式 effort"。
+    initialEffort: selectedEffort.value || undefined,
     mentions: mentionResolution,
     permissionMode: selectedPermissionMode.value || undefined,
   });
@@ -989,9 +1207,9 @@ async function handleSend() {
 
 // 快捷操作（压缩/清空上下文）：跟手打消息走同一条路径（忙碌排队/权限模式透传都
 // 免费拿到），但用户气泡渲染成动作胶囊（emit 时带 action 描述符，见
-// useChatSession.dispatchSend）。/clear 不可逆，执行前弹 useModal.confirm 二次确认；
-// /compact 可逆，直接发。取消确认则什么都不发、不入队、不推气泡。
-async function handleQuickAction(action: QuickAction) {
+// useChatSession.dispatchSend）。/clear 不可逆，执行前弹 useModal.confirm 二次确认。
+// 菜单点击与手打 /name 统一走 runPromptAction——取消确认则什么都不发、不入队、不推气泡。
+async function runPromptAction(action: QuickAction, prompt: string): Promise<boolean> {
   if (action.confirm) {
     const ok = await useModal().confirm(
       action.label,
@@ -999,13 +1217,24 @@ async function handleQuickAction(action: QuickAction) {
       "清空",
       true,
     );
-    if (!ok) return;
+    if (!ok) return false;
   }
-  emit("send", action.prompt, {
+  emit("send", prompt, {
     initialModel: selectedModel.value || undefined,
+    initialEffort: selectedEffort.value || undefined,
     permissionMode: selectedPermissionMode.value || undefined,
     action: { id: action.id, label: action.label, icon: action.icon },
   });
+  return true;
+}
+
+/** 分裂按钮菜单选择：btw 是输入模式切换（不发消息），prompt 类与手打 /name 同路径。 */
+async function handleQuickAction(action: QuickAction) {
+  if (action.kind === "btw") {
+    toggleBtw();
+    return;
+  }
+  await runPromptAction(action, "/" + action.command);
 }
 
 /** 工具卡片「后台运行中」徽章：打开 dock 并选中对应任务（toggleBgDock 已开时只切选中）。 */
@@ -1015,10 +1244,14 @@ function onOpenBgDock(taskId: string) {
 </script>
 
 <template>
-  <div ref="rootEl" class="chat-panel">
+  <div ref="rootEl" class="chat-panel" :class="{ 'chat-panel--hero': isHero, 'chat-panel--hero-leaving': heroLeaving }">
     <TaskListPanel v-if="props.tasks && props.tasks.length > 0" :tasks="props.tasks" />
 
-    <div ref="scrollEl" class="chat-messages" @scroll.passive="onScroll">
+    <!-- 滚动区 wrapper：接手 .chat-messages 的 flex 占位，并作为「回到底部」
+         悬浮按钮的定位锚点——按钮若直接放进滚动容器会随内容一起滚走；
+         相对 chat-panel 绝对定位又无法自适应输入框/权限区的高度变化 -->
+    <div class="chat-scroll-wrap">
+      <div ref="scrollEl" class="chat-messages" @scroll.passive="onScroll">
       <div v-if="messagesVal.length === 0" class="chat-empty">
         开始新对话
       </div>
@@ -1054,6 +1287,20 @@ function onOpenBgDock(taskId: string) {
           <button class="chat-interrupt-btn" @click="emit('interrupt')">中断</button>
         </div>
       </div>
+      </div>
+
+      <!-- 回到底部：常驻渲染、class 控制显隐，留出淡入/上浮过渡；
+           上翻期间来新消息时尾部亮铜色小点 -->
+      <button
+        class="jump-bottom"
+        :class="{ 'jump-bottom--hidden': !farFromBottom }"
+        title="回到底部"
+        @click="jumpToBottom"
+      >
+        <Icon name="arrow-down" :size="12" :stroke-width="1.6" />
+        <span>回到底部</span>
+        <span v-if="newWhileAway" class="jump-bottom-dot" />
+      </button>
     </div>
 
     <!-- 权限确认 / AskUserQuestion：挤在消息区和输入框之间，占真实布局空间而
@@ -1063,6 +1310,7 @@ function onOpenBgDock(taskId: string) {
       :permission="permission ?? null"
       :queue-count="permissionQueueCount"
       :remember-scope="rememberScope"
+      :current-mode="selectedPermissionMode"
       @respond="onPermissionRespond"
     />
 
@@ -1076,7 +1324,20 @@ function onOpenBgDock(taskId: string) {
       @update:selected-id="(id: string) => emit('update:bgDockSelectedId', id)"
     />
 
-    <div class="chat-input-area">
+    <!-- hero 标题区（零会话欢迎态）：logo + 一行纯展示信息，
+         模型/权限模式的实际选择在输入盒工具栏 -->
+    <Transition name="hero-fade">
+      <div v-if="isHero" class="chat-hero-head">
+        <AppLogo :size="56" class="chat-hero-logo" />
+        <div class="chat-hero-title">
+          新会话位于 <span class="chat-hero-ws">{{ heroWsName }}</span>
+          <span class="chat-hero-sep">·</span>
+          使用 <span class="chat-hero-model">{{ heroModelName || "默认模型" }}</span>
+        </div>
+      </div>
+    </Transition>
+
+    <div ref="inputAreaEl" class="chat-input-area">
       <!-- Slash command dropdown -->
       <div v-if="filteredSkills.length" class="skill-dropdown">
         <div
@@ -1114,7 +1375,7 @@ function onOpenBgDock(taskId: string) {
       </Transition>
       <div
         class="chat-input-box"
-        :class="{ 'btw-mode': btwMode }"
+        :class="{ 'btw-mode': btwMode, 'session-running': isBusyVal }"
         @dragover.prevent="handleDragOver"
         @drop.prevent="handleDrop"
       >
@@ -1166,7 +1427,7 @@ function onOpenBgDock(taskId: string) {
           ref="textareaEl"
           v-model="inputText"
           class="chat-input"
-          :placeholder="btwMode ? '顺便问一下,不进入主对话…' : (isBusyVal ? '生成中，发送的消息将排队…' : '输入消息…')"
+          :placeholder="btwMode ? '顺便问一下,不进入主对话…' : (isBusyVal ? '生成中，发送的消息将排队…' : (isHero ? '你正在解决什么问题？' : '输入消息…'))"
           rows="3"
           @keydown.enter.exact.prevent="(slashDropdownVisible && filteredSkills.length) ? selectSkill(filteredSkills[slashSelectedIndex]) : handleSend()"
           @keydown.enter.shift.exact.prevent="insertAtCursor('\n')"
@@ -1184,6 +1445,14 @@ function onOpenBgDock(taskId: string) {
             :options="modelSelectOptions"
             title="模型"
             @update:model-value="handleModelChange"
+          />
+          <!-- effort 选择器：会话级思考深度，切换即时生效（sidecar applyFlagSettings，
+               不重启进程、不碰 prompt 缓存）；默认 high -->
+          <ThemedSelect
+            :model-value="displayedEffort"
+            :options="EFFORT_OPTIONS"
+            title="effort（思考深度）：低档省 token、高档想得更深；切换从下一轮起生效，不影响缓存"
+            @update:model-value="handleEffortChange"
           />
           <div
             v-if="displayPermissionModes.length"
@@ -1235,7 +1504,6 @@ function onOpenBgDock(taskId: string) {
             :btw-disabled="!props.sessionId"
             :btw-disabled-reason="'先发送一条消息开始主对话，才能顺便问一下'"
             @send="handleSend()"
-            @toggle-btw="toggleBtw"
             @select="handleQuickAction"
           />
         </div>
@@ -1280,6 +1548,60 @@ function onOpenBgDock(taskId: string) {
   min-height: 0;
   overflow-y: auto;
   padding: 8px 0;
+}
+
+/* 滚动区 wrapper：占位 + 悬浮按钮定位锚点（见模板注释） */
+.chat-scroll-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 回到底部：居中胶囊，悬浮于滚动区底部上方；显隐走 opacity/transform
+   过渡，hidden 态保留布局不占位（absolute）仅关指针事件 */
+.jump-bottom {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border-strong);
+  box-shadow: var(--aide-shadow-md);
+  color: var(--aide-text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    opacity var(--aide-ease-t),
+    transform var(--aide-ease-t),
+    background var(--aide-ease-t),
+    color var(--aide-ease-t);
+}
+.jump-bottom:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-accent-hover);
+}
+.jump-bottom--hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(8px);
+}
+.jump-bottom-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--aide-accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .jump-bottom { transition: none; }
 }
 
 /* 对话区顶部环境光晕：pointer-events none，层级不压内容 */
@@ -1376,6 +1698,109 @@ function onOpenBgDock(taskId: string) {
   position: relative;
 }
 
+/* ── hero（零会话欢迎态）────────────────────────────────────────────
+   同一棵 DOM 换布局：消息区隐藏、输入盒居中放大；进出 hero 的动画只动
+   transform/opacity（FLIP 的 JS 部分见 script 里 isHero 的 watch）。 */
+.chat-panel--hero {
+  justify-content: center;
+}
+
+/* hero 下整条滚动区（含 wrapper）隐藏——wrapper 带 flex:1，只藏
+   .chat-messages 会让它吃掉剩余空间、破坏输入盒居中 */
+.chat-panel--hero .chat-scroll-wrap {
+  display: none;
+}
+
+.chat-hero-head {
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+  user-select: none;
+}
+
+.chat-hero-logo {
+  border-radius: 12px;
+  box-shadow: var(--aide-shadow-md);
+}
+
+.chat-hero-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--aide-text-secondary);
+}
+
+.chat-hero-ws {
+  color: var(--aide-text-primary);
+}
+
+.chat-hero-sep {
+  color: var(--aide-text-muted);
+}
+
+.chat-hero-model {
+  color: var(--aide-accent);
+}
+
+.chat-panel--hero .chat-input-area {
+  flex: none;
+  width: min(680px, 92%);
+  margin: 0 auto;
+  padding: 0;
+  border-top: none;
+  animation: hero-rise .22s var(--aide-ease);
+}
+
+.chat-panel--hero .chat-input-box {
+  box-shadow: var(--aide-shadow-lg);
+}
+
+/* 进入 hero：标题行/输入盒淡入上浮 */
+@keyframes hero-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 离开 hero：消息区淡入（配合 FLIP 的输入盒落底） */
+.chat-panel--hero-leaving .chat-messages {
+  animation: hero-msgs-in .3s var(--aide-ease);
+}
+
+@keyframes hero-msgs-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* hero 标题行进出 */
+.hero-fade-enter-active {
+  transition: opacity .18s var(--aide-ease), transform .18s var(--aide-ease);
+}
+.hero-fade-leave-active {
+  transition: opacity .15s ease;
+}
+.hero-fade-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.hero-fade-leave-to {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-panel--hero .chat-input-area,
+  .chat-panel--hero-leaving .chat-messages {
+    animation: none;
+  }
+  .hero-fade-enter-active,
+  .hero-fade-leave-active {
+    transition: none;
+  }
+}
+
 /* 统一的带边框输入盒子——图片缩略图、文本框、模型工具栏都在里面，
    焦点样式挂在盒子本身（:focus-within），不是内层 textarea 单独一圈边框。 */
 .chat-input-box {
@@ -1389,6 +1814,63 @@ function onOpenBgDock(taskId: string) {
 
 .chat-input-box:focus-within {
   border-color: var(--aide-accent);
+}
+
+/* 运行中聚焦不再整圈 accent 描边——边框保持素色，让彗星环成为唯一的彩色信号 */
+.chat-input-box.session-running:focus-within {
+  border-color: var(--aide-border);
+}
+
+/* 会话运行时输入盒流光（双向对追双彗星 + 柔光晕）：纯 CSS 单伪元素，零 JS。
+   ::before 的 conic 渐变随 @property 角度旋转（两颗彗星相隔 180° 对跑），
+   2 层 mask + exclude 只露出 1px 锐环、精确压盖住边框；光晕用 drop-shadow
+   实现——关键教训：filter 作用于 mask 之后的结果，所以 drop-shadow 严格
+   跟随环形（盒内一笔不画，glass 半透明背景主题也安全）；而 blur 在 mask 前
+   生效、会被 mask 裁出硬边平顶光带（"粗边框"观感的来源），不能用。
+   另注意此 WebView2 只支持单值 mask-composite，3 层以上多值组合整条失效
+   （退化成全叠加、光楔糊满输入框），mask 层数必须 ≤2。
+   渐变淡出端用 color-mix 0% 同色透明，不用 transparent 关键字（透明黑插值
+   会经过发暗中间色、光带显脏）。颜色全走主题 token，空闲时无伪元素零开销。 */
+@property --aide-input-comet {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.chat-input-box.session-running {
+  position: relative;
+  isolation: isolate;
+}
+
+.chat-input-box.session-running::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: var(--aide-radius-sm);
+  pointer-events: none;
+  background: conic-gradient(
+    from var(--aide-input-comet),
+    color-mix(in srgb, var(--aide-accent) 0%, transparent) 0deg,
+    var(--aide-accent) 30deg,
+    var(--aide-accent-hover) 42deg,
+    color-mix(in srgb, var(--aide-accent-hover) 0%, transparent) 55deg,
+    color-mix(in srgb, var(--aide-accent) 0%, transparent) 180deg,
+    var(--aide-accent) 210deg,
+    var(--aide-accent-hover) 222deg,
+    color-mix(in srgb, var(--aide-accent-hover) 0%, transparent) 235deg,
+    color-mix(in srgb, var(--aide-accent) 0%, transparent) 360deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--aide-accent) 85%, transparent));
+  animation: chat-input-comet 3.2s linear infinite;
+}
+
+@keyframes chat-input-comet {
+  to { --aide-input-comet: 360deg; }
 }
 
 .chat-toolbar {

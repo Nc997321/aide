@@ -17,6 +17,26 @@ use extract::extract_symbols;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// 可索引源文件数上限（walk 之后、parse 之前检查）。超过即拒建——防止把
+/// 超大目录（家目录、磁盘根、误挂的依赖树）当项目索引。实测家目录 walk 出
+/// 数百万文件 / 405 万符号 / 3GB shard，embed 永远跑不完且 embed_complete
+/// 永远 false → 每次打开都全量重扫的永动机。50k 对正常项目绰绰有余
+/// （本仓库 ~371 文件；大型单体仓库一般 <20k）。
+pub const MAX_INDEX_FILES: usize = 50_000;
+
+/// 文件数超限时的错误消息；None = 未超限。单独成函数便于测试（测试不必
+/// 真的创建 5 万个文件）。
+pub fn file_count_error(total: usize) -> Option<String> {
+    if total > MAX_INDEX_FILES {
+        Some(format!(
+            "项目过大：walk 出 {} 个源文件，超过上限 {} — 拒绝索引（请确认打开的是项目目录而非家目录/磁盘根）",
+            total, MAX_INDEX_FILES
+        ))
+    } else {
+        None
+    }
+}
+
 /// Per-process monotonic counter baked into each shard dir name so two builds in
 /// the same wall-clock second (same `now_epoch`) still get distinct dirs. The
 /// dir name is `qdrant-<epoch>-<counter>`; versioning means a rebuild NEVER
@@ -56,13 +76,17 @@ pub fn collect_symbols(
     parser_manager: &ParserManager,
     on_status: Option<&dyn Fn(&str)>,
     cancel: Option<&std::sync::atomic::AtomicBool>,
-) -> (SymbolTable, EdgeTable, Vec<IndexedPoint>, BuildStats) {
+) -> Result<(SymbolTable, EdgeTable, Vec<IndexedPoint>, BuildStats), String> {
     let exts = parser_manager.supported_extensions();
     let ext_refs: Vec<&str> = exts.iter().copied().collect();
     if let Some(f) = on_status {
         f("扫描文件树...");
     }
     let files = walk::walk_source_files(project_root, &ext_refs);
+    // 规模保险丝：拒建超大目录（家目录/磁盘根误开），见 MAX_INDEX_FILES。
+    if let Some(msg) = file_count_error(files.len()) {
+        return Err(msg);
+    }
     let total_files = files.len();
 
     let mut table = SymbolTable::new();
@@ -107,7 +131,7 @@ pub fn collect_symbols(
         }
         all_points.extend(points);
     }
-    (table, edges, all_points, stats)
+    Ok((table, edges, all_points, stats))
 }
 
 /// Phase 1 of a full rebuild: walk + parse + create shard + persist symbols/meta.
@@ -162,7 +186,8 @@ pub fn build_structure_index(
     }
     let shard = CodeShard::create(&qdir, dim)?;
 
-    let (table, edges, points, stats) = collect_symbols(project_root, parser_manager, on_status, cancel);
+    let (table, edges, points, stats) = collect_symbols(project_root, parser_manager, on_status, cancel)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     // Persist SymbolTable + meta at structure-layer readiness (not waiting for
     // embed). Permission errors expected (`.aide/` may be read-only); other FS
@@ -192,8 +217,60 @@ pub fn build_structure_index(
     if let Err(e) = meta.save(&base.join("meta.json")) {
         tracing::warn!("codegraph: meta.json persist failed: {}", e);
     }
+    // 新 shard 目录已铸造——旧的 embed 断点（属于上一个 shard）必须作废，
+    // 否则续跑会跳过从未进新 shard 的文件。shard_dir 不匹配时 load 侧也会
+    // 拒绝（双保险），这里主动清空是主防线。
+    clear_embed_checkpoint(&base);
 
     Ok((table, edges, Arc::new(shard), points, stats))
+}
+
+/// Embed 断点：记录「哪些文件的全部符号已 upsert 进 shard」。Phase 2 embed
+/// 被中断（关 app / 切工作区 / 强杀）时 meta.embed_complete 留 false，但
+/// 已 embed 的文件不必重做——下次构建走续跑路径（`load_resume_base`）只补
+/// 剩余文件，而不是整棵全量重建。
+///
+/// 绑定 `shard_dir`：断点只对铸造它的那个 shard 有效；fresh build 换了新
+/// shard 目录后旧断点必须视为不存在（`load_embed_checkpoint` 比对 shard_dir）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EmbedCheckpoint {
+    pub shard_dir: String,
+    pub files: std::collections::HashSet<String>,
+}
+
+pub fn embed_checkpoint_path(base: &Path) -> PathBuf {
+    base.join("embed_checkpoint.json")
+}
+
+/// 读断点；文件缺失/损坏/shard_dir 不匹配 → None（视为零进度，安全降级为
+/// 全部重 embed，幂等 upsert 不会产生重复点）。
+pub fn load_embed_checkpoint(base: &Path, shard_dir: &str) -> Option<EmbedCheckpoint> {
+    let bytes = std::fs::read(embed_checkpoint_path(base)).ok()?;
+    let cp: EmbedCheckpoint = serde_json::from_slice(&bytes).ok()?;
+    if cp.shard_dir != shard_dir {
+        return None;
+    }
+    Some(cp)
+}
+
+/// 原子落盘断点（tmp + rename）：进程在写盘途中被强杀也不会留半截 JSON
+/// （半截会被 load 拒绝 → 降级为零进度，安全）。每批 embed 后调用，成本
+/// 是一次小文件写。
+pub fn save_embed_checkpoint(base: &Path, cp: &EmbedCheckpoint) {
+    let path = embed_checkpoint_path(base);
+    let tmp = base.join("embed_checkpoint.json.tmp");
+    match serde_json::to_vec(cp) {
+        Ok(bytes) => {
+            if let Err(e) = std::fs::write(&tmp, &bytes).and_then(|_| std::fs::rename(&tmp, &path)) {
+                tracing::warn!("codegraph: embed checkpoint save failed: {}", e);
+            }
+        }
+        Err(e) => tracing::warn!("codegraph: embed checkpoint serialize failed: {}", e),
+    }
+}
+
+pub fn clear_embed_checkpoint(base: &Path) {
+    let _ = std::fs::remove_file(embed_checkpoint_path(base));
 }
 
 /// Remove `qdrant*` directories under `base` except the one named `keep`. Only
@@ -287,6 +364,39 @@ pub fn load_compatible_index(
     let edges = EdgeTable::load_json(&base.join("edges.json"))?;
     let shard = CodeShard::load(&base.join(&meta.shard_dir), expect_dim).ok()?;
     Some((table, edges, Arc::new(shard), meta))
+}
+
+/// Load the base for an EMBED RESUME: the on-disk meta matches the configured
+/// embedder (model_name + dim), the structure layer (symbols.json + edges.json)
+/// and the partial shard load — but `embed_complete` is FALSE (a previous build
+/// was interrupted mid-embed). Returns the structure layer + partial shard +
+/// embed checkpoint (files already embedded, empty if none) so the caller can
+/// re-embed only the remaining files instead of full-rebuilding.
+///
+/// Returns None when there's no resumable base (no meta / model·dim mismatch /
+/// embed already complete — that goes to the reuse/incremental paths instead /
+/// structure files or shard unloadable) → caller falls back to a full rebuild.
+pub fn load_resume_base(
+    project_root: &Path,
+    expect_model: &str,
+    expect_dim: usize,
+) -> Option<(SymbolTable, EdgeTable, Arc<CodeShard>, Meta, EmbedCheckpoint)> {
+    let base = index_dir(project_root);
+    let meta = Meta::load(&base.join("meta.json"))?;
+    if meta.model_name != expect_model || meta.dim != expect_dim {
+        return None;
+    }
+    if meta.embed_complete {
+        return None;
+    }
+    let table = SymbolTable::load_json(&base.join("symbols.json"))?;
+    let edges = EdgeTable::load_json(&base.join("edges.json"))?;
+    let shard = CodeShard::load(&base.join(&meta.shard_dir), expect_dim).ok()?;
+    let checkpoint = load_embed_checkpoint(&base, &meta.shard_dir).unwrap_or(EmbedCheckpoint {
+        shard_dir: meta.shard_dir.clone(),
+        files: std::collections::HashSet::new(),
+    });
+    Some((table, edges, Arc::new(shard), meta, checkpoint))
 }
 
 /// Fast path: reuse on-disk index if fresh and compatible with the configured
@@ -421,7 +531,7 @@ mod tests {
         }
         let pm = ParserManager::new();
         let cancel = std::sync::atomic::AtomicBool::new(true);
-        let (table, _edges, _points, stats) = collect_symbols(&dir, &pm, None, Some(&cancel));
+        let (table, _edges, _points, stats) = collect_symbols(&dir, &pm, None, Some(&cancel)).unwrap();
         assert_eq!(stats.scanned_files, 0, "cancel must stop before scanning any file");
         assert_eq!(table.len(), 0, "no symbols collected under cancel");
         std::fs::remove_dir_all(&dir).ok();
@@ -439,7 +549,7 @@ mod tests {
         }
         let pm = ParserManager::new();
         let cancel = std::sync::atomic::AtomicBool::new(false);
-        let (table, _edges, _points, stats) = collect_symbols(&dir, &pm, None, Some(&cancel));
+        let (table, _edges, _points, stats) = collect_symbols(&dir, &pm, None, Some(&cancel)).unwrap();
         assert_eq!(stats.scanned_files, 5, "all files scanned without cancel");
         assert_eq!(table.len(), 5, "one symbol per file collected");
         std::fs::remove_dir_all(&dir).ok();
@@ -451,6 +561,87 @@ mod tests {
         assert!(decide_increment(5, 100), "5% → incremental");
         assert!(decide_increment(20, 100), "exactly 20% → incremental (boundary)");
         assert!(decide_increment(0, 0), "empty project, no changes → incremental");
+    }
+
+    #[test]
+    fn file_count_error_only_above_cap() {
+        assert!(super::file_count_error(super::MAX_INDEX_FILES).is_none(), "at cap → ok");
+        assert!(super::file_count_error(super::MAX_INDEX_FILES + 1).is_some(), "over cap → error");
+        let msg = super::file_count_error(super::MAX_INDEX_FILES + 1).unwrap();
+        assert!(msg.contains("拒绝索引"), "error must be actionable, got: {}", msg);
+    }
+
+    #[test]
+    fn embed_checkpoint_roundtrip_and_shard_dir_binding() {
+        let base = std::env::temp_dir().join(format!("cg_ckpt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let mut files = std::collections::HashSet::new();
+        files.insert("src/a.ts".to_string());
+        files.insert("src/b.ts".to_string());
+        let cp = super::EmbedCheckpoint { shard_dir: "qdrant-1-0".into(), files };
+        super::save_embed_checkpoint(&base, &cp);
+        // 同 shard_dir → 读回
+        let loaded = super::load_embed_checkpoint(&base, "qdrant-1-0").expect("checkpoint loads");
+        assert_eq!(loaded.files.len(), 2);
+        assert!(loaded.files.contains("src/a.ts"));
+        // shard_dir 不匹配（fresh build 换了新目录）→ 拒绝，视为零进度
+        assert!(super::load_embed_checkpoint(&base, "qdrant-2-0").is_none(),
+            "checkpoint from another shard must be rejected");
+        // 半截损坏文件 → None（安全降级）
+        std::fs::write(super::embed_checkpoint_path(&base), b"{\"shard_dir\":").unwrap();
+        assert!(super::load_embed_checkpoint(&base, "qdrant-1-0").is_none(),
+            "corrupt checkpoint must be rejected");
+        // clear 后 → None
+        super::clear_embed_checkpoint(&base);
+        assert!(super::load_embed_checkpoint(&base, "qdrant-1-0").is_none());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn load_resume_base_only_for_incomplete_matching_index() {
+        let dir = std::env::temp_dir().join(format!("cg_resume_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.ts"), "class A { save() {} }").unwrap();
+        let pm = ParserManager::new();
+        let shard_dir_name;
+        {
+            let (_t, _edges, shard, _p, _s) =
+                super::build_structure_index(&dir, &pm, 4, "test-model", None, None).unwrap();
+            shard_dir_name = crate::codegraph::meta::Meta::load(
+                &super::index_dir(&dir).join("meta.json")).unwrap().shard_dir;
+            drop(shard);
+        }
+        // embed_complete=false + model/dim 匹配 → 可续跑
+        let loaded = super::load_resume_base(&dir, "test-model", 4);
+        assert!(loaded.is_some(), "incomplete matching index must be resumable");
+        let (t, _e, shard, meta, cp) = loaded.unwrap();
+        assert!(t.len() > 0, "structure layer must load");
+        assert!(!meta.embed_complete);
+        assert!(cp.files.is_empty(), "no checkpoint yet → zero progress");
+        drop(shard);
+        // 写入断点后再载 → 断点随基座一起返回
+        let mut files = std::collections::HashSet::new();
+        files.insert("a.ts".to_string());
+        super::save_embed_checkpoint(&super::index_dir(&dir),
+            &super::EmbedCheckpoint { shard_dir: shard_dir_name.clone(), files });
+        let (_t2, _e2, shard2, _m2, cp2) = super::load_resume_base(&dir, "test-model", 4).unwrap();
+        assert_eq!(cp2.files.len(), 1, "checkpoint must ride along");
+        drop(shard2);
+        // model/dim 不匹配 → None
+        assert!(super::load_resume_base(&dir, "other", 4).is_none());
+        assert!(super::load_resume_base(&dir, "test-model", 999).is_none());
+        // embed_complete=true → None（走复用/增量路径，不是续跑）
+        {
+            let base = super::index_dir(&dir);
+            let mut m = crate::codegraph::meta::Meta::load(&base.join("meta.json")).unwrap();
+            m.embed_complete = true;
+            m.save(&base.join("meta.json")).unwrap();
+        }
+        assert!(super::load_resume_base(&dir, "test-model", 4).is_none(),
+            "complete index must not be a resume base");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -589,7 +780,7 @@ mod tests {
             "class OrderService { void save() {} }").unwrap();
 
         let pm = ParserManager::new();
-        let (table, edges, points, stats) = collect_symbols(&dir, &pm, None, None);
+        let (table, edges, points, stats) = collect_symbols(&dir, &pm, None, None).unwrap();
 
         assert_eq!(table.lookup("save").len(), 2);
         assert!(table.lookup("UserService").len() == 1);

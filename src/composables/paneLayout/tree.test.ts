@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  createBlankRoot,
+  createEmptyRoot,
   createGroup,
   createTab,
   findTabBySession,
@@ -239,7 +239,7 @@ describe("快照序列化与恢复", () => {
   });
 
   it("空白 tab 不入快照；全空白布局返回 null", () => {
-    expect(toSnapshot(createBlankRoot(), "x")).toBeNull();
+    expect(toSnapshot(createEmptyRoot(), "x")).toBeNull();
     const g = groupWith("a");
     g.tabs.push(createTab(null, "草稿"));
     const snap = toSnapshot(g, g.id)!;

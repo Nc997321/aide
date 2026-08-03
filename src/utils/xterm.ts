@@ -24,7 +24,7 @@ export function buildXtermTheme(_unused_tokens?: ThemeTokens) {
     background: cssVar("bg-deep"),
     foreground: cssVar("text-primary"),
     cursor: cssVar("accent"),
-    selectionBackground: cssVar("surface-active"),
+    selectionBackground: cssVar("selection-bg"),
     black: cssVar("surface-hover"),
     red: cssVar("danger"),
     green: cssVar("success"),

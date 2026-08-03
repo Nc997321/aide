@@ -101,6 +101,7 @@ static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
         user("settings.enabledPlugins", json!({}), SettingValueKind::Object, "marketplace"),
         user("settings.jdkRegistry", json!([]), SettingValueKind::Array, "jdk"),
         user("settings.jdkPromptDismissed", json!([]), SettingValueKind::Array, "jdk"),
+        ui("settings.leftSidebarPinned", json!(false), SettingValueKind::Boolean),
         user("providers", json!([]), SettingValueKind::Array, "provider"),
         user("providers[].id", json!(""), SettingValueKind::String, "provider"),
         user("providers[].kind", json!("custom"), SettingValueKind::String, "provider"),

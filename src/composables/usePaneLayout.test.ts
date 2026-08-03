@@ -22,12 +22,11 @@ beforeEach(() => {
 });
 
 describe("预览 tab 语义（用户确认的行为）", () => {
-  it("初始是单组单空白预览 tab，activeSessionId 为空串", () => {
+  it("初始是空根组（零会话欢迎态），activeSessionId 为空串", () => {
     const pl = usePaneLayout();
     expect(groups()).toHaveLength(1);
-    expect(focused().tabs).toHaveLength(1);
-    expect(focused().tabs[0].sessionId).toBeNull();
-    expect(focused().previewTabId).toBe(focused().tabs[0].id);
+    expect(focused().tabs).toHaveLength(0);
+    expect(focused().previewTabId).toBeNull();
     expect(pl.activeSessionId.value).toBe("");
   });
 
@@ -139,14 +138,52 @@ describe("拆分与关闭", () => {
     expect(pl.activeSessionId.value).toBe("s1");
   });
 
-  it("关掉最后一个 tab：重置为单组空白预览 tab", () => {
+  it("关掉最后一个 tab：回到空根组（零会话欢迎态）", () => {
     const pl = usePaneLayout();
     pl.openSession("s1");
     const g = focused();
     pl.closeTab(g.id, g.tabs[0].id);
     expect(groups()).toHaveLength(1);
-    expect(focused().tabs[0].sessionId).toBeNull();
+    expect(focused().tabs).toHaveLength(0);
     expect(pl.activeSessionId.value).toBe("");
+  });
+
+  it("空根组（欢迎态）上 openSession / openBlankTab 正常建 tab", () => {
+    const pl = usePaneLayout();
+    pl.openSession("s1");
+    expect(focused().tabs).toHaveLength(1);
+    expect(pl.activeSessionId.value).toBe("s1");
+    // 关回空根组后 openBlankTab 也能建
+    pl.closeTab(focused().id, focused().tabs[0].id);
+    expect(focused().tabs).toHaveLength(0);
+    pl.openBlankTab("新会话 A");
+    expect(focused().tabs).toHaveLength(1);
+    expect(focused().tabs[0].sessionId).toBeNull();
+    expect(focused().tabs[0].pendingName).toBe("新会话 A");
+  });
+
+  it("空根组（欢迎态）上 splitFocusedGroup 是 no-op", () => {
+    const pl = usePaneLayout();
+    pl.splitFocusedGroup("horizontal");
+    expect(groups()).toHaveLength(1);
+    expect(focused().tabs).toHaveLength(0);
+  });
+
+  it("空根组（欢迎态）上 openSessionInSplit 退化为直接开进空组", () => {
+    const pl = usePaneLayout();
+    pl.openSessionInSplit("s1", "horizontal");
+    expect(groups()).toHaveLength(1);
+    expect(focused().tabs.map((t) => t.sessionId)).toEqual(["s1"]);
+    expect(pl.activeSessionId.value).toBe("s1");
+  });
+
+  it("hasAnyTab：空根组为 false，有 tab 为 true，关光回到 false", () => {
+    const pl = usePaneLayout();
+    expect(pl.hasAnyTab.value).toBe(false);
+    pl.openSession("s1");
+    expect(pl.hasAnyTab.value).toBe(true);
+    pl.closeTab(focused().id, focused().tabs[0].id);
+    expect(pl.hasAnyTab.value).toBe(false);
   });
 
   it("closeOtherTabs 只留目标 tab 且激活它", () => {

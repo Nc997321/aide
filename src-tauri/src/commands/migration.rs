@@ -14,7 +14,7 @@
 //!   ①幂等：重复迁移不会破坏已迁数据；②边界：用户迁移前先开了会话，claude.exe 已
 //!   在 `claude/` 下写了新 settings.json / 新 transcript，迁移时跳过已存在项，新会话
 //!   数据不被旧数据冲掉，旧数据只补到还没产生的位置。
-//! - **迁移状态记在 config.json 顶层**（`claudeMigrationDone` / `claudeMigrationDismissed`），
+//! - **迁移状态记在 state.json 顶层**（`claudeMigrationDone` / `claudeMigrationDismissed`），
 //!   不在 `AppSettings` 内——这是迁移状态，不是用户偏好。
 //! - **重 IO 走 `spawn_blocking`**：拷 `projects/` 可能数百 MB，不能阻塞 Tauri 主线程。
 //!   检测由前端 `App.vue onMounted` 调 `check_claude_migration` 触发，不在 `lib.rs`
@@ -23,7 +23,7 @@
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-use super::settings::{load_config, with_config_mut};
+use super::settings::{load_state, with_state_mut};
 use super::{claude_home, our_config_dir, user_home};
 
 /// 迁移源：用户系统老 `~/.claude/`（Claude CLI 数据）
@@ -49,11 +49,11 @@ fn legacy_aide_data_dir() -> PathBuf {
 ///
 /// 这是 Aide **自有数据目录**的升级（区别于 `~/.claude/` 的 Claude CLI 数据迁移——
 /// 那个走用户弹窗，因为涉及外部 CLI 的数据）。本函数无需用户确认：同文件系统 rename
-/// 瞬时完成，把 config.json / sessions / recent / notifications / diagnostics / log /
-/// claude-agent-sdk/ / claude/ 等整棵树搬到新根。
+/// 瞬时完成，把 config.json（legacy）/ state.json / sessions / recent / notifications /
+/// diagnostics / log / claude-agent-sdk/ / claude/ 等整棵树搬到新根。
 ///
-/// **必须在任何读 config.json 之前调用**（lib.rs setup 第一步），否则 `our_config_dir()`
-/// 已指向 `~/.aide/` 而 config 还在老目录，provider 设置会读空。
+/// **必须在任何读 state.json 之前调用**（lib.rs setup 第一步），否则 `our_config_dir()`
+/// 已指向 `~/.aide/` 而 state 还在老目录，provider 设置会读空。
 ///
 /// 幂等：`~/.aide/` 已存在（已迁移或新用户首次写入后）→ 直接 Ok；老目录不存在（新用户）
 /// → Ok。rename 失败（杀软锁等）→ 返回 Err，下次启动重试，不标记任何状态。
@@ -100,9 +100,9 @@ pub struct MigrationStatus {
     pub legacy_exists: bool,
     /// 是否有任一可迁移条目存在（决定要不要弹窗）
     pub has_migratable: bool,
-    /// config.json `claudeMigrationDone`——已迁移过，不再弹
+    /// state.json `claudeMigrationDone`——已迁移过，不再弹
     pub done: bool,
-    /// config.json `claudeMigrationDismissed`——用户选过「不再提示」
+    /// state.json `claudeMigrationDismissed`——用户选过「不再提示」
     pub dismissed: bool,
 }
 
@@ -113,7 +113,7 @@ pub struct MigrationSummary {
     pub skipped_count: u32,
 }
 
-/// 纯读：探测 `~/.claude/` 是否存在 + 读 config.json 两个标记。轻量，同步即可。
+/// 纯读：探测 `~/.claude/` 是否存在 + 读 state.json 两个标记。轻量，同步即可。
 #[tauri::command]
 pub fn check_claude_migration() -> Result<MigrationStatus, String> {
     let legacy = legacy_claude_dir();
@@ -122,12 +122,12 @@ pub fn check_claude_migration() -> Result<MigrationStatus, String> {
         && MIGRATABLE_ENTRIES
             .iter()
             .any(|e| legacy.join(e).exists());
-    let config = load_config();
-    let done = config
+    let state = load_state();
+    let done = state
         .get(DONE_KEY)
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let dismissed = config
+    let dismissed = state
         .get(DISMISSED_KEY)
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
@@ -150,8 +150,8 @@ pub async fn migrate_claude_data() -> Result<MigrationSummary, String> {
 /// 用户选「不再提示」——只压住自动弹窗，不影响 SettingsPanel 后备按钮主动触发。
 #[tauri::command]
 pub fn dismiss_claude_migration() -> Result<(), String> {
-    with_config_mut(|config| {
-        config[DISMISSED_KEY] = serde_json::Value::Bool(true);
+    with_state_mut(|state| {
+        state[DISMISSED_KEY] = serde_json::Value::Bool(true);
         Ok(())
     })
 }
@@ -195,8 +195,8 @@ fn migrate_blocking() -> Result<MigrationSummary, String> {
 }
 
 fn mark_done() -> Result<(), String> {
-    with_config_mut(|config| {
-        config[DONE_KEY] = serde_json::Value::Bool(true);
+    with_state_mut(|state| {
+        state[DONE_KEY] = serde_json::Value::Bool(true);
         Ok(())
     })
 }

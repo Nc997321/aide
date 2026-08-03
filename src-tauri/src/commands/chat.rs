@@ -29,6 +29,7 @@ fn build_send_command(
     images: Option<&Vec<serde_json::Value>>,
     resume_id: Option<String>,
     initial_model: Option<String>,
+    initial_effort: Option<String>,
     permission_mode: Option<String>,
     jump_queue: Option<bool>,
     workspace_root: Option<String>,
@@ -57,6 +58,17 @@ fn build_send_command(
         if !model.is_empty() {
             if let Some(env) = cmd.get_mut("env").and_then(|e| e.as_object_mut()) {
                 env.insert("ANTHROPIC_MODEL".to_string(), json!(model));
+            }
+        }
+    }
+    // effort 与 initial_model 同形：骑 env 通道（CLAUDE_CODE_EFFORT_LEVEL），
+    // sidecar 读作初始/每轮档位。注意它不在 connection_fingerprint 白名单里，
+    // 不会触发 provider_switched 重启；也不会被 sidecar 透传成 CLI 的 env
+    // （worker 显式删除，effort 只走 options.effort + applyFlagSettings）。
+    if let Some(ref effort) = initial_effort {
+        if !effort.is_empty() {
+            if let Some(env) = cmd.get_mut("env").and_then(|e| e.as_object_mut()) {
+                env.insert("CLAUDE_CODE_EFFORT_LEVEL".to_string(), json!(effort));
             }
         }
     }
@@ -123,6 +135,7 @@ pub async fn send_message(
     images: Option<Vec<serde_json::Value>>,
     resume_id: Option<String>,
     initial_model: Option<String>,
+    initial_effort: Option<String>,
     permission_mode: Option<String>,
     jump_queue: Option<bool>,
     workspace_root: Option<String>,
@@ -151,6 +164,7 @@ pub async fn send_message(
         images.as_ref(),
         resume_id,
         initial_model,
+        initial_effort,
         permission_mode,
         jump_queue,
         workspace_root,
@@ -235,6 +249,19 @@ pub async fn set_model(
     runtime_mgr.send_to_runtime(&cmd).await.map(|_| true)
 }
 
+/// 会话级 effort 切换（provider-agnostic 字符串档位，Claude sidecar 解释为
+/// low/medium/high/xhigh/max）。镜像 set_model：Runtime 不在时返回 false，
+/// 前端按 deferred 处理（值会随下一条 send 的 env 通道带上）。
+#[tauri::command]
+pub async fn set_effort(
+    session_id: String,
+    effort: String,
+    runtime_mgr: State<'_, AgentRuntimeManager>,
+) -> Result<bool, String> {
+    let cmd = json!({ "cmd": "set_effort", "session_id": session_id, "effort": effort });
+    runtime_mgr.send_to_runtime(&cmd).await.map(|_| true)
+}
+
 #[tauri::command]
 pub async fn set_permission_mode(
     session_id: String,
@@ -265,6 +292,7 @@ pub async fn start_btw_session(
     lightweight: bool,
     permission_mode: Option<String>,
     model: Option<String>,
+    effort: Option<String>,
     runtime_mgr: State<'_, AgentRuntimeManager>,
     settings_service: State<'_, std::sync::Arc<crate::settings::SettingsService>>,
 ) -> Result<(), String> {
@@ -289,6 +317,15 @@ pub async fn start_btw_session(
         if !m.is_empty() {
             if let Some(env) = cmd.get_mut("env").and_then(|e| e.as_object_mut()) {
                 env.insert("ANTHROPIC_MODEL".to_string(), json!(m));
+            }
+        }
+    }
+    // effort 与普通 send 的 initial_effort 同形：骑 env 通道，worker 只读作初始
+    // currentEffort（options.effort），绝不会以 env 形式透传给 CLI。
+    if let Some(ref effort) = effort {
+        if !effort.is_empty() {
+            if let Some(env) = cmd.get_mut("env").and_then(|e| e.as_object_mut()) {
+                env.insert("CLAUDE_CODE_EFFORT_LEVEL".to_string(), json!(effort));
             }
         }
     }
@@ -443,7 +480,7 @@ mod tests {
             "继续聊",
             None,              // images
             Some("resume-xyz".to_string()), // resume_id
-            None, None, None, None, false, true, &env,
+            None, None, None, None, None, false, true, &env,
             "/tmp",
         );
         assert_eq!(cmd["cmd"], "send");
@@ -457,10 +494,29 @@ mod tests {
     fn build_send_command_no_resume_field_when_absent() {
         let env: HashMap<String, String> = HashMap::new();
         let cmd = build_send_command(
-            "temp-1", "hi", None, None, None, None, None, None, false, true, &env, "/tmp",
+            "temp-1", "hi", None, None, None, None, None, None, None, false, true, &env, "/tmp",
         );
         assert_eq!(cmd["session_id"], "temp-1");
         assert!(cmd.get("resume_session_id").is_none());
+    }
+
+    /// effort 与 initial_model 同形：initial_effort 注入 env.CLAUDE_CODE_EFFORT_LEVEL
+    /// 覆盖 provider 默认；缺省/空串则不注入（保留 provider env 原值）。
+    #[test]
+    fn build_send_command_carries_initial_effort() {
+        let env: HashMap<String, String> =
+            HashMap::from([("CLAUDE_CODE_EFFORT_LEVEL".to_string(), "LOW".to_string())]);
+        let cmd = build_send_command(
+            "s", "hi", None, None, None, Some("max".to_string()), None, None, None,
+            false, true, &env, "/tmp",
+        );
+        assert_eq!(cmd["env"]["CLAUDE_CODE_EFFORT_LEVEL"], "max");
+        // 缺省：provider env 原值保留（sidecar 读作 provider 默认档位）
+        let cmd2 = build_send_command(
+            "s", "hi", None, None, None, None, None, None, None,
+            false, true, &env, "/tmp",
+        );
+        assert_eq!(cmd2["env"]["CLAUDE_CODE_EFFORT_LEVEL"], "LOW");
     }
 
     /// 回归：provider_switched 仍照常带，且不干扰 resume_session_id。
@@ -470,7 +526,7 @@ mod tests {
         let cmd = build_send_command(
             "main-sid", "hi", None,
             Some("resume-xyz".to_string()),
-            None, None, None, None,
+            None, None, None, None, None,
             true, true, &env, "/tmp",
         );
         assert_eq!(cmd["session_id"], "main-sid");
@@ -484,11 +540,11 @@ mod tests {
     fn build_send_command_carries_auto_title_flag() {
         let env: HashMap<String, String> = HashMap::new();
         let on = build_send_command(
-            "s", "hi", None, None, None, None, None, None, false, true, &env, "/tmp",
+            "s", "hi", None, None, None, None, None, None, None, false, true, &env, "/tmp",
         );
         assert_eq!(on["auto_title"], true);
         let off = build_send_command(
-            "s", "hi", None, None, None, None, None, None, false, false, &env, "/tmp",
+            "s", "hi", None, None, None, None, None, None, None, false, false, &env, "/tmp",
         );
         assert_eq!(off["auto_title"], false);
     }

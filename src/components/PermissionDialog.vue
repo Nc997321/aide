@@ -28,6 +28,11 @@ const props = defineProps<{
    *  为 null 表示无可持久化作用域可用——不显示「记住」按钮。
    *  仅对工具调用请求有意义（计划批准 / 澄清提问不是工具调用）。 */
   rememberScope?: PermissionScope | null;
+  /** 当前权限模式（ChatPanel 的 selectedPermissionMode）。编辑工具在非编辑模式下
+   *  把「允许并记住」换成「进入编辑模式」——对不了解规则机制的用户，逐条点允许/
+   *  记住都不解渴，切模式才是"之后别再问"的那个选项（对齐 CLI 的 "allow all
+   *  edits this session"）。可能为空串（模式清单还没就位），按"显示"处理。 */
+  currentMode?: string;
 }>();
 
 const emit = defineEmits<{
@@ -137,10 +142,24 @@ function submitAnswers() {
 const rememberDraft = computed<PermissionRuleDraft | null>(() =>
   props.permission ? deriveRememberRule(props.permission.name, props.permission.input) : null,
 );
+
+// ── 「进入编辑模式」：编辑类工具的"一劳永逸"选项 ──
+// 手动模式下编辑会一直弹窗；对不熟悉规则机制的用户，「允许并记住」（记一条文件夹
+// 规则）不如直接切到编辑模式解渴。已在编辑/自动/最高权限模式时弹窗本就不该为
+// 编辑出现（出现了说明是 ask 规则等例外），此时藏起本按钮、露出「允许并记住」。
+const EDIT_TOOL_NAMES = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+const canEnterEditMode = computed(
+  () =>
+    !!props.permission &&
+    EDIT_TOOL_NAMES.has(props.permission.name) &&
+    !["acceptEdits", "auto", "bypassPermissions"].includes(props.currentMode ?? ""),
+);
+
 const canRemember = computed(
   () =>
     !isPlanApproval.value &&
     !isQuestion.value &&
+    !canEnterEditMode.value &&
     !!rememberDraft.value &&
     !!props.rememberScope,
 );
@@ -261,6 +280,10 @@ const inputJson = computed(() => {
       <!-- 「允许并记住」预览：点之前先让用户看清将记住什么、落到哪个作用域。
            只在工具调用且有可推导规则时出现（计划批准 / 澄清提问不显示）。 -->
       <div v-if="canRemember" class="perm-remember-hint">{{ rememberDescription }}</div>
+      <!-- 「进入编辑模式」后果说明：不熟机制的用户需要知道点下去之后不再逐条弹。 -->
+      <div v-if="canEnterEditMode" class="perm-remember-hint">
+        本次放行，并切换到编辑模式——之后本会话所有文件编辑自动接受，不再逐条确认
+      </div>
       <div class="perm-actions">
         <template v-if="isQuestion">
           <button class="perm-btn perm-btn--ghost" @click="emit('respond', permission.id, false)">跳过</button>
@@ -289,6 +312,14 @@ const inputJson = computed(() => {
               </button>
             </template>
             <template v-else>
+              <button
+                v-if="canEnterEditMode"
+                class="perm-btn perm-btn--outline"
+                data-action="edit-mode"
+                @click="emit('respond', permission.id, true, undefined, 'acceptEdits')"
+              >
+                进入编辑模式
+              </button>
               <button
                 v-if="canRemember"
                 class="perm-btn perm-btn--outline"

@@ -233,6 +233,10 @@ pub async fn codegraph_build_index(
     let settings_service = settings_service.inner().clone();
     tokio::task::spawn_blocking(move || {
         let root = PathBuf::from(&project_root);
+        // 家目录/磁盘根这类非项目 root 不再需要特例守卫：展示与索引的入口
+        // （get_project_info → FileTree/ensureIndex）已显式区分「无工作区」，
+        // 不会把家目录传进来；任何其它误开的超大目录由 walk 后的
+        // MAX_INDEX_FILES 保险丝统一拒建（见 indexer::file_count_error）。
         // Cancel any in-flight build from a previous workspace/config switch and
         // wait for it to drain before starting the new one. Without this, the old
         // spawn_blocking task keeps running — its closure holds the old shard Arc +
@@ -360,6 +364,16 @@ pub async fn codegraph_build_index(
         if let Some(json) = try_incremental_build(&st, &root, &model_name, dim)? {
             return Ok(json);
         }
+        // Incremental didn't apply. Before falling back to a full rebuild, try
+        // RESUMING an interrupted embed: a previous build finished Phase 1
+        // (structure layer persisted) but was cancelled/killed mid-embed, so
+        // meta.embed_complete=false poisoned every loader into full-rebuild.
+        // With the per-file embed checkpoint we re-embed only the remaining
+        // files — an interrupted 4-minute embed resumes in seconds instead of
+        // restarting from scratch on every app relaunch.
+        if let Some(json) = try_resume_embed(&st, &root, &model_name, dim, has_emb)? {
+            return Ok(json);
+        }
 
         st.build_cancel.store(false, Ordering::Relaxed);
         st.build_active.store(true, Ordering::Relaxed);
@@ -448,75 +462,41 @@ pub async fn codegraph_build_index(
         // Phase 2: embed the collected points into the shard (background fill).
         // Structure layer is already swapped in and serving goto; this only adds
         // the semantic layer. Cancelled by close/project switch via build_cancel.
+        // Per-file progress is checkpointed to disk so an interrupted embed can
+        // RESUME on the next build (try_resume_embed) instead of full-rebuilding.
         let total = points.len();
         st.build_total.store(total, Ordering::Relaxed);
         st.build_done.store(0, Ordering::Relaxed);
         on_status(&format!("建立索引 0/{}", total));
-        let mut embedded = 0usize;
-        let mut batch_errors = 0usize;
-        // First batch error message — surfaced in `embed_status` so the user
-        // sees the real cause (e.g. Ollama "model not loaded") instead of a
-        // bare `batch_errors: N`.
-        let mut first_err: Option<String> = None;
-        // Stop early after a run of persistent failures. A server-side fault
-        // (Ollama HTTP 500, model unloaded, service down) does not recover by
-        // retrying every remaining batch — it just stalls for tens of seconds
-        // with no new info. Tolerate a single transient hiccup (1 failure),
-        // stop after 2 consecutive.
-        let mut consecutive_failures = 0usize;
-        let mut stopped_early = false;
-        if can_embed {
-            let emb = st.embedder.lock().map_err(|e| e.to_string())?;
-            if let Some(embedder) = emb.as_ref() {
-                for chunk in points.chunks(EMBED_BATCH_SIZE) {
-                    if st.build_cancel.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    match indexer::store::embed_and_store(chunk, embedder.as_ref(), &shard) {
-                        Ok(_) => {
-                            consecutive_failures = 0;
-                        }
-                        Err(e) => {
-                            tracing::warn!("codegraph: embed batch failed: {}", e);
-                            batch_errors = batch_errors.saturating_add(1);
-                            first_err.get_or_insert_with(|| e.to_string());
-                            consecutive_failures = consecutive_failures.saturating_add(1);
-                            if consecutive_failures >= 2 {
-                                tracing::warn!(
-                                    "codegraph: embed stopping early after {} consecutive batch failures",
-                                    consecutive_failures
-                                );
-                                stopped_early = true;
-                                break;
-                            }
-                        }
-                    }
-                    embedded = embedded.saturating_add(chunk.len());
-                    st.build_done.store(embedded, Ordering::Relaxed);
-                    on_status(&format!("建立索引 {}/{}", embedded, total));
-                }
-            }
-        }
-        let cancelled = st.build_cancel.load(Ordering::Relaxed);
+        let base = indexer::index_dir(&root);
+        let shard_dir = Meta::load(&base.join("meta.json"))
+            .map(|m| m.shard_dir)
+            .unwrap_or_default();
+        let outcome = if can_embed {
+            run_embed_loop(
+                &st,
+                &base,
+                &shard_dir,
+                &shard,
+                &points,
+                std::collections::HashSet::new(),
+                &on_status,
+            )?
+        } else {
+            EmbedRunOutcome::skipped()
+        };
+        let cancelled = outcome.cancelled;
+        let embedded = outcome.embedded;
         let completed = !cancelled && can_embed && embedded >= total;
         if completed {
             embed_ready.store(true, Ordering::Relaxed);
-            // Mark the on-disk meta as embed-complete. Phase 1 wrote
-            // `embed_complete: false`; without flipping it here the shard would
-            // be rejected on every reuse (load_project_index /
-            // load_compatible_index gate on it), forcing a pointless full
-            // rebuild next time. Only the full-rebuild completion path needs
-            // this — the fast-path reuse already has embed_complete=true (it
-            // wouldn't load otherwise) and incremental reindex sets it inside
-            // reindex_one. Re-read the meta we wrote in Phase 1, flip the flag,
-            // re-save — avoids duplicating Meta construction / shard_dir here.
-            let base = indexer::index_dir(&root);
-            if let Some(mut meta) = Meta::load(&base.join("meta.json")) {
-                meta.embed_complete = true;
-                if let Err(e) = meta.save(&base.join("meta.json")) {
-                    tracing::warn!("codegraph: meta.json embed-complete flip failed: {}", e);
-                }
-            }
+            // Mark the on-disk meta as embed-complete (and drop the resume
+            // checkpoint). Phase 1 wrote `embed_complete: false`; without
+            // flipping it here the shard would be rejected on every reuse
+            // (load_project_index / load_compatible_index gate on it), forcing
+            // a pointless full rebuild next time. Re-reads the meta written in
+            // Phase 1 — avoids duplicating Meta construction / shard_dir.
+            mark_embed_complete(&root);
         }
         // Fill embed_status with the precise reason if embed didn't complete.
         if embed_status.is_empty() {
@@ -528,18 +508,19 @@ pub async fn codegraph_build_index(
                 };
             } else if cancelled {
                 embed_status = format!("cancelled at {}/{}", embedded, total);
-            } else if batch_errors > 0 {
-                let first = first_err
+            } else if outcome.batch_errors > 0 {
+                let first = outcome
+                    .first_err
                     .as_ref()
                     .map(|e| format!(" — first: {}", e))
                     .unwrap_or_default();
-                let why = if stopped_early {
+                let why = if outcome.stopped_early {
                     format!(
                         "batch_errors: {} (stopped early, embedded {}/{}){}",
-                        batch_errors, embedded, total, first
+                        outcome.batch_errors, embedded, total, first
                     )
                 } else {
-                    format!("batch_errors: {} (embedded {}/{}){}", batch_errors, embedded, total, first)
+                    format!("batch_errors: {} (embedded {}/{}){}", outcome.batch_errors, embedded, total, first)
                 };
                 embed_status = why;
             } else if !completed {
@@ -981,45 +962,11 @@ fn try_incremental_build(
     };
     let old = guard::swap_returning_old(&st.inner, new_index);
     guard::drop_catching_panics(old, "old project index (incremental swap)");
-    // 5. Reindex each changed file (per-file write lock, same pattern as
-    //    `codegraph_rescan`). `reindex_one` re-persists symbols.json + meta.json
-    //    (indexed_at=now) on each file, so disk stays in sync with the live table.
+    // 5. Reindex each changed file (per-file write lock). `reindex_one`
+    //    re-persists symbols.json + meta.json (indexed_at=now) on each file,
+    //    so disk stays in sync with the live table.
     st.build_cancel.store(false, Ordering::Relaxed);
-    let mut rescanned = 0usize;
-    let mut errors = 0usize;
-    for abs in &changed {
-        if st.build_cancel.load(Ordering::Relaxed) {
-            break;
-        }
-        let mut guard = st.inner.write().map_err(|e| e.to_string())?;
-        let pi = match guard.as_mut() {
-            Some(pi) => pi,
-            None => break, // index closed mid-rescan
-        };
-        if !pi.embed_ready.load(Ordering::Relaxed) {
-            break;
-        }
-        let emb = st.embedder.lock().map_err(|e| e.to_string())?;
-        let embedder_ref: Option<&dyn Embedder> = emb.as_ref().map(|b| b.as_ref());
-        let shard2 = pi.shard.clone();
-        match indexer::reindex_one(
-            root,
-            abs,
-            &mut pi.symbols,
-            &mut pi.edges,
-            &shard2,
-            embedder_ref,
-            model_name,
-            dim,
-            &st.parser_manager,
-        ) {
-            Ok(_) => rescanned += 1,
-            Err(e) => {
-                tracing::warn!("codegraph: incremental reindex failed {}: {}", abs.display(), e);
-                errors += 1;
-            }
-        }
-    }
+    let (rescanned, errors) = reindex_files(st, root, &changed, model_name, dim)?;
     let cancelled = st.build_cancel.load(Ordering::Relaxed);
     let n = {
         let g = st.inner.read().map_err(|e| e.to_string())?;
@@ -1045,10 +992,415 @@ fn try_incremental_build(
     })))
 }
 
+/// Outcome of a Phase 2 embed run (fresh build or resume). `ran` is false when
+/// no embedder was available — the caller distinguishes "didn't run" from
+/// "ran but was cancelled / failed early".
+struct EmbedRunOutcome {
+    embedded: usize,
+    batch_errors: usize,
+    first_err: Option<String>,
+    stopped_early: bool,
+    cancelled: bool,
+    ran: bool,
+}
+
+impl EmbedRunOutcome {
+    fn skipped() -> Self {
+        Self { embedded: 0, batch_errors: 0, first_err: None, stopped_early: false, cancelled: false, ran: false }
+    }
+}
+
+/// Shared Phase 2 embed loop (fresh build + resume): batches points through the
+/// cached embedder into the shard, updating build progress and checkpointing
+/// per-file completion to `embed_checkpoint.json` so an interruption (app close
+/// / workspace switch / kill) can resume next build instead of full-rebuilding.
+///
+/// `checkpoint_files` seeds the done-set (empty for a fresh build, loaded from
+/// disk for a resume); files whose points complete during this run are added.
+/// Saved every 8 batches and once at every exit (complete / cancelled / early
+/// stop) — a kill loses at most a handful of batches of progress.
+///
+/// Batch-failure policy (unchanged from the original inline loop): tolerate a
+/// single transient failure, stop after 2 consecutive — a server-side fault
+/// (Ollama down / model unloaded) does not recover by retrying every batch.
+fn run_embed_loop(
+    st: &CodeGraphState,
+    base: &std::path::Path,
+    shard_dir: &str,
+    shard: &CodeShard,
+    points: &[types::IndexedPoint],
+    mut checkpoint_files: std::collections::HashSet<String>,
+    on_status: &dyn Fn(&str),
+) -> Result<EmbedRunOutcome, String> {
+    let mut out = EmbedRunOutcome {
+        embedded: 0,
+        batch_errors: 0,
+        first_err: None,
+        stopped_early: false,
+        cancelled: false,
+        ran: false,
+    };
+    let total = points.len();
+    // Precompute contiguous per-file runs (collect_symbols emits all of a
+    // file's points together): (file, index of its last point). After each
+    // batch, every run whose last point is behind the cursor is fully embedded.
+    let mut runs: Vec<(&str, usize)> = Vec::new();
+    for (i, p) in points.iter().enumerate() {
+        match runs.last_mut() {
+            Some((f, last)) if *f == p.symbol.file.as_str() => *last = i,
+            _ => runs.push((p.symbol.file.as_str(), i)),
+        }
+    }
+    let mut run_ptr = 0usize;
+    let mut since_save = 0usize;
+    {
+        let emb = st.embedder.lock().map_err(|e| e.to_string())?;
+        let Some(embedder) = emb.as_ref() else {
+            return Ok(out);
+        };
+        out.ran = true;
+        let mut consecutive_failures = 0usize;
+        for chunk in points.chunks(EMBED_BATCH_SIZE) {
+            if st.build_cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            match indexer::store::embed_and_store(chunk, embedder.as_ref(), shard) {
+                Ok(_) => {
+                    consecutive_failures = 0;
+                }
+                Err(e) => {
+                    tracing::warn!("codegraph: embed batch failed: {}", e);
+                    out.batch_errors = out.batch_errors.saturating_add(1);
+                    out.first_err.get_or_insert_with(|| e.to_string());
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    if consecutive_failures >= 2 {
+                        tracing::warn!(
+                            "codegraph: embed stopping early after {} consecutive batch failures",
+                            consecutive_failures
+                        );
+                        out.stopped_early = true;
+                        break;
+                    }
+                }
+            }
+            out.embedded = out.embedded.saturating_add(chunk.len());
+            st.build_done.store(out.embedded, Ordering::Relaxed);
+            on_status(&format!("建立索引 {}/{}", out.embedded, total));
+            // Checkpoint: every file-run fully behind the cursor is done.
+            while run_ptr < runs.len() && runs[run_ptr].1 < out.embedded {
+                checkpoint_files.insert(runs[run_ptr].0.to_string());
+                run_ptr += 1;
+            }
+            since_save += 1;
+            if since_save >= 8 {
+                indexer::save_embed_checkpoint(base, &indexer::EmbedCheckpoint {
+                    shard_dir: shard_dir.to_string(),
+                    files: checkpoint_files.clone(),
+                });
+                since_save = 0;
+            }
+        }
+    }
+    out.cancelled = st.build_cancel.load(Ordering::Relaxed);
+    // Final checkpoint on every exit path.
+    indexer::save_embed_checkpoint(base, &indexer::EmbedCheckpoint {
+        shard_dir: shard_dir.to_string(),
+        files: checkpoint_files,
+    });
+    Ok(out)
+}
+
+/// Flip the on-disk meta to embed-complete and drop the resume checkpoint (the
+/// loaders gate on `embed_complete` first, so a completed build never resumes).
+/// Re-reads the meta written at Phase 1 — avoids duplicating Meta construction
+/// / shard_dir. Shared by the fresh-build and resume completion paths.
+fn mark_embed_complete(root: &std::path::Path) {
+    let base = indexer::index_dir(root);
+    if let Some(mut meta) = Meta::load(&base.join("meta.json")) {
+        meta.embed_complete = true;
+        if let Err(e) = meta.save(&base.join("meta.json")) {
+            tracing::warn!("codegraph: meta.json embed-complete flip failed: {}", e);
+        }
+    }
+    indexer::clear_embed_checkpoint(&base);
+}
+
+/// Reindex a set of files against the live index (per-file write lock so goto
+/// can interleave; stops on cancel / index closed / embed no longer ready).
+/// Returns (rescanned, errors). Shared by the incremental build and the resume
+/// path's changed-file refresh.
+fn reindex_files(
+    st: &std::sync::Arc<CodeGraphState>,
+    root: &std::path::Path,
+    files: &[std::path::PathBuf],
+    model_name: &str,
+    dim: usize,
+) -> Result<(usize, usize), String> {
+    let mut rescanned = 0usize;
+    let mut errors = 0usize;
+    for abs in files {
+        if st.build_cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let mut guard = st.inner.write().map_err(|e| e.to_string())?;
+        let pi = match guard.as_mut() {
+            Some(pi) => pi,
+            None => break, // index closed mid-rescan
+        };
+        if !pi.embed_ready.load(Ordering::Relaxed) {
+            break;
+        }
+        let emb = st.embedder.lock().map_err(|e| e.to_string())?;
+        let embedder_ref: Option<&dyn Embedder> = emb.as_ref().map(|b| b.as_ref());
+        let shard = pi.shard.clone();
+        match indexer::reindex_one(
+            root,
+            abs,
+            &mut pi.symbols,
+            &mut pi.edges,
+            &shard,
+            embedder_ref,
+            model_name,
+            dim,
+            &st.parser_manager,
+        ) {
+            Ok(_) => rescanned += 1,
+            Err(e) => {
+                tracing::warn!("codegraph: reindex failed {}: {}", abs.display(), e);
+                errors += 1;
+            }
+        }
+    }
+    Ok((rescanned, errors))
+}
+
+/// Attempt to RESUME an interrupted embed instead of full-rebuilding. Applies
+/// when a previous build persisted the structure layer but died mid-embed
+/// (`meta.embed_complete=false` — the old behavior rejected such an index in
+/// every loader, forcing a full rebuild on every relaunch after an interrupt):
+/// load the partial shard + per-file checkpoint, re-parse for fresh points,
+/// embed only the files not yet done, then refresh files changed since the
+/// interrupted build. Returns None when there's no resumable base → the caller
+/// falls back to a full rebuild.
+fn try_resume_embed(
+    st: &std::sync::Arc<CodeGraphState>,
+    root: &std::path::Path,
+    model_name: &str,
+    dim: usize,
+    has_emb: bool,
+) -> Result<Option<serde_json::Value>, String> {
+    if !has_emb || dim == 0 {
+        return Ok(None); // can't embed → resume pointless; full rebuild (structure-only)
+    }
+    let base = indexer::index_dir(root);
+    let Some((_table_stale, _edges_stale, shard, meta, checkpoint)) =
+        indexer::load_resume_base(root, model_name, dim)
+    else {
+        return Ok(None);
+    };
+    let skipped_files = checkpoint.files.len();
+    tracing::info!(
+        "codegraph: resuming interrupted embed ({} files already embedded, shard {})",
+        skipped_files,
+        meta.shard_dir
+    );
+
+    // Files changed since the interrupted build: the fresh re-parse below picks
+    // up their new structure, but their OLD vectors may still be in the shard
+    // and they may sit in the checkpoint as done. Exclude them from the skip
+    // set and reindex them per-file after the embed completes (refreshes
+    // vectors + re-persists symbols.json/meta). Best-effort delete of their
+    // stale points now — delete errors on a half-built shard are caught inside
+    // CodeShard and surface as Err (logged, not fatal).
+    let exts = st.parser_manager.supported_extensions();
+    let ext_refs: Vec<&str> = exts.iter().copied().collect();
+    let (changed, _total_files) = indexer::changed_files_since(root, &ext_refs, meta.indexed_at);
+    let mut skip = checkpoint.files.clone();
+    for abs in &changed {
+        let rel = abs
+            .strip_prefix(root)
+            .unwrap_or(abs)
+            .to_string_lossy()
+            .replace('\\', "/");
+        skip.insert(rel.clone());
+        if checkpoint.files.contains(&rel) {
+            if let Err(e) = shard.delete_by_file(&rel) {
+                tracing::warn!("codegraph: resume stale-point delete failed {}: {}", rel, e);
+            }
+        }
+    }
+
+    st.build_cancel.store(false, Ordering::Relaxed);
+    st.build_active.store(true, Ordering::Relaxed);
+    let on_status = |s: &str| {
+        if let Ok(mut g) = st.build_current.lock() {
+            g.clear();
+            g.push_str(s);
+        }
+    };
+
+    // Re-walk + re-parse for fresh points (Phase 1 cost only — no new shard).
+    // The freshly-parsed structure layer (not the stale symbols.json one) is
+    // swapped in below: it already reflects files changed since the interrupt.
+    let (table, edges, points, _stats) = match indexer::collect_symbols(
+        root,
+        &st.parser_manager,
+        Some(&on_status),
+        Some(&st.build_cancel),
+    ) {
+        Ok(x) => x,
+        Err(e) => {
+            st.build_active.store(false, Ordering::Relaxed);
+            return Err(format!("Indexing failed: {}", e));
+        }
+    };
+    let points: Vec<types::IndexedPoint> = points
+        .into_iter()
+        .filter(|p| !skip.contains(&p.symbol.file))
+        .collect();
+
+    // Swap the resumed index in (embed_ready=false until the loop completes).
+    let embed_ready = Arc::new(AtomicBool::new(false));
+    let new_index = ProjectIndex {
+        project_root: root.to_path_buf(),
+        symbols: table,
+        edges,
+        shard: shard.clone(),
+        indexed_at: SystemTime::now(),
+        embed_ready: embed_ready.clone(),
+    };
+    let old = guard::swap_returning_old(&st.inner, new_index);
+    guard::drop_catching_panics(old, "old project index (resume swap)");
+
+    let total = points.len();
+    st.build_total.store(total, Ordering::Relaxed);
+    st.build_done.store(0, Ordering::Relaxed);
+    on_status(&format!("建立索引 0/{}", total));
+    let outcome = run_embed_loop(st, &base, &meta.shard_dir, &shard, &points, checkpoint.files, &on_status)?;
+    let completed = !outcome.cancelled && outcome.ran && outcome.embedded >= total;
+    if completed {
+        embed_ready.store(true, Ordering::Relaxed);
+        mark_embed_complete(root);
+        if !changed.is_empty() {
+            let (rescanned, errors) = reindex_files(st, root, &changed, model_name, dim)?;
+            tracing::info!(
+                "codegraph: resume changed-file refresh: {} reindexed, {} errors",
+                rescanned,
+                errors
+            );
+        }
+    }
+    let n = {
+        let g = st.inner.read().map_err(|e| e.to_string())?;
+        g.as_ref().map(|pi| pi.symbols.len()).unwrap_or(0)
+    };
+    st.build_active.store(false, Ordering::Relaxed);
+    if let Ok(mut g) = st.build_current.lock() {
+        g.clear();
+    }
+    Ok(Some(serde_json::json!({
+        "loaded": false,
+        "resumed": true,
+        "skipped_embedded_files": skipped_files,
+        "total_symbols": n,
+        "has_embeddings": completed,
+        "embed_status": if completed {
+            "ok (resumed)".to_string()
+        } else if outcome.cancelled {
+            format!("cancelled at {}/{}", outcome.embedded, total)
+        } else {
+            format!("incomplete: embedded {}/{}", outcome.embedded, total)
+        },
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::codegraph::types::{Confidence, IndexedPoint, SymbolDef, SymbolKind};
+
+    /// 4 维假 embedder：批次原样返回零向量，不依赖 ONNX/HTTP。
+    struct FakeEmb;
+    impl crate::codegraph::embed::Embedder for FakeEmb {
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
+            Ok(texts.iter().map(|_| vec![0.0f32; 4]).collect())
+        }
+        fn dim(&self) -> usize { 4 }
+        fn model_name(&self) -> &str { "fake" }
+    }
+
+    fn mk_point(file: &str, name: &str, line: usize) -> IndexedPoint {
+        IndexedPoint {
+            symbol: SymbolDef {
+                name: name.into(),
+                kind: SymbolKind::Function,
+                file: file.into(),
+                line,
+                column: 1,
+                parent: None,
+            },
+            source: Confidence::Structure,
+            code_snippet: format!("function {}() {{}}", name),
+        }
+    }
+
+    fn state_with_fake_embedder() -> CodeGraphState {
+        let st = CodeGraphState::new();
+        *st.embedder.lock().unwrap() = Some(Box::new(FakeEmb));
+        st
+    }
+
+    /// Embed 循环跑完后，断点必须覆盖所有文件——这是「中断后续跑只补剩余
+    /// 文件」机制的数据源。断点绑定 shard_dir（不匹配时 load 拒绝）。
+    #[test]
+    fn run_embed_loop_checkpoints_all_completed_files() {
+        let base = std::env::temp_dir().join(format!("cg_loop_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let shard = CodeShard::create(&base.join("qdrant-x"), 4).unwrap();
+        // 3 points / 2 files：a.ts 两个符号、b.ts 一个。
+        let points = vec![
+            mk_point("a.ts", "f1", 1),
+            mk_point("a.ts", "f2", 2),
+            mk_point("b.ts", "g1", 1),
+        ];
+        let st = state_with_fake_embedder();
+        let out = run_embed_loop(
+            &st, &base, "qdrant-x", &shard, &points,
+            std::collections::HashSet::new(), &|_| {},
+        ).unwrap();
+        assert!(out.ran && !out.cancelled && !out.stopped_early);
+        assert_eq!(out.embedded, 3);
+        let cp = indexer::load_embed_checkpoint(&base, "qdrant-x").expect("checkpoint must be saved");
+        assert!(cp.files.contains("a.ts"), "a.ts must be checkpointed");
+        assert!(cp.files.contains("b.ts"), "b.ts must be checkpointed");
+        assert_eq!(st.build_done.load(Ordering::Relaxed), 3, "progress must reach total");
+        drop(shard);
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// 取消（首批前就置 flag）→ 零进度，但断点文件仍落盘（空集）——续跑路径
+    /// 据此从头 embed，且不误判任何文件为已完成。
+    #[test]
+    fn run_embed_loop_cancelled_before_first_batch_saves_empty_checkpoint() {
+        let base = std::env::temp_dir().join(format!("cg_loop_cancel_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let shard = CodeShard::create(&base.join("qdrant-y"), 4).unwrap();
+        let points = vec![mk_point("a.ts", "f1", 1)];
+        let st = state_with_fake_embedder();
+        st.build_cancel.store(true, Ordering::Relaxed);
+        let out = run_embed_loop(
+            &st, &base, "qdrant-y", &shard, &points,
+            std::collections::HashSet::new(), &|_| {},
+        ).unwrap();
+        assert!(out.cancelled, "pre-set cancel flag must stop the loop");
+        assert_eq!(out.embedded, 0, "no point embedded after cancel");
+        let cp = indexer::load_embed_checkpoint(&base, "qdrant-y").expect("checkpoint must exist");
+        assert!(cp.files.is_empty(), "cancelled run must not mark files done");
+        drop(shard);
+        std::fs::remove_dir_all(&base).ok();
+    }
 
     /// Incremental path: a project with an existing on-disk index, one file
     /// changed → `try_incremental_build` reindexes only that file (not a full

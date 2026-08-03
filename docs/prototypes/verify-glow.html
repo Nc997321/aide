@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  :root {
+    --aide-radius-sm: 6px;
+    --aide-accent: #d9ab78;
+    --aide-accent-hover: #e6bd8e;
+    --aide-bg-deep: #141218;
+    --aide-border: rgba(255,214,160,.09);
+  }
+  body { background: #1a1820; margin: 0; padding: 50px; font-family: sans-serif; }
+  .chat-input-box {
+    border-radius: var(--aide-radius-sm);
+    background: var(--aide-bg-deep);
+    border: 1px solid var(--aide-border);
+    height: 80px; color: #7d7568; padding: 12px; font-size: 14px;
+  }
+  .chat-input-box.session-running { position: relative; isolation: isolate; }
+  @property --aide-input-comet { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+  .chat-input-box.session-running::before {
+    content: ""; position: absolute; inset: 0; padding: 1px;
+    border-radius: var(--aide-radius-sm); pointer-events: none;
+    background: conic-gradient(
+      from var(--aide-input-comet),
+      color-mix(in srgb, var(--aide-accent) 0%, transparent) 0deg,
+      var(--aide-accent) 30deg,
+      var(--aide-accent-hover) 42deg,
+      color-mix(in srgb, var(--aide-accent-hover) 0%, transparent) 55deg,
+      color-mix(in srgb, var(--aide-accent) 0%, transparent) 180deg,
+      var(--aide-accent) 210deg,
+      var(--aide-accent-hover) 222deg,
+      color-mix(in srgb, var(--aide-accent-hover) 0%, transparent) 235deg,
+      color-mix(in srgb, var(--aide-accent) 0%, transparent) 360deg
+    );
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    filter: drop-shadow(0 0 10px color-mix(in srgb, var(--aide-accent) 85%, transparent));
+    animation: chat-input-comet 3.2s linear infinite;
+  }
+  @keyframes chat-input-comet { to { --aide-input-comet: 360deg; } }
+  .glass { --aide-bg-deep: rgba(250,250,252,.55); --aide-accent: #CFA6A0; --aide-accent-hover: #BE938D; --aide-border: rgba(124,137,154,.18); background: rgba(255,255,255,.62); color: #8a7f76; }
+  body.light { background: linear-gradient(135deg, #e8e2e8, #d8cfd8); }
+</style>
+</head>
+<body>
+  <div class="chat-input-box session-running">生成中，发送的消息将排队…（dark）</div>
+  <div style="height:40px"></div>
+  <div class="chat-input-box session-running glass">生成中，发送的消息将排队…（glass）</div>
+</body>
+</html>

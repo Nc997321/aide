@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Git 完整体原型：文件树装饰 + Git 面板新功能</title>
+<style>
+  /* ── warm-dark 主题 token（与 src/themes/warm-dark.ts 一致） ── */
+  :root {
+    --aide-bg-deep: #141218;
+    --aide-bg-base: #1a1820;
+    --aide-bg-raised: #221f29;
+    --aide-surface-default: #292631;
+    --aide-surface-hover: #322e3c;
+    --aide-text-primary: #ece5db;
+    --aide-text-secondary: #b3aa9c;
+    --aide-text-muted: #7d7568;
+    --aide-text-on-accent: #241d15;
+    --aide-accent: #d9ab78;
+    --aide-accent-subtle: rgba(217,171,120,.13);
+    --aide-success: #8bc48a;
+    --aide-warning: #e8c374;
+    --aide-danger: #e87070;
+    --aide-info: #7eb8d8;
+    --aide-radius-md: 9px;
+    --aide-shadow-md: 0 6px 20px rgba(0,0,0,.34), 0 1px 4px rgba(0,0,0,.22);
+    --aide-font-mono: "Cascadia Code", Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0c0a10; color: var(--aide-text-primary);
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    padding: 32px; display: flex; flex-direction: column; gap: 24px; align-items: center;
+  }
+  h1 { font-size: 18px; font-weight: 600; }
+  h1 small { font-size: 12px; color: var(--aide-text-muted); font-weight: 400; margin-left: 10px; }
+  .stage { display: flex; gap: 20px; align-items: flex-start; }
+  .frame {
+    background: var(--aide-bg-deep); border: 1px solid var(--aide-surface-default);
+    border-radius: 12px; overflow: hidden; box-shadow: var(--aide-shadow-md);
+  }
+  .frame-title {
+    padding: 8px 12px; font-size: 11px; color: var(--aide-text-muted);
+    background: var(--aide-bg-base); border-bottom: 1px solid var(--aide-surface-default);
+    text-transform: uppercase; letter-spacing: .5px;
+  }
+
+  /* ═══════════ 左侧：文件树 ═══════════ */
+  .filetree { width: 300px; height: 640px; overflow-y: auto; padding: 6px 0; font-size: 12.5px; }
+  .tree-node {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 10px; cursor: pointer; white-space: nowrap; color: var(--aide-text-secondary);
+  }
+  .tree-node:hover { background: var(--aide-surface-default); }
+  .tree-node .arrow { width: 14px; font-size: 14px; color: var(--aide-text-muted); flex-shrink: 0; transition: transform .15s; }
+  .tree-node .arrow.open { transform: rotate(90deg); }
+  .tree-node .icon { flex-shrink: 0; font-size: 13px; }
+  .tree-node .name { overflow: hidden; text-overflow: ellipsis; }
+  /* ── git 装饰：文件名变色 ── */
+  .git-m > .name, .name.git-m { color: var(--aide-warning); }
+  .git-a > .name, .name.git-a { color: var(--aide-success); }
+  .git-d > .name, .name.git-d { color: var(--aide-danger); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--aide-danger) 60%, transparent); }
+  .git-u > .name, .name.git-u { color: var(--aide-info); }
+  .git-c > .name, .name.git-c { color: var(--aide-danger); }
+  /* 目录聚合色：半透明弱化一点，与文件区分 */
+  .tree-node.dir.git-m > .name { color: color-mix(in srgb, var(--aide-warning) 75%, var(--aide-text-secondary)); }
+  .tree-node.dir.git-u > .name { color: color-mix(in srgb, var(--aide-info) 75%, var(--aide-text-secondary)); }
+  .tree-node.dir.git-a > .name { color: color-mix(in srgb, var(--aide-success) 75%, var(--aide-text-secondary)); }
+  /* ── 状态字母徽标（仅文件） ── */
+  .git-badge {
+    margin-left: auto; flex-shrink: 0; width: 15px; height: 15px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9.5px; font-weight: 700; border-radius: 3px; font-family: var(--aide-font-mono);
+  }
+  .git-badge.b-m { background: color-mix(in srgb, var(--aide-warning) 15%, transparent); color: var(--aide-warning); }
+  .git-badge.b-a { background: color-mix(in srgb, var(--aide-success) 15%, transparent); color: var(--aide-success); }
+  .git-badge.b-d { background: color-mix(in srgb, var(--aide-danger) 15%, transparent); color: var(--aide-danger); }
+  .git-badge.b-u { background: color-mix(in srgb, var(--aide-info) 15%, transparent); color: var(--aide-info); }
+  .git-badge.b-c { background: color-mix(in srgb, var(--aide-danger) 25%, transparent); color: var(--aide-danger); }
+
+  /* ═══════════ 右侧：Git 面板 ═══════════ */
+  .git-panel { width: 340px; height: 640px; overflow-y: auto; display: flex; flex-direction: column; }
+  .branch-bar { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-bottom: 1px solid var(--aide-surface-default); }
+  .branch-btn {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--aide-accent-subtle); border: 1px solid color-mix(in srgb, var(--aide-accent) 25%, transparent);
+    border-radius: 99px; padding: 3px 10px; font-size: 11px; color: var(--aide-accent); font-weight: 600; cursor: pointer;
+  }
+  .section { border-bottom: 1px solid var(--aide-surface-default); }
+  .section-header {
+    display: flex; align-items: center; gap: 6px; width: 100%;
+    padding: 6px 10px; border: none; background: var(--aide-bg-deep);
+    color: var(--aide-text-secondary); cursor: pointer; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .4px; font-family: inherit;
+  }
+  .section-header:hover { background: var(--aide-surface-default); color: var(--aide-text-primary); }
+  .section-header .arrow { width: 14px; font-size: 14px; color: var(--aide-text-muted); transition: transform .15s; }
+  .section-header .arrow.open { transform: rotate(90deg); }
+  .section-header .title-staged { color: var(--aide-success); }
+  .section-header .title-changes { color: var(--aide-warning); }
+  .section-header .title-stash { color: var(--aide-info); }
+  .section-header .title-commits { color: var(--aide-accent); }
+  .badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: var(--aide-surface-default); color: var(--aide-text-muted); }
+  .badge.staged { background: color-mix(in srgb, var(--aide-success) 18%, transparent); color: var(--aide-success); }
+  .badge.changes { background: color-mix(in srgb, var(--aide-warning) 15%, transparent); color: var(--aide-warning); }
+  .badge.stash { background: color-mix(in srgb, var(--aide-info) 15%, transparent); color: var(--aide-info); }
+  .badge.warn { background: color-mix(in srgb, var(--aide-warning) 15%, transparent); color: var(--aide-warning); }
+  .header-action {
+    margin-left: auto; font-size: 10px; font-weight: 500; color: var(--aide-text-muted);
+    text-transform: none; letter-spacing: 0; padding: 2px 6px; border-radius: 3px;
+  }
+  .header-action:hover { color: var(--aide-success); background: color-mix(in srgb, var(--aide-success) 12%, transparent); }
+  .header-action + .header-action { margin-left: 2px; }
+  .header-action.fetch:hover { color: var(--aide-accent); background: color-mix(in srgb, var(--aide-accent) 12%, transparent); }
+  .header-action.pull { color: var(--aide-info); }
+  .header-action.pull:hover { background: color-mix(in srgb, var(--aide-info) 12%, transparent); }
+  .header-action.push { color: var(--aide-warning); }
+  .header-action.push:hover { background: color-mix(in srgb, var(--aide-warning) 12%, transparent); }
+  .file-row { display: flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; color: var(--aide-text-secondary); }
+  .file-row:hover { background: var(--aide-surface-default); }
+  .file-status {
+    flex-shrink: 0; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700; border-radius: 3px; font-family: var(--aide-font-mono);
+  }
+  .file-status.s-m { background: color-mix(in srgb, var(--aide-warning) 15%, transparent); color: var(--aide-warning); }
+  .file-status.s-a { background: color-mix(in srgb, var(--aide-success) 15%, transparent); color: var(--aide-success); }
+  .file-status.s-u { background: color-mix(in srgb, var(--aide-info) 15%, transparent); color: var(--aide-info); }
+  .file-status.s-c { background: color-mix(in srgb, var(--aide-danger) 22%, transparent); color: var(--aide-danger); }
+  .file-path { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .row-btn { background: none; border: none; color: var(--aide-text-muted); cursor: pointer; font-size: 11px; padding: 1px 5px; border-radius: 3px; opacity: 0; }
+  .file-row:hover .row-btn { opacity: 1; }
+  .row-btn:hover { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 12%, transparent); }
+  .row-btn.green:hover { color: var(--aide-success); background: color-mix(in srgb, var(--aide-success) 12%, transparent); }
+
+  /* 冲突提示条 */
+  .conflict-banner {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; font-size: 11px; color: var(--aide-danger);
+    background: color-mix(in srgb, var(--aide-danger) 8%, transparent);
+    border-bottom: 1px solid var(--aide-surface-default);
+  }
+  .conflict-banner button {
+    background: color-mix(in srgb, var(--aide-danger) 15%, transparent); border: none; color: var(--aide-danger);
+    padding: 2px 8px; border-radius: 4px; font-size: 10px; cursor: pointer; margin-left: auto;
+  }
+
+  /* commit 区 */
+  .commit-bar { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--aide-surface-default); align-items: center; }
+  .commit-input {
+    flex: 1; background: var(--aide-bg-base); border: 1px solid var(--aide-surface-hover);
+    border-radius: 4px; padding: 5px 8px; font-size: 12px; color: var(--aide-text-primary); outline: none; font-family: inherit;
+  }
+  .commit-input:focus { border-color: var(--aide-accent); }
+  .commit-btn { background: var(--aide-success); border: none; color: var(--aide-text-on-accent); padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600; }
+  .amend-row {
+    display: flex; align-items: center; gap: 6px; padding: 0 10px 8px;
+    border-bottom: 1px solid var(--aide-surface-default); font-size: 11px; color: var(--aide-text-muted);
+  }
+  .amend-row input { accent-color: var(--aide-accent); }
+  .amend-row .hint { font-size: 10px; color: var(--aide-text-muted); opacity: .7; }
+
+  /* stash 行 */
+  .stash-row { display: flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 12px; color: var(--aide-text-secondary); cursor: default; }
+  .stash-row:hover { background: var(--aide-surface-default); }
+  .stash-idx { font-family: var(--aide-font-mono); font-size: 10px; color: var(--aide-info); flex-shrink: 0; }
+  .stash-msg { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stash-date { font-size: 10px; color: var(--aide-text-muted); flex-shrink: 0; }
+  .stash-actions { display: none; gap: 2px; flex-shrink: 0; }
+  .stash-row:hover .stash-actions { display: flex; }
+  .stash-actions button {
+    background: none; border: none; font-size: 10px; cursor: pointer; padding: 1px 5px; border-radius: 3px; color: var(--aide-text-muted);
+  }
+  .stash-actions button:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+  .stash-actions button.drop:hover { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 12%, transparent); }
+
+  /* commits */
+  .commit-item { border-bottom: 1px solid var(--aide-surface-default); }
+  .commit-header { display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px; cursor: pointer; }
+  .commit-header:hover { background: var(--aide-surface-default); }
+  .commit-dot { font-size: 12px; color: var(--aide-accent); margin-top: 1px; }
+  .commit-dot.unpushed { color: var(--aide-warning); }
+  .commit-message { display: block; font-size: 12px; color: var(--aide-text-primary); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .commit-meta { display: block; font-size: 10px; color: var(--aide-text-muted); margin-top: 1px; }
+  .commit-info { flex: 1; min-width: 0; }
+  .unpushed-divider {
+    display: flex; align-items: center; gap: 8px; padding: 4px 10px;
+    font-size: 10px; color: var(--aide-text-muted); text-transform: uppercase; letter-spacing: .3px;
+  }
+  .unpushed-divider::before, .unpushed-divider::after { content: ""; flex: 1; height: 1px; background: var(--aide-surface-hover); }
+  .load-more {
+    display: block; width: calc(100% - 20px); margin: 8px 10px; padding: 5px;
+    background: var(--aide-surface-default); border: none; border-radius: 6px;
+    color: var(--aide-text-muted); font-size: 11px; cursor: pointer;
+  }
+  .load-more:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+
+  /* 注释标注 */
+  .notes { max-width: 700px; font-size: 12px; color: var(--aide-text-secondary); line-height: 1.8; }
+  .notes h2 { font-size: 13px; color: var(--aide-accent); margin: 10px 0 4px; }
+  .notes code { background: var(--aide-surface-default); padding: 1px 5px; border-radius: 3px; font-size: 11px; }
+  .tag { display: inline-block; font-size: 9px; font-weight: 700; color: var(--aide-bg-deep); background: var(--aide-accent); border-radius: 3px; padding: 0 4px; margin-right: 4px; vertical-align: 2px; }
+</style>
+</head>
+<body>
+
+<h1>Git 完整体原型 <small>左：文件树 git 装饰 ｜ 右：Git 面板新功能 ｜ <span class="tag">NEW</span> 为新增</small></h1>
+
+<div class="stage">
+
+  <!-- ═══════ 文件树 ═══════ -->
+  <div class="frame">
+    <div class="frame-title">文件树 · git 装饰</div>
+    <div class="filetree">
+      <div class="tree-node dir git-m"><span class="arrow open">▸</span><span class="icon">📂</span><span class="name">src</span></div>
+      <div style="padding-left:16px">
+        <div class="tree-node dir git-m"><span class="arrow open">▸</span><span class="icon">📂</span><span class="name">components</span></div>
+        <div style="padding-left:16px">
+          <div class="tree-node git-m"><span class="arrow"></span><span class="icon">🟠</span><span class="name git-m">GitPanel.vue</span><span class="git-badge b-m">M</span></div>
+          <div class="tree-node git-m"><span class="arrow"></span><span class="icon">🟠</span><span class="name git-m">TreeNodeItem.vue</span><span class="git-badge b-m">M</span></div>
+          <div class="tree-node git-u"><span class="arrow"></span><span class="icon">🔵</span><span class="name git-u">StashSection.vue</span><span class="git-badge b-u">U</span></div>
+          <div class="tree-node git-c"><span class="arrow"></span><span class="icon">🔴</span><span class="name git-c">App.vue</span><span class="git-badge b-c">C</span></div>
+          <div class="tree-node"><span class="arrow"></span><span class="icon">⚪</span><span class="name">FileTree.vue</span></div>
+        </div>
+        <div class="tree-node dir git-a"><span class="arrow">▸</span><span class="icon">📁</span><span class="name">composables</span></div>
+        <div class="tree-node dir"><span class="arrow">▸</span><span class="icon">📁</span><span class="name">themes</span></div>
+        <div class="tree-node git-d"><span class="arrow"></span><span class="icon">🔴</span><span class="name git-d">OldHelper.ts</span><span class="git-badge b-d">D</span></div>
+        <div class="tree-node git-a"><span class="arrow"></span><span class="icon">🟢</span><span class="name git-a">useStash.ts</span><span class="git-badge b-a">A</span></div>
+      </div>
+      <div class="tree-node dir"><span class="arrow">▸</span><span class="icon">📁</span><span class="name">docs</span></div>
+      <div class="tree-node dir git-u"><span class="arrow">▸</span><span class="icon">📁</span><span class="name">scripts</span></div>
+      <div class="tree-node git-m"><span class="arrow"></span><span class="icon">🟠</span><span class="name git-m">package.json</span><span class="git-badge b-m">M</span></div>
+      <div class="tree-node"><span class="arrow"></span><span class="icon">⚪</span><span class="name">README.md</span></div>
+    </div>
+  </div>
+
+  <!-- ═══════ Git 面板 ═══════ -->
+  <div class="frame">
+    <div class="frame-title">Git 面板 · 新功能</div>
+    <div class="git-panel">
+      <div class="branch-bar">
+        <button class="branch-btn">⎇ master ▾</button>
+        <span style="font-size:10px;color:var(--aide-text-muted)">origin/gitee</span>
+      </div>
+
+      <!-- 冲突提示条 NEW -->
+      <div class="conflict-banner">
+        <span><span class="tag">NEW</span>⚠ 1 个文件存在合并冲突</span>
+        <button>查看</button>
+      </div>
+
+      <!-- Staged -->
+      <div class="section">
+        <button class="section-header">
+          <span class="arrow open">▸</span><span class="title-staged">Staged</span>
+          <span class="badge staged">2</span>
+          <span class="header-action">Unstage All</span>
+        </button>
+        <div class="file-row"><span class="file-status s-a">A</span><span class="file-path">src/composables/useStash.ts</span><button class="row-btn">−</button></div>
+        <div class="file-row"><span class="file-status s-m">M</span><span class="file-path">package.json</span><button class="row-btn">−</button></div>
+      </div>
+
+      <!-- Commit 区 + Amend NEW -->
+      <div class="commit-bar">
+        <input class="commit-input" placeholder="Commit message...">
+        <button class="commit-btn">Commit</button>
+      </div>
+      <div class="amend-row">
+        <label><input type="checkbox"> <span class="tag">NEW</span>Amend 上一次提交</label>
+        <span class="hint">勾选后留空 = 保留原 message</span>
+      </div>
+
+      <!-- Changes -->
+      <div class="section">
+        <button class="section-header">
+          <span class="arrow open">▸</span><span class="title-changes">Changes</span>
+          <span class="badge changes">4</span>
+          <span class="header-action">Stage All</span>
+        </button>
+        <div class="file-row"><button class="row-btn green" style="opacity:1">+</button><span class="file-status s-c">C</span><span class="file-path">src/App.vue</span><button class="row-btn">↶</button></div>
+        <div class="file-row"><button class="row-btn green" style="opacity:1">+</button><span class="file-status s-m">M</span><span class="file-path">src/components/GitPanel.vue</span><button class="row-btn">↶</button></div>
+        <div class="file-row"><button class="row-btn green" style="opacity:1">+</button><span class="file-status s-m">M</span><span class="file-path">src/components/TreeNodeItem.vue</span><button class="row-btn">↶</button></div>
+        <div class="file-row"><button class="row-btn green" style="opacity:1">+</button><span class="file-status s-u">U</span><span class="file-path">src/components/StashSection.vue</span><button class="row-btn">✕</button></div>
+      </div>
+
+      <!-- Stash 区块 NEW -->
+      <div class="section">
+        <button class="section-header">
+          <span class="arrow open">▸</span><span class="title-stash"><span class="tag">NEW</span>Stash</span>
+          <span class="badge stash">2</span>
+          <span class="header-action">＋ Stash 当前改动</span>
+        </button>
+        <div class="stash-row">
+          <span class="stash-idx">stash@{0}</span>
+          <span class="stash-msg">WIP: 文件树装饰进行中</span>
+          <span class="stash-date">2 小时前</span>
+          <span class="stash-actions"><button>Apply</button><button>Pop</button><button class="drop">Drop</button></span>
+        </div>
+        <div class="stash-row">
+          <span class="stash-idx">stash@{1}</span>
+          <span class="stash-msg">stash 自动保存（切分支前）</span>
+          <span class="stash-date">昨天</span>
+          <span class="stash-actions"><button>Apply</button><button>Pop</button><button class="drop">Drop</button></span>
+        </div>
+      </div>
+
+      <!-- Commits -->
+      <div class="section" style="flex:1">
+        <button class="section-header">
+          <span class="arrow open">▸</span><span class="title-commits">Commits</span>
+          <span class="badge warn">↑3</span>
+          <span class="header-action fetch"><span class="tag">NEW</span>Fetch ⟳</span>
+          <span class="header-action pull">Pull ↓2</span>
+          <span class="header-action push">Push ↑3</span>
+        </button>
+        <div class="commit-item">
+          <div class="commit-header">
+            <span class="commit-dot unpushed">●</span>
+            <div class="commit-info">
+              <span class="commit-message">feat(git): 文件树 git 装饰</span>
+              <span class="commit-meta">heaven · 10 分钟前</span>
+            </div>
+          </div>
+        </div>
+        <div class="commit-item">
+          <div class="commit-header">
+            <span class="commit-dot unpushed">●</span>
+            <div class="commit-info">
+              <span class="commit-message">feat(git): stash 管理区块</span>
+              <span class="commit-meta">heaven · 1 小时前</span>
+            </div>
+          </div>
+        </div>
+        <div class="commit-item">
+          <div class="commit-header">
+            <span class="commit-dot unpushed">●</span>
+            <div class="commit-info">
+              <span class="commit-message">fix(git): 自适应轮询</span>
+              <span class="commit-meta">heaven · 2 小时前</span>
+            </div>
+          </div>
+        </div>
+        <div class="unpushed-divider"><span>已推送 ↓</span></div>
+        <div class="commit-item">
+          <div class="commit-header">
+            <span class="commit-dot">●</span>
+            <div class="commit-info">
+              <span class="commit-message">fix(settings): config.json 活状态迁入 state.json</span>
+              <span class="commit-meta">heaven · 昨天</span>
+            </div>
+          </div>
+        </div>
+        <button class="load-more"><span class="tag">NEW</span>加载更多（还有 47 条）</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="notes">
+  <h2>文件树装饰规则</h2>
+  <div>· <b>M</b> 修改 → 暖黄（warning）｜ <b>A</b> 已暂存新增 → 绿（success）｜ <b>D</b> 删除 → 红 + 删除线 ｜ <b>U</b> 未跟踪 → 蓝（info）｜ <b>C</b> 冲突 → 红</div>
+  <div>· 目录：任意子孙有变更 → 名称变聚合色（弱化 75% 透明度，与文件区分），<b>不带字母徽标</b>（VSCode 行为）</div>
+  <div>· 字母徽标只出现在文件上，右对齐</div>
+  <h2>Git 面板新增</h2>
+  <div>· <b>冲突提示条</b>：有冲突文件时置顶红色 banner</div>
+  <div>· <b>Amend 勾选框</b>：commit 输入框下方，勾选后提交 = <code>git commit --amend</code></div>
+  <div>· <b>Stash 区块</b>：列表 + 每行 Apply / Pop / Drop（Drop 二次确认）；头部「Stash 当前改动」可填备注</div>
+  <div>· <b>Fetch ⟳</b>：手动 fetch；Pull/Push 按钮带 ahead/behind 计数（<code>Pull ↓2</code> = 远端领先 2 条）</div>
+  <div>· <b>加载更多</b>：log 分页，每次追加 50 条</div>
+</div>
+
+</body>
+</html>

@@ -22,6 +22,9 @@ import type { Session, WorkspaceInfo } from "../types";
 
 const props = defineProps<{
   activeSessionId: string;
+  /** 钉子固定状态（App.vue 持久化到 settings.leftSidebarPinned）：
+   *  false = 悬浮自动隐藏模式（侧栏此刻是 overlay），true = 常驻 dock。 */
+  pinned?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -33,6 +36,7 @@ const emit = defineEmits<{
   "open-workbench": [];
   "provider-switch": [providerId: string];
   "open-settings-providers": [];
+  "toggle-pin": [];
 }>();
 
 const { workspaces, activeKey: wsActiveKey, refresh: refreshWorkspaces, openFolder, removeWorkspace: removeWs } = useWorkspaces();
@@ -426,6 +430,17 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
     <!-- Header -->
     <div class="sidebar-header">
       <span class="header-title">会话</span>
+      <button
+        class="pin-btn"
+        :class="{ pinned: props.pinned }"
+        v-tooltip="props.pinned ? '取消固定（恢复自动隐藏）' : '固定侧栏'"
+        @click="emit('toggle-pin')"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 17v5"/>
+          <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/>
+        </svg>
+      </button>
       <button class="new-btn" @click="newSession" v-tooltip="'新建会话 (Ctrl+N)'">
         新 (Ctrl+N)
       </button>
@@ -586,11 +601,44 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 }
 
 .header-title {
+  flex: 1; /* 把钉子/新建按钮挤到右侧 */
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 1px;
   color: var(--aide-text-muted);
+}
+
+/* 钉子按钮：未固定斜 45°（"没钉上"），固定竖直 + accent 高亮（QQ 侧栏语义） */
+.pin-btn {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 6px;
+  border: none;
+  border-radius: var(--aide-radius-sm);
+  background: transparent;
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  transition: background var(--aide-ease-t), color var(--aide-ease-t);
+}
+.pin-btn:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
+}
+.pin-btn svg {
+  width: 13px;
+  height: 13px;
+  transform: rotate(45deg);
+  transition: transform var(--aide-ease-t);
+}
+.pin-btn.pinned {
+  color: var(--aide-accent);
+  background: var(--aide-accent-subtle);
+}
+.pin-btn.pinned svg {
+  transform: none;
 }
 
 .new-btn {

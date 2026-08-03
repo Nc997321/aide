@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useBtwSession } from "@/composables/useBtwSession";
+import { renderMarkdown, renderStreaming } from "@/utils/markdown";
 
 const props = defineProps<{ visible: boolean; lightweight: boolean; modelLabel: string }>();
 const emit = defineEmits<{
@@ -10,6 +11,11 @@ const emit = defineEmits<{
 
 const { store } = useBtwSession();
 const text = computed(() => store.value.messages.join(""));
+// 与主对话同一渲染管道（.msg-text 样式见 global.css）：流式中走 renderStreaming
+// （结构实时渲染、代码围栏暂不高亮），跑完切 renderMarkdown 补高亮并进缓存。
+const html = computed(() =>
+  store.value.isBusy ? renderStreaming(text.value) : renderMarkdown(text.value),
+);
 </script>
 
 <template>
@@ -30,7 +36,8 @@ const text = computed(() => store.value.messages.join(""));
       </div>
       <div class="btw-body">
         <div class="btw-q">{{ store.question }}</div>
-        <div class="btw-a">{{ text }}<span v-if="store.isBusy" class="btw-cursor"></span></div>
+        <div class="btw-a msg-text" v-html="html"></div>
+        <span v-if="store.isBusy" class="btw-cursor"></span>
         <div v-if="store.error" class="btw-err">{{ store.error }}</div>
       </div>
       <div v-if="store.done" class="btw-foot">
@@ -167,7 +174,6 @@ const text = computed(() => store.value.messages.join(""));
   font-size: 11.5px;
   line-height: 1.6;
   color: var(--aide-text-primary);
-  white-space: pre-wrap;
   word-break: break-word;
 }
 

@@ -53,6 +53,42 @@ describe("useBtwSession routing", () => {
     expect(isBtwSid("c")).toBe(false);
   });
 
+  // 支线记忆：同一主会话的下一轮 btw 把此前问答拼进 prompt（2026-08-02）。
+  it("next btw prompt carries previous rounds' Q&A of the same owner session", async () => {
+    const { startBtw, handleBtwEvent } = useBtwSession();
+    await startBtw({ tempId: "h1", forkFrom: "main", prompt: "第一问", cwd: "/r", lightweight: true });
+    handleBtwEvent({ session_id: "h1", type: "text_delta", delta: "第一答" });
+    handleBtwEvent({ session_id: "h1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
+
+    await startBtw({ tempId: "h2", forkFrom: "main", prompt: "第二问", cwd: "/r", lightweight: true });
+    const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
+    expect(sentPrompt).toContain("[本次对话此前的支线问答]");
+    expect(sentPrompt).toContain("Q1: 第一问");
+    expect(sentPrompt).toContain("A1: 第一答");
+    expect(sentPrompt).toContain("[本轮问题]\n第二问");
+  });
+
+  it("history is per owner session: another session's btw sees no digest", async () => {
+    const { startBtw, handleBtwEvent } = useBtwSession();
+    await startBtw({ tempId: "x1", forkFrom: "main-a", prompt: "甲的问", cwd: "/r", lightweight: true });
+    handleBtwEvent({ session_id: "x1", type: "text_delta", delta: "甲的答" });
+    handleBtwEvent({ session_id: "x1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
+
+    await startBtw({ tempId: "x2", forkFrom: "main-b", prompt: "乙的问", cwd: "/r", lightweight: true });
+    const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
+    expect(sentPrompt).toBe("乙的问"); // 无历史 → 原样，不串别的会话的记忆
+  });
+
+  it("empty/errored btw leaves no history for the next round", async () => {
+    const { startBtw, handleBtwEvent } = useBtwSession();
+    await startBtw({ tempId: "z1", forkFrom: "main", prompt: "没答出来", cwd: "/r", lightweight: true });
+    handleBtwEvent({ session_id: "z1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null }); // 无 delta
+
+    await startBtw({ tempId: "z2", forkFrom: "main", prompt: "再问", cwd: "/r", lightweight: true });
+    const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
+    expect(sentPrompt).toBe("再问");
+  });
+
   // 「关闭」=最小化:抽屉收起,但 sidecar 继续后台跑。最小化绝不杀进程——
   // 跑完结论照样经 onDone 插进主对话,用户在主对话批注里看到结果。
   it("minimize hides drawer but keeps sidecar alive; conclusion still inserts on done", async () => {

@@ -108,12 +108,63 @@ const rightResize = useResizable({
  *  自身的 CSS 宽度——子元素默认按轨道 stretch，不需要再单独设 !important
  *  宽度。收起需要联动 .panel-center 的真实包围盒变化，FileViewer 的悬浮
  *  窗口层靠 ResizeObserver 量 .panel-center 才能正确重新平铺（见
- *  FileViewer.vue 顶部注释）——轨道不真的变，那层就量不到变化。 */
+ *  FileViewer.vue 顶部注释）——轨道不真的变，那层就量不到变化。
+ *  左侧栏未固定（QQ 式自动隐藏）时轨道归 0：侧栏脱离 grid 改走 overlay
+ *  绝对定位（见 .panel-left.overlay），不占布局、覆盖内容。 */
 const gridTemplateColumns = computed(() => {
-  const left = leftCollapsed.value ? "10px" : "var(--aide-left-w, 280px)";
+  const left = !leftPinned.value
+    ? "0px"
+    : leftCollapsed.value
+      ? "10px"
+      : "var(--aide-left-w, 280px)";
   const right = rightCollapsed.value ? "10px" : "var(--aide-right-w, 300px)";
   return `${left} 1px minmax(400px, 1fr) 1px ${right}`;
 });
+
+// ── 左侧栏 QQ 式自动隐藏（钉子未固定时）──
+// 默认完全隐藏；贴左边缘 6px 热区滑出（overlay 覆盖内容，不推布局）；
+// 移开延迟收回。钉子固定后回到常驻 dock（上方 grid 轨道恢复）。
+const leftPinned = computed(() => settings.leftSidebarPinned ?? false);
+const leftOverlayOpen = ref(false);
+let leftShowTimer: ReturnType<typeof setTimeout> | null = null;
+let leftHideTimer: ReturnType<typeof setTimeout> | null = null;
+const LEFT_SHOW_DELAY = 60;  // 贴边 intent 延迟，防路过误触
+const LEFT_HIDE_DELAY = 250; // 移开延迟收回，防闪烁
+
+function onLeftEdgeEnter() {
+  if (leftHideTimer) { clearTimeout(leftHideTimer); leftHideTimer = null; }
+  leftShowTimer = setTimeout(() => { leftOverlayOpen.value = true; }, LEFT_SHOW_DELAY);
+}
+function onLeftEdgeLeave() {
+  if (leftShowTimer) { clearTimeout(leftShowTimer); leftShowTimer = null; }
+}
+function onLeftPanelEnter() {
+  if (leftHideTimer) { clearTimeout(leftHideTimer); leftHideTimer = null; }
+}
+function onLeftPanelLeave() {
+  if (leftPinned.value) return;
+  leftHideTimer = setTimeout(() => { leftOverlayOpen.value = false; }, LEFT_HIDE_DELAY);
+}
+function toggleLeftPinned() {
+  updateSettings({ leftSidebarPinned: !leftPinned.value });
+  if (leftPinned.value) {
+    // 切回 dock：清掉 overlay 态
+    leftOverlayOpen.value = false;
+    if (leftHideTimer) { clearTimeout(leftHideTimer); leftHideTimer = null; }
+  }
+}
+
+/** TitleBar「展开/收起左侧栏」按钮：固定 dock 模式折叠轨道；未固定 overlay
+ *  模式切换滑出/收回（等价于贴边热区的点击版）。 */
+function onToggleLeft() {
+  if (leftPinned.value) {
+    leftCollapsed.value = !leftCollapsed.value;
+  } else {
+    if (leftShowTimer) { clearTimeout(leftShowTimer); leftShowTimer = null; }
+    if (leftHideTimer) { clearTimeout(leftHideTimer); leftHideTimer = null; }
+    leftOverlayOpen.value = !leftOverlayOpen.value;
+  }
+}
 
 const sidebarRef = ref<InstanceType<typeof SidebarLeft> | null>(null);
 const fileTreeRef = ref<InstanceType<typeof FileTree> | null>(null);
@@ -303,6 +354,8 @@ function onSessionChanged(id: string) {
 }
 
 function onNewSession(name: string) {
+  // 零会话欢迎态：欢迎页本身就是新建会话页，再开空白 tab 只是冗余
+  if (!paneLayout.hasAnyTab.value) return;
   // 打开空白可输入面板（预览 tab）；不落盘、不进侧栏。真正创建推迟到
   // 用户发出第一条消息、SDK 用 session_init 确认真实 id 之后（onSessionCreated）。
   paneLayout.openBlankTab(name);
@@ -770,7 +823,7 @@ onUnmounted(() => {
       @restart-project="onRestartProject"
       @select-run-config="onSelectRunConfig"
       @edit-run-configs="runConfigsDialogVisible = true"
-      @toggle-left="leftCollapsed = !leftCollapsed"
+      @toggle-left="onToggleLeft"
       @toggle-right="rightCollapsed = !rightCollapsed"
       @open-folder="onOpenFolder"
     />
@@ -787,12 +840,34 @@ onUnmounted(() => {
         @dismiss="onBannerDismiss"
       />
 
+      <!-- 贴边热区：未固定时鼠标贴左边缘滑出侧栏（QQ 式自动隐藏）。
+           侧栏已展开时停用——热区 z 高于侧栏，否则向左划出侧栏会先撞上
+           热区重新触发展开，永远收不回去。 -->
+      <div
+        v-if="!leftPinned"
+        class="left-edge-hotzone"
+        :class="{ inactive: leftOverlayOpen }"
+        @mouseenter="onLeftEdgeEnter"
+        @mouseleave="onLeftEdgeLeave"
+      />
+      <div v-if="!leftPinned && !leftOverlayOpen" class="left-edge-hint" />
+
       <!-- Left panel -->
-      <div class="panel-left" :class="{ collapsed: leftCollapsed }">
+      <div
+        class="panel-left"
+        :class="{
+          collapsed: leftPinned && leftCollapsed,
+          overlay: !leftPinned,
+          'overlay-open': !leftPinned && leftOverlayOpen,
+        }"
+        @mouseenter="onLeftPanelEnter"
+        @mouseleave="onLeftPanelLeave"
+      >
         <SidebarLeft
-          v-show="!leftCollapsed"
+          v-show="!leftPinned || !leftCollapsed"
           ref="sidebarRef"
           :active-session-id="activeSessionId"
+          :pinned="leftPinned"
           @session-changed="onSessionChanged"
           @new-session="onNewSession"
           @workspace-changed="onSidebarWsChanged"
@@ -801,12 +876,13 @@ onUnmounted(() => {
           @provider-switch="onProviderSwitch"
           @open-settings-providers="openSettingsProviders"
           @remove-workspace="onRemoveWorkspace"
+          @toggle-pin="toggleLeftPinned"
         />
       </div>
 
-      <!-- Left resize handle -->
+      <!-- Left resize handle（仅固定 dock 模式可拖） -->
       <div
-        v-show="!leftCollapsed"
+        v-show="leftPinned && !leftCollapsed"
         class="resize-handle resize-handle-left"
         :class="{ active: leftResize.isDragging.value }"
         @mousedown="leftResize.onMousedown"
@@ -913,6 +989,56 @@ onUnmounted(() => {
   position: relative;
   overflow: hidden;
   min-width: 0;
+}
+
+/* ── 左侧栏 overlay（QQ 式自动隐藏，钉子未固定）──
+   脱离 grid（轨道已归 0），绝对定位浮在内容上；背景仍是 --aide-bg-deep
+   （玻璃主题为半透明）+ SidebarLeft 根的 backdrop-filter: var(--aide-surface-blur)
+   ——毛玻璃主题下悬浮侧栏自动带毛玻璃，无需特判。 */
+.panel-left.overlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--aide-left-w, 280px);
+  transform: translateX(-100%);
+  transition: transform 0.22s var(--aide-ease), box-shadow 0.22s var(--aide-ease);
+  /* 高于 FileViewer 悬浮窗口层（40）与 WorkbenchTerminal dock（80），低于通知/弹窗层 */
+  z-index: 90;
+}
+
+.panel-left.overlay.overlay-open {
+  transform: translateX(0);
+  box-shadow: var(--aide-shadow-lg);
+}
+
+/* 贴边热区：平时唯一接收 hover 的触发条（12px），z 高于 overlay 侧栏 */
+.left-edge-hotzone {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  z-index: 95;
+}
+
+.left-edge-hotzone.inactive {
+  pointer-events: none;
+}
+
+/* 边缘提示细线：未展开时暗示"这里能拉出来"（原型同款） */
+.left-edge-hint {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 64px;
+  border-radius: 0 3px 3px 0;
+  background: var(--aide-text-muted);
+  opacity: 0.25;
+  z-index: 89;
+  pointer-events: none;
 }
 
 .panel-center {

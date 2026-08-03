@@ -214,7 +214,7 @@ pub fn claude_sessions_dir() -> PathBuf {
 ///
 /// 历史路径是 `~/.claude-code-desktop/`；启动时 `migration::ensure_aide_data_dir_migrated()`
 /// 会把老目录原子 rename 到此处（同文件系统、瞬时、无需用户确认）。所有 Aide 自有数据
-/// （config.json / sessions / recent / notifications / diagnostics / log / claude-agent-sdk/
+/// （state.json / sessions / recent / notifications / diagnostics / log / claude-agent-sdk/
 /// 以及 claude/ 子目录）都在这棵树下。
 pub fn our_config_dir() -> PathBuf {
     user_home()
@@ -226,8 +226,18 @@ pub fn our_sessions_dir() -> PathBuf {
     our_config_dir().join("sessions")
 }
 
+/// legacy `config.json`——**纯遗留导入源**：老版本的设置+状态都写在这个文件里，
+/// 设置体系迁移（`settings::migration`）读它一次、导入 `settings.json` 后即可整体
+/// 删除。没有任何活代码应该再读写它；运行时状态的家是 `state_path()`。
 pub fn config_path() -> PathBuf {
     our_config_dir().join("config.json")
+}
+
+/// `state.json`——应用自记账的运行时状态（当前工作区、隐藏工作区黑名单、
+/// Claude 数据迁移标记、文件关联注册基线等「不是用户偏好」的状态）。用户设置
+/// 走 `settings.json` 的 descriptor 体系，不进这里。
+pub fn state_path() -> PathBuf {
+    our_config_dir().join("state.json")
 }
 
 /// Locate a session's transcript(s) by globally-unique session id.
@@ -266,7 +276,7 @@ pub fn find_session_jsonl_globally(id: &str) -> Vec<PathBuf> {
 }
 
 // Re-export from workspace module
-pub use workspace::{load_workspace_config, resolve_path_from_key, resolve_project_dirs};
+pub use workspace::{load_workspace_state, resolve_path_from_key, resolve_project_dirs};
 
 #[cfg(test)]
 mod tests {

@@ -3,14 +3,15 @@
  * ChatSendButton —— 分裂式发送按钮。
  *
  * 主体「发送 ↑」点击 = 正常发消息（emit send）；右侧小箭头 ▾ 点击 = 向上弹出
- * 菜单，列出工具栏快捷操作（压缩/清空上下文等，数据来自 useQuickActions）。
+ * 菜单，列出命令注册表（useQuickActions）的全部条目——菜单只是注册表的 UI
+ * 投影：kind=btw 的条目带勾选态/置灰语义，kind=prompt 的是普通菜单项。
  * 两个区域互不干扰：发送不会被菜单抢走，菜单也不需要输入框有内容（压缩/清空
  * 可在空输入时触发）。
  *
  * 弹层定位复用 ThemedSelect.vue 已验证的方案：Teleport to body + position fixed，
  * 工具栏贴窗口底部时自动向上展开。全配色走 var(--aide-*)，不硬编码 hex。
  */
-import { ref, nextTick, onUnmounted, watch } from "vue";
+import { ref, computed, nextTick, onUnmounted, watch } from "vue";
 import type { QuickAction } from "@/composables/useQuickActions";
 
 const props = withDefaults(
@@ -20,11 +21,11 @@ const props = withDefaults(
     /** busy=true 时主体标签显示「插队」而非「发送」——忙碌时发送一律走插队
      *  （sidecar 在安全边界 interrupt 当前轮后续发）。 */
     busy?: boolean;
-    /** 菜单项数据源；为空时不渲染 ▾。 */
+    /** 菜单项数据源（命令注册表）；为空时不渲染 ▾。 */
     actions?: QuickAction[];
-    /** btw 模式是否激活。 */
+    /** btw 模式是否激活（kind=btw 条目的勾选态）。 */
     btwActive?: boolean;
-    /** btw 不可用（无存活主会话可 fork）：菜单项置灰 + tooltip 说明原因，点击无反应。 */
+    /** btw 不可用（无存活主会话可 fork）：kind=btw 条目置灰 + tooltip 说明原因。 */
     btwDisabled?: boolean;
     /** btw 置灰时 hover 显示的原因。 */
     btwDisabledReason?: string;
@@ -35,7 +36,6 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: "send"): void;
   (e: "select", action: QuickAction): void;
-  (e: "toggle-btw"): void;
 }>();
 
 const open = ref(false);
@@ -43,6 +43,9 @@ const positioned = ref(false); // 定位算完前先隐藏，避免在 (0,0) 闪
 const triggerRef = ref<HTMLElement>();
 const menuRef = ref<HTMLElement>();
 const menuStyle = ref<Record<string, string>>({});
+
+/** btw 条目与其余 prompt 条目之间的分隔线位置（第一个非 btw 条目的下标）。 */
+const firstNonBtwIndex = computed(() => props.actions.findIndex((a) => a.kind !== "btw"));
 
 async function positionMenu() {
   const trigger = triggerRef.value;
@@ -78,14 +81,9 @@ function toggleMenu() {
 }
 
 function choose(action: QuickAction) {
+  // btw 置灰时静默：原因由 tooltip 给出，不切换、不关菜单（让用户继续看提示）。
+  if (action.kind === "btw" && props.btwDisabled) return;
   emit("select", action);
-  open.value = false;
-}
-
-function onToggleBtw() {
-  // 置灰时静默:原因由 tooltip 给出,不切换、不关菜单(让用户继续看提示)。
-  if (props.btwDisabled) return;
-  emit("toggle-btw");
   open.value = false;
 }
 
@@ -154,32 +152,26 @@ onUnmounted(() => {
           :style="[menuStyle, positioned ? {} : { visibility: 'hidden' }]"
           role="menu"
         >
-          <button
-            type="button"
-            class="chat-send-menu-item"
-            :class="{ 'is-on': props.btwActive, 'is-disabled': props.btwDisabled }"
-            role="menuitemcheckbox"
-            :aria-checked="props.btwActive"
-            :aria-disabled="props.btwDisabled"
-            v-tooltip="props.btwDisabled ? props.btwDisabledReason : undefined"
-            @click="onToggleBtw"
-          >
-            <span class="chat-send-menu-icon">↳</span>
-            <span class="chat-send-menu-label">顺便问一下</span>
-            <span v-if="props.btwActive" class="chat-send-menu-check">✓</span>
-          </button>
-          <div v-if="actions.length" class="chat-send-menu-sep"></div>
-          <button
-            v-for="a in actions"
-            :key="a.id"
-            type="button"
-            class="chat-send-menu-item"
-            role="menuitem"
-            @click="choose(a)"
-          >
-            <span v-if="a.icon" class="chat-send-menu-icon">{{ a.icon }}</span>
-            <span class="chat-send-menu-label">{{ a.label }}</span>
-          </button>
+          <template v-for="(a, i) in actions" :key="a.id">
+            <div
+              v-if="i > 0 && i === firstNonBtwIndex"
+              class="chat-send-menu-sep"
+            ></div>
+            <button
+              type="button"
+              class="chat-send-menu-item"
+              :class="a.kind === 'btw' ? { 'is-on': props.btwActive, 'is-disabled': props.btwDisabled } : {}"
+              :role="a.kind === 'btw' ? 'menuitemcheckbox' : 'menuitem'"
+              :aria-checked="a.kind === 'btw' ? props.btwActive : undefined"
+              :aria-disabled="a.kind === 'btw' ? props.btwDisabled : undefined"
+              v-tooltip="a.kind === 'btw' && props.btwDisabled ? props.btwDisabledReason : undefined"
+              @click="choose(a)"
+            >
+              <span v-if="a.icon" class="chat-send-menu-icon">{{ a.icon }}</span>
+              <span class="chat-send-menu-label">{{ a.label }}</span>
+              <span v-if="a.kind === 'btw' && props.btwActive" class="chat-send-menu-check">✓</span>
+            </button>
+          </template>
         </div>
       </Transition>
     </Teleport>

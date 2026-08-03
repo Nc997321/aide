@@ -14,6 +14,11 @@ export interface ThemeTokens {
   surfaceHover: string;
   surfaceActive: string;
 
+  /** 文本选中底色（终端 selectionBackground / CodeMirror cm-selectionBackground 共用）。
+   *  暗色主题给中性灰阶（≈surfaceActive 档）；浅色主题 surface 系是白色，选中会
+   *  白到看不见，必须改用 accent 色系的中等透明度粉/彩色。 */
+  selectionBg: string;
+
   textPrimary: string;
   textSecondary: string;
   textMuted: string;

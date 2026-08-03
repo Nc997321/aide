@@ -9,6 +9,7 @@ export const warmDark: ThemeTokens = {
   surfaceDefault: "#292631",
   surfaceHover: "#322e3c",
   surfaceActive: "#3d3848",
+  selectionBg: "#3d3848",
   textPrimary: "#ece5db",
   textSecondary: "#b3aa9c",
   textMuted: "#7d7568",

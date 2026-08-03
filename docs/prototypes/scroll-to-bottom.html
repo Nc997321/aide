@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>回到底部 · 原型</title>
+<style>
+  /* ===== warm-dark 主题 token（与 src/themes/warm-dark.ts 对齐） ===== */
+  :root {
+    --bg-deep: #141218;
+    --bg-base: #1a1820;
+    --bg-raised: #221f29;
+    --surface-default: #292631;
+    --surface-hover: #322e3c;
+    --surface-active: #3d3848;
+    --text-primary: #ece5db;
+    --text-secondary: #b3aa9c;
+    --text-muted: #7d7568;
+    --text-on-accent: #241d15;
+    --accent: #d9ab78;
+    --accent-hover: #e6bd8e;
+    --accent-subtle: rgba(217,171,120,.13);
+    --border: rgba(255,214,160,.09);
+    --border-strong: rgba(255,220,175,.16);
+    --shadow-md: 0 6px 20px rgba(0,0,0,.34), 0 1px 4px rgba(0,0,0,.22);
+    --radius-md: 9px;
+    --ease-t: .16s cubic-bezier(.2,.8,.2,1);
+    color-scheme: dark;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    font: 14px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif;
+    height: 100vh;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* ===== 左侧控制栏（仅原型用） ===== */
+  .controls {
+    width: 230px; flex-shrink: 0;
+    background: var(--bg-base);
+    border-right: 1px solid var(--border);
+    padding: 16px 14px;
+    display: flex; flex-direction: column; gap: 14px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    overflow-y: auto;
+  }
+  .controls h2 { font-size: 13px; color: var(--text-primary); font-weight: 600; }
+  .controls label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .controls button.ctl {
+    background: var(--surface-default);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    border-radius: var(--radius-md);
+    padding: 7px 10px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background var(--ease-t);
+  }
+  .controls button.ctl:hover { background: var(--surface-hover); }
+  .controls .hint { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+
+  /* ===== 聊天面板 ===== */
+  .chat-panel {
+    flex: 1;
+    display: flex; flex-direction: column;
+    position: relative;           /* 悬浮按钮的定位上下文 */
+    background: var(--bg-base);
+    min-width: 0;
+  }
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 28px;
+    scroll-behavior: smooth;      /* 原型直接演示平滑滚动；实现里只在点按钮时 smooth */
+  }
+  .msg { max-width: 720px; margin: 0 auto 14px; }
+  .msg .bubble {
+    border-radius: var(--radius-md);
+    padding: 10px 14px;
+    white-space: pre-wrap;
+  }
+  .msg.user .bubble {
+    background: var(--accent-subtle);
+    border: 1px solid var(--border);
+    margin-left: 60px;
+  }
+  .msg.assistant .bubble {
+    background: var(--surface-default);
+    border: 1px solid var(--border);
+    margin-right: 60px;
+  }
+  .msg .who { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+
+  /* 输入框（mock） */
+  .input-area { padding: 12px 28px 16px; }
+  .input-box {
+    max-width: 720px; margin: 0 auto;
+    background: var(--bg-raised);
+    border: 1px solid var(--border-strong);
+    border-radius: 13px;
+    padding: 12px 14px;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+
+  /* ===== 回到底部按钮 ===== */
+  .jump-bottom {
+    position: absolute;
+    bottom: 84px;                 /* 输入框上方 */
+    z-index: 10;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface-default);
+    border: 1px solid var(--border-strong);
+    box-shadow: var(--shadow-md);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 12px;
+    transition: opacity var(--ease-t), transform var(--ease-t),
+                background var(--ease-t), color var(--ease-t);
+  }
+  .jump-bottom:hover { background: var(--surface-hover); color: var(--text-primary); }
+  .jump-bottom svg { flex-shrink: 0; }
+
+  /* 变体A：居中胶囊 */
+  .jump-bottom.pill {
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 6px 14px;
+    border-radius: 999px;
+  }
+  .jump-bottom.pill:hover { color: var(--accent-hover); }
+
+  /* 变体B：右下圆形 */
+  .jump-bottom.circle {
+    right: 40px;
+    width: 34px; height: 34px;
+    justify-content: center;
+    padding: 0;
+    border-radius: 50%;
+  }
+  .jump-bottom.circle .label { display: none; }
+
+  /* 隐藏态（不 display:none，留出过渡） */
+  .jump-bottom.hidden {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-50%) translateY(8px);
+  }
+  .jump-bottom.circle.hidden { transform: translateY(8px); }
+
+  /* 新消息提示小圆点 */
+  .jump-bottom .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    display: none;
+  }
+  .jump-bottom.has-new .dot { display: block; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chat-messages { scroll-behavior: auto; }
+    .jump-bottom { transition: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="controls">
+    <h2>回到底部 · 原型</h2>
+    <label><input type="radio" name="variant" value="pill" checked /> 变体A：居中胶囊</label>
+    <label><input type="radio" name="variant" value="circle" /> 变体B：右下圆钮</label>
+    <button class="ctl" id="appendOne">模拟新消息 +1</button>
+    <button class="ctl" id="appendMany">模拟流式 +10</button>
+    <div class="hint">
+      交互逻辑：<br>
+      ① 上翻离底 >200px 时按钮淡入<br>
+      ② 点击平滑滚回底部并自动隐藏<br>
+      ③ 滚回底部附近自动隐藏<br>
+      ④ 上翻期间来了新消息 → 按钮上出现铜色小点
+    </div>
+  </div>
+
+  <div class="chat-panel">
+    <div class="chat-messages" id="scrollEl"></div>
+
+    <button class="jump-bottom pill hidden" id="jumpBtn" title="回到底部">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+           stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 3v10M8 13l-4.5-4.5M8 13l4.5-4.5"/>
+      </svg>
+      <span class="label">回到底部</span>
+      <span class="dot"></span>
+    </button>
+
+    <div class="input-area">
+      <div class="input-box">输入消息… （mock）</div>
+    </div>
+  </div>
+
+<script>
+  const scrollEl = document.getElementById("scrollEl");
+  const jumpBtn = document.getElementById("jumpBtn");
+  const SHOW_THRESHOLD = 200; // 离底距离超过该值才显示按钮
+  const NEAR_BOTTOM = 48;     // 与实现里的 autoScroll 阈值一致
+
+  let msgCount = 0;
+  function addMsg(role, text) {
+    msgCount++;
+    const div = document.createElement("div");
+    div.className = "msg " + role;
+    div.innerHTML = `<div class="who">${role === "user" ? "你" : "Claude"}</div>
+      <div class="bubble">${text}</div>`;
+    scrollEl.appendChild(div);
+  }
+
+  // 填充一批假消息
+  const sample = "这是一段示例回复。用来撑出足够长的会话历史，方便测试上翻后「回到底部」按钮的出现/隐藏与点击行为。";
+  for (let i = 1; i <= 30; i++) {
+    addMsg(i % 2 ? "user" : "assistant", `第 ${i} 条消息 — ${sample.repeat(i % 3 + 1)}`);
+  }
+  scrollEl.scrollTop = scrollEl.scrollHeight;
+
+  function distFromBottom() {
+    return scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight;
+  }
+
+  function refresh() {
+    const far = distFromBottom() > SHOW_THRESHOLD;
+    jumpBtn.classList.toggle("hidden", !far);
+    if (!far) jumpBtn.classList.remove("has-new");
+  }
+  scrollEl.addEventListener("scroll", refresh);
+
+  jumpBtn.addEventListener("click", () => {
+    jumpBtn.classList.remove("has-new");
+    scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: "smooth" });
+  });
+
+  function append(n) {
+    const wasNearBottom = distFromBottom() <= NEAR_BOTTOM;
+    for (let i = 0; i < n; i++) addMsg("assistant", `新消息 ${++msgCount} — ${sample}`);
+    if (wasNearBottom) {
+      scrollEl.scrollTop = scrollEl.scrollHeight; // 在底部时保持自动跟随
+    } else {
+      jumpBtn.classList.add("has-new"); // 上翻期间来新消息 → 点亮小圆点
+    }
+    refresh();
+  }
+  document.getElementById("appendOne").onclick = () => append(1);
+  document.getElementById("appendMany").onclick = () => append(10);
+
+  // 变体切换
+  document.querySelectorAll("input[name=variant]").forEach((r) => {
+    r.addEventListener("change", (e) => {
+      jumpBtn.classList.remove("pill", "circle");
+      jumpBtn.classList.add(e.target.value);
+    });
+  });
+
+  refresh();
+</script>
+</body>
+</html>

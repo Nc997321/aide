@@ -566,12 +566,16 @@ fn merge_into(dst: &mut serde_json::Value, src: &serde_json::Value) {
 
 static MIGRATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// I/O 包装：读 config → migrate → 若改了则备份 + 原子写回。idempotent。
+/// I/O 包装：读 legacy config.json → migrate → 若改了则备份 + 原子写回。idempotent。
+///
+/// 操作的是 **legacy 文件**（不是 state.json）：它规范化的 `active_provider` /
+/// `providers` / `system_default_model_mappings` 都是设置体系接管的 key，消费方是
+/// 紧随其后的设置迁移（把 legacy 导入 settings.json）与 snake_case 兜底读取。
 pub fn ensure_migrated() -> Result<(), String> {
     use crate::commands::config_path;
-    use crate::commands::settings::{load_config, save_config};
+    use crate::commands::settings::{load_legacy_config, save_legacy_config};
     let _guard = MIGRATE_LOCK.lock().map_err(|e| e.to_string())?;
-    let mut config = load_config();
+    let mut config = load_legacy_config();
     if config.is_null() {
         config = serde_json::json!({});
     }
@@ -586,7 +590,7 @@ pub fn ensure_migrated() -> Result<(), String> {
             tracing::warn!("config backup failed (migration continues): {e}");
         }
     }
-    save_config(&config)
+    save_legacy_config(&config)
 }
 
 #[cfg(test)]

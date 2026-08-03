@@ -145,7 +145,7 @@ async function createEditor() {
           backgroundColor: "color-mix(in srgb, var(--aide-text-primary) 3%, transparent)",
         },
         ".cm-selectionBackground": {
-          backgroundColor: "var(--aide-surface-hover) !important",
+          backgroundColor: "var(--aide-selection-bg) !important",
         },
         ".cm-cursor": {
           borderLeftColor: "var(--aide-text-primary)",

@@ -90,7 +90,9 @@ describe("SessionWorker — image input capability guard", () => {
     expect(result).toMatchObject({
       hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny" },
     });
-    expect(result!.hookSpecificOutput!.permissionDecisionReason).toContain("不支持图片输入");
+    // HookJSONOutput 的 SDK 类型不含 hookSpecificOutput（联合类型成员），运行时有——
+    // 本文件其它断言一律走 any，这里保持一致。
+    expect((result as any).hookSpecificOutput?.permissionDecisionReason).toContain("不支持图片输入");
     expect(events.some((event) => event.type === "permission_request")).toBe(false);
   });
 
@@ -369,6 +371,69 @@ describe("SessionWorker — fork source / routing key invariants", () => {
   });
 });
 
+describe("SessionWorker — btw 回合结束自毁", () => {
+  // 回归：btw worker 跑完不退出 → claude.exe 永远挂着 → CLI pid 元数据被
+  // list_sessions 扫成侧栏幽灵空会话 + 每条 btw 白占几百 MB（2026-08-02 实锤）。
+  it("btw worker self-stops after the single turn's result", async () => {
+    const events: any[] = [];
+    let selfStopped: SessionWorker | null = null;
+    // 模拟真实 streaming-input query：result 之后仍挂着等新输入——自毁必须主动关。
+    const hangingQuery = (() => (async function* () {
+      yield { type: "system", subtype: "init", session_id: "real-btw" };
+      yield {
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "结论" }] },
+        parent_tool_use_id: null,
+      };
+      yield { type: "result", subtype: "success", is_error: false };
+      await new Promise(() => {}); // 永不 resolve：streaming input 等待中
+    })()) as any;
+    const worker = new SessionWorker("btw-temp", (e) => events.push(e), {
+      btwMode: true,
+      imageCapabilityCache: new ImageInputCapabilityCache(),
+      queryFn: hangingQuery,
+      onSelfStop: (w) => { selfStopped = w; },
+    });
+
+    worker.handleCommand({
+      cmd: "send", session_id: "btw-temp", prompt: "问一句", cwd: "/tmp",
+      env: {}, btw: true, fork_from: "main-sid",
+    } as any);
+    await flushPromises();
+    await flushPromises();
+    await flushPromises();
+
+    // message_stop 先于自毁发出（前端 done 态/插批注依赖它）
+    expect(events.some((e) => e.type === "message_stop")).toBe(true);
+    expect(worker._testIsStopped()).toBe(true);
+    expect(selfStopped).toBe(worker);
+  });
+
+  it("normal (non-btw) worker does NOT self-stop after result", async () => {
+    let selfStopped: SessionWorker | null = null;
+    const hangingQuery = (() => (async function* () {
+      yield { type: "result", subtype: "success", is_error: false };
+      await new Promise(() => {});
+    })()) as any;
+    const worker = new SessionWorker("s-normal", () => {}, {
+      imageCapabilityCache: new ImageInputCapabilityCache(),
+      queryFn: hangingQuery,
+      onSelfStop: (w) => { selfStopped = w; },
+    });
+
+    worker.handleCommand({
+      cmd: "send", session_id: "s-normal", prompt: "你好", cwd: "/tmp", env: {}, auto_title: false,
+    } as any);
+    await flushPromises();
+    await flushPromises();
+    await flushPromises();
+
+    expect(worker._testIsStopped()).toBe(false);
+    expect(selfStopped).toBeNull();
+    worker.stop();
+  });
+});
+
 /**
  * codegraph MCP 工具注册：SessionWorker 组装的 query options 应带
  * mcpServers["aide-codegraph"] 和 allowedTools 放行前缀；
@@ -394,6 +459,58 @@ describe("SessionWorker — codegraph MCP registration", () => {
     worker.stop();
     expect(captured?.mcpServers?.["aide-codegraph"]).toBeDefined();
     expect(captured?.allowedTools).toContain("mcp__aide-codegraph");
+  });
+
+  // 回归：轻量 btw 是纯问答——tools:[] 只禁内建工具，MCP/skills/plugins 必须整体
+  // 不注册，否则模型仍会看到并真去调 MCP 工具（2026-08-02 实锤「先看一眼链路」+卡死）。
+  it("lightweight btw registers NO mcpServers / skills / plugins", async () => {
+    let captured: any;
+    const fakeQuery = ((args: any) => {
+      captured = args?.options ?? args;
+      return (async function* () {})();
+    }) as any;
+    const worker = new SessionWorker("btw-lw", () => {}, {
+      btwMode: true,
+      lightweightMode: true,
+      imageCapabilityCache: new ImageInputCapabilityCache(),
+      queryFn: fakeQuery,
+      cwd: "/proj",
+    });
+    worker.handleCommand({
+      cmd: "send", session_id: "btw-lw", prompt: "问一句", cwd: "/proj",
+      env: {}, btw: true, lightweight: true, fork_from: "main-sid",
+    } as any);
+    await new Promise((r) => setTimeout(r, 50));
+    worker.stop();
+    expect(captured?.mcpServers?.["aide-codegraph"]).toBeUndefined();
+    expect(captured?.tools).toEqual([]);
+    expect(captured?.allowedTools).toEqual([]);
+    expect(captured?.skills).toEqual([]);
+    expect(captured?.plugins).toEqual([]);
+  });
+
+  it("full (non-lightweight) btw still registers codegraph MCP", async () => {
+    let captured: any;
+    const fakeQuery = ((args: any) => {
+      captured = args?.options ?? args;
+      return (async function* () {})();
+    }) as any;
+    const worker = new SessionWorker("btw-full", () => {}, {
+      btwMode: true,
+      lightweightMode: false,
+      imageCapabilityCache: new ImageInputCapabilityCache(),
+      queryFn: fakeQuery,
+      cwd: "/proj",
+    });
+    worker.handleCommand({
+      cmd: "send", session_id: "btw-full", prompt: "问一句", cwd: "/proj",
+      env: {}, btw: true, fork_from: "main-sid",
+    } as any);
+    await new Promise((r) => setTimeout(r, 50));
+    worker.stop();
+    expect(captured?.mcpServers?.["aide-codegraph"]).toBeDefined();
+    expect(captured?.persistSession).toBe(false);
+    expect(captured?.tools).toBeUndefined();
   });
 
   it("AIDE_CODEGRAPH_TOOLS=off skips MCP registration", async () => {
@@ -701,5 +818,53 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
     const out: any = await pending;
     expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
     expect((out.hookSpecificOutput as any).updatedPermissions).toBeUndefined();
+  });
+});
+
+describe("SessionWorker — set_permission_mode acceptEdits flush", () => {
+  it("approves pending edit requests and dismisses their dialogs, leaving other tools pending", async () => {
+    const { worker, events } = makeWorker();
+    const cb = worker._testCanUseTool();
+    // 两条挂起请求：一个编辑工具（应被连带放行）、一个 Bash（不应被动）。
+    const editDecision = cb("Edit", { file_path: "x.ts" }, {} as any);
+    const bashDecision = cb("Bash", { command: "ls" }, {} as any);
+    await flushPromises();
+    const editReq = events.find((e: any) => e.type === "permission_request" && e.name === "Edit");
+    const bashReq = events.find((e: any) => e.type === "permission_request" && e.name === "Bash");
+    expect(editReq).toBeTruthy();
+    expect(bashReq).toBeTruthy();
+
+    worker.handleCommand({ cmd: "set_permission_mode", session_id: "test-sid", mode: "acceptEdits" } as any);
+
+    // 挂起的 Edit 被放行（对齐「进入编辑模式」按钮语义），弹窗经 permission_cancelled 撤下。
+    await expect(editDecision).resolves.toMatchObject({ behavior: "allow" });
+    expect(events.some((e: any) => e.type === "permission_cancelled" && e.id === editReq.id)).toBe(true);
+    // 模式本身已落账并广播。
+    expect(events.some((e: any) => e.type === "permission_modes_available" && e.current === "acceptEdits")).toBe(true);
+    // Bash 不在编辑工具集内：仍挂着，既没放行也没撤弹窗。
+    expect(events.some((e: any) => e.type === "permission_cancelled" && e.id === bashReq.id)).toBe(false);
+    let bashSettled = false;
+    void bashDecision.then(() => { bashSettled = true; });
+    await flushPromises();
+    expect(bashSettled).toBe(false);
+
+    // 收尾：撤掉 Bash 挂起请求，避免悬空 promise。
+    worker.handleCommand({ cmd: "interrupt", session_id: "test-sid" } as any);
+    await expect(bashDecision).resolves.toMatchObject({ behavior: "deny" });
+  });
+
+  it("does not flush pending edits when switching to a non-edit mode", async () => {
+    const { worker, events } = makeWorker();
+    const cb = worker._testCanUseTool();
+    const editDecision = cb("Edit", { file_path: "x.ts" }, {} as any);
+    await flushPromises();
+    const editReq = events.find((e: any) => e.type === "permission_request" && e.name === "Edit");
+
+    worker.handleCommand({ cmd: "set_permission_mode", session_id: "test-sid", mode: "plan" } as any);
+    await flushPromises();
+
+    expect(events.some((e: any) => e.type === "permission_cancelled" && e.id === editReq.id)).toBe(false);
+    worker.handleCommand({ cmd: "interrupt", session_id: "test-sid" } as any);
+    await expect(editDecision).resolves.toMatchObject({ behavior: "deny" });
   });
 });

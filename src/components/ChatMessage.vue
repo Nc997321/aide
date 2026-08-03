@@ -38,6 +38,18 @@ const modelBadge = computed(() => {
   const label = m.modelLabel ?? m.model;
   return isModelInList(props.models ?? [], label) ? label : m.model;
 });
+
+/** 本轮 effort 并进模型徽标（"k3 · HIGH"），与模型名保持同一 accent 色。 */
+const modelBadgeTooltip = computed(() => {
+  const lines: string[] = [];
+  if (modelBadge.value) {
+    lines.push("本条回答实际使用的模型（API 落盘标识）——问模型「你是什么模型」得到的自报身份不可靠，以这里为准");
+  }
+  if (props.message.turnEffort) {
+    lines.push(`本轮 effort：${props.message.turnEffort}（回合结束时 API 侧坐实的实际档位，含静默降级）`);
+  }
+  return lines.join("\n");
+});
 /** 整条用户消息只有一个 ActionBlock 时，不套铜底气泡——胶囊自身带边框/底色，
  *  套在 accent 实心底上会糊成一团。直接作为右对齐的胶囊落在消息行里。 */
 const isActionChip = computed(
@@ -158,12 +170,15 @@ function handleTextClick(e: MouseEvent) {
           :block="(seg.block as any)"
         />
       </template>
-      <div v-if="!isUser && (modelBadge || message.usage)" class="msg-meta">
+      <div v-if="!isUser && (modelBadge || message.turnEffort || message.usage)" class="msg-meta">
         <span
-          v-if="modelBadge"
+          v-if="modelBadge || message.turnEffort"
           class="msg-model"
-          v-tooltip="'本条回答实际使用的模型（API 落盘标识）——问模型「你是什么模型」得到的自报身份不可靠，以这里为准'"
-        >{{ modelBadge }}</span>
+          v-tooltip="modelBadgeTooltip"
+        >{{ modelBadge }}<span
+          v-if="message.turnEffort"
+          class="msg-model-effort"
+        >{{ modelBadge ? "· " : "" }}{{ message.turnEffort.toUpperCase() }}</span></span>
         <TurnUsageBadge v-if="message.usage" class="msg-usage" :usage="message.usage" />
       </div>
     </div>
@@ -269,97 +284,8 @@ function handleTextClick(e: MouseEvent) {
   background: var(--aide-text-on-accent);
 }
 
-.msg-text :deep(p) {
-  margin: 0 0 8px;
-}
-.msg-text :deep(p:last-child) {
-  margin-bottom: 0;
-}
-.msg-text :deep(code) {
-  font-family: var(--aide-font-mono);
-  font-size: 12px;
-  background: var(--aide-bg-deep);
-  padding: 1px 5px;
-  border-radius: 3px;
-}
-/* 只有渲染期判定为文件路径的 code 才呈现可点击态 */
-.msg-text :deep(code.aide-file-link) {
-  cursor: pointer;
-  color: var(--aide-accent);
-  transition: background var(--aide-ease-t), color var(--aide-ease-t);
-}
-.msg-text :deep(code.aide-file-link:hover) {
-  background: var(--aide-accent);
-  color: var(--aide-text-on-accent);
-}
-.msg-text :deep(pre) {
-  background: var(--aide-bg-deep);
-  border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-sm);
-  padding: 10px 12px;
-  overflow-x: auto;
-  margin: 6px 0;
-}
-.msg-text :deep(pre code) {
-  background: none;
-  padding: 0;
-}
-/* 聊天内代码块 hljs 语法色：与 FileWindow.vue 同一 token 配方 */
-.msg-text :deep(.hljs-keyword),
-.msg-text :deep(.hljs-selector-tag),
-.msg-text :deep(.hljs-type) { color: var(--aide-syntax-keyword); }
-.msg-text :deep(.hljs-string),
-.msg-text :deep(.hljs-addition),
-.msg-text :deep(.hljs-regexp) { color: var(--aide-success); }
-.msg-text :deep(.hljs-number),
-.msg-text :deep(.hljs-literal),
-.msg-text :deep(.hljs-variable),
-.msg-text :deep(.hljs-template-variable) { color: var(--aide-syntax-number); }
-.msg-text :deep(.hljs-comment),
-.msg-text :deep(.hljs-quote) { color: var(--aide-text-muted); font-style: italic; }
-.msg-text :deep(.hljs-title),
-.msg-text :deep(.hljs-title.class_),
-.msg-text :deep(.hljs-title.function_),
-.msg-text :deep(.hljs-section),
-.msg-text :deep(.hljs-meta) { color: var(--aide-accent); }
-/* Tailwind preflight 把 ul/ol 的 list-style 统一清成 none，仅补 padding 会
-   导致有序列表看不到 1./2./3. 编号、无序列表看不到圆点——这里显式复原标记。 */
-.msg-text :deep(ul), .msg-text :deep(ol) {
-  padding-left: 20px;
-  margin: 4px 0;
-  list-style-position: outside;
-}
-.msg-text :deep(ul) {
-  list-style-type: disc;
-}
-.msg-text :deep(ol) {
-  list-style-type: decimal;
-}
-.msg-text :deep(li) {
-  margin: 2px 0;
-}
-.msg-text :deep(h1), .msg-text :deep(h2), .msg-text :deep(h3) {
-  margin: 8px 0 4px;
-  font-weight: 600;
-}
-.msg-text :deep(blockquote) {
-  border-left: 3px solid var(--aide-accent);
-  margin: 6px 0;
-  padding-left: 10px;
-  color: var(--aide-text-secondary);
-}
-.msg-text :deep(a) {
-  color: var(--aide-accent);
-  text-decoration: none;
-}
-.msg-text :deep(a:hover) {
-  text-decoration: underline;
-}
-.msg-text :deep(hr) {
-  border: none;
-  border-top: 1px solid var(--aide-border);
-  margin: 8px 0;
-}
+/* .msg-text 的 Markdown 正文样式已提到 styles/global.css（btw 抽屉共用）——
+   选择器与这里原本的一致，只是从 scoped :deep 变成全局后代选择器。 */
 
 .msg-meta {
   display: flex;
@@ -386,6 +312,11 @@ function handleTextClick(e: MouseEvent) {
 
 .msg-meta .msg-usage {
   margin-top: 0;
+}
+
+/* 徽标内的 effort 部分：与模型名同 pill 同色，仅字重略作区分 */
+.msg-model-effort {
+  font-weight: 700;
 }
 
 /* 用量行：GALLERY 要求 tabular-nums */

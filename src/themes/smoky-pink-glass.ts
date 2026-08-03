@@ -19,6 +19,9 @@ export const smokyPinkGlass: ThemeTokens = {
   surfaceDefault: "rgba(255,255,255,.48)",
   surfaceHover: "rgba(255,255,255,.72)",
   surfaceActive: "rgba(255,255,255,.85)",
+  // 浅色主题选中不能用 surface 系（全白、看不见）：用 accent 烟粉的中等透明度，
+  // 深文字压在上面仍清晰可读（终端 selectionBackground / 编辑器选区共用）
+  selectionBg: "rgba(207,166,160,.38)",
 
   textPrimary: "#23262d",
   textSecondary: "#5c6470",

@@ -31,6 +31,7 @@ const defaults: AppSettings = {
   },
   jdkRegistry: [],
   jdkPromptDismissed: [],
+  leftSidebarPinned: false,
 };
 
 // Module-level reactive singleton — shared across ChatPanel and SettingsPanel
@@ -75,6 +76,7 @@ export function useSettings() {
       };
       settings.jdkRegistry = s.jdkRegistry ?? defaults.jdkRegistry;
       settings.jdkPromptDismissed = s.jdkPromptDismissed ?? defaults.jdkPromptDismissed;
+      settings.leftSidebarPinned = s.leftSidebarPinned ?? defaults.leftSidebarPinned;
     } catch (_) {
       // Keep defaults on error
     }
@@ -95,6 +97,7 @@ export function useSettings() {
     if (partial.recentLimit !== undefined) settings.recentLimit = partial.recentLimit;
     if (partial.paneLayouts !== undefined) settings.paneLayouts = partial.paneLayouts;
     if (partial.codegraphEmbedder !== undefined) settings.codegraphEmbedder = partial.codegraphEmbedder;
+    if (partial.leftSidebarPinned !== undefined) settings.leftSidebarPinned = partial.leftSidebarPinned;
     // Persist asynchronously
     try {
       await api.setSettings(partial);

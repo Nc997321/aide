@@ -11,6 +11,8 @@ import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { btwQueryOverrides, forkResumeOptions } from "./btwOptions.js";
 import { generateSessionTitle } from "./titleGenerator.js";
 import { applyModelSwitch } from "./modelSwitch.js";
+import { applyEffortSwitch, normalizeEffort } from "./effortSwitch.js";
+import type { EffortSettable } from "./effortSwitch.js";
 import { cliSubagentModelEnvValue, makeSubagentModelHook } from "./subagentModelDefault.js";
 import { makeSkillGuardHook } from "./skillGuard.js";
 import { codegraphMcpRegistration, CODEGRAPH_ALLOW_RULE, makeCodegraphGrepNudgeHook } from "./codegraphTools.js";
@@ -30,7 +32,7 @@ import {
   emitSubagentBlocks,
 } from "./mapper.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { HookCallback, HookInput } from "@anthropic-ai/claude-agent-sdk";
+import type { EffortLevel, HookCallback, HookInput } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, openSync, readSync, statSync, closeSync } from "node:fs";
 import { readFileSync } from "node:fs";
 import { loadAideInstructions } from "./instructions.js";
@@ -64,6 +66,11 @@ const PERMISSION_MODES: PermissionModeOption[] = [
 const EXTRA_MODE_LABELS: Record<string, string> = {
   dontAsk: "本次会话不再询问",
 };
+
+/** 「进入编辑模式」按钮连带放行的工具集：acceptEdits 的语义就是编辑工具自动接受，
+ *  切模式时队列里还挂着的同类请求一并放行——否则一轮并行 3 个 Edit，用户点完
+ *  「进入编辑模式」还得把剩下 2 条逐个点掉，等于没切。 */
+const EDIT_TOOL_NAMES: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
 const IMAGE_INPUT_UNSUPPORTED_MESSAGE =
   "当前模型不支持图片输入，不能读取该图片。请改读 OCR/文本描述、跳过该文件，或切换到支持视觉的模型。";
@@ -127,6 +134,8 @@ export interface SessionWorkerOptions {
   imageCapabilityCache: ImageInputCapabilityCache;
   /** 测试缝：覆盖 SDK query 实现。生产省略用真 query。 */
   queryFn?: typeof query;
+  /** btw 支线回合结束自毁回调：worker 自停后由 SessionManager 把自己摘出注册表。 */
+  onSelfStop?: (worker: SessionWorker) => void;
 }
 
 export class SessionWorker {
@@ -153,6 +162,12 @@ export class SessionWorker {
   // ---- SDK 查询状态 ----
   private currentQuery: Awaited<ReturnType<typeof query>> | null = null;
   private currentModel = process.env.ANTHROPIC_MODEL ?? "";
+  /** 会话级 effort（low/medium/high/xhigh/max，小写）。绝不以 env 形式传给 CLI
+   * （CLAUDE_CODE_EFFORT_LEVEL 会压过 applyFlagSettings、与 options.effort 就高合并，
+   * 2026-08-01 smoke 实锤）——只走 options.effort + applyFlagSettings 两条官方通道。 */
+  private currentEffort = "";
+  /** Stop hook 读到的本轮实际 effort（含静默降级）；message_stop 盖戳后清零。 */
+  private lastStopEffort = "";
   private lastConcreteModel = "";
   private lastModels: ModelOption[] = [];
   private aliasByResolvedPrefix: { value: string; resolvedPrefix: string }[] = [];
@@ -195,6 +210,8 @@ export class SessionWorker {
 
   // ---- 测试缝：可替换的 SDK query 实现 ----
   private queryFn: typeof query;
+  /** btw 自毁回调（SessionManager 注入，见 SessionWorkerOptions.onSelfStop）。 */
+  private readonly onSelfStop?: (worker: SessionWorker) => void;
   /** send 命令串行化：只在存在未完成的异步 send（例如图片 probe）时启用。 */
   private sendQueue: Promise<void> | null = null;
 
@@ -206,11 +223,16 @@ export class SessionWorker {
     this.emitToStdout = emitToStdout;
     this.routingKey = routingId;
     this.queryFn = opts.queryFn ?? query;
+    this.onSelfStop = opts.onSelfStop;
     this.btwMode = opts.btwMode ?? false;
     this.lightweightMode = opts.lightweightMode ?? false;
     this.cwd = opts.cwd;
     this.envOverrides = opts.envOverrides ?? {};
     this.currentModel = opts.initialModel ?? this.envOverrides.ANTHROPIC_MODEL ?? this.currentModel;
+    // provider env 通道携带的 effort 初始值（Rust 把 provider effort_level / 前端选择器
+    // 值都注入 CLAUDE_CODE_EFFORT_LEVEL，与 ANTHROPIC_MODEL 同形）——只作初始值读出来，
+    // 绝不会以 env 形式透传给 CLI（见 currentEffort 字段注释）。
+    this.currentEffort = normalizeEffort(this.envOverrides.CLAUDE_CODE_EFFORT_LEVEL);
     this.imageCapabilityCache = opts.imageCapabilityCache;
 
     // DeltaCoalescer 的输出经注入回调写 stdout（带上 session_id）
@@ -226,7 +248,24 @@ export class SessionWorker {
   // ---- emit 快捷方法 ----
 
   private emit(event: ChatEvent): void {
+    // message_stop 盖本轮 effort 戳：Stop hook 已把 API 侧坐实的档位（含静默降级）
+    // 存进 lastStopEffort（时序：Stop hook → result → message_stop）。读取即清零——
+    // 中断/出错轮次 Stop 不触发时，不会把上一轮的档位泄漏到这一轮。
+    if (event.type === "message_stop") {
+      if (this.lastStopEffort) event.effort = this.lastStopEffort;
+      this.lastStopEffort = "";
+    }
     this.coalescer.push(event);
+  }
+
+  /** Stop hook：回合结束时读 API 侧坐实的本轮 effort（SDK hook input 的 effort.level），
+   *  由 emit 盖到紧随其后的 message_stop 上。模型不支持 effort 时字段缺席 → 不盖戳。 */
+  private makeStopEffortHook(): HookCallback {
+    return async (input) => {
+      const effort = (input as { effort?: { level?: string } }).effort;
+      this.lastStopEffort = effort?.level ?? "";
+      return {};
+    };
   }
 
   private async imageInputSupported(): Promise<true | false | null> {
@@ -254,6 +293,23 @@ export class SessionWorker {
     this.envOverrides = env ?? {};
     const selectedModel = this.envOverrides.ANTHROPIC_MODEL;
     if (selectedModel) this.currentModel = selectedModel;
+    // 前端选择器每条消息都带当前 effort（同 initialModel 语义，同值幂等无回执）；
+    // 没带的调用方回落 provider env 默认。
+    this.applyEffort(this.envOverrides.CLAUDE_CODE_EFFORT_LEVEL);
+  }
+
+  /** set_effort 命令 / send env 通道共用的切换入口：query 未起存本地（startLoop
+   *  建 query 时经 options.effort 带上），在跑走 applyFlagSettings。成败都有回声。 */
+  private applyEffort(raw: string | undefined): void {
+    applyEffortSwitch({
+      effort: raw ?? "",
+      // SDK Query 的 applyFlagSettings 类型把 effortLevel 限在 xhigh 以内；
+      // max 是类型外但运行时可用的值（smoke-effort.ts 验证），这里结构化收窄。
+      query: this.currentQuery as EffortSettable | null,
+      currentEffort: this.currentEffort,
+      emit: (e) => this.emit(e),
+      commit: (v) => { this.currentEffort = v; },
+    });
   }
 
   /** 从当前轮安全边界接入插队消息；会话已关闭时丢弃，禁止向 closed queue 写入。 */
@@ -261,9 +317,8 @@ export class SessionWorker {
     const jumps = this.jumpQueueCtl.takeAll();
     if (!jumps.length || this.stopped) return false;
     // 多条插队逐条 push（不合并）：/compact 这类斜杠命令作为独立用户消息才能
-    // 被 CLI 正确执行；权限模式取最后一条非空值（对齐旧排队合并语义）。
-    const lastMode = [...jumps].reverse().find((j) => j.permissionMode)?.permissionMode;
-    if (lastMode) this.applyPermissionMode(lastMode);
+    // 被 CLI 正确执行。权限模式不在此回放——存活期间用户切模式走
+    // set_permission_mode 实时通道已生效，入队快照只会把新模式回退成旧值。
     for (const jump of jumps) {
       this.queue.push({
         type: "user",
@@ -597,6 +652,12 @@ export class SessionWorker {
       } else if (cmd.approved && outcome?.toolName === "EnterPlanMode") {
         // 模型主动进入计划模式（非用户预选）：对齐本地账本并广播，让前端下拉同步
         this.applyPermissionMode("plan");
+      } else if (cmd.approved && cmd.nextMode) {
+        // 「进入编辑模式」：编辑工具的权限弹窗提供的一劳永逸选项——放行本次 +
+        // 切到 acceptEdits，之后编辑不再逐条确认（对齐 CLI 的 "allow all edits
+        // this session"）。切完把还挂着的其它编辑请求连带放行，别让用户逐条点。
+        this.applyPermissionMode(cmd.nextMode);
+        if (cmd.nextMode === "acceptEdits") this.permMgr.approveMatching(EDIT_TOOL_NAMES);
       }
 
     } else if (cmd.cmd === "update_permission_policy") {
@@ -618,6 +679,10 @@ export class SessionWorker {
 
     } else if (cmd.cmd === "set_permission_mode") {
       this.applyPermissionMode(cmd.mode);
+      // 与「进入编辑模式」按钮同语义：切到 acceptEdits 时把切换之前已挂起的
+      // 编辑请求连带放行——否则旧弹窗留在屏幕上，而前端 currentMode 已是
+      // acceptEdits，「进入编辑模式」按钮又被藏起来，用户只能逐条点掉。
+      if (cmd.mode === "acceptEdits") this.permMgr.approveMatching(EDIT_TOOL_NAMES);
 
     } else if (cmd.cmd === "set_model") {
       applyModelSwitch({
@@ -628,6 +693,9 @@ export class SessionWorker {
         emit: (e) => this.emit(e),
         commit: (m) => { this.currentModel = m; },
       });
+
+    } else if (cmd.cmd === "set_effort") {
+      this.applyEffort(cmd.effort);
     }
   }
 
@@ -699,7 +767,6 @@ export class SessionWorker {
       this.jumpQueueCtl.request({
         prompt: cmd.prompt,
         images: cmd.images,
-        permissionMode: cmd.permission_mode,
       });
       if (this.toolLifecycle.isIdle()) {
         this.currentQuery.interrupt().catch(() => {});
@@ -710,8 +777,11 @@ export class SessionWorker {
       return;
     }
 
-    // 普通续发
-    if (cmd.permission_mode) this.applyPermissionMode(cmd.permission_mode);
+    // 普通续发。注意不回放 cmd.permission_mode：query 存活期间权限模式由
+    // set_permission_mode 实时通道独占（前端下拉切换必发），消息里带的只是
+    // 发送时刻的快照——handleSend 可能被图片 probe 推迟（enqueueSend 串行化），
+    // 等待期间用户切的新模式会被这里的旧值回退。模式随消息携带只保留给
+    // 上面「首条消息」分支（进程未起时 set_permission_mode 静默失败的兜底）。
     this.queue.push({
       type: "user",
       message: buildUserMessage(cmd.prompt, cmd.images ?? []),
@@ -733,7 +803,9 @@ export class SessionWorker {
           for (const k of [
             "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
             "ANTHROPIC_MODEL", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_SUBAGENT_MODEL",
-            "CLAUDE_CODE_EFFORT_LEVEL",
+            // 注意：CLAUDE_CODE_EFFORT_LEVEL 刻意不透传——它会压过 applyFlagSettings、
+            // 并与 options.effort 就高合并（2026-08-01 smoke 实锤），会让会话内
+            // effort 切换被 env 搅乱。effort 只走 options.effort + applyFlagSettings。
             "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
             "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy",
           ]) {
@@ -743,6 +815,9 @@ export class SessionWorker {
           for (const [k, v] of Object.entries(this.envOverrides)) {
             if (v) cliEnv[k] = v;
           }
+          // {...process.env} 的扩散和 envOverrides 都可能带进 CLAUDE_CODE_EFFORT_LEVEL
+          // （用户全局 env / Rust provider 注入），必须在最后显式删除。
+          delete cliEnv.CLAUDE_CODE_EFFORT_LEVEL;
           cliEnv.CLAUDE_CODE_SUBAGENT_MODEL = cliSubagentModelEnvValue(process.env);
 
           const subagentModelHook = makeSubagentModelHook(process.env);
@@ -752,8 +827,12 @@ export class SessionWorker {
 
           // codegraph agent 工具：默认注册（AIDE_CODEGRAPH_TOOLS=off 关闭）。
           // handler 闭包持有本会话的 emit（经 DeltaCoalescer，红线）与 cwd。
+          // 轻量 btw 是纯问答，必须跳过：tools:[] 只禁内建工具，MCP 工具照样进
+          // 工具列表，模型会真去调（2026-08-02 实锤「先看一眼链路」并卡在调用上）。
           const effectiveCwd = cwd ?? this.cwd ?? "";
-          const codegraphMcp = codegraphMcpRegistration(effectiveCwd, (e) => this.emit(e));
+          const codegraphMcp = this.lightweightMode
+            ? null
+            : codegraphMcpRegistration(effectiveCwd, (e) => this.emit(e));
 
           if (this.resumeSource && this.shouldForkNextConnect && !this.btwMode) {
             this.pendingFork = true;
@@ -785,8 +864,10 @@ export class SessionWorker {
               ...(this.lightweightMode
                 ? { allowedTools: [] as string[] }
                 : { allowedTools: ["Agent", "Task", CODEGRAPH_ALLOW_RULE] }),
-              skills: "all",
-              plugins: buildPluginsOption(),
+              // 轻量 btw：skills/plugins 同样关闭（Skill 工具虽被 tools:[] 禁掉，
+              // 但 skill 清单会白进上下文；plugins 可能自带 MCP 工具漏进工具列表）。
+              skills: this.lightweightMode ? [] : "all",
+              plugins: this.lightweightMode ? [] : buildPluginsOption(),
               hooks: {
                 PreToolUse: [
                   // Aide 权限策略是权威前置层，必须最先评估。
@@ -805,10 +886,14 @@ export class SessionWorker {
                     ? [{ matcher: "^Grep$", hooks: [makeCodegraphGrepNudgeHook()] }]
                     : []),
                 ],
+                // 回合结束读本轮实际 effort（含静默降级）→ emit 盖到 message_stop 上。
+                Stop: [{ hooks: [this.makeStopEffortHook()] }],
               },
               ...(codegraphMcp ? { mcpServers: codegraphMcp as any } : {}),
               includePartialMessages: false,
               ...(this.currentModel ? { model: this.currentModel } : {}),
+              // effort 的 spawn 通道（会话中切换走 set_effort → applyFlagSettings）。
+              ...(this.currentEffort ? { effort: this.currentEffort as EffortLevel } : {}),
               ...(cwd ? { cwd } : {}),
               ...(this.cwd && !cwd ? { cwd: this.cwd } : {}),
               ...(process.env.AIDE_CLAUDE_EXE
@@ -918,6 +1003,13 @@ export class SessionWorker {
               this.toolLifecycle.reset();
               void this.emitContextUsage(q);
               void this.emitRateLimit(q);
+              // btw 是一次性支线：回合结束即自毁释放 claude.exe。streaming-input
+              // 的 query 不主动关会连进程一起永远挂着——CLI 的 pid 元数据留在
+              // ~/.aide/claude/sessions/ 被 list_sessions 扫成侧栏幽灵空会话，
+              // 且每条 btw 白占几百 MB（2026-08-02 实锤 pid 9464 挂 12min+）。
+              // message_stop 已在本轮迭代经 mapSdkMessage 发出；setImmediate
+              // 推迟到迭代体外，避免在 for-await 迭代中 close 自己。
+              if (this.btwMode) setImmediate(() => this.selfTeardown());
             }
           }
           // for await 正常结束（queue closed）
@@ -996,9 +1088,12 @@ export class SessionWorker {
     return this.makeImageGuardHook();
   }
 
-  /** 测试用：暴露 Aide 权限策略 PreToolUse hook，验证 allow/deny/ask/无匹配({})。 */
-  _testPolicyHook(cwd?: string) {
-    return this.makePolicyHook(cwd);
+  /** 测试用：暴露 Aide 权限策略 PreToolUse hook，验证 allow/deny/ask/无匹配({})。
+   *  包装成单参签名：HookCallback 类型上 toolUseID/options 是必填，但策略 hook
+   *  只读 input——与其让十来个测试调用点各补两个占位实参，在这里一次适配。 */
+  _testPolicyHook(cwd?: string): (input: HookInput) => ReturnType<HookCallback> {
+    const hook = this.makePolicyHook(cwd);
+    return (input) => hook(input, undefined, { signal: new AbortController().signal });
   }
 
   /** 测试用：直接注入策略快照（不经过 send/update_permission_policy 命令路径）。 */
@@ -1009,6 +1104,14 @@ export class SessionWorker {
   /** 测试用：暴露待发送用户消息数，验证拒绝图片时不会入队。 */
   _testQueueLength(): number {
     return ((this.queue as any).queue as unknown[] | undefined)?.length ?? 0;
+  }
+
+  /** btw 支线回合结束自毁：关 query/queue 释放 claude.exe，并通知 manager 把自己
+   *  摘出注册表。静默路径——stop() 本身不发 session_dead，前端 done 态不被打扰。 */
+  private selfTeardown(): void {
+    if (this.stopped) return;
+    this.stop();
+    this.onSelfStop?.(this);
   }
 
   /** 停止会话：关闭 query，释放 claude.exe，清理资源 */

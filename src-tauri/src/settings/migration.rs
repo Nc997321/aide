@@ -74,12 +74,30 @@ fn cleanup_legacy_after_new_document_exists(store: &SettingsStore) {
 
 fn best_effort_cleanup_legacy(store: &SettingsStore, legacy: Value) {
     let paths = store.paths();
-    let redacted_backup = redact_legacy_for_backup(legacy);
-    if let Err(error) = store.write_json_atomic(paths.legacy_backup(), &redacted_backup) {
+    // 备份只写一次：保留最完整的首次迁移快照（否则每次启动的重试清理会用残留
+    // 内容覆盖掉它）。备份失败则不碰原文件，下次启动重试。
+    if !paths.legacy_backup().exists() {
+        let redacted_backup = redact_legacy_for_backup(legacy);
+        if let Err(error) = store.write_json_atomic(paths.legacy_backup(), &redacted_backup) {
+            tracing::warn!(
+                path = %paths.legacy_backup().display(),
+                error = %error,
+                "failed to write redacted legacy settings backup after settings migration"
+            );
+            return;
+        }
+    }
+    // legacy 里仍住着非设置体系的 live key（workspace / claudeMigrationDone /
+    // hiddenWorkspaces / openWithExtensions 等）——先搬到 state.json（missing-only），
+    // 搬成功才删文件。曾直接整删，导致迁移完成标记每次启动被抹掉、迁移引导
+    // 弹窗每次重启复现。播种失败则保留 legacy 文件，下次启动重试。
+    if let Err(error) =
+        crate::commands::settings::seed_state_from_legacy(paths.legacy_config(), paths.state())
+    {
         tracing::warn!(
-            path = %paths.legacy_backup().display(),
+            path = %paths.state().display(),
             error = %error,
-            "failed to write redacted legacy settings backup after settings migration"
+            "failed to seed state.json from legacy config; keeping legacy file for retry"
         );
         return;
     }

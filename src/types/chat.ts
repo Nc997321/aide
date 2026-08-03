@@ -177,6 +177,9 @@ export interface ChatMessage {
   streaming?: boolean;
   /** 这条 assistant 消息这一轮的 token 用量 + 费用 */
   usage?: TurnUsage;
+  /** 这一轮实际生效的 effort 档位（sidecar 从回合结束信号读到的权威值，含
+   *  静默降级）——usage 行徽标的数据源；模型不支持 effort 时不带。 */
+  turnEffort?: string;
   /** 这条回答实际使用的模型（API 落盘 wire 标识，比模型自报可靠）——由
    *  sidecar 盖在消息首个块事件上；历史消息（transcript 重建）没有。 */
   model?: string;

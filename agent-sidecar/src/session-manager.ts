@@ -168,6 +168,10 @@ export class SessionManager {
       lightweightMode: !!(cmd as any).lightweight,
       envOverrides: (cmd as any).env ?? {},
       imageCapabilityCache: this.imageCapabilityCache,
+      // btw 回合结束自毁：按当前 routingKey 摘除（可能已 re-key 成真实会话 ID）。
+      onSelfStop: (w) => {
+        this.workers.delete(w.routingKey);
+      },
     });
 
     this.workers.set(sessionId, worker);

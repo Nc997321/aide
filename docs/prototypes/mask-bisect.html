@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  :root { --aide-radius-sm: 6px; --aide-accent: #d9ab78; --aide-accent-hover: #e6bd8e; }
+  body { background: #1a1820; margin: 0; padding: 40px; font-family: sans-serif; color: #7d7568; font-size: 11px; }
+  .row { display: flex; gap: 50px; flex-wrap: wrap; }
+  .col { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .box {
+    width: 140px; height: 56px; border-radius: var(--aide-radius-sm);
+    background: #141218; border: 1px solid rgba(255,214,160,.09);
+    position: relative; isolation: isolate;
+  }
+  .box::after {
+    content: ""; position: absolute; inset: -14px; padding: 14px;
+    border-radius: calc(var(--aide-radius-sm) + 14px); pointer-events: none;
+    background: linear-gradient(90deg, #d9ab78, #e6bd8e);
+  }
+  /* E：2 层标准 subtract */
+  .e::after {
+    mask: linear-gradient(#000 0 0), linear-gradient(#000 0 0) content-box;
+    mask-composite: subtract;
+  }
+  /* F：2 层标准 exclude（::before 同款，唯一区别是 ::after/inset 负值） */
+  .f::after {
+    mask: linear-gradient(#000 0 0), linear-gradient(#000 0 0) content-box;
+    mask-composite: exclude;
+  }
+  /* G：2 层 -webkit source-out */
+  .g::after {
+    -webkit-mask: linear-gradient(#000 0 0), linear-gradient(#000 0 0) content-box;
+    -webkit-mask-composite: source-out;
+  }
+  /* H：3 层 [full, content-box, fadeTop]，标准 add,subtract,intersect */
+  .h::after {
+    mask:
+      linear-gradient(#000 0 0),
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(to bottom, transparent, #000 14px);
+    mask-composite: add, subtract, intersect;
+  }
+  /* I：2 层 [full, fadeTop] 单值 intersect —— 期望上半 14px 渐变、其余满亮 */
+  .i::after {
+    mask: linear-gradient(#000 0 0), linear-gradient(to bottom, transparent, #000 14px);
+    mask-composite: intersect;
+  }
+  /* J：2 层 [fadeTop, content-box] 单值 subtract */
+  .j::after {
+    mask: linear-gradient(to bottom, transparent, #000 14px), linear-gradient(#000 0 0) content-box;
+    mask-composite: subtract;
+  }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="col"><div class="box e"></div><span>E 2层 std subtract</span></div>
+    <div class="col"><div class="box f"></div><span>F 2层 std exclude</span></div>
+    <div class="col"><div class="box g"></div><span>G 2层 webkit source-out</span></div>
+    <div class="col"><div class="box h"></div><span>H 3层 add/sub/intersect</span></div>
+    <div class="col"><div class="box i"></div><span>I 2层 单intersect</span></div>
+    <div class="col"><div class="box j"></div><span>J 2层 fade+subtract</span></div>
+  </div>
+</body>
+</html>

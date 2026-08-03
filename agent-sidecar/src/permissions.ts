@@ -151,4 +151,21 @@ export class PermissionManager {
     }
     this.pending.clear();
   }
+
+  /** Approve every pending request whose tool is in `toolNames` (a mode switch
+   *  made them moot — e.g. entering acceptEdits with several Edits queued in
+   *  parallel). Resolves each approved and dismisses its frontend dialog via
+   *  the same permission_cancelled event (frontend only reads it as "remove
+   *  from queue"). Returns how many were settled. */
+  approveMatching(toolNames: ReadonlySet<string>): number {
+    let settled = 0;
+    for (const [id, entry] of [...this.pending]) {
+      if (!toolNames.has(entry.toolName)) continue;
+      this.pending.delete(id);
+      entry.resolve({ approved: true });
+      entry.emitCancelled();
+      settled++;
+    }
+    return settled;
+  }
 }
