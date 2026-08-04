@@ -34,13 +34,9 @@ pub fn pick_source(
 ) -> Option<ServerSource> {
     if let Some(o) = override_cfg {
         if !o.program.is_empty() {
-            let mut args = o.args.clone();
-            if !args.iter().any(|a| a == "--stdio") {
-                args.push("--stdio".to_string());
-            }
             return Some(ServerSource::Explicit {
                 program: o.program.clone(),
-                args,
+                args: o.args.clone(),
             });
         }
     }
@@ -160,11 +156,51 @@ mod tests {
         match picked {
             Some(ServerSource::Explicit { program, args }) => {
                 assert_eq!(program, "/x/rust-analyzer");
-                assert!(args.contains(&"--stdio".to_string()), "{:?}", args);
+                // pick_source 只负责选源，不注入 --stdio（那是 to_command 的职责）。
+                // 这里只断言用户配置的原始 args 原样透传。
+                assert_eq!(args.len(), 2, "{:?}", args);
                 assert!(args.contains(&"--log-file".to_string()));
+                assert!(args.contains(&"/tmp/ra.log".to_string()));
+                assert!(!args.contains(&"--stdio".to_string()), "pick_source 不应注入 --stdio");
             }
             other => panic!("expected Explicit, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn to_command_injects_stdio() {
+        // Bundled：args 含 --stdio。
+        let bundled = ServerSource::Bundled {
+            subdir: "rust".into(), binary: "rust-analyzer".into(),
+        };
+        let (prog, args) = to_command(&bundled);
+        assert!(args.contains(&"--stdio".to_string()), "bundled args: {:?}", args);
+        assert_eq!(prog, "lsp/rust/rust-analyzer");
+
+        // Which：args 含 --stdio。
+        let which = ServerSource::Which { binary: "gopls".into() };
+        let (prog, args) = to_command(&which);
+        assert_eq!(prog, "gopls");
+        assert!(args.contains(&"--stdio".to_string()), "which args: {:?}", args);
+
+        // Explicit：用户 args 保留 + --stdio 追加。
+        let explicit = ServerSource::Explicit {
+            program: "/x/ra".into(),
+            args: vec!["--log-file".into(), "/tmp/ra.log".into()],
+        };
+        let (prog, args) = to_command(&explicit);
+        assert_eq!(prog, "/x/ra");
+        assert!(args.contains(&"--stdio".to_string()), "explicit args: {:?}", args);
+        assert!(args.contains(&"--log-file".to_string()), "explicit args: {:?}", args);
+
+        // 守卫：用户已传 --stdio 时不重复添加。
+        let explicit_with_stdio = ServerSource::Explicit {
+            program: "/x".into(),
+            args: vec!["--stdio".into()],
+        };
+        let (_, args) = to_command(&explicit_with_stdio);
+        let stdio_count = args.iter().filter(|a| a.as_str() == "--stdio").count();
+        assert_eq!(stdio_count, 1, "不应重复添加 --stdio, args: {:?}", args);
     }
 
     #[test]
