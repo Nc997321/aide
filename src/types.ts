@@ -444,6 +444,17 @@ export interface MigrationSummary {
   skippedCount: number;
 }
 
+// ── LSP types ──
+
+/** CodeMirror completion item shape returned by lsp_completion. */
+export interface CmCompletion {
+  label: string;
+  detail?: string;
+  documentation?: string;
+  kind?: number;
+  insert_text?: string;
+}
+
 // ── Provider action types ──
 
 /** Rust `commands::provider::PortProbeResult`。 */

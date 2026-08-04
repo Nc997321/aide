@@ -7,6 +7,7 @@ import type {
   AppNotification, NotificationRecord,
   CatalogPreset, PortProbeResult, LoginStatusResult, ConnectionStatus,
   MigrationStatus, MigrationSummary,
+  CmCompletion,
 } from "./types";
 import type { ModelOption, PermissionModeOption } from "./types/chat";
 
@@ -371,6 +372,42 @@ export const api = {
   /** 粗粒度构建进度（纯原子读，同步 inline 命令）。前端定时 poll。 */
   codegraphBuildProgress(): Promise<BuildProgress> {
     return invoke("codegraph_build_progress");
+  },
+
+  // ── LSP ──
+
+  lspDetectLanguages(workspaceRoot: string): Promise<string[]> {
+    return invoke("lsp_detect_languages", { workspaceRoot });
+  },
+  lspEnsureServer(workspaceRoot: string, lang: string): Promise<{ ok: boolean; kind?: string }> {
+    return invoke("lsp_ensure_server", { workspaceRoot, lang });
+  },
+  lspDidOpen(workspaceRoot: string, filePath: string, lang: string, text: string): Promise<void> {
+    return invoke("lsp_did_open", { workspaceRoot, filePath, lang, text });
+  },
+  lspDidChange(workspaceRoot: string, filePath: string, lang: string, text: string, version?: number): Promise<void> {
+    return invoke("lsp_did_change", { workspaceRoot, filePath, lang, text, version });
+  },
+  lspDidClose(workspaceRoot: string, filePath: string, lang: string): Promise<void> {
+    return invoke("lsp_did_close", { workspaceRoot, filePath, lang });
+  },
+  lspDefinition(workspaceRoot: string, filePath: string, line: number, column: number, word: string): Promise<QueryResult[]> {
+    return invoke("lsp_definition", { workspaceRoot, filePath, line, column, word });
+  },
+  lspCompletion(workspaceRoot: string, filePath: string, line: number, column: number): Promise<CmCompletion[]> {
+    return invoke("lsp_completion", { workspaceRoot, filePath, line, column });
+  },
+  lspHover(workspaceRoot: string, filePath: string, line: number, column: number): Promise<{ content: string | null }> {
+    return invoke("lsp_hover", { workspaceRoot, filePath, line, column });
+  },
+  lspShutdownWorkspace(workspaceRoot: string): Promise<void> {
+    return invoke("lsp_shutdown_workspace", { workspaceRoot });
+  },
+  workspaceSetLspEnabled(workspaceRoot: string, enabled: boolean): Promise<void> {
+    return invoke("workspace_set_lsp_enabled", { workspaceRoot, enabled });
+  },
+  workspaceSetLspExcludes(workspaceRoot: string, dirs: string[]): Promise<void> {
+    return invoke("workspace_set_lsp_excludes", { workspaceRoot, dirs });
   },
 
   // 工作区信任（Trusted Workspace）— 路径入参，Rust 内部点号归一。
