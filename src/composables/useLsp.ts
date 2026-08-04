@@ -1,6 +1,7 @@
 import { ref, type Ref } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { api } from "../api";
+import { useNotifications } from "./useNotifications";
 
 /** LSP 诊断（最小字段，cmLsp 映射成 CM Diagnostic）。 */
 export interface LspDiagnostic {
@@ -19,6 +20,7 @@ const diagnostics = ref<Map<string, LspDiagnostic[]>>(new Map());
 let listening = false;
 let unlistenDiag: UnlistenFn | null = null;
 let unlistenDead: UnlistenFn | null = null;
+let unlistenShowMsg: UnlistenFn | null = null;
 
 async function ensureListening() {
   if (listening) return;
@@ -40,8 +42,30 @@ async function ensureListening() {
     next.set(filePath, (p.diagnostics || []).map(mapDiag));
     diagnostics.value = next;
   });
+  // spec §8：server 死 → toast 提示（诊断保留，下次 did_open 重拉）。
+  // dedupKey 用全局键——事件无 payload，重复 dead 经 dedup 合并不刷屏。
   unlistenDead = await listen("lsp-server-dead", () => {
-    // server 死：诊断保留（下次 did_open 重拉）；不主动清。可加 toast。
+    useNotifications().push({
+      severity: "warning",
+      source: "lsp",
+      title: "LSP server exited",
+      body: "Will respawn on next file open.",
+      timestamp: Date.now(),
+      dedupKey: "lsp:server-dead",
+    });
+  });
+  // spec §8：window/showMessage（server 主动弹消息）→ toast。
+  // dedupKey 带消息内容，相同消息重复合并，不同消息各自一条。
+  unlistenShowMsg = await listen<string>("lsp-show-message", (ev) => {
+    const msg = (ev.payload as string) || "";
+    useNotifications().push({
+      severity: "info",
+      source: "lsp",
+      title: "LSP message",
+      body: msg,
+      timestamp: Date.now(),
+      dedupKey: `lsp:show-message:${msg}`,
+    });
   });
 }
 
@@ -98,8 +122,10 @@ export function useLsp() {
     listening = false;
     unlistenDiag?.();
     unlistenDead?.();
+    unlistenShowMsg?.();
     unlistenDiag = null;
     unlistenDead = null;
+    unlistenShowMsg = null;
   }
 
   return {

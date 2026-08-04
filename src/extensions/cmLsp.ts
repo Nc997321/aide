@@ -2,6 +2,7 @@ import { StateField, StateEffect, type Extension } from "@codemirror/state";
 import { EditorView, ViewPlugin, hoverTooltip, type Tooltip } from "@codemirror/view";
 import { autocompletion } from "@codemirror/autocomplete";
 import { linter, type Diagnostic as CmDiagnostic } from "@codemirror/lint";
+import { watch, type WatchStopHandle } from "vue";
 import { api } from "../api";
 import { useLsp, type LspDiagnostic } from "../composables/useLsp";
 import { isUserEdit } from "../utils/cmModelSync";
@@ -25,11 +26,31 @@ class LspTracker {
   private changeTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly view: EditorView;
   private readonly opts: CmLspOpts;
+  private unwatch: WatchStopHandle | null = null;
+  private destroyed = false;
 
   constructor(view: EditorView, opts: CmLspOpts) {
     this.view = view;
     this.opts = opts;
     if (opts.enabled) this.didOpen();
+    // 初始注入：diagnostics 可能已存在（重开文件 / server 已发布过），watch 只
+    // 监听后续变化，构造时补一次。空数组跳过，避免无谓的初始事务。
+    if (opts.enabled && opts.filePath) {
+      const initial = useLsp().diagnostics.value.get(opts.filePath) ?? [];
+      if (initial.length) view.dispatch({ effects: setDiagnostics.of(initial) });
+    }
+    // spec §7 flow 1：publishDiagnostics 在 doc 未变时到达（"打开文件看到既有
+    // 错误"），linter() 只在编辑事务时重跑——此处订阅 useLsp().diagnostics 的
+    // Map 变化，把对应 filePath 的诊断 dispatch 进 diagField；linter 通过
+    // needsRefresh 感知该 effect 并重画波浪线，无需用户输入。
+    this.unwatch = watch(
+      () => useLsp().diagnostics.value,
+      (map) => {
+        if (this.destroyed || !this.opts.enabled || !this.opts.filePath) return;
+        const diags = map.get(this.opts.filePath) ?? [];
+        this.view.dispatch({ effects: setDiagnostics.of(diags) });
+      },
+    );
   }
 
   private async didOpen() {
@@ -59,7 +80,10 @@ class LspTracker {
   }
 
   destroy() {
+    this.destroyed = true;
     if (this.changeTimer) clearTimeout(this.changeTimer);
+    this.unwatch?.();
+    this.unwatch = null;
     const { workspaceRoot, lang, filePath } = this.opts;
     if (this.opts.enabled) {
       api.lspDidClose(workspaceRoot, filePath, lang).catch(() => {});
@@ -101,21 +125,28 @@ function completionKind(k?: number): string {
   return "variable";
 }
 
+// linter 读 diagField（而非轮询 useLsp().diagnosticsFor）——diagField 由
+// LspTracker 的 watch dispatch 进来，是 CM 状态里的单一真相源。needsRefresh
+// 感知本地 setDiagnostics effect，让 @codemirror/lint 在 effect 事务后立即
+// 重跑（默认 750ms 防抖），idle 也画波浪线（spec §7 flow 1）。
 function lspLinter(workspaceRoot: string, filePath: string) {
-  return linter((view) => {
-    if (!workspaceRoot) return [];
-    const diags: LspDiagnostic[] = useLsp().diagnosticsFor(filePath);
-    return diags.map<CmDiagnostic>((d) => {
-      const line = view.state.doc.line(Math.min(d.fromLine + 1, view.state.doc.lines));
-      const from = Math.min(line.from + d.fromCol, line.to);
-      const to = Math.min(line.from + d.toCol, line.to);
-      return {
-        from, to,
-        severity: d.severity === "error" ? "error" : d.severity === "warning" ? "warning" : "info",
-        message: d.message,
-      };
-    });
-  });
+  return linter(
+    (view) => {
+      if (!workspaceRoot) return [];
+      const diags: LspDiagnostic[] = view.state.field(diagField, false) ?? [];
+      return diags.map<CmDiagnostic>((d) => {
+        const line = view.state.doc.line(Math.min(d.fromLine + 1, view.state.doc.lines));
+        const from = Math.min(line.from + d.fromCol, line.to);
+        const to = Math.min(line.from + d.toCol, line.to);
+        return {
+          from, to,
+          severity: d.severity === "error" ? "error" : d.severity === "warning" ? "warning" : "info",
+          message: d.message,
+        };
+      });
+    },
+    { needsRefresh: (update) => update.transactions.some((tr) => tr.effects.some((e) => e.is(setDiagnostics))) },
+  );
 }
 
 function lspHover(workspaceRoot: string, filePath: string) {

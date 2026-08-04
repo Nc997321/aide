@@ -409,6 +409,9 @@ export const api = {
   workspaceSetLspExcludes(workspaceRoot: string, dirs: string[]): Promise<void> {
     return invoke("workspace_set_lsp_excludes", { workspaceRoot, dirs });
   },
+  workspaceGetLspExcludes(workspaceRoot: string): Promise<string[]> {
+    return invoke("workspace_get_lsp_excludes", { workspaceRoot });
+  },
 
   // 工作区信任（Trusted Workspace）— 路径入参，Rust 内部点号归一。
   isWorkspaceTrusted(path: string): Promise<boolean> {

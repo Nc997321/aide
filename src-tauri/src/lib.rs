@@ -406,6 +406,7 @@ pub fn run() {
             // LSP built-in
             commands::workspace::workspace_set_lsp_enabled,
             commands::workspace::workspace_set_lsp_excludes,
+            commands::workspace::workspace_get_lsp_excludes,
             lsp::lsp_detect_languages,
             lsp::lsp_ensure_server,
             lsp::lsp_did_open,

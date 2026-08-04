@@ -47,6 +47,12 @@ pub async fn lsp_ensure_server(
     settings_service: tauri::State<'_, Arc<crate::settings::SettingsService>>,
     app: tauri::AppHandle,
 ) -> Result<EnsureOutcome, String> {
+    // 信任门（spec §5.3）：与 workspace_set_lsp_enabled 同一道门。即便
+    // lsp_enabled 被设过，未信任工作区也拒拉 server——untrust 后老 server
+    // 自然消亡，不再 respawn。
+    if !crate::commands::workspace::is_path_trusted(&workspace_root) {
+        return Ok(EnsureOutcome { ok: false, kind: Some("untrusted") });
+    }
     let Some(lang_id) = lang_from_id_str(&lang) else {
         return Ok(EnsureOutcome { ok: false, kind: Some("server_not_found") });
     };

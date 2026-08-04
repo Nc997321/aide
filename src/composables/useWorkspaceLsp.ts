@@ -1,6 +1,7 @@
 import { ref } from "vue";
 import { api } from "../api";
 import { useLsp } from "./useLsp";
+import { useNotifications } from "./useNotifications";
 
 /** 工作区 LSP 设置前端侧：开关 + 排除目录。权威值在后端 state JSON。 */
 export function useWorkspaceLsp(workspaceRoot: string) {
@@ -9,10 +10,62 @@ export function useWorkspaceLsp(workspaceRoot: string) {
   const excludes = ref<string[]>([]);
   const excludesDirty = ref(false);
 
+  // spec T15 读路径补齐：UI 不再 write-only。best-effort 加载，失败静默
+  //（后端命令不存在 / state 损坏时不阻断 UI）。
+  void api
+    .workspaceGetLspExcludes(workspaceRoot)
+    .then((dirs) => { excludes.value = dirs; })
+    .catch(() => {});
+
+  // spec §8：开启时探测各语言的 server，失败分流 toast（server_not_found /
+  // handshake_failed / untrusted）。dedupKey 带工作区+语言+kind，重复同因合并。
+  async function probeServersAndToast() {
+    let langs: string[];
+    try { langs = await api.lspDetectLanguages(workspaceRoot); }
+    catch { return; } // 探测失败不阻断；下次 did_open 仍会兜底
+    for (const lang of langs) {
+      let outcome: { ok: boolean; kind?: string };
+      try { outcome = await api.lspEnsureServer(workspaceRoot, lang); }
+      catch { continue; } // invoke 报错（spawn failed 等）由后端日志兜底
+      if (outcome.ok) continue;
+      const kind = outcome.kind ?? "unknown";
+      const { push } = useNotifications();
+      if (kind === "server_not_found") {
+        push({
+          severity: "warning", source: "lsp",
+          title: `${lang} LSP server not found`,
+          body: `Install the ${lang} LSP server (e.g. rust-analyzer / gopls / typescript-language-server) or set its path in settings.`,
+          timestamp: Date.now(),
+          dedupKey: `lsp:ensure:${workspaceRoot}:${lang}:${kind}`,
+        });
+      } else if (kind === "handshake_failed") {
+        push({
+          severity: "error", source: "lsp",
+          title: `${lang} LSP handshake failed`,
+          body: `Server was found but initialization failed. Check the ${lang} LSP server version / path in settings.`,
+          timestamp: Date.now(),
+          dedupKey: `lsp:ensure:${workspaceRoot}:${lang}:${kind}`,
+        });
+      } else if (kind === "untrusted") {
+        push({
+          severity: "warning", source: "lsp",
+          title: `${lang} LSP disabled`,
+          body: `Workspace is not trusted. Trust it first to enable LSP.`,
+          timestamp: Date.now(),
+          dedupKey: `lsp:ensure:${workspaceRoot}:${lang}:${kind}`,
+        });
+      }
+    }
+  }
+
   async function setEnabled(v: boolean) {
     enabled.value = v;
-    if (v) await enableLsp(workspaceRoot);
-    else await disableLsp(workspaceRoot);
+    if (v) {
+      await enableLsp(workspaceRoot);
+      void probeServersAndToast(); // best-effort：不阻塞 toggle UI
+    } else {
+      await disableLsp(workspaceRoot);
+    }
   }
 
   async function saveExcludes(dirs: string[]) {

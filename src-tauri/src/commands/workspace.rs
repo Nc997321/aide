@@ -427,6 +427,15 @@ pub async fn workspace_set_lsp_excludes(workspace_root: String, dirs: Vec<String
     Ok(())
 }
 
+/// 读某工作区 LSP 排除目录列表（spec T15 读路径补齐：UI 不再 write-only）。
+/// 纯 config 读取，与 workspace_set_lsp_excludes 对称；async + Result 与其它
+/// workspace_set_lsp_* 命令保持一致。
+#[tauri::command]
+pub async fn workspace_get_lsp_excludes(workspace_root: String) -> Result<Vec<String>, String> {
+    let key = path_to_key(&workspace_root);
+    Ok(lsp_workspace_config(&key).exclude_dirs)
+}
+
 pub fn resolve_path_from_key(key: &str) -> Option<String> {
     let mut chars = key.chars();
     let drive = chars.next()?;
