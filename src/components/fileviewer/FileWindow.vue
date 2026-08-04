@@ -13,6 +13,27 @@ import { extToLang, highlightCode } from "../../utils/highlight";
 import { isHtmlFilePath } from "../../utils/fileLink";
 import { marked } from "../../utils/markdown";
 
+/** 文件扩展名 → LSP language id（用于 cmLsp 扩展）。 */
+function lspLangFor(filePath: string): string | undefined {
+  const ext = filePath.split(".").pop()?.toLowerCase() || "";
+  const map: Record<string, string> = {
+    rs: "rust",
+    ts: "typescript", mts: "typescript", cts: "typescript",
+    js: "javascript", mjs: "javascript", cjs: "javascript",
+    vue: "vue",
+    go: "go",
+    py: "python", pyi: "python",
+    java: "java",
+    kt: "kotlin",
+    dart: "dart",
+    cs: "csharp",
+    rb: "ruby",
+    php: "php",
+    ex: "elixir", exs: "elixir",
+  };
+  return map[ext];
+}
+
 const props = defineProps<{
   win: FileWindowState;
   /** 窗口活动区（中央面板）的实时尺寸，拖拽钳制用 */
@@ -175,7 +196,7 @@ const gotoActive = computed(() => goto.visible.value && gotoOwnerId.value === pr
 /** 触发跳转时的光标行——压栈时记入 NavEntry，后退回到这一行 */
 const lastSourceLine = ref<number | null>(null);
 
-async function onGotoDefinition(payload: { word: string; filePath: string; line: number }) {
+async function onGotoDefinition(payload: { word: string; filePath: string; line: number; column: number }) {
   gotoOwnerId.value = props.win.id;
   lastSourceLine.value = payload.line;
   const root = projectRoot.value;
@@ -184,7 +205,7 @@ async function onGotoDefinition(payload: { word: string; filePath: string; line:
     ? payload.filePath.slice(root.length + sep.length).replace(/\\/g, "/")
     : "";
   const ext = payload.filePath.split(".").pop()?.toLowerCase() || "";
-  await goto.search(payload.word, root, { sourceFile: relPath, sourceLine: payload.line, sourceExt: ext });
+  await goto.search(payload.word, root, { sourceFile: relPath, sourceLine: payload.line, sourceExt: ext, sourceColumn: payload.column });
 
   // Auto-jump on single result
   if (goto.results.value.length === 1) {
@@ -378,6 +399,8 @@ async function openInBrowser() {
             v-model="win.editContent"
             :filePath="win.filePath"
             :scrollMemory="cmScrollMemoryOpts"
+            :workspaceRoot="projectRoot"
+            :lspLang="lspLangFor(win.filePath)"
             @goto-definition="onGotoDefinition"
           />
         </div>
@@ -392,6 +415,8 @@ async function openInBrowser() {
           v-model="win.editContent"
           :filePath="win.filePath"
           :scrollMemory="cmScrollMemoryOpts"
+          :workspaceRoot="projectRoot"
+          :lspLang="lspLangFor(win.filePath)"
           @goto-definition="onGotoDefinition"
         />
       </div>

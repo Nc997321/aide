@@ -1,5 +1,6 @@
 import { ref, readonly } from "vue";
 import { api } from "../api";
+import { useLsp } from "./useLsp";
 import type { GrepMatch, QueryResult } from "../types";
 
 // Module-level singleton
@@ -20,7 +21,7 @@ export function useGotoDefinition() {
   async function search(
     word: string,
     projectRoot: string,
-    source?: { sourceFile: string; sourceLine: number; sourceExt: string },
+    source?: { sourceFile: string; sourceLine: number; sourceExt: string; sourceColumn?: number },
   ) {
     if (!word || !projectRoot) return;
 
@@ -34,13 +35,38 @@ export function useGotoDefinition() {
     isGrepFallback.value = false;
     mode.value = "definition";
 
+    // 0. Try LSP first (workspace LSP on + server available → authoritative)
+    try {
+      if (source?.sourceFile && useLsp().isLspOn(projectRoot)) {
+        const lspResults = await api.lspDefinition(
+          projectRoot,
+          source.sourceFile,
+          source.sourceLine,
+          source?.sourceColumn ?? 0,
+          word,
+        );
+        if (lspResults.length > 0) {
+          const filtered = lspResults.filter(
+            r => !(r.symbol.file === source.sourceFile && r.symbol.line === source.sourceLine),
+          );
+          if (filtered.length > 0) {
+            results.value = filtered;
+            isGrepFallback.value = false;
+            return;
+          }
+        }
+      }
+    } catch {
+      // LSP unavailable / error → fall through to codegraph → grep
+    }
+
     // 1. Try CodeGraph first
     try {
       const cgResults = await api.codegraphGotoDefinition(
         word,
         source?.sourceFile || "",
         source?.sourceLine || 0,
-        0, // column not yet from editor
+        source?.sourceColumn ?? 0,
         projectRoot,
       );
 

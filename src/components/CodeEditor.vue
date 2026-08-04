@@ -13,6 +13,8 @@ import { createHighlightStyle } from "../utils/cmHighlight";
 import { loadLanguageExtension } from "../utils/cmLanguage";
 import { ctrlHoverHighlight } from "../extensions/cmCtrlHover";
 import { cmScrollMemory, type ScrollMemoryOptions } from "../extensions/cmScrollMemory";
+import { cmLsp } from "../extensions/cmLsp";
+import { useLsp } from "../composables/useLsp";
 import { parentSyncAnnotation, isUserEdit } from "../utils/cmModelSync";
 
 const { settings } = useSettings();
@@ -22,11 +24,13 @@ const props = defineProps<{
   modelValue: string;
   /** 滚动位置记忆（会话级）；不传则不记 */
   scrollMemory?: ScrollMemoryOptions;
+  workspaceRoot?: string;
+  lspLang?: string;
 }>();
 
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
-  (e: "goto-definition", payload: { word: string; filePath: string; line: number }): void;
+  (e: "goto-definition", payload: { word: string; filePath: string; line: number; column: number }): void;
 }>();
 
 const mountEl = ref<HTMLDivElement | null>(null);
@@ -89,6 +93,14 @@ async function createEditor() {
       updateListener,
       ctrlHoverHighlight(),
       ...(props.scrollMemory ? [cmScrollMemory(props.scrollMemory)] : []),
+      ...(props.workspaceRoot && props.lspLang
+        ? [cmLsp({
+            workspaceRoot: props.workspaceRoot,
+            enabled: useLsp().isLspOn(props.workspaceRoot),
+            lang: props.lspLang,
+            filePath: props.filePath,
+          })]
+        : []),
       EditorView.domEventHandlers({
         click(event, view) {
           if (event.ctrlKey || event.metaKey) {
@@ -105,11 +117,12 @@ async function createEditor() {
                 );
                 if (word) {
                   event.preventDefault();
-                  const line = view.state.doc.lineAt(pos).number;
+                  const lineObj = view.state.doc.lineAt(pos);
                   emit("goto-definition", {
                     word,
                     filePath: props.filePath,
-                    line,
+                    line: lineObj.number,
+                    column: pos - lineObj.from + 1,
                   });
                 }
               }
