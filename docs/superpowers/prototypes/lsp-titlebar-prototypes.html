@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>LSP 标题栏入口 — 原型对比</title>
+<style>
+  /* ── 模拟 warm-dark 主题 token（与 src/themes/warm-dark.ts 一致） ── */
+  :root {
+    --bg-deep: #141218;
+    --bg-raised: #221f29;
+    --surface-default: #292631;
+    --surface-hover: #322e3c;
+    --surface-active: #3a3546;
+    --text-primary: #ece5db;
+    --text-secondary: #b3aa9c;
+    --text-muted: #7d7568;
+    --accent: #d9ab78;
+    --accent-subtle: rgba(217, 171, 120, 0.12);
+    --success: #8bc48a;
+    --warning: #e8c374;
+    --danger: #e87070;
+    --info: #7eb8d8;
+    --border: rgba(255, 214, 160, 0.09);
+    --border-strong: rgba(255, 220, 175, 0.16);
+    --border-subtle: rgba(255, 214, 160, 0.045);
+    --shadow-lg: 0 18px 56px rgba(0,0,0,.5), 0 4px 14px rgba(0,0,0,.3);
+    --radius-sm: 6px;
+    --radius-md: 9px;
+    --ease-t: .16s cubic-bezier(.2,.8,.2,1);
+    --mono: Consolas, "Cascadia Mono", "JetBrains Mono", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 13px;
+    padding: 28px 36px 60px;
+  }
+  .page-head { margin-bottom: 26px; }
+  .page-head h1 { font-size: 17px; font-weight: 600; }
+  .page-head p { color: var(--text-muted); font-size: 12.5px; margin-top: 6px; line-height: 1.7; }
+  .page-head code { font-family: var(--mono); font-size: 11px; background: var(--surface-default); padding: 1px 5px; border-radius: 4px; color: var(--accent); }
+
+  .variant {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    margin-bottom: 30px;
+    background: rgba(0,0,0,.15);
+  }
+  .variant-head {
+    display: flex; align-items: baseline; gap: 12px;
+    padding: 12px 16px;
+    background: linear-gradient(180deg, var(--border-subtle), transparent), var(--bg-raised);
+    border-bottom: 1px solid var(--border);
+  }
+  .variant-head .tag { font-size: 10.5px; font-weight: 700; letter-spacing: .8px; color: var(--accent); text-transform: uppercase; }
+  .variant-head h2 { font-size: 14px; font-weight: 600; }
+  .variant-head p { font-size: 11.5px; color: var(--text-muted); flex: 1; }
+
+  /* ── 模拟标题栏 ── */
+  .fake-titlebar {
+    display: flex; align-items: center; gap: 6px;
+    height: 42px; padding: 0 14px;
+    background: linear-gradient(180deg, var(--border-subtle) 0%, transparent 100%), var(--bg-deep);
+    border-bottom: 1px solid var(--border);
+    position: relative; z-index: 10;
+  }
+  .fake-titlebar .spacer { flex: 1; }
+  .fake-titlebar .titlebar-item {
+    display: flex; align-items: center; justify-content: center;
+    width: 30px; height: 30px; margin: 0 2px;
+    background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
+    color: var(--text-muted); cursor: pointer; position: relative;
+    transition: all var(--ease-t);
+  }
+  .fake-titlebar .titlebar-item:hover { color: var(--text-primary); background: var(--surface-default); }
+  .fake-titlebar .titlebar-item svg { width: 15px; height: 15px; }
+  .fake-titlebar .winbtn { width: 46px; height: 32px; border-radius: 0; margin: 0; }
+
+  /* 通知铃铛参照 */
+  .bell-badge {
+    position: absolute; top: 3px; right: 3px;
+    min-width: 14px; height: 14px; padding: 0 4px;
+    background: var(--danger); color: var(--text-primary);
+    font-size: 9px; font-weight: 700; line-height: 14px; text-align: center;
+    border-radius: 7px; border: 1.5px solid var(--bg-deep);
+  }
+
+  /* 活跃会话参照（用户指定参考样式） */
+  .activity { display: flex; align-items: center; gap: 5px; padding: 0 12px; height: 100%; cursor: default; position: relative; }
+  .activity .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); box-shadow: 0 0 6px rgba(139,196,138,.5); }
+  .activity .count { font-size: 11px; font-weight: 600; color: var(--text-secondary); }
+
+  /* 悬浮面板公共（活跃会话同款；原型里流内展示避免被容器裁剪，视觉等同从标题栏落下） */
+  .pop-panel {
+    background: var(--bg-raised);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    backdrop-filter: blur(14px);
+    margin: 6px 16px 0 0; /* 右对齐：标题栏右侧落下 */
+    width: 330px;
+    margin-left: auto; /* 靠右 */
+  }
+  .panel-header {
+    padding: 8px 14px 9px;
+    font-size: 10.5px; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: .6px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .panel-header .hint { font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 10.5px; }
+  .toggle {
+    display: inline-flex; align-items: center; gap: 6px;
+    cursor: pointer; user-select: none; font-size: 11px; color: var(--text-secondary);
+  }
+  .toggle .sw {
+    width: 30px; height: 16px; border-radius: 9px; position: relative;
+    background: var(--surface-active); transition: background var(--ease-t);
+  }
+  .toggle .sw::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 12px; height: 12px; border-radius: 50%; background: var(--text-secondary);
+    transition: all var(--ease-t);
+  }
+  .toggle.on .sw { background: var(--accent); }
+  .toggle.on .sw::after { left: 16px; background: var(--bg-deep); }
+
+  /* 语言行 */
+  .lang-row {
+    display: flex; align-items: center; gap: 9px;
+    padding: 7px 14px; cursor: pointer; transition: background .1s;
+  }
+  .lang-row:hover { background: var(--surface-default); }
+  .st-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .st-ok { background: var(--success); box-shadow: 0 0 4px rgba(139,196,138,.4); }
+  .st-miss { background: var(--warning); box-shadow: 0 0 4px rgba(232,195,116,.4); }
+  .st-err { background: var(--danger); box-shadow: 0 0 4px rgba(232,112,112,.4); }
+  .lang-name { font-size: 12.5px; color: var(--text-primary); font-weight: 500; }
+  .lang-server { font-size: 10px; color: var(--text-muted); font-family: var(--mono); }
+  .lang-status { font-size: 10.5px; color: var(--text-muted); flex-shrink: 0; }
+  .lang-status.ok { color: var(--success); }
+  .lang-status.miss { color: var(--warning); }
+  .lang-action { flex-shrink: 0; }
+
+  /* 安装指引 */
+  .install-link {
+    font-size: 10.5px; color: var(--accent); cursor: pointer;
+    background: none; border: none; font-family: inherit;
+    padding: 2px 6px; border-radius: var(--radius-sm);
+  }
+  .install-link:hover { background: var(--accent-subtle); }
+  .install-box {
+    margin: 2px 14px 8px 29px; padding: 9px 11px;
+    background: var(--surface-default); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); font-size: 11px; color: var(--text-secondary);
+    line-height: 1.7; display: none;
+  }
+  .install-box.open { display: block; }
+  .install-box .cmd {
+    font-family: var(--mono); font-size: 10.5px; color: var(--accent);
+    background: var(--bg-deep); padding: 3px 8px; border-radius: 4px;
+    display: block; margin: 4px 0;
+    overflow-wrap: break-word;
+  }
+  .install-box a { color: var(--info); }
+
+  /* 排除目录 */
+  .exclude-section { border-top: 1px solid var(--border); }
+  .exclude-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 14px; cursor: pointer; font-size: 11px; color: var(--text-secondary);
+    transition: background .1s;
+  }
+  .exclude-head:hover { background: var(--surface-default); }
+  .exclude-head .chev { transition: transform var(--ease-t); font-size: 9px; color: var(--text-muted); }
+  .exclude-head.open .chev { transform: rotate(90deg); }
+  .exclude-body { padding: 0 14px 12px; display: none; }
+  .exclude-body.open { display: block; }
+  .exclude-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; color: var(--text-secondary);
+    background: var(--surface-default); border: 1px solid var(--border);
+    padding: 2px 6px 2px 9px; border-radius: 12px; font-family: var(--mono);
+  }
+  .chip .x {
+    width: 14px; height: 14px; display: flex; align-items: center; justify-content: center;
+    border-radius: 50%; color: var(--text-muted); cursor: pointer; font-size: 9px;
+  }
+  .chip .x:hover { background: var(--danger); color: var(--text-primary); }
+  .exclude-add { display: flex; gap: 6px; }
+  .exclude-add input {
+    flex: 1; min-width: 0; background: var(--surface-default);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    color: var(--text-primary); font-size: 11.5px; padding: 4px 9px; outline: none;
+    font-family: inherit;
+  }
+  .exclude-add input:focus { border-color: var(--accent); }
+  .exclude-add button, .save-excludes {
+    background: var(--accent-subtle); color: var(--accent);
+    border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+    border-radius: var(--radius-sm); font-size: 11px; padding: 4px 12px;
+    cursor: pointer; font-family: inherit; transition: all .12s;
+  }
+  .exclude-add button:hover, .save-excludes:hover {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  .save-row { display: flex; justify-content: flex-end; margin-top: 8px; }
+
+  /* 变体 B 徽章 */
+  .lsp-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    height: 24px; padding: 0 10px; margin: 0 4px;
+    background: var(--surface-default); border: 1px solid var(--border);
+    border-radius: 99px; font-size: 10.5px; color: var(--text-secondary);
+    cursor: pointer; position: relative; transition: all var(--ease-t);
+    font-family: inherit;
+  }
+  .lsp-badge:hover { background: var(--surface-hover); }
+  .lsp-badge .seg.ok { color: var(--success); }
+  .lsp-badge .seg.miss { color: var(--warning); }
+
+  /* 变体 C 双卡 */
+  .wide-panel { width: 430px; }
+  .card-title {
+    padding: 8px 14px 6px; font-size: 10.5px; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: .6px;
+  }
+  .install-btn {
+    font-size: 10.5px; color: var(--info); cursor: pointer;
+    background: none; border: 1px solid color-mix(in srgb, var(--info) 25%, transparent);
+    padding: 2px 9px; border-radius: 99px; font-family: inherit; transition: all .12s;
+  }
+  .install-btn:hover { background: color-mix(in srgb, var(--info) 14%, transparent); }
+
+  .note { font-size: 11px; color: var(--text-muted); margin-top: 8px; line-height: 1.6; }
+  .stage { padding: 18px 16px 22px; position: relative; }
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>LSP 标题栏入口 — 3 个原型变体</h1>
+  <p>
+    需求：把 LSP 从设置面板搬到标题栏通知旁，样式参考「活跃会话」。跨语言多行（一个项目同时有 Rust/TS/Java/Go…）、
+    每行显示 server 状态、未安装的 server 提供安装指引（命令 + 链接）、可编辑排除目录。
+    三个变体差别在<b>入口形态</b>、<b>安装指引呈现</b>、<b>排除目录位置</b>。模拟数据：Rust/TS 已就绪，Java/Go 未安装。
+  </p>
+</div>
+
+<!-- ═══════════ 变体 A：图标 + hover 悬浮（最像活跃会话） ═══════════ -->
+<div class="variant">
+  <div class="variant-head">
+    <span class="tag">变体 A</span>
+    <h2>图标按钮 · hover 悬浮面板</h2>
+    <p>入口 = 图标 + 汇总状态点（绿=全就绪 / 黄=有缺），鼠标悬停弹出窄面板，与活跃会话同款交互。安装指引行内展开，排除目录折叠区。</p>
+  </div>
+  <div class="stage">
+    <div class="fake-titlebar">
+      <span class="titlebar-item" title="通知"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span class="bell-badge">2</span></span>
+      <span class="activity"><span class="dot"></span><span class="count">1</span></span>
+      <div class="spacer"></div>
+
+      <!-- LSP 入口：图标 + 状态点 -->
+      <span class="titlebar-item" title="语言服务器（2/4 就绪）">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        <span class="bell-badge" style="background:var(--warning); color:#141218;">!</span>
+      </span>
+      <span class="titlebar-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg></span>
+
+    </div><!-- /fake-titlebar -->
+
+      <!-- hover 悬浮面板（活跃会话同款） -->
+      <div class="pop-panel">
+        <div class="panel-header">
+          <span>语言服务器</span>
+          <label class="toggle on"><span class="sw"></span>启用</label>
+        </div>
+
+        <div class="lang-row" style="margin-top:4px">
+          <span class="st-dot st-ok"></span>
+          <span class="lang-name">Rust</span>
+          <span class="lang-server">rust-analyzer</span>
+          <span class="lang-status ok">就绪</span>
+        </div>
+        <div class="lang-row">
+          <span class="st-dot st-ok"></span>
+          <span class="lang-name">TypeScript</span>
+          <span class="lang-server">typescript-language-server</span>
+          <span class="lang-status ok">就绪</span>
+        </div>
+        <div class="lang-row">
+          <span class="st-dot st-miss"></span>
+          <span class="lang-name">Java</span>
+          <span class="lang-server">jdtls</span>
+          <span class="lang-status miss">未安装</span>
+          <span class="lang-action"><button class="install-link" onclick="this.closest('.lang-row').nextElementSibling.classList.toggle('open')">如何安装</button></span>
+        </div>
+        <div class="install-box">
+          需要 JDK 17+，推荐 scoop：
+          <code class="cmd">scoop bucket add java && scoop install jdtls</code>
+          或手动：<a href="#">eclipse.jdt.ls GitHub</a> 下载 zip，把 <code>bin/</code> 加进 PATH。
+        </div>
+        <div class="lang-row">
+          <span class="st-dot st-miss"></span>
+          <span class="lang-name">Go</span>
+          <span class="lang-server">gopls</span>
+          <span class="lang-status miss">未安装</span>
+          <span class="lang-action"><button class="install-link" onclick="this.closest('.lang-row').nextElementSibling.classList.toggle('open')">如何安装</button></span>
+        </div>
+        <div class="install-box">
+          <code class="cmd">go install golang.org/x/tools/gopls@latest</code>
+        </div>
+
+        <!-- 排除目录折叠区 -->
+        <div class="exclude-section">
+          <div class="exclude-head" onclick="this.classList.toggle('open'); this.nextElementSibling.classList.toggle('open')">
+            <span>排除目录（不发给 LSP）</span><span class="chev">▶</span>
+          </div>
+          <div class="exclude-body">
+            <div class="exclude-list">
+              <span class="chip">node_modules<span class="x" onclick="this.parentElement.remove()">✕</span></span>
+              <span class="chip">target<span class="x" onclick="this.parentElement.remove()">✕</span></span>
+            </div>
+            <div class="exclude-add">
+              <input placeholder="输入要排除的目录名…">
+              <button>添加</button>
+            </div>
+            <div class="save-row"><button class="save-excludes">保存排除配置</button></div>
+          </div>
+        </div>
+      </div>
+    <p class="note">交互：hover 入口按钮显示/隐藏面板（与活跃会话一致）；「如何安装」点击展开命令行 + 链接；排除目录可折叠、chip 可删。</p>
+  </div>
+</div>
+
+<!-- ═══════════ 变体 B：常驻徽章 + 点击面板（状态一眼可见） ═══════════ -->
+<div class="variant">
+  <div class="variant-head">
+    <span class="tag">变体 B</span>
+    <h2>常驻徽章 · 点击展开（安装指引内联）</h2>
+    <p>入口 = 常驻徽章，直接显示各语言状态（✓/✗），不用点开就知道缺什么。点击弹出面板：安装指引<b>不折叠直接内联</b>，排除目录常驻底部。</p>
+  </div>
+  <div class="stage">
+    <div class="fake-titlebar">
+      <span class="titlebar-item" title="通知"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span class="bell-badge">2</span></span>
+      <span class="activity"><span class="dot"></span><span class="count">1</span></span>
+      <div class="spacer"></div>
+
+      <!-- LSP 徽章入口 -->
+      <button class="lsp-badge" onclick="var p=document.getElementById('panelB'); p.style.display=p.style.display==='none'?'block':'none'">
+        <span class="seg ok">Rust ✓</span>
+        <span style="opacity:.35">·</span>
+        <span class="seg ok">TS ✓</span>
+        <span style="opacity:.35">·</span>
+        <span class="seg miss">Java ✗</span>
+        <span style="opacity:.35">·</span>
+        <span class="seg miss">Go ✗</span>
+      </button>
+      <span class="titlebar-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg></span>
+    </div><!-- /fake-titlebar -->
+
+      <div id="panelB" class="pop-panel" style="width: 380px;">
+        <div class="panel-header">
+          <span>语言服务器</span>
+          <label class="toggle on"><span class="sw"></span>启用</label>
+        </div>
+
+        <div class="lang-row" style="margin-top:4px">
+          <span class="st-dot st-ok"></span>
+          <span class="lang-name">Rust</span>
+          <span class="lang-server">rust-analyzer</span>
+          <span class="lang-status ok">就绪</span>
+        </div>
+        <div class="lang-row">
+          <span class="st-dot st-ok"></span>
+          <span class="lang-name">TypeScript</span>
+          <span class="lang-server">typescript-language-server</span>
+          <span class="lang-status ok">就绪</span>
+        </div>
+        <div class="lang-row" style="align-items:flex-start">
+          <span class="st-dot st-miss" style="margin-top:8px"></span>
+          <div style="flex:1; min-width:0">
+            <div style="display:flex; align-items:center; gap:8px">
+              <span class="lang-name">Java</span>
+              <span class="lang-server">jdtls</span>
+              <span class="lang-status miss">未安装</span>
+            </div>
+            <div class="install-box open" style="margin:6px 0 0 0; display:block">
+              需要 JDK 17+，推荐 scoop：<code class="cmd">scoop bucket add java && scoop install jdtls</code>
+              或手动：<a href="#">eclipse.jdt.ls GitHub</a> 下载 zip，把 <code>bin/</code> 加进 PATH。
+            </div>
+          </div>
+        </div>
+        <div class="lang-row" style="align-items:flex-start">
+          <span class="st-dot st-miss" style="margin-top:8px"></span>
+          <div style="flex:1; min-width:0">
+            <div style="display:flex; align-items:center; gap:8px">
+              <span class="lang-name">Go</span>
+              <span class="lang-server">gopls</span>
+              <span class="lang-status miss">未安装</span>
+            </div>
+            <div class="install-box open" style="margin:6px 0 0 0; display:block">
+              <code class="cmd">go install golang.org/x/tools/gopls@latest</code>
+            </div>
+          </div>
+        </div>
+
+        <div class="exclude-section" style="margin-top:4px">
+          <div class="card-title">排除目录（不发给 LSP）</div>
+          <div class="exclude-body open" style="display:block; padding-top:2px">
+            <div class="exclude-list">
+              <span class="chip">node_modules<span class="x" onclick="this.parentElement.remove()">✕</span></span>
+              <span class="chip">target<span class="x" onclick="this.parentElement.remove()">✕</span></span>
+              <span class="chip">dist<span class="x" onclick="this.parentElement.remove()">✕</span></span>
+            </div>
+            <div class="exclude-add">
+              <input placeholder="输入要排除的目录名…">
+              <button>添加</button>
+            </div>
+            <div class="save-row"><button class="save-excludes">保存排除配置</button></div>
+          </div>
+        </div>
+      </div>
+    <p class="note">交互：点击徽章开关面板；未安装的行直接显示安装命令（不用点开）；排除目录常驻底部（不折叠）。缺点：语言多时徽章会变长。</p>
+  </div>
+</div>
+
+<!-- ═══════════ 变体 C：图标 + 宽面板双区（安装走外链按钮） ═══════════ -->
+<div class="variant">
+  <div class="variant-head">
+    <span class="tag">变体 C</span>
+    <h2>图标入口 · 双区宽面板（安装走浏览器）</h2>
+    <p>入口 = 图标 + 状态点（同 A），面板更宽分两个卡片区：上「语言服务器」、下「排除目录」。安装指引不内联，给「安装指引」外链按钮直接跳浏览器。</p>
+  </div>
+  <div class="stage">
+    <div class="fake-titlebar">
+      <span class="titlebar-item" title="通知"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span class="bell-badge">2</span></span>
+      <span class="activity"><span class="dot"></span><span class="count">1</span></span>
+      <div class="spacer"></div>
+
+      <span class="titlebar-item" title="语言服务器">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        <span class="bell-badge" style="background:var(--warning); color:#141218;">!</span>
+      </span>
+      <span class="titlebar-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg></span>
+    </div><!-- /fake-titlebar -->
+
+      <div class="pop-panel wide-panel" style="padding-bottom: 6px;">
+        <div class="panel-header">
+          <span>语言服务器</span>
+          <label class="toggle on"><span class="sw"></span>启用</label>
+        </div>
+        <div class="card-title" style="padding-top:10px">语言</div>
+
+        <div class="lang-row">
+          <span class="st-dot st-ok"></span>
+          <span class="lang-name">Rust</span>
+          <span class="lang-server">rust-analyzer</span>
+          <span class="lang-status ok">就绪</span>
+        </div>
+        <div class="lang-row">
+          <span class="st-dot st-ok"></span>
+          <span class="lang-name">TypeScript</span>
+          <span class="lang-server">typescript-language-server</span>
+          <span class="lang-status ok">就绪</span>
+        </div>
+        <div class="lang-row">
+          <span class="st-dot st-miss"></span>
+          <span class="lang-name">Java</span>
+          <span class="lang-server">jdtls</span>
+          <span class="lang-status miss">未安装</span>
+          <span class="lang-action"><a class="install-btn" href="#">安装指引 ↗</a></span>
+        </div>
+        <div class="lang-row">
+          <span class="st-dot st-miss"></span>
+          <span class="lang-name">Go</span>
+          <span class="lang-server">gopls</span>
+          <span class="lang-status miss">未安装</span>
+          <span class="lang-action"><a class="install-btn" href="#">安装指引 ↗</a></span>
+        </div>
+
+        <div class="exclude-section" style="margin-top:6px">
+          <div class="card-title">排除目录（不发给 LSP）</div>
+          <div class="exclude-body open" style="display:block; padding-top:2px">
+            <div class="exclude-list">
+              <span class="chip">node_modules<span class="x" onclick="this.parentElement.remove()">✕</span></span>
+              <span class="chip">target<span class="x" onclick="this.parentElement.remove()">✕</span></span>
+            </div>
+            <div class="exclude-add">
+              <input placeholder="输入要排除的目录名…">
+              <button>添加</button>
+            </div>
+            <div class="save-row"><button class="save-excludes">保存排除配置</button></div>
+          </div>
+        </div>
+      </div>
+    <p class="note">交互：安装指引是外链按钮（点击浏览器打开安装文档页面，面板不展开）；排除目录独立成卡。缺点：跳浏览器打断流程，用户装完要切回来。</p>
+  </div>
+</div>
+
+</body>
+</html>

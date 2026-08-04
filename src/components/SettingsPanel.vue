@@ -2,8 +2,6 @@
 import { ref, watch, onMounted, computed } from "vue";
 import { useSettings } from "../composables/useSettings";
 import { useCustomizations } from "../composables/useCustomizations";
-import { useFileViewer } from "../composables/useFileViewer";
-import { useWorkspaceLsp } from "../composables/useWorkspaceLsp";
 import { api } from "../api";
 import type { JdkEntry, SecretMutation } from "../types";
 import CustomizationList from "./customizations/CustomizationList.vue";
@@ -40,7 +38,7 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-type Tab = "general" | "workspace" | "providers" | "permissions" | "extensions" | "marketplace" | "codegraph" | "java" | "diagnostics";
+type Tab = "general" | "providers" | "permissions" | "extensions" | "marketplace" | "codegraph" | "java" | "diagnostics";
 
 const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 
@@ -287,29 +285,7 @@ const {
 
 onMounted(() => { loadAll(); });
 
-// ── Workspace LSP ──
-
-const { projectRoot } = useFileViewer();
-const lsp = useWorkspaceLsp(projectRoot.value);
-const localExcludes = ref<string[]>([...lsp.excludes.value]);
-const newExcludeDir = ref("");
-
-function addExclude() {
-  const dir = newExcludeDir.value.trim();
-  if (!dir) return;
-  localExcludes.value = [...localExcludes.value, dir];
-  newExcludeDir.value = "";
-  lsp.excludesDirty.value = true;
-}
-
-function removeExclude(i: number) {
-  localExcludes.value = localExcludes.value.filter((_, idx) => idx !== i);
-  lsp.excludesDirty.value = true;
-}
-
-async function saveExcludes() {
-  await lsp.saveExcludes(localExcludes.value);
-}
+// LSP 设置已搬到标题栏（LspIndicator）：开关 + 排除目录在标题栏面板操作。
 
 function handleCreate(data: any) {
   if (activeType.value) createItem(activeType.value, data);
@@ -372,14 +348,6 @@ function onOverlayClick(e: MouseEvent) {
             >
               <Icon class="nav-icon" name="general" :size="16" />
               <span class="nav-label">通用</span>
-            </button>
-            <button
-              class="nav-item"
-              :class="{ active: activeTab === 'workspace' }"
-              @click="activeTab = 'workspace'"
-            >
-              <Icon class="nav-icon" name="server" :size="16" />
-              <span class="nav-label">工作区</span>
             </button>
             <button
               class="nav-item"
@@ -587,55 +555,6 @@ function onOverlayClick(e: MouseEvent) {
                 </div>
               </div>
 
-            </div>
-
-            <!-- ── 工作区 Tab ── -->
-            <div v-else-if="activeTab === 'workspace'" class="tab-workspace">
-              <div class="settings-field">
-                <label class="field-label">LSP（语言服务器）</label>
-                <div class="toggle-row">
-                  <span class="field-hint">实时类型诊断/补全/悬停/定义。默认关闭，按工作区开启。</span>
-                  <label class="toggle">
-                    <input
-                      type="checkbox"
-                      :checked="lsp.enabled.value"
-                      @change="lsp.setEnabled(($event.target as HTMLInputElement).checked)"
-                    />
-                    <span class="toggle-track"></span>
-                  </label>
-                </div>
-              </div>
-
-              <template v-if="lsp.enabled.value">
-                <div class="settings-field">
-                  <label class="field-label">排除目录</label>
-                  <span class="field-hint">这些目录不发给 LSP（IDEA "Mark as Excluded"）。改后重启该工作区 server 生效。</span>
-                  <div v-if="localExcludes.length > 0" class="exclude-list">
-                    <div v-for="(dir, i) in localExcludes" :key="i" class="exclude-item">
-                      <span class="exclude-dir">{{ dir }}</span>
-                      <button class="exclude-remove" @click="removeExclude(i)">－</button>
-                    </div>
-                  </div>
-                  <div class="exclude-add-row">
-                    <input
-                      v-model="newExcludeDir"
-                      class="text-input"
-                      placeholder="输入要排除的目录名..."
-                      @keydown.enter="addExclude"
-                    />
-                    <button
-                      class="exclude-add-btn"
-                      :disabled="!newExcludeDir.trim()"
-                      @click="addExclude"
-                    >添加</button>
-                  </div>
-                  <button
-                    v-if="lsp.excludesDirty.value"
-                    class="exclude-save-btn"
-                    @click="saveExcludes"
-                  >保存排除配置</button>
-                </div>
-              </template>
             </div>
 
             <!-- ── 模型 Tab ── -->
@@ -1329,110 +1248,6 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 /* ── Workspace tab ── */
-
-.tab-workspace {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.exclude-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.exclude-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-md);
-  background: var(--aide-bg-base);
-}
-
-.exclude-dir {
-  flex: 1;
-  font-size: 12px;
-  color: var(--aide-text-primary);
-  font-family: var(--aide-font-mono);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.exclude-remove {
-  width: 22px;
-  height: 22px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  border-radius: var(--aide-radius-sm);
-  color: var(--aide-text-muted);
-  font-size: 14px;
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s;
-}
-.exclude-remove:hover {
-  background: color-mix(in srgb, var(--aide-danger) 15%, transparent);
-  color: var(--aide-danger);
-}
-
-.exclude-add-row {
-  display: flex;
-  gap: 8px;
-  align-items: stretch;
-  margin-top: 8px;
-}
-
-.exclude-add-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 14px;
-  border-radius: var(--aide-radius-md);
-  background: var(--aide-accent, var(--aide-info));
-  color: var(--aide-bg-deep);
-  border: none;
-  font-size: 12.5px;
-  font-weight: 500;
-  font-family: inherit;
-  cursor: pointer;
-  transition: opacity 0.12s;
-  white-space: nowrap;
-}
-.exclude-add-btn:hover:not(:disabled) {
-  opacity: 0.9;
-}
-.exclude-add-btn:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.exclude-save-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 14px;
-  border-radius: var(--aide-radius-md);
-  background: var(--aide-accent, var(--aide-info));
-  color: var(--aide-bg-deep);
-  border: none;
-  font-size: 12.5px;
-  font-weight: 500;
-  font-family: inherit;
-  cursor: pointer;
-  transition: opacity 0.12s;
-  margin-top: 10px;
-}
-.exclude-save-btn:hover {
-  opacity: 0.9;
-}
 
 /* ── Java / JDK tab ── */
 

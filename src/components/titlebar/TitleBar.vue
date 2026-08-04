@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from "vue";
 import WindowControls from "./WindowControls.vue";
 import SidebarToggle from "./SidebarToggle.vue";
 import NotificationBell from "./NotificationBell.vue";
+import LspIndicator from "./LspIndicator.vue";
 import AppLogo from "../AppLogo.vue";
 import Icon from "../Icon.vue";
 import type { SessionStatus } from "../../composables/useSessionState";
@@ -27,6 +28,8 @@ const props = defineProps<{
   runStates?: Record<string, RunStatus>;
   leftCollapsed?: boolean;
   rightCollapsed?: boolean;
+  // 当前工作区根路径（LSP 徽章/面板用）
+  workspaceRoot?: string;
 }>();
 
 const emit = defineEmits<{
@@ -331,6 +334,7 @@ function isRowRunning(cfg: RunConfig): boolean {
     <!-- Right: activity indicator + window controls -->
     <div class="titlebar-right">
       <NotificationBell />
+      <LspIndicator :workspace-root="workspaceRoot" />
       <div
         v-if="(activeSessions ?? []).length > 0"
         class="titlebar-activity"

@@ -73,8 +73,9 @@ describe("SettingsPanel", () => {
     const labels = Array.from(document.body.querySelectorAll(".nav-label")).map(
       (el) => el.textContent?.trim() ?? "",
     );
+    // 工作区 tab 已移除（LSP 设置搬到标题栏 LspIndicator）
     expect(labels).toEqual([
-      "通用", "工作区", "模型", "权限", "扩展", "市场", "代码索引", "Java", "诊断",
+      "通用", "模型", "权限", "扩展", "市场", "代码索引", "Java", "诊断",
     ]);
   });
 

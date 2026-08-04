@@ -816,6 +816,7 @@ onUnmounted(() => {
       :run-states="runStates"
       :left-collapsed="leftCollapsed"
       :right-collapsed="rightCollapsed"
+      :workspace-root="workspacePath"
       @open-palette="paletteOpen = true"
       @select-session="(s) => sidebarRef?.selectSessionFromWorkspace(s.wsKey, s.id)"
       @run-project="onRunProject"

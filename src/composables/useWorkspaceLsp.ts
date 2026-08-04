@@ -1,25 +1,37 @@
-import { ref } from "vue";
+import { ref, watch, type Ref } from "vue";
 import { api } from "../api";
 import { useLsp } from "./useLsp";
 import { useNotifications } from "./useNotifications";
 
-/** 工作区 LSP 设置前端侧：开关 + 排除目录。权威值在后端 state JSON。 */
-export function useWorkspaceLsp(workspaceRoot: string) {
+/** 工作区 LSP 设置前端侧：开关 + 排除目录。权威值在后端 state JSON。
+ *  workspaceRoot 用 getter 传入——工作区切换时 enabled/excludes 自动刷新
+ * （标题栏 LSP 面板常驻，不同于设置面板每次打开重建）。 */
+export function useWorkspaceLsp(getWorkspaceRoot: () => string) {
   const { enableLsp, disableLsp, isLspOn } = useLsp();
-  const enabled = ref(isLspOn(workspaceRoot));
+  const enabled: Ref<boolean> = ref(isLspOn(getWorkspaceRoot()));
   const excludes = ref<string[]>([]);
   const excludesDirty = ref(false);
 
   // spec T15 读路径补齐：UI 不再 write-only。best-effort 加载，失败静默
   //（后端命令不存在 / state 损坏时不阻断 UI）。
-  void api
-    .workspaceGetLspExcludes(workspaceRoot)
-    .then((dirs) => { excludes.value = dirs; })
-    .catch(() => {});
+  async function refreshExcludes() {
+    excludes.value = await api
+      .workspaceGetLspExcludes(getWorkspaceRoot())
+      .catch(() => [] as string[]);
+  }
+  void refreshExcludes();
+
+  // 工作区切换：enabled 重算 + 排除目录重载（excludesDirty 作废）。
+  watch(getWorkspaceRoot, () => {
+    enabled.value = isLspOn(getWorkspaceRoot());
+    excludesDirty.value = false;
+    void refreshExcludes();
+  });
 
   // spec §8：开启时探测各语言的 server，失败分流 toast（server_not_found /
   // handshake_failed / untrusted）。dedupKey 带工作区+语言+kind，重复同因合并。
   async function probeServersAndToast() {
+    const workspaceRoot = getWorkspaceRoot();
     let langs: string[];
     try { langs = await api.lspDetectLanguages(workspaceRoot); }
     catch { return; } // 探测失败不阻断；下次 did_open 仍会兜底
@@ -59,6 +71,7 @@ export function useWorkspaceLsp(workspaceRoot: string) {
   }
 
   async function setEnabled(v: boolean) {
+    const workspaceRoot = getWorkspaceRoot();
     enabled.value = v;
     if (v) {
       await enableLsp(workspaceRoot);
@@ -69,6 +82,7 @@ export function useWorkspaceLsp(workspaceRoot: string) {
   }
 
   async function saveExcludes(dirs: string[]) {
+    const workspaceRoot = getWorkspaceRoot();
     await api.workspaceSetLspExcludes(workspaceRoot, dirs);
     excludes.value = dirs;
     excludesDirty.value = false;
@@ -79,5 +93,5 @@ export function useWorkspaceLsp(workspaceRoot: string) {
     }
   }
 
-  return { enabled, excludes, excludesDirty, setEnabled, saveExcludes };
+  return { enabled, excludes, excludesDirty, setEnabled, saveExcludes, refreshExcludes };
 }
