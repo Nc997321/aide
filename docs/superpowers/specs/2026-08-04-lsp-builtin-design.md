@@ -26,6 +26,7 @@ Aide 已有完整代码编辑栈：CodeMirror 6 编辑器（`src/components/Code
 | 定义与 codegraph 关系 | LSP 定义与 codegraph **并列**，LSP 优先，codegraph 兜底 | 续接 `useGotoDefinition.ts` 多 provider 链，goto 浮层/导航栈零改 |
 | 语言探测方式 | **扩展现有 ProjectDetector** 加 `languages()` 方法 + 文件扩展名兜底探测器 | 复用 16 个探测器 + 优先级链；Tauri→{rust,ts,vue}、Cargo→{rust}、Node→{ts,js}… |
 | 架构方案 | **A：Rust 拥有 server 进程 + JSON-RPC** | 复用 runtime/mod.rs stdio 泵、codegraph 命令形状、cmCtrlHover 扩展范式、goto 链、`CREATE_NO_WINDOW`+`dunce`、workspace trust 门 |
+| 工作区扫描边界 | 硬编码黑名单（复用 codegraph `ALWAYS_IGNORE_DIRS`）**+** 工作区级手动排除目录（IDEA 式）→ 并集注入 server init exclude + 我方 didOpen 跳过；tsserver/pyright 靠项目配置 | server 不自动尊重 .gitignore/黑名单；node_modules 等性能炸弹必须挡；用户手动排除特定目录（如生成的 `generated/`） |
 
 ## 3. 复用的现有基础设施
 
@@ -51,6 +52,7 @@ Aide 已有完整代码编辑栈：CodeMirror 6 编辑器（`src/components/Code
 | 编辑器事务注解 | `src/utils/cmModelSync.ts:18` `isUserEdit` | didChange 仅用户编辑触发 |
 | 诊断/补全样式槽 | `CodeEditor.vue:300-313,260-299` | `@codemirror/lint` / `@codemirror/autocomplete` 已样式 |
 | markdown 渲染 | `src/utils/markdown.ts` | hover tooltip 内容 |
+| 跳过目录黑名单 | `codegraph/indexer/walk.rs:13-34` `ALWAYS_IGNORE_DIRS` | 抽到共享 `src-tauri/src/ignore_dirs.rs`，codegraph + lsp 共用 |
 
 ## 4. 引入的依赖
 
@@ -73,6 +75,8 @@ lsp/
 └── protocol.rs   仅本项目专属类型（如 QueryResult 映射）；LSP 标准类型用 lsp-types
 ```
 
+**共享模块**：把 `codegraph/indexer/walk.rs:13-34` 的 `ALWAYS_IGNORE_DIRS` 抽到 `src-tauri/src/ignore_dirs.rs`（顶层共享，非 lsp/ 子模块），codegraph 的 `walk.rs` 改为 `pub use` 引用，lsp 的 exclude 构建也引用——单一真源，不重复硬编码。
+
 **文件体量约束**：每子模块 80-250 行，mod.rs（命令层）最长 ~250 行。遵守项目红线：源文件超 1000 行必须拆，且提早拆。当前拆分已天然满足。
 
 ### 5.2 前端
@@ -82,13 +86,41 @@ lsp/
 - `src/api.ts`——加 `lsp*` 封装
 - `src/components/CodeEditor.vue`——extensions 数组加一行 `cmLsp({...})`；`goto-definition` emit payload 加 `column`
 - `src/composables/useGotoDefinition.ts`——`search()` 插 LSP 为第一 provider
-- 设置：工作区记录加 `lsp_enabled: bool`（默认 false）+ `workspace_set_lsp_enabled` 命令；全局 `lsp.servers` 覆盖路径
+- 设置：工作区记录加 `lsp_enabled: bool`（默认 false）+ `lsp_exclude_dirs: Vec<String>`（手动排除目录，IDEA 式）+ `workspace_set_lsp_enabled` / `workspace_set_lsp_excludes` 命令；全局 `lsp.servers` 覆盖路径
 
 ### 5.3 两个关键集成决策
 
 **定义触发**：保留 `CodeEditor.vue:109` Ctrl+Click emit，仅给 payload 加 `column`（`posAtCoords`→offset→char）。`useGotoDefinition.search()` 把 LSP 插为第一 provider（工作区 LSP 开且该语言有 server 时调 `lsp_definition`→`QueryResult[]`），空/错落到现有 codegraph→grep。goto 浮层、导航栈、`isGrepFallback` 标签全零改复用。cmLsp 不掺和定义触发。
 
 **信任门**：复用 `is_workspace_trusted`。未信任工作区 `lsp_*` 命令前置校验返回 `{kind:"untrusted"}`，前端禁用 LSP——LSP 跑外部二进制 + 索引工作区，本就该走信任门。
+
+### 5.4 工作区扫描边界（关键）
+
+LSP server 收到 `initialize` + `workspaceFolders` 后会自己起后台索引（跨文件定义/补全/诊断需要全量项目模型）。server 按语言 manifest 走（rust-analyzer 按 Cargo crate 图、tsserver 按 tsconfig、pyright 按 pyproject/pyrightconfig、gopls 按 go.mod），构建产物多被语言自身规则挡住——**但 server 不自动尊重我们的 .gitignore 和硬编码黑名单**，且各家 exclude 机制不统一：
+
+| server | exclude 机制 | 我们能否 init 注入 |
+|---|---|---|
+| rust-analyzer | `initializationOptions` excludeGlobs | 能 |
+| gopls | `initializationOptions.directoryFilters` | 能 |
+| typescript-language-server | tsconfig `exclude`（项目文件） | 不能（不替用户改项目文件） |
+| pyright | `pyrightconfig.json` / `pyproject.toml [tool.pyright]`（项目文件） | 不能 |
+
+**排除集构成**（单一真源 = `src-tauri/src/ignore_dirs.rs`）：
+
+```
+排除集 = ALWAYS_IGNORE_DIRS（硬编码黑名单）
+       ∪ workspace.lsp_exclude_dirs（用户手动排除，IDEA 式，存工作区记录）
+```
+
+**三处应用**：
+
+1. **init 注入**（rust-analyzer/gopls）：把排除集转成 `**/{dir}/**` globs 注入 server 的 init exclude 配置，挡住 server 后台全量扫描钻进 node_modules 等。
+2. **我方 didOpen 跳过**（所有 server 通用兜底）：编辑器开文件时，路径落在排除集里 → 不发 `didOpen`，server 不为它建文档。即便 server 自己扫进去了，我们也不主动喂。
+3. **tsserver/pyright**：靠用户项目自有的 tsconfig/pyright exclude（真实项目几乎都有，构建本来就需要）；v1 不替它们写配置文件。我方 didOpen 跳过仍生效。
+
+**用户手动排除**：工作区记录加 `lsp_exclude_dirs: Vec<String>`（相对工作区根的目录路径，IDEA "Mark Directory as Excluded" 式）。命令 `workspace_set_lsp_excludes(workspace_root, Vec<String>)`；设置 UI 在工作区设置里加一个目录列表编辑器。改后对**已起**的 server 需重启才生效（server init exclude 不支持热改）——`workspace_set_lsp_excludes` 触发该工作区 server 重拉。
+
+**v1 诚实边界**：项目特定 .gitignore 目录（不在硬编码黑名单、又未被语言 manifest exclude、用户也没手动加的）——LSP 仍可能扫。这类通常是少量源码/生成物，非 node_modules 量级，可接受。把 .gitignore 精确翻译给 server 不可行（server 吃 glob 不吃 gitignore 语法，且一半 server 从项目文件读），明确列为范围外。
 
 ## 6. 组件（职责 / 接口 / 依赖）
 
@@ -122,9 +154,10 @@ lsp/
 
 **`lsp/manager.rs`**
 - 职责：`HashMap<(workspace_root, lang), ServerHandle>`，`ServerHandle = {transport, child, status}`
-- 接口：`ensure_server(workspace, lang) -> Result<&Handle>`（幂等，`spawn_lock`）、`kill_workspace(workspace)`、`kill_server(workspace, lang)`、`dead_server` 标记
-- spawn 流程：resolve→spawn→initialize+initialized 握手→ready
-- 依赖：`registry`、`transport`
+- 接口：`ensure_server(workspace, lang) -> Result<&Handle>`（幂等，`spawn_lock`）、`kill_workspace(workspace)`、`kill_server(workspace, lang)`、`dead_server` 标记、`restart_workspace(workspace)`（排除集变更后重拉）
+- spawn 流程：resolve→spawn→initialize（**注入排除集 globs**，见 5.4）+initialized 握手→ready
+- `build_exclude_globs(workspace) -> Vec<String>`：`ALWAYS_IGNORE_DIRS ∪ workspace.lsp_exclude_dirs` 转 `**/{dir}/**`
+- 依赖：`registry`、`transport`、`ignore_dirs`（共享）、`settings`（读 `lsp_exclude_dirs`）
 
 **`lsp/docs.rs`**
 - 职责：`HashMap<Uri, {version, text}>`，per-server 一份
@@ -136,12 +169,13 @@ lsp/
 - 命令（全 `async fn`，照 `codegraph_goto_definition` 形状）：
   - `lsp_detect_languages(workspace_root) -> Vec<LanguageId>`
   - `lsp_ensure_server(workspace_root, lang) -> Result<{ok, server_not_found?}>`
-  - `lsp_did_open / lsp_did_change / lsp_did_close(workspace_root, filePath, lang, text, version?)`
+  - `lsp_did_open / lsp_did_change / lsp_did_close(workspace_root, filePath, lang, text, version?)`（`did_open` 跳过落在排除集里的路径，见 5.4）
   - `lsp_definition(workspace_root, filePath, line, column) -> Vec<QueryResult>`
   - `lsp_completion(workspace_root, filePath, line, column, triggerKind) -> Vec<CompletionItem>`
   - `lsp_hover(workspace_root, filePath, line, column) -> {content: string|null}`
   - `lsp_shutdown_workspace(workspace_root)`
   - `workspace_set_lsp_enabled(workspace_root, bool)`（信任校验前置）
+  - `workspace_set_lsp_excludes(workspace_root, Vec<String>)`（改排除集 → 触发该工作区 server 重拉）
 - 依赖：以上子模块 + `codegraph/types.rs`（复用 `QueryResult`）+ `commands/workspace.rs`（信任）
 
 ### 前端
@@ -176,9 +210,10 @@ lsp/
  → Rust lsp_did_open:
      manager.ensure_server(workspace, "rust")
        registry.resolve("rust") → Bundled("rust-analyzer")
+       build_exclude_globs(workspace) → ["**/node_modules/**","**/target/**",... ,用户手动排除]
        spawn: tokio::piped + creation_flags + dunce
        transport reader_task 起 (Content-Length 帧)
-       发 initialize → 收 capabilities → 发 initialized
+       发 initialize（注入排除集 globs 到 init exclude）→ 收 capabilities → 发 initialized
      docs.open(filePath, version=1, text)
      发 textDocument/didOpen (notification)
      return Ok
@@ -274,6 +309,7 @@ Ctrl+Click (CodeEditor.vue:109)
 | 关工作区 server 回收 | 生命周期 | 发 `shutdown` 请求 → 给 server 500ms grace period 响应 → 不论响应与否发 `exit` 通知 → `start_kill`；保 `kill_workspace` 一定回收。500ms 是我们自选的 grace period（非 LSP 协议规定值），给 server 优雅落盘的机会但不无限等 |
 | 诊断版本错位 | 正确性 | 诊断携带 `version`，丢弃 < 当前 `synced_version` 的，防闪烁 |
 | 大文件（>1MB） | 资源上界 | cmLsp 跳过同步，codegraph/grep 仍可用 |
+| 打开排除目录里的文件 | 扫描边界 | `lsp_did_open` 检测路径落在排除集（§5.4）→ 不发 didOpen，server 不为它建文档；该文件无 LSP 能力，codegraph/grep 照常 |
 | 请求泄漏 | 自愈 | 前端 drop promise → oneshot receiver 丢 → sender send 静默失败；server EOF → 批量 reject。无需超时清扫 |
 
 ## 9. 测试
@@ -302,6 +338,13 @@ Ctrl+Click (CodeEditor.vue:109)
 
 **`lsp/manager.rs`**
 - `ensure_server_idempotent` / `kill_workspace_kills_all` / `kill_server_single` / `dead_server_respawns_on_next_ensure`
+- `restart_workspace_after_exclude_change`：`workspace_set_lsp_excludes` 后 server 重拉且新 init 注入含新 glob
+
+**`ignore_dirs.rs`（共享）+ `manager.build_exclude_globs`**
+- `always_ignore_dirs_unchanged`：抽取到共享后 codegraph `walk.rs` 行为不变（回归保护，照 `walk.rs:94` 测试）
+- `exclude_globs_union_with_workspace_excludes`：黑名单 ∪ 用户手动排除 = 并集
+- `exclude_globs_format`：转成 `**/{dir}/**` 格式正确
+- `did_open_skips_excluded_paths`：路径在排除集 → `lsp_did_open` 不发
 
 **`lsp/docs.rs`**
 - `open_sets_version_1` / `change_increments_version` / `close_removes` / `synced_version_tracks`
@@ -335,6 +378,7 @@ Ctrl+Click (CodeEditor.vue:109)
 - **server 自动重启策略**：v1 crash 后下次 `did_open` 重拉，不自动重启指数退避。未来加。
 - **`$/progress` 索引状态显示**：v1 不做，未来加"索引中"状态条。
 - **第三方语言 server 插件化**：未来允许插件注册自定义 language→server 映射。
+- **.gitignore 精确翻译给 server**：v1 只注入硬编码黑名单 + 用户手动排除；项目特定 .gitignore 规则不翻译（server 吃 glob 不吃 gitignore 语法，且 tsserver/pyright 从项目文件读）。未来若需要，可对支持 init exclude 的 server（rust-analyzer/gopls）做有损的顶层 .gitignore → glob 翻译。
 
 ## 11. 实施约束
 
