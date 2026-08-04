@@ -24,7 +24,7 @@ function lspLangFor(filePath: string): string | undefined {
     go: "go",
     py: "python", pyi: "python",
     java: "java",
-    kt: "kotlin",
+    kt: "kotlin", kts: "kotlin",
     dart: "dart",
     cs: "csharp",
     rb: "ruby",

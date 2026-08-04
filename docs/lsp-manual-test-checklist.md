@@ -14,7 +14,7 @@ v1 不进 CI（慢 + 依赖外部安装）。每个 server 跑一遍下列流程
 ## server 矩阵
 - [ ] rust-analyzer（Rust，捆绑）：本仓库自身 `src-tauri/` 打开 → 诊断 + 跳转 + 补全 + hover
 - [ ] typescript-language-server（TS/JS，捆绑）：本仓库 `src/` 打开 `.ts`/`.vue`
-- [ ] pyright（Python，PATH 发现）：任一 Python 项目
+- [ ] pyright-langserver（Python，PATH 发现；npm 包名 `pyright`，二进制 `pyright-langserver`）：任一 Python 项目
 - [ ] gopls（Go，PATH 发现）：任一 Go 项目 + 验 directoryFilters 排除注入
 
 ## Windows 专项
