@@ -1,6 +1,8 @@
 mod codegraph;
 mod commands;
 mod diagnostics;
+mod ignore_dirs;
+mod lsp;
 mod shell;
 mod runtime;
 mod conversation;

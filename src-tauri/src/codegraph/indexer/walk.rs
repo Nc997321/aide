@@ -2,36 +2,7 @@ use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
 
-/// 始终 prune 的目录名（不依赖 .gitignore 是否存在）。
-///
-/// 背景：`ignore` crate 的 `standard_filters` 只在项目有 `.gitignore` 时才忽略
-/// node_modules / target 等。一个没有 `.gitignore`（或非 git 仓库）的项目会让
-/// walk 钻进 node_modules，把里面成千上万的 .js/.ts 全量 parse + embed，构建
-/// 因此慢到不可用。这里硬编码一份"构建产物 / 依赖 / 工具缓存"黑名单兜底，与
-/// gitignore 叠加——即使无 .gitignore 也快。`.aide` 是 CodeGraph 自己的索引
-/// 目录，必须排除（避免索引自身）。
-const ALWAYS_IGNORE_DIRS: &[&str] = &[
-    "node_modules",
-    "target",
-    "dist",
-    "build",
-    "out",
-    "coverage",
-    ".git",
-    ".aide",
-    ".next",
-    ".nuxt",
-    ".turbo",
-    ".parcel-cache",
-    ".svelte-kit",
-    ".angular",
-    ".cache",
-    "__pycache__",
-    ".venv",
-    "venv",
-    ".idea",
-    ".vscode",
-];
+use crate::ignore_dirs::ALWAYS_IGNORE_DIRS;
 
 /// 单文件大小上限：超过则跳过。minified bundle 动辄几 MB，tree-sitter parse
 /// 极慢且无符号价值。`ignore` crate 的 `max_filesize` 在 walk 层直接跳过。
