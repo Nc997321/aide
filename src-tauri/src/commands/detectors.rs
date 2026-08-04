@@ -19,6 +19,12 @@ pub(crate) trait ProjectDetector: Send + Sync {
     fn matches(&self, root: &Path) -> bool;
     fn build_targets(&self, root: &Path) -> Vec<RunTarget>;
 
+    /// 该探测器认领的项目涉及的 LSP 语言 id 字符串（"rust"/"typescript"/...）。
+    /// 默认空——多数探测器不声明（v1 仅项目型探测器覆盖）。不影响 detect_run_targets。
+    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+        Vec::new()
+    }
+
     // Skeleton -- concrete detectors do not override this.
     fn detect(&self, root: &Path) -> Option<Vec<RunTarget>> {
         if self.matches(root) {
@@ -291,6 +297,8 @@ impl ProjectDetector for TauriDetector {
             command: format!("{} tauri dev", pm),
         }]
     }
+
+    fn languages(&self, _root: &Path) -> Vec<&'static str> { vec!["rust", "typescript", "vue"] }
 }
 
 // Priority 90 -- Maven parent pom with <modules>
@@ -427,6 +435,8 @@ impl ProjectDetector for SpringBootMavenDetector {
             command,
         }]
     }
+
+    fn languages(&self, _root: &Path) -> Vec<&'static str> { vec!["java"] }
 }
 
 // Priority 75 -- Single Spring Boot Gradle project
@@ -447,6 +457,8 @@ impl ProjectDetector for SpringBootGradleDetector {
             command: format!("{} bootRun", gw),
         }]
     }
+
+    fn languages(&self, _root: &Path) -> Vec<&'static str> { vec!["java"] }
 }
 
 // Priority 72 -- Plain Maven project (no spring-boot, no <modules>)
@@ -463,6 +475,8 @@ impl ProjectDetector for JavaMavenDetector {
             command: "mvn compile exec:java".to_string(),
         }]
     }
+
+    fn languages(&self, _root: &Path) -> Vec<&'static str> { vec!["java"] }
 }
 
 // Priority 68 -- Plain Gradle project (no spring-boot)
@@ -480,6 +494,8 @@ impl ProjectDetector for JavaGradleDetector {
             command: format!("{} run", gw),
         }]
     }
+
+    fn languages(&self, _root: &Path) -> Vec<&'static str> { vec!["java"] }
 }
 
 // Priority 70 -- Node.js / frontend (package.json without src-tauri/)
@@ -506,6 +522,8 @@ impl ProjectDetector for NodeDetector {
             command: format!("{} run {}", pm, script),
         }]
     }
+
+    fn languages(&self, _root: &Path) -> Vec<&'static str> { vec!["typescript", "javascript"] }
 }
 
 // Priority 65 -- Rust / Cargo
@@ -520,6 +538,8 @@ impl ProjectDetector for CargoDetector {
             command: "cargo run".to_string(),
         }]
     }
+
+    fn languages(&self, _root: &Path) -> Vec<&'static str> { vec!["rust"] }
 }
 
 // Priority 65 -- Go
@@ -534,6 +554,8 @@ impl ProjectDetector for GoDetector {
             command: "go run .".to_string(),
         }]
     }
+
+    fn languages(&self, _root: &Path) -> Vec<&'static str> { vec!["go"] }
 }
 
 // Priority 60 -- Flutter
@@ -550,6 +572,8 @@ impl ProjectDetector for FlutterDetector {
             command: "flutter run".to_string(),
         }]
     }
+
+    fn languages(&self, _root: &Path) -> Vec<&'static str> { vec!["dart"] }
 }
 
 // Priority 55 -- Pure Dart
@@ -566,6 +590,8 @@ impl ProjectDetector for DartDetector {
             command: "dart run".to_string(),
         }]
     }
+
+    fn languages(&self, _root: &Path) -> Vec<&'static str> { vec!["dart"] }
 }
 
 // Priority 60 -- .NET
@@ -587,6 +613,8 @@ impl ProjectDetector for DotnetDetector {
             command: "dotnet run".to_string(),
         }]
     }
+
+    fn languages(&self, _root: &Path) -> Vec<&'static str> { vec!["csharp"] }
 }
 
 // Priority 60 -- Django
@@ -601,6 +629,8 @@ impl ProjectDetector for DjangoDetector {
             command: "python manage.py runserver".to_string(),
         }]
     }
+
+    fn languages(&self, _root: &Path) -> Vec<&'static str> { vec!["python"] }
 }
 
 // Priority 50 -- Generic Python (main.py / app.py)
@@ -618,6 +648,8 @@ impl ProjectDetector for PythonDetector {
             command: format!("python {}", entry),
         }]
     }
+
+    fn languages(&self, _root: &Path) -> Vec<&'static str> { vec!["python"] }
 }
 
 // Priority 60 -- Ruby on Rails
@@ -634,6 +666,8 @@ impl ProjectDetector for RailsDetector {
             command: "rails server".to_string(),
         }]
     }
+
+    fn languages(&self, _root: &Path) -> Vec<&'static str> { vec!["ruby"] }
 }
 
 // Priority 60 -- Laravel
@@ -650,6 +684,8 @@ impl ProjectDetector for LaravelDetector {
             command: "php artisan serve".to_string(),
         }]
     }
+
+    fn languages(&self, _root: &Path) -> Vec<&'static str> { vec!["php"] }
 }
 
 // Priority 60 -- Elixir / Phoenix
@@ -670,6 +706,8 @@ impl ProjectDetector for ElixirDetector {
             command: cmd.to_string(),
         }]
     }
+
+    fn languages(&self, _root: &Path) -> Vec<&'static str> { vec!["elixir"] }
 }
 
 // Priority 20 -- Makefile fallback
@@ -712,6 +750,24 @@ impl ProjectDetector for SubdirScanDetector {
         }
         targets
     }
+}
+
+/// 走探测器链收集所有 matching 探测器声明的 LSP 语言 id 字符串（去重）。
+/// 供 lsp::detector::detect_languages 用。与 detect_run_targets 独立：不要求 targets 非空，
+/// 只要 matches 即收 languages（一个无 dev 脚本的 Node 项目仍该起 ts server）。
+pub(crate) fn detect_languages_from_markers(root: &Path) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    let chain = DetectorChain::default_chain();
+    for det in &chain.detectors {
+        if det.matches(root) {
+            for lang in det.languages(root) {
+                if !out.contains(&lang) {
+                    out.push(lang);
+                }
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -949,5 +1005,21 @@ mod tests {
             "mvn -pl app -am spring-boot:run -Dspring-boot.run.main-class=com.example.App"
         );
         fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn languages_does_not_break_detect_run_targets() {
+        let tmp = std::env::temp_dir().join("aide_det_lang_regression");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("src-tauri")).unwrap();
+        std::fs::write(tmp.join("package.json"), "{}").unwrap();
+        std::fs::write(tmp.join("src-tauri/Cargo.toml"), "").unwrap();
+        std::fs::write(tmp.join("pnpm-lock.yaml"), "").unwrap();
+        let targets = detect_run_targets(&tmp);
+        assert_eq!(targets.len(), 1);
+        assert!(targets[0].command.contains("tauri dev"), "{}", targets[0].command);
+        let langs = detect_languages_from_markers(&tmp);
+        assert!(langs.contains(&"rust"));
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }
