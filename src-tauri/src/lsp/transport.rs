@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::oneshot;
 
 // ── Framer：Content-Length 帧解析器（带缓冲状态机）──
@@ -98,21 +98,31 @@ impl RequestTable {
 use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
 
-/// 持有一个 server 的 stdin 写端 + 请求/响应关联表。
+/// 持有一个 server 的 stdin 写端 + stdout 读源 + 请求/响应关联表。
 /// stdout reader 任务由 manager 在 spawn 后启动（需 app handle 做 emit），
 /// reader 把 Framer 出来的消息交 rpc::Router::handle_incoming 路由。
 pub struct LspTransport {
     stdin: Arc<TokioMutex<Box<dyn AsyncWrite + Send + Unpin>>>,
     pub table: Arc<TokioMutex<RequestTable>>,
+    reader_source: tokio::sync::Mutex<Option<Box<dyn AsyncRead + Send + Unpin>>>,
 }
 
 impl LspTransport {
-    /// 生产：传 ChildStdin（Box 化）。测试：传 duplex 写端。
-    pub fn new(stdin: Box<dyn AsyncWrite + Send + Unpin>) -> Self {
+    /// 构造：传 stdin（写端）+ stdout（读端）。stdout 通过 take_reader_source 取出供 reader 任务。
+    pub fn with_reader_source(
+        stdin: Box<dyn AsyncWrite + Send + Unpin>,
+        stdout: Box<dyn AsyncRead + Send + Unpin>,
+    ) -> Self {
         Self {
             stdin: Arc::new(TokioMutex::new(stdin)),
             table: Arc::new(TokioMutex::new(RequestTable::new())),
+            reader_source: tokio::sync::Mutex::new(Some(stdout)),
         }
+    }
+
+    /// 取出 stdout 读源（仅一次，供 start_reader 消费）。
+    pub async fn take_reader_source(&self) -> Box<dyn AsyncRead + Send + Unpin> {
+        self.reader_source.lock().await.take().expect("reader taken once")
     }
 
     /// 写一帧（request 或 notification）。调方负责编好消息体。
