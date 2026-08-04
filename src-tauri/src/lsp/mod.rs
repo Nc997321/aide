@@ -9,4 +9,6 @@ pub mod registry;
 pub mod rpc;
 pub mod transport;
 
+#[cfg(test)] mod mock_server;
+
 // LspState 与命令在 Task 11 加入。
