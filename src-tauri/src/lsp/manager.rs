@@ -200,9 +200,9 @@ async fn spawn_and_init(
 
     // —— 生产 spawn ——
     #[cfg(not(test))]
-    let (transport, child) = spawn_real(src, app).await?;
+    let (transport, child) = spawn_real(workspace, lang, src, app).await?;
     #[cfg(test)]
-    let (transport, child) = spawn_test(src).await;
+    let (transport, child) = spawn_test(workspace, lang, src).await;
 
     let router = Arc::new(Router::new());
     let docs = Arc::new(TokioMutex::new(OpenDocs::new()));
@@ -230,15 +230,53 @@ async fn spawn_and_init(
 
 // ── spawn_real（生产）──
 
+/// jdtls 的 `-data` 目录：app_data_dir/lsp/jdtls-workspace/<workspace 哈希>。
+/// jdtls 会把 Eclipse workspace 元数据（.metadata、索引，可达数百 MB）写进 -data 目录，
+/// 故不能直接指向用户工作区；按 workspace 哈希分目录，换区互不污染。
+async fn prepare_jdtls_data_dir(
+    app: &tauri::AppHandle,
+    workspace: &str,
+) -> Result<std::path::PathBuf, EnsureError> {
+    use tauri::Manager;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| EnsureError::SpawnFailed(e.to_string()))?
+        .join("lsp")
+        .join("jdtls-workspace")
+        .join(jdtls_workspace_key(workspace));
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| EnsureError::SpawnFailed(format!("create jdtls data dir: {e}")))?;
+    Ok(dir)
+}
+
+/// workspace 路径 → jdtls -data 目录名。DefaultHasher 跨进程确定性（std 固定 key），
+/// 只作目录命名用，不做安全用途。
+fn jdtls_workspace_key(workspace: &str) -> String {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    workspace.hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
 #[cfg(not(test))]
 async fn spawn_real(
+    workspace: &str,
+    lang: LanguageId,
     src: &ServerSource,
     app: &tauri::AppHandle,
 ) -> Result<(LspTransport, Option<Arc<TokioMutex<tokio::process::Child>>>), EnsureError> {
     use tauri::Manager;
     use tokio::process::Command;
 
-    let (program, args) = registry::to_command(src);
+    // Java 的 jdtls 需要 -data（Eclipse workspace 目录）；其余语言无特殊目录。
+    let data_dir = if lang == LanguageId::Java {
+        Some(prepare_jdtls_data_dir(app, workspace).await?)
+    } else {
+        None
+    };
+    let (program, args) = registry::to_command(lang, src, data_dir.as_deref());
     // Bundled：拼完整资源路径 + dunce 剥前缀
     let program_path = match src {
         ServerSource::Bundled { subdir, binary } => {
@@ -292,6 +330,8 @@ async fn spawn_real(
 
 #[cfg(test)]
 async fn spawn_test(
+    _workspace: &str,
+    _lang: LanguageId,
     _src: &ServerSource,
 ) -> (LspTransport, Option<Arc<TokioMutex<tokio::process::Child>>>) {
     let mock = crate::lsp::mock_server::spawn_mock_lsp();
@@ -474,5 +514,15 @@ mod tests {
         assert!(ALWAYS_IGNORE_DIRS.contains(&"node_modules"));
         assert!(ALWAYS_IGNORE_DIRS.contains(&"target"));
         assert!(ALWAYS_IGNORE_DIRS.contains(&".git"));
+    }
+
+    #[test]
+    fn jdtls_workspace_key_is_deterministic_and_distinct() {
+        let a = jdtls_workspace_key("C:/proj/a");
+        let a2 = jdtls_workspace_key("C:/proj/a");
+        let b = jdtls_workspace_key("C:/proj/b");
+        assert_eq!(a, a2, "同 workspace 哈希必须稳定（跨进程复用 -data 目录）");
+        assert_ne!(a, b, "不同 workspace 哈希不应相同");
+        assert_eq!(a.len(), 16, "hex u64 应为 16 位");
     }
 }

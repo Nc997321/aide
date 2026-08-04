@@ -12,14 +12,36 @@ v1 不进 CI（慢 + 依赖外部安装）。每个 server 跑一遍下列流程
 7. 排除目录：设 `target` 为排除 → 打开 `target/` 下文件不发 didOpen（无诊断/补全）
 
 ## server 矩阵
-- [ ] rust-analyzer（Rust，捆绑）：本仓库自身 `src-tauri/` 打开 → 诊断 + 跳转 + 补全 + hover
-- [ ] typescript-language-server（TS/JS，捆绑）：本仓库 `src/` 打开 `.ts`/`.vue`
+> 注：v1 **未捆绑任何 server**（registry 预留 Bundled 机制但打包未落地）。全部语言走 PATH 发现 / 设置覆盖——机器上没装的 server 会弹 "LSP server not found" toast，功能降级 codegraph/grep。各语言安装见下节。
+
+- [ ] rust-analyzer（Rust，PATH 发现）：本仓库自身 `src-tauri/` 打开 → 诊断 + 跳转 + 补全 + hover
+- [ ] typescript-language-server（TS/JS，PATH 发现）：本仓库 `src/` 打开 `.ts`/`.vue`
 - [ ] pyright-langserver（Python，PATH 发现；npm 包名 `pyright`，二进制 `pyright-langserver`）：任一 Python 项目
 - [ ] gopls（Go，PATH 发现）：任一 Go 项目 + 验 directoryFilters 排除注入
+- [ ] jdtls（Java，PATH 发现）：任一 Java 项目（需先装 jdtls，见下）。验：打开 `.java` → 诊断 + 跳转 + 补全；`-data` 目录落在 `app_data_dir/lsp/jdtls-workspace/`（不进用户工作区）；jdtls stderr 无 `--stdio` 参数报错
 
-## Windows 专项
-- [ ] release build 打开 `.rs`：不弹控制台窗（CREATE_NO_WINDOW）
-- [ ] release build：资源路径传 server 不崩（dunce 剥 `\\?\`）
+## 各语言 server 安装（PATH 发现的要求：二进制在 PATH 上，`which <bin>` 能找到）
+
+| 语言 | 二进制 | 安装 |
+|---|---|---|
+| Rust | `rust-analyzer` | `rustup component add rust-analyzer`（rustup 装好后在 `~/.cargo/bin`）；或 [GitHub releases](https://github.com/rust-lang/rust-analyzer/releases) 下载对应平台 exe 放 PATH |
+| TS/JS | `typescript-language-server` | `npm i -g typescript-language-server typescript`（新版自动装 node 运行时，无需单独 node） |
+| Python | `pyright-langserver` | `npm i -g pyright` |
+| Go | `gopls` | `go install golang.org/x/tools/gopls@latest` |
+| Java | `jdtls` | 见下方 Java 专项 |
+
+> 装好后重启 app 生效；仍报 not found 就用设置覆盖（LSP → 服务器覆盖，program 填完整路径）。
+
+## Java：jdtls 安装与配置（Windows）
+jdtls 是 Eclipse JDT Language Server，**默认走 stdio**（不传 `CLIENT_PORT`/`--pipe` 即 stdin/stdout），因此无需额外传输配置；**它不认 `--stdio`**（Aide 已对 Java 特判不注入，自动补 `-data`）。只需把 `jdtls` 命令搞到 PATH 上：
+
+1. 装 JDK 17+（已有 JDK 的确认版本；jdtls 要求 17+）
+2. 方式 A（推荐，scoop）：`scoop bucket add java && scoop install jdtls` —— 装好后 `jdtls` 自动在 PATH
+3. 方式 B（手动）：从 [eclipse.jdt.ls 发布页](https://github.com/eclipse-jdtls/eclipse.jdt.ls/releases) 下载最新 zip → 解压 → 把 `bin/` 目录加进 PATH（Windows 上 `bin/jdtls` 是脚本，需配合 PATHEXT 或直接用方式 C）
+4. 方式 C（设置覆盖，最稳）：设置面板 → LSP → 服务器覆盖里给 `java` 配 program 指向 `jdtls` 可执行文件完整路径（args 可留空——Aide 自动补 `-data`；若自己配了 args 且想自定义 workspace 目录，显式写 `-data <目录>` 即可，Aide 不重复追加）
+5. 验证：终端跑 `jdtls -h` 或直接开 `.java` 文件看是否弹诊断
+
+> 注意：jdtls 首次启动较慢（Eclipse OSGi 框架 + 索引），补全/诊断可能延迟数秒；`-data` 目录复用同一 workspace 后二次启动快很多。
 
 ## 不测的（诚实声明）
 - 真实 rust-analyzer 全协议兼容矩阵——v1 只覆盖 4 method + 诊断
