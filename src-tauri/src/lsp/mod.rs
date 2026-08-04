@@ -6,7 +6,7 @@ pub mod detector;
 // pub mod manager;
 // pub mod protocol;
 pub mod registry;
-// pub mod rpc;
+pub mod rpc;
 pub mod transport;
 
 // LspState 与命令在 Task 11 加入。
