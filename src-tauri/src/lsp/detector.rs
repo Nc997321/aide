@@ -83,7 +83,7 @@ pub fn detect_languages(root: &Path) -> Vec<LanguageId> {
     let mut out: Vec<LanguageId> = Vec::new();
     // 1. 项目 marker 探测器链
     for id_str in crate::commands::detectors::detect_languages_from_markers(root) {
-        if let Some(lang) = parse_language_id(id_str) {
+        if let Some(lang) = lang_from_id_str(id_str) {
             if !out.contains(&lang) {
                 out.push(lang);
             }
@@ -112,7 +112,7 @@ pub fn detect_languages(root: &Path) -> Vec<LanguageId> {
 }
 
 /// "rust" → LanguageId::Rust。与 LanguageId::id_str 互逆。
-fn parse_language_id(s: &str) -> Option<LanguageId> {
+pub fn lang_from_id_str(s: &str) -> Option<LanguageId> {
     match s {
         "rust" => Some(LanguageId::Rust),
         "typescript" => Some(LanguageId::TypeScript),

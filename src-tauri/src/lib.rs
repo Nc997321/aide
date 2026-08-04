@@ -116,6 +116,7 @@ pub fn run() {
         .manage(workspace_state)
         .manage(PendingOpenFile(std::sync::Mutex::new(None)))
         .manage(std::sync::Arc::new(codegraph::CodeGraphState::new()))
+        .manage(std::sync::Arc::new(lsp::LspState::new()))
         .setup(|app| {
             app.state::<std::sync::Arc<settings::SettingsService>>()
                 .initialize_blocking()
@@ -402,6 +403,18 @@ pub fn run() {
             commands::migration::check_claude_migration,
             commands::migration::migrate_claude_data,
             commands::migration::dismiss_claude_migration,
+            // LSP built-in
+            commands::workspace::workspace_set_lsp_enabled,
+            commands::workspace::workspace_set_lsp_excludes,
+            lsp::lsp_detect_languages,
+            lsp::lsp_ensure_server,
+            lsp::lsp_did_open,
+            lsp::lsp_did_change,
+            lsp::lsp_did_close,
+            lsp::lsp_definition,
+            lsp::lsp_completion,
+            lsp::lsp_hover,
+            lsp::lsp_shutdown_workspace,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

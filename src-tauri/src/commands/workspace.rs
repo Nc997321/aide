@@ -405,6 +405,28 @@ pub async fn untrust_workspace(path: String) -> Result<(), String> {
     .map_err(|e| format!("untrust_workspace panicked: {}", e))?
 }
 
+// ── 工作区 LSP 开关 Tauri 命令 ──
+
+#[tauri::command]
+pub async fn workspace_set_lsp_enabled(workspace_root: String, enabled: bool) -> Result<(), String> {
+    // 信任门：未信任工作区拒开 LSP（LSP 跑外部二进制 + 索引工作区，本就该走信任门）
+    if enabled && !is_path_trusted(&workspace_root) {
+        return Err("untrusted workspace".into());
+    }
+    let key = path_to_key(&workspace_root);
+    set_lsp_enabled(&key, enabled)
+}
+
+#[tauri::command]
+pub async fn workspace_set_lsp_excludes(workspace_root: String, dirs: Vec<String>) -> Result<(), String> {
+    let key = path_to_key(&workspace_root);
+    set_lsp_excludes(&key, dirs)?;
+    // 改排除集 → 触发该工作区 server 重拉（init exclude 不支持热改）
+    // 由前端调 lsp_shutdown_workspace 后下次 did_open 自然重拉；
+    // 或在此 emit 信号。v1：返回 OK，前端 disable→enable LSP 完成重拉。
+    Ok(())
+}
+
 pub fn resolve_path_from_key(key: &str) -> Option<String> {
     let mut chars = key.chars();
     let drive = chars.next()?;
