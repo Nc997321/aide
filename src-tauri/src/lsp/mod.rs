@@ -94,6 +94,13 @@ pub async fn lsp_did_change(
     let mgr = state.0.lock().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(()); };
     let uri = crate::lsp::protocol::path_to_uri(&file_path);
+    // 防御：前端漏发 did_open / 乱序时 OpenDocs::change 会 panic。未开 → 跳过，不崩。
+    {
+        let docs = h.docs.lock().await;
+        if !docs.contains(&uri) {
+            return Ok(()); // doc not open (no preceding did_open) — skip, don't panic
+        }
+    }
     let v = h.docs.lock().await.change(&uri, text.clone());
     let _ = version; // Full 同步：用 docs 内部 version
     let notif = serde_json::json!({
@@ -312,6 +319,7 @@ mod tests {
                         }
                     }
                 }
+                _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => { return Err(()); }
             }
         }
     }
