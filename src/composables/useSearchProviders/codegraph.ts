@@ -45,6 +45,11 @@ function confidenceLabel(result: QueryResult): string {
   return result.confidence === "Structure" ? "精确" : "相似";
 }
 
+/** 语义命中带相似度分数；结构层精确命中无分数（score=null）。显示为百分比，便于和阈值对照。 */
+function scoreTag(result: QueryResult): string {
+  return result.score != null ? ` ${(result.score * 100).toFixed(0)}%` : "";
+}
+
 function createResult(
   result: QueryResult,
   identity: string,
@@ -57,7 +62,7 @@ function createResult(
   return {
     id: `codegraph:${identity}`,
     label: result.symbol.name,
-    description: `${confidenceLabel(result)} · ${location}${moduleHint}`,
+    description: `${confidenceLabel(result)}${scoreTag(result)} · ${location}${moduleHint}`,
     tooltip: `${relativePath}:${result.symbol.line}`,
     icon: result.confidence === "Structure" ? "link" : "search",
     action() {
