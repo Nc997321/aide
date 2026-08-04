@@ -4,7 +4,7 @@
 pub mod detector;
 pub mod docs;
 // pub mod manager;
-// pub mod protocol;
+pub mod protocol;
 pub mod registry;
 pub mod rpc;
 pub mod transport;
