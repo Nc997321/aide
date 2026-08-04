@@ -98,6 +98,22 @@ impl Default for CodeGraphEmbedderConfig {
     }
 }
 
+/// 用户在全局设置里对某语言 LSP server 的显式覆盖（"用这个二进制 + 这些参数"）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct ServerOverride {
+    pub program: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+/// 全局 LSP 设置：按 language id 覆盖 server 二进制路径。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct LspSettings {
+    /// key = language id（"rust"/"typescript"/...），值 = 显式覆盖。
+    #[serde(default)]
+    pub servers: std::collections::HashMap<String, ServerOverride>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -155,6 +171,9 @@ pub struct AppSettings {
     /// 滑出、覆盖内容），true = 常驻 dock 推开内容。纯 UI 状态，Rust 只存取。
     #[serde(default)]
     pub left_sidebar_pinned: bool,
+    /// 全局 LSP 设置：按 language id 覆盖 server 二进制路径。
+    #[serde(default)]
+    pub lsp: LspSettings,
 }
 
 fn default_font_size() -> u32 { 14 }
@@ -189,6 +208,7 @@ impl Default for AppSettings {
             jdk_registry: Vec::new(),
             jdk_prompt_dismissed: Vec::new(),
             left_sidebar_pinned: false,
+            lsp: LspSettings::default(),
         }
     }
 }

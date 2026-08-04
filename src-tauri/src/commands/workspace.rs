@@ -150,6 +150,66 @@ pub fn clear_active_in_config(config: &mut serde_json::Value) {
     }
 }
 
+// ── 工作区 LSP 配置（lsp_workspaces）──
+
+/// 单工作区的 LSP 配置（存 state JSON，按 workspace key 索引）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct WorkspaceLspConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub exclude_dirs: Vec<String>,
+}
+
+/// 读某工作区的 LSP 配置（不存在 → 默认：关闭、无排除）。
+pub fn lsp_workspace_config(key: &str) -> WorkspaceLspConfig {
+    let config = super::settings::load_state();
+    config
+        .get("lsp_workspaces")
+        .and_then(|w| w.get(key))
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
+
+/// 设某工作区 LSP 开关。写 state JSON 的 lsp_workspaces[key].enabled。
+pub fn set_lsp_enabled(key: &str, enabled: bool) -> Result<(), String> {
+    super::settings::with_state_mut(|config| {
+        let entry = config
+            .as_object_mut().ok_or("state not object")?
+            .entry("lsp_workspaces")
+            .or_insert(serde_json::json!({}));
+        let obj = entry.as_object_mut().ok_or("lsp_workspaces not object")?;
+        let mut cfg: WorkspaceLspConfig = obj
+            .get(key)
+            .cloned()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        cfg.enabled = enabled;
+        obj.insert(key.to_string(), serde_json::to_value(&cfg).map_err(|e| e.to_string())?);
+        Ok(())
+    })
+}
+
+/// 设某工作区排除目录列表。写 state JSON 的 lsp_workspaces[key].exclude_dirs。
+pub fn set_lsp_excludes(key: &str, dirs: Vec<String>) -> Result<(), String> {
+    super::settings::with_state_mut(|config| {
+        let entry = config
+            .as_object_mut().ok_or("state not object")?
+            .entry("lsp_workspaces")
+            .or_insert(serde_json::json!({}));
+        let obj = entry.as_object_mut().ok_or("lsp_workspaces not object")?;
+        let mut cfg: WorkspaceLspConfig = obj
+            .get(key)
+            .cloned()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        cfg.exclude_dirs = dirs;
+        obj.insert(key.to_string(), serde_json::to_value(&cfg).map_err(|e| e.to_string())?);
+        Ok(())
+    })
+}
+
 #[tauri::command]
 pub async fn list_workspaces() -> Result<Vec<WorkspaceInfo>, String> {
     tokio::task::spawn_blocking(|| {
@@ -583,6 +643,35 @@ mod tests {
         assert_eq!(via_path, "C--proj-chennong4-0");
         assert_eq!(via_path, via_key_dashed);
         assert_eq!(via_path, via_key_dotted);
+    }
+
+    // ── LSP 工作区配置 ──
+
+    #[test]
+    fn lsp_workspace_config_defaults_when_absent() {
+        let cfg = lsp_workspace_config("aide_test_nonexistent_key_xyz");
+        assert!(!cfg.enabled);
+        assert!(cfg.exclude_dirs.is_empty());
+    }
+
+    #[test]
+    fn set_lsp_enabled_round_trips() {
+        let key = "aide_test_set_enabled_xyz";
+        set_lsp_enabled(key, true).unwrap();
+        let cfg = lsp_workspace_config(key);
+        assert!(cfg.enabled);
+        // 清理
+        set_lsp_enabled(key, false).unwrap();
+    }
+
+    #[test]
+    fn set_lsp_excludes_round_trips() {
+        let key = "aide_test_set_excludes_xyz";
+        set_lsp_excludes(key, vec!["generated".into(), "vendor".into()]).unwrap();
+        let cfg = lsp_workspace_config(key);
+        assert_eq!(cfg.exclude_dirs, vec!["generated".to_string(), "vendor".to_string()]);
+        // 清理
+        set_lsp_excludes(key, vec![]).unwrap();
     }
 
     fn sample(key: &str) -> WorkspaceInfo {
