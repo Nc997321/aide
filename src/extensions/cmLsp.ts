@@ -152,7 +152,7 @@ export interface CmLspOpts {
 
 export function cmLsp(opts: CmLspOpts): Extension {
   if (!opts.enabled) {
-    // 关闭：返回空扩展（不发 didOpen/didChange）。仍挂 diagField 占位以避免 slot 冲突。
+    // 关闭：返回空扩展（不发 didOpen/didChange，不挂任何扩展）。
     return [];
   }
   const plugin = ViewPlugin.fromClass(
