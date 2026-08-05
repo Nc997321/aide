@@ -19,6 +19,12 @@ pub enum EnsureError {
     HandshakeFailed(String),
 }
 
+// ── 超时预算（全链有界：任何一步挂起都不无限等，失败路径杀进程防孤儿）──
+/// spawn_lock 获取：持锁者被卡住（spawn 慢/挂起）时队列不无限等待。
+const SPAWN_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// init_handshake 的 send：与 rx 的 5s 对齐（send 卡 pipe 时也要有界）。
+const HANDSHAKE_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 // ── ServerHandle ──
 
 pub struct ServerHandle {
@@ -53,7 +59,8 @@ impl LspManager {
         }
     }
 
-    /// 幂等：已 alive 直接返；dead → 重拉。
+    /// 幂等：已 alive 直接返；dead → 重拉。全链有界：拿锁 30s 超时（持锁者
+    /// 被 spawn 卡住时队列不无限等），spawn 30s、握手 send/rx 各 5s，失败杀进程。
     pub async fn ensure_server(
         &self,
         workspace: &str,
@@ -61,7 +68,9 @@ impl LspManager {
         app: &tauri::AppHandle,
         settings: &crate::commands::settings::AppSettings,
     ) -> Result<Arc<ServerHandle>, EnsureError> {
-        let _g = self.spawn_lock.lock().await;
+        let _g = tokio::time::timeout(SPAWN_LOCK_TIMEOUT, self.spawn_lock.lock())
+            .await
+            .map_err(|_| EnsureError::SpawnFailed("spawn_lock timeout (holder stuck >30s)".into()))?;
         {
             let map = self.handles.lock().await;
             if let Some(h) = map.get(&(workspace.to_string(), lang)) {
@@ -171,7 +180,7 @@ pub fn is_excluded(path: &str, exclude_globs: &[String]) -> bool {
 // ── shutdown_handle ──
 
 async fn shutdown_handle(h: &ServerHandle) {
-    // 发 shutdown request → 给 500ms grace → exit notification → 标 dead
+    // 发 shutdown request → exit notification → 标 dead
     let (msg, id, tx, _rx) = h.router.next_request("shutdown", serde_json::Value::Null);
     h.transport.table.lock().await.insert(id, tx);
     let _ = h.transport.send(&msg).await;
@@ -180,6 +189,19 @@ async fn shutdown_handle(h: &ServerHandle) {
     let _ = h.transport.send(&exit).await;
     h.dead.store(true, Ordering::Relaxed);
     h.transport.table.lock().await.reject_all();
+    // 兜底：exit 通知后给 3s 让进程自己退出；没退就强杀——否则 server 卡住时
+    // 进程残留（JVM 内存不归还 OS，Task Manager 里 java.exe 不消失）。
+    if let Some(child) = &h._child {
+        let mut c = child.lock().await;
+        let exited = matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(3), c.wait()).await,
+            Ok(Ok(_))
+        );
+        if !exited {
+            let _ = c.kill().await;
+            let _ = c.wait().await;
+        }
+    }
 }
 
 // ── spawn_and_init ──
@@ -223,41 +245,55 @@ async fn spawn_and_init(
     start_reader(handle.clone(), app.clone());
 
     // —— initialize 握手 ——
-    init_handshake(&handle, workspace, lang, &exclude_globs).await?;
+    if let Err(e) = init_handshake(&handle, workspace, lang, &exclude_globs).await {
+        // 握手失败/超时：显式杀子进程，防孤儿堆积（否则每次重探又 spawn 一个新进程，
+        // 系统上堆满不响应 initialize 的 server，越用越慢——"探测中永不结束"的放大器）。
+        if let Some(child) = &handle._child {
+            let mut c = child.lock().await;
+            let _ = c.kill().await;
+            let _ = c.wait().await;
+        }
+        return Err(e);
+    }
     handle.initialized.store(true, Ordering::Relaxed);
     Ok(handle)
 }
 
 // ── spawn_real（生产）──
 
-/// jdtls 的 `-data` 目录：app_data_dir/lsp/jdtls-workspace/<workspace 哈希>。
-/// jdtls 会把 Eclipse workspace 元数据（.metadata、索引，可达数百 MB）写进 -data 目录，
-/// 故不能直接指向用户工作区；按 workspace 哈希分目录，换区互不污染。
-async fn prepare_jdtls_data_dir(
-    app: &tauri::AppHandle,
-    workspace: &str,
-) -> Result<std::path::PathBuf, EnsureError> {
-    use tauri::Manager;
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| EnsureError::SpawnFailed(e.to_string()))?
-        .join("lsp")
-        .join("jdtls-workspace")
-        .join(jdtls_workspace_key(workspace));
+/// 按语言档案准备隔离数据目录：`<workspace>/.aide/<name>`（name 由 profile 声明，
+/// 如 jdtls 的 jdtls-workspace）。.aide 已在 ALWAYS_IGNORE_DIRS：文件树隐藏、不索引。
+async fn prepare_data_dir(workspace: &str, name: &str) -> Result<std::path::PathBuf, EnsureError> {
+    let dir = std::path::PathBuf::from(workspace).join(".aide").join(name);
     tokio::fs::create_dir_all(&dir)
         .await
-        .map_err(|e| EnsureError::SpawnFailed(format!("create jdtls data dir: {e}")))?;
+        .map_err(|e| EnsureError::SpawnFailed(format!("create {name} data dir: {e}")))?;
     Ok(dir)
 }
 
-/// workspace 路径 → jdtls -data 目录名。DefaultHasher 跨进程确定性（std 固定 key），
-/// 只作目录命名用，不做安全用途。
-fn jdtls_workspace_key(workspace: &str) -> String {
-    use std::hash::{DefaultHasher, Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    workspace.hash(&mut h);
-    format!("{:016x}", h.finish())
+/// 组 spawn 命令。Windows 上 .bat/.cmd 不能直接 CreateProcess（实测报"找不到文件"/
+/// 错误 193），必须 `cmd /C` 包装——覆盖 Which（完整路径含扩展名）与用户 Explicit 配 .bat。
+#[cfg(windows)]
+fn build_spawn_command(program: &std::path::Path, args: &[String]) -> tokio::process::Command {
+    use tokio::process::Command;
+    let lower = program.to_string_lossy().to_lowercase();
+    if lower.ends_with(".bat") || lower.ends_with(".cmd") {
+        let mut c = Command::new("cmd");
+        c.arg("/C").arg(program).args(args);
+        c
+    } else {
+        let mut c = Command::new(program);
+        c.args(args);
+        c
+    }
+}
+
+#[cfg(not(windows))]
+fn build_spawn_command(program: &std::path::Path, args: &[String]) -> tokio::process::Command {
+    use tokio::process::Command;
+    let mut c = Command::new(program);
+    c.args(args);
+    c
 }
 
 #[cfg(not(test))]
@@ -268,13 +304,11 @@ async fn spawn_real(
     app: &tauri::AppHandle,
 ) -> Result<(LspTransport, Option<Arc<TokioMutex<tokio::process::Child>>>), EnsureError> {
     use tauri::Manager;
-    use tokio::process::Command;
 
-    // Java 的 jdtls 需要 -data（Eclipse workspace 目录）；其余语言无特殊目录。
-    let data_dir = if lang == LanguageId::Java {
-        Some(prepare_jdtls_data_dir(app, workspace).await?)
-    } else {
-        None
+    // 隔离数据目录（如 jdtls 的 -data Eclipse workspace）由语言档案声明，manager 只做通用准备。
+    let data_dir = match crate::lsp::profiles::profile(lang).data_dir_name() {
+        Some(name) => Some(prepare_data_dir(workspace, name).await?),
+        None => None,
     };
     let (program, args) = registry::to_command(lang, src, data_dir.as_deref());
     // Bundled：拼完整资源路径 + dunce 剥前缀
@@ -289,9 +323,8 @@ async fn spawn_real(
         }
         _ => std::path::PathBuf::from(&program),
     };
-    let mut cmd = Command::new(&program_path);
-    cmd.args(&args)
-        .stdin(std::process::Stdio::piped())
+    let mut cmd = build_spawn_command(&program_path, &args);
+    cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .current_dir(std::env::current_dir().unwrap_or_default());
@@ -299,6 +332,9 @@ async fn spawn_real(
     {
         cmd.creation_flags(0x08000000);
     } // CREATE_NO_WINDOW
+    // tokio 1.52 的 Command::spawn 是同步返回（非 async）：CreateProcess 即使被杀软
+    // 扫描卡住也最终返回，天然有界——只占 worker 线程（"慢"）不会无限挂起（"挂"）。
+    // 真正的无限挂起点是 async 链（spawn_lock / send / rx），已由超时覆盖。
     let mut child = cmd
         .spawn()
         .map_err(|e| EnsureError::SpawnFailed(format!("{:?}: {}", program_path, e)))?;
@@ -413,36 +449,30 @@ async fn init_handshake(
     exclude_globs: &[String],
 ) -> Result<(), EnsureError> {
     let root_uri = crate::lsp::protocol::path_to_uri(workspace);
-    // 按语言注入 init exclude（rust-analyzer: excludeGlobs；gopls: directoryFilters）
-    let init_options = match lang {
-        LanguageId::Rust => serde_json::json!({"excludeGlobs": exclude_globs}),
-        LanguageId::Go => serde_json::json!({
-            "directoryFilters": exclude_globs
-                .iter()
-                .map(|g| g.replace("**/", "-").replace("/**", ""))
-                .collect::<Vec<_>>()
-        }),
-        _ => serde_json::json!({}),
-    };
+    // 初始化选项按语言档案注入（Rust excludeGlobs / Go directoryFilters / 其余默认）
+    let init_options = crate::lsp::profiles::profile(lang).init_options(&exclude_globs);
+    // 注意：capabilities 只声明规范允许的字段——`workspace.workspaceEdit` 的类型是
+    // 对象（WorkspaceEditClientCapabilities），传布尔会炸 jdtls 的 Gson 严格解析
+    // （实测 error -32700 → ClientPreferences 永不设置 → 后续诊断/补全全 NPE）。
     let params = serde_json::json!({
         "processId": std::process::id(),
         "rootUri": root_uri,
         "capabilities": {
-            "textDocument": {"synchronization": {"didSave": false}},
-            "workspace": {"workspaceEdit": false}
+            "textDocument": {"synchronization": {"didSave": false}}
         },
         "workspaceFolders": [{"uri": root_uri, "name": workspace}],
         "initializationOptions": init_options,
     });
     let (msg, id, tx, rx) = handle.router.next_request("initialize", params);
     handle.transport.table.lock().await.insert(id, tx);
-    handle
-        .transport
-        .send(&msg)
+    // send 也带超时（pipe 写阻塞时不无限挂起）
+    tokio::time::timeout(HANDSHAKE_SEND_TIMEOUT, handle.transport.send(&msg))
         .await
+        .map_err(|_| EnsureError::HandshakeFailed("send initialize timeout (>5s)".into()))?
         .map_err(|e| EnsureError::HandshakeFailed(e.to_string()))?;
-    // 5s 握手判活（非请求超时——照 spec §8）
-    let _result = match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
+    // 握手判活超时按语言档案（Java 30s：jdtls 首次启动 OSGi + 索引 10-30s；其余 5s）
+    let handshake_timeout = crate::lsp::profiles::profile(lang).handshake_timeout();
+    let result = match tokio::time::timeout(handshake_timeout, rx).await {
         Ok(Ok(v)) => v,
         Ok(Err(_)) => {
             return Err(EnsureError::HandshakeFailed("channel closed".into()))
@@ -453,6 +483,14 @@ async fn init_handshake(
             ))
         }
     };
+    // 校验响应是 result 而非 error——server 侧解析/处理失败时（如 jdtls 对非法
+    // capabilities 报 -32700）必须判握手失败，否则面板假 ✓ 而后续请求全挂。
+    if let Some(err) = result.get("error") {
+        let msg = err["message"].as_str().unwrap_or("initialize error");
+        return Err(EnsureError::HandshakeFailed(format!(
+            "initialize rejected: {msg}"
+        )));
+    }
     // initialized notification
     let initd = serde_json::json!({"jsonrpc":"2.0","method":"initialized","params":{}});
     handle
@@ -516,13 +554,4 @@ mod tests {
         assert!(ALWAYS_IGNORE_DIRS.contains(&".git"));
     }
 
-    #[test]
-    fn jdtls_workspace_key_is_deterministic_and_distinct() {
-        let a = jdtls_workspace_key("C:/proj/a");
-        let a2 = jdtls_workspace_key("C:/proj/a");
-        let b = jdtls_workspace_key("C:/proj/b");
-        assert_eq!(a, a2, "同 workspace 哈希必须稳定（跨进程复用 -data 目录）");
-        assert_ne!(a, b, "不同 workspace 哈希不应相同");
-        assert_eq!(a.len(), 16, "hex u64 应为 16 位");
-    }
 }

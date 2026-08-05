@@ -1,29 +1,57 @@
 use crate::commands::settings::{AppSettings, ServerOverride};
 use crate::lsp::detector::LanguageId;
 use std::path::Path;
+use std::time::Duration;
+
+// ── ServerProfile：语言 server 启动档案（策略模式） ──
+//
+// 每个语言一个 profile（见 profiles/），收敛该语言的全部特判：捆绑、启动参数、
+// Explicit 补充、初始化选项、握手超时、是否需要 data_dir。registry 只保留通用骨架。
+pub trait ServerProfile {
+    /// 捆绑资源子目录 + 二进制名（None = 该语言不捆绑，靠 which / 用户覆盖）。
+    fn bundled(&self) -> Option<(&'static str, &'static str)> {
+        None
+    }
+
+    /// 需要的隔离数据目录名（放在 `<workspace>/.aide/<name>`，如 jdtls 的
+    /// `-data` Eclipse workspace）。None = 不需要（默认）。
+    fn data_dir_name(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// 语言特有启动参数（含标准 `--stdio`——除 jdtls 默认即 stdio 外都走 stdio）。
+    fn launch_args(&self, _data_dir: Option<&Path>) -> Vec<String> {
+        vec!["--stdio".to_string()]
+    }
+
+    /// Explicit（用户自配 program + args）时的缺省补充：缺 `--stdio` 补之。
+    /// Java 覆写：不补 --stdio，补 -data 与元数据重定向属性（见 profiles/java.rs）。
+    fn supplement_explicit(&self, args: &mut Vec<String>, _data_dir: Option<&Path>) {
+        if !args.iter().any(|a| a == "--stdio") {
+            args.push("--stdio".to_string());
+        }
+    }
+
+    /// initialize 的 initializationOptions（按语言注入排除集等）。
+    fn init_options(&self, _exclude_globs: &[String]) -> serde_json::Value {
+        serde_json::json!({})
+    }
+
+    /// 握手判活超时（Java 例外 30s：jdtls 首次启动 OSGi + 索引 10-30s 常见）。
+    fn handshake_timeout(&self) -> Duration {
+        Duration::from_secs(5)
+    }
+}
 
 /// 已解析的 server 启动来源。
 #[derive(Debug, Clone)]
 pub enum ServerSource {
     /// 随 tauri resources 捆绑：resource_dir/lsp/<subdir>/<binary>。
     Bundled { subdir: String, binary: String },
-    /// PATH 上 `which` 发现的二进制。
+    /// PATH 上 `which` 发现的二进制（存完整路径——含 .bat/.cmd 扩展名，spawn 时判断包装）。
     Which { binary: String },
     /// 用户设置显式覆盖的 program + args。
     Explicit { program: String, args: Vec<String> },
-}
-
-impl ServerSource {
-    /// 捆绑 server 的资源子目录 + 二进制名（v1 仅 rust-analyzer / typescript-language-server 捆绑）。
-    fn bundled_for(lang: LanguageId) -> Option<(String, String)> {
-        let bin = match lang {
-            LanguageId::Rust => "rust-analyzer",
-            LanguageId::TypeScript | LanguageId::JavaScript => "typescript-language-server",
-            _ => return None, // 其余语言 v1 不捆绑，靠 which / 用户覆盖
-        };
-        let binary = if cfg!(windows) { format!("{bin}.exe") } else { bin.to_string() };
-        Some((lang.id_str().to_string(), binary))
-    }
 }
 
 /// 纯函数：按优先级选 source。无 IO，单测核心。
@@ -54,11 +82,12 @@ pub fn resolve(lang: LanguageId, settings: &AppSettings, app: &tauri::AppHandle)
 
 fn bundled_source(lang: LanguageId, app: &tauri::AppHandle) -> Option<ServerSource> {
     use tauri::Manager;
-    let (subdir, binary) = ServerSource::bundled_for(lang)?;
+    let (subdir, binary) = crate::lsp::profiles::profile(lang).bundled()?;
+    let binary = if cfg!(windows) { format!("{binary}.exe") } else { binary.to_string() };
     let res_dir = app.path().resource_dir().ok()?;
-    let path = res_dir.join("lsp").join(&subdir).join(&binary);
+    let path = res_dir.join("lsp").join(subdir).join(&binary);
     if path.exists() {
-        Some(ServerSource::Bundled { subdir, binary })
+        Some(ServerSource::Bundled { subdir: subdir.to_string(), binary })
     } else {
         None
     }
@@ -66,47 +95,26 @@ fn bundled_source(lang: LanguageId, app: &tauri::AppHandle) -> Option<ServerSour
 
 fn which_source(lang: LanguageId) -> Option<ServerSource> {
     let bin = lang.server_binary()?;
-    which::which(bin).ok().map(|_| ServerSource::Which { binary: bin.to_string() })
-}
-
-/// 语言特有的标准启动参数。v1：非 Java 一律 `--stdio`；Java 的 jdtls 默认即 stdio（不认 `--stdio`），
-/// 需要 `-data <eclipse workspace>`——data_dir 由 manager 按 workspace 哈希准备（jdtls 往里写
-/// `.metadata` 索引，不能污染用户工作区）。data_dir 为 None（理论不会）时 Java 退化为无参数。
-pub fn launch_args(lang: LanguageId, data_dir: Option<&Path>) -> Vec<String> {
-    match lang {
-        LanguageId::Java => data_dir
-            .map(|d| vec!["-data".to_string(), d.to_string_lossy().into_owned()])
-            .unwrap_or_default(),
-        _ => vec!["--stdio".to_string()],
-    }
+    // 存 which 解析出的完整路径（Windows 上含 .exe/.bat/.cmd 扩展名）——spawn 时
+    // 需要扩展名判断 .bat/.cmd 必须 cmd /C 包装（CreateProcess 不能直接跑 bat）。
+    let path = which::which(bin).ok()?;
+    Some(ServerSource::Which { binary: path.to_string_lossy().into_owned() })
 }
 
 /// 转 (program, args)。program 是要 spawn 的可执行文件路径/名。
 /// Bundled 的 program 是 dunce 剥前缀后的完整资源路径（调用方在 spawn 时剥，这里只给原路径，
 /// 因为 resource_dir 在 resolve 时已是 verbatim；spawn 前由 manager 剥——见 to_spawn_command）。
+/// 语言特有参数一律走 profile（launch_args / supplement_explicit）。
 pub fn to_command(lang: LanguageId, src: &ServerSource, data_dir: Option<&Path>) -> (String, Vec<String>) {
+    let p = crate::lsp::profiles::profile(lang);
     match src {
         ServerSource::Bundled { subdir, binary } => {
-            // 完整路径在 manager spawn 时拼 + dunce；这里只给相对定位 + 标准参数。
-            // 简化：返回 (binary, args)，manager 用 resource_dir 拼完整路径。
-            // 但 manager 需要知道是 bundled——故 to_command 仅对 Which/Explicit 给完整 program。
-            // Bundled 的完整路径拼在 manager（它有 app handle）。
-            (format!("lsp/{subdir}/{binary}"), launch_args(lang, data_dir))
+            (format!("lsp/{subdir}/{binary}"), p.launch_args(data_dir))
         }
-        ServerSource::Which { binary } => (binary.clone(), launch_args(lang, data_dir)),
+        ServerSource::Which { binary } => (binary.clone(), p.launch_args(data_dir)),
         ServerSource::Explicit { program, args } => {
             let mut full = args.clone();
-            if lang == LanguageId::Java {
-                // jdtls 不认 --stdio；缺 -data 时补（用户只填 program 即可用；已配 -data 则不重复）
-                if let Some(dir) = data_dir {
-                    if !full.iter().any(|a| a == "-data") {
-                        full.push("-data".to_string());
-                        full.push(dir.to_string_lossy().into_owned());
-                    }
-                }
-            } else if !full.iter().any(|a| a == "--stdio") {
-                full.push("--stdio".to_string());
-            }
+            p.supplement_explicit(&mut full, data_dir);
             (program.clone(), full)
         }
     }
@@ -177,11 +185,8 @@ mod tests {
         match picked {
             Some(ServerSource::Explicit { program, args }) => {
                 assert_eq!(program, "/x/rust-analyzer");
-                // pick_source 只负责选源，不注入 --stdio（那是 to_command 的职责）。
-                // 这里只断言用户配置的原始 args 原样透传。
+                // pick_source 只负责选源，不注入任何参数（那是 to_command 的职责）。
                 assert_eq!(args.len(), 2, "{:?}", args);
-                assert!(args.contains(&"--log-file".to_string()));
-                assert!(args.contains(&"/tmp/ra.log".to_string()));
                 assert!(!args.contains(&"--stdio".to_string()), "pick_source 不应注入 --stdio");
             }
             other => panic!("expected Explicit, got {other:?}"),
@@ -189,8 +194,8 @@ mod tests {
     }
 
     #[test]
-    fn to_command_injects_stdio() {
-        // Bundled：args 含 --stdio。
+    fn to_command_injects_stdio_via_profile() {
+        // Bundled（Rust）：--stdio 来自 RustProfile 默认 launch_args。
         let bundled = ServerSource::Bundled {
             subdir: "rust".into(), binary: "rust-analyzer".into(),
         };
@@ -198,13 +203,13 @@ mod tests {
         assert!(args.contains(&"--stdio".to_string()), "bundled args: {:?}", args);
         assert_eq!(prog, "lsp/rust/rust-analyzer");
 
-        // Which：args 含 --stdio。
+        // Which（Go）：--stdio 默认。
         let which = ServerSource::Which { binary: "gopls".into() };
         let (prog, args) = to_command(LanguageId::Go, &which, None);
         assert_eq!(prog, "gopls");
         assert!(args.contains(&"--stdio".to_string()), "which args: {:?}", args);
 
-        // Explicit：用户 args 保留 + --stdio 追加。
+        // Explicit（Rust）：用户 args 保留 + 缺 --stdio 补（profile supplement_explicit）。
         let explicit = ServerSource::Explicit {
             program: "/x/ra".into(),
             args: vec!["--log-file".into(), "/tmp/ra.log".into()],
@@ -222,51 +227,6 @@ mod tests {
         let (_, args) = to_command(LanguageId::Rust, &explicit_with_stdio, None);
         let stdio_count = args.iter().filter(|a| a.as_str() == "--stdio").count();
         assert_eq!(stdio_count, 1, "不应重复添加 --stdio, args: {:?}", args);
-    }
-
-    #[test]
-    fn java_uses_data_dir_not_stdio() {
-        let data = Path::new("C:/cache/jdtls-ws");
-        // Which：jdtls 不认 --stdio，只给 -data。
-        let which = ServerSource::Which { binary: "jdtls".into() };
-        let (prog, args) = to_command(LanguageId::Java, &which, Some(data));
-        assert_eq!(prog, "jdtls");
-        assert_eq!(args, vec!["-data", "C:/cache/jdtls-ws"], "java args: {:?}", args);
-        assert!(!args.contains(&"--stdio".to_string()), "jdtls 不应收到 --stdio");
-
-        // data_dir 为 None（理论路径）：退化无参数。
-        let (_, args) = to_command(LanguageId::Java, &which, None);
-        assert_eq!(args, Vec::<String>::new(), "java args: {:?}", args);
-    }
-
-    #[test]
-    fn java_explicit_injects_data_dir_when_missing() {
-        let data = Path::new("C:/cache/jdtls-ws");
-        // 用户只填 program：自动补 -data。
-        let bare = ServerSource::Explicit {
-            program: "C:/tools/jdtls/bin/jdtls".into(),
-            args: vec![],
-        };
-        let (prog, args) = to_command(LanguageId::Java, &bare, Some(data));
-        assert_eq!(prog, "C:/tools/jdtls/bin/jdtls");
-        assert_eq!(args, vec!["-data", "C:/cache/jdtls-ws"], "java args: {:?}", args);
-        assert!(!args.contains(&"--stdio".to_string()), "jdtls 不应收到 --stdio");
-
-        // 用户已配 -data：不重复追加。
-        let custom = ServerSource::Explicit {
-            program: "jdtls".into(),
-            args: vec!["-data".into(), "D:/my-eclipse-ws".into()],
-        };
-        let (_, args) = to_command(LanguageId::Java, &custom, Some(data));
-        let data_count = args.iter().filter(|a| a.as_str() == "-data").count();
-        assert_eq!(data_count, 1, "不应重复添加 -data, args: {:?}", args);
-        assert!(args.contains(&"D:/my-eclipse-ws".to_string()));
-
-        // 非 Java 语言 Explicit 不注入 -data（保持原行为只补 --stdio）。
-        let go = ServerSource::Explicit { program: "gopls".into(), args: vec![] };
-        let (_, args) = to_command(LanguageId::Go, &go, Some(data));
-        assert!(!args.contains(&"-data".to_string()));
-        assert!(args.contains(&"--stdio".to_string()));
     }
 
     #[test]

@@ -27,6 +27,8 @@ pub const ALWAYS_IGNORE_DIRS: &[&str] = &[
     "venv",
     ".idea",
     ".vscode",
+    ".settings", // Eclipse/jdtls 项目元数据（.project/.classpath 的同族，防索引污染）
+    ".elixir_ls", // elixir-ls 在项目内建的缓存（DETS 索引等）
 ];
 
 #[cfg(test)]
