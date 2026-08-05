@@ -379,7 +379,7 @@ export const api = {
   lspDetectLanguages(workspaceRoot: string): Promise<string[]> {
     return invoke("lsp_detect_languages", { workspaceRoot });
   },
-  lspEnsureServer(workspaceRoot: string, lang: string): Promise<{ ok: boolean; kind?: string }> {
+  lspEnsureServer(workspaceRoot: string, lang: string): Promise<{ ok: boolean; kind?: string; error?: string }> {
     return invoke("lsp_ensure_server", { workspaceRoot, lang });
   },
   lspDidOpen(workspaceRoot: string, filePath: string, lang: string, text: string): Promise<void> {

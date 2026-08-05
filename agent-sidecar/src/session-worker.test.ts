@@ -388,20 +388,25 @@ describe("SessionWorker — btw 回合结束自毁", () => {
       yield { type: "result", subtype: "success", is_error: false };
       await new Promise(() => {}); // 永不 resolve：streaming input 等待中
     })()) as any;
+    // 自毁在 result 后 setImmediate 调度；await selfStoppedP 等到自毁完成，
+    // 隐含已等过 startLoop 的 await loadAideInstructions + for-await 消费到 result
+    // （message_stop 在 result 处理时同步发出，早于 setImmediate 自毁）。
+    // 替代固定次数 flushPromises——startLoop 前置 async 步骤一多，固定次数不够
+    // 就会让 events 一直为空（pre-existing 失败根因）。
+    let resolveStopped!: (w: SessionWorker) => void;
+    const selfStoppedP = new Promise<SessionWorker>((r) => { resolveStopped = r; });
     const worker = new SessionWorker("btw-temp", (e) => events.push(e), {
       btwMode: true,
       imageCapabilityCache: new ImageInputCapabilityCache(),
       queryFn: hangingQuery,
-      onSelfStop: (w) => { selfStopped = w; },
+      onSelfStop: (w) => { selfStopped = w; resolveStopped(w); },
     });
 
     worker.handleCommand({
       cmd: "send", session_id: "btw-temp", prompt: "问一句", cwd: "/tmp",
       env: {}, btw: true, fork_from: "main-sid",
     } as any);
-    await flushPromises();
-    await flushPromises();
-    await flushPromises();
+    await selfStoppedP;
 
     // message_stop 先于自毁发出（前端 done 态/插批注依赖它）
     expect(events.some((e) => e.type === "message_stop")).toBe(true);

@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>LSP 覆盖 UX 原型</title>
+<style>
+  :root {
+    --aide-bg-deep:#141218; --aide-bg-base:#1a1820; --aide-bg-raised:#221f29;
+    --aide-bg-overlay:rgba(12,10,16,.72);
+    --aide-surface-default:#292631; --aide-surface-hover:#322e3c; --aide-surface-active:#3d3848;
+    --aide-text-primary:#ece5db; --aide-text-secondary:#b3aa9c; --aide-text-muted:#7d7568;
+    --aide-text-on-accent:#241d15;
+    --aide-accent:#d9ab78; --aide-accent-hover:#e6bd8e; --aide-accent-subtle:rgba(217,171,120,.13);
+    --aide-success:#8bc48a; --aide-warning:#e8c374; --aide-danger:#e87070;
+    --aide-border:rgba(255,214,160,.09); --aide-border-subtle:rgba(255,214,160,.045);
+    --aide-border-strong:rgba(255,220,175,.16);
+    --aide-shadow-lg:0 18px 56px rgba(0,0,0,.5),0 4px 14px rgba(0,0,0,.3);
+    --aide-radius-sm:6px; --aide-radius-md:9px; --aide-radius-lg:13px;
+    --aide-accent-gradient:linear-gradient(180deg,#e6bd8e,#cf9c66);
+    --aide-accent-glow:0 6px 20px rgba(212,165,116,.28);
+    --aide-ease-t:.16s cubic-bezier(.2,.8,.2,1);
+    color-scheme:dark;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; }
+  body {
+    background:
+      radial-gradient(700px 240px at 50% -60px, rgba(224,181,132,.09), transparent 70%),
+      var(--aide-bg-deep);
+    color:var(--aide-text-primary);
+    font-family:'JetBrains Mono','Cascadia Code','Fira Code','Consolas','PingFang SC','Microsoft YaHei',monospace;
+    font-size:13px;
+    display:flex; flex-direction:column; align-items:center;
+    padding:0; min-height:100vh;
+  }
+  .note-bar {
+    width:100%; max-width:760px; padding:18px 22px 6px; color:var(--aide-text-muted);
+    font-size:12px; line-height:1.7;
+  }
+  .note-bar b { color:var(--aide-text-secondary); }
+  .note-bar code { background:var(--aide-surface-default); padding:1px 6px; border-radius:5px; color:var(--aide-accent); }
+
+  /* 模拟标题栏 */
+  .titlebar {
+    width:100%; height:40px; display:flex; align-items:center; justify-content:center;
+    background:var(--aide-bg-base); border-bottom:1px solid var(--aide-border);
+    position:relative;
+  }
+
+  /* LSP 徽章 */
+  .lsp-badge {
+    display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 8px 0 10px;
+    background:var(--aide-surface-default); border:1px solid var(--aide-border);
+    border-radius:99px; color:var(--aide-text-secondary); font-size:10.5px; cursor:pointer;
+    transition:background var(--aide-ease-t);
+  }
+  .lsp-badge:hover { background:var(--aide-surface-hover); }
+  .lsp-badge.warn { color:var(--aide-warning); }
+  .lsp-badge .chev { opacity:.5; transition:transform .14s ease; }
+  .lsp-badge .chev.open { transform:rotate(180deg); }
+
+  /* 面板 */
+  .lsp-panel {
+    position:absolute; top:46px; right:calc(50% - 190px); width:380px;
+    background:var(--aide-bg-raised); border:1px solid var(--aide-border-strong);
+    border-radius:var(--aide-radius-md); box-shadow:var(--aide-shadow-lg);
+    z-index:900; overflow:hidden;
+  }
+  .lsp-header {
+    display:flex; align-items:center; justify-content:space-between; padding:10px 12px;
+    border-bottom:1px solid var(--aide-border);
+    background:linear-gradient(180deg,var(--aide-border-subtle) 0%,transparent 100%),var(--aide-bg-raised);
+  }
+  .lsp-title { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.8px; color:var(--aide-text-muted); }
+  .toggle { width:30px; height:16px; border-radius:9px; background:var(--aide-accent); position:relative; }
+  .toggle::after { content:""; position:absolute; top:2px; left:16px; width:12px; height:12px; border-radius:50%; background:var(--aide-bg-deep); }
+
+  .lsp-body { max-height:420px; overflow-y:auto; padding:4px 0; scrollbar-width:thin; }
+
+  .lang-block { padding:0 0 2px; }
+  .lang-row { display:flex; align-items:center; gap:9px; padding:7px 14px; }
+  .st-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+  .st-ok { background:var(--aide-success); box-shadow:0 0 4px color-mix(in srgb,var(--aide-success) 40%,transparent); }
+  .st-miss { background:var(--aide-warning); box-shadow:0 0 4px color-mix(in srgb,var(--aide-warning) 40%,transparent); }
+  .st-err { background:var(--aide-danger); box-shadow:0 0 4px color-mix(in srgb,var(--aide-danger) 40%,transparent); }
+  .lang-name { font-size:12.5px; color:var(--aide-text-primary); font-weight:500; }
+  .lang-server { font-size:10px; color:var(--aide-text-muted); }
+  .lang-status { font-size:10.5px; color:var(--aide-text-muted); margin-left:auto; flex-shrink:0; }
+  .lang-status.ok { color:var(--aide-success); }
+  .lang-status.miss { color:var(--aide-warning); }
+  .lang-status.err { color:var(--aide-danger); }
+
+  /* 内联 override 行（取代原 install-box note + 底部服务器覆盖区） */
+  .override-inline { padding:2px 14px 10px 29px; display:flex; flex-direction:column; gap:5px; }
+  .override-inline.failed { background:color-mix(in srgb,var(--aide-danger) 6%,transparent); }
+  .path-row { display:flex; gap:5px; }
+  .path-input {
+    flex:1; min-width:0; background:var(--aide-bg-base); border:1px solid var(--aide-border);
+    border-radius:var(--aide-radius-sm); color:var(--aide-text-primary); font-size:11px;
+    padding:4px 8px; outline:none; font-family:inherit;
+  }
+  .path-input:focus { border-color:var(--aide-accent); }
+  .path-input.has-value { color:var(--aide-text-secondary); }
+  .browse-btn {
+    background:var(--aide-accent-subtle); color:var(--aide-accent);
+    border:1px solid color-mix(in srgb,var(--aide-accent) 22%,transparent);
+    border-radius:var(--aide-radius-sm); font-size:11px; padding:4px 10px; cursor:pointer;
+    font-family:inherit; white-space:nowrap; transition:all .12s;
+  }
+  .browse-btn:hover { background:color-mix(in srgb,var(--aide-accent) 18%,transparent); }
+  .args-input {
+    width:100%; background:var(--aide-bg-base); border:1px solid var(--aide-border);
+    border-radius:var(--aide-radius-sm); color:var(--aide-text-primary); font-size:11px;
+    padding:4px 8px; outline:none; font-family:inherit;
+  }
+  .args-input:focus { border-color:var(--aide-accent); }
+  .override-actions { display:flex; gap:6px; justify-content:flex-end; }
+  .save-btn {
+    background:var(--aide-accent-subtle); color:var(--aide-accent);
+    border:1px solid color-mix(in srgb,var(--aide-accent) 22%,transparent);
+    border-radius:var(--aide-radius-sm); font-size:11px; padding:3px 12px; cursor:pointer; font-family:inherit;
+  }
+  .save-btn:hover { background:color-mix(in srgb,var(--aide-accent) 18%,transparent); }
+  .clear-btn {
+    background:none; color:var(--aide-text-muted); border:1px solid var(--aide-border);
+    border-radius:var(--aide-radius-sm); font-size:11px; padding:3px 12px; cursor:pointer; font-family:inherit;
+  }
+  .clear-btn:hover { color:var(--aide-danger); border-color:var(--aide-danger); }
+  .err-hint { font-size:10.5px; color:var(--aide-danger); line-height:1.5; }
+  .ok-hint { font-size:10.5px; color:var(--aide-text-muted); line-height:1.5; }
+
+  /* ok 状态：紧凑（只读路径 + 浏览），点「更改」展开编辑 */
+  .ok-compact { padding:2px 14px 8px 29px; display:flex; align-items:center; gap:6px; }
+  .ok-compact .path-static { flex:1; min-width:0; font-size:10.5px; color:var(--aide-text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .change-btn { background:none; border:none; color:var(--aide-accent); font-size:10.5px; cursor:pointer; font-family:inherit; padding:0; }
+  .change-btn:hover { text-decoration:underline; }
+
+  /* 排除目录区（保持不变） */
+  .section { border-top:1px solid var(--aide-border); padding:9px 12px 11px; }
+  .section-title { font-size:10.5px; font-weight:600; color:var(--aide-text-muted); text-transform:uppercase; letter-spacing:.6px; margin-bottom:7px; }
+  .chip-list { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+  .chip { display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--aide-text-secondary); background:var(--aide-surface-default); border:1px solid var(--aide-border); padding:2px 4px 2px 9px; border-radius:12px; }
+  .chip-x { width:14px; height:14px; display:flex; align-items:center; justify-content:center; border:none; border-radius:50%; background:none; color:var(--aide-text-muted); cursor:pointer; font-size:9px; }
+  .chip-x:hover { background:var(--aide-danger); color:var(--aide-text-primary); }
+  .add-row { display:flex; gap:6px; }
+  .add-input { flex:1; background:var(--aide-surface-default); border:1px solid var(--aide-border); border-radius:var(--aide-radius-sm); color:var(--aide-text-primary); font-size:11.5px; padding:4px 9px; outline:none; font-family:inherit; }
+  .add-btn { background:var(--aide-accent-subtle); color:var(--aide-accent); border:1px solid color-mix(in srgb,var(--aide-accent) 22%,transparent); border-radius:var(--aide-radius-sm); font-size:11px; padding:4px 12px; cursor:pointer; font-family:inherit; }
+
+  .guide-row { border-top:1px solid var(--aide-border); padding:8px 12px; text-align:right; background:linear-gradient(180deg,transparent 0%,var(--aide-border-subtle) 100%); }
+  .guide-btn { background:none; border:none; cursor:pointer; font-size:11px; color:var(--aide-accent); font-family:inherit; padding:2px 4px; }
+  .guide-btn:hover { text-decoration:underline; }
+
+  /* 文件选择弹窗（参考 OpenFolderDialog） */
+  .fp-overlay {
+    position:fixed; inset:0; background:var(--aide-bg-overlay);
+    display:flex; align-items:center; justify-content:center; z-index:1100; padding:24px;
+    animation:fadeIn .12s ease;
+  }
+  @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+  .fp-dialog {
+    background:var(--aide-bg-raised); border:1px solid var(--aide-border-strong);
+    border-radius:var(--aide-radius-lg); padding:18px 20px; min-width:460px; max-width:600px;
+    box-shadow:var(--aide-shadow-lg); max-height:90vh; display:flex; flex-direction:column;
+    animation:scaleIn var(--aide-ease-t);
+  }
+  @keyframes scaleIn { from{opacity:0;transform:scale(.96)} to{opacity:1;transform:scale(1)} }
+  .fp-header { flex-shrink:0; font-size:14px; font-weight:600; color:var(--aide-text-primary); margin-bottom:12px; user-select:none; }
+  .fp-addr { display:flex; gap:6px; margin-bottom:8px; }
+  .fp-up { width:28px; border:1px solid var(--aide-surface-hover); background:var(--aide-surface-default); border-radius:var(--aide-radius-md); color:var(--aide-text-secondary); cursor:pointer; }
+  .fp-up:hover { background:var(--aide-surface-hover); }
+  .fp-addr-input { flex:1; background:var(--aide-bg-base); border:1px solid var(--aide-surface-hover); border-radius:var(--aide-radius-md); padding:6px 10px; font-size:12px; color:var(--aide-text-primary); outline:none; font-family:inherit; }
+  .fp-roots { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+  .fp-root-chip { font-size:11px; padding:3px 10px; border-radius:10px; border:1px solid var(--aide-surface-hover); background:var(--aide-surface-default); color:var(--aide-text-secondary); cursor:pointer; font-family:inherit; }
+  .fp-root-chip:hover { background:var(--aide-surface-hover); }
+  .fp-root-chip.active { border-color:var(--aide-accent); color:var(--aide-accent); }
+  .fp-tree {
+    flex:1 1 auto; min-height:180px; max-height:300px; overflow-y:auto;
+    border:1px solid var(--aide-border); border-radius:var(--aide-radius-md); padding:6px; background:var(--aide-bg-base);
+    scrollbar-width:thin;
+  }
+  .fp-node { display:flex; align-items:center; gap:4px; padding:3px 6px; border-radius:4px; cursor:pointer; font-size:12px; color:var(--aide-text-secondary); user-select:none; }
+  .fp-node:hover { background:var(--aide-surface-hover); }
+  .fp-node.selected { background:color-mix(in srgb,var(--aide-accent) 18%,transparent); color:var(--aide-text-primary); }
+  .fp-node.file { color:var(--aide-text-secondary); }
+  .fp-node.file.selected { color:var(--aide-text-primary); }
+  .fp-chev { opacity:.6; flex-shrink:0; transition:transform .1s; width:10px; }
+  .fp-chev.expanded { transform:rotate(90deg); }
+  .fp-ic { opacity:.7; flex-shrink:0; }
+  .fp-check { width:13px; height:13px; accent-color:var(--aide-accent); margin:0; flex-shrink:0; cursor:pointer; }
+  .fp-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fp-hint { padding:2px 18px; font-size:11px; color:var(--aide-text-muted); }
+  .fp-actions { flex-shrink:0; display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
+  .fp-btn { padding:7px 16px; border-radius:var(--aide-radius-md); font-size:13px; cursor:pointer; font-family:inherit; border:1px solid var(--aide-border); transition:all var(--aide-ease-t); }
+  .fp-btn.cancel { background:transparent; color:var(--aide-text-secondary); }
+  .fp-btn.cancel:hover { background:var(--aide-surface-hover); color:var(--aide-text-primary); }
+  .fp-btn.confirm { background:var(--aide-accent-gradient); border-color:transparent; color:var(--aide-text-on-accent); box-shadow:var(--aide-accent-glow); }
+  .fp-btn.confirm:disabled { opacity:.45; cursor:default; box-shadow:none; filter:none; }
+  .fp-target { flex-shrink:0; font-size:11px; color:var(--aide-text-muted); margin-top:8px; word-break:break-all; }
+  .fp-target b { color:var(--aide-text-secondary); }
+
+  .legend { width:100%; max-width:760px; padding:10px 22px 40px; color:var(--aide-text-muted); font-size:11.5px; line-height:1.8; }
+  .legend p { margin:4px 0; }
+  .legend .del { color:var(--aide-danger); }
+  .legend .new { color:var(--aide-success); }
+</style>
+</head>
+<body>
+
+<div class="note-bar">
+  <b>原型说明</b>：左侧是新的 LSP 面板 UX。点击标题栏中间的 LSP 徽章展开面板；点任意「浏览…」打开文件选择弹窗（参考"打开目录组件"，但可选文件）。<br>
+  改动：① 删除底部独立的「服务器覆盖」区块；② 删除每语言下方的纯文字 note（冗余）；③ 在每个语言行内联「路径 + 浏览… + 参数 + 保存/清除」，missing/failed 时直接编辑，ok 时紧凑显示并可「更改」。
+</div>
+
+<div class="titlebar">
+  <button class="lsp-badge warn" id="badge">
+    <span>Rust ! · TS ✓ · Go ✗</span>
+    <svg class="chev" id="chev" width="7" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M0.5 0.5L4 4L7.5 0.5"/></svg>
+  </button>
+
+  <div class="lsp-panel" id="panel" style="display:none">
+    <div class="lsp-header">
+      <span class="lsp-title">语言服务器</span>
+      <span class="toggle"></span>
+    </div>
+
+    <div class="lsp-body">
+      <!-- Rust：failed，已填了 rustup proxy 路径（这正是你当前的情况） -->
+      <div class="lang-block">
+        <div class="lang-row">
+          <span class="st-dot st-err"></span>
+          <span class="lang-name">Rust</span>
+          <span class="lang-server">rust-analyzer</span>
+          <span class="lang-status err">启动失败</span>
+        </div>
+        <div class="override-inline failed">
+          <div class="path-row">
+            <input class="path-input has-value" value="C:\Users\yangx\.cargo\bin\rust-analyzer.exe" />
+            <button class="browse-btn" data-lang="rust">浏览…</button>
+          </div>
+          <input class="args-input" placeholder="参数（空格分隔，可选）" />
+          <div class="err-hint">rustup proxy 报错退出：未安装 rust-analyzer 组件。可「浏览…」改选真二进制，或运行 rustup component add rust-analyzer。</div>
+          <div class="override-actions">
+            <button class="clear-btn">清除</button>
+            <button class="save-btn">保存</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- TypeScript：ok，紧凑显示当前路径 + 更改 -->
+      <div class="lang-block">
+        <div class="lang-row">
+          <span class="st-dot st-ok"></span>
+          <span class="lang-name">TypeScript</span>
+          <span class="lang-server">typescript-language-server</span>
+          <span class="lang-status ok">就绪</span>
+        </div>
+        <div class="ok-compact">
+          <span class="path-static">PATH 发现：typescript-language-server</span>
+          <button class="change-btn">更改…</button>
+        </div>
+      </div>
+
+      <!-- Go：missing，空 override 行等用户填 -->
+      <div class="lang-block">
+        <div class="lang-row">
+          <span class="st-dot st-miss"></span>
+          <span class="lang-name">Go</span>
+          <span class="lang-server">gopls</span>
+          <span class="lang-status miss">未安装</span>
+        </div>
+        <div class="override-inline">
+          <div class="path-row">
+            <input class="path-input" placeholder="server 完整路径（留空 = PATH 发现）" />
+            <button class="browse-btn" data-lang="go">浏览…</button>
+          </div>
+          <input class="args-input" placeholder="参数（空格分隔，可选）" />
+          <div class="override-actions">
+            <button class="save-btn">保存</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 排除目录：浏览工作空间内目录（多选，不能跳出工作空间） -->
+    <div class="section">
+      <div class="section-title">排除目录（不发给 LSP）</div>
+      <div class="chip-list" id="exclChips">
+        <span class="chip">target <button class="chip-x">✕</button></span>
+        <span class="chip">node_modules <button class="chip-x">✕</button></span>
+      </div>
+      <button class="browse-btn" id="excludesBrowse">浏览工作空间目录…</button>
+      <div class="override-actions" style="margin-top:8px"><button class="save-btn">保存排除配置</button></div>
+    </div>
+
+    <div class="guide-row">
+      <button class="guide-btn">打开安装向导 ↗</button>
+    </div>
+  </div>
+</div>
+
+<div class="legend">
+  <p><span class="del">● 删除</span> 原「服务器覆盖」整块（面板底部那块，每语言两输入框）。</p>
+  <p><span class="del">● 删除</span> 原 missing/failed 时的 install-box 纯文字 note（"rustup 装好后自动在 PATH…" 之类）。</p>
+  <p><span class="new">● 新增</span> 每语言行内联：路径输入 + 「浏览…」按钮 + 参数输入 + 保存/清除。点「浏览…」弹出右侧的文件选择器。</p>
+  <p><span class="new">● 新增</span> 文件选择弹窗：复用 OpenFolderDialog 外壳 + 一个能显示文件的 FileTreePicker（DirTreePicker 目前只显示目录，需改造为可选文件）。</p>
+  <p><span class="new">● 改造</span> 排除目录：原"手输目录名 + 添加"改为「浏览工作空间目录…」多选弹窗。根锁死在当前工作空间，goUp 到根即停、地址栏只读，无法跳出工作空间。确认后回填为 chips，仍支持单个 ✕ 删除 + 保存。</p>
+  <p><span class="new">● 诊断</span> 后端 stderr 改 tracing、失败路径加 warn 日志（不在本原型视觉里，配套改）。</p>
+</div>
+
+<!-- 文件选择弹窗 -->
+<div class="fp-overlay" id="fp" style="display:none">
+  <div class="fp-dialog" @click.stop>
+    <div class="fp-header">选择 server 文件</div>
+    <div class="fp-addr">
+      <button class="fp-up" title="上一级">↑</button>
+      <input class="fp-addr-input" id="fpAddr" value="C:\Users\yangx\.cargo\bin" spellcheck="false" />
+    </div>
+    <div class="fp-roots">
+      <button class="fp-root-chip">C:</button>
+      <button class="fp-root-chip">D:</button>
+      <button class="fp-root-chip">桌面</button>
+      <button class="fp-root-chip">用户目录</button>
+    </div>
+    <div class="fp-tree" id="fpTree">
+      <!-- 模拟已展开到 bin 的文件树 -->
+      <div class="fp-node"><svg class="fp-chev expanded" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg><span class="fp-ic">📁</span><span class="fp-name">.cargo</span></div>
+      <div class="fp-node" style="padding-left:24px"><svg class="fp-chev expanded" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg><span class="fp-ic">📁</span><span class="fp-name">bin</span></div>
+      <div class="fp-node file" data-path="C:\Users\yangx\.cargo\bin\cargo.exe" style="padding-left:48px"><svg class="fp-chev" style="visibility:hidden"></svg><span class="fp-ic">📄</span><span class="fp-name">cargo.exe</span></div>
+      <div class="fp-node file selected" data-path="C:\Users\yangx\.cargo\bin\rust-analyzer.exe" style="padding-left:48px"><svg class="fp-chev" style="visibility:hidden"></svg><span class="fp-ic">📄</span><span class="fp-name">rust-analyzer.exe</span></div>
+      <div class="fp-node file" data-path="C:\Users\yangx\.cargo\bin\rustc.exe" style="padding-left:48px"><svg class="fp-chev" style="visibility:hidden"></svg><span class="fp-ic">📄</span><span class="fp-name">rustc.exe</span></div>
+      <div class="fp-node file" data-path="C:\Users\yangx\.cargo\bin\rustup.exe" style="padding-left:48px"><svg class="fp-chev" style="visibility:hidden"></svg><span class="fp-ic">📄</span><span class="fp-name">rustup.exe</span></div>
+      <div class="fp-node file" data-path="C:\Users\yangx\.cargo\bin\winpty.dll" style="padding-left:48px"><svg class="fp-chev" style="visibility:hidden"></svg><span class="fp-ic">📄</span><span class="fp-name">winpty.dll</span></div>
+    </div>
+    <div class="fp-target" id="fpTarget"><b>已选：</b>C:\Users\yangx\.cargo\bin\rust-analyzer.exe</div>
+    <div class="fp-actions">
+      <button class="fp-btn cancel" id="fpCancel">取消</button>
+      <button class="fp-btn confirm" id="fpConfirm">确认</button>
+    </div>
+  </div>
+</div>
+
+<!-- 排除目录弹窗：限工作空间内、多选 -->
+<div class="fp-overlay" id="wp" style="display:none">
+  <div class="fp-dialog">
+    <div class="fp-header">选择排除目录 <span style="font-size:11px;color:var(--aide-text-muted);font-weight:400">（可多选 · 限工作空间内）</span></div>
+    <div class="fp-addr">
+      <button class="fp-up" id="wpUp" disabled style="opacity:.4;cursor:not-allowed" title="已在工作空间根，不能向上">↑</button>
+      <input class="fp-addr-input" value="C:\document\owner\cypress-agent" readonly spellcheck="false" />
+    </div>
+    <div class="fp-tree" id="wpTree">
+      <div class="fp-node" style="padding-left:6px"><input type="checkbox" class="fp-check"><svg class="fp-chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg><span class="fp-ic">📁</span><span class="fp-name">src</span></div>
+      <div class="fp-node" style="padding-left:24px"><input type="checkbox" class="fp-check"><svg class="fp-chev" style="visibility:hidden"></svg><span class="fp-ic">📁</span><span class="fp-name">components</span></div>
+      <div class="fp-node" style="padding-left:24px"><input type="checkbox" class="fp-check"><svg class="fp-chev" style="visibility:hidden"></svg><span class="fp-ic">📁</span><span class="fp-name">composables</span></div>
+      <div class="fp-node" style="padding-left:6px"><input type="checkbox" class="fp-check"><svg class="fp-chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg><span class="fp-ic">📁</span><span class="fp-name">src-tauri</span></div>
+      <div class="fp-node" style="padding-left:6px"><input type="checkbox" class="fp-check" checked><svg class="fp-chev" style="visibility:hidden"></svg><span class="fp-ic">📁</span><span class="fp-name">target</span></div>
+      <div class="fp-node" style="padding-left:6px"><input type="checkbox" class="fp-check" checked><svg class="fp-chev" style="visibility:hidden"></svg><span class="fp-ic">📁</span><span class="fp-name">node_modules</span></div>
+      <div class="fp-node" style="padding-left:6px"><input type="checkbox" class="fp-check"><svg class="fp-chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 2.5L8 6L4.5 9.5"/></svg><span class="fp-ic">📁</span><span class="fp-name">docs</span></div>
+      <div class="fp-node" style="padding-left:6px"><input type="checkbox" class="fp-check"><svg class="fp-chev" style="visibility:hidden"></svg><span class="fp-ic">📁</span><span class="fp-name">dist</span></div>
+    </div>
+    <div class="fp-target" id="wpTarget"><b>已选：</b>target, node_modules</div>
+    <div class="fp-actions">
+      <button class="fp-btn cancel" id="wpCancel">取消</button>
+      <button class="fp-btn confirm" id="wpConfirm">确认</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const badge = document.getElementById('badge');
+  const panel = document.getElementById('panel');
+  const chev  = document.getElementById('chev');
+  badge.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = panel.style.display !== 'none';
+    panel.style.display = open ? 'none' : 'block';
+    chev.classList.toggle('open', !open);
+  });
+  document.addEventListener('click', (e) => {
+    if (!panel.contains(e.target) && e.target !== badge && !badge.contains(e.target)) {
+      panel.style.display = 'none'; chev.classList.remove('open');
+    }
+  });
+
+  // 文件选择弹窗
+  const fp = document.getElementById('fp');
+  const fpAddr = document.getElementById('fpAddr');
+  const fpTarget = document.getElementById('fpTarget');
+  const fpConfirm = document.getElementById('fpConfirm');
+  let activeInput = null;
+
+  function openPicker(inputEl) {
+    activeInput = inputEl;
+    fp.style.display = 'flex';
+    // 默认选中当前输入框里的路径（如果有）
+    const cur = inputEl.value.trim();
+    if (cur) { fpAddr.value = cur; fpTarget.innerHTML = '<b>已选：</b>' + cur; }
+  }
+  function closePicker() { fp.style.display = 'none'; activeInput = null; }
+
+  document.querySelectorAll('.browse-btn').forEach(b => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openPicker(b.parentElement.querySelector('.path-input'));
+    });
+  });
+  document.querySelector('.change-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    // 演示：点「更改」把 ok 紧凑行换成完整编辑行
+    const compact = e.target.closest('.ok-compact');
+    compact.innerHTML = `
+      <div style="flex:1;display:flex;flex-direction:column;gap:5px">
+        <div class="path-row"><input class="path-input" placeholder="server 完整路径（留空 = PATH 发现）" /><button class="browse-btn">浏览…</button></div>
+        <input class="args-input" placeholder="参数（空格分隔，可选）" />
+      </div>`;
+    compact.style.flexDirection = 'column';
+    compact.style.alignItems = 'stretch';
+    compact.querySelector('.browse-btn').addEventListener('click', (ev) => {
+      ev.stopPropagation(); openPicker(ev.target.parentElement.querySelector('.path-input'));
+    });
+  });
+
+  fp.querySelectorAll('.fp-node.file').forEach(n => {
+    n.addEventListener('click', () => {
+      fp.querySelectorAll('.fp-node').forEach(x => x.classList.remove('selected'));
+      n.classList.add('selected');
+      const p = n.getAttribute('data-path');
+      fpAddr.value = p;
+      fpTarget.innerHTML = '<b>已选：</b>' + p;
+    });
+  });
+  document.getElementById('fpCancel').addEventListener('click', closePicker);
+  fp.addEventListener('click', (e) => { if (e.target === fp) closePicker(); });
+  fpConfirm.addEventListener('click', () => {
+    if (activeInput && fpAddr.value.trim()) {
+      activeInput.value = fpAddr.value.trim();
+      activeInput.classList.add('has-value');
+    }
+    closePicker();
+  });
+
+  // 排除目录：工作空间内多选弹窗
+  const wp = document.getElementById('wp');
+  const wpTarget = document.getElementById('wpTarget');
+  const exclChips = document.getElementById('exclChips');
+  let selectedExcludes = new Set(['target', 'node_modules']);
+
+  function updateWpTarget() {
+    wpTarget.innerHTML = '<b>已选：</b>' + (selectedExcludes.size ? [...selectedExcludes].join(', ') : '（无）');
+  }
+  function openExcludes() {
+    wp.querySelectorAll('.fp-node').forEach(n => {
+      const cb = n.querySelector('.fp-check');
+      cb.checked = selectedExcludes.has(n.querySelector('.fp-name').textContent);
+    });
+    updateWpTarget();
+    wp.style.display = 'flex';
+  }
+  function closeExcludes() { wp.style.display = 'none'; }
+
+  document.getElementById('excludesBrowse').addEventListener('click', (e) => {
+    e.stopPropagation(); openExcludes();
+  });
+  wp.addEventListener('click', (e) => { if (e.target === wp) closeExcludes(); });
+  document.getElementById('wpCancel').addEventListener('click', closeExcludes);
+  wp.querySelectorAll('.fp-check').forEach(cb => {
+    cb.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const name = cb.parentElement.querySelector('.fp-name').textContent;
+      if (cb.checked) selectedExcludes.add(name); else selectedExcludes.delete(name);
+      updateWpTarget();
+    });
+  });
+  document.getElementById('wpConfirm').addEventListener('click', () => {
+    exclChips.innerHTML = '';
+    selectedExcludes.forEach(name => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.innerHTML = name + ' <button class="chip-x">✕</button>';
+      chip.querySelector('.chip-x').addEventListener('click', () => {
+        selectedExcludes.delete(name);
+        exclChips.removeChild(chip);
+      });
+      exclChips.appendChild(chip);
+    });
+    closeExcludes();
+  });
+</script>
+</body>
+</html>

@@ -67,6 +67,38 @@ describe("useLspStatus", () => {
     });
   });
 
+  it("captures error detail from handshake_failed", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "lsp_detect_languages") return ["rust"];
+      return { ok: false, kind: "handshake_failed", error: "channel closed; stderr:\nUnknown binary 'rust-analyzer.exe'" };
+    });
+    const enabled = ref(true);
+    const { langs } = useLspStatus(() => "/ws", enabled);
+    await vi.waitFor(() => {
+      expect(langs.value).toEqual([{
+        lang: "rust",
+        status: "failed",
+        error: "channel closed; stderr:\nUnknown binary 'rust-analyzer.exe'",
+      }]);
+    });
+  });
+
+  it("captures error detail from spawn_failed", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "lsp_detect_languages") return ["go"];
+      return { ok: false, kind: "spawn_failed", error: "\"C:/x/gopls.exe\": 系统找不到指定的文件" };
+    });
+    const enabled = ref(true);
+    const { langs } = useLspStatus(() => "/ws", enabled);
+    await vi.waitFor(() => {
+      expect(langs.value).toEqual([{
+        lang: "go",
+        status: "failed",
+        error: "\"C:/x/gopls.exe\": 系统找不到指定的文件",
+      }]);
+    });
+  });
+
   it("re-probes on workspace change and clears stale langs", async () => {
     invoke.mockImplementation(async (cmd: string) => {
       if (cmd === "lsp_detect_languages") return ["rust"];

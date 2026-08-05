@@ -31,6 +31,11 @@ export class TaskTracker {
   private pendingCreates = new Map<string, PendingCreate>();
   /** 记录这 4 个工具的 tool_use_id，好在对应 tool_result 到达时判断要不要吞掉。 */
   private trackedIds = new Set<string>();
+  /** 标记「下一轮首个新 task 落地时清空旧 task 列表（覆盖）」。由 markResetOnNextCreate
+   *  设置，handleToolResult 在插入首个新 task 前消费并置 false。不立即清 tasks——
+   *  让旧轮 TODO 在过渡期仍可见，且新轮 TaskUpdate 推进旧 task 时旧 taskId 仍在表
+   *  里能命中（见 markResetOnNextCreate 的说明）。 */
+  private resetOnNextCreate = false;
 
   static isTaskTool(name: string): boolean {
     return TASK_TOOL_NAMES.has(name);
@@ -80,6 +85,12 @@ export class TaskTracker {
 
     const taskId = extractCreatedTaskId(content);
     if (!taskId) return { tracked: true, changed: false }; // 解析失败静默丢弃，不影响主对话流
+    // 新轮首个新 task 落地：清空旧轮 task 列表（覆盖），而非追加。一轮内后续
+    // TaskCreate 标志已置 false，直接追加，不重复清。
+    if (this.resetOnNextCreate) {
+      this.tasks.clear();
+      this.resetOnNextCreate = false;
+    }
     this.tasks.set(taskId, {
       id: taskId,
       subject: pending.subject,
@@ -100,6 +111,19 @@ export class TaskTracker {
    *  工具的结果吞掉（trackedIds 已清），而是回退为通用 tool_result 路径。 */
   reset(): void {
     this.tasks.clear();
+    this.pendingCreates.clear();
+    this.trackedIds.clear();
+  }
+
+  /** 新一轮用户消息开始时调用：标记下一轮首个新 task 落地时覆盖式清空旧 task，
+   *  但不立即清 tasks——让旧轮 TODO 在 Claude 还没响应的过渡期仍可见，且新轮
+   *  Claude 用 TaskUpdate 推进旧 task 时旧 taskId 仍在表里能命中（原 reset() 会
+   *  把旧 taskId 清掉，导致 TaskUpdate 在下方 handleToolUse 被防御性丢弃、todo
+   *  推进信号被吞——保留 tasks 正好修这个）。pendingCreates / trackedIds 仍清，
+   *  保留原 reset 的跨轮迟到 tool_result 防御（迟到结果不再被认作任务工具结果，
+   *  回退通用 tool_result 路径）。 */
+  markResetOnNextCreate(): void {
+    this.resetOnNextCreate = true;
     this.pendingCreates.clear();
     this.trackedIds.clear();
   }

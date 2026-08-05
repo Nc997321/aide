@@ -7,6 +7,8 @@ export type LspServerStatus = "idle" | "ok" | "missing" | "failed";
 export interface LspLangStatus {
   lang: string;
   status: LspServerStatus;
+  /** 后端失败详情（spawn/handshake 的可读错误，含 stderr 摘要）；ok/missing 时无。 */
+  error?: string;
 }
 
 /**
@@ -53,16 +55,18 @@ export function useLspStatus(getWorkspaceRoot: () => string, enabled: Ref<boolea
       const results = await Promise.all(
         detected.map(async (lang): Promise<LspLangStatus> => {
           let status: LspServerStatus = "failed";
+          let error: string | undefined;
           try {
             const r = await withTimeout(
               api.lspEnsureServer(workspaceRoot, lang),
               ENSURE_TIMEOUT_MS[lang] ?? ENSURE_TIMEOUT_DEFAULT,
             );
             status = r.ok ? "ok" : r.kind === "server_not_found" ? "missing" : "failed";
+            error = r.error;
           } catch {
             status = "failed";
           }
-          return { lang, status };
+          return { lang, status, error };
         })
       );
       langs.value = results;
