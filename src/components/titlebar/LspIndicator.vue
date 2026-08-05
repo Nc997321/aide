@@ -2,14 +2,16 @@
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useWorkspaceLsp } from "../../composables/useWorkspaceLsp";
 import { useLspStatus, type LspServerStatus } from "../../composables/useLspStatus";
-import { installGuideFor, LSP_INSTALL_FALLBACK } from "../../lspInstallGuide";
+import { installGuideFor } from "../../lspInstallGuide";
 import { api } from "../../api";
+import FilePickerDialog from "../FilePickerDialog.vue";
+import ExcludeDirsDialog from "../ExcludeDirsDialog.vue";
 
 /**
  * 标题栏 LSP 入口（变体 B：常驻徽章 + 点击面板）。
- * 徽章直接显示各语言 server 状态（Rust ✓ · TS ✗ …）；面板内每语言一行：
- * 状态点 + 语言名 + server 名 + 状态，未安装/失败的行内联安装指引（命令 + 链接），
- * 底部是整体开关 + 排除目录编辑（chips 增删 + 保存）。
+ * 徽章显示各语言 server 状态；面板内每语言一行：状态点 + 语言名 + server 名 + 状态，
+ * 行内联「路径 + 浏览文件 + 参数 + 保存/清除」（取代旧 install-box note 与底部服务器覆盖区）。
+ * 排除目录走「浏览工作空间目录」多选弹窗。底部是整体开关 + 安装向导。
  */
 const props = defineProps<{ workspaceRoot?: string }>();
 
@@ -25,7 +27,7 @@ function toggle() {
   open.value = !open.value;
   if (open.value) {
     void status.probe(); // 打开时刷新一次（ensure 幂等）
-    void loadOverrides(); // 覆盖配置可能有外部改动（手动编辑 settings.json），每次打开重读
+    void loadOverrides(); // 覆盖配置可能有外部改动，每次打开重读
   }
 }
 function onDocClick(e: MouseEvent) {
@@ -79,14 +81,12 @@ const badgeTone = computed(() => {
 // ── 语言行（面板）──
 const langRows = computed(() => status.langs.value.map((x) => ({
   ...x,
-  guide: installGuideFor(x.lang),
   name: installGuideFor(x.lang)?.displayName ?? x.lang,
   server: installGuideFor(x.lang)?.serverBinary ?? "—",
 })));
 
-// ── 排除目录（本地编辑 + 保存）──
+// ── 排除目录（浏览工作空间多选弹窗；chips 单个 ✕ 删 + 保存）──
 const localExcludes = ref<string[]>([...lsp.excludes.value]);
-const newExcludeDir = ref("");
 watch(
   () => lsp.excludes.value,
   (v) => {
@@ -95,22 +95,22 @@ watch(
 );
 watch(root, () => {
   localExcludes.value = [...lsp.excludes.value];
-  newExcludeDir.value = "";
 });
 
-function addExclude() {
-  const dir = newExcludeDir.value.trim();
-  if (!dir) return;
-  localExcludes.value = [...localExcludes.value, dir];
-  newExcludeDir.value = "";
-  lsp.excludesDirty.value = true;
-}
 function removeExclude(i: number) {
   localExcludes.value = localExcludes.value.filter((_, idx) => idx !== i);
   lsp.excludesDirty.value = true;
 }
 async function saveExcludes() {
   await lsp.saveExcludes(localExcludes.value);
+}
+const excludeDialogVisible = ref(false);
+function onExcludesPicked(paths: string[]) {
+  // 合并去重
+  const merged = [...localExcludes.value];
+  for (const p of paths) if (!merged.includes(p)) merged.push(p);
+  localExcludes.value = merged;
+  lsp.excludesDirty.value = true;
 }
 
 async function setEnabled(v: boolean) {
@@ -123,7 +123,7 @@ async function openGuide() {
   await api.openLspInstallGuide().catch(() => {});
 }
 
-// ── 服务器覆盖（lsp.servers[lang]：program + args 显式指定，优先级高于 PATH 发现）──
+// ── 服务器覆盖（lsp.servers[lang]：program + args，优先级高于 PATH 发现）──
 interface OverrideDraft { program: string; args: string }
 const overrides = ref<Record<string, OverrideDraft>>({});
 const savedOverrides = ref<Record<string, { program: string; args: string[] }>>({});
@@ -165,17 +165,37 @@ async function saveOverride(lang: string) {
   try {
     await api.setSettings({ lsp: { servers } });
     savedOverrides.value = servers;
-    // 覆盖改了 server 启动方式 → 重拉该工作区 server（disable→enable，同 saveExcludes）
+    // 覆盖改了 server 启动方式 → 重拉该工作区 server（disable→enable）
     if (lsp.enabled.value) {
       await lsp.setEnabled(false);
       await lsp.setEnabled(true);
     }
+    stopEdit(lang);
   } catch { /* 静默 */ }
 }
 async function clearOverride(lang: string) {
   overrides.value[lang] = { program: "", args: "" };
   await saveOverride(lang);
 }
+
+// ── 文件浏览弹窗（server 二进制选择）──
+const filePickerVisible = ref(false);
+const filePickerLang = ref<string>("");
+function openFilePicker(lang: string) {
+  filePickerLang.value = lang;
+  filePickerVisible.value = true;
+}
+function onFilePicked(path: string) {
+  const lang = filePickerLang.value;
+  if (lang) draftFor(lang).program = path;
+  filePickerLang.value = "";
+}
+
+// ── ok 态「更改」展开编辑 ──
+const editingLang = ref<Set<string>>(new Set());
+function startEdit(lang: string) { editingLang.value = new Set([...editingLang.value, lang]); }
+function stopEdit(lang: string) { const s = new Set(editingLang.value); s.delete(lang); editingLang.value = s; }
+function isEditing(lang: string): boolean { return editingLang.value.has(lang); }
 </script>
 
 <template>
@@ -212,7 +232,7 @@ async function clearOverride(lang: string) {
           </label>
         </div>
 
-        <!-- 语言状态行 -->
+        <!-- 语言状态行 + 内联 override（取代旧 install-box note + 底部服务器覆盖区） -->
         <div class="lsp-body">
           <div v-if="langRows.length === 0" class="lsp-empty">
             {{
@@ -234,18 +254,66 @@ async function clearOverride(lang: string) {
               <span class="lang-status" :class="row.status">{{ STATUS_TEXT[row.status] }}</span>
             </div>
 
-            <!-- 未安装 / 启动失败：只显示简明 note（安装方法见面板底部「打开安装向导」） -->
-            <div
-              v-if="row.status === 'missing' || row.status === 'failed'"
-              class="install-box"
-            >
-              <div v-if="row.guide?.note" class="install-note">{{ row.guide.note }}</div>
-              <span v-else>{{ LSP_INSTALL_FALLBACK }}</span>
+            <!-- failed：可编辑 + 红色错误提示（后端回传的 stderr/握手详情） -->
+            <div v-if="row.status === 'failed'" class="override-inline failed">
+              <div class="path-row">
+                <input
+                  v-model="draftFor(row.lang).program"
+                  class="path-input"
+                  :class="{ 'has-value': draftFor(row.lang).program }"
+                  placeholder="server 完整路径（留空 = PATH 发现）"
+                  @keydown.enter="saveOverride(row.lang)"
+                />
+                <button class="browse-btn" @click="openFilePicker(row.lang)">浏览…</button>
+              </div>
+              <input
+                v-model="draftFor(row.lang).args"
+                class="args-input"
+                placeholder="参数（空格分隔，可选）"
+                @keydown.enter="saveOverride(row.lang)"
+              />
+              <div v-if="row.error" class="err-hint">{{ row.error }}</div>
+              <div class="override-actions">
+                <button v-if="hasOverride(row.lang)" class="clear-btn" @click="clearOverride(row.lang)">清除</button>
+                <button v-if="isOverrideDirty(row.lang)" class="save-btn" @click="saveOverride(row.lang)">保存</button>
+              </div>
+            </div>
+
+            <!-- ok 且未编辑：紧凑只读 + 更改 -->
+            <div v-else-if="row.status === 'ok' && !isEditing(row.lang)" class="ok-compact">
+              <span class="path-static">
+                {{ savedOverrides[row.lang]?.program ? savedOverrides[row.lang].program : `PATH 发现：${row.server}` }}
+              </span>
+              <button class="change-btn" @click="startEdit(row.lang)">更改…</button>
+            </div>
+
+            <!-- missing 或 ok 编辑态：可编辑 -->
+            <div v-else-if="row.status === 'missing' || (row.status === 'ok' && isEditing(row.lang))" class="override-inline">
+              <div class="path-row">
+                <input
+                  v-model="draftFor(row.lang).program"
+                  class="path-input"
+                  :class="{ 'has-value': draftFor(row.lang).program }"
+                  placeholder="server 完整路径（留空 = PATH 发现）"
+                  @keydown.enter="saveOverride(row.lang)"
+                />
+                <button class="browse-btn" @click="openFilePicker(row.lang)">浏览…</button>
+              </div>
+              <input
+                v-model="draftFor(row.lang).args"
+                class="args-input"
+                placeholder="参数（空格分隔，可选）"
+                @keydown.enter="saveOverride(row.lang)"
+              />
+              <div class="override-actions">
+                <button v-if="hasOverride(row.lang)" class="clear-btn" @click="clearOverride(row.lang)">清除</button>
+                <button v-if="isOverrideDirty(row.lang)" class="save-btn" @click="saveOverride(row.lang)">保存</button>
+              </div>
             </div>
           </div>
         </div>
 
-        <!-- 排除目录 -->
+        <!-- 排除目录：浏览工作空间目录（多选，限工作空间内） -->
         <div class="exclude-section">
           <div class="exclude-title">排除目录（不发给 LSP）</div>
           <div class="exclude-body">
@@ -255,59 +323,11 @@ async function clearOverride(lang: string) {
                 <button class="chip-x" v-tooltip="'移除'" @click="removeExclude(i)">✕</button>
               </span>
             </div>
-            <div class="exclude-add">
-              <input
-                v-model="newExcludeDir"
-                class="exclude-input"
-                placeholder="输入要排除的目录名…"
-                @keydown.enter="addExclude"
-              />
-              <button class="exclude-add-btn" :disabled="!newExcludeDir.trim()" @click="addExclude">添加</button>
-            </div>
+            <button class="browse-btn exclude-browse-btn" @click="excludeDialogVisible = true">浏览工作空间目录…</button>
             <div v-if="lsp.excludesDirty.value" class="exclude-save-row">
               <button class="exclude-save-btn" @click="saveExcludes">保存排除配置</button>
             </div>
           </div>
-        </div>
-
-        <!-- 服务器覆盖：指定某语言用哪个 server 二进制 + 参数（优先级高于 PATH 发现）。
-             复用上方排除区的既有样式类（exclude-section/title/input/save-btn），不重复造样式。 -->
-        <div class="exclude-section">
-          <div class="exclude-title">服务器覆盖</div>
-          <div v-if="langRows.length === 0" class="override-empty">
-            {{ root ? "未检测到项目语言" : "打开目录后可用" }}
-          </div>
-          <div v-for="row in langRows" :key="row.lang" class="override-row">
-            <div class="override-lang-row">
-              <span class="lang-name">{{ row.name }}</span>
-              <span class="lang-server">{{ row.server }}</span>
-            </div>
-            <input
-              v-model="draftFor(row.lang).program"
-              class="exclude-input override-input-wide"
-              placeholder="server 完整路径（留空 = PATH 发现）"
-              @keydown.enter="saveOverride(row.lang)"
-            />
-            <input
-              v-model="draftFor(row.lang).args"
-              class="exclude-input override-input-wide"
-              placeholder="参数（空格分隔，可选；如 -vm C:\...\jdk-21\bin\java.exe）"
-              @keydown.enter="saveOverride(row.lang)"
-            />
-            <div class="override-actions">
-              <button
-                v-if="isOverrideDirty(row.lang)"
-                class="exclude-save-btn"
-                @click="saveOverride(row.lang)"
-              >保存</button>
-              <button
-                v-if="hasOverride(row.lang)"
-                class="override-clear"
-                @click="clearOverride(row.lang)"
-              >清除</button>
-            </div>
-          </div>
-          <div class="override-hint">覆盖保存后该语言 server 自动重启生效。装好 server 却报错时常用（如 java 配 -vm 指定 JDK 21）。</div>
         </div>
 
         <!-- 安装向导入口（随包 HTML，系统浏览器打开） -->
@@ -316,6 +336,10 @@ async function clearOverride(lang: string) {
         </div>
       </div>
     </Transition>
+
+    <!-- 文件浏览 + 排除目录弹窗（Teleport to body） -->
+    <FilePickerDialog v-model:visible="filePickerVisible" @confirm="onFilePicked" />
+    <ExcludeDirsDialog v-model:visible="excludeDialogVisible" :workspace-root="root" @confirm="onExcludesPicked" />
   </div>
 </template>
 
@@ -401,14 +425,49 @@ async function clearOverride(lang: string) {
 .lang-status.miss { color: var(--aide-warning); }
 .lang-status.err { color: var(--aide-danger); }
 
-/* ── 安装提示（只显示 note，步骤见安装向导） ── */
-.install-box {
-  margin: 0 14px 8px 29px; padding: 8px 10px;
-  background: var(--aide-surface-default); border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-sm);
-  font-size: 11px; color: var(--aide-text-secondary); line-height: 1.7;
+/* ── 内联 override 行（取代 install-box note + 底部服务器覆盖区） ── */
+.override-inline { padding: 2px 14px 10px 29px; display: flex; flex-direction: column; gap: 5px; }
+.override-inline.failed { background: color-mix(in srgb, var(--aide-danger) 6%, transparent); }
+.path-row { display: flex; gap: 5px; }
+.path-input {
+  flex: 1; min-width: 0; background: var(--aide-bg-base); border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm); color: var(--aide-text-primary); font-size: 11px;
+  padding: 4px 8px; outline: none; font-family: inherit;
 }
-.install-note { font-size: 10.5px; color: var(--aide-text-muted); }
+.path-input:focus { border-color: var(--aide-accent); }
+.path-input.has-value { color: var(--aide-text-secondary); }
+.browse-btn {
+  background: var(--aide-accent-subtle); color: var(--aide-accent);
+  border: 1px solid color-mix(in srgb, var(--aide-accent) 22%, transparent);
+  border-radius: var(--aide-radius-sm); font-size: 11px; padding: 4px 10px; cursor: pointer;
+  font-family: inherit; white-space: nowrap; transition: all 0.12s;
+}
+.browse-btn:hover { background: color-mix(in srgb, var(--aide-accent) 18%, transparent); }
+.args-input {
+  width: 100%; background: var(--aide-bg-base); border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm); color: var(--aide-text-primary); font-size: 11px;
+  padding: 4px 8px; outline: none; font-family: inherit;
+}
+.args-input:focus { border-color: var(--aide-accent); }
+.err-hint { font-size: 10.5px; color: var(--aide-danger); line-height: 1.5; word-break: break-word; }
+.override-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.save-btn {
+  background: var(--aide-accent-subtle); color: var(--aide-accent);
+  border: 1px solid color-mix(in srgb, var(--aide-accent) 22%, transparent);
+  border-radius: var(--aide-radius-sm); font-size: 11px; padding: 3px 12px; cursor: pointer; font-family: inherit;
+}
+.save-btn:hover { background: color-mix(in srgb, var(--aide-accent) 18%, transparent); }
+.clear-btn {
+  background: none; color: var(--aide-text-muted); border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm); font-size: 11px; padding: 3px 12px; cursor: pointer; font-family: inherit;
+}
+.clear-btn:hover { color: var(--aide-danger); border-color: var(--aide-danger); }
+
+/* ok 紧凑行 */
+.ok-compact { padding: 2px 14px 8px 29px; display: flex; align-items: center; gap: 6px; }
+.path-static { flex: 1; min-width: 0; font-size: 10.5px; color: var(--aide-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--aide-font-mono); }
+.change-btn { background: none; border: none; color: var(--aide-accent); font-size: 10.5px; cursor: pointer; font-family: inherit; padding: 0; flex-shrink: 0; }
+.change-btn:hover { text-decoration: underline; }
 
 /* ── 排除目录 ── */
 .exclude-section { border-top: 1px solid var(--aide-border); padding: 9px 12px 11px; }
@@ -429,25 +488,7 @@ async function clearOverride(lang: string) {
   cursor: pointer; font-size: 9px; transition: background 0.12s;
 }
 .chip-x:hover { background: var(--aide-danger); color: var(--aide-text-primary); }
-.exclude-add { display: flex; gap: 6px; }
-.exclude-input {
-  flex: 1; min-width: 0; background: var(--aide-surface-default);
-  border: 1px solid var(--aide-border); border-radius: var(--aide-radius-sm);
-  color: var(--aide-text-primary); font-size: 11.5px; padding: 4px 9px; outline: none;
-  font-family: inherit;
-}
-.exclude-input:focus { border-color: var(--aide-accent); }
-.exclude-add-btn {
-  background: var(--aide-accent-subtle); color: var(--aide-accent);
-  border: 1px solid color-mix(in srgb, var(--aide-accent) 22%, transparent);
-  border-radius: var(--aide-radius-sm); font-size: 11px; padding: 4px 12px;
-  cursor: pointer; font-family: inherit; transition: all 0.12s;
-}
-.exclude-add-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--aide-accent) 18%, transparent);
-  border-color: color-mix(in srgb, var(--aide-accent) 35%, transparent);
-}
-.exclude-add-btn:disabled { opacity: 0.45; cursor: default; }
+.exclude-browse-btn { margin-bottom: 0; }
 .exclude-save-row { display: flex; justify-content: flex-end; margin-top: 8px; }
 .exclude-save-btn {
   background: var(--aide-accent-subtle); color: var(--aide-accent);
@@ -459,22 +500,6 @@ async function clearOverride(lang: string) {
   background: color-mix(in srgb, var(--aide-accent) 18%, transparent);
   border-color: color-mix(in srgb, var(--aide-accent) 35%, transparent);
 }
-
-/* ── 服务器覆盖（复用 exclude 区样式，这里只保留新布局/幽灵清除按钮） ── */
-.override-empty { font-size: 11px; color: var(--aide-text-muted); padding: 4px 0; }
-.override-row { margin: 8px 0; }
-.override-lang-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
-/* exclude-input 是 flex:1（配 .exclude-add 横排）；覆盖区纵向单列 → 拉满整行 */
-.override-input-wide { width: 100%; margin: 2px 0; }
-.override-actions { display: flex; gap: 6px; margin-top: 4px; }
-.override-clear {
-  background: none; color: var(--aide-text-muted);
-  border: 1px solid var(--aide-border); border-radius: var(--aide-radius-sm);
-  font-size: 11px; padding: 3px 12px; cursor: pointer; font-family: inherit;
-  transition: all 0.12s;
-}
-.override-clear:hover { color: var(--aide-danger); border-color: var(--aide-danger); }
-.override-hint { font-size: 10.5px; color: var(--aide-text-muted); margin-top: 6px; line-height: 1.6; }
 
 /* ── 安装向导入口 ── */
 .guide-row {
