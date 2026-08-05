@@ -335,6 +335,29 @@ pub fn changed_files_since(
     (changed, total)
 }
 
+/// Sanity check that an `embed_complete` shard actually has vectors. A build
+/// that silently dropped every batch (Ollama down — the bug this fixes) still
+/// flipped `embed_complete=true`, producing a vector-less shard the loaders
+/// would serve as "complete" (semantic search then returned 0). Returns true
+/// if the shard's point count is far below the declared symbol count → caller
+/// treats it as a broken shard and rebuilds. Conservative 50% threshold: a
+/// completed shard should have nearly all symbols embedded (NaN-skips are a
+/// handful); well under half is unambiguous breakage.
+fn shard_point_count_broken(shard: &CodeShard, meta: &Meta) -> bool {
+    let pc = shard.point_count();
+    let half = meta.symbol_count / 2;
+    if pc < half {
+        tracing::warn!(
+            "codegraph: shard point_count {} << meta.symbol_count {}, treating as broken → rebuild",
+            pc,
+            meta.symbol_count
+        );
+        true
+    } else {
+        false
+    }
+}
+
 /// Load a compatible on-disk index **ignoring staleness**. Returns the
 /// `SymbolTable`, the `CodeShard`, and the `Meta` (whose `indexed_at` drives
 /// the changed-files delta) if the on-disk meta matches the configured
@@ -363,6 +386,9 @@ pub fn load_compatible_index(
     let table = SymbolTable::load_json(&base.join("symbols.json"))?;
     let edges = EdgeTable::load_json(&base.join("edges.json"))?;
     let shard = CodeShard::load(&base.join(&meta.shard_dir), expect_dim).ok()?;
+    if shard_point_count_broken(&shard, &meta) {
+        return None;
+    }
     Some((table, edges, Arc::new(shard), meta))
 }
 
@@ -433,6 +459,9 @@ pub fn load_project_index(
     // Load the shard from the versioned dir recorded in meta (legacy meta without
     // shard_dir defaults to "qdrant").
     let shard = CodeShard::load(&base.join(&meta.shard_dir), expect_dim).ok()?;
+    if shard_point_count_broken(&shard, &meta) {
+        return None;
+    }
     Some((table, edges, Arc::new(shard)))
 }
 
@@ -516,6 +545,17 @@ pub fn reindex_one(
 mod tests {
     use crate::codegraph::parser::ParserManager;
     use super::{collect_symbols, cleanup_orphan_shard_dirs, decide_increment};
+
+    /// 4 维假 embedder：批次原样返回零向量，让测试 shard 真有向量以通过加载层
+    /// 的 point_count 兜底校验（向量数远少于 symbol_count 即判残缺 → 重建）。
+    struct FakeEmb;
+    impl crate::codegraph::embed::Embedder for FakeEmb {
+        fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
+            Ok(texts.iter().map(|_| vec![0.0f32; 4]).collect())
+        }
+        fn dim(&self) -> usize { 4 }
+        fn model_name(&self) -> &str { "test" }
+    }
 
     /// `collect_symbols` must stop after the first file when `cancel` is pre-set,
     /// returning an empty table. Phase 1 observing the cancel promptly is what lets
@@ -697,8 +737,14 @@ mod tests {
         // Build an on-disk index (structure layer + shard + meta). Drop the
         // returned shard so its dir is released on disk before we re-load it.
         {
-            let (_table, _edges, shard, _points, _stats) =
+            let (_table, _edges, shard, points, _stats) =
                 super::build_structure_index(&dir, &pm, 4, "test-model", None, None).unwrap();
+            // Embed the points so the shard has vectors — the loaders now
+            // sanity-check point_count against meta.symbol_count (a vector-less
+            // "complete" shard is rejected as broken, the bug this fixes).
+            for chunk in points.chunks(crate::codegraph::EMBED_BATCH_SIZE) {
+                let _ = super::store::embed_and_store(chunk, &FakeEmb, &shard);
+            }
             drop(shard);
         }
         // Phase 1 writes `embed_complete: false`; flip it to true to simulate a
@@ -802,9 +848,14 @@ mod tests {
             "function caller() { target(); }\nfunction target() {}\n").unwrap();
         let pm = ParserManager::new();
         {
-            let (_t, edges, shard, _p, _s) =
+            let (_t, edges, shard, points, _s) =
                 super::build_structure_index(&dir, &pm, 4, "test-model", None, None).unwrap();
             assert_eq!(edges.callers_of("target").len(), 1);
+            // Embed points so the shard has vectors — loaders sanity-check
+            // point_count vs meta.symbol_count and reject a vector-less shard.
+            for chunk in points.chunks(crate::codegraph::EMBED_BATCH_SIZE) {
+                let _ = super::store::embed_and_store(chunk, &FakeEmb, &shard);
+            }
             drop(shard);
         }
         let base = super::index_dir(&dir);

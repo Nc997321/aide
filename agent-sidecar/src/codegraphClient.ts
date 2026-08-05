@@ -12,6 +12,8 @@ export interface CodegraphQueryResponse {
   error?: string;
   timedOut?: boolean;
   cancelled?: boolean;
+  /** Present when status === "degraded" — describes the shard vector shortfall. */
+  health?: string;
 }
 
 interface Pending {

@@ -146,18 +146,19 @@ pub fn execute_agent_query(
         "semantic_search" => {
             // Clone shard + read embed_ready under the read lock, then DROP it
             // before the embed (same TOCTOU-safe pattern as codegraph_goto_definition).
-            let (shard, embed_ready, root_ok, has_index) = {
+            let (shard, embed_ready, root_ok, has_index, symbol_count) = {
                 let guard = match st.inner.read() {
                     Ok(g) => g,
                     Err(_) => return err_payload("index lock poisoned"),
                 };
                 match guard.as_ref() {
-                    None => (None, false, false, false),
+                    None => (None, false, false, false, 0),
                     Some(pi) => (
                         Some(pi.shard.clone()),
                         pi.embed_ready.load(Ordering::Relaxed),
                         pi.project_root == root,
                         true,
+                        pi.symbols.len(),
                     ),
                 }
             };
@@ -174,6 +175,19 @@ pub fn execute_agent_query(
                 Some(s) => s,
                 None => return err_payload("shard missing"),
             };
+            // Degraded shard: the loaders are supposed to reject a vector-less
+            // "complete" shard, but defense-in-depth — if point_count is far
+            // below the symbol count, surface "degraded" so the agent/user
+            // rebuilds instead of trusting a 0-result "index is healthy".
+            let pc = shard.point_count();
+            if symbol_count > 0 && pc < symbol_count / 2 {
+                return json!({
+                    "ok": true,
+                    "status": "degraded",
+                    "results": [],
+                    "health": format!("shard_point_count={} vs symbols={}", pc, symbol_count),
+                });
+            }
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let limit = args
                 .get("limit")

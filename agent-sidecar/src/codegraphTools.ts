@@ -102,6 +102,14 @@ export function formatToolResponse(
       `Fall back to Grep for now.`
     );
   }
+  if (resp.status === "degraded") {
+    return (
+      `The code index's semantic layer is degraded — the shard has far fewer vectors ` +
+      `than symbols (${resp.health ?? "vector shortfall"}), so semantic search would ` +
+      `return wrong/empty results. Rebuild the index in Settings → 代码索引 (全量重建). ` +
+      `Fall back to Grep for this query.`
+    );
+  }
 
   const results = resp.results ?? [];
   if (results.length === 0) {
