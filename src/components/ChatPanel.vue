@@ -10,7 +10,7 @@ import ThemedSelect from "./ThemedSelect.vue";
 import ChatSendButton from "./ChatSendButton.vue";
 import PermissionDialog from "./PermissionDialog.vue";
 import BgTaskDock from "./BgTaskDock.vue";
-import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, ContextUsage, ModelOption, PermissionModeOption, PermissionRequest, RateLimitInfo, TaskItem, TextBlock } from "@/types/chat";
+import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, ContextUsage, ModelOption, PermissionModeOption, PermissionRequest, RateLimitInfo, TaskItem } from "@/types/chat";
 import type { SkillMeta } from "@/types";
 import { api } from "@/api";
 import { permissionsApi } from "@/api/permissions";
@@ -25,7 +25,7 @@ import { useInlineMention } from "@/composables/useInlineMention";
 import { useMentionInserter } from "@/composables/useMentionInserter";
 import { getFileIcon, pathBasename, FOLDER_ICON_PATH } from "@/utils/fileIcons";
 import type { ImageAttachment, SendOptions } from "@/composables/useChatSession";
-import { useMessageWindow } from "@/composables/useMessageWindow";
+import { useChatScroll } from "@/composables/useChatScroll";
 import { useProviders } from "@/composables/useProviders";
 import { useSessionProviders } from "@/composables/useSessionProviders";
 import type { ProviderConfig } from "@/types";
@@ -644,32 +644,22 @@ watch(isBusyVal, (busy) => {
 watch(contextCompactionVal, syncActivityTimer);
 onUnmounted(() => { if (activityTimer) clearInterval(activityTimer); });
 
-// 窗口化渲染:store 里的消息全量在场,但进 v-for 建 DOM 的只有尾部一个有界
-// 窗口——长会话一次性挂载全史(几万 DOM 节点 + 全量 Markdown/高亮)曾把切
-// 会话的首帧卡成整窗未响应。向上滚动/点击顶部入口逐步扩窗,见 useMessageWindow。
-const { visible: visibleMessages, hiddenCount, expandOlder } = useMessageWindow(
-  () => messagesVal.value,
-  () => props.sessionId,
-);
-
-/** 扩窗 + 滚动锚定:上方插入内容会把当前可视内容往下顶,读扩窗前后的
- *  scrollHeight 差把 scrollTop 补回去,保持视觉位置不跳。强制布局(读
- *  scrollHeight)只发生在用户主动翻旧消息时,不在流式热路径上。 */
-let expandingOlder = false;
-async function expandOlderAnchored() {
-  const el = scrollEl.value;
-  if (!el || expandingOlder || hiddenCount.value === 0) return;
-  expandingOlder = true;
-  try {
-    const prevHeight = el.scrollHeight;
-    const prevTop = el.scrollTop;
-    expandOlder();
-    await nextTick();
-    el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
-  } finally {
-    expandingOlder = false;
-  }
-}
+// 滚动 / 窗口化 / 分帧挂载全部收拢到 useChatScroll：数据窗口（useMessageWindow
+// 尾部 30 条）之上叠一层渲染预算 mountedCount，切会话先挂尾部 6 条、每帧 rAF 加
+// 几条到 30，帧间让出主线程给输入框流光绘制——长会话切回不再整窗未响应。
+// 见 composables/useChatScroll.ts。
+const {
+  scrollEl,
+  contentEl,
+  visibleMessages,
+  hiddenCount,
+  ramping,
+  onScroll,
+  jumpToBottom,
+  farFromBottom,
+  newWhileAway,
+  expandOlderAnchored,
+} = useChatScroll(() => messagesVal.value, () => props.sessionId);
 
 const btwMode = ref(false);
 const btwLightweight = ref(true);
@@ -783,7 +773,6 @@ const filteredSkills = computed(() => {
     .slice(0, 8);
 });
 const pendingImages = ref<Array<ImageAttachment & { previewUrl: string }>>([]);
-const scrollEl = ref<HTMLDivElement>();
 const textareaEl = ref<HTMLTextAreaElement>();
 
 // skills 随工作区变化重扫（onMounted 时 workspacePath 往往还是空串）
@@ -799,90 +788,7 @@ watch(
   { immediate: true },
 );
 
-// 用户向上滚动时暂停自动置底，回到底部附近恢复
-const autoScroll = ref(true);
-// 「回到底部」悬浮按钮：离底超过 JUMP_SHOW_THRESHOLD 才显示（比 autoScroll 的 48px
-// 阈值宽得多——刚离底几十 px 就浮按钮太吵）；上翻期间来了新消息/流式增量时点
-// 亮铜色小点，点击或手动滚回底部附近时熄灭
-const JUMP_SHOW_THRESHOLD = 200;
-const farFromBottom = ref(false);
-const newWhileAway = ref(false);
-
-function onScroll() {
-  const el = scrollEl.value;
-  if (!el) return;
-  const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
-  autoScroll.value = dist < 48;
-  farFromBottom.value = dist > JUMP_SHOW_THRESHOLD;
-  if (autoScroll.value) newWhileAway.value = false;
-  // 滚到接近顶部 = 想看更早的消息:扩窗(带锚定)。只在用户真实滚动时触发,
-  // 挂载/置底不产生 scrollTop≈0 的 scroll 事件,不会误触发。
-  if (el.scrollTop < 80 && hiddenCount.value > 0) void expandOlderAnchored();
-}
-
-// 按帧节流：读 scrollHeight 会强制整个消息容器同步布局（成本 ∝ 会话历史 DOM
-// 体积），流式期间每个增量都触发一次的话，光这一项就能压垮 UI 线程。合并到
-// 每帧至多一次；rAF 回调晚于 Vue 的微任务渲染批次，天然拿到更新后的 DOM。
-let scrollQueued = false;
-function scrollToBottom() {
-  if (!autoScroll.value || scrollQueued) return;
-  scrollQueued = true;
-  requestAnimationFrame(() => {
-    scrollQueued = false;
-    if (scrollEl.value) scrollEl.value.scrollTop = scrollEl.value.scrollHeight;
-  });
-}
-
-// 新消息/流式增量到达：上翻阅读中则点亮「回到底部」的新消息小点；
-// 置底本身仍交给 scrollToBottom（autoScroll=false 时它自己 no-op）
-function onNewContent() {
-  if (!autoScroll.value) newWhileAway.value = true;
-  scrollToBottom();
-}
-
-watch(() => messagesVal.value.length, onNewContent);
-watch(
-  () => {
-    const last = messagesVal.value[messagesVal.value.length - 1];
-    const block = last?.blocks[last.blocks.length - 1];
-    return block?.type === "text" ? (block as TextBlock).text.length : 0;
-  },
-  onNewContent
-);
-
-// 点「回到底部」：平滑滚到底并恢复自动置底。先收按钮再滚——平滑滚动途中用户
-// 滚轮打断时 scroll 事件会把按钮按真实距离重新点亮，不会丢状态。
-function jumpToBottom() {
-  const el = scrollEl.value;
-  if (!el) return;
-  newWhileAway.value = false;
-  farFromBottom.value = false;
-  autoScroll.value = true;
-  el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-}
-
-// 置底的统一触发器：数据层 watcher 只能枚举「新消息 / 文本增量」，但让滚动条
-// 搁浅的来源远不止这些——
-//   ① 内容增高：变更卡（Edit/Write/NotebookEdit）结果到达时「等待结果…」就地
-//      换成几百 px 的 DiffViewer、图片异步加载、历史扩窗……（观察 contentEl）
-//   ② 视口变化：权限对话框出现/消失、Pane 拖拽、窗口缩放改变 clientHeight——
-//      scrollTop 未被钳位时不产生 scroll 事件，onScroll 不重算、内容盒也没变，
-//      滚动条搁浅在半中腰且 autoScroll 仍是 true（观察 scrollEl）
-// 枚举数据必然挂一漏万，改为在 DOM 层观察这两个症状本身。RO 通知按帧合并、
-// 频率与现有 watcher 同级；autoScroll=false 时 scrollToBottom 自身 no-op，不打扰
-// 翻历史的用户；置底只写 scrollTop 不改两者尺寸，无反馈循环。
-const contentEl = ref<HTMLDivElement>();
-let contentObserver: ResizeObserver | null = null;
-onMounted(() => {
-  if (typeof ResizeObserver === "undefined") return;
-  contentObserver = new ResizeObserver(() => scrollToBottom());
-  if (contentEl.value) contentObserver.observe(contentEl.value);
-  if (scrollEl.value) contentObserver.observe(scrollEl.value);
-});
-onUnmounted(() => {
-  contentObserver?.disconnect();
-  contentObserver = null;
-});
+// 滚动 / 窗口 / 置底 / 分帧挂载逻辑已摘至 useChatScroll（见上方 useChatScroll 调用）。
 
 watch(inputText, (val) => {
   const match = val.match(/^\/(\S*)$/); // / 开头且无空格
@@ -905,14 +811,11 @@ watch(inputText, (val) => {
   }
 });
 
-// 切换会话时清空待发图片/引用芯片、恢复自动置底、清理 btw 支线
+// 切换会话时清空待发图片/引用芯片、清理 btw 支线
+// （滚动/窗口复位 + 分帧 ramp 由 useChatScroll 自己 watch sessionId 处理）
 watch(() => props.sessionId, () => {
   pendingImages.value = [];
   pendingMentions.value = [];
-  autoScroll.value = true;
-  farFromBottom.value = false;
-  newWhileAway.value = false;
-  scrollToBottom();
   // 切主会话 → btw 抽屉关、进程清理
   if (btw.store.value.question || btw.store.value.isBusy || btw.store.value.done) {
     btw.cleanup();
@@ -1272,11 +1175,11 @@ function onOpenBgDock(taskId: string) {
       <div v-if="messagesVal.length === 0" class="chat-empty">
         开始新对话
       </div>
-      <!-- 内容盒：ResizeObserver 的观察目标（见 script contentObserver），
+      <!-- 内容盒：ResizeObserver 的观察目标（见 useChatScroll 的 contentObserver），
            纯布局 wrapper，消息增高的任何来源都会反映为它的盒高变化 -->
       <div ref="contentEl" class="chat-messages-body">
         <button
-          v-if="hiddenCount > 0"
+          v-if="hiddenCount > 0 && !ramping"
           class="chat-history-gate"
           @click="expandOlderAnchored"
         >
