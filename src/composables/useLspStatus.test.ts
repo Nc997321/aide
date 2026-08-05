@@ -86,4 +86,20 @@ describe("useLspStatus", () => {
       expect(langs.value).toEqual([{ lang: "java", status: "ok" }]);
     });
   });
+
+  it("resets probing when disabled", async () => {
+    // 回归：probe 在 disabled/无工作区时必须把 probing 复位（防旧挂起残留卡死
+    // 面板「永远探测中」）。注：挂起 invoke 的完整场景在 vitest 4 下会触发
+    // teardown 超时（环境限制），这里直测 return 分支的复位语义。
+    invoke.mockResolvedValue(["rust"]);
+    const enabled = ref(false);
+    const { probing, probe } = useLspStatus(() => "/ws", enabled);
+    probing.value = true; // 模拟上一次 probe 挂起残留
+    await probe(); // disabled → return 分支复位
+    expect(probing.value).toBe(false);
+  });
+
+  // 注：ensure 挂起 → withTimeout(8s) → failed 的超时路径不做单测——挂起 invoke
+  // 在 vitest 4 下触发 teardown 超时（环境限制）；catch 路径已由
+  // "marks failed when ensure throws" 覆盖，withTimeout 本身是薄封装。
 });

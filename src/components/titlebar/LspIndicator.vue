@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useWorkspaceLsp } from "../../composables/useWorkspaceLsp";
 import { useLspStatus, type LspServerStatus } from "../../composables/useLspStatus";
 import { installGuideFor, LSP_INSTALL_FALLBACK } from "../../lspInstallGuide";
+import { api } from "../../api";
 
 /**
  * 标题栏 LSP 入口（变体 B：常驻徽章 + 点击面板）。
@@ -22,7 +23,10 @@ const rootEl = ref<HTMLElement | null>(null);
 
 function toggle() {
   open.value = !open.value;
-  if (open.value) void status.probe(); // 打开时刷新一次（ensure 幂等）
+  if (open.value) {
+    void status.probe(); // 打开时刷新一次（ensure 幂等）
+    void loadOverrides(); // 覆盖配置可能有外部改动（手动编辑 settings.json），每次打开重读
+  }
 }
 function onDocClick(e: MouseEvent) {
   if (rootEl.value && !rootEl.value.contains(e.target as Node)) open.value = false;
@@ -113,6 +117,65 @@ async function setEnabled(v: boolean) {
   await lsp.setEnabled(v);
   if (v) void status.probe();
 }
+
+// ── 安装向导（随包分发的 lsp-install-guide.html，系统浏览器打开）──
+async function openGuide() {
+  await api.openLspInstallGuide().catch(() => {});
+}
+
+// ── 服务器覆盖（lsp.servers[lang]：program + args 显式指定，优先级高于 PATH 发现）──
+interface OverrideDraft { program: string; args: string }
+const overrides = ref<Record<string, OverrideDraft>>({});
+const savedOverrides = ref<Record<string, { program: string; args: string[] }>>({});
+
+async function loadOverrides() {
+  try {
+    const s = await api.getSettings();
+    savedOverrides.value = s.lsp?.servers ?? {};
+    overrides.value = {};
+    for (const [lang, o] of Object.entries(savedOverrides.value)) {
+      overrides.value[lang] = { program: o.program, args: o.args.join(" ") };
+    }
+  } catch { /* 读失败静默（后端异常不阻断面板） */ }
+}
+
+function draftFor(lang: string): OverrideDraft {
+  if (!overrides.value[lang]) overrides.value[lang] = { program: "", args: "" };
+  return overrides.value[lang];
+}
+function isOverrideDirty(lang: string): boolean {
+  const d = draftFor(lang);
+  const o = savedOverrides.value[lang];
+  return !o || o.program !== d.program || o.args.join(" ") !== d.args;
+}
+function hasOverride(lang: string): boolean {
+  return !!savedOverrides.value[lang]?.program;
+}
+async function saveOverride(lang: string) {
+  const d = draftFor(lang);
+  const servers = { ...savedOverrides.value };
+  if (d.program.trim()) {
+    servers[lang] = {
+      program: d.program.trim(),
+      args: d.args.trim() ? d.args.trim().split(/\s+/) : [],
+    };
+  } else {
+    delete servers[lang];
+  }
+  try {
+    await api.setSettings({ lsp: { servers } });
+    savedOverrides.value = servers;
+    // 覆盖改了 server 启动方式 → 重拉该工作区 server（disable→enable，同 saveExcludes）
+    if (lsp.enabled.value) {
+      await lsp.setEnabled(false);
+      await lsp.setEnabled(true);
+    }
+  } catch { /* 静默 */ }
+}
+async function clearOverride(lang: string) {
+  overrides.value[lang] = { program: "", args: "" };
+  await saveOverride(lang);
+}
 </script>
 
 <template>
@@ -152,7 +215,15 @@ async function setEnabled(v: boolean) {
         <!-- 语言状态行 -->
         <div class="lsp-body">
           <div v-if="langRows.length === 0" class="lsp-empty">
-            {{ status.probing ? "正在探测项目语言…" : root ? "未检测到项目语言" : "打开目录后可用" }}
+            {{
+              !lsp.enabled.value
+                ? "LSP 已关闭 — 打开开关开始探测"
+                : status.probing
+                  ? "正在探测项目语言…"
+                  : root
+                    ? "未检测到项目语言"
+                    : "打开目录后可用"
+            }}
           </div>
 
           <div v-for="row in langRows" :key="row.lang" class="lang-block">
@@ -163,20 +234,12 @@ async function setEnabled(v: boolean) {
               <span class="lang-status" :class="row.status">{{ STATUS_TEXT[row.status] }}</span>
             </div>
 
-            <!-- 未安装 / 启动失败：内联安装指引（变体 B：不折叠） -->
+            <!-- 未安装 / 启动失败：只显示简明 note（安装方法见面板底部「打开安装向导」） -->
             <div
               v-if="row.status === 'missing' || row.status === 'failed'"
               class="install-box"
             >
-              <template v-if="row.guide">
-                <div v-for="(step, i) in row.guide.steps" :key="i" class="install-step">
-                  <code class="cmd">{{ step }}</code>
-                </div>
-                <div v-if="row.guide.url" class="install-url">
-                  <a :href="row.guide.url" target="_blank" rel="noreferrer">{{ row.guide.url }} ↗</a>
-                </div>
-                <div v-if="row.guide.note" class="install-note">{{ row.guide.note }}</div>
-              </template>
+              <div v-if="row.guide?.note" class="install-note">{{ row.guide.note }}</div>
               <span v-else>{{ LSP_INSTALL_FALLBACK }}</span>
             </div>
           </div>
@@ -205,6 +268,51 @@ async function setEnabled(v: boolean) {
               <button class="exclude-save-btn" @click="saveExcludes">保存排除配置</button>
             </div>
           </div>
+        </div>
+
+        <!-- 服务器覆盖：指定某语言用哪个 server 二进制 + 参数（优先级高于 PATH 发现）。
+             复用上方排除区的既有样式类（exclude-section/title/input/save-btn），不重复造样式。 -->
+        <div class="exclude-section">
+          <div class="exclude-title">服务器覆盖</div>
+          <div v-if="langRows.length === 0" class="override-empty">
+            {{ root ? "未检测到项目语言" : "打开目录后可用" }}
+          </div>
+          <div v-for="row in langRows" :key="row.lang" class="override-row">
+            <div class="override-lang-row">
+              <span class="lang-name">{{ row.name }}</span>
+              <span class="lang-server">{{ row.server }}</span>
+            </div>
+            <input
+              v-model="draftFor(row.lang).program"
+              class="exclude-input override-input-wide"
+              placeholder="server 完整路径（留空 = PATH 发现）"
+              @keydown.enter="saveOverride(row.lang)"
+            />
+            <input
+              v-model="draftFor(row.lang).args"
+              class="exclude-input override-input-wide"
+              placeholder="参数（空格分隔，可选；如 -vm C:\...\jdk-21\bin\java.exe）"
+              @keydown.enter="saveOverride(row.lang)"
+            />
+            <div class="override-actions">
+              <button
+                v-if="isOverrideDirty(row.lang)"
+                class="exclude-save-btn"
+                @click="saveOverride(row.lang)"
+              >保存</button>
+              <button
+                v-if="hasOverride(row.lang)"
+                class="override-clear"
+                @click="clearOverride(row.lang)"
+              >清除</button>
+            </div>
+          </div>
+          <div class="override-hint">覆盖保存后该语言 server 自动重启生效。装好 server 却报错时常用（如 java 配 -vm 指定 JDK 21）。</div>
+        </div>
+
+        <!-- 安装向导入口（随包 HTML，系统浏览器打开） -->
+        <div class="guide-row">
+          <button class="guide-btn" @click="openGuide">打开安装向导 ↗</button>
         </div>
       </div>
     </Transition>
@@ -293,21 +401,14 @@ async function setEnabled(v: boolean) {
 .lang-status.miss { color: var(--aide-warning); }
 .lang-status.err { color: var(--aide-danger); }
 
-/* ── 安装指引（内联） ── */
+/* ── 安装提示（只显示 note，步骤见安装向导） ── */
 .install-box {
   margin: 0 14px 8px 29px; padding: 8px 10px;
   background: var(--aide-surface-default); border: 1px solid var(--aide-border);
   border-radius: var(--aide-radius-sm);
   font-size: 11px; color: var(--aide-text-secondary); line-height: 1.7;
 }
-.install-step { margin: 3px 0; }
-.cmd {
-  font-family: var(--aide-font-mono); font-size: 10.5px; color: var(--aide-accent);
-  background: var(--aide-bg-deep); padding: 3px 8px; border-radius: 4px;
-  display: inline-block; overflow-wrap: anywhere;
-}
-.install-url a { color: var(--aide-info); font-size: 10.5px; word-break: break-all; }
-.install-note { font-size: 10.5px; color: var(--aide-text-muted); margin-top: 2px; }
+.install-note { font-size: 10.5px; color: var(--aide-text-muted); }
 
 /* ── 排除目录 ── */
 .exclude-section { border-top: 1px solid var(--aide-border); padding: 9px 12px 11px; }
@@ -358,6 +459,36 @@ async function setEnabled(v: boolean) {
   background: color-mix(in srgb, var(--aide-accent) 18%, transparent);
   border-color: color-mix(in srgb, var(--aide-accent) 35%, transparent);
 }
+
+/* ── 服务器覆盖（复用 exclude 区样式，这里只保留新布局/幽灵清除按钮） ── */
+.override-empty { font-size: 11px; color: var(--aide-text-muted); padding: 4px 0; }
+.override-row { margin: 8px 0; }
+.override-lang-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+/* exclude-input 是 flex:1（配 .exclude-add 横排）；覆盖区纵向单列 → 拉满整行 */
+.override-input-wide { width: 100%; margin: 2px 0; }
+.override-actions { display: flex; gap: 6px; margin-top: 4px; }
+.override-clear {
+  background: none; color: var(--aide-text-muted);
+  border: 1px solid var(--aide-border); border-radius: var(--aide-radius-sm);
+  font-size: 11px; padding: 3px 12px; cursor: pointer; font-family: inherit;
+  transition: all 0.12s;
+}
+.override-clear:hover { color: var(--aide-danger); border-color: var(--aide-danger); }
+.override-hint { font-size: 10.5px; color: var(--aide-text-muted); margin-top: 6px; line-height: 1.6; }
+
+/* ── 安装向导入口 ── */
+.guide-row {
+  border-top: 1px solid var(--aide-border);
+  padding: 8px 12px;
+  text-align: right;
+  background: linear-gradient(180deg, transparent 0%, var(--aide-border-subtle) 100%);
+}
+.guide-btn {
+  background: none; border: none; cursor: pointer;
+  font-size: 11px; color: var(--aide-accent); font-family: inherit;
+  padding: 2px 4px; transition: opacity 0.12s;
+}
+.guide-btn:hover { opacity: 0.8; text-decoration: underline; }
 
 /* ── 过渡 ── */
 .lsp-drop-enter-active, .lsp-drop-leave-active { transition: opacity var(--aide-ease-t), transform var(--aide-ease-t); }

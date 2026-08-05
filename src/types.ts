@@ -109,6 +109,14 @@ export interface AppSettings {
   /** 左侧会话栏「钉子」固定状态：false（默认）= QQ 式自动隐藏（贴左边缘悬浮
    *  滑出、覆盖内容），true = 常驻 dock 推开内容。 */
   leftSidebarPinned?: boolean;
+  /** 全局 LSP 设置：按语言 id 覆盖 server 二进制路径（对应后端 LspSettings）。 */
+  lsp?: { servers: Record<string, LspServerOverride> };
+}
+
+/** 某语言 LSP server 的显式覆盖（"用这个二进制 + 这些参数"，对应后端 ServerOverride）。 */
+export interface LspServerOverride {
+  program: string;
+  args: string[];
 }
 
 /** CodeGraph embedding 后端配置。`backend` 选 fastembed（本地 ONNX）或 http

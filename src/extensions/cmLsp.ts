@@ -12,6 +12,18 @@ import { renderMarkdown } from "../utils/markdown";
 
 const setDiagnostics = StateEffect.define<LspDiagnostic[]>();
 
+/** 诊断 Map 按 filePath 取值（key 统一正斜杠比较——Map key 来自 uriToPath
+ *  （file:///C:/x → C:/x），编辑器 filePath 可能是反斜杠 C:\x）。 */
+function diagsForPath(map: Map<string, LspDiagnostic[]>, filePath: string): LspDiagnostic[] {
+  const key = filePath.replace(/\\/g, "/");
+  const direct = map.get(key);
+  if (direct) return direct;
+  for (const [k, v] of map) {
+    if (k.replace(/\\/g, "/") === key) return v;
+  }
+  return [];
+}
+
 const diagField = StateField.define<LspDiagnostic[]>({
   create: () => [],
   update(val, tr) {
@@ -35,9 +47,16 @@ class LspTracker {
     if (opts.enabled) this.didOpen();
     // 初始注入：diagnostics 可能已存在（重开文件 / server 已发布过），watch 只
     // 监听后续变化，构造时补一次。空数组跳过，避免无谓的初始事务。
+    // 注意：插件构造发生在 EditorView update 流程中，此时 dispatch 被禁止
+    // （"Calls to EditorView.update are not allowed while an update is in progress"）
+    // ——推迟到当前 update 完成（微任务）再注入。
     if (opts.enabled && opts.filePath) {
-      const initial = useLsp().diagnostics.value.get(opts.filePath) ?? [];
-      if (initial.length) view.dispatch({ effects: setDiagnostics.of(initial) });
+      const initial = diagsForPath(useLsp().diagnostics.value, opts.filePath);
+      if (initial.length) {
+        queueMicrotask(() => {
+          if (!this.destroyed) view.dispatch({ effects: setDiagnostics.of(initial) });
+        });
+      }
     }
     // spec §7 flow 1：publishDiagnostics 在 doc 未变时到达（"打开文件看到既有
     // 错误"），linter() 只在编辑事务时重跑——此处订阅 useLsp().diagnostics 的
@@ -47,7 +66,7 @@ class LspTracker {
       () => useLsp().diagnostics.value,
       (map) => {
         if (this.destroyed || !this.opts.enabled || !this.opts.filePath) return;
-        const diags = map.get(this.opts.filePath) ?? [];
+        const diags = diagsForPath(map, this.opts.filePath);
         this.view.dispatch({ effects: setDiagnostics.of(diags) });
       },
     );
