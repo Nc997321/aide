@@ -194,39 +194,40 @@ mod tests {
     }
 
     #[test]
-    fn to_command_injects_stdio_via_profile() {
-        // Bundled（Rust）：--stdio 来自 RustProfile 默认 launch_args。
+    fn to_command_rust_no_stdio_other_langs_stdio() {
+        // Bundled（Rust）：无 --stdio —— rust-analyzer 默认即 LSP（stdin/stdout 读
+        // Content-Length 帧），1.96+ 显式拒绝 --stdio（unexpected flag）。
         let bundled = ServerSource::Bundled {
             subdir: "rust".into(), binary: "rust-analyzer".into(),
         };
         let (prog, args) = to_command(LanguageId::Rust, &bundled, None);
-        assert!(args.contains(&"--stdio".to_string()), "bundled args: {:?}", args);
+        assert!(!args.contains(&"--stdio".to_string()), "rust-analyzer 不传 --stdio, args: {:?}", args);
         assert_eq!(prog, "lsp/rust/rust-analyzer");
 
-        // Which（Go）：--stdio 默认。
+        // Which（Go）：--stdio 默认（其他 LSP server 仍走 --stdio）。
         let which = ServerSource::Which { binary: "gopls".into() };
         let (prog, args) = to_command(LanguageId::Go, &which, None);
         assert_eq!(prog, "gopls");
-        assert!(args.contains(&"--stdio".to_string()), "which args: {:?}", args);
+        assert!(args.contains(&"--stdio".to_string()), "go args: {:?}", args);
 
-        // Explicit（Rust）：用户 args 保留 + 缺 --stdio 补（profile supplement_explicit）。
+        // Explicit（Rust）：用户 args 原样保留，profile supplement_explicit 不补 --stdio。
         let explicit = ServerSource::Explicit {
             program: "/x/ra".into(),
             args: vec!["--log-file".into(), "/tmp/ra.log".into()],
         };
         let (prog, args) = to_command(LanguageId::Rust, &explicit, None);
         assert_eq!(prog, "/x/ra");
-        assert!(args.contains(&"--stdio".to_string()), "explicit args: {:?}", args);
-        assert!(args.contains(&"--log-file".to_string()), "explicit args: {:?}", args);
+        assert!(!args.contains(&"--stdio".to_string()), "rust explicit 不补 --stdio, args: {:?}", args);
+        assert!(args.contains(&"--log-file".to_string()), "rust explicit 保留用户 args, {:?}", args);
 
-        // 守卫：用户已传 --stdio 时不重复添加。
+        // 守卫：用户显式传的 --stdio 原样保留（不补也不删；兼容旧版 rust-analyzer）。
         let explicit_with_stdio = ServerSource::Explicit {
             program: "/x".into(),
             args: vec!["--stdio".into()],
         };
         let (_, args) = to_command(LanguageId::Rust, &explicit_with_stdio, None);
         let stdio_count = args.iter().filter(|a| a.as_str() == "--stdio").count();
-        assert_eq!(stdio_count, 1, "不应重复添加 --stdio, args: {:?}", args);
+        assert_eq!(stdio_count, 1, "用户传的 --stdio 保留, args: {:?}", args);
     }
 
     #[test]
