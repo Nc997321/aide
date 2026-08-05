@@ -403,6 +403,9 @@ export const api = {
   lspShutdownWorkspace(workspaceRoot: string): Promise<void> {
     return invoke("lsp_shutdown_workspace", { workspaceRoot });
   },
+  openLspInstallGuide(): Promise<void> {
+    return invoke("open_lsp_install_guide");
+  },
   workspaceSetLspEnabled(workspaceRoot: string, enabled: boolean): Promise<void> {
     return invoke("workspace_set_lsp_enabled", { workspaceRoot, enabled });
   },

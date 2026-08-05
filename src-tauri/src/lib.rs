@@ -416,6 +416,7 @@ pub fn run() {
             lsp::lsp_completion,
             lsp::lsp_hover,
             lsp::lsp_shutdown_workspace,
+            lsp::open_lsp_install_guide,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

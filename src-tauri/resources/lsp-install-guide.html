@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LSP 服务器安装向导 — Aide</title>
+<style>
+  :root {
+    --bg: #16181d; --surface: #1e2128; --surface2: #262a33; --border: #333845;
+    --text: #e6e8ee; --muted: #9aa1af; --accent: #6ea8fe; --ok: #4cc38a;
+    --warn: #e5b567; --danger: #e06c75; --mono: "Cascadia Code", Consolas, "Courier New", monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f6f8; --surface: #ffffff; --surface2: #eef0f4; --border: #d5d9e0;
+      --text: #24292f; --muted: #57606a; --accent: #0969da; --ok: #1a7f37;
+      --warn: #9a6700; --danger: #cf222e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0 auto; max-width: 860px; padding: 28px 20px 60px;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.65 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  h1 { font-size: 24px; margin: 0 0 6px; }
+  h2 { font-size: 18px; margin: 34px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15px; margin: 0 0 4px; }
+  p { margin: 6px 0; }
+  .sub { color: var(--muted); margin-bottom: 18px; }
+  .tip {
+    background: var(--surface); border: 1px solid var(--border);
+    border-left: 3px solid var(--accent); border-radius: 6px;
+    padding: 10px 14px; margin: 14px 0; color: var(--muted);
+  }
+  .tip strong { color: var(--text); }
+  nav { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0; }
+  nav a {
+    color: var(--accent); text-decoration: none; font-size: 13px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 999px; padding: 3px 12px;
+  }
+  nav a:hover { background: var(--surface2); }
+  article {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px 18px; margin: 12px 0;
+  }
+  .lang-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .lang-head .bin {
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    background: var(--surface2); border-radius: 4px; padding: 1px 7px;
+  }
+  .lang-head .req { font-size: 12px; color: var(--warn); }
+  .step { margin: 10px 0 4px; font-size: 13px; color: var(--muted); }
+  code, .cmd {
+    font-family: var(--mono); font-size: 12.5px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 6px;
+  }
+  pre {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px 14px; overflow-x: auto; margin: 6px 0;
+  }
+  pre code { background: none; border: none; padding: 0; color: var(--accent); }
+  .check { color: var(--muted); font-size: 13px; }
+  .check code { color: var(--ok); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  td code { white-space: nowrap; }
+  a { color: var(--accent); }
+  .faq summary { cursor: pointer; color: var(--text); font-weight: 600; padding: 8px 0; }
+  .faq details { border-bottom: 1px solid var(--border); }
+  .faq p { color: var(--muted); }
+  footer { margin-top: 40px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>LSP 服务器安装向导</h1>
+  <p class="sub">Aide 内置 LSP（语言服务器）功能需要各语言的 server 二进制。本页说明怎么装、装完怎么验证。</p>
+  <div class="tip">
+    <strong>前提：</strong>Aide 的 LSP 不捆绑任何 server（全部 PATH 发现 + 设置覆盖）。装完对应 server 后：
+    重启 Aide → 打开项目 → 标题栏 LSP 徽章 → 开 LSP 开关 → 该语言应显示 <strong>✓ 就绪</strong>。
+    没装的会显示 <strong>✗ 未安装</strong> 并弹 "LSP server not found" 提示，这是预期行为。
+  </div>
+</header>
+
+<nav>
+  <a href="#quick">快速自检</a>
+  <a href="#rust">Rust</a>
+  <a href="#ts">TypeScript / JS</a>
+  <a href="#vue">Vue</a>
+  <a href="#go">Go</a>
+  <a href="#java">Java</a>
+  <a href="#python">Python</a>
+  <a href="#kotlin">Kotlin</a>
+  <a href="#more">更多语言</a>
+  <a href="#trouble">排错</a>
+</nav>
+
+<section id="quick">
+  <h2>① 快速自检：本机装了哪些</h2>
+  <p>在终端（PowerShell / CMD）逐条运行，有路径输出 = 已装：</p>
+  <pre><code>where rust-analyzer typescript-language-server vue-language-server gopls jdtls pyright-langserver kotlin-language-server</code></pre>
+  <p class="check">更快的方式：打开 Aide → 标题栏 LSP 徽章 → 面板直接显示每语言状态（✓ 就绪 / ✗ 未安装 / ! 启动失败）。</p>
+</section>
+
+<section id="rust">
+  <h2>② Rust</h2>
+  <article>
+    <div class="lang-head"><h3>rust-analyzer</h3><span class="bin">rust-analyzer</span></div>
+    <div class="step">1. 安装（rustup 用户一行搞定，装完在 ~/.cargo/bin，已在 PATH）：</div>
+    <pre><code>rustup component add rust-analyzer</code></pre>
+    <div class="step">2. 非 rustup / 手动：</div>
+    <p>从 <a href="https://github.com/rust-lang/rust-analyzer/releases" target="_blank">GitHub releases</a> 下载对应平台可执行文件，放进 PATH 目录（Windows 放任意目录后加入 PATH）。</p>
+    <div class="step">3. 验证：</div>
+    <p class="check">终端运行 <code>where rust-analyzer</code> → 有路径即装好。</p>
+  </article>
+</section>
+
+<section id="ts">
+  <h2>③ TypeScript / JavaScript</h2>
+  <article>
+    <div class="lang-head"><h3>typescript-language-server</h3><span class="bin">typescript-language-server</span></div>
+    <div class="step">1. 安装（npm 全局）：</div>
+    <pre><code>npm i -g typescript-language-server typescript</code></pre>
+    <div class="step">2. 验证：</div>
+    <p class="check"><code>where typescript-language-server</code> 有输出即可。TS/JS 共用一个 server。</p>
+  </article>
+</section>
+
+<section id="vue">
+  <h2>④ Vue</h2>
+  <article>
+    <div class="lang-head"><h3>vue-language-server（Volar）</h3><span class="bin">vue-language-server</span></div>
+    <div class="step">1. 安装：</div>
+    <pre><code>npm i -g @vue/language-server</code></pre>
+    <div class="step">2. 验证：</div>
+    <p class="check"><code>where vue-language-server</code> 有输出即可。Vue 项目强烈建议装（.vue 文件的诊断/补全/跳转）。</p>
+  </article>
+</section>
+
+<section id="go">
+  <h2>⑤ Go</h2>
+  <article>
+    <div class="lang-head"><h3>gopls</h3><span class="bin">gopls</span></div>
+    <div class="step">1. 安装（需要已装 Go 工具链）：</div>
+    <pre><code>go install golang.org/x/tools/gopls@latest</code></pre>
+    <div class="step">2. 验证：</div>
+    <p class="check"><code>where gopls</code> 有输出即可（装完需重开终端让 ~/go/bin 生效）。</p>
+  </article>
+</section>
+
+<section id="java">
+  <h2>⑥ Java</h2>
+  <article>
+    <div class="lang-head">
+      <h3>jdtls（Eclipse JDT Language Server）</h3><span class="bin">jdtls</span><span class="req">需 JDK 21+</span>
+    </div>
+    <div class="step">0. 确认 JDK 版本（21 及以上，jdtls 1.44 起最低要求；低于 21 启动失败）：</div>
+    <pre><code>java -version</code></pre>
+    <p class="check">项目本身是 JDK 8 还是 21 不用管——jdtls 在 JDK 21+ 下按各项目自己的编译配置（pom.xml / .classpath / gradle）分析 Java 8~25 的项目。只有没有任何编译级别配置的裸 .java 文件才按运行 JVM 的级别诊断。</p>
+    <div class="step">1. 安装（winget 无 jdtls 包，官方渠道手动下载）：</div>
+    <p>从 <a href="https://github.com/eclipse-jdtls/eclipse.jdt.ls/releases" target="_blank">eclipse.jdt.ls releases</a>（或官方持续构建
+    <a href="https://download.eclipse.org/jdtls/snapshots/" target="_blank">download.eclipse.org/jdtls/snapshots/</a>）下载最新 zip/tar.gz →
+    解压到固定目录（如 <code>C:\tools\jdtls</code>）→ 把 <code>bin/</code> 目录加入 PATH → <strong>重开终端</strong>。</p>
+    <div class="step">2. 不想动 PATH 时（设置覆盖）：</div>
+    <p>标题栏 LSP 面板 → 「服务器覆盖」→ 给 <code>java</code> 填 program 为 jdtls 可执行文件完整路径，args 留空即可（Aide 自动补 <code>-data</code> 工作区目录）。</p>
+    <div class="step">3. 验证：</div>
+    <p class="check"><code>where jdtls</code> 有输出即装好。然后重启 Aide → 打开 Java 项目 → 开 LSP → 面板 Java 显示 ✓。</p>
+    <p class="check">注意：jdtls 首次启动较慢（Eclipse 框架 + 索引），诊断/补全延迟数秒属正常；Aide 已对 jdtls 特判——不传 <code>--stdio</code>、自动把 <code>-data</code> 指到 app 数据目录（不污染你的项目目录）。</p>
+
+    <div class="step">5. 多 JDK 环境：把 jdtls 指向 JDK 21（实操）</div>
+    <p class="check"><strong>为什么</strong>：jdtls 脚本从 PATH/JAVA_HOME 找 java。默认 JDK 是 8/17 时 jdtls 会用旧 JDK 启动失败（面板显示「! 启动失败」）。按下面步骤给 jdtls 单独指定 JDK 21——<strong>无需改全局环境变量</strong>（不动你其他工具用的 JDK 8）。</p>
+
+    <p class="check"><strong>① 下载安装 JDK 21（推荐 Eclipse Temurin 21 LTS——免费、长期支持、Windows 有安装向导）</strong></p>
+    <p class="check">打开 <a href="https://adoptium.net/temurin/releases/?version=21" target="_blank">adoptium.net/temurin/releases/?version=21</a> → 操作系统选 <code>Windows</code> → 架构 <code>x64</code> → 下载 <code>.msi</code> 安装包（约 190MB）→ 双击安装，一路「下一步」（默认装到 <code>C:\Program Files\Eclipse Adoptium\jdk-21.x.x-xx\</code>）。</p>
+
+    <p class="check"><strong>② 确认 JDK 21 的实际安装路径</strong>（版本目录名每个人不同，必须用真实路径）</p>
+    <p class="check">资源管理器地址栏输入 <code>%ProgramFiles%\Eclipse Adoptium</code> 回车 → 记下里面的文件夹名（形如 <code>jdk-21.0.6-11</code>）。完整路径即 <code>C:\Program Files\Eclipse Adoptium\jdk-21.0.6-11</code>。下面示例用 <code>&lt;JDK21路径&gt;</code> 代替它。</p>
+
+    <p class="check"><strong>③ 方法 A（推荐）：建 wrapper 脚本</strong></p>
+    <p class="check">建文件夹 <code>C:\jdtls\</code>，在里面新建文本文件改名为 <code>jdtls21.bat</code>，用记事本粘贴保存（注意编码选 ANSI 或 UTF-8 无 BOM）：</p>
+    <pre><code>@echo off
+set JAVA_HOME=&lt;JDK21路径&gt;
+jdtls %*</code></pre>
+    <p class="check">测试：打开终端运行 <code>C:\jdtls\jdtls21.bat</code>——若 jdtls 正常起进程（无 java 版本报错）即成功，按 Ctrl+C 退出。</p>
+
+    <p class="check"><strong>④ 在 Aide 里配置（方法 A）</strong></p>
+    <p class="check">标题栏 LSP 徽章 → 打开面板 → 下方「服务器覆盖」→ 语言 <code>java</code> 行：program 填 <code>C:\jdtls\jdtls21.bat</code>，args 留空（Aide 自动补 <code>-data</code>）→ 保存。</p>
+
+    <p class="check"><strong>⑤ 方法 B（免脚本，用 -vm 参数）</strong>——不想建文件就用这个：</p>
+    <p class="check">标题栏 LSP 面板 → 「服务器覆盖」→ 语言 <code>java</code> 行：program 填 jdtls 脚本完整路径（如 <code>C:\tools\jdtls\bin\jdtls</code>），args 填：</p>
+    <pre><code>-vm &lt;JDK21路径&gt;\bin\java.exe</code></pre>
+    <p class="check">（Eclipse 原生参数，Aide 原样透传并自动补 <code>-data</code>。）</p>
+
+    <p class="check"><strong>⑥ 验证</strong>：重启 Aide → 打开 Java 项目 → 标题栏 LSP 徽章 → 开 LSP 开关 → 面板 Java 显示 ✓ 就绪；打开 <code>.java</code> 文件看诊断/补全。</p>
+  </article>
+</section>
+
+<section id="python">
+  <h2>⑦ Python</h2>
+  <article>
+    <div class="lang-head"><h3>pyright-langserver</h3><span class="bin">pyright-langserver</span></div>
+    <div class="step">1. 安装（npm 包名是 pyright，二进制是 pyright-langserver）：</div>
+    <pre><code>npm i -g pyright</code></pre>
+    <div class="step">2. 验证：</div>
+    <p class="check"><code>where pyright-langserver</code> 有输出即可。</p>
+  </article>
+</section>
+
+<section id="kotlin">
+  <h2>⑧ Kotlin</h2>
+  <article>
+    <div class="lang-head"><h3>kotlin-language-server</h3><span class="bin">kotlin-language-server</span></div>
+    <div class="step">1. 安装：</div>
+    <p>从 <a href="https://github.com/fwcd/kotlin-language-server/releases" target="_blank">GitHub releases</a> 下载 release 包解压，把 <code>bin/</code> 加入 PATH（或设置覆盖 program 指向完整路径）。</p>
+    <div class="step">2. 验证：</div>
+    <p class="check"><code>where kotlin-language-server</code> 有输出即可（.kt / .kts 文件共用）。</p>
+  </article>
+</section>
+
+<section id="more">
+  <h2>⑨ 更多语言</h2>
+  <table>
+    <tr><th>语言</th><th>server</th><th>安装</th><th>备注</th></tr>
+    <tr><td>Dart</td><td><code>dart</code></td><td>装 Dart SDK 即可</td><td>Dart SDK 自带 LSP</td></tr>
+    <tr><td>Ruby</td><td><code>solargraph</code></td><td><code>gem install solargraph</code></td><td>需 RubyGems</td></tr>
+    <tr><td>PHP</td><td><code>intelephense</code></td><td><code>npm i -g intelephense</code></td><td></td></tr>
+    <tr><td>Elixir</td><td><code>elixir-ls</code></td><td>GitHub releases 手动解压</td><td></td></tr>
+    <tr><td>C#</td><td><code>omnisharp</code></td><td>omnisharp-vscode releases 手动解压</td><td></td></tr>
+  </table>
+  <p class="check">以上语言如果装完仍报 not found：用「设置覆盖」（见下方 ⑩）把 program 指向二进制完整路径。</p>
+</section>
+
+<section id="trouble">
+  <h2>⑩ 排错（FAQ）</h2>
+  <div class="faq">
+    <details>
+      <summary>面板显示 ✗ 未安装，但我明明装了？</summary>
+      <p>PATH 未生效：装完后需<strong>重开终端</strong>验证 <code>where &lt;server&gt;</code>；Aide 需要<strong>重启</strong>才能读到新 PATH（dev 模式跑 <code>pnpm tauri dev</code> 的还需要重新编译 Rust 后端）。仍不行就用设置覆盖填完整路径。</p>
+    </details>
+    <details>
+      <summary>面板显示 ! 启动失败（handshake failed）？</summary>
+      <p>server 找到了但初始化握手超时（默认 5s）。常见原因：首次启动慢（尤其 jdtls/rust-analyzer 第一次要建索引，属正常，多试一次）；server 版本与 JDK/Node 不匹配（jdtls 需 JDK 21+，`java -version` 确认）；被安全软件拦截（见下）。</p>
+    </details>
+    <details>
+      <summary>装了 jdtls 还是报错？</summary>
+      <p>确认 JDK 21+（<code>java -version</code>）；确认 <code>where jdtls</code> 找到的是 jdtls 脚本而不是别的同名命令。Aide 已特判：不传 <code>--stdio</code>（jdtls 默认 stdio）、自动补 <code>-data</code>。如果你自己配了 args，想自定义工作区目录就显式写 <code>-data &lt;目录&gt;</code>。</p>
+    </details>
+    <details>
+      <summary>为什么项目目录里多了 .project / .classpath / .settings？</summary>
+      <p>jdtls 是 Eclipse 内核，导入项目时会生成 Eclipse 项目元数据。**jdtls 1.54+ 已内置解决**：Aide 启动 jdtls 时注入 <code>--jvm-arg=-Djava.import.generatesMetadataFilesAtProjectRoot=false</code>，元数据自动重定向到项目内 <code>.aide/jdtls-workspace/</code>（源码目录零污染，该目录 Aide 文件树默认隐藏、不参与代码索引）。注意：<strong>升级前已生成的文件不会自动清理</strong>（重定向只对不存在的文件生效）——手动删一次项目里的 <code>.project</code>、<code>.classpath</code>、<code>.settings/</code> 即可，之后不再生成。</p>
+    </details>
+    <details>
+      <summary>为什么打开面板一直显示「正在探测项目语言…」？</summary>
+      <p>探测会对每个语言拉起 server 握手（每语言最多 ~5s，串行）。语言多或 server 首次启动慢时等十几秒正常。若永远不结束：看 Aide 终端日志有没有 <code>[lsp stderr]</code> 输出；也可能被安全软件拦截了 server 进程的 spawn（把 Aide 加白名单）。</p>
+    </details>
+    <details>
+      <summary>什么是「设置覆盖」？</summary>
+      <p>标题栏 LSP 徽章 → 打开面板 → 「服务器覆盖」：给任意语言指定 program（完整路径）+ args（可选），优先于 PATH 发现。适合：server 不在 PATH、要指定特定版本、或要传自定义参数。例：java → program = <code>C:\tools\jdtls\bin\jdtls</code>，args 留空。</p>
+    </details>
+    <details>
+      <summary>LSP 开关在哪？</summary>
+      <p>标题栏 LSP 徽章（显示「LSP 关」或语言状态）→ 点开面板 → 右上角开关。工作区级：每个项目独立记忆开关和排除目录。</p>
+    </details>
+  </div>
+</section>
+
+<footer>
+  Aide 内置 LSP · 每语言 server 由 PATH 发现 · 未捆绑 · 本向导随安装包分发，可离线使用
+</footer>
+
+</body>
+</html>
