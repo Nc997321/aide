@@ -29,6 +29,9 @@ const { isTrusted, trust } = useWorkspaceTrust();
 
 const progress = ref<BuildProgress>({ active: false, done: 0, total: 0, current: "", index_ready: false });
 const building = ref(false);
+/** 最近一次 build 结果（成功落盘的），供 SettingsPanel 显示索引健康
+ *  （完整/残缺/未完成/语义不可用）。null = 还没建过。失败不覆盖（保留上次成功）。 */
+const lastBuild = ref<BuildIndexResult | null>(null);
 
 let timer: number | null = null;
 let lastIndexedRoot = "";
@@ -86,13 +89,16 @@ function trackBuild(p: Promise<BuildIndexResult>, root: string) {
           stopPoll();
           return;
         }
+        // 缓存最近一次 build 结果，供 SettingsPanel 显示索引健康
+        // （完整/残缺/未完成/语义不可用）。
+        lastBuild.value = r;
         if (r.loaded) {
           console.info("[codegraph] reused existing index:", r);
           // 快速路径复用既有索引也算完全成功：自愈同 root 旧通知。
           selfHeal(root);
         } else if (r.has_embeddings === false) {
           console.warn(
-            `[codegraph] build done but embeddings NOT completed — semantic search disabled, structure layer ok. embed_status: ${r.embed_status ?? "(unknown)"}`,
+            `[codegraph] build done but embeddings NOT completed — semantic search disabled, structure layer ok. embed_status: ${r.embed_status ?? "(unknown)"} (skipped: ${r.skipped_count ?? 0}, failed: ${r.failed_count ?? 0})`,
             r,
           );
           push({
@@ -117,8 +123,23 @@ function trackBuild(p: Promise<BuildIndexResult>, root: string) {
             timestamp: Date.now(),
             dedupKey: `codegraph:empty:${root}`,
           });
+        } else if (r.incremental) {
+          console.info(
+            `[codegraph] incremental: ${r.rescanned_files ?? 0} files reindexed (health: ${r.health ?? "complete"}, points: ${r.shard_point_count ?? "?"}):`,
+            r,
+          );
+          selfHeal(root);
+        } else if (r.resumed) {
+          console.info(
+            `[codegraph] resumed build done (health: ${r.health ?? "complete"}, skipped: ${r.skipped_count ?? 0}, points: ${r.shard_point_count ?? "?"}):`,
+            r,
+          );
+          selfHeal(root);
         } else {
-          console.info("[codegraph] build done with embeddings:", r);
+          console.info(
+            `[codegraph] full build done (health: ${r.health ?? "complete"}, skipped: ${r.skipped_count ?? 0}, failed: ${r.failed_count ?? 0}, points: ${r.shard_point_count ?? "?"}):`,
+            r,
+          );
           // 完全成功：自愈——dismiss 同 root 的旧 codegraph 通知
           selfHeal(root);
         }
@@ -301,6 +322,7 @@ function __resetForTest() {
     rescanTimer = null;
   }
   progress.value = { active: false, done: 0, total: 0, current: "", index_ready: false };
+  lastBuild.value = null;
   lastIndexedRoot = "";
   untrustedCurrent = "";
 }
@@ -309,6 +331,7 @@ export function useCodeGraphProgress() {
   return {
     progress: readonly(progress),
     building: readonly(building),
+    lastBuild: readonly(lastBuild),
     ensureIndex,
     onWorkspaceTrusted,
     trackBuild,

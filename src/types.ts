@@ -368,6 +368,26 @@ export interface BuildIndexResult {
    *  | "batch_errors: N ..." | "incomplete: ...". Surfaced so the frontend can show
    *  why semantic search is unavailable without relying on tracing logs. */
   embed_status?: string;
+  /** NaN-skipped symbol count this build (permanent skips — bge-m3 overflow
+   *  snippets the `code:` prefix + bisection couldn't save). Counts as "processed". */
+  skipped_count?: number;
+  /** Failed embed batches this build (transient — Ollama down / timeout). >0 ⇒ the
+   *  build is `incomplete`, not `degraded`. */
+  failed_count?: number;
+  /** Actual vector count in the shard on completion. A complete shard should have
+   *  ~total_symbols minus NaN-skips; far below ⇒ broken (loaders reject it). */
+  shard_point_count?: number;
+  /** Same as has_embeddings for a fresh/resume build; `true` for incremental
+   *  (reused a load_compatible_index shard that already passed point_count check). */
+  embed_complete?: boolean;
+  /** Incremental reindex only: true when only a small set of changed files was
+   *  re-parsed + re-embedded instead of a full rebuild. */
+  incremental?: boolean;
+  /** Incremental only: number of changed files reindexed. */
+  rescanned_files?: number;
+  /** Coarse health for the UI: "complete" | "degraded" (NaN skips) | "incomplete"
+   *  (cancelled/failed/stopped early) | "structure_only" (no embedder). */
+  health?: "complete" | "incomplete" | "degraded" | "structure_only";
 }
 
 /** 粗粒度构建进度，前端 poll 拉取（不走 app.emit，避历史跨线程 emit 卡死）。 */

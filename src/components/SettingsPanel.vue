@@ -2,6 +2,7 @@
 import { ref, watch, onMounted, computed } from "vue";
 import { useSettings } from "../composables/useSettings";
 import { useCustomizations } from "../composables/useCustomizations";
+import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
 import { api } from "../api";
 import type { JdkEntry, SecretMutation } from "../types";
 import CustomizationList from "./customizations/CustomizationList.vue";
@@ -79,6 +80,29 @@ const cgFormat = ref(settings.codegraphEmbedder.format);
 const cgDim = ref(settings.codegraphEmbedder.dim);
 // undefined = 后端按模型自动（fastembed≈0.35，http≈0.55）；用户填了数字则覆盖。
 const cgScoreThreshold = ref<number | undefined>(settings.codegraphEmbedder.scoreThreshold);
+
+// 最近一次 codegraph build 结果（模块级单例，trackBuild 成功时落盘），
+// 显示上次构建健康：完整 / 残缺(N skipped) / 未完成恢复中 / 语义不可用。
+const { lastBuild: cgLastBuild } = useCodeGraphProgress();
+const cgHealthKind = computed<"complete" | "degraded" | "incomplete" | "muted">(() => {
+  const h = cgLastBuild.value?.health;
+  if (h === "complete") return "complete";
+  if (h === "degraded") return "degraded";
+  if (h === "incomplete") return "incomplete";
+  return "muted";
+});
+const cgHealthText = computed(() => {
+  const r = cgLastBuild.value;
+  if (!r) return "";
+  const sym = r.total_symbols ?? 0;
+  switch (r.health) {
+    case "complete": return `完整 · ${sym} 符号`;
+    case "degraded": return `残缺 · ${sym} indexed, ${r.skipped_count ?? 0} skipped, ${r.failed_count ?? 0} failed`;
+    case "incomplete": return `未完成，恢复中（${r.embed_status ?? "—"}）`;
+    case "structure_only": return `语义不可用 · embedder 缺失`;
+    default: return `已索引 · ${sym} 符号`;
+  }
+});
 
 function codegraphConfig() {
   return {
@@ -722,6 +746,11 @@ function onOverlayClick(e: MouseEvent) {
                 <Icon name="warning" :size="13" />
                 切换后端或模型会触发全量重建索引（向量维度 / 模型空间不兼容）。
               </div>
+
+              <div v-if="cgLastBuild" class="cg-health" :class="`cg-health-${cgHealthKind}`">
+                <span class="cg-health-dot" />
+                <span class="cg-health-text">{{ cgHealthText }}</span>
+              </div>
             </div>
 
             <!-- ── Java / JDK Tab ── -->
@@ -1246,6 +1275,28 @@ function onOverlayClick(e: MouseEvent) {
   align-items: center;
   gap: 6px;
 }
+
+.cg-health {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--aide-text-secondary);
+}
+.cg-health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--aide-text-secondary);
+}
+.cg-health-complete .cg-health-dot { background: var(--aide-success); }
+.cg-health-degraded .cg-health-dot { background: var(--aide-warning); }
+.cg-health-incomplete .cg-health-dot { background: var(--aide-danger); }
+.cg-health-complete .cg-health-text { color: var(--aide-success); }
+.cg-health-degraded .cg-health-text { color: var(--aide-warning); }
+.cg-health-incomplete .cg-health-text { color: var(--aide-danger); }
 
 /* ── Workspace tab ── */
 

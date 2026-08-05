@@ -387,12 +387,12 @@ pub fn run() {
             // Plugin skills scanning
             commands::shell::scan_plugin_skills,
             // Code graph
-            codegraph::codegraph_build_index,
-            codegraph::codegraph_goto_definition,
-            codegraph::codegraph_close,
-            codegraph::codegraph_reindex_file,
-            codegraph::codegraph_rescan,
-            codegraph::codegraph_build_progress,
+            codegraph::build::codegraph_build_index,
+            codegraph::commands::codegraph_goto_definition,
+            codegraph::commands::codegraph_close,
+            codegraph::commands::codegraph_reindex_file,
+            codegraph::commands::codegraph_rescan,
+            codegraph::commands::codegraph_build_progress,
             // 卡死诊断黑匣子
             diagnostics::diag_heartbeat,
             diagnostics::diag_freeze_supplement,

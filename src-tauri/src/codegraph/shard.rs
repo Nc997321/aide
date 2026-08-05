@@ -299,6 +299,42 @@ impl CodeShard {
         catch_qdrant("optimize", || edge.optimize())?;
         Ok(())
     }
+
+    /// Exact number of points stored in the shard. The index loaders use this
+    /// as a sanity check that an `embed_complete` shard actually has vectors —
+    /// the bug: a build that silently dropped every batch (Ollama down) still
+    /// flipped `embed_complete=true`, producing a vector-less ~191MB-payload
+    /// shard that the loaders served as "complete" and semantic search returned
+    /// 0 from. Returns 0 on any qdrant error/panic — callers treat a low count
+    /// as "broken shard → rebuild".
+    pub fn point_count(&self) -> usize {
+        let edge = self.edge();
+        let req = CountRequest {
+            filter: None,
+            exact: true,
+        };
+        match catch_qdrant("point_count", || edge.count(req)) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("codegraph: point_count failed: {}", e);
+                0
+            }
+        }
+    }
+
+    /// Flush in-memory vectors + WAL to disk. Call after a build/resume completes
+    /// (before `mark_embed_complete`) so the on-disk shard actually has the
+    /// vectors the `embed_complete=true` flag promises. Without this, vectors
+    /// live in memory only — a restart loads an empty shard (point_count=0),
+    /// the point_count sanity check rejects it as broken, and every restart
+    /// full-rebuilds. This is the fix for the "restart always full-rebuilds" bug.
+    pub fn flush(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let edge = self.edge();
+        catch_qdrant("flush", || -> Result<(), Box<dyn std::error::Error>> {
+            edge.flush();
+            Ok(())
+        })
+    }
 }
 
 impl Drop for CodeShard {
