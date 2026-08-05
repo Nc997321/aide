@@ -24,6 +24,10 @@ pub struct EnsureOutcome {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<&'static str>,
+    /// 失败详情（spawn/handshake 的可读错误，含 stderr 摘要）。ServerNotFound 不带。
+    /// 用 skip_serializing_if 保证旧前端忽略新字段。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 pub struct LspState(pub Arc<TokioMutex<LspManager>>);
@@ -52,19 +56,19 @@ pub async fn lsp_ensure_server(
     // lsp_enabled 被设过，未信任工作区也拒拉 server——untrust 后老 server
     // 自然消亡，不再 respawn。
     if !crate::commands::workspace::is_path_trusted(&workspace_root) {
-        return Ok(EnsureOutcome { ok: false, kind: Some("untrusted") });
+        return Ok(EnsureOutcome { ok: false, kind: Some("untrusted"), error: None });
     }
     let Some(lang_id) = lang_from_id_str(&lang) else {
-        return Ok(EnsureOutcome { ok: false, kind: Some("server_not_found") });
+        return Ok(EnsureOutcome { ok: false, kind: Some("server_not_found"), error: None });
     };
     let settings = crate::commands::settings::public_settings(settings_service.inner())
         .map_err(|e| e.to_string())?;
     let mgr = state.0.lock().await;
     match mgr.ensure_server(&workspace_root, lang_id, &app, &settings).await {
-        Ok(_) => Ok(EnsureOutcome { ok: true, kind: None }),
-        Err(EnsureError::ServerNotFound) => Ok(EnsureOutcome { ok: false, kind: Some("server_not_found") }),
-        Err(EnsureError::HandshakeFailed(_e)) => Ok(EnsureOutcome { ok: false, kind: Some("handshake_failed") }),
-        Err(EnsureError::SpawnFailed(e)) => Err(format!("spawn failed: {e}")),
+        Ok(_) => Ok(EnsureOutcome { ok: true, kind: None, error: None }),
+        Err(EnsureError::ServerNotFound) => Ok(EnsureOutcome { ok: false, kind: Some("server_not_found"), error: None }),
+        Err(EnsureError::HandshakeFailed(e)) => Ok(EnsureOutcome { ok: false, kind: Some("handshake_failed"), error: Some(e) }),
+        Err(EnsureError::SpawnFailed(e)) => Ok(EnsureOutcome { ok: false, kind: Some("spawn_failed"), error: Some(e) }),
     }
 }
 

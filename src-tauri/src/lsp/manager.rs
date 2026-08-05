@@ -222,9 +222,9 @@ async fn spawn_and_init(
 
     // —— 生产 spawn ——
     #[cfg(not(test))]
-    let (transport, child) = spawn_real(workspace, lang, src, app).await?;
+    let (transport, child, stderr_lines) = spawn_real(workspace, lang, src, app).await?;
     #[cfg(test)]
-    let (transport, child) = spawn_test(workspace, lang, src).await;
+    let (transport, child, stderr_lines) = spawn_test(workspace, lang, src).await;
 
     let router = Arc::new(Router::new());
     let docs = Arc::new(TokioMutex::new(OpenDocs::new()));
@@ -246,6 +246,23 @@ async fn spawn_and_init(
 
     // —— initialize 握手 ——
     if let Err(e) = init_handshake(&handle, workspace, lang, &exclude_globs).await {
+        // 给 stderr reader 一点时间 flush：子进程退出 → pipe 关闭 → reader 读最后几行。
+        // 50ms 对用户无感（握手本身已耗时数秒），比 oneshot 信号简单可靠。
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let stderr_summary = stderr_lines.lock().await.join("\n");
+        // stderr 非空 → 拼进错误消息（rustup proxy "Unknown binary..." 这类关键线索得以回传前端 + 日志）
+        let enhanced = match e {
+            EnsureError::HandshakeFailed(msg) if !stderr_summary.is_empty() => {
+                EnsureError::HandshakeFailed(format!("{msg}; stderr:\n{stderr_summary}"))
+            }
+            other => other,
+        };
+        tracing::warn!(
+            "[lsp] handshake failed: lang={}, workspace={}, err={:?}",
+            lang.id_str(),
+            workspace,
+            enhanced
+        );
         // 握手失败/超时：显式杀子进程，防孤儿堆积（否则每次重探又 spawn 一个新进程，
         // 系统上堆满不响应 initialize 的 server，越用越慢——"探测中永不结束"的放大器）。
         if let Some(child) = &handle._child {
@@ -253,7 +270,7 @@ async fn spawn_and_init(
             let _ = c.kill().await;
             let _ = c.wait().await;
         }
-        return Err(e);
+        return Err(enhanced);
     }
     handle.initialized.store(true, Ordering::Relaxed);
     Ok(handle)
@@ -302,8 +319,13 @@ async fn spawn_real(
     lang: LanguageId,
     src: &ServerSource,
     app: &tauri::AppHandle,
-) -> Result<(LspTransport, Option<Arc<TokioMutex<tokio::process::Child>>>), EnsureError> {
+) -> Result<(LspTransport, Option<Arc<TokioMutex<tokio::process::Child>>>, Arc<TokioMutex<Vec<String>>>), EnsureError> {
     use tauri::Manager;
+
+    // stderr 环形缓冲（上限 20 行）：reader 任务写入，握手失败时回读拼进错误消息。
+    // 解决"server 启动失败但用户看不到原因"——stderr 走 tracing 进日志，同时留最近若干行
+    // 供 spawn_and_init 在 channel closed 时拼出"rustup proxy 报 Unknown binary..."这类关键线索。
+    let stderr_lines: Arc<TokioMutex<Vec<String>>> = Arc::new(TokioMutex::new(Vec::new()));
 
     // 隔离数据目录（如 jdtls 的 -data Eclipse workspace）由语言档案声明，manager 只做通用准备。
     let data_dir = match crate::lsp::profiles::profile(lang).data_dir_name() {
@@ -335,9 +357,20 @@ async fn spawn_real(
     // tokio 1.52 的 Command::spawn 是同步返回（非 async）：CreateProcess 即使被杀软
     // 扫描卡住也最终返回，天然有界——只占 worker 线程（"慢"）不会无限挂起（"挂"）。
     // 真正的无限挂起点是 async 链（spawn_lock / send / rx），已由超时覆盖。
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| EnsureError::SpawnFailed(format!("{:?}: {}", program_path, e)))?;
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("{:?}: {}", program_path, e);
+            tracing::warn!(
+                "[lsp] spawn failed: lang={}, workspace={}, program={:?}, err={}",
+                lang.id_str(),
+                workspace,
+                program_path,
+                e
+            );
+            return Err(EnsureError::SpawnFailed(msg));
+        }
+    };
     let stdin = child
         .stdin
         .take()
@@ -346,20 +379,27 @@ async fn spawn_real(
         .stdout
         .take()
         .ok_or(EnsureError::SpawnFailed("no stdout".into()))?;
-    // stderr 尾部缓冲：读行并日志，防 pipe buffer 阻塞
+    // stderr 尾部缓冲：读行 → tracing 进日志 + 环形缓冲（握手失败时回读），防 pipe buffer 阻塞
     if let Some(stderr) = child.stderr.take() {
+        let stderr_buf = Arc::clone(&stderr_lines);
+        let lang_id = lang.id_str();
         tokio::spawn(async move {
             use tokio::io::BufReader;
             use tokio::io::AsyncBufReadExt;
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                eprintln!("[lsp stderr] {line}");
+                tracing::info!("[lsp stderr] [{}] {}", lang_id, line);
+                let mut buf = stderr_buf.lock().await;
+                buf.push(line);
+                if buf.len() > 20 {
+                    buf.remove(0);
+                }
             }
         });
     }
     let child = Arc::new(TokioMutex::new(child));
     let transport = LspTransport::with_reader_source(Box::new(stdin), Box::new(stdout));
-    Ok((transport, Some(child)))
+    Ok((transport, Some(child), stderr_lines))
 }
 
 // ── spawn_test（mock）──
@@ -369,11 +409,11 @@ async fn spawn_test(
     _workspace: &str,
     _lang: LanguageId,
     _src: &ServerSource,
-) -> (LspTransport, Option<Arc<TokioMutex<tokio::process::Child>>>) {
+) -> (LspTransport, Option<Arc<TokioMutex<tokio::process::Child>>>, Arc<TokioMutex<Vec<String>>>) {
     let mock = crate::lsp::mock_server::spawn_mock_lsp();
     let transport =
         LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
-    (transport, None)
+    (transport, None, Arc::new(TokioMutex::new(Vec::new())))
 }
 
 // ── start_reader ──
