@@ -18,7 +18,7 @@ v1 不进 CI（慢 + 依赖外部安装）。每个 server 跑一遍下列流程
 - [ ] typescript-language-server（TS/JS，PATH 发现）：本仓库 `src/` 打开 `.ts`/`.vue`
 - [ ] pyright-langserver（Python，PATH 发现；npm 包名 `pyright`，二进制 `pyright-langserver`）：任一 Python 项目
 - [ ] gopls（Go，PATH 发现）：任一 Go 项目 + 验 directoryFilters 排除注入
-- [ ] jdtls（Java，PATH 发现）：任一 Java 项目（需先装 jdtls，见下）。验：打开 `.java` → 诊断 + 跳转 + 补全；`-data` 目录落在 `app_data_dir/lsp/jdtls-workspace/`（不进用户工作区）；jdtls stderr 无 `--stdio` 参数报错
+- [ ] jdtls（Java，PATH 发现）：任一 Java 项目（需先装 jdtls，见下）。验：打开 `.java` → 诊断 + 跳转 + 补全；`-data` 目录落在项目内 `.aide/jdtls-workspace/`（源码目录无 .project/.classpath/.settings）；jdtls stderr 无 `--stdio` 参数报错
 
 ## 各语言 server 安装（PATH 发现的要求：二进制在 PATH 上，`which <bin>` 能找到）
 
@@ -35,13 +35,17 @@ v1 不进 CI（慢 + 依赖外部安装）。每个 server 跑一遍下列流程
 ## Java：jdtls 安装与配置（Windows）
 jdtls 是 Eclipse JDT Language Server，**默认走 stdio**（不传 `CLIENT_PORT`/`--pipe` 即 stdin/stdout），因此无需额外传输配置；**它不认 `--stdio`**（Aide 已对 Java 特判不注入，自动补 `-data`）。只需把 `jdtls` 命令搞到 PATH 上：
 
-1. 装 JDK 17+（已有 JDK 的确认版本；jdtls 要求 17+）
-2. 方式 A（推荐，scoop）：`scoop bucket add java && scoop install jdtls` —— 装好后 `jdtls` 自动在 PATH
-3. 方式 B（手动）：从 [eclipse.jdt.ls 发布页](https://github.com/eclipse-jdtls/eclipse.jdt.ls/releases) 下载最新 zip → 解压 → 把 `bin/` 目录加进 PATH（Windows 上 `bin/jdtls` 是脚本，需配合 PATHEXT 或直接用方式 C）
-4. 方式 C（设置覆盖，最稳）：设置面板 → LSP → 服务器覆盖里给 `java` 配 program 指向 `jdtls` 可执行文件完整路径（args 可留空——Aide 自动补 `-data`；若自己配了 args 且想自定义 workspace 目录，显式写 `-data <目录>` 即可，Aide 不重复追加）
-5. 验证：终端跑 `jdtls -h` 或直接开 `.java` 文件看是否弹诊断
+1. 装 JDK 21+（jdtls 1.44 起最低要求；已有 JDK 的用 `java -version` 确认。项目本身是 JDK 8 还是 21 不影响——jdtls 按各项目编译配置分析 Java 8~25）
+2. 方式 A（手动，winget 无 jdtls 包）：从 [GitHub releases](https://github.com/eclipse-jdtls/eclipse.jdt.ls/releases) 下载最新版 zip（tag 持续更新，2026 年仍有发版）→ 解压到固定目录 → 把 `bin/` 目录加进 PATH（Windows 上 `bin/jdtls` 是脚本，需配合 PATHEXT 或直接用方式 B）。备选渠道：官方下载站 [download.eclipse.org/jdtls/snapshots/](https://download.eclipse.org/jdtls/snapshots/) 的 `jdt-language-server-latest.tar.gz`（约 50MB，持续构建）
+3. 方式 B（不想动 PATH 时）：标题栏 LSP 徽章 → 打开面板 → 「服务器覆盖」→ 语言 `java`：program 填 `jdtls` 可执行文件完整路径（args 留空——Aide 自动补 `-data`；若自己配了 args 且想自定义 workspace 目录，显式写 `-data <目录>` 即可，Aide 不重复追加）
+4. 验证安装：终端跑 `where jdtls`（有路径输出即装好）→ **重启 Aide**（dev build 需重编译，Rust 后端含 jdtls 特判；旧实例全关掉）
+5. 验证生效：打开 Java 项目 → 标题栏 LSP 徽章点开面板 → 开 LSP 开关 → 面板显示 **Java ✓ 就绪**；打开 `.java` 文件 → 类型错有波浪线诊断、Ctrl+Click 跳转、键入补全
 
 > 注意：jdtls 首次启动较慢（Eclipse OSGi 框架 + 索引），补全/诊断可能延迟数秒；`-data` 目录复用同一 workspace 后二次启动快很多。
+
+**多 JDK 环境**（默认 JDK 是 8/17、另有 21）：jdtls 脚本从 PATH/JAVA_HOME 找 java，默认版本不够 21 会启动失败（面板显示「! 启动失败」）。无需全局改环境变量，二选一（入口都是标题栏 LSP 面板 → 「服务器覆盖」→ 语言 `java`）：
+- wrapper：建 `jdtls21.bat`（`@echo off` + `set JAVA_HOME=C:\...\jdk-21` + `jdtls %*`），program 填该 bat 完整路径，args 留空
+- `-vm`：program 填 jdtls 脚本路径，args 填 `-vm C:\...\jdk-21\bin\java.exe`（Eclipse 原生参数，Aide 原样透传并自动补 `-data`）
 
 ## 不测的（诚实声明）
 - 真实 rust-analyzer 全协议兼容矩阵——v1 只覆盖 4 method + 诊断
