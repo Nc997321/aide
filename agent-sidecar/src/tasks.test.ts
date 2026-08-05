@@ -186,3 +186,91 @@ describe("TaskTracker.reset", () => {
     ]);
   });
 });
+
+describe("TaskTracker.markResetOnNextCreate", () => {
+  function createResolved(t: TaskTracker, toolUseId: string, taskId: string, subject: string) {
+    t.handleToolUse(toolUseId, "TaskCreate", { subject });
+    t.handleToolResult(toolUseId, `Task #${taskId} created successfully: ${subject}`);
+  }
+
+  // 回归：原每轮 send 立即 reset() 清空 tasks，导致 (1) 旧轮 TODO 瞬间消失；
+  // (2) 新轮 Claude 用 TaskUpdate 推进旧 task 时旧 taskId 已被清，在 handleToolUse
+  // 里查不到 existing 被防御性丢弃（changed=false），且 tool_result 被标 tracked:true
+  // 吞掉——todo 推进信号彻底丢失。markResetOnNextCreate 保留 tasks，仅在新轮首个
+  // 新 TaskCreate 落地时覆盖，修复这两条。
+
+  it("旧轮 TODO 标记后仍可见，等新轮首个 TaskCreate 落地才覆盖；后续 TaskCreate 追加", () => {
+    const t = new TaskTracker();
+    createResolved(t, "u1", "1", "A");
+    t.handleToolUse("u2", "TaskUpdate", { taskId: "1", status: "completed" });
+    createResolved(t, "u3", "2", "B");
+    t.handleToolUse("u4", "TaskUpdate", { taskId: "2", status: "in_progress" });
+    expect(t.snapshot()).toHaveLength(2);
+
+    t.markResetOnNextCreate();
+    // 过渡期：旧轮 TODO 仍可见（不立即清）
+    expect(t.snapshot()).toHaveLength(2);
+
+    // 新轮首个 TaskCreate 落地 → 覆盖旧列表
+    t.handleToolUse("u5", "TaskCreate", { subject: "C" });
+    expect(t.handleToolResult("u5", "Task #3 created successfully: C")).toEqual({ tracked: true, changed: true });
+    expect(t.snapshot()).toEqual([
+      { id: "3", subject: "C", status: "pending", activeForm: undefined },
+    ]);
+
+    // 同轮第二个 TaskCreate 追加，不重复清
+    t.handleToolUse("u6", "TaskCreate", { subject: "D" });
+    t.handleToolResult("u6", "Task #4 created successfully: D");
+    expect(t.snapshot()).toEqual([
+      { id: "3", subject: "C", status: "pending", activeForm: undefined },
+      { id: "4", subject: "D", status: "pending", activeForm: undefined },
+    ]);
+  });
+
+  it("标记后新轮仅 TaskUpdate 旧 task → 旧 taskId 仍命中并推进（原 reset() 下会被吞）", () => {
+    const t = new TaskTracker();
+    createResolved(t, "u1", "1", "A");
+    t.handleToolUse("u2", "TaskUpdate", { taskId: "1", status: "in_progress" });
+    createResolved(t, "u3", "2", "B");
+    expect(t.snapshot()[0].status).toBe("in_progress");
+
+    t.markResetOnNextCreate();
+    expect(t.snapshot()).toHaveLength(2); // 旧轮 TODO 保留
+
+    // 新轮用旧 taskId 推进 —— 命中（reset() 下 existing 会被清，changed=false）
+    const changed = t.handleToolUse("u4", "TaskUpdate", { taskId: "1", status: "completed" });
+    expect(changed).toBe(true);
+    expect(t.snapshot()).toEqual([
+      { id: "1", subject: "A", status: "completed", activeForm: undefined },
+      { id: "2", subject: "B", status: "pending", activeForm: undefined },
+    ]);
+    // tool_result tracked 但快照不变
+    expect(t.handleToolResult("u4", "Updated task #1 status")).toEqual({ tracked: true, changed: false });
+
+    // 覆盖标志仍未被消费（无新 TaskCreate）——继续推进 B 也能命中
+    expect(t.handleToolUse("u5", "TaskUpdate", { taskId: "2", status: "in_progress" })).toBe(true);
+    expect(t.snapshot()[1].status).toBe("in_progress");
+  });
+
+  it("标记后新轮无任何 Task 工具 → 旧 tasks 原样保留", () => {
+    const t = new TaskTracker();
+    createResolved(t, "u1", "1", "A");
+    createResolved(t, "u2", "2", "B");
+
+    t.markResetOnNextCreate();
+    expect(t.snapshot()).toEqual([
+      { id: "1", subject: "A", status: "pending", activeForm: undefined },
+      { id: "2", subject: "B", status: "pending", activeForm: undefined },
+    ]);
+  });
+
+  it("标记后清掉 trackedIds，跨轮迟到的旧 tool_result 回退通用 tool_result（保留原 reset 防御）", () => {
+    const t = new TaskTracker();
+    t.handleToolUse("u1", "TaskCreate", { subject: "旧轮" });
+    t.handleToolUse("u2", "TaskList", {});
+
+    t.markResetOnNextCreate();
+
+    expect(t.handleToolResult("u2", JSON.stringify({ tasks: [] }))).toEqual({ tracked: false, changed: false });
+  });
+});

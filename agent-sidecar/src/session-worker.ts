@@ -731,9 +731,11 @@ export class SessionWorker {
       if (forkFrom) this.resumeSource = forkFrom;
     }
 
-    // 新一轮用户消息：清 TODO 快照
-    this.taskTracker.reset();
-    this.emit({ type: "tasks_update", tasks: [] });
+    // 新一轮用户消息：不立即清 TODO——让旧轮在过渡期仍可见，等本轮首个新
+    // TaskCreate 落地时再覆盖式清空（用户要的「有新 todo 才覆盖」）。无新
+    // TaskCreate 则旧 task 保留；新轮 Claude 用 TaskUpdate 推进旧 task 时旧
+    // taskId 仍在表里能命中（原 reset() 会清掉导致推进被吞——mark 保留 tasks 修这个）。
+    this.taskTracker.markResetOnNextCreate();
 
     // 首条消息：启动 query 循环
     if (!this.currentQuery) {
