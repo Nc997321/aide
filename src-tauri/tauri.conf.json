@@ -29,7 +29,8 @@
     "resources/codegraph-model/config.json": "codegraph-model/config.json",
     "resources/codegraph-model/special_tokens_map.json": "codegraph-model/special_tokens_map.json",
     "resources/codegraph-model/tokenizer_config.json": "codegraph-model/tokenizer_config.json",
-    "resources/lsp-install-guide.html": "lsp-install-guide.html"
+    "resources/lsp-install-guide.html": "lsp-install-guide.html",
+    "resources/lsp/lombok.jar": "lsp/lombok.jar"
     },
     "icon": [
       "icons/32x32.png",

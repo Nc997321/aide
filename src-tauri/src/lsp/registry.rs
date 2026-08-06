@@ -41,6 +41,13 @@ pub trait ServerProfile {
         }
     }
 
+    /// spawn 时额外注入的启动参数（需要 app/resource_dir 等 IO 上下文的语言用）。
+    /// 默认空——纯 additive 扩展点，与 launch_args/init_options 同级，不强制其他
+    /// profile 改。Java 覆写：注入内置 lombok 的 -javaagent（见 profiles/java.rs）。
+    fn extra_args(&self, _ctx: &LaunchCtx) -> Vec<String> {
+        Vec::new()
+    }
+
     /// initialize 的 initializationOptions（按语言注入排除集等）。
     fn init_options(&self, _exclude_globs: &[String]) -> serde_json::Value {
         serde_json::json!({})
@@ -61,6 +68,14 @@ pub enum ServerSource {
     Which { binary: String },
     /// 用户设置显式覆盖的 program + args。
     Explicit { program: String, args: Vec<String> },
+}
+
+/// spawn 时 profile 可注入的额外启动参数上下文（IO 已就绪：app 拿 resource_dir、
+/// src 判来源）。默认 profile 不用；Java 用它注入内置 lombok 的 -javaagent
+/// （见 profiles/java.rs）。纯 additive，无语言概念，不强制其他 profile 改。
+pub struct LaunchCtx<'a> {
+    pub app: &'a tauri::AppHandle,
+    pub src: &'a ServerSource,
 }
 
 /// 纯函数：按优先级选 source。无 IO，单测核心。

@@ -6,7 +6,7 @@
 //!   重定向到 -data 的 metadata 区域（项目根零污染）——经 `--jvm-arg` 注入，实测验证
 //! - 握手 30s：jdtls 首次启动（OSGi 框架 + 索引）10-30s 常见，5s 必挂
 
-use crate::lsp::registry::ServerProfile;
+use crate::lsp::registry::{LaunchCtx, ServerProfile, ServerSource};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -61,6 +61,16 @@ impl ServerProfile for JavaProfile {
         }
     }
 
+    /// Lombok：始终注入内置 lombok.jar（向 IDEA 看齐——jdtls 经 javaagent patch JDT
+    /// AST，让编辑器看到 @Getter/@Data 生成的方法）。用户自配 jdtls（Explicit）时
+    /// 不掺和；内置 jar 缺失（开发期/打包漏）则不注入，jdtls 仍可起。
+    fn extra_args(&self, ctx: &LaunchCtx) -> Vec<String> {
+        if matches!(ctx.src, ServerSource::Explicit { .. }) {
+            return Vec::new();
+        }
+        build_lombok_args(resolve_lombok_jar(ctx).as_deref())
+    }
+
     fn init_options(&self, _exclude_globs: &[String]) -> Value {
         serde_json::json!({})
     }
@@ -70,13 +80,62 @@ impl ServerProfile for JavaProfile {
     }
 }
 
+/// 解析内置 lombok jar：resource_dir/lsp/lombok.jar。失败（开发期未放/打包漏）
+/// 返回 None → 不注入，jdtls 仍可起（只是没 lombok，@Getter 等仍报红）。
+fn resolve_lombok_jar(ctx: &LaunchCtx) -> Option<PathBuf> {
+    use tauri::Manager;
+    let res_dir = ctx.app.path().resource_dir().ok()?;
+    let jar = res_dir.join("lsp").join("lombok.jar");
+    if jar.exists() { Some(jar) } else { None }
+}
+
+/// 纯函数：按已解析的 lombok jar 构造注入参数（不碰 IO，单测核心）。
+/// 两条 --jvm-arg 透传给 jdtls launcher，最终成 java 的 -javaagent / -Xbootclasspath/a。
+/// 等号形式（--jvm-arg=...）让 launcher 把含空格的 jar 路径当单 argv 透传，不被 shell 拆分。
+fn build_lombok_args(jar: Option<&Path>) -> Vec<String> {
+    match jar {
+        Some(j) => {
+            // 剥 verbatim 前缀（dunce::simplified），否则 javaagent 路径解析可失败
+            let p = dunce::simplified(j).to_string_lossy().into_owned();
+            vec![
+                format!("--jvm-arg=-javaagent:{p}"),
+                format!("--jvm-arg=-Xbootclasspath/a:{p}"),
+            ]
+        }
+        None => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lsp::registry::ServerSource;
 
     fn data() -> &'static Path {
         Path::new("C:/cache/jdtls-ws")
+    }
+
+    #[test]
+    fn build_lombok_args_none_is_empty() {
+        assert!(build_lombok_args(None).is_empty());
+    }
+
+    #[test]
+    fn build_lombok_args_injects_javaagent_and_bootclasspath() {
+        let args = build_lombok_args(Some(Path::new("/opt/lombok.jar")));
+        assert_eq!(args.len(), 2);
+        assert!(args.iter().any(|a| a == "--jvm-arg=-javaagent:/opt/lombok.jar"), "{args:?}");
+        assert!(args.iter().any(|a| a == "--jvm-arg=-Xbootclasspath/a:/opt/lombok.jar"), "{args:?}");
+        // jdtls 不认 --stdio，lombok 注入也不应混入
+        assert!(!args.iter().any(|a| a.contains("--stdio")));
+    }
+
+    #[test]
+    fn build_lombok_args_uses_jvm_arg_equals_form() {
+        // --jvm-arg= 等号形式：launcher 据此把含空格路径当单 argv 透传给 java
+        let args = build_lombok_args(Some(Path::new("C:/Program Files/Aide/lombok.jar")));
+        assert_eq!(args.len(), 2);
+        assert!(args.iter().all(|a| a.starts_with("--jvm-arg=")), "{args:?}");
+        assert!(args.iter().any(|a| a.contains("Program Files")), "{args:?}");
     }
 
     #[test]

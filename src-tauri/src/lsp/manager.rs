@@ -334,7 +334,10 @@ async fn spawn_real(
         Some(path) => Some(ensure_data_dir(path).await?),
         None => None,
     };
-    let (program, args) = registry::to_command(lang, src, data_dir.as_deref());
+    let (program, mut args) = registry::to_command(lang, src, data_dir.as_deref());
+    // profile 额外参数（需 app/resource_dir 的语言用，默认空；Java 注入 lombok javaagent）
+    let ctx = registry::LaunchCtx { app, src };
+    args.extend(crate::lsp::profiles::profile(lang).extra_args(&ctx));
     // Bundled：拼完整资源路径 + dunce 剥前缀
     let program_path = match src {
         ServerSource::Bundled { subdir, binary } => {
