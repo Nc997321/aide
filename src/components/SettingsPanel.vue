@@ -39,7 +39,7 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-type Tab = "general" | "providers" | "permissions" | "extensions" | "marketplace" | "codegraph" | "java" | "diagnostics";
+type Tab = "general" | "editor" | "providers" | "permissions" | "extensions" | "marketplace" | "codegraph" | "java" | "diagnostics";
 
 const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 
@@ -54,6 +54,11 @@ const proxyLocal = ref(settings.proxy);
 const shellPathLocal = ref(settings.shellPath);
 const recentLimitLocal = ref(settings.recentLimit);
 
+// ── 编辑器 ──
+// 整块写入：任一字段变动都把完整 editor 回写后端（后端 set_settings 按 top-level
+// key 整体覆盖），与 codegraphEmbedder / jdkRegistry 同模式。缩进字符固定 Tab。
+const indentSizeLocal = ref(settings.editor.indentSize);
+
 watch(fontSizeLocal, (v) => { settings.fontSize = v; update({ fontSize: v }); });
 watch(fontFamilyLocal, (v) => { settings.fontFamily = v; update({ fontFamily: v }); });
 watch(notificationsEnabledLocal, (v) => { settings.notificationsEnabled = v; update({ notificationsEnabled: v }); });
@@ -65,6 +70,12 @@ watch(recentLimitLocal, (v) => {
   recentLimitLocal.value = clamped;
   settings.recentLimit = clamped;
   update({ recentLimit: clamped });
+});
+watch(indentSizeLocal, (v) => {
+  const clamped = Math.max(1, Math.min(16, Math.floor(v) || 4));
+  indentSizeLocal.value = clamped;
+  const editor = { ...settings.editor, indentSize: clamped };
+  update({ editor });
 });
 
 // ── CodeGraph embedding 后端 ──
@@ -375,6 +386,14 @@ function onOverlayClick(e: MouseEvent) {
             </button>
             <button
               class="nav-item"
+              :class="{ active: activeTab === 'editor' }"
+              @click="activeTab = 'editor'"
+            >
+              <Icon class="nav-icon" name="bracket" :size="16" />
+              <span class="nav-label">编辑器</span>
+            </button>
+            <button
+              class="nav-item"
               :class="{ active: activeTab === 'providers' }"
               @click="activeTab = 'providers'"
             >
@@ -579,6 +598,24 @@ function onOverlayClick(e: MouseEvent) {
                 </div>
               </div>
 
+            </div>
+
+            <!-- ── 编辑器 Tab ── -->
+            <div v-else-if="activeTab === 'editor'" class="tab-editor">
+              <div class="settings-field">
+                <label class="field-label">缩进格数</label>
+                <div class="field-control">
+                  <input
+                    v-model.number="indentSizeLocal"
+                    type="number"
+                    min="1"
+                    max="16"
+                    class="text-input indent-size-input"
+                  />
+                  <span class="field-value">{{ indentSizeLocal }} 格</span>
+                </div>
+                <span class="field-hint">回车自动缩进与 Tab 键每层插入一个 Tab 字符，此值控制其显示列宽（作用于文件编辑器）</span>
+              </div>
             </div>
 
             <!-- ── 模型 Tab ── -->
@@ -996,6 +1033,12 @@ function onOverlayClick(e: MouseEvent) {
   gap: 0;
 }
 
+.tab-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
 .settings-field {
   margin-bottom: 20px;
 }
@@ -1053,6 +1096,12 @@ function onOverlayClick(e: MouseEvent) {
 
 .text-input:focus {
   border-color: var(--aide-accent);
+}
+
+/* 缩进格数：窄数字输入，不占满整行 */
+.indent-size-input {
+  width: 80px;
+  flex: 0 0 auto;
 }
 
 /* ── Toggle ── */

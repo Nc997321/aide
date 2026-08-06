@@ -112,6 +112,14 @@ export interface AppSettings {
   leftSidebarPinned?: boolean;
   /** 全局 LSP 设置：按语言 id 覆盖 server 二进制路径（对应后端 LspSettings）。 */
   lsp?: { servers: Record<string, LspServerOverride> };
+  /** 代码编辑器设置（缩进等）。后续编辑器相关设置归入此类。固定 Tab 字符缩进。 */
+  editor: EditorSettings;
+}
+
+/** 代码编辑器设置。缩进字符固定为 Tab，缩进格数控制 Tab 显示列宽。 */
+export interface EditorSettings {
+  /** Tab 字符的显示列宽（回车自动缩进与 Tab 键每层插入一个 \t），默认 4。 */
+  indentSize: number;
 }
 
 /** 某语言 LSP server 的显式覆盖（"用这个二进制 + 这些参数"，对应后端 ServerOverride）。 */

@@ -174,18 +174,20 @@ describe("useFileViewer 多窗口 store", () => {
     const v = useFileViewer();
     await v.open("a.ts");
     const win = v.windows.value[0];
-    await v.navigateInPlace(win.id, "b.ts", { line: 42, sourceLine: 7 });
+    await v.navigateInPlace(win.id, "b.ts", { line: 42, sourceLine: 7, viewportY: 120 });
     expect(v.windows.value).toHaveLength(1); // 没有新窗口
     expect(win.filePath).toBe("b.ts");
     expect(win.fileName).toBe("b.ts");
     expect(win.editContent).toBe("content of b.ts");
     expect(win.scrollToLine).toBe(42);
+    expect(win.scrollViewportY).toBe(120);
     expect(win.navStack).toHaveLength(1);
     expect(win.navStack[0]).toMatchObject({
       filePath: "a.ts",
       editContent: "content of a.ts",
       content: "content of a.ts",
       line: 7,
+      viewportY: 120,
     });
   });
 
@@ -193,11 +195,13 @@ describe("useFileViewer 多窗口 store", () => {
     const v = useFileViewer();
     await v.open("a.ts");
     const win = v.windows.value[0];
-    await v.navigateInPlace(win.id, "b.ts", { line: 42, sourceLine: 7 });
+    await v.navigateInPlace(win.id, "b.ts", { line: 42, sourceLine: 7, viewportY: 120 });
     await v.navigateBack(win.id);
     expect(win.filePath).toBe("a.ts");
     expect(win.editContent).toBe("content of a.ts");
     expect(win.scrollToLine).toBe(7);
+    // 回退时 viewportY 随栈恢复——源行定位到该偏移处复刻跳转前滚动位置
+    expect(win.scrollViewportY).toBe(120);
     expect(win.navStack).toHaveLength(0);
     expect(isWindowDirty(win)).toBe(false);
   });
@@ -207,7 +211,7 @@ describe("useFileViewer 多窗口 store", () => {
     await v.open("a.ts");
     const win = v.windows.value[0];
     win.editContent = "unsaved changes";
-    await v.navigateInPlace(win.id, "b.ts", { line: 1, sourceLine: 3 });
+    await v.navigateInPlace(win.id, "b.ts", { line: 1, sourceLine: 3, viewportY: null });
     expect(isWindowDirty(win)).toBe(false); // b.ts 是干净的新加载
     await v.navigateBack(win.id);
     expect(win.editContent).toBe("unsaved changes");
@@ -219,7 +223,7 @@ describe("useFileViewer 多窗口 store", () => {
     const v = useFileViewer();
     await v.open("a.ts");
     const win = v.windows.value[0];
-    await v.navigateInPlace(win.id, "a.ts", { line: 200, sourceLine: 10 });
+    await v.navigateInPlace(win.id, "a.ts", { line: 200, sourceLine: 10, viewportY: null });
     expect(v.windows.value).toHaveLength(1);
     expect(win.filePath).toBe("a.ts");
     expect(win.scrollToLine).toBe(200);
@@ -235,7 +239,7 @@ describe("useFileViewer 多窗口 store", () => {
     await v.open("a.ts");
     await v.open("b.ts");
     const [wa, wb] = v.windows.value;
-    await v.navigateInPlace(wa.id, "b.ts", { line: 42, sourceLine: 7 });
+    await v.navigateInPlace(wa.id, "b.ts", { line: 42, sourceLine: 7, viewportY: null });
     expect(wa.filePath).toBe("a.ts");
     expect(wa.navStack).toHaveLength(0);
     expect(v.focusedId.value).toBe(wb.id);
@@ -250,7 +254,7 @@ describe("useFileViewer 多窗口 store", () => {
     const v = useFileViewer();
     await v.open("a.ts");
     const win = v.windows.value[0];
-    await v.navigateInPlace(win.id, "bad.ts", { line: 1, sourceLine: 5 });
+    await v.navigateInPlace(win.id, "bad.ts", { line: 1, sourceLine: 5, viewportY: null });
     expect(win.error).toBeTruthy();
     expect(win.navStack).toHaveLength(1);
     await v.navigateBack(win.id);
@@ -265,7 +269,7 @@ describe("useFileViewer 多窗口 store", () => {
     await v.open("README.md");
     const win = v.windows.value[0];
     win.mdMode = "edit";
-    await v.navigateInPlace(win.id, "a.ts", { line: 1, sourceLine: null });
+    await v.navigateInPlace(win.id, "a.ts", { line: 1, sourceLine: null, viewportY: null });
     expect(win.isMarkdown).toBe(false);
     await v.navigateBack(win.id);
     expect(win.isMarkdown).toBe(true);
@@ -278,11 +282,11 @@ describe("useFileViewer 多窗口 store", () => {
     const win = v.windows.value[0];
     expect(v.navStackHasDirty(win)).toBe(false);
     // 干净压栈 → 仍 false
-    await v.navigateInPlace(win.id, "b.ts", { line: 1, sourceLine: 1 });
+    await v.navigateInPlace(win.id, "b.ts", { line: 1, sourceLine: 1, viewportY: null });
     expect(v.navStackHasDirty(win)).toBe(false);
     // b.ts 改脏再压栈 → true
     win.editContent = "dirty b";
-    await v.navigateInPlace(win.id, "c.ts", { line: 1, sourceLine: 1 });
+    await v.navigateInPlace(win.id, "c.ts", { line: 1, sourceLine: 1, viewportY: null });
     expect(v.navStackHasDirty(win)).toBe(true);
     // 弹掉脏 entry → false
     await v.navigateBack(win.id);

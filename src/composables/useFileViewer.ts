@@ -27,6 +27,9 @@ export interface NavEntry {
   content: string;
   /** 触发跳转时光标所在行（后退落点）；未知为 null */
   line: number | null;
+  /** 触发跳转时源符号在编辑器视口中的垂直偏移（px）。回退时把源行定位到该偏移处，
+   *  复刻跳转前的滚动位置——比记 scrollTop 像素更确定，不受回退后内容覆盖重排影响。 */
+  viewportY: number | null;
   /** markdown 三态随栈恢复 */
   mdMode: MarkdownMode;
 }
@@ -54,6 +57,9 @@ export interface FileWindowState {
   mdMode: MarkdownMode;
   /** 挂载后要滚到的行号，FileWindow 消费后置回 null */
   scrollToLine: number | null;
+  /** 与 scrollToLine 配对：目标行定位到视口顶下多少 px（跳转定义复刻源符号屏幕位置）。
+   *  FileWindow 消费后置回 null；null 时 scrollToLine 走默认（行贴顶）。 */
+  scrollViewportY: number | null;
   /** 跳转定义/引用的后退栈：栈顶 = 上一个位置；空 = 未发生过就地跳转 */
   navStack: NavEntry[];
   /** 窗口几何（px，视口坐标）——自动平铺由 FileViewer 层计算，拖拽直接改 x/y */
@@ -159,6 +165,7 @@ async function loadIntoWindow(win: FileWindowState, path: string) {
   win.isMarkdown = isMarkdownPath(path);
   win.mdMode = "preview";
   win.scrollToLine = null;
+  win.scrollViewportY = null;
 
   let content = "";
   let imageUrl = "";
@@ -234,6 +241,7 @@ export function useFileViewer() {
       // Markdown 默认全预览，编辑/分屏由用户按需切
       mdMode: "preview",
       scrollToLine: null,
+      scrollViewportY: null,
       navStack: [],
       x: 0,
       y: 0,
@@ -275,7 +283,7 @@ export function useFileViewer() {
   async function navigateInPlace(
     winId: string,
     targetPath: string,
-    opts: { line: number | null; sourceLine: number | null },
+    opts: { line: number | null; sourceLine: number | null; viewportY: number | null },
   ) {
     const win = windows.value.find((w) => w.id === winId);
     if (!win || win.virtual) return;
@@ -284,7 +292,10 @@ export function useFileViewer() {
       (w) => w.id !== winId && w.filePath === targetPath && !w.virtual,
     );
     if (other) {
-      if (!other.readonly && !other.error && opts.line != null) other.scrollToLine = opts.line;
+      if (!other.readonly && !other.error && opts.line != null) {
+        other.scrollToLine = opts.line;
+        other.scrollViewportY = opts.viewportY;
+      }
       focusedId.value = other.id;
       return;
     }
@@ -294,10 +305,14 @@ export function useFileViewer() {
       editContent: win.editContent,
       content: win.content,
       line: opts.sourceLine,
+      viewportY: opts.viewportY,
       mdMode: win.mdMode,
     });
     await loadIntoWindow(win, targetPath);
-    if (!win.readonly && !win.error && opts.line != null) win.scrollToLine = opts.line;
+    if (!win.readonly && !win.error && opts.line != null) {
+      win.scrollToLine = opts.line;
+      win.scrollViewportY = opts.viewportY;
+    }
   }
 
   /**
@@ -314,7 +329,12 @@ export function useFileViewer() {
     win.content = entry.content;
     win.editContent = entry.editContent;
     win.mdMode = entry.mdMode;
-    if (!win.readonly && !win.error && entry.line != null) win.scrollToLine = entry.line;
+    // 回退落点：源行定位到跳转时的视口偏移（entry.viewportY），复刻跳转前的滚动位置——
+    // 源符号当时在该偏移处，回退后仍在该处。与跳转走同一 scrollToLine 路径，确定性强。
+    if (!win.readonly && !win.error && entry.line != null) {
+      win.scrollToLine = entry.line;
+      win.scrollViewportY = entry.viewportY;
+    }
   }
 
   /** 栈中是否压着带未保存修改的文件（关窗检查用） */

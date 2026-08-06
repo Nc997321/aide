@@ -32,6 +32,7 @@ const defaults: AppSettings = {
   jdkRegistry: [],
   jdkPromptDismissed: [],
   leftSidebarPinned: false,
+  editor: { indentSize: 4 },
 };
 
 // Module-level reactive singleton — shared across ChatPanel and SettingsPanel
@@ -77,6 +78,8 @@ export function useSettings() {
       settings.jdkRegistry = s.jdkRegistry ?? defaults.jdkRegistry;
       settings.jdkPromptDismissed = s.jdkPromptDismissed ?? defaults.jdkPromptDismissed;
       settings.leftSidebarPinned = s.leftSidebarPinned ?? defaults.leftSidebarPinned;
+      // 旧配置缺 editor → 整块补默认（默认 4 空格缩进）
+      settings.editor = { ...defaults.editor, ...(s.editor ?? {}) };
     } catch (_) {
       // Keep defaults on error
     }
@@ -98,6 +101,8 @@ export function useSettings() {
     if (partial.paneLayouts !== undefined) settings.paneLayouts = partial.paneLayouts;
     if (partial.codegraphEmbedder !== undefined) settings.codegraphEmbedder = partial.codegraphEmbedder;
     if (partial.leftSidebarPinned !== undefined) settings.leftSidebarPinned = partial.leftSidebarPinned;
+    // editor 整块替换：后端 set_settings 按 top-level key 整体覆盖，故前端发完整对象
+    if (partial.editor !== undefined) settings.editor = { ...settings.editor, ...partial.editor };
     // Persist asynchronously
     try {
       await api.setSettings(partial);

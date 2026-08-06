@@ -185,8 +185,12 @@ watch(
     if (line == null || !active) return;
     await nextTick();
     await codeEditorRef.value?.waitReady();
-    codeEditorRef.value?.scrollToLine(line);
+    // viewportY 来自跳转定义的源点击偏移：把目标行定位到该视口高度（复刻源符号屏幕位置）。
+    // null（聊天文件链接等）走默认，行贴近视口顶部。
+    const viewportY = props.win.scrollViewportY;
+    codeEditorRef.value?.scrollToLine(line, { viewportY: viewportY ?? undefined });
     props.win.scrollToLine = null;
+    props.win.scrollViewportY = null;
   },
   { immediate: true },
 );
@@ -195,10 +199,13 @@ watch(
 const gotoActive = computed(() => goto.visible.value && gotoOwnerId.value === props.win.id);
 /** 触发跳转时的光标行——压栈时记入 NavEntry，后退回到这一行 */
 const lastSourceLine = ref<number | null>(null);
+/** 触发跳转时源符号在编辑器视口中的垂直偏移——跳转目标按此偏移定位，回退时复刻滚动位置 */
+const lastSourceViewportY = ref<number | null>(null);
 
-async function onGotoDefinition(payload: { word: string; filePath: string; line: number; column: number }) {
+async function onGotoDefinition(payload: { word: string; filePath: string; line: number; column: number; viewportY: number }) {
   gotoOwnerId.value = props.win.id;
   lastSourceLine.value = payload.line;
+  lastSourceViewportY.value = payload.viewportY;
   const root = projectRoot.value;
   const sep = root.includes("\\") ? "\\" : "/";
   const relPath = payload.filePath.startsWith(root)
@@ -231,6 +238,7 @@ function jumpToResult(item: QueryResult) {
   void navigateInPlace(props.win.id, fullPath, {
     line: item.symbol.line,
     sourceLine: lastSourceLine.value,
+    viewportY: lastSourceViewportY.value,
   });
 }
 

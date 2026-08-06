@@ -114,6 +114,23 @@ pub struct LspSettings {
     pub servers: std::collections::HashMap<String, ServerOverride>,
 }
 
+/// 代码编辑器设置（缩进等）。缩进字符固定为 Tab，缩进格数控制 Tab 显示列宽。
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorSettings {
+    /// Tab 字符的显示列宽（回车自动缩进与 Tab 键每层插入一个 \t），默认 4。
+    #[serde(default = "default_indent_size")]
+    pub indent_size: u32,
+}
+
+fn default_indent_size() -> u32 { 4 }
+
+impl Default for EditorSettings {
+    fn default() -> Self {
+        Self { indent_size: 4 }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -174,6 +191,9 @@ pub struct AppSettings {
     /// 全局 LSP 设置：按 language id 覆盖 server 二进制路径。
     #[serde(default)]
     pub lsp: LspSettings,
+    /// 代码编辑器设置（缩进等）。默认 4 空格缩进。前端 settings 管理；Rust 只存取。
+    #[serde(default)]
+    pub editor: EditorSettings,
 }
 
 fn default_font_size() -> u32 { 14 }
@@ -209,6 +229,7 @@ impl Default for AppSettings {
             jdk_prompt_dismissed: Vec::new(),
             left_sidebar_pinned: false,
             lsp: LspSettings::default(),
+            editor: EditorSettings::default(),
         }
     }
 }

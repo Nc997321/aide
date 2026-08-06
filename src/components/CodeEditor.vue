@@ -14,6 +14,7 @@ import { loadLanguageExtension } from "../utils/cmLanguage";
 import { ctrlHoverHighlight } from "../extensions/cmCtrlHover";
 import { cmScrollMemory, type ScrollMemoryOptions } from "../extensions/cmScrollMemory";
 import { cmLsp } from "../extensions/cmLsp";
+import { cmIndent } from "../extensions/cmIndent";
 import { useLsp } from "../composables/useLsp";
 import { parentSyncAnnotation, isUserEdit } from "../utils/cmModelSync";
 
@@ -30,7 +31,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
-  (e: "goto-definition", payload: { word: string; filePath: string; line: number; column: number }): void;
+  (e: "goto-definition", payload: { word: string; filePath: string; line: number; column: number; viewportY: number }): void;
 }>();
 
 const mountEl = ref<HTMLDivElement | null>(null);
@@ -48,6 +49,9 @@ const ext = computed(() => {
 });
 
 const themeCompartment = new Compartment();
+// 缩进用 compartment 包：编辑器设置变化（缩进格数 / Tab vs 空格）时 reconfigure，
+// 避免重建整个 EditorView。
+const indentCompartment = new Compartment();
 // cmLsp 用 compartment 包，使 LSP 开关变化（先开文件后开 LSP）能 reconfigure
 // 触发 didOpen/didClose——否则 cmLsp 以 createEditor 时的 enabled 固化，后开的
 // LSP 不会 didOpen 已开文件 → server 无该文档 → 跳转/补全返空（bug4 真因）。
@@ -94,6 +98,7 @@ async function createEditor() {
         { key: "Mod-g", run: openGoToLine },
       ]),
       themeCompartment.of(syntaxHighlighting(createHighlightStyle(themes[settings.theme] || themes["warm-dark"]))),
+      indentCompartment.of(cmIndent(settings.editor)),
       updateListener,
       ctrlHoverHighlight(),
       ...(props.scrollMemory ? [cmScrollMemory(props.scrollMemory)] : []),
@@ -124,11 +129,16 @@ async function createEditor() {
                 if (word) {
                   event.preventDefault();
                   const lineObj = view.state.doc.lineAt(pos);
+                  // 记下点击处在编辑器视口中的垂直偏移（相对 scrollDOM 顶），
+                  // 供跳转目标按此偏移定位——目标符号落在与源符号相同的屏幕高度，
+                  // 而不是被滚到视口顶部。回退时用同一偏移复刻原滚动位置。
+                  const viewportY = event.clientY - view.scrollDOM.getBoundingClientRect().top;
                   emit("goto-definition", {
                     word,
                     filePath: props.filePath,
                     line: lineObj.number,
                     column: pos - lineObj.from + 1,
+                    viewportY,
                   });
                 }
               }
@@ -363,6 +373,16 @@ watch(() => settings.theme, () => {
   }
 });
 
+// ── React to editor indent settings: reconfigure indent compartment ──
+watch(
+  () => settings.editor.indentSize,
+  () => {
+    if (view) {
+      view.dispatch({ effects: indentCompartment.reconfigure(cmIndent(settings.editor)) });
+    }
+  }
+);
+
 function openGoToLine(target: EditorView): boolean {
   const { prompt: modalPrompt } = useModal();
   modalPrompt("跳转到行:", "行号").then((line) => {
@@ -428,19 +448,22 @@ watch(
 );
 
 // ── Expose scrollToLine ──
+// opts.viewportY：把目标行定位到编辑器视口顶下 viewportY 像素处（跳转定义复刻源符号
+//   屏幕位置用）；省略则用默认 yMargin（行贴近视口顶部，聊天文件链接等沿用旧行为）。
 
-function scrollToLine(line: number, opts?: { cursor?: boolean }) {
+function scrollToLine(line: number, opts?: { cursor?: boolean; viewportY?: number }) {
   if (!view) return;
   const docLine = view.state.doc.line(Math.min(line, view.state.doc.lines));
+  const yMargin = opts?.viewportY ?? 5;
   if (opts?.cursor !== false) {
     view.dispatch({
       selection: { anchor: docLine.from, head: docLine.from },
-      effects: EditorView.scrollIntoView(docLine.from, { y: "start" }),
+      effects: EditorView.scrollIntoView(docLine.from, { y: "start", yMargin }),
     });
     view.focus();
   } else {
     view.dispatch({
-      effects: EditorView.scrollIntoView(docLine.from, { y: "start" }),
+      effects: EditorView.scrollIntoView(docLine.from, { y: "start", yMargin }),
     });
   }
 }

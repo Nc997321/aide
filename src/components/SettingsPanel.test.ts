@@ -10,6 +10,7 @@ vi.mock("../composables/useSettings", () => ({
     settings: reactive({
       theme: "warm-dark", fontSize: 14, fontFamily: "", proxy: "",
       autoNaming: true, recentLimit: 10,
+      editor: { indentSize: 4 },
       codegraphEmbedder: {
         apiKeyConfigured: false, backend: "fastembed", baseUrl: "",
         dim: 768, model: "", format: "ollama",
@@ -73,9 +74,9 @@ describe("SettingsPanel", () => {
     const labels = Array.from(document.body.querySelectorAll(".nav-label")).map(
       (el) => el.textContent?.trim() ?? "",
     );
-    // 工作区 tab 已移除（LSP 设置搬到标题栏 LspIndicator）
+    // 工作区 tab 已移除（LSP 设置搬到标题栏 LspIndicator）；编辑器 tab 在通用之后
     expect(labels).toEqual([
-      "通用", "模型", "权限", "扩展", "市场", "代码索引", "Java", "诊断",
+      "通用", "编辑器", "模型", "权限", "扩展", "市场", "代码索引", "Java", "诊断",
     ]);
   });
 
