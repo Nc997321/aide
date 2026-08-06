@@ -2,6 +2,7 @@ import { ref, type Ref } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { api } from "../api";
 import { useNotifications } from "./useNotifications";
+import type { LspCapabilities } from "../types";
 
 /** LSP 诊断（最小字段，cmLsp 映射成 CM Diagnostic）。 */
 export interface LspDiagnostic {
@@ -16,6 +17,9 @@ export interface LspDiagnostic {
 const lspEnabledWorkspaces = ref<Set<string>>(new Set());
 /** filePath → 该文件当前诊断（来自 lsp-diagnostics 事件，按 uri 过滤）。 */
 const diagnostics = ref<Map<string, LspDiagnostic[]>>(new Map());
+/** `${workspaceRoot}:${lang}` → server 可选能力开关（lsp_capabilities 缓存）。
+ *  server 关闭/重启后旧值作废——enable/disableLsp 清该工作区缓存。 */
+const capabilities = ref<Map<string, LspCapabilities>>(new Map());
 
 let listening = false;
 let unlistenDiag: UnlistenFn | null = null;
@@ -91,6 +95,7 @@ export function useLsp() {
     if (!workspaceRoot) return;
     await api.workspaceSetLspEnabled(workspaceRoot, true);
     lspEnabledWorkspaces.value = new Set(lspEnabledWorkspaces.value).add(workspaceRoot);
+    clearCapabilitiesForWorkspace(workspaceRoot);
     await ensureListening();
   }
 
@@ -101,6 +106,7 @@ export function useLsp() {
     const next = new Set(lspEnabledWorkspaces.value);
     next.delete(workspaceRoot);
     lspEnabledWorkspaces.value = next;
+    clearCapabilitiesForWorkspace(workspaceRoot);
     // 清该工作区诊断（lsp_shutdown_workspace 后端已 emit clear）
   }
 
@@ -116,9 +122,34 @@ export function useLsp() {
     diagnostics.value = new Map();
   }
 
+  /** 查某语言 server 的可选能力开关（带缓存）。server 未启动/未就绪 → 默认全 false；
+   *  server 后续就绪时调用方应重查（CodeEditor 的 isLspOn watch 触发 reconfigure）。 */
+  async function getCapabilities(workspaceRoot: string, lang: string): Promise<LspCapabilities> {
+    if (!workspaceRoot || !lang) return { implementationProvider: false, documentSymbolProvider: false };
+    const key = `${workspaceRoot}:${lang}`;
+    const cached = capabilities.value.get(key);
+    if (cached) return cached;
+    try {
+      const caps = await api.lspCapabilities(workspaceRoot, lang);
+      capabilities.value = new Map(capabilities.value).set(key, caps);
+      return caps;
+    } catch {
+      return { implementationProvider: false, documentSymbolProvider: false };
+    }
+  }
+
+  /** 清某工作区全部语言的 capability 缓存（server 重启后旧值作废）。 */
+  function clearCapabilitiesForWorkspace(workspaceRoot: string) {
+    const prefix = `${workspaceRoot}:`;
+    const next = new Map<string, LspCapabilities>();
+    for (const [k, v] of capabilities.value) if (!k.startsWith(prefix)) next.set(k, v);
+    capabilities.value = next;
+  }
+
   function __resetForTest() {
     lspEnabledWorkspaces.value = new Set();
     diagnostics.value = new Map();
+    capabilities.value = new Map();
     listening = false;
     unlistenDiag?.();
     unlistenDead?.();
@@ -131,7 +162,8 @@ export function useLsp() {
   return {
     lspEnabledWorkspaces,
     diagnostics,
-    enableLsp, disableLsp, isLspOn, diagnosticsFor, clearDiagnostics,
+    capabilities,
+    enableLsp, disableLsp, isLspOn, diagnosticsFor, clearDiagnostics, getCapabilities, clearCapabilitiesForWorkspace,
     __resetForTest,
   };
 }

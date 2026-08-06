@@ -221,6 +221,64 @@ pub async fn lsp_hover(
 }
 
 #[tauri::command]
+pub async fn lsp_implementation(
+    workspace_root: String, file_path: String, line: usize, column: usize, word: String,
+    state: tauri::State<'_, Arc<LspState>>,
+) -> Result<Vec<crate::codegraph::types::QueryResult>, String> {
+    // 与 lsp_definition 同构，仅 method 换为 textDocument/implementation（父→子）。
+    // 返回 Location[] → 归一为 QueryResult[]；前端据此挂向下箭头，并反推向上箭头。
+    let lang = lang_from_ext_of(&file_path);
+    let Some(lang_id) = lang else { return Ok(vec![]); };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(vec![]); };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let params = serde_json::json!({
+        "textDocument":{"uri":uri},
+        "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
+    });
+    let (msg, id, tx, rx) = h.router.next_request("textDocument/implementation", params);
+    h.transport.table.lock().await.insert(id, tx);
+    h.transport.send(&msg).await.map_err(|e| e.to_string())?;
+    let result = rx.await.map_err(|_| "server closed".to_string())?;
+    let locs = parse_locations(&result);
+    Ok(crate::lsp::protocol::locations_to_query_results(&locs, &word, &workspace_root))
+}
+
+#[tauri::command]
+pub async fn lsp_document_symbol(
+    workspace_root: String, file_path: String,
+    state: tauri::State<'_, Arc<LspState>>,
+) -> Result<Vec<crate::lsp::protocol::DocumentSymbolItem>, String> {
+    // 枚举文档声明符号（Class/Interface/Method/Function...），供前端筛可视区声明查 implementation。
+    // 客户端已声明 hierarchicalSupport → server 多返 DocumentSymbol[]（带 children）；
+    // 解析器兼容 SymbolInformation[]（扁平，有 location）兜底。
+    let Some(lang_id) = lang_from_ext_of(&file_path) else { return Ok(vec![]); };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(vec![]); };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let params = serde_json::json!({ "textDocument":{"uri":uri} });
+    let (msg, id, tx, rx) = h.router.next_request("textDocument/documentSymbol", params);
+    h.transport.table.lock().await.insert(id, tx);
+    h.transport.send(&msg).await.map_err(|e| e.to_string())?;
+    let result = rx.await.map_err(|_| "server closed".to_string())?;
+    Ok(parse_document_symbols(&result))
+}
+
+#[tauri::command]
+pub async fn lsp_capabilities(
+    workspace_root: String, lang: String,
+    state: tauri::State<'_, Arc<LspState>>,
+) -> Result<crate::lsp::protocol::LspCapabilities, String> {
+    // 按语言查 server 的可选能力开关。server 未启动 → 默认全 false（前端据 isLspOn + caps
+    // 决定是否启用 gutter 标记；server 后续就绪时 watch 会 reconfigure）。
+    let Some(lang_id) = lang_from_id_str(&lang) else { return Ok(Default::default()); };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(Default::default()); };
+    let caps = h.capabilities.lock().await;
+    Ok(crate::lsp::protocol::LspCapabilities::from_caps(caps.as_ref()))
+}
+
+#[tauri::command]
 pub async fn lsp_shutdown_workspace(
     workspace_root: String,
     state: tauri::State<'_, Arc<LspState>>,
@@ -295,6 +353,45 @@ fn parse_locations(result: &serde_json::Value) -> Vec<lsp_types::Location> {
     }
 }
 
+/// documentSymbol 结果 → 扁平 DocumentSymbolItem[]。兼容两种形态：
+/// - DocumentSymbol（有 selectionRange，可能带 children）→ 用 selectionRange.start，递归 children
+/// - SymbolInformation（有 location）→ 用 location.range.start
+/// 不依赖 lsp_types::DocumentSymbol（其 SymbolKind newtype 内部私有，as u32 不便），
+/// 直接按 JSON 字段取，规避类型摩擦。
+fn parse_document_symbols(result: &serde_json::Value) -> Vec<crate::lsp::protocol::DocumentSymbolItem> {
+    let Some(arr) = result.as_array() else { return vec![]; };
+    let mut out = Vec::new();
+    for item in arr {
+        flatten_symbol(item, &mut out);
+    }
+    out
+}
+
+fn flatten_symbol(item: &serde_json::Value, out: &mut Vec<crate::lsp::protocol::DocumentSymbolItem>) {
+    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let kind = item.get("kind").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    // DocumentSymbol 用 selectionRange.start；SymbolInformation 用 location.range.start
+    let start = item
+        .get("selectionRange")
+        .and_then(|sr| sr.get("start"))
+        .or_else(|| item.get("location").and_then(|l| l.get("range")).and_then(|r| r.get("start")));
+    if let Some(start) = start {
+        let line = start.get("line").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let column = start.get("character").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        out.push(crate::lsp::protocol::DocumentSymbolItem {
+            name,
+            kind,
+            line: line + 1,   // LSP 0-based → 1-based
+            column: column + 1,
+        });
+    }
+    if let Some(children) = item.get("children").and_then(|v| v.as_array()) {
+        for child in children {
+            flatten_symbol(child, out);
+        }
+    }
+}
+
 fn parse_completion_items(result: &serde_json::Value) -> Vec<lsp_types::CompletionItem> {
     if let Some(arr) = result.get("items").and_then(|v| v.as_array()) {
         arr.iter().filter_map(|v| serde_json::from_value::<lsp_types::CompletionItem>(v.clone()).ok()).collect()
@@ -339,6 +436,44 @@ mod tests {
         let globs = build_exclude_globs(&vec!["generated".into()]);
         assert!(is_excluded("C:/p/generated/x.rs", &globs));
         assert!(!is_excluded("C:/p/src/main.rs", &globs));
+    }
+
+    #[test]
+    fn parse_document_symbols_handles_hierarchical_and_flat() {
+        // DocumentSymbol[]（带 selectionRange + children）→ 扁平化，0-based → 1-based
+        let ds = serde_json::json!([
+            {"name":"Foo","kind":5,
+             "range":{"start":{"line":0,"character":0},"end":{"line":10,"character":0}},
+             "selectionRange":{"start":{"line":0,"character":6},"end":{"line":0,"character":9}},
+             "children":[{"name":"bar","kind":6,
+                          "range":{"start":{"line":2,"character":2},"end":{"line":3,"character":2}},
+                          "selectionRange":{"start":{"line":2,"character":2},"end":{"line":2,"character":5}}}]}
+        ]);
+        let items = parse_document_symbols(&ds);
+        assert_eq!(items.len(), 2); // Foo + bar（children 扁平化）
+        assert_eq!(items[0].name, "Foo");
+        assert_eq!(items[0].kind, 5);
+        assert_eq!(items[0].line, 1);    // line 0 → 1-based 1
+        assert_eq!(items[0].column, 7);  // character 6 → 7
+        assert_eq!(items[1].name, "bar");
+        assert_eq!(items[1].kind, 6);
+        assert_eq!(items[1].line, 3);    // line 2 → 3
+
+        // SymbolInformation[]（扁平，有 location）→ 用 location.range.start
+        let si = serde_json::json!([
+            {"name":"baz","kind":11,
+             "location":{"uri":"file:///x","range":{"start":{"line":5,"character":0},"end":{"line":5,"character":3}}},
+             "containerName":"Foo"}
+        ]);
+        let items2 = parse_document_symbols(&si);
+        assert_eq!(items2.len(), 1);
+        assert_eq!(items2[0].name, "baz");
+        assert_eq!(items2[0].kind, 11);
+        assert_eq!(items2[0].line, 6);   // line 5 → 6
+
+        // null / 空数组 → 空
+        assert!(parse_document_symbols(&serde_json::json!(null)).is_empty());
+        assert!(parse_document_symbols(&serde_json::json!([])).is_empty());
     }
 
     #[tokio::test]

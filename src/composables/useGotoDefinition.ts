@@ -22,8 +22,9 @@ const searchWord = ref("");
 
 const targetProjectRoot = ref("");
 const isGrepFallback = ref(false);
-/** 当前浮层模式：search()=定义，searchAllReferences()=引用。决定标题文案。 */
-const mode = ref<"definition" | "references">("definition");
+/** 当前浮层模式：search()=定义，searchAllReferences()=引用，searchImplementations()=实现。
+ *  决定标题与空态文案。 */
+const mode = ref<"definition" | "references" | "implementation">("definition");
 
 let lastProjectRoot = "";
 let lastSourceExt = "";
@@ -136,6 +137,36 @@ export function useGotoDefinition() {
     selectedIndex.value = 0;
   }
 
+  /** 「跳转到实现」：只走 LSP（textDocument/implementation），不 codegraph/grep 兜底——
+   *  implementation 是纯语义请求，文本兜底会塞入同名符号噪声。
+   *  gutter 标记点击时传 preloadedResults（已查好的缓存），直接填 results 免重查。
+   *  单结果由调用方 jumpOrPick 自动跳；多结果浮层显示供选。 */
+  async function searchImplementations(
+    word: string,
+    projectRoot: string,
+    preloadedResults?: QueryResult[],
+  ) {
+    if (!word || !projectRoot) return;
+    searchWord.value = word;
+    targetProjectRoot.value = projectRoot;
+    lastProjectRoot = projectRoot;
+    results.value = preloadedResults ?? [];
+    selectedIndex.value = 0;
+    isGrepFallback.value = false;
+    mode.value = "implementation";
+    if (preloadedResults) {
+      visible.value = true; // 多结果弹列表；单结果调用方会 jumpOrPick 直接跳
+      return;
+    }
+    // 无预载结果 → 走 LSP 查（预留：当前 gutter 路径总带 preloadedResults，此分支供快捷键等用）
+    visible.value = true;
+    try {
+      results.value = await api.lspImplementation(projectRoot, "", 0, 0, word);
+    } catch {
+      results.value = [];
+    }
+  }
+
   function selectPrev() {
     if (results.value.length === 0) return;
     selectedIndex.value =
@@ -205,6 +236,7 @@ export function useGotoDefinition() {
     mode: readonly(mode),
     search,
     searchAllReferences,
+    searchImplementations,
     dismiss,
     selectPrev,
     selectNext,

@@ -19,6 +19,49 @@ pub struct CmCompletion {
     pub filter_text: Option<String>,
 }
 
+/// 文档符号的扁平条目（documentSymbol 结果归一）。前端据此枚举声明行、按 kind 筛
+/// Class/Interface/Method/Function，对可视区内的声明查 implementation 挂 gutter 标记。
+/// kind 保留 LSP SymbolKind 原值（前端再映射），不在此裁剪——解析与筛选职责分离。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DocumentSymbolItem {
+    pub name: String,
+    pub kind: u32,
+    /// 1-based 声明行（selectionRange.start.line + 1 / SymbolInformation.location.start.line + 1）
+    pub line: usize,
+    /// 1-based 声明列
+    pub column: usize,
+}
+
+/// 某 language server 的可选能力开关（从 initialize 握手 capabilities 提取）。
+/// provider 字段在 LSP 里可为 bool 或对象（如 {"workDoneProgress":true}）——按 key 存在性
+/// + as_bool 兜底判断：key 在且值为对象 → 视为支持；absent 或显式 false → 不支持。
+#[derive(Debug, Clone, serde::Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LspCapabilities {
+    pub implementation_provider: bool,
+    pub document_symbol_provider: bool,
+}
+
+impl LspCapabilities {
+    /// 从 server capabilities JSON 提取我们关心的开关。
+    pub fn from_caps(caps: Option<&serde_json::Value>) -> Self {
+        let Some(c) = caps else { return Self::default(); };
+        Self {
+            implementation_provider: provider_on(c, "implementationProvider"),
+            document_symbol_provider: provider_on(c, "documentSymbolProvider"),
+        }
+    }
+}
+
+/// LSP provider 能力判断：true/对象 → 支持；absent/false → 不支持。
+fn provider_on(caps: &serde_json::Value, key: &str) -> bool {
+    match caps.get(key) {
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(_) => true, // 对象形式（含选项）→ 支持
+        None => false,
+    }
+}
+
 /// LSP Location（无符号名）+ 查询词 + workspace_root → QueryResult。
 /// file 归一为相对 workspace_root 的路径（与 codegraph 一致；不在工作区则保留绝对，
 /// 前端 jumpToResult 兼容）。confidence=Structure；kind 无从得知 → 占位 Function。
@@ -153,6 +196,34 @@ mod tests {
         assert_eq!(qr.symbol.column, 11);    // 1-based
         assert_eq!(qr.confidence, Confidence::Structure);
         assert_eq!(qr.score, None);
+    }
+
+    #[test]
+    fn lsp_capabilities_from_bool_and_object_providers() {
+        // bool 形态：true/false 直接取
+        let caps = serde_json::json!({"implementationProvider": true, "documentSymbolProvider": false});
+        let c = LspCapabilities::from_caps(Some(&caps));
+        assert!(c.implementation_provider);
+        assert!(!c.document_symbol_provider);
+
+        // 对象形态（含 workDoneProgress 等）：key 在即视为支持
+        let caps2 = serde_json::json!({
+            "implementationProvider": {"workDoneProgress": true},
+            "documentSymbolProvider": {"label": "X"}
+        });
+        let c2 = LspCapabilities::from_caps(Some(&caps2));
+        assert!(c2.implementation_provider);
+        assert!(c2.document_symbol_provider);
+
+        // 缺失 → 不支持
+        let c3 = LspCapabilities::from_caps(Some(&serde_json::json!({})));
+        assert!(!c3.implementation_provider);
+        assert!(!c3.document_symbol_provider);
+
+        // None（server 未握手）→ 全 false
+        let c4 = LspCapabilities::from_caps(None);
+        assert!(!c4.implementation_provider);
+        assert!(!c4.document_symbol_provider);
     }
 
     #[test]

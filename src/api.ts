@@ -8,6 +8,7 @@ import type {
   CatalogPreset, PortProbeResult, LoginStatusResult, ConnectionStatus,
   MigrationStatus, MigrationSummary,
   CmCompletion,
+  DocumentSymbolItem, LspCapabilities,
 } from "./types";
 import type { ModelOption, PermissionModeOption } from "./types/chat";
 
@@ -399,6 +400,15 @@ export const api = {
   },
   lspHover(workspaceRoot: string, filePath: string, line: number, column: number): Promise<{ content: string | null }> {
     return invoke("lsp_hover", { workspaceRoot, filePath, line, column });
+  },
+  lspImplementation(workspaceRoot: string, filePath: string, line: number, column: number, word: string): Promise<QueryResult[]> {
+    return invoke("lsp_implementation", { workspaceRoot, filePath, line, column, word });
+  },
+  lspDocumentSymbol(workspaceRoot: string, filePath: string): Promise<DocumentSymbolItem[]> {
+    return invoke("lsp_document_symbol", { workspaceRoot, filePath });
+  },
+  lspCapabilities(workspaceRoot: string, lang: string): Promise<LspCapabilities> {
+    return invoke("lsp_capabilities", { workspaceRoot, lang });
   },
   lspShutdownWorkspace(workspaceRoot: string): Promise<void> {
     return invoke("lsp_shutdown_workspace", { workspaceRoot });

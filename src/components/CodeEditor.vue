@@ -15,6 +15,7 @@ import { ctrlHoverHighlight } from "../extensions/cmCtrlHover";
 import { cmScrollMemory, type ScrollMemoryOptions } from "../extensions/cmScrollMemory";
 import { cmLsp } from "../extensions/cmLsp";
 import { cmIndent } from "../extensions/cmIndent";
+import { cmImplGutter, type GutterGotoPayload } from "../extensions/cmImplGutter";
 import { useLsp } from "../composables/useLsp";
 import { parentSyncAnnotation, isUserEdit } from "../utils/cmModelSync";
 
@@ -32,6 +33,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
   (e: "goto-definition", payload: { word: string; filePath: string; line: number; column: number; viewportY: number }): void;
+  /** gutter 标记点击（跳实现）：results 为缓存实现列表，viewportY 复刻点击处视口偏移
+   *  以对齐目标行；line 为标记所在行（回退 sourceLine）。 */
+  (e: "gutter-goto", payload: GutterGotoPayload): void;
 }>();
 
 const mountEl = ref<HTMLDivElement | null>(null);
@@ -56,6 +60,9 @@ const indentCompartment = new Compartment();
 // 触发 didOpen/didClose——否则 cmLsp 以 createEditor 时的 enabled 固化，后开的
 // LSP 不会 didOpen 已开文件 → server 无该文档 → 跳转/补全返空（bug4 真因）。
 const lspCompartment = new Compartment();
+// 「跳转到实现 / 跳到父类」gutter 标记用 compartment 包：LSP 开关 + capability 到位后
+// reconfigure（初始空，caps 查回后再装）。
+const implGutterCompartment = new Compartment();
 
 // ── Editor lifecycle ──
 
@@ -112,6 +119,8 @@ async function createEditor() {
             })
           : []
       ),
+      // 实现标记 gutter：初始空，createEditor 末按 capability reconfigure（见 applyImplGutter）
+      implGutterCompartment.of([]),
       EditorView.domEventHandlers({
         click(event, view) {
           if (event.ctrlKey || event.metaKey) {
@@ -347,7 +356,37 @@ async function createEditor() {
 
   // Signal that the editor is fully created (including async lang import)
   applyFontSettings();
+  // 装载实现标记 gutter（按 LSP 开关 + capability 决定；caps 异步查回后 reconfigure）
+  void applyImplGutter();
   resolveReady?.();
+}
+
+/** 按 LSP 开关 + server capability 决定是否装载实现标记 gutter。
+ *  - LSP 关 / 无 workspaceRoot / 无 lspLang → 卸载（[]）
+ *  - LSP 开但 server 不支持 implementationProvider 或 documentSymbolProvider → 卸载
+ *  - 都支持 → 装 cmImplGutter（可视区渐进查 implementation + 反推向上箭头） */
+async function applyImplGutter() {
+  if (!view) return;
+  const { workspaceRoot, lspLang } = props;
+  if (!workspaceRoot || !lspLang || !useLsp().isLspOn(workspaceRoot)) {
+    if (view) view.dispatch({ effects: implGutterCompartment.reconfigure([]) });
+    return;
+  }
+  const caps = await useLsp().getCapabilities(workspaceRoot, lspLang);
+  if (!view) return; // editor 可能已 destroy
+  const on = caps.implementationProvider && caps.documentSymbolProvider;
+  view.dispatch({
+    effects: implGutterCompartment.reconfigure(
+      on
+        ? cmImplGutter({
+            workspaceRoot,
+            filePath: props.filePath,
+            lang: lspLang,
+            onGotoImplementation: (p) => emit("gutter-goto", p),
+          })
+        : [],
+    ),
+  });
 }
 
 function applyFontSettings() {
@@ -381,6 +420,12 @@ watch(
       view.dispatch({ effects: indentCompartment.reconfigure(cmIndent(settings.editor)) });
     }
   }
+);
+
+// ── React to LSP 开关变化：重装/卸载实现标记 gutter（caps 随 server 重启刷新）──
+watch(
+  () => (props.workspaceRoot ? useLsp().isLspOn(props.workspaceRoot) : false),
+  () => { void applyImplGutter(); },
 );
 
 function openGoToLine(target: EditorView): boolean {

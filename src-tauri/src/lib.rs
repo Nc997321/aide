@@ -415,6 +415,9 @@ pub fn run() {
             lsp::lsp_definition,
             lsp::lsp_completion,
             lsp::lsp_hover,
+            lsp::lsp_implementation,
+            lsp::lsp_document_symbol,
+            lsp::lsp_capabilities,
             lsp::lsp_shutdown_workspace,
             lsp::open_lsp_install_guide,
         ])

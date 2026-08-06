@@ -34,6 +34,10 @@ pub struct ServerHandle {
     pub exclude_globs: Vec<String>,
     pub initialized: AtomicBool,
     pub dead: Arc<AtomicBool>,
+    /// initialize 握手返回的 server capabilities（原始 JSON）。供前端按语言查
+    /// implementationProvider / documentSymbolProvider 等，决定是否启用 gutter 标记等
+    /// 可选能力。None = 未握手成功。
+    pub capabilities: Arc<TokioMutex<Option<serde_json::Value>>>,
     _child: Option<Arc<TokioMutex<tokio::process::Child>>>,
 }
 
@@ -238,6 +242,7 @@ async fn spawn_and_init(
         exclude_globs: exclude_globs.clone(),
         initialized,
         dead: Arc::clone(&dead),
+        capabilities: Arc::new(TokioMutex::new(None)),
         _child: child,
     });
 
@@ -503,7 +508,12 @@ async fn init_handshake(
         "processId": std::process::id(),
         "rootUri": root_uri,
         "capabilities": {
-            "textDocument": {"synchronization": {"didSave": false}}
+            "textDocument": {
+                "synchronization": {"didSave": false},
+                // 声明树用 DocumentSymbol[]（带 range/children）而非扁平 SymbolInformation[]，
+                // 「跳转到实现」gutter 标记据此枚举可视区声明行。解析器仍兼容 SymbolInformation 兜底。
+                "documentSymbol": {"hierarchicalSupport": true}
+            }
         },
         "workspaceFolders": [{"uri": root_uri, "name": workspace}],
         "initializationOptions": init_options,
@@ -536,6 +546,11 @@ async fn init_handshake(
             "initialize rejected: {msg}"
         )));
     }
+    // 保存 server capabilities：前端按语言查 implementationProvider/documentSymbolProvider
+    // 决定是否启用「跳转到实现」gutter 标记等可选能力。rx 返回的是 JSON-RPC 的 result 字段值
+    //（dispatch 只剥 result），即 {"capabilities":{...}}。
+    let caps = result.get("capabilities").cloned();
+    *handle.capabilities.lock().await = caps;
     // initialized notification
     let initd = serde_json::json!({"jsonrpc":"2.0","method":"initialized","params":{}});
     handle

@@ -359,6 +359,22 @@ export interface QueryResult {
   score: number | null;
 }
 
+/** documentSymbol 扁平条目（Rust 侧 parse_document_symbols 归一）。kind 保留 LSP SymbolKind
+ *  原值（前端再筛 Class/Interface/Method/Function）。行列 1-based。 */
+export interface DocumentSymbolItem {
+  name: string;
+  kind: number;
+  line: number;
+  column: number;
+}
+
+/** 某语言 server 的可选能力开关（来自 initialize 握手 capabilities）。前端据此决定是否
+ *  启用「跳转到实现」gutter 标记等可选能力。 */
+export interface LspCapabilities {
+  implementationProvider: boolean;
+  documentSymbolProvider: boolean;
+}
+
 export interface BuildIndexResult {
   /** true = reused a fresh on-disk index; false = full rebuild. */
   loaded: boolean;

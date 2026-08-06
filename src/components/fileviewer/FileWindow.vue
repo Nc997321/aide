@@ -8,6 +8,7 @@ import { useNotifications } from "../../composables/useNotifications";
 import type { QueryResult } from "../../types";
 import { api } from "../../api";
 import CodeEditor from "../CodeEditor.vue";
+import type { GutterGotoPayload } from "../../extensions/cmImplGutter";
 import DiffViewer from "./DiffViewer.vue";
 import { extToLang, highlightCode } from "../../utils/highlight";
 import { isHtmlFilePath } from "../../utils/fileLink";
@@ -197,10 +198,25 @@ watch(
 
 // ── goto-definition（useGotoDefinition 是单例，浮层只在触发窗口里渲染）──
 const gotoActive = computed(() => goto.visible.value && gotoOwnerId.value === props.win.id);
+/** 浮层标题后缀：按 mode 显示 引用/实现/定义。 */
+const gotoModeLabel = computed(() => {
+  switch (goto.mode.value) {
+    case "references": return "引用";
+    case "implementation": return "实现";
+    default: return "定义";
+  }
+});
 /** 触发跳转时的光标行——压栈时记入 NavEntry，后退回到这一行 */
 const lastSourceLine = ref<number | null>(null);
 /** 触发跳转时源符号在编辑器视口中的垂直偏移——跳转目标按此偏移定位，回退时复刻滚动位置 */
 const lastSourceViewportY = ref<number | null>(null);
+
+/** 单结果直接跳、多结果留浮层供选（search* 已把 visible 置 true）。跳转定义/实现/父类共用。 */
+function jumpOrPick() {
+  if (goto.results.value.length === 1) {
+    jumpToResult(goto.results.value[0]);
+  }
+}
 
 async function onGotoDefinition(payload: { word: string; filePath: string; line: number; column: number; viewportY: number }) {
   gotoOwnerId.value = props.win.id;
@@ -214,10 +230,17 @@ async function onGotoDefinition(payload: { word: string; filePath: string; line:
   const ext = payload.filePath.split(".").pop()?.toLowerCase() || "";
   await goto.search(payload.word, root, { sourceFile: relPath, sourceFileAbs: payload.filePath, sourceLine: payload.line, sourceExt: ext, sourceColumn: payload.column });
 
-  // Auto-jump on single result
-  if (goto.results.value.length === 1) {
-    jumpToResult(goto.results.value[0]);
-  }
+  jumpOrPick();
+}
+
+/** gutter 标记点击（跳实现）：结果已随标记缓存，直接填 results 走 jumpOrPick。
+ *  payload.line/viewportY 用于回退复刻滚动。 */
+async function onGotoGutter(payload: GutterGotoPayload) {
+  gotoOwnerId.value = props.win.id;
+  lastSourceLine.value = payload.line;
+  lastSourceViewportY.value = payload.viewportY;
+  await goto.searchImplementations(payload.word, projectRoot.value, payload.results);
+  jumpOrPick();
 }
 
 async function onSearchAllReferences() {
@@ -414,6 +437,7 @@ async function openInBrowser() {
             :workspaceRoot="projectRoot"
             :lspLang="lspLangFor(win.filePath)"
             @goto-definition="onGotoDefinition"
+            @gutter-goto="onGotoGutter"
           />
         </div>
         <!-- 分屏预览是半宽，换行位置与全预览不同，滚动位置分开记 -->
@@ -430,19 +454,21 @@ async function openInBrowser() {
           :workspaceRoot="projectRoot"
           :lspLang="lspLangFor(win.filePath)"
           @goto-definition="onGotoDefinition"
+          @gutter-goto="onGotoGutter"
         />
       </div>
 
       <!-- 跳转结果浮层 -->
       <div v-if="gotoActive" ref="gotoPopoverRef" tabindex="-1" class="goto-popover" @keydown="onGotoKeydown">
         <div class="goto-popover-header">
-          <span class="goto-popover-title">「{{ goto.searchWord.value }}」的{{ goto.mode.value === 'references' ? '引用' : '定义' }}</span>
+          <span class="goto-popover-title">「{{ goto.searchWord.value }}」的{{ gotoModeLabel }}</span>
           <button class="goto-popover-close" @click="goto.dismiss()">&times;</button>
         </div>
         <div class="goto-popover-body">
           <template v-if="goto.results.value.length === 0">
             <div class="goto-popover-empty">
               <template v-if="goto.mode.value === 'references'">未找到引用</template>
+              <template v-else-if="goto.mode.value === 'implementation'">未找到实现</template>
               <template v-else>
                 未找到定义 · <span class="goto-popover-hint" @click="onSearchAllReferences">搜索所有引用</span>
               </template>
