@@ -7,10 +7,10 @@ import type { AppNotification, NotificationRecord, NotificationSeverity } from "
  *
  * push 是纯前端内存操作（立即反映到 UI）；severity ∈ {error, warning} 时
  * debounce 500ms 触发 save_notifications 落盘；info 仅内存。
- * 读路径：启动时 hydrate() 一次从盘注入 error/warning 为未读。
+ * 读路径：启动时 hydrate() 一次从盘注入 error/warning，read 状态随之恢复（看过不再回未读）。
  *
  * 去重：dedupKey 命中未读项 → 原地更新（count++、timestamp 刷新）；命中已读项视为新条目。
- * 落盘内容：不含 info、不含已 dismiss 项、不含 read 状态（重启回到未读）。
+ * 落盘内容：不含 info、不含已 dismiss 项；含 read 状态（markAllRead 后落盘，看过重启不再提醒）。
  * 软上限 100 条，落盘时按 timestamp 降序截断（Rust 侧再兜一道）。
  *
  * action 派发：action.url → 浏览器打开（调用方处理）；无 url → triggerAction 查
@@ -46,6 +46,7 @@ function persistableRecords(): NotificationRecord[] {
       dedupKey: n.dedupKey,
       count: n.count,
       action: n.action,
+      read: n.read,
     }));
 }
 
@@ -137,8 +138,12 @@ export function useNotifications() {
     },
 
     markAllRead(): void {
-      for (const n of notifications.value) n.read = true;
-      // read 不落盘
+      let changed = false;
+      for (const n of notifications.value) {
+        if (!n.read) { n.read = true; changed = true; }
+      }
+      // 看过落盘 read——重启后保持已读、不再提醒
+      if (changed) scheduleSave();
     },
 
     async hydrate(): Promise<void> {
@@ -155,7 +160,7 @@ export function useNotifications() {
           dedupKey: r.dedupKey,
           count: r.count,
           action: r.action,
-          read: false,
+          read: r.read ?? false,
         }));
         loaded.sort((a, b) => b.timestamp - a.timestamp);
         // 合并：保留内存中已有（info 项不落盘，hydrate 不应覆盖它们）

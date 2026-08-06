@@ -77,13 +77,16 @@ describe("useNotifications", () => {
     expect(api.saveNotifications).toHaveBeenCalledTimes(1);
   });
 
-  it("markAllRead 只改 read 不落盘", async () => {
+  it("markAllRead 落盘 read=true（看过重启不再提醒）", async () => {
     push({ ...base("error"), id: undefined as never, title: "e", timestamp: 1 });
     await new Promise((r) => setTimeout(r, 600));
     (api.saveNotifications as any).mockClear();
     markAllRead();
     expect(unreadCount.value).toBe(0);
-    expect(api.saveNotifications).not.toHaveBeenCalled();
+    await new Promise((r) => setTimeout(r, 600)); // 等 debounce 落盘
+    expect(api.saveNotifications).toHaveBeenCalledTimes(1);
+    const sent = (api.saveNotifications as any).mock.calls[0][0] as any[];
+    expect(sent[0].read).toBe(true);
   });
 
   it("hydrate 注入落盘项为未读", async () => {
@@ -94,6 +97,16 @@ describe("useNotifications", () => {
     expect(notifications.value.length).toBe(1);
     expect(notifications.value[0].read).toBe(false);
     expect(unreadCount.value).toBe(1);
+  });
+
+  it("hydrate 恢复已读状态（看过的重启后保持已读、不再提醒）", async () => {
+    (api.loadNotifications as any).mockResolvedValue([
+      { id: "r1", severity: "error", source: "codegraph", title: "已处理", timestamp: 999, read: true },
+    ]);
+    await hydrate();
+    expect(notifications.value.length).toBe(1);
+    expect(notifications.value[0].read).toBe(true);
+    expect(unreadCount.value).toBe(0);
   });
 
   it("triggerAction 按 source 派发到注册的 handler", async () => {

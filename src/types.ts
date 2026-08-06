@@ -443,7 +443,7 @@ export interface AppNotification {
   read: boolean;
 }
 
-/** 落盘记录（无 read，info 不落盘）。镜像 Rust NotificationRecord。 */
+/** 落盘记录（info 不落盘；read 随条目持久化——看过重启不再回未读）。镜像 Rust NotificationRecord。 */
 export interface NotificationRecord {
   id: string;
   severity: "error" | "warning";
@@ -454,6 +454,7 @@ export interface NotificationRecord {
   dedupKey?: string;
   count?: number;
   action?: NotificationAction;
+  read?: boolean;
 }
 
 // ── 一次性迁移：从用户系统 ~/.claude/ 拷到 Aide 自管理目录 ──

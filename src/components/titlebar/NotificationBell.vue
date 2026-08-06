@@ -9,13 +9,22 @@ const { notifications, unreadCount, clearAll, markAllRead, dismiss, triggerActio
 
 const open2 = ref(false);
 const rootRef = ref<HTMLElement | null>(null);
+// 点击 bell-btn 触发 toggle 后，同一次 click 会继续冒泡到 document 触发 onDocClick。
+// 用此标记让"本次 toggle 对应的 click"不被 onDocClick 误关——修"有未读时首次点击
+// 面板不出现、再次点击才打开"。
+let suppressDocClick = false;
 
 function toggle() {
   open2.value = !open2.value;
   if (open2.value) markAllRead();
+  suppressDocClick = true;
 }
 
 function onDocClick(e: MouseEvent) {
+  if (suppressDocClick) {
+    suppressDocClick = false;
+    return;
+  }
   if (rootRef.value && !rootRef.value.contains(e.target as Node)) {
     open2.value = false;
   }

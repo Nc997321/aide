@@ -4,7 +4,7 @@
 //! - load_notifications：启动时拉取落盘的 error/warning 通知（info 不落盘）。
 //! - save_notifications：前端 debounce 500ms 后整份覆盖写。
 //!
-//! 落盘规则：只存 severity ∈ {error, warning}；不含 read 状态（重启回到未读）；
+//! 落盘规则：只存 severity ∈ {error, warning}；含 read 状态（看过重启保持已读、不再提醒）；
 //! 软上限 100 条，按 timestamp 降序截断。原子写：tmp + rename。
 //!
 //! 文件：~/.aide/notifications.json（与 diagnostics/recent 同根）。
@@ -29,8 +29,10 @@ pub struct NotificationAction {
     pub url: Option<String>,
 }
 
-/// 落盘记录。前端 AppNotification 去掉 read、去掉 info 项后的形态。
-/// serde camelCase 与前端字段对齐（dedupKey 等）。
+/// 落盘记录。前端 AppNotification 去掉 info 项后的形态（read 随条目保留——
+/// 看过的通知重启后保持已读、不再提醒）。
+/// serde camelCase 与前端字段对齐（dedupKey 等）。read 用 Option<bool>：
+/// None 兼容旧 notifications.json（无 read 字段，hydrate 时按未读处理）。
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationRecord {
@@ -43,6 +45,7 @@ pub struct NotificationRecord {
     pub dedup_key: Option<String>,
     pub count: Option<u64>,
     pub action: Option<NotificationAction>,
+    pub read: Option<bool>,
 }
 
 // ── 纯函数（无 IO，可单测）──
@@ -128,6 +131,7 @@ mod tests {
             dedup_key: None,
             count: None,
             action: None,
+            read: None,
         }
     }
 
