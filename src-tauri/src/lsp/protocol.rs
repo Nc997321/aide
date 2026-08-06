@@ -13,17 +13,22 @@ pub struct CmCompletion {
     pub kind: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub insert_text: Option<String>,
+    /// LSP filterText：过滤用文本（可能与 label/insertText 不同，如 label 带修饰后缀）。
+    /// 前端拿它给 CM 做前缀过滤，缺省回落 label。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_text: Option<String>,
 }
 
-/// LSP Location（无符号名）+ 查询词 → QueryResult。
-/// LSP 定义权威 → confidence=Structure；kind 无从得知 → 占位 Function（goto UI 走 name/file/line）。
-pub fn location_to_query_result(loc: &Location, queried_word: &str) -> QueryResult {
+/// LSP Location（无符号名）+ 查询词 + workspace_root → QueryResult。
+/// file 归一为相对 workspace_root 的路径（与 codegraph 一致；不在工作区则保留绝对，
+/// 前端 jumpToResult 兼容）。confidence=Structure；kind 无从得知 → 占位 Function。
+pub fn location_to_query_result(loc: &Location, queried_word: &str, workspace_root: &str) -> QueryResult {
     let start = loc.range.start;
     QueryResult {
         symbol: SymbolDef {
             name: queried_word.to_string(),
             kind: SymbolKind::Function, // 占位：LSP Location 不带 SymbolKind
-            file: uri_to_path(loc.uri.as_str()),
+            file: uri_to_rel_path(loc.uri.as_str(), workspace_root),
             line: (start.line + 1) as usize,    // LSP 0-based → 1-based
             column: (start.character + 1) as usize,
             parent: None,
@@ -35,8 +40,8 @@ pub fn location_to_query_result(loc: &Location, queried_word: &str) -> QueryResu
     }
 }
 
-pub fn locations_to_query_results(locs: &[Location], word: &str) -> Vec<QueryResult> {
-    locs.iter().map(|l| location_to_query_result(l, word)).collect()
+pub fn locations_to_query_results(locs: &[Location], word: &str, workspace_root: &str) -> Vec<QueryResult> {
+    locs.iter().map(|l| location_to_query_result(l, word, workspace_root)).collect()
 }
 
 pub fn completion_items_to_cm(items: &[CompletionItem]) -> Vec<CmCompletion> {
@@ -54,6 +59,7 @@ pub fn completion_items_to_cm(items: &[CompletionItem]) -> Vec<CmCompletion> {
                 serde_json::from_value::<i32>(serde_json::to_value(k).unwrap()).unwrap_or(0) as u32
             }),
             insert_text: it.insert_text.clone(),
+            filter_text: it.filter_text.clone(),
         })
         .collect()
 }
@@ -67,6 +73,23 @@ pub fn path_to_uri(path: &str) -> String {
         // Windows "C:/foo" → "file:///C:/foo"
         format!("file:///{}", normalized)
     }
+}
+
+/// 把可能相对的 file_path 解析成绝对 file:// URI：绝对路径直接转，相对路径先
+/// join workspace_root。LSP URI 必须绝对，且要与 didOpen 的 URI 对齐才能命中文档——
+/// 补全/hover 传绝对路径，定义跳转 useGotoDefinition 传相对 sourceFile，统一在此兜底，
+/// 让所有 lsp_* 命令对绝对/相对路径都正确，根除「定义 URI 缺工作区根 → server 找不到
+/// 文档 → 返空 → 退回 codegraph」这一 bug。
+pub fn resolve_file_uri(workspace_root: &str, file_path: &str) -> String {
+    let abs = if std::path::Path::new(file_path).is_absolute() {
+        file_path.to_string()
+    } else {
+        std::path::Path::new(workspace_root)
+            .join(file_path)
+            .to_string_lossy()
+            .into_owned()
+    };
+    path_to_uri(&abs)
 }
 
 /// file:// URI → 本地路径（用 `/`，前端与 codegraph 都用正斜杠）。
@@ -83,6 +106,23 @@ pub fn uri_to_path(uri: &str) -> String {
         rest.to_string()
     } else {
         uri.to_string()
+    }
+}
+
+/// file:// URI → 相对 workspace_root 的路径（与 codegraph 一致用相对路径）；URI 不在
+/// workspace 下则保留绝对路径（前端 jumpToResult 兼容两种形态）。统一正斜杠、大小写
+/// 不敏感（Windows 盘符 C:/c: 都能匹配），避免 jumpToResult 拼成 root+绝对（os error 123）。
+pub fn uri_to_rel_path(uri: &str, workspace_root: &str) -> String {
+    let abs = uri_to_path(uri); // 正斜杠绝对路径
+    let root = workspace_root.replace('\\', "/");
+    if root.is_empty() {
+        return abs;
+    }
+    let prefix = format!("{}/", root.to_lowercase());
+    if abs.to_lowercase().starts_with(&prefix) {
+        abs[root.len() + 1..].to_string() // 保留 abs 原始大小写
+    } else {
+        abs
     }
 }
 
@@ -106,13 +146,22 @@ mod tests {
     #[test]
     fn lsp_location_to_query_result() {
         let loc = make_location("file:///C:/proj/src/main.rs", 5, 10);
-        let qr = location_to_query_result(&loc, "my_fn");
+        let qr = location_to_query_result(&loc, "my_fn", "C:/proj");
         assert_eq!(qr.symbol.name, "my_fn");
-        assert_eq!(qr.symbol.file, "C:/proj/src/main.rs");
+        assert_eq!(qr.symbol.file, "src/main.rs"); // 相对工作区（与 codegraph 一致）
         assert_eq!(qr.symbol.line, 6);       // 1-based
         assert_eq!(qr.symbol.column, 11);    // 1-based
         assert_eq!(qr.confidence, Confidence::Structure);
         assert_eq!(qr.score, None);
+    }
+
+    #[test]
+    fn uri_to_rel_path_strips_workspace_and_case_insensitive() {
+        // 工作区内 → 相对（与 codegraph 一致），正斜杠 + 大小写不敏感（Windows 盘符）
+        assert_eq!(uri_to_rel_path("file:///C:/proj/src/a.rs", "C:/proj"), "src/a.rs");
+        assert_eq!(uri_to_rel_path("file:///C:/proj/src/a.rs", "c:\\proj"), "src/a.rs");
+        // 工作区外 → 保留绝对（前端 jumpToResult 兼容）
+        assert_eq!(uri_to_rel_path("file:///D:/other/x.rs", "C:/proj"), "D:/other/x.rs");
     }
 
     #[test]
@@ -138,6 +187,26 @@ mod tests {
     }
 
     #[test]
+    fn resolve_file_uri_relative_joins_workspace() {
+        // 定义跳转传相对 sourceFile 的兜底路径：join 工作区根 → 绝对 URI，
+        // 与 didOpen（绝对路径）的 URI 对齐才能命中文档。Path::is_absolute 平台相关，
+        // 故用 cfg 分流 Windows / Unix 路径。
+        #[cfg(windows)]
+        assert_eq!(resolve_file_uri("C:/proj", "src/main.ts"), "file:///C:/proj/src/main.ts");
+        #[cfg(not(windows))]
+        assert_eq!(resolve_file_uri("/home/proj", "src/main.ts"), "file:///home/proj/src/main.ts");
+    }
+
+    #[test]
+    fn resolve_file_uri_absolute_unchanged() {
+        // 补全/hover 走绝对路径：直接转，不重复 join（绝对路径再 join 会被截断/串接出错）。
+        #[cfg(windows)]
+        assert_eq!(resolve_file_uri("C:/proj", "C:/proj/src/main.rs"), "file:///C:/proj/src/main.rs");
+        #[cfg(not(windows))]
+        assert_eq!(resolve_file_uri("/home/proj", "/home/proj/src/main.rs"), "file:///home/proj/src/main.rs");
+    }
+
+    #[test]
     fn completion_items_map_label_detail_doc() {
         let items = vec![
             CompletionItem {
@@ -155,5 +224,21 @@ mod tests {
         assert_eq!(cm[0].detail.as_deref(), Some("fn foo()"));
         assert_eq!(cm[0].documentation.as_deref(), Some("docs"));
         assert!(cm[0].insert_text.as_deref() == Some("foo()"));
+        // filter_text 未设 → None（serde skip_serializing_if 不序列化，前端回落 label）
+        assert!(cm[0].filter_text.is_none());
+    }
+
+    #[test]
+    fn completion_items_map_filter_text() {
+        // label 是展示名（可能带修饰），filter_text 是过滤名（与 insert_text 对齐）——
+        // 前端拿 filter_text 给 CM 做前缀过滤，比拿 label 过滤更准。
+        let items = vec![CompletionItem {
+            label: "apiService".into(),
+            filter_text: Some("apiService".into()),
+            insert_text: Some("apiService".into()),
+            ..Default::default()
+        }];
+        let cm = completion_items_to_cm(&items);
+        assert_eq!(cm[0].filter_text.as_deref(), Some("apiService"));
     }
 }

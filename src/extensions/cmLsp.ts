@@ -103,10 +103,10 @@ class LspTracker {
     if (this.changeTimer) clearTimeout(this.changeTimer);
     this.unwatch?.();
     this.unwatch = null;
-    const { workspaceRoot, lang, filePath } = this.opts;
-    if (this.opts.enabled) {
-      api.lspDidClose(workspaceRoot, filePath, lang).catch(() => {});
-    }
+    // 不发 didClose：导航会重建 CodeEditor（destroy 旧 + create 新），若 didClose 再 didOpen
+    // 会让 jdtls 重新解析导入绑定（异步、秒级），回退后立刻跳转拿到空定义（降级）。
+    // 改为文档在 jdtls 里保持打开，lsp_did_open 去重已开文档；关 LSP 时 lspShutdownWorkspace
+    // 杀 jdtls 自然丢全部文档。（代价：jdtls 累积打开文档直到关 LSP/退出，可接受）
   }
 }
 
@@ -115,17 +115,38 @@ class LspTracker {
 function lspCompletionSource(workspaceRoot: string, filePath: string, lang: string) {
   return async (ctx: any): Promise<any> => {
     if (!workspaceRoot || (!ctx.explicit && ctx.state.doc.length === 0)) return null;
+    // 自动触发守卫：仅当前驱字符是词字符或成员触发符 . 才弹补全；空格/标点/换行
+    // 不触发（函数内按空格不应弹列表）。显式触发（Ctrl+Space，ctx.explicit）放行。
+    if (!ctx.explicit) {
+      const before = ctx.state.doc.sliceString(Math.max(0, ctx.pos - 1), ctx.pos);
+      if (!/[\w.]/.test(before)) return null;
+    }
     const pos = ctx.pos;
     const line = ctx.state.doc.lineAt(pos);
     const lineNum = line.number - 1;            // 0-based
     const col = pos - line.from;                // 0-based
+    const text = ctx.state.doc.toString();
+    // >1MB skip guard（与 LspTracker 对齐：超大文件不走 LSP）
+    if (text.length > 1_000_000) return null;
     try {
+      // 先同步 doc 再请求补全：didChange 被 LspTracker 防抖 300ms，若不在此显式刷，
+      // server 的 doc 落后于已输入字符——停顿后再按键（t 停顿再 a）会拿旧 doc 算
+      // 补全（常为空），列表消失。await 保证 didChange 先于 completion 入 stdio 管道，
+      // server 按序处理：先吃新 doc 再算补全，结果新鲜。
+      await api.lspDidChange(workspaceRoot, filePath, lang, text);
       const items = await api.lspCompletion(workspaceRoot, filePath, lineNum + 1, col + 1);
       if (!items.length) return null;
+      // from 锚到词首而非光标（词尾之后）：接受补全时替换已输入前缀，而非追加。
+      // 输 a 接受 apiService → 替换 a 得 apiService（非 aapiService）；输 ap 时 CM
+      // 用 from→光标 前缀过滤 = ap，apiService 命中。成员补全 apiService. 时
+      // matchBefore(/\w*/) 为空匹配 → from=光标，在 . 后追加，正确。
+      const from = ctx.matchBefore(/\w*/)?.from ?? ctx.pos;
       return {
-        from: ctx.pos,
+        from,
         options: items.map((it) => ({
-          label: it.insert_text || it.label,
+          label: it.label,
+          filterText: it.filter_text || undefined,
+          apply: it.insert_text || it.label,
           detail: it.detail,
           info: it.documentation ? () => renderMarkdown(it.documentation!) : undefined,
           type: completionKind(it.kind),

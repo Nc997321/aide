@@ -3,6 +3,17 @@ import { api } from "../api";
 import { useLsp } from "./useLsp";
 import type { GrepMatch, QueryResult } from "../types";
 
+/** 路径归一为「正斜杠、相对 projectRoot」形式，供跨 provider 自引用过滤比较。
+ *  LSP Location→QueryResult.file 是绝对路径（uri_to_path 出来），codegraph/grep
+ *  是相对路径，source.sourceFile 也是相对路径——三者形态不一，统一归一后再比，
+ *  避免 LSP 多结果时点击点自身因「绝对 ≠ 相对」而滤不掉、混进浮层。 */
+function normFile(root: string, p: string): string {
+  const r = root.replace(/\\/g, "/");
+  const x = p.replace(/\\/g, "/");
+  if (r && x.startsWith(r + "/")) return x.slice(r.length + 1);
+  return x;
+}
+
 // Module-level singleton
 const visible = ref(false);
 const results = ref<QueryResult[]>([]);
@@ -21,7 +32,7 @@ export function useGotoDefinition() {
   async function search(
     word: string,
     projectRoot: string,
-    source?: { sourceFile: string; sourceLine: number; sourceExt: string; sourceColumn?: number },
+    source?: { sourceFile: string; sourceFileAbs?: string; sourceLine: number; sourceExt: string; sourceColumn?: number },
   ) {
     if (!word || !projectRoot) return;
 
@@ -37,17 +48,21 @@ export function useGotoDefinition() {
 
     // 0. Try LSP first (workspace LSP on + server available → authoritative)
     try {
-      if (source?.sourceFile && useLsp().isLspOn(projectRoot)) {
+      if (source?.sourceFileAbs && useLsp().isLspOn(projectRoot)) {
+        // LSP 要绝对路径（与 didOpen 的 URI 对齐才能命中文档），用 sourceFileAbs；
+        // 自引用过滤也用绝对路径经 normFile 归一比较（LSP 结果 file 是绝对）。
+        const srcAbs = source.sourceFileAbs;
+        const srcLine = source.sourceLine;
         const lspResults = await api.lspDefinition(
           projectRoot,
-          source.sourceFile,
-          source.sourceLine,
+          srcAbs,
+          srcLine,
           source?.sourceColumn ?? 0,
           word,
         );
         if (lspResults.length > 0) {
           const filtered = lspResults.filter(
-            r => !(r.symbol.file === source.sourceFile && r.symbol.line === source.sourceLine),
+            r => !(normFile(projectRoot, r.symbol.file) === normFile(projectRoot, srcAbs) && r.symbol.line === srcLine),
           );
           if (filtered.length > 0) {
             results.value = filtered;
@@ -75,7 +90,7 @@ export function useGotoDefinition() {
         let filtered = cgResults;
         if (source?.sourceFile) {
           filtered = cgResults.filter(
-            r => !(r.symbol.file === source.sourceFile && r.symbol.line === source.sourceLine),
+            r => !(normFile(projectRoot, r.symbol.file) === normFile(projectRoot, source.sourceFile) && r.symbol.line === source.sourceLine),
           );
         }
         results.value = filtered;
@@ -91,7 +106,7 @@ export function useGotoDefinition() {
       let matches: GrepMatch[] = await api.grepSymbol(word, projectRoot, source?.sourceExt);
       if (source?.sourceFile) {
         matches = matches.filter(
-          m => !(m.file === source.sourceFile && m.line === source.sourceLine),
+          m => !(normFile(projectRoot, m.file) === normFile(projectRoot, source.sourceFile) && m.line === source.sourceLine),
         );
       }
       // Convert GrepMatch[] to QueryResult[] for unified rendering.

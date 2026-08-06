@@ -8,7 +8,7 @@
 
 use crate::lsp::registry::ServerProfile;
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// jdtls 元数据重定向系统属性（jdtls 1.54+ filesystem provider 读取）。
@@ -18,10 +18,23 @@ pub const METADATA_REDIRECT_ARG: &str =
 pub struct JavaProfile;
 
 impl ServerProfile for JavaProfile {
-    /// jdtls 的 -data（Eclipse workspace）：放项目 .aide/jdtls-workspace，
-    /// 元数据重定向目标随项目走（ALWAYS_IGNORE_DIRS 已覆盖 .aide，文件树隐藏）。
+    /// data 目录名（jdtls-workspace）。位置由下方 data_dir_path 覆写决定——jdtls 必须
+    /// 在工作区外（Eclipse 拒绝项目包含自己的 data 目录，报 overlaps → 拒导项目 →
+    /// 定义/补全全空，bug4 真因），不走默认的 <workspace>/.aide/。
     fn data_dir_name(&self) -> Option<&'static str> {
         Some("jdtls-workspace")
+    }
+
+    /// jdtls 特例覆写：data 目录放 app_data_dir/lsp/jdtls-workspace/<工作区id>（工作区外）。
+    /// 工作区路径派生 id 隔离多工作区；元数据重定向（generatesMetadataFilesAtProjectRoot=false）
+    /// 把 .project/.classpath/.settings 重定向到 -data 的 metadata 区，项目根零污染。
+    fn data_dir_path(&self, workspace: &str, config_dir: &Path) -> Option<PathBuf> {
+        let name = self.data_dir_name()?;
+        let ws_id: String = workspace
+            .chars()
+            .map(|c| if c == ':' || c == '\\' || c == '/' { '_' } else { c })
+            .collect();
+        Some(config_dir.join("lsp").join(name).join(ws_id))
     }
 
     fn launch_args(&self, data_dir: Option<&Path>) -> Vec<String> {
@@ -124,5 +137,18 @@ mod tests {
         assert_eq!(prog, "jdtls");
         assert!(args.contains(&"-data".to_string()));
         assert!(args.iter().any(|a| a.starts_with("--jvm-arg=")));
+    }
+
+    #[test]
+    fn jdtls_data_dir_outside_workspace_and_per_workspace() {
+        // bug4 真因回归：jdtls -data 必须在工作区【外】，否则 Eclipse 拒导项目（overlaps）。
+        let cfg = std::path::Path::new("/home/u/.aide");
+        let p = JavaProfile.data_dir_path("C:\\proj\\alpha", cfg).expect("Some");
+        // 在 app_data_dir/lsp/jdtls-workspace/<ws_id> 下
+        assert!(p.starts_with(cfg.join("lsp").join("jdtls-workspace")));
+        // 不在工作区内（overlap 会让 jdtls 拒导项目）
+        assert!(!p.starts_with(std::path::PathBuf::from("C:\\proj\\alpha")));
+        // 不同工作区隔离（不串数据）
+        assert_ne!(p, JavaProfile.data_dir_path("C:\\proj\\beta", cfg).expect("Some"));
     }
 }

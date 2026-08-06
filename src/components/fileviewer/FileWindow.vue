@@ -205,7 +205,7 @@ async function onGotoDefinition(payload: { word: string; filePath: string; line:
     ? payload.filePath.slice(root.length + sep.length).replace(/\\/g, "/")
     : "";
   const ext = payload.filePath.split(".").pop()?.toLowerCase() || "";
-  await goto.search(payload.word, root, { sourceFile: relPath, sourceLine: payload.line, sourceExt: ext, sourceColumn: payload.column });
+  await goto.search(payload.word, root, { sourceFile: relPath, sourceFileAbs: payload.filePath, sourceLine: payload.line, sourceExt: ext, sourceColumn: payload.column });
 
   // Auto-jump on single result
   if (goto.results.value.length === 1) {
@@ -222,7 +222,11 @@ function jumpToResult(item: QueryResult) {
   const root = projectRoot.value;
   if (!root) return;
   const separator = root.includes("\\") ? "\\" : "/";
-  const fullPath = root + separator + item.symbol.file.replace(/\//g, separator);
+  // symbol.file 通常是相对工作区（codegraph/LSP 都归一到相对）；LSP 跨工作区定义
+  // （如外部库源）会是绝对路径——绝对直接用，相对才拼 root，避免拼成 root+绝对（os error 123）。
+  const norm = item.symbol.file.replace(/[\\/]/g, separator);
+  const isAbs = /^[A-Za-z]:[\\/]/.test(norm) || /^[\\/]/.test(norm);
+  const fullPath = isAbs ? norm : root + separator + norm;
   // 就地覆盖当前窗口（压栈），不新开窗口；后退箭头逐级弹回
   void navigateInPlace(props.win.id, fullPath, {
     line: item.symbol.line,

@@ -145,7 +145,9 @@ async function loadIntoWindow(win: FileWindowState, path: string) {
     blobUrls.delete(win.id);
   }
 
-  win.filePath = path;
+  // 先清非触发字段 + 读内容（async），最后才赋 filePath——filePath 改变触发
+  // CodeEditor watch 重建并 cmLsp didOpen，必须在 editContent 已就位后才赋，
+  // 否则 didOpen 发空 text、jdtls 把文件当空、跳转定义解析不到（跳转后 [] 真因）。
   win.fileName = fileNameOf(path);
   win.content = "";
   win.editContent = "";
@@ -158,28 +160,38 @@ async function loadIntoWindow(win: FileWindowState, path: string) {
   win.mdMode = "preview";
   win.scrollToLine = null;
 
+  let content = "";
+  let imageUrl = "";
+  let readonly = false;
+  let error = "";
   const mime = imageMimeFromPath(path);
   if (mime) {
     // 图片：读取原始字节并构造 Blob URL，避免 UTF-8 解码失败。
     try {
       const buf = await api.readFileBinary(path);
       const blob = new Blob([buf], { type: mime });
-      const url = URL.createObjectURL(blob);
-      blobUrls.set(win.id, url);
-      win.imageUrl = url;
-      win.readonly = true;
+      imageUrl = URL.createObjectURL(blob);
+      blobUrls.set(win.id, imageUrl);
+      readonly = true;
     } catch (e) {
-      win.error = String(e);
+      error = String(e);
     }
   } else {
     try {
-      win.content = await api.readFileContent(path);
-      win.editContent = win.content;
-      if (win.content.length > MAX_EDITABLE_SIZE) win.readonly = true;
+      content = await api.readFileContent(path);
+      if (content.length > MAX_EDITABLE_SIZE) readonly = true;
     } catch (e) {
-      win.error = String(e);
+      error = String(e);
     }
   }
+
+  win.content = content;
+  win.editContent = content;
+  win.imageUrl = imageUrl;
+  win.readonly = readonly;
+  win.error = error;
+  win.filePath = path; // ← 最后赋：触发 CodeEditor watch 时 editContent 已就位
+
   // 记录最近访问文件（best effort，绝不阻断打开主流程）
   void useRecent().recordFile(path, win.fileName);
 }

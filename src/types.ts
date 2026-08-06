@@ -482,6 +482,8 @@ export interface CmCompletion {
   documentation?: string;
   kind?: number;
   insert_text?: string;
+  /** LSP filterText：过滤用文本（可能与 label/insert_text 不同）。CM 用它做前缀过滤。 */
+  filter_text?: string;
 }
 
 // ── Provider action types ──

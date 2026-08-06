@@ -278,14 +278,14 @@ async fn spawn_and_init(
 
 // ── spawn_real（生产）──
 
-/// 按语言档案准备隔离数据目录：`<workspace>/.aide/<name>`（name 由 profile 声明，
-/// 如 jdtls 的 jdtls-workspace）。.aide 已在 ALWAYS_IGNORE_DIRS：文件树隐藏、不索引。
-async fn prepare_data_dir(workspace: &str, name: &str) -> Result<std::path::PathBuf, EnsureError> {
-    let dir = std::path::PathBuf::from(workspace).join(".aide").join(name);
-    tokio::fs::create_dir_all(&dir)
+/// 按 profile 给定的路径建 data 目录。位置由 profile.data_dir_path 自决——
+/// 默认 <workspace>/.aide/<name>（工作区内），jdtls 覆写移到工作区外（见
+/// profiles/java.rs：Eclipse 拒绝项目包含自己的 data 目录）。manager 不掺语言特有逻辑。
+async fn ensure_data_dir(path: std::path::PathBuf) -> Result<std::path::PathBuf, EnsureError> {
+    tokio::fs::create_dir_all(&path)
         .await
-        .map_err(|e| EnsureError::SpawnFailed(format!("create {name} data dir: {e}")))?;
-    Ok(dir)
+        .map_err(|e| EnsureError::SpawnFailed(format!("create data dir {}: {e}", path.display())))?;
+    Ok(path)
 }
 
 /// 组 spawn 命令。Windows 上 .bat/.cmd 不能直接 CreateProcess（实测报"找不到文件"/
@@ -327,9 +327,11 @@ async fn spawn_real(
     // 供 spawn_and_init 在 channel closed 时拼出"rustup proxy 报 Unknown binary..."这类关键线索。
     let stderr_lines: Arc<TokioMutex<Vec<String>>> = Arc::new(TokioMutex::new(Vec::new()));
 
-    // 隔离数据目录（如 jdtls 的 -data Eclipse workspace）由语言档案声明，manager 只做通用准备。
-    let data_dir = match crate::lsp::profiles::profile(lang).data_dir_name() {
-        Some(name) => Some(prepare_data_dir(workspace, name).await?),
+    // 隔离数据目录由 profile.data_dir_path 自决位置（默认 <workspace>/.aide/<name>，
+    // jdtls 覆写移到工作区外），manager 只负责按此路径建目录。
+    let config_dir = crate::commands::our_config_dir();
+    let data_dir = match crate::lsp::profiles::profile(lang).data_dir_path(workspace, &config_dir) {
+        Some(path) => Some(ensure_data_dir(path).await?),
         None => None,
     };
     let (program, args) = registry::to_command(lang, src, data_dir.as_deref());

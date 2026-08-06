@@ -86,9 +86,25 @@ pub async fn lsp_did_open(
         Ok(h) => h, Err(_) => return Ok(()),
     };
     // §5.4 排除集跳过
-    if crate::lsp::manager::is_excluded(&file_path, &h.exclude_globs) { return Ok(()); }
-    let uri = crate::lsp::protocol::path_to_uri(&file_path);
-    h.docs.lock().await.open(uri.clone(), text.clone());
+    if crate::lsp::manager::is_excluded(&file_path, &h.exclude_globs) {
+        return Ok(());
+    }
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    // 去重：文档已在 jdtls 打开（导航回退时 cmLsp 不发 didClose，文档保持打开）→
+    // 跳过重发 didOpen，否则 jdtls 报 "document already open"，且省去重新解析导入绑定
+    // 的秒级延迟（回退后立刻跳转才拿得到定义）。
+    let already_open = {
+        let mut docs = h.docs.lock().await;
+        if docs.contains(&uri) {
+            true
+        } else {
+            docs.open(uri.clone(), text.clone());
+            false
+        }
+    };
+    if already_open {
+        return Ok(());
+    }
     let notif = serde_json::json!({
         "jsonrpc":"2.0","method":"textDocument/didOpen",
         "params":{"textDocument":{"uri":uri,"languageId":lang,"version":1,"text":text}}
@@ -104,7 +120,7 @@ pub async fn lsp_did_change(
     let Some(lang_id) = lang_from_id_str(&lang) else { return Ok(()); };
     let mgr = state.0.lock().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(()); };
-    let uri = crate::lsp::protocol::path_to_uri(&file_path);
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
     // 防御：前端漏发 did_open / 乱序时 OpenDocs::change 会 panic。未开 → 跳过，不崩。
     {
         let docs = h.docs.lock().await;
@@ -130,7 +146,7 @@ pub async fn lsp_did_close(
     let Some(lang_id) = lang_from_id_str(&lang) else { return Ok(()); };
     let mgr = state.0.lock().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(()); };
-    let uri = crate::lsp::protocol::path_to_uri(&file_path);
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
     h.docs.lock().await.close(&uri);
     let notif = serde_json::json!({
         "jsonrpc":"2.0","method":"textDocument/didClose",
@@ -148,7 +164,7 @@ pub async fn lsp_definition(
     let Some(lang_id) = lang else { return Ok(vec![]); };
     let mgr = state.0.lock().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(vec![]); };
-    let uri = crate::lsp::protocol::path_to_uri(&file_path);
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
     let params = serde_json::json!({
         "textDocument":{"uri":uri},
         "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
@@ -159,7 +175,7 @@ pub async fn lsp_definition(
     let result = rx.await.map_err(|_| "server closed".to_string())?;
     // result 是 null / Location / Location[]
     let locs = parse_locations(&result);
-    Ok(crate::lsp::protocol::locations_to_query_results(&locs, &word))
+    Ok(crate::lsp::protocol::locations_to_query_results(&locs, &word, &workspace_root))
 }
 
 #[tauri::command]
@@ -170,7 +186,7 @@ pub async fn lsp_completion(
     let Some(lang_id) = lang_from_ext_of(&file_path) else { return Ok(vec![]); };
     let mgr = state.0.lock().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(vec![]); };
-    let uri = crate::lsp::protocol::path_to_uri(&file_path);
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
     let params = serde_json::json!({
         "textDocument":{"uri":uri},
         "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
@@ -191,7 +207,7 @@ pub async fn lsp_hover(
     let Some(lang_id) = lang_from_ext_of(&file_path) else { return Ok(serde_json::json!({"content":null})); };
     let mgr = state.0.lock().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(serde_json::json!({"content":null})); };
-    let uri = crate::lsp::protocol::path_to_uri(&file_path);
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
     let params = serde_json::json!({
         "textDocument":{"uri":uri},
         "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
@@ -312,7 +328,7 @@ mod tests {
                 "end":   { "line": 3, "character": 8 },
             }
         })).unwrap()];
-        let r = crate::lsp::protocol::locations_to_query_results(&locs, "foo");
+        let r = crate::lsp::protocol::locations_to_query_results(&locs, "foo", "C:/p");
         assert_eq!(r[0].symbol.name, "foo");
         assert_eq!(r[0].symbol.line, 4);
         assert_eq!(r[0].symbol.column, 6);
@@ -353,8 +369,8 @@ mod tests {
         let result = pump_until(&mut reader, &mut framer, &table_r, rx).await.unwrap();
         let locs = parse_locations(&result);
         assert_eq!(locs.len(), 1);
-        let qr = crate::lsp::protocol::locations_to_query_results(&locs, "sym");
-        assert_eq!(qr[0].symbol.file, "/mock/def.rs");
+        let qr = crate::lsp::protocol::locations_to_query_results(&locs, "sym", "/mock");
+        assert_eq!(qr[0].symbol.file, "def.rs"); // 相对 mock workspace root
     }
 
     async fn pump_until(

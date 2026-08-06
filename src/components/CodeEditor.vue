@@ -48,6 +48,10 @@ const ext = computed(() => {
 });
 
 const themeCompartment = new Compartment();
+// cmLsp 用 compartment 包，使 LSP 开关变化（先开文件后开 LSP）能 reconfigure
+// 触发 didOpen/didClose——否则 cmLsp 以 createEditor 时的 enabled 固化，后开的
+// LSP 不会 didOpen 已开文件 → server 无该文档 → 跳转/补全返空（bug4 真因）。
+const lspCompartment = new Compartment();
 
 // ── Editor lifecycle ──
 
@@ -93,14 +97,16 @@ async function createEditor() {
       updateListener,
       ctrlHoverHighlight(),
       ...(props.scrollMemory ? [cmScrollMemory(props.scrollMemory)] : []),
-      ...(props.workspaceRoot && props.lspLang
-        ? [cmLsp({
-            workspaceRoot: props.workspaceRoot,
-            enabled: useLsp().isLspOn(props.workspaceRoot),
-            lang: props.lspLang,
-            filePath: props.filePath,
-          })]
-        : []),
+      lspCompartment.of(
+        props.workspaceRoot && props.lspLang
+          ? cmLsp({
+              workspaceRoot: props.workspaceRoot,
+              enabled: useLsp().isLspOn(props.workspaceRoot),
+              lang: props.lspLang,
+              filePath: props.filePath,
+            })
+          : []
+      ),
       EditorView.domEventHandlers({
         click(event, view) {
           if (event.ctrlKey || event.metaKey) {
@@ -401,6 +407,24 @@ watch(
   () => {
     createEditor();
   }
+);
+
+// ── LSP 开关变化（先开文件后开 LSP / LspIndicator 关 LSP）：reconfigure cmLsp，
+// 触发 LspTracker 构造→didOpen / destroy→didClose。不加此 watch，cmLsp 以
+// createEditor 时的 enabled 固化，后开的 LSP 不会 didOpen 已开文件，server 没有
+// 该文档，lspDefinition/lspCompletion 一律返空（bug4 真因）。
+watch(
+  () => (props.workspaceRoot && props.lspLang ? useLsp().isLspOn(props.workspaceRoot) : false),
+  (on) => {
+    if (!view) return;
+    view.dispatch({
+      effects: lspCompartment.reconfigure(
+        props.workspaceRoot && props.lspLang
+          ? cmLsp({ workspaceRoot: props.workspaceRoot, enabled: on, lang: props.lspLang, filePath: props.filePath })
+          : []
+      ),
+    });
+  },
 );
 
 // ── Expose scrollToLine ──

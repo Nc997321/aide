@@ -1,6 +1,6 @@
 use crate::commands::settings::{AppSettings, ServerOverride};
 use crate::lsp::detector::LanguageId;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 // ── ServerProfile：语言 server 启动档案（策略模式） ──
@@ -13,10 +13,19 @@ pub trait ServerProfile {
         None
     }
 
-    /// 需要的隔离数据目录名（放在 `<workspace>/.aide/<name>`，如 jdtls 的
-    /// `-data` Eclipse workspace）。None = 不需要（默认）。
+    /// 隔离数据目录名。默认 data_dir_path 放 `<workspace>/.aide/<name>`（.aide 隐藏）。
+    /// None = 不需要（默认）。jdtls 用此名但位置不同（见 data_dir_path 覆写）。
     fn data_dir_name(&self) -> Option<&'static str> {
         None
+    }
+
+    /// data 目录完整路径。默认：`<workspace>/.aide/<data_dir_name>`（工作区内，.aide 隐藏）。
+    /// 语言特例可覆写——jdtls 必须在工作区【外】（Eclipse 拒绝项目包含自己的 data 目录，
+    /// 报 overlaps → 拒导项目 → 定义/补全全空，bug4 真因），Java profile 覆写此方法移到
+    /// app_data_dir 下。其他语言不覆写则走默认，不受影响。
+    fn data_dir_path(&self, workspace: &str, _config_dir: &Path) -> Option<PathBuf> {
+        let name = self.data_dir_name()?;
+        Some(PathBuf::from(workspace).join(".aide").join(name))
     }
 
     /// 语言特有启动参数（含标准 `--stdio`——除 jdtls 默认即 stdio 外都走 stdio）。
@@ -241,5 +250,17 @@ mod tests {
         });
         let picked = pick_source(settings.lsp.servers.get("rust"), bundled, None);
         assert!(matches!(picked, Some(ServerSource::Bundled { .. })));
+    }
+
+    #[test]
+    fn default_data_dir_path_inside_workspace_aide() {
+        // 默认 data_dir_path 放 <workspace>/.aide/<name>（工作区内）——非 jdtls 语言走此
+        // 默认，不受 Java 覆写影响。jdtls 必须在工作区外故覆写（见 profiles/java.rs）。
+        struct Dummy;
+        impl ServerProfile for Dummy {
+            fn data_dir_name(&self) -> Option<&'static str> { Some("dummy-ws") }
+        }
+        let p = Dummy.data_dir_path("/proj", Path::new("/home/u/.aide")).expect("Some");
+        assert_eq!(p, PathBuf::from("/proj").join(".aide").join("dummy-ws"));
     }
 }
