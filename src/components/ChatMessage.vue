@@ -5,6 +5,7 @@ import { renderStreaming, renderMarkdown } from "@/utils/markdown";
 import ToolCallBlock from "./ToolCallBlock.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
+import ThinkingBlock from "./ThinkingBlock.vue";
 import TurnUsageBadge from "./TurnUsageBadge.vue";
 import { segmentBlocks, isChangeTool, type Segment } from "@/utils/blockSegments";
 import { useFileResolver } from "@/composables/useFileResolver";
@@ -124,6 +125,10 @@ function handleTextClick(e: MouseEvent) {
           class="msg-text"
           v-html="blockHtml(seg.block.text, seg.index)"
           @click="handleTextClick"
+        />
+        <ThinkingBlock
+          v-else-if="seg.block.type === 'thinking'"
+          :text="seg.block.text"
         />
         <ToolCallBlock
           v-else-if="seg.block.type === 'tool_call'"

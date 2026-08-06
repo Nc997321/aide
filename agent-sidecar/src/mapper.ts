@@ -489,6 +489,13 @@ export function mapSdkMessage(
         // 这里再发会重复——但 index.ts 现在不开 partial，所以这是唯一来源。
         if (block.text) emit(withModel({ type: "text_delta", delta: block.text }));
         continue;
+      } else if (block.type === "thinking") {
+        // 主线程 thinking block 整块转发（partial-off 下思考在 assistant content 里
+        // 一次性到达，非逐字增量）。文本为空时跳过——provider 用 display=omitted
+        // 时 block 在但 text 空，前端没东西可渲染。partial-on 的逐字 thinking_delta
+        // 走 stream_event 分支，当前不开 partial，这里就是唯一来源。
+        if (block.thinking) emit({ type: "thinking", text: block.thinking });
+        continue;
       } else if (block.type === "tool_use") {
         // 插队安全边界判断的账本：不管是普通工具、Task/Agent 子代理还是内置
         // Task* 工具，从主线程视角都是"一步指令，结果没回来之前不能打断"。

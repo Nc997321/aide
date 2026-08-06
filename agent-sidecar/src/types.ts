@@ -64,6 +64,10 @@ export type ChatEvent =
   // 别名表给出的展示建议（系统默认下是 "sonnet" 这类；第三方常解析出 Claude
   // 别名，前端按「在可选项列表里」校验，不在列回退 model 原文）。
   | { type: "text_delta"; delta: string; model?: string; modelLabel?: string }
+  // 主线程 thinking block 整块（partial-off 下 assistant 消息 content 里一次性到达，
+  // 非逐字增量）。不盖 model/modelLabel——模型徽标由同消息首个 text/tool_use 块盖，
+  // 思考块不抢。text 空时（provider 用 display=omitted）sidecar 直接不发。
+  | { type: "thinking"; text: string }
   | { type: "tool_use_start"; id: string; name: string; input: unknown; model?: string; modelLabel?: string }
   | { type: "tool_result"; id: string; content: string; is_error: boolean }
   | { type: "subagent_start"; id: string; agentName: string; description: string; prompt?: string; model?: string; modelLabel?: string }

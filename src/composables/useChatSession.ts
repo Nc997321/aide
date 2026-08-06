@@ -16,6 +16,7 @@ import type {
   SubagentEntry,
   TaskItem,
   TextBlock,
+  ThinkingBlock,
   ToolCallBlock,
   ImageBlock,
   ActionBlock,
@@ -497,6 +498,18 @@ function handleChatEvent(e: Record<string, unknown>) {
       }
       break;
     }
+    case "thinking": {
+      // 主线程 thinking block 整块（partial-off）。连续 thinking 合并到同一 block，
+      // 与 text_delta 同形。不盖 model——thinking 事件不带 model/modelLabel。
+      const msg = getOrCreateAssistant(store);
+      const last = msg.blocks[msg.blocks.length - 1];
+      if (last?.type === "thinking") {
+        (last as ThinkingBlock).text += e["text"] as string;
+      } else {
+        msg.blocks.push({ type: "thinking", text: e["text"] as string });
+      }
+      break;
+    }
     case "tool_use_start": {
       const msg = getOrCreateAssistant(store);
       stampMessageModel(msg, e);
@@ -945,7 +958,7 @@ async function hydrate(sid: string) {
 function historyBlockToContentBlocks(
   block: HistoryBlock,
   isUser: boolean,
-): (TextBlock | ToolCallBlock)[] {
+): (TextBlock | ThinkingBlock | ToolCallBlock)[] {
   if (block.type === "tool_call") {
     return [{
       type: "tool_call",
@@ -956,6 +969,11 @@ function historyBlockToContentBlocks(
       isError: block.isError ?? undefined,
       isPending: false,
     }];
+  }
+  if (block.type === "thinking") {
+    // 历史思考块：text 空（provider display=omitted）时 Rust 侧照常保留维持顺序，
+    // 前端按非空才发——空的不进 blocks，避免空思考区。
+    return block.text ? [{ type: "thinking", text: block.text }] : [];
   }
   if (!isUser) return [{ type: "text", text: block.text }];
   const { displayText, sections } = splitMentionSections(block.text);

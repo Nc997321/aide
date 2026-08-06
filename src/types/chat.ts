@@ -65,7 +65,15 @@ export interface ActionBlock {
   hint?: string; // 折叠头尾部提示,如"不进上下文"
 }
 
-export type ContentBlock = TextBlock | ToolCallBlock | ImageBlock | SubagentBlock | ActionBlock;
+/** 主线程思考块——sidecar 把 assistant 消息 content 里的 thinking block 整块转发
+ *  （partial-off 下非逐字）。文本为空时 sidecar 直接不发，故此处 text 必非空。
+ *  视觉对齐子代理 .sa-thinking（灰斜体小字），渲染在它对应的 text/tool_use 之前。 */
+export interface ThinkingBlock {
+  type: "thinking";
+  text: string;
+}
+
+export type ContentBlock = TextBlock | ThinkingBlock | ToolCallBlock | ImageBlock | SubagentBlock | ActionBlock;
 
 export interface TurnUsage {
   inputTokens: number;

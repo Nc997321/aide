@@ -498,6 +498,10 @@ fn parse_transcript_lines(lines: &[String]) -> Vec<ChatMessageItem> {
                         .get("text")
                         .and_then(|t| t.as_str())
                         .map(|t| HistoryBlock::Text { text: t.to_string() }),
+                    Some("thinking") => block
+                        .get("thinking")
+                        .and_then(|t| t.as_str())
+                        .map(|t| HistoryBlock::Thinking { text: t.to_string() }),
                     Some("tool_use") => {
                         let id = block.get("id").and_then(|t| t.as_str())?.to_string();
                         let name = block.get("name").and_then(|t| t.as_str())?.to_string();

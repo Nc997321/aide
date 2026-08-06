@@ -904,6 +904,10 @@ export class SessionWorker {
               ...(this.currentModel ? { model: this.currentModel } : {}),
               // effort 的 spawn 通道（会话中切换走 set_effort → applyFlagSettings）。
               ...(this.currentEffort ? { effort: this.currentEffort as EffortLevel } : {}),
+              // 请求可读思考文本：Claude 官方模型 thinking.display 默认 omitted（block
+              // 在但 text 空），显式 summarized 才回可读摘要。GLM 等第三方不一定认此
+              // 参数但无害——主线程思考展示的兜底保险（诊断见 docs/mockups/）。
+              thinking: { type: "adaptive" as const, display: "summarized" as const },
               ...(cwd ? { cwd } : {}),
               ...(this.cwd && !cwd ? { cwd: this.cwd } : {}),
               ...(process.env.AIDE_CLAUDE_EXE

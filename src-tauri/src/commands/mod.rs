@@ -68,6 +68,11 @@ pub enum HistoryBlock {
         result: Option<String>,
         is_error: Option<bool>,
     },
+    /// 主线程思考块——Claude CLI 落盘的 assistant 消息 content 里的 thinking block。
+    /// text 可能空（provider 用 display=omitted 时 block 在但 text 空）；前端按非空
+    /// 才渲染思考区，空的不显示，故空值也照常保留以维持 block 顺序。
+    #[serde(rename = "thinking")]
+    Thinking { text: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
