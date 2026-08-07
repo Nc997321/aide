@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from "vue";
+import { ref, computed, reactive, watch } from "vue";
 import type { PermissionRequest } from "@/types/chat";
 import type { PermissionRuleDraft, PermissionScope } from "@/types/permissions";
 import { deriveRememberRule, describeRememberRule } from "@/utils/permissionRuleDerivation";
@@ -73,6 +73,23 @@ const eyebrowLabel = computed(() => {
   if (kind.value === "question") return "需要澄清";
   return "工具调用请求";
 });
+
+/** 折叠态：计划批准 / 澄清提问弹窗较高，与顶部 TaskListPanel 一同挤压时会把消息区
+ *  夹到几乎不可见（perm-dock max-height 45vh）。右上角折叠按钮把正文收起、只留头部
+ *  条，把高度还给 .chat-messages（flex:1 自动回收），用户回看上文后再展开决定。
+ *  仅 plan / question 给按钮——工具调用弹窗本就矮（输入封顶 128px），折叠省不了多少。
+ *  组件常驻挂载（外层 v-if 在内层 .perm-dock），collapsed 会跨请求残留，故新请求到达
+ *  时复位为展开，否则下一条计划会被默认收起、用户看不到新内容。 */
+const collapsed = ref(false);
+function toggleCollapse() {
+  collapsed.value = !collapsed.value;
+}
+watch(
+  () => props.permission?.id,
+  () => {
+    collapsed.value = false;
+  },
+);
 
 const planHtml = computed(() => {
   if (!isPlanApproval.value) return "";
@@ -221,7 +238,18 @@ const inputJson = computed(() => {
           </span>
         </div>
         <span v-if="(queueCount ?? 0) > 1" class="perm-queue-badge">还有 {{ (queueCount ?? 0) - 1 }} 条待确认</span>
+        <button
+          v-if="isPlanApproval || isQuestion"
+          type="button"
+          class="perm-collapse"
+          :aria-expanded="collapsed ? 'false' : 'true'"
+          :title="collapsed ? '展开' : '收起'"
+          @click="toggleCollapse"
+        >
+          <span class="perm-collapse-caret">{{ collapsed ? "▴" : "▾" }}</span>
+        </button>
       </div>
+      <div class="perm-body" v-show="!collapsed">
       <!-- 标注这次请求是主线程还是某个子代理发起的——没有它，子代理跑到一半突然
            弹出权限框，用户完全不知道是谁在问（子代理没有独立窗口，只有一张可折叠
            的进度卡片，很容易被当成"平白无故弹出来的"）。 -->
@@ -334,6 +362,7 @@ const inputJson = computed(() => {
             </template>
           </div>
         </template>
+      </div>
       </div>
     </div>
   </div>
@@ -449,6 +478,35 @@ const inputJson = computed(() => {
   border-radius: var(--aide-radius-sm);
   padding: 1px 6px;
   white-space: nowrap;
+}
+
+/* 折叠按钮：头部最右的小 ghost 图标按钮，▾/▴ 三角 caret 对齐 BgTaskDock 的开合范式
+   （全项目三角箭头统一 14px，不走 Icon 组件）。仅 plan / question 渲染。 */
+.perm-collapse {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--aide-radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  transition: all var(--aide-ease-t);
+  font-family: inherit;
+}
+
+.perm-collapse:hover {
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
+  border-color: var(--aide-border);
+}
+
+.perm-collapse-caret {
+  font-size: 14px;
+  line-height: 1;
 }
 
 .perm-subagent-badge {

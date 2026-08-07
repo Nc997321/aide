@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
 import { mount } from "@vue/test-utils";
+import { nextTick } from "vue";
 import PermissionDialog from "./PermissionDialog.vue";
 import type { PermissionRequest } from "../types/chat";
 
@@ -123,5 +124,89 @@ describe("PermissionDialog — 进入编辑模式", () => {
       props: { permission: editPermission(), currentMode: "" },
     });
     expect(wrapper.find('[data-action="edit-mode"]').exists()).toBe(true);
+  });
+});
+
+describe("PermissionDialog — 折叠（计划批准 / 澄清提问）", () => {
+  const planPermission = (): PermissionRequest => ({
+    id: "pp1",
+    name: "ExitPlanMode",
+    input: { plan: "做这件事\n1. 第一步\n2. 第二步" },
+  });
+  const questionPermission = (): PermissionRequest => ({
+    id: "qq1",
+    name: "AskUserQuestion",
+    input: {
+      questions: [
+        {
+          question: "用哪个？",
+          header: "选择",
+          options: [
+            { label: "A", description: "" },
+            { label: "B", description: "" },
+          ],
+        },
+      ],
+    },
+  });
+
+  /** perm-body 的内联 display——v-show 直接设这个。jsdom 的 getComputedStyle 对
+   *  v-show 的 display:none 不可靠（isVisible() 时真时假、且不遍历祖先），改读
+   *  element.style.display 这条确定性信号：展开="" / 收起="none"。 */
+  const bodyDisplay = (w: ReturnType<typeof mount>): string =>
+    (w.find(".perm-body").element as HTMLElement).style.display;
+
+  it("计划批准默认展开，点折叠按钮收起正文、再点展开", async () => {
+    const wrapper = mount(PermissionDialog, { props: { permission: planPermission() } });
+    expect(bodyDisplay(wrapper)).toBe("");
+    expect(wrapper.find(".perm-collapse-caret").text()).toBe("▾");
+    expect(wrapper.find(".perm-collapse").attributes("aria-expanded")).toBe("true");
+    await wrapper.get(".perm-collapse").trigger("click");
+    await nextTick();
+    expect(bodyDisplay(wrapper)).toBe("none");
+    expect(wrapper.find(".perm-collapse-caret").text()).toBe("▴");
+    expect(wrapper.find(".perm-collapse").attributes("aria-expanded")).toBe("false");
+    await wrapper.get(".perm-collapse").trigger("click");
+    await nextTick();
+    expect(bodyDisplay(wrapper)).toBe("");
+    expect(wrapper.find(".perm-collapse-caret").text()).toBe("▾");
+  });
+
+  it("澄清提问同样可折叠", async () => {
+    const wrapper = mount(PermissionDialog, { props: { permission: questionPermission() } });
+    expect(wrapper.find(".perm-collapse").exists()).toBe(true);
+    await wrapper.get(".perm-collapse").trigger("click");
+    await nextTick();
+    expect(bodyDisplay(wrapper)).toBe("none");
+  });
+
+  it("工具调用弹窗不渲染折叠按钮（弹窗本就矮，折叠无意义）", () => {
+    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+    expect(wrapper.find(".perm-collapse").exists()).toBe(false);
+  });
+
+  it("新请求到达时折叠状态复位为展开", async () => {
+    const wrapper = mount(PermissionDialog, { props: { permission: planPermission() } });
+    await wrapper.get(".perm-collapse").trigger("click");
+    await nextTick();
+    expect(bodyDisplay(wrapper)).toBe("none");
+    await wrapper.setProps({
+      permission: { id: "pp2", name: "ExitPlanMode", input: { plan: "另一份计划" } },
+    });
+    await nextTick();
+    expect(bodyDisplay(wrapper)).toBe("");
+    expect(wrapper.find(".perm-collapse-caret").text()).toBe("▾");
+  });
+
+  it("折叠时操作按钮随正文一起隐藏——先看上下文再展开决定", async () => {
+    const wrapper = mount(PermissionDialog, { props: { permission: planPermission() } });
+    const actionsEl = () => wrapper.find(".perm-actions").element as HTMLElement;
+    // 操作按钮在 perm-body 内；展开时正文块无 inline display
+    expect((actionsEl().closest(".perm-body") as HTMLElement | null)?.style.display).toBe("");
+    await wrapper.get(".perm-collapse").trigger("click");
+    await nextTick();
+    // 正文 display:none ⇒ 其内操作按钮一并不可见
+    expect(bodyDisplay(wrapper)).toBe("none");
+    expect((actionsEl().closest(".perm-body") as HTMLElement | null)?.style.display).toBe("none");
   });
 });
