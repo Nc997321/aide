@@ -15,9 +15,17 @@ const userOverride = ref(false);
 const userOpen = ref(false);
 const open = computed(() => (userOverride.value ? userOpen.value : !!props.streaming));
 const bodyRef = ref<HTMLDivElement | undefined>();
-// 流式期：thinking-body 限高 320px + overflow auto，逐字增长时内部滚到底，让用户看到
+// 流式期：thinking-body 限高 320px + 钉底跟随（逐字增长时内部滚到底），让用户看到
 // 最新生成的内容；否则视窗停在顶部，新内容在底部生成却看不到，需手动下拉内部滚动条。
 // 结束后停止跟随，用户可自由上下滚看全文。
+//
+// 流式期 body 用 overflow:hidden 而非 auto（.thinking--streaming 类）——滚动陷阱根因：
+// body 是嵌套滚动容器，思考上万字时内部滚动范围几千 px，滚轮落在其上会被整个吃掉
+// （Chromium 只在嵌套容器滚到边界后才链式传给外层对话区），且 B 方案下思考 delta 结束
+// → text 整块到达之间有长空窗，钉底已停、details 仍开，用户在块内上滚后所有向下滚轮
+// 全被吞——对话定格在该轮位置。overflow:hidden 的盒子不是滚轮手势目标（滚轮直接穿透
+// 链到对话区）但仍可编程滚动（钉底 scrollTop 赋值照常），流式期实时跟随模式下块内
+// 手动滚动本就被钉底接管，不损失能力；流式结束/手动展开回到 overflow:auto 阅读模式。
 watch(
   () => props.text,
   () => {
@@ -40,7 +48,7 @@ function onToggle(e: Event) {
 </script>
 
 <template>
-  <details class="thinking" :open="open" @toggle="onToggle">
+  <details class="thinking" :class="{ 'thinking--streaming': streaming }" :open="open" @toggle="onToggle">
     <summary class="thinking-head">
       <span class="thinking-caret" aria-hidden="true"></span>
       <span class="thinking-label">思考</span>
@@ -94,6 +102,10 @@ function onToggle(e: Event) {
   max-height: 320px;
   overflow: auto;
 }
+
+/* 流式期滚轮穿透：hidden 不是滚轮手势目标，滚轮直达对话区；钉底仍可编程滚动。
+   详见组件头部注释（滚动陷阱根因）。阅读模式（非流式）保持 auto 原生内滚。 */
+.thinking--streaming .thinking-body { overflow: hidden; }
 
 @media (prefers-reduced-motion: reduce) {
   .thinking-caret { transition: none; }
