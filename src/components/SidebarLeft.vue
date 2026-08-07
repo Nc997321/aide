@@ -10,6 +10,7 @@ import { useSessionNames } from "../composables/useSessionNames";
 import { useSessionWorkspaces } from "../composables/useSessionWorkspaces";
 import { sessionMenuItems, workspaceMenuItems } from "../menus/contextMenus";
 import { useWorkspaces } from "../composables/useWorkspaces";
+import { useSettings } from "../composables/useSettings";
 import { useWorkspaceTrust } from "../composables/useWorkspaceTrust";
 import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
 import { api } from "../api";
@@ -43,6 +44,7 @@ const emit = defineEmits<{
 const { workspaces, activeKey: wsActiveKey, refresh: refreshWorkspaces, openFolder, removeWorkspace: removeWs } = useWorkspaces();
 const { untrustedPaths, isTrusted, refreshFor: refreshTrust, trust, shouldPrompt, markPrompted } = useWorkspaceTrust();
 const { onWorkspaceTrusted } = useCodeGraphProgress();
+const { settings } = useSettings();
 const sessionsByWorkspace = ref<Record<string, Session[]>>({});
 const activeWorkspace = ref("");
 const expandedWorkspaces = ref(new Set<string>());
@@ -127,7 +129,7 @@ function wsSessions(wsKey: string): Session[] {
 
 // ── 会话折叠（VS Code 式）：每个工作区默认只露前 N 条，其余收进
 // 「另外 N 个」展开行；搜索时展示全部命中，折叠只作用于默认视图。
-const SESSION_PREVIEW_COUNT = 3;
+// N 跟随设置「最近访问保留条数」（settings.recentLimit，1..50），改设置即时生效。
 const showAllSessions = ref(new Set<string>());
 
 function sessionsCollapsed(wsKey: string): boolean {
@@ -136,12 +138,12 @@ function sessionsCollapsed(wsKey: string): boolean {
 
 function visibleSessions(wsKey: string): Session[] {
   const list = wsSessions(wsKey);
-  return sessionsCollapsed(wsKey) ? list.slice(0, SESSION_PREVIEW_COUNT) : list;
+  return sessionsCollapsed(wsKey) ? list.slice(0, settings.recentLimit) : list;
 }
 
 function hiddenSessionCount(wsKey: string): number {
   return sessionsCollapsed(wsKey)
-    ? Math.max(0, wsSessions(wsKey).length - SESSION_PREVIEW_COUNT)
+    ? Math.max(0, wsSessions(wsKey).length - settings.recentLimit)
     : 0;
 }
 
@@ -591,7 +593,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
               另外 {{ hiddenSessionCount(ws.key) }} 个
             </div>
             <div
-              v-else-if="showAllSessions.has(ws.key) && wsSessions(ws.key).length > SESSION_PREVIEW_COUNT"
+              v-else-if="showAllSessions.has(ws.key) && wsSessions(ws.key).length > settings.recentLimit"
               class="session-more"
               @click="toggleShowAllSessions(ws.key)"
             >
