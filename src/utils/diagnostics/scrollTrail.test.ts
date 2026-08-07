@@ -90,4 +90,16 @@ describe("scrollTrail 滚动诊断环", () => {
     document.body.appendChild(el);
     expect(nearestGestureScroller(el)).toBe("div.xterm-viewport");
   });
+
+  it("probeRebuildChatScrollers 重建滚动容器并留标记", async () => {
+    const { probeRebuildChatScrollers } = await import("./scrollTrail");
+    document.body.innerHTML = `<div class="chat-messages"></div><div class="chat-messages"></div>`;
+    const n = probeRebuildChatScrollers();
+    expect(n).toBe(2);
+    const markers = snapshotScrollTrail().filter((e) => e.kind === "probe");
+    expect(markers).toHaveLength(2);
+    expect(markers[0].detail).toContain("rebuild");
+    // 探针不破坏元素的内联样式残留（display 已还原）
+    expect((document.querySelector(".chat-messages") as HTMLElement).style.display).toBe("");
+  });
 });
