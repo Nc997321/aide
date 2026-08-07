@@ -59,7 +59,7 @@
       <!-- 按模型分桶：多模型会话（如子代理用了别的模型）才展开。单模型时 sidecar 不带 byModel。 -->
       <div class="by-model" v-if="modelEntries.length > 1">
         <div class="by-model-row" v-for="m in modelEntries" :key="m.id">
-          <span class="bm-label" :title="m.id">{{ shortModel(m.id) }}</span>
+          <span class="bm-label" v-tooltip="m.id">{{ shortModel(m.id) }}</span>
           <span class="bm-value">{{ fmtTokens(m.inputTokens) }}</span>
         </div>
       </div>

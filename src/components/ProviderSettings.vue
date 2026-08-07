@@ -261,7 +261,7 @@ function removeModelTag(idx: number) {
               type="button"
               class="icon-picker-opt"
               :class="{ 'icon-picker-opt--active': form.icon === g }"
-              :title="g"
+              v-tooltip="g"
               @click="form.icon = g"
             >
               <Icon :name="g" :size="18" />

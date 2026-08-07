@@ -452,7 +452,7 @@ defineExpose({ loadRoot, revealFile });
           v-tooltip="'精确跳转已就绪 · 语义搜索后台补全中'"
         >✓</i>
         <i v-else class="cgp-dot"></i>
-        <span class="cgp-status" :title="cg.progress.value.current">{{ cgStatus }}</span>
+        <span class="cgp-status" v-tooltip="cg.progress.value.current">{{ cgStatus }}</span>
         <div class="cgp-segments">
           <span
             v-for="i in CGP_SEGMENTS"

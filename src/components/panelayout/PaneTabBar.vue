@@ -85,11 +85,11 @@ function onAuxClick(e: MouseEvent, tab: TabItem) {
         @contextmenu="onContextMenu($event, tab)"
       >
         <AStatusDot v-if="tab.sessionId" :tone="dotTone(tab.sessionId)" />
-        <span class="pane-tab__label" :title="label(tab)">{{ label(tab) }}</span>
+        <span class="pane-tab__label" v-tooltip="label(tab)">{{ label(tab) }}</span>
         <span
           v-if="wsSuffix(tab)"
           class="pane-tab__ws"
-          :title="wsFullPath(tab)"
+          v-tooltip="wsFullPath(tab)"
         >· {{ wsSuffix(tab) }}</span>
         <button
           class="pane-tab__close"

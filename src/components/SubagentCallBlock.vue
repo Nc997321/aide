@@ -53,9 +53,9 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
       <!-- 折叠行：角色 + 类型 pill + 描述 + 模型 + 步数 + 箭头 -->
       <button class="sa-head" :aria-expanded="expanded" @click="expanded = !expanded">
         <span class="sa-role">Agent</span>
-        <span class="sa-type" :title="`子代理类型：${block.agentName}`">{{ block.agentName }}</span>
+        <span class="sa-type" v-tooltip="`子代理类型：${block.agentName}`">{{ block.agentName }}</span>
         <span class="sa-desc">{{ block.description }}</span>
-        <span v-if="block.model" class="sa-model" :title="`子代理使用的模型：${block.model}`">{{ block.model }}</span>
+        <span v-if="block.model" class="sa-model" v-tooltip="`子代理使用的模型：${block.model}`">{{ block.model }}</span>
         <span v-if="block.isPending && stepCount" class="sa-steps">{{ stepCount }} 步</span>
         <svg
           class="sa-chev" :class="{ 'sa-chev--open': expanded }"

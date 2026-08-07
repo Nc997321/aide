@@ -243,7 +243,7 @@ const inputJson = computed(() => {
           type="button"
           class="perm-collapse"
           :aria-expanded="collapsed ? 'false' : 'true'"
-          :title="collapsed ? '展开' : '收起'"
+          v-tooltip="collapsed ? '展开' : '收起'"
           @click="toggleCollapse"
         >
           <span class="perm-collapse-caret">{{ collapsed ? "▴" : "▾" }}</span>

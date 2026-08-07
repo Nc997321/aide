@@ -1214,7 +1214,7 @@ function onOpenBgDock(taskId: string) {
       <button
         class="jump-bottom"
         :class="{ 'jump-bottom--hidden': !farFromBottom }"
-        title="回到底部"
+        v-tooltip="'回到底部'"
         @click="jumpToBottom"
       >
         <Icon name="arrow-down" :size="12" :stroke-width="1.6" />
@@ -1394,7 +1394,7 @@ function onOpenBgDock(taskId: string) {
           <div
             v-if="props.contextUsage"
             class="chat-ctx-usage"
-            :title="`上下文用量：${props.contextUsage.totalTokens.toLocaleString()} / ${props.contextUsage.maxTokens.toLocaleString()} tokens`"
+            v-tooltip="`上下文用量：${props.contextUsage.totalTokens.toLocaleString()} / ${props.contextUsage.maxTokens.toLocaleString()} tokens`"
           >
             <span class="chat-ctx-label">ctx</span>
             <div class="chat-ctx-bar">
@@ -1407,7 +1407,7 @@ function onOpenBgDock(taskId: string) {
             :key="w.key"
             class="chat-quota"
             :class="`chat-quota--${w.status}`"
-            :title="w.title"
+            v-tooltip="w.title"
           >
             <span class="chat-quota-dot" />
             <span class="chat-quota-label">{{ w.label }}</span>
