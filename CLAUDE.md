@@ -9,7 +9,7 @@
 | 桌面框架 | Tauri v2 (Rust 后端 + WebView 前端) |
 | 前端 | Vue 3 + Composition API + TypeScript |
 | 终端 | xterm.js 5.x + xterm-addon-fit |
-| 代码高亮 | highlight.js 11.x（仅打包 12 种语言） |
+| 代码高亮 | highlight.js 11.x（仅打包 15 种语言，含 properties/ini；编辑器侧 yaml/properties 走 @codemirror/legacy-modes + StreamLanguage） |
 | Markdown 渲染 | marked 18.x（文件查看器 .md 预览） |
 | 样式 | Tailwind CSS 3 + 双暗色主题（warm-dark 默认 / catppuccin），全项目三角箭头统一 `font-size: 14px` |
 | 包管理 | pnpm |

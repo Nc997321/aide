@@ -11,6 +11,8 @@ import markdown from "highlight.js/lib/languages/markdown";
 import yaml from "highlight.js/lib/languages/yaml";
 import sql from "highlight.js/lib/languages/sql";
 import java from "highlight.js/lib/languages/java";
+import ini from "highlight.js/lib/languages/ini";
+import properties from "highlight.js/lib/languages/properties";
 import plaintext from "highlight.js/lib/languages/plaintext";
 
 hljs.registerLanguage("typescript", typescript);
@@ -26,6 +28,8 @@ hljs.registerLanguage("markdown", markdown);
 hljs.registerLanguage("yaml", yaml);
 hljs.registerLanguage("sql", sql);
 hljs.registerLanguage("java", java);
+hljs.registerLanguage("ini", ini);
+hljs.registerLanguage("properties", properties);
 hljs.registerLanguage("plaintext", plaintext);
 
 export { hljs };
@@ -44,6 +48,7 @@ export const extToLang: Record<string, string> = {
   sql: "sql",
   java: "java", jar: "java",
   toml: "ini", ini: "ini", cfg: "ini", conf: "ini",
+  properties: "properties",
   gitignore: "plaintext", env: "plaintext",
 };
 

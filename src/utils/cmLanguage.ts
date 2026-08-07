@@ -1,4 +1,5 @@
 import type { Extension } from "@codemirror/state";
+import { StreamLanguage } from "@codemirror/language";
 
 /**
  * 按文件扩展名动态加载 CodeMirror 语言包（CodeEditor 与 DiffViewer 共用）。
@@ -51,6 +52,17 @@ export async function loadLanguageExtension(e: string): Promise<Extension> {
       case "vue": {
         const { vue } = await import("@codemirror/lang-vue");
         return vue();
+      }
+      // yaml / properties 无官方 lezer 语法包，用 legacy-modes（CM5 模式移植）
+      // 包 StreamLanguage；语言包动态 import 保持按扩展名代码分割。
+      case "yaml":
+      case "yml": {
+        const { yaml } = await import("@codemirror/legacy-modes/mode/yaml");
+        return StreamLanguage.define(yaml);
+      }
+      case "properties": {
+        const { properties } = await import("@codemirror/legacy-modes/mode/properties");
+        return StreamLanguage.define(properties);
       }
       default:
         return [];
