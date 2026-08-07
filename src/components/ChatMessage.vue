@@ -156,7 +156,13 @@ function handleTextClick(e: MouseEvent) {
               <span class="btw-note-q">{{ seg.block.label }}</span>
             </summary>
             <div class="btw-note-body">
-              <div>{{ seg.block.body }}</div>
+              <!-- 批注正文是已定稿的支线结论：与主文本块同一渲染管道
+                   （renderMarkdown 缓存 + msg-text 样式），文件码span 同样可点。 -->
+              <div
+                class="msg-text"
+                v-html="renderMarkdown(seg.block.body ?? '')"
+                @click="handleTextClick"
+              ></div>
               <div class="btw-note-warn">↳ 这是支线结论,不会进入主对话上下文。</div>
             </div>
           </details>
