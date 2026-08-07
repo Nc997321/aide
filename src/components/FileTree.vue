@@ -181,7 +181,8 @@ function onAreaContextMenu(e: MouseEvent) {
   show(
     e.clientX,
     e.clientY,
-    fileTreeAreaMenuItems(projectInfo.value.root, loadRoot, {
+    // 刷新/新建走原地刷新（保持展开状态），不再 loadRoot 推倒重建把树收起到根
+    fileTreeAreaMenuItems(projectInfo.value.root, refreshAllExpanded, {
       rescan: (root: string) => cg.rescan(root),
       rebuild: (root: string) => cg.rebuild(root),
     }),
@@ -236,6 +237,22 @@ async function reloadExpandedDescendants(nodes: FileEntry[]) {
   }
 }
 
+/**
+ * 文件操作（移动/粘贴/重命名/删除/新建）后的局部刷新。
+ * 裸 loadChildren 会整体替换目标目录的 children——新条目里所有子目录的
+ * children 都是 null，而 TreeNodeItem 的渲染条件是 isExpanded && node.children，
+ * 于是已展开的子孙目录"箭头朝下、内容消失"；刷新根目录时整棵树全部收起。
+ * 这里重载后自顶向下补加载仍处于展开状态的子孙目录，与 refreshAllExpanded 同理。
+ */
+async function refreshDir(dirPath: string) {
+  await loadChildren(dirPath);
+  const base =
+    dirPath === projectInfo.value.root
+      ? treeData.value
+      : findNode(treeData.value, dirPath)?.children;
+  if (base) await reloadExpandedDescendants(base);
+}
+
 function getSelectedNodeIsDir(): boolean {
   if (!selectedPath.value) return false;
   const node = findNode(treeData.value, selectedPath.value);
@@ -260,8 +277,8 @@ async function onTreeKeydown(e: KeyboardEvent) {
     const srcParent = getParentPath(clipboard.value.path);
     await executePaste(
       targetDir,
-      () => loadChildren(srcParent),
-      () => loadChildren(targetDir),
+      () => refreshDir(srcParent),
+      () => refreshDir(targetDir),
     );
   } else if (e.key === 'Escape') {
     if (!clipboard.value) return;
@@ -432,7 +449,7 @@ defineExpose({ loadRoot, revealFile });
           :expanded-dirs="expandedDirs"
           :selected-path="selectedPath"
           :project-root="projectInfo.root"
-          :on-refresh-dir="(p: string) => loadChildren(p)"
+          :on-refresh-dir="(p: string) => refreshDir(p)"
           :session-id="sessionId"
           @toggle="toggleDir"
           @open="openFile"
