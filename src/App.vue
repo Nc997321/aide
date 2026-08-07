@@ -827,6 +827,7 @@ onUnmounted(() => {
       @toggle-left="onToggleLeft"
       @toggle-right="rightCollapsed = !rightCollapsed"
       @open-folder="onOpenFolder"
+      @open-workbench="wb.toggle()"
     />
 
     <div
@@ -873,7 +874,6 @@ onUnmounted(() => {
           @new-session="onNewSession"
           @workspace-changed="onSidebarWsChanged"
           @open-settings="openSettings"
-          @open-workbench="wb.toggle()"
           @provider-switch="onProviderSwitch"
           @open-settings-providers="openSettingsProviders"
           @remove-workspace="onRemoveWorkspace"

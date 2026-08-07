@@ -42,6 +42,7 @@ const emit = defineEmits<{
   "restart-project": [];
   "toggle-left": [];
   "toggle-right": [];
+  "open-workbench": [];
   "open-folder": [];
 }>();
 
@@ -319,6 +320,19 @@ function isRowRunning(cfg: RunConfig): boolean {
       >
         <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
           <polygon points="2,1 9,5 2,9"/>
+        </svg>
+      </button>
+
+      <!-- 工作台终端 (Ctrl+`)：运行按钮右边，独立元素始终可见
+           （不进 run-group 的 v-if/v-else-if，否则无项目时按钮消失） -->
+      <button
+        class="titlebar-icon-btn"
+        v-tooltip="'工作台终端 (Ctrl+`)'"
+        @click.stop="$emit('open-workbench')"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="4 17 10 11 4 5"/>
+          <line x1="12" y1="19" x2="20" y2="19"/>
         </svg>
       </button>
 
@@ -965,6 +979,22 @@ function isRowRunning(cfg: RunConfig): boolean {
 }
 .run-restart-btn:hover {
   background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
+}
+
+/* ── Workbench terminal button ── */
+/* 标题栏左部的 icon-only 边框按钮，与「打开目录」同语言（边框 + radius-sm），
+   供工作台终端、未来其它 icon 入口复用。 */
+.titlebar-icon-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; background: none; border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm); color: var(--aide-text-secondary);
+  cursor: pointer; flex-shrink: 0; transition: background 0.12s, border-color 0.12s, color 0.12s;
+  font-family: inherit;
+}
+.titlebar-icon-btn:hover {
+  background: var(--aide-surface-hover);
+  border-color: color-mix(in srgb, var(--aide-text-secondary) 30%, transparent);
   color: var(--aide-text-primary);
 }
 

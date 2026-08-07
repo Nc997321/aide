@@ -33,11 +33,15 @@ function onPillKeydown(e: KeyboardEvent) {
 const { chatPaneWidth, chatPaneLeft } = useChatPaneWidth();
 // pill 左缘/宽度对齐聚焦对话框：测得值后严格贴齐（左缘=对话框左缘，宽=对话框宽），
 // 而不是在整窗居中——侧栏把对话框右推，居中的 pill 会比对话框偏右。未测得时兜底整窗 10px 边距。
+// 终端面板顶部固定在标题栏下方，不遮挡标题栏（标题栏 42px + 8px 间距 = 50px）。
+// 水平方向对齐聚焦聊天窗（chatPaneLeft/Width）；未测得时兜底整窗 10px 边距。
+const WORKBENCH_TOP = "50px";
 const pillStyle = computed(() => {
+  const base = { height: props.height + "px", top: WORKBENCH_TOP };
   if (chatPaneWidth.value > 0) {
-    return { height: props.height + "px", left: `${chatPaneLeft.value}px`, width: `${chatPaneWidth.value}px` };
+    return { ...base, left: `${chatPaneLeft.value}px`, width: `${chatPaneWidth.value}px` };
   }
-  return { height: props.height + "px", left: "10px", width: "calc(100% - 20px)" };
+  return { ...base, left: "10px", width: "calc(100% - 20px)" };
 });
 const containerRef = ref<HTMLDivElement>();
 
@@ -85,13 +89,14 @@ function addTerminal() {
   wb.createSession(props.workspaceKey, props.cwd);
 }
 
-function onHeaderDragStart(e: MouseEvent) {
-  if ((e.target as HTMLElement).closest(".wb-tabs, .wb-header-right")) return;
+// 底部边缘拖拽调高度：pill 顶部固定在标题栏下方，向下拖=变高（底部下展），
+// 向上拖=变矮。下界 120px 保 header+终端可见；上界留出 top(50)+底部间距(8) 不溢出窗口。
+function onResizeStart(e: MouseEvent) {
   e.preventDefault();
   const startY = e.clientY;
   const startH = props.height;
   const onMove = (ev: MouseEvent) => {
-    const h = Math.max(120, Math.min(window.innerHeight - 80, startH + ev.clientY - startY));
+    const h = Math.max(120, Math.min(window.innerHeight - 58, startH + ev.clientY - startY));
     emit("update:height", h);
   };
   const onUp = () => {
@@ -106,7 +111,7 @@ function onHeaderDragStart(e: MouseEvent) {
 <template>
   <div class="workbench-overlay" :class="{ 'workbench-overlay--hidden': !wb.visible.value }">
     <div class="workbench-pill" :class="{ 'is-shown': wb.visible.value }" :style="pillStyle" @keydown.capture="onPillKeydown">
-      <div class="workbench-header" @mousedown="onHeaderDragStart">
+      <div class="workbench-header">
         <div class="wb-tabs">
           <div
             v-for="tab in wb.tabs.value"
@@ -138,6 +143,7 @@ function onHeaderDragStart(e: MouseEvent) {
           <div class="workbench-exited__hint">按 Enter 或点击重启</div>
         </div>
       </div>
+      <div class="workbench-resize-handle" @mousedown="onResizeStart" v-tooltip="'拖动调整高度'"></div>
     </div>
   </div>
 </template>
@@ -158,7 +164,6 @@ function onHeaderDragStart(e: MouseEvent) {
 .workbench-pill {
   pointer-events: auto;
   position: absolute;
-  top: 10px;
   width: calc(100% - 20px);
   background: var(--aide-bg-base);
   border: 1px solid var(--aide-surface-default);
@@ -186,7 +191,7 @@ function onHeaderDragStart(e: MouseEvent) {
   padding: 0 8px 0 4px;
   background: var(--aide-bg-deep);
   border-bottom: 1px solid var(--aide-surface-default);
-  cursor: row-resize;
+  cursor: default;
   user-select: none;
   gap: 8px;
 }
@@ -287,6 +292,33 @@ function onHeaderDragStart(e: MouseEvent) {
   flex: 1;
   position: relative;
   overflow: hidden;
+}
+
+/* ── 底部 resize 手柄：pill 顶部固定在标题栏下方，拖此条上下调高度 ── */
+.workbench-resize-handle {
+  height: 6px;
+  flex-shrink: 0;
+  cursor: row-resize;
+  background: var(--aide-bg-deep);
+  border-top: 1px solid var(--aide-surface-default);
+  user-select: none;
+  position: relative;
+}
+.workbench-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 36px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--aide-text-muted);
+  opacity: 0.35;
+  transition: opacity 0.15s;
+}
+.workbench-resize-handle:hover::after {
+  opacity: 0.7;
 }
 
 .wb-term-pane {
