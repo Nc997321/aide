@@ -42,6 +42,8 @@ import { useRunConfigs } from "./composables/useRunConfigs";
 import { matchShortcut } from "./utils/shortcut";
 import { applyTheme, themes } from "./themes";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
+import { snapshotScrollTrail } from "./utils/diagnostics/scrollTrail";
 import { useFileViewer } from "./composables/useFileViewer";
 import { useRecent } from "./composables/useRecent";
 import { useWorkspaces } from "./composables/useWorkspaces";
@@ -607,6 +609,41 @@ function handleKeydown(e: KeyboardEvent) {
     e.preventDefault();
     e.stopPropagation();
     sidebarRef.value?.newSession();
+  }
+
+  // Ctrl+Shift+D：滚动诊断环落盘——间歇性「滚轮定格」的活体取证（见
+  // utils/diagnostics/scrollTrail.ts）。定格时按下，wheel 目标 / scrollTop
+  // 写入者时间线写入 diagnostics/scroll-trail-<ts>.json，路径走通知中心反馈。
+  if (e.ctrlKey && e.shiftKey && (e.code === "KeyD" || e.key === "D")) {
+    e.preventDefault();
+    e.stopPropagation();
+    void dumpScrollTrail();
+  }
+}
+
+/** 滚动诊断环快照 → Rust 落盘；诊断永不影响业务，失败仅通知。 */
+async function dumpScrollTrail() {
+  try {
+    const path = await invoke<string>("diag_scroll_trail", {
+      payload: JSON.stringify(snapshotScrollTrail()),
+    });
+    pushNotification({
+      severity: "info",
+      source: "diagnostics",
+      title: "滚动诊断已落盘",
+      body: path,
+      timestamp: Date.now(),
+      dedupKey: "scroll-trail-dump",
+    });
+  } catch (err) {
+    pushNotification({
+      severity: "warning",
+      source: "diagnostics",
+      title: "滚动诊断落盘失败",
+      body: String(err),
+      timestamp: Date.now(),
+      dedupKey: "scroll-trail-dump",
+    });
   }
 }
 

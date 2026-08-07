@@ -14,6 +14,7 @@ import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, Co
 import type { SkillMeta } from "@/types";
 import { api } from "@/api";
 import { permissionsApi } from "@/api/permissions";
+import { trail } from "../utils/diagnostics/scrollTrail";
 import type { PermissionRuleDraft, PermissionScope, PermissionSettingsView } from "@/types/permissions";
 import { resolvePastePayload } from "@/utils/paste";
 import type { PasteResolution } from "@/utils/paste";
@@ -445,6 +446,14 @@ watch(
     }
   },
   { immediate: true },
+);
+
+// 滚动诊断环：弹窗显隐标记。滚轮定格的嫌疑方向之一是弹窗挤压/死区——留下
+// show/hide 时间戳，定格时与 wheel/scroll 记录互证（弹窗出现前后滚轮是否还
+// 落在对话区）。
+watch(
+  () => props.permission?.id ?? null,
+  (id) => trail("perm", id ? `show:${props.permission?.name}` : "hide"),
 );
 
 /** 点击「允许并记住」：先落盘 allow 规则（Rust 广播新快照给 sidecar，后续同类调用

@@ -396,6 +396,7 @@ pub fn run() {
             // 卡死诊断黑匣子
             diagnostics::diag_heartbeat,
             diagnostics::diag_freeze_supplement,
+            diagnostics::diag_scroll_trail,
             // 通知中心持久化
             commands::notifications::load_notifications,
             commands::notifications::save_notifications,

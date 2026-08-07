@@ -4,7 +4,7 @@
  * 设计文档：docs/superpowers/specs/2026-07-08-freeze-diagnostics-design.md
  *
  * 职责：
- * - 启动三个采集器（event loop 延迟 / longtask / 面包屑）；
+ * - 启动采集器（event loop 延迟 / longtask / 面包屑 / 滚动诊断环）；
  * - 每 500ms 向 Rust 发一次心跳（携带本周期指标增量）——Rust watchdog
  *   以心跳断流 ≥2s 判定冻结；
  * - 自愈补交：心跳定时器自己发现断档 ≥2s（= 刚从卡死中恢复），把冻结
@@ -22,6 +22,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { drainMaxLag, startLagSampler } from "../utils/diagnostics/eventLoopLag";
 import { drainSummary, entriesSince, startLongTasks } from "../utils/diagnostics/longTasks";
 import { drainPending, snapshotAll, startBreadcrumbs } from "../utils/diagnostics/breadcrumbs";
+import { startScrollTrail } from "../utils/diagnostics/scrollTrail";
 
 /** 心跳周期。Rust watchdog 的判定阈值（2s）以此为基准，改动需两侧同步。 */
 const HEARTBEAT_MS = 500;
@@ -72,6 +73,7 @@ export function startDiagnostics(): void {
   startLagSampler();
   startLongTasks();
   startBreadcrumbs();
+  startScrollTrail(); // 滚动诊断环：间歇性滚轮定格的活体采集（见 scrollTrail.ts）
 
   lastBeatAt = performance.now();
 

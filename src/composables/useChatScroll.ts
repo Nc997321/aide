@@ -1,6 +1,7 @@
 import { computed, getCurrentInstance, getCurrentScope, nextTick, onMounted, onScopeDispose, onUnmounted, ref, watch } from "vue";
 import type { ComputedRef } from "vue";
 import { useMessageWindow } from "./useMessageWindow";
+import { trail } from "../utils/diagnostics/scrollTrail";
 import type { ChatMessage, TextBlock } from "@/types/chat";
 
 /**
@@ -131,16 +132,23 @@ export function useChatScroll(
       mountedCount.value = windowed.value.length;
       await nextTick();
       el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
+      trail("expand", `${Math.round(prevTop)}→${Math.round(el.scrollTop)} hid=${hiddenCount.value}`);
     } finally {
       expandingOlder = false;
     }
   }
 
   // ── 滚动事件 ──────────────────────────────────────────────────────────────
+  // trail 埋点（滚动诊断环）：间歇性滚轮定格的活体采集——每个 scroll 事件留一行
+  // 位置+门控状态，定格时与 wheel/write 记录互证。高频但纯内存推送，无布局读取。
   function onScroll() {
     const el = scrollEl.value;
     if (!el) return;
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    trail(
+      "scroll",
+      `top=${Math.round(el.scrollTop)} sh=${el.scrollHeight} ch=${el.clientHeight} auto=${autoScroll.value ? 1 : 0}`,
+    );
     autoScroll.value = dist < 48;
     farFromBottom.value = dist > JUMP_SHOW_THRESHOLD;
     if (autoScroll.value) newWhileAway.value = false;
@@ -159,7 +167,11 @@ export function useChatScroll(
     scrollQueued = true;
     scheduleFrame(() => {
       scrollQueued = false;
-      if (scrollEl.value) scrollEl.value.scrollTop = scrollEl.value.scrollHeight;
+      const el = scrollEl.value;
+      if (el) {
+        trail("write", `toBottom ${Math.round(el.scrollTop)}→${el.scrollHeight}`);
+        el.scrollTop = el.scrollHeight;
+      }
     });
   }
 
@@ -186,6 +198,7 @@ export function useChatScroll(
   function jumpToBottom() {
     const el = scrollEl.value;
     if (!el) return;
+    trail("write", `jump smooth from=${Math.round(el.scrollTop)}`);
     newWhileAway.value = false;
     farFromBottom.value = false;
     autoScroll.value = true;
@@ -204,7 +217,12 @@ export function useChatScroll(
   if (getCurrentInstance()) {
     onMounted(() => {
       if (typeof ResizeObserver === "undefined") return;
-      contentObserver = new ResizeObserver(() => scrollToBottom());
+      contentObserver = new ResizeObserver(() => {
+        // 不读尺寸（RO 回调里读 scrollHeight 是热路径强制布局）——只记触发与门控态，
+        // 尺寸变化由随后的 scroll/write 记录体现。
+        trail("ro", `auto=${autoScroll.value ? 1 : 0}`);
+        scrollToBottom();
+      });
       if (contentEl.value) contentObserver.observe(contentEl.value);
       if (scrollEl.value) contentObserver.observe(scrollEl.value);
     });
@@ -231,6 +249,7 @@ export function useChatScroll(
     // 本帧会用旧 scrollTop 渲染造成一帧抖动；这里在调度下一 tick 前同步把 scrollTop
     // 钉到底，覆盖上一帧残留。成本是一次强制布局（∝ 已挂 DOM 6→30，仅 ~130ms ramp 期）。
     if (scrollEl.value && autoScroll.value) {
+      trail("write", "ramp pin0");
       scrollEl.value.scrollTop = scrollEl.value.scrollHeight;
     }
     function tick() {
@@ -244,6 +263,7 @@ export function useChatScroll(
       }
       mountedCount.value = next;
       if (scrollEl.value && autoScroll.value) {
+        trail("write", `ramp pin m=${mountedCount.value}`);
         scrollEl.value.scrollTop = scrollEl.value.scrollHeight;
       }
       rafHandle = scheduleFrame(tick);
@@ -257,6 +277,7 @@ export function useChatScroll(
   watch(
     sessionId,
     (newId) => {
+      trail("session", newId ?? "null"); // 切会话标记：定格「自愈」的分界线
       cancelRamp();
       rampPending = false;
       autoScroll.value = true;
