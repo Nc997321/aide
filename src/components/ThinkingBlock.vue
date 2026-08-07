@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, watch, nextTick } from "vue";
 /** 主线程思考块——partial=on 时 sidecar 把 thinking_delta 逐字转发（流式），partial=off /
  *  历史回放走 thinking 整块。视觉对齐子代理 .sa-thinking（灰斜体小字 + info 色调），独立成
  *  组件与 ToolCallBlock / SubagentCallBlock 同级。
@@ -14,9 +14,28 @@ const props = defineProps<{ text: string; streaming?: boolean }>();
 const userOverride = ref(false);
 const userOpen = ref(false);
 const open = computed(() => (userOverride.value ? userOpen.value : !!props.streaming));
+const bodyRef = ref<HTMLDivElement | undefined>();
+// 流式期：thinking-body 限高 320px + overflow auto，逐字增长时内部滚到底，让用户看到
+// 最新生成的内容；否则视窗停在顶部，新内容在底部生成却看不到，需手动下拉内部滚动条。
+// 结束后停止跟随，用户可自由上下滚看全文。
+watch(
+  () => props.text,
+  () => {
+    if (props.streaming && bodyRef.value) {
+      nextTick(() => {
+        if (bodyRef.value) bodyRef.value.scrollTop = bodyRef.value.scrollHeight;
+      });
+    }
+  },
+);
 function onToggle(e: Event) {
+  const target = e.target as HTMLDetailsElement;
+  // 程序化 :open 变化也触发 toggle——此时 target.open 与 computed open 一致，不是
+  // 用户操作，忽略；只有用户点击导致两者不一致时才接管（避免流式自动展开/折叠
+  // 污染 userOverride，使结束折叠失效）。
+  if (target.open === open.value) return;
   userOverride.value = true;
-  userOpen.value = (e.target as HTMLDetailsElement).open;
+  userOpen.value = target.open;
 }
 </script>
 
@@ -27,7 +46,7 @@ function onToggle(e: Event) {
       <span class="thinking-label">思考</span>
       <span class="thinking-count">{{ text.length }} 字</span>
     </summary>
-    <div class="thinking-body">{{ text }}</div>
+    <div ref="bodyRef" class="thinking-body">{{ text }}</div>
   </details>
 </template>
 
@@ -47,9 +66,9 @@ function onToggle(e: Event) {
 .thinking-head::-webkit-details-marker { display: none; }
 
 .thinking-caret {
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 5px solid var(--aide-text-muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--aide-text-muted);
   opacity: 0.7;
   transition: transform var(--aide-ease-t);
 }
