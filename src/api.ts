@@ -124,8 +124,8 @@ export const api = {
   detectRunTargets(cwd: string): Promise<RunTarget[]> {
     return invoke("detect_run_targets", { cwd });
   },
-  runProcessStart(configId: string, cwd: string, command: string, env: Record<string, string>): Promise<string> {
-    return invoke("run_process_start", { configId, cwd, command, env });
+  runProcessStart(configId: string, cwd: string, command: string, env: Record<string, string>, rows: number, cols: number): Promise<string> {
+    return invoke("run_process_start", { configId, cwd, command, env, rows, cols });
   },
   runProcessStop(configId: string): Promise<void> {
     return invoke("run_process_stop", { configId });

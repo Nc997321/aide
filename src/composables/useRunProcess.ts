@@ -50,12 +50,17 @@ export function useRunProcess() {
   /** 启动指定配置的 run 进程。不触碰其他在跑的配置——多模块可并行。 */
   async function start(config: RunConfig): Promise<void> {
     await ensureExitListener();
-    const sessionId = await api.runProcessStart(config.id, config.cwd, config.command, config.env ?? {});
-    setStatus(config.id, "running");
-    // 打开 workbench 并为这个 PTY 挂一个独立终端 tab（每个 run__{id} 一个 tab）
+    // attach-then-spawn：先打开 workbench 并为 PTY 挂终端 tab（fit 出真实 cols），
+    // 再用真实 cols spawn ConPTY——让 ConPTY 从第一帧起即与 xterm 列宽一致，避免
+    // 固定 80 列 spawn 导致 spawn→resize 窗口期内长行被提前 wrap 割裂。sessionId
+    // 是确定性的 run__{config_id}（见 run_process.rs::run_session_id），可预知先 attach。
+    const sessionId = sessionOf(config.id);
     wb.visible.value = true;
     await new Promise<void>(r => setTimeout(r, 80));
-    wb.attachSession(currentWs(), sessionId, config.name);
+    const dim = wb.attachSession(currentWs(), sessionId, config.name) ?? { rows: 24, cols: 80 };
+    await api.runProcessStart(config.id, config.cwd, config.command, config.env ?? {}, dim.rows, dim.cols);
+    wb.markSpawned(sessionId);
+    setStatus(config.id, "running");
   }
 
   /** 停止指定配置的 run 进程（仅这一个，不影响其他并行模块）。状态由 pty-exit 异步回填。 */
@@ -73,10 +78,12 @@ export function useRunProcess() {
       await api.runProcessStop(config.id).catch(() => {});
       // 短暂停顿让老 PTY 冲刷尾部输出后再以同一 id 重开
       await new Promise<void>(r => setTimeout(r, 150));
-      const sessionId = await api.runProcessStart(config.id, config.cwd, config.command, config.env ?? {});
-      setStatus(config.id, "running");
+      // 先 attach（复用已有 terminal，clearFirst 清屏）拿真实 cols，再 spawn
       wb.visible.value = true;
-      wb.attachSession(currentWs(), sessionId, config.name, true /* clearFirst */);
+      const dim = wb.attachSession(currentWs(), sid, config.name, true /* clearFirst */) ?? { rows: 24, cols: 80 };
+      await api.runProcessStart(config.id, config.cwd, config.command, config.env ?? {}, dim.rows, dim.cols);
+      wb.markSpawned(sid);
+      setStatus(config.id, "running");
     } finally {
       markRunRestarted(sid);
     }

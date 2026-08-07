@@ -243,8 +243,15 @@ export function useWorkbenchTerminal() {
     }
   }
 
-  function attachSession(workspaceKey: string, id: string, label: string, clearFirst = false): void {
+  // attach 一个 run 专用终端 tab 到一个即将 spawn 的 PTY session（run 流程专用）。
+  // 与 createSession 不同：此处 **不 spawn PTY**——run 流程的 spawn 由调用方
+  // （useRunProcess）在拿到本函数返回的真实 cols 后再发起，让 ConPTY 从第一帧
+  // 起即与 xterm 列宽一致，避免用固定 80 列 spawn 导致 spawn→resize 窗口期内
+  // 长行被提前 wrap 割裂（割裂的输出会永久留在 buffer 里）。
+  // 返回 fit 出的 {rows, cols}（下限 clamp），容器无宽度时返回 null。
+  function attachSession(workspaceKey: string, id: string, label: string, clearFirst = false): { rows: number; cols: number } | null {
     ensureSettingsWatchers();
+    const dimsOf = (t: Terminal) => ({ rows: Math.max(2, t.rows), cols: Math.max(10, t.cols) });
     const existing = sessions.get(id);
     if (existing) {
       existing.spawned = true;
@@ -253,9 +260,9 @@ export function useWorkbenchTerminal() {
       setActiveTab(workspaceKey, id);
       switchTo(id);
       ensurePolling();
-      return;
+      return dimsOf(existing.terminal);
     }
-    if (!containerEl) return;
+    if (!containerEl) return null;
     const stg = settingsRef!;
     const wpCfg2 = windowsPtyConfig();
     const terminal = new Terminal({
@@ -277,13 +284,23 @@ export function useWorkbenchTerminal() {
       fitAddon.fit(); api.ptyResize(id, terminal.rows, terminal.cols).catch(() => {});
     });
     observer.observe(div);
-    const session: WbSession = { id, workspaceKey, kind: "run", shellName: "", terminal, fitAddon, div, observer, spawned: true };
+    // spawned=false：PTY 尚未 spawn（调用方稍后 runProcessStart + markSpawned）。
+    // ensurePolling 自动跳过未 spawn session；poll_pty_output 对不存在 session
+    // 返回空字符串，无写入副作用。
+    const session: WbSession = { id, workspaceKey, kind: "run", shellName: "", terminal, fitAddon, div, observer, spawned: false };
     sessions.set(id, session);
     addTab(workspaceKey, { id, label, shellName: "", exited: false, kind: "run" });
     switchTo(id);
     ensurePolling();
     ensureExitListener();
-    nextTick(() => { api.ptyResize(id, terminal.rows, terminal.cols).catch(() => {}); });
+    return dimsOf(terminal);
+  }
+
+  // run 流程 spawn 成功后由 useRunProcess 调用：开启该 session 的输出轮询。
+  // 在 attachSession 之后再调，保证 ConPTY 用真实 cols 创建后才取数。
+  function markSpawned(id: string) {
+    const s = sessions.get(id);
+    if (s) s.spawned = true;
   }
 
   async function show() {
@@ -354,6 +371,7 @@ export function useWorkbenchTerminal() {
     init,
     createSession,
     attachSession,
+    markSpawned,
     switchTo,
     closeSession,
     show,
