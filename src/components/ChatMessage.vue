@@ -284,16 +284,6 @@ function handleTextClick(e: MouseEvent) {
   word-break: break-word;
 }
 
-/* user 铜底气泡里的 mention 墨线行：默认 muted 色在铜底上对比度不够，压成深色 */
-.msg-bubble--user :deep(.ti-row),
-.msg-bubble--user :deep(.ti-name),
-.msg-bubble--user :deep(.ti-summary) {
-  color: var(--aide-text-on-accent);
-}
-.msg-bubble--user :deep(.ti-dot) {
-  background: var(--aide-text-on-accent);
-}
-
 /* .msg-text 的 Markdown 正文样式已提到 styles/global.css（btw 抽屉共用）——
    选择器与这里原本的一致，只是从 scoped :deep 变成全局后代选择器。 */
 
