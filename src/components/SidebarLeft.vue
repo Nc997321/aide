@@ -47,7 +47,11 @@ const sessionsByWorkspace = ref<Record<string, Session[]>>({});
 const activeWorkspace = ref("");
 const expandedWorkspaces = ref(new Set<string>());
 const searchQuery = ref("");
-const loading = ref(true);
+// 加载态按层级隔离：workspacesLoading 只覆盖启动时的工作区清单（全局占位仅此一处）；
+// sessionsLoading 按工作区 key 各自标记——点哪个工作区只有哪个的展开区显示骨架，
+// 不再全局「加载中...」连坐隐藏整表（旧写法点大会话量的工作区时全侧栏空白）。
+const workspacesLoading = ref(true);
+const sessionsLoading = ref(new Set<string>());
 
 // ── 工作区信任提示（Variant A 居中模态）── trustPrompt 非 null 时显示。
 // 不信任工作区首次激活时弹一次（maybePromptTrust），「暂不」后本会话不再弹；
@@ -150,12 +154,17 @@ function toggleShowAllSessions(wsKey: string) {
 }
 
 async function loadWorkspaces() {
-  await refreshWorkspaces();
+  try {
+    await refreshWorkspaces();
+  } finally {
+    workspacesLoading.value = false;
+  }
 }
 
 async function loadSessions() {
-  loading.value = true;
+  // 先捕获再标记：await 期间用户可能又切了工作区，结果与骨架都跟着捕获的 key 走
   const wsKey = activeWorkspace.value;
+  sessionsLoading.value.add(wsKey);
 
   try {
     const loaded = await api.listSessions();
@@ -164,9 +173,9 @@ async function loadSessions() {
     registerSessionWs(loaded, wsKey);
   } catch (_e) {
     sessionsByWorkspace.value[wsKey] = [];
+  } finally {
+    sessionsLoading.value.delete(wsKey);
   }
-
-  loading.value = false;
 
   const list = sessionsByWorkspace.value[wsKey] ?? [];
   if (list.length === 0) {
@@ -503,7 +512,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 
     <!-- Workspace + Session list -->
     <div class="session-list">
-      <div v-if="loading" class="session-empty muted">加载中...</div>
+      <div v-if="workspacesLoading" class="session-empty muted">加载中...</div>
 
       <template v-else v-for="ws in filteredWorkspaces" :key="ws.key">
         <!-- Workspace row -->
@@ -542,44 +551,53 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 
         <!-- Sessions (for any expanded workspace) -->
         <template v-if="expandedWorkspaces.has(ws.key)">
+          <!-- 会话加载按工作区隔离：骨架只占本工作区展开区，其余工作区原地不动 -->
+          <div v-if="sessionsLoading.has(ws.key)" class="session-skel-list">
+            <div v-for="i in 2" :key="i" class="session-skel-card">
+              <div class="session-skel-line session-skel-title"></div>
+              <div class="session-skel-line session-skel-preview"></div>
+            </div>
+          </div>
           <div
-            v-if="wsSessions(ws.key).length === 0"
+            v-else-if="wsSessions(ws.key).length === 0"
             class="session-empty muted"
           >
             暂无会话
           </div>
-          <TransitionGroup name="session-anim" tag="div" class="session-anim-group" @leave="onSessionAnimLeave">
-            <ACard
-              v-for="s in visibleSessions(ws.key)"
-              :key="s.id"
-              :active="props.activeSessionId === s.id"
-              :glow-color="sessionState[s.id] === 'running' ? 'var(--aide-success)' : undefined"
-              class="session-card"
-              @click="selectSessionFromWorkspace(ws.key, s.id)"
-              @contextmenu.prevent="onSessionContextMenu($event, ws.key, s.id)"
+          <template v-else>
+            <TransitionGroup name="session-anim" tag="div" class="session-anim-group" @leave="onSessionAnimLeave">
+              <ACard
+                v-for="s in visibleSessions(ws.key)"
+                :key="s.id"
+                :active="props.activeSessionId === s.id"
+                :glow-color="sessionState[s.id] === 'running' ? 'var(--aide-success)' : undefined"
+                class="session-card"
+                @click="selectSessionFromWorkspace(ws.key, s.id)"
+                @contextmenu.prevent="onSessionContextMenu($event, ws.key, s.id)"
+              >
+                <div class="session-card-header">
+                  <AStatusDot :tone="dotTone(s.id)" />
+                  <span class="session-name">{{ sessionNames.names[s.id] || s.name }}</span>
+                  <span class="session-time">{{ timeAgo(s.timestamp) }}</span>
+                </div>
+                <div v-if="s.last_message" class="session-preview">{{ s.last_message }}</div>
+              </ACard>
+            </TransitionGroup>
+            <div
+              v-if="hiddenSessionCount(ws.key) > 0"
+              class="session-more"
+              @click="toggleShowAllSessions(ws.key)"
             >
-              <div class="session-card-header">
-                <AStatusDot :tone="dotTone(s.id)" />
-                <span class="session-name">{{ sessionNames.names[s.id] || s.name }}</span>
-                <span class="session-time">{{ timeAgo(s.timestamp) }}</span>
-              </div>
-              <div v-if="s.last_message" class="session-preview">{{ s.last_message }}</div>
-            </ACard>
-          </TransitionGroup>
-          <div
-            v-if="hiddenSessionCount(ws.key) > 0"
-            class="session-more"
-            @click="toggleShowAllSessions(ws.key)"
-          >
-            另外 {{ hiddenSessionCount(ws.key) }} 个
-          </div>
-          <div
-            v-else-if="showAllSessions.has(ws.key) && wsSessions(ws.key).length > SESSION_PREVIEW_COUNT"
-            class="session-more"
-            @click="toggleShowAllSessions(ws.key)"
-          >
-            收起
-          </div>
+              另外 {{ hiddenSessionCount(ws.key) }} 个
+            </div>
+            <div
+              v-else-if="showAllSessions.has(ws.key) && wsSessions(ws.key).length > SESSION_PREVIEW_COUNT"
+              class="session-more"
+              @click="toggleShowAllSessions(ws.key)"
+            >
+              收起
+            </div>
+          </template>
         </template>
       </template>
     </div>
@@ -958,6 +976,41 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   cursor: default;
   font-size: 12px;
   padding: 12px 16px;
+}
+
+/* ── 会话加载骨架（per-workspace）──
+   加载态按工作区隔离后，「加载中」从全局文本变成本工作区展开区内的假会话卡：
+   外壳复刻 ACard（raised 底 + 细描边 + radius-lg + 16px 内边距），切换真卡时
+   只有文字线消失、卡轮廓不动；线条脉冲语言与 MarketplaceTab 的 skel-line 一致
+   （surface-hover 底 + 呼吸透明度）。 */
+.session-skel-card {
+  margin: 0 10px 6px 24px;
+  padding: 16px;
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-lg);
+}
+
+.session-skel-line {
+  height: 11px;
+  border-radius: 4px;
+  background: var(--aide-surface-hover);
+  animation: session-skel-pulse 1.5s ease-in-out infinite;
+}
+
+.session-skel-title {
+  width: 55%;
+  margin-bottom: 8px;
+}
+
+.session-skel-preview {
+  width: 80%;
+  height: 10px;
+}
+
+@keyframes session-skel-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.7; }
 }
 
 /* ── Update banner ── */
