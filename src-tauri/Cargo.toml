@@ -10,7 +10,9 @@ edition = "2021"
 # 卡 → sidecar 管道回压 → 后端被拖死、彻底 wedge。去掉后 emit 退回 fire-and-forget
 # （send_user_message 变体），worker 不再因主线程卡而死等，后端能跑完、重启可恢复。
 # aide 自带的 `tracing = "0.1"` crate 不受影响，只丢掉 Tauri 内部插桩（本就没用）。
-tauri = { version = "2", features = [] }
+# `devtools`：release 构建保留 WebView2 devtools——滚轮定格这类状态病需要在病发
+# 实例上活体解剖（计算样式/逐样式开关），前端经 Ctrl+Alt+I → open_devtools 打开。
+tauri = { version = "2", features = ["devtools"] }
 
 tauri-plugin-shell = "2"
 

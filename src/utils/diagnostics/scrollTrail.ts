@@ -89,6 +89,25 @@ export function snapshotScrollTrail(): ScrollTrailEntry[] {
   return ring.slice();
 }
 
+/** 修复探针（App.vue 热键 Ctrl+Shift+R）：强制重建所有对话滚动容器的滚动节点
+ *  （display 摘除 → 强制重排 → 还原）。定格现场按一下再试滚轮——
+ *  复活 = 坐实「滚轮路径缓存了滚动范围」（resize 不刷新它、DOM 重建才刷新，
+ *  与切会话自愈互证），且本动作直接就是修复机制；不复活 = 排除最后一类，
+ *  配合 Ctrl+Alt+I 开 devtools 解剖。标记写入诊断环供事后比对。
+ *  副作用：scrollTop 归零（跳回顶部），仅诊断窗口期使用。 */
+export function probeRebuildChatScrollers(): number {
+  if (typeof document === "undefined") return 0;
+  const els = document.querySelectorAll<HTMLElement>(".chat-messages");
+  els.forEach((el) => {
+    const before = `${Math.round(el.scrollTop)}/${el.scrollHeight}`;
+    el.style.display = "none";
+    void el.offsetHeight; // 强制重排：确保旧滚动节点真正销毁再重建
+    el.style.display = "";
+    trail("probe", `rebuild top/sh ${before}→${Math.round(el.scrollTop)}/${el.scrollHeight}`);
+  });
+  return els.length;
+}
+
 /** 测试辅助：重置模块状态。 */
 export function resetScrollTrailForTest(): void {
   ring.length = 0;

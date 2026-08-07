@@ -230,6 +230,14 @@ pub async fn diag_freeze_supplement(
         .map_err(|e| e.to_string())
 }
 
+/// 打开 WebView2 devtools。release 默认没有（需 Cargo `devtools` feature 保能力）——
+/// 滚轮定格这类状态病（不冻结、watchdog 抓不到）需要在病发实例上活体解剖：
+/// 读计算样式、逐样式开关、观察滚轮是否复活。纯窗口调用，同步无 IO。
+#[tauri::command]
+pub fn open_devtools(window: tauri::WebviewWindow) {
+    window.open_devtools();
+}
+
 /// 滚动诊断环落盘：前端热键（Ctrl+Shift+D）触发，把滚轮目标 / scrollTop 写入者
 /// 时间线写到 diagnostics/scroll-trail-<epoch_ms>.json，返回落盘路径。针对间歇性
 /// 滚轮定格（『回到底部』可用、切会话自愈）的活体取证—— watchdog 管的是主线程

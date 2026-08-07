@@ -43,7 +43,7 @@ import { matchShortcut } from "./utils/shortcut";
 import { applyTheme, themes } from "./themes";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { snapshotScrollTrail } from "./utils/diagnostics/scrollTrail";
+import { snapshotScrollTrail, probeRebuildChatScrollers } from "./utils/diagnostics/scrollTrail";
 import { useFileViewer } from "./composables/useFileViewer";
 import { useRecent } from "./composables/useRecent";
 import { useWorkspaces } from "./composables/useWorkspaces";
@@ -618,6 +618,31 @@ function handleKeydown(e: KeyboardEvent) {
     e.preventDefault();
     e.stopPropagation();
     void dumpScrollTrail();
+  }
+
+  // Ctrl+Shift+R：滚动修复探针——定格现场重建滚动节点，复活即坐实滚轮路径
+  // 缓存病（见 scrollTrail.ts 注释）；探针副作用是回到顶部。
+  if (e.ctrlKey && e.shiftKey && (e.code === "KeyR" || e.key === "R")) {
+    e.preventDefault();
+    e.stopPropagation();
+    const n = probeRebuildChatScrollers();
+    pushNotification({
+      severity: "info",
+      source: "diagnostics",
+      title: "滚动探针已执行",
+      body: `重建了 ${n} 个对话滚动容器（回到顶部）。现在试试滚轮，然后 Ctrl+Shift+D 落盘`,
+      timestamp: Date.now(),
+      dedupKey: "scroll-probe",
+    });
+    return;
+  }
+
+  // Ctrl+Alt+I：打开 WebView2 devtools（release 活体解剖入口；避开 F12/Ctrl+Shift+I
+  // 这类可能被浏览器加速器键拦截的组合）
+  if (e.ctrlKey && e.altKey && (e.code === "KeyI" || e.key === "I")) {
+    e.preventDefault();
+    e.stopPropagation();
+    void invoke("open_devtools").catch(() => {});
   }
 }
 

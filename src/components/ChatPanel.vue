@@ -1476,6 +1476,13 @@ function onOpenBgDock(taskId: string) {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* 关掉浏览器滚动锚定：它把 scrollTop 调整藏在渲染管线里（我们的诊断环看不
+     见），且与「合成器滚动范围失同步」bug 类强相关——2026-08-07 scroll-trail
+     现场：滚轮（合成器路径）被钳在旧内容高度对应的 top≈191、从真底部一滚即
+     被拽回，JS 置底却畅通，起病时刻与流式思考 <details> 自动折叠重合。扩窗
+     锚定（expandOlderAnchored）与钉底（toBottom）全是手写逻辑，对浏览器锚定
+     零依赖；关掉只消除黑盒变量，无功能损失。 */
+  overflow-anchor: none;
   padding: 8px 0;
 }
 
