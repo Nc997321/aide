@@ -78,15 +78,19 @@ function isLiveGroup(seg: Segment): boolean {
 // 只响应渲染期已判定为文件的 code（见 utils/markdown.ts codespan 渲染器 +
 // utils/fileLink.ts 判定规则），点击层不再自己做路径识别。openResolved 会先探测
 // 路径是否存在，不存在时在工作区内搜索（带加载态，多命中弹选择框）。
+/** 该 block 是否是消息最后一块且消息还在流式——流式尾块判定。index 是原 blocks
+ *  下标（segmentBlocks 保留 Segment.index），不是 segments 下标（tool_group 聚合
+ *  后 segments.length ≠ blocks.length）。文本流式尾块、思考流式期判定共用。 */
+function isStreamingTail(index: number): boolean {
+  return !!props.message.streaming && index === props.message.blocks.length - 1;
+}
+
 /** 文本块 → HTML：已定稿的块走 renderMarkdown 缓存（重渲染零解析成本，含语法
  *  高亮）；流式中的最后一块每个增量都在变，走 renderStreaming——结构照常实时
  *  渲染，唯独代码围栏不跑 hljs（每个增量重高亮成长中的大围栏是 O(n²) 卡死放大器，
- *  见 utils/markdown.ts）。块定稿后自然切回 renderMarkdown 补上高亮。
- *  index 是块在原 blocks 里的下标（Segment.index），分段化后判定依据不变。 */
+ *  见 utils/markdown.ts）。块定稿后自然切回 renderMarkdown 补上高亮。 */
 function blockHtml(text: string, index: number): string {
-  const streamingTail =
-    !!props.message.streaming && index === props.message.blocks.length - 1;
-  return streamingTail ? renderStreaming(text) : renderMarkdown(text);
+  return isStreamingTail(index) ? renderStreaming(text) : renderMarkdown(text);
 }
 
 function handleTextClick(e: MouseEvent) {
@@ -129,6 +133,7 @@ function handleTextClick(e: MouseEvent) {
         <ThinkingBlock
           v-else-if="seg.block.type === 'thinking'"
           :text="seg.block.text"
+          :streaming="isStreamingTail(seg.index)"
         />
         <ToolCallBlock
           v-else-if="seg.block.type === 'tool_call'"

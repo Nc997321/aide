@@ -174,14 +174,80 @@ describe("mapSdkMessage streaming (includePartialMessages)", () => {
     };
   }
 
-  it("forwards stream_event text deltas as text_delta", () => {
+  function streamThinkingDelta(text: string, parentToolUseId: string | null = null) {
+    return {
+      type: "stream_event",
+      parent_tool_use_id: parentToolUseId,
+      event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: text } },
+    };
+  }
+  function assistantThinking(thinking: string) {
+    return { type: "assistant", message: { content: [{ type: "thinking", thinking }] } };
+  }
+  /** 用 partialMode 调 mapSdkMessage，返回 emit 的事件列表。subagents/tools 可传入共享。 */
+  function mapPartial(msg: any, partialMode: boolean, subagents = new SubagentTracker(), tools = new ToolLifecycleTracker()): ChatEvent[] {
     const events: ChatEvent[] = [];
-    mapSdkMessage(streamTextDelta("你"), (e) => events.push(e), new TaskTracker(), new SubagentTracker(), new ToolLifecycleTracker());
-    mapSdkMessage(streamTextDelta("好"), (e) => events.push(e), new TaskTracker(), new SubagentTracker(), new ToolLifecycleTracker());
+    mapSdkMessage(msg, (e) => events.push(e), new TaskTracker(), subagents, tools, undefined, undefined, undefined, partialMode);
+    return events;
+  }
+
+  // partial=off（默认 / btw / title）：SDK 不发 stream_event；即使到达也忽略。
+  it("partial=off: stream_event 分支不转发任何 delta", () => {
+    const events: ChatEvent[] = [];
+    events.push(...mapPartial(streamTextDelta("你"), false));
+    events.push(...mapPartial(streamThinkingDelta("想"), false));
+    expect(events).toEqual([]);
+  });
+
+  // partial=on（主会话）：thinking_delta 逐字流式、text_delta 丢弃（text 走整块）。
+  it("partial=on: forwards stream_event thinking_delta as thinking_delta", () => {
+    const events: ChatEvent[] = [];
+    events.push(...mapPartial(streamThinkingDelta("我"), true));
+    events.push(...mapPartial(streamThinkingDelta("在想"), true));
     expect(events).toEqual([
-      { type: "text_delta", delta: "你" },
-      { type: "text_delta", delta: "好" },
+      { type: "thinking_delta", delta: "我" },
+      { type: "thinking_delta", delta: "在想" },
     ]);
+  });
+
+  it("partial=on: does not forward stream_event text_delta (text 走整块)", () => {
+    const events: ChatEvent[] = [];
+    events.push(...mapPartial(streamTextDelta("你"), true));
+    events.push(...mapPartial(streamTextDelta("好"), true));
+    expect(events).toEqual([]);
+  });
+
+  it("partial=on: skips thinking block in assistant message (已被 stream_event 逐字发过, 去重)", () => {
+    expect(mapPartial(assistantThinking("整块思考"), true)).toEqual([]);
+  });
+
+  it("partial=on: assistant text block 整块照发", () => {
+    expect(mapPartial(assistantText("完整文本"), true)).toEqual([{ type: "text_delta", delta: "完整文本" }]);
+  });
+
+  it("partial=on: assistant text+thinking mixed, thinking 跳过、text 整块发", () => {
+    const msg = {
+      type: "assistant",
+      message: { content: [{ type: "thinking", thinking: "思考" }, { type: "text", text: "正文" }] },
+    };
+    expect(mapPartial(msg, true)).toEqual([{ type: "text_delta", delta: "正文" }]);
+  });
+
+  it("partial=on: 空 thinking（display=omitted）两边都不发", () => {
+    expect(mapPartial({ type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "" } } }, true)).toEqual([]);
+    expect(mapPartial({ type: "assistant", message: { content: [{ type: "thinking", thinking: "" }] } }, true)).toEqual([]);
+  });
+
+  it("partial=on: 子代理 stream_event 丢弃（走整块，不连带逐字流式）", () => {
+    const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
+    // 先注册子代理 a1（Agent tool_use → active）
+    mapPartial(assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研" }), true, subagents, tools);
+    expect(subagents.isActive("a1")).toBe(true);
+    const events: ChatEvent[] = [];
+    events.push(...mapPartial(streamTextDelta("子代理文本", "a1"), true, subagents, tools));
+    events.push(...mapPartial(streamThinkingDelta("子代理思考", "a1"), true, subagents, tools));
+    expect(events).toEqual([]);
   });
 
   it("emits the final assistant text block as one text_delta (partial off)", () => {

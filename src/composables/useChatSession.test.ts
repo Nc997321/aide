@@ -357,6 +357,38 @@ describe("useChatSession per-session store", () => {
     expect(msg.model).toBe("kimi-for-coding-highspeed");
   });
 
+  it("thinking_delta 逐字追加到同一 thinking block，与 text 块互不并入", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+
+    emit({ type: "thinking_delta", delta: "我", session_id: "uuid-a" });
+    emit({ type: "thinking_delta", delta: "在想", session_id: "uuid-a" });
+    await flush();
+    let blocks = chat.messages.value.flatMap((m) => m.blocks);
+    expect(blocks.some((b) => b.type === "thinking" && (b as { text: string }).text === "我在想")).toBe(true);
+
+    // 后续 text 块另起（不并入 thinking）
+    emit({ type: "text_delta", delta: "结论", session_id: "uuid-a" });
+    await flush();
+    blocks = chat.messages.value.flatMap((m) => m.blocks);
+    expect(blocks.some((b) => b.type === "text" && (b as { text: string }).text === "结论")).toBe(true);
+    expect(blocks.some((b) => b.type === "thinking" && (b as { text: string }).text === "我在想")).toBe(true);
+  });
+
+  it("thinking 整块（历史回放）走同一追加逻辑", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+
+    emit({ type: "thinking", text: "整块思考内容", session_id: "uuid-a" });
+    await flush();
+    const blocks = chat.messages.value.flatMap((m) => m.blocks);
+    expect(blocks.some((b) => b.type === "thinking" && (b as { text: string }).text === "整块思考内容")).toBe(true);
+  });
+
   it("model_switch_result 落 store 且 seq 单调递增（连续切同一模型也触发 watcher）", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);

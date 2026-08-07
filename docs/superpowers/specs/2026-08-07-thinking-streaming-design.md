@@ -86,8 +86,8 @@ SDK (includePartialMessages: true)
 ```ts
 // 主线程 thinking 逐字增量——partial=on 下 stream_event 的 thinking_delta 转发。
 // 与 thinking 整块互补：partial=on 走这条（流式），partial=off / 历史回放走 thinking 整块。
-// 与 subagent_thinking_delta 对称，不带 id（主线程一轮只有一个思考增量流）。
-| { type: "thinking_delta"; text: string }
+// 与 subagent_thinking_delta 对称（用 delta 字段、不带 id），可走 deltaCoalescer 合并。
+| { type: "thinking_delta"; delta: string }
 ```
 
 保留 `{ type: "thinking"; text: string }` 整块事件不动。前端 `src/types/chat.ts` 的 `ThinkingBlock` 类型不变（前端把 `thinking_delta` 追加到现有 `ThinkingBlock.text`）。
@@ -103,7 +103,7 @@ SDK (includePartialMessages: true)
 `mapSdkMessage` 新增参数 `partialMode: boolean`（SessionWorker 注入）：
 
 - **`stream_event` 分支**（当前只转发 `text_delta`，mapper.ts:465-471）：
-  - `partialMode=true`：改为转发 `thinking_delta`（`emit({ type: "thinking_delta", text: ev.delta.thinking })`），**不再转发 `text_delta`**
+  - `partialMode=true`：改为转发 `thinking_delta`（`emit({ type: "thinking_delta", delta: ev.delta.thinking })`），**不再转发 `text_delta`**
   - `partialMode=false`：分支不触发（SDK 不发 stream_event），现状不变
 - **`assistant` 分支**（mapper.ts:485-517 遍历 content blocks）：
   - `partialMode=true` 时：`thinking` block 整块**跳过**；`text` block 整块照发；`tool_use` 照发
@@ -127,14 +127,15 @@ SDK (includePartialMessages: true)
 ```ts
 case "thinking":
 case "thinking_delta": {
-  // partial-on 走 thinking_delta 逐字增量，partial-off / 历史回放走 thinking 整块；
-  // 前端都是"追加到末尾同类型 block，否则新建"，行为一致。
+  // partial-on 走 thinking_delta 逐字增量（delta 字段），partial-off / 历史回放走 thinking
+  // 整块（text 字段）；前端都是"追加到末尾同类型 block，否则新建"，用 text ?? delta 兼容两路。
+  const chunk = (e["text"] as string) ?? (e["delta"] as string);
   const msg = getOrCreateAssistant(store);
   const last = msg.blocks[msg.blocks.length - 1];
   if (last?.type === "thinking") {
-    (last as ThinkingBlock).text += e["text"] as string;
+    (last as ThinkingBlock).text += chunk;
   } else {
-    msg.blocks.push({ type: "thinking", text: e["text"] as string });
+    msg.blocks.push({ type: "thinking", text: chunk });
   }
   break;
 }

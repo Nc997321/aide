@@ -68,6 +68,11 @@ export type ChatEvent =
   // 非逐字增量）。不盖 model/modelLabel——模型徽标由同消息首个 text/tool_use 块盖，
   // 思考块不抢。text 空时（provider 用 display=omitted）sidecar 直接不发。
   | { type: "thinking"; text: string }
+  // 主线程 thinking 逐字增量（partial-on 下 stream_event 的 thinking_delta 转发）。
+  // 与 thinking 整块互补：partial=on 走这条（流式），partial=off / 历史回放走 thinking
+  // 整块。与 subagent_thinking_delta 对称（用 delta 字段、不带 id），可走 deltaCoalescer 合并。
+  // text 空时（display=omitted）stream_event 不发本类型，故此处 delta 必非空。
+  | { type: "thinking_delta"; delta: string }
   | { type: "tool_use_start"; id: string; name: string; input: unknown; model?: string; modelLabel?: string }
   | { type: "tool_result"; id: string; content: string; is_error: boolean }
   | { type: "subagent_start"; id: string; agentName: string; description: string; prompt?: string; model?: string; modelLabel?: string }

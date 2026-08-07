@@ -900,7 +900,10 @@ export class SessionWorker {
                 Stop: [{ hooks: [this.makeStopEffortHook()] }],
               },
               ...(codegraphMcp ? { mcpServers: codegraphMcp as any } : {}),
-              includePartialMessages: false,
+              // 主会话开 partial：让 thinking_delta 逐字流式（mapper 只放 thinking_delta，
+              // text 仍走整块，避开历史 partial 卡死坑，见 2026-08-07-thinking-streaming-design）。
+              // btw 轻量支线保持 partial=off（mapper 的子代理隔离守卫也对 btw 生效）。
+              includePartialMessages: !this.btwMode,
               ...(this.currentModel ? { model: this.currentModel } : {}),
               // effort 的 spawn 通道（会话中切换走 set_effort → applyFlagSettings）。
               ...(this.currentEffort ? { effort: this.currentEffort as EffortLevel } : {}),
@@ -970,6 +973,7 @@ export class SessionWorker {
                 startTail: (id, outputFile) => this.startBgTaskTail(id, outputFile),
                 stopTail: (id) => this.stopBgTaskTail(id),
               },
+              !this.btwMode,
             );
 
             if (this.jumpQueueCtl.has() && this.toolLifecycle.isIdle()) {

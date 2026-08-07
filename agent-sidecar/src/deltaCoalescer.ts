@@ -22,6 +22,7 @@ type DeltaEvent = Extract<ChatEvent, { delta: string }>;
 
 const COALESCABLE_TYPES: ReadonlySet<string> = new Set([
   "text_delta",
+  "thinking_delta",
   "subagent_text_delta",
   "subagent_thinking_delta",
   "bg_task_output",

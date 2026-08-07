@@ -313,9 +313,14 @@ export function emitSubagentBlocks(
  * assistant/user 两条分支委托给 `emitSubagentBlocks`（.output 回放复用同一份解析）；
  * 这里只保留 stream_event 逐字增量分支——.output 里没有这类事件。
  */
-function emitSubagentProgress(msg: any, emit: (e: ChatEvent) => void, subagents: SubagentTracker) {
+function emitSubagentProgress(msg: any, emit: (e: ChatEvent) => void, subagents: SubagentTracker, partialMode: boolean = false) {
   const parentId = msg.parent_tool_use_id as string;
   if (!subagents.isActive(parentId)) return; // 防御性：理论上不会出现不认识的 id
+
+  // partial=on（主会话）时丢弃子代理逐字 delta——子代理走下方 emitSubagentBlocks 整块
+  // （与 partial=off 现状一致），避免开 partial 连带让子代理 text/thinking 也逐字流式。
+  // 未来若要子代理也流式，去掉此守卫。partial=off 时 SDK 不发 stream_event，本守卫无副作用。
+  if (partialMode && msg.type === "stream_event") return;
 
   // 逐字流式：子代理内部的 text_delta / thinking_delta 增量。
   if (msg.type === "stream_event") {
@@ -367,9 +372,12 @@ export function mapSdkMessage(
     startTail: (id: string, outputFile: string) => void;
     stopTail: (id: string) => void;
   },
+  /** partial=on 标志：主会话 true（thinking 逐字流式、text 走整块、子代理走整块）；
+   *  缺省 false（partial=off / btw / titleGenerator / 测试），现状不变。 */
+  partialMode: boolean = false,
 ) {
   if (msg.parent_tool_use_id) {
-    emitSubagentProgress(msg, emit, subagents);
+    emitSubagentProgress(msg, emit, subagents, partialMode);
     return;
   }
 
@@ -460,12 +468,14 @@ export function mapSdkMessage(
     return;
   }
 
-  // 真流式：query 开了 includePartialMessages，文本以 stream_event 的
-  // text_delta 逐字到达；thinking_delta 等其他增量类型不进对话流。
+  // partial=on 时的逐字增量。主会话只放 thinking 流式——thinking_delta 逐字转发；
+  // text_delta 仍走下方 assistant 整块（text 不流式，避开历史 partial 卡死坑）。
+  // partial=off（btw/title）SDK 不发 stream_event，本分支不触发。
   if (msg.type === "stream_event") {
+    if (!partialMode) return;
     const ev = msg.event;
-    if (ev?.type === "content_block_delta" && ev.delta?.type === "text_delta" && ev.delta.text) {
-      emit({ type: "text_delta", delta: ev.delta.text });
+    if (ev?.type === "content_block_delta" && ev.delta?.type === "thinking_delta" && ev.delta.thinking) {
+      emit({ type: "thinking_delta", delta: ev.delta.thinking });
     }
     return;
   }
@@ -484,17 +494,16 @@ export function mapSdkMessage(
     };
     for (const block of msg.message.content) {
       if (block.type === "text") {
-        // includePartialMessages 关闭后没有 stream_event 逐字增量，整块文本在此
-        // 一次性发出（否则助手回复文本丢失）。partial 开启时会被逐字增量抢先、
-        // 这里再发会重复——但 index.ts 现在不开 partial，所以这是唯一来源。
+        // text 整块：partial=on 时 stream_event 的 text_delta 被 mapper 丢弃（B 方案
+        // text 不流式），text 只从完整 assistant message 整块发；partial=off 时 SDK
+        // 不发 stream_event，也是整块发。两条路都落到这里，是 text 的唯一来源。
         if (block.text) emit(withModel({ type: "text_delta", delta: block.text }));
         continue;
       } else if (block.type === "thinking") {
-        // 主线程 thinking block 整块转发（partial-off 下思考在 assistant content 里
-        // 一次性到达，非逐字增量）。文本为空时跳过——provider 用 display=omitted
-        // 时 block 在但 text 空，前端没东西可渲染。partial-on 的逐字 thinking_delta
-        // 走 stream_event 分支，当前不开 partial，这里就是唯一来源。
-        if (block.thinking) emit({ type: "thinking", text: block.thinking });
+        // 主线程 thinking block 整块。partial=on 时已被 stream_event 的 thinking_delta
+        // 逐字发过，此处跳过去重；partial=off 时这是唯一来源（整块转发）。文本为空
+        // 时跳过——provider 用 display=omitted 时 block 在但 text 空，两边都不发。
+        if (block.thinking && !partialMode) emit({ type: "thinking", text: block.thinking });
         continue;
       } else if (block.type === "tool_use") {
         // 插队安全边界判断的账本：不管是普通工具、Task/Agent 子代理还是内置

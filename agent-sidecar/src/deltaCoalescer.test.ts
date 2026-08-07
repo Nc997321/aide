@@ -29,6 +29,19 @@ describe("DeltaCoalescer", () => {
     expect(events).toEqual([{ type: "text_delta", delta: "你好！" }]);
   });
 
+  // 主线程 thinking 逐字增量（无 id）同样按 key 合并——流式思考的事件洪峰也压成一条。
+  it("merges consecutive thinking_delta (main thread, no id) within the flush window", () => {
+    const { events, sink } = collect();
+    const c = new DeltaCoalescer(sink, 40);
+
+    c.push({ type: "thinking_delta", delta: "我" });
+    c.push({ type: "thinking_delta", delta: "在想" });
+    c.push({ type: "thinking_delta", delta: "…" });
+
+    vi.advanceTimersByTime(40);
+    expect(events).toEqual([{ type: "thinking_delta", delta: "我在想…" }]);
+  });
+
   // 非增量事件到达时先冲刷缓冲——tool_use_start 不能跑到它之前的文本前面去。
   it("flushes pending deltas before passing through a non-delta event", () => {
     const { events, sink } = collect();

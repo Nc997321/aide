@@ -498,15 +498,19 @@ function handleChatEvent(e: Record<string, unknown>) {
       }
       break;
     }
-    case "thinking": {
-      // 主线程 thinking block 整块（partial-off）。连续 thinking 合并到同一 block，
-      // 与 text_delta 同形。不盖 model——thinking 事件不带 model/modelLabel。
+    case "thinking":
+    case "thinking_delta": {
+      // 主线程思考：partial=on 走 thinking_delta 逐字增量（delta 字段），partial=off / 历史
+      // 回放走 thinking 整块（text 字段）。前端都是"追加到末尾同类型 block，否则新建"，
+      // 用 text ?? delta 兼容两路。不盖 model——思考事件不带 model/modelLabel（模型徽标
+      // 由同消息首个 text/tool_use 块盖）。
+      const chunk = (e["text"] as string) ?? (e["delta"] as string);
       const msg = getOrCreateAssistant(store);
       const last = msg.blocks[msg.blocks.length - 1];
       if (last?.type === "thinking") {
-        (last as ThinkingBlock).text += e["text"] as string;
+        (last as ThinkingBlock).text += chunk;
       } else {
-        msg.blocks.push({ type: "thinking", text: e["text"] as string });
+        msg.blocks.push({ type: "thinking", text: chunk });
       }
       break;
     }
