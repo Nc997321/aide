@@ -2,6 +2,7 @@
 import SidebarLeft from "./components/SidebarLeft.vue";
 import FileTree from "./components/FileTree.vue";
 import ChangeLogPanel from "./components/ChangeLogPanel.vue";
+import FileResolveOverlay from "./components/FileResolveOverlay.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import ModalDialog from "./components/ModalDialog.vue";
 import { defineAsyncComponent } from "vue";
@@ -922,6 +923,10 @@ onUnmounted(() => {
 
       <!-- 文件窗口层：左缘起、止于文件树侧栏（可盖会话侧栏），边界随侧栏拖动实测 -->
       <FileViewer />
+
+      <!-- 文件解析浮层：useFileResolver 的搜索 loading / 多命中选择（模块级单例状态，
+           聊天文件链接与会话变更面板共用，必须全局挂载一份才可见） -->
+      <FileResolveOverlay :workspace-path="workspacePath" />
 
       <ContextMenu />
       <ModalDialog />

@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, ref } from "vue";
 import { useConversationChanges } from "../composables/useConversationChanges";
-import type { ChangeRound } from "../composables/useConversationChanges";
-import { useFileViewer } from "../composables/useFileViewer";
+import type { ChangeRound, ChangeFile } from "../composables/useConversationChanges";
+import { useFileResolver } from "../composables/useFileResolver";
+import { useSessionWorkspaces } from "../composables/useSessionWorkspaces";
 import { api } from "../api";
 
 const props = defineProps<{ sessionId: string }>();
 
 const { rounds, revertRound, revertSingleFile } = useConversationChanges(() => props.sessionId);
-const fileViewer = useFileViewer();
+const { openResolved } = useFileResolver();
+const sessionWs = useSessionWorkspaces();
 
 // 连续无变更轮次 > 2 时，中间折叠成一行省略号，点击可展开
 const NOCHANGE_COLLAPSE_THRESHOLD = 2;
@@ -24,21 +26,31 @@ function expandGroup(key: string) {
   expandedGroups.value = new Set(expandedGroups.value);
 }
 
-const projectRoot = ref("");
-
-onMounted(async () => {
+/**
+ * 变更条目所属的工作区根：优先会话注册表（混合 tab 布局下会话可来自任意工作区，
+ * 捕获变更时 git 就以它为 cwd），未注册时退回当前活动工作区。
+ * 点击时现取、不缓存——曾缓存于 onMounted，工作区切换/晚恢复后失锚，
+ * 所有点击都被拼到旧根下报「找不到文件」。
+ */
+async function workspaceRootOf(sessionId: string): Promise<string | undefined> {
+  const registered = sessionWs.workspaceOf(sessionId)?.wsPath;
+  if (registered) return registered;
   try {
     const info = await api.getProjectInfo();
-    projectRoot.value = info.root;
-  } catch (_) { /* ignore */ }
-});
-
-function resolvePath(rel: string): string {
-  return projectRoot.value.replace(/\\/g, "/") + "/" + rel;
+    return info.root || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
-function openFile(path: string) {
-  fileViewer.open(path);
+/**
+ * 打开变更文件：走文件解析器的「探测 → 工作区内按名搜索 → 多命中浮层」完整兜底，
+ * 与聊天文件链接同一条路径——条目被移动/改名后仍能被搜索找回，而不是直接报错。
+ * 已删除（D）条目磁盘上无对应物，不可点开；内容可用「撤回此文件」恢复。
+ */
+async function openFile(f: ChangeFile) {
+  if (f.status === "D") return;
+  await openResolved(f.path, await workspaceRootOf(props.sessionId));
 }
 
 const totalFiles = computed(() => {
@@ -118,9 +130,11 @@ const renderItems = computed<RenderItem[]>(() => {
               v-for="f in item.round.files"
               :key="f.path"
               class="changelog-file"
-              @click="openFile(resolvePath(f.path))"
+              :class="{ 'changelog-file--deleted': f.status === 'D' }"
+              v-tooltip="f.status === 'D' ? '文件已删除，可点右侧撤回恢复' : undefined"
+              @click="openFile(f)"
             >
-              <span class="changelog-file-status" :class="f.status === 'A' ? 'status-A' : 'status-M'">{{ f.status || 'M' }}</span>
+              <span class="changelog-file-status" :class="`status-${f.status || 'M'}`">{{ f.status || 'M' }}</span>
               <span class="changelog-file-path" v-tooltip="f.path">{{ f.path }}</span>
               <span v-if="f.additions > 0 || f.deletions > 0" class="changelog-file-stats">
                 <span v-if="f.additions > 0" class="stat-add">+{{ f.additions }}</span>
@@ -318,6 +332,23 @@ const renderItems = computed<RenderItem[]>(() => {
 .status-A {
   background: color-mix(in srgb, var(--aide-success) 15%, transparent);
   color: var(--aide-success);
+}
+.status-D {
+  background: color-mix(in srgb, var(--aide-danger) 15%, transparent);
+  color: var(--aide-danger);
+}
+
+/* 已删除条目：磁盘无对应物，不可点开（撤回按钮仍可用，能恢复内容） */
+.changelog-file--deleted {
+  cursor: default;
+  opacity: 0.6;
+}
+.changelog-file--deleted:hover {
+  background: none;
+  color: inherit;
+}
+.changelog-file--deleted .changelog-file-path {
+  text-decoration: line-through;
 }
 
 .changelog-file-path {
