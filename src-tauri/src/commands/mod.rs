@@ -231,6 +231,22 @@ pub fn our_sessions_dir() -> PathBuf {
     our_config_dir().join("sessions")
 }
 
+/// 会话显示名的权威源：`~/.aide/sessions/<id>.json` 的 `name` 字段
+/// （create/rename/auto_rename 三处写）。任何「按 id 展示会话名」的地方都应
+/// 以它为准，元数据缺失时由调用方决定兜底。list_sessions 与 list_recent
+/// （recent.json 只存快照名）都经此对齐。
+pub(crate) fn our_session_name(session_id: &str) -> Option<String> {
+    let path = our_sessions_dir().join(format!("{}.json", session_id));
+    if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+                return v.get("name").and_then(|n| n.as_str()).map(|s| s.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// legacy `config.json`——**纯遗留导入源**：老版本的设置+状态都写在这个文件里，
 /// 设置体系迁移（`settings::migration`）读它一次、导入 `settings.json` 后即可整体
 /// 删除。没有任何活代码应该再读写它；运行时状态的家是 `state_path()`。

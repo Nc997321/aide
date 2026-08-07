@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use tauri::State;
 
-use super::{find_session_jsonl_globally, our_config_dir};
+use super::{find_session_jsonl_globally, our_config_dir, our_session_name};
 use crate::settings::SettingsService;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -99,6 +99,31 @@ pub fn prune_stale(state: &mut RecentState, ws_key: &str) -> bool {
         |id| !find_session_jsonl_globally(id).is_empty(),
         |p| Path::new(p).metadata().is_ok(),
     )
+}
+
+/// 用外部提供的权威名查询函数覆盖会话条目的快照名，返回是否有变化。
+/// 权威名缺失（元数据 json 不在）时保留快照兜底。
+pub fn overlay_session_names_with(
+    state: &mut RecentState,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> bool {
+    let mut changed = false;
+    for s in state.sessions.iter_mut() {
+        if let Some(name) = lookup(&s.session_id) {
+            if s.name != name {
+                s.name = name;
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+/// 生产环境覆盖：权威名来自 `~/.aide/sessions/<id>.json`（create/rename/auto_rename
+/// 三处写，见 `our_session_name`）。recent.json 的 name 只是入列那一刻的快照——
+/// 自动标题/手动改名后不回写，读取时以此自愈，与侧栏会话列表保持同源。
+pub fn overlay_session_names(state: &mut RecentState) -> bool {
+    overlay_session_names_with(state, our_session_name)
 }
 
 // ── 持久化 ──
@@ -194,6 +219,10 @@ pub fn list_recent(ws_key: String, service: State<'_, Arc<SettingsService>>) -> 
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
     let limit = current_limit(&service);
     let mut need_save = prune_stale(&mut guard, &ws_key);
+    // 名字自愈：快照名过期（自动标题/手动改名）时以权威名覆盖并落盘
+    if overlay_session_names(&mut guard) {
+        need_save = true;
+    }
     if guard.sessions.len() > limit {
         guard.sessions.truncate(limit);
         need_save = true;
@@ -335,6 +364,43 @@ mod tests {
         push_session(&mut st, sess("a", 1), 10);
         push_file(&mut st, "k", file("/a", 1), 10);
         let changed = prune_stale_with(&mut st, "k", PRUNE_GRACE_MS + 100, |_| true, |_| true);
+        assert!(!changed);
+    }
+
+    #[test]
+    fn overlay_session_names_overrides_stale_snapshot() {
+        // 回归：自动标题/手动改名只更新权威元数据，recent.json 快照名不回写，
+        // 「最近会话」与会话列表名字不一致——读取时必须以权威名覆盖。
+        let mut st = RecentState::default();
+        let mut e = sess("a", 1);
+        e.name = "a1b2c3d4".into(); // 入列时的占位快照名
+        push_session(&mut st, e, 10);
+        let changed = overlay_session_names_with(&mut st, |id| {
+            (id == "a").then(|| "修复登录 Bug".to_string())
+        });
+        assert!(changed);
+        assert_eq!(st.sessions[0].name, "修复登录 Bug");
+    }
+
+    #[test]
+    fn overlay_session_names_keeps_snapshot_when_metadata_missing() {
+        // 权威元数据缺失（会话 json 不在）时保留快照名兜底，不清空、不判变化。
+        let mut st = RecentState::default();
+        let mut e = sess("a", 1);
+        e.name = "旧名".into();
+        push_session(&mut st, e, 10);
+        let changed = overlay_session_names_with(&mut st, |_| None);
+        assert!(!changed);
+        assert_eq!(st.sessions[0].name, "旧名");
+    }
+
+    #[test]
+    fn overlay_session_names_no_change_returns_false() {
+        let mut st = RecentState::default();
+        let mut e = sess("a", 1);
+        e.name = "同名".into();
+        push_session(&mut st, e, 10);
+        let changed = overlay_session_names_with(&mut st, |_| Some("同名".to_string()));
         assert!(!changed);
     }
 }

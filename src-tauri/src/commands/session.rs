@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use tauri::State;
 
-use super::{Session, ChatMessageItem, HistoryBlock, LastEventInfo, ChangeRoundData, WorkspaceState, project_root_for_commands, find_session_jsonl_globally, claude_projects_dir, claude_sessions_dir, our_sessions_dir};
+use super::{Session, ChatMessageItem, HistoryBlock, LastEventInfo, ChangeRoundData, WorkspaceState, project_root_for_commands, find_session_jsonl_globally, claude_projects_dir, claude_sessions_dir, our_sessions_dir, our_session_name};
 
 /// 扫描目录 + 每个会话读一次 .jsonl 取末条消息，工作区会话多时是实打实的重 IO；
 /// 同步 command 跑在主线程上会卡窗口，这里主线程只取工作区快照，扫描进 blocking 线程。
@@ -848,19 +848,6 @@ fn last_jsonl_message(jsonl_path: &std::path::Path) -> String {
         }
         None => String::new(),
     }
-}
-
-fn our_session_name(session_id: &str) -> Option<String> {
-    let dir = our_sessions_dir();
-    let path = dir.join(format!("{}.json", session_id));
-    if path.exists() {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(v) = serde_json::from_str::<Value>(&content) {
-                return v.get("name").and_then(|n| n.as_str()).map(|s| s.to_string());
-            }
-        }
-    }
-    None
 }
 
 /// Lightweight session discovery used during new-session polling.

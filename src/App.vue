@@ -698,11 +698,15 @@ onMounted(async () => {
   nextTick(() => {
     paletteRef.value?.setRecentFn(async (): Promise<PaletteResult[]> => {
       const { sessions, files } = useRecent();
+      const { names } = useSessionNames();
       const out: PaletteResult[] = [];
       for (const s of sessions.value) {
         out.push({
           id: "rs-" + s.session_id,
-          label: s.name,
+          // 显示名以共享注册表为准（手动改名/自动标题当次运行内即时生效）；
+          // 未注册（重启后未加载该工作区）回落 recent 快照——后端 list_recent
+          // 已用权威元数据自愈覆盖，两条路径同源。
+          label: names[s.session_id] || s.name,
           description: `${s.ws_name} · ${timeAgo(s.ts)}`,
           icon: "session",
           group: "最近会话",
