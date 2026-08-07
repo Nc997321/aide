@@ -59,6 +59,11 @@ pub async fn codegraph_build_index(
             }));
         }
         let root = PathBuf::from(&project_root);
+        // 已信任工作区激活索引：顺带确保该仓库 exclude 忽略 `.aide/`——覆盖
+        // 历史已信任的工作区（trust_workspace 只在「新信任」那一刻生效）。
+        // 幂等、失败仅记日志；每次工作区激活多一次 git rev-parse（blocking
+        // 池内几十 ms），可忽略。
+        crate::commands::workspace::ensure_aide_excluded(&root);
         // 家目录/磁盘根这类非项目 root 不再需要特例守卫：展示与索引的入口
         // （get_project_info → FileTree/ensureIndex）已显式区分「无工作区」，
         // 不会把家目录传进来；任何其它误开的超大目录由 walk 后的

@@ -4,6 +4,12 @@ use tauri::State;
 
 use super::{WorkspaceInfo, WorkspaceState, claude_projects_dir};
 
+// ── 子实现层 ──
+// git_exclude：信任 / 索引激活时把 `.aide/` 幂等写入仓库 .git/info/exclude，
+// 防 Aide 本地状态污染 git status。设计取舍见子模块头部注释。
+mod git_exclude;
+pub use git_exclude::ensure_aide_excluded;
+
 /// 路径 → 编码 key：把 : \ / 替换为 -，与 Claude CLI
 /// `~/.aide/claude/projects/` 目录命名一致。
 pub fn path_to_key(path: &str) -> String {
@@ -385,7 +391,10 @@ pub async fn trust_workspace(path: String) -> Result<(), String> {
         super::settings::with_state_mut(|config| {
             trust_in_config(config, &key);
             Ok(())
-        })
+        })?;
+        // 信任即备好 git 忽略（幂等，失败仅记日志，不因此拒信任）。
+        ensure_aide_excluded(std::path::Path::new(&path));
+        Ok(())
     })
     .await
     .map_err(|e| format!("trust_workspace panicked: {}", e))?
