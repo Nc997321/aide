@@ -8,7 +8,7 @@ import type {
   PolicyDecision,
   ChainEntry,
 } from "./types.js";
-import { matcherMatches, specificity } from "./matchers.js";
+import { hasUnquotedShellControl, matcherMatches, specificity, splitBashSegments } from "./matchers.js";
 
 // Scope priority, highest first. Used both to pick the cross-scope winner and
 // to order per-scope evaluation. `Session` is in-memory only and never
@@ -21,15 +21,46 @@ const SCOPE_PRIORITY: PermissionRule["scope"][] = [
   "managed",
 ];
 
+/** Winner ordering shared by composite evaluation: highest-priority scope,
+ * then specificity DESC, then order ASC. Must stay identical to the Rust
+ * mirror in src-tauri/src/policy/evaluate.rs. */
+function compareByPriority(a: PermissionRule, b: PermissionRule): number {
+  const scopeDiff =
+    SCOPE_PRIORITY.indexOf(a.scope) - SCOPE_PRIORITY.indexOf(b.scope);
+  if (scopeDiff !== 0) return scopeDiff;
+  const specDiff = specificity(b.matcher) - specificity(a.matcher);
+  if (specDiff !== 0) return specDiff;
+  return a.order - b.order;
+}
+
 /** Evaluate `invocation` against `snapshot`. The decision is `defer` when no
  * rule matches, leaving the caller to fall back to the provider's existing
  * permission mode. Filesystem access happens only for path-folder matchers
- * (symlink safety); Bash/field/tool matchers are pure. */
+ * (symlink safety); Bash/field/tool matchers are pure.
+ *
+ * Chained Bash commands (`a | b`, `a && b`, …) take the composite path: the
+ * command is split into verifiable segments (see `splitBashSegments`) and
+ * every segment must independently match an allow rule — a prefix allow never
+ * silently widens across a separator into an unvetted command. deny/ask rules
+ * are checked against the raw command AND each segment, so a `deny rm -rf`
+ * still fires on `echo hi | rm -rf /`. Commands the analyzer cannot verify
+ * (file redirects, `$(…)`, backticks, unbalanced quotes) fall through to the
+ * classic path where the allow shell-gate blocks them. */
 export async function evaluatePolicy(
   snapshot: PermissionPolicySnapshot,
   invocation: { tool: string; input: Record<string, unknown>; cwd?: string },
 ): Promise<PolicyDecision> {
   const { tool, input, cwd } = invocation;
+
+  if (tool === "Bash") {
+    const command = typeof input.command === "string" ? input.command : "";
+    if (command && hasUnquotedShellControl(command)) {
+      const segments = splitBashSegments(command);
+      if (segments !== null) {
+        return evaluateBashComposite(snapshot, invocation, segments);
+      }
+    }
+  }
 
   // Per scope: collect matched rules, pick the winner by
   // (specificity DESC, order ASC). Losers in the same scope are recorded for
@@ -129,6 +160,122 @@ export async function evaluatePolicy(
   const reason = selected !== null ? summarizeRule(selected) : "no matching permission rule; deferring to provider permission mode";
 
   return { disposition, winner: selected, chain, reason };
+}
+
+// ---------------------------------------------------------------------------
+// Chained Bash command evaluation
+// ---------------------------------------------------------------------------
+
+/** Composite evaluation for a chained Bash command already split into
+ * verifiable segments by `splitBashSegments`. Mirror of the Rust
+ * `evaluate_bash_composite` — decision semantics and winner ordering must
+ * stay identical (locked by the shared JSON fixture). */
+async function evaluateBashComposite(
+  snapshot: PermissionPolicySnapshot,
+  invocation: { tool: string; input: Record<string, unknown>; cwd?: string },
+  segments: string[],
+): Promise<PolicyDecision> {
+  const { input, cwd } = invocation;
+  const rules = snapshot.rules.filter((r) => r.tool === "Bash");
+  const segmentInputs = segments.map((s) => ({ ...input, command: s }));
+
+  /** Highest-priority rule with `effect` matching ANY of the given inputs
+   * (raw command first, then segments in order). deny/ask only. */
+  const bestMatch = async (
+    effect: "deny" | "ask",
+  ): Promise<{ rule: PermissionRule; matchedInput: Record<string, unknown> } | null> => {
+    for (const scope of SCOPE_PRIORITY) {
+      const scoped = rules.filter((r) => r.scope === scope && r.effect === effect);
+      if (scoped.length === 0) continue;
+      for (const candidateInput of [input, ...segmentInputs]) {
+        const matched: PermissionRule[] = [];
+        for (const r of scoped) {
+          if (await matcherMatches(r.matcher, candidateInput, cwd, effect)) {
+            matched.push(r);
+          }
+        }
+        if (matched.length > 0) {
+          matched.sort(compareByPriority);
+          return { rule: matched[0], matchedInput: candidateInput };
+        }
+      }
+    }
+    return null;
+  };
+
+  const segmentNote = (matchedInput: Record<string, unknown>): string =>
+    matchedInput === input
+      ? ""
+      : ` — matched segment ${JSON.stringify(matchedInput.command)} of the chained command`;
+
+  const deny = await bestMatch("deny");
+  if (deny !== null) {
+    return {
+      disposition: "deny",
+      winner: deny.rule,
+      chain: [compositeChainEntry(deny.rule, "selected")],
+      reason: summarizeRule(deny.rule) + segmentNote(deny.matchedInput),
+    };
+  }
+
+  const ask = await bestMatch("ask");
+  if (ask !== null) {
+    return {
+      disposition: "ask",
+      winner: ask.rule,
+      chain: [compositeChainEntry(ask.rule, "selected")],
+      reason: summarizeRule(ask.rule) + segmentNote(ask.matchedInput),
+    };
+  }
+
+  // Allow: EVERY segment must match at least one allow rule. Per-segment
+  // winners are all marked selected — each one vouches for its segment.
+  const perSegmentWinners: PermissionRule[] = [];
+  for (let idx = 0; idx < segments.length; idx++) {
+    const matched: PermissionRule[] = [];
+    for (const r of rules) {
+      if (r.effect === "allow" && (await matcherMatches(r.matcher, segmentInputs[idx], cwd, "allow"))) {
+        matched.push(r);
+      }
+    }
+    if (matched.length === 0) {
+      return {
+        disposition: "defer",
+        winner: null,
+        chain: [],
+        reason:
+          `segment ${idx + 1}/${segments.length} ${JSON.stringify(segments[idx])} of the chained command ` +
+          "matched no allow rule; deferring to provider permission mode",
+      };
+    }
+    matched.sort(compareByPriority);
+    perSegmentWinners.push(matched[0]);
+  }
+
+  const winner = [...perSegmentWinners].sort(compareByPriority)[0];
+  // Dedupe by rule id — one rule may vouch for several segments.
+  const chainRules = [...new Map(perSegmentWinners.map((r) => [r.id, r])).values()];
+  const chain = chainRules.map((r) => compositeChainEntry(r, "selected"));
+  const suffix =
+    segments.length > 1
+      ? ` — all ${segments.length} segments of the chained command matched allow rules`
+      : "";
+  return {
+    disposition: "allow",
+    winner,
+    chain,
+    reason: summarizeRule(winner) + suffix,
+  };
+}
+
+function compositeChainEntry(rule: PermissionRule, status: ChainEntry["status"]): ChainEntry {
+  return {
+    ruleId: rule.id,
+    scope: rule.scope,
+    matched: true,
+    specificity: specificity(rule.matcher),
+    status,
+  };
 }
 
 // ---------------------------------------------------------------------------

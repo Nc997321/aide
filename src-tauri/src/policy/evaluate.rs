@@ -4,7 +4,7 @@
 
 use crate::settings::{PermissionEffect, SettingsScope, StoredPermissionRule};
 
-use super::matchers::{matcher_matches, specificity};
+use super::matchers::{has_unquoted_shell_control, matcher_matches, specificity, split_bash_segments};
 use super::model::{
     ChainEntry, ChainStatus, PermissionMatcher, PermissionPolicySnapshot, PermissionRule,
     PermissionSource, PolicyDecision, PolicyDisposition, ToolInvocation,
@@ -21,11 +21,44 @@ const SCOPE_PRIORITY: [SettingsScope; 5] = [
     SettingsScope::Managed,
 ];
 
+/// Winner ordering shared by composite evaluation: highest-priority scope,
+/// then specificity DESC, then order ASC. Must stay identical to the
+/// TypeScript mirror in agent-sidecar/src/policy/evaluate.ts.
+fn compare_by_priority(a: &PermissionRule, b: &PermissionRule) -> std::cmp::Ordering {
+    scope_rank(a.scope)
+        .cmp(&scope_rank(b.scope))
+        .then(specificity(&b.matcher).cmp(&specificity(&a.matcher)))
+        .then(a.order.cmp(&b.order))
+}
+
+fn scope_rank(scope: SettingsScope) -> usize {
+    SCOPE_PRIORITY.iter().position(|&s| s == scope).unwrap_or(usize::MAX)
+}
+
 /// Evaluate `invocation` against `snapshot`. The decision is `defer` when no
 /// rule matches, leaving the caller to fall back to the provider's existing
 /// permission mode. Filesystem access happens only for path-folder matchers
 /// (symlink safety); Bash/field/tool matchers are pure.
+///
+/// Chained Bash commands (`a | b`, `a && b`, …) take the composite path: the
+/// command is split into verifiable segments (see `split_bash_segments`) and
+/// every segment must independently match an allow rule — a prefix allow never
+/// silently widens across a separator into an unvetted command. deny/ask rules
+/// are checked against the raw command AND each segment, so a `deny rm -rf`
+/// still fires on `echo hi | rm -rf /`. Commands the analyzer cannot verify
+/// (file redirects, `$(…)`, backticks, unbalanced quotes) fall through to the
+/// classic path where the allow shell-gate blocks them.
 pub fn evaluate(snapshot: &PermissionPolicySnapshot, invocation: &ToolInvocation) -> PolicyDecision {
+    if invocation.tool == "Bash" {
+        if let Some(command) = invocation.input.get("command").and_then(|v| v.as_str()) {
+            if !command.is_empty() && has_unquoted_shell_control(command) {
+                if let Some(segments) = split_bash_segments(command) {
+                    return evaluate_bash_composite(snapshot, invocation, &segments);
+                }
+            }
+        }
+    }
+
     // Per scope: collect matched rules, pick the winner by
     // (specificity DESC, order ASC). Losers in the same scope are recorded for
     // the chain as `shadowed_by_specificity`.
@@ -124,6 +157,152 @@ pub fn evaluate(snapshot: &PermissionPolicySnapshot, invocation: &ToolInvocation
         winner: selected.cloned(),
         chain,
         reason,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Chained Bash command evaluation
+// ---------------------------------------------------------------------------
+
+/// Composite evaluation for a chained Bash command already split into
+/// verifiable segments by `split_bash_segments`. Mirror of the TypeScript
+/// `evaluateBashComposite` — decision semantics and winner ordering must stay
+/// identical (locked by the shared JSON fixture).
+fn evaluate_bash_composite(
+    snapshot: &PermissionPolicySnapshot,
+    invocation: &ToolInvocation,
+    segments: &[String],
+) -> PolicyDecision {
+    let cwd = invocation.cwd.as_deref();
+    let rules: Vec<&PermissionRule> = snapshot
+        .rules
+        .iter()
+        .filter(|r| r.tool == "Bash")
+        .collect();
+    let segment_inputs: Vec<serde_json::Map<String, serde_json::Value>> = segments
+        .iter()
+        .map(|s| {
+            let mut m = invocation.input.clone();
+            m.insert("command".to_string(), serde_json::Value::String(s.clone()));
+            m
+        })
+        .collect();
+
+    // Highest-priority rule with `effect` matching ANY candidate input (raw
+    // command first, then segments in order). deny/ask only.
+    let best_match = |effect: PermissionEffect| -> Option<(&PermissionRule, usize)> {
+        for &scope in &SCOPE_PRIORITY {
+            // index 0 = raw invocation input; 1.. = segments
+            for idx in 0..=segment_inputs.len() {
+                let candidate: &serde_json::Map<String, serde_json::Value> = if idx == 0 {
+                    &invocation.input
+                } else {
+                    &segment_inputs[idx - 1]
+                };
+                let mut matched: Vec<&PermissionRule> = rules
+                    .iter()
+                    .filter(|r| r.scope == scope && r.effect == effect)
+                    .filter(|r| matcher_matches(&r.matcher, candidate, cwd, effect))
+                    .copied()
+                    .collect();
+                if !matched.is_empty() {
+                    matched.sort_by(|a, b| compare_by_priority(a, b));
+                    return Some((matched[0], idx));
+                }
+            }
+        }
+        None
+    };
+
+    let segment_note = |idx: usize| -> String {
+        if idx == 0 {
+            String::new()
+        } else {
+            format!(
+                " — matched segment {:?} of the chained command",
+                segments[idx - 1]
+            )
+        }
+    };
+
+    if let Some((deny, idx)) = best_match(PermissionEffect::Deny) {
+        return PolicyDecision {
+            disposition: PolicyDisposition::Deny,
+            winner: Some(deny.clone()),
+            chain: vec![composite_chain_entry(deny, ChainStatus::Selected)],
+            reason: format!("{}{}", summarize_rule(deny), segment_note(idx)),
+        };
+    }
+
+    if let Some((ask, idx)) = best_match(PermissionEffect::Ask) {
+        return PolicyDecision {
+            disposition: PolicyDisposition::Ask,
+            winner: Some(ask.clone()),
+            chain: vec![composite_chain_entry(ask, ChainStatus::Selected)],
+            reason: format!("{}{}", summarize_rule(ask), segment_note(idx)),
+        };
+    }
+
+    // Allow: EVERY segment must match at least one allow rule. Per-segment
+    // winners are all marked selected — each one vouches for its segment.
+    let mut per_segment_winners: Vec<&PermissionRule> = Vec::new();
+    for (idx, candidate) in segment_inputs.iter().enumerate() {
+        let mut matched: Vec<&PermissionRule> = rules
+            .iter()
+            .filter(|r| r.effect == PermissionEffect::Allow)
+            .filter(|r| matcher_matches(&r.matcher, candidate, cwd, PermissionEffect::Allow))
+            .copied()
+            .collect();
+        if matched.is_empty() {
+            return PolicyDecision {
+                disposition: PolicyDisposition::Defer,
+                winner: None,
+                chain: Vec::new(),
+                reason: format!(
+                    "segment {}/{} {:?} of the chained command matched no allow rule; deferring to provider permission mode",
+                    idx + 1,
+                    segments.len(),
+                    segments[idx]
+                ),
+            };
+        }
+        matched.sort_by(|a, b| compare_by_priority(a, b));
+        per_segment_winners.push(matched[0]);
+    }
+
+    let mut sorted = per_segment_winners.clone();
+    sorted.sort_by(|a, b| compare_by_priority(a, b));
+    let winner = sorted[0];
+    // Dedupe by rule id — one rule may vouch for several segments.
+    let mut seen_ids = std::collections::HashSet::new();
+    let chain: Vec<ChainEntry> = per_segment_winners
+        .iter()
+        .filter(|r| seen_ids.insert(r.id.clone()))
+        .map(|r| composite_chain_entry(r, ChainStatus::Selected))
+        .collect();
+    let suffix = if segments.len() > 1 {
+        format!(
+            " — all {} segments of the chained command matched allow rules",
+            segments.len()
+        )
+    } else {
+        String::new()
+    };
+    PolicyDecision {
+        disposition: PolicyDisposition::Allow,
+        winner: Some(winner.clone()),
+        chain,
+        reason: format!("{}{}", summarize_rule(winner), suffix),
+    }
+}
+
+fn composite_chain_entry(rule: &PermissionRule, status: ChainStatus) -> ChainEntry {
+    ChainEntry {
+        rule_id: rule.id.clone(),
+        scope: rule.scope,
+        matched: true,
+        specificity: specificity(&rule.matcher),
+        status,
     }
 }
 

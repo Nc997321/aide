@@ -92,7 +92,10 @@ fn bash_matches(mode: BashMode, value: &str, command: &str, effect: PermissionEf
         BashMode::Prefix => {
             // Conservative gate: an `allow` prefix must not widen across
             // unquoted shell control tokens (`;`, `|`, `&`, `<`, `>`, newline,
-            // backtick, `$(`). ask/deny may inspect the raw text.
+            // backtick, `$(`). ask/deny may inspect the raw text. Chained
+            // commands reach this matcher one segment at a time via
+            // `split_bash_segments` in `evaluate` — this gate is the backstop
+            // for everything that analysis could not verify.
             if effect == PermissionEffect::Allow && has_unquoted_shell_control(command) {
                 return false;
             }
@@ -108,7 +111,7 @@ fn bash_matches(mode: BashMode, value: &str, command: &str, effect: PermissionEf
 /// widen a prefix allow into a second command. Tracks single/double quote
 /// state and backslash escapes (outside single quotes, `\` escapes the next
 /// char). Inside single quotes everything is literal.
-fn has_unquoted_shell_control(command: &str) -> bool {
+pub fn has_unquoted_shell_control(command: &str) -> bool {
     let chars: Vec<char> = command.chars().collect();
     let mut in_single = false;
     let mut in_double = false;
@@ -133,6 +136,218 @@ fn has_unquoted_shell_control(command: &str) -> bool {
         i += 1;
     }
     false
+}
+
+/// Split a chained command (`a | b`, `a && b`, `a; b`, `a & b`, newlines) into
+/// independently verifiable segments, or `None` when the command is NOT safely
+/// verifiable as a whole:
+///  - unquoted backtick / `$(` command substitution (nested commands unseen),
+///  - a file redirect (`> out`, `< in`, heredoc, process substitution) — writes
+///    must never inherit per-segment allows,
+///  - an empty interior segment (`cmd | | grep`), unbalanced quotes.
+///
+/// Harmless redirections are stripped in place before a segment is returned:
+/// fd duplication (`2>&1`, `>&2`, `2>&-`) and discards to /dev/null
+/// (`2>/dev/null`, `>&/dev/null`, `&>/dev/null`). A single trailing separator
+/// (`cmd &&`, `cmd;`) is tolerated — it launches no extra command.
+///
+/// Security argument: each returned segment is a standalone simple command
+/// judged by the ordinary prefix-boundary matcher, so the chained execution set
+/// is a subset of what the rules already authorize standalone — no widening.
+/// TypeScript mirror: agent-sidecar/src/policy/matchers.ts `splitBashSegments`.
+pub fn split_bash_segments(command: &str) -> Option<Vec<String>> {
+    let chars: Vec<char> = command.chars().collect();
+    let mut segments: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut i = 0usize;
+
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' && !in_single {
+            if i + 1 < chars.len() {
+                current.push(c);
+                current.push(chars[i + 1]);
+                i += 2;
+            } else {
+                current.push(c);
+                i += 1;
+            }
+            continue;
+        }
+        if c == '\'' && !in_double {
+            in_single = !in_single;
+            current.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '"' && !in_single {
+            in_double = !in_double;
+            current.push(c);
+            i += 1;
+            continue;
+        }
+        if in_single || in_double {
+            current.push(c);
+            i += 1;
+            continue;
+        }
+
+        // Unquoted from here on.
+        if c == '$' && chars.get(i + 1) == Some(&'(') {
+            return None;
+        }
+        if c == '`' {
+            return None;
+        }
+        if c == ';' || c == '\n' {
+            if !finalize_interior_segment(&mut current, &mut segments) {
+                return None;
+            }
+            i += 1;
+            continue;
+        }
+        if c == '|' {
+            i += 1;
+            if chars.get(i) == Some(&'|') {
+                i += 1; // `||` is one separator
+            }
+            if !finalize_interior_segment(&mut current, &mut segments) {
+                return None;
+            }
+            continue;
+        }
+        if c == '&' {
+            match chars.get(i + 1) {
+                Some('&') => {
+                    i += 2;
+                    if !finalize_interior_segment(&mut current, &mut segments) {
+                        return None;
+                    }
+                }
+                Some('>') => {
+                    // `&>file` / `&>>file` redirect both streams — only
+                    // /dev/null is harmless.
+                    i += 2;
+                    if chars.get(i) == Some(&'>') {
+                        i += 1;
+                    }
+                    match read_redirect_target(&chars, &mut i) {
+                        Some(t) if t == "/dev/null" => {}
+                        _ => return None,
+                    }
+                }
+                // Single `&` = background separator.
+                _ => {
+                    i += 1;
+                    if !finalize_interior_segment(&mut current, &mut segments) {
+                        return None;
+                    }
+                }
+            }
+            continue;
+        }
+        if c == '>' || c == '<' {
+            strip_trailing_fd(&mut current);
+            let op = c;
+            i += 1;
+            if op == '>' && chars.get(i) == Some(&'>') {
+                i += 1; // `>>`
+            } else if op == '<' && chars.get(i) == Some(&'<') {
+                return None; // heredoc / herestring
+            }
+            if chars.get(i) == Some(&'&') {
+                // fd duplication `[n]>&[m]` / `[n]>&-` — no filesystem effect.
+                // A non-numeric target (`>&file`) redirects BOTH streams to a file.
+                i += 1;
+                match read_redirect_target(&chars, &mut i) {
+                    Some(t) if t == "-" || t.chars().all(|ch| ch.is_ascii_digit()) => {}
+                    _ => return None,
+                }
+                continue;
+            }
+            match read_redirect_target(&chars, &mut i) {
+                Some(t) if op == '>' && t == "/dev/null" => {} // harmless discard
+                _ => return None, // any real file redirect is unverifiable
+            }
+            continue;
+        }
+        current.push(c);
+        i += 1;
+    }
+    if in_single || in_double {
+        return None;
+    }
+    // The trailing segment is handled here: a dangling final separator
+    // (`cmd &&`) launches nothing, so an empty tail is tolerated.
+    let last = current.trim();
+    if !last.is_empty() {
+        segments.push(last.to_string());
+    }
+    if segments.is_empty() {
+        return None;
+    }
+    Some(segments)
+}
+
+/// Interior separators require a non-empty segment (`cmd | | grep` is
+/// unverifiable). Clears `current` either way.
+fn finalize_interior_segment(current: &mut String, segments: &mut Vec<String>) -> bool {
+    let seg = current.trim().to_string();
+    current.clear();
+    if seg.is_empty() {
+        return false;
+    }
+    segments.push(seg);
+    true
+}
+
+/// Read a redirect target word (no quotes/expansions — unverifiable then).
+/// Stops at whitespace, shell control, or any char that could hide expansion.
+fn read_redirect_target(chars: &[char], i: &mut usize) -> Option<String> {
+    while *i < chars.len() && (chars[*i] == ' ' || chars[*i] == '\t') {
+        *i += 1;
+    }
+    if *i >= chars.len() {
+        return None;
+    }
+    if chars[*i] == '\'' || chars[*i] == '"' {
+        return None;
+    }
+    let mut t = String::new();
+    while *i < chars.len() {
+        let c = chars[*i];
+        if matches!(
+            c,
+            ' ' | '\t' | ';' | '|' | '&' | '<' | '>' | '\n' | '`' | '$' | '"' | '\'' | '\\'
+        ) {
+            break;
+        }
+        t.push(c);
+        *i += 1;
+    }
+    if t.is_empty() {
+        None
+    } else {
+        Some(t)
+    }
+}
+
+/// Drop a standalone digit run at the end of `current` — an IO_NUMBER fd
+/// belonging to the redirect operator, not part of the command words.
+/// `echo foo2>file` keeps `foo2` (digits glued to a word are an argument).
+fn strip_trailing_fd(current: &mut String) {
+    let bytes = current.as_bytes();
+    let mut j = bytes.len();
+    while j > 0 && bytes[j - 1].is_ascii_digit() {
+        j -= 1;
+    }
+    // Digits only went past when they form their own token (preceded by
+    // whitespace or string start) — otherwise they belong to the word.
+    if j < bytes.len() && (j == 0 || bytes[j - 1] == b' ' || bytes[j - 1] == b'\t') {
+        current.truncate(j);
+    }
 }
 
 /// Prefix match with a command boundary: `value` must match the start of
@@ -299,8 +514,95 @@ mod tests {
     }
 
     #[test]
-    fn specificity_table_is_fixed() {
-        assert_eq!(specificity(&PermissionMatcher::Tool), 0);
+    fn segments_split_on_unquoted_separators() {
+        assert_eq!(
+            split_bash_segments("cargo test | tail -20"),
+            Some(vec!["cargo test".to_string(), "tail -20".to_string()])
+        );
+        assert_eq!(
+            split_bash_segments("a && b || c; d\ne"),
+            Some(vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string(),
+                "e".to_string()
+            ])
+        );
+        assert_eq!(
+            split_bash_segments("sleep 1 & echo done"),
+            Some(vec!["sleep 1".to_string(), "echo done".to_string()])
+        );
+    }
+
+    #[test]
+    fn segments_strip_harmless_redirects() {
+        // fd duplication and /dev/null discards vanish from the segment
+        assert_eq!(
+            split_bash_segments("cargo test --lib 2>&1"),
+            Some(vec!["cargo test --lib".to_string()])
+        );
+        assert_eq!(
+            split_bash_segments("ls /tmp 2>/dev/null"),
+            Some(vec!["ls /tmp".to_string()])
+        );
+        assert_eq!(
+            split_bash_segments("cmd >&2"),
+            Some(vec!["cmd".to_string()])
+        );
+        assert_eq!(
+            split_bash_segments("cmd &>/dev/null"),
+            Some(vec!["cmd".to_string()])
+        );
+        assert_eq!(
+            split_bash_segments("cmd 2>&1 | tail -1"),
+            Some(vec!["cmd".to_string(), "tail -1".to_string()])
+        );
+        // digits glued to a word are an argument, not an fd
+        assert_eq!(
+            split_bash_segments("echo foo2>&1"),
+            Some(vec!["echo foo2".to_string()])
+        );
+    }
+
+    #[test]
+    fn segments_reject_unverifiable_constructs() {
+        // file redirects — writes must never inherit per-segment allows
+        assert_eq!(split_bash_segments("cargo test > out.txt"), None);
+        assert_eq!(split_bash_segments("sort < in.txt"), None);
+        assert_eq!(split_bash_segments("cmd >> log.txt"), None);
+        assert_eq!(split_bash_segments("cmd &> both.txt"), None);
+        assert_eq!(split_bash_segments("cat <<EOF"), None);
+        // command substitution hides nested commands
+        assert_eq!(split_bash_segments("echo $(whoami) | cat"), None);
+        assert_eq!(split_bash_segments("echo `whoami`"), None);
+        // empty interior segments / unbalanced quotes
+        assert_eq!(split_bash_segments("echo hi | | cat"), None);
+        assert_eq!(split_bash_segments("| cat"), None);
+        assert_eq!(split_bash_segments("echo \"unterminated | x"), None);
+        // redirect target with expansion/quote is unverifiable
+        assert_eq!(split_bash_segments("cmd 2> $LOG"), None);
+    }
+
+    #[test]
+    fn segments_tolerate_trailing_separator_and_quoting() {
+        assert_eq!(
+            split_bash_segments("pnpm test;"),
+            Some(vec!["pnpm test".to_string()])
+        );
+        // quoted separators stay inside the segment
+        assert_eq!(
+            split_bash_segments("echo \"a|b\""),
+            Some(vec!["echo \"a|b\"".to_string()])
+        );
+        assert_eq!(
+            split_bash_segments("git commit -m 'fix: a; b'"),
+            Some(vec!["git commit -m 'fix: a; b'".to_string()])
+        );
+    }
+
+    #[test]
+    fn specificity_table_is_fixed() {        assert_eq!(specificity(&PermissionMatcher::Tool), 0);
         assert_eq!(
             specificity(&PermissionMatcher::Bash {
                 mode: BashMode::All,

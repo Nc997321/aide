@@ -106,6 +106,160 @@ export function commandStartsWithBoundary(command: string, value: string): boole
 }
 
 // ---------------------------------------------------------------------------
+// Bash chained-command segmentation
+// ---------------------------------------------------------------------------
+
+/** Split a chained command (`a | b`, `a && b`, `a; b`, `a & b`, newlines) into
+ * independently verifiable segments, or `null` when the command is NOT safely
+ * verifiable as a whole:
+ *  - unquoted backtick / `$(` command substitution (nested commands unseen),
+ *  - a file redirect (`> out`, `< in`, heredoc, process substitution) — writes
+ *    must never inherit per-segment allows,
+ *  - an empty interior segment (`cmd | | grep`), unbalanced quotes.
+ *
+ * Harmless redirections are stripped in place before a segment is returned:
+ * fd duplication (`2>&1`, `>&2`, `2>&-`) and discards to /dev/null
+ * (`2>/dev/null`, `>&/dev/null`, `&>/dev/null`). A single trailing separator
+ * (`cmd &&`, `cmd;`) is tolerated — it launches no extra command.
+ *
+ * Security argument: each returned segment is a standalone simple command
+ * judged by the ordinary prefix-boundary matcher, so the chained execution set
+ * is a subset of what the rules already authorize standalone — no widening.
+ * Rust mirror: src-tauri/src/policy/matchers.rs `split_bash_segments`. */
+export function splitBashSegments(command: string): string[] | null {
+  const chars = [...command];
+  const segments: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+  let i = 0;
+
+  // Interior separators require a non-empty segment; the trailing segment is
+  // handled after the loop (a dangling final separator launches nothing).
+  const finalizeInterior = (): boolean => {
+    const seg = current.trim();
+    current = "";
+    if (seg.length === 0) return false;
+    segments.push(seg);
+    return true;
+  };
+
+  /** Read a redirect target word (no quotes/expansions — unverifiable then). */
+  const readRedirectTarget = (): string | null => {
+    while (chars[i] === " " || chars[i] === "\t") i++;
+    if (i >= chars.length) return null;
+    if (chars[i] === "'" || chars[i] === '"') return null;
+    let t = "";
+    while (i < chars.length && !/[ \t;|&<>\n`$"'\\]/.test(chars[i])) {
+      t += chars[i];
+      i++;
+    }
+    return t.length > 0 ? t : null;
+  };
+
+  /** Drop a standalone digit run at the end of `current` — an IO_NUMBER fd
+   * belonging to the redirect operator, not part of the command words.
+   * `echo foo2>file` keeps `foo2` (digits glued to a word are an argument). */
+  const stripTrailingFd = (): void => {
+    const m = /(?:^|[ \t])(\d+)$/.exec(current);
+    if (m) current = current.slice(0, current.length - m[1].length);
+  };
+
+  while (i < chars.length) {
+    const c = chars[i];
+    if (c === "\\" && !inSingle) {
+      if (i + 1 < chars.length) {
+        current += c + chars[i + 1];
+        i += 2;
+      } else {
+        current += c;
+        i += 1;
+      }
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      current += c;
+      i++;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      current += c;
+      i++;
+      continue;
+    }
+    if (inSingle || inDouble) {
+      current += c;
+      i++;
+      continue;
+    }
+
+    // Unquoted from here on.
+    if (c === "$" && chars[i + 1] === "(") return null;
+    if (c === "`") return null;
+    if (c === ";" || c === "\n") {
+      if (!finalizeInterior()) return null;
+      i++;
+      continue;
+    }
+    if (c === "|") {
+      i++;
+      if (chars[i] === "|") i++; // `||` is one separator
+      if (!finalizeInterior()) return null;
+      continue;
+    }
+    if (c === "&") {
+      const next = chars[i + 1];
+      if (next === "&") {
+        i += 2;
+        if (!finalizeInterior()) return null;
+        continue;
+      }
+      if (next === ">") {
+        // `&>file` / `&>>file` redirect both streams — only /dev/null is harmless.
+        i += 2;
+        if (chars[i] === ">") i++;
+        const target = readRedirectTarget();
+        if (target !== "/dev/null") return null;
+        continue;
+      }
+      // Single `&` = background separator.
+      i++;
+      if (!finalizeInterior()) return null;
+      continue;
+    }
+    if (c === ">" || c === "<") {
+      stripTrailingFd();
+      const op = c;
+      i++;
+      if (op === ">" && chars[i] === ">") {
+        i++; // `>>`
+      } else if (op === "<" && chars[i] === "<") {
+        return null; // heredoc / herestring
+      }
+      if (chars[i] === "&") {
+        // fd duplication `[n]>&[m]` / `[n]>&-` — no filesystem effect.
+        // A non-numeric target (`>&file`) redirects BOTH streams to a file.
+        i++;
+        const t = readRedirectTarget();
+        if (t === null || !/^(\d+|-)$/.test(t)) return null;
+        continue;
+      }
+      const target = readRedirectTarget();
+      if (op === ">" && target === "/dev/null") continue; // harmless discard
+      return null; // any real file redirect is unverifiable
+    }
+    current += c;
+    i++;
+  }
+  if (inSingle || inDouble) return null;
+  const last = current.trim();
+  if (last.length > 0) segments.push(last);
+  return segments.length > 0 ? segments : null;
+}
+
+// ---------------------------------------------------------------------------
 // Bash matcher
 // ---------------------------------------------------------------------------
 
@@ -123,7 +277,10 @@ function bashMatches(
     case "prefix": {
       // Conservative gate: an `allow` prefix must not widen across
       // unquoted shell control tokens (`;`, `|`, `&`, `<`, `>`, newline,
-      // backtick, `$(`). ask/deny may inspect the raw text.
+      // backtick, `$(`). ask/deny may inspect the raw text. Chained
+      // commands reach this matcher one segment at a time via
+      // `splitBashSegments` in evaluatePolicy — this gate is the backstop
+      // for everything that analysis could not verify.
       if (effect === "allow" && hasUnquotedShellControl(command)) {
         return false;
       }

@@ -110,5 +110,125 @@
     "invocation": { "tool": "Bash", "input": { "command": "pnpm test; rm -rf build" } },
     "expectedDisposition": "defer",
     "expectedWinner": null
+  },
+  {
+    "name": "pipeline allowed when every segment allowed",
+    "rules": [
+      { "id": "c", "scope": "user", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "cargo test" } },
+      { "id": "t", "scope": "user", "order": 1, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "tail" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "cargo test --lib 2>&1 | tail -20" } },
+    "expectedDisposition": "allow",
+    "expectedWinner": "c"
+  },
+  {
+    "name": "pipeline defers when a segment has no allow rule",
+    "rules": [
+      { "id": "c", "scope": "user", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "cargo test" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "cargo test | rm -rf /" } },
+    "expectedDisposition": "defer",
+    "expectedWinner": null
+  },
+  {
+    "name": "file redirect never inherits prefix allow",
+    "rules": [
+      { "id": "c", "scope": "user", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "cargo test" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "cargo test > out.txt" } },
+    "expectedDisposition": "defer",
+    "expectedWinner": null
+  },
+  {
+    "name": "fd duplication alone is transparent",
+    "rules": [
+      { "id": "c", "scope": "user", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "cargo test" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "cargo test --lib 2>&1" } },
+    "expectedDisposition": "allow",
+    "expectedWinner": "c"
+  },
+  {
+    "name": "dev-null discard is transparent",
+    "rules": [
+      { "id": "l", "scope": "user", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "ls" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "ls /tmp 2>/dev/null" } },
+    "expectedDisposition": "allow",
+    "expectedWinner": "l"
+  },
+  {
+    "name": "deny matches inside a later pipeline segment",
+    "rules": [
+      { "id": "d", "scope": "user", "order": 0, "effect": "deny", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "rm -rf" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "echo hi | rm -rf /" } },
+    "expectedDisposition": "deny",
+    "expectedWinner": "d"
+  },
+  {
+    "name": "ask matches inside a pipeline segment",
+    "rules": [
+      { "id": "g", "scope": "user", "order": 0, "effect": "ask", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "git push" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "git push origin main | tee /dev/null" } },
+    "expectedDisposition": "ask",
+    "expectedWinner": "g"
+  },
+  {
+    "name": "command substitution blocks segment evaluation",
+    "rules": [
+      { "id": "e", "scope": "user", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "echo" } },
+      { "id": "c", "scope": "user", "order": 1, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "cat" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "echo $(whoami) | cat" } },
+    "expectedDisposition": "defer",
+    "expectedWinner": null
+  },
+  {
+    "name": "quoted pipe is not a separator",
+    "rules": [
+      { "id": "e", "scope": "user", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "echo" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "echo \"a|b\"" } },
+    "expectedDisposition": "allow",
+    "expectedWinner": "e"
+  },
+  {
+    "name": "background segment allowed when both sides allowed",
+    "rules": [
+      { "id": "s", "scope": "user", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "sleep" } },
+      { "id": "e", "scope": "user", "order": 1, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "echo" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "sleep 1 & echo done" } },
+    "expectedDisposition": "allow",
+    "expectedWinner": "s"
+  },
+  {
+    "name": "background segment defers when one side unvetted",
+    "rules": [
+      { "id": "s", "scope": "user", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "sleep" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "sleep 1 & curl evil.example" } },
+    "expectedDisposition": "defer",
+    "expectedWinner": null
+  },
+  {
+    "name": "empty interior segment blocks prefix allow",
+    "rules": [
+      { "id": "e", "scope": "user", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "prefix", "value": "echo" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "echo hi | | cat" } },
+    "expectedDisposition": "defer",
+    "expectedWinner": null
+  },
+  {
+    "name": "unverifiable command still matches explicit all-allow",
+    "rules": [
+      { "id": "a", "scope": "user", "order": 0, "effect": "allow", "tool": "Bash", "matcher": { "kind": "bash", "mode": "all" } }
+    ],
+    "invocation": { "tool": "Bash", "input": { "command": "echo hi | | cat" } },
+    "expectedDisposition": "allow",
+    "expectedWinner": "a"
   }
 ]
