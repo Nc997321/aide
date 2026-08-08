@@ -39,6 +39,7 @@ import { useGitWatcher } from "./composables/useGitWatcher";
 import { useRunProject } from "./composables/useRunProject";
 import { useRunProcess } from "./composables/useRunProcess";
 import { useRunConfigs } from "./composables/useRunConfigs";
+import { useWorkspaceJdk } from "./composables/useWorkspaceJdk";
 import { matchShortcut } from "./utils/shortcut";
 import { applyTheme, themes } from "./themes";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -213,6 +214,8 @@ const wb = useWorkbenchTerminal();
 const { run: runProject } = useRunProject();
 const { runStates, start: startRunProcess, stop: stopRunProcess, restart: restartRunProcess } = useRunProcess();
 const { configs: runConfigs, activeConfig: activeRunConfig, load: loadRunConfigs, setActive: setActiveRunConfig } = useRunConfigs();
+// 工作区级 JDK 单例：工作区切换时 loadFor 刷新（run 注入 / 提示判定 / 只读展示同源）
+const { jdkHome: workspaceJdk, loadFor: loadWorkspaceJdk } = useWorkspaceJdk();
 const runConfigsDialogVisible = ref(false);
 
 // ── Workspace dialogs ──
@@ -372,6 +375,9 @@ async function onSidebarWsChanged(path: string) {
   if (rightTab.value === "git") gitPanelRef.value?.reload();
   // Load run configurations for this workspace (auto-detects on first open).
   await loadRunConfigs(path, path);
+  // 顺序敏感：list_run_configs 在 Rust 侧做存量 JAVA_HOME→工作区 JDK 迁移，
+  // 迁移完成后 loadWorkspaceJdk 才能读到迁移值；提示判定在两者就绪后再跑。
+  await loadWorkspaceJdk(path);
   // 加载完再判断是否需要预防式 JDK 提示（await 保证 runConfigs 已就绪）。
   void maybePromptJdk(path);
 }
@@ -422,14 +428,6 @@ function openSettingsMarket() {
   settingsVisible.value = true;
 }
 
-/** 打开设置 → Java / JDK tab。从运行配置对话框（JDK 注册表为空时的「前往扫描」
- *  按钮）或预防式提示触发。z-index 1100 使设置覆盖在对话框之上，扫描完关闭
- *  即回到对话框——jdkRegistry 是 reactive 单例，对话框下拉自动刷新。 */
-function openSettingsJava() {
-  settingsInitialTab.value = "java";
-  settingsVisible.value = true;
-}
-
 async function onRunProject(id?: string) {
   // 从下拉行 ▶（带 id）直接跑该配置；主按钮 ▶（无 id）跑当前选中的。多模块可
   // 并行——启动一个不会停掉另一个。无 active 且无 id 时回退到旧 workbench send。
@@ -459,12 +457,14 @@ function onSelectRunConfig(id: string) {
 }
 
 // ── 预防式 JDK 提示（缺 JDK 才弹）──
-// 工作区加载后，若存在「Java 命令但未选 JDK」的运行配置且本工作区未 dismiss 过，
-// 弹一次 choice 引导用户去配置（直接打开运行配置对话框——那里有 JDK 选择器，
-// 注册表为空时还有「前往扫描」快捷跳转）。「稍后」关闭记录落盘到 config.json
-// （AppSettings.jdkPromptDismissed，按 wsKey 键控），而非 localStorage——重启 / 清
-// WebView2 缓存都不丢。判定「Java 命令」看命令字含 mvn/gradle/gradlew/java，零 IO、
-// 足够准（javascript/javadoc 等 \b 边界不命中）。
+// 工作区加载后，若存在 Java 命令的运行配置且本工作区尚未选 JDK（且未 dismiss 过），
+// 弹一次 choice 引导用户去配置。JDK 是工作区级——一个工作区一个 JDK，所有模块
+// 共享（Maven/Gradle 反应堆只有一个启动 JDK，per-module 是错误粒度，2026-08-08
+// 拍板）；confirm 程序化展开标题栏 LSP 面板（工作区选择器 + 注册表扫描都在那里；
+// 运行配置对话框已改只读展示，不再承载配置动作）。「稍后」落盘 dismiss 到
+// config.json（AppSettings.jdkPromptDismissed，按 wsKey 键控）——重启 / 清
+// WebView2 缓存都不丢。判定「Java 命令」看命令字含 mvn/gradle/gradlew/java，
+// 零 IO、足够准（javascript/javadoc 等 \b 边界不命中）。
 
 function isJavaCommand(cmd: string): boolean {
   return /\b(mvn|gradlew?|java)\b/i.test(cmd);
@@ -475,28 +475,26 @@ async function maybePromptJdk(wsKey: string): Promise<void> {
   if (!wsKey) return;
   // 切换工作区竞态：加载期间用户又切走 → 不弹（避免给错工作区弹窗）
   if (workspacePath.value !== wsKey) return;
-  // 引导式语义：仅当该工作区「有 Java 配置且没有任何一个选过 JDK」时才提示。
-  // 这是一次性引导（让用户知道有按项目选 JDK 这回事），而非逐模块盯梢——多模块
-  // 项目里用户通常只跑其中几个，给任一模块选过 JDK 即视为已了解该功能，不再催；
-  // 其余模块真跑时若版本不符会有明确 Java 报错，无需反复弹窗。
+  // 引导式语义：仅当该工作区「有 Java 配置且尚未选工作区 JDK」时才提示——
+  // 一次性引导（让用户知道有按工作区选 JDK 这回事），而非逐模块盯梢；
+  // 选过一次所有模块共享，真版本不符时会有明确 Java 报错，无需反复弹窗。
   const javaConfigs = runConfigs.value.filter((c) => isJavaCommand(c.command));
-  const needsJdk =
-    javaConfigs.length > 0 && javaConfigs.every((c) => !c.env?.JAVA_HOME);
-  if (!needsJdk) return;
+  if (javaConfigs.length === 0 || workspaceJdk.value) return;
   if ((settings.jdkPromptDismissed ?? []).includes(wsKey)) return;
 
   const registryEmpty = (settings.jdkRegistry ?? []).length === 0;
   const message = registryEmpty
-    ? "检测到 Java 项目，运行配置尚未选择 JDK，启动时可能因版本不匹配报错。需先扫描本机 JDK。"
-    : "检测到 Java 项目，运行配置尚未选择 JDK，启动时可能因版本不匹配报错。";
+    ? "检测到 Java 项目，尚未选择工作区 JDK，启动时可能因版本不匹配报错。需先扫描本机 JDK。"
+    : "检测到 Java 项目，尚未选择工作区 JDK，启动时可能因版本不匹配报错。";
   const result = await choice("检测到 Java 项目", message, {
     confirmLabel: "去配置 JDK",
     altLabel: "稍后",
   });
-  // choice 返回 "confirm" | "alt" | "cancel"。confirm → 开对话框；其余 → 落盘 dismiss。
-  // 弹窗期间用户可能又切走工作区，开对话框前再校验一次当前工作区一致。
+  // choice 返回 "confirm" | "alt" | "cancel"。confirm → 展开标题栏 LSP 面板
+  // （JDK 区块）；其余 → 落盘 dismiss。弹窗期间用户可能又切走工作区，
+  // 展开前再校验一次当前工作区一致。
   if (result === "confirm" && workspacePath.value === wsKey) {
-    runConfigsDialogVisible.value = true;
+    titleBarRef.value?.openLspPanel();
   } else {
     void persistJdkDismissal(wsKey);
   }
@@ -726,6 +724,8 @@ onMounted(async () => {
       workspacePath.value = info.root;
       projectName.value = info.name;
       await loadRunConfigs(info.root, info.root);
+      // 同 onSidebarWsChanged：迁移（list_run_configs 内）→ 读工作区 JDK → 提示
+      await loadWorkspaceJdk(info.root);
       void maybePromptJdk(info.root);
       void maybePromptMigration();
       void paneLayoutPersistence.restoreAtStartup();
@@ -1006,7 +1006,6 @@ onUnmounted(() => {
       <RunConfigsDialog
         v-if="runConfigsDialogVisible"
         @close="runConfigsDialogVisible = false"
-        @open-settings-java="openSettingsJava"
       />
       <WorkbenchTerminal :workspace-key="activeWorkspaceKey ?? ''" :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
     </div>

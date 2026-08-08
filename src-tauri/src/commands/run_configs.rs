@@ -14,8 +14,10 @@ pub struct RunConfig {
     pub cwd: String,
     pub command: String,
     /// 启动该配置时注入子进程的环境变量（覆盖继承的系统值）。
-    /// 目前用于按项目选 JDK：存 `JAVA_HOME`，spawn 时再据此前置 `bin` 到 `PATH`。
-    /// 旧 run-config JSON 无此字段 → serde default 回填空 → 不注入 → 原行为不变。
+    /// JDK 已从 per-config（env.JAVA_HOME）升级为工作区级（state.json
+    /// workspace_jdks），list_run_configs 读出时自动迁移剥除——见
+    /// migrate_per_config_java_home。旧 run-config JSON 无此字段 → serde
+    /// default 回填空 → 不注入 → 原行为不变。
     #[serde(default)]
     pub env: std::collections::BTreeMap<String, String>,
 }
@@ -37,7 +39,45 @@ pub fn list_run_configs(ws_key: String) -> Result<Vec<RunConfig>, String> {
         return Ok(Vec::new());
     }
     let data = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&data).map_err(|e| e.to_string())
+    let mut configs: Vec<RunConfig> = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+    migrate_per_config_java_home(&ws_key, &mut configs, &path);
+    Ok(configs)
+}
+
+/// 存量迁移（2026-08-08）：JDK 选择从 per-config（env.JAVA_HOME）升级为工作区级
+///（state.json workspace_jdks[key]）——一个工作区一个 JDK，所有模块共享。
+/// 首个带 JAVA_HOME 的配置值提升为工作区 JDK（工作区已选过则尊重现值、仅剥除），
+/// 所有配置的 env 剥除 JAVA_HOME（保留其他键），有改动即写回文件。
+/// ws_key 即工作区路径：encode_key 与 workspace::path_to_key 是同一变换
+///（`: \ /` → `-`），两边 key 天然一致。
+fn migrate_per_config_java_home(ws_key: &str, configs: &mut [RunConfig], path: &Path) {
+    let first_jh = configs
+        .iter()
+        .filter_map(|c| c.env.get("JAVA_HOME"))
+        .find(|s| !s.is_empty())
+        .cloned();
+    let Some(first_jh) = first_jh else { return };
+    let key = super::workspace::path_to_key(ws_key);
+    if super::workspace::workspace_jdk(&key).is_none() {
+        if let Err(e) = super::workspace::set_workspace_jdk(&key, &first_jh) {
+            tracing::warn!("run_configs: migrate JAVA_HOME → workspace_jdk failed: {e}");
+        }
+    }
+    let mut touched = false;
+    for c in configs.iter_mut() {
+        touched |= c.env.remove("JAVA_HOME").is_some();
+    }
+    if !touched {
+        return;
+    }
+    match serde_json::to_string_pretty(configs) {
+        Ok(data) => {
+            if let Err(e) = fs::write(path, data) {
+                tracing::warn!("run_configs: rewrite after JDK migration failed: {e}");
+            }
+        }
+        Err(e) => tracing::warn!("run_configs: re-serialize after JDK migration failed: {e}"),
+    }
 }
 
 #[tauri::command]
@@ -98,5 +138,65 @@ mod tests {
         let back: RunConfig = serde_json::from_str(&s).unwrap();
         assert_eq!(back.env.get("JAVA_HOME").map(|s| s.as_str()), Some("/jdks/jdk-21"));
         assert_eq!(back.env.get("EXTRA").map(|s| s.as_str()), Some("x"));
+    }
+
+    /// 存量迁移：首个 per-config JAVA_HOME 提升为工作区 JDK，所有配置剥除
+    /// JAVA_HOME（保留其他 env 键），并写回文件。
+    #[test]
+    fn migrate_promotes_first_java_home_and_strips_all() {
+        let ws = "aide_test_migrate_jdk_ws1";
+        let key = crate::commands::workspace::path_to_key(ws);
+        crate::commands::workspace::set_workspace_jdk(&key, "").unwrap(); // 前置：未选
+        let dir = std::env::temp_dir().join("aide_test_migrate_jdk_1");
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("configs.json");
+        let mut configs: Vec<RunConfig> = serde_json::from_str(r#"[
+            {"id":"a","name":"a","cwd":"/p","command":"mvn","env":{"JAVA_HOME":"/jdks/jdk-17","EXTRA":"x"}},
+            {"id":"b","name":"b","cwd":"/p","command":"mvn","env":{"JAVA_HOME":"/jdks/jdk-21"}}
+        ]"#).unwrap();
+
+        migrate_per_config_java_home(ws, &mut configs, &file);
+
+        // 第一个值提升为工作区 JDK
+        assert_eq!(
+            crate::commands::workspace::workspace_jdk(&key).as_deref(),
+            Some("/jdks/jdk-17")
+        );
+        // 全部剥除，其他键保留
+        assert!(configs.iter().all(|c| !c.env.contains_key("JAVA_HOME")));
+        assert_eq!(configs[0].env.get("EXTRA").map(|s| s.as_str()), Some("x"));
+        // 写回的文件也是剥除后的
+        let on_disk: Vec<RunConfig> =
+            serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert!(on_disk.iter().all(|c| !c.env.contains_key("JAVA_HOME")));
+
+        crate::commands::workspace::set_workspace_jdk(&key, "").unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 迁移尊重工作区已选的 JDK：per-config 值不覆盖，仅剥除。
+    #[test]
+    fn migrate_respects_existing_workspace_jdk() {
+        let ws = "aide_test_migrate_jdk_ws2";
+        let key = crate::commands::workspace::path_to_key(ws);
+        crate::commands::workspace::set_workspace_jdk(&key, "/jdks/jdk-8").unwrap(); // 前置：已选
+        let dir = std::env::temp_dir().join("aide_test_migrate_jdk_2");
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("configs.json");
+        let mut configs: Vec<RunConfig> = serde_json::from_str(r#"[
+            {"id":"a","name":"a","cwd":"/p","command":"mvn","env":{"JAVA_HOME":"/jdks/jdk-21"}}
+        ]"#).unwrap();
+
+        migrate_per_config_java_home(ws, &mut configs, &file);
+
+        assert_eq!(
+            crate::commands::workspace::workspace_jdk(&key).as_deref(),
+            Some("/jdks/jdk-8"),
+            "existing workspace JDK must win over per-config values"
+        );
+        assert!(configs.iter().all(|c| !c.env.contains_key("JAVA_HOME")));
+
+        crate::commands::workspace::set_workspace_jdk(&key, "").unwrap();
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -51,6 +51,13 @@ function onSelectSession(s: ActiveSessionInfo) {
   emit("select-session", s);
 }
 
+// LspIndicator 程序化展开：App.vue 预防式 JDK 提示「去配置 JDK」→ 领到这里。
+const lspIndicatorRef = ref<InstanceType<typeof LspIndicator> | null>(null);
+function openLspPanel() {
+  lspIndicatorRef.value?.openPanel();
+}
+defineExpose({ openLspPanel });
+
 const STATUS_LABEL: Record<string, string> = {
   running: "运行中",
   waiting: "已就绪",
@@ -348,7 +355,7 @@ function isRowRunning(cfg: RunConfig): boolean {
     <!-- Right: activity indicator + window controls -->
     <div class="titlebar-right">
       <NotificationBell />
-      <LspIndicator :workspace-root="workspaceRoot" />
+      <LspIndicator ref="lspIndicatorRef" :workspace-root="workspaceRoot" />
       <div
         v-if="(activeSessions ?? []).length > 0"
         class="titlebar-activity"

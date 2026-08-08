@@ -2,21 +2,18 @@
 import { ref, computed, watch } from "vue";
 import { useRunConfigs } from "../composables/useRunConfigs";
 import { useSettings } from "../composables/useSettings";
-import ThemedSelect from "./ThemedSelect.vue";
+import { useWorkspaceJdk } from "../composables/useWorkspaceJdk";
 import Icon from "./Icon.vue";
 import type { RunConfig, RunTarget } from "../types";
 
 const emit = defineEmits<{
   close: [];
-  /** JDK 注册表为空（或用户点「管理 JDK」）→ 请求父级打开设置 → Java tab 扫描。
-   *  不直接开设置：打开方式由 App.vue 统一控制（settingsVisible/initialTab），
-   *  且设置 z-index 1100 覆盖在本对话框之上，扫描完关闭即回到此处选 JDK。 */
-  "open-settings-java": [];
 }>();
 
 const { configs, activeId, add, update, remove, detectAndAdd, addTargets, currentWsKey } =
   useRunConfigs();
 const { settings } = useSettings();
+const { jdkHome } = useWorkspaceJdk();
 
 // ── List selection ──────────────────────────────────────────────────────────
 const selectedId = ref(activeId.value || configs.value[0]?.id || "");
@@ -48,29 +45,21 @@ const isDirty = computed(
   () => selected.value && (
     draft.value.name !== selected.value.name ||
     draft.value.cwd !== selected.value.cwd ||
-    draft.value.command !== selected.value.command ||
-    (draft.value.env?.JAVA_HOME ?? "") !== (selected.value.env?.JAVA_HOME ?? "")
+    draft.value.command !== selected.value.command
   )
 );
 
-// ── JDK 选择器（按项目选 JDK）──
-// 列注册表条目 + 「(系统默认)」。选中 → draft.env 注入 JAVA_HOME；选系统默认 → 清掉。
-// env 还可承载其它键，这里只动 JAVA_HOME，保留其余。
-const jdkOptions = computed(() => [
-  { value: "", label: "(系统默认)" },
-  ...(settings.jdkRegistry ?? []).map(e => ({
-    value: e.path,
-    label: `${e.name} · Java ${e.version}`,
-  })),
-]);
-const selectedJdkPath = computed(() => draft.value.env?.JAVA_HOME ?? "");
-
-function onPickJdk(path: string) {
-  const env: Record<string, string> = { ...(draft.value.env ?? {}) };
-  if (path) env.JAVA_HOME = path;
-  else delete env.JAVA_HOME;
-  draft.value.env = Object.keys(env).length ? env : undefined;
-}
+// ── JDK 只读展示（工作区级，2026-08-08 起不再有 per-config 选择器）──
+// 一个工作区 = 一个 JDK，所有模块共享——点任何模块看到的都是同一份。修改入口
+// 在标题栏 LSP 面板（注册表管理 + 工作区选择器都在那里）。这里只读展示：
+// 注册表命中 → 名称 · 版本；未命中（被移出注册表但仍在磁盘）→ 路径 + 警示；
+// 空 → 系统默认。
+const workspaceJdkLabel = computed(() => {
+  const home = jdkHome.value;
+  if (!home) return "";
+  const entry = (settings.jdkRegistry ?? []).find((e) => e.path === home);
+  return entry ? `${entry.name} · Java ${entry.version}` : `${home}（不在注册表）`;
+});
 
 async function save() {
   if (!selected.value) return;
@@ -199,31 +188,17 @@ async function close() {
             </div>
 
             <div class="rcd-field">
-              <label>JDK</label>
-              <ThemedSelect
-                :model-value="selectedJdkPath"
-                :options="jdkOptions"
-                block
-                @update:model-value="onPickJdk"
-              />
+              <label>JDK（工作区级）</label>
+              <div class="rcd-jdk-readonly">
+                <span class="jdk-ico" :class="{ muted: !workspaceJdkLabel }">
+                  <Icon name="java" :size="13" />
+                </span>
+                <span v-if="workspaceJdkLabel" class="jdk-val">{{ workspaceJdkLabel }}</span>
+                <span v-else class="jdk-val shared">(系统默认) — 使用 PATH 中的 java</span>
+              </div>
               <div class="rcd-jdk-hint">
-                <span v-if="jdkOptions.length > 1" class="rcd-hint">选中 JDK → 启动时注入 JAVA_HOME（系统全局不变）</span>
-                <button
-                  v-else
-                  class="rcd-link-btn rcd-link-btn-warn"
-                  @click="emit('open-settings-java')"
-                >
-                  <Icon name="java" :size="12" />
-                  <span>尚未登记 JDK，前往扫描</span>
-                  <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true">
-                    <path d="M2 5h6M5.5 2.5L8 5L5.5 7.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                </button>
-                <button
-                  v-if="jdkOptions.length > 1"
-                  class="rcd-link-btn"
-                  @click="emit('open-settings-java')"
-                >管理 JDK</button>
+                <span v-if="workspaceJdkLabel" class="rcd-hint">所有模块共享 · 修改：<span class="arrow">标题栏 → 语言服务器</span></span>
+                <span v-else class="rcd-hint">按工作区选择：<span class="arrow">标题栏 → 语言服务器 → 本工作区 JDK</span></span>
               </div>
             </div>
 
@@ -477,39 +452,45 @@ async function close() {
   color: var(--aide-text-muted);
 }
 
-/* JDK 字段下的提示行：说明文字 + 跳转按钮（去设置扫描 / 管理 JDK） */
+/* JDK 只读展示（工作区级）：虚线框 + 非输入控件视觉，一眼区别于可编辑字段。
+   修改入口在标题栏 LSP 面板，这里只指路。 */
+.rcd-jdk-readonly {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px dashed var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  background: rgba(0, 0, 0, 0.12);
+}
+.rcd-jdk-readonly .jdk-ico {
+  color: var(--aide-accent, var(--aide-info));
+  flex-shrink: 0;
+  display: flex;
+}
+.rcd-jdk-readonly .jdk-ico.muted {
+  color: var(--aide-text-muted);
+}
+.rcd-jdk-readonly .jdk-val {
+  font-size: 12px;
+  color: var(--aide-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rcd-jdk-readonly .jdk-val.shared {
+  color: var(--aide-text-muted);
+}
+
+/* JDK 字段下的提示行：共享语义说明 + 指路标题栏 */
 .rcd-jdk-hint {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   margin-top: 1px;
 }
-
-/* 跳转链接式按钮：无原生浏览器外观，主题化、可点。 */
-.rcd-link-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: none;
-  border: none;
-  padding: 0;
-  font-family: inherit;
-  font-size: 10.5px;
-  color: var(--aide-text-muted);
-  cursor: pointer;
-  transition: color 0.12s;
-}
-.rcd-link-btn:hover {
+.rcd-jdk-hint .arrow {
   color: var(--aide-accent, var(--aide-info));
-}
-.rcd-link-btn-warn {
-  color: var(--aide-warning);
-  font-size: 11px;
-}
-.rcd-link-btn-warn:hover {
-  color: var(--aide-warning);
-  opacity: 0.85;
 }
 
 .rcd-save-row {

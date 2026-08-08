@@ -74,9 +74,11 @@ describe("SettingsPanel", () => {
     const labels = Array.from(document.body.querySelectorAll(".nav-label")).map(
       (el) => el.textContent?.trim() ?? "",
     );
-    // 工作区 tab 已移除（LSP 设置搬到标题栏 LspIndicator）；编辑器 tab 在通用之后
+    // 工作区 tab 已移除（LSP 设置搬到标题栏 LspIndicator）；Java tab 亦于
+    // 2026-08-08 搬走（JDK 管理迁入 LspIndicator 面板 JDK 区块，工作区级语义）。
+    // 编辑器 tab 在通用之后
     expect(labels).toEqual([
-      "通用", "编辑器", "模型", "权限", "扩展", "市场", "代码索引", "Java", "诊断",
+      "通用", "编辑器", "模型", "权限", "扩展", "市场", "代码索引", "诊断",
     ]);
   });
 

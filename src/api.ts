@@ -267,12 +267,20 @@ export const api = {
     return invoke("set_settings", { settings });
   },
 
-  // JDK 注册表（按项目选 JDK）
+  // JDK 注册表（机器级；工作区选哪个走 workspace_get/set_jdk）
   scanJdks(): Promise<JdkEntry[]> {
     return invoke("scan_jdks");
   },
   resolveJdk(path: string): Promise<JdkEntry | null> {
     return invoke("resolve_jdk", { path });
+  },
+
+  // 工作区级 JDK（一个工作区一个 JDK，所有运行配置共享；空 = 系统默认）
+  workspaceGetJdk(workspaceRoot: string): Promise<string> {
+    return invoke("workspace_get_jdk", { workspaceRoot });
+  },
+  workspaceSetJdk(workspaceRoot: string, jdkHome: string): Promise<void> {
+    return invoke("workspace_set_jdk", { workspaceRoot, jdkHome });
   },
 
   // 供应商

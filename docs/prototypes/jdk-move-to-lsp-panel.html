@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>JDK 按工作区走 — LSP 面板 + 运行配置只读展示 原型 v2</title>
+<style>
+  /* ── 模拟 warm-dark 主题 token（与 src/themes/warm-dark.ts 一致） ── */
+  :root {
+    --bg-deep: #141218;
+    --bg-base: #1a1720;
+    --bg-raised: #221f29;
+    --surface-default: #292631;
+    --surface-hover: #322e3c;
+    --surface-active: #3a3546;
+    --text-primary: #ece5db;
+    --text-secondary: #b3aa9c;
+    --text-muted: #7d7568;
+    --accent: #d9ab78;
+    --accent-subtle: rgba(217, 171, 120, 0.12);
+    --success: #8bc48a;
+    --warning: #e8c374;
+    --danger: #e87070;
+    --info: #7eb8d8;
+    --border: rgba(255, 214, 160, 0.09);
+    --border-strong: rgba(255, 220, 175, 0.16);
+    --border-subtle: rgba(255, 214, 160, 0.045);
+    --bg-overlay: rgba(10, 8, 14, 0.62);
+    --shadow-lg: 0 18px 56px rgba(0,0,0,.5), 0 4px 14px rgba(0,0,0,.3);
+    --radius-sm: 6px;
+    --radius-md: 9px;
+    --radius-lg: 14px;
+    --ease-t: .16s cubic-bezier(.2,.8,.2,1);
+    --mono: Consolas, "Cascadia Mono", "JetBrains Mono", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 13px;
+    padding: 28px 36px 60px;
+  }
+  .page-head { margin-bottom: 26px; max-width: 940px; }
+  .page-head h1 { font-size: 17px; font-weight: 600; }
+  .page-head p { color: var(--text-muted); font-size: 12.5px; margin-top: 6px; line-height: 1.7; }
+  .page-head code { font-family: var(--mono); font-size: 11px; background: var(--surface-default); padding: 1px 5px; border-radius: 4px; color: var(--accent); }
+  .page-head b { color: var(--text-secondary); }
+
+  .variant {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    margin-bottom: 30px;
+    background: rgba(0,0,0,.15);
+    padding-bottom: 26px;
+  }
+  .variant-head {
+    display: flex; align-items: baseline; gap: 12px;
+    padding: 12px 16px;
+    background: linear-gradient(180deg, var(--border-subtle), transparent), var(--bg-raised);
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 20px;
+  }
+  .variant-head .tag { font-size: 10.5px; font-weight: 700; letter-spacing: .8px; color: var(--accent); text-transform: uppercase; }
+  .variant-head h2 { font-size: 14px; font-weight: 600; }
+  .variant-head p { font-size: 11.5px; color: var(--text-muted); flex: 1; }
+
+  /* ══════════════════════════════════════════════════════════
+     第一部分：标题栏 LSP 面板（真实宽度 380px，流内右对齐展示）
+     ══════════════════════════════════════════════════════════ */
+
+  .fake-titlebar {
+    display: flex; align-items: center; gap: 6px;
+    height: 42px; padding: 0 14px;
+    background: linear-gradient(180deg, var(--border-subtle) 0%, transparent 100%), var(--bg-deep);
+    border-bottom: 1px solid var(--border);
+  }
+  .fake-titlebar .spacer { flex: 1; }
+  .lsp-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 24px; padding: 0 8px 0 10px; margin: 0 4px;
+    background: var(--surface-default); border: 1px solid var(--border);
+    border-radius: 99px; color: var(--text-secondary);
+    font-size: 10.5px; font-family: inherit; cursor: pointer;
+  }
+  .lsp-badge.on { color: var(--success); }
+  .lsp-badge.warn { color: var(--warning); }
+  .lsp-badge.off { color: var(--text-muted); }
+  .lsp-badge-chevron { opacity: .5; }
+
+  .lsp-panel {
+    width: 380px;
+    margin: 6px 16px 0 auto;
+    background: var(--bg-raised);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+  }
+  .lsp-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, var(--border-subtle) 0%, transparent 100%), var(--bg-raised);
+  }
+  .lsp-title {
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--text-muted);
+  }
+  .lsp-toggle-track {
+    width: 30px; height: 16px; border-radius: 9px; position: relative;
+    background: var(--surface-active);
+  }
+  .lsp-toggle-track::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 12px; height: 12px; border-radius: 50%; background: var(--text-muted);
+  }
+  .lsp-toggle.on .lsp-toggle-track { background: var(--accent); }
+  .lsp-toggle.on .lsp-toggle-track::after { left: 16px; background: var(--bg-deep); }
+
+  .lsp-body { padding: 4px 0; }
+  .lsp-empty { padding: 26px 14px; text-align: center; color: var(--text-muted); font-size: 12px; }
+  .lang-row { display: flex; align-items: center; gap: 9px; padding: 7px 14px; }
+  .st-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .st-ok { background: var(--success); box-shadow: 0 0 4px rgba(139,196,138,.4); }
+  .st-miss { background: var(--warning); box-shadow: 0 0 4px rgba(232,195,116,.4); }
+  .lang-name { font-size: 12.5px; color: var(--text-primary); font-weight: 500; }
+  .lang-server { font-size: 10px; color: var(--text-muted); font-family: var(--mono); }
+  .lang-status { font-size: 10.5px; color: var(--text-muted); flex-shrink: 0; margin-left: auto; }
+  .lang-status.ok { color: var(--success); }
+  .lang-status.miss { color: var(--warning); }
+  .ok-compact { padding: 2px 14px 8px 29px; display: flex; align-items: center; gap: 6px; }
+  .path-static { flex: 1; min-width: 0; font-size: 10.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+  .change-btn { background: none; border: none; color: var(--accent); font-size: 10.5px; cursor: pointer; font-family: inherit; padding: 0; flex-shrink: 0; }
+
+  /* ── 新增：JDK 区块（工作区选择器 + 机器级注册表） ── */
+  .jdk-section { border-top: 1px solid var(--border); padding: 9px 12px 11px; }
+  .jdk-ws-label {
+    font-size: 10.5px; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: .6px; margin-bottom: 6px;
+  }
+  /* ThemedSelect 模拟（与 RunConfigsDialog 下拉同款视觉） */
+  .jdk-ws-select {
+    width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    background: var(--bg-base); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); color: var(--text-primary); font-size: 11.5px;
+    padding: 5px 9px; cursor: pointer; font-family: inherit;
+  }
+  .jdk-ws-select.placeholder { color: var(--text-muted); }
+  .jdk-ws-select .chev { opacity: .5; flex-shrink: 0; }
+  .jdk-ws-hint { font-size: 10px; color: var(--text-muted); line-height: 1.55; margin-top: 5px; }
+  .jdk-ws-hint em { font-style: normal; color: var(--text-secondary); }
+
+  .jdk-registry-head {
+    display: flex; align-items: center; gap: 8px;
+    margin: 10px 0 6px; padding-top: 9px;
+    border-top: 1px dashed var(--border);
+  }
+  .jdk-registry-title {
+    font-size: 10px; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: .6px;
+  }
+  .jdk-count {
+    font-size: 10px; color: var(--text-muted);
+    background: var(--surface-default); border: 1px solid var(--border);
+    padding: 0 6px; border-radius: 8px; line-height: 15px;
+  }
+  .jdk-rescan {
+    margin-left: auto;
+    background: none; border: none; cursor: pointer; font-family: inherit;
+    font-size: 10.5px; color: var(--accent); padding: 0 2px;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .jdk-rescan:hover { text-decoration: underline; }
+
+  .jdk-list { display: flex; flex-direction: column; gap: 5px; max-height: 128px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--surface-active) transparent; }
+  .jdk-item {
+    display: flex; flex-direction: column; gap: 1px;
+    padding: 6px 8px 6px 10px;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    background: var(--bg-base);
+  }
+  .jdk-item.active-ws { border-color: rgba(217,171,120,.4); }
+  .jdk-item-line1 { display: flex; align-items: center; gap: 7px; }
+  .jdk-item-name { font-size: 12px; color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .jdk-item-version {
+    font-size: 9.5px; color: var(--accent);
+    padding: 0 5px; border-radius: var(--radius-sm); line-height: 15px;
+    background: var(--accent-subtle); flex-shrink: 0;
+  }
+  .jdk-item-inuse {
+    font-size: 9px; color: var(--success); flex-shrink: 0;
+    display: inline-flex; align-items: center; gap: 3px;
+  }
+  .jdk-remove {
+    margin-left: auto; width: 16px; height: 16px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    border: none; border-radius: 50%; background: none; color: var(--text-muted);
+    cursor: pointer; font-size: 9px;
+  }
+  .jdk-remove:hover { background: var(--danger); color: var(--text-primary); }
+  .jdk-item-path {
+    font-size: 10px; color: var(--text-muted); font-family: var(--mono);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .jdk-scan-msg { font-size: 10.5px; color: var(--text-muted); line-height: 1.5; margin-top: 7px; }
+  .jdk-scan-msg.ok { color: var(--success); }
+  .jdk-scan-msg.err { color: var(--danger); }
+
+  .jdk-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 7px; padding: 2px 2px 4px; }
+  .jdk-empty-text { font-size: 11px; color: var(--text-muted); line-height: 1.55; }
+  .jdk-scan-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px;
+    border-radius: var(--radius-sm);
+    background: var(--accent); color: var(--bg-deep);
+    border: none; font-size: 11.5px; font-weight: 500; font-family: inherit;
+    cursor: pointer;
+  }
+  .jdk-spin { animation: jdk-spin .8s linear infinite; }
+  @keyframes jdk-spin { to { transform: rotate(360deg); } }
+
+  .jdk-manual-toggle {
+    background: none; border: none; cursor: pointer; font-family: inherit;
+    font-size: 10.5px; color: var(--text-muted); padding: 0; margin-top: 8px;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .jdk-manual-toggle:hover { color: var(--accent); }
+  .jdk-manual-form { display: flex; flex-direction: column; gap: 5px; margin-top: 7px; }
+  .jdk-manual-row { display: flex; gap: 5px; }
+  .jdk-input {
+    flex: 1; min-width: 0; background: var(--bg-base); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); color: var(--text-primary); font-size: 11px;
+    padding: 4px 8px; outline: none; font-family: inherit;
+  }
+  .jdk-input:focus { border-color: var(--accent); }
+  .jdk-input::placeholder { color: var(--text-muted); }
+  .jdk-add-btn {
+    background: var(--accent-subtle); color: var(--accent);
+    border: 1px solid rgba(217,171,120,.22);
+    border-radius: var(--radius-sm); font-size: 11px; padding: 4px 12px;
+    cursor: pointer; font-family: inherit; white-space: nowrap;
+  }
+
+  /* 排除目录 / 安装向导（现有样式，展示相对位置） */
+  .exclude-section { border-top: 1px solid var(--border); padding: 9px 12px 11px; }
+  .exclude-title {
+    font-size: 10.5px; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: .6px; margin-bottom: 7px;
+  }
+  .exclude-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; color: var(--text-secondary);
+    background: var(--surface-default); border: 1px solid var(--border);
+    padding: 2px 4px 2px 9px; border-radius: 12px; font-family: var(--mono);
+  }
+  .chip-x { width: 14px; height: 14px; display: flex; align-items: center; justify-content: center; border: none; border-radius: 50%; background: none; color: var(--text-muted); cursor: pointer; font-size: 9px; }
+  .browse-btn {
+    background: var(--accent-subtle); color: var(--accent);
+    border: 1px solid rgba(217,171,120,.22);
+    border-radius: var(--radius-sm); font-size: 11px; padding: 4px 10px; cursor: pointer;
+    font-family: inherit; white-space: nowrap;
+  }
+  .guide-row { border-top: 1px solid var(--border); padding: 8px 12px; text-align: right; background: linear-gradient(180deg, transparent 0%, var(--border-subtle) 100%); }
+  .guide-btn { background: none; border: none; cursor: pointer; font-size: 11px; color: var(--accent); font-family: inherit; padding: 2px 4px; }
+
+  /* ══════════════════════════════════════════════════════════
+     第二部分：运行配置对话框 — JDK 只读展示 + 指路
+     ══════════════════════════════════════════════════════════ */
+  .rcd-mock-wrap { display: flex; justify-content: center; padding: 10px 0 4px; gap: 22px; flex-wrap: wrap; }
+  .rcd-dialog {
+    width: 460px;
+    background: var(--bg-raised); border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg); overflow: hidden;
+  }
+  .rcd-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 13px 16px; border-bottom: 1px solid var(--border);
+  }
+  .rcd-title { font-size: 14px; font-weight: 600; }
+  .rcd-right { flex: 1; padding: 14px 18px; display: flex; flex-direction: column; gap: 12px; }
+  .rcd-field label { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 5px; }
+  .rcd-field input[type="text"] {
+    width: 100%; background: var(--bg-base); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); color: var(--text-primary); font-size: 12px;
+    padding: 6px 9px; outline: none; font-family: inherit;
+  }
+  /* 只读 JDK 展示（非输入控件，一眼区别于可编辑字段） */
+  .rcd-jdk-readonly {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px;
+    border: 1px dashed var(--border); border-radius: var(--radius-sm);
+    background: rgba(0,0,0,.12);
+  }
+  .rcd-jdk-readonly .jdk-ico { color: var(--accent); flex-shrink: 0; display: flex; }
+  .rcd-jdk-readonly .jdk-val { font-size: 12px; color: var(--text-secondary); }
+  .rcd-jdk-readonly .jdk-val b { color: var(--text-primary); font-weight: 500; }
+  .rcd-jdk-readonly .jdk-val.shared { color: var(--text-muted); }
+  .rcd-jdk-hint { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .rcd-hint { font-size: 11px; color: var(--text-muted); }
+  .rcd-hint .arrow { color: var(--accent); }
+
+  .note-row {
+    max-width: 940px; margin: -14px 0 30px; padding: 0 4px;
+    font-size: 11.5px; color: var(--text-muted); line-height: 1.7;
+  }
+  .note-row code { font-family: var(--mono); font-size: 10.5px; background: var(--surface-default); padding: 1px 5px; border-radius: 4px; color: var(--accent); }
+  .note-row b { color: var(--text-secondary); }
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>JDK 按工作区走 — 原型 v2</h1>
+  <p>
+    核心心智：<b>一个工作区 = 一个 JDK</b>（Maven/Gradle 反应堆构建只有一个启动 JDK），所有模块共享，消灭「每点一个模块提示一次」。
+    存储：<code>state.json → workspace_jdks[工作区key] = jdk路径</code>（复用 lsp_workspaces 范式）；空 = 系统默认。
+    存量 per-config <code>env.JAVA_HOME</code> 自动迁移：第一个值提升为工作区 JDK，并从所有配置剥除（保留其他 env 键）。
+    工作台终端不注入（v1 只管 run 进程）。
+  </p>
+</div>
+
+<!-- ───────────────────────── ① Java 工作区 · 已选工作区 JDK ───────────────────────── -->
+<div class="variant">
+  <div class="variant-head">
+    <span class="tag">LSP 面板</span>
+    <h2>① Java 工作区 · 已选工作区 JDK</h2>
+    <p>JDK 区块 = 顶部「本工作区 JDK」选择器 + 机器级注册表（扫描/手动添加/移除）；列表里标记当前生效项</p>
+  </div>
+  <div class="fake-titlebar">
+    <span style="font-size:12px;color:var(--text-muted)">Aide — my-java-project</span>
+    <span class="spacer"></span>
+    <button class="lsp-badge on"><span>Java ✓</span>
+      <svg class="lsp-badge-chevron" width="7" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M0.5 0.5L4 4L7.5 0.5"/></svg>
+    </button>
+  </div>
+  <div class="lsp-panel">
+    <div class="lsp-header">
+      <span class="lsp-title">语言服务器</span>
+      <label class="lsp-toggle on"><span class="lsp-toggle-track"></span></label>
+    </div>
+    <div class="lsp-body">
+      <div class="lang-row">
+        <span class="st-dot st-ok"></span>
+        <span class="lang-name">Java</span>
+        <span class="lang-server">jdtls</span>
+        <span class="lang-status ok">就绪</span>
+      </div>
+      <div class="ok-compact">
+        <span class="path-static">PATH 发现：jdtls</span>
+        <button class="change-btn">更改…</button>
+      </div>
+    </div>
+
+    <!-- ★ JDK 区块：工作区选择器 + 注册表 -->
+    <div class="jdk-section">
+      <div class="jdk-ws-label">本工作区 JDK</div>
+      <button class="jdk-ws-select">
+        <span>jdk-21 · Java 21.0.3</span>
+        <svg class="chev" width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M0.5 0.5L4 4L7.5 0.5"/></svg>
+      </button>
+      <div class="jdk-ws-hint">该工作区所有运行配置共享，启动时注入 <em>JAVA_HOME</em>（系统全局不变）</div>
+
+      <div class="jdk-registry-head">
+        <span class="jdk-registry-title">注册表（机器级）</span>
+        <span class="jdk-count">2</span>
+        <button class="jdk-rescan">
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.13"/></svg>
+          重新扫描
+        </button>
+      </div>
+      <div class="jdk-list">
+        <div class="jdk-item active-ws">
+          <div class="jdk-item-line1">
+            <span class="jdk-item-name">jdk-21</span>
+            <span class="jdk-item-version">Java 21.0.3</span>
+            <span class="jdk-item-inuse">● 本工作区</span>
+            <button class="jdk-remove">✕</button>
+          </div>
+          <span class="jdk-item-path">C:\Program Files\Java\jdk-21</span>
+        </div>
+        <div class="jdk-item">
+          <div class="jdk-item-line1">
+            <span class="jdk-item-name">corretto-8</span>
+            <span class="jdk-item-version">Java 1.8.0_412</span>
+            <button class="jdk-remove">✕</button>
+          </div>
+          <span class="jdk-item-path">C:\Program Files\Amazon Corretto\jdk1.8.0_412</span>
+        </div>
+      </div>
+      <button class="jdk-manual-toggle">＋ 手动添加 JDK…</button>
+    </div>
+
+    <div class="exclude-section">
+      <div class="exclude-title">排除目录（不发给 LSP）</div>
+      <div class="exclude-list"><span class="chip">target<button class="chip-x">✕</button></span></div>
+      <button class="browse-btn">浏览工作空间目录…</button>
+    </div>
+    <div class="guide-row"><button class="guide-btn">打开安装向导 ↗</button></div>
+  </div>
+</div>
+
+<!-- ───────────────────────── ② Java 工作区 · 未选 + 注册表为空 ───────────────────────── -->
+<div class="variant">
+  <div class="variant-head">
+    <span class="tag">LSP 面板</span>
+    <h2>② Java 工作区 · 未选 JDK 且注册表为空</h2>
+    <p>选择器只有「(系统默认)」可选；空态扫描按钮占主导（手动添加展开态一并示出）</p>
+  </div>
+  <div class="fake-titlebar">
+    <span style="font-size:12px;color:var(--text-muted)">Aide — my-java-project</span>
+    <span class="spacer"></span>
+    <button class="lsp-badge warn"><span>Java ✗</span>
+      <svg class="lsp-badge-chevron" width="7" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M0.5 0.5L4 4L7.5 0.5"/></svg>
+    </button>
+  </div>
+  <div class="lsp-panel">
+    <div class="lsp-header">
+      <span class="lsp-title">语言服务器</span>
+      <label class="lsp-toggle on"><span class="lsp-toggle-track"></span></label>
+    </div>
+    <div class="lsp-body">
+      <div class="lang-row">
+        <span class="st-dot st-miss"></span>
+        <span class="lang-name">Java</span>
+        <span class="lang-server">jdtls</span>
+        <span class="lang-status miss">未安装</span>
+      </div>
+    </div>
+
+    <div class="jdk-section">
+      <div class="jdk-ws-label">本工作区 JDK</div>
+      <button class="jdk-ws-select placeholder">
+        <span>(系统默认)</span>
+        <svg class="chev" width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M0.5 0.5L4 4L7.5 0.5"/></svg>
+      </button>
+      <div class="jdk-ws-hint">未登记 JDK 时只能选择系统默认——先扫描或手动添加：</div>
+      <div class="jdk-empty">
+        <button class="jdk-scan-btn">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          扫描本机 JDK
+        </button>
+      </div>
+      <div class="jdk-manual-form">
+        <div class="jdk-manual-row">
+          <input class="jdk-input" type="text" placeholder="JDK home 路径，如 C:\Program Files\Java\jdk-21">
+        </div>
+        <div class="jdk-manual-row">
+          <input class="jdk-input" type="text" placeholder="名称（可空，默认取目录名）">
+          <button class="jdk-add-btn">添加</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="exclude-section">
+      <div class="exclude-title">排除目录（不发给 LSP）</div>
+      <button class="browse-btn">浏览工作空间目录…</button>
+    </div>
+    <div class="guide-row"><button class="guide-btn">打开安装向导 ↗</button></div>
+  </div>
+</div>
+
+<!-- ───────────────────────── ③ 非 Java / LSP 关闭（对照） ───────────────────────── -->
+<div class="variant">
+  <div class="variant-head">
+    <span class="tag">对照</span>
+    <h2>③a 非 Java 工作区 — JDK 块整个不出现　｜　③b LSP 总开关关闭但项目是 Java — JDK 块仍可用</h2>
+    <p>显示条件与 LSP 开关解耦：语言检测单独一次轻量探测，含 java 即渲染 JDK 区块</p>
+  </div>
+  <div class="fake-titlebar">
+    <span style="font-size:12px;color:var(--text-muted)">Aide — my-rust-project</span>
+    <span class="spacer"></span>
+    <button class="lsp-badge on"><span>Rust ✓</span>
+      <svg class="lsp-badge-chevron" width="7" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M0.5 0.5L4 4L7.5 0.5"/></svg>
+    </button>
+  </div>
+  <div class="lsp-panel">
+    <div class="lsp-header">
+      <span class="lsp-title">语言服务器</span>
+      <label class="lsp-toggle on"><span class="lsp-toggle-track"></span></label>
+    </div>
+    <div class="lsp-body">
+      <div class="lang-row">
+        <span class="st-dot st-ok"></span>
+        <span class="lang-name">Rust</span>
+        <span class="lang-server">rust-analyzer</span>
+        <span class="lang-status ok">就绪</span>
+      </div>
+      <div class="ok-compact">
+        <span class="path-static">PATH 发现：rust-analyzer</span>
+        <button class="change-btn">更改…</button>
+      </div>
+    </div>
+    <!-- ③a：无 JDK 区块 -->
+    <div class="exclude-section">
+      <div class="exclude-title">排除目录（不发给 LSP）</div>
+      <div class="exclude-list"><span class="chip">target<button class="chip-x">✕</button></span></div>
+      <button class="browse-btn">浏览工作空间目录…</button>
+    </div>
+    <div class="guide-row"><button class="guide-btn">打开安装向导 ↗</button></div>
+  </div>
+
+  <div style="height:26px"></div>
+
+  <div class="fake-titlebar">
+    <span style="font-size:12px;color:var(--text-muted)">Aide — my-java-project（LSP 已关闭）</span>
+    <span class="spacer"></span>
+    <button class="lsp-badge off"><span>LSP 关</span>
+      <svg class="lsp-badge-chevron" width="7" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M0.5 0.5L4 4L7.5 0.5"/></svg>
+    </button>
+  </div>
+  <div class="lsp-panel">
+    <div class="lsp-header">
+      <span class="lsp-title">语言服务器</span>
+      <label class="lsp-toggle"><span class="lsp-toggle-track"></span></label>
+    </div>
+    <div class="lsp-body">
+      <div class="lsp-empty">LSP 已关闭 — 打开开关开始探测</div>
+    </div>
+    <!-- ③b：LSP 关着，但检测出 Java → JDK 区块仍在 -->
+    <div class="jdk-section">
+      <div class="jdk-ws-label">本工作区 JDK</div>
+      <button class="jdk-ws-select">
+        <span>jdk-21 · Java 21.0.3</span>
+        <svg class="chev" width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M0.5 0.5L4 4L7.5 0.5"/></svg>
+      </button>
+      <div class="jdk-ws-hint">该工作区所有运行配置共享，启动时注入 <em>JAVA_HOME</em>（系统全局不变）</div>
+      <div class="jdk-registry-head">
+        <span class="jdk-registry-title">注册表（机器级）</span>
+        <span class="jdk-count">2</span>
+        <button class="jdk-rescan">
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.13"/></svg>
+          重新扫描
+        </button>
+      </div>
+      <div class="jdk-list">
+        <div class="jdk-item active-ws">
+          <div class="jdk-item-line1">
+            <span class="jdk-item-name">jdk-21</span>
+            <span class="jdk-item-version">Java 21.0.3</span>
+            <span class="jdk-item-inuse">● 本工作区</span>
+            <button class="jdk-remove">✕</button>
+          </div>
+          <span class="jdk-item-path">C:\Program Files\Java\jdk-21</span>
+        </div>
+      </div>
+    </div>
+    <div class="guide-row"><button class="guide-btn">打开安装向导 ↗</button></div>
+  </div>
+</div>
+
+<!-- ───────────────────────── ④ 运行配置对话框 · 只读展示 ───────────────────────── -->
+<div class="variant">
+  <div class="variant-head">
+    <span class="tag">运行配置</span>
+    <h2>④ 运行配置对话框 — JDK 只读展示 + 指路（不再有选择器/扫描按钮）</h2>
+    <p>点任何模块看到的都是同一份工作区 JDK；修改入口指向标题栏 LSP 面板</p>
+  </div>
+  <div class="rcd-mock-wrap">
+
+    <div class="rcd-dialog">
+      <div class="rcd-header"><span class="rcd-title">运行配置</span><span style="font-size:10.5px;color:var(--success);margin-left:auto">已选工作区 JDK</span></div>
+      <div class="rcd-right">
+        <div class="rcd-field">
+          <label>名称</label>
+          <input type="text" value="service-auth" readonly>
+        </div>
+        <div class="rcd-field">
+          <label>命令</label>
+          <input type="text" value="mvn spring-boot:run" readonly>
+        </div>
+        <div class="rcd-field">
+          <label>JDK（工作区级）</label>
+          <div class="rcd-jdk-readonly">
+            <span class="jdk-ico">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3h8l2 4H6l2-4z"/><path d="M6 7v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7"/></svg>
+            </span>
+            <span class="jdk-val"><b>jdk-21</b> · Java 21.0.3</span>
+          </div>
+          <div class="rcd-jdk-hint">
+            <span class="rcd-hint">所有模块共享 · 修改：<span class="arrow">标题栏 → 语言服务器</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rcd-dialog">
+      <div class="rcd-header"><span class="rcd-title">运行配置</span><span style="font-size:10.5px;color:var(--text-muted);margin-left:auto">未选（系统默认）</span></div>
+      <div class="rcd-right">
+        <div class="rcd-field">
+          <label>名称</label>
+          <input type="text" value="service-order" readonly>
+        </div>
+        <div class="rcd-field">
+          <label>命令</label>
+          <input type="text" value="mvn spring-boot:run" readonly>
+        </div>
+        <div class="rcd-field">
+          <label>JDK（工作区级）</label>
+          <div class="rcd-jdk-readonly">
+            <span class="jdk-ico" style="color:var(--text-muted)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3h8l2 4H6l2-4z"/><path d="M6 7v10a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7"/></svg>
+            </span>
+            <span class="jdk-val shared">(系统默认) — 使用 PATH 中的 java</span>
+          </div>
+          <div class="rcd-jdk-hint">
+            <span class="rcd-hint">按工作区选择：<span class="arrow">标题栏 → 语言服务器 → 本工作区 JDK</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="note-row">
+  <b>配套改动（不在画面中）：</b>
+  ① <code>state.json</code> 新增 <code>workspace_jdks[key]</code>（Rust：workspace_get_jdk / workspace_set_jdk 命令，复用 lsp_workspaces 范式）；
+  ② 前端新 <code>useWorkspaceJdk</code> 单例（工作区切换时加载），<code>useRunProcess.start/restart</code> 启动时把工作区 JDK 合入 env（Rust shell.rs 的 JAVA_HOME→PATH 原样复用）；
+  ③ 存量迁移：list_run_configs 读到 per-config JAVA_HOME 时，第一个值提升为工作区 JDK 并剥除（保留其他 env 键）；
+  ④ <code>maybePromptJdk</code> 条件改为「有 Java 配置且工作区未选 JDK」，confirm → 程序化展开标题栏 LSP 面板（LspIndicator defineExpose open，TitleBar 转发）；
+  ⑤ 设置面板 Java tab 整个移除；<code>RunConfigsDialog</code> 删 open-settings-java emit 与 per-config 选择器。
+</div>
+
+</body>
+</html>

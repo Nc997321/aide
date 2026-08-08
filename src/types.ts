@@ -291,8 +291,9 @@ export interface RunConfig {
   name: string;
   cwd: string;
   command: string;
-  /** 启动该配置时注入子进程的环境变量（覆盖系统继承值）。目前用于按项目选
-   *  JDK：存 `JAVA_HOME`，Rust spawn 时再据此前置 `bin` 到 `PATH`。可选——
+  /** 启动该配置时注入子进程的环境变量（覆盖系统继承值）。JDK 已从 per-config
+   *  （env.JAVA_HOME）升级为工作区级（state.json workspace_jdks，启动时由
+   *  useRunProcess 合入），list_run_configs 读出时自动迁移剥除。可选——
    *  旧配置无此字段，缺省即不注入（走系统全局环境，旧行为不变）。 */
   env?: Record<string, string>;
 }

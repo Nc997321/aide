@@ -409,6 +409,9 @@ pub fn run() {
             commands::workspace::workspace_set_lsp_enabled,
             commands::workspace::workspace_set_lsp_excludes,
             commands::workspace::workspace_get_lsp_excludes,
+            // 工作区级 JDK（一个工作区一个 JDK，所有运行配置共享）
+            commands::workspace::workspace_get_jdk,
+            commands::workspace::workspace_set_jdk,
             lsp::lsp_detect_languages,
             lsp::lsp_ensure_server,
             lsp::lsp_did_open,

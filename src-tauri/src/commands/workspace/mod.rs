@@ -216,6 +216,62 @@ pub fn set_lsp_excludes(key: &str, dirs: Vec<String>) -> Result<(), String> {
     })
 }
 
+// ── 工作区 JDK（workspace_jdks）──
+//
+// 一个工作区 = 一个 JDK：Maven/Gradle 多模块项目是一次反应堆构建，只有启动
+// mvn/gradle 的那一个 JDK，per-module 选 JDK 是错误粒度（2026-08-08 用户拍板）。
+// 存 state JSON 的 workspace_jdks[key] = JDK home 路径；缺省 = 系统默认（PATH
+// 里的 java，不注入）。key 与 lsp_workspaces 同为 path_to_key；run_configs.rs
+// 的 encode_key 是同一变换，run 配置文件键与此处天然对齐。
+
+/// 读某工作区选中的 JDK home（未选 → None = 系统默认）。
+pub fn workspace_jdk(key: &str) -> Option<String> {
+    let config = super::settings::load_state();
+    config
+        .get("workspace_jdks")
+        .and_then(|w| w.get(key))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
+/// 设某工作区 JDK。空路径 = 清除（回到系统默认），并把键从 map 里摘掉——
+/// 不留空串死数据。
+pub fn set_workspace_jdk(key: &str, jdk_home: &str) -> Result<(), String> {
+    super::settings::with_state_mut(|config| {
+        let entry = config
+            .as_object_mut().ok_or("state not object")?
+            .entry("workspace_jdks")
+            .or_insert(serde_json::json!({}));
+        let obj = entry.as_object_mut().ok_or("workspace_jdks not object")?;
+        if jdk_home.is_empty() {
+            obj.remove(key);
+        } else {
+            obj.insert(
+                key.to_string(),
+                serde_json::Value::String(jdk_home.to_string()),
+            );
+        }
+        Ok(())
+    })
+}
+
+/// 读某工作区选中的 JDK home（未选 → 空串 = 系统默认）。轻量 state 读，
+/// 与 workspace_get_lsp_excludes 同形（async + Result，无 spawn_blocking）。
+#[tauri::command]
+pub async fn workspace_get_jdk(workspace_root: String) -> Result<String, String> {
+    let key = path_to_key(&workspace_root);
+    Ok(workspace_jdk(&key).unwrap_or_default())
+}
+
+/// 设某工作区 JDK（空 = 系统默认）。前端选择器改动即调，run 进程启动时
+/// 由前端读回合入 env（JAVA_HOME → shell.rs 前置 bin 到 PATH）。
+#[tauri::command]
+pub async fn workspace_set_jdk(workspace_root: String, jdk_home: String) -> Result<(), String> {
+    let key = path_to_key(&workspace_root);
+    set_workspace_jdk(&key, &jdk_home)
+}
+
 #[tauri::command]
 pub async fn list_workspaces() -> Result<Vec<WorkspaceInfo>, String> {
     tokio::task::spawn_blocking(|| {
@@ -712,6 +768,32 @@ mod tests {
         assert_eq!(cfg.exclude_dirs, vec!["generated".to_string(), "vendor".to_string()]);
         // 清理
         set_lsp_excludes(key, vec![]).unwrap();
+    }
+
+    // ── 工作区 JDK ──
+
+    #[test]
+    fn workspace_jdk_absent_defaults_to_none() {
+        assert_eq!(workspace_jdk("aide_test_jdk_nonexistent_xyz"), None);
+    }
+
+    #[test]
+    fn set_workspace_jdk_round_trips_and_empty_clears() {
+        let key = "aide_test_set_jdk_xyz";
+        set_workspace_jdk(key, r"C:\Program Files\Java\jdk-21").unwrap();
+        assert_eq!(
+            workspace_jdk(key).as_deref(),
+            Some(r"C:\Program Files\Java\jdk-21")
+        );
+        // 空 = 清除回系统默认，且键从 map 摘掉（不留空串死数据）
+        set_workspace_jdk(key, "").unwrap();
+        assert_eq!(workspace_jdk(key), None);
+        let config = crate::commands::settings::load_state();
+        let still_there = config
+            .get("workspace_jdks")
+            .and_then(|w| w.get(key))
+            .is_some();
+        assert!(!still_there, "empty set must remove the key from workspace_jdks");
     }
 
     fn sample(key: &str) -> WorkspaceInfo {

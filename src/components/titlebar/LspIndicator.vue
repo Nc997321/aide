@@ -2,8 +2,12 @@
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useWorkspaceLsp } from "../../composables/useWorkspaceLsp";
 import { useLspStatus, type LspServerStatus } from "../../composables/useLspStatus";
+import { useWorkspaceJdk } from "../../composables/useWorkspaceJdk";
+import { useSettings } from "../../composables/useSettings";
 import { installGuideFor } from "../../lspInstallGuide";
 import { api } from "../../api";
+import type { JdkEntry } from "../../types";
+import ThemedSelect from "../ThemedSelect.vue";
 import FilePickerDialog from "../FilePickerDialog.vue";
 import ExcludeDirsDialog from "../ExcludeDirsDialog.vue";
 
@@ -12,6 +16,12 @@ import ExcludeDirsDialog from "../ExcludeDirsDialog.vue";
  * 徽章显示各语言 server 状态；面板内每语言一行：状态点 + 语言名 + server 名 + 状态，
  * 行内联「路径 + 浏览文件 + 参数 + 保存/清除」（取代旧 install-box note 与底部服务器覆盖区）。
  * 排除目录走「浏览工作空间目录」多选弹窗。底部是整体开关 + 安装向导。
+ *
+ * JDK 区块（2026-08-08 从设置面板迁入）：Java 工作区才显示——探测与 LSP 总开关
+ * 解耦（lsp_detect_languages 是纯文件探测，无信任门/开关门）。一个工作区 = 一个
+ * JDK（Maven/Gradle 反应堆只有一个启动 JDK，per-module 是错误粒度）：顶部「本
+ * 工作区 JDK」选择器写 state.json workspace_jdks，run 进程启动时合入 env；
+ * 下面是机器级注册表管理（扫描/手动添加/移除）。
  */
 const props = defineProps<{ workspaceRoot?: string }>();
 
@@ -28,6 +38,7 @@ function toggle() {
   if (open.value) {
     void status.probe(); // 打开时刷新一次（ensure 幂等）
     void loadOverrides(); // 覆盖配置可能有外部改动，每次打开重读
+    void detectJava(); // JDK 区块显示条件（与 LSP 开关解耦）
   }
 }
 function onDocClick(e: MouseEvent) {
@@ -196,6 +207,110 @@ const editingLang = ref<Set<string>>(new Set());
 function startEdit(lang: string) { editingLang.value = new Set([...editingLang.value, lang]); }
 function stopEdit(lang: string) { const s = new Set(editingLang.value); s.delete(lang); editingLang.value = s; }
 function isEditing(lang: string): boolean { return editingLang.value.has(lang); }
+
+// ── JDK 区块（Java 工作区才显示；探测与 LSP 开关解耦）──
+// 一个工作区 = 一个 JDK：选择器写 state.json workspace_jdks（useWorkspaceJdk
+// 单例，App.vue 在工作区切换时 loadFor），注册表是机器级（AppSettings.jdkRegistry，
+// 所有工作区共享）。扫描/添加结果按 path 去重合并，整块写回。
+
+const { jdkHome, setJdk } = useWorkspaceJdk();
+const { settings, setJdkRegistry } = useSettings();
+
+const hasJava = ref(false);
+async function detectJava() {
+  const r = root.value;
+  if (!r) { hasJava.value = false; return; }
+  const langs = await api.lspDetectLanguages(r).catch(() => [] as string[]);
+  if (root.value !== r) return; // 工作区切换竞态：丢弃陈旧结果
+  hasJava.value = langs.includes("java");
+}
+watch(root, () => { void detectJava(); });
+
+/** 工作区 JDK 选择器选项：(系统默认) + 注册表条目 + 存量临时项（选中项已被
+ *  移出注册表时显示「不在注册表」，防选择凭空消失——JDK 仍在磁盘上，注入仍有效）。 */
+const jdkOptions = computed(() => {
+  const opts = [{ value: "", label: "(系统默认)" }];
+  const registry = settings.jdkRegistry ?? [];
+  for (const e of registry) opts.push({ value: e.path, label: `${e.name} · Java ${e.version}` });
+  if (jdkHome.value && !registry.some((e) => e.path === jdkHome.value)) {
+    opts.push({ value: jdkHome.value, label: `${jdkHome.value}（不在注册表）` });
+  }
+  return opts;
+});
+function onPickWorkspaceJdk(path: string) {
+  void setJdk(path);
+}
+
+const jdkEntries = computed<JdkEntry[]>(() => settings.jdkRegistry ?? []);
+
+const jdkScanning = ref(false);
+const jdkScanMsg = ref("");
+const jdkScanMsgKind = ref<"ok" | "err">("ok");
+const manualOpen = ref(false);
+const manualPath = ref("");
+const manualName = ref("");
+const jdkResolving = ref(false);
+
+async function scanJdks() {
+  jdkScanning.value = true;
+  jdkScanMsg.value = "";
+  try {
+    const found = await api.scanJdks();
+    // 按 path 去重合并：扫描结果覆盖同 path 条目（版本可能更新），保留扫描未覆盖的手动条目
+    const byPath = new Map<string, JdkEntry>();
+    for (const e of jdkEntries.value) byPath.set(e.path, e);
+    for (const e of found) byPath.set(e.path, e);
+    const merged = Array.from(byPath.values());
+    await setJdkRegistry(merged);
+    jdkScanMsgKind.value = "ok";
+    jdkScanMsg.value = `扫描完成，发现 ${found.length} 个 JDK（共 ${merged.length} 个已登记）`;
+  } catch (e) {
+    jdkScanMsgKind.value = "err";
+    jdkScanMsg.value = `扫描失败：${e}`;
+  } finally {
+    jdkScanning.value = false;
+  }
+}
+
+async function addManualJdk() {
+  const p = manualPath.value.trim();
+  if (!p) return;
+  jdkResolving.value = true;
+  try {
+    const resolved = await api.resolveJdk(p);
+    if (!resolved) {
+      jdkScanMsgKind.value = "err";
+      jdkScanMsg.value = `未在 ${p} 找到有效的 JDK（缺少 release 文件）`;
+      return;
+    }
+    // 用户给名优先，否则用解析出的目录名
+    const name = manualName.value.trim() || resolved.name;
+    const entry: JdkEntry = { name, version: resolved.version, path: resolved.path };
+    // 同 path 替换，避免重复
+    const filtered = jdkEntries.value.filter((e) => e.path !== entry.path);
+    await setJdkRegistry([...filtered, entry]);
+    manualPath.value = "";
+    manualName.value = "";
+    manualOpen.value = false;
+    jdkScanMsgKind.value = "ok";
+    jdkScanMsg.value = `已添加 ${name}（Java ${resolved.version}）`;
+  } catch (e) {
+    jdkScanMsgKind.value = "err";
+    jdkScanMsg.value = `添加失败：${e}`;
+  } finally {
+    jdkResolving.value = false;
+  }
+}
+
+async function removeJdk(path: string) {
+  await setJdkRegistry(jdkEntries.value.filter((e) => e.path !== path));
+}
+
+// ── 程序化展开（App.vue 预防式 JDK 提示「去配置 JDK」→ 直接领到这里）──
+function openPanel() {
+  if (!open.value) toggle();
+}
+defineExpose({ openPanel });
 </script>
 
 <template>
@@ -309,6 +424,91 @@ function isEditing(lang: string): boolean { return editingLang.value.has(lang); 
                 <button v-if="hasOverride(row.lang)" class="clear-btn" @click="clearOverride(row.lang)">清除</button>
                 <button v-if="isOverrideDirty(row.lang)" class="save-btn" @click="saveOverride(row.lang)">保存</button>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- JDK 区块：Java 工作区才显示（探测与 LSP 开关解耦）。
+             一个工作区 = 一个 JDK，所有运行配置共享；注册表机器级。 -->
+        <div v-if="hasJava" class="jdk-section">
+          <div class="jdk-ws-label">本工作区 JDK</div>
+          <ThemedSelect
+            :model-value="jdkHome"
+            :options="jdkOptions"
+            block
+            @update:model-value="onPickWorkspaceJdk"
+          />
+          <div class="jdk-ws-hint">
+            {{ jdkEntries.length > 0
+              ? "该工作区所有运行配置共享，启动时注入 JAVA_HOME（系统全局不变）"
+              : "未登记 JDK 时只能选择系统默认——先扫描或手动添加：" }}
+          </div>
+
+          <template v-if="jdkEntries.length > 0">
+            <div class="jdk-registry-head">
+              <span class="jdk-registry-title">注册表（机器级）</span>
+              <span class="jdk-count">{{ jdkEntries.length }}</span>
+              <button class="jdk-rescan" :disabled="jdkScanning" @click="scanJdks">
+                <svg v-if="jdkScanning" class="jdk-spin" width="9" height="9" viewBox="0 0 12 12" aria-hidden="true">
+                  <path d="M6 1.5a4.5 4.5 0 1 0 4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                <svg v-else width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.13"/>
+                </svg>
+                {{ jdkScanning ? "扫描中…" : "重新扫描" }}
+              </button>
+            </div>
+            <div class="jdk-list">
+              <div
+                v-for="jdk in jdkEntries" :key="jdk.path"
+                class="jdk-item" :class="{ 'active-ws': jdk.path === jdkHome }"
+              >
+                <div class="jdk-item-line1">
+                  <span class="jdk-item-name">{{ jdk.name }}</span>
+                  <span class="jdk-item-version">Java {{ jdk.version }}</span>
+                  <span v-if="jdk.path === jdkHome" class="jdk-item-inuse">● 本工作区</span>
+                  <button class="jdk-remove" v-tooltip="'移除'" @click="removeJdk(jdk.path)">✕</button>
+                </div>
+                <span class="jdk-item-path" v-tooltip="jdk.path">{{ jdk.path }}</span>
+              </div>
+            </div>
+          </template>
+          <div v-else class="jdk-empty">
+            <button class="jdk-scan-btn" :disabled="jdkScanning" @click="scanJdks">
+              <svg v-if="jdkScanning" class="jdk-spin" width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">
+                <path d="M6 1.5a4.5 4.5 0 1 0 4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+              <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+                <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
+              </svg>
+              <span>{{ jdkScanning ? "扫描中…" : "扫描本机 JDK" }}</span>
+            </button>
+          </div>
+
+          <div v-if="jdkScanMsg" class="jdk-scan-msg" :class="jdkScanMsgKind">{{ jdkScanMsg }}</div>
+
+          <button v-if="!manualOpen" class="jdk-manual-toggle" @click="manualOpen = true">＋ 手动添加 JDK…</button>
+          <div v-else class="jdk-manual-form">
+            <div class="jdk-manual-row">
+              <input
+                v-model="manualPath"
+                class="jdk-input"
+                placeholder="JDK home 路径，如 C:\Program Files\Java\jdk-21"
+                @keydown.enter="addManualJdk"
+              />
+            </div>
+            <div class="jdk-manual-row">
+              <input
+                v-model="manualName"
+                class="jdk-input"
+                placeholder="名称（可空，默认取目录名）"
+                @keydown.enter="addManualJdk"
+              />
+              <button
+                class="jdk-add-btn"
+                :disabled="jdkResolving || !manualPath.trim()"
+                @click="addManualJdk"
+              >{{ jdkResolving ? "校验中…" : "添加" }}</button>
             </div>
           </div>
         </div>
@@ -468,6 +668,120 @@ function isEditing(lang: string): boolean { return editingLang.value.has(lang); 
 .path-static { flex: 1; min-width: 0; font-size: 10.5px; color: var(--aide-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--aide-font-mono); }
 .change-btn { background: none; border: none; color: var(--aide-accent); font-size: 10.5px; cursor: pointer; font-family: inherit; padding: 0; flex-shrink: 0; }
 .change-btn:hover { text-decoration: underline; }
+
+/* ── JDK 区块（Java 工作区；工作区选择器 + 机器级注册表） ── */
+.jdk-section { border-top: 1px solid var(--aide-border); padding: 9px 12px 11px; }
+.jdk-ws-label {
+  font-size: 10.5px; font-weight: 600; color: var(--aide-text-muted);
+  text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px;
+}
+.jdk-ws-hint { font-size: 10px; color: var(--aide-text-muted); line-height: 1.55; margin-top: 5px; }
+
+.jdk-registry-head {
+  display: flex; align-items: center; gap: 8px;
+  margin: 10px 0 6px; padding-top: 9px;
+  border-top: 1px dashed var(--aide-border);
+}
+.jdk-registry-title {
+  font-size: 10px; font-weight: 600; color: var(--aide-text-muted);
+  text-transform: uppercase; letter-spacing: 0.6px;
+}
+.jdk-count {
+  font-size: 10px; color: var(--aide-text-muted);
+  background: var(--aide-surface-default); border: 1px solid var(--aide-border);
+  padding: 0 6px; border-radius: 8px; line-height: 15px;
+}
+.jdk-rescan {
+  margin-left: auto;
+  background: none; border: none; cursor: pointer; font-family: inherit;
+  font-size: 10.5px; color: var(--aide-accent); padding: 0 2px;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.jdk-rescan:hover:not(:disabled) { text-decoration: underline; }
+.jdk-rescan:disabled { opacity: 0.5; cursor: default; }
+
+.jdk-list {
+  display: flex; flex-direction: column; gap: 5px;
+  max-height: 128px; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: var(--aide-surface-active) transparent;
+}
+.jdk-item {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 6px 8px 6px 10px;
+  border: 1px solid var(--aide-border); border-radius: var(--aide-radius-sm);
+  background: var(--aide-bg-base);
+}
+.jdk-item.active-ws { border-color: color-mix(in srgb, var(--aide-accent) 40%, transparent); }
+.jdk-item-line1 { display: flex; align-items: center; gap: 7px; }
+.jdk-item-name {
+  font-size: 12px; color: var(--aide-text-primary); font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.jdk-item-version {
+  font-size: 9.5px; color: var(--aide-accent);
+  padding: 0 5px; border-radius: var(--aide-radius-sm); line-height: 15px;
+  background: var(--aide-accent-subtle); flex-shrink: 0;
+}
+.jdk-item-inuse {
+  font-size: 9px; color: var(--aide-success); flex-shrink: 0;
+  display: inline-flex; align-items: center; gap: 3px;
+}
+.jdk-remove {
+  margin-left: auto; width: 16px; height: 16px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: 50%; background: none; color: var(--aide-text-muted);
+  cursor: pointer; font-size: 9px; transition: background 0.12s;
+}
+.jdk-remove:hover { background: var(--aide-danger); color: var(--aide-text-primary); }
+.jdk-item-path {
+  font-size: 10px; color: var(--aide-text-muted); font-family: var(--aide-font-mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.jdk-scan-msg { font-size: 10.5px; line-height: 1.5; margin-top: 7px; }
+.jdk-scan-msg.ok { color: var(--aide-success); }
+.jdk-scan-msg.err { color: var(--aide-danger); }
+
+.jdk-empty { display: flex; padding: 4px 2px 2px; }
+.jdk-scan-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px;
+  border-radius: var(--aide-radius-sm);
+  background: var(--aide-accent); color: var(--aide-bg-deep);
+  border: none; font-size: 11.5px; font-weight: 500; font-family: inherit;
+  cursor: pointer; transition: opacity 0.12s;
+}
+.jdk-scan-btn:hover:not(:disabled) { opacity: 0.9; }
+.jdk-scan-btn:disabled { opacity: 0.45; cursor: default; }
+.jdk-spin { animation: jdk-spin 0.8s linear infinite; }
+@keyframes jdk-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .jdk-spin { animation: none; }
+}
+
+.jdk-manual-toggle {
+  background: none; border: none; cursor: pointer; font-family: inherit;
+  font-size: 10.5px; color: var(--aide-text-muted); padding: 0; margin-top: 8px;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.jdk-manual-toggle:hover { color: var(--aide-accent); }
+.jdk-manual-form { display: flex; flex-direction: column; gap: 5px; margin-top: 7px; }
+.jdk-manual-row { display: flex; gap: 5px; }
+.jdk-input {
+  flex: 1; min-width: 0; background: var(--aide-bg-base); border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm); color: var(--aide-text-primary); font-size: 11px;
+  padding: 4px 8px; outline: none; font-family: inherit;
+}
+.jdk-input:focus { border-color: var(--aide-accent); }
+.jdk-input::placeholder { color: var(--aide-text-muted); }
+.jdk-add-btn {
+  background: var(--aide-accent-subtle); color: var(--aide-accent);
+  border: 1px solid color-mix(in srgb, var(--aide-accent) 22%, transparent);
+  border-radius: var(--aide-radius-sm); font-size: 11px; padding: 4px 12px;
+  cursor: pointer; font-family: inherit; white-space: nowrap;
+}
+.jdk-add-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--aide-accent) 18%, transparent); }
+.jdk-add-btn:disabled { opacity: 0.45; cursor: default; }
 
 /* ── 排除目录 ── */
 .exclude-section { border-top: 1px solid var(--aide-border); padding: 9px 12px 11px; }

@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { api } from "../api";
 import { useWorkbenchTerminal } from "./useWorkbenchTerminal";
 import { useWorkspaces } from "./useWorkspaces";
+import { useWorkspaceJdk } from "./useWorkspaceJdk";
 import { markRunRestarting, markRunRestarted, isRunRestarting } from "./workbenchTerminalState";
 import type { RunConfig } from "../types";
 
@@ -45,7 +46,18 @@ async function ensureExitListener(): Promise<void> {
 export function useRunProcess() {
   const wb = useWorkbenchTerminal();
   const { activeKey } = useWorkspaces();
+  const { jdkHome } = useWorkspaceJdk();
   function currentWs(): string { return activeKey.value ?? ""; }
+
+  /** 启动 env：工作区级 JDK 注入（一个工作区一个 JDK，所有配置共享——
+   *  Maven/Gradle 反应堆构建只有一个启动 JDK）。空 = 系统默认，同时剥掉
+   *  存量 per-config JAVA_HOME（list_run_configs 迁移已写回，这里兜底）。 */
+  function envForRun(config: RunConfig): Record<string, string> {
+    const env = { ...(config.env ?? {}) };
+    if (jdkHome.value) env.JAVA_HOME = jdkHome.value;
+    else delete env.JAVA_HOME;
+    return env;
+  }
 
   /** 启动指定配置的 run 进程。不触碰其他在跑的配置——多模块可并行。 */
   async function start(config: RunConfig): Promise<void> {
@@ -58,7 +70,7 @@ export function useRunProcess() {
     wb.visible.value = true;
     await new Promise<void>(r => setTimeout(r, 80));
     const dim = wb.attachSession(currentWs(), sessionId, config.name) ?? { rows: 24, cols: 80 };
-    await api.runProcessStart(config.id, config.cwd, config.command, config.env ?? {}, dim.rows, dim.cols);
+    await api.runProcessStart(config.id, config.cwd, config.command, envForRun(config), dim.rows, dim.cols);
     wb.markSpawned(sessionId);
     setStatus(config.id, "running");
   }
@@ -81,7 +93,7 @@ export function useRunProcess() {
       // 先 attach（复用已有 terminal，clearFirst 清屏）拿真实 cols，再 spawn
       wb.visible.value = true;
       const dim = wb.attachSession(currentWs(), sid, config.name, true /* clearFirst */) ?? { rows: 24, cols: 80 };
-      await api.runProcessStart(config.id, config.cwd, config.command, config.env ?? {}, dim.rows, dim.cols);
+      await api.runProcessStart(config.id, config.cwd, config.command, envForRun(config), dim.rows, dim.cols);
       wb.markSpawned(sid);
       setStatus(config.id, "running");
     } finally {
