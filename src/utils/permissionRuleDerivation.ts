@@ -57,12 +57,24 @@ function firstUnquotedControlIndex(command: string): number {
   return chars.length;
 }
 
-/** Bash 前缀推导：去前导空白 → 在首个未引用控制符处截断 → 去尾部空白。
+/** Bash 前缀推导：去前导空白 → 在首个未引用控制符处截断 → 吸收重定向 fd → 去尾部空白。
  *  结果为空（命令本身以控制符开头 / 空命令）返回 null。 */
 function deriveBashPrefix(command: string): string | null {
   const trimmed = command.trimStart();
   if (!trimmed) return null;
-  const cut = firstUnquotedControlIndex(trimmed);
+  let cut = firstUnquotedControlIndex(trimmed);
+  // 重定向 fd（IO_NUMBER）吸收：`cmd 2>/dev/null` 截断点在 `>`，紧邻操作符的
+  // 独立数字 token 是 fd 而非参数，须一并剥掉——否则前缀末尾挂个 " 2"，
+  // 不带重定向的同类命令（`cmd`）反而匹配不上，规则成了死规则。
+  if (cut > 0 && (trimmed[cut] === ">" || trimmed[cut] === "<")) {
+    let j = cut - 1;
+    while (j >= 0 && trimmed[j] >= "0" && trimmed[j] <= "9") j--;
+    // 数字须紧邻操作符、且自身是独立 token（前面是空白或串首）才剥；
+    // `echo foo2>file` 的 2 是单词一部分（bash 里也是参数），不能剥。
+    if (j < cut - 1 && (j < 0 || trimmed[j] === " " || trimmed[j] === "\t")) {
+      cut = j + 1;
+    }
+  }
   const prefix = trimmed.slice(0, cut).trimEnd();
   return prefix.length > 0 ? prefix : null;
 }
