@@ -20,6 +20,7 @@ import { resolvePastePayload } from "@/utils/paste";
 import type { PasteResolution } from "@/utils/paste";
 import { resolveFileMentions } from "@/utils/fileMentions";
 import type { FileMentionResolution } from "@/utils/fileMentions";
+import { nextPermissionMode } from "@/utils/permissionModeCycle";
 import { checkImageInputSupport } from "@/utils/imageInputPreflight";
 import { peekFileClipboard, clearFileClipboard } from "@/composables/useFileClipboard";
 import { useInlineMention } from "@/composables/useInlineMention";
@@ -37,7 +38,7 @@ import { setChatPaneRect } from "@/composables/useChatPaneWidth";
 import BtwDrawer from "./BtwDrawer.vue";
 import { useBtwSession } from "@/composables/useBtwSession";
 import { pickModelValue, isModelInList } from "@/utils/modelSelect";
-import { isPendingSession, toggleBgDock } from "@/composables/useChatSession";
+import { isPendingSession, isFinalizedSessionPair, toggleBgDock } from "@/composables/useChatSession";
 import AToast from "@/ui/AToast.vue";
 import { useToast } from "@/composables/useToast";
 import type { ModelSwitchResult } from "@/types/chat";
@@ -355,6 +356,10 @@ const EFFORT_OPTIONS = [
 const selectedEffort = ref("high");
 /** 用户在当前会话视图里手动改过 = true——异步恢复/provider 就绪回调不得覆盖。 */
 let effortTouchedByUser = false;
+/** 上次用户手动切 effort 的时刻——坐实 toast 的新鲜度守卫（仿模型回执的 5s 窗口）。 */
+let lastEffortUserActionAt = 0;
+/** 已弹过坐实 toast 的档位——同值重复坐实（重连回放开）不重复弹。会话切换时重置。 */
+let lastEffortToastValue = "";
 
 /** provider 配置的默认档位（设置面板的 effortLevel 是 LOW/MAX 风格大写）；
  *  没配或非法值 → "high"（用户决定：选择器没有"默认"档，默认就落 high）。 */
@@ -370,15 +375,36 @@ function handleEffortChange(value: string) {
     return;
   }
   effortTouchedByUser = true;
+  lastEffortUserActionAt = Date.now();
   selectedEffort.value = value;
   // 会话还没开始时 setEffort 是无会话可发的空操作，安全；真正生效靠
   // handleSend 把 selectedEffort 带进第一条消息的 initialEffort。
   emit("set-effort", value);
+  // 会话未起：不会有 effort_changed 坐实事件，立即给 deferred 提示（同模型 deferred 文案）。
+  if (!props.sessionId) {
+    const label = EFFORT_OPTIONS.find((o) => o.value === value)?.label ?? value;
+    showToast(`已选定 ${label}，将在发送后生效`, "info");
+  }
 }
 
 // sidecar 坐实/回滚同步：失败时选择器被拉回旧值（error toast 由下方 watcher 弹）。
+// 成功坐实 → toast（镜像模型回执范式）：坐实值 == 用户选定值才弹——失败回滚带
+// 的是旧值 ≠ 选定值，天然不弹（失败提示走 effortSwitchError）。比较必须在回滚
+// 同步赋值之前。守卫：用户在本视图手动改过（挡初始同步/恢复）+ 5s 新鲜度窗口
+// （挡切 tab 回来的旧回执重弹）+ 同值去重。
 watch(() => props.currentEffort, (v) => {
-  if (v && v !== selectedEffort.value) selectedEffort.value = v;
+  if (!v) return;
+  if (
+    v === selectedEffort.value &&
+    effortTouchedByUser &&
+    Date.now() - lastEffortUserActionAt <= 5000 &&
+    v !== lastEffortToastValue
+  ) {
+    lastEffortToastValue = v;
+    const label = EFFORT_OPTIONS.find((o) => o.value === v)?.label ?? v;
+    showToast(`effort 已切换为 ${label}`, "success");
+  }
+  if (v !== selectedEffort.value) selectedEffort.value = v;
 });
 
 // effort 切换失败 → 瞬时提示（同 modelSwitchResult 的新鲜度守卫语义）。
@@ -392,15 +418,30 @@ watch(
 
 // 会话切换：恢复这个会话记住的 effort（没有则落 provider 默认/high）。
 // pending 会话不恢复不重置——选择是用户刚做的/随 initialEffort 走的。
+// tempId→realId 定名搬迁同理：同一场会话换名，选择不洗（此前定名时落进下面
+// 的 providerDefault 重置，首轮发送后 effort 被洗回默认——首轮 bug 的修复）。
 watch(
   () => props.sessionId,
-  async (sid) => {
-    effortTouchedByUser = false;
+  async (sid, prevSid) => {
+    // 定名搬迁（首轮发送后 SDK 确认真实 id）：不重置不恢复；用户开工前显式
+    // 选过的档位随定名持久化进会话元数据（对齐 setEffort 契约，重开会话恢复）。
+    if (isFinalizedSessionPair(prevSid, sid)) {
+      if (effortTouchedByUser && sid) {
+        void api.setSessionEffort(sid, selectedEffort.value).catch(() => {});
+      }
+      return;
+    }
     if (!sid) {
+      effortTouchedByUser = false;
+      lastEffortToastValue = "";
       selectedEffort.value = providerDefaultEffort();
       return;
     }
+    // pending 临时会话（首轮已发送、等 SDK 定名）：不恢复不重置；touched 保留
+    // 到上面的定名分支，用它决定是否把选择持久化。
     if (isPendingSession(sid)) return;
+    effortTouchedByUser = false;
+    lastEffortToastValue = "";
     selectedEffort.value = providerDefaultEffort();
     const remembered = await api.sessionEffort(sid).catch(() => null);
     // 读回期间切走了别的会话，或用户已经手动改过 → 放弃恢复
@@ -554,6 +595,10 @@ watch(() => props.sessionId, (sid) => {
 function handlePermissionModeChange(value: string) {
   selectedPermissionMode.value = value;
   emit("set-permission-mode", value);
+  // 用户主动切换（下拉/Shift+Tab）→ 瞬时提示；sidecar 广播同步走
+  // currentPermissionMode watcher 不经过这里，不会误弹。
+  const label = permissionModeSelectOptions.value.find((o) => o.value === value)?.label ?? value;
+  showToast(`权限模式：${label}`, "info");
 }
 const isBusyVal = computed(() =>
   typeof props.isBusy === "boolean" ? props.isBusy : props.isBusy.value
@@ -875,10 +920,24 @@ const mentionIcon = getFileIcon;
 const folderIconPath = FOLDER_ICON_PATH;
 
 function handleTabKey(e: KeyboardEvent) {
+  // Shift+Tab = 循环权限模式（CLI 同款），与 slash 补全互斥
+  if (e.shiftKey) {
+    cyclePermissionMode(e);
+    return;
+  }
   if (slashDropdownVisible.value && filteredSkills.value.length) {
     e.preventDefault();
     selectSkill(filteredSkills.value[slashSelectedIndex.value]);
   }
+}
+
+/** Shift+Tab 循环权限模式：序列剔除 bypassPermissions（见 permissionModeCycle）。
+ *  无可切（清单未就位/剔除后不足两项）时不拦截按键，焦点正常移动。 */
+function cyclePermissionMode(e: KeyboardEvent) {
+  const next = nextPermissionMode(selectedPermissionMode.value, displayPermissionModes.value);
+  if (!next) return;
+  e.preventDefault();
+  handlePermissionModeChange(next);
 }
 
 function handleArrowUp(e: KeyboardEvent) {

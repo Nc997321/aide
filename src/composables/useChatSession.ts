@@ -269,6 +269,15 @@ export function isPendingSession(sid: string | null | undefined): boolean {
   return !!sid && pendingSids.has(sid);
 }
 
+/** tempId→realId 定名搬迁判定：finalizeSession 刚把 pending 临时 key 换成 SDK
+ *  确认的真实 id 时为 true——同一场会话换名，不是「切到另一个会话」。 */
+export function isFinalizedSessionPair(
+  prevSid: string | null | undefined,
+  nextSid: string | null | undefined,
+): boolean {
+  return !!prevSid && !!nextSid && aliasMap.get(prevSid) === nextSid;
+}
+
 /** 取续写目标：最后一条消息是流式 assistant 就续写，否则新建 */
 function getOrCreateAssistant(store: SessionStore): ChatMessage {
   const last = store.messages[store.messages.length - 1];
