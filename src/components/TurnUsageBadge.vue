@@ -62,9 +62,9 @@ const tooltip = computed(() => {
   gap: 1px;
 }
 
-/* ↓ 输入（喂给模型看的）：偏中性的信息色，呼应项目里"info"语义 */
+/* ↓ 输入（喂给模型看的）：代理活动装饰色（agentAccent），与思考竖线/子代理卡同色系 */
 .tu-in {
-  color: var(--aide-info);
+  color: var(--aide-agent-accent);
 }
 
 /* ↑ 输出（模型吐出来的，含工具调用/子代理产出）：偏强调的成功色，

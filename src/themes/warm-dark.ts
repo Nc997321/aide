@@ -21,6 +21,7 @@ export const warmDark: ThemeTokens = {
   warning: "#e8c374",
   danger: "#e87070",
   info: "#7eb8d8",
+  agentAccent: "#c9a06c",
   border: "rgba(255,214,160,.09)",
   borderSubtle: "rgba(255,214,160,.045)",
   borderStrong: "rgba(255,220,175,.16)",

@@ -36,6 +36,7 @@ export const smokyPinkGlass: ThemeTokens = {
   warning: "#C98A3D",
   danger: "#dd6b72",
   info: "#7C93B8",
+  agentAccent: "#B87F7E",
   border: "rgba(124,137,154,.18)",
   borderSubtle: "rgba(124,137,154,.10)",
   borderStrong: "rgba(207,166,160,.42)",

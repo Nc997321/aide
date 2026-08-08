@@ -26,6 +26,7 @@ export const glass: ThemeTokens = {
   warning: "#fcd34d",
   danger: "#f87171",
   info: "#7dd3fc",
+  agentAccent: "#e0a3d8",
 
   border: "rgba(255,255,255,.1)",
   borderSubtle: "rgba(255,255,255,.06)",

@@ -26,6 +26,7 @@ export const catppuccin: ThemeTokens = {
   warning: "#f9e2af",
   danger:  "#f38ba8",
   info:    "#89dceb",
+  agentAccent: "#89dceb",
 
   border:       "rgba(255, 255, 255, 0.06)",
   borderSubtle: "rgba(255, 255, 255, 0.03)",

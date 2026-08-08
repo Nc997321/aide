@@ -35,6 +35,7 @@
 | `textPrimary / textSecondary / textMuted / textOnAccent` | 文字四级 |
 | `accent / accentHover / accentSubtle` | 强调色三态 |
 | `success / warning / danger / info` | 功能色 |
+| `agentAccent` | 聊天域「代理活动」装饰色：思考竖线 / 子代理卡（左边条+pill+虚线）/ 后台徽章 / 用量徽章↓。纯装饰，跟主题气质走；与功能色 info 分槽（2026-08-09） |
 | `border / borderSubtle` | 边框两档 |
 | `shadowSm / shadowMd / shadowLg` | 阴影三档 |
 | `radiusSm / radiusMd / radiusLg` | 圆角三档 |

@@ -33,6 +33,13 @@ export interface ThemeTokens {
   danger: string;
   info: string;
 
+  /** 聊天域「代理活动」装饰色：思考块竖线 / 子代理卡（左边条+类型 pill+嵌套虚线）/
+   *  后台运行徽章 / 用量徽章↓输入。与 info 分槽——info 是功能色（toast/git 徽章/
+   *  通知/文件图标），保持语义蓝；agentAccent 是纯装饰色，跟主题气质走
+   *  （暖铜主题给柔铜、烟粉主题给玫瑰），2026-08-09 选色原型见
+   *  docs/superpowers/design-previews/2026-08-09-chat-agent-accent.html */
+  agentAccent: string;
+
   border: string;
   borderSubtle: string;
 

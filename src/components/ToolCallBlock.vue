@@ -214,15 +214,15 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
   font-size: 10.5px;
   padding: 1px 8px;
   border-radius: 999px;
-  color: var(--aide-info);
-  background: color-mix(in srgb, var(--aide-info) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--aide-info) 25%, transparent);
+  color: var(--aide-agent-accent);
+  background: color-mix(in srgb, var(--aide-agent-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-agent-accent) 25%, transparent);
   white-space: nowrap;
   animation: ti-bgchip-pulse 1.6s infinite;
   transition: background var(--aide-ease-t);
 }
 .ti-bgchip:hover {
-  background: color-mix(in srgb, var(--aide-info) 20%, transparent);
+  background: color-mix(in srgb, var(--aide-agent-accent) 20%, transparent);
 }
 @keyframes ti-bgchip-pulse {
   0%, 100% { opacity: 1; }

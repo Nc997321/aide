@@ -179,9 +179,9 @@ const runningSummary = computed(() =>
   font-size: 10.5px;
   padding: 1px 8px;
   border-radius: 999px;
-  color: var(--aide-info);
-  background: color-mix(in srgb, var(--aide-info) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--aide-info) 25%, transparent);
+  color: var(--aide-agent-accent);
+  background: color-mix(in srgb, var(--aide-agent-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-agent-accent) 25%, transparent);
   white-space: nowrap;
   animation: tg-bg-pulse 1.6s infinite;
 }

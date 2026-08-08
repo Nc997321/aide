@@ -111,7 +111,7 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
 </template>
 
 <style scoped>
-/* 子代理：GALLERY .subagent — info 左边条 + 渐变背景 + 嵌套虚线 */
+/* 子代理：GALLERY .subagent — agentAccent 左边条 + 渐变背景 + 嵌套虚线 */
 .sa {
   position: relative;
   display: flex;
@@ -119,16 +119,16 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
   margin: 4px 0;
   font-size: 11.5px;
   border: 1px solid var(--aide-border-subtle);
-  border-left: 3px solid var(--aide-info);
+  border-left: 3px solid var(--aide-agent-accent);
   border-radius: var(--aide-radius-md);
-  background: linear-gradient(90deg, color-mix(in srgb, var(--aide-info) 5%, transparent), var(--aide-bg-base) 40%);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--aide-agent-accent) 5%, transparent), var(--aide-bg-base) 40%);
   overflow: hidden;
   box-shadow: var(--aide-highlight-inset);
   backdrop-filter: var(--aide-surface-blur);
   -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
-/* GALLERY 子代理不再需要左侧括号节点，改用 info 色左边条 */
+/* GALLERY 子代理不再需要左侧括号节点，改用 agentAccent 色左边条 */
 .sa-rail {
   display: none;
 }
@@ -173,9 +173,9 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--aide-info);
-  background: color-mix(in srgb, var(--aide-info) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--aide-info) 25%, transparent);
+  color: var(--aide-agent-accent);
+  background: color-mix(in srgb, var(--aide-agent-accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-agent-accent) 25%, transparent);
   border-radius: 3px;
   padding: 1px 5px;
 }
@@ -219,7 +219,7 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
 /* 子线程时间线：GALLERY .sa-nested 嵌套虚线缩进 */
 .sa-timeline {
   margin: 0 12px 10px 22px;
-  border-left: 1px dashed color-mix(in srgb, var(--aide-info) 30%, transparent);
+  border-left: 1px dashed color-mix(in srgb, var(--aide-agent-accent) 30%, transparent);
   padding-left: 12px;
   display: flex;
   flex-direction: column;
@@ -256,7 +256,7 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
   transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
 .sa-prompt-toggle:hover {
-  background: color-mix(in srgb, var(--aide-info) 8%, transparent);
+  background: color-mix(in srgb, var(--aide-agent-accent) 8%, transparent);
   color: var(--aide-text-primary);
 }
 .sa-prompt-glyph {
@@ -312,7 +312,7 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
 
 .sa-head:focus-visible,
 .sa-prompt-toggle:focus-visible {
-  outline: 1px solid var(--aide-info);
+  outline: 1px solid var(--aide-agent-accent);
   outline-offset: 1px;
 }
 
