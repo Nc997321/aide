@@ -16,7 +16,7 @@
         </div>
         <div class="stat">
           <span class="stat-value">{{ health?.processes?.claudeExeCount ?? 0 }}</span>
-          <span class="stat-label">claude.exe 进程</span>
+          <span class="stat-label">claude 进程</span>
         </div>
       </div>
     </div>

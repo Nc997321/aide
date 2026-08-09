@@ -60,6 +60,11 @@ export function isWindows(): boolean {
   return navigator.platform.toLowerCase().includes("win");
 }
 
+/** True when running on macOS. */
+export function isMac(): boolean {
+  return navigator.platform.toLowerCase().includes("mac");
+}
+
 /** The detected Windows build number, or undefined if unknown. */
 export function getWindowsBuildNumber(): number | undefined {
   return _windowsBuildNumber;

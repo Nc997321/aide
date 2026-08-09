@@ -478,9 +478,9 @@ function onOverlayClick(e: MouseEvent) {
                 <input
                   v-model="shellPathLocal"
                   class="text-input"
-                  placeholder="留空自动探测（Windows: PowerShell / Linux: bash）"
+                  placeholder="留空自动探测（Windows: PowerShell / macOS: zsh / Linux: bash）"
                 />
-                <span class="field-hint">填绝对路径覆盖默认，如 C:\Program Files\Git\bin\bash.exe</span>
+                <span class="field-hint">填绝对路径覆盖默认，如 C:\Program Files\Git\bin\bash.exe 或 /bin/zsh</span>
               </div>
 
               <div class="settings-field">

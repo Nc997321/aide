@@ -8,7 +8,7 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "build:sidecar": "pnpm --dir agent-sidecar build && pnpm --dir agent-sidecar build:exe",
+    "build:sidecar": "pnpm --dir agent-sidecar build && pnpm --dir agent-sidecar build:bin",
     "release": "pnpm build:sidecar && pnpm tauri build",
     "test": "vitest run",
     "test:watch": "vitest"

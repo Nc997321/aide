@@ -227,9 +227,10 @@ export function useWorkbenchTerminal() {
     const stg = settingsRef!;
     try {
       await api.ptySpawnShell(id, s.terminal.rows, s.terminal.cols, cwd, stg.shellPath ?? "");
+      const plat = navigator.platform.toLowerCase();
       s.shellName = stg.shellPath
         ? deriveShellName(stg.shellPath)
-        : (navigator.platform.toLowerCase().includes("win") ? "PowerShell" : "bash");
+        : (plat.includes("win") ? "PowerShell" : plat.includes("mac") ? "zsh" : "bash");
       setShellName(id, s.shellName);
       s.spawned = true;
       if (initialCommand) {

@@ -6,6 +6,7 @@ import NotificationBell from "./NotificationBell.vue";
 import LspIndicator from "./LspIndicator.vue";
 import AppLogo from "../AppLogo.vue";
 import Icon from "../Icon.vue";
+import { isWindows } from "../../utils/platform";
 import type { SessionStatus } from "../../composables/useSessionState";
 import type { RunStatus } from "../../composables/useRunProcess";
 import type { RunConfig } from "../../types";
@@ -387,7 +388,7 @@ function isRowRunning(cfg: RunConfig): boolean {
         :collapsed="!!rightCollapsed"
         @toggle="$emit('toggle-right')"
       />
-      <WindowControls />
+      <WindowControls v-if="isWindows()" />
     </div>
   </div>
 </template>

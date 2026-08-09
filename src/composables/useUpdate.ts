@@ -1,5 +1,6 @@
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { isMac, isWindows } from "../utils/platform";
 
 // ── Module-level state ──
 
@@ -70,9 +71,11 @@ async function checkUpdate(currentVersion: string): Promise<void> {
 
         if (isNewer(release.tag_name, currentVersion)) {
             latestVersion.value = release.tag_name;
-            const asset = release.assets.find(
-                (a) => a.name.endsWith(".exe") || a.name.endsWith(".msi"),
-            );
+            const asset = release.assets.find((a) => {
+                if (isMac()) return a.name.endsWith(".dmg") || a.name.endsWith(".pkg");
+                if (isWindows()) return a.name.endsWith(".exe") || a.name.endsWith(".msi");
+                return false;
+            });
             downloadUrl.value = asset?.browser_download_url ?? release.html_url;
             updateAvailable.value = true;
         }

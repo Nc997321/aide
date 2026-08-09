@@ -531,12 +531,13 @@ impl AgentRuntimeManager {
         {
             use tauri::Manager;
             let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
-            let path = resource_dir.join("agent-runtime").join("aide-agent.exe");
+            let bin_name = if cfg!(windows) { "aide-agent.exe" } else { "aide-agent" };
+            let path = resource_dir.join("agent-runtime").join(bin_name);
             if path.exists() {
                 return Ok(dunce::simplified(&path).to_path_buf());
             }
             // fallback: 旧资源路径
-            let fallback = resource_dir.join("agent-sidecar").join("aide-agent.exe");
+            let fallback = resource_dir.join("agent-sidecar").join(bin_name);
             if fallback.exists() {
                 return Ok(dunce::simplified(&fallback).to_path_buf());
             }
