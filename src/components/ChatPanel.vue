@@ -867,15 +867,17 @@ watch(inputText, (val) => {
   }
 });
 
-// 切换会话时清空待发图片/引用芯片、清理 btw 支线
+// 切换会话时清空待发图片/引用芯片
 // （滚动/窗口复位 + 分帧 ramp 由 useChatScroll 自己 watch sessionId 处理）
+//
+// 注意:切会话绝不清理 btw 支线——此前这里调 btw.cleanup(),跑中的支线(问答/
+// git-commit)直接被 kill,像被"取消"了一样。现在:抽屉可见性由 ownerSessionId
+// 绑定(切走自动隐藏、切回重现),sidecar 进程后台照跑,结论经 onDone 回插主会话
+// store(模块级,切换不丢)。真正 teardown 只有两处:用户关抽屉(done/error 态)
+// / 开新 btw(单实例替换,见 useBtwSession.startBtw)。
 watch(() => props.sessionId, () => {
   pendingImages.value = [];
   pendingMentions.value = [];
-  // 切主会话 → btw 抽屉关、进程清理
-  if (btw.store.value.question || btw.store.value.isBusy || btw.store.value.done) {
-    btw.cleanup();
-  }
 });
 
 function selectSkill(skill: SkillMeta | undefined) {

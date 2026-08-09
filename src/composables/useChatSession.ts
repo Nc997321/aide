@@ -413,6 +413,9 @@ async function finalizeSession(tempId: string, realId: string) {
   migrateProvider(tempId, realId);
   // 工作区归属同样搬迁（sendMessage 首发时 seed 的创建时绑定快照）
   useSessionWorkspaces().migrate(tempId, realId);
+  // btw 支线抽屉绑定/支线记忆 key 跟随定名（git-commit 可从 pending 会话发起，
+  // ownerSid 记的是临时 id；不迁抽屉永久失绑）
+  useBtwSession().rebindOwner(tempId, realId);
   // 2. Runtime 内部管理 session 映射（SessionManager 的 Map），不需要 Rust 改名
   // 3. 通知 App.vue：这是第一次创建，去写元数据、加侧栏、记最近访问
   for (const cb of sessionCreatedCallbacks) cb(tempId, realId);

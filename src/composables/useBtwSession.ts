@@ -139,6 +139,19 @@ function reopen() {
   state.value.minimized = false;
 }
 
+/** 主会话 tempId→realId 定名跟随:git-commit 可从 pending 会话(首发后、
+ *  session_init 前)发起,ownerSid 记的是临时 id;主会话 finalize 改名后,
+ *  可见性判定 ownerSessionId === props.sessionId 再也不成立——抽屉永久失绑。
+ *  由 useChatSession.finalizeSession 调:绑定与支线记忆 key 一起迁到 realId。 */
+function rebindOwner(tempId: string, realId: string) {
+  if (state.value.ownerSessionId === tempId) state.value.ownerSessionId = realId;
+  const rounds = historyByOwner.get(tempId);
+  if (rounds) {
+    historyByOwner.delete(tempId);
+    historyByOwner.set(realId, rounds);
+  }
+}
+
 function handleBtwEvent(e: Record<string, unknown>) {
   switch (e["type"]) {
     case "session_init": {
@@ -222,6 +235,7 @@ export function useBtwSession() {
     cleanup,
     minimize,
     reopen,
+    rebindOwner,
     setOnDone,
   };
 }

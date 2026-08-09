@@ -159,4 +159,27 @@ describe("useBtwSession routing", () => {
     const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
     expect(sentPrompt).toBe("正常问");
   });
+
+  // 主会话定名跟随:git-commit 可从 pending 会话发起(ownerSid=临时 id),
+  // finalize 改名后不跟随的话抽屉永久失绑(ownerSessionId !== props.sessionId)。
+  it("rebindOwner follows temp→real rename: drawer binding + Q&A memory migrate", async () => {
+    const { startBtw, handleBtwEvent, store, rebindOwner } = useBtwSession();
+    await startBtw({ tempId: "p1", forkFrom: "", ownerSid: "temp-main", prompt: "pending 问", cwd: "/r", lightweight: true });
+    expect(store.value.ownerSessionId).toBe("temp-main");
+    // 留一轮记忆再改名:绑定与记忆 key 都要迁到 realId
+    handleBtwEvent({ session_id: "p1", type: "text_delta", delta: "pending 答" });
+    handleBtwEvent({ session_id: "p1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
+    rebindOwner("temp-main", "real-main");
+    expect(store.value.ownerSessionId).toBe("real-main");
+    await startBtw({ tempId: "p2", forkFrom: "real-main", prompt: "再问", cwd: "/r", lightweight: true });
+    const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
+    expect(sentPrompt).toContain("Q1: pending 问"); // 记忆 key 已迁
+  });
+
+  it("rebindOwner no-ops for unrelated ids", async () => {
+    const { startBtw, store, rebindOwner } = useBtwSession();
+    await startBtw({ tempId: "u1", forkFrom: "main", prompt: "q", cwd: "/r", lightweight: true });
+    rebindOwner("someone-else", "real-x");
+    expect(store.value.ownerSessionId).toBe("main"); // 不受影响
+  });
 });
