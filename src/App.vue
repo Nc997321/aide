@@ -48,6 +48,7 @@ import { snapshotScrollTrail, probeRebuildChatScrollers } from "./utils/diagnost
 import { useFileViewer } from "./composables/useFileViewer";
 import { useRecent } from "./composables/useRecent";
 import { useWorkspaces } from "./composables/useWorkspaces";
+import { useSessionWorkspaces } from "./composables/useSessionWorkspaces";
 import { timeAgo } from "./utils/time";
 import type { PaletteResult } from "./ui/ACommandPalette.vue";
 import OpenFolderDialog from "./components/OpenFolderDialog.vue";
@@ -196,7 +197,14 @@ onSessionCreated((tempId, realId) => {
   useSessionNames().setName(realId, name);
   void api.createSession(realId, name).then((session) => {
     sidebarRef.value?.addSession({ id: session.id, name: session.name, timestamp: session.timestamp, last_message: "" });
-    void useRecent().recordCurrentSession(session.id, session.name);
+    // 归属读注册表（首发时 seed 的创建时绑定），不用「当前」工作区——
+    // session_init 在途期间用户可能已切走
+    const ws = useSessionWorkspaces().workspaceOf(realId);
+    void useRecent().recordCurrentSession(
+      session.id,
+      session.name,
+      ws ? { key: ws.wsKey, name: ws.wsPath } : undefined,
+    );
   });
 });
 const settingsVisible = ref(false);
@@ -364,7 +372,11 @@ function onNewSession(name: string) {
   if (!paneLayout.hasAnyTab.value) return;
   // 打开空白可输入面板（预览 tab）；不落盘、不进侧栏。真正创建推迟到
   // 用户发出第一条消息、SDK 用 session_init 确认真实 id 之后（onSessionCreated）。
-  paneLayout.openBlankTab(name);
+  // 工作区归属在创建时绑定（布局全局一份，切工作区不动 tab，不快照就会落到
+  // 发送时的「当前」工作区）。
+  const wsKey = activeWorkspaceKey.value;
+  const wsPath = workspacePath.value;
+  paneLayout.openBlankTab(name, wsKey && wsPath ? { wsKey, wsPath } : undefined);
 }
 
 async function onSidebarWsChanged(path: string) {

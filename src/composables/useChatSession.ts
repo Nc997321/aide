@@ -24,7 +24,7 @@ import type {
 } from "../types/chat";
 import { useSessionState } from "./useSessionState";
 import { useSessionNames } from "./useSessionNames";
-import { useSessionWorkspaces } from "./useSessionWorkspaces";
+import { useSessionWorkspaces, type SessionWorkspaceInfo } from "./useSessionWorkspaces";
 import { useSessionProviders } from "./useSessionProviders";
 import { useProviders } from "./useProviders";
 import { splitMentionSections, type FileMentionResolution } from "../utils/fileMentions";
@@ -93,6 +93,10 @@ export interface SendOptions {
    *  ActionBlock），而发给 sidecar 的 prompt 仍是 opts 对应的斜杠命令——显示
    *  与命令解耦。 */
   action?: { id: string; label: string; icon?: string };
+  /** 新会话（空白面板首发）的工作区归属——空白 tab 创建时绑定快照或发送时的
+   *  当前工作区，由 PaneGroup 注入；仅生成临时 sid 时消费（种进注册表），
+   *  已有会话忽略（归属本来就在注册表里）。 */
+  workspace?: SessionWorkspaceInfo;
 }
 
 interface QueuedSend {
@@ -407,6 +411,8 @@ async function finalizeSession(tempId: string, realId: string) {
   }
   // provider 绑定也跟着搬迁：临时 id 在 sendMessage 时已盖戳，拿到真实 id 后不能丢
   migrateProvider(tempId, realId);
+  // 工作区归属同样搬迁（sendMessage 首发时 seed 的创建时绑定快照）
+  useSessionWorkspaces().migrate(tempId, realId);
   // 2. Runtime 内部管理 session 映射（SessionManager 的 Map），不需要 Rust 改名
   // 3. 通知 App.vue：这是第一次创建，去写元数据、加侧栏、记最近访问
   for (const cb of sessionCreatedCallbacks) cb(tempId, realId);
@@ -1091,6 +1097,10 @@ export function useChatSession(sessionId: Ref<string | null>) {
     if (!sid) {
       sid = crypto.randomUUID();
       pendingSids.add(sid);
+      // 空白面板首发：把工作区归属（创建时绑定快照，或发送时当前工作区）当场
+      // 种进注册表——dispatchSend 的 workspaceRoot、finalize 后的落盘归属都读它，
+      // 不再受「发出后用户切了工作区」影响。
+      if (opts.workspace) useSessionWorkspaces().setWorkspace(sid, opts.workspace);
     }
     await ensureGlobalListener();
 

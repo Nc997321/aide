@@ -6,6 +6,7 @@ import { usePaneLayout } from "../../composables/usePaneLayout";
 import { useChatSession, type SendOptions } from "../../composables/useChatSession";
 import { useContextMenu } from "../../composables/useContextMenu";
 import { useSessionWorkspaces } from "../../composables/useSessionWorkspaces";
+import { useWorkspaces } from "../../composables/useWorkspaces";
 import { paneTabMenuItems } from "../../menus/contextMenus";
 import { WORKSPACE_PATH_KEY } from "./keys";
 import type { GroupNode } from "../../composables/paneLayout/tree";
@@ -64,9 +65,21 @@ const workspacePath = inject<Ref<string>>(WORKSPACE_PATH_KEY, ref(""));
 // 混合 tab：面板内的路径展示/文件引用以会话自己的工作区为基准，
 // 没有归属记录（空白新会话）才回落当前活动工作区。
 const { workspaceOf } = useSessionWorkspaces();
+const { activeKey: activeWsKey } = useWorkspaces();
+
+/** 当前活动工作区的归属快照（空白 tab 创建/兜底发送用）；信息不全时不绑。 */
+function wsSnapshot(): { wsKey: string; wsPath: string } | undefined {
+  const wsPath = workspacePath.value;
+  const wsKey = activeWsKey.value;
+  return wsKey && wsPath ? { wsKey, wsPath } : undefined;
+}
+
 const effectiveWorkspacePath = computed(() => {
-  const sid = activeTab.value?.sessionId;
-  return (sid && workspaceOf(sid)?.wsPath) || workspacePath.value;
+  const tab = activeTab.value;
+  const sid = tab?.sessionId;
+  if (sid) return workspaceOf(sid)?.wsPath || workspacePath.value;
+  // 空白面板：显示创建时绑定的工作区（切工作区后仍如实展示它属于哪）
+  return tab?.pendingWs?.wsPath || workspacePath.value;
 });
 
 /**
@@ -78,7 +91,12 @@ async function onSend(prompt: string, opts: SendOptions) {
   if (!activeTab.value) onNewTab();
   const tab = activeTab.value;
   if (!tab) return;
-  const sid = await sendMessage(prompt, opts);
+  // 空白 tab 的归属在创建时已绑定（pendingWs）；切工作区后发送仍落创建时的
+  // 工作区。无快照（欢迎态同 tick 建 tab / 拆组空白 tab）兜底当前工作区。
+  const sid = await sendMessage(prompt, {
+    ...opts,
+    workspace: tab.sessionId ? undefined : (tab.pendingWs ?? wsSnapshot()),
+  });
   if (!sid) return;
   if (tab.sessionId !== sid) pl.bindSession(tab.id, sid);
   pl.promoteTab(sid);
@@ -100,7 +118,9 @@ function onTabContext(tabId: string, x: number, y: number) {
 
 function onNewTab() {
   pl.focusGroup(props.group.id);
-  pl.openBlankTab(`新会话 ${new Date().toLocaleTimeString()}`);
+  // 空白面板创建时绑定当前工作区：布局全局一份，切工作区不动 tab——
+  // 不快照的话首条消息会落到「当前」工作区而不是创建时的那个
+  pl.openBlankTab(`新会话 ${new Date().toLocaleTimeString()}`, wsSnapshot());
 }
 </script>
 

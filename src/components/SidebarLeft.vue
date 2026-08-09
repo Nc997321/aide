@@ -472,13 +472,15 @@ onMounted(async () => {
 });
 
 /**
- * Add a newly-created session to the top of the active workspace list.
+ * Add a newly-created session to the top of its own workspace list.
  * Called by App.vue's onSessionCreated once the SDK has confirmed a real
  * session id (see CLAUDE.md「会话 ID 生命周期」) — sessions never appear here
  * before that, so there's no draft id to swap out later.
+ * 归属读注册表（首发时 seed 的创建时绑定快照）：session_init 在途期间用户
+ * 可能已切走工作区，不能用回调时刻的 activeWorkspace。
  */
 function addSession(session: Session) {
-  const wsKey = activeWorkspace.value;
+  const wsKey = sessionWs.workspaceOf(session.id)?.wsKey ?? activeWorkspace.value;
   const list = sessionsByWorkspace.value[wsKey] ?? [];
   if (!list.some(s => s.id === session.id)) {
     list.unshift(session);

@@ -29,18 +29,18 @@ const { displayName } = useSessionNames();
 const { workspaceOf } = useSessionWorkspaces();
 const activeWorkspacePath = inject<Ref<string>>(WORKSPACE_PATH_KEY, ref(""));
 
-/** 跨工作区标识：会话不属于当前活动工作区时返回其工作区短名，否则空串。
- *  Windows 路径大小写不敏感，比较统一转小写。 */
+/** 跨工作区标识：会话（含空白 tab 的创建时绑定）不属于当前活动工作区时
+ *  返回其工作区短名，否则空串。Windows 路径大小写不敏感，比较统一转小写。 */
 function wsSuffix(tab: TabItem): string {
-  if (!tab.sessionId) return "";
-  const ws = workspaceOf(tab.sessionId);
+  const ws = tab.sessionId ? workspaceOf(tab.sessionId) : (tab.pendingWs ?? null);
   if (!ws?.wsPath) return "";
   if (ws.wsPath.toLowerCase() === activeWorkspacePath.value.toLowerCase()) return "";
   return workspaceLabelFromPath(ws.wsPath);
 }
 
 function wsFullPath(tab: TabItem): string {
-  return (tab.sessionId && workspaceOf(tab.sessionId)?.wsPath) || "";
+  if (tab.sessionId) return workspaceOf(tab.sessionId)?.wsPath || "";
+  return tab.pendingWs?.wsPath || "";
 }
 
 /** 激活 tab 的会话进程是否存活（决定停止按钮显隐，只看活跃度轴） */

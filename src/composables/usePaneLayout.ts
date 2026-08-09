@@ -16,6 +16,7 @@ import {
   type GroupNode,
   type LayoutSnapshot,
   type PaneNode,
+  type TabItem,
 } from "./paneLayout/tree";
 import { useSessionState } from "./useSessionState";
 import { useSessionNames } from "./useSessionNames";
@@ -119,6 +120,7 @@ export function usePaneLayout() {
       if (preview) {
         preview.sessionId = sessionId;
         delete preview.pendingName;
+        delete preview.pendingWs; // 改绑已存在会话：归属走注册表，空白快照作废
         activateTab(group, preview.id);
         return;
       }
@@ -129,8 +131,9 @@ export function usePaneLayout() {
     activateTab(group, tab.id);
   }
 
-  /** 新建会话（Ctrl+N / 侧栏按钮）：空白面板天然未启动，走预览语义。 */
-  function openBlankTab(pendingName: string) {
+  /** 新建会话（Ctrl+N / 侧栏按钮）：空白面板天然未启动，走预览语义。
+   *  pendingWs = 创建时的工作区归属快照（创建时绑定），首发时种进注册表。 */
+  function openBlankTab(pendingName: string, pendingWs?: TabItem["pendingWs"]) {
     const group = focusedGroup();
     const preview = group.previewTabId
       ? group.tabs.find((t) => t.id === group.previewTabId)
@@ -138,10 +141,13 @@ export function usePaneLayout() {
     if (preview) {
       preview.sessionId = null;
       preview.pendingName = pendingName;
+      // 复用预览 tab = 换一个空白面板：归属快照跟着换绑（无新快照则清除旧绑定）
+      if (pendingWs) preview.pendingWs = pendingWs;
+      else delete preview.pendingWs;
       activateTab(group, preview.id);
       return;
     }
-    const tab = createTab(null, pendingName);
+    const tab = createTab(null, pendingName, pendingWs);
     group.tabs.push(tab);
     group.previewTabId = tab.id;
     activateTab(group, tab.id);
@@ -232,7 +238,10 @@ export function usePaneLayout() {
   /** 空白 tab 首次发消息：绑定现场生成的临时 session id。 */
   function bindSession(tabId: string, sessionId: string) {
     const hit = findTabById(layout.root, tabId);
-    if (hit) hit.tab.sessionId = sessionId;
+    if (hit) {
+      hit.tab.sessionId = sessionId;
+      delete hit.tab.pendingWs; // 归属已种进注册表（sendMessage seed），tab 不留冗余
+    }
   }
 
   /** SDK session_init 确认真实 id：临时 id → 真实 id（App.vue 的 onSessionCreated 里调）。 */

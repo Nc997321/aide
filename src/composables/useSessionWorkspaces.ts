@@ -36,5 +36,14 @@ export function useSessionWorkspaces() {
     return workspaces[sessionId] ?? null;
   }
 
-  return { workspaces, setWorkspace, setMany, workspaceOf };
+  /** 临时 id 被 SDK 确认为真实 id：归属条目原地搬迁（与 useChatSession 里
+   *  stores/sessionState/provider 的 temp→real 搬迁同范式）。 */
+  function migrate(oldId: string, newId: string) {
+    const info = workspaces[oldId];
+    if (!info) return;
+    workspaces[newId] = info;
+    delete workspaces[oldId];
+  }
+
+  return { workspaces, setWorkspace, setMany, workspaceOf, migrate };
 }

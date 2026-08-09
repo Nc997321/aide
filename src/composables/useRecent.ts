@@ -24,12 +24,20 @@ export function useRecent() {
     }
   }
 
-  /** 记录最近会话：用当前工作区（启动前选择已切到该会话所属 ws）。
-   *  仅在会话"启动"时调用——只预览未启动的会话不入最近列表。 */
-  async function recordCurrentSession(sessionId: string, name: string): Promise<void> {
-    if (!currentWsKey.value) return;
+  /** 记录最近会话：缺省用当前工作区（启动前选择已切到该会话所属 ws）。
+   *  仅在会话"启动"时调用——只预览未启动的会话不入最近列表。
+   *  ws 显式给出时用它（新会话落盘路径：归属是创建时绑定快照，session_init
+   *  在途期间用户可能已切走，currentWs 不可靠）。 */
+  async function recordCurrentSession(
+    sessionId: string,
+    name: string,
+    ws?: { key: string; name: string },
+  ): Promise<void> {
+    const key = ws?.key ?? currentWsKey.value;
+    const wsName = ws?.name ?? currentWsName.value;
+    if (!key) return;
     try {
-      await api.recordRecentSession(currentWsKey.value, currentWsName.value, sessionId, name);
+      await api.recordRecentSession(key, wsName, sessionId, name);
       await refresh();
     } catch {
       // best effort

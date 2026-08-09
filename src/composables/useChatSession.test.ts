@@ -19,6 +19,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import { useChatSession, __resetForTest } from "./useChatSession";
 import { useSessionState } from "./useSessionState";
+import { useSessionWorkspaces } from "./useSessionWorkspaces";
 
 function emit(e: Record<string, unknown>) {
   chatEventHandler?.({ payload: e });
@@ -96,6 +97,30 @@ describe("useChatSession per-session store", () => {
 
     const call = invokeMock.mock.calls.find((c) => c[0] === "send_message");
     expect(call?.[1]).toMatchObject({ resumeId: "0f6d9a2e-1234-4abc-9def-000000000001" });
+  });
+
+  it("新会话首发 seed 工作区归属（创建时绑定）：send_message 带 workspaceRoot，session_init 后迁到真实 id", async () => {
+    const sid = ref<string | null>(null);
+    const chat = useChatSession(sid);
+    await flush();
+
+    const ws = { wsKey: "key-a", wsPath: "C:\\proj\\a" };
+    const tempId = await chat.sendMessage("first", { workspace: ws });
+    expect(tempId).toBeTruthy();
+
+    const { workspaceOf, workspaces } = useSessionWorkspaces();
+    // seed 先于 dispatchSend：注册表立即可取，send_message 的 workspaceRoot 不再是 null
+    expect(workspaceOf(tempId as string)).toEqual(ws);
+    const sendCall = invokeMock.mock.calls.find((c) => c[0] === "send_message");
+    expect(sendCall?.[1]).toMatchObject({ sessionId: tempId, workspaceRoot: ws.wsPath });
+
+    // SDK 确认真实 id：归属随 finalizeSession 搬迁，临时条目清除
+    emit({ type: "session_init", sdk_session_id: "sdk-uuid-ws", session_id: tempId as string });
+    await flush();
+    expect(workspaceOf("sdk-uuid-ws")).toEqual(ws);
+    expect(workspaces[tempId as string]).toBeUndefined();
+
+    delete workspaces["sdk-uuid-ws"]; // 模块级注册表单例，清掉不污染其他测试
   });
 
   it("sessionId 为空时首次发送现场生成临时 key，不带 resume；session_init 后触发首次创建，alias 转发在途事件", async () => {

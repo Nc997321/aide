@@ -25,6 +25,12 @@ export interface TabItem {
   sessionId: string | null;
   /** 空白面板预起的名字，等 SDK 确认真实 id 后由 App.vue 取走用于落盘 */
   pendingName?: string;
+  /**
+   * 空白面板创建时的工作区归属快照（创建时绑定）：布局是全局一份，切工作区
+   * 不动聊天区 tab，没有它首条消息会落到「当前」工作区而不是创建时的那个。
+   * 首发时种进 useSessionWorkspaces 注册表（bindSession 时清掉本字段）。
+   */
+  pendingWs?: { wsKey: string; wsPath: string };
 }
 
 export interface GroupNode {
@@ -52,8 +58,17 @@ export function newId(): string {
   return crypto.randomUUID();
 }
 
-export function createTab(sessionId: string | null, pendingName?: string): TabItem {
-  return { id: newId(), sessionId, ...(pendingName !== undefined ? { pendingName } : {}) };
+export function createTab(
+  sessionId: string | null,
+  pendingName?: string,
+  pendingWs?: TabItem["pendingWs"],
+): TabItem {
+  return {
+    id: newId(),
+    sessionId,
+    ...(pendingName !== undefined ? { pendingName } : {}),
+    ...(pendingWs !== undefined ? { pendingWs } : {}),
+  };
 }
 
 export function createGroup(tabs: TabItem[] = []): GroupNode {

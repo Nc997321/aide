@@ -227,6 +227,47 @@ describe("会话 id 生命周期接线", () => {
   });
 });
 
+describe("空白 tab 工作区归属快照（创建时绑定）", () => {
+  const wsA = { wsKey: "key-a", wsPath: "C:\\proj\\a" };
+  const wsB = { wsKey: "key-b", wsPath: "C:\\proj\\b" };
+
+  it("openBlankTab 带 pendingWs 落到 tab 上", () => {
+    const pl = usePaneLayout();
+    pl.openBlankTab("新会话 A", wsA);
+    expect(focused().tabs[0].pendingWs).toEqual(wsA);
+  });
+
+  it("复用预览 tab：有新快照换绑，无快照清除旧绑定", () => {
+    const pl = usePaneLayout();
+    pl.openSession("s1"); // s1 未启动 → 预览 tab
+    pl.openBlankTab("新会话 A", wsA); // 复用预览 tab
+    expect(focused().tabs).toHaveLength(1);
+    expect(focused().tabs[0].pendingWs).toEqual(wsA);
+    pl.openBlankTab("新会话 B", wsB); // 换绑
+    expect(focused().tabs[0].pendingWs).toEqual(wsB);
+    pl.openBlankTab("新会话 C"); // 无新快照 → 清除旧绑定
+    expect(focused().tabs[0].pendingWs).toBeUndefined();
+  });
+
+  it("openSession 复用预览 tab 后 pendingWs 被清（改绑已存在会话，归属走注册表）", () => {
+    const pl = usePaneLayout();
+    pl.openBlankTab("新会话 A", wsA);
+    pl.openSession("s1"); // s1 未启动 → 复用这个预览 tab
+    expect(focused().tabs).toHaveLength(1);
+    expect(focused().tabs[0].sessionId).toBe("s1");
+    expect(focused().tabs[0].pendingWs).toBeUndefined();
+  });
+
+  it("bindSession 后 pendingWs 被清（归属已种进注册表）", () => {
+    const pl = usePaneLayout();
+    pl.openBlankTab("新会话 A", wsA);
+    const tab = focused().tabs[0];
+    pl.bindSession(tab.id, "temp-id");
+    expect(tab.sessionId).toBe("temp-id");
+    expect(tab.pendingWs).toBeUndefined();
+  });
+});
+
 describe("tab 切换与聚焦", () => {
   it("MRU 切换：快速按一次在最近两个会话间往返（OS Alt+Tab 语义）", () => {
     const pl = usePaneLayout();
