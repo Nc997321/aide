@@ -1287,8 +1287,7 @@ function onOpenBgDock(taskId: string) {
         />
         <div v-else-if="isBusyVal" class="chat-thinking">
           <AppLogo :size="15" animated />
-          <span>正在思考…</span>
-          <span class="chat-thinking-time">{{ activityElapsed }}s</span>
+          <span class="chat-thinking-text">正在思考</span>
           <InterruptButton class="chat-interrupt-btn" @click="emit('interrupt')" />
         </div>
       </div>
@@ -1677,10 +1676,41 @@ function onOpenBgDock(taskId: string) {
   color: var(--aide-text-muted);
 }
 
-.chat-thinking-time {
-  color: var(--aide-text-muted);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
+.chat-thinking-text {
+  position: relative;
+  font-weight: 500;
+  background: linear-gradient(
+    90deg,
+    var(--aide-text-muted) 0%,
+    var(--aide-text-muted) 33%,
+    var(--aide-agent-accent) 50%,
+    var(--aide-text-muted) 67%,
+    var(--aide-text-muted) 100%
+  );
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: thinking-text-shimmer 2.5s linear infinite;
+}
+
+@keyframes thinking-text-shimmer {
+  0% {
+    background-position: 100% center;
+  }
+  100% {
+    background-position: 0% center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-thinking-text {
+    animation: none;
+    background: var(--aide-text-muted);
+    -webkit-background-clip: initial;
+    background-clip: initial;
+    -webkit-text-fill-color: initial;
+  }
 }
 
 /* 中断按钮：视觉在 InterruptButton.vue（声波停止钮），这里只给布局——靠右 */
