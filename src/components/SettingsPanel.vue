@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, computed } from "vue";
+import { getVersion } from "@tauri-apps/api/app";
 import { useSettings } from "../composables/useSettings";
 import { useCustomizations } from "../composables/useCustomizations";
 import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
@@ -39,9 +40,15 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-type Tab = "general" | "editor" | "providers" | "permissions" | "extensions" | "marketplace" | "codegraph" | "diagnostics";
+type Tab = "general" | "editor" | "providers" | "permissions" | "extensions" | "marketplace" | "codegraph" | "diagnostics" | "about";
 
 const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
+
+// ── 关于 ──
+const appVersion = ref("");
+onMounted(async () => {
+  appVersion.value = await getVersion().catch(() => "");
+});
 
 // ── Settings (通用) ──
 
@@ -380,6 +387,14 @@ function onOverlayClick(e: MouseEvent) {
             >
               <Icon class="nav-icon" name="agent" :size="16" />
               <span class="nav-label">诊断</span>
+            </button>
+            <button
+              class="nav-item"
+              :class="{ active: activeTab === 'about' }"
+              @click="activeTab = 'about'"
+            >
+              <Icon class="nav-icon" name="info" :size="16" />
+              <span class="nav-label">关于</span>
             </button>
           </nav>
 
@@ -726,6 +741,25 @@ function onOverlayClick(e: MouseEvent) {
             <!-- ── 诊断 Tab ── -->
             <div v-else-if="activeTab === 'diagnostics'" class="tab-diagnostics">
               <DiagnosticsDashboard />
+            </div>
+
+            <!-- ── 关于 Tab ── -->
+            <div v-else-if="activeTab === 'about'" class="tab-about">
+              <div class="about-card">
+                <div class="about-name">
+                  Aide
+                  <span v-if="appVersion" class="about-version">v{{ appVersion }}</span>
+                </div>
+                <p class="about-desc">基于 Claude Agent SDK 构建的 Claude Code 非官方桌面客户端。</p>
+                <p class="about-desc">
+                  对话能力由内置的 Claude Agent SDK 提供，无需单独安装命令行工具；
+                  在「设置 → 模型」中配置供应商凭证即可开始使用。
+                </p>
+                <div class="about-legal">
+                  本项目与 Anthropic 无隶属、背书或赞助关系；"Claude" 是 Anthropic PBC 的商标。
+                  Aide 以 MIT 协议开源。
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1330,5 +1364,48 @@ function onOverlayClick(e: MouseEvent) {
   border: 1px solid color-mix(in srgb, var(--aide-warning) 25%, transparent);
   font-size: 11px;
   color: var(--aide-warning);
+}
+
+/* ── 关于 Tab ── */
+
+.tab-about {
+  display: flex;
+  justify-content: center;
+  padding: 56px 24px 24px;
+}
+
+.about-card {
+  max-width: 420px;
+  text-align: center;
+}
+
+.about-name {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--aide-text-primary);
+  letter-spacing: 0.02em;
+}
+
+.about-version {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--aide-accent);
+}
+
+.about-desc {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--aide-text-secondary);
+}
+
+.about-legal {
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--aide-border-subtle);
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--aide-text-muted);
 }
 </style>

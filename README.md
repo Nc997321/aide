@@ -1,15 +1,13 @@
 # Aide
 
-Unofficial desktop interface for Claude Code CLI. Built with Tauri v2 + Vue 3.
+Unofficial desktop interface for Claude Code, built on the [Claude Agent SDK](https://docs.anthropic.com/en/docs/claude-code/sdk). Tauri v2 + Vue 3.
 
 > **Disclaimer:** This project is **not affiliated with, endorsed by, or sponsored by Anthropic.**
-> "Claude" is a trademark of Anthropic PBC. This is an independent open-source wrapper
-> that requires a separate installation of the official Claude Code CLI.
-> All trademarks belong to their respective owners.
+> "Claude" is a trademark of Anthropic PBC. All trademarks belong to their respective owners.
 
 ## What is Aide?
 
-Aide wraps the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) in a desktop GUI, giving you:
+Aide gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) a desktop GUI. Conversations are driven by the Claude Agent SDK `query()` in a bundled Node.js sidecar (no terminal wrapper), giving you:
 
 - Multi-panel layout with draggable splitters
 - Session list backed by Claude Code's real storage (no data lock-in)
@@ -18,13 +16,13 @@ Aide wraps the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
 - File tree with one-click file opening
 - Context menus for files, folders, and sessions
 
-Aide does **not** bundle or redistribute the Claude Code CLI. It is a UI layer only — you must install `claude` yourself.
+Aide ships the Claude Code runtime through Anthropic's official Claude Agent SDK distribution — no separate CLI installation is required. You authenticate with your own provider credentials (Settings → 模型).
 
 ## Features
 
-- **Chat with Claude** — `claude -p --resume <sessionId>` under the hood, rendered as styled chat bubbles
+- **Chat with Claude** — streaming via the Claude Agent SDK in a Node.js sidecar, rendered as styled chat bubbles
 - **Context compaction feedback** — shows a live, theme-aware status while the agent is compressing context, without inventing a percentage
-- **Session management** — reads directly from `~/.claude/projects/` and `~/.claude/sessions/`, so your conversations stay in sync with the CLI
+- **Session management** — reads directly from the aide-managed Claude config dir (`~/.aide/claude/`), in Claude Code's native format, so nothing is locked into a private database
 - **File tree** — lazy-loaded directory browser, filtered (skips `.`, `node_modules`, `target`, `dist`)
 - **Workspace scanning** — lists all projects you've used Claude with
 - **Right-click menus** — context-aware menus on files, directories, sessions, and messages
@@ -33,7 +31,6 @@ Aide does **not** bundle or redistribute the Claude Code CLI. It is a UI layer o
 
 ### Work in progress
 
-- Streaming output (currently `claude -p` returns all at once)
 - Code syntax highlighting
 - Stop button for in-progress responses
 - Workspace switcher UI
@@ -41,7 +38,7 @@ Aide does **not** bundle or redistribute the Claude Code CLI. It is a UI layer o
 
 ## Prerequisites
 
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code/overview) installed and authenticated
+- Your own Claude provider credentials, configured in the app (Settings → 模型)
 - **Rust** 1.96+ (MSVC toolchain on Windows)
 - **VS Build Tools 2022** (for `link.exe` on Windows)
 - **Node.js** 24+
@@ -92,6 +89,7 @@ aide/
 │   │   └── pty.rs          # PTY support
 │   ├── Cargo.toml
 │   └── tauri.conf.json
+├── agent-sidecar/          # Node.js sidecar — Claude Agent SDK query() workers
 ├── package.json
 ├── vite.config.ts
 └── PLANS.md                # Product backlog & architecture notes
@@ -101,13 +99,13 @@ aide/
 
 ```
 User types message
-  → Vue invokes chat_send(message, sessionId)
-    → Rust spawns "claude -p <msg> --resume <sessionId>"
-      → stdout parsed and emitted as chat-chunk events
-        → Vue appends text to chat bubble (marked.js renders Markdown)
+  → Vue forwards it to the agent runtime (sidecar)
+    → Node.js worker runs Claude Agent SDK query() with streaming input
+      → SDK events stream back to the UI
+        → Vue appends text to chat bubble (marked renders Markdown)
 ```
 
-Session data lives in `~/.claude/` (Claude Code's own storage). Aide never duplicates your conversations — it reads and displays what Claude already stores.
+Session data lives in `~/.aide/claude/` (aide-managed `CLAUDE_CONFIG_DIR`), in Claude Code's native storage format. Aide never duplicates your conversations into a private database — it reads and displays what the runtime already stores.
 
 ## Settings & permissions
 
@@ -121,5 +119,5 @@ MIT — see [LICENSE](./LICENSE) for details.
 
 - Aide is an independent project. It is **not** created by, endorsed by, or affiliated with Anthropic.
 - "Claude" is a trademark of Anthropic PBC. Use of the name is purely descriptive.
-- This tool does not bundle, modify, or redistribute the Claude Code CLI. Users must install and authenticate the CLI separately.
+- The Claude Code runtime included with Aide comes from Anthropic's official Claude Agent SDK packages and is subject to [Anthropic's legal agreements](https://code.claude.com/docs/en/legal-and-compliance). Using it requires your own valid Claude credentials.
 - The authors assume no liability for use of this software. Use at your own risk.

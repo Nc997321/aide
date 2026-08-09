@@ -27,6 +27,8 @@ export const GLYPHS: Record<string, string> = {
   model: '<path d="M3.5 8L8 4.5M3.5 8L8 11.5M8 4.5L12.5 8M8 11.5L12.5 8"/><circle cx="3.5" cy="8" r="1.5" class="f"/><circle cx="8" cy="4.5" r="1.5" class="f"/><circle cx="8" cy="11.5" r="1.5" class="f"/><circle cx="12.5" cy="8" r="1.5" class="f"/>',
   extension: '<path d="M2 2H14V6a2 2 0 0 1 0 4V14H2V10a2 2 0 0 1 0 -4Z"/>',
   market: '<path d="M3.5 6h9l-1 8h-7z"/><path d="M5.5 6V4.5a2.5 2.5 0 0 1 5 0V6"/>',
+  /** 信息圈：关于页（圆圈内刻 i，与 warning 同族的点线结构） */
+  info: '<circle cx="8" cy="8" r="5.5"/><path d="M8 7.4V11.2"/><circle cx="8" cy="5.1" r="0.55" class="f"/>',
   // ── 扩展分类 ──
   agent: '<path d="M8 8L3.8 4.5M8 8L3.8 11.5M8 8L12.5 8"/><circle cx="8" cy="8" r="1.8" class="f"/><circle cx="3.8" cy="4.5" r="1.3" class="f"/><circle cx="3.8" cy="11.5" r="1.3" class="f"/><circle cx="12.5" cy="8" r="1.3" class="f"/>',
   skill: '<path d="M9 2L4 9h3.5L7 14l5-7H8.5Z" class="f"/>',
