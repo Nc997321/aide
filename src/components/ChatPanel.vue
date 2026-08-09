@@ -80,6 +80,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   send: [prompt: string, opts: SendOptions];
   "send-btw": [prompt: string, opts: { lightweight: boolean; model?: string; effort?: string }];
+  "send-btw-task": [opts: { taskId: string }];
   interrupt: [];
   "set-model": [model: string];
   "set-effort": [effort: string];
@@ -1113,6 +1114,14 @@ async function performSend() {
     const action = cmdMatch ? quickActions.find((a) => a.command === cmdMatch[1]) : undefined;
     if (action) {
       const args = (cmdMatch![2] ?? "").trim();
+      if (action.kind === "task") {
+        // 任务支线(git-commit):无参数、不进输入模式,一键直跑;输入清空同 btw。
+        inputText.value = "";
+        pendingImages.value = [];
+        pendingMentions.value = [];
+        emit("send-btw-task", { taskId: action.taskId ?? action.id });
+        return;
+      }
       if (action.kind === "btw") {
         inputText.value = "";
         pendingImages.value = [];
@@ -1216,10 +1225,15 @@ async function runPromptAction(action: QuickAction, prompt: string): Promise<boo
   return true;
 }
 
-/** 分裂按钮菜单选择：btw 是输入模式切换（不发消息），prompt 类与手打 /name 同路径。 */
+/** 分裂按钮菜单选择：btw 是输入模式切换（不发消息），task 一键直跑任务支线，
+ *  prompt 类与手打 /name 同路径。 */
 async function handleQuickAction(action: QuickAction) {
   if (action.kind === "btw") {
     toggleBtw();
+    return;
+  }
+  if (action.kind === "task") {
+    emit("send-btw-task", { taskId: action.taskId ?? action.id });
     return;
   }
   await runPromptAction(action, "/" + action.command);

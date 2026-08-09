@@ -13,8 +13,12 @@ export interface QuickAction {
   label: string;
   /** prompt = CLI 引擎层原生命令，原文发给 sidecar 执行（/compact /clear）；
    *  btw = 支线对话，aide 自己实现的 UX 增强（CLI 的 /btw 是 TUI 专属，
-   *  SDK 环境不可用），走 send-btw 链路不发引擎。 */
-  kind: "prompt" | "btw";
+   *  SDK 环境不可用），走 send-btw 链路不发引擎。
+   *  task = btw 任务支线（git-commit）：不 fork 主会话的全新会话 + 工具白名单，
+   *  走 send-btw-task 链路；不进输入模式、无参数，一键直跑。 */
+  kind: "prompt" | "btw" | "task";
+  /** kind === "task" 时的任务标识（目前仅 "git-commit"）。 */
+  taskId?: string;
   /** 菜单项/胶囊气泡前缀图标（字符）。 */
   icon?: string;
   /** true = 执行前弹 useModal.confirm 二次确认（用于不可逆操作，如 /clear）。 */
@@ -23,6 +27,7 @@ export interface QuickAction {
 
 const actions: QuickAction[] = [
   { id: "btw", command: "btw", label: "顺便问一下", kind: "btw", icon: "↳" },
+  { id: "git-commit", command: "commit", label: "Git 提交", kind: "task", taskId: "git-commit", icon: "⌾" },
   { id: "compact", command: "compact", label: "压缩上下文", kind: "prompt", icon: "✦" },
   { id: "clear", command: "clear", label: "清空上下文", kind: "prompt", icon: "⌫", confirm: true },
 ];

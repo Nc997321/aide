@@ -44,8 +44,8 @@ const triggerRef = ref<HTMLElement>();
 const menuRef = ref<HTMLElement>();
 const menuStyle = ref<Record<string, string>>({});
 
-/** btw 条目与其余 prompt 条目之间的分隔线位置（第一个非 btw 条目的下标）。 */
-const firstNonBtwIndex = computed(() => props.actions.findIndex((a) => a.kind !== "btw"));
+/** 支线类条目(btw/task)与 prompt 条目之间的分隔线位置(第一个 prompt 条目的下标)。 */
+const firstNonBtwIndex = computed(() => props.actions.findIndex((a) => a.kind === "prompt"));
 
 async function positionMenu() {
   const trigger = triggerRef.value;
@@ -81,8 +81,8 @@ function toggleMenu() {
 }
 
 function choose(action: QuickAction) {
-  // btw 置灰时静默：原因由 tooltip 给出，不切换、不关菜单（让用户继续看提示）。
-  if (action.kind === "btw" && props.btwDisabled) return;
+  // btw/task 置灰时静默：原因由 tooltip 给出，不切换、不关菜单（让用户继续看提示）。
+  if ((action.kind === "btw" || action.kind === "task") && props.btwDisabled) return;
   emit("select", action);
   open.value = false;
 }
@@ -160,11 +160,11 @@ onUnmounted(() => {
             <button
               type="button"
               class="chat-send-menu-item"
-              :class="a.kind === 'btw' ? { 'is-on': props.btwActive, 'is-disabled': props.btwDisabled } : {}"
+              :class="a.kind === 'btw' ? { 'is-on': props.btwActive, 'is-disabled': props.btwDisabled } : a.kind === 'task' ? { 'is-disabled': props.btwDisabled } : {}"
               :role="a.kind === 'btw' ? 'menuitemcheckbox' : 'menuitem'"
               :aria-checked="a.kind === 'btw' ? props.btwActive : undefined"
-              :aria-disabled="a.kind === 'btw' ? props.btwDisabled : undefined"
-              v-tooltip="a.kind === 'btw' && props.btwDisabled ? props.btwDisabledReason : undefined"
+              :aria-disabled="(a.kind === 'btw' || a.kind === 'task') ? props.btwDisabled : undefined"
+              v-tooltip="(a.kind === 'btw' || a.kind === 'task') && props.btwDisabled ? props.btwDisabledReason : undefined"
               @click="choose(a)"
             >
               <span v-if="a.icon" class="chat-send-menu-icon">{{ a.icon }}</span>

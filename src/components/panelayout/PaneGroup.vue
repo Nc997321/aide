@@ -50,6 +50,7 @@ const {
   bgDockSelectedId,
   sendMessage,
   sendBtw,
+  sendBtwTask,
   interrupt,
   stopSession,
   setModel,
@@ -85,6 +86,10 @@ async function onSend(prompt: string, opts: SendOptions) {
 
 function onSendBtw(prompt: string, opts: { lightweight: boolean; model?: string; effort?: string }) {
   sendBtw(prompt, opts);
+}
+
+function onSendBtwTask(opts: { taskId: string }) {
+  sendBtwTask(opts.taskId);
 }
 
 function onTabContext(tabId: string, x: number, y: number) {
@@ -142,6 +147,7 @@ function onNewTab() {
       class="pane-group__chat"
       @send="onSend"
       @send-btw="onSendBtw"
+      @send-btw-task="onSendBtwTask"
       @interrupt="interrupt"
       @set-model="setModel"
       @set-effort="setEffort"

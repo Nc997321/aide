@@ -466,9 +466,11 @@ describe("SessionWorker — codegraph MCP registration", () => {
     expect(captured?.allowedTools).toContain("mcp__aide-codegraph");
   });
 
-  // 回归：轻量 btw 是纯问答——tools:[] 只禁内建工具，MCP/skills/plugins 必须整体
-  // 不注册，否则模型仍会看到并真去调 MCP 工具（2026-08-02 实锤「先看一眼链路」+卡死）。
-  it("lightweight btw registers NO mcpServers / skills / plugins", async () => {
+  // 2026-08-09 缓存前缀对齐:轻量 btw 是 fork 支线,必须保持与主会话逐字节
+  // 一致的请求前缀(mcpServers/skills/plugins/工具列表全注册)才能命中 prompt
+  // cache——此前 tools:[] + 全不注册让缓存必崩、每次全价重读主会话历史。
+  // 「纯问答」语义改由 policy hook 全 deny + prompt 尾部指令实现(行为层)。
+  it("lightweight btw keeps full mcpServers / skills / plugins (cache prefix parity)", async () => {
     let captured: any;
     const fakeQuery = ((args: any) => {
       captured = args?.options ?? args;
@@ -487,11 +489,42 @@ describe("SessionWorker — codegraph MCP registration", () => {
     } as any);
     await new Promise((r) => setTimeout(r, 50));
     worker.stop();
+    expect(captured?.mcpServers?.["aide-codegraph"]).toBeDefined();
+    expect(captured?.tools).toBeUndefined(); // 不动工具列表 = 与主会话一致
+    expect(captured?.allowedTools).toEqual(["Agent", "Task", "mcp__aide-codegraph"]);
+    expect(captured?.skills).toBe("all");
+    expect(captured?.persistSession).toBe(false);
+  });
+
+  // btw 任务支线(git-commit):全新会话无缓存可吃,前缀反向最小化——
+  // tools/allowedTools 收成白名单,codegraph MCP / skills / plugins 全不注册。
+  it("task btw (tools whitelist) minimizes prefix: no MCP / skills / plugins", async () => {
+    let captured: any;
+    const fakeQuery = ((args: any) => {
+      captured = args?.options ?? args;
+      return (async function* () {})();
+    }) as any;
+    const worker = new SessionWorker("btw-task", () => {}, {
+      btwMode: true,
+      imageCapabilityCache: new ImageInputCapabilityCache(),
+      queryFn: fakeQuery,
+      cwd: "/proj",
+    });
+    worker.handleCommand({
+      cmd: "send", session_id: "btw-task", prompt: "提交", cwd: "/proj",
+      env: {}, btw: true, tools: ["Bash", "Read", "Glob", "Grep"],
+      // fork_from 省略 = 全新会话(不 fork 主会话)
+    } as any);
+    await new Promise((r) => setTimeout(r, 50));
+    worker.stop();
     expect(captured?.mcpServers?.["aide-codegraph"]).toBeUndefined();
-    expect(captured?.tools).toEqual([]);
-    expect(captured?.allowedTools).toEqual([]);
+    expect(captured?.tools).toEqual(["Bash", "Read", "Glob", "Grep"]);
+    expect(captured?.allowedTools).toEqual(["Bash", "Read", "Glob", "Grep"]);
     expect(captured?.skills).toEqual([]);
     expect(captured?.plugins).toEqual([]);
+    expect(captured?.persistSession).toBe(false);
+    expect(captured?.resume).toBeUndefined(); // 不 fork
+    expect(captured?.forkSession).toBeUndefined();
   });
 
   it("full (non-lightweight) btw still registers codegraph MCP", async () => {
@@ -785,6 +818,125 @@ describe("SessionWorker — Aide 权限策略 PreToolUse hook", () => {
     const out: any = await pending;
     expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
     expect(out.hookSpecificOutput.updatedInput).toEqual({ questions: input.questions, answers: { q: "a" } });
+  });
+});
+
+describe("SessionWorker — btw 权限守卫(无弹窗通路,一律 deny 不挂起)", () => {
+  function makeBtwWorker(opts: { lightweight?: boolean } = {}) {
+    const events: any[] = [];
+    const worker = new SessionWorker("btw-guard", (e) => events.push(e), {
+      btwMode: true,
+      lightweightMode: opts.lightweight ?? false,
+      imageCapabilityCache: new ImageInputCapabilityCache(),
+      queryFn: (() => (async function* () {})()) as any,
+      cwd: "/proj",
+    });
+    return { worker, events };
+  }
+
+  it("lightweight btw: policy hook denies EVERY tool instantly (no permission_request)", async () => {
+    const { worker, events } = makeBtwWorker({ lightweight: true });
+    const hook = worker._testPolicyHook("/proj");
+    for (const tool of ["Bash", "Read", "mcp__aide-codegraph__find_symbol"]) {
+      const out: any = await hook({ hook_event_name: "PreToolUse", tool_name: tool, tool_input: {} } as any);
+      expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+    }
+    expect(events.some((e: any) => e.type === "permission_request")).toBe(false);
+    worker.stop();
+  });
+
+  it("full btw: policy ask → deny immediately (never reaches permMgr.request)", async () => {
+    const { worker, events } = makeBtwWorker();
+    worker._testApplyPermissionPolicy(rule("ask", "Bash"));
+    const hook = worker._testPolicyHook("/proj");
+    const out: any = await hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } } as any);
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(events.some((e: any) => e.type === "permission_request")).toBe(false);
+    worker.stop();
+  });
+
+  it("btw: canUseTool auto-denies without emitting permission_request", async () => {
+    const { worker, events } = makeBtwWorker();
+    const cb = worker._testCanUseTool();
+    const out: any = await cb("Bash", { command: "rm -rf /" }, {} as any);
+    expect(out.behavior).toBe("deny");
+    expect(events.some((e: any) => e.type === "permission_request")).toBe(false);
+    worker.stop();
+  });
+
+  it("btw: session-scope policy allow still passes at the policy layer (git whitelist path)", async () => {
+    const { worker } = makeBtwWorker();
+    worker._testApplyPermissionPolicy({
+      revision: 1,
+      rules: [{
+        id: "git-status", scope: "session", order: 0, effect: "allow", tool: "Bash",
+        matcher: { kind: "bash", mode: "prefix", value: "git status" },
+        source: { label: "git-commit-task", readOnly: true },
+      }],
+    });
+    const hook = worker._testPolicyHook("/proj");
+    const out: any = await hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "git status --short" } } as any);
+    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
+    worker.stop();
+  });
+
+  // 2026-08-09 运行时任真:defer 在 allowDangerouslySkipPermissions 下被 CLI 静默
+  // 放行(canUseTool 根本不会被调,ipconfig 在 btw 任务里直接执行)——任务支线的
+  // 白名单拦截必须在 policy hook 的 defer 分支完成。
+  it("task btw (tools whitelist): defer → deny, not silent allow", async () => {
+    const events: any[] = [];
+    const worker = new SessionWorker("btw-task-guard", (e) => events.push(e), {
+      btwMode: true,
+      imageCapabilityCache: new ImageInputCapabilityCache(),
+      queryFn: (() => (async function* () {})()) as any,
+      cwd: "/proj",
+    });
+    worker.handleCommand({
+      cmd: "send", session_id: "btw-task-guard", prompt: "任务", cwd: "/proj",
+      env: {}, btw: true, tools: ["Bash"],
+      permission_policy: {
+        revision: 1,
+        rules: [{
+          id: "git-status", scope: "session", order: 0, effect: "allow", tool: "Bash",
+          matcher: { kind: "bash", mode: "prefix", value: "git status" },
+          source: { label: "git-commit-task", readOnly: true },
+        }],
+      },
+    } as any);
+    await flushPromises();
+    const hook = worker._testPolicyHook("/proj");
+    // 白名单内:allow
+    const allow: any = await hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "git status" } } as any);
+    expect(allow.hookSpecificOutput.permissionDecision).toBe("allow");
+    // 白名单外:defer → deny(不是 {} 放行)
+    const deny: any = await hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ipconfig" } } as any);
+    expect(deny.hookSpecificOutput.permissionDecision).toBe("deny");
+    worker.stop();
+  });
+
+  it("lightweight btw prompt gets the no-tools suffix (prefix parity preserved)", async () => {
+    let capturedPrompt: any;
+    const worker = new SessionWorker("btw-suffix", () => {}, {
+      btwMode: true,
+      lightweightMode: true,
+      imageCapabilityCache: new ImageInputCapabilityCache(),
+      queryFn: ((args: any) => {
+        capturedPrompt = args?.prompt;
+        return (async function* () {})();
+      }) as any,
+      cwd: "/proj",
+    });
+    worker.handleCommand({
+      cmd: "send", session_id: "btw-suffix", prompt: "原问题", cwd: "/proj",
+      env: {}, btw: true, lightweight: true, fork_from: "main-sid",
+    } as any);
+    await new Promise((r) => setTimeout(r, 50));
+    // prompt 是 queue 的 async iterator——取出第一条 user 消息验证尾部指令
+    const iter = (capturedPrompt as AsyncIterable<any>)[Symbol.asyncIterator]();
+    const msg = (await iter.next()).value;
+    expect(msg.message.content).toContain("原问题");
+    expect(msg.message.content).toContain("不要调用任何工具");
+    worker.stop();
   });
 });
 

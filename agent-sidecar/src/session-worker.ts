@@ -190,6 +190,10 @@ export class SessionWorker {
   // ---- BTW / 轻量模式 ----
   readonly btwMode: boolean;
   readonly lightweightMode: boolean;
+  /** btw 任务支线(git-commit)的内建工具白名单:非空时 query() 的
+   *  tools/allowedTools 收成它 + skills/plugins/codegraph 全关(全新会话,
+   *  前缀最小化)。与 lightweightMode 互斥——问答支线保持与主会话前缀一致。 */
+  private taskTools?: string[];
 
   // ---- 工作目录 ----
   private cwd?: string;
@@ -340,8 +344,19 @@ export class SessionWorker {
     // canUseTool 只对需要授权的工具（Write/Edit/Bash…）触发；Read 这种只读工具 CLI 在
     // allowDangerouslySkipPermissions 下自动放行、根本不调 canUseTool，所以图片 Read 守卫
     // 不能放这里——改用 makeImageGuardHook 的 PreToolUse hook（对所有工具都触发）。
-    return async (toolName: string, input: unknown, opts?: unknown) =>
-      permissionCallback(toolName, input, opts as any);
+    return async (toolName: string, input: unknown, opts?: unknown) => {
+      // btw 支线没有权限弹窗通路(permission_request 会被前端 btw 路由吞掉,
+      // 干等 resolve → 永久挂起):落到这里的一律 deny。注意这是兜底死代码——
+      // allowDangerouslySkipPermissions 下 CLI 实则不会调 canUseTool(2026-08-09
+      // 实测),真正的白名单拦截在 makePolicyHook 的 taskTools defer→deny 分支。
+      if (this.btwMode) {
+        return {
+          behavior: "deny" as const,
+          message: "btw 支线无人应答权限请求(仅策略白名单内操作可用)",
+        };
+      }
+      return permissionCallback(toolName, input, opts as any);
+    };
   }
 
   /** PreToolUse hook：在 Read 执行前拦截图片路径。hook 对所有工具都触发（含 CLI 自动
@@ -399,6 +414,20 @@ export class SessionWorker {
       const toolName = input.tool_name;
       const toolInput = input.tool_input;
       if (!toolName) return {};
+      // 轻量 btw 是纯问答:行为层禁掉一切工具(matcher ".*" 覆盖 MCP 工具)。
+      // 在请求前缀之外实现——工具列表保持与主会话一致,prompt cache 才能命中;
+      // deny 即时返回,也根治了 2026-08-02「模型调 MCP 工具卡住」(不再 tools:[]
+      // 之后模型可能尝试调用,但每次都吃到明确 deny,立刻转文字回答)。
+      if (this.lightweightMode) {
+        return {
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse" as const,
+            permissionDecision: "deny" as const,
+            permissionDecisionReason:
+              "轻量支线为纯问答,工具已禁用,请直接根据上下文回答",
+          },
+        };
+      }
       const decision = await evaluatePolicy(this.permissionPolicy, {
         tool: toolName,
         input: (toolInput ?? {}) as Record<string, unknown>,
@@ -422,6 +451,18 @@ export class SessionWorker {
             },
           };
         case "ask": {
+          // btw 支线没有权限弹窗通路(permission_request 会被前端 btw 路由吞掉,
+          // permMgr.request 干等 resolve → 永久挂起)——ask 一律当 deny 处理。
+          if (this.btwMode) {
+            return {
+              hookSpecificOutput: {
+                hookEventName: "PreToolUse" as const,
+                permissionDecision: "deny" as const,
+                permissionDecisionReason:
+                  "btw 支线无人应答权限请求(需确认的操作一律拒绝)",
+              },
+            };
+          }
           const answer = await this.permMgr.request(
             toolName,
             toolInput,
@@ -441,6 +482,22 @@ export class SessionWorker {
           };
         }
         default:
+          // btw 任务支线(git-commit):白名单外的命令必须在这里 deny——defer 会在
+          // allowDangerouslySkipPermissions 下被 CLI 静默放行,canUseTool 根本不会被
+          // 调用(2026-08-09 运行时任真:ipconfig 在 btw 任务里直接执行,策略日志
+          // disposition=defer 之后没有任何 canUseTool 回调)。不加这道 = 支线开 bypass。
+          // 问答支线(full btw)保持旧行为:defer → {} → CLI 放行(fork 主会话的
+          // 既有语义,政策快照本来也不推给 btw)。
+          if (this.taskTools) {
+            return {
+              hookSpecificOutput: {
+                hookEventName: "PreToolUse" as const,
+                permissionDecision: "deny" as const,
+                permissionDecisionReason:
+                  "btw 任务支线仅允许白名单内的命令(git 只读 + add/commit)",
+              },
+            };
+          }
           // No Aide policy rule matched → return {} (no opinion) so the CLI proceeds
           // with its normal permission flow (here allowDangerouslySkipPermissions
           // auto-allows). Do NOT return permissionDecision:"defer": the claude.exe CLI
@@ -729,6 +786,19 @@ export class SessionWorker {
       // BTW forks from `fork_from`, not `session_id`（session_id 是 BTW 自己的路由键）
       const forkFrom = (cmd as any).fork_from as string | undefined;
       if (forkFrom) this.resumeSource = forkFrom;
+      // btw 任务支线(git-commit):工具白名单 → 全新会话 + 前缀最小化。
+      if (cmd.tools?.length) this.taskTools = cmd.tools;
+      // 轻量问答支线:行为层禁工具(policy hook 全 deny)+ prompt 尾部指令,
+      // 请求前缀保持与主会话逐字节一致以命中 prompt cache——绝不能再动
+      // tools/skills/plugins 选项(2026-08-09 缓存前缀实锤)。
+      if (cmd.lightweight) {
+        cmd = {
+          ...cmd,
+          prompt:
+            cmd.prompt +
+            "\n\n[这是纯问答支线:直接根据已有上下文回答,不要调用任何工具。]",
+        };
+      }
     }
 
     // 新一轮用户消息：不立即清 TODO——让旧轮在过渡期仍可见，等本轮首个新
@@ -830,10 +900,12 @@ export class SessionWorker {
 
           // codegraph agent 工具：默认注册（AIDE_CODEGRAPH_TOOLS=off 关闭）。
           // handler 闭包持有本会话的 emit（经 DeltaCoalescer，红线）与 cwd。
-          // 轻量 btw 是纯问答，必须跳过：tools:[] 只禁内建工具，MCP 工具照样进
-          // 工具列表，模型会真去调（2026-08-02 实锤「先看一眼链路」并卡在调用上）。
+          // btw 任务支线(taskTools,全新会话)跳过:任务用不上代码索引,前缀最小化。
+          // 轻量 btw 不再跳过——问答支线要保持与主会话请求前缀逐字节一致,
+          // 少注册 MCP 工具 = 工具列表不同 = prompt cache 必崩(2026-08-09 实锤);
+          // 模型误调由 policy hook 的轻量全 deny 兜底,不会卡。
           const effectiveCwd = cwd ?? this.cwd ?? "";
-          const codegraphMcp = this.lightweightMode
+          const codegraphMcp = this.taskTools
             ? null
             : codegraphMcpRegistration(effectiveCwd, (e) => this.emit(e), process.env, trusted);
 
@@ -869,13 +941,14 @@ export class SessionWorker {
                 preset: "claude_code" as const,
                 append: instructions,
               },
-              ...(this.lightweightMode
-                ? { allowedTools: [] as string[] }
-                : { allowedTools: ["Agent", "Task", CODEGRAPH_ALLOW_RULE] }),
-              // 轻量 btw：skills/plugins 同样关闭（Skill 工具虽被 tools:[] 禁掉，
-              // 但 skill 清单会白进上下文；plugins 可能自带 MCP 工具漏进工具列表）。
-              skills: this.lightweightMode ? [] : "all",
-              plugins: this.lightweightMode
+              // allowedTools 统一:问答支线(轻量/完整)与主会话同形,保持前缀一致;
+              // btw 任务支线由 btwQueryOverrides 在后方覆盖成白名单。
+              allowedTools: ["Agent", "Task", CODEGRAPH_ALLOW_RULE],
+              // btw 任务支线:skills/plugins 全关——全新会话没有缓存可吃,
+              // 前缀最小化(skill 清单/plugin 自带 MCP 工具都不进上下文)。
+              // 轻量 btw 保持 "all"/全量:与主会话前缀对齐吃 prompt cache。
+              skills: this.taskTools ? [] : "all",
+              plugins: this.taskTools
                 ? []
                 : [...buildPluginsOption(), ...buildDispatchPluginsOption(effectiveCwd, trusted, this.lightweightMode)],
               hooks: {
@@ -917,7 +990,9 @@ export class SessionWorker {
                 ? { pathToClaudeCodeExecutable: process.env.AIDE_CLAUDE_EXE }
                 : {}),
               ...forkResumeOptions(this.resumeSource ?? "", this.shouldForkNextConnect),
-              ...btwQueryOverrides(this.btwMode, this.lightweightMode),
+              // 任务支线(tools 白名单)在此覆盖前面的统一 allowedTools;问答支线
+              // 只带 persistSession:false,不碰工具列表(缓存前缀红线)。
+              ...btwQueryOverrides(this.btwMode, this.taskTools),
               env: cliEnv,
             },
           });

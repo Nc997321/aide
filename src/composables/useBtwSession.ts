@@ -26,9 +26,12 @@ interface BtwState {
   effort: string; // 这条支线实际跑的 effort 档位(抽屉 pill 展示——直发不进输入模式时选择器看不到它);空串=idle
   minimized: boolean; // 用户点了「关闭」=最小化:抽屉收起,但 sidecar 继续后台跑,
   // 跑完结论照样经 onDone 插进主对话。最小化不杀进程;真正的 teardown 是 cleanup。
+  taskId: string; // btw 任务支线标识(git-commit);空串=问答支线。抽屉据此隐藏轻量/完整切换。
+  taskLabel: string; // 任务支线的批注标题(问答支线用问题原文,任务支线没有"问题")
+  taskIcon: string; // 任务支线批注图标
 }
 
-const IDLE: BtwState = { messages: [], isBusy: false, done: false, error: null, question: "", status: "idle", ownerSessionId: null, model: "", effort: "", minimized: false };
+const IDLE: BtwState = { messages: [], isBusy: false, done: false, error: null, question: "", status: "idle", ownerSessionId: null, model: "", effort: "", minimized: false, taskId: "", taskLabel: "", taskIcon: "" };
 const state = ref<BtwState>({ ...IDLE });
 let btwTempId: string | null = null;
 let btwRealId: string | null = null; // session_init 后的 fork id
@@ -55,8 +58,8 @@ function composePrompt(ownerSid: string, prompt: string): string {
 }
 
 function resetState(question: string) {
-  // 新支线:show drawer(最小化标志清掉),starting 态。ownerSessionId/model/effort 由 startBtw 补。
-  state.value = { messages: [], isBusy: true, done: false, error: null, question, status: "starting", ownerSessionId: null, model: "", effort: "", minimized: false };
+  // 新支线:show drawer(最小化标志清掉),starting 态。ownerSessionId/model/effort/task 由 startBtw 补。
+  state.value = { messages: [], isBusy: true, done: false, error: null, question, status: "starting", ownerSessionId: null, model: "", effort: "", minimized: false, taskId: "", taskLabel: "", taskIcon: "" };
 }
 
 /** useChatSession.handleChatEvent 调:判断事件是否属于当前 btw。 */
@@ -66,13 +69,19 @@ function isBtwSid(raw: string): boolean {
 
 interface StartBtwOpts {
   tempId: string;
+  /** fork 源会话 sid;空串 = 不 fork,全新会话(btw 任务支线——不背主会话历史)。 */
   forkFrom: string;
+  /** 抽屉绑定的主会话 sid + 支线问答记忆 key。省略 = forkFrom(问答支线常态);
+   *  任务支线(forkFrom 空)必须显式给,否则抽屉不显示、结论批注无处回插。 */
+  ownerSid?: string;
   prompt: string;
   cwd: string;
   lightweight: boolean;
   permissionMode?: string;
   model?: string;
   effort?: string; // 支线档位（默认 low），骑 env 通道到 sidecar 作初始 effort
+  /** btw 任务支线(git-commit):工具白名单 + session 级权限白名单快照。 */
+  task?: { id: string; label: string; icon: string; tools: string[]; policy: unknown };
 }
 
 async function startBtw(opts: StartBtwOpts) {
@@ -81,20 +90,28 @@ async function startBtw(opts: StartBtwOpts) {
   btwTempId = opts.tempId;
   btwRealId = null;
   resetState(opts.prompt); // status="starting":抽屉已可见,显示问题
-  state.value.ownerSessionId = opts.forkFrom; // 抽屉只绑回这个主会话所在窗口
+  state.value.ownerSessionId = opts.ownerSid ?? opts.forkFrom; // 抽屉只绑回这个主会话所在窗口
   state.value.model = opts.model ?? ""; // 抽屉展示这条支线用的模型
   state.value.effort = opts.effort ?? ""; // 抽屉 pill 展示这条支线实际跑的档位
+  if (opts.task) {
+    state.value.taskId = opts.task.id;
+    state.value.taskLabel = opts.task.label;
+    state.value.taskIcon = opts.task.icon;
+  }
   try {
     await invoke("start_btw_session", {
       btwId: opts.tempId,
-      forkFrom: opts.forkFrom,
+      forkFrom: opts.forkFrom || null, // 空串 → None → 不 fork,全新会话
       // 带上本主会话此前的支线问答（无历史则原样）；抽屉展示的仍是原始问题。
-      prompt: composePrompt(opts.forkFrom, opts.prompt),
+      // 任务支线不 fork 主会话,没有"此前问答"的语境,composePrompt 原样返回。
+      prompt: opts.forkFrom ? composePrompt(opts.ownerSid ?? opts.forkFrom, opts.prompt) : opts.prompt,
       cwd: opts.cwd,
       lightweight: opts.lightweight,
       permissionMode: opts.permissionMode ?? null,
       model: opts.model ?? null,
       effort: opts.effort ?? null,
+      tools: opts.task?.tools ?? null,
+      permissionPolicy: opts.task?.policy ?? null,
     });
     state.value.status = "running"; // sidecar 已接收命令,确认 fork 成功
   } catch (e) {
@@ -145,17 +162,20 @@ function handleBtwEvent(e: Record<string, unknown>) {
       useCodeGraphProgress().scheduleRescan();
       const conclusion = state.value.messages.join("");
       // 记入支线记忆（只记有结论的成功轮次；出错/空轮不记，免得污染后续 prompt）。
-      if (conclusion && state.value.ownerSessionId) {
+      // 任务支线(git-commit)不记——它是全新会话的固定任务,结论回插主对话即可,
+      // 混入问答记忆只会污染后续轻量 btw 的 prompt。
+      if (conclusion && state.value.ownerSessionId && !state.value.taskId) {
         const rounds = historyByOwner.get(state.value.ownerSessionId) ?? [];
         rounds.push({ question: state.value.question, answer: conclusion });
         historyByOwner.set(state.value.ownerSessionId, rounds);
       }
       if (onDoneCb && conclusion) {
+        const isTask = !!state.value.taskId;
         const block: ActionBlock = {
           type: "action",
-          actionId: "btw",
-          label: state.value.question,
-          icon: "↳",
+          actionId: isTask ? state.value.taskId : "btw",
+          label: isTask ? state.value.taskLabel : state.value.question,
+          icon: isTask ? state.value.taskIcon : "↳",
           foldable: true,
           body: conclusion,
         };

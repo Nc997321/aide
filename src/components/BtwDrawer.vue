@@ -24,10 +24,11 @@ const html = computed(() =>
       <div class="btw-drawer-stripe"></div>
       <div class="btw-head">
         <div class="btw-title-row">
-          <div class="btw-title"><span class="btw-fork">↳</span> 顺便问一下 <span class="btw-pill">· {{ props.modelLabel }}</span></div>
+          <div class="btw-title"><span class="btw-fork">{{ store.taskId ? store.taskIcon : "↳" }}</span> {{ store.taskId ? store.taskLabel : "顺便问一下" }} <span class="btw-pill">· {{ props.modelLabel }}</span></div>
           <button class="btw-btn" @click="emit('close')">关闭</button>
         </div>
-        <div class="btw-seg-row">
+        <!-- 任务支线(git-commit)工具集固定,轻量/完整切换无意义,隐藏 -->
+        <div v-if="!store.taskId" class="btw-seg-row">
           <div class="btw-seg" role="group">
             <button :aria-pressed="props.lightweight" @click="emit('update:lightweight', true)" :disabled="store.isBusy">轻量</button>
             <button :aria-pressed="!props.lightweight" @click="emit('update:lightweight', false)" :disabled="store.isBusy">完整</button>
@@ -35,7 +36,7 @@ const html = computed(() =>
         </div>
       </div>
       <div class="btw-body">
-        <div class="btw-q">{{ store.question }}</div>
+        <div class="btw-q">{{ store.taskId ? store.taskLabel : store.question }}</div>
         <div class="btw-a msg-text" v-html="html"></div>
         <span v-if="store.isBusy" class="btw-cursor"></span>
         <div v-if="store.error" class="btw-err">{{ store.error }}</div>

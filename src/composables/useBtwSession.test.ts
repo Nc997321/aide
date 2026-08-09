@@ -128,4 +128,35 @@ describe("useBtwSession routing", () => {
     expect(store.value.minimized).toBe(false); // 强制顶出抽屉
     expect(store.value.error).toBe("boom");
   });
+
+  // 任务支线(git-commit):forkFrom 空 → 不 fork;tools/policy 透传;批注用任务
+  // 图标/标题;结论不进支线问答记忆(它是固定任务,混入只会污染后续 btw prompt)。
+  it("task btw: no fork, tools/policy passthrough, task annotation, no Q&A history", async () => {
+    const { startBtw, handleBtwEvent, store, setOnDone } = useBtwSession();
+    const done = vi.fn();
+    setOnDone(done);
+    const policy = { revision: 1, rules: [{ id: "g0", effect: "allow" }] };
+    await startBtw({
+      tempId: "task1", forkFrom: "", ownerSid: "main", prompt: "固定任务 prompt",
+      cwd: "/r", lightweight: false,
+      task: { id: "git-commit", label: "Git 提交", icon: "⌾", tools: ["Bash"], policy },
+    });
+    expect(store.value.taskId).toBe("git-commit");
+    const args = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1] as Record<string, unknown>;
+    expect(args.forkFrom).toBeNull(); // 空串 → null → Rust 不写 fork_from → 全新会话
+    expect(args.tools).toEqual(["Bash"]);
+    expect(args.permissionPolicy).toEqual(policy);
+    expect(args.prompt).toBe("固定任务 prompt"); // 不拼支线问答历史
+
+    handleBtwEvent({ session_id: "task1", type: "text_delta", delta: "已提交 abc1234" });
+    handleBtwEvent({ session_id: "task1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
+    expect(done).toHaveBeenCalledWith(expect.objectContaining({
+      actionId: "git-commit", label: "Git 提交", icon: "⌾", body: "已提交 abc1234",
+    }));
+
+    // 下一轮普通 btw 的 prompt 不应携带任务支线的"问答"
+    await startBtw({ tempId: "q1", forkFrom: "main", prompt: "正常问", cwd: "/r", lightweight: true });
+    const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
+    expect(sentPrompt).toBe("正常问");
+  });
 });

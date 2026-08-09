@@ -3,17 +3,21 @@ import { btwQueryOverrides, forkResumeOptions } from "./btwOptions.js";
 
 describe("btwQueryOverrides", () => {
   it("non-btw: no overrides", () => {
-    expect(btwQueryOverrides(false, false)).toEqual({});
+    expect(btwQueryOverrides(false)).toEqual({});
   });
-  it("btw full: persistSession false only", () => {
-    expect(btwQueryOverrides(true, false)).toEqual({ persistSession: false });
+  it("btw Q&A (lightweight or full): persistSession false only — 工具列表必须", () => {
+    // 与主会话逐字节一致才能命中 prompt cache;「纯问答」由 policy hook 全 deny 实现。
+    expect(btwQueryOverrides(true)).toEqual({ persistSession: false });
   });
-  it("btw lightweight: persistSession false + no tools", () => {
-    expect(btwQueryOverrides(true, true)).toEqual({
+  it("btw task (git-commit): persistSession false + tools/allowedTools 白名单", () => {
+    expect(btwQueryOverrides(true, ["Bash", "Read"])).toEqual({
       persistSession: false,
-      tools: [],
-      allowedTools: [],
+      tools: ["Bash", "Read"],
+      allowedTools: ["Bash", "Read"],
     });
+  });
+  it("btw task with empty tools: falls back to plain Q&A overrides", () => {
+    expect(btwQueryOverrides(true, [])).toEqual({ persistSession: false });
   });
 });
 

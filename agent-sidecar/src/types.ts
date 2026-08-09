@@ -216,9 +216,16 @@ export type SidecarCommand =
       jump_queue?: boolean;
       // btw 支线对话:命中 → 下一次建 query() 时 resume fork_from + forkSession:true。
       // fork_from 是 fork 源会话 ID（BTW 自己的 session_id 仅用于路由，不传给 SDK）。
+      // fork_from 省略/空 = 不 fork,全新会话——btw 任务支线(git-commit)走这条路:
+      // 不背主会话历史,token 最省。
       btw?: boolean;
       lightweight?: boolean;
       fork_from?: string;
+      // btw 任务支线的内建工具白名单(如 ["Bash","Read","Glob","Grep"]):query()
+      // 的 tools/allowedTools 收成它,MCP 工具一并禁掉,请求前缀最小化。
+      // 仅 btw 任务支线使用;问答支线(轻量/完整)绝不能用——改工具列表会改
+      // 请求前缀,fork 支线的 prompt cache 必崩(2026-08-09 实锤)。
+      tools?: string[];
       // 重开已有会话时带：SDK 据此 resume 已有会话上下文。与 session_id（路由键）
       // 解耦——session_id 用于 SessionManager 路由，resume_session_id 用于 SDK resume。
       // 省略=全新会话不 resume。btw 用 fork_from + forkSession，不带这个。

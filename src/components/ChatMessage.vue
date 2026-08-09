@@ -143,17 +143,17 @@ function handleTextClick(e: MouseEvent) {
           :bg-tasks="bgTasks"
           @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
         />
-        <!-- btw 页边批注：可折叠、视觉权重远低于真实消息，读起来是"贴在边上的便签" -->
+        <!-- btw/任务支线页边批注：可折叠、视觉权重远低于真实消息，读起来是"贴在边上的便签" -->
         <div
-          v-else-if="seg.block.type === 'action' && seg.block.actionId === 'btw'"
+          v-else-if="seg.block.type === 'action' && (seg.block.actionId === 'btw' || seg.block.actionId === 'git-commit')"
           class="msg-row--note"
         >
           <details class="btw-note">
             <summary class="btw-note-head">
               <span class="btw-note-caret tri"></span>
-              <span class="btw-note-glyph tri">↳</span>
-              <span class="btw-note-tag">btw</span>
-              <span class="btw-note-q">{{ seg.block.label }}</span>
+              <span class="btw-note-glyph tri">{{ seg.block.icon || "↳" }}</span>
+              <span class="btw-note-tag">{{ seg.block.actionId === "btw" ? "btw" : seg.block.label }}</span>
+              <span class="btw-note-q">{{ seg.block.actionId === "btw" ? seg.block.label : "" }}</span>
             </summary>
             <div class="btw-note-body">
               <!-- 批注正文是已定稿的支线结论：与主文本块同一渲染管道

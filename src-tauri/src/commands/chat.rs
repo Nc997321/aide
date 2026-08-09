@@ -287,16 +287,23 @@ pub async fn stop_chat_session(
 
 /// 启动 btw 支线：不再 spawn 独立进程，改为发 send 命令到 Runtime，
 /// Runtime 内部创建 btwMode=true 的 SessionWorker。
+///
+/// fork_from 为 None/空 = 不 fork，全新会话（btw 任务支线如 git-commit：
+/// 不背主会话历史，token 最省）；tools 非空 = 任务支线的内建工具白名单
+/// （query() 的 tools/allowedTools 收成它）；permission_policy 原样透传
+/// （worker 的 handleSend 已消费），任务支线靠它在 policy 层放行白名单命令。
 #[tauri::command]
 pub async fn start_btw_session(
     btw_id: String,
-    fork_from: String,
+    fork_from: Option<String>,
     prompt: String,
     cwd: String,
     lightweight: bool,
     permission_mode: Option<String>,
     model: Option<String>,
     effort: Option<String>,
+    tools: Option<Vec<String>>,
+    permission_policy: Option<serde_json::Value>,
     runtime_mgr: State<'_, AgentRuntimeManager>,
     settings_service: State<'_, std::sync::Arc<crate::settings::SettingsService>>,
 ) -> Result<(), String> {
@@ -313,9 +320,22 @@ pub async fn start_btw_session(
         "cwd": cwd,
         "btw": true,
         "lightweight": lightweight,
-        "fork_from": fork_from,
         "env": provider_env,
     });
+    // fork_from 空/省略 = 全新会话（worker 侧 `if (forkFrom)` 判空），不写进 JSON。
+    if let Some(ref f) = fork_from {
+        if !f.is_empty() {
+            cmd["fork_from"] = json!(f);
+        }
+    }
+    if let Some(t) = tools {
+        if !t.is_empty() {
+            cmd["tools"] = json!(t);
+        }
+    }
+    if let Some(p) = permission_policy {
+        cmd["permission_policy"] = p;
+    }
     // 工作区信任标志（与 send_message 同语义）。
     cmd["trusted"] = json!(crate::commands::workspace::is_path_trusted(&cwd));
 
