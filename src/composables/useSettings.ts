@@ -17,7 +17,7 @@ const defaults: AppSettings = {
     paneSplitDown: "Ctrl+Shift+\\",
     paneCloseTab: "Ctrl+W",
   },
-  theme: "warm-dark",
+  theme: "glass",
   openWithExtensions: [],
   recentLimit: 10,
   paneLayouts: {},
