@@ -8,6 +8,7 @@ import ContextCompactionStatus from "./ContextCompactionStatus.vue";
 import TaskListPanel from "./TaskListPanel.vue";
 import ThemedSelect from "./ThemedSelect.vue";
 import ChatSendButton from "./ChatSendButton.vue";
+import InterruptButton from "./InterruptButton.vue";
 import PermissionDialog from "./PermissionDialog.vue";
 import BgTaskDock from "./BgTaskDock.vue";
 import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, ContextUsage, ModelOption, PermissionModeOption, PermissionRequest, RateLimitInfo, TaskItem } from "@/types/chat";
@@ -1286,7 +1287,7 @@ function onOpenBgDock(taskId: string) {
           <AppLogo :size="15" animated />
           <span>正在思考…</span>
           <span class="chat-thinking-time">{{ activityElapsed }}s</span>
-          <button class="chat-interrupt-btn" @click="emit('interrupt')">中断</button>
+          <InterruptButton class="chat-interrupt-btn" @click="emit('interrupt')" />
         </div>
       </div>
       </div>
@@ -1680,24 +1681,9 @@ function onOpenBgDock(taskId: string) {
   font-variant-numeric: tabular-nums;
 }
 
+/* 中断按钮：视觉在 InterruptButton.vue（声波停止钮），这里只给布局——靠右 */
 .chat-interrupt-btn {
   margin-left: auto;
-  padding: 3.5px 12px;
-  font-size: 11px;
-  font-weight: 500;
-  font-family: inherit;
-  border-radius: var(--aide-radius-sm);
-  border: 1px solid color-mix(in srgb, var(--aide-danger) 32%, transparent);
-  background: transparent;
-  color: var(--aide-danger);
-  cursor: pointer;
-  transition: all var(--aide-ease-t);
-}
-
-.chat-interrupt-btn:hover {
-  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
-  border-color: color-mix(in srgb, var(--aide-danger) 55%, transparent);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--aide-danger) 22%, transparent);
 }
 
 .chat-input-area {

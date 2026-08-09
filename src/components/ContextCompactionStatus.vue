@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ContextCompactionState } from "@/types/chat";
+import InterruptButton from "./InterruptButton.vue";
 
 const props = defineProps<{
   status: ContextCompactionState;
@@ -40,7 +41,7 @@ const statusLabel = computed(() => `${headline.value}，${supportingText.value}`
     </span>
 
     <span v-if="!failed" class="context-compaction-elapsed" aria-hidden="true">{{ elapsedSeconds }}s</span>
-    <button v-if="!failed" class="context-compaction-interrupt" type="button" @click="emit('interrupt')">中断</button>
+    <InterruptButton v-if="!failed" class="context-compaction-interrupt" @click="emit('interrupt')" />
   </div>
 </template>
 
@@ -144,39 +145,11 @@ const statusLabel = computed(() => `${headline.value}，${supportingText.value}`
   font-variant-numeric: tabular-nums;
 }
 
-.context-compaction-interrupt {
-  flex-shrink: 0;
-  padding: calc(var(--aide-space-unit) * 0.75) calc(var(--aide-space-unit) * 2.25);
-  border: 1px solid color-mix(in srgb, var(--aide-danger) 32%, transparent);
-  border-radius: var(--aide-radius-sm);
-  background: transparent;
-  color: var(--aide-danger);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 11px;
-  font-weight: 500;
-  transition: background var(--aide-ease-t), border-color var(--aide-ease-t);
-}
-
-.context-compaction-interrupt:hover {
-  border-color: color-mix(in srgb, var(--aide-danger) 55%, transparent);
-  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
-}
-
-.context-compaction-interrupt:focus-visible {
-  outline: none;
-  box-shadow: var(--aide-accent-ring);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .context-fold-segment {
     animation: none;
     opacity: 0.85;
     transform: scaleX(0.72);
-  }
-
-  .context-compaction-interrupt {
-    transition: none;
   }
 }
 </style>
