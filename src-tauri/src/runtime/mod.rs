@@ -544,6 +544,22 @@ impl AgentRuntimeManager {
             Err(format!("Runtime exe missing: {:?}", path))
         }
     }
+
+    /// 返回 spawn agent-runtime 的 (bin, first_arg)。
+    /// dev: (node, runtime.js)；release: (aide-agent.exe, 空)。
+    /// 供一次性子命令（test-mcp 探活等）复用 spawn 模式，避免每处重写 dev/release 分支。
+    pub fn resolve_runtime_command(app: &AppHandle) -> Result<(String, std::path::PathBuf), String> {
+        let runtime_path = Self::resolve_runtime_path(app)?;
+        #[cfg(debug_assertions)]
+        {
+            let node = std::env::var("AIDE_NODE_PATH").unwrap_or_else(|_| "node".to_string());
+            Ok((node, runtime_path))
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            Ok((runtime_path.to_string_lossy().to_string(), std::path::PathBuf::new()))
+        }
+    }
 }
 
 fn emit_runtime_dead(

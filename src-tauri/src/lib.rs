@@ -329,6 +329,7 @@ pub fn run() {
             commands::customizations::read_skill_script,
             commands::customizations::write_skill_script,
             commands::customizations::delete_skill_script,
+            commands::customizations::test_mcp_connection,
             // Provider commands
             commands::provider::get_providers,
             commands::provider::set_providers,
