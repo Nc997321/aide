@@ -34,6 +34,10 @@ function handleToggle(id: string, event: Event) {
     emit("toggle", id, !item.enabled);
   }
 }
+
+function sourceLabel(s: NonNullable<CustomizationItem["source"]>): string {
+  return s === "builtin" ? "内置" : s === "project" ? "项目" : s === "plugin" ? "插件" : "用户";
+}
 </script>
 
 <template>
@@ -61,6 +65,11 @@ function handleToggle(id: string, event: Event) {
           <div class="item-name">{{ item.name }}</div>
           <div class="item-meta" v-if="item.description">{{ item.description }}</div>
         </div>
+        <span
+          class="src-badge"
+          :class="`src-${item.source ?? 'user'}`"
+          v-if="item.source"
+        >{{ sourceLabel(item.source) }}</span>
         <button
           class="toggle-btn"
           :class="{ active: item.enabled }"
@@ -217,5 +226,31 @@ function handleToggle(id: string, event: Event) {
 .add-btn:hover {
   border-color: var(--aide-accent);
   color: var(--aide-accent);
+}
+
+.src-badge {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.src-user {
+  background: color-mix(in srgb, var(--aide-info) 14%, transparent);
+  color: var(--aide-info);
+}
+.src-project {
+  background: color-mix(in srgb, var(--aide-success) 14%, transparent);
+  color: var(--aide-success);
+}
+.src-plugin {
+  background: color-mix(in srgb, var(--aide-warning) 14%, transparent);
+  color: var(--aide-warning);
+}
+.src-builtin {
+  background: var(--aide-surface-active);
+  color: var(--aide-text-muted);
 }
 </style>

@@ -70,10 +70,17 @@ const activeItems = ref<CustomizationItem[]>([]);
 
 // ── Actions ──
 
+function deriveSource(path: string): NonNullable<CustomizationItem["source"]> {
+  // 插件来源：路径含 plugins/cache（marketplace 装的插件包内）。其余暂归 user（项目级细分留后续）。
+  if (path.includes("plugins") && path.includes("cache")) return "plugin";
+  return "user";
+}
+
 async function loadItems(type: CustomizationType) {
   loading[type] = true;
   try {
-    items[type] = await customizationApi.list(type);
+    const list = await customizationApi.list(type);
+    items[type] = list.map((it) => ({ ...it, source: it.source ?? deriveSource(it.path) }));
   } catch (e) {
     console.error(`Failed to load ${type}s:`, e);
     items[type] = [];

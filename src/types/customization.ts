@@ -10,6 +10,7 @@ export interface CustomizationItem {
   path: string;
   description?: string;
   metadata?: Record<string, any>;
+  source?: 'user' | 'project' | 'plugin' | 'builtin';
 }
 
 // ── Agent Types ──
@@ -56,9 +57,12 @@ export interface Hook extends CustomizationItem {
 
 export interface McpServer extends CustomizationItem {
   type: 'mcp_server';
-  command: string;
-  args: string[];
-  env: Record<string, string>;
+  transport: 'stdio' | 'sse' | 'http';
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
 }
 
 // ── Form Types ──
