@@ -53,7 +53,6 @@ const {
   sendBtw,
   sendBtwTask,
   interrupt,
-  stopSession,
   setModel,
   setEffort,
   setPermissionMode,
@@ -138,7 +137,6 @@ function onNewTab() {
         @promote="(id: string) => pl.promoteTabById(props.group.id, id)"
         @context="onTabContext"
         @new-tab="onNewTab"
-        @stop="stopSession"
       />
     </Transition>
     <ChatPanel

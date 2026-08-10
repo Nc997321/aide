@@ -382,6 +382,25 @@ function resetRuntimeState(store: SessionStore, clearTasks = true) {
   if (clearTasks) store.tasks = [];
 }
 
+/** 按 sessionId 停止会话进程：杀 sidecar worker + 清运行时状态 + 释放 provider 绑定。
+ *  模块级、不依赖当前激活 tab——供 usePaneLayout.closeTab 在关闭任意 tab 时按该 tab
+ *  的 sid 就地停止（"关闭即停止"合并语义）。try/finally 吞错：进程已死 / 通信瞬断 /
+ *  管道断也不抛，finally 兜底把前端状态置 stopped（UI 以这里为准，sidecar 对不存在的
+ *  worker 是 no-op，幂等）。与原闭包内 stopSession 的 finally 完全一致，只是 sid 由
+ *  调用方传入而非取激活 tab。 */
+export async function stopSessionById(sid: string) {
+  const store = getStore(sid);
+  try {
+    await invoke("stop_chat_session", { sessionId: sid });
+  } finally {
+    resetRuntimeState(store);
+    setSessionState(sid, "stopped");
+    // 释放 provider 绑定：下拉随即回落到全局 active provider，体现"stop 后供应商
+    // 才改变"；下次发消息会重新盖戳当前 active provider 并用它 spawn。
+    clearProvider(sid);
+  }
+}
+
 /** 子代理逐字增量累积：跟主线程 text_delta 同一套模式——最后一项同类型就原地追加，
  *  否则另起一项（类型切换，或被一次工具调用打断了连续的文本/thinking 段落）。 */
 function appendSubagentTextEntry(block: SubagentBlock, kind: "text" | "thinking", delta: string) {
@@ -1207,20 +1226,6 @@ export function useChatSession(sessionId: Ref<string | null>) {
     }
   }
 
-  async function stopSession() {
-    const sid = sessionId.value;
-    if (!sid) return;
-    const store = getStore(sid);
-    try {
-      await invoke("stop_chat_session", { sessionId: sid });
-    } finally {
-      resetRuntimeState(store);
-      setSessionState(sid, "stopped");
-      // 释放 provider 绑定：下拉随即回落到全局 active provider，体现"stop 后供应商
-      // 才改变"；下次发消息会重新盖戳当前 active provider 并用它 spawn。
-      clearProvider(sid);
-    }
-  }
 
   function onSessionCreated(cb: (tempId: string, realId: string) => void) {
     sessionCreatedCallbacks.add(cb);
@@ -1407,7 +1412,6 @@ export function useChatSession(sessionId: Ref<string | null>) {
     sendBtwTask,
     respondPermission,
     interrupt,
-    stopSession,
     onSessionCreated,
     setModel,
     setEffort,

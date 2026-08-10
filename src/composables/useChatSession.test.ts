@@ -17,7 +17,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-import { useChatSession, __resetForTest } from "./useChatSession";
+import { useChatSession, __resetForTest, stopSessionById } from "./useChatSession";
 import { useSessionState } from "./useSessionState";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
 
@@ -957,7 +957,7 @@ describe("useChatSession subagent events", () => {
     expect(chat.tasks.value).toHaveLength(1);
   });
 
-  it("stopSession 清空 tasks", async () => {
+  it("stopSessionById 清空 tasks（按 sid 停止，不依赖激活 tab）", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);
     await flush();
@@ -970,7 +970,7 @@ describe("useChatSession subagent events", () => {
     await flush();
     expect(chat.tasks.value).toHaveLength(1);
 
-    await chat.stopSession();
+    await stopSessionById("uuid-a");
     await flush();
     expect(chat.tasks.value).toEqual([]);
   });

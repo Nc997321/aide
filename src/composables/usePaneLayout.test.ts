@@ -186,7 +186,7 @@ describe("拆分与关闭", () => {
     expect(pl.hasAnyTab.value).toBe(false);
   });
 
-  it("closeOtherTabs 只留目标 tab 且激活它", () => {
+  it("closeOtherTabs 只留目标 tab 且激活它", async () => {
     const pl = usePaneLayout();
     ["a", "b", "c"].forEach((s) => {
       pl.openSession(s);
@@ -195,7 +195,7 @@ describe("拆分与关闭", () => {
     });
     const g = focused();
     const keep = g.tabs.find((t) => t.sessionId === "b")!;
-    pl.closeOtherTabs(g.id, keep.id);
+    await pl.closeOtherTabs(g.id, keep.id);
     expect(g.tabs.map((t) => t.sessionId)).toEqual(["b"]);
     expect(g.activeTabId).toBe(keep.id);
   });

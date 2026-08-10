@@ -262,7 +262,7 @@ export function paneTabMenuItems(groupId: string, tabId: string): MenuItem[] {
     { label: "向右拆分", action: () => pane.splitFocusedGroup("horizontal", groupId) },
     { label: "向下拆分", action: () => pane.splitFocusedGroup("vertical", groupId) },
     sep(),
-    { label: "关闭", action: () => pane.closeTab(groupId, tabId) },
-    { label: "关闭其他", action: () => pane.closeOtherTabs(groupId, tabId) },
+    { label: "关闭", action: () => { void pane.closeTab(groupId, tabId); } },
+    { label: "关闭其他", action: () => { void pane.closeOtherTabs(groupId, tabId); } },
   ];
 }

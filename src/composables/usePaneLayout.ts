@@ -21,7 +21,7 @@ import {
 import { useSessionState } from "./useSessionState";
 import { useSessionNames } from "./useSessionNames";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
-import { getLastDispatchedPrompt } from "./useChatSession";
+import { getLastDispatchedPrompt, stopSessionById } from "./useChatSession";
 
 /**
  * 聊天区多 tab + 任意分屏的状态层（模块级 reactive 单例，同 useSessionState 风格）。
@@ -200,28 +200,47 @@ export function usePaneLayout() {
     layout.focusedGroupId = res.newGroup.id;
   }
 
-  function closeTab(groupId: string, tabId: string) {
+  /** 关闭 tab：会话存活时先停止进程再移除布局（"关闭即停止"合并语义）。
+   *  async 以 await stopSessionById——stop_chat_session 只是往 sidecar stdin 写一行
+   *  命令即返回（毫秒级，不等 worker 退出），所以 await 几乎无成本，且能确认命令送达
+   *  才移除 tab。已停止 / 空白 tab 跳过停止，直接移除。所有关闭入口（X / 中键 / 右键
+   *  "关闭" / Ctrl+W / "关闭其他"）都走这里，单点一致。 */
+  async function closeTab(groupId: string, tabId: string) {
+    const group = findGroup(layout.root, groupId);
+    const tab = group?.tabs.find((t) => t.id === tabId);
+    const sid = tab?.sessionId;
+    if (sid && (sessionState[sid] ?? "stopped") !== "stopped") {
+      await stopSessionById(sid);
+    }
     commitRoot(removeTab(layout.root, groupId, tabId));
   }
 
-  /** 关闭聚焦组的激活 tab（Ctrl+W）。 */
+  /** 关闭聚焦组的激活 tab（Ctrl+W）。fire-and-forget：closeTab 内部仍完整执行
+   *  await stop → remove，键盘快捷键语义与点 X 一致。 */
   function closeActiveTab() {
     const group = focusedGroup();
-    if (group.activeTabId) closeTab(group.id, group.activeTabId);
+    if (group.activeTabId) void closeTab(group.id, group.activeTabId);
   }
 
-  function closeOtherTabs(groupId: string, tabId: string) {
+  /** 关闭其他 tab：对每个非激活 tab 串行 closeTab（各自"存活则先停"），再固定激活 tab。
+   *  串行而非并行：3-5 个 tab 各一次 stdin 写入（十几毫秒），顺序确定、可控。 */
+  async function closeOtherTabs(groupId: string, tabId: string) {
     const group = findGroup(layout.root, groupId);
     if (!group || !group.tabs.some((t) => t.id === tabId)) return;
-    group.tabs = group.tabs.filter((t) => t.id === tabId);
+    const toClose = group.tabs.filter((t) => t.id !== tabId);
+    for (const t of toClose) {
+      await closeTab(group.id, t.id);
+    }
     group.activeTabId = tabId;
     if (group.previewTabId !== tabId) group.previewTabId = null;
   }
 
-  /** 会话被删除（侧栏删除动作）：关掉对应 tab。 */
+  /** 会话被删除（侧栏删除动作）：关掉对应 tab。删除流程已先 stopChatSession，
+   *  这里走 closeTab 时 sessionState 已 stopped → 跳过 stopSessionById，直接移除
+   *  （幂等）。fire-and-forget。 */
   function closeSessionTab(sessionId: string) {
     const hit = findTabBySession(layout.root, sessionId);
-    if (hit) closeTab(hit.group.id, hit.tab.id);
+    if (hit) void closeTab(hit.group.id, hit.tab.id);
   }
 
   /** 预览转正：会话启动（首次派发消息）或双击 tab 时调用。 */
