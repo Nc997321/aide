@@ -1,4 +1,5 @@
 import type { PermissionPolicySnapshot } from "./policy/types.js";
+import type { BuiltinHookManifest } from "./builtinHooks/index.js";
 
 // 一轮对话的 token 用量 + 费用（跨该轮用到的所有模型汇总，如子代理另用了别的模型）
 export interface TurnUsage {
@@ -139,6 +140,9 @@ export type ChatEvent =
   // 会话建立时 SDK 回传的权威 slash commands 清单（内置命令 + skills + 自定义命令），
   // 仅当 SDK 提供该字段时才发（见 mapper.ts 的 Array.isArray 判断）。
   | { type: "slash_commands_available"; commands: string[] }
+  // 内建 hook 清单：query 启动后 emit 一次（扩展管理设置页的 hook 列表用，
+  // Task 3 只发、前端消费在 Task 10）。provider-agnostic 不透明数组。
+  | { type: "builtin_hooks_manifest"; manifest: BuiltinHookManifest[] }
   | { type: "context_usage"; total_tokens: number; max_tokens: number; percentage: number }
   // 上下文压缩生命周期——provider-agnostic：只表达任何 agent 都可能提供的阶段，
   // 不把 Claude 的 system/status / compact_result 细节泄露到核心协议。没有真实可测

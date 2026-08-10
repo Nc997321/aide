@@ -16,6 +16,7 @@ import type { EffortSettable } from "./effortSwitch.js";
 import { cliSubagentModelEnvValue } from "./subagentModelDefault.js";
 import { codegraphMcpRegistration, CODEGRAPH_ALLOW_RULE, makeCodegraphGrepNudgeHook } from "./codegraphTools.js";
 import { buildBuiltinHooks } from "./builtinHooks/index.js";
+import { loadUserMcpServers, loadUserHooks, assembleMcpServers, assembleHooks } from "./userExtensions.js";
 import { cancelAllCodegraphQueries } from "./codegraphClient.js";
 import {
   ImageInputCapabilityCache,
@@ -925,6 +926,10 @@ export class SessionWorker {
             session: this as any, // makePolicyHook/makeImageGuardHook/makeStopEffortHook 是 private 方法，这里同类访问
             codegraphMounted: !!codegraphMcp,
           });
+          // 用户扩展（settings.json 的 mcpServers/hooks）：mcpServers 与 codegraph 按
+          // name 共存；hooks 内建在前、用户追加（内建 policy 恒为 PreToolUse[0]，不可越过）。
+          const userMcp = loadUserMcpServers();
+          const userHooks = loadUserHooks();
 
           const q = this.queryFn({
             prompt: this.queue[Symbol.asyncIterator](),
@@ -952,8 +957,8 @@ export class SessionWorker {
               plugins: this.taskTools
                 ? []
                 : [...buildPluginsOption(), ...buildDispatchPluginsOption(effectiveCwd, trusted, this.lightweightMode)],
-              hooks: builtinHooks,
-              ...(codegraphMcp ? { mcpServers: codegraphMcp as any } : {}),
+              hooks: assembleHooks(builtinHooks, userHooks),
+              mcpServers: assembleMcpServers(codegraphMcp ?? null, userMcp),
               // 主会话开 partial：让 thinking_delta 逐字流式（mapper 只放 thinking_delta，
               // text 仍走整块，避开历史 partial 卡死坑，见 2026-08-07-thinking-streaming-design）。
               // btw 轻量支线保持 partial=off（mapper 的子代理隔离守卫也对 btw 生效）。
@@ -979,6 +984,8 @@ export class SessionWorker {
           });
           this.currentQuery = q;
           this.shouldForkNextConnect = false;
+          // 内建 hook 清单回传前端（扩展设置页 hook 列表用；Task 10 消费，重复 emit 幂等）。
+          this.emit({ type: "builtin_hooks_manifest", manifest: builtinHookManifest });
 
           for await (const msg of q) {
             if ((msg as any).type === "result") {

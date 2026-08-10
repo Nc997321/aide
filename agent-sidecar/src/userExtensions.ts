@@ -41,3 +41,21 @@ export function loadUserHooks(): HooksByEvent {
   }
   return out;
 }
+
+/** 合并 codegraph（in-process）与用户 mcpServers（stdio/sse/http），name 不冲突即可。 */
+export function assembleMcpServers(codegraph: Record<string, any> | null, user: Record<string, any>): Record<string, any> {
+  return { ...(codegraph ?? {}), ...user };
+}
+
+/** 合并内建 hook（前）与用户 hook（后），按事件分组。内建不可被越过。 */
+export function assembleHooks(builtin: { PreToolUse: any[]; Stop: any[] }, user: Record<string, any>): Record<string, any> {
+  const events = new Set<string>(["PreToolUse", "Stop", ...Object.keys(user)]);
+  const out: Record<string, any> = {};
+  for (const ev of events) {
+    const b = (builtin as any)[ev] ?? [];
+    const u = user[ev] ?? [];
+    const merged = [...b, ...u];
+    if (merged.length > 0) out[ev] = merged;
+  }
+  return out;
+}
