@@ -320,6 +320,16 @@ pub fn get_skill(id: String) -> Result<CustomizationItem, String> {
     })
 }
 
+/// 读取 skill 的 SKILL.md 全文（frontmatter + 正文）。
+#[tauri::command]
+pub async fn get_skill_content(id: String) -> Result<String, String> {
+    let path = skills_dir().join(&id).join("SKILL.md");
+    if !path.exists() {
+        return Err(format!("Skill '{}' not found", id));
+    }
+    fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn create_skill(data: serde_json::Value) -> Result<CustomizationItem, String> {
     let _trace = crate::diagnostics::trace_command("create_skill");
@@ -356,6 +366,12 @@ pub fn update_skill(id: String, data: serde_json::Value) -> Result<(), String> {
     let skill_md = dir.join("SKILL.md");
     if !skill_md.exists() {
         return Err(format!("Skill '{}' not found", id));
+    }
+
+    // 正文 tab：data.content 存在时全文覆盖 SKILL.md（frontmatter + body 一起写）。
+    if let Some(full) = data["content"].as_str() {
+        fs::write(&skill_md, full).map_err(|e| format!("Failed to write skill: {}", e))?;
+        return Ok(());
     }
 
     let mut content = fs::read_to_string(&skill_md).map_err(|e| e.to_string())?;

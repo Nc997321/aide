@@ -92,3 +92,19 @@ export interface McpTestResult {
 export function testMcpConnection(config: Record<string, any>): Promise<McpTestResult> {
   return invoke<McpTestResult>('test_mcp_connection', { config });
 }
+
+// ── Skill 正文 + 脚本 ──
+
+/** 读取 skill 的 SKILL.md 全文（frontmatter + 正文）。 */
+export function getSkillContent(id: string): Promise<string> {
+  return invoke<string>('get_skill_content', { id });
+}
+
+export const skillScriptApi = {
+  read: (skillId: string, filename: string) =>
+    invoke<string>('read_skill_script', { skillId, filename }),
+  write: (skillId: string, filename: string, content: string) =>
+    invoke('write_skill_script', { skillId, filename, content }),
+  delete: (skillId: string, filename: string) =>
+    invoke('delete_skill_script', { skillId, filename }),
+};
