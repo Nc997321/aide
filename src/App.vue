@@ -29,6 +29,7 @@ import { marketplaceApi } from "./api/marketplace";
 import { useNotifications } from "./composables/useNotifications";
 import { ref, onMounted, onUnmounted, nextTick, watch, computed } from "vue";
 import { useSettings } from "./composables/useSettings";
+import { useOnboarding } from "./composables/useOnboarding";
 import { useWindowFocus } from "./composables/useWindowFocus";
 import { useModal } from "./composables/useModal";
 import { useNotification, pendingSessions, clearPending } from "./composables/useNotification";
@@ -214,6 +215,8 @@ const { activeKey: activeWorkspaceKey } = useWorkspaces();
 const workspacePath = ref("");
 const projectName = ref("");
 const { settings, update: updateSettings, dismissJdkPrompt: persistJdkDismissal } = useSettings();
+// 首次引导：onMounted 里 open()，未 onboarded 时弹全屏向导（OnboardingWizard 在 Task 3 挂载）
+const onboarding = useOnboarding();
 
 // 「打开方式」事件监听句柄，onUnmounted 时释放
 let unlistenOpenFile: UnlistenFn | null = null;
@@ -712,6 +715,9 @@ onMounted(async () => {
 
   // Load provider configuration
   await loadProviders();
+  // 首次引导门控：loadProviders 之后（登录步的 apiKeyConfigured 已就绪）、refresh 之前。
+  // 全新用户 !onboarded → 弹向导；老用户 open() 内部守卫直接 return。
+  onboarding.open();
   // 启动时拉最新模型覆盖"系统默认"5 字段——fire-and-forget 不 await，UI 先渲染，
   // 拉完响应式刷新 systemDefaultMappings（ProviderSettings 系统默认下 5 字段只读）。
   // 无认证/网络失败时 Rust 侧保留旧值，前端不阻塞。
