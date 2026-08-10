@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>扩展管理 — 交互原型</title>
+<style>
+:root{
+  --bg-deep:#141218;--bg-base:#1a1820;--bg-raised:#221f29;--surface:#292631;
+  --surface-h:#322e3c;--surface-a:#3d3848;--text:#ece5db;--text2:#b3aa9c;
+  --muted:#7d7568;--accent:#d9ab78;--accent-h:#e6bd8e;--accent-sub:rgba(217,171,120,.13);
+  --ok:#8bc48a;--warn:#e8c374;--danger:#e87070;--info:#7eb8d8;
+  --border:rgba(255,214,160,.09);--border-s:rgba(255,220,175,.16);
+  --r-sm:6px;--r-md:9px;--r-lg:13px;
+}
+*{box-sizing:border-box;}
+body{margin:0;padding:30px;background:var(--bg-deep);
+  font-family:-apple-system,"Segoe UI",system-ui,sans-serif;color:var(--text);
+  min-height:100vh;display:flex;justify-content:center;}
+.stage{width:100%;max-width:1080px;}
+.ext-wrap{border-radius:var(--r-lg);overflow:hidden;
+  border:1px solid var(--border);box-shadow:0 18px 56px rgba(0,0,0,.5),0 4px 14px rgba(0,0,0,.3);}
+.ext-head{padding:18px 22px 14px;background:linear-gradient(180deg,var(--bg-raised),var(--bg-base));
+  border-bottom:1px solid var(--border);}
+.ext-title{font-size:18px;font-weight:600;letter-spacing:.2px;}
+.ext-sub{font-size:12.5px;color:var(--text2);margin-top:3px;}
+.notice{margin-top:11px;padding:8px 12px;border-radius:var(--r-sm);background:var(--accent-sub);
+  border:1px solid var(--border-s);color:var(--text2);font-size:12px;display:flex;gap:8px;align-items:center;}
+.notice b{color:var(--accent);font-weight:600;}
+.ext-body{display:flex;min-height:520px;}
+.ext-nav{width:208px;flex-shrink:0;background:var(--bg-base);border-right:1px solid var(--border);
+  padding:10px 8px;display:flex;flex-direction:column;gap:2px;}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:var(--r-sm);
+  cursor:pointer;color:var(--text2);font-size:13px;border:1px solid transparent;transition:all .14s;}
+.nav-item:hover{background:var(--surface);color:var(--text);}
+.nav-item.on{background:var(--surface-a);color:var(--text);border-color:var(--border-s);}
+.nav-item .ico{width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:15px;opacity:.85;}
+.nav-item .ct{flex:1;}
+.nav-badge{font-size:11px;color:var(--muted);background:var(--surface);padding:1px 7px;border-radius:10px;}
+.nav-item.on .nav-badge{background:var(--accent-sub);color:var(--accent);}
+.ext-main{flex:1;padding:18px 22px;overflow:auto;}
+.panel-title{font-size:14px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:8px;}
+.panel-sub{font-size:12px;color:var(--muted);margin-bottom:14px;}
+.row{display:flex;align-items:center;gap:12px;padding:11px 13px;border-radius:var(--r-md);
+  background:var(--surface);border:1px solid var(--border);margin-bottom:7px;cursor:pointer;transition:all .14s;}
+.row:hover{background:var(--surface-h);border-color:var(--border-s);}
+.row.sel{border-color:var(--accent);box-shadow:0 0 0 2.5px rgba(217,171,120,.32);}
+.row-main{flex:1;min-width:0;}
+.row-name{font-size:13.5px;font-weight:500;}
+.row-desc{font-size:11.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.badges{display:flex;gap:6px;align-items:center;}
+.src{font-size:10.5px;padding:2px 7px;border-radius:10px;font-weight:500;letter-spacing:.3px;white-space:nowrap;}
+.src-user{background:rgba(126,184,216,.14);color:var(--info);}
+.src-proj{background:rgba(139,196,138,.14);color:var(--ok);}
+.src-plugin{background:rgba(232,195,116,.14);color:var(--warn);}
+.src-builtin{background:var(--surface-a);color:var(--muted);}
+.dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+.dot-ok{background:var(--ok);box-shadow:0 0 6px rgba(139,196,138,.5);}
+.dot-unk{background:var(--muted);opacity:.5;}
+.dot-fail{background:var(--danger);box-shadow:0 0 6px rgba(232,112,112,.5);}
+.dot-spin{border-radius:50%;border:2px solid var(--surface-a);border-top-color:var(--warn);background:transparent;width:12px;height:12px;animation:sp 1s linear infinite;}
+@keyframes sp{to{transform:rotate(360deg);}}
+.btn{font-size:12px;padding:6px 11px;border-radius:var(--r-sm);border:1px solid var(--border-s);
+  background:var(--surface-h);color:var(--text);cursor:pointer;transition:all .14s;white-space:nowrap;}
+.btn:hover{background:var(--surface-a);}
+.btn:disabled{opacity:.6;cursor:default;}
+.btn-accent{background:var(--accent);color:#241d15;border-color:var(--accent);font-weight:600;}
+.btn-accent:hover{background:var(--accent-h);}
+.btn-ghost{background:transparent;border-color:var(--border);color:var(--text2);}
+.btn-lock{font-size:10.5px;color:var(--muted);display:flex;align-items:center;gap:4px;}
+.tg{width:30px;height:17px;border-radius:9px;background:var(--surface-a);position:relative;cursor:pointer;flex-shrink:0;transition:all .14s;}
+.tg.on{background:var(--accent);}
+.tg::after{content:"";position:absolute;width:13px;height:13px;border-radius:50%;background:var(--text);top:2px;left:2px;transition:all .14s;}
+.tg.on::after{left:15px;background:#241d15;}
+.editor{margin-top:8px;padding:16px;border-radius:var(--r-md);background:var(--bg-raised);
+  border:1px solid var(--border-s);}
+.ed-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border);}
+.ed-title{font-size:13.5px;font-weight:600;}
+.seg{display:inline-flex;background:var(--bg-base);border:1px solid var(--border);border-radius:var(--r-sm);padding:2px;}
+.seg button{font-size:12px;padding:5px 12px;border:none;background:transparent;color:var(--text2);cursor:pointer;border-radius:4px;}
+.seg button.on{background:var(--accent);color:#241d15;font-weight:600;}
+.field{margin-bottom:12px;}
+.field label{display:block;font-size:11.5px;color:var(--text2);margin-bottom:5px;letter-spacing:.3px;}
+.field input,.field textarea,.field select{width:100%;box-sizing:border-box;background:var(--bg-base);
+  border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text);font-size:12.5px;
+  padding:8px 10px;font-family:inherit;outline:none;}
+.field input:focus,.field textarea:focus,.field select:focus{border-color:var(--accent);box-shadow:0 0 0 2.5px rgba(217,171,120,.32);}
+.field textarea{resize:vertical;min-height:54px;font-family:ui-monospace,"Cascadia Code",monospace;font-size:11.5px;}
+.kv{display:flex;gap:8px;margin-bottom:6px;align-items:center;}
+.kv input{flex:1;}
+.kv .x{font-size:14px;color:var(--muted);cursor:pointer;width:22px;text-align:center;}
+.hint{font-size:11px;color:var(--muted);margin-top:4px;}
+.status-bar{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:var(--r-sm);background:var(--bg-base);border:1px solid var(--border);margin-top:8px;}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:14px;}
+.tabs button{font-size:12.5px;padding:8px 14px;background:transparent;border:none;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;}
+.tabs button.on{color:var(--accent);border-bottom-color:var(--accent);}
+.tab-pane{display:none;}
+.tab-pane.on{display:block;}
+.cm-mock{background:#0f0d13;border:1px solid var(--border);border-radius:var(--r-sm);padding:12px;
+  font-family:ui-monospace,"Cascadia Code",monospace;font-size:12px;line-height:1.6;color:var(--text2);
+  min-height:140px;white-space:pre-wrap;}
+.cm-mock .fm{color:var(--accent);}
+.cm-mock .h{color:var(--text);font-weight:600;}
+.scripts-list{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px;align-items:center;}
+.script-chip{font-size:11.5px;padding:5px 10px;border-radius:var(--r-sm);background:var(--surface);border:1px solid var(--border);cursor:pointer;color:var(--text2);}
+.script-chip.on{border-color:var(--accent);color:var(--text);background:var(--surface-a);}
+.ed-actions{display:flex;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--border);}
+.section-label{font-size:10.5px;color:var(--muted);letter-spacing:.6px;text-transform:uppercase;margin:6px 0 4px;font-weight:600;}
+.readonly-note{font-size:11px;color:var(--muted);font-style:italic;margin-left:auto;}
+</style>
+</head>
+<body>
+<div class="stage">
+<div class="ext-wrap">
+  <div class="ext-head">
+    <div class="ext-title">扩展</div>
+    <div class="ext-sub">管理 MCP 服务器、技能、钩构、智能体与指令 — 统一来源、可编辑、接入会话生效</div>
+    <div class="notice"><span>⏎</span><span>配置已保存，<b>下次新会话生效</b>。点「测试连接」可即时验证 MCP 配置。</span></div>
+  </div>
+  <div class="ext-body">
+    <div class="ext-nav" id="nav">
+      <div class="nav-item" data-cat="agent" onclick="switchCat('agent')"><span class="ico">🤖</span><span class="ct">智能体</span><span class="nav-badge">2</span></div>
+      <div class="nav-item on" data-cat="mcp" onclick="switchCat('mcp')"><span class="ico">🔌</span><span class="ct">MCP 服务器</span><span class="nav-badge">3</span></div>
+      <div class="nav-item" data-cat="skill" onclick="switchCat('skill')"><span class="ico">⚡</span><span class="ct">技能</span><span class="nav-badge">5</span></div>
+      <div class="nav-item" data-cat="hook" onclick="switchCat('hook')"><span class="ico">🪝</span><span class="ct">钩构</span><span class="nav-badge">9</span></div>
+      <div class="nav-item" data-cat="instruction" onclick="switchCat('instruction')"><span class="ico">📖</span><span class="ct">指令</span><span class="nav-badge">2</span></div>
+    </div>
+    <div class="ext-main" id="main"></div>
+  </div>
+</div>
+</div>
+
+<script>
+const STATE={cat:'mcp',selMcp:'playwright',transport:'stdio',skillTab:'meta',selSkill:'build'};
+
+function renderMCP(){
+  const items=[
+    {id:'filesystem',name:'filesystem',desc:'npx -y @modelcontextprotocol/server-filesystem',src:'user',status:'ok',tools:4},
+    {id:'playwright',name:'playwright',desc:'npx -y @executeautomation/playwright-mcp-server',src:'user',status:'unk'},
+    {id:'aide-codegraph',name:'aide-codegraph',desc:'内置代码索引（in-process）',src:'builtin',status:'ok',tools:3},
+  ];
+  let rows=items.map(it=>`
+    <div class="row ${STATE.selMcp===it.id?'sel':''}" onclick="selMcp('${it.id}')">
+      <span class="dot ${it.status==='ok'?'dot-ok':'dot-unk'}" id="dot-${it.id}"></span>
+      <div class="row-main"><div class="row-name">${it.name}</div><div class="row-desc">${it.desc}</div></div>
+      <div class="badges">
+        ${it.tools?`<span class="src src-user">${it.tools} 工具</span>`:''}
+        <span class="src src-${it.src}">${it.src==='user'?'用户':it.src==='builtin'?'内置':it.src}</span>
+      </div>
+      ${it.src!=='builtin'?`<button class="btn" onclick="event.stopPropagation();testConnRow(this,'${it.id}')">测试连接</button>`:`<span class="btn-lock">🔒 只读</span>`}
+      ${it.src!=='builtin'?`<div class="tg on" onclick="event.stopPropagation()"></div>`:''}
+    </div>`).join('');
+  let ed='';
+  if(STATE.selMcp==='playwright'){
+    const t=STATE.transport;
+    ed=`<div class="editor">
+      <div class="ed-head"><div class="ed-title">playwright</div><div><span class="src src-user">用户</span></div></div>
+      <div class="field"><label>传输类型</label>
+        <div class="seg">
+          <button class="${t==='stdio'?'on':''}" onclick="setTransport('stdio')">stdio</button>
+          <button class="${t==='sse'?'on':''}" onclick="setTransport('sse')">sse</button>
+          <button class="${t==='http'?'on':''}" onclick="setTransport('http')">http</button>
+        </div>
+      </div>
+      ${t==='stdio'?`
+        <div class="field"><label>command</label><input value="npx" /></div>
+        <div class="field"><label>args <span class="hint">每行一个，避免引号转义</span></label>
+          <textarea>-y
+@executeautomation/playwright-mcp-server</textarea></div>
+        <div class="field"><label>env</label>
+          <div class="kv"><input value="PLAYWRIGHT_BROWSERS_PATH" placeholder="键"><input value="/usr/local/share" placeholder="值"><span class="x">×</span></div>
+          <div class="kv"><input placeholder="键"><input placeholder="值"><span class="x">×</span></div>
+          <button class="btn btn-ghost">+ 添加</button>
+        </div>`:''}
+      ${t==='sse'?`<div class="field"><label>url</label><input value="http://localhost:8080/sse" /></div>`:''}
+      ${t==='http'?`
+        <div class="field"><label>url</label><input value="http://localhost:8080/mcp" /></div>
+        <div class="field"><label>headers</label>
+          <div class="kv"><input value="Authorization" placeholder="键"><input value="Bearer xxx" placeholder="值"><span class="x">×</span></div>
+        </div>`:''}
+      <div class="status-bar">
+        <span class="dot dot-unk" id="sd"></span>
+        <span style="font-size:12px;color:var(--text2)" id="st">未测试</span>
+        <button class="btn" onclick="testConnEd(this)">测试连接</button>
+        <span class="hint" style="margin-left:auto">握手只读，无副作用</span>
+      </div>
+      <div class="ed-actions">
+        <button class="btn btn-accent">保存</button>
+        <button class="btn btn-ghost">删除</button>
+        <span class="readonly-note">下次新会话生效</span>
+      </div>
+    </div>`;
+  }
+  return `<div class="panel-title">🔌 MCP 服务器 <span class="panel-sub" style="margin:0">3 个 · stdio / sse / http</span></div>${rows}${ed}`;
+}
+
+function renderHook(){
+  const builtin=[
+    {n:'权限策略',e:'PreToolUse',m:'.*',d:'工具权限门控（不可越过）'},
+    {n:'子代理模型',e:'PreToolUse',m:'^(Agent|Task)$',d:'子代理模型选择'},
+    {n:'图片守卫',e:'PreToolUse',m:'^Read$',d:'读图保护'},
+    {n:'技能守卫',e:'PreToolUse',m:'^Skill$',d:'技能调用守卫'},
+    {n:'回合结束',e:'Stop',m:'—',d:'读本轮 effort'},
+  ];
+  const user=[
+    {n:'提交检查',e:'PostToolUse',m:'^Bash$',d:'git commit 前检查',on:true},
+    {n:'通知转发',e:'Notification',m:'.*',d:'转发到系统通知',on:true},
+    {n:'保存格式化',e:'PostToolUse',m:'^Edit$',d:'保存后格式化',on:false},
+  ];
+  let br=builtin.map(b=>`<div class="row" style="opacity:.85">
+      <span class="dot dot-ok"></span>
+      <div class="row-main"><div class="row-name">${b.n}</div><div class="row-desc">${b.e} · ${b.m} · ${b.d}</div></div>
+      <span class="src src-builtin">内置</span>
+      <span class="btn-lock">🔒 只读</span>
+    </div>`).join('');
+  let ur=user.map(u=>`<div class="row">
+      <span class="dot dot-unk"></span>
+      <div class="row-main"><div class="row-name">${u.n}</div><div class="row-desc">${u.e} · ${u.m} · ${u.d}</div></div>
+      <span class="src src-user">用户</span>
+      <div class="tg ${u.on?'on':''}" onclick="event.stopPropagation();this.classList.toggle('on')"></div>
+    </div>`).join('');
+  return `<div class="panel-title">🪝 钩构 <span class="panel-sub" style="margin:0">内置 5 · 用户 3 · 用户 hook 排在内置之后</span></div>
+    <div class="section-label">内置（只读 · 会话实际挂载）</div>${br}
+    <div class="section-label">用户（可编辑）</div>${ur}
+    <div class="hint" style="margin-top:10px">用户 hook 的 type:command 由 SDK spawn 执行；policyHook 永远最先评估，不可被越过。</div>`;
+}
+
+function renderSkill(){
+  const skills=[
+    {id:'build',n:'build',d:'构建产物验证',src:'user'},
+    {id:'commit',n:'commit',d:'提交规范检查',src:'user'},
+    {id:'local-check',n:'local-check',d:'本地自检',src:'proj'},
+    {id:'brainstorming',n:'brainstorming',d:'想法→设计',src:'plugin'},
+    {id:'systematic-debugging',n:'systematic-debugging',d:'系统化调试',src:'plugin'},
+  ];
+  let rows=skills.map(s=>`<div class="row ${STATE.selSkill===s.id?'sel':''}" onclick="selSkill('${s.id}')">
+      <div class="row-main"><div class="row-name">${s.n}</div><div class="row-desc">${s.d}</div></div>
+      <span class="src src-${s.src}">${s.src==='user'?'用户':s.src==='proj'?'项目':'插件:superpowers'}</span>
+      ${s.src==='plugin'?`<span class="btn-lock">🔒</span>`:''}
+    </div>`).join('');
+  const readOnly=STATE.selSkill==='brainstorming'||STATE.selSkill==='systematic-debugging';
+  let editor='';
+  if(STATE.selSkill==='build'){
+    const tb=STATE.skillTab;
+    editor=`<div class="editor">
+      <div class="ed-head"><div class="ed-title">build</div><div><span class="src src-user">用户</span></div></div>
+      <div class="tabs">
+        <button class="${tb==='meta'?'on':''}" onclick="setSkillTab('meta')">基本信息</button>
+        <button class="${tb==='body'?'on':''}" onclick="setSkillTab('body')">正文 (SKILL.md)</button>
+        <button class="${tb==='scripts'?'on':''}" onclick="setSkillTab('scripts')">脚本 (3)</button>
+      </div>
+      <div class="tab-pane ${tb==='meta'?'on':''}">
+        <div class="field"><label>name</label><input value="build" /></div>
+        <div class="field"><label>description</label><textarea>构建产物验证：编译、测试、产物检查</textarea></div>
+      </div>
+      <div class="tab-pane ${tb==='body'?'on':''}">
+        <div class="cm-mock"><span class="fm">---
+name: build
+description: 构建产物验证
+context: inline
+---</</span>
+
+<span class="h"># 构建产物验证</span>
+
+执行构建命令并检查产物：
+1. 运行 \`pnpm build\`
+2. 确认 dist/ 生成
+3. 校验关键文件存在</div>
+      </div>
+      <div class="tab-pane ${tb==='scripts'?'on':''}">
+        <div class="scripts-list">
+          <span class="script-chip on">build.sh</span>
+          <span class="script-chip">check.py</span>
+          <span class="script-chip">verify.js</span>
+          <button class="btn btn-ghost" style="font-size:11px">+ 新建</button>
+        </div>
+        <div class="cm-mock">#!/usr/bin/env bash
+set -euo pipefail
+pnpm build
+test -f dist/index.js || exit 1
+echo "build ok"</div>
+        <div class="ed-actions" style="margin-top:12px">
+          <button class="btn btn-accent">保存脚本</button>
+          <button class="btn btn-ghost">删除脚本</button>
+        </div>
+      </div>
+      <div class="ed-actions">
+        <button class="btn btn-accent">保存</button>
+        <button class="btn btn-ghost">删除</button>
+      </div>
+    </div>`;
+  }else if(readOnly){
+    editor=`<div class="editor">
+      <div class="ed-head"><div class="ed-title">${STATE.selSkill}</div><div><span class="src src-plugin">插件:superpowers</span></div></div>
+      <div class="cm-mock"><span class="fm">---
+name: ${STATE.selSkill}
+description: ...
+---</</span>
+
+<span class="h"># ${STATE.selSkill}</span>
+
+（插件来源技能，只读展示。编辑请去市场 tab 卸载/换插件。）</div>
+      <div class="ed-actions"><span class="readonly-note">插件包内 · 只读</span></div>
+    </div>`;
+  }
+  return `<div class="panel-title">⚡ 技能 <span class="panel-sub" style="margin:0">用户 2 · 项目 1 · 插件 2</span></div>${rows}${editor}`;
+}
+
+function renderAgent(){
+  return `<div class="panel-title">🤖 智能体 <span class="panel-sub" style="margin:0">2 个</span></div>
+    <div class="row sel"><div class="row-main"><div class="row-name">code-reviewer</div><div class="row-desc">model: claude-sonnet-5 · tools: Read,Grep,Bash</div></div><span class="src src-user">用户</span><div class="tg on"></div></div>
+    <div class="row"><div class="row-main"><div class="row-name">smoke-agent-probe</div><div class="row-desc">model: haiku · 仅 Read</div></div><span class="src src-user">用户</span><div class="tg on"></div></div>
+    <div class="editor">
+      <div class="ed-head"><div class="ed-title">code-reviewer</div><div><span class="src src-user">用户</span></div></div>
+      <div class="tabs"><button class="on">基本信息</button><button>正文 (agent.md)</button></div>
+      <div class="field"><label>name</label><input value="code-reviewer"/></div>
+      <div class="field"><label>description</label><input value="代码审查 agent"/></div>
+      <div class="field"><label>model</label><input value="claude-sonnet-5"/></div>
+      <div class="field"><label>tools <span class="hint">可增删</span></label>
+        <div class="kv"><input value="Read" style="flex:1"><input value="Grep" style="flex:1"><input value="Bash" style="flex:1"></div>
+        <button class="btn btn-ghost" style="font-size:11px;margin-top:6px">+ 添加工具</button>
+      </div>
+      <div class="ed-actions"><button class="btn btn-accent">保存</button><button class="btn btn-ghost">删除</button></div>
+    </div>`;
+}
+
+function renderInstruction(){
+  return `<div class="panel-title">📖 指令 <span class="panel-sub" style="margin:0">全局 / 项目</span></div>
+    <div class="seg" style="margin-bottom:14px"><button class="on">全局 (CLAUDE.md)</button><button>项目 (.claude/CLAUDE.md)</button></div>
+    <div class="editor">
+      <div class="cm-mock" style="min-height:240px"><span class="h"># 项目约定</span>
+
+- 提交前跑测试
+- 代码要有层次：抽象在上层、实现在子目录
+- Windows 必加 CREATE_NO_WINDOW
+
+<span class="h"># 架构红线</span>
+
+所有 Command::new 必须加 0x08000000 标志...</div>
+      <div class="ed-actions"><button class="btn btn-accent">保存</button></div>
+    </div>`;
+}
+
+function render(){
+  document.querySelectorAll('#nav .nav-item').forEach(n=>n.classList.toggle('on',n.dataset.cat===STATE.cat));
+  const m=document.getElementById('main');
+  if(STATE.cat==='mcp')m.innerHTML=renderMCP();
+  else if(STATE.cat==='hook')m.innerHTML=renderHook();
+  else if(STATE.cat==='skill')m.innerHTML=renderSkill();
+  else if(STATE.cat==='agent')m.innerHTML=renderAgent();
+  else m.innerHTML=renderInstruction();
+}
+function switchCat(c){STATE.cat=c;if(c==='mcp')STATE.selMcp='playwright';render();}
+function selMcp(id){STATE.selMcp=id;render();}
+function setTransport(t){STATE.transport=t;render();}
+function setSkillTab(t){STATE.skillTab=t;render();}
+function selSkill(id){STATE.selSkill=id;STATE.skillTab='meta';render();}
+function testConnRow(btn,id){
+  const dot=document.getElementById('dot-'+id);
+  if(dot)dot.className='dot dot-spin';
+  const old=btn.textContent;btn.textContent='测试中…';btn.disabled=true;
+  setTimeout(()=>{if(dot)dot.className='dot dot-ok';btn.textContent=old;btn.disabled=false;},1100);
+}
+function testConnEd(btn){
+  const dot=document.getElementById('sd');const txt=document.getElementById('st');
+  if(dot)dot.className='dot dot-spin';if(txt)txt.textContent='握手中…';
+  btn.textContent='测试中…';btn.disabled=true;
+  setTimeout(()=>{if(dot)dot.className='dot dot-ok';if(txt)txt.textContent='已连接 · 4 工具';btn.textContent='测试连接';btn.disabled=false;},1100);
+}
+render();
+</script>
+</body>
+</html>
