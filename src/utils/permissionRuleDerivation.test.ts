@@ -1,5 +1,21 @@
 import { describe, it, expect } from "vitest";
+import type { PermissionRule } from "@/types/permissions";
 import { deriveRememberRule, describeRememberRule } from "./permissionRuleDerivation";
+
+/** 构造一条 Bash 前缀 allow 规则（或 tool 级）。 */
+function allowRule(value: string, toolLevel = false): PermissionRule {
+  return {
+    id: `r-${value}`,
+    scope: "user",
+    order: 0,
+    effect: "allow",
+    tool: "Bash",
+    matcher: toolLevel
+      ? { kind: "tool" }
+      : { kind: "bash", mode: "prefix", value },
+    source: { label: "user", readOnly: false },
+  };
+}
 
 describe("deriveRememberRule Bash 前缀推导", () => {
   it("无控制符的命令→整条作前缀", () => {
@@ -90,6 +106,49 @@ describe("deriveRememberRule Bash 前缀推导", () => {
   it("命令缺失/类型错→null", () => {
     expect(deriveRememberRule("Bash", undefined)).toBeNull();
     expect(deriveRememberRule("Bash", { command: 123 })).toBeNull();
+  });
+});
+
+describe("deriveRememberRule 链式命令感知现有规则", () => {
+  it("第一段已被现有前缀规则覆盖→记住未覆盖的第二段", () => {
+    const rules = [allowRule("pnpm vitest run")];
+    expect(
+      deriveRememberRule(
+        "Bash",
+        { command: "pnpm vitest run src/utils/permissionModeCycle.test.ts | grep -i allow" },
+        rules,
+      )?.matcher,
+    ).toEqual({ kind: "bash", mode: "prefix", value: "grep -i allow" });
+  });
+
+  it("无现有规则→维持旧行为（第一段作前缀）", () => {
+    expect(
+      deriveRememberRule("Bash", { command: "pnpm test && npm run build" }, [])?.matcher,
+    ).toEqual({ kind: "bash", mode: "prefix", value: "pnpm test" });
+  });
+
+  it("多段命令取第一个未覆盖段", () => {
+    const rules = [allowRule("pnpm vitest run")];
+    expect(
+      deriveRememberRule("Bash", { command: "pnpm vitest run a.ts | grep x | wc -l" }, rules)
+        ?.matcher,
+    ).toEqual({ kind: "bash", mode: "prefix", value: "grep x" });
+  });
+
+  it("全部段已被覆盖（异常态）→回退第一段", () => {
+    const rules = [allowRule("pnpm test"), allowRule("grep")];
+    expect(deriveRememberRule("Bash", { command: "pnpm test | grep x" }, rules)?.matcher).toEqual({
+      kind: "bash",
+      mode: "prefix",
+      value: "pnpm test",
+    });
+  });
+
+  it("引号内管道不算分隔符", () => {
+    const rules = [allowRule("pnpm vitest run")];
+    expect(
+      deriveRememberRule("Bash", { command: "pnpm vitest run 'a|b' | grep x" }, rules)?.matcher,
+    ).toEqual({ kind: "bash", mode: "prefix", value: "grep x" });
   });
 });
 

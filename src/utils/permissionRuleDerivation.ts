@@ -2,18 +2,25 @@
 // `allow` 规则，替代旧版「总是允许」按钮（那笔提交移除了 always-allow 路径，
 // 改由 aide 自有权限规则体系承接）。
 //
-// 纯函数，无 IO：输入工具名 + 工具参数，输出 PermissionRuleDraft 或 null
-// （推不出来就不显示「记住」按钮）。Bash 前缀截断的引号感知扫描器与 sidecar
+// 纯函数，无 IO：输入工具名 + 工具参数 + 现有规则，输出 PermissionRuleDraft 或
+// null（推不出来就不显示「记住」按钮）。Bash 前缀截断的引号感知扫描器与 sidecar
 // `agent-sidecar/src/policy/matchers.ts` 的 `hasUnquotedShellControl` 语义对齐——
 // 前端不能 import sidecar，这里复刻一份最小实现。
+//
+// 链式命令（`a | b`、`a && b`…）的推导感知现有规则：切分成段后逐段检查是否已
+// 被现有 allow 规则覆盖，取**第一个未覆盖的段**作为新规则前缀。否则像
+// `pnpm vitest run <file> | grep x` 这类第一段早已放行、真正缺的是管道后段的命令，
+// 记住出来的会是第一段的冗余规则，永远解决不了弹窗。
 //
 // 安全性靠两层：① 推导出的前缀本身绝不含未引用 shell 控制符（在首个控制符处截断）；
 // ② Rust/sidecar 的 prefix-allow 匹配还有第二道闸——被匹配命令若含未引用控制符
 // 直接 no-match。所以「记住 `pnpm test`」会放行 `pnpm test --foo`，但永不放行
-// `pnpm test && rm -rf /`。
+// `pnpm test && rm -rf /`。段覆盖检查只复用前缀边界语义，不放松链式分段本身的
+// 严格匹配。
 
 import type {
   PermissionMatcher,
+  PermissionRule,
   PermissionRuleDraft,
   PermissionScope,
 } from "@/types/permissions";
@@ -57,6 +64,168 @@ function firstUnquotedControlIndex(command: string): number {
   return chars.length;
 }
 
+/** 命令是否含未引用的 shell 控制符（`|;&&><\n\`` 或 `$(`）。与
+ *  `firstUnquotedControlIndex` 同源：有控制符 ⇔ 索引小于命令长度。 */
+function hasUnquotedShellControl(command: string): boolean {
+  return firstUnquotedControlIndex(command) < command.length;
+}
+
+/** 前缀匹配带命令边界：`value` 必须匹配 `command` 开头且其后跟空白、shell
+ *  分隔符或串尾。`"pnpm test"` 匹配 `"pnpm test --runInBand"` 但不匹配
+ *  `"pnpm testx"`。对齐 sidecar matchers.ts `commandStartsWithBoundary`。 */
+function commandStartsWithBoundary(command: string, value: string): boolean {
+  if (value.length === 0) {
+    return false;
+  }
+  const trimmed = command.trimStart();
+  if (!trimmed.startsWith(value)) {
+    return false;
+  }
+  const rest = trimmed.slice(value.length);
+  if (rest.length === 0) {
+    return true;
+  }
+  const next = rest[0];
+  return (
+    next === " " || next === "\t" ||
+    next === ";" || next === "|" || next === "&" ||
+    next === "<" || next === ">" || next === "\n"
+  );
+}
+
+/** Bash 链式命令切分（前端复刻 sidecar matchers.ts `splitBashSegments`）。
+ *  把 `a | b`、`a && b`、`a; b`、`a & b`、换行切分成独立段；命令含文件重定向、
+ *  `$(…)`/反引号、空段、未闭合引号时返回 null（不可验证）。无害重定向
+ *  （`2>&1`、`2>/dev/null`、`&>/dev/null`）段内透明化。 */
+function splitBashSegments(command: string): string[] | null {
+  const chars = [...command];
+  const segments: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+  let i = 0;
+
+  const finalizeInterior = (): boolean => {
+    const seg = current.trim();
+    current = "";
+    if (seg.length === 0) return false;
+    segments.push(seg);
+    return true;
+  };
+
+  /** 读重定向目标词（带引号/展开即不可验证）。 */
+  const readRedirectTarget = (): string | null => {
+    while (chars[i] === " " || chars[i] === "\t") i++;
+    if (i >= chars.length) return null;
+    if (chars[i] === "'" || chars[i] === '"') return null;
+    let t = "";
+    while (i < chars.length && !/[ \t;|&<>\n`$"'\\]/.test(chars[i])) {
+      t += chars[i];
+      i++;
+    }
+    return t.length > 0 ? t : null;
+  };
+
+  /** 剥掉 `current` 末尾独立数字 run——重定向操作符的 IO_NUMBER fd，
+   *  不是命令词（`echo foo2>file` 的 2 是参数，保留）。 */
+  const stripTrailingFd = (): void => {
+    const m = /(?:^|[ \t])(\d+)$/.exec(current);
+    if (m) current = current.slice(0, current.length - m[1].length);
+  };
+
+  while (i < chars.length) {
+    const c = chars[i];
+    if (c === "\\" && !inSingle) {
+      if (i + 1 < chars.length) {
+        current += c + chars[i + 1];
+        i += 2;
+      } else {
+        current += c;
+        i += 1;
+      }
+      continue;
+    }
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      current += c;
+      i++;
+      continue;
+    }
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      current += c;
+      i++;
+      continue;
+    }
+    if (inSingle || inDouble) {
+      current += c;
+      i++;
+      continue;
+    }
+
+    if (c === "$" && chars[i + 1] === "(") return null;
+    if (c === "`") return null;
+    if (c === ";" || c === "\n") {
+      if (!finalizeInterior()) return null;
+      i++;
+      continue;
+    }
+    if (c === "|") {
+      i++;
+      if (chars[i] === "|") i++; // `||` 是单个分隔符
+      if (!finalizeInterior()) return null;
+      continue;
+    }
+    if (c === "&") {
+      const next = chars[i + 1];
+      if (next === "&") {
+        i += 2;
+        if (!finalizeInterior()) return null;
+        continue;
+      }
+      if (next === ">") {
+        // `&>file` / `&>>file` 双流重定向——只有 /dev/null 无害。
+        i += 2;
+        if (chars[i] === ">") i++;
+        const target = readRedirectTarget();
+        if (target !== "/dev/null") return null;
+        continue;
+      }
+      // 单个 `&` = 后台分隔符。
+      i++;
+      if (!finalizeInterior()) return null;
+      continue;
+    }
+    if (c === ">" || c === "<") {
+      stripTrailingFd();
+      const op = c;
+      i++;
+      if (op === ">" && chars[i] === ">") {
+        i++; // `>>`
+      } else if (op === "<" && chars[i] === "<") {
+        return null; // heredoc / herestring
+      }
+      if (chars[i] === "&") {
+        // fd 复制 `[n]>&[m]` / `[n]>&-`——无文件系统副作用。
+        // 非数字目标（`>&file`）把双流重定向到文件。
+        i++;
+        const t = readRedirectTarget();
+        if (t === null || !/^(\d+|-)$/.test(t)) return null;
+        continue;
+      }
+      const target = readRedirectTarget();
+      if (op === ">" && target === "/dev/null") continue; // 无害丢弃
+      return null; // 任何真实文件重定向都不可验证
+    }
+    current += c;
+    i++;
+  }
+  if (inSingle || inDouble) return null;
+  const last = current.trim();
+  if (last.length > 0) segments.push(last);
+  return segments.length > 0 ? segments : null;
+}
+
 /** Bash 前缀推导：去前导空白 → 在首个未引用控制符处截断 → 吸收重定向 fd → 去尾部空白。
  *  结果为空（命令本身以控制符开头 / 空命令）返回 null。 */
 function deriveBashPrefix(command: string): string | null {
@@ -79,6 +248,50 @@ function deriveBashPrefix(command: string): string | null {
   return prefix.length > 0 ? prefix : null;
 }
 
+/** 段是否已被现有 allow 规则覆盖。只认 Bash 工具的 allow 规则；tool 级 / bash
+ *  `all` 覆盖一切，bash `prefix` 按「前缀 + 命令边界 + 无未引用控制符」判定（与
+ *  sidecar 策略引擎同语义）。`contains` 永不作 allow（上游已校验），跳过。 */
+function segmentCoveredByRules(segment: string, rules: readonly PermissionRule[]): boolean {
+  for (const rule of rules) {
+    if (rule.effect !== "allow" || rule.tool !== "Bash") continue;
+    const m = rule.matcher;
+    if (m.kind === "tool") return true;
+    if (m.kind !== "bash") continue;
+    if (m.mode === "all") return true;
+    if (m.mode === "prefix") {
+      const value = m.value ?? "";
+      if (
+        value.length > 0 &&
+        !hasUnquotedShellControl(segment) &&
+        commandStartsWithBoundary(segment, value)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Bash「记住」规则的前缀推导：简单命令维持原行为（整条作前缀）；链式命令
+ *  切分成段后取第一个未被现有规则覆盖的段作前缀——第一段早已放行的命令，记住的
+ *  是真正缺的管道后段。整条不可验证或全被覆盖时回退到原行为（第一段前缀）。 */
+function deriveBashRememberPrefix(
+  command: string,
+  rules: readonly PermissionRule[],
+): string | null {
+  const trimmed = command.trimStart();
+  if (!trimmed) return null;
+  if (!hasUnquotedShellControl(trimmed)) {
+    return deriveBashPrefix(trimmed);
+  }
+  const segments = splitBashSegments(trimmed);
+  if (segments === null) {
+    return deriveBashPrefix(trimmed);
+  }
+  const uncovered = segments.find((seg) => !segmentCoveredByRules(seg, rules));
+  return deriveBashPrefix(uncovered ?? segments[0]);
+}
+
 /** 跨平台父目录：同时认 `/` 和 `\`，去尾部分隔后取最后一段之前。
  *  无父目录（单段相对名、根、盘根）返回 null——避免推出「任意路径」过宽规则。 */
 function parentDir(p: string): string | null {
@@ -90,10 +303,12 @@ function parentDir(p: string): string | null {
   return trimmed.slice(0, lastSep);
 }
 
-/** 把一次工具调用请求推导成一条 `allow` 规则。推不出来返回 null。 */
+/** 把一次工具调用请求推导成一条 `allow` 规则。`existingRules` 供 Bash 链式命令
+ *  识别「第一个未被现有规则覆盖的段」；其它工具不依赖它。推不出来返回 null。 */
 export function deriveRememberRule(
   tool: string,
   input: unknown,
+  existingRules: readonly PermissionRule[] = [],
 ): PermissionRuleDraft | null {
   const inp =
     input && typeof input === "object" && !Array.isArray(input)
@@ -102,7 +317,7 @@ export function deriveRememberRule(
 
   if (tool === "Bash") {
     const command = typeof inp.command === "string" ? inp.command : "";
-    const prefix = deriveBashPrefix(command);
+    const prefix = deriveBashRememberPrefix(command, existingRules);
     if (!prefix) return null;
     return {
       effect: "allow",

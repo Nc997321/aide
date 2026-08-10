@@ -468,24 +468,24 @@ watch(() => sessionProvider.value.id, () => {
 // 优先，不可编辑则回退用户全局），并缓存规则列表供点击时去重。权限请求不频繁，
 // 一次 prompt 一次 get() 可接受。请求消失时清空，避免跨请求串用旧视图。
 const rememberScope = ref<PermissionScope | null>(null);
-let rememberView: PermissionSettingsView | null = null;
+const rememberView = ref<PermissionSettingsView | null>(null);
 watch(
   () => props.permission?.id,
   async (id) => {
     if (!id || !props.permission) {
       rememberScope.value = null;
-      rememberView = null;
+      rememberView.value = null;
       return;
     }
     try {
       const view = await permissionsApi.get();
-      rememberView = view;
+      rememberView.value = view;
       const local = view.scopes.find((s) => s.scope === "local");
       const user = view.scopes.find((s) => s.scope === "user");
       rememberScope.value = local?.editable ? "local" : user?.editable ? "user" : null;
     } catch {
       rememberScope.value = null;
-      rememberView = null;
+      rememberView.value = null;
     }
   },
   { immediate: true },
@@ -505,7 +505,7 @@ watch(
 async function persistRememberRule(scope: PermissionScope, rule: PermissionRuleDraft): Promise<void> {
   const scopeWord = scope === "local" ? "本项目本地" : scope === "user" ? "用户全局" : scope;
   try {
-    const view = rememberView ?? (await permissionsApi.get());
+    const view = rememberView.value ?? (await permissionsApi.get());
     const key = (r: { effect: string; tool: string; matcher: unknown }) =>
       `${r.effect}|${r.tool}|${JSON.stringify(r.matcher)}`;
     const draftKey = key({ effect: "allow", tool: rule.tool, matcher: rule.matcher });
@@ -1314,6 +1314,7 @@ function onOpenBgDock(taskId: string) {
       :permission="permission ?? null"
       :queue-count="permissionQueueCount"
       :remember-scope="rememberScope"
+      :remember-rules="rememberView?.rules ?? []"
       :current-mode="selectedPermissionMode"
       @respond="onPermissionRespond"
     />
