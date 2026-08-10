@@ -45,16 +45,8 @@ function sourceLabel(s: NonNullable<CustomizationItem["source"]>): string {
     <!-- Loading -->
     <div v-if="loading" class="loading">加载中...</div>
 
-    <!-- Empty -->
-    <div v-else-if="items.length === 0" class="empty">
-      <div class="empty-icon"><Icon :name="category?.icon ?? ''" :size="32" /></div>
-      <div class="empty-text">暂无{{ category?.label }}</div>
-      <button class="create-btn" @click="handleCreate">创建第一个</button>
-    </div>
-
-    <!-- List -->
-    <div v-else class="list">
-      <!-- Hook 内置只读区（sidecar builtin_hooks_manifest 填充，会话实际挂载） -->
+    <template v-else>
+      <!-- Hook 内置只读区（总显示，独立于用户 items 空/满；sidecar builtin_hooks_manifest 填充） -->
       <div v-if="type === 'hook' && builtinHooks.length > 0" class="builtin-section">
         <div class="section-label">内置（只读 · 会话实际挂载）</div>
         <div
@@ -70,37 +62,48 @@ function sourceLabel(s: NonNullable<CustomizationItem["source"]>): string {
           <span class="lock-mark">🔒</span>
         </div>
       </div>
-      <div
-        v-for="item in items"
-        :key="item.id"
-        class="list-item"
-        :class="{ disabled: !item.enabled }"
-        @click="emit('select', item.id)"
-      >
-        <div class="item-info">
-          <div class="item-name">{{ item.name }}</div>
-          <div class="item-meta" v-if="item.description">{{ item.description }}</div>
-        </div>
-        <span
-          class="src-badge"
-          :class="`src-${item.source ?? 'user'}`"
-          v-if="item.source"
-        >{{ sourceLabel(item.source) }}</span>
-        <button
-          class="toggle-btn"
-          :class="{ active: item.enabled }"
-          @click="handleToggle(item.id, $event)"
-          v-tooltip="item.enabled ? '禁用' : '启用'"
-        >
-          {{ item.enabled ? '启用' : '停用' }}
-        </button>
-      </div>
-    </div>
 
-    <!-- Add Button -->
-    <div class="add-bar" v-if="!loading && items.length > 0">
-      <button class="add-btn" @click="handleCreate">+ 添加</button>
-    </div>
+      <!-- Empty（用户区无条目） -->
+      <div v-if="items.length === 0" class="empty">
+        <div class="empty-icon"><Icon :name="category?.icon ?? ''" :size="32" /></div>
+        <div class="empty-text">暂无用户{{ category?.label }}</div>
+        <button class="create-btn" @click="handleCreate">创建第一个</button>
+      </div>
+
+      <!-- List（用户区） -->
+      <div v-else class="list">
+        <div
+          v-for="item in items"
+          :key="item.id"
+          class="list-item"
+          :class="{ disabled: !item.enabled }"
+          @click="emit('select', item.id)"
+        >
+          <div class="item-info">
+            <div class="item-name">{{ item.name }}</div>
+            <div class="item-meta" v-if="item.description">{{ item.description }}</div>
+          </div>
+          <span
+            class="src-badge"
+            :class="`src-${item.source ?? 'user'}`"
+            v-if="item.source"
+          >{{ sourceLabel(item.source) }}</span>
+          <button
+            class="toggle-btn"
+            :class="{ active: item.enabled }"
+            @click="handleToggle(item.id, $event)"
+            v-tooltip="item.enabled ? '禁用' : '启用'"
+          >
+            {{ item.enabled ? '启用' : '停用' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- Add Button -->
+      <div class="add-bar" v-if="items.length > 0">
+        <button class="add-btn" @click="handleCreate">+ 添加</button>
+      </div>
+    </template>
   </div>
 </template>
 
