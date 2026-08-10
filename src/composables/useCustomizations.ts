@@ -42,6 +42,15 @@ export const CUSTOMIZATION_CATEGORIES: CustomizationCategory[] = [
   },
 ];
 
+// ── 内置 hook 清单（由 sidecar builtin_hooks_manifest 事件填充，会话启动时） ──
+export interface BuiltinHookManifest {
+  id: string;
+  event: string;
+  matcher: string;
+  purpose: string;
+}
+export const builtinHooks = ref<BuiltinHookManifest[]>([]);
+
 // ── State ──
 
 const items = reactive<Record<CustomizationType, CustomizationItem[]>>({
@@ -171,6 +180,7 @@ export function useCustomizations() {
   return {
     // State
     items,
+    builtinHooks,
     loading,
     activeType,
     activeItemId,

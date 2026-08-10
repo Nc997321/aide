@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { CustomizationType, CustomizationItem } from "../../types/customization";
-import { CUSTOMIZATION_CATEGORIES } from "../../composables/useCustomizations";
+import { CUSTOMIZATION_CATEGORIES, builtinHooks } from "../../composables/useCustomizations";
 import { useModal } from "../../composables/useModal";
 import Icon from "../Icon.vue";
 
@@ -54,6 +54,22 @@ function sourceLabel(s: NonNullable<CustomizationItem["source"]>): string {
 
     <!-- List -->
     <div v-else class="list">
+      <!-- Hook 内置只读区（sidecar builtin_hooks_manifest 填充，会话实际挂载） -->
+      <div v-if="type === 'hook' && builtinHooks.length > 0" class="builtin-section">
+        <div class="section-label">内置（只读 · 会话实际挂载）</div>
+        <div
+          v-for="b in builtinHooks"
+          :key="b.id"
+          class="list-item builtin-item"
+        >
+          <div class="item-info">
+            <div class="item-name">{{ b.id }}</div>
+            <div class="item-meta">{{ b.event }} · {{ b.matcher || '—' }} · {{ b.purpose }}</div>
+          </div>
+          <span class="src-badge src-builtin">内置</span>
+          <span class="lock-mark">🔒</span>
+        </div>
+      </div>
       <div
         v-for="item in items"
         :key="item.id"
@@ -252,5 +268,30 @@ function sourceLabel(s: NonNullable<CustomizationItem["source"]>): string {
 .src-builtin {
   background: var(--aide-surface-active);
   color: var(--aide-text-muted);
+}
+
+.builtin-section {
+  padding: 4px 8px 4px;
+  border-bottom: 1px solid var(--aide-surface-default);
+  margin-bottom: 4px;
+}
+.section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--aide-text-muted);
+  margin: 4px 4px 8px;
+}
+.builtin-item {
+  cursor: default;
+  opacity: 0.85;
+}
+.builtin-item:hover {
+  background: transparent;
+}
+.lock-mark {
+  font-size: 12px;
+  opacity: 0.7;
 }
 </style>

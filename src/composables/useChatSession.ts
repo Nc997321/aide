@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { api } from "@/api";
 import { useDiagnosticsDashboard } from "@/composables/useDiagnosticsDashboard";
+import { builtinHooks, type BuiltinHookManifest } from "@/composables/useCustomizations";
 import type {
   ChatMessage,
   ContextCompactionState,
@@ -539,6 +540,11 @@ function dispatchSend(
 }
 
 function handleChatEvent(e: Record<string, unknown>) {
+  // 内置 hook 清单：sidecar 会话启动时 emit 的全局元数据（无 session_id），路由到扩展管理。
+  if (e["type"] === "builtin_hooks_manifest") {
+    builtinHooks.value = (e["manifest"] as BuiltinHookManifest[]) ?? [];
+    return;
+  }
   const raw = e["session_id"] as string | undefined;
   if (!raw) return;
   // btw 事件路由到独立 store,不进主对话 store(隔离红线)
