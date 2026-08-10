@@ -576,6 +576,13 @@ function onOverlayClick(e: MouseEvent) {
 
             <!-- ── 扩展 Tab ── -->
             <div v-else-if="activeTab === 'extensions'" class="tab-extensions">
+              <!-- 新会话生效提示（MCP/钩构） -->
+              <div
+                v-if="activeType === 'mcp_server' || activeType === 'hook'"
+                class="ext-notice"
+              >
+                已保存的 MCP / 钩构配置<b>下次新会话生效</b>。点「测试连接」即时验证 MCP。
+              </div>
               <!-- Back button (when not at category root) -->
               <div v-if="activeType" class="ext-back">
                 <button class="back-btn" @click="handleBack"><Icon name="back" :size="13" /> {{ categories.find(c => c.type === activeType)?.label || '返回' }}</button>
@@ -1070,6 +1077,20 @@ function onOverlayClick(e: MouseEvent) {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+.ext-notice {
+  padding: 8px 12px;
+  border-radius: var(--aide-radius-sm);
+  background: color-mix(in srgb, var(--aide-accent) 13%, transparent);
+  border: 1px solid var(--aide-border-strong);
+  color: var(--aide-text-secondary);
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+.ext-notice b {
+  color: var(--aide-accent);
+  font-weight: 600;
 }
 
 .ext-back {
