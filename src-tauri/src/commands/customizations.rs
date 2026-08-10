@@ -403,6 +403,61 @@ pub fn toggle_skill(id: String, enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// 校验脚本文件名：单段、非空、非隐藏、无路径分隔/越界，仅字母数字下划点连。
+fn sanitize_script_filename(name: &str) -> Result<String, String> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err("invalid script filename".into());
+    }
+    if name.starts_with('.') {
+        return Err("hidden file not allowed".into());
+    }
+    if !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '-') {
+        return Err("filename contains invalid chars".into());
+    }
+    Ok(name.to_string())
+}
+
+/// 拼接 <skill>/scripts/<filename>，校验文件名防越界，且结果须在 skills_dir 之下。
+fn script_path(skill_id: &str, filename: &str) -> Result<std::path::PathBuf, String> {
+    let safe = sanitize_script_filename(filename)?;
+    let p = skills_dir().join(skill_id).join("scripts").join(safe);
+    if !p.starts_with(skills_dir()) {
+        return Err("path escape".into());
+    }
+    Ok(p)
+}
+
+/// 读取 skill 的脚本文件内容。
+#[tauri::command]
+pub async fn read_skill_script(skill_id: String, filename: String) -> Result<String, String> {
+    let p = script_path(&skill_id, &filename)?;
+    fs::read_to_string(&p).map_err(|e| e.to_string())
+}
+
+/// 写入（或覆盖）skill 的脚本文件；scripts 目录不存在时自动创建。
+#[tauri::command]
+pub async fn write_skill_script(
+    skill_id: String,
+    filename: String,
+    content: String,
+) -> Result<(), String> {
+    let p = script_path(&skill_id, &filename)?;
+    if let Some(parent) = p.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(&p, content).map_err(|e| e.to_string())
+}
+
+/// 删除 skill 的脚本文件；不存在视为成功。
+#[tauri::command]
+pub async fn delete_skill_script(skill_id: String, filename: String) -> Result<(), String> {
+    let p = script_path(&skill_id, &filename)?;
+    if p.exists() {
+        fs::remove_file(&p).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 // ── Instruction Commands ──
 
 #[tauri::command]
@@ -965,5 +1020,24 @@ mod tests {
         let http = serde_json::json!({ "url": "http://x/mcp", "headers": { "Authorization": "k" } });
         assert_eq!(describe_mcp(&http), "http http://x/mcp");
         assert_eq!(describe_mcp(&serde_json::json!({})), "");
+    }
+
+    #[test]
+    fn sanitize_script_filename_rejects_traversal() {
+        assert!(sanitize_script_filename("build.sh").is_ok());
+        assert!(sanitize_script_filename("../evil").is_err());
+        assert!(sanitize_script_filename("a/b").is_err());
+        assert!(sanitize_script_filename("").is_err());
+        assert!(sanitize_script_filename(".gitignore").is_err());
+    }
+
+    #[test]
+    fn sanitize_script_filename_rejects_invalid_chars() {
+        assert!(sanitize_script_filename("a b").is_err()); // 空格
+        assert!(sanitize_script_filename("a*b").is_err());
+        assert!(sanitize_script_filename("a:b").is_err());
+        assert!(sanitize_script_filename("build.sh").is_ok());
+        assert!(sanitize_script_filename("check_1.py").is_ok());
+        assert!(sanitize_script_filename("verify-v2.js").is_ok());
     }
 }
