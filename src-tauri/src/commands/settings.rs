@@ -204,7 +204,7 @@ fn default_font_family() -> String {
 }
 fn default_notifications_enabled() -> bool { true }
 fn default_auto_naming() -> bool { true }
-fn default_theme() -> String { "warm-dark".to_string() }
+fn default_theme() -> String { "glass".to_string() }
 fn default_recent_limit() -> u32 { 10 }
 
 impl Default for AppSettings {

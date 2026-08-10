@@ -689,8 +689,8 @@ function handleKeyup(e: KeyboardEvent) {
 
 onMounted(async () => {
   // 首屏主题：优先 localStorage 缓存的主题 id（上次切换时 SettingsPanel 写入），
-  // 避免浅色主题用户每次启动先闪一帧暗色兜底；无缓存才用 warm-dark。
-  let cachedTheme = "warm-dark";
+  // 避免浅色主题用户每次启动先闪一帧暗色兜底；无缓存才用默认主题 glass。
+  let cachedTheme = "glass";
   try {
     const c = localStorage.getItem("aide.theme");
     if (c && themes[c]) cachedTheme = c;
@@ -705,7 +705,7 @@ onMounted(async () => {
   await loadSettings();
 
   // Apply persisted theme (以磁盘设置为准，校正 localStorage 缓存可能过期的情况)
-  const themeId = settings.theme || "warm-dark";
+  const themeId = settings.theme || "glass";
   const themeTokens = themes[themeId] || themes["warm-dark"];
   applyTheme(themeTokens);
   try { localStorage.setItem("aide.theme", themes[themeId] ? themeId : "warm-dark"); } catch { /* ignore */ }

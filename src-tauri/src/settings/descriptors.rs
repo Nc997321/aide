@@ -74,7 +74,7 @@ static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
         user("settings.shellPath", json!(""), SettingValueKind::String, "settings"),
         ui("settings.workbenchHeight", json!(0), SettingValueKind::Number),
         ui("settings.keybindings", json!({}), SettingValueKind::Object),
-        ui("settings.theme", json!("warm-dark"), SettingValueKind::String),
+        ui("settings.theme", json!("glass"), SettingValueKind::String),
         user(
             "settings.openWithExtensions",
             json!([]),
