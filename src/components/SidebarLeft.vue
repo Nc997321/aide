@@ -78,15 +78,18 @@ function closeTrustPrompt(): void {
   trustPrompt.value = null;
 }
 
-/** 信任此工作区：持久化 + 触发索引构建 + 刷新徽标。 */
+/** 信任此工作区：持久化 + 自动写入安全命令白名单 + 触发索引构建 + 刷新徽标。 */
 async function confirmTrust(): Promise<void> {
   const p = trustPrompt.value;
   if (!p) return;
   trustPrompt.value = null;
-  const ok = await trust(p.path);
+  const { ok, added } = await trust(p.path);
   if (ok) {
     onWorkspaceTrusted(p.path);
     void refreshTrust(workspaces.value.map((w) => w.name).filter(Boolean));
+    if (added > 0) {
+      showToast(`已信任工作区，已添加 ${added} 条安全命令白名单`, "success");
+    }
   }
 }
 

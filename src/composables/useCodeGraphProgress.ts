@@ -307,7 +307,7 @@ registerActionHandler("codegraph", (n) => {
   if (!n.dedupKey) return;
   if (n.dedupKey.startsWith("codegraph:untrusted:")) {
     const root = n.dedupKey.slice("codegraph:untrusted:".length);
-    if (root) void trust(root).then((ok) => { if (ok) onWorkspaceTrusted(root); });
+    if (root) void trust(root).then((res) => { if (res.ok) onWorkspaceTrusted(root); });
     return;
   }
   const root = n.dedupKey.split(":").slice(2).join(":");

@@ -23,6 +23,10 @@ use crate::policy::{
 use crate::runtime::AgentRuntimeManager;
 use crate::settings::{PermissionEffect, SettingsError, SettingsScope, SettingsService, StoredPermissionRule};
 
+/// 信任工作区自动写入的安全只读命令白名单（trust/untrust 命令调用）。
+pub(crate) mod workspace_safe_rules;
+pub(crate) use workspace_safe_rules::{ensure_safe_rules, remove_safe_rules};
+
 // ---- DTOs ----
 
 /// New-rule payload from the UI. The backend assigns `id`, `order`, `scope`

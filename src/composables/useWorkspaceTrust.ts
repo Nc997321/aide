@@ -38,31 +38,32 @@ export function useWorkspaceTrust() {
     untrustedPaths.value = next;
   }
 
-  /** 信任一个工作区（持久化），从 untrustedPaths 移除。返回是否成功。 */
-  async function trust(path: string): Promise<boolean> {
-    if (!path) return false;
+  /** 信任一个工作区（持久化），从 untrustedPaths 移除。返回是否成功 + 自动写入的
+   *  安全命令规则条数（信任成功但规则写入失败时 ok=true、added=0）。 */
+  async function trust(path: string): Promise<{ ok: boolean; added: number }> {
+    if (!path) return { ok: false, added: 0 };
     try {
-      await api.trustWorkspace(path);
+      const added = await api.trustWorkspace(path);
       const next = new Set(untrustedPaths.value);
       next.delete(path);
       untrustedPaths.value = next;
-      return true;
+      return { ok: true, added };
     } catch {
-      return false;
+      return { ok: false, added: 0 };
     }
   }
 
-  /** 取消信任（持久化），加入 untrustedPaths。 */
-  async function untrust(path: string): Promise<boolean> {
-    if (!path) return false;
+  /** 取消信任（持久化），加入 untrustedPaths。返回是否成功 + 移除的自动规则条数。 */
+  async function untrust(path: string): Promise<{ ok: boolean; removed: number }> {
+    if (!path) return { ok: false, removed: 0 };
     try {
-      await api.untrustWorkspace(path);
+      const removed = await api.untrustWorkspace(path);
       const next = new Set(untrustedPaths.value);
       next.add(path);
       untrustedPaths.value = next;
-      return true;
+      return { ok: true, removed };
     } catch {
-      return false;
+      return { ok: false, removed: 0 };
     }
   }
 

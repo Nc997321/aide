@@ -438,10 +438,12 @@ export const api = {
   isWorkspaceTrusted(path: string): Promise<boolean> {
     return invoke("is_workspace_trusted", { path });
   },
-  trustWorkspace(path: string): Promise<void> {
+  /** 信任工作区：返回自动写入的安全命令规则条数（幂等，已存在则 0）。 */
+  trustWorkspace(path: string): Promise<number> {
     return invoke("trust_workspace", { path });
   },
-  untrustWorkspace(path: string): Promise<void> {
+  /** 取消信任：返回移除的自动安全规则条数。 */
+  untrustWorkspace(path: string): Promise<number> {
     return invoke("untrust_workspace", { path });
   },
 };

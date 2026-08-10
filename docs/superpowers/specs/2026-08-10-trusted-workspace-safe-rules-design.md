@@ -15,7 +15,7 @@
 | 触发 | 恒开：信任工作区即写入，无开关 |
 | 回填 | 只对新信任的工作区；功能上线前已信任的不回填 |
 | 安全清单 | `cd grep cat head tail wc uniq cut tr ls diff`（11 条，全纯只读；`cd` 为 shell 内建仅改工作目录；不含 sort——`-o` 能写文件） |
-| untrust | 删除 `auto-safe-` 前缀规则（取消信任 = 权限回到原样） |
+| untrust | 删除自动规则（id 由 `auto-safe-<cmd>` 派生确定性 UUID，untrust 重算删除；取消信任 = 权限回到原样） |
 | 实现位置 | Rust 侧挂钩 `trust_workspace` / `untrust_workspace` |
 | 前端 toast | 信任成功后显示「已信任工作区，已添加 N 条安全命令白名单」 |
 
@@ -46,7 +46,7 @@ src-tauri/src/commands/
 
 | 字段 | 值 |
 |---|---|
-| id | `auto-safe-<cmd>`（如 `auto-safe-grep`）——untrust 清理的标记 |
+| id | `auto-safe-<cmd>` 的稳定 FNV-1a 双哈希 → **UUID 形状确定性 id**（settings store 强制 `is_uuid` 校验，同一命令永远同一 id）——untrust 重算删除 |
 | effect | `allow` |
 | tool | `Bash` |
 | matcher | `{ kind: "bash", mode: "prefix", value: "<cmd>" }` |
@@ -54,7 +54,7 @@ src-tauri/src/commands/
 
 **幂等**：写入前检查 local scope 是否已有**同 (tool, matcher)** 规则，有则跳过——用户手动加过 `grep` 前缀规则就不重复写；重复信任也不堆。
 
-**关键语义**：`auto-safe-` 前缀只做 untrust 标记；幂等去重按 (tool, matcher)。用户手动规则和自动规则互不覆盖，untrust 只删 `auto-safe-` 的。
+**关键语义**：自动规则 id 由 `auto-safe-<cmd>` 确定性派生（同一命令同一 id），untrust 时重算 id 集合精确删除，**不误删用户手动规则**（用户规则 id 是随机 UUID，不在集合里）；幂等去重按 (tool, matcher)，用户手动规则和自动规则互不覆盖。
 
 ## 数据流
 

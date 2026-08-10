@@ -1,8 +1,11 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tauri::State;
 
 use super::{WorkspaceInfo, WorkspaceState, claude_projects_dir};
+use crate::runtime::AgentRuntimeManager;
+use crate::settings::{SettingsScope, SettingsService};
 
 // ── 子实现层 ──
 // git_exclude：信任 / 索引激活时把 `.aide/` 幂等写入仓库 .git/info/exclude，
@@ -439,35 +442,84 @@ pub async fn is_workspace_trusted(path: String) -> Result<bool, String> {
         .map_err(|e| format!("is_workspace_trusted panicked: {}", e))
 }
 
-/// 信任一个工作区（按路径，归一后写入白名单）。
+/// 信任一个工作区（按路径，归一后写入白名单）。信任即把安全只读命令白名单
+/// （grep/cat/head…）幂等写入 local scope 并广播给 live 会话，返回新增条数。
+/// 规则写入失败仅记日志，不因此拒信任（信任 key 是主动作）。
 #[tauri::command]
-pub async fn trust_workspace(path: String) -> Result<(), String> {
+pub async fn trust_workspace(
+    path: String,
+    settings: State<'_, Arc<SettingsService>>,
+    runtime: State<'_, AgentRuntimeManager>,
+) -> Result<usize, String> {
     let key = trust_key_from_path(&path);
-    tokio::task::spawn_blocking(move || {
-        super::settings::with_state_mut(|config| {
-            trust_in_config(config, &key);
-            Ok(())
-        })?;
-        // 信任即备好 git 忽略（幂等，失败仅记日志，不因此拒信任）。
-        ensure_aide_excluded(std::path::Path::new(&path));
-        Ok(())
-    })
+    let project = PathBuf::from(&path);
+    let project_for_write = project.clone();
+    let service = settings.inner().clone();
+    let service_for_write = service.clone();
+
+    let added = tokio::task::spawn_blocking(
+        move || -> Result<usize, String> {
+            super::settings::with_state_mut(|config| {
+                trust_in_config(config, &key);
+                Ok(())
+            })?;
+            // 信任即备好 git 忽略（幂等，失败仅记日志，不因此拒信任）。
+            ensure_aide_excluded(&project_for_write);
+            // 信任即写入安全只读命令白名单（幂等）。失败仅记日志，按 0 处理。
+            match super::permissions::ensure_safe_rules(&service_for_write, &project_for_write) {
+                Ok(n) => Ok(n),
+                Err(e) => {
+                    tracing::warn!(?e, path = %project_for_write.display(), "trust_workspace: ensure_safe_rules failed");
+                    Ok(0)
+                }
+            }
+        },
+    )
     .await
-    .map_err(|e| format!("trust_workspace panicked: {}", e))?
+    .map_err(|e| format!("trust_workspace panicked: {e}"))??;
+
+    runtime
+        .broadcast_policy_change(SettingsScope::Local, Some(project.as_path()), &service)
+        .await;
+    Ok(added)
 }
 
-/// 取消信任一个工作区（按路径）。
+/// 取消信任一个工作区（按路径）。对称删除自动写入的安全规则并广播，返回删除条数。
+/// 清理失败仅记日志，不因此拒取消信任。
 #[tauri::command]
-pub async fn untrust_workspace(path: String) -> Result<(), String> {
+pub async fn untrust_workspace(
+    path: String,
+    settings: State<'_, Arc<SettingsService>>,
+    runtime: State<'_, AgentRuntimeManager>,
+) -> Result<usize, String> {
     let key = trust_key_from_path(&path);
-    tokio::task::spawn_blocking(move || {
-        super::settings::with_state_mut(|config| {
-            untrust_in_config(config, &key);
-            Ok(())
-        })
-    })
+    let project = PathBuf::from(&path);
+    let project_for_write = project.clone();
+    let service = settings.inner().clone();
+    let service_for_write = service.clone();
+
+    let removed = tokio::task::spawn_blocking(
+        move || -> Result<usize, String> {
+            super::settings::with_state_mut(|config| {
+                untrust_in_config(config, &key);
+                Ok(())
+            })?;
+            match super::permissions::remove_safe_rules(&service_for_write, &project_for_write) {
+                Ok(n) => Ok(n),
+                Err(e) => {
+                    tracing::warn!(?e, path = %project_for_write.display(), "untrust_workspace: remove_safe_rules failed");
+                    Ok(0)
+                }
+            }
+        },
+    )
     .await
-    .map_err(|e| format!("untrust_workspace panicked: {}", e))?
+    .map_err(|e| format!("untrust_workspace panicked: {e}"))??;
+
+    runtime
+        .broadcast_policy_change(SettingsScope::Local, Some(project.as_path()), &service)
+        .await;
+    Ok(removed)
 }
 
 // ── 工作区 LSP 开关 Tauri 命令 ──
