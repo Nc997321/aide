@@ -85,6 +85,8 @@ export interface AppSettings {
   fontSize: number;
   fontFamily: string;
   notificationsEnabled: boolean;
+  /** 首次安装引导是否已完成。首次启动若为 false 则弹全屏向导；完成或"跳过引导"后置 true，不再二次弹。 */
+  onboarded: boolean;
   /** 会话自动命名：首轮对话后由 sidecar 用小模型生成会话标题（默认开）。
    *  用户手动改过的名字（nameSource=manual）不会被覆盖。 */
   autoNaming: boolean;

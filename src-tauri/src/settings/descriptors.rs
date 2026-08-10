@@ -183,6 +183,7 @@ static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
         .with_legacy_ids(&["system_default_model_mappings.subagent"]),
         user("claudeMigrationDone", json!(false), SettingValueKind::Boolean, "migration"),
         user("claudeMigrationDismissed", json!(false), SettingValueKind::Boolean, "migration"),
+        user("onboarded", json!(false), SettingValueKind::Boolean, "general"),
         SettingDescriptor::new(
             "permissions.rules",
             json!([]),

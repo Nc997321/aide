@@ -32,6 +32,7 @@ const defaults: AppSettings = {
   jdkRegistry: [],
   jdkPromptDismissed: [],
   leftSidebarPinned: true,
+  onboarded: false,
   editor: { indentSize: 4 },
 };
 
@@ -78,6 +79,7 @@ export function useSettings() {
       settings.jdkRegistry = s.jdkRegistry ?? defaults.jdkRegistry;
       settings.jdkPromptDismissed = s.jdkPromptDismissed ?? defaults.jdkPromptDismissed;
       settings.leftSidebarPinned = s.leftSidebarPinned ?? defaults.leftSidebarPinned;
+      settings.onboarded = s.onboarded ?? defaults.onboarded;
       // 旧配置缺 editor → 整块补默认（默认 4 空格缩进）
       settings.editor = { ...defaults.editor, ...(s.editor ?? {}) };
     } catch (_) {
@@ -101,6 +103,7 @@ export function useSettings() {
     if (partial.paneLayouts !== undefined) settings.paneLayouts = partial.paneLayouts;
     if (partial.codegraphEmbedder !== undefined) settings.codegraphEmbedder = partial.codegraphEmbedder;
     if (partial.leftSidebarPinned !== undefined) settings.leftSidebarPinned = partial.leftSidebarPinned;
+    if (partial.onboarded !== undefined) settings.onboarded = partial.onboarded;
     // editor 整块替换：后端 set_settings 按 top-level key 整体覆盖，故前端发完整对象
     if (partial.editor !== undefined) settings.editor = { ...settings.editor, ...partial.editor };
     // Persist asynchronously
