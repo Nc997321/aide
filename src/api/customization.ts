@@ -78,3 +78,17 @@ export const mcpServerApi = {
   update: (id: string, data: Partial<CustomizationItem>) => customizationApi.update('mcp_server', id, data),
   delete: (id: string) => customizationApi.delete('mcp_server', id),
 };
+
+// ── MCP 探活 ──
+
+export interface McpTestResult {
+  status: 'ok' | 'timeout' | 'spawn_error' | 'handshake_error' | 'connect_error';
+  tools: string[];
+  error?: string;
+  duration_ms: number;
+}
+
+/** 探活一个 MCP server：spawn agent-runtime 跑 test-mcp，握手 initialize + tools/list。 */
+export function testMcpConnection(config: Record<string, any>): Promise<McpTestResult> {
+  return invoke<McpTestResult>('test_mcp_connection', { config });
+}
