@@ -1022,7 +1022,7 @@ onUnmounted(() => {
         @confirm="onRemoveWorkspaceConfirm"
       />
       <SettingsPanel v-if="settingsVisible" :initial-tab="settingsInitialTab" @close="settingsVisible = false" />
-      <OnboardingWizard v-if="onboarding.visible.value" />
+      <OnboardingWizard v-if="onboarding.visible.value" @workspace-selected="onSidebarWsChanged" />
       <RunConfigsDialog
         v-if="runConfigsDialogVisible"
         @close="runConfigsDialogVisible = false"

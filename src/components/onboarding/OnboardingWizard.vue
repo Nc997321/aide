@@ -8,6 +8,9 @@ import ModelStep from "./steps/ModelStep.vue";
 
 const ob = useOnboarding();
 
+// WorkspaceStep 选定文件夹后转发给 App，由 App 调 onSidebarWsChanged 走完整加载
+const emit = defineEmits<{ "workspace-selected": [path: string] }>();
+
 const STEPS: { key: Step; label: string }[] = [
   { key: "welcome", label: "欢迎" },
   { key: "workspace", label: "工作区" },
@@ -44,7 +47,7 @@ function onPrimary() {
 
       <div class="wiz-center">
         <WelcomeStep v-if="ob.step.value === 'welcome'" />
-        <WorkspaceStep v-else-if="ob.step.value === 'workspace'" />
+        <WorkspaceStep v-else-if="ob.step.value === 'workspace'" @selected="emit('workspace-selected', $event)" />
         <LoginStep v-else-if="ob.step.value === 'login'" />
         <ModelStep v-else-if="ob.step.value === 'model'" />
       </div>
