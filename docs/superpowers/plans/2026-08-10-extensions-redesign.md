@@ -115,7 +115,6 @@ describe("builtinHooks registry", () => {
   it("buildBuiltinHooks：codegraphMounted=false 时 codegraphGrep 不进 manifest 也不进 hooks", () => {
     const ctx = { cwd: "/x", env: {}, session: {} as any, codegraphMounted: false };
     const { hooks, manifest } = buildBuiltinHooks(ctx);
-    const preIds = hooks.PreToolUse.map((e: any) => e.hooks[0]).map((_: any) => "fn");
     expect(hooks.PreToolUse.length).toBe(4); // policy + subagentModel + imageGuard + skillGuard（codegraph 不挂）
     expect(manifest.find((m) => m.id === "codegraphGrep")).toBeUndefined();
   });
@@ -1081,13 +1080,11 @@ const item = { id: "x", name: "playwright", type: "mcp_server", enabled: true, p
 describe("McpServerEditor", () => {
   it("stdio 渲染 command/args/env", () => {
     const w = mount(McpServerEditor, { props: { item } });
-    expect(w.find('input[value="npx"]').exists() || w.html()).toContain("npx");
+    expect(w.html()).toContain("npx");
     expect(w.text()).toContain("command");
   });
   it("切到 sse 隐藏 command，显示 url", async () => {
     const w = mount(McpServerEditor, { props: { item } });
-    await w.findAllComponents({ name: "Segmented" }).length; // 或按按钮
-    // 触发传输切换到 sse
     const sseBtn = w.findAll("button").find(b => b.text() === "sse")!;
     await sseBtn.trigger("click");
     expect(w.text()).toContain("url");
@@ -1194,7 +1191,7 @@ describe("HookEditor", () => {
   it("渲染 event 下拉 + matcher + command", () => {
     const w = mount(HookEditor, { props: { item } });
     expect(w.html()).toContain("PostToolUse");
-    expect(w.find("input[value='^Bash$']").exists() || w.html()).toContain("^Bash$");
+    expect(w.html()).toContain("^Bash$");
   });
   it("event 下拉含 4 选项", () => {
     const w = mount(HookEditor, { props: { item } });
