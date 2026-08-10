@@ -1551,12 +1551,10 @@ function onOpenBgDock(taskId: string) {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  /* 关掉浏览器滚动锚定：它把 scrollTop 调整藏在渲染管线里（我们的诊断环看不
-     见），且与「合成器滚动范围失同步」bug 类强相关——2026-08-07 scroll-trail
-     现场：滚轮（合成器路径）被钳在旧内容高度对应的 top≈191、从真底部一滚即
-     被拽回，JS 置底却畅通，起病时刻与流式思考 <details> 自动折叠重合。扩窗
-     锚定（expandOlderAnchored）与钉底（toBottom）全是手写逻辑，对浏览器锚定
-     零依赖；关掉只消除黑盒变量，无功能损失。 */
+  /* overflow-anchor:none 排除浏览器滚动锚定这个黑盒变量（我们的锚定/钉底全是
+     手写逻辑，零依赖）。经验证**未**防住滚轮焊死 bug（现场 2 在本规则生效下仍
+     复发），真正的根治在 useChatScroll 的 onWheel——接管滚轮走 JS 赋值路径，
+     旁路掉合成器滚轮缓存。本规则保留仅为排除变量、无功能损失。 */
   overflow-anchor: none;
   padding: 8px 0;
 }

@@ -5,6 +5,23 @@ import { trail } from "../utils/diagnostics/scrollTrail";
 import type { ChatMessage, TextBlock } from "@/types/chat";
 
 /**
+ * 从 target 向上找第一个用户手势可滚的祖先（overflow-y: auto|scroll）。
+ * 用于 wheel 接管判断：若最近可滚祖先就是对话滚动容器本身，说明滚轮该滚
+ * 对话区、光标下没有需要原生滚动的嵌套块——此时接管（见 useChatScroll 的
+ * onWheel），让滚轮走 JS 赋值路径（实时布局），旁路掉合成器滚轮缓存的焊死
+ * 病根（见 [[nested-scroller-wheel-trap]]）。返回 null = 一路到顶无可滚祖先。
+ */
+export function nearestScrollableAncestor(target: EventTarget | null): Element | null {
+  let el = target as Element | null;
+  for (let hop = 0; el && hop < 12; hop++) {
+    const oy = getComputedStyle(el).overflowY;
+    if (oy === "auto" || oy === "scroll") return el;
+    el = el.parentElement;
+  }
+  return null;
+}
+
+/**
  * 聊天滚动区的主控：把 ChatPanel 里散落的滚动/窗口逻辑收拢成一层，并在
  * useMessageWindow 的"数据窗口"之上叠一层"渲染预算"做分帧挂载。
  *
@@ -138,6 +155,25 @@ export function useChatScroll(
     }
   }
 
+  // ── 滚轮接管 ──────────────────────────────────────────────────────────────
+  // 根因（见 [[nested-scroller-wheel-trap]]，两份 scroll-trail 现场 + 探针复活定案）：
+  // 合成器滚轮路径把 maxScrollOffset 焊死在内容首次溢出视口那一刻的值，之后内容
+  // 增长不刷新；JS 的 scrollTop 赋值走主线程布局读实时 scrollHeight，畅通。所以把
+  // 滚轮也赶到 JS 赋值路径：光标下最近可滚祖先就是本容器时（该滚对话区、无嵌套块
+  // 需要原生滚），preventDefault + 手动 scrollTop += deltaY，彻底旁路缓存。
+  // 取舍：失去 Chromium 合成器滚轮惯性/平滑——聊天滚动不需要。嵌套可滚块（思考块
+  // reading 态、工具卡结果、xterm、DiffViewer 的 cm-scroller）的滚轮 nearestScrollableAncestor
+  // 返回它们而非本容器，放行原生链式，不受影响。deltaMode 非 pixel（触控板 line/page
+  // 模式）暂放行原生——鼠标 wheel 是 pixel 模式，覆盖最常见情况；触控板如复现再加换算。
+  function onWheel(e: WheelEvent) {
+    const el = scrollEl.value;
+    if (!el || e.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return;
+    if (nearestScrollableAncestor(e.target) !== el) return;
+    e.preventDefault();
+    el.scrollTop += e.deltaY;
+    trail("wheelTakeover", `dy=${Math.round(e.deltaY)}→top=${Math.round(el.scrollTop)}`);
+  }
+
   // ── 滚动事件 ──────────────────────────────────────────────────────────────
   // trail 埋点（滚动诊断环）：间歇性滚轮定格的活体采集——每个 scroll 事件留一行
   // 位置+门控状态，定格时与 wheel/write 记录互证。高频但纯内存推送，无布局读取。
@@ -216,6 +252,9 @@ export function useChatScroll(
   // 避免 onMounted 无 active instance 警告；RO 本就依赖 DOM，node 测试无 ResizeObserver）。
   if (getCurrentInstance()) {
     onMounted(() => {
+      // 滚轮接管（见 onWheel）：独立于 RO——RO 在无 ResizeObserver 环境（jsdom）会
+      // 提前 return，但 wheel 监听不依赖 RO，必须无条件挂。
+      scrollEl.value?.addEventListener("wheel", onWheel, { passive: false });
       if (typeof ResizeObserver === "undefined") return;
       contentObserver = new ResizeObserver(() => {
         // 不读尺寸（RO 回调里读 scrollHeight 是热路径强制布局）——只记触发与门控态，
@@ -229,6 +268,7 @@ export function useChatScroll(
     onUnmounted(() => {
       contentObserver?.disconnect();
       contentObserver = null;
+      scrollEl.value?.removeEventListener("wheel", onWheel);
     });
   }
 
