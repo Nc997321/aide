@@ -362,6 +362,9 @@ function handleTextClick(e: MouseEvent) {
 .btw-note-tag {
   font-size: 10px; font-weight: 600; letter-spacing: 0.04em; padding: 1px 6px;
   border-radius: 999px; border: 1px solid var(--aide-accent); color: var(--aide-accent);
+  /* 标签胶囊永不换行、不收缩：含中文 label（如 git-commit 的「Git 提交」)时，
+     flex item 默认 min-width:auto 会收缩到 min-content（latin 词宽），把中文挤成竖排三行。 */
+  white-space: nowrap; flex-shrink: 0;
 }
 .btw-note-q { color: var(--aide-text-secondary); font-size: 12px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .btw-note-body { padding: 2px 12px 9px; font-size: 12px; line-height: 1.6; color: var(--aide-text-secondary); border-top: 1px dashed var(--aide-border); }
