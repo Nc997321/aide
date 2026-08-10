@@ -3,6 +3,14 @@ import { SessionManager } from "./session-manager.js";
 import { ensureWindowsBashEnv } from "./winBashEnv.js";
 import { ensureCodegraphSkill } from "./codegraphSkill.js";
 
+// test-mcp 子命令：探活 MCP server。被 Rust test_mcp_connection spawn 调用
+// （agent-runtime test-mcp <config-json>）。最早分支，跳过会话初始化，输出 JSON 退出。
+if (process.argv[2] === "test-mcp") {
+  const { runTestMcp } = await import("./testMcp.js");
+  await runTestMcp(process.argv[3] ?? "{}");
+  process.exit(0);
+}
+
 // Windows：给 Bash 工具的非交互 bash 注入 BASH_ENV（chcp 65001），
 // 让 Windows 原生 CLI 输出 UTF-8，防 GBK 乱码。内建于 runtime，免用户配置。
 ensureWindowsBashEnv(process.env);
