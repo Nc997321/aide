@@ -129,7 +129,7 @@ const gridTemplateColumns = computed(() => {
 // ── 左侧栏 QQ 式自动隐藏（钉子未固定时）──
 // 默认完全隐藏；贴左边缘 6px 热区滑出（overlay 覆盖内容，不推布局）；
 // 移开延迟收回。钉子固定后回到常驻 dock（上方 grid 轨道恢复）。
-const leftPinned = computed(() => settings.leftSidebarPinned ?? false);
+const leftPinned = computed(() => settings.leftSidebarPinned ?? true);
 const leftOverlayOpen = ref(false);
 let leftShowTimer: ReturnType<typeof setTimeout> | null = null;
 let leftHideTimer: ReturnType<typeof setTimeout> | null = null;

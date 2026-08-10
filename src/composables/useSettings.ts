@@ -31,7 +31,7 @@ const defaults: AppSettings = {
   },
   jdkRegistry: [],
   jdkPromptDismissed: [],
-  leftSidebarPinned: false,
+  leftSidebarPinned: true,
   editor: { indentSize: 4 },
 };
 
