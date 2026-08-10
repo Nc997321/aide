@@ -1,0 +1,1 @@
+<template><div class="step-stub">model</div></template>

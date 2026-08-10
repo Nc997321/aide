@@ -8,6 +8,7 @@ import ModalDialog from "./components/ModalDialog.vue";
 import { defineAsyncComponent } from "vue";
 const FileViewer = defineAsyncComponent(() => import("./components/FileViewer.vue"));
 const SettingsPanel = defineAsyncComponent(() => import("./components/SettingsPanel.vue"));
+const OnboardingWizard = defineAsyncComponent(() => import("./components/onboarding/OnboardingWizard.vue"));
 const RunConfigsDialog = defineAsyncComponent(() => import("./components/RunConfigsDialog.vue"));
 import PaneLayout from "./components/PaneLayout.vue";
 import { useChatSession, isPendingSession } from "./composables/useChatSession";
@@ -1021,6 +1022,7 @@ onUnmounted(() => {
         @confirm="onRemoveWorkspaceConfirm"
       />
       <SettingsPanel v-if="settingsVisible" :initial-tab="settingsInitialTab" @close="settingsVisible = false" />
+      <OnboardingWizard v-if="onboarding.visible.value" />
       <RunConfigsDialog
         v-if="runConfigsDialogVisible"
         @close="runConfigsDialogVisible = false"
