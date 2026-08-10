@@ -100,6 +100,11 @@ export function getSkillContent(id: string): Promise<string> {
   return invoke<string>('get_skill_content', { id });
 }
 
+/** 读取 agent 的 .md 全文（frontmatter + 正文）。 */
+export function getAgentContent(id: string): Promise<string> {
+  return invoke<string>('get_agent_content', { id });
+}
+
 export const skillScriptApi = {
   read: (skillId: string, filename: string) =>
     invoke<string>('read_skill_script', { skillId, filename }),

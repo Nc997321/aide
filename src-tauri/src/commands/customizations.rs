@@ -134,6 +134,16 @@ pub fn get_agent(id: String) -> Result<CustomizationItem, String> {
     })
 }
 
+/// 读取 agent 的 .md 全文（frontmatter + 正文）。
+#[tauri::command]
+pub async fn get_agent_content(id: String) -> Result<String, String> {
+    let path = agents_dir().join(format!("{}.md", id));
+    if !path.exists() {
+        return Err(format!("Agent '{}' not found", id));
+    }
+    fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn create_agent(data: serde_json::Value) -> Result<CustomizationItem, String> {
     let _trace = crate::diagnostics::trace_command("create_agent");
@@ -169,6 +179,12 @@ pub fn update_agent(id: String, data: serde_json::Value) -> Result<(), String> {
     let path = agents_dir().join(format!("{}.md", id));
     if !path.exists() {
         return Err(format!("Agent '{}' not found", id));
+    }
+
+    // 正文 tab：data.content 存在时全文覆盖 agent.md。
+    if let Some(full) = data["content"].as_str() {
+        fs::write(&path, full).map_err(|e| format!("Failed to update agent: {}", e))?;
+        return Ok(());
     }
 
     let mut content = fs::read_to_string(&path).map_err(|e| e.to_string())?;

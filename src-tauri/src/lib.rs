@@ -312,6 +312,7 @@ pub fn run() {
             commands::customizations::delete_skill,
             commands::customizations::toggle_skill,
             commands::customizations::get_skill_content,
+            commands::customizations::get_agent_content,
             commands::customizations::list_instructions,
             commands::customizations::get_global_instructions,
             commands::customizations::save_global_instructions,
