@@ -17,6 +17,12 @@ vi.mock("../../composables/useOnboarding", () => ({
   useOnboarding: () => obMock,
 }));
 
+// AppLogo 导入 /icon.png 在 vitest 下解析为 file:///icon.png 会抛错（真 Vite 构建无此问题），
+// 向导测试只验 chrome 不验 step 内容，mock 掉 AppLogo 隔离资源导入。
+vi.mock("../AppLogo.vue", () => ({
+  default: { name: "AppLogo", template: "<div class='logo-stub'></div>" },
+}));
+
 import OnboardingWizard from "./OnboardingWizard.vue";
 
 function mountWizard() {
