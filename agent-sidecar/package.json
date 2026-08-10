@@ -9,7 +9,9 @@
     "build:mac": "bun build --compile dist/runtime.js --outfile dist/aide-agent",
     "build:bin": "node -e \"const{execSync:e}=require('child_process');e(process.platform==='win32'?'bun build --compile dist/runtime.js --outfile dist/aide-agent.exe --windows-icon=../src-tauri/icons/icon.ico --windows-title=Aide-Agent --windows-publisher=Aide --windows-version=0.8.0.0 --windows-description=Aide-Agent-Runtime':'bun build --compile dist/runtime.js --outfile dist/aide-agent',{stdio:'inherit'})\"",
     "dev": "npx tsx src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.197",
@@ -20,6 +22,7 @@
     "@types/node": "^18.19.130",
     "esbuild": "^0.25.0",
     "tsx": "^4.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.9"
   }
 }

@@ -13,9 +13,9 @@ import { generateSessionTitle } from "./titleGenerator.js";
 import { applyModelSwitch } from "./modelSwitch.js";
 import { applyEffortSwitch, normalizeEffort } from "./effortSwitch.js";
 import type { EffortSettable } from "./effortSwitch.js";
-import { cliSubagentModelEnvValue, makeSubagentModelHook } from "./subagentModelDefault.js";
-import { makeSkillGuardHook } from "./skillGuard.js";
+import { cliSubagentModelEnvValue } from "./subagentModelDefault.js";
 import { codegraphMcpRegistration, CODEGRAPH_ALLOW_RULE, makeCodegraphGrepNudgeHook } from "./codegraphTools.js";
+import { buildBuiltinHooks } from "./builtinHooks/index.js";
 import { cancelAllCodegraphQueries } from "./codegraphClient.js";
 import {
   ImageInputCapabilityCache,
@@ -893,11 +893,6 @@ export class SessionWorker {
           delete cliEnv.CLAUDE_CODE_EFFORT_LEVEL;
           cliEnv.CLAUDE_CODE_SUBAGENT_MODEL = cliSubagentModelEnvValue(process.env);
 
-          const subagentModelHook = makeSubagentModelHook(process.env);
-          // 子代理重型 skill 守卫：子代理上下文里拦截名单内重型 skill（默认 claude-api），
-          // 防 fan-out × 逐轮重发撑爆 input。返回 null（关闭/名单空）则不注册。
-          const skillGuardHook = makeSkillGuardHook(process.env);
-
           // codegraph agent 工具：默认注册（AIDE_CODEGRAPH_TOOLS=off 关闭）。
           // handler 闭包持有本会话的 emit（经 DeltaCoalescer，红线）与 cwd。
           // btw 任务支线(taskTools,全新会话)跳过:任务用不上代码索引,前缀最小化。
@@ -921,9 +916,15 @@ export class SessionWorker {
             process.env.CLAUDE_CONFIG_DIR ?? "",
             trusted,
           );
-          // Aide 权限策略 hook：排在所有其它 PreToolUse hook 之前（含图片守卫），
-          // allowDangerouslySkipPermissions 也不绕过——matcher ".*" 对每个工具都触发。
-          const policyHook = this.makePolicyHook(effectiveCwd);
+          // 内建 hooks 统一走 builtinHooks 注册表：policy 恒为 PreToolUse[0]
+          // （权威前置层，用户 hook 不可越过），subagentModel/skillGuard/codegraphGrep
+          // 按条件挂载。builtinHookManifest 经清单通道回传前端（Task 3 接线）。
+          const { hooks: builtinHooks, manifest: builtinHookManifest } = buildBuiltinHooks({
+            cwd: effectiveCwd,
+            env: process.env,
+            session: this as any, // makePolicyHook/makeImageGuardHook/makeStopEffortHook 是 private 方法，这里同类访问
+            codegraphMounted: !!codegraphMcp,
+          });
 
           const q = this.queryFn({
             prompt: this.queue[Symbol.asyncIterator](),
@@ -951,27 +952,7 @@ export class SessionWorker {
               plugins: this.taskTools
                 ? []
                 : [...buildPluginsOption(), ...buildDispatchPluginsOption(effectiveCwd, trusted, this.lightweightMode)],
-              hooks: {
-                PreToolUse: [
-                  // Aide 权限策略是权威前置层，必须最先评估。
-                  { matcher: ".*", hooks: [policyHook] },
-                  ...(subagentModelHook
-                    ? [{ matcher: "^(Agent|Task)$", hooks: [subagentModelHook] }]
-                    : []),
-                  // 图片 Read 守卫：canUseTool 对只读工具不触发，必须用 hook。
-                  { matcher: "^Read$", hooks: [this.makeImageGuardHook()] },
-                  ...(skillGuardHook
-                    ? [{ matcher: "^Skill$", hooks: [skillGuardHook] }]
-                    : []),
-                  // codegraph Grep 纠偏：符号状 pattern 时注入「先用索引工具」提示。
-                  // 与 MCP 注册同生同灭（AIDE_CODEGRAPH_TOOLS=off 时不挂）。
-                  ...(codegraphMcp
-                    ? [{ matcher: "^Grep$", hooks: [makeCodegraphGrepNudgeHook()] }]
-                    : []),
-                ],
-                // 回合结束读本轮实际 effort（含静默降级）→ emit 盖到 message_stop 上。
-                Stop: [{ hooks: [this.makeStopEffortHook()] }],
-              },
+              hooks: builtinHooks,
               ...(codegraphMcp ? { mcpServers: codegraphMcp as any } : {}),
               // 主会话开 partial：让 thinking_delta 逐字流式（mapper 只放 thinking_delta，
               // text 仍走整块，避开历史 partial 卡死坑，见 2026-08-07-thinking-streaming-design）。
