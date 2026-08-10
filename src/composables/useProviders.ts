@@ -176,6 +176,11 @@ async function saveSystemDefaultMappings(mappings: ProviderModelMappings): Promi
   await updateProvider(SYSTEM_DEFAULT_ID, { modelMappings: mappings });
 }
 
+/** 保存 SystemDefault（Anthropic 官方直连）的 API key 到 keyring。引导登录步 + 上下文兜底用。 */
+async function saveSystemDefaultApiKey(key: string): Promise<void> {
+  await updateProvider(SYSTEM_DEFAULT_ID, {}, { apiKey: { action: "set", value: key } });
+}
+
 async function refreshSystemDefaultModels(): Promise<void> {
   refreshing.value = true;
   try {
@@ -213,6 +218,7 @@ export function useProviders() {
     deleteProvider,
     setActiveProvider,
     saveSystemDefaultMappings,
+    saveSystemDefaultApiKey,
     refreshSystemDefaultModels,
     refreshing,
     SYSTEM_DEFAULT_ID,

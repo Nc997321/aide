@@ -317,6 +317,10 @@ export const api = {
   refreshModels(providerId: string): Promise<ProviderModelMappings> {
     return invoke("refresh_models", { providerId });
   },
+  /** ~/.aide/claude/.credentials.json 是否存在（claude.exe OAuth 登录后写入）。 */
+  claudeCredentialsExist(): Promise<boolean> {
+    return invoke("claude_credentials_exist");
+  },
 
   // 工作区
   listWorkspaces(): Promise<WorkspaceInfo[]> {
