@@ -620,6 +620,74 @@ describe("useChatSession per-session store", () => {
     expect(chat.contextCompaction.value).toMatchObject({ stage: "compacting" });
   });
 
+  it("排队消息在工具跑完（jump_promoted）前不渲染成对话气泡，只显示待发出提示条", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+
+    // 第一条消息：会话进入忙碌（dispatchSend 设 isBusy=true）
+    await chat.sendMessage("q");
+    emit({ type: "text_delta", delta: "回复中", session_id: "uuid-a" });
+    await flush();
+    expect(chat.isBusy.value).toBe(true);
+
+    // 工具还在跑（isBusy 仍 true）时排队下一条
+    await chat.sendMessage("排队消息");
+
+    // 排队消息不应立即渲染成对话气泡——只该出现在"待发出"提示条里
+    const userMsgs = chat.messages.value.filter((m) => m.role === "user");
+    expect(userMsgs.length).toBe(1);
+    expect(chat.pendingJumps.value.length).toBe(1);
+    expect(chat.pendingJumps.value[0].text).toBe("排队消息");
+
+    // 工具跑完，sidecar 到达安全边界接入排队消息
+    emit({ type: "jump_promoted", session_id: "uuid-a" });
+    await flush();
+
+    // 此时排队消息才落成对话气泡，提示条清空
+    const userMsgsAfter = chat.messages.value.filter((m) => m.role === "user");
+    expect(userMsgsAfter.length).toBe(2);
+    const lastUser = userMsgsAfter[1];
+    expect(
+      lastUser.blocks.some((b) => b.type === "text" && (b as { text: string }).text === "排队消息"),
+    ).toBe(true);
+    expect(chat.pendingJumps.value.length).toBe(0);
+  });
+
+  it("多条排队逐条暂存，jump_queued 不重复入队，jump_promoted 一次全部 flush", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    emit({ type: "text_delta", delta: "回复中", session_id: "uuid-a" });
+    await flush();
+
+    // 工具持续在跑：连续排队两条
+    await chat.sendMessage("排队1");
+    await chat.sendMessage("排队2");
+    // dispatchSend 每条暂存一次，提示条 2 项；用户气泡仍只有第一条 q
+    expect(chat.pendingJumps.value.length).toBe(2);
+    expect(chat.pendingJumps.value.map((j) => j.text)).toEqual(["排队1", "排队2"]);
+    expect(chat.messages.value.filter((m) => m.role === "user").length).toBe(1);
+
+    // sidecar 逐条回 jump_queued 确认——不能让提示条重复成 4 项
+    emit({ type: "jump_queued", prompt: "排队1", session_id: "uuid-a" });
+    emit({ type: "jump_queued", prompt: "排队2", session_id: "uuid-a" });
+    await flush();
+    expect(chat.pendingJumps.value.length).toBe(2);
+
+    // 工具跑完，一次 flush 全部成用户气泡，顺序保留
+    emit({ type: "jump_promoted", session_id: "uuid-a" });
+    await flush();
+    const userMsgs = chat.messages.value.filter((m) => m.role === "user");
+    expect(userMsgs.length).toBe(3);
+    const texts = userMsgs.map(
+      (m) => (m.blocks.find((b) => b.type === "text") as { text: string } | undefined)?.text,
+    );
+    expect(texts).toEqual(["q", "排队1", "排队2"]);
+    expect(chat.pendingJumps.value.length).toBe(0);
+  });
+
   it("message_stop 带 usage 时挂到最后一条 assistant 消息", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);

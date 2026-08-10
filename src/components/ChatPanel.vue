@@ -27,7 +27,7 @@ import { peekFileClipboard, clearFileClipboard } from "@/composables/useFileClip
 import { useInlineMention } from "@/composables/useInlineMention";
 import { useMentionInserter } from "@/composables/useMentionInserter";
 import { getFileIcon, pathBasename, FOLDER_ICON_PATH } from "@/utils/fileIcons";
-import type { ImageAttachment, SendOptions } from "@/composables/useChatSession";
+import type { ImageAttachment, PendingJump, SendOptions } from "@/composables/useChatSession";
 import { useChatScroll } from "@/composables/useChatScroll";
 import { useProviders } from "@/composables/useProviders";
 import { useSessionProviders } from "@/composables/useSessionProviders";
@@ -65,8 +65,8 @@ const props = defineProps<{
   tasks?: TaskItem[];
   permissionModes?: PermissionModeOption[];
   currentPermissionMode?: string;
-  /** 忙碌时插队、正在 sidecar 里等安全边界的消息原文（顺序即发出顺序） */
-  pendingJumps?: string[];
+  /** 忙碌时排队、正在 sidecar 里等安全边界的消息（顺序即发出顺序）；jump_promoted 后清空 */
+  pendingJumps?: PendingJump[];
   /** 后台 shell 任务列表 + dock 开合状态（useChatSession store 透传） */
   bgTasks?: BgTask[];
   bgDockOpen?: boolean;
@@ -1072,7 +1072,7 @@ async function handleDrop(e: DragEvent) {
   if (entry) clearFileClipboard();
 }
 
-/** 忙碌时发送 = 插队：不排队，交给 sidecar 在安全边界（当前工具调用跑完）
+/** 忙碌时发送 = 排队：不排队，交给 sidecar 在安全边界（当前工具调用跑完）
  *  打断当前这轮再发出——见 useChatSession.sendMessage 的注释。
  *
  *  重入守卫 sending：发图时 checkImageInputSupport 会做一次真实 LLM 往返探测
@@ -1099,7 +1099,7 @@ async function performSend() {
   const mentionPrefix = pendingMentions.value.length
     ? pendingMentions.value.map((m) => "@" + m.path).join(" ") + " "
     : "";
-  // 忙碌时不再拦截：useChatSession 会带插队标记透传，sidecar 在安全边界续发
+  // 忙碌时不再拦截：useChatSession 会带排队标记透传，sidecar 在安全边界续发
   if (!text && !hasImages && !mentionPrefix) return;
 
   // 只在有图片时预检；明确不支持则保留输入和附件，未知/临时失败交给 sidecar 二次防线。
@@ -1357,12 +1357,12 @@ function onOpenBgDock(taskId: string) {
       </div>
       <!-- 输入框、图片缩略图、模型工具栏放进同一个带边框的盒子里，工具栏焊在底部——
            不再是"模型栏单独一行浮在输入框上方"，避免贴图片时模型栏被顶得到处跑。 -->
-      <!-- 忙碌时插队、正在等安全边界（当前工具跑完）的消息：sidecar 已登记，不可撤回 -->
+      <!-- 忙碌时排队、正在等安全边界（当前回合结束）的消息：sidecar 已登记，不可撤回 -->
       <div v-if="pendingJumps?.length" class="jump-strip">
         <div v-for="(p, i) in pendingJumps" :key="i" class="jump-item">
-          <span class="jump-item-tag">插队</span>
-          <span class="jump-item-text">{{ p }}</span>
-          <span class="jump-item-hint">等当前工具跑完发出</span>
+          <span class="jump-item-tag">排队</span>
+          <span class="jump-item-text">{{ p.text }}</span>
+          <span class="jump-item-hint">等当前回合结束发出</span>
         </div>
       </div>
       <!-- 最小化后支线仍在后台跑:浮一个可点开重展抽屉的小标(done 后结论已进批注,不再浮) -->

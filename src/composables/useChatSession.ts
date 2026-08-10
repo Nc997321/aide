@@ -107,6 +107,16 @@ interface QueuedSend {
   action?: { id: string; label: string; icon?: string };
 }
 
+/** 排队消息的待渲染快照——忙碌排队时不立即落成对话气泡，只暂存到这里并在输入区
+ *  上方显示"待发出"提示条；等 sidecar 到达安全边界（当前工具跑完）发回
+ *  jump_promoted 时，再 flush 成真正的用户气泡。text 是提示条显示文本（与用户气泡
+ *  标题一致：action.label 优先，否则 prompt），blocks 是气泡渲染数据（与直发
+ *  dispatchSend 同构，jump_promoted 时原样 push 进 messages）。 */
+export interface PendingJump {
+  text: string;
+  blocks: (ImageBlock | TextBlock | ToolCallBlock | ActionBlock)[];
+}
+
 interface SessionStore {
   messages: ChatMessage[];
   isBusy: boolean;
@@ -151,9 +161,10 @@ interface SessionStore {
   /** SDK 权威 slash commands 清单；null 表示本会话还没收到过（会话未开始，
    *  或 provider 不支持该概念）。一旦非 null，下拉框数据源单向切换，不回退。 */
   slashCommands: string[] | null;
-  /** 已派发、正在 sidecar 里等安全边界（当前工具跑完）的插队消息原文——
-   *  仅展示用（输入区上方的"待发出"提示条），jump_promoted 后清空。 */
-  pendingJumps: string[];
+  /** 已派发、正在 sidecar 里等安全边界（当前工具跑完）的排队消息——忙碌排队时
+   *  dispatchSend 不立即渲染成对话气泡，只暂存到这里，输入区上方显示"待发出"
+   *  提示条；jump_promoted 时 flush 成用户气泡并清空。 */
+  pendingJumps: PendingJump[];
 }
 
 // ── 模块级单例状态 ─────────────────────────────────────────────────────────
@@ -438,7 +449,7 @@ function dispatchSend(
   initialEffort?: string,
 ) {
   const store = getStore(sid);
-  // 新轮次不能继承前一轮的压缩提示；但忙碌时这里仅登记插队消息，当前轮
+  // 新轮次不能继承前一轮的压缩提示；但忙碌时这里仅登记排队消息，当前轮
   // 仍在压缩，不能提前撤掉它的状态条。真正接入下一轮时由 jump_promoted 清理。
   if (!jumpQueue) store.contextCompaction = null;
   store.isBusy = true;
@@ -481,13 +492,21 @@ function dispatchSend(
           isPending: false,
         })),
       ];
-  finishStreaming(store); // 上一条 assistant 不再续写
-  store.messages.push({
-    id: crypto.randomUUID(),
-    role: "user",
-    blocks,
-    timestamp: Date.now(),
-  });
+  if (jumpQueue) {
+    // 排队：当前轮还在跑（工具/生成中），消息要等安全边界（当前工具跑完）由
+    // sidecar 接入。不立即落成对话气泡——只暂存到 pendingJumps，输入区上方显示
+    // "待发出"提示条，jump_promoted 时再 flush。也不调 finishStreaming：当前
+    // assistant 仍在流式，提前收尾会让工具结果/后续文本错位新建到用户气泡之后。
+    store.pendingJumps.push({ text: lastDispatchedPrompt[sid], blocks });
+  } else {
+    finishStreaming(store); // 上一条 assistant 不再续写
+    store.messages.push({
+      id: crypto.randomUUID(),
+      role: "user",
+      blocks,
+      timestamp: Date.now(),
+    });
+  }
 
   const sendText = item.mentions?.sendText ?? item.prompt;
   // 混合 tab：会话可能归属别的工作区，sidecar 必须在它自己的项目目录里跑。
@@ -507,7 +526,7 @@ function dispatchSend(
     initialEffort: initialEffort || null,
     // 每条消息都带当前选中的权限模式，sidecar 侧幂等（同值跳过）
     permissionMode: item.permissionMode || null,
-    // 插队：不在这里打断，原样透传给 sidecar，由它在安全边界（当前工具调用
+    // 排队：不在这里打断，原样透传给 sidecar，由它在安全边界（当前工具调用
     // 跑完）自己决定何时真正 interrupt——见 jumpQueue 分支的调用处。
     jumpQueue: jumpQueue || null,
   }).catch((e) => {
@@ -889,14 +908,26 @@ function handleChatEvent(e: Record<string, unknown>) {
       break;
     }
     case "jump_queued": {
-      // 插队消息已登记、在等安全边界——输入区上方显示"待发出"提示条
-      store.pendingJumps.push(e["prompt"] as string);
+      // dispatchSend 在忙碌排队时已把消息暂存进 pendingJumps 并显示提示条——
+      // sidecar 此处回传仅作确认（工具在跑、需等安全边界），不再重复 push，否则
+      // 提示条会重复出现两条。工具空闲路径不发此事件，直接走 jump_promoted。
       break;
     }
     case "jump_promoted": {
-      // 待插队消息已全部接入后续轮次——清提示条。新轮次由 sidecar 直接发起、不经过
-      // dispatchSend，这里把忙碌态补回来（否则按钮区会闪"发送"且没有停止按钮）。
-      // 上一轮若留下失败说明，也不能覆盖已经开始的下一轮。
+      // 安全边界到达：把暂存的排队消息 flush 成用户气泡（追加在当前 assistant 之后），
+      // 清提示条。新轮次由 sidecar 直接发起、不经过 dispatchSend，这里把忙碌态补回来
+      // （否则按钮区会闪"发送"且没有停止按钮）。上一轮若留下失败说明，也不能覆盖
+      // 已经开始的下一轮。finishStreaming 收尾上一轮 assistant（工具跑完/被 interrupt
+      // 时可能仍在 streaming），保证用户气泡插在其后、新轮 assistant 输出再新建。
+      finishStreaming(store);
+      for (const jump of store.pendingJumps) {
+        store.messages.push({
+          id: crypto.randomUUID(),
+          role: "user",
+          blocks: jump.blocks,
+          timestamp: Date.now(),
+        });
+      }
       store.pendingJumps.length = 0;
       store.contextCompaction = null;
       store.isBusy = true;
@@ -1090,7 +1121,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
    * "创建会话"（写元数据 / 加侧栏 / 记最近访问）推迟到 SDK 用 session_init 确认
    * 真实 id 之后才发生，见 finalizeSession。
    *
-   * 会话忙碌（上一轮还在生成）时一律走插队：带 jumpQueue 标记透传给 sidecar，
+   * 会话忙碌（上一轮还在生成）时一律走排队：带 jumpQueue 标记透传给 sidecar，
    * 由它在安全边界（当前工具调用跑完，没有工具在跑就是立刻）interrupt 当前轮
    * 再发出——不在前端 interrupt_session，那会腰斩还没跑完的工具调用。等待安全
    * 边界期间 sidecar 会发 jump_queued，输入区上方显示"待发出"提示条。
@@ -1115,7 +1146,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       permissionMode: opts.permissionMode,
       action: opts.action,
     };
-    // 忙碌一律插队：sidecar 在安全边界（当前工具跑完）interrupt 后优先发出。
+    // 忙碌一律排队：sidecar 在安全边界（当前工具跑完）interrupt 后优先发出。
     const jumpQueue = store.isBusy || undefined;
 
     // resume：显式传入 > 已被 SDK 确认的 id 本身（aide id 就是 sdk id，无需查表）
@@ -1123,7 +1154,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
 
     // 即将 spawn（会话不存活：新会话 / stop 后续发 / 重开历史）→ 给这次会话盖戳
     // 当前全局 active provider，让模型下拉在存活期间锁定它，全局切换不影响。
-    // 与 Rust `!has_session` 对齐：busy（含插队）= 存活 → 不盖戳，沿用旧绑定。
+    // 与 Rust `!has_session` 对齐：busy（含排队）= 存活 → 不盖戳，沿用旧绑定。
     const status = sessionState[sid];
     if (!status || status === "stopped") {
       setProvider(sid, activeProviderId.value);
@@ -1164,7 +1195,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       store.isBusy = false;
       store.contextCompaction = null;
       store.pendingPermissions = [];
-      store.pendingJumps.length = 0; // 用户主动打断：待插队消息一并作废（sidecar 同）
+      store.pendingJumps.length = 0; // 用户主动打断：待排队消息一并作废（sidecar 同）
       finishStreaming(store);
       setSessionState(sid, "waiting"); // sidecar 仍存活
     }
