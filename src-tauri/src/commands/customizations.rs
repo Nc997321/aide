@@ -732,62 +732,100 @@ pub fn list_mcp_servers() -> Result<Vec<CustomizationItem>, String> {
     Ok(items)
 }
 
-#[tauri::command]
-pub fn create_mcp_server(data: serde_json::Value) -> Result<CustomizationItem, String> {
-    let _trace = crate::diagnostics::trace_command("create_mcp_server");
-    let name = data["name"].as_str().unwrap_or("unnamed");
-    let command = data["command"].as_str().unwrap_or("");
-    let args = data["args"].clone();
-    let env = data["env"].clone();
+/// 从前端 data 构造写入 settings.json 的 mcpServer config。
+/// 剥离前端 UI 字段（transport/disabled/name），保留 SDK 认的传输字段
+/// （stdio: command/args/env；sse/http: url/headers）。跳过 null 与空 env/args。
+fn build_mcp_config(data: &serde_json::Value) -> serde_json::Value {
+    let mut cfg = serde_json::Map::new();
+    if let Some(obj) = data.as_object() {
+        for (k, v) in obj {
+            if k == "name" || k == "transport" || k == "disabled" {
+                continue;
+            }
+            if v.is_null() {
+                continue;
+            }
+            if k == "env" {
+                if let Some(e) = v.as_object() {
+                    if e.is_empty() {
+                        continue;
+                    }
+                }
+            }
+            if k == "args" {
+                if let Some(a) = v.as_array() {
+                    if a.is_empty() {
+                        continue;
+                    }
+                }
+            }
+            cfg.insert(k.clone(), v.clone());
+        }
+    }
+    serde_json::Value::Object(cfg)
+}
 
+/// 生成列表展示用的描述文本：stdio 显 command+args，sse/http 显 type+url。
+fn describe_mcp(cfg: &serde_json::Value) -> String {
+    if let Some(c) = cfg.get("command").and_then(|v| v.as_str()) {
+        let args = cfg
+            .get("args")
+            .and_then(|a| a.as_array())
+            .map(|v| {
+                v.iter()
+                    .filter_map(|x| x.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+        format!("{} {}", c, args)
+    } else if let Some(u) = cfg.get("url").and_then(|v| v.as_str()) {
+        let t = if cfg.get("headers").is_some() { "http" } else { "sse" };
+        format!("{} {}", t, u)
+    } else {
+        String::new()
+    }
+}
+
+#[tauri::command]
+pub async fn create_mcp_server(data: serde_json::Value) -> Result<CustomizationItem, String> {
+    let name = data["name"].as_str().unwrap_or("unnamed").to_string();
+    let cfg = build_mcp_config(&data);
     let mut settings = load_settings();
-    let mcp_servers = settings
+    settings
         .as_object_mut()
         .unwrap()
         .entry("mcpServers")
         .or_insert_with(|| serde_json::json!({}));
-
-    mcp_servers[name] = serde_json::json!({
-        "command": command,
-        "args": args,
-        "env": env
-    });
-
+    settings["mcpServers"][name.as_str()] = cfg.clone();
     save_settings(&settings)?;
 
     Ok(CustomizationItem {
-        id: name.to_string(),
-        name: name.to_string(),
+        id: name.clone(),
+        name,
         r#type: "mcp_server".to_string(),
         enabled: true,
         path: settings_path().to_string_lossy().to_string(),
-        description: Some(format!("{} {}", command, args.as_str().unwrap_or(""))),
-        metadata: Some(serde_json::json!({ "command": command, "args": args, "env": env })),
+        description: Some(describe_mcp(&cfg)),
+        metadata: Some(cfg),
     })
 }
 
 #[tauri::command]
-pub fn update_mcp_server(id: String, data: serde_json::Value) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("update_mcp_server");
+pub async fn update_mcp_server(id: String, data: serde_json::Value) -> Result<(), String> {
+    let cfg = build_mcp_config(&data);
     let mut settings = load_settings();
-    let mcp_servers = settings
-        .as_object_mut()
-        .unwrap()
-        .entry("mcpServers")
-        .or_insert_with(|| serde_json::json!({}));
-
-    if let Some(config) = mcp_servers.get_mut(&id) {
-        if let Some(command) = data["command"].as_str() {
-            config["command"] = serde_json::json!(command);
+    if let Some(servers) = settings.get_mut("mcpServers").and_then(|v| v.as_object_mut()) {
+        // 保留原 disabled 状态（toggle 单独管），其余整体替换为前端透传的 config。
+        let disabled = servers.get(&id).and_then(|c| c.get("disabled")).cloned();
+        let mut new_cfg = cfg;
+        if let Some(d) = disabled {
+            if let Some(obj) = new_cfg.as_object_mut() {
+                obj.insert("disabled".into(), d);
+            }
         }
-        if let Some(args) = data["args"].as_array() {
-            config["args"] = serde_json::json!(args);
-        }
-        if let Some(env) = data["env"].as_object() {
-            config["env"] = serde_json::json!(env);
-        }
+        servers.insert(id, new_cfg);
     }
-
     save_settings(&settings)
 }
 
@@ -876,4 +914,56 @@ fn update_frontmatter_field(content: &str, field: &str, value: &str) -> String {
         }
     }
     content.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_mcp_config_stdio() {
+        let data = serde_json::json!({ "transport": "stdio", "command": "npx", "args": ["-y", "srv"], "env": {} });
+        let cfg = build_mcp_config(&data);
+        assert_eq!(cfg["command"], "npx");
+        assert!(cfg["args"].is_array());
+        assert!(!cfg.as_object().unwrap().contains_key("disabled"));
+        assert!(!cfg.as_object().unwrap().contains_key("transport"));
+        assert!(!cfg.as_object().unwrap().contains_key("env")); // 空 env 跳过
+    }
+
+    #[test]
+    fn build_mcp_config_sse_strips_transport() {
+        let data = serde_json::json!({ "transport": "sse", "url": "http://x/sse" });
+        let cfg = build_mcp_config(&data);
+        assert_eq!(cfg["url"], "http://x/sse");
+        assert!(!cfg.as_object().unwrap().contains_key("transport"));
+    }
+
+    #[test]
+    fn build_mcp_config_http() {
+        let data = serde_json::json!({ "transport": "http", "url": "http://x/mcp", "headers": { "Authorization": "Bearer k" } });
+        let cfg = build_mcp_config(&data);
+        assert_eq!(cfg["url"], "http://x/mcp");
+        assert_eq!(cfg["headers"]["Authorization"], "Bearer k");
+    }
+
+    #[test]
+    fn build_mcp_config_strips_name_and_disabled() {
+        let data = serde_json::json!({ "name": "x", "disabled": true, "command": "npx", "args": ["a"] });
+        let cfg = build_mcp_config(&data);
+        assert!(!cfg.as_object().unwrap().contains_key("name"));
+        assert!(!cfg.as_object().unwrap().contains_key("disabled"));
+        assert_eq!(cfg["command"], "npx");
+    }
+
+    #[test]
+    fn describe_mcp_stdio_and_url() {
+        let stdio = serde_json::json!({ "command": "npx", "args": ["-y", "srv"] });
+        assert_eq!(describe_mcp(&stdio), "npx -y srv");
+        let sse = serde_json::json!({ "type": "sse", "url": "http://x/sse" });
+        assert_eq!(describe_mcp(&sse), "sse http://x/sse");
+        let http = serde_json::json!({ "url": "http://x/mcp", "headers": { "Authorization": "k" } });
+        assert_eq!(describe_mcp(&http), "http http://x/mcp");
+        assert_eq!(describe_mcp(&serde_json::json!({})), "");
+    }
 }
