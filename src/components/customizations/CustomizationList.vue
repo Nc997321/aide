@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { CustomizationType, CustomizationItem } from "../../types/customization";
-import { CUSTOMIZATION_CATEGORIES, builtinHooks } from "../../composables/useCustomizations";
+import { CUSTOMIZATION_CATEGORIES, builtinHooks, builtinMcpServers } from "../../composables/useCustomizations";
 import { useModal } from "../../composables/useModal";
 import Icon from "../Icon.vue";
 
@@ -57,6 +57,23 @@ function sourceLabel(s: NonNullable<CustomizationItem["source"]>): string {
           <div class="item-info">
             <div class="item-name">{{ b.id }}</div>
             <div class="item-meta">{{ b.event }} · {{ b.matcher || '—' }} · {{ b.purpose }}</div>
+          </div>
+          <span class="src-badge src-builtin">内置</span>
+          <span class="lock-mark">🔒</span>
+        </div>
+      </div>
+
+      <!-- MCP 内置只读区（codegraph in-process，不写 settings.json） -->
+      <div v-else-if="type === 'mcp_server' && builtinMcpServers.length > 0" class="builtin-section">
+        <div class="section-label">内置（只读 · in-process）</div>
+        <div
+          v-for="m in builtinMcpServers"
+          :key="m.id"
+          class="list-item builtin-item"
+        >
+          <div class="item-info">
+            <div class="item-name">{{ m.id }}</div>
+            <div class="item-meta">{{ m.transport }} · {{ m.purpose }}</div>
           </div>
           <span class="src-badge src-builtin">内置</span>
           <span class="lock-mark">🔒</span>
