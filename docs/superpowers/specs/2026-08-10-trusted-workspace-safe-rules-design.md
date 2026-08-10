@@ -14,7 +14,7 @@
 |---|---|
 | 触发 | 恒开：信任工作区即写入，无开关 |
 | 回填 | 只对新信任的工作区；功能上线前已信任的不回填 |
-| 安全清单 | `grep cat head tail wc uniq cut tr ls diff`（10 条，全纯只读；不含 sort——`-o` 能写文件） |
+| 安全清单 | `cd grep cat head tail wc uniq cut tr ls diff`（11 条，全纯只读；`cd` 为 shell 内建仅改工作目录；不含 sort——`-o` 能写文件） |
 | untrust | 删除 `auto-safe-` 前缀规则（取消信任 = 权限回到原样） |
 | 实现位置 | Rust 侧挂钩 `trust_workspace` / `untrust_workspace` |
 | 前端 toast | 信任成功后显示「已信任工作区，已添加 N 条安全命令白名单」 |
@@ -30,7 +30,7 @@ src-tauri/src/commands/
 ```
 
 **`workspace_safe_rules.rs`**（子实现，符合「组织文件上层、子实现放同名子目录」）：
-- `SAFE_COMMANDS` 清单常量
+- `SAFE_COMMANDS` 清单常量：`["cd", "grep", "cat", "head", "tail", "wc", "uniq", "cut", "tr", "ls", "diff"]`
 - `ensure(service, project) -> Result<usize, String>`：幂等写入安全规则到 local scope，返回**新增条数**
 - `remove(service, project) -> Result<usize, String>`：删除 local scope 里 `auto-safe-` 前缀规则，返回**删除条数**
 
@@ -85,7 +85,7 @@ src-tauri/src/commands/
 ## 测试
 
 **单测**（`workspace_safe_rules` 模块，用 `SettingsStore::for_test` 临时目录）：
-1. `ensure` 首调写入全部 10 条：id 是 `auto-safe-<cmd>`、matcher 是 Bash prefix、scope 是 local
+1. `ensure` 首调写入全部 11 条：id 是 `auto-safe-<cmd>`、matcher 是 Bash prefix、scope 是 local
 2. `ensure` 幂等：二调新增 0 条；同 (tool, matcher) 的用户手动规则存在时也跳过
 3. `remove` 只删 `auto-safe-` 前缀规则，用户手动规则保留
 4. `remove` 无 `auto-safe-` 规则时返回 0，不报错
@@ -96,6 +96,7 @@ src-tauri/src/commands/
 ## 安全考量
 
 - 自动规则**只覆盖纯只读命令**，链式分段严格匹配不变（每段仍需 allow 才放行）
+- `cd` 是 shell 内建，只改会话工作目录，不读写文件、不执行命令；每条命令独立评估，`cd` 不会给后续命令授新权限
 - 危险命令（`rm tee xargs sed sort awk find curl wget dd` 等）**不在清单**，AI 无法用 `... | xargs rm` 混过去
 - 信任是用户主动行为，放宽了哪些在 设置→权限 里一目了然，可手动删
 - untrust 清理对称，取消信任即回到原权限态
