@@ -1441,11 +1441,15 @@ export function setAuthRequiredHandler(cb: (() => void) | null): void {
   authRequiredHandler = cb;
 }
 
-/** 是否有凭证可发消息：SystemDefault apiKey 已配 或 ~/.aide/claude/.credentials.json 存在（claude.exe OAuth）。
+/** 是否有凭证可发消息。
+ *  - 当前激活供应商非 SystemDefault（ollama/cpa_gpt/custom 等）→ 放行。它们在设置里配
+ *    baseUrl+token，缺配置时由 runtime 报真实错误，不走 Claude 登录门、不冒充"登录 Claude"。
+ *  - SystemDefault（Anthropic 直连）：apiKey 已配 或 ~/.aide/claude/.credentials.json 存在 才放行。
  *  只在「明确无凭证」时拦截（apiKeyConfigured=false 且 credentialsExist===false）；检测不确定
  *  （命令失败 / 测试 invoke 返回 undefined）时放行，避免误拦真实可用场景。 */
 export async function canSendOrPrompt(): Promise<boolean> {
-  const { systemDefault } = useProviders();
+  const { systemDefault, activeProviderId, SYSTEM_DEFAULT_ID } = useProviders();
+  if (activeProviderId.value !== SYSTEM_DEFAULT_ID) return true;
   if (systemDefault.value.apiKeyConfigured) return true;
   try {
     const exist = await api.claudeCredentialsExist();

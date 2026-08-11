@@ -8,6 +8,8 @@ const obMock = vi.hoisted(() => ({ advance: vi.fn(), step: { value: "login" } })
 const providersMock = vi.hoisted(() => ({
   systemDefault: { value: { apiKeyConfigured: false } },
   saveSystemDefaultApiKey: vi.fn(),
+  activeProviderId: { value: "__system_default__" },
+  SYSTEM_DEFAULT_ID: "__system_default__",
 }));
 
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
@@ -35,6 +37,15 @@ describe("LoginStep", () => {
     providersMock.saveSystemDefaultApiKey.mockReset();
     providersMock.saveSystemDefaultApiKey.mockResolvedValue(undefined);
     providersMock.systemDefault.value.apiKeyConfigured = false;
+    providersMock.activeProviderId.value = "__system_default__";
+  });
+
+  it("当前激活供应商非 SystemDefault → 自动跳过 Claude 登录步（不强制 Claude）", async () => {
+    providersMock.activeProviderId.value = "ollama-xxx";
+    credsExist.fn.mockResolvedValue(false); // SystemDefault 没凭证也不挡
+    mountStep();
+    await flush();
+    expect(obMock.advance).toHaveBeenCalled();
   });
 
   it("无凭证时渲染 OAuth 主按钮 + API key 链接", async () => {

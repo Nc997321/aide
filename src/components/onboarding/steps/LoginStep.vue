@@ -6,7 +6,7 @@ import { useOnboarding } from "../../../composables/useOnboarding";
 import { useProviders } from "../../../composables/useProviders";
 
 const ob = useOnboarding();
-const { systemDefault, saveSystemDefaultApiKey } = useProviders();
+const { systemDefault, saveSystemDefaultApiKey, activeProviderId, SYSTEM_DEFAULT_ID } = useProviders();
 
 const showApiKey = ref(false);
 const apiKey = ref("");
@@ -15,8 +15,11 @@ const error = ref("");
 const oauthBusy = ref(false);
 const oauthMessage = ref("");
 
-// 已登录检测：credentials.json 存在 或 SystemDefault apiKey 已配置 → 自动跳过该步
+// 已登录/已用别的供应商 → 自动跳过 Claude 登录步：
+//  - 当前激活供应商非 SystemDefault（ollama/cpa_gpt/custom 等）→ 不强制 Claude 登录
+//  - SystemDefault：credentials.json 存在 或 apiKey 已配置 → 已就绪
 onMounted(async () => {
+  if (activeProviderId.value !== SYSTEM_DEFAULT_ID) { ob.advance(); return; }
   try {
     const credsExist = await api.claudeCredentialsExist();
     if (credsExist || systemDefault.value.apiKeyConfigured) {
