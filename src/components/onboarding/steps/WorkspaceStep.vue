@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import DirTreePicker from "../../DirTreePicker.vue";
+import { api } from "../../../api";
 import { useWorkspaces } from "../../../composables/useWorkspaces";
 import { useOnboarding } from "../../../composables/useOnboarding";
 
@@ -20,9 +21,16 @@ function onPick(v: string | string[]) {
   hasPath.value = (Array.isArray(v) ? v[0] : v)?.trim().length > 0;
 }
 
-// 已有激活工作区 → 自动跳过该步
-onMounted(() => {
-  if (activeKey.value) ob.advance();
+// 已有工作区则自动跳过：activeKey（openFolder 设过）或 getProjectInfo().root（启动时已加载的实际工作区）。
+// activeKey 启动时不从 values.workspace 恢复（一直 null），故补 getProjectInfo 检查——老用户才真正跳过此步。
+onMounted(async () => {
+  if (activeKey.value) { ob.advance(); return; }
+  try {
+    const info = await api.getProjectInfo();
+    if (info?.root) ob.advance();
+  } catch {
+    // 无工作区则留在本步让用户选
+  }
 });
 
 async function confirm() {

@@ -10,9 +10,11 @@ const obMock = vi.hoisted(() => ({
   advance: vi.fn(),
   step: { value: "workspace" },
 }));
+const getProjectInfo = vi.hoisted(() => ({ fn: vi.fn() }));
 
 vi.mock("../../../composables/useWorkspaces", () => ({ useWorkspaces: () => wsMock }));
 vi.mock("../../../composables/useOnboarding", () => ({ useOnboarding: () => obMock }));
+vi.mock("../../../api", () => ({ api: { getProjectInfo: () => getProjectInfo.fn() } }));
 // DirTreePicker 替换为可触发 update:modelValue 的桩，隔离真实树渲染 + api
 vi.mock("../../DirTreePicker.vue", () => ({
   default: {
@@ -36,6 +38,8 @@ describe("WorkspaceStep", () => {
     wsMock.openFolder.mockReset();
     wsMock.openFolder.mockResolvedValue({ key: "k", path: "C:/dev/proj", name: "proj" } as any);
     obMock.advance.mockReset();
+    getProjectInfo.fn.mockReset();
+    getProjectInfo.fn.mockResolvedValue({ root: null } as any); // 默认无工作区
   });
 
   it("无路径时确认按钮禁用", () => {
@@ -64,9 +68,25 @@ describe("WorkspaceStep", () => {
     expect(obMock.advance).not.toHaveBeenCalled();
   });
 
-  it("已有激活工作区 → mounted 即自动跳过", () => {
+  it("已有激活工作区（activeKey）→ mounted 即自动跳过", () => {
     wsMock.activeKey.value = "existing-key";
     mountStep();
     expect(obMock.advance).toHaveBeenCalled();
+  });
+
+  it("getProjectInfo().root 非空（老用户有工作区、activeKey 未恢复）→ 自动跳过", async () => {
+    wsMock.activeKey.value = null; // 启动时 activeKey 不从 values.workspace 恢复
+    getProjectInfo.fn.mockResolvedValue({ root: "C:/dev/proj", name: "proj", branch: "" } as any);
+    mountStep();
+    await flush();
+    expect(obMock.advance).toHaveBeenCalled();
+  });
+
+  it("getProjectInfo().root 为空（全新用户）→ 留在本步、不跳过", async () => {
+    wsMock.activeKey.value = null;
+    getProjectInfo.fn.mockResolvedValue({ root: null } as any);
+    mountStep();
+    await flush();
+    expect(obMock.advance).not.toHaveBeenCalled();
   });
 });
