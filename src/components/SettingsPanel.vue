@@ -2,6 +2,7 @@
 import { ref, watch, onMounted, computed } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
 import { useSettings } from "../composables/useSettings";
+import { useOnboarding } from "../composables/useOnboarding";
 import { useCustomizations } from "../composables/useCustomizations";
 import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
 import { api } from "../api";
@@ -53,6 +54,14 @@ onMounted(async () => {
 // ── Settings (通用) ──
 
 const { settings, update, setCodegraphEmbedder } = useSettings();
+const onboarding = useOnboarding();
+
+/** 重新运行首次引导：置 onboarded=false + 打开向导 + 关闭设置面板。 */
+function rerunOnboarding() {
+  update({ onboarded: false });
+  onboarding.open();
+  emit("close");
+}
 const fontSizeLocal = ref(settings.fontSize);
 const fontFamilyLocal = ref(settings.fontFamily);
 const notificationsEnabledLocal = ref(settings.notificationsEnabled);
@@ -766,6 +775,7 @@ function onOverlayClick(e: MouseEvent) {
                   本项目与 Anthropic 无隶属、背书或赞助关系；"Claude" 是 Anthropic PBC 的商标。
                   Aide 以 MIT 协议开源。
                 </div>
+                <button class="rerun-onboarding" @click="rerunOnboarding">重新运行首次引导</button>
               </div>
             </div>
           </div>
@@ -1428,5 +1438,23 @@ function onOverlayClick(e: MouseEvent) {
   font-size: 11px;
   line-height: 1.7;
   color: var(--aide-text-muted);
+}
+.rerun-onboarding {
+  margin-top: 14px;
+  padding: 8px 16px;
+  border-radius: var(--aide-radius-md);
+  background: var(--aide-surface);
+  border: 1px solid var(--aide-border);
+  color: var(--aide-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all var(--aide-ease-t);
+}
+.rerun-onboarding:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
+  border-color: var(--aide-border-strong);
 }
 </style>

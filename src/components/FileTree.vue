@@ -7,6 +7,7 @@ import { useSessionState } from "../composables/useSessionState";
 import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
 import { fileTreeAreaMenuItems } from "../menus/contextMenus";
 import { api } from "../api";
+import { useOnboarding } from "../composables/useOnboarding";
 import { useFileClipboard, getParentPath } from "../composables/useFileClipboard";
 import type { FileEntry, WorkspaceInfo } from "../types";
 
@@ -20,6 +21,7 @@ const errorMsg = ref("");
 const expandedDirs = ref<Set<string>>(new Set());
 const selectedPath = ref<string>("");
 const showHidden = ref(false);
+const onboarding = useOnboarding();
 
 // ── CodeGraph 构建进度（方案 A：底部条）──
 const CGP_SEGMENTS = 18; // 分段方块格数（signature：符号逐个点亮）
@@ -455,7 +457,11 @@ defineExpose({ loadRoot, revealFile });
           @open="openFile"
         />
         <div v-if="treeData.length === 0" class="tree-status">
-          {{ projectInfo.root ? "目录为空" : "未打开工作区 — 从左侧栏选择一个项目" }}
+          <template v-if="projectInfo.root">目录为空</template>
+          <template v-else>
+            <div class="no-workspace-hint">还没有工作区</div>
+            <button class="onboard-ws-btn" @click="onboarding.openAt('workspace')">选一个工作区</button>
+          </template>
         </div>
       </template>
     </div>
