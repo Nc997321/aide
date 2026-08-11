@@ -65,14 +65,40 @@ const isPlanApproval = computed(() => props.permission?.name === "ExitPlanMode")
  *  {id, name, input} / (id, approved, answers?, nextMode?) 的通用形状。 */
 const isQuestion = computed(() => props.permission?.name === "AskUserQuestion");
 
+/** 发送前确认（变体 C）：本地合成的「确认请求」，复用本组件的 AskUserQuestion 视觉
+ *  语言（问号火漆印 + 「需要确认」eyebrow + 问题 chip），但用信息卡 + 取消/继续发送
+ *  二按钮（非选项卡）。name 用 "__sendConfirm__" 标记区分于真实 sidecar 权限请求；
+ *  input 形状 { title, chip, question, info, confirmLabel } 全前端字段，不进 sidecar
+ *  协议。ChatPanel 在 performSend 检测到 provider/模型与会话上次不同（fork/冷缓存）
+ *  时构造此请求并接管 respond：approved→发送，!approved→取消并保留输入。 */
+const isConfirm = computed(() => props.permission?.name === "__sendConfirm__");
+const confirmInput = computed<{
+  title: string;
+  chip: string;
+  question: string;
+  info: string;
+  confirmLabel: string;
+} | null>(() =>
+  isConfirm.value
+    ? (props.permission?.input as { title: string; chip: string; question: string; info: string; confirmLabel: string })
+    : null,
+);
+
 /** 三种确认口吻用同一枚"火漆印"图钉，用图形区分种类：工具调用=锁、
- *  计划批准=清单、澄清提问=问号——不按具体工具名再细分图标，换新工具/
+ *  计划批准=清单、澄清提问/发送确认=问号——不按具体工具名再细分图标，换新工具/
  *  第三方 provider 接入时也不用维护一张图标映射表。 */
-const kind = computed<"plan" | "question" | "tool">(() =>
-  isPlanApproval.value ? "plan" : isQuestion.value ? "question" : "tool",
+const kind = computed<"plan" | "question" | "tool" | "confirm">(() =>
+  isConfirm.value
+    ? "confirm"
+    : isPlanApproval.value
+      ? "plan"
+      : isQuestion.value
+        ? "question"
+        : "tool",
 );
 
 const eyebrowLabel = computed(() => {
+  if (kind.value === "confirm") return "需要确认";
   if (kind.value === "plan") return "计划待批准";
   if (kind.value === "question") return "需要澄清";
   return "工具调用请求";
@@ -238,14 +264,15 @@ const inputJson = computed(() => {
         <div class="perm-head-text">
           <span class="perm-eyebrow">{{ eyebrowLabel }}</span>
           <span class="perm-title-main">
-            <template v-if="isPlanApproval">批准执行这份计划？</template>
+            <template v-if="isConfirm">{{ confirmInput?.title }}</template>
+            <template v-else-if="isPlanApproval">批准执行这份计划？</template>
             <template v-else-if="isQuestion">Claude 有问题要问你</template>
             <template v-else><code class="perm-tool-chip">{{ permission.name }}</code></template>
           </span>
         </div>
         <span v-if="(queueCount ?? 0) > 1" class="perm-queue-badge">还有 {{ (queueCount ?? 0) - 1 }} 条待确认</span>
         <button
-          v-if="isPlanApproval || isQuestion"
+          v-if="isPlanApproval || isQuestion || isConfirm"
           type="button"
           class="perm-collapse"
           :aria-expanded="collapsed ? 'false' : 'true'"
@@ -302,6 +329,16 @@ const inputJson = computed(() => {
           />
         </div>
       </div>
+      <!-- 发送前确认（变体 C）：问题 chip + 一段说明信息卡，无选项卡。 -->
+      <div v-else-if="isConfirm" class="perm-questions">
+        <div class="perm-question">
+          <div class="perm-question-head">
+            <span class="perm-question-chip">{{ confirmInput?.chip }}</span>
+            <span class="perm-question-text">{{ confirmInput?.question }}</span>
+          </div>
+          <div class="perm-info">{{ confirmInput?.info }}</div>
+        </div>
+      </div>
       <div v-else class="perm-input">
         <div v-if="inputRows" class="perm-input-rows">
           <div v-for="row in inputRows" :key="row.label" class="perm-input-row">
@@ -328,6 +365,14 @@ const inputJson = computed(() => {
           >
             提交回答
           </button>
+        </template>
+        <template v-else-if="isConfirm">
+          <button class="perm-btn perm-btn--ghost" @click="emit('respond', permission.id, false)">取消</button>
+          <div class="perm-actions-primary">
+            <button class="perm-btn perm-btn--solid" @click="emit('respond', permission.id, true)">
+              {{ confirmInput?.confirmLabel }}
+            </button>
+          </div>
         </template>
         <template v-else>
           <button class="perm-btn perm-btn--ghost" data-action="deny" @click="emit('respond', permission.id, false)">
@@ -643,6 +688,17 @@ const inputJson = computed(() => {
   font-size: 13px;
   font-weight: 500;
   color: var(--aide-text-primary);
+}
+
+/* 发送前确认（变体 C）的信息卡：问题下方一段冷缓存/fork 说明。 */
+.perm-info {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--aide-text-secondary);
+  background: var(--aide-bg-deep);
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-sm);
+  padding: 9px 12px;
 }
 
 .perm-options {

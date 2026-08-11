@@ -138,6 +138,10 @@ interface SessionStore {
   /** sidecar 坐实的当前 effort 档位（effort_changed 事件）；空串表示还没学到
    *  （选择器本地值为准，这个用于坐实同步/失败回滚）。 */
   currentEffort: string;
+  /** 发送时暂存的「用户选的模型」——只在 SDK 真正接收发送后才落盘（session_init
+   *  spawn / jump_promoted 排队提升 / 存活非排队派发 / finalize 首条定名）。空串 =
+   *  没带模型（无需落盘）。见 ChatPanel.performSend 的 sendOpts.initialModel。 */
+  pendingModelCommit: string;
   /** effort 切换失败回执（sidecar 驳回，选择器已被回滚广播拉回旧值）——
    *  seq 单调递增，面板据此弹失败提示。 */
   effortSwitchError: { message: string; seq: number } | null;
@@ -286,7 +290,7 @@ const {
 
 // 会话 → spawn 时 provider 绑定：存活会话锁定初始 provider，全局切换不影响它；
 // stop_session 清绑定，下次发消息才用新 provider。见 useSessionProviders 注释。
-const { setProvider, clearProvider, migrateProvider } = useSessionProviders();
+const { setProvider, clearProvider, migrateProvider, providerOf } = useSessionProviders();
 // 当前全局 active provider id——仅用于在 spawn 前（会话不存活时）给新会话盖戳。
 const { activeProviderId } = useProviders();
 
@@ -301,6 +305,7 @@ function getStore(sid: string): SessionStore {
       currentModel: "",
       modelSwitchResult: null,
       currentEffort: "",
+      pendingModelCommit: "",
       effortSwitchError: null,
       contextUsage: null,
       contextCompaction: null,
@@ -315,6 +320,19 @@ function getStore(sid: string): SessionStore {
     };
   }
   return stores[sid];
+}
+
+/** SDK 真正接收发送后落盘模型：把 store.pendingModelCommit（用户发送时选的模型）写进
+ *  会话元数据，写完清空。只在「SDK 已接收发送」的信号处调用——session_init（spawn）、
+ *  jump_promoted（排队消息被提升处理）、finalize（首条定名搬迁后）、存活会话非排队
+ *  派发（见 dispatchSend）。下拉切换不落盘（setModel 已去掉 set_session_model），
+ *  确认弹窗取消/排队未提升都不会触发本函数 → 不会过早落盘。 */
+function commitPendingModel(sid: string): void {
+  const s = getStore(sid);
+  const m = s.pendingModelCommit;
+  if (!m) return;
+  s.pendingModelCommit = "";
+  void invoke("set_session_model", { id: sid, model: m }).catch(() => {});
 }
 
 function resolveSid(raw: string): string {
@@ -450,6 +468,10 @@ async function finalizeSession(tempId: string, realId: string) {
   // 2. Runtime 内部管理 session 映射（SessionManager 的 Map），不需要 Rust 改名
   // 3. 通知 App.vue：这是第一次创建，去写元数据、加侧栏、记最近访问
   for (const cb of sessionCreatedCallbacks) cb(tempId, realId);
+  // 首条发送：SDK 已用真实 id 确认 → 落盘用户选的模型（pendingModelCommit 已随 store
+  // 搬迁到 realId）。这是第三方 provider 首条落盘的唯一路径（currentModel 是别名、
+  // 别名不在真实列表里，session_init 的 models_available watcher 不会落盘）。
+  commitPendingModel(realId);
 }
 
 /**
@@ -469,6 +491,13 @@ function dispatchSend(
   initialEffort?: string,
 ) {
   const store = getStore(sid);
+  // 暂存用户选的模型（initialModel），SDK 真正接收发送时才落盘（见 commitPendingModel）：
+  //   spawn（prevStatus stopped/null）→ session_init 落盘
+  //   排队（jumpQueue）→ jump_promoted 落盘
+  //   存活非排队（prevStatus waiting/attention）→ 派发即接收，下面落盘
+  //   首条 pending → finalize 落盘
+  const prevStatus = sessionState[sid];
+  store.pendingModelCommit = initialModel || "";
   // 新轮次不能继承前一轮的压缩提示；但忙碌时这里仅登记排队消息，当前轮
   // 仍在压缩，不能提前撤掉它的状态条。真正接入下一轮时由 jump_promoted 清理。
   if (!jumpQueue) store.contextCompaction = null;
@@ -532,6 +561,10 @@ function dispatchSend(
   // 混合 tab：会话可能归属别的工作区，sidecar 必须在它自己的项目目录里跑。
   // 注册表没有记录（新会话）时传 null，Rust 侧回落当前活动工作区。
   const sessionWs = useSessionWorkspaces().workspaceOf(sid);
+  // 存活会话且非排队：派发即 SDK 接收 → 立即落盘模型（spawn/排队/首条另走 session_init/jump_promoted/finalize）。
+  if (!jumpQueue && (prevStatus === "waiting" || prevStatus === "attention")) {
+    commitPendingModel(sid);
+  }
   invoke("send_message", {
     sessionId: sid,
     prompt: sendText,
@@ -588,6 +621,9 @@ function handleChatEvent(e: Record<string, unknown>) {
         break;
       }
       setSessionState(sid, "running");
+      // 续发（resume/重开停止会话）：SDK 起来接受了发送 → 落盘模型。
+      // 首条（pending）走上面的 finalize 分支，finalizeSession 里落盘。
+      commitPendingModel(sid);
       break;
     }
     case "text_delta": {
@@ -958,6 +994,8 @@ function handleChatEvent(e: Record<string, unknown>) {
       store.isBusy = true;
       setSessionState(sid, "running");
       armStalled(sid);
+      // 排队消息被 SDK 真正提升处理 → 落盘模型（排队时 dispatchSend 不落盘，留到这里）。
+      commitPendingModel(sid);
       break;
     }
     case "notification": {
@@ -1140,6 +1178,17 @@ export function useChatSession(sessionId: Ref<string | null>) {
     { immediate: true },
   );
 
+  // 会话供应商绑定落盘：非 pending（含 finalize 后 tempId→realId 搬迁完成的真实 id）
+  // 时把 bound provider 写进 `<sid>.json` 的 provider 字段，重开 app 后前端据此恢复该
+  // 会话的供应商绑定（只恢复该会话，不动全局激活）。pending 会话跳过（临时 key，
+  // finalize 前不落盘，避免给临时 id 留文件）。幂等——同值重复写无副作用。
+  watch(sessionId, (sid) => {
+    if (sid && !isPendingSession(sid)) {
+      const pid = providerOf(sid);
+      if (pid) void api.setSessionProvider(sid, pid).catch(() => {});
+    }
+  });
+
   /**
    * 发消息。若当前没有 session id（"新建会话"打开的空白面板），现场生成一个
    * 纯内存临时 key 并返回给调用方——App.vue 用它更新 activeSessionId。真正的
@@ -1249,13 +1298,15 @@ export function useChatSession(sessionId: Ref<string | null>) {
    *  进程活着 → sidecar 运行时坐实后发 model_switch_result；进程没起 →
    *  Rust 返回 false，这里本地合成 deferred 回执（选择随下一条消息的
    *  initialModel 生效）——两条路都给用户可见反馈，不允许静默。
-   *  用户显式选择立即持久化（停止中的会话没有广播渠道，靠这次写入记住）。 */
+   *
+   *  ⚠️ 不在此处持久化（set_session_model）：切换是「草稿」，只有用户真正发送
+   *  才落盘（见 ChatPanel.performSend 的 setSessionModel）。否则切换后不发送、关闭
+   *  重开会读回切换后的模型（用户报告的 bug）。存活会话运行时切换（set_model）
+   *  不发 models_available，currentModel watcher 也不会持久化——所以这里去掉
+   *  立即落盘即可阻断「下拉切换 → 落盘」路径，落盘改到发送时。 */
   async function setModel(model: string) {
     const sid = sessionId.value;
     if (!sid) return;
-    if (!isPendingSession(sid)) {
-      void invoke("set_session_model", { id: sid, model }).catch(() => {});
-    }
     let delivered = false;
     try {
       delivered = await invoke<boolean>("set_model", { sessionId: sid, model });

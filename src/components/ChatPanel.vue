@@ -38,6 +38,7 @@ import { useModal } from "@/composables/useModal";
 import { setChatPaneRect } from "@/composables/useChatPaneWidth";
 import BtwDrawer from "./BtwDrawer.vue";
 import { useBtwSession } from "@/composables/useBtwSession";
+import { useSessionContinuity } from "@/composables/useSessionContinuity";
 import { pickModelValue, isModelInList } from "@/utils/modelSelect";
 import { isPendingSession, isFinalizedSessionPair, toggleBgDock } from "@/composables/useChatSession";
 import AToast from "@/ui/AToast.vue";
@@ -122,6 +123,63 @@ const sessionProvider = computed<ProviderConfig>(() => {
   if (id === SYSTEM_DEFAULT_ID) return systemDefault.value;
   return allProviders.value.find((p) => p.id === id) ?? systemDefault.value;
 });
+
+// 会话供应商/模型延续性 + 发送前确认门控（见 useSessionContinuity）。allProviders 用来
+// 判断「持久化的供应商是否还存在」——被删的供应商不恢复绑定，发送时与会话上次不同
+// 则弹确认。lastUsed 在切会话时由 restoreBinding/refreshLastUsed 读回。
+const continuity = useSessionContinuity(allProviders);
+
+// 发送前确认（变体 C）：当 performSend 检测到本次发送的 provider/模型与会话上次不同
+// （停止/重开会话 respawn，fork/冷缓存代价）时，不立即发送，构造一份合成的
+// PermissionRequest（name="__sendConfirm__"）交给 PermissionDialog 渲染确认形态，
+// pendingSend 暂存待发的 prompt+opts。确认 → resumeSend：清输入并 emit send；取消 →
+// clearSendConfirm：保留输入（内容回退到对话框）。
+interface SendConfirmState {
+  /** 合成的确认请求（其 id 即 PermissionDialog respond 回传的 id，匹配用）。 */
+  request: PermissionRequest;
+  pendingSend: { prompt: string; opts: SendOptions };
+  /** 本次发送将生效的供应商/模型——确认后用它推进 continuity.lastUsed 基线。 */
+  effectiveProvider: string;
+  effectiveModel: string;
+}
+const sendConfirm = ref<SendConfirmState | null>(null);
+/** PermissionDialog 显示的请求：发送前确认优先于真实权限请求（两者互斥——发送时
+ *  不会有 sidecar 权限请求在排队）。 */
+const displayedPermission = computed<PermissionRequest | null>(
+  () => sendConfirm.value?.request ?? props.permission ?? null,
+);
+
+/** 构造发送前确认的合成请求（变体 C）：按「供应商变了/模型变了/都变」组合文案，
+ *  复用 PermissionDialog 的 AskUserQuestion 视觉语言渲染。input 全前端字段，不进 sidecar。 */
+function buildSendConfirmRequest(effectiveProviderId: string, effectiveModel: string): PermissionRequest {
+  const oldProviderId = continuity.lastUsedProvider.value;
+  const oldModel = continuity.lastUsedModel.value ?? "";
+  const providerChanged = effectiveProviderId !== (oldProviderId ?? "");
+  const modelChanged = effectiveModel !== oldModel;
+  const newProviderName = sessionProvider.value.name || effectiveProviderId;
+  const oldProviderName = oldProviderId
+    ? (allProviders.value.find((p) => p.id === oldProviderId)?.name ?? oldProviderId)
+    : "";
+  const title = providerChanged && modelChanged
+    ? "本次发送将切换供应商/模型"
+    : providerChanged
+      ? "本次发送将切换供应商"
+      : "本次发送将切换模型";
+  const question = providerChanged && modelChanged
+    ? `将以 ${newProviderName}/${effectiveModel} 发送（原 ${oldProviderName}/${oldModel}）`
+    : providerChanged
+      ? `将以 ${newProviderName} 发送（原 ${oldProviderName}）`
+      : `将以 ${effectiveModel} 发送（原 ${oldModel}）`;
+  const info = providerChanged
+    ? `切换供应商会重新拉起会话进程，提示缓存失效（冷缓存）；与该会话上次使用的 ${oldProviderName} 不同，会 fork 自原会话。`
+    : `切换模型会导致提示缓存失效（冷缓存），下一轮起新模型生效；与该会话上次使用的 ${oldModel} 不同，会 fork 自原会话。`;
+  return {
+    id: `send-confirm-${crypto.randomUUID()}`,
+    name: "__sendConfirm__",
+    input: { title, chip: "切换确认", question, info, confirmLabel: `继续发送 · ${effectiveModel}` },
+  };
+}
+
 // 工具栏快捷操作（/compact /clear）：composable 早就写好且有单测，但从没接到
 // UI 上过——之前工具栏里完全看不到这两个按钮。见 handleQuickAction。
 const { actions: quickActions } = useQuickActions();
@@ -187,18 +245,16 @@ const modelSelectOptions = computed(() =>
   displayModels.value.map((m) => ({ value: m.value, label: m.displayName })),
 );
 
-/** 打开会话时从元数据读回的模型记忆（null = 没记过/还没读回）——
- *  作为「provider 默认」之前的一档候选参与默认值解析：这个会话上次
- *  用什么模型，重开（含重启 app）后选择器还是它。 */
-const rememberedModel = ref<string | null>(null);
 /** 用户在当前会话视图里手动改过选择 = true——异步恢复读回时不得覆盖用户操作。 */
 let modelTouchedByUser = false;
 
-/** remembered 优先于 provider 默认；但它不在当前列表里（停会话期间换了
- *  provider）时不采信，退回 provider 默认。 */
+/** 会话上次用的模型（continuity.lastUsedModel）优先于 provider 默认参与默认值解析：
+ *  这个会话上次用什么模型，重开（含重启 app）后选择器还是它；不在当前列表里（停会话
+ *  期间换了 provider）则退回 provider 默认。lastUsedModel 由切会话时的
+ *  restoreBinding/refreshLastUsed 读回（取代旧 rememberedModel 本地 ref）。 */
 function modelFallback(models: ModelOption[]): string {
-  return isModelInList(models, rememberedModel.value)
-    ? (rememberedModel.value as string)
+  return isModelInList(models, continuity.lastUsedModel.value)
+    ? (continuity.lastUsedModel.value as string)
     : sessionProvider.value.model;
 }
 
@@ -235,57 +291,50 @@ watch(() => props.currentModel, () => {
     modelFallback(displayModels.value),
   );
   if (next !== selectedModel.value) selectedModel.value = next;
-  // 坐实模型持久化（重开会话恢复的数据来源）：只记选择器能显示的值（在列表
-  //  里）。第三方 provider 下 sidecar 会把 wire id 解析成 Claude 别名（实测
-  //  kimi：kimi-for-coding → "haiku"），别名不在真实 id 列表里——记了恢复
-  //  不出来，还会盖掉用户真实选择。
-  const sid = props.sessionId;
-  if (sid && !isPendingSession(sid) && isModelInList(displayModels.value, props.currentModel)) {
-    void api.setSessionModel(sid, props.currentModel as string).catch(() => {});
-  }
+  // 注意：模型持久化不在此处（也不在 setModel 下拉切换处）——下拉切换是草稿，
+  // 只在 SDK 真正接收发送时落盘（useChatSession.commitPendingModel，挂在
+  // session_init / jump_promoted / 存活非排队派发 / finalize 上）。本 watcher 只
+  // 负责 selectedModel 与 sidecar 坐实值同步。
 });
 watch(displayModels, applyDefaultModel, { immediate: true });
 watch(
   () => props.sessionId,
-  async (sid) => {
+  async (sid, prevSid) => {
+    // 定名搬迁（tempId→realId）：同一场会话换名，选择不洗。模型落盘交给
+    // useChatSession.commitPendingModel（finalizeSession 在搬迁后落盘用户发送时选的模型）。
+    if (isFinalizedSessionPair(prevSid, sid)) {
+      return;
+    }
     modelTouchedByUser = false;
-    rememberedModel.value = null;
     if (!sid) {
       selectedModel.value = "";
       applyDefaultModel(displayModels.value);
+      continuity.clear();
       return;
     }
-    // 新建（pending）会话：选择是用户刚做的/随 initialModel 走的，不恢复不重置；
-    // 存活会话：SDK 坐实值（currentModel watcher）优先。此处显式同步 selectedModel
-    // 而不是简单 return——因为 currentModel watcher 只在值变化时触发，若两个会话
-    // 的 currentModel 碰巧相同（如都用了 deepseek-v4-flash），或组件初始化时
-    // props 初始值不算"变化"，watcher 都不会触发，selectedModel 会停留在旧值。
-    if (isPendingSession(sid) || props.currentModel) {
-      if (props.currentModel) {
-        const next = pickModelValue(
-          displayModels.value,
-          selectedModel.value,
-          props.currentModel,
-          modelFallback(displayModels.value),
-        );
-        if (next !== selectedModel.value) selectedModel.value = next;
-      }
-      return;
+    // 新建（pending）会话：选择是用户刚做的/随 initialModel 走的，不恢复不重置。
+    if (isPendingSession(sid)) return;
+    // 停止/重开（无内存绑定）：先恢复供应商绑定 + 读 lastUsed（须在模型恢复前 await，
+    // 让 displayModels 反映恢复后的供应商）；存活会话（有内存绑定）：只读 lastUsed。
+    if (!providerOf(sid)) {
+      await continuity.restoreBinding(sid);
+    } else {
+      await continuity.refreshLastUsed(sid);
     }
-    // 打开的是停止/历史会话：先清掉上个会话的残留选择、落默认（记忆还没读回），
-    // 再异步恢复这个会话记住的模型。
+    // 读回期间切走了别的会话 → 放弃（切回来时会再走一遍）。
+    if (props.sessionId !== sid) return;
+    // 重置到中性：不带上个会话的 selectedModel 当 existing（那是跨会话串的根因——
+    // 同供应商下旧值永远在新列表里，pickModelValue 会把它当 existing 留下）。
     selectedModel.value = "";
     applyDefaultModel(displayModels.value);
-    const remembered = await api.sessionModel(sid).catch(() => null);
-    // 读回期间切走了别的会话，或用户已经手动改过选择 → 放弃恢复
-    if (props.sessionId !== sid || modelTouchedByUser) return;
-    rememberedModel.value = remembered;
-    // 记忆的模型在列表里才直接选中——不能再走 applyDefaultModel：此刻
-    // selectedModel 占着上面落的占位默认，它会以 existing 身份在 pickModelValue
-    // 里压过 remembered（回归：停止会话切回来选择器永远停在默认模型）。
-    // 不在列表（停会话期间换过 provider）则维持刚落的默认。
-    if (isModelInList(displayModels.value, remembered)) {
-      selectedModel.value = remembered as string;
+    // 存活会话 sidecar 坐实的当前模型在列表里 → 权威采信（反映真实在跑的模型）；
+    // 第三方别名（不在真实列表）/停止会话（currentModel 空）则恢复 lastUsed。
+    if (props.currentModel && isModelInList(displayModels.value, props.currentModel)) {
+      if (selectedModel.value !== props.currentModel) selectedModel.value = props.currentModel;
+    } else if (isModelInList(displayModels.value, continuity.lastUsedModel.value)) {
+      // 用 isModelInList + 直接赋值，不再过 pickModelValue——existing 会压过 remembered
+      // （见 modelSelect.test.ts 注释）。不在列表（停会话期间换过 provider）则维持默认。
+      selectedModel.value = continuity.lastUsedModel.value as string;
     }
   },
   { immediate: true },
@@ -444,7 +493,12 @@ watch(
     if (isPendingSession(sid)) return;
     effortTouchedByUser = false;
     lastEffortToastValue = "";
-    selectedEffort.value = providerDefaultEffort();
+    // 先按存活会话坐实的 currentEffort 落值，不带上个会话的 selectedEffort（跨会话串）；
+    // currentEffort 无效（停止会话/还没学到）时退 provider 默认。再异步恢复 remembered
+    // （用户持久化选择优先）——pre-send 选档（pending 时未持久化）靠 currentEffort 兜。
+    const ce = props.currentEffort;
+    selectedEffort.value =
+      ce && EFFORT_OPTIONS.some((o) => o.value === ce) ? ce : providerDefaultEffort();
     const remembered = await api.sessionEffort(sid).catch(() => null);
     // 读回期间切走了别的会话，或用户已经手动改过 → 放弃恢复
     if (props.sessionId !== sid || effortTouchedByUser) return;
@@ -521,7 +575,8 @@ async function persistRememberRule(scope: PermissionScope, rule: PermissionRuleD
   }
 }
 
-/** PermissionDialog 的 respond 统一入口：处理「记住」持久化 + 权限模式同步 + 放行。 */
+/** PermissionDialog 的 respond 统一入口：处理「记住」持久化 + 权限模式同步 + 放行。
+ *  发送前确认（变体 C，name="__sendConfirm__"）在此本地路由——不走 sidecar 权限协议。 */
 async function onPermissionRespond(
   id: string,
   approved: boolean,
@@ -529,6 +584,20 @@ async function onPermissionRespond(
   nextMode?: string,
   persistRule?: { scope: PermissionScope; rule: PermissionRuleDraft },
 ) {
+  // 发送前确认：approved→清输入并发送 + 推进 lastUsed 基线；取消→保留输入（回退对话框）。
+  // 匹配 id 用 sc.request.id（即 PermissionDialog respond 回传的 permission.id）。
+  const sc = sendConfirm.value;
+  if (sc && sc.request.id === id) {
+    if (approved) {
+      inputText.value = "";
+      pendingImages.value = [];
+      pendingMentions.value = [];
+      continuity.noteSent(sc.effectiveProvider, sc.effectiveModel);
+      emit("send", sc.pendingSend.prompt, sc.pendingSend.opts);
+    }
+    sendConfirm.value = null;
+    return;
+  }
   if (nextMode) selectedPermissionMode.value = nextMode;
   if (approved && persistRule) {
     await persistRememberRule(persistRule.scope, persistRule.rule);
@@ -587,12 +656,26 @@ function applyDefaultPermissionMode(modes: PermissionModeOption[]) {
 
 watch(() => props.currentPermissionMode, (v) => { if (v) selectedPermissionMode.value = v; });
 watch(displayPermissionModes, applyDefaultPermissionMode, { immediate: true });
-watch(() => props.sessionId, (sid) => {
-  if (!sid) {
+watch(
+  () => props.sessionId,
+  (sid, prevSid) => {
+    // 定名搬迁：不重置（保留用户 pre-send 选的模式，首条消息 permissionMode 带对）。
+    if (isFinalizedSessionPair(prevSid, sid)) return;
+    if (!sid) {
+      selectedPermissionMode.value = "";
+      applyDefaultPermissionMode(displayPermissionModes.value);
+      return;
+    }
+    // pending 会话：保留用户刚选的（无 sidecar 权威源可同步）。
+    if (isPendingSession(sid)) return;
+    // 每次切换都重置（不带上个会话的模式——跨会话串），再从 sidecar 坐实值或默认落值。
+    // currentPermissionMode 同值时 currentPermissionMode watcher 不触发，故此处必须主动落。
     selectedPermissionMode.value = "";
-    applyDefaultPermissionMode(displayPermissionModes.value);
-  }
-});
+    if (props.currentPermissionMode) selectedPermissionMode.value = props.currentPermissionMode;
+    else applyDefaultPermissionMode(displayPermissionModes.value);
+  },
+  { immediate: true },
+);
 
 function handlePermissionModeChange(value: string) {
   selectedPermissionMode.value = value;
@@ -1189,10 +1272,7 @@ async function performSend() {
   const mentionResolution = await resolveFileMentions(mentionPrefix + finalPrompt, api.readFileContent);
 
   const images = pendingImages.value.map(({ data, mediaType }) => ({ data, mediaType }));
-  inputText.value = "";
-  pendingImages.value = [];
-  pendingMentions.value = [];
-  emit("send", mentionPrefix + finalPrompt, {
+  const sendOpts: SendOptions = {
     images: images.length ? images : undefined,
     // Rust 只在 sidecar 进程还没起来时才会用这个值（见 chat.rs），已有会话时
     // 无害地被忽略，不需要在这里判断"是否已有会话"。
@@ -1202,7 +1282,35 @@ async function performSend() {
     initialEffort: selectedEffort.value || undefined,
     mentions: mentionResolution,
     permissionMode: selectedPermissionMode.value || undefined,
-  });
+  };
+
+  // 发送前确认门控（变体 C）：若本次发送的 provider/模型与会话上次不同（fork/冷缓存代价）
+  // → 不立即发送，交给 PermissionDialog 确认形态：确认才发，取消则保留输入（内容回退对话框）。
+  // 覆盖停止会话（发送 respawn）和 idle 存活会话（waiting，发送续跑但模型已切换 → 冷缓存）；
+  // 仅「正在生成」(isBusy) 跳过避免打断；pending（首条）无 lastUsed 不弹；同值不弹。
+  const effectiveProvider = sessionProvider.value.id;
+  const effectiveModel = selectedModel.value || sessionProvider.value.model;
+  const sidForGate = props.sessionId;
+  if (
+    sidForGate &&
+    !isPendingSession(sidForGate) &&
+    !isBusyVal.value &&
+    continuity.needsConfirm(effectiveProvider, effectiveModel)
+  ) {
+    sendConfirm.value = {
+      request: buildSendConfirmRequest(effectiveProvider, effectiveModel),
+      pendingSend: { prompt: mentionPrefix + finalPrompt, opts: sendOpts },
+      effectiveProvider,
+      effectiveModel,
+    };
+    return; // 不清输入——取消时内容回退对话框
+  }
+
+  inputText.value = "";
+  pendingImages.value = [];
+  pendingMentions.value = [];
+  continuity.noteSent(effectiveProvider, effectiveModel);
+  emit("send", mentionPrefix + finalPrompt, sendOpts);
 }
 
 // 快捷操作（压缩/清空上下文）：跟手打消息走同一条路径（忙碌排队/权限模式透传都
@@ -1219,12 +1327,34 @@ async function runPromptAction(action: QuickAction, prompt: string): Promise<boo
     );
     if (!ok) return false;
   }
-  emit("send", prompt, {
+  const sendOpts: SendOptions = {
     initialModel: selectedModel.value || undefined,
     initialEffort: selectedEffort.value || undefined,
     permissionMode: selectedPermissionMode.value || undefined,
     action: { id: action.id, label: action.label, icon: action.icon },
-  });
+  };
+  // 同 performSend 的发送前确认门控：provider/模型与会话上次不同（fork/冷缓存）→
+  // 交确认形态（停止会话 respawn / idle 存活会话冷缓存都弹，正在生成跳过）。取消→返回
+  // false，调用方据此保留输入。
+  const effectiveProvider = sessionProvider.value.id;
+  const effectiveModel = selectedModel.value || sessionProvider.value.model;
+  const sidForGate = props.sessionId;
+  if (
+    sidForGate &&
+    !isPendingSession(sidForGate) &&
+    !isBusyVal.value &&
+    continuity.needsConfirm(effectiveProvider, effectiveModel)
+  ) {
+    sendConfirm.value = {
+      request: buildSendConfirmRequest(effectiveProvider, effectiveModel),
+      pendingSend: { prompt, opts: sendOpts },
+      effectiveProvider,
+      effectiveModel,
+    };
+    return false;
+  }
+  continuity.noteSent(effectiveProvider, effectiveModel);
+  emit("send", prompt, sendOpts);
   return true;
 }
 
@@ -1307,11 +1437,12 @@ function onOpenBgDock(taskId: string) {
       </button>
     </div>
 
-    <!-- 权限确认 / AskUserQuestion：挤在消息区和输入框之间，占真实布局空间而
-         不是悬浮遮挡——上面 .chat-messages 是 flex:1，这块一出现就自动让出
-         高度，正文和输入框都不会被盖住。 -->
+    <!-- 权限确认 / AskUserQuestion / 发送前确认（变体 C）：挤在消息区和输入框之间，
+         占真实布局空间而不是悬浮遮挡——上面 .chat-messages 是 flex:1，这块一出现
+         就自动让出高度，正文和输入框都不会被盖住。displayedPermission 优先显示
+         发送前确认（本地合成请求），其次真实权限请求。 -->
     <PermissionDialog
-      :permission="permission ?? null"
+      :permission="displayedPermission"
       :queue-count="permissionQueueCount"
       :remember-scope="rememberScope"
       :remember-rules="rememberView?.rules ?? []"

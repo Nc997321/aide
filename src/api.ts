@@ -66,6 +66,14 @@ export const api = {
   sessionEffort(id: string): Promise<string | null> {
     return invoke("session_effort", { id });
   },
+  /** 记住/读回会话绑定的供应商 id（会话元数据，重开 app 后恢复会话供应商绑定，
+   *  只恢复该会话绑定不动全局激活）。provider 为空 = 清除（回落全局激活供应商）。 */
+  setSessionProvider(id: string, provider: string): Promise<void> {
+    return invoke("set_session_provider", { id, provider });
+  },
+  sessionProvider(id: string): Promise<string | null> {
+    return invoke("session_provider", { id });
+  },
   getDefaultModels(): Promise<ModelOption[]> {
     return invoke("get_default_models");
   },

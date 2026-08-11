@@ -454,14 +454,16 @@ describe("useChatSession per-session store", () => {
     expect(chat.currentModel.value).toBe("sonnet");
   });
 
-  it("setModel 持久化用户选择（用户的选项必然在列表里；停止中的会话靠这次写入记住）", async () => {
+  it("setModel 只应用不落盘（落盘移到 SDK 接收发送时，见 commitPendingModel）", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);
     await flush();
 
     await chat.setModel("opus");
-    expect(invokeMock).toHaveBeenCalledWith("set_session_model", { id: "uuid-a", model: "opus" });
+    // 应用：set_model 派发到存活 sidecar（停止会话返回 false = deferred，见下条用例）
     expect(invokeMock).toHaveBeenCalledWith("set_model", { sessionId: "uuid-a", model: "opus" });
+    // 不落盘：下拉切换是草稿，过早落盘会让「切换后不发→重开成切换后」（用户报告 bug）
+    expect(invokeMock).not.toHaveBeenCalledWith("set_session_model", expect.anything());
   });
 
   it("set_model 未投递（无活进程）→ 本地合成 deferred 回执驱动面板提示", async () => {

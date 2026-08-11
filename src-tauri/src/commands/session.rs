@@ -387,6 +387,57 @@ pub async fn session_effort(id: String) -> Result<Option<String>, String> {
     .map_err(|e| format!("session_effort task panicked: {}", e))?
 }
 
+/// 记住会话 spawn 时绑定的供应商 id：merge 写进会话元数据 `<id>.json` 的 `provider`
+/// 字段（与 set_session_model / set_session_effort 同一模式），重开 app 后由前端恢复
+/// 会话的供应商绑定（只恢复该会话绑定，不动全局激活供应商）。provider 为空 = 清除。
+/// 磁盘 IO 离开主线程（同 set_session_model，见 CLAUDE.md「同步 command 禁止重 IO」）。
+#[tauri::command]
+pub async fn set_session_provider(id: String, provider: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let dir = our_sessions_dir();
+        fs::create_dir_all(&dir).map_err(|e| format!("Failed to create sessions dir: {}", e))?;
+        let path = dir.join(format!("{}.json", id));
+
+        let mut v: Value = if path.exists() {
+            let content = fs::read_to_string(&path)
+                .map_err(|e| format!("Failed to read: {}", e))?;
+            serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?
+        } else {
+            serde_json::json!({ "id": id })
+        };
+        if provider.is_empty() {
+            v.as_object_mut().map(|o| o.remove("provider"));
+        } else {
+            v["provider"] = Value::String(provider);
+        }
+
+        fs::write(&path, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("Failed to write: {}", e))
+    })
+    .await
+    .map_err(|e| format!("set_session_provider task panicked: {}", e))?
+}
+
+/// 读回会话绑定的供应商 id；没有元数据文件或没记过 → None（前端回落全局激活供应商）。
+#[tauri::command]
+pub async fn session_provider(id: String) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = fs::read_to_string(&path).map_err(|e| format!("Failed to read: {}", e))?;
+        let v: Value = serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?;
+        Ok(v
+            .get("provider")
+            .and_then(|m| m.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string()))
+    })
+    .await
+    .map_err(|e| format!("session_provider task panicked: {}", e))?
+}
+
 /// transcript 会随会话增长到多 MB，整读 + 逐行解析必须离开主线程（切会话时触发，
 /// 同步跑等于切一次长会话卡一次窗口）。
 #[tauri::command]
@@ -1072,6 +1123,44 @@ mod tests {
         // 没记过的会话 → None，前端据此走默认选择逻辑
         assert_eq!(
             session_model("test-model-never-exists-aa11bb22".to_string())
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn session_provider_roundtrip_and_preserves_other_fields() {
+        // 回归：供应商绑定记进会话元数据并能读回；merge 写不能冲掉 name/model 等既有字段。
+        let id = "test-provider-aa11bb22".to_string();
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        let _ = fs::remove_file(&path);
+
+        create_session(id.clone(), "供应商会话".to_string()).unwrap();
+        assert_eq!(session_provider(id.clone()).await.unwrap(), None);
+
+        set_session_provider(id.clone(), "p_abc".to_string()).await.unwrap();
+        assert_eq!(session_provider(id.clone()).await.unwrap(), Some("p_abc".to_string()));
+
+        // name 字段必须还活着（merge 而非覆盖）
+        let content = fs::read_to_string(&path).unwrap();
+        let v: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("供应商会话"));
+
+        // 覆盖写 + 清空（清空后读回 None）
+        set_session_provider(id.clone(), "p_def".to_string()).await.unwrap();
+        assert_eq!(session_provider(id.clone()).await.unwrap(), Some("p_def".to_string()));
+        set_session_provider(id.clone(), String::new()).await.unwrap();
+        assert_eq!(session_provider(id.clone()).await.unwrap(), None);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn session_provider_returns_none_for_unknown_session() {
+        // 没记过的会话 → None，前端据此走全局激活供应商回落
+        assert_eq!(
+            session_provider("test-provider-never-exists-aa11bb22".to_string())
                 .await
                 .unwrap(),
             None
