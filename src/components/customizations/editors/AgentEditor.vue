@@ -5,7 +5,11 @@ import { customizationApi, getAgentContent } from "../../../api/customization";
 
 defineOptions({ name: "AgentEditor" });
 const props = defineProps<{ item: CustomizationItem | null }>();
-const emit = defineEmits<{ update: [data: Partial<CustomizationItem>]; delete: []; back: [] }>();
+// model/tools 是 agent frontmatter 的写字段，后端 update_agent 用 as_str() 取值——
+// 都是逗号分隔 string（见 src-tauri/commands/customizations.rs update_agent）。
+// 故 emit 类型在 Partial<CustomizationItem> 上扩 model?/tools?: string，而非用
+// Partial<Agent>（Agent.tools: string[] 是 list 侧的读类型，与写字段不符）。
+const emit = defineEmits<{ update: [data: Partial<CustomizationItem> & { model?: string; tools?: string }]; delete: []; back: [] }>();
 
 const readOnly = computed(() => props.item?.source === "builtin" || props.item?.source === "plugin");
 const tab = ref<"meta" | "body">("meta");
