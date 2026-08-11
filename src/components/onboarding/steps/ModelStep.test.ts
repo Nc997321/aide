@@ -8,6 +8,7 @@ const providersMock = vi.hoisted(() => ({
     value: { anthropicModel: "claude-sonnet-5", defaultOpusModel: "", defaultSonnetModel: "", defaultHaikuModel: "", subagent: "" },
   },
   saveSystemDefaultMappings: vi.fn(),
+  refreshing: { value: false },
 }));
 
 vi.mock("../../../api", () => ({ api: { getDefaultModels: () => getDefaultModels.fn() } }));
@@ -33,6 +34,7 @@ describe("ModelStep", () => {
     getDefaultModels.fn.mockReset();
     providersMock.saveSystemDefaultMappings.mockReset();
     providersMock.systemDefaultMappings.value.anthropicModel = "claude-sonnet-5";
+    providersMock.refreshing.value = false;
   });
 
   it("渲染当前模型名 + 供应商 hint", async () => {
@@ -62,5 +64,15 @@ describe("ModelStep", () => {
     const w = mountStep();
     await flush();
     expect(w.find(".model-pick .t").text()).toContain("加载中…");
+  });
+
+  it("refreshing=true（refreshModels 在飞）时显示「正在从 Anthropic 获取模型…」", async () => {
+    providersMock.refreshing.value = true;
+    getDefaultModels.fn.mockResolvedValue([
+      { value: "claude-sonnet-5", displayName: "Claude Sonnet 5" },
+    ]);
+    const w = mountStep();
+    await flush();
+    expect(w.find(".model-pick .t").text()).toContain("正在从 Anthropic 获取模型");
   });
 });

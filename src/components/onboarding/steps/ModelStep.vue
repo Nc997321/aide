@@ -4,7 +4,8 @@ import { api } from "../../../api";
 import { useProviders } from "../../../composables/useProviders";
 import ThemedSelect from "../../ThemedSelect.vue";
 
-const { systemDefaultMappings, saveSystemDefaultMappings } = useProviders();
+const { systemDefaultMappings, saveSystemDefaultMappings, refreshing } = useProviders();
+const isRefreshing = computed(() => refreshing.value);
 
 // ThemedSelect 要 {value, label}；api.getDefaultModels 返回 ModelOption({value, displayName})——做一次映射
 const options = ref<{ value: string; label: string }[]>([]);
@@ -36,7 +37,10 @@ async function onChange(v: string) {
   <div class="model-row">
     <div class="model-pick">
       <span class="lbl">
-        <span class="t">{{ currentLabel || "加载中…" }}</span>
+        <span class="t">
+          <span v-if="isRefreshing" class="loading-text">正在从 Anthropic 获取模型…</span>
+          <span v-else>{{ currentLabel || "加载中…" }}</span>
+        </span>
         <span class="s">来自 Anthropic · 默认</span>
       </span>
       <ThemedSelect :model-value="current" :options="options" block @update:model-value="onChange" />
@@ -64,5 +68,8 @@ async function onChange(v: string) {
 }
 .model-pick .lbl .t { font-size: 12.5px; color: var(--aide-text-primary); font-weight: 500; display: block; }
 .model-pick .lbl .s { font-size: 10.5px; color: var(--aide-text-muted); margin-top: 2px; display: block; }
+.loading-text { color: var(--aide-text-muted); animation: model-loading-pulse 1.4s ease-in-out infinite; }
+@keyframes model-loading-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .loading-text { animation: none; opacity: .8; } }
 .model-hint { font-size: 10.5px; color: var(--aide-text-muted); margin-top: 8px; text-align: left; }
 </style>
