@@ -104,6 +104,7 @@ static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
         user("settings.jdkRegistry", json!([]), SettingValueKind::Array, "jdk"),
         user("settings.jdkPromptDismissed", json!([]), SettingValueKind::Array, "jdk"),
         ui("settings.leftSidebarPinned", json!(true), SettingValueKind::Boolean),
+        ui("settings.onboarded", json!(false), SettingValueKind::Boolean),
         user("providers", json!([]), SettingValueKind::Array, "provider"),
         user("providers[].id", json!(""), SettingValueKind::String, "provider"),
         user("providers[].kind", json!("custom"), SettingValueKind::String, "provider"),
@@ -183,7 +184,6 @@ static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
         .with_legacy_ids(&["system_default_model_mappings.subagent"]),
         user("claudeMigrationDone", json!(false), SettingValueKind::Boolean, "migration"),
         user("claudeMigrationDismissed", json!(false), SettingValueKind::Boolean, "migration"),
-        user("onboarded", json!(false), SettingValueKind::Boolean, "general"),
         SettingDescriptor::new(
             "permissions.rules",
             json!([]),
