@@ -91,6 +91,7 @@ const MIGRATABLE_ENTRIES: &[&str] = &[
     "projects",
     "sessions",
     "plugins/cache",
+    ".credentials.json",
 ];
 
 #[derive(Serialize)]
@@ -262,6 +263,12 @@ mod tests {
             fs::create_dir_all(p).unwrap();
         }
         fs::write(path, content).unwrap();
+    }
+
+    #[test]
+    fn credentials_json_is_migratable() {
+        // 老系统 ~/.claude/.credentials.json 的 OAuth 登录随迁移提示一并迁入 ~/.aide/claude/
+        assert!(MIGRATABLE_ENTRIES.iter().any(|e| *e == ".credentials.json"));
     }
 
     #[test]

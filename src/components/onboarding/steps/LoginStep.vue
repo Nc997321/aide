@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
+import { open } from "@tauri-apps/plugin-shell";
 import { api } from "../../../api";
 import { useOnboarding } from "../../../composables/useOnboarding";
 import { useProviders } from "../../../composables/useProviders";
@@ -11,6 +12,8 @@ const showApiKey = ref(false);
 const apiKey = ref("");
 const saving = ref(false);
 const error = ref("");
+const oauthBusy = ref(false);
+const oauthMessage = ref("");
 
 // 已登录检测：credentials.json 存在 或 SystemDefault apiKey 已配置 → 自动跳过该步
 onMounted(async () => {
@@ -23,6 +26,35 @@ onMounted(async () => {
     // 检测失败不阻塞——留在登录步让用户配
   }
 });
+
+async function startOAuth() {
+  oauthBusy.value = true;
+  oauthMessage.value = "";
+  try {
+    const r = await api.claudeStartLogin();
+    if (r.authorizeUrl) {
+      // A2 成功——打开浏览器，轮询 credentials.json 出现
+      await open(r.authorizeUrl);
+      oauthMessage.value = "请在浏览器中完成 Claude 登录…";
+      const deadline = Date.now() + 120_000;
+      while (Date.now() < deadline) {
+        await new Promise((res) => setTimeout(res, 500));
+        if (await api.claudeCredentialsExist()) { ob.advance(); return; }
+      }
+      oauthMessage.value = "浏览器登录未完成，请改用 API key。";
+      showApiKey.value = true;
+    } else {
+      // degraded（A2/A1 未接入）——降级到 API key
+      oauthMessage.value = "浏览器登录暂不可用，请改用 API key（OAuth 即将支持）。";
+      showApiKey.value = true;
+    }
+  } catch (e: any) {
+    oauthMessage.value = typeof e === "string" ? e : (e?.message ?? "登录启动失败");
+    showApiKey.value = true;
+  } finally {
+    oauthBusy.value = false;
+  }
+}
 
 async function saveApiKey() {
   const k = apiKey.value.trim();
@@ -44,9 +76,11 @@ async function saveApiKey() {
   <div class="headline">登录你的 Claude 账号</div>
   <div class="support">aide 需要凭证才能发消息、跑模型。用浏览器登录 Claude 账号最省事；没有账号也能用 API key。</div>
   <div class="login-stack">
-    <button class="btn-primary oauth-btn" disabled title="OAuth 浏览器登录即将支持">
-      用 Claude 账号登录 <span class="ext">↗ 浏览器打开</span>
+    <button class="btn-primary oauth-btn" :disabled="oauthBusy" @click="startOAuth">
+      {{ oauthBusy ? "启动中…" : "用 Claude 账号登录" }}
+      <span v-if="!oauthBusy" class="ext">↗ 浏览器打开</span>
     </button>
+    <div v-if="oauthMessage" class="oauth-msg">{{ oauthMessage }}</div>
     <div class="divider">或</div>
     <span class="link" @click="showApiKey = true">改用 API key（去 console.anthropic.com 申请）</span>
     <template v-if="showApiKey">
@@ -81,6 +115,7 @@ async function saveApiKey() {
 .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
 .btn-primary:not(:disabled):hover { filter: brightness(1.07); transform: translateY(-1px); }
 .btn-primary .ext { font-size: 10px; opacity: .7; font-weight: 500; }
+.oauth-msg { font-size: 11.5px; color: var(--aide-warning); width: 100%; text-align: center; }
 .divider { display: flex; align-items: center; gap: 10px; width: 100%; color: var(--aide-text-muted); font-size: 10.5px; }
 .divider::before, .divider::after { content: ""; height: 1px; flex: 1; background: var(--aide-border); }
 .link {

@@ -3,13 +3,20 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 
 const credsExist = vi.hoisted(() => ({ fn: vi.fn() }));
+const startLogin = vi.hoisted(() => ({ fn: vi.fn() }));
 const obMock = vi.hoisted(() => ({ advance: vi.fn(), step: { value: "login" } }));
 const providersMock = vi.hoisted(() => ({
   systemDefault: { value: { apiKeyConfigured: false } },
   saveSystemDefaultApiKey: vi.fn(),
 }));
 
-vi.mock("../../../api", () => ({ api: { claudeCredentialsExist: () => credsExist.fn() } }));
+vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
+vi.mock("../../../api", () => ({
+  api: {
+    claudeCredentialsExist: () => credsExist.fn(),
+    claudeStartLogin: () => startLogin.fn(),
+  },
+}));
 vi.mock("../../../composables/useOnboarding", () => ({ useOnboarding: () => obMock }));
 vi.mock("../../../composables/useProviders", () => ({ useProviders: () => providersMock }));
 
@@ -23,19 +30,34 @@ function mountStep() {
 describe("LoginStep", () => {
   beforeEach(() => {
     credsExist.fn.mockReset();
+    startLogin.fn.mockReset();
     obMock.advance.mockReset();
     providersMock.saveSystemDefaultApiKey.mockReset();
     providersMock.saveSystemDefaultApiKey.mockResolvedValue(undefined);
     providersMock.systemDefault.value.apiKeyConfigured = false;
   });
 
-  it("无凭证时渲染 OAuth 主按钮(disabled) + API key 链接", async () => {
+  it("无凭证时渲染 OAuth 主按钮 + API key 链接", async () => {
     credsExist.fn.mockResolvedValue(false);
     const w = mountStep();
     await flush();
     expect(w.find(".oauth-btn").text()).toContain("用 Claude 账号登录");
     expect(w.find(".link").text()).toContain("改用 API key");
-    expect(w.find(".oauth-btn").attributes("disabled")).toBeDefined();
+    // OAuth 按钮可点（非 oauthBusy 时 enabled）
+    expect(w.find(".oauth-btn").attributes("disabled")).toBeUndefined();
+  });
+
+  it("OAuth 点击 → degraded → 显示提示 + 展开 API key", async () => {
+    credsExist.fn.mockResolvedValue(false);
+    startLogin.fn.mockResolvedValue({ authorizeUrl: null, degraded: true });
+    const w = mountStep();
+    await flush();
+    expect(w.find(".api-key-input").exists()).toBe(false);
+    await w.find(".oauth-btn").trigger("click");
+    await flush();
+    expect(startLogin.fn).toHaveBeenCalled();
+    expect(w.find(".oauth-msg").text()).toContain("暂不可用");
+    expect(w.find(".api-key-input").exists()).toBe(true);
   });
 
   it("已有 credentials.json 时 mounted 即自动跳过", async () => {

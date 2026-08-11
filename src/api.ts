@@ -321,6 +321,10 @@ export const api = {
   claudeCredentialsExist(): Promise<boolean> {
     return invoke("claude_credentials_exist");
   },
+  /** 启动 Claude OAuth 登录。返回授权 URL（A2 成功）或 degraded=true（降级到 API key）。OAuth 未接入前恒返回 degraded。 */
+  claudeStartLogin(): Promise<{ authorizeUrl: string | null; degraded: boolean }> {
+    return invoke("claude_start_login");
+  },
 
   // 工作区
   listWorkspaces(): Promise<WorkspaceInfo[]> {

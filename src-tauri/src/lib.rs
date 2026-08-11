@@ -212,6 +212,7 @@ pub fn run() {
             commands::shell::poll_pty_output,
             commands::shell::pty_spawn_shell,
             commands::onboarding::claude_credentials_exist,
+            commands::onboarding::claude_start_login,
             commands::filesystem::get_project_info,
             commands::filesystem::list_directory,
             commands::filesystem::list_fs_roots,
