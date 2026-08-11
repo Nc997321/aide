@@ -11,7 +11,7 @@ const SettingsPanel = defineAsyncComponent(() => import("./components/SettingsPa
 const OnboardingWizard = defineAsyncComponent(() => import("./components/onboarding/OnboardingWizard.vue"));
 const RunConfigsDialog = defineAsyncComponent(() => import("./components/RunConfigsDialog.vue"));
 import PaneLayout from "./components/PaneLayout.vue";
-import { useChatSession, isPendingSession } from "./composables/useChatSession";
+import { useChatSession, isPendingSession, setAuthRequiredHandler } from "./composables/useChatSession";
 import { usePaneLayout } from "./composables/usePaneLayout";
 import { usePaneLayoutPersistence } from "./composables/paneLayout/persistence";
 import { useSessionNames } from "./composables/useSessionNames";
@@ -719,6 +719,8 @@ onMounted(async () => {
   // 首次引导门控：loadProviders 之后（登录步的 apiKeyConfigured 已就绪）、refresh 之前。
   // 全新用户 !onboarded → 弹向导；老用户 open() 内部守卫直接 return。
   onboarding.open();
+  // 上下文兜底：无凭证发消息时，sendMessage 拦截 + 调本 handler → 打开 onboarding 登录步。
+  setAuthRequiredHandler(() => onboarding.openAt("login"));
   // 启动时拉最新模型覆盖"系统默认"5 字段——fire-and-forget 不 await，UI 先渲染，
   // 拉完响应式刷新 systemDefaultMappings（ProviderSettings 系统默认下 5 字段只读）。
   // 无认证/网络失败时 Rust 侧保留旧值，前端不阻塞。

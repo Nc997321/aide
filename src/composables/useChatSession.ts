@@ -1164,6 +1164,19 @@ export function useChatSession(sessionId: Ref<string | null>) {
     await ensureGlobalListener();
 
     const store = getStore(sid);
+    // 上下文兜底：无凭证（SystemDefault apiKey 未配 且 ~/.aide/claude/.credentials.json 不存在）
+    // 拦截发送，原地把"还没登录 Claude"提示落到聊天区 + 触发 authRequiredHandler（App 打开 onboarding 登录步）。
+    // 不再让首条消息裸奔成 SDK 401。
+    if (!(await canSendOrPrompt())) {
+      store.messages.push({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        blocks: [{ type: "text", text: "还没登录 Claude——发消息需要凭证。请在打开的引导里配置 API key 或登录账号。" }],
+        timestamp: Date.now(),
+      });
+      authRequiredHandler?.();
+      return sid;
+    }
     const item: QueuedSend = {
       prompt,
       images: opts.images,
@@ -1417,4 +1430,28 @@ export function useChatSession(sessionId: Ref<string | null>) {
     setEffort,
     setPermissionMode,
   };
+}
+
+// ── 上下文兜底：无凭证发消息拦截 ──
+// useChatSession 不直接 import useOnboarding——那会拉 useSettings 的 watch(document, immediate)，
+// 破坏 node-env 的 listener 测试。App.vue 通过 setAuthRequiredHandler 注册回调，无凭证时
+// sendMessage 拦截 + 调 handler → App 打开 onboarding 登录步。解耦 + 可测。
+let authRequiredHandler: (() => void) | null = null;
+export function setAuthRequiredHandler(cb: (() => void) | null): void {
+  authRequiredHandler = cb;
+}
+
+/** 是否有凭证可发消息：SystemDefault apiKey 已配 或 ~/.aide/claude/.credentials.json 存在（claude.exe OAuth）。
+ *  只在「明确无凭证」时拦截（apiKeyConfigured=false 且 credentialsExist===false）；检测不确定
+ *  （命令失败 / 测试 invoke 返回 undefined）时放行，避免误拦真实可用场景。 */
+export async function canSendOrPrompt(): Promise<boolean> {
+  const { systemDefault } = useProviders();
+  if (systemDefault.value.apiKeyConfigured) return true;
+  try {
+    const exist = await api.claudeCredentialsExist();
+    if (exist === false) return false; // 明确无凭证 → 拦截
+    return true; // exist === true 或 undefined（命令失败/测试）→ 放行，避免误拦
+  } catch {
+    return true; // 检测失败不拦截——留给后续真实错误暴露
+  }
 }
