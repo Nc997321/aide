@@ -188,6 +188,10 @@ pub struct AppSettings {
     /// 滑出、覆盖内容），true = 常驻 dock 推开内容。纯 UI 状态，Rust 只存取。
     #[serde(default)]
     pub left_sidebar_pinned: bool,
+    /// 首次安装引导是否已完成。首启动若为 false 则前端弹全屏向导；完成/「跳过引导」后置 true，不再二次弹。
+    /// 存于 values.settings.onboarded（set_settings 落盘路径与描述符 settings.onboarded 对齐）。
+    #[serde(default)]
+    pub onboarded: bool,
     /// 全局 LSP 设置：按 language id 覆盖 server 二进制路径。
     #[serde(default)]
     pub lsp: LspSettings,
@@ -228,6 +232,7 @@ impl Default for AppSettings {
             jdk_registry: Vec::new(),
             jdk_prompt_dismissed: Vec::new(),
             left_sidebar_pinned: false,
+            onboarded: false,
             lsp: LspSettings::default(),
             editor: EditorSettings::default(),
         }
