@@ -171,8 +171,8 @@ function buildSendConfirmRequest(effectiveProviderId: string, effectiveModel: st
       ? `将以 ${newProviderName} 发送（原 ${oldProviderName}）`
       : `将以 ${effectiveModel} 发送（原 ${oldModel}）`;
   const info = providerChanged
-    ? `切换供应商会重新拉起会话进程，提示缓存失效（冷缓存）；与该会话上次使用的 ${oldProviderName} 不同，会 fork 自原会话。`
-    : `切换模型会导致提示缓存失效（冷缓存），下一轮起新模型生效；与该会话上次使用的 ${oldModel} 不同，会 fork 自原会话。`;
+    ? `切换供应商会重新拉起会话进程，提示缓存失效（冷缓存）；与该会话上次使用的 ${oldProviderName} 不同，对话历史将迁移到新会话继续。`
+    : `切换模型会导致提示缓存失效（冷缓存），下一轮起新模型生效；与该会话上次使用的 ${oldModel} 不同`;
   return {
     id: `send-confirm-${crypto.randomUUID()}`,
     name: "__sendConfirm__",
