@@ -46,10 +46,6 @@ impl EdgeTable {
         self.by_caller.retain(|_, v| !v.is_empty());
     }
 
-    pub fn len(&self) -> usize {
-        self.by_callee.values().map(|v| v.len()).sum()
-    }
-
     pub fn save_json(&self, path: &Path) -> std::io::Result<()> {
         let bytes = serde_json::to_vec(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -59,6 +55,15 @@ impl EdgeTable {
     pub fn load_json(path: &Path) -> Option<Self> {
         let bytes = std::fs::read(path).ok()?;
         serde_json::from_slice(&bytes).ok()
+    }
+}
+
+/// 测试断言用：当前总边数（caller→callee 记录条数）。生产路径不查边数，仅
+/// `#[cfg(test)]` 编译，避免 dead_code 警告；将来若加「索引 N 条边」日志再提回主 impl。
+#[cfg(test)]
+impl EdgeTable {
+    pub fn len(&self) -> usize {
+        self.by_callee.values().map(|v| v.len()).sum()
     }
 }
 

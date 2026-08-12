@@ -30,16 +30,24 @@ impl OpenDocs {
         self.0.remove(uri);
     }
 
+    pub fn contains(&self, uri: &str) -> bool {
+        self.0.contains_key(uri)
+    }
+}
+
+/// 测试断言用查询器：生产路径只 open/change/close/contains（version 经 `change`
+/// 返回值直接喂给 didChange 通知；诊断版本比对丢旧 v1 在前端做）。仅 `#[cfg(test)]`
+/// 编译，避免 dead_code 警告；将来若在 Rust 侧做诊断版本比对或 hover 取 buffer 文本再提回主 impl。
+#[cfg(test)]
+impl OpenDocs {
+    /// 当前已同步 version（open=1，change 递增）。
     pub fn synced_version(&self, uri: &str) -> Option<i64> {
         self.0.get(uri).map(|e| e.version)
     }
 
+    /// 当前整份 text。
     pub fn get_text(&self, uri: &str) -> Option<&str> {
         self.0.get(uri).map(|e| e.text.as_str())
-    }
-
-    pub fn contains(&self, uri: &str) -> bool {
-        self.0.contains_key(uri)
     }
 }
 

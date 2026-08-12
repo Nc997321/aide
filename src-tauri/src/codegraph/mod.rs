@@ -21,7 +21,7 @@ pub mod commands;
 // `codegraph::commands::*`) — `#[tauri::command]` generates `__cmd__`/`__tauri_command_name_`
 // helpers next to the function definition, which a `pub use` here would NOT carry,
 // so `generate_handler!` must point at the defining module.
-pub use state::{CodeGraphState, ProjectIndex};
+pub use state::CodeGraphState;
 
 // Re-exported so `runtime/mod.rs` keeps using `crate::codegraph::query_score_threshold`.
 pub(crate) use embed_config::query_score_threshold;

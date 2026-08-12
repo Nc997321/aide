@@ -110,6 +110,9 @@ impl LspManager {
         }
     }
 
+    /// 预留：按语言单独回收 server（`kill_workspace` 的细粒度版）。v1 仅用
+    /// `kill_workspace`（关区即杀），per-lang 回收待「禁用某语言 LSP」类开关接入。
+    #[allow(dead_code)]
     pub async fn kill_server(&self, workspace: &str, lang: LanguageId) {
         let removed = self
             .handles
@@ -122,6 +125,8 @@ impl LspManager {
     }
 
     /// 排除集变更后重拉该工作区全部 server（init exclude 不支持热改）。
+    /// v1 未接「lsp_exclude_dirs 热改」事件；预留待该功能接入时由变更处理路径直接调用。
+    #[allow(dead_code)]
     pub async fn restart_workspace(
         &self,
         workspace: &str,

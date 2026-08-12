@@ -259,7 +259,7 @@ mod tests {
         let mut edges = EdgeTable::new();
         edges.insert(CallEdge { caller: "main".into(), callee: "save".into(), file: "b.ts".into(), line: 88 });
         let st = CodeGraphState::new();
-        *st.inner.write().unwrap() = Some(crate::codegraph::ProjectIndex {
+        *st.inner.write().unwrap() = Some(crate::codegraph::state::ProjectIndex {
             project_root: PathBuf::from(root),
             symbols: table,
             edges,

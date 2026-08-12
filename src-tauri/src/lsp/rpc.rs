@@ -36,7 +36,9 @@ pub enum Action {
     Log(String),
     /// window/showMessage → toast。
     ShowMessage(String),
-    /// server→client request（罕见，如 workspace/configuration）→ v1 暂不处理，回空 response。
+    /// server→client request（罕见，如 workspace/configuration）→ v1 仅记日志、不回 response
+    ///（`method`/`params` 未读取，保留供未来 handler 处理；真要回 response 也只需在 reader 按 id 回）。
+    #[allow(dead_code)]
     ServerRequest {
         id: serde_json::Value,
         method: String,
