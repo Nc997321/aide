@@ -342,10 +342,14 @@ function handleTextClick(e: MouseEvent) {
   cursor: pointer;
 }
 
-/* btw 页边批注：右对齐、虚线 accent 边、默认折叠 */
+/* btw 页边批注：右对齐、虚线 accent 边、默认折叠。
+   不在此设百分比 max-width：批注走 .msg-action-wrap(inline-flex)分支，宽度按内容
+   撑开、无外部基准，百分比 max-width 的基准会自指 .btw-note 自身撑开的
+   .msg-row--note，把容器压到比内容还窄、head 标签被 overflow:hidden 截断。宽度
+   上限交由 .msg-action-wrap 的 max-width:85%（基准=消息区，正确）兜底。 */
 .msg-row--note { display: flex; justify-content: flex-end; padding: 2px 12px; }
 .btw-note {
-  max-width: 70%; border: 1px dashed var(--aide-accent); border-radius: var(--aide-radius-md);
+  border: 1px dashed var(--aide-accent); border-radius: var(--aide-radius-md);
   background: color-mix(in srgb, var(--aide-accent) 6%, transparent); overflow: hidden;
 }
 .btw-note-head {
