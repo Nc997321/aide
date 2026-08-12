@@ -230,9 +230,11 @@ pub async fn diag_freeze_supplement(
         .map_err(|e| e.to_string())
 }
 
-/// 打开 WebView2 devtools。release 默认没有（需 Cargo `devtools` feature 保能力）——
-/// 滚轮定格这类状态病（不冻结、watchdog 抓不到）需要在病发实例上活体解剖：
-/// 读计算样式、逐样式开关、观察滚轮是否复活。纯窗口调用，同步无 IO。
+/// 打开 WebView2 devtools。仅 dev build 或诊断包（`tauri build --features devtools`）
+/// 编译——release 默认无 devtools 能力，此 command 不注册、函数不编译，前端 Ctrl+Alt+I
+/// invoke 静默 reject。滚轮定格这类状态病（不冻结、watchdog 抓不到）需要在病发实例
+/// 活体解剖：读计算样式、逐样式开关、观察滚轮是否复活。纯窗口调用，同步无 IO。
+#[cfg(any(debug_assertions, feature = "devtools"))]
 #[tauri::command]
 pub fn open_devtools(window: tauri::WebviewWindow) {
     window.open_devtools();

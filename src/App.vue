@@ -651,8 +651,9 @@ function handleKeydown(e: KeyboardEvent) {
     return;
   }
 
-  // Ctrl+Alt+I：打开 WebView2 devtools（release 活体解剖入口；避开 F12/Ctrl+Shift+I
-  // 这类可能被浏览器加速器键拦截的组合）
+  // Ctrl+Alt+I：打开 WebView2 devtools。仅 dev build / 诊断包（--features devtools）可用；
+  // 正常 release 的 open_devtools command 不注册，invoke 静默 reject。避开 F12/Ctrl+Shift+I
+  // 这类可能被浏览器加速器键拦截的组合
   if (e.ctrlKey && e.altKey && (e.code === "KeyI" || e.key === "I")) {
     e.preventDefault();
     e.stopPropagation();
