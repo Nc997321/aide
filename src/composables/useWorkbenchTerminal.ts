@@ -47,6 +47,12 @@ const sessions = new Map<string, WbSession>();   // sessionId -> xterm/div
 const visible = ref(false);
 let containerEl: HTMLDivElement | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let pollTimerInterval = 0;
+// 工作台可见性门控轮询频率:展开 100ms 保持实时,隐藏 500ms 降频。
+// 隐藏期不停轮询:ConPTY 内核输出缓冲有限,完全不抽会让持续输出的子进程写满
+// 缓冲后被背压阻塞(卡住构建/长输出);500ms 仍抽,IPC 量砍 80% 且无背压风险。
+const POLL_INTERVAL_VISIBLE = 100;
+const POLL_INTERVAL_HIDDEN = 500;
 let unlistenExit: UnlistenFn | null = null;
 
 let settingsRef: ReturnType<typeof useSettings>["settings"] | null = null;
@@ -91,8 +97,14 @@ function deriveShellName(path: string): string {
   return base;
 }
 
+function currentPollInterval(): number {
+  return visible.value ? POLL_INTERVAL_VISIBLE : POLL_INTERVAL_HIDDEN;
+}
+
 function ensurePolling() {
-  if (pollTimer) return;
+  const want = currentPollInterval();
+  if (pollTimer && pollTimerInterval === want) return;
+  if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
     for (const [, s] of sessions) {
       if (!s.spawned) continue;
@@ -101,11 +113,12 @@ function ensurePolling() {
         if (data) s.terminal.write(data);
       } catch (_) { /* ignore */ }
     }
-  }, 100);
+  }, want);
+  pollTimerInterval = want;
 }
 
 function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; pollTimerInterval = 0; }
 }
 
 function ensureExitListener() {
@@ -313,7 +326,10 @@ export function useWorkbenchTerminal() {
     }, 200);
   }
 
-  function hide() { visible.value = false; }
+  function hide() {
+    visible.value = false;
+    ensurePolling();   // 切到隐藏低频:visible 已 false,ensurePolling 检测到频率变化重建 timer
+  }
 
   function toggle() {
     if (visible.value) hide();
