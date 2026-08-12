@@ -18,9 +18,9 @@ describe("builtinHooks registry", () => {
     expect(first.alwaysMounted).toBe(true);
   });
 
-  it("顺序固定：policy → subagentModel → imageGuard → docxRead → skillGuard → codegraphGrep(PreToolUse)，stopEffort(Stop)", () => {
+  it("顺序固定：policy → subagentModel → imageGuard → skillGuard → codegraphGrep(PreToolUse)，stopEffort(Stop)", () => {
     const pre = BUILTIN_HOOKS.filter((h) => h.event === "PreToolUse").map((h) => h.id);
-    expect(pre).toEqual(["policy", "subagentModel", "imageGuard", "docxRead", "skillGuard", "codegraphGrep"]);
+    expect(pre).toEqual(["policy", "subagentModel", "imageGuard", "skillGuard", "codegraphGrep"]);
     const stop = BUILTIN_HOOKS.filter((h) => h.event === "Stop").map((h) => h.id);
     expect(stop).toEqual(["stopEffort"]);
   });
@@ -37,7 +37,6 @@ describe("builtinHooks registry", () => {
       env: { CLAUDE_CODE_SUBAGENT_MODEL: "sonnet" },
       session: sessionStub,
       codegraphMounted: false,
-      docxMounted: false,
     };
     const { hooks, manifest } = buildBuiltinHooks(ctx);
     expect(hooks.PreToolUse.length).toBe(4); // policy + subagentModel + imageGuard + skillGuard（codegraph 不挂）
@@ -50,7 +49,6 @@ describe("builtinHooks registry", () => {
       env: { CLAUDE_CODE_SUBAGENT_MODEL: "sonnet" },
       session: sessionStub,
       codegraphMounted: true,
-      docxMounted: false,
     };
     const { hooks } = buildBuiltinHooks(ctx);
     expect(hooks.PreToolUse[0].matcher).toBe(".*");

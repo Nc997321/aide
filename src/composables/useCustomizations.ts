@@ -62,8 +62,9 @@ export const builtinHooks = ref<BuiltinHookManifest[]>([
   { id: "stopEffort", event: "Stop", matcher: "—", purpose: "读本轮 effort 盖到 message_stop" },
 ]);
 
-// 内置 MCP server 静态清单（前端展示镜像）。codegraph 是 in-process server，
-// 不写 settings.json、不出现在 list_mcp_server，前端静态显示让用户知道有此内置 MCP。
+// 内置 MCP server 静态清单（前端展示镜像）——in-process server 不写 settings.json、
+// 不出现在 list_mcp_server，前端静态显示让用户知道有此内置 MCP。sidecar 每新增一个
+// 内置 MCP（docxMcpRegistration 等）必须在此同步登记，否则面板不显示。
 export interface BuiltinMcpServer {
   id: string;
   transport: string;
@@ -71,6 +72,7 @@ export interface BuiltinMcpServer {
 }
 export const builtinMcpServers = ref<BuiltinMcpServer[]>([
   { id: "aide-codegraph", transport: "in-process", purpose: "内置代码索引（find_symbol / semantic_search / call_graph），codegraph 开 + 受信任工作区时挂载" },
+  { id: "aide-docs", transport: "in-process", purpose: "内置 .docx 阅读器（read_docx → markdown），受信任工作区时挂载" },
 ]);
 
 // ── State ──

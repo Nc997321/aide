@@ -22,45 +22,6 @@ export const DOCX_INSTRUCTIONS = `This environment has a built-in .docx (Word 20
 2. read_docx returns the document content as markdown (headings, lists, tables, link text preserved; images are replaced with alt text/path — no image bytes).
 3. read_docx only handles .docx. It does NOT handle legacy .doc (Word 97-2003), .pdf, or .xlsx — for those, ask the user to convert to .docx or use another approach.`;
 
-const DOCX_EXTENSIONS = new Set(["docx"]);
-
-/** 判断路径是否指向 .docx（照 imageInputCapability.ts 的 isImagePath 范式）。 */
-export function isDocxPath(path: unknown): boolean {
-  if (typeof path !== "string") return false;
-  const ext = path.trim().split(/[\\/]/).at(-1)?.split(".").at(-1)?.toLowerCase();
-  return !!ext && DOCX_EXTENSIONS.has(ext);
-}
-
-// ---------------------------------------------------------------------------
-// Read 纠偏 hook（PreToolUse）
-// ---------------------------------------------------------------------------
-
-/**
- * 为什么需要硬 deny（不是软提示）：.docx 是 zip 二进制，Read 出来全是乱码，100% 错误用途，
- * 硬 deny 安全。与 imageGuard 同 matcher (^Read$) 但条件互斥——imageGuard 看图片扩展名，
- * 本 hook 看 .docx 扩展名。不拦 Bash（pandoc 能工作，误伤代价大，同 codegraphGrep 取舍）。
- *
- * 必须 alwaysMounted:false + build 检查 docxMounted——否则 trusted=false / 环境变量 off /
- * 任务支线下模型被 deny 却无 read_docx 替代工具，死路。详见 builtinHooks/index.ts。
- */
-export function makeDocxReadNudgeHook() {
-  return async (input: { hook_event_name?: string; tool_name?: string; tool_input?: unknown }) => {
-    if (input.hook_event_name !== "PreToolUse") return {};
-    if (input.tool_name !== "Read") return {};
-    const ti = input.tool_input;
-    if (!ti || typeof ti !== "object" || Array.isArray(ti)) return {};
-    const fp = (ti as Record<string, unknown>).file_path;
-    if (!isDocxPath(fp)) return {};
-    return {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse" as const,
-        permissionDecision: "deny" as const,
-        permissionDecisionReason: `"${String(fp)}" is a .docx file. Read returns binary garbage. Use mcp__aide-docs__read_docx to read .docx as markdown.`,
-      },
-    };
-  };
-}
-
 // ---------------------------------------------------------------------------
 // 格式化（纯函数，测试直接覆盖）
 // ---------------------------------------------------------------------------

@@ -15,7 +15,7 @@ import { applyEffortSwitch, normalizeEffort } from "./effortSwitch.js";
 import type { EffortSettable } from "./effortSwitch.js";
 import { cliSubagentModelEnvValue } from "./subagentModelDefault.js";
 import { codegraphMcpRegistration, CODEGRAPH_ALLOW_RULE, makeCodegraphGrepNudgeHook } from "./codegraphTools.js";
-import { docxMcpRegistration, DOCX_ALLOW_RULE, makeDocxReadNudgeHook } from "./docxTools.js";
+import { docxMcpRegistration, DOCX_ALLOW_RULE } from "./docxTools.js";
 import { buildBuiltinHooks } from "./builtinHooks/index.js";
 import { loadUserMcpServers, loadUserHooks, assembleMcpServers, assembleHooks } from "./userExtensions.js";
 import { cancelAllCodegraphQueries } from "./codegraphClient.js";
@@ -932,7 +932,6 @@ export class SessionWorker {
             env: process.env,
             session: this as any, // makePolicyHook/makeImageGuardHook/makeStopEffortHook 是 private 方法，这里同类访问
             codegraphMounted: !!codegraphMcp,
-            docxMounted: !!docxMcp,
           });
           // 用户扩展（settings.json 的 mcpServers/hooks）：mcpServers 与 codegraph 按
           // name 共存；hooks 内建在前、用户追加（内建 policy 恒为 PreToolUse[0]，不可越过）。
