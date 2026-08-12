@@ -168,12 +168,10 @@ const selectedStatus = computed<RunStatus>(() =>
   props.activeRunConfig ? statusOf(props.activeRunConfig.id) : "idle"
 );
 const isRunning = computed(() => selectedStatus.value === "running");
-// 重启只对选中的、且已跑过（running/stopped/crashed）的配置有意义。
-const showRestartBtn = computed(() =>
-  selectedStatus.value === "running" ||
-  selectedStatus.value === "stopped" ||
-  selectedStatus.value === "crashed"
-);
+// 重启 = 停止当前并立即重新启动，仅对「正在运行」的配置有意义——与 ⏹ 停止按钮
+// 并列。停止/崩溃/未启动后重启按钮必须消失，只留 ▶ 运行按钮（要再跑点 ▶ 即可），
+// 不再常驻——否则停止后重启按钮残留（2026-08-12 修复）。
+const showRestartBtn = computed(() => selectedStatus.value === "running");
 // 某行是否正在跑（供下拉每行常驻显示停止态）。
 function isRowRunning(cfg: RunConfig): boolean {
   return statusOf(cfg.id) === "running";
@@ -244,7 +242,7 @@ function isRowRunning(cfg: RunConfig): boolean {
             </svg>
           </button>
 
-          <!-- Restart button (visible when process has been started at least once) -->
+          <!-- Restart button (only when running — 停止/崩溃后消失，避免残留) -->
           <button
             v-if="showRestartBtn"
             class="run-restart-btn"
