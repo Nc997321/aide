@@ -14,7 +14,7 @@ import { applyModelSwitch } from "./modelSwitch.js";
 import { applyEffortSwitch, normalizeEffort } from "./effortSwitch.js";
 import type { EffortSettable } from "./effortSwitch.js";
 import { cliSubagentModelEnvValue } from "./subagentModelDefault.js";
-import { codegraphMcpRegistration, CODEGRAPH_ALLOW_RULE, makeCodegraphGrepNudgeHook } from "./codegraphTools.js";
+import { codegraphMcpRegistration, CODEGRAPH_ALLOW_RULE } from "./codegraphTools.js";
 import { docxMcpRegistration, DOCX_ALLOW_RULE } from "./docxTools.js";
 import { buildBuiltinHooks } from "./builtinHooks/index.js";
 import { loadUserMcpServers, loadUserHooks, assembleMcpServers, assembleHooks } from "./userExtensions.js";
@@ -925,13 +925,12 @@ export class SessionWorker {
             trusted,
           );
           // 内建 hooks 统一走 builtinHooks 注册表：policy 恒为 PreToolUse[0]
-          // （权威前置层，用户 hook 不可越过），subagentModel/skillGuard/codegraphGrep
+          // （权威前置层，用户 hook 不可越过），subagentModel/skillGuard
           // 按条件挂载。builtinHookManifest 经清单通道回传前端（Task 3 接线）。
           const { hooks: builtinHooks, manifest: builtinHookManifest } = buildBuiltinHooks({
             cwd: effectiveCwd,
             env: process.env,
             session: this as any, // makePolicyHook/makeImageGuardHook/makeStopEffortHook 是 private 方法，这里同类访问
-            codegraphMounted: !!codegraphMcp,
           });
           // 用户扩展（settings.json 的 mcpServers/hooks）：mcpServers 与 codegraph 按
           // name 共存；hooks 内建在前、用户追加（内建 policy 恒为 PreToolUse[0]，不可越过）。

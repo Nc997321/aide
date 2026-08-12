@@ -2,48 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   codegraphMcpRegistration,
   formatToolResponse,
-  looksLikeSymbolLookup,
-  makeCodegraphGrepNudgeHook,
   CODEGRAPH_ALLOW_RULE,
 } from "./codegraphTools.js";
 
-describe("codegraph Grep 纠偏 hook", () => {
-  it("looksLikeSymbolLookup: bare identifiers with/without \\b", () => {
-    expect(looksLikeSymbolLookup("makeSkillGuardHook")).toBe(true);
-    expect(looksLikeSymbolLookup("\\bsave\\b")).toBe(true);
-    expect(looksLikeSymbolLookup("canUseTool")).toBe(true);
-    // 非符号：正则、路径、带空格、过短、日志文本
-    expect(looksLikeSymbolLookup("permission_?request|PermissionDialog")).toBe(false);
-    expect(looksLikeSymbolLookup("session-worker")).toBe(false);
-    expect(looksLikeSymbolLookup("listen.*chat-event")).toBe(false);
-    expect(looksLikeSymbolLookup("ab")).toBe(false);
-    expect(looksLikeSymbolLookup("")).toBe(false);
-  });
-
-  it("injects additionalContext for symbol-ish grep, silent otherwise", async () => {
-    const hook = makeCodegraphGrepNudgeHook();
-    const hit = await hook({
-      hook_event_name: "PreToolUse",
-      tool_name: "Grep",
-      tool_input: { pattern: "\\bsave\\b" },
-    });
-    expect((hit as any).hookSpecificOutput.additionalContext).toContain("mcp__aide-codegraph__find_symbol");
-
-    const miss = await hook({
-      hook_event_name: "PreToolUse",
-      tool_name: "Grep",
-      tool_input: { pattern: "permission_?request|PermissionDialog" },
-    });
-    expect(miss).toEqual({});
-
-    const otherTool = await hook({
-      hook_event_name: "PreToolUse",
-      tool_name: "Read",
-      tool_input: { file_path: "save.ts" },
-    });
-    expect(otherTool).toEqual({});
-  });
-});
 
 describe("codegraphMcpRegistration", () => {
   it("returns server spec by default, null when AIDE_CODEGRAPH_TOOLS=off", () => {

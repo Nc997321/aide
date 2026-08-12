@@ -50,15 +50,14 @@ export interface BuiltinHookManifest {
   purpose: string;
 }
 // 内建 hook 静态清单（前端展示镜像，与 sidecar builtinHooks 注册表同源）。
-// 静态初始值保证扩展 tab 无活跃会话时也能看到 6 个内建 hook；
+// 静态初始值保证扩展 tab 无活跃会话时也能看到 5 个内建 hook；
 // sidecar 会话 query 启动时 emit builtin_hooks_manifest 动态覆盖（反映实际挂载，
-// 如 codegraphGrep 仅 codegraph 开时挂、subagentModel/skillGuard 条件挂）。
+// subagentModel/skillGuard 条件挂）。
 export const builtinHooks = ref<BuiltinHookManifest[]>([
   { id: "policy", event: "PreToolUse", matcher: ".*", purpose: "工具权限门控（权威前置层，不可越过）" },
   { id: "subagentModel", event: "PreToolUse", matcher: "^(Agent|Task)$", purpose: "子代理模型选择兜底（条件挂）" },
   { id: "imageGuard", event: "PreToolUse", matcher: "^Read$", purpose: "读图保护（image input 不可用时 deny）" },
   { id: "skillGuard", event: "PreToolUse", matcher: "^Skill$", purpose: "子代理重型 skill 名单拦截（条件挂）" },
-  { id: "codegraphGrep", event: "PreToolUse", matcher: "^Grep$", purpose: "Grep 符号状 pattern 注入索引工具提示（条件挂：codegraph 开时）" },
   { id: "stopEffort", event: "Stop", matcher: "—", purpose: "读本轮 effort 盖到 message_stop" },
 ]);
 

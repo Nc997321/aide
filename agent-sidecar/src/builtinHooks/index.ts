@@ -1,14 +1,12 @@
 import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
 import { makeSubagentModelHook } from "../subagentModelDefault";
 import { makeSkillGuardHook } from "../skillGuard";
-import { makeCodegraphGrepNudgeHook } from "../codegraphTools";
 
 export interface HookBuildContext {
   cwd: string | undefined;
   env: NodeJS.ProcessEnv;
   session: { makePolicyHook(cwd: string | undefined): HookCallback;
               makeImageGuardHook(): HookCallback; makeStopEffortHook(): HookCallback };
-  codegraphMounted: boolean;
 }
 
 export interface BuiltinHookEntry {
@@ -37,9 +35,6 @@ export const BUILTIN_HOOKS: BuiltinHookEntry[] = [
   { id: "skillGuard", event: "PreToolUse", matcher: "^Skill$",
     purpose: "子代理重型 skill 名单拦截", alwaysMounted: false,
     build: (ctx) => makeSkillGuardHook(ctx.env) },
-  { id: "codegraphGrep", event: "PreToolUse", matcher: "^Grep$",
-    purpose: "Grep 符号状 pattern 时注入索引工具提示", alwaysMounted: false,
-    build: (ctx) => (ctx.codegraphMounted ? makeCodegraphGrepNudgeHook() : null) },
   { id: "stopEffort", event: "Stop", matcher: "",
     purpose: "读本轮 effort 盖到 message_stop", alwaysMounted: true,
     build: (ctx) => ctx.session.makeStopEffortHook() },

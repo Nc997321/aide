@@ -26,53 +26,6 @@ Grep is for text/pattern search, NOT for locating symbols. These tools are exact
 const SNIPPET_HARD_CAP = 300;
 
 // ---------------------------------------------------------------------------
-// Grep 纠偏 hook（PreToolUse）
-// ---------------------------------------------------------------------------
-
-/**
- * 为什么需要这个 hook（2026-07-26 三轮 headless A/B 实锤）：MCP instructions
- * 把工具采纳率从 0 拉到 ~10%，codegraph-explore skill 进入列表也没被主动
- * 调用——第三方模型（Kimi K2.6）对「自愿遵守」类引导（instructions/skill
- * 列表/用户 prompt 点名）都不稳定。hook 是 harness 级强制通道：每次 Grep
- * 命中符号状 pattern 就注入纠偏提示，模型无法「忽略」它，同一轮内即可纠偏。
- *
- * 只做 additionalContext 软纠偏，不 deny——日志串/错误消息等文本搜索是
- * Grep 的合法用途，误伤代价大于收益。
- */
-const SYMBOLISH_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
-
-/** 判断 Grep pattern 是否像"在找一个符号"（裸标识符，可带 \b 词界）。 */
-export function looksLikeSymbolLookup(pattern: string): boolean {
-  const p = pattern.trim().replace(/\\b/g, "");
-  return SYMBOLISH_RE.test(p) && p.length >= 3;
-}
-
-/** PreToolUse hook（matcher ^Grep$）：符号状 pattern → 注入 codegraph 纠偏提示。 */
-export function makeCodegraphGrepNudgeHook() {
-  return async (input: { hook_event_name?: string; tool_name?: string; tool_input?: unknown }) => {
-    if (input.hook_event_name !== "PreToolUse") return {};
-    if (input.tool_name !== "Grep") return {};
-    const ti = input.tool_input;
-    if (!ti || typeof ti !== "object" || Array.isArray(ti)) return {};
-    const pattern = (ti as Record<string, unknown>).pattern;
-    if (typeof pattern !== "string" || !looksLikeSymbolLookup(pattern)) return {};
-    return {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse" as const,
-        additionalContext:
-          // 2026-08-03 文案迭代：preference→替代，逃生口收窄为"无法命中"（0 结果/索引没建）。
-          // "钉住"语义：有结果（哪怕差）不退 Grep，逼模型啃 find_symbol 而不是逃回 grep 老路。
-          // 大白话描述用途（避免 symbol/调用链 jargon，第三方模型更买账）；工具全名保留供调用。
-          `Note: "${pattern.trim().replace(/\\b/g, "")}" looks like a function/class/variable name you're looking for. ` +
-          `Use mcp__aide-codegraph__find_symbol (to find where it's defined) or mcp__aide-codegraph__call_graph (to find who calls it / what it calls) ` +
-          `INSTEAD OF Grep — do not Grep for this name. ` +
-          `Only fall back to Grep if they return no match or say the index is not built.`,
-      },
-    };
-  };
-}
-
-// ---------------------------------------------------------------------------
 // 格式化（纯函数，测试直接覆盖）
 // ---------------------------------------------------------------------------
 
