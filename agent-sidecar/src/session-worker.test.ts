@@ -491,7 +491,7 @@ describe("SessionWorker — codegraph MCP registration", () => {
     worker.stop();
     expect(captured?.mcpServers?.["aide-codegraph"]).toBeDefined();
     expect(captured?.tools).toBeUndefined(); // 不动工具列表 = 与主会话一致
-    expect(captured?.allowedTools).toEqual(["Agent", "Task", "mcp__aide-codegraph"]);
+    expect(captured?.allowedTools).toEqual(["Agent", "Task", "mcp__aide-codegraph", "mcp__aide-docs"]);
     expect(captured?.skills).toBe("all");
     expect(captured?.persistSession).toBe(false);
   });

@@ -2,6 +2,7 @@ import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
 import { makeSubagentModelHook } from "../subagentModelDefault";
 import { makeSkillGuardHook } from "../skillGuard";
 import { makeCodegraphGrepNudgeHook } from "../codegraphTools";
+import { makeDocxReadNudgeHook } from "../docxTools";
 
 export interface HookBuildContext {
   cwd: string | undefined;
@@ -9,6 +10,7 @@ export interface HookBuildContext {
   session: { makePolicyHook(cwd: string | undefined): HookCallback;
               makeImageGuardHook(): HookCallback; makeStopEffortHook(): HookCallback };
   codegraphMounted: boolean;
+  docxMounted: boolean;
 }
 
 export interface BuiltinHookEntry {
@@ -34,6 +36,9 @@ export const BUILTIN_HOOKS: BuiltinHookEntry[] = [
   { id: "imageGuard", event: "PreToolUse", matcher: "^Read$",
     purpose: "读图保护（image input 不可用时 deny）", alwaysMounted: true,
     build: (ctx) => ctx.session.makeImageGuardHook() },
+  { id: "docxRead", event: "PreToolUse", matcher: "^Read$",
+    purpose: "Read 命中 .docx 时 deny 并引导 read_docx", alwaysMounted: false,
+    build: (ctx) => (ctx.docxMounted ? makeDocxReadNudgeHook() : null) },
   { id: "skillGuard", event: "PreToolUse", matcher: "^Skill$",
     purpose: "子代理重型 skill 名单拦截", alwaysMounted: false,
     build: (ctx) => makeSkillGuardHook(ctx.env) },
