@@ -197,8 +197,8 @@ async function close() {
                 <span v-else class="jdk-val shared">(系统默认) — 使用 PATH 中的 java</span>
               </div>
               <div class="rcd-jdk-hint">
-                <span v-if="workspaceJdkLabel" class="rcd-hint">所有模块共享 · 修改：<span class="arrow">标题栏 → 语言服务器</span></span>
-                <span v-else class="rcd-hint">按工作区选择：<span class="arrow">标题栏 → 语言服务器 → 本工作区 JDK</span></span>
+                <span v-if="workspaceJdkLabel" class="rcd-hint">所有模块共享 · 修改：<span class="arrow">标题栏 → 语言环境</span></span>
+                <span v-else class="rcd-hint">按工作区选择：<span class="arrow">标题栏 → 语言环境 → 本工作区 JDK</span></span>
               </div>
             </div>
 

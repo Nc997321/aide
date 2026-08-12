@@ -12,7 +12,7 @@ import FilePickerDialog from "../FilePickerDialog.vue";
 import ExcludeDirsDialog from "../ExcludeDirsDialog.vue";
 
 /**
- * 标题栏 LSP 入口（变体 B：常驻徽章 + 点击面板）。
+ * 标题栏「语言环境」入口（变体 B：常驻徽章 + 点击面板）。
  * 徽章显示各语言 server 状态；面板内每语言一行：状态点 + 语言名 + server 名 + 状态，
  * 行内联「路径 + 浏览文件 + 参数 + 保存/清除」（取代旧 install-box note 与底部服务器覆盖区）。
  * 排除目录走「浏览工作空间目录」多选弹窗。底部是整体开关 + 安装向导。
@@ -71,10 +71,10 @@ const MAX_BADGE_SEGS = 4;
 
 /** 徽章文本：语言短名 + 状态符号，最多 4 段 + "+N"。 */
 const badgeText = computed(() => {
-  if (!root.value) return "LSP";
-  if (!lsp.enabled.value) return "LSP 关";
+  if (!root.value) return "语言环境";
+  if (!lsp.enabled.value) return "语言环境";
   const list = status.langs.value;
-  if (list.length === 0) return "LSP";
+  if (list.length === 0) return "语言环境";
   const shown = list.slice(0, MAX_BADGE_SEGS);
   const segs = shown
     .map((x) => `${installGuideFor(x.lang)?.shortName ?? x.lang} ${STATUS_MARK[x.status]}`)
@@ -319,8 +319,8 @@ defineExpose({ openPanel });
     <button
       class="lsp-badge"
       :class="badgeTone"
-      v-tooltip="'语言服务器（LSP）'"
-      :aria-label="'语言服务器'"
+      v-tooltip="'语言环境'"
+      :aria-label="'语言环境'"
       :aria-expanded="open"
       @click="toggle"
     >
