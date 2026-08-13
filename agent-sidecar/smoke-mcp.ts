@@ -49,6 +49,18 @@ const docxServer = createSdkMcpServer({
         ],
       }),
     ),
+    tool(
+      "write_docx",
+      "Write a markdown string to a .docx (Word 2007+) file. Converts markdown to a real .docx — headings, lists, tables, code blocks, blockquotes, and local images supported. Use this INSTEAD OF Bash+python-docx/pandoc (often not installed). Refuses to overwrite an existing file unless overwrite: true is passed.",
+      {
+        file_path: z.string().describe("Path where the .docx file will be written"),
+        markdown: z.string().describe("Markdown content to convert to .docx"),
+        overwrite: z.boolean().optional().describe("Set to true to overwrite an existing file"),
+      },
+      async (args) => ({
+        content: [{ type: "text" as const, text: `# MOCK ${String((args as any).file_path)}\n\nWrote mock docx.` }],
+      }),
+    ),
   ],
 });
 
@@ -121,3 +133,17 @@ if (!docxTools.some((n) => n.includes("read_docx"))) {
   process.exit(1);
 }
 console.log("\nPASS: read_docx was called");
+
+// 3) write_docx 冒烟——验证 instructions 让模型采纳 write_docx（同一 server，同一 instructions 块）
+const docxGenTools = await runQuery(
+  "docx-write",
+  "Write a .docx file at /tmp/out.docx containing a short markdown document about the weather.",
+  { "aide-docs": docxServer },
+  ["mcp__aide-docs"],
+  "docs",
+);
+if (!docxGenTools.some((n) => n.includes("write_docx"))) {
+  console.error("\nFAIL: model did not call write_docx — DOCX_INSTRUCTIONS may be ineffective");
+  process.exit(1);
+}
+console.log("\nPASS: write_docx was called");

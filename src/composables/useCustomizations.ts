@@ -71,7 +71,7 @@ export interface BuiltinMcpServer {
 }
 export const builtinMcpServers = ref<BuiltinMcpServer[]>([
   { id: "aide-codegraph", transport: "in-process", purpose: "内置代码索引（find_symbol / semantic_search / call_graph），codegraph 开 + 受信任工作区时挂载" },
-  { id: "aide-docs", transport: "in-process", purpose: "内置 .docx 阅读器（read_docx → markdown），受信任工作区时挂载" },
+  { id: "aide-docs", transport: "in-process", purpose: "内置 .docx 读写工具（read_docx → markdown / write_docx ← markdown），受信任工作区时挂载" },
 ]);
 
 // ── State ──

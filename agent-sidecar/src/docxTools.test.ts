@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   docxMcpRegistration,
   formatDocxResult,
+  formatDocxGenResult,
   DOCX_ALLOW_RULE,
 } from "./docxTools.js";
 
@@ -43,6 +44,52 @@ describe("formatDocxResult", () => {
     const t = formatDocxResult({ ok: false, reason: "unknown", detail: "boom" }, "/p/a.docx");
     expect(t).toContain("boom");
     expect(t).toContain("pandoc");
+  });
+});
+
+describe("formatDocxGenResult", () => {
+  it("ok: path + counts", () => {
+    const t = formatDocxGenResult(
+      { ok: true, buffer: Buffer.from("x"), paragraphs: 3, images: 1, skippedImages: 0 },
+      "/p/a.docx",
+    );
+    expect(t).toContain("# /p/a.docx");
+    expect(t).toContain("Wrote 3 paragraphs");
+    expect(t).toContain("1 images");
+    expect(t).toContain("Bytes: 1");
+  });
+
+  it("ok: skipped images noted", () => {
+    const t = formatDocxGenResult(
+      { ok: true, buffer: Buffer.from("x"), paragraphs: 1, images: 0, skippedImages: 2 },
+      "/p/a.docx",
+    );
+    expect(t).toContain("2 skipped");
+  });
+
+  it("ok: verbatim prefix stripped for display", () => {
+    const t = formatDocxGenResult(
+      { ok: true, buffer: Buffer.from("x"), paragraphs: 1, images: 0, skippedImages: 0 },
+      "\\\\?\\C:\\proj\\a.docx",
+    );
+    expect(t).toContain("# C:\\proj\\a.docx");
+    expect(t).not.toContain("\\\\?\\");
+  });
+
+  it("invalid_arg", () => {
+    expect(formatDocxGenResult({ ok: false, reason: "invalid_arg", detail: "bad" }, "/p/a.docx")).toContain(
+      "Invalid arguments: bad",
+    );
+  });
+
+  it("exists hints overwrite", () => {
+    const t = formatDocxGenResult({ ok: false, reason: "exists", detail: "" }, "/p/a.docx");
+    expect(t).toContain("already exists");
+    expect(t).toContain("overwrite: true");
+  });
+
+  it("unknown", () => {
+    expect(formatDocxGenResult({ ok: false, reason: "unknown", detail: "boom" }, "/p/a.docx")).toContain("boom");
   });
 });
 
@@ -89,6 +136,7 @@ describe("docxMcpRegistration", () => {
     });
     // instructions 缺失时模型会无视工具（codegraph 2026-07-26 冒烟实锤），此处防回归。
     expect(json).toContain("MUST call mcp__aide-docs__read_docx");
+    expect(json).toContain("MUST call mcp__aide-docs__write_docx");
     expect(json).toContain("does NOT handle legacy .doc");
   });
 });
