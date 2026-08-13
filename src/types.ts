@@ -277,6 +277,12 @@ export interface AheadBehind {
   hasUpstream: boolean;
 }
 
+/** git pull/fetch 成功后带回的结果摘要；与后端 FetchPullOutcome 对齐（camelCase）。 */
+export interface FetchPullOutcome {
+  alreadyUpToDate: boolean;
+  summary: string;
+}
+
 // ── Grep types ──
 
 export interface GrepMatch {

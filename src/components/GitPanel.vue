@@ -210,7 +210,8 @@ async function onCommit() {
 async function onFetch() {
   clearFetchError();
   try {
-    await doFetch();
+    const o = await doFetch();
+    showToast(o.summary, o.alreadyUpToDate ? "info" : "success");
   } catch (_) {
     // error stored in fetchError ref by doFetch
   }
@@ -282,7 +283,8 @@ async function onPush() {
 async function onPull() {
   clearPullError();
   try {
-    await doPull();
+    const o = await doPull();
+    showToast(o.summary, o.alreadyUpToDate ? "info" : "success");
   } catch (_) {
     // error stored in pullError ref by doPull
   }
@@ -353,7 +355,8 @@ async function onErrorAction(kind: string) {
     stashPopWarning.value = "";
     try {
       await invoke("git_stash");
-      await doPull();
+      const o = await doPull();
+      showToast(o.summary, o.alreadyUpToDate ? "info" : "success");
       try {
         await invoke("git_stash_pop");
       } catch (popErr) {
@@ -636,7 +639,7 @@ defineExpose({ reload: loadAll });
     </div>
     <!-- AToast 必须留在 .git-panel 内部：组件须保持单根——App.vue 用 v-show 切 tab，
          多根组件的 v-show 会静默失效（fragment 根的 el 是文本锚点，vShow 读不到 style）。 -->
-    <AToast :state="toastState" />
+    <AToast :state="toastState" placement="inside-bottom" />
   </div>
 </template>
 

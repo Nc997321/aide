@@ -6,12 +6,12 @@ import type { ToastState } from "@/composables/useToast";
  * （与 ChatPanel 的 btw-revert-toast 同一锚定模式），全 --aide-* token 随主题切换。
  * 状态由 useToast 管理，本组件纯展示。
  */
-defineProps<{ state: ToastState }>();
+defineProps<{ state: ToastState; placement?: "outside-top" | "inside-bottom" }>();
 </script>
 
 <template>
   <Transition name="a-toast">
-    <div v-if="state.visible" class="a-toast" :class="`a-toast--${state.kind}`" role="status">
+    <div v-if="state.visible" class="a-toast" :class="[`a-toast--${state.kind}`, { 'a-toast--inside-bottom': placement === 'inside-bottom' }]" role="status">
       <span class="a-toast-dot" aria-hidden="true" />
       <span class="a-toast-text">{{ state.text }}</span>
     </div>
@@ -71,6 +71,15 @@ defineProps<{ state: ToastState }>();
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* inside-bottom：弹在锚容器内侧底部——用于锚容器 overflow:hidden 会裁掉外侧 toast
+   的场景（如 GitPanel 的 .git-panel overflow:hidden），且不挡顶部工具栏。
+   outside-top 默认弹外侧顶部（ChatPanel 用）。 */
+.a-toast--inside-bottom {
+  top: auto;
+  bottom: 8px;
+  margin-bottom: 0;
 }
 
 .a-toast-enter-active,

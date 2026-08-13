@@ -1,6 +1,6 @@
 import { ref, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import type { CommitEntry, CommitDetail, BranchInfo, GitStatusEntry, StashEntry, AheadBehind } from "../types";
+import type { CommitEntry, CommitDetail, BranchInfo, GitStatusEntry, StashEntry, AheadBehind, FetchPullOutcome } from "../types";
 
 // ── Module-level reactive state ──
 
@@ -282,12 +282,13 @@ async function doCommit(message: string, amend = false): Promise<string> {
     return hash;
 }
 
-async function doFetch(): Promise<void> {
+async function doFetch(): Promise<FetchPullOutcome> {
     fetching.value = true;
     fetchError.value = "";
     try {
-        await invoke("git_fetch");
+        const outcome = await invoke<FetchPullOutcome>("git_fetch");
         await Promise.all([loadAheadBehind(), loadUnpushed(), loadBranches()]);
+        return outcome;
     } catch (e) {
         fetchError.value = typeof e === "string" ? e : (e as Error).message || "Fetch failed";
         throw e;
@@ -343,13 +344,14 @@ async function doForcePush(): Promise<void> {
     return doPush(true);
 }
 
-async function doPull(): Promise<void> {
+async function doPull(): Promise<FetchPullOutcome> {
     pulling.value = true;
     pullError.value = "";
     try {
-        await invoke("git_pull");
+        const outcome = await invoke<FetchPullOutcome>("git_pull");
         await refreshAfterAction();
         await loadBranches();
+        return outcome;
     } catch (e) {
         pullError.value = typeof e === "string" ? e : (e as Error).message || "Pull failed";
         throw e;
