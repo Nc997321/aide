@@ -46,7 +46,7 @@ function fakeScrollEl(opts: { scrollTop: number; scrollHeight: number; clientHei
 }
 
 describe("useChatScroll", () => {
-  it("切会话分帧挂载：先 6 条，ramp 跑完到 30，ramping 收尾 false", () => {
+  it("切会话分帧挂载：先 6 条，ramp 跑完到 15，ramping 收尾 false", () => {
     const list = ref(makeMessages(100));
     const sid = ref<string | null>("s1");
     const { schedule } = syncScheduler();
@@ -56,7 +56,7 @@ describe("useChatScroll", () => {
       { scheduleFrame: schedule },
     );
     // 同步调度器下 ramp 在 immediate sessionId watcher 里一气跑完
-    expect(visibleMessages.value.length).toBe(30);
+    expect(visibleMessages.value.length).toBe(15);
     expect(ramping.value).toBe(false);
   });
 
@@ -87,7 +87,7 @@ describe("useChatScroll", () => {
     // hydrate：整份历史一次性灌入
     list.value = makeMessages(50);
     await nextTick(); // pre-flush length watcher 触发 startRamp
-    expect(visibleMessages.value.length).toBe(30);
+    expect(visibleMessages.value.length).toBe(15);
     expect(ramping.value).toBe(false);
   });
 
@@ -136,14 +136,14 @@ describe("useChatScroll", () => {
       { scheduleFrame: schedule },
     );
     expect(ramping.value).toBe(true); // ramp 中（tick 在队未 flush）
-    expect(hiddenCount.value).toBe(70); // 100 - 窗口 30
+    expect(hiddenCount.value).toBe(85); // 100 - 窗口 15
     scrollEl.value = fakeScrollEl({ scrollTop: 100, scrollHeight: 2000, clientHeight: 500 });
     await expandOlderAnchored();
     expect(ramping.value).toBe(false); // 用户接管，ramp 取消
-    expect(hiddenCount.value).toBe(40); // 窗口 30→60
-    expect(visibleMessages.value.length).toBe(60); // 渲染预算一并到顶
+    expect(hiddenCount.value).toBe(70); // 窗口 15→30
+    expect(visibleMessages.value.length).toBe(30); // 渲染预算一并到顶
     flush(); // 队里残留的旧 ramp tick 已被 cancel 移除，flush 空跑不应改变状态
-    expect(visibleMessages.value.length).toBe(60);
+    expect(visibleMessages.value.length).toBe(30);
   });
 
   it("onScroll 在 ramping 时不触发扩窗（hiddenCount 不变）", () => {
@@ -156,10 +156,10 @@ describe("useChatScroll", () => {
       { scheduleFrame: schedule },
     );
     expect(ramping.value).toBe(true);
-    expect(hiddenCount.value).toBe(70);
+    expect(hiddenCount.value).toBe(85);
     scrollEl.value = fakeScrollEl({ scrollTop: 0, scrollHeight: 2000, clientHeight: 500 });
     onScroll();
     // ramping 期间自动扩窗分支被 !ramping 门拦住，窗口不动
-    expect(hiddenCount.value).toBe(70);
+    expect(hiddenCount.value).toBe(85);
   });
 });

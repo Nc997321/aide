@@ -26,21 +26,21 @@ export function nearestScrollableAncestor(target: EventTarget | null): Element |
  * useMessageWindow 的"数据窗口"之上叠一层"渲染预算"做分帧挂载。
  *
  * 为什么要有这一层（根因见 warm-sniffing-balloon.md）：切会话时 v-for 的 key 整批
- * 换新，旧 30 条全卸载 + 新 30 条在**同一个同步渲染补丁**里挂完——每条同步跑缓存
+ * 换新，旧 15 条全卸载 + 新 15 条在**同一个同步渲染补丁**里挂完——每条同步跑缓存
  * 未命中的 marked.parse+hljs，加上 Edit/Write/NotebookEdit 默认展开的 CodeMirror
  * DiffViewer，长任务占满主线程，输入框彗星流光（每帧主线程重绘）掉帧几秒。
- * useMessageWindow 已把 v-for 限在尾部 30 条（不是全量挂载），残留问题就是
- * "30 条挤在一个 patch"。
+ * useMessageWindow 已把 v-for 限在尾部 15 条（不是全量挂载），残留问题就是
+ * "15 条挤在一个 patch"。
  *
  * 分帧挂载：切会话先只挂尾部 ~6 条（首屏可见的最新消息，含流式那条），每帧
- * requestAnimationFrame 加几条长到 30，帧间让出主线程给流光绘制。窗口是尾部的，
+ * requestAnimationFrame 加几条长到 15，帧间让出主线程给流光绘制。窗口是尾部的，
  * 可见底不动、旧消息在上方填入——与原 expandOlderAnchored 锚定一致。显示最终
- * 仍 30 条可见，~130ms 内补齐，用户基本无感。
+ * 仍 15 条可见，~50ms 内补齐，用户基本无感。
  *
  * 两层分离：
- *  - useMessageWindow 的"窗口"（initialSize=30，可向上扩）= 数据边界，原样复用、
- *    既有单测零改动；它照旧在 key 变时把 window 重置回 30（正是我们要的稳态窗口）。
- *  - 本层的 mountedCount（6→30 ramp）= 实际挂载数（渲染预算）。visibleMessages
+ *  - useMessageWindow 的"窗口"（initialSize=15，可向上扩）= 数据边界，原样复用、
+ *    既有单测零改动；它照旧在 key 变时把 window 重置回 15（正是我们要的稳态窗口）。
+ *  - 本层的 mountedCount（6→15 ramp）= 实际挂载数（渲染预算）。visibleMessages
  *    = 窗口尾部切片的尾部 mountedCount 条，随 ramp 逐帧增长。
  *
  * hydrate 时序：未加载的会话 messages 为空，切过去时窗口虽是 30 但实际 0 条——
@@ -54,9 +54,9 @@ export interface ChatScrollOptions {
   rampInitial?: number;
   /** 每帧扩窗追加的条数。默认 3。 */
   rampChunk?: number;
-  /** 数据窗口大小（透传 useMessageWindow 的 initialSize）。默认 30。 */
+  /** 数据窗口大小（透传 useMessageWindow 的 initialSize）。默认 15。 */
   windowInitial?: number;
-  /** 上滚扩窗步长（透传 useMessageWindow 的 step）。默认 30。 */
+  /** 上滚扩窗步长（透传 useMessageWindow 的 step）。默认 15。 */
   windowStep?: number;
   /**
    * 可注入的帧调度器：返回一个 cancel 函数。默认 requestAnimationFrame；
@@ -68,8 +68,8 @@ export interface ChatScrollOptions {
 
 const DEFAULT_RAMP_INITIAL = 6;
 const DEFAULT_RAMP_CHUNK = 3;
-const DEFAULT_WINDOW_INITIAL = 30;
-const DEFAULT_WINDOW_STEP = 30;
+const DEFAULT_WINDOW_INITIAL = 15;
+const DEFAULT_WINDOW_STEP = 15;
 
 /** rAF 不可用时（如极简运行时）退到 setTimeout，保证不崩。 */
 function defaultScheduleFrame(cb: () => void): () => void {
