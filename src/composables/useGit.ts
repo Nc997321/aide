@@ -78,6 +78,16 @@ function toRelKey(absPath: string): string | null {
     return normPath.slice(normRoot.length + 1);
 }
 
+/** 相对路径（git 命令输出）→ 绝对路径。fileViewer 窗口 identity、文件树定位
+ *  （revealFile 的前缀检查）、真实文件读取全都建立在绝对路径约定上；根未知时
+ *  原样返回（面板未加载完就不会有可点的文件条目，理论不会发生）。 */
+function toAbsPath(relPath: string): string {
+    const root = projectRoot.value;
+    if (!root) return relPath;
+    const sep = root.includes("\\") ? "\\" : "/";
+    return root.replace(/[\\/]+$/, "") + sep + relPath.replace(/[\\/]/g, sep);
+}
+
 /** 文件查找表：相对路径 key → status entry（O(1)）。 */
 const statusByPath = computed(() => {
     const m = new Map<string, GitStatusEntry>();
@@ -444,6 +454,7 @@ export function useGit() {
         dirtyDirs,
         fileGitStatus,
         dirGitStatus,
+        toAbsPath,
         loadAll,
         loadCommits,
         loadMoreCommits,

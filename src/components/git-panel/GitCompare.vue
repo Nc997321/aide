@@ -21,7 +21,7 @@ import { useFileViewer } from "../../composables/useFileViewer";
 import { useToast } from "../../composables/useToast";
 import type { CompareFile, CommitDetail, DiffEntry, DiffPair } from "../../types";
 
-const { currentBranch, branches, compare, compareLoading, compareError, loadCompare, clearCompare, loadCommitDetail } =
+const { currentBranch, branches, compare, compareLoading, compareError, loadCompare, clearCompare, loadCommitDetail, toAbsPath } =
   useGit();
 const fileViewer = useFileViewer();
 const { showToast } = useToast();
@@ -97,7 +97,7 @@ async function onCompareFileClick(f: CompareFile) {
       head: headBranch.value,
       oldPath: f.oldPath ?? undefined,
     });
-    fileViewer.open(f.path, { diffPair: pair });
+    fileViewer.open(toAbsPath(f.path), { diffPair: pair });
   } catch (e) {
     showToast(`加载 diff 失败：${typeof e === "string" ? e : (e as Error).message || e}`, "danger");
   }
@@ -107,7 +107,8 @@ async function onCommitFileClick(f: DiffEntry, hash: string) {
   // 提交详情文件：该提交的行级 diff（h^ vs h）
   try {
     const pair = await invoke<DiffPair>("git_diff_pair", { path: f.path, commitHash: hash });
-    fileViewer.open(f.path, { diffPair: pair });
+    // 同 GitPanel：git 用相对路径，fileViewer 窗口用绝对路径
+    fileViewer.open(toAbsPath(f.path), { diffPair: pair });
   } catch (e) {
     showToast(`加载 diff 失败：${typeof e === "string" ? e : (e as Error).message || e}`, "danger");
   }

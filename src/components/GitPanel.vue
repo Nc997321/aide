@@ -26,6 +26,7 @@ const {
   hasUnpushed,
   unpushedCount,
   projectRoot,
+  toAbsPath,
   loading,
   hasMoreCommits,
   loadingMore,
@@ -196,7 +197,9 @@ async function openDiffInViewer(relPath: string, staged?: boolean, commitHash?: 
     if (staged !== undefined) params.staged = staged;
     if (commitHash) params.commitHash = commitHash;
     const pair = await invoke<DiffPair>("git_diff_pair", params);
-    fileViewer.open(relPath, { diffPair: pair });
+    // git 命令吃仓库相对路径；fileViewer 窗口必须拿绝对路径
+    // （文件树定位/打开真实文件/路径展示都建立在绝对路径约定上）
+    fileViewer.open(toAbsPath(relPath), { diffPair: pair });
   } catch (e) {
     showToast(`加载 diff 失败：${typeof e === "string" ? e : (e as Error).message || e}`, "danger");
   }

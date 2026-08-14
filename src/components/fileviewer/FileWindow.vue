@@ -10,6 +10,7 @@ import { api } from "../../api";
 import CodeEditor from "../CodeEditor.vue";
 import type { GutterGotoPayload } from "../../extensions/cmImplGutter";
 import DiffViewer from "./DiffViewer.vue";
+import { firstChangedLine } from "./diffLocate";
 import { extToLang, highlightCode } from "../../utils/highlight";
 import { isHtmlFilePath } from "../../utils/fileLink";
 import { marked } from "../../utils/markdown";
@@ -41,7 +42,7 @@ const props = defineProps<{
   bounds: { w: number; h: number };
 }>();
 
-const { closeWindow, save, projectRoot, gotoOwnerId, indexHintWinId, revealInTreePath, navigateInPlace, navigateBack, navStackHasDirty } = useFileViewer();
+const { closeWindow, save, projectRoot, gotoOwnerId, indexHintWinId, revealInTreePath, navigateInPlace, navigateBack, navStackHasDirty, openAndScrollTo } = useFileViewer();
 const goto = useGotoDefinition();
 const modal = useModal();
 const { push: pushNotification } = useNotifications();
@@ -309,8 +310,30 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
+/** 可定位条件：普通文件恒真；diff 虚拟窗的 filePath 也是真实磁盘路径
+ *  （git 入口已经 toAbsPath 补绝对），唯独 deleted 状态文件已不在盘上，
+ *  定位无意义。 */
+const canLocateInTree = computed(
+  () =>
+    !props.win.virtual ||
+    (!!props.win.diffPair && props.win.diffPair.status !== "deleted"),
+);
+
+/** 「打开文件定位到首个变更」：仅 git 全文件 diff 窗（deleted 无文件可开）。
+ *  聊天变更卡是片段 diff，走它自己的「打开 ↗」锚点定位，不经这里。 */
+const canOpenAtChange = computed(
+  () => !!props.win.diffPair && props.win.diffPair.status !== "deleted",
+);
+
 function locateInTree() {
   revealInTreePath.value = props.win.filePath;
+}
+
+/** 打开真实文件（与 diff 窗并存）并滚到首个变更行 */
+function openAtFirstChange() {
+  const pair = props.win.diffPair;
+  if (!pair) return;
+  void openAndScrollTo(props.win.filePath, firstChangedLine(pair));
 }
 
 async function openInBrowser() {
@@ -366,9 +389,23 @@ async function openInBrowser() {
         </svg>
       </button>
 
-      <!-- 在文件树中定位（仅非虚拟文件） -->
+      <!-- 打开真实文件并定位到首个变更处（仅 git diff 窗） -->
       <button
-        v-if="!win.virtual"
+        v-if="canOpenAtChange"
+        class="fw-icon-btn"
+        v-tooltip="'打开文件并定位到首个变更处'"
+        @click.stop="openAtFirstChange"
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+          <path d="M15 3h6v6"/>
+          <path d="M10 14L21 3"/>
+        </svg>
+      </button>
+
+      <!-- 在文件树中定位（普通文件 + diff 窗口；纯注入内容的虚拟窗除外） -->
+      <button
+        v-if="canLocateInTree"
         class="fw-icon-btn"
         v-tooltip="'在文件树中定位'"
         @click.stop="locateInTree"
