@@ -302,6 +302,9 @@ pub fn run() {
             commands::git::git_push,
             commands::git::git_fingerprint,
             commands::git::git_commit,
+            commands::git::git_compare_branches,
+            commands::git::git_diff_pair_refs,
+            commands::git::git_tags,
             // Customization commands
             commands::customizations::list_agents,
             commands::customizations::get_agent,

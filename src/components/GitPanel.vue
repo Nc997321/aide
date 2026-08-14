@@ -6,6 +6,9 @@ import { useFileViewer } from "../composables/useFileViewer";
 import { useModal } from "../composables/useModal";
 import { useToast } from "../composables/useToast";
 import AToast from "../ui/AToast.vue";
+import ATabBar from "../ui/ATabBar.vue";
+import GitCompare from "./git-panel/GitCompare.vue";
+import GitTags from "./git-panel/GitTags.vue";
 import { parseGitError } from "../utils/errors";
 import type { DiffPair } from "../types";
 
@@ -32,6 +35,7 @@ const {
   stashes,
   aheadBehind,
   loadAll,
+  loadTags,
   loadStatus,
   loadMoreCommits,
   toggleCommit,
@@ -67,6 +71,14 @@ const fileViewer = useFileViewer();
 const { confirm: confirmDialog, prompt: promptDialog } = useModal();
 const { toastState, showToast } = useToast();
 
+// 视图切换：改动（工作区）/ 对比（分支发散）/ 标签（版本分组）
+const gitView = ref<"changes" | "compare" | "tags">("changes");
+const gitTabs = [
+  { id: "changes", label: "改动" },
+  { id: "compare", label: "对比" },
+  { id: "tags", label: "标签" },
+];
+
 const branchDropdownOpen = ref(false);
 const switchError = ref("");
 const pendingBranch = ref("");
@@ -93,6 +105,17 @@ const localBranches = computed(() => branches.value.filter((b) => !b.is_remote))
 const remoteBranches = computed(() => branches.value.filter((b) => b.is_remote));
 
 onMounted(() => { loadAll(); });
+
+// 切到标签 tab 时加载标签（不在 loadAll 内以保持启动瘦身；tags 不在
+// git_fingerprint 内，不会自动触发刷新，需显式加载）。手动刷新由 GitTags 按钮调 loadTags。
+watch(gitView, (v) => {
+  if (v === "tags") void loadTags();
+});
+
+// 对外刷新（App.vue 切工作区时调用）：全量 + 标签（不同仓库有不同 tag 集）
+async function reload() {
+  await Promise.all([loadAll(), loadTags()]);
+}
 
 // 工作区无变更时自动折叠 Changes，有变更时自动展开
 watch(
@@ -387,7 +410,7 @@ function isUnpushed(hash: string): boolean {
   return unpushedHashes.value.has(hash);
 }
 
-defineExpose({ reload: loadAll });
+defineExpose({ reload });
 </script>
 
 <template>
@@ -459,6 +482,11 @@ defineExpose({ reload: loadAll });
       <span class="conflict-banner-text">⚠ {{ conflictFiles.length }} 个文件存在合并冲突，解决后 stage 并提交</span>
     </div>
 
+    <!-- 视图切换：改动 / 对比 / 标签 -->
+    <ATabBar v-model="gitView" :tabs="gitTabs" />
+
+    <!-- 改动视图（今天的完整面板内容） -->
+    <div v-show="gitView === 'changes'" class="changes-view">
     <!-- Staged -->
     <div v-if="stagedFiles.length > 0" class="git-section">
       <button class="section-header section-header-staged" @click="changesExpanded = !changesExpanded">
@@ -646,6 +674,13 @@ defineExpose({ reload: loadAll });
         </template>
       </div>
     </div>
+    </div><!-- /changes-view -->
+
+    <!-- 对比视图 -->
+    <GitCompare v-show="gitView === 'compare'" />
+    <!-- 标签视图 -->
+    <GitTags v-show="gitView === 'tags'" />
+
     <!-- AToast 必须留在 .git-panel 内部：组件须保持单根——App.vue 用 v-show 切 tab，
          多根组件的 v-show 会静默失效（fragment 根的 el 是文本锚点，vShow 读不到 style）。 -->
     <AToast :state="toastState" placement="inside-bottom" />
@@ -833,6 +868,11 @@ defineExpose({ reload: loadAll });
 .git-section { border-bottom: 1px solid var(--aide-surface-default); flex-shrink: 0; }
 .commits-section { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .commits-section .section-body { flex: 1; overflow-y: auto; }
+
+/* 改动视图容器：包住 Staged→Commits，保住 commits-section 的 flex:1 滚动 */
+.changes-view {
+  flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+}
 
 .section-header {
   display: flex; align-items: center; gap: 6px; width: 100%;

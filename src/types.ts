@@ -285,6 +285,46 @@ export interface FetchPullOutcome {
   summary: string;
 }
 
+/** 对比视图中的一个文件差异项（与后端 CompareFile 对齐，camelCase）。 */
+export interface CompareFile {
+  path: string;
+  /** 重命名源路径；仅 status === "R" 时有值 */
+  oldPath?: string;
+  /** A/M/D/R/C/T 单字母 */
+  status: string;
+  additions: number;
+  deletions: number;
+}
+
+/** 分支对比结果（与后端 CompareResult 对齐，camelCase）。 */
+export interface CompareResult {
+  /** 基准分支名（默认当前分支） */
+  base: string;
+  /** 被对比分支名 */
+  head: string;
+  /** base 领先 head 的提交数（base 独有） */
+  ahead: number;
+  /** head 领先 base 的提交数（head 独有） */
+  behind: number;
+  aheadCommits: CommitEntry[];
+  behindCommits: CommitEntry[];
+  files: CompareFile[];
+  filesTotal: number;
+}
+
+/** 标签项（与后端 TagEntry 对齐，camelCase）。 */
+export interface TagEntry {
+  name: string;
+  /** 相对创建日期（如 "2 days ago"） */
+  date: string;
+  /** 指向的提交短 hash（前 7 位） */
+  target: string;
+  /** annotated = true，lightweight = false */
+  isAnnotated: boolean;
+  /** annotated 标签的注讯首行；lightweight 为空 */
+  message: string;
+}
+
 // ── Grep types ──
 
 export interface GrepMatch {

@@ -7,7 +7,7 @@ use tracing::{info, error};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use super::{DiffEntry, WorkspaceState, project_root_for_commands, detect_git_branch};
+use crate::commands::{DiffEntry, WorkspaceState, project_root_for_commands, detect_git_branch};
 
 // ── Git-specific types ──
 
@@ -55,7 +55,7 @@ pub struct GitStatus {
 /// UTF-8 路径；无引号包裹的输入原样返回。
 /// status/numstat/ls-files/ls-tree 的输出都受此规则影响，不还原会导致下游
 /// 文件操作（删除/diff/撤回）拿到不存在的转义名而静默失败。
-fn unquote_git_path(s: &str) -> String {
+pub(super) fn unquote_git_path(s: &str) -> String {
     let bytes = s.as_bytes();
     if bytes.len() < 2 || bytes[0] != b'"' || bytes[bytes.len() - 1] != b'"' {
         return s.to_string();
@@ -168,7 +168,7 @@ fn git_run_with_timeout(
 }
 
 /// Default-timeout variant used by all local (non-network) git invocations.
-fn git_run(args: &[&str], root: &std::path::Path) -> Result<std::process::Output, String> {
+pub(super) fn git_run(args: &[&str], root: &std::path::Path) -> Result<std::process::Output, String> {
     git_run_with_timeout(args, root, GIT_TIMEOUT)
 }
 
@@ -187,7 +187,7 @@ async fn git_run_async_timeout(
     .map_err(|e| format!("Git task panicked: {}", e))?
 }
 
-async fn git_run_async(
+pub(super) async fn git_run_async(
     args: Vec<String>,
     root: std::path::PathBuf,
 ) -> Result<std::process::Output, String> {
@@ -197,7 +197,7 @@ async fn git_run_async(
 /// Like `git_run_async` but accepts an arbitrary closure that receives `root`
 /// and can execute **multiple** git steps inside a single blocking task —
 /// avoids repeated thread hops for compound operations (commit, show, …).
-async fn git_run_blocking<F, T>(f: F) -> Result<T, String>
+pub(super) async fn git_run_blocking<F, T>(f: F) -> Result<T, String>
 where
     F: FnOnce() -> Result<T, String> + Send + 'static,
     T: Send + 'static,
@@ -754,6 +754,25 @@ pub async fn git_delete_branch(
     Ok(())
 }
 
+/// 解析 `git log --format=%H|%s|%an|%ar` 的逐行输出为 [`CommitEntry`] 列表。
+/// `git_log` 与 `compare::git_compare_branches` 共用。
+pub(super) fn parse_commit_lines(stdout: &str) -> Vec<CommitEntry> {
+    let mut commits = Vec::new();
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.splitn(4, '|').collect();
+        if parts.len() < 4 {
+            continue;
+        }
+        commits.push(CommitEntry {
+            hash: parts[0].to_string(),
+            message: parts[1].to_string(),
+            author: parts[2].to_string(),
+            date: parts[3].to_string(),
+        });
+    }
+    commits
+}
+
 #[tauri::command]
 pub async fn git_log(
     workspace_state: State<'_, WorkspaceState>,
@@ -789,19 +808,7 @@ pub async fn git_log(
         })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut commits = Vec::new();
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.splitn(4, '|').collect();
-        if parts.len() < 4 {
-            continue;
-        }
-        commits.push(CommitEntry {
-            hash: parts[0].to_string(),
-            message: parts[1].to_string(),
-            author: parts[2].to_string(),
-            date: parts[3].to_string(),
-        });
-    }
+    let commits = parse_commit_lines(&stdout);
 
     info!(count = commits.len(), "git_log ok");
     Ok(commits)
@@ -894,7 +901,7 @@ fn looks_binary(bytes: &[u8]) -> bool {
 }
 
 /// `git show <rev>:<path>`；blob 不存在（未跟踪 / 该 rev 无此文件）→ None。
-fn show_blob(rev_path: &str, root: &std::path::Path) -> Result<Option<Vec<u8>>, String> {
+pub(super) fn show_blob(rev_path: &str, root: &std::path::Path) -> Result<Option<Vec<u8>>, String> {
     let out = git_run(&["show", rev_path], root)?;
     if out.status.success() {
         Ok(Some(out.stdout))
@@ -903,10 +910,249 @@ fn show_blob(rev_path: &str, root: &std::path::Path) -> Result<Option<Vec<u8>>, 
     }
 }
 
+/// 一条 `git cat-file --batch` 进程取多个 blob，避免 N 个 `git show` 串行 spawn 的
+/// 固定启动开销（本机每 spawn ~1s，2~3 个串行 = 2~3s 纯启动）。`rev_paths` 用
+/// `rev:path` 语法——`HEAD:path`、`:path`（索引）、`HEAD^:path`（父提交）均经实测可用。
+/// 返回与输入对齐的 `Option<Vec<u8>>`：对象缺失（未跟踪 / 该 rev 无此文件）→ None。
+pub(super) fn show_blobs(
+    rev_paths: &[&str],
+    root: &std::path::Path,
+) -> Result<Vec<Option<Vec<u8>>>, String> {
+    let _guard = GIT_LOCK
+        .lock()
+        .map_err(|e| format!("Git lock poisoned: {}", e))?;
+
+    let mut cmd = Command::new("git");
+    cmd.args(["cat-file", "--batch"])
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x08000000);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn git cat-file: {}", e))?;
+
+    // 先起 stdout/stderr 排干线程，再写 stdin：否则 cat-file 写满 stdout 管道时
+    // 会阻塞在写端，与主线程写 stdin 互锁。
+    let mut child_stdout = child.stdout.take().expect("stdout piped");
+    let mut child_stderr = child.stderr.take().expect("stderr piped");
+    let out_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut child_stdout, &mut buf).map(|_| buf)
+    });
+    let err_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut child_stderr, &mut buf).map(|_| buf)
+    });
+
+    {
+        let stdin = child.stdin.as_mut().expect("stdin piped");
+        for rp in rev_paths {
+            std::io::Write::write_all(stdin, rp.as_bytes())
+                .map_err(|e| format!("write cat-file stdin: {}", e))?;
+            std::io::Write::write_all(stdin, b"\n")
+                .map_err(|e| format!("write cat-file stdin: {}", e))?;
+        }
+    }
+    drop(child.stdin.take());
+
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) => {
+                if start.elapsed() > GIT_TIMEOUT {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = out_handle.join();
+                    let _ = err_handle.join();
+                    return Err(format!(
+                        "git cat-file --batch timed out after {}s",
+                        GIT_TIMEOUT.as_secs()
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("Failed to wait on git cat-file: {}", e)),
+        }
+    };
+
+    let bytes = out_handle.join().unwrap_or(Ok(Vec::new())).unwrap_or_default();
+    let _stderr = err_handle.join().unwrap_or(Ok(Vec::new())).unwrap_or_default();
+    if !status.success() {
+        return Err(format!(
+            "git cat-file --batch failed (exit {:?})",
+            status.code()
+        ));
+    }
+
+    parse_cat_file_batch(&bytes, rev_paths.len())
+}
+
+/// 解析 `git cat-file --batch` 输出：每对象 `<oid> <type> <size>\n<content>\n`，
+/// 缺失 `<input> missing\n`。按输入数量对齐返回。纯字节解析，不需 git，配单测。
+fn parse_cat_file_batch(bytes: &[u8], expected: usize) -> Result<Vec<Option<Vec<u8>>>, String> {
+    let mut results = Vec::with_capacity(expected);
+    let mut pos = 0;
+    while results.len() < expected {
+        if pos >= bytes.len() {
+            // 提前收尾（不应发生）— 剩余按缺失填充，保持与输入对齐
+            results.push(None);
+            continue;
+        }
+        let nl = bytes[pos..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .ok_or("cat-file batch: truncated header")?;
+        let header = std::str::from_utf8(&bytes[pos..pos + nl])
+            .map_err(|e| format!("cat-file batch: bad header utf8: {}", e))?;
+        pos += nl + 1;
+        // 缺失行：<input> missing（input 可能含空格，只按后缀判定，不解析 input）
+        if header.ends_with(" missing") {
+            results.push(None);
+            continue;
+        }
+        // 命中行：<oid> <type> <size>
+        let parts: Vec<&str> = header.split_whitespace().collect();
+        let size: usize = parts
+            .get(2)
+            .ok_or_else(|| format!("cat-file batch: bad header '{}'", header))?
+            .parse::<usize>()
+            .map_err(|e| format!("cat-file batch: bad size: {}", e))?;
+        if pos + size > bytes.len() {
+            return Err("cat-file batch: truncated content".into());
+        }
+        let content = bytes[pos..pos + size].to_vec();
+        pos += size;
+        // content 后的定界 \n
+        if pos < bytes.len() && bytes[pos] == b'\n' {
+            pos += 1;
+        }
+        results.push(Some(content));
+    }
+    Ok(results)
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::parse_cat_file_batch;
+
+    #[test]
+    fn parses_two_blobs() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"abc123 blob 5\nhello\n");
+        bytes.extend_from_slice(b"def456 blob 6\nworld!\n");
+        let r = parse_cat_file_batch(&bytes, 2).unwrap();
+        assert_eq!(r[0].as_deref(), Some(b"hello".as_ref()));
+        assert_eq!(r[1].as_deref(), Some(b"world!".as_ref()));
+    }
+
+    #[test]
+    fn parses_missing_object() {
+        let bytes = b"HEAD:foo missing\nabc blob 3\nbar\n";
+        let r = parse_cat_file_batch(bytes, 2).unwrap();
+        assert_eq!(r[0], None);
+        assert_eq!(r[1].as_deref(), Some(b"bar".as_ref()));
+    }
+
+    #[test]
+    fn parses_binary_content() {
+        let mut bytes = b"abc blob 3\n".to_vec();
+        bytes.extend_from_slice(&[0u8, 1, 2]);
+        bytes.push(b'\n');
+        let r = parse_cat_file_batch(&bytes, 1).unwrap();
+        assert_eq!(r[0].as_deref(), Some(&[0u8, 1, 2][..]));
+    }
+
+    #[test]
+    fn missing_input_with_spaces() {
+        let bytes = b"HEAD:src/foo bar.ts missing\n";
+        let r = parse_cat_file_batch(bytes, 1).unwrap();
+        assert_eq!(r[0], None);
+    }
+
+    #[test]
+    fn empty_blob() {
+        let bytes = b"abc blob 0\n\n";
+        let r = parse_cat_file_batch(bytes, 1).unwrap();
+        assert_eq!(r[0].as_deref(), Some(&[][..]));
+    }
+}
+
+/// 把已取到的两侧 blob/标签组装成 [`DiffPair`]：too-big 短路、binary 检测、
+/// 行尾归一化、eol_only 判定、status 推导。`build_diff_pair` 与
+/// `compare::git_diff_pair_refs` 共用此尾段。`(old_exists,new_exists)==(false,false)`
+/// 时按 `root` 下 `path` 的磁盘存在性兜底（与原内联逻辑一致）。
+pub(super) fn assemble_diff_pair(
+    old_label: String,
+    new_label: String,
+    old_exists: bool,
+    new_exists: bool,
+    old_bytes: Option<Vec<u8>>,
+    new_bytes: Option<Vec<u8>>,
+    old_too_big: bool,
+    new_too_big: bool,
+    root: &std::path::Path,
+    path: &str,
+) -> DiffPair {
+    let too_big = old_too_big || new_too_big;
+    let is_binary = !too_big
+        && (old_bytes.as_deref().map(looks_binary).unwrap_or(false)
+            || new_bytes.as_deref().map(looks_binary).unwrap_or(false));
+
+    let status = match (old_exists, new_exists) {
+        (false, true) => "added",
+        (true, false) => "deleted",
+        // 两侧皆空（如未跟踪的空文件）：按磁盘存在性兜底
+        (false, false) => {
+            if root.join(path).exists() { "added" } else { "deleted" }
+        }
+        (true, true) => "modified",
+    };
+
+    if too_big {
+        return DiffPair {
+            old_text: String::new(),
+            new_text: String::new(),
+            old_label,
+            new_label,
+            status: status.to_string(),
+            is_binary,
+            eol_only: false,
+            too_big,
+        };
+    }
+
+    let old_str = old_bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
+    let new_str = new_bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
+
+    let old_raw_str = old_str.unwrap_or_default();
+    let new_raw_str = new_str.unwrap_or_default();
+    let old_text = normalize_eol(&old_raw_str);
+    let new_text = normalize_eol(&new_raw_str);
+    let eol_only = old_text == new_text && old_raw_str != new_raw_str;
+
+    DiffPair {
+        old_text,
+        new_text,
+        old_label,
+        new_label,
+        status: status.to_string(),
+        is_binary,
+        eol_only,
+        too_big,
+    }
+}
+
 /// 三种场景取数：未暂存 = HEAD vs 磁盘；已暂存 = HEAD vs 索引；提交 = h^ vs h。
 /// 返回前两侧都做行尾归一化；归一化后相等但原文不等 → eol_only。
 /// 单侧超过 1MB 时标记 too_big 并返回空文本，避免巨大 payload 跨 IPC。
-fn build_diff_pair(
+pub(super) fn build_diff_pair(
     root: &std::path::Path,
     path: &str,
     staged: bool,
@@ -925,8 +1171,14 @@ fn build_diff_pair(
         new_too_big,
     ) = if let Some(h) = commit_hash {
         let short = &h[..7.min(h.len())];
-        let old = show_blob(&format!("{}^:{}", h, path), root)?;
-        let new = show_blob(&format!("{}:{}", h, path), root)?;
+        // 一条 cat-file --batch 取 h^:path 与 h:path（原 2 个 show_blob 串行 spawn）
+        let blobs = show_blobs(
+            &[&format!("{}^:{}", h, path), &format!("{}:{}", h, path)],
+            root,
+        )?;
+        let mut it = blobs.into_iter();
+        let old = it.next().unwrap_or(None);
+        let new = it.next().unwrap_or(None);
         let old_exists = old.is_some();
         let new_exists = new.is_some();
         let old_too_big = old.as_ref().map(|b| b.len() as u64 > MAX_DIFF_BYTES).unwrap_or(false);
@@ -942,8 +1194,11 @@ fn build_diff_pair(
             new_too_big,
         )
     } else if staged {
-        let old = show_blob(&format!("HEAD:{}", path), root)?;
-        let new = show_blob(&format!(":{}", path), root)?;
+        // 一条 cat-file --batch 取 HEAD:path 与 :path（索引 blob）
+        let blobs = show_blobs(&[&format!("HEAD:{}", path), &format!(":{}", path)], root)?;
+        let mut it = blobs.into_iter();
+        let old = it.next().unwrap_or(None);
+        let new = it.next().unwrap_or(None);
         let old_exists = old.is_some();
         let new_exists = new.is_some();
         let old_too_big = old.as_ref().map(|b| b.len() as u64 > MAX_DIFF_BYTES).unwrap_or(false);
@@ -987,53 +1242,18 @@ fn build_diff_pair(
         )
     };
 
-    let too_big = old_too_big || new_too_big;
-    let is_binary = !too_big
-        && (old_bytes.as_deref().map(looks_binary).unwrap_or(false)
-            || new_bytes.as_deref().map(looks_binary).unwrap_or(false));
-
-    let status = match (old_exists, new_exists) {
-        (false, true) => "added",
-        (true, false) => "deleted",
-        // 两侧皆空（如未跟踪的空文件）：按磁盘存在性兜底
-        (false, false) => {
-            if root.join(path).exists() { "added" } else { "deleted" }
-        }
-        (true, true) => "modified",
-    };
-
-    if too_big {
-        return Ok(DiffPair {
-            old_text: String::new(),
-            new_text: String::new(),
-            old_label,
-            new_label,
-            status: status.to_string(),
-            is_binary,
-            eol_only: false,
-            too_big,
-        });
-    }
-
-    let old_str = old_bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
-    let new_str = new_bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
-
-    let old_raw_str = old_str.unwrap_or_default();
-    let new_raw_str = new_str.unwrap_or_default();
-    let old_text = normalize_eol(&old_raw_str);
-    let new_text = normalize_eol(&new_raw_str);
-    let eol_only = old_text == new_text && old_raw_str != new_raw_str;
-
-    Ok(DiffPair {
-        old_text,
-        new_text,
+    Ok(assemble_diff_pair(
         old_label,
         new_label,
-        status: status.to_string(),
-        is_binary,
-        eol_only,
-        too_big,
-    })
+        old_exists,
+        new_exists,
+        old_bytes,
+        new_bytes,
+        old_too_big,
+        new_too_big,
+        root,
+        path,
+    ))
 }
 
 #[tauri::command]

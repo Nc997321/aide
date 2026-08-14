@@ -1,6 +1,6 @@
 import { ref, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
-import type { CommitEntry, CommitDetail, BranchInfo, GitStatusEntry, StashEntry, AheadBehind, FetchPullOutcome } from "../types";
+import type { CommitEntry, CommitDetail, BranchInfo, GitStatusEntry, StashEntry, AheadBehind, FetchPullOutcome, TagEntry, CompareResult } from "../types";
 
 // ── Module-level reactive state ──
 
@@ -25,6 +25,13 @@ const fetching = ref(false);
 const fetchError = ref("");
 const stashes = ref<StashEntry[]>([]);
 const aheadBehind = ref<AheadBehind>({ ahead: 0, behind: 0, hasUpstream: false });
+
+// ── 标签 / 分支对比（独立加载，不进 loadAll；tags 不在 git_fingerprint 内，需显式触发）──
+const tags = ref<TagEntry[]>([]);
+const tagsLoading = ref(false);
+const compare = ref<CompareResult | null>(null);
+const compareLoading = ref(false);
+const compareError = ref("");
 
 const LOG_PAGE_SIZE = 50;
 
@@ -216,12 +223,52 @@ async function loadAheadBehind() {
     }
 }
 
+/** 列出所有标签（按创建日期降序）；不进 loadAll，由标签 tab 显式触发 + 手动刷新。 */
+async function loadTags() {
+    tagsLoading.value = true;
+    try {
+        tags.value = await invoke<TagEntry[]>("git_tags");
+    } catch (e) {
+        console.error("[useGit] loadTags failed:", e);
+        tags.value = [];
+    } finally {
+        tagsLoading.value = false;
+    }
+}
+
+/** 加载分支对比结果。base 缺省由后端取当前分支。失败时写 compareError，不抛出。 */
+async function loadCompare(head: string, base?: string): Promise<void> {
+    compareLoading.value = true;
+    compareError.value = "";
+    try {
+        compare.value = await invoke<CompareResult>("git_compare_branches", {
+            head,
+            base: base ?? null,
+        });
+    } catch (e) {
+        compareError.value = typeof e === "string" ? e : (e as Error).message || "对比加载失败";
+        compare.value = null;
+    } finally {
+        compareLoading.value = false;
+    }
+}
+
+function clearCompare() {
+    compare.value = null;
+    compareError.value = "";
+}
+
 async function loadAll() {
     await Promise.all([loadProjectRoot(), loadBranches(), loadCommits(), loadStatus(), loadUnpushed(), loadStashes(), loadAheadBehind()]);
 }
 
 async function refreshAfterAction() {
     await Promise.all([loadCommits(), loadStatus(), loadUnpushed(), loadStashes(), loadAheadBehind()]);
+}
+
+/** 纯获取单条提交详情（不触碰共享展开态）；供对比视图本地展开复用。 */
+async function loadCommitDetail(hash: string): Promise<CommitDetail> {
+    return invoke<CommitDetail>("git_show", { hash });
 }
 
 async function toggleCommit(hash: string) {
@@ -233,7 +280,7 @@ async function toggleCommit(hash: string) {
     expandedCommit.value = hash;
     detailLoading.value = true;
     try {
-        commitDetail.value = await invoke<CommitDetail>("git_show", { hash });
+        commitDetail.value = await loadCommitDetail(hash);
     } catch (_) {
         commitDetail.value = null;
     } finally {
@@ -432,6 +479,16 @@ export function useGit() {
         fetchError,
         stashes,
         aheadBehind,
+        // 标签 / 分支对比
+        tags,
+        tagsLoading,
+        compare,
+        compareLoading,
+        compareError,
+        loadTags,
+        loadCompare,
+        clearCompare,
+        loadCommitDetail,
         clearPushError,
         clearPullError,
         clearFetchError,
