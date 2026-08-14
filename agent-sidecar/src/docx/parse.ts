@@ -1,4 +1,3 @@
-import { isAbsolute, join } from "node:path";
 import { DOCX_MAX_CHARS, DOCX_MAX_BYTES } from "./constants.js";
 export { DOCX_MAX_CHARS, DOCX_MAX_BYTES } from "./constants.js";
 import { parseDocxToModel, DocxParseError } from "./parse/index.js";
@@ -98,22 +97,5 @@ export async function parseDocx(buffer: Buffer, opts: DocxReadOptions = {}): Pro
  * - 绝对路径 → 直用
  * - 相对路径 → 对 cwd join（跨平台用 node:path）
  */
-export function resolveDocxPath(
-  cwd: string,
-  raw: unknown,
-): { ok: true; path: string } | { ok: false; reason: "invalid_arg"; detail: string } {
-  if (typeof raw !== "string") {
-    return { ok: false, reason: "invalid_arg", detail: "file_path must be a string" };
-  }
-  const trimmed = raw.trim();
-  if (trimmed === "") {
-    return { ok: false, reason: "invalid_arg", detail: "file_path is empty" };
-  }
-  if (trimmed.startsWith("\\\\?\\")) {
-    return { ok: true, path: trimmed };
-  }
-  if (isAbsolute(trimmed)) {
-    return { ok: true, path: trimmed };
-  }
-  return { ok: true, path: join(cwd, trimmed) };
-}
+/** read 侧路径解析：与 write 侧共用 path.ts 的 bun 兼容实现（含 Windows 盘符绝对路径兜底） */
+export { resolveDocxPath } from "./path.js";

@@ -1,18 +1,42 @@
 // 路径解析工具（read/write 共用）。与 parse.ts 的 resolveDocxPath 同语义，但独立成文件
 // 供 md 层（图片相对路径）与 docxTools 层（输出路径）复用，避免 gen.ts 退役后无处安放。
+//
+// ⚠️ bun 运行时兼容（bun build --compile 编译的 aide-agent.exe 内嵌 bun 的 node:path/fs，
+// 实测 bun 1.3.14 与 Node 有三处行为差异，本文件 + docxTools 的 mkdir 全部规避）：
+//   1. path.isAbsolute('C:\\Users\\...')（反斜杠盘符绝对路径）返回 false → 会被 join 进 cwd
+//   2. path.dirname('C:\\Users\\...\\a.docx') 返回 "C:"（正确应为父目录）
+//   3. fs.mkdirSync(p, { recursive: true }) 对「已存在目录」抛 EEXIST（Node 是 no-op）
+//   反斜杠路径三个全踩；正斜杠路径行为与 Node 一致 → 非 verbatim 路径统一 normalize 正斜杠，
+//   verbatim `\\?\` 前缀不能动（破坏前缀语义），取父目录用手动 safeDirname 兜底。
 
 import { isAbsolute, join } from "node:path";
 
+/** Windows 盘符绝对路径（`C:\` 或 `C:/`）——bun 的 isAbsolute 对反斜杠盘符路径误判 false 的兜底 */
+const WIN_DRIVE_ABS = /^[a-zA-Z]:[\\/]/;
+
+/** 反斜杠统一正斜杠（Windows fs API 均接受正斜杠；bun 的 path/fs 对正斜杠路径行为与 Node 一致） */
+function toForwardSlashes(p: string): string {
+  return p.includes("\\") ? p.replace(/\\/g, "/") : p;
+}
+
+/** 取父目录：bun 的 path.dirname 对 Windows 反斜杠路径返回 "C:"（实测 bun 1.3.14）——
+ * verbatim `\\?\` 路径不能 normalize（会破坏前缀语义），取父目录用手动实现兜底。 */
+export function safeDirname(p: string): string {
+  const idx = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  if (idx <= 0) return ".";
+  return p.slice(0, idx);
+}
+
 /**
- * 把模型给的输出路径解析成可写路径。纯函数，无 IO。
+ * 把模型给的路径解析成可写路径。纯函数，无 IO。
  * - 非字符串/空 → invalid_arg
  * - verbatim `\\?\` 前缀（Windows 扩展长度路径，Tauri resource_dir 常带，见 CLAUDE.md
  *   dunce 坑）→ 原样透传，不 normalize/join（否则破坏前缀语义）
- * - 绝对路径 → 直用
- * - 相对路径 → 对 cwd join（跨平台用 node:path）
+ * - 绝对路径（含 Windows 盘符，isAbsolute 有 bun 兼容兜底）→ 直用（normalize 正斜杠）
+ * - 相对路径 → 对 cwd join（跨平台用 node:path，join 结果 normalize 正斜杠）
  * 不查盘——exists/not_a_directory 是 handler 层职责。
  */
-export function resolveDocxOutPath(
+export function resolveDocxPath(
   cwd: string,
   raw: unknown,
 ): { ok: true; path: string } | { ok: false; reason: "invalid_arg"; detail: string } {
@@ -26,8 +50,10 @@ export function resolveDocxOutPath(
   if (trimmed.startsWith("\\\\?\\")) {
     return { ok: true, path: trimmed };
   }
-  if (isAbsolute(trimmed)) {
-    return { ok: true, path: trimmed };
-  }
-  return { ok: true, path: join(cwd, trimmed) };
+  // join 的 cwd 也要先 normalize：bun 的 join 对反斜杠 cwd 会把 `C:\work` 解析成 `C:work`（实测 bun 1.3.14）
+  const p = isAbsolute(trimmed) || WIN_DRIVE_ABS.test(trimmed) ? trimmed : join(toForwardSlashes(cwd), trimmed);
+  return { ok: true, path: toForwardSlashes(p) };
 }
+
+/** write 侧别名（docxTools 的 import 名保持稳定，read/write 共用同一实现） */
+export const resolveDocxOutPath = resolveDocxPath;

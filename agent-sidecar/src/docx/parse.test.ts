@@ -67,10 +67,10 @@ describe("resolveDocxPath", () => {
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.path).toBe("/abs/a.docx");
   });
-  it("relative path joined to cwd", () => {
+  it("relative path joined to cwd（结果 normalize 正斜杠，bun 兼容）", () => {
     const r = resolveDocxPath("/cwd", "a.docx");
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.path).toBe(join("/cwd", "a.docx"));
+    if (r.ok) expect(r.path).toBe(join("/cwd", "a.docx").replace(/\\/g, "/"));
   });
 });
 

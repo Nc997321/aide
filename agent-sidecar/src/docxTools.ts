@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { statSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import {
   parseDocx,
   resolveDocxPath,
@@ -9,7 +8,7 @@ import {
   DOCX_MAX_CHARS,
   type DocxParseResult,
 } from "./docx/parse.js";
-import { resolveDocxOutPath } from "./docx/path.js";
+import { resolveDocxOutPath, safeDirname } from "./docx/path.js";
 import { DOCX_MAX_INPUT_CHARS } from "./docx/constants.js";
 import { markdownToModel } from "./docx/md/toModel.js";
 import { modelToDocxBuffer } from "./docx/gen/index.js";
@@ -254,10 +253,17 @@ export function docxMcpRegistration(
           }
 
           try {
-            mkdirSync(dirname(path), { recursive: true });
+            // safeDirname：bun 的 path.dirname 对 Windows 反斜杠路径返回 "C:"（实测 bun 1.3.14），
+            // verbatim `\\?\` 路径不能 normalize，父目录用手动实现取。
+            mkdirSync(safeDirname(path), { recursive: true });
           } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            return textResult(formatDocxGenResult({ ok: false, reason: "unknown", detail: `mkdir failed: ${msg}` }, path));
+            // bun 的 recursive mkdir 对「已存在目录」抛 EEXIST（Node 是 no-op，实测 bun 1.3.14）——
+            // 目录已存在即满足要求，吞掉；其余错误照报。
+            const code = (err as NodeJS.ErrnoException).code;
+            if (code !== "EEXIST") {
+              const msg = err instanceof Error ? err.message : String(err);
+              return textResult(formatDocxGenResult({ ok: false, reason: "unknown", detail: `mkdir failed: ${msg}` }, path));
+            }
           }
 
           const parsed = markdownToModel(md, { cwd });
