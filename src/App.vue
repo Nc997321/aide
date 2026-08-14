@@ -388,7 +388,10 @@ async function onSidebarWsChanged(path: string) {
   projectName.value = path.split(/[\\/]/).filter(Boolean).pop() || path;
   // 混合 tab 布局：切换活动工作区不动聊天区的 tab（布局是全局一份）
   await fileTreeRef.value?.loadRoot();
-  if (rightTab.value === "git") gitPanelRef.value?.reload();
+  // git 面板数据是工作区级的（分支/提交/状态/标签/对比），右栏 git 徽标也读
+  // useGit 状态——无条件刷新，不依赖 git tab 是否激活；否则面板隐藏期间切走
+  // 再切回会看到上一个工作区的陈旧数据（分支 unknown / 提交全空 / 对比报错）
+  gitPanelRef.value?.reload();
   // Load run configurations for this workspace (auto-detects on first open).
   await loadRunConfigs(path, path);
   // 顺序敏感：list_run_configs 在 Rust 侧做存量 JAVA_HOME→工作区 JDK 迁移，

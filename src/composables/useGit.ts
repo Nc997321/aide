@@ -35,6 +35,17 @@ const compareError = ref("");
 
 const LOG_PAGE_SIZE = 50;
 
+// ── 加载纪元：工作区切换后旧加载结果可能晚到（git 命令 ~1s/条，两轮 loadAll
+// 交错时旧结果会覆盖新结果），用纪元号丢弃过期写入——「最新一次加载胜出」。
+// 每个 load* 函数在调用时捕获当前纪元（或由 loadAll 显式传入新纪元），结果
+// 落地前校验：纪元已推进 = 期间又发起了新一轮加载，丢弃本次结果。──
+let loadEpoch = 0;
+
+/** 结果是否已过期（期间又发起了新一轮加载）。 */
+function isStale(epoch: number): boolean {
+  return epoch !== loadEpoch;
+}
+
 // ── Computed ──
 
 const unstagedFiles = computed(() =>
@@ -130,10 +141,13 @@ function dirGitStatus(absPath: string): string | null {
 
 // ── Actions ──
 
-async function loadBranches() {
+async function loadBranches(epoch?: number) {
+    const eff = epoch ?? loadEpoch;
     try {
-        branches.value = await invoke<BranchInfo[]>("git_branches");
-        const cur = branches.value.find((b) => b.is_current);
+        const list = await invoke<BranchInfo[]>("git_branches");
+        if (isStale(eff)) return;
+        branches.value = list;
+        const cur = list.find((b) => b.is_current);
         const name = cur?.name ?? "";
         // detached HEAD 时 git branch 输出 `* (HEAD detached at abc1234)`
         const m = name.match(/^\(HEAD detached (?:at|from) (.+)\)$/);
@@ -145,11 +159,13 @@ async function loadBranches() {
             currentBranch.value = name;
         }
     } catch (e) {
+        if (isStale(eff)) return;
         console.error("[useGit] loadBranches failed:", e);
     }
 }
 
-async function loadCommits() {
+async function loadCommits(epoch?: number) {
+    const eff = epoch ?? loadEpoch;
     loading.value = true;
     try {
         const page = await invoke<CommitEntry[]>("git_log", {
@@ -157,108 +173,142 @@ async function loadCommits() {
             branch: currentBranch.value || null,
             skip: 0,
         });
+        if (isStale(eff)) return;
         commits.value = page;
         hasMoreCommits.value = page.length >= LOG_PAGE_SIZE;
     } catch (e) {
+        if (isStale(eff)) return;
         console.error("[useGit] loadCommits failed:", e);
         commits.value = [];
         hasMoreCommits.value = false;
     } finally {
-        loading.value = false;
+        // loading 由最新一轮 loadAll 的 loadCommits 兜底复位（loadAll 必含 loadCommits）
+        if (!isStale(eff)) loading.value = false;
     }
 }
 
 async function loadMoreCommits() {
     if (loadingMore.value || !hasMoreCommits.value) return;
     loadingMore.value = true;
+    const eff = loadEpoch;
     try {
         const page = await invoke<CommitEntry[]>("git_log", {
             limit: LOG_PAGE_SIZE,
             branch: currentBranch.value || null,
             skip: commits.value.length,
         });
+        if (isStale(eff)) return;
         commits.value = [...commits.value, ...page];
         hasMoreCommits.value = page.length >= LOG_PAGE_SIZE;
     } catch (e) {
+        if (isStale(eff)) return;
         console.error("[useGit] loadMoreCommits failed:", e);
     } finally {
         loadingMore.value = false;
     }
 }
 
-async function loadStatus() {
+async function loadStatus(epoch?: number) {
+    const eff = epoch ?? loadEpoch;
     try {
         const s = await invoke<{ entries: GitStatusEntry[] }>("git_status");
+        if (isStale(eff)) return;
         statusEntries.value = s.entries;
     } catch (e) {
+        if (isStale(eff)) return;
         console.error("[useGit] loadStatus failed:", e);
         statusEntries.value = [];
     }
 }
 
-async function loadUnpushed() {
+async function loadUnpushed(epoch?: number) {
+    const eff = epoch ?? loadEpoch;
     try {
         const hashes: string[] = await invoke("git_unpushed_commits");
+        if (isStale(eff)) return;
         unpushedHashes.value = new Set(hashes);
     } catch (e) {
+        if (isStale(eff)) return;
         console.error("[useGit] loadUnpushed failed:", e);
         unpushedHashes.value = new Set();
     }
 }
 
-async function loadProjectRoot() {
+async function loadProjectRoot(epoch?: number) {
+    const eff = epoch ?? loadEpoch;
     try {
         const info = await invoke<{ root: string }>("get_project_info");
+        if (isStale(eff)) return;
         projectRoot.value = info.root;
     } catch (e) {
+        if (isStale(eff)) return;
         console.error("[useGit] loadProjectRoot failed:", e);
     }
 }
 
-async function loadStashes() {
+async function loadStashes(epoch?: number) {
+    const eff = epoch ?? loadEpoch;
     try {
-        stashes.value = await invoke<StashEntry[]>("git_stash_list");
+        const list = await invoke<StashEntry[]>("git_stash_list");
+        if (isStale(eff)) return;
+        stashes.value = list;
     } catch (e) {
+        if (isStale(eff)) return;
         console.error("[useGit] loadStashes failed:", e);
         stashes.value = [];
     }
 }
 
-async function loadAheadBehind() {
+async function loadAheadBehind(epoch?: number) {
+    const eff = epoch ?? loadEpoch;
     try {
-        aheadBehind.value = await invoke<AheadBehind>("git_ahead_behind");
+        const ab = await invoke<AheadBehind>("git_ahead_behind");
+        if (isStale(eff)) return;
+        aheadBehind.value = ab;
     } catch (e) {
+        if (isStale(eff)) return;
         console.error("[useGit] loadAheadBehind failed:", e);
         aheadBehind.value = { ahead: 0, behind: 0, hasUpstream: false };
     }
 }
 
-/** 列出所有标签（按创建日期降序）；不进 loadAll，由标签 tab 显式触发 + 手动刷新。 */
-async function loadTags() {
+/** 列出所有标签（按创建日期降序）；不进 loadAll，由标签 tab 显式触发 + 手动刷新。
+ *  不推进纪元（与 loadAll 同轮共享——reload 并行调用两者时不能互相作废）。 */
+async function loadTags(epoch?: number) {
+    const eff = epoch ?? loadEpoch;
     tagsLoading.value = true;
     try {
-        tags.value = await invoke<TagEntry[]>("git_tags");
+        const list = await invoke<TagEntry[]>("git_tags");
+        if (isStale(eff)) return;
+        tags.value = list;
     } catch (e) {
+        if (isStale(eff)) return;
         console.error("[useGit] loadTags failed:", e);
         tags.value = [];
     } finally {
+        // 无条件复位：loadAll 不含 loadTags，过期丢弃后没有兜底复位方
         tagsLoading.value = false;
     }
 }
 
 /** 加载分支对比结果。base 缺省由后端取当前分支。失败时写 compareError，不抛出。 */
 async function loadCompare(head: string, base?: string): Promise<void> {
+    const eff = loadEpoch;
     compareLoading.value = true;
     compareError.value = "";
     try {
-        compare.value = await invoke<CompareResult>("git_compare_branches", {
+        const result = await invoke<CompareResult>("git_compare_branches", {
             head,
             base: base ?? null,
         });
+        if (isStale(eff)) return;
+        compare.value = result;
     } catch (e) {
+        if (isStale(eff)) return;
         compareError.value = typeof e === "string" ? e : (e as Error).message || "对比加载失败";
         compare.value = null;
     } finally {
+        // 无条件复位：loadAll 不含 loadCompare，过期丢弃后由 projectRoot watcher 重跑
         compareLoading.value = false;
     }
 }
@@ -268,8 +318,19 @@ function clearCompare() {
     compareError.value = "";
 }
 
-async function loadAll() {
-    await Promise.all([loadProjectRoot(), loadBranches(), loadCommits(), loadStatus(), loadUnpushed(), loadStashes(), loadAheadBehind()]);
+async function loadAll(epoch?: number) {
+    const eff = epoch ?? ++loadEpoch;
+    // 先定分支：commits 的 branch 参数、compare 的 base 都依赖 currentBranch，
+    // 并行发起会用旧仓库的分支名查新仓库
+    await loadBranches(eff);
+    await Promise.all([
+        loadProjectRoot(eff),
+        loadCommits(eff),
+        loadStatus(eff),
+        loadUnpushed(eff),
+        loadStashes(eff),
+        loadAheadBehind(eff),
+    ]);
 }
 
 async function refreshAfterAction() {

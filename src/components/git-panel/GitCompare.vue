@@ -21,7 +21,7 @@ import { useFileViewer } from "../../composables/useFileViewer";
 import { useToast } from "../../composables/useToast";
 import type { CompareFile, CommitDetail, DiffEntry, DiffPair } from "../../types";
 
-const { currentBranch, branches, compare, compareLoading, compareError, loadCompare, clearCompare, loadCommitDetail, toAbsPath } =
+const { currentBranch, branches, projectRoot, compare, compareLoading, compareError, loadCompare, clearCompare, loadCommitDetail, toAbsPath } =
   useGit();
 const fileViewer = useFileViewer();
 const { showToast } = useToast();
@@ -68,6 +68,9 @@ async function runCompare() {
 }
 
 watch([headBranch, currentBranch], () => { void runCompare(); });
+// 工作区切换后重跑对比：两仓库分支名相同（如都是 master）时 currentBranch/
+// headBranch 都不变，上面的 watcher 不会触发，但 projectRoot 一定变——用它兜底
+watch(projectRoot, () => { void runCompare(); });
 onMounted(() => { void runCompare(); });
 
 async function toggleCompareCommit(hash: string) {
