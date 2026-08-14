@@ -88,6 +88,10 @@ const branchDisplay = computed(() => {
   return "unknown";
 });
 
+// 分支下拉分组：本地分支可删可切换，远程分支只读、点击检出为本地跟踪分支
+const localBranches = computed(() => branches.value.filter((b) => !b.is_remote));
+const remoteBranches = computed(() => branches.value.filter((b) => b.is_remote));
+
 onMounted(() => { loadAll(); });
 
 // 工作区无变更时自动折叠 Changes，有变更时自动展开
@@ -400,10 +404,15 @@ defineExpose({ reload: loadAll });
           <button class="branch-dropdown-item branch-dropdown-create" @click="onCreateBranch">
             <span class="branch-item-name">+ 新建分支...</span>
           </button>
-          <button v-for="b in branches" :key="b.name" class="branch-dropdown-item" :class="{ current: b.is_current }" @click="onBranchSelect(b.name)">
+          <button v-for="b in localBranches" :key="b.name" class="branch-dropdown-item" :class="{ current: b.is_current }" @click="onBranchSelect(b.name)">
             <span class="branch-item-name">{{ b.name }}</span>
             <span v-if="b.is_current" class="branch-item-check">✓</span>
             <button v-else class="branch-delete-btn" v-tooltip="'删除分支'" @click.stop="onDeleteBranch(b.name, $event)">🗑</button>
+          </button>
+          <div v-if="remoteBranches.length > 0" class="branch-dropdown-sep">远程分支</div>
+          <button v-for="b in remoteBranches" :key="b.name" class="branch-dropdown-item branch-remote-item" @click="onBranchSelect(b.name)">
+            <span class="branch-item-name">{{ b.name }}</span>
+            <span class="branch-remote-hint" v-tooltip="'检出为本地跟踪分支'">↩</span>
           </button>
         </div>
       </div>
@@ -700,6 +709,19 @@ defineExpose({ reload: loadAll });
 }
 .branch-dropdown-create:hover { background: color-mix(in srgb, var(--aide-info) 8%, transparent); color: var(--aide-accent); }
 .branch-item-check { font-size: 10px; }
+
+/* ── 远程分支分组 ── */
+.branch-dropdown-sep {
+  display: flex; align-items: center; gap: 8px;
+  margin: 4px 2px 2px; padding: 4px 6px 0;
+  font-size: 10px; color: var(--aide-text-muted);
+  text-transform: uppercase; letter-spacing: 0.3px;
+}
+.branch-dropdown-sep::after { content: ""; flex: 1; height: 1px; background: var(--aide-surface-hover); }
+.branch-remote-item .branch-item-name { font-family: var(--aide-font-mono); font-size: 11px; color: var(--aide-text-muted); }
+.branch-remote-item:hover .branch-item-name { color: var(--aide-accent); }
+.branch-remote-hint { flex-shrink: 0; font-size: 11px; color: var(--aide-text-muted); }
+.branch-remote-item:hover .branch-remote-hint { color: var(--aide-info); }
 
 .branch-delete-btn {
   display: none; flex-shrink: 0; background: none; border: none; color: var(--aide-text-muted);

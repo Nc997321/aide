@@ -33,6 +33,8 @@ pub struct CommitDetail {
 pub struct BranchInfo {
     pub name: String,
     pub is_current: bool,
+    /// true = 远程跟踪分支（`origin/xxx`），本地分支为 false
+    pub is_remote: bool,
 }
 
 #[derive(Debug, serde::Serialize, Clone)]
@@ -1061,7 +1063,7 @@ pub async fn git_branches(
         return Ok(Vec::new());
     }
 
-    let output = match git_run_async(vec!["branch".into()], root).await {
+    let output = match git_run_async(vec!["branch".into(), "-a".into()], root).await {
         Ok(o) => o,
         Err(e) => {
             error!("git_branches failed: {}", e);
@@ -1081,14 +1083,28 @@ pub async fn git_branches(
         if trimmed.is_empty() {
             continue;
         }
-        if let Some(name) = trimmed.strip_prefix("* ") {
-            branches.push(BranchInfo { name: name.to_string(), is_current: true });
-        } else {
-            branches.push(BranchInfo { name: trimmed.to_string(), is_current: false });
+        // 跳过符号引用别名行（`origin/HEAD -> origin/main`），不是真实分支
+        if trimmed.contains(" -> ") {
+            continue;
         }
+        let (is_current, raw) = match trimmed.strip_prefix("* ") {
+            Some(rest) => (true, rest),
+            None => (false, trimmed),
+        };
+        // `git branch -a` 里远程分支带 `remotes/` 前缀，剥掉后展示为 origin/xxx
+        let (is_remote, name) = match raw.strip_prefix("remotes/") {
+            Some(rest) => (true, rest.to_string()),
+            None => (false, raw.to_string()),
+        };
+        branches.push(BranchInfo { name, is_current, is_remote });
     }
 
-    branches.sort_by(|a, b| b.is_current.cmp(&a.is_current).then(a.name.cmp(&b.name)));
+    branches.sort_by(|a, b| {
+        b.is_current
+            .cmp(&a.is_current)
+            .then(a.is_remote.cmp(&b.is_remote))
+            .then(a.name.cmp(&b.name))
+    });
     info!(count = branches.len(), "git_branches ok");
     Ok(branches)
 }
@@ -1103,7 +1119,36 @@ pub async fn git_checkout(
         return Err("Not a git repository".into());
     }
 
-    let output = git_run_async(vec!["checkout".into(), branch], root).await
+    let mut args: Vec<String> = vec!["checkout".into()];
+    if let Some((_, local)) = branch.split_once('/') {
+        // 远程分支 ref（origin/xxx，git remote 名不含 `/`）：
+        // 本地无同名分支 → `git checkout -b <短名> --track <ref>` 创建跟踪分支；
+        // 已有同名本地分支 → 检出本地分支（即该远程分支的本地跟踪分支），避免检出远程 ref 变 detached HEAD。
+        let local_exists = git_run_async(
+            vec![
+                "show-ref".into(),
+                "--verify".into(),
+                "--quiet".into(),
+                format!("refs/heads/{}", local),
+            ],
+            root.clone(),
+        )
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+        if !local_exists {
+            args.push("-b".into());
+            args.push(local.to_string());
+            args.push("--track".into());
+            args.push(branch.clone());
+        } else {
+            args.push(local.to_string());
+        }
+    } else {
+        args.push(branch.clone());
+    }
+
+    let output = git_run_async(args, root).await
         .map_err(|e| format!("Failed to run git checkout: {}", e))?;
 
     if !output.status.success() {

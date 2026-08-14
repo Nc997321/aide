@@ -251,6 +251,8 @@ export interface CommitDetail {
 export interface BranchInfo {
   name: string;
   is_current: boolean;
+  /** true = 远程跟踪分支（origin/xxx），false/缺省 = 本地分支 */
+  is_remote?: boolean;
 }
 
 export interface GitStatusEntry {
