@@ -294,6 +294,57 @@ function makeParagraph(
   return out;
 }
 
+/**
+ * 列表项块级 tokens → runs（多段落/代码块合并为单个段落块，段间 break 分隔）。
+ * marked v18 的 item.tokens 对单行项是 inline tokens（text），对多段落/含代码块项是
+ * 块级 tokens（paragraph/code/…）——walkInline 只认 inline token，块级会走 default 被
+ * 静默丢弃（实测：多段落列表项只剩编号前缀，内容全丢）。这里统一按块级处理。
+ */
+function listItemTokensToRuns(tokens: Token[], ctx: MdCtx, style: RunStyle): Run[] {
+  const out: Run[] = [];
+  let wrote = false;
+  const breakBetween = () => {
+    if (wrote) out.push({ text: "", break: true, ...style });
+  };
+  for (const t of std(tokens)) {
+    switch (t.type) {
+      case "text":
+        out.push({ text: t.text, ...style });
+        wrote = true;
+        break;
+      case "paragraph":
+        breakBetween();
+        // 段落内图片降级为占位文本（列表项拆块会破坏 bullet 结构）
+        out.push(...inlineToRuns(walkInline(t.tokens, ctx, style)));
+        wrote = true;
+        break;
+      case "code": {
+        breakBetween();
+        // 行间 break 与 makeCodeBlock 同模式（首行无 break，后续行前置 break）
+        t.text.replace(/\n$/, "").split("\n").forEach((line, i) => {
+          out.push({ text: line, font: ctx.opts.monoFont, shading: "F5F5F5", ...(i > 0 ? { break: true } : {}), ...style });
+        });
+        wrote = true;
+        break;
+      }
+      case "blockquote":
+        breakBetween();
+        out.push(...listItemTokensToRuns(t.tokens, ctx, { ...style, color: "595959" }));
+        wrote = true;
+        break;
+      case "space":
+        break;
+      default:
+        // 表格/标题等无法在列表段落内表达 → 降级占位文本
+        breakBetween();
+        out.push({ text: `[${t.type}]`, italics: true, color: "808080", ...style });
+        wrote = true;
+        break;
+    }
+  }
+  return out;
+}
+
 /** 列表段落模拟：bullet/编号字符 + 缩进（IR 无 list 类型） */
 function walkList(token: Tokens.List, ctx: MdCtx, listLevel: number, quote: boolean): Block[] {
   const level = Math.min(listLevel, 2);
@@ -311,8 +362,7 @@ function walkList(token: Tokens.List, ctx: MdCtx, listLevel: number, quote: bool
     const runs: Run[] = [{ text: token.ordered ? `${index}. ` : "• " }];
     if (token.ordered) index++;
     if (item.task) runs.push({ text: item.checked ? "☑ " : "☐ " });
-    // 列表项内图片降级为占位文本（列表项拆块会破坏 bullet 结构）
-    runs.push(...inlineToRuns(walkInline(bodyTokens, ctx, quote ? { color: "595959" } : {})));
+    runs.push(...listItemTokensToRuns(bodyTokens, ctx, quote ? { color: "595959" } : {}));
     ctx.paragraphs++;
     out.push({
       kind: "paragraph",

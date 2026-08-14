@@ -83,6 +83,33 @@ describe("markdownToModel 基础", () => {
     expect((blocks[2] as Paragraph).runs[0].text).toBe("1. ");
     expect((blocks[3] as Paragraph).runs[0].text).toBe("2. ");
   });
+
+  it("多段落列表项：内容不丢（编号前缀 + 各段文本 + 段间 break）", () => {
+    // marked v18 对带空行续行的列表项产块级 tokens（paragraph），曾导致 walkInline 静默丢弃内容
+    const { doc } = toModel("1. 第一段\n\n   第二段缩进");
+    const p = firstParagraph(doc);
+    expect(p.runs[0].text).toBe("1. ");
+    const texts = p.runs.map((r) => r.text).join("");
+    expect(texts).toContain("第一段");
+    expect(texts).toContain("第二段缩进");
+    expect(p.runs.some((r) => r.break)).toBe(true);
+  });
+
+  it("列表项内代码块：代码行保真（monoFont + 行间 break）", () => {
+    const { doc } = toModel("1. 执行命令\n\n    ```\n    rule family=... accept\n    ```");
+    const p = firstParagraph(doc);
+    expect(p.runs[0].text).toBe("1. ");
+    const codeRun = p.runs.find((r) => r.text.includes("rule family"));
+    expect(codeRun).toBeDefined();
+    expect(codeRun?.font).toBe("Consolas");
+  });
+
+  it("列表项内引用：递归转 runs 不丢内容", () => {
+    const { doc } = toModel("1. 说明\n\n    > 引用内容");
+    const p = firstParagraph(doc);
+    const texts = p.runs.map((r) => r.text).join("");
+    expect(texts).toContain("引用内容");
+  });
 });
 
 describe("markdownToModel 扩展语法", () => {
@@ -208,6 +235,13 @@ describe("round-trip markdown → docx → markdown", () => {
     const md = `![测试图](data:image/png;base64,${PNG_1x1.toString("base64")}){width=300}`;
     const back = await fullRoundTrip(md);
     expect(back).toContain("![测试图](media/0.png){width=300}");
+  });
+
+  it("多段落列表项 round-trip：编号与内容保真", async () => {
+    const back = await fullRoundTrip("1. 第一段\n\n   第二段缩进\n\n2. 第二项");
+    expect(back).toContain("1. 第一段");
+    expect(back).toContain("第二段缩进");
+    expect(back).toContain("2. 第二项");
   });
 });
 
