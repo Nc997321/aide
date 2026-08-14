@@ -5,7 +5,7 @@ import { parseDocx, classifyDocxError, resolveDocxPath, DOCX_MAX_CHARS } from ".
 
 /**
  * 用 jszip 内存构造最小 .docx（Word 2007+ zip 包：[Content_Types].xml + _rels/.rels +
- * word/document.xml），不落盘。mammoth 认这套结构。
+ * word/document.xml），不落盘。自研解析器认这套结构。
  */
 async function makeDocx(bodyXml: string): Promise<Buffer> {
   const zip = new JSZip();
@@ -75,11 +75,14 @@ describe("resolveDocxPath", () => {
 });
 
 describe("parseDocx", () => {
-  it("parses paragraphs to markdown", async () => {
+  it("parses paragraphs to markdown with meta", async () => {
     const buf = await makeDocx(`<w:p><w:r><w:t>Hello body</w:t></w:r></w:p>`);
     const res = await parseDocx(buf);
     expect(res.ok).toBe(true);
-    if (res.ok) expect(res.markdown).toContain("Hello body");
+    if (res.ok && res.mode === "markdown") {
+      expect(res.markdown).toContain("Hello body");
+      expect(res.meta).toEqual({ paragraphs: 1, images: 0, tables: 0, sections: 1 });
+    }
   });
 
   it("truncates markdown over DOCX_MAX_CHARS", async () => {
@@ -87,10 +90,31 @@ describe("parseDocx", () => {
     const buf = await makeDocx(`<w:p><w:r><w:t>${big}</w:t></w:r></w:p>`);
     const res = await parseDocx(buf);
     expect(res.ok).toBe(true);
-    if (res.ok) {
+    if (res.ok && res.mode === "markdown") {
       expect(res.truncated).toBe(true);
       expect(res.markdown.length).toBeLessThanOrEqual(DOCX_MAX_CHARS);
     }
+  });
+
+  it("structure mode: headings/fields/sections overview", async () => {
+    const buf = await makeDocx(
+      `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>第一章</w:t></w:r></w:p>` +
+        `<w:p><w:r><w:t>正文</w:t></w:r></w:p>`,
+    );
+    const res = await parseDocx(buf, { mode: "structure" });
+    expect(res.ok).toBe(true);
+    if (res.ok && res.mode === "structure") {
+      expect(res.structure.sections).toBe(1);
+      expect(res.structure.paragraphs).toBe(2);
+      expect(res.structure.headings).toEqual([{ level: 1, text: "第一章" }]);
+    }
+  });
+
+  it("images: base64 embeds media bytes", async () => {
+    const buf = await makeDocx(`<w:p><w:r><w:t>Hello body</w:t></w:r></w:p>`);
+    const res = await parseDocx(buf, { images: "base64" });
+    expect(res.ok).toBe(true);
+    if (res.ok && res.mode === "markdown") expect(res.markdown).toContain("Hello body");
   });
 
   it("corrupt buffer → not ok", async () => {

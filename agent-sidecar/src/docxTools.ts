@@ -9,12 +9,16 @@ import {
   DOCX_MAX_CHARS,
   type DocxParseResult,
 } from "./docx/parse.js";
-import {
-  markdownToDocxBuffer,
-  resolveDocxOutPath,
-  DOCX_MAX_INPUT_CHARS,
-  type DocxGenResult,
-} from "./docx/gen.js";
+import { resolveDocxOutPath } from "./docx/path.js";
+import { DOCX_MAX_INPUT_CHARS } from "./docx/constants.js";
+import { markdownToModel } from "./docx/md/toModel.js";
+import { modelToDocxBuffer } from "./docx/gen/index.js";
+import type { DocxDocument } from "./docx/model.js";
+
+/** write 结果（工具层组合 markdownToModel 计数 + modelToDocxBuffer buffer 而成） */
+export type DocxGenResult =
+  | { ok: true; buffer: Buffer; paragraphs: number; images: number; skippedImages: number }
+  | { ok: false; reason: "invalid_arg" | "unknown"; detail: string };
 
 /** allowedTools 前缀规则：匹配该 server 全部工具，canUseTool 直接跳过（只读工具不弹窗）。 */
 export const DOCX_ALLOW_RULE = "mcp__aide-docs";
@@ -26,10 +30,12 @@ export const DOCX_ALLOW_RULE = "mcp__aide-docs";
  */
 export const DOCX_INSTRUCTIONS = `This environment has built-in .docx (Word 2007+) tools exposed as the aide-docs MCP server (read_docx / write_docx). Rules:
 1. When the user asks you to read a .docx file, you MUST call mcp__aide-docs__read_docx — do NOT use Read (returns binary garbage) and do NOT use Bash+pandoc (pandoc is often not installed).
-2. read_docx returns the document content as markdown (headings, lists, tables, link text preserved; images are replaced with alt text/path — no image bytes).
-3. read_docx only handles .docx. It does NOT handle legacy .doc (Word 97-2003), .pdf, or .xlsx — for those, ask the user to convert to .docx or use another approach.
-4. When the user asks you to create or write a .docx file, you MUST call mcp__aide-docs__write_docx with the markdown content and the output file_path — do NOT use Bash with python-docx/pandoc (often not installed) and do NOT try to write binary files yourself.
-5. write_docx converts markdown to .docx (headings, lists, tables, code blocks, blockquotes, and local images supported; unreadable images degrade to a placeholder). It refuses to overwrite an existing file unless you pass overwrite: true.`;
+2. read_docx returns the document content as markdown (headings, lists, tables, link text preserved; images are replaced with alt text/path — no image bytes) plus a one-line summary (paragraphs/images/tables/sections counts).
+3. For long documents, call read_docx with mode: "structure" first to get a compact JSON overview (headings, tables, images, fields, sections) and decide which part to read in full.
+4. read_docx only handles .docx. It does NOT handle legacy .doc (Word 97-2003), .pdf, or .xlsx — for those, ask the user to convert to .docx or use another approach.
+5. When the user asks you to create or write a .docx file, you MUST call mcp__aide-docs__write_docx with the markdown content and the output file_path — do NOT use Bash with python-docx/pandoc (often not installed) and do NOT try to write binary files yourself.
+6. write_docx converts markdown to .docx (headings, lists, tables, code blocks, blockquotes, and local images supported; unreadable images degrade to a placeholder). It refuses to overwrite an existing file unless you pass overwrite: true.
+7. write_docx extension syntax: [TOC] inserts a table of contents (Word fills page numbers on open); [TOC:figures] / [TOC:tables] insert figure/table indexes that collect paragraphs styled with ::: caption / ::: tablecaption (mark figure captions and table captions with those directives). \newpage inserts a page break; ::: center/right/justify aligns the following paragraph; {width=N} after an image sets its width in px.`;
 
 
 // ---------------------------------------------------------------------------
@@ -62,10 +68,14 @@ export function formatDocxResult(res: DocxParseResult, path: string): string {
     }
   }
   const head = `# ${path}\n\n`;
+  if (res.mode === "structure") {
+    return `${head}${JSON.stringify(res.structure, null, 2)}`;
+  }
+  const meta = `Paragraphs: ${res.meta.paragraphs}, Images: ${res.meta.images}, Tables: ${res.meta.tables}, Sections: ${res.meta.sections}\n\n`;
   const tail = res.truncated
     ? `\n\n[Truncated at ${DOCX_MAX_CHARS} characters — ask the user for the specific section or heading if you need more.]`
     : "";
-  return `${head}${res.markdown}${tail}`;
+  return `${head}${meta}${res.markdown}${tail}`;
 }
 
 /** handler 层错误（exists 由 write_docx 的 statSync 检查产生，不在 gen.ts 的 reason 里）。 */
@@ -78,7 +88,7 @@ function stripVerbatimPrefix(p: string): string {
   return p;
 }
 
-export function formatDocxGenResult(res: DocxGenOutcome, path: string): string {
+export function formatDocxGenResult(res: DocxGenOutcome, path: string, hasToc = false): string {
   if (!res.ok) {
     switch (res.reason) {
       case "invalid_arg":
@@ -92,7 +102,17 @@ export function formatDocxGenResult(res: DocxGenOutcome, path: string): string {
   const display = stripVerbatimPrefix(path);
   const images = res.images > 0 ? `, ${res.images} images` : "";
   const skipped = res.skippedImages > 0 ? ` (${res.skippedImages} skipped)` : "";
-  return `# ${display}\n\nWrote ${res.paragraphs} paragraphs${images}${skipped}. Bytes: ${res.buffer.length}`;
+  const tocNote = hasToc
+    ? `\n\nNote: the document contains a TOC field marked for auto-update — when the user opens it in Word, accept the "update fields" prompt (or press Ctrl+A then F9) to fill in page numbers.`
+    : "";
+  return `# ${display}\n\nWrote ${res.paragraphs} paragraphs${images}${skipped}. Bytes: ${res.buffer.length}${tocNote}`;
+}
+
+/** 文档是否含 TOC 域（[TOC] / [TOC:...] 变体）——write 成功提示用 */
+export function hasTocField(doc: DocxDocument): boolean {
+  return doc.sections.some((s) =>
+    s.blocks.some((b) => b.kind === "field" && b.type === "toc"),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -128,9 +148,24 @@ export function docxMcpRegistration(
       tool(
         "read_docx",
         "Read a .docx (Word 2007+) file and return its content as markdown — headings/lists/tables/link text preserved; images replaced with alt text/path (no image bytes). Use this INSTEAD OF Read (binary garbage) or Bash+pandoc (often not installed). Does NOT handle legacy .doc, .pdf, or .xlsx — ask the user to convert to .docx.",
-        { file_path: z.string().describe("Absolute or workspace-relative path to the .docx file") },
+        {
+          file_path: z.string().describe("Absolute or workspace-relative path to the .docx file"),
+          mode: z
+            .enum(["markdown", "structure"])
+            .optional()
+            .describe(
+              "Output mode: markdown (default, full content) or structure (compact JSON overview: headings/tables/images/fields/sections — use for long documents to decide what to read)",
+            ),
+          images: z
+            .enum(["placeholder", "skip", "base64"])
+            .optional()
+            .describe(
+              "Image strategy: placeholder (default, alt text + path, no bytes), skip (omit images), or base64 (embed image bytes as data URIs — large output, use only when the image content matters)",
+            ),
+        },
         async (args) => {
-          const fp = (args as Record<string, unknown>).file_path;
+          const a = args as Record<string, unknown>;
+          const fp = a.file_path;
           const resolved = resolveDocxPath(cwd, fp);
           if (!resolved.ok) return textResult(`Invalid file_path: ${resolved.detail}`);
 
@@ -163,7 +198,10 @@ export function docxMcpRegistration(
             return textResult(formatDocxResult({ ok: false, reason: "unknown", detail: `read failed: ${msg}` }, path));
           }
 
-          const res = await parseDocx(buffer);
+          const res = await parseDocx(buffer, {
+            mode: a.mode === "structure" ? "structure" : "markdown",
+            images: a.images === "skip" || a.images === "base64" ? a.images : "placeholder",
+          });
           return textResult(formatDocxResult(res, path));
         },
       ),
@@ -222,8 +260,22 @@ export function docxMcpRegistration(
             return textResult(formatDocxGenResult({ ok: false, reason: "unknown", detail: `mkdir failed: ${msg}` }, path));
           }
 
-          const res = await markdownToDocxBuffer(md, { cwd });
-          if (!res.ok) return textResult(formatDocxGenResult(res, path));
+          const parsed = markdownToModel(md, { cwd });
+          if (!parsed.ok) return textResult(formatDocxGenResult(parsed, path));
+          let buffer: Buffer;
+          try {
+            buffer = await modelToDocxBuffer(parsed.doc);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return textResult(formatDocxGenResult({ ok: false, reason: "unknown", detail: `docx generation failed: ${msg}` }, path));
+          }
+          const res: DocxGenResult = {
+            ok: true,
+            buffer,
+            paragraphs: parsed.paragraphs,
+            images: parsed.images,
+            skippedImages: parsed.skippedImages,
+          };
 
           try {
             writeFileSync(path, res.buffer);
@@ -231,7 +283,7 @@ export function docxMcpRegistration(
             const msg = err instanceof Error ? err.message : String(err);
             return textResult(formatDocxGenResult({ ok: false, reason: "unknown", detail: `write failed: ${msg}` }, path));
           }
-          return textResult(formatDocxGenResult(res, path));
+          return textResult(formatDocxGenResult(res, path, hasTocField(parsed.doc)));
         },
       ),
     ],

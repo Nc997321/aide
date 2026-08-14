@@ -1,33 +1,34 @@
 import { isAbsolute, join } from "node:path";
-import * as mammothNs from "mammoth";
-
-/**
- * mammoth 1.12.1 在 lib/index.js 导出 `convertToMarkdown`（运行时存在，line 13/26），
- * 但自带的 lib/index.d.ts 漏声明（只列了 convertToHtml/extractRawText/embedStyleMap/
- * images 四个）。这里局部收窄类型，不污染全局、不 fork 一份 .d.ts。
- */
-type MammothMarkdown = typeof mammothNs & {
-  convertToMarkdown(input: { buffer: Buffer } | { path: string }): Promise<{
-    value: string;
-    messages: Array<{ type: string; message: string; error?: unknown }>;
-  }>;
-};
-const mammoth = mammothNs as MammothMarkdown;
-
-/** 单次解析返回的字符上限。超出截断并置 truncated:true，避免爆 agent context。 */
-export const DOCX_MAX_CHARS = 60_000;
-
-/** statSync 守卫：超过此字节的 .docx 不读进内存（OOM/慢），handler 层用。 */
-export const DOCX_MAX_BYTES = 50 * 1024 * 1024;
+import { DOCX_MAX_CHARS, DOCX_MAX_BYTES } from "./constants.js";
+export { DOCX_MAX_CHARS, DOCX_MAX_BYTES } from "./constants.js";
+import { parseDocxToModel, DocxParseError } from "./parse/index.js";
+import { modelToMarkdown } from "./md/toMarkdown.js";
+import { docxToStructure, type DocxStructure } from "./structure.js";
 
 export type DocxErrorReason = "not_found" | "not_docx" | "encrypted" | "too_large" | "unknown";
 
+/** 元信息：正文统计（structure 模式自带统计，markdown 模式用 meta 补充） */
+export interface DocxMeta {
+  paragraphs: number;
+  images: number;
+  tables: number;
+  sections: number;
+}
+
 export type DocxParseResult =
-  | { ok: true; markdown: string; truncated: boolean; messages: unknown[] }
+  | { ok: true; mode: "markdown"; markdown: string; truncated: boolean; meta: DocxMeta }
+  | { ok: true; mode: "structure"; structure: DocxStructure; truncated: boolean }
   | { ok: false; reason: DocxErrorReason; detail: string };
 
+export interface DocxReadOptions {
+  /** 输出模式：markdown（默认，格式干净的 markdown 流）| structure（IR JSON 视图） */
+  mode?: "markdown" | "structure";
+  /** 图片策略：placeholder（默认，占位符 + 图片清单）| skip（跳过）| base64（内嵌字节） */
+  images?: "placeholder" | "skip" | "base64";
+}
+
 /**
- * 把 mammoth/jszip 抛的错误归类成结构化原因。纯函数，无 IO。
+ * 把 jszip 抛的错误归类成结构化原因。纯函数，无 IO。
  * parseDocx 的 catch 分支与测试共用——not_found / too_large 是 handler 层（statSync/
  * readFileSync）产生，不经过这里。
  */
@@ -45,35 +46,48 @@ export function classifyDocxError(err: unknown): {
   ) {
     return { reason: "not_docx", detail: msg || "file is not a valid .docx (zip archive expected)" };
   }
-  // 加密文档：jszip 抛 "encrypted entry"，mammoth 报 password
+  // 加密文档：jszip 抛 "encrypted entry"
   if (lower.includes("encrypted") || lower.includes("password")) {
     return { reason: "encrypted", detail: msg || "document is password-protected" };
   }
-  return { reason: "unknown", detail: msg || "mammoth failed to parse the document" };
+  return { reason: "unknown", detail: msg || "failed to parse the document" };
 }
 
 /**
- * 解析 .docx buffer 为 markdown。成功截断超长，失败返 {ok:false} 不抛——工具报错会让
- * agent 纠结，结构化结果让上层 formatDocxResult 转成文本提示让它自然换路。只处理
- * .docx（Word 2007+）；老式 .doc / .pdf / .xlsx 交给调用方在工具层提示。
+ * 解析 .docx buffer。默认输出 markdown 流（基于 IR 生成，格式干净），
+ * mode: "structure" 输出 IR 的 JSON 视图。成功截断超长，失败返 {ok:false} 不抛——
+ * 工具报错会让 agent 纠结，结构化结果让上层 formatDocxResult 转成文本提示让它自然换路。
+ * 只处理 .docx（Word 2007+）；老式 .doc / .pdf / .xlsx 交给调用方在工具层提示。
  */
-export async function parseDocx(buffer: Buffer): Promise<DocxParseResult> {
+export async function parseDocx(buffer: Buffer, opts: DocxReadOptions = {}): Promise<DocxParseResult> {
+  let doc;
   try {
-    const result = await mammoth.convertToMarkdown({ buffer });
-    const full = result.value ?? "";
-    if (full.length <= DOCX_MAX_CHARS) {
-      return { ok: true, markdown: full, truncated: false, messages: result.messages ?? [] };
-    }
-    return {
-      ok: true,
-      markdown: full.slice(0, DOCX_MAX_CHARS),
-      truncated: true,
-      messages: result.messages ?? [],
-    };
+    doc = await parseDocxToModel(buffer);
   } catch (err) {
+    if (err instanceof DocxParseError) {
+      return { ok: false, reason: err.reason, detail: err.message };
+    }
     const { reason, detail } = classifyDocxError(err);
     return { ok: false, reason, detail };
   }
+
+  // structure 是紧凑 JSON（标题/域/统计清单），远小于 DOCX_MAX_CHARS，不截断
+  if (opts.mode === "structure") {
+    return { ok: true, mode: "structure", structure: docxToStructure(doc), truncated: false };
+  }
+
+  const full = modelToMarkdown(doc, { images: opts.images ?? "placeholder" });
+  const s = docxToStructure(doc); // 一次遍历拿统计（markdown 模式 meta）
+  const meta: DocxMeta = {
+    paragraphs: s.paragraphs,
+    images: s.images,
+    tables: s.tables,
+    sections: s.sections,
+  };
+  if (full.length <= DOCX_MAX_CHARS) {
+    return { ok: true, mode: "markdown", markdown: full, truncated: false, meta };
+  }
+  return { ok: true, mode: "markdown", markdown: full.slice(0, DOCX_MAX_CHARS), truncated: true, meta };
 }
 
 /**

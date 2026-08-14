@@ -18,7 +18,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "docx": "^9.7.1",
     "image-size": "^2.0.2",
-    "mammoth": "^1.12.1",
+    "jszip": "^3.10.1",
     "marked": "^18.0.9",
     "undici": "^8.5.0",
     "zod": "^4.4.3"

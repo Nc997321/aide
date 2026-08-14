@@ -7,17 +7,52 @@ import {
 } from "./docxTools.js";
 
 
+const META = { paragraphs: 1, images: 0, tables: 0, sections: 1 };
+
 describe("formatDocxResult", () => {
-  it("ok: head + markdown", () => {
-    const t = formatDocxResult({ ok: true, markdown: "Hello", truncated: false, messages: [] }, "/p/a.docx");
+  it("ok: head + meta + markdown", () => {
+    const t = formatDocxResult(
+      { ok: true, mode: "markdown", markdown: "Hello", truncated: false, meta: META },
+      "/p/a.docx",
+    );
     expect(t).toContain("# /p/a.docx");
+    expect(t).toContain("Paragraphs: 1, Images: 0, Tables: 0, Sections: 1");
     expect(t).toContain("Hello");
     expect(t).not.toContain("Truncated");
   });
 
   it("ok truncated: tail note", () => {
-    const t = formatDocxResult({ ok: true, markdown: "x".repeat(100), truncated: true, messages: [] }, "/p/a.docx");
+    const t = formatDocxResult(
+      { ok: true, mode: "markdown", markdown: "x".repeat(100), truncated: true, meta: META },
+      "/p/a.docx",
+    );
     expect(t).toContain("Truncated");
+  });
+
+  it("structure mode: JSON overview", () => {
+    const t = formatDocxResult(
+      {
+        ok: true,
+        mode: "structure",
+        truncated: false,
+        structure: {
+          sections: 1,
+          paragraphs: 2,
+          images: 0,
+          tables: 0,
+          headings: [{ level: 1, text: "标题" }],
+          fields: [],
+          bookmarks: [],
+          headers: [],
+          footers: [],
+        },
+      },
+      "/p/a.docx",
+    );
+    expect(t).toContain("# /p/a.docx");
+    expect(t).toContain('"headings"');
+    expect(t).toContain('"level": 1');
+    expect(t).toContain("标题");
   });
 
   it("not_found", () => {
