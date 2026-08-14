@@ -11,8 +11,16 @@ describe("permissionsApi", () => {
 
   it("get calls invoke with 'get_permission_settings' and no args", async () => {
     mockInvoke.mockResolvedValue({ revision: 1, scopes: [], rules: [] });
-    await permissionsApi.get(mockInvoke);
+    await permissionsApi.get(undefined, mockInvoke);
     expect(mockInvoke).toHaveBeenCalledWith("get_permission_settings");
+  });
+
+  it("get with explicit project passes { project }", async () => {
+    mockInvoke.mockResolvedValue({ revision: 1, scopes: [], rules: [] });
+    await permissionsApi.get("C:/ws-a", mockInvoke);
+    expect(mockInvoke).toHaveBeenCalledWith("get_permission_settings", {
+      project: "C:/ws-a",
+    });
   });
 
   it("create calls invoke with 'create_permission_rule' and { scope, rule }", async () => {
@@ -22,10 +30,25 @@ describe("permissionsApi", () => {
       tool: "Bash",
       matcher: { kind: "bash", mode: "prefix", value: "pnpm test" },
     };
-    await permissionsApi.create("project", draft, mockInvoke);
+    await permissionsApi.create("project", draft, undefined, mockInvoke);
     expect(mockInvoke).toHaveBeenCalledWith("create_permission_rule", {
       scope: "project",
       rule: draft,
+    });
+  });
+
+  it("create with explicit project passes { scope, rule, project }", async () => {
+    mockInvoke.mockResolvedValue({ revision: 2, scopes: [], rules: [] });
+    const draft: PermissionRuleDraft = {
+      effect: "allow",
+      tool: "Bash",
+      matcher: { kind: "bash", mode: "prefix", value: "pnpm test" },
+    };
+    await permissionsApi.create("local", draft, "C:/ws-a", mockInvoke);
+    expect(mockInvoke).toHaveBeenCalledWith("create_permission_rule", {
+      scope: "local",
+      rule: draft,
+      project: "C:/ws-a",
     });
   });
 

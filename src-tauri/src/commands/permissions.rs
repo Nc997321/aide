@@ -90,6 +90,18 @@ fn current_project_root(workspace: &WorkspaceState) -> Option<PathBuf> {
         .and_then(|guard| guard.as_ref().filter(|p| p.exists()).cloned())
 }
 
+/// Resolve the project root for a permission command. An explicit `project`
+/// (the permission dialog's owning session workspace, pinned at dialog-open
+/// time) wins over the current active workspace — clicking "允许并记住" after
+/// switching workspaces must still land in the session's own workspace.
+/// Absent/empty falls back to the current workspace (settings panel etc.).
+fn resolve_project_root(explicit: Option<String>, workspace: &WorkspaceState) -> Option<PathBuf> {
+    match explicit.filter(|s| !s.trim().is_empty()) {
+        Some(p) => Some(PathBuf::from(p)),
+        None => current_project_root(workspace),
+    }
+}
+
 /// Generate a UUID-v4-shaped id without pulling in a uuid dependency. Uniqueness
 /// comes from wall-clock nanos XOR'd with pid and a per-process counter; the v4
 /// version nibble is set so the result looks like a real UUID. `is_uuid` only
@@ -362,11 +374,12 @@ pub fn explain_permission_decision_impl(
 
 #[tauri::command]
 pub async fn get_permission_settings(
+    project: Option<String>,
     settings: State<'_, Arc<SettingsService>>,
     workspace: State<'_, WorkspaceState>,
 ) -> Result<PermissionSettingsView, String> {
     let service = settings.inner().clone();
-    let project = current_project_root(&workspace);
+    let project = resolve_project_root(project, &workspace);
     tokio::task::spawn_blocking(move || build_permission_settings_view(&service, project.as_deref()))
         .await
         .map_err(|e| e.to_string())?
@@ -376,12 +389,13 @@ pub async fn get_permission_settings(
 pub async fn create_permission_rule(
     scope: SettingsScope,
     rule: PermissionRuleDraft,
+    project: Option<String>,
     settings: State<'_, Arc<SettingsService>>,
     runtime: State<'_, AgentRuntimeManager>,
     workspace: State<'_, WorkspaceState>,
 ) -> Result<PermissionSettingsView, String> {
     let service = settings.inner().clone();
-    let project = current_project_root(&workspace);
+    let project = resolve_project_root(project, &workspace);
     create_permission_rule_impl(service, runtime.inner(), scope, rule, project).await
 }
 
@@ -430,6 +444,7 @@ pub async fn explain_permission_decision(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     #[test]
     fn generated_rule_id_is_uuid_shaped() {
@@ -480,6 +495,39 @@ mod tests {
             },
         };
         assert!(validate_draft(SettingsScope::User, &draft).is_ok());
+    }
+
+    #[test]
+    fn resolve_project_root_prefers_explicit_project_over_current_workspace() {
+        // 「允许并记住」在弹窗挂起期间切了工作区：显式 project（弹窗所属会话的
+        // 工作区根）必须压过当前活动工作区，否则规则写进新工作区。
+        let mut ws = WorkspaceState::new();
+        ws.path = Mutex::new(Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")))); // 当前工作区
+        let explicit = Some(env!("CARGO_MANIFEST_DIR").to_string() + "/../.."); // 会话原工作区
+        let resolved = resolve_project_root(explicit, &ws);
+        assert_eq!(
+            resolved,
+            Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join(".."))
+        );
+    }
+
+    #[test]
+    fn resolve_project_root_falls_back_to_current_workspace() {
+        // 设置面板等调用方不传 project：回退当前活动工作区（与旧行为一致）。
+        let mut ws = WorkspaceState::new();
+        ws.path = Mutex::new(Some(PathBuf::from(env!("CARGO_MANIFEST_DIR"))));
+        assert_eq!(
+            resolve_project_root(None, &ws),
+            Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+        );
+        assert_eq!(
+            resolve_project_root(Some(String::new()), &ws),
+            Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+        );
+        assert_eq!(
+            resolve_project_root(Some("   ".to_string()), &ws),
+            Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+        );
     }
 }
 

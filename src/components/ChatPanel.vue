@@ -521,18 +521,24 @@ watch(() => sessionProvider.value.id, () => {
 // 权限请求出现时拉一次权限设置视图，决定「记住」默认落到哪个作用域（项目本地
 // 优先，不可编辑则回退用户全局），并缓存规则列表供点击时去重。权限请求不频繁，
 // 一次 prompt 一次 get() 可接受。请求消失时清空，避免跨请求串用旧视图。
+// workspacePath prop 是弹窗所属会话自己的工作区（PaneGroup 按会话注册解析，
+// 不随活动工作区变化）——「记住」的可用性判定与落盘必须钉在它上面：弹窗挂起
+// 期间切了工作区，Rust 侧按当前活动工作区解析会把规则写进新工作区（bug）。
 const rememberScope = ref<PermissionScope | null>(null);
 const rememberView = ref<PermissionSettingsView | null>(null);
+const rememberWsRoot = ref<string | null>(null);
 watch(
   () => props.permission?.id,
   async (id) => {
     if (!id || !props.permission) {
       rememberScope.value = null;
       rememberView.value = null;
+      rememberWsRoot.value = null;
       return;
     }
+    rememberWsRoot.value = props.workspacePath ?? null;
     try {
-      const view = await permissionsApi.get();
+      const view = await permissionsApi.get(rememberWsRoot.value ?? undefined);
       rememberView.value = view;
       const local = view.scopes.find((s) => s.scope === "local");
       const user = view.scopes.find((s) => s.scope === "user");
@@ -555,11 +561,13 @@ watch(
 
 /** 点击「允许并记住」：先落盘 allow 规则（Rust 广播新快照给 sidecar，后续同类调用
  *  自动放行），再走正常 approve 放行本次。目标作用域已有等价 allow 规则时跳过创建，
- *  避免重复点击堆积重复规则。落盘失败仍放行本次（不阻塞用户），仅提示。 */
+ *  避免重复点击堆积重复规则。落盘失败仍放行本次（不阻塞用户），仅提示。
+ *  落盘用 rememberWsRoot 显式钉住弹窗所属会话的工作区（弹窗挂起期间切工作区时，
+ *  缺省按当前活动工作区解析会把规则写进新工作区）。 */
 async function persistRememberRule(scope: PermissionScope, rule: PermissionRuleDraft): Promise<void> {
   const scopeWord = scope === "local" ? "本项目本地" : scope === "user" ? "用户全局" : scope;
   try {
-    const view = rememberView.value ?? (await permissionsApi.get());
+    const view = rememberView.value ?? (await permissionsApi.get(rememberWsRoot.value ?? undefined));
     const key = (r: { effect: string; tool: string; matcher: unknown }) =>
       `${r.effect}|${r.tool}|${JSON.stringify(r.matcher)}`;
     const draftKey = key({ effect: "allow", tool: rule.tool, matcher: rule.matcher });
@@ -567,7 +575,7 @@ async function persistRememberRule(scope: PermissionScope, rule: PermissionRuleD
       (r) => r.scope === scope && r.effect === "allow" && key(r) === draftKey,
     );
     if (!exists) {
-      await permissionsApi.create(scope, rule);
+      await permissionsApi.create(scope, rule, rememberWsRoot.value ?? undefined);
     }
     showToast(`已记住到${scopeWord}，下次自动放行`, "success");
   } catch (e) {

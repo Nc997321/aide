@@ -7,16 +7,23 @@ import type {
 } from "../types/permissions";
 
 export const permissionsApi = {
-  get(invoke = tauriInvoke): Promise<PermissionSettingsView> {
-    return invoke("get_permission_settings");
+  /** `project` = 显式工作区根（「允许并记住」把 scope 可用性/去重钉在弹窗所属
+   *  会话的工作区上，避免切工作区后按当前工作区解析）；缺省 = Rust 侧当前活动工作区。 */
+  get(project?: string, invoke = tauriInvoke): Promise<PermissionSettingsView> {
+    return project
+      ? invoke("get_permission_settings", { project })
+      : invoke("get_permission_settings");
   },
 
   create(
     scope: PermissionScope,
     rule: PermissionRuleDraft,
+    project?: string,
     invoke = tauriInvoke,
   ): Promise<PermissionSettingsView> {
-    return invoke("create_permission_rule", { scope, rule });
+    return project
+      ? invoke("create_permission_rule", { scope, rule, project })
+      : invoke("create_permission_rule", { scope, rule });
   },
 
   update(
