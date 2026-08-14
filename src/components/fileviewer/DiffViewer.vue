@@ -15,6 +15,7 @@ import { loadLanguageExtension } from "../../utils/cmLanguage";
 import { createHighlightStyle } from "../../utils/cmHighlight";
 import { useSettings } from "../../composables/useSettings";
 import { themes } from "../../themes";
+import { createDiffTheme } from "./diffThemes";
 
 /**
  * 编辑器级 diff 查看器（@codemirror/merge）。纯查看：
@@ -70,65 +71,23 @@ const ext = computed(() => {
   return parts.length > 1 ? parts.pop()!.toLowerCase() : "";
 });
 
+/** 文件路径拆目录（弱化）+ 基名（主色）：工具栏信息层级的主角是文件名 */
+const pathParts = computed(() => {
+  const normalized = props.filePath.replace(/\\/g, "/");
+  const idx = normalized.lastIndexOf("/");
+  return idx < 0
+    ? { dir: "", name: normalized }
+    : { dir: normalized.slice(0, idx + 1), name: normalized.slice(idx + 1) };
+});
+
 const themeCompartment = new Compartment();
 
 function currentTokens() {
   return themes[settings.theme] || themes["warm-dark"];
 }
 
-// ── merge 主题（只写编辑器内部选择器，& = 编辑器根）──
-// 类名读 node_modules/@codemirror/merge/dist/index.js 源码确认：
-//   变更行 .cm-changedLine；行内变更段 .cm-changedText；
-//   unified：新增行 .cm-insertedLine(<ins>)、删除行 .cm-deletedLine(<del>)、
-//   删除块 widget .cm-deletedChunk、行内变更行 .cm-inlineChangedLine；
-//   折叠条 .cm-collapsedLines；gutter 标记 .cm-changedLineGutter / .cm-deletedLineGutter；
-//   编辑器根 a 侧带 .cm-merge-a、b 侧带 .cm-merge-b（源码 baseTheme 用
-//   "&.cm-merge-a .cm-changedLine" 同款选择器，根元素带侧类名可确认）。
-// 外层容器 .cm-mergeView 是编辑器根的祖先，这里够不到，由下方非 scoped 样式负责。
-// { dark: true } 必传：让包自带 &dark 默认值生效，再由 --aide-* 精修。
-const mergeTheme = EditorView.theme(
-  {
-    "&": {
-      backgroundColor: "var(--aide-bg-deep)",
-      color: "var(--aide-text-primary)",
-      fontSize: "var(--cm-font-size)",
-      fontFamily: "var(--cm-font-family)",
-      height: "100%",
-    },
-    // base 主题在 .cm-scroller 硬设 monospace 会盖掉 & 的 var(--cm-font-family) 继承；
-    // 同名选择器覆盖（用户主题优先级高于 baseTheme），.cm-content/.cm-gutters 跟着继承。
-    ".cm-scroller": { overflow: "auto", fontFamily: "var(--cm-font-family)" },
-    ".cm-gutters": {
-      backgroundColor: "var(--aide-bg-deep)",
-      color: "var(--aide-text-muted)",
-      borderRight: "1px solid var(--aide-surface-hover)",
-    },
-    // 旧侧（a / 删除）= danger，新侧（b / 新增）= success
-    "&.cm-merge-a .cm-changedLine, .cm-deletedChunk": {
-      backgroundColor: "color-mix(in srgb, var(--aide-danger) 8%, transparent)",
-    },
-    "&.cm-merge-b .cm-changedLine, .cm-inlineChangedLine": {
-      backgroundColor: "color-mix(in srgb, var(--aide-success) 7%, transparent)",
-    },
-    ".cm-changedText": {
-      backgroundColor: "color-mix(in srgb, var(--aide-warning) 22%, transparent)",
-    },
-    ".cm-insertedLine, .cm-deletedLine, .cm-deletedLine del": {
-      textDecoration: "none",
-    },
-    "&.cm-merge-a .cm-changedLineGutter, .cm-deletedLineGutter": {
-      backgroundColor: "var(--aide-danger)",
-    },
-    "&.cm-merge-b .cm-changedLineGutter": {
-      backgroundColor: "var(--aide-success)",
-    },
-    ".cm-collapsedLines": {
-      color: "var(--aide-text-muted)",
-      background: "var(--aide-bg-base)",
-    },
-  },
-  { dark: true },
-);
+// merge 配色主题在 ./diffThemes.ts（克制系三层结构 + 类名/级联考据注释）；
+// 颜色全是 var(--aide-*) 引用，主题切换自动生效，无需 compartment。
 
 function readOnlyExts(langExt: Extension): Extension[] {
   return [
@@ -137,7 +96,7 @@ function readOnlyExts(langExt: Extension): Extension[] {
     EditorView.editable.of(false),
     langExt,
     themeCompartment.of(syntaxHighlighting(createHighlightStyle(currentTokens()))),
-    mergeTheme,
+    createDiffTheme(),
   ];
 }
 
@@ -241,12 +200,19 @@ onBeforeUnmount(() => {
   <div class="dv-root">
     <div class="dv-toolbar">
       <span class="dv-badge" :class="`dv-badge--${pair.status}`">{{ statusLabel }}</span>
-      <span class="dv-labels" v-tooltip="filePath">{{ pair.oldLabel }} → {{ pair.newLabel }}</span>
+      <span class="dv-path" v-tooltip="filePath" :style="{ fontFamily: settings.fontFamily }">
+        <span class="dv-path-dir">{{ pathParts.dir }}</span><span class="dv-path-name">{{ pathParts.name }}</span>
+      </span>
+      <span class="dv-labels">{{ pair.oldLabel }} → {{ pair.newLabel }}</span>
       <div class="dv-spacer"></div>
       <template v-if="!showNotice">
-        <button class="dv-btn" v-tooltip="'上一处变更'" @click="gotoChunk(false)">↑</button>
-        <button class="dv-btn" v-tooltip="'下一处变更'" @click="gotoChunk(true)">↓</button>
-        <button class="dv-btn" @click="toggleMode">{{ mode === "split" ? "单栏" : "并排" }}</button>
+        <button class="dv-btn" v-tooltip="'上一处变更'" @click="gotoChunk(false)">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2.5 8L6 4.5L9.5 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="dv-btn" v-tooltip="'下一处变更'" @click="gotoChunk(true)">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2.5 4L6 7.5L9.5 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="dv-btn dv-btn-text" @click="toggleMode">{{ mode === "split" ? "单栏" : "并排" }}</button>
       </template>
     </div>
     <div v-if="showNotice" class="dv-notice">{{ noticeText }}</div>
@@ -261,15 +227,14 @@ onBeforeUnmount(() => {
   height: 100%;
   background: var(--aide-bg-deep);
 }
+/* 工具栏做成扁平条（仅底部发线）：外层 FileWindow/变更卡已有自己的
+   边框+圆角 chrome，这里再套一层浮起卡片就是双重 chrome */
 .dv-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 6px;
-  background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border-subtle);
-  border-radius: var(--aide-radius-md);
-  box-shadow: var(--aide-highlight-inset);
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--aide-border-subtle);
   flex-shrink: 0;
 }
 .dv-badge {
@@ -298,32 +263,59 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
   border-color: color-mix(in srgb, var(--aide-danger) 28%, transparent);
 }
-.dv-labels {
+/* 文件路径：等宽字体，目录弱化、基名主色——工具栏的第一信息 */
+.dv-path {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
   font-size: 12px;
+  white-space: nowrap;
+}
+.dv-path-dir {
   color: var(--aide-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dv-path-name {
+  color: var(--aide-text-primary);
+  flex-shrink: 0;
+}
+/* 旧→新标签降级为次级元数据，截断保护（让位于文件名） */
+.dv-labels {
+  font-size: 11px;
+  color: var(--aide-text-muted);
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .dv-spacer {
   flex: 1;
 }
+/* ghost 按钮不带 inset 高光（透明底上的顶部亮线读起来像杂散边框） */
 .dv-btn {
-  min-width: 28px;
-  height: 28px;
-  padding: 0 6px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 5px;
   border: none;
   border-radius: var(--aide-radius-sm);
   background: transparent;
   color: var(--aide-text-muted);
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: var(--aide-highlight-inset);
   transition: all var(--aide-ease-t);
 }
 .dv-btn:hover {
   background: var(--aide-surface-hover);
   color: var(--aide-text-primary);
+}
+/* 文字按钮（单栏/并排）横向留白，别挤在 26px 最小宽里 */
+.dv-btn-text {
+  padding: 0 8px;
 }
 .dv-notice {
   padding: 24px;
@@ -344,7 +336,7 @@ onBeforeUnmount(() => {
      !important——两侧撑全高、永不自滚；唯一滚动容器是外层 .cm-mergeView（height +
      overflow:auto），一个滚动条带动两侧（行对齐靠库内建 spacer，无需同步代码）。
      .cm-mergeViewEditors/.cm-mergeViewEditor 两层禁止钉 100% 高，否则内容被裁、
-     容器撑不出滚动空间。unified 单栏不走这里：mergeTheme 的 .cm-scroller
+     容器撑不出滚动空间。unified 单栏不走这里：diffThemes 的 .cm-scroller
      overflow:auto + 编辑器 height:100% 自滚。 -->
 <style>
 .dv-mount .cm-mergeView {
