@@ -4,6 +4,7 @@ export { default as AButton } from "./AButton.vue";
 export { default as AInput } from "./AInput.vue";
 export { default as ACard } from "./ACard.vue";
 export { default as ATabBar } from "./ATabBar.vue";
+export { default as ARailBar } from "./ARailBar.vue";
 export type { Tab } from "./ATabBar.vue";
 export { default as AToolbar } from "./AToolbar.vue";
 export { default as ADropdown } from "./ADropdown.vue";

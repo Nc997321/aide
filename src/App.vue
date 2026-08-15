@@ -20,7 +20,7 @@ import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
 import NotificationBanner from "./components/NotificationBanner.vue";
 import TitleBar from "./components/titlebar/TitleBar.vue";
 import ACommandPalette from "./ui/ACommandPalette.vue";
-import { ATabBar } from "./ui";
+import { ARailBar } from "./ui";
 import type { Tab } from "./ui";
 import { useResizable } from "./composables/useResizable";
 import { useConversationChanges } from "./composables/useConversationChanges";
@@ -105,9 +105,9 @@ const leftResize = useResizable({
 
 const rightResize = useResizable({
   cssVar: "--aide-right-w",
-  initial: 300,
-  min: 280,
-  max: 500,
+  initial: 340,
+  min: 300,
+  max: 540,
   direction: "right",
 });
 
@@ -124,7 +124,7 @@ const gridTemplateColumns = computed(() => {
     : leftCollapsed.value
       ? "10px"
       : "var(--aide-left-w, 280px)";
-  const right = rightCollapsed.value ? "10px" : "var(--aide-right-w, 300px)";
+  const right = rightCollapsed.value ? "var(--aide-rail-w, 40px)" : "var(--aide-right-w, 300px)";
   return `${left} 1px minmax(400px, 1fr) 1px ${right}`;
 });
 
@@ -365,6 +365,20 @@ const rightTabs = computed<Tab[]>(() => [
   { id: "changes", icon: tabIconChanges, badge: changeCount.value || undefined },
   { id: "git", icon: tabIconGit, badge: unstagedFiles.value.length || undefined },
 ]);
+
+/** 右侧竖直工具栏选择（IDEA 式）：点未激活项切换并展开、点已激活项折叠、
+ *  折叠态点任意项展开并激活。标题栏 toggle-right 走 rightCollapsed 直翻。 */
+function onRailSelect(id: string) {
+  const tab = id as typeof rightTab.value;
+  if (rightCollapsed.value) {
+    rightTab.value = tab;
+    rightCollapsed.value = false;
+  } else if (tab === rightTab.value) {
+    rightCollapsed.value = true;
+  } else {
+    rightTab.value = tab;
+  }
+}
 
 function onSessionChanged(id: string) {
   // 打开语义（预览覆盖/全局唯一聚焦）由布局层统一裁决
@@ -994,11 +1008,9 @@ onUnmounted(() => {
         @mousedown="rightResize.onMousedown"
       />
 
-      <!-- Right panel -->
+      <!-- Right panel：content + 常驻竖直工具栏（IDEA 式） -->
       <div class="panel-right" :class="{ collapsed: rightCollapsed }">
         <div v-show="!rightCollapsed" class="panel-right-inner">
-          <ATabBar :tabs="rightTabs" v-model="rightTab" />
-
           <div class="tab-content">
             <FileTree
               v-show="rightTab === 'files'"
@@ -1010,6 +1022,7 @@ onUnmounted(() => {
             <GitPanel v-show="rightTab === 'git'" ref="gitPanelRef" />
           </div>
         </div>
+        <ARailBar :tabs="rightTabs" :model-value="rightTab" :collapsed="rightCollapsed" @select="onRailSelect" />
       </div>
 
       <!-- 文件窗口层：左缘起、止于文件树侧栏（可盖会话侧栏），边界随侧栏拖动实测 -->
@@ -1154,7 +1167,7 @@ onUnmounted(() => {
   background-color: var(--aide-bg-deep);
   border-left: 1px solid var(--aide-border);
   display: flex;
-  flex-direction: column;
+  flex-direction: row; /* content + 常驻竖直工具栏 */
   position: relative;
   overflow: hidden;
   min-width: 0;
@@ -1197,6 +1210,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   flex: 1;
+  min-width: 0;
   min-height: 0;
 }
 
