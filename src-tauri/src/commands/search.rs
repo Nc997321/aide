@@ -185,6 +185,106 @@ fn search_in_files_blocking(
     Ok(SearchResponse { files: groups, total, truncated })
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplacePreviewFile {
+    pub file: String,
+    pub original: String,
+    pub replaced: String,
+    pub match_count: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplacePreviewResponse {
+    pub files: Vec<ReplacePreviewFile>,
+    pub total_matches: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaceFileInput {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyResult {
+    pub succeeded: Vec<String>,
+    pub failed: Vec<(String, String)>,
+}
+
+/// 服务端权威计算替换（regex crate 的 $1/$name/${name} 捕获组），
+/// 预览与写盘永远一致。文件数上限 50，超出置 truncated。
+fn replace_in_files_preview_blocking(
+    query: &str,
+    replacement: &str,
+    cwd: &str,
+    options: &SearchOptions,
+) -> Result<ReplacePreviewResponse, String> {
+    if query.trim().is_empty() {
+        return Ok(ReplacePreviewResponse { files: Vec::new(), total_matches: 0, truncated: false });
+    }
+    let re = compile_pattern(query, options)?;
+    let max_files = 50;
+
+    let mut files: Vec<ReplacePreviewFile> = Vec::new();
+    let mut total_matches = 0usize;
+    let mut truncated = false;
+
+    for entry in build_walker(cwd, options)? {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if let Ok(meta) = std::fs::metadata(path) {
+            if meta.len() > 1_000_000 {
+                continue;
+            }
+        }
+        let Some(content) = read_text_skip_binary(path) else { continue };
+        let replaced = re.replace_all(&content, replacement).to_string();
+        if replaced == content {
+            continue;
+        }
+        let match_count = re.find_iter(&content).count();
+        total_matches += match_count;
+        let rel_path = path
+            .strip_prefix(cwd)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        files.push(ReplacePreviewFile {
+            file: rel_path,
+            original: content,
+            replaced,
+            match_count,
+        });
+        if files.len() >= max_files {
+            truncated = true;
+            break;
+        }
+    }
+
+    Ok(ReplacePreviewResponse { files, total_matches, truncated })
+}
+
+/// 只接受预览返回的 content，逐文件写盘，返回成功/失败列表。
+fn apply_replacements_blocking(files: Vec<ReplaceFileInput>) -> Result<ApplyResult, String> {
+    let mut succeeded = Vec::new();
+    let mut failed = Vec::new();
+    for f in files {
+        match std::fs::write(&f.path, &f.content) {
+            Ok(()) => succeeded.push(f.path),
+            Err(e) => failed.push((f.path, format!("写入失败: {}", e))),
+        }
+    }
+    Ok(ApplyResult { succeeded, failed })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,5 +427,92 @@ mod tests {
         let res = search_in_files_blocking("foo", dir.to_str().unwrap(), &SearchOptions::default()).unwrap();
         assert_eq!(res.total, 1);
         assert_eq!(res.files[0].file, "src/a.ts");
+    }
+
+    #[test]
+    fn replace_literal_all_occurrences() {
+        let dir = make_workspace();
+        write(&dir, "a.ts", "foo foo bar\n");
+        let res = replace_in_files_preview_blocking("foo", "baz", dir.to_str().unwrap(), &SearchOptions::default()).unwrap();
+        assert_eq!(res.files.len(), 1);
+        assert_eq!(res.files[0].replaced, "baz baz bar\n");
+        assert_eq!(res.files[0].match_count, 2);
+        assert_eq!(res.total_matches, 2);
+    }
+
+    #[test]
+    fn replace_capture_groups() {
+        let dir = make_workspace();
+        write(&dir, "a.ts", "foobar\n");
+        let opts = SearchOptions { use_regex: true, ..Default::default() };
+        let res = replace_in_files_preview_blocking("(foo)(bar)", "$1-$2", dir.to_str().unwrap(), &opts).unwrap();
+        assert_eq!(res.files[0].replaced, "foo-bar\n");
+    }
+
+    #[test]
+    fn replace_named_capture_group() {
+        let dir = make_workspace();
+        write(&dir, "a.ts", "foobar\n");
+        let opts = SearchOptions { use_regex: true, ..Default::default() };
+        let res = replace_in_files_preview_blocking("(?P<name>foo)bar", "${name}!", dir.to_str().unwrap(), &opts).unwrap();
+        assert_eq!(res.files[0].replaced, "foo!\n");
+    }
+
+    #[test]
+    fn no_match_file_excluded_from_preview() {
+        let dir = make_workspace();
+        write(&dir, "a.ts", "foo\n");
+        write(&dir, "b.ts", "nothing\n");
+        let res = replace_in_files_preview_blocking("foo", "bar", dir.to_str().unwrap(), &SearchOptions::default()).unwrap();
+        assert_eq!(res.files.len(), 1);
+        assert_eq!(res.files[0].file, "a.ts");
+    }
+
+    #[test]
+    fn preview_truncates_at_50_files() {
+        let dir = make_workspace();
+        for i in 0..60 {
+            write(&dir, &format!("f{}.ts", i), "foo\n");
+        }
+        let res = replace_in_files_preview_blocking("foo", "bar", dir.to_str().unwrap(), &SearchOptions::default()).unwrap();
+        assert_eq!(res.files.len(), 50);
+        assert!(res.truncated);
+    }
+
+    #[test]
+    fn apply_writes_files() {
+        let dir = make_workspace();
+        let p = dir.join("a.ts");
+        fs::write(&p, "old").unwrap();
+        let res = apply_replacements_blocking(vec![
+            ReplaceFileInput { path: p.to_string_lossy().to_string(), content: "new".to_string() },
+        ]).unwrap();
+        assert_eq!(res.succeeded.len(), 1);
+        assert!(res.failed.is_empty());
+        assert_eq!(fs::read_to_string(&p).unwrap(), "new");
+    }
+
+    #[test]
+    fn apply_partial_failure() {
+        let dir = make_workspace();
+        let p = dir.join("a.ts");
+        fs::write(&p, "old").unwrap();
+        let res = apply_replacements_blocking(vec![
+            ReplaceFileInput { path: p.to_string_lossy().to_string(), content: "new".to_string() },
+            ReplaceFileInput { path: dir.join("no_such_dir").join("missing.ts").to_string_lossy().to_string(), content: "x".to_string() },
+        ]).unwrap();
+        assert_eq!(res.succeeded.len(), 1);
+        assert_eq!(res.failed.len(), 1);
+        assert!(res.failed[0].0.ends_with("missing.ts"));
+    }
+
+    #[test]
+    fn replace_respects_case_sensitive() {
+        let dir = make_workspace();
+        write(&dir, "a.ts", "Foo foo\n");
+        let opts = SearchOptions { case_sensitive: true, ..Default::default() };
+        let res = replace_in_files_preview_blocking("foo", "bar", dir.to_str().unwrap(), &opts).unwrap();
+        assert_eq!(res.files[0].replaced, "Foo bar\n");
+        assert_eq!(res.files[0].match_count, 1);
     }
 }
