@@ -59,6 +59,11 @@ ureq = { version = "2", features = ["json", "tls"] }
 dunce = "1"
 # 卡死诊断黑匣子：冻结期采样 aide 进程家族的 CPU/内存（仅 system 特性，减编译面）
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+# 远程控制网关：出站 WS 客户端（连自建中继）
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+# 配对码 / token / device_id 生成
+rand = "0.8"
 
 # CodeGraph: embedded vector DB, ONNX embedding inference, syntax parsing
 qdrant-edge = "0.6"

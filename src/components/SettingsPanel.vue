@@ -6,7 +6,7 @@ import { useOnboarding } from "../composables/useOnboarding";
 import { useCustomizations } from "../composables/useCustomizations";
 import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
 import { api } from "../api";
-import type { SecretMutation } from "../types";
+import type { RemoteStatus, SecretMutation } from "../types";
 import CustomizationList from "./customizations/CustomizationList.vue";
 import CustomizationDetail from "./customizations/CustomizationDetail.vue";
 import MarketplaceTab from "./marketplace/MarketplaceTab.vue";
@@ -41,7 +41,7 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-type Tab = "general" | "editor" | "providers" | "extensions" | "marketplace" | "codegraph" | "diagnostics" | "about";
+type Tab = "general" | "editor" | "providers" | "extensions" | "marketplace" | "codegraph" | "diagnostics" | "about" | "remote";
 
 const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 
@@ -182,6 +182,49 @@ watch(cgScoreThreshold, (v) => {
   if (v !== undefined && (Number.isNaN(v) || v < 0)) cgScoreThreshold.value = undefined;
   flushCodegraphEmbedder();
 });
+
+// ── 远程控制 ──
+// 开关走专用命令（remote_set_enabled 同时启停网关）；URL/权限模式走 update 落盘。
+// 状态快照（配对码/连接/已签发 token）每次进入 tab 时刷新。
+const remotePermissionModeOptions = [
+  { value: "auto", label: "自动模式（自动批准非危险工具）" },
+  { value: "acceptEdits", label: "编辑模式（文件编辑自动批准）" },
+  { value: "default", label: "手动模式（不推荐远程使用）" },
+];
+const remoteEnabled = ref(settings.remote.enabled);
+const remoteRelayUrl = ref(settings.remote.relayUrl);
+const remotePermissionMode = ref(settings.remote.permissionMode);
+const remoteStatus = ref<RemoteStatus | null>(null);
+
+async function refreshRemoteStatus() {
+  remoteStatus.value = await api.remoteGetStatus();
+}
+onMounted(() => { if (props.initialTab === "remote") refreshRemoteStatus(); });
+watch(activeTab, (t) => { if (t === "remote") refreshRemoteStatus(); });
+
+async function onRemoteEnabledChange(e: Event) {
+  const enabled = (e.target as HTMLInputElement).checked;
+  remoteEnabled.value = enabled;
+  await api.remoteSetEnabled(enabled);
+  refreshRemoteStatus();
+}
+function onRemoteRelayUrlChange(e: Event) {
+  const v = (e.target as HTMLInputElement).value;
+  remoteRelayUrl.value = v;
+  update({ remote: { ...settings.remote, relayUrl: v } });
+}
+function onRemotePermissionModeChange(v: string) {
+  remotePermissionMode.value = v;
+  update({ remote: { ...settings.remote, permissionMode: v } });
+}
+async function refreshPairingCode() {
+  await api.remoteRefreshPairingCode();
+  refreshRemoteStatus();
+}
+async function revokeRemote() {
+  await api.remoteRevoke();
+  refreshRemoteStatus();
+}
 
 // ── JDK 注册表（已搬走）──
 // 2026-08-08：JDK 管理（注册表扫描/手动添加/移除 + 工作区 JDK 选择）整体迁入
@@ -392,6 +435,14 @@ function onOverlayClick(e: MouseEvent) {
             >
               <Icon class="nav-icon" name="agent" :size="16" />
               <span class="nav-label">诊断</span>
+            </button>
+            <button
+              class="nav-item"
+              :class="{ active: activeTab === 'remote' }"
+              @click="activeTab = 'remote'"
+            >
+              <Icon class="nav-icon" name="globe" :size="16" />
+              <span class="nav-label">远程控制</span>
             </button>
             <button
               class="nav-item"
@@ -758,6 +809,62 @@ function onOverlayClick(e: MouseEvent) {
             <!-- ── 诊断 Tab ── -->
             <div v-else-if="activeTab === 'diagnostics'" class="tab-diagnostics">
               <DiagnosticsDashboard />
+            </div>
+
+            <!-- ── 远程控制 Tab ── -->
+            <div v-else-if="activeTab === 'remote'" class="tab-remote">
+              <div class="settings-field">
+                <label class="field-label">启用远程控制</label>
+                <div class="toggle-row">
+                  <span class="field-hint">手机 APP 通过自建中继远程控制本机 aide（发消息、看回复、看历史）</span>
+                  <label class="toggle">
+                    <input type="checkbox" :checked="remoteEnabled" @change="onRemoteEnabledChange" />
+                    <span class="toggle-track"></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">中继 URL</label>
+                <input
+                  :value="remoteRelayUrl"
+                  class="text-input"
+                  placeholder="wss://relay.example.com"
+                  @change="onRemoteRelayUrlChange"
+                />
+                <span class="field-hint">自建中继服务器地址（wss://…），手机 APP 填同一地址</span>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">远程会话权限模式</label>
+                <ThemedSelect
+                  :model-value="remotePermissionMode"
+                  :options="remotePermissionModeOptions"
+                  @update:model-value="onRemotePermissionModeChange"
+                />
+                <span class="field-hint">远程会话每次执行时读取，可随时切换、立即生效</span>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">配对码（10 分钟有效）</label>
+                <div class="field-control">
+                  <span class="remote-code">{{ remoteStatus?.pairingCode ?? "—" }}</span>
+                  <button class="cg-secret-btn" @click="refreshPairingCode">刷新</button>
+                </div>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">连接状态</label>
+                <span class="field-hint">{{ remoteStatus?.connected ? "已连接" : "未连接" }}</span>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">已配对设备</label>
+                <div class="field-control">
+                  <span class="field-hint">{{ remoteStatus?.tokenConfigured ? "有（token 已签发）" : "无" }}</span>
+                  <button class="cg-secret-btn" @click="revokeRemote">吊销所有设备</button>
+                </div>
+              </div>
             </div>
 
             <!-- ── 关于 Tab ── -->
@@ -1235,6 +1342,13 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .cg-secret-btn:disabled { opacity: 0.5; cursor: default; }
+
+.remote-code {
+  font-family: var(--aide-font-mono);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--aide-text-primary);
+}
 
 .cg-info {
   margin-top: 4px;

@@ -21,6 +21,7 @@ pub mod notifications;
 pub mod migration;
 pub mod onboarding;
 pub mod permissions;
+pub mod remote;
 
 use serde::{Deserialize, Serialize};
 use std::fs;

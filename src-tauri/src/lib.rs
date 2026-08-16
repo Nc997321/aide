@@ -1,10 +1,13 @@
 mod codegraph;
-mod commands;
+// commands/remote/settings 公开给集成测试（tests/ 目录只能访问 crate 公开 API，
+// 测试分离布局要求源文件零测试代码，集成测试是唯一测试面）
+pub mod commands;
 mod diagnostics;
 mod ignore_dirs;
 mod lsp;
 mod shell;
-mod runtime;
+pub mod remote;
+pub mod runtime;
 mod conversation;
 mod skills;
 mod policy;
@@ -121,6 +124,21 @@ pub fn run() {
             app.state::<std::sync::Arc<settings::SettingsService>>()
                 .initialize_blocking()
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
+
+            // 远程控制网关：manage 需要 AppHandle，只能在 setup 内注册。
+            // initialize_blocking 必须先于 public_settings（未初始化读会报 NotInitialized）。
+            app.manage(std::sync::Arc::new(remote::RemoteGateway::new(app.handle().clone())));
+            // 设置开启则随 app 启动
+            {
+                let gateway = app.state::<std::sync::Arc<remote::RemoteGateway>>();
+                let service = app.state::<std::sync::Arc<settings::SettingsService>>();
+                let enabled = commands::settings::public_settings(service.inner())
+                    .map(|s| s.remote.enabled)
+                    .unwrap_or(false);
+                if enabled {
+                    gateway.start();
+                }
+            }
 
             // Create the main window programmatically so we can set file_drop_enabled = false.
             // On Windows, Tauri's built-in OLE Drop Target intercepts all drag-and-drop messages
@@ -442,6 +460,10 @@ pub fn run() {
             lsp::lsp_capabilities,
             lsp::lsp_shutdown_workspace,
             lsp::open_lsp_install_guide,
+            commands::remote::remote_get_status,
+            commands::remote::remote_set_enabled,
+            commands::remote::remote_refresh_pairing_code,
+            commands::remote::remote_revoke,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

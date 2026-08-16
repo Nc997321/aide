@@ -206,7 +206,39 @@ pub struct AppSettings {
     /// 代码编辑器设置（缩进等）。默认 4 空格缩进。前端 settings 管理；Rust 只存取。
     #[serde(default)]
     pub editor: EditorSettings,
+    /// 远程控制网关配置（手机 APP 远程控制桌面 aide）。
+    #[serde(default)]
+    pub remote: RemoteSettings,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub relay_url: String,
+    #[serde(default)]
+    pub device_id: String,
+    #[serde(default = "default_remote_permission_mode")]
+    pub permission_mode: String,
+}
+
+// 手动 Default（非 derive）：AppSettings.remote 字段缺失时 serde 用
+// RemoteSettings::default()，derive 的 Default 不会调用
+// default_remote_permission_mode，permission_mode 会落成 ""。
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            relay_url: String::new(),
+            device_id: String::new(),
+            permission_mode: default_remote_permission_mode(),
+        }
+    }
+}
+
+fn default_remote_permission_mode() -> String { "auto".to_string() }
 
 fn default_font_size() -> u32 { 14 }
 fn default_font_family() -> String {
@@ -245,6 +277,7 @@ impl Default for AppSettings {
             onboarded: false,
             lsp: LspSettings::default(),
             editor: EditorSettings::default(),
+            remote: RemoteSettings::default(),
         }
     }
 }

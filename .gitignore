@@ -44,3 +44,4 @@ _design_preview/
 src-tauri/.fastembed_cache/
 # 内嵌的 CodeGraph embedding 模型（87MB，构建时从 HF cache 复制/下载，不入库）
 src-tauri/resources/codegraph-model/
+relay-server/target/

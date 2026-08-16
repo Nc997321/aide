@@ -121,6 +121,27 @@ export interface AppSettings {
   lsp?: { servers: Record<string, LspServerOverride> };
   /** 代码编辑器设置（缩进等）。后续编辑器相关设置归入此类。固定 Tab 字符缩进。 */
   editor: EditorSettings;
+  /** 远程控制网关设置（手机 APP 经自建中继控制本机）。 */
+  remote: RemoteSettings;
+}
+
+/** 远程控制网关设置。relayUrl 为自建中继地址（wss://…），permissionMode 决定
+ *  远程会话的工具批准策略（auto / acceptEdits / default）。 */
+export interface RemoteSettings {
+  enabled: boolean;
+  relayUrl: string;
+  deviceId: string;
+  permissionMode: string;
+}
+
+/** 远程控制状态快照（对应后端 remote_get_status）。 */
+export interface RemoteStatus {
+  enabled: boolean;
+  relayUrl: string;
+  deviceId: string;
+  pairingCode: string | null;
+  connected: boolean;
+  tokenConfigured: boolean;
 }
 
 /** 代码编辑器设置。缩进字符固定为 Tab，缩进格数控制 Tab 显示列宽。 */

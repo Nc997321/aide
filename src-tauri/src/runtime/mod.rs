@@ -50,6 +50,9 @@ pub struct AgentRuntimeManager {
     /// stdin（单测里 stdin 永远 None）。生产恒为 false，`sent_commands` 保持空。
     test_mode: bool,
     sent_commands: Arc<Mutex<Vec<Value>>>,
+    /// chat-event 广播：worker 读 sidecar stdout 后同时推这里，网关订阅后经中继
+    /// 推给手机。前端路径（app.emit + poll 缓冲）不动，这是并行新增的扇出。
+    chat_events: tokio::sync::broadcast::Sender<Value>,
 }
 
 impl AgentRuntimeManager {
@@ -64,6 +67,10 @@ impl AgentRuntimeManager {
             session_routes: Mutex::new(HashMap::new()),
             test_mode: false,
             sent_commands: Arc::new(Mutex::new(Vec::new())),
+            chat_events: {
+                let (tx, _) = tokio::sync::broadcast::channel(1024);
+                tx
+            },
         }
     }
 
@@ -209,6 +216,7 @@ impl AgentRuntimeManager {
         let stderr_tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
         let tail_for_reader = Arc::clone(&stderr_tail);
         let tail_for_stderr = Arc::clone(&stderr_tail);
+        let chat_events_tx = self.chat_events.clone();
 
         tokio::spawn(async move {
             let stderr_tail = tail_for_reader;
@@ -309,6 +317,7 @@ impl AgentRuntimeManager {
                             event.get("type").and_then(|t| t.as_str()).unwrap_or("unknown"),
                             "worker",
                         );
+                        let _ = chat_events_tx.send(event.clone());
                         let _ = app.emit("chat-event", event);
                     }
                     Ok(Ok(None)) | Ok(Err(_)) => break "exit",
@@ -356,6 +365,16 @@ impl AgentRuntimeManager {
         line.push('\n');
         let mut guard = stdin.lock().await;
         guard.write_all(line.as_bytes()).await.map_err(|e| e.to_string())
+    }
+
+    /// 订阅 chat-event 流（网关事件转发用）。broadcast 语义：慢消费者丢最旧。
+    pub fn subscribe_chat_events(&self) -> tokio::sync::broadcast::Receiver<Value> {
+        self.chat_events.subscribe()
+    }
+
+    /// 测试缝合：向 chat-event 通道发送（集成测试无法驱动真实 worker）。
+    pub fn chat_events_sender(&self) -> tokio::sync::broadcast::Sender<Value> {
+        self.chat_events.clone()
     }
 
     /// 请求 Runtime 用内置 1×1 PNG 预检当前连接/模型的图片能力。

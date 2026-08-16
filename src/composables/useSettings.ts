@@ -36,6 +36,12 @@ const defaults: AppSettings = {
   leftSidebarPinned: true,
   onboarded: false,
   editor: { indentSize: 4 },
+  remote: {
+    enabled: false,
+    relayUrl: "",
+    deviceId: "",
+    permissionMode: "auto",
+  },
 };
 
 // Module-level reactive singleton — shared across ChatPanel and SettingsPanel
@@ -95,6 +101,8 @@ export function useSettings() {
       settings.onboarded = s.onboarded ?? defaults.onboarded;
       // 旧配置缺 editor → 整块补默认（默认 4 空格缩进）
       settings.editor = { ...defaults.editor, ...(s.editor ?? {}) };
+      // 旧配置缺 remote → 整块补默认（远程控制默认关）
+      settings.remote = { ...defaults.remote, ...(s.remote ?? {}) };
     } catch (_) {
       // Keep defaults on error
     }
@@ -121,6 +129,7 @@ export function useSettings() {
     if (partial.onboarded !== undefined) settings.onboarded = partial.onboarded;
     // editor 整块替换：后端 set_settings 按 top-level key 整体覆盖，故前端发完整对象
     if (partial.editor !== undefined) settings.editor = { ...settings.editor, ...partial.editor };
+    if (partial.remote !== undefined) settings.remote = { ...settings.remote, ...partial.remote };
     // Persist asynchronously
     try {
       await api.setSettings(partial);

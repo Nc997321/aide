@@ -10,6 +10,7 @@ import type {
   MigrationStatus, MigrationSummary,
   CmCompletion,
   DocumentSymbolItem, LspCapabilities,
+  RemoteStatus,
 } from "./types";
 import type { ModelOption, PermissionModeOption } from "./types/chat";
 
@@ -290,6 +291,20 @@ export const api = {
   },
   setSettings(settings: Partial<AppSettings> | { codegraphEmbedder: Record<string, unknown> }): Promise<void> {
     return invoke("set_settings", { settings });
+  },
+
+  // 远程控制网关
+  remoteGetStatus(): Promise<RemoteStatus> {
+    return invoke("remote_get_status");
+  },
+  remoteSetEnabled(enabled: boolean): Promise<void> {
+    return invoke("remote_set_enabled", { enabled });
+  },
+  remoteRefreshPairingCode(): Promise<string> {
+    return invoke("remote_refresh_pairing_code");
+  },
+  remoteRevoke(): Promise<void> {
+    return invoke("remote_revoke");
   },
 
   // JDK 注册表（机器级；工作区选哪个走 workspace_get/set_jdk）

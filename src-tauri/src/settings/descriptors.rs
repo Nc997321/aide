@@ -193,6 +193,10 @@ static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
             false,
             true,
         ),
+        user("settings.remote.enabled", json!(false), SettingValueKind::Boolean, "remote"),
+        user("settings.remote.relayUrl", json!(""), SettingValueKind::String, "remote"),
+        user("settings.remote.deviceId", json!(""), SettingValueKind::String, "remote"),
+        user("settings.remote.permissionMode", json!("auto"), SettingValueKind::String, "remote"),
     ]
 });
 

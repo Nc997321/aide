@@ -13,6 +13,7 @@ vi.mock("../composables/useSettings", () => ({
       onboarded: true, theme: "warm-dark", fontSize: 14, fontFamily: "", proxy: "",
       autoNaming: true, recentLimit: 10, editor: { indentSize: 4 },
       codegraphEmbedder: { apiKeyConfigured: false, backend: "fastembed", baseUrl: "", dim: 768, model: "", format: "ollama" },
+      remote: { enabled: false, relayUrl: "", deviceId: "", permissionMode: "auto" },
       jdkRegistries: [], openWithExtensions: {},
     }),
     loaded: ref(true),
