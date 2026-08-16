@@ -16,6 +16,7 @@ import { usePaneLayout } from "./composables/usePaneLayout";
 import { usePaneLayoutPersistence } from "./composables/paneLayout/persistence";
 import { useSessionNames } from "./composables/useSessionNames";
 import GitPanel from "./components/GitPanel.vue";
+import SearchPanel from "./components/SearchPanel.vue";
 import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
 import NotificationBanner from "./components/NotificationBanner.vue";
 import TitleBar from "./components/titlebar/TitleBar.vue";
@@ -59,7 +60,7 @@ import type { WorkspaceInfo } from "./types";
 
 const leftCollapsed = ref(false);
 const rightCollapsed = ref(false);
-const rightTab = ref<"files" | "changes" | "git">("files");
+const rightTab = ref<"files" | "changes" | "git" | "search">("files");
 const { unstagedFiles, hasChanges, loadStatus, currentBranch } = useGit();
 
 // Session activity for titlebar
@@ -175,6 +176,7 @@ function onToggleLeft() {
 
 const sidebarRef = ref<InstanceType<typeof SidebarLeft> | null>(null);
 const fileTreeRef = ref<InstanceType<typeof FileTree> | null>(null);
+const searchPanelRef = ref<InstanceType<typeof SearchPanel> | null>(null);
 const gitPanelRef = ref<InstanceType<typeof GitPanel> | null>(null);
 const titleBarRef = ref<InstanceType<typeof TitleBar> | null>(null);
 const paletteOpen = ref(false);
@@ -359,11 +361,13 @@ const changeCount = computed(() => {
 const tabIconFiles = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7c0-1.1.9-2 2-2h4.6L12 7h7c1.1 0 2 .9 2 2v8c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2V7z"/></svg>';
 const tabIconChanges = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
 const tabIconGit = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
+const tabIconSearch = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
 
 const rightTabs = computed<Tab[]>(() => [
   { id: "files", icon: tabIconFiles },
   { id: "changes", icon: tabIconChanges, badge: changeCount.value || undefined },
   { id: "git", icon: tabIconGit, badge: unstagedFiles.value.length || undefined },
+  { id: "search", icon: tabIconSearch },
 ]);
 
 /** 右侧竖直工具栏选择（IDEA 式）：点未激活项切换并展开、点已激活项折叠、
@@ -378,6 +382,22 @@ function onRailSelect(id: string) {
   } else {
     rightTab.value = tab;
   }
+}
+
+/** 快捷键打开搜索面板：展开右侧 + 切到 search tab + 预选模式并聚焦输入框。
+ *  面板已打开时重复按快捷键 = 聚焦输入框（IDEA 行为）。 */
+function openSearchPanel(mode: "search" | "replace") {
+  if (rightCollapsed.value) {
+    rightTab.value = "search";
+    rightCollapsed.value = false;
+  } else if (rightTab.value !== "search") {
+    rightTab.value = "search";
+  }
+  searchPanelRef.value?.focusInput(mode);
+}
+
+function onSearchFilesChanged() {
+  fileTreeRef.value?.loadRoot();
 }
 
 function onSessionChanged(id: string) {
@@ -651,9 +671,24 @@ function handleKeydown(e: KeyboardEvent) {
     void dumpScrollTrail();
   }
 
-  // Ctrl+Shift+R：滚动修复探针——定格现场重建滚动节点，复活即坐实滚轮路径
-  // 缓存病（见 scrollTrail.ts 注释）；探针副作用是回到顶部。
+  // Ctrl+Shift+F：全局搜索（只查找）；Ctrl+Shift+R：全局搜索+替换（IDEA 语义）
+  if (e.ctrlKey && e.shiftKey && (e.code === "KeyF" || e.key === "F")) {
+    e.preventDefault();
+    e.stopPropagation();
+    openSearchPanel("search");
+    return;
+  }
   if (e.ctrlKey && e.shiftKey && (e.code === "KeyR" || e.key === "R")) {
+    e.preventDefault();
+    e.stopPropagation();
+    openSearchPanel("replace");
+    return;
+  }
+
+  // Ctrl+Shift+Alt+R：滚动修复探针——定格现场重建滚动节点，复活即坐实滚轮路径
+  // 缓存病（见 scrollTrail.ts 注释）；探针副作用是回到顶部。原 Ctrl+Shift+R
+  // 让位给全局搜索+替换（Ruling R9）。
+  if (e.ctrlKey && e.shiftKey && e.altKey && (e.code === "KeyR" || e.key === "R")) {
     e.preventDefault();
     e.stopPropagation();
     const n = probeRebuildChatScrollers();
@@ -1020,6 +1055,12 @@ onUnmounted(() => {
             />
             <ChangeLogPanel v-show="rightTab === 'changes'" :session-id="activeSessionId" />
             <GitPanel v-show="rightTab === 'git'" ref="gitPanelRef" />
+            <SearchPanel
+              v-show="rightTab === 'search'"
+              :workspace-path="workspacePath"
+              ref="searchPanelRef"
+              @files-changed="onSearchFilesChanged"
+            />
           </div>
         </div>
         <ARailBar :tabs="rightTabs" :model-value="rightTab" :collapsed="rightCollapsed" @select="onRailSelect" />
