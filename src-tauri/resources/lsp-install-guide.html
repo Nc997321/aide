@@ -159,9 +159,6 @@
     <div class="lang-head">
       <h3>jdtls（Eclipse JDT Language Server）</h3><span class="bin">jdtls</span><span class="req">需 JDK 21+</span>
     </div>
-    <div class="step">0. 确认 JDK 版本（21 及以上，jdtls 1.44 起最低要求；低于 21 启动失败）：</div>
-    <pre><code>java -version</code></pre>
-    <p class="check">项目本身是 JDK 8 还是 21 不用管——jdtls 在 JDK 21+ 下按各项目自己的编译配置（pom.xml / .classpath / gradle）分析 Java 8~25 的项目。只有没有任何编译级别配置的裸 .java 文件才按运行 JVM 的级别诊断。</p>
     <div class="step">1. 安装（winget 无 jdtls 包，官方渠道手动下载）：</div>
     <p>从 <a href="https://github.com/eclipse-jdtls/eclipse.jdt.ls/releases" target="_blank">eclipse.jdt.ls releases</a>（或官方持续构建
     <a href="https://download.eclipse.org/jdtls/snapshots/" target="_blank">download.eclipse.org/jdtls/snapshots/</a>）下载最新 zip/tar.gz →
@@ -170,10 +167,9 @@
     <p>标题栏 LSP 面板 → 「服务器覆盖」→ 给 <code>java</code> 填 program 为 jdtls 可执行文件完整路径，args 留空即可（Aide 自动补 <code>-data</code> 工作区目录）。</p>
     <div class="step">3. 验证：</div>
     <p class="check"><code>where jdtls</code> 有输出即装好。然后重启 Aide → 打开 Java 项目 → 开 LSP → 面板 Java 显示 ✓。</p>
-    <p class="check">注意：jdtls 首次启动较慢（Eclipse 框架 + 索引），诊断/补全延迟数秒属正常；Aide 已对 jdtls 特判——不传 <code>--stdio</code>、自动把 <code>-data</code> 指到 app 数据目录（不污染你的项目目录）。</p>
-
-    <div class="step">5. 多 JDK 环境：把 jdtls 指向 JDK 21（实操）</div>
-    <p class="check"><strong>为什么</strong>：jdtls 脚本从 PATH/JAVA_HOME 找 java。默认 JDK 是 8/17 时 jdtls 会用旧 JDK 启动失败（面板显示「! 启动失败」）。按下面步骤给 jdtls 单独指定 JDK 21——<strong>无需改全局环境变量</strong>（不动你其他工具用的 JDK 8）。</p>
+    
+    <div class="step">4. 多 JDK 环境：把 jdtls 指向 JDK 21（实操）</div>
+    <p class="check"><strong>为什么</strong>：jdtls 脚本从 PATH/JAVA_HOME 找 java。默认 JDK 是 8/17 时 jdtls 会用旧 JDK 启动失败（面板显示「! 启动失败」）。按下面步骤给 jdtls 单独指定 JDK 21——<strong>无需改全局环境变量</strong></p>
 
     <p class="check"><strong>① 下载安装 JDK 21（推荐 Eclipse Temurin 21 LTS——免费、长期支持、Windows 有安装向导）</strong></p>
     <p class="check">打开 <a href="https://adoptium.net/temurin/releases/?version=21" target="_blank">adoptium.net/temurin/releases/?version=21</a> → 操作系统选 <code>Windows</code> → 架构 <code>x64</code> → 下载 <code>.msi</code> 安装包（约 190MB）→ 双击安装，一路「下一步」（默认装到 <code>C:\Program Files\Eclipse Adoptium\jdk-21.x.x-xx\</code>）。</p>
@@ -194,7 +190,6 @@ jdtls %*</code></pre>
     <p class="check"><strong>⑤ 方法 B（免脚本，用 -vm 参数）</strong>——不想建文件就用这个：</p>
     <p class="check">标题栏 LSP 面板 → 「服务器覆盖」→ 语言 <code>java</code> 行：program 填 jdtls 脚本完整路径（如 <code>C:\tools\jdtls\bin\jdtls</code>），args 填：</p>
     <pre><code>-vm &lt;JDK21路径&gt;\bin\java.exe</code></pre>
-    <p class="check">（Eclipse 原生参数，Aide 原样透传并自动补 <code>-data</code>。）</p>
 
     <p class="check"><strong>⑥ 验证</strong>：重启 Aide → 打开 Java 项目 → 标题栏 LSP 徽章 → 开 LSP 开关 → 面板 Java 显示 ✓ 就绪；打开 <code>.java</code> 文件看诊断/补全。</p>
   </article>
@@ -264,7 +259,7 @@ jdtls %*</code></pre>
     </details>
     <details>
       <summary>LSP 开关在哪？</summary>
-      <p>标题栏 LSP 徽章（显示「LSP 关」或语言状态）→ 点开面板 → 右上角开关。工作区级：每个项目独立记忆开关和排除目录。</p>
+      <p>标题栏 语言环境 徽章（显示「LSP 关」或语言状态）→ 点开面板 → 右上角开关。工作区级：每个项目独立记忆开关和排除目录。</p>
     </details>
   </div>
 </section>
