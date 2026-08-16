@@ -1,5 +1,6 @@
 pub mod shell;
 pub mod filesystem;
+pub mod search;
 pub mod git;
 pub mod session;
 pub mod workspace;
