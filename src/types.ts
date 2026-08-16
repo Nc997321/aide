@@ -339,6 +339,59 @@ export interface GrepMatch {
   match_type: string;
 }
 
+// ── Global search & replace types（Find in Files）──
+
+export interface SearchOptions {
+  useRegex: boolean;
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  fileMask: string | null;
+  limit: number | null;
+}
+
+export interface SearchMatch {
+  file: string;
+  line: number;
+  column: number;
+  lineText: string;
+  matchStart: number;
+  matchEnd: number;
+}
+
+export interface SearchFileGroup {
+  file: string;
+  matches: SearchMatch[];
+}
+
+export interface SearchResponse {
+  files: SearchFileGroup[];
+  total: number;
+  truncated: boolean;
+}
+
+export interface ReplacePreviewFile {
+  file: string;
+  original: string;
+  replaced: string;
+  matchCount: number;
+}
+
+export interface ReplacePreviewResponse {
+  files: ReplacePreviewFile[];
+  totalMatches: number;
+  truncated: boolean;
+}
+
+export interface ReplaceFileInput {
+  path: string;
+  content: string;
+}
+
+export interface ApplyResult {
+  succeeded: string[];
+  failed: [string, string][];
+}
+
 // ── Run Config types ──
 
 export interface RunConfig {

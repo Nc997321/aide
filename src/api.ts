@@ -3,6 +3,7 @@ import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem,
   ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
   GrepMatch, ProviderConfig, ProviderConfigInput, ProviderModelMappings, RunConfig, RunTarget, JdkEntry, RecentView,
+  SearchOptions, SearchResponse, ReplacePreviewResponse, ReplaceFileInput, ApplyResult,
   SkillMeta, BuildIndexResult, BuildProgress, RescanResult, QueryResult,
   AppNotification, NotificationRecord,
   CatalogPreset, PortProbeResult, LoginStatusResult, ConnectionStatus,
@@ -192,6 +193,22 @@ export const api = {
   // 符号搜索（跳转到定义）
   grepSymbol(word: string, cwd: string, sourceExt?: string): Promise<GrepMatch[]> {
     return invoke("grep_symbol", { word, cwd, sourceExt: sourceExt ?? null });
+  },
+
+  // 全局搜索 + 替换（Find in Files）
+  searchInFiles(query: string, cwd: string, options: SearchOptions): Promise<SearchResponse> {
+    return invoke("search_in_files", { query, cwd, options });
+  },
+  replaceInFilesPreview(
+    query: string,
+    replacement: string,
+    cwd: string,
+    options: SearchOptions,
+  ): Promise<ReplacePreviewResponse> {
+    return invoke("replace_in_files_preview", { query, replacement, cwd, options });
+  },
+  applyReplacements(files: ReplaceFileInput[]): Promise<ApplyResult> {
+    return invoke("apply_replacements", { files });
   },
 
   // Git
