@@ -40,6 +40,7 @@ async function runSearch() {
   if (!q) {
     result.value = null;
     error.value = "";
+    searching.value = false;
     return;
   }
   searching.value = true;

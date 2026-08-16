@@ -108,6 +108,25 @@ describe("SearchPanel 搜索模式", () => {
     expect(wrapper.find(".error-line").exists()).toBe(true);
   });
 
+  it("清空查询时重置 searching 状态（在途请求竞态）", async () => {
+    vi.useFakeTimers();
+    let resolveFirst: (v: unknown) => void = () => {};
+    const first = new Promise((r) => { resolveFirst = r; });
+    (api.searchInFiles as any).mockImplementationOnce(() => first);
+    const wrapper = mount(SearchPanel, { props: { workspacePath: "/ws" } });
+    await wrapper.find("input.search-input").setValue("foo");
+    vi.advanceTimersByTime(300);
+    await flushPromises();
+    // 在途请求未返回时清空查询
+    await wrapper.find("input.search-input").setValue("");
+    vi.advanceTimersByTime(300);
+    await flushPromises();
+    // 旧请求（seq=1）现在才返回，应被丢弃——且 searching 必须已被重置
+    resolveFirst({ files: [group("old.ts")], total: 1, truncated: false });
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("搜索中…");
+  });
+
   it("空查询清空结果", async () => {
     vi.useFakeTimers();
     (api.searchInFiles as any).mockResolvedValue({ files: [group("a.ts")], total: 1, truncated: false });
