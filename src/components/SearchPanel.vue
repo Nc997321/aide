@@ -6,6 +6,7 @@ import { useFileViewer } from "../composables/useFileViewer";
 import DiffViewer from "./fileviewer/DiffViewer.vue";
 import AToast from "../ui/AToast.vue";
 import { useToast } from "../composables/useToast";
+import { joinPath } from "../composables/useInlineMention";
 import type { ApplyResult, ReplacePreviewResponse } from "../types";
 
 const props = withDefaults(
@@ -143,10 +144,31 @@ async function runSearch() {
   }
 }
 
-/** 相对路径 + 工作区根 → 绝对路径（Windows 盘符路径用 / 拼接，Rust 侧可吃） */
-function joinPath(base: string, rel: string): string {
-  return base.replace(/\\/g, "/").replace(/\/+$/, "") + "/" + rel.replace(/\\/g, "/");
+/** 路径中间省略：保留首个目录段 + 末尾两段（父目录/文件名），中间 …；完整路径 hover title 可见 */
+function middleEllipsis(p: string, max = 44): string {
+  if (p.length <= max) return p;
+  const segs = p.split("/");
+  if (segs.length <= 2) return p.slice(0, max - 1) + "…";
+  const head = segs[0];
+  const tail = segs.slice(-2).join("/");
+  const out = head + "/…/" + tail;
+  return out.length < p.length ? out : p.slice(0, max - 1) + "…";
 }
+
+/** 行内命中 mark 滚入可见区（仅横向动本行滚动容器，不滚外层结果列表） */
+const vScrollToMark = {
+  mounted(el: HTMLElement) {
+    requestAnimationFrame(() => {
+      const mark = el.querySelector("mark");
+      if (!mark) return;
+      const elRect = el.getBoundingClientRect();
+      const markRect = mark.getBoundingClientRect();
+      if (markRect.left < elRect.left || markRect.right > elRect.right) {
+        el.scrollLeft = Math.max(0, el.scrollLeft + (markRect.left - elRect.left) - 8);
+      }
+    });
+  },
+};
 
 /** byte 偏移 → UTF-16 索引（Rust 返回 byte 偏移，JS 字符串是 UTF-16，CJK 需转换） */
 function byteToUtf16(s: string, byteOffset: number): number {
@@ -215,7 +237,7 @@ function toggleGroup(file: string) {
           :class="{ active: activePreviewFile === f.file }"
           @click="activePreviewFile = f.file"
         >
-          <span class="file-name">{{ f.file }}</span>
+          <span class="file-name" :title="f.file">{{ f.file }}</span>
           <span class="file-count">{{ f.matchCount }} 处</span>
         </div>
       </div>
@@ -250,13 +272,13 @@ function toggleGroup(file: string) {
       <div v-for="g in result.files" :key="g.file" class="file-group">
         <div class="file-head" @click="toggleGroup(g.file)">
           <span class="chevron">{{ expanded.has(g.file) ? "▾" : "▸" }}</span>
-          <span class="file-name">{{ g.file }}</span>
+          <span class="file-name" :title="g.file">{{ middleEllipsis(g.file) }}</span>
           <span class="file-count">{{ g.matches.length }}</span>
         </div>
         <div v-if="expanded.has(g.file)" class="match-list">
           <div v-for="(m, i) in g.matches" :key="i" class="match-row" @click="onMatchClick(m)">
             <span class="line-no">{{ m.line }}</span>
-            <span class="line-text" v-html="highlight(m)"></span>
+            <span class="line-text" v-html="highlight(m)" v-scroll-to-mark></span>
           </div>
         </div>
       </div>
@@ -339,12 +361,14 @@ function toggleGroup(file: string) {
 }
 .result-list {
   flex: 1;
+  min-height: 0; /* flex 子项必须允许收缩，否则内容撑开、overflow 滚动失效 → 结果挤在顶部不滚动 */
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 .file-group {
+  flex-shrink: 0; /* flex 子项禁止压缩：内容超高时会被等比压扁，行文字溢出互相叠压 */
   border: 1px solid var(--aide-border);
   border-radius: var(--aide-radius);
   overflow: hidden;
@@ -401,8 +425,8 @@ function toggleGroup(file: string) {
 .line-text {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-x: auto; /* 完整行文本可横向滚动，v-scroll-to-mark 自动滚到命中关键字 */
+  scrollbar-width: thin;
   font-family: var(--aide-font-mono);
   font-size: 12px;
 }
@@ -471,6 +495,7 @@ function toggleGroup(file: string) {
 .preview-file-row {
   display: flex;
   align-items: center;
+  flex-shrink: 0; /* 同 .file-group：文件多时不被 flex 压扁叠压 */
   gap: 6px;
   padding: 3px 6px;
   border-radius: var(--aide-radius);

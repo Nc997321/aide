@@ -67,8 +67,8 @@ describe("joinPath", () => {
     expect(joinPath("C:/repo", "src/a.ts")).toBe("C:/repo/src/a.ts");
   });
 
-  it("按 base 分隔符拼接（反斜杠 base）", () => {
-    expect(joinPath("C:\\repo", "src/a.ts")).toBe("C:\\repo\\src/a.ts");
+  it("按 base 分隔符拼接（反斜杠 base，rel 内部统一为反斜杠）", () => {
+    expect(joinPath("C:\\repo", "src/a.ts")).toBe("C:\\repo\\src\\a.ts");
   });
 
   it("剥前/后导分隔符", () => {

@@ -29,12 +29,14 @@ export interface MentionTokenMatch {
   token: string;
 }
 
-/** 跨平台路径拼接：按 base 的分隔符拼，剥前/后导分隔符。无 base 时原样返回 rel。 */
+/** 跨平台路径拼接：按 base 的分隔符拼，剥前/后导分隔符，rel 内部统一为 base 的分隔符
+ *  （Windows 全反斜杠，与文件树/后端返回的原生路径格式一致，open() 的已有窗口查找才能命中）。
+ *  无 base 时原样返回 rel。 */
 export function joinPath(base: string, rel: string): string {
   if (!base) return rel;
   const sep = base.includes("\\") ? "\\" : "/";
   const b = base.replace(/[\\/]+$/, "");
-  const r = rel.replace(/^[\\/]+/, "");
+  const r = rel.replace(/^[\\/]+/, "").replace(/[\\/]/g, sep);
   if (!r) return b;
   return `${b}${sep}${r}`;
 }
