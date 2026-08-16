@@ -57,10 +57,10 @@ export function usePermissions(api = defaultApi) {
     scopes.value = view.scopes;
   }
 
-  async function load(): Promise<void> {
+  async function load(project?: string): Promise<void> {
     error.value = null;
     try {
-      const view = await api.get();
+      const view = await api.get(project);
       applyView(view);
       lastSavedRevision.value = view.revision;
     } catch (e) {
@@ -69,15 +69,19 @@ export function usePermissions(api = defaultApi) {
     }
   }
 
-  async function saveDraft(): Promise<void> {
+  async function saveDraft(project?: string): Promise<void> {
     error.value = null;
     saving.value = true;
     try {
       let view: PermissionSettingsView;
       if (draft.editingId !== null) {
-        view = await api.update(draft.scope, draft.editingId, draft.rule);
+        view = project
+          ? await api.update(draft.scope, draft.editingId, draft.rule, project)
+          : await api.update(draft.scope, draft.editingId, draft.rule);
       } else {
-        view = await api.create(draft.scope, draft.rule);
+        view = project
+          ? await api.create(draft.scope, draft.rule, project)
+          : await api.create(draft.scope, draft.rule);
       }
       applyView(view);
       lastSavedRevision.value = view.revision;
@@ -91,7 +95,7 @@ export function usePermissions(api = defaultApi) {
     }
   }
 
-  async function deleteRule(id: string): Promise<void> {
+  async function deleteRule(id: string, project?: string): Promise<void> {
     error.value = null;
     saving.value = true;
     try {
@@ -99,7 +103,9 @@ export function usePermissions(api = defaultApi) {
       // sit in a different scope than the draft currently being edited.
       const rule = rules.value.find((r) => r.id === id);
       const scope = rule?.scope ?? draft.scope;
-      const view = await api.remove(scope, id);
+      const view = project
+        ? await api.remove(scope, id, project)
+        : await api.remove(scope, id);
       applyView(view);
       lastSavedRevision.value = view.revision;
     } catch (e) {

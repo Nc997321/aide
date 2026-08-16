@@ -33,21 +33,22 @@ function onKeydown(e: KeyboardEvent) {
 
 <template>
   <div class="a-rail-bar" role="tablist" @keydown="onKeydown">
-    <button
-      v-for="tab in tabs"
-      :key="tab.id"
-      class="a-rail-btn"
-      :class="{ 'a-rail-btn--active': !collapsed && modelValue === tab.id }"
-      role="tab"
-      :aria-selected="!collapsed && modelValue === tab.id"
-      :aria-label="tab.label || tab.id"
-      :tabindex="!collapsed && modelValue === tab.id ? 0 : -1"
-      v-tooltip="tab.label || tab.id"
-      @click="emit('select', tab.id)"
-    >
-      <span v-if="tab.icon" class="a-rail-btn__icon" v-html="tab.icon"></span>
-      <span v-if="tab.badge && tab.badge > 0" class="a-rail-badge">{{ tab.badge }}</span>
-    </button>
+    <template v-for="tab in tabs" :key="tab.id">
+      <span v-if="tab.bottom" class="a-rail-sep" />
+      <button
+        class="a-rail-btn"
+        :class="{ 'a-rail-btn--active': !collapsed && modelValue === tab.id }"
+        role="tab"
+        :aria-selected="!collapsed && modelValue === tab.id"
+        :aria-label="tab.label || tab.id"
+        :tabindex="!collapsed && modelValue === tab.id ? 0 : -1"
+        v-tooltip="tab.label || tab.id"
+        @click="emit('select', tab.id)"
+      >
+        <span v-if="tab.icon" class="a-rail-btn__icon" v-html="tab.icon"></span>
+        <span v-if="tab.badge && tab.badge > 0" class="a-rail-badge">{{ tab.badge }}</span>
+      </button>
+    </template>
   </div>
 </template>
 
@@ -111,6 +112,12 @@ function onKeydown(e: KeyboardEvent) {
   width: 16px;
   height: 16px;
   flex-shrink: 0;
+}
+
+/* 沉底分隔：把 bottom 标记的 tab（如权限）推到底部，与常规 tab 分隔开 */
+.a-rail-sep {
+  flex: 1;
+  width: 100%;
 }
 
 /* badge 角标（绝对定位右上角；不用 ABadge——它是流内 inline-flex） */

@@ -53,39 +53,33 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-// The dialog teleports to body; initialTab="permissions" avoids rendering the
+// The dialog teleports to body; initialTab="about" avoids rendering the
 // heavy general tab. The nav bar is always rendered regardless of active tab.
 function mountPanel() {
   wrapper = shallowMount(SettingsPanel, {
-    props: { initialTab: "permissions" },
+    props: { initialTab: "about" },
     attachTo: document.body,
     // SettingsPanel roots in <Teleport to="body">. shallowMount stubs Teleport
     // by default, which would keep nav + content out of document.body and make
     // the assertions below read empty. Disable that one stub so Teleport renders
-    // for real while child components (PermissionsSettings etc.) stay stubbed.
+    // for real while child components (DiagnosticsDashboard etc.) stay stubbed.
     global: { stubs: { Teleport: false } },
   });
   return wrapper;
 }
 
 describe("SettingsPanel", () => {
-  it("places the Permissions tab between Model and Extensions (fixed order)", () => {
+  it("renders the settings nav in fixed order (Permissions moved to right rail)", () => {
     mountPanel();
     const labels = Array.from(document.body.querySelectorAll(".nav-label")).map(
       (el) => el.textContent?.trim() ?? "",
     );
     // 工作区 tab 已移除（LSP 设置搬到标题栏 LspIndicator）；Java tab 亦于
     // 2026-08-08 搬走（JDK 管理迁入 LspIndicator 面板 JDK 区块，工作区级语义）。
+    // 权限 tab 于 2026-08-16 迁入右侧 rail（工作区级语义，不再属于公共设置）。
     // 编辑器 tab 在通用之后；「关于」tab 固定在末尾（2026-08-09 新增，版本与声明）。
     expect(labels).toEqual([
-      "通用", "编辑器", "模型", "权限", "扩展", "市场", "代码索引", "诊断", "关于",
+      "通用", "编辑器", "模型", "扩展", "市场", "代码索引", "诊断", "关于",
     ]);
-  });
-
-  it("renders PermissionsSettings when the permissions tab is active", () => {
-    mountPanel();
-    // shallowMount stubs the child as <permissions-settings-stub>; the stub tag
-    // appears in the teleported DOM (kebab-case + -stub suffix, hence the dashes).
-    expect(document.body.innerHTML.toLowerCase()).toContain("permissions-settings-stub");
   });
 });

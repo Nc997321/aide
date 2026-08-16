@@ -404,12 +404,13 @@ pub async fn update_permission_rule(
     scope: SettingsScope,
     id: String,
     rule: PermissionRuleDraft,
+    project: Option<String>,
     settings: State<'_, Arc<SettingsService>>,
     runtime: State<'_, AgentRuntimeManager>,
     workspace: State<'_, WorkspaceState>,
 ) -> Result<PermissionSettingsView, String> {
     let service = settings.inner().clone();
-    let project = current_project_root(&workspace);
+    let project = resolve_project_root(project, &workspace);
     update_permission_rule_impl(service, runtime.inner(), scope, id, rule, project).await
 }
 
@@ -417,12 +418,13 @@ pub async fn update_permission_rule(
 pub async fn delete_permission_rule(
     scope: SettingsScope,
     id: String,
+    project: Option<String>,
     settings: State<'_, Arc<SettingsService>>,
     runtime: State<'_, AgentRuntimeManager>,
     workspace: State<'_, WorkspaceState>,
 ) -> Result<PermissionSettingsView, String> {
     let service = settings.inner().clone();
-    let project = current_project_root(&workspace);
+    let project = resolve_project_root(project, &workspace);
     delete_permission_rule_impl(service, runtime.inner(), scope, id, project).await
 }
 

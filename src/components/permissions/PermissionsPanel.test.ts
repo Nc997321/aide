@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
-import PermissionsSettings from "../PermissionsSettings.vue";
+import PermissionsPanel from "./PermissionsPanel.vue";
 import type { PermissionSettingsView, PermissionExplanationView } from "@/types/permissions";
 
 const { api, customMock, confirmMock, showToastMock } = vi.hoisted(() => ({
@@ -47,10 +47,13 @@ const VIEW: PermissionSettingsView = {
 };
 
 function mountSettings() {
-  return mount(PermissionsSettings, { global: { stubs: { ThemedSelect: true } } });
+  return mount(PermissionsPanel, {
+    props: { workspacePath: "C:/ws-a" },
+    global: { stubs: { ThemedSelect: true } },
+  });
 }
 
-describe("PermissionsSettings", () => {
+describe("PermissionsPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.get.mockResolvedValue(VIEW);
@@ -67,10 +70,11 @@ describe("PermissionsSettings", () => {
     } as PermissionExplanationView);
   });
 
-  it("loads and renders scope tabs + the user rule card", async () => {
+  it("loads with the pinned workspace and renders scope tabs + the user rule card", async () => {
     const w = mountSettings();
     await flushPromises();
     expect(api.get).toHaveBeenCalledOnce();
+    expect(api.get).toHaveBeenCalledWith("C:/ws-a");
     expect(w.findAll(".scope-tab").map((x) => x.text())).toEqual(["用户全局", "项目共享", "项目本地", "受管策略"]);
     expect(w.text()).toContain("pnpm test");
     // managed scope selected → no add button; user (default) → add button visible
@@ -85,7 +89,7 @@ describe("PermissionsSettings", () => {
     await w.get(".primary-btn").trigger("click");
     await flushPromises();
     expect(customMock).toHaveBeenCalledOnce();
-    expect(api.create).toHaveBeenCalledWith("user", draft);
+    expect(api.create).toHaveBeenCalledWith("user", draft, "C:/ws-a");
     expect(showToastMock).toHaveBeenCalledWith("权限规则已保存", "success");
   });
 

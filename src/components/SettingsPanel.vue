@@ -10,7 +10,6 @@ import type { SecretMutation } from "../types";
 import CustomizationList from "./customizations/CustomizationList.vue";
 import CustomizationDetail from "./customizations/CustomizationDetail.vue";
 import MarketplaceTab from "./marketplace/MarketplaceTab.vue";
-import PermissionsSettings from "./settings/PermissionsSettings.vue";
 import DiagnosticsDashboard from "./DiagnosticsDashboard.vue";
 import ProviderSettings from "./ProviderSettings.vue";
 import ThemedSelect from "./ThemedSelect.vue";
@@ -42,7 +41,7 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-type Tab = "general" | "editor" | "providers" | "permissions" | "extensions" | "marketplace" | "codegraph" | "diagnostics" | "about";
+type Tab = "general" | "editor" | "providers" | "extensions" | "marketplace" | "codegraph" | "diagnostics" | "about";
 
 const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 
@@ -364,14 +363,6 @@ function onOverlayClick(e: MouseEvent) {
             </button>
             <button
               class="nav-item"
-              :class="{ active: activeTab === 'permissions' }"
-              @click="activeTab = 'permissions'"
-            >
-              <Icon class="nav-icon" name="key" :size="16" />
-              <span class="nav-label">权限</span>
-            </button>
-            <button
-              class="nav-item"
               :class="{ active: activeTab === 'extensions' }"
               @click="activeTab = 'extensions'"
             >
@@ -592,9 +583,6 @@ function onOverlayClick(e: MouseEvent) {
             <div v-else-if="activeTab === 'providers'" class="tab-providers">
               <ProviderSettings />
             </div>
-
-            <!-- ── 权限 Tab ── -->
-            <PermissionsSettings v-else-if="activeTab === 'permissions'" />
 
             <!-- ── 扩展 Tab ── -->
             <div v-else-if="activeTab === 'extensions'" class="tab-extensions">

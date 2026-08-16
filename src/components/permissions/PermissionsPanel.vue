@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, watch } from "vue";
 import { usePermissions } from "@/composables/usePermissions";
 import { useModal } from "@/composables/useModal";
 import { useToast } from "@/composables/useToast";
 import type { PermissionRule, PermissionRuleDraft, PermissionScope } from "@/types/permissions";
-import PermissionScopeTabs from "./permissions/PermissionScopeTabs.vue";
-import PermissionRuleList from "./permissions/PermissionRuleList.vue";
-import PermissionRuleEditor from "./permissions/PermissionRuleEditor.vue";
-import PermissionDecisionPanel from "./permissions/PermissionDecisionPanel.vue";
+import PermissionScopeTabs from "./PermissionScopeTabs.vue";
+import PermissionRuleList from "./PermissionRuleList.vue";
+import PermissionRuleEditor from "./PermissionRuleEditor.vue";
+import PermissionDecisionPanel from "./PermissionDecisionPanel.vue";
+
+const props = defineProps<{ workspacePath?: string }>();
+/** 空串（未打开工作区）→ undefined → Rust 当前活动工作区兜底 */
+const project = computed(() => props.workspacePath || undefined);
 
 const perms = usePermissions();
 const modal = useModal();
@@ -25,9 +29,14 @@ const canAddRule = computed(
   () => activeScope.value !== "managed" && (currentScope.value?.editable ?? false),
 );
 
-onMounted(() => {
-  perms.load().catch((e) => showToast("加载权限失败：" + String(e), "danger"));
-});
+// v-show 面板常驻挂载：单一触发点同时覆盖初始加载与切工作区重载
+watch(
+  project,
+  (p) => {
+    void perms.load(p).catch((e) => showToast("加载权限失败：" + String(e), "danger"));
+  },
+  { immediate: true },
+);
 
 async function openEditor(title: string) {
   let submitted = await modal.custom<PermissionRuleDraft | null>({
@@ -38,7 +47,7 @@ async function openEditor(title: string) {
   while (submitted) {
     perms.draft.rule = submitted;
     try {
-      await perms.saveDraft();
+      await perms.saveDraft(project.value);
       showToast("权限规则已保存", "success");
       return;
     } catch (e) {
@@ -67,7 +76,7 @@ async function onDelete(rule: PermissionRule) {
   const ok = await modal.confirm("删除规则", `确定删除规则 ${rule.tool}？`, "删除", true);
   if (!ok) return;
   try {
-    await perms.deleteRule(rule.id);
+    await perms.deleteRule(rule.id, project.value);
     showToast("规则已删除", "success");
   } catch (e) {
     showToast("删除失败：" + String(e), "danger");
@@ -76,72 +85,101 @@ async function onDelete(rule: PermissionRule) {
 </script>
 
 <template>
-  <div class="permissions-settings">
-    <div class="content-head">
-      <div>
-        <h1>工具权限</h1>
-        <p class="subtext">为 Aide 内的工具调用设置预先允许、每次询问或拒绝规则。</p>
-      </div>
+  <div class="permissions-panel">
+    <div class="panel-header">
+      <span class="panel-title">工具权限</span>
       <button v-if="canAddRule" class="primary-btn" @click="onAdd">＋ 添加规则</button>
     </div>
 
-    <PermissionScopeTabs
-      v-if="perms.scopes.value.length"
-      :scopes="perms.scopes.value"
-      v-model="activeScope"
-    />
+    <div class="permissions-scroll">
+      <PermissionScopeTabs
+        v-if="perms.scopes.value.length"
+        :scopes="perms.scopes.value"
+        v-model="activeScope"
+      />
 
-    <div v-if="currentScope" class="scope-summary">
-      <span class="badge">{{ currentScope.description }}</span>
-      <span v-if="currentScope.storagePath">
-        写入 <code>{{ currentScope.storagePath }}</code>。
-      </span>
-      <span v-if="!currentScope.editable" class="reason">{{ currentScope.reason }}</span>
+      <div v-if="currentScope" class="scope-summary">
+        <span class="badge">{{ currentScope.description }}</span>
+        <span v-if="currentScope.storagePath">
+          <code>{{ currentScope.storagePath }}</code>。
+        </span>
+        <span v-if="!currentScope.editable" class="reason">{{ currentScope.reason }}</span>
+      </div>
+
+      <PermissionRuleList
+        :rules="rulesForScope"
+        :scope="currentScope ?? { scope: activeScope, editable: false, reason: '尚未打开项目', storagePath: null, description: '' }"
+        @edit="onEdit"
+        @delete="onDelete"
+      />
+
+      <div class="priority-note">
+        <strong>优先级</strong>
+        <span>受管策略 → 用户全局 → 项目共享 → 项目本地 → 本会话。上层的拒绝规则不能被下层放宽。</span>
+      </div>
+
+      <PermissionDecisionPanel />
     </div>
-
-    <PermissionRuleList
-      :rules="rulesForScope"
-      :scope="currentScope ?? { scope: activeScope, editable: false, reason: '尚未打开项目', storagePath: null, description: '' }"
-      @edit="onEdit"
-      @delete="onDelete"
-    />
-
-    <div class="priority-note">
-      <strong>优先级</strong>
-      <span>受管策略 → 用户全局 → 项目共享 → 项目本地 → 本会话。上层的拒绝规则不能被下层放宽。</span>
-    </div>
-
-    <PermissionDecisionPanel />
   </div>
 </template>
 
 <style scoped>
-.permissions-settings { display: grid; gap: 0; }
-.content-head {
+.permissions-panel {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
+  flex-direction: column;
+  position: relative;
+  height: 100%;
+  background: var(--aide-bg-deep);
+  overflow: hidden;
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
-h1 { margin: 0; font-size: 16px; color: var(--aide-text-primary); }
-.subtext { margin: 4px 0 0; color: var(--aide-text-muted); font-size: 12px; }
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--aide-surface-default);
+  flex-shrink: 0;
+}
+.panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--aide-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .primary-btn {
-  height: 31px;
-  padding: 0 14px;
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 10px;
   border: 1px solid color-mix(in srgb, var(--aide-accent) 55%, var(--aide-border));
   background: var(--aide-accent-gradient);
   color: var(--aide-text-on-accent);
   border-radius: var(--aide-radius-md);
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 500;
   cursor: pointer;
+  white-space: nowrap;
 }
+.permissions-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+.permissions-scroll::-webkit-scrollbar { width: 4px; }
+.permissions-scroll::-webkit-scrollbar-track { background: transparent; }
+.permissions-scroll::-webkit-scrollbar-thumb { background: var(--aide-surface-hover); border-radius: 2px; }
+
 .scope-summary {
   display: flex;
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
-  margin-top: 14px;
+  margin-top: 10px;
   padding: 9px 11px;
   border: 1px solid color-mix(in srgb, var(--aide-info) 25%, var(--aide-border));
   background: color-mix(in srgb, var(--aide-info) 7%, var(--aide-bg-base));
@@ -153,10 +191,13 @@ h1 { margin: 0; font-size: 16px; color: var(--aide-text-primary); }
 .scope-summary code {
   font-family: var(--aide-font-mono, monospace);
   color: var(--aide-text-primary);
+  /* 长路径（Windows 盘符无空格）必须能断行，否则撑出面板右缘 */
+  min-width: 0;
+  word-break: break-all;
 }
 .scope-summary .reason { color: var(--aide-warning); }
 .priority-note {
-  margin-top: 14px;
+  margin-top: 10px;
   display: flex;
   gap: 8px;
   padding: 10px 12px;

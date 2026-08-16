@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Aide · 权限设置视觉稿</title>
+  <title>Aide · 权限面板（右 tab 窄版）视觉稿</title>
   <style>
     /* 静态视觉稿：组件样式仅消费现有 --aide-* token。
        :root 的值是 warm-dark.ts 的预览注入；正式界面由 applyTheme() 注入同名变量。 */
@@ -31,87 +31,215 @@
       --aide-radius-sm: 4px; --aide-radius-md: 8px; --aide-radius-lg: 12px;
     }
     * { box-sizing: border-box; }
-    body { margin: 0; min-width: 960px; background: var(--aide-bg-deep); color: var(--aide-text-primary); font: 13px/1.45 Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+    body { margin: 0; min-width: 1000px; background: var(--aide-bg-deep); color: var(--aide-text-primary); font: 13px/1.45 Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif; }
     button, input { font: inherit; } button { color: inherit; }
-    .page { min-height: 100vh; padding: 34px; background: radial-gradient(700px 240px at 50% -80px, var(--aide-accent-subtle), transparent 70%), var(--aide-bg-deep); }
-    .preview-bar { width: 1040px; margin: 0 auto 14px; display: flex; align-items: center; justify-content: space-between; color: var(--aide-text-muted); font-size: 12px; }
+    .page { min-height: 100vh; padding: 28px; background: radial-gradient(700px 240px at 50% -80px, var(--aide-accent-subtle), transparent 70%), var(--aide-bg-deep); }
+    .preview-bar { width: 1080px; margin: 0 auto 16px; display: flex; align-items: center; justify-content: space-between; color: var(--aide-text-muted); font-size: 12px; }
     .preview-bar strong { color: var(--aide-text-secondary); font-weight: 600; }
-    .theme-toggle { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--aide-border); background: var(--aide-bg-base); border-radius: var(--aide-radius-md); box-shadow: var(--aide-highlight-inset); }
-    .theme-toggle button, .scope-tabs button, .nav-item, .icon-btn { border: 0; background: transparent; cursor: pointer; border-radius: var(--aide-radius-sm); transition: background var(--aide-ease-t), color var(--aide-ease-t); }
-    .theme-toggle button { padding: 4px 9px; color: var(--aide-text-muted); font-size: 11px; }
-    .theme-toggle button.active { background: var(--aide-surface-active); color: var(--aide-text-primary); }
-    .settings-shell { width: 1040px; height: 650px; margin: 0 auto; overflow: hidden; display: flex; flex-direction: column; border: 1px solid var(--aide-border-strong); border-radius: var(--aide-radius-lg); background: var(--aide-bg-raised); box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset); }
-    .dialog-header { height: 52px; display: flex; align-items: center; justify-content: space-between; padding: 0 18px 0 20px; border-bottom: 1px solid var(--aide-border-subtle); background: linear-gradient(180deg, var(--aide-border-subtle), transparent), var(--aide-bg-raised); }
-    .dialog-title { font-size: 14px; font-weight: 600; } .dialog-close { color: var(--aide-text-muted); font-size: 19px; padding: 2px 7px; }
-    .dialog-body { min-height: 0; flex: 1; display: flex; }
-    .side-nav { width: 154px; flex: 0 0 auto; padding: 10px 6px; background: var(--aide-bg-deep); border-right: 1px solid var(--aide-border-subtle); }
-    .nav-item { width: 100%; padding: 8px 10px; display: flex; gap: 9px; align-items: center; color: var(--aide-text-secondary); text-align: left; }
-    .nav-item:hover { background: var(--aide-surface-default); color: var(--aide-text-primary); }
-    .nav-item.active { color: var(--aide-text-primary); background: var(--aide-accent-subtle); box-shadow: inset 2px 0 0 var(--aide-accent); }
-    .nav-icon { width: 18px; text-align: center; color: var(--aide-accent); font-size: 15px; }
-    .content { min-width: 0; flex: 1; overflow: auto; padding: 22px; }
-    .content-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
-    h1 { margin: 0; font-size: 16px; } .subtext { margin: 4px 0 0; color: var(--aide-text-muted); font-size: 12px; }
-    .primary-btn, .secondary-btn { height: 31px; border-radius: var(--aide-radius-md); padding: 0 12px; cursor: pointer; font-size: 12px; font-weight: 500; }
-    .primary-btn { border: 1px solid color-mix(in srgb, var(--aide-accent) 55%, var(--aide-border)); background: var(--aide-accent-gradient); color: var(--aide-text-on-accent); box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset); }
-    .secondary-btn { border: 1px solid var(--aide-border); background: var(--aide-surface-default); color: var(--aide-text-secondary); box-shadow: var(--aide-highlight-inset), var(--aide-shadow-sm); }
-    .scope-tabs { display: flex; gap: 4px; margin: 20px 0 11px; padding: 3px; border: 1px solid var(--aide-border-subtle); background: var(--aide-bg-base); border-radius: var(--aide-radius-md); width: fit-content; }
-    .scope-tabs button { padding: 5px 10px; color: var(--aide-text-muted); font-size: 11.5px; }
-    .scope-tabs button.active { background: var(--aide-surface-active); color: var(--aide-text-primary); box-shadow: var(--aide-highlight-inset); }
-    .scope-summary { display: flex; gap: 8px; align-items: center; min-height: 38px; padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--aide-info) 25%, var(--aide-border)); background: color-mix(in srgb, var(--aide-info) 7%, var(--aide-bg-base)); border-radius: var(--aide-radius-md); color: var(--aide-text-secondary); font-size: 12px; }
+    .preview-bar .hint { color: var(--aide-text-muted); }
+    .ctl-group { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--aide-border); background: var(--aide-bg-base); border-radius: var(--aide-radius-md); box-shadow: var(--aide-highlight-inset); }
+    .ctl-group + .ctl-group { margin-left: 8px; }
+    .ctl-group button, .scope-tab, .icon-btn, .nav-item { border: 0; background: transparent; cursor: pointer; border-radius: var(--aide-radius-sm); transition: background var(--aide-ease-t), color var(--aide-ease-t); }
+    .ctl-group button { padding: 4px 9px; color: var(--aide-text-muted); font-size: 11px; }
+    .ctl-group button.active { background: var(--aide-surface-active); color: var(--aide-text-primary); }
+
+    /* ── 应用窗口模拟：聊天区 + 权限面板 + 竖直 rail ── */
+    .app-frame {
+      width: 1080px; height: 660px; margin: 0 auto; overflow: hidden;
+      display: flex;
+      border: 1px solid var(--aide-border-strong); border-radius: var(--aide-radius-lg);
+      background: var(--aide-bg-base); box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
+    }
+    .chat-area {
+      flex: 1; min-width: 0; position: relative;
+      display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(420px 200px at 30% 12%, var(--aide-accent-subtle), transparent 70%), var(--aide-bg-base);
+      color: var(--aide-text-muted); font-size: 12px; letter-spacing: .02em;
+    }
+
+    /* 右侧面板：内容 + 常驻竖直工具栏（与 App.vue .panel-right 同构） */
+    .right-zone { width: var(--panel-w, 340px); flex: 0 0 auto; display: flex; flex-direction: row; border-left: 1px solid var(--aide-border); transition: width var(--aide-ease-t); }
+
+    .perm-panel { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; background: var(--aide-bg-deep); overflow: hidden; }
+    .panel-header {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 8px 12px; border-bottom: 1px solid var(--aide-surface-default); flex-shrink: 0;
+    }
+    .panel-title { font-size: 13px; font-weight: 600; color: var(--aide-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .add-btn {
+      flex-shrink: 0; height: 26px; padding: 0 10px;
+      border: 1px solid color-mix(in srgb, var(--aide-accent) 55%, var(--aide-border));
+      background: var(--aide-accent-gradient); color: var(--aide-text-on-accent);
+      border-radius: var(--aide-radius-md); font-size: 11.5px; font-weight: 500; cursor: pointer;
+      box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset);
+      white-space: nowrap;
+    }
+    .panel-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
+    .panel-scroll::-webkit-scrollbar { width: 8px; }
+    .panel-scroll::-webkit-scrollbar-thumb { background: var(--aide-surface-active); border-radius: 4px; }
+    .panel-scroll::-webkit-scrollbar-track { background: transparent; }
+
+    /* scope 切换：4 个 tab 在窄宽度下改 2×2 网格（一行 4 个在 300px 下必溢出） */
+    .scope-tabs {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 3px;
+      border: 1px solid var(--aide-border-subtle); background: var(--aide-bg-base); border-radius: var(--aide-radius-md);
+    }
+    .scope-tab { padding: 6px 4px; font-size: 11.5px; color: var(--aide-text-muted); text-align: center; }
+    .scope-tab:hover:not(:disabled) { color: var(--aide-text-primary); }
+    .scope-tab.active { background: var(--aide-surface-active); color: var(--aide-text-primary); box-shadow: var(--aide-highlight-inset); }
+    .scope-tab:disabled { opacity: .5; cursor: not-allowed; }
+
+    .scope-summary {
+      display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+      min-height: 34px; margin-top: 10px; padding: 7px 10px;
+      border: 1px solid color-mix(in srgb, var(--aide-info) 25%, var(--aide-border));
+      background: color-mix(in srgb, var(--aide-info) 7%, var(--aide-bg-base));
+      border-radius: var(--aide-radius-md); color: var(--aide-text-secondary); font-size: 11.5px;
+    }
     .scope-summary .badge { color: var(--aide-info); font-weight: 600; }
-    .rule-list { margin-top: 12px; display: grid; gap: 8px; }
-    .rule-card { position: relative; display: grid; grid-template-columns: 34px minmax(0,1fr) auto; gap: 11px; align-items: center; padding: 12px; border: 1px solid var(--aide-border); border-radius: var(--aide-radius-md); background: var(--aide-bg-base); box-shadow: var(--aide-highlight-inset); }
+    .scope-summary code { font-family: "Cascadia Code", Consolas, monospace; color: var(--aide-text-primary); font-size: 10.5px; }
+
+    .rule-list { margin-top: 10px; display: grid; gap: 6px; }
+    .rule-card {
+      position: relative; display: grid; grid-template-columns: 24px minmax(0,1fr) auto; gap: 8px; align-items: center;
+      padding: 8px 10px; border: 1px solid var(--aide-border); border-radius: var(--aide-radius-md);
+      background: var(--aide-bg-base); box-shadow: var(--aide-highlight-inset);
+    }
     .rule-card:hover { border-color: var(--aide-border-strong); background: var(--aide-surface-default); }
-    .rule-symbol { height: 30px; width: 30px; display: grid; place-items: center; border-radius: var(--aide-radius-sm); font-family: "Cascadia Code", monospace; font-weight: 700; }
+    .rule-symbol { height: 24px; width: 24px; display: grid; place-items: center; border-radius: var(--aide-radius-sm); font-family: "Cascadia Code", monospace; font-weight: 700; font-size: 12px; }
     .allow .rule-symbol { color: var(--aide-success); background: color-mix(in srgb, var(--aide-success) 12%, transparent); } .ask .rule-symbol { color: var(--aide-warning); background: color-mix(in srgb, var(--aide-warning) 12%, transparent); } .deny .rule-symbol { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 12%, transparent); }
-    .rule-title { min-width: 0; display: flex; align-items: center; gap: 8px; } .rule-title code { color: var(--aide-text-primary); font: 600 12px "Cascadia Code", Consolas, monospace; } .rule-meta { margin-top: 3px; overflow: hidden; color: var(--aide-text-muted); font: 11px "Cascadia Code", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
-    .effect { display: inline-flex; min-width: 52px; justify-content: center; padding: 3px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; } .allow .effect { color: var(--aide-success); background: color-mix(in srgb, var(--aide-success) 13%, transparent); } .ask .effect { color: var(--aide-warning); background: color-mix(in srgb, var(--aide-warning) 13%, transparent); } .deny .effect { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 13%, transparent); }
-    .rule-actions { display: flex; gap: 3px; margin-left: 8px; } .icon-btn { width: 26px; height: 26px; color: var(--aide-text-muted); } .icon-btn:hover { color: var(--aide-text-primary); background: var(--aide-surface-hover); }
-    .readonly { opacity: .78; } .readonly::after { content: "受管策略"; position: absolute; top: 8px; right: 10px; color: var(--aide-text-muted); font-size: 10px; }
-    .readonly .rule-actions { display: none; } .readonly .effect { margin-right: 38px; }
-    .priority-note { margin-top: 14px; display: flex; gap: 8px; padding: 10px 12px; border-radius: var(--aide-radius-md); border: 1px solid color-mix(in srgb, var(--aide-warning) 24%, var(--aide-border)); background: color-mix(in srgb, var(--aide-warning) 7%, var(--aide-bg-base)); color: var(--aide-text-secondary); font-size: 11.5px; }
-    .priority-note strong { color: var(--aide-warning); }
+    .rule-main { min-width: 0; }
+    .rule-title { min-width: 0; display: flex; align-items: center; gap: 6px; } .rule-title code { color: var(--aide-text-primary); font: 600 11.5px "Cascadia Code", Consolas, monospace; }
+    .rule-meta { margin-top: 2px; overflow: hidden; color: var(--aide-text-muted); font: 10.5px "Cascadia Code", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .rule-side { display: flex; align-items: center; gap: 2px; }
+    .effect { display: inline-flex; min-width: 44px; justify-content: center; padding: 2px 6px; border-radius: 999px; font-size: 10.5px; font-weight: 600; }
+    .allow .effect { color: var(--aide-success); background: color-mix(in srgb, var(--aide-success) 13%, transparent); } .ask .effect { color: var(--aide-warning); background: color-mix(in srgb, var(--aide-warning) 13%, transparent); } .deny .effect { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 13%, transparent); }
+    .rule-actions { display: flex; gap: 2px; margin-left: 4px; } .icon-btn { width: 22px; height: 22px; color: var(--aide-text-muted); font-size: 12px; } .icon-btn:hover { color: var(--aide-text-primary); background: var(--aide-surface-hover); }
+    .readonly { opacity: .78; } .readonly::after { content: "受管策略"; position: absolute; top: 6px; right: 8px; color: var(--aide-text-muted); font-size: 9.5px; }
+    .readonly .rule-actions { display: none; } .readonly .rule-side { margin-right: 34px; }
+
+    .priority-note {
+      margin-top: 10px; display: flex; gap: 6px; padding: 8px 10px;
+      border-radius: var(--aide-radius-md); border: 1px solid color-mix(in srgb, var(--aide-warning) 24%, var(--aide-border));
+      background: color-mix(in srgb, var(--aide-warning) 7%, var(--aide-bg-base));
+      color: var(--aide-text-secondary); font-size: 11px;
+    }
+    .priority-note strong { color: var(--aide-warning); white-space: nowrap; }
+
+    /* 决策解释面板（PermissionDecisionPanel 的窄版） */
+    .decision-panel { margin-top: 12px; padding: 10px; border: 1px solid var(--aide-border); border-radius: var(--aide-radius-md); background: var(--aide-bg-base); box-shadow: var(--aide-highlight-inset); }
+    .decision-title { font-size: 12px; font-weight: 600; color: var(--aide-text-primary); }
+    .decision-desc { margin-top: 2px; color: var(--aide-text-muted); font-size: 11px; }
+    .decision-row { display: flex; gap: 6px; margin-top: 8px; }
+    .text-input {
+      flex: 1; min-width: 0; height: 26px; padding: 0 8px;
+      border: 1px solid var(--aide-border); border-radius: var(--aide-radius-sm);
+      background: var(--aide-bg-deep); color: var(--aide-text-primary); font-size: 11.5px;
+      font-family: "Cascadia Code", Consolas, monospace;
+    }
+    .text-input:focus { outline: none; border-color: color-mix(in srgb, var(--aide-accent) 55%, var(--aide-border)); }
+    .btn-secondary {
+      flex-shrink: 0; height: 26px; padding: 0 10px;
+      border: 1px solid var(--aide-border); background: var(--aide-surface-default); color: var(--aide-text-secondary);
+      border-radius: var(--aide-radius-sm); font-size: 11.5px; cursor: pointer; box-shadow: var(--aide-highlight-inset), var(--aide-shadow-sm);
+    }
+    .btn-secondary:hover { color: var(--aide-text-primary); background: var(--aide-surface-hover); }
+    .chain { margin-top: 8px; display: grid; gap: 4px; }
+    .chain-entry {
+      display: grid; grid-template-columns: 86px minmax(0,1fr) auto; gap: 8px; align-items: center;
+      padding: 5px 8px; background: var(--aide-surface-default); border-radius: var(--aide-radius-sm); font-size: 10.5px;
+    }
+    .chain-scope { color: var(--aide-text-secondary); font-weight: 600; }
+    .chain-rule { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--aide-text-muted); font-family: "Cascadia Code", Consolas, monospace; }
+    .chain-status { color: var(--aide-danger); white-space: nowrap; }
+    .chain-status.overridden { color: var(--aide-text-muted); }
+
+    /* rail：竖直工具栏（与 ARailBar 同构，位于面板右侧边缘） */
+    .rail {
+      width: 40px; flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 4px;
+      padding: 8px 0; border-left: 1px solid var(--aide-border-subtle); background: var(--aide-bg-deep);
+    }
+    .rail-btn { position: relative; width: 30px; height: 30px; display: grid; place-items: center; border: 0; background: transparent; color: var(--aide-text-muted); border-radius: var(--aide-radius-sm); cursor: pointer; transition: background var(--aide-ease-t), color var(--aide-ease-t); }
+    .rail-btn:hover { background: var(--aide-surface-default); color: var(--aide-text-secondary); }
+    .rail-btn.active { color: var(--aide-accent); background: var(--aide-accent-subtle); }
+    .rail-btn.active::before { content: ""; position: absolute; left: -5px; top: 4px; bottom: 4px; width: 2.5px; border-radius: 2px; background: var(--aide-accent); box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 60%, transparent); }
+    .rail-btn svg { width: 16px; height: 16px; }
+    .rail-sep { flex: 1; }
+
     .toast { position: fixed; left: 50%; bottom: 24px; z-index: 2; transform: translate(-50%, 120px); padding: 9px 12px; border: 1px solid color-mix(in srgb, var(--aide-success) 28%, var(--aide-border)); border-radius: var(--aide-radius-md); background: var(--aide-bg-raised); box-shadow: var(--aide-shadow-md), var(--aide-highlight-inset); color: var(--aide-text-primary); transition: transform var(--aide-ease-t); font-size: 12px; } .toast.show { transform: translate(-50%, 0); }
-    @media (max-width: 1050px) { body { min-width: 0; } .page { padding: 18px; } .preview-bar, .settings-shell { width: 100%; } .settings-shell { height: calc(100vh - 75px); } }
+
+    @media (max-width: 1100px) { body { min-width: 0; } .page { padding: 18px; } .preview-bar, .app-frame { width: 100%; } .app-frame { height: calc(100vh - 75px); } }
   </style>
 </head>
 <body>
   <main class="page">
     <div class="preview-bar">
-      <span><strong>Aide · 权限设置</strong>　静态视觉稿 / 仅验证布局与主题适配</span>
-      <div class="theme-toggle" aria-label="预览主题">
-        <button class="active" data-theme="warm">Warm Dark</button>
-        <button data-theme="cat">Catppuccin</button>
+      <span><strong>Aide · 权限面板</strong>　右 tab 窄版视觉稿 / 验证窄宽度布局与主题适配</span>
+      <div style="display:flex;align-items:center">
+        <div class="ctl-group" aria-label="面板宽度">
+          <button data-w="300">300px</button>
+          <button class="active" data-w="340">340px</button>
+          <button data-w="540">540px</button>
+        </div>
+        <div class="ctl-group" aria-label="预览主题">
+          <button class="active" data-theme="warm">Warm Dark</button>
+          <button data-theme="cat">Catppuccin</button>
+        </div>
       </div>
     </div>
-    <section class="settings-shell" aria-label="Aide 设置">
-      <header class="dialog-header"><span class="dialog-title">设置</span><button class="icon-btn dialog-close" aria-label="关闭">×</button></header>
-      <div class="dialog-body">
-        <nav class="side-nav" aria-label="设置分类">
-          <button class="nav-item"><span class="nav-icon">◉</span>通用</button>
-          <button class="nav-item"><span class="nav-icon">◇</span>模型</button>
-          <button class="nav-item active"><span class="nav-icon">⌁</span>权限</button>
-          <button class="nav-item"><span class="nav-icon">▦</span>扩展</button>
-          <button class="nav-item"><span class="nav-icon">◈</span>市场</button>
-          <button class="nav-item"><span class="nav-icon">⬡</span>代码索引</button>
-          <button class="nav-item"><span class="nav-icon">J</span>Java</button>
-        </nav>
-        <div class="content">
-          <div class="content-head">
-            <div><h1>工具权限</h1><p class="subtext">为 Aide 内的工具调用设置预先允许、每次询问或拒绝规则。</p></div>
-            <button id="add-rule" class="primary-btn">＋ 添加规则</button>
+
+    <section class="app-frame" aria-label="应用窗口预览">
+      <!-- 聊天区占位 -->
+      <div class="chat-area">聊天区（右侧为权限面板）</div>
+
+      <!-- 右侧：权限面板 + rail -->
+      <div class="right-zone">
+        <div class="perm-panel">
+          <div class="panel-header">
+            <span class="panel-title">工具权限</span>
+            <button id="add-rule" class="add-btn">＋ 添加规则</button>
           </div>
-          <div class="scope-tabs" role="tablist">
-            <button class="active" data-scope="user">用户全局</button>
-            <button data-scope="project">项目共享</button>
-            <button data-scope="local">项目本地</button>
-            <button data-scope="managed">受管策略</button>
+          <div class="panel-scroll">
+            <div class="scope-tabs" role="tablist">
+              <button class="active" data-scope="user">用户全局</button>
+              <button data-scope="project">项目共享</button>
+              <button data-scope="local">项目本地</button>
+              <button data-scope="managed">受管策略</button>
+            </div>
+            <div id="scope-summary" class="scope-summary"><span class="badge">用户全局</span><span>写入 <code>~/.aide/settings.json</code>，对所有工作区生效。</span></div>
+            <div id="rule-list" class="rule-list"></div>
+            <div class="priority-note"><strong>优先级</strong><span>受管策略 → 用户全局 → 项目共享 → 项目本地 → 本会话。上层拒绝不能被下层放宽。</span></div>
+
+            <div class="decision-panel">
+              <div class="decision-title">决策解释</div>
+              <div class="decision-desc">输入工具名与参数，查看命中链</div>
+              <div class="decision-row">
+                <input id="dec-input" class="text-input" value="Bash · rm -rf build" />
+                <button id="dec-btn" class="btn-secondary">解释</button>
+              </div>
+              <div id="dec-chain" class="chain"></div>
+            </div>
           </div>
-          <div id="scope-summary" class="scope-summary"><span class="badge">用户全局</span><span>写入 <code>~/.aide/settings.json</code>，对所有工作区生效。</span></div>
-          <div id="rule-list" class="rule-list"></div>
-          <div class="priority-note"><strong>优先级</strong><span>受管策略 → 用户全局 → 项目共享 → 项目本地 → 本会话。上层的拒绝规则不能被下层放宽。</span></div>
         </div>
+
+        <nav class="rail" aria-label="右侧工具栏">
+          <button class="rail-btn" aria-label="files" title="files">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7c0-1.1.9-2 2-2h4.6L12 7h7c1.1 0 2 .9 2 2v8c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2V7z"/></svg>
+          </button>
+          <button class="rail-btn" aria-label="changes" title="changes">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+          </button>
+          <button class="rail-btn" aria-label="git" title="git">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+          </button>
+          <button class="rail-btn" aria-label="search" title="search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </button>
+          <span class="rail-sep"></span>
+          <button class="rail-btn active" aria-label="权限" title="权限">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+          </button>
+        </nav>
       </div>
     </section>
   </main>
@@ -148,8 +276,9 @@
       const text = summaries[scope];
       summary.innerHTML = `<span class="badge">${text[0]}</span><span>${text.slice(1).join('')}</span>`;
       list.innerHTML = ruleSets[scope].map(rule => `<article class="rule-card ${rule.kind} ${rule.readonly ? 'readonly' : ''}">
-        <span class="rule-symbol">${rule.symbol}</span><div><div class="rule-title"><code>${rule.tool}</code></div><div class="rule-meta">${rule.detail}</div></div>
-        <div style="display:flex;align-items:center"><span class="effect">${rule.effect}</span>${rule.readonly ? '' : '<span class="rule-actions"><button class="icon-btn" aria-label="编辑">✎</button><button class="icon-btn" aria-label="删除">×</button></span>'}</div>
+        <span class="rule-symbol">${rule.symbol}</span>
+        <div class="rule-main"><div class="rule-title"><code>${rule.tool}</code></div><div class="rule-meta">${rule.detail}</div></div>
+        <div class="rule-side"><span class="effect">${rule.effect}</span>${rule.readonly ? '' : '<span class="rule-actions"><button class="icon-btn" aria-label="编辑">✎</button><button class="icon-btn" aria-label="删除">×</button></span>'}</div>
       </article>`).join('');
       document.querySelector('#add-rule').style.visibility = scope === 'managed' ? 'hidden' : 'visible';
     }
@@ -161,6 +290,20 @@
     document.querySelector('#add-rule').addEventListener('click', () => {
       const toast = document.querySelector('#toast'); toast.classList.add('show'); setTimeout(() => toast.classList.remove('show'), 2600);
     });
+    // 决策解释：点击后展示命中链（验证窄版下 UUID 省略）
+    document.querySelector('#dec-btn').addEventListener('click', () => {
+      const chain = document.querySelector('#dec-chain');
+      chain.innerHTML = `
+        <div class="chain-entry"><span class="chain-scope">受管策略</span><span class="chain-rule">9f2c41b7-8d3e-4a6b-9c01-7e5d2a8b4f63</span><span class="chain-status">命中 · 拒绝</span></div>
+        <div class="chain-entry"><span class="chain-scope">用户全局</span><span class="chain-rule">r-allow-bash-test</span><span class="chain-status overridden">被覆盖</span></div>
+        <div class="chain-entry"><span class="chain-scope">本会话</span><span class="chain-rule">—</span><span class="chain-status overridden">未命中</span></div>`;
+    });
+    // 面板宽度切换
+    document.querySelectorAll('[data-w]').forEach(button => button.addEventListener('click', () => {
+      document.querySelector('.right-zone').style.setProperty('--panel-w', button.dataset.w + 'px');
+      document.querySelectorAll('[data-w]').forEach(item => item.classList.toggle('active', item === button));
+    }));
+    // 主题切换
     document.querySelectorAll('[data-theme]').forEach(button => button.addEventListener('click', () => {
       const cat = button.dataset.theme === 'cat'; document.body.classList.toggle('catppuccin', cat);
       document.querySelectorAll('[data-theme]').forEach(item => item.classList.toggle('active', item === button));

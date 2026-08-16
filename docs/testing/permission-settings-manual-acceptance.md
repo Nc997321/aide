@@ -101,7 +101,7 @@
 
 - **Rust**：`cargo test --lib` — 覆盖 `settings::` / `policy::` / `commands::permissions` / `runtime::provider`
 - **sidecar**：`pnpm exec vitest run agent-sidecar/src/policy agent-sidecar/src/permissions.test.ts agent-sidecar/src/session-worker.test.ts agent-sidecar/src/session-manager.test.ts agent-sidecar/src/instructions.test.ts`
-- **前端**：`pnpm exec vitest run src/api/permissions.test.ts src/composables/usePermissions.test.ts src/components/settings/permissions src/components/SettingsPanel.test.ts src/components/PermissionDialog.test.ts src/utils/permissionRuleDerivation.test.ts`
+- **前端**：`pnpm exec vitest run src/api/permissions.test.ts src/composables/usePermissions.test.ts src/components/permissions src/components/SettingsPanel.test.ts src/components/PermissionDialog.test.ts src/utils/permissionRuleDerivation.test.ts`
 - **类型**：`node node_modules/vue-tsc/bin/vue-tsc.js --noEmit`（⚠️ `pnpm vue-tsc --noEmit` 是 bogus shim，会打印 "Already up to date" 但不真跑 vue-tsc，必须用 direct binary）
 - **构建**：`pnpm build` + `pnpm --dir agent-sidecar build`
 

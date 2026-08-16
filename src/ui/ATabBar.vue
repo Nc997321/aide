@@ -7,6 +7,8 @@ export interface Tab {
   label?: string;
   icon?: string;
   badge?: number;
+  /** 沉底标记：仅 ARailBar 消费——带此标记的 tab 用弹性分隔推到底部（如权限）。 */
+  bottom?: boolean;
 }
 
 const props = defineProps<{

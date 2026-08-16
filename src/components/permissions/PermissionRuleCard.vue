@@ -48,10 +48,10 @@ const detail = computed(() => {
 <style scoped>
 .rule-card {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) auto;
-  gap: 11px;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 8px;
   align-items: center;
-  padding: 12px;
+  padding: 8px 10px;
   border: 1px solid var(--aide-border);
   border-radius: var(--aide-radius-md);
   background: var(--aide-bg-base);
@@ -61,44 +61,44 @@ const detail = computed(() => {
   background: var(--aide-surface-default);
 }
 .rule-symbol {
-  height: 30px;
+  height: 24px;
   display: grid;
   place-items: center;
   border-radius: var(--aide-radius-sm);
   font-weight: 700;
-  font-size: 15px;
+  font-size: 13px;
 }
 .rule-card.allow .rule-symbol { color: var(--aide-success); background: color-mix(in srgb, var(--aide-success) 12%, transparent); }
 .rule-card.ask .rule-symbol { color: var(--aide-warning); background: color-mix(in srgb, var(--aide-warning) 12%, transparent); }
 .rule-card.deny .rule-symbol { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 12%, transparent); }
 .rule-body { min-width: 0; }
-.rule-title code { color: var(--aide-text-primary); font-weight: 600; font-family: var(--aide-font-mono, monospace); font-size: 12px; }
+.rule-title code { color: var(--aide-text-primary); font-weight: 600; font-family: var(--aide-font-mono, monospace); font-size: 11.5px; }
 .rule-meta {
-  margin-top: 3px;
+  margin-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--aide-text-muted);
   font-family: var(--aide-font-mono, monospace);
-  font-size: 11px;
+  font-size: 10.5px;
 }
-.rule-tail { display: flex; align-items: center; gap: 8px; }
+.rule-tail { display: flex; align-items: center; gap: 4px; }
 .effect-badge {
   display: inline-flex;
-  min-width: 52px;
+  min-width: 44px;
   justify-content: center;
-  padding: 3px 7px;
+  padding: 2px 6px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
 }
 .rule-card.allow .effect-badge { color: var(--aide-success); background: color-mix(in srgb, var(--aide-success) 13%, transparent); }
 .rule-card.ask .effect-badge { color: var(--aide-warning); background: color-mix(in srgb, var(--aide-warning) 13%, transparent); }
 .rule-card.deny .effect-badge { color: var(--aide-danger); background: color-mix(in srgb, var(--aide-danger) 13%, transparent); }
-.rule-actions { display: flex; gap: 3px; }
+.rule-actions { display: flex; gap: 2px; }
 .icon-btn {
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   color: var(--aide-text-muted);
   border: 0;
   background: transparent;

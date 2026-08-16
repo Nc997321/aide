@@ -17,6 +17,7 @@ import { usePaneLayoutPersistence } from "./composables/paneLayout/persistence";
 import { useSessionNames } from "./composables/useSessionNames";
 import GitPanel from "./components/GitPanel.vue";
 import SearchPanel from "./components/SearchPanel.vue";
+import PermissionsPanel from "./components/permissions/PermissionsPanel.vue";
 import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
 import NotificationBanner from "./components/NotificationBanner.vue";
 import TitleBar from "./components/titlebar/TitleBar.vue";
@@ -60,7 +61,7 @@ import type { WorkspaceInfo } from "./types";
 
 const leftCollapsed = ref(false);
 const rightCollapsed = ref(false);
-const rightTab = ref<"files" | "changes" | "git" | "search">("files");
+const rightTab = ref<"files" | "changes" | "git" | "search" | "permissions">("files");
 const { unstagedFiles, hasChanges, loadStatus, currentBranch } = useGit();
 
 // Session activity for titlebar
@@ -362,12 +363,14 @@ const tabIconFiles = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
 const tabIconChanges = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
 const tabIconGit = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
 const tabIconSearch = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
+const tabIconPermissions = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>';
 
 const rightTabs = computed<Tab[]>(() => [
   { id: "files", icon: tabIconFiles },
   { id: "changes", icon: tabIconChanges, badge: changeCount.value || undefined },
   { id: "git", icon: tabIconGit, badge: unstagedFiles.value.length || undefined },
   { id: "search", icon: tabIconSearch },
+  { id: "permissions", icon: tabIconPermissions, label: "权限", bottom: true },
 ]);
 
 /** 右侧竖直工具栏选择（IDEA 式）：点未激活项切换并展开、点已激活项折叠、
@@ -1063,6 +1066,10 @@ onUnmounted(() => {
               :workspace-path="workspacePath"
               ref="searchPanelRef"
               @files-changed="onSearchFilesChanged"
+            />
+            <PermissionsPanel
+              v-show="rightTab === 'permissions'"
+              :workspace-path="workspacePath"
             />
           </div>
         </div>

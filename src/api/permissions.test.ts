@@ -59,7 +59,7 @@ describe("permissionsApi", () => {
       tool: "Bash",
       matcher: { kind: "bash", mode: "contains", value: "rm -rf" },
     };
-    await permissionsApi.update("user", "rule-1", draft, mockInvoke);
+    await permissionsApi.update("user", "rule-1", draft, undefined, mockInvoke);
     expect(mockInvoke).toHaveBeenCalledWith("update_permission_rule", {
       scope: "user",
       id: "rule-1",
@@ -67,12 +67,38 @@ describe("permissionsApi", () => {
     });
   });
 
+  it("update with explicit project passes { scope, id, rule, project }", async () => {
+    mockInvoke.mockResolvedValue({ revision: 3, scopes: [], rules: [] });
+    const draft: PermissionRuleDraft = {
+      effect: "deny",
+      tool: "Bash",
+      matcher: { kind: "bash", mode: "contains", value: "rm -rf" },
+    };
+    await permissionsApi.update("project", "rule-1", draft, "C:/ws-a", mockInvoke);
+    expect(mockInvoke).toHaveBeenCalledWith("update_permission_rule", {
+      scope: "project",
+      id: "rule-1",
+      rule: draft,
+      project: "C:/ws-a",
+    });
+  });
+
   it("remove calls invoke with 'delete_permission_rule' and { scope, id }", async () => {
     mockInvoke.mockResolvedValue({ revision: 4, scopes: [], rules: [] });
-    await permissionsApi.remove("local", "rule-42", mockInvoke);
+    await permissionsApi.remove("local", "rule-42", undefined, mockInvoke);
     expect(mockInvoke).toHaveBeenCalledWith("delete_permission_rule", {
       scope: "local",
       id: "rule-42",
+    });
+  });
+
+  it("remove with explicit project passes { scope, id, project }", async () => {
+    mockInvoke.mockResolvedValue({ revision: 4, scopes: [], rules: [] });
+    await permissionsApi.remove("local", "rule-42", "C:/ws-a", mockInvoke);
+    expect(mockInvoke).toHaveBeenCalledWith("delete_permission_rule", {
+      scope: "local",
+      id: "rule-42",
+      project: "C:/ws-a",
     });
   });
 

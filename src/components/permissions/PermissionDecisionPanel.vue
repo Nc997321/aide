@@ -92,37 +92,42 @@ const DECISION_LABEL: Record<string, string> = {
 
 <style scoped>
 .decision-panel {
-  margin-top: 20px;
-  padding: 16px;
+  margin-top: 12px;
+  padding: 12px;
   border: 1px solid var(--aide-border);
   border-radius: var(--aide-radius-md);
   background: var(--aide-bg-base);
   display: grid;
-  gap: 10px;
+  /* 单列轨道必须 minmax(0,1fr)：否则 field-row 的 input 固有宽度会撑破轨道，
+     把按钮等 stretch 子项一起顶出面板右缘（窄面板必现） */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
 }
-.panel-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--aide-text-primary); }
-.panel-hint { margin: 0; color: var(--aide-text-muted); font-size: 12px; }
-.field-row { display: grid; grid-template-columns: 140px 1fr; gap: 12px; }
+.panel-title { margin: 0; font-size: 12.5px; font-weight: 600; color: var(--aide-text-primary); }
+.panel-hint { margin: 0; color: var(--aide-text-muted); font-size: 11.5px; }
+.field-row { display: grid; grid-template-columns: 108px minmax(0, 1fr); gap: 8px; }
 .field { display: grid; gap: 4px; }
 .field-label { font-size: 11px; color: var(--aide-text-secondary); }
 .text-input {
-  height: 31px;
-  padding: 0 10px;
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
   color: var(--aide-text-primary);
   background: var(--aide-bg-deep);
   border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-md);
-  font-size: 12px;
+  border-radius: var(--aide-radius-sm);
+  font-size: 11.5px;
 }
 .text-input:focus { outline: none; border-color: var(--aide-accent); }
 .btn-secondary {
-  height: 31px;
-  padding: 0 14px;
+  height: 28px;
+  padding: 0 12px;
   border: 1px solid var(--aide-border);
   background: var(--aide-surface-default);
   color: var(--aide-text-secondary);
-  border-radius: var(--aide-radius-md);
-  font-size: 12px;
+  border-radius: var(--aide-radius-sm);
+  font-size: 11.5px;
   cursor: pointer;
 }
 .btn-secondary:disabled { opacity: 0.6; cursor: not-allowed; }
@@ -137,17 +142,24 @@ const DECISION_LABEL: Record<string, string> = {
 .chain { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .chain-entry {
   display: grid;
-  grid-template-columns: 160px 1fr auto;
+  grid-template-columns: 120px minmax(0, 1fr) auto;
   gap: 8px;
-  padding: 6px 8px;
+  padding: 5px 8px;
   border-radius: var(--aide-radius-sm);
   background: var(--aide-bg-deep);
-  font-size: 11px;
+  font-size: 10.5px;
   font-family: var(--aide-font-mono, monospace);
 }
 .chain-entry.overridden_by_deny { color: var(--aide-danger); }
 .chain-entry.selected { color: var(--aide-success); }
 .chain-entry.shadowed_by_specificity,
 .chain-entry.overridden_by_lower_scope { color: var(--aide-text-muted); }
+/* ruleId 是 36 位 UUID，窄面板下必须省略 */
+.chain-rule {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .chain-scope { color: var(--aide-text-muted); }
 </style>

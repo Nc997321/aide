@@ -50,23 +50,26 @@ const ordered = computed(() =>
 </template>
 
 <style scoped>
+/* 4 个 scope tab 在 300px 面板宽度下一行必溢出，故 2×2 网格（窄版布局
+   见 docs/superpowers/design-previews/2026-07-22-permission-settings.html） */
 .scope-tabs {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 4px;
   padding: 3px;
-  width: fit-content;
   border: 1px solid var(--aide-border-subtle);
   background: var(--aide-bg-base);
   border-radius: var(--aide-radius-md);
 }
 .scope-tab {
-  padding: 5px 10px;
+  padding: 6px 4px;
   font-size: 11.5px;
   color: var(--aide-text-muted);
   border: 0;
   background: transparent;
   border-radius: var(--aide-radius-sm);
   cursor: pointer;
+  text-align: center;
   transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
 .scope-tab:hover:not(:disabled) {

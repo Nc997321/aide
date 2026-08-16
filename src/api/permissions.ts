@@ -30,17 +30,23 @@ export const permissionsApi = {
     scope: PermissionScope,
     id: string,
     rule: PermissionRuleDraft,
+    project?: string,
     invoke = tauriInvoke,
   ): Promise<PermissionSettingsView> {
-    return invoke("update_permission_rule", { scope, id, rule });
+    return project
+      ? invoke("update_permission_rule", { scope, id, rule, project })
+      : invoke("update_permission_rule", { scope, id, rule });
   },
 
   remove(
     scope: PermissionScope,
     id: string,
+    project?: string,
     invoke = tauriInvoke,
   ): Promise<PermissionSettingsView> {
-    return invoke("delete_permission_rule", { scope, id });
+    return project
+      ? invoke("delete_permission_rule", { scope, id, project })
+      : invoke("delete_permission_rule", { scope, id });
   },
 
   explain(
