@@ -58,13 +58,13 @@ onUnmounted(() => {
 
 // ── 徽章内容 ──
 const STATUS_MARK: Record<LspServerStatus, string> = {
-  ok: "✓", missing: "✗", failed: "!", idle: "",
+  ok: "✓", missing: "✗", failed: "!", idle: "", indexing: "⟳",
 };
 const STATUS_TEXT: Record<LspServerStatus, string> = {
-  ok: "就绪", missing: "未安装", failed: "启动失败", idle: "待探测",
+  ok: "就绪", missing: "未安装", failed: "启动失败", idle: "待探测", indexing: "索引中…",
 };
 const STATUS_CLASS: Record<LspServerStatus, string> = {
-  ok: "st-ok", missing: "st-miss", failed: "st-err", idle: "st-idle",
+  ok: "st-ok", missing: "st-miss", failed: "st-err", idle: "st-idle", indexing: "st-index",
 };
 
 const MAX_BADGE_SEGS = 4;
@@ -363,11 +363,17 @@ defineExpose({ openPanel });
 
           <div v-for="row in langRows" :key="row.lang" class="lang-block">
             <div class="lang-row">
-              <span class="st-dot" :class="STATUS_CLASS[row.status]" />
+              <svg v-if="row.status === 'indexing'" class="st-dot-spin" width="9" height="9" viewBox="0 0 12 12" aria-hidden="true">
+                <path d="M6 1.5a4.5 4.5 0 1 0 4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              </svg>
+              <span v-else class="st-dot" :class="STATUS_CLASS[row.status]" />
               <span class="lang-name">{{ row.name }}</span>
               <span class="lang-server">{{ row.server }}</span>
               <span class="lang-status" :class="row.status">{{ STATUS_TEXT[row.status] }}</span>
             </div>
+
+            <!-- indexing 诚实兜底文案：超 90s 仍无就绪信号时单列一行（仍索引中，不切假就绪） -->
+            <div v-if="row.note" class="lang-note-row">{{ row.note }}</div>
 
             <!-- failed：可编辑 + 红色错误提示（后端回传的 stderr/握手详情） -->
             <div v-if="row.status === 'failed'" class="override-inline failed">
@@ -618,12 +624,17 @@ defineExpose({ openPanel });
 .st-miss { background: var(--aide-warning); box-shadow: 0 0 4px color-mix(in srgb, var(--aide-warning) 40%, transparent); }
 .st-err { background: var(--aide-danger); box-shadow: 0 0 4px color-mix(in srgb, var(--aide-danger) 40%, transparent); }
 .st-idle { background: var(--aide-text-muted); opacity: 0.5; }
+/* indexing：旋转 spinner 替代静态圆点（accent 色 = 进行中，区别于绿色就绪） */
+.st-dot-spin { color: var(--aide-accent); flex-shrink: 0; animation: jdk-spin 0.8s linear infinite; }
 .lang-name { font-size: 12.5px; color: var(--aide-text-primary); font-weight: 500; }
 .lang-server { font-size: 10px; color: var(--aide-text-muted); font-family: var(--aide-font-mono); }
 .lang-status { font-size: 10.5px; color: var(--aide-text-muted); flex-shrink: 0; margin-left: auto; }
 .lang-status.ok { color: var(--aide-success); }
 .lang-status.miss { color: var(--aide-warning); }
 .lang-status.err { color: var(--aide-danger); }
+.lang-status.indexing { color: var(--aide-accent); }
+/* indexing 诚实兜底文案：对齐到 lang-name 下方（29px = 14px 行内边距 + 6px 点 + 9px 间距） */
+.lang-note-row { padding: 0 14px 6px 29px; font-size: 10px; color: var(--aide-text-muted); line-height: 1.4; }
 
 /* ── 内联 override 行（取代 install-box note + 底部服务器覆盖区） ── */
 .override-inline { padding: 2px 14px 10px 29px; display: flex; flex-direction: column; gap: 5px; }
@@ -756,7 +767,7 @@ defineExpose({ openPanel });
 .jdk-spin { animation: jdk-spin 0.8s linear infinite; }
 @keyframes jdk-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
-  .jdk-spin { animation: none; }
+  .jdk-spin, .st-dot-spin { animation: none; }
 }
 
 .jdk-manual-toggle {

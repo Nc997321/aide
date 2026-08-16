@@ -24,6 +24,9 @@ pub enum EnsureError {
 const SPAWN_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// init_handshake 的 send：与 rx 的 5s 对齐（send 卡 pipe 时也要有界）。
 const HANDSHAKE_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// LSP 请求（definition/completion/hover/...）响应超时：防 jdtls 偶发卡死无限挂起。
+/// 超时返空让前端 fallback CodeGraph，不阻塞编辑器。
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 // ── ServerHandle ──
 
@@ -33,6 +36,10 @@ pub struct ServerHandle {
     pub router: Arc<Router>,
     pub exclude_globs: Vec<String>,
     pub initialized: AtomicBool,
+    /// 功能就绪（区别于 initialized=握手成功）。Java（jdtls）握手后还要导入项目 + 索引，
+    /// 收到 language/status 的 ServiceReady 才置 true；其余语言握手成功即 true。
+    /// LSP 请求命令据此 gate：未就绪直接返空（前端 fallback CodeGraph），不挂起等索引。
+    pub ready: AtomicBool,
     pub dead: Arc<AtomicBool>,
     /// initialize 握手返回的 server capabilities（原始 JSON）。供前端按语言查
     /// implementationProvider / documentSymbolProvider 等，决定是否启用 gutter 标记等
@@ -44,6 +51,29 @@ pub struct ServerHandle {
 impl ServerHandle {
     pub fn is_alive(&self) -> bool {
         !self.dead.load(Ordering::Relaxed) && self.initialized.load(Ordering::Relaxed)
+    }
+
+    /// 发一条 LSP request 并等响应，带「功能就绪 gate + 超时」兜底：
+    /// - 未就绪（ready=false，如 jdtls 索引期）→ 直接返 Null，不发请求不挂起
+    ///   （前端 definition/引用据此 fallback CodeGraph；补全/hover/implementation 返空）。
+    /// - 就绪 → 发请求，rx 套 REQUEST_TIMEOUT 超时：超时/channel closed → Null（防偶发卡死）。
+    /// 返回原始 result（调用方各自 parse；Null 各 parser 均返空）。
+    pub async fn request(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        if !self.ready.load(Ordering::Relaxed) {
+            return Ok(serde_json::Value::Null);
+        }
+        let (msg, id, tx, rx) = self.router.next_request(method, params);
+        self.transport.table.lock().await.insert(id, tx);
+        self.transport.send(&msg).await.map_err(|e| e.to_string())?;
+        match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(_)) => Ok(serde_json::Value::Null), // channel closed（server 退出）
+            Err(_) => Ok(serde_json::Value::Null),     // timeout（防卡死挂起）
+        }
     }
 }
 
@@ -239,6 +269,7 @@ async fn spawn_and_init(
     let docs = Arc::new(TokioMutex::new(OpenDocs::new()));
     let dead = Arc::new(AtomicBool::new(false));
     let initialized = AtomicBool::new(false);
+    let ready = AtomicBool::new(false);
 
     let handle = Arc::new(ServerHandle {
         transport,
@@ -246,13 +277,14 @@ async fn spawn_and_init(
         router: Arc::clone(&router),
         exclude_globs: exclude_globs.clone(),
         initialized,
+        ready,
         dead: Arc::clone(&dead),
         capabilities: Arc::new(TokioMutex::new(None)),
         _child: child,
     });
 
     // —— reader 任务 ——
-    start_reader(handle.clone(), app.clone());
+    start_reader(handle.clone(), lang, workspace.to_string(), app.clone());
 
     // —— initialize 握手 ——
     if let Err(e) = init_handshake(&handle, workspace, lang, &exclude_globs).await {
@@ -283,6 +315,11 @@ async fn spawn_and_init(
         return Err(enhanced);
     }
     handle.initialized.store(true, Ordering::Relaxed);
+    // 非 Java：握手成功即功能就绪（不发 language/status，不能卡在 ready=false）。
+    // Java：ready 保持 false，等 jdtls 发 language/status 的 ServiceReady（reader 任务置位）。
+    if !crate::lsp::profiles::profile(lang).handles_status() {
+        handle.ready.store(true, Ordering::Relaxed);
+    }
     Ok(handle)
 }
 
@@ -433,7 +470,7 @@ async fn spawn_test(
 
 // ── start_reader ──
 
-fn start_reader(handle: Arc<ServerHandle>, app: tauri::AppHandle) {
+fn start_reader(handle: Arc<ServerHandle>, lang: LanguageId, workspace: String, app: tauri::AppHandle) {
     use tauri::Emitter;
     use tokio::io::{AsyncReadExt, BufReader};
 
@@ -483,6 +520,18 @@ fn start_reader(handle: Arc<ServerHandle>, app: tauri::AppHandle) {
                     } => {
                         // v1：回空 response（不实现 workspace/configuration 等细节）
                         tracing::debug!("[lsp] server request ignored: id={:?}", id);
+                    }
+                    Action::ServerStatus { status_type, message } => {
+                        // 仅 Java（handles_status=true）消费：认 ServiceReady 置功能就绪。
+                        // 其余语言不发 language/status，即使发也按 profile 默认忽略。
+                        let p = crate::lsp::profiles::profile(lang);
+                        if p.handles_status() && p.is_ready_status(&status_type, &message) {
+                            handle.ready.store(true, Ordering::Relaxed);
+                            let _ = app.emit(
+                                "lsp-server-ready",
+                                serde_json::json!({"workspaceRoot": workspace, "lang": lang.id_str()}),
+                            );
+                        }
                     }
                     Action::Ignore => {}
                 }

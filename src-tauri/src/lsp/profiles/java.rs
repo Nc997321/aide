@@ -78,6 +78,16 @@ impl ServerProfile for JavaProfile {
     fn handshake_timeout(&self) -> Duration {
         Duration::from_secs(30)
     }
+
+    /// jdtls 握手后还有项目导入 + 索引期，发 language/status 推进就绪阶段 → 消费。
+    fn handles_status(&self) -> bool {
+        true
+    }
+
+    /// 认 ServiceReady（jdtls 功能就绪）才置 ready=true。容错三种历史形式。
+    fn is_ready_status(&self, status_type: &Value, message: &str) -> bool {
+        is_service_ready(status_type, message)
+    }
 }
 
 /// 解析内置 lombok jar：resource_dir/lsp/lombok.jar。失败（开发期未放/打包漏）
@@ -87,6 +97,22 @@ fn resolve_lombok_jar(ctx: &LaunchCtx) -> Option<PathBuf> {
     let res_dir = ctx.app.path().resource_dir().ok()?;
     let jar = res_dir.join("lsp").join("lombok.jar");
     if jar.exists() { Some(jar) } else { None }
+}
+
+/// 判 jdtls `language/status` 通知是否代表功能就绪（项目导入 + 索引完成）。
+/// 容错匹配三种历史形式，避免硬绑单一字面量：
+/// - 新版 type="ServiceReady"（string）
+/// - 旧版 type=3（int messageType，ServiceReady 的枚举值）
+/// - message 含 "Service ready"（兜底，跨版本措辞）
+/// 纯函数，单测核心。
+pub fn is_service_ready(status_type: &Value, message: &str) -> bool {
+    if status_type.as_str() == Some("ServiceReady") {
+        return true;
+    }
+    if status_type.as_i64() == Some(3) {
+        return true;
+    }
+    message.contains("Service ready")
 }
 
 /// 纯函数：按已解析的 lombok jar 构造注入参数（不碰 IO，单测核心）。
@@ -109,9 +135,26 @@ fn build_lombok_args(jar: Option<&Path>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn data() -> &'static Path {
         Path::new("C:/cache/jdtls-ws")
+    }
+
+    #[test]
+    fn is_service_ready_matches_all_known_forms() {
+        // 新版 string "ServiceReady"
+        assert!(is_service_ready(&json!("ServiceReady"), ""));
+        // 旧版 int 3（messageType）
+        assert!(is_service_ready(&json!(3), ""));
+        // message 兜底（message 含 "Service ready"）
+        assert!(is_service_ready(&json!("Starting"), "Service ready now"));
+        // 反例：非就绪阶段
+        assert!(!is_service_ready(&json!("Starting"), "Importing project"));
+        assert!(!is_service_ready(&json!("Started"), "Bundle started"));
+        assert!(!is_service_ready(&json!("ProjectStatus"), "OK"));
+        assert!(!is_service_ready(&json!(2), ""));
+        assert!(!is_service_ready(&serde_json::Value::Null, ""));
     }
 
     #[test]

@@ -57,6 +57,20 @@ pub trait ServerProfile {
     fn handshake_timeout(&self) -> Duration {
         Duration::from_secs(5)
     }
+
+    /// 是否消费 server→client `language/status` 通知。默认 false（绝大多数 LSP server
+    /// 握手完即可用，不发就绪进度）。Java（jdtls）覆写为 true：握手后还有 OSGi + 项目导入
+    /// + 索引期，需认 ServiceReady 才算功能就绪——见 profiles/java.rs。
+    fn handles_status(&self) -> bool {
+        false
+    }
+
+    /// 收到 `language/status` 时，判该阶段是否代表功能就绪。仅 `handles_status()==true`
+    /// 的 profile 会被 manager 调此方法（其余 profile 此方法不会被调，默认 false）。Java 覆写：
+    /// 容错匹配 ServiceReady（string）/ 旧版 int 3 / message 含 "Service ready"。
+    fn is_ready_status(&self, _status_type: &serde_json::Value, _message: &str) -> bool {
+        false
+    }
 }
 
 /// 已解析的 server 启动来源。

@@ -22,6 +22,9 @@ pub use crate::lsp::protocol::CmCompletion;
 #[derive(Debug, Serialize)]
 pub struct EnsureOutcome {
     pub ok: bool,
+    /// 功能就绪（区别于 ok=握手成功）。Java（jdtls）握手后仍索引中 → ready=false；
+    /// 其余语言握手成功即 ready=true。前端据此在 Java 索引期显示「索引中」中间态。
+    pub ready: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<&'static str>,
     /// 失败详情（spawn/handshake 的可读错误，含 stderr 摘要）。ServerNotFound 不带。
@@ -56,19 +59,25 @@ pub async fn lsp_ensure_server(
     // lsp_enabled 被设过，未信任工作区也拒拉 server——untrust 后老 server
     // 自然消亡，不再 respawn。
     if !crate::commands::workspace::is_path_trusted(&workspace_root) {
-        return Ok(EnsureOutcome { ok: false, kind: Some("untrusted"), error: None });
+        return Ok(EnsureOutcome { ok: false, ready: false, kind: Some("untrusted"), error: None });
     }
     let Some(lang_id) = lang_from_id_str(&lang) else {
-        return Ok(EnsureOutcome { ok: false, kind: Some("server_not_found"), error: None });
+        return Ok(EnsureOutcome { ok: false, ready: false, kind: Some("server_not_found"), error: None });
     };
     let settings = crate::commands::settings::public_settings(settings_service.inner())
         .map_err(|e| e.to_string())?;
     let mgr = state.0.lock().await;
     match mgr.ensure_server(&workspace_root, lang_id, &app, &settings).await {
-        Ok(_) => Ok(EnsureOutcome { ok: true, kind: None, error: None }),
-        Err(EnsureError::ServerNotFound) => Ok(EnsureOutcome { ok: false, kind: Some("server_not_found"), error: None }),
-        Err(EnsureError::HandshakeFailed(e)) => Ok(EnsureOutcome { ok: false, kind: Some("handshake_failed"), error: Some(e) }),
-        Err(EnsureError::SpawnFailed(e)) => Ok(EnsureOutcome { ok: false, kind: Some("spawn_failed"), error: Some(e) }),
+        Ok(h) => Ok(EnsureOutcome {
+            ok: true,
+            // Java 索引期 ready=false（握手成功但 jdtls 还没 ServiceReady）；其余 true。
+            ready: h.ready.load(std::sync::atomic::Ordering::Relaxed),
+            kind: None,
+            error: None,
+        }),
+        Err(EnsureError::ServerNotFound) => Ok(EnsureOutcome { ok: false, ready: false, kind: Some("server_not_found"), error: None }),
+        Err(EnsureError::HandshakeFailed(e)) => Ok(EnsureOutcome { ok: false, ready: false, kind: Some("handshake_failed"), error: Some(e) }),
+        Err(EnsureError::SpawnFailed(e)) => Ok(EnsureOutcome { ok: false, ready: false, kind: Some("spawn_failed"), error: Some(e) }),
     }
 }
 
@@ -169,11 +178,8 @@ pub async fn lsp_definition(
         "textDocument":{"uri":uri},
         "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
     });
-    let (msg, id, tx, rx) = h.router.next_request("textDocument/definition", params);
-    h.transport.table.lock().await.insert(id, tx);
-    h.transport.send(&msg).await.map_err(|e| e.to_string())?;
-    let result = rx.await.map_err(|_| "server closed".to_string())?;
-    // result 是 null / Location / Location[]
+    let result = h.request("textDocument/definition", params).await?;
+    // result 是 null / Location / Location[]（未就绪或超时返 null → parse 返空 → 前端 fallback CodeGraph）
     let locs = parse_locations(&result);
     Ok(crate::lsp::protocol::locations_to_query_results(&locs, &word, &workspace_root))
 }
@@ -191,10 +197,7 @@ pub async fn lsp_completion(
         "textDocument":{"uri":uri},
         "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
     });
-    let (msg, id, tx, rx) = h.router.next_request("textDocument/completion", params);
-    h.transport.table.lock().await.insert(id, tx);
-    h.transport.send(&msg).await.map_err(|e| e.to_string())?;
-    let result = rx.await.map_err(|_| "server closed".to_string())?;
+    let result = h.request("textDocument/completion", params).await?;
     let items = parse_completion_items(&result);
     Ok(crate::lsp::protocol::completion_items_to_cm(&items))
 }
@@ -212,10 +215,7 @@ pub async fn lsp_hover(
         "textDocument":{"uri":uri},
         "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
     });
-    let (msg, id, tx, rx) = h.router.next_request("textDocument/hover", params);
-    h.transport.table.lock().await.insert(id, tx);
-    h.transport.send(&msg).await.map_err(|e| e.to_string())?;
-    let result = rx.await.map_err(|_| "server closed".to_string())?;
+    let result = h.request("textDocument/hover", params).await?;
     let content = parse_hover_content(&result);
     Ok(serde_json::json!({"content":content}))
 }
@@ -236,10 +236,7 @@ pub async fn lsp_implementation(
         "textDocument":{"uri":uri},
         "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
     });
-    let (msg, id, tx, rx) = h.router.next_request("textDocument/implementation", params);
-    h.transport.table.lock().await.insert(id, tx);
-    h.transport.send(&msg).await.map_err(|e| e.to_string())?;
-    let result = rx.await.map_err(|_| "server closed".to_string())?;
+    let result = h.request("textDocument/implementation", params).await?;
     let locs = parse_locations(&result);
     Ok(crate::lsp::protocol::locations_to_query_results(&locs, &word, &workspace_root))
 }
@@ -257,10 +254,7 @@ pub async fn lsp_document_symbol(
     let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(vec![]); };
     let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
     let params = serde_json::json!({ "textDocument":{"uri":uri} });
-    let (msg, id, tx, rx) = h.router.next_request("textDocument/documentSymbol", params);
-    h.transport.table.lock().await.insert(id, tx);
-    h.transport.send(&msg).await.map_err(|e| e.to_string())?;
-    let result = rx.await.map_err(|_| "server closed".to_string())?;
+    let result = h.request("textDocument/documentSymbol", params).await?;
     Ok(parse_document_symbols(&result))
 }
 

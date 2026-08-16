@@ -44,6 +44,13 @@ pub enum Action {
         method: String,
         params: serde_json::Value,
     },
+    /// server→client `language/status` 通知（jdtls 等）。manager 据此判 Java 功能就绪——
+    /// 非 Java 或非就绪阶段由 manager 按 profile 忽略。params: { type: string|int, message: string }。
+    /// `status_type` 保留原始 Value（新版 jdtls 是 string "ServiceReady"、旧版是 int），容错不丢。
+    ServerStatus {
+        status_type: serde_json::Value,
+        message: String,
+    },
     Ignore,
 }
 
@@ -98,6 +105,17 @@ pub fn dispatch(msg: &serde_json::Value) -> Action {
                     .unwrap_or("")
                     .to_string();
                 Action::ShowMessage(msg)
+            }
+            // jdtls 功能就绪进度通知（Starting/Started/ServiceReady/ProjectStatus/Error…）。
+            // manager 按 profile 决定是否消费（仅 Java 认 ServiceReady 置 ready）。
+            "language/status" => {
+                let status_type = params.get("type").cloned().unwrap_or(serde_json::Value::Null);
+                let message = params
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                Action::ServerStatus { status_type, message }
             }
             _ => Action::Ignore,
         };
@@ -230,6 +248,31 @@ mod tests {
         match dispatch(&msg) {
             Action::ServerRequest { method, .. } => assert_eq!(method, "workspace/configuration"),
             other => panic!("expected ServerRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_routes_language_status() {
+        // 新版 jdtls：type 是 string "ServiceReady"
+        let msg = json!({"method":"language/status","params":{"type":"ServiceReady","message":"Service ready"}});
+        match dispatch(&msg) {
+            Action::ServerStatus { status_type, message } => {
+                assert_eq!(status_type, "ServiceReady");
+                assert_eq!(message, "Service ready");
+            }
+            other => panic!("expected ServerStatus, got {other:?}"),
+        }
+        // 旧版 jdtls：type 是 int（messageType），status_type 保留原始数值不丢
+        let msg_int = json!({"method":"language/status","params":{"type":3,"message":"Service ready"}});
+        match dispatch(&msg_int) {
+            Action::ServerStatus { status_type, .. } => assert_eq!(status_type, 3),
+            other => panic!("expected ServerStatus(int), got {other:?}"),
+        }
+        // 缺 params.type → null，不崩（manager 容错判非就绪）
+        let msg_none = json!({"method":"language/status","params":{"message":"x"}});
+        match dispatch(&msg_none) {
+            Action::ServerStatus { status_type, .. } => assert!(status_type.is_null()),
+            other => panic!("expected ServerStatus(null type), got {other:?}"),
         }
     }
 
