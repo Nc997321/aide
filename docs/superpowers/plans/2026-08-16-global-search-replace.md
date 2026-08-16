@@ -845,6 +845,10 @@ git commit -m "feat(search): 前端类型 + api 包装（searchInFiles / replace
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 
+// useFileViewer mock 必须是单例：组件内部调用与测试断言共享同一个 vi.fn()，
+// 否则每次 useFileViewer() 都新建 mock，断言永远落空。
+const { openAndScrollTo } = vi.hoisted(() => ({ openAndScrollTo: vi.fn() }));
+
 vi.mock("../api", () => ({
   api: {
     searchInFiles: vi.fn(),
@@ -854,7 +858,7 @@ vi.mock("../api", () => ({
 }));
 
 vi.mock("../composables/useFileViewer", () => ({
-  useFileViewer: () => ({ openAndScrollTo: vi.fn() }),
+  useFileViewer: () => ({ openAndScrollTo }),
 }));
 
 import SearchPanel from "./SearchPanel.vue";
@@ -904,7 +908,7 @@ describe("SearchPanel 搜索模式", () => {
     const first = new Promise((r) => { resolveFirst = r; });
     (api.searchInFiles as any)
       .mockImplementationOnce(() => first)
-      .mockResolvedValueOnce({ files: [group("old.ts")], total: 1, truncated: false });
+      .mockResolvedValueOnce({ files: [group("new.ts")], total: 1, truncated: false });
     const wrapper = mount(SearchPanel, { props: { workspacePath: "/ws" } });
     await wrapper.find("input.search-input").setValue("foo");
     vi.advanceTimersByTime(300);
@@ -912,8 +916,10 @@ describe("SearchPanel 搜索模式", () => {
     await wrapper.find("input.search-input").setValue("foobar");
     vi.advanceTimersByTime(300);
     await flushPromises();
+    // 旧请求（seq=1）现在才返回，应被丢弃——UI 只显示新请求（seq=2）的 new.ts
     resolveFirst({ files: [group("old.ts")], total: 1, truncated: false });
     await flushPromises();
+    expect(wrapper.text()).toContain("new.ts");
     expect(wrapper.text()).not.toContain("old.ts");
   });
 
@@ -1021,6 +1027,7 @@ async function runSearch() {
     const res = await api.searchInFiles(q, props.workspacePath, options.value);
     if (mySeq !== seq) return; // 竞态：丢弃过期结果
     result.value = res;
+    expanded.value = new Set(res.files.map((g) => g.file)); // 新结果默认全展开（IDEA 习惯）
   } catch (e) {
     if (mySeq !== seq) return;
     error.value = String(e);
@@ -1402,6 +1409,7 @@ Expected: 新追加的 5 个测试失败（组件无 replace-input / preview-btn
 
 ```ts
 import DiffViewer from "./fileviewer/DiffViewer.vue";
+import AToast from "../ui/AToast.vue";
 import { useToast } from "../composables/useToast";
 import type { ApplyResult, ReplacePreviewResponse } from "../types";
 
