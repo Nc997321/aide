@@ -78,6 +78,8 @@ async function applyAll() {
       showToast(`替换完成：${ok} 成功，${fail} 失败`, "danger");
     }
     emit("files-changed");
+  } catch (e) {
+    showToast("替换失败: " + String(e), "danger");
   } finally {
     applying.value = false;
   }
@@ -240,7 +242,7 @@ function toggleGroup(file: string) {
         </button>
       </div>
     </div>
-    <AToast :state="toastState" />
+    <AToast :state="toastState" placement="inside-bottom" />
     <div v-if="error" class="error-line">{{ error }}</div>
     <div v-if="searching" class="status-line">搜索中…</div>
     <div v-else-if="result && result.total === 0" class="status-line">无结果</div>
@@ -270,6 +272,7 @@ function toggleGroup(file: string) {
   gap: 8px;
   padding: 10px;
   height: 100%;
+  position: relative;
   overflow: hidden;
   color: var(--aide-text);
   font-size: 13px;
