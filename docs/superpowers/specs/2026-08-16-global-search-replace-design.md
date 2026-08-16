@@ -14,6 +14,7 @@
 | UI 形态 | 右侧面板新 tab（ARailBar 加「搜索」图标，与 FileTree/Git 并列） |
 | 替换流程 | 逐文件 diff 预览（IDEA 式），确认后才写盘 |
 | 搜索范围 | 仅整个工作区（尊重 .gitignore），v1 不做目录范围选择 |
+| 快捷键 | Ctrl+Shift+F = 只搜索（不显示替换区）；Ctrl+Shift+R = 搜索+替换（显示替换区）。同一面板，快捷键决定进入的模式（IDEA 语义） |
 
 ## 2. 现状盘点：为什么另起一个
 
@@ -143,8 +144,9 @@ struct ApplyResult {
 ┌─────────────────────────────┐
 │ [搜索输入框]            [×]  │  ← 300ms 防抖
 │ [正则] [Aa] [全词] [掩码:___] │  ← 选项行（toggle + 掩码输入）
+│ [替换模式 toggle]            │  ← 搜索/替换模式切换（快捷键预选，也可手动切）
 ├─────────────────────────────┤
-│ 替换模式：                    │
+│ 替换模式（仅替换模式显示）：    │
 │ [替换为输入框] [预览替换]      │
 ├─────────────────────────────┤
 │ 结果列表（按文件分组）          │
@@ -164,6 +166,7 @@ struct ApplyResult {
 - 结果按文件分组渲染：文件头（路径 + 命中数，可折叠）+ 匹配行（行号 + 行文本，命中片段高亮）。
 - 点击匹配行 → `useFileViewer.openAndScrollTo(file, line)` 跳转定位。
 - 状态：搜索中 spinner、结果数、`truncated` 截断提示、无结果空态、错误提示（如非法正则）。
+- **搜索模式不显示替换输入区**（Ctrl+Shift+F 进入此模式）。
 
 ### 5.3 替换模式
 
@@ -171,11 +174,15 @@ struct ApplyResult {
 - 预览结果逐文件渲染 `DiffViewer`（复用，`initialMode: "unified"`，`DiffPair` 组装：`oldText=original`、`newText=replaced`、`oldLabel="原"`、`newLabel="替换后"`、`status="modified"`）。
 - 逐文件「确认」/「全部确认」→ `apply_replacements` → 面板内状态行提示成功/失败数 → `fileTreeRef.loadRoot()` 刷新文件树。
 - 预览后文件被外部改动：apply 前不重新校验（v1 简化，diff 预览已展示将要写入的内容）。
+- 模式切换：面板内 toggle 可在搜索/替换模式间手动切换；快捷键进入时预选对应模式（Ctrl+Shift+F → 搜索模式，Ctrl+Shift+R → 替换模式）。切换模式不清空已输入的搜索词。
 
 ### 5.4 接线
 
 - `App.vue`：`rightTabs` 加 `{ id: "search", icon: 放大镜 SVG }`（与现有 tabIcon* 同款 24x24 stroke 风格）；`rightTab` 联合类型加 `"search"`。
-- 快捷键：`handleKeydown` 加 Ctrl+Shift+F → 展开右侧面板并切到 search tab（复用 `onRailSelect` 逻辑）。
+- 快捷键（`handleKeydown` + `matchShortcut`，IDEA 语义）：
+  - **Ctrl+Shift+F** → 展开右侧面板并切到 search tab，**搜索模式**（不显示替换区）
+  - **Ctrl+Shift+R** → 展开右侧面板并切到 search tab，**替换模式**（显示替换区）
+  - 面板已打开时重复按快捷键：聚焦搜索输入框（IDEA 行为：重复按聚焦输入框）
 - `api.ts`：3 个 invoke 包装（`searchInFiles` / `replaceInFilesPreview` / `applyReplacements`）。
 - `lib.rs`：`generate_handler!` 注册 3 个命令。
 - 类型：`types.ts` 加 `SearchOptions` / `SearchMatch` / `SearchFileGroup` / `SearchResponse` / `ReplacePreviewFile` / `ReplacePreviewResponse` / `ReplaceFileInput` / `ApplyResult`（建模参考 `GrepMatch`）。
