@@ -89,7 +89,7 @@ export function snapshotScrollTrail(): ScrollTrailEntry[] {
   return ring.slice();
 }
 
-/** 修复探针（App.vue 热键 Ctrl+Shift+R）：强制重建所有对话滚动容器的滚动节点
+/** 修复探针（App.vue 热键 Ctrl+Shift+Alt+R）：强制重建所有对话滚动容器的滚动节点
  *  （display 摘除 → 强制重排 → 还原）。定格现场按一下再试滚轮——
  *  复活 = 坐实「滚轮路径缓存了滚动范围」（resize 不刷新它、DOM 重建才刷新，
  *  与切会话自愈互证），且本动作直接就是修复机制；不复活 = 排除最后一类，

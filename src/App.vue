@@ -393,7 +393,10 @@ function openSearchPanel(mode: "search" | "replace") {
   } else if (rightTab.value !== "search") {
     rightTab.value = "search";
   }
-  searchPanelRef.value?.focusInput(mode);
+  // v-show 的 DOM 更新（摘除 display:none）要等下一轮 flush，同步 focus 会打在
+  // 仍隐藏的输入框上（HTML 规范下对 display:none 元素 focus 是 no-op）——nextTick
+  // 后再聚焦，折叠/跨 tab 打开两条路径才生效。
+  nextTick(() => searchPanelRef.value?.focusInput(mode));
 }
 
 function onSearchFilesChanged() {
