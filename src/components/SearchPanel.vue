@@ -3,10 +3,92 @@ import { ref, computed, watch } from "vue";
 import { api } from "../api";
 import type { SearchMatch, SearchOptions, SearchResponse } from "../types";
 import { useFileViewer } from "../composables/useFileViewer";
+import DiffViewer from "./fileviewer/DiffViewer.vue";
+import AToast from "../ui/AToast.vue";
+import { useToast } from "../composables/useToast";
+import type { ApplyResult, ReplacePreviewResponse } from "../types";
 
-const props = defineProps<{
-  workspacePath: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    workspacePath: string;
+    initialMode?: "search" | "replace";
+  }>(),
+  { initialMode: "search" },
+);
+
+const emit = defineEmits<{ "files-changed": [] }>();
+
+const mode = ref<"search" | "replace">(props.initialMode);
+const replaceWith = ref("");
+const previewing = ref(false);
+const preview = ref<ReplacePreviewResponse | null>(null);
+const previewError = ref("");
+const applying = ref(false);
+const applyResult = ref<ApplyResult | null>(null);
+const activePreviewFile = ref<string | null>(null);
+const queryInput = ref<HTMLInputElement | null>(null);
+
+const { toastState, showToast } = useToast();
+
+function switchMode(m: "search" | "replace") {
+  mode.value = m;
+}
+
+async function runPreview() {
+  const q = query.value.trim();
+  if (!q) return;
+  previewing.value = true;
+  previewError.value = "";
+  preview.value = null;
+  applyResult.value = null;
+  activePreviewFile.value = null;
+  try {
+    preview.value = await api.replaceInFilesPreview(
+      q,
+      replaceWith.value,
+      props.workspacePath,
+      options.value,
+    );
+    activePreviewFile.value = preview.value.files[0]?.file ?? null;
+  } catch (e) {
+    previewError.value = String(e);
+  } finally {
+    previewing.value = false;
+  }
+}
+
+function activePreview() {
+  return preview.value?.files.find((f) => f.file === activePreviewFile.value) ?? null;
+}
+
+async function applyAll() {
+  if (!preview.value) return;
+  applying.value = true;
+  try {
+    const files = preview.value.files.map((f) => ({
+      path: joinPath(props.workspacePath, f.file),
+      content: f.replaced,
+    }));
+    applyResult.value = await api.applyReplacements(files);
+    const ok = applyResult.value.succeeded.length;
+    const fail = applyResult.value.failed.length;
+    if (fail === 0) {
+      showToast(`已替换 ${ok} 个文件`, "success");
+    } else {
+      showToast(`替换完成：${ok} 成功，${fail} 失败`, "danger");
+    }
+    emit("files-changed");
+  } finally {
+    applying.value = false;
+  }
+}
+
+defineExpose({
+  focusInput(m: "search" | "replace") {
+    mode.value = m;
+    queryInput.value?.focus();
+  },
+});
 
 const query = ref("");
 const useRegex = ref(false);
@@ -102,7 +184,7 @@ function toggleGroup(file: string) {
 <template>
   <div class="search-panel">
     <div class="search-input-row">
-      <input v-model="query" class="search-input" placeholder="搜索工作区…" spellcheck="false" />
+      <input v-model="query" ref="queryInput" class="search-input" placeholder="搜索工作区…" spellcheck="false" />
       <button v-if="query" class="clear-btn" @click="query = ''">×</button>
     </div>
     <div class="option-row">
@@ -111,6 +193,54 @@ function toggleGroup(file: string) {
       <label class="opt"><input type="checkbox" v-model="wholeWord" /> 全词</label>
       <input v-model="fileMask" class="mask-input" placeholder="掩码 *.ts,*.vue" spellcheck="false" />
     </div>
+    <div class="mode-row">
+      <button class="mode-btn" :class="{ active: mode === 'search' }" @click="switchMode('search')">查找</button>
+      <button class="mode-btn" :class="{ active: mode === 'replace' }" @click="switchMode('replace')">替换</button>
+    </div>
+    <div v-if="mode === 'replace'" class="replace-row">
+      <input v-model="replaceWith" class="replace-input" placeholder="替换为…" spellcheck="false" />
+      <button class="preview-btn" :disabled="!query.trim() || previewing" @click="runPreview">
+        {{ previewing ? "预览中…" : "预览替换" }}
+      </button>
+    </div>
+    <div v-if="previewError" class="error-line">{{ previewError }}</div>
+    <div v-if="preview" class="preview-area">
+      <div class="preview-file-list">
+        <div
+          v-for="f in preview.files"
+          :key="f.file"
+          class="preview-file-row"
+          :class="{ active: activePreviewFile === f.file }"
+          @click="activePreviewFile = f.file"
+        >
+          <span class="file-name">{{ f.file }}</span>
+          <span class="file-count">{{ f.matchCount }} 处</span>
+        </div>
+      </div>
+      <div v-if="activePreview()" class="preview-diff">
+        <DiffViewer
+          :pair="{
+            oldText: activePreview()!.original,
+            newText: activePreview()!.replaced,
+            oldLabel: '原',
+            newLabel: '替换后',
+            status: 'modified',
+            isBinary: false,
+            eolOnly: false,
+            tooBig: false,
+          }"
+          :file-path="activePreview()!.file"
+          initial-mode="unified"
+        />
+      </div>
+      <div v-if="preview.truncated" class="status-line">预览已截断（仅前 {{ preview.files.length }} 个文件）</div>
+      <div class="preview-actions">
+        <button class="apply-all-btn" :disabled="applying" @click="applyAll">
+          {{ applying ? "应用中…" : `全部应用（${preview.files.length} 个文件）` }}
+        </button>
+      </div>
+    </div>
+    <AToast :state="toastState" />
     <div v-if="error" class="error-line">{{ error }}</div>
     <div v-if="searching" class="status-line">搜索中…</div>
     <div v-else-if="result && result.total === 0" class="status-line">无结果</div>
@@ -278,5 +408,86 @@ function toggleGroup(file: string) {
   color: var(--aide-bg);
   border-radius: 2px;
   padding: 0 1px;
+}
+.mode-row {
+  display: flex;
+  gap: 4px;
+}
+.mode-btn {
+  flex: 1;
+  background: var(--aide-surface);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius);
+  color: var(--aide-text-dim);
+  padding: 3px 0;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mode-btn.active {
+  color: var(--aide-accent);
+  border-color: var(--aide-accent);
+}
+.replace-row {
+  display: flex;
+  gap: 6px;
+}
+.preview-btn,
+.apply-all-btn {
+  background: var(--aide-accent);
+  border: none;
+  border-radius: var(--aide-radius);
+  color: var(--aide-bg);
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.preview-btn:disabled,
+.apply-all-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.preview-area {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius);
+  padding: 6px;
+  overflow: hidden;
+}
+.preview-file-list {
+  max-height: 120px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.preview-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: var(--aide-radius);
+  cursor: pointer;
+  user-select: none;
+}
+.preview-file-row:hover {
+  background: var(--aide-surface-hover);
+}
+.preview-file-row.active {
+  background: var(--aide-surface-hover);
+  color: var(--aide-accent);
+}
+.preview-diff {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.preview-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 </style>

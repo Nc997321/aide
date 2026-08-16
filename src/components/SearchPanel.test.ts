@@ -18,6 +18,10 @@ vi.mock("../composables/useFileViewer", () => ({
   useFileViewer: () => ({ openAndScrollTo }),
 }));
 
+vi.mock("./fileviewer/DiffViewer.vue", () => ({
+  default: { template: "<div class='diff-stub' />" },
+}));
+
 import SearchPanel from "./SearchPanel.vue";
 import { api } from "../api";
 import { useFileViewer } from "../composables/useFileViewer";
@@ -139,5 +143,102 @@ describe("SearchPanel 搜索模式", () => {
     vi.advanceTimersByTime(300);
     await flushPromises();
     expect(wrapper.text()).not.toContain("a.ts");
+  });
+});
+
+describe("SearchPanel 替换模式", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("initialMode=replace 时显示替换输入区", () => {
+    const wrapper = mount(SearchPanel, {
+      props: { workspacePath: "/ws", initialMode: "replace" },
+    });
+    expect(wrapper.find("input.replace-input").exists()).toBe(true);
+  });
+
+  it("搜索模式不显示替换输入区", () => {
+    const wrapper = mount(SearchPanel, { props: { workspacePath: "/ws" } });
+    expect(wrapper.find("input.replace-input").exists()).toBe(false);
+  });
+
+  it("预览替换调用 api 并渲染 DiffViewer", async () => {
+    vi.useFakeTimers();
+    (api.searchInFiles as any).mockResolvedValue(EMPTY);
+    (api.replaceInFilesPreview as any).mockResolvedValue({
+      files: [{ file: "src/a.ts", original: "foo\n", replaced: "bar\n", matchCount: 1 }],
+      totalMatches: 1,
+      truncated: false,
+    });
+    const wrapper = mount(SearchPanel, {
+      props: { workspacePath: "/ws", initialMode: "replace" },
+    });
+    await wrapper.find("input.search-input").setValue("foo");
+    vi.advanceTimersByTime(300);
+    await flushPromises();
+    await wrapper.find("input.replace-input").setValue("bar");
+    await wrapper.find("button.preview-btn").trigger("click");
+    await flushPromises();
+    expect(api.replaceInFilesPreview).toHaveBeenCalledWith(
+      "foo",
+      "bar",
+      "/ws",
+      expect.objectContaining({ useRegex: false }),
+    );
+    expect(wrapper.find(".diff-stub").exists()).toBe(true);
+  });
+
+  it("全部应用调用 api 并 emit files-changed", async () => {
+    vi.useFakeTimers();
+    (api.searchInFiles as any).mockResolvedValue(EMPTY);
+    (api.replaceInFilesPreview as any).mockResolvedValue({
+      files: [{ file: "src/a.ts", original: "foo\n", replaced: "bar\n", matchCount: 1 }],
+      totalMatches: 1,
+      truncated: false,
+    });
+    (api.applyReplacements as any).mockResolvedValue({ succeeded: ["/ws/src/a.ts"], failed: [] });
+    const wrapper = mount(SearchPanel, {
+      props: { workspacePath: "/ws", initialMode: "replace" },
+    });
+    await wrapper.find("input.search-input").setValue("foo");
+    vi.advanceTimersByTime(300);
+    await flushPromises();
+    await wrapper.find("input.replace-input").setValue("bar");
+    await wrapper.find("button.preview-btn").trigger("click");
+    await flushPromises();
+    await wrapper.find("button.apply-all-btn").trigger("click");
+    await flushPromises();
+    expect(api.applyReplacements).toHaveBeenCalledWith([
+      { path: "/ws/src/a.ts", content: "bar\n" },
+    ]);
+    expect(wrapper.emitted("files-changed")).toBeTruthy();
+  });
+
+  it("应用部分失败时 toast 提示 danger", async () => {
+    vi.useFakeTimers();
+    (api.searchInFiles as any).mockResolvedValue(EMPTY);
+    (api.replaceInFilesPreview as any).mockResolvedValue({
+      files: [{ file: "src/a.ts", original: "foo\n", replaced: "bar\n", matchCount: 1 }],
+      totalMatches: 1,
+      truncated: false,
+    });
+    (api.applyReplacements as any).mockResolvedValue({
+      succeeded: [],
+      failed: [["/ws/src/a.ts", "写入失败: 权限"]],
+    });
+    const wrapper = mount(SearchPanel, {
+      props: { workspacePath: "/ws", initialMode: "replace" },
+    });
+    await wrapper.find("input.search-input").setValue("foo");
+    vi.advanceTimersByTime(300);
+    await flushPromises();
+    await wrapper.find("input.replace-input").setValue("bar");
+    await wrapper.find("button.preview-btn").trigger("click");
+    await flushPromises();
+    await wrapper.find("button.apply-all-btn").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("失败");
   });
 });
