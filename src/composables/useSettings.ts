@@ -1,11 +1,13 @@
 import { reactive, ref, watch } from "vue";
 import { api } from "../api";
-import { MONO_FONT_STACK, resolveFontFamily } from "../utils/fonts";
+import { MONO_FONT_STACK, UI_FONT_STACK, resolveFontFamily, resolveScopedFontFamily } from "../utils/fonts";
 import type { AppSettings, CodeGraphEmbedderConfig, JdkEntry, SecretMutation } from "../types";
 
 const defaults: AppSettings = {
   fontSize: 14,
   fontFamily: MONO_FONT_STACK,
+  editorFontFamily: MONO_FONT_STACK,
+  terminalFontFamily: MONO_FONT_STACK,
   notificationsEnabled: true,
   autoNaming: true,
   proxy: "",
@@ -45,7 +47,15 @@ const loaded = ref(false);
 // correct value even before load() completes.
 watch(
   () => settings.fontFamily,
-  (v) => document.documentElement.style.setProperty("--aide-font-mono", v),
+  (v) => {
+    document.documentElement.style.setProperty("--aide-font-mono", v);
+    // UI 正文（按钮/标签/面板）跟随界面字体，但默认栈（用户未设置）时保持
+    // Inter 现状——只有用户显式选了字体后 UI 正文才跟随。
+    document.documentElement.style.setProperty(
+      "--aide-font-ui",
+      v === MONO_FONT_STACK ? UI_FONT_STACK : v,
+    );
+  },
   { immediate: true }
 );
 
@@ -59,6 +69,9 @@ export function useSettings() {
       if (settings.fontFamily !== (s.fontFamily ?? "")) {
         update({ fontFamily: settings.fontFamily });
       }
+      // 编辑器/终端字体：新字段未设置（空）→ 回退界面字体，老用户设置自动继承
+      settings.editorFontFamily = resolveScopedFontFamily(s.editorFontFamily, settings.fontFamily);
+      settings.terminalFontFamily = resolveScopedFontFamily(s.terminalFontFamily, settings.fontFamily);
       settings.notificationsEnabled = s.notificationsEnabled ?? defaults.notificationsEnabled;
       settings.autoNaming = s.autoNaming ?? defaults.autoNaming;
       settings.proxy = s.proxy ?? defaults.proxy;
@@ -92,6 +105,8 @@ export function useSettings() {
     // Immediate reactive update
     if (partial.fontSize !== undefined) settings.fontSize = partial.fontSize;
     if (partial.fontFamily !== undefined) settings.fontFamily = partial.fontFamily;
+    if (partial.editorFontFamily !== undefined) settings.editorFontFamily = partial.editorFontFamily;
+    if (partial.terminalFontFamily !== undefined) settings.terminalFontFamily = partial.terminalFontFamily;
     if (partial.notificationsEnabled !== undefined) settings.notificationsEnabled = partial.notificationsEnabled;
     if (partial.autoNaming !== undefined) settings.autoNaming = partial.autoNaming;
     if (partial.proxy !== undefined) settings.proxy = partial.proxy;

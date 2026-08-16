@@ -13,6 +13,9 @@
   color-scheme: dark;
   /* 等宽栈尾部垫 CJK 回退：西文 mono 无中文字形，不垫则 Windows 落到宋体 */
   --aide-font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'PingFang SC', 'Microsoft YaHei', monospace;
+  /* 界面正文（按钮/标签/面板）首屏兜底：useSettings 同步 --aide-font-ui，
+     默认栈（用户未设置）时保持 Inter，用户显式选字体后跟随。 */
+  --aide-font-ui: 'Inter Variable', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --aide-bg-deep: #141218;
   --aide-bg-base: #1a1820;
   --aide-bg-raised: #221f29;
@@ -66,7 +69,8 @@ html, body, #app {
   /* 玻璃后门：普通主题 ambientScene 为 "none" → 无图像；玻璃主题为极光渐变 */
   background-image: var(--aide-ambient-scene);
   color: var(--aide-text-primary);
-  font-family: 'Inter Variable', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  /* 界面正文跟随 --aide-font-ui（useSettings 同步，默认 Inter，用户选字体后跟随） */
+  font-family: var(--aide-font-ui);
   font-size: 13px;
 }
 

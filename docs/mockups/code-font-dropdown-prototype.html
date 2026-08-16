@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>字体设置拆分原型（聊天 / 文件编辑器 / 工作台终端）</title>
+<style>
+  :root {
+    --bg: #101418;
+    --surface: rgba(255, 255, 255, 0.05);
+    --surface-2: rgba(255, 255, 255, 0.08);
+    --border: rgba(255, 255, 255, 0.12);
+    --text: #e8eaed;
+    --text-dim: #9aa3ad;
+    --accent: #6ea8fe;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 800px at 70% -10%, #1b2430 0%, var(--bg) 55%);
+    color: var(--text);
+    font-family: "Inter", "Segoe UI", "Microsoft YaHei", sans-serif;
+    padding: 40px 32px;
+    display: flex;
+    justify-content: center;
+  }
+  .page { width: 760px; }
+  h1 { font-size: 18px; margin-bottom: 4px; }
+  .sub { color: var(--text-dim); font-size: 13px; margin-bottom: 24px; }
+
+  /* ── tab 栏 ── */
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+  .tab {
+    padding: 7px 18px;
+    border-radius: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid transparent;
+    user-select: none;
+  }
+  .tab.active { color: var(--text); background: var(--surface-2); border-color: var(--border); }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    backdrop-filter: blur(14px);
+    display: none;
+  }
+  .card.show { display: block; }
+  .field-label { font-size: 13px; font-weight: 600; margin-bottom: 8px; display: block; }
+  .field-hint { font-size: 12px; color: var(--text-dim); margin-top: 8px; display: block; }
+  .settings-field + .settings-field { margin-top: 20px; }
+
+  /* ── 下拉框 ── */
+  .select-wrap { position: relative; }
+  .select {
+    width: 100%;
+    appearance: none;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 13px;
+    padding: 9px 34px 9px 12px;
+    cursor: pointer;
+    outline: none;
+  }
+  .select:focus { border-color: var(--accent); }
+  .select-wrap::after {
+    content: "▾";
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 14px;
+    color: var(--text-dim);
+    pointer-events: none;
+  }
+  .select option { background: #1a2027; color: var(--text); }
+
+  .custom-input {
+    display: none;
+    width: 100%;
+    margin-top: 8px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 13px;
+    padding: 9px 12px;
+    outline: none;
+  }
+  .custom-input:focus { border-color: var(--accent); }
+  .custom-input.show { display: block; }
+
+  /* ── 预览 ── */
+  .preview {
+    margin-top: 14px;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 13px;
+    line-height: 1.7;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .preview .comment { color: #7d8a99; }
+  .preview .kw { color: #c792ea; }
+  .preview .str { color: #a5d6a7; }
+  .preview .fn { color: #82aaff; }
+  .preview .num { color: #f78c6c; }
+  .preview.chat { border-radius: 12px; }
+  .preview.term { background: rgba(0, 0, 0, 0.5); }
+
+  .status { margin-top: 10px; font-size: 12px; color: var(--text-dim); }
+  .status b { color: var(--accent); font-weight: 600; }
+
+  .detected {
+    margin-top: 20px;
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.8;
+  }
+  .detected .chip {
+    display: inline-block;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px 8px;
+    margin-right: 6px;
+  }
+  .detected .chip.miss { opacity: 0.4; text-decoration: line-through; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>字体设置拆分原型</h1>
+  <div class="sub">三个独立设置：界面字体 + 工作台终端字体（通用 tab）、文件编辑器字体（编辑器 tab）。各自下拉选择，互不影响。</div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="general">通用</div>
+    <div class="tab" data-tab="editor">编辑器</div>
+  </div>
+
+  <!-- ── 通用 tab：界面字体 + 工作台终端字体 ── -->
+  <div class="card show" id="card-general">
+    <div class="settings-field">
+      <label class="field-label">界面字体</label>
+      <div class="select-wrap">
+        <select id="chatSelect" class="select"></select>
+      </div>
+      <input id="chatCustom" class="custom-input" placeholder="输入字体名或 font-family 栈，如 Sarasa Mono SC" />
+      <span class="field-hint">作用于界面正文（按钮/标签/面板）与聊天区</span>
+      <div class="preview chat" id="chatPreview"><span class="kw">function</span> <span class="fn">fib</span>(n) {
+  <span class="kw">if</span> (n &lt;= <span class="num">1</span>) <span class="kw">return</span> n;
+  <span class="kw">return</span> <span class="fn">fib</span>(n - <span class="num">1</span>) + <span class="fn">fib</span>(n - <span class="num">2</span>);
+}
+<span class="comment">// 聊天消息：中文注释回退到雅黑/苹方</span></div>
+      <div class="status">当前生效：<b id="chatActive">—</b></div>
+    </div>
+
+    <div class="settings-field">
+      <label class="field-label">工作台终端字体</label>
+      <div class="select-wrap">
+        <select id="termSelect" class="select"></select>
+      </div>
+      <input id="termCustom" class="custom-input" placeholder="输入字体名或 font-family 栈，如 Sarasa Mono SC" />
+      <span class="field-hint">作用于工作台终端、聊天流 Bash 输出块与后台任务面板</span>
+      <div class="preview term" id="termPreview">$ pnpm dev
+  VITE v6.0.0  ready in 312 ms
+  ➜  Local:   http://localhost:5173/
+<span class="comment"># 终端输出：中文回退到雅黑/苹方</span></div>
+      <div class="status">当前生效：<b id="termActive">—</b></div>
+    </div>
+  </div>
+
+  <!-- ── 编辑器 tab：文件编辑器字体 ── -->
+  <div class="card" id="card-editor">
+    <div class="settings-field">
+      <label class="field-label">文件编辑器字体</label>
+      <div class="select-wrap">
+        <select id="editorSelect" class="select"></select>
+      </div>
+      <input id="editorCustom" class="custom-input" placeholder="输入字体名或 font-family 栈，如 Sarasa Mono SC" />
+      <span class="field-hint">作用于文件编辑器（CodeMirror）</span>
+      <div class="preview" id="editorPreview"><span class="kw">const</span> <span class="fn">greet</span> = (name) =&gt; <span class="str">`Hello, ${name}!`</span>;
+<span class="comment">// 文件编辑器：中文注释回退到雅黑/苹方</span></div>
+      <div class="status">当前生效：<b id="editorActive">—</b></div>
+    </div>
+  </div>
+
+  <div class="detected" id="detected"></div>
+</div>
+
+<script>
+// ── 候选等宽字体（探测哪些本机已安装） ──
+const CANDIDATES = [
+  "JetBrains Mono", "Cascadia Code", "Fira Code", "Consolas",
+  "Menlo", "Monaco", "Source Code Pro", "IBM Plex Mono",
+  "DejaVu Sans Mono", "Noto Sans Mono", "Sarasa Mono SC",
+  "Sarasa Term SC", "Maple Mono", "Maple Mono SC NF", "Hack",
+  "Ubuntu Mono", "Cascadia Mono", "Cousine", "Liberation Mono",
+];
+
+// 模拟三个持久化设置值（真实实现里读 settings.fontFamily / editorFontFamily / terminalFontFamily）
+const STORED = {
+  chat: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'PingFang SC', 'Microsoft YaHei', monospace",
+  editor: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'PingFang SC', 'Microsoft YaHei', monospace",
+  term: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'PingFang SC', 'Microsoft YaHei', monospace",
+};
+
+const detected = document.getElementById("detected");
+
+async function isInstalled(name) {
+  try {
+    const faces = await document.fonts.load(`16px "${name}"`);
+    return faces.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function firstAvailable(stack) {
+  const names = stack.split(",").map(s => s.trim().replace(/^['"]|['"]$/g, ""));
+  for (const n of names) {
+    if (n === "monospace" || n === "sans-serif" || n === "serif") continue;
+    if (await isInstalled(n)) return n;
+  }
+  return names[0] || "monospace";
+}
+
+// 每个设置项一个实例：下拉框 + 自定义输入 + 预览 + 生效状态
+function makeField(key, selectId, customId, previewId, activeId) {
+  const select = document.getElementById(selectId);
+  const custom = document.getElementById(customId);
+  const preview = document.getElementById(previewId);
+  const active = document.getElementById(activeId);
+
+  function update() {
+    let font;
+    if (select.value === "__custom__") {
+      font = custom.value.trim() || "monospace";
+    } else {
+      font = select.value;
+    }
+    preview.style.fontFamily = `"${font}", "PingFang SC", "Microsoft YaHei", monospace`;
+    active.textContent = font;
+  }
+
+  select.addEventListener("change", () => {
+    if (select.value === "__custom__") {
+      custom.classList.add("show");
+      custom.focus();
+    } else {
+      custom.classList.remove("show");
+    }
+    update();
+  });
+  custom.addEventListener("input", update);
+  return { select, custom, update };
+}
+
+async function init() {
+  const results = [];
+  for (const name of CANDIDATES) {
+    results.push({ name, installed: await isInstalled(name) });
+  }
+  const installed = results.filter(r => r.installed);
+
+  const fields = {};
+  for (const key of ["chat", "editor", "term"]) {
+    const f = makeField(key,
+      key + "Select", key + "Custom", key + "Preview", key + "Active");
+    installed.forEach(r => {
+      const opt = document.createElement("option");
+      opt.value = r.name;
+      opt.textContent = r.name;
+      f.select.appendChild(opt);
+    });
+    const customOpt = document.createElement("option");
+    customOpt.value = "__custom__";
+    customOpt.textContent = "自定义…";
+    f.select.appendChild(customOpt);
+
+    const current = await firstAvailable(STORED[key]);
+    const matched = installed.find(r => r.name === current);
+    if (matched) {
+      f.select.value = matched.name;
+    } else {
+      f.select.value = "__custom__";
+      f.custom.value = current;
+      f.custom.classList.add("show");
+    }
+    f.update();
+    fields[key] = f;
+  }
+
+  detected.innerHTML = "本机检测结果：" + results.map(r =>
+    `<span class="chip ${r.installed ? "" : "miss"}">${r.name}</span>`
+  ).join("");
+}
+
+// tab 切换
+document.querySelectorAll(".tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    tab.classList.add("active");
+    document.getElementById("card-general").classList.toggle("show", tab.dataset.tab === "general");
+    document.getElementById("card-editor").classList.toggle("show", tab.dataset.tab === "editor");
+  });
+});
+
+init();
+</script>
+</body>
+</html>

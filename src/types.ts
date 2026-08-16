@@ -83,7 +83,12 @@ export interface Keybindings {
 
 export interface AppSettings {
   fontSize: number;
+  /** 界面字体（font-family 栈）：控制界面正文（按钮/标签/面板）与聊天区。 */
   fontFamily: string;
+  /** 文件编辑器字体（font-family 栈）。空 = 未设置，回退 fontFamily。 */
+  editorFontFamily: string;
+  /** 工作台终端字体（font-family 栈）。空 = 未设置，回退 fontFamily。 */
+  terminalFontFamily: string;
   notificationsEnabled: boolean;
   /** 首次安装引导是否已完成。首次启动若为 false 则弹全屏向导；完成或"跳过引导"后置 true，不再二次弹。 */
   onboarded: boolean;

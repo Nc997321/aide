@@ -69,7 +69,7 @@ function ensureSettingsWatchers() {
       s.fitAddon.fit();
     }
   });
-  watch(() => settings.fontFamily, (v) => {
+  watch(() => settings.terminalFontFamily, (v) => {
     for (const [, s] of sessions) {
       s.terminal.options.fontFamily = v || MONO_FONT_STACK;
     }
@@ -168,7 +168,7 @@ export function useWorkbenchTerminal() {
     const terminal = new Terminal({
       cursorBlink: true,
       fontSize: stg.fontSize,
-      fontFamily: stg.fontFamily || MONO_FONT_STACK,
+      fontFamily: stg.terminalFontFamily || MONO_FONT_STACK,
       theme: buildXtermTheme(themes[stg.theme || "warm-dark"]),
       allowProposedApi: true,
       ...(wpCfg ? { windowsPty: wpCfg } : {}),
@@ -280,7 +280,7 @@ export function useWorkbenchTerminal() {
     const stg = settingsRef!;
     const wpCfg2 = windowsPtyConfig();
     const terminal = new Terminal({
-      cursorBlink: true, fontSize: stg.fontSize, fontFamily: stg.fontFamily || MONO_FONT_STACK,
+      cursorBlink: true, fontSize: stg.fontSize, fontFamily: stg.terminalFontFamily || MONO_FONT_STACK,
       theme: buildXtermTheme(themes[stg.theme || "warm-dark"]), allowProposedApi: true,
       ...(wpCfg2 ? { windowsPty: wpCfg2 } : {}),
     });

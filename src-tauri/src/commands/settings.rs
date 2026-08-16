@@ -136,8 +136,16 @@ impl Default for EditorSettings {
 pub struct AppSettings {
     #[serde(default = "default_font_size")]
     pub font_size: u32,
+    /// 界面字体（font-family 栈）：控制界面正文（按钮/标签/面板）与聊天区。
+    /// 默认与编辑器/终端同栈；前端在未设置（默认栈字面量）时让 UI 正文保持 Inter。
     #[serde(default = "default_font_family")]
     pub font_family: String,
+    /// 文件编辑器字体（font-family 栈）。空 = 未设置，前端回退 font_family。
+    #[serde(default)]
+    pub editor_font_family: String,
+    /// 工作台终端字体（font-family 栈）。空 = 未设置，前端回退 font_family。
+    #[serde(default)]
+    pub terminal_font_family: String,
     #[serde(default = "default_notifications_enabled")]
     pub notifications_enabled: bool,
     /// 会话自动命名：首轮对话后由 sidecar 用小模型生成会话标题（默认开）。
@@ -216,6 +224,8 @@ impl Default for AppSettings {
         Self {
             font_size: default_font_size(),
             font_family: default_font_family(),
+            editor_font_family: String::new(),
+            terminal_font_family: String::new(),
             notifications_enabled: default_notifications_enabled(),
             auto_naming: default_auto_naming(),
             proxy: String::new(),

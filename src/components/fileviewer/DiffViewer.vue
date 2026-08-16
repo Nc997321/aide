@@ -147,7 +147,7 @@ function destroyView() {
 function applyFontSettings() {
   if (!mountEl.value) return;
   mountEl.value.style.setProperty("--cm-font-size", `${settings.fontSize}px`);
-  mountEl.value.style.setProperty("--cm-font-family", settings.fontFamily);
+  mountEl.value.style.setProperty("--cm-font-family", settings.editorFontFamily);
 }
 
 /** hunk 跳转：split 模式作用于 b（新）侧编辑器；StateCommand 直接吃 EditorView */
@@ -178,7 +178,7 @@ watch(
 
 // 字体设置变化 → 重新下发到挂载容器（跟随 CodeEditor 的同款 watch）
 watch(
-  [() => settings.fontSize, () => settings.fontFamily],
+  [() => settings.fontSize, () => settings.editorFontFamily],
   () => applyFontSettings(),
 );
 
@@ -200,7 +200,7 @@ onBeforeUnmount(() => {
   <div class="dv-root">
     <div class="dv-toolbar">
       <span class="dv-badge" :class="`dv-badge--${pair.status}`">{{ statusLabel }}</span>
-      <span class="dv-path" v-tooltip="filePath" :style="{ fontFamily: settings.fontFamily }">
+      <span class="dv-path" v-tooltip="filePath" :style="{ fontFamily: settings.editorFontFamily }">
         <span class="dv-path-dir">{{ pathParts.dir }}</span><span class="dv-path-name">{{ pathParts.name }}</span>
       </span>
       <span class="dv-labels">{{ pair.oldLabel }} → {{ pair.newLabel }}</span>

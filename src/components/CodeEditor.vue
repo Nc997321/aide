@@ -392,12 +392,12 @@ async function applyImplGutter() {
 function applyFontSettings() {
   if (!view) return;
   view.dom.style.setProperty("--cm-font-size", `${settings.fontSize}px`);
-  view.dom.style.setProperty("--cm-font-family", settings.fontFamily);
+  view.dom.style.setProperty("--cm-font-family", settings.editorFontFamily);
 }
 
 // ── React to user font settings changes ──
 watch(
-  [() => settings.fontSize, () => settings.fontFamily],
+  [() => settings.fontSize, () => settings.editorFontFamily],
   () => applyFontSettings()
 );
 

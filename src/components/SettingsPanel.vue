@@ -14,6 +14,7 @@ import PermissionsSettings from "./settings/PermissionsSettings.vue";
 import DiagnosticsDashboard from "./DiagnosticsDashboard.vue";
 import ProviderSettings from "./ProviderSettings.vue";
 import ThemedSelect from "./ThemedSelect.vue";
+import FontSelect from "./FontSelect.vue";
 import Icon from "./Icon.vue";
 
 const themeOptions = [
@@ -64,6 +65,8 @@ function rerunOnboarding() {
 }
 const fontSizeLocal = ref(settings.fontSize);
 const fontFamilyLocal = ref(settings.fontFamily);
+const editorFontFamilyLocal = ref(settings.editorFontFamily);
+const terminalFontFamilyLocal = ref(settings.terminalFontFamily);
 const notificationsEnabledLocal = ref(settings.notificationsEnabled);
 const autoNamingLocal = ref(settings.autoNaming);
 const proxyLocal = ref(settings.proxy);
@@ -77,6 +80,8 @@ const indentSizeLocal = ref(settings.editor.indentSize);
 
 watch(fontSizeLocal, (v) => { settings.fontSize = v; update({ fontSize: v }); });
 watch(fontFamilyLocal, (v) => { settings.fontFamily = v; update({ fontFamily: v }); });
+watch(editorFontFamilyLocal, (v) => { settings.editorFontFamily = v; update({ editorFontFamily: v }); });
+watch(terminalFontFamilyLocal, (v) => { settings.terminalFontFamily = v; update({ terminalFontFamily: v }); });
 watch(notificationsEnabledLocal, (v) => { settings.notificationsEnabled = v; update({ notificationsEnabled: v }); });
 watch(autoNamingLocal, (v) => { settings.autoNaming = v; update({ autoNaming: v }); });
 watch(proxyLocal, (v) => { settings.proxy = v; update({ proxy: v }); });
@@ -427,13 +432,15 @@ function onOverlayClick(e: MouseEvent) {
               </div>
 
               <div class="settings-field">
-                <label class="field-label">代码字体</label>
-                <input
-                  v-model="fontFamilyLocal"
-                  class="text-input"
-                  placeholder="输入等宽字体名称..."
-                />
-                <span class="field-hint">作用于文件编辑器与工作台终端，建议等宽字体</span>
+                <label class="field-label">界面字体</label>
+                <FontSelect v-model="fontFamilyLocal" />
+                <span class="field-hint">作用于界面正文（按钮/标签/面板）与聊天区，建议等宽字体</span>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">工作台终端字体</label>
+                <FontSelect v-model="terminalFontFamilyLocal" />
+                <span class="field-hint">作用于工作台终端、聊天流 Bash 输出块与后台任务面板</span>
               </div>
 
               <div class="settings-field">
@@ -572,6 +579,12 @@ function onOverlayClick(e: MouseEvent) {
                   <span class="field-value">{{ indentSizeLocal }} 格</span>
                 </div>
                 <span class="field-hint">回车自动缩进与 Tab 键每层插入一个 Tab 字符，此值控制其显示列宽（作用于文件编辑器）</span>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">文件编辑器字体</label>
+                <FontSelect v-model="editorFontFamilyLocal" />
+                <span class="field-hint">作用于文件编辑器与文件 diff 查看器</span>
               </div>
             </div>
 

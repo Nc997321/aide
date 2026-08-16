@@ -25,7 +25,7 @@ onMounted(() => {
     scrollback: 1000,
     disableStdin: true,
     fontSize: 12,
-    fontFamily: settings.fontFamily || MONO_FONT_STACK,
+    fontFamily: settings.terminalFontFamily || MONO_FONT_STACK,
     ...(wpCfg ? { windowsPty: wpCfg } : {}),
   });
   fitAddon = new FitAddon();
