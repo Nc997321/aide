@@ -5,7 +5,7 @@ import AppLogo from "../../AppLogo.vue";
 <template>
   <div class="logo-big"><AppLogo :size="56" animated /></div>
   <div class="eyebrow">01 / 04</div>
-  <div class="headline">和 Claude 并肩写代码</div>
+  <div class="headline">用 Aide，和 Claude 并肩写代码</div>
   <div class="support">aide 是一个桌面工作区——会话、文件树、代码索引都在一个窗口。三步配好，马上能开聊。</div>
   <div class="pills">
     <div class="pill"><b>1</b>选工作区</div>

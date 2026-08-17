@@ -12,7 +12,7 @@ import WelcomeStep from "./WelcomeStep.vue";
 describe("WelcomeStep", () => {
   it("渲染 headline + support + 三 pill", () => {
     const w = mount(WelcomeStep);
-    expect(w.find(".headline").text()).toContain("和 Claude 并肩写代码");
+    expect(w.find(".headline").text()).toContain("用 Aide，和 Claude 并肩写代码");
     expect(w.find(".support").text()).toContain("桌面工作区");
     const pills = w.findAll(".pill");
     expect(pills.length).toBe(3);

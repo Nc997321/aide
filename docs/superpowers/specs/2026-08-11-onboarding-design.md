@@ -48,7 +48,7 @@
 
 | 步 | 标题 | 动作 | 可跳过 | 自动跳过条件 |
 |---|---|---|---|---|
-| 01 欢迎 | "和 Claude 并肩写代码" | 签名时刻：logo + 价值主张 + 三步预览 + "开始" | 是 | 无（首屏） |
+| 01 欢迎 | "用 Aide，和 Claude 并肩写代码" | 签名时刻：logo + 价值主张 + 三步预览 + "开始" | 是 | 无（首屏） |
 | 02 工作区 | "选一个文件夹开始" | 文件夹选择器（Tauri OpenFolderDialog + 拖拽）→ `createWorkspace` | 是 | 已有激活工作区 |
 | 03 登录 Claude | "登录你的 Claude 账号" | OAuth 浏览器登录（主）/ API key（兜底） | 是 | 已有有效凭证（`~/.aide/claude/.credentials.json` 存在 或 SystemDefault apiKeyConfigured） |
 | 04 模型 | "用哪个模型？" | 下拉选默认模型（登录后 `refreshSystemDefaultModels` 加载） | 是 | 无（总是展示，建立"模型来自供应商"认知） |
@@ -72,7 +72,7 @@
 
 ### 4.3 各步内容（已批准高保真稿）
 
-- **欢迎步**：logo-big（56px，radius 14，accentGradient + accentGlow + highlightInset）+ eyebrow "01 / 04" + headline "和 Claude 并肩写代码" + support "aide 是一个桌面工作区——会话、文件树、代码索引都在一个窗口。三步配好，马上能开聊。" + 三 pill（1 选工作区 / 2 登录 Claude / 3 选模型）+ 底部"开始 →"。背景隐约透出 app 的 hero（blur+brightness 衰减），点明"这是覆盖在你将来的工作区上"。
+- **欢迎步**：logo-big（56px，radius 14，accentGradient + accentGlow + highlightInset）+ eyebrow "01 / 04" + headline "用 Aide，和 Claude 并肩写代码" + support "aide 是一个桌面工作区——会话、文件树、代码索引都在一个窗口。三步配好，马上能开聊。" + 三 pill（1 选工作区 / 2 登录 Claude / 3 选模型）+ 底部"开始 →"。背景隐约透出 app 的 hero（blur+brightness 衰减），点明"这是覆盖在你将来的工作区上"。
 - **工作区步**：folder-pick 卡片（`bg-deep` + border + highlightInset，hover border accent + accentRing）= 文件夹图标 + "选择一个文件夹…" + "或把文件夹拖到这里" + "浏览"。支持 Tauri 对话框 + 拖拽落盘。
 - **登录步**：eyebrow "03 / 04 · 登录 Claude" + headline "登录你的 Claude 账号" + support + 主按钮"用 Claude 账号登录 ↗ 浏览器打开"（primary，整宽）+ "或"分隔 + link "改用 API key（去 console.anthropic.com 申请）"。点 link 展开 password 输入（`.text-input` 范式）+ 保存。
 - **模型步**：model-pick 卡片（图标 + 当前模型名 + "来自 Anthropic · 默认" + chevron）= ThemedSelect 下拉。下方 hint "模型来自你的供应商。在设置 → 模型里可加更多供应商、换默认模型。" 底部按钮"进入 aide →"。
