@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { toForwardSlashes, safeDirname } from "./winPaths.js";
 
 /**
  * codegraph-explore skill 自动落地（内建，免用户配置）。
@@ -45,17 +46,31 @@ This workspace is pre-indexed. The \`aide-codegraph\` MCP tools answer code-navi
 
 type Env = Record<string, string | undefined>;
 
-/** SKILL.md 落地路径：$CLAUDE_CONFIG_DIR/skills/codegraph-explore/SKILL.md。 */
+/** SKILL.md 落地路径：$CLAUDE_CONFIG_DIR/skills/codegraph-explore/SKILL.md（正斜杠形式，规避 bun path 缺陷）。 */
 export function skillPath(env: Env): string {
   const dir = env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".aide", "claude");
-  return path.join(dir, "skills", "codegraph-explore", "SKILL.md");
+  return toForwardSlashes(
+    path.join(toForwardSlashes(dir), "skills", "codegraph-explore", "SKILL.md"),
+  );
 }
 
-/** 确保 skill 文件存在且内容最新。写盘失败静默跳过（永不阻塞会话启动）。 */
+/**
+ * 确保 skill 文件存在且内容最新。写盘失败静默跳过（永不阻塞会话启动）。
+ *
+ * 路径用 winPaths 兜底（toForwardSlashes + safeDirname）：aide-agent.exe 内嵌 bun 的
+ * path.dirname 对 Windows 反斜杠盘符路径返回 "C:"，mkdirSync 会落到错处；中文用户目录
+ * 叠加该缺陷会导致 skill 不落地 → codegraph-explore 内建 skill 不生效。正斜杠化 + safeDirname 规避。
+ */
 export function ensureCodegraphSkill(env: Env): void {
   try {
     const file = skillPath(env);
-    mkdirSync(path.dirname(file), { recursive: true });
+    // mkdirSync 独立 try：bun 的 recursive mkdir 对已存在目录抛 EEXIST（Node 是 no-op），
+    // 不让它中断后续内容比对/写入（已装机器重跑也会更新漂移内容）。
+    try {
+      mkdirSync(safeDirname(file), { recursive: true });
+    } catch {
+      /* 父目录已存在(bun EEXIST) 或不可创建，继续尝试写 */
+    }
     let current: string | null = null;
     try {
       current = readFileSync(file, "utf8");

@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { toForwardSlashes, safeDirname } from "./winPaths.js";
 
 /**
  * Windows 上 Bash 工具输出 UTF-8 化（内建，免用户配置）。
@@ -21,16 +22,20 @@ const BASHRC_CONTENT =
 
 type Env = Record<string, string | undefined>;
 
-/** bashrc 落地路径：配置目录下的 aide-bashrc。 */
+/** bashrc 落地路径：配置目录下的 aide-bashrc（正斜杠形式，规避 bun path 缺陷）。 */
 export function bashrcPath(env: Env): string {
   const dir = env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".aide", "claude");
-  return path.join(dir, "aide-bashrc");
+  return toForwardSlashes(path.join(toForwardSlashes(dir), "aide-bashrc"));
 }
 
 /**
  * Windows 且用户未自设 BASH_ENV 时：确保 bashrc 文件存在且内容最新，
  * 并把 env.BASH_ENV 指过去（正斜杠形式，Git Bash 更稳）。
  * 非 Windows / 写盘失败均为 no-op（永不阻塞会话启动）。
+ *
+ * 路径用 winPaths 兜底（toForwardSlashes + safeDirname）：aide-agent.exe 内嵌 bun 的
+ * path.dirname 对 Windows 反斜杠盘符路径返回 "C:"，mkdirSync 会落到错处；中文用户目录
+ * 叠加该缺陷会导致 bashrc 不落地 → Git Bash 仍 GBK 乱码。正斜杠化 + safeDirname 规避。
  */
 export function ensureWindowsBashEnv(
   env: Env,
@@ -40,7 +45,13 @@ export function ensureWindowsBashEnv(
   if (env.BASH_ENV) return;
   try {
     const file = bashrcPath(env);
-    mkdirSync(path.dirname(file), { recursive: true });
+    // mkdirSync 独立 try：bun 的 recursive mkdir 对已存在目录抛 EEXIST（Node 是 no-op），
+    // 不让它中断后续内容比对/写入（已装机器重跑也会更新漂移内容）。
+    try {
+      mkdirSync(safeDirname(file), { recursive: true });
+    } catch {
+      /* 父目录已存在(bun EEXIST) 或不可创建，继续尝试写 */
+    }
     let current: string | null = null;
     try {
       current = readFileSync(file, "utf8");
@@ -48,7 +59,7 @@ export function ensureWindowsBashEnv(
       /* 不存在，下面写 */
     }
     if (current !== BASHRC_CONTENT) writeFileSync(file, BASHRC_CONTENT, "utf8");
-    env.BASH_ENV = file.replace(/\\/g, "/");
+    env.BASH_ENV = file;
   } catch {
     /* 配置目录不可写等情况：跳过注入，不影响会话 */
   }

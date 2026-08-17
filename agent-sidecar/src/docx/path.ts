@@ -10,22 +10,16 @@
 //   verbatim `\\?\` 前缀不能动（破坏前缀语义），取父目录用手动 safeDirname 兜底。
 
 import { isAbsolute, join } from "node:path";
+// bun 反斜杠兜底（toForwardSlashes / safeDirname / WIN_DRIVE_ABS）抽到共享 winPaths，
+// 供 docx + winBashEnv + codegraphSkill 复用，单一真相源。bun 1.3.14 三缺陷见 winPaths 注释。
+import {
+  toForwardSlashes,
+  safeDirname,
+  WIN_DRIVE_ABS,
+} from "../winPaths.js";
 
-/** Windows 盘符绝对路径（`C:\` 或 `C:/`）——bun 的 isAbsolute 对反斜杠盘符路径误判 false 的兜底 */
-const WIN_DRIVE_ABS = /^[a-zA-Z]:[\\/]/;
-
-/** 反斜杠统一正斜杠（Windows fs API 均接受正斜杠；bun 的 path/fs 对正斜杠路径行为与 Node 一致） */
-function toForwardSlashes(p: string): string {
-  return p.includes("\\") ? p.replace(/\\/g, "/") : p;
-}
-
-/** 取父目录：bun 的 path.dirname 对 Windows 反斜杠路径返回 "C:"（实测 bun 1.3.14）——
- * verbatim `\\?\` 路径不能 normalize（会破坏前缀语义），取父目录用手动实现兜底。 */
-export function safeDirname(p: string): string {
-  const idx = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
-  if (idx <= 0) return ".";
-  return p.slice(0, idx);
-}
+// re-export：docxTools.ts / path.test.ts 仍从 ./docx/path 引 safeDirname，保持不破。
+export { safeDirname };
 
 /**
  * 把模型给的路径解析成可写路径。纯函数，无 IO。
