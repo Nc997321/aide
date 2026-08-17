@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { shallowMount } from "@vue/test-utils";
+import { shallowMount, flushPromises } from "@vue/test-utils";
 import { ref, reactive } from "vue";
 import type { VueWrapper } from "@vue/test-utils";
 import SettingsPanel from "./SettingsPanel.vue";
@@ -10,6 +10,7 @@ vi.mock("../composables/useSettings", () => ({
     settings: reactive({
       theme: "warm-dark", fontSize: 14, fontFamily: "", proxy: "",
       autoNaming: true, recentLimit: 10,
+      keybindings: {}, shellPath: "", workbenchHeight: 0,
       editor: { indentSize: 4 },
       codegraphEmbedder: {
         apiKeyConfigured: false, backend: "fastembed", baseUrl: "",
@@ -41,12 +42,23 @@ vi.mock("../composables/useCustomizations", () => ({
     toggleItem: vi.fn().mockResolvedValue(undefined),
   }),
 }));
-vi.mock("../api", () => ({
-  api: new Proxy(
-    {},
-    { get: () => vi.fn().mockResolvedValue(undefined) },
-  ),
-}));
+vi.mock("../api", () => {
+  // 按方法名缓存 mock fn——否则每次属性访问都生成新 fn，测试里无法覆写返回值。
+  const fns = new Map<string, ReturnType<typeof vi.fn>>();
+  return {
+    api: new Proxy(
+      {},
+      {
+        get: (_t, key) => {
+          const k = String(key);
+          if (!fns.has(k)) fns.set(k, vi.fn().mockResolvedValue(undefined));
+          return fns.get(k);
+        },
+      },
+    ),
+  };
+});
+import { api } from "../api";
 
 let wrapper: VueWrapper | undefined;
 afterEach(() => {
@@ -100,5 +112,44 @@ describe("SettingsPanel", () => {
     expect(text).toContain("中继 URL");
     expect(text).toContain("配对码");
     expect(text).toContain("未连接");
+  });
+
+  it("offers one-click apply when a live proxy is detected and settings empty", async () => {
+    vi.mocked(api.detectAvailableProxy).mockResolvedValue("http://127.0.0.1:7890");
+    mountPanel("general");
+    await flushPromises();
+
+    const hint = document.body.querySelector(".proxy-hint");
+    expect(hint).not.toBeNull();
+    expect(hint!.textContent).toContain("http://127.0.0.1:7890");
+
+    // 点「应用」→ 填入输入框，提示消失
+    (hint!.querySelector("button") as HTMLButtonElement).click();
+    await flushPromises();
+
+    const input = document.body.querySelector<HTMLInputElement>(
+      "input[placeholder*='127.0.0.1']",
+    );
+    expect(input!.value).toBe("http://127.0.0.1:7890");
+    expect(document.body.querySelector(".proxy-hint")).toBeNull();
+  });
+
+  it("hides proxy hint once dismissed", async () => {
+    vi.mocked(api.detectAvailableProxy).mockResolvedValue("http://127.0.0.1:7890");
+    mountPanel("general");
+    await flushPromises();
+
+    const hint = document.body.querySelector(".proxy-hint");
+    expect(hint).not.toBeNull();
+    // 「忽略」→ 提示消失，输入框保持为空
+    const buttons = hint!.querySelectorAll("button");
+    (buttons[buttons.length - 1] as HTMLButtonElement).click();
+    await flushPromises();
+
+    expect(document.body.querySelector(".proxy-hint")).toBeNull();
+    const input = document.body.querySelector<HTMLInputElement>(
+      "input[placeholder*='127.0.0.1']",
+    );
+    expect(input!.value).toBe("");
   });
 });

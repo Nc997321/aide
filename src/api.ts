@@ -289,6 +289,10 @@ export const api = {
   getSettings(): Promise<AppSettings> {
     return invoke("get_settings");
   },
+  /** 探测本机自动可用的代理（不含用户已配置值）；设置面板「网络代理」为空时提示一键填入。 */
+  detectAvailableProxy(): Promise<string | null> {
+    return invoke("detect_available_proxy");
+  },
   setSettings(settings: Partial<AppSettings> | { codegraphEmbedder: Record<string, unknown> }): Promise<void> {
     return invoke("set_settings", { settings });
   },

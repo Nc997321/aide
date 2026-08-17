@@ -287,6 +287,7 @@ pub fn run() {
             commands::workspace::untrust_workspace,
             commands::settings::get_settings,
             commands::settings::set_settings,
+            commands::proxy::detect_available_proxy,
             commands::settings::notify_send,
             commands::settings::get_pending_notification,
             commands::permissions::get_permission_settings,

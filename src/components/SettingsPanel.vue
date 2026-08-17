@@ -49,6 +49,12 @@ const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 const appVersion = ref("");
 onMounted(async () => {
   appVersion.value = await getVersion().catch(() => "");
+  // 网络代理为空时探测本机活代理（env / git 配置 / 常见端口，Rust 侧 ~1-2s 后台跑），
+  // 命中则提示一键填入——自动发现的「建议」交给用户确认，不静默生效。
+  if (!settings.proxy) {
+    const found = await api.detectAvailableProxy().catch(() => null);
+    if (found) proxyHint.value = found;
+  }
 });
 
 // ── Settings (通用) ──
@@ -62,6 +68,10 @@ function rerunOnboarding() {
   onboarding.open();
   emit("close");
 }
+function applyProxyHint() {
+  proxyLocal.value = proxyHint.value || "";
+  proxyHintDismissed.value = true;
+}
 const fontSizeLocal = ref(settings.fontSize);
 const fontFamilyLocal = ref(settings.fontFamily);
 const editorFontFamilyLocal = ref(settings.editorFontFamily);
@@ -69,6 +79,9 @@ const terminalFontFamilyLocal = ref(settings.terminalFontFamily);
 const notificationsEnabledLocal = ref(settings.notificationsEnabled);
 const autoNamingLocal = ref(settings.autoNaming);
 const proxyLocal = ref(settings.proxy);
+/** 本机自动检测到的活代理（设置在空时提示一键填入）；null = 未检测到。 */
+const proxyHint = ref<string | null>(null);
+const proxyHintDismissed = ref(false);
 const shellPathLocal = ref(settings.shellPath);
 const recentLimitLocal = ref(settings.recentLimit);
 
@@ -529,6 +542,12 @@ function onOverlayClick(e: MouseEvent) {
                   class="text-input"
                   placeholder="例如 http://127.0.0.1:7890（Clash）"
                 />
+                <div v-if="proxyHint && !proxyHintDismissed && !proxyLocal" class="proxy-hint">
+                  <span>检测到本机可用代理 {{ proxyHint }}</span>
+                  <button class="cg-secret-btn" @click="applyProxyHint">应用</button>
+                  <button class="cg-secret-btn" @click="proxyHintDismissed = true">忽略</button>
+                </div>
+                <span v-else-if="!proxyLocal" class="field-hint">留空 = 直连；聊天流量仅使用此处显式配置的代理</span>
               </div>
 
               <div class="settings-field">
@@ -1137,6 +1156,23 @@ function onOverlayClick(e: MouseEvent) {
 .field-hint {
   font-size: 12px;
   color: var(--aide-text-muted);
+}
+
+/* 网络代理「检测到活代理」提示条——建议交给用户确认，不静默生效 */
+.proxy-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: var(--aide-radius-sm);
+  background: color-mix(in srgb, var(--aide-accent) 13%, transparent);
+  border: 1px solid var(--aide-border-strong);
+  color: var(--aide-text-secondary);
+  font-size: 12px;
+}
+.proxy-hint span {
+  flex: 1;
 }
 
 .toggle {
