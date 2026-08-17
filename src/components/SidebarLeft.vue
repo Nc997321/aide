@@ -247,29 +247,15 @@ function onProviderClickOutside(e: MouseEvent) {
 }
 
 
-// Select a session from a potentially different workspace.
-// 仅切换+预览，不记录最近会话——只有真正"启动"（Agent SDK send_message）的会话才入列，
+// 从（可能非活动的）工作区打开会话：只打开，不切换活动工作区。
+// 会话自带归属（useSessionWorkspaces 注册表：发消息 cwd / tab 后缀 / 归属校验
+// 都走它），后端按全局唯一 session id 定位 JSONL，均不依赖活动工作区；
+// 文件树 / git / run 面板仍跟随活动工作区不动。
+// 切工作区的入口只剩三处：侧栏工作区头部点击（switchWorkspace）、文件树切换器
+// （switchToWorkspaceByKey）、打开目录（openWorkspaceFolder）。
+// 仅预览，不记录最近会话——只有真正"启动"（Agent SDK send_message）的会话才入列，
 // 记录在 App.onNewSession 完成。
-async function selectSessionFromWorkspace(wsKey: string, sessionId: string) {
-  if (wsKey !== activeWorkspace.value) {
-    // Switch to the workspace first
-    const ws = workspaces.value.find(w => w.key === wsKey);
-    if (ws) {
-      try {
-        await api.setWorkspace(ws.key, ws.name);
-      } catch (_e) { return; }
-      activeWorkspace.value = ws.key;
-      wsActiveKey.value = ws.key;   // 同步共享 activeKey，供终端分组/run tab 归属等消费方感知切换
-      emit("workspace-changed", ws.name);
-      await setCurrentWs(ws.key, ws.name);
-      void maybePromptTrust(ws);
-      void refreshTrust(workspaces.value.map((w) => w.name).filter(Boolean));
-      // Load sessions for the new active workspace if not already loaded
-      if (!sessionsByWorkspace.value[wsKey]) {
-        await loadSessions();
-      }
-    }
-  }
+function selectSessionFromWorkspace(_wsKey: string, sessionId: string) {
   emit("session-changed", sessionId);
 }
 
@@ -277,25 +263,23 @@ function openUpdate() {
   if (downloadUrl.value) open(downloadUrl.value);
 }
 
-async function switchWorkspace(ws: WorkspaceInfo) {
-  // 工作区头部点击 = 纯展开/收起开关（VS Code 语义），与激活态无关：
-  // 若收起也要求先激活，两个展开的工作区来回点时第一下会被"抢激活"
-  // 消耗掉，收起就得点两下。激活切换只在展开非活动工作区时顺带发生，
-  // 或通过点击其下的会话条目（selectSessionFromWorkspace）。
+function switchWorkspace(ws: WorkspaceInfo) {
+  // 工作区头部点击 = 纯展开/收起开关，与激活态无关（VS Code 语义）：
+  // 展开/查看列表不改变活动工作区——与点会话只打开同一逻辑，工作区上下文
+  // 只由文件树 path-bar 切换器（switchToWorkspaceByKey）与打开目录改变。
+  // 展开非活动工作区时补加载其会话列表（未加载过才拉，避免每次展开都请求）。
   if (expandedWorkspaces.value.has(ws.key)) {
     expandedWorkspaces.value.delete(ws.key);
     return;
   }
-
   expandedWorkspaces.value.add(ws.key);
-  if (ws.key === activeWorkspace.value) return;
-
-  const ok = await activateWorkspace(ws);
-  if (!ok) expandedWorkspaces.value.delete(ws.key);
+  if (!sessionsByWorkspace.value[ws.key]) {
+    void loadWsSessions(ws.key);
+  }
 }
 
 /** 真正把某个工作区设为活动：setWorkspace + 更新本地状态 + 广播 workspace-changed。
- *  switchWorkspace（侧栏点头）与 switchToWorkspaceByKey（文件树切换器）共用。 */
+ *  唯一入口是文件树 path-bar 切换器（switchToWorkspaceByKey）。 */
 async function activateWorkspace(ws: WorkspaceInfo): Promise<boolean> {
   if (ws.missing) return false;
   try {

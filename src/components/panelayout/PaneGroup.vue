@@ -10,6 +10,7 @@ import { useWorkspaces } from "../../composables/useWorkspaces";
 import { paneTabMenuItems } from "../../menus/contextMenus";
 import { WORKSPACE_PATH_KEY } from "./keys";
 import type { GroupNode } from "../../composables/paneLayout/tree";
+import type { WorkspaceInfo } from "../../types";
 
 /**
  * 一个分屏组：tab 栏 + 常驻一个 ChatPanel。
@@ -77,8 +78,9 @@ const effectiveWorkspacePath = computed(() => {
   const tab = activeTab.value;
   const sid = tab?.sessionId;
   if (sid) return workspaceOf(sid)?.wsPath || workspacePath.value;
-  // 空白面板：显示创建时绑定的工作区（切工作区后仍如实展示它属于哪）
-  return tab?.pendingWs?.wsPath || workspacePath.value;
+  // 空白面板：显示创建时绑定的工作区（切工作区后仍如实展示它属于哪）；
+  // 零 tab（hero）时显示 hero 归属选择器选定的归属，未选才回落活动工作区
+  return tab?.pendingWs?.wsPath || pl.layout.defaultWs?.wsPath || workspacePath.value;
 });
 
 /**
@@ -117,9 +119,27 @@ function onTabContext(tabId: string, x: number, y: number) {
 
 function onNewTab() {
   pl.focusGroup(props.group.id);
-  // 空白面板创建时绑定当前工作区：布局全局一份，切工作区不动 tab——
-  // 不快照的话首条消息会落到「当前」工作区而不是创建时的那个
-  pl.openBlankTab(`新会话 ${new Date().toLocaleTimeString()}`, wsSnapshot());
+  // 空白面板创建时绑定工作区：hero 归属选择器选定的 defaultWs 优先，用后即清
+  // （归属选择只作用于紧随其后的第一个新会话）；否则快照当前活动工作区——
+  // 布局全局一份，切工作区不动 tab，不快照的话首条消息会落到「当前」工作区
+  // 而不是创建时的那个
+  const ws = pl.layout.defaultWs ?? wsSnapshot();
+  if (pl.layout.defaultWs) pl.setDefaultWs(null);
+  pl.openBlankTab(`新会话 ${new Date().toLocaleTimeString()}`, ws);
+}
+
+/** hero 归属选择：空白预览 tab 直接改写其 pendingWs；零 tab 存布局 defaultWs
+ *  （作用于紧随其后的第一个新会话）。只写归属不切工作区——活动工作区仍只由
+ *  文件树 path-bar 切换器 / 打开目录改变。 */
+function onPickWorkspace(ws: WorkspaceInfo) {
+  if (ws.missing) return;
+  const bind = { wsKey: ws.key, wsPath: ws.name };
+  const tab = activeTab.value;
+  if (tab && !tab.sessionId) {
+    pl.setTabPendingWs(tab.id, bind);
+  } else {
+    pl.setDefaultWs(bind);
+  }
 }
 </script>
 
@@ -166,6 +186,7 @@ function onNewTab() {
       @send="onSend"
       @send-btw="onSendBtw"
       @send-btw-task="onSendBtwTask"
+      @select-workspace="onPickWorkspace"
       @interrupt="interrupt"
       @set-model="setModel"
       @set-effort="setEffort"

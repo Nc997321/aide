@@ -37,6 +37,12 @@ import { getLastDispatchedPrompt, stopSessionById } from "./useChatSession";
 interface LayoutState {
   root: PaneNode;
   focusedGroupId: string;
+  /**
+   * 零 tab 欢迎态（hero）选定的「下一新会话归属」：hero 点归属选择器改的是它
+   * 而不是活动工作区——选归属 ≠ 切工作区。首个空白 tab 创建时由调用方取用
+   * （openBlankTab 的 pendingWs），取用后即清。不落盘（快照恢复与此无关）。
+   */
+  defaultWs?: TabItem["pendingWs"] | null;
 }
 
 /** 初始/兜底状态：空根组（零会话欢迎态——无 tab 栏，居中 hero 输入区）。 */
@@ -151,6 +157,20 @@ export function usePaneLayout() {
     group.tabs.push(tab);
     group.previewTabId = tab.id;
     activateTab(group, tab.id);
+  }
+
+  /** hero 归属选择改写空白 tab 的归属快照。已启动（sessionId 非空）禁止——归属
+   *  已种进注册表，改 pendingWs 是无效动作。选归属不切工作区。 */
+  function setTabPendingWs(tabId: string, ws: TabItem["pendingWs"]) {
+    const hit = findTabById(layout.root, tabId);
+    if (!hit || hit.tab.sessionId) return;
+    hit.tab.pendingWs = ws;
+  }
+
+  /** hero（零 tab）归属：作用于紧随其后的第一个新会话；openBlankTab 消费后由
+   *  调用方 setDefaultWs(null) 清除。 */
+  function setDefaultWs(ws: TabItem["pendingWs"] | null) {
+    layout.defaultWs = ws ?? null;
   }
 
   /** 侧栏右键「在新标签页打开」：显式动作，无论启动与否都开固定 tab。 */
@@ -391,6 +411,8 @@ export function usePaneLayout() {
     hasAnyTab: computed(() => listGroups(layout.root).some((g) => g.tabs.length > 0)),
     openSession,
     openBlankTab,
+    setTabPendingWs,
+    setDefaultWs,
     openSessionInNewTab,
     openSessionInSplit,
     splitFocusedGroup,
@@ -419,6 +441,7 @@ export function __resetPaneLayoutForTest(startedProbe?: (sid: string) => boolean
   const s = emptyState();
   layout.root = s.root;
   layout.focusedGroupId = s.focusedGroupId;
+  layout.defaultWs = null;
   isStarted = startedProbe ?? defaultIsStarted;
   mru.length = 0;
   mruFrozen = false;

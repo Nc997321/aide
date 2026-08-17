@@ -11,8 +11,9 @@ import ChatSendButton from "./ChatSendButton.vue";
 import InterruptButton from "./InterruptButton.vue";
 import PermissionDialog from "./PermissionDialog.vue";
 import BgTaskDock from "./BgTaskDock.vue";
+import WorkspacePicker from "../ui/WorkspacePicker.vue";
 import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, ContextUsage, ModelOption, PermissionModeOption, PermissionRequest, RateLimitInfo, TaskItem } from "@/types/chat";
-import type { SkillMeta } from "@/types";
+import type { SkillMeta, WorkspaceInfo } from "@/types";
 import { api } from "@/api";
 import { permissionsApi } from "@/api/permissions";
 import { trail } from "../utils/diagnostics/scrollTrail";
@@ -89,6 +90,8 @@ const emit = defineEmits<{
   "set-permission-mode": [mode: string];
   "respond-permission": [id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string];
   "update:bgDockSelectedId": [id: string];
+  /** hero 归属选择：选中的是会话归属，不是活动工作区（PaneGroup 据此改 pendingWs/defaultWs） */
+  "select-workspace": [ws: WorkspaceInfo];
 }>();
 
 const rootEl = ref<HTMLElement | null>(null);
@@ -705,10 +708,7 @@ const messagesVal = computed(() =>
 // 判定 = 未绑定会话且无消息：零 tab 布局与「新会话」空白预览 tab 共用这一套
 // 居中样式。hero 不是独立组件——输入盒/工具栏/发送路径全部复用，只是换布局文案。
 const isHero = computed(() => !props.sessionId && messagesVal.value.length === 0);
-const heroWsName = computed(() => {
-  const p = props.workspacePath ?? "";
-  return p.split(/[\\/]/).filter(Boolean).pop() || p;
-});
+// 归属显示交给 WorkspacePicker（path → 末段目录名），hero 只需传 props.workspacePath
 const heroModelName = computed(
   () => displayModels.value.find((m) => m.value === selectedModel.value)?.displayName ?? "",
 );
@@ -1474,7 +1474,11 @@ function onOpenBgDock(taskId: string) {
       <div v-if="isHero" class="chat-hero-head">
         <AppLogo :size="56" class="chat-hero-logo" />
         <div class="chat-hero-title">
-          新会话位于 <span class="chat-hero-ws">{{ heroWsName }}</span>
+          新会话位于
+          <WorkspacePicker
+            :path="props.workspacePath ?? ''"
+            @select="(ws) => emit('select-workspace', ws)"
+          />
           <span class="chat-hero-sep">·</span>
           使用 <span class="chat-hero-model">{{ heroModelName || "默认模型" }}</span>
         </div>
@@ -1898,10 +1902,6 @@ function onOpenBgDock(taskId: string) {
   gap: 8px;
   font-size: 14px;
   color: var(--aide-text-secondary);
-}
-
-.chat-hero-ws {
-  color: var(--aide-text-primary);
 }
 
 .chat-hero-sep {

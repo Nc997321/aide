@@ -377,3 +377,42 @@ describe("serialize / restore", () => {
     expect(pl.activeSessionId.value).toBe("");
   });
 });
+
+describe("hero 归属选择（setTabPendingWs / setDefaultWs）", () => {
+  it("setTabPendingWs：空白 tab 改写归属快照", () => {
+    const pl = usePaneLayout();
+    pl.openBlankTab("新会话 A");
+    const tab = focused().tabs[0];
+    pl.setTabPendingWs(tab.id, { wsKey: "C--proj-y", wsPath: "C:/proj/y" });
+    expect(focused().tabs[0].pendingWs).toEqual({ wsKey: "C--proj-y", wsPath: "C:/proj/y" });
+  });
+
+  it("setTabPendingWs：已启动 tab 拒绝改写（归属已种注册表）", () => {
+    const pl = usePaneLayout();
+    pl.openSession("s1");
+    started.add("s1");
+    pl.promoteTab("s1");
+    const tab = focused().tabs.find((t) => t.sessionId === "s1")!;
+    pl.setTabPendingWs(tab.id, { wsKey: "C--proj-y", wsPath: "C:/proj/y" });
+    expect(tab.pendingWs).toBeUndefined();
+  });
+
+  it("setTabPendingWs：未知 tabId 静默忽略", () => {
+    const pl = usePaneLayout();
+    pl.setTabPendingWs("nope", { wsKey: "C--proj-y", wsPath: "C:/proj/y" });
+    expect(groups()).toHaveLength(1);
+    expect(focused().tabs).toHaveLength(0);
+  });
+
+  it("setDefaultWs：设置/清除/重置", () => {
+    const pl = usePaneLayout();
+    expect(pl.layout.defaultWs).toBeNull();
+    pl.setDefaultWs({ wsKey: "C--proj-y", wsPath: "C:/proj/y" });
+    expect(pl.layout.defaultWs).toEqual({ wsKey: "C--proj-y", wsPath: "C:/proj/y" });
+    pl.setDefaultWs(null);
+    expect(pl.layout.defaultWs).toBeNull();
+    pl.setDefaultWs({ wsKey: "C--proj-z", wsPath: "C:/proj/z" });
+    __resetPaneLayoutForTest((sid) => started.has(sid));
+    expect(pl.layout.defaultWs).toBeNull();
+  });
+});
