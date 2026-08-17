@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::commands::WorkspaceState;
 use crate::policy::{
@@ -225,30 +225,51 @@ pub async fn create_permission_rule_impl(
     draft: PermissionRuleDraft,
     project: Option<PathBuf>,
 ) -> Result<PermissionSettingsView, String> {
-    validate_draft(scope, &draft)?;
+    create_permission_rules_impl(service, runtime, scope, vec![draft], project).await
+}
+
+/// Batch create: one atomic store + one broadcast for the whole batch (a
+/// chained Bash command remembered as N segments arrives here as N drafts —
+/// splitting them into N single-rule writes would emit N snapshots and could
+/// leave the store half-written on failure).
+pub async fn create_permission_rules_impl(
+    service: Arc<SettingsService>,
+    runtime: &AgentRuntimeManager,
+    scope: SettingsScope,
+    drafts: Vec<PermissionRuleDraft>,
+    project: Option<PathBuf>,
+) -> Result<PermissionSettingsView, String> {
+    if drafts.is_empty() {
+        return Err("no permission rules to create".to_string());
+    }
+    for draft in &drafts {
+        validate_draft(scope, draft)?;
+    }
 
     let svc = service.clone();
     let project_for_write = project.clone();
     let write_scope = scope;
     let write_result = tokio::task::spawn_blocking(move || {
         svc.mutate_scope_blocking(write_scope, project_for_write.as_deref(), |doc| {
-            let next_order = doc
+            let mut next_order = doc
                 .permissions
                 .rules
                 .iter()
                 .map(|r| r.order)
                 .max()
-                .unwrap_or(-1)
-                .saturating_add(1);
-            let stored = StoredPermissionRule {
-                id: generate_rule_id(),
-                effect: draft.effect,
-                tool: draft.tool,
-                matcher: serde_json::to_value(&draft.matcher)
-                    .map_err(|e| SettingsError::Storage(e.to_string()))?,
-                order: next_order,
-            };
-            doc.permissions.rules.push(stored);
+                .unwrap_or(-1);
+            for draft in drafts {
+                next_order = next_order.saturating_add(1);
+                let stored = StoredPermissionRule {
+                    id: generate_rule_id(),
+                    effect: draft.effect,
+                    tool: draft.tool,
+                    matcher: serde_json::to_value(&draft.matcher)
+                        .map_err(|e| SettingsError::Storage(e.to_string()))?,
+                    order: next_order,
+                };
+                doc.permissions.rules.push(stored);
+            }
             Ok(())
         })
     })
@@ -385,8 +406,17 @@ pub async fn get_permission_settings(
         .map_err(|e| e.to_string())?
 }
 
+/// 写入成功后通知前端权限面板刷新。带新 revision（单调递增），前端按
+/// `payload > revision` 判断是否需要重拉，自己写入后的回环（payload 相等）跳过。
+/// 与 sidecar 广播（update_permission_policy）是两条独立通道：那条更新 agent
+/// 运行中策略，这条刷新右侧 tab 面板展示。
+fn emit_permissions_changed(app: &AppHandle, view: &PermissionSettingsView) {
+    let _ = app.emit("permissions-changed", view.revision);
+}
+
 #[tauri::command]
 pub async fn create_permission_rule(
+    app: AppHandle,
     scope: SettingsScope,
     rule: PermissionRuleDraft,
     project: Option<String>,
@@ -396,11 +426,31 @@ pub async fn create_permission_rule(
 ) -> Result<PermissionSettingsView, String> {
     let service = settings.inner().clone();
     let project = resolve_project_root(project, &workspace);
-    create_permission_rule_impl(service, runtime.inner(), scope, rule, project).await
+    let view = create_permission_rule_impl(service, runtime.inner(), scope, rule, project).await?;
+    emit_permissions_changed(&app, &view);
+    Ok(view)
+}
+
+#[tauri::command]
+pub async fn create_permission_rules(
+    app: AppHandle,
+    scope: SettingsScope,
+    rules: Vec<PermissionRuleDraft>,
+    project: Option<String>,
+    settings: State<'_, Arc<SettingsService>>,
+    runtime: State<'_, AgentRuntimeManager>,
+    workspace: State<'_, WorkspaceState>,
+) -> Result<PermissionSettingsView, String> {
+    let service = settings.inner().clone();
+    let project = resolve_project_root(project, &workspace);
+    let view = create_permission_rules_impl(service, runtime.inner(), scope, rules, project).await?;
+    emit_permissions_changed(&app, &view);
+    Ok(view)
 }
 
 #[tauri::command]
 pub async fn update_permission_rule(
+    app: AppHandle,
     scope: SettingsScope,
     id: String,
     rule: PermissionRuleDraft,
@@ -411,11 +461,14 @@ pub async fn update_permission_rule(
 ) -> Result<PermissionSettingsView, String> {
     let service = settings.inner().clone();
     let project = resolve_project_root(project, &workspace);
-    update_permission_rule_impl(service, runtime.inner(), scope, id, rule, project).await
+    let view = update_permission_rule_impl(service, runtime.inner(), scope, id, rule, project).await?;
+    emit_permissions_changed(&app, &view);
+    Ok(view)
 }
 
 #[tauri::command]
 pub async fn delete_permission_rule(
+    app: AppHandle,
     scope: SettingsScope,
     id: String,
     project: Option<String>,
@@ -425,7 +478,9 @@ pub async fn delete_permission_rule(
 ) -> Result<PermissionSettingsView, String> {
     let service = settings.inner().clone();
     let project = resolve_project_root(project, &workspace);
-    delete_permission_rule_impl(service, runtime.inner(), scope, id, project).await
+    let view = delete_permission_rule_impl(service, runtime.inner(), scope, id, project).await?;
+    emit_permissions_changed(&app, &view);
+    Ok(view)
 }
 
 #[tauri::command]

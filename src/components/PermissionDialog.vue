@@ -2,7 +2,12 @@
 import { ref, computed, reactive, watch } from "vue";
 import type { PermissionRequest } from "@/types/chat";
 import type { PermissionRule, PermissionRuleDraft, PermissionScope } from "@/types/permissions";
-import { deriveRememberRule, describeRememberRule } from "@/utils/permissionRuleDerivation";
+import {
+  deriveRememberRule,
+  describeRememberRule,
+  hasUnquotedShellControl,
+  stripTrailingNumericArg,
+} from "@/utils/permissionRuleDerivation";
 import { marked } from "@/utils/markdown";
 import Icon from "./Icon.vue";
 
@@ -45,10 +50,11 @@ const emit = defineEmits<{
     approved: boolean,
     answers?: Record<string, string>,
     nextMode?: string,
-    /** 仅「允许并记住」按钮带：本次放行 + 把这条 allow 规则持久化到指定作用域。
-     *  ChatPanel 收到后先调 permissionsApi.create 落盘（Rust 广播新快照给 sidecar），
-     *  再走正常 approve。纯前端字段，不进 SidecarCommand 协议。 */
-    persistRule?: { scope: PermissionScope; rule: PermissionRuleDraft },
+    /** 仅「允许并记住」按钮带：本次放行 + 把这组 allow 规则持久化到指定作用域
+     *  （Bash 链式命令一次记住多段时是多条）。ChatPanel 收到后先调
+     *  permissionsApi.createMany 落盘（Rust 一次原子写 + 一次广播），再走正常
+     *  approve。纯前端字段，不进 SidecarCommand 协议。 */
+    persistRule?: { scope: PermissionScope; rules: PermissionRuleDraft[] },
   ];
 }>();
 
@@ -183,14 +189,59 @@ function submitAnswers() {
   emit("respond", props.permission.id, true, answers);
 }
 
-// ── 「允许并记住」：把这次工具调用就地推导成一条 allow 规则 ──
+// ── 「允许并记住」：把这次工具调用就地推导成一组 allow 规则 ──
 // 推导规则按工具分（Bash→命令前缀、文件工具→所在文件夹、WebFetch→完整 URL、
-// 其它→工具级），推不出来（空命令 / 空路径）或没有可持久化作用域时不显示按钮。
-const rememberDraft = computed<PermissionRuleDraft | null>(() =>
+// 其它→工具级）；Bash 链式命令对每个未覆盖段各推一条，一次记住整链。推不出
+// 来（空命令 / 空路径）或没有可持久化作用域时不显示按钮。
+const rememberDrafts = computed<PermissionRuleDraft[]>(() =>
   props.permission
     ? deriveRememberRule(props.permission.name, props.permission.input, props.rememberRules ?? [])
-    : null,
+    : [],
 );
+
+/** Bash prefix 规则的 matcher value（可编辑的规则值）；其它 matcher 只读。 */
+function bashPrefixValue(d: PermissionRuleDraft): string | null {
+  return d.matcher.kind === "bash" && d.matcher.mode === "prefix" && d.matcher.value !== undefined
+    ? d.matcher.value
+    : null;
+}
+
+/** 每条规则的可编辑值：初始 = 推导值，用户可改。新请求到达时重置。 */
+const editableValues = reactive<string[]>([]);
+watch(
+  () => props.permission?.id,
+  () => {
+    editableValues.splice(
+      0,
+      editableValues.length,
+      ...rememberDrafts.value.map((d) => bashPrefixValue(d) ?? ""),
+    );
+  },
+  { immediate: true },
+);
+
+/** 行级校验：空值 / 含未引用 shell 控制符（allow 前缀在策略引擎里永不命中）。 */
+const editableInvalid = computed<Array<string | null>>(() =>
+  rememberDrafts.value.map((d, i) => {
+    if (bashPrefixValue(d) === null) return null;
+    const v = editableValues[i] ?? "";
+    if (!v.trim()) return "规则值不能为空";
+    if (hasUnquotedShellControl(v)) return "含未引用 shell 控制符（|;&>< 等）——允许规则永不命中";
+    return null;
+  }),
+);
+const rememberValid = computed(() => editableInvalid.value.every((e) => e === null));
+
+/** 数字参数透明化：末尾是 `-8` / `-n 8` / `--lines=8` 形态时提示「仅匹配字面
+ *  参数」并提供「改为记住去掉数字的版本」快捷切换。裸数字（vitest 过滤器 2）
+ *  不提示——那可能是语义本身，留给用户手动编辑。 */
+const simplifiedValues = computed<Array<string | null>>(() =>
+  rememberDrafts.value.map((_, i) => stripTrailingNumericArg(editableValues[i] ?? "")),
+);
+function applySimplified(i: number) {
+  const s = simplifiedValues.value[i];
+  if (s !== null) editableValues[i] = s;
+}
 
 // ── 「进入编辑模式」：编辑类工具的"一劳永逸"选项 ──
 // 手动模式下编辑会一直弹窗；对不熟悉规则机制的用户，「允许并记住」（记一条文件夹
@@ -209,18 +260,27 @@ const canRemember = computed(
     !isPlanApproval.value &&
     !isQuestion.value &&
     !canEnterEditMode.value &&
-    !!rememberDraft.value &&
+    rememberDrafts.value.length > 0 &&
     !!props.rememberScope,
 );
 const rememberDescription = computed(() => {
-  if (!rememberDraft.value || !props.rememberScope) return "";
-  return describeRememberRule(rememberDraft.value, props.rememberScope);
+  if (rememberDrafts.value.length === 0 || !props.rememberScope) return "";
+  return describeRememberRule(rememberDrafts.value, props.rememberScope);
 });
+/** 非 Bash 规则（文件夹 / URL / 工具级）的只读描述行。渲染时 canRemember
+ *  已保证 rememberScope 非空，`?? "user"` 只是满足类型收窄。 */
+function ruleStaticDescription(d: PermissionRuleDraft): string {
+  return describeRememberRule([d], props.rememberScope ?? "user");
+}
 function emitAllowAndRemember() {
-  if (!props.permission || !rememberDraft.value || !props.rememberScope) return;
+  if (!props.permission || !props.rememberScope || !rememberValid.value) return;
+  const rules = rememberDrafts.value.map((d, i) => {
+    if (bashPrefixValue(d) === null) return d;
+    return { ...d, matcher: { ...d.matcher, value: (editableValues[i] ?? "").trim() } };
+  });
   emit("respond", props.permission.id, true, undefined, undefined, {
     scope: props.rememberScope,
-    rule: rememberDraft.value,
+    rules,
   });
 }
 
@@ -349,8 +409,42 @@ const inputJson = computed(() => {
         <pre v-else class="perm-input-raw">{{ inputJson }}</pre>
       </div>
       <!-- 「允许并记住」预览：点之前先让用户看清将记住什么、落到哪个作用域。
-           只在工具调用且有可推导规则时出现（计划批准 / 澄清提问不显示）。 -->
-      <div v-if="canRemember" class="perm-remember-hint">{{ rememberDescription }}</div>
+           只在工具调用且有可推导规则时出现（计划批准 / 澄清提问不显示）。
+           链式命令一次记住多段时逐条列出；Bash prefix 值可直接编辑（参数
+           透明化的兜底），末尾数字参数（tail -8 形态）另给「去掉数字」快捷
+           切换。非 Bash 规则只读展示。 -->
+      <div v-if="canRemember" class="perm-remember">
+        <div class="perm-remember-hint">{{ rememberDescription }}</div>
+        <div
+          v-for="(d, i) in rememberDrafts"
+          :key="i"
+          class="perm-remember-rule"
+          :class="{ 'perm-remember-rule--invalid': editableInvalid[i] }"
+        >
+          <template v-if="bashPrefixValue(d) !== null">
+            <div class="perm-remember-rule-row">
+              <span class="perm-remember-idx">{{ i + 1 }}</span>
+              <input
+                v-model="editableValues[i]"
+                class="perm-remember-value"
+                spellcheck="false"
+                aria-label="规则值"
+              />
+            </div>
+            <div v-if="simplifiedValues[i]" class="perm-remember-note">
+              仅匹配字面参数（其他值如 {{ editableValues[i] }} 变体会继续询问）
+              <button type="button" class="perm-remember-simplify" @click="applySimplified(i)">
+                改为记住 {{ simplifiedValues[i] }}
+              </button>
+            </div>
+            <div v-if="editableInvalid[i]" class="perm-remember-error">{{ editableInvalid[i] }}</div>
+          </template>
+          <div v-else class="perm-remember-rule-row">
+            <span class="perm-remember-idx">{{ i + 1 }}</span>
+            <code class="perm-remember-static">{{ ruleStaticDescription(d) }}</code>
+          </div>
+        </div>
+      </div>
       <!-- 「进入编辑模式」后果说明：不熟机制的用户需要知道点下去之后不再逐条弹。 -->
       <div v-if="canEnterEditMode" class="perm-remember-hint">
         本次放行，并切换到编辑模式——之后本会话所有文件编辑自动接受，不再逐条确认
@@ -403,6 +497,7 @@ const inputJson = computed(() => {
                 v-if="canRemember"
                 class="perm-btn perm-btn--outline"
                 data-action="remember"
+                :disabled="!rememberValid"
                 @click="emitAllowAndRemember"
               >
                 允许并记住
@@ -632,9 +727,14 @@ const inputJson = computed(() => {
   word-break: break-all;
 }
 
-/* 「允许并记住」预览行：点之前看清将记住什么。低调次要信息，不抢按钮视觉。 */
-.perm-remember-hint {
+/* 「允许并记住」预览区：描述行 + 每条规则的编辑行/提示行。低调次要信息，
+   不抢按钮视觉；编辑行是「规则值透明化」的载体——参数怎么记、记多宽，点
+   按钮之前全部可见可改。 */
+.perm-remember {
   margin: 0 14px 2px;
+}
+
+.perm-remember-hint {
   padding: 6px 10px;
   font-size: 11px;
   line-height: 1.45;
@@ -642,6 +742,92 @@ const inputJson = computed(() => {
   background: color-mix(in srgb, var(--aide-accent) 5%, transparent);
   border-left: 2px solid color-mix(in srgb, var(--aide-accent) 35%, transparent);
   border-radius: 2px;
+}
+
+.perm-remember-rule {
+  margin-top: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-sm);
+  background: var(--aide-bg-deep);
+}
+
+.perm-remember-rule--invalid {
+  border-color: color-mix(in srgb, var(--aide-danger) 45%, transparent);
+}
+
+.perm-remember-rule-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.perm-remember-idx {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--aide-accent);
+  background: color-mix(in srgb, var(--aide-accent) 10%, transparent);
+}
+
+.perm-remember-value {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--aide-text-primary);
+  font-family: var(--aide-font-mono);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 1px 4px;
+  outline: none;
+}
+
+.perm-remember-value:focus {
+  border-color: var(--aide-border-strong);
+  background: var(--aide-surface-default);
+}
+
+.perm-remember-static {
+  font-family: var(--aide-font-mono);
+  font-size: 11.5px;
+  color: var(--aide-text-secondary);
+}
+
+.perm-remember-note {
+  margin-top: 4px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--aide-warning);
+}
+
+.perm-remember-simplify {
+  margin-left: 4px;
+  border: 1px solid color-mix(in srgb, var(--aide-warning) 30%, transparent);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--aide-warning) 8%, transparent);
+  color: var(--aide-warning);
+  font-size: 10.5px;
+  font-family: var(--aide-font-mono);
+  padding: 1px 6px;
+  cursor: pointer;
+}
+
+.perm-remember-simplify:hover {
+  background: color-mix(in srgb, var(--aide-warning) 15%, transparent);
+}
+
+.perm-remember-error {
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--aide-danger);
 }
 
 .perm-plan {

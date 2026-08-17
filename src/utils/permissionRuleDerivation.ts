@@ -65,8 +65,10 @@ function firstUnquotedControlIndex(command: string): number {
 }
 
 /** 命令是否含未引用的 shell 控制符（`|;&&><\n\`` 或 `$(`）。与
- *  `firstUnquotedControlIndex` 同源：有控制符 ⇔ 索引小于命令长度。 */
-function hasUnquotedShellControl(command: string): boolean {
+ *  `firstUnquotedControlIndex` 同源：有控制符 ⇔ 索引小于命令长度。
+ *  导出供记住对话框校验用户编辑的规则值——allow 前缀含未引用控制符
+ *  在策略引擎里永不命中，必须先亮红灯。 */
+export function hasUnquotedShellControl(command: string): boolean {
   return firstUnquotedControlIndex(command) < command.length;
 }
 
@@ -96,7 +98,14 @@ function commandStartsWithBoundary(command: string, value: string): boolean {
 /** Bash 链式命令切分（前端复刻 sidecar matchers.ts `splitBashSegments`）。
  *  把 `a | b`、`a && b`、`a; b`、`a & b`、换行切分成独立段；命令含文件重定向、
  *  `$(…)`/反引号、空段、未闭合引号时返回 null（不可验证）。无害重定向
- *  （`2>&1`、`2>/dev/null`、`&>/dev/null`）段内透明化。 */
+ *  （`2>&1`、`2>/dev/null`、`&>/dev/null`）段内透明化。
+ *
+ *  与 sidecar 匹配侧有一处刻意分叉：这里的段**剥离 fd 号**（`cmd 2>&1` → 段
+ *  `cmd`），sidecar 匹配侧的段**保留 fd**（`cmd 2`）。记住侧要剥——`2>&1` 的
+ *  `2` 是 fd 不是命令词，留在段里会被 `deriveBashPrefix` 当参数写进规则，
+ *  生成 `cmd 2` 这种把 fd 误当参数的错规则。匹配侧要留——字面规则 `cmd 2`
+ *  （用户记住/手写的参数）必须命中 `cmd 2>&1` 重定向变体。两者配合：
+ *  记住生成的是剥了 fd 的宽前缀（`cmd`），匹配段保留 fd 后照样命中。 */
 function splitBashSegments(command: string): string[] | null {
   const chars = [...command];
   const segments: string[] = [];
@@ -272,24 +281,32 @@ function segmentCoveredByRules(segment: string, rules: readonly PermissionRule[]
   return false;
 }
 
-/** Bash「记住」规则的前缀推导：简单命令维持原行为（整条作前缀）；链式命令
- *  切分成段后取第一个未被现有规则覆盖的段作前缀——第一段早已放行的命令，记住的
- *  是真正缺的管道后段。整条不可验证或全被覆盖时回退到原行为（第一段前缀）。 */
-function deriveBashRememberPrefix(
+/** Bash「记住」规则前缀推导：简单命令维持原行为（整条作前缀）；链式命令切分
+ *  成段后对**每一个未被现有规则覆盖的段**各生成一条前缀——一次「允许并记住」
+ *  把管道整链缺的规则全部补上，而不是只补第一段、留下第二段下次继续弹窗。
+ *  整条不可验证或全被覆盖时回退到原行为（首段前缀）。结果去重（不同段可能
+ *  推出同一前缀）。 */
+function deriveBashRememberPrefixes(
   command: string,
   rules: readonly PermissionRule[],
-): string | null {
+): string[] {
   const trimmed = command.trimStart();
-  if (!trimmed) return null;
+  if (!trimmed) return [];
+  const one = (c: string): string[] => {
+    const p = deriveBashPrefix(c);
+    return p ? [p] : [];
+  };
   if (!hasUnquotedShellControl(trimmed)) {
-    return deriveBashPrefix(trimmed);
+    return one(trimmed);
   }
   const segments = splitBashSegments(trimmed);
   if (segments === null) {
-    return deriveBashPrefix(trimmed);
+    return one(trimmed);
   }
-  const uncovered = segments.find((seg) => !segmentCoveredByRules(seg, rules));
-  return deriveBashPrefix(uncovered ?? segments[0]);
+  const uncovered = segments.filter((seg) => !segmentCoveredByRules(seg, rules));
+  // 全部被覆盖是异常态（整链已被放行，本不该弹窗）——保守回退首段，不加戏。
+  const targets = uncovered.length > 0 ? uncovered : [segments[0]];
+  return [...new Set(targets.flatMap(one))];
 }
 
 /** 跨平台父目录：同时认 `/` 和 `\`，去尾部分隔后取最后一段之前。
@@ -303,13 +320,14 @@ function parentDir(p: string): string | null {
   return trimmed.slice(0, lastSep);
 }
 
-/** 把一次工具调用请求推导成一条 `allow` 规则。`existingRules` 供 Bash 链式命令
- *  识别「第一个未被现有规则覆盖的段」；其它工具不依赖它。推不出来返回 null。 */
+/** 把一次工具调用请求推导成一组 `allow` 规则（Bash 链式命令可一次推出多条——
+ *  每段一条；其余工具最多一条）。`existingRules` 供 Bash 链式命令识别「未被现有
+ *  规则覆盖的段」。推不出来返回空数组（对话框据此不显示「记住」按钮）。 */
 export function deriveRememberRule(
   tool: string,
   input: unknown,
   existingRules: readonly PermissionRule[] = [],
-): PermissionRuleDraft | null {
+): PermissionRuleDraft[] {
   const inp =
     input && typeof input === "object" && !Array.isArray(input)
       ? (input as Record<string, unknown>)
@@ -317,50 +335,79 @@ export function deriveRememberRule(
 
   if (tool === "Bash") {
     const command = typeof inp.command === "string" ? inp.command : "";
-    const prefix = deriveBashRememberPrefix(command, existingRules);
-    if (!prefix) return null;
-    return {
+    return deriveBashRememberPrefixes(command, existingRules).map((value) => ({
       effect: "allow",
       tool,
-      matcher: { kind: "bash", mode: "prefix", value: prefix },
-    };
+      matcher: { kind: "bash", mode: "prefix", value },
+    }));
   }
 
   if (tool === "Write" || tool === "Edit" || tool === "MultiEdit") {
     const fp = typeof inp.file_path === "string" ? inp.file_path : "";
     const folder = parentDir(fp);
-    if (!folder) return null;
-    return {
-      effect: "allow",
-      tool,
-      matcher: { kind: "path", field: "file_path", folder },
-    };
+    if (!folder) return [];
+    return [
+      {
+        effect: "allow",
+        tool,
+        matcher: { kind: "path", field: "file_path", folder },
+      },
+    ];
   }
 
   if (tool === "NotebookEdit") {
     const fp = typeof inp.notebook_path === "string" ? inp.notebook_path : "";
     const folder = parentDir(fp);
-    if (!folder) return null;
-    return {
-      effect: "allow",
-      tool,
-      matcher: { kind: "path", field: "notebook_path", folder },
-    };
+    if (!folder) return [];
+    return [
+      {
+        effect: "allow",
+        tool,
+        matcher: { kind: "path", field: "notebook_path", folder },
+      },
+    ];
   }
 
   if (tool === "WebFetch") {
     const url = typeof inp.url === "string" ? inp.url : "";
-    if (!url) return null;
-    return {
-      effect: "allow",
-      tool,
-      matcher: { kind: "field", field: "url", equals: url },
-    };
+    if (!url) return [];
+    return [
+      {
+        effect: "allow",
+        tool,
+        matcher: { kind: "field", field: "url", equals: url },
+      },
+    ];
   }
 
   // 其它工具：工具级「任意调用」。用户显式点了记住，工具级 allow 可接受；
   // 描述行会写明「调用 X 工具时始终允许」，用户看清楚再决定。
-  return { effect: "allow", tool, matcher: { kind: "tool" } };
+  return [{ effect: "allow", tool, matcher: { kind: "tool" } }];
+}
+
+// ---------------------------------------------------------------------------
+// 数字参数透明化（方案 E）：`tail -8` 形态的高置信度可变参数检测
+// ---------------------------------------------------------------------------
+
+/** 规则值末尾是否「数字参数」形态，若是返回去掉该参数后的前缀，否则返回 null。
+ *  只认高置信度可变的形态：
+ *   - `-8`（选项+数值一体）→ `tail -8` → `tail`
+ *   - `--lines=8` → `tail --lines=8` → `tail`
+ *   - `-n 8` / `--lines 8`（数值前是选项 flag）→ `head -n 8` → `head`
+ *  裸数字 token（`npx vitest run 2` 的 `2`）不简化——那可能是 vitest 过滤器、
+ *  分支名这类语义本身，引擎无法区分，宁可留给用户手动编辑。 */
+export function stripTrailingNumericArg(value: string): string | null {
+  const tokens = value.trim().split(/\s+/);
+  if (tokens.length < 2) return null;
+  const last = tokens[tokens.length - 1];
+  const prev = tokens[tokens.length - 2];
+  const prevIsFlag = /^--?[\w-]+$/.test(prev);
+  const lastIsFlagValue = /^-\d+$/.test(last) || /^(--?[\w-]+)=\d+$/.test(last);
+  const lastIsNumWithFlagPrev = /^\d+$/.test(last) && prevIsFlag;
+  if (!lastIsFlagValue && !lastIsNumWithFlagPrev) return null;
+  const cut = lastIsNumWithFlagPrev ? tokens.length - 2 : tokens.length - 1;
+  const prefix = tokens.slice(0, cut).join(" ");
+  return prefix.length > 0 ? prefix : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -403,10 +450,19 @@ function matcherDescription(matcher: PermissionMatcher): string {
   }
 }
 
-/** 供权限对话框「允许并记住」按钮旁的描述行：将记住到哪个作用域、记住什么。 */
+/** 供权限对话框「允许并记住」按钮旁的描述行：将记住到哪个作用域、记住什么。
+ *  多条规则（链式命令一次记住多段）逐条列出。 */
 export function describeRememberRule(
-  draft: PermissionRuleDraft,
+  drafts: readonly PermissionRuleDraft[],
   scope: PermissionScope,
 ): string {
-  return `将记住到${scopeWord(scope)}：${matcherDescription(draft.matcher)}时始终允许`;
+  if (drafts.length === 0) return "";
+  const head = `将记住到${scopeWord(scope)}`;
+  if (drafts.length === 1) {
+    return `${head}：${matcherDescription(drafts[0].matcher)}时始终允许`;
+  }
+  const items = drafts
+    .map((d, i) => `${i + 1}. ${matcherDescription(d.matcher)}时始终允许`)
+    .join("；");
+  return `${head}（${drafts.length} 条规则）：${items}`;
 }

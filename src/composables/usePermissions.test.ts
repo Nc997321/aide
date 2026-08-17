@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { listen } from "@tauri-apps/api/event";
 import { usePermissions } from "./usePermissions";
 import type {
   PermissionSettingsView,
 } from "../types/permissions";
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async () => () => {}),
+}));
 
 const SAMPLE_VIEW: PermissionSettingsView = {
   revision: 5,
@@ -205,5 +210,56 @@ describe("usePermissions", () => {
     expect(p.draft.scope).toBe("user");
     expect(p.draft.editingId).toBeNull();
     expect(p.draft.rule.effect).toBe("ask");
+  });
+});
+
+describe("usePermissions — 外部权限变更事件", () => {
+  /** 取 usePermissions 首次实例化时注册的 listen 回调（模块级单例只注册一次）。 */
+  function externalEvent(): (payload: number) => void {
+    const handler = vi.mocked(listen).mock.calls[0]?.[1] as
+      | ((e: { payload: number }) => void)
+      | undefined;
+    expect(handler).toBeTruthy();
+    return (payload) => handler!({ payload });
+  }
+
+  it("收到更大 revision 的广播时自动重拉并应用（如 ChatPanel 记住后）", async () => {
+    const api = mockApi();
+    const p = usePermissions(api);
+    await p.load(); // revision 5
+    expect(api.get).toHaveBeenCalledTimes(1);
+
+    const fire = externalEvent();
+    api.get.mockResolvedValueOnce(UPDATED_VIEW); // revision 6
+    fire(6);
+
+    await vi.waitFor(() => expect(p.revision.value).toBe(6));
+    expect(p.rules.value).toHaveLength(2);
+    expect(api.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("revision 不大于本地时跳过重拉（自己写入后的回环）", async () => {
+    const api = mockApi();
+    const p = usePermissions(api);
+    await p.load(); // revision 5
+
+    externalEvent()(5);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.get).toHaveBeenCalledTimes(1);
+    expect(p.revision.value).toBe(5);
+  });
+
+  it("外部事件重拉复用最近一次 load 的工作区", async () => {
+    const api = mockApi();
+    const p = usePermissions(api);
+    await p.load("C:/proj");
+
+    const fire = externalEvent();
+    api.get.mockResolvedValueOnce(UPDATED_VIEW);
+    fire(6);
+
+    await vi.waitFor(() => expect(p.revision.value).toBe(6));
+    expect(api.get).toHaveBeenLastCalledWith("C:/proj");
   });
 });

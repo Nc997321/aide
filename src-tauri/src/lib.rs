@@ -291,6 +291,7 @@ pub fn run() {
             commands::settings::get_pending_notification,
             commands::permissions::get_permission_settings,
             commands::permissions::create_permission_rule,
+            commands::permissions::create_permission_rules,
             commands::permissions::update_permission_rule,
             commands::permissions::delete_permission_rule,
             commands::permissions::explain_permission_decision,

@@ -58,10 +58,14 @@ describe("PermissionDialog — 允许并记住", () => {
     expect(events).toBeTruthy();
     expect(events![0][0]).toBe("p1");
     expect(events![0][1]).toBe(true);
-    const persist = events![0][4] as { scope: string; rule: { tool: string; matcher: unknown } };
+    const persist = events![0][4] as {
+      scope: string;
+      rules: { tool: string; matcher: unknown }[];
+    };
     expect(persist.scope).toBe("local");
-    expect(persist.rule.tool).toBe("Bash");
-    expect(persist.rule.matcher).toEqual({ kind: "bash", mode: "prefix", value: "ls -la" });
+    expect(persist.rules).toHaveLength(1);
+    expect(persist.rules[0].tool).toBe("Bash");
+    expect(persist.rules[0].matcher).toEqual({ kind: "bash", mode: "prefix", value: "ls -la" });
   });
 
   it("计划批准不显示记住按钮", () => {
@@ -72,6 +76,66 @@ describe("PermissionDialog — 允许并记住", () => {
       },
     });
     expect(wrapper.find('[data-action="remember"]').exists()).toBe(false);
+  });
+});
+
+describe("PermissionDialog — 允许并记住（多段 + 参数透明化）", () => {
+  const pipePermission = (): PermissionRequest => ({
+    id: "p4",
+    name: "Bash",
+    input: { command: "npx vitest run 2>&1 | tail -8" },
+  });
+
+  it("链式命令一次列出多条规则（每段一条）", () => {
+    const wrapper = mount(PermissionDialog, {
+      props: { permission: pipePermission(), rememberScope: "local" },
+    });
+    expect(wrapper.findAll(".perm-remember-rule")).toHaveLength(2); // npx vitest run + tail -8
+    expect(wrapper.find(".perm-remember-hint").text()).toContain("2 条规则");
+  });
+
+  it("编辑规则值后 emit 携带编辑后的值", async () => {
+    const wrapper = mount(PermissionDialog, {
+      props: { permission: bashPermission(), rememberScope: "local" },
+    });
+    await wrapper.find(".perm-remember-value").setValue("ls");
+    await wrapper.get('[data-action="remember"]').trigger("click");
+    const persist = wrapper.emitted("respond")![0][4] as {
+      rules: { matcher: { value: string } }[];
+    };
+    expect(persist.rules[0].matcher.value).toBe("ls");
+  });
+
+  it("末尾数字参数（tail -8 形态）提示并可一键改宽", async () => {
+    const wrapper = mount(PermissionDialog, {
+      props: { permission: pipePermission(), rememberScope: "local" },
+    });
+    expect(wrapper.find(".perm-remember-note").text()).toContain("仅匹配字面参数");
+    await wrapper.get(".perm-remember-simplify").trigger("click");
+    const values = wrapper.findAll(".perm-remember-value");
+    expect((values[1].element as HTMLInputElement).value).toBe("tail");
+  });
+
+  it("编辑成含控制符的值→行标红、按钮禁用", async () => {
+    const wrapper = mount(PermissionDialog, {
+      props: { permission: bashPermission(), rememberScope: "local" },
+    });
+    await wrapper.find(".perm-remember-value").setValue("ls; rm -rf /");
+    expect(wrapper.find(".perm-remember-error").exists()).toBe(true);
+    expect(
+      (wrapper.get('[data-action="remember"]').element as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it("非 Bash 规则（WebFetch）只读展示，无可编辑输入", () => {
+    const wrapper = mount(PermissionDialog, {
+      props: {
+        permission: { id: "p5", name: "WebFetch", input: { url: "https://x.com/p" } },
+        rememberScope: "local",
+      },
+    });
+    expect(wrapper.find(".perm-remember-static").exists()).toBe(true);
+    expect(wrapper.find(".perm-remember-value").exists()).toBe(false);
   });
 });
 

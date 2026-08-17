@@ -117,10 +117,15 @@ export function commandStartsWithBoundary(command: string, value: string): boole
  *    must never inherit per-segment allows,
  *  - an empty interior segment (`cmd | | grep`), unbalanced quotes.
  *
- * Harmless redirections are stripped in place before a segment is returned:
- * fd duplication (`2>&1`, `>&2`, `2>&-`) and discards to /dev/null
- * (`2>/dev/null`, `>&/dev/null`, `&>/dev/null`). A single trailing separator
- * (`cmd &&`, `cmd;`) is tolerated — it launches no extra command.
+ * Harmless redirect OPERATORS are stripped in place before a segment is
+ * returned: fd duplication (`2>&1`, `>&2`, `2>&-`) and discards to /dev/null
+ * (`2>/dev/null`, `>&/dev/null`, `&>/dev/null`). The IO_NUMBER fd stays in the
+ * segment — `cmd 2>&1` yields `cmd 2`, NOT `cmd` — so a literal rule `cmd 2`
+ * (a remembered or hand-written prefix ending in that very `2`) still matches
+ * the redirect variant; the `2` is indistinguishable from an argument at rule
+ * level, and keeping it in the segment is what makes remembered rules hit.
+ * A single trailing separator (`cmd &&`, `cmd;`) is tolerated — it launches no
+ * extra command.
  *
  * Security argument: each returned segment is a standalone simple command
  * judged by the ordinary prefix-boundary matcher, so the chained execution set
@@ -155,14 +160,6 @@ export function splitBashSegments(command: string): string[] | null {
       i++;
     }
     return t.length > 0 ? t : null;
-  };
-
-  /** Drop a standalone digit run at the end of `current` — an IO_NUMBER fd
-   * belonging to the redirect operator, not part of the command words.
-   * `echo foo2>file` keeps `foo2` (digits glued to a word are an argument). */
-  const stripTrailingFd = (): void => {
-    const m = /(?:^|[ \t])(\d+)$/.exec(current);
-    if (m) current = current.slice(0, current.length - m[1].length);
   };
 
   while (i < chars.length) {
@@ -230,7 +227,6 @@ export function splitBashSegments(command: string): string[] | null {
       continue;
     }
     if (c === ">" || c === "<") {
-      stripTrailingFd();
       const op = c;
       i++;
       if (op === ">" && chars[i] === ">") {

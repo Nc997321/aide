@@ -567,18 +567,23 @@ watch(
  *  避免重复点击堆积重复规则。落盘失败仍放行本次（不阻塞用户），仅提示。
  *  落盘用 rememberWsRoot 显式钉住弹窗所属会话的工作区（弹窗挂起期间切工作区时，
  *  缺省按当前活动工作区解析会把规则写进新工作区）。 */
-async function persistRememberRule(scope: PermissionScope, rule: PermissionRuleDraft): Promise<void> {
+async function persistRememberRule(
+  scope: PermissionScope,
+  rules: PermissionRuleDraft[],
+): Promise<void> {
   const scopeWord = scope === "local" ? "本项目本地" : scope === "user" ? "用户全局" : scope;
   try {
     const view = rememberView.value ?? (await permissionsApi.get(rememberWsRoot.value ?? undefined));
     const key = (r: { effect: string; tool: string; matcher: unknown }) =>
       `${r.effect}|${r.tool}|${JSON.stringify(r.matcher)}`;
-    const draftKey = key({ effect: "allow", tool: rule.tool, matcher: rule.matcher });
-    const exists = view.rules.some(
-      (r) => r.scope === scope && r.effect === "allow" && key(r) === draftKey,
-    );
-    if (!exists) {
-      await permissionsApi.create(scope, rule, rememberWsRoot.value ?? undefined);
+    const fresh = rules.filter((rule) => {
+      const draftKey = key({ effect: "allow", tool: rule.tool, matcher: rule.matcher });
+      return !view.rules.some(
+        (r) => r.scope === scope && r.effect === "allow" && key(r) === draftKey,
+      );
+    });
+    if (fresh.length > 0) {
+      await permissionsApi.createMany(scope, fresh, rememberWsRoot.value ?? undefined);
     }
     showToast(`已记住到${scopeWord}，下次自动放行`, "success");
   } catch (e) {
@@ -593,7 +598,7 @@ async function onPermissionRespond(
   approved: boolean,
   answers?: Record<string, string>,
   nextMode?: string,
-  persistRule?: { scope: PermissionScope; rule: PermissionRuleDraft },
+  persistRule?: { scope: PermissionScope; rules: PermissionRuleDraft[] },
 ) {
   // 发送前确认：approved→清输入并发送 + 推进 lastUsed 基线；取消→保留输入（回退对话框）。
   // 匹配 id 用 sc.request.id（即 PermissionDialog respond 回传的 permission.id）。
@@ -611,7 +616,7 @@ async function onPermissionRespond(
   }
   if (nextMode) selectedPermissionMode.value = nextMode;
   if (approved && persistRule) {
-    await persistRememberRule(persistRule.scope, persistRule.rule);
+    await persistRememberRule(persistRule.scope, persistRule.rules);
   }
   emit("respond-permission", id, approved, answers, nextMode);
 }

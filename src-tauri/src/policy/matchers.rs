@@ -146,10 +146,15 @@ pub fn has_unquoted_shell_control(command: &str) -> bool {
 ///    must never inherit per-segment allows,
 ///  - an empty interior segment (`cmd | | grep`), unbalanced quotes.
 ///
-/// Harmless redirections are stripped in place before a segment is returned:
-/// fd duplication (`2>&1`, `>&2`, `2>&-`) and discards to /dev/null
-/// (`2>/dev/null`, `>&/dev/null`, `&>/dev/null`). A single trailing separator
-/// (`cmd &&`, `cmd;`) is tolerated — it launches no extra command.
+/// Harmless redirect OPERATORS are stripped in place before a segment is
+/// returned: fd duplication (`2>&1`, `>&2`, `2>&-`) and discards to /dev/null
+/// (`2>/dev/null`, `>&/dev/null`, `&>/dev/null`). The IO_NUMBER fd stays in
+/// the segment — `cmd 2>&1` yields `cmd 2`, NOT `cmd` — so a literal rule
+/// `cmd 2` (a remembered or hand-written prefix ending in that very `2`) still
+/// matches the redirect variant; the `2` is indistinguishable from an argument
+/// at rule level, and keeping it in the segment is what makes remembered rules
+/// hit. A single trailing separator (`cmd &&`, `cmd;`) is tolerated — it
+/// launches no extra command.
 ///
 /// Security argument: each returned segment is a standalone simple command
 /// judged by the ordinary prefix-boundary matcher, so the chained execution set
@@ -249,7 +254,6 @@ pub fn split_bash_segments(command: &str) -> Option<Vec<String>> {
             continue;
         }
         if c == '>' || c == '<' {
-            strip_trailing_fd(&mut current);
             let op = c;
             i += 1;
             if op == '>' && chars.get(i) == Some(&'>') {
@@ -331,22 +335,6 @@ fn read_redirect_target(chars: &[char], i: &mut usize) -> Option<String> {
         None
     } else {
         Some(t)
-    }
-}
-
-/// Drop a standalone digit run at the end of `current` — an IO_NUMBER fd
-/// belonging to the redirect operator, not part of the command words.
-/// `echo foo2>file` keeps `foo2` (digits glued to a word are an argument).
-fn strip_trailing_fd(current: &mut String) {
-    let bytes = current.as_bytes();
-    let mut j = bytes.len();
-    while j > 0 && bytes[j - 1].is_ascii_digit() {
-        j -= 1;
-    }
-    // Digits only went past when they form their own token (preceded by
-    // whitespace or string start) — otherwise they belong to the word.
-    if j < bytes.len() && (j == 0 || bytes[j - 1] == b' ' || bytes[j - 1] == b'\t') {
-        current.truncate(j);
     }
 }
 
@@ -537,15 +525,17 @@ mod tests {
 
     #[test]
     fn segments_strip_harmless_redirects() {
-        // fd duplication and /dev/null discards vanish from the segment
+        // The redirect OPERATOR vanishes, but the IO_NUMBER fd stays in the
+        // segment — a literal rule `cmd 2` must still match `cmd 2>&1`.
         assert_eq!(
             split_bash_segments("cargo test --lib 2>&1"),
-            Some(vec!["cargo test --lib".to_string()])
+            Some(vec!["cargo test --lib 2".to_string()])
         );
         assert_eq!(
             split_bash_segments("ls /tmp 2>/dev/null"),
-            Some(vec!["ls /tmp".to_string()])
+            Some(vec!["ls /tmp 2".to_string()])
         );
+        // No leading IO_NUMBER — nothing to keep.
         assert_eq!(
             split_bash_segments("cmd >&2"),
             Some(vec!["cmd".to_string()])
@@ -556,7 +546,7 @@ mod tests {
         );
         assert_eq!(
             split_bash_segments("cmd 2>&1 | tail -1"),
-            Some(vec!["cmd".to_string(), "tail -1".to_string()])
+            Some(vec!["cmd 2".to_string(), "tail -1".to_string()])
         );
         // digits glued to a word are an argument, not an fd
         assert_eq!(

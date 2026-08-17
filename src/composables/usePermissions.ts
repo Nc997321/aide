@@ -1,4 +1,5 @@
 import { reactive, ref, readonly } from "vue";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { permissionsApi as defaultApi } from "../api/permissions";
 import type {
   PermissionScope,
@@ -24,8 +25,28 @@ function emptyDraft(scope: PermissionScope): PermissionDraft {
   };
 }
 
+// 模块级全局 listener 单例：Rust 侧每次权限写成功广播 `permissions-changed`
+//（带新 revision）。面板 v-show 常驻挂载、只在挂载/切工作区时 load，外部入口
+//（如 ChatPanel 的「允许并记住」createMany）写入后靠这个事件触发重拉。
+// revision 比较跳过自己写入后的回环（applyView 已更新，payload 不大于本地）。
+type ExternalRefetcher = { refetch: (revision: number) => void };
+let extRefetcher: ExternalRefetcher | null = null;
+let extListenerPromise: Promise<UnlistenFn> | null = null;
+
+function ensureExternalListener(): void {
+  if (extListenerPromise) return;
+  extListenerPromise = listen<number>("permissions-changed", (e) => {
+    extRefetcher?.refetch(e.payload);
+  }).catch(() => {
+    extListenerPromise = null; // 注册失败（如测试环境无 Tauri）可重试
+    return (() => {}) as UnlistenFn;
+  });
+}
+
 export function usePermissions(api = defaultApi) {
   const rules = ref<PermissionRule[]>([]);
+  /** 最近一次 load 的工作区——外部变更事件重拉时复用（不依赖调用方再传参）。 */
+  let currentProject: string | undefined;
   const revision = ref(0);
   const scopes = ref<ScopeAvailability[]>([]);
   const lastSavedRevision = ref(0);
@@ -58,9 +79,10 @@ export function usePermissions(api = defaultApi) {
   }
 
   async function load(project?: string): Promise<void> {
+    currentProject = project ?? currentProject;
     error.value = null;
     try {
-      const view = await api.get(project);
+      const view = await api.get(project ?? currentProject);
       applyView(view);
       lastSavedRevision.value = view.revision;
     } catch (e) {
@@ -128,6 +150,19 @@ export function usePermissions(api = defaultApi) {
       throw e;
     }
   }
+
+  // 注册为外部变更的刷新目标（单面板场景只有一个实例，后注册覆盖先注册无害）。
+  extRefetcher = {
+    // 参数名避开 `revision`——遮蔽实例 ref 后 `revision.value` 会读到 undefined。
+    refetch: (payload) => {
+      if (payload > revision.value) {
+        void load().catch(() => {
+          /* 刷新失败静默：下一次事件/操作会再触发 */
+        });
+      }
+    },
+  };
+  ensureExternalListener();
 
   return {
     /** Reactive state */

@@ -26,6 +26,19 @@ export const permissionsApi = {
       : invoke("create_permission_rule", { scope, rule });
   },
 
+  /** 批量创建（链式命令一次记住多段时一次原子写入 + 一次广播，而非 N 次单条
+   *  写入产生 N 次快照广播）。 */
+  createMany(
+    scope: PermissionScope,
+    rules: PermissionRuleDraft[],
+    project?: string,
+    invoke = tauriInvoke,
+  ): Promise<PermissionSettingsView> {
+    return project
+      ? invoke("create_permission_rules", { scope, rules, project })
+      : invoke("create_permission_rules", { scope, rules });
+  },
+
   update(
     scope: PermissionScope,
     id: string,
