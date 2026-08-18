@@ -4,18 +4,20 @@ pub mod walk;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use crate::codegraph::edges::EdgeTable;
 use crate::codegraph::embed::Embedder;
 use crate::codegraph::meta::{now_epoch, Meta, META_VERSION};
 use crate::codegraph::parser::ParserManager;
 use crate::codegraph::shard::CodeShard;
+use crate::codegraph::state::ProjectIndex;
 use crate::codegraph::symbols::SymbolTable;
 use crate::codegraph::types::IndexedPoint;
 
 use extract::extract_symbols;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// 可索引源文件数上限（walk 之后、parse 之前检查）。超过即拒建——防止把
 /// 超大目录（家目录、磁盘根、误挂的依赖树）当项目索引。实测家目录 walk 出
@@ -390,6 +392,45 @@ pub fn load_compatible_index(
         return None;
     }
     Some((table, edges, Arc::new(shard), meta))
+}
+
+/// On-demand load of an on-disk index for an agent query (find_symbol /
+/// call_graph / semantic_search) when the live `CodeGraphState.inner` singleton
+/// holds a different project's index — i.e. the sidecar's session cwd (the
+/// query root) ≠ the active workspace whose index the frontend `ensureIndex`
+/// keeps warm in the singleton.
+///
+/// Unlike `load_project_index` (which calls `is_stale` and walks the whole
+/// source tree), this does NOT walk/extract/embed: it reuses the pure-load
+/// `load_compatible_index` and only assembles a `ProjectIndex` for the query.
+/// Agent queries tolerate a slightly stale symbol set; the frontend's
+/// `ensureIndex` / per-turn rescan keeps the on-disk index fresh for the active
+/// workspace, and other roots' indexes are simply read as last-built.
+///
+/// `embed_ready` is set `true` up front: `load_compatible_index` already gates
+/// on `meta.embed_complete == true` and `shard_point_count_broken` (sufficient
+/// vectors), so any shard that survives the load is fully embedded — no
+/// re-embedder is needed on the query path.
+///
+/// `expect_model` / `expect_dim` come from the cached embedder identity
+/// (`CodeGraphState.embedder_model`). When the embedder hasn't been initialized
+/// (app restart before any build), the caller returns `wrong_project` rather
+/// than calling this — it lets the frontend `ensureIndex` build + initialize.
+pub fn load_index_for_query(
+    project_root: &Path,
+    expect_model: &str,
+    expect_dim: usize,
+) -> Option<ProjectIndex> {
+    let (symbols, edges, shard, _meta) =
+        load_compatible_index(project_root, expect_model, expect_dim)?;
+    Some(ProjectIndex {
+        project_root: project_root.to_path_buf(),
+        symbols,
+        edges,
+        shard,
+        indexed_at: SystemTime::now(),
+        embed_ready: Arc::new(AtomicBool::new(true)),
+    })
 }
 
 /// Load the base for an EMBED RESUME: the on-disk meta matches the configured

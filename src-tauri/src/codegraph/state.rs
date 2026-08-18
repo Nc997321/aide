@@ -65,6 +65,16 @@ pub struct CodeGraphState {
     /// 取消正在跑的 embed（close/切项目时置 true，embed 循环下一批 check 后 break）。
     /// 避免孤儿 embed 继续浪费 CPU 写一个已被 take 走的 shard。
     pub(crate) build_cancel: AtomicBool,
+    /// Agent 按需加载的临时索引单 slot 缓存：`execute_agent_query` 在 `inner`
+    /// 单例 root ≠ query root（会话 cwd）时，按 query root 的 `<root>/.aide/index/`
+    /// 自动 load 一份临时 `ProjectIndex` 供本次查询。**独立于 `inner`**——不参与
+    /// build/close，不被前端 `ensureIndex` 触碰，单例仍由前端激活工作区管理。
+    /// 单 root 连续多查命中缓存省一次 disk load；多 root 交替覆盖 slot 只是重
+    /// load（不抖动 `inner`、不污染前端 goto 等单例消费者——这是 A2 相对「写
+    /// 单例」方案的核心优势）。覆盖旧 slot 时旧 `Arc<ProjectIndex>` 的
+    /// `CodeShard` drop 可能因 flush IO panic，须在锁外用
+    /// `guard::drop_catching_panics` 释放（见 `commands.rs` close 路径）。
+    pub(crate) query_cache: Mutex<Option<(PathBuf, Arc<ProjectIndex>)>>,
 }
 
 impl CodeGraphState {
@@ -79,6 +89,7 @@ impl CodeGraphState {
             build_total: AtomicUsize::new(0),
             build_current: Mutex::new(String::new()),
             build_cancel: AtomicBool::new(false),
+            query_cache: Mutex::new(None),
         }
     }
 }
