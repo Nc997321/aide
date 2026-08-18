@@ -20,11 +20,12 @@
     "image-size": "^2.0.2",
     "jszip": "^3.10.1",
     "marked": "^18.0.9",
+    "pdfjs-dist": "^6.2.108",
     "undici": "^8.5.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^18.19.130",
+    "@types/node": "^20.19.0",
     "esbuild": "^0.25.0",
     "jszip": "^3.10.1",
     "tsx": "^4.0.0",
