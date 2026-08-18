@@ -7,7 +7,7 @@ import { z } from "zod";
 import { existsSync } from "node:fs";
 // 直接用生产门面导出的 instructions 常量，确保冒烟用的就是注入模型的那一份（防文案漂移）。
 import { CODEGRAPH_INSTRUCTIONS } from "./src/codegraphTools.js";
-import { DOCX_INSTRUCTIONS } from "./src/docxTools.js";
+import { DOCS_INSTRUCTIONS } from "./src/docsMcp.js";
 
 // dev 默认用 SDK 平台包里的 claude.exe，免设 AIDE_CLAUDE_EXE。
 const DEFAULT_CLAUDE_EXE =
@@ -34,7 +34,7 @@ const codegraphServer = createSdkMcpServer({
 const docxServer = createSdkMcpServer({
   name: "aide-docs",
   version: "1.0.0",
-  instructions: DOCX_INSTRUCTIONS,
+  instructions: DOCS_INSTRUCTIONS,
   tools: [
     tool(
       "read_docx",
@@ -45,6 +45,23 @@ const docxServer = createSdkMcpServer({
           {
             type: "text" as const,
             text: `# MOCK ${String((args as any).file_path)}\n\n## 虫情数据 API\n\n这是 mock docx 内容，read_docx 已被调用。`,
+          },
+        ],
+      }),
+    ),
+    tool(
+      "read_pdf",
+      "Read a .pdf file and return its content as markdown — text extracted per page (## Page N), layout reconstructed from coordinates. Images are counted but not extracted. Use this INSTEAD OF Read (binary garbage) or Bash+pdftotext (often not installed). For long documents, call with mode: \"structure\" first, then read specific pages with pages.",
+      {
+        file_path: z.string().describe("Path to the .pdf file"),
+        pages: z.string().optional().describe('Page range: "3", "1-5", or "1,3,5-7"'),
+        mode: z.enum(["markdown", "structure"]).optional().describe("Output mode"),
+      },
+      async (args) => ({
+        content: [
+          {
+            type: "text" as const,
+            text: `# MOCK ${String((args as any).file_path)}\n\n## Page 1\n\n这是 mock pdf 内容，read_pdf 已被调用。`,
           },
         ],
       }),
@@ -129,7 +146,7 @@ const docxTools = await runQuery(
   "docs",
 );
 if (!docxTools.some((n) => n.includes("read_docx"))) {
-  console.error("\nFAIL: model did not call read_docx — DOCX_INSTRUCTIONS may be ineffective");
+  console.error("\nFAIL: model did not call read_docx — DOCS_INSTRUCTIONS may be ineffective");
   process.exit(1);
 }
 console.log("\nPASS: read_docx was called");
@@ -143,7 +160,21 @@ const docxGenTools = await runQuery(
   "docs",
 );
 if (!docxGenTools.some((n) => n.includes("write_docx"))) {
-  console.error("\nFAIL: model did not call write_docx — DOCX_INSTRUCTIONS may be ineffective");
+  console.error("\nFAIL: model did not call write_docx — DOCS_INSTRUCTIONS may be ineffective");
   process.exit(1);
 }
 console.log("\nPASS: write_docx was called");
+
+// 4) read_pdf 冒烟——验证 instructions 让模型采纳 read_pdf（同一 server，同一 instructions 块）
+const pdfTools = await runQuery(
+  "pdf",
+  "Read the file /tmp/example.pdf and summarize its content in one line.",
+  { "aide-docs": docxServer },
+  ["mcp__aide-docs"],
+  "docs",
+);
+if (!pdfTools.some((n) => n.includes("read_pdf"))) {
+  console.error("\nFAIL: model did not call read_pdf — DOCS_INSTRUCTIONS may be ineffective");
+  process.exit(1);
+}
+console.log("\nPASS: read_pdf was called");

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { docsMcpRegistration } from "./docsMcp.js";
 import {
-  docxMcpRegistration,
   formatDocxResult,
   formatDocxGenResult,
   DOCX_ALLOW_RULE,
@@ -128,11 +128,11 @@ describe("formatDocxGenResult", () => {
   });
 });
 
-describe("docxMcpRegistration", () => {
+describe("docsMcpRegistration", () => {
   it("returns server spec by default, null when AIDE_DOCX_TOOLS=off or untrusted", () => {
-    expect(docxMcpRegistration("/proj")).not.toBeNull();
-    expect(docxMcpRegistration("/proj", { AIDE_DOCX_TOOLS: "off" } as NodeJS.ProcessEnv)).toBeNull();
-    expect(docxMcpRegistration("/proj", process.env, false)).toBeNull();
+    expect(docsMcpRegistration("/proj")).not.toBeNull();
+    expect(docsMcpRegistration("/proj", { AIDE_DOCX_TOOLS: "off" } as NodeJS.ProcessEnv)).toBeNull();
+    expect(docsMcpRegistration("/proj", process.env, false)).toBeNull();
   });
 
   it("allow rule matches the MCP server name prefix", () => {
@@ -140,12 +140,12 @@ describe("docxMcpRegistration", () => {
   });
 
   it("spec contains the aide-docs server", () => {
-    const spec = docxMcpRegistration("/proj");
+    const spec = docsMcpRegistration("/proj");
     expect(spec!["aide-docs"]).toBeDefined();
   });
 
   it("tool descriptions steer the agent to read_docx (snapshot)", () => {
-    const spec = docxMcpRegistration("/proj");
+    const spec = docsMcpRegistration("/proj");
     // SDK server 实例内含 zod v4 schema（内部 root 自引用），直接 JSON.stringify 会抛
     // circular structure —— 用 WeakSet replacer 去环，工具描述仍在序列化结果里。
     const seen = new WeakSet();
@@ -160,7 +160,7 @@ describe("docxMcpRegistration", () => {
   });
 
   it("server carries MCP instructions steering the model to read_docx (必需品)", () => {
-    const spec = docxMcpRegistration("/proj");
+    const spec = docsMcpRegistration("/proj");
     const seen = new WeakSet();
     const json = JSON.stringify(spec, (_key, value) => {
       if (typeof value === "object" && value !== null) {
@@ -172,6 +172,7 @@ describe("docxMcpRegistration", () => {
     // instructions 缺失时模型会无视工具（codegraph 2026-07-26 冒烟实锤），此处防回归。
     expect(json).toContain("MUST call mcp__aide-docs__read_docx");
     expect(json).toContain("MUST call mcp__aide-docs__write_docx");
-    expect(json).toContain("does NOT handle legacy .doc");
+    expect(json).toContain("MUST call mcp__aide-docs__read_pdf");
+    expect(json).toContain("Does NOT handle legacy .doc");
   });
 });

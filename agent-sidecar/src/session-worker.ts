@@ -15,7 +15,7 @@ import { applyEffortSwitch, normalizeEffort } from "./effortSwitch.js";
 import type { EffortSettable } from "./effortSwitch.js";
 import { cliSubagentModelEnvValue } from "./subagentModelDefault.js";
 import { codegraphMcpRegistration, CODEGRAPH_ALLOW_RULE } from "./codegraphTools.js";
-import { docxMcpRegistration, DOCX_ALLOW_RULE } from "./docxTools.js";
+import { docsMcpRegistration, DOCS_ALLOW_RULE } from "./docsMcp.js";
 import { buildBuiltinHooks } from "./builtinHooks/index.js";
 import { loadUserMcpServers, loadUserHooks, assembleMcpServers, assembleHooks } from "./userExtensions.js";
 import { cancelAllCodegraphQueries } from "./codegraphClient.js";
@@ -907,12 +907,12 @@ export class SessionWorker {
           const codegraphMcp = this.taskTools
             ? null
             : codegraphMcpRegistration(effectiveCwd, (e) => this.emit(e), process.env, trusted);
-          // docx 阅读工具:注册条件与 codegraph 完全相同(任务支线跳过、!trusted 跳过、
-          // AIDE_DOCX_TOOLS=off 跳过)。无 emit 参数——docx 一次性同步解析,不像 codegraph
-          // 要 IPC 客户端(emit+request_id+超时那套不适用)。详见 docxTools.ts。
-          const docxMcp = this.taskTools
+          // 文档工具(docx + pdf):注册条件与 codegraph 完全相同(任务支线跳过、!trusted 跳过、
+          // AIDE_DOCX_TOOLS=off 跳过)。无 emit 参数——docx/pdf 一次性同步解析,不像 codegraph
+          // 要 IPC 客户端(emit+request_id+超时那套不适用)。详见 docsMcp.ts。
+          const docsMcp = this.taskTools
             ? null
-            : docxMcpRegistration(effectiveCwd, process.env, trusted);
+            : docsMcpRegistration(effectiveCwd, process.env, trusted);
 
           if (this.resumeSource && this.shouldForkNextConnect && !this.btwMode) {
             this.pendingFork = true;
@@ -957,7 +957,7 @@ export class SessionWorker {
               },
               // allowedTools 统一:问答支线(轻量/完整)与主会话同形,保持前缀一致;
               // btw 任务支线由 btwQueryOverrides 在后方覆盖成白名单。
-              allowedTools: ["Agent", "Task", CODEGRAPH_ALLOW_RULE, DOCX_ALLOW_RULE],
+              allowedTools: ["Agent", "Task", CODEGRAPH_ALLOW_RULE, DOCS_ALLOW_RULE],
               // btw 任务支线:skills/plugins 全关——全新会话没有缓存可吃,
               // 前缀最小化(skill 清单/plugin 自带 MCP 工具都不进上下文)。
               // 轻量 btw 保持 "all"/全量:与主会话前缀对齐吃 prompt cache。
@@ -966,7 +966,7 @@ export class SessionWorker {
                 ? []
                 : [...buildPluginsOption(), ...buildDispatchPluginsOption(effectiveCwd, trusted, this.lightweightMode)],
               hooks: assembleHooks(builtinHooks, userHooks),
-              mcpServers: assembleMcpServers({ ...(codegraphMcp ?? {}), ...(docxMcp ?? {}) }, userMcp),
+              mcpServers: assembleMcpServers({ ...(codegraphMcp ?? {}), ...(docsMcp ?? {}) }, userMcp),
               // 主会话开 partial：让 thinking_delta 逐字流式（mapper 只放 thinking_delta，
               // text 仍走整块，避开历史 partial 卡死坑，见 2026-08-07-thinking-streaming-design）。
               // btw 轻量支线保持 partial=off（mapper 的子代理隔离守卫也对 btw 生效）。
