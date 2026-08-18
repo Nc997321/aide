@@ -36,12 +36,38 @@ describe("PermissionManager — AskUserQuestion answers 重组", () => {
     expect(result).toEqual({ behavior: "allow", updatedInput: input });
   });
 
-  it("denying AskUserQuestion returns deny, ignoring any stray answers", async () => {
+  it("denying AskUserQuestion returns deny with the default message, ignoring any stray answers", async () => {
     const events: ChatEvent[] = [];
     const mgr = new PermissionManager();
     const callback = mgr.makeCallback((e) => events.push(e));
 
     const resultPromise = callback("AskUserQuestion", { questions: [] }, {});
+    const id = (events[0] as any).id;
+    mgr.resolve(id, false);
+
+    const result = await resultPromise;
+    expect(result).toEqual({ behavior: "deny", message: "用户拒绝" });
+  });
+
+  it("deny with a user reason surfaces the reason as the SDK deny message", async () => {
+    const events: ChatEvent[] = [];
+    const mgr = new PermissionManager();
+    const callback = mgr.makeCallback((e) => events.push(e));
+
+    const resultPromise = callback("Bash", { command: "rm -rf /tmp/cache" }, {});
+    const id = (events[0] as any).id;
+    mgr.resolve(id, false, undefined, "别删目录，改成只清空里层的 .tmp 文件");
+
+    const result = await resultPromise;
+    expect(result).toEqual({ behavior: "deny", message: "别删目录，改成只清空里层的 .tmp 文件" });
+  });
+
+  it("deny without a reason still falls back to the default 用户拒绝 message", async () => {
+    const events: ChatEvent[] = [];
+    const mgr = new PermissionManager();
+    const callback = mgr.makeCallback((e) => events.push(e));
+
+    const resultPromise = callback("Bash", { command: "ls" }, {});
     const id = (events[0] as any).id;
     mgr.resolve(id, false);
 

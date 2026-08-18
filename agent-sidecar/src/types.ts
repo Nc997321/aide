@@ -250,7 +250,7 @@ export type SidecarCommand =
       permission_policy?: PermissionPolicySnapshot;
     }
   | { cmd: "update_permission_policy"; session_id: string; policy: PermissionPolicySnapshot }
-  | { cmd: "permission_response"; session_id: string; id: string; approved: boolean; answers?: Record<string, string>; nextMode?: string }
+  | { cmd: "permission_response"; session_id: string; id: string; approved: boolean; answers?: Record<string, string>; nextMode?: string; message?: string }
   | { cmd: "interrupt"; session_id: string }
   // 终止一个后台任务（provider-agnostic：任何 provider 的"停掉后台命令"都映射成它）。
   // 成功后任务会走正常终态通道（bg_task_ended, status:"stopped"），不需要额外回执事件。

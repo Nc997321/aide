@@ -1253,12 +1253,15 @@ export function useChatSession(sessionId: Ref<string | null>) {
   }
 
   /** answers：仅 AskUserQuestion 场景（问题文本 → 选中答案的不透明映射），
-   *  由 PermissionDialog.vue 收集，这里只透传，语义由 sidecar 解释。 */
+   *  由 PermissionDialog.vue 收集，这里只透传，语义由 sidecar 解释。
+   *  reason：拒绝理由（仅 approved=false 时用户输入），Rust 参数名 message
+   *  （serde 自动 camelCase 映射），sidecar 透传给 SDK 的 deny message。 */
   async function respondPermission(
     id: string,
     approved: boolean,
     answers?: Record<string, string>,
     nextMode?: string,
+    reason?: string,
   ) {
     const sid = sessionId.value;
     if (!sid) return;
@@ -1270,7 +1273,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       setSessionState(sid, "running");
       armStalled(sid); // 权限批准后恢复生成 → 重启软超时计时
     }
-    await invoke("permission_response", { sessionId: sid, id, approved, answers, nextMode });
+    await invoke("permission_response", { sessionId: sid, id, approved, answers, nextMode, message: reason });
   }
 
   async function interrupt() {

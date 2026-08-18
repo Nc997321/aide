@@ -191,7 +191,7 @@ function onPickWorkspace(ws: WorkspaceInfo) {
       @set-model="setModel"
       @set-effort="setEffort"
       @set-permission-mode="setPermissionMode"
-      @respond-permission="(id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string) => respondPermission(id, approved, answers, nextMode)"
+      @respond-permission="(id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string, reason?: string) => respondPermission(id, approved, answers, nextMode, reason)"
     />
   </div>
 </template>

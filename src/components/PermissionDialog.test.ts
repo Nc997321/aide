@@ -28,10 +28,53 @@ describe("PermissionDialog — ordinary tool confirmation", () => {
     expect(events![0]).toEqual(["p1", true]);
   });
 
-  it("emits respond(approved=false) when deny is clicked", async () => {
+  it("deny click opens the reason input instead of responding immediately", async () => {
     const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
     await wrapper.get('[data-action="deny"]').trigger("click");
-    expect(wrapper.emitted("respond")![0]).toEqual(["p1", false]);
+    expect(wrapper.emitted("respond")).toBeUndefined(); // 尚未拒绝
+    expect(wrapper.find('[data-action="deny-reason"]').exists()).toBe(true); // 输入区展开
+    expect(wrapper.find('[data-action="deny-submit"]').exists()).toBe(true);
+    expect(wrapper.find('[data-action="deny-back"]').exists()).toBe(true);
+  });
+
+  it("submitting with a reason emits respond with reason at the end", async () => {
+    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+    await wrapper.get('[data-action="deny"]').trigger("click");
+    await wrapper.get('[data-action="deny-reason"]').setValue("别删目录，改成移动");
+    await wrapper.get('[data-action="deny-submit"]').trigger("click");
+    expect(wrapper.emitted("respond")![0]).toEqual(["p1", false, undefined, undefined, undefined, "别删目录，改成移动"]);
+  });
+
+  it("submitting with an empty reason is a plain deny (reason undefined)", async () => {
+    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+    await wrapper.get('[data-action="deny"]').trigger("click");
+    await wrapper.get('[data-action="deny-submit"]').trigger("click");
+    expect(wrapper.emitted("respond")![0]).toEqual(["p1", false, undefined, undefined, undefined, undefined]);
+  });
+
+  it("Enter in the reason input submits the deny", async () => {
+    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+    await wrapper.get('[data-action="deny"]').trigger("click");
+    await wrapper.get('[data-action="deny-reason"]').setValue("改用相对路径");
+    await wrapper.get('[data-action="deny-reason"]').trigger("keydown.enter");
+    expect(wrapper.emitted("respond")![0]).toEqual(["p1", false, undefined, undefined, undefined, "改用相对路径"]);
+  });
+
+  it("back restores the button row without responding", async () => {
+    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+    await wrapper.get('[data-action="deny"]').trigger("click");
+    await wrapper.get('[data-action="deny-reason"]').setValue("放弃理由");
+    await wrapper.get('[data-action="deny-back"]').trigger("click");
+    expect(wrapper.emitted("respond")).toBeUndefined();
+    expect(wrapper.find('[data-action="deny"]').exists()).toBe(true); // 恢复按钮行
+  });
+
+  it("a new request resets the deny input state", async () => {
+    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+    await wrapper.get('[data-action="deny"]').trigger("click");
+    await wrapper.get('[data-action="deny-reason"]').setValue("旧理由");
+    await wrapper.setProps({ permission: { id: "p2", name: "Bash", input: { command: "ls" } } });
+    expect(wrapper.find('[data-action="deny-reason"]').exists()).toBe(false); // 复位到按钮态
   });
 });
 
@@ -272,5 +315,23 @@ describe("PermissionDialog — 折叠（计划批准 / 澄清提问）", () => {
     // 正文 display:none ⇒ 其内操作按钮一并不可见
     expect(bodyDisplay(wrapper)).toBe("none");
     expect((actionsEl().closest(".perm-body") as HTMLElement | null)?.style.display).toBe("none");
+  });
+
+  it("计划批准「继续修改计划」同样支持拒绝理由", async () => {
+    const wrapper = mount(PermissionDialog, { props: { permission: planPermission() } });
+    await wrapper.get('[data-action="deny"]').trigger("click");
+    expect(wrapper.find('[data-action="deny-reason"]').exists()).toBe(true);
+    await wrapper.get('[data-action="deny-reason"]').setValue("不要动 X，只做 Y");
+    await wrapper.get('[data-action="deny-submit"]').trigger("click");
+    expect(wrapper.emitted("respond")![0]).toEqual(["pp1", false, undefined, undefined, undefined, "不要动 X，只做 Y"]);
+  });
+
+  it("澄清提问「跳过」不支持理由输入（保持原样）", () => {
+    const wrapper = mount(PermissionDialog, { props: { permission: questionPermission() } });
+    // question 的拒绝按钮是「跳过」，点了直接 respond，不展开理由输入
+    expect(wrapper.find('[data-action="deny"]').exists()).toBe(false);
+    expect(wrapper.find('[data-action="deny-reason"]').exists()).toBe(false);
+    const skip = [...wrapper.findAll("button")].find((b) => b.text().includes("跳过"));
+    expect(skip).toBeTruthy();
   });
 });

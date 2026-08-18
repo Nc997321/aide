@@ -478,7 +478,9 @@ export class SessionWorker {
               permissionDecision: answer.approved ? ("allow" as const) : ("deny" as const),
               permissionDecisionReason: answer.approved
                 ? "Aide policy requires confirmation"
-                : "User denied Aide policy confirmation",
+                // 用户拒绝附理由：理由作为 hook 原因反馈给模型，模型按理由直接调整，
+                // 不用再停下追问一轮。无理由时保持旧缺省文案。
+                : (answer.message ?? "User denied Aide policy confirmation"),
               ...(answer.updatedInput ? { updatedInput: answer.updatedInput } : {}),
             },
           };
@@ -706,7 +708,7 @@ export class SessionWorker {
       this.enqueueSend(cmd);
 
     } else if (cmd.cmd === "permission_response") {
-      const outcome = this.permMgr.resolve(cmd.id, cmd.approved, cmd.answers);
+      const outcome = this.permMgr.resolve(cmd.id, cmd.approved, cmd.answers, cmd.message);
       if (cmd.approved && outcome?.toolName === "ExitPlanMode") {
         this.applyPermissionMode(cmd.nextMode || "default");
       } else if (cmd.approved && outcome?.toolName === "EnterPlanMode") {

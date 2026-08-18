@@ -55,6 +55,9 @@ const emit = defineEmits<{
      *  permissionsApi.createMany 落盘（Rust 一次原子写 + 一次广播），再走正常
      *  approve。纯前端字段，不进 SidecarCommand 协议。 */
     persistRule?: { scope: PermissionScope; rules: PermissionRuleDraft[] },
+    /** 拒绝理由：仅 approved=false 且用户输入时带。全链路透传到 SDK 的 deny message，
+     *  作为工具错误反馈给模型——模型按理由直接调整，不用再追问一轮。 */
+    reason?: string,
   ];
 }>();
 
@@ -120,10 +123,34 @@ const collapsed = ref(false);
 function toggleCollapse() {
   collapsed.value = !collapsed.value;
 }
+
+/** 拒绝理由输入（形态 A）：点「拒绝/继续修改计划」→ 按钮行整体替换为理由输入 +
+ *  提交/返回；Enter 提交、Esc 返回按钮态。空理由提交 = 普通拒绝（reason 传 undefined）。
+ *  仅 tool / plan 渲染入口（question 的「跳过」/ confirm 的「取消」不带理由）。 */
+const denyOpen = ref(false);
+const denyReason = ref("");
+function openDeny() {
+  denyOpen.value = true;
+}
+function closeDeny() {
+  denyOpen.value = false;
+  denyReason.value = "";
+}
+function submitDeny() {
+  if (!props.permission) return;
+  const reason = denyReason.value.trim() || undefined;
+  emit("respond", props.permission.id, false, undefined, undefined, undefined, reason);
+  // 组件常驻挂载，提交后复位本地状态（防下一条请求残留输入/展开态）
+  denyOpen.value = false;
+  denyReason.value = "";
+}
+
 watch(
   () => props.permission?.id,
   () => {
     collapsed.value = false;
+    denyOpen.value = false;
+    denyReason.value = "";
   },
 );
 
@@ -469,44 +496,65 @@ const inputJson = computed(() => {
           </div>
         </template>
         <template v-else>
-          <button class="perm-btn perm-btn--ghost" data-action="deny" @click="emit('respond', permission.id, false)">
-            {{ isPlanApproval ? "继续修改计划" : "拒绝" }}
-          </button>
-          <div class="perm-actions-primary">
-            <template v-if="isPlanApproval">
-              <button class="perm-btn perm-btn--outline" @click="emit('respond', permission.id, true, undefined, undefined)">
-                批准，手动确认编辑
-              </button>
-              <button class="perm-btn perm-btn--outline" @click="emit('respond', permission.id, true, undefined, 'acceptEdits')">
-                批准，自动接受编辑
-              </button>
-              <button class="perm-btn perm-btn--solid" @click="emit('respond', permission.id, true, undefined, 'auto')">
-                批准，使用 Auto 模式
-              </button>
-            </template>
-            <template v-else>
-              <button
-                v-if="canEnterEditMode"
-                class="perm-btn perm-btn--outline"
-                data-action="edit-mode"
-                @click="emit('respond', permission.id, true, undefined, 'acceptEdits')"
-              >
-                进入编辑模式
-              </button>
-              <button
-                v-if="canRemember"
-                class="perm-btn perm-btn--outline"
-                data-action="remember"
-                :disabled="!rememberValid"
-                @click="emitAllowAndRemember"
-              >
-                允许并记住
-              </button>
-              <button class="perm-btn perm-btn--solid" data-action="allow" @click="emit('respond', permission.id, true)">
-                允许
-              </button>
-            </template>
-          </div>
+          <template v-if="denyOpen">
+            <div class="perm-deny-row">
+              <input
+                v-model="denyReason"
+                class="perm-deny-input"
+                placeholder="拒绝理由（可选）——告诉模型该怎么改"
+                spellcheck="false"
+                data-action="deny-reason"
+                @keydown.enter="submitDeny"
+                @keydown.escape="closeDeny"
+              />
+            </div>
+            <button class="perm-btn perm-btn--outline perm-btn--outline-danger" data-action="deny-submit" @click="submitDeny">
+              提交拒绝
+            </button>
+            <button class="perm-btn perm-btn--ghost" data-action="deny-back" @click="closeDeny">
+              返回
+            </button>
+          </template>
+          <template v-else>
+            <button class="perm-btn perm-btn--ghost" data-action="deny" @click="openDeny">
+              {{ isPlanApproval ? "继续修改计划" : "拒绝" }}
+            </button>
+            <div class="perm-actions-primary">
+              <template v-if="isPlanApproval">
+                <button class="perm-btn perm-btn--outline" @click="emit('respond', permission.id, true, undefined, undefined)">
+                  批准，手动确认编辑
+                </button>
+                <button class="perm-btn perm-btn--outline" @click="emit('respond', permission.id, true, undefined, 'acceptEdits')">
+                  批准，自动接受编辑
+                </button>
+                <button class="perm-btn perm-btn--solid" @click="emit('respond', permission.id, true, undefined, 'auto')">
+                  批准，使用 Auto 模式
+                </button>
+              </template>
+              <template v-else>
+                <button
+                  v-if="canEnterEditMode"
+                  class="perm-btn perm-btn--outline"
+                  data-action="edit-mode"
+                  @click="emit('respond', permission.id, true, undefined, 'acceptEdits')"
+                >
+                  进入编辑模式
+                </button>
+                <button
+                  v-if="canRemember"
+                  class="perm-btn perm-btn--outline"
+                  data-action="remember"
+                  :disabled="!rememberValid"
+                  @click="emitAllowAndRemember"
+                >
+                  允许并记住
+                </button>
+                <button class="perm-btn perm-btn--solid" data-action="allow" @click="emit('respond', permission.id, true)">
+                  允许
+                </button>
+              </template>
+            </div>
+          </template>
         </template>
       </div>
       </div>
@@ -942,6 +990,30 @@ const inputJson = computed(() => {
   border-color: var(--aide-warning);
 }
 
+/* 拒绝理由输入：形态 A 的输入框（复用 freetext 质感，危险色描边示意「拒绝」路径）。
+   .perm-actions 是 flex 行，输入框整行占位后按钮自然换到下一行右对齐。 */
+.perm-deny-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.perm-deny-input {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: var(--aide-radius-sm);
+  border: 1px solid color-mix(in srgb, var(--aide-danger) 45%, transparent);
+  background: var(--aide-bg-deep);
+  color: var(--aide-text-primary);
+  padding: 7px 10px;
+  font-size: 12.5px;
+  outline: none;
+}
+
+.perm-deny-input:focus {
+  border-color: var(--aide-danger);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--aide-danger) 18%, transparent);
+}
+
 /* 按钮行：GALLERY .perm-foot */
 .perm-actions {
   display: flex;
@@ -949,6 +1021,8 @@ const inputJson = computed(() => {
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 14px;
+  /* 拒绝理由输入态：输入框 flex:1 占满整行，按钮换到下一行右对齐 */
+  flex-wrap: wrap;
 }
 
 .perm-actions-primary {

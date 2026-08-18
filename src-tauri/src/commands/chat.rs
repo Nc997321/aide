@@ -206,6 +206,9 @@ pub async fn permission_response(
     always: Option<bool>,
     answers: Option<HashMap<String, String>>,
     next_mode: Option<String>,
+    // 拒绝理由：仅 approved=false 时生效，sidecar 透传给 SDK 的 deny message
+    // （作为工具错误反馈给模型，让模型按理由直接调整，不再追问一轮）。
+    message: Option<String>,
     runtime_mgr: State<'_, AgentRuntimeManager>,
 ) -> Result<(), String> {
     let mut cmd = json!({
@@ -220,6 +223,9 @@ pub async fn permission_response(
     }
     if let Some(mode) = next_mode {
         cmd["nextMode"] = json!(mode);
+    }
+    if let Some(m) = message {
+        cmd["message"] = json!(m);
     }
     runtime_mgr.send_to_runtime(&cmd).await
 }
@@ -446,6 +452,30 @@ mod tests {
         assert_eq!(cmd["session_id"], "test-sid");
         assert_eq!(cmd["id"], "perm-1");
         assert_eq!(cmd["approved"], true);
+    }
+
+    /// 回归：拒绝带理由时 permission_response 必须携带 message（sidecar 透传给
+    /// SDK 的 deny message）；无理由时不得出现该键（保持旧行为）。
+    #[test]
+    fn permission_response_cmd_message_optional() {
+        let with_msg = json!({
+            "cmd": "permission_response",
+            "session_id": "test-sid",
+            "id": "perm-1",
+            "approved": false,
+            "always": serde_json::Value::Null,
+            "message": "改用相对路径",
+        });
+        assert_eq!(with_msg["message"], "改用相对路径");
+
+        let without_msg = json!({
+            "cmd": "permission_response",
+            "session_id": "test-sid",
+            "id": "perm-1",
+            "approved": false,
+            "always": serde_json::Value::Null,
+        });
+        assert!(without_msg.get("message").is_none());
     }
 
     #[test]

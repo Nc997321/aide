@@ -962,6 +962,21 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
     worker.stop();
   });
 
+  it("permission_response with a message surfaces the deny reason to the SDK", async () => {
+    const { worker, events } = makeWorker();
+    worker._testApplyPermissionPolicy(rule("ask", "Bash"));
+    const hook = worker._testPolicyHook("/tmp");
+    const pending = hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "rm -rf /tmp/cache" } } as any);
+    await flushPromises();
+    const req = events.find((e: any) => e.type === "permission_request");
+    // 拒绝 + 理由：Rust permission_response 命令带 message 字段
+    worker.handleCommand({ cmd: "permission_response", session_id: "test-sid", id: req.id, approved: false, message: "别删目录，改成只清空里层的 .tmp 文件" } as any);
+    const out: any = await pending;
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+    // 用户理由走 permissionDecisionReason 反馈给模型（hook 路径，非 canUseTool 的 message）
+    expect(out.hookSpecificOutput.permissionDecisionReason).toBe("别删目录，改成只清空里层的 .tmp 文件");
+  });
+
   it("permission_response no longer carries always (command shape, no updatedPermissions)", async () => {
     const { worker, events } = makeWorker();
     // send a permission_request via the policy ask path, then resolve without `always`

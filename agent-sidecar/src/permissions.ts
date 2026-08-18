@@ -17,7 +17,12 @@ export interface ResolveOutcome {
 }
 
 interface PendingEntry {
-  resolve: (decision: { approved: boolean; answers?: Record<string, string> }) => void;
+  resolve: (decision: {
+    approved: boolean;
+    answers?: Record<string, string>;
+    /** 拒绝理由（用户输入）：透传给 SDK 的 deny message，作为工具错误反馈给模型。 */
+    message?: string;
+  }) => void;
   toolName: string;
   /** Notify the frontend to dismiss this request (interrupt / cancel). */
   emitCancelled: () => void;
@@ -48,7 +53,7 @@ export class PermissionManager {
     context: PermissionRequestContext,
     emit: (e: ChatEvent) => void,
     subagents?: SubagentTracker,
-  ): Promise<{ approved: boolean; updatedInput?: Record<string, unknown> }> {
+  ): Promise<{ approved: boolean; updatedInput?: Record<string, unknown>; message?: string }> {
     // Signal already aborted before the callback fired (interrupt/tool race):
     // addEventListener on an already-aborted signal won't fire, so check first.
     if (context.signal?.aborted) {
@@ -65,7 +70,11 @@ export class PermissionManager {
       input,
       ...(fromSubagent ? { fromSubagent } : {}),
     });
-    const decision = await new Promise<{ approved: boolean; answers?: Record<string, string> }>(
+    const decision = await new Promise<{
+      approved: boolean;
+      answers?: Record<string, string>;
+      message?: string;
+    }>(
       (resolve) => {
         this.pending.set(id, {
           resolve,
@@ -85,7 +94,8 @@ export class PermissionManager {
       },
     );
     if (!decision.approved) {
-      return { approved: false };
+      // 拒绝理由：仅 deny 路径有意义（用户输入），透传给 SDK 的 deny message。
+      return { approved: false, ...(decision.message ? { message: decision.message } : {}) };
     }
     // AskUserQuestion: SDK requires the answers reshaped into updatedInput
     // ({questions, answers}) — the one divergence from plain tool approval,
@@ -118,7 +128,7 @@ export class PermissionManager {
         subagents,
       );
       if (!result.approved) {
-        return { behavior: "deny" as const, message: "用户拒绝" };
+        return { behavior: "deny" as const, message: result.message ?? "用户拒绝" };
       }
       return {
         behavior: "allow" as const,
@@ -134,11 +144,13 @@ export class PermissionManager {
     id: string,
     approved: boolean,
     answers?: Record<string, string>,
+    /** 拒绝理由：透传给 SDK 的 deny message（仅 approved=false 时生效）。 */
+    message?: string,
   ): ResolveOutcome | undefined {
     const entry = this.pending.get(id);
     if (!entry) return undefined;
     this.pending.delete(id);
-    entry.resolve({ approved, answers });
+    entry.resolve({ approved, answers, message });
     return { toolName: entry.toolName };
   }
 

@@ -88,7 +88,7 @@ const emit = defineEmits<{
   "set-model": [model: string];
   "set-effort": [effort: string];
   "set-permission-mode": [mode: string];
-  "respond-permission": [id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string];
+  "respond-permission": [id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string, reason?: string];
   "update:bgDockSelectedId": [id: string];
   /** hero 归属选择：选中的是会话归属，不是活动工作区（PaneGroup 据此改 pendingWs/defaultWs） */
   "select-workspace": [ws: WorkspaceInfo];
@@ -599,6 +599,7 @@ async function onPermissionRespond(
   answers?: Record<string, string>,
   nextMode?: string,
   persistRule?: { scope: PermissionScope; rules: PermissionRuleDraft[] },
+  reason?: string,
 ) {
   // 发送前确认：approved→清输入并发送 + 推进 lastUsed 基线；取消→保留输入（回退对话框）。
   // 匹配 id 用 sc.request.id（即 PermissionDialog respond 回传的 permission.id）。
@@ -618,7 +619,7 @@ async function onPermissionRespond(
   if (approved && persistRule) {
     await persistRememberRule(persistRule.scope, persistRule.rules);
   }
-  emit("respond-permission", id, approved, answers, nextMode);
+  emit("respond-permission", id, approved, answers, nextMode, reason);
 }
 
 // ── 权限模式（plan / acceptEdits / default）——和模型下拉同一套模式：
