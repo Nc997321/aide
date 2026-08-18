@@ -17,8 +17,9 @@ import FileWindow from "./fileviewer/FileWindow.vue";
  *
  * 布局是平铺式（tiling）而非「聚焦+最小化」：
  * - 无主窗时所有窗口按区域宽高比均分网格，随数量增多变小；
- * - 点某个窗口 → 它恢复默认弹窗大小靠左，其余窗口在右侧剩余空间里
- *   实际缩小平铺（仍是完整窗口，不是缩略条）；
+ * - 点某个窗口 → 它恢复默认弹窗大小，锚在自己当前所在的一侧（左/右）放大，
+ *   不搬到固定一侧——窗口左右顺序永不因聚焦而交换；
+ *   其余窗口在另一侧剩余空间里实际缩小平铺（仍是完整窗口，不是缩略条）；
  * - 拖标题栏可随意挪动；开/关/切主窗/边界变化会重新自动平铺。
  */
 
@@ -108,14 +109,18 @@ function retile() {
   const caw = chatW - MARGIN * 2;
   const focused = tileable.find((w) => w.id === focusedId.value);
   if (focused) {
-    // 主窗恢复默认弹窗大小靠左，其余在右侧剩余空间里平铺缩小
-    focused.w = Math.min(DEFAULT_W, Math.round(caw * 0.62));
+    // 主窗恢复默认弹窗大小，锚在自己当前所在的一侧放大（原地变大，不左右换位）：
+    // 以窗口当前中心点相对平铺区中点判左右；62% 宽时放大后中心仍落在同侧，
+    // 后续 retile（侧栏拖动等）不会翻侧抖动。
+    const fw = Math.min(DEFAULT_W, Math.round(caw * 0.62));
+    const dockRight = focused.x + focused.w / 2 > ax + caw / 2;
+    focused.w = fw;
     focused.h = ah;
-    focused.x = ax;
+    focused.x = dockRight ? ax + caw - fw : ax;
     focused.y = ay;
     const rest = tileable.filter((w) => w !== focused);
-    const rx = ax + focused.w + MARGIN;
-    const rw = Math.max(ax + caw - rx, 200);
+    const rw = Math.max(caw - fw - MARGIN, 200);
+    const rx = dockRight ? ax : ax + fw + MARGIN;
     tileGrid(rest, rx, ay, rw, ah);
   } else {
     tileGrid(tileable, ax, ay, caw, ah);
