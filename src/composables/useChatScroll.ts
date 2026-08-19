@@ -21,6 +21,18 @@ export function nearestScrollableAncestor(target: EventTarget | null): Element |
   return null;
 }
 
+/** 嵌套可滚块是否已在 deltaY 方向的边界（顶/底）。onWheel 用它判断嵌套块滚到边界后
+ *  是否该把滚轮链式移交给对话区走 JS 赋值（旁路合成器链式失同步，见
+ *  [[nested-scroller-wheel-trap]]）。deltaY<0=上滚到顶，deltaY>0=下滚到底；
+ *  内容未溢出（含 jsdom 零几何）直接判否——无可滚范围谈不上边界，放行原生交给浏览器。
+ *  -1px 容差吸收亚像素/缩放。 */
+function atScrollEdge(el: Element, deltaY: number): boolean {
+  if (el.scrollHeight <= el.clientHeight) return false;
+  if (deltaY < 0) return el.scrollTop <= 0;
+  if (deltaY > 0) return el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+  return false;
+}
+
 /**
  * 聊天滚动区的主控：把 ChatPanel 里散落的滚动/窗口逻辑收拢成一层，并在
  * useMessageWindow 的"数据窗口"之上叠一层"渲染预算"做分帧挂载。
@@ -161,17 +173,31 @@ export function useChatScroll(
   // 增长不刷新；JS 的 scrollTop 赋值走主线程布局读实时 scrollHeight，畅通。所以把
   // 滚轮也赶到 JS 赋值路径：光标下最近可滚祖先就是本容器时（该滚对话区、无嵌套块
   // 需要原生滚），preventDefault + 手动 scrollTop += deltaY，彻底旁路缓存。
-  // 取舍：失去 Chromium 合成器滚轮惯性/平滑——聊天滚动不需要。嵌套可滚块（思考块
-  // reading 态、工具卡结果、xterm、DiffViewer 的 cm-scroller）的滚轮 nearestScrollableAncestor
-  // 返回它们而非本容器，放行原生链式，不受影响。deltaMode 非 pixel（触控板 line/page
-  // 模式）暂放行原生——鼠标 wheel 是 pixel 模式，覆盖最常见情况；触控板如复现再加换算。
+  // 取舍：失去 Chromium 合成器滚轮惯性/平滑——聊天滚动不需要。
+  //
+  // 嵌套可滚块分支（思考块 reading 态、工具卡结果、xterm、DiffViewer 的 cm-scroller）：
+  // nearestScrollableAncestor 返回嵌套块而非本容器。原实现直接放行原生、指望链式冒泡
+  // 给对话区——但合成器焊死会让链式失同步，嵌套块滚到顶/底后对话区仍滚不动，长会话里
+  // 光标落在工具卡/代码块上时表现为"滚不到顶、只看得到尾部 15 条、上滚加载更多不触发"。
+  // 修正：嵌套块已到该方向边界（atScrollEdge）时接管对话区走 JS 赋值，补上这条漏掉的
+  // 链式分支；未到边界则放行原生滚嵌套块本身。
+  // deltaMode 非 pixel（触控板 line/page 模式）暂放行原生——鼠标 wheel 是 pixel 模式，覆盖最常见情况；触控板如复现再加换算。
   function onWheel(e: WheelEvent) {
     const el = scrollEl.value;
     if (!el || e.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return;
-    if (nearestScrollableAncestor(e.target) !== el) return;
-    e.preventDefault();
-    el.scrollTop += e.deltaY;
-    trail("wheelTakeover", `dy=${Math.round(e.deltaY)}→top=${Math.round(el.scrollTop)}`);
+    const nearest = nearestScrollableAncestor(e.target);
+    if (nearest === el) {
+      e.preventDefault();
+      el.scrollTop += e.deltaY;
+      trail("wheelTakeover", `dy=${Math.round(e.deltaY)}→top=${Math.round(el.scrollTop)}`);
+      return;
+    }
+    // 嵌套可滚块：到该方向边界才接管链式给对话区（旁路合成器链式失同步），否则放行原生滚嵌套块本身
+    if (nearest && atScrollEdge(nearest, e.deltaY)) {
+      e.preventDefault();
+      el.scrollTop += e.deltaY;
+      trail("wheelTakeover", `chained dy=${Math.round(e.deltaY)}→top=${Math.round(el.scrollTop)}`);
+    }
   }
 
   // ── 滚动事件 ──────────────────────────────────────────────────────────────

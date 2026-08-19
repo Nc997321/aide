@@ -52,6 +52,13 @@ function mountScroll(target: "plain-text" | "nested-scroller") {
   return { wrapper, scrollEl };
 }
 
+/** jsdom 不做布局，scrollHeight/clientHeight 恒 0，手动 mock 嵌套块几何以测 atScrollEdge 边界判定。 */
+function setGeometry(el: HTMLElement, g: { scrollTop?: number; clientHeight?: number; scrollHeight?: number }) {
+  if (g.scrollTop !== undefined) el.scrollTop = g.scrollTop;
+  if (g.clientHeight !== undefined) Object.defineProperty(el, "clientHeight", { value: g.clientHeight, configurable: true });
+  if (g.scrollHeight !== undefined) Object.defineProperty(el, "scrollHeight", { value: g.scrollHeight, configurable: true });
+}
+
 describe("nearestScrollableAncestor", () => {
   it("自身可滚时返回自身", () => {
     const el = document.createElement("div");
@@ -96,6 +103,48 @@ describe("useChatScroll 滚轮接管", () => {
     expect(evt.defaultPrevented).toBe(false);
     expect(scrollEl.scrollTop).toBe(before);
     expect(snapshotScrollTrail().filter((e) => e.kind === "wheelTakeover")).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("嵌套块在顶 + 上滚：到边界，接管对话区走 JS（补链式分支）", () => {
+    resetScrollTrailForTest();
+    const { wrapper, scrollEl } = mountScroll("nested-scroller");
+    const nested = scrollEl.querySelector(".nested") as HTMLElement;
+    setGeometry(nested, { scrollTop: 0, clientHeight: 100, scrollHeight: 500 }); // 嵌套块在顶
+    scrollEl.scrollTop = 500; // 对话区不在顶，才能观察到上滚位移
+    const evt = new WheelEvent("wheel", { deltaY: -100, deltaMode: 0, bubbles: true, cancelable: true });
+    scrollEl.querySelector(".nested-inner")!.dispatchEvent(evt);
+    expect(evt.defaultPrevented).toBe(true);
+    expect(scrollEl.scrollTop).toBe(400); // 500 + (-100)，链式移交对话区
+    expect(snapshotScrollTrail().filter((e) => e.kind === "wheelTakeover")).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("嵌套块未到顶 + 上滚：未到边界，放行原生滚嵌套块本身", () => {
+    resetScrollTrailForTest();
+    const { wrapper, scrollEl } = mountScroll("nested-scroller");
+    const nested = scrollEl.querySelector(".nested") as HTMLElement;
+    setGeometry(nested, { scrollTop: 100, clientHeight: 100, scrollHeight: 500 }); // 未到顶
+    const before = scrollEl.scrollTop;
+    const evt = new WheelEvent("wheel", { deltaY: -100, deltaMode: 0, bubbles: true, cancelable: true });
+    scrollEl.querySelector(".nested-inner")!.dispatchEvent(evt);
+    expect(evt.defaultPrevented).toBe(false);
+    expect(scrollEl.scrollTop).toBe(before);
+    expect(snapshotScrollTrail().filter((e) => e.kind === "wheelTakeover")).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("嵌套块在底 + 下滚：到边界，接管对话区走 JS", () => {
+    resetScrollTrailForTest();
+    const { wrapper, scrollEl } = mountScroll("nested-scroller");
+    const nested = scrollEl.querySelector(".nested") as HTMLElement;
+    setGeometry(nested, { scrollTop: 400, clientHeight: 100, scrollHeight: 500 }); // 在底 400+100=500
+    const before = scrollEl.scrollTop;
+    const evt = new WheelEvent("wheel", { deltaY: 100, deltaMode: 0, bubbles: true, cancelable: true });
+    scrollEl.querySelector(".nested-inner")!.dispatchEvent(evt);
+    expect(evt.defaultPrevented).toBe(true);
+    expect(scrollEl.scrollTop).toBe(before + 100);
+    expect(snapshotScrollTrail().filter((e) => e.kind === "wheelTakeover")).toHaveLength(1);
     wrapper.unmount();
   });
 
