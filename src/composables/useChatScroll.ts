@@ -175,17 +175,37 @@ export function useChatScroll(
   }
 
   // ── 滚动事件 ──────────────────────────────────────────────────────────────
-  // trail 埋点（滚动诊断环）：间歇性滚轮定格的活体采集——每个 scroll 事件留一行
-  // 位置+门控状态，定格时与 wheel/write 记录互证。高频但纯内存推送，无布局读取。
+  // 「用户离开底部」唯一可靠的信号是 scrollTop 减小——不能按事件到达时的活几何
+  // dist≥48 判定：程序化置底（scrollToBottom / ramp pin / jumpToBottom）的 scroll
+  // 事件是异步派发的，写入与事件到达之间内容会继续增高（Write/Edit 变更卡落定一帧
+  // +400px），事件里算出的 dist≥48 只是「置底回波」而非用户手势。按 dist 误判会把
+  // 跟随打死且 sticky——此后 scrollToBottom 对 autoScroll=false 一律 no-op、再无
+  // 置底救回，表现为写文件后对话不再自动到底（现场：scroll-trail 快照中
+  // write toBottom 0→5740 后 28ms 才派发的 scroll top=4923 sh=6076 dist=336
+  // 把 auto 打成 0）。位置不变/增大 = 增长回波或下滚，跟随态原样保留（置底链由
+  // RO 继续驱动）；位置减小才按 dist 重判——内容收缩被钳回底部时 scrollTop 虽
+  // 减小但 dist=0，落进 re-arm 分支，不误伤。所有用户上滚路径（wheel 接管 /
+  // 触控板原生 / 拖滚动条 / 键盘）都使 scrollTop 减小，方向判定对它们全部成立。
+  let prevScrollTop = -1;
   function onScroll() {
     const el = scrollEl.value;
     if (!el) return;
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const prev = prevScrollTop;
+    prevScrollTop = el.scrollTop;
+    // trail 埋点（滚动诊断环）：间歇性滚轮定格的活体采集——每个 scroll 事件留一行
+    // 位置+门控状态，定格时与 wheel/write 记录互证。高频但纯内存推送，无布局读取。
     trail(
       "scroll",
       `top=${Math.round(el.scrollTop)} sh=${el.scrollHeight} ch=${el.clientHeight} auto=${autoScroll.value ? 1 : 0}`,
     );
-    autoScroll.value = dist < 48;
+    if (prev >= 0 && el.scrollTop < prev - 1) {
+      // 向上滚动：按实时离底距离重判跟随态
+      autoScroll.value = dist < 48;
+    } else if (dist < 48) {
+      // 到达/停在底部：恢复跟随（下滚到底、jump 落定、钳位回底都走这里）
+      autoScroll.value = true;
+    }
     farFromBottom.value = dist > JUMP_SHOW_THRESHOLD;
     if (autoScroll.value) newWhileAway.value = false;
     // 滚到接近顶部 = 想看更早的消息:扩窗(带锚定)。ramp 期间不触发——短内容时
@@ -321,6 +341,9 @@ export function useChatScroll(
       cancelRamp();
       rampPending = false;
       autoScroll.value = true;
+      // 方向判定基线一并重置：旧会话残留的大 scrollTop 会把新会话首个
+      // scroll 事件误读成「上滚」而脱扣
+      prevScrollTop = -1;
       farFromBottom.value = false;
       newWhileAway.value = false;
       scrollToBottom();

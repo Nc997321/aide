@@ -162,4 +162,81 @@ describe("useChatScroll", () => {
     // ramping 期间自动扩窗分支被 !ramping 门拦住，窗口不动
     expect(hiddenCount.value).toBe(85);
   });
+
+  // ── 跟随态锁存：按滚动方向区分用户手势与置底回波（根因见 useChatScroll.onScroll 注释）──
+  let msgSeq = 0;
+  function pushMessage(list: Ref<ChatMessage[]>) {
+    msgSeq += 1;
+    list.value = [
+      ...list.value,
+      { id: `x${msgSeq}`, role: "assistant", blocks: [{ type: "text", text: "n" }], timestamp: 1000 + msgSeq },
+    ];
+  }
+
+  /** 钉底基线：20 条 + 同步调度器（ramp 在 setup 内跑完）+ 钉在底部的假滚动元素 */
+  function setupPinned() {
+    const list = ref(makeMessages(20));
+    const sid = ref<string | null>("s1");
+    const { schedule } = syncScheduler();
+    const api = useChatScroll(
+      () => list.value,
+      () => sid.value,
+      { scheduleFrame: schedule },
+    );
+    // scrollTop=1000, scrollHeight=1817, clientHeight=817 → dist=0（钉底）
+    const el = fakeScrollEl({ scrollTop: 1000, scrollHeight: 1817, clientHeight: 817 });
+    api.scrollEl.value = el;
+    api.onScroll(); // 基线事件，建立 prevScrollTop=1000
+    return { list, el, ...api };
+  }
+
+  it("置底回波不脱扣：置底写入与 scroll 事件派发之间内容继续长高（变更卡 +440 场景）", async () => {
+    const { list, el, onScroll, newWhileAway } = setupPinned();
+
+    // 新消息触发置底写入（同步调度器立即执行 rAF 回调）
+    pushMessage(list);
+    await nextTick();
+    expect(el.scrollTop).toBe(1817);
+
+    // 写入与 scroll 事件派发之间内容又长高 440px（Write 变更卡落定）——回波事件：
+    // scrollTop 不小于上一事件位置（1817 > 1000），dist=440 ≥ 48 也不得脱扣
+    el.scrollHeight = 2257;
+    onScroll();
+
+    // 跟随仍活着：再来一条消息继续置底
+    pushMessage(list);
+    await nextTick();
+    expect(el.scrollTop).toBe(2257);
+    expect(newWhileAway.value).toBe(false);
+  });
+
+  it("真实上滚脱扣、滚回底部恢复跟随", async () => {
+    const { list, el, onScroll, newWhileAway } = setupPinned();
+
+    // 用户上滚 400px：scrollTop 减小 + dist≥48 → 脱扣
+    el.scrollTop = 600;
+    onScroll();
+    pushMessage(list);
+    await nextTick();
+    expect(el.scrollTop).toBe(600); // 不再置底
+    expect(newWhileAway.value).toBe(true); // 离开期间来新消息点亮小点
+
+    // 滚回底部（dist=0）→ 恢复跟随
+    el.scrollTop = 1000;
+    onScroll();
+    pushMessage(list);
+    await nextTick();
+    expect(el.scrollTop).toBe(1817);
+    expect(newWhileAway.value).toBe(false);
+  });
+
+  it("上滚 48px 宽限内不脱扣", async () => {
+    const { list, el, onScroll } = setupPinned();
+
+    el.scrollTop = 975; // 上滚 25px，dist=25 < 48
+    onScroll();
+    pushMessage(list);
+    await nextTick();
+    expect(el.scrollTop).toBe(1817); // 跟随仍在，置底生效
+  });
 });
