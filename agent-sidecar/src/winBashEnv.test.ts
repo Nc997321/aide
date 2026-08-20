@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { bashrcPath, ensureWindowsBashEnv } from "./winBashEnv.js";
+import { toForwardSlashes } from "./winPaths.js";
 
 const tmpDirs: string[] = [];
 
@@ -67,12 +68,14 @@ describe("ensureWindowsBashEnv", () => {
   });
 });
 
+// bashrcPath 强制正斜杠输出（winPaths 兜底 bun node:path/fs 缺陷，见 winBashEnv.ts 注释），
+// 期望值同样走 toForwardSlashes 归一化，断言聚焦「目录来源 + 文件名」而非分隔符形式。
 describe("bashrcPath", () => {
   it("优先用 CLAUDE_CONFIG_DIR", () => {
-    expect(bashrcPath({ CLAUDE_CONFIG_DIR: "/x/y" })).toBe(path.join("/x/y", "aide-bashrc"));
+    expect(bashrcPath({ CLAUDE_CONFIG_DIR: "/x/y" })).toBe(toForwardSlashes(path.join("/x/y", "aide-bashrc")));
   });
 
   it("缺省回退 ~/.aide/claude", () => {
-    expect(bashrcPath({})).toBe(path.join(os.homedir(), ".aide", "claude", "aide-bashrc"));
+    expect(bashrcPath({})).toBe(toForwardSlashes(path.join(os.homedir(), ".aide", "claude", "aide-bashrc")));
   });
 });
