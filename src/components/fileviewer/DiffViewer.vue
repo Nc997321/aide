@@ -28,8 +28,10 @@ const props = withDefaults(
     filePath: string;
     /** 初始并排/单栏；默认 split 保持文件查看器现状，对话内变更卡传 unified */
     initialMode?: "split" | "unified";
+    /** 工具栏状态徽章（新增/修改/删除）；对话内变更卡与工具名重复，传 false */
+    showBadge?: boolean;
   }>(),
-  { initialMode: "split" },
+  { initialMode: "split", showBadge: true },
 );
 
 const { settings } = useSettings();
@@ -199,7 +201,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="dv-root">
     <div class="dv-toolbar">
-      <span class="dv-badge" :class="`dv-badge--${pair.status}`">{{ statusLabel }}</span>
+      <span v-if="showBadge" class="dv-badge" :class="`dv-badge--${pair.status}`">{{ statusLabel }}</span>
       <span class="dv-path" v-tooltip="filePath" :style="{ fontFamily: settings.editorFontFamily }">
         <span class="dv-path-dir">{{ pathParts.dir }}</span><span class="dv-path-name">{{ pathParts.name }}</span>
       </span>

@@ -116,7 +116,7 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
         class="ti-change"
         :style="{ height: `${changeHeight}px` }"
       >
-        <DiffViewer :pair="changeInfo.pair" :file-path="changeInfo.filePath" initial-mode="unified" />
+        <DiffViewer :pair="changeInfo.pair" :file-path="changeInfo.filePath" initial-mode="unified" :show-badge="false" />
       </div>
       <pre v-else-if="block.result" class="ti-result">{{ block.result }}</pre>
       <div v-else class="ti-pending">等待结果…</div>
