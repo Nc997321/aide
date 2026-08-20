@@ -868,17 +868,20 @@ defineExpose({ reload });
 /* ── 冲突状态字母 ── */
 .status-C { background: color-mix(in srgb, var(--aide-danger) 22%, transparent); color: var(--aide-danger); }
 
-.git-section { border-bottom: 1px solid var(--aide-surface-default); flex-shrink: 0; }
-.commits-section { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.commits-section .section-body { flex: 1; overflow-y: auto; }
+.git-section { border-bottom: 1px solid var(--aide-surface-default); }
 
-/* 改动视图容器：包住 Staged→Commits，保住 commits-section 的 flex:1 滚动 */
+/* 改动视图容器：整面板唯一滚动层。各 section 随内容自然堆叠、超出由本容器统一滚动；
+   不再让 Commits 内部单独 flex 滚动——旧结构里 Staged/Changes/Stash 全是 flex-shrink:0，
+   文件一多就把下方 section 挤出 overflow:hidden 的可视区，且无滚轮可达；
+   单一滚动层也避开了 WebView2 嵌套滚动的滚轮范围失同步坑。 */
 .changes-view {
-  flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+  flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
 }
 
 .section-header {
   display: flex; align-items: center; gap: 6px; width: 100%;
+  /* 吸顶：整面板滚动时当前 section 标题（含 Stage All / Fetch / Push 等操作）保持可见 */
+  position: sticky; top: 0; z-index: 2;
   padding: 6px 10px; border: none; background: var(--aide-bg-deep);
   color: var(--aide-text-secondary); cursor: pointer; font-size: 11px;
   font-family: inherit; text-transform: uppercase; letter-spacing: 0.4px;
@@ -1021,10 +1024,10 @@ defineExpose({ reload });
 .detail-loading { font-size: 11px; color: var(--aide-text-muted); padding: 4px 0; }
 .commit-body { font-size: 11px; color: var(--aide-text-secondary); white-space: pre-wrap; margin-bottom: 6px; padding: 4px 0; border-bottom: 1px solid var(--aide-surface-default); }
 
-.section-body::-webkit-scrollbar,
+.changes-view::-webkit-scrollbar,
 .commit-detail::-webkit-scrollbar, .branch-dropdown::-webkit-scrollbar { width: 4px; }
-.section-body::-webkit-scrollbar-track,
+.changes-view::-webkit-scrollbar-track,
 .commit-detail::-webkit-scrollbar-track, .branch-dropdown::-webkit-scrollbar-track { background: transparent; }
-.section-body::-webkit-scrollbar-thumb,
+.changes-view::-webkit-scrollbar-thumb,
 .commit-detail::-webkit-scrollbar-thumb, .branch-dropdown::-webkit-scrollbar-thumb { background: var(--aide-surface-hover); border-radius: 2px; }
 </style>
