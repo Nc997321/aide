@@ -38,8 +38,9 @@ withDefaults(
   cursor: pointer;
 }
 
+/* 悬停反馈只走光影（边框 + 阴影加深），不做位移：translateY 上浮会让底缘脱离光标
+   形成 hover 失而复得的振荡循环（光标停在卡片底缘 2px 条带内时持续震颤）。 */
 .a-card--hoverable:hover {
-  transform: translateY(-2px);
   border-color: var(--aide-border-strong);
   box-shadow: var(--aide-highlight-inset), var(--aide-shadow-md);
 }
