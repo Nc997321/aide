@@ -1423,17 +1423,6 @@ function onOpenBgDock(taskId: string) {
           :bg-tasks="bgTasks"
           @open-bg-dock="onOpenBgDock"
         />
-        <ContextCompactionStatus
-          v-if="contextCompactionVal"
-          :status="contextCompactionVal"
-          :elapsed-seconds="activityElapsed"
-          @interrupt="emit('interrupt')"
-        />
-        <div v-else-if="isBusyVal" class="chat-thinking">
-          <AppLogo :size="15" animated />
-          <span class="chat-thinking-text">正在思考</span>
-          <InterruptButton class="chat-interrupt-btn" @click="emit('interrupt')" />
-        </div>
       </div>
       </div>
 
@@ -1473,6 +1462,21 @@ function onOpenBgDock(taskId: string) {
       :selected-id="bgDockSelectedId ?? null"
       @update:selected-id="(id: string) => emit('update:bgDockSelectedId', id)"
     />
+
+    <!-- 活动状态行（上下文压缩 / 正在思考）：inline dock 固定在输入框上方，
+         不随消息滚动——上滚读历史时状态可见、中断按钮仍触手可及；
+         出现时挤压消息区高度，与 PermissionDialog 同一模式。 -->
+    <ContextCompactionStatus
+      v-if="contextCompactionVal"
+      :status="contextCompactionVal"
+      :elapsed-seconds="activityElapsed"
+      @interrupt="emit('interrupt')"
+    />
+    <div v-else-if="isBusyVal" class="chat-thinking">
+      <AppLogo :size="15" animated />
+      <span class="chat-thinking-text">正在思考</span>
+      <InterruptButton class="chat-interrupt-btn" @click="emit('interrupt')" />
+    </div>
 
     <!-- hero 标题区（零会话欢迎态）：logo + 一行纯展示信息，
          模型/权限模式的实际选择在输入盒工具栏 -->
@@ -1823,6 +1827,8 @@ function onOpenBgDock(taskId: string) {
   padding: 8px 16px;
   font-size: 12px;
   color: var(--aide-text-muted);
+  /* 输入框正上方的固定状态行（inline dock）：flex 列里不许被压扁 */
+  flex-shrink: 0;
 }
 
 .chat-thinking-text {
