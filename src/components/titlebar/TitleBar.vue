@@ -4,6 +4,7 @@ import WindowControls from "./WindowControls.vue";
 import SidebarToggle from "./SidebarToggle.vue";
 import NotificationBell from "./NotificationBell.vue";
 import LspIndicator from "./LspIndicator.vue";
+import ProviderSwitcher from "./ProviderSwitcher.vue";
 import AppLogo from "../AppLogo.vue";
 import Icon from "../Icon.vue";
 import { isWindows } from "../../utils/platform";
@@ -45,6 +46,7 @@ const emit = defineEmits<{
   "toggle-right": [];
   "open-workbench": [];
   "open-folder": [];
+  "open-settings-providers": [];
 }>();
 
 function onSelectSession(s: ActiveSessionInfo) {
@@ -201,6 +203,9 @@ function isRowRunning(cfg: RunConfig): boolean {
       >
         <span class="titlebar-open-folder-text">打开目录</span>
       </button>
+
+      <!-- 供应商切换（自包含，仅「管理供应商…」向上转发开设置面板） -->
+      <ProviderSwitcher @open-settings-providers="$emit('open-settings-providers')" />
 
       <!-- Run config selector: shown when configs exist for this workspace -->
       <template v-if="projectName && runConfigs && runConfigs.length > 0">

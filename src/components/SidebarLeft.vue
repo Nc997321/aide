@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { timeAgo } from "../utils/time";
 import { useContextMenu } from "../composables/useContextMenu";
 import { useSessionState } from "../composables/useSessionState";
 import { useUpdate } from "../composables/useUpdate";
-import { useProviders } from "../composables/useProviders";
 import { useRecent } from "../composables/useRecent";
 import { useSessionNames } from "../composables/useSessionNames";
 import { useSessionWorkspaces } from "../composables/useSessionWorkspaces";
@@ -19,8 +18,6 @@ import { getVersion } from "@tauri-apps/api/app";
 import { ACard, AStatusDot } from "../ui";
 import AToast from "../ui/AToast.vue";
 import { useToast } from "../composables/useToast";
-import IconOrChar from "./IconOrChar.vue";
-import Icon from "./Icon.vue";
 import type { Session, WorkspaceInfo } from "../types";
 
 const props = defineProps<{
@@ -36,8 +33,6 @@ const emit = defineEmits<{
   "workspace-changed": [path: string];
   "remove-workspace": [ws: WorkspaceInfo];
   "open-settings": [];
-  "provider-switch": [providerId: string];
-  "open-settings-providers": [];
   "toggle-pin": [];
 }>();
 
@@ -219,34 +214,6 @@ function registerSessionWs(list: Session[], wsKey: string) {
 const { updateAvailable, latestVersion, downloadUrl, dismissUpdate } = useUpdate();
 const { setCurrentWs } = useRecent();
 
-// ── Provider selector ──
-const {
-  displayList: providerDisplayList,
-  activeProviderId,
-  activeProvider,
-  setActiveProvider,
-  SYSTEM_DEFAULT_ID,
-} = useProviders();
-const providerDropdownOpen = ref(false);
-const providerSelectorRef = ref<HTMLDivElement | null>(null);
-
-function toggleProviderDropdown() {
-  providerDropdownOpen.value = !providerDropdownOpen.value;
-}
-
-async function onProviderSelect(id: string) {
-  providerDropdownOpen.value = false;
-  if (id === activeProviderId.value) return;
-  await setActiveProvider(id);
-}
-
-function onProviderClickOutside(e: MouseEvent) {
-  if (providerSelectorRef.value && !providerSelectorRef.value.contains(e.target as Node)) {
-    providerDropdownOpen.value = false;
-  }
-}
-
-
 // 从（可能非活动的）工作区打开会话：只打开，不切换活动工作区。
 // 会话自带归属（useSessionWorkspaces 注册表：发消息 cwd / tab 后缀 / 归属校验
 // 都走它），后端按全局唯一 session id 定位 JSONL，均不依赖活动工作区；
@@ -424,12 +391,7 @@ function newSession() {
   emit("new-session", name);
 }
 
-onUnmounted(() => {
-  document.removeEventListener("click", onProviderClickOutside);
-});
-
 onMounted(async () => {
-  document.addEventListener("click", onProviderClickOutside);
   await loadWorkspaces();
   // Find active workspace: match by encoded key derived from get_project_info
   try {
@@ -602,16 +564,8 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
       <button class="update-dismiss" v-tooltip="'忽略'" @click.stop="dismissUpdate">✕</button>
     </div>
 
-    <!-- Status bar: provider + actions -->
-    <div ref="providerSelectorRef" class="status-bar">
-      <div class="status-bar-provider" @click="toggleProviderDropdown">
-        <span class="status-bar-provider-icon"><IconOrChar :text="activeProvider.icon" :size="13" /></span>
-        <span class="status-bar-provider-name">{{ activeProvider.name }}</span>
-        <svg class="status-bar-chevron" :class="{ open: providerDropdownOpen }" width="10" height="10" viewBox="0 0 10 10" fill="none">
-          <path d="M2.5 4L5 6.5L7.5 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </div>
-
+    <!-- Status bar: actions（供应商切换已搬到标题栏 ProviderSwitcher） -->
+    <div class="status-bar">
       <div class="status-bar-actions">
         <button class="status-bar-btn" v-tooltip="'设置'" @click="emit('open-settings')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -619,26 +573,6 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
           </svg>
         </button>
-      </div>
-
-      <!-- Provider dropdown -->
-      <div v-if="providerDropdownOpen" class="provider-dropdown">
-        <div
-          v-for="p in providerDisplayList"
-          :key="p.id"
-          class="provider-option"
-          :class="{ active: p.id === activeProviderId }"
-          @click="onProviderSelect(p.id)"
-        >
-          <span class="provider-opt-icon"><IconOrChar :text="p.icon" :size="14" /></span>
-          <span class="provider-opt-name">{{ p.name }}</span>
-          <span v-if="p.id === activeProviderId" class="provider-opt-check">✓</span>
-        </div>
-        <div class="provider-divider"></div>
-        <div class="provider-option" @click="providerDropdownOpen = false; emit('open-settings-providers')">
-          <span class="provider-opt-icon"><Icon name="general" :size="14" /></span>
-          <span class="provider-opt-name">管理供应商…</span>
-        </div>
       </div>
     </div>
 
@@ -1058,7 +992,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   color: var(--aide-text-primary);
 }
 
-/* ── Status bar (provider + actions) ── */
+/* ── Status bar (actions) ── */
 
 .status-bar {
   position: relative;
@@ -1074,57 +1008,12 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   gap: 2px;
 }
 
-.status-bar-provider {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border-radius: var(--aide-radius-sm);
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--aide-text-secondary);
-  transition: all 0.12s;
-  overflow: hidden;
-  flex: 1;
-  min-width: 0;
-}
-
-.status-bar-provider:hover {
-  background: var(--aide-surface-default);
-  color: var(--aide-text-primary);
-}
-
-.status-bar-provider-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 13px;
-  flex-shrink: 0;
-  color: var(--aide-accent);
-}
-
-.status-bar-provider-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 500;
-}
-
-.status-bar-chevron {
-  flex-shrink: 0;
-  color: var(--aide-text-muted);
-  transition: transform 0.15s ease;
-}
-
-.status-bar-chevron.open {
-  transform: rotate(180deg);
-}
-
 .status-bar-actions {
   display: flex;
   align-items: center;
   gap: 1px;
   flex-shrink: 0;
+  margin-left: auto; /* 供应商切换搬走后，设置齿轮保持右对齐 */
 }
 
 .status-bar-btn {
@@ -1144,82 +1033,6 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 .status-bar-btn:hover {
   color: var(--aide-text-primary);
   background: var(--aide-surface-default);
-}
-
-/* ── Provider dropdown ── */
-
-.provider-dropdown {
-  position: absolute;
-  bottom: calc(100% + 4px);
-  left: 6px;
-  right: 6px;
-  background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border-strong);
-  border-radius: var(--aide-radius-md);
-  box-shadow: var(--aide-shadow-md), var(--aide-highlight-inset);
-  z-index: 100;
-  padding: 4px;
-  backdrop-filter: var(--aide-surface-blur);
-  animation: dropdown-up var(--aide-ease-t);
-}
-
-@keyframes dropdown-up {
-  from { opacity: 0; transform: translateY(4px) scale(0.97); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-.provider-dropdown {
-  animation: dropdown-up var(--aide-ease-t);
-}
-
-.provider-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  border-radius: var(--aide-radius-sm);
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--aide-text-secondary);
-  transition: all 0.1s;
-}
-
-.provider-option:hover {
-  background: var(--aide-surface-default);
-  color: var(--aide-text-primary);
-}
-
-.provider-option.active {
-  color: var(--aide-text-primary);
-}
-
-.provider-opt-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  width: 18px;
-  flex-shrink: 0;
-  color: var(--aide-accent);
-}
-
-.provider-opt-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.provider-opt-check {
-  color: var(--aide-success);
-  font-size: 12px;
-  flex-shrink: 0;
-}
-
-.provider-divider {
-  height: 1px;
-  background: var(--aide-border);
-  margin: 4px 6px;
 }
 
 /* ── 工作区信任徽标 ── */

@@ -466,11 +466,7 @@ function relPath(p: string): string {
   return p;
 }
 
-const { setActiveProvider, load: loadProviders, refreshSystemDefaultModels } = useProviders();
-
-async function onProviderSwitch(providerId: string) {
-  await setActiveProvider(providerId);
-}
+const { load: loadProviders, refreshSystemDefaultModels } = useProviders();
 
 function openSettingsProviders() {
   settingsInitialTab.value = "providers";
@@ -975,6 +971,7 @@ onUnmounted(() => {
       @toggle-right="rightCollapsed = !rightCollapsed"
       @open-folder="onOpenFolder"
       @open-workbench="wb.toggle()"
+      @open-settings-providers="openSettingsProviders"
     />
 
     <div
@@ -1021,8 +1018,6 @@ onUnmounted(() => {
           @new-session="onNewSession"
           @workspace-changed="onSidebarWsChanged"
           @open-settings="openSettings"
-          @provider-switch="onProviderSwitch"
-          @open-settings-providers="openSettingsProviders"
           @remove-workspace="onRemoveWorkspace"
           @toggle-pin="toggleLeftPinned"
         />
