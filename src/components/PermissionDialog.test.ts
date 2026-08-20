@@ -84,12 +84,14 @@ describe("PermissionDialog — 允许并记住", () => {
     expect(wrapper.find('[data-action="remember"]').exists()).toBe(false);
   });
 
-  it("有 rememberScope 且可推导时显示记住按钮 + 描述行", () => {
+  it("有 rememberScope 且可推导时显示记住按钮 + 规则行", () => {
     const wrapper = mount(PermissionDialog, {
       props: { permission: bashPermission(), rememberScope: "local" },
     });
     expect(wrapper.find('[data-action="remember"]').exists()).toBe(true);
-    expect(wrapper.find(".perm-remember-hint").text()).toContain("ls -la");
+    const ruleInput = wrapper.find(".perm-remember-value");
+    expect(ruleInput.exists()).toBe(true);
+    expect((ruleInput.element as HTMLInputElement).value).toBe("ls -la");
   });
 
   it("点击记住按钮 emit 带 persistRule 的 respond", async () => {
@@ -134,7 +136,6 @@ describe("PermissionDialog — 允许并记住（多段 + 参数透明化）", (
       props: { permission: pipePermission(), rememberScope: "local" },
     });
     expect(wrapper.findAll(".perm-remember-rule")).toHaveLength(2); // npx vitest run + tail -8
-    expect(wrapper.find(".perm-remember-hint").text()).toContain("2 条规则");
   });
 
   it("编辑规则值后 emit 携带编辑后的值", async () => {

@@ -4,7 +4,7 @@ import type { PermissionRequest } from "@/types/chat";
 import type { PermissionRule, PermissionRuleDraft, PermissionScope } from "@/types/permissions";
 import {
   deriveRememberRule,
-  describeRememberRule,
+  describeRuleMatcher,
   hasUnquotedShellControl,
   stripTrailingNumericArg,
 } from "@/utils/permissionRuleDerivation";
@@ -290,14 +290,10 @@ const canRemember = computed(
     rememberDrafts.value.length > 0 &&
     !!props.rememberScope,
 );
-const rememberDescription = computed(() => {
-  if (rememberDrafts.value.length === 0 || !props.rememberScope) return "";
-  return describeRememberRule(rememberDrafts.value, props.rememberScope);
-});
-/** 非 Bash 规则（文件夹 / URL / 工具级）的只读描述行。渲染时 canRemember
- *  已保证 rememberScope 非空，`?? "user"` 只是满足类型收窄。 */
+/** 非 Bash 规则（文件夹 / URL / 工具级）的只读描述行：这条规则匹配什么。
+ *  作用域不在预览区展示——点完 toast 会确认落点，设置面板可查看。 */
 function ruleStaticDescription(d: PermissionRuleDraft): string {
-  return describeRememberRule([d], props.rememberScope ?? "user");
+  return describeRuleMatcher(d);
 }
 function emitAllowAndRemember() {
   if (!props.permission || !props.rememberScope || !rememberValid.value) return;
@@ -435,13 +431,13 @@ const inputJson = computed(() => {
         </div>
         <pre v-else class="perm-input-raw">{{ inputJson }}</pre>
       </div>
-      <!-- 「允许并记住」预览：点之前先让用户看清将记住什么、落到哪个作用域。
+      <!-- 「允许并记住」预览：点之前先让用户看清将记住什么（落到哪个作用域
+           由点击后的 toast 确认，不在此占一行）。
            只在工具调用且有可推导规则时出现（计划批准 / 澄清提问不显示）。
            链式命令一次记住多段时逐条列出；Bash prefix 值可直接编辑（参数
            透明化的兜底），末尾数字参数（tail -8 形态）另给「去掉数字」快捷
            切换。非 Bash 规则只读展示。 -->
       <div v-if="canRemember" class="perm-remember">
-        <div class="perm-remember-hint">{{ rememberDescription }}</div>
         <div
           v-for="(d, i) in rememberDrafts"
           :key="i"

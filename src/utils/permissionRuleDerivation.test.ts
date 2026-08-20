@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { PermissionRule } from "@/types/permissions";
 import {
   deriveRememberRule,
-  describeRememberRule,
+  describeRuleMatcher,
   stripTrailingNumericArg,
 } from "./permissionRuleDerivation";
 
@@ -205,37 +205,22 @@ describe("deriveRememberRule 其它工具→工具级", () => {
   });
 });
 
-describe("describeRememberRule 描述行", () => {
-  it("Bash 前缀 + 项目本地", () => {
-    const drafts = deriveRememberRule("Bash", { command: "pnpm test" });
-    expect(describeRememberRule(drafts, "local")).toBe(
-      '将记住到本项目本地：执行以 "pnpm test" 开头的命令时始终允许',
-    );
+describe("describeRuleMatcher 规则行描述", () => {
+  it("Bash 前缀", () => {
+    const [d] = deriveRememberRule("Bash", { command: "pnpm test" });
+    expect(describeRuleMatcher(d)).toBe('执行以 "pnpm test" 开头的命令时始终允许');
   });
-  it("文件工具 + 用户全局回退", () => {
-    const drafts = deriveRememberRule("Write", { file_path: "/a/b/c.ts" });
-    expect(describeRememberRule(drafts, "user")).toBe(
-      "将记住到用户全局：编辑 /a/b 及其子目录下的文件时始终允许",
-    );
+  it("文件工具文件夹", () => {
+    const [d] = deriveRememberRule("Write", { file_path: "/a/b/c.ts" });
+    expect(describeRuleMatcher(d)).toBe("编辑 /a/b 及其子目录下的文件时始终允许");
   });
   it("WebFetch url equals", () => {
-    const drafts = deriveRememberRule("WebFetch", { url: "https://x.com/p" });
-    expect(describeRememberRule(drafts, "local")).toBe(
-      '将记住到本项目本地：对 url 为 "https://x.com/p" 的调用时始终允许',
-    );
+    const [d] = deriveRememberRule("WebFetch", { url: "https://x.com/p" });
+    expect(describeRuleMatcher(d)).toBe('对 url 为 "https://x.com/p" 的调用时始终允许');
   });
   it("工具级", () => {
-    const drafts = deriveRememberRule("Read", {});
-    expect(describeRememberRule(drafts, "local")).toBe(
-      "将记住到本项目本地：调用该工具时始终允许",
-    );
-  });
-  it("多条（链式命令）逐条列出", () => {
-    const drafts = deriveRememberRule("Bash", { command: "pnpm test && npm run build" });
-    expect(drafts).toHaveLength(2);
-    expect(describeRememberRule(drafts, "local")).toBe(
-      '将记住到本项目本地（2 条规则）：1. 执行以 "pnpm test" 开头的命令时始终允许；2. 执行以 "npm run build" 开头的命令时始终允许',
-    );
+    const [d] = deriveRememberRule("Read", {});
+    expect(describeRuleMatcher(d)).toBe("调用该工具时始终允许");
   });
 });
 

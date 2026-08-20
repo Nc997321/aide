@@ -83,7 +83,7 @@
 权限确认框新增「允许并记住」按钮：本次放行 + 就地推导一条 `allow` 规则写到默认作用域（项目本地优先，不可写回退用户全局），替代被移除的旧「总是允许」。推导规则：Bash→命令前缀（在首个未引用 shell 控制符处截断）、Write/Edit/MultiEdit→所在文件夹、NotebookEdit→notebook 所在文件夹、WebFetch→完整 URL equals、其它→工具级。
 
 - [ ] 启动 `pnpm tauri dev` 并打开一个项目（让 local scope 可写），确认跑的是新 bundle（旧 WebView2 缓存会误判"修完不生效"）
-- [ ] 让模型调用 Bash（如 `pnpm test`）：权限框出现「允许并记住」按钮 + 描述行「将记住到本项目本地：执行以 "pnpm test" 开头的命令时始终允许」
+- [ ] 让模型调用 Bash（如 `pnpm test`）：权限框出现「允许并记住」按钮 + 规则行「执行以 "pnpm test" 开头的命令时始终允许」（作用域不在预览区展示，由点击后的 toast 确认）
 - [ ] 点「允许并记住」→ toast「已记住到本项目本地，下次自动放行」+ 本次放行
 - [ ] 设置 → 权限 → 项目本地 tab 出现对应 allow 规则（`.aide/settings.local.json`）
 - [ ] 再次触发同类命令（如 `pnpm test --runInBand`）→ 不弹窗，直接放行
@@ -92,7 +92,7 @@
 - [ ] Write/Edit：记住后，同目录及子目录下文件编辑自动放行；其它目录仍弹窗
 - [ ] WebFetch：记住后，同 URL 再抓取自动放行；其它 URL 仍弹窗
 - [ ] 计划批准（ExitPlanMode）/ AskUserQuestion 对话框**不**显示「允许并记住」按钮
-- [ ] 无项目打开时：权限框描述显示「将记住到用户全局」，规则落到 `~/.aide/settings.json`
+- [ ] 无项目打开时：点「允许并记住」后 toast 显示「已记住到用户全局」，规则落到 `~/.aide/settings.json`
 - [ ] 「允许」（单次）按钮仍存在且只放行本次、不写规则
 
 ## 自动化测试覆盖

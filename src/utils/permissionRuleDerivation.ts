@@ -22,7 +22,6 @@ import type {
   PermissionMatcher,
   PermissionRule,
   PermissionRuleDraft,
-  PermissionScope,
 } from "@/types/permissions";
 
 // 未引用即被视为命令边界的 shell 控制符。`$(` 单独处理（两字符）。
@@ -411,23 +410,9 @@ export function stripTrailingNumericArg(value: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// 描述（供对话框展示「将记住什么」）
+// 描述（供对话框规则行展示这条规则匹配什么）。作用域不在预览区描述——点完
+// 「允许并记住」toast 会确认落点（ChatPanel），设置面板可查看。
 // ---------------------------------------------------------------------------
-
-function scopeWord(scope: PermissionScope): string {
-  switch (scope) {
-    case "local":
-      return "本项目本地";
-    case "project":
-      return "本项目（共享）";
-    case "user":
-      return "用户全局";
-    case "managed":
-      return "受管策略";
-    case "session":
-      return "本会话";
-  }
-}
 
 function matcherDescription(matcher: PermissionMatcher): string {
   switch (matcher.kind) {
@@ -450,19 +435,7 @@ function matcherDescription(matcher: PermissionMatcher): string {
   }
 }
 
-/** 供权限对话框「允许并记住」按钮旁的描述行：将记住到哪个作用域、记住什么。
- *  多条规则（链式命令一次记住多段）逐条列出。 */
-export function describeRememberRule(
-  drafts: readonly PermissionRuleDraft[],
-  scope: PermissionScope,
-): string {
-  if (drafts.length === 0) return "";
-  const head = `将记住到${scopeWord(scope)}`;
-  if (drafts.length === 1) {
-    return `${head}：${matcherDescription(drafts[0].matcher)}时始终允许`;
-  }
-  const items = drafts
-    .map((d, i) => `${i + 1}. ${matcherDescription(d.matcher)}时始终允许`)
-    .join("；");
-  return `${head}（${drafts.length} 条规则）：${items}`;
+/** 单条规则的只读描述行：这条规则匹配什么。 */
+export function describeRuleMatcher(draft: PermissionRuleDraft): string {
+  return `${matcherDescription(draft.matcher)}时始终允许`;
 }
