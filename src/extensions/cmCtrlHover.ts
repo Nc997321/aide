@@ -49,12 +49,14 @@ class CtrlHoverTracker {
     this.onKeyDown = (e) => {
       if (e.key === "Control" && !this.ctrlHeld) {
         this.ctrlHeld = true;
+        console.warn(`[hover] ctrl down`);
         this.sync();
       }
     };
     this.onKeyUp = (e) => {
       if (e.key === "Control") {
         this.ctrlHeld = false;
+        console.warn(`[hover] ctrl up`);
         this.clear();
       }
     };
@@ -101,11 +103,13 @@ class CtrlHoverTracker {
       return;
     }
     this.activeRange = { from: word.from, to: word.to };
+    console.warn(`[hover] ctrl sync word="${this.view.state.doc.sliceString(word.from, word.to)}" pos=${pos}`);
     this.view.dispatch({ effects: setHoverWord.of(this.activeRange) });
   }
 
   private clear() {
     if (this.activeRange) {
+      console.warn(`[hover] ctrl clear`);
       this.activeRange = null;
       this.view.dispatch({ effects: setHoverWord.of(null) });
     }

@@ -189,26 +189,54 @@ function lspLinter(workspaceRoot: string, filePath: string) {
   );
 }
 
+// hover 请求去重 + 内容缓存。lspHover source 返回 promise，CM6 HoverPlugin 把它置
+// pending，并在每次 editor update 后重触——jdtls 索引期 publishDiagnostics 频繁到达，
+// 每次触发 setDiagnostics dispatch → HoverPlugin update → 重发 lspHover，数十请求堆积
+// 在 jdtls 串行 stdio 管道，单个被拖到 80-100s（diag 实测）。in-flight 去重：同 position
+// pending 期间复用同一 promise 不重发；返回后缓存 content，后续 update 重触走 cache 同步
+// 返（不 pending、不重发）。key 含 doc.length：doc 编辑后 length 变 → key 变 → 不命中陈旧。
+const hoverInflight = new Map<string, Promise<Tooltip | null>>();
+const hoverCache = new Map<string, string>();
+const HOVER_CACHE_CAP = 50;
+
+function makeHoverDom(content: string): HTMLElement {
+  const dom = document.createElement("div");
+  dom.className = "aide-lsp-hover";
+  dom.innerHTML = renderMarkdown(content);
+  return dom;
+}
+
 function lspHover(workspaceRoot: string, filePath: string) {
   return hoverTooltip(async (view, pos): Promise<Tooltip | null> => {
-    if (!workspaceRoot) return null;
+    if (!workspaceRoot) { console.warn(`[hover] lsp skip no-ws pos=${pos}`); return null; }
     const line = view.state.doc.lineAt(pos);
     const lineNum = line.number - 1;
     const col = pos - line.from;
-    try {
-      const { content } = await api.lspHover(workspaceRoot, filePath, lineNum + 1, col + 1);
-      if (!content) return null;
-      return {
-        pos,
-        above: true,
-        create() {
-          const dom = document.createElement("div");
-          dom.className = "aide-lsp-hover";
-          dom.innerHTML = renderMarkdown(content);
-          return { dom };
-        },
-      };
-    } catch { return null; }
+    const key = `${filePath}|${view.state.doc.length}|${lineNum + 1}|${col + 1}`;
+    // 缓存命中：同步返（非 promise）→ CM6 不置 pending → 不因 update 重触重发
+    const cached = hoverCache.get(key);
+    if (cached !== undefined) {
+      console.warn(`[hover] lsp cached len=${cached.length}`);
+      return { pos, above: true, create() { return { dom: makeHoverDom(cached) }; } };
+    }
+    // in-flight 去重：同 position pending 期间复用同一 promise，diagnostics update 重触时不重发
+    const existing = hoverInflight.get(key);
+    if (existing) { console.warn(`[hover] lsp inflight-reuse`); return existing; }
+    const tHover = performance.now();
+    console.warn(`[hover] lsp source line=${lineNum + 1} col=${col + 1} pos=${pos} file=${filePath}`);
+    const p = (async (): Promise<Tooltip | null> => {
+      try {
+        const { content } = await api.lspHover(workspaceRoot, filePath, lineNum + 1, col + 1);
+        console.warn(`[hover] lsp result ms=${(performance.now() - tHover).toFixed(0)} len=${content?.length || 0}`);
+        if (!content) return null;
+        if (hoverCache.size >= HOVER_CACHE_CAP) hoverCache.delete(hoverCache.keys().next().value!);
+        hoverCache.set(key, content);
+        return { pos, above: true, create() { return { dom: makeHoverDom(content) }; } };
+      } catch (e) { console.warn(`[hover] lsp err ${e}`); return null; }
+    })();
+    hoverInflight.set(key, p);
+    p.finally(() => hoverInflight.delete(key));
+    return p;
   });
 }
 

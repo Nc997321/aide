@@ -33,6 +33,25 @@ pub struct EnsureOutcome {
     pub error: Option<String>,
 }
 
+/// 跳转类 LSP 请求（definition）的结果包装：把 ServerHandle::request() 的 RequestOutcome
+/// 透传给前端，让前端区分「server 确认无结果」(Ok+空) 与「server 慢/未就绪/挂了」(其余)，
+/// 据此决定 fallback codegraph 还是等/重试。其余 LSP 命令（completion/hover/...）暂不透传
+/// status，保持原空行为（向后兼容），待后续渐进升级。
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum JumpStatus {
+    Ok,
+    Timeout,
+    NotReady,
+    Gone,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LspJumpResult {
+    pub status: JumpStatus,
+    pub results: Vec<crate::codegraph::types::QueryResult>,
+}
+
 pub struct LspState(pub Arc<TokioMutex<LspManager>>);
 impl LspState {
     pub fn new() -> Self { Self(Arc::new(TokioMutex::new(LspManager::new()))) }
@@ -168,20 +187,34 @@ pub async fn lsp_did_close(
 pub async fn lsp_definition(
     workspace_root: String, file_path: String, line: usize, column: usize, word: String,
     state: tauri::State<'_, Arc<LspState>>,
-) -> Result<Vec<crate::codegraph::types::QueryResult>, String> {
+) -> Result<LspJumpResult, String> {
+    // lang 识别不出 → Ok+空（前端 fallback codegraph，与今天同）。
     let lang = lang_from_ext_of(&file_path);
-    let Some(lang_id) = lang else { return Ok(vec![]); };
+    let Some(lang_id) = lang else {
+        return Ok(LspJumpResult { status: JumpStatus::Ok, results: vec![] });
+    };
     let mgr = state.0.lock().await;
-    let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(vec![]); };
+    // server 未起/失败 → NotReady（前端显示「未就绪」并 auto-fallback codegraph）。
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(LspJumpResult { status: JumpStatus::NotReady, results: vec![] });
+    };
     let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
     let params = serde_json::json!({
         "textDocument":{"uri":uri},
         "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
     });
-    let result = h.request("textDocument/definition", params).await?;
-    // result 是 null / Location / Location[]（未就绪或超时返 null → parse 返空 → 前端 fallback CodeGraph）
-    let locs = parse_locations(&result);
-    Ok(crate::lsp::protocol::locations_to_query_results(&locs, &word, &workspace_root))
+    let outcome = h.request("textDocument/definition", params, crate::lsp::manager::DEFINITION_TIMEOUT).await?;
+    let (status, value) = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => (JumpStatus::Ok, v),
+        crate::lsp::manager::RequestOutcome::Timeout => (JumpStatus::Timeout, serde_json::Value::Null),
+        crate::lsp::manager::RequestOutcome::NotReady => (JumpStatus::NotReady, serde_json::Value::Null),
+        crate::lsp::manager::RequestOutcome::ServerGone => (JumpStatus::Gone, serde_json::Value::Null),
+    };
+    // Ok+空数组 = server 确认无结果（status=Ok, results 空）→ 前端据 status=ok 走 codegraph fallback；
+    // 非 Ok → results 恒空，前端据 status 决定（timeout 等/重试，not_ready/gone fallback）。
+    let locs = parse_locations(&value);
+    let results = crate::lsp::protocol::locations_to_query_results(&locs, &word, &workspace_root);
+    Ok(LspJumpResult { status, results })
 }
 
 #[tauri::command]
@@ -197,7 +230,9 @@ pub async fn lsp_completion(
         "textDocument":{"uri":uri},
         "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
     });
-    let result = h.request("textDocument/completion", params).await?;
+    let outcome = h.request("textDocument/completion", params, crate::lsp::manager::REQUEST_TIMEOUT).await?;
+    // 向后兼容：非 Ok（timeout/notready/gone）映射 Null，parse 返空 = 旧行为；status 暂不透传。
+    let result = match outcome { crate::lsp::manager::RequestOutcome::Ok(v) => v, _ => serde_json::Value::Null };
     let items = parse_completion_items(&result);
     Ok(crate::lsp::protocol::completion_items_to_cm(&items))
 }
@@ -215,8 +250,13 @@ pub async fn lsp_hover(
         "textDocument":{"uri":uri},
         "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
     });
-    let result = h.request("textDocument/hover", params).await?;
+    let outcome = h.request("textDocument/hover", params, crate::lsp::manager::REQUEST_TIMEOUT).await?;
+    let result = match outcome { crate::lsp::manager::RequestOutcome::Ok(v) => v, _ => serde_json::Value::Null };
     let content = parse_hover_content(&result);
+    {
+        let raw: String = serde_json::to_string(&result).unwrap_or_default().chars().take(400).collect();
+        eprintln!("[hover] rust raw(400)={} content_some={}", raw, content.is_some());
+    }
     Ok(serde_json::json!({"content":content}))
 }
 
@@ -236,7 +276,8 @@ pub async fn lsp_implementation(
         "textDocument":{"uri":uri},
         "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
     });
-    let result = h.request("textDocument/implementation", params).await?;
+    let outcome = h.request("textDocument/implementation", params, crate::lsp::manager::REQUEST_TIMEOUT).await?;
+    let result = match outcome { crate::lsp::manager::RequestOutcome::Ok(v) => v, _ => serde_json::Value::Null };
     let locs = parse_locations(&result);
     Ok(crate::lsp::protocol::locations_to_query_results(&locs, &word, &workspace_root))
 }
@@ -254,7 +295,8 @@ pub async fn lsp_document_symbol(
     let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(vec![]); };
     let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
     let params = serde_json::json!({ "textDocument":{"uri":uri} });
-    let result = h.request("textDocument/documentSymbol", params).await?;
+    let outcome = h.request("textDocument/documentSymbol", params, crate::lsp::manager::REQUEST_TIMEOUT).await?;
+    let result = match outcome { crate::lsp::manager::RequestOutcome::Ok(v) => v, _ => serde_json::Value::Null };
     Ok(parse_document_symbols(&result))
 }
 
@@ -399,6 +441,15 @@ fn parse_hover_content(result: &serde_json::Value) -> Option<String> {
     match contents {
         serde_json::Value::String(s) => Some(s.clone()),
         obj if obj.is_object() => obj.get("value").and_then(|v| v.as_str()).map(String::from),
+        arr if arr.is_array() => {
+            // MarkedString[]（LSP 旧格式，jdtls 某些场景仍用）：元素是 string 或
+            // {language, value}，拼成多段。MarkupContent（{kind,value}）走上面的 object 分支。
+            let parts: Vec<String> = arr.as_array().unwrap().iter().filter_map(|el| {
+                el.as_str().map(String::from)
+                    .or_else(|| el.get("value").and_then(|v| v.as_str()).map(String::from))
+            }).collect();
+            if parts.is_empty() { None } else { Some(parts.join("\n\n")) }
+        }
         _ => None,
     }
 }
@@ -470,6 +521,24 @@ mod tests {
         assert!(parse_document_symbols(&serde_json::json!([])).is_empty());
     }
 
+    #[test]
+    fn parse_hover_content_formats() {
+        // MarkupContent（新格式，jdtls 常用）：{kind, value}
+        let mk = serde_json::json!({"contents":{"kind":"markdown","value":"**foo**"}});
+        assert_eq!(parse_hover_content(&mk).as_deref(), Some("**foo**"));
+        // MarkedString[]（旧格式）：[string, {language, value}] → 拼多段
+        let arr = serde_json::json!({"contents":[{"language":"java","value":"public void foo()"},"plain"]});
+        let c = parse_hover_content(&arr).unwrap();
+        assert!(c.contains("public void foo()") && c.contains("plain"));
+        // 纯字符串
+        assert_eq!(parse_hover_content(&serde_json::json!({"contents":"hi"})).as_deref(), Some("hi"));
+        // null / 缺 contents → None
+        assert_eq!(parse_hover_content(&serde_json::Value::Null), None);
+        assert_eq!(parse_hover_content(&serde_json::json!({"nope":1})), None);
+        // 空数组 → None
+        assert_eq!(parse_hover_content(&serde_json::json!({"contents":[]})), None);
+    }
+
     #[tokio::test]
     async fn mock_end_to_end_definition() {
         let mock = crate::lsp::mock_server::spawn_mock_lsp();
@@ -525,5 +594,14 @@ mod tests {
                 _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => { return Err(()); }
             }
         }
+    }
+
+    #[test]
+    fn jump_status_serializes_snake_case() {
+        // 前端按字符串字面量分流（"ok"/"timeout"/"not_ready"/"gone"），snake_case 必须稳定。
+        assert_eq!(serde_json::to_string(&JumpStatus::Ok).unwrap(), "\"ok\"");
+        assert_eq!(serde_json::to_string(&JumpStatus::Timeout).unwrap(), "\"timeout\"");
+        assert_eq!(serde_json::to_string(&JumpStatus::NotReady).unwrap(), "\"not_ready\"");
+        assert_eq!(serde_json::to_string(&JumpStatus::Gone).unwrap(), "\"gone\"");
     }
 }

@@ -24,9 +24,29 @@ pub enum EnsureError {
 const SPAWN_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// init_handshake 的 send：与 rx 的 5s 对齐（send 卡 pipe 时也要有界）。
 const HANDSHAKE_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-/// LSP 请求（definition/completion/hover/...）响应超时：防 jdtls 偶发卡死无限挂起。
-/// 超时返空让前端 fallback CodeGraph，不阻塞编辑器。
-const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// LSP 请求响应超时（completion/hover/implementation/documentSymbol）：防 server 偶发卡死
+/// 无限挂起。超时返回 RequestOutcome::Timeout，调用方据 outcome 决定 fallback 还是等。
+pub const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// 跳转类请求（definition）超时：8s 给 jdtls 冷解析（常 4-6s）一次跑完的余量——前端已不再
+/// 重试（hover 预取 + 缓存使重复点击免费），超时只兜底最坏情况（>8s = 卡死 server → degraded
+/// hint +「用本地索引跳转」）。比通用 10s 紧一档，最坏 UX（8s）略优于旧 5s+retry≈10.5s，
+/// 且无「跳转中…」重启。详见 composables/definitionResolver。
+pub const DEFINITION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+// ── 请求结果：区分「server 慢/未就绪/挂了」与「server 确认无结果」──
+// 旧实现把 NotReady/Timeout/ServerGone 三种和 Ok(空) 都返 Null，前端只看 length>0
+// 一律 fallback codegraph → jdtls 渐进解析时同符号在「直跳」与「多结果弹框」间漂移。
+#[derive(Debug, PartialEq)]
+pub enum RequestOutcome {
+    /// ready=false（如 jdtls 索引期）：请求根本没发。
+    NotReady,
+    /// timeout：server 活着但在预算内没响应（jdtls lazy resolve 首次慢）。
+    Timeout,
+    /// channel closed：server 进程已退出（reader EOF → reject_all）。
+    ServerGone,
+    /// 收到响应（可能是 null/空数组——那是 server 确认无结果，与上面三种本质不同）。
+    Ok(serde_json::Value),
+}
 
 // ── ServerHandle ──
 
@@ -53,26 +73,28 @@ impl ServerHandle {
         !self.dead.load(Ordering::Relaxed) && self.initialized.load(Ordering::Relaxed)
     }
 
-    /// 发一条 LSP request 并等响应，带「功能就绪 gate + 超时」兜底：
-    /// - 未就绪（ready=false，如 jdtls 索引期）→ 直接返 Null，不发请求不挂起
-    ///   （前端 definition/引用据此 fallback CodeGraph；补全/hover/implementation 返空）。
-    /// - 就绪 → 发请求，rx 套 REQUEST_TIMEOUT 超时：超时/channel closed → Null（防偶发卡死）。
-    /// 返回原始 result（调用方各自 parse；Null 各 parser 均返空）。
+    /// 发一条 LSP request 并等响应，带「功能就绪 gate + 超时」兜底，返回 RequestOutcome
+    /// 让调用方区分四种情况（旧实现统统返 Null，前端无法区分慢与空）：
+    /// - NotReady：ready=false（jdtls 索引期等）→ 不发请求不挂起。
+    /// - Ok(v)：收到响应（v 可能 null/空数组=server 确认无结果，与 NotReady/Timeout/Gone 本质不同）。
+    /// - Timeout / ServerGone：预算内未响应 / server 退出。调用方据 status 决定重试或 fallback。
+    /// send 失败（broken pipe）保持外层 Err(String)——传输层故障不同于「server 没响应」。
     pub async fn request(
         &self,
         method: &str,
         params: serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
+        timeout: std::time::Duration,
+    ) -> Result<RequestOutcome, String> {
         if !self.ready.load(Ordering::Relaxed) {
-            return Ok(serde_json::Value::Null);
+            return Ok(RequestOutcome::NotReady);
         }
         let (msg, id, tx, rx) = self.router.next_request(method, params);
         self.transport.table.lock().await.insert(id, tx);
         self.transport.send(&msg).await.map_err(|e| e.to_string())?;
-        match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
-            Ok(Ok(result)) => Ok(result),
-            Ok(Err(_)) => Ok(serde_json::Value::Null), // channel closed（server 退出）
-            Err(_) => Ok(serde_json::Value::Null),     // timeout（防卡死挂起）
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(result)) => Ok(RequestOutcome::Ok(result)),
+            Ok(Err(_)) => Ok(RequestOutcome::ServerGone), // channel closed（server 退出）
+            Err(_) => Ok(RequestOutcome::Timeout),       // 预算内未响应
         }
     }
 }
@@ -666,6 +688,111 @@ mod tests {
         assert!(ALWAYS_IGNORE_DIRS.contains(&"node_modules"));
         assert!(ALWAYS_IGNORE_DIRS.contains(&"target"));
         assert!(ALWAYS_IGNORE_DIRS.contains(&".git"));
+    }
+
+    // ── request() 四态：区分 NotReady/Timeout/ServerGone/Ok ──
+
+    use crate::lsp::mock_server;
+    use crate::lsp::transport::LspTransport;
+
+    fn make_handle(transport: LspTransport, ready: bool) -> Arc<ServerHandle> {
+        Arc::new(ServerHandle {
+            transport,
+            docs: Arc::new(TokioMutex::new(OpenDocs::new())),
+            router: Arc::new(Router::new()),
+            exclude_globs: vec![],
+            initialized: AtomicBool::new(true),
+            ready: AtomicBool::new(ready),
+            dead: Arc::new(AtomicBool::new(false)),
+            capabilities: Arc::new(TokioMutex::new(None)),
+            _child: None,
+        })
+    }
+
+    /// 简化 reader：只处理 ResolveWaiter（把响应送回 tx），忽略 diagnostics/log 等
+    /// （测试 mock 也会推 publishDiagnostics，这里忽略）。EOF 时 reject_all 模拟 server 退出。
+    fn start_test_reader(handle: Arc<ServerHandle>) {
+        use tokio::io::{AsyncReadExt, BufReader};
+        let table = handle.transport.table_handle();
+        tokio::spawn(async move {
+            let reader_source = handle.transport.take_reader_source().await;
+            let mut reader = BufReader::new(reader_source);
+            let mut framer = crate::lsp::transport::Framer::new();
+            let mut buf = [0u8; 8192];
+            loop {
+                let n = match reader.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(_) => break,
+                };
+                for msg in framer.feed(&buf[..n]) {
+                    if let crate::lsp::rpc::Action::ResolveWaiter { id, result } =
+                        crate::lsp::rpc::dispatch(&msg)
+                    {
+                        if let Some(tx) = table.lock().await.take(id) {
+                            let _ = tx.send(result);
+                        }
+                    }
+                }
+            }
+            table.lock().await.reject_all();
+        });
+    }
+
+    #[tokio::test]
+    async fn request_not_ready_returns_not_ready_without_sending() {
+        let mock = mock_server::spawn_mock_lsp();
+        let transport = LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
+        let h = make_handle(transport, false); // ready=false → 不发请求
+        let outcome = h
+            .request("textDocument/definition", serde_json::json!({}), std::time::Duration::from_secs(2))
+            .await
+            .unwrap();
+        assert_eq!(outcome, RequestOutcome::NotReady);
+    }
+
+    #[tokio::test]
+    async fn request_ok_returns_response_value() {
+        let mock = mock_server::spawn_mock_lsp();
+        let transport = LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
+        let h = make_handle(transport, true);
+        start_test_reader(h.clone());
+        let outcome = h
+            .request(
+                "textDocument/definition",
+                serde_json::json!({"textDocument":{"uri":"file:///mock/x"},"position":{"line":0,"character":0}}),
+                std::time::Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RequestOutcome::Ok(_)), "got {outcome:?}");
+    }
+
+    #[tokio::test]
+    async fn request_timeout_when_silent_server() {
+        let mock = mock_server::spawn_mock_lsp_silent();
+        let transport = LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
+        let h = make_handle(transport, true);
+        start_test_reader(h.clone());
+        let outcome = h
+            .request("textDocument/definition", serde_json::json!({}), std::time::Duration::from_millis(80))
+            .await
+            .unwrap();
+        assert_eq!(outcome, RequestOutcome::Timeout);
+    }
+
+    #[tokio::test]
+    async fn request_server_gone_when_reader_eof() {
+        // die mock：读到请求字节即退出 → test_reader EOF → reject_all → rx RecvError → ServerGone。
+        let mock = mock_server::spawn_mock_lsp_die();
+        let transport = LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
+        let h = make_handle(transport, true);
+        start_test_reader(h.clone());
+        let outcome = h
+            .request("textDocument/definition", serde_json::json!({}), std::time::Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(outcome, RequestOutcome::ServerGone);
     }
 
 }

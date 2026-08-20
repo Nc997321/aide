@@ -487,6 +487,21 @@ export interface QueryResult {
   symbol: SymbolDef;
   confidence: Confidence;
   score: number | null;
+  /** 结果来源（前端 orchestration 层打标，Rust 不发）：lsp=语言服务、ast=codegraph 结构层、
+   *  semantic=codegraph 语义层、grep=文本回退。缺省=旧路径未打标，浮层按 confidence 兜底显示。 */
+  source?: "lsp" | "ast" | "semantic" | "grep";
+}
+
+/** lsp_definition 请求结局：区分「server 慢/未就绪/挂了」与「server 确认无结果」。
+ *  - ok：server 正常响应（results 可空=确认无定义，由前端决定是否 fallback）
+ *  - timeout：预算内无响应（前端可重试一次，仍 timeout 则降级提示，不自动 fallback）
+ *  - not_ready：语言服务未就绪（前端 auto-fallback codegraph→grep + 标签 + hint）
+ *  - gone：语言服务已退出（前端 auto-fallback codegraph→grep，useLsp 已 toast） */
+export type JumpStatus = "ok" | "timeout" | "not_ready" | "gone";
+
+export interface LspJumpResult {
+  status: JumpStatus;
+  results: QueryResult[];
 }
 
 /** documentSymbol 扁平条目（Rust 侧 parse_document_symbols 归一）。kind 保留 LSP SymbolKind

@@ -1,6 +1,7 @@
 import { ref, readonly } from "vue";
 import { api } from "../api";
 import { useLsp } from "./useLsp";
+import * as resolver from "./definitionResolver";
 import type { GrepMatch, QueryResult } from "../types";
 
 /** 路径归一为「正斜杠、相对 projectRoot」形式，供跨 provider 自引用过滤比较。
@@ -12,6 +13,14 @@ function normFile(root: string, p: string): string {
   const x = p.replace(/\\/g, "/");
   if (r && x.startsWith(r + "/")) return x.slice(r.length + 1);
   return x;
+}
+
+/** LSP 结果消费：自引用过滤（同文件同行 = 点到定义本身）+ `source:"lsp"` 打标。
+ *  peek 缓存命中与 resolve-ok 两路共用，确保过滤/打标逻辑单一真相。 */
+function stampLsp(results: QueryResult[], projectRoot: string, srcAbs: string, srcLine: number): QueryResult[] {
+  return results
+    .filter(r => !(normFile(projectRoot, r.symbol.file) === normFile(projectRoot, srcAbs) && r.symbol.line === srcLine))
+    .map(r => ({ ...r, source: "lsp" as const }));
 }
 
 // Module-level singleton
@@ -26,57 +35,31 @@ const isGrepFallback = ref(false);
  *  决定标题与空态文案。 */
 const mode = ref<"definition" | "references" | "implementation">("definition");
 
+/** LSP 请求进行中（浮层显示「跳转中…」而非「未找到定义」）。由拥有当前 seq 的调用在各出口复位。 */
+const searching = ref(false);
+/** LSP 降级原因（仅 timeout/not_ready；gone/ok-empty 不设）。浮层在 results 为空时据此显示 hint。 */
+const degraded = ref<"timeout" | "not_ready" | null>(null);
+/** 请求序号：每次 search/dismiss/切换模式自增，await 后比对 mySeq——不等说明有更新请求，
+ *  当前 await 弃结果（防 stale 覆盖：慢 server 期间快速连点不同符号，末次点击胜）。 */
+let requestSeq = 0;
+
 let lastProjectRoot = "";
 let lastSourceExt = "";
+let lastSourceFile = "";
+let lastSourceLine = 0;
+let lastSourceColumn = 0;
 
 export function useGotoDefinition() {
-  async function search(
+  /** 跑 codegraph→grep 本地索引两层（不调 LSP）。供 search() 的 ok-empty/not_ready/gone 分支
+   *  与 localManualSearch() 共用。每次 await 后查 seq，stale 即弃（不复位 searching——新请求拥有它）。
+   *  命中或耗尽时由本函数复位 searching（仅当仍为当前 seq）。 */
+  async function runLocalTiers(
     word: string,
     projectRoot: string,
-    source?: { sourceFile: string; sourceFileAbs?: string; sourceLine: number; sourceExt: string; sourceColumn?: number },
+    source: { sourceFile: string; sourceLine: number; sourceExt?: string; sourceColumn?: number } | undefined,
+    mySeq: number,
   ) {
-    if (!word || !projectRoot) return;
-
-    searchWord.value = word;
-    targetProjectRoot.value = projectRoot;
-    lastProjectRoot = projectRoot;
-    lastSourceExt = source?.sourceExt || "";
-    results.value = [];
-    selectedIndex.value = 0;
-    visible.value = true;
-    isGrepFallback.value = false;
-    mode.value = "definition";
-
-    // 0. Try LSP first (workspace LSP on + server available → authoritative)
-    try {
-      if (source?.sourceFileAbs && useLsp().isLspOn(projectRoot)) {
-        // LSP 要绝对路径（与 didOpen 的 URI 对齐才能命中文档），用 sourceFileAbs；
-        // 自引用过滤也用绝对路径经 normFile 归一比较（LSP 结果 file 是绝对）。
-        const srcAbs = source.sourceFileAbs;
-        const srcLine = source.sourceLine;
-        const lspResults = await api.lspDefinition(
-          projectRoot,
-          srcAbs,
-          srcLine,
-          source?.sourceColumn ?? 0,
-          word,
-        );
-        if (lspResults.length > 0) {
-          const filtered = lspResults.filter(
-            r => !(normFile(projectRoot, r.symbol.file) === normFile(projectRoot, srcAbs) && r.symbol.line === srcLine),
-          );
-          if (filtered.length > 0) {
-            results.value = filtered;
-            isGrepFallback.value = false;
-            return;
-          }
-        }
-      }
-    } catch {
-      // LSP unavailable / error → fall through to codegraph → grep
-    }
-
-    // 1. Try CodeGraph first
+    // 1. CodeGraph 结构（tree-sitter AST，名字匹配）/ 语义（向量）层
     try {
       const cgResults = await api.codegraphGotoDefinition(
         word,
@@ -85,7 +68,7 @@ export function useGotoDefinition() {
         source?.sourceColumn ?? 0,
         projectRoot,
       );
-
+      if (mySeq !== requestSeq) return;
       if (cgResults.length > 0) {
         // Filter out self-reference (same file, same line)
         let filtered = cgResults;
@@ -94,17 +77,24 @@ export function useGotoDefinition() {
             r => !(normFile(projectRoot, r.symbol.file) === normFile(projectRoot, source.sourceFile) && r.symbol.line === source.sourceLine),
           );
         }
-        results.value = filtered;
+        results.value = filtered.map(r => ({
+          ...r,
+          source: r.confidence === "Structure" ? ("ast" as const) : ("semantic" as const),
+        }));
+        isGrepFallback.value = false;
+        searching.value = false;
         return;
       }
     } catch {
       // CodeGraph unavailable — fall through to grep
     }
+    if (mySeq !== requestSeq) return;
 
-    // 2. Fallback: grep-level search (existing behavior)
-    isGrepFallback.value = true;
+    // 2. grep 文本回退（word-boundary 精确匹配）
     try {
       let matches: GrepMatch[] = await api.grepSymbol(word, projectRoot, source?.sourceExt);
+      if (mySeq !== requestSeq) return;
+      isGrepFallback.value = true;
       if (source?.sourceFile) {
         matches = matches.filter(
           m => !(normFile(projectRoot, m.file) === normFile(projectRoot, source.sourceFile) && m.line === source.sourceLine),
@@ -112,8 +102,8 @@ export function useGotoDefinition() {
       }
       // Convert GrepMatch[] to QueryResult[] for unified rendering.
       // grep 是 word-boundary 精确文本匹配，既非 tree-sitter 结构层也非向量语义层；
-      // 这里 confidence/score 仅是为满足 QueryResult 类型的占位，渲染层走
-      // isGrepFallback 标志显示 [匹配] 标签，不读这俩字段——勿据此判断"是定义"。
+      // 这里 confidence/score 仅是为满足 QueryResult 类型的占位，渲染层走 source:"grep"/isGrepFallback
+      // 显示 [匹配] 标签，不读这俩字段——勿据此判断"是定义"。
       results.value = matches.slice(0, 20).map(m => ({
         symbol: {
           name: word,
@@ -125,16 +115,125 @@ export function useGotoDefinition() {
         },
         confidence: "Semantic" as const,
         score: null,
+        source: "grep" as const,
       }));
     } catch {
+      if (mySeq !== requestSeq) return;
+      isGrepFallback.value = true;
       results.value = [];
     }
+    if (mySeq !== requestSeq) return;
+    searching.value = false;
+  }
+
+  async function search(
+    word: string,
+    projectRoot: string,
+    source?: { sourceFile: string; sourceFileAbs?: string; sourceLine: number; sourceExt: string; sourceColumn?: number; sourceWordColumn?: number },
+  ) {
+    if (!word || !projectRoot) return;
+
+    searchWord.value = word;
+    targetProjectRoot.value = projectRoot;
+    lastProjectRoot = projectRoot;
+    lastSourceExt = source?.sourceExt || "";
+    lastSourceFile = source?.sourceFile || "";
+    lastSourceLine = source?.sourceLine || 0;
+    lastSourceColumn = source?.sourceColumn ?? 0;
+    results.value = [];
+    selectedIndex.value = 0;
+    visible.value = true;
+    isGrepFallback.value = false;
+    mode.value = "definition";
+    searching.value = true;
+    degraded.value = null;
+    const mySeq = ++requestSeq;
+
+    // 0. LSP（工作区 LSP 开 + server 在线 → 权威；按 status 分流 fallback 语义）
+    if (source?.sourceFileAbs && useLsp().isLspOn(projectRoot)) {
+      const srcAbs = source.sourceFileAbs;
+      const srcLine = source.sourceLine;
+      // 缓存键列 = 词首列（hover 预取与 click 对同一词产出同键 → 预取真正暖到点击）；
+      // 缺省回退 click 位置列。LSP 请求也用此列——LSP 解析的是标识符，词首列与
+      // click 位置列结果完全一致。
+      const keyCol = source.sourceWordColumn ?? source.sourceColumn ?? 0;
+
+      // 同步快路径：命中缓存即瞬时跳转（无 await、无「跳转中…」，Vue 批处理不渲染 loading）
+      const cached = resolver.peek(projectRoot, srcAbs, srcLine, keyCol, word);
+      if (cached) {
+        console.warn(`[hover] search peek HIT word=${word} line=${srcLine} col=${keyCol}`);
+        const filtered = stampLsp(cached, projectRoot, srcAbs, srcLine);
+        if (filtered.length > 0) {
+          results.value = filtered;
+          searching.value = false;
+          return;
+        }
+        // 缓存全自引用（点到定义本身）→ 同 ok-empty，落本地索引（不重发 LSP）
+      } else {
+        console.warn(`[hover] search peek MISS word=${word} line=${srcLine} col=${keyCol} → resolve`);
+        // 未命中：单次解析（无 retry、无 sleep）。hover 预取已在途则 await 同一 promise。
+        try {
+          const jump = await resolver.resolve(projectRoot, srcAbs, srcLine, keyCol, word);
+          if (mySeq !== requestSeq) return;
+          if (jump.status === "ok") {
+            const filtered = stampLsp(jump.results, projectRoot, srcAbs, srcLine);
+            if (filtered.length > 0) {
+              results.value = filtered;
+              searching.value = false;
+              return;
+            }
+            // ok 但空 = server 确认无定义 → 落本地索引（今天行为）
+          } else if (jump.status === "timeout") {
+            // 单次超时（删 retry）：结果真未知 → 降级提示，不 auto-fallback
+            // （auto-fallback 正是多结果噪声弹框的来源；给手动「用本地索引跳转」链接）
+            degraded.value = "timeout";
+            searching.value = false;
+            return;
+          } else if (jump.status === "not_ready") {
+            // 索引窗口 30-90s+，死等比今天静默 fallback 还差 → auto-fallback 本地索引 + hint
+            degraded.value = "not_ready";
+          } else {
+            // gone：useLsp 已 toast server 退出 → auto-fallback 本地索引
+          }
+        } catch {
+          if (mySeq !== requestSeq) return;
+          // LSP invoke 抛错（通道/序列化）→ 落本地索引
+        }
+      }
+    }
+
+    // 1+2. 本地索引：codegraph → grep（ok-empty / not_ready / gone / LSP 不可用 / 缓存全自引用 路径汇入此）
+    await runLocalTiers(word, projectRoot, source, mySeq);
   }
 
   function dismiss() {
+    requestSeq++;
     visible.value = false;
     results.value = [];
     selectedIndex.value = 0;
+    searching.value = false;
+    degraded.value = null;
+  }
+
+  /** hint 链接「用本地索引跳转」：只重跑 codegraph+grep（不调 LSP），供 timeout 降级时用户主动取本地结果。
+   *  复用 search() 时缓存的 source 字段做自引用过滤。 */
+  async function localManualSearch() {
+    const word = searchWord.value;
+    const projectRoot = targetProjectRoot.value;
+    if (!word || !projectRoot) return;
+    const mySeq = ++requestSeq;
+    searching.value = true;
+    degraded.value = null;
+    results.value = [];
+    selectedIndex.value = 0;
+    isGrepFallback.value = false;
+    visible.value = true;
+    await runLocalTiers(
+      word,
+      projectRoot,
+      { sourceFile: lastSourceFile, sourceLine: lastSourceLine, sourceExt: lastSourceExt, sourceColumn: lastSourceColumn },
+      mySeq,
+    );
   }
 
   /** 「跳转到实现」：只走 LSP（textDocument/implementation），不 codegraph/grep 兜底——
@@ -147,10 +246,13 @@ export function useGotoDefinition() {
     preloadedResults?: QueryResult[],
   ) {
     if (!word || !projectRoot) return;
+    requestSeq++; // 取消任何进行中的定义跳转 await
+    searching.value = false;
+    degraded.value = null;
     searchWord.value = word;
     targetProjectRoot.value = projectRoot;
     lastProjectRoot = projectRoot;
-    results.value = preloadedResults ?? [];
+    results.value = (preloadedResults ?? []).map(r => ({ ...r, source: "lsp" as const }));
     selectedIndex.value = 0;
     isGrepFallback.value = false;
     mode.value = "implementation";
@@ -161,7 +263,7 @@ export function useGotoDefinition() {
     // 无预载结果 → 走 LSP 查（预留：当前 gutter 路径总带 preloadedResults，此分支供快捷键等用）
     visible.value = true;
     try {
-      results.value = await api.lspImplementation(projectRoot, "", 0, 0, word);
+      results.value = (await api.lspImplementation(projectRoot, "", 0, 0, word)).map(r => ({ ...r, source: "lsp" as const }));
     } catch {
       results.value = [];
     }
@@ -185,6 +287,9 @@ export function useGotoDefinition() {
 
   async function searchAllReferences(word: string, projectRoot: string) {
     if (!word || !projectRoot) return;
+    requestSeq++; // 取消任何进行中的定义跳转 await
+    searching.value = false;
+    degraded.value = null;
 
     searchWord.value = word;
     targetProjectRoot.value = projectRoot;
@@ -200,7 +305,10 @@ export function useGotoDefinition() {
         word, "", 0, 0, projectRoot,
       );
       if (cgResults.length > 0) {
-        results.value = cgResults;
+        results.value = cgResults.map(r => ({
+          ...r,
+          source: r.confidence === "Structure" ? ("ast" as const) : ("semantic" as const),
+        }));
         return;
       }
     } catch { /* fall through */ }
@@ -209,7 +317,7 @@ export function useGotoDefinition() {
     isGrepFallback.value = true;
     try {
       const matches = await api.grepSymbol(word, projectRoot, lastSourceExt || undefined);
-      // 同 search() 的 grep 兜底：confidence/score 是类型占位，渲染走 isGrepFallback。
+      // 同 search() 的 grep 兜底：confidence/score 是类型占位，渲染走 source:"grep"/isGrepFallback。
       results.value = matches.map(m => ({
         symbol: {
           name: word,
@@ -221,6 +329,7 @@ export function useGotoDefinition() {
         },
         confidence: "Semantic" as const,
         score: null,
+        source: "grep" as const,
       }));
     } catch {
       results.value = [];
@@ -234,13 +343,36 @@ export function useGotoDefinition() {
     searchWord: readonly(searchWord),
     isGrepFallback: readonly(isGrepFallback),
     mode: readonly(mode),
+    searching: readonly(searching),
+    degraded: readonly(degraded),
     search,
     searchAllReferences,
     searchImplementations,
+    localManualSearch,
     dismiss,
     selectPrev,
     selectNext,
     getSelected,
     getProjectRoot: () => lastProjectRoot,
   };
+}
+
+/** 测试专用：复位模块单例态（生产代码勿调）。 */
+export function __resetGotoForTest() {
+  visible.value = false;
+  results.value = [];
+  selectedIndex.value = 0;
+  searchWord.value = "";
+  targetProjectRoot.value = "";
+  isGrepFallback.value = false;
+  mode.value = "definition";
+  searching.value = false;
+  degraded.value = null;
+  requestSeq = 0;
+  lastProjectRoot = "";
+  lastSourceExt = "";
+  lastSourceFile = "";
+  lastSourceLine = 0;
+  lastSourceColumn = 0;
+  resolver.__resetForTest();
 }

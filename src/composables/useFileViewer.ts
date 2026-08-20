@@ -143,7 +143,7 @@ async function detectProjectRoot() {
  * 重置全部内容相关字段后重新加载：图片走 Blob URL，文本按大小判只读，
  * 读取失败写 win.error（调用方决定是否允许后退恢复）。
  */
-async function loadIntoWindow(win: FileWindowState, path: string) {
+async function loadIntoWindow(win: FileWindowState, path: string, opts?: { content?: string }) {
   // 旧图片的 Blob URL 先释放（同窗口换文件，避免泄漏）
   const oldUrl = blobUrls.get(win.id);
   if (oldUrl) {
@@ -151,28 +151,22 @@ async function loadIntoWindow(win: FileWindowState, path: string) {
     blobUrls.delete(win.id);
   }
 
-  // 先清非触发字段 + 读内容（async），最后才赋 filePath——filePath 改变触发
-  // CodeEditor watch 重建并 cmLsp didOpen，必须在 editContent 已就位后才赋，
-  // 否则 didOpen 发空 text、jdtls 把文件当空、跳转定义解析不到（跳转后 [] 真因）。
-  win.fileName = fileNameOf(path);
-  win.content = "";
-  win.editContent = "";
-  win.imageUrl = "";
-  win.language = "";
-  win.diffPair = null;
-  win.error = "";
-  win.readonly = false;
-  win.isMarkdown = isMarkdownPath(path);
-  win.mdMode = "preview";
-  win.scrollToLine = null;
-  win.scrollViewportY = null;
-
+  // 读内容（async）。读期间保留旧 editContent——编辑器仍显示旧文件，不闪空。
+  // 关键：不在 readFile 前清 editContent=""。曾因提前清空，CodeEditor 的 modelValue
+  // 先于 filePath 变（变空）→ 合并 watch 走 parent-sync 分支 dispatch 空内容进旧编辑器
+  // → docChanged → INVALIDATE 源文件 definition 缓存（回退再点同词必 miss、重发 LSP，
+  // diag 实测确认）。现把 editContent 与 filePath 等全部字段推迟到 readFile 后一次性
+  // 同步设置：editContent 与 filePath 在同一同步块连改 → 合并 watch 走 createEditor
+  // 重建分支（filePath 变、销毁旧视图、不 dispatch），不误清缓存。
+  // opts.content：调用方提供内容（navigateBack 用快照恢复，不读磁盘、保留未保存修改）。
   let content = "";
   let imageUrl = "";
   let readonly = false;
   let error = "";
   const mime = imageMimeFromPath(path);
-  if (mime) {
+  if (opts?.content !== undefined) {
+    content = opts.content;
+  } else if (mime) {
     // 图片：读取原始字节并构造 Blob URL，避免 UTF-8 解码失败。
     try {
       const buf = await api.readFileBinary(path);
@@ -192,12 +186,22 @@ async function loadIntoWindow(win: FileWindowState, path: string) {
     }
   }
 
+  // 一次性同步设置全部字段（filePath 最后）。editContent 与 filePath 同步连改 →
+  // CodeEditor 合并 watch 走 createEditor 重建（销毁旧视图、不 dispatch），cmLsp didOpen
+  // 拿到目标内容；不向旧编辑器 parent-sync dispatch，旧文件缓存不被误清。
+  win.fileName = fileNameOf(path);
   win.content = content;
   win.editContent = content;
   win.imageUrl = imageUrl;
   win.readonly = readonly;
+  win.language = "";
+  win.diffPair = null;
   win.error = error;
-  win.filePath = path; // ← 最后赋：触发 CodeEditor watch 时 editContent 已就位
+  win.isMarkdown = isMarkdownPath(path);
+  win.mdMode = "preview";
+  win.scrollToLine = null;
+  win.scrollViewportY = null;
+  win.filePath = path; // ← 最后赋：与 editContent 同步连改触发 createEditor 重建
 
   // 记录最近访问文件（best effort，绝不阻断打开主流程）
   void useRecent().recordFile(path, win.fileName);
@@ -308,7 +312,12 @@ export function useFileViewer() {
       viewportY: opts.viewportY,
       mdMode: win.mdMode,
     });
-    await loadIntoWindow(win, targetPath);
+    // 同文件跳转（目标在当前文件内）：不重载——保留未保存修改、不触发 docChanged
+    // 清定义缓存、省一次磁盘 IO。仅设 scrollToLine，由 FileWindow watch 滚到目标行
+    // （同 openAndScrollTo 对已开窗口的语义，已存在编辑器无需重建）。跨文件才切内容。
+    if (targetPath !== win.filePath) {
+      await loadIntoWindow(win, targetPath);
+    }
     if (!win.readonly && !win.error && opts.line != null) {
       win.scrollToLine = opts.line;
       win.scrollViewportY = opts.viewportY;
@@ -324,10 +333,12 @@ export function useFileViewer() {
     const win = windows.value.find((w) => w.id === winId);
     if (!win || win.navStack.length === 0) return;
     const entry = win.navStack.pop()!;
-    await loadIntoWindow(win, entry.filePath);
-    // 磁盘现读可能被压栈后的外部保存改变过——恢复以快照为准，未保存修改不丢
+    // 恢复以快照为准：直接用 entry.editContent 灌入（不读磁盘），保留压栈时的未保存修改。
+    // 走 loadIntoWindow 的 opts.content 一次性同步设置 editContent+filePath → 合并 watch
+    // 走 createEditor 重建分支，不 parent-sync dispatch，不清源缓存。
+    await loadIntoWindow(win, entry.filePath, { content: entry.editContent });
+    // 基线用快照基线（dirty 判定靠 editContent !== content 自然成立）
     win.content = entry.content;
-    win.editContent = entry.editContent;
     win.mdMode = entry.mdMode;
     // 回退落点：源行定位到跳转时的视口偏移（entry.viewportY），复刻跳转前的滚动位置——
     // 源符号当时在该偏移处，回退后仍在该处。与跳转走同一 scrollToLine 路径，确定性强。

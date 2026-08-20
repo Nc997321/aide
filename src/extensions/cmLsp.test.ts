@@ -10,7 +10,7 @@ vi.mock("../api", () => ({
     lspDidClose: vi.fn().mockResolvedValue(undefined),
     lspCompletion: vi.fn().mockResolvedValue([]),
     lspHover: vi.fn().mockResolvedValue({ content: null }),
-    lspDefinition: vi.fn().mockResolvedValue([]),
+    lspDefinition: vi.fn().mockResolvedValue({ status: "ok", results: [] }),
     lspShutdownWorkspace: vi.fn().mockResolvedValue(undefined),
     workspaceSetLspEnabled: vi.fn().mockResolvedValue(undefined),
   },

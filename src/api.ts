@@ -4,7 +4,7 @@ import type {
   ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
   GrepMatch, ProviderConfig, ProviderConfigInput, ProviderModelMappings, RunConfig, RunTarget, JdkEntry, RecentView,
   SearchOptions, SearchResponse, ReplacePreviewResponse, ReplaceFileInput, ApplyResult,
-  SkillMeta, BuildIndexResult, BuildProgress, RescanResult, QueryResult,
+  SkillMeta, BuildIndexResult, BuildProgress, RescanResult, QueryResult, LspJumpResult,
   AppNotification, NotificationRecord,
   CatalogPreset, PortProbeResult, LoginStatusResult, ConnectionStatus,
   MigrationStatus, MigrationSummary,
@@ -452,7 +452,7 @@ export const api = {
   lspDidClose(workspaceRoot: string, filePath: string, lang: string): Promise<void> {
     return invoke("lsp_did_close", { workspaceRoot, filePath, lang });
   },
-  lspDefinition(workspaceRoot: string, filePath: string, line: number, column: number, word: string): Promise<QueryResult[]> {
+  lspDefinition(workspaceRoot: string, filePath: string, line: number, column: number, word: string): Promise<LspJumpResult> {
     return invoke("lsp_definition", { workspaceRoot, filePath, line, column, word });
   },
   lspCompletion(workspaceRoot: string, filePath: string, line: number, column: number): Promise<CmCompletion[]> {

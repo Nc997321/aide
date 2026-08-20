@@ -207,6 +207,18 @@ const gotoModeLabel = computed(() => {
     default: return "定义";
   }
 });
+/** 浮层结果来源标签：按前端 orchestration 层打的 source 四档透明显示，缺 source（旧路径）按 confidence 兜底。
+ *  lsp/ast 同 conf-structure 色（LSP 权威 / codegraph AST 结构层），semantic 走 conf-semantic，grep 走 conf-text。 */
+function gotoConf(item: QueryResult): { cls: string; text: string } {
+  if (item.source === "lsp") return { cls: "conf-structure", text: "[LSP]" };
+  if (item.source === "ast") return { cls: "conf-structure", text: "[AST]" };
+  if (item.source === "semantic")
+    return { cls: "conf-semantic", text: `[语义·${item.score != null ? Math.round(item.score * 100) : "?"}%]` };
+  if (item.source === "grep" || goto.isGrepFallback.value)
+    return { cls: "conf-text", text: "[匹配]" };
+  if (item.confidence === "Structure") return { cls: "conf-structure", text: "[精确]" };
+  return { cls: "conf-semantic", text: `[语义·${item.score != null ? Math.round(item.score * 100) : "?"}%]` };
+}
 /** 触发跳转时的光标行——压栈时记入 NavEntry，后退回到这一行 */
 const lastSourceLine = ref<number | null>(null);
 /** 触发跳转时源符号在编辑器视口中的垂直偏移——跳转目标按此偏移定位，回退时复刻滚动位置 */
@@ -219,7 +231,7 @@ function jumpOrPick() {
   }
 }
 
-async function onGotoDefinition(payload: { word: string; filePath: string; line: number; column: number; viewportY: number }) {
+async function onGotoDefinition(payload: { word: string; filePath: string; line: number; column: number; wordColumn: number; viewportY: number }) {
   gotoOwnerId.value = props.win.id;
   lastSourceLine.value = payload.line;
   lastSourceViewportY.value = payload.viewportY;
@@ -229,8 +241,7 @@ async function onGotoDefinition(payload: { word: string; filePath: string; line:
     ? payload.filePath.slice(root.length + sep.length).replace(/\\/g, "/")
     : "";
   const ext = payload.filePath.split(".").pop()?.toLowerCase() || "";
-  await goto.search(payload.word, root, { sourceFile: relPath, sourceFileAbs: payload.filePath, sourceLine: payload.line, sourceExt: ext, sourceColumn: payload.column });
-
+  await goto.search(payload.word, root, { sourceFile: relPath, sourceFileAbs: payload.filePath, sourceLine: payload.line, sourceExt: ext, sourceColumn: payload.column, sourceWordColumn: payload.wordColumn });
   jumpOrPick();
 }
 
@@ -246,6 +257,10 @@ async function onGotoGutter(payload: GutterGotoPayload) {
 
 async function onSearchAllReferences() {
   await goto.searchAllReferences(goto.searchWord.value, projectRoot.value);
+}
+/** 降级 hint 链接「用本地索引跳转」：timeout 时用户主动取 codegraph+grep 结果（不调 LSP）。 */
+async function onLocalManualSearch() {
+  await goto.localManualSearch();
 }
 
 function jumpToResult(item: QueryResult) {
@@ -502,7 +517,19 @@ async function openInBrowser() {
           <button class="goto-popover-close" @click="goto.dismiss()">&times;</button>
         </div>
         <div class="goto-popover-body">
-          <template v-if="goto.results.value.length === 0">
+          <!-- 跳转请求进行中：显示 loading，而非 await 期间的「未找到定义」空文案 -->
+          <template v-if="goto.searching.value">
+            <div class="goto-popover-empty">跳转中…</div>
+          </template>
+          <!-- LSP 降级且无结果：timeout=语言服务慢 / not_ready=未就绪，给手动「用本地索引跳转」链接
+               （auto-fallback 仅 not_ready 路径已跑过本地索引；这里链接供 timeout 主动取本地结果） -->
+          <template v-else-if="goto.degraded.value && goto.results.value.length === 0">
+            <div class="goto-popover-empty">
+              {{ goto.degraded.value === 'timeout' ? '语言服务响应较慢' : '语言服务未就绪' }} ·
+              <span class="goto-popover-hint" @click="onLocalManualSearch">用本地索引跳转</span>
+            </div>
+          </template>
+          <template v-else-if="goto.results.value.length === 0">
             <div class="goto-popover-empty">
               <template v-if="goto.mode.value === 'references'">未找到引用</template>
               <template v-else-if="goto.mode.value === 'implementation'">未找到实现</template>
@@ -519,16 +546,7 @@ async function openInBrowser() {
               :class="{ selected: idx === goto.selectedIndex.value }"
               @click="jumpToResult(item)"
             >
-              <span
-                class="goto-confidence"
-                :class="goto.isGrepFallback.value
-                  ? 'conf-text'
-                  : (item.confidence === 'Structure' ? 'conf-structure' : 'conf-semantic')"
-              >
-                <template v-if="goto.isGrepFallback.value">[匹配]</template>
-                <template v-else-if="item.confidence === 'Structure'">[精确]</template>
-                <template v-else>[语义·{{ item.score != null ? Math.round(item.score * 100) : '?' }}%]</template>
-              </span>
+              <span class="goto-confidence" :class="gotoConf(item).cls">{{ gotoConf(item).text }}</span>
               <span class="goto-name">{{ item.symbol.name }}</span>
               <span v-if="item.symbol.parent" class="goto-parent">· {{ item.symbol.parent }}</span>
               <span class="goto-file">{{ item.symbol.file }}:{{ item.symbol.line }}</span>

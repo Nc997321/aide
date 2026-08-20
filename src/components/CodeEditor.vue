@@ -14,6 +14,7 @@ import { loadLanguageExtension } from "../utils/cmLanguage";
 import { ctrlHoverHighlight } from "../extensions/cmCtrlHover";
 import { cmScrollMemory, type ScrollMemoryOptions } from "../extensions/cmScrollMemory";
 import { cmLsp } from "../extensions/cmLsp";
+import { cmDefinitionPrefetch } from "../extensions/cmDefinitionPrefetch";
 import { cmIndent } from "../extensions/cmIndent";
 import { cmImplGutter, type GutterGotoPayload } from "../extensions/cmImplGutter";
 import { useLsp } from "../composables/useLsp";
@@ -32,7 +33,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
-  (e: "goto-definition", payload: { word: string; filePath: string; line: number; column: number; viewportY: number }): void;
+  (e: "goto-definition", payload: { word: string; filePath: string; line: number; column: number; wordColumn: number; viewportY: number }): void;
   /** gutter 标记点击（跳实现）：results 为缓存实现列表，viewportY 复刻点击处视口偏移
    *  以对齐目标行；line 为标记所在行（回退 sourceLine）。 */
   (e: "gutter-goto", payload: GutterGotoPayload): void;
@@ -108,6 +109,10 @@ async function createEditor() {
       indentCompartment.of(cmIndent(settings.editor)),
       updateListener,
       ctrlHoverHighlight(),
+      // 跳转定义 hover 预取 + 缓存失效观察者：常驻基础数组（非 cmLsp 数组——后者
+      // enabled:false 返 [] 会留 LSP-关→编辑→LSP-开 陈旧窗口）。LSP 开关在 source
+      // 内实时读，cmLsp.ts 零改动。详见 extensions/cmDefinitionPrefetch.ts。
+      cmDefinitionPrefetch({ workspaceRoot: props.workspaceRoot ?? "", filePath: props.filePath }),
       ...(props.scrollMemory ? [cmScrollMemory(props.scrollMemory)] : []),
       lspCompartment.of(
         props.workspaceRoot && props.lspLang
@@ -147,6 +152,7 @@ async function createEditor() {
                     filePath: props.filePath,
                     line: lineObj.number,
                     column: pos - lineObj.from + 1,
+                    wordColumn: wordAt.from - lineObj.from + 1,
                     viewportY,
                   });
                 }
@@ -446,11 +452,24 @@ function openGoToLine(target: EditorView): boolean {
   return true;
 }
 
-// ── External content update (when modelValue changes from parent) ──
-
+// ── 文件切换 / 父层内容同步（合并单 watch，按变更来源分流）──
+// filePath 与 modelValue 在「就地导航换页」（useFileViewer.loadIntoWindow）里
+// 同步连改：先置 editContent(=modelValue) 后置 filePath。若拆两个独立 watch，
+// modelValue 那个会先触发——此时 filePath 仍是旧文件、旧编辑器还挂着，parent-sync
+// dispatch 把新内容灌进旧编辑器 → 旧文件 definition 缓存被误清（回退再点同词必 miss、
+// 重发 LSP 等 3-4s）。合并成单 watch 后，Vue 把同步连改批成一次回调，回调内见两者
+// 同变 → 走 createEditor 重建（销毁旧视图、不 dispatch），从源头消除对旧编辑器的
+// 程序性灌入；失效观察者随之可回退到裸 docChanged（仅真实内容变更才失效）。
 watch(
-  () => props.modelValue,
-  (newVal) => {
+  [() => props.modelValue, () => props.filePath],
+  ([newVal, newFilePath], [oldVal, oldFilePath]) => {
+    if (newFilePath !== oldFilePath) {
+      // 文件切换：重建编辑器。createEditor 读 props.modelValue 作新 doc（已就位），
+      // cmLsp didOpen 拿到目标内容。不 parent-sync dispatch——旧编辑器不被注入新内容。
+      createEditor();
+      return;
+    }
+    // 同文件、父层内容变更（磁盘重载 / 外部更新）：同步进编辑器，带注解防回流假 dirty
     if (view && newVal !== view.state.doc.toString()) {
       view.dispatch({
         changes: {
@@ -462,15 +481,6 @@ watch(
         annotations: parentSyncAnnotation.of(true),
       });
     }
-  }
-);
-
-// ── File extension change → recreate editor with new language ──
-
-watch(
-  () => props.filePath,
-  () => {
-    createEditor();
   }
 );
 
