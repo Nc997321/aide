@@ -38,6 +38,17 @@ describe("detectImageUnsupported", () => {
     })).toBe(true);
   });
 
+  it("recognizes the real SDK event shape: is_api_error_message (snake_case)", () => {
+    // 2026-08-21 smoke 实锤：jsonl 写 camelCase，但 SDK 事件流转发时是
+    // is_api_error_message: true（且无 apiErrorStatus 字段）——camelCase 分支
+    // 实际永不命中，回滚从未触发。这个用例钉住 snake_case 形态。
+    expect(detectImageUnsupported({
+      type: "assistant",
+      message: { role: "assistant", model: "<synthetic>", content: [{ type: "text", text: "API Error: 400 this model does not support image input (ref: abc)" }] },
+      is_api_error_message: true,
+    })).toBe(true);
+  });
+
   it.each([
     { type: "assistant", isApiErrorMessage: true, apiErrorStatus: 401, message: { content: [{ type: "text", text: "Unauthorized" }] } },
     { type: "assistant", isApiErrorMessage: true, apiErrorStatus: 400, message: { content: [{ type: "text", text: "invalid model" }] } },

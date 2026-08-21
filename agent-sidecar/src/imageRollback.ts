@@ -7,11 +7,21 @@ import { join } from "node:path";
 import { classifyImageInputResult, extractMessageText, IMAGE_UNSUPPORTED_400 } from "./imageInputCapability.js";
 
 /** 识别「模型不支持图片」的 400 错误消息（SDK 的两种形态）：
- *  - synthetic assistant 消息（isApiErrorMessage + apiErrorStatus 400，真实 SDK 行为）
+ *  - synthetic assistant 消息（真实 SDK 事件流形状：is_api_error_message + model="<synthetic>"，
+ *    2026-08-21 smoke 实锤——CLI 写 jsonl 用 camelCase isApiErrorMessage，但 SDK 事件
+ *    转发时是 snake_case is_api_error_message，camelCase 分支实际永不命中）
  *  - result 错误消息（部分网关让 CLI 非零退出时走这条） */
 export function detectImageUnsupported(msg: unknown): boolean {
-  const m = msg as { type?: unknown; isApiErrorMessage?: unknown; apiErrorStatus?: unknown };
-  if (m?.type === "assistant" && m.isApiErrorMessage === true && m.apiErrorStatus === 400) {
+  const m = msg as {
+    type?: unknown;
+    isApiErrorMessage?: unknown;
+    apiErrorStatus?: unknown;
+    is_api_error_message?: unknown;
+  };
+  if (
+    m?.type === "assistant" &&
+    (m.isApiErrorMessage === true || m.is_api_error_message === true)
+  ) {
     return IMAGE_UNSUPPORTED_400.test(extractMessageText(msg));
   }
   return classifyImageInputResult(msg) === false;
@@ -85,10 +95,20 @@ function extractUserText(content: unknown): string {
     .join("\n");
 }
 
-/** synthetic 图片 400 错误行（isApiErrorMessage + apiErrorStatus 400 + 文本匹配）。 */
+/** synthetic 图片 400 错误行（isApiErrorMessage/is_api_error_message + apiErrorStatus 400 + 文本匹配）。
+ *  jsonl 里 CLI 写 camelCase（实测）；SDK 事件流是 snake_case——两态都认。 */
 function isSyntheticImageError(msg: unknown): boolean {
-  const m = msg as { type?: unknown; isApiErrorMessage?: unknown; apiErrorStatus?: unknown };
-  if (m?.type !== "assistant" || m.isApiErrorMessage !== true || m.apiErrorStatus !== 400) return false;
+  const m = msg as {
+    type?: unknown;
+    isApiErrorMessage?: unknown;
+    apiErrorStatus?: unknown;
+    is_api_error_message?: unknown;
+  };
+  if (
+    m?.type !== "assistant" ||
+    (m.isApiErrorMessage !== true && m.is_api_error_message !== true) ||
+    m.apiErrorStatus !== 400
+  ) return false;
   return IMAGE_UNSUPPORTED_400.test(extractMessageText(msg));
 }
 

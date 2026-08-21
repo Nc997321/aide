@@ -236,6 +236,48 @@ describe("useChatSession per-session store", () => {
     expect(state["uuid-a"]).toBe("running");
   });
 
+  it("image_input_rollback 解除 busy、落提示消息、文本进 rollbackText 待回填", async () => {
+    const { state, health } = useSessionState();
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("分析这张图", {
+      images: [{ data: "not-used", mediaType: "image/png" }],
+    });
+    expect(chat.isBusy.value).toBe(true);
+
+    emit({ type: "image_input_rollback", text: "分析这张图", session_id: "uuid-a" });
+    await flush();
+
+    expect(chat.isBusy.value).toBe(false);
+    expect(state["uuid-a"]).toBe("waiting");
+    expect(health["uuid-a"]).toBe("warning");
+    const lastMessage = chat.messages.value[chat.messages.value.length - 1];
+    expect(lastMessage?.blocks).toContainEqual({ type: "text", text: "当前模型不支持图片输入，已移除该消息。文本已放回输入框，可手动重发。" });
+    // 文本暂存待 ChatPanel 回填输入框
+    expect(chat.rollbackText.value).toBe("分析这张图");
+
+    // 消费后清空，避免重复回填
+    chat.consumeRollbackText();
+    expect(chat.rollbackText.value).toBe("");
+  });
+
+  it("image_input_rollback 无文本（模型 Read 图片）时只提示、不回填输入框", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("看下这个目录");
+    expect(chat.isBusy.value).toBe(true);
+
+    emit({ type: "image_input_rollback", text: "", session_id: "uuid-a" });
+    await flush();
+
+    expect(chat.isBusy.value).toBe(false);
+    expect(chat.rollbackText.value).toBe("");
+    const lastMessage = chat.messages.value[chat.messages.value.length - 1];
+    expect(lastMessage?.blocks).toContainEqual({ type: "text", text: "当前模型不支持图片输入，已移除图片内容并告知模型，对话继续。" });
+  });
+
   it("红点(warning)在下一条消息发出时清除，回到 running/绿", async () => {
     const { health, dotTone } = useSessionState();
     const sid = ref<string | null>("uuid-a");

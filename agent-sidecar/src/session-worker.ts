@@ -30,6 +30,7 @@ import {
   emitSubagentBlocks,
 } from "./mapper.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { EffortLevel, HookCallback, HookInput } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, openSync, readSync, statSync, closeSync } from "node:fs";
 import { readFileSync } from "node:fs";
@@ -163,6 +164,12 @@ export class SessionWorker {
   private rollbackPending = false;
   /** 当前 query 的 abort 信号（每次 while 迭代新建；回滚时 abort 杀 CLI 停写入）。 */
   private abortController: AbortController | null = null;
+  /** 场景 B 注入消息（预置槽）：不 push 进共享 queue——MessageQueue 的 resolveNext
+   *  是单槽，abort 后旧迭代器还挂在 await 上，push 会被它 shift 走并卡死在 yield
+   *  （SDK 已 abort 不再 next()），下一轮新迭代器就永远拿不到（2026-08-21 实锤：
+   *  注入未达 CLI → resume 0 事件退出，会话无后续）。改由下一轮 query 的私有
+   *  迭代器首条 yield。 */
+  private rollbackInjection: SDKUserMessage | null = null;
 
   // ---- 会话级权限规则（内存态，worker 销毁即消失） ----
   // 「允许」文件工具时前端推导的精确文件规则落在这里：policy hook 评估前合并进
@@ -948,8 +955,17 @@ export class SessionWorker {
           // 每次迭代新建 abort 信号：abort 过的 controller 不能复用（回滚后
           // 下一轮 query 需要全新的）。回滚时 abort 杀 CLI 进程、停一切写入。
           this.abortController = new AbortController();
+          // 场景 B 注入走预置槽：先 yield 注入（私有迭代器，无共享 queue 竞态），
+          // 再 yield* 共享 queue（后续用户消息走 MessageQueue 正常通道）。
+          const rollbackInjection = this.rollbackInjection;
+          this.rollbackInjection = null;
+          const queueIter = this.queue[Symbol.asyncIterator]();
+          const promptIter = (async function* () {
+            if (rollbackInjection) yield rollbackInjection;
+            yield* queueIter;
+          })();
           const q = this.queryFn({
-            prompt: this.queue[Symbol.asyncIterator](),
+            prompt: promptIter,
             options: {
               abortController: this.abortController,
               permissionMode: this.currentPermissionMode as any,
@@ -1191,11 +1207,13 @@ export class SessionWorker {
           // 场景 B（模型 Read 图片）：回滚只替换了 tool_result，模型还没回复——
           // resume 后 CLI 等输入，不注入消息模型不会自动继续。注入后 CLI 重放
           // 历史（含错误文本 tool_result）→ 模型改读文本/跳过。
-          this.queue.push({
+          // 注意：不能 queue.push——旧迭代器挂起的 resolveNext 会把消息吞掉
+          // （见 rollbackInjection 字段注释），必须预置到下一轮私有迭代器。
+          this.rollbackInjection = {
             type: "user",
-            message: buildUserMessage(SessionWorker.ROLLBACK_TOOL_CONTINUE),
+            message: buildUserMessage(SessionWorker.ROLLBACK_TOOL_CONTINUE, []),
             parent_tool_use_id: null,
-          } as any);
+          };
         }
       }
     } catch {
