@@ -29,7 +29,8 @@ export async function loadLanguageExtension(e: string): Promise<Extension> {
         const { python } = await import("@codemirror/lang-python");
         return python();
       }
-      case "json": {
+      case "json":
+      case "jsonl": {
         const { json } = await import("@codemirror/lang-json");
         return json();
       }

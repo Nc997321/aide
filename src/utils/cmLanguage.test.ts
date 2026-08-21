@@ -9,6 +9,7 @@ describe("loadLanguageExtension", () => {
     expect(await loadLanguageExtension("yml")).not.toEqual([]);
     expect(await loadLanguageExtension("yaml")).not.toEqual([]);
     expect(await loadLanguageExtension("properties")).not.toEqual([]);
+    expect(await loadLanguageExtension("jsonl")).not.toEqual([]);
   });
 
   it("未知扩展名返回空数组", async () => {

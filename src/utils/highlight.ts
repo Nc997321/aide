@@ -38,7 +38,7 @@ export const extToLang: Record<string, string> = {
   ts: "typescript", tsx: "typescript",
   js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
   rs: "rust",
-  json: "json", jsonc: "json",
+  json: "json", jsonc: "json", jsonl: "json",
   xml: "xml", html: "html", htm: "html", vue: "html", svelte: "html",
   css: "css", scss: "css", less: "css",
   sh: "bash", bash: "bash", zsh: "bash", ps1: "bash",
