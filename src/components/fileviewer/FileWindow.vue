@@ -12,6 +12,8 @@ import type { GutterGotoPayload } from "../../extensions/cmImplGutter";
 import DiffViewer from "./DiffViewer.vue";
 import { firstChangedLine } from "./diffLocate";
 import { extToLang, highlightCode } from "../../utils/highlight";
+import { formatContent } from "../../utils/format";
+import { useContextMenu } from "../../composables/useContextMenu";
 import { isHtmlFilePath } from "../../utils/fileLink";
 import { marked } from "../../utils/markdown";
 
@@ -46,6 +48,7 @@ const { closeWindow, save, projectRoot, gotoOwnerId, indexHintWinId, revealInTre
 const goto = useGotoDefinition();
 const modal = useModal();
 const { push: pushNotification } = useNotifications();
+const { show: showContextMenu } = useContextMenu();
 
 const gotoPopoverRef = ref<HTMLElement | null>(null);
 const codeEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null);
@@ -312,7 +315,7 @@ watch(gotoActive, (v) => {
   if (v) nextTick(() => gotoPopoverRef.value?.focus());
 });
 
-// ── 快捷键：Ctrl+S 保存，Esc 关窗，Alt+← 后退（导航栈）──
+// ── 快捷键：Ctrl+S 保存，Esc 关窗，Alt+← 后退（导航栈），Shift+Alt+F 格式化 ──
 function onKeydown(e: KeyboardEvent) {
   if (e.key === "s" && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
@@ -320,6 +323,9 @@ function onKeydown(e: KeyboardEvent) {
   } else if (e.key === "ArrowLeft" && e.altKey) {
     e.preventDefault();
     goBack();
+  } else if (e.key === "F" && e.shiftKey && e.altKey) {
+    e.preventDefault();
+    if (canFormat.value) formatFile();
   } else if (e.key === "Escape") {
     void requestClose();
   }
@@ -364,6 +370,44 @@ async function openInBrowser() {
       dedupKey: `fileviewer:open-browser:${props.win.filePath}`,
     });
   }
+}
+
+// ── 格式化（JSON / JSONL）──
+// 仅编辑器激活（非只读/虚拟/错误/图片）且扩展名 ∈ {json, jsonl} 时可用；
+// jsonc 通常带注释 JSON.parse 必失败，不提供入口。
+const canFormat = computed(() => {
+  if (props.win.readonly || props.win.virtual || props.win.error || props.win.imageUrl) return false;
+  const ext = props.win.fileName.split(".").pop()?.toLowerCase() || "";
+  return ext === "json" || ext === "jsonl";
+});
+
+function formatFile() {
+  const ext = props.win.fileName.split(".").pop()?.toLowerCase() || "";
+  const result = formatContent(props.win.editContent, ext);
+  if (!result.ok) {
+    pushNotification({
+      severity: "error",
+      source: "fileviewer",
+      title: "格式化失败",
+      body: `${props.win.fileName}: ${result.error}`,
+      timestamp: Date.now(),
+      dedupKey: `fileviewer:format:${props.win.filePath}`,
+    });
+    return;
+  }
+  // 直接改 editContent：dirty 判定（editContent !== content）自然成立；
+  // CodeEditor 合并 watch 走 parent-sync dispatch（带注解），不会回流造成假 dirty。
+  props.win.editContent = result.text;
+}
+
+/** 编辑器右键菜单：JSON/JSONL 弹自定义菜单（格式化 + 保存），其余放行原生菜单 */
+function onEditorContextMenu(e: MouseEvent) {
+  if (!canFormat.value) return;
+  e.preventDefault();
+  showContextMenu(e.clientX, e.clientY, [
+    { label: "格式化", kbd: "Shift+Alt+F", action: formatFile },
+    { label: "保存", kbd: "Ctrl+S", action: () => save(props.win.id) },
+  ]);
 }
 </script>
 
@@ -480,7 +524,7 @@ async function openInBrowser() {
 
       <!-- Markdown 分屏：左编辑右实时预览 -->
       <div v-else-if="win.isMarkdown && win.mdMode === 'split'" class="fw-split">
-        <div class="fw-split-pane fw-editor">
+        <div class="fw-split-pane fw-editor" @contextmenu="onEditorContextMenu">
           <CodeEditor
             ref="codeEditorRef"
             v-model="win.editContent"
@@ -497,7 +541,7 @@ async function openInBrowser() {
       </div>
 
       <!-- 默认：直接可编辑（含 Markdown 全编辑） -->
-      <div v-else class="fw-editor">
+      <div v-else class="fw-editor" @contextmenu="onEditorContextMenu">
         <CodeEditor
           ref="codeEditorRef"
           v-model="win.editContent"

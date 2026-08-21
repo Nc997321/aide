@@ -1,30 +1,51 @@
 import { describe, it, expect } from "vitest";
-import { formatCompactNumber } from "./format";
+import { formatContent } from "./format";
 
-describe("formatCompactNumber", () => {
-  it("leaves numbers under 1000 untouched (没必要为个位数套 k)", () => {
-    expect(formatCompactNumber(0)).toBe("0");
-    expect(formatCompactNumber(42)).toBe("42");
-    expect(formatCompactNumber(999)).toBe("999");
+describe("formatContent", () => {
+  it("json 缩进美化", () => {
+    expect(formatContent('{"a":1,"b":[1,2]}', "json")).toEqual({
+      ok: true,
+      text: '{\n  "a": 1,\n  "b": [\n    1,\n    2\n  ]\n}\n',
+    });
   });
 
-  it("formats thousands with one decimal below 100k", () => {
-    expect(formatCompactNumber(1000)).toBe("1.0k");
-    expect(formatCompactNumber(36108)).toBe("36.1k");
-    expect(formatCompactNumber(1234)).toBe("1.2k");
+  it("json 空文件返回空串", () => {
+    expect(formatContent("", "json")).toEqual({ ok: true, text: "" });
+    expect(formatContent("  \n  ", "json")).toEqual({ ok: true, text: "" });
   });
 
-  it("drops the decimal once the compact value reaches 100+ (150170 → 150k, not 150.2k)", () => {
-    expect(formatCompactNumber(150170)).toBe("150k");
-    expect(formatCompactNumber(999_999)).toBe("1000k");
+  it("json 非法报错", () => {
+    const r = formatContent('{"a":', "json");
+    expect(r.ok).toBe(false);
   });
 
-  it("switches to millions above 1,000,000", () => {
-    expect(formatCompactNumber(1_000_000)).toBe("1.0m");
-    expect(formatCompactNumber(2_500_000)).toBe("2.5m");
+  it("jsonl 逐行规范化", () => {
+    expect(formatContent('{"a":1}\n{"b": 2}\n', "jsonl")).toEqual({
+      ok: true,
+      text: '{"a":1}\n{"b":2}\n',
+    });
   });
 
-  it("handles negative numbers by magnitude (defensive; tokens are never negative in practice)", () => {
-    expect(formatCompactNumber(-36108)).toBe("-36.1k");
+  it("jsonl 空行跳过", () => {
+    expect(formatContent('{"a":1}\n\n{"b":2}', "jsonl")).toEqual({
+      ok: true,
+      text: '{"a":1}\n{"b":2}\n',
+    });
+  });
+
+  it("jsonl 空文件返回空串", () => {
+    expect(formatContent("", "jsonl")).toEqual({ ok: true, text: "" });
+  });
+
+  it("jsonl 非法行报行号", () => {
+    const r = formatContent('{"a":1}\n{oops}\n', "jsonl");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("第 2 行");
+  });
+
+  it("不支持的类型", () => {
+    const r = formatContent("x", "ts");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain(".ts");
   });
 });
