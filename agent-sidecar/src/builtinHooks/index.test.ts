@@ -2,10 +2,9 @@ import { describe, it, expect } from "vitest";
 import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
 import { BUILTIN_HOOKS, buildBuiltinHooks } from "./index";
 
-// session 桩：registry 通过依赖注入的 ctx.session 调 3 个 private 方法（policy/imageGuard/stopEffort）。
+// session 桩：registry 通过依赖注入的 ctx.session 调 2 个 private 方法（policy/stopEffort）。
 const sessionStub = {
   makePolicyHook: (): HookCallback => async () => ({}),
-  makeImageGuardHook: (): HookCallback => async () => ({}),
   makeStopEffortHook: (): HookCallback => async () => ({}),
 };
 
@@ -18,9 +17,9 @@ describe("builtinHooks registry", () => {
     expect(first.alwaysMounted).toBe(true);
   });
 
-  it("顺序固定：policy → subagentModel → imageGuard → skillGuard(PreToolUse)，stopEffort(Stop)", () => {
+  it("顺序固定：policy → subagentModel → skillGuard(PreToolUse)，stopEffort(Stop)", () => {
     const pre = BUILTIN_HOOKS.filter((h) => h.event === "PreToolUse").map((h) => h.id);
-    expect(pre).toEqual(["policy", "subagentModel", "imageGuard", "skillGuard"]);
+    expect(pre).toEqual(["policy", "subagentModel", "skillGuard"]);
     const stop = BUILTIN_HOOKS.filter((h) => h.event === "Stop").map((h) => h.id);
     expect(stop).toEqual(["stopEffort"]);
   });

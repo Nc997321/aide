@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { SessionManager } from "./session-manager.js";
-import { ImageInputCapabilityCache } from "./imageInputCapability.js";
 
 /**
  * 验证 SessionManager 的 session_init re-key 行为——Bug 1 的回归保护。
@@ -76,78 +75,7 @@ describe("SessionManager — session_init re-key", () => {
   });
 });
 
-/**
- * Runtime-level image capability probes must be answered before getOrCreate(),
- * so a Rust preflight can check support without creating or mutating a real chat session.
- */
-describe("SessionManager — image input capability probe", () => {
-  it("answers image capability probes without creating a session worker", async () => {
-    const output: any[] = [];
-    const manager = new SessionManager({
-      emit: (sessionId, event) => output.push({ session_id: sessionId, ...event }),
-      probeImageInput: async () => false,
-    });
-
-    manager.handleCommand({
-      cmd: "probe_image_input",
-      request_id: "p-1",
-      model: "glm-5.2",
-      env: { ANTHROPIC_BASE_URL: "https://gateway" },
-    });
-    await vi.waitFor(() => expect(output).toContainEqual({
-      session_id: "_runtime",
-      type: "image_input_probe_result",
-      request_id: "p-1",
-      supported: false,
-    }));
-
-    expect(manager.getAllWorkers().size).toBe(0);
-  });
-
-  it("returns null for probe failures and keeps the stdin command loop alive", async () => {
-    const output: any[] = [];
-    const manager = new SessionManager({
-      emit: (sessionId, event) => output.push({ session_id: sessionId, ...event }),
-      probeImageInput: async () => {
-        throw new Error("provider probe failed");
-      },
-    });
-
-    expect(() => manager.handleCommand({
-      cmd: "probe_image_input",
-      request_id: "p-err",
-      env: {},
-    })).not.toThrow();
-    await vi.waitFor(() => expect(output).toContainEqual({
-      session_id: "_runtime",
-      type: "image_input_probe_result",
-      request_id: "p-err",
-      supported: null,
-    }));
-
-    expect(manager.getAllWorkers().size).toBe(0);
-  });
-
-  it("shares one cache between runtime probes and newly-created workers", async () => {
-    const cache = new ImageInputCapabilityCache();
-    const manager = new SessionManager({
-      emit: () => {},
-      imageCapabilityCache: cache,
-      probeImageInput: async () => true,
-    });
-
-    manager.handleCommand({
-      cmd: "probe_image_input",
-      request_id: "p-cache",
-      model: "vision-model",
-      env: { ANTHROPIC_BASE_URL: "https://gateway" },
-    });
-    await Promise.resolve();
-
-    const worker = manager.__testCreateWorker("temp-cache") as any;
-    expect(worker.imageCapabilityCache).toBe(cache);
-  });
-
+describe("SessionManager — provider env refresh", () => {
   it("refreshes an existing worker's provider environment and selected model before send", async () => {
     const manager = new SessionManager({ emit: () => {} });
     const worker = (manager as any).getOrCreate("session-1", {

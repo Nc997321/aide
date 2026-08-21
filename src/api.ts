@@ -79,9 +79,6 @@ export const api = {
   getDefaultModels(): Promise<ModelOption[]> {
     return invoke("get_default_models");
   },
-  probeImageInput(model?: string): Promise<{ supported: boolean | null }> {
-    return invoke("probe_image_input", { model: model || null });
-  },
   setPermissionMode(sessionId: string, mode: string): Promise<void> {
     return invoke("set_permission_mode", { sessionId, mode });
   },

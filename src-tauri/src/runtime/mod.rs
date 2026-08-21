@@ -1,20 +1,17 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
-use tokio::sync::{Mutex as TokioMutex, oneshot};
+use tokio::sync::Mutex as TokioMutex;
 use tauri::{AppHandle, Emitter};
 use serde_json::Value;
 pub mod env;
 pub mod provider;
 use crate::runtime::provider::connection_fingerprint;
 use crate::settings::{SettingsScope, SettingsService};
-
-/// 进程内唯一即可：request id 不跨 Runtime 持久化，也不暴露给前端。
-static NEXT_IMAGE_PROBE_REQUEST: AtomicU64 = AtomicU64::new(1);
 
 /// Per-session routing info used to scope permission-policy broadcasts.
 /// `workspace_root` decides which sessions a project/local policy change
@@ -39,9 +36,7 @@ pub struct AgentRuntimeManager {
     /// 跟当前 provider 配置比对，判断要不要 fork 绕开 CLI session 文件里缓存的旧
     /// provider 配置。
     fingerprints: Mutex<HashMap<String, BTreeMap<String, String>>>,
-    /// Runtime 内部图片预检的临时应答表；结果不经过前端 chat-event。
-    image_probe_waiters: Arc<Mutex<HashMap<String, oneshot::Sender<Option<bool>>>>>,
-    /// 串行化冷启动，避免 setup 和首次预检各自 spawn 一个 Runtime。
+    /// 串行化冷启动，避免 setup 和首次发送各自 spawn 一个 Runtime。
     spawn_lock: TokioMutex<()>,
     /// session_id → 工作区路由。`send_message` 注册/刷新；权限规则保存后
     /// `broadcast_policy_change` 据此决定哪些 session 收到 `update_permission_policy`。
@@ -62,7 +57,6 @@ impl AgentRuntimeManager {
             child: Mutex::new(None),
             killed: Arc::new(AtomicBool::new(false)),
             fingerprints: Mutex::new(HashMap::new()),
-            image_probe_waiters: Arc::new(Mutex::new(HashMap::new())),
             spawn_lock: TokioMutex::new(()),
             session_routes: Mutex::new(HashMap::new()),
             test_mode: false,
@@ -207,7 +201,6 @@ impl AgentRuntimeManager {
         let app = app_handle.clone();
         let killed_clone = Arc::clone(&self.killed);
         let child_for_kill = self.child.lock().unwrap().as_ref().ok_or("child not set")?.clone();
-        let image_probe_waiters = Arc::clone(&self.image_probe_waiters);
 
         // codegraph agent 查询回写通道（reader 拦截 codegraph_query 后用它写回结果）。
         let stdin_for_agent = self.stdin.lock().unwrap().as_ref().unwrap().clone();
@@ -226,21 +219,6 @@ impl AgentRuntimeManager {
                 match tokio::time::timeout(HEARTBEAT_TIMEOUT, reader.next_line()).await {
                     Ok(Ok(Some(line))) => {
                         let Ok(mut event) = serde_json::from_str::<Value>(&line) else { continue };
-                        // 图片预检是 Rust ↔ Runtime 的内部 request/response；不能转发给 Vue。
-                        if event.get("type").and_then(|t| t.as_str()) == Some("image_input_probe_result") {
-                            let Some(request_id) = event.get("request_id").and_then(|v| v.as_str()) else {
-                                continue;
-                            };
-                            let supported = match event.get("supported") {
-                                Some(Value::Bool(value)) => Some(*value),
-                                Some(Value::Null) => None,
-                                _ => continue,
-                            };
-                            if let Some(waiter) = image_probe_waiters.lock().unwrap().remove(request_id) {
-                                let _ = waiter.send(supported);
-                            }
-                            continue;
-                        }
                         // codegraph agent 工具查询：Rust ↔ Runtime 内部 request/response，不转发 Vue。
                         // 查询在独立任务里跑（spawn_blocking），不阻塞 reader 主循环——慢查询
                         // （大 shard 搜索 / HTTP embed）不能卡住心跳与其他事件的读取。
@@ -375,43 +353,6 @@ impl AgentRuntimeManager {
     /// 测试缝合：向 chat-event 通道发送（集成测试无法驱动真实 worker）。
     pub fn chat_events_sender(&self) -> tokio::sync::broadcast::Sender<Value> {
         self.chat_events.clone()
-    }
-
-    /// 请求 Runtime 用内置 1×1 PNG 预检当前连接/模型的图片能力。
-    /// 无结论、Runtime 写入失败或超时都按未知处理，不能影响聊天会话。
-    pub async fn probe_image_input(
-        &self,
-        env_vars: HashMap<String, String>,
-    ) -> Result<Option<bool>, String> {
-        let request_id = format!(
-            "image-probe-{}",
-            NEXT_IMAGE_PROBE_REQUEST.fetch_add(1, Ordering::Relaxed),
-        );
-        let (sender, receiver) = oneshot::channel();
-        self.image_probe_waiters
-            .lock()
-            .unwrap()
-            .insert(request_id.clone(), sender);
-
-        let waiter_id = request_id.clone();
-        let command = serde_json::json!({
-            "cmd": "probe_image_input",
-            "request_id": request_id,
-            "model": env_vars.get("ANTHROPIC_MODEL"),
-            "env": env_vars,
-        });
-        if self.send_to_runtime(&command).await.is_err() {
-            self.image_probe_waiters.lock().unwrap().remove(&waiter_id);
-            return Ok(None);
-        }
-
-        match tokio::time::timeout(Duration::from_secs(10), receiver).await {
-            Ok(Ok(supported)) => Ok(supported),
-            Ok(Err(_)) | Err(_) => {
-                self.image_probe_waiters.lock().unwrap().remove(&waiter_id);
-                Ok(None)
-            }
-        }
     }
 
     /// 杀死 Runtime 进程（全局 stop / app 退出）。

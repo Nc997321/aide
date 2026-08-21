@@ -73,7 +73,7 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, value: &serde_json::V
     Ok(())
 }
 
-// ── 请求/响应 oneshot 表（照 runtime/mod.rs image_probe_waiters 范式）──
+// ── 请求/响应 oneshot 表（照 runtime/mod.rs 已移除的 image_probe_waiters 范式）──
 
 pub struct RequestTable {
     waiters: HashMap<u64, oneshot::Sender<serde_json::Value>>,

@@ -1,22 +1,11 @@
 import type { ChatEvent, SidecarCommand } from "./types.js";
 import { SessionWorker } from "./session-worker.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import {
-  ImageInputCapabilityCache,
-  imageCapabilityKey,
-  probeImageInput as defaultProbeImageInput,
-} from "./imageInputCapability.js";
 import { resolveCodegraphResult } from "./codegraphClient.js";
-
-type ProbeImageInputFn = typeof defaultProbeImageInput;
 
 export interface SessionManagerOptions {
   /** 测试缝：覆盖 stdout 写入；生产省略则 JSONL 写 process.stdout。 */
   emit?: (sessionId: string, event: ChatEvent) => void;
-  /** Runtime 级共享缓存：probe command 与所有 worker 共用同一份。 */
-  imageCapabilityCache?: ImageInputCapabilityCache;
-  /** 测试缝：覆盖真实 SDK probe，避免单测访问 provider。 */
-  probeImageInput?: ProbeImageInputFn;
 }
 
 /**
@@ -30,14 +19,10 @@ export interface SessionManagerOptions {
  */
 export class SessionManager {
   private workers = new Map<string, SessionWorker>();
-  readonly imageCapabilityCache: ImageInputCapabilityCache;
   private readonly outputOverride?: (sessionId: string, event: ChatEvent) => void;
-  private readonly probeImageInput: ProbeImageInputFn;
 
   constructor(opts: SessionManagerOptions = {}) {
-    this.imageCapabilityCache = opts.imageCapabilityCache ?? new ImageInputCapabilityCache();
     this.outputOverride = opts.emit;
-    this.probeImageInput = opts.probeImageInput ?? defaultProbeImageInput;
   }
 
   // ---- stdout 输出 ----
@@ -79,11 +64,6 @@ export class SessionManager {
    * - session_stop：停止并移除 worker
    */
   handleCommand(cmd: SidecarCommand): void {
-    if (cmd.cmd === "probe_image_input") {
-      void this.handleImageInputProbe(cmd);
-      return;
-    }
-
     // codegraph MCP 工具的 Rust 回包：按 request_id 结算挂起查询，无会话路由。
     if (cmd.cmd === "codegraph_result") {
       resolveCodegraphResult(cmd as any);
@@ -117,27 +97,6 @@ export class SessionManager {
     }
   }
 
-  private async handleImageInputProbe(cmd: Extract<SidecarCommand, { cmd: "probe_image_input" }>): Promise<void> {
-    const env = cmd.env ?? {};
-    const model = cmd.model ?? env.ANTHROPIC_MODEL ?? "";
-    const key = imageCapabilityKey(env, model);
-    let supported: boolean | null = null;
-
-    try {
-      supported = await this.imageCapabilityCache.ensure(key, () => (
-        this.probeImageInput(query, { env, model })
-      ));
-    } catch {
-      supported = null;
-    }
-
-    this.emitToStdout("_runtime", {
-      type: "image_input_probe_result",
-      request_id: cmd.request_id,
-      supported,
-    });
-  }
-
   // ---- 会话生命周期 ----
 
   /** 获取已有 worker 或为 send 命令创建新 worker。 */
@@ -167,7 +126,6 @@ export class SessionManager {
       btwMode: !!(cmd as any).btw,
       lightweightMode: !!(cmd as any).lightweight,
       envOverrides: (cmd as any).env ?? {},
-      imageCapabilityCache: this.imageCapabilityCache,
       // btw 回合结束自毁：按当前 routingKey 摘除（可能已 re-key 成真实会话 ID）。
       onSelfStop: (w) => {
         this.workers.delete(w.routingKey);

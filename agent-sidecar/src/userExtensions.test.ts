@@ -74,7 +74,6 @@ describe("assembleHooks", () => {
   const builtin = {
     PreToolUse: [
       { matcher: ".*", hooks: ["policyHook"] },
-      { matcher: "^Read$", hooks: ["imageGuard"] },
     ],
     Stop: [{ hooks: ["stopEffort"] }],
   };
@@ -87,7 +86,6 @@ describe("assembleHooks", () => {
     const out = assembleHooks(builtin, user);
     expect(out.PreToolUse).toEqual([
       { matcher: ".*", hooks: ["policyHook"] },
-      { matcher: "^Read$", hooks: ["imageGuard"] },
       { matcher: "^Grep$", hooks: ["userGrepHook"] },
     ]);
     expect(out.PreToolUse?.[0].hooks[0]).toBe("policyHook");

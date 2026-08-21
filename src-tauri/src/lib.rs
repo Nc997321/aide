@@ -409,7 +409,6 @@ pub fn run() {
             commands::recent::clear_recent,
             // Chat (Agent SDK)
             commands::chat::send_message,
-            commands::chat::probe_image_input,
             commands::chat::permission_response,
             commands::chat::interrupt_session,
             commands::chat::stop_bg_task,

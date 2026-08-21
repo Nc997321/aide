@@ -6,7 +6,7 @@ export interface HookBuildContext {
   cwd: string | undefined;
   env: NodeJS.ProcessEnv;
   session: { makePolicyHook(cwd: string | undefined): HookCallback;
-              makeImageGuardHook(): HookCallback; makeStopEffortHook(): HookCallback };
+              makeStopEffortHook(): HookCallback };
 }
 
 export interface BuiltinHookEntry {
@@ -29,9 +29,6 @@ export const BUILTIN_HOOKS: BuiltinHookEntry[] = [
   { id: "subagentModel", event: "PreToolUse", matcher: "^(Agent|Task)$",
     purpose: "子代理模型选择兜底", alwaysMounted: false,
     build: (ctx) => makeSubagentModelHook(ctx.env) },
-  { id: "imageGuard", event: "PreToolUse", matcher: "^Read$",
-    purpose: "读图保护（image input 不可用时 deny）", alwaysMounted: true,
-    build: (ctx) => ctx.session.makeImageGuardHook() },
   { id: "skillGuard", event: "PreToolUse", matcher: "^Skill$",
     purpose: "子代理重型 skill 名单拦截", alwaysMounted: false,
     build: (ctx) => makeSkillGuardHook(ctx.env) },
