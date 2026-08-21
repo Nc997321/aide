@@ -11,6 +11,7 @@ import { segmentBlocks, isChangeTool, type Segment } from "@/utils/blockSegments
 import { useFileResolver } from "@/composables/useFileResolver";
 import { parseFileLink, shouldOpenExternally } from "@/utils/fileLink";
 import { isModelInList } from "@/utils/modelSelect";
+import { effortLabel } from "@/utils/effort";
 
 const props = defineProps<{
   message: ChatMessage;
@@ -194,7 +195,7 @@ function handleTextClick(e: MouseEvent) {
         >{{ modelBadge }}<span
           v-if="message.turnEffort"
           class="msg-model-effort"
-        >{{ modelBadge ? "· " : "" }}{{ message.turnEffort.toUpperCase() }}</span></span>
+        >{{ modelBadge ? "· " : "" }}{{ effortLabel(message.turnEffort) }}</span></span>
         <TurnUsageBadge v-if="message.usage" class="msg-usage" :usage="message.usage" />
       </div>
     </div>

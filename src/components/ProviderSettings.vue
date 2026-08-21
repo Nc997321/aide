@@ -26,13 +26,13 @@ import ThemedSelect from "./ThemedSelect.vue";
 import { PROVIDER_GLYPHS } from "@/utils/icons";
 import type { ProviderConfig, ProviderKind, ProviderModelMappings, SecretMutation } from "../types";
 
+// 三档制：快速(low)=关闭思考模式、思考(high)/深度思考(max)=开启思考。
+// 历史档位 MEDIUM/XHIGH 由 normalizeEffortOption 迁移到相邻档位，不再出现在选择器。
 const effortOptions = [
   { value: "", label: "默认" },
-  { value: "LOW", label: "LOW" },
-  { value: "MEDIUM", label: "MEDIUM" },
-  { value: "HIGH", label: "HIGH" },
-  { value: "XHIGH", label: "XHIGH" },
-  { value: "MAX", label: "MAX" },
+  { value: "LOW", label: "快速" },
+  { value: "HIGH", label: "思考" },
+  { value: "MAX", label: "深度思考" },
 ];
 
 const {
@@ -394,7 +394,7 @@ function removeModelTag(idx: number) {
             block
             @update:model-value="form.effortLevel = $event"
           />
-          <span class="form-hint">新开会话的初始档位；会话中可在输入框工具栏随时切换</span>
+          <span class="form-hint">新开会话的初始档位；快速=关闭思考模式、思考/深度思考=开启；会话中可在输入框工具栏随时切换</span>
         </div>
 
         <!-- 自动压缩：CLAUDE_CODE_AUTO_COMPACT_WINDOW + CLAUDE_AUTOCOMPACT_PCT_OVERRIDE。
