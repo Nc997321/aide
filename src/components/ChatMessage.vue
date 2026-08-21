@@ -4,6 +4,7 @@ import type { ChatMessage, ModelOption, BgTask } from "@/types/chat";
 import { renderStreaming, renderMarkdown } from "@/utils/markdown";
 import ToolCallBlock from "./ToolCallBlock.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
+import ProcessGroup from "./ProcessGroup.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import TurnUsageBadge from "./TurnUsageBadge.vue";
@@ -63,11 +64,13 @@ const isActionChip = computed(
 const { openResolved } = useFileResolver();
 
 /** user 消息不分组（@mention 的 tool_call 是附件展示，保持逐条）；
- *  assistant 消息连续 tool_call 聚成墨线组（spec·分组行为）。 */
+ *  assistant 消息连续 tool_call 聚成墨线组（spec·分组行为）；定稿（streaming=false）
+ *  后再走二阶段：≥2 个过程段（思考/工具组/子代理）的连续段合成一个过程胶囊——
+ *  回复文本与变更卡留在原位不动，只收拢"模型干活"的痕迹。 */
 const segments = computed<Segment[]>(() =>
   isUser.value
     ? props.message.blocks.map((block, index) => ({ kind: "block" as const, block, index }))
-    : segmentBlocks(props.message.blocks),
+    : segmentBlocks(props.message.blocks, { finalized: !props.message.streaming }),
 );
 
 /** 组是否"活着"：消息还在流式生成，且该组是最后一段（新工具块会继续追加进组）。 */
@@ -122,6 +125,12 @@ function handleTextClick(e: MouseEvent) {
           v-if="seg.kind === 'tool_group'"
           :blocks="seg.blocks"
           :live="isLiveGroup(seg)"
+          :bg-tasks="bgTasks"
+          @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
+        />
+        <ProcessGroup
+          v-else-if="seg.kind === 'process'"
+          :segments="seg.segments"
           :bg-tasks="bgTasks"
           @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
         />

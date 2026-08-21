@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { ContentBlock, ToolCallBlock } from "@/types/chat";
-import { groupStats, segmentBlocks } from "./blockSegments";
+import { groupStats, processStats, segmentBlocks, type Segment } from "./blockSegments";
 
 let nextId = 0;
 function tool(name: string, over: Partial<ToolCallBlock> = {}): ToolCallBlock {
   return { type: "tool_call", id: `t${nextId++}`, name, input: {}, isPending: false, ...over };
 }
 const text = (t: string): ContentBlock => ({ type: "text", text: t });
+const thinking = (t: string): ContentBlock => ({ type: "thinking", text: t });
+const subagent = (id: string): ContentBlock => ({
+  type: "subagent", id, agentName: "Explore", description: "", entries: [], isPending: false,
+});
 
 describe("segmentBlocks", () => {
   it("空 blocks → 空段", () => {
@@ -68,5 +72,87 @@ describe("groupStats", () => {
       { name: "Glob", count: 1 },
       { name: "Grep", count: 1 },
     ]);
+  });
+});
+
+describe("segmentBlocks 过程合并（finalized）", () => {
+  it("finalized 时 ≥2 个可折叠块的连续段合成一个 process 段，index 取段首原下标", () => {
+    const segs = segmentBlocks(
+      [text("a"), tool("Read"), thinking("t1"), tool("Grep"), text("b")],
+      { finalized: true },
+    );
+    expect(segs.map((s) => s.kind)).toEqual(["block", "process", "block"]);
+    const p = segs[1] as { segments: Segment[]; index: number };
+    expect(p.index).toBe(1);
+    expect(p.segments.map((s) => s.kind)).toEqual(["tool_group", "block", "tool_group"]);
+  });
+
+  it("回复（text）永不进 process 段，留在原位", () => {
+    const segs = segmentBlocks(
+      [thinking("t1"), tool("Read"), text("中间回复"), thinking("t2"), tool("Grep"), text("正式回复")],
+      { finalized: true },
+    );
+    expect(segs.map((s) => s.kind)).toEqual(["process", "block", "process", "block"]);
+    expect((segs[1] as { block: ContentBlock }).block).toMatchObject({ type: "text", text: "中间回复" });
+    expect((segs[3] as { block: ContentBlock }).block).toMatchObject({ type: "text", text: "正式回复" });
+  });
+
+  it("单块段不合并：只有一个思考/一个工具组时保持原组件", () => {
+    expect(
+      segmentBlocks([text("a"), thinking("t"), text("b")], { finalized: true }).map((s) => s.kind),
+    ).toEqual(["block", "block", "block"]);
+    expect(
+      segmentBlocks([text("a"), tool("Read"), text("b")], { finalized: true }).map((s) => s.kind),
+    ).toEqual(["block", "tool_group", "block"]);
+  });
+
+  it("变更卡（Edit/Write/NotebookEdit）切断连续段：两侧单块段不合并，长段各自成 process", () => {
+    const shortRuns = segmentBlocks([tool("Read"), tool("Edit"), tool("Grep")], { finalized: true });
+    expect(shortRuns.map((s) => s.kind)).toEqual(["tool_group", "block", "tool_group"]);
+
+    const longRuns = segmentBlocks(
+      [tool("Read"), thinking("t1"), tool("Edit"), thinking("t2"), tool("Grep")],
+      { finalized: true },
+    );
+    expect(longRuns.map((s) => s.kind)).toEqual(["process", "block", "process"]);
+    expect((longRuns[1] as { block: ToolCallBlock }).block.name).toBe("Edit");
+  });
+
+  it("subagent 块是可折叠过程项：进 process 段，单独存在时不合并", () => {
+    const merged = segmentBlocks([subagent("s1"), thinking("t")], { finalized: true });
+    expect(merged.map((s) => s.kind)).toEqual(["process"]);
+
+    const single = segmentBlocks([text("a"), subagent("s1"), text("b")], { finalized: true });
+    expect(single.map((s) => s.kind)).toEqual(["block", "block", "block"]);
+  });
+
+  it("finalized 缺省/false（流式中）不合并，行为与现状一致", () => {
+    const blocks = [tool("Read"), thinking("t"), tool("Grep")];
+    expect(segmentBlocks(blocks).map((s) => s.kind)).toEqual(["tool_group", "block", "tool_group"]);
+    expect(segmentBlocks(blocks, { finalized: false }).map((s) => s.kind)).toEqual([
+      "tool_group", "block", "tool_group",
+    ]);
+  });
+});
+
+describe("processStats", () => {
+  it("统计思考段数 / 工具总数 / 失败数 / 子代理数", () => {
+    const segs = segmentBlocks(
+      [
+        tool("Read"), tool("Grep", { isError: true }), thinking("t1"),
+        subagent("s1"), thinking("t2"), tool("Glob"),
+      ],
+      { finalized: true },
+    );
+    expect(segs).toHaveLength(1);
+    const stats = processStats((segs[0] as { segments: Segment[] }).segments);
+    expect(stats).toEqual({ thinkingCount: 2, toolTotal: 3, toolErrorCount: 1, subagentCount: 1 });
+  });
+
+  it("无思考/无工具时为 0", () => {
+    const stats = processStats([
+      { kind: "tool_group", blocks: [tool("Read")], index: 0 },
+    ]);
+    expect(stats).toEqual({ thinkingCount: 0, toolTotal: 1, toolErrorCount: 0, subagentCount: 0 });
   });
 });
