@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>过程合并原型 v2 — 回复原位不动，只合并连续过程段</title>
+<style>
+  /* glass 主题 token（src/themes/glass.ts） */
+  :root {
+    --bg-base: rgba(17,19,29,.52);
+    --surface-default: rgba(255,255,255,.06);
+    --surface-hover: rgba(255,255,255,.1);
+    --surface-active: rgba(255,255,255,.14);
+    --text-primary: #eef0f8;
+    --text-secondary: #b9bdd0;
+    --text-muted: #7c8296;
+    --accent: #a5b8ff;
+    --agent-accent: #e0a3d8;
+    --border: rgba(255,255,255,.1);
+    --border-subtle: rgba(255,255,255,.06);
+    --highlight-inset: inset 0 1px 0 rgba(255,255,255,.12);
+    --success: #6ee7a8;
+    --danger: #f87171;
+    --radius-md: 10px;
+    --font-mono: "Cascadia Code", Consolas, monospace;
+    --ease-t: .16s cubic-bezier(.2,.8,.2,1);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    padding: 28px 16px 80px;
+    color: var(--text-primary);
+    font: 13px/1.7 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background:
+      radial-gradient(560px 380px at 10% -8%, rgba(124,108,255,.32), transparent 65%),
+      radial-gradient(520px 420px at 96% 6%, rgba(64,190,220,.22), transparent 65%),
+      radial-gradient(640px 340px at 60% 112%, rgba(210,110,190,.16), transparent 70%),
+      #0a0b11;
+  }
+  .page { max-width: 780px; margin: 0 auto; }
+
+  /* 顶部视图切换 */
+  .switcher { display: flex; gap: 4px; justify-content: center; margin-bottom: 6px; }
+  .switcher button {
+    padding: 5px 14px; font-size: 12px; cursor: pointer;
+    color: var(--text-secondary);
+    background: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+  }
+  .switcher button:first-child { border-radius: 99px 0 0 99px; }
+  .switcher button:last-child  { border-radius: 0 99px 99px 0; }
+  .switcher button.on {
+    color: var(--text-primary); background: var(--surface-active);
+    border-color: var(--border);
+  }
+  .hint {
+    text-align: center; font-size: 11.5px; color: var(--text-muted);
+    margin-bottom: 26px; min-height: 34px;
+  }
+  .hint b { color: var(--text-secondary); font-weight: 600; }
+
+  /* assistant 回合书脊（ChatMessage .msg-turn） */
+  .msg-turn {
+    max-width: 94%;
+    border-left: 2px solid rgba(165,184,255,.45);
+    padding: 2px 0 2px 18px;
+    display: none; flex-direction: column; gap: 8px;
+    line-height: 1.7; word-break: break-word;
+  }
+  body:not(.v-a0):not(.v-b) #view-before { display: flex; }
+  body.v-a0 #view-a0 { display: flex; }
+  body.v-b  #view-b  { display: flex; }
+
+  .msg-text { color: var(--text-primary); }
+  .msg-text p + p { margin-top: 8px; }
+  .msg-text code {
+    font-family: var(--font-mono); font-size: 11.5px;
+    background: var(--surface-default); border-radius: 4px; padding: 1px 5px;
+  }
+
+  /* 思考胶囊（ThinkingBlock） */
+  details.thinking { margin: 2px 0; }
+  .thinking-head {
+    display: inline-flex; align-items: center; gap: 7px;
+    cursor: pointer; list-style: none; padding: 2px 0;
+    font-size: 12px; color: var(--text-muted);
+  }
+  .thinking-head::-webkit-details-marker { display: none; }
+  .caret {
+    width: 0; height: 0;
+    border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+    border-left: 5px solid var(--text-muted);
+    opacity: .7; transition: transform var(--ease-t);
+  }
+  details[open] > summary .caret, .process-group.open .pg-head .caret { transform: rotate(90deg); }
+  .thinking-label { font-weight: 600; color: var(--text-secondary); }
+  .thinking-count { font-size: 10.5px; font-family: var(--font-mono); color: var(--text-muted); }
+  .thinking-body {
+    margin: 4px 0 6px; padding: 4px 10px;
+    border-left: 2px solid rgba(224,163,216,.4);
+    font-size: 11.5px; line-height: 1.6; color: var(--text-muted);
+    font-style: italic; opacity: .85; white-space: pre-wrap;
+    max-height: 120px; overflow: auto;
+  }
+
+  /* 工具组卡（ToolCallGroup） */
+  .tool-group { display: flex; flex-direction: column; gap: 6px; }
+  .tg-summary {
+    display: flex; align-items: center; gap: 9px; width: 100%;
+    text-align: left; font-size: 12px; color: var(--text-secondary);
+    padding: 8px 12px; cursor: pointer;
+    background: var(--bg-base); border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md); box-shadow: var(--highlight-inset);
+    transition: background var(--ease-t);
+  }
+  .tg-summary:hover { background: var(--surface-default); }
+  .tg-n {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 19px; height: 19px; padding: 0 6px; border-radius: 99px;
+    background: var(--surface-active); border: 1px solid var(--border);
+    font-size: 10.5px; font-weight: 600; color: var(--text-primary);
+    flex-shrink: 0;
+  }
+  .tg-kinds {
+    flex: 0 1 auto; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+    font-family: var(--font-mono); color: var(--text-muted);
+  }
+  .tg-items {
+    display: none; flex-direction: column; gap: 4px; margin-left: 8px;
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
+  }
+  .tool-group.open .tg-items { display: flex; }
+  .tg-item {
+    padding: 4px 10px; border: 1px solid var(--border-subtle);
+    border-radius: 8px; background: var(--surface-default);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .tg-item b { color: var(--accent); font-weight: 600; }
+
+  /* ★ 过程胶囊（ProcessGroup）——视觉沿用 tg-summary 卡片语言 */
+  .process-group {
+    background: var(--bg-base); border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md); box-shadow: var(--highlight-inset);
+    overflow: hidden;
+  }
+  .pg-head {
+    display: flex; align-items: center; gap: 9px; width: 100%;
+    padding: 8px 12px; cursor: pointer; border: 0;
+    background: transparent; text-align: left;
+    font-size: 12px; color: var(--text-secondary);
+    transition: background var(--ease-t);
+  }
+  .pg-head:hover { background: var(--surface-default); }
+  .pg-pill {
+    flex-shrink: 0; padding: 1px 8px; border-radius: 99px;
+    background: var(--surface-active); border: 1px solid var(--border);
+    font-size: 10.5px; font-weight: 600; color: var(--text-primary);
+  }
+  .pg-summary {
+    flex: 0 1 auto; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted);
+  }
+  .pg-body {
+    display: none;
+    border-top: 1px solid var(--border-subtle);
+    padding: 10px 12px;
+    max-height: 440px; overflow: auto;
+    flex-direction: column; gap: 8px;
+  }
+  .process-group.open .pg-body { display: flex; }
+
+  /* 变更卡 */
+  .change-card {
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    background: var(--bg-base); box-shadow: var(--highlight-inset); overflow: hidden;
+  }
+  .cc-head {
+    display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+    font-size: 12px; border-bottom: 1px solid var(--border-subtle);
+  }
+  .cc-tool { color: var(--accent); font-weight: 600; font-family: var(--font-mono); }
+  .cc-path { font-family: var(--font-mono); color: var(--text-secondary); }
+  .cc-stat { margin-left: auto; font-family: var(--font-mono); font-size: 11px; }
+  .cc-stat .add { color: var(--success); }
+  .cc-stat .del { color: var(--danger); }
+  .cc-diff { padding: 8px 12px; font-family: var(--font-mono); font-size: 11px; line-height: 1.6; }
+  .cc-diff .d-add { color: var(--success); }
+  .cc-diff .d-del { color: var(--danger); }
+  .cc-diff .d-ctx { color: var(--text-muted); }
+
+  .divider-note {
+    text-align: center; font-size: 11px; color: var(--text-muted);
+    margin: 26px 0 10px; opacity: .8;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="switcher">
+    <button data-view="" class="on">现状</button>
+    <button data-view="v-a0">原位合并（推荐）</button>
+    <button data-view="v-b">回复合并（对照）</button>
+  </div>
+  <div class="hint" id="hint"></div>
+
+  <!-- ============ 现状 ============ -->
+  <div class="msg-turn" id="view-before">
+    <details class="thinking">
+      <summary class="thinking-head"><span class="caret"></span><span class="thinking-label">思考</span><span class="thinking-count">4907 字</span></summary>
+      <div class="thinking-body">让我先梳理一下整条链路……（此处省略 4900 字思考）</div>
+    </details>
+    <div class="msg-text">链路推演到这里没有明显断点。先做两个实测取证：用户跑的 dist 是不是包含注入逻辑的版本；注入消息与正常用户消息的格式差异。</div>
+    <div class="tool-group">
+      <button class="tg-summary"><span class="tg-n">2</span>次工具调用 <span class="tg-kinds">Bash ×1 · find_symbol ×1</span></button>
+      <div class="tg-items">
+        <div class="tg-item"><b>Bash</b> ls -la dist/runtime.js</div>
+        <div class="tg-item"><b>find_symbol</b> injectMessage</div>
+      </div>
+    </div>
+    <details class="thinking">
+      <summary class="thinking-head"><span class="caret"></span><span class="thinking-label">思考</span><span class="thinking-count">89 字</span></summary>
+      <div class="thinking-body">dist 时间戳是 8-21 14:06，包含注入逻辑……</div>
+    </details>
+    <div class="tool-group">
+      <button class="tg-summary"><span class="tg-n">2</span>次工具调用 <span class="tg-kinds">Bash ×1 · Grep ×1</span></button>
+      <div class="tg-items">
+        <div class="tg-item"><b>Bash</b> grep -n "inject" dist/runtime.js</div>
+        <div class="tg-item"><b>Grep</b> pattern=injectMessage path=src/</div>
+      </div>
+    </div>
+    <details class="thinking">
+      <summary class="thinking-head"><span class="caret"></span><span class="thinking-label">思考</span><span class="thinking-count">279 字</span></summary>
+      <div class="thinking-body">release 跑的是 aide-agent.exe，构建于 8-20 21:55……</div>
+    </details>
+    <div class="tool-group">
+      <button class="tg-summary"><span class="tg-n">1</span>次工具调用 <span class="tg-kinds">Bash ×1</span></button>
+      <div class="tg-items"><div class="tg-item"><b>Bash</b> stat aide-agent.exe</div></div>
+    </div>
+    <details class="thinking">
+      <summary class="thinking-head"><span class="caret"></span><span class="thinking-label">思考</span><span class="thinking-count">228 字</span></summary>
+      <div class="thinking-body">接下来对比注入消息与正常消息的格式……</div>
+    </details>
+    <div class="tool-group">
+      <button class="tg-summary"><span class="tg-n">1</span>次工具调用 <span class="tg-kinds">Bash ×1</span></button>
+      <div class="tg-items"><div class="tg-item"><b>Bash</b> node probe.js</div></div>
+    </div>
+    <details class="thinking">
+      <summary class="thinking-head"><span class="caret"></span><span class="thinking-label">思考</span><span class="thinking-count">957 字</span></summary>
+      <div class="thinking-body">实测结果出来了，dev 与 release 的差异确认……</div>
+    </details>
+    <div class="tool-group">
+      <button class="tg-summary"><span class="tg-n">3</span>次工具调用 <span class="tg-kinds">Bash ×2 · Grep ×1</span></button>
+      <div class="tg-items">
+        <div class="tg-item"><b>Bash</b> git log --oneline -3</div>
+        <div class="tg-item"><b>Bash</b> diff snapshot.json</div>
+        <div class="tg-item"><b>Grep</b> pattern=formatDiff</div>
+      </div>
+    </div>
+    <div class="change-card">
+      <div class="cc-head"><span class="cc-tool">Edit</span><span class="cc-path">src/api/provider.ts</span><span class="cc-stat"><span class="add">+12</span> <span class="del">−3</span></span></div>
+      <div class="cc-diff">
+        <div class="d-ctx">  const msg = buildMessage(input)</div>
+        <div class="d-del">- return send(msg)</div>
+        <div class="d-add">+ const stamped = stampFormat(msg, FORMAT_VERSION)</div>
+        <div class="d-add">+ return send(stamped)</div>
+      </div>
+    </div>
+    <details class="thinking">
+      <summary class="thinking-head"><span class="caret"></span><span class="thinking-label">思考</span><span class="thinking-count">781 字</span></summary>
+      <div class="thinking-body">最后把结论整理成回复……</div>
+    </details>
+    <div class="msg-text">dev 模式跑 <code>node dist/runtime.js</code>（8-21 14:06 已含注入），release 跑 <code>aide-agent.exe</code>（8-20 21:55 不含注入）。如果用户跑的是安装版/打包版，注入逻辑根本没进去。先确认用户用 dev 还是 release，同时对比注入消息与正常消息的格式差异……</div>
+  </div>
+
+  <!-- ============ A0：原位合并（推荐） ============ -->
+  <div class="msg-turn" id="view-a0">
+    <details class="thinking">
+      <summary class="thinking-head"><span class="caret"></span><span class="thinking-label">思考</span><span class="thinking-count">4907 字</span></summary>
+      <div class="thinking-body">让我先梳理一下整条链路……（此处省略 4900 字思考）</div>
+    </details>
+    <div class="msg-text">链路推演到这里没有明显断点。先做两个实测取证：用户跑的 dist 是不是包含注入逻辑的版本；注入消息与正常用户消息的格式差异。</div>
+    <div class="process-group">
+      <button class="pg-head" aria-expanded="false">
+        <span class="caret"></span>
+        <span class="pg-pill">过程</span>
+        <span class="pg-summary">4 段思考 · 9 次工具调用</span>
+      </button>
+      <div class="pg-body" data-clone="run-mid"></div>
+    </div>
+    <div class="change-card">
+      <div class="cc-head"><span class="cc-tool">Edit</span><span class="cc-path">src/api/provider.ts</span><span class="cc-stat"><span class="add">+12</span> <span class="del">−3</span></span></div>
+      <div class="cc-diff">
+        <div class="d-ctx">  const msg = buildMessage(input)</div>
+        <div class="d-del">- return send(msg)</div>
+        <div class="d-add">+ const stamped = stampFormat(msg, FORMAT_VERSION)</div>
+        <div class="d-add">+ return send(stamped)</div>
+      </div>
+    </div>
+    <details class="thinking">
+      <summary class="thinking-head"><span class="caret"></span><span class="thinking-label">思考</span><span class="thinking-count">781 字</span></summary>
+      <div class="thinking-body">最后把结论整理成回复……</div>
+    </details>
+    <div class="msg-text">dev 模式跑 <code>node dist/runtime.js</code>（8-21 14:06 已含注入），release 跑 <code>aide-agent.exe</code>（8-20 21:55 不含注入）。如果用户跑的是安装版/打包版，注入逻辑根本没进去。先确认用户用 dev 还是 release，同时对比注入消息与正常消息的格式差异……</div>
+  </div>
+
+  <!-- ============ B：回复合并（对照） ============ -->
+  <div class="msg-turn" id="view-b">
+    <div class="process-group">
+      <button class="pg-head" aria-expanded="false">
+        <span class="caret"></span>
+        <span class="pg-pill">过程</span>
+        <span class="pg-summary">6 段思考 · 9 次工具调用</span>
+      </button>
+      <div class="pg-body">
+        <details class="thinking">
+          <summary class="thinking-head"><span class="caret"></span><span class="thinking-label">思考</span><span class="thinking-count">4907 字</span></summary>
+          <div class="thinking-body">让我先梳理一下整条链路……（此处省略 4900 字思考）</div>
+        </details>
+        <div data-clone-target="run-mid"></div>
+        <details class="thinking">
+          <summary class="thinking-head"><span class="caret"></span><span class="thinking-label">思考</span><span class="thinking-count">781 字</span></summary>
+          <div class="thinking-body">最后把结论整理成回复……</div>
+        </details>
+      </div>
+    </div>
+    <div class="change-card">
+      <div class="cc-head"><span class="cc-tool">Edit</span><span class="cc-path">src/api/provider.ts</span><span class="cc-stat"><span class="add">+12</span> <span class="del">−3</span></span></div>
+      <div class="cc-diff">
+        <div class="d-ctx">  const msg = buildMessage(input)</div>
+        <div class="d-del">- return send(msg)</div>
+        <div class="d-add">+ const stamped = stampFormat(msg, FORMAT_VERSION)</div>
+        <div class="d-add">+ return send(stamped)</div>
+      </div>
+    </div>
+    <div class="msg-text">
+      <p>链路推演到这里没有明显断点。先做两个实测取证：用户跑的 dist 是不是包含注入逻辑的版本；注入消息与正常用户消息的格式差异。</p>
+      <p>dev 模式跑 <code>node dist/runtime.js</code>（8-21 14:06 已含注入），release 跑 <code>aide-agent.exe</code>（8-20 21:55 不含注入）。如果用户跑的是安装版/打包版，注入逻辑根本没进去。先确认用户用 dev 还是 release，同时对比注入消息与正常消息的格式差异……</p>
+    </div>
+  </div>
+
+  <div class="divider-note">纯文本回复（无工具/无思考）的回合不受影响，各视图渲染一致</div>
+</div>
+
+<!-- 中段过程内容（工具组×5 + 思考×4），A0 / B 两视图共用 -->
+<template id="run-mid">
+  <div class="tool-group">
+    <button class="tg-summary"><span class="tg-n">2</span>次工具调用 <span class="tg-kinds">Bash ×1 · find_symbol ×1</span></button>
+    <div class="tg-items">
+      <div class="tg-item"><b>Bash</b> ls -la dist/runtime.js</div>
+      <div class="tg-item"><b>find_symbol</b> injectMessage</div>
+    </div>
+  </div>
+  <details class="thinking">
+    <summary class="thinking-head"><span class="caret"></span><span class="thinking-label">思考</span><span class="thinking-count">89 字</span></summary>
+    <div class="thinking-body">dist 时间戳是 8-21 14:06，包含注入逻辑……</div>
+  </details>
+  <div class="tool-group">
+    <button class="tg-summary"><span class="tg-n">2</span>次工具调用 <span class="tg-kinds">Bash ×1 · Grep ×1</span></button>
+    <div class="tg-items">
+      <div class="tg-item"><b>Bash</b> grep -n "inject" dist/runtime.js</div>
+      <div class="tg-item"><b>Grep</b> pattern=injectMessage path=src/</div>
+    </div>
+  </div>
+  <details class="thinking">
+    <summary class="thinking-head"><span class="caret"></span><span class="thinking-label">思考</span><span class="thinking-count">279 字</span></summary>
+    <div class="thinking-body">release 跑的是 aide-agent.exe，构建于 8-20 21:55……</div>
+  </details>
+  <div class="tool-group">
+    <button class="tg-summary"><span class="tg-n">1</span>次工具调用 <span class="tg-kinds">Bash ×1</span></button>
+    <div class="tg-items"><div class="tg-item"><b>Bash</b> stat aide-agent.exe</div></div>
+  </div>
+  <details class="thinking">
+    <summary class="thinking-head"><span class="caret"></span><span class="thinking-label">思考</span><span class="thinking-count">228 字</span></summary>
+    <div class="thinking-body">接下来对比注入消息与正常消息的格式……</div>
+  </details>
+  <div class="tool-group">
+    <button class="tg-summary"><span class="tg-n">1</span>次工具调用 <span class="tg-kinds">Bash ×1</span></button>
+    <div class="tg-items"><div class="tg-item"><b>Bash</b> node probe.js</div></div>
+  </div>
+  <details class="thinking">
+    <summary class="thinking-head"><span class="caret"></span><span class="thinking-label">思考</span><span class="thinking-count">957 字</span></summary>
+    <div class="thinking-body">实测结果出来了，dev 与 release 的差异确认……</div>
+  </details>
+  <div class="tool-group">
+    <button class="tg-summary"><span class="tg-n">3</span>次工具调用 <span class="tg-kinds">Bash ×2 · Grep ×1</span></button>
+    <div class="tg-items">
+      <div class="tg-item"><b>Bash</b> git log --oneline -3</div>
+      <div class="tg-item"><b>Bash</b> diff snapshot.json</div>
+      <div class="tg-item"><b>Grep</b> pattern=formatDiff</div>
+    </div>
+  </div>
+</template>
+
+<script>
+  const HINTS = {
+    '':     '现状：思考 / 工具组 / 回复按到达顺序平铺——中间那堵 9 项的墙把两段相似回复隔开，读着像重复',
+    'v-a0': '原位合并：<b>回复一律留在原位</b>；≥2 个过程块的连续段合成一个过程胶囊（点击展开看原序全过程）；单块段与变更卡不动。13 个视觉单元 → 6 个，零重排',
+    'v-b':  '回复合并（对照）：中间回复挪到尾部并入正式回复——更短，但文本离开原位置，「先取证」跑到「已取证」后面，定稿瞬间已读文本会跳位',
+  };
+  const body = document.body;
+  const hint = document.getElementById('hint');
+  const btns = [...document.querySelectorAll('.switcher button')];
+  function setView(v) {
+    body.classList.remove('v-a0', 'v-b');
+    if (v) body.classList.add(v);
+    btns.forEach(b => b.classList.toggle('on', b.dataset.view === v));
+    hint.innerHTML = HINTS[v];
+  }
+  btns.forEach(b => b.onclick = () => setView(b.dataset.view));
+
+  // template 克隆：data-clone 整份替换；data-clone-target 填充进占位 div
+  const tpl = document.getElementById('run-mid');
+  document.querySelectorAll('[data-clone="run-mid"]').forEach(el => el.appendChild(tpl.content.cloneNode(true)));
+  document.querySelectorAll('[data-clone-target="run-mid"]').forEach(el => el.replaceWith(...tpl.content.cloneNode(true).childNodes));
+
+  // 事件委托：过程胶囊 / 工具组开合（克隆内容自动生效）
+  document.addEventListener('click', e => {
+    const pgHead = e.target.closest('.pg-head');
+    if (pgHead) {
+      const pg = pgHead.parentElement;
+      const open = pg.classList.toggle('open');
+      pgHead.setAttribute('aria-expanded', String(open));
+      return;
+    }
+    const tg = e.target.closest('.tg-summary');
+    if (tg) tg.parentElement.classList.toggle('open');
+  });
+
+  // 截图自检锚点
+  if (location.hash === '#a0') setView('v-a0');
+  if (location.hash === '#a0-open') { setView('v-a0'); document.querySelector('#view-a0 .pg-head').click(); }
+  if (location.hash === '#b') setView('v-b');
+  setView(location.hash === '#b' ? 'v-b' : location.hash.startsWith('#a0') ? 'v-a0' : '');
+</script>
+</body>
+</html>
