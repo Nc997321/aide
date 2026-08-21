@@ -1,4 +1,5 @@
 import { query, type Query } from "@anthropic-ai/claude-agent-sdk";
+import { resolveClaudeExe } from "./claudeExe.js";
 
 export type OAuthLoginResult =
   | { ok: true; method: "oauth"; authorizeUrl: string }
@@ -17,7 +18,7 @@ export type OAuthLoginResult =
 export async function startOAuthLogin(): Promise<OAuthLoginResult> {
   try {
     const session = query({
-      pathToClaudeCodeExecutable: process.env.AIDE_CLAUDE_EXE,
+      pathToClaudeCodeExecutable: resolveClaudeExe(),
       env: process.env as Record<string, string>,
       // 无 user message——仅承载控制请求。若 SDK 要求首条 user message 才建会话，
       // 此处会抛错 → 返回 ok:false 触发 A1/API key 降级。
