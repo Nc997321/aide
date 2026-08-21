@@ -321,6 +321,9 @@ function matcherSummary(matcher: PermissionRule["matcher"]): string {
       if (matcher.folder !== undefined) {
         return `path ${fieldStr} under ${JSON.stringify(matcher.folder)}`;
       }
+      if (matcher.file !== undefined) {
+        return `path ${fieldStr} equals ${JSON.stringify(matcher.file)}`;
+      }
       return `path ${fieldStr} (any)`;
     }
     case "field": {

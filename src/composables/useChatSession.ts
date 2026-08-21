@@ -23,6 +23,7 @@ import type {
   ActionBlock,
   BgTask,
 } from "../types/chat";
+import type { PermissionRuleDraft } from "../types/permissions";
 import { useSessionState } from "./useSessionState";
 import { useSessionNames } from "./useSessionNames";
 import { useSessionWorkspaces, type SessionWorkspaceInfo } from "./useSessionWorkspaces";
@@ -171,6 +172,9 @@ interface SessionStore {
    *  dispatchSend 不立即渲染成对话气泡，只暂存到这里，输入区上方显示"待发出"
    *  提示条；jump_promoted 时 flush 成用户气泡并清空。 */
   pendingJumps: PendingJump[];
+  /** 图片 400 回滚后待放回输入框的文本（image_input_rollback 事件写入；空串 =
+   *  无待回填）。ChatPanel 消费后经 consumeRollbackText 清空，避免重复回填。 */
+  rollbackText: string;
 }
 
 // ── 模块级单例状态 ─────────────────────────────────────────────────────────
@@ -318,6 +322,7 @@ function getStore(sid: string): SessionStore {
       currentPermissionMode: "",
       slashCommands: null,
       pendingJumps: [],
+      rollbackText: "",
     };
   }
   return stores[sid];
@@ -1022,6 +1027,31 @@ function handleChatEvent(e: Record<string, unknown>) {
       setSessionHealth(sid, "warning");
       break;
     }
+    case "image_input_rollback": {
+      // 模型 400 不支持图片：sidecar 已处理会话历史（会话不报废）。两种形态：
+      // - 用户发图（text 非空）：整条消息已移除，文本暂存 rollbackText 由
+      //   ChatPanel 回填输入框，用户手动重发。
+      // - 模型 Read 图片（text 空）：tool_result 图片已替换为错误文本回喂模型，
+      //   模型会改读文本继续，无需用户介入。
+      // 这里只落一条提示消息 + 解除 busy。
+      resetRuntimeState(store, false);
+      const rollbackText = String(e["text"] ?? "");
+      store.messages.push({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        blocks: [{
+          type: "text",
+          text: rollbackText
+            ? "当前模型不支持图片输入，已移除该消息。文本已放回输入框，可手动重发。"
+            : "当前模型不支持图片输入，已移除图片内容并告知模型，对话继续。",
+        }],
+        timestamp: Date.now(),
+      });
+      store.rollbackText = rollbackText;
+      setSessionState(sid, "waiting");
+      setSessionHealth(sid, "warning");
+      break;
+    }
     case "error": {
       // fatal:false = 可恢复错误，sidecar 进程仍存活等下一条 → 保留任务列表（可能继续更新）；
       // 缺省/true 按致命处理（进程已死）→ 清任务，兼容未重建的旧 bundle。
@@ -1255,13 +1285,16 @@ export function useChatSession(sessionId: Ref<string | null>) {
   /** answers：仅 AskUserQuestion 场景（问题文本 → 选中答案的不透明映射），
    *  由 PermissionDialog.vue 收集，这里只透传，语义由 sidecar 解释。
    *  reason：拒绝理由（仅 approved=false 时用户输入），Rust 参数名 message
-   *  （serde 自动 camelCase 映射），sidecar 透传给 SDK 的 deny message。 */
+   *  （serde 自动 camelCase 映射），sidecar 透传给 SDK 的 deny message。
+   *  sessionRules：会话级规则草稿（「允许」文件工具时前端推导，如「本会话内
+   *  同文件不再询问」），随放行透传到 sidecar 入库，worker 销毁即消失。 */
   async function respondPermission(
     id: string,
     approved: boolean,
     answers?: Record<string, string>,
     nextMode?: string,
     reason?: string,
+    sessionRules?: PermissionRuleDraft[],
   ) {
     const sid = sessionId.value;
     if (!sid) return;
@@ -1273,7 +1306,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       setSessionState(sid, "running");
       armStalled(sid); // 权限批准后恢复生成 → 重启软超时计时
     }
-    await invoke("permission_response", { sessionId: sid, id, approved, answers, nextMode, message: reason });
+    await invoke("permission_response", { sessionId: sid, id, approved, answers, nextMode, message: reason, sessionRules });
   }
 
   async function interrupt() {
@@ -1484,6 +1517,13 @@ export function useChatSession(sessionId: Ref<string | null>) {
     setModel,
     setEffort,
     setPermissionMode,
+    /** 图片 400 回滚后待放回输入框的文本（空串 = 无待回填）。 */
+    rollbackText: computed(() => current.value?.rollbackText ?? ""),
+    /** ChatPanel 把 rollbackText 回填进输入框后调用，清空待回填标记。 */
+    consumeRollbackText: () => {
+      const s = current.value;
+      if (s) s.rollbackText = "";
+    },
   };
 }
 

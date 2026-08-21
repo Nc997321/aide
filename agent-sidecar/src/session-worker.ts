@@ -74,6 +74,11 @@ const EXTRA_MODE_LABELS: Record<string, string> = {
  *  「进入编辑模式」还得把剩下 2 条逐个点掉，等于没切。 */
 const EDIT_TOOL_NAMES: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
+/** 会话级规则的文件工具家族：Edit/Write/MultiEdit 共享同一份 file_path 精确文件规则
+ *  （同一文件是同一操作对象，工具差异只是写入方式——Write 新文件放行后，Edit 同文件
+ *  不再询问）。NotebookEdit 的输入字段是 notebook_path，不在家族内。 */
+const FILE_FAMILY_TOOLS = ["Edit", "Write", "MultiEdit"] as const;
+
 	// ---- OutputTail（per-SessionWorker 实例） ----
 
 /** 解析 .output 的一行 JSONL → 子代理事件。 */
@@ -369,19 +374,28 @@ export class SessionWorker {
   addSessionRules(drafts: PermissionRuleDraft[]): void {
     for (const d of drafts) {
       if (d.effect !== "allow") continue;
-      const dup = this.sessionRules.some(
-        (r) => r.tool === d.tool && JSON.stringify(r.matcher) === JSON.stringify(d.matcher),
-      );
-      if (dup) continue;
-      this.sessionRules.push({
-        id: `session-${randomUUID()}`,
-        scope: "session",
-        order: this.sessionRuleOrder++,
-        effect: d.effect,
-        tool: d.tool,
-        matcher: d.matcher,
-        source: { label: "session", readOnly: true },
-      });
+      // 文件工具家族展开：一条精确文件规则 → 家族内每个工具各一条同路径规则。
+      // 这样 Write 放行后 Edit/MultiEdit 同文件不再询问，反过来也一样。
+      const tools: readonly string[] =
+        d.matcher.kind === "path" && d.matcher.file !== undefined &&
+        (FILE_FAMILY_TOOLS as readonly string[]).includes(d.tool)
+          ? FILE_FAMILY_TOOLS
+          : [d.tool];
+      for (const tool of tools) {
+        const dup = this.sessionRules.some(
+          (r) => r.tool === tool && JSON.stringify(r.matcher) === JSON.stringify(d.matcher),
+        );
+        if (dup) continue;
+        this.sessionRules.push({
+          id: `session-${randomUUID()}`,
+          scope: "session",
+          order: this.sessionRuleOrder++,
+          effect: d.effect,
+          tool,
+          matcher: d.matcher,
+          source: { label: "session", readOnly: true },
+        });
+      }
     }
   }
 

@@ -6,7 +6,7 @@ import * as fsSync from "node:fs";
 import * as os from "node:os";
 import { fileURLToPath } from "node:url";
 import { evaluatePolicy } from "./evaluate.js";
-import { pathWithinFolder } from "./matchers.js";
+import { pathEqualsFile, pathWithinFolder } from "./matchers.js";
 
 // Load the shared fixture from the Rust side
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -118,6 +118,66 @@ describe("pathWithinFolder", () => {
       const target = path.join(allowedDir, "link", "file.txt");
       const result = await pathWithinFolder(target, allowedDir);
       expect(result).toBe(false);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("pathEqualsFile", () => {
+  it("matches the exact file", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "policy-test-"));
+    try {
+      const target = path.join(tmpDir, "file.txt");
+      await fs.writeFile(target, "x");
+      expect(await pathEqualsFile(target, target)).toBe(true);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a sibling file", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "policy-test-"));
+    try {
+      const target = path.join(tmpDir, "file.txt");
+      const sibling = path.join(tmpDir, "other.txt");
+      await fs.writeFile(target, "x");
+      await fs.writeFile(sibling, "x");
+      expect(await pathEqualsFile(sibling, target)).toBe(false);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a string-prefix lookalike (file.txt vs file.txt.bak)", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "policy-test-"));
+    try {
+      const target = path.join(tmpDir, "file.txt");
+      const lookalike = path.join(tmpDir, "file.txt.bak");
+      await fs.writeFile(target, "x");
+      await fs.writeFile(lookalike, "x");
+      expect(await pathEqualsFile(lookalike, target)).toBe(false);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("matches a non-existent file via ancestor tail (Write of a new file)", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "policy-test-"));
+    try {
+      const target = path.join(tmpDir, "new.txt"); // does not exist
+      expect(await pathEqualsFile(target, target)).toBe(true);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a relative target against cwd", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "policy-test-"));
+    try {
+      const target = path.join(tmpDir, "file.txt");
+      await fs.writeFile(target, "x");
+      expect(await pathEqualsFile("file.txt", target, tmpDir)).toBe(true);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

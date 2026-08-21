@@ -26,13 +26,17 @@ pub enum PermissionMatcher {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         value: Option<String>,
     },
-    /// File-system path matcher. Absent `folder` means "any path" (specificity
-    /// 1); a `folder` requires normalized component containment with symlink
-    /// resolution (specificity 3).
+    /// File-system path matcher. Absent `folder`/`file` means "any path"
+    /// (specificity 1); a `folder` requires normalized component containment
+    /// with symlink resolution (specificity 3); a `file` requires normalized
+    /// component equality with symlink resolution (specificity 3). `folder`
+    /// and `file` are mutually exclusive (validated in `validate_rule`).
     Path {
         field: PathField,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         folder: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file: Option<String>,
     },
     /// Exact equality on an approved scalar input field (specificity 3).
     Field {
@@ -172,6 +176,10 @@ pub enum PolicyValidationError {
     EmptyPrefix,
     EmptyContains,
     EmptyFolder,
+    EmptyFile,
+    /// `path` matcher set both `folder` and `file` — the two modes are
+    /// mutually exclusive (containment vs exact equality).
+    FolderAndFileExclusive,
     EmptyEquals,
     /// `effect=allow && matcher=bash contains` is forbidden — `contains` is too
     /// permissive for an always-allow (a malicious command could embed the
@@ -191,6 +199,11 @@ impl std::fmt::Display for PolicyValidationError {
                 write!(f, "bash contains value must not be empty")
             }
             PolicyValidationError::EmptyFolder => write!(f, "path folder must not be empty"),
+            PolicyValidationError::EmptyFile => write!(f, "path file must not be empty"),
+            PolicyValidationError::FolderAndFileExclusive => write!(
+                f,
+                "path matcher cannot set both folder and file (containment vs exact equality)"
+            ),
             PolicyValidationError::EmptyEquals => write!(f, "field equals value must not be empty"),
             PolicyValidationError::BashContainsAllow => write!(
                 f,

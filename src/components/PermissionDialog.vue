@@ -4,6 +4,7 @@ import type { PermissionRequest } from "@/types/chat";
 import type { PermissionRule, PermissionRuleDraft, PermissionScope } from "@/types/permissions";
 import {
   deriveRememberRule,
+  deriveSessionFileRules,
   describeRuleMatcher,
   hasUnquotedShellControl,
   stripTrailingNumericArg,
@@ -290,6 +291,20 @@ const canRemember = computed(
     rememberDrafts.value.length > 0 &&
     !!props.rememberScope,
 );
+
+// ── 会话级规则提示：文件工具弹窗里点「允许」会推导一条精确文件规则（本会话内
+// 同文件不再询问，换文件仍确认）——「允许」按钮的 tooltip 让用户知道普通允许
+// ≠ 只放行这一次。与「允许并记住」（持久化文件夹规则）互补：允许=单文件、记住=目录级。
+const isFileTool = computed(
+  () => !!props.permission && EDIT_TOOL_NAMES.has(props.permission.name),
+);
+const sessionDrafts = computed<PermissionRuleDraft[]>(() =>
+  props.permission ? deriveSessionFileRules(props.permission.name, props.permission.input) : [],
+);
+/** 仅文件工具且有可推导会话规则时给出 tooltip 文本（空串时 v-tooltip 不显示）。 */
+const allowTooltip = computed(() =>
+  isFileTool.value && sessionDrafts.value.length > 0 ? "该文件本次会话不再询问" : "",
+);
 /** 非 Bash 规则（文件夹 / URL / 工具级）的只读描述行：这条规则匹配什么。
  *  作用域不在预览区展示——点完 toast 会确认落点，设置面板可查看。 */
 function ruleStaticDescription(d: PermissionRuleDraft): string {
@@ -468,10 +483,6 @@ const inputJson = computed(() => {
           </div>
         </div>
       </div>
-      <!-- 「进入编辑模式」后果说明：不熟机制的用户需要知道点下去之后不再逐条弹。 -->
-      <div v-if="canEnterEditMode" class="perm-remember-hint">
-        本次放行，并切换到编辑模式——之后本会话所有文件编辑自动接受，不再逐条确认
-      </div>
       <div class="perm-actions">
         <template v-if="isQuestion">
           <button class="perm-btn perm-btn--ghost" @click="emit('respond', permission.id, false)">跳过</button>
@@ -532,6 +543,7 @@ const inputJson = computed(() => {
                   v-if="canEnterEditMode"
                   class="perm-btn perm-btn--outline"
                   data-action="edit-mode"
+                  v-tooltip="'本会话所有文件编辑自动接受'"
                   @click="emit('respond', permission.id, true, undefined, 'acceptEdits')"
                 >
                   进入编辑模式
@@ -545,7 +557,12 @@ const inputJson = computed(() => {
                 >
                   允许并记住
                 </button>
-                <button class="perm-btn perm-btn--solid" data-action="allow" @click="emit('respond', permission.id, true)">
+                <button
+                  class="perm-btn perm-btn--solid"
+                  data-action="allow"
+                  v-tooltip="allowTooltip"
+                  @click="emit('respond', permission.id, true)"
+                >
                   允许
                 </button>
               </template>
@@ -776,16 +793,6 @@ const inputJson = computed(() => {
    按钮之前全部可见可改。 */
 .perm-remember {
   margin: 0 14px 2px;
-}
-
-.perm-remember-hint {
-  padding: 6px 10px;
-  font-size: 11px;
-  line-height: 1.45;
-  color: var(--aide-text-muted);
-  background: color-mix(in srgb, var(--aide-accent) 5%, transparent);
-  border-left: 2px solid color-mix(in srgb, var(--aide-accent) 35%, transparent);
-  border-radius: 2px;
 }
 
 .perm-remember-rule {

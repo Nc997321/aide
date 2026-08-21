@@ -13,7 +13,8 @@ use super::model::{BashMode, FieldName, PathField, PermissionMatcher};
 
 /// Fixed specificity table (plan §Canonical Contracts):
 /// tool=0; bash all=1; bash contains=2; bash prefix=3; path all=1; path
-/// folder=3; field equals=3. Specificity never depends on string length.
+/// folder=3; path file=3; field equals=3. Specificity never depends on string
+/// length.
 pub fn specificity(matcher: &PermissionMatcher) -> u32 {
     match matcher {
         PermissionMatcher::Tool => 0,
@@ -22,8 +23,8 @@ pub fn specificity(matcher: &PermissionMatcher) -> u32 {
             BashMode::Contains => 2,
             BashMode::Prefix => 3,
         },
-        PermissionMatcher::Path { folder, .. } => {
-            if folder.is_some() {
+        PermissionMatcher::Path { folder, file, .. } => {
+            if folder.is_some() || file.is_some() {
                 3
             } else {
                 1
@@ -49,16 +50,19 @@ pub fn matcher_matches(
             let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
             bash_matches(*mode, value.as_deref().unwrap_or(""), command, effect)
         }
-        PermissionMatcher::Path { field, folder } => {
+        PermissionMatcher::Path { field, folder, file } => {
             let field_key = path_field_key(*field);
             let target = match input.get(field_key).and_then(|v| v.as_str()) {
                 Some(s) => s,
                 None => return false,
             };
-            match folder.as_deref() {
+            match (folder.as_deref(), file.as_deref()) {
                 // "all paths" — matches any invocation that supplies the field.
-                None => true,
-                Some(folder) => path_within_folder(target, folder, cwd),
+                (None, None) => true,
+                (Some(folder), None) => path_within_folder(target, folder, cwd),
+                (None, Some(file)) => path_equals_file(target, file, cwd),
+                // Both set is rejected by validate_rule; treat as no-match.
+                (Some(_), Some(_)) => false,
             }
         }
         PermissionMatcher::Field { field, equals } => {
@@ -379,6 +383,30 @@ pub fn path_within_folder(target: &str, folder: &str, cwd: Option<&str>) -> bool
     is_within(&target_canon, &folder_canon)
 }
 
+/// Exact-file match with symlink safety. The target and file are resolved
+/// against `cwd`, lexically normalized, then the deepest existing ancestor is
+/// canonicalized (resolving symlinks) with the non-existent tail appended —
+/// the same walk as `path_within_folder`, but requiring component equality
+/// instead of containment. A rule for a file about to be created still matches
+/// (its parent resolves, the tail is appended on both sides). Any
+/// filesystem/permission error returns `false` (no-match), never `true`.
+pub fn path_equals_file(target: &str, file: &str, cwd: Option<&str>) -> bool {
+    let cwd_path = cwd.map(PathBuf::from);
+    let target_abs = make_absolute(Path::new(target), cwd_path.as_deref());
+    let file_abs = make_absolute(Path::new(file), cwd_path.as_deref());
+    let target_norm = lexical_normalize(&target_abs);
+    let file_norm = lexical_normalize(&file_abs);
+    let target_canon = match canonicalize_with_tail(&target_norm) {
+        Some(p) => p,
+        None => return false,
+    };
+    let file_canon = match canonicalize_with_tail(&file_norm) {
+        Some(p) => p,
+        None => return false,
+    };
+    target_canon == file_canon
+}
+
 fn make_absolute(path: &Path, cwd: Option<&Path>) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -618,6 +646,7 @@ mod tests {
             specificity(&PermissionMatcher::Path {
                 field: PathField::FilePath,
                 folder: None,
+                file: None,
             }),
             1
         );
@@ -625,6 +654,15 @@ mod tests {
             specificity(&PermissionMatcher::Path {
                 field: PathField::FilePath,
                 folder: Some("/a".into()),
+                file: None,
+            }),
+            3
+        );
+        assert_eq!(
+            specificity(&PermissionMatcher::Path {
+                field: PathField::FilePath,
+                folder: None,
+                file: Some("/a/b.ts".into()),
             }),
             3
         );

@@ -24,7 +24,6 @@ vi.mock("@/api", () => ({
       getDefaultPermissionModes: vi.fn(async () => [{ value: "default", displayName: "默认" }]),
       scanPluginSkills: vi.fn(async () => []),
       readFileContent: vi.fn(async () => ""),
-      probeImageInput: vi.fn(async () => ({ supported: null })),
     },
     { get: (t, k) => (typeof k === "string" && k in t ? (t as Record<string, unknown>)[k] : vi.fn(async () => undefined)) },
   ),
@@ -32,36 +31,36 @@ vi.mock("@/api", () => ({
 vi.mock("@/api/permissions", () => ({
   permissionsApi: { get: vi.fn(async () => ({ scopes: [], rules: [] })) },
 }));
-vi.mock("../utils/diagnostics/scrollTrail", () => ({ trail: vi.fn(), snapshotScrollTrail: vi.fn() }));
+vi.mock("../../utils/diagnostics/scrollTrail", () => ({ trail: vi.fn(), snapshotScrollTrail: vi.fn() }));
 
 // ── 其余 composable stub（ChatPanel onMounted/watch 依赖）──
-vi.mock("../composables/useChatScroll", () => ({
+vi.mock("../../composables/useChatScroll", () => ({
   useChatScroll: () => ({
     scrollEl: null, contentEl: null, visibleMessages: [], hiddenCount: 0,
     ramping: false, onScroll: vi.fn(), jumpToBottom: vi.fn(), farFromBottom: false,
     newWhileAway: false, expandOlderAnchored: vi.fn(),
   }),
 }));
-vi.mock("../composables/useBtwSession", () => ({
+vi.mock("../../composables/useBtwSession", () => ({
   useBtwSession: () => ({
     store: { value: { status: "idle", minimized: false, isBusy: false, ownerSessionId: null, model: "", effort: "" } },
     isBtwSid: () => false, startBtw: vi.fn(), handleBtwEvent: vi.fn(), cleanup: vi.fn(),
     minimize: vi.fn(), reopen: vi.fn(), rebindOwner: vi.fn(), setOnDone: vi.fn(),
   }),
 }));
-vi.mock("../composables/useQuickActions", () => ({ useQuickActions: () => ({ actions: [] }) }));
-vi.mock("../composables/useModal", () => ({ useModal: () => ({ confirm: vi.fn(async () => true), choice: vi.fn(async () => "cancel"), notice: vi.fn(async () => undefined) }) }));
-vi.mock("../composables/useToast", () => ({ useToast: () => ({ toastState: { visible: false, text: "", kind: "info" }, showToast: vi.fn() }) }));
-vi.mock("../composables/useMentionInserter", () => ({ useMentionInserter: () => ({ pending: { value: null }, insertMention: vi.fn(), consumeMention: vi.fn() }) }));
-vi.mock("../composables/useInlineMention", () => ({ useInlineMention: () => ({ onInput: vi.fn(), scan: vi.fn() }) }));
-vi.mock("../composables/useChatPaneWidth", () => ({ setChatPaneRect: vi.fn() }));
-vi.mock("../composables/useFileClipboard", () => ({ peekFileClipboard: () => null, clearFileClipboard: vi.fn() }));
+vi.mock("../../composables/useQuickActions", () => ({ useQuickActions: () => ({ actions: [] }) }));
+vi.mock("../../composables/useModal", () => ({ useModal: () => ({ confirm: vi.fn(async () => true), choice: vi.fn(async () => "cancel"), notice: vi.fn(async () => undefined) }) }));
+vi.mock("../../composables/useToast", () => ({ useToast: () => ({ toastState: { visible: false, text: "", kind: "info" }, showToast: vi.fn() }) }));
+vi.mock("../../composables/useMentionInserter", () => ({ useMentionInserter: () => ({ pending: { value: null }, insertMention: vi.fn(), consumeMention: vi.fn() }) }));
+vi.mock("../../composables/useInlineMention", () => ({ useInlineMention: () => ({ onInput: vi.fn(), scan: vi.fn() }) }));
+vi.mock("../../composables/useChatPaneWidth", () => ({ setChatPaneRect: vi.fn() }));
+vi.mock("../../composables/useFileClipboard", () => ({ peekFileClipboard: () => null, clearFileClipboard: vi.fn() }));
 // AppLogo 导入 /icon.png（vite 公共资源）在 jsdom 下会崩，stub 掉。
-vi.mock("./AppLogo.vue", () => ({ default: { name: "AppLogo", template: "<div class='app-logo-stub' />" } }));
+vi.mock("../AppLogo.vue", () => ({ default: { name: "AppLogo", template: "<div class='app-logo-stub' />" } }));
 
 import ChatPanel from "./ChatPanel.vue";
-import { useSessionProviders } from "../composables/useSessionProviders";
-import { useProviders } from "../composables/useProviders";
+import { useSessionProviders } from "../../composables/useSessionProviders";
+import { useProviders } from "../../composables/useProviders";
 
 const emptyMappings = (): ProviderModelMappings => ({
   anthropicModel: "", defaultOpusModel: "", defaultSonnetModel: "", defaultHaikuModel: "", subagent: "",

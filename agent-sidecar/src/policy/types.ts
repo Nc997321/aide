@@ -22,7 +22,14 @@ export interface PermissionRule {
 export type PermissionMatcher =
   | { kind: "tool" }
   | { kind: "bash"; mode: "all" | "prefix" | "contains"; value?: string }
-  | { kind: "path"; field: "file_path" | "path" | "notebook_path"; folder?: string }
+  | {
+      kind: "path";
+      field: "file_path" | "path" | "notebook_path";
+      /** Directory containment (symlink-safe). Mutually exclusive with `file`. */
+      folder?: string;
+      /** Exact-file equality (symlink-safe). Mutually exclusive with `folder`. */
+      file?: string;
+    }
   | { kind: "field"; field: "url" | "query" | "command"; equals: string };
 
 export type PolicyDisposition = "allow" | "deny" | "ask" | "defer";

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { PermissionRule } from "@/types/permissions";
 import {
   deriveRememberRule,
+  deriveSessionFileRules,
   describeRuleMatcher,
   stripTrailingNumericArg,
 } from "./permissionRuleDerivation";
@@ -221,6 +222,58 @@ describe("describeRuleMatcher 规则行描述", () => {
   it("工具级", () => {
     const [d] = deriveRememberRule("Read", {});
     expect(describeRuleMatcher(d)).toBe("调用该工具时始终允许");
+  });
+});
+
+describe("deriveSessionFileRules 会话级精确文件规则", () => {
+  it("Edit/Write/MultiEdit → 精确文件 matcher（file 字段，非 folder）", () => {
+    expect(deriveSessionFileRules("Edit", { file_path: "C:/proj/src/a.ts" })).toEqual([
+      {
+        effect: "allow",
+        tool: "Edit",
+        matcher: { kind: "path", field: "file_path", file: "C:/proj/src/a.ts" },
+      },
+    ]);
+    expect(deriveSessionFileRules("Write", { file_path: "/home/u/repo/b.rs" })[0].matcher).toEqual({
+      kind: "path",
+      field: "file_path",
+      file: "/home/u/repo/b.rs",
+    });
+    expect(deriveSessionFileRules("MultiEdit", { file_path: "src/c.ts" })[0].matcher).toEqual({
+      kind: "path",
+      field: "file_path",
+      file: "src/c.ts",
+    });
+  });
+
+  it("NotebookEdit 用 notebook_path 字段", () => {
+    expect(deriveSessionFileRules("NotebookEdit", { notebook_path: "/nb/x.ipynb" })).toEqual([
+      {
+        effect: "allow",
+        tool: "NotebookEdit",
+        matcher: { kind: "path", field: "notebook_path", file: "/nb/x.ipynb" },
+      },
+    ]);
+  });
+
+  it("路径为空 / 缺失 → 空数组（不推导）", () => {
+    expect(deriveSessionFileRules("Edit", { file_path: "" })).toEqual([]);
+    expect(deriveSessionFileRules("Edit", {})).toEqual([]);
+    expect(deriveSessionFileRules("Edit", undefined)).toEqual([]);
+    expect(deriveSessionFileRules("Edit", { file_path: 123 })).toEqual([]);
+  });
+
+  it("非文件工具 → 空数组（Bash/WebFetch 不建会话规则）", () => {
+    expect(deriveSessionFileRules("Bash", { command: "ls" })).toEqual([]);
+    expect(deriveSessionFileRules("WebFetch", { url: "https://x.com" })).toEqual([]);
+    expect(deriveSessionFileRules("Read", { file_path: "/a/b" })).toEqual([]);
+  });
+});
+
+describe("describeRuleMatcher file matcher 措辞（与 folder 区分）", () => {
+  it("file matcher → 编辑某文件时始终允许", () => {
+    const [d] = deriveSessionFileRules("Write", { file_path: "/a/b/c.ts" });
+    expect(describeRuleMatcher(d)).toBe("编辑 /a/b/c.ts 这个文件时始终允许");
   });
 });
 

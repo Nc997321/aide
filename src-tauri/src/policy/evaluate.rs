@@ -339,11 +339,19 @@ pub fn validate_rule(rule: &PermissionRule) -> Result<(), super::model::PolicyVa
                 return Err(super::model::PolicyValidationError::BashContainsAllow);
             }
         }
-        PermissionMatcher::Path { folder, .. } => {
+        PermissionMatcher::Path { folder, file, .. } => {
             if let Some(f) = folder {
                 if f.trim().is_empty() {
                     return Err(super::model::PolicyValidationError::EmptyFolder);
                 }
+            }
+            if let Some(f) = file {
+                if f.trim().is_empty() {
+                    return Err(super::model::PolicyValidationError::EmptyFile);
+                }
+            }
+            if folder.is_some() && file.is_some() {
+                return Err(super::model::PolicyValidationError::FolderAndFileExclusive);
             }
         }
         PermissionMatcher::Field { equals, .. } => {
@@ -418,9 +426,10 @@ fn matcher_summary(matcher: &PermissionMatcher) -> String {
                 None => format!("bash {mode_word}"),
             }
         }
-        PermissionMatcher::Path { field, folder } => match folder {
-            Some(f) => format!("path {:?} under {f:?}", field),
-            None => format!("path {:?} (any)", field),
+        PermissionMatcher::Path { field, folder, file } => match (folder, file) {
+            (Some(f), _) => format!("path {:?} under {f:?}", field),
+            (None, Some(f)) => format!("path {:?} equals {f:?}", field),
+            (None, None) => format!("path {:?} (any)", field),
         },
         PermissionMatcher::Field { field, equals } => {
             format!("field {:?} equals {equals:?}", field)

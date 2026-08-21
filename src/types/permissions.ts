@@ -9,7 +9,9 @@ export type PermissionEffect = "allow" | "deny" | "ask";
 export type PermissionMatcher =
   | { kind: "tool" }
   | { kind: "bash"; mode: "all" | "prefix" | "contains"; value?: string }
-  | { kind: "path"; field: "file_path" | "path" | "notebook_path"; folder?: string }
+  // folder 与 file 互斥（Rust/sidecar 校验层拒绝同时出现）；file 是精确文件
+  // 匹配（规范化组件相等，symlink 安全），会话级「允许后同文件不再询问」用它。
+  | { kind: "path"; field: "file_path" | "path" | "notebook_path"; folder?: string; file?: string }
   | { kind: "field"; field: "url" | "query" | "command"; equals: string };
 
 export interface PermissionSource {

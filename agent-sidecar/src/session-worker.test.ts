@@ -776,12 +776,80 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
     await other;
   });
 
-  it("duplicate session rules are deduplicated by (tool, matcher)", async () => {
+  it("file-family expansion: Write approval auto-allows Edit/MultiEdit on the same file", async () => {
+    const { worker, events } = makeWorker();
+    worker._testApplyPermissionPolicy(rule("ask", "Write"));
+    const hook = worker._testPolicyHook("/tmp");
+    // Write 新文件 → ask，允许（草稿是 Write 工具的精确文件规则）
+    const first = hook({ hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: "/tmp/x.ts" } } as any);
+    await flushPromises();
+    const req = events.find((e: any) => e.type === "permission_request");
+    worker.handleCommand({
+      cmd: "permission_response", session_id: "test-sid", id: req.id, approved: true,
+      sessionRules: [{ effect: "allow", tool: "Write", matcher: { kind: "path", field: "file_path", file: "/tmp/x.ts" } }],
+    } as any);
+    await first;
+    // Edit 同一文件 → 家族规则命中，不再弹窗
+    const edit = hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/x.ts" } } as any);
+    await flushPromises();
+    const outE: any = await edit;
+    expect(outE.hookSpecificOutput.permissionDecision).toBe("allow");
+    // MultiEdit 同一文件 → 同样直接放行
+    const multi = hook({ hook_event_name: "PreToolUse", tool_name: "MultiEdit", tool_input: { file_path: "/tmp/x.ts" } } as any);
+    await flushPromises();
+    const outM: any = await multi;
+    expect(outM.hookSpecificOutput.permissionDecision).toBe("allow");
+    expect(events.filter((e: any) => e.type === "permission_request").length).toBe(1);
+  });
+
+  it("file-family expansion keeps NotebookEdit independent", async () => {
+    const { worker, events } = makeWorker();
+    // Write 与 NotebookEdit 都配 ask 规则（家族只含 Write/Edit/MultiEdit）
+    worker._testApplyPermissionPolicy({
+      revision: 1,
+      rules: [
+        { id: "r1", scope: "user", order: 0, effect: "ask", tool: "Write", matcher: { kind: "tool" }, source: { label: "user", readOnly: false } },
+        { id: "r2", scope: "user", order: 1, effect: "ask", tool: "NotebookEdit", matcher: { kind: "tool" }, source: { label: "user", readOnly: false } },
+      ],
+    });
+    const hook = worker._testPolicyHook("/tmp");
+    // Write 放行（家族展开：Edit/Write/MultiEdit 三条同路径规则）
+    const first = hook({ hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: "/tmp/x.ipynb" } } as any);
+    await flushPromises();
+    const req = events.find((e: any) => e.type === "permission_request");
+    worker.handleCommand({
+      cmd: "permission_response", session_id: "test-sid", id: req.id, approved: true,
+      sessionRules: [{ effect: "allow", tool: "Write", matcher: { kind: "path", field: "file_path", file: "/tmp/x.ipynb" } }],
+    } as any);
+    await first;
+    // NotebookEdit 同路径（notebook_path 字段）不在家族内 → 仍问
+    const nb = hook({ hook_event_name: "PreToolUse", tool_name: "NotebookEdit", tool_input: { notebook_path: "/tmp/x.ipynb" } } as any);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(events.filter((e: any) => e.type === "permission_request").length).toBe(2);
+    // 收尾：拒绝 NotebookEdit 挂单请求，避免测试悬挂
+    const reqs = events.filter((e: any) => e.type === "permission_request");
+    worker.handleCommand({ cmd: "permission_response", session_id: "test-sid", id: reqs[1].id, approved: false } as any);
+    await nb;
+  });
+
+  it("file-family expansion dedupes across the family (Write then Edit drafts → 3 rules)", async () => {
+    const { worker } = makeWorker();
+    const writeDraft = { effect: "allow" as const, tool: "Write", matcher: { kind: "path" as const, field: "file_path" as const, file: "/tmp/x.ts" } };
+    const editDraft = { effect: "allow" as const, tool: "Edit", matcher: { kind: "path" as const, field: "file_path" as const, file: "/tmp/x.ts" } };
+    worker._testApplyPermissionPolicy(rule("ask", "Edit"));
+    worker.handleCommand({ cmd: "permission_response", session_id: "test-sid", id: "never", approved: true, sessionRules: [writeDraft] } as any);
+    worker.handleCommand({ cmd: "permission_response", session_id: "test-sid", id: "never", approved: true, sessionRules: [editDraft] } as any);
+    // Write 展开成 Edit/Write/MultiEdit 三条；Edit 草稿与之逐条去重 → 仍只有 3 条
+    expect(worker._testSessionRuleCount()).toBe(3);
+  });
+
+  it("duplicate session rules are deduplicated by (tool, matcher) within the family", async () => {
     const { worker, events } = makeWorker();
     worker._testApplyPermissionPolicy(rule("ask", "Edit"));
     const hook = worker._testPolicyHook("/tmp");
     const draft = { effect: "allow" as const, tool: "Edit", matcher: { kind: "path" as const, field: "file_path" as const, file: "/tmp/x.ts" } };
-    // 规则落地前同一文件已有两条挂起请求（并发 Edit），都带相同草稿 → 只存一条
+    // 规则落地前同一文件已有两条挂起请求（并发 Edit），都带相同草稿：
+    // 家族展开后固定 3 条（Edit/Write/MultiEdit 各一），重复草稿不新增膨胀
     const p1 = hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/x.ts" } } as any);
     const p2 = hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/x.ts" } } as any);
     await flushPromises();
@@ -790,7 +858,7 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
     worker.handleCommand({ cmd: "permission_response", session_id: "test-sid", id: reqs[0].id, approved: true, sessionRules: [draft] } as any);
     worker.handleCommand({ cmd: "permission_response", session_id: "test-sid", id: reqs[1].id, approved: true, sessionRules: [draft] } as any);
     await Promise.all([p1, p2]);
-    expect(worker._testSessionRuleCount()).toBe(1);
+    expect(worker._testSessionRuleCount()).toBe(3);
   });
 });
 

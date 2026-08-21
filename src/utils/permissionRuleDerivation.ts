@@ -385,6 +385,49 @@ export function deriveRememberRule(
 }
 
 // ---------------------------------------------------------------------------
+// 会话级规则推导（「允许」文件工具 → 本会话内同文件不再询问）
+// ---------------------------------------------------------------------------
+
+/** 会话级「允许后同文件不再询问」规则推导：文件工具（Edit/Write/MultiEdit/
+ *  NotebookEdit）在手动模式下点「允许」时，把本次调用转成一条**精确文件**
+ *  `allow` 规则（matcher.file），随 permission_response 透传 sidecar 入库。
+ *  作用域 session（纯内存，worker 销毁即消失）——与「允许并记住」的持久化
+ *  文件夹规则互补：普通允许只放行这一个文件，不扩大范围；「记住」才升级成
+ *  目录级。推不出来（缺路径字段）返回空数组。 */
+export function deriveSessionFileRules(
+  tool: string,
+  input: unknown,
+): PermissionRuleDraft[] {
+  const inp =
+    input && typeof input === "object" && !Array.isArray(input)
+      ? (input as Record<string, unknown>)
+      : {};
+  if (tool === "Edit" || tool === "Write" || tool === "MultiEdit") {
+    const fp = typeof inp.file_path === "string" ? inp.file_path : "";
+    if (!fp) return [];
+    return [
+      {
+        effect: "allow",
+        tool,
+        matcher: { kind: "path", field: "file_path", file: fp },
+      },
+    ];
+  }
+  if (tool === "NotebookEdit") {
+    const fp = typeof inp.notebook_path === "string" ? inp.notebook_path : "";
+    if (!fp) return [];
+    return [
+      {
+        effect: "allow",
+        tool,
+        matcher: { kind: "path", field: "notebook_path", file: fp },
+      },
+    ];
+  }
+  return [];
+}
+
+// ---------------------------------------------------------------------------
 // 数字参数透明化（方案 E）：`tail -8` 形态的高置信度可变参数检测
 // ---------------------------------------------------------------------------
 
@@ -425,6 +468,9 @@ function matcherDescription(matcher: PermissionMatcher): string {
     case "path": {
       const fieldWord =
         matcher.field === "notebook_path" ? "notebook" : "文件";
+      if (matcher.file !== undefined) {
+        return `编辑 ${matcher.file} 这个${fieldWord}`;
+      }
       if (matcher.folder !== undefined) {
         return `编辑 ${matcher.folder} 及其子目录下的${fieldWord}`;
       }

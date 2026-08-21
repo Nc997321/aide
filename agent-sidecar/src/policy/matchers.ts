@@ -14,7 +14,8 @@ import type { PermissionMatcher } from "./types.js";
 
 /** Fixed specificity table (plan Canonical Contracts):
  * tool=0; bash all=1; bash contains=2; bash prefix=3; path all=1; path
- * folder=3; field equals=3. Specificity never depends on string length. */
+ * folder=3; path file=3; field equals=3. Specificity never depends on string
+ * length. */
 export function specificity(matcher: PermissionMatcher): number {
   switch (matcher.kind) {
     case "tool":
@@ -30,7 +31,7 @@ export function specificity(matcher: PermissionMatcher): number {
       }
       break;
     case "path":
-      return matcher.folder !== undefined ? 3 : 1;
+      return matcher.folder !== undefined || matcher.file !== undefined ? 3 : 1;
     case "field":
       return 3;
   }
@@ -427,6 +428,33 @@ export async function pathWithinFolder(
   return isWithin(targetCanon, folderCanon);
 }
 
+/** Exact-file match with symlink safety. The target and file are resolved
+ * against `cwd`, lexically normalized, then the deepest existing ancestor is
+ * canonicalized (resolving symlinks) with the non-existent tail appended —
+ * the same walk as `pathWithinFolder`, but requiring component equality
+ * instead of containment. A rule for a file about to be created still matches
+ * (its parent resolves, the tail is appended on both sides). Any
+ * filesystem/permission error returns `false` (no-match), never `true`. */
+export async function pathEqualsFile(
+  target: string,
+  file: string,
+  cwd?: string,
+): Promise<boolean> {
+  const targetAbs = makeAbsolute(target, cwd);
+  const fileAbs = makeAbsolute(file, cwd);
+  const targetNorm = lexicalNormalize(targetAbs);
+  const fileNorm = lexicalNormalize(fileAbs);
+  const targetCanon = await canonicalizeWithTail(targetNorm);
+  if (targetCanon === null) {
+    return false;
+  }
+  const fileCanon = await canonicalizeWithTail(fileNorm);
+  if (fileCanon === null) {
+    return false;
+  }
+  return targetCanon === fileCanon;
+}
+
 function makeAbsolute(p: string, cwd?: string): string {
   if (path.isAbsolute(p)) {
     return p;
@@ -464,11 +492,14 @@ export async function matcherMatches(
       if (typeof target !== "string") {
         return false;
       }
-      if (matcher.folder === undefined) {
+      if (matcher.folder === undefined && matcher.file === undefined) {
         // "all paths" — matches any invocation that supplies the field.
         return true;
       }
-      return pathWithinFolder(target, matcher.folder, cwd);
+      if (matcher.file !== undefined) {
+        return pathEqualsFile(target, matcher.file, cwd);
+      }
+      return pathWithinFolder(target, matcher.folder!, cwd);
     }
     case "field": {
       const val = input[matcher.field];

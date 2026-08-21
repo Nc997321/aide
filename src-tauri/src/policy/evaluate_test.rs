@@ -158,6 +158,7 @@ fn folder_rule(folder: &str, effect: PermissionEffect) -> PermissionRule {
         matcher: PermissionMatcher::Path {
             field: PathField::FilePath,
             folder: Some(folder.to_string()),
+            file: None,
         },
         source: PermissionSource::default(),
     }
@@ -286,6 +287,128 @@ fn folder_rule_matches_nonexistent_file_via_ancestor_tail() {
         PolicyDisposition::Allow,
         "non-existent file inside allowed folder must still match"
     );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// --- Exact-file matching --- //
+
+fn file_rule(file: &str, effect: PermissionEffect) -> PermissionRule {
+    PermissionRule {
+        id: "f".into(),
+        scope: SettingsScope::User,
+        order: 0,
+        effect,
+        tool: "Write".into(),
+        matcher: PermissionMatcher::Path {
+            field: PathField::FilePath,
+            folder: None,
+            file: Some(file.to_string()),
+        },
+        source: PermissionSource::default(),
+    }
+}
+
+#[test]
+fn file_rule_matches_exact_file() {
+    let root = temp_dir_for("file-exact");
+    let target = root.join("file.txt");
+    std::fs::write(&target, "x").unwrap();
+
+    let snapshot = PermissionPolicySnapshot {
+        revision: 1,
+        rules: vec![file_rule(&target.to_string_lossy(), PermissionEffect::Allow)],
+    };
+    let decision = evaluate(
+        &snapshot,
+        &invocation_write(&target.to_string_lossy(), Some(&root.to_string_lossy())),
+    );
+    assert_eq!(decision.disposition, PolicyDisposition::Allow);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn file_rule_rejects_sibling_file() {
+    let root = temp_dir_for("file-sibling");
+    let target = root.join("file.txt");
+    let sibling = root.join("other.txt");
+    std::fs::write(&target, "x").unwrap();
+    std::fs::write(&sibling, "x").unwrap();
+
+    let snapshot = PermissionPolicySnapshot {
+        revision: 1,
+        rules: vec![file_rule(&target.to_string_lossy(), PermissionEffect::Allow)],
+    };
+    let decision = evaluate(
+        &snapshot,
+        &invocation_write(&sibling.to_string_lossy(), Some(&root.to_string_lossy())),
+    );
+    assert_eq!(
+        decision.disposition,
+        PolicyDisposition::Defer,
+        "a sibling file must not match an exact-file rule"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn file_rule_rejects_prefix_lookalike() {
+    // file.txt must not match file.txt.bak — component equality, not string prefix.
+    let root = temp_dir_for("file-prefix");
+    let target = root.join("file.txt");
+    let lookalike = root.join("file.txt.bak");
+    std::fs::write(&target, "x").unwrap();
+    std::fs::write(&lookalike, "x").unwrap();
+
+    let snapshot = PermissionPolicySnapshot {
+        revision: 1,
+        rules: vec![file_rule(&target.to_string_lossy(), PermissionEffect::Allow)],
+    };
+    let decision = evaluate(
+        &snapshot,
+        &invocation_write(&lookalike.to_string_lossy(), Some(&root.to_string_lossy())),
+    );
+    assert_eq!(decision.disposition, PolicyDisposition::Defer);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn file_rule_matches_nonexistent_file_via_ancestor_tail() {
+    // A file about to be created (Write) must match its own exact-file rule.
+    let root = temp_dir_for("file-nonexistent");
+    let target = root.join("new.txt"); // does not exist
+
+    let snapshot = PermissionPolicySnapshot {
+        revision: 1,
+        rules: vec![file_rule(&target.to_string_lossy(), PermissionEffect::Allow)],
+    };
+    let decision = evaluate(
+        &snapshot,
+        &invocation_write(&target.to_string_lossy(), Some(&root.to_string_lossy())),
+    );
+    assert_eq!(
+        decision.disposition,
+        PolicyDisposition::Allow,
+        "non-existent file must still match its exact-file rule"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn file_rule_resolves_relative_target_against_cwd() {
+    let root = temp_dir_for("file-relative");
+    let target = root.join("file.txt");
+    std::fs::write(&target, "x").unwrap();
+
+    // Rule stores the absolute path; invocation passes a relative one.
+    let snapshot = PermissionPolicySnapshot {
+        revision: 1,
+        rules: vec![file_rule(&target.to_string_lossy(), PermissionEffect::Allow)],
+    };
+    let decision = evaluate(
+        &snapshot,
+        &invocation_write("file.txt", Some(&root.to_string_lossy())),
+    );
+    assert_eq!(decision.disposition, PolicyDisposition::Allow);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -431,6 +554,7 @@ fn validate_rejects_empty_id_tool_folder_equals() {
         PermissionMatcher::Path {
             field: PathField::FilePath,
             folder: Some("  ".into()),
+            file: None,
         },
     );
     assert_eq!(
@@ -451,6 +575,51 @@ fn validate_rejects_empty_id_tool_folder_equals() {
         super::evaluate::validate_rule(&empty_equals).unwrap_err(),
         super::model::PolicyValidationError::EmptyEquals
     );
+}
+
+#[test]
+fn validate_rejects_empty_file_and_folder_file_conflict() {
+    let empty_file = rule(
+        "r",
+        PermissionEffect::Allow,
+        "Write",
+        PermissionMatcher::Path {
+            field: PathField::FilePath,
+            folder: None,
+            file: Some("  ".into()),
+        },
+    );
+    assert_eq!(
+        super::evaluate::validate_rule(&empty_file).unwrap_err(),
+        super::model::PolicyValidationError::EmptyFile
+    );
+
+    let both = rule(
+        "r",
+        PermissionEffect::Allow,
+        "Write",
+        PermissionMatcher::Path {
+            field: PathField::FilePath,
+            folder: Some("/a".into()),
+            file: Some("/a/b.ts".into()),
+        },
+    );
+    assert_eq!(
+        super::evaluate::validate_rule(&both).unwrap_err(),
+        super::model::PolicyValidationError::FolderAndFileExclusive
+    );
+
+    let ok = rule(
+        "r",
+        PermissionEffect::Allow,
+        "Write",
+        PermissionMatcher::Path {
+            field: PathField::FilePath,
+            folder: None,
+            file: Some("/a/b.ts".into()),
+        },
+    );
+    assert!(super::evaluate::validate_rule(&ok).is_ok());
 }
 
 #[test]

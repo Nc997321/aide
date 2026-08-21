@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, inject, ref, type Ref } from "vue";
-import ChatPanel from "../ChatPanel.vue";
+import ChatPanel from "../ChatPanel/ChatPanel.vue";
 import PaneTabBar from "./PaneTabBar.vue";
 import { usePaneLayout } from "../../composables/usePaneLayout";
 import { useChatSession, type SendOptions } from "../../composables/useChatSession";
+import type { PermissionRuleDraft } from "../../types/permissions";
 import { useContextMenu } from "../../composables/useContextMenu";
 import { useSessionWorkspaces } from "../../composables/useSessionWorkspaces";
 import { useWorkspaces } from "../../composables/useWorkspaces";
@@ -50,6 +51,8 @@ const {
   bgTasks,
   bgDockOpen,
   bgDockSelectedId,
+  rollbackText,
+  consumeRollbackText,
   sendMessage,
   sendBtw,
   sendBtwTask,
@@ -182,6 +185,7 @@ function onPickWorkspace(ws: WorkspaceInfo) {
       v-model:bg-dock-selected-id="bgDockSelectedId"
       :permission="pendingPermission"
       :permission-queue-count="pendingPermissionCount"
+      :rollback-text="rollbackText"
       class="pane-group__chat"
       @send="onSend"
       @send-btw="onSendBtw"
@@ -191,7 +195,8 @@ function onPickWorkspace(ws: WorkspaceInfo) {
       @set-model="setModel"
       @set-effort="setEffort"
       @set-permission-mode="setPermissionMode"
-      @respond-permission="(id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string, reason?: string) => respondPermission(id, approved, answers, nextMode, reason)"
+      @respond-permission="(id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string, reason?: string, sessionRules?: PermissionRuleDraft[]) => respondPermission(id, approved, answers, nextMode, reason, sessionRules)"
+      @rollback-text-consumed="consumeRollbackText"
     />
   </div>
 </template>

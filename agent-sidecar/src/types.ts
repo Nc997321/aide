@@ -1,5 +1,14 @@
-import type { PermissionPolicySnapshot } from "./policy/types.js";
+import type { PermissionMatcher, PermissionPolicySnapshot } from "./policy/types.js";
 import type { BuiltinHookManifest } from "./builtinHooks/index.js";
+
+/** 会话级权限规则草稿（前端推导、随 permission_response 透传）。与前端
+ *  `PermissionRuleDraft` 同形：effect/tool/matcher，id/scope/order 由 sidecar
+ *  入库时补全（scope 恒为 "session"）。 */
+export interface PermissionRuleDraft {
+  effect: "allow" | "deny" | "ask";
+  tool: string;
+  matcher: PermissionMatcher;
+}
 
 // 一轮对话的 token 用量 + 费用（跨该轮用到的所有模型汇总，如子代理另用了别的模型）
 export interface TurnUsage {
@@ -162,8 +171,6 @@ export type ChatEvent =
   // provider-agnostic（任何 provider 都能生成标题）。前端仅在用户未手动
   // 命名过时采纳（auto_rename_session 原子判断），否则忽略。
   | { type: "session_title"; title: string }
-  // Rust command 应答：仅供运行期 reader 识别 probe_image_input 的结果，不转发为 UI 消息。
-  | { type: "image_input_probe_result"; request_id: string; supported: boolean | null }
   // Rust reader 拦截的 agent 代码索引查询（不转发 Vue；响应走 codegraph_result 命令）。
   | {
       type: "codegraph_query";
@@ -174,6 +181,9 @@ export type ChatEvent =
     }
   // 用户消息二次防线：provider-agnostic，不携带厂商专属字段；message 是可直接展示的人类说明。
   | { type: "image_input_rejected"; message: string }
+  // 图片 400 回滚：模型不支持图片时，sidecar 已从会话历史移除带图消息（会话不报废）。
+  // text 是被移除消息的文本——前端放回输入框，用户手动重发。
+  | { type: "image_input_rollback"; text: string }
   // fatal:false = 可恢复错误（进程仍存活、继续等下一条消息）；缺省/true = 致命。
   // 前端据此决定落 waiting+warning（红点）还是 stopped（灰点）。
   | { type: "error"; message: string; fatal?: boolean }
@@ -201,12 +211,6 @@ export interface ImageAttachment {
 // Rust → Sidecar（每行一个 JSON，从 stdin 读取）。
 // 所有命令都带 session_id：SessionManager 按它路由到对应 SessionWorker。
 export type SidecarCommand =
-  | {
-      cmd: "probe_image_input";
-      request_id: string;
-      model?: string;
-      env: Record<string, string>;
-    }
   | {
       cmd: "send";
       session_id: string;
@@ -250,7 +254,18 @@ export type SidecarCommand =
       permission_policy?: PermissionPolicySnapshot;
     }
   | { cmd: "update_permission_policy"; session_id: string; policy: PermissionPolicySnapshot }
-  | { cmd: "permission_response"; session_id: string; id: string; approved: boolean; answers?: Record<string, string>; nextMode?: string; message?: string }
+  | {
+      cmd: "permission_response";
+      session_id: string;
+      id: string;
+      approved: boolean;
+      answers?: Record<string, string>;
+      nextMode?: string;
+      message?: string;
+      // 会话级规则草稿（前端推导，如「允许后本会话内同文件编辑不再询问」）：
+      // 随放行原子入库，worker 销毁即消失。纯内存态，不持久化、不进策略快照。
+      sessionRules?: PermissionRuleDraft[];
+    }
   | { cmd: "interrupt"; session_id: string }
   // 终止一个后台任务（provider-agnostic：任何 provider 的"停掉后台命令"都映射成它）。
   // 成功后任务会走正常终态通道（bg_task_ended, status:"stopped"），不需要额外回执事件。

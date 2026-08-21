@@ -196,7 +196,43 @@ describe("PermissionDialog — 进入编辑模式", () => {
     });
     expect(wrapper.find('[data-action="edit-mode"]').exists()).toBe(true);
     expect(wrapper.find('[data-action="remember"]').exists()).toBe(false);
-    expect(wrapper.find(".perm-remember-hint").text()).toContain("编辑模式");
+    // 会话级规则提示移入按钮 tooltip（v-tooltip 指令，非原生 title）
+    expect(wrapper.get('[data-action="allow"]').attributes("title")).toBeUndefined();
+  });
+
+  it("文件工具「允许」/「进入编辑模式」按钮带会话级规则 tooltip", () => {
+    const bindings = new Map<string, string>();
+    const wrapper = mount(PermissionDialog, {
+      props: { permission: editPermission(), rememberScope: "local", currentMode: "default" },
+      global: {
+        directives: {
+          tooltip: {
+            mounted(el: HTMLElement, binding: { value: string }) {
+              if (binding.value) bindings.set(el.getAttribute("data-action") ?? "", binding.value);
+            },
+          },
+        },
+      },
+    });
+    expect(bindings.get("allow")).toBe("该文件本次会话不再询问");
+    expect(bindings.get("edit-mode")).toBe("本会话所有文件编辑自动接受");
+  });
+
+  it("非文件工具（Bash）「允许」按钮无会话级规则 tooltip", () => {
+    const bindings = new Map<string, string>();
+    mount(PermissionDialog, {
+      props: { permission: bashPermission(), rememberScope: "local", currentMode: "default" },
+      global: {
+        directives: {
+          tooltip: {
+            mounted(el: HTMLElement, binding: { value: string }) {
+              if (binding.value) bindings.set(el.getAttribute("data-action") ?? "", binding.value);
+            },
+          },
+        },
+      },
+    });
+    expect(bindings.get("allow")).toBeUndefined();
   });
 
   it("点击「进入编辑模式」emit 带 nextMode=acceptEdits 的放行", async () => {
