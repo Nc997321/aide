@@ -35,6 +35,7 @@ fn build_send_command(
     workspace_root: Option<String>,
     provider_switched: bool,
     auto_title: bool,
+    thinking_enabled: bool,
     env_vars: &HashMap<String, String>,
     cwd: &str,
 ) -> serde_json::Value {
@@ -45,6 +46,7 @@ fn build_send_command(
         "cwd": cwd,
         "env": env_vars,
         "auto_title": auto_title,
+        "thinking_enabled": thinking_enabled,
     });
     if let Some(imgs) = images {
         if !imgs.is_empty() {
@@ -87,47 +89,6 @@ fn build_send_command(
     cmd
 }
 
-/// 构造 Runtime 内部图片预检命令（纯函数，保持 IPC 载荷可单测）。
-#[cfg(test)]
-fn build_probe_image_input_command(
-    request_id: &str,
-    model: Option<String>,
-    env: &HashMap<String, String>,
-) -> serde_json::Value {
-    json!({
-        "cmd": "probe_image_input",
-        "request_id": request_id,
-        "model": model,
-        "env": env,
-    })
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImageInputProbeResult {
-    pub supported: Option<bool>,
-}
-
-#[tauri::command]
-pub async fn probe_image_input(
-    model: Option<String>,
-    app_handle: tauri::AppHandle,
-    runtime_mgr: State<'_, AgentRuntimeManager>,
-    settings_service: State<'_, std::sync::Arc<crate::settings::SettingsService>>,
-) -> Result<ImageInputProbeResult, String> {
-    let active = resolve_active_provider(settings_service.inner().clone()).await?;
-    let proxy = get_settings(settings_service).await.map(|s| s.proxy).unwrap_or_default();
-    let mut env = build_runtime_env_vars(&active, &proxy);
-    if let Some(model) = model.filter(|value| !value.is_empty()) {
-        env.insert("ANTHROPIC_MODEL".into(), model);
-    }
-
-    runtime_mgr.ensure_runtime(app_handle, env.clone()).await?;
-    Ok(ImageInputProbeResult {
-        supported: runtime_mgr.probe_image_input(env).await?,
-    })
-}
-
 #[tauri::command]
 pub async fn send_message(
     session_id: String,
@@ -157,6 +118,9 @@ pub async fn send_message(
     runtime_mgr.upsert_fingerprint(&session_id, &provider_env);
     // 自动命名开关下发 sidecar（设置读取失败时默认开启）
     let auto_title = settings.as_ref().map(|s| s.auto_naming).unwrap_or(true);
+    // 思考开关下发 sidecar（设置读取失败时默认开启）：只在 spawn（建 query）时
+    // 生效——会话内 CLI 锁死无法恢复，故仅影响之后新建的会话/btw 支线。
+    let thinking_enabled = settings.as_ref().map(|s| s.thinking_enabled).unwrap_or(true);
 
     let mut cmd = build_send_command(
         &session_id,
@@ -170,6 +134,7 @@ pub async fn send_message(
         workspace_root,
         provider_switched,
         auto_title,
+        thinking_enabled,
         &provider_env,
         &cwd_str,
     );
@@ -209,6 +174,9 @@ pub async fn permission_response(
     // 拒绝理由：仅 approved=false 时生效，sidecar 透传给 SDK 的 deny message
     // （作为工具错误反馈给模型，让模型按理由直接调整，不再追问一轮）。
     message: Option<String>,
+    // 会话级规则草稿（前端在「允许」文件工具时推导，如「本会话内同文件不再询问」）：
+    // 不透明透传给 sidecar 入库（PermissionRuleDraft 形状，Rust 不校验内容）。
+    session_rules: Option<Vec<serde_json::Value>>,
     runtime_mgr: State<'_, AgentRuntimeManager>,
 ) -> Result<(), String> {
     let mut cmd = json!({
@@ -226,6 +194,9 @@ pub async fn permission_response(
     }
     if let Some(m) = message {
         cmd["message"] = json!(m);
+    }
+    if let Some(rules) = session_rules {
+        cmd["sessionRules"] = json!(rules);
     }
     runtime_mgr.send_to_runtime(&cmd).await
 }
@@ -478,6 +449,34 @@ mod tests {
         assert!(without_msg.get("message").is_none());
     }
 
+    /// 会话级规则草稿：带则透传 sessionRules，不带则不得出现该键。
+    #[test]
+    fn permission_response_cmd_session_rules_optional() {
+        let with_rules = json!({
+            "cmd": "permission_response",
+            "session_id": "test-sid",
+            "id": "perm-1",
+            "approved": true,
+            "always": serde_json::Value::Null,
+            "sessionRules": [{
+                "effect": "allow",
+                "tool": "Edit",
+                "matcher": { "kind": "path", "field": "file_path", "file": "C:/x.ts" },
+            }],
+        });
+        assert_eq!(with_rules["sessionRules"][0]["tool"], "Edit");
+        assert_eq!(with_rules["sessionRules"][0]["matcher"]["file"], "C:/x.ts");
+
+        let without_rules = json!({
+            "cmd": "permission_response",
+            "session_id": "test-sid",
+            "id": "perm-1",
+            "approved": true,
+            "always": serde_json::Value::Null,
+        });
+        assert!(without_rules.get("sessionRules").is_none());
+    }
+
     #[test]
     fn interrupt_cmd_has_session_id() {
         let cmd = json!({ "cmd": "interrupt", "session_id": "test-sid" });
@@ -536,7 +535,7 @@ mod tests {
             "继续聊",
             None,              // images
             Some("resume-xyz".to_string()), // resume_id
-            None, None, None, None, None, false, true, &env,
+            None, None, None, None, None, false, true, true, &env,
             "/tmp",
         );
         assert_eq!(cmd["cmd"], "send");
@@ -550,7 +549,7 @@ mod tests {
     fn build_send_command_no_resume_field_when_absent() {
         let env: HashMap<String, String> = HashMap::new();
         let cmd = build_send_command(
-            "temp-1", "hi", None, None, None, None, None, None, None, false, true, &env, "/tmp",
+            "temp-1", "hi", None, None, None, None, None, None, None, false, true, true, &env, "/tmp",
         );
         assert_eq!(cmd["session_id"], "temp-1");
         assert!(cmd.get("resume_session_id").is_none());
@@ -564,13 +563,13 @@ mod tests {
             HashMap::from([("CLAUDE_CODE_EFFORT_LEVEL".to_string(), "LOW".to_string())]);
         let cmd = build_send_command(
             "s", "hi", None, None, None, Some("max".to_string()), None, None, None,
-            false, true, &env, "/tmp",
+            false, true, true, &env, "/tmp",
         );
         assert_eq!(cmd["env"]["CLAUDE_CODE_EFFORT_LEVEL"], "max");
         // 缺省：provider env 原值保留（sidecar 读作 provider 默认档位）
         let cmd2 = build_send_command(
             "s", "hi", None, None, None, None, None, None, None,
-            false, true, &env, "/tmp",
+            false, true, true, &env, "/tmp",
         );
         assert_eq!(cmd2["env"]["CLAUDE_CODE_EFFORT_LEVEL"], "LOW");
     }
@@ -583,7 +582,7 @@ mod tests {
             "main-sid", "hi", None,
             Some("resume-xyz".to_string()),
             None, None, None, None, None,
-            true, true, &env, "/tmp",
+            true, true, true, &env, "/tmp",
         );
         assert_eq!(cmd["session_id"], "main-sid");
         assert_eq!(cmd["resume_session_id"], "resume-xyz");
@@ -596,24 +595,27 @@ mod tests {
     fn build_send_command_carries_auto_title_flag() {
         let env: HashMap<String, String> = HashMap::new();
         let on = build_send_command(
-            "s", "hi", None, None, None, None, None, None, None, false, true, &env, "/tmp",
+            "s", "hi", None, None, None, None, None, None, None, false, true, true, &env, "/tmp",
         );
         assert_eq!(on["auto_title"], true);
         let off = build_send_command(
-            "s", "hi", None, None, None, None, None, None, None, false, false, &env, "/tmp",
+            "s", "hi", None, None, None, None, None, None, None, false, false, true, &env, "/tmp",
         );
         assert_eq!(off["auto_title"], false);
     }
 
+    /// 思考开关（settings.thinkingEnabled）随 send 命令下发给 sidecar：
+    /// false 时 spawn 的 thinking 参数为 disabled（会话内无效，只影响新建会话）。
     #[test]
-    fn probe_image_input_cmd_carries_request_model_and_provider_env() {        let cmd = build_probe_image_input_command(
-            "probe-1",
-            Some("glm-5.2".into()),
-            &HashMap::from([("ANTHROPIC_BASE_URL".into(), "https://gateway".into())]),
+    fn build_send_command_carries_thinking_enabled_flag() {
+        let env: HashMap<String, String> = HashMap::new();
+        let on = build_send_command(
+            "s", "hi", None, None, None, None, None, None, None, false, true, true, &env, "/tmp",
         );
-        assert_eq!(cmd["cmd"], "probe_image_input");
-        assert_eq!(cmd["request_id"], "probe-1");
-        assert_eq!(cmd["model"], "glm-5.2");
-        assert_eq!(cmd["env"]["ANTHROPIC_BASE_URL"], "https://gateway");
+        assert_eq!(on["thinking_enabled"], true);
+        let off = build_send_command(
+            "s", "hi", None, None, None, None, None, None, None, false, true, false, &env, "/tmp",
+        );
+        assert_eq!(off["thinking_enabled"], false);
     }
 }

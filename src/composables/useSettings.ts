@@ -10,6 +10,7 @@ const defaults: AppSettings = {
   terminalFontFamily: MONO_FONT_STACK,
   notificationsEnabled: true,
   autoNaming: true,
+  thinkingEnabled: true,
   proxy: "",
   shellPath: "",
   workbenchHeight: 0,
@@ -80,6 +81,7 @@ export function useSettings() {
       settings.terminalFontFamily = resolveScopedFontFamily(s.terminalFontFamily, settings.fontFamily);
       settings.notificationsEnabled = s.notificationsEnabled ?? defaults.notificationsEnabled;
       settings.autoNaming = s.autoNaming ?? defaults.autoNaming;
+      settings.thinkingEnabled = s.thinkingEnabled ?? defaults.thinkingEnabled;
       settings.proxy = s.proxy ?? defaults.proxy;
       settings.shellPath = s.shellPath ?? defaults.shellPath;
       settings.workbenchHeight = s.workbenchHeight ?? defaults.workbenchHeight;
@@ -117,6 +119,7 @@ export function useSettings() {
     if (partial.terminalFontFamily !== undefined) settings.terminalFontFamily = partial.terminalFontFamily;
     if (partial.notificationsEnabled !== undefined) settings.notificationsEnabled = partial.notificationsEnabled;
     if (partial.autoNaming !== undefined) settings.autoNaming = partial.autoNaming;
+    if (partial.thinkingEnabled !== undefined) settings.thinkingEnabled = partial.thinkingEnabled;
     if (partial.proxy !== undefined) settings.proxy = partial.proxy;
     if (partial.shellPath !== undefined) settings.shellPath = partial.shellPath;
     if (partial.workbenchHeight !== undefined) settings.workbenchHeight = partial.workbenchHeight;

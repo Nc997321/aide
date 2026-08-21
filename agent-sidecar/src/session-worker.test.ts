@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { SessionWorker } from "./session-worker.js";
-import { ImageInputCapabilityCache } from "./imageInputCapability.js";
 import type { ChatEvent } from "./types.js";
 import type { PermissionPolicySnapshot } from "./policy/types.js";
 
@@ -17,9 +16,7 @@ import type { PermissionPolicySnapshot } from "./policy/types.js";
 function makeWorker(sid = "test-sid") {
   const events: any[] = [];
   return {
-    worker: new SessionWorker(sid, (e) => events.push(e), {
-      imageCapabilityCache: new ImageInputCapabilityCache(),
-    }),
+    worker: new SessionWorker(sid, (e) => events.push(e), {}),
     events,
   };
 }
@@ -28,260 +25,13 @@ async function flushPromises() {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-function imageProbeQuery(supported: true | false | null) {
-  return (() => (async function* () {
-    if (supported === null) return;
-    yield supported
-      ? { type: "result", subtype: "success", is_error: false }
-      : {
-          type: "result",
-          subtype: "error_max_turns",
-          is_error: true,
-          api_error_status: 400,
-          result: "This model does not support image input.",
-        };
-  })()) as any;
-}
-
-function controllableImageProbeQuery(onProbeStart: () => void, probeGate: Promise<void>) {
-  return (() => (async function* () {
-    onProbeStart();
-    await probeGate;
-    yield { type: "result", subtype: "success", is_error: false };
-  })()) as any;
-}
-
-function makeWorkerWithImageCapability(supported: true | false | null) {
-  const events: any[] = [];
-  const worker = new SessionWorker("s1", (e) => events.push(e), {
-    imageCapabilityCache: new ImageInputCapabilityCache(),
-    queryFn: imageProbeQuery(supported),
-  });
-  return { worker, events };
-}
-
-function makeWorkerWithControllableImageProbe() {
-  const events: any[] = [];
-  let resolveProbeStarted!: () => void;
-  const probeStarted = new Promise<void>((resolve) => {
-    resolveProbeStarted = resolve;
-  });
-  let releaseProbe!: () => void;
-  const probeGate = new Promise<void>((resolve) => {
-    releaseProbe = resolve;
-  });
-  const worker = new SessionWorker("s1", (e) => events.push(e), {
-    imageCapabilityCache: new ImageInputCapabilityCache(),
-    queryFn: controllableImageProbeQuery(() => resolveProbeStarted(), probeGate),
-  });
-  return { worker, events, probeStarted, releaseProbe };
-}
-
-describe("SessionWorker — image input capability guard", () => {
-  it("denies an image Read via the PreToolUse hook when the model is unsupported", async () => {
-    const { worker, events } = makeWorkerWithImageCapability(false);
-    const hook = worker._testImageGuardHook();
-    const result = await hook(
-      { hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: "C:/repo/diagram.PNG" }, tool_use_id: "tu1" } as any,
-      "tu1",
-      { signal: new AbortController().signal } as any,
-    );
-
-    expect(result).toMatchObject({
-      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny" },
-    });
-    // HookJSONOutput 的 SDK 类型不含 hookSpecificOutput（联合类型成员），运行时有——
-    // 本文件其它断言一律走 any，这里保持一致。
-    expect((result as any).hookSpecificOutput?.permissionDecisionReason).toContain("不支持图片输入");
-    expect(events.some((event) => event.type === "permission_request")).toBe(false);
-  });
-
-  it("the hook allows an image Read when supported or inconclusive (no deny)", async () => {
-    const supported = makeWorkerWithImageCapability(true);
-    const r1 = await supported.worker._testImageGuardHook()(
-      { hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: "diagram.png" }, tool_use_id: "tu1" } as any,
-      "tu1",
-      { signal: new AbortController().signal } as any,
-    );
-    expect(r1).toEqual({});
-
-    const unknown = makeWorkerWithImageCapability(null);
-    const r2 = await unknown.worker._testImageGuardHook()(
-      { hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: "diagram.png" }, tool_use_id: "tu2" } as any,
-      "tu2",
-      { signal: new AbortController().signal } as any,
-    );
-    expect(r2).toEqual({});
-  });
-
-  it("the hook allows a text Read without probing (non-image path)", async () => {
-    const { worker } = makeWorkerWithImageCapability(false);
-    const result = await worker._testImageGuardHook()(
-      { hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: "README.md" }, tool_use_id: "tu1" } as any,
-      "tu1",
-      { signal: new AbortController().signal } as any,
-    );
-    expect(result).toEqual({});
-  });
-
-  it("preserves the existing canUseTool permission flow for text Read", async () => {
-    const text = makeWorkerWithImageCapability(false);
-    void text.worker._testCanUseTool()("Read", { file_path: "README.md" }, {});
-    expect(text.events[0]?.type).toBe("permission_request");
-  });
-
-  it("does not enqueue a direct image attachment when the capability probe rejects it", async () => {
-    const { worker, events } = makeWorkerWithImageCapability(false);
-    worker.handleCommand({
-      cmd: "send",
-      session_id: "s1",
-      prompt: "看看这张图",
-      images: [{ data: "not-used", mediaType: "image/png" }],
-      env: {},
-    } as any);
-    await flushPromises();
-
-    expect(worker._testQueueLength()).toBe(0);
-    expect(events).toContainEqual(expect.objectContaining({
-      type: "image_input_rejected",
-    }));
-  });
-
-  it("does not mutate the jump queue for rejected image attachments", async () => {
-    const { worker, events } = makeWorkerWithImageCapability(false);
-    (worker as any).currentQuery = { interrupt: async () => {} };
-    (worker as any).turnActive = true;
-
-    worker.handleCommand({
-      cmd: "send",
-      session_id: "s1",
-      prompt: "插队看图",
-      jump_queue: true,
-      images: [{ data: "not-used", mediaType: "image/png" }],
-      env: {},
-    } as any);
-    await flushPromises();
-
-    expect(worker.jumpQueueCtl.has()).toBe(false);
-    expect(events).toContainEqual(expect.objectContaining({
-      type: "image_input_rejected",
-    }));
-  });
-
-  it("keeps the existing direct image send path when the capability probe is inconclusive", async () => {
-    const { worker, events } = makeWorkerWithImageCapability(null);
-
-    worker.handleCommand({
-      cmd: "send",
-      session_id: "s1",
-      prompt: "看看这张图",
-      images: [{ data: "not-used", mediaType: "image/png" }],
-      env: {},
-    } as any);
-    await flushPromises();
-
-    expect(worker._testQueueLength()).toBe(1);
-    expect(events.some((event) => event.type === "image_input_rejected")).toBe(false);
-  });
-
-  it("keeps an earlier image send ahead of a later text send while the probe is pending", async () => {
-    const { worker, probeStarted, releaseProbe } = makeWorkerWithControllableImageProbe();
-    const pushed: string[] = [];
-    (worker.queue as any).push = (msg: any) => {
-      const content = msg.message.content;
-      pushed.push(Array.isArray(content)
-        ? `image:${content.find((block: any) => block.type === "text")?.text ?? ""}`
-        : `text:${content}`);
-    };
-    (worker as any).currentQuery = {};
-    (worker as any).turnActive = true;
-
-    worker.handleCommand({
-      cmd: "send",
-      session_id: "s1",
-      prompt: "图片先来",
-      images: [{ data: "not-used", mediaType: "image/png" }],
-      env: {},
-    } as any);
-    await probeStarted;
-
-    worker.handleCommand({
-      cmd: "send",
-      session_id: "s1",
-      prompt: "后来的文本",
-      env: {},
-    } as any);
-
-    expect(pushed).toEqual([]);
-
-    releaseProbe();
-    await flushPromises();
-
-    expect(pushed).toEqual(["image:图片先来", "text:后来的文本"]);
-  });
-
-  it("uses the selected model from the session environment for its image probe", async () => {
-    const previousModel = process.env.ANTHROPIC_MODEL;
-    process.env.ANTHROPIC_MODEL = "runtime-default";
-    const requests: any[] = [];
-    const queryFn = ((request: any) => {
-      requests.push(request);
-      return (async function* () {
-        yield { type: "result", subtype: "success", is_error: false };
-      })();
-    }) as any;
-    const worker = new SessionWorker("s1", () => {}, {
-      envOverrides: { ANTHROPIC_MODEL: "selected-vision-model" },
-      imageCapabilityCache: new ImageInputCapabilityCache(),
-      queryFn,
-    });
-
-    try {
-      worker.handleCommand({
-        cmd: "send",
-        session_id: "s1",
-        prompt: "看看这张图",
-        images: [{ data: "not-used", mediaType: "image/png" }],
-        env: { ANTHROPIC_MODEL: "selected-vision-model" },
-      } as any);
-      await flushPromises();
-
-      expect(requests.find((request) => request.options.persistSession === false)?.options.model)
-        .toBe("selected-vision-model");
-    } finally {
-      if (previousModel === undefined) delete process.env.ANTHROPIC_MODEL;
-      else process.env.ANTHROPIC_MODEL = previousModel;
-    }
-  });
-
-  it("does not admit an image send when the worker stops during its probe", async () => {
-    const { worker, probeStarted, releaseProbe } = makeWorkerWithControllableImageProbe();
-    const pushed: unknown[] = [];
-    (worker.queue as any).push = (message: unknown) => pushed.push(message);
-
-    worker.handleCommand({
-      cmd: "send",
-      session_id: "s1",
-      prompt: "关闭前的图片",
-      images: [{ data: "not-used", mediaType: "image/png" }],
-      env: {},
-    } as any);
-    await probeStarted;
-
-    worker.stop();
-    releaseProbe();
-    await flushPromises();
-
-    expect(pushed).toEqual([]);
-  });
-
+describe("SessionWorker — jump queue", () => {
   it("does not promote a pending jump send after the worker stops", async () => {
     let releaseQuery!: () => void;
     const queryGate = new Promise<void>((resolve) => { releaseQuery = resolve; });
     let markQueryStarted!: () => void;
     const queryStarted = new Promise<void>((resolve) => { markQueryStarted = resolve; });
     const worker = new SessionWorker("s1", () => {}, {
-      imageCapabilityCache: new ImageInputCapabilityCache(),
       queryFn: (() => (async function* () {
         markQueryStarted();
         await queryGate;
@@ -397,7 +147,6 @@ describe("SessionWorker — btw 回合结束自毁", () => {
     const selfStoppedP = new Promise<SessionWorker>((r) => { resolveStopped = r; });
     const worker = new SessionWorker("btw-temp", (e) => events.push(e), {
       btwMode: true,
-      imageCapabilityCache: new ImageInputCapabilityCache(),
       queryFn: hangingQuery,
       onSelfStop: (w) => { selfStopped = w; resolveStopped(w); },
     });
@@ -421,7 +170,6 @@ describe("SessionWorker — btw 回合结束自毁", () => {
       await new Promise(() => {});
     })()) as any;
     const worker = new SessionWorker("s-normal", () => {}, {
-      imageCapabilityCache: new ImageInputCapabilityCache(),
       queryFn: hangingQuery,
       onSelfStop: (w) => { selfStopped = w; },
     });
@@ -453,7 +201,6 @@ describe("SessionWorker — codegraph MCP registration", () => {
       return (async function* () {})();
     }) as any;
     const worker = new SessionWorker("s-cg", () => {}, {
-      imageCapabilityCache: new ImageInputCapabilityCache(),
       queryFn: fakeQuery,
       cwd: "/proj",
     });
@@ -479,7 +226,6 @@ describe("SessionWorker — codegraph MCP registration", () => {
     const worker = new SessionWorker("btw-lw", () => {}, {
       btwMode: true,
       lightweightMode: true,
-      imageCapabilityCache: new ImageInputCapabilityCache(),
       queryFn: fakeQuery,
       cwd: "/proj",
     });
@@ -506,7 +252,6 @@ describe("SessionWorker — codegraph MCP registration", () => {
     }) as any;
     const worker = new SessionWorker("btw-task", () => {}, {
       btwMode: true,
-      imageCapabilityCache: new ImageInputCapabilityCache(),
       queryFn: fakeQuery,
       cwd: "/proj",
     });
@@ -536,7 +281,6 @@ describe("SessionWorker — codegraph MCP registration", () => {
     const worker = new SessionWorker("btw-full", () => {}, {
       btwMode: true,
       lightweightMode: false,
-      imageCapabilityCache: new ImageInputCapabilityCache(),
       queryFn: fakeQuery,
       cwd: "/proj",
     });
@@ -560,7 +304,6 @@ describe("SessionWorker — codegraph MCP registration", () => {
         return (async function* () {})();
       }) as any;
       const worker = new SessionWorker("s-cg-off", () => {}, {
-        imageCapabilityCache: new ImageInputCapabilityCache(),
         queryFn: fakeQuery,
         cwd: "/proj",
       });
@@ -613,7 +356,6 @@ function makeTitleWorker(titleMessages: unknown[]) {
     })();
   }) as any;
   const worker = new SessionWorker("s-title", (e) => events.push(e), {
-    imageCapabilityCache: new ImageInputCapabilityCache(),
     queryFn,
   });
   return { worker, events };
@@ -668,7 +410,6 @@ describe("SessionWorker — 会话自动命名", () => {
       })();
     }) as any;
     const worker = new SessionWorker("s-title2", (e) => events.push(e), {
-      imageCapabilityCache: new ImageInputCapabilityCache(),
       queryFn,
     });
     worker.handleCommand({
@@ -827,7 +568,6 @@ describe("SessionWorker — btw 权限守卫(无弹窗通路,一律 deny 不挂�
     const worker = new SessionWorker("btw-guard", (e) => events.push(e), {
       btwMode: true,
       lightweightMode: opts.lightweight ?? false,
-      imageCapabilityCache: new ImageInputCapabilityCache(),
       queryFn: (() => (async function* () {})()) as any,
       cwd: "/proj",
     });
@@ -887,7 +627,6 @@ describe("SessionWorker — btw 权限守卫(无弹窗通路,一律 deny 不挂�
     const events: any[] = [];
     const worker = new SessionWorker("btw-task-guard", (e) => events.push(e), {
       btwMode: true,
-      imageCapabilityCache: new ImageInputCapabilityCache(),
       queryFn: (() => (async function* () {})()) as any,
       cwd: "/proj",
     });
@@ -919,7 +658,6 @@ describe("SessionWorker — btw 权限守卫(无弹窗通路,一律 deny 不挂�
     const worker = new SessionWorker("btw-suffix", () => {}, {
       btwMode: true,
       lightweightMode: true,
-      imageCapabilityCache: new ImageInputCapabilityCache(),
       queryFn: ((args: any) => {
         capturedPrompt = args?.prompt;
         return (async function* () {})();
@@ -946,7 +684,6 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
     const captured = new Promise<any>((r) => { resolveCapture = r; });
     const worker = new SessionWorker("sid", () => {}, {
       cwd: "/tmp",
-      imageCapabilityCache: new ImageInputCapabilityCache(),
       queryFn: ((args: any) => {
         resolveCapture(args.options);
         return (async function* () { /* empty generator */ })() as any;
@@ -990,6 +727,70 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
     const out: any = await pending;
     expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
     expect((out.hookSpecificOutput as any).updatedPermissions).toBeUndefined();
+  });
+
+  it("permission_response with sessionRules auto-allows the same file for the rest of the session", async () => {
+    const { worker, events } = makeWorker();
+    worker._testApplyPermissionPolicy(rule("ask", "Edit"));
+    const hook = worker._testPolicyHook("/tmp");
+    // 首次调用该文件 → ask，弹窗
+    const first = hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/x.ts" } } as any);
+    await flushPromises();
+    const req = events.find((e: any) => e.type === "permission_request");
+    expect(req).toBeTruthy();
+    // 允许并携带前端推导的会话规则草稿（精确文件 matcher）
+    worker.handleCommand({
+      cmd: "permission_response", session_id: "test-sid", id: req.id, approved: true,
+      sessionRules: [{ effect: "allow", tool: "Edit", matcher: { kind: "path", field: "file_path", file: "/tmp/x.ts" } }],
+    } as any);
+    const out: any = await first;
+    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
+    // 再次调用同一文件 → 直接放行，不再弹 permission_request
+    const second = hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/x.ts" } } as any);
+    await flushPromises();
+    const out2: any = await second;
+    expect(out2.hookSpecificOutput.permissionDecision).toBe("allow");
+    expect(events.filter((e: any) => e.type === "permission_request").length).toBe(1);
+  });
+
+  it("session rule covers only the exact file — a different file still asks", async () => {
+    const { worker, events } = makeWorker();
+    worker._testApplyPermissionPolicy(rule("ask", "Edit"));
+    const hook = worker._testPolicyHook("/tmp");
+    const first = hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/x.ts" } } as any);
+    await flushPromises();
+    const req = events.find((e: any) => e.type === "permission_request");
+    worker.handleCommand({
+      cmd: "permission_response", session_id: "test-sid", id: req.id, approved: true,
+      sessionRules: [{ effect: "allow", tool: "Edit", matcher: { kind: "path", field: "file_path", file: "/tmp/x.ts" } }],
+    } as any);
+    await first;
+    // 不同文件 → 仍走 ask。pathEqualsFile 走真实 fs（canonicalizeWithTail），
+    // 单次 setImmediate 不够，等 I/O 落定再查事件。
+    const other = hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/y.ts" } } as any);
+    await new Promise((r) => setTimeout(r, 50));
+    const reqs = events.filter((e: any) => e.type === "permission_request");
+    expect(reqs.length).toBe(2);
+    // 收尾：拒绝第二条挂起请求，避免测试悬挂
+    worker.handleCommand({ cmd: "permission_response", session_id: "test-sid", id: reqs[1].id, approved: false } as any);
+    await other;
+  });
+
+  it("duplicate session rules are deduplicated by (tool, matcher)", async () => {
+    const { worker, events } = makeWorker();
+    worker._testApplyPermissionPolicy(rule("ask", "Edit"));
+    const hook = worker._testPolicyHook("/tmp");
+    const draft = { effect: "allow" as const, tool: "Edit", matcher: { kind: "path" as const, field: "file_path" as const, file: "/tmp/x.ts" } };
+    // 规则落地前同一文件已有两条挂起请求（并发 Edit），都带相同草稿 → 只存一条
+    const p1 = hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/x.ts" } } as any);
+    const p2 = hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/x.ts" } } as any);
+    await flushPromises();
+    const reqs = events.filter((e: any) => e.type === "permission_request");
+    expect(reqs.length).toBe(2);
+    worker.handleCommand({ cmd: "permission_response", session_id: "test-sid", id: reqs[0].id, approved: true, sessionRules: [draft] } as any);
+    worker.handleCommand({ cmd: "permission_response", session_id: "test-sid", id: reqs[1].id, approved: true, sessionRules: [draft] } as any);
+    await Promise.all([p1, p2]);
+    expect(worker._testSessionRuleCount()).toBe(1);
   });
 });
 
@@ -1038,5 +839,50 @@ describe("SessionWorker — set_permission_mode acceptEdits flush", () => {
     expect(events.some((e: any) => e.type === "permission_cancelled" && e.id === editReq.id)).toBe(false);
     worker.handleCommand({ cmd: "interrupt", session_id: "test-sid" } as any);
     await expect(editDecision).resolves.toMatchObject({ behavior: "deny" });
+  });
+});
+
+describe("SessionWorker — 思考开关（send.thinking_enabled → spawn thinking 参数）", () => {
+  async function captureSend(cmd: any, extraOpts: Record<string, unknown> = {}) {
+    let captured: any;
+    const fakeQuery = ((args: any) => {
+      captured = args?.options ?? args;
+      return (async function* () {})();
+    }) as any;
+    const worker = new SessionWorker("s-th", () => {}, {
+      queryFn: fakeQuery,
+      cwd: "/proj",
+      ...extraOpts,
+    });
+    worker.handleCommand({
+      cmd: "send", session_id: "s-th", prompt: "hi", cwd: "/proj", env: {},
+      ...cmd,
+    } as any);
+    await new Promise((r) => setTimeout(r, 50));
+    worker.stop();
+    return captured;
+  }
+
+  it("缺省（未下发）→ adaptive + summarized（默认开）", async () => {
+    const captured = await captureSend({});
+    expect(captured.thinking).toEqual({ type: "adaptive", display: "summarized" });
+  });
+
+  it("thinking_enabled:false → thinking: disabled", async () => {
+    const captured = await captureSend({ thinking_enabled: false });
+    expect(captured.thinking).toEqual({ type: "disabled" });
+  });
+
+  it("thinking_enabled:true → adaptive + summarized", async () => {
+    const captured = await captureSend({ thinking_enabled: true });
+    expect(captured.thinking).toEqual({ type: "adaptive", display: "summarized" });
+  });
+
+  it("btw 支线恒关思考（轻量定位，与旧 low→disabled 等价），开关开启也不例外", async () => {
+    const captured = await captureSend(
+      { btw: true, lightweight: true, thinking_enabled: true },
+      { btwMode: true, lightweightMode: true },
+    );
+    expect(captured.thinking).toEqual({ type: "disabled" });
   });
 });

@@ -19,12 +19,8 @@ import { docsMcpRegistration, DOCS_ALLOW_RULE } from "./docsMcp.js";
 import { buildBuiltinHooks } from "./builtinHooks/index.js";
 import { loadUserMcpServers, loadUserHooks, assembleMcpServers, assembleHooks } from "./userExtensions.js";
 import { cancelAllCodegraphQueries } from "./codegraphClient.js";
-import {
-  ImageInputCapabilityCache,
-  imageCapabilityKey,
-  isImagePath,
-  probeImageInput,
-} from "./imageInputCapability.js";
+import { detectImageUnsupported, findSessionJsonl, rollbackImageMessage } from "./imageRollback.js";
+import { resolveClaudeExe } from "./claudeExe.js";
 import {
   mapSdkMessage,
   buildUserMessage,
@@ -37,10 +33,13 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { EffortLevel, HookCallback, HookInput } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, openSync, readSync, statSync, closeSync } from "node:fs";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { loadAideInstructions } from "./instructions.js";
 import { buildDispatchPluginsOption } from "./dispatchPlugins.js";
 import { evaluatePolicy } from "./policy/evaluate.js";
-import type { PermissionPolicySnapshot } from "./policy/types.js";
+import type { PermissionPolicySnapshot, PermissionRule } from "./policy/types.js";
+import type { PermissionRuleDraft } from "./types.js";
+import { randomUUID } from "node:crypto";
 
 // ---- 进程级常量（所有 SessionWorker 共享） ----
 
@@ -74,9 +73,6 @@ const EXTRA_MODE_LABELS: Record<string, string> = {
  *  切模式时队列里还挂着的同类请求一并放行——否则一轮并行 3 个 Edit，用户点完
  *  「进入编辑模式」还得把剩下 2 条逐个点掉，等于没切。 */
 const EDIT_TOOL_NAMES: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
-
-const IMAGE_INPUT_UNSUPPORTED_MESSAGE =
-  "当前模型不支持图片输入，不能读取该图片。请改读 OCR/文本描述、跳过该文件，或切换到支持视觉的模型。";
 
 	// ---- OutputTail（per-SessionWorker 实例） ----
 
@@ -133,8 +129,6 @@ export interface SessionWorkerOptions {
   lightweightMode?: boolean;
   initialModel?: string;
   envOverrides?: Record<string, string>;
-  /** Runtime 级共享图片输入能力缓存；由 SessionManager 注入，禁止每会话各建一份。 */
-  imageCapabilityCache: ImageInputCapabilityCache;
   /** 测试缝：覆盖 SDK query 实现。生产省略用真 query。 */
   queryFn?: typeof query;
   /** btw 支线回合结束自毁回调：worker 自停后由 SessionManager 把自己摘出注册表。 */
@@ -160,7 +154,17 @@ export class SessionWorker {
   readonly toolLifecycle = new ToolLifecycleTracker();
   readonly jumpQueueCtl = new JumpQueueController();
   readonly coalescer: DeltaCoalescer;
-  readonly imageCapabilityCache: ImageInputCapabilityCache;
+  /** 图片 400 回滚：检测到 synthetic 400 后置位，abort 当前 query，catch 里执行回滚。 */
+  private rollbackPending = false;
+  /** 当前 query 的 abort 信号（每次 while 迭代新建；回滚时 abort 杀 CLI 停写入）。 */
+  private abortController: AbortController | null = null;
+
+  // ---- 会话级权限规则（内存态，worker 销毁即消失） ----
+  // 「允许」文件工具时前端推导的精确文件规则落在这里：policy hook 评估前合并进
+  // 快照（session 作用域天然最高优先级），同文件后续调用自动放行。不持久化、
+  // 不进 Rust 快照、不随会话 resume 存活——会话停止即清空。
+  private sessionRules: PermissionRule[] = [];
+  private sessionRuleOrder = 0;
 
   // ---- SDK 查询状态 ----
   private currentQuery: Awaited<ReturnType<typeof query>> | null = null;
@@ -183,6 +187,13 @@ export class SessionWorker {
   // ---- 会话自动命名（首轮回复开始时小模型生成标题，见 titleGenerator.ts） ----
   /** 设置面板开关（send.auto_title 下发），缺省开启。 */
   private autoTitle = true;
+  /** 思考开关（send.thinking_enabled 下发），缺省开启。关闭 = 从能力上禁用思考：
+   *  ① 请求层——spawn 时 thinking: disabled（官方 API 真正不思考、省 token）；
+   *  ② 展示层——mapper 剥除 thinking 块（thinking_delta 流 / assistant 整块 /
+   *  子代理块），立即生效。例外：ollama 兼容端点不认 thinking 参数（请求体不带
+   *  thinking 字段=端点默认，模型总会出思考块，2026-08-21 mock 端点实锤），
+   *  无法能力级禁用，仅靠 ② 隐藏显示。 */
+  private thinkingEnabled = true;
   /** 每个 worker 只尝试一次（防止 resume/多轮重复生成）。 */
   private titleAttempted = false;
   /** 首轮回复触发：新会话首条 send 置 collectingTitle，收到首条主线程 assistant 消息时触发。 */
@@ -240,7 +251,6 @@ export class SessionWorker {
     // 值都注入 CLAUDE_CODE_EFFORT_LEVEL，与 ANTHROPIC_MODEL 同形）——只作初始值读出来，
     // 绝不会以 env 形式透传给 CLI（见 currentEffort 字段注释）。
     this.currentEffort = normalizeEffort(this.envOverrides.CLAUDE_CODE_EFFORT_LEVEL);
-    this.imageCapabilityCache = opts.imageCapabilityCache;
 
     // DeltaCoalescer 的输出经注入回调写 stdout（带上 session_id）
     this.coalescer = new DeltaCoalescer((event) => {
@@ -275,25 +285,6 @@ export class SessionWorker {
     };
   }
 
-  private async imageInputSupported(): Promise<true | false | null> {
-    const model = this.currentModel || this.envOverrides.ANTHROPIC_MODEL || "";
-    const key = imageCapabilityKey(this.envOverrides, model);
-    // probe 的 CLI 子进程需要 PATH/SystemRoot 等基础环境，不能只给 provider 连接参数
-    // （SDK 的 env 选项传了就替换 process.env，不是合并）。这里以 process.env 为底再叠加
-    // per-session provider 覆盖，和主 query 的 cliEnv 构造保持一致。
-    const probeEnv = { ...process.env, ...this.envOverrides };
-    const result = await this.imageCapabilityCache.ensure(
-      key,
-      () => probeImageInput(this.queryFn, { env: probeEnv, model }),
-    );
-    return result;
-  }
-
-  private async guardImageInput(images?: ImageAttachment[]): Promise<boolean> {
-    if (!images?.length) return true;
-    return (await this.imageInputSupported()) !== false;
-  }
-
   /** 每条 send 都携带 Rust 当前计算出的 provider 环境；在命令真正执行时更新，
    * 防止等待前一条图片 probe 时提前覆盖其连接身份。 */
   private applySendRuntimeConfig(env: Record<string, string> | undefined): void {
@@ -305,8 +296,9 @@ export class SessionWorker {
     this.applyEffort(this.envOverrides.CLAUDE_CODE_EFFORT_LEVEL);
   }
 
-  /** set_effort 命令 / send env 通道共用的切换入口：query 未起存本地（startLoop
-   *  建 query 时经 options.effort 带上），在跑走 applyFlagSettings。成败都有回声。 */
+  /** set_effort 命令 / send env 通道共用的入口：query 未起存本地（startLoop
+   *  建 query 时经 options.effort 带上），在跑走 applyFlagSettings。成败都有回声。
+   *  思考开关与 effort 解耦：这里只改 effort（见 effortSwitch.ts 注释）。 */
   private applyEffort(raw: string | undefined): void {
     applyEffortSwitch({
       effort: raw ?? "",
@@ -343,9 +335,6 @@ export class SessionWorker {
       (e) => this.emit(e),
       this.subagentTracker,
     );
-    // canUseTool 只对需要授权的工具（Write/Edit/Bash…）触发；Read 这种只读工具 CLI 在
-    // allowDangerouslySkipPermissions 下自动放行、根本不调 canUseTool，所以图片 Read 守卫
-    // 不能放这里——改用 makeImageGuardHook 的 PreToolUse hook（对所有工具都触发）。
     return async (toolName: string, input: unknown, opts?: unknown) => {
       // btw 支线没有权限弹窗通路(permission_request 会被前端 btw 路由吞掉,
       // 干等 resolve → 永久挂起):落到这里的一律 deny。注意这是兜底死代码——
@@ -361,32 +350,6 @@ export class SessionWorker {
     };
   }
 
-  /** PreToolUse hook：在 Read 执行前拦截图片路径。hook 对所有工具都触发（含 CLI 自动
-   *  放行的只读工具），不像 canUseTool 只覆盖需授权工具，所以图片 Read 守卫必须放这里。
-   *  返回 permissionDecision:"deny" 会把 permissionDecisionReason 作为工具错误回喂模型，
-   *  模型可据此改读 OCR/文本或跳过，且真实图片字节永不进入会话。 */
-  private makeImageGuardHook(): HookCallback {
-    return async (input: HookInput) => {
-      if (input.hook_event_name !== "PreToolUse") return {};
-      if (input.tool_name !== "Read") return {};
-      const toolInput = input.tool_input;
-      if (!toolInput || typeof toolInput !== "object" || Array.isArray(toolInput)) return {};
-      const fp = (toolInput as Record<string, unknown>).file_path;
-      if (!isImagePath(fp)) return {};
-      const supported = await this.imageInputSupported();
-      if (supported === false) {
-        return {
-          hookSpecificOutput: {
-            hookEventName: "PreToolUse" as const,
-            permissionDecision: "deny" as const,
-            permissionDecisionReason: IMAGE_INPUT_UNSUPPORTED_MESSAGE,
-          },
-        };
-      }
-      return {};
-    };
-  }
-
   // ================================================================
   // Aide 权限策略
   // ================================================================
@@ -398,6 +361,28 @@ export class SessionWorker {
   applyPermissionPolicy(snapshot: PermissionPolicySnapshot): void {
     if (!snapshot || snapshot.revision < this.permissionPolicy.revision) return;
     this.permissionPolicy = snapshot;
+  }
+
+  /** 把前端推导的会话级规则草稿入库（随 permission_response 放行原子到达）。
+   *  只收 allow；按 (tool, matcher) 去重——同一文件被再次允许时不堆积重复规则。
+   *  规则 id 用随机 UUID（无持久化、无跨 worker 语义，无需可读性）。 */
+  addSessionRules(drafts: PermissionRuleDraft[]): void {
+    for (const d of drafts) {
+      if (d.effect !== "allow") continue;
+      const dup = this.sessionRules.some(
+        (r) => r.tool === d.tool && JSON.stringify(r.matcher) === JSON.stringify(d.matcher),
+      );
+      if (dup) continue;
+      this.sessionRules.push({
+        id: `session-${randomUUID()}`,
+        scope: "session",
+        order: this.sessionRuleOrder++,
+        effect: d.effect,
+        tool: d.tool,
+        matcher: d.matcher,
+        source: { label: "session", readOnly: true },
+      });
+    }
   }
 
   /** Authoritative PreToolUse hook: evaluates the Aide policy snapshot before
@@ -430,7 +415,13 @@ export class SessionWorker {
           },
         };
       }
-      const decision = await evaluatePolicy(this.permissionPolicy, {
+      // 会话级规则（「允许」文件工具时前端推导）合并进快照再评估——session 作用域
+      // 在 SCOPE_PRIORITY 里最高，天然压过持久化规则；无会话规则时零拷贝走原快照。
+      const snapshot =
+        this.sessionRules.length > 0
+          ? { ...this.permissionPolicy, rules: [...this.sessionRules, ...this.permissionPolicy.rules] }
+          : this.permissionPolicy;
+      const decision = await evaluatePolicy(snapshot, {
         tool: toolName,
         input: (toolInput ?? {}) as Record<string, unknown>,
         cwd: cwd ?? this.cwd,
@@ -709,6 +700,11 @@ export class SessionWorker {
 
     } else if (cmd.cmd === "permission_response") {
       const outcome = this.permMgr.resolve(cmd.id, cmd.approved, cmd.answers, cmd.message);
+      // 会话级规则随放行原子入库（「允许」文件工具 → 同文件本会话自动放行）。
+      // 拒绝/取消不带 sessionRules，天然只走允许路径。
+      if (cmd.approved && cmd.sessionRules?.length) {
+        this.addSessionRules(cmd.sessionRules);
+      }
       if (cmd.approved && outcome?.toolName === "ExitPlanMode") {
         this.applyPermissionMode(cmd.nextMode || "default");
       } else if (cmd.approved && outcome?.toolName === "EnterPlanMode") {
@@ -765,14 +761,10 @@ export class SessionWorker {
     if (this.stopped) return;
     this.applySendRuntimeConfig(cmd.env);
     if (cmd.auto_title !== undefined) this.autoTitle = cmd.auto_title;
+    if (cmd.thinking_enabled !== undefined) this.thinkingEnabled = cmd.thinking_enabled;
     // 首条 send 携带的策略快照在 query 起来前落地——PreToolUse hook 首次评估就能用。
     if (cmd.permission_policy) this.applyPermissionPolicy(cmd.permission_policy);
 
-    if (cmd.images?.length && !(await this.guardImageInput(cmd.images))) {
-      this.emit({ type: "image_input_rejected", message: IMAGE_INPUT_UNSUPPORTED_MESSAGE });
-      return;
-    }
-    // 图片 probe 是异步的；等待期间会话可能已关闭，不能让已移除的 worker 重新启动 query。
     if (this.stopped) return;
 
     // session_id 在命令里是路由键（SessionManager 用它找 worker）。
@@ -939,9 +931,13 @@ export class SessionWorker {
           const userMcp = loadUserMcpServers();
           const userHooks = loadUserHooks();
 
+          // 每次迭代新建 abort 信号：abort 过的 controller 不能复用（回滚后
+          // 下一轮 query 需要全新的）。回滚时 abort 杀 CLI 进程、停一切写入。
+          this.abortController = new AbortController();
           const q = this.queryFn({
             prompt: this.queue[Symbol.asyncIterator](),
             options: {
+              abortController: this.abortController,
               permissionMode: this.currentPermissionMode as any,
               allowDangerouslySkipPermissions: true,
               canUseTool: this.makeCanUseToolCallback() as any,
@@ -977,11 +973,21 @@ export class SessionWorker {
               // 请求可读思考文本：Claude 官方模型 thinking.display 默认 omitted（block
               // 在但 text 空），显式 summarized 才回可读摘要。GLM 等第三方不一定认此
               // 参数但无害——主线程思考展示的兜底保险（诊断见 docs/mockups/）。
-              thinking: { type: "adaptive" as const, display: "summarized" as const },
+              // 思考开关（send.thinking_enabled 下发，「设置→通用」）：请求层只在这里
+              // spawn 时生效——官方 API 关思考靠这里（请求体无 thinking 字段）；ollama
+              // 等兼容端点不认 thinking 参数（无字段=模型自决，推理模型必出思考块，
+              // 2026-08-21 mock 端点实锤），API 层关不掉，靠下方 mapSdkMessage 的
+              // showThinking 展示层剥除兜底。btw 支线恒 disabled（轻量问答省 token）；
+              // 与 effort 解耦（2026-08-21 决策：effort 切换不再联动 thinking）。
+              thinking: this.btwMode
+                ? { type: "disabled" }
+                : this.thinkingEnabled
+                  ? { type: "adaptive", display: "summarized" }
+                  : { type: "disabled" },
               ...(cwd ? { cwd } : {}),
               ...(this.cwd && !cwd ? { cwd: this.cwd } : {}),
-              ...(process.env.AIDE_CLAUDE_EXE
-                ? { pathToClaudeCodeExecutable: process.env.AIDE_CLAUDE_EXE }
+              ...(resolveClaudeExe()
+                ? { pathToClaudeCodeExecutable: resolveClaudeExe() }
                 : {}),
               ...forkResumeOptions(this.resumeSource ?? "", this.shouldForkNextConnect),
               // 任务支线(tools 白名单)在此覆盖前面的统一 allowedTools;问答支线
@@ -996,6 +1002,13 @@ export class SessionWorker {
           this.emit({ type: "builtin_hooks_manifest", manifest: builtinHookManifest });
 
           for await (const msg of q) {
+            // 图片 400 回滚：模型不支持图片时，历史里带图消息重放必 400（会话报废）。
+            // 检测到即 abort 杀 CLI（停一切写入），catch 里执行回滚（去图重写历史），
+            // 下一轮 query 重放干净历史。btw 是一次性支线（400 后自毁），无需回滚。
+            if (!this.btwMode && detectImageUnsupported(msg)) {
+              this.rollbackPending = true;
+              this.abortController?.abort();
+            }
             if ((msg as any).type === "result") {
               this.turnActive = false;
               // 兜底：首轮未收到任何主线程 assistant 消息就结束（出错/空轮），
@@ -1045,6 +1058,9 @@ export class SessionWorker {
                 stopTail: (id) => this.stopBgTaskTail(id),
               },
               !this.btwMode,
+              // 思考展示开关：关闭时剥掉 thinking 块（ollama 端点不认 thinking 参数，
+              // API 层关不掉，只能展示层剥——见 mapper.ts emitSubagentBlocks 注释）。
+              this.thinkingEnabled,
             );
 
             if (this.jumpQueueCtl.has() && this.toolLifecycle.isIdle()) {
@@ -1108,14 +1124,68 @@ export class SessionWorker {
           this.pendingFork = false;
           this.turnActive = false;
           this.toolLifecycle.reset();
-          if (e?.name !== "AbortError") {
+          if (this.rollbackPending) {
+            // 图片 400：abort 已杀 CLI，回滚历史后下一轮重放干净历史。
+            // 回滚本身失败时静默（会话保持现状），不把 AbortError 当错误上报。
+            this.rollbackPending = false;
+            await this.performImageRollback();
+          } else if (e?.name !== "AbortError") {
             this.emit({ type: "error", message: String(e?.message ?? e), fatal: false });
+            // 非 AbortError = 会话级故障（SDK 初始化失败等）：break 退出循环，
+            // 等用户下一条消息重新 startLoop。继续循环会无限快速重试——
+            // 2026-08-21 实锤 "Native CLI binary not found" 每秒几十次风暴。
+            // fatal:false 语义不变：进程仍存活、等下一条。
+            break;
           }
           this.promoteJumpQueue();
         }
       }
     } finally {
       this.currentQuery = null;
+    }
+  }
+
+  // ================================================================
+  // 图片 400 回滚
+  // ================================================================
+
+  /** 场景 B 自动继续的注入消息：CLI resume 会话后必须收到输入才会重放历史
+   *  （2026-08-21 实锤：resume 无输入 → CLI 0 事件直接退出）。注入这条 user
+   *  消息触发 CLI 重放历史（含错误文本 tool_result）→ 模型自行判断下一步：
+   *  能读就读，不能读就自然告知用户跳过。措辞刻意不预设"有文本可读"
+   *  （图片可能是纯视觉内容，OCR 无效），并引导模型回复时别复述技术细节
+   *  （"模型不支持图片输入"这类内部错误，用户看到会一头雾水）。该消息只进
+   *  会话 jsonl，SDK 事件流不回显 user 消息，前端不会出现多余气泡。 */
+  private static readonly ROLLBACK_TOOL_CONTINUE =
+    "请继续处理用户的问题。刚才读取图片文件未获得可用内容，请忽略该次操作。" +
+    "若该文件内容确实无法读取，可自然地向用户说明无法查看该文件并继续，不要提及任何技术细节。";
+
+  /** 从 SDK 会话历史移除带图消息（含 synthetic 400 行），让下一轮 query 重放干净历史。
+   *  调用时机：abort 之后（CLI 已退出，文件不再被写）。失败静默——会话保持现状，
+   *  至少不 crash。 */
+  private async performImageRollback(): Promise<void> {
+    try {
+      const configDir = process.env.CLAUDE_CONFIG_DIR;
+      const sid = this.resumeSource;
+      if (!configDir || !sid) return;
+      const jsonl = findSessionJsonl(join(configDir, "projects"), sid);
+      if (!jsonl) return;
+      const result = rollbackImageMessage(jsonl);
+      if (result.removed) {
+        this.emit({ type: "image_input_rollback", text: result.text });
+        if (result.kind === "tool") {
+          // 场景 B（模型 Read 图片）：回滚只替换了 tool_result，模型还没回复——
+          // resume 后 CLI 等输入，不注入消息模型不会自动继续。注入后 CLI 重放
+          // 历史（含错误文本 tool_result）→ 模型改读文本/跳过。
+          this.queue.push({
+            type: "user",
+            message: buildUserMessage(SessionWorker.ROLLBACK_TOOL_CONTINUE),
+            parent_tool_use_id: null,
+          } as any);
+        }
+      }
+    } catch {
+      // 回滚失败（文件占用等）：会话保持现状，至少不 crash
     }
   }
 
@@ -1136,7 +1206,7 @@ export class SessionWorker {
       model: process.env.AIDE_TITLE_MODEL || "haiku",
       env: { ...process.env, ...this.envOverrides },
       cwd: this.cwd,
-      executablePath: process.env.AIDE_CLAUDE_EXE,
+      executablePath: resolveClaudeExe(),
     });
     if (title && !this.stopped) this.emit({ type: "session_title", title });
   }
@@ -1172,11 +1242,6 @@ export class SessionWorker {
     return this.makeCanUseToolCallback();
   }
 
-  /** 测试用：暴露图片 Read 守卫的 PreToolUse hook，验证 deny/allow 决策。 */
-  _testImageGuardHook() {
-    return this.makeImageGuardHook();
-  }
-
   /** 测试用：暴露 Aide 权限策略 PreToolUse hook，验证 allow/deny/ask/无匹配({})。
    *  包装成单参签名：HookCallback 类型上 toolUseID/options 是必填，但策略 hook
    *  只读 input——与其让十来个测试调用点各补两个占位实参，在这里一次适配。 */
@@ -1193,6 +1258,11 @@ export class SessionWorker {
   /** 测试用：暴露待发送用户消息数，验证拒绝图片时不会入队。 */
   _testQueueLength(): number {
     return ((this.queue as any).queue as unknown[] | undefined)?.length ?? 0;
+  }
+
+  /** 测试用：会话级规则条数（验证去重不堆积）。 */
+  _testSessionRuleCount(): number {
+    return this.sessionRules.length;
   }
 
   /** btw 支线回合结束自毁：关 query/queue 释放 claude.exe，并通知 manager 把自己

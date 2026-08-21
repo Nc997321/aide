@@ -49,6 +49,15 @@ describe("applyEffortSwitch", () => {
     expect(events).toEqual([{ type: "effort_changed", effort: "max" }]);
   });
 
+  it("切快速(low)：applyFlagSettings 只传 effortLevel，不联动思考", async () => {
+    const applyFlagSettings = vi.fn(() => Promise.resolve());
+    const { events, committed } = setup("high", { applyFlagSettings }, "low");
+    expect(applyFlagSettings).toHaveBeenCalledWith({ effortLevel: "low" });
+    await flush();
+    expect(committed).toEqual(["low"]);
+    expect(events).toEqual([{ type: "effort_changed", effort: "low" }]);
+  });
+
   it("切换失败（CLI 驳回）：不坐实、effort_changed(旧值 + error) 回滚", async () => {
     const applyFlagSettings = vi.fn(() => Promise.reject(new Error("invalid effortLevel")));
     const { events, committed } = setup("high", { applyFlagSettings });
@@ -76,7 +85,7 @@ describe("applyEffortSwitch", () => {
     expect(events).toEqual([]);
   });
 
-  it("大写输入规范化后生效（provider env 是 LOW/MAX 风格）", async () => {
+  it("大写输入规范化后生效（exit env 是 LOW/MAX 风格）", async () => {
     const applyFlagSettings = vi.fn(() => Promise.resolve());
     const { events, committed } = setup("high", { applyFlagSettings }, "XHIGH");
     await flush();

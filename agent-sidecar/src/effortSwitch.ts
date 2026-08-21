@@ -36,6 +36,12 @@ export interface EffortSwitchParams {
  * effort 只走 options.effort（建 query）+ applyFlagSettings（会话中）两条官方通道。
  * Settings.effortLevel 的 TS 类型只列到 xhigh，max 是类型外但运行时可用的值
  * （smoke-effort.ts 验证），故接口上 effortLevel 声明为 string。
+ *
+ * 思考开关与 effort 解耦（2026-08-21 决策）：effort 切换不再联动 thinking——
+ * applyFlagSettings 只改 effort。思考由「设置→通用」的独立开关控制，只在
+ * spawn（建 query）时经 thinking 参数生效（见 session-worker 的 thinking 构造）。
+ * 会话内 thinking 一旦关闭会被 CLI 锁死无法恢复（2.1.228+ollama 冒烟实测），
+ * 解耦后无此问题——开关只在新建会话生效。
  */
 export function applyEffortSwitch(p: EffortSwitchParams): void {
   const next = normalizeEffort(p.effort);

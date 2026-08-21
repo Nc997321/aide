@@ -78,6 +78,7 @@ const editorFontFamilyLocal = ref(settings.editorFontFamily);
 const terminalFontFamilyLocal = ref(settings.terminalFontFamily);
 const notificationsEnabledLocal = ref(settings.notificationsEnabled);
 const autoNamingLocal = ref(settings.autoNaming);
+const thinkingEnabledLocal = ref(settings.thinkingEnabled);
 const proxyLocal = ref(settings.proxy);
 /** 本机自动检测到的活代理（设置在空时提示一键填入）；null = 未检测到。 */
 const proxyHint = ref<string | null>(null);
@@ -96,6 +97,7 @@ watch(editorFontFamilyLocal, (v) => { settings.editorFontFamily = v; update({ ed
 watch(terminalFontFamilyLocal, (v) => { settings.terminalFontFamily = v; update({ terminalFontFamily: v }); });
 watch(notificationsEnabledLocal, (v) => { settings.notificationsEnabled = v; update({ notificationsEnabled: v }); });
 watch(autoNamingLocal, (v) => { settings.autoNaming = v; update({ autoNaming: v }); });
+watch(thinkingEnabledLocal, (v) => { settings.thinkingEnabled = v; update({ thinkingEnabled: v }); });
 watch(proxyLocal, (v) => { settings.proxy = v; update({ proxy: v }); });
 watch(shellPathLocal, (v) => { settings.shellPath = v; update({ shellPath: v }); });
 watch(recentLimitLocal, (v) => {
@@ -515,6 +517,17 @@ function onOverlayClick(e: MouseEvent) {
                   <span class="field-hint">首轮对话后根据内容自动生成会话标题（用户手动改过的名字不会被覆盖）</span>
                   <label class="toggle">
                     <input v-model="autoNamingLocal" type="checkbox" />
+                    <span class="toggle-track"></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">启用思考</label>
+                <div class="toggle-row">
+                  <span class="field-hint">对话中展示模型的思考过程。关闭后从能力上禁用思考（新会话起生效）</span>
+                  <label class="toggle">
+                    <input v-model="thinkingEnabledLocal" type="checkbox" />
                     <span class="toggle-track"></span>
                   </label>
                 </div>

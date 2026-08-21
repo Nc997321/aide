@@ -152,6 +152,13 @@ pub struct AppSettings {
     /// 关闭后 send 命令带 auto_title:false，sidecar 不再发起标题生成。
     #[serde(default = "default_auto_naming")]
     pub auto_naming: bool,
+    /// 启用思考：默认开。关闭 = 从能力上禁用思考——请求层（thinking 参数）在
+    /// 新建会话 spawn 时生效（官方 API 真正不思考、省 token）；展示层剥除立即
+    /// 生效（sidecar 剥掉 thinking 块）。例外：ollama 兼容端点不认 thinking 参数
+    /// （2026-08-21 mock 端点实锤），模型无法能力级禁用，仅隐藏显示。
+    /// 与 effort 解耦（2026-08-21 决策）：effort 切换不再联动 thinking。
+    #[serde(default = "default_thinking_enabled")]
+    pub thinking_enabled: bool,
     #[serde(default)]
     pub proxy: String,
     #[serde(default)]
@@ -248,6 +255,7 @@ fn default_font_family() -> String {
 }
 fn default_notifications_enabled() -> bool { true }
 fn default_auto_naming() -> bool { true }
+fn default_thinking_enabled() -> bool { true }
 fn default_theme() -> String { "glass".to_string() }
 fn default_recent_limit() -> u32 { 10 }
 
@@ -260,6 +268,7 @@ impl Default for AppSettings {
             terminal_font_family: String::new(),
             notifications_enabled: default_notifications_enabled(),
             auto_naming: default_auto_naming(),
+            thinking_enabled: default_thinking_enabled(),
             proxy: String::new(),
             shell_path: String::new(),
             workbench_height: 0,

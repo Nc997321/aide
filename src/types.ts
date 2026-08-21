@@ -95,6 +95,11 @@ export interface AppSettings {
   /** 会话自动命名：首轮对话后由 sidecar 用小模型生成会话标题（默认开）。
    *  用户手动改过的名字（nameSource=manual）不会被覆盖。 */
   autoNaming: boolean;
+  /** 启用思考（默认开）：关闭 = 从能力上禁用思考——请求层（thinking 参数）在
+   *  新建会话（spawn）时生效，官方 API 真正不思考、省 token；展示层剥除立即生效
+   *  （sidecar 剥掉 thinking 块）。例外：本地 ollama 模型不认 thinking 参数、无法
+   *  能力级禁用，仅隐藏显示。与 effort 解耦。 */
+  thinkingEnabled: boolean;
   proxy: string;
   shellPath: string;
   workbenchHeight: number;

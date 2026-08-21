@@ -250,6 +250,12 @@ export function emitSubagentBlocks(
    *  tool_use 的 id。emitSubagentProgress 用它算嵌套深度并发 nesting 警告。
    *  subagentOutputTail 的 .output 回放路径不传（async 回放不告警）。 */
   onNestedSpawn?: (childToolUseId: string) => void,
+  /** 思考展示开关（「设置→通用」下发）：关闭 = 从能力上禁用思考（请求层
+   *  thinking: disabled 对官方 API 生效）；此处是展示层兜底——ollama 等兼容
+   *  端点不认 thinking 参数（2026-08-21 实测：disabled 时请求体根本不带
+   *  thinking 字段，端点默认=模型自决），推理模型无法能力级禁用，只能剥掉
+   *  thinking 块。缺省 true 兼容旧调用。 */
+  showThinking: boolean = true,
 ) {
   // 子代理内部的工具产出：user 消息里的 tool_result block。按 tool_use_id（子代理
   // 内部那次工具调用的 id）发 subagent_tool_result，前端据此把产出回填到对应步骤——
@@ -276,7 +282,7 @@ export function emitSubagentBlocks(
   for (const block of msg.message.content) {
     if (block.type === "text" && block.text) {
       emit({ type: "subagent_text_delta", id, delta: block.text });
-    } else if (block.type === "thinking" && block.thinking) {
+    } else if (block.type === "thinking" && block.thinking && showThinking) {
       emit({ type: "subagent_thinking_delta", id, delta: block.thinking });
     }
   }
@@ -313,7 +319,13 @@ export function emitSubagentBlocks(
  * assistant/user 两条分支委托给 `emitSubagentBlocks`（.output 回放复用同一份解析）；
  * 这里只保留 stream_event 逐字增量分支——.output 里没有这类事件。
  */
-function emitSubagentProgress(msg: any, emit: (e: ChatEvent) => void, subagents: SubagentTracker, partialMode: boolean = false) {
+function emitSubagentProgress(
+  msg: any,
+  emit: (e: ChatEvent) => void,
+  subagents: SubagentTracker,
+  partialMode: boolean = false,
+  showThinking: boolean = true,
+) {
   const parentId = msg.parent_tool_use_id as string;
   if (!subagents.isActive(parentId)) return; // 防御性：理论上不会出现不认识的 id
 
@@ -328,7 +340,7 @@ function emitSubagentProgress(msg: any, emit: (e: ChatEvent) => void, subagents:
     if (ev?.type === "content_block_delta") {
       if (ev.delta?.type === "text_delta" && ev.delta.text) {
         emit({ type: "subagent_text_delta", id: parentId, delta: ev.delta.text });
-      } else if (ev.delta?.type === "thinking_delta" && ev.delta.thinking) {
+      } else if (ev.delta?.type === "thinking_delta" && ev.delta.thinking && showThinking) {
         emit({ type: "subagent_thinking_delta", id: parentId, delta: ev.delta.thinking });
       }
     }
@@ -347,6 +359,7 @@ function emitSubagentProgress(msg: any, emit: (e: ChatEvent) => void, subagents:
         emit({ type: "subagent_nesting_warning", depth, threshold: NESTING_WARN_THRESHOLD });
       }
     },
+    showThinking,
   );
 }
 
@@ -375,9 +388,12 @@ export function mapSdkMessage(
   /** partial=on 标志：主会话 true（thinking 逐字流式、text 走整块、子代理走整块）；
    *  缺省 false（partial=off / btw / titleGenerator / 测试），现状不变。 */
   partialMode: boolean = false,
+  /** 思考展示开关（「设置→通用」下发，见 emitSubagentBlocks 的 showThinking）：
+   *  关闭时剥掉主线程 thinking_delta 流与 assistant thinking 整块。缺省 true 兼容旧调用。 */
+  showThinking: boolean = true,
 ) {
   if (msg.parent_tool_use_id) {
-    emitSubagentProgress(msg, emit, subagents, partialMode);
+    emitSubagentProgress(msg, emit, subagents, partialMode, showThinking);
     return;
   }
 
@@ -474,7 +490,7 @@ export function mapSdkMessage(
   if (msg.type === "stream_event") {
     if (!partialMode) return;
     const ev = msg.event;
-    if (ev?.type === "content_block_delta" && ev.delta?.type === "thinking_delta" && ev.delta.thinking) {
+    if (ev?.type === "content_block_delta" && ev.delta?.type === "thinking_delta" && ev.delta.thinking && showThinking) {
       emit({ type: "thinking_delta", delta: ev.delta.thinking });
     }
     return;
@@ -503,7 +519,9 @@ export function mapSdkMessage(
         // 主线程 thinking block 整块。partial=on 时已被 stream_event 的 thinking_delta
         // 逐字发过，此处跳过去重；partial=off 时这是唯一来源（整块转发）。文本为空
         // 时跳过——provider 用 display=omitted 时 block 在但 text 空，两边都不发。
-        if (block.thinking && !partialMode) emit({ type: "thinking", text: block.thinking });
+        // 思考开关关闭（showThinking=false）时剥除——ollama 兼容端点不认 thinking
+        // 参数，模型总会出思考块，API 层关不掉，只能这里剥（2026-08-21 实测）。
+        if (block.thinking && !partialMode && showThinking) emit({ type: "thinking", text: block.thinking });
         continue;
       } else if (block.type === "tool_use") {
         // 插队安全边界判断的账本：不管是普通工具、Task/Agent 子代理还是内置
