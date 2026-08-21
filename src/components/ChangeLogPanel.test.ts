@@ -91,6 +91,21 @@ describe("ChangeLogPanel — 变更文件点击打开", () => {
     expect(mocks.openResolved).toHaveBeenCalledWith("src/App.vue", undefined);
   });
 
+  it("「撤回到此处」按钮：纯问答轮（无文件变更）也有入口，无快照轮隐藏", async () => {
+    mocks.rounds = [
+      // 纯问答轮：rewindTo 有值但 files 空 → 应显示（可回滚对话）
+      { index: 1, time: "11:00:00", prompt: "这个函数干嘛的", files: [], rewindTo: 1000 },
+      // 快照失败轮：rewindTo 无值 → 不显示（回滚不了对话，避免误导）
+      { index: 2, time: "12:00:00", prompt: "改点东西", files: [], rewindTo: undefined },
+    ];
+    const wrapper = mountPanel();
+    const buttons = wrapper.findAll(".changelog-round-revert");
+
+    expect(buttons).toHaveLength(1);
+    await buttons[0].trigger("click");
+    expect(mocks.revertRound).toHaveBeenCalledTimes(1);
+  });
+
   it("已删除（D）条目不可点开，但保留撤回入口", async () => {
     const wrapper = mountPanel();
     const rows = wrapper.findAll(".changelog-file");

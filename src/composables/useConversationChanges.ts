@@ -18,6 +18,8 @@ export function useConversationChanges(sessionId: () => string) {
   let currentSid = "";
   let pendingRewindPosition: number | null = null;
   let snapshotDiff: Map<string, { additions: number; deletions: number }> | null = null;
+  /** 撤回进行中：阻止 stopChatSession 触发的 captureChanges 把「被杀轮」记录回来 */
+  let reverting = false;
 
   /** Persist rounds to disk */
   async function save() {
@@ -70,6 +72,7 @@ export function useConversationChanges(sessionId: () => string) {
 
   /** After Claude finishes: compute what changed this round and create an entry */
   async function captureChanges() {
+    if (reverting) return; // 撤回进行中：被杀轮不记录（轮记录已被清理）
     try {
       const current = await api.gitDiffFiles();
 
@@ -116,32 +119,48 @@ export function useConversationChanges(sessionId: () => string) {
     } catch (_) { /* best effort */ }
   }
 
-  /** Revert all files in a round, and rewind the .jsonl conversation history */
+  /** 回滚到该轮之前：截断 .jsonl 对话历史 + 恢复该轮及之后所有轮的文件更改。
+   *  「撤回到此处」语义 = 回滚到此处（该轮开始）之前的状态，不可逆。 */
   async function revertRound(round: ChangeRound) {
     const sid = currentSid;
 
-    if (round.rewindTo !== undefined && sid) {
-      // Safety: if Claude is running, warn the user before killing
-      const curState = sessionState[sid];
-      if (curState === "running") {
-        const ok = await modal.confirm(
-          "终止会话",
-          "Claude 正在运行，撤回将强制终止进程。确定继续？",
-          "终止并撤回",
-          true,
-        );
-        if (!ok) return;
+    // 不可逆操作：任何状态都弹确认；会话活跃时附加终止进程警告。
+    // waiting 时 CLI 内存持有截断前的历史，不杀进程则下次发消息 API 请求
+    // 仍带旧消息——回滚无效（waiting 同 running 必须杀）。
+    const curState = sid ? sessionState[sid] : undefined;
+    const active = !!curState && curState !== "stopped";
+    const ok = await modal.confirm(
+      "撤回到此处",
+      active
+        ? "Claude 正在运行，回滚将强制终止进程。对话与文件将回滚到该轮开始之前，此操作不可撤销。确定继续？"
+        : "对话与文件将回滚到该轮开始之前，此操作不可撤销。确定继续？",
+      "撤回",
+      true,
+    );
+    if (!ok) return;
+
+    reverting = true;
+    try {
+      if (active) {
         await api.stopChatSession(sid);
       }
 
       // Truncate .jsonl to the position before this round started
-      try {
-        await api.truncateSessionJsonl(sid, round.rewindTo);
-      } catch (_) { /* best effort */ }
-    }
+      if (round.rewindTo !== undefined && sid) {
+        try {
+          await api.truncateSessionJsonl(sid, round.rewindTo);
+        } catch (_) { /* best effort */ }
+      }
 
-    for (const f of round.files) {
-      await revertFile(f.path);
+      // 恢复该轮及之后所有轮的文件更改（不只是当前轮）
+      for (const r of rounds.value) {
+        if (r.index < round.index) continue;
+        for (const f of r.files) {
+          await revertFile(f.path);
+        }
+      }
+    } finally {
+      reverting = false;
     }
     rounds.value = rounds.value.filter((r) => r.index < round.index);
     roundCounter = rounds.value.length;
