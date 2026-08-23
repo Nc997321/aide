@@ -27,7 +27,11 @@ export function useConversationChanges(sessionId: () => string) {
     if (!sid || isPendingSession(sid)) return;
     try {
       await api.saveSessionChanges(sid, rounds.value);
-    } catch (_) { /* best effort */ }
+    } catch (e) {
+      // 变更记录落盘失败：内存里本轮数据还在，但重启/切会话后丢失——
+      // 降级提示（面板数据仍可继续累积，下次 save 会再试整份）。
+      console.warn("[changelog] save session changes failed, rounds will be lost on session switch/restart:", e);
+    }
   }
 
   /** Load rounds from disk when session changes */
@@ -109,14 +113,23 @@ export function useConversationChanges(sessionId: () => string) {
       const prompt = getLastDispatchedPrompt(currentSid) || undefined;
       rounds.value.push({ index: roundCounter, time, files, rewindTo, prompt });
       await save();
-    } catch (_) { /* best effort */ }
+    } catch (e) {
+      // diff 计算或落盘失败：本轮变更记录丢失（内存里未 push 或未持久化）。
+      // 降级提示，避免用户以为本轮已记录。
+      console.warn("[changelog] captureChanges failed, this round's changes were not recorded:", e);
+    }
   }
 
   /** Revert a single file to its staged (pre-Claude) version */
   async function revertFile(filePath: string) {
     try {
       await api.gitRevertFile(filePath);
-    } catch (_) { /* best effort */ }
+    } catch (e) {
+      // 用户主动操作（撤回文件）失败绝不静默：上报并向上抛，
+      // 让 revertRound/revertSingleFile 的调用方能感知回滚未完成。
+      console.error("[changelog] revert file failed:", filePath, e);
+      throw e;
+    }
   }
 
   /** 回滚到该轮之前：截断 .jsonl 对话历史 + 恢复该轮及之后所有轮的文件更改。
@@ -145,11 +158,16 @@ export function useConversationChanges(sessionId: () => string) {
         await api.stopChatSession(sid);
       }
 
-      // Truncate .jsonl to the position before this round started
+      // Truncate .jsonl to the position before this round started。
+      // 截断失败必须中止整个回滚：若继续恢复文件，会出现「文件已回滚但对话
+      // 历史未截断」的半回滚状态，与用户看到的撤回到处语义相悖。
       if (round.rewindTo !== undefined && sid) {
         try {
           await api.truncateSessionJsonl(sid, round.rewindTo);
-        } catch (_) { /* best effort */ }
+        } catch (e) {
+          console.error("[changelog] truncate session jsonl failed, revert aborted (no files were restored):", e);
+          throw e;
+        }
       }
 
       // 恢复该轮及之后所有轮的文件更改（不只是当前轮）

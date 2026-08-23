@@ -65,6 +65,7 @@ function flushSaveNow() {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
+  // 落盘失败不阻塞 UI（fire-and-forget，同 scheduleSave 的降级语义）
   void api.saveNotifications(persistableRecords()).catch(() => {});
 }
 

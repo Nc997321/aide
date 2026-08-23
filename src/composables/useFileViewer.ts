@@ -214,14 +214,19 @@ export function useFileViewer() {
    * 新窗口加入平铺全览（取消聚焦），窗口随数量增多平均变小。
    */
   async function open(path: string, opts?: { content?: string; language?: string; diffPair?: DiffPair }) {
+    // 虚拟视图注入内容：diffPair 分支不用 content（diff 内容由 diffPair 携带）；
+    // 非 diffPair 的虚拟打开 content 必有值（isVirtual 定义保证），开头收窄一次，
+    // 后续分支用 injectContent 避免 opts!.content! 双断言。
+    const injectContent = opts?.diffPair === undefined ? opts?.content : undefined;
     const isVirtual = opts?.content !== undefined || opts?.diffPair !== undefined;
     const existing = windows.value.find((w) => w.filePath === path && w.virtual === isVirtual);
     if (existing) {
       if (opts?.diffPair) {
         existing.diffPair = opts.diffPair;
       } else if (isVirtual) {
-        existing.content = opts!.content!;
-        existing.editContent = opts!.content!;
+        // 契约：!diffPair 且 isVirtual → content 必有值（见 injectContent 注释）
+        existing.content = injectContent!;
+        existing.editContent = injectContent!;
         existing.language = opts?.language || existing.language;
       }
       focusedId.value = existing.id;
@@ -256,7 +261,8 @@ export function useFileViewer() {
 
     if (isVirtual) {
       if (!opts?.diffPair) {
-        win.content = opts!.content!;
+        // 契约同上：!diffPair 且 isVirtual → content 必有值
+        win.content = injectContent!;
         win.editContent = win.content;
       }
     } else {
@@ -332,6 +338,7 @@ export function useFileViewer() {
   async function navigateBack(winId: string) {
     const win = windows.value.find((w) => w.id === winId);
     if (!win || win.navStack.length === 0) return;
+    // 上一条已判 length > 0，pop 必有值（TS 的 pop 类型不追踪 length 收窄）
     const entry = win.navStack.pop()!;
     // 恢复以快照为准：直接用 entry.editContent 灌入（不读磁盘），保留压栈时的未保存修改。
     // 走 loadIntoWindow 的 opts.content 一次性同步设置 editContent+filePath → 合并 watch

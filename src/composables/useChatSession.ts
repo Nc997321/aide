@@ -107,6 +107,9 @@ interface QueuedSend {
   images?: ImageAttachment[];
   mentions?: FileMentionResolution;
   permissionMode?: string;
+  /** 发送时的 effort 档位（与 permissionMode 同级：调用环境透传，invoke 时展开
+   *  为 initialEffort）。与 initialModel 同一条 env 通道（CLAUDE_CODE_EFFORT_LEVEL）。 */
+  effort?: string;
   action?: { id: string; label: string; icon?: string };
 }
 
@@ -338,7 +341,11 @@ function commitPendingModel(sid: string): void {
   const m = s.pendingModelCommit;
   if (!m) return;
   s.pendingModelCommit = "";
-  void invoke("set_session_model", { id: sid, model: m }).catch(() => {});
+  void invoke("set_session_model", { id: sid, model: m }).catch((e) => {
+    // 落盘失败：模型选择不会持久化，重开会话回退 provider 默认——降级提示，
+    // 本次会话内的选择不受影响（模型选择只影响下一条消息，SDK 原生保证）。
+    console.warn("[chat] persist model failed, will fall back to provider default:", e);
+  });
 }
 
 function resolveSid(raw: string): string {
@@ -488,25 +495,22 @@ async function finalizeSession(tempId: string, realId: string) {
  * 等它返回会让首条消息在 UI 上有明显卡顿。这里只做本地状态就绪，IPC 后台完成，
  * 失败走 .catch 兜底。
  */
-function dispatchSend(
-  sid: string,
-  item: QueuedSend,
-  resumeId?: string,
-  initialModel?: string,
-  jumpQueue?: boolean,
-  initialEffort?: string,
-) {
+/**
+ * 本地状态就绪：暂存待发模型 / 清压缩提示 / isBusy / 提问标题 / 会话状态 /
+ * 软超时。返回 "queued"（发送前已忙碌，气泡走排队暂存）或 "direct"（直发）。
+ */
+function prepareSend(sid: string, item: QueuedSend, model?: string): "queued" | "direct" {
   const store = getStore(sid);
-  // 暂存用户选的模型（initialModel），SDK 真正接收发送时才落盘（见 commitPendingModel）：
+  const wasBusy = store.isBusy;
+  // 暂存用户选的模型（model），SDK 真正接收发送时才落盘（见 commitPendingModel）：
   //   spawn（prevStatus stopped/null）→ session_init 落盘
-  //   排队（jumpQueue）→ jump_promoted 落盘
-  //   存活非排队（prevStatus waiting/attention）→ 派发即接收，下面落盘
+  //   排队（queued）→ jump_promoted 落盘
+  //   存活非排队（prevStatus waiting/attention）→ 派发即接收，sendQueued 落盘
   //   首条 pending → finalize 落盘
-  const prevStatus = sessionState[sid];
-  store.pendingModelCommit = initialModel || "";
+  store.pendingModelCommit = model || "";
   // 新轮次不能继承前一轮的压缩提示；但忙碌时这里仅登记排队消息，当前轮
   // 仍在压缩，不能提前撤掉它的状态条。真正接入下一轮时由 jump_promoted 清理。
-  if (!jumpQueue) store.contextCompaction = null;
+  if (!wasBusy) store.contextCompaction = null;
   store.isBusy = true;
   // 记下本次派发的用户提问，供变更面板给轮次做标题（图片消息无文本时兜底占位）。
   // 动作胶囊用 label 做标题更可读，底层 prompt 是 /compact 这种斜杠命令。
@@ -516,7 +520,20 @@ function dispatchSend(
   // 新一轮开始：清掉上轮可能残留的 warning（红点），并起软超时表。
   setSessionHealth(sid, "ok");
   armStalled(sid);
+  return wasBusy ? "queued" : "direct";
+}
 
+/**
+ * 气泡渲染：direct 立即落成用户气泡；queued 只暂存到 pendingJumps（输入区上方
+ * "待发出"提示条），等 jump_promoted 时 flush 成用户气泡。text 是提示条显示文本
+ * （与用户气泡标题一致）。
+ */
+function renderSendBubble(
+  store: SessionStore,
+  item: QueuedSend,
+  text: string,
+  queued: boolean,
+) {
   // 动作胶囊：用户气泡只放一个 ActionBlock（胶囊显示 label/icon），不再混文本/
   // 图片/引用——发给 sidecar 的仍是 item.prompt（/compact /clear），显示与命令解耦。
   // 普通消息：@path 引用展开出来的文件内容不进用户气泡的文本——渲染成独立的、
@@ -547,12 +564,12 @@ function dispatchSend(
           isPending: false,
         })),
       ];
-  if (jumpQueue) {
+  if (queued) {
     // 排队：当前轮还在跑（工具/生成中），消息要等安全边界（当前工具跑完）由
     // sidecar 接入。不立即落成对话气泡——只暂存到 pendingJumps，输入区上方显示
     // "待发出"提示条，jump_promoted 时再 flush。也不调 finishStreaming：当前
     // assistant 仍在流式，提前收尾会让工具结果/后续文本错位新建到用户气泡之后。
-    store.pendingJumps.push({ text: lastDispatchedPrompt[sid], blocks });
+    store.pendingJumps.push({ text, blocks });
   } else {
     finishStreaming(store); // 上一条 assistant 不再续写
     store.messages.push({
@@ -562,32 +579,48 @@ function dispatchSend(
       timestamp: Date.now(),
     });
   }
+}
 
-  const sendText = item.mentions?.sendText ?? item.prompt;
+/**
+ * 真实发送：invoke("send_message") 不 await 到底——新会话要等 Rust 侧现拉起
+ * Node 子进程，等它返回会让首条消息在 UI 上有明显卡顿。这里只做本地状态
+ * 就绪，IPC 后台完成，失败走 .catch 兜底（fire-and-forget，无需调用方等待）。
+ */
+function sendQueued(
+  sid: string,
+  item: QueuedSend,
+  opts: { resumeId?: string; jumpQueue?: boolean },
+) {
+  const prevStatus = sessionState[sid];
+  const store = getStore(sid);
+  // prepareSend 刚暂存到 pendingModelCommit 的模型（存活非排队分支下
+  // commitPendingModel 会清空，故先读出来再落盘）。
+  const initialModel = store.pendingModelCommit || null;
   // 混合 tab：会话可能归属别的工作区，sidecar 必须在它自己的项目目录里跑。
   // 注册表没有记录（新会话）时传 null，Rust 侧回落当前活动工作区。
   const sessionWs = useSessionWorkspaces().workspaceOf(sid);
   // 存活会话且非排队：派发即 SDK 接收 → 立即落盘模型（spawn/排队/首条另走 session_init/jump_promoted/finalize）。
-  if (!jumpQueue && (prevStatus === "waiting" || prevStatus === "attention")) {
+  if (!opts.jumpQueue && (prevStatus === "waiting" || prevStatus === "attention")) {
     commitPendingModel(sid);
   }
+  const sendText = item.mentions?.sendText ?? item.prompt;
   invoke("send_message", {
     sessionId: sid,
     prompt: sendText,
     workspaceRoot: sessionWs?.wsPath || null,
     images: item.images?.length ? item.images : null,
-    resumeId: resumeId ?? null,
+    resumeId: opts.resumeId ?? null,
     // 只在这个 sidecar 进程还没起来时（第一条消息）有意义，Rust 侧只在
     // spawn 分支用它覆盖 provider 默认模型；之后切模型走 setModel()。
-    initialModel: initialModel || null,
+    initialModel,
     // effort 选择器当前值（与 initialModel 同一条 env 通道：CLAUDE_CODE_EFFORT_LEVEL）。
     // 存活会话同值幂等；切换走 setEffort() 即时生效，这里是 deferred 兜底。
-    initialEffort: initialEffort || null,
+    initialEffort: item.effort || null,
     // 每条消息都带当前选中的权限模式，sidecar 侧幂等（同值跳过）
     permissionMode: item.permissionMode || null,
     // 排队：不在这里打断，原样透传给 sidecar，由它在安全边界（当前工具调用
     // 跑完）自己决定何时真正 interrupt——见 jumpQueue 分支的调用处。
-    jumpQueue: jumpQueue || null,
+    jumpQueue: opts.jumpQueue || null,
   }).catch((e) => {
     console.warn("send_message failed:", e);
     const s = getStore(resolveSid(sid));
@@ -1216,7 +1249,13 @@ export function useChatSession(sessionId: Ref<string | null>) {
   watch(sessionId, (sid) => {
     if (sid && !isPendingSession(sid)) {
       const pid = providerOf(sid);
-      if (pid) void api.setSessionProvider(sid, pid).catch(() => {});
+      if (pid) {
+        void api.setSessionProvider(sid, pid).catch((e) => {
+          // 供应商绑定落盘失败：重开 app 后该会话的 provider 绑定丢失（回落全局
+          // 激活）——降级提示，本次运行不受影响。
+          console.warn("[chat] persist session provider failed:", sid, pid, e);
+        });
+      }
     }
   });
 
@@ -1262,10 +1301,9 @@ export function useChatSession(sessionId: Ref<string | null>) {
       images: opts.images,
       mentions: opts.mentions,
       permissionMode: opts.permissionMode,
+      effort: opts.initialEffort,
       action: opts.action,
     };
-    // 忙碌一律排队：sidecar 在安全边界（当前工具跑完）interrupt 后优先发出。
-    const jumpQueue = store.isBusy || undefined;
 
     // resume：显式传入 > 已被 SDK 确认的 id 本身（aide id 就是 sdk id，无需查表）
     const resolvedResumeId = opts.resumeId ?? (isPendingSession(sid) ? undefined : sid);
@@ -1278,7 +1316,12 @@ export function useChatSession(sessionId: Ref<string | null>) {
       setProvider(sid, activeProviderId.value);
     }
 
-    dispatchSend(sid, item, resolvedResumeId, opts.initialModel, jumpQueue, opts.initialEffort);
+    // 派发三阶段（各自 ≤4 输入，调用点全具名）：prepareSend 本地状态就绪并判定
+    // 忙碌（忙碌 → "queued" 排队，直发 → "direct"）；renderSendBubble 渲染气泡；
+    // sendQueued 真实发送（fire-and-forget，内部 catch 兜底）。
+    const queued = prepareSend(sid, item, opts.initialModel);
+    renderSendBubble(store, item, lastDispatchedPrompt[sid], queued === "queued");
+    sendQueued(sid, item, { resumeId: resolvedResumeId, jumpQueue: queued === "queued" });
     return sid;
   }
 
@@ -1291,10 +1334,12 @@ export function useChatSession(sessionId: Ref<string | null>) {
   async function respondPermission(
     id: string,
     approved: boolean,
-    answers?: Record<string, string>,
-    nextMode?: string,
-    reason?: string,
-    sessionRules?: PermissionRuleDraft[],
+    opts: {
+      answers?: Record<string, string>;
+      nextMode?: string;
+      reason?: string;
+      sessionRules?: PermissionRuleDraft[];
+    } = {},
   ) {
     const sid = sessionId.value;
     if (!sid) return;
@@ -1306,7 +1351,15 @@ export function useChatSession(sessionId: Ref<string | null>) {
       setSessionState(sid, "running");
       armStalled(sid); // 权限批准后恢复生成 → 重启软超时计时
     }
-    await invoke("permission_response", { sessionId: sid, id, approved, answers, nextMode, message: reason, sessionRules });
+    await invoke("permission_response", {
+      sessionId: sid,
+      id,
+      approved,
+      answers: opts.answers,
+      nextMode: opts.nextMode,
+      message: opts.reason,
+      sessionRules: opts.sessionRules,
+    });
   }
 
   async function interrupt() {
@@ -1384,7 +1437,11 @@ export function useChatSession(sessionId: Ref<string | null>) {
     const sid = sessionId.value;
     if (!sid) return;
     if (!isPendingSession(sid)) {
-      void api.setSessionEffort(sid, effort).catch(() => {});
+      void api.setSessionEffort(sid, effort).catch((e) => {
+        // effort 持久化失败：重开会话恢复不到该档位（回落上次持久化的值）——
+        // 降级提示，本次运行的生效通道（applyFlagSettings）不受影响。
+        console.warn("[chat] persist effort failed:", sid, effort, e);
+      });
     }
     try {
       await api.setEffort(sid, effort);

@@ -177,7 +177,7 @@ describe("useGotoDefinition.search provider chain", () => {
       results: [{ symbol: { name: "foo", file: "/p/def.rs", line: 9, column: 0, kind: "Function", parent: null }, confidence: "Structure", score: null }],
     });
     useLsp().lspEnabledWorkspaces.value.add("/p");
-    resolver.prefetch("/p", "/p/main.rs", 1, 3, "foo"); // 词首列 3
+    resolver.prefetch({ workspaceRoot: "/p", word: "foo" }, { file: "/p/main.rs", line: 1, col: 3 }); // 词首列 3
     await new Promise<void>(r => setTimeout(r, 0)); // 等 settle
     vi.clearAllMocks();
     const { search, results, searching } = useGotoDefinition();
@@ -194,7 +194,7 @@ describe("useGotoDefinition.search provider chain", () => {
       results: [{ symbol: { name: "foo", file: "/p/def.rs", line: 9, column: 0, kind: "Function", parent: null }, confidence: "Structure", score: null }],
     });
     useLsp().lspEnabledWorkspaces.value.add("/p");
-    resolver.prefetch("/p", "/p/main.rs", 1, 3, "foo");
+    resolver.prefetch({ workspaceRoot: "/p", word: "foo" }, { file: "/p/main.rs", line: 1, col: 3 });
     await new Promise<void>(r => setTimeout(r, 0));
     const { search, results } = useGotoDefinition();
     await search("foo", "/p", { sourceFile: "p/main.rs", sourceFileAbs: "/p/main.rs", sourceLine: 1, sourceExt: "rs", sourceColumn: 5, sourceWordColumn: 3 });
@@ -209,7 +209,7 @@ describe("useGotoDefinition.search provider chain", () => {
       results: [{ symbol: { name: "foo", file: "/p/def.rs", line: 9, column: 0, kind: "Function", parent: null }, confidence: "Structure", score: null }],
     });
     useLsp().lspEnabledWorkspaces.value.add("/p");
-    resolver.prefetch("/p", "/p/main.rs", 1, 3, "foo");
+    resolver.prefetch({ workspaceRoot: "/p", word: "foo" }, { file: "/p/main.rs", line: 1, col: 3 });
     await new Promise<void>(r => setTimeout(r, 0));
     resolver.invalidateFile("/p/main.rs"); // 编辑失效
     const { search, results } = useGotoDefinition();

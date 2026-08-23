@@ -1,5 +1,3 @@
-import type { ThemeTokens } from "../themes/tokens";
-
 /** Read a --aide-* CSS var from the document root. Falls back to the raw string
  *  if the var is not set (should never happen at runtime). */
 export function cssVar(name: string): string {
@@ -17,9 +15,8 @@ export function cssVar(name: string): string {
  *  Call this at terminal creation AND on theme switch.
  *  xterm is canvas-rendered, so it must be explicitly re-applied —
  *  CSS var cascade doesn't reach canvas. 所有 --aide-* 变量在 global.css
- *  :root 有恒在兜底，cssVar 运行时不应为空，故不再挂暗色 hex fallback。
- *  @param _unused_tokens — kept for API compatibility; function reads CSS vars directly. */
-export function buildXtermTheme(_unused_tokens?: ThemeTokens) {
+ *  :root 有恒在兜底，cssVar 运行时不应为空，故不再挂暗色 hex fallback。 */
+export function buildXtermTheme() {
   return {
     background: cssVar("bg-deep"),
     foreground: cssVar("text-primary"),

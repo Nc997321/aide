@@ -5,7 +5,6 @@ import { FitAddon } from "xterm-addon-fit";
 import { buildXtermTheme } from "../utils/xterm";
 import { MONO_FONT_STACK } from "../utils/fonts";
 import { windowsPtyConfig } from "../utils/platform";
-import { themes } from "../themes";
 import { useSettings } from "../composables/useSettings";
 
 const props = defineProps<{ content: string; isError: boolean }>();
@@ -21,7 +20,7 @@ onMounted(() => {
   terminal = new Terminal({
     rows: 10,
     cols: 80,
-    theme: buildXtermTheme(themes[settings.theme] || themes["warm-dark"]),
+    theme: buildXtermTheme(),
     scrollback: 1000,
     disableStdin: true,
     fontSize: 12,
@@ -46,7 +45,7 @@ watch(() => props.content, (val) => {
 
 watch(() => settings.theme, async () => {
   await nextTick();
-  if (terminal) terminal.options.theme = buildXtermTheme(themes[settings.theme] || themes["warm-dark"]);
+  if (terminal) terminal.options.theme = buildXtermTheme();
 });
 </script>
 

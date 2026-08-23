@@ -27,13 +27,13 @@ function setTaskbarProgress(status: string, progress?: number) {
     const state: Record<string, unknown> = { status };
     if (progress !== undefined) state.progress = progress;
     getCurrentWindow().setProgressBar(state as never);
-  } catch (_) {}
+  } catch (_) { /* 任务栏 API 不可用时静默（非关键平台集成，失败不影响主流程） */ }
 }
 
 function flashTaskbar() {
   try {
     getCurrentWindow().requestUserAttention(2);
-  } catch (_) {}
+  } catch (_) { /* 任务栏 API 不可用时静默（同上） */ }
 }
 
 export function useNotification() {
@@ -46,7 +46,7 @@ export function useNotification() {
   let projectName = "";
 
   async function getSessionName(id: string): Promise<string> {
-    if (nameCache.has(id)) return nameCache.get(id)!;
+    if (nameCache.has(id)) return nameCache.get(id) ?? "";
     try {
       const sessions = await api.listSessions();
       for (const s of sessions) {
@@ -76,12 +76,12 @@ export function useNotification() {
       pendingSessions.add(id);
       try {
         api.notifySend(title, `${body} 需要确认`, id);
-      } catch (_) {}
+      } catch (_) { /* 系统通知 API 不可用时静默（通知是增强体验，失败不阻断主流程） */ }
     } else {
       pendingSessions.add(id);
       try {
         api.notifySend(title, `${body} 已回复`, id);
-      } catch (_) {}
+      } catch (_) { /* 系统通知 API 不可用时静默（同上） */ }
     }
   }
 

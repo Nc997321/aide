@@ -85,7 +85,7 @@ function trackBuild(p: Promise<BuildIndexResult>, root: string) {
       if (r) {
         // 不信任工作区：Rust 门控早退（skipped_untrusted），静默处理——
         // 「工作区不受信任」通知已由 ensureIndex 发，这里不重复告警。
-        if ((r as any).skipped_untrusted) {
+        if ((r as BuildIndexResult & { skipped_untrusted?: boolean }).skipped_untrusted) {
           stopPoll();
           return;
         }
@@ -218,9 +218,12 @@ async function ensureIndex(root: string) {
   const build = () =>
     trackBuild(api.codegraphBuildIndex(root), root);
   if (previous) {
+    // 踩中 212-217 行注释的竞争时（close 失败 → build_cancel 仍是旧 root 的
+    // true，会落在新 build 的 embed 循环里使其早退），close 失败后仍然要
+    // build——否则新 root 完全没有索引；失败落 warn 便于排查 embed 缺失。
     void api
       .codegraphClose(previous)
-      .catch(() => {})
+      .catch((e) => { console.warn("[codegraph] close previous index failed:", e); })
       .finally(build);
   } else {
     build();
@@ -274,7 +277,7 @@ async function rescan(root: string) {
  */
 function rebuild(root: string) {
   if (!root || root === untrustedCurrent) return;
-  trackBuild(api.codegraphBuildIndex(root, true), root);
+  trackBuild(api.codegraphBuildIndex(root, { force: true }), root);
 }
 
 /**

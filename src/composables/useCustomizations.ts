@@ -136,7 +136,8 @@ function selectCategory(type: CustomizationType) {
 
 function selectItem(id: string) {
   activeItemId.value = id;
-  editingItem.value = items[activeType.value!].find((i) => i.id === id) || null;
+  // activeType 未选时（防御，UI 上选中项前必有分类）空列表兜底，不压 ! 断言
+  editingItem.value = (activeType.value ? items[activeType.value] : []).find((i) => i.id === id) || null;
 }
 
 function clearSelection() {

@@ -8,7 +8,6 @@ import { registerSearch, unregisterSearch, useTerminalSearch } from "./useTermin
 import { buildXtermTheme } from "../utils/xterm";
 import { MONO_FONT_STACK } from "../utils/fonts";
 import { windowsPtyConfig } from "../utils/platform";
-import { themes } from "../themes";
 import {
   setActiveWorkspace as coreSetActiveWorkspace,
   activeWorkspaceKey,
@@ -78,7 +77,7 @@ function ensureSettingsWatchers() {
     await nextTick();
     for (const [, s] of sessions) {
       if (s.terminal) {
-        s.terminal.options.theme = buildXtermTheme(themes[settings.theme] || themes["warm-dark"]);
+        s.terminal.options.theme = buildXtermTheme();
       }
     }
     useTerminalSearch().refreshTheme();
@@ -162,6 +161,7 @@ export function useWorkbenchTerminal() {
   function createSession(workspaceKey: string, cwd: string, initialCommand?: string): string {
     if (!containerEl) return "";
     const id = genSessionId(workspaceKey);
+    // ensureSettingsWatchers 在 useWorkbenchTerminal() 入口已执行，settingsRef 契约非空
     const stg = settingsRef!;
 
     const wpCfg = windowsPtyConfig();
@@ -169,7 +169,7 @@ export function useWorkbenchTerminal() {
       cursorBlink: true,
       fontSize: stg.fontSize,
       fontFamily: stg.terminalFontFamily || MONO_FONT_STACK,
-      theme: buildXtermTheme(themes[stg.theme || "warm-dark"]),
+      theme: buildXtermTheme(),
       allowProposedApi: true,
       ...(wpCfg ? { windowsPty: wpCfg } : {}),
     });
@@ -185,7 +185,17 @@ export function useWorkbenchTerminal() {
     terminal.open(div);
     fitAddon.fit();
 
-    terminal.onData((data) => { api.ptyWrite(id, data).catch(() => {}); });
+    terminal.onData((data) => {
+      api.ptyWrite(id, data).catch((e) => {
+        // 高频路径静默 = 键击无声丢失，用户以为 shell 还活着。失败且 shell
+        // 未被标记退出时，warn + 在 xterm 写一行可见反馈。
+        const sess = sessions.get(id);
+        if (sess && sess.spawned) {
+          console.warn("[terminal] ptyWrite failed:", id, e);
+          sess.terminal.writeln("\r\n\x1b[31m[终端写入失败]\x1b[0m");
+        }
+      });
+    });
     const observer = new ResizeObserver(() => {
       fitAddon.fit();
       api.ptyResize(id, terminal.rows, terminal.cols).catch(() => {});
@@ -218,7 +228,7 @@ export function useWorkbenchTerminal() {
     const s = sessions.get(id);
     if (!s) return;
     const wk = s.workspaceKey;            // 先存，removeTab 后 workspaceKeyOf 查不到
-    api.ptyKill(id).catch(() => {});
+    api.ptyKill(id).catch((e) => console.warn("[terminal] ptyKill failed:", id, e));
     s.observer.disconnect();
     s.terminal.dispose();
     s.div.remove();
@@ -237,6 +247,7 @@ export function useWorkbenchTerminal() {
   async function spawnShell(id: string, cwd: string, initialCommand?: string) {
     const s = sessions.get(id);
     if (!s || s.spawned) return;
+    // 同 createSession：入口 ensureSettingsWatchers 已保证非空
     const stg = settingsRef!;
     try {
       await api.ptySpawnShell(id, s.terminal.rows, s.terminal.cols, cwd, stg.shellPath ?? "");
@@ -277,11 +288,12 @@ export function useWorkbenchTerminal() {
       return dimsOf(existing.terminal);
     }
     if (!containerEl) return null;
+    // 同 createSession：入口 ensureSettingsWatchers 已保证非空
     const stg = settingsRef!;
     const wpCfg2 = windowsPtyConfig();
     const terminal = new Terminal({
       cursorBlink: true, fontSize: stg.fontSize, fontFamily: stg.terminalFontFamily || MONO_FONT_STACK,
-      theme: buildXtermTheme(themes[stg.theme || "warm-dark"]), allowProposedApi: true,
+      theme: buildXtermTheme(), allowProposedApi: true,
       ...(wpCfg2 ? { windowsPty: wpCfg2 } : {}),
     });
     const fitAddon = new FitAddon();
@@ -293,7 +305,16 @@ export function useWorkbenchTerminal() {
     div.style.display = "";
     terminal.open(div);
     fitAddon.fit();
-    terminal.onData((data) => { api.ptyWrite(id, data).catch(() => {}); });
+    terminal.onData((data) => {
+      api.ptyWrite(id, data).catch((e) => {
+        // 同 createSession：高频路径失败必须有可见反馈，防键击无声丢失。
+        const sess = sessions.get(id);
+        if (sess && sess.spawned) {
+          console.warn("[terminal] ptyWrite failed:", id, e);
+          sess.terminal.writeln("\r\n\x1b[31m[终端写入失败]\x1b[0m");
+        }
+      });
+    });
     const observer = new ResizeObserver(() => {
       fitAddon.fit(); api.ptyResize(id, terminal.rows, terminal.cols).catch(() => {});
     });
@@ -354,7 +375,7 @@ export function useWorkbenchTerminal() {
     unlistenExit?.();
     unlistenExit = null;
     for (const [id, s] of sessions) {
-      api.ptyKill(id).catch(() => {});
+      api.ptyKill(id).catch((e) => console.warn("[terminal] ptyKill failed:", id, e));
       s.observer.disconnect();
       s.terminal.dispose();
       s.div.remove();
@@ -370,7 +391,7 @@ export function useWorkbenchTerminal() {
     for (const id of ids) {
       const s = sessions.get(id);
       if (s) {
-        api.ptyKill(id).catch(() => {});
+        api.ptyKill(id).catch((e) => console.warn("[terminal] ptyKill failed:", id, e));
         s.observer.disconnect();
         s.terminal.dispose();
         s.div.remove();

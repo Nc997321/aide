@@ -106,6 +106,20 @@ async function onSend(prompt: string, opts: SendOptions) {
   pl.promoteTab(sid);
 }
 
+/** 权限响应转发：PermissionDialog 的 emit 载荷 → respondPermission 的具名对象
+ *  （模板内联展开对象字面量会被 Vue 模板解析器当作语句块，故在此收口）。 */
+function onRespondPermission(
+  req: { id: string; approved: boolean; answers?: Record<string, string>; nextMode?: string; reason?: string },
+  sessionRules?: PermissionRuleDraft[],
+) {
+  respondPermission(req.id, req.approved, {
+    answers: req.answers,
+    nextMode: req.nextMode,
+    reason: req.reason,
+    sessionRules,
+  });
+}
+
 function onSendBtw(prompt: string, opts: { lightweight: boolean; model?: string; effort?: string }) {
   sendBtw(prompt, opts);
 }
@@ -195,7 +209,7 @@ function onPickWorkspace(ws: WorkspaceInfo) {
       @set-model="setModel"
       @set-effort="setEffort"
       @set-permission-mode="setPermissionMode"
-      @respond-permission="(id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string, reason?: string, sessionRules?: PermissionRuleDraft[]) => respondPermission(id, approved, answers, nextMode, reason, sessionRules)"
+      @respond-permission="onRespondPermission"
       @rollback-text-consumed="consumeRollbackText"
     />
   </div>

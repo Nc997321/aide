@@ -48,7 +48,7 @@ export function cmDefinitionPrefetch(opts: { workspaceRoot: string; filePath: st
     const lineObj = view.state.doc.lineAt(pos);
     const wordCol = wa.from - lineObj.from + 1;
     console.warn(`[hover] prefetch source line=${lineObj.number} col=${wordCol} word=${word} pos=${pos} file=${filePath}`);
-    resolver.prefetch(workspaceRoot, filePath, lineObj.number, wordCol, word);
+    resolver.prefetch({ workspaceRoot, word }, { file: filePath, line: lineObj.number, col: wordCol });
     return null;
   }, { hoverTime: 300 });
 

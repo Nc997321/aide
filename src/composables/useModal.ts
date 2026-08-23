@@ -21,8 +21,11 @@ const component = shallowRef<Component | null>(null);
 const componentProps = ref<Record<string, unknown>>({});
 const width = ref<"sm" | "md" | "lg">("md");
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let resolver: ((v: any) => void) | null = null;
+// 各模式 resolve 参数类型各异（string|null / boolean / "confirm"|"alt"|"cancel" /
+// void / T|null），调用点（resolveCustom/submit/submitAlt/cancel）传值都能赋给
+// unknown。TS strictFunctionTypes 的逆变规则会拒收具体参数类型的 resolve 赋值
+// （运行时完全安全：调用点从不传超出声明范围的值），故赋值处窄化。
+let resolver: ((v: unknown) => void) | null = null;
 
 export function useModal() {
   /** Show a text-input prompt. Returns the entered string, or null if cancelled. */
@@ -32,7 +35,7 @@ export function useModal() {
     label?: string,
   ): Promise<string | null> {
     return new Promise((resolve) => {
-      resolver = resolve;
+      resolver = resolve as (v: unknown) => void;
       mode.value = "prompt";
       title.value = promptTitle;
       message.value = "";
@@ -52,7 +55,7 @@ export function useModal() {
     isDanger?: boolean,
   ): Promise<boolean> {
     return new Promise((resolve) => {
-      resolver = resolve;
+      resolver = resolve as (v: unknown) => void;
       mode.value = "confirm";
       title.value = confirmTitle;
       message.value = confirmMessage;
@@ -74,7 +77,7 @@ export function useModal() {
     labels: { confirmLabel: string; altLabel: string; danger?: boolean },
   ): Promise<"confirm" | "alt" | "cancel"> {
     return new Promise((resolve) => {
-      resolver = resolve;
+      resolver = resolve as (v: unknown) => void;
       mode.value = "choice";
       title.value = choiceTitle;
       message.value = choiceMessage;
@@ -94,7 +97,7 @@ export function useModal() {
    */
   function notice(noticeTitle: string, noticeMessage: string, label?: string): Promise<void> {
     return new Promise((resolve) => {
-      resolver = resolve;
+      resolver = resolve as (v: unknown) => void;
       mode.value = "notice";
       title.value = noticeTitle;
       message.value = noticeMessage;
@@ -113,7 +116,7 @@ export function useModal() {
    */
   function custom<T>(request: CustomModalRequest<T>): Promise<T | null> {
     return new Promise((resolve) => {
-      resolver = resolve;
+      resolver = resolve as (v: unknown) => void;
       mode.value = "custom";
       title.value = request.title;
       message.value = "";

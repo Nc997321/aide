@@ -17,7 +17,10 @@ function generateId(): string {
 
 async function persist() {
   if (!currentWsKey.value) return;
-  await api.saveRunConfigs(currentWsKey.value, configs.value).catch(() => {});
+  // 落盘失败降级提示：配置仍在内存中生效，但切工作区/重启后丢失
+  await api.saveRunConfigs(currentWsKey.value, configs.value).catch((e) => {
+    console.warn("[run-configs] persist failed, changes lost on workspace switch/restart:", e);
+  });
 }
 
 export function useRunConfigs() {

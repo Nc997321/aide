@@ -8,7 +8,6 @@ import { api } from "@/api";
 import { buildXtermTheme } from "../utils/xterm";
 import { MONO_FONT_STACK } from "../utils/fonts";
 import { windowsPtyConfig } from "../utils/platform";
-import { themes } from "../themes";
 import { useSettings } from "../composables/useSettings";
 
 /**
@@ -122,7 +121,7 @@ async function initTerminal() {
   if (!termEl.value || terminal) return;
   const wpCfg = windowsPtyConfig();
   terminal = new Terminal({
-    theme: buildXtermTheme(themes[settings.theme] || themes["warm-dark"]),
+    theme: buildXtermTheme(),
     scrollback: 5000,
     disableStdin: true,
     fontSize: 12,
@@ -175,7 +174,7 @@ watch(
   () => settings.theme,
   async () => {
     await nextTick();
-    if (terminal) terminal.options.theme = buildXtermTheme(themes[settings.theme] || themes["warm-dark"]);
+    if (terminal) terminal.options.theme = buildXtermTheme();
   },
 );
 

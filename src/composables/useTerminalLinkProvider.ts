@@ -77,7 +77,10 @@ export function useTerminalLinkProvider({ workspacePath, openFile }: LinkProvide
           );
         }
 
-        Promise.all(pending).then(() => callback(links.length ? links : undefined));
+        // 任一 fileExists reject（IPC/后端瞬断）不能吞掉整行链接——降级为无链接
+        Promise.all(pending)
+          .then(() => callback(links.length ? links : undefined))
+          .catch(() => callback(undefined));
       },
     });
   }

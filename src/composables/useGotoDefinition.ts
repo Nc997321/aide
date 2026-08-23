@@ -159,7 +159,7 @@ export function useGotoDefinition() {
       const keyCol = source.sourceWordColumn ?? source.sourceColumn ?? 0;
 
       // 同步快路径：命中缓存即瞬时跳转（无 await、无「跳转中…」，Vue 批处理不渲染 loading）
-      const cached = resolver.peek(projectRoot, srcAbs, srcLine, keyCol, word);
+      const cached = resolver.peek({ workspaceRoot: projectRoot, word }, { file: srcAbs, line: srcLine, col: keyCol });
       if (cached) {
         console.warn(`[hover] search peek HIT word=${word} line=${srcLine} col=${keyCol}`);
         const filtered = stampLsp(cached, projectRoot, srcAbs, srcLine);
@@ -173,7 +173,7 @@ export function useGotoDefinition() {
         console.warn(`[hover] search peek MISS word=${word} line=${srcLine} col=${keyCol} → resolve`);
         // 未命中：单次解析（无 retry、无 sleep）。hover 预取已在途则 await 同一 promise。
         try {
-          const jump = await resolver.resolve(projectRoot, srcAbs, srcLine, keyCol, word);
+          const jump = await resolver.resolve({ workspaceRoot: projectRoot, word }, { file: srcAbs, line: srcLine, col: keyCol });
           if (mySeq !== requestSeq) return;
           if (jump.status === "ok") {
             const filtered = stampLsp(jump.results, projectRoot, srcAbs, srcLine);

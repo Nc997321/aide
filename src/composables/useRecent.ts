@@ -37,7 +37,7 @@ export function useRecent() {
     const wsName = ws?.name ?? currentWsName.value;
     if (!key) return;
     try {
-      await api.recordRecentSession(key, wsName, sessionId, name);
+      await api.recordRecentSession({ wsKey: key, wsName, sessionId, name });
       await refresh();
     } catch {
       // best effort

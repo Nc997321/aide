@@ -20,8 +20,8 @@ async function run<T>(flag: { value: boolean }, fn: () => Promise<T>): Promise<T
   lastError.value = null;
   try {
     return await fn();
-  } catch (e: any) {
-    lastError.value = e?.message ?? String(e);
+  } catch (e) {
+    lastError.value = e instanceof Error ? e.message : String(e);
     return null;
   } finally {
     flag.value = false;
@@ -45,8 +45,8 @@ async function cpaOpenManagement(): Promise<void> {
   if (url) {
     try {
       await open(url);
-    } catch (e: any) {
-      lastError.value = `打开管理面板失败: ${e?.message ?? e}`;
+    } catch (e) {
+      lastError.value = `打开管理面板失败: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 }

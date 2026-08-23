@@ -89,7 +89,7 @@ function defaultScheduleFrame(cb: () => void): () => void {
     const id = requestAnimationFrame(cb);
     return () => cancelAnimationFrame(id);
   }
-  const id = setTimeout(cb, 16) as unknown as number;
+  const id: ReturnType<typeof setTimeout> = setTimeout(cb, 16);
   return () => clearTimeout(id);
 }
 

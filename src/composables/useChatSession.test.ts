@@ -19,6 +19,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import { useChatSession, __resetForTest, stopSessionById } from "./useChatSession";
 import { useSessionState } from "./useSessionState";
+import { useSessionProviders } from "./useSessionProviders";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
 
 function emit(e: Record<string, unknown>) {
@@ -1063,5 +1064,97 @@ describe("useChatSession 会话自动命名", () => {
     const { useSessionNames } = await import("./useSessionNames");
     // 注册表没有该 id → 退化为 id 前 8 位
     expect(useSessionNames().displayName("uuid-a")).toBe("uuid-a");
+  });
+
+  it("send_message 失败 → console.warn + 忙态复位（fire-and-forget 兜底不静默）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    invokeMock.mockRejectedValue(new Error("sidecar spawn boom"));
+
+    await chat.sendMessage("hello");
+    await flush();
+    await flush();
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "send_message failed:",
+      expect.any(Error),
+    );
+    // 状态复位：不残留 busy（否则 UI 永久转圈）
+    expect(chat.isBusy.value).toBe(false);
+    const { state } = useSessionState();
+    expect(state["uuid-a"]).toBe("stopped");
+    warnSpy.mockRestore();
+  });
+
+  it("commitPendingModel 落盘失败（set_session_model reject）→ console.warn 降级", async () => {
+    const sid = ref<string | null>(null);
+    const chat = useChatSession(sid);
+    await flush();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "set_session_model") throw new Error("disk full");
+      return undefined;
+    });
+
+    const tempId = await chat.sendMessage("hello", { initialModel: "opus" });
+    // SDK 确认真实 id → finalizeSession 搬迁后 commitPendingModel(realId) 落盘
+    emit({ type: "session_init", sdk_session_id: "sdk-uuid-1", session_id: tempId as string });
+    await flush();
+    await flush();
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[chat] persist model failed, will fall back to provider default:",
+      expect.any(Error),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("provider 绑定落盘失败 → console.warn 降级（本次运行不受影响）", async () => {
+    const sid = ref<string | null>("");
+    const chat = useChatSession(sid);
+    await flush();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { setProvider } = useSessionProviders();
+    setProvider("uuid-a", "provider-x");
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "set_session_provider") throw new Error("disk full");
+      return undefined;
+    });
+
+    sid.value = "uuid-a"; // 非 pending + 有绑定 → watch 落盘
+    await flush();
+    await flush();
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[chat] persist session provider failed:",
+      "uuid-a",
+      "provider-x",
+      expect.any(Error),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("setEffort 持久化失败（set_session_effort reject）→ console.warn 降级", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "set_session_effort") throw new Error("disk full");
+      return undefined;
+    });
+
+    await chat.setEffort("high");
+    await flush();
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[chat] persist effort failed:",
+      "uuid-a",
+      "high",
+      expect.any(Error),
+    );
+    warnSpy.mockRestore();
   });
 });

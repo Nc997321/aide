@@ -70,7 +70,7 @@ export function useRunProcess() {
     wb.visible.value = true;
     await new Promise<void>(r => setTimeout(r, 80));
     const dim = wb.attachSession(currentWs(), sessionId, config.name) ?? { rows: 24, cols: 80 };
-    await api.runProcessStart(config.id, config.cwd, config.command, envForRun(config), dim.rows, dim.cols);
+    await api.runProcessStart(config.id, config.cwd, config.command, envForRun(config), { rows: dim.rows, cols: dim.cols });
     wb.markSpawned(sessionId);
     setStatus(config.id, "running");
   }
@@ -93,7 +93,7 @@ export function useRunProcess() {
       // 先 attach（复用已有 terminal，clearFirst 清屏）拿真实 cols，再 spawn
       wb.visible.value = true;
       const dim = wb.attachSession(currentWs(), sid, config.name, true /* clearFirst */) ?? { rows: 24, cols: 80 };
-      await api.runProcessStart(config.id, config.cwd, config.command, envForRun(config), dim.rows, dim.cols);
+      await api.runProcessStart(config.id, config.cwd, config.command, envForRun(config), { rows: dim.rows, cols: dim.cols });
       wb.markSpawned(sid);
       setStatus(config.id, "running");
     } finally {

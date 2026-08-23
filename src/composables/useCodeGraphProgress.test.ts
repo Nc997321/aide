@@ -87,4 +87,23 @@ describe("useCodeGraphProgress", () => {
     expect(codegraphNotes).toHaveLength(1);
     expect(codegraphNotes[0].severity).toBe("warning");
   });
+
+  it("切换 root 时 close 上一个索引失败 → warn + 仍 build 新 root（close 失败不吞 build）", async () => {
+    const cg = useCodeGraphProgress();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await cg.ensureIndex("C:/proj-a");
+    vi.mocked(api.codegraphClose).mockRejectedValueOnce(new Error("close boom"));
+    await cg.ensureIndex("C:/proj-b");
+    // close 链是 fire-and-forget（void）：await ensureIndex 不等它，reject→catch→
+    // finally(build) 的微任务链要 flush 后才执行 build 的同步调用。
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+    // close 失败走 warn（不静默），.finally(build) 保证新 root 照常建索引
+    expect(api.codegraphBuildIndex).toHaveBeenCalledWith("C:/proj-b");
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[codegraph] close previous index failed"),
+      expect.any(Error),
+    );
+    warnSpy.mockRestore();
+  });
 });
