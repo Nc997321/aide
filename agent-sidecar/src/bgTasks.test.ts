@@ -152,7 +152,9 @@ describe("mapSdkMessage background bash pipeline", () => {
     };
     const emit = (e: ChatEvent) => events.push(e);
     const call = (msg: any) =>
-      mapSdkMessage(msg, emit, new TaskTracker(), new SubagentTracker(), new ToolLifecycleTracker(), undefined, undefined, hooks);
+      mapSdkMessage(msg,
+  emit,
+  { tasks: new TaskTracker(), subagents: new SubagentTracker(), tools: new ToolLifecycleTracker(), bgTaskHooks: hooks });
     return { events, started, stopped, call };
   }
 
@@ -255,13 +257,9 @@ describe("mapSdkMessage background bash pipeline", () => {
 
   it("无 bgTaskHooks 时后台回执只是普通 tool_result（向后兼容）", () => {
     const events: ChatEvent[] = [];
-    mapSdkMessage(
-      userToolResult("tu1", "Command running in background with ID: t1. Output is being written to: /tmp/t1.output. You will be notified when it completes."),
-      (e) => events.push(e),
-      new TaskTracker(),
-      new SubagentTracker(),
-      new ToolLifecycleTracker(),
-    );
+    mapSdkMessage(userToolResult("tu1", "Command running in background with ID: t1. Output is being written to: /tmp/t1.output. You will be notified when it completes."),
+  (e) => events.push(e),
+  { tasks: new TaskTracker(), subagents: new SubagentTracker(), tools: new ToolLifecycleTracker() });
     expect(events.map((e) => e.type)).toEqual(["tool_result"]);
   });
 });

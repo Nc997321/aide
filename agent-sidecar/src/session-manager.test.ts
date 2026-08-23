@@ -119,15 +119,16 @@ describe("SessionWorker — 自动化会话硬停补终态（2026-08-23 蒸馏�
   function emittedEvents(sid: string): any[] {
     // 必须按 session_id 过滤：文件内前面的测试（provider env 等）起过桩 query，
     // 其异步收官会迟写到 stdout，落进本用例的 spy（单测隔离跑可复现差异）
+    // 返回 any[]：调用方按事件字段断言（e.type），JSON.parse 产物本无静态形状。
     return stdoutSpy.mock.calls
-      .map((c) => {
+      .map((c: unknown[]) => {
         try {
-          return JSON.parse(String(c[0]));
+          return JSON.parse(String(c[0])) as { session_id?: string };
         } catch {
           return null;
         }
       })
-      .filter((e) => e && e.session_id === sid);
+      .filter((e: { session_id?: string } | null) => e !== null && e.session_id === sid);
   }
 
   /** 建 worker 并直接塞自动化配置/回合态（绕开 handleSend——它会 startLoop spawn 真 CLI）。 */

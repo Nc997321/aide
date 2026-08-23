@@ -499,6 +499,8 @@ export async function matcherMatches(
       if (matcher.file !== undefined) {
         return pathEqualsFile(target, matcher.file, cwd);
       }
+      // 上方两个 undefined 检查都未命中 → folder 必已定义（folder 或 file 至少其一
+      // 存在，见 matcher 校验），契约注释，勿删 !。
       return pathWithinFolder(target, matcher.folder!, cwd);
     }
     case "field": {

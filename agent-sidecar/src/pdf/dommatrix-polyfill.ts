@@ -93,9 +93,9 @@ class Path2DPolyfill {
   }
 }
 
-if (typeof globalThis.DOMMatrix === "undefined") {
+if (!("DOMMatrix" in globalThis)) {
   (globalThis as Record<string, unknown>).DOMMatrix = DOMMatrixPolyfill;
 }
-if (typeof globalThis.Path2D === "undefined") {
+if (!("Path2D" in globalThis)) {
   (globalThis as Record<string, unknown>).Path2D = Path2DPolyfill;
 }

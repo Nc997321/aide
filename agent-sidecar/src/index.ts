@@ -2,6 +2,7 @@ import * as readline from "readline";
 import { SessionManager } from "./session-manager.js";
 import { ensureWindowsBashEnv } from "./winBashEnv.js";
 import { ensureCodegraphSkill } from "./codegraphSkill.js";
+import { setStdoutBackpressureNotifier, writeStdoutFrame } from "./stdoutFrames.js";
 
 // test-mcp 子命令：探活 MCP server。被 Rust test_mcp_connection spawn 调用
 // （agent-runtime test-mcp <config-json>）。最早分支，跳过会话初始化，输出 JSON 退出。
@@ -25,12 +26,14 @@ ensureCodegraphSkill(process.env);
 // 的 canUseTool 对每个工具都发 permission_request 让用户确认，Agent/Task 走它
 // 就会逐个子代理打断）。这是预期行为，压掉这条噪声即可，其余警告照常透出。
 const __origEmitWarning = process.emitWarning.bind(process);
-(process as any).emitWarning = (warning: unknown, options: unknown) => {
+// Node 的 emitWarning 签名是 overloads 集合，这里用窄签名覆盖（参数取 unknown 是
+// 超集逆变，赋值兼容）；透传时按最宽 overload 还原成 string | Error。
+(process as { emitWarning: (warning: unknown, options: unknown) => void }).emitWarning = (warning: unknown, options: unknown) => {
   const code = typeof options === "object" && options !== null
     ? (options as { code?: string }).code
     : typeof options === "string" ? options : undefined;
   if (code === "CLAUDE_SDK_CAN_USE_TOOL_SHADOWED") return;
-  __origEmitWarning(warning as string, options as any);
+  __origEmitWarning(warning as string | Error, options as Parameters<typeof __origEmitWarning>[1]);
 };
 
 // ================================================================
@@ -44,10 +47,18 @@ const __origEmitWarning = process.emitWarning.bind(process);
 const manager = new SessionManager();
 manager.startHealthTimer();
 
+// 背压降级/熔断的通知：走 emitToStdout 组装带会话上下文（无会话时落 _runtime）的
+// error 帧。该帧自身是"非增量"，背压期间照常进 Node 缓冲，对端恢复读取后能收到。
+// 见 stdoutFrames.ts —— 这是 OOM 前最后的可见信号，Rust 侧也可据此给前端报错。
+setStdoutBackpressureNotifier((message, sessionId) => {
+  manager.emitToStdout(sessionId ?? "_runtime", { type: "error", message, fatal: false });
+});
+
 // ---- 存活心跳（Runtime 级别，每 5s） ----
 // Rust 看门狗读到任意 stdout 行即证明进程存活并重置计时；连续 15s 无行 → 判死。
+// 心跳是"可丢弃"帧：背压期间跳过（对端真挂时，看门狗判死重启正是预期恢复路径）。
 setInterval(() => {
-  process.stdout.write(JSON.stringify({ type: "heartbeat" }) + "\n");
+  writeStdoutFrame(JSON.stringify({ type: "heartbeat" }) + "\n", true);
 }, 5_000).unref();
 
 // ---- 代理设置（进程级） ----
@@ -73,12 +84,12 @@ rl.on("line", (line) => {
   }
   try {
     manager.handleCommand(cmd);
-  } catch (e: any) {
+  } catch (e: unknown) {
     // 单条命令处理失败不崩整个 Runtime：写一条 error 事件带 session_id 继续
     const sid = cmd?.session_id ?? "unknown";
     manager.emitToStdout(sid, {
       type: "error",
-      message: `Runtime: ${e?.message ?? e}`,
+      message: `Runtime: ${(e as Error)?.message ?? String(e)}`,
       fatal: false,
     });
   }

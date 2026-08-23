@@ -52,7 +52,7 @@ export function assembleHooks(builtin: { PreToolUse: any[]; Stop: any[] }, user:
   const events = new Set<string>(["PreToolUse", "Stop", ...Object.keys(user)]);
   const out: Record<string, any> = {};
   for (const ev of events) {
-    const b = (builtin as any)[ev] ?? [];
+    const b = (builtin as Record<string, unknown[]>)[ev] ?? [];
     const u = user[ev] ?? [];
     const merged = [...b, ...u];
     if (merged.length > 0) out[ev] = merged;

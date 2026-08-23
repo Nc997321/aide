@@ -50,7 +50,7 @@ export function makeSkillGuardHook(env: Env): HookCallback | null {
     if (input.hook_event_name !== "PreToolUse") return {};
     // agent_id 非空 = 子代理上下文（SDK BaseHookInput 注释：仅子代理内 fire 时 present，
     // 主线程 absent）。用 agent_id（非 agent_type）区分主/子。
-    const agentId = (input as any).agent_id as string | undefined;
+    const agentId = input.agent_id;
     if (!agentId) return {}; // 主会话放行
     const toolInput = input.tool_input;
     if (!toolInput || typeof toolInput !== "object" || Array.isArray(toolInput)) return {};

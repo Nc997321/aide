@@ -21,8 +21,8 @@ export async function runTestMcp(configStr: string): Promise<void> {
   let cfg: any;
   try {
     cfg = JSON.parse(configStr);
-  } catch (e: any) {
-    emit({ status: "handshake_error", tools: [], error: `bad config json: ${e?.message ?? e}` });
+  } catch (e: unknown) {
+    emit({ status: "handshake_error", tools: [], error: `bad config json: ${(e as Error)?.message ?? String(e)}` });
     return;
   }
 
@@ -46,8 +46,8 @@ export async function runTestMcp(configStr: string): Promise<void> {
       emit({ status: "handshake_error", tools: [], error: `unknown transport: ${cfg.transport}` });
       return;
     }
-  } catch (e: any) {
-    emit({ status: "handshake_error", tools: [], error: String(e?.message ?? e) });
+  } catch (e: unknown) {
+    emit({ status: "handshake_error", tools: [], error: String((e as Error)?.message ?? e) });
     return;
   }
 
@@ -57,9 +57,9 @@ export async function runTestMcp(configStr: string): Promise<void> {
   try {
     await Promise.race([client.connect(transport), timer]);
     const { tools } = await Promise.race([client.listTools(), timer]);
-    emit({ status: "ok", tools: (tools ?? []).map((t: any) => t.name) });
-  } catch (e: any) {
-    const msg = String(e?.message ?? e);
+    emit({ status: "ok", tools: (tools ?? []).map((t: { name: string }) => t.name) });
+  } catch (e: unknown) {
+    const msg = String((e as Error)?.message ?? e);
     const status =
       msg === "timeout"
         ? "timeout"

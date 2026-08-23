@@ -47,3 +47,6 @@ src-tauri/resources/codegraph-model/
 # LLVM 覆盖率插桩运行的原始数据（LLVM_PROFILE_FILE 未设时写到 cwd）
 *.profraw
 relay-server/target/
+# vitest 覆盖率产物（ts-quality 插件自举 @vitest/coverage-v8 生成，不入库）
+coverage/
+agent-sidecar/coverage/

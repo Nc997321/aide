@@ -145,7 +145,7 @@ export type ChatEvent =
   // 「成功/失败」瞬时提示。ok:false 时 error 带 CLI 驳回原因，下拉已被回滚
   // 广播拉回旧值。display 是喂给提示文案的人类可读名（displayName，兜底 value）。
   | { type: "model_switch_result"; ok: boolean; model: string; display: string; error?: string }
-  | { type: "permission_modes_available"; modes: PermissionModeOption[]; current: string }
+  | { type: "permission_modes_available"; modes: PermissionModeOption[]; current: string; error?: string }
   // 会话建立时 SDK 回传的权威 slash commands 清单（内置命令 + skills + 自定义命令），
   // 仅当 SDK 提供该字段时才发（见 mapper.ts 的 Array.isArray 判断）。
   | { type: "slash_commands_available"; commands: string[] }
@@ -264,6 +264,9 @@ export type SidecarCommand =
       // 会话自动命名开关（来自设置面板）：false 时首轮后不生成会话标题。
       // 省略 = 开启。provider-agnostic：标题生成是通用能力。
       auto_title?: boolean;
+      // 思考展示开关：false 时 mapper 剥掉 thinking 块（ollama 端点不认
+      // thinking 参数，API 层关不掉，只能展示层剥——见 mapper.ts 注释）。
+      thinking_enabled?: boolean;
       // 工作区信任标志：Rust 在 send_message / start_btw_session 里按 cwd 查
       // trustedWorkspaces 白名单后注入。true（或省略，向后兼容/测试）= 信任，
       // 加载项目 CLAUDE.md / .claude/skills/ / .mcp.json；false = 受限模式，

@@ -11,6 +11,11 @@ export class MessageQueue {
     this.resolveNext = null;
   }
 
+  /** 待发送用户消息数（测试/UI 查询用，避免外部摸私有字段）。 */
+  get size(): number {
+    return this.queue.length;
+  }
+
   close() {
     this.closed = true;
     this.resolveNext?.();
@@ -19,6 +24,7 @@ export class MessageQueue {
   async *[Symbol.asyncIterator](): AsyncGenerator<SDKUserMessage> {
     while (true) {
       if (this.queue.length > 0) {
+        // 上面 length > 0 保证 shift() 非空——契约注释，勿删 !。
         yield this.queue.shift()!;
       } else if (this.closed) {
         return;

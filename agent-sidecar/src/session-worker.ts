@@ -37,9 +37,9 @@ import {
 } from "./mapper.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { EffortLevel, HookCallback, HookInput } from "@anthropic-ai/claude-agent-sdk";
-import { existsSync, openSync, readSync, statSync, closeSync } from "node:fs";
-import { readFileSync } from "node:fs";
+import type { CanUseTool, EffortLevel, HookCallback, HookInput, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
+import { existsSync, readFileSync } from "node:fs";
+import { open, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { loadAideInstructions } from "./instructions.js";
 import { buildDispatchPluginsOption } from "./dispatchPlugins.js";
@@ -88,6 +88,10 @@ const FILE_FAMILY_TOOLS = ["Edit", "Write", "MultiEdit"] as const;
 
 	// ---- OutputTail（per-SessionWorker 实例） ----
 
+/** 单次 tick 的读上限（1MB）：超限截断、剩余下次续读——防大输出文件一次读爆
+ *  内存（sync 全量 allocUnsafe 曾是 OOM 与事件循环卡死的来源，审查 P0-2）。 */
+const MAX_TAIL_READ_BYTES = 1024 * 1024;
+
 /** 解析 .output 的一行 JSONL → 子代理事件。 */
 function parseOutputLine(
   line: string, id: string, emit: (e: ChatEvent) => void, claimModel: () => boolean,
@@ -104,30 +108,40 @@ class OutputTail {
   private leftover = "";
   private modelClaimed = false;
   private stopped = false;
+  /** 在途读守卫：异步 tick 与定时器下轮互斥，防并发重复读同一区间。 */
+  private ticking = false;
   constructor(
     private readonly id: string,
     private readonly outputFile: string,
     private readonly emit: (e: ChatEvent) => void,
   ) {}
-  tick(): void {
-    if (this.stopped) return;
+  /** 异步增量读（fs/promises，不阻塞事件循环）；单次最多读 MAX_TAIL_READ_BYTES，
+   *  超出部分下次 tick 续读——大输出文件不再一次 allocUnsafe 全量 + 同步 readSync
+   *  卡死事件循环（审查 P0-2）。读失败/文件消失由调用方 catch，下次轮询重试。 */
+  async tick(): Promise<void> {
+    if (this.stopped || this.ticking) return;
     if (!existsSync(this.outputFile)) return;
-    let fd: number | undefined;
+    this.ticking = true;
+    let fd: Awaited<ReturnType<typeof open>> | undefined;
     try {
-      const st = statSync(this.outputFile);
+      const st = await stat(this.outputFile);
       if (st.size < this.offset) { this.offset = 0; this.leftover = ""; }
       if (st.size === this.offset) return;
-      fd = openSync(this.outputFile, "r");
-      const buf = Buffer.allocUnsafe(st.size - this.offset);
-      readSync(fd, buf, 0, buf.length, this.offset);
-      this.offset = st.size;
-      const data = this.leftover + buf.toString("utf8");
+      fd = await open(this.outputFile, "r");
+      const want = Math.min(st.size - this.offset, MAX_TAIL_READ_BYTES);
+      const buf = Buffer.allocUnsafe(want);
+      // 注意：不用 fs/promises 顶层 read()——Node 22.22 无此导出（2026-08-23 实测
+      // undefined），用 FileHandle.read 方法（两 API 同语义：位置读，返回 bytesRead）。
+      const { bytesRead } = await fd.read(buf, 0, want, this.offset);
+      this.offset += bytesRead;
+      const data = this.leftover + buf.subarray(0, bytesRead).toString("utf8");
       const lines = data.split(/\r?\n/);
       this.leftover = lines.pop() ?? "";
       const claimModel = () => (this.modelClaimed ? false : (this.modelClaimed = true));
       for (const line of lines) parseOutputLine(line, this.id, this.emit, claimModel);
     } finally {
-      if (fd !== undefined) closeSync(fd);
+      this.ticking = false;
+      if (fd !== undefined) await fd.close();
     }
   }
   stop(): void { this.stopped = true; }
@@ -219,8 +233,10 @@ export class SessionWorker {
   private titleUserText = "";
 
   // ---- BTW / 轻量模式 ----
-  readonly btwMode: boolean;
-  readonly lightweightMode: boolean;
+  // 非 readonly：btw send 命令在 handleSend 里动态置 true（构造期选项还拿不到
+  // btw 标志——它是随命令到达的），见 handleSend 的 cmd.btw 分支。
+  btwMode: boolean;
+  lightweightMode: boolean;
   /** btw 任务支线(git-commit)的内建工具白名单:非空时 query() 的
    *  tools/allowedTools 收成它 + skills/plugins/codegraph 全关(全新会话,
    *  前缀最小化)。与 lightweightMode 互斥——问答支线保持与主会话前缀一致。 */
@@ -346,19 +362,20 @@ export class SessionWorker {
         type: "user",
         message: buildUserMessage(jump.prompt, jump.images ?? []),
         parent_tool_use_id: null,
-      } as any);
+      });
     }
-    this.emit({ type: "jump_promoted" } as any);
+    this.emit({ type: "jump_promoted" });
     this.turnActive = true;
     return true;
   }
 
-  private makeCanUseToolCallback() {
+  /** SDK canUseTool 回调：返回类型对齐 CanUseTool 契约（input/opts 由 SDK 传入）。 */
+  private makeCanUseToolCallback(): CanUseTool {
     const permissionCallback = this.permMgr.makeCallback(
       (e) => this.emit(e),
       this.subagentTracker,
     );
-    return async (toolName: string, input: unknown, opts?: unknown) => {
+    return async (toolName, input, opts) => {
       // btw 支线没有权限弹窗通路(permission_request 会被前端 btw 路由吞掉,
       // 干等 resolve → 永久挂起):落到这里的一律 deny。注意这是兜底死代码——
       // allowDangerouslySkipPermissions 下 CLI 实则不会调 canUseTool(2026-08-09
@@ -377,7 +394,7 @@ export class SessionWorker {
           message: "自动化运行无人值守(仅白名单内工具可用)",
         };
       }
-      return permissionCallback(toolName, input, opts as any);
+      return permissionCallback(toolName, input, opts);
     };
   }
 
@@ -566,7 +583,7 @@ export class SessionWorker {
   // 权限模式
   // ================================================================
 
-  private emitPermissionModes(): void {
+  private emitPermissionModes(error?: string): void {
     const modes = PERMISSION_MODES.some((m) => m.value === this.currentPermissionMode)
       ? PERMISSION_MODES
       : [
@@ -576,7 +593,12 @@ export class SessionWorker {
             displayName: EXTRA_MODE_LABELS[this.currentPermissionMode] ?? this.currentPermissionMode,
           },
         ];
-    this.emit({ type: "permission_modes_available", modes, current: this.currentPermissionMode });
+    this.emit({
+      type: "permission_modes_available",
+      modes,
+      current: this.currentPermissionMode,
+      ...(error !== undefined ? { error } : {}),
+    });
   }
 
   private applyPermissionMode(mode: string): void {
@@ -584,12 +606,18 @@ export class SessionWorker {
     if (mode === this.currentPermissionMode) return;
     const q = this.currentQuery;
     if (q) {
-      q.setPermissionMode(mode as any)
+      // mode 已在上方按 PERMISSION_MODES/EXTRA_MODE_LABELS 校验过，断言为 SDK
+      // 字面量联合（含 auto/dontAsk 等前端可选项）只表达"校验后必然是合法值"。
+      q.setPermissionMode(mode as PermissionMode)
         .then(() => {
           this.currentPermissionMode = mode;
           this.emitPermissionModes();
         })
-        .catch(() => {});
+        .catch((e: unknown) => {
+          // setPermissionMode 失败（SDK/CLI 拒绝切换）：模式未生效——回滚广播旧值
+          // 并附 error 让前端提示（对齐 effortSwitch.ts:62 失败回执模式）。
+          this.emitPermissionModes(`权限模式切换失败：${String((e as Error)?.message ?? e)}`);
+        });
     } else {
       this.currentPermissionMode = mode;
       this.emitPermissionModes();
@@ -643,9 +671,9 @@ export class SessionWorker {
   private async emitRateLimit(q: Awaited<ReturnType<typeof query>>): Promise<void> {
     if (Date.now() - this.lastRateLimitAt < 15_000) return;
     try {
-      const anyQ = q as any;
-      if (typeof anyQ.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== "function") return;
-      const usage = await anyQ.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET();
+      // 方法在类型上恒存在，但旧 CLI 二进制可能没实现——运行时守卫兜底。
+      if (typeof q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== "function") return;
+      const usage = await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET();
       this.lastRateLimitAt = Date.now();
       this.emit(buildRateLimitEvent(usage));
     } catch {
@@ -682,10 +710,12 @@ export class SessionWorker {
     if (this.outputTailTimer) return;
     this.outputTailTimer = setInterval(() => {
       for (const t of this.outputTails.values()) {
-        try { t.tick(); } catch { /* 单条 tail 出错不影响其它 */ }
+        // fire-and-forget：异步读不阻塞事件循环；单条 tail 出错（文件被删/读失败）
+        // 不影响其它 tail，下次轮询自动重试。
+        void t.tick().catch(() => { /* 单条 tail 出错不影响其它 */ });
       }
     }, 600);
-    if (typeof (this.outputTailTimer as any).unref === "function") (this.outputTailTimer as any).unref();
+    this.outputTailTimer.unref(); // 不阻止进程自然退出
   }
 
   // ================================================================
@@ -700,7 +730,12 @@ export class SessionWorker {
 
   stopBgTaskTail(id: string): void {
     const t = this.bgTaskTails.get(id);
-    if (t) { t.finalFlush(); this.bgTaskTails.delete(id); } // finalFlush 内含 stop
+    if (t) {
+      // fire-and-forget：异步 finalFlush 不阻塞命令处理；内部吞错，末尾置 stopped。
+      // 删除发生在 flush 完成前——tail 对象仍被该 promise 持有，emit 照常生效。
+      void t.finalFlush().catch(() => { /* flush 失败（文件已删等）：尾部内容放弃 */ });
+      this.bgTaskTails.delete(id);
+    }
     if (this.bgTaskTails.size === 0 && this.bgTaskTailTimer) {
       clearInterval(this.bgTaskTailTimer);
       this.bgTaskTailTimer = undefined;
@@ -717,10 +752,12 @@ export class SessionWorker {
     if (this.bgTaskTailTimer) return;
     this.bgTaskTailTimer = setInterval(() => {
       for (const t of this.bgTaskTails.values()) {
-        try { t.tick(); } catch { /* 单条 tail 出错不影响其它 */ }
+        // fire-and-forget：异步读不阻塞事件循环；单条 tail 出错（文件被删/读失败）
+        // 不影响其它 tail，下次轮询自动重试。
+        void t.tick().catch(() => { /* 单条 tail 出错不影响其它 */ });
       }
     }, 600);
-    if (typeof (this.bgTaskTailTimer as any).unref === "function") (this.bgTaskTailTimer as any).unref();
+    this.bgTaskTailTimer.unref(); // 不阻止进程自然退出
   }
 
   // ================================================================
@@ -728,9 +765,15 @@ export class SessionWorker {
   // ================================================================
 
   private enqueueSend(cmd: Extract<SidecarCommand, { cmd: "send" }>): void {
+    // send 处理链抛错（handleSend 同步段异常，如 buildUserMessage）不能静默吞：
+    // 报 error 帧（对齐 startLoop:1254 的错误上报）；catch 后 promise 恢复
+    // resolved，队列照常推进（吞拒绝是队列语义需要，不是吞错误）。
+    const reportSendError = (e: unknown) => {
+      this.emit({ type: "error", message: String((e as Error)?.message ?? e), fatal: false });
+    };
     if (this.sendQueue) {
       const next = this.sendQueue.then(() => this.handleSend(cmd));
-      const tracked = next.catch(() => {});
+      const tracked = next.catch(reportSendError);
       this.sendQueue = tracked;
       void tracked.finally(() => {
         if (this.sendQueue === tracked) this.sendQueue = null;
@@ -744,7 +787,7 @@ export class SessionWorker {
       return;
     }
 
-    const tracked = pending.catch(() => {});
+    const tracked = pending.catch(reportSendError);
     this.sendQueue = tracked;
     void tracked.finally(() => {
       if (this.sendQueue === tracked) this.sendQueue = null;
@@ -784,12 +827,14 @@ export class SessionWorker {
       this.permMgr.cancelAll();
       this.jumpQueueCtl.clear();
       cancelAllCodegraphQueries("interrupted");
+      // interrupt 的拒绝是预期结果（用户已点中断，SDK 侧无事可打断）——契约性吞掉。
       this.currentQuery?.interrupt().catch(() => {});
 
     } else if (cmd.cmd === "stop_bg_task") {
       // 终止后台任务：SDK stopTask 后 CLI 会发 task_notification(status:"stopped")，
       // 终态走 mapper 既有通道（停 tail + bg_task_ended），这里不合成任何事件。
-      // query 未起（会话还没发过消息）或任务不存在时安静吞掉。
+      // query 未起（会话还没发过消息）或任务不存在时安静吞掉——stopTask 拒绝
+      // （任务已终态等）同样是预期结果，契约性吞掉。
       this.currentQuery?.stopTask(cmd.task_id).catch(() => {});
 
     } else if (cmd.cmd === "set_permission_mode") {
@@ -834,11 +879,10 @@ export class SessionWorker {
 
     if (cmd.btw) {
       this.shouldForkNextConnect = true;
-      (this as any).btwMode = true;
-      (this as any).lightweightMode = !!cmd.lightweight;
+      this.btwMode = true;
+      this.lightweightMode = !!cmd.lightweight;
       // BTW forks from `fork_from`, not `session_id`（session_id 是 BTW 自己的路由键）
-      const forkFrom = (cmd as any).fork_from as string | undefined;
-      if (forkFrom) this.resumeSource = forkFrom;
+      if (cmd.fork_from) this.resumeSource = cmd.fork_from;
       // btw 任务支线(git-commit):工具白名单 → 全新会话 + 前缀最小化。
       if (cmd.tools?.length) this.taskTools = cmd.tools;
       // 轻量问答支线:行为层禁工具(policy hook 全 deny)+ prompt 尾部指令,
@@ -902,7 +946,7 @@ export class SessionWorker {
         type: "user",
         message: buildUserMessage(cmd.prompt, cmd.images ?? []),
         parent_tool_use_id: null,
-      } as any);
+      });
       this.turnActive = true;
       return;
     }
@@ -914,10 +958,11 @@ export class SessionWorker {
         images: cmd.images,
       });
       if (this.toolLifecycle.isIdle()) {
+        // interrupt 拒绝 = 没有可打断的回合（用户已插队）——契约性吞掉。
         this.currentQuery.interrupt().catch(() => {});
       } else {
         // 有工具在跑：要等安全边界，通知前端显示"待发出"提示条
-        this.emit({ type: "jump_queued", prompt: cmd.prompt } as any);
+        this.emit({ type: "jump_queued", prompt: cmd.prompt });
       }
       return;
     }
@@ -931,7 +976,7 @@ export class SessionWorker {
       type: "user",
       message: buildUserMessage(cmd.prompt, cmd.images ?? []),
       parent_tool_use_id: null,
-    } as any);
+    });
     this.turnActive = true;
   }
 
@@ -1002,7 +1047,13 @@ export class SessionWorker {
           const { hooks: builtinHooks, manifest: builtinHookManifest } = buildBuiltinHooks({
             cwd: effectiveCwd,
             env: process.env,
-            session: this as any, // makePolicyHook/makeImageGuardHook/makeStopEffortHook 是 private 方法，这里同类访问
+            // makePolicyHook/makeStopEffortHook 是 private 方法：直接传 this 会被
+            // private 成员的名义类型规则挡掉，这里经闭包适配成最小接口（见
+            // builtinHooks/index.ts 的 HookBuildContext.session）。
+            session: {
+              makePolicyHook: (cwd) => this.makePolicyHook(cwd),
+              makeStopEffortHook: () => this.makeStopEffortHook(),
+            },
           });
           // 用户扩展（settings.json 的 mcpServers/hooks）：mcpServers 与 codegraph 按
           // name 共存；hooks 内建在前、用户追加（内建 policy 恒为 PreToolUse[0]，不可越过）。
@@ -1025,9 +1076,11 @@ export class SessionWorker {
             prompt: promptIter,
             options: {
               abortController: this.abortController,
-              permissionMode: this.currentPermissionMode as any,
+              // currentPermissionMode 在 applyPermissionMode 里按白名单校验后才写，
+              // 断言为 SDK 字面量联合（含 auto/dontAsk）只表达"必然是合法值"。
+              permissionMode: this.currentPermissionMode as PermissionMode,
               allowDangerouslySkipPermissions: true,
-              canUseTool: this.makeCanUseToolCallback() as any,
+              canUseTool: this.makeCanUseToolCallback(),
               settingSources: [],
               // 受限模式（!trusted）：strictMcpConfig 忽略项目 .mcp.json 等外部 MCP 配置；
               // buildDispatchPluginsOption 不注入项目级散装 plugin（项目 skills/agents
@@ -1106,7 +1159,7 @@ export class SessionWorker {
               this.rollbackPending = true;
               this.abortController?.abort();
             }
-            if ((msg as any).type === "result") {
+            if (msg.type === "result") {
               this.turnActive = false;
               // 兜底：首轮未收到任何主线程 assistant 消息就结束（出错/空轮），
               // 放弃命名，仅清理标志，避免泄漏到下一轮。正常流程下标志已在
@@ -1126,11 +1179,15 @@ export class SessionWorker {
             // 自动批准 EnterPlanMode）：主线程 assistant 消息里出现 EnterPlanMode
             // 工具调用时，对齐本地账本并广播。子代理内部不计（不污染主线程模式）。
             if (
-              (msg as any).type === "assistant" &&
-              !(msg as any).parent_tool_use_id
+              msg.type === "assistant" &&
+              !msg.parent_tool_use_id
             ) {
-              const blocks = (msg as any).message?.content as any[] | undefined;
-              if (blocks?.some((b: any) => b.type === "tool_use" && b.name === "EnterPlanMode")) {
+              // assistant content 可能是字符串（罕见），Array.isArray 防御后再扫块
+              const blocks = msg.message?.content;
+              if (
+                Array.isArray(blocks) &&
+                blocks.some((b) => b.type === "tool_use" && b.name === "EnterPlanMode")
+              ) {
                 this.applyPermissionMode("plan");
               }
             }
@@ -1138,29 +1195,32 @@ export class SessionWorker {
             mapSdkMessage(
               msg,
               (e) => this.emit(e),
-              this.taskTracker,
-              this.subagentTracker,
-              this.toolLifecycle,
-              (m) => this.resolveDropdownValue(m),
               {
-                start: (id, outputFile, _emit, _onStop) => {
-                  // SessionWorker 的 emit 已绑定到实例，忽略传入的 emit/onStop
-                  this.startOutputTail(id, outputFile);
+                tasks: this.taskTracker,
+                subagents: this.subagentTracker,
+                tools: this.toolLifecycle,
+                resolveModelLabel: (m) => this.resolveDropdownValue(m),
+                outputTailHooks: {
+                  start: (id, outputFile, _emit, _onStop) => {
+                    // SessionWorker 的 emit 已绑定到实例，忽略传入的 emit/onStop
+                    this.startOutputTail(id, outputFile);
+                  },
+                  stop: (id) => this.stopOutputTail(id),
                 },
-                stop: (id) => this.stopOutputTail(id),
+                bgTaskHooks: {
+                  tracker: this.bgTaskTracker,
+                  startTail: (id, outputFile) => this.startBgTaskTail(id, outputFile),
+                  stopTail: (id) => this.stopBgTaskTail(id),
+                },
+                partialMode: !this.btwMode,
+                // 思考展示开关：关闭时剥掉 thinking 块（ollama 端点不认 thinking 参数，
+                // API 层关不掉，只能展示层剥——见 mapper.ts emitSubagentBlocks 注释）。
+                showThinking: this.thinkingEnabled,
               },
-              {
-                tracker: this.bgTaskTracker,
-                startTail: (id, outputFile) => this.startBgTaskTail(id, outputFile),
-                stopTail: (id) => this.stopBgTaskTail(id),
-              },
-              !this.btwMode,
-              // 思考展示开关：关闭时剥掉 thinking 块（ollama 端点不认 thinking 参数，
-              // API 层关不掉，只能展示层剥——见 mapper.ts emitSubagentBlocks 注释）。
-              this.thinkingEnabled,
             );
 
             if (this.jumpQueueCtl.has() && this.toolLifecycle.isIdle()) {
+              // interrupt 拒绝 = 无在跑回合（首条消息后插队）——契约性吞掉。
               this.currentQuery?.interrupt().catch(() => {});
             }
 
@@ -1171,37 +1231,37 @@ export class SessionWorker {
             // （parent_tool_use_id 非空）不计——它不是主线程回复。
             if (
               this.collectingTitle &&
-              (msg as any).type === "assistant" &&
-              !(msg as any).parent_tool_use_id
+              msg.type === "assistant" &&
+              !msg.parent_tool_use_id
             ) {
               this.collectingTitle = false;
               void this.emitSessionTitle();
             }
 
-            if ((msg as any).type === "system" && (msg as any).subtype === "init") {
-              const newSid = (msg as any).session_id as string | undefined;
+            if (msg.type === "system" && msg.subtype === "init") {
+              const newSid = msg.session_id;
               if (this.pendingFork && newSid && newSid !== this.resumeSource) {
                 this.emit({
                   type: "notification",
                   message: "已切换供应商，对话历史已迁移到新会话。",
                   notification_type: "provider_switch",
-                } as any);
+                });
                 this.pendingFork = false;
               }
               this.resumeSource = newSid ?? this.resumeSource;
               void this.emitModelsAvailable(q);
             } else if (
-              (msg as any).type === "assistant" &&
-              !(msg as any).parent_tool_use_id &&
+              msg.type === "assistant" &&
+              !msg.parent_tool_use_id &&
               isAdoptableAssistantModel(msg) &&
-              (msg as any).message.model !== this.lastConcreteModel
+              msg.message.model !== this.lastConcreteModel
             ) {
-              this.lastConcreteModel = (msg as any).message.model;
+              this.lastConcreteModel = msg.message.model;
               this.currentModel = this.resolveDropdownValue(this.lastConcreteModel);
               if (this.lastModels.length > 0) {
                 this.emit({ type: "models_available", models: this.lastModels, current: this.currentModel });
               }
-            } else if ((msg as any).type === "result") {
+            } else if (msg.type === "result") {
               this.toolLifecycle.reset();
               void this.emitContextUsage(q);
               void this.emitRateLimit(q);
@@ -1217,7 +1277,7 @@ export class SessionWorker {
           }
           // for await 正常结束（queue closed）
           break;
-        } catch (e: any) {
+        } catch (e: unknown) {
           this.currentQuery = null;
           this.pendingFork = false;
           this.turnActive = false;
@@ -1227,8 +1287,8 @@ export class SessionWorker {
             // 回滚本身失败时静默（会话保持现状），不把 AbortError 当错误上报。
             this.rollbackPending = false;
             await this.performImageRollback();
-          } else if (e?.name !== "AbortError") {
-            this.emit({ type: "error", message: String(e?.message ?? e), fatal: false });
+          } else if ((e as Error)?.name !== "AbortError") {
+            this.emit({ type: "error", message: String((e as Error)?.message ?? e), fatal: false });
             // 自动化一次性会话：query 循环抛错（SDK 初始化失败等）即终态，
             // 没有「用户下一条消息重试」的后续——自毁防幽灵 worker。
             if (this.automationConfig) setImmediate(() => this.selfTeardown());
@@ -1360,7 +1420,7 @@ export class SessionWorker {
 
   /** 测试用：暴露待发送用户消息数，验证拒绝图片时不会入队。 */
   _testQueueLength(): number {
-    return ((this.queue as any).queue as unknown[] | undefined)?.length ?? 0;
+    return this.queue.size;
   }
 
   /** 测试用：会话级规则条数（验证去重不堆积）。 */

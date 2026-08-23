@@ -1,6 +1,11 @@
-import { existsSync, openSync, readSync, statSync, closeSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { open, stat } from "node:fs/promises";
 import type { ChatEvent } from "./types.js";
 import { emitSubagentBlocks } from "./mapper.js";
+
+/** 单次 tick 的读上限（1MB）：超限截断、剩余下次续读——防大输出文件一次读爆
+ *  内存（sync 全量 allocUnsafe 曾是 OOM 与事件循环卡死的来源，审查 P0-2）。 */
+const MAX_TAIL_READ_BYTES = 1024 * 1024;
 
 /** 解析 .output 的一行 JSONL → 子代理事件。空行/非法 JSON 安静丢弃（.output 尾部可能有半行）。 */
 export function parseOutputLine(line: string, id: string, emit: (e: ChatEvent) => void, claimModel: () => boolean): void {
@@ -17,31 +22,41 @@ class OutputTail {
   private leftover = "";
   private modelClaimed = false;
   private stopped = false;
+  /** 在途读守卫：异步 tick 与定时器下轮互斥，防并发重复读同一区间。 */
+  private ticking = false;
   constructor(
     private readonly id: string,
     private readonly outputFile: string,
     private readonly emit: (e: ChatEvent) => void,
     private readonly onStop: (id: string) => void,
   ) {}
-  tick(): void {
-    if (this.stopped) return;
+  /** 异步增量读（fs/promises，不阻塞事件循环）；单次最多读 MAX_TAIL_READ_BYTES，
+   *  超出部分下次 tick 续读——大输出文件不再一次 allocUnsafe 全量 + 同步 readSync
+   *  卡死事件循环（审查 P0-2）。读失败/文件消失由调用方 catch，下次轮询重试。 */
+  async tick(): Promise<void> {
+    if (this.stopped || this.ticking) return;
     if (!existsSync(this.outputFile)) return; // 子代理还没开始写
-    let fd: number | undefined;
+    this.ticking = true;
+    let fd: Awaited<ReturnType<typeof open>> | undefined;
     try {
-      const st = statSync(this.outputFile);
+      const st = await stat(this.outputFile);
       if (st.size < this.offset) { this.offset = 0; this.leftover = ""; } // 文件被截断/换新
       if (st.size === this.offset) return;
-      fd = openSync(this.outputFile, "r");
-      const buf = Buffer.allocUnsafe(st.size - this.offset);
-      readSync(fd, buf, 0, buf.length, this.offset);
-      this.offset = st.size;
-      const data = this.leftover + buf.toString("utf8");
+      fd = await open(this.outputFile, "r");
+      const want = Math.min(st.size - this.offset, MAX_TAIL_READ_BYTES);
+      const buf = Buffer.allocUnsafe(want);
+      // 注意：不用 fs/promises 顶层 read()——Node 22.22 无此导出（2026-08-23 实测
+      // undefined），用 FileHandle.read 方法（两 API 同语义：位置读，返回 bytesRead）。
+      const { bytesRead } = await fd.read(buf, 0, want, this.offset);
+      this.offset += bytesRead;
+      const data = this.leftover + buf.subarray(0, bytesRead).toString("utf8");
       const lines = data.split(/\r?\n/);
       this.leftover = lines.pop() ?? ""; // 最后一段可能是不完整行，留给下次
       const claimModel = () => (this.modelClaimed ? false : (this.modelClaimed = true));
       for (const line of lines) parseOutputLine(line, this.id, this.emit, claimModel);
     } finally {
-      if (fd !== undefined) closeSync(fd);
+      this.ticking = false;
+      if (fd !== undefined) await fd.close();
     }
   }
   stop(): void { this.stopped = true; }
@@ -73,8 +88,10 @@ function ensureTimer(): void {
   if (timer) return;
   timer = setInterval(() => {
     for (const t of tails.values()) {
-      try { t.tick(); } catch { /* 单条 tail 出错不影响其它 */ }
+      // fire-and-forget：异步读不阻塞事件循环；单条 tail 出错（文件被删/读失败）
+      // 不影响其它 tail，下次轮询自动重试。
+      void t.tick().catch(() => { /* 单条 tail 出错不影响其它 */ });
     }
   }, 600); // 600ms：肉眼「实时」又不至于 IO 洪峰（每 tail 一个 stat+read）
-  if (typeof (timer as any).unref === "function") (timer as any).unref(); // 不挡进程退出
+  timer.unref(); // 不挡进程退出
 }

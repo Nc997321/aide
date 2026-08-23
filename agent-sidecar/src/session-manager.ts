@@ -2,6 +2,7 @@ import type { ChatEvent, SidecarCommand } from "./types.js";
 import { SessionWorker } from "./session-worker.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { resolveCodegraphResult } from "./codegraphClient.js";
+import { isDroppableEvent, writeStdoutFrame } from "./stdoutFrames.js";
 
 export interface SessionManagerOptions {
   /** 测试缝：覆盖 stdout 写入；生产省略则 JSONL 写 process.stdout。 */
@@ -50,7 +51,9 @@ export class SessionManager {
     } else {
       out.session_id = sessionId;
     }
-    process.stdout.write(JSON.stringify(out) + "\n");
+    // 背压检测在最后一层做：write 返回 false = 内核缓冲满 → 增量帧丢弃、熔断超时
+    // 兜底（见 stdoutFrames.ts）。sessionId 随帧带给通知回调，error 帧可带会话上下文。
+    writeStdoutFrame(JSON.stringify(out) + "\n", isDroppableEvent(event), sessionId);
   }
 
   // ---- 命令路由 ----
@@ -66,7 +69,7 @@ export class SessionManager {
   handleCommand(cmd: SidecarCommand): void {
     // codegraph MCP 工具的 Rust 回包：按 request_id 结算挂起查询，无会话路由。
     if (cmd.cmd === "codegraph_result") {
-      resolveCodegraphResult(cmd as any);
+      resolveCodegraphResult(cmd);
       return;
     }
 
@@ -76,7 +79,7 @@ export class SessionManager {
       return;
     }
 
-    const sid = (cmd as any).session_id as string | undefined;
+    const sid = cmd.session_id;
 
     if (cmd.cmd === "send") {
       // send 可能没有预先存在的 worker（新会话）
@@ -102,6 +105,7 @@ export class SessionManager {
   /** 获取已有 worker 或为 send 命令创建新 worker。 */
   private getOrCreate(sid: string | undefined, cmd: SidecarCommand & { cmd: "send" }): SessionWorker {
     if (sid && this.workers.has(sid)) {
+      // has(sid) 已确认在表内——get 必非空，契约注释，勿删 !。
       return this.workers.get(sid)!;
     }
 
@@ -123,9 +127,9 @@ export class SessionManager {
     };
     worker = new SessionWorker(sessionId, emit, {
       cwd: cmd.cwd,
-      btwMode: !!(cmd as any).btw,
-      lightweightMode: !!(cmd as any).lightweight,
-      envOverrides: (cmd as any).env ?? {},
+      btwMode: !!cmd.btw,
+      lightweightMode: !!cmd.lightweight,
+      envOverrides: cmd.env ?? {},
       // btw 回合结束自毁：按当前 routingKey 摘除（可能已 re-key 成真实会话 ID）。
       onSelfStop: (w) => {
         this.workers.delete(w.routingKey);
@@ -200,9 +204,7 @@ export class SessionManager {
         timestamp: Date.now(),
       });
     }, 30_000);
-    if (typeof (this.healthTimer as any).unref === "function") {
-      (this.healthTimer as any).unref(); // 不阻止进程自然退出
-    }
+    this.healthTimer?.unref(); // 不阻止进程自然退出
   }
 
   // ---- 关闭 ----

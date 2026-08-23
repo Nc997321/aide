@@ -1,4 +1,4 @@
-import type { MessageParam } from "@anthropic-ai/sdk/resources";
+import type { ImageBlockParam, MessageParam, TextBlockParam } from "@anthropic-ai/sdk/resources";
 import type { ChatEvent, ImageAttachment, RateLimitWindow, TurnUsage } from "./types.js";
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
@@ -29,18 +29,21 @@ export function buildUserMessage(
   if (images.length === 0) {
     return { role: "user", content: prompt };
   }
-  const blocks: Array<Record<string, unknown>> = images.map((img) => ({
+  const blocks: Array<ImageBlockParam | TextBlockParam> = images.map((img) => ({
     type: "image",
     source: {
       type: "base64",
-      media_type: img.mediaType,
+      // media_type 是 Anthropic 字面量联合（jpeg/png/gif/webp），前端传来的是自由
+      // 字符串——API 边界契约断言：非这四种时服务端会拒绝，与断言语义一致。
+      // source 联合里只有 base64 分支带 media_type，用 Extract 收窄取型。
+      media_type: img.mediaType as Extract<ImageBlockParam["source"], { type: "base64" }>["media_type"],
       data: img.data,
     },
   }));
   if (prompt) {
     blocks.push({ type: "text", text: prompt });
   }
-  return { role: "user", content: blocks as any };
+  return { role: "user", content: blocks };
 }
 
 /** result.errors 里用户可读的条目——`[ede_diagnostic]` 开头的是 CLI 塞的内部
@@ -264,7 +267,7 @@ export function emitSubagentBlocks(
     for (const block of msg.message.content) {
       if (block.type !== "tool_result") continue;
       const content = Array.isArray(block.content)
-        ? block.content.map((c: any) => c.text ?? "").join("")
+        ? block.content.map((c: { text?: string }) => c.text ?? "").join("")
         : String(block.content ?? "");
       emit({ type: "subagent_tool_result", id, toolUseId: block.tool_use_id, content, is_error: block.is_error ?? false });
     }
@@ -287,7 +290,7 @@ export function emitSubagentBlocks(
     }
   }
 
-  const toolUses = (msg.message.content as any[]).filter((b) => b.type === "tool_use");
+  const toolUses = (msg.message.content as Array<{ type: string; id: string; name: string; input: unknown }>).filter((b) => b.type === "tool_use");
   if (toolUses.length === 0) return;
 
   const model = claimModel() ? (msg.message.model as string) : undefined;
@@ -307,6 +310,36 @@ export function emitSubagentBlocks(
   });
 }
 
+/** mapper 的依赖包：调用方以对象形式注入，取代历史 11 位置参数墙（审查 P1）。
+ *  必选三个 tracker；可选能力一律字段缺省 = 不启用（旧调用方逐个核对迁移）。 */
+export interface MapperDeps {
+  tasks: TaskTracker;
+  subagents: SubagentTracker;
+  tools: ToolLifecycleTracker;
+  /** 把 wire model id 解析成展示建议（别名）——index.ts 传 resolveDropdownValue；
+   *  缺省（测试等）时 modelLabel 即 wire 原文。 */
+  resolveModelLabel?: (wire: string) => string;
+  /** SessionWorker 注入的 output tail 回调（per-instance，替代模块级全局）。
+   *  缺省时走全局 subagentOutputTail（旧路径兼容）。 */
+  outputTailHooks?: {
+    start: (id: string, outputFile: string, emit: (e: ChatEvent) => void, onStop: (id: string) => void) => void;
+    stop: (id: string) => void;
+  };
+  /** 后台 shell 任务：tracker + 输出 tail 钩子（per-session，SessionWorker 注入）。
+   *  缺省时 task_started/后台回执/task_notification 一律不识别（测试兼容）。 */
+  bgTaskHooks?: {
+    tracker: BgTaskTracker;
+    startTail: (id: string, outputFile: string) => void;
+    stopTail: (id: string) => void;
+  };
+  /** partial=on 标志：主会话 true（thinking 逐字流式、text 走整块、子代理走整块）；
+   *  缺省 false（partial=off / btw / titleGenerator / 测试），现状不变。 */
+  partialMode?: boolean;
+  /** 思考展示开关（「设置→通用」下发，见 emitSubagentBlocks 的 showThinking）：
+   *  关闭时剥掉主线程 thinking_delta 流与 assistant thinking 整块。缺省 true 兼容旧调用。 */
+  showThinking?: boolean;
+}
+
 /**
  * 子代理内部消息（`parent_tool_use_id` 非空）：转发文本/thinking 的逐字增量（对齐
  * 主线程 stream_event 的粒度），以及工具调用摘要——三者按到达顺序穿插，前端据此
@@ -322,12 +355,12 @@ export function emitSubagentBlocks(
 function emitSubagentProgress(
   msg: any,
   emit: (e: ChatEvent) => void,
-  subagents: SubagentTracker,
-  partialMode: boolean = false,
-  showThinking: boolean = true,
+  deps: MapperDeps,
 ) {
   const parentId = msg.parent_tool_use_id as string;
-  if (!subagents.isActive(parentId)) return; // 防御性：理论上不会出现不认识的 id
+  if (!deps.subagents.isActive(parentId)) return; // 防御性：理论上不会出现不认识的 id
+  const partialMode = deps.partialMode ?? false;
+  const showThinking = deps.showThinking ?? true;
 
   // partial=on（主会话）时丢弃子代理逐字 delta——子代理走下方 emitSubagentBlocks 整块
   // （与 partial=off 现状一致），避免开 partial 连带让子代理 text/thinking 也逐字流式。
@@ -351,10 +384,10 @@ function emitSubagentProgress(
     msg,
     parentId,
     emit,
-    () => isAdoptableAssistantModel(msg) && subagents.claimModelReport(parentId),
+    () => isAdoptableAssistantModel(msg) && deps.subagents.claimModelReport(parentId),
     // 嵌套派发回调：子代理内部又调 Agent/Task → 算深度，超阈值发软警告（warn-only）。
     (childId) => {
-      const depth = subagents.recordNestedSpawn(parentId, childId);
+      const depth = deps.subagents.recordNestedSpawn(parentId, childId);
       if (depth > NESTING_WARN_THRESHOLD) {
         emit({ type: "subagent_nesting_warning", depth, threshold: NESTING_WARN_THRESHOLD });
       }
@@ -363,39 +396,19 @@ function emitSubagentProgress(
   );
 }
 
-export function mapSdkMessage(
-  msg: any,
-  emit: (e: ChatEvent) => void,
-  tasks: TaskTracker,
-  subagents: SubagentTracker,
-  tools: ToolLifecycleTracker,
-  /** 把 wire model id 解析成展示建议（别名）——index.ts 传 resolveDropdownValue；
-   *  缺省（测试等）时 modelLabel 即 wire 原文。 */
-  resolveModelLabel?: (wire: string) => string,
-  /** SessionWorker 注入的 output tail 回调（per-instance，替代模块级全局）。
-   *  缺省时走全局 subagentOutputTail（旧路径兼容）。 */
-  outputTailHooks?: {
-    start: (id: string, outputFile: string, emit: (e: ChatEvent) => void, onStop: (id: string) => void) => void;
-    stop: (id: string) => void;
-  },
-  /** 后台 shell 任务：tracker + 输出 tail 钩子（per-session，SessionWorker 注入）。
-   *  缺省时 task_started/后台回执/task_notification 一律不识别（测试兼容）。 */
-  bgTaskHooks?: {
-    tracker: BgTaskTracker;
-    startTail: (id: string, outputFile: string) => void;
-    stopTail: (id: string) => void;
-  },
-  /** partial=on 标志：主会话 true（thinking 逐字流式、text 走整块、子代理走整块）；
-   *  缺省 false（partial=off / btw / titleGenerator / 测试），现状不变。 */
-  partialMode: boolean = false,
-  /** 思考展示开关（「设置→通用」下发，见 emitSubagentBlocks 的 showThinking）：
-   *  关闭时剥掉主线程 thinking_delta 流与 assistant thinking 整块。缺省 true 兼容旧调用。 */
-  showThinking: boolean = true,
-) {
-  if (msg.parent_tool_use_id) {
-    emitSubagentProgress(msg, emit, subagents, partialMode, showThinking);
-    return;
-  }
+/** 子代理内部消息（parent_tool_use_id 非空）：委托 emitSubagentProgress
+ *  （只依赖 subagents + partialMode/showThinking 两个展示开关）。 */
+function mapSubagentMessage(msg: any, emit: (e: ChatEvent) => void, deps: MapperDeps): void {
+  emitSubagentProgress(msg, emit, deps);
+}
+
+/**
+ * 主线程消息：除子代理内部消息（mapSubagentMessage）与 result 终态
+ * （mapResultMessage）外的全部类型——system/stream_event/assistant/user/
+ * queue-operation。一条 if 链按 type 分派，每分支单一职责。
+ */
+function mapMainThreadMessage(msg: any, emit: (e: ChatEvent) => void, deps: MapperDeps): void {
+  const { tasks, subagents, tools, resolveModelLabel, outputTailHooks, bgTaskHooks, partialMode, showThinking } = deps;
 
   if (msg.type === "system" && msg.subtype === "init") {
     emit({ type: "session_init", session_id: msg.session_id });
@@ -593,7 +606,7 @@ export function mapSdkMessage(
       if (block.type === "tool_result") {
         tools.onToolResult(block.tool_use_id);
         const content = Array.isArray(block.content)
-          ? block.content.map((c: any) => c.text ?? "").join("")
+          ? block.content.map((c: { text?: string }) => c.text ?? "").join("")
           : String(block.content ?? "");
         // 优先检查 async launch-ack 签名（agentId: + output_file:）。命中则是子代理刚起步
         // 的回执，不是结果——不调 handleToolResult（保持 active），发 subagent_async_launched
@@ -641,79 +654,99 @@ export function mapSdkMessage(
     }
     return;
   }
+}
 
-  if (msg.type === "result") {
-    // 本轮派发的子代理数——在任何分支之前读取并清零（一轮一个 result，error/abort
-    // 也要消费掉计数，避免泄漏到下一轮）。result 时子代理都已 handleToolResult 出 active，
-    // 只能靠这个计数器判断"本轮是否含子代理活动"。
-    const subagentCount = subagents.consumeTurnSubagentCount();
-    // 错误 result（鉴权/额度/达上限等）SDK 不抛异常，会走到这里。以前和成功一样
-    // 压成 message_stop，错误细节全被吞掉 → 前端静默落 waiting，用户"发消息没反应"。
-    // 现在路由到 error 通道（fatal:false，进程仍存活可重试），前端会渲染错误气泡。
-    if (msg.is_error === true || msg.subtype !== "success") {
-      // 主动打断的 result 不是错误——压成 message_stop 正常收轮，
-      // 不弹红色错误气泡（见 isBenignAbortResult 注释）。
-      if (isBenignAbortResult(msg)) {
-        emit({
-          type: "message_stop",
-          stop_reason: "interrupted",
-          total_cost_usd: msg.total_cost_usd ?? null,
-          usage: null,
-        });
-        return;
-      }
-      emit({ type: "error", message: describeResultError(msg), fatal: false });
+/**
+ * result 终态：错误（鉴权/额度/达上限等）/主动打断/成功收轮。只依赖 subagents
+ * 的回合计数（consumeTurnSubagentCount）+ emit。错误不抛异常（SDK 产物），
+ * 路由成 error 帧（fatal:false，进程仍存活可重试）；打断压成 message_stop 收轮。
+ */
+function mapResultMessage(msg: any, emit: (e: ChatEvent) => void, deps: MapperDeps): void {
+  const subagents = deps.subagents;
+  // 本轮派发的子代理数——在任何分支之前读取并清零（一轮一个 result，error/abort
+  // 也要消费掉计数，避免泄漏到下一轮）。result 时子代理都已 handleToolResult 出 active，
+  // 只能靠这个计数器判断"本轮是否含子代理活动"。
+  const subagentCount = subagents.consumeTurnSubagentCount();
+  // 错误 result（鉴权/额度/达上限等）SDK 不抛异常，会走到这里。以前和成功一样
+  // 压成 message_stop，错误细节全被吞掉 → 前端静默落 waiting，用户"发消息没反应"。
+  // 现在路由到 error 通道（fatal:false，进程仍存活可重试），前端会渲染错误气泡。
+  if (msg.is_error === true || msg.subtype !== "success") {
+    // 主动打断的 result 不是错误——压成 message_stop 正常收轮，
+    // 不弹红色错误气泡（见 isBenignAbortResult 注释）。
+    if (isBenignAbortResult(msg)) {
+      emit({
+        type: "message_stop",
+        stop_reason: "interrupted",
+        total_cost_usd: msg.total_cost_usd ?? null,
+        usage: null,
+      });
       return;
     }
-    const modelUsage = msg.modelUsage as Record<string, {
-      inputTokens?: number;
-      outputTokens?: number;
-      cacheReadInputTokens?: number;
-      cacheCreationInputTokens?: number;
-      costUSD?: number;
-    }> | undefined;
-    let usage: TurnUsage | null = null;
-    if (modelUsage) {
-      const entries = Object.entries(modelUsage);
-      const total: TurnUsage = {
-        inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUsd: 0,
-      };
-      // 同时保留按模型分桶——多模型会话（如子代理用了别的模型）能让前端看到每个模型各烧多少。
-      // 单模型时不带 byModel（省得每轮都塞一个只有一项的 map，前端按"键数>1"判断是否展开）。
-      const byModel: Record<string, TurnUsage> = {};
-      for (const [modelId, m] of entries) {
-        const u: TurnUsage = {
-          inputTokens: m.inputTokens ?? 0,
-          outputTokens: m.outputTokens ?? 0,
-          cacheReadInputTokens: m.cacheReadInputTokens ?? 0,
-          cacheCreationInputTokens: m.cacheCreationInputTokens ?? 0,
-          costUsd: m.costUSD ?? 0,
-        };
-        byModel[modelId] = u;
-        total.inputTokens += u.inputTokens;
-        total.outputTokens += u.outputTokens;
-        total.cacheReadInputTokens += u.cacheReadInputTokens;
-        total.cacheCreationInputTokens += u.cacheCreationInputTokens;
-        total.costUsd += u.costUsd;
-      }
-      usage = total;
-      if (subagentCount > 0) {
-        usage.subagentTurn = true;
-        usage.subagentCount = subagentCount;
-      }
-      if (Object.keys(byModel).length > 1) {
-        usage.byModel = byModel;
-      }
-      // num_turns 是 turn 级 API 调用数（不按模型拆），透传给前端做「×N」分解——
-      // 4.2m 累计输入 ÷ 20 ≈ ctx，让徽标不再反直觉。
-      if (typeof msg.num_turns === "number") usage.apiCallCount = msg.num_turns;
-    }
-    emit({
-      type: "message_stop",
-      stop_reason: msg.subtype === "success" ? "end_turn" : msg.subtype,
-      total_cost_usd: msg.total_cost_usd ?? null,
-      usage,
-    });
+    emit({ type: "error", message: describeResultError(msg), fatal: false });
     return;
   }
+  const modelUsage = msg.modelUsage as Record<string, {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
+    costUSD?: number;
+  }> | undefined;
+  let usage: TurnUsage | null = null;
+  if (modelUsage) {
+    const entries = Object.entries(modelUsage);
+    const total: TurnUsage = {
+      inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUsd: 0,
+    };
+    // 同时保留按模型分桶——多模型会话（如子代理用了别的模型）能让前端看到每个模型各烧多少。
+    // 单模型时不带 byModel（省得每轮都塞一个只有一项的 map，前端按"键数>1"判断是否展开）。
+    const byModel: Record<string, TurnUsage> = {};
+    for (const [modelId, m] of entries) {
+      const u: TurnUsage = {
+        inputTokens: m.inputTokens ?? 0,
+        outputTokens: m.outputTokens ?? 0,
+        cacheReadInputTokens: m.cacheReadInputTokens ?? 0,
+        cacheCreationInputTokens: m.cacheCreationInputTokens ?? 0,
+        costUsd: m.costUSD ?? 0,
+      };
+      byModel[modelId] = u;
+      total.inputTokens += u.inputTokens;
+      total.outputTokens += u.outputTokens;
+      total.cacheReadInputTokens += u.cacheReadInputTokens;
+      total.cacheCreationInputTokens += u.cacheCreationInputTokens;
+      total.costUsd += u.costUsd;
+    }
+    usage = total;
+    if (subagentCount > 0) {
+      usage.subagentTurn = true;
+      usage.subagentCount = subagentCount;
+    }
+    if (Object.keys(byModel).length > 1) {
+      usage.byModel = byModel;
+    }
+    // num_turns 是 turn 级 API 调用数（不按模型拆），透传给前端做「×N」分解——
+    // 4.2m 累计输入 ÷ 20 ≈ ctx，让徽标不再反直觉。
+    if (typeof msg.num_turns === "number") usage.apiCallCount = msg.num_turns;
+  }
+  emit({
+    type: "message_stop",
+    stop_reason: msg.subtype === "success" ? "end_turn" : msg.subtype,
+    total_cost_usd: msg.total_cost_usd ?? null,
+    usage,
+  });
+}
+
+/** 唯一入口：按消息形状路由到三个处理函数（每函数 ≤3 输入，deps 对象）。
+ *  子代理内部消息（parent_tool_use_id 非空）→ mapSubagentMessage；
+ *  result 终态 → mapResultMessage；其余全部 → mapMainThreadMessage。 */
+export function mapSdkMessage(msg: any, emit: (e: ChatEvent) => void, deps: MapperDeps): void {
+  if (msg.parent_tool_use_id) {
+    mapSubagentMessage(msg, emit, deps);
+    return;
+  }
+  if (msg.type === "result") {
+    mapResultMessage(msg, emit, deps);
+    return;
+  }
+  mapMainThreadMessage(msg, emit, deps);
 }

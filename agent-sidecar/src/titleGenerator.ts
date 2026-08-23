@@ -102,25 +102,25 @@ export async function generateSessionTitle(
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<null>((resolve) => {
     timer = setTimeout(() => {
-      try { (q as any).close?.(); } catch { /* 忽略 */ }
+      try { q.close(); } catch { /* 忽略 */ }
       resolve(null);
     }, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-    if (typeof (timer as any).unref === "function") (timer as any).unref();
+    timer.unref(); // 不挡进程退出
   });
 
   // catch 放这里而不是外层 try：超时赢了 race 后迭代仍可能 reject，
   // 没有它会是 unhandled rejection。
   const collect = (async (): Promise<string | null> => {
     let text = "";
-    for await (const msg of q as AsyncIterable<any>) {
-      if (msg?.type === "assistant") {
+    for await (const msg of q) {
+      if (msg.type === "assistant") {
         const blocks = msg.message?.content;
         if (Array.isArray(blocks)) {
           for (const b of blocks) {
             if (b?.type === "text" && typeof b.text === "string") text += b.text;
           }
         }
-      } else if (msg?.type === "result") {
+      } else if (msg.type === "result") {
         break;
       }
     }
@@ -129,6 +129,6 @@ export async function generateSessionTitle(
 
   const result = await Promise.race([collect, timeout]);
   if (timer) clearTimeout(timer);
-  try { (q as any).close?.(); } catch { /* 忽略 */ }
+  try { q.close(); } catch { /* 忽略 */ }
   return result;
 }
