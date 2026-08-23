@@ -44,4 +44,6 @@ _design_preview/
 src-tauri/.fastembed_cache/
 # 内嵌的 CodeGraph embedding 模型（87MB，构建时从 HF cache 复制/下载，不入库）
 src-tauri/resources/codegraph-model/
+# LLVM 覆盖率插桩运行的原始数据（LLVM_PROFILE_FILE 未设时写到 cwd）
+*.profraw
 relay-server/target/
