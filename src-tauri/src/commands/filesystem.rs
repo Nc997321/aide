@@ -111,12 +111,14 @@ pub async fn detect_run_command(cwd: String) -> Result<Option<String>, String> {
 
 #[tauri::command]
 pub async fn list_directory(path: String, show_hidden: Option<bool>) -> Result<Vec<FileEntry>, String> {
+    // IPC 边界保留 Option（前端可省略）；None 与 false 等价，进实现前归一成 bool。
+    let show_hidden = show_hidden.unwrap_or(false);
     tokio::task::spawn_blocking(move || list_directory_blocking(path, show_hidden))
         .await
         .map_err(|e| format!("list_directory task panicked: {}", e))?
 }
 
-fn list_directory_blocking(path: String, show_hidden: Option<bool>) -> Result<Vec<FileEntry>, String> {
+fn list_directory_blocking(path: String, show_hidden: bool) -> Result<Vec<FileEntry>, String> {
     let dir = PathBuf::from(&path);
     if !dir.is_dir() {
         return Err(format!("Not a directory: {}", path));
@@ -129,7 +131,7 @@ fn list_directory_blocking(path: String, show_hidden: Option<bool>) -> Result<Ve
         let Ok(entry) = entry else { continue; };
         let name = entry.file_name().to_string_lossy().to_string();
 
-        if !show_hidden.unwrap_or(false) {
+        if !show_hidden {
             if name.starts_with('.') || name == "node_modules" || name == "target" || name == "dist" {
                 continue;
             }

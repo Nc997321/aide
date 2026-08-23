@@ -1,8 +1,8 @@
-use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::mpsc::{self, SyncSender};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Emitter};
@@ -19,6 +19,37 @@ enum ExitPayload {
     /// `{"session_id":"...","success":bool}` — used by run-config sessions,
     /// whose UI reports whether the command succeeded.
     Run,
+}
+
+/// `launch` 的启动参数——一次 PTY 启动的全部输入内聚成一簇
+/// （会话身份 / 命令 / 终端尺寸 / 退出载荷形状），替代 7 个平铺位置参数。
+struct LaunchParams<'a> {
+    session_id: &'a str,
+    cmd: CommandBuilder,
+    /// spawn 失败报错用的人类可读名字（program / command）。
+    label: &'a str,
+    size: PtySize,
+    app_handle: AppHandle,
+    payload_kind: ExitPayload,
+}
+
+/// `open_pty` 的产物：PTY 句柄 + 子进程 + 共享输出缓冲。
+struct OpenedPty {
+    master: Box<dyn MasterPty + Send>,
+    writer: Box<dyn Write + Send>,
+    reader: Box<dyn Read + Send>,
+    child: Box<dyn Child + Send + Sync>,
+    killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
+    output_buffer: Arc<Mutex<String>>,
+}
+
+/// waiter 线程的全部 move-in 输入：子进程所有权 + 会话注册表 + 退出载荷。
+struct WaiterJob {
+    child: Box<dyn Child + Send + Sync>,
+    sessions: Arc<Mutex<HashMap<String, ShellSession>>>,
+    sid: String,
+    app_handle: AppHandle,
+    payload_kind: ExitPayload,
 }
 
 struct ShellSession {
@@ -46,102 +77,32 @@ impl ShellManager {
     }
 
     /// Common launch path shared by `spawn_shell` and `spawn_run_command`.
-    /// Builds the PTY, spawns the child, and starts the three per-session
-    /// worker threads (reader / writer / waiter).
-    fn launch(
-        &self,
-        session_id: &str,
-        cmd: CommandBuilder,
-        label: &str,
-        rows: u16,
-        cols: u16,
-        app_handle: AppHandle,
-        payload_kind: ExitPayload,
-    ) -> Result<(), String> {
+    /// 骨架：杀旧会话 → 建 PTY+spawn 子进程 → 注册会话 → 起三个 worker 线程。
+    fn launch(&self, params: LaunchParams) -> Result<(), String> {
         // Kill existing PTY for this session if any.
-        self.kill_session(session_id);
+        self.kill_session(params.session_id);
 
-        let pty_system = native_pty_system();
-        let pty_pair = pty_system
-            .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
-            .map_err(|e| format!("Failed to open PTY: {}", e))?;
+        let OpenedPty { master, writer, reader, child, killer, output_buffer } =
+            open_pty(params.cmd, params.size, params.label)?;
 
-        let child = pty_pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| format!("Failed to spawn {}: {}", label, e))?;
-
-        drop(pty_pair.slave);
-
-        let killer = Arc::new(Mutex::new(child.clone_killer()));
-
-        let master = pty_pair.master;
-        let mut writer = master.take_writer().map_err(|e| format!("Failed to take writer: {}", e))?;
-        let mut reader = master.try_clone_reader().map_err(|e| format!("Failed to clone reader: {}", e))?;
-
-        let output_buffer = Arc::new(Mutex::new(String::new()));
         let (writer_tx, writer_rx) = mpsc::sync_channel::<String>(WRITE_QUEUE_CAP);
-
         {
             let mut sessions = self.sessions.lock().map_err(|e| e.to_string())?;
             sessions.insert(
-                session_id.to_string(),
-                ShellSession {
-                    master,
-                    writer_tx,
-                    killer: killer.clone(),
-                    output_buffer: output_buffer.clone(),
-                },
+                params.session_id.to_string(),
+                ShellSession { master, writer_tx, killer, output_buffer: output_buffer.clone() },
             );
         }
 
-        // Reader thread — appends PTY output to a shared buffer the frontend
-        // polls via `poll_pty_output`.
-        let buf_for_reader = output_buffer.clone();
-        thread::spawn(move || {
-            let mut buf = [0u8; 65536];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        let data = String::from_utf8_lossy(&buf[..n]);
-                        if let Ok(mut output) = buf_for_reader.lock() {
-                            output.push_str(&data);
-                        }
-                    }
-                }
-            }
+        spawn_reader(reader, output_buffer);
+        spawn_writer(writer, writer_rx);
+        spawn_waiter(WaiterJob {
+            child,
+            sessions: self.sessions.clone(),
+            sid: params.session_id.to_string(),
+            app_handle: params.app_handle,
+            payload_kind: params.payload_kind,
         });
-
-        // Writer thread — owns the PTY writer and drains the bounded queue.
-        thread::spawn(move || {
-            while let Ok(data) = writer_rx.recv() {
-                if writer.write_all(data.as_bytes()).is_err() || writer.flush().is_err() {
-                    break;
-                }
-            }
-        });
-
-        // Waiter thread — blocking `wait()` for instant, reliable exit detection.
-        let sessions = self.sessions.clone();
-        let sid = session_id.to_string();
-        let app_waiter = app_handle;
-        thread::spawn(move || {
-            let mut child = child;
-            let success = child.wait().ok().map(|s| s.success()).unwrap_or(false);
-
-            if let Ok(mut map) = sessions.lock() {
-                map.remove(&sid);
-            }
-            let payload = match payload_kind {
-                ExitPayload::Plain => serde_json::json!({ "session_id": &sid }).to_string(),
-                ExitPayload::Run => {
-                    serde_json::json!({ "session_id": &sid, "success": success }).to_string()
-                }
-            };
-            let _ = app_waiter.emit("pty-exit", payload);
-        });
-
         Ok(())
     }
 
@@ -161,7 +122,14 @@ impl ShellManager {
         cmd.args(args);
         cmd.cwd(cwd);
 
-        self.launch(session_id, cmd, program, rows, cols, app_handle, ExitPayload::Plain)
+        self.launch(LaunchParams {
+            session_id,
+            cmd,
+            label: program,
+            size: PtySize { rows, cols, pixel_width: 0, pixel_height: 0 },
+            app_handle,
+            payload_kind: ExitPayload::Plain,
+        })
     }
 
     /// Spawn a user run-config command in a PTY via the system shell.
@@ -212,7 +180,14 @@ impl ShellManager {
             }
         }
 
-        self.launch(session_id, cmd, command, rows, cols, app_handle, ExitPayload::Run)
+        self.launch(LaunchParams {
+            session_id,
+            cmd,
+            label: command,
+            size: PtySize { rows, cols, pixel_width: 0, pixel_height: 0 },
+            app_handle,
+            payload_kind: ExitPayload::Run,
+        })
     }
 
     /// Resize the PTY for a specific session.
@@ -268,6 +243,76 @@ impl ShellManager {
             Ok(String::new())
         }
     }
+}
+
+/// openpty + spawn 子进程，返回组装好的句柄集。失败返回带 `label` 的报错。
+fn open_pty(cmd: CommandBuilder, size: PtySize, label: &str) -> Result<OpenedPty, String> {
+    let pty_system = native_pty_system();
+    let pty_pair = pty_system
+        .openpty(size)
+        .map_err(|e| format!("Failed to open PTY: {}", e))?;
+
+    let child = pty_pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|e| format!("Failed to spawn {}: {}", label, e))?;
+    drop(pty_pair.slave);
+
+    let killer = Arc::new(Mutex::new(child.clone_killer()));
+    let master = pty_pair.master;
+    let writer = master.take_writer().map_err(|e| format!("Failed to take writer: {}", e))?;
+    let reader = master.try_clone_reader().map_err(|e| format!("Failed to clone reader: {}", e))?;
+    let output_buffer = Arc::new(Mutex::new(String::new()));
+    Ok(OpenedPty { master, writer, reader, child, killer, output_buffer })
+}
+
+/// Reader 线程——把 PTY 输出追加进共享缓冲，前端经 `poll_pty_output` 轮询。
+fn spawn_reader(mut reader: Box<dyn Read + Send>, output_buffer: Arc<Mutex<String>>) {
+    thread::spawn(move || {
+        let mut buf = [0u8; 65536];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let data = String::from_utf8_lossy(&buf[..n]);
+                    if let Ok(mut output) = output_buffer.lock() {
+                        output.push_str(&data);
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Writer thread — owns the PTY writer and drains the bounded queue.
+fn spawn_writer(mut writer: Box<dyn Write + Send>, writer_rx: Receiver<String>) {
+    thread::spawn(move || {
+        while let Ok(data) = writer_rx.recv() {
+            if writer.write_all(data.as_bytes()).is_err() || writer.flush().is_err() {
+                break;
+            }
+        }
+    });
+}
+
+/// Waiter thread — blocking `wait()` for instant, reliable exit detection.
+/// 退出后从注册表移除会话，并 emit `pty-exit`（Plain 或 Run 载荷）。
+fn spawn_waiter(job: WaiterJob) {
+    thread::spawn(move || {
+        let WaiterJob { mut child, sessions, sid, app_handle, payload_kind } = job;
+        let success = child.wait().ok().map(|s| s.success()).unwrap_or(false);
+
+        if let Ok(mut map) = sessions.lock() {
+            map.remove(&sid);
+        }
+        let payload = match payload_kind {
+            ExitPayload::Plain => serde_json::json!({ "session_id": &sid }).to_string(),
+            ExitPayload::Run => {
+                serde_json::json!({ "session_id": &sid, "success": success }).to_string()
+            }
+        };
+        let _ = app_handle.emit("pty-exit", payload);
+    });
 }
 
 /// 把 `<java_home>/bin` 前置到现有 `PATH`，使子进程解析 `java`/`mvn` 等命令时
