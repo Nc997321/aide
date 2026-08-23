@@ -39,8 +39,7 @@ pub trait ProviderStrategy: Send + Sync {
     // Task 8-10 脚手架：动作列表面板届时会调用，当前保留 trait 契约。
     #[allow(dead_code)]
     fn actions(&self) -> Vec<ActionDef> { Vec::new() }
-    fn run_action(&self, cfg: &ProviderConfig, action: &str) -> Result<ActionResult, String> {
-        let _ = cfg;
+    fn run_action(&self, _cfg: &ProviderConfig, action: &str) -> Result<ActionResult, String> {
         Err(format!("action '{action}' not supported by {:?} kind", self.kind()))
     }
     fn test_connection(&self, cfg: &ProviderConfig) -> Result<ConnectionStatus, String>;
