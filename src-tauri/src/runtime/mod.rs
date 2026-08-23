@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex as TokioMutex;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use serde_json::Value;
 pub mod env;
 pub mod provider;
@@ -295,6 +295,13 @@ impl AgentRuntimeManager {
                             event.get("type").and_then(|t| t.as_str()).unwrap_or("unknown"),
                             "worker",
                         );
+                        // 自动化运行终态观测：非活跃会话/非终态事件立即返回，
+                        // 终态落盘在内部 spawn 出去做，不堵事件泵。
+                        if let Some(svc) = app
+                            .try_state::<std::sync::Arc<crate::automation::AutomationService>>()
+                        {
+                            svc.observe_chat_event(&event);
+                        }
                         let _ = chat_events_tx.send(event.clone());
                         let _ = app.emit("chat-event", event);
                     }

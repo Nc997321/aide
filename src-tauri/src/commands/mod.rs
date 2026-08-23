@@ -250,6 +250,24 @@ pub(crate) fn our_session_name(session_id: &str) -> Option<String> {
     None
 }
 
+/// 会话是否是自动化运行产物（tags 含 "automation"）。
+/// 运行转录仍是普通 session JSONL（查看器直接复用），但不进正常会话列表——
+/// 一个每天跑的任务 30 天产生 30+ 条记录，会把列表冲垮。tags 由
+/// AutomationService 发起运行时写入 `~/.aide/sessions/<id>.json`。
+pub(crate) fn our_session_is_automation(session_id: &str) -> bool {
+    let path = our_sessions_dir().join(format!("{}.json", session_id));
+    if let Ok(content) = fs::read_to_string(&path) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+            return v
+                .get("tags")
+                .and_then(|t| t.as_array())
+                .map(|a| a.iter().any(|x| x.as_str() == Some("automation")))
+                .unwrap_or(false);
+        }
+    }
+    false
+}
+
 /// legacy `config.json`——**纯遗留导入源**：老版本的设置+状态都写在这个文件里，
 /// 设置体系迁移（`settings::migration`）读它一次、导入 `settings.json` 后即可整体
 /// 删除。没有任何活代码应该再读写它；运行时状态的家是 `state_path()`。

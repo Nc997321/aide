@@ -17,6 +17,8 @@ import { open } from "@tauri-apps/plugin-shell";
 import { getVersion } from "@tauri-apps/api/app";
 import { ACard, AStatusDot } from "../ui";
 import AToast from "../ui/AToast.vue";
+import AutomationSidebarSection from "./automation/AutomationSidebarSection.vue";
+import SidebarSectionHead from "./SidebarSectionHead.vue";
 import { useToast } from "../composables/useToast";
 import type { Session, WorkspaceInfo } from "../types";
 
@@ -49,6 +51,13 @@ const searchQuery = ref("");
 // 不再全局「加载中...」连坐隐藏整表（旧写法点大会话量的工作区时全侧栏空白）。
 const workspacesLoading = ref(true);
 const sessionsLoading = ref(new Set<string>());
+/** 「会话」分区折叠态（与自动化分区平级，VS Code 资源管理器语义）。
+ *  注意与下方 sessionsCollapsed(wsKey)（「另外 N 个」分页折叠）是两回事。 */
+const sessionsSectionCollapsed = ref(false);
+/** 全工作区会话总数（会话分区头的计数徽标）。 */
+const totalSessionCount = computed(() =>
+  Object.values(sessionsByWorkspace.value).reduce((n, list) => n + list.length, 0),
+);
 
 // ── 工作区信任提示（Variant A 居中模态）── trustPrompt 非 null 时显示。
 // 不信任工作区首次激活时弹一次（maybePromptTrust），「暂不」后本会话不再弹；
@@ -444,27 +453,21 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 
 <template>
   <div class="sidebar-left">
-    <!-- Header -->
-    <div class="sidebar-header">
-      <span class="header-title">会话</span>
-      <button
-        class="pin-btn"
-        :class="{ pinned: props.pinned }"
-        v-tooltip="props.pinned ? '取消固定（恢复自动隐藏）' : '固定侧栏'"
-        @click="emit('toggle-pin')"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 17v5"/>
-          <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/>
-        </svg>
-      </button>
-      <button class="new-btn" @click="newSession" v-tooltip="'新建会话 (Ctrl+N)'">
-        新 (Ctrl+N)
-      </button>
-    </div>
-
-    <!-- Workspace + Session list -->
+    <!-- Workspace + Session list（「会话」降级为分区树的根分区之一，与自动化平级） -->
     <div class="session-list">
+      <SidebarSectionHead
+        icon="💬"
+        label="会话"
+        :count="totalSessionCount || undefined"
+        :expanded="!sessionsSectionCollapsed"
+        @toggle="sessionsSectionCollapsed = !sessionsSectionCollapsed"
+      >
+        <template #actions>
+          <button class="sec-act-btn" v-tooltip="'新建会话 (Ctrl+N)'" @click="newSession">＋</button>
+        </template>
+      </SidebarSectionHead>
+
+      <template v-if="!sessionsSectionCollapsed">
       <div v-if="workspacesLoading" class="session-empty muted">加载中...</div>
 
       <template v-else v-for="ws in filteredWorkspaces" :key="ws.key">
@@ -553,6 +556,11 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
           </template>
         </template>
       </template>
+      </template>
+
+      <!-- 自动化分区：分区树的第二个根分区（会话工作区树之下，同区滚动），
+           选中任务由 App.vue 把主区切成 AutomationMain（PaneLayout v-show 保活） -->
+      <AutomationSidebarSection />
     </div>
 
     <!-- Update banner -->
@@ -564,9 +572,20 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
       <button class="update-dismiss" v-tooltip="'忽略'" @click.stop="dismissUpdate">✕</button>
     </div>
 
-    <!-- Status bar: actions（供应商切换已搬到标题栏 ProviderSwitcher） -->
+    <!-- Status bar: actions（供应商切换已搬到标题栏 ProviderSwitcher；pin 随分区树改造从 header 挪到此处） -->
     <div class="status-bar">
       <div class="status-bar-actions">
+        <button
+          class="status-bar-btn pin"
+          :class="{ pinned: props.pinned }"
+          v-tooltip="props.pinned ? '取消固定（恢复自动隐藏）' : '固定侧栏'"
+          @click="emit('toggle-pin')"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 17v5"/>
+            <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/>
+          </svg>
+        </button>
         <button class="status-bar-btn" v-tooltip="'设置'" @click="emit('open-settings')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3"/>
@@ -614,75 +633,10 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
-.sidebar-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--aide-surface-default);
-}
-
-.header-title {
-  flex: 1; /* 把钉子/新建按钮挤到右侧 */
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--aide-text-muted);
-}
-
-/* 钉子按钮：未固定斜 45°（"没钉上"），固定竖直 + accent 高亮（QQ 侧栏语义） */
-.pin-btn {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  margin-right: 6px;
-  border: none;
-  border-radius: var(--aide-radius-sm);
-  background: transparent;
-  color: var(--aide-text-muted);
-  cursor: pointer;
-  transition: background var(--aide-ease-t), color var(--aide-ease-t);
-}
-.pin-btn:hover {
-  background: var(--aide-surface-hover);
-  color: var(--aide-text-primary);
-}
-.pin-btn svg {
-  width: 13px;
-  height: 13px;
-  transform: rotate(45deg);
-  transition: transform var(--aide-ease-t);
-}
-.pin-btn.pinned {
-  color: var(--aide-accent);
-  background: var(--aide-accent-subtle);
-}
-.pin-btn.pinned svg {
-  transform: none;
-}
-
-.new-btn {
-  background: var(--aide-accent-subtle);
-  border: 1px solid color-mix(in srgb, var(--aide-accent) 20%, transparent);
-  color: var(--aide-accent);
-  padding: 4px 12px;
-  border-radius: var(--aide-radius-sm);
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-.new-btn:hover {
-  background: color-mix(in srgb, var(--aide-accent) 20%, transparent);
-  border-color: color-mix(in srgb, var(--aide-accent) 35%, transparent);
-}
-
 .session-list {
   flex: 1;
   overflow-y: auto;
-  padding: 0 10px 10px;
+  padding: 10px 10px 10px 0;
 }
 
 /* ── Workspace item ── */
@@ -1033,6 +987,22 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 .status-bar-btn:hover {
   color: var(--aide-text-primary);
   background: var(--aide-surface-default);
+}
+
+/* 钉子按钮（分区树改造后挪到状态栏）：未固定斜 45°（"没钉上"），
+   固定竖直 + accent 高亮（QQ 侧栏语义，沿用旧 header 的视觉约定） */
+.status-bar-btn.pin svg {
+  width: 13px;
+  height: 13px;
+  transform: rotate(45deg);
+  transition: transform var(--aide-ease-t);
+}
+.status-bar-btn.pin.pinned {
+  color: var(--aide-accent);
+  background: var(--aide-accent-subtle);
+}
+.status-bar-btn.pin.pinned svg {
+  transform: none;
 }
 
 /* ── 工作区信任徽标 ── */

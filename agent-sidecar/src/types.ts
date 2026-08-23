@@ -234,6 +234,26 @@ export type SidecarCommand =
       // 仅 btw 任务支线使用;问答支线(轻量/完整)绝不能用——改工具列表会改
       // 请求前缀,fork 支线的 prompt cache 必崩(2026-08-09 实锤)。
       tools?: string[];
+      // 自动化运行（无人值守 headless 会话，调度器发起）：与 btw 的区别是
+      // 转录落盘（persistSession 不动）。preset 是权限预设（auto=CLI 自动裁决/
+      // full=全放行）；tools 恒为 ["*"]（可见性不收口，行为层收口）；
+      // mcp_allowlist 是预授权连接器 server key（policy hook 按它裁决 MCP 工具）；
+      // 终态（message_stop/error）后 worker 自毁。
+      automation?: {
+        task_id: string;
+        run_id: string;
+        preset?: string;
+        tools: string[];
+        mcp_allowlist: string[];
+        // 任务目录绝对路径：写工具落进此目录即放行（蒸馏/自愈合写回在 cwd 之外）
+        task_dir?: string;
+        max_turns?: number;
+        max_budget_usd?: number;
+        // 蒸馏轮置 true：resume 运行会话但 fork 成新 SDK 会话 id——否则 worker
+        // re-key 后与运行会话同 id，任何发往运行会话的命令（关 tab 的
+        // session_stop / ESC interrupt）都会误杀蒸馏（2026-08-23 实锤）
+        fork?: boolean;
+      };
       // 重开已有会话时带：SDK 据此 resume 已有会话上下文。与 session_id（路由键）
       // 解耦——session_id 用于 SessionManager 路由，resume_session_id 用于 SDK resume。
       // 省略=全新会话不 resume。btw 用 fork_from + forkSession，不带这个。

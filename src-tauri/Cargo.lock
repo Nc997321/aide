@@ -58,6 +58,7 @@ version = "0.8.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
+ "chrono",
  "clipboard-win 5.4.1",
  "dunce",
  "encoding_rs",

@@ -108,3 +108,68 @@ describe("SessionManager — provider env refresh", () => {
     expect((worker as any).currentModel).toBe("new-model");
   });
 });
+
+describe("SessionWorker — 自动化会话硬停补终态（2026-08-23 蒸馏被误杀回归）", () => {
+  let stdoutSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  });
+
+  function emittedEvents(sid: string): any[] {
+    // 必须按 session_id 过滤：文件内前面的测试（provider env 等）起过桩 query，
+    // 其异步收官会迟写到 stdout，落进本用例的 spy（单测隔离跑可复现差异）
+    return stdoutSpy.mock.calls
+      .map((c) => {
+        try {
+          return JSON.parse(String(c[0]));
+        } catch {
+          return null;
+        }
+      })
+      .filter((e) => e && e.session_id === sid);
+  }
+
+  /** 建 worker 并直接塞自动化配置/回合态（绕开 handleSend——它会 startLoop spawn 真 CLI）。 */
+  function makeWorker(manager: SessionManager, sid: string, opts: { automation: boolean; midTurn: boolean }) {
+    const worker = (manager as any).__testCreateWorker(sid) as any;
+    if (opts.automation) {
+      worker.automationConfig = {
+        taskId: "aut_t",
+        runId: "run_t",
+        preset: "auto",
+        tools: ["*"],
+        mcpAllowlist: [],
+        taskDir: "",
+        maxTurns: 10,
+        maxBudgetUsd: 1,
+      };
+    }
+    worker.turnActive = opts.midTurn;
+    return worker;
+  }
+
+  it("自动化会话回合中途 stop → 补发 message_stop(interrupted)，调度器能收尾", () => {
+    const manager = new SessionManager();
+    const worker = makeWorker(manager, "run_1", { automation: true, midTurn: true });
+    worker.stop();
+    const stops = emittedEvents("run_1").filter((e) => e.type === "message_stop");
+    expect(stops).toHaveLength(1);
+    expect(stops[0].stop_reason).toBe("interrupted");
+    expect(stops[0].session_id).toBe("run_1");
+  });
+
+  it("自动化会话空闲时 stop → 不补（自然终态的 message_stop 已发）", () => {
+    const manager = new SessionManager();
+    const worker = makeWorker(manager, "run_2", { automation: true, midTurn: false });
+    worker.stop();
+    expect(emittedEvents("run_2").filter((e) => e.type === "message_stop")).toHaveLength(0);
+  });
+
+  it("普通会话回合中途 stop → 不补（前端走自己的中断收尾语义）", () => {
+    const manager = new SessionManager();
+    const worker = makeWorker(manager, "s1", { automation: false, midTurn: true });
+    worker.stop();
+    expect(emittedEvents("s1").filter((e) => e.type === "message_stop")).toHaveLength(0);
+  });
+});

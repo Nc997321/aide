@@ -1,4 +1,5 @@
 mod codegraph;
+mod automation;
 // commands/remote/settings 公开给集成测试（tests/ 目录只能访问 crate 公开 API，
 // 测试分离布局要求源文件零测试代码，集成测试是唯一测试面）
 pub mod commands;
@@ -120,6 +121,7 @@ pub fn run() {
         .manage(PendingOpenFile(std::sync::Mutex::new(None)))
         .manage(std::sync::Arc::new(codegraph::CodeGraphState::new()))
         .manage(std::sync::Arc::new(lsp::LspState::new()))
+        .manage(std::sync::Arc::new(automation::AutomationService::new()))
         .setup(|app| {
             app.state::<std::sync::Arc<settings::SettingsService>>()
                 .initialize_blocking()
@@ -208,6 +210,13 @@ pub fn run() {
                 }
             });
 
+            // 自动化调度器：常驻 tokio task（30s tick + 启动 missed-run 扫描）。
+            // M1 只观测日志；M2 接通 send_to_runtime 执行链。
+            {
+                let svc = app.state::<std::sync::Arc<automation::AutomationService>>();
+                svc.inner().clone().start(app.handle().clone());
+            }
+
             // 冷启动带参：首次即被 `aide.exe <path>` 唤起时，single-instance 回调
             // 不会触发（首个实例），这里把路径暂存到 PendingOpenFile，前端 mount
             // 时通过 consume_pending_open_file 取走兜底；同时 emit 一份，若前端
@@ -258,6 +267,17 @@ pub fn run() {
             commands::filesystem::copy_file,
             commands::filesystem::move_file,
             commands::session::list_sessions,
+            automation::commands::list_automations,
+            automation::commands::get_automation,
+            automation::commands::create_automation,
+            automation::commands::update_automation,
+            automation::commands::delete_automation,
+            automation::commands::set_automation_enabled,
+            automation::commands::list_automation_runs,
+            automation::commands::automation_run_stats,
+            automation::commands::run_automation_now,
+            automation::commands::get_automation_playbook,
+            automation::commands::redistill_automation,
             commands::session::list_sessions_for_workspace,
             commands::session::create_session,
             commands::session::delete_session,

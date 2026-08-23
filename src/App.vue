@@ -11,6 +11,8 @@ const SettingsPanel = defineAsyncComponent(() => import("./components/SettingsPa
 const OnboardingWizard = defineAsyncComponent(() => import("./components/onboarding/OnboardingWizard.vue"));
 const RunConfigsDialog = defineAsyncComponent(() => import("./components/RunConfigsDialog.vue"));
 import PaneLayout from "./components/PaneLayout.vue";
+import AutomationMain from "./components/automation/AutomationMain.vue";
+import { useAutomation } from "./composables/useAutomation";
 import { useChatSession, isPendingSession, setAuthRequiredHandler } from "./composables/useChatSession";
 import { usePaneLayout } from "./composables/usePaneLayout";
 import { usePaneLayoutPersistence } from "./composables/paneLayout/persistence";
@@ -185,6 +187,7 @@ const paletteRef = ref<InstanceType<typeof ACommandPalette> | null>(null);
 // 「当前会话」= 聚焦分屏组激活 tab 的会话——布局层的计算属性，所有下游
 // （右面板 / 权限弹窗 / 标题栏 / 侧栏高亮）沿用旧的单一 activeSessionId 语义。
 const paneLayout = usePaneLayout();
+const automation = useAutomation();
 const paneLayoutPersistence = usePaneLayoutPersistence();
 const activeSessionId = paneLayout.activeSessionId;
 // App 级 useChatSession 只用来拿全局单例的 onSessionCreated 回调（module 级
@@ -407,6 +410,8 @@ function onSearchFilesChanged() {
 }
 
 function onSessionChanged(id: string) {
+  // 选中会话时关掉自动化面板，主区切回聊天
+  automation.closePanel();
   // 打开语义（预览覆盖/全局唯一聚焦）由布局层统一裁决
   paneLayout.openSession(id);
 }
@@ -776,6 +781,9 @@ onMounted(async () => {
   onboarding.open();
   // 上下文兜底：无凭证发消息时，sendMessage 拦截 + 调本 handler → 打开 onboarding 登录步。
   setAuthRequiredHandler(() => onboarding.openAt("login"));
+
+  // 自动化：拉任务表 + 注册运行终态监听（不阻塞首屏）
+  void automation.init();
   // 启动时拉最新模型覆盖"系统默认"5 字段——fire-and-forget 不 await，UI 先渲染，
   // 拉完响应式刷新 systemDefaultMappings（ProviderSettings 系统默认下 5 字段只读）。
   // 无认证/网络失败时 Rust 侧保留旧值，前端不阻塞。
@@ -1031,9 +1039,11 @@ onUnmounted(() => {
         @mousedown="leftResize.onMousedown"
       />
 
-      <!-- Center panel: 多 tab + 任意分屏（每组自治接线见 panelayout/PaneGroup.vue） -->
+      <!-- Center panel: 多 tab + 任意分屏（每组自治接线见 panelayout/PaneGroup.vue）。
+           自动化面板激活时盖在上面；PaneLayout 用 v-show 保活（流式会话不掉线） -->
       <div class="panel-center">
-        <PaneLayout :workspace-path="workspacePath" class="h-full" />
+        <AutomationMain v-if="automation.state.view !== null" class="h-full" />
+        <PaneLayout v-show="automation.state.view === null" :workspace-path="workspacePath" class="h-full" />
       </div>
 
       <!-- Right resize handle -->

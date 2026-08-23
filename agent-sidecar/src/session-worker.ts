@@ -9,6 +9,12 @@ import { BgTaskTail } from "./bgTaskOutputTail.js";
 import { JumpQueueController } from "./jumpQueue.js";
 import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { btwQueryOverrides, forkResumeOptions } from "./btwOptions.js";
+import {
+  automationHookVerdict,
+  automationQueryOverrides,
+  filterMcpServers,
+  type AutomationConfig,
+} from "./automation.js";
 import { generateSessionTitle } from "./titleGenerator.js";
 import { applyModelSwitch } from "./modelSwitch.js";
 import { applyEffortSwitch, normalizeEffort } from "./effortSwitch.js";
@@ -220,6 +226,11 @@ export class SessionWorker {
    *  前缀最小化)。与 lightweightMode 互斥——问答支线保持与主会话前缀一致。 */
   private taskTools?: string[];
 
+  // ---- 自动化运行（无人值守 headless，调度器发起） ----
+  // 非空时：policy hook 白名单裁决 + skills/plugins 关 + thinking 关 + partial 关
+  // + 终态自毁。与 btwMode 互斥（调度器永不发 btw 标志）。
+  private automationConfig?: AutomationConfig;
+
   // ---- 工作目录 ----
   private cwd?: string;
 
@@ -358,6 +369,14 @@ export class SessionWorker {
           message: "btw 支线无人应答权限请求(仅策略白名单内操作可用)",
         };
       }
+      // 自动化运行同理无人应答：policy hook 已对白名单内操作 allow、其余 deny，
+      // 能落到这里的都是 hook 未覆盖的边角——一律 deny（绝不 defer 等弹窗）。
+      if (this.automationConfig) {
+        return {
+          behavior: "deny" as const,
+          message: "自动化运行无人值守(仅白名单内工具可用)",
+        };
+      }
       return permissionCallback(toolName, input, opts as any);
     };
   }
@@ -433,6 +452,23 @@ export class SessionWorker {
             permissionDecision: "deny" as const,
             permissionDecisionReason:
               "轻量支线为纯问答,工具已禁用,请直接根据上下文回答",
+          },
+        };
+      }
+      // 自动化运行：三值裁决。MCP 工具按连接器白名单（与预设无关）；内建工具
+      // full 预设 allow、auto 预设返回 {} 不表态——交还 CLI auto 模式（安全自动
+      // 放行，高危询问 → canUseTool 自动化分支兜底 deny，无人值守没人应答弹窗）。
+      if (this.automationConfig) {
+        const verdict = automationHookVerdict(toolName, toolInput, this.automationConfig);
+        if (verdict === "defer") return {};
+        return {
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse" as const,
+            permissionDecision: verdict === "allow" ? ("allow" as const) : ("deny" as const),
+            permissionDecisionReason:
+              verdict === "allow"
+                ? "自动化任务预授权"
+                : `连接器未预授权（可用: ${this.automationConfig.mcpAllowlist.join(", ") || "无"}）`,
           },
         };
       }
@@ -818,6 +854,25 @@ export class SessionWorker {
       }
     }
 
+    // 自动化运行（调度器发起的无人值守会话）：存配置，白名单裁决在
+    // makePolicyHook / makeCanUseToolCallback 里读它。转录落盘（不动
+    // persistSession）；resume_session_id（蒸馏轮）走下方既有通道。
+    if (cmd.automation) {
+      this.automationConfig = {
+        taskId: cmd.automation.task_id,
+        runId: cmd.automation.run_id,
+        preset: cmd.automation.preset === "full" ? "full" : "auto",
+        tools: cmd.automation.tools ?? ["*"],
+        mcpAllowlist: cmd.automation.mcp_allowlist ?? [],
+        taskDir: cmd.automation.task_dir ?? "",
+        maxTurns: cmd.automation.max_turns,
+        maxBudgetUsd: cmd.automation.max_budget_usd,
+      };
+      // 蒸馏轮 fork：resume 运行会话的上下文但写成新 SDK 会话——worker re-key
+      // 到运行会话 id 会让「关运行 tab → session_stop」之类的命令误杀蒸馏轮
+      if (cmd.automation.fork) this.shouldForkNextConnect = true;
+    }
+
     // 新一轮用户消息：不立即清 TODO——让旧轮在过渡期仍可见，等本轮首个新
     // TaskCreate 落地时再覆盖式清空（用户要的「有新 todo 才覆盖」）。无新
     // TaskCreate 则旧 task 保留；新轮 Claude 用 TaskUpdate 推进旧 task 时旧
@@ -927,7 +982,9 @@ export class SessionWorker {
             ? null
             : docsMcpRegistration(effectiveCwd, process.env, trusted);
 
-          if (this.resumeSource && this.shouldForkNextConnect && !this.btwMode) {
+          // pendingFork 只服务「供应商切换」通知——自动化蒸馏轮也 fork（隔离
+          // 运行会话 id），但那是内部机制，不该冒出「已切换供应商」提示。
+          if (this.resumeSource && this.shouldForkNextConnect && !this.btwMode && !this.automationConfig) {
             this.pendingFork = true;
           }
 
@@ -987,16 +1044,24 @@ export class SessionWorker {
               // btw 任务支线:skills/plugins 全关——全新会话没有缓存可吃,
               // 前缀最小化(skill 清单/plugin 自带 MCP 工具都不进上下文)。
               // 轻量 btw 保持 "all"/全量:与主会话前缀对齐吃 prompt cache。
-              skills: this.taskTools ? [] : "all",
-              plugins: this.taskTools
+              // 自动化运行同理全关：每次都是全新会话，精简基座 = 省钱 + 行为确定。
+              skills: this.taskTools || this.automationConfig ? [] : "all",
+              plugins: this.taskTools || this.automationConfig
                 ? []
                 : [...buildPluginsOption(), ...buildDispatchPluginsOption(effectiveCwd, trusted, this.lightweightMode)],
               hooks: assembleHooks(builtinHooks, userHooks),
-              mcpServers: assembleMcpServers({ ...(codegraphMcp ?? {}), ...(docsMcp ?? {}) }, userMcp),
+              // 自动化：未预授权的连接器（MCP server）不挂载——其工具对模型根本
+              // 不存在（第一层收口）；policy hook 白名单裁决是第二层。
+              mcpServers: this.automationConfig
+                ? filterMcpServers(
+                    assembleMcpServers({ ...(codegraphMcp ?? {}), ...(docsMcp ?? {}) }, userMcp),
+                    this.automationConfig.mcpAllowlist,
+                  )
+                : assembleMcpServers({ ...(codegraphMcp ?? {}), ...(docsMcp ?? {}) }, userMcp),
               // 主会话开 partial：让 thinking_delta 逐字流式（mapper 只放 thinking_delta，
               // text 仍走整块，避开历史 partial 卡死坑，见 2026-08-07-thinking-streaming-design）。
               // btw 轻量支线保持 partial=off（mapper 的子代理隔离守卫也对 btw 生效）。
-              includePartialMessages: !this.btwMode,
+              includePartialMessages: !this.btwMode && !this.automationConfig,
               ...(this.currentModel ? { model: this.currentModel } : {}),
               // effort 的 spawn 通道（会话中切换走 set_effort → applyFlagSettings）。
               ...(this.currentEffort ? { effort: this.currentEffort as EffortLevel } : {}),
@@ -1009,7 +1074,7 @@ export class SessionWorker {
               // 2026-08-21 mock 端点实锤），API 层关不掉，靠下方 mapSdkMessage 的
               // showThinking 展示层剥除兜底。btw 支线恒 disabled（轻量问答省 token）；
               // 与 effort 解耦（2026-08-21 决策：effort 切换不再联动 thinking）。
-              thinking: this.btwMode
+              thinking: this.btwMode || this.automationConfig
                 ? { type: "disabled" }
                 : this.thinkingEnabled
                   ? { type: "adaptive", display: "summarized" }
@@ -1023,6 +1088,8 @@ export class SessionWorker {
               // 任务支线(tools 白名单)在此覆盖前面的统一 allowedTools;问答支线
               // 只带 persistSession:false,不碰工具列表(缓存前缀红线)。
               ...btwQueryOverrides(this.btwMode, this.taskTools),
+              // 自动化:tools 收成白名单 + maxTurns/maxBudgetUsd 护栏透传。
+              ...automationQueryOverrides(this.automationConfig),
               env: cliEnv,
             },
           });
@@ -1138,13 +1205,14 @@ export class SessionWorker {
               this.toolLifecycle.reset();
               void this.emitContextUsage(q);
               void this.emitRateLimit(q);
-              // btw 是一次性支线：回合结束即自毁释放 claude.exe。streaming-input
+              // btw/自动化都是一次性会话：回合结束即自毁释放 claude.exe。streaming-input
               // 的 query 不主动关会连进程一起永远挂着——CLI 的 pid 元数据留在
               // ~/.aide/claude/sessions/ 被 list_sessions 扫成侧栏幽灵空会话，
               // 且每条 btw 白占几百 MB（2026-08-02 实锤 pid 9464 挂 12min+）。
               // message_stop 已在本轮迭代经 mapSdkMessage 发出；setImmediate
               // 推迟到迭代体外，避免在 for-await 迭代中 close 自己。
-              if (this.btwMode) setImmediate(() => this.selfTeardown());
+              // （result 成功与错误子类型都走到这里，两条路都自毁。）
+              if (this.btwMode || this.automationConfig) setImmediate(() => this.selfTeardown());
             }
           }
           // for await 正常结束（queue closed）
@@ -1161,6 +1229,9 @@ export class SessionWorker {
             await this.performImageRollback();
           } else if (e?.name !== "AbortError") {
             this.emit({ type: "error", message: String(e?.message ?? e), fatal: false });
+            // 自动化一次性会话：query 循环抛错（SDK 初始化失败等）即终态，
+            // 没有「用户下一条消息重试」的后续——自毁防幽灵 worker。
+            if (this.automationConfig) setImmediate(() => this.selfTeardown());
             // 非 AbortError = 会话级故障（SDK 初始化失败等）：break 退出循环，
             // 等用户下一条消息重新 startLoop。继续循环会无限快速重试——
             // 2026-08-21 实锤 "Native CLI binary not found" 每秒几十次风暴。
@@ -1307,7 +1378,15 @@ export class SessionWorker {
 
   /** 停止会话：关闭 query，释放 claude.exe，清理资源 */
   stop(): void {
+    // 自动化一次性会话在回合中途被硬停（session_stop 等）：补一条终态事件，
+    // 否则调度器永远等不到 message_stop，运行卡「运行中」直到重启自愈。
+    // 自然终态（result→message_stop 已发）时 turnActive=false，不会补这条；
+    // 极小窗口的重复也会被执行侧幂等忽略（路由摘除后事件无处路由）。
+    const emitSyntheticTerminal = !!this.automationConfig && this.turnActive;
     this.stopped = true;
+    if (emitSyntheticTerminal) {
+      this.emit({ type: "message_stop", stop_reason: "interrupted", total_cost_usd: null, usage: null });
+    }
     // 进程没了，running 的后台任务永远等不到结束信号——统一收尾 stopped，
     // 先停 tail（finalFlush 冲掉尾巴）再发终态，UI 不会留「永远运行中」的僵尸任务。
     for (const ev of this.bgTaskTracker.stopAllRunning()) {

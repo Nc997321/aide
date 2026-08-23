@@ -35,6 +35,10 @@ portable-pty = "0.8"
 notify-rust = "4"
 tokio = { version = "1", features = ["full"] }
 once_cell = "1"
+# 自动化调度的本地日历运算（weekday/月长/next-fire）。已在依赖树里（tauri 链传递引入），
+# 这里只是提升为直接依赖，不增加编译成本。刻意用 NaiveDateTime 做「墙钟时间」语义——
+# 「每天 18:30」应跟随本地墙钟，不做 UTC/DST 换算。
+chrono = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"

@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use tauri::State;
 
-use super::{Session, ChatMessageItem, HistoryBlock, LastEventInfo, ChangeRoundData, WorkspaceState, project_root_for_commands, find_session_jsonl_globally, claude_projects_dir, claude_sessions_dir, our_sessions_dir, our_session_name};
+use super::{Session, ChatMessageItem, HistoryBlock, LastEventInfo, ChangeRoundData, WorkspaceState, project_root_for_commands, find_session_jsonl_globally, claude_projects_dir, claude_sessions_dir, our_sessions_dir, our_session_name, our_session_is_automation};
 
 /// 扫描目录 + 每个会话读一次 .jsonl 取末条消息，工作区会话多时是实打实的重 IO；
 /// 同步 command 跑在主线程上会卡窗口，这里主线程只取工作区快照，扫描进 blocking 线程。
@@ -48,6 +48,10 @@ fn scan_project_jsonl_sessions(
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
         if session_id.is_empty() || sessions.iter().any(|s| s.id == session_id) {
+            continue;
+        }
+        // 自动化运行产物不进正常会话列表（tags 机制见 our_session_is_automation）
+        if our_session_is_automation(&session_id) {
             continue;
         }
 
@@ -121,6 +125,11 @@ fn list_sessions_blocking(
 
                     // Skip if already in the list (has a .jsonl file)
                     if sessions.iter().any(|s| s.id == session_id) {
+                        continue;
+                    }
+
+                    // 自动化运行产物不进正常会话列表
+                    if our_session_is_automation(session_id) {
                         continue;
                     }
 
@@ -868,7 +877,9 @@ fn claude_session_meta(session_id: &str) -> Option<(String, u64)> {
     None
 }
 
-fn last_jsonl_message(jsonl_path: &std::path::Path) -> String {
+/// 取 jsonl 末条消息的文本（≤80 字）。自动化运行摘要（RunRecord.summary）也用它——
+/// 运行终态时读本运行转录的尾行。
+pub(crate) fn last_jsonl_message(jsonl_path: &std::path::Path) -> String {
     let file = match fs::File::open(jsonl_path) {
         Ok(f) => f,
         Err(_) => return String::new(),
