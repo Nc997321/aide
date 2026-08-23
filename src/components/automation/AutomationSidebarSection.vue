@@ -1,14 +1,23 @@
 <script setup lang="ts">
 /** 侧栏「自动化」分区：分区树里的根分区之一（会话工作区树之下），
- *  VS Code 资源管理器范式——可折叠、hover 出新建按钮、有任务在跑时亮呼吸点。
- *  数据全走 useAutomation 单例；选中任务 → 主区 AutomationDetail。 */
+ *  大导航行范式——可折叠、右槽位 计数⇄⋯（⋯ = 新建任务菜单）、
+ *  有任务在跑时亮呼吸点。数据全走 useAutomation 单例；
+ *  选中任务 → 主区 AutomationDetail。 */
 import { ref } from "vue";
 import { useAutomation, scheduleText, shortTime } from "../../composables/useAutomation";
+import { useContextMenu } from "../../composables/useContextMenu";
+import { automationSectionMenuItems } from "../../menus/contextMenus";
 import SidebarSectionHead from "../SidebarSectionHead.vue";
 import type { AutomationTask } from "../../api/automation";
 
 const auto = useAutomation();
+const { show } = useContextMenu();
 const collapsed = ref(false);
+
+/** 导航行 ⋯：新建任务入口（与右键体系同一个 useContextMenu）。 */
+function onSectionMenu(e: MouseEvent) {
+  show(e.clientX, e.clientY, automationSectionMenuItems(() => auto.openEditor(null)));
+}
 
 function dotClass(t: AutomationTask): string {
   if (t.lastRunStatus === "running") return "running";
@@ -31,23 +40,23 @@ function metaText(t: AutomationTask): string {
 <template>
   <div class="auto-sec">
     <SidebarSectionHead
-      icon="⚡"
       label="自动化"
       :count="auto.state.tasks.length || undefined"
       :live="auto.state.runningIds.size > 0"
       live-title="有任务正在运行"
       :expanded="!collapsed"
       @toggle="collapsed = !collapsed"
+      @menu="onSectionMenu"
     >
-      <template #actions>
-        <button class="sec-act-btn" v-tooltip="'新建自动化任务'" @click="auto.openEditor(null)">＋</button>
+      <template #icon>
+        <svg viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </template>
     </SidebarSectionHead>
 
-    <!-- 任务节点 -->
+    <!-- 任务节点（行式，与会话行同一语言） -->
     <div v-if="!collapsed" class="sec-children">
       <div v-if="auto.state.tasks.length === 0" class="sec-empty">
-        还没有任务，点 ＋ 新建一个定时助手
+        还没有任务，点上方 ⋯ 新建一个定时助手
       </div>
       <div
         v-for="t in auto.state.tasks"
@@ -69,50 +78,60 @@ function metaText(t: AutomationTask): string {
 
 <style scoped>
 .auto-sec {
-  margin-top: 8px;
-  border-top: 1px solid var(--aide-border-subtle);
-  padding-top: 8px;
+  margin-top: 2px;
 }
 
 .sec-children {
-  padding: 0 10px 0 14px;
+  padding: 3px 0 6px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
 }
 
 .sec-empty {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--aide-text-muted);
-  padding: 8px 10px;
+  padding: 10px 12px 10px 28px;
+  margin: 3px 10px 0;
   line-height: 1.6;
 }
 
+/* 行式任务节点：与会话行同一语言（28px 缩进 / 常态淡底 / 选中 accent 竖条） */
 .task-node {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px 8px;
-  border-radius: var(--aide-radius-sm);
-  border: 1px solid transparent;
+  gap: 4px;
+  padding: 10px 12px 10px 28px;
+  margin: 3px 10px 0;
+  background: var(--aide-surface-default);
+  border-radius: var(--aide-radius-md);
   cursor: pointer;
-  transition: all var(--aide-ease-t);
+  transition: background var(--aide-ease-t);
 }
 .task-node:hover {
   background: var(--aide-surface-hover);
 }
 .task-node.on {
   background: var(--aide-accent-subtle);
-  border-color: color-mix(in srgb, var(--aide-accent) 35%, transparent);
+}
+.task-node.on::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--aide-accent);
 }
 
 .r1 {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
 }
 .nm {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--aide-text-primary);
   overflow: hidden;
@@ -128,15 +147,16 @@ function metaText(t: AutomationTask): string {
   margin-left: 4px;
 }
 .sched {
-  font-size: 10px;
+  font-size: 10.5px;
   color: var(--aide-text-muted);
   font-family: "Cascadia Code", "Consolas", monospace;
   flex-shrink: 0;
 }
 .r2 {
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--aide-text-muted);
   padding-left: 14px;
+  line-height: 1.45;
 }
 .r2.live {
   color: var(--aide-info);
@@ -161,5 +181,10 @@ function metaText(t: AutomationTask): string {
 }
 .status-dot.idle {
   background: var(--aide-text-muted);
+}
+@keyframes auto-pulse {
+  50% {
+    opacity: 0.35;
+  }
 }
 </style>

@@ -240,7 +240,19 @@ export function sessionMenuItems(
   ];
 }
 
-// ── Workspace context menu（侧栏工作区行右键） ──
+// ── Sidebar section menu（侧栏分区导航行 ⋯ 菜单）──
+
+/** 「会话」导航行 ⋯：新建入口从分区头 ＋ 按钮收进此处（右槽位 计数⇄⋯ 交互）。 */
+export function sessionSectionMenuItems(onNewSession: () => void): MenuItem[] {
+  return [{ label: "新建会话", kbd: "Ctrl+N", action: onNewSession }];
+}
+
+/** 「自动化」导航行 ⋯：同上，新建任务入口。 */
+export function automationSectionMenuItems(onNewTask: () => void): MenuItem[] {
+  return [{ label: "新建自动化任务", action: onNewTask }];
+}
+
+// ── Workspace context menu（侧栏工作区行右键/⋯ 共用） ──
 
 export function workspaceMenuItems(
   ws: { key: string; name: string; missing: boolean },

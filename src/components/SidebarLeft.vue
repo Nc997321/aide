@@ -7,7 +7,7 @@ import { useUpdate } from "../composables/useUpdate";
 import { useRecent } from "../composables/useRecent";
 import { useSessionNames } from "../composables/useSessionNames";
 import { useSessionWorkspaces } from "../composables/useSessionWorkspaces";
-import { sessionMenuItems, workspaceMenuItems } from "../menus/contextMenus";
+import { sessionMenuItems, sessionSectionMenuItems, workspaceMenuItems } from "../menus/contextMenus";
 import { useWorkspaces } from "../composables/useWorkspaces";
 import { useSettings } from "../composables/useSettings";
 import { useWorkspaceTrust } from "../composables/useWorkspaceTrust";
@@ -15,8 +15,9 @@ import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
 import { api } from "../api";
 import { open } from "@tauri-apps/plugin-shell";
 import { getVersion } from "@tauri-apps/api/app";
-import { ACard, AStatusDot } from "../ui";
+import { AStatusDot } from "../ui";
 import AToast from "../ui/AToast.vue";
+import AppLogo from "./AppLogo.vue";
 import AutomationSidebarSection from "./automation/AutomationSidebarSection.vue";
 import SidebarSectionHead from "./SidebarSectionHead.vue";
 import { useToast } from "../composables/useToast";
@@ -51,6 +52,8 @@ const searchQuery = ref("");
 // 不再全局「加载中...」连坐隐藏整表（旧写法点大会话量的工作区时全侧栏空白）。
 const workspacesLoading = ref(true);
 const sessionsLoading = ref(new Set<string>());
+/** 品牌区版本号（onMounted 里 getVersion 拉取，与更新检查共用一次调用）。 */
+const appVersion = ref("");
 /** 「会话」分区折叠态（与自动化分区平级，VS Code 资源管理器语义）。
  *  注意与下方 sessionsCollapsed(wsKey)（「另外 N 个」分页折叠）是两回事。 */
 const sessionsSectionCollapsed = ref(false);
@@ -385,6 +388,11 @@ function onSessionContextMenu(e: MouseEvent, wsKey: string, id: string) {
   );
 }
 
+/** 「会话」导航行 ⋯：新建入口（v3 右槽位交互，与右键体系同一个 useContextMenu）。 */
+function onSessionSectionMenu(e: MouseEvent) {
+  show(e.clientX, e.clientY, sessionSectionMenuItems(newSession));
+}
+
 function onWorkspaceContextMenu(e: MouseEvent, ws: WorkspaceInfo) {
   e.preventDefault();
   e.stopPropagation();
@@ -428,8 +436,9 @@ onMounted(async () => {
   void refreshTrust(workspaces.value.map((w) => w.name).filter(Boolean));
 
   try {
+    appVersion.value = await getVersion();
     const { checkUpdate } = useUpdate();
-    await checkUpdate(await getVersion());
+    await checkUpdate(appVersion.value);
   } catch (_) { /* non-critical */ }
 });
 
@@ -457,17 +466,26 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 
 <template>
   <div class="sidebar-left">
+    <!-- 品牌区（WorkBuddy 式：logo + 名称 + 版本号，固定不随列表滚动） -->
+    <div class="brand">
+      <AppLogo :size="34" />
+      <div>
+        <div class="brand-name">Aide</div>
+        <div class="brand-ver">{{ appVersion ? `v${appVersion}` : "" }}</div>
+      </div>
+    </div>
+
     <!-- Workspace + Session list（「会话」降级为分区树的根分区之一，与自动化平级） -->
     <div class="session-list">
       <SidebarSectionHead
-        icon="💬"
         label="会话"
         :count="totalSessionCount || undefined"
         :expanded="!sessionsSectionCollapsed"
         @toggle="sessionsSectionCollapsed = !sessionsSectionCollapsed"
+        @menu="onSessionSectionMenu"
       >
-        <template #actions>
-          <button class="sec-act-btn" v-tooltip="'新建会话 (Ctrl+N)'" @click="newSession">＋</button>
+        <template #icon>
+          <svg viewBox="0 0 24 24" fill="none"><path d="M21 15C21 15.53 20.79 16.04 20.41 16.41C20.04 16.79 19.53 17 19 17H7L3 21V5C3 4.47 3.21 3.96 3.59 3.59C3.96 3.21 4.47 3 5 3H19C19.53 3 20.04 3.21 20.41 3.59C20.79 3.96 21 4.47 21 5V15Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </template>
       </SidebarSectionHead>
 
@@ -500,13 +518,19 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
           </svg>
           <span class="ws-name">{{ workspaceLabel(ws) }}</span>
           <span v-if="ws.missing" class="ws-missing-badge">失效</span>
-          <span v-else-if="(sessionsByWorkspace[ws.key] ?? []).length > 0" class="ws-count">{{ (sessionsByWorkspace[ws.key] ?? []).length }}</span>
           <span
             v-if="!ws.missing && untrustedPaths.has(ws.name)"
             class="ws-trust-badge"
             v-tooltip="'工作区不受信任，点击信任'"
             @click.stop="openTrustPrompt(ws)"
           >不受信任</span>
+          <!-- 右槽位：计数 ⇄ ⋯（hover 互换）；⋯ 与右键同一份 workspaceMenuItems -->
+          <span class="ws-slot" @click.stop>
+            <span v-if="!ws.missing && (sessionsByWorkspace[ws.key] ?? []).length > 0" class="ws-count">{{ (sessionsByWorkspace[ws.key] ?? []).length }}</span>
+            <button class="row-dots" v-tooltip="'更多操作'" @click="onWorkspaceContextMenu($event, ws)">
+              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+            </button>
+          </span>
         </div>
 
         <!-- Sessions (for any expanded workspace) -->
@@ -526,22 +550,27 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
           </div>
           <template v-else>
             <TransitionGroup name="session-anim" tag="div" class="session-anim-group" @leave="onSessionAnimLeave">
-              <ACard
+              <!-- 行式会话（v3：accent 竖条选中态；右槽位 时间⇄⋯，⋯ 与右键同一份 sessionMenuItems） -->
+              <div
                 v-for="s in visibleSessions(ws.key)"
                 :key="s.id"
-                :active="props.activeSessionId === s.id"
-                :glow-color="sessionState[s.id] === 'running' ? 'var(--aide-success)' : undefined"
-                class="session-card"
+                class="session-row"
+                :class="{ on: props.activeSessionId === s.id, running: sessionState[s.id] === 'running' }"
                 @click="selectSessionFromWorkspace(ws.key, s.id)"
                 @contextmenu.prevent="onSessionContextMenu($event, ws.key, s.id)"
               >
-                <div class="session-card-header">
+                <div class="session-row-r1">
                   <AStatusDot :tone="dotTone(s.id)" />
                   <span class="session-name">{{ sessionNames.names[s.id] || s.name }}</span>
-                  <span class="session-time">{{ timeAgo(s.timestamp) }}</span>
+                  <span class="session-slot" @click.stop>
+                    <span class="session-time">{{ timeAgo(s.timestamp) }}</span>
+                    <button class="row-dots" v-tooltip="'更多操作'" @click="onSessionContextMenu($event, ws.key, s.id)">
+                      <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+                    </button>
+                  </span>
                 </div>
                 <div v-if="s.last_message" class="session-preview">{{ s.last_message }}</div>
-              </ACard>
+              </div>
             </TransitionGroup>
             <div
               v-if="hiddenSessionCount(ws.key) > 0"
@@ -640,7 +669,30 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 .session-list {
   flex: 1;
   overflow-y: auto;
-  padding: 10px 10px 10px 0;
+  padding: 4px 0 8px;
+}
+
+/* ── 品牌区（WorkBuddy 式，固定不滚动）── */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 16px 16px 12px;
+  flex-shrink: 0;
+}
+.brand :deep(.app-logo) {
+  border-radius: 10px;
+}
+.brand-name {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: var(--aide-text-primary);
+}
+.brand-ver {
+  font-size: 10.5px;
+  color: var(--aide-text-muted);
+  margin-top: 2px;
 }
 
 /* ── Workspace item ── */
@@ -648,13 +700,13 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 .workspace-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  margin: 6px 10px 4px;
+  gap: 9px;
+  padding: 9px 12px;
+  margin: 4px 10px 0;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--aide-text-muted);
+  color: var(--aide-text-secondary);
   background: transparent;
   border-radius: var(--aide-radius-md);
   transition: all 0.15s ease;
@@ -708,17 +760,58 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   flex: 1;
 }
 
+/* ── 行右槽位（工作区/会话行共用）：元信息 ⇄ ⋯，hover 整行互换。
+   元信息流内撑开槽位（「17分钟前」这类长文本不溢出行边界）；
+   ⋯ absolute 覆盖同一区域，hover 互换时槽位宽度不变、布局不抖。 ── */
+.ws-slot,
+.session-slot {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
 .ws-count {
+  min-width: 26px;
+  box-sizing: border-box;
+  text-align: center;
+  padding: 2px 7px;
   font-size: 10px;
   font-weight: 600;
   color: var(--aide-text-muted);
   background: var(--aide-surface-default);
-  padding: 0 6px;
   border-radius: 8px;
-  min-width: 18px;
-  text-align: center;
-  line-height: 1.6;
-  flex-shrink: 0;
+  transition: opacity 0.12s;
+}
+
+.row-dots {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.row-dots svg {
+  width: 15px;
+  height: 15px;
+}
+.workspace-item:hover .ws-count,
+.session-row:hover .session-time {
+  opacity: 0;
+}
+.workspace-item:hover .row-dots,
+.session-row:hover .row-dots {
+  opacity: 1;
+}
+.row-dots:hover {
+  background: var(--aide-surface-active);
+  color: var(--aide-text-primary);
 }
 
 .workspace-item.missing {
@@ -749,27 +842,68 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   letter-spacing: 0.3px;
 }
 
-/* ── Session card ──
-   工匠质感卡片（复用 ACard 凸起卡片语言：raised 底 + 描边 + 圆角 + 内边距 +
-   悬停阴影 + 选中 accent 渐变 + 运行时左侧 glow 光条）。布局保持 VS Code 式对齐：
-   左缩进挂在工作区名下、右留白使卡片整体比工作区行窄；卡片间留呼吸间距。 */
+/* ── Session row（行式：常态淡底、hover 加深、选中 = accent 竖条 + accent-subtle 底）──
+   从 ACard 凸起卡片改为行式（v3 重设计）：去掉边框堆砌，但保留淡底「物件感」——
+   结构行（导航/工作区）透明、内容行（会话/任务）带淡底，层次靠底色明度差表达；
+   行内 10px padding + 行间 3px，几十行长列表也不糊成一片。删除/补位动画不变。 */
 
-.session-card {
-  margin: 0 10px 6px 24px;
+.session-row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px 10px 28px;
+  margin: 3px 10px 0;
   cursor: pointer;
+  background: var(--aide-surface-default);
+  border-radius: var(--aide-radius-md);
+  transition: background var(--aide-ease-t);
+}
+.session-row:hover {
+  background: var(--aide-surface-hover);
+}
+.session-row.on {
+  background: var(--aide-accent-subtle);
+}
+.session-row.on::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--aide-accent);
 }
 
-/* ── 会话卡进出场 / 补位动画（TransitionGroup session-anim）──
-   删除 = 乐观本地移除：卡片淡出+左滑+高度收拢，兄弟卡片平滑上移补位，
+/* running 流光：行左缘 2px 渐变脉动竖条（沿用原 ACard glow 语言）。
+   ::after 与选中竖条 ::before 错开（0 vs 12px），选中且运行中时两者共存。 */
+.session-row.running::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 1px;
+  background: linear-gradient(180deg, transparent, var(--aide-success), transparent);
+  animation: session-glow-pulse 2s ease-in-out infinite;
+}
+@keyframes session-glow-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+/* ── 会话行进出场 / 补位动画（TransitionGroup session-anim）──
+   删除 = 乐观本地移除：行淡出+左滑+高度收拢，兄弟行平滑上移补位，
    不再整表 loadSessions（旧写法 loading 闪「加载中...」且 scrollTop 被钳回顶部）。
    新建会话插入顶部走同一条渲染路径，白得入场淡入。
    两条硬性细节：
-   1) 所有属性同一时长同一缓动、同一帧到终点——时长错开会出现"先隐身的卡片还在收高度、
+   1) 所有属性同一时长同一缓动、同一帧到终点——时长错开会出现"先隐身的行还在收高度、
       兄弟慢爬后急停"的收尾顿挫；
-   2) 选择器叠成 .session-card.session-anim-*（0-2-0）压过 ACard 根上的
-      transition: all var(--aide-ease-t)（0-1-0），否则离场过渡被它接管。 */
-.session-card.session-anim-enter-active,
-.session-card.session-anim-leave-active {
+   2) 选择器叠成 .session-row.session-anim-* 压过行根上的 transition。 */
+.session-row.session-anim-enter-active,
+.session-row.session-anim-leave-active {
   transition:
     opacity 0.24s cubic-bezier(0.4, 0, 0.2, 1),
     transform 0.24s cubic-bezier(0.4, 0, 0.2, 1),
@@ -779,21 +913,21 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   overflow: hidden;
 }
 
-.session-card.session-anim-enter-from {
+.session-row.session-anim-enter-from {
   opacity: 0;
   transform: translateY(-6px);
 }
 
-.session-card.session-anim-leave-active {
+.session-row.session-anim-leave-active {
   /* 收拢期间保持 in-flow（脱离文档流会让兄弟补位丢失布局依据）。
-     起点高度由 @leave 钩子写入 --session-leave-h（真实卡高）——max-height 必须
-     有有限起点（none→0 不可过渡），但不能拍固定上界：上界高于真实卡高时前段
+     起点高度由 @leave 钩子写入 --session-leave-h（真实行高）——max-height 必须
+     有有限起点（none→0 不可过渡），但不能拍固定上界：上界高于真实行高时前段
      空跑、收拢被压进末段，收尾有顿挫感。 */
   position: relative;
   max-height: var(--session-leave-h, 100px);
 }
 
-.session-card.session-anim-leave-to {
+.session-row.session-anim-leave-to {
   opacity: 0;
   transform: translateX(-12px);
   max-height: 0;
@@ -807,11 +941,10 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   transition: transform 0.24s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.session-card-header {
+.session-row-r1 {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 4px;
 }
 
 .session-name {
@@ -822,27 +955,31 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+  min-width: 0;
 }
 
+/* 会话行右槽位元信息 = 时间（无底色 flat 形态；流内撑开槽位，hover 时让给 ⋯） */
 .session-time {
-  font-size: 10px;
+  padding: 2px;
+  font-size: 10.5px;
   color: var(--aide-text-muted);
-  flex-shrink: 0;
+  white-space: nowrap;
+  transition: opacity 0.12s;
 }
 
 .session-preview {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--aide-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 .session-more {
-  margin: 1px 6px 3px 24px;
-  padding: 4px 10px 4px 25px;
-  font-size: 11px;
+  margin: 2px 10px 0;
+  padding: 7px 12px 7px 28px;
+  font-size: 11.5px;
   color: var(--aide-text-muted);
   cursor: pointer;
   border-radius: var(--aide-radius-sm);
@@ -858,24 +995,24 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   color: var(--aide-text-muted);
   cursor: default;
   font-size: 12px;
-  padding: 12px 16px;
+  padding: 10px 12px 10px 28px;
+  margin: 1px 10px 0;
 }
 
 /* ── 会话加载骨架（per-workspace）──
-   加载态按工作区隔离后，「加载中」从全局文本变成本工作区展开区内的假会话卡：
-   外壳复刻 ACard（raised 底 + 细描边 + radius-lg + 16px 内边距），切换真卡时
-   只有文字线消失、卡轮廓不动；线条脉冲语言与 MarketplaceTab 的 skel-line 一致
+   加载态按工作区隔离后，「加载中」从全局文本变成本工作区展开区内的假会话行：
+   行式骨架与真实 session-row 同位同尺寸（28px 缩进/行高），切换真行时
+   只有文字线消失、行轮廓不动；线条脉冲语言与 MarketplaceTab 的 skel-line 一致
    （surface-hover 底 + 呼吸透明度）。 */
 .session-skel-card {
-  margin: 0 10px 6px 24px;
-  padding: 16px;
-  background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border-subtle);
-  border-radius: var(--aide-radius-lg);
+  margin: 3px 10px 0;
+  padding: 10px 12px 10px 28px;
+  background: var(--aide-surface-default);
+  border-radius: var(--aide-radius-md);
 }
 
 .session-skel-line {
-  height: 11px;
+  height: 12px;
   border-radius: 4px;
   background: var(--aide-surface-hover);
   animation: session-skel-pulse 1.5s ease-in-out infinite;

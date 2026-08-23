@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Sidebar" -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Aide 侧栏重设计 v3 · 全层级 ⋯ 菜单</title>
+<style>
+  /* ── glass 主题 token（与 src/themes/glass.ts 一致）── */
+  :root {
+    --bg-deep: rgba(8,10,16,.82);
+    --bg-base: rgba(17,19,29,.52);
+    --bg-raised: rgba(24,26,38,.48);
+    --surface-default: rgba(255,255,255,.06);
+    --surface-hover: rgba(255,255,255,.1);
+    --surface-active: rgba(255,255,255,.14);
+    --text-primary: #eef0f8;
+    --text-secondary: #b9bdd0;
+    --text-muted: #7c8296;
+    --accent: #a5b8ff;
+    --accent-subtle: rgba(150,170,255,.16);
+    --success: #6ee7a8;
+    --danger: #f87171;
+    --border: rgba(255,255,255,.1);
+    --border-subtle: rgba(255,255,255,.06);
+    --border-strong: rgba(255,255,255,.17);
+    --highlight-inset: inset 0 1px 0 rgba(255,255,255,.12);
+    --accent-gradient: linear-gradient(180deg, rgba(160,180,255,.42), rgba(130,150,255,.3));
+    --accent-glow: 0 4px 18px rgba(140,160,255,.38);
+    --shadow-lg: 0 20px 60px rgba(0,0,0,.55);
+    --radius-sm: 8px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --ease-t: .16s cubic-bezier(.2,.8,.2,1);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    color: var(--text-primary);
+    background:
+      radial-gradient(560px 380px at 10% -8%, rgba(124,108,255,.32), transparent 65%),
+      radial-gradient(520px 420px at 96% 6%, rgba(64,190,220,.22), transparent 65%),
+      radial-gradient(640px 340px at 60% 112%, rgba(210,110,190,.16), transparent 70%),
+      #0a0b11;
+    padding: 28px 32px 40px;
+  }
+  h1 { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { font-size: 12.5px; color: var(--text-muted); margin-bottom: 24px; max-width: 1060px; line-height: 1.7; }
+  .subtitle b { color: var(--text-secondary); font-weight: 600; }
+  .subtitle em { color: var(--accent); font-style: normal; }
+
+  .boards { display: flex; gap: 40px; align-items: flex-start; }
+  .board { display: flex; flex-direction: column; gap: 10px; }
+  .board-name { font-size: 14px; font-weight: 700; }
+  .board-tag { font-size: 11.5px; color: var(--text-muted); line-height: 1.6; max-width: 300px; }
+  .board-tag em { color: var(--accent); font-style: normal; }
+
+  .sb {
+    position: relative;
+    width: 292px;
+    height: 660px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg-base);
+    backdrop-filter: blur(20px) saturate(150%);
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+  }
+  .sb-body { flex: 1; overflow-y: auto; padding-bottom: 8px; }
+  .sb-body::-webkit-scrollbar { width: 8px; }
+  .sb-body::-webkit-scrollbar-thumb { background: var(--surface-hover); border-radius: 4px; }
+
+  /* ── 品牌区 ── */
+  .brand { display: flex; align-items: center; gap: 11px; padding: 16px 16px 12px; }
+  .brand .logo {
+    width: 34px; height: 34px; border-radius: 10px; flex-shrink: 0;
+    background: var(--accent-gradient);
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+    box-shadow: var(--accent-glow);
+    display: grid; place-items: center;
+    font-size: 16px; font-weight: 700; color: #eef0ff;
+  }
+  .brand .name { font-size: 15px; font-weight: 700; letter-spacing: .2px; }
+  .brand .ver { font-size: 10.5px; color: var(--text-muted); margin-top: 2px; }
+
+  /* ── 大导航行（计数 ⇄ ⋯）── */
+  .nav { padding: 4px 10px 0; display: flex; flex-direction: column; gap: 2px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 12px; border-radius: var(--radius-lg);
+    font-size: 13.5px; font-weight: 600; color: var(--text-secondary);
+    cursor: pointer; transition: all var(--ease-t);
+    border: 1px solid transparent; user-select: none;
+  }
+  .nav-item:hover { background: var(--surface-default); color: var(--text-primary); }
+  .nav-item.on {
+    background: var(--surface-active); color: var(--text-primary);
+    border-color: var(--border-subtle); box-shadow: var(--highlight-inset);
+  }
+  .nav-item .chev { width: 13px; height: 13px; color: var(--text-muted); flex-shrink: 0; transition: transform .2s; }
+  .nav-item.open .chev { transform: rotate(90deg); color: var(--accent); }
+  .nav-item .nico { width: 17px; height: 17px; flex-shrink: 0; color: var(--text-muted); }
+  .nav-item.on .nico { color: var(--accent); }
+  .nav-item .nlbl { flex: 1; }
+
+  /* 通用右槽位：元信息（计数/时间）⇄ ⋯，hover 整行互换 */
+  .rslot { position: relative; flex-shrink: 0; width: 28px; height: 20px; margin-left: auto; }
+  .rmeta {
+    position: absolute; inset: 0;
+    display: grid; place-items: center;
+    font-size: 10.5px; font-weight: 600; color: var(--text-muted);
+    background: var(--surface-default); border-radius: 9px;
+    transition: opacity .12s;
+  }
+  .rmeta.flat { background: transparent; font-weight: 400; } /* 会话行的时间：无底色 */
+  .nav-item.on .rmeta { color: var(--accent); background: var(--accent-subtle); }
+  .rdots {
+    position: absolute; inset: 0;
+    display: grid; place-items: center;
+    border: none; border-radius: 6px; background: transparent;
+    color: var(--text-muted); cursor: pointer;
+    opacity: 0; transition: opacity .12s;
+  }
+  .rdots svg { width: 15px; height: 15px; }
+  .rdots:hover { background: var(--surface-active); color: var(--text-primary); }
+  .nav-item:hover .rmeta, .ws:hover .rmeta, .row:hover .rmeta { opacity: 0; }
+  .nav-item:hover .rdots, .ws:hover .rdots, .row:hover .rdots { opacity: 1; }
+  /* 演示强制态 */
+  .demo-hover .rmeta { opacity: 0 !important; }
+  .demo-hover .rdots { opacity: 1 !important; }
+
+  /* ── 工作区行 ── */
+  .subtree { padding: 2px 0 4px; }
+  .ws {
+    display: flex; align-items: center; gap: 9px;
+    padding: 8px 12px; margin: 2px 10px 0;
+    font-size: 13px; font-weight: 600; color: var(--text-secondary);
+    border-radius: var(--radius-md); cursor: pointer; transition: all var(--ease-t);
+  }
+  .ws:hover, .ws.demo-hover { background: var(--surface-default); color: var(--text-primary); }
+  .ws.open { color: var(--text-primary); }
+  .ws .chev { width: 12px; height: 12px; color: var(--text-muted); flex-shrink: 0; transition: transform .2s; }
+  .ws.open .chev { transform: rotate(90deg); color: var(--accent); }
+  .ws .folder { width: 15px; height: 15px; color: var(--text-muted); flex-shrink: 0; }
+  .ws.open .folder { color: var(--accent); }
+  .ws .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ── 会话行（B 行式，时间 ⇄ ⋯）── */
+  .row {
+    position: relative; display: flex; flex-direction: column; gap: 3px;
+    padding: 8px 12px 8px 28px; margin: 1px 10px 0;
+    border-radius: var(--radius-md); cursor: pointer; transition: all var(--ease-t);
+  }
+  .row:hover, .row.demo-hover { background: var(--surface-default); }
+  .row.on { background: var(--accent-subtle); }
+  .row.on::before {
+    content: ""; position: absolute; left: 12px; top: 9px; bottom: 9px; width: 3px;
+    border-radius: 2px; background: var(--accent);
+  }
+  .row .r1 { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .dot.run { background: var(--success); box-shadow: 0 0 5px var(--success); }
+  .dot.idle { background: var(--text-muted); opacity: .5; }
+  .row .nm { flex: 1; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .pv { font-size: 11.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.45; }
+  .more {
+    margin: 1px 10px 0; padding: 6px 12px 6px 28px;
+    font-size: 11.5px; color: var(--text-muted); cursor: pointer; border-radius: var(--radius-sm);
+  }
+  .more:hover { color: var(--accent); background: var(--surface-default); }
+
+  /* 自动化任务行 */
+  .task {
+    display: flex; flex-direction: column; gap: 3px;
+    padding: 8px 12px 8px 28px; margin: 1px 10px 0;
+    border-radius: var(--radius-md); cursor: pointer; transition: all var(--ease-t);
+  }
+  .task:hover { background: var(--surface-default); }
+  .task .r1 { display: flex; align-items: center; gap: 8px; }
+  .task .nm { flex: 1; font-size: 13px; font-weight: 600; }
+  .task .sched { font-size: 10.5px; color: var(--text-muted); }
+  .task .r2 { font-size: 11.5px; color: var(--text-muted); }
+
+  /* ── 菜单（对齐真实 ContextMenu：bg-raised + border-strong + radius-lg + 13px 项）── */
+  .menu {
+    position: absolute; z-index: 10;
+    min-width: 176px; max-width: 260px; padding: 5px;
+    background: var(--bg-raised);
+    backdrop-filter: blur(20px) saturate(150%);
+    border: 1px solid var(--border-strong); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg), var(--highlight-inset);
+  }
+  .menu-item {
+    display: flex; align-items: center;
+    padding: 6px 10px; border-radius: var(--radius-sm);
+    font-size: 13px; color: var(--text-secondary);
+    cursor: pointer; transition: background .12s, color .12s;
+  }
+  .menu-item:hover { background: var(--surface-default); color: var(--text-primary); }
+  .menu-item.danger { color: var(--danger); }
+  .menu-item.danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+  .menu-sep { height: 1px; margin: 5px 8px; background: var(--border-subtle); }
+
+  /* 底部状态栏 */
+  .statusbar {
+    height: 44px; display: flex; align-items: center;
+    padding: 0 12px; gap: 6px;
+    border-top: 1px solid var(--border); background: var(--bg-deep); flex-shrink: 0;
+  }
+  .sbtn {
+    width: 32px; height: 32px; border: none; border-radius: var(--radius-sm);
+    background: none; color: var(--text-muted); cursor: pointer;
+    display: grid; place-items: center;
+  }
+  .sbtn svg { width: 15px; height: 15px; }
+  .sbtn:hover { color: var(--text-primary); background: var(--surface-default); }
+  .sbtn.on { color: var(--accent); background: var(--accent-subtle); }
+  .statusbar .sp { flex: 1; }
+
+  svg { display: block; }
+</style>
+</head>
+<body>
+  <h1>侧栏 v3 · 全层级 ⋯ 菜单</h1>
+  <div class="subtitle">
+    右槽位交互语言统一：<b>常态显示元信息，hover 变 ⋯，点 ⋯ = 该行的右键菜单</b>——
+    导航行 <em>计数 ⇄ ⋯</em>（新建菜单，v2 已确认）；工作区行 <em>计数 ⇄ ⋯</em>（工作区右键菜单）；会话行 <em>时间 ⇄ ⋯</em>（会话右键菜单）。
+  </div>
+
+  <div class="boards">
+
+    <!-- ════════ 常态 ════════ -->
+    <div class="board">
+      <div class="board-name">常态</div>
+      <div class="sb">
+        <div class="sb-body">
+          <div class="brand">
+            <div class="logo">A</div>
+            <div><div class="name">Aide</div><div class="ver">v0.9.2</div></div>
+          </div>
+
+          <div class="nav">
+            <div class="nav-item on open">
+              <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg class="nico" viewBox="0 0 24 24" fill="none"><path d="M21 15C21 15.53 20.79 16.04 20.41 16.41C20.04 16.79 19.53 17 19 17H7L3 21V5C3 4.47 3.21 3.96 3.59 3.59C3.96 3.21 4.47 3 5 3H19C19.53 3 20.04 3.21 20.41 3.59C20.79 3.96 21 4.47 21 5V15Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="nlbl">会话</span>
+              <span class="rslot">
+                <span class="rmeta">128</span>
+                <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+              </span>
+            </div>
+
+            <div class="subtree">
+              <div class="ws open">
+                <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <svg class="folder" viewBox="0 0 24 24" fill="none"><path d="M3 7C3 5.9 3.9 5 5 5H9.6C9.85 5 10.1 5.1 10.3 5.3L12 7H19C20.1 7 21 7.9 21 9V17C21 18.1 20.1 19 19 19H5C3.9 19 3 18.1 3 17V7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="nm">aide</span>
+                <span class="rslot">
+                  <span class="rmeta">96</span>
+                  <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                </span>
+              </div>
+
+              <div class="row on">
+                <div class="r1">
+                  <span class="dot run"></span><span class="nm">侧栏 UI 重设计</span>
+                  <span class="rslot">
+                    <span class="rmeta flat">刚刚</span>
+                    <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                  </span>
+                </div>
+                <div class="pv">做三个方案的原型对比，先别动代码</div>
+              </div>
+              <div class="row">
+                <div class="r1">
+                  <span class="dot idle"></span><span class="nm">marketplace 插件合成条目</span>
+                  <span class="rslot">
+                    <span class="rmeta flat">2小时前</span>
+                    <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                  </span>
+                </div>
+                <div class="pv">已安装视图补齐本地/禁用源插件</div>
+              </div>
+              <div class="row">
+                <div class="r1">
+                  <span class="dot idle"></span><span class="nm">分支覆盖率对账</span>
+                  <span class="rslot">
+                    <span class="rmeta flat">昨天</span>
+                    <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                  </span>
+                </div>
+                <div class="pv">补测到 100%，llvm-cov 幂等装</div>
+              </div>
+              <div class="more">另外 93 个</div>
+
+              <div class="ws">
+                <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <svg class="folder" viewBox="0 0 24 24" fill="none"><path d="M3 7C3 5.9 3.9 5 5 5H9.6C9.85 5 10.1 5.1 10.3 5.3L12 7H19C20.1 7 21 7.9 21 9V17C21 18.1 20.1 19 19 19H5C3.9 19 3 18.1 3 17V7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="nm">ts-quality</span>
+                <span class="rslot">
+                  <span class="rmeta">32</span>
+                  <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                </span>
+              </div>
+            </div>
+
+            <div class="nav-item open">
+              <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg class="nico" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="nlbl">自动化</span>
+              <span class="rslot">
+                <span class="rmeta">1</span>
+                <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+              </span>
+            </div>
+            <div class="subtree">
+              <div class="task">
+                <div class="r1"><span class="dot run"></span><span class="nm">每日代码体检</span><span class="sched">每天 09:30</span></div>
+                <div class="r2">上次 今天 09:30 · 成功</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <button class="sbtn on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/></svg></button>
+          <span class="sp"></span>
+          <button class="sbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+        </div>
+      </div>
+      <div class="board-tag">三层的右槽位常态都是元信息：导航行计数、工作区计数、会话时间。</div>
+    </div>
+
+    <!-- ════════ 会话行 ⋯ → 会话右键菜单 ════════ -->
+    <div class="board">
+      <div class="board-name">hover 会话行 → ⋯ → 会话菜单</div>
+      <div class="sb">
+        <div class="sb-body">
+          <div class="brand">
+            <div class="logo">A</div>
+            <div><div class="name">Aide</div><div class="ver">v0.9.2</div></div>
+          </div>
+
+          <div class="nav">
+            <div class="nav-item on open">
+              <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg class="nico" viewBox="0 0 24 24" fill="none"><path d="M21 15C21 15.53 20.79 16.04 20.41 16.41C20.04 16.79 19.53 17 19 17H7L3 21V5C3 4.47 3.21 3.96 3.59 3.59C3.96 3.21 4.47 3 5 3H19C19.53 3 20.04 3.21 20.41 3.59C20.79 3.96 21 4.47 21 5V15Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="nlbl">会话</span>
+              <span class="rslot">
+                <span class="rmeta">128</span>
+                <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+              </span>
+            </div>
+
+            <div class="subtree">
+              <div class="ws open">
+                <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <svg class="folder" viewBox="0 0 24 24" fill="none"><path d="M3 7C3 5.9 3.9 5 5 5H9.6C9.85 5 10.1 5.1 10.3 5.3L12 7H19C20.1 7 21 7.9 21 9V17C21 18.1 20.1 19 19 19H5C3.9 19 3 18.1 3 17V7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="nm">aide</span>
+                <span class="rslot">
+                  <span class="rmeta">96</span>
+                  <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                </span>
+              </div>
+
+              <!-- demo：hover 此行，时间 → ⋯，菜单打开 -->
+              <div class="row on demo-hover">
+                <div class="r1">
+                  <span class="dot run"></span><span class="nm">侧栏 UI 重设计</span>
+                  <span class="rslot">
+                    <span class="rmeta flat">刚刚</span>
+                    <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                  </span>
+                </div>
+                <div class="pv">做三个方案的原型对比，先别动代码</div>
+              </div>
+
+              <!-- 会话右键菜单（与 sessionMenuItems 一致） -->
+              <div class="menu" style="top:196px; right:12px;">
+                <div class="menu-item">在新标签页打开</div>
+                <div class="menu-item">在右侧分屏打开</div>
+                <div class="menu-item">在下方分屏打开</div>
+                <div class="menu-sep"></div>
+                <div class="menu-item">重命名</div>
+                <div class="menu-sep"></div>
+                <div class="menu-item danger">删除</div>
+              </div>
+
+              <div class="row">
+                <div class="r1">
+                  <span class="dot idle"></span><span class="nm">marketplace 插件合成条目</span>
+                  <span class="rslot">
+                    <span class="rmeta flat">2小时前</span>
+                    <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                  </span>
+                </div>
+                <div class="pv">已安装视图补齐本地/禁用源插件</div>
+              </div>
+              <div class="row">
+                <div class="r1">
+                  <span class="dot idle"></span><span class="nm">分支覆盖率对账</span>
+                  <span class="rslot">
+                    <span class="rmeta flat">昨天</span>
+                    <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                  </span>
+                </div>
+                <div class="pv">补测到 100%，llvm-cov 幂等装</div>
+              </div>
+              <div class="more">另外 93 个</div>
+            </div>
+
+            <div class="nav-item">
+              <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg class="nico" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="nlbl">自动化</span>
+              <span class="rslot">
+                <span class="rmeta">1</span>
+                <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <button class="sbtn on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/></svg></button>
+          <span class="sp"></span>
+          <button class="sbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+        </div>
+      </div>
+      <div class="board-tag">会话行右槽位：<em>时间 ⇄ ⋯</em>。菜单内容与右键完全一致（sessionMenuItems）：开 tab/分屏、重命名、删除。选中行的 accent 竖条不受 hover 影响。</div>
+    </div>
+
+    <!-- ════════ 工作区行 ⋯ → 工作区右键菜单 ════════ -->
+    <div class="board">
+      <div class="board-name">hover 工作区行 → ⋯ → 工作区菜单</div>
+      <div class="sb">
+        <div class="sb-body">
+          <div class="brand">
+            <div class="logo">A</div>
+            <div><div class="name">Aide</div><div class="ver">v0.9.2</div></div>
+          </div>
+
+          <div class="nav">
+            <div class="nav-item on open">
+              <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg class="nico" viewBox="0 0 24 24" fill="none"><path d="M21 15C21 15.53 20.79 16.04 20.41 16.41C20.04 16.79 19.53 17 19 17H7L3 21V5C3 4.47 3.21 3.96 3.59 3.59C3.96 3.21 4.47 3 5 3H19C19.53 3 20.04 3.21 20.41 3.59C20.79 3.96 21 4.47 21 5V15Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="nlbl">会话</span>
+              <span class="rslot">
+                <span class="rmeta">128</span>
+                <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+              </span>
+            </div>
+
+            <div class="subtree">
+              <!-- demo：hover 工作区行，计数 → ⋯，菜单打开 -->
+              <div class="ws open demo-hover">
+                <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <svg class="folder" viewBox="0 0 24 24" fill="none"><path d="M3 7C3 5.9 3.9 5 5 5H9.6C9.85 5 10.1 5.1 10.3 5.3L12 7H19C20.1 7 21 7.9 21 9V17C21 18.1 20.1 19 19 19H5C3.9 19 3 18.1 3 17V7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="nm">aide</span>
+                <span class="rslot">
+                  <span class="rmeta">96</span>
+                  <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                </span>
+              </div>
+
+              <!-- 工作区右键菜单（与 workspaceMenuItems 一致） -->
+              <div class="menu" style="top:146px; right:12px;">
+                <div class="menu-item">切换到此工作区</div>
+                <div class="menu-item">在文件资源管理器中打开</div>
+                <div class="menu-item">复制路径</div>
+                <div class="menu-sep"></div>
+                <div class="menu-item danger">从列表移除…</div>
+              </div>
+
+              <div class="row on">
+                <div class="r1">
+                  <span class="dot run"></span><span class="nm">侧栏 UI 重设计</span>
+                  <span class="rslot">
+                    <span class="rmeta flat">刚刚</span>
+                    <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                  </span>
+                </div>
+                <div class="pv">做三个方案的原型对比，先别动代码</div>
+              </div>
+              <div class="row">
+                <div class="r1">
+                  <span class="dot idle"></span><span class="nm">marketplace 插件合成条目</span>
+                  <span class="rslot">
+                    <span class="rmeta flat">2小时前</span>
+                    <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                  </span>
+                </div>
+                <div class="pv">已安装视图补齐本地/禁用源插件</div>
+              </div>
+              <div class="row">
+                <div class="r1">
+                  <span class="dot idle"></span><span class="nm">分支覆盖率对账</span>
+                  <span class="rslot">
+                    <span class="rmeta flat">昨天</span>
+                    <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                  </span>
+                </div>
+                <div class="pv">补测到 100%，llvm-cov 幂等装</div>
+              </div>
+              <div class="more">另外 93 个</div>
+
+              <div class="ws">
+                <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <svg class="folder" viewBox="0 0 24 24" fill="none"><path d="M3 7C3 5.9 3.9 5 5 5H9.6C9.85 5 10.1 5.1 10.3 5.3L12 7H19C20.1 7 21 7.9 21 9V17C21 18.1 20.1 19 19 19H5C3.9 19 3 18.1 3 17V7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="nm">ts-quality</span>
+                <span class="rslot">
+                  <span class="rmeta">32</span>
+                  <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                </span>
+              </div>
+            </div>
+
+            <div class="nav-item">
+              <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg class="nico" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="nlbl">自动化</span>
+              <span class="rslot">
+                <span class="rmeta">1</span>
+                <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <button class="sbtn on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/></svg></button>
+          <span class="sp"></span>
+          <button class="sbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+        </div>
+      </div>
+      <div class="board-tag">工作区行右槽位：<em>计数 ⇄ ⋯</em>。菜单 = workspaceMenuItems：切换到此工作区 / 文件管理器打开 / 复制路径 / 从列表移除。失效工作区（无计数）hover 同样出 ⋯。</div>
+    </div>
+
+  </div>
+</body>
+</html>

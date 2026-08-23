@@ -1,9 +1,10 @@
 <script setup lang="ts">
-/** 侧栏分区树的共享分区头（VS Code 资源管理器范式）：
- *  chevron 旋转 + 图标 + 大写标签 + 计数徽标 + 可选呼吸点 + hover 操作槽。
- *  会话/自动化/未来分区共用，保证视觉与交互完全一致。 */
+/** 侧栏分区的大导航行（WorkBuddy 式）：
+ *  chevron 旋转 + SVG 图标（icon slot）+ 13.5px 标签 + 可选呼吸点
+ *  + 右槽位「计数 ⇄ ⋯」——常态显示计数，hover 淡出计数淡入 ⋯，
+ *  点 ⋯ emit menu 事件（父级用 useContextMenu 弹分区菜单，与右键体系同一份）。
+ *  会话/自动化分区共用，保证视觉与交互完全一致。 */
 defineProps<{
-  icon: string;
   label: string;
   count?: number;
   /** 有活跃活动（运行中任务等）时亮呼吸点 */
@@ -12,20 +13,26 @@ defineProps<{
   expanded: boolean;
 }>();
 
-const emit = defineEmits<{ toggle: [] }>();
+const emit = defineEmits<{
+  toggle: [];
+  /** 点击右槽位 ⋯：携带 MouseEvent 供父级定位上下文菜单 */
+  menu: [e: MouseEvent];
+}>();
 </script>
 
 <template>
   <div class="sec-head" @click="emit('toggle')">
-    <svg class="chevron" :class="{ expanded }" width="12" height="12" viewBox="0 0 12 12" fill="none">
+    <svg class="chevron" :class="{ expanded }" width="13" height="13" viewBox="0 0 12 12" fill="none">
       <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
-    <span class="sec-ico">{{ icon }}</span>
+    <span class="sec-ico"><slot name="icon" /></span>
     <span class="sec-label">{{ label }}</span>
-    <span v-if="count !== undefined" class="sec-count">{{ count }}</span>
     <span v-if="live" class="live-dot" v-tooltip="liveTitle ?? ''" />
-    <span class="sec-actions" @click.stop>
-      <slot name="actions" />
+    <span class="sec-slot" @click.stop>
+      <span v-if="count !== undefined" class="sec-count">{{ count }}</span>
+      <button class="sec-dots" v-tooltip="'更多操作'" @click="emit('menu', $event)">
+        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="19" cy="12" r="2" /></svg>
+      </button>
     </span>
   </div>
 </template>
@@ -34,21 +41,21 @@ const emit = defineEmits<{ toggle: [] }>();
 .sec-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  margin: 0 10px 4px;
+  gap: 10px;
+  padding: 10px 12px;
+  margin: 6px 10px 2px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13.5px;
   font-weight: 600;
-  color: var(--aide-text-muted);
-  border-radius: var(--aide-radius-md);
+  color: var(--aide-text-secondary);
+  border: 1px solid transparent;
+  border-radius: var(--aide-radius-lg);
   transition: all var(--aide-ease-t);
-  letter-spacing: 0.2px;
   user-select: none;
 }
 .sec-head:hover {
-  color: var(--aide-text-secondary);
   background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
 }
 
 .chevron {
@@ -62,27 +69,25 @@ const emit = defineEmits<{ toggle: [] }>();
 }
 
 .sec-ico {
-  font-size: 11px;
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+  color: var(--aide-text-muted);
+  transition: color var(--aide-ease-t);
+}
+.sec-head:hover .sec-ico {
+  color: var(--aide-text-secondary);
+}
+/* slot 里 SVG 的统一尺寸（使用方传 24 viewBox 的描边图标） */
+.sec-ico :deep(svg) {
+  width: 17px;
+  height: 17px;
 }
 
 .sec-label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-}
-
-.sec-count {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--aide-text-muted);
-  background: var(--aide-surface-default);
-  padding: 0 6px;
-  border-radius: 8px;
-  min-width: 18px;
-  text-align: center;
-  line-height: 1.6;
-  flex-shrink: 0;
+  letter-spacing: 0.3px;
 }
 
 .live-dot {
@@ -91,11 +96,7 @@ const emit = defineEmits<{ toggle: [] }>();
   border-radius: 50%;
   background: var(--aide-info);
   animation: sec-pulse 1.2s infinite;
-  margin-left: auto;
   flex-shrink: 0;
-}
-.live-dot + .sec-actions {
-  margin-left: 4px;
 }
 @keyframes sec-pulse {
   50% {
@@ -103,30 +104,53 @@ const emit = defineEmits<{ toggle: [] }>();
   }
 }
 
-.sec-actions {
+/* 右槽位：计数 ⇄ ⋯（同一位互换，hover 整行触发）。
+   计数流内撑开槽位（3 位以上计数不溢出）；⋯ absolute 覆盖同一区域，
+   hover 互换时槽位宽度不变、布局不抖。 */
+.sec-slot {
+  position: relative;
+  flex-shrink: 0;
   margin-left: auto;
-  display: none;
+  display: flex;
   align-items: center;
 }
-.sec-head:hover .sec-actions {
-  display: flex;
-}
-/* 操作按钮的统一形态由使用方填 slot，这里只管容器；
-   按钮样式用 :deep 透给 slot 内容 */
-.sec-actions :deep(.sec-act-btn) {
-  width: 20px;
-  height: 20px;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
+.sec-count {
+  min-width: 26px;
+  box-sizing: border-box;
+  text-align: center;
+  padding: 2px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
   color: var(--aide-text-muted);
-  font-size: 13px;
-  cursor: pointer;
+  background: var(--aide-surface-default);
+  border-radius: 9px;
+  transition: opacity 0.12s;
+}
+.sec-dots {
+  position: absolute;
+  inset: 0;
   display: grid;
   place-items: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
 }
-.sec-actions :deep(.sec-act-btn:hover) {
+.sec-dots svg {
+  width: 15px;
+  height: 15px;
+}
+.sec-head:hover .sec-count {
+  opacity: 0;
+}
+.sec-head:hover .sec-dots {
+  opacity: 1;
+}
+.sec-dots:hover {
   background: var(--aide-surface-active);
-  color: var(--aide-accent);
+  color: var(--aide-text-primary);
 }
 </style>
