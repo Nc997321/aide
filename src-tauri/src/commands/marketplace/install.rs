@@ -163,6 +163,14 @@ fn run_git(args: &[String], cwd: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
+/// git 源的版本锚点：分支/tag（ref）与精确提交（sha）。两者相邻同型
+/// （Option<&str>）易错位，装箱成对象后签名只剩一个 anchor 参数。
+#[derive(Clone, Copy)]
+struct GitRef<'a> {
+    r#ref: Option<&'a str>,
+    sha: Option<&'a str>,
+}
+
 fn git_short_sha(dir: &std::path::Path) -> Option<String> {
     let mut cmd = std::process::Command::new("git");
     cmd.args(["rev-parse", "--short", "HEAD"]).current_dir(dir);
@@ -171,21 +179,21 @@ fn git_short_sha(dir: &std::path::Path) -> Option<String> {
     if out.status.success() { Some(String::from_utf8_lossy(&out.stdout).trim().to_string()) } else { None }
 }
 
-fn clone_ref_sha(url: &str, r#ref: Option<&str>, sha: Option<&str>, target: &std::path::PathBuf) -> Result<(), String> {
+fn clone_ref_sha(url: &str, anchor: GitRef<'_>, target: &std::path::PathBuf) -> Result<(), String> {
     let mut a = vec!["clone".into(), "--depth".into(), "1".into()];
-    if let Some(r) = r#ref { a.push("--branch".into()); a.push(r.into()); }
+    if let Some(r) = anchor.r#ref { a.push("--branch".into()); a.push(r.into()); }
     a.push(url.into()); a.push(target.to_string_lossy().to_string());
     // For clone, cwd doesn't matter since target path is absolute; use parent as cwd
     run_git(&a, target.parent().unwrap_or(std::path::Path::new(".")))?;
-    if let Some(s) = sha { run_git(&["fetch".into(), "--depth".into(), "1".into(), "origin".into(), s.into()], target)?; run_git(&["checkout".into(), s.into()], target)?; }
+    if let Some(s) = anchor.sha { run_git(&["fetch".into(), "--depth".into(), "1".into(), "origin".into(), s.into()], target)?; run_git(&["checkout".into(), s.into()], target)?; }
     Ok(())
 }
 
 /// github / url 源通用：浅克隆（带 ref/sha）→ 解析最终版本 → 落 cache 版本目录
-fn install_git(target_root: &std::path::PathBuf, url: &str, r#ref: Option<&str>, sha: Option<&str>, version: String) -> Result<std::path::PathBuf, String> {
+fn install_git(target_root: &std::path::PathBuf, url: &str, anchor: GitRef<'_>, version: String) -> Result<std::path::PathBuf, String> {
     let tmp = target_root.join(".__tmp__");
     let _ = std::fs::remove_dir_all(&tmp);
-    clone_ref_sha(url, r#ref, sha, &tmp)?;
+    clone_ref_sha(url, anchor, &tmp)?;
     let final_ver = if version.is_empty() { git_short_sha(&tmp).unwrap_or("unknown".into()) } else { version };
     let target = target_root.join(&final_ver);
     if !target.exists() {
@@ -200,11 +208,11 @@ fn install_git(target_root: &std::path::PathBuf, url: &str, r#ref: Option<&str>,
     Ok(target)
 }
 
-fn clone_subdir(url: &str, r#ref: Option<&str>, sha: Option<&str>, path: &str, target: &std::path::PathBuf) -> Result<(), String> {
+fn clone_subdir(url: &str, anchor: GitRef<'_>, path: &str, target: &std::path::PathBuf) -> Result<(), String> {
     run_git(&["clone".into(), "--filter=blob:none".into(), "--sparse".into(), "--no-checkout".into(), url.into(), target.to_string_lossy().to_string()], target.parent().unwrap_or(std::path::Path::new(".")))?;
     run_git(&["sparse-checkout".into(), "set".into(), path.into()], target)?;
-    run_git(&["checkout".into(), r#ref.unwrap_or("HEAD").into()], target)?;
-    if let Some(s) = sha { run_git(&["fetch".into(), "--depth".into(), "1".into(), "origin".into(), s.into()], target)?; run_git(&["checkout".into(), s.into()], target)?; }
+    run_git(&["checkout".into(), anchor.r#ref.unwrap_or("HEAD").into()], target)?;
+    if let Some(s) = anchor.sha { run_git(&["fetch".into(), "--depth".into(), "1".into(), "origin".into(), s.into()], target)?; run_git(&["checkout".into(), s.into()], target)?; }
     Ok(())
 }
 
@@ -233,17 +241,17 @@ fn resolve_and_install(source_id: &str, market: &str, plugin: &str, entry: &crat
         crate::commands::marketplace::sources::RawSource::Github { repo, r#ref, sha } => {
             let url = format!("https://github.com/{}.git", repo);
             let ver = if !version.is_empty() { version } else { sha.as_ref().map(|s| short_sha(s)).unwrap_or_default() };
-            install_git(&target_root, &url, r#ref.as_deref(), sha.as_deref(), ver)
+            install_git(&target_root, &url, GitRef { r#ref: r#ref.as_deref(), sha: sha.as_deref() }, ver)
         }
         crate::commands::marketplace::sources::RawSource::Url { url, r#ref, sha } => {
             let ver = if !version.is_empty() { version } else { sha.as_ref().map(|s| short_sha(s)).unwrap_or_default() };
-            install_git(&target_root, &url, r#ref.as_deref(), sha.as_deref(), ver)
+            install_git(&target_root, &url, GitRef { r#ref: r#ref.as_deref(), sha: sha.as_deref() }, ver)
         }
         crate::commands::marketplace::sources::RawSource::GitSubdir { url, path, r#ref, sha } => {
             // 稀疏克隆后取子目录
             let tmp = target_root.join(".__tmp__");
             let _ = std::fs::remove_dir_all(&tmp);
-            clone_subdir(url, r#ref.as_deref(), sha.as_deref(), path, &tmp)?;
+            clone_subdir(url, GitRef { r#ref: r#ref.as_deref(), sha: sha.as_deref() }, path, &tmp)?;
             let ver = if !version.is_empty() { version } else { sha.as_ref().map(|s| short_sha(s)).unwrap_or_else(|| git_short_sha(&tmp).unwrap_or("unknown".into())) };
             let target = target_root.join(&ver);
             let from = tmp.join(path);

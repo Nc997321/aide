@@ -63,6 +63,17 @@ struct SessionRoute {
     is_distill: bool,
 }
 
+/// 运行终态的可选收尾数据（失败/跳过/中断路径几乎全 None，走 Default）。
+/// 身份字段（task_id/run_id/status）留在 finalize_run 签名上：必填在前、可选在后。
+#[derive(Default)]
+struct RunFinalize {
+    stop_reason: Option<String>,
+    usage: Option<RunUsage>,
+    rounds: Option<u64>,
+    cost_usd: Option<f64>,
+    error: Option<String>,
+}
+
 pub struct AutomationService {
     /// 内存任务表（CRUD 命令维护；磁盘 task.json 是权威，启动时加载）
     tasks: Mutex<BTreeMap<String, AutomationTask>>,
@@ -463,11 +474,7 @@ impl AutomationService {
                 &task.id,
                 &run_id,
                 RunStatus::Failed,
-                None,
-                None,
-                None,
-                None,
-                Some(format!("发送运行命令失败: {e}")),
+                RunFinalize { error: Some(format!("发送运行命令失败: {e}")), ..Default::default() },
             );
             return Err(e);
         }
@@ -594,7 +601,12 @@ impl AutomationService {
                 let run_id = route.run_id;
                 let task_id = route.task_id;
                 tokio::spawn(async move {
-                    svc.finalize_run(&task_id, &run_id, status, stop_reason, usage, rounds, cost, error);
+                    svc.finalize_run(
+                        &task_id,
+                        &run_id,
+                        status,
+                        RunFinalize { stop_reason, usage, rounds, cost_usd: cost, error },
+                    );
                 });
             }
             "session_dead" => {
@@ -625,11 +637,7 @@ impl AutomationService {
                                 &route.task_id,
                                 &route.run_id,
                                 RunStatus::Failed,
-                                None,
-                                None,
-                                None,
-                                None,
-                                Some(format!("runtime 进程退出（{reason}）")),
+                                RunFinalize { error: Some(format!("runtime 进程退出（{reason}）")), ..Default::default() },
                             );
                         }
                     }
@@ -705,67 +713,94 @@ impl AutomationService {
         task_id: &str,
         run_id: &str,
         status: RunStatus,
-        stop_reason: Option<String>,
-        usage: Option<RunUsage>,
-        rounds: Option<u64>,
-        cost_usd: Option<f64>,
-        error: Option<String>,
+        outcome: RunFinalize,
     ) {
-        let now = schedule::fmt_dt(Self::now_naive());
-        // 活跃表摘除（幂等关键）；路由只摘运行本体的（蒸馏路由独立生命周期）
+        self.detach_routes(task_id);
+        let Ok(task) = self.get_task(task_id) else { return };
+        let Some(run) = Self::load_run(task_id, run_id) else { return };
+        let run = self.apply_outcome(task_id, &task, run, status, &outcome);
+        Self::notify_if_needed(&task, &run, status, &outcome);
+        self.emit_finished(task_id, run_id, status);
+        Self::maybe_distill(self, task, run, status);
+    }
+
+    /// 活跃表摘除（幂等关键）；路由只摘运行本体的（蒸馏路由独立生命周期）。
+    fn detach_routes(&self, task_id: &str) {
         self.active_runs.lock().unwrap_or_else(|e| e.into_inner()).remove(task_id);
         let mut guard = self.by_session.lock().unwrap_or_else(|e| e.into_inner());
         guard.retain(|_, r| !(r.task_id == task_id && !r.is_distill));
-        drop(guard);
+    }
 
-        let Ok(mut task) = self.get_task(task_id) else { return };
-        let Some(mut run) = super::list_runs(task_id, 50)
+    /// 找本次运行记录；找不到 = 事件来晚了（已收尾/记录被删），幂等忽略。
+    fn load_run(task_id: &str, run_id: &str) -> Option<RunRecord> {
+        super::list_runs(task_id, 50)
             .unwrap_or_default()
             .into_iter()
             .find(|r| r.run_id == run_id)
-        else {
-            return;
-        };
+    }
+
+    /// 回写运行终态 + 任务缓存（last_run_status），返回更新后的记录供通知/蒸馏用。
+    fn apply_outcome(
+        &self,
+        task_id: &str,
+        task: &AutomationTask,
+        run: RunRecord,
+        status: RunStatus,
+        outcome: &RunFinalize,
+    ) -> RunRecord {
+        let mut run = run;
         run.status = status;
-        run.finished_at = Some(now);
-        run.stop_reason = stop_reason;
-        run.usage = usage;
-        run.rounds = rounds;
-        run.cost_usd = cost_usd;
-        run.error = error.clone();
+        run.finished_at = Some(schedule::fmt_dt(Self::now_naive()));
+        run.stop_reason = outcome.stop_reason.clone();
+        run.usage = outcome.usage;
+        run.rounds = outcome.rounds;
+        run.cost_usd = outcome.cost_usd;
+        run.error = outcome.error.clone();
         // 结论摘要：转录尾行文本——报告类任务在运行列表里一眼可读，通知正文也带
         run.summary = Self::extract_summary(&run.session_id);
         if let Err(e) = super::update_run(task_id, &run) {
             tracing::warn!("[automation] 回写运行记录失败 {}: {}", task_id, e);
         }
-
+        let mut task = task.clone();
         task.last_run_status = Some(status);
         if let Err(e) = self.persist_task(&task) {
             tracing::warn!("{}", e);
         }
+        run
+    }
 
-        // 通知：成功/失败按任务开关
+    /// 成功/失败按任务开关发系统通知。
+    fn notify_if_needed(task: &AutomationTask, run: &RunRecord, status: RunStatus, outcome: &RunFinalize) {
         let should_notify = match status {
             RunStatus::Succeeded => task.notify_success,
             RunStatus::Failed => task.notify_failure,
             _ => false,
         };
-        if should_notify {
-            let title = format!("自动化「{}」{}", task.name, if status == RunStatus::Succeeded { "已完成" } else { "失败" });
-            let body = match status {
-                RunStatus::Succeeded => {
-                    let base = format!("成本 ${:.3}", cost_usd.unwrap_or(0.0));
-                    match &run.summary {
-                        Some(s) if !s.is_empty() => format!("{} · {}", base, s.chars().take(60).collect::<String>()),
-                        _ => base,
-                    }
-                }
-                _ => error.clone().unwrap_or_else(|| "未知错误".into()),
-            };
-            Self::notify(&title, &body);
+        if !should_notify {
+            return;
         }
+        let title = format!(
+            "自动化「{}」{}",
+            task.name,
+            if status == RunStatus::Succeeded { "已完成" } else { "失败" }
+        );
+        let body = match status {
+            RunStatus::Succeeded => {
+                let base = format!("成本 ${:.3}", outcome.cost_usd.unwrap_or(0.0));
+                match &run.summary {
+                    Some(s) if !s.is_empty() => {
+                        format!("{} · {}", base, s.chars().take(60).collect::<String>())
+                    }
+                    _ => base,
+                }
+            }
+            _ => outcome.error.clone().unwrap_or_else(|| "未知错误".into()),
+        };
+        Self::notify(&title, &body);
+    }
 
-        // 向前端广播终态（M3 面板刷新用；chat-event 通道，无 session_id 路由语义）
+    /// 向前端广播终态（M3 面板刷新用；chat-event 通道，无 session_id 路由语义）。
+    fn emit_finished(&self, task_id: &str, run_id: &str, status: RunStatus) {
         if let Some(app) = self.app.get() {
             let _ = app.emit(
                 "chat-event",
@@ -777,19 +812,22 @@ impl AutomationService {
                 }),
             );
         }
+    }
 
-        // M4 蒸馏：成功的探索轮（手册未就绪且开了开关）→ resume 本会话补一轮蒸馏。
-        // 路由/落盘都在 start_distill 里；spawn 出去做（send 是 async）。
-        if Self::should_distill(&task, status) {
-            let svc = Arc::clone(self);
-            let task_c = task.clone();
-            let run_c = run.clone();
-            tokio::spawn(async move {
-                if let Err(e) = svc.start_distill(task_c, run_c).await {
-                    tracing::warn!("[automation] 蒸馏轮发起失败: {}", e);
-                }
-            });
+    /// M4 蒸馏：成功的探索轮（手册未就绪且开了开关）→ resume 本会话补一轮蒸馏。
+    /// 路由/落盘都在 start_distill 里；spawn 出去做（send 是 async）。
+    fn maybe_distill(svc: &Arc<Self>, task: AutomationTask, run: RunRecord, status: RunStatus) {
+        if !Self::should_distill(&task, status) {
+            return;
         }
+        let svc = Arc::clone(svc);
+        let task_c = task.clone();
+        let run_c = run.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.start_distill(task_c, run_c).await {
+                tracing::warn!("[automation] 蒸馏轮发起失败: {}", e);
+            }
+        });
     }
 
     /// 蒸馏条件：运行成功 + 开了手册开关 + 手册未就绪（NotYet 首跑 / Stale 重提炼）。
@@ -1232,6 +1270,28 @@ mod tests {
         assert!(svc.by_session.lock().unwrap().contains_key("sdk-uuid-1"));
         let active = svc.active_runs.lock().unwrap();
         assert_eq!(active.get("aut_1").unwrap().sdk_session_id.as_deref(), Some("sdk-uuid-1"));
+    }
+
+    /// finalize_run 前置：活跃表 + 路由摘除（幂等关键）。运行本体路由摘除、
+    /// 蒸馏路由独立生命周期保留、他人任务路由不受影响。
+    #[test]
+    fn finalize_detaches_active_and_routes() {
+        let svc = bare_service();
+        svc.active_runs.lock().unwrap().insert(
+            "aut_1".to_string(),
+            ActiveRun { run_id: "run_1".into(), sdk_session_id: None },
+        );
+        svc.by_session.lock().unwrap().insert("run_1".to_string(), route("aut_1", "run_1", false));
+        svc.by_session.lock().unwrap().insert("run_1-d".to_string(), route("aut_1", "run_1", true));
+        svc.by_session.lock().unwrap().insert("run_2".to_string(), route("aut_2", "run_2", false));
+
+        svc.detach_routes("aut_1");
+
+        assert!(svc.active_runs.lock().unwrap().is_empty(), "活跃表应摘除");
+        let routes = svc.by_session.lock().unwrap();
+        assert!(routes.get("run_1").is_none(), "运行本体路由应摘除");
+        assert!(routes.get("run_1-d").is_some(), "蒸馏路由独立生命周期保留");
+        assert!(routes.get("run_2").is_some(), "他人任务路由不受影响");
     }
 
     /// 终态事件按 SDK 真实 id 命中路由的端到端锁（2026-08-22 卡 running 回归）：

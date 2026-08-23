@@ -36,237 +36,98 @@ pub fn extract_symbols(
     let mut call_edges: Vec<CallEdge> = Vec::new();
 
     // Walk all named nodes looking for definitions and calls
-    extract_from_node(
-        &root_node,
+    let mut ctx = ExtractCtx {
         source,
-        &relative_path,
-        None,
-        None,
-        &mut symbols,
-        &mut call_edges,
-    );
+        file: &relative_path,
+        symbols: &mut symbols,
+        call_edges: &mut call_edges,
+    };
+    extract_from_node(&root_node, &mut ctx, None, None);
 
     (symbols, call_edges)
 }
 
+/// 遍历上下文：source/file 与两个输出集合。parent_sym/current_fn 是递归覆盖
+/// 变量，不进 ctx（每次递归都变，放 ctx 反而要反复改写）。
+struct ExtractCtx<'a> {
+    source: &'a str,
+    file: &'a str,
+    symbols: &'a mut Vec<IndexedPoint>,
+    call_edges: &'a mut Vec<CallEdge>,
+}
+
+impl ExtractCtx<'_> {
+    /// 压一个符号；parent 为父级符号名（顶层定义传 None）。
+    fn push_symbol(
+        &mut self,
+        name: &str,
+        kind: SymbolKind,
+        node: &Node,
+        snippet_label: &str,
+        parent: Option<&str>,
+    ) {
+        let start = node.start_position();
+        self.symbols.push(IndexedPoint {
+            symbol: SymbolDef {
+                name: name.to_string(),
+                kind,
+                file: self.file.to_string(),
+                line: start.row + 1,
+                column: start.column + 1,
+                parent: parent.map(|s| s.to_string()),
+                end_line: node.end_position().row + 1,
+            },
+            source: Confidence::Structure,
+            code_snippet: symbol_snippet(name, snippet_label, node, self.source),
+        });
+    }
+
+    /// 遍历子节点，沿用给定的 parent/current_fn（容器覆盖时显式传覆盖值）。
+    fn recurse(&mut self, node: &Node, parent: Option<&str>, current_fn: Option<&str>) {
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                extract_from_node(&child, self, parent, current_fn);
+            }
+        }
+    }
+}
+
+/// 定义节点分派：容器（设父）/顶层符号/函数/字段/调用各走一个子函数。
+/// parent_sym/current_fn 是递归覆盖变量（容器覆盖时显式传覆盖值）。
 fn extract_from_node(
     node: &Node,
-    source: &str,
-    file: &str,
+    ctx: &mut ExtractCtx<'_>,
     parent_sym: Option<&str>,
-    current_fn: Option<&str>,   // 所属函数/方法名，用于填 CallEdge.caller
-    symbols: &mut Vec<IndexedPoint>,
-    call_edges: &mut Vec<CallEdge>,
+    current_fn: Option<&str>,
 ) {
     let kind = node.kind();
 
     match kind {
-        // ── Definition nodes (TypeScript / Java) ──
-        "class_declaration" | "class_definition" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = match name_node.utf8_text(source.as_bytes()) {
-                    Ok(n) => n,
-                    Err(_) => return,
-                };
-                let start = node.start_position();
-                symbols.push(IndexedPoint {
-                    symbol: SymbolDef {
-                        name: name.to_string(),
-                        kind: SymbolKind::Class,
-                        file: file.to_string(),
-                        line: start.row + 1,
-                        column: start.column + 1,
-                        parent: None,
-                        end_line: node.end_position().row + 1,
-                    },
-                    source: Confidence::Structure,
-                    code_snippet: symbol_snippet(&name, "class", node, source),
-                });
-                // Recurse into class body with this class as parent
-                let parent = name.to_string();
-                for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
-                        extract_from_node(
-                            &child, source, file, Some(&parent), current_fn,
-                            symbols, call_edges,
-                        );
-                    }
-                }
+        // ── 容器符号（TS/Java/Rust）：自身压符号，子节点以自身为父 ──
+        "class_declaration" | "class_definition" | "struct_item" | "enum_item" | "trait_item" => {
+            if extract_container(node, ctx, current_fn) {
                 return; // children already handled
             }
         }
 
+        // ── 顶层符号（TS/Java/Python）：压符号不设父，子节点走底部递归 ──
         "interface_declaration" | "interface_definition" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = match name_node.utf8_text(source.as_bytes()) {
-                    Ok(n) => n,
-                    Err(_) => return,
-                };
-                let start = node.start_position();
-                symbols.push(IndexedPoint {
-                    symbol: SymbolDef {
-                        name: name.to_string(),
-                        kind: SymbolKind::Interface,
-                        file: file.to_string(),
-                        line: start.row + 1,
-                        column: start.column + 1,
-                        parent: None,
-                        end_line: node.end_position().row + 1,
-                    },
-                    source: Confidence::Structure,
-                    code_snippet: symbol_snippet(&name, "interface", node, source),
-                });
-            }
+            extract_leaf(node, ctx, SymbolKind::Interface, "interface", None);
         }
 
         "enum_declaration" | "enum_definition" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = match name_node.utf8_text(source.as_bytes()) {
-                    Ok(n) => n,
-                    Err(_) => return,
-                };
-                let start = node.start_position();
-                symbols.push(IndexedPoint {
-                    symbol: SymbolDef {
-                        name: name.to_string(),
-                        kind: SymbolKind::Enum,
-                        file: file.to_string(),
-                        line: start.row + 1,
-                        column: start.column + 1,
-                        parent: None,
-                        end_line: node.end_position().row + 1,
-                    },
-                    source: Confidence::Structure,
-                    code_snippet: symbol_snippet(&name, "enum", node, source),
-                });
-            }
+            extract_leaf(node, ctx, SymbolKind::Enum, "enum", None);
         }
 
         // ── Rust container nodes (struct / enum / trait / impl) ──
-
-        "struct_item" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = match name_node.utf8_text(source.as_bytes()) {
-                    Ok(n) => n,
-                    Err(_) => return,
-                };
-                let start = node.start_position();
-                symbols.push(IndexedPoint {
-                    symbol: SymbolDef {
-                        name: name.to_string(),
-                        kind: SymbolKind::Class,
-                        file: file.to_string(),
-                        line: start.row + 1,
-                        column: start.column + 1,
-                        parent: None,
-                        end_line: node.end_position().row + 1,
-                    },
-                    source: Confidence::Structure,
-                    code_snippet: symbol_snippet(&name, "struct", node, source),
-                });
-                // Recurse into body with this struct as parent (so fields get indexed)
-                let parent = name.to_string();
-                for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
-                        extract_from_node(
-                            &child, source, file, Some(&parent), current_fn,
-                            symbols, call_edges,
-                        );
-                    }
-                }
-                return; // children already handled
-            }
-        }
-
-        "enum_item" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = match name_node.utf8_text(source.as_bytes()) {
-                    Ok(n) => n,
-                    Err(_) => return,
-                };
-                let start = node.start_position();
-                symbols.push(IndexedPoint {
-                    symbol: SymbolDef {
-                        name: name.to_string(),
-                        kind: SymbolKind::Enum,
-                        file: file.to_string(),
-                        line: start.row + 1,
-                        column: start.column + 1,
-                        parent: None,
-                        end_line: node.end_position().row + 1,
-                    },
-                    source: Confidence::Structure,
-                    code_snippet: symbol_snippet(&name, "enum", node, source),
-                });
-                // Recurse into body with this enum as parent
-                let parent = name.to_string();
-                for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
-                        extract_from_node(
-                            &child, source, file, Some(&parent), current_fn,
-                            symbols, call_edges,
-                        );
-                    }
-                }
-                return; // children already handled
-            }
-        }
-
-        "trait_item" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = match name_node.utf8_text(source.as_bytes()) {
-                    Ok(n) => n,
-                    Err(_) => return,
-                };
-                let start = node.start_position();
-                symbols.push(IndexedPoint {
-                    symbol: SymbolDef {
-                        name: name.to_string(),
-                        kind: SymbolKind::Interface,
-                        file: file.to_string(),
-                        line: start.row + 1,
-                        column: start.column + 1,
-                        parent: None,
-                        end_line: node.end_position().row + 1,
-                    },
-                    source: Confidence::Structure,
-                    code_snippet: symbol_snippet(&name, "trait", node, source),
-                });
-                // Recurse into body with this trait as parent
-                let parent = name.to_string();
-                for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
-                        extract_from_node(
-                            &child, source, file, Some(&parent), current_fn,
-                            symbols, call_edges,
-                        );
-                    }
-                }
-                return; // children already handled
-            }
-        }
 
         // impl_item: no symbol of its own, but sets parent_sym from the `type`
         // field so methods inside it become Method with correct parent.
         // For `impl MyStruct { ... }` the `type` field is "MyStruct".
         // For `impl Trait for MyStruct { ... }` the `type` field is also "MyStruct".
         "impl_item" => {
-            if let Some(type_node) = node.child_by_field_name("type") {
-                let parent_name = match type_node.utf8_text(source.as_bytes()) {
-                    Ok(n) => n.to_string(),
-                    Err(_) => String::new(),
-                };
-                if !parent_name.is_empty() {
-                    for i in 0..node.child_count() {
-                        if let Some(child) = node.child(i) {
-                            extract_from_node(
-                                &child, source, file, Some(&parent_name), current_fn,
-                                symbols, call_edges,
-                            );
-                        }
-                    }
-                    return; // children already handled
-                }
+            if extract_impl(node, ctx, current_fn) {
+                return; // children already handled
             }
             // Fall through: no `type` field → recurse without setting parent.
         }
@@ -277,184 +138,143 @@ fn extract_from_node(
         | "function_item" | "constructor_declaration"
         // Rust trait method declarations (no body)
         | "function_signature_item" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = match name_node.utf8_text(source.as_bytes()) {
-                    Ok(n) => n,
-                    Err(_) => return,
-                };
-                let start = node.start_position();
-                let kind = if parent_sym.is_some() || kind.contains("method") {
-                    SymbolKind::Method
-                } else {
-                    SymbolKind::Function
-                };
-                symbols.push(IndexedPoint {
-                    symbol: SymbolDef {
-                        name: name.to_string(),
-                        kind,
-                        file: file.to_string(),
-                        line: start.row + 1,
-                        column: start.column + 1,
-                        parent: parent_sym.map(|s| s.to_string()),
-                        end_line: node.end_position().row + 1,
-                    },
-                    source: Confidence::Structure,
-                    code_snippet: symbol_snippet(&name, "fn", node, source),
-                });
-                // Recurse into the body with this function as the enclosing caller,
-                // so call edges inside it record `caller = name`. Nested function
-                // definitions re-shadow current_fn when entered.
-                let fn_name = name.to_string();
-                for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
-                        extract_from_node(
-                            &child, source, file, parent_sym, Some(&fn_name),
-                            symbols, call_edges,
-                        );
-                    }
-                }
+            if extract_function(node, ctx, parent_sym) {
                 return; // children already handled
             }
         }
 
         // ── Field nodes (multi-language) ──
+        // Only index class-level fields; skip function-local const/let to avoid
+        // flooding the table with locals (Mo3).
         "field_declaration" | "variable_declarator"
         | "public_field_definition" | "property_definition" => {
-            // Only index class-level fields; skip function-local const/let to avoid
-            // flooding the table with locals (Mo3).
-            if parent_sym.is_some() {
-                if let Some(name_node) = node.child_by_field_name("name") {
-                    let name = match name_node.utf8_text(source.as_bytes()) {
-                        Ok(n) => n,
-                        Err(_) => return,
-                    };
-                    let start = node.start_position();
-                    symbols.push(IndexedPoint {
-                        symbol: SymbolDef {
-                            name: name.to_string(),
-                            kind: SymbolKind::Field,
-                            file: file.to_string(),
-                            line: start.row + 1,
-                            column: start.column + 1,
-                            parent: parent_sym.map(|s| s.to_string()),
-                            end_line: node.end_position().row + 1,
-                        },
-                        source: Confidence::Structure,
-                        code_snippet: symbol_snippet(&name, "field", node, source),
-                    });
-                }
-            }
+            extract_field(node, ctx, parent_sym);
         }
 
         // ── Rust const / static / type alias ──
         "const_item" | "static_item" | "type_item" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = match name_node.utf8_text(source.as_bytes()) {
-                    Ok(n) => n,
-                    Err(_) => return,
-                };
-                let start = node.start_position();
-                symbols.push(IndexedPoint {
-                    symbol: SymbolDef {
-                        name: name.to_string(),
-                        kind: SymbolKind::Variable,
-                        file: file.to_string(),
-                        line: start.row + 1,
-                        column: start.column + 1,
-                        parent: parent_sym.map(|s| s.to_string()),
-                        end_line: node.end_position().row + 1,
-                    },
-                    source: Confidence::Structure,
-                    code_snippet: symbol_snippet(&name, "const", node, source),
-                });
-            }
+            extract_leaf(node, ctx, SymbolKind::Variable, "const", parent_sym);
         }
 
         // ── Python class-level assignments (field-like) ──
         // Only indexed when inside a class (parent_sym set), matching the
         // function-local-variable filtering policy for other languages.
         "assignment" | "augmented_assignment" => {
-            if parent_sym.is_some() {
-                if let Some(left) = node.child_by_field_name("left") {
-                    if let Some(name_node) = find_identifier_in_pattern(left) {
-                        let name = match name_node.utf8_text(source.as_bytes()) {
-                            Ok(n) => n,
-                            Err(_) => return,
-                        };
-                        let start = node.start_position();
-                        symbols.push(IndexedPoint {
-                            symbol: SymbolDef {
-                                name: name.to_string(),
-                                kind: SymbolKind::Field,
-                                file: file.to_string(),
-                                line: start.row + 1,
-                                column: start.column + 1,
-                                parent: parent_sym.map(|s| s.to_string()),
-                                end_line: node.end_position().row + 1,
-                            },
-                            source: Confidence::Structure,
-                            code_snippet: symbol_snippet(&name, "field", node, source),
-                        });
-                    }
-                }
-            }
+            extract_py_field(node, ctx, parent_sym);
         }
 
         // ── Python 3.12+ type alias ──
         "type_alias_statement" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = match name_node.utf8_text(source.as_bytes()) {
-                    Ok(n) => n,
-                    Err(_) => return,
-                };
-                let start = node.start_position();
-                symbols.push(IndexedPoint {
-                    symbol: SymbolDef {
-                        name: name.to_string(),
-                        kind: SymbolKind::Variable,
-                        file: file.to_string(),
-                        line: start.row + 1,
-                        column: start.column + 1,
-                        parent: parent_sym.map(|s| s.to_string()),
-                        end_line: node.end_position().row + 1,
-                    },
-                    source: Confidence::Structure,
-                    code_snippet: symbol_snippet(&name, "type", node, source),
-                });
-            }
+            extract_leaf(node, ctx, SymbolKind::Variable, "type", parent_sym);
         }
 
         // ── Call nodes ──
         // "call" covers Python; "call_expression" covers Rust/TS;
         // "method_invocation" / "function_call" cover Java/TS.
         "method_invocation" | "function_call" | "call_expression" | "call" => {
-            if let Some(name_node) = node.child_by_field_name("name")
-                .or_else(|| node.child_by_field_name("function"))
-            {
-                let raw = match name_node.utf8_text(source.as_bytes()) {
-                    Ok(s) => s,
-                    Err(_) => return,
-                };
-                let callee = callee_leaf_name(raw);
-                let start = node.start_position();
-                call_edges.push(CallEdge {
-                    caller: current_fn.unwrap_or("").to_string(),
-                    callee: callee.to_string(),
-                    file: file.to_string(),
-                    line: start.row + 1,
-                });
-            }
+            extract_call(node, ctx, current_fn);
         }
 
         _ => {}
     }
 
     // Recurse into children (unless early-returned for container nodes above)
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
-            extract_from_node(&child, source, file, parent_sym, current_fn, symbols, call_edges);
-        }
+    ctx.recurse(node, parent_sym, current_fn);
+}
+
+/// 容器符号（class/struct/enum/trait）：压符号，子节点以自身为父。
+/// 返回 false（无 name/解码失败）= 落到底部递归（与原实现一致）。
+fn extract_container(node: &Node, ctx: &mut ExtractCtx<'_>, current_fn: Option<&str>) -> bool {
+    let (kind, snippet) = match node.kind() {
+        "class_declaration" | "class_definition" => (SymbolKind::Class, "class"),
+        "struct_item" => (SymbolKind::Class, "struct"),
+        "enum_item" => (SymbolKind::Enum, "enum"),
+        "trait_item" => (SymbolKind::Interface, "trait"),
+        _ => return false,
+    };
+    let Some(name_node) = node.child_by_field_name("name") else { return false };
+    let Ok(name) = name_node.utf8_text(ctx.source.as_bytes()) else { return false };
+    ctx.push_symbol(name, kind, node, snippet, None);
+    let parent = name.to_string();
+    ctx.recurse(node, Some(&parent), current_fn);
+    true
+}
+
+/// 顶层/叶子符号（interface/enum_decl/const/static/type alias）：压符号不设父，
+/// 子节点由调用方走底部递归。
+fn extract_leaf(
+    node: &Node,
+    ctx: &mut ExtractCtx<'_>,
+    kind: SymbolKind,
+    snippet: &str,
+    parent: Option<&str>,
+) {
+    let Some(name_node) = node.child_by_field_name("name") else { return };
+    let Ok(name) = name_node.utf8_text(ctx.source.as_bytes()) else { return };
+    ctx.push_symbol(name, kind, node, snippet, parent);
+}
+
+/// impl 块：自身不产生符号，子节点以 type 字段（被 impl 的类型）为父。
+/// 返回 true = 子节点已处理（有 type 字段）；false = 落到底部递归。
+fn extract_impl(node: &Node, ctx: &mut ExtractCtx<'_>, current_fn: Option<&str>) -> bool {
+    let Some(type_node) = node.child_by_field_name("type") else { return false };
+    let Ok(parent_name) = type_node.utf8_text(ctx.source.as_bytes()) else { return false };
+    if parent_name.is_empty() {
+        return false;
     }
+    ctx.recurse(node, Some(parent_name), current_fn);
+    true
+}
+
+/// 函数/方法：压符号；子节点以自身为 current_fn（嵌套定义重设），parent 透传。
+/// 返回 false（无 name/解码失败）= 落到底部递归。
+fn extract_function(node: &Node, ctx: &mut ExtractCtx<'_>, parent_sym: Option<&str>) -> bool {
+    let Some(name_node) = node.child_by_field_name("name") else { return false };
+    let Ok(name) = name_node.utf8_text(ctx.source.as_bytes()) else { return false };
+    let kind = if parent_sym.is_some() || node.kind().contains("method") {
+        SymbolKind::Method
+    } else {
+        SymbolKind::Function
+    };
+    ctx.push_symbol(name, kind, node, "fn", parent_sym);
+    let fn_name = name.to_string();
+    ctx.recurse(node, parent_sym, Some(&fn_name));
+    true
+}
+
+/// 类级字段：只有父存在时索引（函数局部变量跳过，Mo3）。
+fn extract_field(node: &Node, ctx: &mut ExtractCtx<'_>, parent_sym: Option<&str>) {
+    let Some(parent_sym) = parent_sym else { return };
+    let Some(name_node) = node.child_by_field_name("name") else { return };
+    let Ok(name) = name_node.utf8_text(ctx.source.as_bytes()) else { return };
+    ctx.push_symbol(name, SymbolKind::Field, node, "field", Some(parent_sym));
+}
+
+/// Python 类级赋值：left 可能是 identifier 或 pattern_list，递归找标识符。
+fn extract_py_field(node: &Node, ctx: &mut ExtractCtx<'_>, parent_sym: Option<&str>) {
+    let Some(parent_sym) = parent_sym else { return };
+    let Some(left) = node.child_by_field_name("left") else { return };
+    let Some(name_node) = find_identifier_in_pattern(left) else { return };
+    let Ok(name) = name_node.utf8_text(ctx.source.as_bytes()) else { return };
+    ctx.push_symbol(name, SymbolKind::Field, node, "field", Some(parent_sym));
+}
+
+/// 调用边：caller 是当前所属函数（无则空串）。
+fn extract_call(node: &Node, ctx: &mut ExtractCtx<'_>, current_fn: Option<&str>) {
+    let Some(name_node) = node.child_by_field_name("name")
+        .or_else(|| node.child_by_field_name("function"))
+    else {
+        return;
+    };
+    let Ok(raw) = name_node.utf8_text(ctx.source.as_bytes()) else { return };
+    let callee = callee_leaf_name(raw);
+    let start = node.start_position();
+    ctx.call_edges.push(CallEdge {
+        caller: current_fn.unwrap_or("").to_string(),
+        callee: callee.to_string(),
+        file: ctx.file.to_string(),
+        line: start.row + 1,
+    });
 }
 
 /// Extract the identifier name from a tree-sitter pattern node.
@@ -564,15 +384,13 @@ fn extract_vue_sfc(
         let mut parser = tree_sitter::Parser::new();
         if parser.set_language(ts_lang).is_ok() {
             if let Some(tree) = parser.parse(&script_content, None) {
-                extract_from_node(
-                    &tree.root_node(),
-                    &script_content,
-                    &relative_path,
-                    None,
-                    None,
-                    &mut symbols,
-                    &mut call_edges,
-                );
+                let mut ctx = ExtractCtx {
+                    source: &script_content,
+                    file: &relative_path,
+                    symbols: &mut symbols,
+                    call_edges: &mut call_edges,
+                };
+                extract_from_node(&tree.root_node(), &mut ctx, None, None);
             }
         }
     }
@@ -796,6 +614,43 @@ mod tests {
         // checking the grammar's node-types.json.
     }
 
+    #[test]
+    fn python_nested_pattern_list_finds_identifiers() {
+        // 嵌套 tuple pattern 必须排在首位才会触发递归：find_identifier_in_pattern
+        // 遇到第一个 identifier 就短路返回（单字段语义——一个 assignment 只索引
+        // 一个标识符，Mo3）。`(b, c), a` 的 pattern_list 首元素是 tuple_pattern，
+        // 必须递归进去才能找到 b（覆盖 find_identifier_in_pattern 的递归分支）。
+        let src = "class Layout:\n    (b, c), a = (1, 2), 3";
+        let pm = ParserManager::new();
+        let (points, _) = extract_symbols(Path::new("layout.py"), src, &pm, Path::new(""));
+        let b = points
+            .iter()
+            .find(|p| p.symbol.name == "b" && p.symbol.kind == SymbolKind::Field);
+        assert!(b.is_some(), "nested tuple pattern must be searched recursively");
+        assert_eq!(b.unwrap().symbol.parent.as_deref(), Some("Layout"));
+        // 单字段语义：只索引第一个标识符，c/a 不出现
+        assert!(!points.iter().any(|p| p.symbol.name == "c"));
+        assert!(!points.iter().any(|p| p.symbol.name == "a"));
+    }
+
+    #[test]
+    fn long_function_snippet_is_truncated_to_budget() {
+        // symbol_snippet 的 512 字符预算：超长函数体必须截断并带 "..."（覆盖
+        // 截断分支）。用长注释撑大函数文本，确保 utf8_text 超过 512。
+        let body = format!("// {}\n", "x".repeat(600));
+        let src = format!("class Big {{\n{}\n  run() {{}}\n}}", body);
+        let pm = ParserManager::new();
+        let (points, _) = extract_symbols(Path::new("Big.ts"), &src, &pm, Path::new(""));
+        let big = points.iter().find(|p| p.symbol.name == "Big").expect("class symbol");
+        assert!(big.code_snippet.len() <= 515, "snippet within budget: {}", big.code_snippet.len());
+        assert!(big.code_snippet.ends_with("..."), "truncated snippet ends with ellipsis");
+        // 短符号不受影响
+        let src2 = "class Small { x = 1 }";
+        let (points2, _) = extract_symbols(Path::new("Small.ts"), src2, &pm, Path::new(""));
+        let small = points2.iter().find(|p| p.symbol.name == "Small").unwrap();
+        assert!(!small.code_snippet.ends_with("..."));
+    }
+
     // ── Vue tests ──
 
     #[test]
@@ -854,3 +709,10 @@ mod tests {
         assert_eq!(handler.symbol.end_line, 5, "handleClick spans SFC lines 3-5");
     }
 }
+
+// 独立测试文件（可访问本模块私有项，release 构建不编译）。
+// #[path]：extract.rs 是模块文件，默认查找会去 extract/extract_tests.rs；
+// 显式指向同目录文件。
+#[cfg(test)]
+#[path = "extract_tests.rs"]
+mod extract_tests;

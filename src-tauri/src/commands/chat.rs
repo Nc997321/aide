@@ -16,77 +16,110 @@ async fn resolve_active_provider(
         .map_err(|error| error.to_string())?
 }
 
-/// 构造 `send` 命令的 JSON（纯函数，可单测）。
+/// send 命令的可选行为（全部带 Default，调用点 `..Default::default()` 起步）。
+///
+/// 具名字段解决裸 bool 调用点（`false, true, true`）不可读问题；`jump_queue` 用
+/// `bool`（原 `Option<bool>` 的 None 与 Some(false) 行为相同，三角态是假的）。
+#[derive(Default)]
+struct SendOptions<'a> {
+    images: Option<&'a [serde_json::Value]>,
+    resume_id: Option<String>,
+    initial_model: Option<String>,
+    initial_effort: Option<String>,
+    permission_mode: Option<String>,
+    jump_queue: bool,
+    provider_switched: bool,
+    auto_title: bool,
+    thinking_enabled: bool,
+}
+
+/// 构造 `send` 命令的 JSON（纯函数，可单测）。骨架目录：必填字段 + 逐项附件，
+/// 每个附件一个子函数（attach_*），零分支，读者可一眼读出"由哪几层组成"。
 ///
 /// 关键：resume_id 进 `resume_session_id` 独立字段，**不覆盖 `session_id`**（路由键）。
 /// SessionManager 按 session_id 路由到/建 worker；SessionWorker 在首条 send（无活 query）
 /// 时把 resume_session_id 赋给 resumeSource，startLoop 的 forkResumeOptions 据此 resume。
 /// 旧行为（resume_id 覆盖 session_id）会让路由键换成真 ID 但 resumeSource 仍空 → 不 resume。
-#[allow(clippy::too_many_arguments)]
 fn build_send_command(
     session_id: &str,
     prompt: &str,
-    images: Option<&Vec<serde_json::Value>>,
-    resume_id: Option<String>,
-    initial_model: Option<String>,
-    initial_effort: Option<String>,
-    permission_mode: Option<String>,
-    jump_queue: Option<bool>,
-    workspace_root: Option<String>,
-    provider_switched: bool,
-    auto_title: bool,
-    thinking_enabled: bool,
-    env_vars: &HashMap<String, String>,
     cwd: &str,
+    env_vars: &HashMap<String, String>,
+    opts: SendOptions<'_>,
 ) -> serde_json::Value {
-    let mut cmd = json!({
+    let mut cmd = base_send_command(session_id, prompt, cwd, env_vars, &opts);
+    attach_images(&mut cmd, opts.images);
+    attach_resume(&mut cmd, opts.resume_id);
+    attach_env_override(&mut cmd, "ANTHROPIC_MODEL", opts.initial_model);
+    attach_env_override(&mut cmd, "CLAUDE_CODE_EFFORT_LEVEL", opts.initial_effort);
+    attach_permission_mode(&mut cmd, opts.permission_mode);
+    attach_flag(&mut cmd, "jump_queue", opts.jump_queue);
+    attach_flag(&mut cmd, "provider_switched", opts.provider_switched);
+    cmd
+}
+
+/// 必填骨架。env 恒存在（`attach_env_override` 依赖此不变式，不做 get_mut 兜底）。
+fn base_send_command(
+    session_id: &str,
+    prompt: &str,
+    cwd: &str,
+    env_vars: &HashMap<String, String>,
+    opts: &SendOptions<'_>,
+) -> serde_json::Value {
+    json!({
         "cmd": "send",
         "session_id": session_id,
         "prompt": prompt,
         "cwd": cwd,
         "env": env_vars,
-        "auto_title": auto_title,
-        "thinking_enabled": thinking_enabled,
-    });
+        "auto_title": opts.auto_title,
+        "thinking_enabled": opts.thinking_enabled,
+    })
+}
+
+/// images 非空才落（None 与空数组均不落字段）。
+fn attach_images(cmd: &mut serde_json::Value, images: Option<&[serde_json::Value]>) {
     if let Some(imgs) = images {
         if !imgs.is_empty() {
             cmd["images"] = json!(imgs);
         }
     }
+}
+
+/// resume_id 走独立字段（不动 session_id 路由键）。
+fn attach_resume(cmd: &mut serde_json::Value, resume_id: Option<String>) {
     if let Some(rid) = resume_id {
         cmd["resume_session_id"] = json!(rid);
     }
-    if let Some(ref model) = initial_model {
-        if !model.is_empty() {
-            if let Some(env) = cmd.get_mut("env").and_then(|e| e.as_object_mut()) {
-                env.insert("ANTHROPIC_MODEL".to_string(), json!(model));
-            }
+}
+
+/// 非空字符串走 env 覆盖（model / effort 同形）。None 与空串不注入（保留
+/// provider env 原值）。env 恒存在（base 不变式），直接索引不兜底。
+/// effort 注：CLAUDE_CODE_EFFORT_LEVEL 不在 connection_fingerprint 白名单里，
+/// 不会触发 provider_switched 重启；也不会被 sidecar 透传成 CLI 的 env
+/// （worker 显式删除，effort 只走 options.effort + applyFlagSettings）。
+fn attach_env_override(cmd: &mut serde_json::Value, key: &str, value: Option<String>) {
+    if let Some(v) = value {
+        if !v.is_empty() {
+            cmd["env"][key] = json!(v);
         }
     }
-    // effort 与 initial_model 同形：骑 env 通道（CLAUDE_CODE_EFFORT_LEVEL），
-    // sidecar 读作初始/每轮档位。注意它不在 connection_fingerprint 白名单里，
-    // 不会触发 provider_switched 重启；也不会被 sidecar 透传成 CLI 的 env
-    // （worker 显式删除，effort 只走 options.effort + applyFlagSettings）。
-    if let Some(ref effort) = initial_effort {
-        if !effort.is_empty() {
-            if let Some(env) = cmd.get_mut("env").and_then(|e| e.as_object_mut()) {
-                env.insert("CLAUDE_CODE_EFFORT_LEVEL".to_string(), json!(effort));
-            }
+}
+
+/// 非空 mode 才落 permission_mode 字段。
+fn attach_permission_mode(cmd: &mut serde_json::Value, mode: Option<String>) {
+    if let Some(m) = mode {
+        if !m.is_empty() {
+            cmd["permission_mode"] = json!(m);
         }
     }
-    if let Some(mode) = permission_mode {
-        if !mode.is_empty() {
-            cmd["permission_mode"] = json!(mode);
-        }
+}
+
+/// 条件布尔：true 才落字段（false/缺省不写，与原 Option<bool> 的 None 行为一致）。
+fn attach_flag(cmd: &mut serde_json::Value, key: &str, on: bool) {
+    if on {
+        cmd[key] = json!(true);
     }
-    if jump_queue == Some(true) {
-        cmd["jump_queue"] = json!(true);
-    }
-    if provider_switched {
-        cmd["provider_switched"] = json!(true);
-    }
-    let _ = workspace_root; // cwd 已在外部解析传入
-    cmd
 }
 
 #[tauri::command]
@@ -125,18 +158,19 @@ pub async fn send_message(
     let mut cmd = build_send_command(
         &session_id,
         &prompt,
-        images.as_ref(),
-        resume_id,
-        initial_model,
-        initial_effort,
-        permission_mode,
-        jump_queue,
-        workspace_root,
-        provider_switched,
-        auto_title,
-        thinking_enabled,
-        &provider_env,
         &cwd_str,
+        &provider_env,
+        SendOptions {
+            images: images.as_deref(),
+            resume_id,
+            initial_model,
+            initial_effort,
+            permission_mode,
+            jump_queue: jump_queue.unwrap_or(false),
+            provider_switched,
+            auto_title,
+            thinking_enabled,
+        },
     );
 
     // 工作区信任标志下发给 sidecar：不信任时 startLoop 据此跳过项目 CLAUDE.md /
@@ -397,6 +431,15 @@ pub fn get_default_permission_modes(app_handle: tauri::AppHandle) -> Result<serd
 mod tests {
     use super::*;
 
+    /// 默认开 auto_title/thinking_enabled（与 send_message 生产路径的默认一致）。
+    fn base_opts() -> SendOptions<'static> {
+        SendOptions {
+            auto_title: true,
+            thinking_enabled: true,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn send_message_cmd_has_session_id() {
         // 回归：所有命令必须带 session_id，否则 Runtime 无法路由
@@ -529,17 +572,18 @@ mod tests {
     /// 覆盖了会让 SessionManager 用真 ID 建 worker，但 SessionWorker.resumeSource 仍空 → 不 resume。
     #[test]
     fn build_send_command_resume_goes_to_separate_field() {
-        let env: HashMap<String, String> = HashMap::new();
         let cmd = build_send_command(
-            "main-sid",        // session_id（路由键 = 前端 sid）
+            "main-sid", // session_id（路由键 = 前端 sid）
             "继续聊",
-            None,              // images
-            Some("resume-xyz".to_string()), // resume_id
-            None, None, None, None, None, false, true, true, &env,
             "/tmp",
+            &HashMap::new(),
+            SendOptions {
+                resume_id: Some("resume-xyz".to_string()),
+                ..base_opts()
+            },
         );
         assert_eq!(cmd["cmd"], "send");
-        assert_eq!(cmd["session_id"], "main-sid");       // 路由键不变
+        assert_eq!(cmd["session_id"], "main-sid");          // 路由键不变
         assert_eq!(cmd["resume_session_id"], "resume-xyz"); // resume 进独立字段
         assert!(cmd.get("provider_switched").is_none() || cmd["provider_switched"] == false);
     }
@@ -547,12 +591,53 @@ mod tests {
     /// 回归：无 resume_id 时不出 resume_session_id 字段（普通新会话）。
     #[test]
     fn build_send_command_no_resume_field_when_absent() {
-        let env: HashMap<String, String> = HashMap::new();
-        let cmd = build_send_command(
-            "temp-1", "hi", None, None, None, None, None, None, None, false, true, true, &env, "/tmp",
-        );
+        let cmd = build_send_command("temp-1", "hi", "/tmp", &HashMap::new(), base_opts());
         assert_eq!(cmd["session_id"], "temp-1");
         assert!(cmd.get("resume_session_id").is_none());
+    }
+
+    /// images 非空才落字段（Some 非空 → cmd.images；空数组与 None 均不落）。
+    #[test]
+    fn build_send_command_carries_images_when_nonempty() {
+        let cmd = build_send_command(
+            "s", "hi", "/tmp", &HashMap::new(),
+            SendOptions {
+                images: Some(&[json!({"mime": "image/png", "data": "aGk="})]),
+                ..base_opts()
+            },
+        );
+        assert_eq!(cmd["images"][0]["mime"], "image/png");
+        // 空数组：与 None 一样不落字段
+        let empty = build_send_command(
+            "s", "hi", "/tmp", &HashMap::new(),
+            SendOptions { images: Some(&[]), ..base_opts() },
+        );
+        assert!(empty.get("images").is_none());
+    }
+
+    /// initial_model 注入 env.ANTHROPIC_MODEL 覆盖 provider 默认；空串不注入
+    /// （保留 provider env 原值）。与 effort 共用 attach_env_override（带值/空串臂）。
+    #[test]
+    fn build_send_command_carries_initial_model() {
+        let env: HashMap<String, String> =
+            HashMap::from([("ANTHROPIC_MODEL".to_string(), "claude-sonnet-4-5".to_string())]);
+        let cmd = build_send_command(
+            "s", "hi", "/tmp", &env,
+            SendOptions {
+                initial_model: Some("claude-opus-4-1".to_string()),
+                ..base_opts()
+            },
+        );
+        assert_eq!(cmd["env"]["ANTHROPIC_MODEL"], "claude-opus-4-1");
+        // 空串：不注入，provider env 原值保留
+        let blank = build_send_command(
+            "s", "hi", "/tmp", &env,
+            SendOptions {
+                initial_model: Some(String::new()),
+                ..base_opts()
+            },
+        );
+        assert_eq!(blank["env"]["ANTHROPIC_MODEL"], "claude-sonnet-4-5");
     }
 
     /// effort 与 initial_model 同形：initial_effort 注入 env.CLAUDE_CODE_EFFORT_LEVEL
@@ -562,27 +647,62 @@ mod tests {
         let env: HashMap<String, String> =
             HashMap::from([("CLAUDE_CODE_EFFORT_LEVEL".to_string(), "LOW".to_string())]);
         let cmd = build_send_command(
-            "s", "hi", None, None, None, Some("max".to_string()), None, None, None,
-            false, true, true, &env, "/tmp",
+            "s", "hi", "/tmp", &env,
+            SendOptions {
+                initial_effort: Some("max".to_string()),
+                ..base_opts()
+            },
         );
         assert_eq!(cmd["env"]["CLAUDE_CODE_EFFORT_LEVEL"], "max");
         // 缺省：provider env 原值保留（sidecar 读作 provider 默认档位）
-        let cmd2 = build_send_command(
-            "s", "hi", None, None, None, None, None, None, None,
-            false, true, true, &env, "/tmp",
-        );
+        let cmd2 = build_send_command("s", "hi", "/tmp", &env, base_opts());
         assert_eq!(cmd2["env"]["CLAUDE_CODE_EFFORT_LEVEL"], "LOW");
+    }
+
+    /// permission_mode 非空才落字段；空串不落。
+    #[test]
+    fn build_send_command_carries_permission_mode() {
+        let cmd = build_send_command(
+            "s", "hi", "/tmp", &HashMap::new(),
+            SendOptions {
+                permission_mode: Some("writeEdits".to_string()),
+                ..base_opts()
+            },
+        );
+        assert_eq!(cmd["permission_mode"], "writeEdits");
+        // 空串：不落字段
+        let blank = build_send_command(
+            "s", "hi", "/tmp", &HashMap::new(),
+            SendOptions {
+                permission_mode: Some(String::new()),
+                ..base_opts()
+            },
+        );
+        assert!(blank.get("permission_mode").is_none());
+    }
+
+    /// jump_queue 仅 true 落字段（false 与缺省一致，不落）。
+    #[test]
+    fn build_send_command_carries_jump_queue_when_enabled() {
+        let on = build_send_command(
+            "s", "hi", "/tmp", &HashMap::new(),
+            SendOptions { jump_queue: true, ..base_opts() },
+        );
+        assert_eq!(on["jump_queue"], true);
+        let off = build_send_command("s", "hi", "/tmp", &HashMap::new(), base_opts());
+        assert!(off.get("jump_queue").is_none());
     }
 
     /// 回归：provider_switched 仍照常带，且不干扰 resume_session_id。
     #[test]
     fn build_send_command_provider_switched_and_resume_coexist() {
-        let env: HashMap<String, String> = HashMap::new();
         let cmd = build_send_command(
-            "main-sid", "hi", None,
-            Some("resume-xyz".to_string()),
-            None, None, None, None, None,
-            true, true, true, &env, "/tmp",
+            "main-sid", "hi", "/tmp", &HashMap::new(),
+            SendOptions {
+                resume_id: Some("resume-xyz".to_string()),
+                provider_switched: true,
+                ..base_opts()
+            },
         );
         assert_eq!(cmd["session_id"], "main-sid");
         assert_eq!(cmd["resume_session_id"], "resume-xyz");
@@ -593,13 +713,11 @@ mod tests {
     /// false 时 sidecar 首轮后不生成会话标题。
     #[test]
     fn build_send_command_carries_auto_title_flag() {
-        let env: HashMap<String, String> = HashMap::new();
-        let on = build_send_command(
-            "s", "hi", None, None, None, None, None, None, None, false, true, true, &env, "/tmp",
-        );
+        let on = build_send_command("s", "hi", "/tmp", &HashMap::new(), base_opts());
         assert_eq!(on["auto_title"], true);
         let off = build_send_command(
-            "s", "hi", None, None, None, None, None, None, None, false, false, true, &env, "/tmp",
+            "s", "hi", "/tmp", &HashMap::new(),
+            SendOptions { auto_title: false, ..base_opts() },
         );
         assert_eq!(off["auto_title"], false);
     }
@@ -608,13 +726,11 @@ mod tests {
     /// false 时 spawn 的 thinking 参数为 disabled（会话内无效，只影响新建会话）。
     #[test]
     fn build_send_command_carries_thinking_enabled_flag() {
-        let env: HashMap<String, String> = HashMap::new();
-        let on = build_send_command(
-            "s", "hi", None, None, None, None, None, None, None, false, true, true, &env, "/tmp",
-        );
+        let on = build_send_command("s", "hi", "/tmp", &HashMap::new(), base_opts());
         assert_eq!(on["thinking_enabled"], true);
         let off = build_send_command(
-            "s", "hi", None, None, None, None, None, None, None, false, true, false, &env, "/tmp",
+            "s", "hi", "/tmp", &HashMap::new(),
+            SendOptions { thinking_enabled: false, ..base_opts() },
         );
         assert_eq!(off["thinking_enabled"], false);
     }
