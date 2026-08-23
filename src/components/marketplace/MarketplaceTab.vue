@@ -12,6 +12,7 @@ const {
   sources,
   plugins,
   filteredPlugins,
+  allEntries,
   hiddenCount,
   installedPlugins,
   loading,
@@ -87,15 +88,15 @@ function categoryLabel(key: string): string {
   return categoryLabelMap[key] || key;
 }
 
-// 当前已加载源中已安装的数量：与「已安装」视图实际显示条数一致，
-// 避免徽标 N 与列表条数错配（installedPlugins.size 含禁用源的已装项，会偏多）。
+// 展示集中已安装的数量：与「已安装」视图实际显示条数一致。
+// 基于 allEntries（目录条目 + 合成本地条目），local 市场/禁用源的已装项也算。
 const installedVisibleCount = computed(() =>
-  plugins.value.filter((p) => getInstalled(p.marketName, p.name)).length,
+  allEntries.value.filter((p) => getInstalled(p.marketName, p.name)).length,
 );
 
 const categories = computed(() => {
   const map = new Map<string, number>();
-  for (const p of plugins.value) {
+  for (const p of allEntries.value) {
     if (p.category) {
       map.set(p.category, (map.get(p.category) || 0) + 1);
     }
@@ -104,7 +105,7 @@ const categories = computed(() => {
     .sort((a, b) => b[1] - a[1])
     .map(([key, count]) => ({ key, label: categoryLabel(key), count }));
   const all = [
-    { key: "all", label: "全部", count: plugins.value.length },
+    { key: "all", label: "全部", count: allEntries.value.length },
     ...entries,
   ];
   // 0 安装时不占位（面板空间有限）；「已安装」作为伪分类置于最前，单选互斥。

@@ -18,10 +18,39 @@ const hiddenCount = ref(0);
 
 const keyOf = (market: string, name: string) => `${name}@${market}`;
 
+// 已安装但不在任何已启用市场源目录里的插件（local 市场直装、源被禁用后仍安装的）。
+// 合成为列表条目——否则「已安装」视图按目录条目过滤永远看不到它们，
+// 底部「N 已安装」与列表对不上。无更新/安装概念：versionId 与自身一致，hasUpdate 恒 false。
+const installedOnlyEntries = computed<PluginEntry[]>(() => {
+  const inCatalog = new Set(plugins.value.map((p) => keyOf(p.marketName, p.name)));
+  const out: PluginEntry[] = [];
+  for (const inst of installedPlugins.value.values()) {
+    if (inCatalog.has(keyOf(inst.market, inst.name))) continue;
+    out.push({
+      name: inst.name,
+      displayName: inst.displayName,
+      description: inst.description,
+      version: inst.version,
+      versionId: inst.versionId,
+      sourceId: inst.market,
+      marketName: inst.market,
+      category: "",
+      homepage: "",
+      repository: "",
+      availability: "available",
+      unsupported: [],
+    });
+  }
+  return out;
+});
+
+// 展示全集 = 目录条目 + 已装但不在目录的条目；「全部」「已安装」共用，计数一致。
+const allEntries = computed<PluginEntry[]>(() => [...plugins.value, ...installedOnlyEntries.value]);
+
 const filteredPlugins = computed(() => {
   const q = searchQuery.value.toLowerCase().trim();
-  if (!q) return plugins.value;
-  return plugins.value.filter((p) =>
+  if (!q) return allEntries.value;
+  return allEntries.value.filter((p) =>
     p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q),
   );
 });
@@ -107,7 +136,7 @@ function del(set: Ref<Set<string>>, name: string) {
 export function useMarketplace() {
   return {
     sources, plugins, installedPlugins, loading, installing, updating,
-    error, errorActions, searchQuery, hiddenCount, filteredPlugins,
+    error, errorActions, searchQuery, hiddenCount, filteredPlugins, allEntries,
     isInstalled, isInstalling, getInstalled, hasUpdate,
     fetchSources, fetchPlugins, refreshInstalled,
     installPlugin, uninstallPlugin, updatePlugin, setEnabled, refreshSource, setSourceEnabled,

@@ -38,13 +38,23 @@ const sourceLabel = computed(() => {
       return "官方";
     case "claude-community":
       return "社区";
+    case "local":
+      return "本地";
     default:
       return props.entry.sourceId;
   }
 });
 
 const badgeClass = computed(() => {
-  return props.entry.sourceId === "claude-plugins-official" ? "official" : "community";
+  switch (props.entry.sourceId) {
+    case "claude-plugins-official":
+      return "official";
+    case "claude-community":
+      return "community";
+    default:
+      // 合成本地条目（sourceId=market）与未知源共用中性徽标。
+      return "local";
+  }
 });
 
 const caveatText = computed(() => {
@@ -211,6 +221,11 @@ function openGit() {
   color: var(--aide-info);
   border-color: color-mix(in srgb, var(--aide-info) 35%, transparent);
   background: color-mix(in srgb, var(--aide-info) 10%, transparent);
+}
+
+.badge.local {
+  color: var(--aide-text-secondary);
+  background: var(--aide-bg-deep);
 }
 
 .cat {
