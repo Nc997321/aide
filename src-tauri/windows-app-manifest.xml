@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Windows 应用清单：bin 与测试可执行文件统一由 build.rs 经 /MANIFESTINPUT 嵌入。
+     内容与 tauri-build 默认清单一致（仅 comctl32 v6 依赖），但 tauri 默认只把清单
+     编进 bin 的资源——cargo test 的 lib-test harness 拿不到，一旦链接进 comctl32
+     v6 专属符号（tauri-runtime-wry 对话框 / muda 菜单的 TaskDialogIndirect 等），
+     测试进程加载即 0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND（tauri#11179）。
+     故关掉 tauri 的资源版清单（build.rs 里 new_without_app_manifest），统一走这里。 -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*" />
+    </dependentAssembly>
+  </dependency>
+</assembly>
