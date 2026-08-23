@@ -41,8 +41,8 @@ async function confirm() {
     await openFolder(p);   // createWorkspace + refresh + 设激活 key
     emit("selected", p);   // App 侧 onSidebarWsChanged 走完整加载（文件树/run 配置/JDK）
     ob.advance();
-  } catch (e: any) {
-    error.value = typeof e === "string" ? e : (e?.message ?? "打开目录失败");
+  } catch (e: unknown) {
+    error.value = typeof e === "string" ? e : (e instanceof Error ? e.message : "打开目录失败");
   } finally {
     busy.value = false;
   }
@@ -85,7 +85,7 @@ async function confirm() {
 .err { font-size: 11.5px; color: var(--aide-danger); }
 .confirm-btn {
   width: 100%; padding: 10px 16px; border-radius: var(--aide-radius-md);
-  background: var(--aide-accent-gradient); color: #eef0ff; font-size: 13px; font-weight: 600;
+  background: var(--aide-accent-gradient); color: var(--aide-text-on-accent); font-size: 13px; font-weight: 600;
   box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset);
   border: 1px solid rgba(150,170,255,.45); cursor: pointer;
   transition: all .16s var(--aide-ease);

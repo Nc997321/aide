@@ -20,7 +20,6 @@ export function fileMenuItems(
   path: string,
   projectRoot: string,
   onDeleted?: () => void,
-  _sessionId?: string,
 ): MenuItem[] {
   const fileName = path.split(/[/\\]/).pop() || path;
   const viewer = useFileViewer();
@@ -70,11 +69,15 @@ export function fileMenuItems(
 export function directoryMenuItems(
   path: string,
   projectRoot: string,
-  onToggle?: () => void,
-  onRefresh?: () => void,
-  onDeleted?: () => void,
-  refreshDir?: (dirPath: string) => void,
+  callbacks: {
+    onToggle?: () => void;
+    onRefresh?: () => void;
+    onDeleted?: () => void;
+    /** 粘贴时刷新「剪切源」所在目录（不同于本目录的 onRefresh） */
+    refreshDir?: (dirPath: string) => void;
+  },
 ): MenuItem[] {
+  const { onToggle, onRefresh, onDeleted, refreshDir } = callbacks;
   const dirName = path.split(/[/\\]/).pop() || path;
   return [
     { label: "展开/折叠", action: onToggle },
@@ -187,10 +190,13 @@ export function fileTreeAreaMenuItems(
 
 export function sessionMenuItems(
   id: string,
-  onRenamed: (name: string) => void,
-  onOptimisticRemove: () => void,
-  onDeleteFailed: () => void,
+  callbacks: {
+    onRenamed: (name: string) => void;
+    onOptimisticRemove: () => void;
+    onDeleteFailed: () => void;
+  },
 ): MenuItem[] {
+  const { onRenamed, onOptimisticRemove, onDeleteFailed } = callbacks;
   const pane = usePaneLayout();
   return [
     // 混合 tab 布局：任意工作区的会话都可直接开 tab/分屏，cwd 跟会话归属走

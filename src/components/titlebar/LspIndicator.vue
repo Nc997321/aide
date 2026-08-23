@@ -131,7 +131,12 @@ async function setEnabled(v: boolean) {
 
 // ── 安装向导（随包分发的 lsp-install-guide.html，系统浏览器打开）──
 async function openGuide() {
-  await api.openLspInstallGuide().catch(() => {});
+  try {
+    await api.openLspInstallGuide();
+  } catch (e) {
+    // 打开系统浏览器失败不阻断面板（次要路径），但落日志便于排查
+    console.warn("[LspIndicator] 打开安装向导失败:", e);
+  }
 }
 
 // ── 服务器覆盖（lsp.servers[lang]：program + args，优先级高于 PATH 发现）──
@@ -182,7 +187,11 @@ async function saveOverride(lang: string) {
       await lsp.setEnabled(true);
     }
     stopEdit(lang);
-  } catch { /* 静默 */ }
+  } catch (e) {
+    // 保存失败：保留编辑态让用户能重试/修改（stopEdit 不执行），并落日志——
+    // 本组件无 toast 通道（标题栏徽章区），console.warn 是唯一反馈出口
+    console.warn(`[LspIndicator] 保存 ${lang} 服务器覆盖失败，编辑态已保留:`, e);
+  }
 }
 async function clearOverride(lang: string) {
   overrides.value[lang] = { program: "", args: "" };

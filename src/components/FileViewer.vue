@@ -51,19 +51,19 @@ function measureBounds() {
   };
 }
 
-function tileGrid(wins: FileWindowState[], x: number, y: number, w: number, h: number) {
+function tileGrid(wins: FileWindowState[], area: { x: number; y: number; w: number; h: number }) {
   const n = wins.length;
   if (!n) return;
   // 按区域宽高比选列数，尽量让每格接近常规窗口比例
-  const cols = Math.min(n, Math.max(1, Math.round(Math.sqrt((n * w) / h))));
+  const cols = Math.min(n, Math.max(1, Math.round(Math.sqrt((n * area.w) / area.h))));
   const rows = Math.ceil(n / cols);
-  const cellW = (w - (cols - 1) * MARGIN) / cols;
-  const cellH = (h - (rows - 1) * MARGIN) / rows;
+  const cellW = (area.w - (cols - 1) * MARGIN) / cols;
+  const cellH = (area.h - (rows - 1) * MARGIN) / rows;
   wins.forEach((win, i) => {
     const c = i % cols;
     const r = Math.floor(i / cols);
-    win.x = Math.round(x + c * (cellW + MARGIN));
-    win.y = Math.round(y + r * (cellH + MARGIN));
+    win.x = Math.round(area.x + c * (cellW + MARGIN));
+    win.y = Math.round(area.y + r * (cellH + MARGIN));
     win.w = Math.round(cellW);
     win.h = Math.round(cellH);
   });
@@ -121,9 +121,9 @@ function retile() {
     const rest = tileable.filter((w) => w !== focused);
     const rw = Math.max(caw - fw - MARGIN, 200);
     const rx = dockRight ? ax : ax + fw + MARGIN;
-    tileGrid(rest, rx, ay, rw, ah);
+    tileGrid(rest, { x: rx, y: ay, w: rw, h: ah });
   } else {
-    tileGrid(tileable, ax, ay, caw, ah);
+    tileGrid(tileable, { x: ax, y: ay, w: caw, h: ah });
   }
 }
 

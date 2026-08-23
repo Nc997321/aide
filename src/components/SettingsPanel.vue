@@ -7,6 +7,7 @@ import { useCustomizations } from "../composables/useCustomizations";
 import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
 import { api } from "../api";
 import type { RemoteStatus, SecretMutation } from "../types";
+import type { CustomizationItem } from "../types/customization";
 import CustomizationList from "./customizations/CustomizationList.vue";
 import CustomizationDetail from "./customizations/CustomizationDetail.vue";
 import MarketplaceTab from "./marketplace/MarketplaceTab.vue";
@@ -289,10 +290,13 @@ function onRecordKeydown(e: KeyboardEvent) {
   // Only record when a modifier key is held (to avoid recording plain letters)
   if (e.ctrlKey || e.metaKey || (e.altKey && e.key !== "Alt")) {
     const shortcut = formatShortcut(e);
-    const kb = { ...settings.keybindings };
-    (kb as any)[recordingKey.value] = shortcut;
-    settings.keybindings = kb;
-    update({ keybindings: kb });
+    // 录制的是任意键（含自定义 key），Keybindings 是固定字段接口——扩成
+    // Record<string, string> 写入后再还原类型（单跳断言，字段集不受影响）
+    const kb = { ...settings.keybindings } as Record<string, string>;
+    kb[recordingKey.value] = shortcut;
+    const merged = kb as typeof settings.keybindings;
+    settings.keybindings = merged;
+    update({ keybindings: merged });
   }
   recordingKey.value = null;
 }
@@ -302,10 +306,11 @@ function onRecordBlur() {
 }
 
 function resetKeybinding(key: string) {
-  const kb = { ...settings.keybindings };
-  (kb as any)[key] = keybindingDefaults[key] ?? "";
-  settings.keybindings = kb;
-  update({ keybindings: kb });
+  const kb = { ...settings.keybindings } as Record<string, string>;
+  kb[key] = keybindingDefaults[key] ?? "";
+  const merged = kb as typeof settings.keybindings;
+  settings.keybindings = merged;
+  update({ keybindings: merged });
 }
 
 // ── Theme ──
@@ -343,11 +348,11 @@ onMounted(() => { loadAll(); });
 
 // LSP 设置已搬到标题栏（LspIndicator）：开关 + 排除目录在标题栏面板操作。
 
-function handleCreate(data: any) {
+function handleCreate(data: Partial<CustomizationItem>) {
   if (activeType.value) createItem(activeType.value, data);
 }
 
-function handleUpdate(data: any) {
+function handleUpdate(data: Partial<CustomizationItem>) {
   if (activeType.value && activeItemId.value) updateItem(activeType.value, activeItemId.value, data);
 }
 

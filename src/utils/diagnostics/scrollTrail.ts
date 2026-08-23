@@ -17,6 +17,13 @@
  * Ctrl+Shift+D → diag_scroll_trail 落盘（release 无控制台，走这条）。
  */
 
+declare global {
+  interface Window {
+    /** dev 控制台出口：window.__aideScrollTrail() 打印滚动诊断快照。 */
+    __aideScrollTrail?: () => string;
+  }
+}
+
 export interface ScrollTrailEntry {
   /** epoch ms */
   t: number;
@@ -79,8 +86,8 @@ export function startScrollTrail(): void {
     { capture: true, passive: true }, // 纯观察：永不 preventDefault
   );
   if (typeof window !== "undefined") {
-    (window as unknown as { __aideScrollTrail?: unknown }).__aideScrollTrail = () =>
-      JSON.stringify(snapshotScrollTrail());
+    // dev 控制台出口：给 window 挂诊断快照函数（仅 dev 期使用，声明在下方 global）
+    window.__aideScrollTrail = () => JSON.stringify(snapshotScrollTrail());
   }
 }
 

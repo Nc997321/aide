@@ -29,7 +29,9 @@ async function load() {
     const it = scope.value === "global"
       ? await instructionApi.getGlobal()
       : await instructionApi.getProject();
-    content.value = (it.metadata as any)?.content ?? "";
+    // metadata 是通用 JSON 字段：content 必须是 string 才取用，否则回落空串
+    const md = it.metadata;
+    content.value = md && typeof md.content === "string" ? md.content : "";
   } catch {
     content.value = "";
   }
@@ -49,8 +51,8 @@ async function save() {
     if (scope.value === "global") await instructionApi.saveGlobal(content.value);
     else await instructionApi.saveProject(content.value);
     savedMsg.value = "已保存";
-  } catch (e: any) {
-    savedMsg.value = `失败：${e?.message ?? e}`;
+  } catch (e: unknown) {
+    savedMsg.value = `失败：${e instanceof Error ? e.message : String(e)}`;
   } finally {
     saving.value = false;
   }

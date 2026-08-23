@@ -147,8 +147,8 @@ function handleTextClick(e: MouseEvent) {
         />
         <ToolCallBlock
           v-else-if="seg.block.type === 'tool_call'"
-          :block="(seg.block as any)"
-          :default-expanded="isChangeTool((seg.block as any).name)"
+          :block="seg.block"
+          :default-expanded="isChangeTool(seg.block.name)"
           :workspace-path="workspacePath"
           :bg-tasks="bgTasks"
           @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
@@ -187,13 +187,13 @@ function handleTextClick(e: MouseEvent) {
         </span>
         <img
           v-else-if="seg.block.type === 'image'"
-          :src="`data:${(seg.block as any).mediaType};base64,${(seg.block as any).data}`"
+          :src="`data:${seg.block.mediaType};base64,${seg.block.data}`"
           class="msg-image"
           alt="附图"
         />
         <SubagentCallBlock
           v-else-if="seg.block.type === 'subagent'"
-          :block="(seg.block as any)"
+          :block="seg.block"
         />
       </template>
       <div v-if="!isUser && (modelBadge || message.turnEffort || message.usage)" class="msg-meta">

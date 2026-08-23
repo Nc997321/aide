@@ -18,6 +18,13 @@
 let _windowsBuildNumber: number | undefined;
 let _initialized = false;
 
+/** 仅声明我们用到的 userAgentData 子集——Navigator 上不存在该属性，需单跳断言。 */
+interface UANavigator extends Navigator {
+  userAgentData?: {
+    getHighEntropyValues(keys: string[]): Promise<{ platformVersion?: string }>;
+  };
+}
+
 /** Call once at app startup to detect Windows platform details. */
 export async function initPlatform(): Promise<void> {
   if (_initialized) return;
@@ -26,12 +33,11 @@ export async function initPlatform(): Promise<void> {
   if (!isWindows()) return;
 
   try {
-    // Modern Chromium API — available in WebView2
-    const ua = navigator as unknown as Record<string, unknown>;
-    if (typeof (ua.userAgentData as any)?.getHighEntropyValues === "function") {
-      const values = await (ua.userAgentData as any).getHighEntropyValues([
-        "platformVersion",
-      ]);
+    // Modern Chromium API — available in WebView2（单跳断言 + 运行时 typeof 守卫）
+    const ua = navigator as UANavigator;
+    const uaData = ua.userAgentData;
+    if (uaData && typeof uaData.getHighEntropyValues === "function") {
+      const values = await uaData.getHighEntropyValues(["platformVersion"]);
       const pv: string | undefined = values?.platformVersion;
       if (pv) {
         // platformVersion is like "10.0.26200.0"

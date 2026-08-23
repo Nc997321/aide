@@ -89,7 +89,7 @@ export interface McpTestResult {
 }
 
 /** 探活一个 MCP server：spawn agent-runtime 跑 test-mcp，握手 initialize + tools/list。 */
-export function testMcpConnection(config: Record<string, any>): Promise<McpTestResult> {
+export function testMcpConnection(config: Record<string, unknown>): Promise<McpTestResult> {
   return invoke<McpTestResult>('test_mcp_connection', { config });
 }
 

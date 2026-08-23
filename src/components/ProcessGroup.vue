@@ -64,7 +64,7 @@ const summary = computed(() => {
         />
         <SubagentCallBlock
           v-else-if="seg.kind === 'block' && seg.block.type === 'subagent'"
-          :block="(seg.block as any)"
+          :block="seg.block"
         />
       </template>
     </div>

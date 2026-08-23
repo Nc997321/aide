@@ -9,7 +9,7 @@ export interface CustomizationItem {
   enabled: boolean;
   path: string;
   description?: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   source?: 'user' | 'project' | 'plugin' | 'builtin';
 }
 

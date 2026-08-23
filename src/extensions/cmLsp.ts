@@ -1,6 +1,6 @@
 import { StateField, StateEffect, type Extension } from "@codemirror/state";
-import { EditorView, ViewPlugin, hoverTooltip, type Tooltip } from "@codemirror/view";
-import { autocompletion } from "@codemirror/autocomplete";
+import { EditorView, ViewPlugin, hoverTooltip, type Tooltip, type ViewUpdate } from "@codemirror/view";
+import { autocompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { linter, type Diagnostic as CmDiagnostic } from "@codemirror/lint";
 import { watch, type WatchStopHandle } from "vue";
 import { api } from "../api";
@@ -87,10 +87,16 @@ class LspTracker {
     const text = this.view.state.doc.toString();
     // >1MB skip guard
     if (text.length > 1_000_000) return;
-    try { await api.lspDidChange(workspaceRoot, filePath, lang, text); } catch { /* ignore */ }
+    try {
+      await api.lspDidChange(workspaceRoot, filePath, lang, text);
+    } catch (e) {
+      // server 未就绪/已停时变更同步失败是预期路径：编辑器不受影响，下次变更
+      // 或补全请求前（lspCompletionSource 会先同步 doc）会重试，这里只落日志
+      console.warn("[cmLsp] didChange 同步失败:", e);
+    }
   }
 
-  update(update: any) {
+  update(update: ViewUpdate) {
     if (update.docChanged && isUserEdit(update.transactions)) {
       // debounce 300ms（spec §5.2）
       if (this.changeTimer) clearTimeout(this.changeTimer);
@@ -113,7 +119,7 @@ class LspTracker {
 // ── 三个 source：autocompletion / linter / hoverTooltip ──
 
 function lspCompletionSource(workspaceRoot: string, filePath: string, lang: string) {
-  return async (ctx: any): Promise<any> => {
+  return async (ctx: CompletionContext): Promise<CompletionResult | null> => {
     if (!workspaceRoot || (!ctx.explicit && ctx.state.doc.length === 0)) return null;
     // 自动触发守卫：仅当前驱字符是词字符或成员触发符 . 才弹补全；空格/标点/换行
     // 不触发（函数内按空格不应弹列表）。显式触发（Ctrl+Space，ctx.explicit）放行。
@@ -143,16 +149,26 @@ function lspCompletionSource(workspaceRoot: string, filePath: string, lang: stri
       const from = ctx.matchBefore(/\w*/)?.from ?? ctx.pos;
       return {
         from,
-        options: items.map((it) => ({
-          label: it.label,
-          filterText: it.filter_text || undefined,
-          apply: it.insert_text || it.label,
-          detail: it.detail,
-          info: it.documentation ? () => renderMarkdown(it.documentation!) : undefined,
-          type: completionKind(it.kind),
-        })),
+        options: items.map((it) => {
+          // documentation 可选：有值才挂 markdown 渲染闭包（空则不显示 info 面板）。
+          // CM 类型里 CompletionInfo 只有 Node/{dom} 两种形态（运行时虽兼容 string），
+          // 返回 { dom } 最贴近原语义：懒渲染、复用 hover 的 markdown 样式类。
+          const doc = it.documentation;
+          return {
+            label: it.label,
+            filterText: it.filter_text || undefined,
+            apply: it.insert_text || it.label,
+            detail: it.detail,
+            info: doc ? () => ({ dom: makeHoverDom(doc) }) : undefined,
+            type: completionKind(it.kind),
+          };
+        }),
       };
-    } catch { return null; }
+    } catch (e) {
+      // LSP 未就绪/请求失败：静默返回 null 让 CM 走无补全路径（输入不受影响）
+      console.warn("[cmLsp] completion 失败:", e);
+      return null;
+    }
   };
 }
 
@@ -229,7 +245,10 @@ function lspHover(workspaceRoot: string, filePath: string) {
         const { content } = await api.lspHover(workspaceRoot, filePath, lineNum + 1, col + 1);
         console.warn(`[hover] lsp result ms=${(performance.now() - tHover).toFixed(0)} len=${content?.length || 0}`);
         if (!content) return null;
-        if (hoverCache.size >= HOVER_CACHE_CAP) hoverCache.delete(hoverCache.keys().next().value!);
+        if (hoverCache.size >= HOVER_CACHE_CAP) {
+          const oldest = hoverCache.keys().next().value;
+          if (oldest !== undefined) hoverCache.delete(oldest);
+        }
         hoverCache.set(key, content);
         return { pos, above: true, create() { return { dom: makeHoverDom(content) }; } };
       } catch (e) { console.warn(`[hover] lsp err ${e}`); return null; }

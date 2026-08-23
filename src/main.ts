@@ -16,9 +16,10 @@ initPlatform();
 
 // ── Global error capture → Rust tracing log ──
 
-async function captureError(kind: string, msg: string, source?: string, lineno?: number, colno?: number, err?: unknown) {
-    const detail = err instanceof Error ? `${err.message}\n${err.stack || ""}` : String(err || "");
-    const line = `[${kind}] ${msg} | ${source || ""}:${lineno || 0}:${colno || 0} | ${detail}`;
+async function captureError(kind: string, msg: string, info: { source?: string; lineno?: number; colno?: number; err?: unknown } = {}) {
+    const { source, lineno, colno, err } = info;
+    const detail = err instanceof Error ? `${err.message}\n${err.stack || ""}` : String(err ?? "");
+    const line = `[${kind}] ${msg} | ${source ?? ""}:${lineno ?? 0}:${colno ?? 0} | ${detail}`;
     try {
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke("log_frontend_error", { message: line });
@@ -32,11 +33,11 @@ async function captureError(kind: string, msg: string, source?: string, lineno?:
 }
 
 window.addEventListener("error", (e) => {
-    captureError("ONERROR", e.message, e.filename, e.lineno, e.colno, e.error);
+    captureError("ONERROR", e.message, { source: e.filename, lineno: e.lineno, colno: e.colno, err: e.error });
 });
 
 window.addEventListener("unhandledrejection", (e) => {
-    captureError("UNHANDLED_REJECTION", String(e.reason), "", 0, 0, e.reason);
+    captureError("UNHANDLED_REJECTION", String(e.reason), { err: e.reason });
 });
 
 const app = createApp(App);

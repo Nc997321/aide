@@ -929,7 +929,10 @@ onMounted(async () => {
               updates++;
             }
           }
-        } catch { /* 单源失败已在上方统计 */ }
+        } catch {
+          // 与上方 refresh 循环同构：单源失败同样计入 failed（供「全部源失败」判定）
+          failed++;
+        }
       }
       // 有更新 → 通知（info 仅内存；「查看」动作经 registerActionHandler 打开市场标签页）
       if (updates > 0) {

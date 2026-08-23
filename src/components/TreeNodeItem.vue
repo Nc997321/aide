@@ -60,17 +60,13 @@ function onContextMenu(e: MouseEvent) {
   const parentPath = getParentPath(props.node.path);
   const refresh = props.onRefreshDir;
   const items = props.node.is_dir
-    ? directoryMenuItems(
-        props.node.path,
-        props.projectRoot,
-        () => emit("toggle", props.node.path),
-        () => refresh(props.node.path),
-        () => refresh(parentPath),
-        refresh,
-      )
-    : fileMenuItems(props.node.path, props.projectRoot, () =>
-        refresh(parentPath), props.sessionId,
-      );
+    ? directoryMenuItems(props.node.path, props.projectRoot, {
+        onToggle: () => emit("toggle", props.node.path),
+        onRefresh: () => refresh(props.node.path),
+        onDeleted: () => refresh(parentPath),
+        refreshDir: refresh,
+      })
+    : fileMenuItems(props.node.path, props.projectRoot, () => refresh(parentPath));
   show(e.clientX, e.clientY, items);
 }
 

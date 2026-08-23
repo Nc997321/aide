@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch } from "vue";
-import type { CustomizationItem } from "../../../types/customization";
+import type { CustomizationItem, McpServer } from "../../../types/customization";
 import { testMcpConnection } from "../../../api/customization";
 
 defineOptions({ name: "McpServerEditor" });
@@ -23,20 +23,28 @@ const status = ref<"unk" | "spin" | "ok" | "fail">("unk");
 const toolsCount = ref(0);
 const errMsg = ref("");
 
-function deriveTransport(meta: any): "stdio" | "sse" | "http" {
-  if (meta?.command) return "stdio";
-  if (meta?.headers) return "http";
-  if (meta?.url) return "sse";
+/** 把未知 JSON 值收窄为 string 对象表（metadata 里的 env/headers 是 KV 对象）。 */
+function toStrRecord(v: unknown): Record<string, string> {
+  return v && typeof v === "object" ? (v as Record<string, string>) : {};
+}
+
+function deriveTransport(meta: Record<string, unknown>): "stdio" | "sse" | "http" {
+  if (meta.command) return "stdio";
+  if (meta.headers) return "http";
+  if (meta.url) return "sse";
   return "stdio";
 }
 function initForm(item: CustomizationItem | null) {
-  const meta: any = item?.metadata ?? {};
+  // metadata 是通用 JSON 字段，逐字段收窄（缺省回落默认值）
+  const meta = (item?.metadata ?? {}) as Record<string, unknown>;
   form.transport = deriveTransport(meta);
-  form.command = meta.command ?? "";
-  argsText.value = Array.isArray(meta.args) ? meta.args.join("\n") : "";
-  envEntries.value = meta.env ? Object.entries(meta.env) : [];
-  form.url = meta.url ?? "";
-  headersEntries.value = meta.headers ? Object.entries(meta.headers) : [];
+  form.command = typeof meta.command === "string" ? meta.command : "";
+  argsText.value = Array.isArray(meta.args)
+    ? meta.args.filter((a): a is string => typeof a === "string").join("\n")
+    : "";
+  envEntries.value = Object.entries(toStrRecord(meta.env));
+  form.url = typeof meta.url === "string" ? meta.url : "";
+  headersEntries.value = Object.entries(toStrRecord(meta.headers));
   status.value = "unk";
   toolsCount.value = 0;
   errMsg.value = "";
@@ -51,7 +59,7 @@ function sourceLabel(s: NonNullable<CustomizationItem["source"]>): string {
 async function testConn() {
   status.value = "spin";
   try {
-    const cfg: Record<string, any> = { transport: form.transport };
+    const cfg: Record<string, unknown> = { transport: form.transport };
     if (form.transport === "stdio") {
       cfg.command = form.command;
       cfg.args = argsText.value.split("\n").filter((s) => s.length > 0);
@@ -66,14 +74,14 @@ async function testConn() {
     status.value = r.status === "ok" ? "ok" : "fail";
     toolsCount.value = r.tools.length;
     errMsg.value = r.error ?? "";
-  } catch (e: any) {
+  } catch (e: unknown) {
     status.value = "fail";
-    errMsg.value = String(e?.message ?? e);
+    errMsg.value = e instanceof Error ? e.message : String(e);
   }
 }
 
 function save() {
-  const data: any = { transport: form.transport };
+  const data: Partial<McpServer> = { transport: form.transport };
   if (form.transport === "stdio") {
     data.command = form.command;
     data.args = argsText.value.split("\n").filter((s) => s.length > 0);

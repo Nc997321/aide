@@ -65,10 +65,11 @@ async function saveBody() {
   if (!props.item) return;
   saving.value = true;
   try {
-    await customizationApi.update("agent", props.item.id, { content: body.value } as any);
+    // content 是 Agent 的写字段（不在 CustomizationItem 上），单跳断言
+    await customizationApi.update("agent", props.item.id, { content: body.value } as Partial<CustomizationItem>);
     savedMsg.value = "正文已保存";
-  } catch (e: any) {
-    savedMsg.value = `失败：${e?.message ?? e}`;
+  } catch (e: unknown) {
+    savedMsg.value = `失败：${e instanceof Error ? e.message : String(e)}`;
   } finally {
     saving.value = false;
   }

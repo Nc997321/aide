@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { reactive, computed, watch } from "vue";
-import type { CustomizationItem, HookEvent } from "../../../types/customization";
+import type { CustomizationItem, Hook, HookEvent } from "../../../types/customization";
 
 defineOptions({ name: "HookEditor" });
 const props = defineProps<{ item: CustomizationItem | null }>();
-const emit = defineEmits<{ update: [data: Partial<CustomizationItem>]; delete: []; back: [] }>();
+// event/matcher/command/timeout/asyncRewake 是 Hook 的写字段（不在 CustomizationItem 上），
+// 交集类型让 emit 载荷带全这些字段，同时保持与 CustomizationDetail 的 update 监听兼容
+const emit = defineEmits<{ update: [data: Partial<CustomizationItem> & Partial<Hook>]; delete: []; back: [] }>();
 
 const readOnly = computed(() => props.item?.source === "builtin" || props.item?.source === "plugin");
 
@@ -24,12 +26,13 @@ const form = reactive<{
 });
 
 function initForm(item: CustomizationItem | null) {
-  const m: any = item?.metadata ?? {};
-  form.event = (m.event as HookEvent) ?? "PreToolUse";
-  form.matcher = m.matcher ?? "";
-  form.command = m.command ?? "";
-  form.timeout = m.timeout != null ? String(m.timeout) : "";
-  form.asyncRewake = !!m.asyncRewake;
+  // metadata 是通用 JSON 字段，逐字段收窄（后端只写这些 key，缺省回落默认值）
+  const meta = (item?.metadata ?? {}) as Record<string, unknown>;
+  form.event = (meta.event as HookEvent) ?? "PreToolUse";
+  form.matcher = typeof meta.matcher === "string" ? meta.matcher : "";
+  form.command = typeof meta.command === "string" ? meta.command : "";
+  form.timeout = meta.timeout != null ? String(meta.timeout) : "";
+  form.asyncRewake = !!meta.asyncRewake;
 }
 initForm(props.item);
 watch(() => props.item, (n) => initForm(n));
@@ -39,7 +42,7 @@ function sourceLabel(s: NonNullable<CustomizationItem["source"]>): string {
 }
 
 function save() {
-  const data: any = { event: form.event, matcher: form.matcher, command: form.command };
+  const data: Partial<CustomizationItem> & Partial<Hook> = { event: form.event, matcher: form.matcher, command: form.command };
   if (form.timeout) data.timeout = Number(form.timeout);
   if (form.asyncRewake) data.asyncRewake = true;
   emit("update", data);

@@ -336,7 +336,12 @@ async function renameSession(wsKey: string, id: string, name: string) {
       await loadWsSessions(wsKey);
     }
     sessionNames.setName(id, name);
-  } catch (_e) { /* ignore */ }
+  } catch (e) {
+    // 乐观更新失败 → UI 与磁盘脱节：报错 + 重新拉取该工作区真实列表恢复
+    console.error("[SidebarLeft] rename failed:", e);
+    showToast("重命名失败，列表已恢复", "danger");
+    await loadWsSessions(wsKey);
+  }
 }
 
 /** 本地移除会话卡片（乐观删除）：不动滚动、不整表重载，离场动画由 TransitionGroup 播。 */
@@ -372,12 +377,11 @@ function onSessionContextMenu(e: MouseEvent, wsKey: string, id: string) {
   show(
     e.clientX,
     e.clientY,
-    sessionMenuItems(
-      id,
-      (name: string) => renameSession(wsKey, id, name),
-      () => removeSessionLocally(wsKey, id),
-      () => onSessionDeleteFailed(wsKey),
-    ),
+    sessionMenuItems(id, {
+      onRenamed: (name: string) => renameSession(wsKey, id, name),
+      onOptimisticRemove: () => removeSessionLocally(wsKey, id),
+      onDeleteFailed: () => onSessionDeleteFailed(wsKey),
+    }),
   );
 }
 
@@ -1144,9 +1148,9 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   color: var(--aide-text-primary);
 }
 .btn.primary {
-  background: var(--aide-accent-gradient, linear-gradient(180deg, #e6bd8e, #cf9c66));
+  background: var(--aide-accent-gradient);
   color: var(--aide-text-on-accent);
-  box-shadow: var(--aide-accent-glow, 0 6px 20px rgba(212, 165, 116, 0.28));
+  box-shadow: var(--aide-accent-glow);
   border-color: color-mix(in srgb, var(--aide-accent) 40%, transparent);
 }
 .btn.primary:hover {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, computed } from "vue";
+import { ref, watch, nextTick, computed, onUnmounted } from "vue";
 import IconOrChar from "../components/IconOrChar.vue";
 import Icon from "../components/Icon.vue";
 
@@ -59,6 +59,12 @@ const emptyHint = computed(() =>
 );
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+onUnmounted(() => {
+  // 组件销毁后防抖回调仍会触发 searchFn 并写 results——卸载即清，避免泄漏
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = null;
+});
 
 watch(query, (q) => {
   if (debounceTimer) clearTimeout(debounceTimer);

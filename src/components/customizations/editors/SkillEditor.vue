@@ -23,7 +23,11 @@ const savedMsg = ref("");
 function initForm(item: CustomizationItem | null) {
   name.value = item?.name ?? "";
   description.value = item?.description ?? "";
-  scripts.value = Array.isArray(item?.metadata?.scripts) ? [...item.metadata.scripts] : [];
+  // metadata 是通用 JSON 字段：scripts 收窄为 string[]（非数组/非字符串元素一律丢弃）
+  const scriptsMeta = item?.metadata?.scripts;
+  scripts.value = Array.isArray(scriptsMeta)
+    ? scriptsMeta.filter((s): s is string => typeof s === "string")
+    : [];
   body.value = "";
   bodyLoaded.value = false;
   curScript.value = null;
@@ -58,10 +62,11 @@ async function saveBody() {
   if (!props.item) return;
   saving.value = true;
   try {
-    await customizationApi.update("skill", props.item.id, { content: body.value } as any);
+    // content 是 Skill 的写字段（不在 CustomizationItem 上），单跳断言
+    await customizationApi.update("skill", props.item.id, { content: body.value } as Partial<CustomizationItem>);
     savedMsg.value = "正文已保存";
-  } catch (e: any) {
-    savedMsg.value = `失败：${e?.message ?? e}`;
+  } catch (e: unknown) {
+    savedMsg.value = `失败：${e instanceof Error ? e.message : String(e)}`;
   } finally {
     saving.value = false;
   }
@@ -73,8 +78,8 @@ async function saveScript() {
   try {
     await skillScriptApi.write(props.item.id, curScript.value, curScriptContent.value);
     savedMsg.value = `${curScript.value} 已保存`;
-  } catch (e: any) {
-    savedMsg.value = `失败：${e?.message ?? e}`;
+  } catch (e: unknown) {
+    savedMsg.value = `失败：${e instanceof Error ? e.message : String(e)}`;
   } finally {
     saving.value = false;
   }

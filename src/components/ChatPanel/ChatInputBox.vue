@@ -52,7 +52,8 @@ const props = defineProps<{
   /** 图片 400 回滚后待放回输入框的文本（useChatSession 透传；空串 = 无待回填）。
    *  回填后 emit rollback-text-consumed 清空，避免重复回填。 */
   rollbackText?: string;
-  focused?: boolean;
+  /** 父层恒传（ChatPanel 的 props.focused），非可选 */
+  focused: boolean;
   /** 会话所属 provider（ChatPanel 算好的 computed：存活会话锁 spawn 时的 provider） */
   sessionProvider: ProviderConfig;
   /** 会话供应商/模型延续性 + 发送前确认基线。非单例（每次调用新建 ref），必须由
@@ -68,7 +69,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   /** 发送请求（不清输入）：ChatPanel 跑发送前确认门控，通过/确认后 emit send +
    *  递增 sendConfirmedNonce，本组件据此清空输入。 */
-  "send-request": [prompt: string, opts: SendOptions, effectiveProvider: string, effectiveModel: string];
+  /** 发送请求（不清输入）：effectiveProvider/effectiveModel 并入 opts（ChatPanel
+   *  的发送前确认门控据此判定是否弹确认形态），相邻 string 不再位置错位 */
+  "send-request": [prompt: string, opts: SendOptions & { effectiveProvider: string; effectiveModel: string }];
   "send-btw": [prompt: string, opts: { lightweight: boolean; model?: string; effort?: string }];
   "send-btw-task": [opts: { taskId: string }];
   "set-model": [model: string];
@@ -710,6 +713,7 @@ async function applyPasteResolution(res: PasteResolution) {
     // 转换立即发生，不必等用户再按键。纯文本扫描无 token 即 no-op。
     void scanMentions();
   }
+  let failed = 0;
   for (const imgPath of res.imagePaths) {
     try {
       const data = await api.readFileBase64(imgPath);
@@ -722,8 +726,13 @@ async function applyPasteResolution(res: PasteResolution) {
         mediaType,
         previewUrl: `data:${mediaType};base64,${data}`,
       });
-    } catch { /* 静默失败 */ }
+    } catch (e) {
+      // 单张读取失败不阻断其余图片；累计后一次性提示，避免用户以为贴上了
+      failed++;
+      console.warn("[ChatInputBox] 图片读取失败，已跳过:", e);
+    }
   }
+  if (failed > 0) showToast(`图片读取失败，已跳过 ${failed} 张`, "danger");
 }
 
 /** Uint8Array → base64（分块，避免超大文件一次展开爆栈）。 */
@@ -761,6 +770,7 @@ async function handleDrop(e: DragEvent) {
   let paths: string[] = [];
   let entry: ReturnType<typeof peekFileClipboard> = null;
 
+  let stagedFailed = 0;
   if (dropped.length > 0) {
     for (const file of dropped) {
       const fp = (file as File & { path?: string }).path;
@@ -771,9 +781,14 @@ async function handleDrop(e: DragEvent) {
           const buf = new Uint8Array(await file.arrayBuffer());
           const staged = await api.stageDroppedFile(file.name, encodeBase64(buf));
           paths.push(staged);
-        } catch { /* 单个文件失败不阻断其余 */ }
+        } catch (e) {
+          // 单个文件失败不阻断其余；循环结束后一次性提示失败数
+          stagedFailed++;
+          console.warn("[ChatInputBox] 拖入文件暂存失败，已跳过:", e);
+        }
       }
     }
+    if (stagedFailed > 0) showToast(`${stagedFailed} 个文件读取失败已跳过`, "danger");
   } else {
     // 内部文件树拖入：onDragStart 调的是 cut(path)，而 resolvePastePayload 只认
     // copy 条目，所以不把 entry 喂给它——直接把路径推进 paths 走 files 分支
@@ -825,7 +840,7 @@ async function performSend() {
     const cmdMatch = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
     const action = cmdMatch ? quickActions.find((a) => a.command === cmdMatch[1]) : undefined;
     if (action) {
-      const args = (cmdMatch![2] ?? "").trim();
+      const args = (cmdMatch?.[2] ?? "").trim();
       if (action.kind === "task") {
         // 任务支线(git-commit):无参数、不进输入模式,一键直跑;输入清空同 btw。
         inputText.value = "";
@@ -906,12 +921,14 @@ async function performSend() {
     permissionMode: selectedPermissionMode.value || undefined,
   };
 
-  // 发送前确认门控（变体 C）已上移到 ChatPanel（onSendRequest）：这里只上报本次
-  // 发送的 provider/模型，由 ChatPanel 判定是否弹确认形态。确认后/直接发送后经
-  // sendConfirmedNonce 坐实清空输入；取消确认不递增，输入保留（内容回退对话框）。
-  const effectiveProvider = props.sessionProvider.id;
-  const effectiveModel = selectedModel.value || props.sessionProvider.model;
-  emit("send-request", mentionPrefix + finalPrompt, sendOpts, effectiveProvider, effectiveModel);
+  // 发送前确认门控（变体 C）已上移到 ChatPanel（onSendRequest）：这里把本次发送
+  // 的 provider/模型并进 opts 上报，由 ChatPanel 判定是否弹确认形态。确认后/直接
+  // 发送后经 sendConfirmedNonce 坐实清空输入；取消确认不递增，输入保留。
+  emit("send-request", mentionPrefix + finalPrompt, {
+    ...sendOpts,
+    effectiveProvider: props.sessionProvider.id,
+    effectiveModel: selectedModel.value || props.sessionProvider.model,
+  });
 }
 
 // 快捷操作（压缩/清空上下文）：跟手打消息走同一条路径（忙碌排队/权限模式透传都
@@ -934,10 +951,12 @@ async function runPromptAction(action: QuickAction, prompt: string): Promise<boo
     permissionMode: selectedPermissionMode.value || undefined,
     action: { id: action.id, label: action.label, icon: action.icon },
   };
-  // 发送前确认门控已上移到 ChatPanel（onSendRequest）：这里只上报 provider/模型。
-  const effectiveProvider = props.sessionProvider.id;
-  const effectiveModel = selectedModel.value || props.sessionProvider.model;
-  emit("send-request", prompt, sendOpts, effectiveProvider, effectiveModel);
+  // 发送前确认门控已上移到 ChatPanel（onSendRequest）：这里把 provider/模型并进 opts。
+  emit("send-request", prompt, {
+    ...sendOpts,
+    effectiveProvider: props.sessionProvider.id,
+    effectiveModel: selectedModel.value || props.sessionProvider.model,
+  });
   return true;
 }
 

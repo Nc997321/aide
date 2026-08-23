@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, computed, onMounted, onUnmounted } from "vue";
-import type { ComputedRef } from "vue";
 import ChatMessage from "../ChatMessage.vue";
 import AppLogo from "../AppLogo.vue";
 import Icon from "../Icon.vue";
@@ -34,8 +33,9 @@ import { effortLabel } from "@/utils/effort";
 const props = defineProps<{
   sessionId: string | null;
   workspacePath?: string;
-  messages: ComputedRef<ChatMessageType[]> | ChatMessageType[];
-  isBusy: { value: boolean } | boolean;
+  /** 父层经模板自动解包后传入的纯值（PaneGroup 传 useChatSession computed，模板解包成数组） */
+  messages: ChatMessageType[];
+  isBusy: boolean;
   models?: ModelOption[];
   currentModel?: string;
   /** 模型切换坐实回执（sidecar 运行时路径发出）——据此弹成功/失败瞬时提示 */
@@ -56,7 +56,8 @@ const props = defineProps<{
   pendingJumps?: PendingJump[];
   /** 后台 shell 任务列表 + dock 开合状态（useChatSession store 透传） */
   bgTasks?: BgTask[];
-  bgDockOpen?: boolean;
+  /** 父层恒传（PaneGroup 的 useChatSession computed 透传），非可选 */
+  bgDockOpen: boolean;
   bgDockSelectedId?: string | null;
   /** 本会话待确认的权限/提问请求——渲染在消息区和输入框之间（见模板），
    *  不是浮层，见 PermissionDialog.vue 顶部注释。 */
@@ -65,7 +66,8 @@ const props = defineProps<{
   /** 图片 400 回滚后待放回输入框的文本（useChatSession 透传；空串 = 无待回填）。
    *  回填后 emit rollback-text-consumed 清空，避免重复回填。 */
   rollbackText?: string;
-  focused?: boolean;
+  /** 父层恒传（PaneGroup 的聚焦判定 computed），非可选 */
+  focused: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -76,7 +78,9 @@ const emit = defineEmits<{
   "set-model": [model: string];
   "set-effort": [effort: string];
   "set-permission-mode": [mode: string];
-  "respond-permission": [id: string, approved: boolean, answers?: Record<string, string>, nextMode?: string, reason?: string, sessionRules?: PermissionRuleDraft[]];
+  /** 权限/提问请求的放行结果：req 具名对象（nextMode/reason 相邻 string 不再错位），
+   *  sessionRules 为会话级规则草稿（「允许」文件工具时前端推导，随放行透传） */
+  "respond-permission": [req: { id: string; approved: boolean; answers?: Record<string, string>; nextMode?: string; reason?: string }, sessionRules?: PermissionRuleDraft[]];
   "update:bgDockSelectedId": [id: string];
   /** hero 归属选择：选中的是会话归属，不是活动工作区（PaneGroup 据此改 pendingWs/defaultWs） */
   "select-workspace": [ws: WorkspaceInfo];
@@ -323,8 +327,8 @@ async function onPermissionRespond(
     sendConfirm.value = null;
     return;
   }
-  // nextMode 目前无调用方传（PermissionDialog 的 emit 签名保留位），防御性更新
-  // 对话框展示用 ref；输入框选择器是用户侧事实源，不经此同步。
+  // nextMode 由 PermissionDialog 的「进入编辑模式/自动」按钮传（acceptEdits/auto），
+  // 防御性更新对话框展示用 ref；输入框选择器是用户侧事实源，不经此同步。
   if (nextMode) permissionMode.value = nextMode;
   if (approved && persistRule) {
     await persistRememberRule(persistRule.scope, persistRule.rules);
@@ -339,7 +343,7 @@ async function onPermissionRespond(
     sessionRules = deriveSessionFileRules(props.permission.name, props.permission.input);
     if (sessionRules.length === 0) sessionRules = undefined;
   }
-  emit("respond-permission", id, approved, answers, nextMode, reason, sessionRules);
+  emit("respond-permission", { id, approved, answers, nextMode, reason }, sessionRules);
 }
 
 /** 发送坐实信号：门控通过/确认后递增，ChatInputBox 据此清空输入（取消确认不递增，
@@ -349,24 +353,26 @@ const sendConfirmedNonce = ref(0);
 /** 输入框的发送请求统一入口：跑发送前确认门控（变体 C）。需确认 → 弹确认形态
  *  （不清输入，取消时内容回退对话框）；否则直接发送 + 推进 lastUsed 基线 +
  *  递增 sendConfirmedNonce（输入框据此清空输入）。 */
-function onSendRequest(prompt: string, opts: SendOptions, effectiveProvider: string, effectiveModel: string) {
+function onSendRequest(prompt: string, opts: SendOptions & { effectiveProvider: string; effectiveModel: string }) {
+  // 拆出确认门控用的 provider/模型，真实发送只带纯 SendOptions（不给 useChatSession 传额外字段）
+  const { effectiveProvider, effectiveModel, ...sendOpts } = opts;
   const sidForGate = props.sessionId;
   if (
     sidForGate &&
     !isPendingSession(sidForGate) &&
-    !isBusyVal.value &&
+    !props.isBusy &&
     continuity.needsConfirm(effectiveProvider, effectiveModel)
   ) {
     sendConfirm.value = {
       request: buildSendConfirmRequest(effectiveProvider, effectiveModel),
-      pendingSend: { prompt, opts },
+      pendingSend: { prompt, opts: sendOpts },
       effectiveProvider,
       effectiveModel,
     };
     return;
   }
   continuity.noteSent(effectiveProvider, effectiveModel);
-  emit("send", prompt, opts);
+  emit("send", prompt, sendOpts);
   sendConfirmedNonce.value++;
 }
 
@@ -381,18 +387,12 @@ const displayPermissionModes = computed<PermissionModeOption[]>(() =>
   props.permissionModes?.length ? props.permissionModes : defaultPermissionModes.value,
 );
 
-const isBusyVal = computed(() =>
-  typeof props.isBusy === "boolean" ? props.isBusy : props.isBusy.value
-);
 const contextCompactionVal = computed(() => props.contextCompaction ?? null);
-const messagesVal = computed(() =>
-  Array.isArray(props.messages) ? props.messages : props.messages.value
-);
 
 // ── hero（零会话欢迎态）────────────────────────────────────────────────────
 // 判定 = 未绑定会话且无消息：零 tab 布局与「新会话」空白预览 tab 共用这一套
 // 居中样式。hero 不是独立组件——输入盒/工具栏/发送路径全部复用，只是换布局文案。
-const isHero = computed(() => !props.sessionId && messagesVal.value.length === 0);
+const isHero = computed(() => !props.sessionId && props.messages.length === 0);
 // 归属显示交给 WorkspacePicker（path → 末段目录名），hero 只需传 props.workspacePath。
 // 模型名由 ChatInputBox 上报（hero-model-name 事件）——选中模型在输入框组件内，
 // hero 头只读展示，不持有选择状态。
@@ -470,7 +470,7 @@ function syncActivityTimer() {
   if (!activityTimer) activityTimer = setInterval(refreshActivityElapsed, 1000);
 }
 
-watch(isBusyVal, (busy) => {
+watch(() => props.isBusy, (busy) => {
   busyStartedAt.value = busy ? Date.now() : null;
   syncActivityTimer();
 }, { immediate: true });
@@ -492,7 +492,7 @@ const {
   farFromBottom,
   newWhileAway,
   expandOlderAnchored,
-} = useChatScroll(() => messagesVal.value, () => props.sessionId);
+} = useChatScroll(() => props.messages, () => props.sessionId);
 
 // btw 轻量开关：BtwDrawer 与 ChatInputBox 共用（输入框经 prop 读、emit 回写）。
 const btwLightweight = ref(true);
@@ -547,7 +547,7 @@ function onOpenBgDock(taskId: string) {
          相对 chat-panel 绝对定位又无法自适应输入框/权限区的高度变化 -->
     <div class="chat-scroll-wrap">
       <div ref="scrollEl" class="chat-messages" @scroll.passive="onScroll">
-      <div v-if="messagesVal.length === 0" class="chat-empty">
+      <div v-if="props.messages.length === 0" class="chat-empty">
         开始新对话
       </div>
       <!-- 内容盒：ResizeObserver 的观察目标（见 useChatScroll 的 contentObserver），
@@ -604,7 +604,7 @@ function onOpenBgDock(taskId: string) {
     <BgTaskDock
       :session-id="props.sessionId"
       :tasks="bgTasks ?? []"
-      :open="bgDockOpen ?? false"
+      :open="bgDockOpen"
       :selected-id="bgDockSelectedId ?? null"
       @update:selected-id="(id: string) => emit('update:bgDockSelectedId', id)"
     />
@@ -618,7 +618,7 @@ function onOpenBgDock(taskId: string) {
       :elapsed-seconds="activityElapsed"
       @interrupt="emit('interrupt')"
     />
-    <div v-else-if="isBusyVal" class="chat-thinking">
+    <div v-else-if="props.isBusy" class="chat-thinking">
       <AppLogo :size="15" animated />
       <span class="chat-thinking-text">正在思考</span>
       <InterruptButton class="chat-interrupt-btn" @click="emit('interrupt')" />
@@ -648,7 +648,7 @@ function onOpenBgDock(taskId: string) {
       ref="inputBoxRef"
       :session-id="props.sessionId"
       :workspace-path="props.workspacePath"
-      :is-busy="isBusyVal"
+      :is-busy="props.isBusy"
       :is-hero="isHero"
       :models="displayModels"
       :current-model="props.currentModel"

@@ -131,8 +131,10 @@ export const api = {
   detectRunTargets(cwd: string): Promise<RunTarget[]> {
     return invoke("detect_run_targets", { cwd });
   },
-  runProcessStart(configId: string, cwd: string, command: string, env: Record<string, string>, rows: number, cols: number): Promise<string> {
-    return invoke("run_process_start", { configId, cwd, command, env, rows, cols });
+  /** size 具名对象：rows/cols 相邻同型不再可错位 */
+  // TODO: useRunProcess.ts:73,96 的 (…, dim.rows, dim.cols) 调用点待 B 路同步为 { rows, cols }
+  runProcessStart(configId: string, cwd: string, command: string, env: Record<string, string>, size: { rows: number; cols: number }): Promise<string> {
+    return invoke("run_process_start", { configId, cwd, command, env, rows: size.rows, cols: size.cols });
   },
   runProcessStop(configId: string): Promise<void> {
     return invoke("run_process_stop", { configId });
@@ -385,8 +387,10 @@ export const api = {
   },
 
   // 最近访问
-  recordRecentSession(wsKey: string, wsName: string, sessionId: string, name: string): Promise<void> {
-    return invoke("record_recent_session", { wsKey, wsName, sessionId, name });
+  /** input 具名对象：4 个相邻 string 不再可错位 */
+  // TODO: useRecent.ts:40 的 (key, wsName, sessionId, name) 调用点待 B 路同步为对象
+  recordRecentSession(input: { wsKey: string; wsName: string; sessionId: string; name: string }): Promise<void> {
+    return invoke("record_recent_session", input);
   },
   recordRecentFile(wsKey: string, path: string, name: string): Promise<void> {
     return invoke("record_recent_file", { wsKey, path, name });
@@ -402,8 +406,10 @@ export const api = {
   },
 
   // CodeGraph — enhanced code navigation
-  codegraphBuildIndex(projectRoot: string, force = false): Promise<BuildIndexResult> {
-    return invoke("codegraph_build_index", { projectRoot, force });
+  /** opts.force=true 全量重建（跳过增量快速路径）；默认增量。裸 bool 具名化。 */
+  // TODO: useCodeGraphProgress.ts:280 的 (root, true) 调用点待 B 路同步为 { force: true }
+  codegraphBuildIndex(projectRoot: string, opts: { force?: boolean } = {}): Promise<BuildIndexResult> {
+    return invoke("codegraph_build_index", { projectRoot, force: opts.force ?? false });
   },
   codegraphGotoDefinition(
     word: string,
