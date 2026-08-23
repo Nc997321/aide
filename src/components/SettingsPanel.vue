@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, computed } from "vue";
+import { ref, watch, watchEffect, onMounted, computed } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
 import { useSettings } from "../composables/useSettings";
 import { useOnboarding } from "../composables/useOnboarding";
 import { useCustomizations } from "../composables/useCustomizations";
 import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
 import { api } from "../api";
-import type { RemoteStatus, SecretMutation } from "../types";
+import type { RemoteStatus, SecretMutation, VimBindings } from "../types";
+import { eventToVimKey } from "../extensions/vimKeybindings";
 import type { CustomizationItem } from "../types/customization";
 import CustomizationList from "./customizations/CustomizationList.vue";
 import CustomizationDetail from "./customizations/CustomizationDetail.vue";
@@ -91,6 +92,7 @@ const recentLimitLocal = ref(settings.recentLimit);
 // 整块写入：任一字段变动都把完整 editor 回写后端（后端 set_settings 按 top-level
 // key 整体覆盖），与 codegraphEmbedder / jdkRegistry 同模式。缩进字符固定 Tab。
 const indentSizeLocal = ref(settings.editor.indentSize);
+const vimModeLocal = ref(settings.editor.vimMode);
 
 watch(fontSizeLocal, (v) => { settings.fontSize = v; update({ fontSize: v }); });
 watch(fontFamilyLocal, (v) => { settings.fontFamily = v; update({ fontFamily: v }); });
@@ -112,6 +114,74 @@ watch(indentSizeLocal, (v) => {
   indentSizeLocal.value = clamped;
   const editor = { ...settings.editor, indentSize: clamped };
   update({ editor });
+});
+watch(vimModeLocal, (v) => {
+  const editor = { ...settings.editor, vimMode: v };
+  update({ editor });
+});
+
+// ── Vim 键位映射（VSCodeVim 风格）──
+// 行编辑直接改 settings.editor.vimKeybindings（CodeEditor deep watch 即时热
+// 更新），随后整块 editor 回写持久化。
+const vimKeymapModes: Array<{ key: keyof VimBindings; label: string }> = [
+  { key: "normal", label: "Normal" },
+  { key: "insert", label: "Insert" },
+  { key: "visual", label: "Visual" },
+];
+const recordingVimKey = ref<{ mode: keyof VimBindings; index: number } | null>(null);
+
+function persistVimBindings() {
+  update({ editor: { ...settings.editor } });
+}
+
+function startRecordVimKey(mode: keyof VimBindings, index: number) {
+  recordingVimKey.value = { mode, index };
+}
+
+function isRecordingVimKey(mode: keyof VimBindings, index: number): boolean {
+  return recordingVimKey.value?.mode === mode && recordingVimKey.value.index === index;
+}
+
+// 快捷目标（替代 datalist——原生下拉弹层不受 CSS 控制、无法主题化）。
+// 每模式一组 chip，点击填到该模式最后一行（通常是刚「添加映射」的空行）。
+const VIM_TARGET_SUGGESTIONS: readonly string[] = ["<Esc>", ":w", ":wq", ":q", ":q!", "gg", "G"];
+
+function setVimTarget(mode: keyof VimBindings, target: string) {
+  const bindings = settings.editor.vimKeybindings[mode];
+  if (bindings.length === 0) bindings.push({ keys: "", to: "" });
+  bindings[bindings.length - 1].to = target;
+  persistVimBindings();
+}
+
+function addVimBinding(mode: keyof VimBindings) {
+  settings.editor.vimKeybindings[mode].push({ keys: "", to: "" });
+  persistVimBindings();
+}
+
+function removeVimBinding(mode: keyof VimBindings, index: number) {
+  settings.editor.vimKeybindings[mode].splice(index, 1);
+  if (recordingVimKey.value?.mode === mode && recordingVimKey.value.index === index) {
+    recordingVimKey.value = null;
+  }
+  persistVimBindings();
+}
+
+// 键录制：录制期间挂 window keydown（capture 先于编辑器），命中即填入并保存
+watchEffect(() => {
+  const rec = recordingVimKey.value;
+  if (!rec) return;
+  const onKey = (e: KeyboardEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const key = eventToVimKey(e);
+    if (!key) return; // 纯修饰键 / 识别不了：继续录
+    const bindings = settings.editor.vimKeybindings[rec.mode];
+    if (bindings[rec.index]) bindings[rec.index].keys = key;
+    recordingVimKey.value = null;
+    persistVimBindings();
+  };
+  window.addEventListener("keydown", onKey, true);
+  return () => window.removeEventListener("keydown", onKey, true);
 });
 
 // ── CodeGraph embedding 后端 ──
@@ -663,6 +733,59 @@ function onOverlayClick(e: MouseEvent) {
               </div>
 
               <div class="settings-field">
+                <label class="field-label">Vim 模式</label>
+                <div class="toggle-row">
+                  <span class="field-hint">使用 Vim 键位编辑文件（normal / insert / visual 模式，支持 / 搜索与 : 命令；:w 保存、:wq 保存并关闭、:q 关闭需确认修改、:q! 放弃修改直接关）。第三方输入法会把按键截成组合输入导致直接写入字符，遇此情况请用系统自带输入法</span>
+                  <label class="toggle">
+                    <input v-model="vimModeLocal" type="checkbox" />
+                    <span class="toggle-track"></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">Vim 键位映射</label>
+                <span class="field-hint">把按键绑成 vim 键序列（如 jj → &lt;Esc&gt;）或内置命令（如 &lt;C-s&gt; → :w 保存、:wq 保存并关闭、:q/:q! 关闭）。点「录制」录入键；目标以 : 开头为内置命令（单键生效），否则为 vim 键序列（支持多键）</span>
+                <div class="vim-keymap-list">
+                  <div v-for="mode in vimKeymapModes" :key="mode.key" class="vim-keymap-mode">
+                    <div class="vim-keymap-mode-label">{{ mode.label }}</div>
+                    <div
+                      v-for="(b, idx) in settings.editor.vimKeybindings[mode.key]"
+                      :key="idx"
+                      class="vim-keymap-row"
+                    >
+                      <button
+                        class="vim-key-rec"
+                        :class="{ recording: isRecordingVimKey(mode.key, idx) }"
+                        @click="startRecordVimKey(mode.key, idx)"
+                      >
+                        {{ isRecordingVimKey(mode.key, idx) ? "按快捷键…" : b.keys || "点击录制" }}
+                      </button>
+                      <span class="vim-keymap-arrow">→</span>
+                      <input
+                        v-model="b.to"
+                        class="vim-key-target"
+                        placeholder="如 <Esc> 或 :w"
+                        @change="persistVimBindings"
+                      />
+                      <button class="vim-key-del" @click="removeVimBinding(mode.key, idx)">×</button>
+                    </div>
+                    <div class="vim-keymap-suggest">
+                      <button
+                        v-for="t in VIM_TARGET_SUGGESTIONS"
+                        :key="t"
+                        class="vim-key-suggest"
+                        @click="setVimTarget(mode.key, t)"
+                      >
+                        {{ t }}
+                      </button>
+                    </div>
+                    <button class="vim-key-add" @click="addVimBinding(mode.key)">＋ 添加映射</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-field">
                 <label class="field-label">文件编辑器字体</label>
                 <FontSelect v-model="editorFontFamilyLocal" />
                 <span class="field-hint">作用于文件编辑器与文件 diff 查看器</span>
@@ -1092,6 +1215,123 @@ function onOverlayClick(e: MouseEvent) {
   display: flex;
   flex-direction: column;
   gap: 0;
+}
+
+/* ── Vim 键位映射 ── */
+.vim-keymap-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--aide-space-2);
+  margin-top: var(--aide-space-2);
+}
+.vim-keymap-mode {
+  display: flex;
+  flex-direction: column;
+  gap: var(--aide-space-1);
+}
+.vim-keymap-mode-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aide-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.vim-keymap-row {
+  display: flex;
+  align-items: center;
+  gap: var(--aide-space-1);
+}
+.vim-key-rec {
+  min-width: 96px;
+  padding: 3px 8px;
+  font-family: var(--cm-font-family, monospace);
+  font-size: 12.5px;
+  color: var(--aide-text-primary);
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  cursor: pointer;
+  text-align: center;
+}
+.vim-key-rec:hover {
+  background: var(--aide-surface-hover);
+}
+.vim-key-rec.recording {
+  border-color: var(--aide-accent);
+  color: var(--aide-accent);
+  animation: vim-key-pulse 1s ease-in-out infinite;
+}
+@keyframes vim-key-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.vim-keymap-arrow {
+  color: var(--aide-text-muted);
+  font-size: 13px;
+}
+.vim-key-target {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 8px;
+  font-size: 12.5px;
+  font-family: var(--cm-font-family, monospace);
+  color: var(--aide-text-primary);
+  background: var(--aide-bg-deep);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+}
+.vim-key-target:focus {
+  outline: none;
+  border-color: var(--aide-accent);
+}
+.vim-keymap-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--aide-space-1);
+  /* 对齐 target 输入框起点：rec 按钮 min-width(96px) + row gap(space-1=4px) */
+  margin-left: 100px;
+}
+.vim-key-suggest {
+  padding: 1px 7px;
+  font-size: 11.5px;
+  font-family: var(--cm-font-family, monospace);
+  color: var(--aide-text-muted);
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  cursor: pointer;
+}
+.vim-key-suggest:hover {
+  color: var(--aide-accent);
+  border-color: var(--aide-accent);
+}
+.vim-key-del {
+  padding: 2px 8px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--aide-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--aide-radius-sm);
+  cursor: pointer;
+}
+.vim-key-del:hover {
+  color: var(--aide-danger);
+  background: var(--aide-surface-hover);
+}
+.vim-key-add {
+  align-self: flex-start;
+  padding: 2px 10px;
+  font-size: 12px;
+  color: var(--aide-text-secondary);
+  background: transparent;
+  border: 1px dashed var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  cursor: pointer;
+}
+.vim-key-add:hover {
+  color: var(--aide-accent);
+  border-color: var(--aide-accent);
 }
 
 .tab-editor {

@@ -150,9 +150,27 @@ export interface RemoteStatus {
 }
 
 /** 代码编辑器设置。缩进字符固定为 Tab，缩进格数控制 Tab 显示列宽。 */
+/** Vim 键位映射单条（VSCodeVim 风格）：keys = vim 键串（"jj"、"<C-s>"）；
+ *  to 以 ":" 开头 = 内置 ex 命令（:w/:wq/:q/:q!），否则为 vim 键序列。 */
+export interface VimBinding {
+  keys: string;
+  to: string;
+}
+
+/** Vim 键位映射表：normal / insert / visual 三模式各自一组 */
+export interface VimBindings {
+  normal: VimBinding[];
+  insert: VimBinding[];
+  visual: VimBinding[];
+}
+
 export interface EditorSettings {
   /** Tab 字符的显示列宽（回车自动缩进与 Tab 键每层插入一个 \t），默认 4。 */
   indentSize: number;
+  /** Vim 键位模式（@replit/codemirror-vim），默认关。 */
+  vimMode: boolean;
+  /** Vim 键位映射（VSCodeVim 风格），默认空表 */
+  vimKeybindings: VimBindings;
 }
 
 /** 某语言 LSP server 的显式覆盖（"用这个二进制 + 这些参数"，对应后端 ServerOverride）。 */

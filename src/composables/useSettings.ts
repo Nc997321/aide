@@ -36,7 +36,7 @@ const defaults: AppSettings = {
   jdkPromptDismissed: [],
   leftSidebarPinned: true,
   onboarded: false,
-  editor: { indentSize: 4 },
+  editor: { indentSize: 4, vimMode: false, vimKeybindings: { normal: [], insert: [], visual: [] } },
   remote: {
     enabled: false,
     relayUrl: "",
@@ -101,8 +101,17 @@ export function useSettings() {
       settings.jdkPromptDismissed = s.jdkPromptDismissed ?? defaults.jdkPromptDismissed;
       settings.leftSidebarPinned = s.leftSidebarPinned ?? defaults.leftSidebarPinned;
       settings.onboarded = s.onboarded ?? defaults.onboarded;
-      // 旧配置缺 editor → 整块补默认（默认 4 空格缩进）
-      settings.editor = { ...defaults.editor, ...(s.editor ?? {}) };
+      // 旧配置缺 editor → 整块补默认（默认 4 空格缩进）；vimKeybindings 嵌套逐层补空
+      // （s.editor 只有 indentSize 时整体 ?? 会丢三模式结构）
+      settings.editor = {
+        ...defaults.editor,
+        ...(s.editor ?? {}),
+        vimKeybindings: {
+          normal: s.editor?.vimKeybindings?.normal ?? [],
+          insert: s.editor?.vimKeybindings?.insert ?? [],
+          visual: s.editor?.vimKeybindings?.visual ?? [],
+        },
+      };
       // 旧配置缺 remote → 整块补默认（远程控制默认关）
       settings.remote = { ...defaults.remote, ...(s.remote ?? {}) };
     } catch (_) {

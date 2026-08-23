@@ -5,6 +5,9 @@ import { keymap } from "@codemirror/view";
 import { searchKeymap } from "@codemirror/search";
 import { Compartment } from "@codemirror/state";
 import { syntaxHighlighting } from "@codemirror/language";
+import { vim } from "@replit/codemirror-vim";
+import { registerVimExCommands, unregisterVimExCommands, type VimExCommand } from "../extensions/vimExCommands";
+import { applyVimKeyMaps, clearVimKeyMaps, vimKeyExInterceptor } from "../extensions/vimKeybindings";
 import { useSettings } from "../composables/useSettings";
 import { useModal } from "../composables/useModal";
 import { themes } from "../themes";
@@ -37,6 +40,8 @@ const emit = defineEmits<{
   /** gutter 标记点击（跳实现）：results 为缓存实现列表，viewportY 复刻点击处视口偏移
    *  以对齐目标行；line 为标记所在行（回退 sourceLine）。 */
   (e: "gutter-goto", payload: GutterGotoPayload): void;
+  /** vim ex 命令（:w/:wq/:q/:q!）请求文件操作，由宿主组件（FileWindow）执行 */
+  (e: "vim-ex", command: VimExCommand): void;
 }>();
 
 const mountEl = ref<HTMLDivElement | null>(null);
@@ -64,6 +69,11 @@ const lspCompartment = new Compartment();
 // 「跳转到实现 / 跳到父类」gutter 标记用 compartment 包：LSP 开关 + capability 到位后
 // reconfigure（初始空，caps 查回后再装）。
 const implGutterCompartment = new Compartment();
+// vim 键位用 compartment 包：设置面板切 Vim 模式时 reconfigure 热切换，不重建编辑器。
+// vim() 内部用 domEventHandlers.keydown 拦截按键（优先级高于 keymap），但只对 vim-core
+// keymap 认识的键 preventDefault——Ctrl+G 无绑定（vim-core 仅 <C-a>~<C-y> 系），
+// 事件放行，故下方 Mod-g 跳行在 normal 模式下仍可用。
+const vimCompartment = new Compartment();
 
 // ── Editor lifecycle ──
 
@@ -77,6 +87,7 @@ async function createEditor() {
 
   // Destroy existing instance
   if (view) {
+    unregisterVimExCommands(view); // 全局注册表按 view 路由：旧 view 解绑
     view.destroy();
     view = null;
   }
@@ -107,6 +118,14 @@ async function createEditor() {
       ]),
       themeCompartment.of(syntaxHighlighting(createHighlightStyle(themes[settings.theme] || themes["warm-dark"]))),
       indentCompartment.of(cmIndent(settings.editor)),
+      vimCompartment.of(
+        settings.editor.vimMode
+          ? [
+              vim(),
+              vimKeyExInterceptor(settings.editor.vimKeybindings, (cmd) => emit("vim-ex", cmd)),
+            ]
+          : []
+      ),
       updateListener,
       ctrlHoverHighlight(),
       // 跳转定义 hover 预取 + 缓存失效观察者：常驻基础数组（非 cmLsp 数组——后者
@@ -244,6 +263,19 @@ async function createEditor() {
           color: "var(--aide-text-primary) !important",
           border: "1px solid var(--aide-border) !important",
         },
+        // vim ex 命令面板（:w/:wq/:q）：vim-core 的 openDialog 渲染裸 <input>
+        // （无 .cm-textfield 类），自带的 baseTheme 只给了 border:none +
+        // backgroundColor:inherit，color/字体/光标色仍是 UA 默认——补主题
+        ".cm-vim-panel input": {
+          color: "var(--aide-text-primary) !important",
+          caretColor: "var(--aide-text-primary) !important",
+          fontFamily: "var(--cm-font-family, monospace) !important",
+          fontSize: "12.5px !important",
+        },
+        ".cm-vim-panel input:focus": {
+          outline: "1px solid var(--aide-accent) !important",
+          outlineOffset: "1px !important",
+        },
         ".cm-panel.cm-search": {
           backgroundColor: "var(--aide-bg-raised) !important",
           boxShadow: "var(--aide-shadow-sm) !important",
@@ -360,6 +392,11 @@ async function createEditor() {
     parent: mountEl.value,
   });
 
+  // vim ex 命令路由：本视图的 :w/:wq/:q/:q! 转 emit 让宿主（FileWindow）执行
+  registerVimExCommands(view, (command) => emit("vim-ex", command));
+  // 按键映射是 vim-core 全局副作用：vim 开时应用（拦截扩展已随 compartment 装入）
+  if (settings.editor.vimMode) applyVimKeyMaps(settings.editor.vimKeybindings);
+
   // Signal that the editor is fully created (including async lang import)
   applyFontSettings();
   // 装载实现标记 gutter（按 LSP 开关 + capability 决定；caps 异步查回后 reconfigure）
@@ -426,6 +463,43 @@ watch(
       view.dispatch({ effects: indentCompartment.reconfigure(cmIndent(settings.editor)) });
     }
   }
+);
+
+// ── React to vim mode toggle: reconfigure vim compartment ──
+// 装载时同时 applyVimKeyMaps（按键映射是 vim-core 全局 defaultKeymap 副作用，
+// 不随 compartment 生命周期走，需显式 apply/clear）；拦截扩展与 vim() 同 compartment
+//（同生共死，vim 关即卸）。
+watch(
+  () => settings.editor.vimMode,
+  (on) => {
+    if (!view) return;
+    if (on) applyVimKeyMaps(settings.editor.vimKeybindings);
+    else clearVimKeyMaps();
+    view.dispatch({
+      effects: vimCompartment.reconfigure(
+        on
+          ? [vim(), vimKeyExInterceptor(settings.editor.vimKeybindings, (cmd) => emit("vim-ex", cmd))]
+          : []
+      ),
+    });
+  }
+);
+
+// ── React to vim keybinding edits: re-apply maps + swap interceptor bindings ──
+watch(
+  () => settings.editor.vimKeybindings,
+  (bindings) => {
+    if (!view) return;
+    if (settings.editor.vimMode) applyVimKeyMaps(bindings);
+    view.dispatch({
+      effects: vimCompartment.reconfigure(
+        settings.editor.vimMode
+          ? [vim(), vimKeyExInterceptor(bindings, (cmd) => emit("vim-ex", cmd))]
+          : []
+      ),
+    });
+  },
+  { deep: true } // 三模式嵌套数组，浅比较感知不到行增删
 );
 
 // ── React to LSP 开关变化：重装/卸载实现标记 gutter（caps 随 server 重启刷新）──
@@ -534,7 +608,9 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  clearVimKeyMaps(); // vim-core 全局映射随编辑器卸载清掉，避免残留到其他编辑器
   if (view) {
+    unregisterVimExCommands(view);
     view.destroy();
     view = null;
   }

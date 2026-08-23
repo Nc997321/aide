@@ -5,13 +5,14 @@ import { ref, reactive } from "vue";
 import type { VueWrapper } from "@vue/test-utils";
 import SettingsPanel from "./SettingsPanel.vue";
 
+const { updateMock } = vi.hoisted(() => ({ updateMock: vi.fn() }));
 vi.mock("../composables/useSettings", () => ({
   useSettings: () => ({
     settings: reactive({
       theme: "warm-dark", fontSize: 14, fontFamily: "", proxy: "",
       autoNaming: true, recentLimit: 10,
       keybindings: {}, shellPath: "", workbenchHeight: 0,
-      editor: { indentSize: 4 },
+      editor: { indentSize: 4, vimMode: false, vimKeybindings: { normal: [], insert: [], visual: [] } },
       codegraphEmbedder: {
         apiKeyConfigured: false, backend: "fastembed", baseUrl: "",
         dim: 768, model: "", format: "ollama",
@@ -20,7 +21,7 @@ vi.mock("../composables/useSettings", () => ({
       jdkRegistries: [], openWithExtensions: {},
     }),
     loaded: ref(true),
-    update: vi.fn().mockResolvedValue(undefined),
+    update: updateMock,
     setCodegraphEmbedder: vi.fn().mockResolvedValue(undefined),
     setJdkRegistry: vi.fn().mockResolvedValue(undefined),
     dismissJdkPrompt: vi.fn(),
@@ -151,5 +152,28 @@ describe("SettingsPanel", () => {
       "input[placeholder*='127.0.0.1']",
     );
     expect(input!.value).toBe("");
+  });
+
+  it("editor tab renders vim toggle and writes editor block on change", async () => {
+    mountPanel("editor");
+    await flushPromises();
+
+    const toggle = document.body.querySelector<HTMLInputElement>(
+      ".tab-editor .toggle input[type=checkbox]",
+    );
+    expect(toggle).not.toBeNull();
+    expect(toggle!.checked).toBe(false);
+
+    toggle!.click();
+    await flushPromises();
+
+    // 整块写入：update 收到完整 editor 对象（含 vimMode: true 与既有 indentSize/vimKeybindings）
+    expect(updateMock).toHaveBeenCalledWith({
+      editor: {
+        indentSize: 4,
+        vimMode: true,
+        vimKeybindings: { normal: [], insert: [], visual: [] },
+      },
+    });
   });
 });

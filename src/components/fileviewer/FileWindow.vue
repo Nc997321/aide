@@ -9,6 +9,7 @@ import type { QueryResult } from "../../types";
 import { api } from "../../api";
 import CodeEditor from "../CodeEditor.vue";
 import type { GutterGotoPayload } from "../../extensions/cmImplGutter";
+import type { VimExCommand } from "../../extensions/vimExCommands";
 import DiffViewer from "./DiffViewer.vue";
 import { firstChangedLine } from "./diffLocate";
 import { extToLang, highlightCode } from "../../utils/highlight";
@@ -112,6 +113,13 @@ const renderedMarkdown = computed(() => {
 // ── 关闭：干净直接关；当前文件或栈内文件有未保存修改时让用户选 ──
 const stackDirty = computed(() => navStackHasDirty(props.win));
 
+// 保存并关闭：保存失败（error 已显示）就停，别静默丢内容
+async function saveAndClose() {
+  await save(props.win.id);
+  if (isWindowDirty(props.win)) return;
+  closeWindow(props.win.id);
+}
+
 async function requestClose() {
   if (dirty.value || stackDirty.value) {
     const msg = dirty.value
@@ -126,11 +134,29 @@ async function requestClose() {
     );
     if (res === "cancel") return;
     if (res === "confirm") {
-      await save(props.win.id);
-      if (isWindowDirty(props.win)) return; // 保存失败（error 已显示），别静默丢内容
+      await saveAndClose();
     }
   }
   closeWindow(props.win.id);
+}
+
+// ── vim ex 命令（CodeEditor 转发）：:w 保存 / :wq 保存并关闭 /
+//    :q 复用关闭确认（有修改时让用户选）/ :q! 丢弃修改直接关 ──
+async function onVimEx(cmd: VimExCommand) {
+  switch (cmd) {
+    case "w":
+      await save(props.win.id);
+      break;
+    case "wq":
+      await saveAndClose();
+      break;
+    case "q":
+      await requestClose();
+      break;
+    case "q!":
+      closeWindow(props.win.id);
+      break;
+  }
 }
 
 // ── 标题栏拖拽：随意挪动窗口（自动平铺会在开/关/切主窗时重新接管）──
@@ -534,6 +560,7 @@ function onEditorContextMenu(e: MouseEvent) {
             :lspLang="lspLangFor(win.filePath)"
             @goto-definition="onGotoDefinition"
             @gutter-goto="onGotoGutter"
+            @vim-ex="onVimEx"
           />
         </div>
         <!-- 分屏预览是半宽，换行位置与全预览不同，滚动位置分开记 -->
@@ -551,6 +578,7 @@ function onEditorContextMenu(e: MouseEvent) {
           :lspLang="lspLangFor(win.filePath)"
           @goto-definition="onGotoDefinition"
           @gutter-goto="onGotoGutter"
+          @vim-ex="onVimEx"
         />
       </div>
 
