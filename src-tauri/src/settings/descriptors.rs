@@ -12,8 +12,9 @@ const USER_PROJECT_LOCAL: &[SettingsScope] = &[
     SettingsScope::Local,
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingValueKind {
+    #[default]
     String,
     Number,
     Boolean,
@@ -36,25 +37,31 @@ pub struct SettingDescriptor {
     pub project_overridable: bool,
 }
 
+/// `SettingDescriptor::new` 的构造元数据。身份字段（id/default/kind/scopes/
+/// ui_owner）必填；sensitive / project_overridable 是策略开关，默认关闭，
+/// 需要的调用点显式打开——替代 7 位置参数 + 2 相邻 bool。
+#[derive(Default)]
+struct DescriptorMeta {
+    id: &'static str,
+    default: Value,
+    kind: SettingValueKind,
+    scopes: &'static [SettingsScope],
+    ui_owner: &'static str,
+    sensitive: bool,
+    project_overridable: bool,
+}
+
 impl SettingDescriptor {
-    fn new(
-        id: &'static str,
-        default: Value,
-        kind: SettingValueKind,
-        scopes: &'static [SettingsScope],
-        ui_owner: &'static str,
-        sensitive: bool,
-        project_overridable: bool,
-    ) -> Self {
+    fn new(meta: DescriptorMeta) -> Self {
         Self {
-            id,
+            id: meta.id,
             legacy_ids: &[],
-            default,
-            kind,
-            scopes,
-            ui_owner,
-            sensitive,
-            project_overridable,
+            default: meta.default,
+            kind: meta.kind,
+            scopes: meta.scopes,
+            ui_owner: meta.ui_owner,
+            sensitive: meta.sensitive,
+            project_overridable: meta.project_overridable,
         }
     }
 
@@ -184,15 +191,15 @@ static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
         .with_legacy_ids(&["system_default_model_mappings.subagent"]),
         user("claudeMigrationDone", json!(false), SettingValueKind::Boolean, "migration"),
         user("claudeMigrationDismissed", json!(false), SettingValueKind::Boolean, "migration"),
-        SettingDescriptor::new(
-            "permissions.rules",
-            json!([]),
-            SettingValueKind::Array,
-            USER_PROJECT_LOCAL,
-            "permissions",
-            false,
-            true,
-        ),
+        SettingDescriptor::new(DescriptorMeta {
+            id: "permissions.rules",
+            default: json!([]),
+            kind: SettingValueKind::Array,
+            scopes: USER_PROJECT_LOCAL,
+            ui_owner: "permissions",
+            project_overridable: true,
+            ..Default::default()
+        }),
         user("settings.remote.enabled", json!(false), SettingValueKind::Boolean, "remote"),
         user("settings.remote.relayUrl", json!(""), SettingValueKind::String, "remote"),
         user("settings.remote.deviceId", json!(""), SettingValueKind::String, "remote"),
@@ -280,15 +287,15 @@ pub(crate) fn validate_descriptor_entries(entries: &[SettingDescriptor]) -> Resu
 }
 
 fn ui(id: &'static str, default: Value, kind: SettingValueKind) -> SettingDescriptor {
-    SettingDescriptor::new(
+    SettingDescriptor::new(DescriptorMeta {
         id,
         default,
         kind,
-        USER_PROJECT_LOCAL,
-        "settings",
-        false,
-        true,
-    )
+        scopes: USER_PROJECT_LOCAL,
+        ui_owner: "settings",
+        project_overridable: true,
+        ..Default::default()
+    })
 }
 
 fn project(
@@ -297,7 +304,15 @@ fn project(
     kind: SettingValueKind,
     ui_owner: &'static str,
 ) -> SettingDescriptor {
-    SettingDescriptor::new(id, default, kind, USER_PROJECT_LOCAL, ui_owner, false, true)
+    SettingDescriptor::new(DescriptorMeta {
+        id,
+        default,
+        kind,
+        scopes: USER_PROJECT_LOCAL,
+        ui_owner,
+        project_overridable: true,
+        ..Default::default()
+    })
 }
 
 fn user(
@@ -306,17 +321,24 @@ fn user(
     kind: SettingValueKind,
     ui_owner: &'static str,
 ) -> SettingDescriptor {
-    SettingDescriptor::new(id, default, kind, USER, ui_owner, false, false)
+    SettingDescriptor::new(DescriptorMeta {
+        id,
+        default,
+        kind,
+        scopes: USER,
+        ui_owner,
+        ..Default::default()
+    })
 }
 
 fn secret(id: &'static str, ui_owner: &'static str) -> SettingDescriptor {
-    SettingDescriptor::new(
+    SettingDescriptor::new(DescriptorMeta {
         id,
-        Value::Null,
-        SettingValueKind::Secret,
-        USER,
+        default: Value::Null,
+        kind: SettingValueKind::Secret,
+        scopes: USER,
         ui_owner,
-        true,
-        false,
-    )
+        sensitive: true,
+        ..Default::default()
+    })
 }

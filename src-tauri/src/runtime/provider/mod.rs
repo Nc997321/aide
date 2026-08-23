@@ -145,9 +145,34 @@ pub struct ProviderConfigInput {
     #[serde(default)] pub known_models: Vec<String>,
 }
 
+/// Provider 凭证配置状态的视图——替代 `api_key_configured` + `auth_token_configured`
+/// 相邻 bool。四个组合都合法，但用枚举把「组合决策」集中在调用点一次做掉，
+/// `view` 只负责展开回两个序列化 bool（ProviderConfigView 的 JSON schema 不变）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthStatus {
+    None,
+    ApiKey,
+    AuthToken,
+    Both,
+}
+
 impl ProviderConfig {
-    fn view(self, api_key_configured: bool, auth_token_configured: bool) -> ProviderConfigView {
-        ProviderConfigView { id: self.id, kind: self.kind, name: self.name, icon: self.icon, base_url: self.base_url, api_key_configured, auth_token_configured, model: self.model, model_mappings: self.model_mappings, effort_level: self.effort_level, auto_compact_window: self.auto_compact_window, autocompact_pct_override: self.autocompact_pct_override, known_models: self.known_models }
+    fn view(self, auth: AuthStatus) -> ProviderConfigView {
+        ProviderConfigView {
+            id: self.id,
+            kind: self.kind,
+            name: self.name,
+            icon: self.icon,
+            base_url: self.base_url,
+            api_key_configured: matches!(auth, AuthStatus::ApiKey | AuthStatus::Both),
+            auth_token_configured: matches!(auth, AuthStatus::AuthToken | AuthStatus::Both),
+            model: self.model,
+            model_mappings: self.model_mappings,
+            effort_level: self.effort_level,
+            auto_compact_window: self.auto_compact_window,
+            autocompact_pct_override: self.autocompact_pct_override,
+            known_models: self.known_models,
+        }
     }
 }
 
@@ -239,7 +264,13 @@ impl crate::settings::SettingsService {
                 enrich(&mut provider);
                 let api = self.secrets().get(&format!("provider/{}/apiKey", provider.id))?.is_some();
                 let token = self.secrets().get(&format!("provider/{}/authToken", provider.id))?.is_some();
-                Ok(provider.view(api, token))
+                let auth = match (api, token) {
+                    (true, true) => AuthStatus::Both,
+                    (true, false) => AuthStatus::ApiKey,
+                    (false, true) => AuthStatus::AuthToken,
+                    (false, false) => AuthStatus::None,
+                };
+                Ok(provider.view(auth))
             }).collect()
     }
 
@@ -848,6 +879,24 @@ mod tests {
         strip(&mut p);
         assert_eq!(p.name, "my", "custom identity preserved");
         assert_eq!(p.base_url, "https://gw");
+    }
+
+    /// view 把 AuthStatus 合成枚举展开回两个序列化 bool——四个组合逐一验证，
+    /// 保证 ProviderConfigView 的 JSON schema 语义不变（前端依赖这两个字段）。
+    #[test]
+    fn view_expands_auth_status_to_credential_flags() {
+        let cfg = provider_with(String::new(), String::new());
+        let cases = [
+            (AuthStatus::None, false, false),
+            (AuthStatus::ApiKey, true, false),
+            (AuthStatus::AuthToken, false, true),
+            (AuthStatus::Both, true, true),
+        ];
+        for (status, api, token) in cases {
+            let view = cfg.clone().view(status);
+            assert_eq!(view.api_key_configured, api, "api_key flag for {status:?}");
+            assert_eq!(view.auth_token_configured, token, "auth_token flag for {status:?}");
+        }
     }
 
     #[test]

@@ -64,6 +64,19 @@ struct ActiveFreeze {
     tick_since_flush: u32,
 }
 
+/// 落盘/收尾时的冻结结局——替代 `suspected_sleep` + `recovered` 相邻 bool，
+/// 杜绝无意义的 (true, true) 组合。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FreezeOutcome {
+    /// 心跳仍断流：落一份进行中快照（增量重写同一文件），或按非结局收尾（hidden 节流）。
+    /// 短于此结局的冻结被 close_freeze 丢弃。
+    Ongoing,
+    /// 心跳恢复，一次完整收尾的瞬时冻结。
+    Recovered,
+    /// 整机休眠/挂起导致的中断，标 suspected_sleep 收尾。
+    SuspectedSleep,
+}
+
 pub fn spawn(app: AppHandle) {
     let _ = std::thread::Builder::new()
         .name("diag-watchdog".into())
@@ -92,7 +105,7 @@ fn run(app: AppHandle) {
         if suspended {
             // 整机休眠恢复：进行中的冻结按 suspected_sleep 收尾，不新开
             if let Some(fz) = freeze.take() {
-                close_freeze(&inner, fz, true, false);
+                close_freeze(&inner, fz, FreezeOutcome::SuspectedSleep);
             }
             continue;
         }
@@ -107,7 +120,7 @@ fn run(app: AppHandle) {
         if inner.hidden.load(Ordering::Relaxed) {
             // 窗口隐藏：定时器被浏览器节流，缺口不可信。停止监测，收尾进行中的冻结。
             if let Some(fz) = freeze.take() {
-                close_freeze(&inner, fz, false, false);
+                close_freeze(&inner, fz, FreezeOutcome::Ongoing);
             }
             continue;
         }
@@ -127,7 +140,7 @@ fn run(app: AppHandle) {
                 // 预热让下一帧就有有效 CPU 数据
                 let _ = sample_processes(&mut sys);
                 fz.samples.push(make_sample(&mut sys, &probe, &hwnd, &main_tid, true));
-                fz.path = flush_report(&inner, &fz, false, false);
+                fz.path = flush_report(&inner, &fz, FreezeOutcome::Ongoing);
                 freeze = Some(fz);
             }
             Some(fz) if gap_ms >= FREEZE_GAP_MS => {
@@ -136,14 +149,14 @@ fn run(app: AppHandle) {
                 }
                 fz.tick_since_flush += 1;
                 if fz.tick_since_flush >= FLUSH_EVERY_TICKS {
-                    fz.path = flush_report(&inner, fz, false, false);
+                    fz.path = flush_report(&inner, fz, FreezeOutcome::Ongoing);
                     fz.tick_since_flush = 0;
                 }
             }
             Some(_) => {
                 // 心跳恢复 → 最终落盘（recovered=true），前端随后补交明细
                 let fz = freeze.take().expect("freeze checked Some");
-                close_freeze(&inner, fz, false, true);
+                close_freeze(&inner, fz, FreezeOutcome::Recovered);
             }
             None => {}
         }
@@ -236,13 +249,8 @@ fn sample_processes(sys: &mut System) -> Vec<ProcessSample> {
 }
 
 /// 组装并落盘一份报告。返回报告路径（按 started 锚定，增量重写同一文件）。
-/// `recovered=true` 表示心跳已恢复、是一次完整收尾的瞬时冻结。
-fn flush_report(
-    inner: &DiagInner,
-    fz: &ActiveFreeze,
-    suspected_sleep: bool,
-    recovered: bool,
-) -> Option<PathBuf> {
+/// `FreezeOutcome::Recovered` 表示心跳已恢复、是一次完整收尾的瞬时冻结。
+fn flush_report(inner: &DiagInner, fz: &ActiveFreeze, outcome: FreezeOutcome) -> Option<PathBuf> {
     let ended = report::epoch_ms();
     let report = FreezeReport {
         meta: ReportMeta::current(),
@@ -251,8 +259,8 @@ fn flush_report(
             ended,
             duration_ms: ended.saturating_sub(fz.started_epoch),
             detected_gap_ms: fz.detected_gap_ms,
-            suspected_sleep,
-            recovered,
+            suspected_sleep: outcome == FreezeOutcome::SuspectedSleep,
+            recovered: outcome == FreezeOutcome::Recovered,
         },
         samples: fz.samples.clone(),
         ring: RingSnapshot {
@@ -265,19 +273,18 @@ fn flush_report(
     let dir = crate::commands::our_config_dir().join("diagnostics");
     match report::write_report(&dir, &report) {
         Ok(path) => {
-            if recovered {
-                tracing::warn!(
+            match outcome {
+                FreezeOutcome::Recovered => tracing::warn!(
                     "diag: freeze recovered after {}ms: {}",
                     report.freeze.duration_ms,
                     path.display()
-                );
-            } else {
-                tracing::warn!(
+                ),
+                _ => tracing::warn!(
                     "diag: freeze ongoing ({}ms, {} samples): {}",
                     report.freeze.duration_ms,
                     report.samples.len(),
                     path.display()
-                );
+                ),
             }
             *inner.last_report.lock().unwrap() = Some((path.clone(), Instant::now()));
             Some(path)
@@ -290,9 +297,9 @@ fn flush_report(
 }
 
 /// 收尾一次冻结。短冻结（非恢复、非休眠、< MIN_REPORT_MS）丢弃，避免节流伪影噪声。
-fn close_freeze(inner: &DiagInner, fz: ActiveFreeze, suspected_sleep: bool, recovered: bool) {
+fn close_freeze(inner: &DiagInner, fz: ActiveFreeze, outcome: FreezeOutcome) {
     let duration = report::epoch_ms().saturating_sub(fz.started_epoch);
-    if !recovered && !suspected_sleep && duration < MIN_REPORT_MS {
+    if outcome == FreezeOutcome::Ongoing && duration < MIN_REPORT_MS {
         if let Some(p) = &fz.path {
             let _ = std::fs::remove_file(p);
         }
@@ -304,7 +311,7 @@ fn close_freeze(inner: &DiagInner, fz: ActiveFreeze, suspected_sleep: bool, reco
         }
         return;
     }
-    flush_report(inner, &fz, suspected_sleep, recovered);
+    flush_report(inner, &fz, outcome);
 }
 
 /// 主窗口 HWND（Windows 判「未响应」用）。在主线程解析一次，存成整数共享。
@@ -345,6 +352,79 @@ fn resolve_main_thread_id(app: &AppHandle) -> Arc<AtomicU32> {
 #[link(name = "kernel32")]
 extern "system" {
     fn GetCurrentThreadId() -> u32;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Mutex;
+
+    /// 构造一个最小的 DiagInner（空环）。close_freeze 的丢弃路径只碰
+    /// last_report + 磁盘，不依赖心跳/事件环内容。
+    fn test_inner() -> Arc<DiagInner> {
+        Arc::new(DiagInner {
+            last_heartbeat: Mutex::new(None),
+            hidden: AtomicBool::new(false),
+            heartbeats: Mutex::new(super::super::ring::Ring::new(4)),
+            event_rates: Mutex::new(super::super::EventRates::new(4)),
+            last_report: Mutex::new(None),
+        })
+    }
+
+    /// 现在开始的短冻结（duration≈0 < MIN_REPORT_MS），路径可控。
+    fn freeze_now(path: Option<PathBuf>) -> ActiveFreeze {
+        ActiveFreeze {
+            started_epoch: report::epoch_ms(),
+            detected_gap_ms: FREEZE_GAP_MS,
+            samples: Vec::new(),
+            path,
+            tick_since_flush: 0,
+        }
+    }
+
+    /// Ongoing + 短于 MIN_REPORT_MS → 丢弃：已落盘报告文件删除、last_report 清空。
+    /// 不触发 flush_report，不污染真实配置目录。
+    #[test]
+    fn ongoing_short_discard_deletes_file_and_clears_last_report() {
+        let inner = test_inner();
+        let dir = std::env::temp_dir().join(format!("diag-watchdog-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("freeze.json");
+        std::fs::write(&path, "{}").unwrap();
+        *inner.last_report.lock().unwrap() = Some((path.clone(), Instant::now()));
+
+        close_freeze(&inner, freeze_now(Some(path.clone())), FreezeOutcome::Ongoing);
+
+        assert!(!path.exists(), "短冻结丢弃应删除已落盘的报告文件");
+        assert!(
+            inner.last_report.lock().unwrap().is_none(),
+            "last_report 应随文件清空"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Ongoing + 短：fz 没有已落盘路径时不动 last_report，避免误清别的报告。
+    #[test]
+    fn ongoing_short_discard_keeps_unrelated_last_report() {
+        let inner = test_inner();
+        let dir = std::env::temp_dir().join(format!("diag-watchdog-test2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let other = dir.join("other.json");
+        std::fs::write(&other, "{}").unwrap();
+        *inner.last_report.lock().unwrap() = Some((other.clone(), Instant::now()));
+
+        close_freeze(&inner, freeze_now(None), FreezeOutcome::Ongoing);
+
+        let kept = inner.last_report.lock().unwrap();
+        assert_eq!(
+            kept.as_ref().map(|(p, _)| p),
+            Some(&other),
+            "无关 last_report 保留"
+        );
+        assert!(other.exists(), "无关文件不受影响");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// Windows：问操作系统这个窗口是否已被判定「未响应」（≥5s 不处理消息）。
