@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aide 远程 PWA — 三屏原型</title>
+<link rel="icon" href="../../src-tauri/icons/icon.png">
+<style>
+  /* ===== glass 主题 token（src/themes/glass.ts）===== */
+  :root {
+    --bg-deep: rgba(8,10,16,.82);
+    --bg-base: rgba(17,19,29,.52);
+    --bg-raised: rgba(24,26,38,.48);
+    --surface-default: rgba(255,255,255,.06);
+    --surface-hover: rgba(255,255,255,.1);
+    --surface-active: rgba(255,255,255,.14);
+    --text-primary: #eef0f8;
+    --text-secondary: #b9bdd0;
+    --text-muted: #7c8296;
+    --accent: #a5b8ff;
+    --accent-hover: #bcc9ff;
+    --accent-subtle: rgba(150,170,255,.16);
+    --accent-gradient: linear-gradient(180deg, rgba(160,180,255,.42), rgba(130,150,255,.3));
+    --accent-glow: 0 4px 18px rgba(140,160,255,.38);
+    --accent-ring: 0 0 0 2.5px rgba(150,170,255,.42);
+    --success: #6ee7a8;
+    --warning: #fcd34d;
+    --danger: #f87171;
+    --info: #7dd3fc;
+    --agent-accent: #e0a3d8;
+    --border: rgba(255,255,255,.1);
+    --border-subtle: rgba(255,255,255,.06);
+    --border-strong: rgba(255,255,255,.17);
+    --highlight-inset: inset 0 1px 0 rgba(255,255,255,.12);
+    --shadow-md: 0 8px 24px rgba(0,0,0,.38);
+    --shadow-lg: 0 20px 60px rgba(0,0,0,.55);
+    --radius-sm: 8px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --font-mono: "Cascadia Code", Consolas, monospace;
+    --ease-t: .16s cubic-bezier(.2,.8,.2,1);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    min-height: 100vh;
+    padding: 30px 20px 60px;
+    color: var(--text-primary);
+    font: 14px/1.65 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background:
+      radial-gradient(560px 380px at 10% -8%, rgba(124,108,255,.32), transparent 65%),
+      radial-gradient(520px 420px at 96% 6%, rgba(64,190,220,.22), transparent 65%),
+      radial-gradient(640px 340px at 60% 112%, rgba(210,110,190,.16), transparent 70%),
+      #0a0b11;
+  }
+
+  /* ===== 页面头部 ===== */
+  .page-head { text-align: center; margin-bottom: 30px; }
+  .page-head h1 { font-size: 20px; font-weight: 700; letter-spacing: .3px; }
+  .page-head h1 small { font-size: 12px; color: var(--accent); font-weight: 600; margin-left: 8px; vertical-align: 2px; }
+  .page-head p { font-size: 12.5px; color: var(--text-muted); margin-top: 6px; }
+  .page-head p b { color: var(--text-secondary); font-weight: 600; }
+
+  /* ===== 三屏舞台 ===== */
+  .stage {
+    display: flex; gap: 28px; justify-content: center; align-items: flex-start;
+    flex-wrap: wrap; max-width: 1400px; margin: 0 auto;
+  }
+  .phone-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .phone-label { font-size: 13px; font-weight: 700; color: var(--text-secondary); letter-spacing: .5px; }
+  .phone-label span { color: var(--text-muted); font-weight: 500; margin-left: 6px; font-size: 11.5px; }
+
+  /* ===== 手机框 ===== */
+  .phone {
+    width: 375px; height: 740px; flex: none;
+    border-radius: 46px; padding: 11px;
+    background: linear-gradient(160deg, #23242e, #101118 40%, #1a1b23);
+    border: 1px solid var(--border-strong);
+    box-shadow: var(--shadow-lg), inset 0 1px 1px rgba(255,255,255,.14);
+    position: relative;
+  }
+  /* 侧边按键装饰 */
+  .phone::before, .phone::after {
+    content: ""; position: absolute; right: -2.5px; width: 3px; border-radius: 2px;
+    background: #2c2d38;
+  }
+  .phone::before { top: 150px; height: 56px; }
+  .phone::after  { top: 220px; height: 88px; }
+  .screen {
+    width: 100%; height: 100%; border-radius: 36px; overflow: hidden;
+    background: #0b0c12;
+    display: flex; flex-direction: column; position: relative;
+  }
+  .screen::before { /* 屏幕顶部环境光 */
+    content: ""; position: absolute; inset: 0 0 auto; height: 200px; pointer-events: none; z-index: 0;
+    background: radial-gradient(320px 130px at 50% -60px, rgba(150,170,255,.13), transparent 70%);
+  }
+
+  /* 状态栏 */
+  .statusbar {
+    height: 40px; flex: none; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 22px 0 26px; font-size: 12.5px; font-weight: 600; color: var(--text-primary);
+    position: relative; z-index: 2;
+  }
+  .statusbar .sb-icons { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+
+  /* ===== 通用小组件 ===== */
+  .spinner {
+    width: 14px; height: 14px; flex: none; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.18); border-top-color: currentColor;
+    animation: rot .7s linear infinite;
+  }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .dot.ok   { background: var(--success); box-shadow: 0 0 8px rgba(110,231,168,.7); }
+  .dot.warn { background: var(--warning); box-shadow: 0 0 8px rgba(252,211,77,.6); animation: pulse 1.4s ease-in-out infinite; }
+  .dot.off  { background: #f0a868; box-shadow: 0 0 8px rgba(240,168,104,.6); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .45; } }
+
+  /* 屏下控制胶囊 */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; max-width: 375px; }
+  .chips .cap { width: 100%; text-align: center; font-size: 10.5px; color: var(--text-muted); margin-bottom: -1px; }
+  .chip {
+    padding: 4px 11px; font-size: 11px; cursor: pointer; border-radius: 99px;
+    color: var(--text-secondary); background: var(--bg-base); border: 1px solid var(--border-subtle);
+    transition: all var(--ease-t);
+  }
+  .chip:hover { background: var(--surface-default); color: var(--text-primary); }
+  .chip.on { color: var(--text-primary); background: var(--surface-active); border-color: var(--border); }
+
+  /* ============================================================
+     屏 1 · 连接 / 配对
+     ============================================================ */
+  .conn { flex: 1; display: flex; flex-direction: column; padding: 8px 26px 26px; overflow-y: auto; position: relative; z-index: 1; }
+  .conn-logo {
+    width: 68px; height: 68px; border-radius: 18px; margin: 26px auto 16px;
+    box-shadow: 0 8px 30px rgba(140,160,255,.35), var(--highlight-inset);
+    display: block;
+  }
+  .conn h2 { text-align: center; font-size: 21px; font-weight: 700; letter-spacing: .5px; }
+  .conn .sub { text-align: center; font-size: 12px; color: var(--text-muted); margin: 7px 0 26px; }
+
+  .field { margin-bottom: 16px; }
+  .field label { display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 7px; }
+  .field label small { float: right; font-weight: 400; color: var(--text-muted); font-size: 10.5px; margin-top: 1px; }
+  .field input {
+    width: 100%; padding: 11px 13px; font-size: 13.5px; color: var(--text-primary);
+    background: var(--surface-default); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    outline: none; transition: all var(--ease-t); font-family: inherit;
+  }
+  .field input::placeholder { color: var(--text-muted); }
+  .field input:focus { border-color: rgba(150,170,255,.5); box-shadow: var(--accent-ring); background: var(--surface-hover); }
+  .field input.mono { font-family: var(--font-mono); font-size: 15px; }
+  .field input.code {
+    text-align: center; font-family: var(--font-mono); font-size: 21px; font-weight: 600;
+    letter-spacing: 12px; padding-left: 24px; /* 视觉居中补偿 letter-spacing */
+  }
+  .field input.error { border-color: rgba(248,113,113,.55); box-shadow: 0 0 0 2.5px rgba(248,113,113,.25); animation: shake .3s; }
+  @keyframes shake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+  .field .tip { font-size: 10.5px; color: var(--text-muted); margin-top: 6px; }
+  .field .tip em { font-style: normal; color: var(--danger); }
+
+  .btn-primary {
+    width: 100%; padding: 12px; margin-top: 6px;
+    font-size: 14.5px; font-weight: 700; letter-spacing: 2px; color: #fff; cursor: pointer;
+    background: var(--accent-gradient); border: 1px solid rgba(170,190,255,.4); border-radius: var(--radius-md);
+    box-shadow: var(--accent-glow), var(--highlight-inset);
+    transition: all var(--ease-t);
+    display: flex; align-items: center; justify-content: center; gap: 9px;
+    font-family: inherit;
+  }
+  .btn-primary:hover { filter: brightness(1.12); }
+  .btn-primary:active { transform: scale(.985); }
+  .btn-primary:disabled { opacity: .65; cursor: default; filter: none; transform: none; }
+
+  /* 状态展示区 */
+  .conn-status { min-height: 74px; margin-top: 18px; }
+  .st {
+    display: none; align-items: flex-start; gap: 10px;
+    padding: 11px 13px; border-radius: var(--radius-md); font-size: 12px; line-height: 1.55;
+    border: 1px solid var(--border-subtle); background: var(--surface-default);
+  }
+  .st.show { display: flex; animation: rise .25s cubic-bezier(.2,.8,.2,1); }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  .st .st-ic { margin-top: 1px; display: flex; }
+  .st b { display: block; font-size: 12.5px; }
+  .st small { color: var(--text-muted); font-size: 11px; }
+  .st.info    { color: var(--text-secondary); }
+  .st.info b  { color: var(--text-primary); }
+  .st.ok      { background: rgba(110,231,168,.09); border-color: rgba(110,231,168,.3); color: var(--success); }
+  .st.warn    { background: rgba(240,168,104,.09); border-color: rgba(240,168,104,.32); color: #f0a868; }
+  .st.danger  { background: rgba(248,113,113,.09); border-color: rgba(248,113,113,.32); color: var(--danger); }
+  .st small   { display: block; }
+  .st.ok small, .st.warn small, .st.danger small { color: inherit; opacity: .75; }
+
+  .conn-foot { margin-top: auto; padding-top: 20px; text-align: center; font-size: 10.5px; color: var(--text-muted); }
+  .conn-foot .kv { display: flex; justify-content: center; gap: 5px; align-items: center; }
+  .conn-foot .dot { width: 6px; height: 6px; }
+
+  /* ============================================================
+     屏 2 · 会话列表
+     ============================================================ */
+  .sv-top {
+    flex: none; display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px 12px; border-bottom: 1px solid var(--border-subtle);
+    position: relative; z-index: 1;
+  }
+  .sv-top h3 { font-size: 16.5px; font-weight: 700; flex: 1; }
+  .conn-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10.5px; font-weight: 600; color: var(--text-secondary);
+    padding: 4px 10px; border-radius: 99px;
+    background: var(--surface-default); border: 1px solid var(--border-subtle);
+  }
+  .icon-btn {
+    width: 30px; height: 30px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-sm); cursor: pointer; color: var(--text-secondary);
+    background: var(--surface-default); border: 1px solid var(--border-subtle);
+    transition: all var(--ease-t);
+  }
+  .icon-btn:hover { background: var(--surface-hover); color: var(--text-primary); }
+  .icon-btn svg.spinning { animation: rot .6s linear; }
+
+  .sv-list { flex: 1; overflow-y: auto; padding: 10px 12px 90px; position: relative; z-index: 1; }
+  .sv-item {
+    display: block; width: 100%; text-align: left; cursor: pointer; font-family: inherit;
+    padding: 12px 14px; margin-bottom: 8px; border-radius: var(--radius-lg);
+    background: var(--surface-default); border: 1px solid var(--border-subtle);
+    box-shadow: var(--highlight-inset); transition: all var(--ease-t);
+    color: inherit;
+  }
+  .sv-item:hover { background: var(--surface-hover); border-color: var(--border); transform: translateY(-1px); }
+  .sv-item:active { transform: scale(.99); }
+  .sv-row1 { display: flex; align-items: center; gap: 8px; }
+  .sv-name { flex: 1; font-size: 13.5px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sv-time { flex: none; font-size: 10.5px; color: var(--text-muted); }
+  .sv-row2 { display: flex; align-items: center; gap: 7px; margin-top: 4px; }
+  .sv-prev { flex: 1; font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sv-live {
+    flex: none; display: inline-flex; align-items: center; gap: 5px;
+    font-size: 10px; font-weight: 600; color: var(--accent);
+  }
+  .sv-live .dot { background: var(--accent); box-shadow: 0 0 7px rgba(165,184,255,.8); animation: pulse 1.1s ease-in-out infinite; }
+
+  /* 新会话浮动按钮 */
+  .fab {
+    position: absolute; right: 18px; bottom: 22px; z-index: 3;
+    width: 52px; height: 52px; border-radius: 50%; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; color: #fff;
+    background: var(--accent-gradient); border: 1px solid rgba(170,190,255,.45);
+    box-shadow: var(--accent-glow), var(--highlight-inset);
+    transition: all var(--ease-t);
+  }
+  .fab:hover { filter: brightness(1.15); transform: scale(1.06); }
+  .fab:active { transform: scale(.95); }
+
+  /* ===== 工作区选择行 + 底部弹层 ===== */
+  .sv-ws {
+    flex: none; display: flex; align-items: center; padding: 7px 12px 9px;
+    border-bottom: 1px solid var(--border-subtle); position: relative; z-index: 1;
+  }
+  .ws-chip {
+    flex: 1; display: flex; align-items: center; gap: 9px; min-width: 0;
+    padding: 7px 10px; border-radius: var(--radius-md); cursor: pointer;
+    color: var(--text-primary); font-family: inherit; text-align: left;
+    background: var(--surface-default); border: 1px solid var(--border-subtle);
+    transition: all var(--ease-t);
+  }
+  .ws-chip:hover { background: var(--surface-hover); border-color: var(--border); }
+  .ws-chip:active { transform: scale(.99); }
+  .ws-ic { flex: none; display: flex; color: var(--accent); }
+  .ws-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .ws-name { font-size: 12.5px; font-weight: 700; }
+  .ws-path { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ws-caret { flex: none; display: flex; color: var(--text-muted); transition: transform var(--ease-t); }
+  .ws-chip[aria-expanded="true"] .ws-caret { transform: rotate(180deg); }
+  .ws-mask {
+    position: absolute; inset: 0; z-index: 6;
+    background: rgba(5,6,10,.55); backdrop-filter: blur(3px);
+    display: flex; align-items: flex-end;
+    opacity: 0; visibility: hidden; transition: opacity .22s ease, visibility .22s;
+  }
+  .ws-mask.show { opacity: 1; visibility: visible; }
+  .ws-sheet {
+    width: 100%; padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px));
+    background: #14161f; border: 1px solid var(--border); border-bottom: none;
+    border-radius: 22px 22px 0 0; box-shadow: var(--shadow-lg);
+    transform: translateY(24px); transition: transform .24s cubic-bezier(.2,.8,.2,1);
+  }
+  .ws-mask.show .ws-sheet { transform: translateY(0); }
+  .ws-head { display: flex; align-items: baseline; gap: 8px; padding: 0 4px 10px; }
+  .ws-head b { font-size: 14px; }
+  .ws-head small { font-size: 10.5px; color: var(--text-muted); }
+  .ws-opt {
+    width: 100%; display: flex; align-items: center; gap: 10px;
+    padding: 10px; margin-bottom: 4px; border-radius: var(--radius-md); cursor: pointer;
+    color: var(--text-primary); font-family: inherit; text-align: left;
+    background: none; border: 1px solid transparent; transition: all var(--ease-t);
+  }
+  .ws-opt:hover { background: var(--surface-default); }
+  .ws-opt.on { background: var(--accent-subtle); border-color: rgba(150,170,255,.3); }
+  .ws-opt .ws-ic { color: var(--text-muted); }
+  .ws-opt.on .ws-ic { color: var(--accent); }
+  .ws-check { flex: none; color: var(--accent); opacity: 0; transition: opacity var(--ease-t); }
+  .ws-opt.on .ws-check { opacity: 1; }
+
+  /* ============================================================
+     屏 3 · 聊天
+     ============================================================ */
+  .ch-top {
+    flex: none; display: flex; align-items: center; gap: 4px;
+    padding: 8px 10px 10px; border-bottom: 1px solid var(--border-subtle);
+    position: relative; z-index: 4; background: rgba(11,12,18,.72); backdrop-filter: blur(14px);
+  }
+  .ch-back {
+    width: 34px; height: 34px; flex: none; display: flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-sm); cursor: pointer; color: var(--text-secondary);
+    background: none; border: none; transition: all var(--ease-t);
+  }
+  .ch-back:hover { background: var(--surface-default); color: var(--text-primary); }
+  .ch-title { flex: 1; text-align: center; min-width: 0; }
+  .ch-name { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ch-state { display: flex; align-items: center; justify-content: center; gap: 5px; font-size: 10.5px; color: var(--text-muted); margin-top: 1px; }
+  .ch-top .spacer { width: 34px; flex: none; }
+
+  /* 离线横幅 */
+  .ch-offbar {
+    display: none; flex: none; align-items: center; justify-content: center; gap: 8px;
+    padding: 7px; font-size: 11.5px; font-weight: 600; color: #f0a868;
+    background: rgba(240,168,104,.1); border-bottom: 1px solid rgba(240,168,104,.25);
+    position: relative; z-index: 3;
+  }
+  .ch-offbar.show { display: flex; animation: rise .25s; }
+
+  /* 消息区 */
+  .ch-msgs { flex: 1; overflow-y: auto; padding: 14px 14px 12px; position: relative; z-index: 1; scroll-behavior: auto; }
+  .ch-msgs::-webkit-scrollbar, .sv-list::-webkit-scrollbar, .conn::-webkit-scrollbar { width: 0; }
+
+  .m-time { text-align: center; font-size: 10px; color: var(--text-muted); margin: 4px 0 14px; }
+  .m-sys {
+    text-align: center; font-size: 10.5px; color: var(--info); margin: 10px 0;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .m-sys::before, .m-sys::after { content: ""; flex: 1; height: 1px; background: var(--border-subtle); }
+
+  .m-row { display: flex; margin-bottom: 14px; }
+  .m-row.user { justify-content: flex-end; }
+  .m-bubble-user {
+    max-width: 82%; padding: 9px 13px; font-size: 13.5px; line-height: 1.6;
+    color: var(--text-primary); white-space: pre-wrap; word-break: break-word;
+    background: var(--accent-subtle); border: 1px solid rgba(150,170,255,.28);
+    border-radius: 14px 14px 4px 14px; box-shadow: var(--highlight-inset);
+  }
+  .m-assistant { max-width: 100%; flex: 1; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+  .m-text { font-size: 13.5px; line-height: 1.7; color: var(--text-primary); white-space: pre-wrap; word-break: break-word; }
+
+  /* 流式光标 */
+  .cursor {
+    display: inline-block; width: 8px; height: 1.02em; margin-left: 2px;
+    background: var(--accent); border-radius: 1.5px; vertical-align: -2px;
+    animation: blink 1s steps(1) infinite; box-shadow: 0 0 6px rgba(165,184,255,.8);
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* 思考块（折叠） */
+  details.blk { border-radius: var(--radius-md); }
+  details.blk summary {
+    display: inline-flex; align-items: center; gap: 7px; cursor: pointer; list-style: none;
+    font-size: 11.5px; color: var(--text-muted); padding: 3px 0; user-select: none;
+  }
+  details.blk summary::-webkit-details-marker { display: none; }
+  .caret {
+    width: 0; height: 0; flex: none;
+    border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+    border-left: 5px solid var(--text-muted); opacity: .75; transition: transform var(--ease-t);
+  }
+  details[open] > summary .caret { transform: rotate(90deg); }
+  .blk-label { font-weight: 600; color: var(--text-secondary); }
+  .blk-body-think {
+    margin: 3px 0 5px 2px; padding: 5px 11px;
+    border-left: 2px solid rgba(224,163,216,.4);
+    font-size: 11.5px; line-height: 1.65; color: var(--text-muted); font-style: italic;
+    white-space: pre-wrap; word-break: break-word;
+  }
+
+  /* 工具调用块（折叠卡） */
+  .tool {
+    border-radius: var(--radius-md); background: var(--bg-base);
+    border: 1px solid var(--border-subtle); box-shadow: var(--highlight-inset);
+    overflow: hidden;
+  }
+  .tool > summary {
+    display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 11px;
+    cursor: pointer; list-style: none; font-size: 12px; color: var(--text-secondary);
+    transition: background var(--ease-t); user-select: none;
+  }
+  .tool > summary::-webkit-details-marker { display: none; }
+  .tool > summary:hover { background: var(--surface-default); }
+  .tool-ic { flex: none; display: flex; color: var(--text-muted); }
+  .tool-name { font-family: var(--font-mono); font-size: 11.5px; font-weight: 600; color: var(--text-primary); }
+  .tool-arg { flex: 1; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tool-st {
+    flex: none; display: inline-flex; align-items: center; gap: 5px;
+    font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 99px;
+  }
+  .tool-st.run { color: var(--info); background: rgba(125,211,252,.1); border: 1px solid rgba(125,211,252,.3); }
+  .tool-st.ok  { color: var(--success); background: rgba(110,231,168,.09); border: 1px solid rgba(110,231,168,.28); }
+  .tool-st.err { color: var(--danger); background: rgba(248,113,113,.09); border: 1px solid rgba(248,113,113,.3); }
+  .tool-st .spinner { width: 9px; height: 9px; border-width: 1.5px; }
+  .tool-body { padding: 9px 11px 10px; border-top: 1px solid var(--border-subtle); display: flex; flex-direction: column; gap: 7px; }
+  .tool-kv { font-size: 10.5px; }
+  .tool-kv .k { color: var(--text-muted); font-weight: 600; margin-bottom: 3px; }
+  .tool-kv pre {
+    font-family: var(--font-mono); font-size: 10.5px; line-height: 1.55; color: var(--text-secondary);
+    background: rgba(0,0,0,.28); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+    padding: 7px 9px; white-space: pre-wrap; word-break: break-all; max-height: 110px; overflow-y: auto;
+  }
+  .tool-kv pre.err { color: var(--danger); border-color: rgba(248,113,113,.25); }
+
+  /* 子代理块（一行摘要） */
+  .agent-line {
+    display: flex; align-items: center; gap: 8px; padding: 7px 11px;
+    border-radius: var(--radius-md); font-size: 11.5px;
+    background: rgba(224,163,216,.07); border: 1px solid rgba(224,163,216,.22);
+  }
+  .agent-line .a-ic { color: var(--agent-accent); display: flex; flex: none; }
+  .agent-line b { color: var(--agent-accent); font-weight: 600; flex: none; }
+  .agent-line span { color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* 错误块 */
+  .m-error {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 9px 12px; border-radius: var(--radius-md);
+    font-size: 12px; line-height: 1.55; color: var(--danger);
+    background: rgba(248,113,113,.09); border: 1px solid rgba(248,113,113,.3);
+  }
+  .m-error svg { flex: none; margin-top: 1px; }
+
+  /* usage 尾注 */
+  .m-usage { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); text-align: right; opacity: .8; }
+
+  /* 重连 toast */
+  .ch-toast {
+    position: absolute; top: 96px; left: 50%; transform: translateX(-50%) translateY(-8px);
+    padding: 7px 14px; border-radius: 99px; z-index: 5;
+    font-size: 11.5px; font-weight: 600; color: var(--success);
+    background: rgba(17,19,29,.92); border: 1px solid rgba(110,231,168,.4);
+    box-shadow: var(--shadow-md); opacity: 0; pointer-events: none;
+    transition: all .3s cubic-bezier(.2,.8,.2,1);
+    display: flex; align-items: center; gap: 7px; white-space: nowrap;
+  }
+  .ch-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* 输入区 */
+  .ch-input {
+    flex: none; display: flex; align-items: flex-end; gap: 9px;
+    padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--border-subtle);
+    background: rgba(11,12,18,.72); backdrop-filter: blur(14px);
+    position: relative; z-index: 4;
+  }
+  .ch-ta-wrap {
+    flex: 1; display: flex; border-radius: 18px;
+    background: var(--surface-default); border: 1px solid var(--border-subtle);
+    transition: all var(--ease-t);
+  }
+  .ch-ta-wrap:focus-within { border-color: rgba(150,170,255,.45); box-shadow: var(--accent-ring); }
+  .ch-input textarea {
+    flex: 1; resize: none; border: none; outline: none; background: none;
+    padding: 9px 13px; font: 13.5px/1.5 inherit; color: var(--text-primary);
+    max-height: 108px; font-family: inherit;
+  }
+  .ch-input textarea::placeholder { color: var(--text-muted); }
+  .ch-input textarea:disabled { opacity: .5; }
+  .ch-send {
+    width: 38px; height: 38px; flex: none; border-radius: 50%; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; color: #fff;
+    background: var(--accent-gradient); border: 1px solid rgba(170,190,255,.45);
+    box-shadow: var(--accent-glow), var(--highlight-inset);
+    transition: all var(--ease-t);
+  }
+  .ch-send:hover:not(:disabled) { filter: brightness(1.15); }
+  .ch-send:active:not(:disabled) { transform: scale(.92); }
+  .ch-send:disabled { opacity: .38; cursor: default; box-shadow: none; filter: grayscale(.4); }
+
+  /* ===== 底部功能覆盖对照 ===== */
+  .cover { max-width: 1180px; margin: 44px auto 0; }
+  .cover summary {
+    display: inline-flex; align-items: center; gap: 8px; cursor: pointer; list-style: none;
+    font-size: 12.5px; font-weight: 600; color: var(--text-secondary);
+    padding: 7px 14px; border-radius: 99px;
+    background: var(--bg-base); border: 1px solid var(--border-subtle);
+  }
+  .cover summary::-webkit-details-marker { display: none; }
+  .cover-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 14px; }
+  .cover-card {
+    padding: 14px 16px; border-radius: var(--radius-lg); font-size: 12px; line-height: 2;
+    background: var(--bg-base); border: 1px solid var(--border-subtle); box-shadow: var(--highlight-inset);
+  }
+  .cover-card h4 { font-size: 12.5px; color: var(--accent); margin-bottom: 4px; }
+  .cover-card li { list-style: none; color: var(--text-muted); }
+  .cover-card li::before { content: "✓ "; color: var(--success); font-weight: 700; margin-right: 3px; }
+  .cover-card li em { font-style: normal; color: var(--text-secondary); }
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <h1>aide 远程 PWA<small>原型 v2 · 三屏并排</small></h1>
+  <p>全部为<b>假数据</b>：聊天屏自动循环演示流式回复；屏 2 可演示<b>工作区切换</b>；每屏下方的小胶囊可切换状态预览（离线 / 配对错误 / 重连等）。</p>
+</header>
+
+<div class="stage">
+
+  <!-- ================= 屏 1 · 连接 / 配对 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 1 · 连接 / 配对<span>启动 &amp; 未配对时</span></div>
+    <div class="phone">
+      <div class="screen">
+        <div class="statusbar">
+          <span>21:47</span>
+          <span class="sb-icons">
+            <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4" y="5" width="3" height="6" rx="1"/><rect x="8" y="2.5" width="3" height="8.5" rx="1"/><rect x="12" y="0" width="3" height="11" rx="1" opacity=".35"/></svg>
+            <svg width="14" height="11" viewBox="0 0 16 12" fill="currentColor"><path d="M8 9.6a1.6 1.6 0 1 0 .01 3.2A1.6 1.6 0 0 0 8 9.6zM8 5.6c-1.7 0-3.2.66-4.3 1.75l1.4 1.42A4.1 4.1 0 0 1 8 7.6c1.13 0 2.15.45 2.9 1.17l1.4-1.42A5.9 5.9 0 0 0 8 5.6zM8 1.4C5.1 1.4 2.4 2.5.35 4.4l1.42 1.42A8.9 8.9 0 0 1 8 3.4c2.44 0 4.65.95 6.23 2.42L15.65 4.4A10.9 10.9 0 0 0 8 1.4z" transform="translate(0,-1)"/></svg>
+            <svg width="22" height="11" viewBox="0 0 25 12" fill="none"><rect x=".5" y=".5" width="21" height="11" rx="3.5" stroke="currentColor" opacity=".4"/><rect x="2" y="2" width="15" height="8" rx="2" fill="currentColor"/><path d="M23.5 4v4a2 2 0 0 0 0-4z" fill="currentColor" opacity=".4"/></svg>
+          </span>
+        </div>
+
+        <div class="conn">
+          <img class="conn-logo" src="../../src-tauri/icons/icon.png" alt="aide">
+          <h2>aide 远程</h2>
+          <p class="sub">用手机远程控制你的桌面 aide</p>
+
+          <div class="field">
+            <label>中继服务器<small>记住上次输入</small></label>
+            <input class="mono" type="text" value="wss://relay.example.com" spellcheck="false">
+          </div>
+          <div class="field">
+            <label>配对码</label>
+            <input id="codeInput" class="code" type="text" inputmode="numeric" maxlength="6" placeholder="––––––" autocomplete="one-time-code">
+            <div class="tip" id="codeTip">桌面 aide → 设置 → 远程控制，查看 6 位配对码</div>
+          </div>
+
+          <button class="btn-primary" id="connBtn"><span id="connBtnTxt">连 接</span></button>
+
+          <!-- 状态展示区：同一位置互斥展示五种状态 -->
+          <div class="conn-status">
+            <div class="st info" data-st="connecting">
+              <span class="st-ic"><span class="spinner" style="color:var(--accent)"></span></span>
+              <span><b>正在连接中继服务器…</b><small>wss://relay.example.com</small></span>
+            </div>
+            <div class="st ok" data-st="connected">
+              <span class="st-ic"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.6"/><path d="M5 8.2l2 2 4-4.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              <span><b>已连接，正在进入会话…</b><small>原型中为三屏并排，实际跳转到屏 2 →</small></span>
+            </div>
+            <div class="st warn" data-st="offline">
+              <span class="st-ic"><span class="spinner" style="color:#f0a868"></span></span>
+              <span><b>设备离线</b><small>桌面 aide 未开启远程控制，或中继无法连接<br>正在自动重试（3 秒后第 2 次）…</small></span>
+            </div>
+            <div class="st danger" data-st="badcode">
+              <span class="st-ic"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.6"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+              <span><b>配对码无效或已过期</b><small>请回到桌面 aide 重新获取配对码</small></span>
+            </div>
+            <div class="st danger" data-st="revoked">
+              <span class="st-ic"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M8 1.8L14 4v4c0 3.4-2.5 5.7-6 6.8C4.5 13.7 2 11.4 2 8V4l6-2.2z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 5.2v3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="8" cy="10.6" r=".9" fill="currentColor"/></svg></span>
+              <span><b>需要重新配对</b><small>本设备的登录凭证已被吊销，请输入新配对码</small></span>
+            </div>
+          </div>
+
+          <div class="conn-foot">
+            <span class="kv"><span class="dot ok"></span>本设备已配对 · 下次启动自动连接</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="chips" id="connChips">
+      <span class="cap">状态预览</span>
+      <button class="chip on" data-st="idle">待机</button>
+      <button class="chip" data-st="connecting">连接中</button>
+      <button class="chip" data-st="connected">已连接</button>
+      <button class="chip" data-st="offline">设备离线</button>
+      <button class="chip" data-st="badcode">配对码无效</button>
+      <button class="chip" data-st="revoked">需重新配对</button>
+    </div>
+  </section>
+
+  <!-- ================= 屏 2 · 会话列表 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 2 · 会话列表<span>已连接后 · 工作区切换</span></div>
+    <div class="phone">
+      <div class="screen">
+        <div class="statusbar">
+          <span>21:47</span>
+          <span class="sb-icons">
+            <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4" y="5" width="3" height="6" rx="1"/><rect x="8" y="2.5" width="3" height="8.5" rx="1"/><rect x="12" y="0" width="3" height="11" rx="1" opacity=".35"/></svg>
+            <svg width="14" height="11" viewBox="0 0 16 12" fill="currentColor"><path d="M8 9.6a1.6 1.6 0 1 0 .01 3.2A1.6 1.6 0 0 0 8 9.6zM8 5.6c-1.7 0-3.2.66-4.3 1.75l1.4 1.42A4.1 4.1 0 0 1 8 7.6c1.13 0 2.15.45 2.9 1.17l1.4-1.42A5.9 5.9 0 0 0 8 5.6zM8 1.4C5.1 1.4 2.4 2.5.35 4.4l1.42 1.42A8.9 8.9 0 0 1 8 3.4c2.44 0 4.65.95 6.23 2.42L15.65 4.4A10.9 10.9 0 0 0 8 1.4z" transform="translate(0,-1)"/></svg>
+            <svg width="22" height="11" viewBox="0 0 25 12" fill="none"><rect x=".5" y=".5" width="21" height="11" rx="3.5" stroke="currentColor" opacity=".4"/><rect x="2" y="2" width="15" height="8" rx="2" fill="currentColor"/><path d="M23.5 4v4a2 2 0 0 0 0-4z" fill="currentColor" opacity=".4"/></svg>
+          </span>
+        </div>
+
+        <div class="sv-top">
+          <h3>会话</h3>
+          <span class="conn-pill" id="svPill"><span class="dot ok"></span>已连接</span>
+          <button class="icon-btn" id="svRefresh" title="刷新">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M13.6 8a5.6 5.6 0 1 1-1.65-3.95" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M13.8 1.6v3h-3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+
+        <!-- 工作区选择行：常驻显示当前工作区，点击弹出底部弹层切换 -->
+        <div class="sv-ws">
+          <button class="ws-chip" id="wsChip" aria-expanded="false">
+            <span class="ws-ic"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 3.5c0-.55.45-1 1-1h3l1.6 1.6h5.4c.55 0 1 .45 1 1v7.4c0 .55-.45 1-1 1H3c-.55 0-1-.45-1-1v-9z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span>
+            <span class="ws-txt"><b class="ws-name">aide</b><span class="ws-path">C:\Users\<user>\IdeaProjects\aide</span></span>
+            <span class="ws-caret"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          </button>
+        </div>
+
+        <div class="sv-list" id="svList"></div>
+
+        <button class="fab" id="fabNew" title="新会话">
+          <svg width="22" height="22" viewBox="0 0 20 20" fill="none"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        </button>
+
+        <!-- 工作区选择弹层（底部 sheet） -->
+        <div class="ws-mask" id="wsMask">
+          <div class="ws-sheet">
+            <div class="ws-head"><b>选择工作区</b><small>会话按工作区隔离 · 新会话发往所选工作区</small></div>
+            <div id="wsOpts"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">状态预览</span>
+      <button class="chip on" data-sv="ok">已连接</button>
+      <button class="chip" data-sv="off">设备离线</button>
+      <button class="chip" id="svDoRefresh">点刷新按钮 ↗</button>
+      <button class="chip" id="svDoWs">点工作区行 ↗</button>
+    </div>
+  </section>
+
+  <!-- ================= 屏 3 · 聊天 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 3 · 聊天<span>历史 + 实时流式</span></div>
+    <div class="phone">
+      <div class="screen">
+        <div class="statusbar">
+          <span>21:47</span>
+          <span class="sb-icons">
+            <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4" y="5" width="3" height="6" rx="1"/><rect x="8" y="2.5" width="3" height="8.5" rx="1"/><rect x="12" y="0" width="3" height="11" rx="1" opacity=".35"/></svg>
+            <svg width="14" height="11" viewBox="0 0 16 12" fill="currentColor"><path d="M8 9.6a1.6 1.6 0 1 0 .01 3.2A1.6 1.6 0 0 0 8 9.6zM8 5.6c-1.7 0-3.2.66-4.3 1.75l1.4 1.42A4.1 4.1 0 0 1 8 7.6c1.13 0 2.15.45 2.9 1.17l1.4-1.42A5.9 5.9 0 0 0 8 5.6zM8 1.4C5.1 1.4 2.4 2.5.35 4.4l1.42 1.42A8.9 8.9 0 0 1 8 3.4c2.44 0 4.65.95 6.23 2.42L15.65 4.4A10.9 10.9 0 0 0 8 1.4z" transform="translate(0,-1)"/></svg>
+            <svg width="22" height="11" viewBox="0 0 25 12" fill="none"><rect x=".5" y=".5" width="21" height="11" rx="3.5" stroke="currentColor" opacity=".4"/><rect x="2" y="2" width="15" height="8" rx="2" fill="currentColor"/><path d="M23.5 4v4a2 2 0 0 0 0-4z" fill="currentColor" opacity=".4"/></svg>
+          </span>
+        </div>
+
+        <div class="ch-top">
+          <button class="ch-back" title="返回">
+            <svg width="19" height="19" viewBox="0 0 20 20" fill="none"><path d="M12.5 4L6.5 10l6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="ch-title">
+            <div class="ch-name">PWA 客户端原型</div>
+            <div class="ch-state" id="chState"><span class="dot ok"></span><span id="chStateTxt">已连接</span></div>
+          </div>
+          <span class="spacer"></span>
+        </div>
+
+        <div class="ch-offbar" id="chOffbar"><span class="spinner" style="width:11px;height:11px;border-width:1.5px"></span>设备离线，自动重连中…</div>
+        <div class="ch-toast" id="chToast"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.6"/><path d="M5 8.2l2 2 4-4.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>已重连，会话历史已刷新</div>
+
+        <div class="ch-msgs" id="chMsgs">
+          <div class="m-time">今天 21:32</div>
+
+          <!-- 历史：用户 -->
+          <div class="m-row user"><div class="m-bubble-user">帮我把远程网关的协议类型整理成一份 TS 定义，放到 remote-pwa 里</div></div>
+
+          <!-- 历史：助手（思考 + 工具×2 + 文本 + usage） -->
+          <div class="m-row"><div class="m-assistant">
+            <details class="blk">
+              <summary><span class="caret"></span><span class="blk-label">思考过程</span><span>12s</span></summary>
+            <div class="blk-body-think">用户要的是 protocol.rs 的 TS 镜像。先看 Rust 侧的 serde 结构，注意 ChatEvent 是 untagged enum，TS 侧用判别联合即可。load_messages 返回的 HistoryBlock 只有三种，比实时事件窄。</div>
+            </details>
+            <details class="tool">
+              <summary>
+                <span class="caret"></span>
+                <span class="tool-ic"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M10.7 2.3a3.4 3.4 0 0 0-4.5 4.4L2.5 10.4a1.7 1.7 0 1 0 2.4 2.4l3.7-3.7a3.4 3.4 0 0 0 4.4-4.5l-2.3 2.3-1.9-.5-.5-1.9 2.4-2.2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg></span>
+                <span class="tool-name">Read</span>
+                <span class="tool-arg">src-tauri/src/remote/protocol.rs</span>
+                <span class="tool-st ok">✓ 成功</span>
+              </summary>
+              <div class="tool-body">
+                <div class="tool-kv"><div class="k">输入</div><pre>{
+  "file_path": "src-tauri/src/remote/protocol.rs"
+}</pre></div>
+                <div class="tool-kv"><div class="k">结果</div><pre>已读取 214 行</pre></div>
+              </div>
+            </details>
+            <details class="tool">
+              <summary>
+                <span class="caret"></span>
+                <span class="tool-ic"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+                <span class="tool-name">Grep</span>
+                <span class="tool-arg">ChatEvent · 14 处匹配</span>
+                <span class="tool-st ok">✓ 成功</span>
+              </summary>
+              <div class="tool-body">
+                <div class="tool-kv"><div class="k">输入</div><pre>{ "pattern": "ChatEvent", "output_mode": "files_with_matches" }</pre></div>
+                <div class="tool-kv"><div class="k">结果</div><pre>protocol.rs
+handler.rs
+useChatSession.ts</pre></div>
+              </div>
+            </details>
+            <div class="m-text">整理好了，types.ts 已建好：协议消息、ChatEvent 判别联合、Session / ChatMessageItem 三个数据形状都镜像了 Rust 侧。配对和鉴权走两条消息（pair / auth），中继层只认 connect。</div>
+            <div class="m-usage">12.4k tok · cache 96% · effort high</div>
+          </div></div>
+
+          <!-- 历史：工具失败 + 错误块 -->
+          <div class="m-row user"><div class="m-bubble-user">跑一下协议的单测</div></div>
+          <div class="m-row"><div class="m-assistant">
+            <details class="tool">
+              <summary>
+                <span class="caret"></span>
+                <span class="tool-ic"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5l4 3.5-4 3.5M8 12h5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                <span class="tool-name">Bash</span>
+                <span class="tool-arg">pnpm test protocol</span>
+                <span class="tool-st err">✗ 失败</span>
+              </summary>
+              <div class="tool-body">
+                <div class="tool-kv"><div class="k">输入</div><pre>{ "command": "pnpm --prefix remote-pwa test protocol" }</pre></div>
+                <div class="tool-kv"><div class="k">结果</div><pre class="err">ERR_PNPM_RECURSIVE_FAIL  remote-pwa 目录不存在</pre></div>
+              </div>
+            </details>
+            <div class="m-error">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 1.8L14 4v4c0 3.4-2.5 5.7-6 6.8C4.5 13.7 2 11.4 2 8V4l6-2.2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 5.2v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="10.6" r=".9" fill="currentColor"/></svg>
+              <span>命令执行失败：remote-pwa 目录还没创建，先搭项目骨架再跑测试。</span>
+            </div>
+            <div class="m-text">目录确实还没建。我先把 Task 1 的骨架落好，再补测试。</div>
+          </div></div>
+
+          <div class="m-time">21:47</div>
+          <!-- 流式演示消息挂载点 -->
+          <div id="liveSlot"></div>
+        </div>
+
+        <div class="ch-input">
+          <div class="ch-ta-wrap"><textarea id="chTa" rows="1" placeholder="发消息给桌面 aide…"></textarea></div>
+          <button class="ch-send" id="chSend" title="发送">
+            <svg width="17" height="17" viewBox="0 0 18 18" fill="none"><path d="M9 14.5v-11M4 8l5-5 5 5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">演示控制</span>
+      <button class="chip" id="btnReplay">↻ 重播流式</button>
+      <button class="chip" id="btnOffline">模拟断线</button>
+      <button class="chip" id="btnReconnect" style="display:none">恢复连接</button>
+      <button class="chip" id="btnSendHint">在输入框发条消息试试 ↓</button>
+    </div>
+  </section>
+</div>
+
+<!-- ===== 功能覆盖对照 ===== -->
+<details class="cover">
+  <summary><span class="caret"></span>功能覆盖对照（计划 §功能清单）</summary>
+  <div class="cover-grid">
+    <div class="cover-card">
+      <h4>屏 1 · 连接/配对</h4>
+      <ul>
+        <li><em>中继 URL 输入框</em>（标注"记住上次输入"）</li>
+        <li><em>6 位配对码输入框</em>（数字键盘、大字号居中）</li>
+        <li><em>连接按钮</em>（连接中带 spinner 禁用）</li>
+        <li><em>五种状态</em>：连接中 / 已连接 / 设备离线自动重试 / 配对码无效（输入框标红抖动）/ 需重新配对</li>
+        <li><em>已配对自动连接</em>：底部常驻"本设备已配对"指示</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>屏 2 · 会话列表</h4>
+      <ul>
+        <li><em>顶部连接状态 pill</em>（已连接 / 设备离线，可切换预览）</li>
+        <li><em>刷新按钮</em>（点击旋转）</li>
+        <li><em>工作区选择器</em>：顶栏下方常驻当前工作区 chip（名称 + 路径），点击弹出底部弹层；切换后会话列表立即刷新（各工作区假数据不同，可观察列表变化）</li>
+        <li><em>新会话发往所选工作区</em>：FAB 新建的会话归属当前工作区</li>
+        <li><em>会话项</em>：名称 + 最后消息摘要 + 相对时间</li>
+        <li><em>新会话入口</em>：右下 FAB（计划中"进聊天屏直接发消息即创建"）</li>
+        <li>进行中的会话显示 <em>"回复中"</em> 实时徽标</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>屏 3 · 聊天</h4>
+      <ul>
+        <li><em>顶栏</em>：返回 + 会话名 + 连接状态点</li>
+        <li><em>用户消息</em>右侧气泡；<em>助手</em>左侧块状内容</li>
+        <li><em>文本块</em>流式逐字 + 闪烁光标；<em>思考块</em>折叠；<em>工具块</em>折叠 + 进行中/成功/失败三态徽标；<em>子代理</em>一行摘要；<em>错误块</em>红卡</li>
+        <li><em>历史与流式同列表</em>（上方历史、下方实时演示）</li>
+        <li><em>输入框</em>多行自增高；未连接 / 回复中禁用发送</li>
+        <li><em>断线</em>：顶栏状态点 + 橙色横幅；<em>重连</em>后 toast + "历史已刷新"分隔线（对应 load_messages 补齐缺口）</li>
+      </ul>
+    </div>
+  </div>
+</details>
+
+<script>
+"use strict";
+const $ = (s, r) => (r || document).querySelector(s);
+const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* ================= 屏 1 · 状态切换 ================= */
+const connStates = ["connecting", "connected", "offline", "badcode", "revoked"];
+const codeInput = $("#codeInput"), codeTip = $("#codeTip");
+const connBtn = $("#connBtn"), connBtnTxt = $("#connBtnTxt");
+let connTimer = null;
+
+function setConn(st) {
+  connStates.forEach(s => $(`.st[data-st="${s}"]`).classList.toggle("show", s === st));
+  $$("#connChips .chip").forEach(c => c.classList.toggle("on", c.dataset.st === st));
+  clearTimeout(connTimer);
+  // 输入框与按钮的联动
+  codeInput.classList.toggle("error", st === "badcode");
+  codeTip.innerHTML = st === "badcode"
+    ? "<em>配对码无效或已过期，请重新输入</em>"
+    : "桌面 aide → 设置 → 远程控制，查看 6 位配对码";
+  connBtn.disabled = st === "connecting" || st === "connected";
+  connBtnTxt.innerHTML = st === "connecting" ? '<span class="spinner" style="width:13px;height:13px"></span>连接中' : "连 接";
+  if (st === "connected") connTimer = setTimeout(() => setConn("idle"), 3800);
+}
+$$("#connChips .chip").forEach(c => c.addEventListener("click", () => setConn(c.dataset.st)));
+connBtn.addEventListener("click", () => { setConn("connecting"); connTimer = setTimeout(() => setConn("connected"), 1400); });
+codeInput.addEventListener("input", () => { codeInput.value = codeInput.value.replace(/\D/g, ""); if (codeInput.classList.contains("error")) setConn("idle"); });
+
+/* ================= 屏 2 · 刷新 & 状态 pill ================= */
+const svPill = $("#svPill");
+$("#svRefresh").addEventListener("click", e => {
+  const svg = e.currentTarget.querySelector("svg");
+  svg.classList.remove("spinning"); void svg.offsetWidth; svg.classList.add("spinning");
+});
+$$(".chip[data-sv]").forEach(c => c.addEventListener("click", () => {
+  $$(".chip[data-sv]").forEach(x => x.classList.toggle("on", x === c));
+  svPill.innerHTML = c.dataset.sv === "ok"
+    ? '<span class="dot ok"></span>已连接'
+    : '<span class="dot off"></span>设备离线';
+}));
+$("#svDoRefresh").addEventListener("click", () => $("#svRefresh").click());
+
+/* ================= 屏 2 · 工作区切换（假数据按工作区隔离） ================= */
+/* 形状对齐真实协议 Workspace{key, name}（key = 路径编码，name 由桌面侧解码给出） */
+const WS_FAKE = [
+  { key: "C--Users-heaven-IdeaProjects-aide", name: "aide", path: "C:\\Users\\<user>\\IdeaProjects\\aide",
+    sessions: [
+      { name: "PWA 客户端原型", time: "刚刚", prev: "三屏原型已出，流式演示跑通，等你确认交互细节…", live: true },
+      { name: "重构 session 状态机", time: "5 分钟前", prev: "applyEvent 里 tool_result 按 id 回填，message_stop 收尾挂 usage" },
+      { name: "relay-server 部署到 VPS", time: "昨天 23:12", prev: "Caddy 反代配置写好了，wss 已通，证书自动续期" },
+      { name: "Windows 弹窗排查", time: "周二", prev: "CREATE_NO_WINDOW 标志补齐，release 不再弹黑窗" },
+      { name: "codegraph 索引反复重建", time: "8/14", prev: "embed_checkpoint 断点续跑验证通过，不再全量重建" },
+    ] },
+  { key: "C--Users-heaven-IdeaProjects-aide--relay-server", name: "relay-server", path: "C:\\Users\\<user>\\IdeaProjects\\aide\\relay-server",
+    sessions: [
+      { name: "中继单槽设备表", time: "12 分钟前", prev: "devices 改成 HashMap，重注册互顶，断线自动重连", live: true },
+      { name: "wss 证书续期", time: "昨天 15:40", prev: "Caddy 自动续期已配，无需手动干预" },
+    ] },
+  { key: "C--Users-heaven-Sites-homepage", name: "homepage", path: "C:\\Users\\<user>\\Sites\\homepage",
+    sessions: [
+      { name: "博客暗色主题", time: "3 小时前", prev: "换了一版 glass 风格，移动端导航折叠" },
+      { name: "相册页懒加载", time: "8/19", prev: "图片改 IntersectionObserver 按需加载" },
+    ] },
+];
+let activeWs = WS_FAKE[0];
+
+function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+function renderSvList() {
+  $("#svList").innerHTML = activeWs.sessions.map(s => `
+    <button class="sv-item">
+      <div class="sv-row1"><span class="sv-name">${esc(s.name)}</span><span class="sv-time">${esc(s.time)}</span></div>
+      <div class="sv-row2"><span class="sv-prev">${esc(s.prev)}</span>${s.live ? '<span class="sv-live"><span class="dot"></span>回复中</span>' : ""}</div>
+    </button>`).join("");
+  $$("#svList .sv-item").forEach(it => it.addEventListener("click", () => flashHint("（原型：进入屏 3 聊天 →）")));
+}
+function renderWsSheet() {
+  $("#wsOpts").innerHTML = WS_FAKE.map(w => `
+    <button class="ws-opt${w.key === activeWs.key ? " on" : ""}" data-ws="${esc(w.key)}">
+      <span class="ws-ic"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 3.5c0-.55.45-1 1-1h3l1.6 1.6h5.4c.55 0 1 .45 1 1v7.4c0 .55-.45 1-1 1H3c-.55 0-1-.45-1-1v-9z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span>
+      <span class="ws-txt"><b class="ws-name">${esc(w.name)}</b><span class="ws-path">${esc(w.path)}</span></span>
+      <svg class="ws-check" width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M5 8.2l2 2 4-4.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>`).join("");
+}
+function openWsSheet() {
+  renderWsSheet();
+  $("#wsMask").classList.add("show");
+  $("#wsChip").setAttribute("aria-expanded", "true");
+}
+function closeWsSheet() {
+  $("#wsMask").classList.remove("show");
+  $("#wsChip").setAttribute("aria-expanded", "false");
+}
+function applyWs(w) {
+  activeWs = w;
+  $("#wsChip .ws-name").textContent = w.name;
+  $("#wsChip .ws-path").textContent = w.path;
+  renderWsSheet();
+  renderSvList();
+  closeWsSheet();
+}
+$("#wsChip").addEventListener("click", openWsSheet);
+$("#wsMask").addEventListener("click", e => { if (e.target === e.currentTarget) closeWsSheet(); });
+$("#wsOpts").addEventListener("click", e => {
+  const btn = e.target.closest(".ws-opt");
+  if (btn) applyWs(WS_FAKE.find(w => w.key === btn.dataset.ws));
+});
+$("#svDoWs").addEventListener("click", () => openWsSheet());
+renderSvList();
+
+/* ================= 屏 3 · 聊天流式演示 ================= */
+const chMsgs = $("#chMsgs"), liveSlot = $("#liveSlot");
+const chTa = $("#chTa"), chSend = $("#chSend");
+const chState = $("#chState"), chStateTxt = $("#chStateTxt");
+const chOffbar = $("#chOffbar"), chToast = $("#chToast");
+let offline = false, streaming = false, runId = 0;
+
+/* --- 自动演示剧本（循环播放的一条助手回复） --- */
+const AUTO_SCRIPT = [
+  { t: "think", text: "用户想在手机上确认原型。三屏布局已经就绪，我先检查一下聊天屏还缺哪些块类型没有演示到——子代理块还没出现，补一个。" },
+  { t: "agent", name: "Explore", desc: "搜索协议相关类型定义" },
+  { t: "tool", name: "Write", arg: "remote-pwa/src/types.ts",
+    input: '{\n  "file_path": "remote-pwa/src/types.ts",\n  "content": "export type ChatEvent = …"\n}',
+    result: "文件已创建（86 行）" },
+  { t: "text", text: "好了，types.ts 骨架落好了。总结一下这屏的块渲染：\n\n· 文本块流式逐字追加，带光标\n· 思考 / 工具调用折叠，点标题展开\n· 子代理一行摘要\n· 失败工具和错误块用红色区分\n\n你在手机上看到的流式效果就是真实协议下 text_delta 逐条推送的样子。" },
+  { t: "usage", text: "8.7k tok · cache 94% · effort high" },
+];
+/* --- 手动发送后的应答剧本 --- */
+const REPLY_SCRIPT = [
+  { t: "think", text: "这是从原型输入框发出的消息，演示一条完整的实时回复链路：send_message → 桌面执行 → 事件流回推。" },
+  { t: "tool", name: "Bash", arg: "pnpm test", input: '{ "command": "pnpm --prefix remote-pwa test" }', result: "✓ 12 passed (1.2s)" },
+  { t: "text", text: "收到！真实环境下，你这条消息会经中继推到桌面 aide 执行，事件再逐条流回这里。发送期间输入框和按钮是禁用的——就是你现在看到的状态。" },
+  { t: "usage", text: "3.1k tok · cache 91%" },
+];
+
+const ICON_TOOL = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M10.7 2.3a3.4 3.4 0 0 0-4.5 4.4L2.5 10.4a1.7 1.7 0 1 0 2.4 2.4l3.7-3.7a3.4 3.4 0 0 0 4.4-4.5l-2.3 2.3-1.9-.5-.5-1.9 2.4-2.2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+const ICON_AGENT = '<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l1.8 4.2L14 6l-3 3.1.7 4.4L8 11.4l-3.7 2.1.7-4.4-3-3.1 4.2-.8L8 1z"/></svg>';
+
+function scrollBottom() { chMsgs.scrollTop = chMsgs.scrollHeight; }
+
+function el(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; }
+
+async function typeInto(node, text, myId, cps) {
+  for (const ch of text) {
+    if (myId !== runId) return false;
+    node.insertBefore(document.createTextNode(ch), node.querySelector(".cursor"));
+    scrollBottom();
+    await sleep(cps);
+  }
+  return true;
+}
+
+async function playScript(script, mount) {
+  const myId = runId;
+  const row = el('<div class="m-row"><div class="m-assistant"></div></div>');
+  mount.appendChild(row); scrollBottom();
+  const box = row.firstChild;
+
+  for (const step of script) {
+    if (myId !== runId) return;
+    if (step.t === "think") {
+      const d = el(`<details class="blk" open><summary><span class="caret"></span><span class="blk-label">思考中</span><span class="spinner" style="width:9px;height:9px;border-width:1.5px"></span></summary><div class="blk-body-think"><span class="cursor"></span></div></details>`);
+      box.appendChild(d); scrollBottom();
+      const body = d.querySelector(".blk-body-think");
+      if (!await typeInto(body, step.text, myId, 14)) return;
+      body.querySelector(".cursor").remove();
+      d.querySelector(".blk-label").textContent = "思考过程";
+      d.querySelector("summary .spinner").remove();
+      await sleep(350); d.removeAttribute("open");
+    } else if (step.t === "agent") {
+      box.appendChild(el(`<div class="agent-line"><span class="a-ic">${ICON_AGENT}</span><b>${esc(step.name)}</b><span>${esc(step.desc)}</span></div>`));
+      scrollBottom(); await sleep(500);
+    } else if (step.t === "tool") {
+      const d = el(`<details class="tool" open><summary><span class="caret"></span><span class="tool-ic">${ICON_TOOL}</span><span class="tool-name">${esc(step.name)}</span><span class="tool-arg">${esc(step.arg)}</span><span class="tool-st run"><span class="spinner"></span>进行中</span></summary><div class="tool-body"><div class="tool-kv"><div class="k">输入</div><pre>${esc(step.input)}</pre></div></div></details>`);
+      box.appendChild(d); scrollBottom();
+      await sleep(1100); if (myId !== runId) return;
+      d.querySelector(".tool-st").outerHTML = '<span class="tool-st ok">✓ 成功</span>';
+      d.querySelector(".tool-body").insertAdjacentHTML("beforeend", `<div class="tool-kv"><div class="k">结果</div><pre>${esc(step.result)}</pre></div>`);
+      scrollBottom(); await sleep(400); d.removeAttribute("open");
+    } else if (step.t === "text") {
+      const p = el('<div class="m-text"><span class="cursor"></span></div>');
+      box.appendChild(p); scrollBottom();
+      if (!await typeInto(p, step.text, myId, 26)) return;
+      p.querySelector(".cursor").remove();
+    } else if (step.t === "usage") {
+      await sleep(250);
+      box.appendChild(el(`<div class="m-usage">${esc(step.text)}</div>`));
+      scrollBottom();
+    }
+  }
+}
+
+function setSending(on) {
+  streaming = on;
+  updateInputState();
+}
+function updateInputState() {
+  const disabled = offline || streaming;
+  chTa.disabled = offline;
+  chSend.disabled = disabled;
+  chTa.placeholder = offline ? "设备离线，等待重连…" : "发消息给桌面 aide…";
+}
+
+/* 自动循环演示 */
+async function autoLoop() {
+  const myId = ++runId;
+  while (myId === runId) {
+    setSending(true);
+    await playScript(AUTO_SCRIPT, liveSlot);
+    if (myId !== runId) return;
+    setSending(false);
+    await sleep(6000);
+    if (myId !== runId) return;
+    liveSlot.innerHTML = "";  // 清空上一轮演示消息再重播
+  }
+}
+
+$("#btnReplay").addEventListener("click", () => {
+  liveSlot.innerHTML = "";
+  runId++;            // 停掉旧循环
+  autoLoop();         // 开新循环
+});
+
+/* 发送 */
+function sendMsg() {
+  const text = chTa.value.trim();
+  if (!text || streaming || offline) return;
+  runId++; liveSlot.innerHTML = "";           // 停掉自动演示
+  chTa.value = ""; autoGrow();
+  liveSlot.appendChild(el(`<div class="m-row user"><div class="m-bubble-user">${esc(text)}</div></div>`));
+  scrollBottom();
+  (async () => {
+    setSending(true);
+    await sleep(500);
+    await playScript(REPLY_SCRIPT, liveSlot);
+    setSending(false);
+  })();
+}
+chSend.addEventListener("click", sendMsg);
+chTa.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMsg(); } });
+
+/* 输入框自增高 */
+function autoGrow() { chTa.style.height = "auto"; chTa.style.height = Math.min(chTa.scrollHeight, 108) + "px"; }
+chTa.addEventListener("input", autoGrow);
+
+/* 断线 / 重连演示 */
+$("#btnOffline").addEventListener("click", () => {
+  offline = true;
+  chState.querySelector(".dot").className = "dot off";
+  chStateTxt.textContent = "设备离线";
+  chOffbar.classList.add("show");
+  updateInputState();
+  $("#btnOffline").style.display = "none";
+  $("#btnReconnect").style.display = "";
+});
+$("#btnReconnect").addEventListener("click", async () => {
+  chState.querySelector(".dot").className = "dot warn";
+  chStateTxt.textContent = "重连中…";
+  await sleep(1200);
+  offline = false;
+  chState.querySelector(".dot").className = "dot ok";
+  chStateTxt.textContent = "已连接";
+  chOffbar.classList.remove("show");
+  updateInputState();
+  chToast.classList.add("show");
+  const sys = el('<div class="m-sys">已重连 · 会话历史已刷新</div>');
+  chMsgs.appendChild(sys); scrollBottom();
+  setTimeout(() => chToast.classList.remove("show"), 2400);
+  $("#btnOffline").style.display = "";
+  $("#btnReconnect").style.display = "none";
+});
+
+/* 小提示（点击会话项等占位交互） */
+let hintTimer = null;
+function flashHint(text) {
+  chToast.textContent = text;
+  chToast.style.color = "var(--info)";
+  chToast.style.borderColor = "rgba(125,211,252,.4)";
+  chToast.classList.add("show");
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => chToast.classList.remove("show"), 1600);
+}
+$("#fabNew").addEventListener("click", () => flashHint("（原型：新建会话 → 直接进入屏 3）"));
+$("#btnSendHint").addEventListener("click", () => { chTa.focus(); });
+
+/* 启动 */
+setConn("idle");
+updateInputState();
+autoLoop();
+</script>
+</body>
+</html>

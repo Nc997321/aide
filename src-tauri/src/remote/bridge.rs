@@ -10,9 +10,10 @@ use super::{read_remote_settings, RemoteGateway};
 pub enum BridgeAction {
     Pair { code: String },
     Auth { token: String },
-    SendMessage { session_id: String, prompt: String },
+    SendMessage { session_id: String, prompt: String, workspace_key: Option<String> },
     LoadMessages { session_id: String },
-    ListSessions,
+    ListSessions { workspace_key: Option<String> },
+    ListWorkspaces,
 }
 
 /// 纯映射：认证检查 + 消息规范化（无 session_id 时生成 remote- 前缀 id）。
@@ -21,19 +22,23 @@ pub fn map_message(msg: &PhoneToDesktop, authed: bool) -> Result<BridgeAction, S
     match msg {
         PhoneToDesktop::Pair { code } => Ok(BridgeAction::Pair { code: code.clone() }),
         PhoneToDesktop::Auth { token } => Ok(BridgeAction::Auth { token: token.clone() }),
-        PhoneToDesktop::SendMessage { session_id, prompt } => {
+        PhoneToDesktop::SendMessage { session_id, prompt, workspace_key } => {
             if !authed { return Err("未认证：请先配对".into()); }
             let sid = session_id.clone()
                 .unwrap_or_else(|| format!("remote-{}", auth::generate_device_id()));
-            Ok(BridgeAction::SendMessage { session_id: sid, prompt: prompt.clone() })
+            Ok(BridgeAction::SendMessage { session_id: sid, prompt: prompt.clone(), workspace_key: workspace_key.clone() })
         }
         PhoneToDesktop::LoadMessages { session_id } => {
             if !authed { return Err("未认证：请先配对".into()); }
             Ok(BridgeAction::LoadMessages { session_id: session_id.clone() })
         }
-        PhoneToDesktop::ListSessions => {
+        PhoneToDesktop::ListSessions { workspace_key } => {
             if !authed { return Err("未认证：请先配对".into()); }
-            Ok(BridgeAction::ListSessions)
+            Ok(BridgeAction::ListSessions { workspace_key: workspace_key.clone() })
+        }
+        PhoneToDesktop::ListWorkspaces => {
+            if !authed { return Err("未认证：请先配对".into()); }
+            Ok(BridgeAction::ListWorkspaces)
         }
     }
 }
@@ -60,16 +65,21 @@ pub async fn execute(
                 Ok(Some(DesktopToPhone::AuthError { message: "token 无效".into() }))
             }
         }
-        BridgeAction::SendMessage { session_id, prompt } => {
+        BridgeAction::SendMessage { session_id, prompt, workspace_key } => {
             // 远程权限模式每次执行时读设置（可中途改，立即生效）
             let permission_mode = read_remote_settings(&gateway.app_handle).await?.permission_mode;
             let app = gateway.app_handle.clone();
             let runtime = app.state::<crate::runtime::AgentRuntimeManager>();
             let ws_state = app.state::<crate::commands::WorkspaceState>();
             let settings = app.state::<std::sync::Arc<crate::settings::SettingsService>>();
+            // workspace_key（编码 key）→ 根路径：手机按工作区隔离发消息。
+            // 新建会话必须落对目录；历史会话由 PWA 端按「会话归属工作区」映射带 key。
+            let workspace_root = workspace_key
+                .as_deref()
+                .and_then(crate::commands::workspace::resolve_path_from_key);
             crate::commands::chat::send_message(
                 session_id, prompt, None, None, None, None,
-                Some(permission_mode), None, None,
+                Some(permission_mode), None, workspace_root,
                 runtime, ws_state, settings,
             ).await?;
             Ok(None)
@@ -80,11 +90,21 @@ pub async fn execute(
             let messages = crate::commands::session::load_messages(ws_state, session_id).await?;
             Ok(Some(DesktopToPhone::Messages { messages: json!(messages) }))
         }
-        BridgeAction::ListSessions => {
+        BridgeAction::ListSessions { workspace_key } => {
             let app = gateway.app_handle.clone();
-            let ws_state = app.state::<crate::commands::WorkspaceState>();
-            let sessions = crate::commands::session::list_sessions(ws_state).await?;
+            // 带 key 按指定工作区列；不带 = 桌面当前活动工作区（旧行为）
+            let sessions = match workspace_key {
+                Some(k) => crate::commands::session::list_sessions_for_workspace(k).await?,
+                None => {
+                    let ws_state = app.state::<crate::commands::WorkspaceState>();
+                    crate::commands::session::list_sessions(ws_state).await?
+                }
+            };
             Ok(Some(DesktopToPhone::Sessions { sessions: json!(sessions) }))
+        }
+        BridgeAction::ListWorkspaces => {
+            let workspaces = crate::commands::workspace::list_workspaces().await?;
+            Ok(Some(DesktopToPhone::Workspaces { workspaces: json!(workspaces) }))
         }
     }
 }

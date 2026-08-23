@@ -220,6 +220,8 @@ watch(activeTab, (t) => { if (t === "remote") refreshRemoteStatus(); });
 async function onRemoteEnabledChange(e: Event) {
   const enabled = (e.target as HTMLInputElement).checked;
   remoteEnabled.value = enabled;
+  // 同步单例：面板 v-if 重挂载时 remoteEnabled 从单例初始化，不同步则重开设置显示旧值
+  settings.remote.enabled = enabled;
   await api.remoteSetEnabled(enabled);
   refreshRemoteStatus();
 }

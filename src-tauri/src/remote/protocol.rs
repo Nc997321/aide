@@ -10,12 +10,21 @@ pub enum PhoneToDesktop {
     Pair { code: String },
     /// 已配对：token 认证
     Auth { token: String },
-    /// 发消息；无 session_id 时新建会话
-    SendMessage { session_id: Option<String>, prompt: String },
+    /// 发消息；无 session_id 时新建会话。
+    /// workspace_key：目标工作区（编码 key，与 list_workspaces 返回一致）；
+    /// None = 桌面当前活动工作区。历史会话必须带其归属工作区，
+    /// 否则 cwd 会落到桌面当前工作区。
+    SendMessage {
+        session_id: Option<String>,
+        prompt: String,
+        workspace_key: Option<String>,
+    },
     /// 拉历史
     LoadMessages { session_id: String },
-    /// 会话列表
-    ListSessions,
+    /// 会话列表；workspace_key 缺省 = 桌面当前活动工作区（向后兼容旧客户端）
+    ListSessions { workspace_key: Option<String> },
+    /// 工作区列表（name 已由桌面解码为路径字符串；missing = 目录已不在）
+    ListWorkspaces,
 }
 
 /// 桌面 → 手机
@@ -32,4 +41,6 @@ pub enum DesktopToPhone {
     /// list_sessions / load_messages 的应答（现有命令结果原样透传）
     Sessions { sessions: Value },
     Messages { messages: Value },
+    /// list_workspaces 的应答（WorkspaceInfo[] 原样透传）
+    Workspaces { workspaces: Value },
 }

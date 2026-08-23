@@ -6,7 +6,7 @@ pub mod relay_client;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
-use tokio::task::JoinHandle;
+use tauri::async_runtime::JoinHandle;
 
 use crate::commands::settings::{public_settings, RemoteSettings};
 use crate::settings::SettingsService;
@@ -37,10 +37,12 @@ impl RemoteGateway {
     }
 
     /// 启动中继客户端任务（幂等：已在跑则不动）。
+    /// 必须走 tauri 的全局 async runtime 而非 tokio::spawn——setup 钩子跑在主线程
+    /// （Tokio runtime 之外），tokio::spawn 会 panic "no reactor running"。
     pub fn start(self: &Arc<Self>) {
         if self.relay_task.lock().unwrap().is_some() { return; }
         let gateway = self.clone();
-        let handle = tokio::spawn(async move {
+        let handle = tauri::async_runtime::spawn(async move {
             relay_client::run(gateway).await;
         });
         *self.relay_task.lock().unwrap() = Some(handle);

@@ -39,8 +39,13 @@ async fn connect_once(gateway: &Arc<RemoteGateway>) -> Result<(), String> {
     let device_id = gateway.tokens.device_id().await?;
     let register = json!({"type": "register", "device_id": device_id, "pairing_code": code});
     ws.send(Message::Text(register.to_string().into())).await.map_err(|e| e.to_string())?;
+    // 只在「断开→连接」转换时打一行：Ok 路径断开不重置 connected（抖动时恒 true），
+    // 无条件打印会在连接抖动（如双实例互顶）时每秒刷屏。
+    let was_connected = gateway.is_connected();
     gateway.set_connected(true);
-    eprintln!("[remote] connected to relay {url}");
+    if !was_connected {
+        eprintln!("[remote] connected to relay {url}");
+    }
 
     let (mut sink, mut stream) = ws.split();
 
