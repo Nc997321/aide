@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, watchEffect, onMounted, computed } from "vue";
+import { ref, watch, onMounted, computed } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
 import { useSettings } from "../composables/useSettings";
 import { useOnboarding } from "../composables/useOnboarding";
@@ -134,8 +134,62 @@ function persistVimBindings() {
   update({ editor: { ...settings.editor } });
 }
 
+/** 录制超时兜底：挂起后 30s 未按键自动取消——录制监听是 window capture、
+ * 期间会吞掉所有按键（preventDefault + 写入 keys），挂起不放会「编辑器按键
+ * 无法输入 + 映射被意外覆写」（曾发生：用户录完忘了，i/a 输入被吞、设置
+ * 里的键被编辑器按键覆盖）。 */
+const RECORD_TIMEOUT_MS = 30_000;
+
+/**
+ * 录制状态唯一收口：挂监听 / 卸监听 / 超时全部经由此处。
+ * 不用 watchEffect 的 return-cleanup——实测（2026-08-24，jsdom 探针）rec 置
+ * null 时 cleanup 不触发，keydown 监听残留，之后所有按键被吞并覆写 keys。
+ */
+let recordKeydownHandler: ((e: KeyboardEvent) => void) | null = null;
+let recordTimer: ReturnType<typeof setTimeout> | null = null;
+
+function teardownKeyRecording() {
+  if (recordTimer) clearTimeout(recordTimer);
+  recordTimer = null;
+  if (recordKeydownHandler) {
+    window.removeEventListener("keydown", recordKeydownHandler, true);
+    recordKeydownHandler = null;
+  }
+}
+
+function setRecordingState(next: { mode: keyof VimBindings; index: number } | null): void {
+  if (!next) {
+    teardownKeyRecording();
+    recordingVimKey.value = null;
+    return;
+  }
+  // 换行重录：先卸旧的再挂新的（幂等）
+  teardownKeyRecording();
+  recordingVimKey.value = next;
+  const onKey = (e: KeyboardEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const key = eventToVimKey(e);
+    if (!key) return; // 纯修饰键 / 识别不了：继续录
+    const rec = recordingVimKey.value;
+    if (!rec) return;
+    const bindings = settings.editor.vimKeybindings[rec.mode];
+    if (bindings[rec.index]) bindings[rec.index].keys = key;
+    setRecordingState(null); // 命中即收口：卸监听 + 清超时
+    persistVimBindings();
+  };
+  recordKeydownHandler = onKey;
+  window.addEventListener("keydown", onKey, true);
+  recordTimer = setTimeout(() => setRecordingState(null), RECORD_TIMEOUT_MS);
+}
+
 function startRecordVimKey(mode: keyof VimBindings, index: number) {
-  recordingVimKey.value = { mode, index };
+  // toggle：再次点击同一行 = 取消（录制中必须可逆，见超时注释）
+  if (isRecordingVimKey(mode, index)) {
+    setRecordingState(null);
+    return;
+  }
+  setRecordingState({ mode, index });
 }
 
 function isRecordingVimKey(mode: keyof VimBindings, index: number): boolean {
@@ -160,29 +214,10 @@ function addVimBinding(mode: keyof VimBindings) {
 
 function removeVimBinding(mode: keyof VimBindings, index: number) {
   settings.editor.vimKeybindings[mode].splice(index, 1);
-  if (recordingVimKey.value?.mode === mode && recordingVimKey.value.index === index) {
-    recordingVimKey.value = null;
-  }
+  // 正在录制被删的行 → 收口（卸监听 + 清超时），不留挂起监听吞键
+  if (isRecordingVimKey(mode, index)) setRecordingState(null);
   persistVimBindings();
 }
-
-// 键录制：录制期间挂 window keydown（capture 先于编辑器），命中即填入并保存
-watchEffect(() => {
-  const rec = recordingVimKey.value;
-  if (!rec) return;
-  const onKey = (e: KeyboardEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const key = eventToVimKey(e);
-    if (!key) return; // 纯修饰键 / 识别不了：继续录
-    const bindings = settings.editor.vimKeybindings[rec.mode];
-    if (bindings[rec.index]) bindings[rec.index].keys = key;
-    recordingVimKey.value = null;
-    persistVimBindings();
-  };
-  window.addEventListener("keydown", onKey, true);
-  return () => window.removeEventListener("keydown", onKey, true);
-});
 
 // ── CodeGraph embedding 后端 ──
 // 整块写入：任一字段变动都把完整的 codegraphEmbedder 回写后端。下次 build
@@ -746,6 +781,14 @@ function onOverlayClick(e: MouseEvent) {
               <div class="settings-field">
                 <label class="field-label">Vim 键位映射</label>
                 <span class="field-hint">把按键绑成 vim 键序列（如 jj → &lt;Esc&gt;）或内置命令（如 &lt;C-s&gt; → :w 保存、:wq 保存并关闭、:q/:q! 关闭）。点「录制」录入键；目标以 : 开头为内置命令（单键生效），否则为 vim 键序列（支持多键）</span>
+                <div
+                  v-if="recordingVimKey"
+                  class="vim-recording-banner"
+                  role="status"
+                >
+                  <span>正在录制「{{ vimKeymapModes.find((m) => m.key === recordingVimKey?.mode)?.label }}」模式第 {{ (recordingVimKey?.index ?? 0) + 1 }} 行：按要绑定的键（期间按键会被吞，30 秒无操作自动取消）</span>
+                  <button class="vim-recording-cancel" @click="setRecordingState(null)">取消</button>
+                </div>
                 <div class="vim-keymap-list">
                   <div v-for="mode in vimKeymapModes" :key="mode.key" class="vim-keymap-mode">
                     <div class="vim-keymap-mode-label">{{ mode.label }}</div>
@@ -1218,6 +1261,32 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 /* ── Vim 键位映射 ── */
+.vim-recording-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--aide-space-2);
+  margin-top: var(--aide-space-2);
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--aide-accent);
+  background: color-mix(in srgb, var(--aide-accent) 10%, transparent);
+  border: 1px solid var(--aide-accent);
+  border-radius: var(--aide-radius-sm);
+}
+.vim-recording-cancel {
+  padding: 2px 10px;
+  font-size: 12px;
+  color: var(--aide-text-primary);
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.vim-recording-cancel:hover {
+  background: var(--aide-surface-hover);
+}
 .vim-keymap-list {
   display: flex;
   flex-direction: column;

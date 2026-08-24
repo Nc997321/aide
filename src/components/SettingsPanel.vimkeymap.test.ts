@@ -2,7 +2,7 @@
 // vim 键位映射快捷目标 chip（SettingsPanel 编辑器 tab）：点击把目标填到该模式
 // 最后一行。两个分支：无行时自动加一行；已有行直接填。settings 经 globalThis
 // 桥接供 beforeEach 重置（mock 工厂闭包内创建、测试需访问）。
-import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { describe, it, test, expect, vi, afterEach, beforeEach } from "vitest";
 import { shallowMount, flushPromises } from "@vue/test-utils";
 import { ref } from "vue";
 import type { VueWrapper } from "@vue/test-utils";
@@ -85,6 +85,102 @@ beforeEach(() => {
 afterEach(() => {
   wrapper?.unmount();
   document.body.innerHTML = "";
+});
+
+describe("SettingsPanel vim key recording lifecycle", () => {
+  function pressWindowKey(key: string, init: KeyboardEventInit = {}) {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, ...init }));
+  }
+
+  it("record_captures_key_then_stops_listening", async () => {
+    mountEditorTab();
+    await flushPromises();
+    const add = document.body.querySelector(".vim-key-add") as HTMLButtonElement;
+    add.click();
+    await flushPromises();
+
+    const rec = document.body.querySelector(".vim-key-rec") as HTMLButtonElement;
+    rec.click();
+    await flushPromises();
+    expect(document.body.querySelector(".vim-recording-banner")).not.toBeNull();
+
+    // 用户最初的映射：Ctrl+[ → 录制捕获 <C-[>
+    pressWindowKey("[", { ctrlKey: true });
+    await flushPromises();
+    expect(testSettings().editor.vimKeybindings.normal[0].keys).toBe("<C-[>");
+    expect(document.body.querySelector(".vim-recording-banner")).toBeNull();
+
+    // 录制结束后再按键 → 不写 keys（回归：监听泄漏吞键/覆写）
+    pressWindowKey("a");
+    await flushPromises();
+    expect(testSettings().editor.vimKeybindings.normal[0].keys).toBe("<C-[>");
+  });
+
+  it("record_toggle_cancels_and_unhooks", async () => {
+    mountEditorTab();
+    await flushPromises();
+    const add = document.body.querySelector(".vim-key-add") as HTMLButtonElement;
+    add.click();
+    await flushPromises();
+
+    const rec = document.body.querySelector(".vim-key-rec") as HTMLButtonElement;
+    rec.click();
+    await flushPromises();
+    expect(document.body.querySelector(".vim-recording-banner")).not.toBeNull();
+
+    // 再点同一行 = 取消（录制挂起会吞键，必须可逆）
+    rec.click();
+    await flushPromises();
+    expect(document.body.querySelector(".vim-recording-banner")).toBeNull();
+
+    pressWindowKey("a");
+    await flushPromises();
+    expect(testSettings().editor.vimKeybindings.normal[0].keys).toBe("");
+  });
+
+  test("record_auto_cancels_after_30s_timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      mountEditorTab();
+      await vi.advanceTimersByTimeAsync(0);
+      const add = document.body.querySelector(".vim-key-add") as HTMLButtonElement;
+      add.click();
+      await vi.advanceTimersByTimeAsync(0);
+      const rec = document.body.querySelector(".vim-key-rec") as HTMLButtonElement;
+      rec.click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(document.body.querySelector(".vim-recording-banner")).not.toBeNull();
+
+      // 30s 无按键 → 自动取消（防挂起监听吞后续所有按键）
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(document.body.querySelector(".vim-recording-banner")).toBeNull();
+
+      pressWindowKey("a");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(testSettings().editor.vimKeybindings.normal[0].keys).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("record_state_cleared_when_row_deleted", async () => {
+    mountEditorTab();
+    await flushPromises();
+    const add = document.body.querySelector(".vim-key-add") as HTMLButtonElement;
+    add.click();
+    await flushPromises();
+
+    const rec = document.body.querySelector(".vim-key-rec") as HTMLButtonElement;
+    rec.click();
+    await flushPromises();
+    expect(document.body.querySelector(".vim-recording-banner")).not.toBeNull();
+
+    const del = document.body.querySelector(".vim-key-del") as HTMLButtonElement;
+    del.click();
+    await flushPromises();
+    expect(document.body.querySelector(".vim-recording-banner")).toBeNull();
+    expect(testSettings().editor.vimKeybindings.normal).toHaveLength(0);
+  });
 });
 
 describe("SettingsPanel vim keymap suggestion chips", () => {
