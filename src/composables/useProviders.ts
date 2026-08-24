@@ -2,8 +2,7 @@ import { ref, computed } from "vue";
 import { api } from "../api";
 import type { ProviderConfig, ProviderConfigInput, ProviderKind, ProviderModelMappings, SecretMutation } from "../types";
 import { useProviderCatalog } from "./useProviderCatalog";
-
-const SYSTEM_DEFAULT_ID = "__system_default__";
+import { SYSTEM_DEFAULT_ID } from "../utils/provider";
 
 const emptyMappings = (): ProviderModelMappings => ({
   anthropicModel: "",

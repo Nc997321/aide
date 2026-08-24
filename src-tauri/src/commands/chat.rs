@@ -16,6 +16,42 @@ async fn resolve_active_provider(
         .map_err(|error| error.to_string())?
 }
 
+async fn resolve_provider_by_id(
+    service: &std::sync::Arc<crate::settings::SettingsService>,
+    id: &str,
+) -> Result<crate::runtime::provider::ProviderConfig, String> {
+    let service = service.clone();
+    let id = id.to_string();
+    tokio::task::spawn_blocking(move || service.resolve_runtime_provider(&id).map_err(|error| error.to_string()))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// 解析本次发送的 provider（三层，逐级回落）：
+///  1. 前端透传的会话身份（stampProvider/restoreBinding 解析出的绑定，最权威）；
+///  2. 会话元数据 `<sid>.json` 的 provider 字段（前端无绑定的历史会话兜底）；
+///  3. 全局 active provider（新会话/两者皆无）。
+/// 显式 id 在 provider 列表里不存在（被删除）→ 回落全局 active——与前端
+/// sessionProvider 计算属性同一语义（供应商没了就用全局），不会硬失败。
+async fn resolve_send_provider(
+    service: std::sync::Arc<crate::settings::SettingsService>,
+    session_id: &str,
+    explicit_provider: Option<String>,
+) -> Result<crate::runtime::provider::ProviderConfig, String> {
+    let sid = session_id.to_string();
+    let metadata_provider = tokio::task::spawn_blocking(move || crate::commands::our_session_provider_field(&sid))
+        .await
+        .map_err(|error| error.to_string())?;
+    let preferred = explicit_provider.or(metadata_provider);
+    let Some(id) = preferred.filter(|s| !s.is_empty()) else {
+        return resolve_active_provider(service).await;
+    };
+    match resolve_provider_by_id(&service, &id).await {
+        Ok(p) => Ok(p),
+        Err(_) => resolve_active_provider(service).await,
+    }
+}
+
 /// send 命令的可选行为（全部带 Default，调用点 `..Default::default()` 起步）。
 ///
 /// 具名字段解决裸 bool 调用点（`false, true, true`）不可读问题；`jump_queue` 用
@@ -133,6 +169,9 @@ pub async fn send_message(
     permission_mode: Option<String>,
     jump_queue: Option<bool>,
     workspace_root: Option<String>,
+    // 会话自持的 provider 身份（前端 stampProvider/restoreBinding 解析出的绑定）。
+    // None = 前端无绑定，走会话元数据 → 全局 active 兜底（见 resolve_send_provider）。
+    provider: Option<String>,
     runtime_mgr: State<'_, AgentRuntimeManager>,
     workspace_state: State<'_, WorkspaceState>,
     settings_service: State<'_, std::sync::Arc<crate::settings::SettingsService>>,
@@ -140,7 +179,7 @@ pub async fn send_message(
     let cwd = session_cwd(&workspace_root, &workspace_state);
     let cwd_str = cwd.to_string_lossy().to_string();
 
-    let active = resolve_active_provider(settings_service.inner().clone()).await?;
+    let active = resolve_send_provider(settings_service.inner().clone(), &session_id, provider).await?;
     // Clone the Arc before `get_settings` takes the `State` by value — the
     // permission snapshot below still needs the service.
     let snapshot_service = settings_service.inner().clone();

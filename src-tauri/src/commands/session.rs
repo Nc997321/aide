@@ -428,23 +428,13 @@ pub async fn set_session_provider(id: String, provider: String) -> Result<(), St
 }
 
 /// 读回会话绑定的供应商 id；没有元数据文件或没记过 → None（前端回落全局激活供应商）。
+/// 字段读取与 send_message 的元数据兜底共用 `our_session_provider_field` 同一口径；
+/// 读取失败降级为 None（与缺文件同语义，前端已 catch 兜底）。
 #[tauri::command]
 pub async fn session_provider(id: String) -> Result<Option<String>, String> {
-    tokio::task::spawn_blocking(move || {
-        let path = our_sessions_dir().join(format!("{}.json", id));
-        if !path.exists() {
-            return Ok(None);
-        }
-        let content = fs::read_to_string(&path).map_err(|e| format!("Failed to read: {}", e))?;
-        let v: Value = serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?;
-        Ok(v
-            .get("provider")
-            .and_then(|m| m.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string()))
-    })
-    .await
-    .map_err(|e| format!("session_provider task panicked: {}", e))?
+    tokio::task::spawn_blocking(move || Ok(crate::commands::our_session_provider_field(&id)))
+        .await
+        .map_err(|e| format!("session_provider task panicked: {}", e))?
 }
 
 /// transcript 会随会话增长到多 MB，整读 + 逐行解析必须离开主线程（切会话时触发，

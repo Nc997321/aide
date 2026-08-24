@@ -29,6 +29,7 @@ import { useSessionNames } from "./useSessionNames";
 import { useSessionWorkspaces, type SessionWorkspaceInfo } from "./useSessionWorkspaces";
 import { useSessionProviders } from "./useSessionProviders";
 import { useProviders } from "./useProviders";
+import { consistentProviderId } from "../utils/provider";
 import { splitMentionSections, type FileMentionResolution } from "../utils/fileMentions";
 import type { HistoryBlock } from "../types";
 import { useBtwSession } from "./useBtwSession";
@@ -299,8 +300,9 @@ const {
 // 会话 → spawn 时 provider 绑定：存活会话锁定初始 provider，全局切换不影响它；
 // stop_session 清绑定，下次发消息才用新 provider。见 useSessionProviders 注释。
 const { setProvider, clearProvider, migrateProvider, providerOf } = useSessionProviders();
-// 当前全局 active provider id——仅用于在 spawn 前（会话不存活时）给新会话盖戳。
-const { activeProviderId } = useProviders();
+// 全局 active provider 列表与 id——仅在 spawn 前（会话不存活、又无自身身份）给
+// 新会话兜底盖戳。会话自持身份优先，见 stampProvider。
+const { allProviders, activeProviderId } = useProviders();
 
 function getStore(sid: string): SessionStore {
   if (!stores[sid]) {
@@ -345,6 +347,28 @@ function commitPendingModel(sid: string): void {
     // 落盘失败：模型选择不会持久化，重开会话回退 provider 默认——降级提示，
     // 本次会话内的选择不受影响（模型选择只影响下一条消息，SDK 原生保证）。
     console.warn("[chat] persist model failed, will fall back to provider default:", e);
+  });
+}
+
+/** 会话 spawn 前盖 provider 戳：注册表已有绑定（restoreBinding 恢复 / 存活沿用）
+ *  则不动——这是「会话保持自身身份」的关键，历史上这里无条件盖全局 active 正是
+ *  污染根因。无绑定才解析：读 `<sid>.json` 持久化身份经一致性校验（模型反查自
+ *  愈）→ 仍无 → 回落全局 active。非 pending（重开停止会话）当场落盘；pending
+ *  （首条临时 key）跳过，由 finalizeSession 定名后补写。 */
+async function stampProvider(sid: string): Promise<void> {
+  if (providerOf(sid)) return;
+  const [persistedProvider, persistedModel] = await Promise.all([
+    api.sessionProvider(sid).catch(() => null),
+    api.sessionModel(sid).catch(() => null),
+  ]);
+  const resolved =
+    consistentProviderId(allProviders.value, persistedProvider, persistedModel) ?? activeProviderId.value;
+  setProvider(sid, resolved);
+  if (isPendingSession(sid)) return;
+  void api.setSessionProvider(sid, resolved).catch((e) => {
+    // 供应商绑定落盘失败：重开 app 后该会话的 provider 绑定丢失（回落全局
+    // 激活）——降级提示，本次运行不受影响。
+    console.warn("[chat] persist session provider failed:", sid, resolved, e);
   });
 }
 
@@ -482,9 +506,17 @@ async function finalizeSession(tempId: string, realId: string) {
   // 3. 通知 App.vue：这是第一次创建，去写元数据、加侧栏、记最近访问
   for (const cb of sessionCreatedCallbacks) cb(tempId, realId);
   // 首条发送：SDK 已用真实 id 确认 → 落盘用户选的模型（pendingModelCommit 已随 store
-  // 搬迁到 realId）。这是第三方 provider 首条落盘的唯一路径（currentModel 是别名、
+  // 迁移到 realId）。这是第三方 provider 首条落盘的唯一路径（currentModel 是别名、
   // 别名不在真实列表里，session_init 的 models_available watcher 不会落盘）。
   commitPendingModel(realId);
+  // provider 绑定同点补写：stampProvider 在临时 key 上是 pending → 跳过落盘，
+  // 定名后才是真实 id，此刻补写——首条的 provider 身份才能跨 app 重启存活。
+  const pid = providerOf(realId);
+  if (pid) {
+    void api.setSessionProvider(realId, pid).catch((e) => {
+      console.warn("[chat] persist session provider failed:", realId, pid, e);
+    });
+  }
 }
 
 /**
@@ -609,6 +641,10 @@ function sendQueued(
     prompt: sendText,
     workspaceRoot: sessionWs?.wsPath || null,
     images: item.images?.length ? item.images : null,
+    // 会话自持的 provider 身份（restoreBinding/stampProvider 解析出的绑定）——
+    // 传给 Rust 让 runtime env 按它构造，不再只认全局 active。无绑定（新会话
+    // 还没解析完）传 null，Rust 回落会话元数据 → 全局 active。
+    provider: providerOf(sid) || null,
     resumeId: opts.resumeId ?? null,
     // 只在这个 sidecar 进程还没起来时（第一条消息）有意义，Rust 侧只在
     // spawn 分支用它覆盖 provider 默认模型；之后切模型走 setModel()。
@@ -1242,23 +1278,6 @@ export function useChatSession(sessionId: Ref<string | null>) {
     { immediate: true },
   );
 
-  // 会话供应商绑定落盘：非 pending（含 finalize 后 tempId→realId 搬迁完成的真实 id）
-  // 时把 bound provider 写进 `<sid>.json` 的 provider 字段，重开 app 后前端据此恢复该
-  // 会话的供应商绑定（只恢复该会话，不动全局激活）。pending 会话跳过（临时 key，
-  // finalize 前不落盘，避免给临时 id 留文件）。幂等——同值重复写无副作用。
-  watch(sessionId, (sid) => {
-    if (sid && !isPendingSession(sid)) {
-      const pid = providerOf(sid);
-      if (pid) {
-        void api.setSessionProvider(sid, pid).catch((e) => {
-          // 供应商绑定落盘失败：重开 app 后该会话的 provider 绑定丢失（回落全局
-          // 激活）——降级提示，本次运行不受影响。
-          console.warn("[chat] persist session provider failed:", sid, pid, e);
-        });
-      }
-    }
-  });
-
   /**
    * 发消息。若当前没有 session id（"新建会话"打开的空白面板），现场生成一个
    * 纯内存临时 key 并返回给调用方——App.vue 用它更新 activeSessionId。真正的
@@ -1308,12 +1327,13 @@ export function useChatSession(sessionId: Ref<string | null>) {
     // resume：显式传入 > 已被 SDK 确认的 id 本身（aide id 就是 sdk id，无需查表）
     const resolvedResumeId = opts.resumeId ?? (isPendingSession(sid) ? undefined : sid);
 
-    // 即将 spawn（会话不存活：新会话 / stop 后续发 / 重开历史）→ 给这次会话盖戳
-    // 当前全局 active provider，让模型下拉在存活期间锁定它，全局切换不影响。
-    // 与 Rust `!has_session` 对齐：busy（含排队）= 存活 → 不盖戳，沿用旧绑定。
+    // 即将 spawn（会话不存活：新会话 / stop 后续发 / 重开历史）→ 解析这次会话的
+    // provider 身份并盖戳（stampProvider：已有绑定不覆盖 / 无绑定读持久化身份 →
+    // 回落全局 active），让模型下拉在存活期间锁定它，全局切换不影响。与 Rust
+    // `!has_session` 对齐：busy（含排队）= 存活 → 不盖戳，沿用旧绑定。
     const status = sessionState[sid];
     if (!status || status === "stopped") {
-      setProvider(sid, activeProviderId.value);
+      await stampProvider(sid);
     }
 
     // 派发三阶段（各自 ≤4 输入，调用点全具名）：prepareSend 本地状态就绪并判定

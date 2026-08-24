@@ -250,6 +250,26 @@ pub(crate) fn our_session_name(session_id: &str) -> Option<String> {
     None
 }
 
+/// 会话绑定的供应商 id 权威源：`~/.aide/sessions/<id>.json` 的 `provider` 字段
+/// （set_session_provider / 前端 stampProvider 写）。空串视为未记（filter）。
+/// 「会话属于哪个供应商」的 Rust 侧解析（send_message 按会话 provider 构造 env）
+/// 与前端 session_provider 命令共用此口径。
+pub(crate) fn our_session_provider_field(session_id: &str) -> Option<String> {
+    let path = our_sessions_dir().join(format!("{}.json", session_id));
+    if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+                return v
+                    .get("provider")
+                    .and_then(|p| p.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// 会话是否是自动化运行产物（tags 含 "automation"）。
 /// 运行转录仍是普通 session JSONL（查看器直接复用），但不进正常会话列表——
 /// 一个每天跑的任务 30 天产生 30+ 条记录，会把列表冲垮。tags 由

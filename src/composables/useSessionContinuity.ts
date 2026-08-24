@@ -1,6 +1,7 @@
 import { ref, type Ref } from "vue";
 import { api } from "@/api";
 import { useSessionProviders } from "./useSessionProviders";
+import { consistentProviderId } from "@/utils/provider";
 import type { ProviderConfig } from "@/types";
 
 /**
@@ -33,28 +34,41 @@ export function useSessionContinuity(allProviders: Ref<ProviderConfig[]>) {
   /** 当前会话上次持久化的供应商。null=没记过。 */
   const lastUsedProvider = ref<string | null>(null);
 
-  /** 无内存绑定时（重开 / 新开）：读 session_provider + session_model → 若 provider 仍在
-   *  allProviders 则 setProvider 恢复该会话绑定（不动全局激活）；同时把 lastUsed 置位。
-   *  须在 ChatPanel 模型恢复前 await，让 displayModels 反映恢复后的供应商。 */
+  /** 无内存绑定时（重开 / 新开）：读 session_provider + session_model → 一致性校验
+   *  （consistentProviderId）后 setProvider 恢复该会话绑定（不动全局激活）；校验修
+   *  正了身份时把修正值写回 `<sid>.json`（self-heal，防污染永久化）。
+   *  同时把 lastUsed 置位。须在 ChatPanel 模型恢复前 await，让 displayModels 反映
+   *  恢复后的供应商。 */
   async function restoreBinding(sid: string): Promise<void> {
     const [persistedProvider, persistedModel] = await Promise.all([
       api.sessionProvider(sid).catch(() => null),
       api.sessionModel(sid).catch(() => null),
     ]);
-    lastUsedProvider.value = persistedProvider;
+    const resolved = consistentProviderId(allProviders.value, persistedProvider, persistedModel);
+    lastUsedProvider.value = resolved;
     lastUsedModel.value = persistedModel;
-    if (persistedProvider && allProviders.value.some((p) => p.id === persistedProvider)) {
-      setProvider(sid, persistedProvider);
+    if (resolved) {
+      setProvider(sid, resolved);
+      // 持久化 provider 与一致性校验结果不一致 = 元数据被污染（模型归属可疑），
+      // 写回修正值，避免下次重开再走一遍污染路径。
+      if (persistedProvider !== resolved) {
+        void api.setSessionProvider(sid, resolved).catch((e) => {
+          console.warn("[continuity] self-heal session provider failed:", sid, resolved, e);
+        });
+      }
     }
   }
 
-  /** 有内存绑定时（存活会话 / 同一 app 运行内切走又切回）：只读 lastUsed，不重设绑定。 */
+  /** 有内存绑定时（存活会话 / 同一 app 运行内切走又切回）：只读 lastUsed，不重设绑定。
+   *  lastUsedProvider 与 restoreBinding 同一解析口径（consistentProviderId）——两处
+   *  不一致会让污染会话（provider 字段被盖写）在 needsConfirm 里把「解析身份 vs 原始
+   *  持久化值」误判成切换，明明身份没变却弹确认。 */
   async function refreshLastUsed(sid: string): Promise<void> {
     const [persistedProvider, persistedModel] = await Promise.all([
       api.sessionProvider(sid).catch(() => null),
       api.sessionModel(sid).catch(() => null),
     ]);
-    lastUsedProvider.value = persistedProvider;
+    lastUsedProvider.value = consistentProviderId(allProviders.value, persistedProvider, persistedModel);
     lastUsedModel.value = persistedModel;
   }
 

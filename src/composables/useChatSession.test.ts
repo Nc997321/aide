@@ -1111,29 +1111,61 @@ describe("useChatSession 会话自动命名", () => {
     warnSpy.mockRestore();
   });
 
-  it("provider 绑定落盘失败 → console.warn 降级（本次运行不受影响）", async () => {
-    const sid = ref<string | null>("");
+  it("finalize 补写 provider 落盘失败（set_session_provider reject）→ console.warn 降级", async () => {
+    const sid = ref<string | null>(null);
     const chat = useChatSession(sid);
     await flush();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { setProvider } = useSessionProviders();
-    setProvider("uuid-a", "provider-x");
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd === "set_session_provider") throw new Error("disk full");
       return undefined;
     });
 
-    sid.value = "uuid-a"; // 非 pending + 有绑定 → watch 落盘
+    const tempId = await chat.sendMessage("hello"); // 新会话：stamp 暂存绑定，pending → 跳过落盘
+    // SDK 确认真实 id → finalizeSession 补写 provider（拒绝 → warn 降级）
+    emit({ type: "session_init", sdk_session_id: "sdk-uuid-p", session_id: tempId as string });
     await flush();
     await flush();
 
     expect(warnSpy).toHaveBeenCalledWith(
       "[chat] persist session provider failed:",
-      "uuid-a",
-      "provider-x",
+      "sdk-uuid-p",
+      expect.any(String),
       expect.any(Error),
     );
     warnSpy.mockRestore();
+  });
+
+  it("sendMessage: 会话已有 provider 绑定（restoreBinding 恢复的自身身份）→ 不被全局 active 覆盖", async () => {
+    const sid = ref<string | null>("uuid-b");
+    const chat = useChatSession(sid);
+    await flush();
+    const { setProvider, providerOf } = useSessionProviders();
+    setProvider("uuid-b", "kimi-provider"); // 重开会话 restoreBinding 已恢复的身份
+
+    await chat.sendMessage("hello");
+
+    expect(providerOf("uuid-b")).toBe("kimi-provider"); // 绑定未被盖写
+    // 身份透传给 Rust：send_message 的 provider 参数 = 会话自身绑定
+    const sendCall = invokeMock.mock.calls.find(([cmd]) => cmd === "send_message");
+    expect(sendCall?.[1]).toMatchObject({ sessionId: "uuid-b", provider: "kimi-provider" });
+    // 没有盖戳动作 → 不发生 set_session_provider 写盘（原 watcher 已删）
+    const setProviderCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === "set_session_provider");
+    expect(setProviderCalls).toHaveLength(0);
+  });
+
+  it("sendMessage: 无绑定的停止会话 → 盖全局 active 并落盘", async () => {
+    const sid = ref<string | null>("uuid-c");
+    const chat = useChatSession(sid);
+    await flush();
+    const { providerOf } = useSessionProviders();
+
+    await chat.sendMessage("hello");
+
+    // 无持久化身份（session_provider/session_model 均 mock 为 undefined）→ 回落全局 active
+    expect(providerOf("uuid-c")).toBe("__system_default__");
+    const sendCall = invokeMock.mock.calls.find(([cmd]) => cmd === "send_message");
+    expect(sendCall?.[1]).toMatchObject({ sessionId: "uuid-c", provider: "__system_default__" });
   });
 
   it("setEffort 持久化失败（set_session_effort reject）→ console.warn 降级", async () => {

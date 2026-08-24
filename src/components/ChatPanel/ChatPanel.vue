@@ -29,6 +29,7 @@ import { useSessionContinuity } from "@/composables/useSessionContinuity";
 import { isPendingSession, toggleBgDock } from "@/composables/useChatSession";
 import { useToast } from "@/composables/useToast";
 import { effortLabel } from "@/utils/effort";
+import { providerModelList } from "@/utils/provider";
 
 const props = defineProps<{
   sessionId: string | null;
@@ -203,20 +204,9 @@ onMounted(async () => {
  * 模型变量映射（modelMappings）里的 anthropicModel/defaultOpusModel/.../subagent
  * 本就是该供应商真实可跑的模型 id，用户在设置里填了就期望下拉能看到——只取顶层
  * model + knownModels 会让用户配了一堆映射却只看到主模型。这里把它们一并并入。 */
-const providerModels = computed<ModelOption[]>(() => {
-  const p = sessionProvider.value;
-  const m = p.modelMappings;
-  const vals = [
-    p.model,
-    m?.anthropicModel,
-    m?.defaultOpusModel,
-    m?.defaultSonnetModel,
-    m?.defaultHaikuModel,
-    m?.subagent,
-    ...p.knownModels,
-  ].filter((v): v is string => !!v && typeof v === "string");
-  return [...new Set(vals)].map((v) => ({ value: v, displayName: v }));
-});
+const providerModels = computed<ModelOption[]>(() =>
+  providerModelList(sessionProvider.value).map((v) => ({ value: v, displayName: v })),
+);
 
 const displayModels = computed<ModelOption[]>(() => {
   // 第三方供应商：下拉展示真实模型 id，始终以供应商配置为准——SDK 回发的

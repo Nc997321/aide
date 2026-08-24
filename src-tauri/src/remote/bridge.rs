@@ -77,9 +77,11 @@ pub async fn execute(
             let workspace_root = workspace_key
                 .as_deref()
                 .and_then(crate::commands::workspace::resolve_path_from_key);
+            // provider 不传（None）：远程发消息不持有前端绑定，走会话元数据 → 全局
+            // active 兜底（resolve_send_provider 语义）。
             crate::commands::chat::send_message(
                 session_id, prompt, None, None, None, None,
-                Some(permission_mode), None, workspace_root,
+                Some(permission_mode), None, workspace_root, None,
                 runtime, ws_state, settings,
             ).await?;
             Ok(None)
