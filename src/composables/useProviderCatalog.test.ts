@@ -55,7 +55,7 @@ describe("useProviderCatalog", () => {
       id: "x", kind: "cpa_gpt", name: "", icon: "", baseUrl: "",
       apiKeyConfigured: false, authTokenConfigured: true, model: "",
       modelMappings: { anthropicModel: "", defaultOpusModel: "", defaultSonnetModel: "", defaultHaikuModel: "", subagent: "" },
-      effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", knownModels: [],
+      effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", maxContextTokens: "", knownModels: [],
     };
     const enriched = enrichForDisplay(p);
     expect(enriched.name).toBe("CPA 中转");
@@ -71,7 +71,7 @@ describe("useProviderCatalog", () => {
       id: "c", kind: "custom", name: "my", icon: "M", baseUrl: "https://gw",
       apiKeyConfigured: true, authTokenConfigured: false, model: "",
       modelMappings: { anthropicModel: "", defaultOpusModel: "", defaultSonnetModel: "", defaultHaikuModel: "", subagent: "" },
-      effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", knownModels: [],
+      effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", maxContextTokens: "", knownModels: [],
     };
     const enriched = enrichForDisplay(p);
     expect(enriched.name).toBe("my");
@@ -83,7 +83,7 @@ describe("useProviderCatalog", () => {
       id: "x", kind: "ollama", name: "", icon: "", baseUrl: "",
       apiKeyConfigured: false, authTokenConfigured: false, model: "",
       modelMappings: { anthropicModel: "", defaultOpusModel: "", defaultSonnetModel: "", defaultHaikuModel: "", subagent: "" },
-      effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", knownModels: [],
+      effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", maxContextTokens: "", knownModels: [],
     };
     const enriched = enrichForDisplay(p);
     expect(enriched.kind).toBe("ollama");

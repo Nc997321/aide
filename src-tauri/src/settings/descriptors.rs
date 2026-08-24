@@ -141,6 +141,8 @@ static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
             .with_legacy_ids(&["providers[].auto_compact_window"]),
         user("providers[].autocompactPctOverride", json!(""), SettingValueKind::String, "provider")
             .with_legacy_ids(&["providers[].autocompact_pct_override"]),
+        user("providers[].maxContextTokens", json!(""), SettingValueKind::String, "provider")
+            .with_legacy_ids(&["providers[].max_context_tokens"]),
         user("providers[].knownModels", json!([]), SettingValueKind::Array, "provider")
             .with_legacy_ids(&["providers[].known_models"]),
         user("activeProvider", json!("__system_default__"), SettingValueKind::String, "provider")

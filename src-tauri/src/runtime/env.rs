@@ -51,7 +51,8 @@ mod tests {
             api_key: "".into(), auth_token: "".into(), model: String::new(),
             model_mappings: ProviderModelMappings::default(),
             effort_level: "".into(), auto_compact_window: "".into(),
-            autocompact_pct_override: "".into(), known_models: vec![],
+            autocompact_pct_override: "".into(), max_context_tokens: "".into(),
+            known_models: vec![],
         };
         let _ = build_runtime_env_vars(&p, "");
     }
@@ -66,7 +67,8 @@ mod tests {
             api_key: "k".into(), auth_token: "".into(), model: String::new(),
             model_mappings: ProviderModelMappings::default(),
             effort_level: "".into(), auto_compact_window: "".into(),
-            autocompact_pct_override: "".into(), known_models: vec![],
+            autocompact_pct_override: "".into(), max_context_tokens: "".into(),
+            known_models: vec![],
         };
         let env = build_runtime_env_vars(&p, "");
         assert_eq!(env.get("ANTHROPIC_BASE_URL"), Some(&"https://b.example".to_string()));

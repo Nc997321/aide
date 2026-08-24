@@ -27,6 +27,7 @@ function makeProvider(
     effortLevel: "",
     autoCompactWindow: "",
     autocompactPctOverride: "",
+    maxContextTokens: "",
     knownModels: opts.knownModels ?? [],
   };
 }

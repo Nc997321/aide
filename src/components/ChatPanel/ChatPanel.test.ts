@@ -69,7 +69,7 @@ function makeProvider(id: string, model: string, knownModels: string[]): Provide
   return {
     id, kind: "custom", name: id, icon: "provider", baseUrl: "",
     apiKeyConfigured: false, authTokenConfigured: false, model, modelMappings: emptyMappings(),
-    effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", knownModels,
+    effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", maxContextTokens: "", knownModels,
   };
 }
 const PROVIDER_P = makeProvider("p_test", "kimi", ["kimi", "deepseek"]);

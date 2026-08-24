@@ -67,6 +67,7 @@ impl ProviderStrategy for PresetStrategy {
         if !cfg.effort_level.is_empty() { env.insert("CLAUDE_CODE_EFFORT_LEVEL".into(), cfg.effort_level.clone()); }
         if !cfg.auto_compact_window.is_empty() { env.insert("CLAUDE_CODE_AUTO_COMPACT_WINDOW".into(), cfg.auto_compact_window.clone()); }
         if !cfg.autocompact_pct_override.is_empty() { env.insert("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE".into(), cfg.autocompact_pct_override.clone()); }
+        if !cfg.max_context_tokens.is_empty() { env.insert("CLAUDE_CODE_MAX_CONTEXT_TOKENS".into(), cfg.max_context_tokens.clone()); }
         env.extend(mappings_to_env(&cfg.model_mappings));
         env
     }

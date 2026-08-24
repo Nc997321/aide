@@ -245,7 +245,7 @@ mod tests {
                 auth_token: SecretMutation::Unchanged,
                 model: String::new(), model_mappings: ProviderModelMappings::default(),
                 effort_level: String::new(), auto_compact_window: String::new(),
-                autocompact_pct_override: String::new(), known_models: Vec::new(),
+                autocompact_pct_override: String::new(), max_context_tokens: String::new(), known_models: Vec::new(),
             },
             ProviderConfigInput {
                 id: "other".to_string(), kind: ProviderKind::Custom, name: "test".to_string(),
@@ -254,7 +254,7 @@ mod tests {
                 auth_token: SecretMutation::Unchanged,
                 model: String::new(), model_mappings: ProviderModelMappings::default(),
                 effort_level: String::new(), auto_compact_window: String::new(),
-                autocompact_pct_override: String::new(), known_models: Vec::new(),
+                autocompact_pct_override: String::new(), max_context_tokens: String::new(), known_models: Vec::new(),
             },
         ]).unwrap();
 
@@ -301,7 +301,7 @@ mod tests {
                 auth_token: SecretMutation::Unchanged,
                 model: String::new(), model_mappings: ProviderModelMappings::default(),
                 effort_level: String::new(), auto_compact_window: String::new(),
-                autocompact_pct_override: String::new(), known_models: Vec::new(),
+                autocompact_pct_override: String::new(), max_context_tokens: String::new(), known_models: Vec::new(),
             },
             ProviderConfigInput {
                 id: "__system_default__".to_string(), kind: ProviderKind::SystemDefault, name: String::new(),
@@ -310,7 +310,7 @@ mod tests {
                 auth_token: SecretMutation::Unchanged,
                 model: String::new(), model_mappings: ProviderModelMappings::default(),
                 effort_level: String::new(), auto_compact_window: String::new(),
-                autocompact_pct_override: String::new(), known_models: Vec::new(),
+                autocompact_pct_override: String::new(), max_context_tokens: String::new(), known_models: Vec::new(),
             },
         ]).unwrap();
 
@@ -343,7 +343,7 @@ mod tests {
                 auth_token: SecretMutation::Unchanged,
                 model: String::new(), model_mappings: ProviderModelMappings::default(),
                 effort_level: String::new(), auto_compact_window: String::new(),
-                autocompact_pct_override: String::new(), known_models: Vec::new(),
+                autocompact_pct_override: String::new(), max_context_tokens: String::new(), known_models: Vec::new(),
             },
             ProviderConfigInput {
                 id: "other".to_string(), kind: ProviderKind::Custom, name: "test".to_string(),
@@ -352,7 +352,7 @@ mod tests {
                 auth_token: SecretMutation::Unchanged,
                 model: String::new(), model_mappings: ProviderModelMappings::default(),
                 effort_level: String::new(), auto_compact_window: String::new(),
-                autocompact_pct_override: String::new(), known_models: Vec::new(),
+                autocompact_pct_override: String::new(), max_context_tokens: String::new(), known_models: Vec::new(),
             },
         ]).unwrap();
 

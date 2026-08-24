@@ -151,6 +151,7 @@ async function handleSave() {
     effortLevel: f.effortLevel,
     autoCompactWindow: String(f.autoCompactWindow ?? ""),
     autocompactPctOverride: String(f.autocompactPctOverride ?? ""),
+    maxContextTokens: String(f.maxContextTokens ?? ""),
     knownModels: [...f.knownModels],
   }, {
     apiKey: apiKeyInput.value ? { action: "set", value: apiKeyInput.value } : apiKeyMutation.value,
@@ -401,7 +402,19 @@ function removeModelTag(idx: number) {
              空字段不注入 env，CLI 走自带默认。 -->
         <div class="form-section">
           <label>自动压缩</label>
-          <span class="form-hint">Claude Code CLI auto-compact 阈值调优，留空走 CLI 默认</span>
+          <span class="form-hint">模型上下文窗口与 auto-compact 阈值调优，留空走 CLI 默认</span>
+
+          <div class="form-field model-var-field">
+            <label>上下文窗口 (tokens)</label>
+            <input
+              v-model="form.maxContextTokens"
+              class="text-input"
+              type="number"
+              min="1"
+              placeholder="留空用 CLI 默认（未知模型 200K）"
+            />
+            <span class="form-hint">CLAUDE_CODE_MAX_CONTEXT_TOKENS：模型上下文窗口本身。填了可突破 CLI 对未知/非 Anthropic 模型的 200K 默认上限（压缩窗口被它夹住）；务必 ≤ 模型真实窗口——填超了 CLI 不再预压缩，但超出部分模型会截断或报错</span>
+          </div>
 
           <div class="form-field model-var-field">
             <label>压缩窗口 (tokens)</label>

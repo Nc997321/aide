@@ -996,7 +996,7 @@ export class SessionWorker {
             // 注意：CLAUDE_CODE_EFFORT_LEVEL 刻意不透传——它会压过 applyFlagSettings、
             // 并与 options.effort 就高合并（2026-08-01 smoke 实锤），会让会话内
             // effort 切换被 env 搅乱。effort 只走 options.effort + applyFlagSettings。
-            "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
             "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy",
           ]) {
             if (process.env[k]) cliEnv[k] = process.env[k];

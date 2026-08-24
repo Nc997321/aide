@@ -20,7 +20,7 @@ const sd = (overrides: Partial<ProviderConfig> = {}): ProviderConfig => ({
   id: "__system_default__", kind: "system_default", name: "Anthropic", icon: "A", baseUrl: "",
   apiKeyConfigured: false, authTokenConfigured: false, model: "",
   modelMappings: { anthropicModel: "claude-3", defaultOpusModel: "", defaultSonnetModel: "", defaultHaikuModel: "", subagent: "" },
-  effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", knownModels: [],
+  effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", maxContextTokens: "", knownModels: [],
   ...overrides,
 });
 
@@ -28,7 +28,7 @@ const cpa = (): ProviderConfig => ({
   id: "cpa-local", kind: "cpa_gpt", name: "CPA 中转", icon: "C", baseUrl: "http://127.0.0.1:8317",
   apiKeyConfigured: false, authTokenConfigured: true, model: "",
   modelMappings: { anthropicModel: "", defaultOpusModel: "", defaultSonnetModel: "", defaultHaikuModel: "", subagent: "" },
-  effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", knownModels: [],
+  effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", maxContextTokens: "", knownModels: [],
 });
 
 describe("useProviders — SystemDefault 统一", () => {
@@ -149,5 +149,8 @@ describe("useProviders — kind-aware add", () => {
     expect(p.kind).toBe("custom");
     expect(p.name).toBe("新供应商");
     expect(p.baseUrl).toBe("");
+    // maxContextTokens 经 addProvider 的 `partial.maxContextTokens ?? ""` 兜底为空
+    // （addCustomProvider 不透传该字段 → undefined → ""）。验证 nullish 臂。
+    expect(p.maxContextTokens).toBe("");
   });
 });

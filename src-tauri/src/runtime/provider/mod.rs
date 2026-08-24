@@ -105,6 +105,12 @@ pub struct ProviderConfig {
     /// 触发时机。空 = 不注入 = CLI 自带默认百分比。
     #[serde(default)]
     pub autocompact_pct_override: String,
+    /// → CLAUDE_CODE_MAX_CONTEXT_TOKENS：模型上下文窗口本身（token 数），直接定窗口
+    /// 大小。与 auto_compact_window 区别——后者控 auto-compact 阈值且被本窗口夹住，本
+    /// 字段定窗口上限。ollama 等非官方模型 CLI 默认 200K；抬高可推迟压缩，但勿超模型
+    /// 真实窗口（越过模型硬限 → 模型端报错/截断/丢内容）。空 = 不注入 = CLI 默认。
+    #[serde(default)]
+    pub max_context_tokens: String,
     #[serde(default)]
     pub known_models: Vec<String>,
 }
@@ -124,6 +130,7 @@ pub struct ProviderConfigView {
     pub effort_level: String,
     pub auto_compact_window: String,
     pub autocompact_pct_override: String,
+    pub max_context_tokens: String,
     pub known_models: Vec<String>,
 }
 
@@ -142,6 +149,7 @@ pub struct ProviderConfigInput {
     #[serde(default)] pub effort_level: String,
     #[serde(default)] pub auto_compact_window: String,
     #[serde(default)] pub autocompact_pct_override: String,
+    #[serde(default)] pub max_context_tokens: String,
     #[serde(default)] pub known_models: Vec<String>,
 }
 
@@ -171,6 +179,7 @@ impl ProviderConfig {
             effort_level: self.effort_level,
             auto_compact_window: self.auto_compact_window,
             autocompact_pct_override: self.autocompact_pct_override,
+            max_context_tokens: self.max_context_tokens,
             known_models: self.known_models,
         }
     }
@@ -204,6 +213,7 @@ pub fn provider_to_env_vars(p: &ProviderConfig) -> HashMap<String, String> {
         ("CLAUDE_CODE_EFFORT_LEVEL", &p.effort_level),
         ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", &p.auto_compact_window),
         ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", &p.autocompact_pct_override),
+        ("CLAUDE_CODE_MAX_CONTEXT_TOKENS", &p.max_context_tokens),
     ];
     for (key, val) in pairs {
         if !val.is_empty() {
@@ -250,7 +260,8 @@ pub fn system_default_provider() -> ProviderConfig {
         api_key: String::new(), auth_token: String::new(), model: String::new(),
         model_mappings: ProviderModelMappings::default(),
         effort_level: String::new(), auto_compact_window: String::new(),
-        autocompact_pct_override: String::new(), known_models: Vec::new(),
+        autocompact_pct_override: String::new(), max_context_tokens: String::new(),
+        known_models: Vec::new(),
     }
 }
 
@@ -379,7 +390,7 @@ impl crate::settings::SettingsService {
                     }
                 }
             }
-            let mut provider = ProviderConfig { id: input.id.clone(), kind: input.kind, name: input.name.clone(), icon: input.icon.clone(), base_url: input.base_url.clone(), api_key: String::new(), auth_token: String::new(), model: input.model.clone(), model_mappings: input.model_mappings.clone(), effort_level: input.effort_level.clone(), auto_compact_window: input.auto_compact_window.clone(), autocompact_pct_override: input.autocompact_pct_override.clone(), known_models: input.known_models.clone() };
+            let mut provider = ProviderConfig { id: input.id.clone(), kind: input.kind, name: input.name.clone(), icon: input.icon.clone(), base_url: input.base_url.clone(), api_key: String::new(), auth_token: String::new(), model: input.model.clone(), model_mappings: input.model_mappings.clone(), effort_level: input.effort_level.clone(), auto_compact_window: input.auto_compact_window.clone(), autocompact_pct_override: input.autocompact_pct_override.clone(), max_context_tokens: input.max_context_tokens.clone(), known_models: input.known_models.clone() };
             strip(&mut provider);
             persisted.push(provider);
         }
@@ -400,7 +411,7 @@ impl crate::settings::SettingsService {
 
     #[cfg(test)]
     pub fn save_provider_input_for_test(&self, id: &str, secret: &str) -> Result<(), crate::settings::SettingsError> {
-        self.save_provider_inputs(vec![ProviderConfigInput { id: id.to_string(), kind: ProviderKind::Custom, name: "test".to_string(), icon: String::new(), base_url: String::new(), api_key: crate::settings::SecretMutation::Set(secret.to_string()), auth_token: crate::settings::SecretMutation::Unchanged, model: String::new(), model_mappings: ProviderModelMappings::default(), effort_level: String::new(), auto_compact_window: String::new(), autocompact_pct_override: String::new(), known_models: Vec::new() }])
+        self.save_provider_inputs(vec![ProviderConfigInput { id: id.to_string(), kind: ProviderKind::Custom, name: "test".to_string(), icon: String::new(), base_url: String::new(), api_key: crate::settings::SecretMutation::Set(secret.to_string()), auth_token: crate::settings::SecretMutation::Unchanged, model: String::new(), model_mappings: ProviderModelMappings::default(), effort_level: String::new(), auto_compact_window: String::new(), autocompact_pct_override: String::new(), max_context_tokens: String::new(), known_models: Vec::new() }])
     }
 }
 
@@ -503,6 +514,7 @@ pub fn migrate(config: &mut serde_json::Value) -> bool {
         "effort_level": "",
         "auto_compact_window": "",
         "autocompact_pct_override": "",
+        "max_context_tokens": "",
         "known_models": [],
     });
 
@@ -755,6 +767,7 @@ mod tests {
             effort_level: String::new(),
             auto_compact_window: String::new(),
             autocompact_pct_override: String::new(),
+            max_context_tokens: String::new(),
             known_models: Vec::new(),
         }
     }
@@ -834,6 +847,24 @@ mod tests {
         assert!(env.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE").is_none());
     }
 
+    /// max_context_tokens 非空时注入 CLAUDE_CODE_MAX_CONTEXT_TOKENS——直接定模型上下文窗口
+    /// 本身（与 auto_compact_window 区别：后者控 auto-compact 阈值且被本窗口夹住）。
+    #[test]
+    fn provider_to_env_vars_injects_max_context_tokens_when_nonempty() {
+        let p = ProviderConfig {
+            max_context_tokens: "800000".to_string(),
+            ..provider_with(String::new(), String::new())
+        };
+        let env = provider_to_env_vars(&p);
+        assert_eq!(env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS"), Some(&"800000".to_string()));
+    }
+
+    #[test]
+    fn provider_to_env_vars_omits_max_context_tokens_when_empty() {
+        let env = provider_to_env_vars(&provider_with(String::new(), String::new()));
+        assert!(env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS").is_none());
+    }
+
     #[test]
     fn enrich_fills_preset_identity_from_catalog() {
         let mut p = ProviderConfig {
@@ -842,7 +873,8 @@ mod tests {
             api_key: "".into(), auth_token: "".into(), model: String::new(),
             model_mappings: ProviderModelMappings::default(),
             effort_level: "".into(), auto_compact_window: "".into(),
-            autocompact_pct_override: "".into(), known_models: vec![],
+            autocompact_pct_override: "".into(), max_context_tokens: "".into(),
+            known_models: vec![],
         };
         enrich(&mut p);
         assert_eq!(p.name, "CPA 中转");
@@ -857,7 +889,8 @@ mod tests {
             api_key: "k".into(), auth_token: "t".into(), model: String::new(),
             model_mappings: ProviderModelMappings::default(),
             effort_level: "".into(), auto_compact_window: "".into(),
-            autocompact_pct_override: "".into(), known_models: vec![],
+            autocompact_pct_override: "".into(), max_context_tokens: "".into(),
+            known_models: vec![],
         };
         strip(&mut p);
         assert_eq!(p.name, "");
@@ -874,7 +907,8 @@ mod tests {
             api_key: "".into(), auth_token: "".into(), model: String::new(),
             model_mappings: ProviderModelMappings::default(),
             effort_level: "".into(), auto_compact_window: "".into(),
-            autocompact_pct_override: "".into(), known_models: vec![],
+            autocompact_pct_override: "".into(), max_context_tokens: "".into(),
+            known_models: vec![],
         };
         strip(&mut p);
         assert_eq!(p.name, "my", "custom identity preserved");

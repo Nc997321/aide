@@ -28,6 +28,7 @@ impl ProviderStrategy for CpaGptStrategy {
         if !cfg.effort_level.is_empty() { env.insert("CLAUDE_CODE_EFFORT_LEVEL".into(), cfg.effort_level.clone()); }
         if !cfg.auto_compact_window.is_empty() { env.insert("CLAUDE_CODE_AUTO_COMPACT_WINDOW".into(), cfg.auto_compact_window.clone()); }
         if !cfg.autocompact_pct_override.is_empty() { env.insert("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE".into(), cfg.autocompact_pct_override.clone()); }
+        if !cfg.max_context_tokens.is_empty() { env.insert("CLAUDE_CODE_MAX_CONTEXT_TOKENS".into(), cfg.max_context_tokens.clone()); }
         env.extend(mappings_to_env(&cfg.model_mappings));
         env
     }
@@ -81,7 +82,8 @@ mod tests {
             api_key: "".into(), auth_token: "sk-local-cpa".into(), model: String::new(),
             model_mappings: ProviderModelMappings::default(),
             effort_level: "".into(), auto_compact_window: "".into(),
-            autocompact_pct_override: "".into(), known_models: vec![],
+            autocompact_pct_override: "".into(), max_context_tokens: "".into(),
+            known_models: vec![],
         }
     }
 
@@ -90,6 +92,14 @@ mod tests {
         let env = CpaGptStrategy.env_vars(&cpa_cfg());
         assert_eq!(env.get("ANTHROPIC_BASE_URL"), Some(&CPA_BASE_URL.to_string()));
         assert_eq!(env.get("ANTHROPIC_AUTH_TOKEN"), Some(&"sk-local-cpa".to_string()));
+    }
+
+    #[test]
+    fn cpa_env_vars_injects_max_context_tokens_when_nonempty() {
+        let mut p = cpa_cfg();
+        p.max_context_tokens = "800000".into();
+        let env = CpaGptStrategy.env_vars(&p);
+        assert_eq!(env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS"), Some(&"800000".to_string()));
     }
 
     #[test]

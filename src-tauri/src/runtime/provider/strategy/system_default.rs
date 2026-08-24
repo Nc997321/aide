@@ -47,6 +47,9 @@ impl ProviderStrategy for SystemDefaultStrategy {
         if !cfg.autocompact_pct_override.is_empty() {
             env.insert("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE".into(), cfg.autocompact_pct_override.clone());
         }
+        if !cfg.max_context_tokens.is_empty() {
+            env.insert("CLAUDE_CODE_MAX_CONTEXT_TOKENS".into(), cfg.max_context_tokens.clone());
+        }
         // base_url 不注入（SDK 默认）；靠 env 兜底
         env
     }
@@ -215,6 +218,7 @@ mod tests {
             effort_level: "".into(),
             auto_compact_window: "".into(),
             autocompact_pct_override: "".into(),
+            max_context_tokens: "".into(),
             known_models: vec![],
         }
     }
@@ -235,6 +239,14 @@ mod tests {
         let env = SystemDefaultStrategy.env_vars(&p);
         assert_eq!(env.get("ANTHROPIC_API_KEY"), Some(&"sk-test".to_string()));
         assert_eq!(env.get("ANTHROPIC_MODEL"), Some(&"sonnet-5".to_string()));
+    }
+
+    #[test]
+    fn system_default_env_vars_injects_max_context_tokens_when_nonempty() {
+        let mut p = sd_cfg();
+        p.max_context_tokens = "800000".into();
+        let env = SystemDefaultStrategy.env_vars(&p);
+        assert_eq!(env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS"), Some(&"800000".to_string()));
     }
 
     #[test]

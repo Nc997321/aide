@@ -22,7 +22,8 @@ mod tests {
             api_key: "".into(), auth_token: "k".into(), model: String::new(),
             model_mappings: ProviderModelMappings::default(),
             effort_level: "".into(), auto_compact_window: "".into(),
-            autocompact_pct_override: "".into(), known_models: vec![],
+            autocompact_pct_override: "".into(), max_context_tokens: "".into(),
+            known_models: vec![],
         }
     }
 

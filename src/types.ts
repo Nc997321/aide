@@ -270,6 +270,8 @@ export interface ProviderConfig {
   autoCompactWindow: string;
   /** → CLAUDE_AUTOCOMPACT_PCT_OVERRIDE：1–100，作用在 window 之上微调触发时机。空 = CLI 默认 */
   autocompactPctOverride: string;
+  /** → CLAUDE_CODE_MAX_CONTEXT_TOKENS：模型上下文窗口本身（token 数）。直接设可突破 CLI 对未知/非 Anthropic 模型的 200K 默认上限（autoCompactWindow 阈值被此窗口夹住）。空 = CLI 默认（未知模型 200K） */
+  maxContextTokens: string;
   knownModels: string[];
 }
 

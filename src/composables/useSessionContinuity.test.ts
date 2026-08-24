@@ -40,6 +40,7 @@ function makeProvider(id: string, name = id, model = `${id}-default`): ProviderC
     effortLevel: "",
     autoCompactWindow: "",
     autocompactPctOverride: "",
+    maxContextTokens: "",
     knownModels: [],
   };
 }

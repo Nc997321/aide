@@ -47,7 +47,7 @@ function fallbackSystemDefault(): ProviderConfig {
   return {
     id: SYSTEM_DEFAULT_ID, kind: "system_default", name: "系统默认", icon: "provider", baseUrl: "",
     apiKeyConfigured: false, authTokenConfigured: false, model: "", modelMappings: emptyMappings(),
-    effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", knownModels: [],
+    effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", maxContextTokens: "", knownModels: [],
   };
 }
 
@@ -99,6 +99,7 @@ async function addProvider(partial: Partial<ProviderConfig> = {}): Promise<Provi
     effortLevel: partial.effortLevel ?? "",
     autoCompactWindow: partial.autoCompactWindow ?? "",
     autocompactPctOverride: partial.autocompactPctOverride ?? "",
+    maxContextTokens: partial.maxContextTokens ?? "",
     knownModels: partial.knownModels ?? [],
   };
   allProviders.value = [...allProviders.value, p];
@@ -122,7 +123,7 @@ async function addPresetProvider(kind: ProviderKind): Promise<ProviderConfig> {
     name: "", icon: "", baseUrl: "",
     apiKeyConfigured: false, authTokenConfigured: false, model: "",
     modelMappings: emptyMappings(),
-    effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "",
+    effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", maxContextTokens: "",
     knownModels: [],
   });
   allProviders.value = [...allProviders.value, p];
