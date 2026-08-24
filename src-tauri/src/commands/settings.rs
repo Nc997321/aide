@@ -114,20 +114,59 @@ pub struct LspSettings {
     pub servers: std::collections::HashMap<String, ServerOverride>,
 }
 
-/// 代码编辑器设置（缩进等）。缩进字符固定为 Tab，缩进格数控制 Tab 显示列宽。
+/// Vim 键位映射条目（VSCodeVim 风格）：一个「按键（或键序列）→ 目标」。
+/// 目标以 ":" 开头 = 内置 ex 命令（:w/:wq/:q/:q!，单键生效），否则 = vim 键
+/// 序列（如 "<Esc>" / "gg"，多键 "jj" 由 vim-core partial-wait 处理）。
+/// 前端 opaque 数据（录制/编辑/应用全在前端），Rust 只存取。
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VimBinding {
+    #[serde(default)]
+    pub keys: String,
+    #[serde(default)]
+    pub to: String,
+}
+
+/// Vim 键位映射：normal/insert/visual 三模式各自的映射表。前端 opaque 数据。
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VimBindings {
+    #[serde(default)]
+    pub normal: Vec<VimBinding>,
+    #[serde(default)]
+    pub insert: Vec<VimBinding>,
+    #[serde(default)]
+    pub visual: Vec<VimBinding>,
+}
+
+/// 代码编辑器设置（缩进、vim 模式开关与键位映射）。缩进字符固定为 Tab，
+/// 缩进格数控制 Tab 显示列宽。vim 数据前端 opaque（录制/编辑/应用全在前端），
+/// Rust 只存取——**editor 的未知字段会被 serde 丢弃**，新增编辑器设置必须
+/// 在这里声明字段，否则「set_settings 落盘成功、get_settings 读回丢字段」
+/// （曾导致 vimMode 重启回 false）。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorSettings {
     /// Tab 字符的显示列宽（回车自动缩进与 Tab 键每层插入一个 \t），默认 4。
     #[serde(default = "default_indent_size")]
     pub indent_size: u32,
+    /// Vim 模式总开关（@replit/codemirror-vim），默认关。
+    #[serde(default)]
+    pub vim_mode: bool,
+    /// Vim 键位映射（normal/insert/visual 三表），默认全空。
+    #[serde(default)]
+    pub vim_keybindings: VimBindings,
 }
 
 fn default_indent_size() -> u32 { 4 }
 
 impl Default for EditorSettings {
     fn default() -> Self {
-        Self { indent_size: 4 }
+        Self {
+            indent_size: 4,
+            vim_mode: false,
+            vim_keybindings: VimBindings::default(),
+        }
     }
 }
 
@@ -659,6 +698,48 @@ mod tests {
         assert!(!s2.auto_naming);
         let out = serde_json::to_string(&s2).unwrap();
         assert!(out.contains("\"autoNaming\":false"), "{out}");
+    }
+
+    /// Vim 设置随 AppSettings 落盘/读取：vimMode/vimKeybindings camelCase 一致、
+    /// 缺字段回填默认。核心回归：serde 未知字段会被静默丢弃——editor 的新字段
+    /// 若只在前端加而 Rust EditorSettings 漏声明，set_settings 落盘成功但
+    /// get_settings 读回丢字段（vimMode 曾因此重启回 false）。
+    #[test]
+    fn editor_vim_settings_round_trip_and_default() {
+        // 缺 editor 块 → 默认（缩进 4、vim 关、三表空）
+        let s: AppSettings = serde_json::from_str(r#"{"fontSize":14}"#).unwrap();
+        assert_eq!(s.editor.indent_size, 4);
+        assert!(!s.editor.vim_mode);
+        assert!(s.editor.vim_keybindings.normal.is_empty());
+        assert!(s.editor.vim_keybindings.insert.is_empty());
+        assert!(s.editor.vim_keybindings.visual.is_empty());
+
+        // 完整 vim 配置 round-trip（用户真实落盘形态：insert 模式 jj → <Esc>）
+        let json = r#"{
+            "fontSize": 14,
+            "editor": {
+                "indentSize": 5,
+                "vimMode": true,
+                "vimKeybindings": {
+                    "normal": [],
+                    "insert": [{ "keys": "jj", "to": "<Esc>" }],
+                    "visual": []
+                }
+            }
+        }"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.editor.indent_size, 5);
+        assert!(s.editor.vim_mode);
+        assert_eq!(s.editor.vim_keybindings.insert.len(), 1);
+        assert_eq!(s.editor.vim_keybindings.insert[0].keys, "jj");
+        assert_eq!(s.editor.vim_keybindings.insert[0].to, "<Esc>");
+
+        // 再序列化必须仍是 camelCase（前端按 camelCase 读）
+        let out = serde_json::to_string(&s).unwrap();
+        assert!(out.contains("\"vimMode\":true"), "{out}");
+        assert!(out.contains("\"vimKeybindings\""), "{out}");
+        assert!(out.contains("\"keys\":\"jj\""), "{out}");
+        assert!(out.contains("\"to\":\"<Esc>\""), "{out}");
     }
 
     /// 市场源启用字段 round-trip + 缺省回填。
