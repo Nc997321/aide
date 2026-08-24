@@ -490,6 +490,9 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
       </SidebarSectionHead>
 
       <template v-if="!sessionsSectionCollapsed">
+      <!-- 子树容器：沿分区头 chevron 中轴右移 + 1px 引导线（v3.1 层级修正方案A），
+           让「会话 > 工作区 > 会话行」的父子关系在视觉上成立 -->
+      <div class="sec-subtree">
       <div v-if="workspacesLoading" class="session-empty muted">加载中...</div>
 
       <template v-else v-for="ws in filteredWorkspaces" :key="ws.key">
@@ -589,6 +592,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
           </template>
         </template>
       </template>
+      </div>
       </template>
 
       <!-- 自动化分区：分区树的第二个根分区（会话工作区树之下，同区滚动），
@@ -695,6 +699,14 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   margin-top: 2px;
 }
 
+/* ── 分区子树（v3.1 层级修正方案A：缩进 + 引导线）──
+   分区头 chevron 中轴 ≈ margin 10 + padding 12 + chevron 半宽 6.5 = 28.5px，
+   引导线落在 28px 与 chevron 同轴；子级行随之右移，父子层级一眼可读。 */
+.sec-subtree {
+  margin-left: 28px;
+  border-left: 1px solid var(--aide-border-subtle);
+}
+
 /* ── Workspace item ── */
 
 .workspace-item {
@@ -702,7 +714,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   align-items: center;
   gap: 9px;
   padding: 9px 12px;
-  margin: 4px 10px 0;
+  margin: 4px 8px 0 7px;
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
@@ -852,8 +864,8 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 10px 12px 10px 28px;
-  margin: 3px 10px 0;
+  padding: 10px 12px 10px 20px; /* 左缩进 28→20：引导线容器已右移，净缩进不变 */
+  margin: 3px 8px 0 7px;
   cursor: pointer;
   background: var(--aide-surface-default);
   border-radius: var(--aide-radius-md);
@@ -977,8 +989,8 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 }
 
 .session-more {
-  margin: 2px 10px 0;
-  padding: 7px 12px 7px 28px;
+  margin: 2px 8px 0 7px;
+  padding: 7px 12px 7px 20px;
   font-size: 11.5px;
   color: var(--aide-text-muted);
   cursor: pointer;
@@ -995,18 +1007,18 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   color: var(--aide-text-muted);
   cursor: default;
   font-size: 12px;
-  padding: 10px 12px 10px 28px;
-  margin: 1px 10px 0;
+  padding: 10px 12px 10px 20px;
+  margin: 1px 8px 0 7px;
 }
 
 /* ── 会话加载骨架（per-workspace）──
    加载态按工作区隔离后，「加载中」从全局文本变成本工作区展开区内的假会话行：
-   行式骨架与真实 session-row 同位同尺寸（28px 缩进/行高），切换真行时
+   行式骨架与真实 session-row 同位同尺寸（20px 缩进/行高），切换真行时
    只有文字线消失、行轮廓不动；线条脉冲语言与 MarketplaceTab 的 skel-line 一致
    （surface-hover 底 + 呼吸透明度）。 */
 .session-skel-card {
-  margin: 3px 10px 0;
-  padding: 10px 12px 10px 28px;
+  margin: 3px 8px 0 7px;
+  padding: 10px 12px 10px 20px;
   background: var(--aide-surface-default);
   border-radius: var(--aide-radius-md);
 }

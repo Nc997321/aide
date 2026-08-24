@@ -85,24 +85,28 @@ function metaText(t: AutomationTask): string {
   padding: 3px 0 6px;
   display: flex;
   flex-direction: column;
+  /* 与会话分区同一语言（v3.1 层级修正方案A）：沿分区头 chevron 中轴（28px）
+     右移 + 1px 引导线，任务节点是「自动化」的子级 */
+  margin-left: 28px;
+  border-left: 1px solid var(--aide-border-subtle);
 }
 
 .sec-empty {
   font-size: 11.5px;
   color: var(--aide-text-muted);
-  padding: 10px 12px 10px 28px;
-  margin: 3px 10px 0;
+  padding: 10px 12px 10px 20px;
+  margin: 3px 8px 0 7px;
   line-height: 1.6;
 }
 
-/* 行式任务节点：与会话行同一语言（28px 缩进 / 常态淡底 / 选中 accent 竖条） */
+/* 行式任务节点：与会话行同一语言（20px 缩进 / 常态淡底 / 选中 accent 竖条） */
 .task-node {
   position: relative;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 10px 12px 10px 28px;
-  margin: 3px 10px 0;
+  padding: 10px 12px 10px 20px;
+  margin: 3px 8px 0 7px;
   background: var(--aide-surface-default);
   border-radius: var(--aide-radius-md);
   cursor: pointer;

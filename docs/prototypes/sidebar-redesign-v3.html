@@ -129,6 +129,45 @@
   .demo-hover .rmeta { opacity: 0 !important; }
   .demo-hover .rdots { opacity: 1 !important; }
 
+  /* ════════ v3.1 层级修正（父子视觉区分）════════
+     问题：导航行（会话/自动化）与工作区行同为 13~13.5px/600、同一左缘、
+     同为透明结构行 → 看不出父子。三套变体类挂在 .sb 上对照。 */
+  .sb.compact { height: 480px; }
+
+  /* A · 树状缩进 + 引导线：子树沿导航 chevron 中轴右移，左缘 1px 线 */
+  .opt-a .subtree {
+    margin-left: 18px;  /* .nav 内边距 10 + 18 = 28px ≈ 导航 chevron 中轴 */
+    border-left: 1px solid var(--border-subtle);
+  }
+  .opt-a .subtree .ws   { margin: 2px 8px 0 7px; }
+  .opt-a .subtree .row  { margin: 1px 8px 0 7px; padding-left: 20px; }
+  .opt-a .subtree .more { margin: 1px 8px 0 7px; padding-left: 20px; }
+  .opt-a .subtree .task { margin: 1px 8px 0 7px; padding-left: 20px; }
+
+  /* B · 缩进 + 字重分层：父行保持 13.5/600 且 open 提亮，子行降 12.5/500 灰 + 右缩 */
+  .opt-b .nav-item.open { color: var(--text-primary); }
+  .opt-b .nav-item.open .nico { color: var(--accent); }
+  .opt-b .ws {
+    margin: 2px 10px 0 18px; padding: 7px 12px;
+    font-size: 12.5px; font-weight: 500; color: var(--text-muted);
+  }
+  .opt-b .ws:hover, .opt-b .ws.open { color: var(--text-secondary); }
+  .opt-b .ws .chev { width: 11px; height: 11px; }
+  .opt-b .ws .folder { width: 14px; height: 14px; }
+  .opt-b .row  { margin-left: 18px; }
+  .opt-b .more { margin-left: 18px; }
+  .opt-b .task { margin-left: 18px; }
+
+  /* C · 分区头小标签化（VS Code EXPLORER 式）：父退为 11px 加宽字距灰标签、去图标 */
+  .opt-c .nav-item {
+    padding: 7px 12px 5px; font-size: 11px; font-weight: 700;
+    letter-spacing: 2px; color: var(--text-muted);
+    border-radius: var(--radius-md); gap: 7px;
+  }
+  .opt-c .nav-item .nico { display: none; }
+  .opt-c .nav-item .chev { width: 11px; height: 11px; }
+  .opt-c .nav-item:hover { color: var(--text-secondary); }
+
   /* ── 工作区行 ── */
   .subtree { padding: 2px 0 4px; }
   .ws {
@@ -226,6 +265,279 @@
     右槽位交互语言统一：<b>常态显示元信息，hover 变 ⋯，点 ⋯ = 该行的右键菜单</b>——
     导航行 <em>计数 ⇄ ⋯</em>（新建菜单，v2 已确认）；工作区行 <em>计数 ⇄ ⋯</em>（工作区右键菜单）；会话行 <em>时间 ⇄ ⋯</em>（会话右键菜单）。
   </div>
+
+  <!-- ════════ v3.1 · 层级修正方案对比（2026-08-24）════════ -->
+  <h1 style="margin-top:44px;">v3.1 · 层级修正：父子视觉区分</h1>
+  <div class="subtitle">
+    问题：「会话」导航行与工作区行同为 13~13.5px / 600 字重、同一左缘、同样透明无底色——看着像同级兄弟，不像父子。
+    三个修正方向（右槽位 ⋯ 语言不变），现状对照见下方 v3 原案「常态」板。
+  </div>
+
+  <div class="boards">
+
+    <!-- ── 方案 A：树状缩进 + 引导线 ── -->
+    <div class="board">
+      <div class="board-name">A · 树状缩进 + 引导线　✅ 已采纳（2026-08-24）</div>
+      <div class="sb opt-a compact">
+        <div class="sb-body">
+          <div class="brand">
+            <div class="logo">A</div>
+            <div><div class="name">Aide</div><div class="ver">v0.9.2</div></div>
+          </div>
+
+          <div class="nav">
+            <div class="nav-item open">
+              <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg class="nico" viewBox="0 0 24 24" fill="none"><path d="M21 15C21 15.53 20.79 16.04 20.41 16.41C20.04 16.79 19.53 17 19 17H7L3 21V5C3 4.47 3.21 3.96 3.59 3.59C3.96 3.21 4.47 3 5 3H19C19.53 3 20.04 3.21 20.41 3.59C20.79 3.96 21 4.47 21 5V15Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="nlbl">会话</span>
+              <span class="rslot">
+                <span class="rmeta">128</span>
+                <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+              </span>
+            </div>
+
+            <div class="subtree">
+              <div class="ws open">
+                <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <svg class="folder" viewBox="0 0 24 24" fill="none"><path d="M3 7C3 5.9 3.9 5 5 5H9.6C9.85 5 10.1 5.1 10.3 5.3L12 7H19C20.1 7 21 7.9 21 9V17C21 18.1 20.1 19 19 19H5C3.9 19 3 18.1 3 17V7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="nm">aide</span>
+                <span class="rslot">
+                  <span class="rmeta">96</span>
+                  <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                </span>
+              </div>
+
+              <div class="row on">
+                <div class="r1">
+                  <span class="dot run"></span><span class="nm">侧栏 UI 重设计</span>
+                  <span class="rslot">
+                    <span class="rmeta flat">刚刚</span>
+                    <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                  </span>
+                </div>
+                <div class="pv">做三个方案的原型对比，先别动代码</div>
+              </div>
+              <div class="row">
+                <div class="r1">
+                  <span class="dot idle"></span><span class="nm">marketplace 插件合成条目</span>
+                  <span class="rslot">
+                    <span class="rmeta flat">2小时前</span>
+                    <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                  </span>
+                </div>
+                <div class="pv">已安装视图补齐本地/禁用源插件</div>
+              </div>
+              <div class="more">另外 93 个</div>
+
+              <div class="ws">
+                <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <svg class="folder" viewBox="0 0 24 24" fill="none"><path d="M3 7C3 5.9 3.9 5 5 5H9.6C9.85 5 10.1 5.1 10.3 5.3L12 7H19C20.1 7 21 7.9 21 9V17C21 18.1 20.1 19 19 19H5C3.9 19 3 18.1 3 17V7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="nm">ts-quality</span>
+                <span class="rslot">
+                  <span class="rmeta">32</span>
+                  <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                </span>
+              </div>
+            </div>
+
+            <div class="nav-item">
+              <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg class="nico" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="nlbl">自动化</span>
+              <span class="rslot">
+                <span class="rmeta">1</span>
+                <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <button class="sbtn on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/></svg></button>
+          <span class="sp"></span>
+          <button class="sbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+        </div>
+      </div>
+      <div class="board-tag">子树沿导航 chevron 中轴右移 18px + 左缘 1px 引导线（VS Code 树同款）；会话行 padding-left 28→20 补偿。层级信号最强、最惯用；长列表下引导线略有「划线感」。可与 B 叠加。</div>
+    </div>
+
+    <!-- ── 方案 B：缩进 + 字重分层 ── -->
+    <div class="board">
+      <div class="board-name">B · 缩进 + 字重分层</div>
+      <div class="sb opt-b compact">
+        <div class="sb-body">
+          <div class="brand">
+            <div class="logo">A</div>
+            <div><div class="name">Aide</div><div class="ver">v0.9.2</div></div>
+          </div>
+
+          <div class="nav">
+            <div class="nav-item open">
+              <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg class="nico" viewBox="0 0 24 24" fill="none"><path d="M21 15C21 15.53 20.79 16.04 20.41 16.41C20.04 16.79 19.53 17 19 17H7L3 21V5C3 4.47 3.21 3.96 3.59 3.59C3.96 3.21 4.47 3 5 3H19C19.53 3 20.04 3.21 20.41 3.59C20.79 3.96 21 4.47 21 5V15Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="nlbl">会话</span>
+              <span class="rslot">
+                <span class="rmeta">128</span>
+                <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+              </span>
+            </div>
+
+            <div class="subtree">
+              <div class="ws open">
+                <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <svg class="folder" viewBox="0 0 24 24" fill="none"><path d="M3 7C3 5.9 3.9 5 5 5H9.6C9.85 5 10.1 5.1 10.3 5.3L12 7H19C20.1 7 21 7.9 21 9V17C21 18.1 20.1 19 19 19H5C3.9 19 3 18.1 3 17V7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="nm">aide</span>
+                <span class="rslot">
+                  <span class="rmeta">96</span>
+                  <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                </span>
+              </div>
+
+              <div class="row on">
+                <div class="r1">
+                  <span class="dot run"></span><span class="nm">侧栏 UI 重设计</span>
+                  <span class="rslot">
+                    <span class="rmeta flat">刚刚</span>
+                    <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                  </span>
+                </div>
+                <div class="pv">做三个方案的原型对比，先别动代码</div>
+              </div>
+              <div class="row">
+                <div class="r1">
+                  <span class="dot idle"></span><span class="nm">marketplace 插件合成条目</span>
+                  <span class="rslot">
+                    <span class="rmeta flat">2小时前</span>
+                    <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                  </span>
+                </div>
+                <div class="pv">已安装视图补齐本地/禁用源插件</div>
+              </div>
+              <div class="more">另外 93 个</div>
+
+              <div class="ws">
+                <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <svg class="folder" viewBox="0 0 24 24" fill="none"><path d="M3 7C3 5.9 3.9 5 5 5H9.6C9.85 5 10.1 5.1 10.3 5.3L12 7H19C20.1 7 21 7.9 21 9V17C21 18.1 20.1 19 19 19H5C3.9 19 3 18.1 3 17V7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="nm">ts-quality</span>
+                <span class="rslot">
+                  <span class="rmeta">32</span>
+                  <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                </span>
+              </div>
+            </div>
+
+            <div class="nav-item">
+              <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg class="nico" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="nlbl">自动化</span>
+              <span class="rslot">
+                <span class="rmeta">1</span>
+                <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <button class="sbtn on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/></svg></button>
+          <span class="sp"></span>
+          <button class="sbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+        </div>
+      </div>
+      <div class="board-tag">几何几乎不动：工作区行仅右缩 8px，降 12.5px / 500 字重 + 灰色，图标缩一档；父行 open 提亮、图标 accent。最轻改、最安静；层级全靠字重灰度差，弱于 A。</div>
+    </div>
+
+    <!-- ── 方案 C：分区头小标签化 ── -->
+    <div class="board">
+      <div class="board-name">C · 分区头小标签化</div>
+      <div class="sb opt-c compact">
+        <div class="sb-body">
+          <div class="brand">
+            <div class="logo">A</div>
+            <div><div class="name">Aide</div><div class="ver">v0.9.2</div></div>
+          </div>
+
+          <div class="nav">
+            <div class="nav-item open">
+              <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg class="nico" viewBox="0 0 24 24" fill="none"><path d="M21 15C21 15.53 20.79 16.04 20.41 16.41C20.04 16.79 19.53 17 19 17H7L3 21V5C3 4.47 3.21 3.96 3.59 3.59C3.96 3.21 4.47 3 5 3H19C19.53 3 20.04 3.21 20.41 3.59C20.79 3.96 21 4.47 21 5V15Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="nlbl">会话</span>
+              <span class="rslot">
+                <span class="rmeta">128</span>
+                <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+              </span>
+            </div>
+
+            <div class="subtree">
+              <div class="ws open">
+                <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <svg class="folder" viewBox="0 0 24 24" fill="none"><path d="M3 7C3 5.9 3.9 5 5 5H9.6C9.85 5 10.1 5.1 10.3 5.3L12 7H19C20.1 7 21 7.9 21 9V17C21 18.1 20.1 19 19 19H5C3.9 19 3 18.1 3 17V7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="nm">aide</span>
+                <span class="rslot">
+                  <span class="rmeta">96</span>
+                  <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                </span>
+              </div>
+
+              <div class="row on">
+                <div class="r1">
+                  <span class="dot run"></span><span class="nm">侧栏 UI 重设计</span>
+                  <span class="rslot">
+                    <span class="rmeta flat">刚刚</span>
+                    <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                  </span>
+                </div>
+                <div class="pv">做三个方案的原型对比，先别动代码</div>
+              </div>
+              <div class="row">
+                <div class="r1">
+                  <span class="dot idle"></span><span class="nm">marketplace 插件合成条目</span>
+                  <span class="rslot">
+                    <span class="rmeta flat">2小时前</span>
+                    <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                  </span>
+                </div>
+                <div class="pv">已安装视图补齐本地/禁用源插件</div>
+              </div>
+              <div class="more">另外 93 个</div>
+
+              <div class="ws">
+                <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <svg class="folder" viewBox="0 0 24 24" fill="none"><path d="M3 7C3 5.9 3.9 5 5 5H9.6C9.85 5 10.1 5.1 10.3 5.3L12 7H19C20.1 7 21 7.9 21 9V17C21 18.1 20.1 19 19 19H5C3.9 19 3 18.1 3 17V7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="nm">ts-quality</span>
+                <span class="rslot">
+                  <span class="rmeta">32</span>
+                  <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+                </span>
+              </div>
+            </div>
+
+            <div class="nav-item">
+              <svg class="chev" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <svg class="nico" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="nlbl">自动化</span>
+              <span class="rslot">
+                <span class="rmeta">1</span>
+                <button class="rdots" tabindex="-1"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="statusbar">
+          <button class="sbtn on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/></svg></button>
+          <span class="sp"></span>
+          <button class="sbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+        </div>
+      </div>
+      <div class="board-tag">「会话 / 自动化」退为 11px 加宽字距灰标签、去图标（VS Code EXPLORER 式 section label），子行不动反成主行。父子差异最大、最「不乱」；但牺牲导航行的大行存在感与点击面积。</div>
+    </div>
+
+  </div>
+
+  <!-- ════════ v3 原案（⋯ 菜单，对照用，未动）════════ -->
+  <div style="margin:52px 0 4px; height:1px; background:var(--border-subtle);"></div>
+  <h1 style="font-size:14px; color:var(--text-muted); margin-bottom:14px;">── v3 原案 · ⋯ 菜单三板（对照用，未动）──</h1>
 
   <div class="boards">
 
