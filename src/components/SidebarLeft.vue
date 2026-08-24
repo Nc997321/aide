@@ -15,7 +15,6 @@ import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
 import { api } from "../api";
 import { open } from "@tauri-apps/plugin-shell";
 import { getVersion } from "@tauri-apps/api/app";
-import { AStatusDot } from "../ui";
 import AToast from "../ui/AToast.vue";
 import AppLogo from "./AppLogo.vue";
 import AutomationSidebarSection from "./automation/AutomationSidebarSection.vue";
@@ -475,8 +474,9 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
       </div>
     </div>
 
-    <!-- Workspace + Session list（「会话」降级为分区树的根分区之一，与自动化平级） -->
-    <div class="session-list">
+    <!-- Workspace + Session list（「会话」降级为分区树的根分区之一，与自动化平级；
+         session-style-* 挂会话列表样式皮肤（card/row，设置「主题样式」tab 切换）） -->
+    <div class="session-list" :class="`session-style-${settings.sessionListStyle ?? 'card'}`">
       <SidebarSectionHead
         label="会话"
         :count="totalSessionCount || undefined"
@@ -516,8 +516,10 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
             <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
             <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
           </svg>
-          <svg v-if="!ws.missing" class="ws-folder-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M3 7C3 5.89543 3.89543 5 5 5H9.58579C9.851 5 10.1054 5.10536 10.2929 5.29289L12 7H19C20.1046 7 21 7.89543 21 9V17C21 18.1046 20.1046 19 19 19H5C3.89543 19 3 18.1046 3 17V7Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <svg v-if="!ws.missing" class="ws-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3L21.5 7.8L12 12.6L2.5 7.8L12 3Z"/>
+            <path d="M2.5 12.3L12 17.1L21.5 12.3"/>
+            <path d="M2.5 16.8L12 21.6L21.5 16.8"/>
           </svg>
           <span class="ws-name">{{ workspaceLabel(ws) }}</span>
           <span v-if="ws.missing" class="ws-missing-badge">失效</span>
@@ -553,17 +555,18 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
           </div>
           <template v-else>
             <TransitionGroup name="session-anim" tag="div" class="session-anim-group" @leave="onSessionAnimLeave">
-              <!-- 行式会话（v3：accent 竖条选中态；右槽位 时间⇄⋯，⋯ 与右键同一份 sessionMenuItems） -->
+              <!-- 会话条目：状态点已移除，状态（颜色/脉动逻辑）整体搬到左缘流光——
+                   绿=running / 蓝=waiting（回复完成待输入）/ 黄=attention（权限等待）/
+                   红=warning / 橙=stalled，dead 无流光；右槽位 时间⇄⋯ 与右键同一份菜单 -->
               <div
                 v-for="s in visibleSessions(ws.key)"
                 :key="s.id"
                 class="session-row"
-                :class="{ on: props.activeSessionId === s.id, running: sessionState[s.id] === 'running' }"
+                :class="[{ on: props.activeSessionId === s.id }, `tone-${dotTone(s.id)}`]"
                 @click="selectSessionFromWorkspace(ws.key, s.id)"
                 @contextmenu.prevent="onSessionContextMenu($event, ws.key, s.id)"
               >
                 <div class="session-row-r1">
-                  <AStatusDot :tone="dotTone(s.id)" />
                   <span class="session-name">{{ sessionNames.names[s.id] || s.name }}</span>
                   <span class="session-slot" @click.stop>
                     <span class="session-time">{{ timeAgo(s.timestamp) }}</span>
@@ -754,14 +757,14 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   color: var(--aide-text-secondary);
 }
 
-.ws-folder-icon {
+.ws-icon {
   flex-shrink: 0;
   color: var(--aide-text-muted);
   transition: color 0.15s;
 }
 
-.workspace-item.active .ws-folder-icon,
-.workspace-item.expanded .ws-folder-icon {
+.workspace-item.active .ws-icon,
+.workspace-item.expanded .ws-icon {
   color: var(--aide-accent);
 }
 
@@ -854,43 +857,68 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   letter-spacing: 0.3px;
 }
 
-/* ── Session row（行式：常态淡底、hover 加深、选中 = accent 竖条 + accent-subtle 底）──
-   从 ACard 凸起卡片改为行式（v3 重设计）：去掉边框堆砌，但保留淡底「物件感」——
-   结构行（导航/工作区）透明、内容行（会话/任务）带淡底，层次靠底色明度差表达；
-   行内 10px padding + 行间 3px，几十行长列表也不糊成一片。删除/补位动画不变。 */
+/* ── Session card 公共布局（两档皮肤共享：间距/圆角骨架/流光/动画）──
+   皮肤差异（底色/描边/阴影/选中表达）拆到 .session-style-card / .session-style-row
+   两档，由设置「主题样式 → 会话列表样式」切换；布局共享保证切换时列表不跳动。 */
 
 .session-row {
   position: relative;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 10px 12px 10px 20px; /* 左缩进 28→20：引导线容器已右移，净缩进不变 */
+  padding: 12px 14px;
   margin: 3px 8px 0 7px;
   cursor: pointer;
-  background: var(--aide-surface-default);
-  border-radius: var(--aide-radius-md);
-  transition: background var(--aide-ease-t);
-}
-.session-row:hover {
-  background: var(--aide-surface-hover);
-}
-.session-row.on {
-  background: var(--aide-accent-subtle);
-}
-.session-row.on::before {
-  content: "";
-  position: absolute;
-  left: 12px;
-  top: 9px;
-  bottom: 9px;
-  width: 3px;
-  border-radius: 2px;
-  background: var(--aide-accent);
+  border: 1px solid transparent;
+  overflow: hidden; /* running 流光贴左缘，收进圆角内 */
+  transition: all var(--aide-ease-t);
 }
 
-/* running 流光：行左缘 2px 渐变脉动竖条（沿用原 ACard glow 语言）。
-   ::after 与选中竖条 ::before 错开（0 vs 12px），选中且运行中时两者共存。 */
-.session-row.running::after {
+/* 皮肤·卡片（默认）：raised 底 + 描边 + 内阴影/投影 + 悬停光影加深 +
+   选中 135° accent 渐变。悬停只走光影不做位移（位移会让底缘脱离光标形成振荡）。 */
+.session-style-card .session-row {
+  background: var(--aide-bg-raised);
+  border-color: var(--aide-border-subtle);
+  border-radius: var(--aide-radius-lg);
+  box-shadow: var(--aide-highlight-inset), var(--aide-shadow-sm);
+}
+.session-style-card .session-row:hover {
+  border-color: var(--aide-border-strong);
+  box-shadow: var(--aide-highlight-inset), var(--aide-shadow-md);
+}
+.session-style-card .session-row.on {
+  border-color: color-mix(in srgb, var(--aide-accent) 35%, transparent);
+  background:
+    linear-gradient(135deg, var(--aide-accent-subtle) 0%, transparent 60%),
+    var(--aide-bg-raised);
+}
+
+/* 皮肤·行式：surface 淡底 + hover 加深 + 选中 accent-subtle 底 + 名称转 accent。
+   选中不再用左侧 accent 竖条——引导线（.sec-subtree border-left）已是同位置的
+   层级线语言，再叠一条竖条会形成「双线」拥挤；左缘只保留 running 绿色流光。 */
+.session-style-row .session-row {
+  background: var(--aide-surface-default);
+  border-radius: var(--aide-radius-md);
+}
+.session-style-row .session-row:hover {
+  background: var(--aide-surface-hover);
+}
+.session-style-row .session-row.on {
+  background: var(--aide-accent-subtle);
+}
+.session-style-row .session-row.on .session-name {
+  color: var(--aide-accent);
+}
+
+/* ── 状态流光：会话条目左缘 2px 竖条，原状态点（AStatusDot）的颜色/动效一比一搬来——
+   绿 running / 蓝 waiting（回复完成待输入，常亮）/ 黄 attention（权限等待，脉动）/
+   红 warning（可恢复错误，脉动）/ 橙 stalled（疑似卡住，脉动）；stopped（dead）无流光。
+   优先级坍缩沿用 dotTone（dead > warning > stalled > attention/running/waiting）。 ── */
+.session-row.tone-running::after,
+.session-row.tone-waiting::after,
+.session-row.tone-attention::after,
+.session-row.tone-warning::after,
+.session-row.tone-stalled::after {
   content: "";
   position: absolute;
   left: 0;
@@ -898,7 +926,24 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   bottom: 6px;
   width: 2px;
   border-radius: 1px;
+}
+.session-row.tone-running::after {
   background: linear-gradient(180deg, transparent, var(--aide-success), transparent);
+  animation: session-glow-pulse 2s ease-in-out infinite;
+}
+.session-row.tone-waiting::after {
+  background: linear-gradient(180deg, transparent, var(--aide-info), transparent);
+}
+.session-row.tone-attention::after {
+  background: linear-gradient(180deg, transparent, var(--aide-warning), transparent);
+  animation: session-glow-pulse 2s ease-in-out infinite;
+}
+.session-row.tone-warning::after {
+  background: linear-gradient(180deg, transparent, var(--aide-danger), transparent);
+  animation: session-glow-pulse 2s ease-in-out infinite;
+}
+.session-row.tone-stalled::after {
+  background: linear-gradient(180deg, transparent, var(--aide-stalled), transparent);
   animation: session-glow-pulse 2s ease-in-out infinite;
 }
 @keyframes session-glow-pulse {
@@ -1012,13 +1057,21 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 }
 
 /* ── 会话加载骨架（per-workspace）──
-   加载态按工作区隔离后，「加载中」从全局文本变成本工作区展开区内的假会话行：
-   行式骨架与真实 session-row 同位同尺寸（20px 缩进/行高），切换真行时
-   只有文字线消失、行轮廓不动；线条脉冲语言与 MarketplaceTab 的 skel-line 一致
+   加载态按工作区隔离后，「加载中」从全局文本变成本工作区展开区内的假会话条目：
+   外壳跟随会话列表样式皮肤（卡片档描边大圆角 / 行式档淡底中圆角），切换真条目时
+   只有文字线消失、轮廓不动；线条脉冲语言与 MarketplaceTab 的 skel-line 一致
    （surface-hover 底 + 呼吸透明度）。 */
 .session-skel-card {
   margin: 3px 8px 0 7px;
-  padding: 10px 12px 10px 20px;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+}
+.session-style-card .session-skel-card {
+  background: var(--aide-bg-raised);
+  border-color: var(--aide-border-subtle);
+  border-radius: var(--aide-radius-lg);
+}
+.session-style-row .session-skel-card {
   background: var(--aide-surface-default);
   border-radius: var(--aide-radius-md);
 }
@@ -1175,7 +1228,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 .ws-trust-badge:hover {
   background: color-mix(in srgb, var(--aide-warning) 24%, transparent);
 }
-.workspace-item.untrusted:not(.active):not(.expanded) .ws-folder-icon {
+.workspace-item.untrusted:not(.active):not(.expanded) .ws-icon {
   color: var(--aide-warning);
 }
 

@@ -81,6 +81,10 @@ export interface Keybindings {
   paneCloseTab: string;
 }
 
+/** 侧栏会话列表样式："card" = 渐变卡片（raised 底 + 描边 + 选中 135° accent 渐变）；
+ *  "row" = 行式（surface 淡底 + accent 竖条选中）。纯 UI 皮肤切换，逻辑共享。 */
+export type SessionListStyle = "card" | "row";
+
 export interface AppSettings {
   fontSize: number;
   /** 界面字体（font-family 栈）：控制界面正文（按钮/标签/面板）与聊天区。 */
@@ -122,6 +126,8 @@ export interface AppSettings {
   /** 左侧会话栏「钉子」固定状态：false（默认）= QQ 式自动隐藏（贴左边缘悬浮
    *  滑出、覆盖内容），true = 常驻 dock 推开内容。 */
   leftSidebarPinned?: boolean;
+  /** 侧栏会话列表样式（卡片/行式），默认 "card"。纯 UI 皮肤，设置「主题样式」tab 切换。 */
+  sessionListStyle?: SessionListStyle;
   /** 全局 LSP 设置：按语言 id 覆盖 server 二进制路径（对应后端 LspSettings）。 */
   lsp?: { servers: Record<string, LspServerOverride> };
   /** 代码编辑器设置（缩进等）。后续编辑器相关设置归入此类。固定 Tab 字符缩进。 */

@@ -6,7 +6,7 @@ import { useOnboarding } from "../composables/useOnboarding";
 import { useCustomizations } from "../composables/useCustomizations";
 import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
 import { api } from "../api";
-import type { RemoteStatus, SecretMutation, VimBindings } from "../types";
+import type { RemoteStatus, SecretMutation, SessionListStyle, VimBindings } from "../types";
 import { eventToVimKey } from "../extensions/vimKeybindings";
 import type { CustomizationItem } from "../types/customization";
 import CustomizationList from "./customizations/CustomizationList.vue";
@@ -23,6 +23,10 @@ const themeOptions = [
   { value: "catppuccin", label: "Catppuccin Mocha" },
   { value: "glass", label: "Glass（experimental）" },
   { value: "smoky-pink-glass", label: "Smoky Pink Glass（light）" },
+];
+const sessionListStyleOptions = [
+  { value: "card", label: "卡片（渐变质感）" },
+  { value: "row", label: "行式（简洁列表）" },
 ];
 const cgBackendOptions = [
   { value: "fastembed", label: "fastembed（本地 ONNX）" },
@@ -43,7 +47,7 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-type Tab = "general" | "editor" | "providers" | "extensions" | "marketplace" | "codegraph" | "diagnostics" | "about" | "remote";
+type Tab = "general" | "appearance" | "editor" | "providers" | "extensions" | "marketplace" | "codegraph" | "diagnostics" | "about" | "remote";
 
 const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 
@@ -420,9 +424,14 @@ function resetKeybinding(key: string) {
 
 // ── Theme ──
 
+/** 会话列表样式切换（主题样式 tab）：ThemedSelect 值域由 sessionListStyleOptions
+ *  约束在 "card" | "row"，收窄安全。纯皮肤设置，侧栏响应式即时切换。 */
+function onSessionListStyleChange(v: string) {
+  update({ sessionListStyle: v as SessionListStyle });
+}
+
 function onThemeChange(themeId: string) {
-  const tokens = themes[themeId];
-  if (tokens) {
+  const tokens = themes[themeId];  if (tokens) {
     applyTheme(tokens);
     update({ theme: themeId });
     // 同步缓存主题 id，供 App.vue 启动时首屏直接应用，避免暗色兜底闪烁
@@ -514,6 +523,14 @@ function onOverlayClick(e: MouseEvent) {
             >
               <Icon class="nav-icon" name="general" :size="16" />
               <span class="nav-label">通用</span>
+            </button>
+            <button
+              class="nav-item"
+              :class="{ active: activeTab === 'appearance' }"
+              @click="activeTab = 'appearance'"
+            >
+              <Icon class="nav-icon" name="spark" :size="16" />
+              <span class="nav-label">主题样式</span>
             </button>
             <button
               class="nav-item"
@@ -685,15 +702,6 @@ function onOverlayClick(e: MouseEvent) {
                 <span class="field-hint">填绝对路径覆盖默认，如 C:\Program Files\Git\bin\bash.exe 或 /bin/zsh</span>
               </div>
 
-              <div class="settings-field">
-                <label class="field-label">主题</label>
-                <ThemedSelect
-                  :model-value="settings.theme"
-                  :options="themeOptions"
-                  @update:model-value="onThemeChange"
-                />
-              </div>
-
               <!-- ── Keybindings ── -->
               <div class="settings-section">
                 <div class="section-title">快捷键</div>
@@ -748,6 +756,29 @@ function onOverlayClick(e: MouseEvent) {
                 </div>
               </div>
 
+            </div>
+
+            <!-- ── 主题样式 Tab ── -->
+            <div v-else-if="activeTab === 'appearance'" class="tab-general">
+              <div class="settings-field">
+                <label class="field-label">主题</label>
+                <ThemedSelect
+                  :model-value="settings.theme"
+                  :options="themeOptions"
+                  @update:model-value="onThemeChange"
+                />
+                <span class="field-hint">界面整体配色主题，切换即时生效</span>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">会话列表样式</label>
+                <ThemedSelect
+                  :model-value="settings.sessionListStyle ?? 'card'"
+                  :options="sessionListStyleOptions"
+                  @update:model-value="onSessionListStyleChange"
+                />
+                <span class="field-hint">侧栏会话条目的呈现：卡片 = 渐变质感卡片；行式 = 简洁列表行</span>
+              </div>
             </div>
 
             <!-- ── 编辑器 Tab ── -->

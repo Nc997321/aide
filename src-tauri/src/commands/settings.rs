@@ -242,6 +242,10 @@ pub struct AppSettings {
     /// 滑出、覆盖内容），true = 常驻 dock 推开内容。纯 UI 状态，Rust 只存取。
     #[serde(default)]
     pub left_sidebar_pinned: bool,
+    /// 侧栏会话列表样式："card"（渐变卡片，默认）/ "row"（行式）。
+    /// 纯 UI 皮肤开关，Rust 只存取。
+    #[serde(default = "default_session_list_style")]
+    pub session_list_style: String,
     /// 首次安装引导是否已完成。首启动若为 false 则前端弹全屏向导；完成/「跳过引导」后置 true，不再二次弹。
     /// 存于 values.settings.onboarded（set_settings 落盘路径与描述符 settings.onboarded 对齐）。
     #[serde(default)]
@@ -297,6 +301,7 @@ fn default_auto_naming() -> bool { true }
 fn default_thinking_enabled() -> bool { true }
 fn default_theme() -> String { "glass".to_string() }
 fn default_recent_limit() -> u32 { 10 }
+fn default_session_list_style() -> String { "card".to_string() }
 
 impl Default for AppSettings {
     fn default() -> Self {
@@ -322,6 +327,7 @@ impl Default for AppSettings {
             jdk_registry: Vec::new(),
             jdk_prompt_dismissed: Vec::new(),
             left_sidebar_pinned: false,
+            session_list_style: default_session_list_style(),
             onboarded: false,
             lsp: LspSettings::default(),
             editor: EditorSettings::default(),
