@@ -21,15 +21,13 @@ import type { PermissionRuleDraft, PermissionScope, PermissionSettingsView } fro
 import type { PendingJump, SendOptions } from "@/composables/useChatSession";
 import { useChatScroll } from "@/composables/useChatScroll";
 import { useProviders } from "@/composables/useProviders";
-import { useSessionProviders } from "@/composables/useSessionProviders";
 import type { ProviderConfig } from "@/types";
 import { setChatPaneRect } from "@/composables/useChatPaneWidth";
 import { useBtwSession } from "@/composables/useBtwSession";
-import { useSessionContinuity } from "@/composables/useSessionContinuity";
+import { useSessionIdentity, buildConfirmDecision, type ConfirmDecision } from "@/composables/sessionIdentity";
 import { isPendingSession, toggleBgDock } from "@/composables/useChatSession";
 import { useToast } from "@/composables/useToast";
 import { effortLabel } from "@/utils/effort";
-import { providerModelList } from "@/utils/provider";
 
 const props = defineProps<{
   sessionId: string | null;
@@ -109,23 +107,21 @@ onMounted(() => {
 onUnmounted(() => { widthObserver?.disconnect(); widthObserver = null; });
 watch(() => props.focused, () => reportWidth());
 
-const { activeProviderId, allProviders, systemDefault, SYSTEM_DEFAULT_ID } = useProviders();
-const { providerOf } = useSessionProviders();
+const { allProviders, systemDefault, SYSTEM_DEFAULT_ID } = useProviders();
+const identity = useSessionIdentity();
 
 // 会话所属 provider：存活会话锁定它 spawn 那一刻的 provider（存在 useSessionProviders
 // 注册表里），全局切换供应商不影响已启动会话的模型下拉；没有绑定（新会话/已 stop/
 // 重开历史）时回落到全局 active provider——这正是"stop_session 后供应商才改变"的
 // 体现。下拉的选项列表与默认选中都跟 sessionProvider 走，不再跟 activeProvider。
 const sessionProvider = computed<ProviderConfig>(() => {
-  const id = (props.sessionId && providerOf(props.sessionId)) ?? activeProviderId.value;
+  const id = identity.effectiveProvider.value;
   if (id === SYSTEM_DEFAULT_ID) return systemDefault.value;
   return allProviders.value.find((p) => p.id === id) ?? systemDefault.value;
 });
 
-// 会话供应商/模型延续性 + 发送前确认门控（见 useSessionContinuity）。allProviders 用来
-// 判断「持久化的供应商是否还存在」——被删的供应商不恢复绑定，发送时与会话上次不同
-// 则弹确认。lastUsed 在切会话时由 restoreBinding/refreshLastUsed 读回。
-const continuity = useSessionContinuity(allProviders);
+// 会话身份（L2 SSOT）+ 发送前确认门控（L3 gate）。identity 持 provider/model 绑定、
+// 落盘、恢复、门控基线；buildConfirmDecision 纯函数判定要不要弹确认。
 
 // 发送前确认（变体 C）：当 performSend 检测到本次发送的 provider/模型与会话上次不同
 // （停止/重开会话 respawn，fork/冷缓存代价）时，不立即发送，构造一份合成的
@@ -149,28 +145,25 @@ const displayedPermission = computed<PermissionRequest | null>(
 
 /** 构造发送前确认的合成请求（变体 C）：按「供应商变了/模型变了/都变」组合文案，
  *  复用 PermissionDialog 的 AskUserQuestion 视觉语言渲染。input 全前端字段，不进 sidecar。 */
-function buildSendConfirmRequest(effectiveProviderId: string, effectiveModel: string): PermissionRequest {
-  const oldProviderId = continuity.lastUsedProvider.value;
-  const oldModel = continuity.lastUsedModel.value ?? "";
-  const providerChanged = effectiveProviderId !== (oldProviderId ?? "");
-  const modelChanged = effectiveModel !== oldModel;
-  const newProviderName = sessionProvider.value.name || effectiveProviderId;
-  const oldProviderName = oldProviderId
-    ? (allProviders.value.find((p) => p.id === oldProviderId)?.name ?? oldProviderId)
+function buildSendConfirmRequest(decision: ConfirmDecision, effectiveModel: string): PermissionRequest {
+  const newProviderName = sessionProvider.value.name || decision.effective.provider;
+  const oldProviderName = decision.last.provider
+    ? (allProviders.value.find((p) => p.id === decision.last.provider)?.name ?? decision.last.provider)
     : "";
-  const title = providerChanged && modelChanged
+  const { changed } = decision;
+  const title = changed === "both"
     ? "本次发送将切换供应商/模型"
-    : providerChanged
+    : changed === "provider"
       ? "本次发送将切换供应商"
       : "本次发送将切换模型";
-  const question = providerChanged && modelChanged
-    ? `将以 ${newProviderName}/${effectiveModel} 发送（原 ${oldProviderName}/${oldModel}）`
-    : providerChanged
+  const question = changed === "both"
+    ? `将以 ${newProviderName}/${effectiveModel} 发送（原 ${oldProviderName}/${decision.last.model}）`
+    : changed === "provider"
       ? `将以 ${newProviderName} 发送（原 ${oldProviderName}）`
-      : `将以 ${effectiveModel} 发送（原 ${oldModel}）`;
-  const info = providerChanged
-    ? `切换供应商会重新拉起会话进程，提示缓存失效（冷缓存）；与该会话上次使用的 ${oldProviderName} 不同，对话历史将迁移到新会话继续。`
-    : `切换模型会导致提示缓存失效（冷缓存），下一轮起新模型生效；与该会话上次使用的 ${oldModel} 不同`;
+      : `将以 ${effectiveModel} 发送（原 ${decision.last.model}）`;
+  const info = changed === "model"
+    ? `切换模型会导致提示缓存失效（冷缓存），下一轮起新模型生效；与该会话上次使用的 ${decision.last.model} 不同`
+    : `切换供应商会重新拉起会话进程，提示缓存失效（冷缓存）；与该会话上次使用的 ${oldProviderName} 不同，对话历史将迁移到新会话继续。`;
   return {
     id: `send-confirm-${crypto.randomUUID()}`,
     name: "__sendConfirm__",
@@ -182,42 +175,19 @@ function buildSendConfirmRequest(effectiveProviderId: string, effectiveModel: st
 // props.models 是空的——依次退化：provider 设置里配置的 knownModels（用户自己
 // 填的） > 静态默认列表（读本地文件，不起进程，见 get_default_models），
 // 让用户进会话就能选模型，不用等发完第一条消息。
-const defaultModels = ref<ModelOption[]>([]);
 const defaultPermissionModes = ref<PermissionModeOption[]>([]);
 onMounted(async () => {
-  try {
-    defaultModels.value = await api.getDefaultModels();
-  } catch {
-    // 读不到就不兜底，下拉直接不显示——不影响其他功能
-  }
+  // 系统默认静态兜底模型列表归 L2（identity.refreshDefaultModels）；权限模式仍在此读。
+  void identity.refreshDefaultModels();
   try {
     defaultPermissionModes.value = await api.getDefaultPermissionModes();
   } catch {
-    // 同上
+    // 读不到就用内置默认，不影响其他功能
   }
 });
 
-/** 第三方供应商自己的真实模型列表：顶层默认模型 + 模型变量映射里的具体模型 id +
- * 模型列表（去重，去空）。跟 sessionProvider 走——存活会话用 spawn 时的 provider，
- * 不受全局切换影响。
- *
- * 模型变量映射（modelMappings）里的 anthropicModel/defaultOpusModel/.../subagent
- * 本就是该供应商真实可跑的模型 id，用户在设置里填了就期望下拉能看到——只取顶层
- * model + knownModels 会让用户配了一堆映射却只看到主模型。这里把它们一并并入。 */
-const providerModels = computed<ModelOption[]>(() =>
-  providerModelList(sessionProvider.value).map((v) => ({ value: v, displayName: v })),
-);
-
-const displayModels = computed<ModelOption[]>(() => {
-  // 第三方供应商：下拉展示真实模型 id，始终以供应商配置为准——SDK 回发的
-  // 是 Claude 的 opus/sonnet 别名列表，对第三方是假象（TUI 时代的别名
-  // 欺骗机制已移除），选了还可能打到不存在的模型。
-  if (sessionProvider.value.id !== SYSTEM_DEFAULT_ID) {
-    return providerModels.value;
-  }
-  // 系统默认（真 Claude）：SDK 学到的列表 > 静态兜底
-  return props.models?.length ? props.models : defaultModels.value;
-});
+// 当前会话下拉选项（第三方 providerModelList / 系统默认 SDK 动态列表）统一归 L2 身份层。
+const displayModels = computed<ModelOption[]>(() => identity.displayModels.value);
 
 const { toastState, showToast } = useToast();
 
@@ -310,7 +280,7 @@ async function onPermissionRespond(
   const sc = sendConfirm.value;
   if (sc && sc.request.id === id) {
     if (approved) {
-      continuity.noteSent(sc.effectiveProvider, sc.effectiveModel);
+      identity.settleOnSend(props.sessionId ?? "", { provider: sc.effectiveProvider, model: sc.effectiveModel });
       emit("send", sc.pendingSend.prompt, sc.pendingSend.opts);
       sendConfirmedNonce.value++;
     }
@@ -347,21 +317,22 @@ function onSendRequest(prompt: string, opts: SendOptions & { effectiveProvider: 
   // 拆出确认门控用的 provider/模型，真实发送只带纯 SendOptions（不给 useChatSession 传额外字段）
   const { effectiveProvider, effectiveModel, ...sendOpts } = opts;
   const sidForGate = props.sessionId;
-  if (
-    sidForGate &&
-    !isPendingSession(sidForGate) &&
-    !props.isBusy &&
-    continuity.needsConfirm(effectiveProvider, effectiveModel)
-  ) {
-    sendConfirm.value = {
-      request: buildSendConfirmRequest(effectiveProvider, effectiveModel),
-      pendingSend: { prompt, opts: sendOpts },
-      effectiveProvider,
-      effectiveModel,
-    };
-    return;
+  if (sidForGate && !isPendingSession(sidForGate) && !props.isBusy) {
+    const decision = buildConfirmDecision(
+      { provider: effectiveProvider, model: effectiveModel },
+      identity.lastIdentity.value,
+    );
+    if (decision) {
+      sendConfirm.value = {
+        request: buildSendConfirmRequest(decision, effectiveModel),
+        pendingSend: { prompt, opts: sendOpts },
+        effectiveProvider,
+        effectiveModel,
+      };
+      return;
+    }
   }
-  continuity.noteSent(effectiveProvider, effectiveModel);
+  identity.settleOnSend(sidForGate ?? "", { provider: effectiveProvider, model: effectiveModel });
   emit("send", prompt, sendOpts);
   sendConfirmedNonce.value++;
 }
@@ -653,7 +624,6 @@ function onOpenBgDock(taskId: string) {
       :rollback-text="props.rollbackText"
       :focused="props.focused"
       :session-provider="sessionProvider"
-      :continuity="continuity"
       :send-confirmed-nonce="sendConfirmedNonce"
       :btw-lightweight="btwLightweight"
       @send-request="onSendRequest"

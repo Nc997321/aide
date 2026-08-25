@@ -497,7 +497,7 @@ describe("useChatSession per-session store", () => {
     expect(chat.currentModel.value).toBe("sonnet");
   });
 
-  it("setModel 只应用不落盘（落盘移到 SDK 接收发送时，见 commitPendingModel）", async () => {
+  it("setModel 只应用不落盘（落盘移到发送前 settleOnSend，由 ChatPanel 调 L2）", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);
     await flush();
@@ -1088,54 +1088,6 @@ describe("useChatSession 会话自动命名", () => {
     warnSpy.mockRestore();
   });
 
-  it("commitPendingModel 落盘失败（set_session_model reject）→ console.warn 降级", async () => {
-    const sid = ref<string | null>(null);
-    const chat = useChatSession(sid);
-    await flush();
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    invokeMock.mockImplementation(async (cmd: string) => {
-      if (cmd === "set_session_model") throw new Error("disk full");
-      return undefined;
-    });
-
-    const tempId = await chat.sendMessage("hello", { initialModel: "opus" });
-    // SDK 确认真实 id → finalizeSession 搬迁后 commitPendingModel(realId) 落盘
-    emit({ type: "session_init", sdk_session_id: "sdk-uuid-1", session_id: tempId as string });
-    await flush();
-    await flush();
-
-    expect(warnSpy).toHaveBeenCalledWith(
-      "[chat] persist model failed, will fall back to provider default:",
-      expect.any(Error),
-    );
-    warnSpy.mockRestore();
-  });
-
-  it("finalize 补写 provider 落盘失败（set_session_provider reject）→ console.warn 降级", async () => {
-    const sid = ref<string | null>(null);
-    const chat = useChatSession(sid);
-    await flush();
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    invokeMock.mockImplementation(async (cmd: string) => {
-      if (cmd === "set_session_provider") throw new Error("disk full");
-      return undefined;
-    });
-
-    const tempId = await chat.sendMessage("hello"); // 新会话：stamp 暂存绑定，pending → 跳过落盘
-    // SDK 确认真实 id → finalizeSession 补写 provider（拒绝 → warn 降级）
-    emit({ type: "session_init", sdk_session_id: "sdk-uuid-p", session_id: tempId as string });
-    await flush();
-    await flush();
-
-    expect(warnSpy).toHaveBeenCalledWith(
-      "[chat] persist session provider failed:",
-      "sdk-uuid-p",
-      expect.any(String),
-      expect.any(Error),
-    );
-    warnSpy.mockRestore();
-  });
-
   it("sendMessage: 会话已有 provider 绑定（restoreBinding 恢复的自身身份）→ 不被全局 active 覆盖", async () => {
     const sid = ref<string | null>("uuid-b");
     const chat = useChatSession(sid);
@@ -1154,18 +1106,17 @@ describe("useChatSession 会话自动命名", () => {
     expect(setProviderCalls).toHaveLength(0);
   });
 
-  it("sendMessage: 无绑定的停止会话 → 盖全局 active 并落盘", async () => {
+  it("sendMessage: 无绑定的停止会话 → send_message provider=null（盖戳在 L2，Rust 回落全局 active）", async () => {
     const sid = ref<string | null>("uuid-c");
     const chat = useChatSession(sid);
     await flush();
-    const { providerOf } = useSessionProviders();
 
     await chat.sendMessage("hello");
 
-    // 无持久化身份（session_provider/session_model 均 mock 为 undefined）→ 回落全局 active
-    expect(providerOf("uuid-c")).toBe("__system_default__");
+    // useChatSession 不再盖戳（盖戳在 L2 settleOnSend/resolve，由 ChatPanel 调）；
+    // 无绑定 → send_message provider=null，Rust 侧回落全局 active。
     const sendCall = invokeMock.mock.calls.find(([cmd]) => cmd === "send_message");
-    expect(sendCall?.[1]).toMatchObject({ sessionId: "uuid-c", provider: "__system_default__" });
+    expect(sendCall?.[1]).toMatchObject({ sessionId: "uuid-c", provider: null });
   });
 
   it("setEffort 持久化失败（set_session_effort reject）→ console.warn 降级", async () => {

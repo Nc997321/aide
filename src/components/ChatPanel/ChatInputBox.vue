@@ -17,13 +17,11 @@ import { peekFileClipboard, clearFileClipboard } from "@/composables/useFileClip
 import { useInlineMention } from "@/composables/useInlineMention";
 import { useMentionInserter } from "@/composables/useMentionInserter";
 import { getFileIcon, pathBasename, FOLDER_ICON_PATH } from "@/utils/fileIcons";
-import { useSessionProviders } from "@/composables/useSessionProviders";
 import { useQuickActions } from "@/composables/useQuickActions";
 import type { QuickAction } from "@/composables/useQuickActions";
 import { useModal } from "@/composables/useModal";
 import { useBtwSession } from "@/composables/useBtwSession";
-import { useSessionContinuity } from "@/composables/useSessionContinuity";
-import { pickModelValue, isModelInList } from "@/utils/modelSelect";
+import { useSessionIdentity } from "@/composables/sessionIdentity";
 import { isPendingSession, isFinalizedSessionPair } from "@/composables/useChatSession";
 import { useToast } from "@/composables/useToast";
 import { EFFORT_OPTIONS, normalizeEffortOption } from "@/utils/effort";
@@ -54,11 +52,8 @@ const props = defineProps<{
   rollbackText?: string;
   /** 父层恒传（ChatPanel 的 props.focused），非可选 */
   focused: boolean;
-  /** 会话所属 provider（ChatPanel 算好的 computed：存活会话锁 spawn 时的 provider） */
+  /** 会话所属 provider（effort 档位读取用；模型/身份已归 L2 身份层） */
   sessionProvider: ProviderConfig;
-  /** 会话供应商/模型延续性 + 发送前确认基线。非单例（每次调用新建 ref），必须由
-   *  ChatPanel 传入，不能在组件内重复调用。 */
-  continuity: ReturnType<typeof useSessionContinuity>;
   /** 发送坐实信号：ChatPanel 门控通过/确认后递增，本组件据此清空输入（取消确认
    *  不递增，输入保留——与旧实现「取消时内容回退对话框」语义一致）。 */
   sendConfirmedNonce: number;
@@ -90,126 +85,49 @@ const emit = defineEmits<{
 const rootEl = ref<HTMLElement | null>(null);
 defineExpose({ rootEl });
 
-const { providerOf } = useSessionProviders();
+const identity = useSessionIdentity();
 
-const displayModels = computed<ModelOption[]>(() => props.models);
+const displayModels = computed<ModelOption[]>(() => identity.displayModels.value);
 const displayPermissionModes = computed<PermissionModeOption[]>(() => props.permissionModes);
 
 // ── 模型选择器 ──
-/** 本地选中值：随 props.currentModel（SDK 坐实/切换确认）同步；
- *  会话开始前没有 props.currentModel，用户选的先存在这，随第一条消息带走。 */
-const selectedModel = ref("");
+// selectedModel 已归 L2 身份层（identity.effectiveModel，SSOT）。本组件只读它 + 手选走 setUserChoice。
+const selectedModel = computed(() => identity.effectiveModel.value);
 
 /** ThemedSelect 需要 {value,label}，把 {value,displayName} 映射过去 */
 const modelSelectOptions = computed(() =>
   displayModels.value.map((m) => ({ value: m.value, label: m.displayName })),
 );
 
-/** 用户在当前会话视图里手动改过选择 = true——异步恢复读回时不得覆盖用户操作。 */
-let modelTouchedByUser = false;
 
-/** 会话上次用的模型（continuity.lastUsedModel）优先于 provider 默认参与默认值解析：
- *  这个会话上次用什么模型，重开（含重启 app）后选择器还是它；不在当前列表里（停会话
- *  期间换了 provider）则退回 provider 默认。lastUsedModel 由切会话时的
- *  restoreBinding/refreshLastUsed 读回（取代旧 rememberedModel 本地 ref）。 */
-function modelFallback(models: ModelOption[]): string {
-  return isModelInList(models, props.continuity.lastUsedModel.value)
-    ? (props.continuity.lastUsedModel.value as string)
-    : props.sessionProvider.model;
-}
 
-/** 下拉框必须始终有一个「在当前可选项里」的选中值——不能只是视觉上落在第一个
- *  <option> 上而 selectedModel 仍是空串，否则 handleSend 里 `selectedModel.value
- *  || undefined` 不会把它带进 initialModel，导致下拉框显示的模型和实际启动
- *  sidecar 用的模型对不上；更不能让 selectedModel 落到一个不在列表里的值
- *  （ThemedSelect 找不到匹配项会显示空）。
- *
- *  解析统一走 pickModelValue：保证返回值 ∈ 列表（列表空才返回 ""）。这里
- *  sdkCurrent 传 "" —— applyDefaultModel 只在「列表变更 / 会话/provider 重置」
- *  时负责选默认值，不采信 SDK 回报的当前模型（那是 currentModel watcher 的
- *  职责）；尤其 provider 切换时 props.currentModel 可能还是旧 provider 的值，
- *  在此采信会把旧模型带进新 provider 的下拉。 */
-function applyDefaultModel(models: ModelOption[]) {
-  selectedModel.value = pickModelValue(
-    models,
-    selectedModel.value,
-    "",
-    modelFallback(models),
-  );
-}
 
-/** SDK 在每轮 assistant 消息后回报当前模型（models_available.current）。
- *  仅当它落在当前可选项里才采信——第三方 provider 下 sidecar 回报的常是
- *  Claude 别名（sonnet/opus）或对不上的 id，不在真实模型 id 列表里，采信它
- *  会让下拉显示空；此时保留用户已选的真实 id。existing 仍在列表里则保留之，
- *  否则退化到 记忆/provider 默认 / 首项，绝不空。 */
-watch(() => props.currentModel, () => {
-  const next = pickModelValue(
-    displayModels.value,
-    selectedModel.value,
-    props.currentModel ?? "",
-    modelFallback(displayModels.value),
-  );
-  if (next !== selectedModel.value) selectedModel.value = next;
-  // 注意：模型持久化不在此处（也不在 setModel 下拉切换处）——下拉切换是草稿，
-  // 只在 SDK 真正接收发送时落盘（useChatSession.commitPendingModel，挂在
-  // session_init / jump_promoted / 存活非排队派发 / finalize 上）。本 watcher 只
-  // 负责 selectedModel 与 sidecar 坐实值同步。
-});
-watch(displayModels, applyDefaultModel, { immediate: true });
 watch(
   () => props.sessionId,
   async (sid, prevSid) => {
-    // 定名搬迁（tempId→realId）：同一场会话换名，选择不洗。模型落盘交给
-    // useChatSession.commitPendingModel（finalizeSession 在搬迁后落盘用户发送时选的模型）。
+    // 定名搬迁（tempId→realId）：绑定由 finalizeSession.migrateBinding 迁移，这里 currentSid 跟到 realId。
     if (isFinalizedSessionPair(prevSid, sid)) {
+      // 定名搬迁：sid 是 realId（非空），isFinalizedSessionPair 不保证 TS 收窄，显式判。
+      if (sid) identity.adoptSid(sid);
       return;
     }
-    modelTouchedByUser = false;
     if (!sid) {
-      selectedModel.value = "";
-      applyDefaultModel(displayModels.value);
-      props.continuity.clear();
+      identity.clearCurrent();
       return;
     }
-    // 新建（pending）会话：选择是用户刚做的/随 initialModel 走的，不恢复不重置。
-    if (isPendingSession(sid)) return;
-    // 停止/重开（无内存绑定）：先恢复供应商绑定 + 读 lastUsed（须在模型恢复前 await，
-    // 让 displayModels 反映恢复后的供应商）；存活会话（有内存绑定）：只读 lastUsed。
-    if (!providerOf(sid)) {
-      await props.continuity.restoreBinding(sid);
-    } else {
-      await props.continuity.refreshLastUsed(sid);
+    // 新建（pending）会话：清 currentSid/基线——displayModels 走空白面板分支（activeProvider 列表），
+    // 首次发送 lastIdentity=null 不弹确认。不 resolve（pending 还没身份可恢复）。
+    if (isPendingSession(sid)) {
+      identity.clearCurrent();
+      return;
     }
-    // 读回期间切走了别的会话 → 放弃（切回来时会再走一遍）。
+    await identity.resolve(sid);
+    // 读回期间切走 → 放弃（切回来时再走一遍）。
     if (props.sessionId !== sid) return;
-    // 重置到中性：不带上个会话的 selectedModel 当 existing（那是跨会话串的根因——
-    // 同供应商下旧值永远在新列表里，pickModelValue 会把它当 existing 留下）。
-    selectedModel.value = "";
-    applyDefaultModel(displayModels.value);
-    // 存活会话 sidecar 坐实的当前模型在列表里 → 权威采信（反映真实在跑的模型）；
-    // 第三方别名（不在真实列表）/停止会话（currentModel 空）则恢复 lastUsed。
-    if (props.currentModel && isModelInList(displayModels.value, props.currentModel)) {
-      if (selectedModel.value !== props.currentModel) selectedModel.value = props.currentModel;
-    } else if (isModelInList(displayModels.value, props.continuity.lastUsedModel.value)) {
-      // 用 isModelInList + 直接赋值，不再过 pickModelValue——existing 会压过 remembered
-      // （见 modelSelect.test.ts 注释）。不在列表（停会话期间换过 provider）则维持默认。
-      selectedModel.value = props.continuity.lastUsedModel.value as string;
-    }
   },
   { immediate: true },
 );
-// 会话所属 provider 变了（全局切换影响到非存活会话，或 stop_session 释放了绑定），
-// 旧选择大概率不在新列表里，重置回新 provider 的默认模型。存活会话的 sessionProvider
-// 锁在 spawn 时的 provider，全局切换不会触发这个 watcher——模型下拉不受影响。
-watch(() => props.sessionProvider.id, () => {
-  // 当前选择在新 provider 的列表里仍然有效就保留——启动竞态：provider 配置异步
-  // 加载完成时 id 从系统默认翻成真实 provider，若无脑清空，用户刚选好（还没
-  // 发送）的模型会被擦回默认，下一条消息的 initialModel 就带错了模型。
-  if (isModelInList(displayModels.value, selectedModel.value)) return;
-  selectedModel.value = "";
-  applyDefaultModel(displayModels.value);
-});
+// 模型下拉的 provider 切换重置已归 L2（identity 内部按 provider 归属重算 displayModels/effectiveModel）。
 
 function handleModelChange(value: string) {
   // btw 模式下模型选择器只决定这条支线用什么模型,不回写主会话(主会话模型不变,
@@ -218,10 +136,8 @@ function handleModelChange(value: string) {
     btwModel.value = value;
     return;
   }
-  modelTouchedByUser = true;
-  selectedModel.value = value;
-  // 会话还没开始时 useChatSession.setModel 是无会话可发的空操作，安全；
-  // 真正生效靠 handleSend 把 selectedModel 带进第一条消息。
+  // 用户手选 → L2 草稿（不落盘，发送时 settleOnSend 才落盘）。运行时切换走 emit set-model。
+  identity.setUserChoice(value);
   emit("set-model", value);
 }
 
@@ -926,8 +842,8 @@ async function performSend() {
   // 发送后经 sendConfirmedNonce 坐实清空输入；取消确认不递增，输入保留。
   emit("send-request", mentionPrefix + finalPrompt, {
     ...sendOpts,
-    effectiveProvider: props.sessionProvider.id,
-    effectiveModel: selectedModel.value || props.sessionProvider.model,
+    effectiveProvider: identity.effectiveProvider.value,
+    effectiveModel: selectedModel.value,
   });
 }
 
@@ -954,8 +870,8 @@ async function runPromptAction(action: QuickAction, prompt: string): Promise<boo
   // 发送前确认门控已上移到 ChatPanel（onSendRequest）：这里把 provider/模型并进 opts。
   emit("send-request", prompt, {
     ...sendOpts,
-    effectiveProvider: props.sessionProvider.id,
-    effectiveModel: selectedModel.value || props.sessionProvider.model,
+    effectiveProvider: identity.effectiveProvider.value,
+    effectiveModel: selectedModel.value,
   });
   return true;
 }

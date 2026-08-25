@@ -27,9 +27,8 @@ import type { PermissionRuleDraft } from "../types/permissions";
 import { useSessionState } from "./useSessionState";
 import { useSessionNames } from "./useSessionNames";
 import { useSessionWorkspaces, type SessionWorkspaceInfo } from "./useSessionWorkspaces";
-import { useSessionProviders } from "./useSessionProviders";
 import { useProviders } from "./useProviders";
-import { consistentProviderId } from "../utils/provider";
+import { useSessionIdentity } from "@/composables/sessionIdentity";
 import { splitMentionSections, type FileMentionResolution } from "../utils/fileMentions";
 import type { HistoryBlock } from "../types";
 import { useBtwSession } from "./useBtwSession";
@@ -144,10 +143,6 @@ interface SessionStore {
   /** sidecar 坐实的当前 effort 档位（effort_changed 事件）；空串表示还没学到
    *  （选择器本地值为准，这个用于坐实同步/失败回滚）。 */
   currentEffort: string;
-  /** 发送时暂存的「用户选的模型」——只在 SDK 真正接收发送后才落盘（session_init
-   *  spawn / jump_promoted 排队提升 / 存活非排队派发 / finalize 首条定名）。空串 =
-   *  没带模型（无需落盘）。见 ChatPanel.performSend 的 sendOpts.initialModel。 */
-  pendingModelCommit: string;
   /** effort 切换失败回执（sidecar 驳回，选择器已被回滚广播拉回旧值）——
    *  seq 单调递增，面板据此弹失败提示。 */
   effortSwitchError: { message: string; seq: number } | null;
@@ -297,12 +292,9 @@ const {
   health: sessionHealth,
 } = useSessionState();
 
-// 会话 → spawn 时 provider 绑定：存活会话锁定初始 provider，全局切换不影响它；
-// stop_session 清绑定，下次发消息才用新 provider。见 useSessionProviders 注释。
-const { setProvider, clearProvider, migrateProvider, providerOf } = useSessionProviders();
-// 全局 active provider 列表与 id——仅在 spawn 前（会话不存活、又无自身身份）给
-// 新会话兜底盖戳。会话自持身份优先，见 stampProvider。
-const { allProviders, activeProviderId } = useProviders();
+// 会话身份（provider/model SSOT）——绑定、落盘、恢复、门控基线统一在 L2 身份层。
+// 取代 stampProvider/clearProvider/migrateProvider/pendingModelCommit 散落调用。
+const identity = useSessionIdentity();
 
 function getStore(sid: string): SessionStore {
   if (!stores[sid]) {
@@ -315,7 +307,6 @@ function getStore(sid: string): SessionStore {
       currentModel: "",
       modelSwitchResult: null,
       currentEffort: "",
-      pendingModelCommit: "",
       effortSwitchError: null,
       contextUsage: null,
       contextCompaction: null,
@@ -333,44 +324,6 @@ function getStore(sid: string): SessionStore {
   return stores[sid];
 }
 
-/** SDK 真正接收发送后落盘模型：把 store.pendingModelCommit（用户发送时选的模型）写进
- *  会话元数据，写完清空。只在「SDK 已接收发送」的信号处调用——session_init（spawn）、
- *  jump_promoted（排队消息被提升处理）、finalize（首条定名搬迁后）、存活会话非排队
- *  派发（见 dispatchSend）。下拉切换不落盘（setModel 已去掉 set_session_model），
- *  确认弹窗取消/排队未提升都不会触发本函数 → 不会过早落盘。 */
-function commitPendingModel(sid: string): void {
-  const s = getStore(sid);
-  const m = s.pendingModelCommit;
-  if (!m) return;
-  s.pendingModelCommit = "";
-  void invoke("set_session_model", { id: sid, model: m }).catch((e) => {
-    // 落盘失败：模型选择不会持久化，重开会话回退 provider 默认——降级提示，
-    // 本次会话内的选择不受影响（模型选择只影响下一条消息，SDK 原生保证）。
-    console.warn("[chat] persist model failed, will fall back to provider default:", e);
-  });
-}
-
-/** 会话 spawn 前盖 provider 戳：注册表已有绑定（restoreBinding 恢复 / 存活沿用）
- *  则不动——这是「会话保持自身身份」的关键，历史上这里无条件盖全局 active 正是
- *  污染根因。无绑定才解析：读 `<sid>.json` 持久化身份经一致性校验（模型反查自
- *  愈）→ 仍无 → 回落全局 active。非 pending（重开停止会话）当场落盘；pending
- *  （首条临时 key）跳过，由 finalizeSession 定名后补写。 */
-async function stampProvider(sid: string): Promise<void> {
-  if (providerOf(sid)) return;
-  const [persistedProvider, persistedModel] = await Promise.all([
-    api.sessionProvider(sid).catch(() => null),
-    api.sessionModel(sid).catch(() => null),
-  ]);
-  const resolved =
-    consistentProviderId(allProviders.value, persistedProvider, persistedModel) ?? activeProviderId.value;
-  setProvider(sid, resolved);
-  if (isPendingSession(sid)) return;
-  void api.setSessionProvider(sid, resolved).catch((e) => {
-    // 供应商绑定落盘失败：重开 app 后该会话的 provider 绑定丢失（回落全局
-    // 激活）——降级提示，本次运行不受影响。
-    console.warn("[chat] persist session provider failed:", sid, resolved, e);
-  });
-}
 
 function resolveSid(raw: string): string {
   return aliasMap.get(raw) ?? raw;
@@ -452,7 +405,7 @@ export async function stopSessionById(sid: string) {
     setSessionState(sid, "stopped");
     // 释放 provider 绑定：下拉随即回落到全局 active provider，体现"stop 后供应商
     // 才改变"；下次发消息会重新盖戳当前 active provider 并用它 spawn。
-    clearProvider(sid);
+    identity.releaseBinding(sid);
   }
 }
 
@@ -496,7 +449,7 @@ async function finalizeSession(tempId: string, realId: string) {
     removeSessionState(tempId);
   }
   // provider 绑定也跟着搬迁：临时 id 在 sendMessage 时已盖戳，拿到真实 id 后不能丢
-  migrateProvider(tempId, realId);
+  identity.migrateBinding(tempId, realId);
   // 工作区归属同样搬迁（sendMessage 首发时 seed 的创建时绑定快照）
   useSessionWorkspaces().migrate(tempId, realId);
   // btw 支线抽屉绑定/支线记忆 key 跟随定名（git-commit 可从 pending 会话发起，
@@ -505,18 +458,13 @@ async function finalizeSession(tempId: string, realId: string) {
   // 2. Runtime 内部管理 session 映射（SessionManager 的 Map），不需要 Rust 改名
   // 3. 通知 App.vue：这是第一次创建，去写元数据、加侧栏、记最近访问
   for (const cb of sessionCreatedCallbacks) cb(tempId, realId);
-  // 首条发送：SDK 已用真实 id 确认 → 落盘用户选的模型（pendingModelCommit 已随 store
-  // 迁移到 realId）。这是第三方 provider 首条落盘的唯一路径（currentModel 是别名、
-  // 别名不在真实列表里，session_init 的 models_available watcher 不会落盘）。
-  commitPendingModel(realId);
-  // provider 绑定同点补写：stampProvider 在临时 key 上是 pending → 跳过落盘，
-  // 定名后才是真实 id，此刻补写——首条的 provider 身份才能跨 app 重启存活。
-  const pid = providerOf(realId);
-  if (pid) {
-    void api.setSessionProvider(realId, pid).catch((e) => {
-      console.warn("[chat] persist session provider failed:", realId, pid, e);
-    });
-  }
+  // 首条 pending：onSendRequest 时 sid=null 只推进了基线没落盘（会话还没创建），
+  // 这里拿到 realId 后补落盘。effectiveProvider/effectiveModel 来自 L2（currentSid 仍 null
+  // → activeProvider + pendingDraft），与 onSendRequest 推进的基线同源。
+  await identity.settleOnSend(realId, {
+    provider: identity.effectiveProvider.value,
+    model: identity.effectiveModel.value,
+  });
 }
 
 /**
@@ -531,15 +479,10 @@ async function finalizeSession(tempId: string, realId: string) {
  * 本地状态就绪：暂存待发模型 / 清压缩提示 / isBusy / 提问标题 / 会话状态 /
  * 软超时。返回 "queued"（发送前已忙碌，气泡走排队暂存）或 "direct"（直发）。
  */
-function prepareSend(sid: string, item: QueuedSend, model?: string): "queued" | "direct" {
+function prepareSend(sid: string, item: QueuedSend): "queued" | "direct" {
   const store = getStore(sid);
   const wasBusy = store.isBusy;
-  // 暂存用户选的模型（model），SDK 真正接收发送时才落盘（见 commitPendingModel）：
-  //   spawn（prevStatus stopped/null）→ session_init 落盘
-  //   排队（queued）→ jump_promoted 落盘
-  //   存活非排队（prevStatus waiting/attention）→ 派发即接收，sendQueued 落盘
-  //   首条 pending → finalize 落盘
-  store.pendingModelCommit = model || "";
+  // 模型落盘已移到发送前（ChatPanel.onSendRequest 调 L2 settleOnSend），prepareSend 不再暂存。
   // 新轮次不能继承前一轮的压缩提示；但忙碌时这里仅登记排队消息，当前轮
   // 仍在压缩，不能提前撤掉它的状态条。真正接入下一轮时由 jump_promoted 清理。
   if (!wasBusy) store.contextCompaction = null;
@@ -623,28 +566,21 @@ function sendQueued(
   item: QueuedSend,
   opts: { resumeId?: string; jumpQueue?: boolean },
 ) {
-  const prevStatus = sessionState[sid];
-  const store = getStore(sid);
-  // prepareSend 刚暂存到 pendingModelCommit 的模型（存活非排队分支下
-  // commitPendingModel 会清空，故先读出来再落盘）。
-  const initialModel = store.pendingModelCommit || null;
+  // effectiveModel（L2 身份层）与落盘值同源——settleOnSend 已在发送前落盘，这里只取值传 Rust。
+  const initialModel = identity.effectiveModel.value || null;
   // 混合 tab：会话可能归属别的工作区，sidecar 必须在它自己的项目目录里跑。
   // 注册表没有记录（新会话）时传 null，Rust 侧回落当前活动工作区。
   const sessionWs = useSessionWorkspaces().workspaceOf(sid);
-  // 存活会话且非排队：派发即 SDK 接收 → 立即落盘模型（spawn/排队/首条另走 session_init/jump_promoted/finalize）。
-  if (!opts.jumpQueue && (prevStatus === "waiting" || prevStatus === "attention")) {
-    commitPendingModel(sid);
-  }
   const sendText = item.mentions?.sendText ?? item.prompt;
   invoke("send_message", {
     sessionId: sid,
     prompt: sendText,
     workspaceRoot: sessionWs?.wsPath || null,
     images: item.images?.length ? item.images : null,
-    // 会话自持的 provider 身份（restoreBinding/stampProvider 解析出的绑定）——
+    // 会话自持的 provider 身份（L2 身份层 resolve/settleOnSend 解析出的绑定）——
     // 传给 Rust 让 runtime env 按它构造，不再只认全局 active。无绑定（新会话
     // 还没解析完）传 null，Rust 回落会话元数据 → 全局 active。
-    provider: providerOf(sid) || null,
+    provider: identity.providerOf(sid) || null,
     resumeId: opts.resumeId ?? null,
     // 只在这个 sidecar 进程还没起来时（第一条消息）有意义，Rust 侧只在
     // spawn 分支用它覆盖 provider 默认模型；之后切模型走 setModel()。
@@ -696,9 +632,7 @@ function handleChatEvent(e: Record<string, unknown>) {
         break;
       }
       setSessionState(sid, "running");
-      // 续发（resume/重开停止会话）：SDK 起来接受了发送 → 落盘模型。
-      // 首条（pending）走上面的 finalize 分支，finalizeSession 里落盘。
-      commitPendingModel(sid);
+      // 落盘已在发送前（ChatPanel.onSendRequest 的 settleOnSend）完成，此处不再落盘。
       break;
     }
     case "text_delta": {
@@ -772,10 +706,11 @@ function handleChatEvent(e: Record<string, unknown>) {
       store.models = e["models"] as ModelOption[];
       store.currentModel = e["current"] as string;
       sharedModels.value = store.models;
-      // 注意：坐实模型的持久化不在这里做——current 可能是 sidecar 解析出的
-      // Claude 别名（第三方 wire id → "haiku"/"sonnet"），不经验证落盘会污染
-      // 会话记忆。持久化在 ChatPanel 的 currentModel watcher：只记在当前
-      // 可选项列表里的值（恢复得出来的值才值得记）。
+      // 坐实 L2 身份层：runtimeModel 供 effectiveModel 优先级，sdkModels 供系统默认下拉。
+      // 不在此落盘（current 可能是 sidecar 解析的 Claude 别名，落盘会污染记忆）——
+      // 落盘只在发送前 settleOnSend（用户选的有效模型，可恢复）。
+      identity.bindRuntime(sid, store.currentModel);
+      identity.setSdkModels(sid, store.models);
       break;
     }
     case "model_switch_result": {
@@ -1069,8 +1004,7 @@ function handleChatEvent(e: Record<string, unknown>) {
       store.isBusy = true;
       setSessionState(sid, "running");
       armStalled(sid);
-      // 排队消息被 SDK 真正提升处理 → 落盘模型（排队时 dispatchSend 不落盘，留到这里）。
-      commitPendingModel(sid);
+      // 落盘已在发送前（settleOnSend）完成，此处不再落盘。
       break;
     }
     case "notification": {
@@ -1327,19 +1261,14 @@ export function useChatSession(sessionId: Ref<string | null>) {
     // resume：显式传入 > 已被 SDK 确认的 id 本身（aide id 就是 sdk id，无需查表）
     const resolvedResumeId = opts.resumeId ?? (isPendingSession(sid) ? undefined : sid);
 
-    // 即将 spawn（会话不存活：新会话 / stop 后续发 / 重开历史）→ 解析这次会话的
-    // provider 身份并盖戳（stampProvider：已有绑定不覆盖 / 无绑定读持久化身份 →
-    // 回落全局 active），让模型下拉在存活期间锁定它，全局切换不影响。与 Rust
-    // `!has_session` 对齐：busy（含排队）= 存活 → 不盖戳，沿用旧绑定。
+    // provider 绑定由 ChatPanel.onSendRequest 的 settleOnSend 在 emit send 前确保
+    // （setProvider + 落盘），到这里 providerOf(sid) 已就绪。不再在此 stampProvider。
     const status = sessionState[sid];
-    if (!status || status === "stopped") {
-      await stampProvider(sid);
-    }
 
     // 派发三阶段（各自 ≤4 输入，调用点全具名）：prepareSend 本地状态就绪并判定
     // 忙碌（忙碌 → "queued" 排队，直发 → "direct"）；renderSendBubble 渲染气泡；
     // sendQueued 真实发送（fire-and-forget，内部 catch 兜底）。
-    const queued = prepareSend(sid, item, opts.initialModel);
+    const queued = prepareSend(sid, item);
     renderSendBubble(store, item, lastDispatchedPrompt[sid], queued === "queued");
     sendQueued(sid, item, { resumeId: resolvedResumeId, jumpQueue: queued === "queued" });
     return sid;
