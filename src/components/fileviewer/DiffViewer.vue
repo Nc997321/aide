@@ -30,6 +30,9 @@ const props = withDefaults(
     initialMode?: "split" | "unified";
     /** 工具栏状态徽章（新增/修改/删除）；对话内变更卡与工具名重复，传 false */
     showBadge?: boolean;
+    /** 行号起始偏移：片段级 diff（对话内变更卡）传片段在文件中的真实起始行，
+     *  使行号显示真实行而非片段相对行；不传（全文 diff：git diff / 替换预览）→ 从 1。 */
+    firstLineNumber?: number;
   }>(),
   { initialMode: "split", showBadge: true },
 );
@@ -83,6 +86,16 @@ const pathParts = computed(() => {
 });
 
 const themeCompartment = new Compartment();
+// 行号起始偏移用 compartment 包：firstLineNumber prop 变化（异步算出真实行后回填）
+// 时 reconfigure，不重建视图（同主题切换模式）。变更卡先以从 1 挂载，算完后平滑偏移。
+const lineNumberCompartment = new Compartment();
+
+/** 行号偏移扩展：firstLineNumber=100 → 第 1 行显示 100、第 2 行 101…。
+ *  CM6 的 lineNumbers 无 firstLineNumber（那是 CM5 API），用 formatNumber 偏移显示值。 */
+function lineNumberExt(firstLine?: number): Extension {
+  const offset = firstLine ? firstLine - 1 : 0;
+  return lineNumbers({ formatNumber: (n) => String(n + offset) });
+}
 
 function currentTokens() {
   return themes[settings.theme] || themes["warm-dark"];
@@ -93,7 +106,7 @@ function currentTokens() {
 
 function readOnlyExts(langExt: Extension): Extension[] {
   return [
-    lineNumbers(),
+    lineNumberCompartment.of(lineNumberExt(props.firstLineNumber)),
     EditorState.readOnly.of(true),
     EditorView.editable.of(false),
     langExt,
@@ -172,6 +185,18 @@ watch(
     const effect = themeCompartment.reconfigure(
       syntaxHighlighting(createHighlightStyle(currentTokens())),
     );
+    mergeView?.a.dispatch({ effects: effect });
+    mergeView?.b.dispatch({ effects: effect });
+    unifiedView?.dispatch({ effects: effect });
+  },
+);
+
+// 行号偏移变化（异步算出真实起始行后回填）：只重配 lineNumbers compartment，不重建视图。
+// dispatch 到 split 两侧与 unified 单栏（变更卡只用 unified，另两者兜底不传该 prop）。
+watch(
+  () => props.firstLineNumber,
+  (v) => {
+    const effect = lineNumberCompartment.reconfigure(lineNumberExt(v));
     mergeView?.a.dispatch({ effects: effect });
     mergeView?.b.dispatch({ effects: effect });
     unifiedView?.dispatch({ effects: effect });

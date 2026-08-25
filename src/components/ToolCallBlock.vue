@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import type { ToolCallBlock, BgTask } from "@/types/chat";
 import BashOutputBlock from "./BashOutputBlock.vue";
 import DiffViewer from "./fileviewer/DiffViewer.vue";
-import { buildChangeInfo, locateAnchorLine, type ChangeInfo } from "@/utils/changeCard";
+import { buildChangeInfo, locateAnchorLine, locateEditStartLine, type ChangeInfo } from "@/utils/changeCard";
 import { isChangeTool } from "@/utils/blockSegments";
 import { summarizeToolInput } from "@/utils/toolSummary";
 import { useFileResolver } from "@/composables/useFileResolver";
@@ -65,8 +65,27 @@ async function openChangeFile(e: MouseEvent) {
   const info = changeInfo.value;
   if (!info) return;
   const line = await locateAnchorLine(info.filePath, info.anchor);
-  void openResolved(info.filePath, props.workspacePath, line);
+  // 整块高亮：定位行起 N 行 = new_string 行数（变更卡显示的就是这块）
+  const flashCount = info.pair.newText ? info.pair.newText.split("\n").length : 1;
+  void openResolved(info.filePath, props.workspacePath, line, flashCount);
 }
+
+/**
+ * 变更卡 diff 行号偏移：展开时异步算片段在当前文件中的真实起始行，传给 DiffViewer
+ * 使行号显示真实行而非片段相对行。算不出（Write 新文件 / 文件已改覆盖 / 读失败）→
+ * undefined → 行号从 1。firstLine 的 null = 「未算」，与「算出 undefined」区分，
+ * 避免每次展开都重读文件。
+ */
+const firstLine = ref<number | undefined | null>(null);
+
+watch(
+  [expanded, changeInfo] as const,
+  async ([exp, info]) => {
+    if (!exp || !info || firstLine.value !== null) return;
+    firstLine.value = await locateEditStartLine(info.filePath, info.pair.newText, info.pair.status);
+  },
+  { immediate: true },
+);
 
 const inputSummary = computed(() => summarizeToolInput(props.block.name, props.block.input));
 </script>
@@ -116,7 +135,7 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
         class="ti-change"
         :style="{ height: `${changeHeight}px` }"
       >
-        <DiffViewer :pair="changeInfo.pair" :file-path="changeInfo.filePath" initial-mode="unified" :show-badge="false" />
+        <DiffViewer :pair="changeInfo.pair" :file-path="changeInfo.filePath" :first-line-number="firstLine ?? undefined" initial-mode="unified" :show-badge="false" />
       </div>
       <pre v-else-if="block.result" class="ti-result">{{ block.result }}</pre>
       <div v-else class="ti-pending">等待结果…</div>

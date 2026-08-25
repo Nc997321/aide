@@ -60,6 +60,9 @@ export interface FileWindowState {
   /** 与 scrollToLine 配对：目标行定位到视口顶下多少 px（跳转定义复刻源符号屏幕位置）。
    *  FileWindow 消费后置回 null；null 时 scrollToLine 走默认（行贴顶）。 */
   scrollViewportY: number | null;
+  /** 与 scrollToLine 配对：flash 高亮行数（整块高亮用，如变更卡 new_string 行数）。
+   *  FileWindow 消费后置回 null；null 时单行高亮。 */
+  flashCount: number | null;
   /** 跳转定义/引用的后退栈：栈顶 = 上一个位置；空 = 未发生过就地跳转 */
   navStack: NavEntry[];
   /** 窗口几何（px，视口坐标）——自动平铺由 FileViewer 层计算，拖拽直接改 x/y */
@@ -201,6 +204,7 @@ async function loadIntoWindow(win: FileWindowState, path: string, opts?: { conte
   win.mdMode = "preview";
   win.scrollToLine = null;
   win.scrollViewportY = null;
+  win.flashCount = null;
   win.filePath = path; // ← 最后赋：与 editContent 同步连改触发 createEditor 重建
 
   // 记录最近访问文件（best effort，绝不阻断打开主流程）
@@ -251,6 +255,7 @@ export function useFileViewer() {
       mdMode: "preview",
       scrollToLine: null,
       scrollViewportY: null,
+      flashCount: null,
       navStack: [],
       x: 0,
       y: 0,
@@ -277,11 +282,14 @@ export function useFileViewer() {
   }
 
   /** 打开并滚动到目标行（聊天文件链接 / 跳转定义共用入口） */
-  async function openAndScrollTo(targetPath: string, line: number) {
+  async function openAndScrollTo(targetPath: string, line: number, flashCount?: number) {
     await open(targetPath);
     const win = windows.value.find((w) => w.filePath === targetPath && !w.virtual);
     if (!win) return;
-    if (!win.readonly && !win.error) win.scrollToLine = line;
+    if (!win.readonly && !win.error) {
+      win.scrollToLine = line;
+      win.flashCount = flashCount ?? null;
+    }
     focusedId.value = win.id;
   }
 

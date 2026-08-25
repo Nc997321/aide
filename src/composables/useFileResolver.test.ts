@@ -39,8 +39,14 @@ describe("useFileResolver", () => {
     const r = useFileResolver();
     await r.openResolved("src/App.vue", "C:/repo", 12);
 
-    expect(mocks.viewerOpenAndScrollTo).toHaveBeenCalledWith("C:/repo/src/App.vue", 12);
+    expect(mocks.viewerOpenAndScrollTo).toHaveBeenCalledWith("C:/repo/src/App.vue", 12, undefined);
     expect(mocks.fileOpen).not.toHaveBeenCalled();
+  });
+
+  it("openResolved 透传 flashCount 到 openAndScrollTo（整块高亮行数）", async () => {
+    const r = useFileResolver();
+    await r.openResolved("src/App.vue", "C:/repo", 12, 5);
+    expect(mocks.viewerOpenAndScrollTo).toHaveBeenCalledWith("C:/repo/src/App.vue", 12, 5);
   });
 
   it("聊天中的 HTML 文件路径使用系统默认浏览器打开", async () => {

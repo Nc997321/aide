@@ -94,6 +94,23 @@ describe("useFileViewer 多窗口 store", () => {
     expect(v.focusedId.value).toBe(target.id);
   });
 
+  it("openAndScrollTo 透传 flashCount 到 win（整块高亮行数）", async () => {
+    const v = useFileViewer();
+    await v.open("a.ts");
+    await v.openAndScrollTo("a.ts", 10, 5);
+    const target = v.windows.value.find((w) => w.filePath === "a.ts")!;
+    expect(target.scrollToLine).toBe(10);
+    expect(target.flashCount).toBe(5);
+  });
+
+  it("openAndScrollTo 不传 flashCount 时 win.flashCount 为 null（单行高亮）", async () => {
+    const v = useFileViewer();
+    await v.open("a.ts");
+    await v.openAndScrollTo("a.ts", 10);
+    const target = v.windows.value.find((w) => w.filePath === "a.ts")!;
+    expect(target.flashCount).toBeNull();
+  });
+
   it("超过 1MB 的大文件只读", async () => {
     vi.mocked(api.readFileContent).mockResolvedValueOnce("x".repeat(1_000_001));
     const v = useFileViewer();

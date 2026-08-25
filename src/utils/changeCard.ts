@@ -157,3 +157,38 @@ export async function locateAnchorLine(
   }
   return undefined;
 }
+
+/**
+ * 变更卡行号偏移用：算 Edit/NotebookEdit 片段在当前文件中的 1-based 起始行号，
+ * 供 DiffViewer 的 lineNumbers({ firstLineNumber }) 显示真实行号。
+ *
+ * 搜的是 **new_string**（不是 old_string）：Edit 把 old_string 替换成 new_string，
+ * 执行后文件里是 new_string、old_string 已不在——搜 old 必失败。new_string 与
+ * old_string 同位置替换，起始行相同，故 new_string 起始行 = 真实改动起始行。
+ * 与「打开↗」的 locateAnchorLine 同源（它也搜 new_string）。
+ * - Write / 纯插入（newText 空 / status=added）：返回 undefined → 行号从 1（新文件语义）。
+ * - new_string 被后续改动覆盖 / 读失败：返回 undefined → 退化从 1（不假装准）。
+ *
+ * readFileContent 不归一化 \r\n（decode_text_bytes 仅解码字节，见 filesystem.rs:243），
+ * 故这里统一 \r\n → \n 再匹配——行数不变，行号仍准确。
+ */
+export async function locateEditStartLine(
+  path: string,
+  newText: string,
+  status: DiffPair["status"],
+): Promise<number | undefined> {
+  if (status === "added" || !newText) return undefined;
+  try {
+    const raw = await api.readFileContent(path);
+    const text = raw.replace(/\r\n/g, "\n");
+    const needle = newText.replace(/\r\n/g, "\n");
+    const idx = text.indexOf(needle);
+    if (idx === -1) return undefined;
+    let line = 1;
+    for (let i = 0; i < idx; i++) if (text.charCodeAt(i) === 10) line++;
+    return line;
+  } catch {
+    // 读失败退化从 1：变更卡是历史记录，行号偏移降级不应阻塞 UI（语义见 JSDoc）
+    return undefined;
+  }
+}

@@ -24,30 +24,30 @@ function basenameOf(p: string): string {
 export function useFileResolver() {
   const viewer = useFileViewer();
 
-  function doOpen(path: string, line?: number) {
+  function doOpen(path: string, line?: number, flashCount?: number) {
     if (shouldOpenExternally(path)) {
       void api.fileOpen(path).catch((e) => {
         console.warn(`[file-resolver] failed to open externally: ${path}`, e);
       });
       return;
     }
-    if (line !== undefined) void viewer.openAndScrollTo(path, line);
+    if (line !== undefined) void viewer.openAndScrollTo(path, line, flashCount);
     else void viewer.open(path);
   }
 
-  async function openResolved(rawPath: string, workspacePath: string | undefined, line?: number) {
+  async function openResolved(rawPath: string, workspacePath: string | undefined, line?: number, flashCount?: number) {
     const full = resolveFileLinkPath(rawPath, workspacePath);
 
     // 纯网页 URL 不需要 fs 探测/工作区搜索，直接交给系统默认浏览器。
     if (shouldOpenExternally(full) && /^https?:\/\//i.test(full)) {
-      doOpen(full, line);
+      doOpen(full, line, flashCount);
       return;
     }
 
     // 1. 直接命中 → 原有行为
     try {
       if (await api.fileExists(full)) {
-        doOpen(full, line);
+        doOpen(full, line, flashCount);
         return;
       }
     } catch {
@@ -56,7 +56,7 @@ export function useFileResolver() {
 
     // 2. 不存在 → 工作区内按名搜索（无工作区根可搜时退回原路径）
     if (!workspacePath) {
-      doOpen(full, line);
+      doOpen(full, line, flashCount);
       return;
     }
     resolving.value = true;
@@ -70,9 +70,9 @@ export function useFileResolver() {
     resolving.value = false;
 
     if (matches.length === 0) {
-      doOpen(full, line); // 交给 FileViewer 显示"文件不存在"
+      doOpen(full, line, flashCount); // 交给 FileViewer 显示"文件不存在"
     } else if (matches.length === 1) {
-      doOpen(matches[0], line);
+      doOpen(matches[0], line, flashCount);
     } else {
       pendingLine.value = line;
       candidates.value = matches;

@@ -20,6 +20,7 @@ import { cmLsp } from "../extensions/cmLsp";
 import { cmDefinitionPrefetch } from "../extensions/cmDefinitionPrefetch";
 import { cmIndent } from "../extensions/cmIndent";
 import { cmImplGutter, type GutterGotoPayload } from "../extensions/cmImplGutter";
+import { cmFlash, flashEffect } from "../extensions/cmFlash";
 import { useLsp } from "../composables/useLsp";
 import { parentSyncAnnotation, isUserEdit } from "../utils/cmModelSync";
 
@@ -86,6 +87,10 @@ async function createEditor() {
   readyPromise = new Promise<void>(r => { resolveReady = r; });
 
   // Destroy existing instance
+  if (flashTimer) {
+    clearTimeout(flashTimer);
+    flashTimer = null;
+  }
   if (view) {
     unregisterVimExCommands(view); // 全局注册表按 view 路由：旧 view 解绑
     view.destroy();
@@ -388,6 +393,8 @@ async function createEditor() {
           borderLeftColor: "var(--aide-danger) !important",
         },
       }, { dark: true }),
+      // 跳转定位后的「闪一下渐隐」行高亮（FileWindow 定位行后调 flashLine 触发）
+      cmFlash(),
     ],
     parent: mountEl.value,
   });
@@ -597,11 +604,25 @@ function scrollToLine(line: number, opts?: { cursor?: boolean; viewportY?: numbe
   }
 }
 
+let flashTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 跳转定位后「闪一下渐隐」高亮：给 line..line+count-1 行挂渐隐装饰，~1.5s 后清。
+ *  timer 随重建/卸载清（见 createEditor / onUnmounted），避免回调 dispatch 到已销毁视图。 */
+function flashLine(line: number, count = 1) {
+  if (!view) return;
+  view.dispatch({ effects: flashEffect.of({ line, count, add: true }) });
+  if (flashTimer) clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => {
+    flashTimer = null;
+    if (view) view.dispatch({ effects: flashEffect.of({ line, count, add: false }) });
+  }, 1500);
+}
+
 function waitReady(): Promise<void> {
   return readyPromise;
 }
 
-defineExpose({ scrollToLine, waitReady });
+defineExpose({ scrollToLine, flashLine, waitReady });
 
 onMounted(() => {
   createEditor();
@@ -609,6 +630,10 @@ onMounted(() => {
 
 onUnmounted(() => {
   clearVimKeyMaps(); // vim-core 全局映射随编辑器卸载清掉，避免残留到其他编辑器
+  if (flashTimer) {
+    clearTimeout(flashTimer);
+    flashTimer = null;
+  }
   if (view) {
     unregisterVimExCommands(view);
     view.destroy();

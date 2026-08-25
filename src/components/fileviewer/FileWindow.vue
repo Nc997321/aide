@@ -220,8 +220,13 @@ watch(
     // null（聊天文件链接等）走默认，行贴近视口顶部。
     const viewportY = props.win.scrollViewportY;
     codeEditorRef.value?.scrollToLine(line, { viewportY: viewportY ?? undefined });
+    // 定位后「闪一下渐隐」高亮目标块——所有 scrollToLine 定位都在此统一触发
+    // （封装一处，不散落到各定位调用点）。flashCount 为整块行数（变更卡 new_string），
+    // 默认 1 行（跳转定义/聊天链接）。只读 pre 视图不挂 CodeEditor，editorActive=false 不进此分支。
+    codeEditorRef.value?.flashLine(line, props.win.flashCount ?? 1);
     props.win.scrollToLine = null;
     props.win.scrollViewportY = null;
+    props.win.flashCount = null;
   },
   { immediate: true },
 );
