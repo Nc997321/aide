@@ -6,6 +6,8 @@ export interface MenuItem {
   separator?: boolean;
   disabled?: boolean;
   danger?: boolean;
+  /** 警示色（黄）菜单项，与行内警示图标同色——用于「信任此工作区」这类状态纠正入口 */
+  warning?: boolean;
   /** Icon glyph (single character or emoji) shown before the label */
   icon?: string;
   /** Keyboard shortcut hint shown right-aligned */

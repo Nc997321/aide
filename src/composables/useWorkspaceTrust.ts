@@ -25,7 +25,7 @@ export function useWorkspaceTrust() {
     }
   }
 
-  /** 批量刷新一组路径的信任态，更新 untrustedPaths（供侧栏渲染活动+展开工作区徽标）。 */
+  /** 批量刷新一组路径的信任态，更新 untrustedPaths（供侧栏渲染工作区碎盾图标/⋯ 菜单信任入口）。 */
   async function refreshFor(paths: string[]): Promise<void> {
     const next = new Set<string>();
     await Promise.all(

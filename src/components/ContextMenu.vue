@@ -83,7 +83,7 @@ onUnmounted(() => {
           <div
             v-else
             class="ctx-item"
-            :class="{ disabled: item.disabled, danger: item.danger }"
+            :class="{ disabled: item.disabled, danger: item.danger, warning: item.warning }"
             @click="onItemClick(item)"
           >
             <span v-if="item.icon" class="ctx-icon">{{ item.icon }}</span>
@@ -133,6 +133,15 @@ onUnmounted(() => {
 
 .ctx-item.danger:hover:not(.disabled) {
   background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
+}
+
+/* 警示项（黄）：与行内碎盾/警告三角图标同一个 --aide-warning，用于状态纠正入口 */
+.ctx-item.warning {
+  color: var(--aide-warning);
+}
+
+.ctx-item.warning:hover:not(.disabled) {
+  background: color-mix(in srgb, var(--aide-warning) 12%, transparent);
 }
 
 .ctx-item.disabled {

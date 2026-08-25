@@ -113,6 +113,9 @@ const emit = defineEmits<{
   margin-left: auto;
   display: flex;
   align-items: center;
+  /* 无计数时（0 会话/0 任务）槽位没有流内内容会塌成 0×0，absolute 的 ⋯
+     只剩半颗悬在行外、hover 底色与 tooltip 锚点全无；地板与 .sec-count 对齐 */
+  min-width: 26px;
 }
 .sec-count {
   min-width: 26px;
@@ -128,7 +131,14 @@ const emit = defineEmits<{
 }
 .sec-dots {
   position: absolute;
-  inset: 0;
+  /* 垂直方向不能依赖槽位高度：无计数时槽位 0 高，inset:0 会把按钮压成
+     0 高、网格轨道从槽位顶边起排，图标整体偏下半颗身位；
+     横向铺满槽位 + 固定高度 + 中线变换，槽位有无内容都锁定行中线 */
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 22px;
+  transform: translateY(-50%);
   display: grid;
   place-items: center;
   border: none;

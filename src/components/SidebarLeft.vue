@@ -63,7 +63,7 @@ const totalSessionCount = computed(() =>
 
 // ── 工作区信任提示（Variant A 居中模态）── trustPrompt 非 null 时显示。
 // 不信任工作区首次激活时弹一次（maybePromptTrust），「暂不」后本会话不再弹；
-// 工作区行的「不受信任」徽标点击可重开（openTrustPrompt = 回收路径）。
+// 工作区行 ⋯ 菜单的「信任此工作区」项可重开（openTrustPrompt = 回收路径）。
 const trustPrompt = ref<{ path: string; name: string } | null>(null);
 
 /** 检查信任态：不信任且本会话未弹过 → 弹模态。幂等（markPrompted 去重）。 */
@@ -402,6 +402,8 @@ function onWorkspaceContextMenu(e: MouseEvent, ws: WorkspaceInfo) {
       ws,
       () => activateWorkspace(ws),
       () => emit("remove-workspace", ws),
+      // 不受信任工作区：行内不再放「不受信任」文字徽标，信任入口收进此菜单
+      !ws.missing && untrustedPaths.value.has(ws.name) ? () => openTrustPrompt(ws) : undefined,
     ),
   );
 }
@@ -503,7 +505,6 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
             active: ws.key === activeWorkspace,
             expanded: expandedWorkspaces.has(ws.key),
             missing: ws.missing,
-            untrusted: !ws.missing && untrustedPaths.has(ws.name),
           }"
           v-tooltip="ws.missing ? `路径不存在，目录可能已被移动或删除：${ws.key}` : ''"
           @click="ws.missing ? undefined : switchWorkspace(ws)"
@@ -516,19 +517,18 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
             <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
             <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
           </svg>
-          <svg v-if="!ws.missing" class="ws-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <!-- 不受信任工作区：碎盾图标替代层叠图标（恒警示色），信任入口收进行尾 ⋯ 菜单 -->
+          <svg v-if="!ws.missing && untrustedPaths.has(ws.name)" class="ws-icon ws-shield-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+            v-tooltip="'工作区不受信任，⋯ 菜单可信任'">
+            <path d="M12 3L19 5.8V11c0 4.2-2.8 7.1-7 8.5C7.8 18.1 5 15.2 5 11V5.8L12 3Z"/>
+            <path d="M12 6.8L10.5 9.6L13.2 11.5L11.2 14.6"/>
+          </svg>
+          <svg v-else-if="!ws.missing" class="ws-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 3L21.5 7.8L12 12.6L2.5 7.8L12 3Z"/>
             <path d="M2.5 12.3L12 17.1L21.5 12.3"/>
             <path d="M2.5 16.8L12 21.6L21.5 16.8"/>
           </svg>
-          <span class="ws-name">{{ workspaceLabel(ws) }}</span>
-          <span v-if="ws.missing" class="ws-missing-badge">失效</span>
-          <span
-            v-if="!ws.missing && untrustedPaths.has(ws.name)"
-            class="ws-trust-badge"
-            v-tooltip="'工作区不受信任，点击信任'"
-            @click.stop="openTrustPrompt(ws)"
-          >不受信任</span>
+          <span class="ws-name" v-tooltip="ws.missing ? '' : workspaceLabel(ws)">{{ workspaceLabel(ws) }}</span>
           <!-- 右槽位：计数 ⇄ ⋯（hover 互换）；⋯ 与右键同一份 workspaceMenuItems -->
           <span class="ws-slot" @click.stop>
             <span v-if="!ws.missing && (sessionsByWorkspace[ws.key] ?? []).length > 0" class="ws-count">{{ (sessionsByWorkspace[ws.key] ?? []).length }}</span>
@@ -773,6 +773,8 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+  /* flex 项下限兜底：缺了它名字长时不收缩，会把行尾 ⋯ 槽位顶出行外（.session-name 同款） */
+  min-width: 0;
 }
 
 /* ── 行右槽位（工作区/会话行共用）：元信息 ⇄ ⋯，hover 整行互换。
@@ -799,9 +801,23 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   transition: opacity 0.12s;
 }
 
+/* 无计数的工作区行（未展开/0 会话/失效）：槽位没有流内内容会塌成 0×0，
+   absolute 的 ⋯ 只剩半颗悬在行外、hover 底色与 tooltip 锚点全无；
+   给 26px 地板（= 计数徽标 min-width），⋯ 列跨行对齐、命中区域恒定。 */
+.ws-slot {
+  min-width: 26px;
+}
+
 .row-dots {
   position: absolute;
-  inset: 0;
+  /* 垂直方向不能依赖槽位高度：无计数时槽位 0 高，inset:0 会把按钮压成
+     0 高、网格轨道从槽位顶边起排，图标整体偏下半颗身位；
+     横向铺满槽位 + 固定高度 + 中线变换，槽位有无内容都锁定行中线 */
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 22px;
+  transform: translateY(-50%);
   display: grid;
   place-items: center;
   border: none;
@@ -842,19 +858,6 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 .ws-warn-icon {
   flex-shrink: 0;
   color: var(--aide-warning);
-}
-
-.ws-missing-badge {
-  font-size: 9px;
-  font-weight: 600;
-  color: var(--aide-warning);
-  background: color-mix(in srgb, var(--aide-warning) 15%, transparent);
-  border: 1px solid color-mix(in srgb, var(--aide-warning) 30%, transparent);
-  padding: 0 5px;
-  border-radius: 6px;
-  line-height: 1.6;
-  flex-shrink: 0;
-  letter-spacing: 0.3px;
 }
 
 /* ── Session card 公共布局（两档皮肤共享：间距/圆角骨架/流光/动画）──
@@ -1211,24 +1214,10 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   transform: none;
 }
 
-/* ── 工作区信任徽标 ── */
-.ws-trust-badge {
-  font-size: 9.5px;
-  font-weight: 600;
-  color: var(--aide-warning);
-  background: color-mix(in srgb, var(--aide-warning) 15%, transparent);
-  border: 1px solid color-mix(in srgb, var(--aide-warning) 32%, transparent);
-  padding: 1.5px 6px;
-  border-radius: var(--aide-radius-sm);
-  letter-spacing: 0.3px;
-  flex: 0 0 auto;
-  cursor: pointer;
-  transition: background var(--aide-ease-t);
-}
-.ws-trust-badge:hover {
-  background: color-mix(in srgb, var(--aide-warning) 24%, transparent);
-}
-.workspace-item.untrusted:not(.active):not(.expanded) .ws-icon {
+/* ── 工作区信任状态图标 ── */
+/* 碎盾（不受信任）恒为警示色：与 .workspace-item.active/.expanded .ws-icon
+   的 accent 规则同优先级（0,3,0），本条位置靠后胜出 */
+.workspace-item .ws-icon.ws-shield-icon {
   color: var(--aide-warning);
 }
 
