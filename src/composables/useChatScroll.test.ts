@@ -154,6 +154,67 @@ describe("useChatScroll", () => {
     expect(ramping.value).toBe(false);
   });
 
+  it("ramp 期间用户上滚（onScroll 上滚分支）：接管——ramp 停、autoScroll 释放、全量挂载", () => {
+    const list = ref(makeMessages(100));
+    const sid = ref<string | null>("s1");
+    const { schedule } = manualScheduler();
+    const { scrollEl, visibleMessages, ramping, onScroll } = useChatScroll(
+      () => list.value,
+      () => sid.value,
+      { scheduleFrame: schedule },
+    );
+    expect(ramping.value).toBe(true); // immediate watcher 已起 ramp（tick 在队未 flush）
+    // 基线：第一次 onScroll 只建立 prevScrollTop（-1 初值不判上滚）
+    scrollEl.value = fakeScrollEl({ scrollTop: 900, scrollHeight: 1817, clientHeight: 817 });
+    onScroll();
+    expect(ramping.value).toBe(true);
+    // 用户上滚 900→700：接管——ramp 停、数据全量挂载（防中间段缺失）
+    scrollEl.value = fakeScrollEl({ scrollTop: 700, scrollHeight: 1817, clientHeight: 817 });
+    onScroll();
+    expect(ramping.value).toBe(false);
+    expect(visibleMessages.value.length).toBe(100);
+  });
+
+  it("切走再切回：恢复离开时的滚动位置（不钉底、全量挂载）", async () => {
+    const list = ref(makeMessages(100));
+    const sid = ref<string | null>("s1");
+    const { schedule, flush } = manualScheduler();
+    const { scrollEl, visibleMessages, ramping } = useChatScroll(
+      () => list.value,
+      () => sid.value,
+      { scheduleFrame: schedule },
+    );
+    // s1 滚动到中间位置（用户离开现场）
+    scrollEl.value = fakeScrollEl({ scrollTop: 500, scrollHeight: 1817, clientHeight: 817 });
+    // 切走（真实用户操作有间隔，watch 分两批触发）：记录 s1=500
+    sid.value = "s2";
+    await nextTick();
+    // 切回：恢复分支（全量挂载 + 一帧后 scrollTop 回 500）
+    sid.value = "s1";
+    await nextTick();
+    flush(); // 执行 restore 帧
+    expect(scrollEl.value!.scrollTop).toBe(500); // 恢复离开时的位置，而不是被拖回底部
+    expect(visibleMessages.value.length).toBe(100); // 全量挂载（不 ramp 不 pin）
+    expect(ramping.value).toBe(false);
+  });
+
+  it("首次打开（无位置记忆）：保持钉底 + ramp 原行为", () => {
+    const list = ref(makeMessages(100));
+    const sid = ref<string | null>("s1");
+    const { schedule, flush } = manualScheduler();
+    const { scrollEl, visibleMessages, ramping } = useChatScroll(
+      () => list.value,
+      () => sid.value,
+      { scheduleFrame: schedule },
+    );
+    // 无记忆：autoScroll=true 钉底 + ramp 启动（tick 在队未 flush）
+    scrollEl.value = fakeScrollEl({ scrollTop: 0, scrollHeight: 1817, clientHeight: 817 });
+    expect(ramping.value).toBe(true);
+    flush(); // ramp 跑完 → 全量
+    expect(visibleMessages.value.length).toBe(100);
+    expect(ramping.value).toBe(false);
+  });
+
   it("ramp 期间用户上滚 expandOlderAnchored：取消 ramp（ramping 收尾 false）", async () => {
     const list = ref(makeMessages(100));
     const sid = ref<string | null>("s1");

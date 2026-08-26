@@ -516,14 +516,69 @@ fn read_page_backwards(
         let (messages, page_start, used_bytes) = trim_to_bytes(&parsed, &lines, limit_bytes);
         if used_bytes >= limit_bytes as usize || cursor == 0 {
             let next_offset = starts.get(page_start).copied().unwrap_or(0);
+            // 尾部探测：下一页区域较小（≤1MB，接近文件头）且无可解析消息时直接归零——
+            // 否则前端「上方还有更早消息」按钮在空区域前悬空（点击/上滚后才发现
+            // 没有内容，2026-08-26 用户实锤「误报」：文件头多为 queue-operation /
+            // 图片消息等不可渲染行，如 ed6377db 尾页 next=278 区域全空）。
+            let next_offset = if next_offset > 0 && next_offset <= CHUNK_SIZE
+                && !region_has_parseable_messages(file, next_offset)?
+            {
+                0
+            } else {
+                next_offset
+            };
             return Ok(LoadMessagesResult { messages, next_offset_bytes: next_offset });
         }
     }
 }
 
+/// `[0, end)` 区域是否存在「能解析成历史消息」的行（轻量判定，与
+/// `parse_transcript_lines_with_starts` 的产出规则一致：type=user/assistant、
+/// 非 synthetic、content 含 text/thinking/非子代理 tool_use 块）。供
+/// `read_page_backwards` 尾部探测——空区域直接归零游标，前端「还有更早」入口
+/// 不悬空。仅当 `end` 较小（文件头附近）时调用，成本 ≤1 次 1MB 读 + 逐行判定。
+fn region_has_parseable_messages(file: &fs::File, end: u64) -> Result<bool, String> {
+    if end == 0 {
+        return Ok(false);
+    }
+    let mut f = file;
+    f.seek(SeekFrom::Start(0)).map_err(|e| format!("Failed to seek: {}", e))?;
+    let mut buf = vec![0u8; end as usize];
+    f.read_exact(&mut buf).map_err(|e| format!("Failed to read region: {}", e))?;
+    for line in split_lines(&buf, 0).0 {
+        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+        let msg_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if msg_type == "user" && is_synthetic_user_entry(&v) {
+            continue;
+        }
+        let Some(content) = v.get("message").and_then(|m| m.get("content")) else {
+            continue;
+        };
+        let has_block = match content {
+            Value::String(s) => !s.is_empty(),
+            Value::Array(blocks) => blocks.iter().any(|b| match b.get("type").and_then(|t| t.as_str()) {
+                Some("text") | Some("thinking") => true,
+                Some("tool_use") => {
+                    let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    !SUBAGENT_TOOL_NAMES.contains(&name)
+                }
+                _ => false,
+            }),
+            _ => false,
+        };
+        if has_block {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// 分页回读块大小（1MB）：read_chunk_backwards 单块；read_page_backwards 用它
+/// 限定「尾部探测」范围（≤1MB 的 next_offset 才探测，更远必然还有内容）。
+const CHUNK_SIZE: u64 = 1024 * 1024;
+
 /// 从 `cursor` 往回读一块（1MB），返回 (字节, 块起始位置)。cursor=0 时调用方不调。
 fn read_chunk_backwards(file: &fs::File, cursor: u64) -> Result<(Vec<u8>, u64), String> {
-    const CHUNK_SIZE: u64 = 1024 * 1024;
     let start = cursor.saturating_sub(CHUNK_SIZE);
     let len = (cursor - start) as usize;
     let mut buf = vec![0u8; len];
@@ -2221,6 +2276,71 @@ mod tests {
             assert!(load_session_changes_blocking(id.clone()).is_err());
 
             let _ = std::fs::remove_file(&path);
+        }
+
+        // ── 尾部探测（region_has_parseable_messages）──
+
+        fn queue_op_line() -> String {
+            serde_json::json!({ "type": "queue-operation", "operation": "enqueue", "timestamp": "2026-08-25T00:00:00Z" }).to_string()
+        }
+
+        fn image_only_user_line() -> String {
+            serde_json::json!({ "type": "user", "message": { "content": [{ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "AAAA" } }] } }).to_string()
+        }
+
+        #[test]
+        fn region_has_parseable_messages_detects_real_message() {
+            // 真实 user 文本行 → true
+            let p = temp_jsonl("regreal", &standard_lines().join("\n"));
+            let file = fs::File::open(&p).unwrap();
+            let file_len = file.metadata().unwrap().len();
+            assert!(region_has_parseable_messages(&file, file_len).unwrap());
+        }
+
+        #[test]
+        fn region_has_parseable_messages_empty_head_region() {
+            // 头部只有 queue-operation + 图片 user 行（不可渲染）→ false
+            let content = queue_op_line() + "\n" + &queue_op_line() + "\n" + &image_only_user_line() + "\n";
+            let p = temp_jsonl("emptyhead", &content);
+            let file = fs::File::open(&p).unwrap();
+            assert!(!region_has_parseable_messages(&file, content.len() as u64).unwrap());
+        }
+
+        #[test]
+        fn region_has_parseable_messages_synthetic_user_skipped() {
+            // isMeta 合成 user 行不算（parse 时会过滤，探测必须同口径）
+            let content = serde_json::json!({ "type": "user", "isMeta": true, "message": { "content": "skill 注入" } }).to_string() + "\n";
+            let p = temp_jsonl("synthetic", &content);
+            let file = fs::File::open(&p).unwrap();
+            assert!(!region_has_parseable_messages(&file, content.len() as u64).unwrap());
+        }
+
+        #[test]
+        fn tail_probe_zeroes_next_offset_when_head_region_empty() {
+            // 文件 = 头部空区（queue + 图片）+ 尾部真实消息（"你好"）：尾部页的
+            // next 指向头部空区起点 → 探测发现无可解析消息 → next 归 0（按钮不悬空）。
+            let mut lines = vec![queue_op_line(), image_only_user_line()];
+            lines.push(line(serde_json::json!({ "type": "user", "message": { "content": "你好" } })));
+            lines.push(line(serde_json::json!({ "type": "assistant", "message": { "content": "你好" } })));
+            let p = temp_jsonl("emptyheadpage", &(lines.join("\n") + "\n"));
+            // 预算 = 尾部 2 条消息字节和 → 尾部页 = 2 条 → next 指向头部区起点
+            let page = page_from_file(&p, None, budget_tail_lines(&lines, 2));
+            assert_eq!(page.messages.len(), 2);
+            assert_eq!(page.next_offset_bytes, 0, "头部空区：next 必须归 0，按钮不悬空");
+            let _ = std::fs::remove_file(&p);
+        }
+
+        #[test]
+        fn tail_probe_keeps_offset_when_head_has_more_messages() {
+            // 头部有真实消息：探测保留 next（下一页确实还有内容）
+            let mut lines = standard_lines();
+            lines.push(line(serde_json::json!({ "type": "user", "message": { "content": "最后一轮" } })));
+            lines.push(line(serde_json::json!({ "type": "assistant", "message": { "content": "嗯" } })));
+            let p = temp_jsonl("headreal", &(lines.join("\n") + "\n"));
+            let page = page_from_file(&p, None, budget_tail_lines(&lines, 2));
+            assert_eq!(page.messages.len(), 2);
+            assert!(page.next_offset_bytes > 0, "头部还有真实消息：next 保留");
+            let _ = std::fs::remove_file(&p);
         }
     }
 }

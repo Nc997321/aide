@@ -251,11 +251,17 @@ const { setSessionState, setSessionHealth, removeSessionState, armStalled } = us
 export { setSessionState, setSessionHealth, armStalled };
 
 /** 取会话 store（不存在则现场建一个空 store）。事件流/组件同步读共用——空 store
- *  重建是「首次打开」的常态路径（不标记 disposed 的会话）。 */
+ *  重建是「首次打开」的常态路径（组件标记 disposed 的会话）。
+ *
+ *  ⚠️ 必须返回**响应式 proxy**：`stores` 是 `reactive({})`，`stores[sid] = store`
+ *  只把深转换后的 proxy 存进表里，局部变量 `store` 仍是原始对象——直接返回它
+ *  会让「首次创建的 store」由调用方以原始引用写入（hydrate 的 unshift 等），
+ *  不触发任何响应式通知，UI 永不更新（2026-08-26 实锤：首开会话空白、
+ *  切走再切回有数据）。创建后一律以 `reactive(store)` 包装再入库、返回。 */
 export function getStore(sid: string): SessionStore {
   let store = stores[sid];
   if (!store) {
-    store = {
+    store = reactive({
       messages: [],
       isBusy: false,
       pendingPermissions: [],
@@ -276,7 +282,7 @@ export function getStore(sid: string): SessionStore {
       slashCommands: null,
       pendingJumps: [],
       rollbackText: "",
-    };
+    });
     stores[sid] = store;
   }
   return store;

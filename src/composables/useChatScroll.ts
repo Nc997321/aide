@@ -96,6 +96,10 @@ export function useChatScroll(
   // ── 首帧渲染预算（唯一一层窗口化：防切会话一次性挂载 jam）──────────────
   // 数据层不窗口化（已加载全部渲染）；这里只控制「首帧挂多少」再逐帧补到全量。
   const mountedCount = ref(rampInitial);
+  /** 会话滚动位置记忆（sid → scrollTop）：切走记录、切回恢复。切回钉底只用于
+   *  首次打开（无记忆）；组件级 Map——会话切换组件常驻，位置随会话保留，
+   *  组件重建（关 tab 重开）后自然为空，回落首帧钉底行为。 */
+  const scrollPositions = new Map<string, number>();
   /** 进 v-for 的实际列表：messages 尾部 mountedCount 条（首帧 ramp 渐进，之后全量）。 */
   const visibleMessages: ComputedRef<readonly ChatMessage[]> = computed(() => {
     const list = messages();
@@ -114,6 +118,17 @@ export function useChatScroll(
       rafHandle = null;
     }
     ramping.value = false;
+  }
+
+  /** 用户滚动接管：ramp 即停、已加载数据全量挂载（防中间段缺失）、脱离自动跟随。
+   *  滚轮接管（onWheel）与原生上滚（onScroll 上滚分支）共用。根因：ramp 每帧
+   *  pin 到底 + pin 的 scroll 回波把 autoScroll 刷回 true，用户的滚轮增量被逐帧
+   *  吞掉——切回会话（autoScroll=true + startRamp）后滚轮一直钉在底部，live 会话
+   *  （target 持续增长）ramp 永不结束则永远钉底（2026-08-26 用户实锤）。 */
+  function userTookScroll() {
+    cancelRamp();
+    autoScroll.value = false;
+    mountedCount.value = Math.max(mountedCount.value, messages().length);
   }
 
   function startRamp() {
@@ -218,12 +233,14 @@ export function useChatScroll(
     const nearest = nearestScrollableAncestor(e.target);
     if (nearest === el) {
       e.preventDefault();
+      userTookScroll();
       el.scrollTop += e.deltaY;
       trail("wheelTakeover", `dy=${Math.round(e.deltaY)}→top=${Math.round(el.scrollTop)}`);
       return;
     }
     if (nearest && atScrollEdge(nearest, e.deltaY)) {
       e.preventDefault();
+      userTookScroll();
       el.scrollTop += e.deltaY;
       trail("wheelTakeover", `chained dy=${Math.round(e.deltaY)}→top=${Math.round(el.scrollTop)}`);
     }
@@ -248,10 +265,13 @@ export function useChatScroll(
       `top=${Math.round(el.scrollTop)} sh=${el.scrollHeight} ch=${el.clientHeight} auto=${autoScroll.value ? 1 : 0}`,
     );
     if (prev >= 0 && el.scrollTop < prev - 1) {
-      // 向上滚动：按实时离底距离重判跟随态
+      // 向上滚动：用户接管（ramp 停 + 数据全量 + 脱离跟随），再按实时离底距离重判跟随态
+      userTookScroll();
       autoScroll.value = dist < 48;
-    } else if (dist < 48) {
-      // 到达/停在底部：恢复跟随（下滚到底、jump 落定、钳位回底都走这里）
+    } else if (prev >= 0 && dist < 48) {
+      // 到达/停在底部：恢复跟随（下滚到底、jump 落定、钳位回底都走这里）。
+      // prev >= 0 挡掉切会话后首个残留 scroll 事件（基线未建立时的旧位置回波）——
+      // 它会把恢复分支刚置 false 的 autoScroll 误刷回 true，位置随即被 toBottom 拉走。
       autoScroll.value = true;
     }
     farFromBottom.value = dist > JUMP_SHOW_THRESHOLD;
@@ -352,21 +372,50 @@ export function useChatScroll(
   // 切会话：取消旧 ramp、复位滚动态、按需 ramp。immediate——首次打开也走分帧。
   watch(
     sessionId,
-    (newId) => {
+    (newId, oldId) => {
       trail("session", newId ?? "null"); // 切会话标记：定格「自愈」的分界线
+      // 离开的会话：记录当前位置（watch 在渲染前执行，scrollEl 还是旧 DOM，读数准确）。
+      // 切回时恢复——否则每次切回都被强制钉底（2026-08-26 用户实锤「一下从切换
+      // 前的位置被拖回底部」）。
+      if (oldId && scrollEl.value) scrollPositions.set(oldId, scrollEl.value.scrollTop);
       cancelRamp();
       rampPending = false;
       topPending = false; // 旧会话的「顶部待续」不带进新会话
-      autoScroll.value = true;
       // 方向判定基线一并重置：旧会话残留的大 scrollTop 会把新会话首个
-      // scroll 事件误读成「上滚」而脱扣
+      // scroll 事件误判成「上跳」而脱扣
       prevScrollTop = -1;
       farFromBottom.value = false;
       newWhileAway.value = false;
-      scrollToBottom();
       if (!newId) return; // hero（零会话）：不 ramp
-      if (messages().length > 0) startRamp();
-      else rampPending = true; // 未 hydrate：等 messages 到齐
+      const saved = scrollPositions.get(newId);
+      if (saved === undefined) {
+        // 首次打开（无位置记忆）：钉底看最新 + 分帧挂载
+        autoScroll.value = true;
+        scrollToBottom();
+        if (messages().length > 0) startRamp();
+        else rampPending = true; // 未 hydrate：等 messages 到齐
+        return;
+      }
+      // 切回已有记忆：全量挂载（ramp 逐帧 pin 底会破坏位置）+ 恢复离开时的滚动位置。
+      // 双帧恢复：第一帧设 scrollTop（内容可能尚未渲染完，scrollHeight 未就绪时会被
+      // clamp/误判）；第二帧（内容渲染完成、布局就绪）重新校准位置，恢复点在底部
+      // 附近（≤48px）才重新进入跟随——否则残留 scroll 事件把 autoScroll 误刷成 true
+      // 后，随后的 toBottom 会把位置拉回底部（2026-08-26 trail 实锤
+      // `restore 1437 → scroll auto=1 → toBottom 2854`）。
+      autoScroll.value = false;
+      mountedCount.value = Math.max(mountedCount.value, messages().length);
+      scheduleFrame(() => {
+        const el = scrollEl.value;
+        if (!el) return;
+        el.scrollTop = saved;
+        scheduleFrame(() => {
+          const el2 = scrollEl.value;
+          if (!el2) return;
+          el2.scrollTop = saved;
+          trail("write", `restore ${saved}`);
+          if (el2.scrollHeight - el2.scrollTop - el2.clientHeight < 48) autoScroll.value = true;
+        });
+      });
     },
     { immediate: true },
   );
