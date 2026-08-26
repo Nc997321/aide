@@ -25,7 +25,12 @@ import type { ProviderConfig } from "@/types";
 import { setChatPaneRect } from "@/composables/useChatPaneWidth";
 import { useBtwSession } from "@/composables/useBtwSession";
 import { useSessionIdentity, buildConfirmDecision, type ConfirmDecision } from "@/composables/sessionIdentity";
-import { isPendingSession, toggleBgDock } from "@/composables/useChatSession";
+import {
+  isPendingSession,
+  toggleBgDock,
+  loadOlderPage,
+  hasMoreOlder,
+} from "@/composables/useChatSession";
 import { useToast } from "@/composables/useToast";
 import { effortLabel } from "@/utils/effort";
 
@@ -438,22 +443,30 @@ watch(() => props.isBusy, (busy) => {
 watch(contextCompactionVal, syncActivityTimer);
 onUnmounted(() => { if (activityTimer) clearInterval(activityTimer); });
 
-// 滚动 / 窗口化 / 分帧挂载全部收拢到 useChatScroll：数据窗口（useMessageWindow
-// 尾部 30 条）之上叠一层渲染预算 mountedCount，切会话先挂尾部 6 条、每帧 rAF 加
-// 几条到 30，帧间让出主线程给输入框流光绘制——长会话切回不再整窗未响应。
-// 见 composables/useChatScroll.ts。
+// 滚动 / 加载历史全部收拢到 useChatScroll（微信式）：上滚到顶部触发带自动取更早页
+// （数据 = 已加载量，翻多少渲染多少；内存由 store 的 maybeEvict 大 block 降级兜底），
+// 切会话首帧 ramp 分帧挂载防 jam。见 composables/useChatScroll.ts。
 const {
   scrollEl,
   contentEl,
   visibleMessages,
-  hiddenCount,
   ramping,
   onScroll,
   jumpToBottom,
   farFromBottom,
   newWhileAway,
   expandOlderAnchored,
-} = useChatScroll(() => props.messages, () => props.sessionId);
+} = useChatScroll(() => props.messages, () => props.sessionId, {
+  // P1 双向分页：所有分页函数绑定当前会话（props.sessionId 变化时闭包读新值）。
+  // sessionId 为空（新会话未创建）时全链路 no-op。
+  pagination: {
+    hasMore: () => (props.sessionId ? hasMoreOlder(props.sessionId) : false),
+    loadOlder: (limit) => (props.sessionId ? loadOlderPage(props.sessionId, limit) : Promise.resolve(0)),
+  },
+});
+
+// 顶部入口按钮的「磁盘还有更早页」开关（模板里直接读，sessionId 空时 no-op）。
+const canLoadOlder = computed(() => (props.sessionId ? hasMoreOlder(props.sessionId) : false));
 
 // btw 轻量开关：BtwDrawer 与 ChatInputBox 共用（输入框经 prop 读、emit 回写）。
 const btwLightweight = ref(true);
@@ -515,11 +528,11 @@ function onOpenBgDock(taskId: string) {
            纯布局 wrapper，消息增高的任何来源都会反映为它的盒高变化 -->
       <div ref="contentEl" class="chat-messages-body">
         <button
-          v-if="hiddenCount > 0 && !ramping"
+          v-if="canLoadOlder && !ramping"
           class="chat-history-gate"
           @click="expandOlderAnchored"
         >
-          上方还有 {{ hiddenCount }} 条历史消息 · 点击或继续上滚加载
+          上方还有更早消息 · 点击或继续上滚加载
         </button>
         <ChatMessage
           v-for="msg in visibleMessages"

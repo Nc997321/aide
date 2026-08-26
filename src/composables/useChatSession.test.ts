@@ -17,10 +17,11 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-import { useChatSession, __resetForTest, stopSessionById } from "./useChatSession";
+import { useChatSession, __resetForTest, stopSessionById, disposeSession, __pendingEmptyForTest } from "./useChatSession";
 import { useSessionState } from "./useSessionState";
 import { useSessionProviders } from "./useSessionProviders";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
+import { useSessionNames } from "./useSessionNames";
 
 function emit(e: Record<string, unknown>) {
   chatEventHandler?.({ payload: e });
@@ -1139,5 +1140,244 @@ describe("useChatSession 会话自动命名", () => {
       expect.any(Error),
     );
     warnSpy.mockRestore();
+  });
+});
+
+describe("生命周期收口 disposeSession", () => {
+  beforeEach(() => {
+    __resetForTest();
+    invokeMock.mockClear();
+    invokeMock.mockResolvedValue(undefined);
+    const { state, removeSessionState } = useSessionState();
+    for (const k of Object.keys(state)) removeSessionState(k);
+    for (const k of Object.keys(useSessionNames().names)) delete useSessionNames().names[k];
+    const { workspaces } = useSessionWorkspaces();
+    for (const k of Object.keys(workspaces)) delete workspaces[k];
+  });
+
+  it("disposeSession 删 store + per-sid 字典 + 标记，拦截后续事件不复活，幂等不抛", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    emit({ type: "text_delta", delta: "回复", session_id: "uuid-a" });
+    await flush();
+    expect(chat.messages.value.length).toBeGreaterThan(0);
+    useSessionNames().setName("uuid-a", "会话A");
+    const { state } = useSessionState();
+    expect(state["uuid-a"]).toBe("running");
+
+    disposeSession("uuid-a");
+
+    // store 删 + per-sid 字典清
+    expect(state["uuid-a"]).toBeUndefined();
+    expect(useSessionNames().names["uuid-a"]).toBeUndefined();
+    expect(useSessionWorkspaces().workspaces["uuid-a"]).toBeUndefined();
+    // current computed 守卫 → messages 空
+    expect(chat.messages.value).toEqual([]);
+    // 延迟事件被 handleChatEvent 守卫拦截，不重建 store
+    emit({ type: "text_delta", delta: "延迟到达", session_id: "uuid-a" });
+    await flush();
+    expect(chat.messages.value).toEqual([]);
+    // 幂等不抛
+    expect(() => disposeSession("uuid-a")).not.toThrow();
+  });
+
+  it("dispose 后 session_dead 不复活 store、不写僵尸消息", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    disposeSession("uuid-a");
+    emit({ type: "session_dead", reason: "exit", session_id: "uuid-a" });
+    await flush();
+    expect(chat.messages.value).toEqual([]);
+    expect(useSessionState().state["uuid-a"]).toBeUndefined();
+  });
+
+  it("hydrate 解除标记：重开会话恢复事件流", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    disposeSession("uuid-a");
+    expect(chat.messages.value).toEqual([]);
+    // 重开：sid 先置空再置回，watcher→hydrate 清除销毁标记并重建 store
+    sid.value = null;
+    await flush();
+    sid.value = "uuid-a";
+    await flush();
+    // hydrate 后事件正常入 store
+    emit({ type: "text_delta", delta: "重开回复", session_id: "uuid-a" });
+    await flush();
+    const texts = chat.messages.value.flatMap((m) => m.blocks).filter((b) => b.type === "text");
+    expect(texts.some((b) => (b as { text: string }).text === "重开回复")).toBe(true);
+  });
+
+  it("pending 会话关闭：迟到 session_init 不 finalize 落盘", async () => {
+    const sid = ref<string | null>(null);
+    const chat = useChatSession(sid);
+    const created = vi.fn();
+    chat.onSessionCreated(created);
+    await flush();
+    const tempId = await chat.sendMessage("first");
+    expect(tempId).toBeTruthy();
+    // 关闭 pending 会话：清 pendingSids + 标记 disposed
+    disposeSession(tempId as string);
+    // 迟到的 session_init 被拦截，不触发 finalize（created 不被调用、不迁移到 realId）
+    emit({ type: "session_init", sdk_session_id: "sdk-real-1", session_id: tempId as string });
+    await flush();
+    expect(created).not.toHaveBeenCalled();
+    expect(useSessionWorkspaces().workspaceOf("sdk-real-1")).toBeNull();
+    expect(useSessionState().state[tempId as string]).toBeUndefined();
+  });
+
+  it("send_message 在途 reject 时已关闭会话不复活 store", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // 手动控制 send_message 的 reject 时机：其他 invoke 正常 resolve
+    let rejectSend: (e: unknown) => void = () => {};
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "send_message") {
+        return new Promise((_resolve, reject) => {
+          rejectSend = reject;
+        });
+      }
+      return undefined;
+    });
+    await chat.sendMessage("q"); // send_message 进入在途（pending，sendQueued 不 await）
+    disposeSession("uuid-a"); // 关闭会话
+    rejectSend(new Error("boom")); // 现在才 reject → .catch 守卫拦截
+    await flush();
+    await flush();
+    expect(useSessionState().state["uuid-a"]).toBeUndefined();
+    expect(chat.messages.value).toEqual([]);
+    warnSpy.mockRestore();
+  });
+
+  it("bgDock 自动撤条定时器在会话关闭后不复活 store", async () => {
+    vi.useFakeTimers();
+    try {
+      const sid = ref<string | null>("uuid-a");
+      const chat = useChatSession(sid);
+      await flush();
+      await chat.sendMessage("q");
+      // 后台任务结束 → 排 4s 自动撤条定时器
+      emit({ type: "bg_task_started", id: "bg1", command: "sleep 1", session_id: "uuid-a" });
+      emit({ type: "bg_task_ended", id: "bg1", status: "completed", summary: "done", session_id: "uuid-a" });
+      await flush();
+      disposeSession("uuid-a"); // clearBgDockAutoHide 清定时器
+      // 推进定时器：已清，回调不执行；即便执行也有 disposedSids 守卫兜底
+      vi.advanceTimersByTime(5000);
+      expect(useSessionState().state["uuid-a"]).toBeUndefined();
+      expect(chat.messages.value).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("disposeSession 后再 sendMessage 不派发、不重建 store（sendMessage 守卫）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    disposeSession("uuid-a");
+    invokeMock.mockClear();
+    await chat.sendMessage("again");
+    await flush();
+    // sendMessage 守卫 1（ensureGlobalListener 后）拦截：不调 send_message、不重建 store
+    expect(invokeMock).not.toHaveBeenCalledWith("send_message", expect.anything());
+    expect(useSessionState().state["uuid-a"]).toBeUndefined();
+    expect(chat.messages.value).toEqual([]);
+  });
+
+  it("disposeSession 后 stopSessionById 守卫：不再 invoke stop_chat_session（防误调复活）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    disposeSession("uuid-a");
+    invokeMock.mockClear();
+    await stopSessionById("uuid-a"); // 守卫拦截，不应 invoke
+    expect(invokeMock).not.toHaveBeenCalledWith("stop_chat_session", expect.anything());
+    expect(useSessionState().state["uuid-a"]).toBeUndefined();
+  });
+});
+
+describe("回填注册表（P0-2：Map O(1) 查找替代 flatMap）", () => {
+  beforeEach(() => {
+    __resetForTest();
+    invokeMock.mockClear();
+    invokeMock.mockResolvedValue(undefined);
+    const { state, removeSessionState } = useSessionState();
+    for (const k of Object.keys(state)) removeSessionState(k);
+    for (const k of Object.keys(useSessionNames().names)) delete useSessionNames().names[k];
+    const { workspaces } = useSessionWorkspaces();
+    for (const k of Object.keys(workspaces)) delete workspaces[k];
+  });
+
+  it("finalize 迁移回填注册表：tempId 注册的 tool_use 与 subagent 在 realId 下仍能回填", async () => {
+    const sid = ref<string | null>(null);
+    const chat = useChatSession(sid);
+    await flush();
+    const tempId = await chat.sendMessage("q");
+    // 模拟 race：session_init 之前收到 tool_use_start + subagent_start（注册在 tempId 下）
+    emit({ type: "tool_use_start", id: "t1", name: "Bash", input: { command: "ls" }, session_id: tempId as string });
+    emit({ type: "subagent_start", id: "a1", agentName: "general-purpose", description: "d", session_id: tempId as string });
+    await flush();
+    expect(__pendingEmptyForTest(tempId as string)).toBe(false);
+    // session_init finalize：两张注册表从 tempId 迁到 realId
+    emit({ type: "session_init", sdk_session_id: "sdk-real-x", session_id: tempId as string });
+    await flush();
+    expect(__pendingEmptyForTest(tempId as string)).toBe(true); // tempId 已迁走
+    expect(__pendingEmptyForTest("sdk-real-x")).toBe(false); // realId 接到
+    // tool_result + subagent_end 经 alias(tempId)路由到 realId，lookup 命中迁移后的条目
+    emit({ type: "tool_result", id: "t1", content: "ok", is_error: false, session_id: tempId as string });
+    emit({ type: "subagent_end", id: "a1", result: "done", is_error: false, session_id: tempId as string });
+    await flush();
+    sid.value = "sdk-real-x";
+    await flush();
+    const blocks = chat.messages.value.flatMap((m) => m.blocks);
+    const tool = blocks.find((b) => b.type === "tool_call") as { result?: string; isPending?: boolean } | undefined;
+    expect(tool?.result).toBe("ok");
+    expect(tool?.isPending).toBe(false);
+    const sa = blocks.find((b) => b.type === "subagent") as { result?: string; isPending?: boolean } | undefined;
+    expect(sa?.result).toBe("done");
+    expect(sa?.isPending).toBe(false);
+  });
+
+  it("disposeSession 清空该 sid 的回填注册表（无残留）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    emit({ type: "tool_use_start", id: "t1", name: "Bash", input: {}, session_id: "uuid-a" });
+    emit({ type: "subagent_start", id: "a1", agentName: "general-purpose", description: "d", session_id: "uuid-a" });
+    await flush();
+    expect(__pendingEmptyForTest("uuid-a")).toBe(false);
+    disposeSession("uuid-a");
+    expect(__pendingEmptyForTest("uuid-a")).toBe(true);
+  });
+
+  it("同会话多个工具调用都能回填（register 第二次走已存在的内层 Map）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    emit({ type: "tool_use_start", id: "t1", name: "Bash", input: {}, session_id: "uuid-a" });
+    emit({ type: "tool_use_start", id: "t2", name: "Read", input: {}, session_id: "uuid-a" });
+    emit({ type: "tool_result", id: "t1", content: "r1", is_error: false, session_id: "uuid-a" });
+    emit({ type: "tool_result", id: "t2", content: "r2", is_error: false, session_id: "uuid-a" });
+    await flush();
+    const tools = chat.messages.value.flatMap((m) => m.blocks).filter((b) => b.type === "tool_call") as
+      | { id: string; result?: string; isPending?: boolean }
+      | undefined;
+    const t1 = tools.find((t) => t?.id === "t1");
+    const t2 = tools.find((t) => t?.id === "t2");
+    expect(t1?.result).toBe("r1");
+    expect(t2?.result).toBe("r2");
+    expect(__pendingEmptyForTest("uuid-a")).toBe(true); // 都已注销
   });
 });

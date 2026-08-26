@@ -1,16 +1,65 @@
 import { computed, getCurrentInstance, getCurrentScope, nextTick, onMounted, onScopeDispose, onUnmounted, ref, watch } from "vue";
 import type { ComputedRef } from "vue";
-import { useMessageWindow } from "./useMessageWindow";
 import { trail } from "../utils/diagnostics/scrollTrail";
 import type { ChatMessage, TextBlock } from "@/types/chat";
 
 /**
- * 从 target 向上找第一个用户手势可滚的祖先（overflow-y: auto|scroll）。
- * 用于 wheel 接管判断：若最近可滚祖先就是对话滚动容器本身，说明滚轮该滚
- * 对话区、光标下没有需要原生滚动的嵌套块——此时接管（见 useChatScroll 的
- * onWheel），让滚轮走 JS 赋值路径（实时布局），旁路掉合成器滚轮缓存的焊死
- * 病根（见 [[nested-scroller-wheel-trap]]）。返回 null = 一路到顶无可滚祖先。
+ * 聊天滚动区主控（微信式无限滚动，2026-08-26 重构）：
+ * - 数据层：已加载消息全部渲染（messages 即 DOM），不窗口化、不回收——
+ *   内存/DOM = 用户实际翻的量，超出由 store 的 maybeEvict（大 block 降级）兜底；
+ * - 上滚到顶部触发带 → loadOlder 取更早一页 unshift 头部 + 视口补偿
+ *   （scrollTop += 高度差，看到的旧内容不跳）；
+ * - 加载在途时顶部停留 → topPending → 完成后自动续取（连翻不中断）；
+ * - 切会话首帧渲染预算（mountedCount 6 → 全量，每帧 +40）防首帧 jam。
+ *
+ * 为什么删掉窗口层：tailWindow/字节预算/页折叠/释放恢复都是「微博式滚走释放」
+ * 的复杂度——聊天要随时回滚看旧内容，微博式不适用；「按页加载」本身已经
+ * 保证打开不全量（hydrate 一页），窗口化再无必要。
  */
+
+export interface ChatScrollOptions {
+  /** 每次取回更早页的字节预算（loadOlder 的 limit）。默认 256KB。 */
+  pageBytes?: number;
+  /** 首帧渲染预算起点：切会话首帧只挂这么多条。默认 6。 */
+  rampInitial?: number;
+  /** 每帧追加条数。默认 40。 */
+  rampChunk?: number;
+  /** P1 双向分页：由上层（ChatPanel）绑定当前会话注入。缺省 = 无后端取回。 */
+  pagination?: ChatScrollPagination;
+  /** 可注入的帧调度器：返回一个 cancel 函数。默认 requestAnimationFrame；
+   * 测试传同步调度器（vitest 是 node 环境，无 rAF）。scrollToBottom 与 ramp
+   * 共用同一调度器。 */
+  scheduleFrame?: (cb: () => void) => () => void;
+}
+
+/** P1 双向分页接口（最简单形态）：上滚到顶部触发带 → loadOlder 取更早一页。
+ *  不回收、无恢复——内存由 store 的 maybeEvict（大 block 降级）兜底。 */
+export interface ChatScrollPagination {
+  /** 磁盘上还有更早页可取。 */
+  hasMore: () => boolean;
+  /** 取回更早一页（limit 为字节预算，见 load_messages），返回实际条数。 */
+  loadOlder: (limit: number) => Promise<number>;
+}
+
+const DEFAULT_PAGE_BYTES = 256 * 1024;
+const DEFAULT_RAMP_INITIAL = 6;
+const DEFAULT_RAMP_CHUNK = 40;
+
+/** rAF 不可用时（如极简运行时）退到 setTimeout，保证不崩。 */
+function defaultScheduleFrame(cb: () => void): () => void {
+  if (typeof requestAnimationFrame !== "undefined") {
+    const id = requestAnimationFrame(cb);
+    return () => cancelAnimationFrame(id);
+  }
+  const id: ReturnType<typeof setTimeout> = setTimeout(cb, 16);
+  return () => clearTimeout(id);
+}
+
+/** 从 target 向上找第一个用户手势可滚的祖先（overflow-y: auto|scroll）。
+ *  用于 wheel 接管判断：若最近可滚祖先就是对话滚动容器本身，说明滚轮该滚
+ *  对话区、光标下没有需要原生滚动的嵌套块——此时接管（见 onWheel），
+ *  让滚轮走 JS 赋值路径（实时布局），旁路掉合成器滚轮缓存的焊死
+ *  病根（见 [[nested-scroller-wheel-trap]]）。返回 null = 一路到顶无可滚祖先。 */
 export function nearestScrollableAncestor(target: EventTarget | null): Element | null {
   let el = target as Element | null;
   for (let hop = 0; el && hop < 12; hop++) {
@@ -33,95 +82,24 @@ function atScrollEdge(el: Element, deltaY: number): boolean {
   return false;
 }
 
-/**
- * 聊天滚动区的主控：把 ChatPanel 里散落的滚动/窗口逻辑收拢成一层，并在
- * useMessageWindow 的"数据窗口"之上叠一层"渲染预算"做分帧挂载。
- *
- * 为什么要有这一层（根因见 warm-sniffing-balloon.md）：切会话时 v-for 的 key 整批
- * 换新，旧 15 条全卸载 + 新 15 条在**同一个同步渲染补丁**里挂完——每条同步跑缓存
- * 未命中的 marked.parse+hljs，加上 Edit/Write/NotebookEdit 默认展开的 CodeMirror
- * DiffViewer，长任务占满主线程，输入框彗星流光（每帧主线程重绘）掉帧几秒。
- * useMessageWindow 已把 v-for 限在尾部 15 条（不是全量挂载），残留问题就是
- * "15 条挤在一个 patch"。
- *
- * 分帧挂载：切会话先只挂尾部 ~6 条（首屏可见的最新消息，含流式那条），每帧
- * requestAnimationFrame 加几条长到 15，帧间让出主线程给流光绘制。窗口是尾部的，
- * 可见底不动、旧消息在上方填入——与原 expandOlderAnchored 锚定一致。显示最终
- * 仍 15 条可见，~50ms 内补齐，用户基本无感。
- *
- * 两层分离：
- *  - useMessageWindow 的"窗口"（initialSize=15，可向上扩）= 数据边界，原样复用、
- *    既有单测零改动；它照旧在 key 变时把 window 重置回 15（正是我们要的稳态窗口）。
- *  - 本层的 mountedCount（6→15 ramp）= 实际挂载数（渲染预算）。visibleMessages
- *    = 窗口尾部切片的尾部 mountedCount 条，随 ramp 逐帧增长。
- *
- * hydrate 时序：未加载的会话 messages 为空，切过去时窗口虽是 30 但实际 0 条——
- * 此时不能 ramp（target=0 会立刻停且把渲染预算卡住），改为 rampPending 等
- * messages 到齐（store.messages.unshift 那一下 0→N）再 startRamp；length watcher
- * 是 pre-flush，在那一帧渲染补丁前就把 mountedCount 重置回 6，避免 hydrate 完成
- * 时一次性挂 30。
- */
-export interface ChatScrollOptions {
-  /** 渲染预算起点：切会话首帧只挂这么多条。默认 6。 */
-  rampInitial?: number;
-  /** 每帧扩窗追加的条数。默认 3。 */
-  rampChunk?: number;
-  /** 数据窗口大小（透传 useMessageWindow 的 initialSize）。默认 15。 */
-  windowInitial?: number;
-  /** 上滚扩窗步长（透传 useMessageWindow 的 step）。默认 15。 */
-  windowStep?: number;
-  /**
-   * 可注入的帧调度器：返回一个 cancel 函数。默认 requestAnimationFrame；
-   * 测试传同步调度器（vitest 是 node 环境，无 rAF）。scrollToBottom 与 ramp
-   * 共用同一调度器，保证测试里 neither 会因缺 rAF 抛错。
-   */
-  scheduleFrame?: (cb: () => void) => () => void;
-}
-
-const DEFAULT_RAMP_INITIAL = 6;
-const DEFAULT_RAMP_CHUNK = 3;
-const DEFAULT_WINDOW_INITIAL = 15;
-const DEFAULT_WINDOW_STEP = 15;
-
-/** rAF 不可用时（如极简运行时）退到 setTimeout，保证不崩。 */
-function defaultScheduleFrame(cb: () => void): () => void {
-  if (typeof requestAnimationFrame !== "undefined") {
-    const id = requestAnimationFrame(cb);
-    return () => cancelAnimationFrame(id);
-  }
-  const id: ReturnType<typeof setTimeout> = setTimeout(cb, 16);
-  return () => clearTimeout(id);
-}
-
 export function useChatScroll(
   messages: () => readonly ChatMessage[],
   sessionId: () => string | null,
   options: ChatScrollOptions = {},
 ) {
+  const pageBytes = options.pageBytes ?? DEFAULT_PAGE_BYTES;
   const rampInitial = options.rampInitial ?? DEFAULT_RAMP_INITIAL;
   const rampChunk = options.rampChunk ?? DEFAULT_RAMP_CHUNK;
-  const windowInitial = options.windowInitial ?? DEFAULT_WINDOW_INITIAL;
-  const windowStep = options.windowStep ?? DEFAULT_WINDOW_STEP;
   const scheduleFrame = options.scheduleFrame ?? defaultScheduleFrame;
+  const pagination = options.pagination;
 
-  // ── 数据窗口（useMessageWindow，原样复用）─────────────────────────────────
-  // key 变时 useMessageWindow 自己把 window 重置回 windowInitial（稳态窗口）；
-  // 本层只额外控制渲染预算 mountedCount。两 watcher 都 pre-flush，注册序：
-  // useMessageWindow 的在前（先重置 window），本层 sessionId watcher 在后
-  // （读到重置后的 windowed）。
-  const { visible: windowed, hiddenCount, expandOlder } = useMessageWindow(
-    messages,
-    sessionId,
-    { initialSize: windowInitial, step: windowStep },
-  );
-
-  // ── 渲染预算（分帧）───────────────────────────────────────────────────────
+  // ── 首帧渲染预算（唯一一层窗口化：防切会话一次性挂载 jam）──────────────
+  // 数据层不窗口化（已加载全部渲染）；这里只控制「首帧挂多少」再逐帧补到全量。
   const mountedCount = ref(rampInitial);
-  /** 进 v-for 的实际列表：数据窗口尾部 mountedCount 条。mountedCount≥窗口长度
-   *  时透传原数组引用（与 useMessageWindow 同款 cache 友好惯用）。 */
+  /** 进 v-for 的实际列表：messages 尾部 mountedCount 条（首帧 ramp 渐进，之后全量）。 */
   const visibleMessages: ComputedRef<readonly ChatMessage[]> = computed(() => {
-    const w = windowed.value;
-    return w.length <= mountedCount.value ? w : w.slice(-mountedCount.value);
+    const list = messages();
+    return list.length <= mountedCount.value ? list : list.slice(-mountedCount.value);
   });
 
   const ramping = ref(false);
@@ -129,6 +107,43 @@ export function useChatScroll(
   let rampPending = false;
   /** ramp 在途帧句柄（cancel 函数；null=空闲）。 */
   let rafHandle: (() => void) | null = null;
+
+  function cancelRamp() {
+    if (rafHandle) {
+      rafHandle();
+      rafHandle = null;
+    }
+    ramping.value = false;
+  }
+
+  function startRamp() {
+    cancelRamp();
+    ramping.value = true;
+    mountedCount.value = rampInitial;
+    // 首帧同步置底：ramp 每帧加内容后，RO 触发的 scrollToBottom 落在下一帧 rAF，
+    // 本帧会用上一帧的 scrollTop 渲染造成一帧抖动；这里在调度下一 tick 前同步把
+    // scrollTop 钉到底，覆盖上一帧残留。
+    if (scrollEl.value && autoScroll.value) {
+      trail("write", "ramp pin0");
+      scrollEl.value.scrollTop = scrollEl.value.scrollHeight;
+    }
+    function tick() {
+      if (!ramping.value) return; // 被切走 / 用户上滚接管取消
+      const target = messages().length;
+      const next = Math.min(target, mountedCount.value + rampChunk);
+      if (next <= mountedCount.value) {
+        ramping.value = false;
+        return;
+      }
+      mountedCount.value = next;
+      if (scrollEl.value && autoScroll.value) {
+        trail("write", `ramp pin m=${mountedCount.value}`);
+        scrollEl.value.scrollTop = scrollEl.value.scrollHeight;
+      }
+      rafHandle = scheduleFrame(tick);
+    }
+    rafHandle = scheduleFrame(tick);
+  }
 
   // ── 滚动状态 ────────────────────────────────────────────────────────────────
   const scrollEl = ref<HTMLDivElement | undefined>();
@@ -140,30 +155,45 @@ export function useChatScroll(
   const farFromBottom = ref(false);
   const newWhileAway = ref(false);
 
-  // ── 扩窗 + 滚动锚定 ────────────────────────────────────────────────────────
-  let expandingOlder = false;
-  /** 向上扩窗一步 + 滚动锚定（保持视觉位置不跳）。强制布局（读 scrollHeight）只
-   *  发生在用户主动翻旧消息时，不在流式/ramp 热路径上。
-   *
-   *  扩窗后渲染预算 mountedCount 一并到顶（= 新窗口长度）：上滚加载的 30 条是
-   *  一次性同步挂载（与今日行为一致——上滚的卡是后续议题，本次不碰锚定逻辑，
-   *  仅保证功能不退步）。setWindowSize 必须在 nextTick 之前，锚定才能量到新内容
-   *  带来的真实高度差。 */
+  /** 上滚取回触发带：距顶 max(80, 一屏高 × 0.6) 内即预加载——不必精确滚到顶。 */
+  function expandThreshold(el: HTMLDivElement): number {
+    return Math.max(80, el.clientHeight * 0.6);
+  }
+
+  /** 加载更早一页在途（防重入 + 顶部停留续取的门控）。 */
+  const loadingOlder = ref(false);
+  /** 加载在途时用户滚到顶部触发带 → 完成后自动续取（连翻不中断）。 */
+  let topPending = false;
+
+  /** 向上加载更早一页 + 视口补偿（scrollTop 保持旧内容位置不跳）。
+   *  mountedCount 一并到顶（= 新 messages 长度）：新页立即全部挂载
+   *  （一页几十条，一次性挂载可接受；首帧 ramp 只服务于切会话首帧）。 */
   async function expandOlderAnchored() {
     const el = scrollEl.value;
-    if (!el || expandingOlder || hiddenCount.value === 0) return;
-    expandingOlder = true;
+    if (!el || loadingOlder.value || !(pagination?.hasMore() ?? false)) return;
+    loadingOlder.value = true;
     try {
       cancelRamp(); // 用户接管，停掉自动 ramp
       const prevHeight = el.scrollHeight;
       const prevTop = el.scrollTop;
-      expandOlder();
-      mountedCount.value = windowed.value.length;
-      await nextTick();
-      el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
-      trail("expand", `${Math.round(prevTop)}→${Math.round(el.scrollTop)} hid=${hiddenCount.value}`);
+      const count = await pagination!.loadOlder(pageBytes);
+      if (count > 0) {
+        if (el.scrollTop !== prevTop) return; // 加载期间用户滚动，放弃补偿
+        await nextTick();
+        // 视口补偿：新页插在顶部，scrollTop 同步下移 = 看到的旧内容位置不变
+        el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
+        mountedCount.value = Math.max(mountedCount.value, messages().length);
+        trail("expand", `${Math.round(prevTop)}→${Math.round(el.scrollTop)} n=${messages().length}`);
+      }
     } finally {
-      expandingOlder = false;
+      loadingOlder.value = false;
+      // 加载在途时用户已在顶部滚过（topPending）且完成后仍停留触发带：
+      // 自动续取（连翻），直到用户离开顶部 / 磁盘取完。
+      const e = scrollEl.value;
+      if (e && topPending && e.scrollTop < expandThreshold(e)) {
+        topPending = false;
+        void expandOlderAnchored();
+      }
     }
   }
 
@@ -178,10 +208,10 @@ export function useChatScroll(
   // 嵌套可滚块分支（思考块 reading 态、工具卡结果、xterm、DiffViewer 的 cm-scroller）：
   // nearestScrollableAncestor 返回嵌套块而非本容器。原实现直接放行原生、指望链式冒泡
   // 给对话区——但合成器焊死会让链式失同步，嵌套块滚到顶/底后对话区仍滚不动，长会话里
-  // 光标落在工具卡/代码块上时表现为"滚不到顶、只看得到尾部 15 条、上滚加载更多不触发"。
+  // 光标落在工具卡/代码块上时表现为"滚不到顶、只看得到尾部、上滚加载更多不触发"。
   // 修正：嵌套块已到该方向边界（atScrollEdge）时接管对话区走 JS 赋值，补上这条漏掉的
   // 链式分支；未到边界则放行原生滚嵌套块本身。
-  // deltaMode 非 pixel（触控板 line/page 模式）暂放行原生——鼠标 wheel 是 pixel 模式，覆盖最常见情况；触控板如复现再加换算。
+  // deltaMode 非 pixel（触控板 line/page 模式）暂放行原生——鼠标 wheel 是 pixel 模式，覆盖最常见情况。
   function onWheel(e: WheelEvent) {
     const el = scrollEl.value;
     if (!el || e.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return;
@@ -192,7 +222,6 @@ export function useChatScroll(
       trail("wheelTakeover", `dy=${Math.round(e.deltaY)}→top=${Math.round(el.scrollTop)}`);
       return;
     }
-    // 嵌套可滚块：到该方向边界才接管链式给对话区（旁路合成器链式失同步），否则放行原生滚嵌套块本身
     if (nearest && atScrollEdge(nearest, e.deltaY)) {
       e.preventDefault();
       el.scrollTop += e.deltaY;
@@ -206,12 +235,7 @@ export function useChatScroll(
   // 事件是异步派发的，写入与事件到达之间内容会继续增高（Write/Edit 变更卡落定一帧
   // +400px），事件里算出的 dist≥48 只是「置底回波」而非用户手势。按 dist 误判会把
   // 跟随打死且 sticky——此后 scrollToBottom 对 autoScroll=false 一律 no-op、再无
-  // 置底救回，表现为写文件后对话不再自动到底（现场：scroll-trail 快照中
-  // write toBottom 0→5740 后 28ms 才派发的 scroll top=4923 sh=6076 dist=336
-  // 把 auto 打成 0）。位置不变/增大 = 增长回波或下滚，跟随态原样保留（置底链由
-  // RO 继续驱动）；位置减小才按 dist 重判——内容收缩被钳回底部时 scrollTop 虽
-  // 减小但 dist=0，落进 re-arm 分支，不误伤。所有用户上滚路径（wheel 接管 /
-  // 触控板原生 / 拖滚动条 / 键盘）都使 scrollTop 减小，方向判定对它们全部成立。
+  // 置底救回。位置不变/增大 = 增长回波或下滚，跟随态原样保留；位置减小才按 dist 重判。
   let prevScrollTop = -1;
   function onScroll() {
     const el = scrollEl.value;
@@ -219,8 +243,6 @@ export function useChatScroll(
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
     const prev = prevScrollTop;
     prevScrollTop = el.scrollTop;
-    // trail 埋点（滚动诊断环）：间歇性滚轮定格的活体采集——每个 scroll 事件留一行
-    // 位置+门控状态，定格时与 wheel/write 记录互证。高频但纯内存推送，无布局读取。
     trail(
       "scroll",
       `top=${Math.round(el.scrollTop)} sh=${el.scrollHeight} ch=${el.clientHeight} auto=${autoScroll.value ? 1 : 0}`,
@@ -234,9 +256,21 @@ export function useChatScroll(
     }
     farFromBottom.value = dist > JUMP_SHOW_THRESHOLD;
     if (autoScroll.value) newWhileAway.value = false;
-    // 滚到接近顶部 = 想看更早的消息:扩窗(带锚定)。ramp 期间不触发——短内容时
-    // scrollTop≈0 会误把同步 expandOlder 点起来，毁掉分帧（且顶部入口此时也不显示）。
-    if (el.scrollTop < 80 && hiddenCount.value > 0 && !ramping.value) void expandOlderAnchored();
+    // 上滚到触发带 = 想看更早的内容：取回一页（带视口补偿）。ramp 期间不触发。
+    const canFetch = !ramping.value && (pagination?.hasMore() ?? false);
+    if (el.scrollTop < expandThreshold(el) && canFetch) {
+      trail("tryExpand", `hit top=${Math.round(el.scrollTop)} hm=${pagination?.hasMore() ?? false} ramp=${ramping.value ? 1 : 0}`);
+      if (loadingOlder.value) {
+        // 加载在途：用户已在顶部滚过——记 pending，完成后自动续取（连翻）
+        topPending = true;
+      } else {
+        void expandOlderAnchored();
+      }
+    } else if (el.scrollTop < expandThreshold(el) && !canFetch) {
+      trail("tryExpand", `blocked top=${Math.round(el.scrollTop)} hm=${pagination?.hasMore() ?? false} ramp=${ramping.value ? 1 : 0}`);
+    } else {
+      topPending = false; // 离开顶部触发带：取消待续
+    }
   }
 
   // ── 置底 ──────────────────────────────────────────────────────────────────
@@ -290,9 +324,8 @@ export function useChatScroll(
   // ── 置底的统一触发器：数据层 watcher 只能枚举「新消息 / 文本增量」，但让滚动条
   //    搁浅的来源远不止这些——内容增高（变更卡 DiffViewer 到达、图片异步加载、历史
   //    扩窗……）与视口变化（权限对话框出现/消失、Pane 拖拽、窗口缩放）。枚举数据必然
-  //    挂一漏万，改为在 DOM 层观察这两个症状本身。RO 通知按帧合并，频率与现有 watcher
-  //    同级；autoScroll=false 时 scrollToBottom 自身 no-op，不打扰翻历史的用户；
-  //    置底只写 scrollTop 不改两者尺寸，无反馈循环。
+  //    挂一漏万，改为在 DOM 层观察这两个症状本身。RO 通知按帧合并；autoScroll=false
+  //    时 scrollToBottom 自身 no-op；置底只写 scrollTop 不改两者尺寸，无反馈循环。
   let contentObserver: ResizeObserver | null = null;
   // 仅在组件实例内注册生命周期（测试在 effect scope 外直接调 composable 时不注册，
   // 避免 onMounted 无 active instance 警告；RO 本就依赖 DOM，node 测试无 ResizeObserver）。
@@ -303,8 +336,6 @@ export function useChatScroll(
       scrollEl.value?.addEventListener("wheel", onWheel, { passive: false });
       if (typeof ResizeObserver === "undefined") return;
       contentObserver = new ResizeObserver(() => {
-        // 不读尺寸（RO 回调里读 scrollHeight 是热路径强制布局）——只记触发与门控态，
-        // 尺寸变化由随后的 scroll/write 记录体现。
         trail("ro", `auto=${autoScroll.value ? 1 : 0}`);
         scrollToBottom();
       });
@@ -318,54 +349,14 @@ export function useChatScroll(
     });
   }
 
-  // ── 分帧 ramp ──────────────────────────────────────────────────────────────
-  function cancelRamp() {
-    if (rafHandle) {
-      rafHandle();
-      rafHandle = null;
-    }
-    ramping.value = false;
-  }
-
-  function startRamp() {
-    cancelRamp();
-    ramping.value = true;
-    mountedCount.value = rampInitial;
-    // 首帧同步置底：ramp 每帧加内容后，RO 触发的 scrollToBottom 落在下一帧 rAF，
-    // 本帧会用旧 scrollTop 渲染造成一帧抖动；这里在调度下一 tick 前同步把 scrollTop
-    // 钉到底，覆盖上一帧残留。成本是一次强制布局（∝ 已挂 DOM 6→30，仅 ~130ms ramp 期）。
-    if (scrollEl.value && autoScroll.value) {
-      trail("write", "ramp pin0");
-      scrollEl.value.scrollTop = scrollEl.value.scrollHeight;
-    }
-    function tick() {
-      if (!ramping.value) return; // 被切走 / 用户上滚接管取消
-      const target = windowed.value.length;
-      const next = Math.min(target, mountedCount.value + rampChunk);
-      // 到稳态 / 短表全可见 / 空表：next 追不上 mountedCount 即停。天然防短/空会话死循环。
-      if (next <= mountedCount.value) {
-        ramping.value = false;
-        return;
-      }
-      mountedCount.value = next;
-      if (scrollEl.value && autoScroll.value) {
-        trail("write", `ramp pin m=${mountedCount.value}`);
-        scrollEl.value.scrollTop = scrollEl.value.scrollHeight;
-      }
-      rafHandle = scheduleFrame(tick);
-    }
-    rafHandle = scheduleFrame(tick);
-  }
-
-  // 切会话：取消旧 ramp、复位滚动态、按需 ramp。immediate——首次打开（app 启动恢复
-  // 末次会话）也走分帧，不止"切回"。pre-flush 在渲染补丁前触发，首帧渲染读到 mountedCount
-  // 已是 rampInitial（6），不会一次性挂 30。
+  // 切会话：取消旧 ramp、复位滚动态、按需 ramp。immediate——首次打开也走分帧。
   watch(
     sessionId,
     (newId) => {
       trail("session", newId ?? "null"); // 切会话标记：定格「自愈」的分界线
       cancelRamp();
       rampPending = false;
+      topPending = false; // 旧会话的「顶部待续」不带进新会话
       autoScroll.value = true;
       // 方向判定基线一并重置：旧会话残留的大 scrollTop 会把新会话首个
       // scroll 事件误读成「上滚」而脱扣
@@ -374,15 +365,15 @@ export function useChatScroll(
       newWhileAway.value = false;
       scrollToBottom();
       if (!newId) return; // hero（零会话）：不 ramp
-      if (windowed.value.length > 0) startRamp();
+      if (messages().length > 0) startRamp();
       else rampPending = true; // 未 hydrate：等 messages 到齐
     },
     { immediate: true },
   );
 
-  // hydrate 补交：切到未加载会话时挂起的 ramp，在 messages 0→N 那一下触发。pre-flush
-  // 保证那一帧渲染前 mountedCount 已重置回 6，hydrate 不会一次性挂 30。rampPending
-  // 仅 0→N 触发一次，流式逐条追加（n 持续增）不重复 ramp。
+  // hydrate 补交：切到未加载会话时挂起的 ramp，在 messages 0→N 那一下触发。
+  // pre-flush 保证那一帧渲染前 mountedCount 已重置回首帧预算。rampPending 仅 0→N
+  // 触发一次，流式逐条追加（n 持续增）不重复 ramp。
   watch(
     () => messages().length,
     (n) => {
@@ -407,7 +398,6 @@ export function useChatScroll(
     scrollEl,
     contentEl,
     visibleMessages,
-    hiddenCount,
     ramping,
     onScroll,
     jumpToBottom,

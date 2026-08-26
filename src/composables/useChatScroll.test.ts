@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { nextTick, ref } from "vue";
 import type { Ref } from "vue";
 import { useChatScroll } from "./useChatScroll";
@@ -46,7 +46,35 @@ function fakeScrollEl(opts: { scrollTop: number; scrollHeight: number; clientHei
 }
 
 describe("useChatScroll", () => {
-  it("切会话分帧挂载：先 6 条，ramp 跑完到 15，ramping 收尾 false", () => {
+  it("P1 异步取回更早页后锚定：unshift 后全量可见、视觉位置保持", async () => {
+    const list = ref(makeMessages(100));
+    const sid = ref<string | null>("s1");
+    // manualScheduler：unshift 触发 onNewContent 的置底只入队不执行，
+    // 否则 syncScheduler 会把 scrollTop 钉到 scrollHeight、误触「加载期间用户滚动」
+    // 放弃补偿（真实浏览器里 rAF 异步 + 上滚时 autoScroll=false 置底 no-op，无此问题）
+    const { schedule } = manualScheduler();
+    const { scrollEl, expandOlderAnchored, visibleMessages } = useChatScroll(
+      () => list.value,
+      () => sid.value,
+      {
+        scheduleFrame: schedule,
+        pagination: fakePagination({
+          hasMore: () => true,
+          loadOlder: async () => {
+            list.value.unshift(...makeMessages(30));
+            return 30;
+          },
+        }),
+      },
+    );
+    scrollEl.value = fakeScrollEl({ scrollTop: 100, scrollHeight: 2000, clientHeight: 500 });
+    await expandOlderAnchored();
+    // unshift 30 条 → 130 条全部可见（不窗口化）
+    expect(visibleMessages.value.length).toBe(130);
+    expect(scrollEl.value.scrollTop).toBe(100);
+  });
+
+  it("切会话分帧挂载：首帧 6 条，ramp 跑完到全量（100），ramping 收尾 false", () => {
     const list = ref(makeMessages(100));
     const sid = ref<string | null>("s1");
     const { schedule } = syncScheduler();
@@ -55,8 +83,8 @@ describe("useChatScroll", () => {
       () => sid.value,
       { scheduleFrame: schedule },
     );
-    // 同步调度器下 ramp 在 immediate sessionId watcher 里一气跑完
-    expect(visibleMessages.value.length).toBe(15);
+    // 同步调度器下 ramp 在 immediate sessionId watcher 里一气跑完（6 → 46 → 86 → 100）
+    expect(visibleMessages.value.length).toBe(100);
     expect(ramping.value).toBe(false);
   });
 
@@ -87,7 +115,7 @@ describe("useChatScroll", () => {
     // hydrate：整份历史一次性灌入
     list.value = makeMessages(50);
     await nextTick(); // pre-flush length watcher 触发 startRamp
-    expect(visibleMessages.value.length).toBe(15);
+    expect(visibleMessages.value.length).toBe(50);
     expect(ramping.value).toBe(false);
   });
 
@@ -126,41 +154,45 @@ describe("useChatScroll", () => {
     expect(ramping.value).toBe(false);
   });
 
-  it("ramp 期间用户上滚 expandOlderAnchored：取消 ramp、不回缩、渲染预算到顶", async () => {
+  it("ramp 期间用户上滚 expandOlderAnchored：取消 ramp（ramping 收尾 false）", async () => {
     const list = ref(makeMessages(100));
     const sid = ref<string | null>("s1");
     const { schedule, flush } = manualScheduler();
-    const { scrollEl, visibleMessages, hiddenCount, ramping, expandOlderAnchored } = useChatScroll(
+    const { scrollEl, ramping, expandOlderAnchored } = useChatScroll(
       () => list.value,
       () => sid.value,
-      { scheduleFrame: schedule },
+      {
+        scheduleFrame: schedule,
+        // 必须带 pagination：expandOlderAnchored 首行 hasMore() 早退就不会执行
+        // cancelRamp，ramping 永远收不了尾
+        pagination: fakePagination({ hasMore: () => true, loadOlder: async () => 0 }),
+      },
     );
     expect(ramping.value).toBe(true); // ramp 中（tick 在队未 flush）
-    expect(hiddenCount.value).toBe(85); // 100 - 窗口 15
     scrollEl.value = fakeScrollEl({ scrollTop: 100, scrollHeight: 2000, clientHeight: 500 });
     await expandOlderAnchored();
     expect(ramping.value).toBe(false); // 用户接管，ramp 取消
-    expect(hiddenCount.value).toBe(70); // 窗口 15→30
-    expect(visibleMessages.value.length).toBe(30); // 渲染预算一并到顶
-    flush(); // 队里残留的旧 ramp tick 已被 cancel 移除，flush 空跑不应改变状态
-    expect(visibleMessages.value.length).toBe(30);
+    flush(); // 队里残留的旧 ramp tick 已被 cancel 丢弃，flush 空跑不应改变状态
+    expect(ramping.value).toBe(false);
   });
 
-  it("onScroll 在 ramping 时不触发扩窗（hiddenCount 不变）", () => {
+  it("onScroll 在 ramping 时不触发取回", () => {
     const list = ref(makeMessages(100));
     const sid = ref<string | null>("s1");
+    const loadOlder = vi.fn(async () => 0);
     const { schedule } = manualScheduler();
-    const { scrollEl, hiddenCount, ramping, onScroll } = useChatScroll(
+    const { scrollEl, onScroll } = useChatScroll(
       () => list.value,
       () => sid.value,
-      { scheduleFrame: schedule },
+      {
+        scheduleFrame: schedule,
+        pagination: { hasMore: () => true, loadOlder },
+      },
     );
-    expect(ramping.value).toBe(true);
-    expect(hiddenCount.value).toBe(85);
     scrollEl.value = fakeScrollEl({ scrollTop: 0, scrollHeight: 2000, clientHeight: 500 });
     onScroll();
-    // ramping 期间自动扩窗分支被 !ramping 门拦住，窗口不动
-    expect(hiddenCount.value).toBe(85);
+    // ramping 期间自动取回分支被 !ramping 门拦住
+    expect(loadOlder).not.toHaveBeenCalled();
   });
 
   // ── 跟随态锁存：按滚动方向区分用户手势与置底回波（根因见 useChatScroll.onScroll 注释）──
@@ -238,5 +270,143 @@ describe("useChatScroll", () => {
     pushMessage(list);
     await nextTick();
     expect(el.scrollTop).toBe(1817); // 跟随仍在，置底生效
+  });
+
+  // ── P1 双向分页：取回锚定 / 放弃锚定 / 在途自动续取 ──
+
+  function fakePagination(overrides: Partial<NonNullable<Parameters<typeof useChatScroll>[2]["pagination"]>> = {}) {
+    return {
+      hasMore: () => false,
+      loadOlder: async () => 0,
+      ...overrides,
+    };
+  }
+
+
+  it("P1 取回期间用户滚动则放弃锚定（不拉回）", async () => {
+    const list = ref(makeMessages(30));
+    const sid = ref<string | null>("s1");
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    // manualScheduler：unshift 后 onNewContent 置底只入队不执行，否则 sync 下会把
+    // scrollTop 钉到 scrollHeight，覆盖用户滚到的 500（真实浏览器 rAF 异步，无此问题）
+    const { schedule } = manualScheduler();
+    const { scrollEl, expandOlderAnchored } = useChatScroll(
+      () => list.value,
+      () => sid.value,
+      {
+        scheduleFrame: schedule,
+        pagination: fakePagination({
+          hasMore: () => true,
+          loadOlder: async () => {
+            await gate;
+            list.value.unshift(...makeMessages(20));
+            return 20;
+          },
+        }),
+      },
+    );
+    scrollEl.value = fakeScrollEl({ scrollTop: 100, scrollHeight: 2000, clientHeight: 500 });
+    const p = expandOlderAnchored();
+    scrollEl.value.scrollTop = 500; // 取回期间用户滚走
+    release!();
+    await p;
+    expect(scrollEl.value.scrollTop).toBe(500); // 未被拉回 100+Δ
+  });
+
+  it("P1 取回在途时顶部滚动 → 完成后自动续取（连翻不中断）", async () => {
+    const list = ref(makeMessages(15));
+    const sid = ref<string | null>("s1");
+    let hasMore = true;
+    let loadCalls = 0;
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { schedule, flush } = manualScheduler();
+    const { scrollEl, onScroll } = useChatScroll(
+      () => list.value,
+      () => sid.value,
+      {
+        scheduleFrame: schedule,
+        pagination: fakePagination({
+          hasMore: () => hasMore,
+          loadOlder: async () => {
+            loadCalls += 1;
+            if (loadCalls >= 2) hasMore = false;
+            await gate; // 取回在途：等测试放行
+            list.value.unshift(
+              ...Array.from({ length: 30 }, (_, i) => ({
+                id: `old${loadCalls}-${i}`,
+                role: "assistant" as const,
+                blocks: [{ type: "text" as const, text: `old ${loadCalls}-${i}` }],
+                timestamp: 0,
+              })),
+            );
+            return 30;
+          },
+        }),
+      },
+    );
+    flush(); // ramp 跑完（ramping=false），否则 onScroll 的取回被 !ramping 挡
+    scrollEl.value = fakeScrollEl({ scrollTop: 0, scrollHeight: 2000, clientHeight: 500 });
+    onScroll(); // 触发第一次取回（在途）
+    await Promise.resolve();
+    // 取回在途时用户继续在顶部滚 → 标记 pending（不被防重入吞掉）
+    scrollEl.value = fakeScrollEl({ scrollTop: 0, scrollHeight: 2000, clientHeight: 500 });
+    onScroll();
+    await Promise.resolve();
+    expect(loadCalls).toBe(1); // 在途不双触发
+    // 放行：第一次取回完成后自动续取第二次（topPending 消费）
+    release!();
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(loadCalls).toBe(2);
+  });
+
+  it("P1 连续上滚翻页：onScroll 到顶驱动 loadOlder 循环直到磁盘取完", async () => {
+    // 模拟预览打开长会话：store 尾部 15 条（hydrate 页）+ 磁盘还有更早内容
+    const list = ref(makeMessages(15));
+    const sid = ref<string | null>("s1");
+    let hasMore = true;
+    let olderRounds = 0;
+    const { schedule, flush } = manualScheduler();
+    const { scrollEl, onScroll } = useChatScroll(
+      () => list.value,
+      () => sid.value,
+      {
+        scheduleFrame: schedule,
+        pagination: fakePagination({
+          hasMore: () => hasMore,
+          loadOlder: async () => {
+            olderRounds += 1;
+            list.value.unshift(
+              ...Array.from({ length: 30 }, (_, i) => ({
+                id: `old${olderRounds}-${i}`,
+                role: "assistant" as const,
+                blocks: [{ type: "text" as const, text: `old ${olderRounds}-${i}` }],
+                timestamp: 0,
+              })),
+            );
+            if (olderRounds >= 5) hasMore = false; // 第 5 页后磁盘取完
+            return 30;
+          },
+        }),
+      },
+    );
+    flush(); // ramp 跑完（ramping=false）
+    scrollEl.value = fakeScrollEl({ scrollTop: 0, scrollHeight: 2000, clientHeight: 500 });
+    // 滚到顶触发取回：取回后补偿（scrollTop 离开顶部），再滚回顶部再取……
+    let guard = 0;
+    while (hasMore && guard++ < 20) {
+      onScroll();
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+      // 模拟用户再次滚到顶（补偿把 scrollTop 移开顶部）
+      scrollEl.value = fakeScrollEl({ scrollTop: 0, scrollHeight: 2000 + guard, clientHeight: 500 });
+    }
+    // 磁盘取完（5 页 = 150 条）→ 早期内容全部进入 store（不回收，全部保留）
+    expect(olderRounds).toBe(5);
+    expect(list.value.length).toBe(15 + 150);
   });
 });
