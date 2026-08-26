@@ -17,6 +17,7 @@ vi.mock("../composables/useSettings", () => ({
         apiKeyConfigured: false, backend: "fastembed", baseUrl: "",
         dim: 768, model: "", format: "ollama",
       },
+      codegraphEnabled: true,
       remote: { enabled: false, relayUrl: "", deviceId: "", permissionMode: "auto" },
       jdkRegistries: [], openWithExtensions: {},
     }),
@@ -114,6 +115,17 @@ describe("SettingsPanel", () => {
     expect(text).toContain("中继 URL");
     expect(text).toContain("配对码");
     expect(text).toContain("未连接");
+  });
+
+  it("代码索引总开关：切换调 update 落盘（关 → 门面 setEnabled 释放索引）", async () => {
+    mountPanel("codegraph");
+    const toggle = document.body.querySelector<HTMLInputElement>(".tab-codegraph .toggle input");
+    expect(toggle).not.toBeNull();
+    expect(toggle!.checked).toBe(true);
+    toggle!.checked = false;
+    toggle!.dispatchEvent(new Event("change"));
+    await flushPromises();
+    expect(updateMock).toHaveBeenCalledWith({ codegraphEnabled: false });
   });
 
   it("offers one-click apply when a live proxy is detected and settings empty", async () => {

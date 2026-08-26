@@ -47,12 +47,16 @@ pub async fn codegraph_build_index(
     let st = state.inner().clone();
     let settings_service = settings_service.inner().clone();
     tokio::task::spawn_blocking(move || {
-        // 受信任工作区门控：不信任则不建/不重建索引。索引不存在时 find_symbol /
-        // call_graph / semantic_search / goto_definition 自然返回 no_index 优雅降级。
-        if !crate::commands::workspace::is_path_trusted(&project_root) {
+        // 命令级门控：不信任 / 总开关关闭则不建/不重建索引。索引不存在时
+        // find_symbol / call_graph / semantic_search / goto_definition 自然返回
+        // no_index 优雅降级。
+        if let Some(reason) = crate::codegraph::gate::skip_reason(
+            crate::commands::workspace::is_path_trusted(&project_root),
+            &settings_service,
+        ) {
             return Ok(serde_json::json!({
                 "loaded": false,
-                "skipped_untrusted": true,
+                "skipped": reason,
                 "total_symbols": 0,
                 "scanned_files": 0,
                 "files_with_symbols": 0,

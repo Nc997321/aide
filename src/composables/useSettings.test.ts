@@ -7,4 +7,9 @@ describe("useSettings defaults", () => {
     const { settings } = useSettings();
     expect(settings.onboarded).toBe(false);
   });
+
+  it("codegraphEnabled 默认 true（settings 分层：前端 defaults 必须含，否则后端 serde 默认挡死）", () => {
+    const { settings } = useSettings();
+    expect(settings.codegraphEnabled).toBe(true);
+  });
 });

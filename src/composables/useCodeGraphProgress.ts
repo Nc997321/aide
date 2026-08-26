@@ -1,6 +1,7 @@
 import { ref, readonly } from "vue";
 import { api } from "../api";
 import { useNotifications } from "./useNotifications";
+import { useSettings } from "./useSettings";
 import { useWorkspaceTrust } from "./useWorkspaceTrust";
 import type { BuildProgress, BuildIndexResult } from "../types";
 
@@ -25,6 +26,7 @@ import type { BuildProgress, BuildIndexResult } from "../types";
  */
 
 const { push, dismiss, dismissMany, notifications, registerActionHandler } = useNotifications();
+const { settings } = useSettings();
 const { isTrusted, trust } = useWorkspaceTrust();
 
 const progress = ref<BuildProgress>({ active: false, done: 0, total: 0, current: "", index_ready: false });
@@ -38,6 +40,28 @@ let lastIndexedRoot = "";
 // 当前已知「不信任」的 root（memoize，避免每次 ensureIndex 都查一次 state.json）。
 // 信任工作区后由 onWorkspaceTrusted 清空，使下一次 ensureIndex 能真正建索引。
 let untrustedCurrent = "";
+// 当前 root（ensureIndex 通过后记录）：setEnabled(true) 用它立即重建。
+let currentRoot = "";
+
+/**
+ * 门面统一门控：总开关关闭时所有写操作（build/rescan/rebuild/reindex）一律
+ * no-op。开关逻辑只存在于门面内部——触发点（FileTree/useFileViewer/会话事件）
+ * 不感知开关，也不会在调用点散落 if。
+ */
+function guard(): boolean {
+  return settings.codegraphEnabled;
+}
+
+/** 释放活跃索引 + 清 dedup 守卫（停后台 embed、释放 shard）。disabled 分支与
+ *  setEnabled(false) 共用，消除 ensureIndex 里 close 逻辑的重复。
+ *  currentRoot / untrustedCurrent 不清——前者记录「当前工作区」（ensureIndex
+ *  顶部无条件更新，setEnabled(true) 据此重建），后者是调用方管理的 memo
+ *  （untrusted 分支先设再调本函数，清了会丢 memo）。 */
+function closeActive() {
+  const prev = lastIndexedRoot;
+  lastIndexedRoot = "";
+  if (prev) void api.codegraphClose(prev).catch(() => {});
+}
 
 function stopPoll() {
   if (timer != null) {
@@ -83,9 +107,9 @@ function trackBuild(p: Promise<BuildIndexResult>, root: string) {
       // http 服务不可达），语义搜索不可用但结构层（精确跳转）正常。
       // r 可能为 undefined（测试 mock / 边界），防御一下不崩。
       if (r) {
-        // 不信任工作区：Rust 门控早退（skipped_untrusted），静默处理——
+        // Rust 门控早退（skipped: "untrusted" / "disabled"）：静默处理——
         // 「工作区不受信任」通知已由 ensureIndex 发，这里不重复告警。
-        if ((r as BuildIndexResult & { skipped_untrusted?: boolean }).skipped_untrusted) {
+        if (r.skipped) {
           stopPoll();
           return;
         }
@@ -181,6 +205,12 @@ function selfHeal(root: string) {
  */
 async function ensureIndex(root: string) {
   if (!root || root === lastIndexedRoot) return;
+  currentRoot = root; // 记录当前工作区（无论开关），setEnabled(true) 据此重建
+  // 总开关门控：关闭时不建索引；若还有活跃索引（刚关开关）则释放。
+  if (!guard()) {
+    closeActive();
+    return;
+  }
   if (root === untrustedCurrent) return; // 已知不信任，跳过（信任后 onWorkspaceTrusted 清此标记）
   // 受信任工作区门控：不信任则不建索引。Rust 侧 codegraph_build_index 也有同一
   // 门控（防御纵深），前端先挡可省一次 IPC 并通知用户原因。
@@ -190,11 +220,7 @@ async function ensureIndex(root: string) {
     untrustedCurrent = root;
     // 切到不信任工作区：释放上一个索引（若存在），不设 lastIndexedRoot——
     // 这样信任后再次 ensureIndex 能真正建（不会被 dedup 守卫挡）。
-    if (lastIndexedRoot) {
-      const prev = lastIndexedRoot;
-      lastIndexedRoot = "";
-      void api.codegraphClose(prev).catch(() => {});
-    }
+    closeActive();
     push({
       severity: "warning",
       source: "codegraph",
@@ -242,12 +268,28 @@ function onWorkspaceTrusted(root: string) {
 }
 
 /**
+ * 总开关切换（SettingsPanel 调用）。关 → 释放活跃索引（停后台 embed）；
+ * 开 → 清守卫并对当前工作区立即重建。
+ */
+function setEnabled(enabled: boolean) {
+  if (enabled) {
+    untrustedCurrent = "";
+    lastIndexedRoot = ""; // 清 dedup 守卫，让 ensureIndex 真正跑
+    if (currentRoot) void ensureIndex(currentRoot);
+  } else {
+    closeActive();
+    untrustedCurrent = "";
+  }
+}
+
+/**
  * 增量重扫（手动「更新索引」：只 reindex mtime > indexed_at 的改动文件）。
  * 快——保留未改动文件的符号/向量，只重做改动的。无进度条（通常几秒）；
  * 结果落 console 便于排查。无活跃索引时 no-op。
  */
 async function rescan(root: string) {
   if (!root || root === untrustedCurrent) return;
+  if (!guard()) return; // 总开关关闭：不重扫
   try {
     const r = await api.codegraphRescan(root);
     if (!r.active_index) {
@@ -277,7 +319,17 @@ async function rescan(root: string) {
  */
 function rebuild(root: string) {
   if (!root || root === untrustedCurrent) return;
+  if (!guard()) return; // 总开关关闭：不重建
   trackBuild(api.codegraphBuildIndex(root, { force: true }), root);
+}
+
+/**
+ * 保存后增量更新索引（门面入口，useFileViewer 不再直连 api）。关闭时返回
+ * null——调用方按「未触发」处理（静默，不推通知）。
+ */
+async function reindexFile(root: string, file: string) {
+  if (!guard()) return null;
+  return api.codegraphReindexFile(root, file);
 }
 
 /**
@@ -292,6 +344,7 @@ function rebuild(root: string) {
 let rescanTimer: number | null = null;
 function scheduleRescan() {
   if (!lastIndexedRoot) return;
+  if (!guard()) return; // 总开关关闭：不重扫
   if (typeof window === "undefined") return; // node/test 环境
   if (rescanTimer != null) clearTimeout(rescanTimer);
   rescanTimer = window.setTimeout(() => {
@@ -328,6 +381,7 @@ function __resetForTest() {
   lastBuild.value = null;
   lastIndexedRoot = "";
   untrustedCurrent = "";
+  currentRoot = "";
 }
 
 export function useCodeGraphProgress() {
@@ -337,9 +391,11 @@ export function useCodeGraphProgress() {
     lastBuild: readonly(lastBuild),
     ensureIndex,
     onWorkspaceTrusted,
+    setEnabled,
     trackBuild,
     rescan,
     rebuild,
+    reindexFile,
     scheduleRescan,
     stopPoll,
     __resetForTest,

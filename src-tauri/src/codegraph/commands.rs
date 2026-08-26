@@ -149,15 +149,20 @@ pub async fn codegraph_reindex_file(
     project_root: String,
     file: String,
     state: tauri::State<'_, std::sync::Arc<CodeGraphState>>,
+    settings_service: tauri::State<'_, std::sync::Arc<crate::settings::SettingsService>>,
 ) -> Result<serde_json::Value, String> {
     let st = state.inner().clone();
+    let settings_service = settings_service.inner().clone();
     tokio::task::spawn_blocking(move || {
         let root = PathBuf::from(&project_root);
         let abs = PathBuf::from(&file);
 
-        // 受信任工作区门控：不信任则跳过 reindex（索引本就不该存在）。
-        if !crate::commands::workspace::is_path_trusted(&project_root) {
-            return Ok(serde_json::json!({ "reindexed": false, "skipped": "untrusted" }));
+        // 命令级门控：不信任 / 总开关关闭则跳过 reindex（索引本就不该存在）。
+        if let Some(reason) = crate::codegraph::gate::skip_reason(
+            crate::commands::workspace::is_path_trusted(&project_root),
+            &settings_service,
+        ) {
+            return Ok(serde_json::json!({ "reindexed": false, "skipped": reason }));
         }
 
         // Only reindex if it belongs to the active project.
@@ -244,16 +249,21 @@ pub async fn codegraph_reindex_file(
 pub async fn codegraph_rescan(
     project_root: String,
     state: tauri::State<'_, std::sync::Arc<CodeGraphState>>,
+    settings_service: tauri::State<'_, std::sync::Arc<crate::settings::SettingsService>>,
 ) -> Result<serde_json::Value, String> {
     let st = state.inner().clone();
+    let settings_service = settings_service.inner().clone();
     tokio::task::spawn_blocking(move || {
         let root = PathBuf::from(&project_root);
-        // 受信任工作区门控：不信任则跳过 rescan。
-        if !crate::commands::workspace::is_path_trusted(&project_root) {
+        // 命令级门控：不信任 / 总开关关闭则跳过 rescan。
+        if let Some(reason) = crate::codegraph::gate::skip_reason(
+            crate::commands::workspace::is_path_trusted(&project_root),
+            &settings_service,
+        ) {
             return Ok(serde_json::json!({
                 "active_index": false,
                 "rescanned_files": 0,
-                "skipped": "untrusted",
+                "skipped": reason,
             }));
         }
         // Snapshot indexed_at + embed_ready under a read lock; bail if no index

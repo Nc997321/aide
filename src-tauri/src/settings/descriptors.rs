@@ -91,6 +91,7 @@ static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
         .with_legacy_ids(&["settings.open_with_extensions"]),
         ui("settings.recentLimit", json!(10), SettingValueKind::Number),
         ui("settings.paneLayouts", Value::Null, SettingValueKind::Object),
+        project("settings.codegraphEnabled", json!(true), SettingValueKind::Boolean, "codegraph"),
         project("settings.codegraphEmbedder", json!({
             "backend": "fastembed",
             "baseUrl": "",

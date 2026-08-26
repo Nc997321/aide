@@ -288,6 +288,13 @@ async function clearCodegraphApiKey() {
   cgApiKey.value = "";
 }
 
+// 总开关：落盘 + 门面联动（关 → 释放活跃索引停后台 embed；开 → 当前工作区立即重建）。
+async function onCodegraphEnabledChange(e: Event) {
+  const enabled = (e.target as HTMLInputElement).checked;
+  await update({ codegraphEnabled: enabled });
+  useCodeGraphProgress().setEnabled(enabled);
+}
+
 // 空输入 = undefined（后端按模型自动）；v-model.number 会把空串 coerce 成 0、丢失"自动"
 // 语义，所以手绑 :value/@input。非法/负数归零为 undefined。
 function onScoreThresholdInput(e: Event) {
@@ -932,6 +939,18 @@ function onOverlayClick(e: MouseEvent) {
             <!-- ── 代码索引 Tab ── -->
             <div v-else-if="activeTab === 'codegraph'" class="tab-codegraph">
               <div class="settings-field">
+                <label class="field-label">启用代码索引</label>
+                <div class="toggle-row">
+                  <span class="field-hint">关闭后不再扫描/加载索引（启动、文件变更、保存均不触发）</span>
+                  <label class="toggle">
+                    <input type="checkbox" :checked="settings.codegraphEnabled" @change="onCodegraphEnabledChange" />
+                    <span class="toggle-track"></span>
+                  </label>
+                </div>
+              </div>
+
+              <template v-if="settings.codegraphEnabled">
+              <div class="settings-field">
                 <label class="field-label">Embedding 后端</label>
                 <ThemedSelect
                   :model-value="cgBackend"
@@ -1039,6 +1058,12 @@ function onOverlayClick(e: MouseEvent) {
               <div v-if="cgLastBuild" class="cg-health" :class="`cg-health-${cgHealthKind}`">
                 <span class="cg-health-dot" />
                 <span class="cg-health-text">{{ cgHealthText }}</span>
+              </div>
+              </template>
+              <div v-else class="cg-info">
+                <span class="field-hint">
+                  代码索引已关闭：启动、文件变更、保存都不会扫描或加载索引。重新打开后对当前工作区立即重建。
+                </span>
               </div>
             </div>
 

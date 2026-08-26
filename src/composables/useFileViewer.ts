@@ -405,8 +405,8 @@ export function useFileViewer() {
       //   · skipped:no_active_index / not_in_project → 静默（文件不在索引范围，常态）
       //   · reject (失败)         → 进通知中心（error）
       if (projectRoot.value) {
-        api
-          .codegraphReindexFile(projectRoot.value, win.filePath)
+        useCodeGraphProgress()
+          .reindexFile(projectRoot.value, win.filePath)
           .then((r) => {
             if (!r) return;
             if (r.reindexed) {

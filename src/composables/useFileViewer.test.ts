@@ -1,3 +1,6 @@
+// @vitest-environment jsdom
+// jsdom：useFileViewer 经 useCodeGraphProgress 门面间接 import useSettings
+// （模块级 watch 写 document.documentElement 的 CSS 变量），node 环境没有 document。
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../api", () => ({

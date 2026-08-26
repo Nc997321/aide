@@ -8,6 +8,7 @@ pub mod symbols;
 pub mod edges;
 pub mod meta;
 pub mod guard;
+pub mod gate;
 pub mod agent;
 pub mod state;
 pub mod embed_config;

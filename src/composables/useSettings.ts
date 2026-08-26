@@ -32,6 +32,7 @@ const defaults: AppSettings = {
     format: "ollama",
     dim: 0,
   },
+  codegraphEnabled: true,
   jdkRegistry: [],
   jdkPromptDismissed: [],
   leftSidebarPinned: true,
@@ -53,9 +54,12 @@ const loaded = ref(false);
 // Keep --aide-font-mono CSS variable in sync with user's configured fontFamily.
 // Runs immediately so CodeMirror / xterm / hardcoded var() references always see the
 // correct value even before load() completes.
+// 无 DOM 环境（node 单测）直接 no-op——CSS 变量同步是浏览器职责，模块被
+// useCodeGraphProgress 等门面间接 import 时不该炸。
 watch(
   () => settings.fontFamily,
   (v) => {
+    if (typeof document === "undefined") return;
     document.documentElement.style.setProperty("--aide-font-mono", v);
     // UI 正文（按钮/标签/面板）跟随界面字体，但默认栈（用户未设置）时保持
     // Inter 现状——只有用户显式选了字体后 UI 正文才跟随。
@@ -98,6 +102,7 @@ export function useSettings() {
         ...defaults.codegraphEmbedder,
         ...(s.codegraphEmbedder ?? {}),
       };
+      settings.codegraphEnabled = s.codegraphEnabled ?? defaults.codegraphEnabled;
       settings.jdkRegistry = s.jdkRegistry ?? defaults.jdkRegistry;
       settings.jdkPromptDismissed = s.jdkPromptDismissed ?? defaults.jdkPromptDismissed;
       settings.leftSidebarPinned = s.leftSidebarPinned ?? defaults.leftSidebarPinned;
@@ -139,6 +144,7 @@ export function useSettings() {
     if (partial.recentLimit !== undefined) settings.recentLimit = partial.recentLimit;
     if (partial.paneLayouts !== undefined) settings.paneLayouts = partial.paneLayouts;
     if (partial.codegraphEmbedder !== undefined) settings.codegraphEmbedder = partial.codegraphEmbedder;
+    if (partial.codegraphEnabled !== undefined) settings.codegraphEnabled = partial.codegraphEnabled;
     if (partial.leftSidebarPinned !== undefined) settings.leftSidebarPinned = partial.leftSidebarPinned;
     if (partial.sessionListStyle !== undefined) settings.sessionListStyle = partial.sessionListStyle;
     if (partial.onboarded !== undefined) settings.onboarded = partial.onboarded;
