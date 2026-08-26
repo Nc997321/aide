@@ -182,4 +182,43 @@ describe("useBtwSession routing", () => {
     rebindOwner("someone-else", "real-x");
     expect(store.value.ownerSessionId).toBe("main"); // 不受影响
   });
+
+  // P2-3：支线问答记忆收敛——answer 超上限截保尾、轮数超限丢最老、关 tab 清理。
+  it("answer over cap is tail-truncated in Q&A memory", async () => {
+    const { startBtw, handleBtwEvent } = useBtwSession();
+    await startBtw({ tempId: "cap1", forkFrom: "main", prompt: "问", cwd: "/r", lightweight: true });
+    const big = "A".repeat(64 * 1024 + 500); // > BTW_ANSWER_CAP
+    handleBtwEvent({ session_id: "cap1", type: "text_delta", delta: big });
+    handleBtwEvent({ session_id: "cap1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
+
+    await startBtw({ tempId: "cap2", forkFrom: "main", prompt: "再问", cwd: "/r", lightweight: true });
+    const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
+    expect(sentPrompt).toContain("A".repeat(300)); // 尾部（最新结论）保留
+    expect(sentPrompt.length).toBeLessThan(64 * 1024 + 2000); // 截断后总长有界（未截则 >65.5K）
+  });
+
+  it("history rounds over cap drop oldest (keeps latest 20)", async () => {
+    const { startBtw, handleBtwEvent } = useBtwSession();
+    for (let i = 1; i <= 21; i++) {
+      await startBtw({ tempId: `r${i}`, forkFrom: "main", prompt: `问${i}`, cwd: "/r", lightweight: true });
+      handleBtwEvent({ session_id: `r${i}`, type: "text_delta", delta: `答${i}` });
+      handleBtwEvent({ session_id: `r${i}`, type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
+    }
+    await startBtw({ tempId: "r22", forkFrom: "main", prompt: "问22", cwd: "/r", lightweight: true });
+    const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
+    expect(sentPrompt).not.toContain("Q1: 问1"); // 最老被丢（精确匹配，防误伤问10~问19）
+    expect(sentPrompt).toContain("Q1: 问2"); // digest 重新编号，问2 居首
+    expect(sentPrompt).toContain("Q20: 问21"); // 保留最近 20 条，问21 居尾
+  });
+
+  it("clearBtwHistory wipes owner memory; next btw prompt has no digest", async () => {
+    const { startBtw, handleBtwEvent, clearBtwHistory } = useBtwSession();
+    await startBtw({ tempId: "w1", forkFrom: "main", prompt: "问", cwd: "/r", lightweight: true });
+    handleBtwEvent({ session_id: "w1", type: "text_delta", delta: "答" });
+    handleBtwEvent({ session_id: "w1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
+    clearBtwHistory("main"); // 关 tab 时 disposeSession 调
+    await startBtw({ tempId: "w2", forkFrom: "main", prompt: "再问", cwd: "/r", lightweight: true });
+    const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
+    expect(sentPrompt).toBe("再问");
+  });
 });

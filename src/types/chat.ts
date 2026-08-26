@@ -1,8 +1,20 @@
 export type MessageRole = "user" | "assistant";
 
+/** 降级标记类型：标识 block 的哪个大载荷被摘要占位替换。 */
+export type TruncatedKind = "text" | "thinking" | "tool_result" | "image_data" | "subagent_entries" | "subagent_result";
+
+/** block 降级标记：大载荷已替换为摘要占位。originalBytes = 降级前估算字节(UTF-16,
+ *  length×2)——占位文案「原 N 字」+ P1 字节游标取回 + 记账。P0-3 阶段不可逆(淘汰即丢
+ *  全文)，P1 落地后按 block id + 字节游标从后端取回全文，此标记向前兼容(保留 id 即可)。 */
+export interface TruncatedInfo {
+  kind: TruncatedKind;
+  originalBytes: number;
+}
+
 export interface TextBlock {
   type: "text";
   text: string;
+  truncated?: TruncatedInfo;
 }
 
 export interface ToolCallBlock {
@@ -13,21 +25,26 @@ export interface ToolCallBlock {
   result?: string;
   isError?: boolean;
   isPending: boolean;
+  truncated?: TruncatedInfo;
 }
 
 export interface ImageBlock {
   type: "image";
   data: string;      // base64
   mediaType: string; // "image/png" | ...
+  truncated?: TruncatedInfo;
 }
 
 /** 子代理内部时间线上的一项——按到达顺序混排文本/thinking 增量累积的段落，以及
  *  一次完整的工具调用（工具调用没有"增量"概念，一次到位）。tool 项的 toolUseId 是该
- *  调用在子代理内部的 id，sidecar 的 subagent_tool_result 据此把产出回填到 result。 */
+ *  调用在子代理内部的 id，sidecar 的 subagent_tool_result 据此把产出回填到 result。
+ *  truncated：P2-1 写入时上限（SUBAGENT_ENTRY_CAP）截头保尾后的截断标记——与块级
+ *  TruncatedInfo 同构，UI 有现成渲染路径（text/thinking 走 .sa-truncated 小标，
+ *  tool 走 asToolBlock 透传给 ToolCallBlock 的 .ti-truncated）。 */
 export type SubagentEntry =
-  | { type: "text"; text: string }
-  | { type: "thinking"; text: string }
-  | { type: "tool"; toolUseId: string; toolName: string; input: unknown; result?: string; isError?: boolean };
+  | { type: "text"; text: string; truncated?: TruncatedInfo }
+  | { type: "thinking"; text: string; truncated?: TruncatedInfo }
+  | { type: "tool"; toolUseId: string; toolName: string; input: unknown; result?: string; isError?: boolean; truncated?: TruncatedInfo };
 
 export interface SubagentBlock {
   type: "subagent";
@@ -42,11 +59,16 @@ export interface SubagentBlock {
   /** 运行期间收到的时间线，按到达顺序追加；用于展开态还原"子代理具体做了什么"。 */
   entries: SubagentEntry[];
   result?: string;
+  /** P2-1 写入时上限截断标记：result 超 SUBAGENT_ENTRY_CAP 时截头保尾。独立字段而非
+   *  truncated——后者是 P0-3 整块降级标记（degradeBlock 靠它幂等），混用会让已截断
+   *  result 的块跳过 entries 清空降级。 */
+  resultTruncated?: TruncatedInfo;
   isError?: boolean;
   isPending: boolean;
   /** async（后台）子代理：launch-ack 到达后标记，UI 显示「后台运行中」。
    *  回放的工具链/模型由 sidecar tail 经 subagent_progress 等事件推，与 sync 同路。 */
   asyncLaunched?: { agentId: string; outputFile: string };
+  truncated?: TruncatedInfo;
 }
 
 /** 用户侧「动作胶囊」——由工具栏快捷操作（压缩/清空上下文等）触发。底层仍把
@@ -71,6 +93,7 @@ export interface ActionBlock {
 export interface ThinkingBlock {
   type: "thinking";
   text: string;
+  truncated?: TruncatedInfo;
 }
 
 export type ContentBlock = TextBlock | ThinkingBlock | ToolCallBlock | ImageBlock | SubagentBlock | ActionBlock;
@@ -185,6 +208,9 @@ export interface ChatMessage {
   role: MessageRole;
   blocks: ContentBlock[];
   timestamp: number;
+  /** 页折叠占位（微博式回收）：远端页滚出视口后整页折叠成这一条 marker，
+   *  blocks[0].text = 「↑ 更早的 N 条消息」。ChatPanel 渲染为单行，点击/滚回恢复。 */
+  markerFor?: string;
   /** assistant 消息正在流式生成中（用于续写判定，替代对象身份比较） */
   streaming?: boolean;
   /** 这条 assistant 消息这一轮的 token 用量 + 费用 */

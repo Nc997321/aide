@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  Session, WorkspaceInfo, FileEntry, ChatMessageItem,
+  Session, WorkspaceInfo, FileEntry, ChatMessageItem, LoadMessagesResult,
   ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
   GrepMatch, ProviderConfig, ProviderConfigInput, ProviderModelMappings, RunConfig, RunTarget, JdkEntry, RecentView,
   SearchOptions, SearchResponse, ReplacePreviewResponse, ReplaceFileInput, ApplyResult,
@@ -229,8 +229,16 @@ export const api = {
   listSessionsForWorkspace(wsKey: string): Promise<Session[]> {
     return invoke("list_sessions_for_workspace", { wsKey });
   },
-  loadMessages(sessionId: string): Promise<ChatMessageItem[]> {
-    return invoke("load_messages", { sessionId });
+  loadMessages(
+    sessionId: string,
+    offsetBytes?: number | null,
+    limit?: number | null,
+  ): Promise<LoadMessagesResult> {
+    return invoke("load_messages", {
+      sessionId,
+      offsetBytes: offsetBytes ?? null,
+      limit: limit ?? null,
+    });
   },
   createSession(id: string, name: string): Promise<Session> {
     return invoke("create_session", { id, name });
@@ -249,6 +257,9 @@ export const api = {
   },
   saveSessionChanges(sessionId: string, rounds: ChangeRound[]): Promise<void> {
     return invoke("save_session_changes", { sessionId, rounds });
+  },
+  appendSessionChange(sessionId: string, round: ChangeRound): Promise<void> {
+    return invoke("append_session_change", { sessionId, round });
   },
   sessionJsonlSize(sessionId: string): Promise<number> {
     return invoke("session_jsonl_size", { sessionId });

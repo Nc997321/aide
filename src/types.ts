@@ -31,6 +31,13 @@ export interface ChatMessageItem {
   timestamp: number;
 }
 
+/** load_messages 分页返回(serde camelCase 镜像):消息页 + 下一页字节游标。
+ *  nextOffsetBytes = 页首真实 user 行的起始字节;0 = 已到文件头(无更早页)。 */
+export interface LoadMessagesResult {
+  messages: ChatMessageItem[];
+  nextOffsetBytes: number;
+}
+
 export interface ProjectInfo {
   root: string;
   name: string;

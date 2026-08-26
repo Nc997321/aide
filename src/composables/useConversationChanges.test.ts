@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ref, nextTick } from "vue";
+import { useSessionState } from "./useSessionState";
 
 vi.mock("../api", () => ({
   api: {
     saveSessionChanges: vi.fn().mockResolvedValue(undefined),
+    appendSessionChange: vi.fn().mockResolvedValue(undefined),
     loadSessionChanges: vi.fn().mockResolvedValue([]),
     sessionJsonlSize: vi.fn().mockResolvedValue(100),
     gitDiffFiles: vi.fn().mockResolvedValue([]),
@@ -15,6 +17,7 @@ vi.mock("../api", () => ({
 vi.mock("./useChatSession", () => ({
   isPendingSession: () => false,
   getLastDispatchedPrompt: () => "test prompt",
+  resetPaginationForRevert: () => {},
 }));
 vi.mock("./useModal", () => ({
   useModal: () => ({ confirm: vi.fn().mockResolvedValue(true) }),
@@ -25,19 +28,22 @@ import { api } from "../api";
 
 const SID = "uuid-1";
 
-/** 建立带 currentSid 的 hook：sessionId 从空 → SID 触发内部 watch 设置 currentSid
- *  （watch 无 immediate，getter 恒定时不触发，必须真变化一次）。 */
-async function mountWithSid() {
+/** 建立带 currentSid 的 hook：sessionId 从空 → sid 触发内部 watch 设置 currentSid
+ *  （watch 无 immediate，getter 恒定时不触发，必须真变化一次）。
+ *  sid 可传参：state 转换类测试必须用独立 SID——useConversationChanges 的 watch 挂在
+ *  模块级全局 sessionState 上，同 SID 的前置测试实例（测试间不销毁）也会响应
+ *  setSessionState，把 save/append 调用数污染成 N 份。 */
+async function mountWithSid(sid = SID) {
   const sidRef = ref("");
   const hook = useConversationChanges(() => sidRef.value);
   await nextTick();
-  sidRef.value = SID;
+  sidRef.value = sid;
   await nextTick();
   await Promise.resolve(); // watch 回调内 loadSessionChanges await 落定
   return hook;
 }
 const apiMock = api as unknown as Record<
-  "saveSessionChanges" | "loadSessionChanges" | "sessionJsonlSize" | "gitDiffFiles" | "gitRevertFile" | "truncateSessionJsonl" | "stopChatSession",
+  "saveSessionChanges" | "appendSessionChange" | "loadSessionChanges" | "sessionJsonlSize" | "gitDiffFiles" | "gitRevertFile" | "truncateSessionJsonl" | "stopChatSession",
   ReturnType<typeof vi.fn>
 >;
 
@@ -131,5 +137,34 @@ describe("useConversationChanges 用户操作错误处理（P0）", () => {
       expect.stringContaining("[changelog] save session changes failed"),
       expect.any(Error),
     );
+  });
+
+  it("captureChanges 纯追加路径 → 首轮全量兜底、次轮起 append 单轮（P2-4）", async () => {
+    // 独立 SID：前置测试实例的 watch 挂在全局 sessionState[uuid-1] 上，共用会串扰
+    const P24_SID = "uuid-p24";
+    const { rounds } = await mountWithSid(P24_SID);
+    const { setSessionState } = useSessionState();
+    // 第一轮：磁盘空（diskTailIndex=-1）→ 尾轮 index 1 !== 0，全量兜底
+    // （vi.waitFor 轮询落定，pendingOp 链多层 await 不靠固定次数冲刷）
+    setSessionState(P24_SID, "running");
+    await nextTick();
+    setSessionState(P24_SID, "waiting");
+    await vi.waitFor(() => {
+      expect(rounds.value).toHaveLength(1);
+      expect(rounds.value[0].index).toBe(1);
+      expect(apiMock.saveSessionChanges).toHaveBeenCalledTimes(1);
+    });
+    expect(apiMock.appendSessionChange).not.toHaveBeenCalled();
+
+    // 第二轮：内存尾轮 index 2 === diskTailIndex(1)+1 → append 单轮
+    setSessionState(P24_SID, "running");
+    await nextTick();
+    setSessionState(P24_SID, "waiting");
+    await vi.waitFor(() => {
+      expect(rounds.value).toHaveLength(2);
+      expect(apiMock.appendSessionChange).toHaveBeenCalledTimes(1);
+    });
+    expect(apiMock.appendSessionChange).toHaveBeenCalledWith(P24_SID, expect.objectContaining({ index: 2 }));
+    expect(apiMock.saveSessionChanges).toHaveBeenCalledTimes(1); // 仍是首轮那次全量
   });
 });

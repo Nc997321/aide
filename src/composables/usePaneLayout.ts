@@ -21,7 +21,7 @@ import {
 import { useSessionState } from "./useSessionState";
 import { useSessionNames } from "./useSessionNames";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
-import { getLastDispatchedPrompt, stopSessionById } from "./useChatSession";
+import { disposeSession, getLastDispatchedPrompt, stopSessionById } from "./useChatSession";
 
 /**
  * 聊天区多 tab + 任意分屏的状态层（模块级 reactive 单例，同 useSessionState 风格）。
@@ -124,10 +124,12 @@ export function usePaneLayout() {
     if (!isStarted(sessionId) && group.previewTabId) {
       const preview = group.tabs.find((t) => t.id === group.previewTabId);
       if (preview) {
+        const oldSid = preview.sessionId; // 改绑前取：旧会话 tab 无声落下，需收口
         preview.sessionId = sessionId;
         delete preview.pendingName;
         delete preview.pendingWs; // 改绑已存在会话：归属走注册表，空白快照作废
         activateTab(group, preview.id);
+        retireSilentSession(oldSid);
         return;
       }
     }
@@ -145,12 +147,14 @@ export function usePaneLayout() {
       ? group.tabs.find((t) => t.id === group.previewTabId)
       : undefined;
     if (preview) {
+      const oldSid = preview.sessionId; // 改绑前取：旧会话 tab 无声落下，需收口
       preview.sessionId = null;
       preview.pendingName = pendingName;
       // 复用预览 tab = 换一个空白面板：归属快照跟着换绑（无新快照则清除旧绑定）
       if (pendingWs) preview.pendingWs = pendingWs;
       else delete preview.pendingWs;
       activateTab(group, preview.id);
+      retireSilentSession(oldSid);
       return;
     }
     const tab = createTab(null, pendingName, pendingWs);
@@ -220,10 +224,21 @@ export function usePaneLayout() {
     layout.focusedGroupId = res.newGroup.id;
   }
 
-  /** 关闭 tab：会话存活时先停止进程再移除布局（"关闭即停止"合并语义）。
+  /** 预览改绑无声落下的旧会话收口：与 closeTab 同语义——已启动先 stop（防孤儿
+   *  sidecar 不可见不可达），再 disposeSession 释放前端内存。fire-and-forget
+   *  （openSession 是同步函数，stop 异步等命令送达即可）。oldSid 为空（空白预览）no-op。 */
+  function retireSilentSession(oldSid: string | null): void {
+    if (!oldSid) return;
+    if (isStarted(oldSid)) void stopSessionById(oldSid);
+    disposeSession(oldSid);
+  }
+
+  /** 关闭 tab：会话存活时先停止进程再移除布局（"关闭即停止"合并语义），移除后
+   *  disposeSession 彻底收口前端状态（删 store + per-sid 字典 + 标记拦截延迟事件）。
    *  async 以 await stopSessionById——stop_chat_session 只是往 sidecar stdin 写一行
    *  命令即返回（毫秒级，不等 worker 退出），所以 await 几乎无成本，且能确认命令送达
-   *  才移除 tab。已停止 / 空白 tab 跳过停止，直接移除。所有关闭入口（X / 中键 / 右键
+   *  才移除 tab。已停止 / 空白 tab 跳过停止，直接移除。dispose 放 removeTab 后：stop
+   *  失败 = tab 仍在 = 不 dispose，保持一致性。所有关闭入口（X / 中键 / 右键
    *  "关闭" / Ctrl+W / "关闭其他"）都走这里，单点一致。 */
   async function closeTab(groupId: string, tabId: string) {
     const group = findGroup(layout.root, groupId);
@@ -233,6 +248,7 @@ export function usePaneLayout() {
       await stopSessionById(sid);
     }
     commitRoot(removeTab(layout.root, groupId, tabId));
+    if (sid) disposeSession(sid);
   }
 
   /** 关闭聚焦组的激活 tab（Ctrl+W）。fire-and-forget：closeTab 内部仍完整执行

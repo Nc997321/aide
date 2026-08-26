@@ -1,6 +1,6 @@
 import { ref, watch } from "vue";
 import { useSessionState } from "./useSessionState";
-import { isPendingSession, getLastDispatchedPrompt } from "./useChatSession";
+import { isPendingSession, getLastDispatchedPrompt, resetPaginationForRevert } from "./useChatSession";
 import { useModal } from "./useModal";
 import { api } from "../api";
 import type { ChangeRound, ChangeFile } from "../types";
@@ -20,16 +20,29 @@ export function useConversationChanges(sessionId: () => string) {
   let snapshotDiff: Map<string, { additions: number; deletions: number }> | null = null;
   /** 撤回进行中：阻止 stopChatSession 触发的 captureChanges 把「被杀轮」记录回来 */
   let reverting = false;
+  /** 磁盘上最后一条轮的 index（-1 = 无/未知）。save 的追加锚点：内存尾轮 index
+   *  === diskTailIndex + 1 说明是纯追加（captureChanges 常态），只 append 单轮
+   *  O(1) 落盘；否则（revert 后轮次变少/修改、上一轮 save 失败）整份覆盖兜底。
+   *  会话切换 load 完成前保持 -1（未知即全量，避免误 append 到错误会话）。 */
+  let diskTailIndex = -1;
 
-  /** Persist rounds to disk */
+  /** Persist rounds to disk（纯追加走 append 单轮，其余全量覆盖） */
   async function save() {
     const sid = currentSid;
     if (!sid || isPendingSession(sid)) return;
+    const list = rounds.value;
+    const tail = list[list.length - 1];
     try {
-      await api.saveSessionChanges(sid, rounds.value);
+      if (tail && tail.index === diskTailIndex + 1) {
+        await api.appendSessionChange(sid, tail);
+      } else {
+        await api.saveSessionChanges(sid, list);
+      }
+      diskTailIndex = tail ? tail.index : -1;
     } catch (e) {
       // 变更记录落盘失败：内存里本轮数据还在，但重启/切会话后丢失——
-      // 降级提示（面板数据仍可继续累积，下次 save 会再试整份）。
+      // 降级提示（面板数据仍可继续累积，下次 save 会再试整份；锚点未更新，
+      // 下次 save 自动退化为全量覆盖重试）。
       console.warn("[changelog] save session changes failed, rounds will be lost on session switch/restart:", e);
     }
   }
@@ -43,11 +56,13 @@ export function useConversationChanges(sessionId: () => string) {
       roundCounter = 0;
       lastState = "";
       pendingOp = Promise.resolve();
+      diskTailIndex = -1; // load 完成前未知：首个 save 走全量覆盖，不误 append
       try {
         const saved = await api.loadSessionChanges(newSid);
         rounds.value = saved;
         if (saved.length > 0) {
           roundCounter = saved[saved.length - 1].index;
+          diskTailIndex = saved[saved.length - 1].index;
         }
       } catch (_) {
         rounds.value = [];
@@ -182,6 +197,8 @@ export function useConversationChanges(sessionId: () => string) {
     }
     rounds.value = rounds.value.filter((r) => r.index < round.index);
     roundCounter = rounds.value.length;
+    // .jsonl 已按字节截断：旧分页游标失效，清空（后端另有 clamp 兜底，双保险）
+    if (sid) resetPaginationForRevert(sid);
     await save();
   }
 

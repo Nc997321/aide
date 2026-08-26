@@ -3,6 +3,7 @@ import { usePaneLayout, __resetPaneLayoutForTest } from "./usePaneLayout";
 import { listGroups, listSnapshotTabs, type GroupNode, type SplitNode } from "./paneLayout/tree";
 import { useSessionNames } from "./useSessionNames";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
+import { useSessionState } from "./useSessionState";
 
 /** 「已启动」判定注入：测试里显式指定哪些会话算已启动 */
 const started = new Set<string>();
@@ -414,5 +415,43 @@ describe("hero 归属选择（setTabPendingWs / setDefaultWs）", () => {
     pl.setDefaultWs({ wsKey: "C--proj-z", wsPath: "C:/proj/z" });
     __resetPaneLayoutForTest((sid) => started.has(sid));
     expect(pl.layout.defaultWs).toBeNull();
+  });
+});
+
+describe("生命周期收口（closeTab / 预览改绑触发 disposeSession）", () => {
+  // 本文件 beforeEach 不重置 useSessionState——用例自清，防模块级单例污染
+
+  it("closeTab 收口会话前端状态：disposeSession 删 store + per-sid 字典", async () => {
+    const { state, setSessionState, removeSessionState } = useSessionState();
+    setSessionState("s1", "stopped"); // 模拟 session_dead 先到 → closeTab 跳过 stop
+    const pl = usePaneLayout();
+    pl.openSession("s1");
+    expect(state["s1"]).toBe("stopped");
+    const group = focused();
+    await pl.closeTab(group.id, group.tabs[0].id);
+    // disposeSession 清掉 state（store 本身在此未 hydrate，删 no-op，无妨）
+    expect(state["s1"]).toBeUndefined();
+    expect(focused().tabs).toHaveLength(0);
+    removeSessionState("s1"); // 自清兜底
+  });
+
+  it("预览改绑覆盖旧会话时收口其前端状态", () => {
+    const { state, setSessionState, removeSessionState } = useSessionState();
+    setSessionState("s1", "stopped");
+    const pl = usePaneLayout();
+    pl.openSession("s1"); // 预览 s1
+    pl.openSession("s2"); // 覆盖预览 → retireSilentSession("s1") → disposeSession("s1")
+    expect(state["s1"]).toBeUndefined();
+    expect(focused().tabs).toHaveLength(1);
+    expect(pl.activeSessionId.value).toBe("s2");
+    removeSessionState("s2"); // 自清兜底
+  });
+
+  it("openBlankTab 覆盖空白预览：retireSilentSession(null) 空判 no-op 不抛", () => {
+    const pl = usePaneLayout();
+    pl.openBlankTab("A"); // 空白预览 sessionId=null
+    pl.openBlankTab("B"); // 覆盖 → retireSilentSession(null) → if (!oldSid) return
+    expect(focused().tabs).toHaveLength(1);
+    expect(focused().tabs[0].pendingName).toBe("B");
   });
 });

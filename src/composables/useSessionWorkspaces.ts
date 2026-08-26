@@ -45,5 +45,11 @@ export function useSessionWorkspaces() {
     delete workspaces[oldId];
   }
 
-  return { workspaces, setWorkspace, setMany, workspaceOf, migrate };
+  /** 会话销毁时收口归属条目（关 tab / 删会话 / 预览改绑）。读点 workspaceOf
+   *  有 `?? null` 兜底，删后自然回落 null。 */
+  function removeWorkspace(sessionId: string): void {
+    delete workspaces[sessionId];
+  }
+
+  return { workspaces, setWorkspace, setMany, workspaceOf, migrate, removeWorkspace };
 }

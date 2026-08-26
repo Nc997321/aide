@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from "vue";
+import type { TruncatedInfo } from "@/types/chat";
 /** 主线程思考块——partial=on 时 sidecar 把 thinking_delta 逐字转发（流式），partial=off /
  *  历史回放走 thinking 整块。视觉对齐子代理 .sa-thinking（灰斜体小字 + agentAccent 色调），独立成
  *  组件与 ToolCallBlock / SubagentCallBlock 同级。
@@ -8,7 +9,7 @@ import { ref, computed, watch, nextTick } from "vue";
  *  生成，结束自动折叠；用户手动点一次后 userOverride 接管（用户意愿优先于流式默认）。
  *  落在 .msg-turn（铜书脊）里，不套独立卡片避免双层边条，只用 agentAccent 淡左边条区分正文。
  *  text 空时 sidecar 不发本组件，故此处 text 必非空。 */
-const props = defineProps<{ text: string; streaming?: boolean }>();
+const props = defineProps<{ text: string; truncated?: TruncatedInfo; streaming?: boolean }>();
 
 /** 用户是否手动 toggle 过——一旦操作，details 开合完全由用户决定，流式默认不再覆盖。 */
 const userOverride = ref(false);
@@ -52,7 +53,7 @@ function onToggle(e: Event) {
     <summary class="thinking-head">
       <span class="thinking-caret" aria-hidden="true"></span>
       <span class="thinking-label">思考</span>
-      <span class="thinking-count">{{ text.length }} 字</span>
+      <span class="thinking-count">{{ truncated ? Math.round(truncated.originalBytes / 2) : text.length }} 字</span>
     </summary>
     <div ref="bodyRef" class="thinking-body">{{ text }}</div>
   </details>

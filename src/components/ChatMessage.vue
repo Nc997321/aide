@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import type { ChatMessage, ModelOption, BgTask } from "@/types/chat";
 import { renderStreaming, renderMarkdown } from "@/utils/markdown";
+import { truncatedLabel } from "@/utils/messageBytes";
 import ToolCallBlock from "./ToolCallBlock.vue";
 import ToolCallGroup from "./ToolCallGroup.vue";
 import ProcessGroup from "./ProcessGroup.vue";
@@ -143,6 +144,7 @@ function handleTextClick(e: MouseEvent) {
         <ThinkingBlock
           v-else-if="seg.block.type === 'thinking'"
           :text="seg.block.text"
+          :truncated="seg.block.truncated"
           :streaming="isStreamingTail(seg.index)"
         />
         <ToolCallBlock
@@ -185,6 +187,10 @@ function handleTextClick(e: MouseEvent) {
           <span v-if="seg.block.icon" class="msg-action-chip-icon">{{ seg.block.icon }}</span>
           <span class="msg-action-chip-label">{{ seg.block.label }}</span>
         </span>
+        <div
+          v-else-if="seg.block.type === 'image' && seg.block.truncated"
+          class="msg-image-truncated"
+        >{{ truncatedLabel(seg.block.truncated.originalBytes) }}</div>
         <img
           v-else-if="seg.block.type === 'image'"
           :src="`data:${seg.block.mediaType};base64,${seg.block.data}`"
@@ -350,6 +356,14 @@ function handleTextClick(e: MouseEvent) {
   display: block;
   margin: 4px 0;
   cursor: pointer;
+}
+.msg-image-truncated {
+  margin: 4px 0;
+  padding: 8px 12px;
+  font-style: italic;
+  font-size: 12px;
+  color: var(--aide-text-muted);
+  border-radius: var(--aide-radius-sm);
 }
 
 /* btw 页边批注：右对齐、虚线 accent 边、默认折叠。

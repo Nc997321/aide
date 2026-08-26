@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { renderMarkdown, renderStreaming } from "./markdown";
+import { describe, it, expect, beforeEach } from "vitest";
+import { renderMarkdown, renderStreaming, __renderCacheSizeForTest } from "./markdown";
 
 /** 卡死修复的回归护栏：流式尾块渲染必须绕开 hljs（O(n²) 放大器），
  *  语法高亮只在定稿态出现。见 utils/markdown.ts 的注释与
@@ -36,5 +36,19 @@ describe("renderMarkdown（定稿块，高亮）", () => {
   it("同一文本重复渲染返回同一引用（缓存命中）", () => {
     const text = "缓存测试 **x**";
     expect(renderMarkdown(text)).toBe(renderMarkdown(text));
+  });
+
+  it("超单条上限的大文本不入缓存（P2-2）", () => {
+    renderMarkdown("小文本 **a**"); // 基线：缓存 1 条
+    const before = __renderCacheSizeForTest();
+    renderMarkdown("x".repeat(256 * 1024 + 1)); // > RENDER_CACHE_MAX_TEXT_CHARS
+    expect(__renderCacheSizeForTest()).toBe(before); // 未入缓存，条目数不变
+  });
+
+  it("临界线下的文本仍缓存（上限边界内不受影响）", () => {
+    renderMarkdown("小文本 **b**");
+    const before = __renderCacheSizeForTest();
+    renderMarkdown("y".repeat(256 * 1024)); // 恰好在上限内
+    expect(__renderCacheSizeForTest()).toBe(before + 1);
   });
 });

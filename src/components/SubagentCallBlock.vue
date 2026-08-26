@@ -2,6 +2,7 @@
 import { ref, computed } from "vue";
 import type { SubagentBlock, SubagentEntry, ToolCallBlock as ToolCallBlockData } from "@/types/chat";
 import ToolCallBlock from "./ToolCallBlock.vue";
+import { truncatedLabel } from "@/utils/messageBytes";
 
 type ToolEntry = Extract<SubagentEntry, { type: "tool" }>;
 
@@ -33,6 +34,8 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
     input: e.input,
     result: e.result,
     isError: e.isError,
+    // P2-1 写入时截断透传：ToolCallBlock 已有 .ti-truncated 渲染路径，零新 UI
+    truncated: e.truncated,
     // 子步无独立 pending 流；父还在跑且本步尚无产出 → 视为执行中，复用呼吸点。
     isPending: parentRunning && !e.result && !e.isError,
   };
@@ -92,17 +95,30 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
           <pre v-if="promptExpanded" class="sa-prompt-body">{{ block.prompt }}</pre>
         </div>
 
-        <!-- 工具步 / 思考 / 文本：工具步直接复用 <ToolCallBlock>，与父线程同款墨线渲染 -->
+        <!-- 工具步 / 思考 / 文本：工具步直接复用 <ToolCallBlock>，与父线程同款墨线渲染。
+             entry.truncated（P2-1 写入时截断）→ text/thinking 尾随省略小标，
+             tool 走 asToolBlock 透传给 ToolCallBlock 的 .ti-truncated。 -->
         <template v-for="(entry, i) in block.entries" :key="i">
           <ToolCallBlock v-if="entry.type === 'tool'" :block="asToolBlock(entry)" />
-          <p v-else-if="entry.type === 'thinking'" class="sa-thinking">{{ entry.text }}</p>
-          <p v-else class="sa-text">{{ entry.text }}</p>
+          <p v-else-if="entry.type === 'thinking'" class="sa-thinking">
+            {{ entry.text }}<span v-if="entry.truncated" class="sa-truncated">…{{ truncatedLabel(entry.truncated.originalBytes) }}</span>
+          </p>
+          <p v-else class="sa-text">
+            {{ entry.text }}<span v-if="entry.truncated" class="sa-truncated">…{{ truncatedLabel(entry.truncated.originalBytes) }}</span>
+          </p>
         </template>
 
+        <!-- 降级占位：子代理 entries/result 大载荷已被摘要替换 -->
+        <div v-if="block.truncated" class="sa-truncated">{{ truncatedLabel(block.truncated.originalBytes) }}</div>
+
         <!-- 最终产出（输出）：时间线尾端，子线程的收束。
-             有 entries 时它是工具步之后的总结；无 entries 时它是唯一产出。 -->
-        <pre v-if="block.result" class="sa-result">{{ block.result }}</pre>
-        <div v-else-if="!block.entries.length" class="sa-pending">
+             有 entries 时它是工具步之后的总结；无 entries 时它是唯一产出。
+             resultTruncated（P2-1 写入时截断）在 pre 后随行小标。 -->
+        <div v-if="block.result" class="sa-result-wrap">
+          <pre class="sa-result">{{ block.result }}</pre>
+          <span v-if="block.resultTruncated" class="sa-truncated">…{{ truncatedLabel(block.resultTruncated.originalBytes) }}</span>
+        </div>
+        <div v-else-if="!block.entries.length && !block.truncated" class="sa-pending">
           {{ block.asyncLaunched ? "子代理后台运行中…" : "子代理执行中…" }}
         </div>
       </div>
@@ -296,6 +312,11 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
   opacity: 0.85;
 }
 
+.sa-result-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
 .sa-result {
   margin: 4px 0 0;
   max-height: 240px;
@@ -305,6 +326,11 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
   color: var(--aide-text-secondary);
 }
 .sa-pending {
+  padding: 2px 0;
+  font-style: italic;
+  color: var(--aide-text-muted);
+}
+.sa-truncated {
   padding: 2px 0;
   font-style: italic;
   color: var(--aide-text-muted);

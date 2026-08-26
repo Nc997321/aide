@@ -1,14 +1,20 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { useConversationChanges } from "../composables/useConversationChanges";
 import type { ChangeRound, ChangeFile } from "../composables/useConversationChanges";
 import { useFileResolver } from "../composables/useFileResolver";
 import { useSessionWorkspaces } from "../composables/useSessionWorkspaces";
 import { api } from "../api";
 
-const props = defineProps<{ sessionId: string }>();
+// P2-4 合一：rounds 与撤回操作由 App.vue 的 useConversationChanges 唯一实例
+// 经 props 透传（ChangeLogPanel 恒挂在活动会话，sessionId 与实例恒同）。
+// 模板里 rounds/revertRound/revertSingleFile 直接按 props 名访问（script setup 展开）。
+const props = defineProps<{
+  sessionId: string;
+  rounds: ChangeRound[];
+  revertRound: (round: ChangeRound) => Promise<void>;
+  revertSingleFile: (round: ChangeRound, filePath: string) => Promise<void>;
+}>();
 
-const { rounds, revertRound, revertSingleFile } = useConversationChanges(() => props.sessionId);
 const { openResolved } = useFileResolver();
 const sessionWs = useSessionWorkspaces();
 
@@ -55,11 +61,11 @@ async function openFile(f: ChangeFile) {
 
 const totalFiles = computed(() => {
   let n = 0;
-  for (const r of rounds.value) n += r.files.length;
+  for (const r of props.rounds) n += r.files.length;
   return n;
 });
 
-const displayedRounds = computed(() => [...rounds.value].reverse());
+const displayedRounds = computed(() => [...props.rounds].reverse());
 
 const renderItems = computed<RenderItem[]>(() => {
   const list = displayedRounds.value;

@@ -6,6 +6,7 @@ import DiffViewer from "./fileviewer/DiffViewer.vue";
 import { buildChangeInfo, locateAnchorLine, locateEditStartLine, type ChangeInfo } from "@/utils/changeCard";
 import { isChangeTool } from "@/utils/blockSegments";
 import { summarizeToolInput } from "@/utils/toolSummary";
+import { truncatedLabel } from "@/utils/messageBytes";
 import { useFileResolver } from "@/composables/useFileResolver";
 import { useSettings } from "@/composables/useSettings";
 
@@ -129,7 +130,7 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
       </svg>
     </button>
     <div v-if="expanded" class="ti-body">
-      <BashOutputBlock v-if="isBash && block.result" :content="block.result" :is-error="block.isError ?? false" />
+      <BashOutputBlock v-if="isBash && block.result && !block.truncated" :content="block.result" :is-error="block.isError ?? false" />
       <div
         v-else-if="changeInfo && !block.isPending"
         class="ti-change"
@@ -137,6 +138,7 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
       >
         <DiffViewer :pair="changeInfo.pair" :file-path="changeInfo.filePath" :first-line-number="firstLine ?? undefined" initial-mode="unified" :show-badge="false" />
       </div>
+      <div v-else-if="block.truncated" class="ti-truncated">{{ truncatedLabel(block.truncated.originalBytes) }}</div>
       <pre v-else-if="block.result" class="ti-result">{{ block.result }}</pre>
       <div v-else class="ti-pending">等待结果…</div>
     </div>
@@ -296,6 +298,11 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
 }
 
 .ti-pending {
+  padding: 11px 14px;
+  font-style: italic;
+  color: var(--aide-text-muted);
+}
+.ti-truncated {
   padding: 11px 14px;
   font-style: italic;
   color: var(--aide-text-muted);

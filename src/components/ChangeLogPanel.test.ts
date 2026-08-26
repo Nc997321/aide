@@ -12,17 +12,6 @@ const mocks = vi.hoisted(() => ({
   revertSingleFile: vi.fn(),
 }));
 
-vi.mock("../composables/useConversationChanges", async () => {
-  const { ref } = await import("vue");
-  return {
-    useConversationChanges: () => ({
-      rounds: ref(mocks.rounds),
-      revertRound: mocks.revertRound,
-      revertSingleFile: mocks.revertSingleFile,
-    }),
-  };
-});
-
 vi.mock("../composables/useFileResolver", () => ({
   useFileResolver: () => ({ openResolved: mocks.openResolved }),
 }));
@@ -51,7 +40,12 @@ function seedRounds() {
 
 function mountPanel() {
   return mount(ChangeLogPanel, {
-    props: { sessionId: "s1" },
+    props: {
+      sessionId: "s1",
+      rounds: mocks.rounds,
+      revertRound: mocks.revertRound,
+      revertSingleFile: mocks.revertSingleFile,
+    },
     global: { directives: { tooltip: () => {} } },
   });
 }

@@ -23,5 +23,11 @@ export function useSessionNames() {
     return names[id] || id.slice(0, 8);
   }
 
-  return { names, setName, setFromSessions, displayName };
+  /** 会话销毁时收口注册表条目（关 tab / 删会话 / 预览改绑）。读点 displayName
+   *  有 `||` 兜底，删后自然回落 id 前 8 位。 */
+  function removeName(id: string): void {
+    delete names[id];
+  }
+
+  return { names, setName, setFromSessions, displayName, removeName };
 }

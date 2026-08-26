@@ -39,13 +39,17 @@ let onDoneCb: ((block: ActionBlock) => void) | null = null;
 
 /** 支线问答记忆：按主会话 id 记全部历史轮次（内存态，app 重启即忘——btw 本来就是
  *  阅后即弃的临时物）。下一轮 btw 拼进 prompt，支线就能引用此前的问答（2026-08-02）。
- *  不设轮数/字符上限：正常用法一个会话就几轮，每轮大头开销本是 fork 主会话上下文，
- *  为假想的病态累积写截断特殊处理不值得。 */
+ *  P2-3 加双上限（正常用法一会话几轮，上限防病态累积）：
+ *  轮数超 BTW_HISTORY_ROUNDS_CAP 丢最老；单轮 answer 超 BTW_ANSWER_CAP 截头保尾
+ *  （历史 digest 只喂后续 prompt，保留最新尾部结论；全量流式正文已在主对话
+ *  action block 呈现，记忆副本截断不影响展示）。 */
 interface BtwRound {
   question: string;
   answer: string;
 }
 const historyByOwner = new Map<string, BtwRound[]>();
+const BTW_HISTORY_ROUNDS_CAP = 20;
+const BTW_ANSWER_CAP = 64 * 1024;
 
 /** 把该主会话此前的支线问答拼进本轮 prompt；无历史则原样返回。 */
 function composePrompt(ownerSid: string, prompt: string): string {
@@ -178,9 +182,16 @@ function handleBtwEvent(e: Record<string, unknown>) {
       // 任务支线(git-commit)不记——它是全新会话的固定任务,结论回插主对话即可,
       // 混入问答记忆只会污染后续轻量 btw 的 prompt。
       if (conclusion && state.value.ownerSessionId && !state.value.taskId) {
-        const rounds = historyByOwner.get(state.value.ownerSessionId) ?? [];
-        rounds.push({ question: state.value.question, answer: conclusion });
-        historyByOwner.set(state.value.ownerSessionId, rounds);
+        const owner = state.value.ownerSessionId;
+        const rounds = historyByOwner.get(owner) ?? [];
+        // P2-3：answer 截头保尾到上限；轮数超限丢最老
+        const answer =
+          conclusion.length > BTW_ANSWER_CAP ? conclusion.slice(-BTW_ANSWER_CAP) : conclusion;
+        rounds.push({ question: state.value.question, answer });
+        if (rounds.length > BTW_HISTORY_ROUNDS_CAP) {
+          rounds.splice(0, rounds.length - BTW_HISTORY_ROUNDS_CAP);
+        }
+        historyByOwner.set(owner, rounds);
       }
       if (onDoneCb && conclusion) {
         const isTask = !!state.value.taskId;
@@ -237,7 +248,15 @@ export function useBtwSession() {
     reopen,
     rebindOwner,
     setOnDone,
+    clearBtwHistory,
   };
+}
+
+/** P2-3：关 tab / 删会话时清理该主会话的支线问答记忆（owner 已关，记忆无人消费）。
+ *  后台仍跑的 btw 完成时会经 message_stop 重建单轮条目——owner 已关不会再 startBtw，
+ *  该条目无人消费，无害。useChatSession.disposeSession 调用。 */
+export function clearBtwHistory(ownerSid: string) {
+  historyByOwner.delete(ownerSid);
 }
 
 export function __resetBtwForTest() {

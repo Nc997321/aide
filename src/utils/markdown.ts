@@ -64,8 +64,23 @@ const markedStreaming = makeMarked(plainCode);
  *  innerHTML 写入，旧块的 DOM 完全不动。 */
 const renderCache = new Map<string, string>();
 const RENDER_CACHE_MAX = 300;
+/** 单条缓存上限（P2-2）：文本超此字符数不入缓存。cap 300 条只挡了条数，单条无上限时
+ *  一条 MB 级文本的 HTML 能常驻数十 MB（文本 512KB UTF-16 + HTML 数倍）；超阈直接
+ *  parse 不缓存——大块本就少见，每次重渲染多付一次解析换内存有界（数据层另有 P0-3
+ *  降级在 store 超阈值后收敛大 block，这里是渲染缓存层的独立有界性）。 */
+const RENDER_CACHE_MAX_TEXT_CHARS = 256 * 1024;
+
+/** 测试钩子：当前缓存条目数（P2-2 验证「超限不入缓存」用）。
+ *  注意不能用「重复渲染引用相同」断言——marked.parse 本身对相同输入返回同引用。 */
+export function __renderCacheSizeForTest(): number {
+  return renderCache.size;
+}
 
 export function renderMarkdown(text: string): string {
+  // 超阈大文本不入缓存（见 RENDER_CACHE_MAX_TEXT_CHARS 注释）
+  if (text.length > RENDER_CACHE_MAX_TEXT_CHARS) {
+    return marked.parse(text) as string;
+  }
   const hit = renderCache.get(text);
   if (hit !== undefined) return hit;
   const html = marked.parse(text) as string;
