@@ -72,7 +72,7 @@ function onReconnected(): void {
 
 async function reload(): Promise<void> {
   try {
-    const items = await props.client.loadMessages(props.session.id);
+    const { messages: items } = await props.client.loadMessages(props.session.id);
     messages.value = historyToMessages(items);
   } catch {
     // 新会话尚未创建 / 断线等：保持现状

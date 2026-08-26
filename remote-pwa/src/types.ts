@@ -30,7 +30,7 @@ export type DesktopToPhone =
   | { type: "error"; message: string }
   | { type: "sessions"; sessions: Session[] }
   | { type: "workspaces"; workspaces: Workspace[] }
-  | { type: "messages"; messages: ChatMessageItem[] };
+  | { type: "messages"; messages: LoadMessagesResult };
 
 // ── ChatEvent：桌面透传的 sidecar 事件（对齐桌面 useChatSession.ts 处理的事件）──
 export type ChatEvent =
@@ -97,4 +97,11 @@ export interface ChatMessageItem {
   role: string;
   blocks: HistoryBlock[];
   timestamp: number;
+}
+
+/** load_messages 分页返回(与桌面侧 serde camelCase 镜像):消息页 + 下一页字节游标。
+ *  nextOffsetBytes = 页首真实 user 行的起始字节;0 = 已到文件头(无更早页)。 */
+export interface LoadMessagesResult {
+  messages: ChatMessageItem[];
+  nextOffsetBytes: number;
 }

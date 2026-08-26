@@ -89,8 +89,10 @@ pub async fn execute(
         BridgeAction::LoadMessages { session_id } => {
             let app = gateway.app_handle.clone();
             let ws_state = app.state::<crate::commands::WorkspaceState>();
-            let messages = crate::commands::session::load_messages(ws_state, session_id).await?;
-            Ok(Some(DesktopToPhone::Messages { messages: json!(messages) }))
+            // 远程不分页：传 None 保持整读（向后兼容）；payload 从数组变对象
+            // （LoadMessagesResult），remote-pwa 侧同步解析。
+            let result = crate::commands::session::load_messages(ws_state, session_id, None, None).await?;
+            Ok(Some(DesktopToPhone::Messages { messages: json!(result) }))
         }
         BridgeAction::ListSessions { workspace_key } => {
             let app = gateway.app_handle.clone();

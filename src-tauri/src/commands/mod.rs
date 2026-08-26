@@ -85,6 +85,19 @@ pub struct ChatMessageItem {
     pub timestamp: u64,
 }
 
+/// `load_messages` 分页返回：消息页 + 下一页字节游标。
+/// `next_offset_bytes` = 页首真实 user 行的起始字节；0 = 已到文件头（无更早页）。
+/// 下一页从该字节继续往前读（不包含该行本身），页与页之间无重复。
+/// ⚠️ camelCase 必须（前端读 `result.nextOffsetBytes`）：缺了它前端拿到 undefined、
+/// tailOffset=undefined → hasMore 恒 false → 预览上滚取回永不触发（2026-08-26
+/// 诊断环实测定位，测试全用 mock 所以从未暴露）。
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadMessagesResult {
+    pub messages: Vec<ChatMessageItem>,
+    pub next_offset_bytes: u64,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct WorkspaceInfo {
     pub key: String,

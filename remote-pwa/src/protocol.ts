@@ -1,6 +1,6 @@
 import type {
   ChatEvent,
-  ChatMessageItem,
+  LoadMessagesResult,
   DesktopToPhone,
   PhoneToDesktop,
   RelayConnect,
@@ -63,7 +63,7 @@ export interface RemoteClientLike {
   connect(creds: ConnectCreds): void;
   pair(code: string): Promise<PairOk>;
   sendMessage(sessionId: string | null, prompt: string, workspaceKey?: string): void;
-  loadMessages(sessionId: string): Promise<ChatMessageItem[]>;
+  loadMessages(sessionId: string): Promise<LoadMessagesResult>;
   listSessions(workspaceKey?: string): Promise<Session[]>;
   listWorkspaces(): Promise<Workspace[]>;
   disconnect(): void;
@@ -192,11 +192,11 @@ export class RemoteClient implements RemoteClientLike {
     this.send(msg);
   }
 
-  loadMessages(sessionId: string): Promise<ChatMessageItem[]> {
+  loadMessages(sessionId: string): Promise<LoadMessagesResult> {
     return this.request("messages", {
       type: "load_messages",
       session_id: sessionId,
-    }) as Promise<ChatMessageItem[]>;
+    }) as Promise<LoadMessagesResult>;
   }
 
   /** 会话列表；workspaceKey 缺省 = 桌面当前活动工作区。 */

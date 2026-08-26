@@ -293,6 +293,7 @@ pub fn run() {
             commands::session::session_last_event,
             commands::session::load_session_changes,
             commands::session::save_session_changes,
+            commands::session::append_session_change,
             commands::session::session_jsonl_size,
             commands::session::session_truncate_jsonl,
             commands::session::find_sessions_since,
