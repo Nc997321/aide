@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ref, nextTick } from "vue";
+import { ref, computed, watch, nextTick } from "vue";
 
 // ── Tauri mocks ──
 let chatEventHandler: ((e: { payload: Record<string, unknown> }) => void) | null = null;
@@ -89,6 +89,59 @@ describe("useChatSession per-session store", () => {
       | undefined;
     expect(tool?.result).toBe("ok");
     expect(tool?.isPending).toBe(false);
+  });
+
+  it("tool_result 回填触发响应式——卡片不停在「等待结果…」（挂起表存原始对象回归）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+
+    emit({ type: "tool_use_start", id: "t1", name: "Edit", input: { file_path: "a.ts" }, session_id: "uuid-a" });
+    await flush();
+
+    // 组件视角：经 store.messages 响应式链读 block（与模板渲染同一条路径）。
+    // 挂起表若存原始对象，回填绕过代理 set 陷阱——值变了但 watch 不触发，
+    // 组件只有强制重渲染（折叠重开/切会话）才显示结果。
+    const toolResult = computed(
+      () =>
+        (chat.messages.value.flatMap((m) => m.blocks).find((b) => b.type === "tool_call") as
+          | { result?: string; isPending?: boolean }
+          | undefined)?.result,
+    );
+    const observed: (string | undefined)[] = [];
+    watch(toolResult, (v) => observed.push(v));
+
+    emit({ type: "tool_result", id: "t1", content: "ok", is_error: false, session_id: "uuid-a" });
+    await flush();
+
+    expect(observed).toContain("ok"); // 关键断言：watcher 必须被触发，而非只有重读才拿到值
+    expect(toolResult.value).toBe("ok");
+  });
+
+  it("subagent_end 回填触发响应式（同上，子代理挂起表）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+
+    emit({ type: "subagent_start", id: "s1", agentName: "Explore", description: "d", session_id: "uuid-a" });
+    await flush();
+
+    const saResult = computed(
+      () =>
+        (chat.messages.value.flatMap((m) => m.blocks).find((b) => b.type === "subagent") as
+          | { result?: string; isPending?: boolean }
+          | undefined)?.result,
+    );
+    const observed: (string | undefined)[] = [];
+    watch(saResult, (v) => observed.push(v));
+
+    emit({ type: "subagent_end", id: "s1", result: "调研结论", is_error: false, session_id: "uuid-a" });
+    await flush();
+
+    expect(observed).toContain("调研结论");
+    expect(saResult.value).toBe("调研结论");
   });
 
   it("历史会话（UUID id）首次发送时把自身 id 作为 resume 传下去（P0 resume 断裂回归）", async () => {

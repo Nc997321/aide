@@ -122,7 +122,12 @@ export const pendingSids = new Set<string>();
 export const disposedSids = new Set<string>();
 /** sid → tool_use_id → ToolCallBlock：回填 O(1) 查找，替代 flatMap.find 全表扫描。
  *  per-sid 隔离：disposeSession 整 sid 删除无残留；finalizeSession 跟随 stores 迁移
- *  tempId→realId。block 是 push 到 message.blocks 的同一引用，回填即改到 message 里。 */
+ *  tempId→realId。
+ *  契约：表内存 reactive(block) 代理，不是原始对象。block 是 push 进响应式
+ *  messages 的同一引用，组件经 messages→blocks 链读到的是 Vue 包装的代理——
+ *  直接改原始对象会绕过 set 陷阱、不触发重渲染（tool_result 已回填但卡片停在
+ *  「等待结果…」，折叠重开/切会话强制重读才显示）；reactive() 经 reactiveMap
+ *  身份缓存与组件读到的是同一代理，回填即触发。 */
 export const pendingToolCalls = new Map<string, Map<string, ToolCallBlock>>();
 /** sid → subagent_id → SubagentBlock（同上；子代理事件跨回合，pending 期更长）。 */
 export const pendingSubagents = new Map<string, Map<string, SubagentBlock>>();
@@ -139,7 +144,7 @@ export function registerToolCall(sid: string, id: string, block: ToolCallBlock):
     m = new Map();
     pendingToolCalls.set(sid, m);
   }
-  m.set(id, block);
+  m.set(id, reactive(block));
 }
 export function lookupToolCall(sid: string, id: string): ToolCallBlock | undefined {
   return pendingToolCalls.get(sid)?.get(id);
@@ -153,7 +158,7 @@ export function registerSubagent(sid: string, id: string, block: SubagentBlock):
     m = new Map();
     pendingSubagents.set(sid, m);
   }
-  m.set(id, block);
+  m.set(id, reactive(block));
 }
 export function lookupSubagent(sid: string, id: string): SubagentBlock | undefined {
   return pendingSubagents.get(sid)?.get(id);
