@@ -1,4 +1,4 @@
-# 清理 src-tauri/target 的增量缓存与覆盖率产物（可安全删除，不影响 deps 缓存）。
+﻿# 清理 src-tauri/target 的增量缓存与覆盖率产物（可安全删除，不影响 deps 缓存）。
 # 用法：
 #   powershell -ExecutionPolicy Bypass -File scripts/clean-build.ps1          # 删 cov* + debug\incremental（推荐日常用）
 #   powershell -ExecutionPolicy Bypass -File scripts/clean-build.ps1 -Full   # 额外执行 cargo clean（全清，下次启动需全量重编）
