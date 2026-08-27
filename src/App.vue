@@ -204,7 +204,7 @@ onSessionCreated((tempId, realId) => {
   const name = paneLayout.takePendingName(realId) || realId.substring(0, 8);
   useSessionNames().setName(realId, name);
   void api.createSession(realId, name).then((session) => {
-    sidebarRef.value?.addSession({ id: session.id, name: session.name, timestamp: session.timestamp, last_message: "" });
+    sidebarRef.value?.addSession({ id: session.id, name: session.name, timestamp: session.timestamp });
     // 归属读注册表（首发时 seed 的创建时绑定），不用「当前」工作区——
     // session_init 在途期间用户可能已切走
     const ws = useSessionWorkspaces().workspaceOf(realId);

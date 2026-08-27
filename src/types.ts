@@ -2,7 +2,6 @@ export interface Session {
   id: string;
   name: string;
   timestamp: number;
-  last_message: string;
 }
 
 export interface WorkspaceInfo {

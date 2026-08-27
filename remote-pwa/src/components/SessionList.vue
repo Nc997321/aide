@@ -92,9 +92,8 @@ function relTime(ts: number): string {
           <span class="sv-name">{{ s.name || "未命名会话" }}</span>
           <span class="sv-time">{{ relTime(s.timestamp) }}</span>
         </div>
-        <div class="sv-row2">
-          <span class="sv-prev">{{ s.last_message }}</span>
-          <span v-if="liveSessions.has(s.id)" class="sv-live"><span class="dot"></span>回复中</span>
+        <div v-if="liveSessions.has(s.id)" class="sv-row2">
+          <span class="sv-live"><span class="dot"></span>回复中</span>
         </div>
       </button>
       <p v-if="sessions.length === 0" style="text-align: center; color: var(--text-muted); font-size: 12px; padding-top: 40px">

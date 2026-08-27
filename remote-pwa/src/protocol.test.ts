@@ -230,10 +230,10 @@ describe("RemoteClient 消息收发", () => {
     const p = client.listSessions();
     expect(ws().sent[2]).toBe('{"type":"list_sessions"}');
     ws().receive(
-      '{"type":"sessions","sessions":[{"id":"s1","name":"会话","timestamp":1,"last_message":"hi"}]}',
+      '{"type":"sessions","sessions":[{"id":"s1","name":"会话","timestamp":1}]}',
     );
     await expect(p).resolves.toEqual([
-      { id: "s1", name: "会话", timestamp: 1, last_message: "hi" },
+      { id: "s1", name: "会话", timestamp: 1 },
     ]);
   });
 

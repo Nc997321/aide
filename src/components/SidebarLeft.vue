@@ -131,9 +131,7 @@ function wsSessions(wsKey: string): Session[] {
   const list = sessionsByWorkspace.value[wsKey] ?? [];
   const q = searchQuery.value.trim().toLowerCase();
   if (!q) return list;
-  return list.filter(
-    (s) => s.name.toLowerCase().includes(q) || s.last_message.toLowerCase().includes(q),
-  );
+  return list.filter((s) => s.name.toLowerCase().includes(q));
 }
 
 // ── 会话折叠（VS Code 式）：每个工作区默认只露前 N 条，其余收进
@@ -364,10 +362,10 @@ function onSessionDeleteFailed(wsKey: string) {
 }
 
 /**
- * 离场收拢起点校准：卡高不固定（有无 preview 行差 ~20px），CSS 无法预知真实高度。
- * 在 leave 钩子（先于 leave-active 类生效）把真实高度写进 CSS 变量，
- * 让 max-height 从精确值收拢到 0——若从固定上界（如 100px）起播，
- * 前段数值大于真实高度时视觉空跑、收拢被压进末段，收尾会有顿挫感。
+ * 离场收拢起点校准：CSS 无法预知真实卡片高度。在 leave 钩子（先于 leave-active
+ * 类生效）把真实高度写进 CSS 变量，让 max-height 从精确值收拢到 0——若从固定
+ * 上界（如 100px）起播，前段数值大于真实高度时视觉空跑、收拢被压进末段，
+ * 收尾会有顿挫感。
  */
 function onSessionAnimLeave(el: Element) {
   (el as HTMLElement).style.setProperty("--session-leave-h", `${(el as HTMLElement).offsetHeight}px`);
@@ -544,7 +542,6 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
           <div v-if="sessionsLoading.has(ws.key)" class="session-skel-list">
             <div v-for="i in 2" :key="i" class="session-skel-card">
               <div class="session-skel-line session-skel-title"></div>
-              <div class="session-skel-line session-skel-preview"></div>
             </div>
           </div>
           <div
@@ -575,7 +572,6 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
                     </button>
                   </span>
                 </div>
-                <div v-if="s.last_message" class="session-preview">{{ s.last_message }}</div>
               </div>
             </TransitionGroup>
             <div
@@ -1027,15 +1023,6 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   transition: opacity 0.12s;
 }
 
-.session-preview {
-  font-size: 11.5px;
-  color: var(--aide-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  line-height: 1.45;
-}
-
 .session-more {
   margin: 2px 8px 0 7px;
   padding: 7px 12px 7px 20px;
@@ -1088,12 +1075,6 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 
 .session-skel-title {
   width: 55%;
-  margin-bottom: 8px;
-}
-
-.session-skel-preview {
-  width: 80%;
-  height: 10px;
 }
 
 @keyframes session-skel-pulse {

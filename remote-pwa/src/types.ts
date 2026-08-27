@@ -70,7 +70,6 @@ export interface Session {
   id: string;
   name: string;
   timestamp: number;
-  last_message: string;
 }
 
 /** 工作区（镜像 WorkspaceInfo）：key = 路径编码，name = 桌面解码后的路径字符串 */

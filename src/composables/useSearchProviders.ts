@@ -58,16 +58,11 @@ function createSessionProvider(
       try {
         const sessions = await getSessionList();
         const filtered = sessions
-          .filter(
-            s =>
-              s.name.toLowerCase().includes(query) ||
-              s.last_message.toLowerCase().includes(query),
-          )
+          .filter(s => s.name.toLowerCase().includes(query))
           .slice(0, limit);
         return filtered.map(s => ({
           id: s.id,
           label: s.name,
-          description: s.last_message || undefined,
           icon: "session",
           action: () => onSelect(s.id),
         }));

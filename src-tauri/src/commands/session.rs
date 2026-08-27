@@ -72,13 +72,10 @@ fn scan_project_jsonl_sessions(
         let display_name = our_session_name(&session_id)
             .unwrap_or(name);
 
-        let last_msg = last_jsonl_message(&path);
-
         sessions.push(Session {
             id: session_id,
             name: display_name,
             timestamp,
-            last_message: last_msg,
         });
     }
     Ok(())
@@ -144,7 +141,6 @@ fn list_sessions_blocking(
                         id: session_id.to_string(),
                         name: display_name,
                         timestamp: started_at,
-                        last_message: String::new(),
                     });
                 }
             }
@@ -178,7 +174,6 @@ pub fn create_session(id: String, name: String) -> Result<Session, String> {
         id,
         name,
         timestamp,
-        last_message: String::new(),
     })
 }
 
@@ -1069,7 +1064,6 @@ fn list_sessions_for_workspace_blocking(ws_key: String) -> Result<Vec<Session>, 
                         id: session_id.to_string(),
                         name: display_name,
                         timestamp: started_at,
-                        last_message: String::new(),
                     });
                 }
             }
@@ -1111,11 +1105,11 @@ fn claude_session_meta(session_id: &str) -> Option<(String, u64)> {
     None
 }
 
-/// 取 jsonl 末条消息的文本（≤80 字）。自动化运行摘要（RunRecord.summary）也用它——
-/// 运行终态时读本运行转录的尾行。
+/// 取 jsonl 末条消息的文本（≤80 字）。仅供自动化运行摘要（RunRecord.summary）——
+/// 运行终态时读本运行转录的尾行；会话列表已不展示末消息预览。
 ///
-/// seek 到文件尾往回读末段找最后一个 `\n`（P1 顺手优化）：会话列表逐会话扫描时
-/// 不再整读大 .jsonl。窗口 64KB 起，末行超窗（窗口内无 `\n`）倍增扩大，最终整读兜底。
+/// seek 到文件尾往回读末段找最后一个 `\n`：不整读大 .jsonl。窗口 64KB 起，
+/// 末行超窗（窗口内无 `\n`）倍增扩大，最终整读兜底。
 pub(crate) fn last_jsonl_message(jsonl_path: &std::path::Path) -> String {
     let file = match fs::File::open(jsonl_path) {
         Ok(f) => f,

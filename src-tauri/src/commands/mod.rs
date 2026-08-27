@@ -43,7 +43,6 @@ pub struct Session {
     pub id: String,
     pub name: String,
     pub timestamp: u64,
-    pub last_message: String,
 }
 
 /// 历史消息里的一个内容块——`load_messages` 解析会话 `.jsonl` 时按原始顺序重建，

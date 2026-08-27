@@ -594,14 +594,6 @@ body {
   gap: 7px;
   margin-top: 4px;
 }
-.sv-prev {
-  flex: 1;
-  font-size: 12px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .sv-live {
   flex: none;
   display: inline-flex;
