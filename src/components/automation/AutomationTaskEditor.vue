@@ -455,7 +455,8 @@ async function save(andRun: boolean) {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 14px;
+  max-width: 720px;
+  margin: 0 auto 14px;
 }
 .e-head h2 {
   font-size: 16px;
@@ -478,6 +479,7 @@ async function save(andRun: boolean) {
 
 .form-wrap {
   max-width: 720px;
+  margin: 0 auto;
 }
 .form-section {
   border: 1px solid var(--aide-border);
