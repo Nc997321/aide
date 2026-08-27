@@ -573,17 +573,8 @@ function onOpenBgDock(taskId: string) {
       @respond="onPermissionRespond"
     />
 
-    <!-- 后台任务 dock：与 PermissionDialog 同款 inline dock——挤压消息区而非浮层。
-         开合/清理语义在 toggleBgDock（结束的任务下次点开才清）。 -->
-    <BgTaskDock
-      :session-id="props.sessionId"
-      :tasks="bgTasks ?? []"
-      :open="bgDockOpen"
-      :selected-id="bgDockSelectedId ?? null"
-      @update:selected-id="(id: string) => emit('update:bgDockSelectedId', id)"
-    />
-
-    <!-- 活动状态行（上下文压缩 / 正在思考）：inline dock 固定在输入框上方，
+    <!-- 活动状态行（上下文压缩 / 正在思考）：inline dock，固定位于后台任务 dock 上方——
+         生成状态是当前会话的第一信息，后台任务条只是次要入口；
          不随消息滚动——上滚读历史时状态可见、中断按钮仍触手可及；
          出现时挤压消息区高度，与 PermissionDialog 同一模式。 -->
     <ContextCompactionStatus
@@ -597,6 +588,17 @@ function onOpenBgDock(taskId: string) {
       <span class="chat-thinking-text">正在思考</span>
       <InterruptButton class="chat-interrupt-btn" @click="emit('interrupt')" />
     </div>
+
+    <!-- 后台任务 dock：与 PermissionDialog 同款 inline dock——挤压消息区而非浮层。
+         位于活动状态行之下（状态行固定在上，后台条出现/消失不顶走它）。
+         开合/清理语义在 toggleBgDock（结束的任务下次点开才清）。 -->
+    <BgTaskDock
+      :session-id="props.sessionId"
+      :tasks="bgTasks ?? []"
+      :open="bgDockOpen"
+      :selected-id="bgDockSelectedId ?? null"
+      @update:selected-id="(id: string) => emit('update:bgDockSelectedId', id)"
+    />
 
     <!-- hero 标题区（零会话欢迎态）：logo + 一行纯展示信息，
          模型/权限模式的实际选择在输入盒工具栏 -->
