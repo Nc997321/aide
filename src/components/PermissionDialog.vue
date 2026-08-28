@@ -234,15 +234,20 @@ function bashPrefixValue(d: PermissionRuleDraft): string | null {
     : null;
 }
 
-/** 每条规则的可编辑值：初始 = 推导值，用户可改。新请求到达时重置。 */
+/** 每条规则的可编辑值：初始 = 推导值，用户可改。
+ *  同步源是 rememberDrafts 而不是 permission id：rememberRules 由 ChatPanel
+ *  异步拉取（弹窗先以空规则渲染全部段，规则到达后已覆盖段被过滤、行收缩）——
+ *  只盯 id 的话，规则到达触发的行变化不会重同步，输入框残留旧行的值（rm 行
+ *  显示 cd 的规则值，提交即写错规则）。rememberDrafts 不依赖 editableValues，
+ *  用户编辑不会触发本回调，无回写循环。 */
 const editableValues = reactive<string[]>([]);
 watch(
-  () => props.permission?.id,
-  () => {
+  rememberDrafts,
+  (drafts) => {
     editableValues.splice(
       0,
       editableValues.length,
-      ...rememberDrafts.value.map((d) => bashPrefixValue(d) ?? ""),
+      ...drafts.map((d) => bashPrefixValue(d) ?? ""),
     );
   },
   { immediate: true },

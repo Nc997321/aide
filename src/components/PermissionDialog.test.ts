@@ -4,6 +4,7 @@ import { mount } from "@vue/test-utils";
 import { nextTick } from "vue";
 import PermissionDialog from "./PermissionDialog.vue";
 import type { PermissionRequest } from "../types/chat";
+import type { PermissionRule } from "../types/permissions";
 
 const bashPermission = (): PermissionRequest => ({
   id: "p1",
@@ -180,6 +181,47 @@ describe("PermissionDialog — 允许并记住（多段 + 参数透明化）", (
     });
     expect(wrapper.find(".perm-remember-static").exists()).toBe(true);
     expect(wrapper.find(".perm-remember-value").exists()).toBe(false);
+  });
+
+  it("规则异步到达后已覆盖段收缩出预览，输入框值与新行对齐（不残留旧行值）", async () => {
+    // 回归：rememberRules 由 ChatPanel 异步拉取，弹窗先以空规则渲染全部段；
+    // 规则到达后 editableValues 必须随 rememberDrafts 重同步——否则 rm 行
+    // 残留 cd 行的值，点「允许并记住」会把错误值写进规则库。
+    const allowRule = (value: string): PermissionRule => ({
+      id: `r-${value}`,
+      scope: "local",
+      order: 0,
+      effect: "allow",
+      tool: "Bash",
+      matcher: { kind: "bash", mode: "prefix", value },
+      source: { label: "test", readOnly: false },
+    });
+    const wrapper = mount(PermissionDialog, {
+      props: {
+        permission: {
+          id: "p6",
+          name: "Bash",
+          input: { command: "cd /tmp/x && rm -f a.jar && grep foo" },
+        },
+        rememberScope: "local",
+        rememberRules: [],
+      },
+    });
+    expect(wrapper.findAll(".perm-remember-rule")).toHaveLength(3); // 规则未到达：全量
+
+    await wrapper.setProps({ rememberRules: [allowRule("cd"), allowRule("grep")] });
+    await nextTick();
+
+    const inputs = wrapper.findAll(".perm-remember-value");
+    expect(inputs).toHaveLength(1); // 只剩未覆盖的 rm 段
+    expect((inputs[0].element as HTMLInputElement).value).toBe("rm -f a.jar");
+
+    await wrapper.get('[data-action="remember"]').trigger("click");
+    const persist = wrapper.emitted("respond")![0][4] as {
+      rules: { matcher: { value: string } }[];
+    };
+    expect(persist.rules).toHaveLength(1);
+    expect(persist.rules[0].matcher.value).toBe("rm -f a.jar");
   });
 });
 

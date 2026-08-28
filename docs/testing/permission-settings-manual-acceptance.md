@@ -89,6 +89,7 @@
 - [ ] 再次触发同类命令（如 `pnpm test --runInBand`）→ 不弹窗，直接放行
 - [ ] Bash 链式安全：记住 `pnpm test` 后，运行 `pnpm test && rm -rf build` → **仍弹窗**（prefix-allow 不放行含未引用控制符的命令）
 - [ ] 去重：对同一命令再点「允许并记住」→ 不产生第二条规则（规则数不增）
+- [ ] 链式命令的预览只列**未被现有规则覆盖的段**：已有 `grep`/`head` 放行规则时跑 `rm -f x.jar && mvn package | grep x | head` → 预览只出现 `rm -f` / `mvn` 两条，且各行输入框的值与所属段对齐（规则异步加载后不错位）
 - [ ] Write/Edit：记住后，同目录及子目录下文件编辑自动放行；其它目录仍弹窗
 - [ ] WebFetch：记住后，同 URL 再抓取自动放行；其它 URL 仍弹窗
 - [ ] 计划批准（ExitPlanMode）/ AskUserQuestion 对话框**不**显示「允许并记住」按钮
