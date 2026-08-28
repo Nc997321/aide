@@ -246,4 +246,37 @@ describe("P0-3 旧消息淘汰 maybeEvict", () => {
     const sa = findBlock<SubagentBlock>(chat.messages.value, "subagent", "a1");
     expect(sa?.truncated).toBeUndefined();
   });
+
+  it("二阶段兜底：块全小（①落空）仍超阈值 → 释放最老已加载页", async () => {
+    // store 阈值 100B（必超）、block 阈值 100KB（① 永不降级）→ 落到阶段②
+    __setEvictThresholdsForTest(100, 100 * 1024);
+    // 三页：preserveNewest=2 豁免最新两页，最老页应被释放成骨架
+    const mk = (prefix: string, start: number, end: number) => ({
+      messages: [{ role: "claude", timestamp: 0, blocks: [{ type: "text" as const, text: `${prefix}${"x".repeat(80)}` }] }],
+      nextOffsetBytes: start,
+      endOffsetBytes: end,
+    });
+    invokeMock.mockResolvedValueOnce(mk("p0", 2000, 3000)); // hydrate 尾部页
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await flush();
+    const { loadOlderPage } = await import("./useChatSession");
+    invokeMock.mockResolvedValueOnce(mk("p1", 1000, 2000));
+    await loadOlderPage("uuid-a", 64 * 1024);
+    invokeMock.mockResolvedValueOnce(mk("p2", 0, 1000));
+    await loadOlderPage("uuid-a", 64 * 1024);
+    const { pageLedgers } = await import("./useChatSession/state");
+    const ledger = pageLedgers.get("uuid-a")!;
+    expect(ledger.length).toBe(3);
+    // 阶段②：最老页（ledger[0] = p2 之前 unshift 的次序，[0] 是最早）被释放
+    expect(ledger[0].loaded).toBe(false);
+    expect(ledger[0].heightPx).toBeGreaterThan(0); // 无 DOM → 估算高已记账
+    expect(ledger[1].loaded).toBe(true);
+    expect(ledger[2].loaded).toBe(true);
+    // 释放的页消息从 store 消失（3 页各 1 条 → 剩 2 条）
+    expect(chat.messages.value.length).toBe(2);
+    // ① 未降级任何块（块全小）
+    expect(chat.messages.value.flatMap((m) => m.blocks).every((b) => !("truncated" in b && b.truncated))).toBe(true);
+  });
 });

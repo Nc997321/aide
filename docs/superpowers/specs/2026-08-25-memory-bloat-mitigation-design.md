@@ -155,6 +155,17 @@ P0 是无后端时的止血态（单向淘汰最早），P1 字节游标直接�
 
 **P1-3 折叠态持久化（可选）**：若用户在意折叠/展开状态跨卸载保留，新增 `foldState: Map<blockId, boolean>` 字典，远端页释放时存当前折叠态，取回时恢复。不做则保持现状（重置为默认折叠）。
 
+**P1-4 页级回收重引入（2026-08-28，推翻 ⑩ 的「不回收」定案）**：freeze-1787901573714 实测——渲染进程堆 1.08GB 时打开文件 → GC 死亡螺旋 87s 未恢复。根因是 ⑩ 的内存模型有洞：「只加载不回收」下翻页只进不出、evict 只降 >16KB 大 block（小 block 会话落空=无上限）、64MB 估算阈值 × 对象/reactive 账外倍率 → 单会话真实堆可顶数百 MB。重引入⑦⑨的回收，但换成更简单的形态：
+
+- **页台账**（`useChatSession/state.ts` `pageLedgers`）：每页 `{startOffset, endOffset, count, bytes, loaded, restorable, heightPx}`；不变式 `store.messages = Σ(loaded 页) + live 段`，live 段（流式区）永不入页。`LoadMessagesResult` 加 `end_offset_bytes`（Rust 一侧一个字段），取回 = `load_messages(offset=endOffset, limit=bytes)` 确定性重放同一字节区间。
+- **实测高度骨架**（与⑦⑨的「无占位」不同）：释放前从 DOM 实测页高，骨架行内联同高占位——总高不变、滚动零跳变、不需要补偿；取回时按「页顶相对视口不变」补偿高度差（`computeRestoreScrollTop` 纯函数）。
+- **视口热区**：滚动停驻 200ms 结算（`useChatScroll.settleRecycle`）——视口页 ±1 豁免，超 16MB 已加载字节预算释放最远页；骨架进入 ±1.5 屏 prefetch 取回。方向敏感问题（⑨）由「骨架原地占位+就近取回」消解，不再有「优先恢复还是取更早」的歧义。
+- **evict 两阶段**：阈值 64→32MB；①块级降级落空仍超 → ②`releaseFarthestPages`（热区由滚动层 `setViewportHot` 上报，无上报保最新 2 页）。`tool_call.input` 政策不变——页重取后 input 完整回来，变更卡不受影响。
+- **渲染行模型**：`ChatPanel` v-for 从消息改为行（新组件 `ChatRow.vue`：page 消息组 / skeleton 占位 / live 单条）；`onNewContent` 改 watch live 段长度（释放/取回不动它，不误亮「新消息」圆点）。
+- 防御：应答缺 `endOffsetBytes` → 页标 `restorable=false` 永不释放（版本错配不丢数据）；取回 0 条（revert 截断 clamp）→ 骨架连台账丢弃；`resetPaginationForRevert` 连台账清。
+
+（前端 1519 passed + vue-tsc 零错误 + remote-pwa 34 passed；Rust 654 passed + `end_offset_bytes` 各场景测试，1 个 Ollama 依赖已知非回归）
+
 ### P2 — 收敛放大器（2026-08-26 全部完成）
 
 - **P2-1 子代理 entries 文本上限** ✅：`SUBAGENT_ENTRY_CAP = 256K` 字符（类比 `BG_TASK_OUTPUT_CAP`），text/thinking delta 累积超 2×cap 截保尾（摊还 O(1)/delta，避免流式热路径 O(n²) slice），tool result / subagent_end 产出超限即截；类型加 `entry.truncated` / `block.resultTruncated`（独立于 P0-3 整块降级标记，不干扰 degradeBlock 幂等），UI 复用 `truncatedLabel` 小标（text/thinking 随行、tool 经 asToolBlock 透传 ToolCallBlock 的 `.ti-truncated`）
@@ -174,7 +185,7 @@ P0 是无后端时的止血态（单向淘汰最早），P1 字节游标直接�
 |---|---|---|---|
 | **淘汰粒度** | A 整条最早消息删除 / B 窗口外单 block 降级（tool_result→摘要，保留消息结构） | B | A 丢消息结构，上滚看到的是「断崖」；B 保留气泡骨架只省大 result 内存，上滚体验连贯，且 P1 取回时只补 result 全文 |
 | **淘汰触发度量** | 消息条数 / block 数 / 估算字节数 | 估算字节数 | 条数/block 数对「1 条 50MB 子代理」无感；字节阈值直接对应内存目标。可在 push 时累计 `store.bytes` 估算 |
-| **窗口语义** | 单向尾部+淘汰最早（保守）/ 双向分页（微博式） | 双向分页（终稿：微信式只加载不回收） | 分页只解决「打开不全量加载」；「释放有界」由 store 层 `maybeEvict` 兜底（两层职责分离）。微博式整页回收（⑦⑨）实测方向敏感复杂，终稿废弃 |
+| **窗口语义** | 单向尾部+淘汰最早（保守）/ 双向分页（微博式） | 双向分页 + 页级骨架回收（2026-08-28 修订，见 P1-4） | 分页解决「打开不全量加载」；页级回收解决「翻页驻留上限」（⑩ 的只加载不回收被 freeze-1787901573714 证伪）；块级降级由 store 层 `maybeEvict` 兜底小块场景 |
 | **回填 Map 作用域** | 模块级单例（跨会话共享）/ per-session（随 store 生命周期） | per-session | 模块级单例会跨会话残留 pending 条目；per-session 随 `delete stores[sid]` 自然清空，与 P0-1 收口一致 |
 | **`renderCache` 与淘汰协同** | 窗口外消息卸载时清其缓存条目 / 保持全局 LRU-300 | 保持现状 | LRU-300 已有界，窗口外缓存命中回滚时反而省重解析；单条体积上限（P2-2）已够 |
 

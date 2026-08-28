@@ -459,7 +459,7 @@ fn load_messages_blocking(
     limit: Option<u32>,
 ) -> Result<LoadMessagesResult, String> {
     let Some(jsonl_path) = find_session_jsonl_globally(&session_id).into_iter().next() else {
-        return Ok(LoadMessagesResult { messages: Vec::new(), next_offset_bytes: 0 });
+        return Ok(LoadMessagesResult { messages: Vec::new(), next_offset_bytes: 0, end_offset_bytes: 0 });
     };
 
     let file = fs::File::open(&jsonl_path)
@@ -469,20 +469,25 @@ fn load_messages_blocking(
         .map_err(|e| format!("Failed to read metadata: {}", e))?
         .len();
     match limit {
-        None => read_all_messages(file),
+        None => read_all_messages(file, file_len),
         Some(limit) => read_page_backwards(&file, file_len, offset_bytes, limit),
     }
 }
 
-/// 整读全部行（缺省路径，与分页前的行为一致）。
-fn read_all_messages(file: fs::File) -> Result<LoadMessagesResult, String> {
+/// 整读全部行（缺省路径，与分页前的行为一致）。end_offset_bytes = file_len
+/// （整页的排他末尾），前端页级回收重取协议要求任何路径都给真实末尾字节。
+fn read_all_messages(file: fs::File, file_len: u64) -> Result<LoadMessagesResult, String> {
     let reader = BufReader::new(file);
     let lines: Vec<String> = reader
         .lines()
         .enumerate()
         .map(|(i, l)| l.map_err(|e| format!("Read error at line {}: {}", i, e)))
         .collect::<Result<_, _>>()?;
-    Ok(LoadMessagesResult { messages: parse_transcript_lines(&lines), next_offset_bytes: 0 })
+    Ok(LoadMessagesResult {
+        messages: parse_transcript_lines(&lines),
+        next_offset_bytes: 0,
+        end_offset_bytes: file_len,
+    })
 }
 
 /// 从 `offset_bytes`（缺省 = 文件尾）往前按字节游标取一页，直到页的「行字节累计」
@@ -522,7 +527,7 @@ fn read_page_backwards(
             } else {
                 next_offset
             };
-            return Ok(LoadMessagesResult { messages, next_offset_bytes: next_offset });
+            return Ok(LoadMessagesResult { messages, next_offset_bytes: next_offset, end_offset_bytes: end });
         }
     }
 }
@@ -1730,6 +1735,39 @@ mod tests {
         }
 
         #[test]
+        fn end_offset_bytes_reports_exclusive_page_end() {
+            // 页级回收（前端 recycle）按 (endOffset, end-start) 确定性重取同一页——
+            // end_offset_bytes 必须恒等于「本次读取的排他末尾」：尾页=file_len，
+            // 中间页=传入 offset，clamp 后=file_len，空文件=0。
+            let lines = standard_lines();
+            let p = temp_jsonl("endoff", &(lines.join("\n") + "\n"));
+            let file = fs::File::open(&p).unwrap();
+            let file_len = file.metadata().unwrap().len();
+
+            // 尾页：offset=None → end=file_len
+            let tail = read_page_backwards(&file, file_len, None, BIG).unwrap();
+            assert_eq!(tail.end_offset_bytes, file_len);
+
+            // 中间页：offset=某页首 → end=该 offset（且 next_offset < end，页非空）
+            let mid = read_page_backwards(&file, file_len, Some(tail.next_offset_bytes.max(1)), BIG).unwrap();
+            assert_eq!(mid.end_offset_bytes, tail.next_offset_bytes.max(1));
+
+            // clamp：越界 → end=file_len
+            let clamped = read_page_backwards(&file, file_len, Some(file_len + 1000), BIG).unwrap();
+            assert_eq!(clamped.end_offset_bytes, file_len);
+
+            // 空文件：file_len=0 → end=0
+            let empty = temp_jsonl("endoff-empty", "");
+            let ef = fs::File::open(&empty).unwrap();
+            let r = read_page_backwards(&ef, 0, None, BIG).unwrap();
+            assert_eq!(r.end_offset_bytes, 0);
+
+            // 整读路径：end=file_len
+            let full = read_all_messages(fs::File::open(&p).unwrap(), file_len).unwrap();
+            assert_eq!(full.end_offset_bytes, file_len);
+        }
+
+        #[test]
         fn cursor_mid_line_discards_that_line() {
             let lines = standard_lines();
             let p = temp_jsonl("midline", &(lines.join("\n") + "\n"));
@@ -1899,8 +1937,10 @@ mod tests {
             let lines = standard_lines();
             let p = temp_jsonl("fullread", &(lines.join("\n") + "\n"));
             let file = fs::File::open(&p).unwrap();
-            let result = read_all_messages(file).unwrap();
+            let file_len = file.metadata().unwrap().len();
+            let result = read_all_messages(file, file_len).unwrap();
             assert_eq!(result.next_offset_bytes, 0);
+            assert_eq!(result.end_offset_bytes, file_len);
             let expected = parse_transcript_lines(&lines);
             assert_eq!(result.messages.len(), expected.len());
             assert_eq!(result.messages[0].role, expected[0].role);
@@ -2067,10 +2107,12 @@ mod tests {
         fn load_messages_result_serializes_camel_case() {
             // 前端读 result.nextOffsetBytes——缺 camelCase 时拿到 undefined →
             // tailOffset=undefined → hasMore 恒 false → 预览上滚取回永不触发
-            let r = LoadMessagesResult { messages: Vec::new(), next_offset_bytes: 42 };
+            let r = LoadMessagesResult { messages: Vec::new(), next_offset_bytes: 42, end_offset_bytes: 84 };
             let s = serde_json::to_string(&r).unwrap();
             assert!(s.contains("\"nextOffsetBytes\":42"), "got: {s}");
+            assert!(s.contains("\"endOffsetBytes\":84"), "got: {s}");
             assert!(!s.contains("next_offset_bytes"));
+            assert!(!s.contains("end_offset_bytes"));
         }
 
         #[test]

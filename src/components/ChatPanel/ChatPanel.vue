@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, computed, onMounted, onUnmounted } from "vue";
-import ChatMessage from "../ChatMessage.vue";
+import ChatRow from "./ChatRow.vue";
 import AppLogo from "../AppLogo.vue";
 import Icon from "../Icon.vue";
 import ContextCompactionStatus from "../ContextCompactionStatus.vue";
@@ -443,19 +443,21 @@ watch(() => props.isBusy, (busy) => {
 watch(contextCompactionVal, syncActivityTimer);
 onUnmounted(() => { if (activityTimer) clearInterval(activityTimer); });
 
-// 滚动 / 加载历史全部收拢到 useChatScroll（微信式）：上滚到顶部触发带自动取更早页
-// （数据 = 已加载量，翻多少渲染多少；内存由 store 的 maybeEvict 大 block 降级兜底），
-// 切会话首帧 ramp 分帧挂载防 jam。见 composables/useChatScroll.ts。
+// 滚动 / 加载历史 / 页级回收全部收拢到 useChatScroll（行模型）：上滚到顶部触发带
+// 自动取更早页；已加载页超字节预算时热区外页折叠成骨架（实测高度撑住不跳滚），
+// 滚动停驻时结算回收/取回；切会话首帧 ramp 分帧挂载防 jam。
+// 见 composables/useChatScroll.ts 与 useChatSession/recycle.ts。
 const {
   scrollEl,
   contentEl,
-  visibleMessages,
+  visibleRows,
   ramping,
   onScroll,
   jumpToBottom,
   farFromBottom,
   newWhileAway,
   expandOlderAnchored,
+  restoreAnchored,
 } = useChatScroll(() => props.messages, () => props.sessionId, {
   // P1 双向分页：所有分页函数绑定当前会话（props.sessionId 变化时闭包读新值）。
   // sessionId 为空（新会话未创建）时全链路 no-op。
@@ -534,14 +536,15 @@ function onOpenBgDock(taskId: string) {
         >
           上方还有更早消息 · 点击或继续上滚加载
         </button>
-        <ChatMessage
-          v-for="msg in visibleMessages"
-          :key="msg.id"
-          :message="msg"
+        <ChatRow
+          v-for="row in visibleRows"
+          :key="row.id"
+          :row="row"
           :workspace-path="workspacePath"
           :models="displayModels"
           :bg-tasks="bgTasks"
           @open-bg-dock="onOpenBgDock"
+          @restore="restoreAnchored"
         />
       </div>
       </div>

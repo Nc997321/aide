@@ -31,7 +31,7 @@ async function flush() {
  * read_page_backwards / trim_to_bytes 同语义）：
  * - 文件 = N 回合（每回合 user + assistant 两行，最早在前）
  * - 从 offset（null = 文件尾）往前累计行字节 ≤ limit 截一页；页首裁到 user 行
- * - 返回 { messages, nextOffsetBytes = 页首行起始字节（0 = 文件头） }
+ * - 返回 { messages, nextOffsetBytes = 页首行起始字节（0 = 文件头）, endOffsetBytes = end }
  */
 function buildBackend(rounds: number, bytesPerRound: number) {
   const lines: string[] = [];
@@ -83,6 +83,7 @@ function buildBackend(rounds: number, bytesPerRound: number) {
         blocks: [{ type: "text" as const, text: m.text }],
       })),
       nextOffsetBytes: firstLineIdx >= lines.length ? 0 : starts[firstLineIdx],
+      endOffsetBytes: end,
     };
   }
 

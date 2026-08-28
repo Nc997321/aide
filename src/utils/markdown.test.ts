@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { renderMarkdown, renderStreaming, __renderCacheSizeForTest } from "./markdown";
+import { renderMarkdown, renderStreaming, __renderCacheSizeForTest, __renderCacheBytesForTest } from "./markdown";
 
 /** 卡死修复的回归护栏：流式尾块渲染必须绕开 hljs（O(n²) 放大器），
  *  语法高亮只在定稿态出现。见 utils/markdown.ts 的注释与
@@ -50,5 +50,15 @@ describe("renderMarkdown（定稿块，高亮）", () => {
     const before = __renderCacheSizeForTest();
     renderMarkdown("y".repeat(256 * 1024)); // 恰好在上限内
     expect(__renderCacheSizeForTest()).toBe(before + 1);
+  });
+
+  it("总字节上限：超 8MB 按插入序淘汰到限内", () => {
+    // 每条约 (100K 文本 + ≈100K html) × 2 ≈ 400KB；渲染 30 条 ≈ 12MB > 8MB 上限
+    for (let i = 0; i < 30; i++) {
+      renderMarkdown(`t${i}-` + "z".repeat(100 * 1024));
+    }
+    // 记账字节被压回限内；条数远少于 30（发生了淘汰）
+    expect(__renderCacheBytesForTest()).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect(__renderCacheSizeForTest()).toBeLessThan(30);
   });
 });

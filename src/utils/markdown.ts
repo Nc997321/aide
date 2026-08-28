@@ -69,11 +69,20 @@ const RENDER_CACHE_MAX = 300;
  *  parse 不缓存——大块本就少见，每次重渲染多付一次解析换内存有界（数据层另有 P0-3
  *  降级在 store 超阈值后收敛大 block，这里是渲染缓存层的独立有界性）。 */
 const RENDER_CACHE_MAX_TEXT_CHARS = 256 * 1024;
+/** 缓存总字节上限（2026-08-28）：条数+单条双上限仍留有 300×256K≈75MB 的最坏驻留
+ *  （freeze-1787901573714 渲染进程 1.08GB GC 螺旋的放大器之一）。键值都是 UTF-16
+ *  字符串，按 (text.length+html.length)×2 记账，超限按插入序淘汰到限内。 */
+const RENDER_CACHE_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
+let renderCacheBytes = 0;
 
 /** 测试钩子：当前缓存条目数（P2-2 验证「超限不入缓存」用）。
  *  注意不能用「重复渲染引用相同」断言——marked.parse 本身对相同输入返回同引用。 */
 export function __renderCacheSizeForTest(): number {
   return renderCache.size;
+}
+/** 测试钩子：当前缓存记账字节（总字节 LRU 验证用）。 */
+export function __renderCacheBytesForTest(): number {
+  return renderCacheBytes;
 }
 
 export function renderMarkdown(text: string): string {
@@ -84,12 +93,21 @@ export function renderMarkdown(text: string): string {
   const hit = renderCache.get(text);
   if (hit !== undefined) return hit;
   const html = marked.parse(text) as string;
-  if (renderCache.size >= RENDER_CACHE_MAX) {
-    // Map 按插入序迭代，删最老的一条即最简 LRU——够用，无需引依赖
+  // Map 按插入序迭代，删最老的即最简 LRU——够用，无需引依赖。
+  // 淘汰条件：条数上限 或 总字节上限（哪个先到算哪个）。
+  const entryBytes = (text.length + html.length) * 2;
+  while (
+    renderCache.size >= RENDER_CACHE_MAX ||
+    renderCacheBytes + entryBytes > RENDER_CACHE_MAX_TOTAL_BYTES
+  ) {
     const oldest = renderCache.keys().next().value;
-    if (oldest !== undefined) renderCache.delete(oldest);
+    if (oldest === undefined) break; // 空缓存仍超（单条本身就超总上限）→ 放行本条，下条再淘
+    const oldestHtml = renderCache.get(oldest)!; // 键来自 keys() 迭代，必存在
+    renderCacheBytes -= (oldest.length + oldestHtml.length) * 2;
+    renderCache.delete(oldest);
   }
   renderCache.set(text, html);
+  renderCacheBytes += entryBytes;
   return html;
 }
 

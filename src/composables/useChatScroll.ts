@@ -2,27 +2,45 @@ import { computed, getCurrentInstance, getCurrentScope, nextTick, onMounted, onS
 import type { ComputedRef } from "vue";
 import { trail } from "../utils/diagnostics/scrollTrail";
 import type { ChatMessage, TextBlock } from "@/types/chat";
+import {
+  buildCumulative,
+  buildRows,
+  findRestorableSkeleton,
+  findViewportPageIndex,
+  isRecycleMutating,
+  loadedPagesBytes,
+  liveMessageCount,
+  RECYCLE_BYTES_BUDGET,
+  releaseFarthestPages,
+  restorePage,
+  setViewportHot,
+  computeRestoreScrollTop,
+  type Row,
+} from "./useChatSession/recycle";
 
 /**
- * 聊天滚动区主控（微信式无限滚动，2026-08-26 重构）：
- * - 数据层：已加载消息全部渲染（messages 即 DOM），不窗口化、不回收——
- *   内存/DOM = 用户实际翻的量，超出由 store 的 maybeEvict（大 block 降级）兜底；
+ * 聊天滚动区主控（行模型 + 页级回收，2026-08-28 重构）：
+ * - 行模型：渲染单元从「消息」升级为「行」（page=已加载页消息组 / skeleton=已释放
+ *   页占位 / live=流式段单条），rows 由 recycle.buildRows 从页台账构建；
+ * - 页级回收：已加载页总字节超 RECYCLE_BYTES_BUDGET 时，热区（视口页 ±1）外的
+ *   远端页释放成骨架（实测高度撑住 → 总高不变、滚动零跳变）；滚动停驻 200ms 时
+ *   结算（释放 + prefetch 骨架取回），取回带视口补偿；
  * - 上滚到顶部触发带 → loadOlder 取更早一页 unshift 头部 + 视口补偿
  *   （scrollTop += 高度差，看到的旧内容不跳）；
  * - 加载在途时顶部停留 → topPending → 完成后自动续取（连翻不中断）；
- * - 切会话首帧渲染预算（mountedCount 6 → 全量，每帧 +40）防首帧 jam。
+ * - 切会话首帧渲染预算（mountedCount 6 行 → 全量，每帧 +40 行）防首帧 jam。
  *
- * 为什么删掉窗口层：tailWindow/字节预算/页折叠/释放恢复都是「微博式滚走释放」
- * 的复杂度——聊天要随时回滚看旧内容，微博式不适用；「按页加载」本身已经
- * 保证打开不全量（hydrate 一页），窗口化再无必要。
+ * 内存双保险：recycle 管「页级驻留上限」（字节区间可从 jsonl 确定性重取），
+ * evict 管「页内大 block 降级」——2026-08-26 的「只加载不回收」定稿被
+ * freeze-1787901573714（渲染进程 1.08GB GC 螺旋 87s 未恢复）证伪推翻。
  */
 
 export interface ChatScrollOptions {
   /** 每次取回更早页的字节预算（loadOlder 的 limit）。默认 256KB。 */
   pageBytes?: number;
-  /** 首帧渲染预算起点：切会话首帧只挂这么多条。默认 6。 */
+  /** 首帧渲染预算起点：切会话首帧只挂这么多行。默认 6。 */
   rampInitial?: number;
-  /** 每帧追加条数。默认 40。 */
+  /** 每帧追加行数。默认 40。 */
   rampChunk?: number;
   /** P1 双向分页：由上层（ChatPanel）绑定当前会话注入。缺省 = 无后端取回。 */
   pagination?: ChatScrollPagination;
@@ -32,8 +50,8 @@ export interface ChatScrollOptions {
   scheduleFrame?: (cb: () => void) => () => void;
 }
 
-/** P1 双向分页接口（最简单形态）：上滚到顶部触发带 → loadOlder 取更早一页。
- *  不回收、无恢复——内存由 store 的 maybeEvict（大 block 降级）兜底。 */
+/** P1 双向分页接口：上滚到顶部触发带 → loadOlder 取更早一页。
+ *  页级回收由 recycle.ts 管（滚动停驻时释放/取回），对本接口透明。 */
 export interface ChatScrollPagination {
   /** 磁盘上还有更早页可取。 */
   hasMore: () => boolean;
@@ -44,6 +62,11 @@ export interface ChatScrollPagination {
 const DEFAULT_PAGE_BYTES = 256 * 1024;
 const DEFAULT_RAMP_INITIAL = 6;
 const DEFAULT_RAMP_CHUNK = 40;
+/** 滚动停驻判定：距最后一次 scroll 事件这么久才结算回收/取回（滚动途中不动结构，
+ *  避免快速翻页时页在脚下被抽走）。 */
+const SCROLL_SETTLE_MS = 200;
+/** 骨架取回预取边距：骨架进入视口 ±1.5 屏就取回（不必等它滚进视口才加载）。 */
+const SKELETON_PREFETCH_MARGIN = 1.5;
 
 /** rAF 不可用时（如极简运行时）退到 setTimeout，保证不崩。 */
 function defaultScheduleFrame(cb: () => void): () => void {
@@ -93,16 +116,21 @@ export function useChatScroll(
   const scheduleFrame = options.scheduleFrame ?? defaultScheduleFrame;
   const pagination = options.pagination;
 
+  /** 行列表：页台账驱动的渲染模型（无台账 = 全 live 兼容路径）。 */
+  const rows: ComputedRef<readonly Row[]> = computed(() =>
+    buildRows(sessionId() ?? "", messages()),
+  );
+
   // ── 首帧渲染预算（唯一一层窗口化：防切会话一次性挂载 jam）──────────────
-  // 数据层不窗口化（已加载全部渲染）；这里只控制「首帧挂多少」再逐帧补到全量。
+  // 数据层窗口化由页级回收负责（骨架）；这里只控制「首帧挂多少行」再逐帧补到全量。
   const mountedCount = ref(rampInitial);
   /** 会话滚动位置记忆（sid → scrollTop）：切走记录、切回恢复。切回钉底只用于
    *  首次打开（无记忆）；组件级 Map——会话切换组件常驻，位置随会话保留，
    *  组件重建（关 tab 重开）后自然为空，回落首帧钉底行为。 */
   const scrollPositions = new Map<string, number>();
-  /** 进 v-for 的实际列表：messages 尾部 mountedCount 条（首帧 ramp 渐进，之后全量）。 */
-  const visibleMessages: ComputedRef<readonly ChatMessage[]> = computed(() => {
-    const list = messages();
+  /** 进 v-for 的实际列表：rows 尾部 mountedCount 行（首帧 ramp 渐进，之后全量）。 */
+  const visibleRows: ComputedRef<readonly Row[]> = computed(() => {
+    const list = rows.value;
     return list.length <= mountedCount.value ? list : list.slice(-mountedCount.value);
   });
 
@@ -128,7 +156,7 @@ export function useChatScroll(
   function userTookScroll() {
     cancelRamp();
     autoScroll.value = false;
-    mountedCount.value = Math.max(mountedCount.value, messages().length);
+    mountedCount.value = Math.max(mountedCount.value, rows.value.length);
   }
 
   function startRamp() {
@@ -144,7 +172,7 @@ export function useChatScroll(
     }
     function tick() {
       if (!ramping.value) return; // 被切走 / 用户上滚接管取消
-      const target = messages().length;
+      const target = rows.value.length;
       const next = Math.min(target, mountedCount.value + rampChunk);
       if (next <= mountedCount.value) {
         ramping.value = false;
@@ -179,13 +207,92 @@ export function useChatScroll(
   const loadingOlder = ref(false);
   /** 加载在途时用户滚到顶部触发带 → 完成后自动续取（连翻不中断）。 */
   let topPending = false;
+  /** 骨架取回在途（与 loadingOlder 互斥——两者都 splice messages/台账）。 */
+  const restoring = ref(false);
+
+  // ── 页级回收：测量/结算/取回 ────────────────────────────────────────────────
+
+  /** 实测当前已挂载行的高度表（rowId → px）。零高度（jsdom/未布局）视为未测，
+   *  不入表——调用方 cum 会回退到骨架记账高/默认估算。 */
+  function measureRowHeights(): Map<string, number> {
+    const heights = new Map<string, number>();
+    const root = contentEl.value;
+    if (!root) return heights;
+    for (const el of root.querySelectorAll<HTMLElement>("[data-row-id]")) {
+      const h = el.getBoundingClientRect().height;
+      if (h > 0 && el.dataset.rowId) heights.set(el.dataset.rowId, h);
+    }
+    return heights;
+  }
+
+  /** 滚动停驻结算：量高 → 定位视口页 → 上报热区 → 超预算释放热区外页 →
+   *  prefetch 边距内骨架取回。ramp/mutate 在途不动结构。 */
+  function settleRecycle() {
+    const el = scrollEl.value;
+    const sid = sessionId();
+    if (!el || !sid || ramping.value || loadingOlder.value || restoring.value || isRecycleMutating(sid)) return;
+    const heights = measureRowHeights();
+    const cum = buildCumulative(rows.value, heights);
+    const pageIdx = findViewportPageIndex(el.scrollTop, rows.value, cum);
+    if (pageIdx >= 0) setViewportHot(sid, pageIdx);
+    if (loadedPagesBytes(sid) > RECYCLE_BYTES_BUDGET) {
+      releaseFarthestPages(
+        sid,
+        { budget: RECYCLE_BYTES_BUDGET, hotPageIndex: pageIdx >= 0 ? pageIdx : undefined },
+        (i) => {
+          // 待释放页若仍挂着：实测行高作骨架高（总高不变 → 滚动零跳变）；
+          // 未挂载（ramp 切走/后台）返回 undefined → recycle 内估算
+          const ledger_row = rows.value.find((r) => r.kind === "page" && r.pageIndex === i);
+          return ledger_row ? heights.get(ledger_row.id) : undefined;
+        },
+      );
+    }
+    // prefetch：骨架接近视口即取回（带视口补偿，内容不跳）
+    const skelIdx = findRestorableSkeleton(el.scrollTop, el.clientHeight, rows.value, cum, SKELETON_PREFETCH_MARGIN);
+    if (skelIdx >= 0) void restoreAnchored(skelIdx);
+  }
+
+  let settleTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleSettle() {
+    if (settleTimer) clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      settleTimer = null;
+      settleRecycle();
+    }, SCROLL_SETTLE_MS);
+  }
+
+  /** 取回骨架页 + 视口补偿：骨架/真实内容的高度差按「页顶相对视口位置不变」
+   *  补偿（computeRestoreScrollTop 纯函数），骨架在视口上方/骑跨两情形统一。 */
+  async function restoreAnchored(pageIndex: number) {
+    const el = scrollEl.value;
+    const sid = sessionId();
+    if (!el || !sid || restoring.value || loadingOlder.value) return;
+    const rowIndex = rows.value.findIndex((r) => r.kind === "skeleton" && r.pageIndex === pageIndex);
+    if (rowIndex < 0) return;
+    restoring.value = true;
+    try {
+      const cumBefore = buildCumulative(rows.value, measureRowHeights());
+      const prevTop = el.scrollTop;
+      const count = await restorePage(sid, pageIndex);
+      if (count === 0) return; // 取回失败/骨架被丢（截断 clamp）——结构已变，不补偿
+      if (el.scrollTop !== prevTop) return; // 取回期间用户滚动，放弃补偿
+      await nextTick();
+      const cumAfter = buildCumulative(rows.value, measureRowHeights());
+      el.scrollTop = computeRestoreScrollTop(cumBefore, cumAfter, rowIndex, prevTop);
+      mountedCount.value = Math.max(mountedCount.value, rows.value.length);
+      trail("restore", `p=${pageIndex} ${Math.round(prevTop)}→${Math.round(el.scrollTop)}`);
+    } finally {
+      restoring.value = false;
+      scheduleSettle(); // 取回后复查：滚过的另一侧可能已可释放
+    }
+  }
 
   /** 向上加载更早一页 + 视口补偿（scrollTop 保持旧内容位置不跳）。
-   *  mountedCount 一并到顶（= 新 messages 长度）：新页立即全部挂载
+   *  mountedCount 一并到顶（= 新 rows 长度）：新页立即全部挂载
    *  （一页几十条，一次性挂载可接受；首帧 ramp 只服务于切会话首帧）。 */
   async function expandOlderAnchored() {
     const el = scrollEl.value;
-    if (!el || loadingOlder.value || !(pagination?.hasMore() ?? false)) return;
+    if (!el || loadingOlder.value || restoring.value || !(pagination?.hasMore() ?? false)) return;
     loadingOlder.value = true;
     try {
       cancelRamp(); // 用户接管，停掉自动 ramp
@@ -197,11 +304,12 @@ export function useChatScroll(
         await nextTick();
         // 视口补偿：新页插在顶部，scrollTop 同步下移 = 看到的旧内容位置不变
         el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
-        mountedCount.value = Math.max(mountedCount.value, messages().length);
-        trail("expand", `${Math.round(prevTop)}→${Math.round(el.scrollTop)} n=${messages().length}`);
+        mountedCount.value = Math.max(mountedCount.value, rows.value.length);
+        trail("expand", `${Math.round(prevTop)}→${Math.round(el.scrollTop)} n=${rows.value.length}`);
       }
     } finally {
       loadingOlder.value = false;
+      scheduleSettle(); // 翻页后复查：远端页可能已超预算该释放
       // 加载在途时用户已在顶部滚过（topPending）且完成后仍停留触发带：
       // 自动续取（连翻），直到用户离开顶部 / 磁盘取完。
       const e = scrollEl.value;
@@ -271,13 +379,13 @@ export function useChatScroll(
     } else if (prev >= 0 && dist < 48) {
       // 到达/停在底部：恢复跟随（下滚到底、jump 落定、钳位回底都走这里）。
       // prev >= 0 挡掉切会话后首个残留 scroll 事件（基线未建立时的旧位置回波）——
-      // 它会把恢复分支刚置 false 的 autoScroll 误刷回 true，位置随即被 toBottom 拉走。
+      // 它会把恢复分支刚置 false 的 autoScroll 误刷成 true，位置随即被 toBottom 拉走。
       autoScroll.value = true;
     }
     farFromBottom.value = dist > JUMP_SHOW_THRESHOLD;
     if (autoScroll.value) newWhileAway.value = false;
     // 上滚到触发带 = 想看更早的内容：取回一页（带视口补偿）。ramp 期间不触发。
-    const canFetch = !ramping.value && (pagination?.hasMore() ?? false);
+    const canFetch = !ramping.value && !restoring.value && (pagination?.hasMore() ?? false);
     if (el.scrollTop < expandThreshold(el) && canFetch) {
       trail("tryExpand", `hit top=${Math.round(el.scrollTop)} hm=${pagination?.hasMore() ?? false} ramp=${ramping.value ? 1 : 0}`);
       if (loadingOlder.value) {
@@ -291,6 +399,7 @@ export function useChatScroll(
     } else {
       topPending = false; // 离开顶部触发带：取消待续
     }
+    scheduleSettle(); // 滚动停驻后结算回收/取回
   }
 
   // ── 置底 ──────────────────────────────────────────────────────────────────
@@ -318,7 +427,11 @@ export function useChatScroll(
     scrollToBottom();
   }
 
-  watch(() => messages().length, onNewContent);
+  // ⚠️ 必须 watch live 段长度而非 messages.length：页级回收的释放（变少）与
+  // 骨架取回（变多）都动 messages.length，watch 它会把「骨架取回」误报成
+  // 「新消息到达」点亮圆点、把「释放」误报成内容变化。live 段（流式追加区）
+  // 的长度只被真实新内容推动。
+  watch(() => liveMessageCount(sessionId() ?? "", messages().length), onNewContent);
   watch(
     () => {
       const list = messages();
@@ -346,6 +459,7 @@ export function useChatScroll(
   //    扩窗……）与视口变化（权限对话框出现/消失、Pane 拖拽、窗口缩放）。枚举数据必然
   //    挂一漏万，改为在 DOM 层观察这两个症状本身。RO 通知按帧合并；autoScroll=false
   //    时 scrollToBottom 自身 no-op；置底只写 scrollTop 不改两者尺寸，无反馈循环。
+  //    骨架与真实页同高（释放时实测撑住），骨架替换不触发净高度变化、不扰钉底。
   let contentObserver: ResizeObserver | null = null;
   // 仅在组件实例内注册生命周期（测试在 effect scope 外直接调 composable 时不注册，
   // 避免 onMounted 无 active instance 警告；RO 本就依赖 DOM，node 测试无 ResizeObserver）。
@@ -381,6 +495,10 @@ export function useChatScroll(
       cancelRamp();
       rampPending = false;
       topPending = false; // 旧会话的「顶部待续」不带进新会话
+      if (settleTimer) {
+        clearTimeout(settleTimer); // 旧会话的待结算不带进新会话
+        settleTimer = null;
+      }
       // 方向判定基线一并重置：旧会话残留的大 scrollTop 会把新会话首个
       // scroll 事件误判成「上跳」而脱扣
       prevScrollTop = -1;
@@ -402,8 +520,9 @@ export function useChatScroll(
       // 附近（≤48px）才重新进入跟随——否则残留 scroll 事件把 autoScroll 误刷成 true
       // 后，随后的 toBottom 会把位置拉回底部（2026-08-26 trail 实锤
       // `restore 1437 → scroll auto=1 → toBottom 2854`）。
+      // 骨架高度有台账记账（实测/估算），恢复位置跨回收仍然近似准确。
       autoScroll.value = false;
-      mountedCount.value = Math.max(mountedCount.value, messages().length);
+      mountedCount.value = Math.max(mountedCount.value, rows.value.length);
       scheduleFrame(() => {
         const el = scrollEl.value;
         if (!el) return;
@@ -438,6 +557,10 @@ export function useChatScroll(
   // 避免无 active scope 时抛错。组件场景下随实例卸载回收 rAF + RO。
   function cleanup() {
     cancelRamp();
+    if (settleTimer) {
+      clearTimeout(settleTimer);
+      settleTimer = null;
+    }
     contentObserver?.disconnect();
     contentObserver = null;
   }
@@ -446,12 +569,14 @@ export function useChatScroll(
   return {
     scrollEl,
     contentEl,
-    visibleMessages,
+    visibleRows,
     ramping,
+    restoring,
     onScroll,
     jumpToBottom,
     farFromBottom,
     newWhileAway,
     expandOlderAnchored,
+    restoreAnchored,
   };
 }

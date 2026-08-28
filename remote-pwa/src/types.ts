@@ -99,8 +99,10 @@ export interface ChatMessageItem {
 }
 
 /** load_messages 分页返回(与桌面侧 serde camelCase 镜像):消息页 + 下一页字节游标。
- *  nextOffsetBytes = 页首真实 user 行的起始字节;0 = 已到文件头(无更早页)。 */
+ *  nextOffsetBytes = 页首真实 user 行的起始字节;0 = 已到文件头(无更早页)。
+ *  endOffsetBytes = 本页排他末尾字节(桌面侧页级回收重取用;PWA 不消费,仅保持镜像)。 */
 export interface LoadMessagesResult {
   messages: ChatMessageItem[];
   nextOffsetBytes: number;
+  endOffsetBytes: number;
 }

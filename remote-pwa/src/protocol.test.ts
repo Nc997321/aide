@@ -217,11 +217,12 @@ describe("RemoteClient 消息收发", () => {
     const p = client.loadMessages("s1");
     expect(ws().sent[2]).toBe('{"type":"load_messages","session_id":"s1"}');
     ws().receive(
-      '{"type":"messages","messages":{"messages":[{"role":"user","blocks":[{"type":"text","text":"hi"}],"timestamp":1}],"nextOffsetBytes":0}}',
+      '{"type":"messages","messages":{"messages":[{"role":"user","blocks":[{"type":"text","text":"hi"}],"timestamp":1}],"nextOffsetBytes":0,"endOffsetBytes":128}}',
     );
     await expect(p).resolves.toEqual({
       messages: [{ role: "user", blocks: [{ type: "text", text: "hi" }], timestamp: 1 }],
       nextOffsetBytes: 0,
+      endOffsetBytes: 128,
     });
   });
 

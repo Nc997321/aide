@@ -179,6 +179,7 @@ function prepareSend(sid: string, item: QueuedSend): "queued" | "direct" {
  * （与用户气泡标题一致）。
  */
 function renderSendBubble(
+  sid: string,
   store: SessionStore,
   item: QueuedSend,
   text: string,
@@ -229,7 +230,7 @@ function renderSendBubble(
       timestamp: Date.now(),
     });
   }
-  maybeEvict(store);
+  maybeEvict(sid, store);
 }
 
 /**
@@ -341,7 +342,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
         blocks: [{ type: "text", text: "还没登录 Claude——发消息需要凭证。请在打开的引导里配置 API key 或登录账号。" }],
         timestamp: Date.now(),
       });
-      maybeEvict(store);
+      maybeEvict(sid, store);
       authRequiredHandler?.();
       return sid;
     }
@@ -365,7 +366,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
     // 忙碌（忙碌 → "queued" 排队，直发 → "direct"）；renderSendBubble 渲染气泡；
     // sendQueued 真实发送（fire-and-forget，内部 catch 兜底）。
     const queued = prepareSend(sid, item);
-    renderSendBubble(store, item, lastDispatchedPrompt[sid], queued === "queued");
+    renderSendBubble(sid, store, item, lastDispatchedPrompt[sid], queued === "queued");
     sendQueued(sid, item, { resumeId: resolvedResumeId, jumpQueue: queued === "queued" });
     return sid;
   }
@@ -524,7 +525,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
         blocks: [block],
         timestamp: Date.now(),
       });
-      maybeEvict(store);
+      maybeEvict(sid, store);
     });
     // startBtw 内部把 fork 失败(主会话未就绪 / spawn 失败)转成 store.status="error",
     // 由抽屉展示原因——不抛、不静默 cleanup(那会抹掉失败只剩误导性 toast)。
@@ -553,7 +554,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
         blocks: [block],
         timestamp: Date.now(),
       });
-      maybeEvict(store);
+      maybeEvict(sid, store);
     });
     await btw.startBtw({
       tempId: btwId,

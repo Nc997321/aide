@@ -561,5 +561,5 @@ export function handleChatEvent(e: Record<string, unknown>): void {
   // running 期间据事件重置软超时；连续静默 STALLED_MS 才会重新判 stalled。
   if (sessionState[sid] === "running") armStalled(sid);
   // P0-3：事件驱动增长（push + 就地 +=）后检查淘汰阈值（节流，单点覆盖全部 case）
-  maybeEvict(store);
+  maybeEvict(sid, store);
 }

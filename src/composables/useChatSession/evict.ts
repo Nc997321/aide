@@ -1,15 +1,21 @@
 import type { ChatMessage, ContentBlock } from "@/types/chat";
 import { estimateBlockBytes, computeStoreBytes, summarizeText } from "@/utils/messageBytes";
 import type { SessionStore } from "./state";
+import { releaseFarthestPages } from "./recycle";
 
 /**
  * P0-3 store 内存兜底（估算字节超阈值降级大 block 为摘要）。
  * 终稿职责定位：滚动层（useChatScroll）只做「取回/锚定/置底」不管内存；
- * store 层这里管内存——超 64MB 阈值时从最早消息起降级大 block（保留消息结构）。
+ *  store 层这里管内存——两阶段：
+ *  ① 超阈值时从最早消息起降级大 block（保留消息结构）；
+ *  ② 降完仍超（小 block 洞：全部块都 ≤16KB 时①落空）→ 调 recycle 释放热区外
+ *     已加载页（页 = jsonl 字节区间，重取可完整恢复，含 tool_call.input）。
  */
 
-/** store 估算字节阈值（UTF-16,length×2）：超出时从最早消息起降级大 block。 */
-const STORE_BYTES_THRESHOLD = 64 * 1024 * 1024;
+/** store 估算字节阈值（UTF-16,length×2）：超出时从最早消息起降级大 block。
+ *  2026-08-28 由 64MB 下调 32MB——页级回收（recycle）落地后单会话驻留有了
+ *  硬天花板，evict 回归「页内大块」本职，阈值不必再给翻页驻留兜底。 */
+const STORE_BYTES_THRESHOLD = 32 * 1024 * 1024;
 /** 单 block 降级阈值：只降级超过此值的大 block（小 block 保留原文）。 */
 const BLOCK_BYTES_THRESHOLD = 16 * 1024;
 /** maybeEvict 节流间隔：全量重算 + 降级循环每会话至多一次/该间隔，流式热路径零 jank。 */
@@ -74,17 +80,19 @@ function degradeBlock(block: ContentBlock): number {
   return before - estimateBlockBytes(block);
 }
 
-/** 节流 + 全量重算的淘汰入口：超 store 阈值时从最早消息起降级大 block。
- *  for..of 结构（无 while，死循环防护结构性）：全小 block 仍超阈值时循环自然落空接受。
- *  跳过 streaming 消息与含 pending 块的消息（流式尾块/回填中的块永不被替换）。
- *  节流配额只在「实际超阈值要降级」时才占——未超阈值的早退不占配额，
- *  避免同 tick 内先到的小事件（如 tool_use_start）把后到的大事件（tool_result）误节流。 */
-export function maybeEvict(store: SessionStore): void {
+/** 节流 + 全量重算的淘汰入口：超 store 阈值时①从最早消息起降级大 block；
+ *  ②仍超（全小 block 落空）则释放热区外已加载页（字节区间可重取，真删数据）。
+ *  for..of 结构（无 while，死循环防护结构性）：全小 block 仍超阈值时①循环
+ *  自然落空，交给②。跳过 streaming 消息与含 pending 块的消息（流式尾块/回填
+ *  中的块永不被替换）。
+ *  节流配额只在「实际降级/释放」时才占——未超阈值的早退不占配额，避免同 tick
+ *  内先到的小事件（如 tool_use_start）把后到的大事件（tool_result）误节流。 */
+export function maybeEvict(sid: string, store: SessionStore): void {
   const now = Date.now();
   if (now - (lastEvictAt.get(store) ?? 0) < EVICT_THROTTLE_MS) return;
   let bytes = computeStoreBytes(store);
   if (bytes <= evictThresholds.storeBytes) return; // 未超阈值：不降级，也不占节流配额
-  // 超阈值，尝试降级；只有实际降级了 block 才占节流配额——全 streaming/pending 跳过
+  // 阶段①：块级降级；只有实际降级了 block 才占节流配额——全 streaming/pending 跳过
   // 时不占（下次事件重试），避免「流式期 tool_result 超阈值但 streaming 跳过」把
   // 紧随的 message_stop（streaming 结束、本可降级）误节流。
   let degraded = false;
@@ -97,6 +105,15 @@ export function maybeEvict(store: SessionStore): void {
       if (saved > 0) degraded = true;
       bytes -= saved;
     }
+  }
+  // 阶段②：小 block 洞兜底——①降完仍超阈值，说明占用大头是不可降级的小块/对象
+  // 结构，按页释放（热区由滚动层 setViewportHot 上报，无上报时保最新 2 页）
+  if (bytes > evictThresholds.storeBytes) {
+    const released = releaseFarthestPages(sid, {
+      budget: evictThresholds.storeBytes * 0.8,
+      preserveNewest: 2,
+    });
+    if (released > 0) degraded = true;
   }
   if (degraded) lastEvictAt.set(store, now);
 }

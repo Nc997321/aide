@@ -132,11 +132,48 @@ export const pendingToolCalls = new Map<string, Map<string, ToolCallBlock>>();
 /** sid → subagent_id → SubagentBlock（同上；子代理事件跨回合，pending 期更长）。 */
 export const pendingSubagents = new Map<string, Map<string, SubagentBlock>>();
 
-/** P1 双向分页游标（最简单形态）：只记录「下一个更早页的起点字节」——
- *  取回后前进为 nextOffsetBytes，内容必然前进不重复。不回收、无页记录：
- *  内存由 evict（maybeEvict 大 block 降级，64MB 阈值）兜底，DOM 由逐页加载
- *  自然控制（翻多少渲染多少）。 */
+/** P1 双向分页游标：只记录「下一个更早页的起点字节」——取回后前进为
+ *  nextOffsetBytes，内容必然前进不重复。 */
 export const sessionPagination = new Map<string, { tailOffset: number }>();
+
+/** 页台账条目（P1 回收半边，2026-08-28 重引入）：一页 = jsonl 的一段字节区间
+ *  [startOffset, endOffset)。loaded=false 时该页消息已从 store.messages 释放，
+ *  渲染层以 heightPx 骨架占位；取回 = load_messages(offset=endOffset, limit=bytes)
+ *  确定性重放同一区间。页边界只由磁盘 offset 决定，流式新增消息不入页（属 live 段）。 */
+export interface PageEntry {
+  /** 稳定行 key（v-for/测量用） */
+  id: string;
+  /** 页首字节（= 加载时的 nextOffsetBytes） */
+  startOffset: number;
+  /** 页尾排他字节（= 本次读取的 endOffsetBytes） */
+  endOffset: number;
+  /** 页内消息数（取回后按实际返回数更新——预算边界允许条数漂移） */
+  count: number;
+  /** endOffset - startOffset（重取时的 limit） */
+  bytes: number;
+  /** 消息是否在 store.messages 中驻留 */
+  loaded: boolean;
+  /** 是否可按字节区间重取（endOffsetBytes 可信）。false = 来源应答缺 endOffsetBytes
+   *  （版本错配等防御场景）——永不释放（驻留现状），不参与回收。 */
+  restorable: boolean;
+  /** 释放时实测高度（首末消息元素 rect 差）；无 DOM 可测时估算（count×均值） */
+  heightPx: number;
+}
+
+/** sid → 页台账（旧→新有序）。不变式：store.messages = Σ(loaded 页消息按页序) + live 段；
+ *  相邻页 pages[i].endOffset === pages[i+1].startOffset；tailOffset === pages[0].startOffset。 */
+export const pageLedgers = new Map<string, PageEntry[]>();
+
+/** 取/建会话页台账。⚠️ 与 getStore 同一响应式陷阱：必须先 reactive() 包装再入 Map
+ *  返回——返回原始数组会让调用方以非响应式引用 splice/改字段，buildRows 不重算。 */
+export function getOrCreateLedger(sid: string): PageEntry[] {
+  let ledger = pageLedgers.get(sid);
+  if (!ledger) {
+    ledger = reactive<PageEntry[]>([]);
+    pageLedgers.set(sid, ledger);
+  }
+  return ledger;
+}
 
 export function registerToolCall(sid: string, id: string, block: ToolCallBlock): void {
   let m = pendingToolCalls.get(sid);
@@ -396,6 +433,7 @@ export function disposeSession(sid: string): void {
   pendingToolCalls.delete(sid);
   pendingSubagents.delete(sid);
   sessionPagination.delete(sid);
+  pageLedgers.delete(sid);
   useSessionNames().removeName(sid);
   useSessionWorkspaces().removeWorkspace(sid);
   // P2-3：btw 问答记忆随 owner 收口（后台仍跑的 btw 完成时重建单轮条目，无害）
@@ -478,6 +516,11 @@ export async function finalizeSession(tempId: string, realId: string) {
     sessionPagination.set(realId, sessionPagination.get(tempId)!);
     sessionPagination.delete(tempId);
   }
+  // 页台账同理（骨架/释放状态随定名保留）
+  if (pageLedgers.has(tempId)) {
+    pageLedgers.set(realId, pageLedgers.get(tempId)!);
+    pageLedgers.delete(tempId);
+  }
   // provider 绑定也跟着搬迁：临时 id 在 sendMessage 时已盖戳，拿到真实 id 后不能丢
   identity.migrateBinding(tempId, realId);
   // 工作区归属同样搬迁（sendMessage 首发时 seed 的创建时绑定快照）
@@ -501,6 +544,7 @@ export async function finalizeSession(tempId: string, realId: string) {
 export function resetAllState(): void {
   for (const k of Object.keys(stores)) delete stores[k];
   sessionPagination.clear();
+  pageLedgers.clear();
   pendingToolCalls.clear();
   pendingSubagents.clear();
   disposedSids.clear();

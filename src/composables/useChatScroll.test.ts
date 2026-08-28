@@ -1,6 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
 import { nextTick, ref } from "vue";
 import type { Ref } from "vue";
+
+// 页级回收测试要碰 pageLedgers/stores（state.ts 模块级 identity 会 listen）——
+// 与 useChatSession 系列测试同一套 Tauri mock。
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async () => () => {}),
+}));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { useChatScroll } from "./useChatScroll";
 import type { ChatMessage } from "@/types/chat";
 
@@ -53,7 +63,7 @@ describe("useChatScroll", () => {
     // 否则 syncScheduler 会把 scrollTop 钉到 scrollHeight、误触「加载期间用户滚动」
     // 放弃补偿（真实浏览器里 rAF 异步 + 上滚时 autoScroll=false 置底 no-op，无此问题）
     const { schedule } = manualScheduler();
-    const { scrollEl, expandOlderAnchored, visibleMessages } = useChatScroll(
+    const { scrollEl, expandOlderAnchored, visibleRows } = useChatScroll(
       () => list.value,
       () => sid.value,
       {
@@ -69,8 +79,8 @@ describe("useChatScroll", () => {
     );
     scrollEl.value = fakeScrollEl({ scrollTop: 100, scrollHeight: 2000, clientHeight: 500 });
     await expandOlderAnchored();
-    // unshift 30 条 → 130 条全部可见（不窗口化）
-    expect(visibleMessages.value.length).toBe(130);
+    // unshift 30 条 → 130 条全部可见（无台账=全 live 行）
+    expect(visibleRows.value.length).toBe(130);
     expect(scrollEl.value.scrollTop).toBe(100);
   });
 
@@ -78,13 +88,13 @@ describe("useChatScroll", () => {
     const list = ref(makeMessages(100));
     const sid = ref<string | null>("s1");
     const { schedule } = syncScheduler();
-    const { visibleMessages, ramping } = useChatScroll(
+    const { visibleRows, ramping } = useChatScroll(
       () => list.value,
       () => sid.value,
       { scheduleFrame: schedule },
     );
     // 同步调度器下 ramp 在 immediate sessionId watcher 里一气跑完（6 → 46 → 86 → 100）
-    expect(visibleMessages.value.length).toBe(100);
+    expect(visibleRows.value.length).toBe(100);
     expect(ramping.value).toBe(false);
   });
 
@@ -92,12 +102,12 @@ describe("useChatScroll", () => {
     const list = ref(makeMessages(8));
     const sid = ref<string | null>("s1");
     const { schedule } = syncScheduler();
-    const { visibleMessages, ramping } = useChatScroll(
+    const { visibleRows, ramping } = useChatScroll(
       () => list.value,
       () => sid.value,
       { scheduleFrame: schedule },
     );
-    expect(visibleMessages.value.length).toBe(8);
+    expect(visibleRows.value.length).toBe(8);
     expect(ramping.value).toBe(false);
   });
 
@@ -105,17 +115,17 @@ describe("useChatScroll", () => {
     const list = ref<ChatMessage[]>([]);
     const sid = ref<string | null>("s1");
     const { schedule } = syncScheduler();
-    const { visibleMessages, ramping } = useChatScroll(
+    const { visibleRows, ramping } = useChatScroll(
       () => list.value,
       () => sid.value,
       { scheduleFrame: schedule },
     );
-    expect(visibleMessages.value.length).toBe(0);
+    expect(visibleRows.value.length).toBe(0);
     expect(ramping.value).toBe(false);
     // hydrate：整份历史一次性灌入
     list.value = makeMessages(50);
     await nextTick(); // pre-flush length watcher 触发 startRamp
-    expect(visibleMessages.value.length).toBe(50);
+    expect(visibleRows.value.length).toBe(50);
     expect(ramping.value).toBe(false);
   });
 
@@ -141,12 +151,12 @@ describe("useChatScroll", () => {
     const list = ref<ChatMessage[]>([]);
     const sid = ref<string | null>(null);
     const { schedule } = syncScheduler();
-    const { visibleMessages, ramping } = useChatScroll(
+    const { visibleRows, ramping } = useChatScroll(
       () => list.value,
       () => sid.value,
       { scheduleFrame: schedule },
     );
-    expect(visibleMessages.value.length).toBe(0);
+    expect(visibleRows.value.length).toBe(0);
     expect(ramping.value).toBe(false);
     // 即便后续 messages 到了，sid 仍为 null 也不 ramp（rampPending 未被置位）
     list.value = makeMessages(50);
@@ -158,7 +168,7 @@ describe("useChatScroll", () => {
     const list = ref(makeMessages(100));
     const sid = ref<string | null>("s1");
     const { schedule } = manualScheduler();
-    const { scrollEl, visibleMessages, ramping, onScroll } = useChatScroll(
+    const { scrollEl, visibleRows, ramping, onScroll } = useChatScroll(
       () => list.value,
       () => sid.value,
       { scheduleFrame: schedule },
@@ -172,14 +182,14 @@ describe("useChatScroll", () => {
     scrollEl.value = fakeScrollEl({ scrollTop: 700, scrollHeight: 1817, clientHeight: 817 });
     onScroll();
     expect(ramping.value).toBe(false);
-    expect(visibleMessages.value.length).toBe(100);
+    expect(visibleRows.value.length).toBe(100);
   });
 
   it("切走再切回：恢复离开时的滚动位置（不钉底、全量挂载）", async () => {
     const list = ref(makeMessages(100));
     const sid = ref<string | null>("s1");
     const { schedule, flush } = manualScheduler();
-    const { scrollEl, visibleMessages, ramping } = useChatScroll(
+    const { scrollEl, visibleRows, ramping } = useChatScroll(
       () => list.value,
       () => sid.value,
       { scheduleFrame: schedule },
@@ -194,7 +204,7 @@ describe("useChatScroll", () => {
     await nextTick();
     flush(); // 执行 restore 帧
     expect(scrollEl.value!.scrollTop).toBe(500); // 恢复离开时的位置，而不是被拖回底部
-    expect(visibleMessages.value.length).toBe(100); // 全量挂载（不 ramp 不 pin）
+    expect(visibleRows.value.length).toBe(100); // 全量挂载（不 ramp 不 pin）
     expect(ramping.value).toBe(false);
   });
 
@@ -202,7 +212,7 @@ describe("useChatScroll", () => {
     const list = ref(makeMessages(100));
     const sid = ref<string | null>("s1");
     const { schedule, flush } = manualScheduler();
-    const { scrollEl, visibleMessages, ramping } = useChatScroll(
+    const { scrollEl, visibleRows, ramping } = useChatScroll(
       () => list.value,
       () => sid.value,
       { scheduleFrame: schedule },
@@ -211,7 +221,7 @@ describe("useChatScroll", () => {
     scrollEl.value = fakeScrollEl({ scrollTop: 0, scrollHeight: 1817, clientHeight: 817 });
     expect(ramping.value).toBe(true);
     flush(); // ramp 跑完 → 全量
-    expect(visibleMessages.value.length).toBe(100);
+    expect(visibleRows.value.length).toBe(100);
     expect(ramping.value).toBe(false);
   });
 
@@ -426,6 +436,36 @@ describe("useChatScroll", () => {
     expect(loadCalls).toBe(2);
   });
 
+  it("页释放/取回不误亮「新消息」圆点；live 段新增才亮", async () => {
+    // 页级回收会 splice messages（释放变少/取回变多）——onNewContent 必须 watch
+    // live 段长度而非 messages.length，否则取回被误报成新消息（亮圆点）。
+    const { getStore, getOrCreateLedger, resetAllState } = await import("./useChatSession/state");
+    const { releasePage } = await import("./useChatSession/recycle");
+    resetAllState();
+    const store = getStore("s1");
+    const ledger = getOrCreateLedger("s1");
+    ledger.push({ id: "pg0", startOffset: 0, endOffset: 100, count: 2, bytes: 100, loaded: true, restorable: true, heightPx: 0 });
+    const msgs = makeMessages(3);
+    store.messages.push(msgs[0], msgs[1]); // 页 0 的 2 条
+    store.messages.push(msgs[2]); // live 段 1 条
+    const sid = ref<string | null>("s1");
+    const { schedule } = syncScheduler();
+    const api = useChatScroll(() => store.messages, () => sid.value, { scheduleFrame: schedule });
+    const el = fakeScrollEl({ scrollTop: 1000, scrollHeight: 1817, clientHeight: 817 });
+    api.scrollEl.value = el;
+    api.onScroll(); // 基线（prevScrollTop 建立）
+    el.scrollTop = 600; // 用户上滚脱扣 → autoScroll=false
+    api.onScroll();
+    // 释放页 0：messages 3→1，但 live 计数不变（1）→ 圆点不亮
+    releasePage("s1", 0, 500);
+    await nextTick();
+    expect(api.newWhileAway.value).toBe(false);
+    // live 段新增 1 条（真实新消息）→ 圆点亮
+    store.messages.push({ id: "new-live", role: "assistant", blocks: [{ type: "text", text: "n" }], timestamp: 9 });
+    await nextTick();
+    expect(api.newWhileAway.value).toBe(true);
+  });
+
   it("P1 连续上滚翻页：onScroll 到顶驱动 loadOlder 循环直到磁盘取完", async () => {
     // 模拟预览打开长会话：store 尾部 15 条（hydrate 页）+ 磁盘还有更早内容
     const list = ref(makeMessages(15));
@@ -466,7 +506,7 @@ describe("useChatScroll", () => {
       // 模拟用户再次滚到顶（补偿把 scrollTop 移开顶部）
       scrollEl.value = fakeScrollEl({ scrollTop: 0, scrollHeight: 2000 + guard, clientHeight: 500 });
     }
-    // 磁盘取完（5 页 = 150 条）→ 早期内容全部进入 store（不回收，全部保留）
+    // 磁盘取完（5 页 = 150 条）→ 早期内容全部进入 store（无台账路径，不触发回收）
     expect(olderRounds).toBe(5);
     expect(list.value.length).toBe(15 + 150);
   });
