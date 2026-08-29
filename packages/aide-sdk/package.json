@@ -6,7 +6,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./chat": "./src/chat/index.ts",
-    "./types": "./src/types.ts"
+    "./types": "./src/types.ts",
+    "./types/*": "./src/types/*.ts",
+    "./api/*": "./src/api/*.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.2.0"

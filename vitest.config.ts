@@ -18,6 +18,6 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts", "agent-sidecar/src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "agent-sidecar/src/**/*.test.ts", "packages/**/*.test.ts"],
   },
 });

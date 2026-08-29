@@ -1,10 +1,2 @@
-export interface SkillMeta {
-  name: string;
-  description: string;
-  /** "user" | "project" | "plugin:superpowers" */
-  source: string;
-  /** SKILL.md 绝对路径 */
-  filePath: string;
-  /** "claude" | future: "codex" | "opencode" */
-  provider: string;
-}
+// 兼容壳：实现已迁至 @aide/sdk。新代码直接引包。
+export type * from "@aide/sdk/types/skill";
