@@ -465,4 +465,18 @@ describe("RemoteTransport 边界与防御臂", () => {
     ws().receive('{"type":"invoke_ok","id":77,"payload":null}');
     expect(errors).toEqual([]);
   });
+
+  it("同实例换凭据重连（重配对）：listen 注册的监听不失效，relayUrl 可更新", async () => {
+    const { t, ws } = authed();
+    const events: unknown[] = [];
+    await t.listen("chat-event", (e) => events.push(e.payload));
+    // token 被吊销 → 重新配对：同实例 connect 新凭据 + 新 relay 地址
+    t.connect({ code: "654321" }, "wss://relay2.example.com");
+    const ws2 = FakeWebSocket.instances[1];
+    expect(ws2.url).toBe("wss://relay2.example.com/ws");
+    ws2.open();
+    ws2.receive('{"type":"pair_ok","device_id":"dev-2","token":"t2"}');
+    ws2.receive('{"type":"event","event":{"type":"text_delta","delta":"alive"}}');
+    expect(events).toEqual([{ type: "text_delta", delta: "alive" }]); // 监听跨过重连仍然生效
+  });
 });

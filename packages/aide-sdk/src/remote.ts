@@ -157,8 +157,11 @@ export class RemoteTransport implements AideTransport {
    * 发起连接（幂等：会先关掉旧连接）。
    * - {code}：桥接后停在 bridged，等 UI 调 pair()
    * - {deviceId, token}：桥接后自动 auth，成功到 authed
+   * - relayUrl：换中继地址时传入更新（App 重配对场景复用同一实例——
+   *   事件监听挂在实例上，换新实例会让已注册的 listen 挂在死连接上）。
    */
-  connect(creds: ConnectCreds): void {
+  connect(creds: ConnectCreds, relayUrl?: string): void {
+    if (relayUrl) this.relayUrl = relayUrl;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

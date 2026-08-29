@@ -45,25 +45,28 @@ const sessionWs = new Map<string, { wsKey: string; wsPath: string }>();
 // ── 连接 ──
 
 function connect(relayUrl: string, creds: ConnectCreds): void {
-  client.value?.disconnect(); // 换 URL / 换凭据时关掉旧连接
-  const t = new RemoteTransport(relayUrl);
-  setTransport(t); // 此后所有 api.* 调用走远程 RPC
-  t.onStateChange(handleState);
-  // 会话列表"回复中"徽标：收到事件标记 live，message_stop 清除
-  void t.listen<Record<string, unknown>>("chat-event", ({ payload }) => {
-    const sid = payload["session_id"];
-    if (typeof sid !== "string") return;
-    if (payload["type"] === "message_stop") liveSessions.delete(sid);
-    else liveSessions.add(sid);
-  });
-  // 桌面侧执行错误（如会话创建失败）——显示出来，否则「发消息没响应」无从诊断
-  t.onError((m) => {
-    errorMsg.value = m;
-    if (errorTimer) clearTimeout(errorTimer);
-    errorTimer = setTimeout(() => (errorMsg.value = null), 5000);
-  });
-  client.value = t;
-  t.connect(creds);
+  // 传输实例只建一次（监听/闭包 listener 挂在实例上，重建会让 listener 挂死连接）；
+  // 换 URL/凭据走同一实例的重连。
+  if (!client.value) {
+    const t = new RemoteTransport(relayUrl);
+    setTransport(t); // 此后所有 api.* 调用走远程 RPC
+    t.onStateChange(handleState);
+    // 会话列表"回复中"徽标：收到事件标记 live，message_stop 清除
+    void t.listen<Record<string, unknown>>("chat-event", ({ payload }) => {
+      const sid = payload["session_id"];
+      if (typeof sid !== "string") return;
+      if (payload["type"] === "message_stop") liveSessions.delete(sid);
+      else liveSessions.add(sid);
+    });
+    // 桌面侧执行错误（如会话创建失败）——显示出来，否则「发消息没响应」无从诊断
+    t.onError((m) => {
+      errorMsg.value = m;
+      if (errorTimer) clearTimeout(errorTimer);
+      errorTimer = setTimeout(() => (errorMsg.value = null), 5000);
+    });
+    client.value = t;
+  }
+  client.value.connect(creds, relayUrl);
 }
 
 function handleState(s: ConnState): void {
