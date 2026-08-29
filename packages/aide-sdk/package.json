@@ -8,7 +8,10 @@
     "./chat": "./src/chat/index.ts",
     "./types": "./src/types.ts",
     "./types/*": "./src/types/*.ts",
-    "./api/*": "./src/api/*.ts"
+    "./api": "./src/api.ts",
+    "./api/*": "./src/api/*.ts",
+    "./composables/*": "./src/composables/*.ts",
+    "./utils/*": "./src/utils/*.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.2.0"

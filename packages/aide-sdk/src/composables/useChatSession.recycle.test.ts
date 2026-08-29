@@ -26,7 +26,7 @@ import {
   restorePage,
   setViewportHot,
 } from "./useChatSession/recycle";
-import type { ChatMessage } from "@/types/chat";
+import type { ChatMessage } from "../types/chat";
 
 function makeMsg(text: string): ChatMessage {
   return { id: crypto.randomUUID(), role: "assistant", blocks: [{ type: "text", text }], timestamp: 0 };

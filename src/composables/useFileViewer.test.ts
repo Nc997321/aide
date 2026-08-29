@@ -3,7 +3,7 @@
 // （模块级 watch 写 document.documentElement 的 CSS 变量），node 环境没有 document。
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("../api", () => ({
+vi.mock("@aide/sdk/api", () => ({
   api: {
     readFileContent: vi.fn(async (path: string) => `content of ${path}`),
     readFileBinary: vi.fn(async () => new ArrayBuffer(0)),

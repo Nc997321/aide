@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { useProviders } from "@/composables/useProviders";
-import { useSessionProviders } from "@/composables/useSessionProviders";
-import type { ProviderConfig, ProviderModelMappings } from "@/types";
-import type { ModelOption } from "@/types/chat";
+import { useProviders } from "../../../composables/useProviders";
+import { useSessionProviders } from "../../../composables/useSessionProviders";
+import type { ProviderConfig, ProviderModelMappings } from "../../../types";
+import type { ModelOption } from "../../../types/chat";
 
 // ── api mock：sessionProvider/sessionModel 读受控；setSession* 记录写回；getDefaultModels 系统默认兜底列表 ──
 const sessionProviderMock = vi.fn<(id: string) => Promise<string | null>>();
@@ -11,7 +11,7 @@ const setSessionProviderMock = vi.fn<(id: string, provider: string) => Promise<v
 const setSessionModelMock = vi.fn<(id: string, model: string) => Promise<void>>();
 const getDefaultModelsMock = vi.fn<() => Promise<ModelOption[]>>();
 
-vi.mock("@/api", () => ({
+vi.mock("../../../api", () => ({
   api: {
     sessionProvider: (id: string) => sessionProviderMock(id),
     sessionModel: (id: string) => sessionModelMock(id),

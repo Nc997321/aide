@@ -19,7 +19,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import { useChatSession, __resetForTest } from "./useChatSession";
 import { useSessionState } from "./useSessionState";
-import type { SubagentBlock, SubagentEntry } from "@/types/chat";
+import type { SubagentBlock, SubagentEntry } from "../types/chat";
 
 const CAP = 256 * 1024; // SUBAGENT_ENTRY_CAP
 

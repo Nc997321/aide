@@ -1,0 +1,565 @@
+import { api } from "../../api";
+import { builtinHooks, type BuiltinHookManifest } from "../../composables/useCustomizations";
+import type {
+  BgTask,
+  ChatMessage,
+  ContextCompactionState,
+  ModelOption,
+  PermissionModeOption,
+  SubagentBlock,
+  SubagentEntry,
+  TaskItem,
+  TextBlock,
+  ThinkingBlock,
+  ToolCallBlock,
+} from "../../types/chat";
+import { useBtwSession } from "../useBtwSession";
+import { useCodeGraphProgress } from "../useCodeGraphProgress";
+import { useSessionNames } from "../useSessionNames";
+import { useSessionIdentity } from "../../composables/sessionIdentity";
+import { useSessionState } from "../useSessionState";
+import { armStalled, sessionHealth, sessionState } from "./state";
+import { maybeEvict } from "./evict";
+import {
+  BG_TASKS_CAP,
+  BG_TASK_OUTPUT_CAP,
+  SUBAGENT_ENTRY_CAP,
+  appendSubagentTextEntry,
+  clearBgDockAutoHide,
+  diag,
+  disposedSids,
+  finalizeSession,
+  finishStreaming,
+  getOrCreateAssistant,
+  getStore,
+  isPendingSession,
+  lookupSubagent,
+  lookupToolCall,
+  registerSubagent,
+  registerToolCall,
+  resetRuntimeState,
+  resolveSid,
+  scheduleBgDockAutoHide,
+  sharedModels,
+  sharedPermissionModes,
+  sharedRateLimit,
+  stampMessageModel,
+  unregisterSubagent,
+  unregisterToolCall,
+} from "./state";
+
+/**
+ * 流式事件总路由（拆分自原 2000+ 行宿主）：按事件类型分发到 per-sid store。
+ * 任意事件到达都证伪「卡住」（清 stalled 橙点）；running 期间重置软超时。
+ */
+export function handleChatEvent(e: Record<string, unknown>): void {
+  // 内置 hook 清单：sidecar 会话启动时 emit 的全局元数据（无 session_id），路由到扩展管理。
+  if (e["type"] === "builtin_hooks_manifest") {
+    builtinHooks.value = (e["manifest"] as BuiltinHookManifest[]) ?? [];
+    return;
+  }
+  const raw = e["session_id"] as string | undefined;
+  if (!raw) return;
+  // btw 事件路由到独立 store,不进主对话 store(隔离红线)
+  const btw = useBtwSession();
+  if (btw.isBtwSid(raw)) {
+    btw.handleBtwEvent(e);
+    return;
+  }
+  const sid = resolveSid(raw);
+  // 已收口销毁的会话：拦截一切延迟事件，防止 getStore 重建僵尸 store
+  if (disposedSids.has(sid)) return;
+  const store = getStore(sid);
+
+  const identity = useSessionIdentity();
+  const { setSessionState, setSessionHealth } = useSessionState();
+
+  switch (e["type"]) {
+    case "session_init": {
+      const sdkSid = e["sdk_session_id"] as string | undefined;
+      if (sdkSid && isPendingSession(sid) && sdkSid !== sid) {
+        // 临时 key 首次被 SDK 确认：finalizeSession 同步段已把 running 盖到 realId
+        // 并 removeSessionState(tempId)。这里不能再 setSessionState(sid, ...)——
+        // sid 是过期的 tempId，写回去会在 sessionStateMap 里留下孤儿条目，
+        // 右上角"活跃会话"因此出现一个点进去空白的会话。realId 的 running 由
+        // finalizeSession 负责，本分支直接结束。
+        void finalizeSession(sid, sdkSid);
+        break;
+      }
+      setSessionState(sid, "running");
+      // 落盘已在发送前（ChatPanel.onSendRequest 的 settleOnSend）完成，此处不再落盘。
+      break;
+    }
+    case "text_delta": {
+      const msg = getOrCreateAssistant(store);
+      stampMessageModel(msg, e);
+      const last = msg.blocks[msg.blocks.length - 1];
+      if (last?.type === "text") {
+        (last as TextBlock).text += e["delta"] as string;
+      } else {
+        msg.blocks.push({ type: "text", text: e["delta"] as string });
+      }
+      break;
+    }
+    case "thinking":
+    case "thinking_delta": {
+      // 主线程思考：partial=on 走 thinking_delta 逐字增量（delta 字段），partial=off / 历史
+      // 回放走 thinking 整块（text 字段）。前端都是"追加到末尾同类型 block，否则新建"，
+      // 用 text ?? delta 兼容两路。不盖 model——思考事件不带 model/modelLabel（模型徽标
+      // 由同消息首个 text/tool_use 块盖）。
+      const chunk = (e["text"] as string) ?? (e["delta"] as string);
+      const msg = getOrCreateAssistant(store);
+      const last = msg.blocks[msg.blocks.length - 1];
+      if (last?.type === "thinking") {
+        (last as ThinkingBlock).text += chunk;
+      } else {
+        msg.blocks.push({ type: "thinking", text: chunk });
+      }
+      break;
+    }
+    case "tool_use_start": {
+      const msg = getOrCreateAssistant(store);
+      stampMessageModel(msg, e);
+      const toolId = e["id"] as string;
+      const block: ToolCallBlock = {
+        type: "tool_call",
+        id: toolId,
+        name: e["name"] as string,
+        input: e["input"],
+        isPending: true,
+      };
+      msg.blocks.push(block);
+      registerToolCall(sid, toolId, block);
+      break;
+    }
+    case "tool_result": {
+      const toolId = e["id"] as string;
+      const block = lookupToolCall(sid, toolId);
+      if (block) {
+        block.result = e["content"] as string;
+        block.isError = e["is_error"] as boolean;
+        block.isPending = false;
+        unregisterToolCall(sid, toolId);
+      }
+      break;
+    }
+    case "permission_request": {
+      store.pendingPermissions.push({
+        id: e["id"] as string,
+        name: e["name"] as string,
+        input: e["input"],
+        fromSubagent: e["fromSubagent"] as { id: string; agentName: string } | undefined,
+      });
+      setSessionState(sid, "attention");
+      break;
+    }
+    case "permission_cancelled": {
+      store.pendingPermissions = store.pendingPermissions.filter((p) => p.id !== e["id"]);
+      break;
+    }
+    case "models_available": {
+      store.models = e["models"] as ModelOption[];
+      store.currentModel = e["current"] as string;
+      sharedModels.value = store.models;
+      // 坐实 L2 身份层：runtimeModel 供 effectiveModel 优先级，sdkModels 供系统默认下拉。
+      // 不在此落盘（current 可能是 sidecar 解析的 Claude 别名，落盘会污染记忆）——
+      // 落盘只在发送前 settleOnSend（用户选的有效模型，可恢复）。
+      identity.bindRuntime(sid, store.currentModel);
+      identity.setSdkModels(sid, store.models);
+      break;
+    }
+    case "model_switch_result": {
+      // 模型切换坐实回执——只有用户显式切换才收到（init/assistant 坐实不发），
+      // 交给面板弹瞬时提示。seq 单调递增：连续两次切同一个模型也触发 watcher。
+      store.modelSwitchResult = {
+        ok: e["ok"] as boolean,
+        model: e["model"] as string,
+        display: (e["display"] as string) || (e["model"] as string),
+        error: e["error"] as string | undefined,
+        seq: (store.modelSwitchResult?.seq ?? 0) + 1,
+        at: Date.now(),
+      };
+      break;
+    }
+    case "effort_changed": {
+      // effort 切换坐实/回滚——成功带新值，失败（sidecar 驳回）带回滚后的旧值
+      //  + error。选择器据此同步（失败时弹提示并拉回旧值）。
+      store.currentEffort = e["effort"] as string;
+      const err = e["error"] as string | undefined;
+      if (err) {
+        store.effortSwitchError = {
+          message: err,
+          seq: (store.effortSwitchError?.seq ?? 0) + 1,
+        };
+      }
+      break;
+    }
+    case "context_usage": {
+      store.contextUsage = {
+        totalTokens: e["total_tokens"] as number,
+        maxTokens: e["max_tokens"] as number,
+        percentage: e["percentage"] as number,
+      };
+      break;
+    }
+    case "context_compaction": {
+      // 压缩生命周期只属于正在运行的轮次。终态之后偶发到达的旧事件不能把
+      // 状态条重新挂回一个闲置会话。
+      if (!store.isBusy) break;
+      const stage = e["stage"];
+      if (stage === "completed") {
+        // 成功后立即交还给普通思考状态；实际压缩后的窗口变化仍走 context_usage。
+        if (store.contextCompaction) store.contextCompaction = null;
+        break;
+      }
+      if (stage !== "compacting" && stage !== "failed") break;
+
+      const detail = typeof e["detail"] === "string" ? e["detail"] : undefined;
+      const error = typeof e["error"] === "string" ? e["error"] : undefined;
+      const previous = store.contextCompaction;
+      const startedAt =
+        stage === "failed" && previous
+          ? previous.startedAt
+          : stage === "compacting" && previous?.stage === "compacting"
+            ? previous.startedAt
+            : Date.now();
+      const next: ContextCompactionState = {
+        stage,
+        startedAt,
+        ...(detail ? { detail } : {}),
+        ...(error ? { error } : {}),
+      };
+      // Sidecar 若重复报告同一阶段，保留原对象以免无意义地触发状态条重渲染。
+      if (
+        previous?.stage === next.stage
+        && previous.detail === next.detail
+        && previous.error === next.error
+      ) break;
+      store.contextCompaction = next;
+      break;
+    }
+    case "tasks_update": {
+      store.tasks = e["tasks"] as TaskItem[];
+      break;
+    }
+    case "session_title": {
+      // 会话自动命名：sidecar 首轮回复开始时生成的标题。是否采纳由 Rust 原子判定
+      // （nameSource==manual 拒写）——返回 true 才更新名字注册表，侧栏卡片
+      // 显示走注册表（SidebarLeft 模板 names[s.id] || s.name），一处更新全局生效。
+      const title = e["title"] as string;
+      if (title) {
+        void api.autoRenameSession(sid, title).then((adopted) => {
+          if (adopted) useSessionNames().setName(sid, title);
+        }).catch(() => { /* 自动命名失败静默——保留默认名 */ });
+      }
+      break;
+    }
+    case "bg_task_started": {
+      // task_started 与后台回执两路信号顺序不保证——按 id upsert 合并。
+      clearBgDockAutoHide(sid); // 新任务起步：取消待执行的自动撤条
+      const id = e["id"] as string;
+      let task = store.bgTasks.find((t) => t.id === id);
+      if (!task) {
+        task = { id, status: "running", output: "", startedAt: Date.now() };
+        store.bgTasks.push(task);
+        // 新任务自动成为 dock 里的选中项（用户最想看的是刚起来的那个）
+        store.bgDockSelectedId = id;
+      }
+      if (e["toolUseId"]) task.toolUseId = e["toolUseId"] as string;
+      if (e["command"]) task.command = e["command"] as string;
+      if (e["description"]) task.description = e["description"] as string;
+      break;
+    }
+    case "bg_task_output": {
+      const task = store.bgTasks.find((t) => t.id === (e["id"] as string));
+      if (!task) break;
+      task.output += e["delta"] as string;
+      // 截头保尾：长跑命令的输出无界增长，超出 256KB 丢掉最旧的部分
+      if (task.output.length > BG_TASK_OUTPUT_CAP) {
+        task.output = task.output.slice(task.output.length - BG_TASK_OUTPUT_CAP);
+      }
+      break;
+    }
+    case "bg_task_ended": {
+      const task = store.bgTasks.find((t) => t.id === (e["id"] as string));
+      if (!task) break;
+      task.status = e["status"] as BgTask["status"];
+      if (e["summary"]) task.summary = e["summary"] as string;
+      task.endedAt = Date.now();
+      // 结束的任务留在列表里（用户可能正看着）——dock 关着且没有运行中任务时，
+      // 短暂停留后自动撤条（scheduleBgDockAutoHide）；dock 开着则等关闭时清。
+      scheduleBgDockAutoHide(sid);
+      // 兜底上限：淘汰最老的已结束项，运行中的不动。
+      if (store.bgTasks.length > BG_TASKS_CAP) {
+        const idx = store.bgTasks.findIndex((t) => t.status !== "running");
+        if (idx >= 0) store.bgTasks.splice(idx, 1);
+      }
+      break;
+    }
+    case "rate_limit": {
+      // 账号级配额，跨会话共享——最新一条即当前状态；windows 空表示非订阅/不报配额。
+      const rawWindows = (e["windows"] as Array<Record<string, unknown>> | undefined) ?? [];
+      sharedRateLimit.value = {
+        subscription: (e["subscription"] as string | null) ?? null,
+        windows: rawWindows.map((w) => ({
+          key: w["key"] as string,
+          label: w["label"] as string,
+          utilization: w["utilization"] as number,
+          resetsAt: (w["resets_at"] as number | null) ?? null,
+        })),
+      };
+      diag.handleRateLimitEvent(sharedRateLimit.value);
+      break;
+    }
+    case "health": {
+      diag.handleHealthEvent(e);
+      break;
+    }
+    case "permission_modes_available": {
+      store.permissionModes = e["modes"] as PermissionModeOption[];
+      store.currentPermissionMode = e["current"] as string;
+      sharedPermissionModes.value = store.permissionModes;
+      break;
+    }
+    case "slash_commands_available": {
+      store.slashCommands = e["commands"] as string[];
+      break;
+    }
+    case "subagent_start": {
+      const msg = getOrCreateAssistant(store);
+      stampMessageModel(msg, e);
+      const saId = e["id"] as string;
+      const block: SubagentBlock = {
+        type: "subagent",
+        id: saId,
+        agentName: e["agentName"] as string,
+        description: e["description"] as string,
+        // task prompt 非空才带（主代理派发时塞进 Agent 工具 input 的完整任务描述）
+        prompt: e["prompt"] ? (e["prompt"] as string) : undefined,
+        entries: [],
+        isPending: true,
+      };
+      msg.blocks.push(block);
+      registerSubagent(sid, saId, block);
+      break;
+    }
+    case "subagent_text_delta":
+    case "subagent_thinking_delta": {
+      const block = lookupSubagent(sid, e["id"] as string);
+      if (block) {
+        appendSubagentTextEntry(block, e["type"] === "subagent_text_delta" ? "text" : "thinking", e["delta"] as string);
+      }
+      break;
+    }
+    case "subagent_async_launched": {
+      const block = lookupSubagent(sid, e["id"] as string);
+      if (block) {
+        block.asyncLaunched = { agentId: e["agentId"] as string, outputFile: e["outputFile"] as string };
+      }
+      break;
+    }
+    case "subagent_progress": {
+      const block = lookupSubagent(sid, e["id"] as string);
+      if (block) {
+        block.entries.push({
+          type: "tool",
+          toolUseId: e["toolUseId"] as string,
+          toolName: e["toolName"] as string,
+          input: e["input"],
+        });
+        if (e["model"]) block.model = e["model"] as string;
+      }
+      break;
+    }
+    case "subagent_tool_result": {
+      // 子代理内部某次工具的产出，按 toolUseId 回填到对应步骤——让步骤能显示输出，
+      // 不只是工具名+入参摘要。找不到对应步骤（tool_use 没采到/乱序）时静默丢弃。
+      const block = lookupSubagent(sid, e["id"] as string);
+      if (block) {
+        const toolUseId = e["toolUseId"] as string;
+        const entry = block.entries.find(
+          (en): en is Extract<SubagentEntry, { type: "tool" }> =>
+            en.type === "tool" && en.toolUseId === toolUseId,
+        );
+        if (entry) {
+          const content = e["content"] as string;
+          if (content.length > SUBAGENT_ENTRY_CAP) {
+            entry.truncated = { kind: "tool_result", originalBytes: (content.length - SUBAGENT_ENTRY_CAP) * 2 };
+            entry.result = content.slice(-SUBAGENT_ENTRY_CAP);
+          } else {
+            entry.result = content;
+          }
+          entry.isError = e["is_error"] as boolean;
+        }
+      }
+      break;
+    }
+    case "subagent_end": {
+      const saId = e["id"] as string;
+      const block = lookupSubagent(sid, saId);
+      if (block) {
+        const result = e["result"] as string;
+        if (result.length > SUBAGENT_ENTRY_CAP) {
+          block.resultTruncated = { kind: "subagent_result", originalBytes: (result.length - SUBAGENT_ENTRY_CAP) * 2 };
+          block.result = result.slice(-SUBAGENT_ENTRY_CAP);
+        } else {
+          block.result = result;
+        }
+        block.isError = e["is_error"] as boolean;
+        block.isPending = false;
+        unregisterSubagent(sid, saId);
+      }
+      break;
+    }
+    case "subagent_nesting_warning": {
+      // runtime 检测到子代理嵌套深度超阈值（warn-only，不阻止调用）——推给诊断面板显示。
+      diag.handleNestingWarning({ depth: e["depth"] as number, threshold: e["threshold"] as number });
+      break;
+    }
+    case "message_stop": {
+      const usage = e["usage"] as ChatMessage["usage"] | null;
+      const turnEffort = e["effort"] as string | undefined;
+      if (usage || turnEffort) {
+        const last = store.messages[store.messages.length - 1];
+        if (last?.role === "assistant") {
+          if (usage) last.usage = usage;
+          // 本轮实际生效的 effort（sidecar 从 Stop hook 读到的权威值，含静默
+          // 降级）——usage 行徽标的数据源；模型不支持 effort 时不带。
+          if (turnEffort) last.turnEffort = turnEffort;
+        }
+        if (usage) diag.accumulateUsage(usage);
+      }
+      finishStreaming(store);
+      // 失败状态留在会话尾部，直到用户真正发起下一轮，避免被紧随其后的
+      // message_stop 一闪而过；进行中/成功状态仍在本轮结束时撤掉。
+      if (store.contextCompaction?.stage !== "failed") store.contextCompaction = null;
+      store.isBusy = false;
+      setSessionState(sid, "waiting");
+      // 本轮 agent 的 Edit/Write 可能改了文件——防抖触发一次增量重扫，
+      // 保持 CodeGraph 索引新鲜（否则改动累积超 20% 阈值，下次构建退全量）。
+      useCodeGraphProgress().scheduleRescan();
+      break;
+    }
+    case "jump_queued": {
+      // dispatchSend 在忙碌排队时已把消息暂存进 pendingJumps 并显示提示条——
+      // sidecar 此处回传仅作确认（工具在跑、需等安全边界），不再重复 push，否则
+      // 提示条会重复出现两条。工具空闲路径不发此事件，直接走 jump_promoted。
+      break;
+    }
+    case "jump_promoted": {
+      // 安全边界到达：把暂存的排队消息 flush 成用户气泡（追加在当前 assistant 之后），
+      // 清提示条。新轮次由 sidecar 直接发起、不经过 dispatchSend，这里把忙碌态补回来
+      // （否则按钮区会闪"发送"且没有停止按钮）。上一轮若留下失败说明，也不能覆盖
+      // 已经开始的下一轮。finishStreaming 收尾上一轮 assistant（工具跑完/被 interrupt
+      // 时可能仍在 streaming），保证用户气泡插在其后、新轮 assistant 输出再新建。
+      finishStreaming(store);
+      for (const jump of store.pendingJumps) {
+        store.messages.push({
+          id: crypto.randomUUID(),
+          role: "user",
+          blocks: jump.blocks,
+          timestamp: Date.now(),
+        });
+      }
+      store.pendingJumps.length = 0;
+      store.contextCompaction = null;
+      store.isBusy = true;
+      setSessionState(sid, "running");
+      armStalled(sid);
+      // 落盘已在发送前（settleOnSend）完成，此处不再落盘。
+      break;
+    }
+    case "notification": {
+      // 非致命通知（如供应商切换后会话迁移提示）
+      store.messages.push({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        blocks: [{ type: "text", text: `${e["message"]}` }],
+        timestamp: Date.now(),
+      });
+      break;
+    }
+    case "image_input_rejected": {
+      // sidecar 二次防线：视觉请求从未到达模型，保持当前任务快照并让纯文本可立即续发。
+      resetRuntimeState(store, false);
+      store.messages.push({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        blocks: [{ type: "text", text: String(e["message"]) }],
+        timestamp: Date.now(),
+      });
+      setSessionState(sid, "waiting");
+      setSessionHealth(sid, "warning");
+      break;
+    }
+    case "image_input_rollback": {
+      // 模型 400 不支持图片：sidecar 已处理会话历史（会话不报废）。两种形态：
+      // - 用户发图（text 非空）：整条消息已移除，文本暂存 rollbackText 由
+      //   ChatPanel 回填输入框，用户手动重发。
+      // - 模型 Read 图片（text 空）：tool_result 图片已替换为错误文本回喂模型，
+      //   模型会改读文本继续，无需用户介入。
+      // 这里只落一条提示消息 + 解除 busy。
+      resetRuntimeState(store, false);
+      const rollbackText = String(e["text"] ?? "");
+      store.messages.push({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        blocks: [{
+          type: "text",
+          text: rollbackText
+            ? "当前模型不支持图片输入，已移除该消息。文本已放回输入框，可手动重发。"
+            : "当前模型不支持图片输入，已移除图片内容并告知模型，对话继续。",
+        }],
+        timestamp: Date.now(),
+      });
+      store.rollbackText = rollbackText;
+      setSessionState(sid, "waiting");
+      setSessionHealth(sid, "warning");
+      break;
+    }
+    case "error": {
+      // fatal:false = 可恢复错误，sidecar 进程仍存活等下一条 → 保留任务列表（可能继续更新）；
+      // 缺省/true 按致命处理（进程已死）→ 清任务，兼容未重建的旧 bundle。
+      resetRuntimeState(store, e["fatal"] !== false);
+      store.messages.push({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        blocks: [{ type: "text", text: `Error: ${e["message"]}` }],
+        timestamp: Date.now(),
+      });
+      // fatal:false 落 waiting + 红点，不再谎报 stopped（灰点）。
+      if (e["fatal"] === false) {
+        setSessionState(sid, "waiting");
+        setSessionHealth(sid, "warning");
+      } else {
+        setSessionState(sid, "stopped");
+      }
+      break;
+    }
+    case "session_dead": {
+      // 进程真的没了（Rust 侧 reader EOF 或心跳看门狗超时合成）。
+      resetRuntimeState(store);
+      const reason = e["reason"] as string | undefined;
+      const detail = e["detail"] as string | undefined;
+      const label =
+        reason === "heartbeat_timeout"
+          ? "会话无响应，已终止进程"
+          : "会话进程已退出";
+      store.messages.push({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        blocks: [{ type: "text", text: detail ? `${label}\n${detail}` : label }],
+        timestamp: Date.now(),
+      });
+      setSessionState(sid, "stopped");
+      break;
+    }
+  }
+
+  // 任意事件到达都证伪“卡住”：清掉 stalled 橙点（warning 红点不在此清，只在下条消息清）。
+  if (sessionHealth[sid] === "stalled") setSessionHealth(sid, "ok");
+  // running 期间据事件重置软超时；连续静默 STALLED_MS 才会重新判 stalled。
+  if (sessionState[sid] === "running") armStalled(sid);
+  // P0-3：事件驱动增长（push + 就地 +=）后检查淘汰阈值（节流，单点覆盖全部 case）
+  maybeEvict(sid, store);
+}

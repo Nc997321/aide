@@ -1,4 +1,4 @@
-import { api } from "@/api";
+import { api } from "../../../api";
 
 /**
  * L1 持久层：会话元数据 `<sid>.json` 的 provider/model 读写收口。

@@ -26,7 +26,7 @@ import {
   resetPaginationForRevert,
 } from "./useChatSession";
 import { useSessionState } from "./useSessionState";
-import type { TextBlock } from "@/types/chat";
+import type { TextBlock } from "../types/chat";
 
 function emit(e: Record<string, unknown>) {
   chatEventHandler?.({ payload: e });

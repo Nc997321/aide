@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { restoreModel } from "./restoreModel";
-import type { ModelOption } from "@/types/chat";
+import type { ModelOption } from "../../../types/chat";
 
 const models = (vals: string[]): ModelOption[] => vals.map((v) => ({ value: v, displayName: v }));
 

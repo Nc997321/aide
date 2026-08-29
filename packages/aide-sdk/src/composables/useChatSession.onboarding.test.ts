@@ -7,7 +7,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) })
 const credsExist = vi.hoisted(() => ({ fn: vi.fn() }));
 const providersState = vi.hoisted(() => ({ apiKeyConfigured: false, activeProviderId: "__system_default__" }));
 
-vi.mock("@/api", () => ({ api: { claudeCredentialsExist: () => credsExist.fn() } }));
+vi.mock("../api", () => ({ api: { claudeCredentialsExist: () => credsExist.fn() } }));
 vi.mock("./useProviders", () => ({
   useProviders: () => ({
     systemDefault: { value: { apiKeyConfigured: providersState.apiKeyConfigured } },

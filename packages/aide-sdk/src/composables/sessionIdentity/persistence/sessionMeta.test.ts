@@ -6,7 +6,7 @@ const sessionModelMock = vi.fn<(id: string) => Promise<string | null>>();
 const setSessionProviderMock = vi.fn<(id: string, provider: string) => Promise<void>>();
 const setSessionModelMock = vi.fn<(id: string, model: string) => Promise<void>>();
 
-vi.mock("@/api", () => ({
+vi.mock("../../../api", () => ({
   api: {
     sessionProvider: (id: string) => sessionProviderMock(id),
     sessionModel: (id: string) => sessionModelMock(id),

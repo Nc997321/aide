@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) })
 // ── api mock：sessionModel/sessionProvider 受控；其余方法返回安全默认 ──
 const sessionModelMock = vi.fn<(id: string) => Promise<string | null>>();
 const sessionProviderMock = vi.fn<(id: string) => Promise<string | null>>();
-vi.mock("@/api", () => ({
+vi.mock("@aide/sdk/api", () => ({
   api: new Proxy(
     {
       sessionModel: (id: string) => sessionModelMock(id),

@@ -1,5 +1,5 @@
-import type { ModelOption } from "@/types/chat";
-import { isModelInList, pickModelValue } from "@/utils/modelSelect";
+import type { ModelOption } from "../../../types/chat";
+import { isModelInList, pickModelValue } from "../../../utils/modelSelect";
 
 /**
  * L2 恢复通道：resolve 慢/快路径里"从盘上 remembered 选定 restored 模型"的唯一入口。

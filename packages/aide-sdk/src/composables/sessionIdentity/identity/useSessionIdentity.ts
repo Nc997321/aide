@@ -1,13 +1,13 @@
 import { computed, reactive, ref, type ComputedRef } from "vue";
-import { api } from "@/api";
-import { useProviders } from "@/composables/useProviders";
-import { useSessionProviders } from "@/composables/useSessionProviders";
-import { consistentProviderId, providerModelList } from "@/utils/provider";
+import { api } from "../../../api";
+import { useProviders } from "../../../composables/useProviders";
+import { useSessionProviders } from "../../../composables/useSessionProviders";
+import { consistentProviderId, providerModelList } from "../../../utils/provider";
 import { readSessionMeta, writeSessionMeta, type SessionMeta } from "../persistence";
 import { resolveEffectiveModel, resolveEffectiveProvider } from "./resolver";
 import { restoreModel } from "./restoreModel";
-import type { ProviderConfig } from "@/types";
-import type { ModelOption } from "@/types/chat";
+import type { ProviderConfig } from "../../../types";
+import type { ModelOption } from "../../../types/chat";
 
 /**
  * L2 身份层：会话供应商/模型身份的单一真相源（SSOT）。

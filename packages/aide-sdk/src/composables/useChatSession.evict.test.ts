@@ -19,7 +19,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import { useChatSession, __resetForTest, __setEvictThresholdsForTest } from "./useChatSession";
 import { useSessionState } from "./useSessionState";
-import type { ToolCallBlock, SubagentBlock } from "@/types/chat";
+import type { ToolCallBlock, SubagentBlock } from "../types/chat";
 
 function emit(e: Record<string, unknown>) {
   chatEventHandler?.({ payload: e });
