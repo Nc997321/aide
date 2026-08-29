@@ -34,10 +34,10 @@ async fn connect_once(gateway: &Arc<RemoteGateway>) -> Result<(), String> {
     let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.map_err(|e| e.to_string())?;
 
     // 注册（配对码过期/为空则刷新，避免配对中途换码）
-    let code = gateway.pairing.lock().unwrap().ensure_valid();
+    let code = super::lock_recover(&gateway.pairing).ensure_valid();
     let device_id = gateway.tokens.device_id().await?;
     let register = json!({"type": "register", "device_id": device_id, "pairing_code": code});
-    ws.send(Message::Text(register.to_string().into())).await.map_err(|e| e.to_string())?;
+    ws.send(Message::Text(register.to_string())).await.map_err(|e| e.to_string())?;
     // 只在「断开→连接」转换时打一行：Ok 路径断开不重置 connected（抖动时恒 true），
     // 无条件打印会在连接抖动（如双实例互顶）时每秒刷屏。
     let was_connected = gateway.is_connected();
@@ -66,7 +66,7 @@ async fn connect_once(gateway: &Arc<RemoteGateway>) -> Result<(), String> {
     loop {
         tokio::select! {
             Some(text) = event_rx.recv() => {
-                if sink.send(Message::Text(text.into())).await.is_err() { break; }
+                if sink.send(Message::Text(text)).await.is_err() { break; }
             }
             msg = stream.next() => {
                 let Some(msg) = msg else { break; };
@@ -75,7 +75,7 @@ async fn connect_once(gateway: &Arc<RemoteGateway>) -> Result<(), String> {
                 let Ok(parsed) = serde_json::from_str::<PhoneToDesktop>(&text) else { continue; };
                 if let Some(reply) = handle_message(gateway, parsed, &mut authed).await {
                     let text = serde_json::to_string(&reply).map_err(|e| e.to_string())?;
-                    if sink.send(Message::Text(text.into())).await.is_err() { break; }
+                    if sink.send(Message::Text(text)).await.is_err() { break; }
                 }
             }
         }
@@ -93,7 +93,7 @@ async fn handle_message(
 ) -> Option<DesktopToPhone> {
     match msg {
         PhoneToDesktop::Pair { code } => {
-            if !gateway.pairing.lock().unwrap().validate(&code) {
+            if !super::lock_recover(&gateway.pairing).validate(&code) {
                 return Some(DesktopToPhone::AuthError { message: "配对码无效或已过期".into() });
             }
             // 签发长期 token + 取设备 id；任一步失败都按配对失败回（可重试）

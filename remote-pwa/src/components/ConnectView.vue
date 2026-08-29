@@ -97,7 +97,7 @@ const status = computed<"connecting" | "connected" | "offline" | "badcode" | "re
         <span><b>已连接，正在进入会话…</b><small>正在加载会话列表</small></span>
       </div>
       <div class="st warn" :class="{ show: status === 'offline' }">
-        <span class="st-ic"><span class="spinner" style="color: #f0a868"></span></span>
+        <span class="st-ic"><span class="spinner" style="color: var(--warning)"></span></span>
         <span><b>设备离线</b><small>桌面 aide 未开启远程控制，或中继无法连接<br />正在自动重试…</small></span>
       </div>
       <div class="st danger" :class="{ show: status === 'badcode' }">

@@ -42,7 +42,8 @@ export function useDiagnosticsDashboard() {
     // 这里不直接 listen——调用方在 App.vue 或 SettingsPanel 里注册
   }
 
-  function handleHealthEvent(event: any) {
+  /** health 事件负载 = HealthSnapshot 本体（sidecar 固定形状，边界处收窄后传入）。 */
+  function handleHealthEvent(event: HealthSnapshot) {
     runtimeHealth.value = {
       sessions: event.sessions,
       processes: event.processes,
@@ -82,7 +83,7 @@ export function useDiagnosticsDashboard() {
     nestingWarning.value = { depth: event.depth, threshold: event.threshold };
   }
 
-  function handleRateLimitEvent(event: any) {
+  function handleRateLimitEvent(event: RateLimitInfo) {
     rateLimit.value = {
       subscription: event.subscription ?? null,
       windows: event.windows ?? [],

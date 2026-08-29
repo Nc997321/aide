@@ -11,9 +11,15 @@ use tauri::async_runtime::JoinHandle;
 use crate::commands::settings::{public_settings, RemoteSettings};
 use crate::settings::SettingsService;
 
+/// 锁毒化恢复：毒锁只说明「持锁期间有 task panic」，值守恒（Option<JoinHandle> /
+/// 配对码都是整体赋值语义），取回守卫继续——比 unwrap 崩掉整个 relay 任务强。
+pub(crate) fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// 远程控制网关：出站连中继，桥接手机消息到 sidecar 命令面。
 /// 组装层——只做生命周期 + 连接状态；认证逻辑在 auth::TokenStore，
-/// 消息映射在 bridge，传输在 relay_client。
+/// 消息映射在 rpc，传输在 relay_client。
 pub struct RemoteGateway {
     app_handle: AppHandle,
     /// 配对码状态（10 分钟轮换）
@@ -40,17 +46,17 @@ impl RemoteGateway {
     /// 必须走 tauri 的全局 async runtime 而非 tokio::spawn——setup 钩子跑在主线程
     /// （Tokio runtime 之外），tokio::spawn 会 panic "no reactor running"。
     pub fn start(self: &Arc<Self>) {
-        if self.relay_task.lock().unwrap().is_some() { return; }
+        if lock_recover(&self.relay_task).is_some() { return; }
         let gateway = self.clone();
         let handle = tauri::async_runtime::spawn(async move {
             relay_client::run(gateway).await;
         });
-        *self.relay_task.lock().unwrap() = Some(handle);
+        *lock_recover(&self.relay_task) = Some(handle);
     }
 
     /// 停止中继客户端任务（abort 会打断重连退避 sleep）。
     pub fn stop(&self) {
-        if let Some(h) = self.relay_task.lock().unwrap().take() {
+        if let Some(h) = lock_recover(&self.relay_task).take() {
             h.abort();
         }
         self.connected.store(false, Ordering::Relaxed);

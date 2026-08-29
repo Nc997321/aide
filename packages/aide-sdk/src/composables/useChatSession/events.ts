@@ -1,5 +1,6 @@
 import { api } from "../../api";
 import { builtinHooks, type BuiltinHookManifest } from "../../composables/useCustomizations";
+import type { HealthSnapshot } from "../../composables/useDiagnosticsDashboard";
 import type {
   BgTask,
   ChatMessage,
@@ -312,7 +313,12 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       break;
     }
     case "health": {
-      diag.handleHealthEvent(e);
+      // 边界收窄：health 事件负载即 HealthSnapshot（sidecar 固定形状）
+      diag.handleHealthEvent({
+        sessions: e["sessions"] as HealthSnapshot["sessions"],
+        processes: e["processes"] as HealthSnapshot["processes"],
+        timestamp: e["timestamp"] as number,
+      });
       break;
     }
     case "permission_modes_available": {

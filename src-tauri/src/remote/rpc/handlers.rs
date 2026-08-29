@@ -16,8 +16,8 @@ use crate::settings::SettingsService;
 // ── 聊天控制 ──
 
 /// send_message 参数 DTO（镜像前端 SendMessageParams）。
-/// `jump_queue` 为 Option<bool> 是协议镜像（前端只发 null/true）——DTO 不承载业务
-/// 规矩，原样透传给命令层。
+/// `jump_queue` 前端只发 true/缺省——缺省即 false，二态语义用 serde(default)
+/// 封闭（None≡Some(false)，见 chat.rs 的 unwrap_or(false)），不留 Option<bool> 三态。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SendMessageArgs {
@@ -30,7 +30,8 @@ struct SendMessageArgs {
     initial_model: Option<String>,
     initial_effort: Option<String>,
     permission_mode: Option<String>,
-    jump_queue: Option<bool>,
+    #[serde(default)]
+    jump_queue: bool,
 }
 
 pub fn send_message(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
@@ -48,7 +49,7 @@ pub fn send_message(app: AppHandle, params: Value) -> BoxFuture<'static, Result<
         to_json(
             crate::commands::chat::send_message(
                 a.session_id, a.prompt, a.images, a.resume_id, a.initial_model, a.initial_effort,
-                permission_mode, a.jump_queue, a.workspace_root, a.provider,
+                permission_mode, Some(a.jump_queue), a.workspace_root, a.provider,
                 runtime, ws_state, settings,
             )
             .await,
@@ -487,12 +488,14 @@ pub fn codegraph_build_index(app: AppHandle, params: Value) -> BoxFuture<'static
         #[serde(rename_all = "camelCase")]
         struct Args {
             project_root: String,
-            force: Option<bool>,
+            // 缺省即 false（命令层 unwrap_or(false)），二态语义 serde(default) 封闭
+            #[serde(default)]
+            force: bool,
         }
         let a: Args = parse(params)?;
         let state = app.state::<Arc<crate::codegraph::CodeGraphState>>();
         let settings = app.state::<Arc<SettingsService>>();
-        to_json(crate::codegraph::build::codegraph_build_index(a.project_root, a.force, state, settings).await)
+        to_json(crate::codegraph::build::codegraph_build_index(a.project_root, Some(a.force), state, settings).await)
     })
 }
 
