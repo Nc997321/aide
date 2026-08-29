@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from "vue";
-import type { Block, Message } from "../session";
+import type { ChatMessage, ContentBlock, SubagentBlock, ToolCallBlock, TurnUsage } from "@aide/sdk/types/chat";
+import { renderMarkdown, renderStreaming } from "@aide/sdk/utils/markdown";
 
 const props = defineProps<{
-  messages: Message[];
-  streaming: boolean; // 末条 assistant 未 done → 光标 / 思考中
+  messages: ChatMessage[];
+  streaming: boolean; // 会话生成中（isBusy）→ 光标 / 思考中
   sysNote: string | null; // 重连分隔线（m-sys）
 }>();
 
@@ -28,49 +29,55 @@ function timeLabel(ts: number): string {
 }
 
 function showTime(i: number): boolean {
-  if (i === 0) return true;
-  return props.messages[i].timestamp - props.messages[i - 1].timestamp > GAP_MS;
+  const prev = props.messages[i - 1];
+  const cur = props.messages[i];
+  if (!cur) return false;
+  if (!prev) return true;
+  return cur.timestamp - prev.timestamp > GAP_MS;
 }
 
-function userText(m: Message): string {
+function userText(m: ChatMessage): string {
   return m.blocks
-    .filter((b): b is Extract<Block, { type: "text" }> => b.type === "text")
+    .filter((b): b is Extract<ContentBlock, { type: "text" }> => b.type === "text")
     .map((b) => b.text)
     .join("\n");
 }
 
-// 流式光标：末条消息的末个文本块
-function showCursor(m: Message, bi: number): boolean {
-  return (
-    props.streaming &&
-    m === props.messages[props.messages.length - 1] &&
-    bi === m.blocks.length - 1 &&
-    m.blocks[bi].type === "text"
-  );
+/** 流式尾块判定：生成中 + 末条消息 + 末个块——该块用非高亮渲染（hljs O(n²) 放大器，
+ *  见 utils/markdown.ts）；定稿块走 renderMarkdown（缓存 + 高亮一次）。 */
+function isStreamingTail(m: ChatMessage, bi: number): boolean {
+  const last = props.messages[props.messages.length - 1];
+  return props.streaming && m.id === last?.id && bi === m.blocks.length - 1;
+}
+
+function renderText(m: ChatMessage, bi: number, text: string): string {
+  return isStreamingTail(m, bi) ? renderStreaming(text) : renderMarkdown(text);
+}
+
+function showCursor(m: ChatMessage, bi: number): boolean {
+  const b = m.blocks[bi];
+  return isStreamingTail(m, bi) && b?.type === "text";
 }
 
 // 思考块"思考中"态：流式进行中且是末条消息的末个块
-function isLiveThinking(m: Message, bi: number): boolean {
-  return (
-    props.streaming &&
-    m === props.messages[props.messages.length - 1] &&
-    bi === m.blocks.length - 1 &&
-    m.blocks[bi].type === "thinking"
-  );
+function isLiveThinking(m: ChatMessage, bi: number): boolean {
+  const b = m.blocks[bi];
+  return isStreamingTail(m, bi) && b?.type === "thinking";
 }
 
 // 工具块：一行摘要 arg（file_path/command/pattern 优先）
-function toolArg(b: Extract<Block, { type: "tool_call" }>): string {
+function toolArg(b: ToolCallBlock): string {
   const input = b.input;
   if (!input || typeof input !== "object") return "";
-  const rec = input as Record<string, unknown>;
+  const rec = input as Record<string, unknown>; // 工具输入是 sidecar 透传的 JSON
   for (const k of ["file_path", "command", "pattern", "path", "url"]) {
-    if (typeof rec[k] === "string" && rec[k]) return rec[k] as string;
+    const v = rec[k];
+    if (typeof v === "string" && v) return v;
   }
   return "";
 }
 
-function toolInput(b: Extract<Block, { type: "tool_call" }>): string {
+function toolInput(b: ToolCallBlock): string {
   if (typeof b.input === "string") return b.input;
   try {
     return JSON.stringify(b.input, null, 2);
@@ -79,35 +86,34 @@ function toolInput(b: Extract<Block, { type: "tool_call" }>): string {
   }
 }
 
-function toolStatusClass(b: Extract<Block, { type: "tool_call" }>): string {
+function toolStatusClass(b: ToolCallBlock): string {
   if (b.isPending) return "run";
   return b.isError ? "err" : "ok";
 }
 
-function toolStatusText(b: Extract<Block, { type: "tool_call" }>): string {
+function toolStatusText(b: ToolCallBlock): string {
   if (b.isPending) return "进行中";
   return b.isError ? "✗ 失败" : "✓ 成功";
 }
 
-// usage 尾注：X tok · cache N% · effort X（对齐原型格式，字段缺失则省略）
-function usageLine(m: Message): string | null {
-  const u = m.usage;
+/** 子代理块的状态行（PWA 极简版：一行摘要 + 结果折叠；时间线明细留在桌面）。 */
+function subagentLine(b: SubagentBlock): string {
+  if (b.isPending) return b.asyncLaunched ? "后台运行中" : "运行中";
+  return b.isError ? "失败" : "完成";
+}
+
+// usage 尾注：X tok · cache N% · effort X（TurnUsage 类型化；字段缺失则省略）
+function usageLine(m: ChatMessage): string | null {
+  const u: TurnUsage | undefined = m.usage;
   const parts: string[] = [];
-  if (u && typeof u === "object") {
-    const rec = u as Record<string, unknown>;
-    const num = (k: string) => (typeof rec[k] === "number" ? (rec[k] as number) : undefined);
-    const input = num("input_tokens");
-    const output = num("output_tokens");
-    const cache = num("cache_read_input_tokens");
-    if (input != null || output != null) {
-      const total = (input ?? 0) + (output ?? 0);
-      parts.push(`${total >= 1000 ? `${(total / 1000).toFixed(1)}k` : total} tok`);
-    }
-    if (cache != null && input != null && input > 0) {
-      parts.push(`cache ${Math.round((cache / input) * 100)}%`);
+  if (u) {
+    const total = u.inputTokens + u.outputTokens;
+    if (total > 0) parts.push(`${total >= 1000 ? `${(total / 1000).toFixed(1)}k` : total} tok`);
+    if (u.inputTokens > 0 && u.cacheReadInputTokens > 0) {
+      parts.push(`cache ${Math.round((u.cacheReadInputTokens / u.inputTokens) * 100)}%`);
     }
   }
-  if (m.effort) parts.push(`effort ${m.effort}`);
+  if (m.turnEffort) parts.push(`effort ${m.turnEffort}`);
   return parts.length ? parts.join(" · ") : null;
 }
 
@@ -132,7 +138,10 @@ watch(
     <template v-for="(m, i) in messages" :key="m.id">
       <div v-if="showTime(i)" class="m-time">{{ timeLabel(m.timestamp) }}</div>
 
-      <div v-if="m.role === 'user'" class="m-row user">
+      <!-- 页折叠占位（内存回收的骨架行）：PWA 不挂滚动恢复观察器，展示原样一行 -->
+      <div v-if="m.markerFor" class="m-sys">↑ 更早的消息已折叠（重新进入会话可恢复）</div>
+
+      <div v-else-if="m.role === 'user'" class="m-row user">
         <div class="m-bubble-user">{{ userText(m) }}</div>
       </div>
 
@@ -172,27 +181,39 @@ watch(
               </div>
             </details>
 
-            <!-- 子代理块（一行摘要） -->
-            <div v-else-if="b.type === 'subagent'" class="agent-line">
-              <span class="a-ic">
-                <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l1.8 4.2L14 6l-3 3.1.7 4.4L8 11.4l-3.7 2.1.7-4.4-3-3.1 4.2-.8L8 1z"/></svg>
-              </span>
-              <b>{{ b.agentName }}</b><span>{{ b.description }}</span>
-            </div>
+            <!-- 子代理块（极简：摘要行 + 结果折叠） -->
+            <details v-else-if="b.type === 'subagent'" class="tool">
+              <summary>
+                <span class="caret"></span>
+                <span class="a-ic">
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l1.8 4.2L14 6l-3 3.1.7 4.4L8 11.4l-3.7 2.1.7-4.4-3-3.1 4.2-.8L8 1z"/></svg>
+                </span>
+                <b>{{ b.agentName }}</b>
+                <span class="tool-arg">{{ b.description }}</span>
+                <span class="tool-st" :class="b.isPending ? 'run' : b.isError ? 'err' : 'ok'">
+                  <span v-if="b.isPending" class="spinner"></span>{{ subagentLine(b) }}
+                </span>
+              </summary>
+              <div v-if="b.result" class="tool-body">
+                <div class="tool-kv"><div class="k">结论</div><pre>{{ b.result }}</pre></div>
+              </div>
+            </details>
 
-            <!-- 错误块 -->
-            <div v-else-if="b.type === 'error'" class="m-error">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 1.8L14 4v4c0 3.4-2.5 5.7-6 6.8C4.5 13.7 2 11.4 2 8V4l6-2.2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 5.2v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="10.6" r=".9" fill="currentColor"/></svg>
-              <span>{{ b.text }}</span>
-            </div>
+            <!-- 动作胶囊（/compact、btw 批注等用户侧动作） -->
+            <details v-else-if="b.type === 'action' && b.foldable" class="tool">
+              <summary>
+                <span class="caret"></span><span>{{ b.icon ?? "⌾" }} {{ b.label }}</span>
+              </summary>
+              <div v-if="b.body" class="tool-body"><div class="tool-kv"><pre>{{ b.body }}</pre></div></div>
+            </details>
+            <div v-else-if="b.type === 'action'" class="m-action">{{ b.icon ?? "" }} {{ b.label }}</div>
 
-            <!-- 图片块（协议 image 事件，最小实现） -->
-            <img v-else-if="b.type === 'image'" class="m-img" :src="b.data" :alt="b.mediaType" />
+            <!-- 图片块 -->
+            <img v-else-if="b.type === 'image'" class="m-img" :src="`data:${b.mediaType};base64,${b.data}`" :alt="b.mediaType" />
 
-            <!-- 文本块（流式逐字 + 光标） -->
-            <div v-else-if="b.type === 'text'" class="m-text">
-              {{ b.text }}<span v-if="showCursor(m, bi)" class="cursor"></span>
-            </div>
+            <!-- 文本块（markdown 渲染；流式尾块不高亮 + 光标跟在文本后） -->
+            <!-- 内容来自本会话模型输出（自有数据源），与桌面同一渲染管线 -->
+            <div v-else-if="b.type === 'text'" class="m-text md"><span v-html="renderText(m, bi, b.text)"></span><span v-if="showCursor(m, bi)" class="cursor"></span></div>
           </template>
 
           <div v-if="usageLine(m)" class="m-usage">{{ usageLine(m) }}</div>

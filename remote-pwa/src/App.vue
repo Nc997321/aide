@@ -7,9 +7,8 @@ import {
   type ConnState,
   type ConnectCreds,
 } from "@aide/sdk";
+import type { Session, WorkspaceInfo } from "@aide/sdk/types";
 import { clearCreds, loadCreds, loadRelayUrl, saveCreds, saveRelayUrl } from "./storage";
-import { newSessionId } from "./session";
-import type { Session, Workspace } from "./types";
 import ConnectView from "./components/ConnectView.vue";
 import SessionList from "./components/SessionList.vue";
 import ChatView from "./components/ChatView.vue";
@@ -20,7 +19,13 @@ const client = ref<RemoteTransport | null>(null);
 const connState = ref<ConnState>("idle");
 const view = ref<View>("conn");
 const sessions = ref<Session[]>([]);
-const activeSession = ref<{ id: string; name: string; workspacePath: string | null } | null>(null);
+/** id = null：新建会话空白面板（首条消息时闭包生成临时 sid，session-finalized 过户真实 id） */
+const activeSession = ref<{
+  id: string | null;
+  name: string;
+  workspaceKey: string | null;
+  workspacePath: string | null;
+} | null>(null);
 const liveSessions = reactive(new Set<string>());
 const pairError = ref<"badcode" | "revoked" | null>(null);
 const hasCreds = ref(false);
@@ -31,11 +36,11 @@ const errorMsg = ref<string | null>(null);
 let errorTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ── 工作区 ──
-const workspaces = ref<Workspace[]>([]);
+const workspaces = ref<WorkspaceInfo[]>([]);
 /** null = 跟随桌面当前活动工作区（列表不带 key 拉取，与桌面实时同步） */
 const activeWorkspaceKey = ref<string | null>(null);
-/** 会话 → 归属工作区路径：列表按工作区拉取时记录，聊天发消息用（历史会话 cwd 必须落对目录） */
-const sessionWsPath = new Map<string, string>();
+/** 会话 → 归属工作区（key+路径）：列表按工作区拉取时记录，聊天发消息/种归属用 */
+const sessionWs = new Map<string, { wsKey: string; wsPath: string }>();
 
 // ── 连接 ──
 
@@ -125,10 +130,10 @@ async function refreshSessions(): Promise<void> {
     sessions.value = wsKey
       ? await api.listSessionsForWorkspace(wsKey)
       : await api.listSessions();
-    // 记录会话归属工作区路径：发历史会话消息时带其 cwd，才落对目录
+    // 记录会话归属工作区：发历史会话消息时带其 cwd，才落对目录
     if (wsKey) {
-      const path = workspacePathOf(wsKey);
-      if (path) for (const s of sessions.value) sessionWsPath.set(s.id, path);
+      const wsPath = workspacePathOf(wsKey);
+      if (wsPath) for (const s of sessions.value) sessionWs.set(s.id, { wsKey, wsPath });
     }
   } catch {
     // 断线等，保持现状
@@ -138,11 +143,13 @@ async function refreshSessions(): Promise<void> {
 }
 
 function openSession(s: Session): void {
+  const ws = sessionWs.get(s.id);
   activeSession.value = {
     id: s.id,
     name: s.name,
+    workspaceKey: ws?.wsKey ?? null,
     // 跟随桌面（null）时列表没记路径——不传 = 桌面当前工作区，恰好一致
-    workspacePath: sessionWsPath.get(s.id) ?? null,
+    workspacePath: ws?.wsPath ?? null,
   };
   view.value = "chat";
 }
@@ -150,11 +157,33 @@ function openSession(s: Session): void {
 function newSession(): void {
   const key = activeWorkspaceKey.value;
   activeSession.value = {
-    id: newSessionId(),
+    id: null, // 空白面板：首条消息时闭包生成临时 sid
     name: "新会话",
+    workspaceKey: key,
     workspacePath: key ? workspacePathOf(key) : null, // 新建会话发往当前所选工作区
   };
   view.value = "chat";
+}
+
+/** 空白面板首发：闭包发了临时 sid，绑到路由态（消息流即时可见）。 */
+function onSessionBound(sid: string): void {
+  if (activeSession.value && !activeSession.value.id) {
+    activeSession.value = { ...activeSession.value, id: sid };
+  }
+}
+
+/** SDK 确认真实 id：路由态过户 + 归属表搬迁 + 元数据落盘（显示名；
+ *  失败仅影响列表显示名——auto-rename 随后会补，不阻断，故只记日志）。 */
+function onSessionFinalized({ tempId, realId }: { tempId: string; realId: string }): void {
+  const ws = sessionWs.get(tempId);
+  if (ws) {
+    sessionWs.set(realId, ws);
+    sessionWs.delete(tempId);
+  }
+  if (activeSession.value?.id === tempId) {
+    activeSession.value = { ...activeSession.value, id: realId };
+  }
+  void api.createSession(realId, "新会话").catch((e) => console.warn("createSession failed:", e));
 }
 
 function backToSessions(): void {
@@ -201,9 +230,12 @@ onMounted(() => {
       v-else-if="view === 'chat' && client && activeSession"
       :client="client"
       :session="activeSession"
+      :workspace-key="activeSession.workspaceKey"
       :workspace-path="activeSession.workspacePath"
       :conn-state="connState"
       @back="backToSessions"
+      @session-bound="onSessionBound"
+      @session-finalized="onSessionFinalized"
     />
     <div class="app-toast" :class="{ show: !!errorMsg }">{{ errorMsg }}</div>
   </div>

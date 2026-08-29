@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import type { ConnState } from "@aide/sdk";
-import type { Session, Workspace } from "../types";
+import type { Session, WorkspaceInfo } from "@aide/sdk/types";
 
 const props = defineProps<{
   connState: ConnState;
   sessions: Session[];
   liveSessions: Set<string>;
   refreshing: boolean;
-  workspaces: Workspace[];
+  workspaces: WorkspaceInfo[];
   /** null = 跟随桌面当前活动工作区（列表不带 key 拉取） */
   activeWorkspaceKey: string | null;
 }>();

@@ -1,34 +1,45 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { api, type ConnState, type RemoteTransport } from "@aide/sdk";
-import type { ChatEvent } from "../types";
-import { applyEvent, historyToMessages, type Message } from "../session";
+import type { ConnState, RemoteTransport } from "@aide/sdk";
+import { reloadSessionMessages, useChatSession } from "@aide/sdk/chat";
+import { useSessionWorkspaces } from "@aide/sdk/composables/useSessionWorkspaces";
 import MessageList from "./MessageList.vue";
 
 const props = defineProps<{
-  /** 结构化 prop 类型：类实例放进 ref 经模板解包丢私有成员（UnwrapRef），
-   *  组件只依赖这几个公开方法，用 Pick 保持结构可赋值。 */
-  client: Pick<RemoteTransport, "listen" | "onReconnected" | "offReconnected">;
-  session: { id: string; name: string };
-  /** 会话归属工作区路径；null = 跟随桌面当前工作区 */
-  workspacePath?: string | null;
+  /** id = null 表示「新建会话」空白面板：首条消息时由闭包生成临时 sid，
+   *  session_init 后经 session-finalized 过户真实 id。 */
+  session: { id: string | null; name: string };
+  /** 会话归属工作区（key + 路径）；null = 跟随桌面当前工作区 */
+  workspaceKey: string | null;
+  workspacePath: string | null;
   connState: ConnState;
+  /** 仅借重连信号（事件订阅由闭包全局监听承担，组件不再自己 listen）。 */
+  client: Pick<RemoteTransport, "onReconnected" | "offReconnected">;
 }>();
 
-const emit = defineEmits<{ back: [] }>();
+const emit = defineEmits<{
+  back: [];
+  /** 空白面板首发成功：闭包发了临时 sid，App 把它绑到路由态上 */
+  sessionBound: [sid: string];
+  /** SDK 确认真实 id：App 更新路由态 + 列表归属 */
+  sessionFinalized: [ids: { tempId: string; realId: string }];
+}>();
 
-const messages = ref<Message[]>([]);
 const input = ref("");
 const ta = ref<HTMLTextAreaElement | null>(null);
 const toastShow = ref(false);
 const sysNote = ref<string | null>(null);
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
-// 流式进行中：末条 assistant 未 done（UI 据此禁用发送 + 显示光标）
-const streaming = computed(() => {
-  const last = messages.value[messages.value.length - 1];
-  return !!last && last.role === "assistant" && !last.done;
-});
+// ── 会话状态（共享闭包：与桌面同一套 store/事件/分页实现）──
+
+const sidRef = computed(() => props.session.id);
+const chat = useChatSession(sidRef);
+const messages = chat.messages;
+const isBusy = chat.isBusy;
+const pendingPermission = chat.pendingPermission;
+const pendingPermissionCount = chat.pendingPermissionCount;
+const pendingJumpCount = computed(() => chat.pendingJumps.value.length);
 
 const offline = computed(() => props.connState === "offline");
 
@@ -56,64 +67,96 @@ const stateText = computed(() => {
   }
 });
 
-// ── 事件：当前会话的流式增量 ──
+/** 顶部「加载更早」可见性：hasMoreOlder 读的是普通 Map（非响应式），
+ *  借 messages 变化触发重估（hydrate/loadOlder 完成时消息数必变）。 */
+const canLoadOlder = computed(() => {
+  void messages.value.length;
+  const sid = props.session.id;
+  return sid ? chat.hasMoreOlder(sid) : false;
+});
 
-function onEvent(e: ChatEvent): void {
-  if (e.session_id && e.session_id !== props.session.id) return;
-  messages.value = applyEvent(messages.value, e);
+// ── 发送 ──
+
+/** 工作区归属（新建会话首发时种进注册表；已有会话注册表早就有，忽略）。 */
+function workspaceBinding(): { wsKey: string; wsPath: string } | undefined {
+  if (!props.workspacePath) return undefined;
+  return { wsKey: props.workspaceKey ?? "", wsPath: props.workspacePath };
 }
 
+async function send(): Promise<void> {
+  const text = input.value.trim();
+  if (!text || offline.value) return;
+  input.value = "";
+  autoGrow();
+  sysNote.value = null;
+  try {
+    const sid = await chat.sendMessage(text, { workspace: workspaceBinding() });
+    if (!props.session.id && sid) emit("sessionBound", sid);
+  } catch (e) {
+    sysNote.value = `发送失败：${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+async function interrupt(): Promise<void> {
+  try {
+    await chat.interrupt();
+  } catch (e) {
+    sysNote.value = `中断失败：${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+async function loadOlder(): Promise<void> {
+  const sid = props.session.id;
+  if (!sid) return;
+  await chat.loadOlderMessages(sid, 256 * 1024); // 与闭包 HYDRATE_PAGE_BYTES 同页大小
+}
+
+// ── 权限应答（极简条：允许 / 拒绝；「始终允许」等高级项留在桌面）──
+
+/** 工具输入摘要：优先取语义化字段，截断到一行。 */
+function permissionSummary(input: unknown): string {
+  if (input && typeof input === "object") {
+    const r = input as Record<string, unknown>; // JSON 边界：sidecar 透传的工具输入
+    for (const k of ["command", "file_path", "pattern", "path", "url"]) {
+      const v = r[k];
+      if (typeof v === "string") return v.length > 120 ? v.slice(0, 120) + "…" : v;
+    }
+  }
+  return "";
+}
+
+async function answerPermission(approved: boolean): Promise<void> {
+  const p = pendingPermission.value;
+  if (!p) return;
+  try {
+    await chat.respondPermission(p.id, approved);
+  } catch (e) {
+    sysNote.value = `权限应答失败：${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+// ── 重连补齐 ──
+
 function onReconnected(): void {
-  // 重连成功：load_messages 补齐事件缺口 + toast + 分隔线（原型演示对应）
-  reload();
+  const sid = props.session.id;
+  if (sid) {
+    // 断线期间的事件缺口：整页重载对齐（消息/分页清零 → 重新 hydrate）
+    void reloadSessionMessages(sid).catch(() => {
+      // 重载失败（如会话已删）：保持现状，用户可返回列表刷新
+    });
+  }
   toastShow.value = true;
   sysNote.value = "已重连 · 会话历史已刷新";
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (toastShow.value = false), 2400);
 }
 
-async function reload(): Promise<void> {
-  try {
-    const { messages: items } = await api.loadMessages(props.session.id);
-    messages.value = historyToMessages(items);
-  } catch {
-    // 新会话尚未创建 / 断线等：保持现状
-  }
-}
-
-// ── 发送 ──
-
-function send(): void {
-  const text = input.value.trim();
-  if (!text || offline.value || streaming.value) return;
-  input.value = "";
-  autoGrow();
-  // 本地立即上屏（桌面侧不回推用户消息事件）
-  messages.value = [
-    ...messages.value,
-    {
-      id: crypto.randomUUID(),
-      role: "user",
-      blocks: [{ type: "text", text }],
-      timestamp: Date.now(),
-      done: true,
-    },
-  ];
-  sysNote.value = null;
-  // fire-and-forget：流式应答走事件回来，不等回执；失败（断线等）出提示条。
-  api.sendMessage({
-    sessionId: props.session.id,
-    prompt: text,
-    workspaceRoot: props.workspacePath ?? null,
-  }).catch((e) => {
-    sysNote.value = `发送失败：${e instanceof Error ? e.message : String(e)}`;
-  });
-}
+// ── 生命周期 ──
 
 function onKeydown(e: KeyboardEvent): void {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
-    send();
+    void send();
   }
 }
 
@@ -124,19 +167,25 @@ function autoGrow(): void {
   el.style.height = Math.min(el.scrollHeight, 108) + "px";
 }
 
-// ── 生命周期 ──
+let offSessionCreated: (() => void) | null = null;
 
-let unlisten: (() => void) | null = null;
-
-onMounted(async () => {
-  // 事件走传输层（{ payload } 形状）；payload 与旧 ChatEvent 联合同形（同源透传）
-  unlisten = await props.client.listen<ChatEvent>("chat-event", (e) => onEvent(e.payload));
+onMounted(() => {
+  // 打开历史会话：补种工作区归属（本会话进程内注册表为空时的兜底，
+  // 与桌面 SidebarLeft 加载列表时的 setMany 同语义）。
+  if (props.session.id && props.workspacePath) {
+    useSessionWorkspaces().setWorkspace(props.session.id, {
+      wsKey: props.workspaceKey ?? "",
+      wsPath: props.workspacePath,
+    });
+  }
+  offSessionCreated = chat.onSessionCreated((tempId, realId) => {
+    if (props.session.id === tempId) emit("sessionFinalized", { tempId, realId });
+  });
   props.client.onReconnected(onReconnected);
-  await reload();
 });
 
 onUnmounted(() => {
-  unlisten?.();
+  offSessionCreated?.();
   props.client.offReconnected(onReconnected);
   if (toastTimer) clearTimeout(toastTimer);
 });
@@ -153,6 +202,7 @@ onUnmounted(() => {
         <div class="ch-state"><span class="dot" :class="stateDot"></span><span>{{ stateText }}</span></div>
       </div>
       <span class="spacer"></span>
+      <button v-if="isBusy" class="ch-stop" title="中断当前生成" @click="interrupt">■ 中断</button>
     </div>
 
     <div class="ch-offbar" :class="{ show: offline }">
@@ -162,7 +212,26 @@ onUnmounted(() => {
       <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.6"/><path d="M5 8.2l2 2 4-4.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>已重连，会话历史已刷新
     </div>
 
-    <MessageList :messages="messages" :streaming="streaming" :sys-note="sysNote" />
+    <div v-if="canLoadOlder" class="ch-older">
+      <button class="ch-older-btn" @click="loadOlder">↑ 加载更早的消息</button>
+    </div>
+
+    <MessageList :messages="messages" :streaming="isBusy" :sys-note="sysNote" />
+
+    <div v-if="pendingPermission" class="ch-perm">
+      <div class="ch-perm-head">
+        <span class="ch-perm-tool">{{ pendingPermission.name }}</span>
+        <span v-if="pendingPermission.fromSubagent" class="ch-perm-sub">来自子代理 {{ pendingPermission.fromSubagent.agentName }}</span>
+        <span v-if="pendingPermissionCount > 1" class="ch-perm-sub">还有 {{ pendingPermissionCount - 1 }} 条待确认</span>
+      </div>
+      <div v-if="permissionSummary(pendingPermission.input)" class="ch-perm-input">{{ permissionSummary(pendingPermission.input) }}</div>
+      <div class="ch-perm-actions">
+        <button class="ch-perm-allow" @click="answerPermission(true)">允许</button>
+        <button class="ch-perm-deny" @click="answerPermission(false)">拒绝</button>
+      </div>
+    </div>
+
+    <div v-if="pendingJumpCount > 0" class="ch-jumps">待发出 {{ pendingJumpCount }} 条（当前轮安全边界后自动发送）</div>
 
     <div class="ch-input">
       <div class="ch-ta-wrap">
@@ -176,7 +245,7 @@ onUnmounted(() => {
           @keydown="onKeydown"
         ></textarea>
       </div>
-      <button class="ch-send" title="发送" :disabled="offline || streaming" @click="send">
+      <button class="ch-send" title="发送" :disabled="offline" @click="send">
         <svg width="17" height="17" viewBox="0 0 18 18" fill="none"><path d="M9 14.5v-11M4 8l5-5 5 5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
     </div>

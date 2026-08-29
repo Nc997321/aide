@@ -425,8 +425,11 @@ export function useChatSession(sessionId: Ref<string | null>) {
     }
   }
 
-  function onSessionCreated(cb: (tempId: string, realId: string) => void) {
+  /** 注册会话落地回调（tempId → realId）。返回解绑函数——组件卸载时必须调用，
+   *  否则回调漏进模块级 Set（PWA 每次进 ChatView 都注册一次的场景会泄漏）。 */
+  function onSessionCreated(cb: (tempId: string, realId: string) => void): () => void {
     sessionCreatedCallbacks.add(cb);
+    return () => sessionCreatedCallbacks.delete(cb);
   }
 
   /** 切换模型只影响下一条消息，SDK 原生保证；不做本地乐观更新，
@@ -669,6 +672,17 @@ export async function canSendOrPrompt(): Promise<boolean> {
 export { toggleBgDock, stopSessionById, disposeSession, getLastDispatchedPrompt, isPendingSession, isFinalizedSessionPair };
 export { __setEvictThresholdsForTest };
 export { loadOlderPage, hasMoreOlder, resetPaginationForRevert };
+
+/** 远程重连后整页重载：清消息 + 分页状态后重新 hydrate。
+ *  桌面靠 Tauri 事件不断流从不需要；远端断线期间有事件缺口，重连后以此对齐。
+ *  只清消息/游标，不动 isBusy——若会话仍在跑，后续流式事件会接在重载的历史之后。 */
+export async function reloadSessionMessages(sid: string): Promise<void> {
+  const store = getStore(sid);
+  store.messages.length = 0;
+  store.hydrated = false;
+  resetPaginationForRevert(sid);
+  await hydrate(sid);
+}
 
 /** 测试钩子：重置全部模块级状态（含全局监听器——listenerPromise 在宿主模块级）。 */
 export function __resetForTest(): void {
