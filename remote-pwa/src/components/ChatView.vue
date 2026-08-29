@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import type { ConnState, RemoteClientLike } from "../protocol";
+import { api, type ConnState, type RemoteTransport } from "@aide/sdk";
 import type { ChatEvent } from "../types";
 import { applyEvent, historyToMessages, type Message } from "../session";
 import MessageList from "./MessageList.vue";
 
 const props = defineProps<{
-  client: RemoteClientLike;
+  /** 结构化 prop 类型：类实例放进 ref 经模板解包丢私有成员（UnwrapRef），
+   *  组件只依赖这几个公开方法，用 Pick 保持结构可赋值。 */
+  client: Pick<RemoteTransport, "listen" | "onReconnected" | "offReconnected">;
   session: { id: string; name: string };
-  /** 会话归属工作区（编码 key）；null = 跟随桌面当前工作区 */
-  workspaceKey?: string | null;
+  /** 会话归属工作区路径；null = 跟随桌面当前工作区 */
+  workspacePath?: string | null;
   connState: ConnState;
 }>();
 
@@ -72,7 +74,7 @@ function onReconnected(): void {
 
 async function reload(): Promise<void> {
   try {
-    const { messages: items } = await props.client.loadMessages(props.session.id);
+    const { messages: items } = await api.loadMessages(props.session.id);
     messages.value = historyToMessages(items);
   } catch {
     // 新会话尚未创建 / 断线等：保持现状
@@ -98,7 +100,14 @@ function send(): void {
     },
   ];
   sysNote.value = null;
-  props.client.sendMessage(props.session.id, text, props.workspaceKey ?? undefined);
+  // fire-and-forget：流式应答走事件回来，不等回执；失败（断线等）出提示条。
+  api.sendMessage({
+    sessionId: props.session.id,
+    prompt: text,
+    workspaceRoot: props.workspacePath ?? null,
+  }).catch((e) => {
+    sysNote.value = `发送失败：${e instanceof Error ? e.message : String(e)}`;
+  });
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -117,14 +126,17 @@ function autoGrow(): void {
 
 // ── 生命周期 ──
 
-onMounted(() => {
-  props.client.onEvent(onEvent);
+let unlisten: (() => void) | null = null;
+
+onMounted(async () => {
+  // 事件走传输层（{ payload } 形状）；payload 与旧 ChatEvent 联合同形（同源透传）
+  unlisten = await props.client.listen<ChatEvent>("chat-event", (e) => onEvent(e.payload));
   props.client.onReconnected(onReconnected);
-  reload();
+  await reload();
 });
 
 onUnmounted(() => {
-  props.client.offEvent(onEvent);
+  unlisten?.();
   props.client.offReconnected(onReconnected);
   if (toastTimer) clearTimeout(toastTimer);
 });

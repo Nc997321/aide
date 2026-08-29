@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>aide 远程 PWA — 三屏原型</title>
+<title>aide 远程 PWA — 原型 v3（抽屉导航 + 供应商切换）</title>
 <link rel="icon" href="../../src-tauri/icons/icon.png">
 <style>
   /* ===== glass 主题 token（src/themes/glass.ts）===== */
@@ -58,7 +58,7 @@
   .page-head { text-align: center; margin-bottom: 30px; }
   .page-head h1 { font-size: 20px; font-weight: 700; letter-spacing: .3px; }
   .page-head h1 small { font-size: 12px; color: var(--accent); font-weight: 600; margin-left: 8px; vertical-align: 2px; }
-  .page-head p { font-size: 12.5px; color: var(--text-muted); margin-top: 6px; }
+  .page-head p { font-size: 12.5px; color: var(--text-muted); margin-top: 6px; max-width: 860px; margin-left: auto; margin-right: auto; }
   .page-head p b { color: var(--text-secondary); font-weight: 600; }
 
   /* ===== 三屏舞台 ===== */
@@ -79,7 +79,6 @@
     box-shadow: var(--shadow-lg), inset 0 1px 1px rgba(255,255,255,.14);
     position: relative;
   }
-  /* 侧边按键装饰 */
   .phone::before, .phone::after {
     content: ""; position: absolute; right: -2.5px; width: 3px; border-radius: 2px;
     background: #2c2d38;
@@ -91,7 +90,7 @@
     background: #0b0c12;
     display: flex; flex-direction: column; position: relative;
   }
-  .screen::before { /* 屏幕顶部环境光 */
+  .screen::before {
     content: ""; position: absolute; inset: 0 0 auto; height: 200px; pointer-events: none; z-index: 0;
     background: radial-gradient(320px 130px at 50% -60px, rgba(150,170,255,.13), transparent 70%);
   }
@@ -128,6 +127,15 @@
   .chip:hover { background: var(--surface-default); color: var(--text-primary); }
   .chip.on { color: var(--text-primary); background: var(--surface-active); border-color: var(--border); }
 
+  .icon-btn {
+    width: 30px; height: 30px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-sm); cursor: pointer; color: var(--text-secondary);
+    background: var(--surface-default); border: 1px solid var(--border-subtle);
+    transition: all var(--ease-t);
+  }
+  .icon-btn:hover { background: var(--surface-hover); color: var(--text-primary); }
+  .icon-btn svg.spinning { animation: rot .6s linear; }
+
   /* ============================================================
      屏 1 · 连接 / 配对
      ============================================================ */
@@ -153,7 +161,7 @@
   .field input.mono { font-family: var(--font-mono); font-size: 15px; }
   .field input.code {
     text-align: center; font-family: var(--font-mono); font-size: 21px; font-weight: 600;
-    letter-spacing: 12px; padding-left: 24px; /* 视觉居中补偿 letter-spacing */
+    letter-spacing: 12px; padding-left: 24px;
   }
   .field input.error { border-color: rgba(248,113,113,.55); box-shadow: 0 0 0 2.5px rgba(248,113,113,.25); animation: shake .3s; }
   @keyframes shake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
@@ -173,7 +181,6 @@
   .btn-primary:active { transform: scale(.985); }
   .btn-primary:disabled { opacity: .65; cursor: default; filter: none; transform: none; }
 
-  /* 状态展示区 */
   .conn-status { min-height: 74px; margin-top: 18px; }
   .st {
     display: none; align-items: flex-start; gap: 10px;
@@ -198,114 +205,7 @@
   .conn-foot .dot { width: 6px; height: 6px; }
 
   /* ============================================================
-     屏 2 · 会话列表
-     ============================================================ */
-  .sv-top {
-    flex: none; display: flex; align-items: center; gap: 10px;
-    padding: 10px 16px 12px; border-bottom: 1px solid var(--border-subtle);
-    position: relative; z-index: 1;
-  }
-  .sv-top h3 { font-size: 16.5px; font-weight: 700; flex: 1; }
-  .conn-pill {
-    display: inline-flex; align-items: center; gap: 6px;
-    font-size: 10.5px; font-weight: 600; color: var(--text-secondary);
-    padding: 4px 10px; border-radius: 99px;
-    background: var(--surface-default); border: 1px solid var(--border-subtle);
-  }
-  .icon-btn {
-    width: 30px; height: 30px; flex: none; display: inline-flex; align-items: center; justify-content: center;
-    border-radius: var(--radius-sm); cursor: pointer; color: var(--text-secondary);
-    background: var(--surface-default); border: 1px solid var(--border-subtle);
-    transition: all var(--ease-t);
-  }
-  .icon-btn:hover { background: var(--surface-hover); color: var(--text-primary); }
-  .icon-btn svg.spinning { animation: rot .6s linear; }
-
-  .sv-list { flex: 1; overflow-y: auto; padding: 10px 12px 90px; position: relative; z-index: 1; }
-  .sv-item {
-    display: block; width: 100%; text-align: left; cursor: pointer; font-family: inherit;
-    padding: 12px 14px; margin-bottom: 8px; border-radius: var(--radius-lg);
-    background: var(--surface-default); border: 1px solid var(--border-subtle);
-    box-shadow: var(--highlight-inset); transition: all var(--ease-t);
-    color: inherit;
-  }
-  .sv-item:hover { background: var(--surface-hover); border-color: var(--border); transform: translateY(-1px); }
-  .sv-item:active { transform: scale(.99); }
-  .sv-row1 { display: flex; align-items: center; gap: 8px; }
-  .sv-name { flex: 1; font-size: 13.5px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .sv-time { flex: none; font-size: 10.5px; color: var(--text-muted); }
-  .sv-row2 { display: flex; align-items: center; gap: 7px; margin-top: 4px; }
-  .sv-prev { flex: 1; font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .sv-live {
-    flex: none; display: inline-flex; align-items: center; gap: 5px;
-    font-size: 10px; font-weight: 600; color: var(--accent);
-  }
-  .sv-live .dot { background: var(--accent); box-shadow: 0 0 7px rgba(165,184,255,.8); animation: pulse 1.1s ease-in-out infinite; }
-
-  /* 新会话浮动按钮 */
-  .fab {
-    position: absolute; right: 18px; bottom: 22px; z-index: 3;
-    width: 52px; height: 52px; border-radius: 50%; cursor: pointer;
-    display: flex; align-items: center; justify-content: center; color: #fff;
-    background: var(--accent-gradient); border: 1px solid rgba(170,190,255,.45);
-    box-shadow: var(--accent-glow), var(--highlight-inset);
-    transition: all var(--ease-t);
-  }
-  .fab:hover { filter: brightness(1.15); transform: scale(1.06); }
-  .fab:active { transform: scale(.95); }
-
-  /* ===== 工作区选择行 + 底部弹层 ===== */
-  .sv-ws {
-    flex: none; display: flex; align-items: center; padding: 7px 12px 9px;
-    border-bottom: 1px solid var(--border-subtle); position: relative; z-index: 1;
-  }
-  .ws-chip {
-    flex: 1; display: flex; align-items: center; gap: 9px; min-width: 0;
-    padding: 7px 10px; border-radius: var(--radius-md); cursor: pointer;
-    color: var(--text-primary); font-family: inherit; text-align: left;
-    background: var(--surface-default); border: 1px solid var(--border-subtle);
-    transition: all var(--ease-t);
-  }
-  .ws-chip:hover { background: var(--surface-hover); border-color: var(--border); }
-  .ws-chip:active { transform: scale(.99); }
-  .ws-ic { flex: none; display: flex; color: var(--accent); }
-  .ws-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  .ws-name { font-size: 12.5px; font-weight: 700; }
-  .ws-path { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .ws-caret { flex: none; display: flex; color: var(--text-muted); transition: transform var(--ease-t); }
-  .ws-chip[aria-expanded="true"] .ws-caret { transform: rotate(180deg); }
-  .ws-mask {
-    position: absolute; inset: 0; z-index: 6;
-    background: rgba(5,6,10,.55); backdrop-filter: blur(3px);
-    display: flex; align-items: flex-end;
-    opacity: 0; visibility: hidden; transition: opacity .22s ease, visibility .22s;
-  }
-  .ws-mask.show { opacity: 1; visibility: visible; }
-  .ws-sheet {
-    width: 100%; padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px));
-    background: #14161f; border: 1px solid var(--border); border-bottom: none;
-    border-radius: 22px 22px 0 0; box-shadow: var(--shadow-lg);
-    transform: translateY(24px); transition: transform .24s cubic-bezier(.2,.8,.2,1);
-  }
-  .ws-mask.show .ws-sheet { transform: translateY(0); }
-  .ws-head { display: flex; align-items: baseline; gap: 8px; padding: 0 4px 10px; }
-  .ws-head b { font-size: 14px; }
-  .ws-head small { font-size: 10.5px; color: var(--text-muted); }
-  .ws-opt {
-    width: 100%; display: flex; align-items: center; gap: 10px;
-    padding: 10px; margin-bottom: 4px; border-radius: var(--radius-md); cursor: pointer;
-    color: var(--text-primary); font-family: inherit; text-align: left;
-    background: none; border: 1px solid transparent; transition: all var(--ease-t);
-  }
-  .ws-opt:hover { background: var(--surface-default); }
-  .ws-opt.on { background: var(--accent-subtle); border-color: rgba(150,170,255,.3); }
-  .ws-opt .ws-ic { color: var(--text-muted); }
-  .ws-opt.on .ws-ic { color: var(--accent); }
-  .ws-check { flex: none; color: var(--accent); opacity: 0; transition: opacity var(--ease-t); }
-  .ws-opt.on .ws-check { opacity: 1; }
-
-  /* ============================================================
-     屏 3 · 聊天
+     屏 2/3 · 聊天主屏（v3：聊天升主屏，会话列表收进抽屉）
      ============================================================ */
   .ch-top {
     flex: none; display: flex; align-items: center; gap: 4px;
@@ -318,10 +218,32 @@
     background: none; border: none; transition: all var(--ease-t);
   }
   .ch-back:hover { background: var(--surface-default); color: var(--text-primary); }
-  .ch-title { flex: 1; text-align: center; min-width: 0; }
-  .ch-name { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .ch-state { display: flex; align-items: center; justify-content: center; gap: 5px; font-size: 10.5px; color: var(--text-muted); margin-top: 1px; }
-  .ch-top .spacer { width: 34px; flex: none; }
+  .ch-title { flex: 1; display: flex; flex-direction: column; align-items: center; min-width: 0; }
+  .ch-name { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+  /* 顶栏供应商 pill（Kimi「Kimi K3」模型 chip 位）：连接点 + 供应商名 + caret，点击弹切换层 */
+  .pv-pill {
+    display: inline-flex; align-items: center; gap: 5px; max-width: 220px;
+    margin-top: 3px; padding: 2px 9px; border-radius: 99px; cursor: pointer;
+    font-size: 10.5px; font-weight: 600; color: var(--text-secondary); font-family: inherit;
+    background: var(--surface-default); border: 1px solid var(--border-subtle);
+    transition: all var(--ease-t);
+  }
+  .pv-pill:hover { background: var(--surface-hover); color: var(--text-primary); border-color: var(--border); }
+  .pv-pill .pv-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pv-pill .dot { width: 6px; height: 6px; }
+  .pv-pill svg { flex: none; opacity: .55; }
+
+  /* 新会话空态 */
+  .ch-empty {
+    display: none; flex: 1; flex-direction: column; align-items: center; justify-content: center;
+    gap: 7px; padding: 30px; text-align: center; position: relative; z-index: 1;
+  }
+  .ch-empty.show { display: flex; }
+  .ch-empty img { width: 58px; height: 58px; border-radius: 15px; box-shadow: 0 8px 26px rgba(140,160,255,.3), var(--highlight-inset); margin-bottom: 6px; }
+  .ch-empty b { font-size: 16px; }
+  .ch-empty p { font-size: 11.5px; color: var(--text-muted); }
+  .ch-empty p em { font-style: normal; color: var(--accent); }
 
   /* 离线横幅 */
   .ch-offbar {
@@ -334,7 +256,7 @@
 
   /* 消息区 */
   .ch-msgs { flex: 1; overflow-y: auto; padding: 14px 14px 12px; position: relative; z-index: 1; scroll-behavior: auto; }
-  .ch-msgs::-webkit-scrollbar, .sv-list::-webkit-scrollbar, .conn::-webkit-scrollbar { width: 0; }
+  .ch-msgs::-webkit-scrollbar, .dr-list::-webkit-scrollbar, .conn::-webkit-scrollbar { width: 0; }
 
   .m-time { text-align: center; font-size: 10px; color: var(--text-muted); margin: 4px 0 14px; }
   .m-sys {
@@ -354,7 +276,6 @@
   .m-assistant { max-width: 100%; flex: 1; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
   .m-text { font-size: 13.5px; line-height: 1.7; color: var(--text-primary); white-space: pre-wrap; word-break: break-word; }
 
-  /* 流式光标 */
   .cursor {
     display: inline-block; width: 8px; height: 1.02em; margin-left: 2px;
     background: var(--accent); border-radius: 1.5px; vertical-align: -2px;
@@ -436,29 +357,42 @@
   }
   .m-error svg { flex: none; margin-top: 1px; }
 
-  /* usage 尾注 */
   .m-usage { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); text-align: right; opacity: .8; }
 
-  /* 重连 toast */
+  /* 屏内 toast（重连 / 切换供应商 / 提示） */
   .ch-toast {
     position: absolute; top: 96px; left: 50%; transform: translateX(-50%) translateY(-8px);
-    padding: 7px 14px; border-radius: 99px; z-index: 5;
+    padding: 7px 14px; border-radius: 99px; z-index: 8;
     font-size: 11.5px; font-weight: 600; color: var(--success);
     background: rgba(17,19,29,.92); border: 1px solid rgba(110,231,168,.4);
     box-shadow: var(--shadow-md); opacity: 0; pointer-events: none;
     transition: all .3s cubic-bezier(.2,.8,.2,1);
     display: flex; align-items: center; gap: 7px; white-space: nowrap;
+    max-width: 88%; overflow: hidden; text-overflow: ellipsis;
   }
   .ch-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
   /* 输入区 */
   .ch-input {
-    flex: none; display: flex; align-items: flex-end; gap: 9px;
-    padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    flex: none; display: flex; flex-direction: column; gap: 8px;
+    padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0px));
     border-top: 1px solid var(--border-subtle);
     background: rgba(11,12,18,.72); backdrop-filter: blur(14px);
     position: relative; z-index: 4;
   }
+  .ch-input-row { display: flex; align-items: flex-end; gap: 9px; }
+  /* 工具行：思考程度 chip（对齐桌面输入框工具栏的 effort 选择器） */
+  .ch-tools { display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
+  .ef-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 10px; border-radius: 99px; cursor: pointer;
+    font-size: 10.5px; font-weight: 600; color: var(--text-secondary); font-family: inherit;
+    background: var(--surface-default); border: 1px solid var(--border-subtle);
+    transition: all var(--ease-t);
+  }
+  .ef-chip:hover { background: var(--surface-hover); color: var(--text-primary); border-color: var(--border); }
+  .ef-chip svg { opacity: .55; }
+  .ef-chip > svg:first-child { color: var(--warning); opacity: .9; }
   .ch-ta-wrap {
     flex: 1; display: flex; border-radius: 18px;
     background: var(--surface-default); border: 1px solid var(--border-subtle);
@@ -483,6 +417,152 @@
   .ch-send:active:not(:disabled) { transform: scale(.92); }
   .ch-send:disabled { opacity: .38; cursor: default; box-shadow: none; filter: grayscale(.4); }
 
+  /* ============================================================
+     抽屉（Kimi 式：左侧滑出历史会话）
+     ============================================================ */
+  .dr-mask {
+    position: absolute; inset: 0; z-index: 6;
+    background: rgba(5,6,10,.5); backdrop-filter: blur(2px);
+    opacity: 0; visibility: hidden; transition: opacity .24s ease, visibility .24s;
+  }
+  .dr-mask.show { opacity: 1; visibility: visible; }
+  .dr-panel {
+    position: absolute; top: 0; bottom: 0; left: 0; width: 84%; max-width: 306px;
+    display: flex; flex-direction: column;
+    background: #10121a; border-right: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+    transform: translateX(-103%); transition: transform .26s cubic-bezier(.2,.8,.2,1);
+  }
+  .dr-mask.show .dr-panel { transform: translateX(0); }
+
+  /* 设备卡（Kimi「头像 + 登月者9365 + Allegretto 徽标」位） */
+  .dr-head { flex: none; padding: 14px 14px 12px; border-bottom: 1px solid var(--border-subtle); }
+  .dr-id { display: flex; align-items: center; gap: 10px; }
+  .dr-id > img { width: 36px; height: 36px; border-radius: 10px; box-shadow: var(--highlight-inset); flex: none; }
+  .dr-id-name { flex: 1; min-width: 0; }
+  .dr-id-name b { display: block; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dr-id-name small { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--text-muted); margin-top: 2px; }
+  .dr-id-name .dot { width: 6px; height: 6px; }
+  /* 供应商徽标（黑 pill 语义的玻璃版）：可点 → 同一个供应商弹层 */
+  .dr-badge {
+    margin-top: 11px; display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+    padding: 4px 10px; border-radius: 99px; cursor: pointer; font-family: inherit;
+    font-size: 11px; font-weight: 700; color: var(--accent);
+    background: var(--accent-subtle); border: 1px solid rgba(150,170,255,.3);
+    transition: all var(--ease-t);
+  }
+  .dr-badge:hover { filter: brightness(1.18); }
+  .dr-badge:active { transform: scale(.97); }
+  .dr-badge .dr-badge-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dr-badge svg { flex: none; opacity: .6; }
+
+  /* 抽屉内工作区行 */
+  .dr-ws { flex: none; padding: 10px 12px 4px; }
+  .dr-sec {
+    flex: none; display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px 6px;
+  }
+  .dr-sec b { flex: 1; font-size: 11px; font-weight: 600; color: var(--text-muted); letter-spacing: 1.5px; }
+  .dr-sec .icon-btn { width: 26px; height: 26px; background: none; border-color: transparent; }
+  .dr-sec .icon-btn:hover { background: var(--surface-default); border-color: var(--border-subtle); }
+
+  /* 抽屉会话列表 */
+  .dr-list { flex: 1; overflow-y: auto; padding: 2px 10px 10px; }
+  .sv-item {
+    display: block; width: 100%; text-align: left; cursor: pointer; font-family: inherit;
+    padding: 10px 12px; margin-bottom: 6px; border-radius: var(--radius-lg);
+    background: var(--surface-default); border: 1px solid var(--border-subtle);
+    box-shadow: var(--highlight-inset); transition: all var(--ease-t);
+    color: inherit;
+  }
+  .sv-item:hover { background: var(--surface-hover); border-color: var(--border); }
+  .sv-item:active { transform: scale(.99); }
+  .sv-item.on { background: var(--accent-subtle); border-color: rgba(150,170,255,.3); }
+  .sv-row1 { display: flex; align-items: center; gap: 8px; }
+  .sv-name { flex: 1; font-size: 13px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sv-time { flex: none; font-size: 10.5px; color: var(--text-muted); }
+  .sv-row2 { display: flex; align-items: center; gap: 7px; margin-top: 3px; }
+  .sv-prev { flex: 1; font-size: 11.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sv-live {
+    flex: none; display: inline-flex; align-items: center; gap: 5px;
+    font-size: 10px; font-weight: 600; color: var(--accent);
+  }
+  .sv-live .dot { background: var(--accent); box-shadow: 0 0 7px rgba(165,184,255,.8); animation: pulse 1.1s ease-in-out infinite; }
+  .dr-none { text-align: center; font-size: 11px; color: var(--text-muted); padding: 22px 0; }
+
+  /* 抽屉底部搜索（Kimi 式） */
+  .dr-search {
+    flex: none; padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--border-subtle);
+  }
+  .dr-search-box {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 13px; border-radius: 99px;
+    background: var(--surface-default); border: 1px solid var(--border-subtle);
+    color: var(--text-muted); transition: all var(--ease-t);
+  }
+  .dr-search-box:focus-within { border-color: rgba(150,170,255,.45); box-shadow: var(--accent-ring); color: var(--text-secondary); }
+  .dr-search-box input {
+    flex: 1; min-width: 0; border: none; outline: none; background: none;
+    color: var(--text-primary); font: 12.5px/1.4 inherit; font-family: inherit;
+  }
+  .dr-search-box input::placeholder { color: var(--text-muted); }
+
+  /* ============================================================
+     底部弹层（工作区 / 供应商共用）
+     ============================================================ */
+  .ws-chip {
+    width: 100%; display: flex; align-items: center; gap: 9px; min-width: 0;
+    padding: 7px 10px; border-radius: var(--radius-md); cursor: pointer;
+    color: var(--text-primary); font-family: inherit; text-align: left;
+    background: var(--surface-default); border: 1px solid var(--border-subtle);
+    transition: all var(--ease-t);
+  }
+  .ws-chip:hover { background: var(--surface-hover); border-color: var(--border); }
+  .ws-chip:active { transform: scale(.99); }
+  .ws-ic { flex: none; display: flex; color: var(--accent); }
+  .ws-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .ws-name { font-size: 12.5px; font-weight: 700; }
+  .ws-path { font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ws-caret { flex: none; display: flex; color: var(--text-muted); transition: transform var(--ease-t); }
+  .ws-mask {
+    position: absolute; inset: 0; z-index: 7;
+    background: rgba(5,6,10,.55); backdrop-filter: blur(3px);
+    display: flex; align-items: flex-end;
+    opacity: 0; visibility: hidden; transition: opacity .22s ease, visibility .22s;
+  }
+  .ws-mask.show { opacity: 1; visibility: visible; }
+  .ws-sheet {
+    width: 100%; max-height: 78%; overflow-y: auto; padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px));
+    background: #14161f; border: 1px solid var(--border); border-bottom: none;
+    border-radius: 22px 22px 0 0; box-shadow: var(--shadow-lg);
+    transform: translateY(24px); transition: transform .24s cubic-bezier(.2,.8,.2,1);
+  }
+  .ws-mask.show .ws-sheet { transform: translateY(0); }
+  .ws-head { display: flex; align-items: baseline; gap: 8px; padding: 0 4px 10px; }
+  .ws-head b { font-size: 14px; }
+  .ws-head small { font-size: 10.5px; color: var(--text-muted); }
+  .ws-opt {
+    width: 100%; display: flex; align-items: center; gap: 10px;
+    padding: 10px; margin-bottom: 4px; border-radius: var(--radius-md); cursor: pointer;
+    color: var(--text-primary); font-family: inherit; text-align: left;
+    background: none; border: 1px solid transparent; transition: all var(--ease-t);
+  }
+  .ws-opt:hover { background: var(--surface-default); }
+  .ws-opt.on { background: var(--accent-subtle); border-color: rgba(150,170,255,.3); }
+  .ws-opt .ws-ic { color: var(--text-muted); }
+  .ws-opt.on .ws-ic { color: var(--accent); }
+  .ws-desc { display: block; font-size: 10px; font-weight: 400; color: var(--text-muted); margin-top: 1px; }
+  .ws-check { flex: none; color: var(--accent); opacity: 0; transition: opacity var(--ease-t); }
+  .ws-opt.on .ws-check { opacity: 1; }
+  /* 供应商选项的图标是字符（对齐桌面 IconOrChar），不是 svg */
+  .pv-ic { width: 15px; text-align: center; font-size: 14px; flex: none; color: var(--text-muted); }
+  .ws-opt.on .pv-ic { color: var(--accent); }
+  .pv-foot {
+    margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--border-subtle);
+    text-align: center; font-size: 10.5px; color: var(--text-muted);
+  }
+
   /* ===== 底部功能覆盖对照 ===== */
   .cover { max-width: 1180px; margin: 44px auto 0; }
   .cover summary {
@@ -501,13 +581,15 @@
   .cover-card li { list-style: none; color: var(--text-muted); }
   .cover-card li::before { content: "✓ "; color: var(--success); font-weight: 700; margin-right: 3px; }
   .cover-card li em { font-style: normal; color: var(--text-secondary); }
+  .cover-card.todo li::before { content: "→ "; color: var(--warning); }
+  .cover-card.skip li::before { content: "✗ "; color: var(--danger); }
 </style>
 </head>
 <body>
 
 <header class="page-head">
-  <h1>aide 远程 PWA<small>原型 v2 · 三屏并排</small></h1>
-  <p>全部为<b>假数据</b>：聊天屏自动循环演示流式回复；屏 2 可演示<b>工作区切换</b>；每屏下方的小胶囊可切换状态预览（离线 / 配对错误 / 重连等）。</p>
+  <h1>aide 远程 PWA<small>原型 v3 · 抽屉导航 + 供应商/思考程度切换</small></h1>
+  <p>借鉴 Kimi 移动版重构导航：<b>聊天升为主屏</b>（连接后直达），会话列表收进<b>左侧抽屉</b>；顶栏供应商 pill 与抽屉徽标同开<b>供应商切换弹层</b>；输入区工具行有<b>思考程度</b>五档选择（对齐桌面 effort 选择器）；＋ 新会话进顶栏。全部为假数据，屏下胶囊切换状态预览。</p>
 </header>
 
 <div class="stage">
@@ -543,7 +625,6 @@
 
           <button class="btn-primary" id="connBtn"><span id="connBtnTxt">连 接</span></button>
 
-          <!-- 状态展示区：同一位置互斥展示五种状态 -->
           <div class="conn-status">
             <div class="st info" data-st="connecting">
               <span class="st-ic"><span class="spinner" style="color:var(--accent)"></span></span>
@@ -551,7 +632,7 @@
             </div>
             <div class="st ok" data-st="connected">
               <span class="st-ic"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.6"/><path d="M5 8.2l2 2 4-4.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-              <span><b>已连接，正在进入会话…</b><small>原型中为三屏并排，实际跳转到屏 2 →</small></span>
+              <span><b>已连接，正在进入最近会话…</b><small>v3 起连接后直达聊天主屏（见屏 2）→</small></span>
             </div>
             <div class="st warn" data-st="offline">
               <span class="st-ic"><span class="spinner" style="color:#f0a868"></span></span>
@@ -584,66 +665,11 @@
     </div>
   </section>
 
-  <!-- ================= 屏 2 · 会话列表 ================= -->
+  <!-- ================= 屏 2 · 聊天主屏 ================= -->
   <section class="phone-wrap">
-    <div class="phone-label">屏 2 · 会话列表<span>已连接后 · 工作区切换</span></div>
+    <div class="phone-label">屏 2 · 聊天主屏<span>连接后直达 · 点供应商 pill 切换</span></div>
     <div class="phone">
-      <div class="screen">
-        <div class="statusbar">
-          <span>21:47</span>
-          <span class="sb-icons">
-            <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4" y="5" width="3" height="6" rx="1"/><rect x="8" y="2.5" width="3" height="8.5" rx="1"/><rect x="12" y="0" width="3" height="11" rx="1" opacity=".35"/></svg>
-            <svg width="14" height="11" viewBox="0 0 16 12" fill="currentColor"><path d="M8 9.6a1.6 1.6 0 1 0 .01 3.2A1.6 1.6 0 0 0 8 9.6zM8 5.6c-1.7 0-3.2.66-4.3 1.75l1.4 1.42A4.1 4.1 0 0 1 8 7.6c1.13 0 2.15.45 2.9 1.17l1.4-1.42A5.9 5.9 0 0 0 8 5.6zM8 1.4C5.1 1.4 2.4 2.5.35 4.4l1.42 1.42A8.9 8.9 0 0 1 8 3.4c2.44 0 4.65.95 6.23 2.42L15.65 4.4A10.9 10.9 0 0 0 8 1.4z" transform="translate(0,-1)"/></svg>
-            <svg width="22" height="11" viewBox="0 0 25 12" fill="none"><rect x=".5" y=".5" width="21" height="11" rx="3.5" stroke="currentColor" opacity=".4"/><rect x="2" y="2" width="15" height="8" rx="2" fill="currentColor"/><path d="M23.5 4v4a2 2 0 0 0 0-4z" fill="currentColor" opacity=".4"/></svg>
-          </span>
-        </div>
-
-        <div class="sv-top">
-          <h3>会话</h3>
-          <span class="conn-pill" id="svPill"><span class="dot ok"></span>已连接</span>
-          <button class="icon-btn" id="svRefresh" title="刷新">
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M13.6 8a5.6 5.6 0 1 1-1.65-3.95" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M13.8 1.6v3h-3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-        </div>
-
-        <!-- 工作区选择行：常驻显示当前工作区，点击弹出底部弹层切换 -->
-        <div class="sv-ws">
-          <button class="ws-chip" id="wsChip" aria-expanded="false">
-            <span class="ws-ic"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 3.5c0-.55.45-1 1-1h3l1.6 1.6h5.4c.55 0 1 .45 1 1v7.4c0 .55-.45 1-1 1H3c-.55 0-1-.45-1-1v-9z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span>
-            <span class="ws-txt"><b class="ws-name">aide</b><span class="ws-path">C:\Users\<user>\IdeaProjects\aide</span></span>
-            <span class="ws-caret"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-          </button>
-        </div>
-
-        <div class="sv-list" id="svList"></div>
-
-        <button class="fab" id="fabNew" title="新会话">
-          <svg width="22" height="22" viewBox="0 0 20 20" fill="none"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
-        </button>
-
-        <!-- 工作区选择弹层（底部 sheet） -->
-        <div class="ws-mask" id="wsMask">
-          <div class="ws-sheet">
-            <div class="ws-head"><b>选择工作区</b><small>会话按工作区隔离 · 新会话发往所选工作区</small></div>
-            <div id="wsOpts"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="chips">
-      <span class="cap">状态预览</span>
-      <button class="chip on" data-sv="ok">已连接</button>
-      <button class="chip" data-sv="off">设备离线</button>
-      <button class="chip" id="svDoRefresh">点刷新按钮 ↗</button>
-      <button class="chip" id="svDoWs">点工作区行 ↗</button>
-    </div>
-  </section>
-
-  <!-- ================= 屏 3 · 聊天 ================= -->
-  <section class="phone-wrap">
-    <div class="phone-label">屏 3 · 聊天<span>历史 + 实时流式</span></div>
-    <div class="phone">
-      <div class="screen">
+      <div class="screen" data-chat data-demo="1">
         <div class="statusbar">
           <span>21:47</span>
           <span class="sb-icons">
@@ -654,146 +680,310 @@
         </div>
 
         <div class="ch-top">
-          <button class="ch-back" title="返回">
-            <svg width="19" height="19" viewBox="0 0 20 20" fill="none"><path d="M12.5 4L6.5 10l6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <button class="ch-back ch-menu" title="历史会话">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M3 5.5h14M3 10h14M3 14.5h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           </button>
           <div class="ch-title">
             <div class="ch-name">PWA 客户端原型</div>
-            <div class="ch-state" id="chState"><span class="dot ok"></span><span id="chStateTxt">已连接</span></div>
+            <button class="pv-pill" title="切换供应商">
+              <span class="dot ok"></span><span class="pv-name">⬢ Claude 官方</span>
+              <svg width="9" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
           </div>
-          <span class="spacer"></span>
+          <button class="ch-back ch-new" title="新会话">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M10 4.5v11M4.5 10h11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
         </div>
 
-        <div class="ch-offbar" id="chOffbar"><span class="spinner" style="width:11px;height:11px;border-width:1.5px"></span>设备离线，自动重连中…</div>
-        <div class="ch-toast" id="chToast"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.6"/><path d="M5 8.2l2 2 4-4.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>已重连，会话历史已刷新</div>
+        <div class="ch-offbar"><span class="spinner" style="width:11px;height:11px;border-width:1.5px"></span>设备离线，自动重连中…</div>
+        <div class="ch-toast"></div>
 
-        <div class="ch-msgs" id="chMsgs">
-          <div class="m-time">今天 21:32</div>
+        <div class="ch-empty">
+          <img src="../../src-tauri/icons/icon.png" alt="aide">
+          <b>新会话</b>
+          <p>发消息即创建 · 发往工作区 <em class="ch-empty-ws">aide</em></p>
+        </div>
 
-          <!-- 历史：用户 -->
-          <div class="m-row user"><div class="m-bubble-user">帮我把远程网关的协议类型整理成一份 TS 定义，放到 remote-pwa 里</div></div>
-
-          <!-- 历史：助手（思考 + 工具×2 + 文本 + usage） -->
-          <div class="m-row"><div class="m-assistant">
-            <details class="blk">
-              <summary><span class="caret"></span><span class="blk-label">思考过程</span><span>12s</span></summary>
-            <div class="blk-body-think">用户要的是 protocol.rs 的 TS 镜像。先看 Rust 侧的 serde 结构，注意 ChatEvent 是 untagged enum，TS 侧用判别联合即可。load_messages 返回的 HistoryBlock 只有三种，比实时事件窄。</div>
-            </details>
-            <details class="tool">
-              <summary>
-                <span class="caret"></span>
-                <span class="tool-ic"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M10.7 2.3a3.4 3.4 0 0 0-4.5 4.4L2.5 10.4a1.7 1.7 0 1 0 2.4 2.4l3.7-3.7a3.4 3.4 0 0 0 4.4-4.5l-2.3 2.3-1.9-.5-.5-1.9 2.4-2.2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg></span>
-                <span class="tool-name">Read</span>
-                <span class="tool-arg">src-tauri/src/remote/protocol.rs</span>
-                <span class="tool-st ok">✓ 成功</span>
-              </summary>
-              <div class="tool-body">
-                <div class="tool-kv"><div class="k">输入</div><pre>{
-  "file_path": "src-tauri/src/remote/protocol.rs"
-}</pre></div>
-                <div class="tool-kv"><div class="k">结果</div><pre>已读取 214 行</pre></div>
-              </div>
-            </details>
-            <details class="tool">
-              <summary>
-                <span class="caret"></span>
-                <span class="tool-ic"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
-                <span class="tool-name">Grep</span>
-                <span class="tool-arg">ChatEvent · 14 处匹配</span>
-                <span class="tool-st ok">✓ 成功</span>
-              </summary>
-              <div class="tool-body">
-                <div class="tool-kv"><div class="k">输入</div><pre>{ "pattern": "ChatEvent", "output_mode": "files_with_matches" }</pre></div>
-                <div class="tool-kv"><div class="k">结果</div><pre>protocol.rs
-handler.rs
-useChatSession.ts</pre></div>
-              </div>
-            </details>
-            <div class="m-text">整理好了，types.ts 已建好：协议消息、ChatEvent 判别联合、Session / ChatMessageItem 三个数据形状都镜像了 Rust 侧。配对和鉴权走两条消息（pair / auth），中继层只认 connect。</div>
-            <div class="m-usage">12.4k tok · cache 96% · effort high</div>
-          </div></div>
-
-          <!-- 历史：工具失败 + 错误块 -->
-          <div class="m-row user"><div class="m-bubble-user">跑一下协议的单测</div></div>
-          <div class="m-row"><div class="m-assistant">
-            <details class="tool">
-              <summary>
-                <span class="caret"></span>
-                <span class="tool-ic"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5l4 3.5-4 3.5M8 12h5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-                <span class="tool-name">Bash</span>
-                <span class="tool-arg">pnpm test protocol</span>
-                <span class="tool-st err">✗ 失败</span>
-              </summary>
-              <div class="tool-body">
-                <div class="tool-kv"><div class="k">输入</div><pre>{ "command": "pnpm --prefix remote-pwa test protocol" }</pre></div>
-                <div class="tool-kv"><div class="k">结果</div><pre class="err">ERR_PNPM_RECURSIVE_FAIL  remote-pwa 目录不存在</pre></div>
-              </div>
-            </details>
-            <div class="m-error">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 1.8L14 4v4c0 3.4-2.5 5.7-6 6.8C4.5 13.7 2 11.4 2 8V4l6-2.2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 5.2v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="10.6" r=".9" fill="currentColor"/></svg>
-              <span>命令执行失败：remote-pwa 目录还没创建，先搭项目骨架再跑测试。</span>
-            </div>
-            <div class="m-text">目录确实还没建。我先把 Task 1 的骨架落好，再补测试。</div>
-          </div></div>
-
-          <div class="m-time">21:47</div>
-          <!-- 流式演示消息挂载点 -->
-          <div id="liveSlot"></div>
+        <div class="ch-msgs">
+          <div class="ch-history"></div>
+          <div class="live-slot"></div>
         </div>
 
         <div class="ch-input">
-          <div class="ch-ta-wrap"><textarea id="chTa" rows="1" placeholder="发消息给桌面 aide…"></textarea></div>
-          <button class="ch-send" id="chSend" title="发送">
-            <svg width="17" height="17" viewBox="0 0 18 18" fill="none"><path d="M9 14.5v-11M4 8l5-5 5 5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
+          <div class="ch-tools">
+            <button class="ef-chip" title="思考程度">
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M8.8 1.5L3.5 9h3.7l-.9 5.5L11.6 7H7.9l.9-5.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+              <span class="ef-label">思考 · 高</span>
+              <svg width="9" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+          <div class="ch-input-row">
+            <div class="ch-ta-wrap"><textarea rows="1" placeholder="发消息给桌面 aide…"></textarea></div>
+            <button class="ch-send" title="发送">
+              <svg width="17" height="17" viewBox="0 0 18 18" fill="none"><path d="M9 14.5v-11M4 8l5-5 5 5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- 抽屉（默认关） -->
+        <div class="dr-mask">
+          <aside class="dr-panel">
+            <div class="dr-head">
+              <div class="dr-id">
+                <img src="../../src-tauri/icons/icon.png" alt="aide">
+                <div class="dr-id-name"><b>HEAVEN-PC</b><small><span class="dot ok"></span>已连接 · 桌面 aide</small></div>
+                <button class="icon-btn dr-quit" title="断开连接">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2v5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M4.7 4.3a5.2 5.2 0 1 0 6.6 0" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                </button>
+              </div>
+              <button class="dr-badge" title="切换供应商">
+                <span class="dr-badge-name">⬢ Claude 官方</span>
+                <svg width="9" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+            <div class="dr-ws">
+              <button class="ws-chip">
+                <span class="ws-ic"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 3.5c0-.55.45-1 1-1h3l1.6 1.6h5.4c.55 0 1 .45 1 1v7.4c0 .55-.45 1-1 1H3c-.55 0-1-.45-1-1v-9z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span>
+                <span class="ws-txt"><b class="ws-name">aide</b><span class="ws-path">C:\Users\<user>\IdeaProjects\aide</span></span>
+                <span class="ws-caret"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              </button>
+            </div>
+            <div class="dr-sec">
+              <b>历史会话</b>
+              <button class="icon-btn dr-refresh" title="刷新">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.6 8a5.6 5.6 0 1 1-1.65-3.95" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M13.8 1.6v3h-3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+            <div class="dr-list"></div>
+            <div class="dr-search">
+              <div class="dr-search-box">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                <input type="text" placeholder="搜索会话">
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <!-- 供应商切换弹层 -->
+        <div class="ws-mask pv-mask">
+          <div class="ws-sheet">
+            <div class="ws-head"><b>选择供应商</b><small>切换即时生效 · 与桌面标题栏同步</small></div>
+            <div class="pv-opts"></div>
+            <div class="pv-foot">管理 / 新增供应商请回桌面 aide → 设置 → 供应商</div>
+          </div>
+        </div>
+
+        <!-- 思考程度弹层（会话级） -->
+        <div class="ws-mask ef-mask">
+          <div class="ws-sheet">
+            <div class="ws-head"><b>思考程度</b><small>会话级 · 随下一条消息生效</small></div>
+            <div class="ef-opts"></div>
+          </div>
+        </div>
+
+        <!-- 工作区切换弹层 -->
+        <div class="ws-mask ws-mask-w">
+          <div class="ws-sheet">
+            <div class="ws-head"><b>选择工作区</b><small>会话按工作区隔离 · 新会话发往所选工作区</small></div>
+            <div class="ws-opts"></div>
+          </div>
         </div>
       </div>
     </div>
     <div class="chips">
       <span class="cap">演示控制</span>
       <button class="chip" id="btnReplay">↻ 重播流式</button>
+      <button class="chip" id="btnNew">＋ 新会话空态</button>
+      <button class="chip" id="btnPv">点供应商 pill ↗</button>
+      <button class="chip" id="btnEf">点思考程度 ↗</button>
+      <button class="chip" id="btnDrawer">打开抽屉 ↗</button>
       <button class="chip" id="btnOffline">模拟断线</button>
       <button class="chip" id="btnReconnect" style="display:none">恢复连接</button>
-      <button class="chip" id="btnSendHint">在输入框发条消息试试 ↓</button>
+      <button class="chip" id="btnSendHint">发条消息试试 ↓</button>
+    </div>
+  </section>
+
+  <!-- ================= 屏 3 · 抽屉导航 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 3 · 抽屉导航<span>☰ 打开 · 工作区 / 搜索 / 供应商徽标</span></div>
+    <div class="phone">
+      <div class="screen" data-chat data-drawer-open="1">
+        <div class="statusbar">
+          <span>21:47</span>
+          <span class="sb-icons">
+            <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4" y="5" width="3" height="6" rx="1"/><rect x="8" y="2.5" width="3" height="8.5" rx="1"/><rect x="12" y="0" width="3" height="11" rx="1" opacity=".35"/></svg>
+            <svg width="14" height="11" viewBox="0 0 16 12" fill="currentColor"><path d="M8 9.6a1.6 1.6 0 1 0 .01 3.2A1.6 1.6 0 0 0 8 9.6zM8 5.6c-1.7 0-3.2.66-4.3 1.75l1.4 1.42A4.1 4.1 0 0 1 8 7.6c1.13 0 2.15.45 2.9 1.17l1.4-1.42A5.9 5.9 0 0 0 8 5.6zM8 1.4C5.1 1.4 2.4 2.5.35 4.4l1.42 1.42A8.9 8.9 0 0 1 8 3.4c2.44 0 4.65.95 6.23 2.42L15.65 4.4A10.9 10.9 0 0 0 8 1.4z" transform="translate(0,-1)"/></svg>
+            <svg width="22" height="11" viewBox="0 0 25 12" fill="none"><rect x=".5" y=".5" width="21" height="11" rx="3.5" stroke="currentColor" opacity=".4"/><rect x="2" y="2" width="15" height="8" rx="2" fill="currentColor"/><path d="M23.5 4v4a2 2 0 0 0 0-4z" fill="currentColor" opacity=".4"/></svg>
+          </span>
+        </div>
+
+        <div class="ch-top">
+          <button class="ch-back ch-menu" title="历史会话">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M3 5.5h14M3 10h14M3 14.5h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+          <div class="ch-title">
+            <div class="ch-name">PWA 客户端原型</div>
+            <button class="pv-pill" title="切换供应商">
+              <span class="dot ok"></span><span class="pv-name">⬢ Claude 官方</span>
+              <svg width="9" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+          <button class="ch-back ch-new" title="新会话">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M10 4.5v11M4.5 10h11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+
+        <div class="ch-offbar"><span class="spinner" style="width:11px;height:11px;border-width:1.5px"></span>设备离线，自动重连中…</div>
+        <div class="ch-toast"></div>
+
+        <div class="ch-empty">
+          <img src="../../src-tauri/icons/icon.png" alt="aide">
+          <b>新会话</b>
+          <p>发消息即创建 · 发往工作区 <em class="ch-empty-ws">aide</em></p>
+        </div>
+
+        <div class="ch-msgs">
+          <div class="ch-history"></div>
+          <div class="live-slot"></div>
+        </div>
+
+        <div class="ch-input">
+          <div class="ch-tools">
+            <button class="ef-chip" title="思考程度">
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M8.8 1.5L3.5 9h3.7l-.9 5.5L11.6 7H7.9l.9-5.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+              <span class="ef-label">思考 · 高</span>
+              <svg width="9" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+          <div class="ch-input-row">
+            <div class="ch-ta-wrap"><textarea rows="1" placeholder="发消息给桌面 aide…"></textarea></div>
+            <button class="ch-send" title="发送">
+              <svg width="17" height="17" viewBox="0 0 18 18" fill="none"><path d="M9 14.5v-11M4 8l5-5 5 5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="dr-mask">
+          <aside class="dr-panel">
+            <div class="dr-head">
+              <div class="dr-id">
+                <img src="../../src-tauri/icons/icon.png" alt="aide">
+                <div class="dr-id-name"><b>HEAVEN-PC</b><small><span class="dot ok"></span>已连接 · 桌面 aide</small></div>
+                <button class="icon-btn dr-quit" title="断开连接">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 2v5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M4.7 4.3a5.2 5.2 0 1 0 6.6 0" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                </button>
+              </div>
+              <button class="dr-badge" title="切换供应商">
+                <span class="dr-badge-name">⬢ Claude 官方</span>
+                <svg width="9" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+            <div class="dr-ws">
+              <button class="ws-chip">
+                <span class="ws-ic"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 3.5c0-.55.45-1 1-1h3l1.6 1.6h5.4c.55 0 1 .45 1 1v7.4c0 .55-.45 1-1 1H3c-.55 0-1-.45-1-1v-9z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span>
+                <span class="ws-txt"><b class="ws-name">aide</b><span class="ws-path">C:\Users\<user>\IdeaProjects\aide</span></span>
+                <span class="ws-caret"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              </button>
+            </div>
+            <div class="dr-sec">
+              <b>历史会话</b>
+              <button class="icon-btn dr-refresh" title="刷新">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.6 8a5.6 5.6 0 1 1-1.65-3.95" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M13.8 1.6v3h-3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+            <div class="dr-list"></div>
+            <div class="dr-search">
+              <div class="dr-search-box">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                <input type="text" placeholder="搜索会话">
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <div class="ws-mask pv-mask">
+          <div class="ws-sheet">
+            <div class="ws-head"><b>选择供应商</b><small>切换即时生效 · 与桌面标题栏同步</small></div>
+            <div class="pv-opts"></div>
+            <div class="pv-foot">管理 / 新增供应商请回桌面 aide → 设置 → 供应商</div>
+          </div>
+        </div>
+
+        <!-- 思考程度弹层（会话级） -->
+        <div class="ws-mask ef-mask">
+          <div class="ws-sheet">
+            <div class="ws-head"><b>思考程度</b><small>会话级 · 随下一条消息生效</small></div>
+            <div class="ef-opts"></div>
+          </div>
+        </div>
+
+        <div class="ws-mask ws-mask-w">
+          <div class="ws-sheet">
+            <div class="ws-head"><b>选择工作区</b><small>会话按工作区隔离 · 新会话发往所选工作区</small></div>
+            <div class="ws-opts"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">演示控制</span>
+      <button class="chip" id="btnDrawer3">关闭抽屉</button>
+      <button class="chip" id="btnPvBadge">点供应商徽标 ↗</button>
+      <button class="chip" id="btnWs3">点工作区 ↗</button>
+      <button class="chip" id="btnSearch3">搜索试试 ↓</button>
     </div>
   </section>
 </div>
 
 <!-- ===== 功能覆盖对照 ===== -->
 <details class="cover">
-  <summary><span class="caret"></span>功能覆盖对照（计划 §功能清单）</summary>
+  <summary><span class="caret"></span>功能覆盖对照（v3 变更 + 协议缺口）</summary>
   <div class="cover-grid">
     <div class="cover-card">
-      <h4>屏 1 · 连接/配对</h4>
+      <h4>屏 1 · 连接/配对（不变）</h4>
       <ul>
-        <li><em>中继 URL 输入框</em>（标注"记住上次输入"）</li>
-        <li><em>6 位配对码输入框</em>（数字键盘、大字号居中）</li>
-        <li><em>连接按钮</em>（连接中带 spinner 禁用）</li>
-        <li><em>五种状态</em>：连接中 / 已连接 / 设备离线自动重试 / 配对码无效（输入框标红抖动）/ 需重新配对</li>
-        <li><em>已配对自动连接</em>：底部常驻"本设备已配对"指示</li>
+        <li><em>中继 URL + 6 位配对码</em>、连接按钮、五种状态</li>
+        <li>已配对自动连接；<em>连接成功直达聊天主屏</em>（v3 起不再落会话列表屏）</li>
       </ul>
     </div>
     <div class="cover-card">
-      <h4>屏 2 · 会话列表</h4>
+      <h4>屏 2 · 聊天主屏（v3 新导航）</h4>
       <ul>
-        <li><em>顶部连接状态 pill</em>（已连接 / 设备离线，可切换预览）</li>
-        <li><em>刷新按钮</em>（点击旋转）</li>
-        <li><em>工作区选择器</em>：顶栏下方常驻当前工作区 chip（名称 + 路径），点击弹出底部弹层；切换后会话列表立即刷新（各工作区假数据不同，可观察列表变化）</li>
-        <li><em>新会话发往所选工作区</em>：FAB 新建的会话归属当前工作区</li>
-        <li><em>会话项</em>：名称 + 最后消息摘要 + 相对时间</li>
-        <li><em>新会话入口</em>：右下 FAB（计划中"进聊天屏直接发消息即创建"）</li>
-        <li>进行中的会话显示 <em>"回复中"</em> 实时徽标</li>
+        <li><em>☰ 打开抽屉</em>（Kimi 式；会话列表不再是独立整屏）</li>
+        <li><em>供应商 pill</em>：连接状态点 + 当前供应商名 + caret，点出底部弹层切换；<em>离线时点击给 toast 提示</em></li>
+        <li><em>思考程度 chip</em>：输入区工具行（对齐桌面输入框工具栏 effort 选择器）→ 低/中/高/超高/最大五档弹层；<em>会话级</em>，离线也可切（随下一条消息生效）；usage 尾注跟随当前档</li>
+        <li><em>＋ 新会话</em>入顶栏（FAB 取消）→ 居中<em>空态</em>（logo + 发往当前工作区提示）</li>
+        <li>消息区：文本流式 + 光标 / 思考折叠 / 工具三态徽标 / 子代理行 / 错误块 / usage 尾注（同 v2）</li>
+        <li>断线：pill 点变橙 + 橙色横幅 + 输入禁用；重连 toast + 分隔线</li>
       </ul>
     </div>
     <div class="cover-card">
-      <h4>屏 3 · 聊天</h4>
+      <h4>屏 3 · 抽屉（Kimi「历史会话」位）</h4>
       <ul>
-        <li><em>顶栏</em>：返回 + 会话名 + 连接状态点</li>
-        <li><em>用户消息</em>右侧气泡；<em>助手</em>左侧块状内容</li>
-        <li><em>文本块</em>流式逐字 + 闪烁光标；<em>思考块</em>折叠；<em>工具块</em>折叠 + 进行中/成功/失败三态徽标；<em>子代理</em>一行摘要；<em>错误块</em>红卡</li>
-        <li><em>历史与流式同列表</em>（上方历史、下方实时演示）</li>
-        <li><em>输入框</em>多行自增高；未连接 / 回复中禁用发送</li>
-        <li><em>断线</em>：顶栏状态点 + 橙色横幅；<em>重连</em>后 toast + "历史已刷新"分隔线（对应 load_messages 补齐缺口）</li>
+        <li><em>设备卡</em>：aide logo + 设备名 + 连接状态 + 断开按钮</li>
+        <li><em>供应商徽标</em>（Kimi「Allegretto」位）：与顶栏 pill 开同一个弹层</li>
+        <li><em>工作区 chip</em> + 底部弹层切换（v2 能力搬进抽屉，假数据按工作区隔离）</li>
+        <li>会话项：名称 + 预览 + 相对时间 + <em>回复中</em>徽标；点击直达该会话</li>
+        <li><em>底部搜索框</em>：输入即过滤当前工作区会话</li>
+      </ul>
+    </div>
+    <div class="cover-card todo">
+      <h4>实施清单 · 协议新增（remote-pwa / protocol.rs）</h4>
+      <ul>
+        <li><em>ListProviders</em> → Providers{ providers:[{id,name,icon}], active_id }（桌面 get_providers + get_active_provider_id 透传，SystemDefault 置首对齐 displayList）</li>
+        <li><em>SetActiveProvider{ provider_id }</em> → 桌面 set_active_provider_id；回最新 Providers</li>
+        <li>send_message 扩展 <em>effort</em> 字段（会话级；缺省 = 桌面当前会话档）；每轮徽标链路已通（message_stop 透传 effort）</li>
+        <li>可选：桌面标题栏切换时推 <em>event provider_changed</em>，手机 pill 同步</li>
+        <li>可选：list_sessions 应答扩展 <em>last_preview</em>（抽屉会话项预览行）</li>
+        <li>导航：authed 后直达聊天（最近会话 / 空态），SessionList 视图由抽屉组件取代</li>
+      </ul>
+    </div>
+    <div class="cover-card skip">
+      <h4>未采纳（Kimi 有、我们没有对应能力）</h4>
+      <ul>
+        <li>⋮ 更多菜单：无对应功能清单</li>
+        <li>语音输入按钮：协议无音频链路</li>
+        <li>账号头像体系：aide 是单设备桌面，用设备卡代替</li>
       </ul>
     </div>
   </div>
@@ -804,6 +994,8 @@ useChatSession.ts</pre></div>
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const esc = s => { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; };
+const el = html => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; };
 
 /* ================= 屏 1 · 状态切换 ================= */
 const connStates = ["connecting", "connected", "offline", "badcode", "revoked"];
@@ -815,7 +1007,6 @@ function setConn(st) {
   connStates.forEach(s => $(`.st[data-st="${s}"]`).classList.toggle("show", s === st));
   $$("#connChips .chip").forEach(c => c.classList.toggle("on", c.dataset.st === st));
   clearTimeout(connTimer);
-  // 输入框与按钮的联动
   codeInput.classList.toggle("error", st === "badcode");
   codeTip.innerHTML = st === "badcode"
     ? "<em>配对码无效或已过期，请重新输入</em>"
@@ -828,22 +1019,27 @@ $$("#connChips .chip").forEach(c => c.addEventListener("click", () => setConn(c.
 connBtn.addEventListener("click", () => { setConn("connecting"); connTimer = setTimeout(() => setConn("connected"), 1400); });
 codeInput.addEventListener("input", () => { codeInput.value = codeInput.value.replace(/\D/g, ""); if (codeInput.classList.contains("error")) setConn("idle"); });
 
-/* ================= 屏 2 · 刷新 & 状态 pill ================= */
-const svPill = $("#svPill");
-$("#svRefresh").addEventListener("click", e => {
-  const svg = e.currentTarget.querySelector("svg");
-  svg.classList.remove("spinning"); void svg.offsetWidth; svg.classList.add("spinning");
-});
-$$(".chip[data-sv]").forEach(c => c.addEventListener("click", () => {
-  $$(".chip[data-sv]").forEach(x => x.classList.toggle("on", x === c));
-  svPill.innerHTML = c.dataset.sv === "ok"
-    ? '<span class="dot ok"></span>已连接'
-    : '<span class="dot off"></span>设备离线';
-}));
-$("#svDoRefresh").addEventListener("click", () => $("#svRefresh").click());
+/* ================= 假数据：供应商 / 工作区（形状对齐真实协议与桌面 displayList） ================= */
+/* 供应商镜像桌面 ProviderConfig 的远程子集 {id,name,icon}；SystemDefault 恒置首 */
+const PV_FAKE = [
+  { id: "__system_default__", name: "系统默认", icon: "✦", desc: "跟随桌面设置的首选供应商" },
+  { id: "claude", name: "Claude 官方", icon: "⬢", desc: "claude.ai 订阅 · OAuth" },
+  { id: "cpa-local", name: "cpa-local", icon: "🏠", desc: "本地代理 · 局域网" },
+  { id: "deepseek", name: "DeepSeek 镜像", icon: "🌊", desc: "第三方中转 API" },
+];
+let activePv = PV_FAKE[1];
 
-/* ================= 屏 2 · 工作区切换（假数据按工作区隔离） ================= */
-/* 形状对齐真实协议 Workspace{key, name}（key = 路径编码，name 由桌面侧解码给出） */
+/* 思考程度：镜像桌面输入框工具栏 effort 选择器（会话级，五档） */
+const EF_FAKE = [
+  { id: "low",    name: "低",   desc: "最快最省，适合简单问答" },
+  { id: "medium", name: "中",   desc: "日常任务的均衡档" },
+  { id: "high",   name: "高",   desc: "默认 · 复杂任务更稳" },
+  { id: "xhigh",  name: "超高", desc: "深度推理，耗时明显更长" },
+  { id: "max",    name: "最大", desc: "不计成本的最强档" },
+];
+let activeEffort = EF_FAKE[2];
+
+/* Workspace{key,name} + 会话 {name,time,prev,live}（prev 对应拟扩展的 last_preview） */
 const WS_FAKE = [
   { key: "C--Users-heaven-IdeaProjects-aide", name: "aide", path: "C:\\Users\\<user>\\IdeaProjects\\aide",
     sessions: [
@@ -866,58 +1062,176 @@ const WS_FAKE = [
 ];
 let activeWs = WS_FAKE[0];
 
-function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+/* 聊天静态历史（屏 2/3 共用背景） */
+const HISTORY_HTML = `
+  <div class="m-time">今天 21:32</div>
+  <div class="m-row user"><div class="m-bubble-user">帮我把远程网关的协议类型整理成一份 TS 定义，放到 remote-pwa 里</div></div>
+  <div class="m-row"><div class="m-assistant">
+    <details class="blk">
+      <summary><span class="caret"></span><span class="blk-label">思考过程</span><span>12s</span></summary>
+      <div class="blk-body-think">用户要的是 protocol.rs 的 TS 镜像。先看 Rust 侧的 serde 结构，注意 ChatEvent 是 untagged enum，TS 侧用判别联合即可。load_messages 返回的 HistoryBlock 只有三种，比实时事件窄。</div>
+    </details>
+    <details class="tool">
+      <summary>
+        <span class="caret"></span>
+        <span class="tool-ic"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M10.7 2.3a3.4 3.4 0 0 0-4.5 4.4L2.5 10.4a1.7 1.7 0 1 0 2.4 2.4l3.7-3.7a3.4 3.4 0 0 0 4.4-4.5l-2.3 2.3-1.9-.5-.5-1.9 2.4-2.2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg></span>
+        <span class="tool-name">Read</span>
+        <span class="tool-arg">src-tauri/src/remote/protocol.rs</span>
+        <span class="tool-st ok">✓ 成功</span>
+      </summary>
+      <div class="tool-body">
+        <div class="tool-kv"><div class="k">输入</div><pre>{
+  "file_path": "src-tauri/src/remote/protocol.rs"
+}</pre></div>
+        <div class="tool-kv"><div class="k">结果</div><pre>已读取 214 行</pre></div>
+      </div>
+    </details>
+    <details class="tool">
+      <summary>
+        <span class="caret"></span>
+        <span class="tool-ic"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+        <span class="tool-name">Grep</span>
+        <span class="tool-arg">ChatEvent · 14 处匹配</span>
+        <span class="tool-st ok">✓ 成功</span>
+      </summary>
+      <div class="tool-body">
+        <div class="tool-kv"><div class="k">输入</div><pre>{ "pattern": "ChatEvent", "output_mode": "files_with_matches" }</pre></div>
+        <div class="tool-kv"><div class="k">结果</div><pre>protocol.rs
+handler.rs
+useChatSession.ts</pre></div>
+      </div>
+    </details>
+    <div class="m-text">整理好了，types.ts 已建好：协议消息、ChatEvent 判别联合、Session / ChatMessageItem 三个数据形状都镜像了 Rust 侧。配对和鉴权走两条消息（pair / auth），中继层只认 connect。</div>
+    <div class="m-usage">12.4k tok · cache 96% · effort high</div>
+  </div></div>
+  <div class="m-row user"><div class="m-bubble-user">跑一下协议的单测</div></div>
+  <div class="m-row"><div class="m-assistant">
+    <details class="tool">
+      <summary>
+        <span class="caret"></span>
+        <span class="tool-ic"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5l4 3.5-4 3.5M8 12h5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <span class="tool-name">Bash</span>
+        <span class="tool-arg">pnpm test protocol</span>
+        <span class="tool-st err">✗ 失败</span>
+      </summary>
+      <div class="tool-body">
+        <div class="tool-kv"><div class="k">输入</div><pre>{ "command": "pnpm --prefix remote-pwa test protocol" }</pre></div>
+        <div class="tool-kv"><div class="k">结果</div><pre class="err">ERR_PNPM_RECURSIVE_FAIL  remote-pwa 目录不存在</pre></div>
+      </div>
+    </details>
+    <div class="m-error">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 1.8L14 4v4c0 3.4-2.5 5.7-6 6.8C4.5 13.7 2 11.4 2 8V4l6-2.2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 5.2v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="10.6" r=".9" fill="currentColor"/></svg>
+      <span>命令执行失败：remote-pwa 目录还没创建，先搭项目骨架再跑测试。</span>
+    </div>
+    <div class="m-text">目录确实还没建。我先把 Task 1 的骨架落好，再补测试。</div>
+  </div></div>
+  <div class="m-time">21:47</div>`;
 
-function renderSvList() {
-  $("#svList").innerHTML = activeWs.sessions.map(s => `
-    <button class="sv-item">
-      <div class="sv-row1"><span class="sv-name">${esc(s.name)}</span><span class="sv-time">${esc(s.time)}</span></div>
-      <div class="sv-row2"><span class="sv-prev">${esc(s.prev)}</span>${s.live ? '<span class="sv-live"><span class="dot"></span>回复中</span>' : ""}</div>
-    </button>`).join("");
-  $$("#svList .sv-item").forEach(it => it.addEventListener("click", () => flashHint("（原型：进入屏 3 聊天 →）")));
+/* ================= 屏内 toast ================= */
+const TOAST_KIND = {
+  ok:   ["var(--success)", "rgba(110,231,168,.4)"],
+  info: ["var(--info)", "rgba(125,211,252,.4)"],
+  warn: ["#f0a868", "rgba(240,168,104,.45)"],
+};
+function flashHint(root, text, kind = "info") {
+  const t = root.querySelector(".ch-toast");
+  const [color, border] = TOAST_KIND[kind] || TOAST_KIND.info;
+  t.textContent = text;
+  t.style.color = color;
+  t.style.borderColor = border;
+  t.classList.add("show");
+  clearTimeout(root._hintTimer);
+  root._hintTimer = setTimeout(() => t.classList.remove("show"), 2000);
 }
-function renderWsSheet() {
-  $("#wsOpts").innerHTML = WS_FAKE.map(w => `
+
+/* ================= 供应商（两屏共享，切换全局同步 pill + 徽标） ================= */
+function syncPv() {
+  const txt = `${activePv.icon} ${activePv.name}`;
+  $$(".pv-name").forEach(n => { n.textContent = txt; });
+  $$(".dr-badge-name").forEach(n => { n.textContent = txt; });
+}
+function renderPvOpts(root) {
+  root.querySelector(".pv-opts").innerHTML = PV_FAKE.map(p => `
+    <button class="ws-opt${p.id === activePv.id ? " on" : ""}" data-pv="${esc(p.id)}">
+      <span class="pv-ic">${p.icon}</span>
+      <span class="ws-txt"><b class="ws-name">${esc(p.name)}</b><span class="ws-desc">${esc(p.desc)}</span></span>
+      <svg class="ws-check" width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M5 8.2l2 2 4-4.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>`).join("");
+}
+
+/* ================= 思考程度（两屏共享 chip） ================= */
+function syncEffort() {
+  $$(".ef-label").forEach(n => { n.textContent = `思考 · ${activeEffort.name}`; });
+}
+function renderEfOpts(root) {
+  root.querySelector(".ef-opts").innerHTML = EF_FAKE.map(e => `
+    <button class="ws-opt${e.id === activeEffort.id ? " on" : ""}" data-ef="${esc(e.id)}">
+      <span class="pv-ic">${e.id === "max" ? "🔥" : "⚡"}</span>
+      <span class="ws-txt"><b class="ws-name">${esc(e.name)}<span class="ws-desc" style="display:inline;margin-left:8px">${esc(e.id)}</span></b><span class="ws-desc">${esc(e.desc)}</span></span>
+      <svg class="ws-check" width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M5 8.2l2 2 4-4.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>`).join("");
+}
+
+/* ================= 工作区（两屏共享 chip + 各自抽屉列表） ================= */
+function renderWsOpts(root) {
+  root.querySelector(".ws-opts").innerHTML = WS_FAKE.map(w => `
     <button class="ws-opt${w.key === activeWs.key ? " on" : ""}" data-ws="${esc(w.key)}">
       <span class="ws-ic"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2 3.5c0-.55.45-1 1-1h3l1.6 1.6h5.4c.55 0 1 .45 1 1v7.4c0 .55-.45 1-1 1H3c-.55 0-1-.45-1-1v-9z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span>
       <span class="ws-txt"><b class="ws-name">${esc(w.name)}</b><span class="ws-path">${esc(w.path)}</span></span>
       <svg class="ws-check" width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M5 8.2l2 2 4-4.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>`).join("");
 }
-function openWsSheet() {
-  renderWsSheet();
-  $("#wsMask").classList.add("show");
-  $("#wsChip").setAttribute("aria-expanded", "true");
+function renderDrList(root) {
+  const kw = (root._q || "").trim().toLowerCase();
+  const list = activeWs.sessions.filter(s => !kw || s.name.toLowerCase().includes(kw) || s.prev.toLowerCase().includes(kw));
+  const box = root.querySelector(".dr-list");
+  box.innerHTML = list.map(s => `
+    <button class="sv-item" data-name="${esc(s.name)}">
+      <div class="sv-row1"><span class="sv-name">${esc(s.name)}</span><span class="sv-time">${esc(s.time)}</span></div>
+      <div class="sv-row2"><span class="sv-prev">${esc(s.prev)}</span>${s.live ? '<span class="sv-live"><span class="dot"></span>回复中</span>' : ""}</div>
+    </button>`).join("") || '<p class="dr-none">无匹配会话</p>';
+  box.querySelectorAll(".sv-item").forEach(it => it.addEventListener("click", () => pickSession(root, it.dataset.name)));
 }
-function closeWsSheet() {
-  $("#wsMask").classList.remove("show");
-  $("#wsChip").setAttribute("aria-expanded", "false");
+function syncWs() {
+  $$("[data-chat]").forEach(root => {
+    root.querySelector(".ws-chip .ws-name").textContent = activeWs.name;
+    root.querySelector(".ws-chip .ws-path").textContent = activeWs.path;
+    root.querySelector(".ch-empty-ws").textContent = activeWs.name;
+    renderDrList(root);
+  });
 }
-function applyWs(w) {
-  activeWs = w;
-  $("#wsChip .ws-name").textContent = w.name;
-  $("#wsChip .ws-path").textContent = w.path;
-  renderWsSheet();
-  renderSvList();
-  closeWsSheet();
-}
-$("#wsChip").addEventListener("click", openWsSheet);
-$("#wsMask").addEventListener("click", e => { if (e.target === e.currentTarget) closeWsSheet(); });
-$("#wsOpts").addEventListener("click", e => {
-  const btn = e.target.closest(".ws-opt");
-  if (btn) applyWs(WS_FAKE.find(w => w.key === btn.dataset.ws));
-});
-$("#svDoWs").addEventListener("click", () => openWsSheet());
-renderSvList();
 
-/* ================= 屏 3 · 聊天流式演示 ================= */
-const chMsgs = $("#chMsgs"), liveSlot = $("#liveSlot");
-const chTa = $("#chTa"), chSend = $("#chSend");
-const chState = $("#chState"), chStateTxt = $("#chStateTxt");
-const chOffbar = $("#chOffbar"), chToast = $("#chToast");
-let offline = false, streaming = false, runId = 0;
+/* ================= 每屏：空态 / 历史 ================= */
+function showEmpty(root) {
+  root._runId++;
+  root.querySelector(".ch-history").innerHTML = "";
+  root.querySelector(".live-slot").innerHTML = "";
+  root.querySelector(".ch-msgs").style.display = "none";
+  root.querySelector(".ch-empty-ws").textContent = activeWs.name;
+  root.querySelector(".ch-empty").classList.add("show");
+  root.querySelector(".ch-name").textContent = "新会话";
+  root.querySelector(".dr-mask").classList.remove("show");
+}
+function hideEmpty(root) {
+  root.querySelector(".ch-empty").classList.remove("show");
+  const msgs = root.querySelector(".ch-msgs");
+  msgs.style.display = "";
+  if (!root.querySelector(".ch-history").innerHTML) {
+    root.querySelector(".ch-history").innerHTML = HISTORY_HTML;
+  }
+}
+function pickSession(root, name) {
+  root.querySelector(".dr-mask").classList.remove("show");
+  root._runId++; // 停掉该屏流式演示
+  root.querySelector(".live-slot").innerHTML = "";
+  root.querySelector(".ch-name").textContent = name;
+  hideEmpty(root);
+  flashHint(root, `已切换到「${name}」`, "ok");
+}
 
-/* --- 自动演示剧本（循环播放的一条助手回复） --- */
+/* ================= 流式演示剧本 ================= */
+const ICON_TOOL = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M10.7 2.3a3.4 3.4 0 0 0-4.5 4.4L2.5 10.4a1.7 1.7 0 1 0 2.4 2.4l3.7-3.7a3.4 3.4 0 0 0 4.4-4.5l-2.3 2.3-1.9-.5-.5-1.9 2.4-2.2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+const ICON_AGENT = '<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l1.8 4.2L14 6l-3 3.1.7 4.4L8 11.4l-3.7 2.1.7-4.4-3-3.1 4.2-.8L8 1z"/></svg>';
 const AUTO_SCRIPT = [
   { t: "think", text: "用户想在手机上确认原型。三屏布局已经就绪，我先检查一下聊天屏还缺哪些块类型没有演示到——子代理块还没出现，补一个。" },
   { t: "agent", name: "Explore", desc: "搜索协议相关类型定义" },
@@ -927,168 +1241,252 @@ const AUTO_SCRIPT = [
   { t: "text", text: "好了，types.ts 骨架落好了。总结一下这屏的块渲染：\n\n· 文本块流式逐字追加，带光标\n· 思考 / 工具调用折叠，点标题展开\n· 子代理一行摘要\n· 失败工具和错误块用红色区分\n\n你在手机上看到的流式效果就是真实协议下 text_delta 逐条推送的样子。" },
   { t: "usage", text: "8.7k tok · cache 94% · effort high" },
 ];
-/* --- 手动发送后的应答剧本 --- */
 const REPLY_SCRIPT = [
   { t: "think", text: "这是从原型输入框发出的消息，演示一条完整的实时回复链路：send_message → 桌面执行 → 事件流回推。" },
   { t: "tool", name: "Bash", arg: "pnpm test", input: '{ "command": "pnpm --prefix remote-pwa test" }', result: "✓ 12 passed (1.2s)" },
   { t: "text", text: "收到！真实环境下，你这条消息会经中继推到桌面 aide 执行，事件再逐条流回这里。发送期间输入框和按钮是禁用的——就是你现在看到的状态。" },
-  { t: "usage", text: "3.1k tok · cache 91%" },
+  { t: "usage", text: "3.1k tok · cache 91% · effort high" },
 ];
 
-const ICON_TOOL = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M10.7 2.3a3.4 3.4 0 0 0-4.5 4.4L2.5 10.4a1.7 1.7 0 1 0 2.4 2.4l3.7-3.7a3.4 3.4 0 0 0 4.4-4.5l-2.3 2.3-1.9-.5-.5-1.9 2.4-2.2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
-const ICON_AGENT = '<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l1.8 4.2L14 6l-3 3.1.7 4.4L8 11.4l-3.7 2.1.7-4.4-3-3.1 4.2-.8L8 1z"/></svg>';
+function scrollBottom(root) { const m = root.querySelector(".ch-msgs"); m.scrollTop = m.scrollHeight; }
 
-function scrollBottom() { chMsgs.scrollTop = chMsgs.scrollHeight; }
-
-function el(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; }
-
-async function typeInto(node, text, myId, cps) {
+async function typeInto(root, node, text, myId, cps) {
   for (const ch of text) {
-    if (myId !== runId) return false;
+    if (myId !== root._runId) return false;
     node.insertBefore(document.createTextNode(ch), node.querySelector(".cursor"));
-    scrollBottom();
+    scrollBottom(root);
     await sleep(cps);
   }
   return true;
 }
 
-async function playScript(script, mount) {
-  const myId = runId;
+async function playScript(root, script) {
+  const myId = root._runId;
+  const mount = root.querySelector(".live-slot");
   const row = el('<div class="m-row"><div class="m-assistant"></div></div>');
-  mount.appendChild(row); scrollBottom();
+  mount.appendChild(row); scrollBottom(root);
   const box = row.firstChild;
 
   for (const step of script) {
-    if (myId !== runId) return;
+    if (myId !== root._runId) return;
     if (step.t === "think") {
       const d = el(`<details class="blk" open><summary><span class="caret"></span><span class="blk-label">思考中</span><span class="spinner" style="width:9px;height:9px;border-width:1.5px"></span></summary><div class="blk-body-think"><span class="cursor"></span></div></details>`);
-      box.appendChild(d); scrollBottom();
+      box.appendChild(d); scrollBottom(root);
       const body = d.querySelector(".blk-body-think");
-      if (!await typeInto(body, step.text, myId, 14)) return;
+      if (!await typeInto(root, body, step.text, myId, 14)) return;
       body.querySelector(".cursor").remove();
       d.querySelector(".blk-label").textContent = "思考过程";
       d.querySelector("summary .spinner").remove();
       await sleep(350); d.removeAttribute("open");
     } else if (step.t === "agent") {
       box.appendChild(el(`<div class="agent-line"><span class="a-ic">${ICON_AGENT}</span><b>${esc(step.name)}</b><span>${esc(step.desc)}</span></div>`));
-      scrollBottom(); await sleep(500);
+      scrollBottom(root); await sleep(500);
     } else if (step.t === "tool") {
       const d = el(`<details class="tool" open><summary><span class="caret"></span><span class="tool-ic">${ICON_TOOL}</span><span class="tool-name">${esc(step.name)}</span><span class="tool-arg">${esc(step.arg)}</span><span class="tool-st run"><span class="spinner"></span>进行中</span></summary><div class="tool-body"><div class="tool-kv"><div class="k">输入</div><pre>${esc(step.input)}</pre></div></div></details>`);
-      box.appendChild(d); scrollBottom();
-      await sleep(1100); if (myId !== runId) return;
+      box.appendChild(d); scrollBottom(root);
+      await sleep(1100); if (myId !== root._runId) return;
       d.querySelector(".tool-st").outerHTML = '<span class="tool-st ok">✓ 成功</span>';
       d.querySelector(".tool-body").insertAdjacentHTML("beforeend", `<div class="tool-kv"><div class="k">结果</div><pre>${esc(step.result)}</pre></div>`);
-      scrollBottom(); await sleep(400); d.removeAttribute("open");
+      scrollBottom(root); await sleep(400); d.removeAttribute("open");
     } else if (step.t === "text") {
       const p = el('<div class="m-text"><span class="cursor"></span></div>');
-      box.appendChild(p); scrollBottom();
-      if (!await typeInto(p, step.text, myId, 26)) return;
+      box.appendChild(p); scrollBottom(root);
+      if (!await typeInto(root, p, step.text, myId, 26)) return;
       p.querySelector(".cursor").remove();
     } else if (step.t === "usage") {
       await sleep(250);
-      box.appendChild(el(`<div class="m-usage">${esc(step.text)}</div>`));
-      scrollBottom();
+      // 尾注跟随当前思考程度档（每轮徽标 = 桌面 message_stop 透传的 effort）
+      const txt = step.text.replace(/effort \w+/, `effort ${activeEffort.id}`);
+      box.appendChild(el(`<div class="m-usage">${esc(txt)}</div>`));
+      scrollBottom(root);
     }
   }
 }
 
-function setSending(on) {
-  streaming = on;
-  updateInputState();
-}
-function updateInputState() {
-  const disabled = offline || streaming;
-  chTa.disabled = offline;
-  chSend.disabled = disabled;
-  chTa.placeholder = offline ? "设备离线，等待重连…" : "发消息给桌面 aide…";
+function updateInputState(root) {
+  const ta = root.querySelector("textarea");
+  const send = root.querySelector(".ch-send");
+  ta.disabled = !!root._offline;
+  send.disabled = !!(root._offline || root._streaming);
+  ta.placeholder = root._offline ? "设备离线，等待重连…" : "发消息给桌面 aide…";
 }
 
-/* 自动循环演示 */
+/* ================= 每屏初始化（屏 2/3 同结构，统一绑定） ================= */
+function initChatScreen(root) {
+  const q = s => root.querySelector(s);
+  root._q = "";          // 抽屉搜索词
+  root._runId = 0;       // 流式演示代际
+  root._offline = false;
+  root._streaming = false;
+  q(".ch-history").innerHTML = HISTORY_HTML;
+
+  // ── 抽屉 ──
+  const drMask = q(".dr-mask");
+  const openDrawer = () => { renderDrList(root); drMask.classList.add("show"); };
+  q(".ch-menu").addEventListener("click", openDrawer);
+  drMask.addEventListener("click", e => { if (e.target === drMask) drMask.classList.remove("show"); });
+  q(".dr-refresh").addEventListener("click", e => {
+    const svg = e.currentTarget.querySelector("svg");
+    svg.classList.remove("spinning"); void svg.offsetWidth; svg.classList.add("spinning");
+    renderDrList(root);
+  });
+  q(".dr-quit").addEventListener("click", () => flashHint(root, "（原型：断开连接 → 回到屏 1 配对页）"));
+  q(".dr-search input").addEventListener("input", e => { root._q = e.target.value; renderDrList(root); });
+
+  // ── 工作区弹层 ──
+  const wsMask = q(".ws-mask-w");
+  q(".ws-chip").addEventListener("click", () => { renderWsOpts(root); wsMask.classList.add("show"); });
+  wsMask.addEventListener("click", e => { if (e.target === wsMask) wsMask.classList.remove("show"); });
+  q(".ws-opts").addEventListener("click", e => {
+    const btn = e.target.closest(".ws-opt");
+    if (!btn) return;
+    const w = WS_FAKE.find(x => x.key === btn.dataset.ws);
+    wsMask.classList.remove("show");
+    if (w.key === activeWs.key) return;
+    activeWs = w;
+    syncWs();
+    flashHint(root, `已切换工作区 · ${w.name}`, "ok");
+  });
+
+  // ── 供应商弹层（pill 与抽屉徽标同入口） ──
+  const pvMask = q(".pv-mask");
+  const openPv = () => {
+    if (root._offline) { flashHint(root, "设备离线，无法切换供应商", "warn"); return; }
+    renderPvOpts(root);
+    pvMask.classList.add("show");
+  };
+  q(".pv-pill").addEventListener("click", openPv);
+  q(".dr-badge").addEventListener("click", openPv);
+  pvMask.addEventListener("click", e => { if (e.target === pvMask) pvMask.classList.remove("show"); });
+  q(".pv-opts").addEventListener("click", e => {
+    const btn = e.target.closest(".ws-opt");
+    if (!btn) return;
+    const p = PV_FAKE.find(x => x.id === btn.dataset.pv);
+    pvMask.classList.remove("show");
+    if (p.id === activePv.id) return;
+    activePv = p;
+    syncPv();
+    flashHint(root, `已切换到 ${p.icon} ${p.name}`, "ok");
+  });
+
+  // ── 思考程度弹层（会话级，离线也可切——本地状态随下一条消息生效） ──
+  const efMask = q(".ef-mask");
+  q(".ef-chip").addEventListener("click", () => { renderEfOpts(root); efMask.classList.add("show"); });
+  efMask.addEventListener("click", e => { if (e.target === efMask) efMask.classList.remove("show"); });
+  q(".ef-opts").addEventListener("click", e => {
+    const btn = e.target.closest(".ws-opt");
+    if (!btn) return;
+    const ef = EF_FAKE.find(x => x.id === btn.dataset.ef);
+    efMask.classList.remove("show");
+    if (ef.id === activeEffort.id) return;
+    activeEffort = ef;
+    syncEffort();
+    flashHint(root, `思考程度 · ${ef.name}，随下一条消息生效`, "ok");
+  });
+
+  // ── 新会话（顶栏 ＋） ──
+  q(".ch-new").addEventListener("click", () => showEmpty(root));
+
+  // ── 发送 ──
+  const ta = q("textarea");
+  const autoGrow = () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 108) + "px"; };
+  ta.addEventListener("input", autoGrow);
+  async function sendMsg() {
+    const text = ta.value.trim();
+    if (!text || root._offline || root._streaming) return;
+    root._runId++;                                    // 停掉自动演示
+    if (q(".ch-empty").classList.contains("show")) {
+      q(".ch-empty").classList.remove("show");
+      q(".ch-msgs").style.display = "";               // 新会话首发：历史保持空
+    }
+    q(".live-slot").innerHTML = "";
+    ta.value = ""; autoGrow();
+    q(".live-slot").appendChild(el(`<div class="m-row user"><div class="m-bubble-user">${esc(text)}</div></div>`));
+    scrollBottom(root);
+    root._streaming = true; updateInputState(root);
+    await sleep(500);
+    await playScript(root, REPLY_SCRIPT);
+    root._streaming = false; updateInputState(root);
+  }
+  q(".ch-send").addEventListener("click", sendMsg);
+  ta.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMsg(); } });
+
+  // ── 初始 ──
+  renderDrList(root);
+  updateInputState(root);
+  if (root.dataset.drawerOpen === "1") drMask.classList.add("show");
+}
+
+/* ================= 启动 ================= */
+const screens = $$("[data-chat]");
+screens.forEach(initChatScreen);
+syncPv();
+syncEffort();
+
+/* 屏 2：自动循环流式演示 + 断线演示 */
+const demoRoot = document.querySelector('[data-demo="1"]');
 async function autoLoop() {
-  const myId = ++runId;
-  while (myId === runId) {
-    setSending(true);
-    await playScript(AUTO_SCRIPT, liveSlot);
-    if (myId !== runId) return;
-    setSending(false);
+  const myId = ++demoRoot._runId;
+  while (myId === demoRoot._runId) {
+    demoRoot._streaming = true; updateInputState(demoRoot);
+    await playScript(demoRoot, AUTO_SCRIPT);
+    if (myId !== demoRoot._runId) return;
+    demoRoot._streaming = false; updateInputState(demoRoot);
     await sleep(6000);
-    if (myId !== runId) return;
-    liveSlot.innerHTML = "";  // 清空上一轮演示消息再重播
+    if (myId !== demoRoot._runId) return;
+    demoRoot.querySelector(".live-slot").innerHTML = "";
   }
 }
-
+function setOffline(on) {
+  demoRoot._offline = on;
+  demoRoot.querySelector(".ch-offbar").classList.toggle("show", on);
+  $$(".pv-pill .dot", demoRoot).forEach(d => { d.className = `dot ${on ? "off" : "ok"}`; });
+  $$(".dr-id-name .dot", demoRoot).forEach(d => { d.className = `dot ${on ? "off" : "ok"}`; });
+  updateInputState(demoRoot);
+  $("#btnOffline").style.display = on ? "none" : "";
+  $("#btnReconnect").style.display = on ? "" : "none";
+}
 $("#btnReplay").addEventListener("click", () => {
-  liveSlot.innerHTML = "";
-  runId++;            // 停掉旧循环
-  autoLoop();         // 开新循环
+  hideEmpty(demoRoot);
+  demoRoot.querySelector(".live-slot").innerHTML = "";
+  autoLoop(); // 代际自增，旧循环自然停
 });
-
-/* 发送 */
-function sendMsg() {
-  const text = chTa.value.trim();
-  if (!text || streaming || offline) return;
-  runId++; liveSlot.innerHTML = "";           // 停掉自动演示
-  chTa.value = ""; autoGrow();
-  liveSlot.appendChild(el(`<div class="m-row user"><div class="m-bubble-user">${esc(text)}</div></div>`));
-  scrollBottom();
-  (async () => {
-    setSending(true);
-    await sleep(500);
-    await playScript(REPLY_SCRIPT, liveSlot);
-    setSending(false);
-  })();
-}
-chSend.addEventListener("click", sendMsg);
-chTa.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMsg(); } });
-
-/* 输入框自增高 */
-function autoGrow() { chTa.style.height = "auto"; chTa.style.height = Math.min(chTa.scrollHeight, 108) + "px"; }
-chTa.addEventListener("input", autoGrow);
-
-/* 断线 / 重连演示 */
-$("#btnOffline").addEventListener("click", () => {
-  offline = true;
-  chState.querySelector(".dot").className = "dot off";
-  chStateTxt.textContent = "设备离线";
-  chOffbar.classList.add("show");
-  updateInputState();
-  $("#btnOffline").style.display = "none";
-  $("#btnReconnect").style.display = "";
-});
+$("#btnNew").addEventListener("click", () => demoRoot.querySelector(".ch-new").click());
+$("#btnPv").addEventListener("click", () => demoRoot.querySelector(".pv-pill").click());
+$("#btnEf").addEventListener("click", () => demoRoot.querySelector(".ef-chip").click());
+$("#btnDrawer").addEventListener("click", () => demoRoot.querySelector(".ch-menu").click());
+$("#btnOffline").addEventListener("click", () => setOffline(true));
 $("#btnReconnect").addEventListener("click", async () => {
-  chState.querySelector(".dot").className = "dot warn";
-  chStateTxt.textContent = "重连中…";
+  $$(".pv-pill .dot", demoRoot).forEach(d => { d.className = "dot warn"; });
   await sleep(1200);
-  offline = false;
-  chState.querySelector(".dot").className = "dot ok";
-  chStateTxt.textContent = "已连接";
-  chOffbar.classList.remove("show");
-  updateInputState();
-  chToast.classList.add("show");
+  setOffline(false);
+  flashHint(demoRoot, "已重连，会话历史已刷新", "ok");
   const sys = el('<div class="m-sys">已重连 · 会话历史已刷新</div>');
-  chMsgs.appendChild(sys); scrollBottom();
-  setTimeout(() => chToast.classList.remove("show"), 2400);
-  $("#btnOffline").style.display = "";
-  $("#btnReconnect").style.display = "none";
+  demoRoot.querySelector(".ch-msgs").appendChild(sys);
+  scrollBottom(demoRoot);
+});
+$("#btnSendHint").addEventListener("click", () => demoRoot.querySelector("textarea").focus());
+autoLoop();
+
+/* 屏 3：抽屉演示 */
+const s3 = document.querySelector('[data-drawer-open="1"]');
+$("#btnDrawer3").addEventListener("click", e => {
+  const mask = s3.querySelector(".dr-mask");
+  mask.classList.toggle("show");
+  e.currentTarget.textContent = mask.classList.contains("show") ? "关闭抽屉" : "打开抽屉";
+});
+$("#btnPvBadge").addEventListener("click", () => s3.querySelector(".dr-badge").click());
+$("#btnWs3").addEventListener("click", () => {
+  s3.querySelector(".dr-mask").classList.add("show");
+  s3.querySelector(".ws-chip").click();
+});
+$("#btnSearch3").addEventListener("click", () => {
+  s3.querySelector(".dr-mask").classList.add("show");
+  s3.querySelector(".dr-search input").focus();
 });
 
-/* 小提示（点击会话项等占位交互） */
-let hintTimer = null;
-function flashHint(text) {
-  chToast.textContent = text;
-  chToast.style.color = "var(--info)";
-  chToast.style.borderColor = "rgba(125,211,252,.4)";
-  chToast.classList.add("show");
-  clearTimeout(hintTimer);
-  hintTimer = setTimeout(() => chToast.classList.remove("show"), 1600);
-}
-$("#fabNew").addEventListener("click", () => flashHint("（原型：新建会话 → 直接进入屏 3）"));
-$("#btnSendHint").addEventListener("click", () => { chTa.focus(); });
-
-/* 启动 */
+/* 屏 1 初始 */
 setConn("idle");
-updateInputState();
-autoLoop();
 </script>
 </body>
 </html>

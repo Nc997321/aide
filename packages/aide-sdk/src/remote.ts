@@ -1,12 +1,15 @@
-import type {
-  ChatEvent,
-  LoadMessagesResult,
-  DesktopToPhone,
-  PhoneToDesktop,
-  RelayConnect,
-  Session,
-  Workspace,
-} from "./types";
+/**
+ * 远程传输：WebSocket 经中继桥接到桌面 remote 网关（协议 v2 通用 RPC + 事件流）。
+ *
+ * 连接状态机 / 指数退避 / 自动续配 移植自原 remote-pwa protocol.ts（实战验证过）；
+ * 与旧 RemoteClient 的差异：
+ *  - 请求/应答从「kind FIFO 队列」改为「id 对号 Map」——通用 invoke 取代手写消息；
+ *  - 事件经 listen("chat-event") 适配成 Tauri 形状（{ payload }），与桌面同源；
+ *  - 类同时实现 AideTransport（setTransport 注入）与连接管理接口（ConnectView 用）。
+ *
+ * 中继是哑管道：register/connect 首条消息之外的字节原样转发，不理解本协议。
+ */
+import type { AideTransport } from "./transport";
 
 export type ConnState =
   | "idle" // 未连接（用户主动断开）
@@ -25,10 +28,6 @@ export type ConnectCreds =
   | { code: string }
   | { deviceId: string; token: string };
 
-const WS_OPEN = 1;
-const BACKOFF_BASE_MS = 1000;
-const BACKOFF_MAX_MS = 30000;
-
 /** 客户端实际用到的 WebSocket 子集（结构化类型，测试可注入假实现）。 */
 export interface WsLike {
   readyState: number;
@@ -40,52 +39,33 @@ export interface WsLike {
   onerror: ((ev: Event) => void) | null;
 }
 
-interface PendingRequest {
-  kind: "sessions" | "messages" | "workspaces";
+/** 桌面 → 手机消息（镜像 src-tauri/src/remote/protocol.rs 的 DesktopToPhone）。 */
+type DesktopToPhone =
+  | { type: "pair_ok"; device_id: string; token: string }
+  | { type: "auth_ok" }
+  | { type: "auth_error"; message: string }
+  | { type: "event"; event: Record<string, unknown> }
+  | { type: "invoke_ok"; id: number; payload: unknown }
+  | { type: "invoke_err"; id: number; error: string };
+
+interface PendingInvoke {
   resolve: (v: unknown) => void;
   reject: (e: Error) => void;
 }
 
-/**
- * RemoteClient 公开接口（组件 prop 用）。
- * 类实例放进 ref 后模板解包会丢私有成员（UnwrapRef 映射类型），
- * 结构化接口可避免——组件只依赖公开方法。
- */
-export interface RemoteClientLike {
-  state: ConnState;
-  onStateChange(cb: (s: ConnState) => void): void;
-  offStateChange(cb: (s: ConnState) => void): void;
-  onEvent(cb: (e: ChatEvent) => void): void;
-  offEvent(cb: (e: ChatEvent) => void): void;
-  onReconnected(cb: () => void): void;
-  offReconnected(cb: () => void): void;
-  onError(cb: (msg: string) => void): void;
-  connect(creds: ConnectCreds): void;
-  pair(code: string): Promise<PairOk>;
-  sendMessage(sessionId: string | null, prompt: string, workspaceKey?: string): void;
-  loadMessages(sessionId: string): Promise<LoadMessagesResult>;
-  listSessions(workspaceKey?: string): Promise<Session[]>;
-  listWorkspaces(): Promise<Workspace[]>;
-  disconnect(): void;
-}
+const WS_OPEN = 1;
+const BACKOFF_BASE_MS = 1000;
+const BACKOFF_MAX_MS = 30000;
+/** 远程网关只透传 chat-event 这一种事件；其他事件名 listen 了也收不到。 */
+const CHAT_EVENT = "chat-event";
 
-/**
- * 远程控制协议客户端：连中继 → 桥接 → 认证 → 收发。
- *
- * 状态机：idle → connecting → bridged → authed；
- * 断线指数退避重连（1s→30s 封顶）+ 重连后自动 re-auth；
- * auth 失败 → needsPairing（等用户重新配对，不自动重连）；
- * 中继/桌面不可达 → offline（持续重试）。
- *
- * 请求/应答：桌面网关串行处理消息，应答按序返回；pending 队列 FIFO 匹配。
- */
-export class RemoteClient implements RemoteClientLike {
+export class RemoteTransport implements AideTransport {
   private ws: WsLike | null = null;
   private wsFactory: (url: string) => WsLike;
   private relayUrl: string;
   private _state: ConnState = "idle";
   private stateCbs: Array<(s: ConnState) => void> = [];
-  private eventCbs: Array<(e: ChatEvent) => void> = [];
+  private eventCbs = new Map<string, Set<(e: { payload: unknown }) => void>>();
   private reconnectedCbs: Array<() => void> = [];
   private errorCbs: Array<(msg: string) => void> = [];
   private creds: ConnectCreds | null = null;
@@ -93,7 +73,8 @@ export class RemoteClient implements RemoteClientLike {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closedByUser = false;
   private reconnecting = false;
-  private pending: PendingRequest[] = [];
+  private pending = new Map<number, PendingInvoke>();
+  private nextInvokeId = 0;
   /** 配对码请求挂起（ws 未打开时 pair() 先行调用）；onopen 补发，重连自动续配。 */
   private pendingPair: string | null = null;
   private pairWaiter: {
@@ -110,6 +91,43 @@ export class RemoteClient implements RemoteClientLike {
     this.wsFactory = wsFactory ?? ((url) => new WebSocket(url));
   }
 
+  // ── AideTransport ──
+
+  invoke<T>(command: string, params?: Record<string, unknown>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const id = ++this.nextInvokeId;
+      // JSON 边界：payload 是 unknown，T 是调用方声明的期望形状（收窄责任在 api 门面）。
+      this.pending.set(id, { resolve: (v) => resolve(v as T), reject });
+      try {
+        // 协议要求 params 恒存在（Rust 端必填字段；无参命令传 {}）
+        this.send(JSON.stringify({ type: "invoke", id, command, params: params ?? {} }));
+      } catch (e) {
+        this.pending.delete(id);
+        reject(e instanceof Error ? e : new Error(String(e)));
+      }
+    });
+  }
+
+  listen<T>(event: string, cb: (e: { payload: T }) => void): Promise<() => void> {
+    if (event !== CHAT_EVENT) {
+      // 远程只转发 chat-event；其他事件（lsp-*/pty-* 等）是桌面专属——
+      // 显式降级为 no-op 而不是静默挂起，让误用在开发期可见。
+      console.warn(`[aide-sdk] RemoteTransport: 事件 "${event}" 远程不可用，按 no-op 处理`);
+      return Promise.resolve(() => {});
+    }
+    const set = this.eventCbs.get(event) ?? new Set();
+    // cb 的 payload 泛型在边界处擦除为 unknown——分发时窄不回来，
+    // 但事件生产端（桌面网关）与消费端（useChatSession）共享同一形状约定。
+    const wrapped = cb as (e: { payload: unknown }) => void;
+    set.add(wrapped);
+    this.eventCbs.set(event, set);
+    return Promise.resolve(() => {
+      set.delete(wrapped);
+    });
+  }
+
+  // ── 连接管理（PWA ConnectView/App 消费）──
+
   get state(): ConnState {
     return this._state;
   }
@@ -118,8 +136,8 @@ export class RemoteClient implements RemoteClientLike {
     this.stateCbs.push(cb);
   }
 
-  onEvent(cb: (e: ChatEvent) => void): void {
-    this.eventCbs.push(cb);
+  offStateChange(cb: (s: ConnState) => void): void {
+    this.stateCbs = this.stateCbs.filter((c) => c !== cb);
   }
 
   /** 重连 + re-auth 成功后触发（UI 据此重新 load_messages 补齐事件缺口）。 */
@@ -127,20 +145,12 @@ export class RemoteClient implements RemoteClientLike {
     this.reconnectedCbs.push(cb);
   }
 
-  onError(cb: (msg: string) => void): void {
-    this.errorCbs.push(cb);
-  }
-
-  offStateChange(cb: (s: ConnState) => void): void {
-    this.stateCbs = this.stateCbs.filter((c) => c !== cb);
-  }
-
-  offEvent(cb: (e: ChatEvent) => void): void {
-    this.eventCbs = this.eventCbs.filter((c) => c !== cb);
-  }
-
   offReconnected(cb: () => void): void {
     this.reconnectedCbs = this.reconnectedCbs.filter((c) => c !== cb);
+  }
+
+  onError(cb: (msg: string) => void): void {
+    this.errorCbs.push(cb);
   }
 
   /**
@@ -175,39 +185,9 @@ export class RemoteClient implements RemoteClientLike {
       this.pairWaiter = { resolve, reject };
       this.pendingPair = code;
       if (this.ws && this.ws.readyState === WS_OPEN) {
-        this.send({ type: "pair", code });
+        this.send(JSON.stringify({ type: "pair", code }));
       }
     });
-  }
-
-  /**
-   * 发消息；sessionId 为 null 时新建会话（桌面侧生成 remote-* id）。
-   * workspaceKey：目标工作区（编码 key）。缺省 = 桌面当前活动工作区。
-   * 历史会话必须传其归属工作区（App 按会话→工作区映射取），否则 cwd 落错目录。
-   */
-  sendMessage(sessionId: string | null, prompt: string, workspaceKey?: string): void {
-    const msg: PhoneToDesktop = { type: "send_message", prompt };
-    if (sessionId) msg.session_id = sessionId;
-    if (workspaceKey) msg.workspace_key = workspaceKey;
-    this.send(msg);
-  }
-
-  loadMessages(sessionId: string): Promise<LoadMessagesResult> {
-    return this.request("messages", {
-      type: "load_messages",
-      session_id: sessionId,
-    }) as Promise<LoadMessagesResult>;
-  }
-
-  /** 会话列表；workspaceKey 缺省 = 桌面当前活动工作区。 */
-  listSessions(workspaceKey?: string): Promise<Session[]> {
-    const msg: PhoneToDesktop = { type: "list_sessions" };
-    if (workspaceKey) msg.workspace_key = workspaceKey;
-    return this.request("sessions", msg) as Promise<Session[]>;
-  }
-
-  listWorkspaces(): Promise<Workspace[]> {
-    return this.request("workspaces", { type: "list_workspaces" }) as Promise<Workspace[]>;
   }
 
   /** 主动断开：停止重连，回 idle。 */
@@ -239,14 +219,15 @@ export class RemoteClient implements RemoteClientLike {
     ws.onopen = () => {
       const creds = this.creds;
       if (!creds) return;
-      const first: RelayConnect =
+      // 中继层首条消息（路由用）：配对码或已配对凭据
+      ws.send(JSON.stringify(
         "code" in creds
           ? { type: "connect", code: creds.code }
-          : { type: "connect", device_id: creds.deviceId, token: creds.token };
-      ws.send(JSON.stringify(first));
+          : { type: "connect", device_id: creds.deviceId, token: creds.token },
+      ));
       if ("token" in creds) {
         // 自动 re-auth
-        this.send({ type: "auth", token: creds.token });
+        this.send(JSON.stringify({ type: "auth", token: creds.token }));
         this.authWaiter = {
           resolve: () => this.setState("authed"),
           reject: () => this.setState("needsPairing"),
@@ -306,9 +287,11 @@ export class RemoteClient implements RemoteClientLike {
   private handleMessage(raw: string): void {
     let msg: DesktopToPhone;
     try {
+      // JSON 边界：解析后只信 type 判别字段分发；各臂字段在使用处经 serde 对账过
+      // （Rust 侧协议枚举与这里互为镜像，两端同步演进）。
       msg = JSON.parse(raw) as DesktopToPhone;
     } catch {
-      return;
+      return; // 坏帧：哑管道中间产物或截断，丢弃即可（无状态损坏）
     }
     switch (msg.type) {
       case "pair_ok": {
@@ -339,56 +322,41 @@ export class RemoteClient implements RemoteClientLike {
         break;
       }
       case "event": {
-        this.eventCbs.forEach((cb) => cb(msg.event));
+        const set = this.eventCbs.get(CHAT_EVENT);
+        if (set) set.forEach((cb) => cb({ payload: msg.event }));
         break;
       }
-      case "sessions": {
-        this.resolvePending("sessions", msg.sessions);
+      case "invoke_ok": {
+        const p = this.pending.get(msg.id);
+        if (p) {
+          this.pending.delete(msg.id);
+          p.resolve(msg.payload);
+        }
         break;
       }
-      case "workspaces": {
-        this.resolvePending("workspaces", msg.workspaces);
+      case "invoke_err": {
+        const p = this.pending.get(msg.id);
+        if (p) {
+          this.pending.delete(msg.id);
+          p.reject(new Error(msg.error));
+        } else {
+          this.errorCbs.forEach((cb) => cb(msg.error));
+        }
         break;
       }
-      case "messages": {
-        this.resolvePending("messages", msg.messages);
-        break;
-      }
-      case "error": {
-        const p = this.pending.shift();
-        if (p) p.reject(new Error(msg.message));
-        else this.errorCbs.forEach((cb) => cb(msg.message));
-        break;
-      }
-    }
-  }
-
-  private request(kind: PendingRequest["kind"], msg: PhoneToDesktop): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      this.pending.push({ kind, resolve, reject });
-      this.send(msg);
-    });
-  }
-
-  private resolvePending(kind: PendingRequest["kind"], value: unknown): void {
-    const idx = this.pending.findIndex((p) => p.kind === kind);
-    if (idx >= 0) {
-      const [p] = this.pending.splice(idx, 1);
-      p.resolve(value);
     }
   }
 
   private failPending(reason: string): void {
-    while (this.pending.length) {
-      this.pending.shift()!.reject(new Error(reason));
-    }
+    for (const [, p] of this.pending) p.reject(new Error(reason));
+    this.pending.clear();
   }
 
-  private send(msg: PhoneToDesktop): void {
+  private send(data: string): void {
     if (!this.ws || this.ws.readyState !== WS_OPEN) {
       throw new Error("未连接");
     }
-    this.ws.send(JSON.stringify(msg));
+    this.ws.send(data);
   }
 
   private setState(s: ConnState): void {

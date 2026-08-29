@@ -1,20 +1,26 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
-import { RemoteClient, type ConnState, type ConnectCreds } from "./protocol";
+import {
+  api,
+  RemoteTransport,
+  setTransport,
+  type ConnState,
+  type ConnectCreds,
+} from "@aide/sdk";
 import { clearCreds, loadCreds, loadRelayUrl, saveCreds, saveRelayUrl } from "./storage";
 import { newSessionId } from "./session";
-import type { ChatEvent, Session, Workspace } from "./types";
+import type { Session, Workspace } from "./types";
 import ConnectView from "./components/ConnectView.vue";
 import SessionList from "./components/SessionList.vue";
 import ChatView from "./components/ChatView.vue";
 
 type View = "conn" | "sessions" | "chat";
 
-const client = ref<RemoteClient | null>(null);
+const client = ref<RemoteTransport | null>(null);
 const connState = ref<ConnState>("idle");
 const view = ref<View>("conn");
 const sessions = ref<Session[]>([]);
-const activeSession = ref<{ id: string; name: string; workspaceKey: string | null } | null>(null);
+const activeSession = ref<{ id: string; name: string; workspacePath: string | null } | null>(null);
 const liveSessions = reactive(new Set<string>());
 const pairError = ref<"badcode" | "revoked" | null>(null);
 const hasCreds = ref(false);
@@ -28,24 +34,31 @@ let errorTimer: ReturnType<typeof setTimeout> | null = null;
 const workspaces = ref<Workspace[]>([]);
 /** null = 跟随桌面当前活动工作区（列表不带 key 拉取，与桌面实时同步） */
 const activeWorkspaceKey = ref<string | null>(null);
-/** 会话 → 归属工作区 key：列表按工作区拉取时记录，聊天发消息用（历史会话 cwd 必须落对目录） */
-const sessionWs = new Map<string, string>();
+/** 会话 → 归属工作区路径：列表按工作区拉取时记录，聊天发消息用（历史会话 cwd 必须落对目录） */
+const sessionWsPath = new Map<string, string>();
 
 // ── 连接 ──
 
 function connect(relayUrl: string, creds: ConnectCreds): void {
   client.value?.disconnect(); // 换 URL / 换凭据时关掉旧连接
-  const c = new RemoteClient(relayUrl);
-  c.onStateChange(handleState);
-  c.onEvent(handleEvent);
+  const t = new RemoteTransport(relayUrl);
+  setTransport(t); // 此后所有 api.* 调用走远程 RPC
+  t.onStateChange(handleState);
+  // 会话列表"回复中"徽标：收到事件标记 live，message_stop 清除
+  void t.listen<Record<string, unknown>>("chat-event", ({ payload }) => {
+    const sid = payload["session_id"];
+    if (typeof sid !== "string") return;
+    if (payload["type"] === "message_stop") liveSessions.delete(sid);
+    else liveSessions.add(sid);
+  });
   // 桌面侧执行错误（如会话创建失败）——显示出来，否则「发消息没响应」无从诊断
-  c.onError((m) => {
+  t.onError((m) => {
     errorMsg.value = m;
     if (errorTimer) clearTimeout(errorTimer);
     errorTimer = setTimeout(() => (errorMsg.value = null), 5000);
   });
-  client.value = c;
-  c.connect(creds);
+  client.value = t;
+  t.connect(creds);
 }
 
 function handleState(s: ConnState): void {
@@ -61,13 +74,6 @@ function handleState(s: ConnState): void {
     pairError.value = pairing.value ? "badcode" : "revoked";
     view.value = "conn";
   }
-}
-
-function handleEvent(e: ChatEvent): void {
-  // 会话列表"回复中"徽标：收到事件标记 live，message_stop 清除
-  if (!e.session_id) return;
-  if (e.type === "message_stop") liveSessions.delete(e.session_id);
-  else liveSessions.add(e.session_id);
 }
 
 /** 配对：连接中继 → 发 pair → 成功存凭据进会话列表 */
@@ -92,10 +98,9 @@ async function pairWithCode(relayUrl: string, code: string): Promise<void> {
 // ── 会话列表 ──
 
 async function refreshWorkspaces(): Promise<void> {
-  const c = client.value;
-  if (!c || connState.value !== "authed") return;
+  if (!client.value || connState.value !== "authed") return;
   try {
-    workspaces.value = await c.listWorkspaces();
+    workspaces.value = await api.listWorkspaces();
   } catch {
     // 断线等，保持现状
   }
@@ -107,16 +112,23 @@ function changeWorkspace(key: string): void {
   refreshSessions();
 }
 
+/** key → 路径（workspace.name 即解码后的路径字符串，见桌面 list_workspaces）。 */
+function workspacePathOf(key: string): string | null {
+  return workspaces.value.find((w) => w.key === key)?.name ?? null;
+}
+
 async function refreshSessions(): Promise<void> {
-  const c = client.value;
-  if (!c || connState.value !== "authed") return;
+  if (!client.value || connState.value !== "authed") return;
   refreshing.value = true;
   try {
-    sessions.value = await c.listSessions(activeWorkspaceKey.value ?? undefined);
-    // 记录会话归属工作区：发历史会话消息时带其 key，cwd 才落对目录
     const wsKey = activeWorkspaceKey.value;
+    sessions.value = wsKey
+      ? await api.listSessionsForWorkspace(wsKey)
+      : await api.listSessions();
+    // 记录会话归属工作区路径：发历史会话消息时带其 cwd，才落对目录
     if (wsKey) {
-      for (const s of sessions.value) sessionWs.set(s.id, wsKey);
+      const path = workspacePathOf(wsKey);
+      if (path) for (const s of sessions.value) sessionWsPath.set(s.id, path);
     }
   } catch {
     // 断线等，保持现状
@@ -129,17 +141,18 @@ function openSession(s: Session): void {
   activeSession.value = {
     id: s.id,
     name: s.name,
-    // 跟随桌面（null）时列表没记 key——不带 key 发消息 = 桌面当前工作区，恰好一致
-    workspaceKey: sessionWs.get(s.id) ?? null,
+    // 跟随桌面（null）时列表没记路径——不传 = 桌面当前工作区，恰好一致
+    workspacePath: sessionWsPath.get(s.id) ?? null,
   };
   view.value = "chat";
 }
 
 function newSession(): void {
+  const key = activeWorkspaceKey.value;
   activeSession.value = {
     id: newSessionId(),
     name: "新会话",
-    workspaceKey: activeWorkspaceKey.value, // 新建会话发往当前所选工作区
+    workspacePath: key ? workspacePathOf(key) : null, // 新建会话发往当前所选工作区
   };
   view.value = "chat";
 }
@@ -188,7 +201,7 @@ onMounted(() => {
       v-else-if="view === 'chat' && client && activeSession"
       :client="client"
       :session="activeSession"
-      :workspace-key="activeSession.workspaceKey"
+      :workspace-path="activeSession.workspacePath"
       :conn-state="connState"
       @back="backToSessions"
     />

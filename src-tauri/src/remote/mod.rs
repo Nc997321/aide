@@ -1,7 +1,7 @@
 pub mod auth;
-pub mod bridge;
 pub mod protocol;
 pub mod relay_client;
+pub mod rpc;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

@@ -5,9 +5,8 @@ use serde_json::json;
 use tauri::Manager;
 use tokio_tungstenite::tungstenite::Message;
 
-use super::bridge;
 use super::protocol::{DesktopToPhone, PhoneToDesktop};
-use super::{read_remote_settings, RemoteGateway};
+use super::{read_remote_settings, rpc, RemoteGateway};
 
 /// 主循环：连中继 → 注册 → 桥接；断开后指数退避重连（1s → 30s 封顶）。
 pub async fn run(gateway: Arc<RemoteGateway>) {
@@ -74,33 +73,62 @@ async fn connect_once(gateway: &Arc<RemoteGateway>) -> Result<(), String> {
                 let Ok(msg) = msg else { break; };
                 let Message::Text(text) = msg else { continue; };
                 let Ok(parsed) = serde_json::from_str::<PhoneToDesktop>(&text) else { continue; };
-                let action = match bridge::map_message(&parsed, authed) {
-                    Ok(a) => a,
-                    Err(e) => {
-                        let reply = DesktopToPhone::Error { message: e };
-                        let text = serde_json::to_string(&reply).map_err(|e| e.to_string())?;
-                        if sink.send(Message::Text(text.into())).await.is_err() { break; }
-                        continue;
-                    }
-                };
-                match bridge::execute(gateway, action).await {
-                    Ok(Some(reply)) => {
-                        if matches!(reply, DesktopToPhone::PairOk { .. } | DesktopToPhone::AuthOk) {
-                            authed = true;
-                        }
-                        let text = serde_json::to_string(&reply).map_err(|e| e.to_string())?;
-                        if sink.send(Message::Text(text.into())).await.is_err() { break; }
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        let reply = DesktopToPhone::Error { message: e };
-                        let text = serde_json::to_string(&reply).map_err(|e| e.to_string())?;
-                        if sink.send(Message::Text(text.into())).await.is_err() { break; }
-                    }
+                if let Some(reply) = handle_message(gateway, parsed, &mut authed).await {
+                    let text = serde_json::to_string(&reply).map_err(|e| e.to_string())?;
+                    if sink.send(Message::Text(text.into())).await.is_err() { break; }
                 }
             }
         }
     }
     fwd.abort();
     Ok(())
+}
+
+/// 入站消息处理（pair/auth 是连接生命周期；invoke 走 RPC 注册表白名单）。
+/// 返回要回给手机的应答（None = 无应答）。
+async fn handle_message(
+    gateway: &Arc<RemoteGateway>,
+    msg: PhoneToDesktop,
+    authed: &mut bool,
+) -> Option<DesktopToPhone> {
+    match msg {
+        PhoneToDesktop::Pair { code } => {
+            if !gateway.pairing.lock().unwrap().validate(&code) {
+                return Some(DesktopToPhone::AuthError { message: "配对码无效或已过期".into() });
+            }
+            // 签发长期 token + 取设备 id；任一步失败都按配对失败回（可重试）
+            let reply = match gateway.tokens.issue() {
+                Ok(token) => match gateway.tokens.device_id().await {
+                    Ok(device_id) => {
+                        *authed = true;
+                        DesktopToPhone::PairOk { device_id, token }
+                    }
+                    Err(e) => DesktopToPhone::AuthError { message: e },
+                },
+                Err(e) => DesktopToPhone::AuthError { message: e },
+            };
+            Some(reply)
+        }
+        PhoneToDesktop::Auth { token } => {
+            if gateway.tokens.validate(&token) {
+                *authed = true;
+                Some(DesktopToPhone::AuthOk)
+            } else {
+                Some(DesktopToPhone::AuthError { message: "token 无效".into() })
+            }
+        }
+        PhoneToDesktop::Invoke { id, command, params } => {
+            if !*authed {
+                return Some(DesktopToPhone::InvokeErr { id, error: "未认证：请先配对".into() });
+            }
+            let reply = match rpc::lookup(&command) {
+                Some(handler) => match handler(gateway.app_handle.clone(), params).await {
+                    Ok(payload) => DesktopToPhone::InvokeOk { id, payload },
+                    Err(error) => DesktopToPhone::InvokeErr { id, error },
+                },
+                None => DesktopToPhone::InvokeErr { id, error: format!("未知命令（不在远程白名单）: {command}") },
+            };
+            Some(reply)
+        }
+    }
 }

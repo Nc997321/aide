@@ -3,6 +3,9 @@ use serde_json::Value;
 
 /// 手机 → 桌面（经中继桥接的应用协议）。
 /// 中继是哑管道，不理解这些消息——只做字节级转发。
+///
+/// v2：通用 RPC。能力调用走 Invoke{command, params}（command 白名单见 rpc::REGISTRY），
+/// 不再每加一个桌面能力就加一个消息变体。pair/auth 是连接生命周期，不属于 RPC。
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PhoneToDesktop {
@@ -10,21 +13,9 @@ pub enum PhoneToDesktop {
     Pair { code: String },
     /// 已配对：token 认证
     Auth { token: String },
-    /// 发消息；无 session_id 时新建会话。
-    /// workspace_key：目标工作区（编码 key，与 list_workspaces 返回一致）；
-    /// None = 桌面当前活动工作区。历史会话必须带其归属工作区，
-    /// 否则 cwd 会落到桌面当前工作区。
-    SendMessage {
-        session_id: Option<String>,
-        prompt: String,
-        workspace_key: Option<String>,
-    },
-    /// 拉历史
-    LoadMessages { session_id: String },
-    /// 会话列表；workspace_key 缺省 = 桌面当前活动工作区（向后兼容旧客户端）
-    ListSessions { workspace_key: Option<String> },
-    /// 工作区列表（name 已由桌面解码为路径字符串；missing = 目录已不在）
-    ListWorkspaces,
+    /// 通用命令调用：command 必须在 rpc::REGISTRY 白名单内，params 为该命令的参数 DTO
+    /// （camelCase，与桌面前端 api 门面的调用形状一致）。
+    Invoke { id: u64, command: String, params: Value },
 }
 
 /// 桌面 → 手机
@@ -34,13 +25,10 @@ pub enum DesktopToPhone {
     PairOk { device_id: String, token: String },
     AuthOk,
     AuthError { message: String },
-    /// 流式事件（ChatEvent 原样透传）
+    /// 流式事件（ChatEvent 原样透传，与桌面 listen("chat-event") 的 payload 同形）
     Event { event: Value },
-    /// 命令回执/错误
-    Error { message: String },
-    /// list_sessions / load_messages 的应答（现有命令结果原样透传）
-    Sessions { sessions: Value },
-    Messages { messages: Value },
-    /// list_workspaces 的应答（WorkspaceInfo[] 原样透传）
-    Workspaces { workspaces: Value },
+    /// Invoke 成功/失败两个变体封闭结果空间——非法组合（同时带 payload 和 error）
+    /// 在类型上造不出来。
+    InvokeOk { id: u64, payload: Value },
+    InvokeErr { id: u64, error: String },
 }

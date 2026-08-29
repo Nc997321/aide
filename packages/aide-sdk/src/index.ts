@@ -7,3 +7,6 @@ export { permissionsApi } from "./api/permissions";
 
 export type { AideTransport } from "./transport";
 export { setTransport, getTransport } from "./transport";
+
+export { RemoteTransport } from "./remote";
+export type { ConnState, ConnectCreds, PairOk, WsLike } from "./remote";
