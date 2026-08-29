@@ -71,11 +71,30 @@ impl RemoteGateway {
     }
 }
 
-/// 读远程设置（spawn_blocking 包同步 IO）。bridge/relay_client 共用。
+/// 读远程设置（spawn_blocking 包同步 IO）。rpc/relay_client 共用。
 pub(crate) async fn read_remote_settings(app: &AppHandle) -> Result<RemoteSettings, String> {
     let service = app.state::<Arc<SettingsService>>();
     let service = service.inner().clone();
     tokio::task::spawn_blocking(move || public_settings(&service))
         .await.map_err(|e| e.to_string())?
         .map(|s| s.remote)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lock_recover_survives_poisoned_mutex() {
+        let m = Mutex::new(1);
+        // 人为毒化：持锁期间 panic（AssertUnwindSafe：毒化正是本测试的目的）
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _g = m.lock().unwrap();
+            panic!("boom");
+        }));
+        assert!(m.is_poisoned());
+        // 恢复路径：拿得到守卫、值完好、可写
+        *lock_recover(&m) = 2;
+        assert_eq!(*lock_recover(&m), 2);
+    }
 }

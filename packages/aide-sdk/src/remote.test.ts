@@ -473,6 +473,7 @@ describe("RemoteTransport 边界与防御臂", () => {
     // token 被吊销 → 重新配对：同实例 connect 新凭据 + 新 relay 地址
     t.connect({ code: "654321" }, "wss://relay2.example.com");
     const ws2 = FakeWebSocket.instances[1];
+    expect(ws2).toBeDefined(); // 重连没发生则下面断的是 TypeError，先坐实存在性
     expect(ws2.url).toBe("wss://relay2.example.com/ws");
     ws2.open();
     ws2.receive('{"type":"pair_ok","device_id":"dev-2","token":"t2"}');
