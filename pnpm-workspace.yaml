@@ -1,3 +1,6 @@
+packages:
+  - 'packages/*'
+  - 'remote-pwa'
 allowBuilds:
   esbuild: true
   vue-demi: true
