@@ -554,4 +554,5 @@ export function resetAllState(): void {
   sessionCreatedCallbacks.clear();
   const { state, removeSessionState } = useSessionState();
   for (const k of Object.keys(state)) removeSessionState(k);
+  useSessionWorkspaces().clearAll(); // 归属注册表同属模块级状态，一并归零
 }

@@ -218,6 +218,7 @@ export class RemoteTransport implements AideTransport {
 
     ws.onopen = () => {
       const creds = this.creds;
+      // 不可达：connect() 恒先设 creds 再 openOnce（防御性守卫，避免静默发出无凭据首包）
       if (!creds) return;
       // 中继层首条消息（路由用）：配对码或已配对凭据
       ws.send(JSON.stringify(
@@ -226,11 +227,12 @@ export class RemoteTransport implements AideTransport {
           : { type: "connect", device_id: creds.deviceId, token: creds.token },
       ));
       if ("token" in creds) {
-        // 自动 re-auth
+        // 自动 re-auth。reject 不动状态：needsPairing 只由显式 auth_error 落
+        // （handleMessage）；断线导致的 auth 中断是可重试的，onclose 走 offline。
         this.send(JSON.stringify({ type: "auth", token: creds.token }));
         this.authWaiter = {
           resolve: () => this.setState("authed"),
-          reject: () => this.setState("needsPairing"),
+          reject: () => {},
         };
       } else {
         this.setState("bridged");
@@ -274,9 +276,12 @@ export class RemoteTransport implements AideTransport {
   }
 
   private scheduleReconnect(): void {
+    // 不可达：onclose 里 closedByUser 已提前 return，且每次 onclose 后 this.ws 置空、
+    // 重复 onclose 被 stale 守卫拦住——本守卫是防御竞态的兜底。
     if (this.closedByUser || this.reconnectTimer) return;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      // 不可达：disconnect() 会 clearTimeout 拦下回调；仅竞态（计时器已触发不可撤）兜底
       if (this.closedByUser) return;
       this.reconnecting = true;
       this.openOnce();

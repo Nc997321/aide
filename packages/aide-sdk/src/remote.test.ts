@@ -324,3 +324,145 @@ describe("RemoteTransport 断线重连", () => {
     await expect(p).rejects.toThrow("连接断开");
   });
 });
+
+describe("RemoteTransport 边界与防御臂", () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function authed() {
+    const { t, ws } = makeTransport();
+    t.connect({ deviceId: "dev-1", token: "tok" });
+    ws().open();
+    ws().receive('{"type":"auth_ok"}');
+    return { t, ws };
+  }
+
+  it("不传 wsFactory：默认工厂建真 WebSocket（jsdom 提供），connect 不炸", () => {
+    const t = new RemoteTransport("wss://relay.example.com");
+    t.connect({ deviceId: "d", token: "t" });
+    // jsdom 的 WebSocket 不会真连上（无服务），onopen 不触发即无后续；直接收尾
+    t.disconnect();
+    expect(t.state).toBe("idle");
+  });
+
+  it("invoke 时底层 send 抛非 Error：包装成 Error 拒绝", async () => {
+    const { t, ws } = authed();
+    // 伪造 send 抛字符串（结构化类型外的野蛮实现）
+    ws().send = () => {
+      throw "野蛮实现";
+    };
+    await expect(t.invoke("list_sessions")).rejects.toBeInstanceOf(Error);
+  });
+
+  it("offStateChange/offReconnected 解绑后不再回调", () => {
+    const { t, ws } = makeTransport();
+    const seen: string[] = [];
+    const reconnected: number[] = [];
+    const stateCb = (s: ConnState) => seen.push(s);
+    const reCb = () => reconnected.push(1);
+    t.onStateChange(stateCb);
+    t.onReconnected(reCb);
+    t.offStateChange(stateCb);
+    t.offReconnected(reCb);
+    t.connect({ deviceId: "dev-1", token: "tok" });
+    ws().open();
+    ws().receive('{"type":"auth_ok"}');
+    expect(seen).toEqual([]); // 解绑后 connecting/authed 都不再收到
+    expect(reconnected).toEqual([]);
+  });
+
+  it("connect 二次调用（换凭据）：旧连接关闭且不触发旧连接重连", () => {
+    const { t, ws } = authed();
+    t.connect({ deviceId: "dev-2", token: "tok2" });
+    // 旧连接已被关（FakeWebSocket.close 同步触发 onclose），且不会进 offline
+    expect(t.state).not.toBe("offline");
+    const ws2 = FakeWebSocket.instances[1];
+    expect(ws2).toBeTruthy();
+    ws2.open();
+    ws2.receive('{"type":"auth_ok"}');
+    expect(t.state).toBe("authed");
+    expect(ws2.sent[0]).toContain('"device_id":"dev-2"');
+  });
+
+  it("offline 退避挂起中 connect（手动重连）：清掉旧计时器，直连不等退避", () => {
+    const { t, ws } = authed();
+    ws().serverClose();
+    expect(t.state).toBe("offline");
+    t.connect({ deviceId: "dev-1", token: "tok" }); // 用户手动重连：应清掉 pending 退避
+    const ws2 = FakeWebSocket.instances[1];
+    expect(ws2).toBeTruthy(); // 立即开新连接，不等 1s 退避
+    ws2.open();
+    ws2.receive('{"type":"auth_ok"}');
+    expect(t.state).toBe("authed");
+    vi.advanceTimersByTime(60000);
+    expect(FakeWebSocket.instances.length).toBe(2); // 旧计时器不会再补一枪
+  });
+
+  it("offline 退避挂起中 disconnect：清掉计时器，不再重连；重复 disconnect 幂等", () => {
+    const { t, ws } = authed();
+    ws().serverClose();
+    expect(t.state).toBe("offline");
+    t.disconnect(); // 清退避计时器
+    t.disconnect(); // 无 ws 幂等
+    expect(t.state).toBe("idle");
+    vi.advanceTimersByTime(60000);
+    expect(FakeWebSocket.instances.length).toBe(1); // 无重连
+  });
+
+  it("迟到的重复 onclose（旧连接晚到）：stale 守卫直接丢弃", () => {
+    const { t, ws } = authed();
+    ws().serverClose();
+    expect(t.state).toBe("offline");
+    // 同一个 ws 再触发一次 onclose（this.ws 已 null ≠ ws）——不应二次调度
+    const before = FakeWebSocket.instances.length;
+    ws().onclose?.(new CloseEvent("close"));
+    vi.advanceTimersByTime(1000);
+    expect(FakeWebSocket.instances.length).toBe(before + 1); // 只重连一次
+  });
+
+  it("auth 等待中断线：authWaiter 拒绝 + 转 offline 继续重连", () => {
+    const { t, ws } = makeTransport();
+    t.connect({ deviceId: "dev-1", token: "tok" });
+    ws().open(); // auth 已发，auth_ok 未回
+    ws().serverClose();
+    expect(t.state).toBe("offline");
+    vi.advanceTimersByTime(1000);
+    expect(FakeWebSocket.instances.length).toBe(2); // 重连发生
+  });
+
+  it("needsPairing 状态下断线：回 idle 且不再重连", () => {
+    const { t, ws } = makeTransport();
+    t.connect({ deviceId: "dev-1", token: "bad" });
+    ws().open();
+    ws().receive('{"type":"auth_error","message":"token 无效"}');
+    expect(t.state).toBe("needsPairing");
+    ws().serverClose();
+    expect(t.state).toBe("idle");
+    vi.advanceTimersByTime(60000);
+    expect(FakeWebSocket.instances.length).toBe(1);
+  });
+
+  it("坏帧（非 JSON）直接丢弃，连接与状态不受影响", () => {
+    const { t, ws } = authed();
+    ws().receive("not-json{{{");
+    expect(t.state).toBe("authed");
+  });
+
+  it("无监听者时 event 到达：安静丢弃", () => {
+    const { t, ws } = authed();
+    expect(() => ws().receive('{"type":"event","event":{"type":"text_delta","delta":"x"}}')).not.toThrow();
+  });
+
+  it("invoke_ok 带未知 id：无 pending 可清，安静忽略", async () => {
+    const { t, ws } = authed();
+    const errors: string[] = [];
+    t.onError((m) => errors.push(m));
+    ws().receive('{"type":"invoke_ok","id":77,"payload":null}');
+    expect(errors).toEqual([]);
+  });
+});

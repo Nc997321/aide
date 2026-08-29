@@ -189,4 +189,116 @@ describe("ChatView（共享闭包适配）", () => {
       expect(fin![0]).toEqual([{ tempId: tempSid, realId: "real-9" }]);
     });
   });
+
+  it("离线时发送被拦截（输入保留，无 send_message）", async () => {
+    const { wrapper, transport } = mountChat();
+    await wrapper.setProps({ connState: "offline" });
+    const textarea = wrapper.find("textarea");
+    expect(textarea.attributes("disabled")).toBeDefined(); // 输入框禁用
+    // 直接调组件内部路径也应有守卫：禁用态下 keydown 不发送
+    await textarea.trigger("keydown", { key: "Enter" });
+    expect(transport.calls.some((c) => c.command === "send_message")).toBe(false);
+  });
+
+  it("权限条点拒绝：permission_response approved=false", async () => {
+    const { wrapper, transport } = mountChat();
+    await vi.waitFor(() => expect(transport.chatEventCb).toBeTruthy());
+    transport.emitChatEvent({
+      type: "permission_request",
+      session_id: "s1",
+      id: "perm-2",
+      name: "Write",
+      input: { file_path: "C:/proj/a.ts" },
+    });
+    await vi.waitFor(() => expect(wrapper.find(".ch-perm").exists()).toBe(true));
+    await wrapper.find(".ch-perm-deny").trigger("click");
+    await vi.waitFor(() => {
+      const resp = transport.calls.find((c) => c.command === "permission_response");
+      expect(resp?.params["approved"]).toBe(false);
+    });
+  });
+
+  it("断线重连后触发整页重载（load_messages 再次调用）", async () => {
+    const { wrapper, transport } = mountChat();
+    await vi.waitFor(() => expect(transport.chatEventCb).toBeTruthy());
+    const before = transport.calls.filter((c) => c.command === "load_messages").length;
+    transport.reconnectedCb?.();
+    await vi.waitFor(() => {
+      expect(transport.calls.filter((c) => c.command === "load_messages").length).toBeGreaterThan(before);
+    });
+    expect(wrapper.text()).toContain("已重连");
+  });
+
+  it("空输入不发送", async () => {
+    const { wrapper, transport } = mountChat();
+    const textarea = wrapper.find("textarea");
+    await textarea.setValue("   ");
+    await textarea.trigger("keydown", { key: "Enter" });
+    expect(transport.calls.some((c) => c.command === "send_message")).toBe(false);
+  });
+
+  it("无工作区归属时发送：workspaceRoot 传 null（Rust 回落桌面活动工作区）", async () => {
+    const { wrapper, transport } = mountChat(); // workspaceKey/Path 均 null
+    const textarea = wrapper.find("textarea");
+    await textarea.setValue("你好");
+    await textarea.trigger("keydown", { key: "Enter" });
+    await vi.waitFor(() => {
+      const send = transport.calls.find((c) => c.command === "send_message");
+      expect(send?.params["workspaceRoot"]).toBeNull();
+    });
+  });
+
+  it("send_message 失败（断线拒收）：sysNote 落错误提示", async () => {
+    const { wrapper, transport } = mountChat();
+    transport.handlers.set("send_message", () => {
+      throw new Error("未连接");
+    });
+    const textarea = wrapper.find("textarea");
+    await textarea.setValue("离线消息");
+    await textarea.trigger("keydown", { key: "Enter" });
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain("发送失败");
+    });
+  });
+
+  it("权限输入超长时摘要截断到 120 字 + 省略号", async () => {
+    const { wrapper, transport } = mountChat();
+    await vi.waitFor(() => expect(transport.chatEventCb).toBeTruthy());
+    const longCmd = "echo " + "x".repeat(200);
+    transport.emitChatEvent({
+      type: "permission_request",
+      session_id: "s1",
+      id: "perm-3",
+      name: "Bash",
+      input: { command: longCmd },
+    });
+    await vi.waitFor(() => {
+      const el = wrapper.find(".ch-perm-input");
+      expect(el.exists()).toBe(true);
+      expect(el.text().length).toBe(121); // 120 + …
+      expect(el.text().endsWith("…")).toBe(true);
+    });
+  });
+
+  it("连接态文案/灯色：connecting→重连中，idle→未连接", async () => {
+    const { wrapper } = mountChat();
+    await wrapper.setProps({ connState: "connecting" });
+    expect(wrapper.text()).toContain("重连中");
+    await wrapper.setProps({ connState: "idle" });
+    expect(wrapper.text()).toContain("未连接");
+  });
+
+  it("permission 请求不带可摘要字段时摘要区不渲染", async () => {
+    const { wrapper, transport } = mountChat();
+    await vi.waitFor(() => expect(transport.chatEventCb).toBeTruthy());
+    transport.emitChatEvent({
+      type: "permission_request",
+      session_id: "s1",
+      id: "perm-4",
+      name: "WebFetch",
+      input: {}, // 无语义化字段
+    });
+    await vi.waitFor(() => expect(wrapper.find(".ch-perm").exists()).toBe(true));
+    expect(wrapper.find(".ch-perm-input").exists()).toBe(false);
+  });
 });

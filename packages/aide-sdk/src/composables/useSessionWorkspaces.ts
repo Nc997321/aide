@@ -51,5 +51,10 @@ export function useSessionWorkspaces() {
     delete workspaces[sessionId];
   }
 
-  return { workspaces, setWorkspace, setMany, workspaceOf, migrate, removeWorkspace };
+  /** 测试钩子：清空注册表（__resetForTest 的全局复位链路一环）。 */
+  function clearAll(): void {
+    for (const k of Object.keys(workspaces)) delete workspaces[k];
+  }
+
+  return { workspaces, setWorkspace, setMany, workspaceOf, migrate, removeWorkspace, clearAll };
 }
