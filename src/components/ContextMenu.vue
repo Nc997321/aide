@@ -53,7 +53,10 @@ function onDocClick(e: MouseEvent) {
 }
 
 function onKeydown(e: KeyboardEvent) {
+  // 消费标记（preventDefault）：PermissionDialog 的 window 级 Esc 见 defaultPrevented
+  // 让路——菜单开着时按 Esc 只关菜单，不同时触发权限弹窗的负面动作。
   if (e.key === "Escape" && visible.value) {
+    e.preventDefault();
     hide();
   }
 }

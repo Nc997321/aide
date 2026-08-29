@@ -31,8 +31,16 @@ watch(visible, async (v) => {
 });
 
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === "Enter" && mode.value !== "custom") submit();
-  if (e.key === "Escape") cancel();
+  // Enter/Escape 被本弹窗消费时 preventDefault——下游 window 级键盘 handler
+  // （PermissionDialog 的 Enter/Esc 确认）见 defaultPrevented 让路，防一次按键双效果。
+  if (e.key === "Enter" && mode.value !== "custom") {
+    e.preventDefault();
+    submit();
+  }
+  if (e.key === "Escape") {
+    e.preventDefault();
+    cancel();
+  }
 }
 
 function onOverlayClick(e: MouseEvent) {

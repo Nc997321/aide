@@ -1,10 +1,16 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from "vitest";
-import { mount } from "@vue/test-utils";
+import { describe, it, expect, afterEach } from "vitest";
+import { mount, enableAutoUnmount } from "@vue/test-utils";
 import { nextTick } from "vue";
 import PermissionDialog from "./PermissionDialog.vue";
+import { useModal } from "../composables/useModal";
 import type { PermissionRequest } from "../types/chat";
 import type { PermissionRule } from "../types/permissions";
+
+// 组件的键盘 handler 挂 window——测试间不卸载会残留 listener：旧 listener 先
+// preventDefault 事件，本测试的 listener 见 defaultPrevented 让路（生产语义正确，
+// 测试里表现为「按键无效果」）。autoUnmount 每个测试后卸干净，杜绝跨测试污染。
+enableAutoUnmount(afterEach);
 
 const bashPermission = (): PermissionRequest => ({
   id: "p1",
@@ -412,5 +418,323 @@ describe("PermissionDialog — 折叠（计划批准 / 澄清提问）", () => {
     expect(wrapper.find('[data-action="deny-reason"]').exists()).toBe(false);
     const skip = [...wrapper.findAll("button")].find((b) => b.text().includes("跳过"));
     expect(skip).toBeTruthy();
+  });
+});
+
+describe("PermissionDialog — 键盘确认（Enter/Esc）", () => {
+  // 键盘 handler 的守卫查 document（.perm-dock 数量 / 遮罩层类名）——必须
+  //  attachTo body 让组件 DOM 进 document。卸载由文件级 enableAutoUnmount 兜底，
+  //  这里只清手动 append 的 textarea / 遮罩 div。
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  function mountAttached(props: Record<string, unknown>) {
+    return mount(PermissionDialog, { props, attachTo: document.body });
+  }
+
+  function press(key: string, init: KeyboardEventInit = {}, target: EventTarget = window): KeyboardEvent {
+    const e = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+    target.dispatchEvent(e);
+    return e;
+  }
+  /** jsdom 的 KeyboardEventInit 不收 isComposing，defineProperty 钉死模拟输入法组合态。 */
+  function pressComposing(key: string, target: EventTarget = window): void {
+    const e = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    Object.defineProperty(e, "isComposing", { value: true });
+    target.dispatchEvent(e);
+  }
+
+  /** 取第 index 条 respond emit——不用 events![i] 非空断言（X2/X3）：先断言总条数
+   *  把契约说死，再用可选链取值，undefined 臂交给 toEqual 判等失败报出。 */
+  function respondEvent(wrapper: ReturnType<typeof mount>, index: number, total: number) {
+    const ev = wrapper.emitted("respond");
+    expect(ev).toHaveLength(total);
+    return ev?.[index];
+  }
+
+  const planPerm = (): PermissionRequest => ({ id: "pp1", name: "ExitPlanMode", input: { plan: "计划正文" } });
+  const questionPerm = (): PermissionRequest => ({
+    id: "qq1",
+    name: "AskUserQuestion",
+    input: {
+      questions: [
+        {
+          question: "用哪个？",
+          header: "选择",
+          options: [
+            { label: "A", description: "" },
+            { label: "B", description: "" },
+          ],
+        },
+      ],
+    },
+  });
+  const confirmPerm = (): PermissionRequest => ({
+    id: "sc1",
+    name: "__sendConfirm__",
+    input: { title: "t", chip: "c", question: "q", info: "i", confirmLabel: "继续发送" },
+  });
+
+  // ── 四种形态的主动作 / 负面出口 ──
+
+  it("工具调用：Enter = 允许（事件被消费）", () => {
+    const wrapper = mountAttached({ permission: bashPermission() });
+    const e = press("Enter");
+    expect(respondEvent(wrapper, 0, 1)).toEqual(["p1", true]);
+    expect(e.defaultPrevented).toBe(true);
+  });
+
+  it("工具调用：Esc = 展开理由输入（不直接拒绝），理由输入自动聚焦", async () => {
+    const wrapper = mountAttached({ permission: bashPermission() });
+    press("Escape");
+    expect(wrapper.emitted("respond")).toBeUndefined();
+    await nextTick();
+    const input = wrapper.get('[data-action="deny-reason"]');
+    expect(input.exists()).toBe(true);
+    expect(document.activeElement).toBe(input.element);
+  });
+
+  it("计划批准：Enter = 批准 Auto 模式（事件被消费）", () => {
+    const wrapper = mountAttached({ permission: planPerm() });
+    const e = press("Enter");
+    expect(respondEvent(wrapper, 0, 1)).toEqual(["pp1", true, undefined, "auto"]);
+    expect(e.defaultPrevented).toBe(true);
+  });
+
+  it("计划批准：Esc = 展开理由输入（事件被消费）", () => {
+    const wrapper = mountAttached({ permission: planPerm() });
+    const e = press("Escape");
+    expect(wrapper.emitted("respond")).toBeUndefined();
+    expect(e.defaultPrevented).toBe(true);
+  });
+
+  it("澄清提问：未作答 Enter 无效果；作答后 Enter = 提交回答", async () => {
+    const wrapper = mountAttached({ permission: questionPerm() });
+    press("Enter");
+    expect(wrapper.emitted("respond")).toBeUndefined(); // canSubmitQuestions 门
+
+    const options = wrapper.findAll(".perm-option");
+    expect(options).toHaveLength(3); // 2 个选项卡 + 1 张「其他…」
+    await options[0]?.trigger("click");
+    press("Enter");
+    expect(respondEvent(wrapper, 0, 1)).toEqual(["qq1", true, { "用哪个？": "A" }]);
+  });
+
+  it("澄清提问：Esc = 跳过", () => {
+    const wrapper = mountAttached({ permission: questionPerm() });
+    press("Escape");
+    expect(respondEvent(wrapper, 0, 1)).toEqual(["qq1", false]);
+  });
+
+  it("发送前确认：Enter = 继续发送", () => {
+    const wrapper = mountAttached({ permission: confirmPerm() });
+    press("Enter");
+    expect(respondEvent(wrapper, 0, 1)).toEqual(["sc1", true]);
+  });
+
+  it("发送前确认：Esc = 取消", () => {
+    const wrapper = mountAttached({ permission: confirmPerm() });
+    press("Escape");
+    expect(respondEvent(wrapper, 0, 1)).toEqual(["sc1", false]);
+  });
+
+  // ── denyOpen 态的两键 ──
+
+  it("理由输入态：window Enter = 提交拒绝（焦点不在输入框也提交）", async () => {
+    const wrapper = mountAttached({ permission: bashPermission() });
+    press("Escape"); // 开理由输入
+    await nextTick();
+    expect(wrapper.find('[data-action="deny-reason"]').exists()).toBe(true);
+    press("Enter"); // 空理由 = 普通拒绝
+    expect(respondEvent(wrapper, 0, 1)).toEqual(["p1", false, undefined, undefined, undefined, undefined]);
+  });
+
+  it("理由输入态：window Esc = 返回按钮态", async () => {
+    const wrapper = mountAttached({ permission: bashPermission() });
+    press("Escape");
+    await nextTick();
+    expect(wrapper.find('[data-action="deny-reason"]').exists()).toBe(true);
+    press("Escape"); // 返回
+    await nextTick(); // 手动 dispatch 不经 VTU trigger，DOM 更新要等下一轮 flush
+    expect(wrapper.emitted("respond")).toBeUndefined();
+    expect(wrapper.find('[data-action="deny-reason"]').exists()).toBe(false);
+    expect(wrapper.find('[data-action="deny"]').exists()).toBe(true);
+  });
+
+  it("焦点在理由输入框时 Esc 走输入框自己的 handler 返回（不双发）", async () => {
+    const wrapper = mountAttached({ permission: bashPermission() });
+    press("Escape");
+    await nextTick();
+    press("Escape", {}, wrapper.get('[data-action="deny-reason"]').element);
+    await nextTick(); // 手动 dispatch 不经 VTU trigger，DOM 更新要等下一轮 flush
+    expect(wrapper.emitted("respond")).toBeUndefined();
+    expect(wrapper.find('[data-action="deny"]').exists()).toBe(true);
+  });
+
+  // ── 守卫分支 ──
+
+  it("无待确认请求时按键不动作", () => {
+    const wrapper = mountAttached({ permission: null });
+    press("Enter");
+    press("Escape");
+    expect(wrapper.emitted("respond")).toBeUndefined();
+  });
+
+  it("焦点在 textarea：Enter/Esc 都让路（聊天输入 / xterm 场景）", () => {
+    const wrapper = mountAttached({ permission: bashPermission() });
+    const ta = document.createElement("textarea");
+    document.body.appendChild(ta);
+    press("Enter", {}, ta);
+    press("Escape", {}, ta);
+    expect(wrapper.emitted("respond")).toBeUndefined();
+    expect(wrapper.find('[data-action="deny-reason"]').exists()).toBe(false);
+  });
+
+  it("焦点在按钮上：Enter 让路给原生 click（防焦点在「允许」上双发）", () => {
+    const wrapper = mountAttached({ permission: bashPermission() });
+    press("Enter", {}, wrapper.get('[data-action="allow"]').element);
+    expect(wrapper.emitted("respond")).toBeUndefined();
+  });
+
+  it("焦点在普通元素（div）：Enter 正常触发主动作", () => {
+    const wrapper = mountAttached({ permission: bashPermission() });
+    const div = document.createElement("div");
+    document.body.appendChild(div);
+    press("Enter", {}, div);
+    expect(respondEvent(wrapper, 0, 1)).toEqual(["p1", true]);
+  });
+
+  it("带修饰键（Ctrl/Shift/Alt/Meta）不动作", () => {
+    const wrapper = mountAttached({ permission: bashPermission() });
+    press("Enter", { ctrlKey: true });
+    press("Enter", { shiftKey: true });
+    press("Escape", { altKey: true });
+    press("Enter", { metaKey: true });
+    expect(wrapper.emitted("respond")).toBeUndefined();
+    expect(wrapper.find('[data-action="deny-reason"]').exists()).toBe(false);
+  });
+
+  it("输入法组合中（isComposing）与按住重复（repeat）不动作", () => {
+    const wrapper = mountAttached({ permission: bashPermission() });
+    pressComposing("Enter");
+    press("Enter", { repeat: true });
+    expect(wrapper.emitted("respond")).toBeUndefined();
+  });
+
+  it("上游已消费（defaultPrevented）让路——一次按键只产生一个效果", () => {
+    const wrapper = mountAttached({ permission: bashPermission() });
+    const e = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    e.preventDefault(); // 模拟 App capture 的 workbench Esc / palette 等先消费
+    window.dispatchEvent(e);
+    expect(wrapper.emitted("respond")).toBeUndefined();
+  });
+
+  it("遮罩层开着（设置面板 / 全局 modal）：按键属于遮罩，不穿透", () => {
+    const wrapper = mountAttached({ permission: bashPermission() });
+    const overlay = document.createElement("div");
+    overlay.className = "settings-overlay";
+    document.body.appendChild(overlay);
+    press("Enter");
+    press("Escape");
+    expect(wrapper.emitted("respond")).toBeUndefined();
+    expect(wrapper.find('[data-action="deny-reason"]').exists()).toBe(false);
+    overlay.remove();
+
+    const { confirm, cancel, visible } = useModal();
+    void confirm("标题", "内容");
+    expect(visible.value).toBe(true);
+    press("Enter");
+    expect(wrapper.emitted("respond")).toBeUndefined();
+    cancel();
+  });
+
+  it("两个弹窗并存（多窗格都待确认）：键盘不动作，强制鼠标（安全缺省）", () => {
+    const w1 = mountAttached({ permission: bashPermission() });
+    const w2 = mountAttached({ permission: { id: "p9", name: "Bash", input: { command: "pwd" } } });
+    press("Enter");
+    expect(w1.emitted("respond")).toBeUndefined();
+    expect(w2.emitted("respond")).toBeUndefined();
+    // 收掉一个后恢复唯一弹窗，键盘恢复响应
+    w2.unmount();
+    press("Enter");
+    expect(respondEvent(w1, 0, 1)).toEqual(["p1", true]);
+  });
+
+  it("非 Enter/Escape 键不动作", () => {
+    const wrapper = mountAttached({ permission: bashPermission() });
+    press("a");
+    press("Tab");
+    expect(wrapper.emitted("respond")).toBeUndefined();
+  });
+
+  // ── 文本输入 Enter 的 IME 守卫 ──
+
+  it("自由文本输入：Enter 提交回答；输入法组合中 Enter（选词）不提交", async () => {
+    const wrapper = mountAttached({ permission: questionPerm() });
+    await wrapper.get(".perm-option--other").trigger("click");
+    const input = wrapper.get(".perm-freetext");
+    await input.setValue("用方案 A");
+    pressComposing("Enter", input.element); // 选词确认
+    expect(wrapper.emitted("respond")).toBeUndefined();
+    press("Enter", {}, input.element); // 真正提交
+    expect(respondEvent(wrapper, 0, 1)).toEqual(["qq1", true, { "用哪个？": "用方案 A" }]);
+  });
+
+  it("理由输入：输入法组合中 Enter（选词）不提交拒绝", async () => {
+    const wrapper = mountAttached({ permission: bashPermission() });
+    press("Escape");
+    await nextTick();
+    const input = wrapper.get('[data-action="deny-reason"]');
+    await input.setValue("别删");
+    pressComposing("Enter", input.element);
+    expect(wrapper.emitted("respond")).toBeUndefined();
+    press("Enter", {}, input.element);
+    expect(respondEvent(wrapper, 0, 1)).toEqual(["p1", false, undefined, undefined, undefined, "别删"]);
+  });
+
+  // ── 点击路径补测（键盘测试绕过了这些 @click 内联 handler，补齐覆盖）──
+
+  it("发送前确认：点击 取消 / 继续发送", async () => {
+    const wrapper = mountAttached({ permission: confirmPerm() });
+    const btns = wrapper.findAll(".perm-btn");
+    expect(btns).toHaveLength(2);
+    await btns[0]?.trigger("click"); // 取消
+    await btns[1]?.trigger("click"); // 继续发送
+    expect(respondEvent(wrapper, 0, 2)).toEqual(["sc1", false]);
+    expect(respondEvent(wrapper, 1, 2)).toEqual(["sc1", true]);
+  });
+
+  it("计划批准：点击三个批准按钮（手动 / 自动接受 / Auto）", async () => {
+    const wrapper = mountAttached({ permission: planPerm() });
+    const buttons = wrapper.findAll(".perm-actions-primary .perm-btn");
+    expect(buttons).toHaveLength(3);
+    for (const b of buttons) await b.trigger("click");
+    expect(respondEvent(wrapper, 0, 3)).toEqual(["pp1", true, undefined, undefined]);
+    expect(respondEvent(wrapper, 1, 3)).toEqual(["pp1", true, undefined, "acceptEdits"]);
+    expect(respondEvent(wrapper, 2, 3)).toEqual(["pp1", true, undefined, "auto"]);
+  });
+
+  // ── 按键提示 chip ──
+
+  it("工具调用：允许/拒绝带 chip，允许并记住/进入编辑模式不带", () => {
+    const wrapper = mountAttached({ permission: bashPermission(), rememberScope: "local" });
+    expect(wrapper.get('[data-action="allow"] .perm-btn-key').text()).toBe("Enter");
+    expect(wrapper.get('[data-action="deny"] .perm-btn-key').text()).toBe("Esc");
+    expect(wrapper.find('[data-action="remember"] .perm-btn-key').exists()).toBe(false);
+  });
+
+  it("计划批准：Auto 主按钮带 Enter chip，两个 outline 批准不带；理由态两键带 chip", async () => {
+    const wrapper = mountAttached({ permission: planPerm() });
+    const solid = wrapper.get(".perm-btn--solid");
+    expect(solid.text()).toContain("批准，使用 Auto 模式");
+    expect(solid.get(".perm-btn-key").text()).toBe("Enter");
+    for (const outline of wrapper.findAll(".perm-actions-primary .perm-btn--outline")) {
+      expect(outline.find(".perm-btn-key").exists()).toBe(false);
+    }
+    press("Escape");
+    await nextTick();
+    expect(wrapper.get('[data-action="deny-submit"] .perm-btn-key').text()).toBe("Enter");
+    expect(wrapper.get('[data-action="deny-back"] .perm-btn-key').text()).toBe("Esc");
   });
 });

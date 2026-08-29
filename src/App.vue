@@ -370,11 +370,11 @@ const tabIconSearch = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor
 const tabIconPermissions = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>';
 
 const rightTabs = computed<Tab[]>(() => [
-  { id: "files", icon: tabIconFiles },
-  { id: "changes", icon: tabIconChanges, badge: changeCount.value || undefined },
-  { id: "git", icon: tabIconGit, badge: unstagedFiles.value.length || undefined },
-  { id: "search", icon: tabIconSearch },
-  { id: "permissions", icon: tabIconPermissions, label: "权限", bottom: true },
+  { id: "files", icon: tabIconFiles, label: "文件 (Ctrl+1)" },
+  { id: "changes", icon: tabIconChanges, badge: changeCount.value || undefined, label: "变更 (Ctrl+2)" },
+  { id: "git", icon: tabIconGit, badge: unstagedFiles.value.length || undefined, label: "Git (Ctrl+3)" },
+  { id: "search", icon: tabIconSearch, label: "搜索 (Ctrl+4)" },
+  { id: "permissions", icon: tabIconPermissions, label: "权限 (Ctrl+5)", bottom: true },
 ]);
 
 /** 右侧竖直工具栏选择（IDEA 式）：点未激活项切换并展开、点已激活项折叠、
@@ -390,6 +390,17 @@ function onRailSelect(id: string) {
     rightTab.value = tab;
   }
 }
+
+/** Ctrl+1~5 → 右侧栏 tab（IDEA Alt+数字语义，走 onRailSelect 的现成裁决：按当前
+ *  激活项 = 折叠右栏）。key 用 e.code 物理键位而非 e.key：AZERTY 等布局数字在
+ *  Shift 层，e.key 产出的是 "&" 不是 "1"。 */
+const RAIL_DIGIT_TABS: Record<string, typeof rightTab.value> = {
+  Digit1: "files",
+  Digit2: "changes",
+  Digit3: "git",
+  Digit4: "search",
+  Digit5: "permissions",
+};
 
 /** 快捷键打开搜索面板：展开右侧 + 切到 search tab + 预选模式并聚焦输入框。
  *  面板已打开时重复按快捷键 = 聚焦输入框（IDEA 行为）。 */
@@ -630,6 +641,9 @@ function handleKeydown(e: KeyboardEvent) {
     !paletteOpen.value &&
     !fromRunDropdown
   ) {
+    // 消费标记：本 handler 在 capture 相最先跑，preventDefault 是给下游（如
+    // PermissionDialog 的 window 键盘确认）的让路信号——一次 Esc 只产生一个效果。
+    e.preventDefault();
     wb.hide();
     return;
   }
@@ -653,6 +667,16 @@ function handleKeydown(e: KeyboardEvent) {
     e.stopPropagation();
     paneLayout.closeActiveTab();
     return;
+  }
+  // Ctrl+1~5：右侧栏 tab 切换（映射与键位选择见 RAIL_DIGIT_TABS 注释）
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+    const railTab = RAIL_DIGIT_TABS[e.code];
+    if (railTab) {
+      e.preventDefault();
+      e.stopPropagation();
+      onRailSelect(railTab);
+      return;
+    }
   }
   // Ctrl+Tab / Ctrl+Shift+Tab：OS Alt+Tab 语义的 MRU 会话切换（跨分屏组全局）。
   // 按住 Ctrl 连按 Tab 沿最近使用列表回溯，松开 Ctrl 提交（见 handleKeyup）。

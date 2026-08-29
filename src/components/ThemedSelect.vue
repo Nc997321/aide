@@ -91,7 +91,12 @@ function onDocPointer(e: PointerEvent) {
 }
 
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape" && open.value) open.value = false;
+  // 消费标记（preventDefault）：PermissionDialog 的 window 级 Esc 见 defaultPrevented
+  // 让路——下拉开着时按 Esc 只关下拉，不同时触发权限弹窗的负面动作。
+  if (e.key === "Escape" && open.value) {
+    e.preventDefault();
+    open.value = false;
+  }
 }
 
 watch(open, async (v) => {

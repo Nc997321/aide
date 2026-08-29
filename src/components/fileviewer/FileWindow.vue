@@ -358,6 +358,9 @@ function onKeydown(e: KeyboardEvent) {
     e.preventDefault();
     if (canFormat.value) formatFile();
   } else if (e.key === "Escape") {
+    // 消费标记（preventDefault）：PermissionDialog 的 window 级 Esc 见 defaultPrevented
+    // 让路——文件窗焦点下按 Esc 只走关窗（含 dirty 确认），不同时触发权限弹窗负面动作。
+    e.preventDefault();
     void requestClose();
   }
 }

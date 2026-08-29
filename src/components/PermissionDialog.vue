@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, reactive, watch } from "vue";
+import { ref, computed, reactive, watch, nextTick, onMounted, onUnmounted } from "vue";
 import type { PermissionRequest } from "@/types/chat";
 import type { PermissionRule, PermissionRuleDraft, PermissionScope } from "@/types/permissions";
 import {
@@ -10,6 +10,7 @@ import {
   stripTrailingNumericArg,
 } from "@/utils/permissionRuleDerivation";
 import { marked } from "@/utils/markdown";
+import { useModal } from "@/composables/useModal";
 import Icon from "./Icon.vue";
 
 interface QuestionOption {
@@ -130,8 +131,11 @@ function toggleCollapse() {
  *  仅 tool / plan 渲染入口（question 的「跳过」/ confirm 的「取消」不带理由）。 */
 const denyOpen = ref(false);
 const denyReason = ref("");
+const denyInputRef = ref<HTMLInputElement | null>(null);
 function openDeny() {
   denyOpen.value = true;
+  // 键盘流（Esc 打开理由输入）要求立刻可输入；鼠标流同样省一次点击。
+  nextTick(() => denyInputRef.value?.focus());
 }
 function closeDeny() {
   denyOpen.value = false;
@@ -145,6 +149,110 @@ function submitDeny() {
   denyOpen.value = false;
   denyReason.value = "";
 }
+
+/** 文本输入框的 Enter 收口：输入法组合中的 Enter 是「确认候选字」而非提交意图——
+ *  isComposing 时让路，防中文选词误提交（deny 理由 / 提问自由文本共用）。 */
+function onTextInputEnter(e: KeyboardEvent, action: () => void) {
+  if (e.isComposing) return;
+  action();
+}
+
+// ── 键盘确认：Enter = 主按钮（允许/批准 Auto/提交回答/继续发送），Esc = 负面出口 ──
+// 挂 window bubble 相（事件链最后一站）。与上游消费者的协作约定：凡吃掉 Esc/Enter
+// 的（App capture 的 workbench Esc、palette/settings/modal 的 Esc）都必须
+// preventDefault——这里见 defaultPrevented 一律让路，一次按键只产生一个效果。
+const { visible: modalVisible } = useModal();
+
+/** 遮罩根类名登记处：这些覆盖层开着时按键属于遮罩，不穿透到权限弹窗（覆盖层都
+ *  v-if 控制，DOM 存在 = 开着）。新增全屏遮罩组件时把根类名加进来。
+ *  workbench-overlay 不在此列：它不是模态、常驻 DOM，其 Esc 收起由 App 的
+ *  capture handler 消费并 preventDefault，走 defaultPrevented 守卫。 */
+const OVERLAY_SELECTOR = [
+  ".settings-overlay",
+  ".a-palette-overlay",
+  ".onboarding-overlay",
+  ".of-overlay",
+  ".rw-overlay",
+  ".trust-overlay",
+  ".fr-overlay",
+  ".picker-overlay",
+  ".pb-overlay",
+].join(", ");
+
+/** 焦点在文本输入类元素上：按键归输入框（聊天输入发送 / deny 理由 / 提问自由
+ *  文本 / xterm helper / palette 输入等，各有自己的 Enter/Esc 语义）。 */
+function isTextEntryTarget(t: EventTarget | null): boolean {
+  return (
+    t instanceof HTMLElement &&
+    !!t.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]')
+  );
+}
+
+/** 焦点在按钮/链接上：Enter 的原生行为就是触发该控件（焦点在「允许」上按 Enter
+ *  = 点击允许），组件再 emit 一次会双发，让路给原生 click。 */
+function isActionTarget(t: EventTarget | null): boolean {
+  return t instanceof HTMLElement && !!t.closest('button, a[href], [role="button"]');
+}
+
+/** 遮罩层开着 = 按键属于遮罩：全局 modal（useModal 单例状态）+ 各覆盖层 DOM。 */
+function isOverlayBlocked(): boolean {
+  return modalVisible.value || !!document.querySelector(OVERLAY_SELECTOR);
+}
+
+/** 多窗格各挂一个 PermissionDialog：两个会话同时待确认时 Enter 会双批——只允许
+ *  「全场唯一待确认弹窗」响应键盘，并存时强制用鼠标（安全缺省，鼠标意图无歧义）。 */
+function isSolePendingDialog(): boolean {
+  return document.querySelectorAll(".perm-dock").length === 1;
+}
+
+function onDialogKeydown(e: KeyboardEvent) {
+  if (!props.permission || e.isComposing || e.repeat) return;
+  if (e.defaultPrevented || isOverlayBlocked() || !isSolePendingDialog()) return;
+  if (e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return;
+  if (e.key === "Enter") onEnterKey(e);
+  else if (e.key === "Escape") onEscapeKey(e);
+}
+
+function onEnterKey(e: KeyboardEvent) {
+  if (isTextEntryTarget(e.target) || isActionTarget(e.target)) return;
+  e.preventDefault();
+  if (denyOpen.value) submitDeny();
+  else primaryAction();
+}
+
+function onEscapeKey(e: KeyboardEvent) {
+  if (isTextEntryTarget(e.target)) return;
+  e.preventDefault();
+  if (denyOpen.value) closeDeny();
+  else negativeAction();
+}
+
+/** Enter 的主动作按弹窗形态分发：确认 = 继续发送、计划 = 批准 Auto（solid 主按钮）、
+ *  提问 = 提交回答（内部有 canSubmitQuestions 门，未答完无效果）、工具 = 允许。 */
+function primaryAction() {
+  const p = props.permission;
+  // 不可达：调用方 onDialogKeydown 已用 !props.permission 守门——防御臂，防未来
+  // 新增调用点绕过守卫。
+  if (!p) return;
+  if (isConfirm.value) emit("respond", p.id, true);
+  else if (isPlanApproval.value) emit("respond", p.id, true, undefined, "auto");
+  else if (isQuestion.value) submitAnswers();
+  else emit("respond", p.id, true);
+}
+
+/** Esc 的负面出口：确认/提问 = 直接取消/跳过（不带理由，对齐按钮语义）；工具/计划
+ *  = 展开理由输入（空理由提交 = 普通拒绝），与点「拒绝」同一条路径。 */
+function negativeAction() {
+  const p = props.permission;
+  // 不可达：调用方 onDialogKeydown 已用 !props.permission 守门——防御臂，防未来
+  // 新增调用点绕过守卫。
+  if (!p) return;
+  if (isConfirm.value || isQuestion.value) emit("respond", p.id, false);
+  else openDeny();
+}
+
+onMounted(() => window.addEventListener("keydown", onDialogKeydown));
+onUnmounted(() => window.removeEventListener("keydown", onDialogKeydown));
 
 watch(
   () => props.permission?.id,
@@ -429,6 +537,7 @@ const inputJson = computed(() => {
             type="text"
             class="perm-freetext"
             placeholder="输入你的回答"
+            @keydown.enter="onTextInputEnter($event, submitAnswers)"
           />
         </div>
       </div>
@@ -490,20 +599,28 @@ const inputJson = computed(() => {
       </div>
       <div class="perm-actions">
         <template v-if="isQuestion">
-          <button class="perm-btn perm-btn--ghost" @click="emit('respond', permission.id, false)">跳过</button>
+          <button class="perm-btn perm-btn--ghost" @click="emit('respond', permission.id, false)">
+            跳过
+            <span class="perm-btn-key">Esc</span>
+          </button>
           <button
             class="perm-btn perm-btn--solid"
             :disabled="!canSubmitQuestions"
             @click="submitAnswers"
           >
             提交回答
+            <span class="perm-btn-key">Enter</span>
           </button>
         </template>
         <template v-else-if="isConfirm">
-          <button class="perm-btn perm-btn--ghost" @click="emit('respond', permission.id, false)">取消</button>
+          <button class="perm-btn perm-btn--ghost" @click="emit('respond', permission.id, false)">
+            取消
+            <span class="perm-btn-key">Esc</span>
+          </button>
           <div class="perm-actions-primary">
             <button class="perm-btn perm-btn--solid" @click="emit('respond', permission.id, true)">
               {{ confirmInput?.confirmLabel }}
+              <span class="perm-btn-key">Enter</span>
             </button>
           </div>
         </template>
@@ -511,25 +628,29 @@ const inputJson = computed(() => {
           <template v-if="denyOpen">
             <div class="perm-deny-row">
               <input
+                ref="denyInputRef"
                 v-model="denyReason"
                 class="perm-deny-input"
                 placeholder="拒绝理由（可选）——告诉模型该怎么改"
                 spellcheck="false"
                 data-action="deny-reason"
-                @keydown.enter="submitDeny"
+                @keydown.enter="onTextInputEnter($event, submitDeny)"
                 @keydown.escape="closeDeny"
               />
             </div>
             <button class="perm-btn perm-btn--outline perm-btn--outline-danger" data-action="deny-submit" @click="submitDeny">
               提交拒绝
+              <span class="perm-btn-key">Enter</span>
             </button>
             <button class="perm-btn perm-btn--ghost" data-action="deny-back" @click="closeDeny">
               返回
+              <span class="perm-btn-key">Esc</span>
             </button>
           </template>
           <template v-else>
             <button class="perm-btn perm-btn--ghost" data-action="deny" @click="openDeny">
               {{ isPlanApproval ? "继续修改计划" : "拒绝" }}
+              <span class="perm-btn-key">Esc</span>
             </button>
             <div class="perm-actions-primary">
               <template v-if="isPlanApproval">
@@ -541,6 +662,7 @@ const inputJson = computed(() => {
                 </button>
                 <button class="perm-btn perm-btn--solid" @click="emit('respond', permission.id, true, undefined, 'auto')">
                   批准，使用 Auto 模式
+                  <span class="perm-btn-key">Enter</span>
                 </button>
               </template>
               <template v-else>
@@ -569,6 +691,7 @@ const inputJson = computed(() => {
                   @click="emit('respond', permission.id, true)"
                 >
                   允许
+                  <span class="perm-btn-key">Enter</span>
                 </button>
               </template>
             </div>
@@ -1108,6 +1231,27 @@ const inputJson = computed(() => {
 .perm-btn--outline-danger {
   border-color: color-mix(in srgb, var(--aide-danger) 35%, transparent);
   color: var(--aide-danger);
+}
+
+/* 按键提示 chip：挂在按钮文本右侧的小标记（Enter/Esc）。currentColor 继承各按钮
+   配色、opacity 压成次要信息；不需要 pointer-events 处理——子元素点击原生冒泡到
+   button 触发，chip 不挡交互。 */
+.perm-btn-key {
+  font-size: 9.5px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 2.5px 5px;
+  border-radius: 4px;
+  border: 1px solid currentColor;
+  opacity: 0.55;
+}
+
+/* outline-danger（提交拒绝）继承 outline 的 column 布局——那是为 main+caption 双行
+   设计的；它只有单行文本 + 提示 chip，切回 row 与其它按钮的视觉对齐一致。 */
+.perm-btn--outline-danger {
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
 }
 
 .perm-btn--outline-danger .perm-btn-caption {

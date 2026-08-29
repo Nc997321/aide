@@ -500,7 +500,12 @@ function onKeydown(e: KeyboardEvent) {
     onRecordKeydown(e);
     return;
   }
-  if (e.key === "Escape") emit("close");
+  // 消费标记（preventDefault）：PermissionDialog 的 window 级 Esc 见 defaultPrevented
+  // 让路——设置面板开着时按 Esc 只关设置，不同时拒绝背后的权限请求。
+  if (e.key === "Escape") {
+    e.preventDefault();
+    emit("close");
+  }
 }
 
 function onOverlayClick(e: MouseEvent) {

@@ -30,7 +30,12 @@ function onDocClick(e: MouseEvent) {
   }
 }
 function onKey(e: KeyboardEvent) {
-  if (e.key === "Escape") open2.value = false;
+  // 只在面板真开着时才消费（preventDefault 标记：PermissionDialog 的 window 级
+  // Esc 见 defaultPrevented 让路）；没开着就不是本组件的按键，不拦截。
+  if (e.key === "Escape" && open2.value) {
+    e.preventDefault();
+    open2.value = false;
+  }
 }
 
 onMounted(() => {

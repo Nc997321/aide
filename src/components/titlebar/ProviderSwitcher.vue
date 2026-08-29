@@ -43,12 +43,20 @@ function onClickOutside(e: MouseEvent) {
   }
 }
 
+/** 只在下拉真开着时才消费 Esc（preventDefault 标记：PermissionDialog 的 window 级
+ *  Esc 见 defaultPrevented 让路）；没开着就不是本组件的按键，不拦截。 */
+function onEsc(e: KeyboardEvent) {
+  if (!open.value) return;
+  e.preventDefault();
+  open.value = false;
+}
+
 onMounted(() => document.addEventListener("click", onClickOutside));
 onUnmounted(() => document.removeEventListener("click", onClickOutside));
 </script>
 
 <template>
-  <div ref="rootRef" class="provider-switcher" @keydown.esc="open = false">
+  <div ref="rootRef" class="provider-switcher" @keydown.esc="onEsc">
     <button
       class="provider-trigger"
       :class="{ open }"
