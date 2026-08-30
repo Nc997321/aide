@@ -13,7 +13,7 @@ const RunConfigsDialog = defineAsyncComponent(() => import("./components/RunConf
 import PaneLayout from "./components/PaneLayout.vue";
 import AutomationMain from "./components/automation/AutomationMain.vue";
 import { useAutomation } from "./composables/useAutomation";
-import { useChatSession, isPendingSession, setAuthRequiredHandler } from "./composables/useChatSession";
+import { useChatSession, setAuthRequiredHandler } from "./composables/useChatSession";
 import { usePaneLayout } from "./composables/usePaneLayout";
 import { usePaneLayoutPersistence } from "./composables/paneLayout/persistence";
 import { useSessionNames } from "./composables/useSessionNames";
@@ -48,8 +48,7 @@ import { useRunConfigs } from "./composables/useRunConfigs";
 import { useWorkspaceJdk } from "./composables/useWorkspaceJdk";
 import { matchShortcut } from "./utils/shortcut";
 import { applyTheme, themes } from "./themes";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
+import { listen } from "./api";
 import { snapshotScrollTrail, probeRebuildChatScrollers } from "./utils/diagnostics/scrollTrail";
 import { useFileViewer } from "./composables/useFileViewer";
 import { useRecent } from "./composables/useRecent";
@@ -65,39 +64,6 @@ const leftCollapsed = ref(false);
 const rightCollapsed = ref(false);
 const rightTab = ref<"files" | "changes" | "git" | "search" | "permissions">("files");
 const { unstagedFiles, hasChanges, loadStatus, currentBranch } = useGit();
-
-// Session activity for titlebar
-import { useSessionState, type SessionStatus } from "./composables/useSessionState";
-export interface ActiveSessionInfo {
-  id: string;
-  name: string;
-  status: SessionStatus;
-  wsKey: string;
-}
-const { state: sessionStateMap } = useSessionState();
-const activeSessionList = computed<ActiveSessionInfo[]>(() => {
-  const allSessions = sidebarRef.value?.sessionsByWorkspace ?? {};
-  const lookup = new Map<string, { name: string; wsKey: string }>();
-  for (const [wsKey, list] of Object.entries(allSessions)) {
-    for (const s of list) lookup.set(s.id, { name: s.name, wsKey });
-  }
-  const result: ActiveSessionInfo[] = [];
-  for (const [id, status] of Object.entries(sessionStateMap)) {
-    if (status === "stopped") continue;
-    const info = lookup.get(id);
-    result.push({
-      id,
-      name: info?.name || (isPendingSession(id) ? "新会话" : id.slice(0, 8)),
-      status,
-      wsKey: info?.wsKey || "",
-    });
-  }
-  result.sort((a, b) => {
-    const order: Record<string, number> = { running: 0, attention: 1, waiting: 2 };
-    return (order[a.status] ?? 3) - (order[b.status] ?? 3);
-  });
-  return result;
-});
 
 const leftResize = useResizable({
   cssVar: "--aide-left-w",
@@ -226,7 +192,7 @@ const { settings, update: updateSettings, dismissJdkPrompt: persistJdkDismissal 
 const onboarding = useOnboarding();
 
 // 「打开方式」事件监听句柄，onUnmounted 时释放
-let unlistenOpenFile: UnlistenFn | null = null;
+let unlistenOpenFile: (() => void) | null = null;
 const workbenchHeight = ref(settings.workbenchHeight || Math.floor(window.innerHeight * 0.45));
 const wb = useWorkbenchTerminal();
 const { run: runProject } = useRunProject();
@@ -736,21 +702,19 @@ function handleKeydown(e: KeyboardEvent) {
   }
 
   // Ctrl+Alt+I：打开 WebView2 devtools。仅 dev build / 诊断包（--features devtools）可用；
-  // 正常 release 的 open_devtools command 不注册，invoke 静默 reject。避开 F12/Ctrl+Shift+I
+  // 正常 release 的 open_devtools command 不注册，调用静默 reject。避开 F12/Ctrl+Shift+I
   // 这类可能被浏览器加速器键拦截的组合
   if (e.ctrlKey && e.altKey && (e.code === "KeyI" || e.key === "I")) {
     e.preventDefault();
     e.stopPropagation();
-    void invoke("open_devtools").catch(() => {});
+    void api.openDevtools().catch(() => {});
   }
 }
 
 /** 滚动诊断环快照 → Rust 落盘；诊断永不影响业务，失败仅通知。 */
 async function dumpScrollTrail() {
   try {
-    const path = await invoke<string>("diag_scroll_trail", {
-      payload: JSON.stringify(snapshotScrollTrail()),
-    });
+    const path = await api.diagScrollTrail(JSON.stringify(snapshotScrollTrail()));
     pushNotification({
       severity: "info",
       source: "diagnostics",
@@ -989,7 +953,6 @@ onUnmounted(() => {
       ref="titleBarRef"
       :project-name="projectName"
       :git-branch="currentBranch"
-      :active-sessions="activeSessionList"
       :run-configs="runConfigs"
       :active-run-config="activeRunConfig"
       :run-states="runStates"
@@ -997,7 +960,6 @@ onUnmounted(() => {
       :right-collapsed="rightCollapsed"
       :workspace-root="workspacePath"
       @open-palette="paletteOpen = true"
-      @select-session="(s) => sidebarRef?.selectSessionFromWorkspace(s.wsKey, s.id)"
       @run-project="onRunProject"
       @stop-project="onStopProject"
       @restart-project="onRestartProject"

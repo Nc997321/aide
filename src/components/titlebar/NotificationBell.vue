@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from "vue";
 import { useNotifications } from "../../composables/useNotifications";
-import { open } from "@tauri-apps/plugin-shell";
+import { openExternal } from "../../api";
 import type { AppNotification } from "../../types";
 
 const { notifications, unreadCount, clearAll, markAllRead, dismiss, triggerAction } =
@@ -72,7 +72,7 @@ function timeLabel(ts: number): string {
 
 function onAction(n: AppNotification) {
   if (n.action?.url) {
-    void open(n.action.url);
+    void openExternal(n.action.url);
   } else {
     triggerAction(n.id);
   }

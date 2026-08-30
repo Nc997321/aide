@@ -1,6 +1,5 @@
 import { ref, watch, getCurrentScope, onScopeDispose, type Ref } from "vue";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { api } from "../api";
+import { api, listen } from "../api";
 
 /** 语言 server 状态。idle = 未探测（LSP 关 / 未打开过面板）。 */
 export type LspServerStatus = "idle" | "ok" | "missing" | "failed" | "indexing";
@@ -49,8 +48,8 @@ export function useLspStatus(getWorkspaceRoot: () => string, enabled: Ref<boolea
   /** lang → 90s 慢索引计时器（indexing 进入起；ready/重 probe/切工作区清）。 */
   const slowTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let listening = false;
-  let unlistenReady: UnlistenFn | null = null;
-  let unlistenDead: UnlistenFn | null = null;
+  let unlistenReady: (() => void) | null = null;
+  let unlistenDead: (() => void) | null = null;
 
   function clearSlowTimer(lang: string) {
     const t = slowTimers.get(lang);

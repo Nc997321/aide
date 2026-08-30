@@ -12,14 +12,14 @@
  * 数据来自 useGit.compare（git_compare_branches）。全 var(--aide-*)。
  */
 import { ref, computed, onMounted, nextTick, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { api } from "../../api";
 import ThemedSelect from "../ThemedSelect.vue";
 import GitCommitRow from "./GitCommitRow.vue";
 import GitFileRow from "./GitFileRow.vue";
 import { useGit } from "../../composables/useGit";
 import { useFileViewer } from "../../composables/useFileViewer";
 import { useToast } from "../../composables/useToast";
-import type { CompareFile, CommitDetail, DiffEntry, DiffPair } from "../../types";
+import type { CompareFile, CommitDetail, DiffEntry } from "../../types";
 
 const { currentBranch, branches, projectRoot, compare, compareLoading, compareError, loadCompare, clearCompare, loadCommitDetail, toAbsPath } =
   useGit();
@@ -94,12 +94,12 @@ async function toggleCompareCommit(hash: string) {
 async function onCompareFileClick(f: CompareFile) {
   // 文件差异组：base vs head 的行级 diff
   try {
-    const pair = await invoke<DiffPair>("git_diff_pair_refs", {
-      path: f.path,
-      base: currentBranch.value || undefined,
-      head: headBranch.value,
-      oldPath: f.oldPath ?? undefined,
-    });
+    // base 必填（对比场景 currentBranch 恒非空；空串与旧 undefined 同走失败兜底）
+    const pair = await api.gitDiffPairRefs(
+      f.path,
+      { base: currentBranch.value, head: headBranch.value },
+      f.oldPath,
+    );
     fileViewer.open(toAbsPath(f.path), { diffPair: pair });
   } catch (e) {
     showToast(`加载 diff 失败：${typeof e === "string" ? e : (e as Error).message || e}`, "danger");
@@ -109,7 +109,7 @@ async function onCompareFileClick(f: CompareFile) {
 async function onCommitFileClick(f: DiffEntry, hash: string) {
   // 提交详情文件：该提交的行级 diff（h^ vs h）
   try {
-    const pair = await invoke<DiffPair>("git_diff_pair", { path: f.path, commitHash: hash });
+    const pair = await api.gitDiffPair(f.path, { commitHash: hash });
     // 同 GitPanel：git 用相对路径，fileViewer 窗口用绝对路径
     fileViewer.open(toAbsPath(f.path), { diffPair: pair });
   } catch (e) {

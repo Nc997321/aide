@@ -8,21 +8,12 @@ import ProviderSwitcher from "./ProviderSwitcher.vue";
 import AppLogo from "../AppLogo.vue";
 import Icon from "../Icon.vue";
 import { isWindows } from "../../utils/platform";
-import type { SessionStatus } from "../../composables/useSessionState";
 import type { RunStatus } from "../../composables/useRunProcess";
 import type { RunConfig } from "../../types";
-
-interface ActiveSessionInfo {
-  id: string;
-  name: string;
-  status: SessionStatus;
-  wsKey: string;
-}
 
 const props = defineProps<{
   projectName?: string;
   gitBranch?: string;
-  activeSessions?: ActiveSessionInfo[];
   runConfigs?: RunConfig[];
   activeRunConfig?: RunConfig | null;
   // 每配置独立运行状态（键 = RunConfig.id）——支持多模块并行。主按钮显示
@@ -36,7 +27,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "open-palette": [];
-  "select-session": [session: ActiveSessionInfo];
   "run-project": [id?: string];
   "select-run-config": [id: string];
   "edit-run-configs": [];
@@ -49,40 +39,12 @@ const emit = defineEmits<{
   "open-settings-providers": [];
 }>();
 
-function onSelectSession(s: ActiveSessionInfo) {
-  panelOpen.value = false;
-  emit("select-session", s);
-}
-
 // LspIndicator 程序化展开：App.vue 预防式 JDK 提示「去配置 JDK」→ 领到这里。
 const lspIndicatorRef = ref<InstanceType<typeof LspIndicator> | null>(null);
 function openLspPanel() {
   lspIndicatorRef.value?.openPanel();
 }
 defineExpose({ openLspPanel });
-
-const STATUS_LABEL: Record<string, string> = {
-  running: "运行中",
-  waiting: "已就绪",
-  attention: "待确认",
-};
-
-const STATUS_CLASS: Record<string, string> = {
-  running: "status-running",
-  waiting: "status-waiting",
-  attention: "status-attention",
-};
-
-const panelOpen = ref(false);
-let closeTimer: ReturnType<typeof setTimeout> | null = null;
-
-function showPanel() {
-  if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
-  panelOpen.value = true;
-}
-function hidePanel() {
-  closeTimer = setTimeout(() => { panelOpen.value = false; }, 150);
-}
 
 // Run config dropdown — click-to-open, searchable, keyboard-navigable.
 // 运行状态按配置独立跟踪（runStates: configId -> RunStatus），支持多模块并行：
@@ -154,10 +116,6 @@ function onDocClick(e: MouseEvent) {
 }
 onMounted(() => document.addEventListener("click", onDocClick));
 onUnmounted(() => document.removeEventListener("click", onDocClick));
-
-const runningCount = computed(() =>
-  (props.activeSessions ?? []).filter(s => s.status === "running").length
-);
 
 // 取某配置的运行状态（缺省 idle——从未启动过）。
 function statusOf(cfgId: string | undefined): RunStatus {
@@ -356,36 +314,10 @@ function isRowRunning(cfg: RunConfig): boolean {
       <kbd class="titlebar-search-kbd">Ctrl+P</kbd>
     </button>
 
-    <!-- Right: activity indicator + window controls -->
+    <!-- Right: window controls -->
     <div class="titlebar-right">
       <NotificationBell />
       <LspIndicator ref="lspIndicatorRef" :workspace-root="workspaceRoot" />
-      <div
-        v-if="(activeSessions ?? []).length > 0"
-        class="titlebar-activity"
-        @mouseenter="showPanel"
-        @mouseleave="hidePanel"
-      >
-        <span class="activity-dot" :class="{ pulsing: runningCount > 0 }" />
-        <span class="activity-count">{{ activeSessions!.length }}</span>
-
-        <!-- Hover panel -->
-        <Transition name="activity-panel">
-          <div v-if="panelOpen" class="activity-panel" @mouseenter="showPanel" @mouseleave="hidePanel">
-            <div class="activity-panel-header">活跃会话</div>
-            <div
-              v-for="s in activeSessions"
-              :key="s.id"
-              class="activity-panel-item"
-              @click="onSelectSession(s)"
-            >
-              <span class="activity-item-dot" :class="STATUS_CLASS[s.status]" />
-              <span class="activity-item-name">{{ s.name }}</span>
-              <span class="activity-item-status">{{ STATUS_LABEL[s.status] || s.status }}</span>
-            </div>
-          </div>
-        </Transition>
-      </div>
       <SidebarToggle
         side="right"
         :collapsed="!!rightCollapsed"
@@ -546,130 +478,6 @@ function isRowRunning(cfg: RunConfig): boolean {
   align-items: center;
   flex-shrink: 0;
   height: 100%;
-}
-
-.titlebar-activity {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0 12px;
-  height: 100%;
-  cursor: default;
-}
-
-.activity-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--aide-success);
-}
-
-.activity-dot.pulsing {
-  box-shadow: 0 0 6px color-mix(in srgb, var(--aide-success) 50%, transparent);
-  animation: activity-pulse 2s ease-in-out infinite;
-}
-
-@keyframes activity-pulse {
-  0%, 100% { opacity: 0.6; }
-  50% { opacity: 1; }
-}
-
-.activity-count {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--aide-text-secondary);
-  min-width: 12px;
-}
-
-/* ── Hover panel ── */
-
-.activity-panel {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  min-width: 200px;
-  max-width: 280px;
-  background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border-strong);
-  border-radius: var(--aide-radius-md);
-  box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
-  padding: 6px 0;
-  z-index: 900;
-  backdrop-filter: var(--aide-surface-blur);
-}
-
-.activity-panel-header {
-  padding: 6px 14px 8px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--aide-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  border-bottom: 1px solid var(--aide-border);
-  margin-bottom: 4px;
-}
-
-.activity-panel-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-
-.activity-panel-item:hover {
-  background: var(--aide-surface-default);
-}
-
-.activity-item-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.activity-item-dot.status-running {
-  background: var(--aide-success);
-  box-shadow: 0 0 4px color-mix(in srgb, var(--aide-success) 40%, transparent);
-}
-
-.activity-item-dot.status-waiting {
-  background: var(--aide-info);
-}
-
-.activity-item-dot.status-attention {
-  background: var(--aide-warning);
-  box-shadow: 0 0 4px color-mix(in srgb, var(--aide-warning) 40%, transparent);
-}
-
-.activity-item-name {
-  flex: 1;
-  font-size: 12px;
-  color: var(--aide-text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.activity-item-status {
-  font-size: 10px;
-  color: var(--aide-text-muted);
-  flex-shrink: 0;
-}
-
-/* ── Panel transition ── */
-
-.activity-panel-enter-active,
-.activity-panel-leave-active {
-  transition: opacity var(--aide-ease-t), transform var(--aide-ease-t);
-}
-
-.activity-panel-enter-from,
-.activity-panel-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
 }
 
 /* ── Run config group ── */

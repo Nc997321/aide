@@ -1,5 +1,5 @@
 import { ref } from "vue";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "../api";
 import { api } from "../api";
 import { useWorkbenchTerminal } from "./useWorkbenchTerminal";
 import { useWorkspaces } from "./useWorkspaces";
@@ -16,7 +16,7 @@ export type RunStatus = "idle" | "running" | "stopped" | "crashed";
 // 跑一个」的假设，会堵死多模块并行——启动 B 不应停掉 A）。终端层本就是多 tab
 // 的（每个 run__{id} 独立 session + 独立 tab），这里把状态层也对齐成多实例。
 const runStates = ref<Record<string, RunStatus>>({});
-let unlistenExit: UnlistenFn | null = null;
+let unlistenExit: (() => void) | null = null;
 
 function sessionOf(configId: string): string {
   return `run__${configId}`;

@@ -28,6 +28,18 @@ const state = reactive<Record<string, SessionStatus>>({});
 const health = reactive<Record<string, SessionHealth>>({});
 // 每会话一个软超时定时器（非 reactive，纯副作用句柄）。
 const stalledTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+// 非交互式会话（自动化运行/蒸馏轮等，无用户面板）：session_init 时发现事件路由键
+// 与 SDK 真实 id 不一致即可判定，标记后所有状态写入静默丢弃——不登记就不会产生
+// 「永远收不到终态的孤儿 running 条目」。removeSessionState 时解除标记。
+const untrackedSids = new Set<string>();
+
+/** 标记一个会话为「不跟踪」：清掉已有条目，后续 setSessionState/armStalled 全部 no-op。 */
+export function markSessionUntracked(id: string) {
+  untrackedSids.add(id);
+  delete state[id];
+  delete health[id];
+  clearStalled(id);
+}
 
 function clearStalled(id: string) {
   const t = stalledTimers[id];
@@ -39,6 +51,7 @@ function clearStalled(id: string) {
 
 export function useSessionState() {
   function setSessionState(id: string, status: SessionStatus) {
+    if (untrackedSids.has(id)) return;
     state[id] = status;
     // 离开 running（waiting/attention/stopped）即停软超时：attention 期间用户可能
     // 长时间不答权限弹窗，不该误判卡住；waiting/stopped 也不需要计时。
@@ -47,10 +60,12 @@ export function useSessionState() {
   }
 
   function setSessionHealth(id: string, h: SessionHealth) {
+    if (untrackedSids.has(id)) return;
     health[id] = h;
   }
 
   function removeSessionState(id: string) {
+    untrackedSids.delete(id);
     delete state[id];
     delete health[id];
     clearStalled(id);
@@ -59,6 +74,7 @@ export function useSessionState() {
   /** 重置软超时定时器：running 期间每收到一个事件调用一次；超过 STALLED_MS 无事件
    *  则把 health 置 stalled。回调里再次校验 running，避免在已离开 running 后误触发。 */
   function armStalled(id: string) {
+    if (untrackedSids.has(id)) return;
     clearStalled(id);
     stalledTimers[id] = setTimeout(() => {
       delete stalledTimers[id];

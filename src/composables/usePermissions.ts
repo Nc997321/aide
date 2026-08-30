@@ -1,5 +1,5 @@
 import { reactive, ref, readonly } from "vue";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "../api";
 import { permissionsApi as defaultApi } from "../api/permissions";
 import type {
   PermissionScope,
@@ -31,7 +31,7 @@ function emptyDraft(scope: PermissionScope): PermissionDraft {
 // revision 比较跳过自己写入后的回环（applyView 已更新，payload 不大于本地）。
 type ExternalRefetcher = { refetch: (revision: number) => void };
 let extRefetcher: ExternalRefetcher | null = null;
-let extListenerPromise: Promise<UnlistenFn> | null = null;
+let extListenerPromise: Promise<() => void> | null = null;
 
 function ensureExternalListener(): void {
   if (extListenerPromise) return;
@@ -39,7 +39,7 @@ function ensureExternalListener(): void {
     extRefetcher?.refetch(e.payload);
   }).catch(() => {
     extListenerPromise = null; // 注册失败（如测试环境无 Tauri）可重试
-    return (() => {}) as UnlistenFn;
+    return () => {};
   });
 }
 

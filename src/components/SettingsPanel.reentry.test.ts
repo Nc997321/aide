@@ -36,7 +36,6 @@ vi.mock("../composables/useCustomizations", () => ({
   }),
 }));
 vi.mock("../api", () => ({ api: new Proxy({}, { get: () => vi.fn().mockResolvedValue(undefined) }) }));
-vi.mock("@tauri-apps/api/app", () => ({ getVersion: vi.fn().mockResolvedValue("0.0.0") }));
 
 import SettingsPanel from "./SettingsPanel.vue";
 

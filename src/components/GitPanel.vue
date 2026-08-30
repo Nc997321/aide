@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { api } from "../api";
 import { useGit } from "../composables/useGit";
 import { useFileViewer } from "../composables/useFileViewer";
 import { useModal } from "../composables/useModal";
@@ -10,7 +10,6 @@ import ATabBar from "../ui/ATabBar.vue";
 import GitCompare from "./git-panel/GitCompare.vue";
 import GitTags from "./git-panel/GitTags.vue";
 import { parseGitError } from "../utils/errors";
-import type { DiffPair } from "../types";
 
 const {
   commits,
@@ -193,10 +192,8 @@ function onFileClick(path: string, staged?: boolean, commitHash?: string) {
 
 async function openDiffInViewer(relPath: string, staged?: boolean, commitHash?: string) {
   try {
-    const params: Record<string, unknown> = { path: relPath };
-    if (staged !== undefined) params.staged = staged;
-    if (commitHash) params.commitHash = commitHash;
-    const pair = await invoke<DiffPair>("git_diff_pair", params);
+    // staged undefined / commitHash 空 → null（Rust None），与旧「不传 key」语义一致
+    const pair = await api.gitDiffPair(relPath, { staged, commitHash: commitHash || undefined });
     // git 命令吃仓库相对路径；fileViewer 窗口必须拿绝对路径
     // （文件树定位/打开真实文件/路径展示都建立在绝对路径约定上）
     fileViewer.open(toAbsPath(relPath), { diffPair: pair });
@@ -214,7 +211,7 @@ async function onDeleteUntracked(path: string) {
   );
   if (!ok) return;
   try {
-    await invoke("delete_file", { path: `${projectRoot.value}/${path}` });
+    await api.deleteFile(`${projectRoot.value}/${path}`);
     await loadStatus();
   } catch (e) {
     console.error("[GitPanel] delete untracked:", e);
@@ -350,10 +347,10 @@ async function onErrorAction(kind: string) {
     switchError.value = "";
     stashPopWarning.value = "";
     try {
-      await invoke("git_stash");
+      await api.gitStash();
       await switchBranch(pendingBranch.value);
       try {
-        await invoke("git_stash_pop");
+        await api.gitStashPop();
       } catch (popErr) {
         const msg = typeof popErr === "string" ? popErr : (popErr as Error).message || "";
         stashPopWarning.value = msg.includes("CONFLICT") || msg.includes("conflict")
@@ -374,7 +371,7 @@ async function onErrorAction(kind: string) {
     if (!ok) return;
     switchError.value = "";
     try {
-      await invoke("git_discard_all");
+      await api.gitDiscardAll();
       await switchBranch(pendingBranch.value);
     } catch (e) {
       switchError.value = typeof e === "string" ? e : (e as Error).message || "丢弃并切换失败";
@@ -384,11 +381,11 @@ async function onErrorAction(kind: string) {
     clearPullError();
     stashPopWarning.value = "";
     try {
-      await invoke("git_stash");
+      await api.gitStash();
       const o = await doPull();
       showToast(o.summary, o.alreadyUpToDate ? "info" : "success");
       try {
-        await invoke("git_stash_pop");
+        await api.gitStashPop();
       } catch (popErr) {
         const msg = typeof popErr === "string" ? popErr : (popErr as Error).message || "";
         stashPopWarning.value = msg.includes("CONFLICT") || msg.includes("conflict")

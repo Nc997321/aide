@@ -1,7 +1,9 @@
 import { getTransport } from "./transport";
 import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem, LoadMessagesResult,
-  ProjectInfo, DiffEntry, LastEventInfo, ChangeRound, AppSettings,
+  ProjectInfo, DiffEntry, DiffPair, LastEventInfo, ChangeRound, AppSettings,
+  CommitEntry, CommitDetail, BranchInfo, GitStatusEntry, StashEntry,
+  AheadBehind, FetchPullOutcome, TagEntry, CompareResult,
   GrepMatch, ProviderConfig, ProviderConfigInput, ProviderModelMappings, RunConfig, RunTarget, JdkEntry, RecentView,
   SearchOptions, SearchResponse, ReplacePreviewResponse, ReplaceFileInput, ApplyResult,
   SkillMeta, BuildIndexResult, BuildProgress, RescanResult, QueryResult, LspJumpResult,
@@ -64,6 +66,15 @@ export interface StartBtwParams {
   effort?: string | null;
   tools?: string[] | null;
   permissionPolicy?: unknown | null;
+}
+
+/** diag_heartbeat 的负载（IPC 边界 DTO，镜像 Rust HeartbeatPayload）。 */
+export interface DiagHeartbeatPayload {
+  lagMaxMs: number;
+  longTaskCount: number;
+  longTaskMaxMs: number;
+  crumbs: unknown[];
+  hidden: boolean;
 }
 
 export const api = {
@@ -277,12 +288,150 @@ export const api = {
     return getTransport().invoke("apply_replacements", { files });
   },
 
-  // Git
+  // Git（自足的「状态读取」组；写操作调用后需调用方自行刷新状态）
   gitDiffFiles(): Promise<DiffEntry[]> {
     return getTransport().invoke("git_diff_files");
   },
   gitRevertFile(path: string): Promise<void> {
     return getTransport().invoke("git_revert_file", { path });
+  },
+  gitBranches(): Promise<BranchInfo[]> {
+    return getTransport().invoke("git_branches");
+  },
+  /** 分页日志；branch null = 当前分支，skip 为已加载条数（翻页）。 */
+  gitLog(limit?: number | null, branch?: string | null, skip?: number | null): Promise<CommitEntry[]> {
+    return getTransport().invoke("git_log", {
+      limit: limit ?? null,
+      branch: branch ?? null,
+      skip: skip ?? null,
+    });
+  },
+  gitStatus(): Promise<{ entries: GitStatusEntry[] }> {
+    return getTransport().invoke("git_status");
+  },
+  /** 未推送提交 hash 集（前端用 Set 标记「待推送」装饰）。 */
+  gitUnpushedCommits(): Promise<string[]> {
+    return getTransport().invoke("git_unpushed_commits");
+  },
+  gitStashList(): Promise<StashEntry[]> {
+    return getTransport().invoke("git_stash_list");
+  },
+  gitAheadBehind(): Promise<AheadBehind> {
+    return getTransport().invoke("git_ahead_behind");
+  },
+  gitTags(): Promise<TagEntry[]> {
+    return getTransport().invoke("git_tags");
+  },
+  /** 分支对比；base null = 后端取当前分支。 */
+  gitCompareBranches(head: string, base?: string | null): Promise<CompareResult> {
+    return getTransport().invoke("git_compare_branches", { head, base: base ?? null });
+  },
+  gitShow(hash: string): Promise<CommitDetail> {
+    return getTransport().invoke("git_show", { hash });
+  },
+  gitCheckout(branch: string): Promise<void> {
+    return getTransport().invoke("git_checkout", { branch });
+  },
+  gitCreateBranch(name: string): Promise<void> {
+    return getTransport().invoke("git_create_branch", { name });
+  },
+  gitDeleteBranch(name: string, force?: boolean): Promise<void> {
+    return getTransport().invoke("git_delete_branch", { name, force: force ?? false });
+  },
+  gitStageFile(path: string): Promise<void> {
+    return getTransport().invoke("git_stage_file", { path });
+  },
+  gitUnstageFile(path: string): Promise<void> {
+    return getTransport().invoke("git_unstage_file", { path });
+  },
+  gitStageAll(): Promise<void> {
+    return getTransport().invoke("git_stage_all");
+  },
+  gitUnstageAll(): Promise<void> {
+    return getTransport().invoke("git_unstage_all");
+  },
+  /** 提交；amend = 修订上一次提交。返回新提交 hash。 */
+  gitCommit(message: string, amend?: boolean): Promise<string> {
+    return getTransport().invoke("git_commit", { message, amend: amend ?? false });
+  },
+  gitFetch(): Promise<FetchPullOutcome> {
+    return getTransport().invoke("git_fetch");
+  },
+  gitPush(force?: boolean): Promise<void> {
+    return getTransport().invoke("git_push", { force: force ?? false });
+  },
+  gitPull(): Promise<FetchPullOutcome> {
+    return getTransport().invoke("git_pull");
+  },
+  /** stash 推入；message null = git 默认消息。 */
+  gitStash(message?: string | null): Promise<void> {
+    return getTransport().invoke("git_stash", { message: message ?? null });
+  },
+  gitStashApply(index: number): Promise<void> {
+    return getTransport().invoke("git_stash_apply", { index });
+  },
+  /** index null = 最新一条（git stash pop 无参语义）。 */
+  gitStashPop(index?: number | null): Promise<void> {
+    return getTransport().invoke("git_stash_pop", { index: index ?? null });
+  },
+  gitStashDrop(index: number): Promise<void> {
+    return getTransport().invoke("git_stash_drop", { index });
+  },
+  /** 丢弃全部工作区改动（确认对话框在后端之前由前端负责）。 */
+  gitDiscardAll(): Promise<void> {
+    return getTransport().invoke("git_discard_all");
+  },
+  /** 仓库指纹（分支/HEAD/status 摘要 hash）——watcher 轮询判断「有无变化」。 */
+  gitFingerprint(): Promise<string> {
+    return getTransport().invoke("git_fingerprint");
+  },
+  /** 远端 URL（origin）；无远端返回 null——更新检查/外链跳转用。 */
+  gitRemoteUrl(): Promise<string | null> {
+    return getTransport().invoke("git_remote_url");
+  },
+  /** 行级 diff 双份原文：工作区变更（staged）或历史提交（commitHash），二选一。
+   *  未指定的键拍平为 null（Rust Option None）。 */
+  gitDiffPair(path: string, opts?: { staged?: boolean; commitHash?: string }): Promise<DiffPair> {
+    return getTransport().invoke("git_diff_pair", {
+      path,
+      staged: opts?.staged ?? null,
+      commitHash: opts?.commitHash ?? null,
+    });
+  },
+  /** 行级 diff 双份原文：任意两 ref 直比（分支对比视图）。base 必填（对比场景恒有）。 */
+  gitDiffPairRefs(path: string, refs: { base: string; head: string }, oldPath?: string): Promise<DiffPair> {
+    return getTransport().invoke("git_diff_pair_refs", {
+      path,
+      base: refs.base,
+      head: refs.head,
+      oldPath: oldPath ?? null,
+    });
+  },
+
+  // 应用 / 诊断
+  /** 打开 WebView2 devtools；仅 dev/诊断 build 注册了命令，release 静默 reject。 */
+  openDevtools(): Promise<void> {
+    return getTransport().invoke("open_devtools");
+  },
+  /** 应用版本号（桌面 = Rust package_info；远端 PWA 不走此方法）。 */
+  appVersion(): Promise<string> {
+    return getTransport().invoke("get_app_version");
+  },
+  /** 卡死诊断心跳（500ms 一次；Rust watchdog 断流 ≥2s 判定冻结）。 */
+  diagHeartbeat(payload: DiagHeartbeatPayload): Promise<void> {
+    return getTransport().invoke("diag_heartbeat", { payload });
+  },
+  /** 冻结自愈补交：卡死恢复后把期间的 longtask 明细 + 面包屑合并进报告。 */
+  diagFreezeSupplement(payload: Record<string, unknown>): Promise<void> {
+    return getTransport().invoke("diag_freeze_supplement", { payload });
+  },
+  /** 滚动诊断环快照落盘；返回报告文件路径。 */
+  diagScrollTrail(payload: string): Promise<string> {
+    return getTransport().invoke("diag_scroll_trail", { payload });
+  },
+  /** 前端错误上报（main.ts 全局兜底也用；走 Rust 日志落盘）。 */
+  logFrontendError(message: string): Promise<void> {
+    return getTransport().invoke("log_frontend_error", { message });
   },
 
   // 会话

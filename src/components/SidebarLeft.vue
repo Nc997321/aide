@@ -12,9 +12,7 @@ import { useWorkspaces } from "../composables/useWorkspaces";
 import { useSettings } from "../composables/useSettings";
 import { useWorkspaceTrust } from "../composables/useWorkspaceTrust";
 import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
-import { api } from "../api";
-import { open } from "@tauri-apps/plugin-shell";
-import { getVersion } from "@tauri-apps/api/app";
+import { api, openExternal } from "../api";
 import AToast from "../ui/AToast.vue";
 import AppLogo from "./AppLogo.vue";
 import AutomationSidebarSection from "./automation/AutomationSidebarSection.vue";
@@ -236,7 +234,7 @@ function selectSessionFromWorkspace(_wsKey: string, sessionId: string) {
 }
 
 function openUpdate() {
-  if (downloadUrl.value) open(downloadUrl.value);
+  if (downloadUrl.value) openExternal(downloadUrl.value);
 }
 
 function switchWorkspace(ws: WorkspaceInfo) {
@@ -435,7 +433,7 @@ onMounted(async () => {
   void refreshTrust(workspaces.value.map((w) => w.name).filter(Boolean));
 
   try {
-    appVersion.value = await getVersion();
+    appVersion.value = await api.appVersion();
     const { checkUpdate } = useUpdate();
     await checkUpdate(appVersion.value);
   } catch (_) { /* non-critical */ }

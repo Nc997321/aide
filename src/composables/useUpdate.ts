@@ -1,5 +1,5 @@
 import { ref } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { api } from "../api";
 import { isMac, isWindows } from "../utils/platform";
 
 // ── Module-level state ──
@@ -47,7 +47,7 @@ async function checkUpdate(currentVersion: string): Promise<void> {
     checking.value = true;
 
     try {
-        const remoteUrl = await invoke<string | null>("git_remote_url");
+        const remoteUrl = await api.gitRemoteUrl();
         if (!remoteUrl) {
             checked.value = true;
             return;

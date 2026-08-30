@@ -6,7 +6,7 @@
  *  实时刷新：监听 chat-event 通道的 automation_run_finished（调度器在运行终态发出），
  *  刷新任务列表 + 当前详情的 runs/stats。 */
 import { reactive } from "vue";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "../api";
 import { useNotifications } from "./useNotifications";
 import {
   automationApi,

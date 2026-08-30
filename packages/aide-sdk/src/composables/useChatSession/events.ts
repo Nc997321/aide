@@ -18,8 +18,8 @@ import { useBtwSession } from "../useBtwSession";
 import { useCodeGraphProgress } from "../useCodeGraphProgress";
 import { useSessionNames } from "../useSessionNames";
 import { useSessionIdentity } from "../../composables/sessionIdentity";
-import { useSessionState } from "../useSessionState";
-import { armStalled, sessionHealth, sessionState } from "./state";
+import { useSessionState, markSessionUntracked } from "../useSessionState";
+import { armStalled, sessionHealth, sessionState, stores, aliasMap } from "./state";
 import { maybeEvict } from "./evict";
 import {
   BG_TASKS_CAP,
@@ -73,7 +73,7 @@ export function handleChatEvent(e: Record<string, unknown>): void {
   const store = getStore(sid);
 
   const identity = useSessionIdentity();
-  const { setSessionState, setSessionHealth } = useSessionState();
+  const { setSessionState, setSessionHealth, removeSessionState } = useSessionState();
 
   switch (e["type"]) {
     case "session_init": {
@@ -85,6 +85,19 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         // 右上角"活跃会话"因此出现一个点进去空白的会话。realId 的 running 由
         // finalizeSession 负责，本分支直接结束。
         void finalizeSession(sid, sdkSid);
+        break;
+      }
+      if (sdkSid && sdkSid !== sid) {
+        // 非交互式来源（自动化运行/蒸馏轮等）：事件路由键（run_xxx）与 SDK 真实 id
+        // 不一致。这类会话没有任何用户面板：若照常登记状态，sessionStateMap 会出现
+        // 两个条目——路由键永远收不到终态（后续事件全带真实 id）的孤儿 running，
+        // 以及无人消费的真实 id 条目（2026-08-30 实锤：自动化一次运行凭空多出两个
+        // "一直存在"的会话）。处理：别名归一 + 状态不跟踪 + store 过户到真实 id。
+        aliasMap.set(sid, sdkSid);
+        markSessionUntracked(sdkSid);
+        if (stores[sid] && !stores[sdkSid]) stores[sdkSid] = stores[sid];
+        delete stores[sid];
+        removeSessionState(sid);
         break;
       }
       setSessionState(sid, "running");

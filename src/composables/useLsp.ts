@@ -1,6 +1,5 @@
 import { ref, type Ref } from "vue";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { api } from "../api";
+import { api, listen } from "../api";
 import { useNotifications } from "./useNotifications";
 import type { LspCapabilities } from "../types";
 
@@ -22,9 +21,9 @@ const diagnostics = ref<Map<string, LspDiagnostic[]>>(new Map());
 const capabilities = ref<Map<string, LspCapabilities>>(new Map());
 
 let listening = false;
-let unlistenDiag: UnlistenFn | null = null;
-let unlistenDead: UnlistenFn | null = null;
-let unlistenShowMsg: UnlistenFn | null = null;
+let unlistenDiag: (() => void) | null = null;
+let unlistenDead: (() => void) | null = null;
+let unlistenShowMsg: (() => void) | null = null;
 
 async function ensureListening() {
   if (listening) return;

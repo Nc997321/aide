@@ -1,5 +1,5 @@
 import { ref, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { api } from "../api";
 import { useGit } from "./useGit";
 import { useWindowFocus } from "./useWindowFocus";
 
@@ -29,7 +29,7 @@ export function useGitWatcher() {
 
   async function checkFingerprint() {
     try {
-      const fp = await invoke<string>("git_fingerprint");
+      const fp = await api.gitFingerprint();
       consecutiveFailures = 0;
       if (lastFingerprint.value && fp !== lastFingerprint.value) {
         await loadAll();
@@ -92,7 +92,7 @@ export function useGitWatcher() {
     consecutiveFailures = 0;
     // 先查指纹：变了 loadAll（含 status），没变只 loadStatus —— 避免 git_status 重复请求
     try {
-      const fp = await invoke<string>("git_fingerprint");
+      const fp = await api.gitFingerprint();
       if (lastFingerprint.value && fp !== lastFingerprint.value) {
         await loadAll();
       } else {

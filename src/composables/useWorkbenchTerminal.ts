@@ -1,5 +1,5 @@
 import { ref, watch, nextTick } from "vue";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "../api";
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { api } from "../api";
@@ -52,7 +52,7 @@ let pollTimerInterval = 0;
 // 缓冲后被背压阻塞(卡住构建/长输出);500ms 仍抽,IPC 量砍 80% 且无背压风险。
 const POLL_INTERVAL_VISIBLE = 100;
 const POLL_INTERVAL_HIDDEN = 500;
-let unlistenExit: UnlistenFn | null = null;
+let unlistenExit: (() => void) | null = null;
 
 let settingsRef: ReturnType<typeof useSettings>["settings"] | null = null;
 let watchersInitialized = false;

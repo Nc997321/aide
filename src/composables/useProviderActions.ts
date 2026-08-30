@@ -1,6 +1,5 @@
 import { ref } from "vue";
-import { api } from "../api";
-import { open } from "@tauri-apps/plugin-shell";
+import { api, openExternal } from "../api";
 import type { ConnectionStatus, PortProbeResult, LoginStatusResult, ProviderModelMappings } from "../types";
 
 const lastError = ref<string | null>(null);
@@ -44,7 +43,7 @@ async function cpaOpenManagement(): Promise<void> {
   const url = await run({ value: false }, () => api.cpaOpenManagement());
   if (url) {
     try {
-      await open(url);
+      await openExternal(url);
     } catch (e) {
       lastError.value = `打开管理面板失败: ${e instanceof Error ? e.message : String(e)}`;
     }

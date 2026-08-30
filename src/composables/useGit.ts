@@ -1,5 +1,5 @@
 import { ref, computed } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { api } from "../api";
 import type { CommitEntry, CommitDetail, BranchInfo, GitStatusEntry, StashEntry, AheadBehind, FetchPullOutcome, TagEntry, CompareResult } from "../types";
 
 // ── Module-level reactive state ──
@@ -144,7 +144,7 @@ function dirGitStatus(absPath: string): string | null {
 async function loadBranches(epoch?: number) {
     const eff = epoch ?? loadEpoch;
     try {
-        const list = await invoke<BranchInfo[]>("git_branches");
+        const list = await api.gitBranches();
         if (isStale(eff)) return;
         branches.value = list;
         const cur = list.find((b) => b.is_current);
@@ -168,11 +168,7 @@ async function loadCommits(epoch?: number) {
     const eff = epoch ?? loadEpoch;
     loading.value = true;
     try {
-        const page = await invoke<CommitEntry[]>("git_log", {
-            limit: LOG_PAGE_SIZE,
-            branch: currentBranch.value || null,
-            skip: 0,
-        });
+        const page = await api.gitLog(LOG_PAGE_SIZE, currentBranch.value || null, 0);
         if (isStale(eff)) return;
         commits.value = page;
         hasMoreCommits.value = page.length >= LOG_PAGE_SIZE;
@@ -192,11 +188,7 @@ async function loadMoreCommits() {
     loadingMore.value = true;
     const eff = loadEpoch;
     try {
-        const page = await invoke<CommitEntry[]>("git_log", {
-            limit: LOG_PAGE_SIZE,
-            branch: currentBranch.value || null,
-            skip: commits.value.length,
-        });
+        const page = await api.gitLog(LOG_PAGE_SIZE, currentBranch.value || null, commits.value.length);
         if (isStale(eff)) return;
         commits.value = [...commits.value, ...page];
         hasMoreCommits.value = page.length >= LOG_PAGE_SIZE;
@@ -211,7 +203,7 @@ async function loadMoreCommits() {
 async function loadStatus(epoch?: number) {
     const eff = epoch ?? loadEpoch;
     try {
-        const s = await invoke<{ entries: GitStatusEntry[] }>("git_status");
+        const s = await api.gitStatus();
         if (isStale(eff)) return;
         statusEntries.value = s.entries;
     } catch (e) {
@@ -224,7 +216,7 @@ async function loadStatus(epoch?: number) {
 async function loadUnpushed(epoch?: number) {
     const eff = epoch ?? loadEpoch;
     try {
-        const hashes: string[] = await invoke("git_unpushed_commits");
+        const hashes = await api.gitUnpushedCommits();
         if (isStale(eff)) return;
         unpushedHashes.value = new Set(hashes);
     } catch (e) {
@@ -237,7 +229,7 @@ async function loadUnpushed(epoch?: number) {
 async function loadProjectRoot(epoch?: number) {
     const eff = epoch ?? loadEpoch;
     try {
-        const info = await invoke<{ root: string }>("get_project_info");
+        const info = await api.getProjectInfo();
         if (isStale(eff)) return;
         projectRoot.value = info.root;
     } catch (e) {
@@ -249,7 +241,7 @@ async function loadProjectRoot(epoch?: number) {
 async function loadStashes(epoch?: number) {
     const eff = epoch ?? loadEpoch;
     try {
-        const list = await invoke<StashEntry[]>("git_stash_list");
+        const list = await api.gitStashList();
         if (isStale(eff)) return;
         stashes.value = list;
     } catch (e) {
@@ -262,7 +254,7 @@ async function loadStashes(epoch?: number) {
 async function loadAheadBehind(epoch?: number) {
     const eff = epoch ?? loadEpoch;
     try {
-        const ab = await invoke<AheadBehind>("git_ahead_behind");
+        const ab = await api.gitAheadBehind();
         if (isStale(eff)) return;
         aheadBehind.value = ab;
     } catch (e) {
@@ -278,7 +270,7 @@ async function loadTags(epoch?: number) {
     const eff = epoch ?? loadEpoch;
     tagsLoading.value = true;
     try {
-        const list = await invoke<TagEntry[]>("git_tags");
+        const list = await api.gitTags();
         if (isStale(eff)) return;
         tags.value = list;
     } catch (e) {
@@ -297,10 +289,7 @@ async function loadCompare(head: string, base?: string): Promise<void> {
     compareLoading.value = true;
     compareError.value = "";
     try {
-        const result = await invoke<CompareResult>("git_compare_branches", {
-            head,
-            base: base ?? null,
-        });
+        const result = await api.gitCompareBranches(head, base ?? null);
         if (isStale(eff)) return;
         compare.value = result;
     } catch (e) {
@@ -339,7 +328,7 @@ async function refreshAfterAction() {
 
 /** 纯获取单条提交详情（不触碰共享展开态）；供对比视图本地展开复用。 */
 async function loadCommitDetail(hash: string): Promise<CommitDetail> {
-    return invoke<CommitDetail>("git_show", { hash });
+    return api.gitShow(hash);
 }
 
 async function toggleCommit(hash: string) {
@@ -360,42 +349,42 @@ async function toggleCommit(hash: string) {
 }
 
 async function switchBranch(branch: string) {
-    await invoke("git_checkout", { branch });
+    await api.gitCheckout(branch);
     await loadAll();
 }
 
 async function createBranch(name: string) {
-    await invoke("git_create_branch", { name });
+    await api.gitCreateBranch(name);
     await loadAll();
 }
 
 async function deleteBranch(name: string, force = false) {
-    await invoke("git_delete_branch", { name, force });
+    await api.gitDeleteBranch(name, force);
     await loadBranches();
 }
 
 async function doStageFile(path: string) {
-    try { await invoke("git_stage_file", { path }); } catch (e) { console.error("[useGit] stageFile:", e); }
+    try { await api.gitStageFile(path); } catch (e) { console.error("[useGit] stageFile:", e); }
     await loadStatus();
 }
 
 async function doUnstageFile(path: string) {
-    try { await invoke("git_unstage_file", { path }); } catch (e) { console.error("[useGit] unstageFile:", e); }
+    try { await api.gitUnstageFile(path); } catch (e) { console.error("[useGit] unstageFile:", e); }
     await loadStatus();
 }
 
 async function doStageAll() {
-    try { await invoke("git_stage_all"); } catch (e) { console.error("[useGit] stageAll:", e); }
+    try { await api.gitStageAll(); } catch (e) { console.error("[useGit] stageAll:", e); }
     await loadStatus();
 }
 
 async function doUnstageAll() {
-    try { await invoke("git_unstage_all"); } catch (e) { console.error("[useGit] unstageAll:", e); }
+    try { await api.gitUnstageAll(); } catch (e) { console.error("[useGit] unstageAll:", e); }
     await loadStatus();
 }
 
 async function doCommit(message: string, amend = false): Promise<string> {
-    const hash = await invoke<string>("git_commit", { message, amend });
+    const hash = await api.gitCommit(message, amend);
     await refreshAfterAction();
     return hash;
 }
@@ -404,7 +393,7 @@ async function doFetch(): Promise<FetchPullOutcome> {
     fetching.value = true;
     fetchError.value = "";
     try {
-        const outcome = await invoke<FetchPullOutcome>("git_fetch");
+        const outcome = await api.gitFetch();
         await Promise.all([loadAheadBehind(), loadUnpushed(), loadBranches()]);
         return outcome;
     } catch (e) {
@@ -420,27 +409,27 @@ function clearFetchError() {
 }
 
 async function doStashPush(message?: string): Promise<void> {
-    await invoke("git_stash", { message: message?.trim() || null });
+    await api.gitStash(message?.trim() || null);
     await Promise.all([loadStatus(), loadStashes()]);
 }
 
 async function doStashApply(index: number): Promise<void> {
-    await invoke("git_stash_apply", { index });
+    await api.gitStashApply(index);
     await loadStatus();
 }
 
 async function doStashPop(index: number): Promise<void> {
-    await invoke("git_stash_pop", { index });
+    await api.gitStashPop(index);
     await Promise.all([loadStatus(), loadStashes()]);
 }
 
 async function doStashDrop(index: number): Promise<void> {
-    await invoke("git_stash_drop", { index });
+    await api.gitStashDrop(index);
     await loadStashes();
 }
 
 async function doRevertFile(path: string) {
-    try { await invoke("git_revert_file", { path }); } catch (e) { console.error("[useGit] revertFile:", e); }
+    try { await api.gitRevertFile(path); } catch (e) { console.error("[useGit] revertFile:", e); }
     await loadStatus();
 }
 
@@ -448,7 +437,7 @@ async function doPush(force?: boolean): Promise<void> {
     pushing.value = true;
     pushError.value = "";
     try {
-        await invoke("git_push", { force: force ?? false });
+        await api.gitPush(force ?? false);
         await refreshAfterAction();
     } catch (e) {
         pushError.value = typeof e === "string" ? e : (e as Error).message || "Push failed";
@@ -466,7 +455,7 @@ async function doPull(): Promise<FetchPullOutcome> {
     pulling.value = true;
     pullError.value = "";
     try {
-        const outcome = await invoke<FetchPullOutcome>("git_pull");
+        const outcome = await api.gitPull();
         await refreshAfterAction();
         await loadBranches();
         return outcome;

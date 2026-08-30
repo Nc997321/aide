@@ -126,6 +126,13 @@ export class RemoteTransport implements AideTransport {
     });
   }
 
+  /** 远端语义：外链在手机本地浏览器新开 tab（不是桌面宿主机的浏览器）。 */
+  openExternal(url: string): Promise<void> {
+    // 浏览器环境的 PWA：window.open 即设备默认浏览器；noopener/noreferrer 防劫持。
+    window.open(url, "_blank", "noopener,noreferrer");
+    return Promise.resolve();
+  }
+
   // ── 连接管理（PWA ConnectView/App 消费）──
 
   get state(): ConnState {

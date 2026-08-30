@@ -9,9 +9,12 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "build:sidecar": "npm --prefix agent-sidecar run build && npm --prefix agent-sidecar run build:bin",
-    "release": "pnpm build:sidecar && pnpm tauri build",
+    "build:codegraph": "node scripts/build-codegraph.mjs",
+    "build:codegraph:release": "node scripts/build-codegraph.mjs --release",
+    "release": "pnpm build:sidecar && pnpm build:codegraph:release && pnpm tauri build",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:tauri-imports": "node scripts/check-tauri-imports.mjs"
   },
   "dependencies": {
     "@aide/sdk": "workspace:*",

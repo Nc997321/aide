@@ -9,14 +9,10 @@ vi.mock("../api", () => ({
     viewAnthropicQuota: vi.fn(),
     refreshModels: vi.fn(),
   },
+  openExternal: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/plugin-shell", () => ({
-  open: vi.fn(),
-}));
-
-import { api } from "../api";
-import { open } from "@tauri-apps/plugin-shell";
+import { api, openExternal } from "../api";
 import { useProviderActions } from "./useProviderActions";
 
 describe("useProviderActions", () => {
@@ -31,7 +27,7 @@ describe("useProviderActions", () => {
     (api.cpaLoginStatus as any).mockReset();
     (api.viewAnthropicQuota as any).mockReset();
     (api.refreshModels as any).mockReset();
-    (open as any).mockReset();
+    (openExternal as any).mockReset();
   });
 
   it("testConnection(id) 调 api.testProviderConnection 并存结果", async () => {
@@ -47,10 +43,10 @@ describe("useProviderActions", () => {
     expect(r?.alive).toBe(true);
   });
 
-  it("cpaOpenManagement 拿 URL 后调 shell.open(url)", async () => {
+  it("cpaOpenManagement 拿 URL 后调 openExternal(url)", async () => {
     (api.cpaOpenManagement as any).mockResolvedValue("http://127.0.0.1:8317/management.html");
     await cpaOpenManagement();
-    expect(open).toHaveBeenCalledWith("http://127.0.0.1:8317/management.html");
+    expect(openExternal).toHaveBeenCalledWith("http://127.0.0.1:8317/management.html");
   });
 
   it("cpaLoginStatus 存 LoginStatusResult", async () => {

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
-import { open } from "@tauri-apps/plugin-shell";
-import { api } from "../../../api";
+import { api, openExternal } from "../../../api";
 import { useOnboarding } from "../../../composables/useOnboarding";
 import { useProviders } from "../../../composables/useProviders";
 
@@ -37,7 +36,7 @@ async function startOAuth() {
     const r = await api.claudeStartLogin();
     if (r.authorizeUrl) {
       // A2 成功——打开浏览器，轮询 credentials.json 出现
-      await open(r.authorizeUrl);
+      await openExternal(r.authorizeUrl);
       oauthMessage.value = "请在浏览器中完成 Claude 登录…";
       const deadline = Date.now() + 120_000;
       while (Date.now() < deadline) {

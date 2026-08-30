@@ -14,11 +14,11 @@
  *   及时抑制（浏览器节流后台定时器会造成假断档）。
  *
  * 与业务代码零耦合：main.ts 一行 startDiagnostics() 启动，可整体摘除。
- * 直接 invoke 而不走 api.ts——诊断是基础设施层（同 main.ts 的错误上报），
- * 不属于业务 API 面。
+ * 经 @aide/sdk 门面调用诊断命令（API 门面是所有命令调用的唯一入口；
+ * 传输层注入让桩件/远端语义与业务命令一致）。
  */
 
-import { invoke } from "@tauri-apps/api/core";
+import { api } from "../api";
 import { drainMaxLag, startLagSampler } from "../utils/diagnostics/eventLoopLag";
 import { drainSummary, entriesSince, startLongTasks } from "../utils/diagnostics/longTasks";
 import { drainPending, snapshotAll, startBreadcrumbs } from "../utils/diagnostics/breadcrumbs";
@@ -45,9 +45,9 @@ async function sendHeartbeat(): Promise<void> {
     hidden: document.hidden,
   };
   try {
-    await invoke("diag_heartbeat", { payload });
+    await api.diagHeartbeat(payload);
   } catch {
-    // 诊断永不影响业务；invoke 失败（如启动早期）静默跳过
+    // 诊断永不影响业务；调用失败（如启动早期）静默跳过
   }
 }
 
@@ -59,7 +59,7 @@ async function sendSupplement(gapMs: number, gapStartPerfMs: number): Promise<vo
     crumbs: snapshotAll(),
   };
   try {
-    await invoke("diag_freeze_supplement", { payload });
+    await api.diagFreezeSupplement(payload);
   } catch {
     // 同上，静默
   }

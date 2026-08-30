@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { PluginEntry } from "../../types/marketplace";
 import { computed } from "vue";
-import { open } from "@tauri-apps/plugin-shell";
+import { openExternal } from "../../api";
 import { useMarketplace } from "../../composables/useMarketplace";
 import { useModal } from "../../composables/useModal";
 
@@ -101,7 +101,7 @@ const detailUrl = computed(() => {
 
 function openGit() {
   const url = detailUrl.value;
-  if (url) void open(url);
+  if (url) void openExternal(url);
 }
 </script>
 

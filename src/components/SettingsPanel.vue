@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, computed } from "vue";
-import { getVersion } from "@tauri-apps/api/app";
 import { useSettings } from "../composables/useSettings";
 import { useOnboarding } from "../composables/useOnboarding";
 import { useCustomizations } from "../composables/useCustomizations";
@@ -54,7 +53,7 @@ const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 // ── 关于 ──
 const appVersion = ref("");
 onMounted(async () => {
-  appVersion.value = await getVersion().catch(() => "");
+  appVersion.value = await api.appVersion().catch(() => "");
   // 网络代理为空时探测本机活代理（env / git 配置 / 常见端口，Rust 侧 ~1-2s 后台跑），
   // 命中则提示一键填入——自动发现的「建议」交给用户确认，不静默生效。
   if (!settings.proxy) {

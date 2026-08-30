@@ -167,7 +167,7 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
   align-items: center;
   gap: 9px;
   width: 100%;
-  padding: 8px 12px;
+  padding: 4px 12px;
   background: none;
   border: none;
   cursor: pointer;
