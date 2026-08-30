@@ -9,11 +9,11 @@ import FileWindow from "./fileviewer/FileWindow.vue";
  * 层挂在 App.vue 的 .app-layout 内（绝对定位），横跨整个 app-layout 宽度
  * （左缘 → 右缘，含两侧侧栏）。层容器本身 pointer-events:none 不挡下方点击，
  * 只有 .fv-win（pointer-events:auto）会拦截——所以侧栏未被窗口盖住的部分
- * 仍可点。单窗默认在整个 aide 居中（用整 app 宽算），文件树开时窗口右半会盖住
- * 一部分文件树，是用户显式要的取舍；多窗只在聊天区（panel-center）内平铺，
- * 文件树侧栏保持可点。侧栏宽可拖动/可折叠，边界不能信 CSS 变量（折叠只改元素
- * 宽度不改 grid 轨道），用 ResizeObserver 量 .panel-center 的真实右缘与
- * .app-layout 的真实右缘。
+ * 仍可点。单窗默认铺满主内容区（panel-center）：左右贴两侧侧栏内缘、顶部留
+ * MARGIN、直达底部，侧栏拖动/折叠时窗口跟着收放（用户显式要的布局）；
+ * 多窗也只在主内容区内平铺，侧栏保持可点。侧栏宽可拖动/可折叠，边界不能信
+ * CSS 变量（折叠只改元素宽度不改 grid 轨道），用 ResizeObserver 量
+ * .panel-center 的真实左/右缘与 .app-layout 的真实右缘。
  *
  * 布局是平铺式（tiling）而非「聚焦+最小化」：
  * - 无主窗时所有窗口按区域宽高比均分网格，随数量增多变小；
@@ -26,17 +26,25 @@ import FileWindow from "./fileviewer/FileWindow.vue";
 const { windows, focusedId, focusWindow } = useFileViewer();
 
 const MARGIN = 12;
+const TOP_MARGIN = 28; // 单窗/聚焦主窗：顶部留出更多空间，让圆角顶边 + box-shadow 完整露出，不被 layer 顶沿裁切
 const DEFAULT_W = 900; // 单窗/主窗的默认弹窗宽度上限
 
 const layerRef = ref<HTMLElement | null>(null);
 /**
  * 窗口活动区实时尺寸，驱动平铺和拖拽钳制。
- * - w  = 整个 app-layout 宽（左缘 → 右缘）：单窗居中用它（整个 aide 居中），
- *         也是层宽与拖拽/resize 钳制边界。
- * - chatW = 聊天区宽（左缘 → panel-center 右缘，即文件树侧栏左边界）：
- *           多窗平铺只用聊天区，文件树侧栏保持可点。
+ * - w  = 整个 app-layout 宽（左缘 → 右缘）：层宽与拖拽/resize 钳制边界，
+ *         用户手动拖出的窗口仍可在整个 app 内活动（含侧栏上方）。
+ * - chatW = 主内容区右缘相对 app-layout 左缘的距离。
+ * - chatX = 主内容区左缘相对 app-layout 左缘的距离（左侧栏宽度）。
+ *           chatW - chatX 即主内容区（panel-center）实际宽度：
+ *           单窗铺满它，多窗平铺其内，侧栏保持可点。
  */
-const layerSize = ref<{ w: number; h: number; chatW: number }>({ w: 0, h: 0, chatW: 0 });
+const layerSize = ref<{ w: number; h: number; chatW: number; chatX: number }>({
+  w: 0,
+  h: 0,
+  chatW: 0,
+  chatX: 0,
+});
 
 function measureBounds() {
   const layout = layerRef.value?.parentElement;
@@ -47,6 +55,7 @@ function measureBounds() {
   layerSize.value = {
     w: Math.max(0, Math.round(lr.right - lr.left)),
     chatW: Math.max(0, Math.round(cr.right - lr.left)),
+    chatX: Math.max(0, Math.round(cr.left - lr.left)),
     h: Math.round(lr.height),
   };
 }
@@ -74,9 +83,6 @@ function retile() {
   const n = wins.length;
   if (!n || !layerSize.value.w) return;
   const fullW = layerSize.value.w; // 整个 app 宽
-  const chatW = layerSize.value.chatW || fullW; // 聊天区宽（多窗平铺其内）
-  const ax = MARGIN;
-  const ay = MARGIN;
   const ah = layerSize.value.h - MARGIN * 2;
 
   // 用户手动调整过尺寸的窗口视为「浮动」：retile 不动它们的几何，
@@ -93,20 +99,25 @@ function retile() {
   const nT = tileable.length;
   if (!nT) return; // 全部由用户手动放置，无需平铺
 
-  // 单窗：在整个 aide 居中（用 fullW）。文件树开时窗口右半会盖住一部分文件树，
-  // 未被盖住的部分仍可点；文件树收起时 chatW≈fullW，行为与原居中一致。
+  // 主内容区（panel-center）在 app-layout 内的左偏移与实际宽度。
+  // 左右侧栏拖动/折叠时 ResizeObserver 会重量，窗口跟着收放。
+  const chatX = layerSize.value.chatX || 0;
+  const chatW2 = (layerSize.value.chatW || fullW) - chatX;
+
+  // 单窗：左右贴主内容区两侧、顶部留 TOP_MARGIN（圆角完整可见）、直达底部（类似 IDE 的编辑区）。
   if (nT === 1 && n === 1) {
     const w0 = tileable[0];
-    const aw = fullW - MARGIN * 2;
-    w0.w = Math.min(DEFAULT_W, Math.round(aw * 0.9));
-    w0.h = Math.round(ah * 0.96);
-    w0.x = ax + Math.round((aw - w0.w) / 2);
-    w0.y = ay + Math.round((ah - w0.h) / 2);
+    w0.x = chatX;
+    w0.y = TOP_MARGIN;
+    w0.w = Math.max(240, chatW2);
+    w0.h = layerSize.value.h - TOP_MARGIN;
     return;
   }
 
-  // 多窗：只在聊天区内平铺（chatW），文件树侧栏保持可点。
-  const caw = chatW - MARGIN * 2;
+  // 多窗：只在主内容区内平铺，左右侧栏保持可点。
+  const ax = chatX + MARGIN;
+  const ay = MARGIN;
+  const caw = chatW2 - MARGIN * 2;
   const focused = tileable.find((w) => w.id === focusedId.value);
   if (focused) {
     // 主窗恢复默认弹窗大小，锚在自己当前所在的一侧放大（原地变大，不左右换位）：
