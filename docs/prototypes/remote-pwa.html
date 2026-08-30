@@ -393,6 +393,26 @@
   .ef-chip:hover { background: var(--surface-hover); color: var(--text-primary); border-color: var(--border); }
   .ef-chip svg { opacity: .55; }
   .ef-chip > svg:first-child { color: var(--warning); opacity: .9; }
+  /* 思考程度浮层：锚定 chip、向上逐项浮出（非全局遮罩） */
+  .ef-wrap { position: relative; }
+  .ef-pop {
+    position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 5;
+    width: 212px; padding: 5px;
+    background: #14161f; border: 1px solid var(--border-strong); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg), var(--highlight-inset);
+    opacity: 0; visibility: hidden; transform: translateY(6px) scale(.96); transform-origin: bottom right;
+    transition: opacity var(--ease-t), transform var(--ease-t), visibility var(--ease-t);
+  }
+  .ef-pop.show { opacity: 1; visibility: visible; transform: none; }
+  .ef-pop .ws-opt { padding: 8px 9px; margin-bottom: 2px; }
+  .ef-pop .ws-opt:last-child { margin-bottom: 0; }
+  .ef-pop.show .ws-opt { animation: ef-rise .22s cubic-bezier(.2,.8,.2,1) both; }
+  .ef-pop.show .ws-opt:nth-child(5) { animation-delay: 0ms; }
+  .ef-pop.show .ws-opt:nth-child(4) { animation-delay: 28ms; }
+  .ef-pop.show .ws-opt:nth-child(3) { animation-delay: 56ms; }
+  .ef-pop.show .ws-opt:nth-child(2) { animation-delay: 84ms; }
+  .ef-pop.show .ws-opt:nth-child(1) { animation-delay: 112ms; }
+  @keyframes ef-rise { from { opacity: 0; transform: translateY(6px); } }
   .ch-ta-wrap {
     flex: 1; display: flex; border-radius: 18px;
     background: var(--surface-default); border: 1px solid var(--border-subtle);
@@ -711,11 +731,14 @@
 
         <div class="ch-input">
           <div class="ch-tools">
-            <button class="ef-chip" title="思考程度">
-              <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M8.8 1.5L3.5 9h3.7l-.9 5.5L11.6 7H7.9l.9-5.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
-              <span class="ef-label">思考 · 高</span>
-              <svg width="9" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </button>
+            <div class="ef-wrap">
+              <button class="ef-chip" title="思考程度">
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M8.8 1.5L3.5 9h3.7l-.9 5.5L11.6 7H7.9l.9-5.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+                <span class="ef-label">思考 · 高</span>
+                <svg width="9" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <div class="ef-pop"></div>
+            </div>
           </div>
           <div class="ch-input-row">
             <div class="ch-ta-wrap"><textarea rows="1" placeholder="发消息给桌面 aide…"></textarea></div>
@@ -770,14 +793,6 @@
             <div class="ws-head"><b>选择供应商</b><small>切换即时生效 · 与桌面标题栏同步</small></div>
             <div class="pv-opts"></div>
             <div class="pv-foot">管理 / 新增供应商请回桌面 aide → 设置 → 供应商</div>
-          </div>
-        </div>
-
-        <!-- 思考程度弹层（会话级） -->
-        <div class="ws-mask ef-mask">
-          <div class="ws-sheet">
-            <div class="ws-head"><b>思考程度</b><small>会话级 · 随下一条消息生效</small></div>
-            <div class="ef-opts"></div>
           </div>
         </div>
 
@@ -849,11 +864,14 @@
 
         <div class="ch-input">
           <div class="ch-tools">
-            <button class="ef-chip" title="思考程度">
-              <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M8.8 1.5L3.5 9h3.7l-.9 5.5L11.6 7H7.9l.9-5.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
-              <span class="ef-label">思考 · 高</span>
-              <svg width="9" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </button>
+            <div class="ef-wrap">
+              <button class="ef-chip" title="思考程度">
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M8.8 1.5L3.5 9h3.7l-.9 5.5L11.6 7H7.9l.9-5.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+                <span class="ef-label">思考 · 高</span>
+                <svg width="9" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <div class="ef-pop"></div>
+            </div>
           </div>
           <div class="ch-input-row">
             <div class="ch-ta-wrap"><textarea rows="1" placeholder="发消息给桌面 aide…"></textarea></div>
@@ -909,14 +927,6 @@
           </div>
         </div>
 
-        <!-- 思考程度弹层（会话级） -->
-        <div class="ws-mask ef-mask">
-          <div class="ws-sheet">
-            <div class="ws-head"><b>思考程度</b><small>会话级 · 随下一条消息生效</small></div>
-            <div class="ef-opts"></div>
-          </div>
-        </div>
-
         <div class="ws-mask ws-mask-w">
           <div class="ws-sheet">
             <div class="ws-head"><b>选择工作区</b><small>会话按工作区隔离 · 新会话发往所选工作区</small></div>
@@ -951,7 +961,7 @@
       <ul>
         <li><em>☰ 打开抽屉</em>（Kimi 式；会话列表不再是独立整屏）</li>
         <li><em>供应商 pill</em>：连接状态点 + 当前供应商名 + caret，点出底部弹层切换；<em>离线时点击给 toast 提示</em></li>
-        <li><em>思考程度 chip</em>：输入区工具行（对齐桌面输入框工具栏 effort 选择器）→ 低/中/高/超高/最大五档弹层；<em>会话级</em>，离线也可切（随下一条消息生效）；usage 尾注跟随当前档</li>
+        <li><em>思考程度 chip</em>：输入区工具行（对齐桌面输入框工具栏 effort 选择器）→ 五档自 chip 向上浮出；<em>会话级</em>，离线也可切（随下一条消息生效）；usage 尾注跟随当前档</li>
         <li><em>＋ 新会话</em>入顶栏（FAB 取消）→ 居中<em>空态</em>（logo + 发往当前工作区提示）</li>
         <li>消息区：文本流式 + 光标 / 思考折叠 / 工具三态徽标 / 子代理行 / 错误块 / usage 尾注（同 v2）</li>
         <li>断线：pill 点变橙 + 橙色横幅 + 输入禁用；重连 toast + 分隔线</li>
@@ -1164,7 +1174,7 @@ function syncEffort() {
   $$(".ef-label").forEach(n => { n.textContent = `思考 · ${activeEffort.name}`; });
 }
 function renderEfOpts(root) {
-  root.querySelector(".ef-opts").innerHTML = EF_FAKE.map(e => `
+  root.querySelector(".ef-pop").innerHTML = EF_FAKE.map(e => `
     <button class="ws-opt${e.id === activeEffort.id ? " on" : ""}" data-ef="${esc(e.id)}">
       <span class="pv-ic">${e.id === "max" ? "🔥" : "⚡"}</span>
       <span class="ws-txt"><b class="ws-name">${esc(e.name)}<span class="ws-desc" style="display:inline;margin-left:8px">${esc(e.id)}</span></b><span class="ws-desc">${esc(e.desc)}</span></span>
@@ -1369,19 +1379,26 @@ function initChatScreen(root) {
     flashHint(root, `已切换到 ${p.icon} ${p.name}`, "ok");
   });
 
-  // ── 思考程度弹层（会话级，离线也可切——本地状态随下一条消息生效） ──
-  const efMask = q(".ef-mask");
-  q(".ef-chip").addEventListener("click", () => { renderEfOpts(root); efMask.classList.add("show"); });
-  efMask.addEventListener("click", e => { if (e.target === efMask) efMask.classList.remove("show"); });
-  q(".ef-opts").addEventListener("click", e => {
+  // ── 思考程度浮层（会话级，锚定 chip 向上浮出，点外部关闭；离线也可切） ──
+  const efWrap = q(".ef-wrap");
+  const efPop = q(".ef-pop");
+  q(".ef-chip").addEventListener("click", e => {
+    e.stopPropagation();
+    if (!efPop.classList.contains("show")) renderEfOpts(root);
+    efPop.classList.toggle("show");
+  });
+  efPop.addEventListener("click", e => {
     const btn = e.target.closest(".ws-opt");
     if (!btn) return;
     const ef = EF_FAKE.find(x => x.id === btn.dataset.ef);
-    efMask.classList.remove("show");
+    efPop.classList.remove("show");
     if (ef.id === activeEffort.id) return;
     activeEffort = ef;
     syncEffort();
     flashHint(root, `思考程度 · ${ef.name}，随下一条消息生效`, "ok");
+  });
+  document.addEventListener("click", e => {
+    if (!efWrap.contains(e.target)) efPop.classList.remove("show");
   });
 
   // ── 新会话（顶栏 ＋） ──

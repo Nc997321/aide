@@ -1,5 +1,5 @@
 // 离线壳缓存：versioned cache-first。发版时 bump CACHE 版本号即全量刷新。
-const CACHE = "aide-remote-v1";
+const CACHE = "aide-remote-v2"; // 2026-08-30 SDK 化换底（协议 v2）发版
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon-512.png"];
 
 self.addEventListener("install", (e) => {
