@@ -493,15 +493,15 @@ pub fn codegraph_build_index(app: AppHandle, params: Value) -> BoxFuture<'static
             force: bool,
         }
         let a: Args = parse(params)?;
-        let state = app.state::<Arc<crate::codegraph::CodeGraphState>>();
+        let state = app.state::<Arc<crate::codegraph::CodeGraphService>>();
         let settings = app.state::<Arc<SettingsService>>();
-        to_json(crate::codegraph::build::codegraph_build_index(a.project_root, Some(a.force), state, settings).await)
+        to_json(crate::codegraph::commands::codegraph_build_index(a.project_root, Some(a.force), state, settings).await)
     })
 }
 
 pub fn codegraph_build_progress(app: AppHandle, _params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
-        let state = app.state::<Arc<crate::codegraph::CodeGraphState>>();
+        let state = app.state::<Arc<crate::codegraph::CodeGraphService>>();
         // 该命令本就返回 Value（非 Result），直通
         Ok(crate::codegraph::commands::codegraph_build_progress(state))
     })
@@ -510,7 +510,7 @@ pub fn codegraph_build_progress(app: AppHandle, _params: Value) -> BoxFuture<'st
 pub fn codegraph_close(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: ProjectRootArgs = parse(params)?;
-        let state = app.state::<Arc<crate::codegraph::CodeGraphState>>();
+        let state = app.state::<Arc<crate::codegraph::CodeGraphService>>();
         to_json(crate::codegraph::commands::codegraph_close(a.project_root, state).await)
     })
 }
@@ -524,7 +524,7 @@ pub fn codegraph_reindex_file(app: AppHandle, params: Value) -> BoxFuture<'stati
             file: String,
         }
         let a: Args = parse(params)?;
-        let state = app.state::<Arc<crate::codegraph::CodeGraphState>>();
+        let state = app.state::<Arc<crate::codegraph::CodeGraphService>>();
         let settings = app.state::<Arc<SettingsService>>();
         to_json(crate::codegraph::commands::codegraph_reindex_file(a.project_root, a.file, state, settings).await)
     })
@@ -533,7 +533,7 @@ pub fn codegraph_reindex_file(app: AppHandle, params: Value) -> BoxFuture<'stati
 pub fn codegraph_rescan(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: ProjectRootArgs = parse(params)?;
-        let state = app.state::<Arc<crate::codegraph::CodeGraphState>>();
+        let state = app.state::<Arc<crate::codegraph::CodeGraphService>>();
         let settings = app.state::<Arc<SettingsService>>();
         to_json(crate::codegraph::commands::codegraph_rescan(a.project_root, state, settings).await)
     })

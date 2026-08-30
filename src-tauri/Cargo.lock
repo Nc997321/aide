@@ -60,23 +60,21 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clipboard-win 5.4.1",
+ "codegraph-core",
  "dunce",
  "encoding_rs",
  "futures-util",
  "ignore",
  "keyring",
  "lsp-types",
- "ndarray",
  "notify-rust",
  "objc2 0.2.7",
  "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
  "once_cell",
- "ort",
  "percent-encoding",
  "png 0.17.16",
  "portable-pty",
- "qdrant-edge",
  "rand 0.8.6",
  "regex",
  "serde",
@@ -88,17 +86,11 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-single-instance",
  "tauri-plugin-window-state",
- "tokenizers",
  "tokio",
  "tokio-tungstenite",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
- "tree-sitter",
- "tree-sitter-java",
- "tree-sitter-python",
- "tree-sitter-rust",
- "tree-sitter-typescript",
  "ureq",
  "which",
  "windows 0.61.3",
@@ -977,6 +969,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
 dependencies = [
  "error-code 3.3.2",
+]
+
+[[package]]
+name = "codegraph-core"
+version = "0.8.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "codegraph-runner"
+version = "0.8.0"
+dependencies = [
+ "codegraph-core",
+ "ignore",
+ "ndarray",
+ "ort",
+ "qdrant-edge",
+ "serde",
+ "serde_json",
+ "sysinfo 0.33.1",
+ "tokenizers",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "tree-sitter",
+ "tree-sitter-java",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "ureq",
 ]
 
 [[package]]

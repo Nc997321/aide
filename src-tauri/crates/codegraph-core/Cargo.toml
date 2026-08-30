@@ -1,0 +1,9 @@
+[package]
+name = "codegraph-core"
+version = "0.8.0"
+edition = "2021"
+description = "CodeGraph shared kernel: pure data types, embedder config DTO, and the stdio JSON-RPC protocol between aide.exe and aide-codegraph.exe"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

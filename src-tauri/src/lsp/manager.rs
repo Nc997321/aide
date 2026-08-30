@@ -3,7 +3,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
 
-use crate::ignore_dirs::ALWAYS_IGNORE_DIRS;
+// ignore_dirs 已随 codegraph 迁至 codegraph-core（lsp 与 runner 共用同一份
+// 黑名单——数据唯一主人）。
+use codegraph_core::ignore_dirs::ALWAYS_IGNORE_DIRS;
 use crate::lsp::detector::LanguageId;
 use crate::lsp::docs::OpenDocs;
 use crate::lsp::registry::{self, ServerSource};

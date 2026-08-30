@@ -1,0 +1,52 @@
+[package]
+name = "codegraph-runner"
+version = "0.8.0"
+edition = "2021"
+description = "aide-codegraph.exe — CodeGraph 独立索引/查询进程（优化项二：进程隔离）。ONNX 推理、qdrant-edge 向量库、tree-sitter 解析全部在此进程内。"
+
+[lib]
+name = "codegraph_runner"
+path = "src/lib.rs"
+
+[[bin]]
+name = "aide-codegraph"
+path = "src/main.rs"
+
+[dependencies]
+codegraph-core = { path = "../codegraph-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 请求分发沿用主进程时代的并发模型：std 锁 + spawn_blocking。io-std：main
+# 的 stdin/stdout 行协议。
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "io-std", "time", "sync"] }
+tracing = "0.1"
+# registry feature：main.rs 的 NotifyLayer（tracing WARN/ERROR → log 通知桥）需要。
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+
+# ---- 重依赖（原 src-tauri/Cargo.toml 下沉至此，主进程二进制不再携带）----
+# 本地 ONNX embedding：禁用 CPU arena + memory_pattern（arena 暴涨不归还 OS，
+# 3G→6G 事故的根因；见 embed.rs OrtEmbedder 文档）。download-binaries +
+# copy-dylibs 必须显式启用，否则 ONNX Runtime DLL 消失。
+ort = { version = "=2.0.0-rc.9", default-features = false, features = ["ndarray", "download-binaries", "copy-dylibs"] }
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+ndarray = { version = "0.16", default-features = false }
+tree-sitter = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-rust = "0.23"
+qdrant-edge = "0.6"
+# HttpEmbedder（Ollama / OpenAI 兼容服务）
+ureq = { version = "2", features = ["json", "tls"] }
+# 项目文件 walk（gitignore + 黑名单 prune）
+ignore = "0.4"
+
+[dev-dependencies]
+# embed.rs 的 ort_arena_memory_trajectory 测试采样进程 RSS（与主 crate 同版本
+# 同 feature，锁定 API 形状）
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+
+[lints.rust]
+# main.rs 的 flush_coverage 钩子依赖 cargo-llvm-cov 注入的 --cfg=coverage；
+# 在此声明该 cfg，普通构建不触发 unexpected_cfgs 告警。
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }

@@ -512,16 +512,9 @@ pub(crate) fn resolve_codegraph_embedder(service: &SettingsService) -> Result<Ru
     })
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct RuntimeCodeGraphEmbedderConfig {
-    pub backend: String,
-    pub base_url: String,
-    pub api_key: String,
-    pub model: String,
-    pub format: String,
-    pub dim: u32,
-    pub score_threshold: Option<f32>,
-}
+/// 运行时 embedder 配置 DTO。**数据唯一主人在 codegraph-core**（主进程与
+/// codegraph-runner 进程共用同一份定义——它跨进程边界序列化传输）。
+pub(crate) use codegraph_core::RuntimeCodeGraphEmbedderConfig;
 
 #[tauri::command]
 pub async fn get_settings(service: State<'_, Arc<SettingsService>>) -> Result<AppSettings, String> {

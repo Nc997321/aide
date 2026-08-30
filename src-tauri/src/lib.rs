@@ -4,7 +4,6 @@ mod automation;
 // 测试分离布局要求源文件零测试代码，集成测试是唯一测试面）
 pub mod commands;
 mod diagnostics;
-mod ignore_dirs;
 mod lsp;
 mod shell;
 pub mod remote;
@@ -119,7 +118,9 @@ pub fn run() {
         .manage(std::sync::Arc::new(skills::SkillRegistry::new()))
         .manage(workspace_state)
         .manage(PendingOpenFile(std::sync::Mutex::new(None)))
-        .manage(std::sync::Arc::new(codegraph::CodeGraphState::new()))
+        // CodeGraph 已进程隔离：主进程只持有 RPC 代理（runner 二进制由它
+        // 惰性拉起，ONNX/向量库/tree-sitter 都不在 aide.exe 里）。
+        .manage(std::sync::Arc::new(codegraph::CodeGraphService::new()))
         .manage(std::sync::Arc::new(lsp::LspState::new()))
         .manage(std::sync::Arc::new(automation::AutomationService::new()))
         .setup(|app| {
@@ -174,10 +175,17 @@ pub fn run() {
                 if let Ok(res_dir) = app.path().resource_dir() {
                     let catalog_dir = res_dir.join("agent-runtime");
                     crate::runtime::provider::catalog::set_resource_dir(catalog_dir);
-                    // CodeGraph embedding model bundled as a resource (release).
-                    // dev mode resolves via CARGO_MANIFEST_DIR in embed::resolve_model_dir.
-                    crate::codegraph::embed::set_model_resource_dir(res_dir);
+                    // CodeGraph 本地 ONNX 模型不再由主进程加载：runner 进程
+                    // 拉起时经 env（AIDE_CODEGRAPH_MODEL_DIR）注入同一资源
+                    // 目录（见 codegraph::proxy::spawn_runner）。
                 }
+            }
+
+            // CodeGraph RPC 代理挂上 AppHandle（runner 路径/资源目录/settings
+            // 访问都要它；manage 先于 setup，只能此处补挂）。
+            {
+                let svc = app.state::<std::sync::Arc<codegraph::CodeGraphService>>();
+                svc.attach(app.handle().clone());
             }
 
             // 迁移老 provider schema（idempotent）——必须在 spawn_runtime 取 env 之前
@@ -323,6 +331,7 @@ pub fn run() {
             commands::git::git_unstage_file,
             commands::git::git_revert_file,
             commands::git::log_frontend_error,
+            commands::app::get_app_version,
             commands::git::git_remote_url,
             commands::git::git_log,
             commands::git::git_show,
@@ -443,7 +452,7 @@ pub fn run() {
             // Plugin skills scanning
             commands::shell::scan_plugin_skills,
             // Code graph
-            codegraph::build::codegraph_build_index,
+            codegraph::commands::codegraph_build_index,
             codegraph::commands::codegraph_goto_definition,
             codegraph::commands::codegraph_close,
             codegraph::commands::codegraph_reindex_file,

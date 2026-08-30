@@ -3,6 +3,13 @@ name = "aide"
 version = "0.8.0"
 edition = "2021"
 
+# Cargo workspace（优化项二）：codegraph-core / codegraph-runner 作为成员。
+# `cargo build`（tauri dev/build 走的路径）默认只构建主包——runner 需显式
+# 构建：`cargo build -p codegraph-runner`（pnpm build:codegraph 封装）。
+[workspace]
+members = ["crates/codegraph-core", "crates/codegraph-runner"]
+default-members = ["."]
+
 [dependencies]
 # 不开 tauri 的 `tracing` feature：它会让 wry 的 eval_script 编译成阻塞版
 # （getter! = send_user_message + rx.recv），worker 每次 app.emit 都同步等主线程
@@ -69,21 +76,14 @@ futures-util = "0.3"
 # 配对码 / token / device_id 生成
 rand = "0.8"
 
-# CodeGraph: embedded vector DB, ONNX embedding inference, syntax parsing
-qdrant-edge = "0.6"
-# 本地 ONNX embedding：直接用 ort 加载 all-MiniLM-L6-v2，禁用 CPU arena + memory_pattern，
-# 避免 fastembed 不暴露 arena 配置导致重建索引时 arena 暴涨不归还 OS（aide.exe 3G→6G）。
-# 必须显式启用 download-binaries + copy-dylibs：fastembed 之前靠自己的 default feature
-# `ort-download-binaries` 间接启用 ort/download-binaries，移除 fastembed 后必须自己显式启用，
-# 否则 ONNX Runtime DLL 消失（编译过、运行/打包崩溃）。copy-dylibs 让 DLL 落输出目录供 release。
-ort = { version = "=2.0.0-rc.9", default-features = false, features = ["ndarray", "download-binaries", "copy-dylibs"] }
-tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
-ndarray = { version = "0.16", default-features = false }
-tree-sitter = "0.23"
-tree-sitter-java = "0.23"
-tree-sitter-typescript = "0.23"
-tree-sitter-python = "0.23"
-tree-sitter-rust = "0.23"
+# CodeGraph 进程隔离（优化项二）：
+# - 重依赖（qdrant-edge / ort / tokenizers / ndarray / tree-sitter*）已整体
+#   下沉到 crates/codegraph-runner —— 主进程二进制不再携带，重建索引时的
+#   RSS 峰值也不再发生在 aide.exe 里。
+# - codegraph-core 是两侧共用的轻量层：types DTO（lsp 共用）+ embedder 配置
+#   DTO + stdio JSON-RPC 协议。只依赖 serde，红线：任何重依赖进来都会重新
+#   污染主进程二进制。
+codegraph-core = { path = "crates/codegraph-core" }
 lsp-types = "0.97.0"
 
 # Clipboard file-path reading is platform-specific; declare the platform-only

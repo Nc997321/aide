@@ -220,32 +220,51 @@ impl AgentRuntimeManager {
                     Ok(Ok(Some(line))) => {
                         let Ok(mut event) = serde_json::from_str::<Value>(&line) else { continue };
                         // codegraph agent 工具查询：Rust ↔ Runtime 内部 request/response，不转发 Vue。
-                        // 查询在独立任务里跑（spawn_blocking），不阻塞 reader 主循环——慢查询
+                        // 查询在独立任务里跑，不阻塞 reader 主循环——慢查询
                         // （大 shard 搜索 / HTTP embed）不能卡住心跳与其他事件的读取。
-                        if let Some(req) = crate::codegraph::agent::parse_codegraph_query(&event) {
+                        // 进程隔离后：查询经 CodeGraphService RPC 转给 runner 执行，
+                        // sidecar 协议解析/组装（codegraph_query → codegraph_result）留主进程。
+                        if let Some(req) = crate::codegraph::agent_bridge::parse_codegraph_query(&event) {
                             use tauri::Manager;
                             let app2 = app.clone();
                             let stdin2 = stdin_for_agent.clone();
                             tokio::spawn(async move {
-                                let payload = tokio::task::spawn_blocking(move || {
-                                    // 阈值按当前 settings 现解析（query-time，不缓存、不重建）。
-                                    let score_threshold = app2
+                                // 政策层输入：阈值按当前 settings 现解析（query-time，
+                                // 不缓存、不重建）；trusted 同理由主进程计算——
+                                // 信任是政策，runner 是机制。两者都是阻塞读，收进
+                                // spawn_blocking。
+                                let trust_root = req.project_root.clone();
+                                let app_for_policy = app2.clone();
+                                let (score_threshold, trusted) = tokio::task::spawn_blocking(move || {
+                                    let score_threshold = app_for_policy
                                         .try_state::<Arc<crate::settings::SettingsService>>()
                                         .map(|s| crate::codegraph::query_score_threshold(s.inner()))
                                         .unwrap_or(0.35);
-                                    let body = match app2.try_state::<Arc<crate::codegraph::CodeGraphState>>() {
-                                        Some(st) => crate::codegraph::agent::execute_agent_query(
-                                            st.inner(), &req.tool, &req.args, &req.project_root, score_threshold,
-                                        ),
-                                        None => serde_json::json!({
-                                            "ok": false, "status": "error",
-                                            "error": "codegraph state unavailable",
-                                        }),
-                                    };
-                                    crate::codegraph::agent::build_result_command(&req.request_id, body)
+                                    let trusted = crate::commands::workspace::is_path_trusted(&trust_root);
+                                    (score_threshold, trusted)
                                 })
-                                .await;
-                                if let Ok(Ok(mut line)) = payload.map(|v| serde_json::to_string(&v)) {
+                                .await
+                                .unwrap_or((0.35, false));
+                                let body = match app2.try_state::<Arc<crate::codegraph::CodeGraphService>>() {
+                                    Some(svc) => {
+                                        match svc
+                                            .agent_query(&req.tool, &req.args, &req.project_root, trusted, score_threshold)
+                                            .await
+                                        {
+                                            Ok(v) => v,
+                                            Err(e) => serde_json::json!({
+                                                "ok": false, "status": "error",
+                                                "error": e,
+                                            }),
+                                        }
+                                    }
+                                    None => serde_json::json!({
+                                        "ok": false, "status": "error",
+                                        "error": "codegraph service unavailable",
+                                    }),
+                                };
+                                let payload = crate::codegraph::agent_bridge::build_result_command(&req.request_id, body);
+                                if let Ok(mut line) = serde_json::to_string(&payload) {
                                     line.push('\n');
                                     let mut g = stdin2.lock().await;
                                     let _ = g.write_all(line.as_bytes()).await;
