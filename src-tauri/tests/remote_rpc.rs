@@ -59,8 +59,14 @@ fn parse_rejects_shape_mismatch() {
 #[test]
 fn to_json_flattens_results() {
     assert_eq!(rpc::to_json(Ok::<_, String>(())).unwrap(), json!(null));
-    assert_eq!(rpc::to_json(Ok::<_, String>(vec![1, 2])).unwrap(), json!([1, 2]));
-    assert_eq!(rpc::to_json(Ok::<_, String>(None::<String>)).unwrap(), json!(null));
+    assert_eq!(
+        rpc::to_json(Ok::<_, String>(vec![1, 2])).unwrap(),
+        json!([1, 2])
+    );
+    assert_eq!(
+        rpc::to_json(Ok::<_, String>(None::<String>)).unwrap(),
+        json!(null)
+    );
     let err = rpc::to_json(Err::<(), _>("失败原因".to_string())).unwrap_err();
     assert_eq!(err, "失败原因");
 }

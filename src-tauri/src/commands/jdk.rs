@@ -92,7 +92,11 @@ where
             .and_then(|n| n.to_str())
             .unwrap_or("(unknown)")
             .to_string();
-        out.push(JdkEntry { name, version, path: key });
+        out.push(JdkEntry {
+            name,
+            version,
+            path: key,
+        });
     }
     out
 }
@@ -121,7 +125,8 @@ fn candidate_jdk_homes() -> Vec<PathBuf> {
     #[cfg(windows)]
     {
         let pf = std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".into());
-        let pf86 = std::env::var("ProgramFiles(x86)").unwrap_or_else(|_| "C:\\Program Files (x86)".into());
+        let pf86 =
+            std::env::var("ProgramFiles(x86)").unwrap_or_else(|_| "C:\\Program Files (x86)".into());
         for parent in [
             format!("{pf}\\Java"),
             format!("{pf}\\Eclipse Adoptium"),
@@ -146,7 +151,9 @@ fn candidate_jdk_homes() -> Vec<PathBuf> {
             homes.extend(child_dirs(&h.join(".jdks")));
         }
         if let Ok(lad) = std::env::var("LOCALAPPDATA") {
-            homes.extend(child_dirs(Path::new(&format!("{lad}\\Programs\\Eclipse Adoptium"))));
+            homes.extend(child_dirs(Path::new(&format!(
+                "{lad}\\Programs\\Eclipse Adoptium"
+            ))));
         }
     }
 
@@ -184,7 +191,11 @@ pub async fn resolve_jdk(path: String) -> Result<Option<JdkEntry>, String> {
                 .and_then(|n| n.to_str())
                 .unwrap_or("(manual)")
                 .to_string();
-            Ok(Some(JdkEntry { name, version, path }))
+            Ok(Some(JdkEntry {
+                name,
+                version,
+                path,
+            }))
         } else {
             Ok(None)
         }
@@ -279,7 +290,11 @@ OS_NAME="Linux"
     /// `JdkEntry` 序列化为 camelCase（前端按 camelCase 读）。
     #[test]
     fn jdk_entry_serializes_camel_case() {
-        let e = JdkEntry { name: "jdk-21".into(), version: "21".into(), path: "/p".into() };
+        let e = JdkEntry {
+            name: "jdk-21".into(),
+            version: "21".into(),
+            path: "/p".into(),
+        };
         let s = serde_json::to_string(&e).unwrap();
         assert!(s.contains("\"name\""), "{s}");
         assert!(s.contains("\"version\""), "{s}");

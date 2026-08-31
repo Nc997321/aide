@@ -17,9 +17,9 @@
 
 pub mod commands;
 pub mod schedule;
-pub mod scheduler;
 #[cfg(test)]
 mod schedule_test;
+pub mod scheduler;
 
 pub use scheduler::AutomationService;
 
@@ -238,7 +238,9 @@ pub fn aggregate_runs(runs: &[RunRecord], since: chrono::NaiveDateTime) -> RunSt
         if r.status != RunStatus::Succeeded && r.status != RunStatus::Failed {
             continue;
         }
-        let Ok(started) = schedule::parse_dt(&r.started_at) else { continue };
+        let Ok(started) = schedule::parse_dt(&r.started_at) else {
+            continue;
+        };
         if started < since {
             continue;
         }
@@ -323,13 +325,17 @@ pub fn load_task(id: &str) -> Result<AutomationTask, String> {
 pub fn load_all_tasks() -> Vec<AutomationTask> {
     let dir = automations_dir();
     let mut out = Vec::new();
-    let Ok(read_dir) = fs::read_dir(&dir) else { return out };
+    let Ok(read_dir) = fs::read_dir(&dir) else {
+        return out;
+    };
     for entry in read_dir.flatten() {
         let path = entry.path();
         if !path.is_dir() {
             continue;
         }
-        let Some(id) = path.file_name().map(|s| s.to_string_lossy().to_string()) else { continue };
+        let Some(id) = path.file_name().map(|s| s.to_string_lossy().to_string()) else {
+            continue;
+        };
         if !id.starts_with("aut_") {
             continue;
         }
@@ -402,7 +408,12 @@ fn read_all_runs(p: &std::path::Path) -> Result<Vec<RunRecord>, String> {
         }
         match serde_json::from_str::<RunRecord>(line) {
             Ok(r) => out.push(r),
-            Err(e) => tracing::warn!("[automation] {} 第 {} 行损坏已跳过: {}", p.display(), i + 1, e),
+            Err(e) => tracing::warn!(
+                "[automation] {} 第 {} 行损坏已跳过: {}",
+                p.display(),
+                i + 1,
+                e
+            ),
         }
     }
     Ok(out)
@@ -422,7 +433,9 @@ pub fn list_runs(id: &str, limit: usize) -> Result<Vec<RunRecord>, String> {
 pub fn new_id(prefix: &str) -> String {
     use std::hash::{BuildHasher, Hasher};
     let ms = crate::commands::recent::now_ms();
-    let rand16 = BuildHasher::build_hasher(&std::collections::hash_map::RandomState::new()).finish() & 0xFFFF;
+    let rand16 = BuildHasher::build_hasher(&std::collections::hash_map::RandomState::new())
+        .finish()
+        & 0xFFFF;
     format!("{}_{}{:04x}", prefix, to_base36(ms), rand16)
 }
 
@@ -446,7 +459,13 @@ fn to_base36(mut v: u64) -> String {
 mod tests {
     use super::*;
 
-    fn run(id: &str, status: RunStatus, started: &str, finished: Option<&str>, cost: Option<f64>) -> RunRecord {
+    fn run(
+        id: &str,
+        status: RunStatus,
+        started: &str,
+        finished: Option<&str>,
+        cost: Option<f64>,
+    ) -> RunRecord {
         RunRecord {
             run_id: id.into(),
             session_id: format!("sess_{id}"),
@@ -469,8 +488,20 @@ mod tests {
     #[test]
     fn aggregate_counts_success_rate_and_cost() {
         let runs = vec![
-            run("a", RunStatus::Succeeded, "2026-08-20T18:30:00", Some("2026-08-20T18:32:00"), Some(0.04)),
-            run("b", RunStatus::Failed, "2026-08-19T18:30:00", Some("2026-08-19T18:30:12"), Some(0.002)),
+            run(
+                "a",
+                RunStatus::Succeeded,
+                "2026-08-20T18:30:00",
+                Some("2026-08-20T18:32:00"),
+                Some(0.04),
+            ),
+            run(
+                "b",
+                RunStatus::Failed,
+                "2026-08-19T18:30:00",
+                Some("2026-08-19T18:30:12"),
+                Some(0.002),
+            ),
             run("c", RunStatus::Skipped, "2026-08-18T18:30:00", None, None),
         ];
         let since = schedule::parse_dt("2026-07-22T00:00:00").unwrap();
@@ -488,8 +519,20 @@ mod tests {
     #[test]
     fn aggregate_filters_by_since_window() {
         let runs = vec![
-            run("old", RunStatus::Succeeded, "2026-07-01T10:00:00", Some("2026-07-01T10:01:00"), Some(1.0)),
-            run("new", RunStatus::Succeeded, "2026-08-20T10:00:00", Some("2026-08-20T10:01:00"), Some(0.05)),
+            run(
+                "old",
+                RunStatus::Succeeded,
+                "2026-07-01T10:00:00",
+                Some("2026-07-01T10:01:00"),
+                Some(1.0),
+            ),
+            run(
+                "new",
+                RunStatus::Succeeded,
+                "2026-08-20T10:00:00",
+                Some("2026-08-20T10:01:00"),
+                Some(0.05),
+            ),
         ];
         let since = schedule::parse_dt("2026-07-22T00:00:00").unwrap();
         let st = aggregate_runs(&runs, since);
@@ -499,9 +542,20 @@ mod tests {
 
     #[test]
     fn aggregate_cache_ratio_and_distill_cost() {
-        let mut r = run("a", RunStatus::Succeeded, "2026-08-20T10:00:00", Some("2026-08-20T10:01:00"), Some(0.03));
+        let mut r = run(
+            "a",
+            RunStatus::Succeeded,
+            "2026-08-20T10:00:00",
+            Some("2026-08-20T10:01:00"),
+            Some(0.03),
+        );
         r.distill_cost_usd = Some(0.01);
-        r.usage = Some(RunUsage { input_tokens: 2_000, output_tokens: 500, cache_read_tokens: 28_000, cache_creation_tokens: 0 });
+        r.usage = Some(RunUsage {
+            input_tokens: 2_000,
+            output_tokens: 500,
+            cache_read_tokens: 28_000,
+            cache_creation_tokens: 0,
+        });
         let since = schedule::parse_dt("2026-07-22T00:00:00").unwrap();
         let st = aggregate_runs(&[r], since);
         // 蒸馏成本并入总账

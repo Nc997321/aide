@@ -9,12 +9,10 @@ use regex::Regex;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use super::{FileEntry, GrepMatch, WorkspaceState, detect_git_branch, ProjectInfo};
+use super::{detect_git_branch, FileEntry, GrepMatch, ProjectInfo, WorkspaceState};
 
 #[tauri::command]
-pub fn get_project_info(
-    workspace_state: State<'_, WorkspaceState>,
-) -> Result<ProjectInfo, String> {
+pub fn get_project_info(workspace_state: State<'_, WorkspaceState>) -> Result<ProjectInfo, String> {
     let _trace = crate::diagnostics::trace_command("get_project_info");
     // 无显式工作区 = 显式空（root/name/branch 全 ""），绝不回退到家目录。
     // project_root_for_commands 的家目录回退只服务「进程 cwd」类消费者
@@ -52,8 +50,7 @@ pub fn file_open(path: String) -> Result<(), String> {
         let mut cmd = Command::new("cmd");
         cmd.args(["/c", "start", "", &path]);
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        cmd.spawn()
-            .map_err(|e| format!("Failed to open: {}", e))?;
+        cmd.spawn().map_err(|e| format!("Failed to open: {}", e))?;
     }
     #[cfg(target_os = "macos")]
     {
@@ -85,12 +82,17 @@ pub fn show_in_explorer(path: String) -> Result<(), String> {
             cmd.arg(format!("/select,{}", path));
         };
         cmd.creation_flags(0x08000000);
-        cmd.spawn().map_err(|e| format!("Failed to open explorer: {}", e))?;
+        cmd.spawn()
+            .map_err(|e| format!("Failed to open explorer: {}", e))?;
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let target = if p.is_dir() { path.clone() } else {
-            p.parent().map(|pa| pa.to_string_lossy().into_owned()).unwrap_or(path)
+        let target = if p.is_dir() {
+            path.clone()
+        } else {
+            p.parent()
+                .map(|pa| pa.to_string_lossy().into_owned())
+                .unwrap_or(path)
         };
         Command::new("xdg-open")
             .arg(&target)
@@ -104,13 +106,18 @@ pub fn show_in_explorer(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn detect_run_command(cwd: String) -> Result<Option<String>, String> {
-    tokio::task::spawn_blocking(move || Ok(super::detectors::detect_command_for_path(Path::new(&cwd))))
-        .await
-        .map_err(|e| format!("detect_run_command task panicked: {}", e))?
+    tokio::task::spawn_blocking(move || {
+        Ok(super::detectors::detect_command_for_path(Path::new(&cwd)))
+    })
+    .await
+    .map_err(|e| format!("detect_run_command task panicked: {}", e))?
 }
 
 #[tauri::command]
-pub async fn list_directory(path: String, show_hidden: Option<bool>) -> Result<Vec<FileEntry>, String> {
+pub async fn list_directory(
+    path: String,
+    show_hidden: Option<bool>,
+) -> Result<Vec<FileEntry>, String> {
     // IPC 边界保留 Option（前端可省略）；None 与 false 等价，进实现前归一成 bool。
     let show_hidden = show_hidden.unwrap_or(false);
     tokio::task::spawn_blocking(move || list_directory_blocking(path, show_hidden))
@@ -128,11 +135,14 @@ fn list_directory_blocking(path: String, show_hidden: bool) -> Result<Vec<FileEn
     let read_dir = fs::read_dir(&dir).map_err(|e| format!("Failed to read dir: {}", e))?;
 
     for entry in read_dir {
-        let Ok(entry) = entry else { continue; };
+        let Ok(entry) = entry else {
+            continue;
+        };
         let name = entry.file_name().to_string_lossy().to_string();
 
         if !show_hidden {
-            if name.starts_with('.') || name == "node_modules" || name == "target" || name == "dist" {
+            if name.starts_with('.') || name == "node_modules" || name == "target" || name == "dist"
+            {
                 continue;
             }
         }
@@ -244,7 +254,9 @@ fn decode_text_bytes(bytes: &[u8]) -> Result<String, String> {
     // 1. BOM 判定
     if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
         // UTF-8 BOM：剥掉 BOM，剩余按 UTF-8 解码（带 BOM 的 UTF-8 一定合法）
-        let s = encoding_rs::UTF_8.decode_without_bom_handling(&bytes[3..]).0;
+        let s = encoding_rs::UTF_8
+            .decode_without_bom_handling(&bytes[3..])
+            .0;
         return Ok(s.into_owned());
     }
     if bytes.starts_with(&[0xFF, 0xFE]) {
@@ -262,7 +274,10 @@ fn decode_text_bytes(bytes: &[u8]) -> Result<String, String> {
         Err(_) => {
             // 3. 二进制兜底：含 NUL 字节 → 视为二进制，保留原 read_to_string 的失败语义
             if bytes.contains(&0x00u8) {
-                return Err("Failed to read file: stream did not contain valid UTF-8 (binary file)".to_string());
+                return Err(
+                    "Failed to read file: stream did not contain valid UTF-8 (binary file)"
+                        .to_string(),
+                );
             }
             // 4. GB18030 兜底（GBK/GB2312 超集）。encoding_rs 的 decode 对任意字节序列
             //    几乎不失败（无效字节以 U+FFFD 替代），返回 Cow<str>。
@@ -329,8 +344,8 @@ pub async fn read_file_base64(path: String) -> Result<String, String> {
         let bytes = fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
         Ok::<String, String>(base64::engine::general_purpose::STANDARD.encode(&bytes))
     })
-        .await
-        .map_err(|e| format!("read_file_base64 task panicked: {}", e))?
+    .await
+    .map_err(|e| format!("read_file_base64 task panicked: {}", e))?
 }
 
 /// 以原始字节读取文件，供前端通过 Blob URL 预览图片等二进制资源。
@@ -362,9 +377,11 @@ pub async fn read_file_binary(path: String) -> Result<tauri::ipc::Response, Stri
 
 #[tauri::command]
 pub async fn write_file_content(path: String, content: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || fs::write(&path, content).map_err(|e| format!("Failed to write file: {}", e)))
-        .await
-        .map_err(|e| format!("write_file_content task panicked: {}", e))?
+    tokio::task::spawn_blocking(move || {
+        fs::write(&path, content).map_err(|e| format!("Failed to write file: {}", e))
+    })
+    .await
+    .map_err(|e| format!("write_file_content task panicked: {}", e))?
 }
 
 #[tauri::command]
@@ -424,7 +441,11 @@ pub async fn copy_file(src: String, dest: String) -> Result<(), String> {
         let src_path = PathBuf::from(&src);
         let dest_path = PathBuf::from(&dest);
         if dest_path.exists() {
-            let name = dest_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let name = dest_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             return Err(format!("EXISTS:{}", name));
         }
         if src_path.is_dir() {
@@ -445,7 +466,11 @@ pub async fn move_file(src: String, dest: String) -> Result<(), String> {
         let src_path = PathBuf::from(&src);
         let dest_path = PathBuf::from(&dest);
         if dest_path.exists() {
-            let name = dest_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let name = dest_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             return Err(format!("EXISTS:{}", name));
         }
         // 同盘快速路径
@@ -458,10 +483,8 @@ pub async fn move_file(src: String, dest: String) -> Result<(), String> {
             fs::remove_dir_all(&src_path)
                 .map_err(|e| format!("Failed to remove source dir: {}", e))?;
         } else {
-            fs::copy(&src_path, &dest_path)
-                .map_err(|e| format!("Failed to copy: {}", e))?;
-            fs::remove_file(&src_path)
-                .map_err(|e| format!("Failed to remove source: {}", e))?;
+            fs::copy(&src_path, &dest_path).map_err(|e| format!("Failed to copy: {}", e))?;
+            fs::remove_file(&src_path).map_err(|e| format!("Failed to remove source: {}", e))?;
         }
         Ok(())
     })
@@ -473,28 +496,23 @@ pub async fn move_file(src: String, dest: String) -> Result<(), String> {
 
 fn code_family(ext: &str) -> Option<&'static [&'static str]> {
     match ext {
-        "java" | "kt" | "kts" | "scala" | "groovy" =>
-            Some(&["java", "kt", "kts", "scala", "groovy"]),
-        "js" | "jsx" | "ts" | "tsx" | "vue" | "svelte" | "mjs" | "cjs" | "mts" | "cts" =>
-            Some(&["js", "jsx", "ts", "tsx", "vue", "svelte", "mjs", "cjs", "mts", "cts"]),
-        "py" | "pyi" =>
-            Some(&["py", "pyi"]),
-        "rs" =>
-            Some(&["rs"]),
-        "go" =>
-            Some(&["go"]),
-        "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" =>
-            Some(&["c", "h", "cpp", "hpp", "cc", "cxx", "hxx"]),
-        "cs" =>
-            Some(&["cs"]),
-        "rb" | "erb" =>
-            Some(&["rb", "erb"]),
-        "php" =>
-            Some(&["php"]),
-        "swift" =>
-            Some(&["swift"]),
-        "dart" =>
-            Some(&["dart"]),
+        "java" | "kt" | "kts" | "scala" | "groovy" => {
+            Some(&["java", "kt", "kts", "scala", "groovy"])
+        }
+        "js" | "jsx" | "ts" | "tsx" | "vue" | "svelte" | "mjs" | "cjs" | "mts" | "cts" => Some(&[
+            "js", "jsx", "ts", "tsx", "vue", "svelte", "mjs", "cjs", "mts", "cts",
+        ]),
+        "py" | "pyi" => Some(&["py", "pyi"]),
+        "rs" => Some(&["rs"]),
+        "go" => Some(&["go"]),
+        "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" => {
+            Some(&["c", "h", "cpp", "hpp", "cc", "cxx", "hxx"])
+        }
+        "cs" => Some(&["cs"]),
+        "rb" | "erb" => Some(&["rb", "erb"]),
+        "php" => Some(&["php"]),
+        "swift" => Some(&["swift"]),
+        "dart" => Some(&["dart"]),
         _ => None,
     }
 }
@@ -502,13 +520,21 @@ fn code_family(ext: &str) -> Option<&'static [&'static str]> {
 /// 同步（非 async）command 在 Tauri 里跑在主线程上——全工作区遍历这种重 IO
 /// 会把窗口整个卡成"未响应"。这里只做线程搬运，真正的遍历在 blocking 线程池。
 #[tauri::command]
-pub async fn grep_symbol(word: String, cwd: String, source_ext: Option<String>) -> Result<Vec<GrepMatch>, String> {
+pub async fn grep_symbol(
+    word: String,
+    cwd: String,
+    source_ext: Option<String>,
+) -> Result<Vec<GrepMatch>, String> {
     tokio::task::spawn_blocking(move || grep_symbol_blocking(word, cwd, source_ext))
         .await
         .map_err(|e| format!("grep_symbol task panicked: {}", e))?
 }
 
-fn grep_symbol_blocking(word: String, cwd: String, source_ext: Option<String>) -> Result<Vec<GrepMatch>, String> {
+fn grep_symbol_blocking(
+    word: String,
+    cwd: String,
+    source_ext: Option<String>,
+) -> Result<Vec<GrepMatch>, String> {
     if word.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -530,9 +556,7 @@ fn grep_symbol_blocking(word: String, cwd: String, source_ext: Option<String>) -
     // Compile regexes once
     let compiled: Vec<(Regex, &str)> = patterns
         .iter()
-        .filter_map(|(pat, mtype)| {
-            Regex::new(pat).ok().map(|re| (re, *mtype))
-        })
+        .filter_map(|(pat, mtype)| Regex::new(pat).ok().map(|re| (re, *mtype)))
         .collect();
 
     // Fallback: any line containing the word
@@ -541,9 +565,7 @@ fn grep_symbol_blocking(word: String, cwd: String, source_ext: Option<String>) -
         Err(_) => return Ok(Vec::new()),
     };
 
-    let allowed_exts: Option<&[&str]> = source_ext
-        .as_deref()
-        .and_then(|e| code_family(e));
+    let allowed_exts: Option<&[&str]> = source_ext.as_deref().and_then(|e| code_family(e));
 
     let mut results: Vec<GrepMatch> = Vec::new();
 
@@ -573,12 +595,32 @@ fn grep_symbol_blocking(word: String, cwd: String, source_ext: Option<String>) -
         if let Some(ext) = file_ext {
             let skip = matches!(
                 ext,
-                "png" | "jpg" | "jpeg" | "gif" | "ico" | "svg"
-                    | "woff" | "woff2" | "ttf" | "eot"
-                    | "mp3" | "mp4" | "wav" | "ogg"
-                    | "zip" | "tar" | "gz" | "rar" | "7z"
-                    | "exe" | "dll" | "so" | "dylib"
-                    | "wasm" | "bin" | "dat"
+                "png"
+                    | "jpg"
+                    | "jpeg"
+                    | "gif"
+                    | "ico"
+                    | "svg"
+                    | "woff"
+                    | "woff2"
+                    | "ttf"
+                    | "eot"
+                    | "mp3"
+                    | "mp4"
+                    | "wav"
+                    | "ogg"
+                    | "zip"
+                    | "tar"
+                    | "gz"
+                    | "rar"
+                    | "7z"
+                    | "exe"
+                    | "dll"
+                    | "so"
+                    | "dylib"
+                    | "wasm"
+                    | "bin"
+                    | "dat"
             );
             if skip {
                 continue;
@@ -627,9 +669,9 @@ fn grep_symbol_blocking(word: String, cwd: String, source_ext: Option<String>) -
             for (line_num, line_content) in content.lines().enumerate() {
                 if fallback.is_match(line_content) {
                     // Skip if already matched as a definition
-                    let already = results.iter().any(|r| {
-                        r.file == rel_path && r.line == (line_num + 1) as u32
-                    });
+                    let already = results
+                        .iter()
+                        .any(|r| r.file == rel_path && r.line == (line_num + 1) as u32);
                     if !already {
                         results.push(GrepMatch {
                             file: rel_path.clone(),
@@ -654,7 +696,8 @@ fn grep_symbol_blocking(word: String, cwd: String, source_ext: Option<String>) -
     results.sort_by(|a, b| {
         let a_def = a.match_type != "reference";
         let b_def = b.match_type != "reference";
-        b_def.cmp(&a_def)
+        b_def
+            .cmp(&a_def)
             .then_with(|| a.file.cmp(&b.file))
             .then_with(|| a.line.cmp(&b.line))
     });
@@ -704,13 +747,21 @@ pub async fn path_types(paths: Vec<String>) -> Result<Vec<String>, String> {
 /// 同 grep_symbol：遍历必须离开主线程（聊天里点一个文件链接就会触发一次搜索，
 /// 大仓库上同步跑等于点一下卡死一次）。
 #[tauri::command]
-pub async fn find_files_by_name(query: String, cwd: String, limit: Option<usize>) -> Result<Vec<String>, String> {
+pub async fn find_files_by_name(
+    query: String,
+    cwd: String,
+    limit: Option<usize>,
+) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || find_files_by_name_blocking(query, cwd, limit))
         .await
         .map_err(|e| format!("find_files_by_name task panicked: {}", e))?
 }
 
-fn find_files_by_name_blocking(query: String, cwd: String, limit: Option<usize>) -> Result<Vec<String>, String> {
+fn find_files_by_name_blocking(
+    query: String,
+    cwd: String,
+    limit: Option<usize>,
+) -> Result<Vec<String>, String> {
     let q = query.trim().replace('\\', "/");
     if q.is_empty() {
         return Ok(Vec::new());
@@ -795,9 +846,13 @@ mod tests {
         let bytes: &[u8] = &[137, 80, 78, 71, 13, 10, 26, 10]; // PNG magic bytes
         fs::write(&path, bytes).unwrap();
 
-        let result = read_file_base64(path.to_string_lossy().to_string()).await.unwrap();
+        let result = read_file_base64(path.to_string_lossy().to_string())
+            .await
+            .unwrap();
         use base64::Engine;
-        let decoded = base64::engine::general_purpose::STANDARD.decode(&result).unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&result)
+            .unwrap();
         assert_eq!(decoded, bytes);
     }
 

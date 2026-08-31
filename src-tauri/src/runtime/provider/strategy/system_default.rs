@@ -42,13 +42,22 @@ impl ProviderStrategy for SystemDefaultStrategy {
             env.insert("CLAUDE_CODE_EFFORT_LEVEL".into(), cfg.effort_level.clone());
         }
         if !cfg.auto_compact_window.is_empty() {
-            env.insert("CLAUDE_CODE_AUTO_COMPACT_WINDOW".into(), cfg.auto_compact_window.clone());
+            env.insert(
+                "CLAUDE_CODE_AUTO_COMPACT_WINDOW".into(),
+                cfg.auto_compact_window.clone(),
+            );
         }
         if !cfg.autocompact_pct_override.is_empty() {
-            env.insert("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE".into(), cfg.autocompact_pct_override.clone());
+            env.insert(
+                "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE".into(),
+                cfg.autocompact_pct_override.clone(),
+            );
         }
         if !cfg.max_context_tokens.is_empty() {
-            env.insert("CLAUDE_CODE_MAX_CONTEXT_TOKENS".into(), cfg.max_context_tokens.clone());
+            env.insert(
+                "CLAUDE_CODE_MAX_CONTEXT_TOKENS".into(),
+                cfg.max_context_tokens.clone(),
+            );
         }
         // base_url 不注入（SDK 默认）；靠 env 兜底
         env
@@ -60,9 +69,18 @@ impl ProviderStrategy for SystemDefaultStrategy {
 
     fn actions(&self) -> Vec<ActionDef> {
         vec![
-            ActionDef { name: "refresh_models".into(), label: "刷新模型列表".into() },
-            ActionDef { name: "view_quota".into(), label: "查看额度".into() },
-            ActionDef { name: "test_connection".into(), label: "测试连接".into() },
+            ActionDef {
+                name: "refresh_models".into(),
+                label: "刷新模型列表".into(),
+            },
+            ActionDef {
+                name: "view_quota".into(),
+                label: "查看额度".into(),
+            },
+            ActionDef {
+                name: "test_connection".into(),
+                label: "测试连接".into(),
+            },
         ]
     }
 
@@ -92,12 +110,16 @@ pub fn refresh_models_blocking(cfg: &ProviderConfig) -> Result<ProviderModelMapp
     let api_key = if !cfg.api_key.is_empty() {
         Some(cfg.api_key.clone())
     } else {
-        std::env::var("ANTHROPIC_API_KEY").ok().filter(|s| !s.is_empty())
+        std::env::var("ANTHROPIC_API_KEY")
+            .ok()
+            .filter(|s| !s.is_empty())
     };
     let auth_token = if !cfg.auth_token.is_empty() {
         Some(cfg.auth_token.clone())
     } else {
-        std::env::var("ANTHROPIC_AUTH_TOKEN").ok().filter(|s| !s.is_empty())
+        std::env::var("ANTHROPIC_AUTH_TOKEN")
+            .ok()
+            .filter(|s| !s.is_empty())
     };
     let base_url = if !cfg.base_url.is_empty() {
         cfg.base_url.clone()
@@ -246,7 +268,10 @@ mod tests {
         let mut p = sd_cfg();
         p.max_context_tokens = "800000".into();
         let env = SystemDefaultStrategy.env_vars(&p);
-        assert_eq!(env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS"), Some(&"800000".to_string()));
+        assert_eq!(
+            env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS"),
+            Some(&"800000".to_string())
+        );
     }
 
     #[test]

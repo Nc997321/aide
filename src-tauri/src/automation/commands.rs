@@ -11,12 +11,17 @@ use super::scheduler::AutomationService;
 use super::{AutomationTask, AutomationTaskInput, PlaybookState, RunRecord, RunStats, RunTrigger};
 
 #[tauri::command]
-pub fn list_automations(svc: State<'_, Arc<AutomationService>>) -> Result<Vec<AutomationTask>, String> {
+pub fn list_automations(
+    svc: State<'_, Arc<AutomationService>>,
+) -> Result<Vec<AutomationTask>, String> {
     Ok(svc.list_tasks())
 }
 
 #[tauri::command]
-pub fn get_automation(svc: State<'_, Arc<AutomationService>>, id: String) -> Result<AutomationTask, String> {
+pub fn get_automation(
+    svc: State<'_, Arc<AutomationService>>,
+    id: String,
+) -> Result<AutomationTask, String> {
     svc.get_task(&id)
 }
 
@@ -44,7 +49,10 @@ pub async fn update_automation(
 }
 
 #[tauri::command]
-pub async fn delete_automation(svc: State<'_, Arc<AutomationService>>, id: String) -> Result<(), String> {
+pub async fn delete_automation(
+    svc: State<'_, Arc<AutomationService>>,
+    id: String,
+) -> Result<(), String> {
     let svc = svc.inner().clone();
     tokio::task::spawn_blocking(move || svc.delete_task(&id))
         .await
@@ -76,7 +84,10 @@ pub async fn list_automation_runs(
 }
 
 #[tauri::command]
-pub async fn automation_run_stats(svc: State<'_, Arc<AutomationService>>, id: String) -> Result<RunStats, String> {
+pub async fn automation_run_stats(
+    svc: State<'_, Arc<AutomationService>>,
+    id: String,
+) -> Result<RunStats, String> {
     let svc = svc.inner().clone();
     tokio::task::spawn_blocking(move || svc.run_stats(&id))
         .await
@@ -86,14 +97,20 @@ pub async fn automation_run_stats(svc: State<'_, Arc<AutomationService>>, id: St
 /// 立即运行一次（不碰调度网格）。返回运行中的记录；正在运行返回 Err。
 /// start_run 内部做小文件落盘（元数据/运行记录）+ async send，不开 blocking。
 #[tauri::command]
-pub async fn run_automation_now(svc: State<'_, Arc<AutomationService>>, id: String) -> Result<RunRecord, String> {
+pub async fn run_automation_now(
+    svc: State<'_, Arc<AutomationService>>,
+    id: String,
+) -> Result<RunRecord, String> {
     let svc = svc.inner().clone();
     svc.start_run(&id, RunTrigger::Manual).await
 }
 
 /// 读执行手册内容（None = 尚未生成，前端显示空态）。
 #[tauri::command]
-pub async fn get_automation_playbook(svc: State<'_, Arc<AutomationService>>, id: String) -> Result<Option<String>, String> {
+pub async fn get_automation_playbook(
+    svc: State<'_, Arc<AutomationService>>,
+    id: String,
+) -> Result<Option<String>, String> {
     let svc = svc.inner().clone();
     tokio::task::spawn_blocking(move || svc.read_playbook(&id))
         .await
@@ -102,7 +119,10 @@ pub async fn get_automation_playbook(svc: State<'_, Arc<AutomationService>>, id:
 
 /// 标记手册待重新提炼：下次运行按探索模式执行并重新蒸馏。
 #[tauri::command]
-pub async fn redistill_automation(svc: State<'_, Arc<AutomationService>>, id: String) -> Result<AutomationTask, String> {
+pub async fn redistill_automation(
+    svc: State<'_, Arc<AutomationService>>,
+    id: String,
+) -> Result<AutomationTask, String> {
     let svc = svc.inner().clone();
     tokio::task::spawn_blocking(move || svc.set_playbook_state(&id, PlaybookState::Stale))
         .await

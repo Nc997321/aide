@@ -27,11 +27,11 @@ use sysinfo::{ProcessesToUpdate, System};
 use tauri::{AppHandle, Manager};
 
 use super::report::{
-    self, FreezeInfo, FreezeReport, FreezeSample, MainThreadProbe, ParkFrameRecord,
-    ProcessSample, ReportMeta, RingSnapshot, StackFrameRecord,
+    self, FreezeInfo, FreezeReport, FreezeSample, MainThreadProbe, ParkFrameRecord, ProcessSample,
+    ReportMeta, RingSnapshot, StackFrameRecord,
 };
 use super::stackwalk;
-use super::{DiagnosticsState, DiagInner};
+use super::{DiagInner, DiagnosticsState};
 
 /// watchdog 检查周期 = 冻结期采样周期
 const TICK_MS: u64 = 500;
@@ -139,13 +139,15 @@ fn run(app: AppHandle) {
                 // 立即预热一次进程表：sysinfo 的 cpu_usage 是两次刷新间的差值，
                 // 预热让下一帧就有有效 CPU 数据
                 let _ = sample_processes(&mut sys);
-                fz.samples.push(make_sample(&mut sys, &probe, &hwnd, &main_tid, true));
+                fz.samples
+                    .push(make_sample(&mut sys, &probe, &hwnd, &main_tid, true));
                 fz.path = flush_report(&inner, &fz, FreezeOutcome::Ongoing);
                 freeze = Some(fz);
             }
             Some(fz) if gap_ms >= FREEZE_GAP_MS => {
                 if fz.samples.len() < MAX_SAMPLES {
-                    fz.samples.push(make_sample(&mut sys, &probe, &hwnd, &main_tid, false));
+                    fz.samples
+                        .push(make_sample(&mut sys, &probe, &hwnd, &main_tid, false));
                 }
                 fz.tick_since_flush += 1;
                 if fz.tick_since_flush >= FLUSH_EVERY_TICKS {
@@ -394,7 +396,11 @@ mod tests {
         std::fs::write(&path, "{}").unwrap();
         *inner.last_report.lock().unwrap() = Some((path.clone(), Instant::now()));
 
-        close_freeze(&inner, freeze_now(Some(path.clone())), FreezeOutcome::Ongoing);
+        close_freeze(
+            &inner,
+            freeze_now(Some(path.clone())),
+            FreezeOutcome::Ongoing,
+        );
 
         assert!(!path.exists(), "短冻结丢弃应删除已落盘的报告文件");
         assert!(

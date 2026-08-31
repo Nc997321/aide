@@ -85,7 +85,11 @@ pub struct ProviderConfig {
     pub base_url: String,
     #[serde(default, skip_serializing_if = "String::is_empty", alias = "api_key")]
     pub api_key: String,
-    #[serde(default, skip_serializing_if = "String::is_empty", alias = "auth_token")]
+    #[serde(
+        default,
+        skip_serializing_if = "String::is_empty",
+        alias = "auth_token"
+    )]
     pub auth_token: String,
     /// 已废弃：模型默认值的权威源改到 `model_mappings.anthropic_model`。字段保留
     /// 仅用于读旧配置——`migrate_provider_model` 在反序列化后把非空的顶层 model
@@ -138,19 +142,32 @@ pub struct ProviderConfigView {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderConfigInput {
     pub id: String,
-    #[serde(default)] pub kind: ProviderKind,
-    #[serde(default)] pub name: String,
-    #[serde(default)] pub icon: String,
-    #[serde(default)] pub base_url: String,
-    #[serde(default)] pub api_key: crate::settings::SecretMutation,
-    #[serde(default)] pub auth_token: crate::settings::SecretMutation,
-    #[serde(default)] pub model: String,
-    #[serde(default)] pub model_mappings: ProviderModelMappings,
-    #[serde(default)] pub effort_level: String,
-    #[serde(default)] pub auto_compact_window: String,
-    #[serde(default)] pub autocompact_pct_override: String,
-    #[serde(default)] pub max_context_tokens: String,
-    #[serde(default)] pub known_models: Vec<String>,
+    #[serde(default)]
+    pub kind: ProviderKind,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: crate::settings::SecretMutation,
+    #[serde(default)]
+    pub auth_token: crate::settings::SecretMutation,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub model_mappings: ProviderModelMappings,
+    #[serde(default)]
+    pub effort_level: String,
+    #[serde(default)]
+    pub auto_compact_window: String,
+    #[serde(default)]
+    pub autocompact_pct_override: String,
+    #[serde(default)]
+    pub max_context_tokens: String,
+    #[serde(default)]
+    pub known_models: Vec<String>,
 }
 
 /// Provider 凭证配置状态的视图——替代 `api_key_configured` + `auth_token_configured`
@@ -212,7 +229,10 @@ pub fn provider_to_env_vars(p: &ProviderConfig) -> HashMap<String, String> {
         ("ANTHROPIC_AUTH_TOKEN", &p.auth_token),
         ("CLAUDE_CODE_EFFORT_LEVEL", &p.effort_level),
         ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", &p.auto_compact_window),
-        ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", &p.autocompact_pct_override),
+        (
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+            &p.autocompact_pct_override,
+        ),
         ("CLAUDE_CODE_MAX_CONTEXT_TOKENS", &p.max_context_tokens),
     ];
     for (key, val) in pairs {
@@ -235,7 +255,9 @@ pub fn migrate_provider_model(p: &mut ProviderConfig) {
 
 /// 预置 kind：从 catalog 派生 base_url/name/icon 填入（内存态，不持久化）。
 pub fn enrich(p: &mut ProviderConfig) {
-    if !p.kind.is_preset() { return; }
+    if !p.kind.is_preset() {
+        return;
+    }
     if let Some((name, icon, base_url)) = resolve_preset_identity(p.kind) {
         p.name = name;
         p.icon = icon;
@@ -245,7 +267,9 @@ pub fn enrich(p: &mut ProviderConfig) {
 
 /// 预置 kind：清空 base_url/name/icon（持久化前调，保证不入 config.json）。
 pub fn strip(p: &mut ProviderConfig) {
-    if !p.kind.is_preset() { return; }
+    if !p.kind.is_preset() {
+        return;
+    }
     p.name = String::new();
     p.icon = String::new();
     p.base_url = String::new();
@@ -256,25 +280,45 @@ pub fn system_default_provider() -> ProviderConfig {
     ProviderConfig {
         id: "__system_default__".to_string(),
         kind: ProviderKind::SystemDefault,
-        name: String::new(), icon: String::new(), base_url: String::new(),
-        api_key: String::new(), auth_token: String::new(), model: String::new(),
+        name: String::new(),
+        icon: String::new(),
+        base_url: String::new(),
+        api_key: String::new(),
+        auth_token: String::new(),
+        model: String::new(),
         model_mappings: ProviderModelMappings::default(),
-        effort_level: String::new(), auto_compact_window: String::new(),
-        autocompact_pct_override: String::new(), max_context_tokens: String::new(),
+        effort_level: String::new(),
+        auto_compact_window: String::new(),
+        autocompact_pct_override: String::new(),
+        max_context_tokens: String::new(),
         known_models: Vec::new(),
     }
 }
 
 impl crate::settings::SettingsService {
-    pub fn list_provider_views(&self) -> Result<Vec<ProviderConfigView>, crate::settings::SettingsError> {
+    pub fn list_provider_views(
+        &self,
+    ) -> Result<Vec<ProviderConfigView>, crate::settings::SettingsError> {
         let values = self.effective_document_blocking(None)?.values;
-        let entries = values.get("providers").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
-        entries.into_iter().filter_map(|entry| serde_json::from_value::<ProviderConfig>(entry).ok())
+        let entries = values
+            .get("providers")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        entries
+            .into_iter()
+            .filter_map(|entry| serde_json::from_value::<ProviderConfig>(entry).ok())
             .map(|mut provider| {
                 migrate_provider_model(&mut provider);
                 enrich(&mut provider);
-                let api = self.secrets().get(&format!("provider/{}/apiKey", provider.id))?.is_some();
-                let token = self.secrets().get(&format!("provider/{}/authToken", provider.id))?.is_some();
+                let api = self
+                    .secrets()
+                    .get(&format!("provider/{}/apiKey", provider.id))?
+                    .is_some();
+                let token = self
+                    .secrets()
+                    .get(&format!("provider/{}/authToken", provider.id))?
+                    .is_some();
                 let auth = match (api, token) {
                     (true, true) => AuthStatus::Both,
                     (true, false) => AuthStatus::ApiKey,
@@ -282,10 +326,14 @@ impl crate::settings::SettingsService {
                     (false, false) => AuthStatus::None,
                 };
                 Ok(provider.view(auth))
-            }).collect()
+            })
+            .collect()
     }
 
-    pub fn resolve_runtime_provider(&self, id: &str) -> Result<ProviderConfig, crate::settings::SettingsError> {
+    pub fn resolve_runtime_provider(
+        &self,
+        id: &str,
+    ) -> Result<ProviderConfig, crate::settings::SettingsError> {
         let values = self.effective_document_blocking(None)?.values;
         self.resolve_runtime_provider_from_values(&values, id)
     }
@@ -302,9 +350,12 @@ impl crate::settings::SettingsService {
         Ok(id.to_string())
     }
 
-    pub fn resolve_active_runtime_provider(&self) -> Result<ProviderConfig, crate::settings::SettingsError> {
+    pub fn resolve_active_runtime_provider(
+        &self,
+    ) -> Result<ProviderConfig, crate::settings::SettingsError> {
         let doc = self.effective_document_blocking(None)?;
-        let id = doc.values
+        let id = doc
+            .values
             .get("activeProvider")
             .or_else(|| doc.values.get("active_provider"))
             .and_then(serde_json::Value::as_str)
@@ -314,14 +365,26 @@ impl crate::settings::SettingsService {
 
     /// Returns all providers WITH secrets resolved (for action paths that may need creds).
     /// Mirrors `list_provider_views` but builds `ProviderConfig` with api_key/auth_token.
-    pub fn list_runtime_providers(&self) -> Result<Vec<ProviderConfig>, crate::settings::SettingsError> {
+    pub fn list_runtime_providers(
+        &self,
+    ) -> Result<Vec<ProviderConfig>, crate::settings::SettingsError> {
         let values = self.effective_document_blocking(None)?.values;
-        let entries = values.get("providers").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+        let entries = values
+            .get("providers")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         let mut out = Vec::with_capacity(entries.len());
         for entry in entries {
             if let Ok(mut provider) = serde_json::from_value::<ProviderConfig>(entry) {
-                provider.api_key = self.secrets().get(&format!("provider/{}/apiKey", provider.id))?.unwrap_or_default();
-                provider.auth_token = self.secrets().get(&format!("provider/{}/authToken", provider.id))?.unwrap_or_default();
+                provider.api_key = self
+                    .secrets()
+                    .get(&format!("provider/{}/apiKey", provider.id))?
+                    .unwrap_or_default();
+                provider.auth_token = self
+                    .secrets()
+                    .get(&format!("provider/{}/authToken", provider.id))?
+                    .unwrap_or_default();
                 migrate_provider_model(&mut provider);
                 enrich(&mut provider);
                 out.push(provider);
@@ -332,11 +395,19 @@ impl crate::settings::SettingsService {
 
     /// Persist model_mappings for a single provider entry. Mutates the `providers[]` entry
     /// whose id matches. If no matching entry, no-op (does NOT create a top-level key).
-    pub fn save_provider_model_mappings(&self, id: &str, mappings: &ProviderModelMappings) -> Result<(), crate::settings::SettingsError> {
+    pub fn save_provider_model_mappings(
+        &self,
+        id: &str,
+        mappings: &ProviderModelMappings,
+    ) -> Result<(), crate::settings::SettingsError> {
         let m_val = serde_json::to_value(mappings)
             .map_err(|e| crate::settings::SettingsError::Storage(e.to_string()))?;
         self.mutate_scope_blocking(crate::settings::SettingsScope::User, None, |document| {
-            if let Some(arr) = document.values.get_mut("providers").and_then(|v| v.as_array_mut()) {
+            if let Some(arr) = document
+                .values
+                .get_mut("providers")
+                .and_then(|v| v.as_array_mut())
+            {
                 for p in arr.iter_mut() {
                     if p.get("id").and_then(|v| v.as_str()) == Some(id) {
                         // ProviderConfig uses #[serde(rename_all = "camelCase")],
@@ -351,18 +422,38 @@ impl crate::settings::SettingsService {
         Ok(())
     }
 
-    fn resolve_runtime_provider_from_values(&self, values: &serde_json::Value, id: &str) -> Result<ProviderConfig, crate::settings::SettingsError> {
-        let entries = values.get("providers").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
-        let mut provider = entries.into_iter().filter_map(|entry| serde_json::from_value::<ProviderConfig>(entry).ok())
-            .find(|candidate| candidate.id == id).unwrap_or_else(system_default_provider);
-        provider.api_key = self.secrets().get(&format!("provider/{}/apiKey", provider.id))?.unwrap_or_default();
-        provider.auth_token = self.secrets().get(&format!("provider/{}/authToken", provider.id))?.unwrap_or_default();
+    fn resolve_runtime_provider_from_values(
+        &self,
+        values: &serde_json::Value,
+        id: &str,
+    ) -> Result<ProviderConfig, crate::settings::SettingsError> {
+        let entries = values
+            .get("providers")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut provider = entries
+            .into_iter()
+            .filter_map(|entry| serde_json::from_value::<ProviderConfig>(entry).ok())
+            .find(|candidate| candidate.id == id)
+            .unwrap_or_else(system_default_provider);
+        provider.api_key = self
+            .secrets()
+            .get(&format!("provider/{}/apiKey", provider.id))?
+            .unwrap_or_default();
+        provider.auth_token = self
+            .secrets()
+            .get(&format!("provider/{}/authToken", provider.id))?
+            .unwrap_or_default();
         migrate_provider_model(&mut provider);
         enrich(&mut provider);
         Ok(provider)
     }
 
-    pub fn save_provider_inputs(&self, inputs: Vec<ProviderConfigInput>) -> Result<(), crate::settings::SettingsError> {
+    pub fn save_provider_inputs(
+        &self,
+        inputs: Vec<ProviderConfigInput>,
+    ) -> Result<(), crate::settings::SettingsError> {
         let mut ids = std::collections::BTreeSet::new();
         for input in &inputs {
             if input.id.trim().is_empty() || !ids.insert(input.id.clone()) {
@@ -375,11 +466,12 @@ impl crate::settings::SettingsService {
         let mut persisted = Vec::with_capacity(inputs.len());
         let mut changed_secret_keys = Vec::new();
         for input in &inputs {
-            for (suffix, mutation) in [("apiKey", &input.api_key), ("authToken", &input.auth_token)] {
+            for (suffix, mutation) in [("apiKey", &input.api_key), ("authToken", &input.auth_token)]
+            {
                 let key = format!("provider/{}/{}", input.id, suffix);
                 match mutation {
-                    crate::settings::SecretMutation::Unchanged => {},
-                    crate::settings::SecretMutation::Set(value) if value.is_empty() => {},
+                    crate::settings::SecretMutation::Unchanged => {}
+                    crate::settings::SecretMutation::Set(value) if value.is_empty() => {}
                     crate::settings::SecretMutation::Set(value) => {
                         self.secrets().set(&key, value)?;
                         changed_secret_keys.push(key);
@@ -390,14 +482,38 @@ impl crate::settings::SettingsService {
                     }
                 }
             }
-            let mut provider = ProviderConfig { id: input.id.clone(), kind: input.kind, name: input.name.clone(), icon: input.icon.clone(), base_url: input.base_url.clone(), api_key: String::new(), auth_token: String::new(), model: input.model.clone(), model_mappings: input.model_mappings.clone(), effort_level: input.effort_level.clone(), auto_compact_window: input.auto_compact_window.clone(), autocompact_pct_override: input.autocompact_pct_override.clone(), max_context_tokens: input.max_context_tokens.clone(), known_models: input.known_models.clone() };
+            let mut provider = ProviderConfig {
+                id: input.id.clone(),
+                kind: input.kind,
+                name: input.name.clone(),
+                icon: input.icon.clone(),
+                base_url: input.base_url.clone(),
+                api_key: String::new(),
+                auth_token: String::new(),
+                model: input.model.clone(),
+                model_mappings: input.model_mappings.clone(),
+                effort_level: input.effort_level.clone(),
+                auto_compact_window: input.auto_compact_window.clone(),
+                autocompact_pct_override: input.autocompact_pct_override.clone(),
+                max_context_tokens: input.max_context_tokens.clone(),
+                known_models: input.known_models.clone(),
+            };
             strip(&mut provider);
             persisted.push(provider);
         }
-        if let Err(error) = self.mutate_scope_blocking(crate::settings::SettingsScope::User, None, move |document| {
-            document.values.insert("providers".to_string(), serde_json::to_value(persisted).map_err(|error| crate::settings::SettingsError::Storage(error.to_string()))?);
-            Ok(())
-        }) {
+        if let Err(error) = self.mutate_scope_blocking(
+            crate::settings::SettingsScope::User,
+            None,
+            move |document| {
+                document.values.insert(
+                    "providers".to_string(),
+                    serde_json::to_value(persisted).map_err(|error| {
+                        crate::settings::SettingsError::Storage(error.to_string())
+                    })?,
+                );
+                Ok(())
+            },
+        ) {
             if !changed_secret_keys.is_empty() {
                 tracing::warn!(
                     secret_key_count = changed_secret_keys.len(),
@@ -410,8 +526,27 @@ impl crate::settings::SettingsService {
     }
 
     #[cfg(test)]
-    pub fn save_provider_input_for_test(&self, id: &str, secret: &str) -> Result<(), crate::settings::SettingsError> {
-        self.save_provider_inputs(vec![ProviderConfigInput { id: id.to_string(), kind: ProviderKind::Custom, name: "test".to_string(), icon: String::new(), base_url: String::new(), api_key: crate::settings::SecretMutation::Set(secret.to_string()), auth_token: crate::settings::SecretMutation::Unchanged, model: String::new(), model_mappings: ProviderModelMappings::default(), effort_level: String::new(), auto_compact_window: String::new(), autocompact_pct_override: String::new(), max_context_tokens: String::new(), known_models: Vec::new() }])
+    pub fn save_provider_input_for_test(
+        &self,
+        id: &str,
+        secret: &str,
+    ) -> Result<(), crate::settings::SettingsError> {
+        self.save_provider_inputs(vec![ProviderConfigInput {
+            id: id.to_string(),
+            kind: ProviderKind::Custom,
+            name: "test".to_string(),
+            icon: String::new(),
+            base_url: String::new(),
+            api_key: crate::settings::SecretMutation::Set(secret.to_string()),
+            auth_token: crate::settings::SecretMutation::Unchanged,
+            model: String::new(),
+            model_mappings: ProviderModelMappings::default(),
+            effort_level: String::new(),
+            auto_compact_window: String::new(),
+            autocompact_pct_override: String::new(),
+            max_context_tokens: String::new(),
+            known_models: Vec::new(),
+        }])
     }
 }
 
@@ -477,7 +612,10 @@ fn classify_by_base_url(base_url: &str) -> ProviderKind {
         ProviderKind::SystemDefault,
     ] {
         if let Some(preset) = catalog_find(kind) {
-            if preset.base_url.eq_ignore_ascii_case(base_url.trim_end_matches('/')) {
+            if preset
+                .base_url
+                .eq_ignore_ascii_case(base_url.trim_end_matches('/'))
+            {
                 return kind;
             }
         }
@@ -487,10 +625,14 @@ fn classify_by_base_url(base_url: &str) -> ProviderKind {
 
 /// 检测老 schema 并原地迁移。返回是否改了。idempotent。
 pub fn migrate(config: &mut serde_json::Value) -> bool {
-    let providers_arr = config.get("providers").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let providers_arr = config
+        .get("providers")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let has_legacy_sdm = config.get("system_default_model_mappings").is_some();
-    let all_have_kind = !providers_arr.is_empty()
-        && providers_arr.iter().all(|p| p.get("kind").is_some());
+    let all_have_kind =
+        !providers_arr.is_empty() && providers_arr.iter().all(|p| p.get("kind").is_some());
     if !has_legacy_sdm && all_have_kind {
         return false; // 已迁移
     }
@@ -576,15 +718,23 @@ pub fn migrate(config: &mut serde_json::Value) -> bool {
         config["active_provider"] = serde_json::json!("__system_default__");
     }
     if has_legacy_sdm {
-        config.as_object_mut().map(|o| o.remove("system_default_model_mappings"));
+        config
+            .as_object_mut()
+            .map(|o| o.remove("system_default_model_mappings"));
     }
     true
 }
 
 /// 把 src 的凭证 / model_mappings 合并进 dst（dst 空才取 src）。
 fn merge_into(dst: &mut serde_json::Value, src: &serde_json::Value) {
-    let dst_obj = match dst.as_object_mut() { Some(o) => o, None => return };
-    let src_obj = match src.as_object() { Some(o) => o, None => return };
+    let dst_obj = match dst.as_object_mut() {
+        Some(o) => o,
+        None => return,
+    };
+    let src_obj = match src.as_object() {
+        Some(o) => o,
+        None => return,
+    };
     // 凭证：dst 空才取
     for key in ["api_key", "auth_token"] {
         let src_val = src_obj.get(key).and_then(|v| v.as_str()).unwrap_or("");
@@ -594,7 +744,10 @@ fn merge_into(dst: &mut serde_json::Value, src: &serde_json::Value) {
         }
     }
     // model_mappings：逐字段 dst 空才取
-    if let Some(dst_m) = dst_obj.get_mut("model_mappings").and_then(|v| v.as_object_mut()) {
+    if let Some(dst_m) = dst_obj
+        .get_mut("model_mappings")
+        .and_then(|v| v.as_object_mut())
+    {
         if let Some(src_m) = src_obj.get("model_mappings").and_then(|v| v.as_object()) {
             for (k, v) in src_m {
                 let dst_v = dst_m.get(k).and_then(|x| x.as_str()).unwrap_or("");
@@ -648,11 +801,16 @@ mod secret_boundary_tests {
         let secrets = Arc::new(MemorySecretStore::default());
         let service = SettingsService::new(SettingsPaths::for_test(root), secrets);
         service.initialize_blocking().unwrap();
-        service.save_provider_input_for_test("p1", "top-secret").unwrap();
+        service
+            .save_provider_input_for_test("p1", "top-secret")
+            .unwrap();
         let view = service.list_provider_views().unwrap();
         assert!(view[0].api_key_configured);
         assert!(!serde_json::to_string(&view).unwrap().contains("top-secret"));
-        assert_eq!(service.resolve_runtime_provider("p1").unwrap().api_key, "top-secret");
+        assert_eq!(
+            service.resolve_runtime_provider("p1").unwrap().api_key,
+            "top-secret"
+        );
     }
 }
 
@@ -686,8 +844,14 @@ mod tests {
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0]["id"], "__system_default__");
         assert_eq!(providers[0]["kind"], "system_default");
-        assert_eq!(providers[0]["model_mappings"]["anthropic_model"], "claude-sonnet-5");
-        assert!(c.get("system_default_model_mappings").is_none(), "top-level sdm removed");
+        assert_eq!(
+            providers[0]["model_mappings"]["anthropic_model"],
+            "claude-sonnet-5"
+        );
+        assert!(
+            c.get("system_default_model_mappings").is_none(),
+            "top-level sdm removed"
+        );
         assert_eq!(c["active_provider"], "__system_default__");
     }
 
@@ -700,7 +864,10 @@ mod tests {
         assert!(migrate(&mut c));
         let p1 = &c["providers"].as_array().unwrap()[1]; // [0]=system_default
         assert_eq!(p1["kind"], "custom");
-        assert_eq!(p1["base_url"], "https://my-gw.example", "custom keeps base_url");
+        assert_eq!(
+            p1["base_url"], "https://my-gw.example",
+            "custom keeps base_url"
+        );
         assert_eq!(p1["name"], "mygw");
     }
 
@@ -714,7 +881,10 @@ mod tests {
         let p2 = &c["providers"].as_array().unwrap()[1];
         assert_eq!(p2["kind"], "cpa_gpt");
         assert_eq!(p2["auth_token"], "sk-local-cpa", "credential kept");
-        assert_eq!(p2["base_url"], "", "preset base_url stripped (derived from catalog)");
+        assert_eq!(
+            p2["base_url"], "",
+            "preset base_url stripped (derived from catalog)"
+        );
         assert_eq!(p2["name"], "", "preset name stripped");
         assert_eq!(p2["icon"], "", "preset icon stripped");
     }
@@ -728,13 +898,23 @@ mod tests {
         assert!(migrate(&mut c));
         let providers = c["providers"].as_array().unwrap();
         // system_default 合并了 p3 的 api_key；p3 不独立存在
-        assert_eq!(providers.len(), 1, "empty-base_url provider merged, not standalone");
+        assert_eq!(
+            providers.len(),
+            1,
+            "empty-base_url provider merged, not standalone"
+        );
         assert_eq!(providers[0]["id"], "__system_default__");
         assert_eq!(providers[0]["kind"], "system_default");
         assert_eq!(providers[0]["api_key"], "key-from-empty");
         // model_mappings：顶层 sdm 的 anthropic_model 保留，p3 的 default_opus_model 补进来
-        assert_eq!(providers[0]["model_mappings"]["anthropic_model"], "sonnet-y");
-        assert_eq!(providers[0]["model_mappings"]["default_opus_model"], "opus-x");
+        assert_eq!(
+            providers[0]["model_mappings"]["anthropic_model"],
+            "sonnet-y"
+        );
+        assert_eq!(
+            providers[0]["model_mappings"]["default_opus_model"],
+            "opus-x"
+        );
     }
 
     #[test]
@@ -747,7 +927,10 @@ mod tests {
         assert!(migrate(&mut c));
         let p4 = &c["providers"].as_array().unwrap()[1];
         assert_eq!(p4["kind"], "custom");
-        assert_eq!(p4["model_mappings"]["anthropic_model"], "claude-sonnet-4", "legacy top-level model backfilled");
+        assert_eq!(
+            p4["model_mappings"]["anthropic_model"], "claude-sonnet-4",
+            "legacy top-level model backfilled"
+        );
     }
 
     fn provider_with(model: String, anthropic: String) -> ProviderConfig {
@@ -799,7 +982,10 @@ mod tests {
             ..Default::default()
         };
         let env = mappings_to_env(&m);
-        assert_eq!(env.get("ANTHROPIC_MODEL"), Some(&"claude-sonnet-5".to_string()));
+        assert_eq!(
+            env.get("ANTHROPIC_MODEL"),
+            Some(&"claude-sonnet-5".to_string())
+        );
         assert_eq!(
             env.get("ANTHROPIC_DEFAULT_SONNET_MODEL"),
             Some(&"claude-sonnet-5".to_string())
@@ -856,7 +1042,10 @@ mod tests {
             ..provider_with(String::new(), String::new())
         };
         let env = provider_to_env_vars(&p);
-        assert_eq!(env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS"), Some(&"800000".to_string()));
+        assert_eq!(
+            env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS"),
+            Some(&"800000".to_string())
+        );
     }
 
     #[test]
@@ -868,12 +1057,19 @@ mod tests {
     #[test]
     fn enrich_fills_preset_identity_from_catalog() {
         let mut p = ProviderConfig {
-            id: "cpa".into(), kind: ProviderKind::CpaGpt,
-            name: "".into(), icon: "".into(), base_url: "".into(),
-            api_key: "".into(), auth_token: "".into(), model: String::new(),
+            id: "cpa".into(),
+            kind: ProviderKind::CpaGpt,
+            name: "".into(),
+            icon: "".into(),
+            base_url: "".into(),
+            api_key: "".into(),
+            auth_token: "".into(),
+            model: String::new(),
             model_mappings: ProviderModelMappings::default(),
-            effort_level: "".into(), auto_compact_window: "".into(),
-            autocompact_pct_override: "".into(), max_context_tokens: "".into(),
+            effort_level: "".into(),
+            auto_compact_window: "".into(),
+            autocompact_pct_override: "".into(),
+            max_context_tokens: "".into(),
             known_models: vec![],
         };
         enrich(&mut p);
@@ -884,12 +1080,19 @@ mod tests {
     #[test]
     fn strip_clears_preset_identity_keeps_custom() {
         let mut p = ProviderConfig {
-            id: "cpa".into(), kind: ProviderKind::CpaGpt,
-            name: "CPA 中转".into(), icon: "C".into(), base_url: "http://127.0.0.1:8317".into(),
-            api_key: "k".into(), auth_token: "t".into(), model: String::new(),
+            id: "cpa".into(),
+            kind: ProviderKind::CpaGpt,
+            name: "CPA 中转".into(),
+            icon: "C".into(),
+            base_url: "http://127.0.0.1:8317".into(),
+            api_key: "k".into(),
+            auth_token: "t".into(),
+            model: String::new(),
             model_mappings: ProviderModelMappings::default(),
-            effort_level: "".into(), auto_compact_window: "".into(),
-            autocompact_pct_override: "".into(), max_context_tokens: "".into(),
+            effort_level: "".into(),
+            auto_compact_window: "".into(),
+            autocompact_pct_override: "".into(),
+            max_context_tokens: "".into(),
             known_models: vec![],
         };
         strip(&mut p);
@@ -902,12 +1105,19 @@ mod tests {
     #[test]
     fn strip_does_not_touch_custom() {
         let mut p = ProviderConfig {
-            id: "c".into(), kind: ProviderKind::Custom,
-            name: "my".into(), icon: "M".into(), base_url: "https://gw".into(),
-            api_key: "".into(), auth_token: "".into(), model: String::new(),
+            id: "c".into(),
+            kind: ProviderKind::Custom,
+            name: "my".into(),
+            icon: "M".into(),
+            base_url: "https://gw".into(),
+            api_key: "".into(),
+            auth_token: "".into(),
+            model: String::new(),
             model_mappings: ProviderModelMappings::default(),
-            effort_level: "".into(), auto_compact_window: "".into(),
-            autocompact_pct_override: "".into(), max_context_tokens: "".into(),
+            effort_level: "".into(),
+            auto_compact_window: "".into(),
+            autocompact_pct_override: "".into(),
+            max_context_tokens: "".into(),
             known_models: vec![],
         };
         strip(&mut p);
@@ -929,7 +1139,10 @@ mod tests {
         for (status, api, token) in cases {
             let view = cfg.clone().view(status);
             assert_eq!(view.api_key_configured, api, "api_key flag for {status:?}");
-            assert_eq!(view.auth_token_configured, token, "auth_token flag for {status:?}");
+            assert_eq!(
+                view.auth_token_configured, token,
+                "auth_token flag for {status:?}"
+            );
         }
     }
 
@@ -942,8 +1155,10 @@ mod tests {
             ]
         });
         assert!(migrate(&mut c), "should migrate");
-        assert_eq!(c["active_provider"], "__system_default__",
-            "dangling active_provider (merged-away p3) must rewrite to sentinel");
+        assert_eq!(
+            c["active_provider"], "__system_default__",
+            "dangling active_provider (merged-away p3) must rewrite to sentinel"
+        );
         // p3's creds merged into the SystemDefault entry
         assert_eq!(c["providers"][0]["id"], "__system_default__");
         assert_eq!(c["providers"][0]["api_key"], "sk-p3");

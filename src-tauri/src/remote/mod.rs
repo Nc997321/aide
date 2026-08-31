@@ -5,8 +5,8 @@ pub mod rpc;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager};
 use tauri::async_runtime::JoinHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::commands::settings::{public_settings, RemoteSettings};
 use crate::settings::SettingsService;
@@ -46,7 +46,9 @@ impl RemoteGateway {
     /// 必须走 tauri 的全局 async runtime 而非 tokio::spawn——setup 钩子跑在主线程
     /// （Tokio runtime 之外），tokio::spawn 会 panic "no reactor running"。
     pub fn start(self: &Arc<Self>) {
-        if lock_recover(&self.relay_task).is_some() { return; }
+        if lock_recover(&self.relay_task).is_some() {
+            return;
+        }
         let gateway = self.clone();
         let handle = tauri::async_runtime::spawn(async move {
             relay_client::run(gateway).await;
@@ -76,7 +78,8 @@ pub(crate) async fn read_remote_settings(app: &AppHandle) -> Result<RemoteSettin
     let service = app.state::<Arc<SettingsService>>();
     let service = service.inner().clone();
     tokio::task::spawn_blocking(move || public_settings(&service))
-        .await.map_err(|e| e.to_string())?
+        .await
+        .map_err(|e| e.to_string())?
         .map(|s| s.remote)
 }
 

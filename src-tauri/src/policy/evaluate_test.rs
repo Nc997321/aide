@@ -96,7 +96,10 @@ fn explanation_shows_managed_deny_and_shadowed_local_allow() {
         .iter()
         .find(|e| e.rule_id == "l")
         .expect("local allow must appear in chain");
-    assert_eq!(local_entry.status, super::model::ChainStatus::OverriddenByDeny);
+    assert_eq!(
+        local_entry.status,
+        super::model::ChainStatus::OverriddenByDeny
+    );
     let managed_entry = decision
         .chain
         .iter()
@@ -114,7 +117,10 @@ fn same_scope_loser_is_shadowed_by_specificity() {
             order: 0,
             effect: PermissionEffect::Ask,
             tool: "Bash".into(),
-            matcher: PermissionMatcher::Bash { mode: BashMode::All, value: None },
+            matcher: PermissionMatcher::Bash {
+                mode: BashMode::All,
+                value: None,
+            },
             source: PermissionSource::default(),
         },
         PermissionRule {
@@ -135,14 +141,16 @@ fn same_scope_loser_is_shadowed_by_specificity() {
     assert_eq!(decision.disposition, PolicyDisposition::Allow);
     assert_eq!(decision.winner.as_ref().map(|r| r.id.as_str()), Some("b"));
     let a_entry = decision.chain.iter().find(|e| e.rule_id == "a").unwrap();
-    assert_eq!(a_entry.status, super::model::ChainStatus::ShadowedBySpecificity);
+    assert_eq!(
+        a_entry.status,
+        super::model::ChainStatus::ShadowedBySpecificity
+    );
 }
 
 // --- Path containment (cross-platform, no symlinks) --- //
 
 fn temp_dir_for(name: &str) -> std::path::PathBuf {
-    let p = std::env::temp_dir()
-        .join(format!("aide-policy-test-{}-{}", name, std::process::id()));
+    let p = std::env::temp_dir().join(format!("aide-policy-test-{}-{}", name, std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).unwrap();
     p
@@ -184,7 +192,10 @@ fn folder_rule_matches_file_inside_folder() {
 
     let snapshot = PermissionPolicySnapshot {
         revision: 1,
-        rules: vec![folder_rule(&allowed.to_string_lossy(), PermissionEffect::Allow)],
+        rules: vec![folder_rule(
+            &allowed.to_string_lossy(),
+            PermissionEffect::Allow,
+        )],
     };
     let decision = evaluate(
         &snapshot,
@@ -206,7 +217,10 @@ fn folder_rule_rejects_file_outside_folder() {
 
     let snapshot = PermissionPolicySnapshot {
         revision: 1,
-        rules: vec![folder_rule(&allowed.to_string_lossy(), PermissionEffect::Allow)],
+        rules: vec![folder_rule(
+            &allowed.to_string_lossy(),
+            PermissionEffect::Allow,
+        )],
     };
     let decision = evaluate(
         &snapshot,
@@ -234,7 +248,10 @@ fn folder_rule_rejects_dotdot_traversal() {
     let target = allowed.join("..").join("outside").join("file.txt");
     let snapshot = PermissionPolicySnapshot {
         revision: 1,
-        rules: vec![folder_rule(&allowed.to_string_lossy(), PermissionEffect::Allow)],
+        rules: vec![folder_rule(
+            &allowed.to_string_lossy(),
+            PermissionEffect::Allow,
+        )],
     };
     let decision = evaluate(
         &snapshot,
@@ -255,7 +272,10 @@ fn folder_rule_resolves_relative_target_against_cwd() {
     // Relative target "allowed/file.txt" resolved against cwd=root.
     let snapshot = PermissionPolicySnapshot {
         revision: 1,
-        rules: vec![folder_rule(&allowed.to_string_lossy(), PermissionEffect::Allow)],
+        rules: vec![folder_rule(
+            &allowed.to_string_lossy(),
+            PermissionEffect::Allow,
+        )],
     };
     let decision = evaluate(
         &snapshot,
@@ -276,7 +296,10 @@ fn folder_rule_matches_nonexistent_file_via_ancestor_tail() {
 
     let snapshot = PermissionPolicySnapshot {
         revision: 1,
-        rules: vec![folder_rule(&allowed.to_string_lossy(), PermissionEffect::Allow)],
+        rules: vec![folder_rule(
+            &allowed.to_string_lossy(),
+            PermissionEffect::Allow,
+        )],
     };
     let decision = evaluate(
         &snapshot,
@@ -316,7 +339,10 @@ fn file_rule_matches_exact_file() {
 
     let snapshot = PermissionPolicySnapshot {
         revision: 1,
-        rules: vec![file_rule(&target.to_string_lossy(), PermissionEffect::Allow)],
+        rules: vec![file_rule(
+            &target.to_string_lossy(),
+            PermissionEffect::Allow,
+        )],
     };
     let decision = evaluate(
         &snapshot,
@@ -336,7 +362,10 @@ fn file_rule_rejects_sibling_file() {
 
     let snapshot = PermissionPolicySnapshot {
         revision: 1,
-        rules: vec![file_rule(&target.to_string_lossy(), PermissionEffect::Allow)],
+        rules: vec![file_rule(
+            &target.to_string_lossy(),
+            PermissionEffect::Allow,
+        )],
     };
     let decision = evaluate(
         &snapshot,
@@ -361,7 +390,10 @@ fn file_rule_rejects_prefix_lookalike() {
 
     let snapshot = PermissionPolicySnapshot {
         revision: 1,
-        rules: vec![file_rule(&target.to_string_lossy(), PermissionEffect::Allow)],
+        rules: vec![file_rule(
+            &target.to_string_lossy(),
+            PermissionEffect::Allow,
+        )],
     };
     let decision = evaluate(
         &snapshot,
@@ -379,7 +411,10 @@ fn file_rule_matches_nonexistent_file_via_ancestor_tail() {
 
     let snapshot = PermissionPolicySnapshot {
         revision: 1,
-        rules: vec![file_rule(&target.to_string_lossy(), PermissionEffect::Allow)],
+        rules: vec![file_rule(
+            &target.to_string_lossy(),
+            PermissionEffect::Allow,
+        )],
     };
     let decision = evaluate(
         &snapshot,
@@ -402,7 +437,10 @@ fn file_rule_resolves_relative_target_against_cwd() {
     // Rule stores the absolute path; invocation passes a relative one.
     let snapshot = PermissionPolicySnapshot {
         revision: 1,
-        rules: vec![file_rule(&target.to_string_lossy(), PermissionEffect::Allow)],
+        rules: vec![file_rule(
+            &target.to_string_lossy(),
+            PermissionEffect::Allow,
+        )],
     };
     let decision = evaluate(
         &snapshot,
@@ -430,7 +468,10 @@ fn folder_rule_does_not_match_symlink_escape() {
     let target = allowed.join("link").join("file.txt");
     let snapshot = PermissionPolicySnapshot {
         revision: 1,
-        rules: vec![folder_rule(&allowed.to_string_lossy(), PermissionEffect::Allow)],
+        rules: vec![folder_rule(
+            &allowed.to_string_lossy(),
+            PermissionEffect::Allow,
+        )],
     };
     let decision = evaluate(
         &snapshot,
@@ -446,7 +487,12 @@ fn folder_rule_does_not_match_symlink_escape() {
 
 // --- validate_rule --- //
 
-fn rule(id: &str, effect: PermissionEffect, tool: &str, matcher: PermissionMatcher) -> PermissionRule {
+fn rule(
+    id: &str,
+    effect: PermissionEffect,
+    tool: &str,
+    matcher: PermissionMatcher,
+) -> PermissionRule {
     PermissionRule {
         id: id.into(),
         scope: SettingsScope::User,
@@ -536,12 +582,7 @@ fn validate_rejects_empty_id_tool_folder_equals() {
         super::model::PolicyValidationError::EmptyId
     );
 
-    let empty_tool = rule(
-        "r",
-        PermissionEffect::Allow,
-        "  ",
-        PermissionMatcher::Tool,
-    );
+    let empty_tool = rule("r", PermissionEffect::Allow, "  ", PermissionMatcher::Tool);
     assert_eq!(
         super::evaluate::validate_rule(&empty_tool).unwrap_err(),
         super::model::PolicyValidationError::EmptyTool

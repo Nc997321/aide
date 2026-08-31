@@ -4,7 +4,9 @@
 
 use crate::settings::{PermissionEffect, SettingsScope, StoredPermissionRule};
 
-use super::matchers::{has_unquoted_shell_control, matcher_matches, specificity, split_bash_segments};
+use super::matchers::{
+    has_unquoted_shell_control, matcher_matches, specificity, split_bash_segments,
+};
 use super::model::{
     ChainEntry, ChainStatus, PermissionMatcher, PermissionPolicySnapshot, PermissionRule,
     PermissionSource, PolicyDecision, PolicyDisposition, ToolInvocation,
@@ -32,7 +34,10 @@ fn compare_by_priority(a: &PermissionRule, b: &PermissionRule) -> std::cmp::Orde
 }
 
 fn scope_rank(scope: SettingsScope) -> usize {
-    SCOPE_PRIORITY.iter().position(|&s| s == scope).unwrap_or(usize::MAX)
+    SCOPE_PRIORITY
+        .iter()
+        .position(|&s| s == scope)
+        .unwrap_or(usize::MAX)
 }
 
 /// Evaluate `invocation` against `snapshot`. The decision is `defer` when no
@@ -48,7 +53,10 @@ fn scope_rank(scope: SettingsScope) -> usize {
 /// still fires on `echo hi | rm -rf /`. Commands the analyzer cannot verify
 /// (file redirects, `$(…)`, backticks, unbalanced quotes) fall through to the
 /// classic path where the allow shell-gate blocks them.
-pub fn evaluate(snapshot: &PermissionPolicySnapshot, invocation: &ToolInvocation) -> PolicyDecision {
+pub fn evaluate(
+    snapshot: &PermissionPolicySnapshot,
+    invocation: &ToolInvocation,
+) -> PolicyDecision {
     if invocation.tool == "Bash" {
         if let Some(command) = invocation.input.get("command").and_then(|v| v.as_str()) {
             if !command.is_empty() && has_unquoted_shell_control(command) {
@@ -71,7 +79,12 @@ pub fn evaluate(snapshot: &PermissionPolicySnapshot, invocation: &ToolInvocation
             .iter()
             .filter(|r| r.scope == scope && r.tool == invocation.tool)
             .filter(|r| {
-                matcher_matches(&r.matcher, &invocation.input, invocation.cwd.as_deref(), r.effect)
+                matcher_matches(
+                    &r.matcher,
+                    &invocation.input,
+                    invocation.cwd.as_deref(),
+                    r.effect,
+                )
             })
             .collect();
         if candidates.is_empty() {
@@ -174,11 +187,7 @@ fn evaluate_bash_composite(
     segments: &[String],
 ) -> PolicyDecision {
     let cwd = invocation.cwd.as_deref();
-    let rules: Vec<&PermissionRule> = snapshot
-        .rules
-        .iter()
-        .filter(|r| r.tool == "Bash")
-        .collect();
+    let rules: Vec<&PermissionRule> = snapshot.rules.iter().filter(|r| r.tool == "Bash").collect();
     let segment_inputs: Vec<serde_json::Map<String, serde_json::Value>> = segments
         .iter()
         .map(|s| {
@@ -320,8 +329,10 @@ pub fn validate_rule(rule: &PermissionRule) -> Result<(), super::model::PolicyVa
     match &rule.matcher {
         PermissionMatcher::Tool => {}
         PermissionMatcher::Bash { mode, value } => {
-            if matches!(mode, super::model::BashMode::Prefix | super::model::BashMode::Contains)
-                && value.as_deref().map_or(true, |v| v.trim().is_empty())
+            if matches!(
+                mode,
+                super::model::BashMode::Prefix | super::model::BashMode::Contains
+            ) && value.as_deref().map_or(true, |v| v.trim().is_empty())
             {
                 return Err(match mode {
                     super::model::BashMode::Prefix => {
@@ -373,9 +384,8 @@ pub fn parse_stored_rule(
     scope: SettingsScope,
     source: super::model::PermissionSource,
 ) -> Result<PermissionRule, super::model::PolicyValidationError> {
-    let matcher: PermissionMatcher = serde_json::from_value(stored.matcher.clone()).map_err(|e| {
-        super::model::PolicyValidationError::InvalidMatcher(e.to_string())
-    })?;
+    let matcher: PermissionMatcher = serde_json::from_value(stored.matcher.clone())
+        .map_err(|e| super::model::PolicyValidationError::InvalidMatcher(e.to_string()))?;
     Ok(PermissionRule {
         id: stored.id.clone(),
         scope,
@@ -426,7 +436,11 @@ fn matcher_summary(matcher: &PermissionMatcher) -> String {
                 None => format!("bash {mode_word}"),
             }
         }
-        PermissionMatcher::Path { field, folder, file } => match (folder, file) {
+        PermissionMatcher::Path {
+            field,
+            folder,
+            file,
+        } => match (folder, file) {
             (Some(f), _) => format!("path {:?} under {f:?}", field),
             (None, Some(f)) => format!("path {:?} equals {f:?}", field),
             (None, None) => format!("path {:?} (any)", field),

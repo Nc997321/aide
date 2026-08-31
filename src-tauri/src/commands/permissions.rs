@@ -17,11 +17,12 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::commands::WorkspaceState;
 use crate::policy::{
-    self, ChainEntry, PermissionMatcher, PermissionRule, PermissionSource,
-    ToolInvocation,
+    self, ChainEntry, PermissionMatcher, PermissionRule, PermissionSource, ToolInvocation,
 };
 use crate::runtime::AgentRuntimeManager;
-use crate::settings::{PermissionEffect, SettingsError, SettingsScope, SettingsService, StoredPermissionRule};
+use crate::settings::{
+    PermissionEffect, SettingsError, SettingsScope, SettingsService, StoredPermissionRule,
+};
 
 /// 信任工作区自动写入的安全只读命令白名单（trust/untrust 命令调用）。
 pub(crate) mod workspace_safe_rules;
@@ -207,7 +208,9 @@ fn build_permission_settings_view(
     service: &SettingsService,
     project: Option<&Path>,
 ) -> Result<PermissionSettingsView, String> {
-    let snapshot = service.permission_snapshot_blocking(project).map_err(|e| e.to_string())?;
+    let snapshot = service
+        .permission_snapshot_blocking(project)
+        .map_err(|e| e.to_string())?;
     let scopes = build_scope_availabilities(service, project);
     Ok(PermissionSettingsView {
         revision: snapshot.revision,
@@ -309,7 +312,9 @@ pub async fn update_permission_rule_impl(
                 .rules
                 .iter_mut()
                 .find(|r| r.id == id)
-                .ok_or_else(|| SettingsError::Validation(format!("permission rule not found: {id}")))?;
+                .ok_or_else(|| {
+                    SettingsError::Validation(format!("permission rule not found: {id}"))
+                })?;
             rule.effect = draft.effect;
             rule.tool = draft.tool;
             rule.matcher = serde_json::to_value(&draft.matcher)
@@ -401,9 +406,11 @@ pub async fn get_permission_settings(
 ) -> Result<PermissionSettingsView, String> {
     let service = settings.inner().clone();
     let project = resolve_project_root(project, &workspace);
-    tokio::task::spawn_blocking(move || build_permission_settings_view(&service, project.as_deref()))
-        .await
-        .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || {
+        build_permission_settings_view(&service, project.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 写入成功后通知前端权限面板刷新。带新 revision（单调递增），前端按
@@ -443,7 +450,8 @@ pub async fn create_permission_rules(
 ) -> Result<PermissionSettingsView, String> {
     let service = settings.inner().clone();
     let project = resolve_project_root(project, &workspace);
-    let view = create_permission_rules_impl(service, runtime.inner(), scope, rules, project).await?;
+    let view =
+        create_permission_rules_impl(service, runtime.inner(), scope, rules, project).await?;
     emit_permissions_changed(&app, &view);
     Ok(view)
 }
@@ -461,7 +469,8 @@ pub async fn update_permission_rule(
 ) -> Result<PermissionSettingsView, String> {
     let service = settings.inner().clone();
     let project = resolve_project_root(project, &workspace);
-    let view = update_permission_rule_impl(service, runtime.inner(), scope, id, rule, project).await?;
+    let view =
+        update_permission_rule_impl(service, runtime.inner(), scope, id, rule, project).await?;
     emit_permissions_changed(&app, &view);
     Ok(view)
 }
@@ -564,7 +573,11 @@ mod tests {
         let resolved = resolve_project_root(explicit, &ws);
         assert_eq!(
             resolved,
-            Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join(".."))
+            Some(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("..")
+                    .join("..")
+            )
         );
     }
 

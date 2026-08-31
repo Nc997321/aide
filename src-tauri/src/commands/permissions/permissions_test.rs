@@ -53,10 +53,7 @@ fn draft_allow_bash_prefix(prefix: &str) -> PermissionRuleDraft {
 
 #[tokio::test]
 async fn save_broadcasts_only_after_atomic_store_success() {
-    let root = std::env::temp_dir().join(format!(
-        "aide-perm-broadcast-{}",
-        std::process::id()
-    ));
+    let root = std::env::temp_dir().join(format!("aide-perm-broadcast-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let project = root.join("repo");
@@ -93,7 +90,10 @@ async fn save_broadcasts_only_after_atomic_store_success() {
         Some(project.clone()),
     )
     .await;
-    assert!(result.is_err(), "injected persist failure must surface as an error");
+    assert!(
+        result.is_err(),
+        "injected persist failure must surface as an error"
+    );
     assert!(
         runtime.sent_commands().is_empty(),
         "failed write must NOT broadcast any policy update"
@@ -104,10 +104,8 @@ async fn save_broadcasts_only_after_atomic_store_success() {
 
 #[tokio::test]
 async fn broadcast_only_reaches_sessions_matching_affected_root() {
-    let root = std::env::temp_dir().join(format!(
-        "aide-perm-broadcast-scope-{}",
-        std::process::id()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("aide-perm-broadcast-scope-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let project_a = root.join("repo-a");
@@ -142,7 +140,11 @@ async fn broadcast_only_reaches_sessions_matching_affected_root() {
             )
         })
         .collect();
-    assert_eq!(updates.len(), 1, "only the matching session must be notified");
+    assert_eq!(
+        updates.len(),
+        1,
+        "only the matching session must be notified"
+    );
     assert_eq!(updates[0].0, "in-a");
 
     let _ = std::fs::remove_dir_all(&root);
@@ -150,10 +152,8 @@ async fn broadcast_only_reaches_sessions_matching_affected_root() {
 
 #[tokio::test]
 async fn user_scope_change_broadcasts_to_all_sessions() {
-    let root = std::env::temp_dir().join(format!(
-        "aide-perm-broadcast-user-{}",
-        std::process::id()
-    ));
+    let root =
+        std::env::temp_dir().join(format!("aide-perm-broadcast-user-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let project_a = root.join("repo-a");
@@ -238,7 +238,10 @@ fn explanation_shows_managed_deny_and_shadowed_local_allow() {
         view.chain
     );
     assert!(view.winner.is_some());
-    assert_eq!(view.winner.as_ref().unwrap().id, "11111111-1111-1111-1111-111111111111");
+    assert_eq!(
+        view.winner.as_ref().unwrap().id,
+        "11111111-1111-1111-1111-111111111111"
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }

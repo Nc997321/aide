@@ -12,7 +12,9 @@ pub struct DocEntry {
 pub struct OpenDocs(HashMap<String, DocEntry>);
 
 impl OpenDocs {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn open(&mut self, uri: String, text: String) {
         self.0.insert(uri, DocEntry { version: 1, text });

@@ -5,12 +5,12 @@ use tokio::sync::Mutex as TokioMutex;
 
 // ignore_dirs 已随 codegraph 迁至 codegraph-core（lsp 与 runner 共用同一份
 // 黑名单——数据唯一主人）。
-use codegraph_core::ignore_dirs::ALWAYS_IGNORE_DIRS;
 use crate::lsp::detector::LanguageId;
 use crate::lsp::docs::OpenDocs;
 use crate::lsp::registry::{self, ServerSource};
 use crate::lsp::rpc::{dispatch, Action, Router};
 use crate::lsp::transport::LspTransport;
+use codegraph_core::ignore_dirs::ALWAYS_IGNORE_DIRS;
 
 // ── EnsureError ──
 
@@ -96,7 +96,7 @@ impl ServerHandle {
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(result)) => Ok(RequestOutcome::Ok(result)),
             Ok(Err(_)) => Ok(RequestOutcome::ServerGone), // channel closed（server 退出）
-            Err(_) => Ok(RequestOutcome::Timeout),       // 预算内未响应
+            Err(_) => Ok(RequestOutcome::Timeout),        // 预算内未响应
         }
     }
 }
@@ -128,7 +128,9 @@ impl LspManager {
     ) -> Result<Arc<ServerHandle>, EnsureError> {
         let _g = tokio::time::timeout(SPAWN_LOCK_TIMEOUT, self.spawn_lock.lock())
             .await
-            .map_err(|_| EnsureError::SpawnFailed("spawn_lock timeout (holder stuck >30s)".into()))?;
+            .map_err(|_| {
+                EnsureError::SpawnFailed("spawn_lock timeout (holder stuck >30s)".into())
+            })?;
         {
             let map = self.handles.lock().await;
             if let Some(h) = map.get(&(workspace.to_string(), lang)) {
@@ -155,9 +157,7 @@ impl LspManager {
                 .filter(|(w, _)| w == workspace)
                 .cloned()
                 .collect();
-            keys.into_iter()
-                .filter_map(|k| map.remove(&k))
-                .collect()
+            keys.into_iter().filter_map(|k| map.remove(&k)).collect()
         };
         for h in removed {
             shutdown_handle(&h).await;
@@ -192,11 +192,7 @@ impl LspManager {
         Ok(())
     }
 
-    pub async fn get(
-        &self,
-        workspace: &str,
-        lang: LanguageId,
-    ) -> Option<Arc<ServerHandle>> {
+    pub async fn get(&self, workspace: &str, lang: LanguageId) -> Option<Arc<ServerHandle>> {
         self.handles
             .lock()
             .await
@@ -353,9 +349,9 @@ async fn spawn_and_init(
 /// 默认 <workspace>/.aide/<name>（工作区内），jdtls 覆写移到工作区外（见
 /// profiles/java.rs：Eclipse 拒绝项目包含自己的 data 目录）。manager 不掺语言特有逻辑。
 async fn ensure_data_dir(path: std::path::PathBuf) -> Result<std::path::PathBuf, EnsureError> {
-    tokio::fs::create_dir_all(&path)
-        .await
-        .map_err(|e| EnsureError::SpawnFailed(format!("create data dir {}: {e}", path.display())))?;
+    tokio::fs::create_dir_all(&path).await.map_err(|e| {
+        EnsureError::SpawnFailed(format!("create data dir {}: {e}", path.display()))
+    })?;
     Ok(path)
 }
 
@@ -390,7 +386,14 @@ async fn spawn_real(
     lang: LanguageId,
     src: &ServerSource,
     app: &tauri::AppHandle,
-) -> Result<(LspTransport, Option<Arc<TokioMutex<tokio::process::Child>>>, Arc<TokioMutex<Vec<String>>>), EnsureError> {
+) -> Result<
+    (
+        LspTransport,
+        Option<Arc<TokioMutex<tokio::process::Child>>>,
+        Arc<TokioMutex<Vec<String>>>,
+    ),
+    EnsureError,
+> {
     use tauri::Manager;
 
     // stderr 环形缓冲（上限 20 行）：reader 任务写入，握手失败时回读拼进错误消息。
@@ -430,9 +433,9 @@ async fn spawn_real(
     {
         cmd.creation_flags(0x08000000);
     } // CREATE_NO_WINDOW
-    // tokio 1.52 的 Command::spawn 是同步返回（非 async）：CreateProcess 即使被杀软
-    // 扫描卡住也最终返回，天然有界——只占 worker 线程（"慢"）不会无限挂起（"挂"）。
-    // 真正的无限挂起点是 async 链（spawn_lock / send / rx），已由超时覆盖。
+      // tokio 1.52 的 Command::spawn 是同步返回（非 async）：CreateProcess 即使被杀软
+      // 扫描卡住也最终返回，天然有界——只占 worker 线程（"慢"）不会无限挂起（"挂"）。
+      // 真正的无限挂起点是 async 链（spawn_lock / send / rx），已由超时覆盖。
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
@@ -460,8 +463,8 @@ async fn spawn_real(
         let stderr_buf = Arc::clone(&stderr_lines);
         let lang_id = lang.id_str();
         tokio::spawn(async move {
-            use tokio::io::BufReader;
             use tokio::io::AsyncBufReadExt;
+            use tokio::io::BufReader;
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 tracing::info!("[lsp stderr] [{}] {}", lang_id, line);
@@ -485,16 +488,24 @@ async fn spawn_test(
     _workspace: &str,
     _lang: LanguageId,
     _src: &ServerSource,
-) -> (LspTransport, Option<Arc<TokioMutex<tokio::process::Child>>>, Arc<TokioMutex<Vec<String>>>) {
+) -> (
+    LspTransport,
+    Option<Arc<TokioMutex<tokio::process::Child>>>,
+    Arc<TokioMutex<Vec<String>>>,
+) {
     let mock = crate::lsp::mock_server::spawn_mock_lsp();
-    let transport =
-        LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
+    let transport = LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
     (transport, None, Arc::new(TokioMutex::new(Vec::new())))
 }
 
 // ── start_reader ──
 
-fn start_reader(handle: Arc<ServerHandle>, lang: LanguageId, workspace: String, app: tauri::AppHandle) {
+fn start_reader(
+    handle: Arc<ServerHandle>,
+    lang: LanguageId,
+    workspace: String,
+    app: tauri::AppHandle,
+) {
     use tauri::Emitter;
     use tokio::io::{AsyncReadExt, BufReader};
 
@@ -545,7 +556,10 @@ fn start_reader(handle: Arc<ServerHandle>, lang: LanguageId, workspace: String, 
                         // v1：回空 response（不实现 workspace/configuration 等细节）
                         tracing::debug!("[lsp] server request ignored: id={:?}", id);
                     }
-                    Action::ServerStatus { status_type, message } => {
+                    Action::ServerStatus {
+                        status_type,
+                        message,
+                    } => {
                         // 仅 Java（handles_status=true）消费：认 ServiceReady 置功能就绪。
                         // 其余语言不发 language/status，即使发也按 profile 默认忽略。
                         let p = crate::lsp::profiles::profile(lang);
@@ -607,9 +621,7 @@ async fn init_handshake(
     let handshake_timeout = crate::lsp::profiles::profile(lang).handshake_timeout();
     let result = match tokio::time::timeout(handshake_timeout, rx).await {
         Ok(Ok(v)) => v,
-        Ok(Err(_)) => {
-            return Err(EnsureError::HandshakeFailed("channel closed".into()))
-        }
+        Ok(Err(_)) => return Err(EnsureError::HandshakeFailed("channel closed".into())),
         Err(_) => {
             return Err(EnsureError::HandshakeFailed(
                 "initialize timeout (>5s, no capabilities)".into(),
@@ -744,10 +756,15 @@ mod tests {
     #[tokio::test]
     async fn request_not_ready_returns_not_ready_without_sending() {
         let mock = mock_server::spawn_mock_lsp();
-        let transport = LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
+        let transport =
+            LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
         let h = make_handle(transport, false); // ready=false → 不发请求
         let outcome = h
-            .request("textDocument/definition", serde_json::json!({}), std::time::Duration::from_secs(2))
+            .request(
+                "textDocument/definition",
+                serde_json::json!({}),
+                std::time::Duration::from_secs(2),
+            )
             .await
             .unwrap();
         assert_eq!(outcome, RequestOutcome::NotReady);
@@ -756,7 +773,8 @@ mod tests {
     #[tokio::test]
     async fn request_ok_returns_response_value() {
         let mock = mock_server::spawn_mock_lsp();
-        let transport = LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
+        let transport =
+            LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
         let h = make_handle(transport, true);
         start_test_reader(h.clone());
         let outcome = h
@@ -773,11 +791,16 @@ mod tests {
     #[tokio::test]
     async fn request_timeout_when_silent_server() {
         let mock = mock_server::spawn_mock_lsp_silent();
-        let transport = LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
+        let transport =
+            LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
         let h = make_handle(transport, true);
         start_test_reader(h.clone());
         let outcome = h
-            .request("textDocument/definition", serde_json::json!({}), std::time::Duration::from_millis(80))
+            .request(
+                "textDocument/definition",
+                serde_json::json!({}),
+                std::time::Duration::from_millis(80),
+            )
             .await
             .unwrap();
         assert_eq!(outcome, RequestOutcome::Timeout);
@@ -787,14 +810,18 @@ mod tests {
     async fn request_server_gone_when_reader_eof() {
         // die mock：读到请求字节即退出 → test_reader EOF → reject_all → rx RecvError → ServerGone。
         let mock = mock_server::spawn_mock_lsp_die();
-        let transport = LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
+        let transport =
+            LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
         let h = make_handle(transport, true);
         start_test_reader(h.clone());
         let outcome = h
-            .request("textDocument/definition", serde_json::json!({}), std::time::Duration::from_secs(5))
+            .request(
+                "textDocument/definition",
+                serde_json::json!({}),
+                std::time::Duration::from_secs(5),
+            )
             .await
             .unwrap();
         assert_eq!(outcome, RequestOutcome::ServerGone);
     }
-
 }

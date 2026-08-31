@@ -109,13 +109,19 @@ pub fn dispatch(msg: &serde_json::Value) -> Action {
             // jdtls 功能就绪进度通知（Starting/Started/ServiceReady/ProjectStatus/Error…）。
             // manager 按 profile 决定是否消费（仅 Java 认 ServiceReady 置 ready）。
             "language/status" => {
-                let status_type = params.get("type").cloned().unwrap_or(serde_json::Value::Null);
+                let status_type = params
+                    .get("type")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
                 let message = params
                     .get("message")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                Action::ServerStatus { status_type, message }
+                Action::ServerStatus {
+                    status_type,
+                    message,
+                }
             }
             _ => Action::Ignore,
         };
@@ -174,10 +180,10 @@ impl Router {
         method: &str,
         params: serde_json::Value,
     ) -> (
-        serde_json::Value,                              // 要发的消息体
-        u64,                                             // id（调用方 insert 用）
-        oneshot::Sender<serde_json::Value>,              // 注册进 table
-        oneshot::Receiver<serde_json::Value>,            // 调用方 await
+        serde_json::Value,                    // 要发的消息体
+        u64,                                  // id（调用方 insert 用）
+        oneshot::Sender<serde_json::Value>,   // 注册进 table
+        oneshot::Receiver<serde_json::Value>, // 调用方 await
     ) {
         let id = self.ids.next();
         let (tx, rx) = oneshot::channel();
@@ -256,14 +262,18 @@ mod tests {
         // 新版 jdtls：type 是 string "ServiceReady"
         let msg = json!({"method":"language/status","params":{"type":"ServiceReady","message":"Service ready"}});
         match dispatch(&msg) {
-            Action::ServerStatus { status_type, message } => {
+            Action::ServerStatus {
+                status_type,
+                message,
+            } => {
                 assert_eq!(status_type, "ServiceReady");
                 assert_eq!(message, "Service ready");
             }
             other => panic!("expected ServerStatus, got {other:?}"),
         }
         // 旧版 jdtls：type 是 int（messageType），status_type 保留原始数值不丢
-        let msg_int = json!({"method":"language/status","params":{"type":3,"message":"Service ready"}});
+        let msg_int =
+            json!({"method":"language/status","params":{"type":3,"message":"Service ready"}});
         match dispatch(&msg_int) {
             Action::ServerStatus { status_type, .. } => assert_eq!(status_type, 3),
             other => panic!("expected ServerStatus(int), got {other:?}"),

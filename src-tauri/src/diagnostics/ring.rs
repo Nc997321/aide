@@ -13,7 +13,10 @@ pub struct Ring<T> {
 impl<T> Ring<T> {
     pub fn new(cap: usize) -> Self {
         assert!(cap > 0, "ring capacity must be > 0");
-        Self { buf: VecDeque::with_capacity(cap), cap }
+        Self {
+            buf: VecDeque::with_capacity(cap),
+            cap,
+        }
     }
 
     pub fn push(&mut self, item: T) {

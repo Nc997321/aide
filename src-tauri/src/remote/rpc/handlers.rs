@@ -41,16 +41,30 @@ pub fn send_message(app: AppHandle, params: Value) -> BoxFuture<'static, Result<
         // （保留旧 bridge 语义：远程会话默认受 remote.permission_mode 约束）。
         let permission_mode = match a.permission_mode {
             Some(m) => Some(m),
-            None => Some(crate::remote::read_remote_settings(&app).await?.permission_mode),
+            None => Some(
+                crate::remote::read_remote_settings(&app)
+                    .await?
+                    .permission_mode,
+            ),
         };
         let runtime = app.state::<AgentRuntimeManager>();
         let ws_state = app.state::<WorkspaceState>();
         let settings = app.state::<Arc<SettingsService>>();
         to_json(
             crate::commands::chat::send_message(
-                a.session_id, a.prompt, a.images, a.resume_id, a.initial_model, a.initial_effort,
-                permission_mode, Some(a.jump_queue), a.workspace_root, a.provider,
-                runtime, ws_state, settings,
+                a.session_id,
+                a.prompt,
+                a.images,
+                a.resume_id,
+                a.initial_model,
+                a.initial_effort,
+                permission_mode,
+                Some(a.jump_queue),
+                a.workspace_root,
+                a.provider,
+                runtime,
+                ws_state,
+                settings,
             )
             .await,
         )
@@ -71,13 +85,23 @@ struct PermissionResponseArgs {
     session_rules: Option<Vec<Value>>,
 }
 
-pub fn permission_response(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn permission_response(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: PermissionResponseArgs = parse(params)?;
         let runtime = app.state::<AgentRuntimeManager>();
         to_json(
             crate::commands::chat::permission_response(
-                a.session_id, a.id, a.approved, None, a.answers, a.next_mode, a.message, a.session_rules,
+                a.session_id,
+                a.id,
+                a.approved,
+                None,
+                a.answers,
+                a.next_mode,
+                a.message,
+                a.session_rules,
                 runtime,
             )
             .await,
@@ -92,7 +116,10 @@ struct SessionIdArgs {
     session_id: String,
 }
 
-pub fn interrupt_session(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn interrupt_session(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: SessionIdArgs = parse(params)?;
         let runtime = app.state::<AgentRuntimeManager>();
@@ -100,7 +127,10 @@ pub fn interrupt_session(app: AppHandle, params: Value) -> BoxFuture<'static, Re
     })
 }
 
-pub fn stop_chat_session(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn stop_chat_session(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: SessionIdArgs = parse(params)?;
         let runtime = app.state::<AgentRuntimeManager>();
@@ -145,7 +175,10 @@ struct SetPermissionModeArgs {
     mode: String,
 }
 
-pub fn set_permission_mode(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn set_permission_mode(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: SetPermissionModeArgs = parse(params)?;
         let runtime = app.state::<AgentRuntimeManager>();
@@ -169,16 +202,28 @@ struct StartBtwArgs {
     permission_policy: Option<Value>,
 }
 
-pub fn start_btw_session(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn start_btw_session(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: StartBtwArgs = parse(params)?;
         let runtime = app.state::<AgentRuntimeManager>();
         let settings = app.state::<Arc<SettingsService>>();
         to_json(
             crate::commands::chat::start_btw_session(
-                a.btw_id, a.fork_from, a.prompt, a.cwd, a.lightweight, a.permission_mode,
-                a.model, a.effort, a.tools, a.permission_policy,
-                runtime, settings,
+                a.btw_id,
+                a.fork_from,
+                a.prompt,
+                a.cwd,
+                a.lightweight,
+                a.permission_mode,
+                a.model,
+                a.effort,
+                a.tools,
+                a.permission_policy,
+                runtime,
+                settings,
             )
             .await,
         )
@@ -200,7 +245,10 @@ struct WsKeyArgs {
     ws_key: String,
 }
 
-pub fn list_sessions_for_workspace(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn list_sessions_for_workspace(
+    _app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: WsKeyArgs = parse(params)?;
         to_json(crate::commands::session::list_sessions_for_workspace(a.ws_key).await)
@@ -244,7 +292,10 @@ pub fn rename_session(_app: AppHandle, params: Value) -> BoxFuture<'static, Resu
     })
 }
 
-pub fn auto_rename_session(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn auto_rename_session(
+    _app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: CreateSessionArgs = parse(params)?;
         to_json(crate::commands::session::auto_rename_session(a.id, a.name).await)
@@ -263,11 +314,22 @@ pub fn load_messages(app: AppHandle, params: Value) -> BoxFuture<'static, Result
     Box::pin(async move {
         let a: LoadMessagesArgs = parse(params)?;
         let ws_state = app.state::<WorkspaceState>();
-        to_json(crate::commands::session::load_messages(ws_state, a.session_id, a.offset_bytes, a.limit).await)
+        to_json(
+            crate::commands::session::load_messages(
+                ws_state,
+                a.session_id,
+                a.offset_bytes,
+                a.limit,
+            )
+            .await,
+        )
     })
 }
 
-pub fn session_last_event(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn session_last_event(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: SessionIdArgs = parse(params)?;
         let ws_state = app.state::<WorkspaceState>();
@@ -291,7 +353,10 @@ struct SetSessionMetaArgs {
 // 元数据三件套各自独立包装（值字段互斥，由调用命令决定取哪个）——
 // 比一个「万能 meta 包装」更直白，serde 漏传直接报错。
 
-pub fn set_session_model(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn set_session_model(
+    _app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: SetSessionMetaArgs = parse(params)?;
         let model = a.model.ok_or("缺少 model 字段")?;
@@ -306,7 +371,10 @@ pub fn session_model(_app: AppHandle, params: Value) -> BoxFuture<'static, Resul
     })
 }
 
-pub fn set_session_effort(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn set_session_effort(
+    _app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: SetSessionMetaArgs = parse(params)?;
         let effort = a.effort.ok_or("缺少 effort 字段")?;
@@ -321,7 +389,10 @@ pub fn session_effort(_app: AppHandle, params: Value) -> BoxFuture<'static, Resu
     })
 }
 
-pub fn set_session_provider(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn set_session_provider(
+    _app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: SetSessionMetaArgs = parse(params)?;
         let provider = a.provider.ok_or("缺少 provider 字段")?;
@@ -329,7 +400,10 @@ pub fn set_session_provider(_app: AppHandle, params: Value) -> BoxFuture<'static
     })
 }
 
-pub fn session_provider(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn session_provider(
+    _app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: SessionIdOnlyArgs = parse(params)?;
         to_json(crate::commands::session::session_provider(a.id).await)
@@ -338,7 +412,10 @@ pub fn session_provider(_app: AppHandle, params: Value) -> BoxFuture<'static, Re
 
 // ── 工作区与信任 ──
 
-pub fn list_workspaces(_app: AppHandle, _params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn list_workspaces(
+    _app: AppHandle,
+    _params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move { to_json(crate::commands::workspace::list_workspaces().await) })
 }
 
@@ -348,7 +425,10 @@ struct PathArgs {
     path: String,
 }
 
-pub fn is_workspace_trusted(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn is_workspace_trusted(
+    _app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: PathArgs = parse(params)?;
         to_json(crate::commands::workspace::is_workspace_trusted(a.path).await)
@@ -364,7 +444,10 @@ pub fn trust_workspace(app: AppHandle, params: Value) -> BoxFuture<'static, Resu
     })
 }
 
-pub fn untrust_workspace(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn untrust_workspace(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: PathArgs = parse(params)?;
         let settings = app.state::<Arc<SettingsService>>();
@@ -415,14 +498,20 @@ pub fn set_providers(app: AppHandle, params: Value) -> BoxFuture<'static, Result
     })
 }
 
-pub fn get_active_provider_id(app: AppHandle, _params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn get_active_provider_id(
+    app: AppHandle,
+    _params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let service = app.state::<Arc<SettingsService>>();
         to_json(crate::commands::provider::get_active_provider_id(service).await)
     })
 }
 
-pub fn set_active_provider_id(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn set_active_provider_id(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
@@ -435,7 +524,10 @@ pub fn set_active_provider_id(app: AppHandle, params: Value) -> BoxFuture<'stati
     })
 }
 
-pub fn get_provider_catalog(_app: AppHandle, _params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn get_provider_catalog(
+    _app: AppHandle,
+    _params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move { to_json(crate::commands::provider::get_provider_catalog()) })
 }
 
@@ -452,17 +544,26 @@ pub fn refresh_models(app: AppHandle, params: Value) -> BoxFuture<'static, Resul
     })
 }
 
-pub fn claude_credentials_exist(_app: AppHandle, _params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn claude_credentials_exist(
+    _app: AppHandle,
+    _params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move { to_json(Ok(crate::commands::onboarding::claude_credentials_exist())) })
 }
 
 // ── 通知中心持久化 ──
 
-pub fn load_notifications(_app: AppHandle, _params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn load_notifications(
+    _app: AppHandle,
+    _params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move { to_json(crate::commands::notifications::load_notifications().await) })
 }
 
-pub fn save_notifications(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn save_notifications(
+    _app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
@@ -482,7 +583,10 @@ struct ProjectRootArgs {
     project_root: String,
 }
 
-pub fn codegraph_build_index(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn codegraph_build_index(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
@@ -495,11 +599,22 @@ pub fn codegraph_build_index(app: AppHandle, params: Value) -> BoxFuture<'static
         let a: Args = parse(params)?;
         let state = app.state::<Arc<crate::codegraph::CodeGraphService>>();
         let settings = app.state::<Arc<SettingsService>>();
-        to_json(crate::codegraph::commands::codegraph_build_index(a.project_root, Some(a.force), state, settings).await)
+        to_json(
+            crate::codegraph::commands::codegraph_build_index(
+                a.project_root,
+                Some(a.force),
+                state,
+                settings,
+            )
+            .await,
+        )
     })
 }
 
-pub fn codegraph_build_progress(app: AppHandle, _params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn codegraph_build_progress(
+    app: AppHandle,
+    _params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let state = app.state::<Arc<crate::codegraph::CodeGraphService>>();
         // 该命令本就返回 Value（非 Result），直通
@@ -515,7 +630,10 @@ pub fn codegraph_close(app: AppHandle, params: Value) -> BoxFuture<'static, Resu
     })
 }
 
-pub fn codegraph_reindex_file(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn codegraph_reindex_file(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
@@ -526,11 +644,22 @@ pub fn codegraph_reindex_file(app: AppHandle, params: Value) -> BoxFuture<'stati
         let a: Args = parse(params)?;
         let state = app.state::<Arc<crate::codegraph::CodeGraphService>>();
         let settings = app.state::<Arc<SettingsService>>();
-        to_json(crate::codegraph::commands::codegraph_reindex_file(a.project_root, a.file, state, settings).await)
+        to_json(
+            crate::codegraph::commands::codegraph_reindex_file(
+                a.project_root,
+                a.file,
+                state,
+                settings,
+            )
+            .await,
+        )
     })
 }
 
-pub fn codegraph_rescan(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn codegraph_rescan(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: ProjectRootArgs = parse(params)?;
         let state = app.state::<Arc<crate::codegraph::CodeGraphService>>();
@@ -541,10 +670,20 @@ pub fn codegraph_rescan(app: AppHandle, params: Value) -> BoxFuture<'static, Res
 
 // ── 默认值目录 ──
 
-pub fn get_default_models(app: AppHandle, _params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn get_default_models(
+    app: AppHandle,
+    _params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move { to_json(crate::commands::chat::get_default_models(app.clone())) })
 }
 
-pub fn get_default_permission_modes(app: AppHandle, _params: Value) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move { to_json(crate::commands::chat::get_default_permission_modes(app.clone())) })
+pub fn get_default_permission_modes(
+    app: AppHandle,
+    _params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        to_json(crate::commands::chat::get_default_permission_modes(
+            app.clone(),
+        ))
+    })
 }

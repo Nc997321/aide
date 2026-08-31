@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use tauri::State;
 
-use crate::settings::{SettingsScope, SettingsService};
 use super::{config_path, state_path};
+use crate::settings::{SettingsScope, SettingsService};
 use once_cell::sync::Lazy;
 
 /// 串行化所有 state「读→改→写」临界区的全局锁。单纯的原子写只能防崩溃半截
@@ -49,10 +49,18 @@ impl Default for Keybindings {
     }
 }
 
-fn default_search_open() -> String { "Ctrl+P".to_string() }
-fn default_pane_split_right() -> String { "Ctrl+\\".to_string() }
-fn default_pane_split_down() -> String { "Ctrl+Shift+\\".to_string() }
-fn default_pane_close_tab() -> String { "Ctrl+W".to_string() }
+fn default_search_open() -> String {
+    "Ctrl+P".to_string()
+}
+fn default_pane_split_right() -> String {
+    "Ctrl+\\".to_string()
+}
+fn default_pane_split_down() -> String {
+    "Ctrl+Shift+\\".to_string()
+}
+fn default_pane_close_tab() -> String {
+    "Ctrl+W".to_string()
+}
 
 /// Embedding backend selector for CodeGraph. `fastembed` = local ONNX (zero
 /// config, downloads a model on first use); `http` = any HTTP embedding service
@@ -80,9 +88,15 @@ pub struct CodeGraphEmbedderConfig {
     pub score_threshold: Option<f32>,
 }
 
-fn default_cg_backend() -> String { "fastembed".to_string() }
-fn default_cg_model() -> String { "nomic-embed-text".to_string() }
-fn default_cg_format() -> String { "ollama".to_string() }
+fn default_cg_backend() -> String {
+    "fastembed".to_string()
+}
+fn default_cg_model() -> String {
+    "nomic-embed-text".to_string()
+}
+fn default_cg_format() -> String {
+    "ollama".to_string()
+}
 
 impl Default for CodeGraphEmbedderConfig {
     fn default() -> Self {
@@ -158,7 +172,9 @@ pub struct EditorSettings {
     pub vim_keybindings: VimBindings,
 }
 
-fn default_indent_size() -> u32 { 4 }
+fn default_indent_size() -> u32 {
+    4
+}
 
 impl Default for EditorSettings {
     fn default() -> Self {
@@ -292,21 +308,39 @@ impl Default for RemoteSettings {
     }
 }
 
-fn default_remote_permission_mode() -> String { "auto".to_string() }
+fn default_remote_permission_mode() -> String {
+    "auto".to_string()
+}
 
-fn default_font_size() -> u32 { 14 }
+fn default_font_size() -> u32 {
+    14
+}
 fn default_font_family() -> String {
     // 与前端 utils/fonts.ts MONO_FONT_STACK 保持一致——尾部垫 CJK 回退，
     // 否则西文 mono 无中文字形，Windows 中文落宋体
     "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'PingFang SC', 'Microsoft YaHei', monospace".to_string()
 }
-fn default_notifications_enabled() -> bool { true }
-fn default_auto_naming() -> bool { true }
-fn default_thinking_enabled() -> bool { true }
-fn default_codegraph_enabled() -> bool { true }
-fn default_theme() -> String { "glass".to_string() }
-fn default_recent_limit() -> u32 { 10 }
-fn default_session_list_style() -> String { "card".to_string() }
+fn default_notifications_enabled() -> bool {
+    true
+}
+fn default_auto_naming() -> bool {
+    true
+}
+fn default_thinking_enabled() -> bool {
+    true
+}
+fn default_codegraph_enabled() -> bool {
+    true
+}
+fn default_theme() -> String {
+    "glass".to_string()
+}
+fn default_recent_limit() -> u32 {
+    10
+}
+fn default_session_list_style() -> String {
+    "card".to_string()
+}
 
 impl Default for AppSettings {
     fn default() -> Self {
@@ -385,7 +419,9 @@ fn load_json_at(path: &Path) -> Value {
 }
 
 fn save_json_at(path: &Path, v: &Value) -> Result<(), String> {
-    let dir = path.parent().ok_or_else(|| "state path has no parent".to_string())?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| "state path has no parent".to_string())?;
     fs::create_dir_all(dir).map_err(|e| format!("Failed to create state dir: {}", e))?;
     let json = serde_json::to_string_pretty(v).map_err(|e| format!("Serialize state: {}", e))?;
     let tmp = path.with_extension("json.tmp");
@@ -484,27 +520,44 @@ where
 }
 
 pub(crate) fn public_settings(service: &SettingsService) -> Result<AppSettings, String> {
-    let effective = service.effective_document_blocking(None).map_err(|error| error.to_string())?;
-    let value = effective.values.get("settings").cloned().unwrap_or_else(|| serde_json::json!({}));
+    let effective = service
+        .effective_document_blocking(None)
+        .map_err(|error| error.to_string())?;
+    let value = effective
+        .values
+        .get("settings")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
     let mut settings: AppSettings = serde_json::from_value(value)
         .map_err(|error| format!("Failed to deserialize settings: {error}"))?;
-    settings.codegraph_embedder.api_key_configured = service.secrets()
-        .get("codegraph/default/apiKey").map_err(|error| error.to_string())?.is_some();
+    settings.codegraph_embedder.api_key_configured = service
+        .secrets()
+        .get("codegraph/default/apiKey")
+        .map_err(|error| error.to_string())?
+        .is_some();
     Ok(settings)
 }
 
 /// 代码索引总开关当前值（默认开）。读失败回退默认开——设置损坏不该把索引
 /// 静默关掉，与 `load_embedder_config` 的容错风格一致。
 pub(crate) fn codegraph_enabled(service: &SettingsService) -> bool {
-    public_settings(service).map(|s| s.codegraph_enabled).unwrap_or(true)
+    public_settings(service)
+        .map(|s| s.codegraph_enabled)
+        .unwrap_or(true)
 }
 
-pub(crate) fn resolve_codegraph_embedder(service: &SettingsService) -> Result<RuntimeCodeGraphEmbedderConfig, String> {
+pub(crate) fn resolve_codegraph_embedder(
+    service: &SettingsService,
+) -> Result<RuntimeCodeGraphEmbedderConfig, String> {
     let settings = public_settings(service)?;
     Ok(RuntimeCodeGraphEmbedderConfig {
         backend: settings.codegraph_embedder.backend,
         base_url: settings.codegraph_embedder.base_url,
-        api_key: service.secrets().get("codegraph/default/apiKey").map_err(|error| error.to_string())?.unwrap_or_default(),
+        api_key: service
+            .secrets()
+            .get("codegraph/default/apiKey")
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default(),
         model: settings.codegraph_embedder.model,
         format: settings.codegraph_embedder.format,
         dim: settings.codegraph_embedder.dim,
@@ -520,38 +573,68 @@ pub(crate) use codegraph_core::RuntimeCodeGraphEmbedderConfig;
 pub async fn get_settings(service: State<'_, Arc<SettingsService>>) -> Result<AppSettings, String> {
     let service = service.inner().clone();
     tokio::task::spawn_blocking(move || public_settings(&service))
-        .await.map_err(|error| error.to_string())?
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub async fn set_settings(settings: Value, service: State<'_, Arc<SettingsService>>) -> Result<(), String> {
+pub async fn set_settings(
+    settings: Value,
+    service: State<'_, Arc<SettingsService>>,
+) -> Result<(), String> {
     let service = service.inner().clone();
     tokio::task::spawn_blocking(move || {
         let mut incoming = settings;
-        let api_key = incoming.get_mut("codegraphEmbedder")
+        let api_key = incoming
+            .get_mut("codegraphEmbedder")
             .and_then(Value::as_object_mut)
             .and_then(|embedder| embedder.remove("apiKey"))
             .map(serde_json::from_value::<crate::settings::SecretMutation>)
-            .transpose().map_err(|error| format!("Invalid API key mutation: {error}"))?
+            .transpose()
+            .map_err(|error| format!("Invalid API key mutation: {error}"))?
             .unwrap_or_default();
-        if let Some(embedder) = incoming.get_mut("codegraphEmbedder").and_then(Value::as_object_mut) {
+        if let Some(embedder) = incoming
+            .get_mut("codegraphEmbedder")
+            .and_then(Value::as_object_mut)
+        {
             embedder.remove("apiKeyConfigured");
         }
-        service.mutate_scope_blocking(SettingsScope::User, None, |document| {
-            let target = document.values.entry("settings".to_string()).or_insert_with(|| serde_json::json!({}));
-            let target = target.as_object_mut().ok_or_else(|| crate::settings::SettingsError::Validation("settings must be an object".to_string()))?;
-            for (key, value) in incoming.as_object().ok_or_else(|| crate::settings::SettingsError::Validation("settings must be an object".to_string()))? {
-                target.insert(key.clone(), value.clone());
-            }
-            Ok(())
-        }).map_err(|error| error.to_string())?;
+        service
+            .mutate_scope_blocking(SettingsScope::User, None, |document| {
+                let target = document
+                    .values
+                    .entry("settings".to_string())
+                    .or_insert_with(|| serde_json::json!({}));
+                let target = target.as_object_mut().ok_or_else(|| {
+                    crate::settings::SettingsError::Validation(
+                        "settings must be an object".to_string(),
+                    )
+                })?;
+                for (key, value) in incoming.as_object().ok_or_else(|| {
+                    crate::settings::SettingsError::Validation(
+                        "settings must be an object".to_string(),
+                    )
+                })? {
+                    target.insert(key.clone(), value.clone());
+                }
+                Ok(())
+            })
+            .map_err(|error| error.to_string())?;
         match api_key {
             crate::settings::SecretMutation::Unchanged => Ok(()),
             crate::settings::SecretMutation::Set(value) if value.is_empty() => Ok(()),
-            crate::settings::SecretMutation::Set(value) => service.secrets().set("codegraph/default/apiKey", &value).map_err(|error| error.to_string()),
-            crate::settings::SecretMutation::Clear => service.secrets().delete("codegraph/default/apiKey").map_err(|error| error.to_string()),
+            crate::settings::SecretMutation::Set(value) => service
+                .secrets()
+                .set("codegraph/default/apiKey", &value)
+                .map_err(|error| error.to_string()),
+            crate::settings::SecretMutation::Clear => service
+                .secrets()
+                .delete("codegraph/default/apiKey")
+                .map_err(|error| error.to_string()),
         }
-    }).await.map_err(|error| error.to_string())?
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// Send a desktop notification with the correct AppUserModelID,
@@ -610,8 +693,7 @@ mod tests {
         )
         .unwrap();
         seed_state_from_legacy(&legacy, &state).unwrap();
-        let seeded: Value =
-            serde_json::from_str(&fs::read_to_string(&state).unwrap()).unwrap();
+        let seeded: Value = serde_json::from_str(&fs::read_to_string(&state).unwrap()).unwrap();
         assert!(seeded.get("settings").is_none());
         assert!(seeded.get("providers").is_none());
         assert!(seeded.get("active_provider").is_none());
@@ -627,14 +709,12 @@ mod tests {
         fs::write(&legacy, r#"{"workspace":"legacy-ws","extra":1}"#).unwrap();
         fs::write(&state, r#"{"workspace":"live-ws"}"#).unwrap();
         seed_state_from_legacy(&legacy, &state).unwrap();
-        let seeded: Value =
-            serde_json::from_str(&fs::read_to_string(&state).unwrap()).unwrap();
+        let seeded: Value = serde_json::from_str(&fs::read_to_string(&state).unwrap()).unwrap();
         assert_eq!(seeded["workspace"], "live-ws", "state 已有 key 不覆盖");
         assert_eq!(seeded["extra"], 1, "缺失 key 补齐");
         // 第二次跑：内容不变
         seed_state_from_legacy(&legacy, &state).unwrap();
-        let again: Value =
-            serde_json::from_str(&fs::read_to_string(&state).unwrap()).unwrap();
+        let again: Value = serde_json::from_str(&fs::read_to_string(&state).unwrap()).unwrap();
         assert_eq!(again, seeded);
     }
 
@@ -678,7 +758,10 @@ mod tests {
 
         // 再序列化必须仍是 camelCase（前端按 camelCase 读）
         let out = serde_json::to_string(&s).unwrap();
-        assert!(out.contains("\"fontSize\":16"), "fontSize key must be camelCase: {out}");
+        assert!(
+            out.contains("\"fontSize\":16"),
+            "fontSize key must be camelCase: {out}"
+        );
         assert!(out.contains("\"workbenchHeight\":100"), "{out}");
         assert!(out.contains("\"recentLimit\":3"), "{out}");
         assert!(out.contains("\"openWithExtensions\""), "{out}");
@@ -759,7 +842,10 @@ mod tests {
         let json = r#"{"fontSize":14,"enabledMarketplaces":["claude-plugins-official"],"enabledPlugins":{"github@claude-plugins-official":true}}"#;
         let s: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(s.enabled_marketplaces, vec!["claude-plugins-official"]);
-        assert_eq!(s.enabled_plugins.get("github@claude-plugins-official"), Some(&true));
+        assert_eq!(
+            s.enabled_plugins.get("github@claude-plugins-official"),
+            Some(&true)
+        );
         let out = serde_json::to_string(&s).unwrap();
         assert!(out.contains("\"enabledMarketplaces\""), "{out}");
         assert!(out.contains("\"enabledPlugins\""), "{out}");
@@ -802,7 +888,10 @@ mod tests {
 
         let out = serde_json::to_string(&s).unwrap();
         assert!(out.contains("\"codegraphEmbedder\""), "{out}");
-        assert!(out.contains("\"baseUrl\":\"http://localhost:11434\""), "{out}");
+        assert!(
+            out.contains("\"baseUrl\":\"http://localhost:11434\""),
+            "{out}"
+        );
     }
 
     /// 代码索引总开关随 AppSettings 落盘/读取，camelCase 一致；缺字段回填默认开。
@@ -813,7 +902,8 @@ mod tests {
         assert!(s.codegraph_enabled);
 
         // 关闭 round-trip
-        let s: AppSettings = serde_json::from_str(r#"{"fontSize":14,"codegraphEnabled":false}"#).unwrap();
+        let s: AppSettings =
+            serde_json::from_str(r#"{"fontSize":14,"codegraphEnabled":false}"#).unwrap();
         assert!(!s.codegraph_enabled);
         let out = serde_json::to_string(&s).unwrap();
         assert!(out.contains("\"codegraphEnabled\":false"), "{out}");
@@ -840,6 +930,9 @@ mod tests {
 
         let out = serde_json::to_string(&s).unwrap();
         assert!(out.contains("\"jdkRegistry\""), "{out}");
-        assert!(out.contains("\"path\":\"C:\\\\Program Files\\\\Java\\\\jdk-21\""), "{out}");
+        assert!(
+            out.contains("\"path\":\"C:\\\\Program Files\\\\Java\\\\jdk-21\""),
+            "{out}"
+        );
     }
 }

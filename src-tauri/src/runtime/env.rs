@@ -9,10 +9,7 @@ use crate::runtime::provider::ProviderConfig;
 /// 组 spawn env：active provider 直映；
 /// 再补公共 fallback（CLAUDE_CONFIG_DIR + 代理），最后 proxy 覆盖。
 /// 纯函数——无 I/O，可单测。
-pub fn build_runtime_env_vars(
-    active: &ProviderConfig,
-    proxy: &str,
-) -> HashMap<String, String> {
+pub fn build_runtime_env_vars(active: &ProviderConfig, proxy: &str) -> HashMap<String, String> {
     use crate::runtime::provider::strategy::strategy_for;
     let strat = strategy_for(active.kind);
     let mut env_vars = strat.env_vars(active);
@@ -47,11 +44,17 @@ mod tests {
         let p = ProviderConfig {
             id: "__system_default__".into(),
             kind: ProviderKind::SystemDefault,
-            name: "".into(), icon: "".into(), base_url: "".into(),
-            api_key: "".into(), auth_token: "".into(), model: String::new(),
+            name: "".into(),
+            icon: "".into(),
+            base_url: "".into(),
+            api_key: "".into(),
+            auth_token: "".into(),
+            model: String::new(),
             model_mappings: ProviderModelMappings::default(),
-            effort_level: "".into(), auto_compact_window: "".into(),
-            autocompact_pct_override: "".into(), max_context_tokens: "".into(),
+            effort_level: "".into(),
+            auto_compact_window: "".into(),
+            autocompact_pct_override: "".into(),
+            max_context_tokens: "".into(),
             known_models: vec![],
         };
         let _ = build_runtime_env_vars(&p, "");
@@ -63,15 +66,24 @@ mod tests {
         let p = ProviderConfig {
             id: "x".into(),
             kind: ProviderKind::Custom,
-            name: "".into(), icon: "".into(), base_url: "https://b.example".into(),
-            api_key: "k".into(), auth_token: "".into(), model: String::new(),
+            name: "".into(),
+            icon: "".into(),
+            base_url: "https://b.example".into(),
+            api_key: "k".into(),
+            auth_token: "".into(),
+            model: String::new(),
             model_mappings: ProviderModelMappings::default(),
-            effort_level: "".into(), auto_compact_window: "".into(),
-            autocompact_pct_override: "".into(), max_context_tokens: "".into(),
+            effort_level: "".into(),
+            auto_compact_window: "".into(),
+            autocompact_pct_override: "".into(),
+            max_context_tokens: "".into(),
             known_models: vec![],
         };
         let env = build_runtime_env_vars(&p, "");
-        assert_eq!(env.get("ANTHROPIC_BASE_URL"), Some(&"https://b.example".to_string()));
+        assert_eq!(
+            env.get("ANTHROPIC_BASE_URL"),
+            Some(&"https://b.example".to_string())
+        );
         assert_eq!(env.get("ANTHROPIC_API_KEY"), Some(&"k".to_string()));
         // active 分支不读 ANTHROPIC_AUTH_TOKEN 进程 env（没设也不会插空）——不在此断言进程 env
     }

@@ -1,17 +1,17 @@
-mod codegraph;
 mod automation;
+mod codegraph;
 // commands/remote/settings 公开给集成测试（tests/ 目录只能访问 crate 公开 API，
 // 测试分离布局要求源文件零测试代码，集成测试是唯一测试面）
 pub mod commands;
+mod conversation;
 mod diagnostics;
 mod lsp;
-mod shell;
+mod policy;
 pub mod remote;
 pub mod runtime;
-mod conversation;
-mod skills;
-mod policy;
 mod settings;
+mod shell;
+mod skills;
 
 use std::path::PathBuf;
 
@@ -130,7 +130,9 @@ pub fn run() {
 
             // 远程控制网关：manage 需要 AppHandle，只能在 setup 内注册。
             // initialize_blocking 必须先于 public_settings（未初始化读会报 NotInitialized）。
-            app.manage(std::sync::Arc::new(remote::RemoteGateway::new(app.handle().clone())));
+            app.manage(std::sync::Arc::new(remote::RemoteGateway::new(
+                app.handle().clone(),
+            )));
             // 设置开启则随 app 启动
             {
                 let gateway = app.state::<std::sync::Arc<remote::RemoteGateway>>();
@@ -201,12 +203,19 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 if let Some(rt) = handle1.try_state::<runtime::AgentRuntimeManager>() {
                     use crate::runtime::env::build_runtime_env_vars;
-                    let settings_service = handle1.state::<std::sync::Arc<settings::SettingsService>>().inner().clone();
+                    let settings_service = handle1
+                        .state::<std::sync::Arc<settings::SettingsService>>()
+                        .inner()
+                        .clone();
                     let resolved = tokio::task::spawn_blocking(move || {
-                        let active = settings_service.resolve_active_runtime_provider().map_err(|error| error.to_string())?;
-                        let proxy = crate::commands::settings::public_settings(&settings_service)?.proxy;
+                        let active = settings_service
+                            .resolve_active_runtime_provider()
+                            .map_err(|error| error.to_string())?;
+                        let proxy =
+                            crate::commands::settings::public_settings(&settings_service)?.proxy;
                         Ok::<_, String>((active, proxy))
-                    }).await;
+                    })
+                    .await;
                     let Ok(Ok((active, proxy))) = resolved else {
                         eprintln!("[aide] unable to resolve initial provider settings");
                         return;
@@ -330,7 +339,6 @@ pub fn run() {
             commands::git::git_stage_file,
             commands::git::git_unstage_file,
             commands::git::git_revert_file,
-            commands::git::log_frontend_error,
             commands::app::get_app_version,
             commands::git::git_remote_url,
             commands::git::git_log,
@@ -459,6 +467,7 @@ pub fn run() {
             codegraph::commands::codegraph_rescan,
             codegraph::commands::codegraph_build_progress,
             // 卡死诊断黑匣子
+            diagnostics::log_frontend_error,
             diagnostics::diag_heartbeat,
             diagnostics::diag_freeze_supplement,
             diagnostics::diag_scroll_trail,

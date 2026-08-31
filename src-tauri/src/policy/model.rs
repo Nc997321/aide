@@ -39,10 +39,7 @@ pub enum PermissionMatcher {
         file: Option<String>,
     },
     /// Exact equality on an approved scalar input field (specificity 3).
-    Field {
-        field: FieldName,
-        equals: String,
-    },
+    Field { field: FieldName, equals: String },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

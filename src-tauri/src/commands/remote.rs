@@ -26,10 +26,15 @@ pub async fn remote_get_status(app: AppHandle) -> Result<RemoteStatus, String> {
     let service2 = service.inner().clone();
     let (settings, token_configured) = tokio::task::spawn_blocking(move || {
         let settings = public_settings(&service2)?;
-        let token_configured = service2.secrets()
-            .get("remote/token").map_err(|e| e.to_string())?.is_some();
+        let token_configured = service2
+            .secrets()
+            .get("remote/token")
+            .map_err(|e| e.to_string())?
+            .is_some();
         Ok::<_, String>((settings, token_configured))
-    }).await.map_err(|e| e.to_string())??;
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let pairing_code = gateway.pairing.lock().unwrap().current();
     Ok(RemoteStatus {
         enabled: settings.remote.enabled,
@@ -47,20 +52,33 @@ pub async fn remote_set_enabled(enabled: bool, app: AppHandle) -> Result<(), Str
     let service = app.state::<Arc<SettingsService>>();
     let service2 = service.inner().clone();
     tokio::task::spawn_blocking(move || {
-        service2.mutate_scope_blocking(SettingsScope::User, None, |document| {
-            let target = document.values.entry("settings".to_string())
-                .or_insert_with(|| serde_json::json!({}));
-            let target = target.as_object_mut().ok_or_else(|| {
-                crate::settings::SettingsError::Validation("settings must be an object".to_string())
-            })?;
-            let remote = target.entry("remote".to_string())
-                .or_insert_with(|| serde_json::json!({}));
-            remote["enabled"] = serde_json::json!(enabled);
-            Ok(())
-        }).map_err(|e| e.to_string())
-    }).await.map_err(|e| e.to_string())??;
+        service2
+            .mutate_scope_blocking(SettingsScope::User, None, |document| {
+                let target = document
+                    .values
+                    .entry("settings".to_string())
+                    .or_insert_with(|| serde_json::json!({}));
+                let target = target.as_object_mut().ok_or_else(|| {
+                    crate::settings::SettingsError::Validation(
+                        "settings must be an object".to_string(),
+                    )
+                })?;
+                let remote = target
+                    .entry("remote".to_string())
+                    .or_insert_with(|| serde_json::json!({}));
+                remote["enabled"] = serde_json::json!(enabled);
+                Ok(())
+            })
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let gateway = app.state::<Arc<RemoteGateway>>().inner().clone();
-    if enabled { gateway.start(); } else { gateway.stop(); }
+    if enabled {
+        gateway.start();
+    } else {
+        gateway.stop();
+    }
     Ok(())
 }
 

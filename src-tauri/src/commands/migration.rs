@@ -119,10 +119,8 @@ pub struct MigrationSummary {
 pub fn check_claude_migration() -> Result<MigrationStatus, String> {
     let legacy = legacy_claude_dir();
     let legacy_exists = legacy.is_dir();
-    let has_migratable = legacy_exists
-        && MIGRATABLE_ENTRIES
-            .iter()
-            .any(|e| legacy.join(e).exists());
+    let has_migratable =
+        legacy_exists && MIGRATABLE_ENTRIES.iter().any(|e| legacy.join(e).exists());
     let state = load_state();
     let done = state
         .get(DONE_KEY)
@@ -301,10 +299,17 @@ mod tests {
         write(&tmp.join("src/agents/b.md"), "B");
         // 目标已存在 agents/a.md（claude.exe 先写的），不应被覆盖
         write(&tmp.join("dst/agents/a.md"), "A-NEW");
-        let copied = copy_dir_missing_only(&tmp.join("src/agents"), &tmp.join("dst/agents")).unwrap();
+        let copied =
+            copy_dir_missing_only(&tmp.join("src/agents"), &tmp.join("dst/agents")).unwrap();
         assert!(copied, "b.md 是新文件，应报告有拷贝");
-        assert_eq!(fs::read_to_string(&tmp.join("dst/agents/a.md")).unwrap(), "A-NEW");
-        assert_eq!(fs::read_to_string(&tmp.join("dst/agents/b.md")).unwrap(), "B");
+        assert_eq!(
+            fs::read_to_string(&tmp.join("dst/agents/a.md")).unwrap(),
+            "A-NEW"
+        );
+        assert_eq!(
+            fs::read_to_string(&tmp.join("dst/agents/b.md")).unwrap(),
+            "B"
+        );
     }
 
     #[test]
@@ -312,7 +317,8 @@ mod tests {
         let tmp = unique_tmp("dir_all_present");
         write(&tmp.join("src/skills/foo/SKILL.md"), "foo");
         write(&tmp.join("dst/skills/foo/SKILL.md"), "foo-existing");
-        let copied = copy_dir_missing_only(&tmp.join("src/skills"), &tmp.join("dst/skills")).unwrap();
+        let copied =
+            copy_dir_missing_only(&tmp.join("src/skills"), &tmp.join("dst/skills")).unwrap();
         assert!(!copied);
         assert_eq!(
             fs::read_to_string(&tmp.join("dst/skills/foo/SKILL.md")).unwrap(),
@@ -394,7 +400,10 @@ mod tests {
         }
         assert_eq!(copied, 1, "CLAUDE.md 被拷");
         assert_eq!(skipped, 1, "settings.json 跳过");
-        assert_eq!(fs::read_to_string(&dst.join("settings.json")).unwrap(), r#"{"new":1}"#);
+        assert_eq!(
+            fs::read_to_string(&dst.join("settings.json")).unwrap(),
+            r#"{"new":1}"#
+        );
         assert_eq!(fs::read_to_string(&dst.join("CLAUDE.md")).unwrap(), "rules");
     }
 
@@ -403,7 +412,10 @@ mod tests {
         let tmp = unique_tmp("aide_rename");
         let old = tmp.join("old/.claude-code-desktop");
         let new = tmp.join("old/.aide");
-        write(&old.join("config.json"), r#"{"settings":{"theme":"warm-dark"}}"#);
+        write(
+            &old.join("config.json"),
+            r#"{"settings":{"theme":"warm-dark"}}"#,
+        );
         write(&old.join("sessions/abc.json"), "{}");
         write(&old.join("claude/settings.json"), r#"{"mcpServers":{}}"#);
         migrate_aide_data_dir(&old, &new).unwrap();
@@ -414,7 +426,10 @@ mod tests {
             r#"{"settings":{"theme":"warm-dark"}}"#
         );
         assert!(new.join("sessions/abc.json").exists());
-        assert!(new.join("claude/settings.json").exists(), "claude/ 子树一并搬走");
+        assert!(
+            new.join("claude/settings.json").exists(),
+            "claude/ 子树一并搬走"
+        );
     }
 
     #[test]
@@ -427,7 +442,10 @@ mod tests {
         // 目标已存在 → Ok 且不动（已迁移 / 新用户）
         migrate_aide_data_dir(&old, &new).unwrap();
         assert!(old.exists(), "老目录保留（不强行覆盖目标）");
-        assert_eq!(fs::read_to_string(&new.join("config.json")).unwrap(), r#"{"new":1}"#);
+        assert_eq!(
+            fs::read_to_string(&new.join("config.json")).unwrap(),
+            r#"{"new":1}"#
+        );
     }
 
     #[test]

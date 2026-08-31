@@ -94,7 +94,11 @@ pub struct EventRates {
 
 impl EventRates {
     fn new(cap: usize) -> Self {
-        Self { current_sec: 0, counts: HashMap::new(), ring: Ring::new(cap) }
+        Self {
+            current_sec: 0,
+            counts: HashMap::new(),
+            ring: Ring::new(cap),
+        }
     }
 
     fn record(&mut self, session_id: &str, event_type: &str, bytes: u64) {
@@ -191,6 +195,13 @@ pub fn current_stuck_command() -> Option<(&'static str, Duration)> {
 
 // ── 前端命令 ────────────────────────────────────────────────────────
 
+/// Capture frontend errors into the Rust tracing log.
+/// （从 commands/git/legacy.rs 归位：前端错误采集本属诊断域，不该寄居 git 模块。）
+#[tauri::command]
+pub fn log_frontend_error(message: String) {
+    tracing::error!(%message, "FRONTEND_ERROR");
+}
+
 /// 前端每 500ms 一次的心跳。纯内存写入，必须保持轻——它本身就在被测的
 /// 渲染主线程上发出，任何重操作都会污染测量。
 #[tauri::command]
@@ -201,11 +212,10 @@ pub fn diag_heartbeat(state: State<DiagnosticsState>, payload: HeartbeatPayload)
     let inner = &state.0;
     inner.hidden.store(payload.hidden, Ordering::Relaxed);
     *inner.last_heartbeat.lock().unwrap() = Some(Instant::now());
-    inner
-        .heartbeats
-        .lock()
-        .unwrap()
-        .push(HeartbeatEntry { t: report::epoch_ms(), payload });
+    inner.heartbeats.lock().unwrap().push(HeartbeatEntry {
+        t: report::epoch_ms(),
+        payload,
+    });
 }
 
 /// 前端从卡死中恢复后补交现场（longtask 明细 + 面包屑快照）。
@@ -278,11 +288,15 @@ mod tests {
         let mut rates = EventRates::new(10);
         // 手工驱动，不依赖真实时钟跨秒
         rates.current_sec = 100;
-        for _ in 0..3 { bump(&mut rates, "s1", "text_delta", 10); }
+        for _ in 0..3 {
+            bump(&mut rates, "s1", "text_delta", 10);
+        }
         bump(&mut rates, "s2", "text_delta", 10);
         rates.flush();
         rates.current_sec = 101;
-        for _ in 0..2 { bump(&mut rates, "s1", "text_delta", 10); }
+        for _ in 0..2 {
+            bump(&mut rates, "s1", "text_delta", 10);
+        }
 
         let mut snap = rates.snapshot();
         snap.sort_by_key(|b| (b.t_sec, b.session_id.clone()));
@@ -316,7 +330,9 @@ mod tests {
     fn snapshot_is_repeatable_without_double_counting() {
         let mut rates = EventRates::new(10);
         rates.current_sec = 50;
-        for _ in 0..5 { bump(&mut rates, "s1", "text_delta", 10); }
+        for _ in 0..5 {
+            bump(&mut rates, "s1", "text_delta", 10);
+        }
         let first = rates.snapshot();
         let second = rates.snapshot();
         // 第二次快照不新增桶（counts 已清空）

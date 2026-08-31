@@ -32,7 +32,13 @@ impl ServerProfile for JavaProfile {
         let name = self.data_dir_name()?;
         let ws_id: String = workspace
             .chars()
-            .map(|c| if c == ':' || c == '\\' || c == '/' { '_' } else { c })
+            .map(|c| {
+                if c == ':' || c == '\\' || c == '/' {
+                    '_'
+                } else {
+                    c
+                }
+            })
             .collect();
         Some(config_dir.join("lsp").join(name).join(ws_id))
     }
@@ -96,7 +102,11 @@ fn resolve_lombok_jar(ctx: &LaunchCtx) -> Option<PathBuf> {
     use tauri::Manager;
     let res_dir = ctx.app.path().resource_dir().ok()?;
     let jar = res_dir.join("lsp").join("lombok.jar");
-    if jar.exists() { Some(jar) } else { None }
+    if jar.exists() {
+        Some(jar)
+    } else {
+        None
+    }
 }
 
 /// 判 jdtls `language/status` 通知是否代表功能就绪（项目导入 + 索引完成）。
@@ -166,8 +176,16 @@ mod tests {
     fn build_lombok_args_injects_javaagent_and_bootclasspath() {
         let args = build_lombok_args(Some(Path::new("/opt/lombok.jar")));
         assert_eq!(args.len(), 2);
-        assert!(args.iter().any(|a| a == "--jvm-arg=-javaagent:/opt/lombok.jar"), "{args:?}");
-        assert!(args.iter().any(|a| a == "--jvm-arg=-Xbootclasspath/a:/opt/lombok.jar"), "{args:?}");
+        assert!(
+            args.iter()
+                .any(|a| a == "--jvm-arg=-javaagent:/opt/lombok.jar"),
+            "{args:?}"
+        );
+        assert!(
+            args.iter()
+                .any(|a| a == "--jvm-arg=-Xbootclasspath/a:/opt/lombok.jar"),
+            "{args:?}"
+        );
         // jdtls 不认 --stdio，lombok 注入也不应混入
         assert!(!args.iter().any(|a| a.contains("--stdio")));
     }
@@ -215,7 +233,10 @@ mod tests {
         // 用户已自配 --jvm-arg：不重复
         let mut args = vec!["--jvm-arg=-Dlog.level=ALL".to_string()];
         JavaProfile.supplement_explicit(&mut args, Some(data()));
-        assert_eq!(args.iter().filter(|a| a.starts_with("--jvm-arg=")).count(), 1);
+        assert_eq!(
+            args.iter().filter(|a| a.starts_with("--jvm-arg=")).count(),
+            1
+        );
     }
 
     #[test]
@@ -230,7 +251,9 @@ mod tests {
     #[test]
     fn works_with_which_source() {
         // 集成：Which source + to_command（走 profile launch_args）
-        let src = ServerSource::Which { binary: "jdtls".into() };
+        let src = ServerSource::Which {
+            binary: "jdtls".into(),
+        };
         let (prog, args) = crate::lsp::registry::to_command(
             crate::lsp::detector::LanguageId::Java,
             &src,
@@ -245,12 +268,19 @@ mod tests {
     fn jdtls_data_dir_outside_workspace_and_per_workspace() {
         // bug4 真因回归：jdtls -data 必须在工作区【外】，否则 Eclipse 拒导项目（overlaps）。
         let cfg = std::path::Path::new("/home/u/.aide");
-        let p = JavaProfile.data_dir_path("C:\\proj\\alpha", cfg).expect("Some");
+        let p = JavaProfile
+            .data_dir_path("C:\\proj\\alpha", cfg)
+            .expect("Some");
         // 在 app_data_dir/lsp/jdtls-workspace/<ws_id> 下
         assert!(p.starts_with(cfg.join("lsp").join("jdtls-workspace")));
         // 不在工作区内（overlap 会让 jdtls 拒导项目）
         assert!(!p.starts_with(std::path::PathBuf::from("C:\\proj\\alpha")));
         // 不同工作区隔离（不串数据）
-        assert_ne!(p, JavaProfile.data_dir_path("C:\\proj\\beta", cfg).expect("Some"));
+        assert_ne!(
+            p,
+            JavaProfile
+                .data_dir_path("C:\\proj\\beta", cfg)
+                .expect("Some")
+        );
     }
 }

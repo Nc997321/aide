@@ -46,7 +46,9 @@ pub(crate) fn detect_proxy_auto() -> Option<String> {
         let mut git_cmd = Command::new("git");
         git_cmd.args(["config", "--global", "http.proxy"]);
         #[cfg(windows)]
-        { git_cmd.creation_flags(0x08000000); }
+        {
+            git_cmd.creation_flags(0x08000000);
+        }
         if let Ok(output) = git_cmd.output() {
             let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !val.is_empty() && is_proxy_reachable(&val) {
@@ -135,7 +137,9 @@ fn is_proxy_reachable(proxy: &str) -> bool {
         .trim_end_matches('/');
     // addr should be "host:port"
     if let Ok(sock) = addr.parse::<std::net::SocketAddr>() {
-        if std::net::TcpStream::connect_timeout(&sock, std::time::Duration::from_millis(500)).is_ok() {
+        if std::net::TcpStream::connect_timeout(&sock, std::time::Duration::from_millis(500))
+            .is_ok()
+        {
             return true;
         }
     }
@@ -155,11 +159,8 @@ mod tests {
     static NEXT_DIR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     fn write_settings(proxy: &str) -> (std::path::PathBuf, std::path::PathBuf) {
         let id = NEXT_DIR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "aide_proxy_test_{}_{}",
-            std::process::id(),
-            id
-        ));
+        let root =
+            std::env::temp_dir().join(format!("aide_proxy_test_{}_{}", std::process::id(), id));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join(".aide")).unwrap();
         let path = root.join(".aide").join("settings.json");

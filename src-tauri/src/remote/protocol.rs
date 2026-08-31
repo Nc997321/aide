@@ -15,20 +15,37 @@ pub enum PhoneToDesktop {
     Auth { token: String },
     /// 通用命令调用：command 必须在 rpc::REGISTRY 白名单内，params 为该命令的参数 DTO
     /// （camelCase，与桌面前端 api 门面的调用形状一致）。
-    Invoke { id: u64, command: String, params: Value },
+    Invoke {
+        id: u64,
+        command: String,
+        params: Value,
+    },
 }
 
 /// 桌面 → 手机
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DesktopToPhone {
-    PairOk { device_id: String, token: String },
+    PairOk {
+        device_id: String,
+        token: String,
+    },
     AuthOk,
-    AuthError { message: String },
+    AuthError {
+        message: String,
+    },
     /// 流式事件（ChatEvent 原样透传，与桌面 listen("chat-event") 的 payload 同形）
-    Event { event: Value },
+    Event {
+        event: Value,
+    },
     /// Invoke 成功/失败两个变体封闭结果空间——非法组合（同时带 payload 和 error）
     /// 在类型上造不出来。
-    InvokeOk { id: u64, payload: Value },
-    InvokeErr { id: u64, error: String },
+    InvokeOk {
+        id: u64,
+        payload: Value,
+    },
+    InvokeErr {
+        id: u64,
+        error: String,
+    },
 }

@@ -3,7 +3,9 @@
 
 use std::collections::HashMap;
 
-use crate::runtime::provider::{mappings_to_env, ProviderConfig, ProviderKind, ProviderModelMappings};
+use crate::runtime::provider::{
+    mappings_to_env, ProviderConfig, ProviderKind, ProviderModelMappings,
+};
 
 // Task 8-10 脚手架：ActionDef / actions() 届时会被 UI 动作面板使用，当前保留类型契约。
 #[allow(dead_code)]
@@ -38,17 +40,26 @@ pub trait ProviderStrategy: Send + Sync {
     fn fallback_env_keys(&self) -> &'static [&'static str];
     // Task 8-10 脚手架：动作列表面板届时会调用，当前保留 trait 契约。
     #[allow(dead_code)]
-    fn actions(&self) -> Vec<ActionDef> { Vec::new() }
+    fn actions(&self) -> Vec<ActionDef> {
+        Vec::new()
+    }
     fn run_action(&self, _cfg: &ProviderConfig, action: &str) -> Result<ActionResult, String> {
-        Err(format!("action '{action}' not supported by {:?} kind", self.kind()))
+        Err(format!(
+            "action '{action}' not supported by {:?} kind",
+            self.kind()
+        ))
     }
     fn test_connection(&self, cfg: &ProviderConfig) -> Result<ConnectionStatus, String>;
 }
 
 const SMALL_FALLBACK: &[&str] = &[
     "CLAUDE_CONFIG_DIR",
-    "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
-    "ALL_PROXY", "all_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
 ];
 
 /// 共享预置策略：base_url 来自 catalog（非空），api_key 认证，仅 test_connection。
@@ -58,22 +69,50 @@ pub(crate) struct PresetStrategy {
 }
 
 impl ProviderStrategy for PresetStrategy {
-    fn kind(&self) -> ProviderKind { self.kind }
+    fn kind(&self) -> ProviderKind {
+        self.kind
+    }
     fn env_vars(&self, cfg: &ProviderConfig) -> HashMap<String, String> {
         let mut env = HashMap::new();
         env.insert("ANTHROPIC_BASE_URL".into(), self.base_url.clone());
-        if !cfg.api_key.is_empty() { env.insert("ANTHROPIC_API_KEY".into(), cfg.api_key.clone()); }
-        if !cfg.auth_token.is_empty() { env.insert("ANTHROPIC_AUTH_TOKEN".into(), cfg.auth_token.clone()); }
-        if !cfg.effort_level.is_empty() { env.insert("CLAUDE_CODE_EFFORT_LEVEL".into(), cfg.effort_level.clone()); }
-        if !cfg.auto_compact_window.is_empty() { env.insert("CLAUDE_CODE_AUTO_COMPACT_WINDOW".into(), cfg.auto_compact_window.clone()); }
-        if !cfg.autocompact_pct_override.is_empty() { env.insert("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE".into(), cfg.autocompact_pct_override.clone()); }
-        if !cfg.max_context_tokens.is_empty() { env.insert("CLAUDE_CODE_MAX_CONTEXT_TOKENS".into(), cfg.max_context_tokens.clone()); }
+        if !cfg.api_key.is_empty() {
+            env.insert("ANTHROPIC_API_KEY".into(), cfg.api_key.clone());
+        }
+        if !cfg.auth_token.is_empty() {
+            env.insert("ANTHROPIC_AUTH_TOKEN".into(), cfg.auth_token.clone());
+        }
+        if !cfg.effort_level.is_empty() {
+            env.insert("CLAUDE_CODE_EFFORT_LEVEL".into(), cfg.effort_level.clone());
+        }
+        if !cfg.auto_compact_window.is_empty() {
+            env.insert(
+                "CLAUDE_CODE_AUTO_COMPACT_WINDOW".into(),
+                cfg.auto_compact_window.clone(),
+            );
+        }
+        if !cfg.autocompact_pct_override.is_empty() {
+            env.insert(
+                "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE".into(),
+                cfg.autocompact_pct_override.clone(),
+            );
+        }
+        if !cfg.max_context_tokens.is_empty() {
+            env.insert(
+                "CLAUDE_CODE_MAX_CONTEXT_TOKENS".into(),
+                cfg.max_context_tokens.clone(),
+            );
+        }
         env.extend(mappings_to_env(&cfg.model_mappings));
         env
     }
-    fn fallback_env_keys(&self) -> &'static [&'static str] { SMALL_FALLBACK }
+    fn fallback_env_keys(&self) -> &'static [&'static str] {
+        SMALL_FALLBACK
+    }
     fn actions(&self) -> Vec<ActionDef> {
-        vec![ActionDef { name: "test_connection".into(), label: "测试连接".into() }]
+        vec![ActionDef {
+            name: "test_connection".into(),
+            label: "测试连接".into(),
+        }]
     }
     fn test_connection(&self, cfg: &ProviderConfig) -> Result<ConnectionStatus, String> {
         common_test_connection(cfg, Some(&self.base_url))
@@ -90,8 +129,12 @@ pub mod system_default;
 pub fn strategy_for(kind: ProviderKind) -> Box<dyn ProviderStrategy> {
     match kind {
         ProviderKind::Custom => Box::new(custom::CustomStrategy),
-        ProviderKind::SystemDefault => Box::new(crate::runtime::provider::strategy::system_default::SystemDefaultStrategy),
-        ProviderKind::CpaGpt => Box::new(crate::runtime::provider::strategy::cpa_gpt::CpaGptStrategy),
+        ProviderKind::SystemDefault => {
+            Box::new(crate::runtime::provider::strategy::system_default::SystemDefaultStrategy)
+        }
+        ProviderKind::CpaGpt => {
+            Box::new(crate::runtime::provider::strategy::cpa_gpt::CpaGptStrategy)
+        }
         ProviderKind::Ollama => crate::runtime::provider::strategy::ollama::strategy(),
         ProviderKind::Kimi => crate::runtime::provider::strategy::kimi::strategy(),
         ProviderKind::DeepSeek => crate::runtime::provider::strategy::deepseek::strategy(),
@@ -110,7 +153,13 @@ pub(crate) fn common_test_connection(
     let base_url = base_url_override
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
-        .or_else(|| if cfg.base_url.is_empty() { None } else { Some(cfg.base_url.clone()) })
+        .or_else(|| {
+            if cfg.base_url.is_empty() {
+                None
+            } else {
+                Some(cfg.base_url.clone())
+            }
+        })
         .unwrap_or_else(|| "https://api.anthropic.com".to_string());
 
     let (auth_name, auth_val): (&str, String) = if !cfg.api_key.is_empty() {
@@ -118,12 +167,17 @@ pub(crate) fn common_test_connection(
     } else if !cfg.auth_token.is_empty() {
         ("Authorization", format!("Bearer {}", cfg.auth_token))
     } else {
-        return Ok(ConnectionStatus { ok: false, detail: "no api_key / auth_token configured".to_string() });
+        return Ok(ConnectionStatus {
+            ok: false,
+            detail: "no api_key / auth_token configured".to_string(),
+        });
     };
 
     let mut builder = ureq::AgentBuilder::new().timeout(Duration::from_secs(10));
     if let Some(proxy_url) = detect_proxy() {
-        if let Ok(p) = ureq::Proxy::new(&proxy_url) { builder = builder.proxy(p); }
+        if let Ok(p) = ureq::Proxy::new(&proxy_url) {
+            builder = builder.proxy(p);
+        }
     }
     let agent = builder.build();
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
@@ -133,9 +187,18 @@ pub(crate) fn common_test_connection(
         .set("anthropic-version", "2023-06-01")
         .call();
     match resp {
-        Ok(r) => Ok(ConnectionStatus { ok: true, detail: format!("HTTP {}", r.status()) }),
-        Err(ureq::Error::Status(code, _)) => Ok(ConnectionStatus { ok: true, detail: format!("HTTP {code}（端点活着，鉴权/路径可能需调整）") }),
-        Err(e) => Ok(ConnectionStatus { ok: false, detail: format!("连接失败: {e}") }),
+        Ok(r) => Ok(ConnectionStatus {
+            ok: true,
+            detail: format!("HTTP {}", r.status()),
+        }),
+        Err(ureq::Error::Status(code, _)) => Ok(ConnectionStatus {
+            ok: true,
+            detail: format!("HTTP {code}（端点活着，鉴权/路径可能需调整）"),
+        }),
+        Err(e) => Ok(ConnectionStatus {
+            ok: false,
+            detail: format!("连接失败: {e}"),
+        }),
     }
 }
 
@@ -145,10 +208,21 @@ mod tests {
 
     #[test]
     fn strategy_for_returns_some_for_every_kind() {
-        for k in [ProviderKind::Custom, ProviderKind::SystemDefault, ProviderKind::CpaGpt,
-                  ProviderKind::Ollama, ProviderKind::Kimi, ProviderKind::DeepSeek] {
+        for k in [
+            ProviderKind::Custom,
+            ProviderKind::SystemDefault,
+            ProviderKind::CpaGpt,
+            ProviderKind::Ollama,
+            ProviderKind::Kimi,
+            ProviderKind::DeepSeek,
+        ] {
             let s = strategy_for(k);
-            assert_eq!(s.kind(), k, "strategy_for({:?}) must return a strategy whose kind matches", k);
+            assert_eq!(
+                s.kind(),
+                k,
+                "strategy_for({:?}) must return a strategy whose kind matches",
+                k
+            );
         }
     }
 }

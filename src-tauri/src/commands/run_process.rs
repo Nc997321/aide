@@ -1,7 +1,7 @@
+use crate::shell::ShellManager;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tauri::{AppHandle, State};
-use crate::shell::ShellManager;
 
 fn run_session_id(config_id: &str) -> String {
     format!("run__{}", config_id)

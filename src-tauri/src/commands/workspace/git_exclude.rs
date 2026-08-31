@@ -146,7 +146,10 @@ fn ensure_aide_excluded_inner(root: &Path) -> Result<&'static str, String> {
 pub fn ensure_aide_excluded(workspace_root: &Path) {
     match ensure_aide_excluded_inner(workspace_root) {
         Ok("written") => {
-            tracing::info!("workspace: .aide/ 已写入 git exclude ({})", workspace_root.display())
+            tracing::info!(
+                "workspace: .aide/ 已写入 git exclude ({})",
+                workspace_root.display()
+            )
         }
         Ok("negated") => tracing::debug!(
             "workspace: 用户在 git exclude 显式否定 .aide/，尊重不写 ({})",
@@ -186,7 +189,10 @@ mod tests {
             aide_exclude_state("node_modules/\r\n.aide/\r\n"),
             AideExcludeState::Present
         );
-        assert_eq!(aide_exclude_state("  .aide/  \n"), AideExcludeState::Present);
+        assert_eq!(
+            aide_exclude_state("  .aide/  \n"),
+            AideExcludeState::Present
+        );
     }
 
     #[test]
@@ -241,7 +247,10 @@ mod tests {
     fn idempotent_second_run_is_noop() {
         let root = exclude_test_repo("idem");
         assert_eq!(ensure_aide_excluded_inner(&root).unwrap(), "written");
-        assert_eq!(ensure_aide_excluded_inner(&root).unwrap(), "already-present");
+        assert_eq!(
+            ensure_aide_excluded_inner(&root).unwrap(),
+            "already-present"
+        );
         let content = fs::read_to_string(root.join(".git").join("info").join("exclude")).unwrap();
         assert_eq!(content.matches(".aide/").count(), 1, "{}", content);
     }
@@ -262,7 +271,10 @@ mod tests {
         let root = exclude_test_repo("respect");
         let exclude = root.join(".git").join("info").join("exclude");
         fs::write(&exclude, "/.aide/\n").unwrap();
-        assert_eq!(ensure_aide_excluded_inner(&root).unwrap(), "already-present");
+        assert_eq!(
+            ensure_aide_excluded_inner(&root).unwrap(),
+            "already-present"
+        );
         fs::write(&exclude, "!.aide/\n").unwrap();
         assert_eq!(ensure_aide_excluded_inner(&root).unwrap(), "negated");
         // 否定场景文件原样保留，一个字节都不动。

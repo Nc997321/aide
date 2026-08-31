@@ -18,7 +18,11 @@ fn parses_invoke_with_params() {
     )
     .unwrap();
     match msg {
-        PhoneToDesktop::Invoke { id, command, params } => {
+        PhoneToDesktop::Invoke {
+            id,
+            command,
+            params,
+        } => {
             assert_eq!(id, 7);
             assert_eq!(command, "send_message");
             assert_eq!(params["sessionId"], "s1");
@@ -38,13 +42,19 @@ fn parses_invoke_without_params_gives_null() {
 
 #[test]
 fn serializes_invoke_ok_and_err() {
-    let ok = DesktopToPhone::InvokeOk { id: 3, payload: json!({"sessions": []}) };
+    let ok = DesktopToPhone::InvokeOk {
+        id: 3,
+        payload: json!({"sessions": []}),
+    };
     let s = serde_json::to_string(&ok).unwrap();
     assert!(s.contains("\"type\":\"invoke_ok\""));
     assert!(s.contains("\"id\":3"));
     assert!(s.contains("\"payload\""));
 
-    let err = DesktopToPhone::InvokeErr { id: 3, error: "boom".into() };
+    let err = DesktopToPhone::InvokeErr {
+        id: 3,
+        error: "boom".into(),
+    };
     let s = serde_json::to_string(&err).unwrap();
     assert!(s.contains("\"type\":\"invoke_err\""));
     assert!(s.contains("\"error\":\"boom\""));
@@ -52,7 +62,10 @@ fn serializes_invoke_ok_and_err() {
 
 #[test]
 fn serializes_pair_ok() {
-    let reply = DesktopToPhone::PairOk { device_id: "d1".into(), token: "t1".into() };
+    let reply = DesktopToPhone::PairOk {
+        device_id: "d1".into(),
+        token: "t1".into(),
+    };
     let s = serde_json::to_string(&reply).unwrap();
     assert!(s.contains("\"type\":\"pair_ok\""));
     assert!(s.contains("\"device_id\":\"d1\""));
@@ -60,7 +73,9 @@ fn serializes_pair_ok() {
 
 #[test]
 fn serializes_event_passthrough() {
-    let ev = DesktopToPhone::Event { event: json!({"type":"text_delta","delta":"x"}) };
+    let ev = DesktopToPhone::Event {
+        event: json!({"type":"text_delta","delta":"x"}),
+    };
     let s = serde_json::to_string(&ev).unwrap();
     assert!(s.contains("\"type\":\"event\""));
     assert!(s.contains("\"text_delta\""));

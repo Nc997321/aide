@@ -4,12 +4,21 @@ use tauri::{AppHandle, State};
 use crate::shell::ShellManager;
 
 #[tauri::command]
-pub fn pty_write(manager: State<'_, ShellManager>, session_id: String, data: String) -> Result<(), String> {
+pub fn pty_write(
+    manager: State<'_, ShellManager>,
+    session_id: String,
+    data: String,
+) -> Result<(), String> {
     manager.write(&session_id, &data)
 }
 
 #[tauri::command]
-pub fn pty_resize(manager: State<'_, ShellManager>, session_id: String, rows: u16, cols: u16) -> Result<(), String> {
+pub fn pty_resize(
+    manager: State<'_, ShellManager>,
+    session_id: String,
+    rows: u16,
+    cols: u16,
+) -> Result<(), String> {
     manager.resize(&session_id, rows, cols)
 }
 
@@ -23,7 +32,10 @@ pub fn pty_kill(manager: State<'_, ShellManager>, session_id: String) -> Result<
 /// The frontend calls this periodically instead of receiving push events,
 /// giving it full control over the data consumption rate.
 #[tauri::command]
-pub fn poll_pty_output(manager: State<'_, ShellManager>, session_id: String) -> Result<String, String> {
+pub fn poll_pty_output(
+    manager: State<'_, ShellManager>,
+    session_id: String,
+) -> Result<String, String> {
     manager.poll_output(&session_id)
 }
 
@@ -37,17 +49,29 @@ fn resolve_shell(shell: &str) -> Result<String, String> {
     }
     #[cfg(target_os = "windows")]
     {
-        if let Ok(p) = which::which("pwsh") { return Ok(p.to_string_lossy().to_string()); }
-        if let Ok(p) = which::which("powershell") { return Ok(p.to_string_lossy().to_string()); }
-        return Err("Shell not found: install PowerShell or set shell_path in settings".to_string());
+        if let Ok(p) = which::which("pwsh") {
+            return Ok(p.to_string_lossy().to_string());
+        }
+        if let Ok(p) = which::which("powershell") {
+            return Ok(p.to_string_lossy().to_string());
+        }
+        return Err(
+            "Shell not found: install PowerShell or set shell_path in settings".to_string(),
+        );
     }
     #[cfg(not(target_os = "windows"))]
     {
         if let Ok(s) = std::env::var("SHELL") {
-            if !s.is_empty() { return Ok(s); }
+            if !s.is_empty() {
+                return Ok(s);
+            }
         }
-        if let Ok(p) = which::which("bash") { return Ok(p.to_string_lossy().to_string()); }
-        if let Ok(p) = which::which("sh") { return Ok(p.to_string_lossy().to_string()); }
+        if let Ok(p) = which::which("bash") {
+            return Ok(p.to_string_lossy().to_string());
+        }
+        if let Ok(p) = which::which("sh") {
+            return Ok(p.to_string_lossy().to_string());
+        }
         Err("Shell not found: set shell_path in settings".to_string())
     }
 }
@@ -94,7 +118,15 @@ pub fn pty_spawn_shell(
     let args: Vec<String> = Vec::new();
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     let cwd_path = PathBuf::from(&cwd);
-    manager.spawn_shell(&session_id, &program, &arg_refs, &cwd_path, rows, cols, app_handle)
+    manager.spawn_shell(
+        &session_id,
+        &program,
+        &arg_refs,
+        &cwd_path,
+        rows,
+        cols,
+        app_handle,
+    )
 }
 
 #[cfg(all(test, target_os = "windows"))]

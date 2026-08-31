@@ -88,7 +88,9 @@ pub fn load_notifications_file() -> Vec<NotificationRecord> {
 pub fn save_notifications_file(records: Vec<NotificationRecord>) -> Result<(), String> {
     let persisted = cap_to_limit(filter_persistable(records), PERSIST_LIMIT);
     let p = notifications_path();
-    let dir = p.parent().ok_or_else(|| "notifications.json has no parent".to_string())?;
+    let dir = p
+        .parent()
+        .ok_or_else(|| "notifications.json has no parent".to_string())?;
     fs::create_dir_all(dir).map_err(|e| format!("create config dir: {e}"))?;
     // 每个 save 用唯一 tmp 名（monotonic 后缀），并发 save 互不共享 tmp，
     // 避免交错写造成 JSON 损坏（最后 rename 胜出，落盘的是完整有效快照）。

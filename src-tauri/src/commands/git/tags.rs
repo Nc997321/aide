@@ -1,13 +1,13 @@
 //! 标签命令：列出所有标签，区分 annotated / lightweight，带相对日期与指向提交。
 //!
-//! 与 [`super::legacy`] 共享 spawn helper（`pub(super)` 暴露）。按 `creatordate`
+//! 与 [`super::runtime`] 共享 spawn helper（`pub(super)` 暴露）。按 `creatordate`
 //! 降序输出，前端再按主版本号分组。
 
 use tauri::State;
-use tracing::{info, error};
+use tracing::{error, info};
 
-use crate::commands::{WorkspaceState, project_root_for_commands};
-use super::legacy::{git_run, git_run_blocking};
+use super::runtime::{git_run, git_run_blocking};
+use crate::commands::{project_root_for_commands, WorkspaceState};
 
 /// 一个标签项。
 #[derive(Debug, serde::Serialize, Clone)]
@@ -28,9 +28,7 @@ pub struct TagEntry {
 /// 列出所有标签，按创建日期降序。annotated 标签取其指向的提交（`*objectname`），
 /// lightweight 标签直接取 `objectname`。空仓库或无标签返回空列表。
 #[tauri::command]
-pub async fn git_tags(
-    workspace_state: State<'_, WorkspaceState>,
-) -> Result<Vec<TagEntry>, String> {
+pub async fn git_tags(workspace_state: State<'_, WorkspaceState>) -> Result<Vec<TagEntry>, String> {
     let root = project_root_for_commands(&workspace_state);
     if !root.join(".git").exists() {
         return Ok(Vec::new());

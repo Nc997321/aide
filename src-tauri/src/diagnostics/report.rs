@@ -204,7 +204,11 @@ impl ReportMeta {
         Self {
             schema_version: SCHEMA_VERSION,
             app_version: env!("CARGO_PKG_VERSION").to_string(),
-            build: if cfg!(debug_assertions) { "debug" } else { "release" },
+            build: if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            },
             os: std::env::consts::OS,
         }
     }
@@ -426,7 +430,11 @@ mod tests {
                 recovered: true,
             },
             samples: vec![],
-            ring: RingSnapshot { heartbeats: vec![], event_rates: vec![], trace: vec![] },
+            ring: RingSnapshot {
+                heartbeats: vec![],
+                event_rates: vec![],
+                trace: vec![],
+            },
             frontend: None,
         }
     }
@@ -441,8 +449,7 @@ mod tests {
     #[test]
     fn family_of_includes_descendants_only() {
         // 1 → 2 → 3，1 → 4；99 独立；5 → 99（无关分支）
-        let parents: HashMap<u32, u32> =
-            [(2, 1), (3, 2), (4, 1), (5, 99)].into_iter().collect();
+        let parents: HashMap<u32, u32> = [(2, 1), (3, 2), (4, 1), (5, 99)].into_iter().collect();
         let family = family_of(1, &parents);
         assert_eq!(family, [1, 2, 3, 4].into_iter().collect());
     }
@@ -473,14 +480,22 @@ mod tests {
     }
 
     fn ps(pid: u32, name: &str, cpu: f32, mem: u64) -> ProcessSample {
-        ProcessSample { pid, name: name.into(), cpu, mem }
+        ProcessSample {
+            pid,
+            name: name.into(),
+            cpu,
+            mem,
+        }
     }
 
     #[test]
     fn select_keeps_family_regardless_of_cpu() {
         // aide(1) 0% CPU 也保留（宿主没忙是关键证据）；node(2) 0% 保留
         let family: HashSet<u32> = [1, 2].into_iter().collect();
-        let cands = vec![ps(1, "aide.exe", 0.0, 50_000_000), ps(2, "node.exe", 0.0, 30_000_000)];
+        let cands = vec![
+            ps(1, "aide.exe", 0.0, 50_000_000),
+            ps(2, "node.exe", 0.0, 30_000_000),
+        ];
         let out = select_frame_processes(cands, &family, 10);
         assert_eq!(out.len(), 2);
     }
@@ -489,7 +504,10 @@ mod tests {
     fn select_drops_idle_other_app_webview_keeps_busy_one() {
         // 家族只有 aide(1)；webview 3088 忙(98%)、其余 28 个 0% 是别的 app 的
         let family: HashSet<u32> = [1].into_iter().collect();
-        let mut cands = vec![ps(1, "aide.exe", 5.0, 52_000_000), ps(3088, "msedgewebview2.exe", 98.0, 171_000_000)];
+        let mut cands = vec![
+            ps(1, "aide.exe", 5.0, 52_000_000),
+            ps(3088, "msedgewebview2.exe", 98.0, 171_000_000),
+        ];
         for pid in [100u32, 101, 102, 103, 104, 105] {
             cands.push(ps(pid, "msedgewebview2.exe", 0.0, 10_000_000));
         }
@@ -516,7 +534,12 @@ mod tests {
         // aide(1) + 10 个 webview = 11
         assert_eq!(out.len(), 11);
         assert!(out.iter().any(|p| p.pid == 1));
-        assert_eq!(out.iter().filter(|p| p.name == "msedgewebview2.exe").count(), 10);
+        assert_eq!(
+            out.iter()
+                .filter(|p| p.name == "msedgewebview2.exe")
+                .count(),
+            10
+        );
     }
 
     #[test]
@@ -583,11 +606,15 @@ mod tests {
         let dir = temp_dir("scroll-trail");
         // 同目录放一份 freeze 报告：两套保留策略按前缀隔离，scroll-trail 清理不波及
         write_report(&dir, &sample_report(7, 12)).unwrap();
-        let path = write_scroll_trail(&dir, r#"[{"t":1,"kind":"wheel","detail":"dy=120"}]"#).unwrap();
+        let path =
+            write_scroll_trail(&dir, r#"[{"t":1,"kind":"wheel","detail":"dy=120"}]"#).unwrap();
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         assert!(name.starts_with("scroll-trail-") && name.ends_with(".json"));
         // 内容原样、无临时文件残留
-        assert_eq!(fs::read_to_string(&path).unwrap(), r#"[{"t":1,"kind":"wheel","detail":"dy=120"}]"#);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            r#"[{"t":1,"kind":"wheel","detail":"dy=120"}]"#
+        );
         let leftovers: Vec<String> = fs::read_dir(&dir)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -599,7 +626,11 @@ mod tests {
         // 人按热键，不会同毫秒），清到 2 份，freeze 报告不动
         fs::remove_file(&path).unwrap();
         for i in 0..5u64 {
-            fs::write(dir.join(format!("scroll-trail-{}.json", 100_000 + i * 10)), "[]").unwrap();
+            fs::write(
+                dir.join(format!("scroll-trail-{}.json", 100_000 + i * 10)),
+                "[]",
+            )
+            .unwrap();
         }
         prune_prefixed(&dir, "scroll-trail-", 2).unwrap();
         let mut names: Vec<String> = fs::read_dir(&dir)
@@ -610,7 +641,13 @@ mod tests {
         names.sort();
         assert!(names.contains(&"scroll-trail-100030.json".to_string()));
         assert!(names.contains(&"scroll-trail-100040.json".to_string()));
-        assert_eq!(names.iter().filter(|n| n.starts_with("scroll-trail-")).count(), 2);
+        assert_eq!(
+            names
+                .iter()
+                .filter(|n| n.starts_with("scroll-trail-"))
+                .count(),
+            2
+        );
         assert!(names.contains(&"freeze-7.json".to_string()));
         let _ = fs::remove_dir_all(&dir);
     }

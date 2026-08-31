@@ -33,7 +33,12 @@ pub fn record(kind: &'static str, name: &str, thread: &'static str) {
         if buf.len() >= TRACE_RING_CAP {
             buf.pop_front();
         }
-        buf.push_back(TraceEvent { t: epoch_ms(), kind, name: name.to_string(), thread });
+        buf.push_back(TraceEvent {
+            t: epoch_ms(),
+            kind,
+            name: name.to_string(),
+            thread,
+        });
     }
 }
 

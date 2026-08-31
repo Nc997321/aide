@@ -4,8 +4,8 @@
 //! shutdown → null；启动后主动推一条 publishDiagnostics。
 //! 让 transport+rpc+manager 的端到端测试在 cargo test 里跑，无需外部二进制。
 
+use crate::lsp::transport::{format_frame, Framer};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use crate::lsp::transport::{Framer, format_frame};
 
 pub struct MockLsp {
     /// transport 的 stdin 写端（manager 往这写）→ mock 的读端

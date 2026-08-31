@@ -26,7 +26,8 @@ pub fn parse_dt(s: &str) -> Result<NaiveDateTime, String> {
 
 /// "YYYY-MM-DD" → NaiveDate。
 pub fn parse_date(s: &str) -> Result<NaiveDate, String> {
-    NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| format!("无效日期格式（期望 YYYY-MM-DD）: {s:?}"))
+    NaiveDate::parse_from_str(s, "%Y-%m-%d")
+        .map_err(|_| format!("无效日期格式（期望 YYYY-MM-DD）: {s:?}"))
 }
 
 /// 统一落盘格式（带秒）。
@@ -36,7 +37,11 @@ pub fn fmt_dt(dt: NaiveDateTime) -> String {
 
 /// 某年某月的天数（monthly 钳日用）。
 fn days_in_month(year: i32, month: u32) -> u32 {
-    let (ny, nm) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+    let (ny, nm) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
     // 次月 1 号的前一天 = 当月最后一天
     NaiveDate::from_ymd_opt(ny, nm, 1)
         .and_then(|d| d.pred_opt())
@@ -57,12 +62,20 @@ fn at_time(d: NaiveDate, t: NaiveTime) -> NaiveDateTime {
 /// `anchor` 仅 interval 用（= createdAt，固定网格不随运行漂移）。
 /// M3 列表「下次运行」展示消费（M1 只有单测引用）。
 #[allow(dead_code)]
-pub fn next_fire(schedule: &Schedule, anchor: NaiveDateTime, now: NaiveDateTime) -> Option<NaiveDateTime> {
+pub fn next_fire(
+    schedule: &Schedule,
+    anchor: NaiveDateTime,
+    now: NaiveDateTime,
+) -> Option<NaiveDateTime> {
     match schedule {
         Schedule::Daily { time } => {
             let t = parse_hhmm(time).ok()?;
             let today = at_time(now.date(), t);
-            Some(if today > now { today } else { at_time(now.date() + Duration::days(1), t) })
+            Some(if today > now {
+                today
+            } else {
+                at_time(now.date() + Duration::days(1), t)
+            })
         }
         Schedule::Weekly { time, weekdays } => {
             let t = parse_hhmm(time).ok()?;
@@ -118,12 +131,20 @@ pub fn next_fire(schedule: &Schedule, anchor: NaiveDateTime, now: NaiveDateTime)
 
 /// now 之前（含）的最近触发点。None = 调度网格还没走到第一个点（once 未到 /
 /// interval 锚点在未来）。due 判定：`last_scheduled_fire(...) > lastRunAt`。
-pub fn last_scheduled_fire(schedule: &Schedule, anchor: NaiveDateTime, now: NaiveDateTime) -> Option<NaiveDateTime> {
+pub fn last_scheduled_fire(
+    schedule: &Schedule,
+    anchor: NaiveDateTime,
+    now: NaiveDateTime,
+) -> Option<NaiveDateTime> {
     match schedule {
         Schedule::Daily { time } => {
             let t = parse_hhmm(time).ok()?;
             let today = at_time(now.date(), t);
-            Some(if today <= now { today } else { at_time(now.date() - Duration::days(1), t) })
+            Some(if today <= now {
+                today
+            } else {
+                at_time(now.date() - Duration::days(1), t)
+            })
         }
         Schedule::Weekly { time, weekdays } => {
             let t = parse_hhmm(time).ok()?;

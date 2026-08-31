@@ -45,7 +45,9 @@ pub struct LspCapabilities {
 impl LspCapabilities {
     /// 从 server capabilities JSON 提取我们关心的开关。
     pub fn from_caps(caps: Option<&serde_json::Value>) -> Self {
-        let Some(c) = caps else { return Self::default(); };
+        let Some(c) = caps else {
+            return Self::default();
+        };
         Self {
             implementation_provider: provider_on(c, "implementationProvider"),
             document_symbol_provider: provider_on(c, "documentSymbolProvider"),
@@ -65,14 +67,18 @@ fn provider_on(caps: &serde_json::Value, key: &str) -> bool {
 /// LSP Location（无符号名）+ 查询词 + workspace_root → QueryResult。
 /// file 归一为相对 workspace_root 的路径（与 codegraph 一致；不在工作区则保留绝对，
 /// 前端 jumpToResult 兼容）。confidence=Structure；kind 无从得知 → 占位 Function。
-pub fn location_to_query_result(loc: &Location, queried_word: &str, workspace_root: &str) -> QueryResult {
+pub fn location_to_query_result(
+    loc: &Location,
+    queried_word: &str,
+    workspace_root: &str,
+) -> QueryResult {
     let start = loc.range.start;
     QueryResult {
         symbol: SymbolDef {
             name: queried_word.to_string(),
             kind: SymbolKind::Function, // 占位：LSP Location 不带 SymbolKind
             file: uri_to_rel_path(loc.uri.as_str(), workspace_root),
-            line: (start.line + 1) as usize,    // LSP 0-based → 1-based
+            line: (start.line + 1) as usize, // LSP 0-based → 1-based
             column: (start.character + 1) as usize,
             parent: None,
             end_line: 0,
@@ -83,8 +89,14 @@ pub fn location_to_query_result(loc: &Location, queried_word: &str, workspace_ro
     }
 }
 
-pub fn locations_to_query_results(locs: &[Location], word: &str, workspace_root: &str) -> Vec<QueryResult> {
-    locs.iter().map(|l| location_to_query_result(l, word, workspace_root)).collect()
+pub fn locations_to_query_results(
+    locs: &[Location],
+    word: &str,
+    workspace_root: &str,
+) -> Vec<QueryResult> {
+    locs.iter()
+        .map(|l| location_to_query_result(l, word, workspace_root))
+        .collect()
 }
 
 pub fn completion_items_to_cm(items: &[CompletionItem]) -> Vec<CmCompletion> {
@@ -192,8 +204,8 @@ mod tests {
         let qr = location_to_query_result(&loc, "my_fn", "C:/proj");
         assert_eq!(qr.symbol.name, "my_fn");
         assert_eq!(qr.symbol.file, "src/main.rs"); // 相对工作区（与 codegraph 一致）
-        assert_eq!(qr.symbol.line, 6);       // 1-based
-        assert_eq!(qr.symbol.column, 11);    // 1-based
+        assert_eq!(qr.symbol.line, 6); // 1-based
+        assert_eq!(qr.symbol.column, 11); // 1-based
         assert_eq!(qr.confidence, Confidence::Structure);
         assert_eq!(qr.score, None);
     }
@@ -201,7 +213,8 @@ mod tests {
     #[test]
     fn lsp_capabilities_from_bool_and_object_providers() {
         // bool 形态：true/false 直接取
-        let caps = serde_json::json!({"implementationProvider": true, "documentSymbolProvider": false});
+        let caps =
+            serde_json::json!({"implementationProvider": true, "documentSymbolProvider": false});
         let c = LspCapabilities::from_caps(Some(&caps));
         assert!(c.implementation_provider);
         assert!(!c.document_symbol_provider);
@@ -229,10 +242,19 @@ mod tests {
     #[test]
     fn uri_to_rel_path_strips_workspace_and_case_insensitive() {
         // 工作区内 → 相对（与 codegraph 一致），正斜杠 + 大小写不敏感（Windows 盘符）
-        assert_eq!(uri_to_rel_path("file:///C:/proj/src/a.rs", "C:/proj"), "src/a.rs");
-        assert_eq!(uri_to_rel_path("file:///C:/proj/src/a.rs", "c:\\proj"), "src/a.rs");
+        assert_eq!(
+            uri_to_rel_path("file:///C:/proj/src/a.rs", "C:/proj"),
+            "src/a.rs"
+        );
+        assert_eq!(
+            uri_to_rel_path("file:///C:/proj/src/a.rs", "c:\\proj"),
+            "src/a.rs"
+        );
         // 工作区外 → 保留绝对（前端 jumpToResult 兼容）
-        assert_eq!(uri_to_rel_path("file:///D:/other/x.rs", "C:/proj"), "D:/other/x.rs");
+        assert_eq!(
+            uri_to_rel_path("file:///D:/other/x.rs", "C:/proj"),
+            "D:/other/x.rs"
+        );
     }
 
     #[test]
@@ -263,32 +285,42 @@ mod tests {
         // 与 didOpen（绝对路径）的 URI 对齐才能命中文档。Path::is_absolute 平台相关，
         // 故用 cfg 分流 Windows / Unix 路径。
         #[cfg(windows)]
-        assert_eq!(resolve_file_uri("C:/proj", "src/main.ts"), "file:///C:/proj/src/main.ts");
+        assert_eq!(
+            resolve_file_uri("C:/proj", "src/main.ts"),
+            "file:///C:/proj/src/main.ts"
+        );
         #[cfg(not(windows))]
-        assert_eq!(resolve_file_uri("/home/proj", "src/main.ts"), "file:///home/proj/src/main.ts");
+        assert_eq!(
+            resolve_file_uri("/home/proj", "src/main.ts"),
+            "file:///home/proj/src/main.ts"
+        );
     }
 
     #[test]
     fn resolve_file_uri_absolute_unchanged() {
         // 补全/hover 走绝对路径：直接转，不重复 join（绝对路径再 join 会被截断/串接出错）。
         #[cfg(windows)]
-        assert_eq!(resolve_file_uri("C:/proj", "C:/proj/src/main.rs"), "file:///C:/proj/src/main.rs");
+        assert_eq!(
+            resolve_file_uri("C:/proj", "C:/proj/src/main.rs"),
+            "file:///C:/proj/src/main.rs"
+        );
         #[cfg(not(windows))]
-        assert_eq!(resolve_file_uri("/home/proj", "/home/proj/src/main.rs"), "file:///home/proj/src/main.rs");
+        assert_eq!(
+            resolve_file_uri("/home/proj", "/home/proj/src/main.rs"),
+            "file:///home/proj/src/main.rs"
+        );
     }
 
     #[test]
     fn completion_items_map_label_detail_doc() {
-        let items = vec![
-            CompletionItem {
-                label: "foo".into(),
-                detail: Some("fn foo()".into()),
-                documentation: Some(lsp_types::Documentation::String("docs".into())),
-                kind: Some(lsp_types::CompletionItemKind::FUNCTION),
-                insert_text: Some("foo()".into()),
-                ..Default::default()
-            },
-        ];
+        let items = vec![CompletionItem {
+            label: "foo".into(),
+            detail: Some("fn foo()".into()),
+            documentation: Some(lsp_types::Documentation::String("docs".into())),
+            kind: Some(lsp_types::CompletionItemKind::FUNCTION),
+            insert_text: Some("foo()".into()),
+            ..Default::default()
+        }];
         let cm = completion_items_to_cm(&items);
         assert_eq!(cm.len(), 1);
         assert_eq!(cm[0].label, "foo");

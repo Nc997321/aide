@@ -1,28 +1,28 @@
-pub mod shell;
-pub mod filesystem;
-pub mod search;
-pub mod git;
-pub mod session;
-pub mod workspace;
-pub mod settings;
+pub mod app;
+pub mod chat;
+pub mod clipboard;
 pub mod customizations;
 pub mod detectors;
-pub mod marketplace;
-pub mod proxy;
-pub mod provider;
-pub mod run_configs;
-pub mod run_process;
-pub mod jdk;
-pub mod clipboard;
 pub mod file_assoc;
-pub mod recent;
-pub mod chat;
-pub mod notifications;
+pub mod filesystem;
+pub mod git;
+pub mod jdk;
+pub mod marketplace;
 pub mod migration;
+pub mod notifications;
 pub mod onboarding;
 pub mod permissions;
+pub mod provider;
+pub mod proxy;
+pub mod recent;
 pub mod remote;
-pub mod app;
+pub mod run_configs;
+pub mod run_process;
+pub mod search;
+pub mod session;
+pub mod settings;
+pub mod shell;
+pub mod workspace;
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -147,7 +147,9 @@ pub struct ChangeFileData {
     pub deletions: u32,
 }
 
-fn default_status() -> String { "M".to_string() }
+fn default_status() -> String {
+    "M".to_string()
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChangeRoundData {
@@ -191,7 +193,6 @@ pub fn project_root_for_commands(ws: &WorkspaceState) -> PathBuf {
     // Using the install directory (cwd) is never useful.
     user_home().unwrap_or_else(|| PathBuf::from("."))
 }
-
 
 pub fn detect_git_branch(root: &PathBuf) -> String {
     let head = root.join(".git").join("HEAD");
@@ -259,7 +260,10 @@ pub(crate) fn our_session_name(session_id: &str) -> Option<String> {
     if path.exists() {
         if let Ok(content) = fs::read_to_string(&path) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
-                return v.get("name").and_then(|n| n.as_str()).map(|s| s.to_string());
+                return v
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .map(|s| s.to_string());
             }
         }
     }
@@ -393,7 +397,10 @@ mod tests {
         let hits = find_session_jsonl_in(&root, id);
         assert_eq!(hits.len(), 1);
         assert_eq!(
-            hits[0].parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()),
+            hits[0]
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str()),
             claude_folder.file_name().and_then(|n| n.to_str()),
         );
 
@@ -414,7 +421,9 @@ mod tests {
     // 前端 hydrate() 就会认不出这个 block，历史消息又会静默退化成纯文字。
     #[test]
     fn history_block_serializes_to_the_shape_the_frontend_expects() {
-        let text = HistoryBlock::Text { text: "hi".to_string() };
+        let text = HistoryBlock::Text {
+            text: "hi".to_string(),
+        };
         assert_eq!(
             serde_json::to_value(&text).unwrap(),
             serde_json::json!({ "type": "text", "text": "hi" }),

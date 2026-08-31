@@ -43,8 +43,16 @@ fn auto_safe_rule_id(cmd: &str) -> String {
         h
     }
     let input = format!("{AUTO_SAFE_ID_PREFIX}{cmd}");
-    let h1 = fnv1a64(input.as_bytes(), 0xcbf2_9ce4_8422_2325, 0x0000_0100_0000_01b3);
-    let h2 = fnv1a64(input.as_bytes(), 0x8422_2325_cbf2_9ce3, 0x0000_0001_0000_01b3);
+    let h1 = fnv1a64(
+        input.as_bytes(),
+        0xcbf2_9ce4_8422_2325,
+        0x0000_0100_0000_01b3,
+    );
+    let h2 = fnv1a64(
+        input.as_bytes(),
+        0x8422_2325_cbf2_9ce3,
+        0x0000_0001_0000_01b3,
+    );
     format!(
         "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
         (h1 >> 32) as u32,
@@ -115,9 +123,7 @@ pub(crate) fn remove_safe_rules(
     let mut removed = 0usize;
     service.mutate_scope_blocking(SettingsScope::Local, Some(project), |doc| {
         let before = doc.permissions.rules.len();
-        doc.permissions
-            .rules
-            .retain(|r| !auto_ids.contains(&r.id));
+        doc.permissions.rules.retain(|r| !auto_ids.contains(&r.id));
         removed = before - doc.permissions.rules.len();
         Ok(())
     })?;
@@ -193,7 +199,10 @@ mod tests {
         let (root, project) = setup("ensure-idempotent");
         let service = test_service(&root);
 
-        assert_eq!(ensure_safe_rules(&service, &project).unwrap(), SAFE_COMMANDS.len());
+        assert_eq!(
+            ensure_safe_rules(&service, &project).unwrap(),
+            SAFE_COMMANDS.len()
+        );
         // 二调幂等
         assert_eq!(ensure_safe_rules(&service, &project).unwrap(), 0);
 

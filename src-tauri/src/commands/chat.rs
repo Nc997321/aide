@@ -1,19 +1,23 @@
-use tauri::State;
-use serde_json::json;
-use crate::runtime::AgentRuntimeManager;
-use crate::commands::{WorkspaceState, project_root_for_commands};
-use crate::runtime::env::build_runtime_env_vars;
 use crate::commands::settings::get_settings;
+use crate::commands::{project_root_for_commands, WorkspaceState};
+use crate::runtime::env::build_runtime_env_vars;
+use crate::runtime::AgentRuntimeManager;
+use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use tauri::State;
 
 async fn resolve_active_provider(
     service: std::sync::Arc<crate::settings::SettingsService>,
 ) -> Result<crate::runtime::provider::ProviderConfig, String> {
-    tokio::task::spawn_blocking(move || service.resolve_active_runtime_provider().map_err(|error| error.to_string()))
-        .await
-        .map_err(|error| error.to_string())?
+    tokio::task::spawn_blocking(move || {
+        service
+            .resolve_active_runtime_provider()
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 async fn resolve_provider_by_id(
@@ -22,9 +26,13 @@ async fn resolve_provider_by_id(
 ) -> Result<crate::runtime::provider::ProviderConfig, String> {
     let service = service.clone();
     let id = id.to_string();
-    tokio::task::spawn_blocking(move || service.resolve_runtime_provider(&id).map_err(|error| error.to_string()))
-        .await
-        .map_err(|error| error.to_string())?
+    tokio::task::spawn_blocking(move || {
+        service
+            .resolve_runtime_provider(&id)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// 解析本次发送的 provider（三层，逐级回落）：
@@ -39,9 +47,10 @@ async fn resolve_send_provider(
     explicit_provider: Option<String>,
 ) -> Result<crate::runtime::provider::ProviderConfig, String> {
     let sid = session_id.to_string();
-    let metadata_provider = tokio::task::spawn_blocking(move || crate::commands::our_session_provider_field(&sid))
-        .await
-        .map_err(|error| error.to_string())?;
+    let metadata_provider =
+        tokio::task::spawn_blocking(move || crate::commands::our_session_provider_field(&sid))
+            .await
+            .map_err(|error| error.to_string())?;
     let preferred = explicit_provider.or(metadata_provider);
     let Some(id) = preferred.filter(|s| !s.is_empty()) else {
         return resolve_active_provider(service).await;
@@ -179,12 +188,16 @@ pub async fn send_message(
     let cwd = session_cwd(&workspace_root, &workspace_state);
     let cwd_str = cwd.to_string_lossy().to_string();
 
-    let active = resolve_send_provider(settings_service.inner().clone(), &session_id, provider).await?;
+    let active =
+        resolve_send_provider(settings_service.inner().clone(), &session_id, provider).await?;
     // Clone the Arc before `get_settings` takes the `State` by value — the
     // permission snapshot below still needs the service.
     let snapshot_service = settings_service.inner().clone();
     let settings = get_settings(settings_service).await.ok();
-    let proxy = settings.as_ref().map(|s| s.proxy.clone()).unwrap_or_default();
+    let proxy = settings
+        .as_ref()
+        .map(|s| s.proxy.clone())
+        .unwrap_or_default();
     let provider_env = build_runtime_env_vars(&active, &proxy);
     let provider_switched = runtime_mgr.connection_drifted(&session_id, &provider_env);
     runtime_mgr.upsert_fingerprint(&session_id, &provider_env);
@@ -192,7 +205,10 @@ pub async fn send_message(
     let auto_title = settings.as_ref().map(|s| s.auto_naming).unwrap_or(true);
     // 思考开关下发 sidecar（设置读取失败时默认开启）：只在 spawn（建 query）时
     // 生效——会话内 CLI 锁死无法恢复，故仅影响之后新建的会话/btw 支线。
-    let thinking_enabled = settings.as_ref().map(|s| s.thinking_enabled).unwrap_or(true);
+    let thinking_enabled = settings
+        .as_ref()
+        .map(|s| s.thinking_enabled)
+        .unwrap_or(true);
 
     let mut cmd = build_send_command(
         &session_id,
@@ -358,7 +374,10 @@ pub async fn start_btw_session(
     settings_service: State<'_, std::sync::Arc<crate::settings::SettingsService>>,
 ) -> Result<(), String> {
     let active = resolve_active_provider(settings_service.inner().clone()).await?;
-    let proxy = get_settings(settings_service).await.map(|s| s.proxy).unwrap_or_default();
+    let proxy = get_settings(settings_service)
+        .await
+        .map(|s| s.proxy)
+        .unwrap_or_default();
     let provider_env = build_runtime_env_vars(&active, &proxy);
 
     // session_id = BTW 自己的路由键（避免与主会话 worker 冲突）；
@@ -432,8 +451,14 @@ fn resolve_sidecar_data_path(app: &tauri::AppHandle, file_name: &str) -> Result<
     {
         let _ = app;
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let path = manifest.parent().unwrap().join("agent-sidecar").join(file_name);
-        if path.exists() { return Ok(path); }
+        let path = manifest
+            .parent()
+            .unwrap()
+            .join("agent-sidecar")
+            .join(file_name);
+        if path.exists() {
+            return Ok(path);
+        }
         Err(format!("{} not found at {:?}", file_name, path))
     }
     #[cfg(not(debug_assertions))]
@@ -441,18 +466,25 @@ fn resolve_sidecar_data_path(app: &tauri::AppHandle, file_name: &str) -> Result<
         use tauri::Manager;
         let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
         let path = resource_dir.join("agent-runtime").join(file_name);
-        if path.exists() { return Ok(path); }
+        if path.exists() {
+            return Ok(path);
+        }
         // fallback
         let fallback = resource_dir.join("agent-sidecar").join(file_name);
-        if fallback.exists() { return Ok(fallback); }
+        if fallback.exists() {
+            return Ok(fallback);
+        }
         Err(format!("{} resource missing: {:?}", file_name, path))
     }
 }
 
-fn read_sidecar_data_json(app: &tauri::AppHandle, file_name: &str) -> Result<serde_json::Value, String> {
+fn read_sidecar_data_json(
+    app: &tauri::AppHandle,
+    file_name: &str,
+) -> Result<serde_json::Value, String> {
     let path = resolve_sidecar_data_path(app, file_name)?;
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read {}: {}", file_name, e))?;
+    let content =
+        fs::read_to_string(&path).map_err(|e| format!("Failed to read {}: {}", file_name, e))?;
     serde_json::from_str(&content).map_err(|e| format!("Failed to parse {}: {}", file_name, e))
 }
 
@@ -462,7 +494,9 @@ pub fn get_default_models(app_handle: tauri::AppHandle) -> Result<serde_json::Va
 }
 
 #[tauri::command]
-pub fn get_default_permission_modes(app_handle: tauri::AppHandle) -> Result<serde_json::Value, String> {
+pub fn get_default_permission_modes(
+    app_handle: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
     read_sidecar_data_json(&app_handle, "default-permission-modes.json")
 }
 
@@ -622,7 +656,7 @@ mod tests {
             },
         );
         assert_eq!(cmd["cmd"], "send");
-        assert_eq!(cmd["session_id"], "main-sid");          // 路由键不变
+        assert_eq!(cmd["session_id"], "main-sid"); // 路由键不变
         assert_eq!(cmd["resume_session_id"], "resume-xyz"); // resume 进独立字段
         assert!(cmd.get("provider_switched").is_none() || cmd["provider_switched"] == false);
     }
@@ -639,7 +673,10 @@ mod tests {
     #[test]
     fn build_send_command_carries_images_when_nonempty() {
         let cmd = build_send_command(
-            "s", "hi", "/tmp", &HashMap::new(),
+            "s",
+            "hi",
+            "/tmp",
+            &HashMap::new(),
             SendOptions {
                 images: Some(&[json!({"mime": "image/png", "data": "aGk="})]),
                 ..base_opts()
@@ -648,8 +685,14 @@ mod tests {
         assert_eq!(cmd["images"][0]["mime"], "image/png");
         // 空数组：与 None 一样不落字段
         let empty = build_send_command(
-            "s", "hi", "/tmp", &HashMap::new(),
-            SendOptions { images: Some(&[]), ..base_opts() },
+            "s",
+            "hi",
+            "/tmp",
+            &HashMap::new(),
+            SendOptions {
+                images: Some(&[]),
+                ..base_opts()
+            },
         );
         assert!(empty.get("images").is_none());
     }
@@ -658,10 +701,15 @@ mod tests {
     /// （保留 provider env 原值）。与 effort 共用 attach_env_override（带值/空串臂）。
     #[test]
     fn build_send_command_carries_initial_model() {
-        let env: HashMap<String, String> =
-            HashMap::from([("ANTHROPIC_MODEL".to_string(), "claude-sonnet-4-5".to_string())]);
+        let env: HashMap<String, String> = HashMap::from([(
+            "ANTHROPIC_MODEL".to_string(),
+            "claude-sonnet-4-5".to_string(),
+        )]);
         let cmd = build_send_command(
-            "s", "hi", "/tmp", &env,
+            "s",
+            "hi",
+            "/tmp",
+            &env,
             SendOptions {
                 initial_model: Some("claude-opus-4-1".to_string()),
                 ..base_opts()
@@ -670,7 +718,10 @@ mod tests {
         assert_eq!(cmd["env"]["ANTHROPIC_MODEL"], "claude-opus-4-1");
         // 空串：不注入，provider env 原值保留
         let blank = build_send_command(
-            "s", "hi", "/tmp", &env,
+            "s",
+            "hi",
+            "/tmp",
+            &env,
             SendOptions {
                 initial_model: Some(String::new()),
                 ..base_opts()
@@ -686,7 +737,10 @@ mod tests {
         let env: HashMap<String, String> =
             HashMap::from([("CLAUDE_CODE_EFFORT_LEVEL".to_string(), "LOW".to_string())]);
         let cmd = build_send_command(
-            "s", "hi", "/tmp", &env,
+            "s",
+            "hi",
+            "/tmp",
+            &env,
             SendOptions {
                 initial_effort: Some("max".to_string()),
                 ..base_opts()
@@ -702,7 +756,10 @@ mod tests {
     #[test]
     fn build_send_command_carries_permission_mode() {
         let cmd = build_send_command(
-            "s", "hi", "/tmp", &HashMap::new(),
+            "s",
+            "hi",
+            "/tmp",
+            &HashMap::new(),
             SendOptions {
                 permission_mode: Some("writeEdits".to_string()),
                 ..base_opts()
@@ -711,7 +768,10 @@ mod tests {
         assert_eq!(cmd["permission_mode"], "writeEdits");
         // 空串：不落字段
         let blank = build_send_command(
-            "s", "hi", "/tmp", &HashMap::new(),
+            "s",
+            "hi",
+            "/tmp",
+            &HashMap::new(),
             SendOptions {
                 permission_mode: Some(String::new()),
                 ..base_opts()
@@ -724,8 +784,14 @@ mod tests {
     #[test]
     fn build_send_command_carries_jump_queue_when_enabled() {
         let on = build_send_command(
-            "s", "hi", "/tmp", &HashMap::new(),
-            SendOptions { jump_queue: true, ..base_opts() },
+            "s",
+            "hi",
+            "/tmp",
+            &HashMap::new(),
+            SendOptions {
+                jump_queue: true,
+                ..base_opts()
+            },
         );
         assert_eq!(on["jump_queue"], true);
         let off = build_send_command("s", "hi", "/tmp", &HashMap::new(), base_opts());
@@ -736,7 +802,10 @@ mod tests {
     #[test]
     fn build_send_command_provider_switched_and_resume_coexist() {
         let cmd = build_send_command(
-            "main-sid", "hi", "/tmp", &HashMap::new(),
+            "main-sid",
+            "hi",
+            "/tmp",
+            &HashMap::new(),
             SendOptions {
                 resume_id: Some("resume-xyz".to_string()),
                 provider_switched: true,
@@ -755,8 +824,14 @@ mod tests {
         let on = build_send_command("s", "hi", "/tmp", &HashMap::new(), base_opts());
         assert_eq!(on["auto_title"], true);
         let off = build_send_command(
-            "s", "hi", "/tmp", &HashMap::new(),
-            SendOptions { auto_title: false, ..base_opts() },
+            "s",
+            "hi",
+            "/tmp",
+            &HashMap::new(),
+            SendOptions {
+                auto_title: false,
+                ..base_opts()
+            },
         );
         assert_eq!(off["auto_title"], false);
     }
@@ -768,8 +843,14 @@ mod tests {
         let on = build_send_command("s", "hi", "/tmp", &HashMap::new(), base_opts());
         assert_eq!(on["thinking_enabled"], true);
         let off = build_send_command(
-            "s", "hi", "/tmp", &HashMap::new(),
-            SendOptions { thinking_enabled: false, ..base_opts() },
+            "s",
+            "hi",
+            "/tmp",
+            &HashMap::new(),
+            SendOptions {
+                thinking_enabled: false,
+                ..base_opts()
+            },
         );
         assert_eq!(off["thinking_enabled"], false);
     }

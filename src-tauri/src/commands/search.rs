@@ -126,7 +126,11 @@ fn search_in_files_blocking(
     options: &SearchOptions,
 ) -> Result<SearchResponse, String> {
     if query.trim().is_empty() {
-        return Ok(SearchResponse { files: Vec::new(), total: 0, truncated: false });
+        return Ok(SearchResponse {
+            files: Vec::new(),
+            total: 0,
+            truncated: false,
+        });
     }
     let re = compile_pattern(query, options)?;
     let limit = options.limit.unwrap_or(500);
@@ -146,7 +150,9 @@ fn search_in_files_blocking(
                 continue;
             }
         }
-        let Some(content) = read_text_skip_binary(path) else { continue };
+        let Some(content) = read_text_skip_binary(path) else {
+            continue;
+        };
         let rel_path = path
             .strip_prefix(cwd)
             .unwrap_or(path)
@@ -175,14 +181,21 @@ fn search_in_files_blocking(
             }
         }
         if !matches.is_empty() {
-            groups.push(SearchFileGroup { file: rel_path, matches });
+            groups.push(SearchFileGroup {
+                file: rel_path,
+                matches,
+            });
         }
         if truncated {
             break;
         }
     }
 
-    Ok(SearchResponse { files: groups, total, truncated })
+    Ok(SearchResponse {
+        files: groups,
+        total,
+        truncated,
+    })
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -225,7 +238,11 @@ fn replace_in_files_preview_blocking(
     options: &SearchOptions,
 ) -> Result<ReplacePreviewResponse, String> {
     if query.trim().is_empty() {
-        return Ok(ReplacePreviewResponse { files: Vec::new(), total_matches: 0, truncated: false });
+        return Ok(ReplacePreviewResponse {
+            files: Vec::new(),
+            total_matches: 0,
+            truncated: false,
+        });
     }
     let re = compile_pattern(query, options)?;
     let max_files = 50;
@@ -245,7 +262,9 @@ fn replace_in_files_preview_blocking(
                 continue;
             }
         }
-        let Some(content) = read_text_skip_binary(path) else { continue };
+        let Some(content) = read_text_skip_binary(path) else {
+            continue;
+        };
         let replaced = re.replace_all(&content, replacement).to_string();
         if replaced == content {
             continue;
@@ -269,7 +288,11 @@ fn replace_in_files_preview_blocking(
         }
     }
 
-    Ok(ReplacePreviewResponse { files, total_matches, truncated })
+    Ok(ReplacePreviewResponse {
+        files,
+        total_matches,
+        truncated,
+    })
 }
 
 /// 只接受预览返回的 content，逐文件写盘，返回成功/失败列表。
@@ -328,7 +351,8 @@ mod tests {
 
     fn make_workspace() -> std::path::PathBuf {
         let n = DIR_SEQ.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("aide_search_test_{}_{}", std::process::id(), n));
+        let dir =
+            std::env::temp_dir().join(format!("aide_search_test_{}_{}", std::process::id(), n));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -347,7 +371,8 @@ mod tests {
         let dir = make_workspace();
         write(&dir, "a.ts", "const foo = 1;\nlet bar = 2;\n");
         write(&dir, "b.ts", "no match here\n");
-        let res = search_in_files_blocking("foo", dir.to_str().unwrap(), &SearchOptions::default()).unwrap();
+        let res = search_in_files_blocking("foo", dir.to_str().unwrap(), &SearchOptions::default())
+            .unwrap();
         assert_eq!(res.total, 1);
         assert_eq!(res.files.len(), 1);
         assert_eq!(res.files[0].file, "a.ts");
@@ -360,7 +385,8 @@ mod tests {
     fn literal_search_case_insensitive_by_default() {
         let dir = make_workspace();
         write(&dir, "a.ts", "const FOO = 1;\n");
-        let res = search_in_files_blocking("foo", dir.to_str().unwrap(), &SearchOptions::default()).unwrap();
+        let res = search_in_files_blocking("foo", dir.to_str().unwrap(), &SearchOptions::default())
+            .unwrap();
         assert_eq!(res.total, 1);
     }
 
@@ -368,7 +394,10 @@ mod tests {
     fn case_sensitive_option() {
         let dir = make_workspace();
         write(&dir, "a.ts", "const Foo = 1;\n");
-        let opts = SearchOptions { case_sensitive: true, ..Default::default() };
+        let opts = SearchOptions {
+            case_sensitive: true,
+            ..Default::default()
+        };
         let res = search_in_files_blocking("foo", dir.to_str().unwrap(), &opts).unwrap();
         assert_eq!(res.total, 0);
     }
@@ -377,7 +406,10 @@ mod tests {
     fn whole_word_option() {
         let dir = make_workspace();
         write(&dir, "a.ts", "foo\nfoobar\n");
-        let opts = SearchOptions { whole_word: true, ..Default::default() };
+        let opts = SearchOptions {
+            whole_word: true,
+            ..Default::default()
+        };
         let res = search_in_files_blocking("foo", dir.to_str().unwrap(), &opts).unwrap();
         assert_eq!(res.total, 1);
         assert_eq!(res.files[0].matches[0].line, 1);
@@ -388,7 +420,10 @@ mod tests {
         // 首尾非词字符（如 "foo("）不加 \b，否则 \b 在非词字符处永不匹配
         let dir = make_workspace();
         write(&dir, "a.ts", "foo(1)\n");
-        let opts = SearchOptions { whole_word: true, ..Default::default() };
+        let opts = SearchOptions {
+            whole_word: true,
+            ..Default::default()
+        };
         let res = search_in_files_blocking("foo(", dir.to_str().unwrap(), &opts).unwrap();
         assert_eq!(res.total, 1);
     }
@@ -397,7 +432,10 @@ mod tests {
     fn regex_search() {
         let dir = make_workspace();
         write(&dir, "a.ts", "f.o\n");
-        let opts = SearchOptions { use_regex: true, ..Default::default() };
+        let opts = SearchOptions {
+            use_regex: true,
+            ..Default::default()
+        };
         let res = search_in_files_blocking("f.o", dir.to_str().unwrap(), &opts).unwrap();
         assert_eq!(res.total, 1);
     }
@@ -406,7 +444,10 @@ mod tests {
     fn invalid_regex_returns_error() {
         let dir = make_workspace();
         write(&dir, "a.ts", "x\n");
-        let opts = SearchOptions { use_regex: true, ..Default::default() };
+        let opts = SearchOptions {
+            use_regex: true,
+            ..Default::default()
+        };
         let res = search_in_files_blocking("(", dir.to_str().unwrap(), &opts);
         assert!(res.is_err());
     }
@@ -416,7 +457,10 @@ mod tests {
         let dir = make_workspace();
         write(&dir, "a.ts", "foo\n");
         write(&dir, "b.vue", "foo\n");
-        let opts = SearchOptions { file_mask: Some("*.ts".to_string()), ..Default::default() };
+        let opts = SearchOptions {
+            file_mask: Some("*.ts".to_string()),
+            ..Default::default()
+        };
         let res = search_in_files_blocking("foo", dir.to_str().unwrap(), &opts).unwrap();
         assert_eq!(res.total, 1);
         assert_eq!(res.files[0].file, "a.ts");
@@ -427,7 +471,8 @@ mod tests {
         let dir = make_workspace();
         write(&dir, "a.ts", "foo\n");
         fs::write(dir.join("b.bin"), b"foo\x00bar").unwrap();
-        let res = search_in_files_blocking("foo", dir.to_str().unwrap(), &SearchOptions::default()).unwrap();
+        let res = search_in_files_blocking("foo", dir.to_str().unwrap(), &SearchOptions::default())
+            .unwrap();
         assert_eq!(res.total, 1);
         assert_eq!(res.files[0].file, "a.ts");
     }
@@ -436,7 +481,10 @@ mod tests {
     fn limit_truncates() {
         let dir = make_workspace();
         write(&dir, "a.ts", "foo\nfoo\nfoo\n");
-        let opts = SearchOptions { limit: Some(2), ..Default::default() };
+        let opts = SearchOptions {
+            limit: Some(2),
+            ..Default::default()
+        };
         let res = search_in_files_blocking("foo", dir.to_str().unwrap(), &opts).unwrap();
         assert_eq!(res.total, 2);
         assert!(res.truncated);
@@ -446,7 +494,8 @@ mod tests {
     fn empty_query_returns_empty() {
         let dir = make_workspace();
         write(&dir, "a.ts", "foo\n");
-        let res = search_in_files_blocking("  ", dir.to_str().unwrap(), &SearchOptions::default()).unwrap();
+        let res = search_in_files_blocking("  ", dir.to_str().unwrap(), &SearchOptions::default())
+            .unwrap();
         assert_eq!(res.total, 0);
         assert!(res.files.is_empty());
     }
@@ -457,7 +506,8 @@ mod tests {
         write(&dir, ".gitignore", "target/\n");
         write(&dir, "target/gen.ts", "foo\n");
         write(&dir, "src/a.ts", "foo\n");
-        let res = search_in_files_blocking("foo", dir.to_str().unwrap(), &SearchOptions::default()).unwrap();
+        let res = search_in_files_blocking("foo", dir.to_str().unwrap(), &SearchOptions::default())
+            .unwrap();
         assert_eq!(res.total, 1);
         assert_eq!(res.files[0].file, "src/a.ts");
     }
@@ -466,7 +516,13 @@ mod tests {
     fn replace_literal_all_occurrences() {
         let dir = make_workspace();
         write(&dir, "a.ts", "foo foo bar\n");
-        let res = replace_in_files_preview_blocking("foo", "baz", dir.to_str().unwrap(), &SearchOptions::default()).unwrap();
+        let res = replace_in_files_preview_blocking(
+            "foo",
+            "baz",
+            dir.to_str().unwrap(),
+            &SearchOptions::default(),
+        )
+        .unwrap();
         assert_eq!(res.files.len(), 1);
         assert_eq!(res.files[0].replaced, "baz baz bar\n");
         assert_eq!(res.files[0].match_count, 2);
@@ -477,8 +533,13 @@ mod tests {
     fn replace_capture_groups() {
         let dir = make_workspace();
         write(&dir, "a.ts", "foobar\n");
-        let opts = SearchOptions { use_regex: true, ..Default::default() };
-        let res = replace_in_files_preview_blocking("(foo)(bar)", "$1-$2", dir.to_str().unwrap(), &opts).unwrap();
+        let opts = SearchOptions {
+            use_regex: true,
+            ..Default::default()
+        };
+        let res =
+            replace_in_files_preview_blocking("(foo)(bar)", "$1-$2", dir.to_str().unwrap(), &opts)
+                .unwrap();
         assert_eq!(res.files[0].replaced, "foo-bar\n");
     }
 
@@ -486,8 +547,17 @@ mod tests {
     fn replace_named_capture_group() {
         let dir = make_workspace();
         write(&dir, "a.ts", "foobar\n");
-        let opts = SearchOptions { use_regex: true, ..Default::default() };
-        let res = replace_in_files_preview_blocking("(?P<name>foo)bar", "${name}!", dir.to_str().unwrap(), &opts).unwrap();
+        let opts = SearchOptions {
+            use_regex: true,
+            ..Default::default()
+        };
+        let res = replace_in_files_preview_blocking(
+            "(?P<name>foo)bar",
+            "${name}!",
+            dir.to_str().unwrap(),
+            &opts,
+        )
+        .unwrap();
         assert_eq!(res.files[0].replaced, "foo!\n");
     }
 
@@ -496,7 +566,13 @@ mod tests {
         let dir = make_workspace();
         write(&dir, "a.ts", "foo\n");
         write(&dir, "b.ts", "nothing\n");
-        let res = replace_in_files_preview_blocking("foo", "bar", dir.to_str().unwrap(), &SearchOptions::default()).unwrap();
+        let res = replace_in_files_preview_blocking(
+            "foo",
+            "bar",
+            dir.to_str().unwrap(),
+            &SearchOptions::default(),
+        )
+        .unwrap();
         assert_eq!(res.files.len(), 1);
         assert_eq!(res.files[0].file, "a.ts");
     }
@@ -507,7 +583,13 @@ mod tests {
         for i in 0..60 {
             write(&dir, &format!("f{}.ts", i), "foo\n");
         }
-        let res = replace_in_files_preview_blocking("foo", "bar", dir.to_str().unwrap(), &SearchOptions::default()).unwrap();
+        let res = replace_in_files_preview_blocking(
+            "foo",
+            "bar",
+            dir.to_str().unwrap(),
+            &SearchOptions::default(),
+        )
+        .unwrap();
         assert_eq!(res.files.len(), 50);
         assert!(res.truncated);
     }
@@ -517,9 +599,11 @@ mod tests {
         let dir = make_workspace();
         let p = dir.join("a.ts");
         fs::write(&p, "old").unwrap();
-        let res = apply_replacements_blocking(vec![
-            ReplaceFileInput { path: p.to_string_lossy().to_string(), content: "new".to_string() },
-        ]).unwrap();
+        let res = apply_replacements_blocking(vec![ReplaceFileInput {
+            path: p.to_string_lossy().to_string(),
+            content: "new".to_string(),
+        }])
+        .unwrap();
         assert_eq!(res.succeeded.len(), 1);
         assert!(res.failed.is_empty());
         assert_eq!(fs::read_to_string(&p).unwrap(), "new");
@@ -531,9 +615,20 @@ mod tests {
         let p = dir.join("a.ts");
         fs::write(&p, "old").unwrap();
         let res = apply_replacements_blocking(vec![
-            ReplaceFileInput { path: p.to_string_lossy().to_string(), content: "new".to_string() },
-            ReplaceFileInput { path: dir.join("no_such_dir").join("missing.ts").to_string_lossy().to_string(), content: "x".to_string() },
-        ]).unwrap();
+            ReplaceFileInput {
+                path: p.to_string_lossy().to_string(),
+                content: "new".to_string(),
+            },
+            ReplaceFileInput {
+                path: dir
+                    .join("no_such_dir")
+                    .join("missing.ts")
+                    .to_string_lossy()
+                    .to_string(),
+                content: "x".to_string(),
+            },
+        ])
+        .unwrap();
         assert_eq!(res.succeeded.len(), 1);
         assert_eq!(res.failed.len(), 1);
         assert!(res.failed[0].0.ends_with("missing.ts"));
@@ -543,8 +638,12 @@ mod tests {
     fn replace_respects_case_sensitive() {
         let dir = make_workspace();
         write(&dir, "a.ts", "Foo foo\n");
-        let opts = SearchOptions { case_sensitive: true, ..Default::default() };
-        let res = replace_in_files_preview_blocking("foo", "bar", dir.to_str().unwrap(), &opts).unwrap();
+        let opts = SearchOptions {
+            case_sensitive: true,
+            ..Default::default()
+        };
+        let res =
+            replace_in_files_preview_blocking("foo", "bar", dir.to_str().unwrap(), &opts).unwrap();
         assert_eq!(res.files[0].replaced, "Foo bar\n");
         assert_eq!(res.files[0].match_count, 1);
     }

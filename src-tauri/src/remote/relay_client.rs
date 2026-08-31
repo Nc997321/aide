@@ -1,7 +1,7 @@
-use std::sync::Arc;
-use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
+use std::sync::Arc;
+use std::time::Duration;
 use tauri::Manager;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -31,13 +31,17 @@ async fn connect_once(gateway: &Arc<RemoteGateway>) -> Result<(), String> {
         return Err("relay URL 未配置".into());
     }
     let url = format!("{}/ws", settings.relay_url.trim_end_matches('/'));
-    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.map_err(|e| e.to_string())?;
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // 注册（配对码过期/为空则刷新，避免配对中途换码）
     let code = super::lock_recover(&gateway.pairing).ensure_valid();
     let device_id = gateway.tokens.device_id().await?;
     let register = json!({"type": "register", "device_id": device_id, "pairing_code": code});
-    ws.send(Message::Text(register.to_string())).await.map_err(|e| e.to_string())?;
+    ws.send(Message::Text(register.to_string()))
+        .await
+        .map_err(|e| e.to_string())?;
     // 只在「断开→连接」转换时打一行：Ok 路径断开不重置 connected（抖动时恒 true），
     // 无条件打印会在连接抖动（如双实例互顶）时每秒刷屏。
     let was_connected = gateway.is_connected();
@@ -50,14 +54,17 @@ async fn connect_once(gateway: &Arc<RemoteGateway>) -> Result<(), String> {
 
     // 事件转发：broadcast → mpsc → 主循环 sink（sink 单写者，避免跨任务共享）
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<String>(256);
-    let mut rx = gateway.app_handle
+    let mut rx = gateway
+        .app_handle
         .state::<crate::runtime::AgentRuntimeManager>()
         .inner()
         .subscribe_chat_events();
     let fwd = tokio::spawn(async move {
         while let Ok(event) = rx.recv().await {
             let msg = json!({"type": "event", "event": event});
-            if event_tx.send(msg.to_string()).await.is_err() { break; }
+            if event_tx.send(msg.to_string()).await.is_err() {
+                break;
+            }
         }
     });
 
@@ -94,7 +101,9 @@ async fn handle_message(
     match msg {
         PhoneToDesktop::Pair { code } => {
             if !super::lock_recover(&gateway.pairing).validate(&code) {
-                return Some(DesktopToPhone::AuthError { message: "配对码无效或已过期".into() });
+                return Some(DesktopToPhone::AuthError {
+                    message: "配对码无效或已过期".into(),
+                });
             }
             // 签发长期 token + 取设备 id；任一步失败都按配对失败回（可重试）
             let reply = match gateway.tokens.issue() {
@@ -114,19 +123,31 @@ async fn handle_message(
                 *authed = true;
                 Some(DesktopToPhone::AuthOk)
             } else {
-                Some(DesktopToPhone::AuthError { message: "token 无效".into() })
+                Some(DesktopToPhone::AuthError {
+                    message: "token 无效".into(),
+                })
             }
         }
-        PhoneToDesktop::Invoke { id, command, params } => {
+        PhoneToDesktop::Invoke {
+            id,
+            command,
+            params,
+        } => {
             if !*authed {
-                return Some(DesktopToPhone::InvokeErr { id, error: "未认证：请先配对".into() });
+                return Some(DesktopToPhone::InvokeErr {
+                    id,
+                    error: "未认证：请先配对".into(),
+                });
             }
             let reply = match rpc::lookup(&command) {
                 Some(handler) => match handler(gateway.app_handle.clone(), params).await {
                     Ok(payload) => DesktopToPhone::InvokeOk { id, payload },
                     Err(error) => DesktopToPhone::InvokeErr { id, error },
                 },
-                None => DesktopToPhone::InvokeErr { id, error: format!("未知命令（不在远程白名单）: {command}") },
+                None => DesktopToPhone::InvokeErr {
+                    id,
+                    error: format!("未知命令（不在远程白名单）: {command}"),
+                },
             };
             Some(reply)
         }

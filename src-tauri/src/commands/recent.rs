@@ -74,9 +74,9 @@ pub fn prune_stale_with(
 ) -> bool {
     let mut changed = false;
     let before = state.sessions.len();
-    state.sessions.retain(|s| {
-        now_ms.saturating_sub(s.ts) < PRUNE_GRACE_MS || session_alive(&s.session_id)
-    });
+    state
+        .sessions
+        .retain(|s| now_ms.saturating_sub(s.ts) < PRUNE_GRACE_MS || session_alive(&s.session_id));
     if state.sessions.len() != before {
         changed = true;
     }
@@ -148,7 +148,9 @@ pub fn load_recent_file() -> RecentState {
 /// 原子写：先写 .tmp 再 rename，防半写入。
 pub fn save_recent_file(state: &RecentState) -> Result<(), String> {
     let p = recent_path();
-    let dir = p.parent().ok_or_else(|| "recent.json has no parent".to_string())?;
+    let dir = p
+        .parent()
+        .ok_or_else(|| "recent.json has no parent".to_string())?;
     fs::create_dir_all(dir).map_err(|e| format!("create config dir: {e}"))?;
     let tmp = p.with_extension("json.tmp");
     let body = serde_json::to_string_pretty(state).map_err(|e| e.to_string())?;
@@ -193,7 +195,13 @@ pub fn record_recent_session(
     name: String,
 ) -> Result<(), String> {
     let _trace = crate::diagnostics::trace_command("record_recent_session");
-    let entry = RecentSession { ws_key, ws_name, session_id, name, ts: now_ms() };
+    let entry = RecentSession {
+        ws_key,
+        ws_name,
+        session_id,
+        name,
+        ts: now_ms(),
+    };
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
     push_session(&mut guard, entry, current_limit(&service));
     save_recent_file(&guard)
@@ -207,14 +215,21 @@ pub fn record_recent_file(
     name: String,
 ) -> Result<(), String> {
     let _trace = crate::diagnostics::trace_command("record_recent_file");
-    let entry = RecentFile { path, name, ts: now_ms() };
+    let entry = RecentFile {
+        path,
+        name,
+        ts: now_ms(),
+    };
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
     push_file(&mut guard, &ws_key, entry, current_limit(&service));
     save_recent_file(&guard)
 }
 
 #[tauri::command]
-pub fn list_recent(ws_key: String, service: State<'_, Arc<SettingsService>>) -> Result<RecentView, String> {
+pub fn list_recent(
+    ws_key: String,
+    service: State<'_, Arc<SettingsService>>,
+) -> Result<RecentView, String> {
     let _trace = crate::diagnostics::trace_command("list_recent");
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
     let limit = current_limit(&service);
@@ -282,7 +297,11 @@ mod tests {
         }
     }
     fn file(path: &str, ts: u64) -> RecentFile {
-        RecentFile { path: path.into(), name: path.into(), ts }
+        RecentFile {
+            path: path.into(),
+            name: path.into(),
+            ts,
+        }
     }
 
     #[test]

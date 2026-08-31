@@ -1,18 +1,18 @@
 //! 分支对比命令：基准分支与另一分支的提交差异 + 文件级 diff 摘要。
 //!
-//! 与 [`super::legacy`] 共享底层 spawn helper、`CommitEntry`/`DiffPair` 结构
+//! 与兄弟域模块共享底层 spawn helper、`CommitEntry`/`DiffPair` 结构
 //! 与 `parse_commit_lines`/`assemble_diff_pair` 尾段（均 `pub(super)` 暴露）。
-//! 本模块只做「对比」这一新逻辑，不改动既有 29 个命令。
+//! 本模块只做「对比」这一新逻辑。
 
 use std::path::Path;
 use tauri::State;
-use tracing::{info, error};
+use tracing::{error, info};
 
-use crate::commands::{WorkspaceState, project_root_for_commands, detect_git_branch};
-use super::legacy::{
-    git_run, git_run_blocking, unquote_git_path, show_blobs, assemble_diff_pair,
-    parse_commit_lines, CommitEntry, DiffPair,
-};
+use super::commits::{parse_commit_lines, CommitEntry};
+use super::diffpair::{assemble_diff_pair, show_blobs, DiffPair};
+use super::runtime::{git_run, git_run_blocking};
+use super::types::unquote_git_path;
+use crate::commands::{detect_git_branch, project_root_for_commands, WorkspaceState};
 
 /// 对比中的一个文件差异项（文件级 diff 摘要，不含行内容）。
 #[derive(Debug, serde::Serialize, Clone)]
@@ -201,7 +201,9 @@ pub async fn git_compare_branches(
         // 校验 head 引用存在
         let rev_check = git_run(&["rev-parse", "--verify", &head_c], &root)?;
         if !rev_check.status.success() {
-            let stderr = String::from_utf8_lossy(&rev_check.stderr).trim().to_string();
+            let stderr = String::from_utf8_lossy(&rev_check.stderr)
+                .trim()
+                .to_string();
             return Err(format!(
                 "COMPARE_REF_MISSING: 分支/引用 '{}' 不存在: {}",
                 head_c, stderr
@@ -210,7 +212,9 @@ pub async fn git_compare_branches(
         // 校验 base 引用存在
         let base_check = git_run(&["rev-parse", "--verify", &base], &root)?;
         if !base_check.status.success() {
-            let stderr = String::from_utf8_lossy(&base_check.stderr).trim().to_string();
+            let stderr = String::from_utf8_lossy(&base_check.stderr)
+                .trim()
+                .to_string();
             return Err(format!(
                 "COMPARE_REF_MISSING: 分支/引用 '{}' 不存在: {}",
                 base, stderr
@@ -220,14 +224,25 @@ pub async fn git_compare_branches(
         // ahead/behind 计数：`rev-list --left-right --count base...head`
         // 输出 "L\tR"：L = base 独有（base 领先），R = head 独有（head 领先）
         let count_out = git_run(
-            &["rev-list", "--left-right", "--count", &format!("{}...{}", base, head_c)],
+            &[
+                "rev-list",
+                "--left-right",
+                "--count",
+                &format!("{}...{}", base, head_c),
+            ],
             &root,
         )?;
         let (ahead, behind) = if count_out.status.success() {
             let line = String::from_utf8_lossy(&count_out.stdout);
             let parts: Vec<&str> = line.trim().split_whitespace().collect();
-            let l = parts.get(0).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-            let r = parts.get(1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+            let l = parts
+                .get(0)
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(0);
+            let r = parts
+                .get(1)
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(0);
             (l, r)
         } else {
             (0, 0)
@@ -235,7 +250,12 @@ pub async fn git_compare_branches(
 
         // base 独有提交 = `head..base`（在 base 不在 head）
         let ahead_out = git_run(
-            &["log", "--format=%H|%s|%an|%ar", "-n50", &format!("{}..{}", head_c, base)],
+            &[
+                "log",
+                "--format=%H|%s|%an|%ar",
+                "-n50",
+                &format!("{}..{}", head_c, base),
+            ],
             &root,
         )?;
         let ahead_commits = if ahead_out.status.success() {
@@ -246,7 +266,12 @@ pub async fn git_compare_branches(
 
         // head 独有提交 = `base..head`（在 head 不在 base）
         let behind_out = git_run(
-            &["log", "--format=%H|%s|%an|%ar", "-n50", &format!("{}..{}", base, head_c)],
+            &[
+                "log",
+                "--format=%H|%s|%an|%ar",
+                "-n50",
+                &format!("{}..{}", base, head_c),
+            ],
             &root,
         )?;
         let behind_commits = if behind_out.status.success() {

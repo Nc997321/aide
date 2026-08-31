@@ -6,7 +6,8 @@ async fn subscribe_receives_events_from_channel() {
     let mgr = AgentRuntimeManager::new();
     let mut rx = mgr.subscribe_chat_events();
     let tx = mgr.chat_events_sender();
-    tx.send(json!({"type": "text_delta", "delta": "hi"})).unwrap();
+    tx.send(json!({"type": "text_delta", "delta": "hi"}))
+        .unwrap();
     let ev = rx.recv().await.unwrap();
     assert_eq!(ev["type"], "text_delta");
     assert_eq!(ev["delta"], "hi");

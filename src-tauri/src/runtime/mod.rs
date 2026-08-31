@@ -1,13 +1,13 @@
+use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex as TokioMutex;
-use tauri::{AppHandle, Emitter, Manager};
-use serde_json::Value;
 pub mod env;
 pub mod provider;
 use crate::runtime::provider::connection_fingerprint;
@@ -111,9 +111,13 @@ impl AgentRuntimeManager {
 
         let mut cmd = tokio::process::Command::new(&bin);
         #[cfg(not(debug_assertions))]
-        { cmd.arg(&arg); }
+        {
+            cmd.arg(&arg);
+        }
         #[cfg(debug_assertions)]
-        { cmd.arg(dunce::simplified(&arg)); }
+        {
+            cmd.arg(dunce::simplified(&arg));
+        }
 
         cmd.current_dir(std::env::current_dir().unwrap_or_default())
             .stdin(std::process::Stdio::piped())
@@ -151,7 +155,11 @@ impl AgentRuntimeManager {
         {
             use tauri::Manager;
             if let Ok(res_dir) = app_handle.path().resource_dir() {
-                let exe_name = if cfg!(windows) { "claude.exe" } else { "claude" };
+                let exe_name = if cfg!(windows) {
+                    "claude.exe"
+                } else {
+                    "claude"
+                };
                 let claude_exe = res_dir.join("agent-runtime").join(exe_name);
                 if claude_exe.exists() {
                     cmd.env("AIDE_CLAUDE_EXE", dunce::simplified(&claude_exe));
@@ -172,7 +180,11 @@ impl AgentRuntimeManager {
             } else {
                 "@anthropic-ai/claude-agent-sdk-linux-x64"
             };
-            let exe_name = if cfg!(windows) { "claude.exe" } else { "claude" };
+            let exe_name = if cfg!(windows) {
+                "claude.exe"
+            } else {
+                "claude"
+            };
             let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("..")
                 .join("agent-sidecar")
@@ -187,9 +199,9 @@ impl AgentRuntimeManager {
         #[cfg(windows)]
         cmd.creation_flags(0x08000000);
 
-        let mut child = cmd.spawn().map_err(|e| format!(
-            "无法启动 Agent Runtime（bin: {bin}）：{e}。"
-        ))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("无法启动 Agent Runtime（bin: {bin}）：{e}。"))?;
         let stdin = child.stdin.take().ok_or("No stdin")?;
         let stdout = child.stdout.take().ok_or("No stdout")?;
         let stderr = child.stderr.take().ok_or("No stderr")?;
@@ -200,7 +212,13 @@ impl AgentRuntimeManager {
         // stdout reader 任务
         let app = app_handle.clone();
         let killed_clone = Arc::clone(&self.killed);
-        let child_for_kill = self.child.lock().unwrap().as_ref().ok_or("child not set")?.clone();
+        let child_for_kill = self
+            .child
+            .lock()
+            .unwrap()
+            .as_ref()
+            .ok_or("child not set")?
+            .clone();
 
         // codegraph agent 查询回写通道（reader 拦截 codegraph_query 后用它写回结果）。
         let stdin_for_agent = self.stdin.lock().unwrap().as_ref().unwrap().clone();
@@ -218,13 +236,17 @@ impl AgentRuntimeManager {
             let reason: &str = loop {
                 match tokio::time::timeout(HEARTBEAT_TIMEOUT, reader.next_line()).await {
                     Ok(Ok(Some(line))) => {
-                        let Ok(mut event) = serde_json::from_str::<Value>(&line) else { continue };
+                        let Ok(mut event) = serde_json::from_str::<Value>(&line) else {
+                            continue;
+                        };
                         // codegraph agent 工具查询：Rust ↔ Runtime 内部 request/response，不转发 Vue。
                         // 查询在独立任务里跑，不阻塞 reader 主循环——慢查询
                         // （大 shard 搜索 / HTTP embed）不能卡住心跳与其他事件的读取。
                         // 进程隔离后：查询经 CodeGraphService RPC 转给 runner 执行，
                         // sidecar 协议解析/组装（codegraph_query → codegraph_result）留主进程。
-                        if let Some(req) = crate::codegraph::agent_bridge::parse_codegraph_query(&event) {
+                        if let Some(req) =
+                            crate::codegraph::agent_bridge::parse_codegraph_query(&event)
+                        {
                             use tauri::Manager;
                             let app2 = app.clone();
                             let stdin2 = stdin_for_agent.clone();
@@ -235,20 +257,33 @@ impl AgentRuntimeManager {
                                 // spawn_blocking。
                                 let trust_root = req.project_root.clone();
                                 let app_for_policy = app2.clone();
-                                let (score_threshold, trusted) = tokio::task::spawn_blocking(move || {
-                                    let score_threshold = app_for_policy
-                                        .try_state::<Arc<crate::settings::SettingsService>>()
-                                        .map(|s| crate::codegraph::query_score_threshold(s.inner()))
-                                        .unwrap_or(0.35);
-                                    let trusted = crate::commands::workspace::is_path_trusted(&trust_root);
-                                    (score_threshold, trusted)
-                                })
-                                .await
-                                .unwrap_or((0.35, false));
-                                let body = match app2.try_state::<Arc<crate::codegraph::CodeGraphService>>() {
+                                let (score_threshold, trusted) =
+                                    tokio::task::spawn_blocking(move || {
+                                        let score_threshold = app_for_policy
+                                            .try_state::<Arc<crate::settings::SettingsService>>()
+                                            .map(|s| {
+                                                crate::codegraph::query_score_threshold(s.inner())
+                                            })
+                                            .unwrap_or(0.35);
+                                        let trusted = crate::commands::workspace::is_path_trusted(
+                                            &trust_root,
+                                        );
+                                        (score_threshold, trusted)
+                                    })
+                                    .await
+                                    .unwrap_or((0.35, false));
+                                let body = match app2
+                                    .try_state::<Arc<crate::codegraph::CodeGraphService>>()
+                                {
                                     Some(svc) => {
                                         match svc
-                                            .agent_query(&req.tool, &req.args, &req.project_root, trusted, score_threshold)
+                                            .agent_query(
+                                                &req.tool,
+                                                &req.args,
+                                                &req.project_root,
+                                                trusted,
+                                                score_threshold,
+                                            )
                                             .await
                                         {
                                             Ok(v) => v,
@@ -263,7 +298,10 @@ impl AgentRuntimeManager {
                                         "error": "codegraph service unavailable",
                                     }),
                                 };
-                                let payload = crate::codegraph::agent_bridge::build_result_command(&req.request_id, body);
+                                let payload = crate::codegraph::agent_bridge::build_result_command(
+                                    &req.request_id,
+                                    body,
+                                );
                                 if let Ok(mut line) = serde_json::to_string(&payload) {
                                     line.push('\n');
                                     let mut g = stdin2.lock().await;
@@ -311,13 +349,16 @@ impl AgentRuntimeManager {
                         }
                         crate::diagnostics::trace::record(
                             "emit",
-                            event.get("type").and_then(|t| t.as_str()).unwrap_or("unknown"),
+                            event
+                                .get("type")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("unknown"),
                             "worker",
                         );
                         // 自动化运行终态观测：非活跃会话/非终态事件立即返回，
                         // 终态落盘在内部 spawn 出去做，不堵事件泵。
-                        if let Some(svc) = app
-                            .try_state::<std::sync::Arc<crate::automation::AutomationService>>()
+                        if let Some(svc) =
+                            app.try_state::<std::sync::Arc<crate::automation::AutomationService>>()
                         {
                             svc.observe_chat_event(&event);
                         }
@@ -344,10 +385,14 @@ impl AgentRuntimeManager {
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = reader.next_line().await {
-                if line.is_empty() { continue; }
+                if line.is_empty() {
+                    continue;
+                }
                 eprintln!("[runtime stderr] {}", line);
                 let mut buf = tail_writer.lock().unwrap();
-                if buf.len() >= 8 { buf.pop_front(); }
+                if buf.len() >= 8 {
+                    buf.pop_front();
+                }
                 buf.push_back(line);
             }
         });
@@ -368,7 +413,10 @@ impl AgentRuntimeManager {
         let mut line = serde_json::to_string(cmd).map_err(|e| e.to_string())?;
         line.push('\n');
         let mut guard = stdin.lock().await;
-        guard.write_all(line.as_bytes()).await.map_err(|e| e.to_string())
+        guard
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// 订阅 chat-event 流（网关事件转发用）。broadcast 语义：慢消费者丢最旧。
@@ -385,9 +433,7 @@ impl AgentRuntimeManager {
     #[allow(dead_code)]
     pub async fn kill_runtime(&self) {
         self.killed.store(true, Ordering::Relaxed);
-        let child = {
-            self.child.lock().unwrap().clone()
-        };
+        let child = { self.child.lock().unwrap().clone() };
         if let Some(child_arc) = child {
             let mut c = child_arc.lock().await;
             let _ = c.start_kill();
@@ -396,11 +442,7 @@ impl AgentRuntimeManager {
 
     /// 连接身份漂移检测：仅在新 session send 前调用。
     /// 持久化指纹存在且与当前 env 不一致 → true（需要 forkSession）。
-    pub fn connection_drifted(
-        &self,
-        session_id: &str,
-        env_vars: &HashMap<String, String>,
-    ) -> bool {
+    pub fn connection_drifted(&self, session_id: &str, env_vars: &HashMap<String, String>) -> bool {
         let fps = self.fingerprints.lock().unwrap();
         match fps.get(session_id) {
             None => false,
@@ -448,9 +490,9 @@ impl AgentRuntimeManager {
                 .iter()
                 .filter_map(|(sid, route)| {
                     let affected = match affected_scope {
-                        SettingsScope::Managed
-                        | SettingsScope::User
-                        | SettingsScope::Session => true,
+                        SettingsScope::Managed | SettingsScope::User | SettingsScope::Session => {
+                            true
+                        }
                         SettingsScope::Project | SettingsScope::Local => {
                             route.workspace_root.as_deref() == affected_root
                         }
@@ -503,8 +545,12 @@ impl AgentRuntimeManager {
             let _ = app;
             let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
             // dev: 跑 esbuild bundle 产物，用 node 启动
-            let path = manifest.parent().unwrap()
-                .join("agent-sidecar").join("dist").join("runtime.js");
+            let path = manifest
+                .parent()
+                .unwrap()
+                .join("agent-sidecar")
+                .join("dist")
+                .join("runtime.js");
             if path.exists() {
                 return Ok(path);
             }
@@ -517,7 +563,11 @@ impl AgentRuntimeManager {
         {
             use tauri::Manager;
             let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
-            let bin_name = if cfg!(windows) { "aide-agent.exe" } else { "aide-agent" };
+            let bin_name = if cfg!(windows) {
+                "aide-agent.exe"
+            } else {
+                "aide-agent"
+            };
             let path = resource_dir.join("agent-runtime").join(bin_name);
             if path.exists() {
                 return Ok(dunce::simplified(&path).to_path_buf());
@@ -534,7 +584,9 @@ impl AgentRuntimeManager {
     /// 返回 spawn agent-runtime 的 (bin, first_arg)。
     /// dev: (node, runtime.js)；release: (aide-agent.exe, 空)。
     /// 供一次性子命令（test-mcp 探活等）复用 spawn 模式，避免每处重写 dev/release 分支。
-    pub fn resolve_runtime_command(app: &AppHandle) -> Result<(String, std::path::PathBuf), String> {
+    pub fn resolve_runtime_command(
+        app: &AppHandle,
+    ) -> Result<(String, std::path::PathBuf), String> {
         let runtime_path = Self::resolve_runtime_path(app)?;
         #[cfg(debug_assertions)]
         {
@@ -543,18 +595,21 @@ impl AgentRuntimeManager {
         }
         #[cfg(not(debug_assertions))]
         {
-            Ok((runtime_path.to_string_lossy().to_string(), std::path::PathBuf::new()))
+            Ok((
+                runtime_path.to_string_lossy().to_string(),
+                std::path::PathBuf::new(),
+            ))
         }
     }
 }
 
-fn emit_runtime_dead(
-    app: &AppHandle,
-    tail_handle: &Arc<Mutex<VecDeque<String>>>,
-    reason: &str,
-) {
+fn emit_runtime_dead(app: &AppHandle, tail_handle: &Arc<Mutex<VecDeque<String>>>, reason: &str) {
     let tail: Vec<String> = tail_handle.lock().unwrap().iter().cloned().collect();
-    let detail = if tail.is_empty() { None } else { Some(tail.join("\n")) };
+    let detail = if tail.is_empty() {
+        None
+    } else {
+        Some(tail.join("\n"))
+    };
     crate::diagnostics::trace::record("runtime", reason, "worker");
     let event = serde_json::json!({
         "type": "runtime_dead",
@@ -570,18 +625,29 @@ fn windows_path_with_git_usr_bin() -> Option<String> {
     let git_cmd_dir = git_exe.parent()?;
     let git_root = git_cmd_dir.parent()?;
     let usr_bin = git_root.join("usr").join("bin");
-    if !usr_bin.is_dir() { return None; }
+    if !usr_bin.is_dir() {
+        return None;
+    }
     let current_path = std::env::var("PATH").unwrap_or_default();
-    Some(prepend_path_entry(&current_path, &usr_bin.to_string_lossy()))
+    Some(prepend_path_entry(
+        &current_path,
+        &usr_bin.to_string_lossy(),
+    ))
 }
 
 #[cfg(windows)]
 fn prepend_path_entry(path: &str, extra: &str) -> String {
-    if extra.is_empty() { return path.to_string(); }
+    if extra.is_empty() {
+        return path.to_string();
+    }
     let already_present = path.split(';').any(|p| p.eq_ignore_ascii_case(extra));
-    if already_present { path.to_string() }
-    else if path.is_empty() { extra.to_string() }
-    else { format!("{extra};{path}") }
+    if already_present {
+        path.to_string()
+    } else if path.is_empty() {
+        extra.to_string()
+    } else {
+        format!("{extra};{path}")
+    }
 }
 
 #[cfg(test)]
@@ -592,7 +658,10 @@ mod tests {
     #[cfg(windows)]
     fn prepend_path_entry_adds_when_missing() {
         let result = prepend_path_entry("C:\\Windows;C:\\Windows\\System32", "C:\\Git\\usr\\bin");
-        assert_eq!(result, "C:\\Git\\usr\\bin;C:\\Windows;C:\\Windows\\System32");
+        assert_eq!(
+            result,
+            "C:\\Git\\usr\\bin;C:\\Windows;C:\\Windows\\System32"
+        );
     }
 
     #[test]
@@ -619,7 +688,10 @@ mod tests {
     }
 
     fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
@@ -636,7 +708,10 @@ mod tests {
             ("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
             ("ANTHROPIC_API_KEY", "key-a"),
         ]));
-        mgr.fingerprints.lock().unwrap().insert("s1".to_string(), fp);
+        mgr.fingerprints
+            .lock()
+            .unwrap()
+            .insert("s1".to_string(), fp);
         let desired = env(&[
             ("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
             ("ANTHROPIC_API_KEY", "key-a"),
@@ -652,7 +727,10 @@ mod tests {
             ("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
             ("ANTHROPIC_API_KEY", "key-a"),
         ]));
-        mgr.fingerprints.lock().unwrap().insert("s1".to_string(), fp);
+        mgr.fingerprints
+            .lock()
+            .unwrap()
+            .insert("s1".to_string(), fp);
         let desired = env(&[
             ("ANTHROPIC_BASE_URL", "https://provider-b.example.com"),
             ("ANTHROPIC_API_KEY", "key-b"),
@@ -663,8 +741,12 @@ mod tests {
     #[test]
     fn fingerprints_survive_runtime_kill() {
         let mgr = AgentRuntimeManager::new();
-        let fp = connection_fingerprint(&env(&[("ANTHROPIC_BASE_URL", "https://api.anthropic.com")]));
-        mgr.fingerprints.lock().unwrap().insert("s1".to_string(), fp.clone());
+        let fp =
+            connection_fingerprint(&env(&[("ANTHROPIC_BASE_URL", "https://api.anthropic.com")]));
+        mgr.fingerprints
+            .lock()
+            .unwrap()
+            .insert("s1".to_string(), fp.clone());
         assert!(mgr.fingerprints.lock().unwrap().contains_key("s1"));
         let desired = env(&[("ANTHROPIC_BASE_URL", "https://provider-b.example.com")]);
         assert!(mgr.connection_drifted("s1", &desired));

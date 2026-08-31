@@ -31,7 +31,9 @@ fn resolve_path() -> Option<std::path::PathBuf> {
     {
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let p = manifest.join("resources").join("provider-catalog.json");
-        if p.exists() { return Some(p); }
+        if p.exists() {
+            return Some(p);
+        }
         None
     }
     #[cfg(not(debug_assertions))]
@@ -42,12 +44,16 @@ fn resolve_path() -> Option<std::path::PathBuf> {
         let exe = std::env::current_exe().ok()?;
         let dir = exe.parent()?;
         let p = dir.join("resources").join("provider-catalog.json");
-        if p.exists() { return Some(p); }
+        if p.exists() {
+            return Some(p);
+        }
         // Tauri 把 resources 解到 resource_dir，但 runtime 层拿不到 AppHandle。
         // 由 lib.rs setup 调 set_resource_dir 注入一次（进程全局 OnceLock，worker 线程可见）。
         if let Some(rd) = RESOURCE_DIR.get() {
             let p = rd.join("provider-catalog.json");
-            if p.exists() { return Some(p); }
+            if p.exists() {
+                return Some(p);
+            }
         }
         None
     }
@@ -110,7 +116,10 @@ mod tests {
         let c = catalog();
         assert!(c.len() >= 5, "catalog must have 5 presets, got {}", c.len());
         assert!(catalog_find(ProviderKind::CpaGpt).is_some());
-        assert!(catalog_find(ProviderKind::Custom).is_none(), "Custom not in catalog");
+        assert!(
+            catalog_find(ProviderKind::Custom).is_none(),
+            "Custom not in catalog"
+        );
     }
 
     #[test]
@@ -141,6 +150,9 @@ mod tests {
         // 第二次 set 应静默忽略（OnceLock::set 返回 Err，我们丢弃）——不 panic。
         set_resource_dir(PathBuf::from("/another-test-dir"));
         // catalog() 仍能加载（dev 模式从 CARGO_MANIFEST_DIR 读，不受影响）。
-        assert!(!catalog().is_empty(), "catalog must not be empty in dev mode");
+        assert!(
+            !catalog().is_empty(),
+            "catalog must not be empty in dev mode"
+        );
     }
 }

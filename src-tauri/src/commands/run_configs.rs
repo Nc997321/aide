@@ -108,7 +108,10 @@ mod tests {
         let json = r#"[{"id":"rc_1","name":"svc","cwd":"/p","command":"mvn spring-boot:run"}]"#;
         let configs: Vec<RunConfig> = serde_json::from_str(json).unwrap();
         assert_eq!(configs.len(), 1);
-        assert!(configs[0].env.is_empty(), "absent env must default to empty");
+        assert!(
+            configs[0].env.is_empty(),
+            "absent env must default to empty"
+        );
     }
 
     /// 带 env 的配置序列化/反序列化 round-trip，且键有序（BTreeMap）。
@@ -133,10 +136,16 @@ mod tests {
         // BTreeMap 保证键有序：EXTRA 在 JAVA_HOME 前（E < J）
         let jh = s.find("\"JAVA_HOME\"").unwrap();
         let ex = s.find("\"EXTRA\"").unwrap();
-        assert!(ex < jh, "BTreeMap keys must be sorted (EXTRA before JAVA_HOME): {s}");
+        assert!(
+            ex < jh,
+            "BTreeMap keys must be sorted (EXTRA before JAVA_HOME): {s}"
+        );
 
         let back: RunConfig = serde_json::from_str(&s).unwrap();
-        assert_eq!(back.env.get("JAVA_HOME").map(|s| s.as_str()), Some("/jdks/jdk-21"));
+        assert_eq!(
+            back.env.get("JAVA_HOME").map(|s| s.as_str()),
+            Some("/jdks/jdk-21")
+        );
         assert_eq!(back.env.get("EXTRA").map(|s| s.as_str()), Some("x"));
     }
 
@@ -183,9 +192,12 @@ mod tests {
         let dir = std::env::temp_dir().join("aide_test_migrate_jdk_2");
         fs::create_dir_all(&dir).unwrap();
         let file = dir.join("configs.json");
-        let mut configs: Vec<RunConfig> = serde_json::from_str(r#"[
+        let mut configs: Vec<RunConfig> = serde_json::from_str(
+            r#"[
             {"id":"a","name":"a","cwd":"/p","command":"mvn","env":{"JAVA_HOME":"/jdks/jdk-21"}}
-        ]"#).unwrap();
+        ]"#,
+        )
+        .unwrap();
 
         migrate_per_config_java_home(ws, &mut configs, &file);
 

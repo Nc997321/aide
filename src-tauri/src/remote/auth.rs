@@ -12,7 +12,10 @@ pub struct PairingState {
 
 impl PairingState {
     pub fn new() -> Self {
-        Self { code: String::new(), expires_at: Instant::now() }
+        Self {
+            code: String::new(),
+            expires_at: Instant::now(),
+        }
     }
 
     /// 测试构造：指定码 + 过期时刻（集成测试无法快进时钟）。
@@ -67,18 +70,30 @@ impl TokenStore {
     /// 签发长期 token 并持久化（覆盖旧 token = 吊销旧设备）。
     pub fn issue(&self) -> Result<String, String> {
         let token = generate_token();
-        self.service.secrets().set("remote/token", &token).map_err(|e| e.to_string())?;
+        self.service
+            .secrets()
+            .set("remote/token", &token)
+            .map_err(|e| e.to_string())?;
         Ok(token)
     }
 
     /// 校验 token（与 secrets 中存储的比对）。
     pub fn validate(&self, token: &str) -> bool {
-        self.service.secrets().get("remote/token").ok().flatten().as_deref() == Some(token)
+        self.service
+            .secrets()
+            .get("remote/token")
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some(token)
     }
 
     /// 吊销所有远程设备（清 token）。
     pub fn revoke(&self) -> Result<(), String> {
-        self.service.secrets().delete("remote/token").map_err(|e| e.to_string())
+        self.service
+            .secrets()
+            .delete("remote/token")
+            .map_err(|e| e.to_string())
     }
 
     /// 读取/生成 device_id（持久化到 settings.remote.deviceId）。
@@ -86,14 +101,21 @@ impl TokenStore {
     pub async fn device_id(&self) -> Result<String, String> {
         let service = self.service.clone();
         let existing = tokio::task::spawn_blocking(move || {
-            let doc = service.effective_document_blocking(None).map_err(|e| e.to_string())?;
-            Ok::<_, String>(doc.values.get("settings")
-                .and_then(|s| s.get("remote"))
-                .and_then(|r| r.get("deviceId"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .unwrap_or_default())
-        }).await.map_err(|e| e.to_string())??;
+            let doc = service
+                .effective_document_blocking(None)
+                .map_err(|e| e.to_string())?;
+            Ok::<_, String>(
+                doc.values
+                    .get("settings")
+                    .and_then(|s| s.get("remote"))
+                    .and_then(|r| r.get("deviceId"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
+            )
+        })
+        .await
+        .map_err(|e| e.to_string())??;
         if !existing.is_empty() {
             return Ok(existing);
         }
@@ -101,18 +123,25 @@ impl TokenStore {
         let service = self.service.clone();
         let id2 = id.clone();
         tokio::task::spawn_blocking(move || {
-            service.mutate_scope_blocking(SettingsScope::User, None, |document| {
-                let target = document.values.entry("settings".to_string())
-                    .or_insert_with(|| serde_json::json!({}));
-                let target = target.as_object_mut().ok_or_else(|| {
-                    SettingsError::Validation("settings must be an object".to_string())
-                })?;
-                let remote = target.entry("remote".to_string())
-                    .or_insert_with(|| serde_json::json!({}));
-                remote["deviceId"] = serde_json::json!(id2);
-                Ok(())
-            }).map_err(|e| e.to_string())
-        }).await.map_err(|e| e.to_string())??;
+            service
+                .mutate_scope_blocking(SettingsScope::User, None, |document| {
+                    let target = document
+                        .values
+                        .entry("settings".to_string())
+                        .or_insert_with(|| serde_json::json!({}));
+                    let target = target.as_object_mut().ok_or_else(|| {
+                        SettingsError::Validation("settings must be an object".to_string())
+                    })?;
+                    let remote = target
+                        .entry("remote".to_string())
+                        .or_insert_with(|| serde_json::json!({}));
+                    remote["deviceId"] = serde_json::json!(id2);
+                    Ok(())
+                })
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
         Ok(id)
     }
 }

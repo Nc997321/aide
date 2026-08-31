@@ -169,6 +169,18 @@ commands/
 
 成本低（1–2 天机械操作），收益是长期可维护性。**优先级排最后**：舒服，但不救命。且建议在优化项二做完后再拆——codegraph 相关命令届时已变成薄桩，拆分面更干净。
 
+### 完成记录（2026-08-31）
+
+前置澄清：执行路线图时实测，本项的「16,763 行平面单模块」是**整个 `commands/` 目录的累计行数**而非单文件——目录早已按域拆为 25 个文件 + 5 个子目录（chat/session/git/workspace/filesystem/…），路线图所列骨架与现状基本一致。真正剩余的欠账是三个违反「源文件超 1000 行必须拆」规则的大文件，本次拆分即收尾这部分：
+
+- **`commands/session.rs`（2382 行）→ `session/`**：`mod.rs`（会话元数据 CRUD/偏好记忆/自动命名守门 + 两处工作区会话扫描 + re-export 门面）、`history.rs`（load_messages + 字节游标反向分页 + 尾部探测）、`transcript.rs`（transcript 纯解析 functional core）、`changes.rs`（变更面板 JSONL 落盘）、`jsonl.rs`（末事件/尺寸截断/末条消息摘要）。
+- **`commands/git/legacy.rs`（1924 行）→ `git/` 域文件**：`runtime.rs`（spawn 串行锁/超时 kill/blocking 桥）、`types.rs`（core.quotepath 还原）、`operations.rs`（暂存/取消/撤回/discard/commit）、`stash.rs`、`branches.rs`、`status.rs`（porcelain 解析 + git_diff_files）、`remote_op.rs`（fetch/pull/push/ahead_behind/unpushed）、`commits.rs`（log/show）、`diffpair.rs`（cat-file --batch + DiffPair 组装）、`fingerprint.rs`（refs mtime 指纹）。`compare.rs`/`tags.rs` 的 `use super::legacy` 改指新域模块。
+- **`commands/customizations.rs`（1166 行）→ `customizations/`**：`mod.rs` 共享底座（CustomizationItem + 目录/settings 读写/frontmatter 助手）+ `agents.rs`、`skills.rs`、`instructions.rs`、`hooks.rs`、`mcp.rs`。
+- **错位归位**：`git/legacy.rs` 里的 `log_frontend_error`（前端错误采集）迁到 `src/diagnostics.rs`，lib.rs 注册路径同步改 `diagnostics::log_frontend_error`，与 diag_* 同列。
+- **门面机制（两式，勿混用）**：`session/` 用私有子模块 + 显式 `pub use`——tauri `__cmd__X` 宏跟随定义模块，须在 mod.rs 逐个 `pub(crate) use` 转发；`git/`、`customizations/` 保持 `pub mod` + glob `pub use X::*` — 宏本身是 pub item 随 glob 转发，无需逐个列。外部注册路径 `commands::session::X` / `commands::git::X` / `commands::customizations::X` 全部不变（lib.rs、remote/rpc/handlers.rs、automation 零改动，除 log_frontend_error 一条）。
+- **纯移动保障**：函数体经行号切片逐字节搬移（非手抄）；测试随域分配且守恒对账 session 64/64、git 26/26、customizations 8/8；`cargo fmt --check` ✓；clippy 对触达模块逐条对照 HEAD 原文件——13 处警告全部逐字存在于搬移前代码，零新增（存量：automation `run_id` 等）；`cargo test --lib` 553/0 全绿（连跑三轮稳定）；rust-reviewer 子代理独立审查通过。
+- **测试小事故一处**：customizations 拆分时一个 `#[test]` 行号边界少切一行（8→7），测试守恒对账当场暴露并补回——守恒对账应作为此类拆分的固定验收步骤。
+
 ---
 
 ## 5. 附带项：remote 模块测试补齐（建议随优化项一一起做）

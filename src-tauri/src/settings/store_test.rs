@@ -361,8 +361,14 @@ fn migration_cleanup_moves_live_keys_to_state_and_deletes_legacy() {
     );
     let text = std::fs::read_to_string(fixture.paths.state()).unwrap();
     let state: Value = serde_json::from_str(&text).unwrap();
-    assert!(state.get("settings").is_none(), "settings 归设置文档，不进 state");
-    assert!(state.get("providers").is_none(), "providers 归设置文档，不进 state");
+    assert!(
+        state.get("settings").is_none(),
+        "settings 归设置文档，不进 state"
+    );
+    assert!(
+        state.get("providers").is_none(),
+        "providers 归设置文档，不进 state"
+    );
     assert!(state.get("active_provider").is_none());
     assert_eq!(
         state.get("workspace").and_then(Value::as_str),

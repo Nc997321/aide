@@ -10,13 +10,14 @@ pub mod registry;
 pub mod rpc;
 pub mod transport;
 
-#[cfg(test)] mod mock_server;
+#[cfg(test)]
+mod mock_server;
 
+use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
-use serde::Serialize;
 
-pub use crate::lsp::manager::{LspManager, EnsureError};
+pub use crate::lsp::manager::{EnsureError, LspManager};
 pub use crate::lsp::protocol::CmCompletion;
 
 #[derive(Debug, Serialize)]
@@ -54,7 +55,9 @@ pub struct LspJumpResult {
 
 pub struct LspState(pub Arc<TokioMutex<LspManager>>);
 impl LspState {
-    pub fn new() -> Self { Self(Arc::new(TokioMutex::new(LspManager::new()))) }
+    pub fn new() -> Self {
+        Self(Arc::new(TokioMutex::new(LspManager::new())))
+    }
 }
 
 fn lang_from_id_str(s: &str) -> Option<crate::lsp::detector::LanguageId> {
@@ -69,7 +72,8 @@ pub async fn lsp_detect_languages(workspace_root: String) -> Result<Vec<String>,
 
 #[tauri::command]
 pub async fn lsp_ensure_server(
-    workspace_root: String, lang: String,
+    workspace_root: String,
+    lang: String,
     state: tauri::State<'_, Arc<LspState>>,
     settings_service: tauri::State<'_, Arc<crate::settings::SettingsService>>,
     app: tauri::AppHandle,
@@ -78,15 +82,28 @@ pub async fn lsp_ensure_server(
     // lsp_enabled 被设过，未信任工作区也拒拉 server——untrust 后老 server
     // 自然消亡，不再 respawn。
     if !crate::commands::workspace::is_path_trusted(&workspace_root) {
-        return Ok(EnsureOutcome { ok: false, ready: false, kind: Some("untrusted"), error: None });
+        return Ok(EnsureOutcome {
+            ok: false,
+            ready: false,
+            kind: Some("untrusted"),
+            error: None,
+        });
     }
     let Some(lang_id) = lang_from_id_str(&lang) else {
-        return Ok(EnsureOutcome { ok: false, ready: false, kind: Some("server_not_found"), error: None });
+        return Ok(EnsureOutcome {
+            ok: false,
+            ready: false,
+            kind: Some("server_not_found"),
+            error: None,
+        });
     };
     let settings = crate::commands::settings::public_settings(settings_service.inner())
         .map_err(|e| e.to_string())?;
     let mgr = state.0.lock().await;
-    match mgr.ensure_server(&workspace_root, lang_id, &app, &settings).await {
+    match mgr
+        .ensure_server(&workspace_root, lang_id, &app, &settings)
+        .await
+    {
         Ok(h) => Ok(EnsureOutcome {
             ok: true,
             // Java 索引期 ready=false（握手成功但 jdtls 还没 ServiceReady）；其余 true。
@@ -94,24 +111,49 @@ pub async fn lsp_ensure_server(
             kind: None,
             error: None,
         }),
-        Err(EnsureError::ServerNotFound) => Ok(EnsureOutcome { ok: false, ready: false, kind: Some("server_not_found"), error: None }),
-        Err(EnsureError::HandshakeFailed(e)) => Ok(EnsureOutcome { ok: false, ready: false, kind: Some("handshake_failed"), error: Some(e) }),
-        Err(EnsureError::SpawnFailed(e)) => Ok(EnsureOutcome { ok: false, ready: false, kind: Some("spawn_failed"), error: Some(e) }),
+        Err(EnsureError::ServerNotFound) => Ok(EnsureOutcome {
+            ok: false,
+            ready: false,
+            kind: Some("server_not_found"),
+            error: None,
+        }),
+        Err(EnsureError::HandshakeFailed(e)) => Ok(EnsureOutcome {
+            ok: false,
+            ready: false,
+            kind: Some("handshake_failed"),
+            error: Some(e),
+        }),
+        Err(EnsureError::SpawnFailed(e)) => Ok(EnsureOutcome {
+            ok: false,
+            ready: false,
+            kind: Some("spawn_failed"),
+            error: Some(e),
+        }),
     }
 }
 
 #[tauri::command]
 pub async fn lsp_did_open(
-    workspace_root: String, file_path: String, lang: String, text: String,
+    workspace_root: String,
+    file_path: String,
+    lang: String,
+    text: String,
     state: tauri::State<'_, Arc<LspState>>,
     settings_service: tauri::State<'_, Arc<crate::settings::SettingsService>>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let Some(lang_id) = lang_from_id_str(&lang) else { return Ok(()); };
-    let settings = crate::commands::settings::public_settings(settings_service.inner()).map_err(|e| e.to_string())?;
+    let Some(lang_id) = lang_from_id_str(&lang) else {
+        return Ok(());
+    };
+    let settings = crate::commands::settings::public_settings(settings_service.inner())
+        .map_err(|e| e.to_string())?;
     let mgr = state.0.lock().await;
-    let h = match mgr.ensure_server(&workspace_root, lang_id, &app, &settings).await {
-        Ok(h) => h, Err(_) => return Ok(()),
+    let h = match mgr
+        .ensure_server(&workspace_root, lang_id, &app, &settings)
+        .await
+    {
+        Ok(h) => h,
+        Err(_) => return Ok(()),
     };
     // §5.4 排除集跳过
     if crate::lsp::manager::is_excluded(&file_path, &h.exclude_globs) {
@@ -142,12 +184,20 @@ pub async fn lsp_did_open(
 
 #[tauri::command]
 pub async fn lsp_did_change(
-    workspace_root: String, file_path: String, lang: String, text: String, version: Option<i64>,
+    workspace_root: String,
+    file_path: String,
+    lang: String,
+    text: String,
+    version: Option<i64>,
     state: tauri::State<'_, Arc<LspState>>,
 ) -> Result<(), String> {
-    let Some(lang_id) = lang_from_id_str(&lang) else { return Ok(()); };
+    let Some(lang_id) = lang_from_id_str(&lang) else {
+        return Ok(());
+    };
     let mgr = state.0.lock().await;
-    let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(()); };
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(());
+    };
     let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
     // 防御：前端漏发 did_open / 乱序时 OpenDocs::change 会 panic。未开 → 跳过，不崩。
     {
@@ -168,12 +218,18 @@ pub async fn lsp_did_change(
 
 #[tauri::command]
 pub async fn lsp_did_close(
-    workspace_root: String, file_path: String, lang: String,
+    workspace_root: String,
+    file_path: String,
+    lang: String,
     state: tauri::State<'_, Arc<LspState>>,
 ) -> Result<(), String> {
-    let Some(lang_id) = lang_from_id_str(&lang) else { return Ok(()); };
+    let Some(lang_id) = lang_from_id_str(&lang) else {
+        return Ok(());
+    };
     let mgr = state.0.lock().await;
-    let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(()); };
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(());
+    };
     let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
     h.docs.lock().await.close(&uri);
     let notif = serde_json::json!({
@@ -185,30 +241,52 @@ pub async fn lsp_did_close(
 
 #[tauri::command]
 pub async fn lsp_definition(
-    workspace_root: String, file_path: String, line: usize, column: usize, word: String,
+    workspace_root: String,
+    file_path: String,
+    line: usize,
+    column: usize,
+    word: String,
     state: tauri::State<'_, Arc<LspState>>,
 ) -> Result<LspJumpResult, String> {
     // lang 识别不出 → Ok+空（前端 fallback codegraph，与今天同）。
     let lang = lang_from_ext_of(&file_path);
     let Some(lang_id) = lang else {
-        return Ok(LspJumpResult { status: JumpStatus::Ok, results: vec![] });
+        return Ok(LspJumpResult {
+            status: JumpStatus::Ok,
+            results: vec![],
+        });
     };
     let mgr = state.0.lock().await;
     // server 未起/失败 → NotReady（前端显示「未就绪」并 auto-fallback codegraph）。
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-        return Ok(LspJumpResult { status: JumpStatus::NotReady, results: vec![] });
+        return Ok(LspJumpResult {
+            status: JumpStatus::NotReady,
+            results: vec![],
+        });
     };
     let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
     let params = serde_json::json!({
         "textDocument":{"uri":uri},
         "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
     });
-    let outcome = h.request("textDocument/definition", params, crate::lsp::manager::DEFINITION_TIMEOUT).await?;
+    let outcome = h
+        .request(
+            "textDocument/definition",
+            params,
+            crate::lsp::manager::DEFINITION_TIMEOUT,
+        )
+        .await?;
     let (status, value) = match outcome {
         crate::lsp::manager::RequestOutcome::Ok(v) => (JumpStatus::Ok, v),
-        crate::lsp::manager::RequestOutcome::Timeout => (JumpStatus::Timeout, serde_json::Value::Null),
-        crate::lsp::manager::RequestOutcome::NotReady => (JumpStatus::NotReady, serde_json::Value::Null),
-        crate::lsp::manager::RequestOutcome::ServerGone => (JumpStatus::Gone, serde_json::Value::Null),
+        crate::lsp::manager::RequestOutcome::Timeout => {
+            (JumpStatus::Timeout, serde_json::Value::Null)
+        }
+        crate::lsp::manager::RequestOutcome::NotReady => {
+            (JumpStatus::NotReady, serde_json::Value::Null)
+        }
+        crate::lsp::manager::RequestOutcome::ServerGone => {
+            (JumpStatus::Gone, serde_json::Value::Null)
+        }
     };
     // Ok+空数组 = server 确认无结果（status=Ok, results 空）→ 前端据 status=ok 走 codegraph fallback；
     // 非 Ok → results 恒空，前端据 status 决定（timeout 等/重试，not_ready/gone fallback）。
@@ -219,99 +297,181 @@ pub async fn lsp_definition(
 
 #[tauri::command]
 pub async fn lsp_completion(
-    workspace_root: String, file_path: String, line: usize, column: usize,
+    workspace_root: String,
+    file_path: String,
+    line: usize,
+    column: usize,
     state: tauri::State<'_, Arc<LspState>>,
 ) -> Result<Vec<CmCompletion>, String> {
-    let Some(lang_id) = lang_from_ext_of(&file_path) else { return Ok(vec![]); };
+    let Some(lang_id) = lang_from_ext_of(&file_path) else {
+        return Ok(vec![]);
+    };
     let mgr = state.0.lock().await;
-    let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(vec![]); };
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(vec![]);
+    };
     let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
     let params = serde_json::json!({
         "textDocument":{"uri":uri},
         "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
     });
-    let outcome = h.request("textDocument/completion", params, crate::lsp::manager::REQUEST_TIMEOUT).await?;
+    let outcome = h
+        .request(
+            "textDocument/completion",
+            params,
+            crate::lsp::manager::REQUEST_TIMEOUT,
+        )
+        .await?;
     // 向后兼容：非 Ok（timeout/notready/gone）映射 Null，parse 返空 = 旧行为；status 暂不透传。
-    let result = match outcome { crate::lsp::manager::RequestOutcome::Ok(v) => v, _ => serde_json::Value::Null };
+    let result = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        _ => serde_json::Value::Null,
+    };
     let items = parse_completion_items(&result);
     Ok(crate::lsp::protocol::completion_items_to_cm(&items))
 }
 
 #[tauri::command]
 pub async fn lsp_hover(
-    workspace_root: String, file_path: String, line: usize, column: usize,
+    workspace_root: String,
+    file_path: String,
+    line: usize,
+    column: usize,
     state: tauri::State<'_, Arc<LspState>>,
 ) -> Result<serde_json::Value, String> {
-    let Some(lang_id) = lang_from_ext_of(&file_path) else { return Ok(serde_json::json!({"content":null})); };
+    let Some(lang_id) = lang_from_ext_of(&file_path) else {
+        return Ok(serde_json::json!({"content":null}));
+    };
     let mgr = state.0.lock().await;
-    let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(serde_json::json!({"content":null})); };
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(serde_json::json!({"content":null}));
+    };
     let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
     let params = serde_json::json!({
         "textDocument":{"uri":uri},
         "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
     });
-    let outcome = h.request("textDocument/hover", params, crate::lsp::manager::REQUEST_TIMEOUT).await?;
-    let result = match outcome { crate::lsp::manager::RequestOutcome::Ok(v) => v, _ => serde_json::Value::Null };
+    let outcome = h
+        .request(
+            "textDocument/hover",
+            params,
+            crate::lsp::manager::REQUEST_TIMEOUT,
+        )
+        .await?;
+    let result = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        _ => serde_json::Value::Null,
+    };
     let content = parse_hover_content(&result);
     {
-        let raw: String = serde_json::to_string(&result).unwrap_or_default().chars().take(400).collect();
-        eprintln!("[hover] rust raw(400)={} content_some={}", raw, content.is_some());
+        let raw: String = serde_json::to_string(&result)
+            .unwrap_or_default()
+            .chars()
+            .take(400)
+            .collect();
+        eprintln!(
+            "[hover] rust raw(400)={} content_some={}",
+            raw,
+            content.is_some()
+        );
     }
     Ok(serde_json::json!({"content":content}))
 }
 
 #[tauri::command]
 pub async fn lsp_implementation(
-    workspace_root: String, file_path: String, line: usize, column: usize, word: String,
+    workspace_root: String,
+    file_path: String,
+    line: usize,
+    column: usize,
+    word: String,
     state: tauri::State<'_, Arc<LspState>>,
 ) -> Result<Vec<crate::codegraph::types::QueryResult>, String> {
     // 与 lsp_definition 同构，仅 method 换为 textDocument/implementation（父→子）。
     // 返回 Location[] → 归一为 QueryResult[]；前端据此挂向下箭头，并反推向上箭头。
     let lang = lang_from_ext_of(&file_path);
-    let Some(lang_id) = lang else { return Ok(vec![]); };
+    let Some(lang_id) = lang else {
+        return Ok(vec![]);
+    };
     let mgr = state.0.lock().await;
-    let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(vec![]); };
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(vec![]);
+    };
     let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
     let params = serde_json::json!({
         "textDocument":{"uri":uri},
         "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
     });
-    let outcome = h.request("textDocument/implementation", params, crate::lsp::manager::REQUEST_TIMEOUT).await?;
-    let result = match outcome { crate::lsp::manager::RequestOutcome::Ok(v) => v, _ => serde_json::Value::Null };
+    let outcome = h
+        .request(
+            "textDocument/implementation",
+            params,
+            crate::lsp::manager::REQUEST_TIMEOUT,
+        )
+        .await?;
+    let result = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        _ => serde_json::Value::Null,
+    };
     let locs = parse_locations(&result);
-    Ok(crate::lsp::protocol::locations_to_query_results(&locs, &word, &workspace_root))
+    Ok(crate::lsp::protocol::locations_to_query_results(
+        &locs,
+        &word,
+        &workspace_root,
+    ))
 }
 
 #[tauri::command]
 pub async fn lsp_document_symbol(
-    workspace_root: String, file_path: String,
+    workspace_root: String,
+    file_path: String,
     state: tauri::State<'_, Arc<LspState>>,
 ) -> Result<Vec<crate::lsp::protocol::DocumentSymbolItem>, String> {
     // 枚举文档声明符号（Class/Interface/Method/Function...），供前端筛可视区声明查 implementation。
     // 客户端已声明 hierarchicalSupport → server 多返 DocumentSymbol[]（带 children）；
     // 解析器兼容 SymbolInformation[]（扁平，有 location）兜底。
-    let Some(lang_id) = lang_from_ext_of(&file_path) else { return Ok(vec![]); };
+    let Some(lang_id) = lang_from_ext_of(&file_path) else {
+        return Ok(vec![]);
+    };
     let mgr = state.0.lock().await;
-    let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(vec![]); };
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(vec![]);
+    };
     let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
     let params = serde_json::json!({ "textDocument":{"uri":uri} });
-    let outcome = h.request("textDocument/documentSymbol", params, crate::lsp::manager::REQUEST_TIMEOUT).await?;
-    let result = match outcome { crate::lsp::manager::RequestOutcome::Ok(v) => v, _ => serde_json::Value::Null };
+    let outcome = h
+        .request(
+            "textDocument/documentSymbol",
+            params,
+            crate::lsp::manager::REQUEST_TIMEOUT,
+        )
+        .await?;
+    let result = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        _ => serde_json::Value::Null,
+    };
     Ok(parse_document_symbols(&result))
 }
 
 #[tauri::command]
 pub async fn lsp_capabilities(
-    workspace_root: String, lang: String,
+    workspace_root: String,
+    lang: String,
     state: tauri::State<'_, Arc<LspState>>,
 ) -> Result<crate::lsp::protocol::LspCapabilities, String> {
     // 按语言查 server 的可选能力开关。server 未启动 → 默认全 false（前端据 isLspOn + caps
     // 决定是否启用 gutter 标记；server 后续就绪时 watch 会 reconfigure）。
-    let Some(lang_id) = lang_from_id_str(&lang) else { return Ok(Default::default()); };
+    let Some(lang_id) = lang_from_id_str(&lang) else {
+        return Ok(Default::default());
+    };
     let mgr = state.0.lock().await;
-    let Some(h) = mgr.get(&workspace_root, lang_id).await else { return Ok(Default::default()); };
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(Default::default());
+    };
     let caps = h.capabilities.lock().await;
-    Ok(crate::lsp::protocol::LspCapabilities::from_caps(caps.as_ref()))
+    Ok(crate::lsp::protocol::LspCapabilities::from_caps(
+        caps.as_ref(),
+    ))
 }
 
 #[tauri::command]
@@ -321,7 +481,11 @@ pub async fn lsp_shutdown_workspace(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     state.0.lock().await.kill_workspace(&workspace_root).await;
-    let _ = tauri::Emitter::emit(&app, "lsp-diagnostics", serde_json::json!({"workspaceRoot":workspace_root,"clear":true}));
+    let _ = tauri::Emitter::emit(
+        &app,
+        "lsp-diagnostics",
+        serde_json::json!({"workspaceRoot":workspace_root,"clear":true}),
+    );
     Ok(())
 }
 
@@ -337,11 +501,15 @@ pub fn open_lsp_install_guide(app: tauri::AppHandle) -> Result<(), String> {
         html
     } else {
         // dev：bundle resources 不拷进 resource_dir（打包才生效），回落源码目录
-        let dev = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/lsp-install-guide.html");
+        let dev = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/lsp-install-guide.html");
         if dev.exists() {
             dev
         } else {
-            return Err(format!("lsp-install-guide.html not found (release: {:?}, dev: {:?})", html, dev));
+            return Err(format!(
+                "lsp-install-guide.html not found (release: {:?}, dev: {:?})",
+                html, dev
+            ));
         }
     };
     // Windows 上 resource_dir 是 \\?\ verbatim 路径，传给外部进程前必须 dunce 剥前缀（CLAUDE.md 红线）
@@ -353,7 +521,8 @@ pub fn open_lsp_install_guide(app: tauri::AppHandle) -> Result<(), String> {
         // start 的第一个引号参数是窗口标题（空串），路径带空格也没问题
         cmd.arg("/C").arg("start").arg("").arg(&html);
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW：不弹控制台
-        cmd.spawn().map_err(|e| format!("Failed to open guide: {e}"))?;
+        cmd.spawn()
+            .map_err(|e| format!("Failed to open guide: {e}"))?;
     }
     #[cfg(target_os = "macos")]
     {
@@ -381,11 +550,18 @@ fn lang_from_ext_of(file_path: &str) -> Option<crate::lsp::detector::LanguageId>
 
 fn parse_locations(result: &serde_json::Value) -> Vec<lsp_types::Location> {
     use lsp_types::Location;
-    if result.is_null() { return vec![]; }
+    if result.is_null() {
+        return vec![];
+    }
     if let Some(arr) = result.as_array() {
-        arr.iter().filter_map(|v| serde_json::from_value::<Location>(v.clone()).ok()).collect()
+        arr.iter()
+            .filter_map(|v| serde_json::from_value::<Location>(v.clone()).ok())
+            .collect()
     } else {
-        serde_json::from_value::<Location>(result.clone()).ok().into_iter().collect()
+        serde_json::from_value::<Location>(result.clone())
+            .ok()
+            .into_iter()
+            .collect()
     }
 }
 
@@ -394,8 +570,12 @@ fn parse_locations(result: &serde_json::Value) -> Vec<lsp_types::Location> {
 /// - SymbolInformation（有 location）→ 用 location.range.start
 /// 不依赖 lsp_types::DocumentSymbol（其 SymbolKind newtype 内部私有，as u32 不便），
 /// 直接按 JSON 字段取，规避类型摩擦。
-fn parse_document_symbols(result: &serde_json::Value) -> Vec<crate::lsp::protocol::DocumentSymbolItem> {
-    let Some(arr) = result.as_array() else { return vec![]; };
+fn parse_document_symbols(
+    result: &serde_json::Value,
+) -> Vec<crate::lsp::protocol::DocumentSymbolItem> {
+    let Some(arr) = result.as_array() else {
+        return vec![];
+    };
     let mut out = Vec::new();
     for item in arr {
         flatten_symbol(item, &mut out);
@@ -403,21 +583,32 @@ fn parse_document_symbols(result: &serde_json::Value) -> Vec<crate::lsp::protoco
     out
 }
 
-fn flatten_symbol(item: &serde_json::Value, out: &mut Vec<crate::lsp::protocol::DocumentSymbolItem>) {
-    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+fn flatten_symbol(
+    item: &serde_json::Value,
+    out: &mut Vec<crate::lsp::protocol::DocumentSymbolItem>,
+) {
+    let name = item
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let kind = item.get("kind").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     // DocumentSymbol 用 selectionRange.start；SymbolInformation 用 location.range.start
     let start = item
         .get("selectionRange")
         .and_then(|sr| sr.get("start"))
-        .or_else(|| item.get("location").and_then(|l| l.get("range")).and_then(|r| r.get("start")));
+        .or_else(|| {
+            item.get("location")
+                .and_then(|l| l.get("range"))
+                .and_then(|r| r.get("start"))
+        });
     if let Some(start) = start {
         let line = start.get("line").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let column = start.get("character").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         out.push(crate::lsp::protocol::DocumentSymbolItem {
             name,
             kind,
-            line: line + 1,   // LSP 0-based → 1-based
+            line: line + 1, // LSP 0-based → 1-based
             column: column + 1,
         });
     }
@@ -430,10 +621,16 @@ fn flatten_symbol(item: &serde_json::Value, out: &mut Vec<crate::lsp::protocol::
 
 fn parse_completion_items(result: &serde_json::Value) -> Vec<lsp_types::CompletionItem> {
     if let Some(arr) = result.get("items").and_then(|v| v.as_array()) {
-        arr.iter().filter_map(|v| serde_json::from_value::<lsp_types::CompletionItem>(v.clone()).ok()).collect()
+        arr.iter()
+            .filter_map(|v| serde_json::from_value::<lsp_types::CompletionItem>(v.clone()).ok())
+            .collect()
     } else if let Some(arr) = result.as_array() {
-        arr.iter().filter_map(|v| serde_json::from_value::<lsp_types::CompletionItem>(v.clone()).ok()).collect()
-    } else { vec![] }
+        arr.iter()
+            .filter_map(|v| serde_json::from_value::<lsp_types::CompletionItem>(v.clone()).ok())
+            .collect()
+    } else {
+        vec![]
+    }
 }
 
 fn parse_hover_content(result: &serde_json::Value) -> Option<String> {
@@ -444,11 +641,21 @@ fn parse_hover_content(result: &serde_json::Value) -> Option<String> {
         arr if arr.is_array() => {
             // MarkedString[]（LSP 旧格式，jdtls 某些场景仍用）：元素是 string 或
             // {language, value}，拼成多段。MarkupContent（{kind,value}）走上面的 object 分支。
-            let parts: Vec<String> = arr.as_array().unwrap().iter().filter_map(|el| {
-                el.as_str().map(String::from)
-                    .or_else(|| el.get("value").and_then(|v| v.as_str()).map(String::from))
-            }).collect();
-            if parts.is_empty() { None } else { Some(parts.join("\n\n")) }
+            let parts: Vec<String> = arr
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|el| {
+                    el.as_str()
+                        .map(String::from)
+                        .or_else(|| el.get("value").and_then(|v| v.as_str()).map(String::from))
+                })
+                .collect();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n\n"))
+            }
         }
         _ => None,
     }
@@ -463,13 +670,16 @@ mod tests {
 
     #[test]
     fn lsp_location_to_query_result_via_protocol() {
-        let locs = vec![serde_json::from_value::<lsp_types::Location>(serde_json::json!({
-            "uri": "file:///C:/p/x.rs",
-            "range": {
-                "start": { "line": 3, "character": 5 },
-                "end":   { "line": 3, "character": 8 },
-            }
-        })).unwrap()];
+        let locs = vec![
+            serde_json::from_value::<lsp_types::Location>(serde_json::json!({
+                "uri": "file:///C:/p/x.rs",
+                "range": {
+                    "start": { "line": 3, "character": 5 },
+                    "end":   { "line": 3, "character": 8 },
+                }
+            }))
+            .unwrap(),
+        ];
         let r = crate::lsp::protocol::locations_to_query_results(&locs, "foo", "C:/p");
         assert_eq!(r[0].symbol.name, "foo");
         assert_eq!(r[0].symbol.line, 4);
@@ -498,11 +708,11 @@ mod tests {
         assert_eq!(items.len(), 2); // Foo + bar（children 扁平化）
         assert_eq!(items[0].name, "Foo");
         assert_eq!(items[0].kind, 5);
-        assert_eq!(items[0].line, 1);    // line 0 → 1-based 1
-        assert_eq!(items[0].column, 7);  // character 6 → 7
+        assert_eq!(items[0].line, 1); // line 0 → 1-based 1
+        assert_eq!(items[0].column, 7); // character 6 → 7
         assert_eq!(items[1].name, "bar");
         assert_eq!(items[1].kind, 6);
-        assert_eq!(items[1].line, 3);    // line 2 → 3
+        assert_eq!(items[1].line, 3); // line 2 → 3
 
         // SymbolInformation[]（扁平，有 location）→ 用 location.range.start
         let si = serde_json::json!([
@@ -514,7 +724,7 @@ mod tests {
         assert_eq!(items2.len(), 1);
         assert_eq!(items2[0].name, "baz");
         assert_eq!(items2[0].kind, 11);
-        assert_eq!(items2[0].line, 6);   // line 5 → 6
+        assert_eq!(items2[0].line, 6); // line 5 → 6
 
         // null / 空数组 → 空
         assert!(parse_document_symbols(&serde_json::json!(null)).is_empty());
@@ -531,19 +741,26 @@ mod tests {
         let c = parse_hover_content(&arr).unwrap();
         assert!(c.contains("public void foo()") && c.contains("plain"));
         // 纯字符串
-        assert_eq!(parse_hover_content(&serde_json::json!({"contents":"hi"})).as_deref(), Some("hi"));
+        assert_eq!(
+            parse_hover_content(&serde_json::json!({"contents":"hi"})).as_deref(),
+            Some("hi")
+        );
         // null / 缺 contents → None
         assert_eq!(parse_hover_content(&serde_json::Value::Null), None);
         assert_eq!(parse_hover_content(&serde_json::json!({"nope":1})), None);
         // 空数组 → None
-        assert_eq!(parse_hover_content(&serde_json::json!({"contents":[]})), None);
+        assert_eq!(
+            parse_hover_content(&serde_json::json!({"contents":[]})),
+            None
+        );
     }
 
     #[tokio::test]
     async fn mock_end_to_end_definition() {
         let mock = crate::lsp::mock_server::spawn_mock_lsp();
         let transport = crate::lsp::transport::LspTransport::with_reader_source(
-            mock.transport_stdin, mock.transport_stdout,
+            mock.transport_stdin,
+            mock.transport_stdout,
         );
         let router = crate::lsp::rpc::Router::new();
         let table = transport.table_handle();
@@ -556,15 +773,22 @@ mod tests {
         }));
         table.lock().await.insert(id, tx);
         transport.send(&msg).await.unwrap();
-        let init = pump_until(&mut reader, &mut framer, &table_r, rx).await.unwrap();
+        let init = pump_until(&mut reader, &mut framer, &table_r, rx)
+            .await
+            .unwrap();
         let _ = init;
         // definition
-        let (msg, id, tx, rx) = router.next_request("textDocument/definition", serde_json::json!({
-            "textDocument":{"uri":"file:///mock/main.rs"},"position":{"line":0,"character":0}
-        }));
+        let (msg, id, tx, rx) = router.next_request(
+            "textDocument/definition",
+            serde_json::json!({
+                "textDocument":{"uri":"file:///mock/main.rs"},"position":{"line":0,"character":0}
+            }),
+        );
         table.lock().await.insert(id, tx);
         transport.send(&msg).await.unwrap();
-        let result = pump_until(&mut reader, &mut framer, &table_r, rx).await.unwrap();
+        let result = pump_until(&mut reader, &mut framer, &table_r, rx)
+            .await
+            .unwrap();
         let locs = parse_locations(&result);
         assert_eq!(locs.len(), 1);
         let qr = crate::lsp::protocol::locations_to_query_results(&locs, "sym", "/mock");
@@ -600,8 +824,17 @@ mod tests {
     fn jump_status_serializes_snake_case() {
         // 前端按字符串字面量分流（"ok"/"timeout"/"not_ready"/"gone"），snake_case 必须稳定。
         assert_eq!(serde_json::to_string(&JumpStatus::Ok).unwrap(), "\"ok\"");
-        assert_eq!(serde_json::to_string(&JumpStatus::Timeout).unwrap(), "\"timeout\"");
-        assert_eq!(serde_json::to_string(&JumpStatus::NotReady).unwrap(), "\"not_ready\"");
-        assert_eq!(serde_json::to_string(&JumpStatus::Gone).unwrap(), "\"gone\"");
+        assert_eq!(
+            serde_json::to_string(&JumpStatus::Timeout).unwrap(),
+            "\"timeout\""
+        );
+        assert_eq!(
+            serde_json::to_string(&JumpStatus::NotReady).unwrap(),
+            "\"not_ready\""
+        );
+        assert_eq!(
+            serde_json::to_string(&JumpStatus::Gone).unwrap(),
+            "\"gone\""
+        );
     }
 }

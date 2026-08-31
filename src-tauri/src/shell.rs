@@ -1,4 +1,4 @@
-use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -82,15 +82,26 @@ impl ShellManager {
         // Kill existing PTY for this session if any.
         self.kill_session(params.session_id);
 
-        let OpenedPty { master, writer, reader, child, killer, output_buffer } =
-            open_pty(params.cmd, params.size, params.label)?;
+        let OpenedPty {
+            master,
+            writer,
+            reader,
+            child,
+            killer,
+            output_buffer,
+        } = open_pty(params.cmd, params.size, params.label)?;
 
         let (writer_tx, writer_rx) = mpsc::sync_channel::<String>(WRITE_QUEUE_CAP);
         {
             let mut sessions = self.sessions.lock().map_err(|e| e.to_string())?;
             sessions.insert(
                 params.session_id.to_string(),
-                ShellSession { master, writer_tx, killer, output_buffer: output_buffer.clone() },
+                ShellSession {
+                    master,
+                    writer_tx,
+                    killer,
+                    output_buffer: output_buffer.clone(),
+                },
             );
         }
 
@@ -126,7 +137,12 @@ impl ShellManager {
             session_id,
             cmd,
             label: program,
-            size: PtySize { rows, cols, pixel_width: 0, pixel_height: 0 },
+            size: PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
             app_handle,
             payload_kind: ExitPayload::Plain,
         })
@@ -159,10 +175,8 @@ impl ShellManager {
             vec!["/c".into(), format!("chcp 65001 >nul & {}", command)],
         );
         #[cfg(not(target_os = "windows"))]
-        let (shell_bin, shell_args): (String, Vec<String>) = (
-            "/bin/sh".into(),
-            vec!["-c".into(), command.into()],
-        );
+        let (shell_bin, shell_args): (String, Vec<String>) =
+            ("/bin/sh".into(), vec!["-c".into(), command.into()]);
 
         let mut cmd = CommandBuilder::new(&shell_bin);
         cmd.args(&shell_args);
@@ -184,7 +198,12 @@ impl ShellManager {
             session_id,
             cmd,
             label: command,
-            size: PtySize { rows, cols, pixel_width: 0, pixel_height: 0 },
+            size: PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
             app_handle,
             payload_kind: ExitPayload::Run,
         })
@@ -196,7 +215,12 @@ impl ShellManager {
         if let Some(session) = sessions.get(session_id) {
             session
                 .master
-                .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+                .resize(PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
                 .map_err(|e| format!("Resize failed: {}", e))?;
         }
         Ok(())
@@ -260,10 +284,21 @@ fn open_pty(cmd: CommandBuilder, size: PtySize, label: &str) -> Result<OpenedPty
 
     let killer = Arc::new(Mutex::new(child.clone_killer()));
     let master = pty_pair.master;
-    let writer = master.take_writer().map_err(|e| format!("Failed to take writer: {}", e))?;
-    let reader = master.try_clone_reader().map_err(|e| format!("Failed to clone reader: {}", e))?;
+    let writer = master
+        .take_writer()
+        .map_err(|e| format!("Failed to take writer: {}", e))?;
+    let reader = master
+        .try_clone_reader()
+        .map_err(|e| format!("Failed to clone reader: {}", e))?;
     let output_buffer = Arc::new(Mutex::new(String::new()));
-    Ok(OpenedPty { master, writer, reader, child, killer, output_buffer })
+    Ok(OpenedPty {
+        master,
+        writer,
+        reader,
+        child,
+        killer,
+        output_buffer,
+    })
 }
 
 /// Reader 线程——把 PTY 输出追加进共享缓冲，前端经 `poll_pty_output` 轮询。
@@ -299,7 +334,13 @@ fn spawn_writer(mut writer: Box<dyn Write + Send>, writer_rx: Receiver<String>) 
 /// 退出后从注册表移除会话，并 emit `pty-exit`（Plain 或 Run 载荷）。
 fn spawn_waiter(job: WaiterJob) {
     thread::spawn(move || {
-        let WaiterJob { mut child, sessions, sid, app_handle, payload_kind } = job;
+        let WaiterJob {
+            mut child,
+            sessions,
+            sid,
+            app_handle,
+            payload_kind,
+        } = job;
         let success = child.wait().ok().map(|s| s.success()).unwrap_or(false);
 
         if let Ok(mut map) = sessions.lock() {
@@ -335,20 +376,29 @@ mod tests {
         // 用 PathBuf 计算期望值，使断言与平台实际分隔符一致（Windows `\`）
         let bin = PathBuf::from("C:\\jdks\\jdk-21").join("bin");
         let expected = format!("{};{}", bin.display(), "C:\\Windows;C:\\other");
-        assert_eq!(prepend_java_bin_to_path("C:\\jdks\\jdk-21", "C:\\Windows;C:\\other", ";"), expected);
+        assert_eq!(
+            prepend_java_bin_to_path("C:\\jdks\\jdk-21", "C:\\Windows;C:\\other", ";"),
+            expected
+        );
     }
 
     #[test]
     fn prepend_java_bin_to_path_unix_sep() {
         let bin = PathBuf::from("/jdks/jdk-21").join("bin");
         let expected = format!("{}:{}", bin.display(), "/usr/bin:/bin");
-        assert_eq!(prepend_java_bin_to_path("/jdks/jdk-21", "/usr/bin:/bin", ":"), expected);
+        assert_eq!(
+            prepend_java_bin_to_path("/jdks/jdk-21", "/usr/bin:/bin", ":"),
+            expected
+        );
     }
 
     #[test]
     fn prepend_java_bin_to_path_empty_current() {
         // 空现有 PATH 时不能留尾随分隔符
         let bin = PathBuf::from("/jdks/jdk-8").join("bin");
-        assert_eq!(prepend_java_bin_to_path("/jdks/jdk-8", "", ":"), bin.display().to_string());
+        assert_eq!(
+            prepend_java_bin_to_path("/jdks/jdk-8", "", ":"),
+            bin.display().to_string()
+        );
     }
 }

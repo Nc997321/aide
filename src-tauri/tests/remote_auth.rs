@@ -1,4 +1,4 @@
-use aide::remote::auth::{PairingState, generate_token, generate_device_id};
+use aide::remote::auth::{generate_device_id, generate_token, PairingState};
 use std::time::{Duration, Instant};
 
 #[test]

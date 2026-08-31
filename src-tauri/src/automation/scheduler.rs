@@ -127,7 +127,10 @@ impl AutomationService {
     fn pending_fire(task: &AutomationTask, now: NaiveDateTime) -> Option<NaiveDateTime> {
         let anchor = schedule::parse_dt(&task.created_at).unwrap_or(now);
         let fire = schedule::last_scheduled_fire(&task.schedule, anchor, now)?;
-        let last_run = task.last_run_at.as_deref().and_then(|s| schedule::parse_dt(s).ok());
+        let last_run = task
+            .last_run_at
+            .as_deref()
+            .and_then(|s| schedule::parse_dt(s).ok());
         match last_run {
             Some(lr) if fire <= lr => None,
             _ => Some(fire),
@@ -142,7 +145,13 @@ impl AutomationService {
             tasks
                 .values()
                 .filter(|t| t.enabled)
-                .filter(|t| schedule::in_valid_range(t.valid_from.as_deref(), t.valid_to.as_deref(), now.date()))
+                .filter(|t| {
+                    schedule::in_valid_range(
+                        t.valid_from.as_deref(),
+                        t.valid_to.as_deref(),
+                        now.date(),
+                    )
+                })
                 .filter(|t| Self::pending_fire(t, now).is_some())
                 .map(|t| t.id.clone())
                 .collect()
@@ -169,12 +178,20 @@ impl AutomationService {
             // 记录会把卡住的 running 压在下面漏收（2026-08-22 实锤：手动运行卡住后
             // tick 补了条 skipped 在最上面，重启自愈看最新一条=skipped 直接跳过）。
             // 若此刻该任务已有活跃运行（启动后 5s 内用户点了「立即运行」），不能误收。
-            if self.active_runs.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&id) {
+            if self
+                .active_runs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&id)
+            {
                 continue;
             }
             let mut healed = false;
             if let Ok(recent) = super::list_runs(&id, 50) {
-                for r in recent.into_iter().filter(|r| r.status == RunStatus::Running) {
+                for r in recent
+                    .into_iter()
+                    .filter(|r| r.status == RunStatus::Running)
+                {
                     let mut fixed = r;
                     fixed.status = RunStatus::Failed;
                     fixed.finished_at = Some(schedule::fmt_dt(now));
@@ -207,17 +224,29 @@ impl AutomationService {
                 }
             }
             // ② missed-run 策略
-            let Ok(task) = self.get_task(&id) else { continue };
+            let Ok(task) = self.get_task(&id) else {
+                continue;
+            };
             if !task.enabled {
                 continue;
             }
-            if !schedule::in_valid_range(task.valid_from.as_deref(), task.valid_to.as_deref(), now.date()) {
+            if !schedule::in_valid_range(
+                task.valid_from.as_deref(),
+                task.valid_to.as_deref(),
+                now.date(),
+            ) {
                 continue;
             }
-            let Some(fire) = Self::pending_fire(&task, now) else { continue };
+            let Some(fire) = Self::pending_fire(&task, now) else {
+                continue;
+            };
             match task.missed_policy {
                 MissedPolicy::Catchup => {
-                    tracing::info!("[automation] 启动补跑:「{}」错过的网格点 {}", task.name, schedule::fmt_dt(fire));
+                    tracing::info!(
+                        "[automation] 启动补跑:「{}」错过的网格点 {}",
+                        task.name,
+                        schedule::fmt_dt(fire)
+                    );
                     if let Err(e) = self.start_run(&id, RunTrigger::Catchup).await {
                         tracing::warn!("[automation] 补跑失败 {}: {}", id, e);
                     }
@@ -271,11 +300,17 @@ impl AutomationService {
             task.last_run_at = Some(schedule::fmt_dt(fire));
             // 有本体在跑时（overlap 场景）别把状态盖成 skipped——侧栏呼吸点会被
             // 误熄，本体的终态由它自己的 finalize 写
-            let has_active = self.active_runs.lock().unwrap_or_else(|e| e.into_inner()).contains_key(id);
+            let has_active = self
+                .active_runs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(id);
             if !has_active {
                 task.last_run_status = Some(RunStatus::Skipped);
             }
-            if let Err(e) = self.persist_task(&task) { tracing::warn!("{}", e); }
+            if let Err(e) = self.persist_task(&task) {
+                tracing::warn!("{}", e);
+            }
         }
     }
 
@@ -312,7 +347,10 @@ impl AutomationService {
             env.insert("ANTHROPIC_MODEL".into(), Value::String(task.model.clone()));
         }
         if !task.effort.is_empty() {
-            env.insert("CLAUDE_CODE_EFFORT_LEVEL".into(), Value::String(task.effort.clone()));
+            env.insert(
+                "CLAUDE_CODE_EFFORT_LEVEL".into(),
+                Value::String(task.effort.clone()),
+            );
         }
         serde_json::json!({
             "cmd": "send",
@@ -356,7 +394,11 @@ impl AutomationService {
     }
 
     /// 发起一次运行。manual 触发时正在运行 → Err；定时触发撞运行 → 记 skipped(overlap)。
-    pub async fn start_run(self: &Arc<Self>, task_id: &str, trigger: RunTrigger) -> Result<RunRecord, String> {
+    pub async fn start_run(
+        self: &Arc<Self>,
+        task_id: &str,
+        trigger: RunTrigger,
+    ) -> Result<RunRecord, String> {
         let now = Self::now_naive();
         let task = self.get_task(task_id)?;
 
@@ -460,7 +502,10 @@ impl AutomationService {
 
         let cmd = Self::build_send_command(&task, &run_id, &prompt, &cwd, trusted);
 
-        let app = self.app.get().ok_or("AutomationService 未启动（无 AppHandle）")?;
+        let app = self
+            .app
+            .get()
+            .ok_or("AutomationService 未启动（无 AppHandle）")?;
         let runtime = app
             .try_state::<crate::runtime::AgentRuntimeManager>()
             .ok_or("AgentRuntimeManager 未注册")?;
@@ -474,7 +519,10 @@ impl AutomationService {
                 &task.id,
                 &run_id,
                 RunStatus::Failed,
-                RunFinalize { error: Some(format!("发送运行命令失败: {e}")), ..Default::default() },
+                RunFinalize {
+                    error: Some(format!("发送运行命令失败: {e}")),
+                    ..Default::default()
+                },
             );
             return Err(e);
         }
@@ -482,13 +530,23 @@ impl AutomationService {
         self.active_runs
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(task.id.clone(), ActiveRun { run_id: run_id.clone(), sdk_session_id: None });
+            .insert(
+                task.id.clone(),
+                ActiveRun {
+                    run_id: run_id.clone(),
+                    sdk_session_id: None,
+                },
+            );
         self.by_session
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(
                 session_id,
-                SessionRoute { task_id: task.id.clone(), run_id: run_id.clone(), is_distill: false },
+                SessionRoute {
+                    task_id: task.id.clone(),
+                    run_id: run_id.clone(),
+                    is_distill: false,
+                },
             );
 
         // 单次任务：触发即停用（保留历史）。此刻 last_run_at 已消费掉唯一
@@ -509,10 +567,18 @@ impl AutomationService {
             "session_init" => {
                 // 坐实 SDK 真实会话 id（转录文件名/resume 目标都是它，run_id 只是
                 // 路由键）：更新运行记录的 session_id + 元数据文件改名。
-                let Some(sid) = event.get("session_id").and_then(|s| s.as_str()) else { return };
-                let Some(sdk_sid) = event.get("sdk_session_id").and_then(|s| s.as_str()) else { return };
+                let Some(sid) = event.get("session_id").and_then(|s| s.as_str()) else {
+                    return;
+                };
+                let Some(sdk_sid) = event.get("sdk_session_id").and_then(|s| s.as_str()) else {
+                    return;
+                };
                 let route = {
-                    self.by_session.lock().unwrap_or_else(|e| e.into_inner()).get(sid).cloned()
+                    self.by_session
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .get(sid)
+                        .cloned()
                 };
                 let Some(route) = route else { return };
                 // SessionManager 在 session_init 后把 worker 原子 re-key 成 SDK 真实 id
@@ -548,29 +614,52 @@ impl AutomationService {
                 });
             }
             "message_stop" | "error" => {
-                let Some(sid) = event.get("session_id").and_then(|s| s.as_str()) else { return };
+                let Some(sid) = event.get("session_id").and_then(|s| s.as_str()) else {
+                    return;
+                };
                 let route = {
-                    self.by_session.lock().unwrap_or_else(|e| e.into_inner()).get(sid).cloned()
+                    self.by_session
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .get(sid)
+                        .cloned()
                 };
                 let Some(route) = route else { return };
-                let (status, stop_reason, usage, rounds, cost, error) = if event_type == "message_stop" {
-                    let sr = event.get("stop_reason").and_then(|s| s.as_str()).unwrap_or("unknown");
+                let (status, stop_reason, usage, rounds, cost, error) = if event_type
+                    == "message_stop"
+                {
+                    let sr = event
+                        .get("stop_reason")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("unknown");
                     let usage = event.get("usage").map(|u| RunUsage {
                         input_tokens: u.get("inputTokens").and_then(|v| v.as_u64()).unwrap_or(0),
                         output_tokens: u.get("outputTokens").and_then(|v| v.as_u64()).unwrap_or(0),
-                        cache_read_tokens: u.get("cacheReadInputTokens").and_then(|v| v.as_u64()).unwrap_or(0),
+                        cache_read_tokens: u
+                            .get("cacheReadInputTokens")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0),
                         cache_creation_tokens: u
                             .get("cacheCreationInputTokens")
                             .and_then(|v| v.as_u64())
                             .unwrap_or(0),
                     });
-                    let rounds = event.pointer("/usage/apiCallCount").and_then(|v| v.as_u64());
+                    let rounds = event
+                        .pointer("/usage/apiCallCount")
+                        .and_then(|v| v.as_u64());
                     let cost = event
                         .get("total_cost_usd")
                         .and_then(|v| v.as_f64())
                         .or_else(|| event.pointer("/usage/costUsd").and_then(|v| v.as_f64()));
                     if sr == "end_turn" {
-                        (RunStatus::Succeeded, Some(sr.to_string()), usage, rounds, cost, None)
+                        (
+                            RunStatus::Succeeded,
+                            Some(sr.to_string()),
+                            usage,
+                            rounds,
+                            cost,
+                            None,
+                        )
                     } else {
                         (
                             RunStatus::Failed,
@@ -605,7 +694,13 @@ impl AutomationService {
                         &task_id,
                         &run_id,
                         status,
-                        RunFinalize { stop_reason, usage, rounds, cost_usd: cost, error },
+                        RunFinalize {
+                            stop_reason,
+                            usage,
+                            rounds,
+                            cost_usd: cost,
+                            error,
+                        },
                     );
                 });
             }
@@ -637,7 +732,10 @@ impl AutomationService {
                                 &route.task_id,
                                 &route.run_id,
                                 RunStatus::Failed,
-                                RunFinalize { error: Some(format!("runtime 进程退出（{reason}）")), ..Default::default() },
+                                RunFinalize {
+                                    error: Some(format!("runtime 进程退出（{reason}）")),
+                                    ..Default::default()
+                                },
                             );
                         }
                     }
@@ -658,7 +756,11 @@ impl AutomationService {
             if run.session_id != sdk_sid {
                 run.session_id = sdk_sid.to_string();
                 if let Err(e) = super::update_run(task_id, &run) {
-                    tracing::warn!("[automation] 过户运行记录 sessionId 失败 {}: {}", task_id, e);
+                    tracing::warn!(
+                        "[automation] 过户运行记录 sessionId 失败 {}: {}",
+                        task_id,
+                        e
+                    );
                 }
             }
         }
@@ -670,7 +772,8 @@ impl AutomationService {
             return;
         }
         if let Ok(content) = std::fs::read_to_string(&old) {
-            let mut v: Value = serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}));
+            let mut v: Value =
+                serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}));
             v["id"] = Value::String(sdk_sid.to_string());
             if let Ok(body) = serde_json::to_string_pretty(&v) {
                 if std::fs::write(&new, body).is_ok() {
@@ -684,7 +787,9 @@ impl AutomationService {
     /// 运行本体的元数据在 start_run 里预写（这份是同一形状的孪生）；fork 蒸馏轮的
     /// SDK id 要到 session_init 才知道，只能在这里补。
     fn write_automation_session_meta(&self, task_id: &str, sdk_sid: &str, suffix: &str) {
-        let Ok(task) = self.get_task(task_id) else { return };
+        let Ok(task) = self.get_task(task_id) else {
+            return;
+        };
         let meta = serde_json::json!({
             "id": sdk_sid,
             "name": format!("{} · {}", task.name, suffix),
@@ -716,8 +821,12 @@ impl AutomationService {
         outcome: RunFinalize,
     ) {
         self.detach_routes(task_id);
-        let Ok(task) = self.get_task(task_id) else { return };
-        let Some(run) = Self::load_run(task_id, run_id) else { return };
+        let Ok(task) = self.get_task(task_id) else {
+            return;
+        };
+        let Some(run) = Self::load_run(task_id, run_id) else {
+            return;
+        };
         let run = self.apply_outcome(task_id, &task, run, status, &outcome);
         Self::notify_if_needed(&task, &run, status, &outcome);
         self.emit_finished(task_id, run_id, status);
@@ -726,7 +835,10 @@ impl AutomationService {
 
     /// 活跃表摘除（幂等关键）；路由只摘运行本体的（蒸馏路由独立生命周期）。
     fn detach_routes(&self, task_id: &str) {
-        self.active_runs.lock().unwrap_or_else(|e| e.into_inner()).remove(task_id);
+        self.active_runs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(task_id);
         let mut guard = self.by_session.lock().unwrap_or_else(|e| e.into_inner());
         guard.retain(|_, r| !(r.task_id == task_id && !r.is_distill));
     }
@@ -770,7 +882,12 @@ impl AutomationService {
     }
 
     /// 成功/失败按任务开关发系统通知。
-    fn notify_if_needed(task: &AutomationTask, run: &RunRecord, status: RunStatus, outcome: &RunFinalize) {
+    fn notify_if_needed(
+        task: &AutomationTask,
+        run: &RunRecord,
+        status: RunStatus,
+        outcome: &RunFinalize,
+    ) {
         let should_notify = match status {
             RunStatus::Succeeded => task.notify_success,
             RunStatus::Failed => task.notify_failure,
@@ -782,7 +899,11 @@ impl AutomationService {
         let title = format!(
             "自动化「{}」{}",
             task.name,
-            if status == RunStatus::Succeeded { "已完成" } else { "失败" }
+            if status == RunStatus::Succeeded {
+                "已完成"
+            } else {
+                "失败"
+            }
         );
         let body = match status {
             RunStatus::Succeeded => {
@@ -832,7 +953,9 @@ impl AutomationService {
 
     /// 蒸馏条件：运行成功 + 开了手册开关 + 手册未就绪（NotYet 首跑 / Stale 重提炼）。
     fn should_distill(task: &AutomationTask, status: RunStatus) -> bool {
-        status == RunStatus::Succeeded && task.playbook_enabled && task.playbook_state != PlaybookState::Ready
+        status == RunStatus::Succeeded
+            && task.playbook_enabled
+            && task.playbook_state != PlaybookState::Ready
     }
 
     /// 蒸馏轮 prompt（纯函数，文案契约有单测）。核心约束：只文档化不执行；
@@ -858,7 +981,11 @@ impl AutomationService {
     /// 新 SDK 会话 id——若与运行会话同 id，worker re-key 后「关运行 tab 的
     /// session_stop / ESC interrupt」等命令会误杀蒸馏轮（2026-08-23 实锤）。
     /// 代价是蒸馏转录写到新 jsonl，不再与运行同文件。
-    async fn start_distill(self: &Arc<Self>, task: AutomationTask, run: RunRecord) -> Result<(), String> {
+    async fn start_distill(
+        self: &Arc<Self>,
+        task: AutomationTask,
+        run: RunRecord,
+    ) -> Result<(), String> {
         let distill_sid = format!("{}-d", run.run_id);
         let cwd = task
             .workspace_path
@@ -891,10 +1018,17 @@ impl AutomationService {
             .try_state::<crate::runtime::AgentRuntimeManager>()
             .ok_or("AgentRuntimeManager 未注册")?;
         // 先注册路由再发（send 返回后事件才可能到达，顺序安全）
-        self.by_session.lock().unwrap_or_else(|e| e.into_inner()).insert(
-            distill_sid.clone(),
-            SessionRoute { task_id: task.id.clone(), run_id: run.run_id.clone(), is_distill: true },
-        );
+        self.by_session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                distill_sid.clone(),
+                SessionRoute {
+                    task_id: task.id.clone(),
+                    run_id: run.run_id.clone(),
+                    is_distill: true,
+                },
+            );
         if let Err(e) = runtime.send_to_runtime(&cmd).await {
             self.by_session
                 .lock()
@@ -902,13 +1036,23 @@ impl AutomationService {
                 .remove(&distill_sid);
             return Err(format!("发送蒸馏命令失败: {e}"));
         }
-        tracing::info!("[automation] 蒸馏轮已发起：「{}」← resume {}", task.name, run.session_id);
+        tracing::info!(
+            "[automation] 蒸馏轮已发起：「{}」← resume {}",
+            task.name,
+            run.session_id
+        );
         Ok(())
     }
 
     /// 蒸馏轮终态收尾：回写蒸馏成本；成功且手册真的生成了 → playbook_state=Ready。
     /// 失败/没产出 → 状态不动（下次成功运行会重试）。
-    fn finalize_distill(self: &Arc<Self>, task_id: &str, run_id: &str, succeeded: bool, cost: Option<f64>) {
+    fn finalize_distill(
+        self: &Arc<Self>,
+        task_id: &str,
+        run_id: &str,
+        succeeded: bool,
+        cost: Option<f64>,
+    ) {
         self.by_session
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -931,7 +1075,11 @@ impl AutomationService {
             let playbook = super::playbook_path(task_id);
             let produced = playbook
                 .exists()
-                .then(|| std::fs::metadata(&playbook).map(|m| m.len() > 0).unwrap_or(false))
+                .then(|| {
+                    std::fs::metadata(&playbook)
+                        .map(|m| m.len() > 0)
+                        .unwrap_or(false)
+                })
                 .unwrap_or(false);
             if produced {
                 match self.set_playbook_state(task_id, PlaybookState::Ready) {
@@ -939,7 +1087,10 @@ impl AutomationService {
                     Err(e) => tracing::warn!("[automation] 手册状态写回失败: {}", e),
                 }
             } else {
-                tracing::warn!("[automation] 蒸馏轮结束但未产出 {}，保持现状下轮重试", playbook.display());
+                tracing::warn!(
+                    "[automation] 蒸馏轮结束但未产出 {}，保持现状下轮重试",
+                    playbook.display()
+                );
             }
         }
 
@@ -974,10 +1125,16 @@ impl AutomationService {
         if session_id.is_empty() {
             return None;
         }
-        let path = crate::commands::find_session_jsonl_globally(session_id).into_iter().next()?;
+        let path = crate::commands::find_session_jsonl_globally(session_id)
+            .into_iter()
+            .next()?;
         let text = crate::commands::session::last_jsonl_message(&path);
         let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        if collapsed.is_empty() { None } else { Some(collapsed) }
+        if collapsed.is_empty() {
+            None
+        } else {
+            Some(collapsed)
+        }
     }
 
     // ── CRUD 内核（commands.rs 薄壳；磁盘 IO 由命令侧 spawn_blocking 包裹） ──
@@ -992,7 +1149,12 @@ impl AutomationService {
     }
 
     pub fn list_tasks(&self) -> Vec<AutomationTask> {
-        self.tasks.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect()
+        self.tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .cloned()
+            .collect()
     }
 
     pub fn get_task(&self, id: &str) -> Result<AutomationTask, String> {
@@ -1032,7 +1194,11 @@ impl AutomationService {
         Ok(task)
     }
 
-    pub fn update_task(&self, id: &str, input: AutomationTaskInput) -> Result<AutomationTask, String> {
+    pub fn update_task(
+        &self,
+        id: &str,
+        input: AutomationTaskInput,
+    ) -> Result<AutomationTask, String> {
         schedule::validate_input(&input)?;
         let existing = self.get_task(id)?;
         // 服务端管理字段保留：id/createdAt/playbookState/lastRun*
@@ -1064,13 +1230,18 @@ impl AutomationService {
 
     pub fn delete_task(&self, id: &str) -> Result<(), String> {
         super::delete_task_dir(id)?;
-        self.tasks.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
+        self.tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
         Ok(())
     }
 
     pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<AutomationTask, String> {
         let mut guard = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
-        let task = guard.get_mut(id).ok_or_else(|| format!("自动化任务不存在: {id}"))?;
+        let task = guard
+            .get_mut(id)
+            .ok_or_else(|| format!("自动化任务不存在: {id}"))?;
         task.enabled = enabled;
         let snapshot = task.clone();
         drop(guard);
@@ -1079,9 +1250,15 @@ impl AutomationService {
     }
 
     /// 重新提炼手册：置 stale，下次运行按探索模式跑完后重新蒸馏（M4 接蒸馏轮）。
-    pub fn set_playbook_state(&self, id: &str, state: PlaybookState) -> Result<AutomationTask, String> {
+    pub fn set_playbook_state(
+        &self,
+        id: &str,
+        state: PlaybookState,
+    ) -> Result<AutomationTask, String> {
         let mut guard = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
-        let task = guard.get_mut(id).ok_or_else(|| format!("自动化任务不存在: {id}"))?;
+        let task = guard
+            .get_mut(id)
+            .ok_or_else(|| format!("自动化任务不存在: {id}"))?;
         task.playbook_state = state;
         let snapshot = task.clone();
         drop(guard);
@@ -1130,7 +1307,10 @@ mod tests {
             effort: "medium".into(),
             permission_preset: preset,
             connectors: vec!["aide-codegraph".into()],
-            schedule: Schedule::Interval { every: 2, unit: IntervalUnit::Hours },
+            schedule: Schedule::Interval {
+                every: 2,
+                unit: IntervalUnit::Hours,
+            },
             valid_from: None,
             valid_to: None,
             missed_policy: MissedPolicy::Catchup,
@@ -1148,13 +1328,25 @@ mod tests {
     #[test]
     fn preset_tools_mapping() {
         // 两档预设都是全量可见——收口在行为层（CLI auto 裁决 / hook allow），不在可见性
-        assert_eq!(AutomationService::preset_tools(PermissionPreset::Auto), vec!["*"]);
-        assert_eq!(AutomationService::preset_tools(PermissionPreset::Full), vec!["*"]);
+        assert_eq!(
+            AutomationService::preset_tools(PermissionPreset::Auto),
+            vec!["*"]
+        );
+        assert_eq!(
+            AutomationService::preset_tools(PermissionPreset::Full),
+            vec!["*"]
+        );
     }
 
     #[test]
     fn send_command_shape_locks_protocol() {
-        let cmd = AutomationService::build_send_command(&task(PermissionPreset::Auto), "run_1", "提示词", "C:/ws", true);
+        let cmd = AutomationService::build_send_command(
+            &task(PermissionPreset::Auto),
+            "run_1",
+            "提示词",
+            "C:/ws",
+            true,
+        );
         // run_id 即 session_id（1:1 映射契约）
         assert_eq!(cmd["session_id"], "run_1");
         assert_eq!(cmd["permission_mode"], "auto");
@@ -1175,7 +1367,13 @@ mod tests {
 
     #[test]
     fn send_command_full_preset_bypasses() {
-        let cmd = AutomationService::build_send_command(&task(PermissionPreset::Full), "run_2", "p", "C:/ws", false);
+        let cmd = AutomationService::build_send_command(
+            &task(PermissionPreset::Full),
+            "run_2",
+            "p",
+            "C:/ws",
+            false,
+        );
         assert_eq!(cmd["permission_mode"], "bypassPermissions");
         assert_eq!(cmd["automation"]["preset"], "full");
     }
@@ -1222,7 +1420,11 @@ mod tests {
     }
 
     fn route(task_id: &str, run_id: &str, is_distill: bool) -> SessionRoute {
-        SessionRoute { task_id: task_id.into(), run_id: run_id.into(), is_distill }
+        SessionRoute {
+            task_id: task_id.into(),
+            run_id: run_id.into(),
+            is_distill,
+        }
     }
 
     /// 2026-08-22 回归：SessionManager 在 session_init 后把 worker re-key 成 SDK
@@ -1260,7 +1462,10 @@ mod tests {
             .insert("run_1".to_string(), route("aut_1", "run_1", false));
         svc.active_runs.lock().unwrap().insert(
             "aut_1".to_string(),
-            ActiveRun { run_id: "run_1".into(), sdk_session_id: None },
+            ActiveRun {
+                run_id: "run_1".into(),
+                sdk_session_id: None,
+            },
         );
         svc.observe_chat_event(&serde_json::json!({
             "type": "session_init",
@@ -1269,7 +1474,10 @@ mod tests {
         }));
         assert!(svc.by_session.lock().unwrap().contains_key("sdk-uuid-1"));
         let active = svc.active_runs.lock().unwrap();
-        assert_eq!(active.get("aut_1").unwrap().sdk_session_id.as_deref(), Some("sdk-uuid-1"));
+        assert_eq!(
+            active.get("aut_1").unwrap().sdk_session_id.as_deref(),
+            Some("sdk-uuid-1")
+        );
     }
 
     /// finalize_run 前置：活跃表 + 路由摘除（幂等关键）。运行本体路由摘除、
@@ -1279,11 +1487,23 @@ mod tests {
         let svc = bare_service();
         svc.active_runs.lock().unwrap().insert(
             "aut_1".to_string(),
-            ActiveRun { run_id: "run_1".into(), sdk_session_id: None },
+            ActiveRun {
+                run_id: "run_1".into(),
+                sdk_session_id: None,
+            },
         );
-        svc.by_session.lock().unwrap().insert("run_1".to_string(), route("aut_1", "run_1", false));
-        svc.by_session.lock().unwrap().insert("run_1-d".to_string(), route("aut_1", "run_1", true));
-        svc.by_session.lock().unwrap().insert("run_2".to_string(), route("aut_2", "run_2", false));
+        svc.by_session
+            .lock()
+            .unwrap()
+            .insert("run_1".to_string(), route("aut_1", "run_1", false));
+        svc.by_session
+            .lock()
+            .unwrap()
+            .insert("run_1-d".to_string(), route("aut_1", "run_1", true));
+        svc.by_session
+            .lock()
+            .unwrap()
+            .insert("run_2".to_string(), route("aut_2", "run_2", false));
 
         svc.detach_routes("aut_1");
 

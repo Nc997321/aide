@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::State;
 
-use super::{WorkspaceInfo, WorkspaceState, claude_projects_dir};
+use super::{claude_projects_dir, WorkspaceInfo, WorkspaceState};
 use crate::runtime::AgentRuntimeManager;
 use crate::settings::{SettingsScope, SettingsService};
 
@@ -50,7 +50,10 @@ pub fn resolve_project_dirs(projects_dir: &std::path::Path, key: &str) -> Vec<Pa
 
 /// 从工作区列表里滤掉黑名单中的 key（隐藏语义）。
 pub fn filter_hidden(infos: Vec<WorkspaceInfo>, hidden: &[String]) -> Vec<WorkspaceInfo> {
-    infos.into_iter().filter(|w| !hidden.contains(&w.key)).collect()
+    infos
+        .into_iter()
+        .filter(|w| !hidden.contains(&w.key))
+        .collect()
 }
 
 /// 读 state 里的 hiddenWorkspaces 黑名单。
@@ -58,7 +61,11 @@ pub fn hidden_keys(config: &serde_json::Value) -> Vec<String> {
     config
         .get("hiddenWorkspaces")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -94,7 +101,11 @@ pub fn trusted_keys(config: &serde_json::Value) -> Vec<String> {
     config
         .get("trustedWorkspaces")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -185,7 +196,8 @@ pub fn lsp_workspace_config(key: &str) -> WorkspaceLspConfig {
 pub fn set_lsp_enabled(key: &str, enabled: bool) -> Result<(), String> {
     super::settings::with_state_mut(|config| {
         let entry = config
-            .as_object_mut().ok_or("state not object")?
+            .as_object_mut()
+            .ok_or("state not object")?
             .entry("lsp_workspaces")
             .or_insert(serde_json::json!({}));
         let obj = entry.as_object_mut().ok_or("lsp_workspaces not object")?;
@@ -195,7 +207,10 @@ pub fn set_lsp_enabled(key: &str, enabled: bool) -> Result<(), String> {
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
         cfg.enabled = enabled;
-        obj.insert(key.to_string(), serde_json::to_value(&cfg).map_err(|e| e.to_string())?);
+        obj.insert(
+            key.to_string(),
+            serde_json::to_value(&cfg).map_err(|e| e.to_string())?,
+        );
         Ok(())
     })
 }
@@ -204,7 +219,8 @@ pub fn set_lsp_enabled(key: &str, enabled: bool) -> Result<(), String> {
 pub fn set_lsp_excludes(key: &str, dirs: Vec<String>) -> Result<(), String> {
     super::settings::with_state_mut(|config| {
         let entry = config
-            .as_object_mut().ok_or("state not object")?
+            .as_object_mut()
+            .ok_or("state not object")?
             .entry("lsp_workspaces")
             .or_insert(serde_json::json!({}));
         let obj = entry.as_object_mut().ok_or("lsp_workspaces not object")?;
@@ -214,7 +230,10 @@ pub fn set_lsp_excludes(key: &str, dirs: Vec<String>) -> Result<(), String> {
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
         cfg.exclude_dirs = dirs;
-        obj.insert(key.to_string(), serde_json::to_value(&cfg).map_err(|e| e.to_string())?);
+        obj.insert(
+            key.to_string(),
+            serde_json::to_value(&cfg).map_err(|e| e.to_string())?,
+        );
         Ok(())
     })
 }
@@ -243,7 +262,8 @@ pub fn workspace_jdk(key: &str) -> Option<String> {
 pub fn set_workspace_jdk(key: &str, jdk_home: &str) -> Result<(), String> {
     super::settings::with_state_mut(|config| {
         let entry = config
-            .as_object_mut().ok_or("state not object")?
+            .as_object_mut()
+            .ok_or("state not object")?
             .entry("workspace_jdks")
             .or_insert(serde_json::json!({}));
         let obj = entry.as_object_mut().ok_or("workspace_jdks not object")?;
@@ -283,9 +303,12 @@ pub async fn list_workspaces() -> Result<Vec<WorkspaceInfo>, String> {
             return Ok(Vec::new());
         }
         let mut workspaces = Vec::new();
-        let read_dir = fs::read_dir(&dir).map_err(|e| format!("Failed to read projects dir: {}", e))?;
+        let read_dir =
+            fs::read_dir(&dir).map_err(|e| format!("Failed to read projects dir: {}", e))?;
         for entry in read_dir {
-            let Ok(entry) = entry else { continue; };
+            let Ok(entry) = entry else {
+                continue;
+            };
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 let key = entry.file_name().to_string_lossy().to_string();
                 let resolved = resolve_path_from_key(&key);
@@ -347,12 +370,19 @@ pub fn create_workspace(
         *pp = Some(PathBuf::from(path.clone()));
     }
     let _ = save_workspace_state(&key);
-    Ok(WorkspaceInfo { key, name: path, missing: false })
+    Ok(WorkspaceInfo {
+        key,
+        name: path,
+        missing: false,
+    })
 }
 
 pub fn load_workspace_state() -> Option<String> {
     let config = super::settings::load_state();
-    config.get("workspace").and_then(|w| w.as_str()).map(|s| s.to_string())
+    config
+        .get("workspace")
+        .and_then(|w| w.as_str())
+        .map(|s| s.to_string())
 }
 
 fn save_workspace_state(path: &str) -> Result<(), String> {
@@ -400,7 +430,8 @@ pub async fn remove_workspace(
         .key
         .lock()
         .map_err(|e| e.to_string())?
-        .as_deref() == Some(&key);
+        .as_deref()
+        == Some(&key);
     if is_active {
         {
             let mut k = workspace_state.key.lock().map_err(|e| e.to_string())?;
@@ -525,7 +556,10 @@ pub async fn untrust_workspace(
 // ── 工作区 LSP 开关 Tauri 命令 ──
 
 #[tauri::command]
-pub async fn workspace_set_lsp_enabled(workspace_root: String, enabled: bool) -> Result<(), String> {
+pub async fn workspace_set_lsp_enabled(
+    workspace_root: String,
+    enabled: bool,
+) -> Result<(), String> {
     // 信任门：未信任工作区拒开 LSP（LSP 跑外部二进制 + 索引工作区，本就该走信任门）
     if enabled && !is_path_trusted(&workspace_root) {
         return Err("untrusted workspace".into());
@@ -535,7 +569,10 @@ pub async fn workspace_set_lsp_enabled(workspace_root: String, enabled: bool) ->
 }
 
 #[tauri::command]
-pub async fn workspace_set_lsp_excludes(workspace_root: String, dirs: Vec<String>) -> Result<(), String> {
+pub async fn workspace_set_lsp_excludes(
+    workspace_root: String,
+    dirs: Vec<String>,
+) -> Result<(), String> {
     let key = path_to_key(&workspace_root);
     set_lsp_excludes(&key, dirs)?;
     // 改排除集 → 触发该工作区 server 重拉（init exclude 不支持热改）
@@ -561,7 +598,11 @@ pub fn resolve_path_from_key(key: &str) -> Option<String> {
     let rest: String = chars.collect();
     if rest.is_empty() {
         let path = format!("{}:\\", drive);
-        return if PathBuf::from(&path).exists() { Some(path) } else { None };
+        return if PathBuf::from(&path).exists() {
+            Some(path)
+        } else {
+            None
+        };
     }
     try_decode(&format!("{}:\\", drive), &rest)
 }
@@ -584,7 +625,10 @@ mod tests {
     #[test]
     fn path_to_key_preserves_other_chars() {
         // 空格、中文、点不替换
-        assert_eq!(path_to_key(r"C:\my project\文档.git"), "C--my project-文档.git");
+        assert_eq!(
+            path_to_key(r"C:\my project\文档.git"),
+            "C--my project-文档.git"
+        );
     }
 
     // ── resolve_project_dirs：dot 归一匹配 ──
@@ -601,7 +645,13 @@ mod tests {
 
         let mut dirs = resolve_project_dirs(&root, "C--proj-chennong4.0");
         dirs.sort();
-        assert_eq!(dirs, vec![root.join("C--proj-chennong4-0"), root.join("C--proj-chennong4.0")]);
+        assert_eq!(
+            dirs,
+            vec![
+                root.join("C--proj-chennong4-0"),
+                root.join("C--proj-chennong4.0")
+            ]
+        );
 
         // 反向 key（横杠版）同样命中两个目录
         assert_eq!(resolve_project_dirs(&root, "C--proj-chennong4-0").len(), 2);
@@ -640,7 +690,10 @@ mod tests {
         let infos = vec![sample("k1"), sample("k2"), sample("k3")];
         let hidden = vec!["k2".to_string()];
         let out = filter_hidden(infos, &hidden);
-        assert_eq!(out.iter().map(|w| w.key.clone()).collect::<Vec<_>>(), vec!["k1", "k3"]);
+        assert_eq!(
+            out.iter().map(|w| w.key.clone()).collect::<Vec<_>>(),
+            vec!["k1", "k3"]
+        );
     }
 
     #[test]
@@ -772,13 +825,19 @@ mod tests {
     #[test]
     fn trust_key_from_path_dots_normalized() {
         // path_to_key 保留点号，trust_key_from_path 再把点号归一成横杠
-        assert_eq!(trust_key_from_path(r"C:\proj\chennong4.0"), "C--proj-chennong4-0");
+        assert_eq!(
+            trust_key_from_path(r"C:\proj\chennong4.0"),
+            "C--proj-chennong4-0"
+        );
     }
 
     #[test]
     fn trust_key_from_key_dots_normalized() {
         // 前端传来的 ws.key 可能是带点号的 path_to_key 版本
-        assert_eq!(trust_key_from_key("C--proj-chennong4.0"), "C--proj-chennong4-0");
+        assert_eq!(
+            trust_key_from_key("C--proj-chennong4.0"),
+            "C--proj-chennong4-0"
+        );
     }
 
     #[test]
@@ -817,7 +876,10 @@ mod tests {
         let key = "aide_test_set_excludes_xyz";
         set_lsp_excludes(key, vec!["generated".into(), "vendor".into()]).unwrap();
         let cfg = lsp_workspace_config(key);
-        assert_eq!(cfg.exclude_dirs, vec!["generated".to_string(), "vendor".to_string()]);
+        assert_eq!(
+            cfg.exclude_dirs,
+            vec!["generated".to_string(), "vendor".to_string()]
+        );
         // 清理
         set_lsp_excludes(key, vec![]).unwrap();
     }
@@ -845,11 +907,18 @@ mod tests {
             .get("workspace_jdks")
             .and_then(|w| w.get(key))
             .is_some();
-        assert!(!still_there, "empty set must remove the key from workspace_jdks");
+        assert!(
+            !still_there,
+            "empty set must remove the key from workspace_jdks"
+        );
     }
 
     fn sample(key: &str) -> WorkspaceInfo {
-        WorkspaceInfo { key: key.to_string(), name: key.to_string(), missing: false }
+        WorkspaceInfo {
+            key: key.to_string(),
+            name: key.to_string(),
+            missing: false,
+        }
     }
 }
 
@@ -867,5 +936,9 @@ fn try_decode(prefix: &str, remaining: &str) -> Option<String> {
         }
     }
     let final_path = format!("{}{}", prefix, remaining);
-    if PathBuf::from(&final_path).exists() { Some(final_path) } else { None }
+    if PathBuf::from(&final_path).exists() {
+        Some(final_path)
+    } else {
+        None
+    }
 }

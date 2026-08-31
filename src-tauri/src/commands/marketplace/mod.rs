@@ -6,9 +6,9 @@ use tauri::State;
 
 use crate::settings::{SettingsError, SettingsScope, SettingsService};
 
-pub mod sources;
 pub mod install;
 pub mod manifest;
+pub mod sources;
 
 // ── Types (API response) ──
 
@@ -16,26 +16,36 @@ pub mod manifest;
 #[serde(rename_all = "camelCase")]
 pub struct PluginEntry {
     pub name: String,
-    #[serde(default)] pub display_name: String,
-    #[serde(default)] pub description: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
     /// 给用户看的语义版本（marketplace.json 的 `version` 字段）。sha-pinned 插件
     /// 此字段为空——marketplace.json 不带语义版本，只有 sha，前端展示时回退 "—"。
-    #[serde(default)] pub version: String,
+    #[serde(default)]
+    pub version: String,
     /// 安装身份 = marketplace 的 version 或 short_sha(sha)（与 `install_git` 落盘的
     /// 版本目录名同源）。**仅用于 hasUpdate 比对**，不展示给用户。
-    #[serde(default)] pub version_id: String,
-    #[serde(default)] pub source_id: String,
-    #[serde(default)] pub market_name: String,
-    #[serde(default)] pub category: String,
-    #[serde(default)] pub homepage: String,
-    #[serde(default)] pub repository: String,
+    #[serde(default)]
+    pub version_id: String,
+    #[serde(default)]
+    pub source_id: String,
+    #[serde(default)]
+    pub market_name: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub homepage: String,
+    #[serde(default)]
+    pub repository: String,
     /// available | mixed | unavailable | unknown
     pub availability: String,
-    #[serde(default)] pub unsupported: Vec<String>,
+    #[serde(default)]
+    pub unsupported: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]   // display_name→displayName, installed_at→installedAt, version_id→versionId
+#[serde(rename_all = "camelCase")] // display_name→displayName, installed_at→installedAt, version_id→versionId
 pub struct InstalledPlugin {
     pub name: String,
     pub market: String,
@@ -47,8 +57,10 @@ pub struct InstalledPlugin {
     /// 比对**（与 `entry.version` 同源，可比），不展示给用户——sha 对用户无意义。
     pub version_id: String,
     pub display_name: String,
-    #[serde(default)] pub description: String,
-    #[serde(default)] pub author: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub author: String,
     pub path: String,
     pub installed_at: u64,
     pub enabled: bool,
@@ -89,7 +101,11 @@ pub fn source_cache_dir(source_id: &str) -> PathBuf {
 }
 
 #[derive(Serialize)]
-struct EnabledPluginEntry { name: String, marketplace: String, path: String }
+struct EnabledPluginEntry {
+    name: String,
+    marketplace: String,
+    path: String,
+}
 
 /// 一个已安装插件是否启用。键不存在 = 启用（与安装时 `default_enabled.unwrap_or(true)`
 /// 对齐：插件出现在 cache 里即视为已安装且启用，除非用户显式置 false）。
@@ -106,8 +122,13 @@ fn plugin_enabled(enabled: &std::collections::BTreeMap<String, bool>, key: &str)
 pub fn write_enabled_plugins_manifest(service: &SettingsService) -> Result<(), String> {
     let settings = read_user_settings(service)?.unwrap_or_else(|| serde_json::json!({}));
     let enabled: std::collections::BTreeMap<String, bool> = settings
-        .get("enabledPlugins").and_then(|v| v.as_object())
-        .map(|o| o.iter().filter_map(|(k, v)| v.as_bool().map(|b| (k.clone(), b))).collect())
+        .get("enabledPlugins")
+        .and_then(|v| v.as_object())
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_bool().map(|b| (k.clone(), b)))
+                .collect()
+        })
         .unwrap_or_default();
     let cache = plugins_dir().join("cache");
     let mut entries = Vec::new();
@@ -118,7 +139,9 @@ pub fn write_enabled_plugins_manifest(service: &SettingsService) -> Result<(), S
                 for p in plugins.flatten() {
                     let plugin = p.file_name().to_string_lossy().to_string();
                     let key = format!("{plugin}@{market}");
-                    if !plugin_enabled(&enabled, &key) { continue; }
+                    if !plugin_enabled(&enabled, &key) {
+                        continue;
+                    }
                     if let Some(latest) = install::latest_version_dir(&p.path()) {
                         entries.push(EnabledPluginEntry {
                             name: plugin.clone(),
@@ -135,7 +158,9 @@ pub fn write_enabled_plugins_manifest(service: &SettingsService) -> Result<(), S
 }
 
 fn atomic_write(path: &std::path::Path, content: &str) -> Result<(), String> {
-    if let Some(parent) = path.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, content).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
@@ -146,7 +171,9 @@ fn atomic_write(path: &std::path::Path, content: &str) -> Result<(), String> {
 /// 键缺失返回 None）。市场模块禁止再走 `load_config`/`with_config_mut`——
 /// 旧 config.json 已删除，那条路径会读到 Null 并报 "settings missing"。
 fn read_user_settings(service: &SettingsService) -> Result<Option<serde_json::Value>, String> {
-    let effective = service.effective_document_blocking(None).map_err(|e| e.to_string())?;
+    let effective = service
+        .effective_document_blocking(None)
+        .map_err(|e| e.to_string())?;
     Ok(effective.values.get("settings").cloned())
 }
 
@@ -157,16 +184,18 @@ fn mutate_user_settings<F>(service: &SettingsService, f: F) -> Result<(), String
 where
     F: FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> Result<(), String>,
 {
-    service.mutate_scope_blocking(SettingsScope::User, None, |document| {
-        let target = document
-            .values
-            .entry("settings".to_string())
-            .or_insert_with(|| serde_json::json!({}));
-        let target = target
-            .as_object_mut()
-            .ok_or_else(|| SettingsError::Validation("settings must be an object".to_string()))?;
-        f(target).map_err(SettingsError::Validation)
-    }).map_err(|e| e.to_string())?;
+    service
+        .mutate_scope_blocking(SettingsScope::User, None, |document| {
+            let target = document
+                .values
+                .entry("settings".to_string())
+                .or_insert_with(|| serde_json::json!({}));
+            let target = target.as_object_mut().ok_or_else(|| {
+                SettingsError::Validation("settings must be an object".to_string())
+            })?;
+            f(target).map_err(SettingsError::Validation)
+        })
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -189,7 +218,9 @@ pub async fn set_plugin_enabled(
             Ok(())
         })?;
         write_enabled_plugins_manifest(&service)
-    }).await.map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ── Commands ──
@@ -202,9 +233,16 @@ pub async fn set_plugin_enabled(
 /// 用「键是否存在」而非「数组是否为空」区分这两种状态——否则关闭一个默认启用的
 /// 源后数组仍空，会被误判回「从未配置」而回弹为开。
 fn resolve_source_states(configured: bool, explicit: &[String]) -> Vec<bool> {
-    sources::FIXED_SOURCES.iter().map(|(id, _, _, def)| {
-        if configured { explicit.iter().any(|e| e == id) } else { *def }
-    }).collect()
+    sources::FIXED_SOURCES
+        .iter()
+        .map(|(id, _, _, def)| {
+            if configured {
+                explicit.iter().any(|e| e == id)
+            } else {
+                *def
+            }
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -216,17 +254,34 @@ pub async fn list_marketplace_sources(
     tokio::task::spawn_blocking(move || -> Result<Vec<sources::SourceInfo>, String> {
         let settings = read_user_settings(&service)?;
         // 键存在 = 已配置（按字面量，空=全关）；键不存在 = 从未配置（取默认）
-        let configured = settings.as_ref().and_then(|x| x.get("enabledMarketplaces")).is_some();
-        let explicit: Vec<String> = settings.as_ref().and_then(|x| x["enabledMarketplaces"].as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        let configured = settings
+            .as_ref()
+            .and_then(|x| x.get("enabledMarketplaces"))
+            .is_some();
+        let explicit: Vec<String> = settings
+            .as_ref()
+            .and_then(|x| x["enabledMarketplaces"].as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         let states = resolve_source_states(configured, &explicit);
-        let list = sources::FIXED_SOURCES.iter().zip(states.into_iter())
+        let list = sources::FIXED_SOURCES
+            .iter()
+            .zip(states.into_iter())
             .map(|((id, repo, name, _), on)| sources::SourceInfo {
-                id: id.to_string(), name: name.to_string(), repo: repo.to_string(), enabled: on,
-            }).collect();
+                id: id.to_string(),
+                name: name.to_string(),
+                repo: repo.to_string(),
+                enabled: on,
+            })
+            .collect();
         Ok(list)
-    }).await.map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -243,19 +298,29 @@ pub async fn set_marketplace_enabled(
             // 否则关闭一个默认启用的源时，它从未入表，retain 无效，数组仍空，
             // list_marketplace_sources 会按「从未配置」把所有默认源重新点亮。
             let first_config = !s.contains_key("enabledMarketplaces");
-            let arr = s.entry("enabledMarketplaces").or_insert(serde_json::json!([]));
+            let arr = s
+                .entry("enabledMarketplaces")
+                .or_insert(serde_json::json!([]));
             let a = arr.as_array_mut().ok_or("enabledMarketplaces not array")?;
             if first_config {
                 for (id, _, _, def) in sources::FIXED_SOURCES.iter() {
-                    if *def { a.push(serde_json::json!(id)); }
+                    if *def {
+                        a.push(serde_json::json!(id));
+                    }
                 }
             }
             let has = a.iter().any(|v| v.as_str() == Some(&source_id));
-            if enabled && !has { a.push(serde_json::json!(source_id)); }
-            if !enabled { a.retain(|v| v.as_str() != Some(&source_id)); }
+            if enabled && !has {
+                a.push(serde_json::json!(source_id));
+            }
+            if !enabled {
+                a.retain(|v| v.as_str() != Some(&source_id));
+            }
             Ok(())
         })
-    }).await.map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -273,7 +338,10 @@ mod tests {
     fn plugin_enabled_treats_absent_as_enabled() {
         let empty: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
         // 空 map（CLI 装的、未经 Aide install）→ 启用
-        assert!(plugin_enabled(&empty, "superpowers@claude-plugins-official"));
+        assert!(plugin_enabled(
+            &empty,
+            "superpowers@claude-plugins-official"
+        ));
         // 显式 true → 启用
         let mut m = std::collections::BTreeMap::new();
         m.insert("a@m".into(), true);
@@ -294,8 +362,12 @@ mod tests {
         // 两个固定源都默认开
         let official = "claude-plugins-official";
         let community = "claude-community";
-        assert!(sources::FIXED_SOURCES.iter().any(|(id, _, _, def)| *id == official && *def));
-        assert!(sources::FIXED_SOURCES.iter().any(|(id, _, _, def)| *id == community && *def));
+        assert!(sources::FIXED_SOURCES
+            .iter()
+            .any(|(id, _, _, def)| *id == official && *def));
+        assert!(sources::FIXED_SOURCES
+            .iter()
+            .any(|(id, _, _, def)| *id == community && *def));
 
         // 从未配置（键不存在）→ 取默认：两者都开
         let s = resolve_source_states(false, &[]);
@@ -308,7 +380,11 @@ mod tests {
 
         // 全部显式关闭 → 空列表，但已配置 → 全关（不回弹为默认开）
         let s = resolve_source_states(true, &[]);
-        assert_eq!(s, vec![false, false], "configured+empty = all off, not defaults");
+        assert_eq!(
+            s,
+            vec![false, false],
+            "configured+empty = all off, not defaults"
+        );
 
         // 重新只开 official
         let s = resolve_source_states(true, &vec![official.to_string()]);

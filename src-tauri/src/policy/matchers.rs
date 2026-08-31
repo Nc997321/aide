@@ -50,7 +50,11 @@ pub fn matcher_matches(
             let command = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
             bash_matches(*mode, value.as_deref().unwrap_or(""), command, effect)
         }
-        PermissionMatcher::Path { field, folder, file } => {
+        PermissionMatcher::Path {
+            field,
+            folder,
+            file,
+        } => {
             let field_key = path_field_key(*field);
             let target = match input.get(field_key).and_then(|v| v.as_str()) {
                 Some(s) => s,
@@ -521,7 +525,10 @@ mod tests {
 
     #[test]
     fn prefix_boundary_rejects_partial_words() {
-        assert!(command_starts_with_boundary("pnpm test --runInBand", "pnpm test"));
+        assert!(command_starts_with_boundary(
+            "pnpm test --runInBand",
+            "pnpm test"
+        ));
         assert!(command_starts_with_boundary("pnpm test", "pnpm test"));
         assert!(command_starts_with_boundary("rm -rf build", "rm"));
         assert!(!command_starts_with_boundary("pnpm testx", "pnpm test"));
@@ -620,7 +627,8 @@ mod tests {
     }
 
     #[test]
-    fn specificity_table_is_fixed() {        assert_eq!(specificity(&PermissionMatcher::Tool), 0);
+    fn specificity_table_is_fixed() {
+        assert_eq!(specificity(&PermissionMatcher::Tool), 0);
         assert_eq!(
             specificity(&PermissionMatcher::Bash {
                 mode: BashMode::All,

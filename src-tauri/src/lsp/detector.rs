@@ -91,7 +91,8 @@ pub fn detect_languages(root: &Path) -> Vec<LanguageId> {
     }
     // 2. 一层目录扩展名频次兜底（无 marker 或 marker 漏的语言）
     if let Ok(entries) = std::fs::read_dir(root) {
-        let mut counts: std::collections::HashMap<LanguageId, usize> = std::collections::HashMap::new();
+        let mut counts: std::collections::HashMap<LanguageId, usize> =
+            std::collections::HashMap::new();
         for entry in entries.flatten() {
             if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
                 if let Some(ext) = entry.path().extension().and_then(|e| e.to_str()) {
@@ -171,8 +172,11 @@ mod tests {
         fs::write(d.join("package.json"), "{}").unwrap();
         let langs = detect_languages(&d);
         // Node 探测器声明 typescript+javascript
-        assert!(langs.contains(&LanguageId::TypeScript) || langs.contains(&LanguageId::JavaScript),
-            "{:?}", langs);
+        assert!(
+            langs.contains(&LanguageId::TypeScript) || langs.contains(&LanguageId::JavaScript),
+            "{:?}",
+            langs
+        );
         fs::remove_dir_all(&d).ok();
     }
 
@@ -188,7 +192,11 @@ mod tests {
     #[test]
     fn spring_boot_yields_java() {
         let d = tmp_dir("spring");
-        fs::write(d.join("pom.xml"), "<project><artifactId>a</artifactId></project>").unwrap();
+        fs::write(
+            d.join("pom.xml"),
+            "<project><artifactId>a</artifactId></project>",
+        )
+        .unwrap();
         let langs = detect_languages(&d);
         // 任何 pom.xml → Java（SpringBootMaven 或 JavaMaven 探测器）
         assert!(langs.contains(&LanguageId::Java), "{:?}", langs);

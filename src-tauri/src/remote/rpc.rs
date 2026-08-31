@@ -34,7 +34,10 @@ pub fn to_json<T: Serialize>(result: Result<T, String>) -> Result<Value, String>
 
 /// 查命令：Some = 白名单内（返回处理器），None = 拒绝。
 pub fn lookup(command: &str) -> Option<Handler> {
-    REGISTRY.iter().find(|(name, _)| *name == command).map(|(_, h)| *h)
+    REGISTRY
+        .iter()
+        .find(|(name, _)| *name == command)
+        .map(|(_, h)| *h)
 }
 
 /// 白名单目录——读这张表即可审计远程暴露面（每行：命令名 → 包装器）。
@@ -50,7 +53,10 @@ static REGISTRY: &[(&str, Handler)] = &[
     ("start_btw_session", handlers::start_btw_session),
     // ── 会话管理与元数据 ──
     ("list_sessions", handlers::list_sessions),
-    ("list_sessions_for_workspace", handlers::list_sessions_for_workspace),
+    (
+        "list_sessions_for_workspace",
+        handlers::list_sessions_for_workspace,
+    ),
     ("create_session", handlers::create_session),
     ("delete_session", handlers::delete_session),
     ("rename_session", handlers::rename_session),
@@ -77,17 +83,26 @@ static REGISTRY: &[(&str, Handler)] = &[
     ("set_active_provider_id", handlers::set_active_provider_id),
     ("get_provider_catalog", handlers::get_provider_catalog),
     ("refresh_models", handlers::refresh_models),
-    ("claude_credentials_exist", handlers::claude_credentials_exist),
+    (
+        "claude_credentials_exist",
+        handlers::claude_credentials_exist,
+    ),
     // ── 通知中心持久化 ──
     ("load_notifications", handlers::load_notifications),
     ("save_notifications", handlers::save_notifications),
     // ── CodeGraph（闭包内 useCodeGraphProgress 被动调用链）──
     ("codegraph_build_index", handlers::codegraph_build_index),
-    ("codegraph_build_progress", handlers::codegraph_build_progress),
+    (
+        "codegraph_build_progress",
+        handlers::codegraph_build_progress,
+    ),
     ("codegraph_close", handlers::codegraph_close),
     ("codegraph_reindex_file", handlers::codegraph_reindex_file),
     ("codegraph_rescan", handlers::codegraph_rescan),
     // ── 模型/权限模式默认值 ──
     ("get_default_models", handlers::get_default_models),
-    ("get_default_permission_modes", handlers::get_default_permission_modes),
+    (
+        "get_default_permission_modes",
+        handlers::get_default_permission_modes,
+    ),
 ];

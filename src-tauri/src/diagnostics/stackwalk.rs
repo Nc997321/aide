@@ -33,8 +33,8 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HMODULE};
 #[cfg(all(windows, target_arch = "x86_64"))]
 use windows::Win32::System::Diagnostics::Debug::{
-    ADDRESS64, AddrModeFlat, CONTEXT, CONTEXT_FULL_AMD64, STACKFRAME64, SYMOPT_DEFERRED_LOADS,
-    SYMOPT_UNDNAME, StackWalk64, GetThreadContext, SymInitializeW, SymSetOptions,
+    AddrModeFlat, GetThreadContext, StackWalk64, SymInitializeW, SymSetOptions, ADDRESS64, CONTEXT,
+    CONTEXT_FULL_AMD64, STACKFRAME64, SYMOPT_DEFERRED_LOADS, SYMOPT_UNDNAME,
 };
 #[cfg(all(windows, target_arch = "x86_64"))]
 use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
@@ -135,15 +135,31 @@ unsafe fn park_frame_inner(h: HANDLE, ctx: &mut CONTEXT, walk_full: bool) -> Opt
     }
     let proc = GetCurrentProcess();
     let (top, base) = resolve_frame(proc, rip);
-    let mut frames = if walk_full { vec![top.clone()] } else { Vec::new() };
+    let mut frames = if walk_full {
+        vec![top.clone()]
+    } else {
+        Vec::new()
+    };
 
     if walk_full {
         // StackWalk64 初态从 CONTEXT 构造：PC/Stack/Frame 分别对应 Rip/Rsp/Rbp。
         // AddrModeFlat = 64 位平坦地址空间。后续每调一次返回上一帧（调用者）。
         let mut sf = STACKFRAME64 {
-            AddrPC: ADDRESS64 { Offset: ctx.Rip, Segment: 0, Mode: AddrModeFlat },
-            AddrStack: ADDRESS64 { Offset: ctx.Rsp, Segment: 0, Mode: AddrModeFlat },
-            AddrFrame: ADDRESS64 { Offset: ctx.Rbp, Segment: 0, Mode: AddrModeFlat },
+            AddrPC: ADDRESS64 {
+                Offset: ctx.Rip,
+                Segment: 0,
+                Mode: AddrModeFlat,
+            },
+            AddrStack: ADDRESS64 {
+                Offset: ctx.Rsp,
+                Segment: 0,
+                Mode: AddrModeFlat,
+            },
+            AddrFrame: ADDRESS64 {
+                Offset: ctx.Rbp,
+                Segment: 0,
+                Mode: AddrModeFlat,
+            },
             ..Default::default()
         };
         const MAX_FRAMES: usize = 32;

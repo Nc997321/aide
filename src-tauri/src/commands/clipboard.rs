@@ -99,7 +99,9 @@ fn read_clipboard_files_impl() -> Vec<String> {
 
     let pb = unsafe { NSPasteboard::generalPasteboard() };
     let classes = unsafe { NSArray::from_slice(&[&*NSURL::class() as *const _ as *const _]) };
-    let opts = unsafe { NSDictionary::<objc2_foundation::NSString, objc2::rc::Retained<objc2_foundation::NSString>>::new() };
+    let opts = unsafe {
+        NSDictionary::<objc2_foundation::NSString, objc2::rc::Retained<objc2_foundation::NSString>>::new()
+    };
     let objects: Option<Retained<NSArray>> =
         unsafe { pb.readObjectsForClasses_options(&classes, Some(&opts)) };
 
@@ -127,7 +129,14 @@ fn read_clipboard_files_impl() -> Vec<String> {
     let candidates: &[&[&str]] = &[
         &["wl-paste", "--type", "text/uri-list"],
         &["wl-paste", "--type", "x-special/gnome-copied-files"],
-        &["xclip", "-selection", "clipboard", "-o", "-t", "text/uri-list"],
+        &[
+            "xclip",
+            "-selection",
+            "clipboard",
+            "-o",
+            "-t",
+            "text/uri-list",
+        ],
         &[
             "xclip",
             "-selection",

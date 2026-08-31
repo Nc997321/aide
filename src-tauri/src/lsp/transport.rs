@@ -19,7 +19,9 @@ impl Framer {
         self.buf.extend_from_slice(chunk);
         let mut out = Vec::new();
         loop {
-            let Some(header_end) = find_header_end(&self.buf) else { break; };
+            let Some(header_end) = find_header_end(&self.buf) else {
+                break;
+            };
             let header = &self.buf[..header_end];
             let Some(len) = parse_content_length(header) else {
                 // 无 Content-Length 的损坏 header 块：跳过这组 \r\n\r\n，继续找下一条。
@@ -67,7 +69,10 @@ pub fn format_frame(value: &serde_json::Value) -> Vec<u8> {
 }
 
 /// 写一帧到异步 sink（生产用 ChildStdin，测试用 duplex 写端）。
-pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, value: &serde_json::Value) -> std::io::Result<()> {
+pub async fn write_frame<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    value: &serde_json::Value,
+) -> std::io::Result<()> {
     w.write_all(&format_frame(value)).await?;
     w.flush().await?;
     Ok(())
@@ -81,7 +86,9 @@ pub struct RequestTable {
 
 impl RequestTable {
     pub fn new() -> Self {
-        Self { waiters: HashMap::new() }
+        Self {
+            waiters: HashMap::new(),
+        }
     }
     pub fn insert(&mut self, id: u64, tx: oneshot::Sender<serde_json::Value>) {
         self.waiters.insert(id, tx);
@@ -122,7 +129,11 @@ impl LspTransport {
 
     /// 取出 stdout 读源（仅一次，供 start_reader 消费）。
     pub async fn take_reader_source(&self) -> Box<dyn AsyncRead + Send + Unpin> {
-        self.reader_source.lock().await.take().expect("reader taken once")
+        self.reader_source
+            .lock()
+            .await
+            .take()
+            .expect("reader taken once")
     }
 
     /// 写一帧（request 或 notification）。调方负责编好消息体。
@@ -202,7 +213,11 @@ mod tests {
         // 损坏 header 块（无 Content-Length）跳过后，正常消息应仍能解析
         buf.extend_from_slice(&frame(r#"{"id":7,"result":{}}"#));
         let msgs = f.feed(&buf);
-        assert_eq!(msgs.len(), 1, "garbage header should be skipped, got {msgs:?}");
+        assert_eq!(
+            msgs.len(),
+            1,
+            "garbage header should be skipped, got {msgs:?}"
+        );
         assert_eq!(msgs[0]["id"], 7);
     }
 
@@ -235,7 +250,10 @@ mod tests {
         let (tx, rx) = oneshot::channel();
         table.insert(42, tx);
         table.reject_all();
-        assert!(rx.await.is_err(), "receiver must get error after reject_all");
+        assert!(
+            rx.await.is_err(),
+            "receiver must get error after reject_all"
+        );
     }
 
     #[test]

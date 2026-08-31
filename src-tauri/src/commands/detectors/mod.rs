@@ -32,7 +32,9 @@ pub(crate) trait ProjectDetector: Send + Sync {
     fn detect(&self, root: &Path) -> Option<Vec<RunTarget>> {
         if self.matches(root) {
             let targets = self.build_targets(root);
-            if !targets.is_empty() { return Some(targets); }
+            if !targets.is_empty() {
+                return Some(targets);
+            }
         }
         None
     }
@@ -97,7 +99,9 @@ impl DetectorChain {
             Box::new(LaravelDetector),
             Box::new(ElixirDetector),
             Box::new(MakeDetector),
-            Box::new(SubdirScanDetector { chain: Self::leaf_chain() }),
+            Box::new(SubdirScanDetector {
+                chain: Self::leaf_chain(),
+            }),
         ])
     }
 
@@ -111,7 +115,10 @@ impl DetectorChain {
     }
 
     fn detect_command(&self, root: &Path) -> Option<String> {
-        self.detect_targets(root).into_iter().next().map(|t| t.command)
+        self.detect_targets(root)
+            .into_iter()
+            .next()
+            .map(|t| t.command)
     }
 }
 
@@ -148,13 +155,19 @@ fn dir_name(root: &Path) -> String {
 fn gradlew_cmd(root: &Path) -> String {
     #[cfg(windows)]
     {
-        if file_exists(root, "gradlew.bat") { ".\\gradlew.bat".into() }
-        else { "gradle".into() }
+        if file_exists(root, "gradlew.bat") {
+            ".\\gradlew.bat".into()
+        } else {
+            "gradle".into()
+        }
     }
     #[cfg(not(windows))]
     {
-        if file_exists(root, "gradlew") { "./gradlew".into() }
-        else { "gradle".into() }
+        if file_exists(root, "gradlew") {
+            "./gradlew".into()
+        } else {
+            "gradle".into()
+        }
     }
 }
 
@@ -218,7 +231,9 @@ fn extract_gradle_includes(content: &str) -> Vec<String> {
     let re = Regex::new(r#"['"](?::)?([a-zA-Z0-9_\-]+)['"]"#).unwrap();
     for line in content.lines() {
         let trimmed = line.trim();
-        if !trimmed.starts_with("include") { continue; }
+        if !trimmed.starts_with("include") {
+            continue;
+        }
         for cap in re.captures_iter(trimmed) {
             if let Some(m) = cap.get(1) {
                 modules.push(m.as_str().to_string());
@@ -231,9 +246,20 @@ fn extract_gradle_includes(content: &str) -> Vec<String> {
 fn should_skip_dir(name: &str) -> bool {
     matches!(
         name,
-        "node_modules" | ".git" | "target" | "build" | "dist"
-            | ".idea" | "__pycache__" | ".gradle" | "out" | "vendor"
-            | ".next" | ".nuxt" | "coverage" | ".vscode"
+        "node_modules"
+            | ".git"
+            | "target"
+            | "build"
+            | "dist"
+            | ".idea"
+            | "__pycache__"
+            | ".gradle"
+            | "out"
+            | "vendor"
+            | ".next"
+            | ".nuxt"
+            | "coverage"
+            | ".vscode"
     ) || name.starts_with('.')
 }
 
@@ -253,22 +279,35 @@ fn find_spring_boot_main_class(module_root: &Path) -> Option<String> {
 }
 
 fn scan_spring_main(dir: &Path) -> Option<String> {
-    let Ok(entries) = fs::read_dir(dir) else { return None; };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return None;
+    };
     let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
     paths.sort();
     for path in paths {
         if path.is_dir() {
-            if let Some(cls) = scan_spring_main(&path) { return Some(cls); }
+            if let Some(cls) = scan_spring_main(&path) {
+                return Some(cls);
+            }
         } else {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if ext != "java" && ext != "kt" { continue; }
+            if ext != "java" && ext != "kt" {
+                continue;
+            }
             let content = fs::read_to_string(&path).unwrap_or_default();
-            if !content.contains("@SpringBootApplication") { continue; }
+            if !content.contains("@SpringBootApplication") {
+                continue;
+            }
             // Java/Kotlin: public class name always equals file stem.
             let class_name = path.file_stem()?.to_str()?.to_string();
             let pkg_re = Regex::new(r"^package\s+([\w.]+)").unwrap();
-            let package = content.lines()
-                .find_map(|l| pkg_re.captures(l.trim()).and_then(|c| c.get(1).map(|m| m.as_str().to_string())))
+            let package = content
+                .lines()
+                .find_map(|l| {
+                    pkg_re
+                        .captures(l.trim())
+                        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
+                })
                 .unwrap_or_default();
             return Some(if package.is_empty() {
                 class_name
@@ -288,18 +327,28 @@ struct SubdirScanDetector {
 }
 
 impl ProjectDetector for SubdirScanDetector {
-    fn priority(&self) -> u8 { 5 }
-    fn matches(&self, root: &Path) -> bool { root.is_dir() }
+    fn priority(&self) -> u8 {
+        5
+    }
+    fn matches(&self, root: &Path) -> bool {
+        root.is_dir()
+    }
     fn build_targets(&self, root: &Path) -> Vec<RunTarget> {
-        let Ok(entries) = fs::read_dir(root) else { return Vec::new(); };
+        let Ok(entries) = fs::read_dir(root) else {
+            return Vec::new();
+        };
         let mut entries: Vec<_> = entries.flatten().collect();
         entries.sort_by_key(|e| e.file_name());
         let mut targets = Vec::new();
         for entry in entries {
             let path = entry.path();
-            if !path.is_dir() { continue; }
+            if !path.is_dir() {
+                continue;
+            }
             let name = entry.file_name().to_string_lossy().to_string();
-            if should_skip_dir(&name) { continue; }
+            if should_skip_dir(&name) {
+                continue;
+            }
             targets.extend(self.chain.detect_targets(&path));
         }
         targets
@@ -571,7 +620,11 @@ mod tests {
         std::fs::write(tmp.join("pnpm-lock.yaml"), "").unwrap();
         let targets = detect_run_targets(&tmp);
         assert_eq!(targets.len(), 1);
-        assert!(targets[0].command.contains("tauri dev"), "{}", targets[0].command);
+        assert!(
+            targets[0].command.contains("tauri dev"),
+            "{}",
+            targets[0].command
+        );
         let langs = detect_languages_from_markers(&tmp);
         assert!(langs.contains(&"rust"));
         std::fs::remove_dir_all(&tmp).ok();

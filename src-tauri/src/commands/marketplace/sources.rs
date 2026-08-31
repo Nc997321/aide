@@ -13,15 +13,31 @@ pub struct SourceInfo {
 
 /// 固定预置市场源（不可自加）。(source_id, owner/repo, 默认市场名, 默认启用)
 pub const FIXED_SOURCES: &[(&str, &str, &str, bool)] = &[
-    ("claude-plugins-official", "anthropics/claude-plugins-official", "claude-plugins-official", true),
-    ("claude-community", "anthropics/claude-plugins-community", "claude-community", true),
+    (
+        "claude-plugins-official",
+        "anthropics/claude-plugins-official",
+        "claude-plugins-official",
+        true,
+    ),
+    (
+        "claude-community",
+        "anthropics/claude-plugins-community",
+        "claude-community",
+        true,
+    ),
 ];
 
 pub fn default_market_name(source_id: &str) -> Option<&'static str> {
-    FIXED_SOURCES.iter().find(|(id, _, _, _)| *id == source_id).map(|(_, _, n, _)| *n)
+    FIXED_SOURCES
+        .iter()
+        .find(|(id, _, _, _)| *id == source_id)
+        .map(|(_, _, n, _)| *n)
 }
 pub fn fixed_repo(source_id: &str) -> Option<&'static str> {
-    FIXED_SOURCES.iter().find(|(id, _, _, _)| *id == source_id).map(|(_, r, _, _)| *r)
+    FIXED_SOURCES
+        .iter()
+        .find(|(id, _, _, _)| *id == source_id)
+        .map(|(_, r, _, _)| *r)
 }
 
 // ── Raw deserialization types for official marketplace.json ──
@@ -36,13 +52,29 @@ pub fn fixed_repo(source_id: &str) -> Option<&'static str> {
 #[derive(Debug)]
 pub enum RawSource {
     Relative(String),
-    Github { repo: String, r#ref: Option<String>, sha: Option<String> },
-    Url { url: String, r#ref: Option<String>, sha: Option<String> },
-    GitSubdir { url: String, path: String, r#ref: Option<String>, sha: Option<String> },
+    Github {
+        repo: String,
+        r#ref: Option<String>,
+        sha: Option<String>,
+    },
+    Url {
+        url: String,
+        r#ref: Option<String>,
+        sha: Option<String>,
+    },
+    GitSubdir {
+        url: String,
+        path: String,
+        r#ref: Option<String>,
+        sha: Option<String>,
+    },
     // npm 源：安装期以 NPM_UNSUPPORTED 拒绝；package/version 按官方 schema 解析保留
     //（前端 ERROR_MAP 用固定文案，附加 detail 不会到达 UI，故字段值暂不消费）。
     #[allow(dead_code)]
-    Npm { package: String, version: Option<String> },
+    Npm {
+        package: String,
+        version: Option<String>,
+    },
     /// 未知源类型：marketplace.json 出现了 schema 未覆盖的 source.kind。
     /// 列表期照常展示（可用性按内联组件字段判定），安装期以 SOURCE_TYPE_UNSUPPORTED 拒绝。
     Unknown,
@@ -93,7 +125,8 @@ pub struct MarketplaceManifest {
 }
 
 pub fn parse_marketplace_json(content: &str) -> Result<MarketplaceManifest, String> {
-    let v: Value = serde_json::from_str(content).map_err(|e| format!("Failed to parse marketplace JSON: {e}"))?;
+    let v: Value = serde_json::from_str(content)
+        .map_err(|e| format!("Failed to parse marketplace JSON: {e}"))?;
     let name = v["name"].as_str().unwrap_or("").to_string();
     let owner = v.get("owner").cloned();
     let metadata = v.get("metadata").map(|m| MarketplaceMetadata {
@@ -105,7 +138,12 @@ pub fn parse_marketplace_json(content: &str) -> Result<MarketplaceManifest, Stri
             plugins.push(parse_entry(p));
         }
     }
-    Ok(MarketplaceManifest { name, owner, plugins, metadata })
+    Ok(MarketplaceManifest {
+        name,
+        owner,
+        plugins,
+        metadata,
+    })
 }
 
 fn parse_entry(p: &Value) -> RawPluginEntry {
@@ -113,14 +151,36 @@ fn parse_entry(p: &Value) -> RawPluginEntry {
     RawPluginEntry {
         name: p["name"].as_str().unwrap_or("").to_string(),
         source: src,
-        display_name: p.get("displayName").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        description: p.get("description").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        version: p.get("version").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        display_name: p
+            .get("displayName")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        description: p
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        version: p
+            .get("version")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         author: p.get("author").cloned(),
-        homepage: p.get("homepage").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        repository: p.get("repository").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        category: p.get("category").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        tags: p.get("tags").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()),
+        homepage: p
+            .get("homepage")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        repository: p
+            .get("repository")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        category: p
+            .get("category")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        tags: p.get("tags").and_then(|v| v.as_array()).map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        }),
         default_enabled: p.get("defaultEnabled").and_then(|v| v.as_bool()),
         skills: p.get("skills").cloned(),
         commands: p.get("commands").cloned(),
@@ -198,18 +258,34 @@ mod tests {
         let m = parse_marketplace_json(j).unwrap();
         assert_eq!(m.name, "m");
         assert_eq!(m.plugins.len(), 5);
-        assert!(matches!(m.plugins[0].source.as_ref().unwrap(), RawSource::Relative(s) if s=="./plugins/a"));
-        assert!(matches!(m.plugins[1].source.as_ref().unwrap(), RawSource::Github{repo,..} if repo=="o/r"));
-        assert!(matches!(m.plugins[2].source.as_ref().unwrap(), RawSource::Url{url,..} if url.contains("gitlab")));
-        assert!(matches!(m.plugins[3].source.as_ref().unwrap(), RawSource::GitSubdir{path,..} if path=="p/d"));
-        assert!(matches!(m.plugins[4].source.as_ref().unwrap(), RawSource::Npm{package,..} if package=="@o/e"));
-        assert_eq!(m.metadata.as_ref().unwrap().plugin_root.as_deref(), Some("./plugins"));
+        assert!(
+            matches!(m.plugins[0].source.as_ref().unwrap(), RawSource::Relative(s) if s=="./plugins/a")
+        );
+        assert!(
+            matches!(m.plugins[1].source.as_ref().unwrap(), RawSource::Github{repo,..} if repo=="o/r")
+        );
+        assert!(
+            matches!(m.plugins[2].source.as_ref().unwrap(), RawSource::Url{url,..} if url.contains("gitlab"))
+        );
+        assert!(
+            matches!(m.plugins[3].source.as_ref().unwrap(), RawSource::GitSubdir{path,..} if path=="p/d")
+        );
+        assert!(
+            matches!(m.plugins[4].source.as_ref().unwrap(), RawSource::Npm{package,..} if package=="@o/e")
+        );
+        assert_eq!(
+            m.metadata.as_ref().unwrap().plugin_root.as_deref(),
+            Some("./plugins")
+        );
     }
 
     #[test]
     fn plugin_root_prepended_to_relative_short_source() {
         assert_eq!(resolve_relative("a", Some("./plugins")), "./plugins/a");
-        assert_eq!(resolve_relative("./plugins/a", Some("./plugins")), "./plugins/a");
+        assert_eq!(
+            resolve_relative("./plugins/a", Some("./plugins")),
+            "./plugins/a"
+        );
         assert_eq!(resolve_relative("a", None), "a");
     }
 
@@ -231,7 +307,9 @@ mod tests {
           {"name":"agent-sdk-dev","source":"./plugins/agent-sdk-dev","category":"development","homepage":"x"}]}"#;
         let m = parse_marketplace_json(j).unwrap();
         assert_eq!(m.plugins[0].category.as_deref(), Some("development"));
-        assert!(matches!(m.plugins[0].source.as_ref().unwrap(), RawSource::Relative(s) if s=="./plugins/agent-sdk-dev"));
+        assert!(
+            matches!(m.plugins[0].source.as_ref().unwrap(), RawSource::Relative(s) if s=="./plugins/agent-sdk-dev")
+        );
     }
 
     #[test]
@@ -241,6 +319,9 @@ mod tests {
         let j = r#"{"name":"m","owner":{"name":"o"},"plugins":[
           {"name":"weird","source":{"source":"future-kind","repo":"o/r"}}]}"#;
         let m = parse_marketplace_json(j).unwrap();
-        assert!(matches!(m.plugins[0].source.as_ref().unwrap(), RawSource::Unknown));
+        assert!(matches!(
+            m.plugins[0].source.as_ref().unwrap(),
+            RawSource::Unknown
+        ));
     }
 }

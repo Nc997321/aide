@@ -111,7 +111,11 @@ pub fn pick_source(
 }
 
 /// 解析某语言的 server 启动来源。优先级：settings.lsp.servers[lang] > 捆绑(resource_dir) > which(binary)。
-pub fn resolve(lang: LanguageId, settings: &AppSettings, app: &tauri::AppHandle) -> Option<ServerSource> {
+pub fn resolve(
+    lang: LanguageId,
+    settings: &AppSettings,
+    app: &tauri::AppHandle,
+) -> Option<ServerSource> {
     let override_cfg = settings.lsp.servers.get(lang.id_str());
     let bundled = bundled_source(lang, app);
     let which = which_source(lang);
@@ -121,11 +125,18 @@ pub fn resolve(lang: LanguageId, settings: &AppSettings, app: &tauri::AppHandle)
 fn bundled_source(lang: LanguageId, app: &tauri::AppHandle) -> Option<ServerSource> {
     use tauri::Manager;
     let (subdir, binary) = crate::lsp::profiles::profile(lang).bundled()?;
-    let binary = if cfg!(windows) { format!("{binary}.exe") } else { binary.to_string() };
+    let binary = if cfg!(windows) {
+        format!("{binary}.exe")
+    } else {
+        binary.to_string()
+    };
     let res_dir = app.path().resource_dir().ok()?;
     let path = res_dir.join("lsp").join(subdir).join(&binary);
     if path.exists() {
-        Some(ServerSource::Bundled { subdir: subdir.to_string(), binary })
+        Some(ServerSource::Bundled {
+            subdir: subdir.to_string(),
+            binary,
+        })
     } else {
         None
     }
@@ -136,14 +147,20 @@ fn which_source(lang: LanguageId) -> Option<ServerSource> {
     // 存 which 解析出的完整路径（Windows 上含 .exe/.bat/.cmd 扩展名）——spawn 时
     // 需要扩展名判断 .bat/.cmd 必须 cmd /C 包装（CreateProcess 不能直接跑 bat）。
     let path = which::which(bin).ok()?;
-    Some(ServerSource::Which { binary: path.to_string_lossy().into_owned() })
+    Some(ServerSource::Which {
+        binary: path.to_string_lossy().into_owned(),
+    })
 }
 
 /// 转 (program, args)。program 是要 spawn 的可执行文件路径/名。
 /// Bundled 的 program 是 dunce 剥前缀后的完整资源路径（调用方在 spawn 时剥，这里只给原路径，
 /// 因为 resource_dir 在 resolve 时已是 verbatim；spawn 前由 manager 剥——见 to_spawn_command）。
 /// 语言特有参数一律走 profile（launch_args / supplement_explicit）。
-pub fn to_command(lang: LanguageId, src: &ServerSource, data_dir: Option<&Path>) -> (String, Vec<String>) {
+pub fn to_command(
+    lang: LanguageId,
+    src: &ServerSource,
+    data_dir: Option<&Path>,
+) -> (String, Vec<String>) {
     let p = crate::lsp::profiles::profile(lang);
     match src {
         ServerSource::Bundled { subdir, binary } => {
@@ -166,10 +183,13 @@ mod tests {
 
     fn override_for(lang: &str, program: &str) -> AppSettings {
         let mut servers = HashMap::new();
-        servers.insert(lang.to_string(), ServerOverride {
-            program: program.to_string(),
-            args: vec![],
-        });
+        servers.insert(
+            lang.to_string(),
+            ServerOverride {
+                program: program.to_string(),
+                args: vec![],
+            },
+        );
         AppSettings {
             lsp: LspSettings { servers },
             ..Default::default()
@@ -184,9 +204,12 @@ mod tests {
     fn precedence_settings_over_bundled_over_which() {
         let settings = override_for("rust", "/my/custom/rust-analyzer");
         let bundled = Some(ServerSource::Bundled {
-            subdir: "rust".into(), binary: "rust-analyzer".into(),
+            subdir: "rust".into(),
+            binary: "rust-analyzer".into(),
         });
-        let which = Some(ServerSource::Which { binary: "rust-analyzer".into() });
+        let which = Some(ServerSource::Which {
+            binary: "rust-analyzer".into(),
+        });
         let picked = pick_source(settings.lsp.servers.get("rust"), bundled, which);
         match picked {
             Some(ServerSource::Explicit { program, .. }) => {
@@ -199,7 +222,9 @@ mod tests {
     #[test]
     fn bundled_missing_falls_to_which() {
         let settings = empty_settings();
-        let which = Some(ServerSource::Which { binary: "gopls".into() });
+        let which = Some(ServerSource::Which {
+            binary: "gopls".into(),
+        });
         let picked = pick_source(settings.lsp.servers.get("go"), None, which);
         assert!(matches!(picked, Some(ServerSource::Which { .. })));
     }
@@ -214,18 +239,27 @@ mod tests {
     #[test]
     fn settings_args_passed_through() {
         let mut servers = HashMap::new();
-        servers.insert("rust".to_string(), ServerOverride {
-            program: "/x/rust-analyzer".into(),
-            args: vec!["--log-file".into(), "/tmp/ra.log".into()],
-        });
-        let settings = AppSettings { lsp: LspSettings { servers }, ..Default::default() };
+        servers.insert(
+            "rust".to_string(),
+            ServerOverride {
+                program: "/x/rust-analyzer".into(),
+                args: vec!["--log-file".into(), "/tmp/ra.log".into()],
+            },
+        );
+        let settings = AppSettings {
+            lsp: LspSettings { servers },
+            ..Default::default()
+        };
         let picked = pick_source(settings.lsp.servers.get("rust"), None, None);
         match picked {
             Some(ServerSource::Explicit { program, args }) => {
                 assert_eq!(program, "/x/rust-analyzer");
                 // pick_source 只负责选源，不注入任何参数（那是 to_command 的职责）。
                 assert_eq!(args.len(), 2, "{:?}", args);
-                assert!(!args.contains(&"--stdio".to_string()), "pick_source 不应注入 --stdio");
+                assert!(
+                    !args.contains(&"--stdio".to_string()),
+                    "pick_source 不应注入 --stdio"
+                );
             }
             other => panic!("expected Explicit, got {other:?}"),
         }
@@ -236,14 +270,21 @@ mod tests {
         // Bundled（Rust）：无 --stdio —— rust-analyzer 默认即 LSP（stdin/stdout 读
         // Content-Length 帧），1.96+ 显式拒绝 --stdio（unexpected flag）。
         let bundled = ServerSource::Bundled {
-            subdir: "rust".into(), binary: "rust-analyzer".into(),
+            subdir: "rust".into(),
+            binary: "rust-analyzer".into(),
         };
         let (prog, args) = to_command(LanguageId::Rust, &bundled, None);
-        assert!(!args.contains(&"--stdio".to_string()), "rust-analyzer 不传 --stdio, args: {:?}", args);
+        assert!(
+            !args.contains(&"--stdio".to_string()),
+            "rust-analyzer 不传 --stdio, args: {:?}",
+            args
+        );
         assert_eq!(prog, "lsp/rust/rust-analyzer");
 
         // Which（Go）：--stdio 默认（其他 LSP server 仍走 --stdio）。
-        let which = ServerSource::Which { binary: "gopls".into() };
+        let which = ServerSource::Which {
+            binary: "gopls".into(),
+        };
         let (prog, args) = to_command(LanguageId::Go, &which, None);
         assert_eq!(prog, "gopls");
         assert!(args.contains(&"--stdio".to_string()), "go args: {:?}", args);
@@ -255,8 +296,16 @@ mod tests {
         };
         let (prog, args) = to_command(LanguageId::Rust, &explicit, None);
         assert_eq!(prog, "/x/ra");
-        assert!(!args.contains(&"--stdio".to_string()), "rust explicit 不补 --stdio, args: {:?}", args);
-        assert!(args.contains(&"--log-file".to_string()), "rust explicit 保留用户 args, {:?}", args);
+        assert!(
+            !args.contains(&"--stdio".to_string()),
+            "rust explicit 不补 --stdio, args: {:?}",
+            args
+        );
+        assert!(
+            args.contains(&"--log-file".to_string()),
+            "rust explicit 保留用户 args, {:?}",
+            args
+        );
 
         // 守卫：用户显式传的 --stdio 原样保留（不补也不删；兼容旧版 rust-analyzer）。
         let explicit_with_stdio = ServerSource::Explicit {
@@ -272,10 +321,20 @@ mod tests {
     fn empty_program_override_is_ignored() {
         // program 空串的 override 视作未配置 → 落 bundled/which。
         let mut servers = HashMap::new();
-        servers.insert("rust".to_string(), ServerOverride { program: "".into(), args: vec![] });
-        let settings = AppSettings { lsp: LspSettings { servers }, ..Default::default() };
+        servers.insert(
+            "rust".to_string(),
+            ServerOverride {
+                program: "".into(),
+                args: vec![],
+            },
+        );
+        let settings = AppSettings {
+            lsp: LspSettings { servers },
+            ..Default::default()
+        };
         let bundled = Some(ServerSource::Bundled {
-            subdir: "rust".into(), binary: "rust-analyzer".into(),
+            subdir: "rust".into(),
+            binary: "rust-analyzer".into(),
         });
         let picked = pick_source(settings.lsp.servers.get("rust"), bundled, None);
         assert!(matches!(picked, Some(ServerSource::Bundled { .. })));
@@ -287,9 +346,13 @@ mod tests {
         // 默认，不受 Java 覆写影响。jdtls 必须在工作区外故覆写（见 profiles/java.rs）。
         struct Dummy;
         impl ServerProfile for Dummy {
-            fn data_dir_name(&self) -> Option<&'static str> { Some("dummy-ws") }
+            fn data_dir_name(&self) -> Option<&'static str> {
+                Some("dummy-ws")
+            }
         }
-        let p = Dummy.data_dir_path("/proj", Path::new("/home/u/.aide")).expect("Some");
+        let p = Dummy
+            .data_dir_path("/proj", Path::new("/home/u/.aide"))
+            .expect("Some");
         assert_eq!(p, PathBuf::from("/proj").join(".aide").join("dummy-ws"));
     }
 }
