@@ -1,9 +1,15 @@
 import { describe, it, expect } from "vitest";
-import type { PermissionRule } from "@/types/permissions";
+import type {
+  PermissionEffect,
+  PermissionMatcher,
+  PermissionRule,
+  PermissionRuleDraft,
+} from "@/types/permissions";
 import {
   deriveRememberRule,
   deriveSessionFileRules,
   describeRuleMatcher,
+  filterRememberableDrafts,
   stripTrailingNumericArg,
 } from "./permissionRuleDerivation";
 
@@ -301,5 +307,162 @@ describe("stripTrailingNumericArg 数字参数透明化", () => {
   it("太短（少于两个 token）→不简化", () => {
     expect(stripTrailingNumericArg("tail")).toBeNull();
     expect(stripTrailingNumericArg("")).toBeNull();
+  });
+});
+
+describe("filterRememberableDrafts 落盘前语义过滤", () => {
+  /** 构造一条任意形状的现有规则（默认 allow / Bash）。 */
+  function ruleWith(
+    matcher: PermissionMatcher,
+    effect: PermissionEffect = "allow",
+    tool = "Bash",
+  ): PermissionRule {
+    return {
+      id: "r-x",
+      scope: "user",
+      order: 0,
+      effect,
+      tool,
+      matcher,
+      source: { label: "user", readOnly: false },
+    };
+  }
+
+  /** 直接构造 draft（绕过 derive——测 filter 对各 matcher 形态的分派本身）。 */
+  const draftOf = (tool: string, matcher: PermissionMatcher): PermissionRuleDraft => ({
+    effect: "allow",
+    tool,
+    matcher,
+  });
+
+  const matchersOf = (drafts: readonly PermissionRuleDraft[]): unknown[] =>
+    drafts.map((d) => d.matcher);
+
+  it("宽前缀规则覆盖窄 prefix draft→丢弃（用户场景：cd/tail 已有宽规则，只剩 cargo check）", () => {
+    const drafts = deriveRememberRule(
+      "Bash",
+      { command: 'cd "C:/document/owner/cypress-agent/src-tauri" && cargo check 2>&1 | tail -30' },
+      [],
+    );
+    expect(drafts).toHaveLength(3); // 空规则库下推导的全量段（快照未过滤形态）
+    const kept = filterRememberableDrafts(drafts, [allowRule("cd"), allowRule("tail")]);
+    expect(matchersOf(kept)).toEqual([{ kind: "bash", mode: "prefix", value: "cargo check" }]);
+  });
+
+  it("未被覆盖的 prefix draft→保留（cargo check ≠ cargo test）", () => {
+    const kept = filterRememberableDrafts(deriveRememberRule("Bash", { command: "cargo check" }), [
+      allowRule("cargo test"),
+    ]);
+    expect(matchersOf(kept)).toEqual([{ kind: "bash", mode: "prefix", value: "cargo check" }]);
+  });
+
+  it("与现有规则精确同值的 prefix draft→丢弃（重复点击不再堆积）", () => {
+    const kept = filterRememberableDrafts(deriveRememberRule("Bash", { command: "pnpm test" }), [
+      allowRule("pnpm test"),
+    ]);
+    expect(kept).toEqual([]);
+  });
+
+  it("tool 级 allow 规则覆盖 prefix draft→丢弃", () => {
+    const kept = filterRememberableDrafts(deriveRememberRule("Bash", { command: "cargo check" }), [
+      allowRule("anything", true),
+    ]);
+    expect(kept).toEqual([]);
+  });
+
+  it("value 缺失的 prefix draft→保守保留（交由行级校验/落盘端兜底）", () => {
+    const kept = filterRememberableDrafts([draftOf("Bash", { kind: "bash", mode: "prefix" })], [
+      allowRule("cd"),
+    ]);
+    expect(kept).toHaveLength(1);
+  });
+
+  it("bash all draft：被 tool 级 allow 或 bash all allow 覆盖→丢；仅有 prefix 规则→留", () => {
+    const allDraft = draftOf("Bash", { kind: "bash", mode: "all" });
+    expect(filterRememberableDrafts([allDraft], [allowRule("x", true)])).toEqual([]);
+    expect(
+      filterRememberableDrafts([allDraft], [ruleWith({ kind: "bash", mode: "all" })]),
+    ).toEqual([]);
+    expect(filterRememberableDrafts([allDraft], [allowRule("ls")])).toHaveLength(1);
+  });
+
+  it("tool 级 draft：同工具 tool 级 allow→丢；不同工具→留", () => {
+    const readDraft = deriveRememberRule("Read", {});
+    expect(readDraft).toHaveLength(1);
+    expect(
+      filterRememberableDrafts(readDraft, [ruleWith({ kind: "tool" }, "allow", "Read")]),
+    ).toEqual([]);
+    expect(
+      filterRememberableDrafts(readDraft, [ruleWith({ kind: "tool" }, "allow", "Grep")]),
+    ).toHaveLength(1);
+    // Bash 的 tool 级规则覆盖不了别的工具
+    expect(filterRememberableDrafts(readDraft, [allowRule("ls", true)])).toHaveLength(1);
+  });
+
+  it("path folder draft：同形状→丢；不同 folder→留（目录包含语义刻意不做）", () => {
+    const writeDraft = deriveRememberRule("Write", { file_path: "C:/proj/src/a.ts" });
+    expect(writeDraft).toHaveLength(1);
+    expect(
+      filterRememberableDrafts(writeDraft, [
+        ruleWith({ kind: "path", field: "file_path", folder: "C:/proj/src" }, "allow", "Write"),
+      ]),
+    ).toEqual([]);
+    // 宽目录（C:/proj）已覆盖窄目录（C:/proj/src）——语义上冗余但本期不做包含判断
+    expect(
+      filterRememberableDrafts(writeDraft, [
+        ruleWith({ kind: "path", field: "file_path", folder: "C:/proj" }, "allow", "Write"),
+      ]),
+    ).toHaveLength(1);
+  });
+
+  it("field equals draft：同形状→丢；不同 equals→留", () => {
+    const urlDraft = deriveRememberRule("WebFetch", { url: "https://x.com/p" });
+    expect(urlDraft).toHaveLength(1);
+    expect(
+      filterRememberableDrafts(urlDraft, [
+        ruleWith({ kind: "field", field: "url", equals: "https://x.com/p" }, "allow", "WebFetch"),
+      ]),
+    ).toEqual([]);
+    expect(
+      filterRememberableDrafts(urlDraft, [
+        ruleWith({ kind: "field", field: "url", equals: "https://x.com/q" }, "allow", "WebFetch"),
+      ]),
+    ).toHaveLength(1);
+  });
+
+  it("同形状 deny/ask 规则不构成覆盖（effect 守卫）", () => {
+    const writeDraft = deriveRememberRule("Write", { file_path: "C:/proj/src/a.ts" });
+    expect(
+      filterRememberableDrafts(writeDraft, [
+        ruleWith({ kind: "path", field: "file_path", folder: "C:/proj/src" }, "deny", "Write"),
+      ]),
+    ).toHaveLength(1);
+    // bash all draft 对 deny/ask 的 tool 级规则同理
+    expect(
+      filterRememberableDrafts([draftOf("Bash", { kind: "bash", mode: "all" })], [
+        ruleWith({ kind: "tool" }, "ask"),
+      ]),
+    ).toHaveLength(1);
+  });
+
+  it("bash contains draft（draft 侧不可达：contains 永不作 allow）落形状臂：同形状→丢", () => {
+    const containsDraft = draftOf("Bash", { kind: "bash", mode: "contains", value: "x" });
+    expect(
+      filterRememberableDrafts([containsDraft], [ruleWith({ kind: "bash", mode: "contains", value: "x" })]),
+    ).toEqual([]);
+    expect(filterRememberableDrafts([containsDraft], [allowRule("ls")])).toHaveLength(1);
+  });
+
+  it("空规则库→全保留", () => {
+    const drafts = deriveRememberRule("Bash", { command: "pnpm test && npm run build" }, []);
+    expect(filterRememberableDrafts(drafts, [])).toHaveLength(drafts.length);
+  });
+
+  it("链式段全覆盖的异常态（derive 回退首段）→过滤后为空：预览/按钮/落盘三侧一致不写", () => {
+    const rules = [allowRule("pnpm test"), allowRule("grep")];
+    const drafts = deriveRememberRule("Bash", { command: "pnpm test | grep x" }, rules);
+    // derive 侧段全覆盖异常态保守回退首段（1 条），但该段已被覆盖——filter 滤掉
+    expect(drafts).toHaveLength(1);
+    expect(filterRememberableDrafts(drafts, rules)).toEqual([]);
   });
 });

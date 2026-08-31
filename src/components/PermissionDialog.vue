@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, reactive, watch, nextTick, onMounted, onUnmounted } from "vue";
 import type { PermissionRequest } from "@/types/chat";
-import type { PermissionRule, PermissionRuleDraft, PermissionScope } from "@/types/permissions";
+import type { PermissionRuleDraft, PermissionScope } from "@/types/permissions";
+import type { RememberContextState } from "@/composables/usePermissionRememberContext";
 import {
   deriveRememberRule,
   deriveSessionFileRules,
   describeRuleMatcher,
+  filterRememberableDrafts,
   hasUnquotedShellControl,
   stripTrailingNumericArg,
 } from "@/utils/permissionRuleDerivation";
@@ -31,14 +33,15 @@ const props = defineProps<{
    *  发来多条请求，弹窗按队列逐条确认——大于 1 时提示用户后面还排着几条，
    *  避免"确认完一条又弹一条"显得像 bug。 */
   queueCount?: number;
-  /** 「允许并记住」要落到的作用域（由 ChatPanel 按 scope 可用性解析后传入）。
-   *  为 null 表示无可持久化作用域可用——不显示「记住」按钮。
-   *  仅对工具调用请求有意义（计划批准 / 澄清提问不是工具调用）。 */
-  rememberScope?: PermissionScope | null;
-  /** 当前生效的权限规则（ChatPanel 拉取的快照）。「允许并记住」推导链式命令时
-   *  需要知道哪些段已被现有规则覆盖，才能记住真正缺的段（而不是第一段的冗余规则）。
-   *  未提供时退化为旧行为（首个控制符处截断）。 */
-  rememberRules?: PermissionRule[] | null;
+  /** 「允许并记住」上下文（ChatPanel 的 usePermissionRememberContext 透传），
+   *  必填——scope 与规则快照同源于一次拉取，union 让「scope 就绪但规则未到」
+   *  这类非法中间态在类型上不可表达：
+   *  - loading：快照未就绪 → 预览区渲染占位行「正在核对现有权限规则…」、
+   *    「记住」按钮不渲染（就绪后随行一起出现，无禁用态分支）；
+   *  - ready：快照就绪 → 规则参与链式分段过滤 + 落盘前语义过滤（预览出的行
+   *    = 会写入的规则）；scope=null 表示无可持久化作用域，不显示记住 UI；
+   *  - failed：拉取失败 → 同不显示记住 UI，普通允许不受影响。 */
+  rememberContext: RememberContextState;
   /** 当前权限模式（ChatPanel 的 selectedPermissionMode）。编辑工具在非编辑模式下
    *  把「允许并记住」换成「进入编辑模式」——对不了解规则机制的用户，逐条点允许/
    *  记住都不解渴，切模式才是"之后别再问"的那个选项（对齐 CLI 的 "allow all
@@ -328,12 +331,49 @@ function submitAnswers() {
 // ── 「允许并记住」：把这次工具调用就地推导成一组 allow 规则 ──
 // 推导规则按工具分（Bash→命令前缀、文件工具→所在文件夹、WebFetch→完整 URL、
 // 其它→工具级）；Bash 链式命令对每个未覆盖段各推一条，一次记住整链。推不出
-// 来（空命令 / 空路径）或没有可持久化作用域时不显示按钮。
-const rememberDrafts = computed<PermissionRuleDraft[]>(() =>
-  props.permission
-    ? deriveRememberRule(props.permission.name, props.permission.input, props.rememberRules ?? [])
-    : [],
+// 来（空命令 / 空路径）或没有可持久化作用域时不显示按钮。推导只在上下午文
+// ready 时执行（loading 时行不渲染），推导结果再过一遍语义过滤——预览出的
+// 行 = 会写入的规则（filterRememberableDrafts 与落盘侧共用）。
+const rememberDrafts = computed<PermissionRuleDraft[]>(() => {
+  const ctx = props.rememberContext;
+  if (!props.permission || ctx.status !== "ready") return [];
+  return filterRememberableDrafts(
+    deriveRememberRule(props.permission.name, props.permission.input, ctx.rules),
+    ctx.rules,
+  );
+});
+
+/** 「记住」功能对这类请求整体可用：真实工具调用（计划批准 / 澄清提问 / 发送前
+ *  确认都不是），且不是「进入编辑模式」优先的编辑工具。与快照就绪态正交。 */
+const rememberPossible = computed(
+  () =>
+    !!props.permission &&
+    !isConfirm.value &&
+    !isPlanApproval.value &&
+    !isQuestion.value &&
+    !canEnterEditMode.value,
 );
+
+/** 快照未就绪的占位门：loading 且该请求确实有可推导规则才显示占位行——
+ *  复用 deriveRememberRule(·, []) 判空（即「零规则快照下的推导」），不写第二
+ *  份可推导谓词；对根本推不出规则的请求不占位（弹窗高度不空跳）。 */
+const rememberPending = computed(() => {
+  if (props.rememberContext.status !== "loading" || !rememberPossible.value) return false;
+  return (
+    !!props.permission &&
+    deriveRememberRule(props.permission.name, props.permission.input, []).length > 0
+  );
+});
+
+const canRemember = computed(() => {
+  const ctx = props.rememberContext;
+  return (
+    rememberPossible.value &&
+    ctx.status === "ready" &&
+    ctx.scope !== null &&
+    rememberDrafts.value.length > 0
+  );
+});
 
 /** Bash prefix 规则的 matcher value（可编辑的规则值）；其它 matcher 只读。 */
 function bashPrefixValue(d: PermissionRuleDraft): string | null {
@@ -343,11 +383,12 @@ function bashPrefixValue(d: PermissionRuleDraft): string | null {
 }
 
 /** 每条规则的可编辑值：初始 = 推导值，用户可改。
- *  同步源是 rememberDrafts 而不是 permission id：rememberRules 由 ChatPanel
- *  异步拉取（弹窗先以空规则渲染全部段，规则到达后已覆盖段被过滤、行收缩）——
- *  只盯 id 的话，规则到达触发的行变化不会重同步，输入框残留旧行的值（rm 行
- *  显示 cd 的规则值，提交即写错规则）。rememberDrafts 不依赖 editableValues，
- *  用户编辑不会触发本回调，无回写循环。 */
+ *  同步源是 rememberDrafts 而不是 permission id：上下文经 loading→ready 迁移
+ *  （快照到达）或 ready→loading→ready（权限队列下一条请求）都会触发行集变化
+ *  ——只盯 id 的话，行变化不会重同步，输入框残留旧行的值（rm 行显示 cd 的
+ *  规则值，提交即写错规则）。loading 时 drafts 恒 []，占位行是纯展示节点、
+ *  不经本同步（无残留路径）。rememberDrafts 不依赖 editableValues，用户编辑
+ *  不会触发本回调，无回写循环。 */
 const editableValues = reactive<string[]>([]);
 watch(
   rememberDrafts,
@@ -365,6 +406,8 @@ watch(
 const editableInvalid = computed<Array<string | null>>(() =>
   rememberDrafts.value.map((d, i) => {
     if (bashPrefixValue(d) === null) return null;
+    // 不可达（?? 右臂）：editableValues 由 watch 盯 rememberDrafts 同步（pre
+    // flush 先于渲染），下标必在界内——防御臂，防未来行数组与值数组脱钩。
     const v = editableValues[i] ?? "";
     if (!v.trim()) return "规则值不能为空";
     if (hasUnquotedShellControl(v)) return "含未引用 shell 控制符（|;&>< 等）——允许规则永不命中";
@@ -396,15 +439,6 @@ const canEnterEditMode = computed(
     !["acceptEdits", "auto", "bypassPermissions"].includes(props.currentMode ?? ""),
 );
 
-const canRemember = computed(
-  () =>
-    !isPlanApproval.value &&
-    !isQuestion.value &&
-    !canEnterEditMode.value &&
-    rememberDrafts.value.length > 0 &&
-    !!props.rememberScope,
-);
-
 // ── 会话级规则提示：文件工具弹窗里点「允许」会推导一条精确文件规则（本会话内
 // 同文件不再询问，换文件仍确认）——「允许」按钮的 tooltip 让用户知道普通允许
 // ≠ 只放行这一次。与「允许并记住」（持久化文件夹规则）互补：允许=单文件、记住=目录级。
@@ -424,13 +458,19 @@ function ruleStaticDescription(d: PermissionRuleDraft): string {
   return describeRuleMatcher(d);
 }
 function emitAllowAndRemember() {
-  if (!props.permission || !props.rememberScope || !rememberValid.value) return;
+  const ctx = props.rememberContext;
+  // 不可达：按钮 v-if="canRemember" 已保证 permission 非空 + ready + scope 非空 +
+  // 有行，行级校验由按钮 :disabled 守——防御臂，防未来新增调用点绕过守卫。
+  if (!props.permission || ctx.status !== "ready" || ctx.scope === null || !rememberValid.value) {
+    return;
+  }
   const rules = rememberDrafts.value.map((d, i) => {
     if (bashPrefixValue(d) === null) return d;
+    // ?? 右臂不可达：editableValues 由 watch 同步，下标必在界内（同 editableInvalid）。
     return { ...d, matcher: { ...d.matcher, value: (editableValues[i] ?? "").trim() } };
   });
   emit("respond", props.permission.id, true, undefined, undefined, {
-    scope: props.rememberScope,
+    scope: ctx.scope,
     rules,
   });
 }
@@ -562,11 +602,19 @@ const inputJson = computed(() => {
       </div>
       <!-- 「允许并记住」预览：点之前先让用户看清将记住什么（落到哪个作用域
            由点击后的 toast 确认，不在此占一行）。
-           只在工具调用且有可推导规则时出现（计划批准 / 澄清提问不显示）。
+           快照未就绪（loading）→ 占位行「正在核对现有权限规则…」，记住按钮
+           不渲染，就绪后随行一起出现（无禁用态分支、无先全量后收缩闪烁）。
+           就绪后只在工具调用且有可推导规则时出现（计划批准 / 澄清提问不显示）。
            链式命令一次记住多段时逐条列出；Bash prefix 值可直接编辑（参数
            透明化的兜底），末尾数字参数（tail -8 形态）另给「去掉数字」快捷
            切换。非 Bash 规则只读展示。 -->
-      <div v-if="canRemember" class="perm-remember">
+      <div v-if="rememberPending" class="perm-remember">
+        <span class="perm-remember-hint">正在核对现有权限规则…</span>
+      </div>
+      <div v-else-if="canRemember" class="perm-remember">
+        <div class="perm-remember-lead">
+          链式命令按段放行，已放行的段不再列出——以下规则记住后，下次同类调用自动放行
+        </div>
         <div
           v-for="(d, i) in rememberDrafts"
           :key="i"
@@ -921,6 +969,27 @@ const inputJson = computed(() => {
    按钮之前全部可见可改。 */
 .perm-remember {
   margin: 0 14px 2px;
+}
+
+/* 快照未就绪的占位行：dashed 边示意「进行中」，与就绪后的实体规则行区分。
+   纯展示节点（无输入框），不参与 editableValues 同步。 */
+.perm-remember-hint {
+  display: block;
+  margin-top: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--aide-text-muted);
+  border: 1px dashed var(--aide-border-subtle);
+  border-radius: var(--aide-radius-sm);
+}
+
+/* 预览说明行：链式命令按段拆分、只列未放行段——没有它用户会把「命令拆出的
+   段」误读成「另一条命令」（实测反馈：cd 段被当成前一条 cd 命令）。 */
+.perm-remember-lead {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--aide-text-muted);
 }
 
 .perm-remember-rule {

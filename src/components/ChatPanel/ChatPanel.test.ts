@@ -11,6 +11,11 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) })
 // ── api mock：sessionModel/sessionProvider 受控；其余方法返回安全默认 ──
 const sessionModelMock = vi.fn<(id: string) => Promise<string | null>>();
 const sessionProviderMock = vi.fn<(id: string) => Promise<string | null>>();
+// 权限快照/批量写入桩（usePermissionRememberContext 消费；「允许并记住」用例 override 返回值）
+const permGetMock = vi.fn(async () => ({ revision: 0, scopes: [], rules: [] }));
+const permCreateManyMock = vi.fn(async () => ({ revision: 1, scopes: [], rules: [] }));
+// toast 桩共享引用（「允许并记住」落盘回执文案断言用）
+const showToastMock = vi.fn();
 vi.mock("@aide/sdk/api", () => ({
   api: new Proxy(
     {
@@ -29,7 +34,11 @@ vi.mock("@aide/sdk/api", () => ({
   ),
 }));
 vi.mock("@/api/permissions", () => ({
-  permissionsApi: { get: vi.fn(async () => ({ scopes: [], rules: [] })) },
+  permissionsApi: {
+    get: (project?: string) => permGetMock(project),
+    createMany: (scope: string, rules: unknown[], project?: string) =>
+      permCreateManyMock(scope, rules, project),
+  },
 }));
 vi.mock("../../utils/diagnostics/scrollTrail", () => ({ trail: vi.fn(), snapshotScrollTrail: vi.fn() }));
 
@@ -50,7 +59,7 @@ vi.mock("../../composables/useBtwSession", () => ({
 }));
 vi.mock("../../composables/useQuickActions", () => ({ useQuickActions: () => ({ actions: [] }) }));
 vi.mock("../../composables/useModal", () => ({ useModal: () => ({ confirm: vi.fn(async () => true), choice: vi.fn(async () => "cancel"), notice: vi.fn(async () => undefined) }) }));
-vi.mock("../../composables/useToast", () => ({ useToast: () => ({ toastState: { visible: false, text: "", kind: "info" }, showToast: vi.fn() }) }));
+vi.mock("../../composables/useToast", () => ({ useToast: () => ({ toastState: { visible: false, text: "", kind: "info" }, showToast: showToastMock }) }));
 vi.mock("../../composables/useMentionInserter", () => ({ useMentionInserter: () => ({ pending: { value: null }, insertMention: vi.fn(), consumeMention: vi.fn() }) }));
 vi.mock("../../composables/useInlineMention", () => ({ useInlineMention: () => ({ onInput: vi.fn(), scan: vi.fn() }) }));
 vi.mock("../../composables/useChatPaneWidth", () => ({ setChatPaneRect: vi.fn() }));
@@ -228,5 +237,101 @@ describe("ChatPanel 跨会话串修复", () => {
     const pd2 = w2.findComponent({ name: "PermissionDialog" });
     expect((pd2?.props("permission") as { name: string } | null)?.name).not.toBe("__sendConfirm__");
     w2.unmount();
+  });
+});
+
+describe("ChatPanel — 允许并记住上下文（usePermissionRememberContext 接线）", () => {
+  const localScope = { scope: "local", editable: true, reason: "", storagePath: null, description: "" };
+  const viewWith = (rules: unknown[]) => ({ revision: 1, scopes: [localScope], rules });
+  const allowRuleBash = (value: string) => ({
+    id: `r-${value}`,
+    scope: "local",
+    order: 0,
+    effect: "allow",
+    tool: "Bash",
+    matcher: { kind: "bash", mode: "prefix", value },
+    source: { label: "test", readOnly: false },
+  });
+  const chainPermission = () => ({
+    id: "p1",
+    name: "Bash",
+    input: { command: 'cd "C:/x" && cargo check 2>&1 | tail -30' },
+  });
+
+  /** mount + flush 到快照就绪。 */
+  async function mountWithPermission() {
+    const wrapper = mount(ChatPanel, {
+      props: baseProps({ permission: chainPermission(), workspacePath: "C:/ws" }),
+    });
+    await flush();
+    return wrapper;
+  }
+
+  beforeEach(() => {
+    permGetMock.mockReset().mockImplementation(async () => viewWith([allowRuleBash("cd"), allowRuleBash("tail")]));
+    permCreateManyMock.mockReset().mockImplementation(async () => viewWith([]));
+    showToastMock.mockClear();
+  });
+
+  it("权限请求挂起 → 快照就绪，弹窗收到 ready 上下文（rules 透传、scope=local）", async () => {
+    const wrapper = await mountWithPermission();
+    const ctx = wrapper.findComponent({ name: "PermissionDialog" }).props("rememberContext");
+    expect(ctx).toEqual({
+      status: "ready",
+      rules: [allowRuleBash("cd"), allowRuleBash("tail")],
+      scope: "local",
+    });
+    wrapper.unmount();
+  });
+
+  it("点「允许并记住」：预览只列未覆盖段（cargo check），createMany 收到该段 + 成功 toast", async () => {
+    const wrapper = await mountWithPermission();
+    // 预览行：cd/tail 已被宽规则覆盖 → 只剩 cargo check 一行
+    const inputs = wrapper.findAll(".perm-remember-value");
+    expect(inputs).toHaveLength(1);
+    expect((inputs[0].element as HTMLInputElement).value).toBe("cargo check");
+
+    await wrapper.get('[data-action="remember"]').trigger("click");
+    await flush();
+
+    // 落盘前现拉（get 共两次：快照 1 + persist 1），写入钉在弹窗会话工作区
+    expect(permGetMock).toHaveBeenCalledTimes(2);
+    expect(permCreateManyMock).toHaveBeenCalledWith(
+      "local",
+      [
+        {
+          effect: "allow",
+          tool: "Bash",
+          matcher: { kind: "bash", mode: "prefix", value: "cargo check" },
+        },
+      ],
+      "C:/ws",
+    );
+    expect(showToastMock).toHaveBeenCalledWith(
+      expect.stringContaining("已记住到本项目本地"),
+      "success",
+    );
+    wrapper.unmount();
+  });
+
+  it("挂起期间规则库新增等价规则 → 落盘时现拉发现已覆盖：不写入 + 无需重复记住 toast", async () => {
+    // get#1（弹窗快照）：库里有 cd/tail 宽规则 → 预览只剩 cargo check；
+    // get#2（persist 现拉）：挂起期间别处已写入 cargo check 等价规则 → all-covered
+    let call = 0;
+    permGetMock.mockImplementation(async () => {
+      call++;
+      const base = [allowRuleBash("cd"), allowRuleBash("tail")];
+      return viewWith(call === 1 ? base : [...base, allowRuleBash("cargo check")]);
+    });
+    const wrapper = await mountWithPermission();
+    expect(wrapper.findAll(".perm-remember-value")).toHaveLength(1);
+
+    await wrapper.get('[data-action="remember"]').trigger("click");
+    await flush();
+
+    expect(permGetMock).toHaveBeenCalledTimes(2);
+    expect(permCreateManyMock).not.toHaveBeenCalled();
+    expect(showToastMock).toHaveBeenCalledWith("现有规则已放行同类调用，无需重复记住", "success");
+    wrapper.unmount();
   });
 });

@@ -89,10 +89,14 @@
 - [ ] 再次触发同类命令（如 `pnpm test --runInBand`）→ 不弹窗，直接放行
 - [ ] Bash 链式安全：记住 `pnpm test` 后，运行 `pnpm test && rm -rf build` → **仍弹窗**（prefix-allow 不放行含未引用控制符的命令）
 - [ ] 去重：对同一命令再点「允许并记住」→ 不产生第二条规则（规则数不增）
-- [ ] 链式命令的预览只列**未被现有规则覆盖的段**：已有 `grep`/`head` 放行规则时跑 `rm -f x.jar && mvn package | grep x | head` → 预览只出现 `rm -f` / `mvn` 两条，且各行输入框的值与所属段对齐（规则异步加载后不错位）
+- [ ] **快照就绪前占位**：弹窗刚出现（权限快照未就绪）时预览区显示「正在核对现有权限规则…」占位行、「允许并记住」按钮不渲染；快照就绪后行与按钮一起出现，无「先全量后收缩」闪烁（权限队列连续两条请求时尤其要验：第二条的首帧不得继承第一条的旧预览）
+- [ ] 链式命令的预览只列**未被现有规则覆盖的段**：已有 `grep`/`head` 放行规则时跑 `rm -f x.jar && mvn package | grep x | head` → 预览只出现 `rm -f` / `mvn` 两条，且各行输入框的值与所属段对齐（规则异步加载后不错位）；预览顶部说明行写明「已放行的段不再列出」
+- [ ] 链式段全覆盖 → 「允许并记住」按钮不出现（也不出现「点了记住却 0 条写入、toast 报成功」）
+- [ ] 挂起期间库变动：弹窗挂起时在设置面板新增等价规则后再点「允许并记住」→ toast「现有规则已放行同类调用，无需重复记住」、不写重复规则（落盘前总是现拉最新规则库做语义过滤）
 - [ ] Write/Edit：记住后，同目录及子目录下文件编辑自动放行；其它目录仍弹窗
 - [ ] WebFetch：记住后，同 URL 再抓取自动放行；其它 URL 仍弹窗
 - [ ] 计划批准（ExitPlanMode）/ AskUserQuestion 对话框**不**显示「允许并记住」按钮
+- [ ] 快照拉取失败（如 sidecar 异常）：弹窗不显示记住相关 UI，普通「允许」仍可点、正常放行
 - [ ] 无项目打开时：点「允许并记住」后 toast 显示「已记住到用户全局」，规则落到 `~/.aide/settings.json`
 - [ ] 「允许」（单次）按钮仍存在且只放行本次、不写规则
 
@@ -102,7 +106,7 @@
 
 - **Rust**：`cargo test --lib` — 覆盖 `settings::` / `policy::` / `commands::permissions` / `runtime::provider`
 - **sidecar**：`pnpm exec vitest run agent-sidecar/src/policy agent-sidecar/src/permissions.test.ts agent-sidecar/src/session-worker.test.ts agent-sidecar/src/session-manager.test.ts agent-sidecar/src/instructions.test.ts`
-- **前端**：`pnpm exec vitest run src/api/permissions.test.ts src/composables/usePermissions.test.ts src/components/permissions src/components/SettingsPanel.test.ts src/components/PermissionDialog.test.ts src/utils/permissionRuleDerivation.test.ts`
+- **前端**：`pnpm exec vitest run src/api/permissions.test.ts src/composables/usePermissions.test.ts src/composables/usePermissionRememberContext.test.ts src/components/permissions src/components/SettingsPanel.test.ts src/components/PermissionDialog.test.ts src/components/ChatPanel/ChatPanel.test.ts src/utils/permissionRuleDerivation.test.ts`
 - **类型**：`node node_modules/vue-tsc/bin/vue-tsc.js --noEmit`（⚠️ `pnpm vue-tsc --noEmit` 是 bogus shim，会打印 "Already up to date" 但不真跑 vue-tsc，必须用 direct binary）
 - **构建**：`pnpm build` + `pnpm --dir agent-sidecar build`
 

@@ -385,6 +385,61 @@ export function deriveRememberRule(
 }
 
 // ---------------------------------------------------------------------------
+// 落盘前语义过滤（预览侧与落盘侧共用——预览出的行 = 会写入的规则）
+// ---------------------------------------------------------------------------
+
+/** 规则形状的稳定 key：effect + tool + matcher 序列化。形状精确匹配语义从
+ *  ChatPanel 旧 persistRememberRule 迁入（matcher 字段顺序前端由字面量、
+ *  Rust 回读由 serde 结构体序决定，两侧各自稳定，实践中 key 可靠）。 */
+function ruleShapeKey(rule: { effect: string; tool: string; matcher: unknown }): string {
+  return `${rule.effect}|${rule.tool}|${JSON.stringify(rule.matcher)}`;
+}
+
+/** draft 是否已被现有规则**语义**覆盖（冗余，无须再写）。刻意边界：
+ *  ① 只认 allow——同形状 deny/ask 不构成覆盖；
+ *  ② bash prefix 用「带边界前缀匹配」判断（draft 的 value 本身即命令段，
+ *    复用链式拆段的同一份覆盖判定）；path folder 的目录包含语义不做
+ *    （pathWithinFolder 是 async+fs），与 field 一同走形状精确匹配；
+ *  ③ 不建模 deny/ask 遮蔽（specificity 链在 Rust/sidecar）；
+ *  ④ 批内 draft 互覆盖不处理（只对既有规则库去重）；
+ *  ⑤ 覆盖判定跨 scope——任一 scope 的 allow 已放行即冗余（与
+ *    deriveRememberRule 的段覆盖同语义，不区分落点）。 */
+function isDraftCovered(
+  draft: PermissionRuleDraft,
+  rules: readonly PermissionRule[],
+): boolean {
+  const m = draft.matcher;
+  if (m.kind === "bash" && m.mode === "prefix") {
+    // value 缺失的 prefix draft 视为未覆盖（保守保留，交给行级校验/落盘端兜底）
+    return m.value !== undefined && segmentCoveredByRules(m.value, rules);
+  }
+  if ((m.kind === "bash" && m.mode === "all") || m.kind === "tool") {
+    // 全量放行 draft 只被同类全量放行覆盖：同工具的 tool 级 allow 或 bash all
+    return rules.some(
+      (r) =>
+        r.effect === "allow" &&
+        r.tool === draft.tool &&
+        (r.matcher.kind === "tool" || (r.matcher.kind === "bash" && r.matcher.mode === "all")),
+    );
+  }
+  // bash contains（draft 侧不可达：contains 永不作 allow，上游已校验）、
+  // path / field：形状精确匹配——同 key 的现有规则即等价规则。
+  const key = ruleShapeKey({ effect: draft.effect, tool: draft.tool, matcher: draft.matcher });
+  return rules.some((r) => ruleShapeKey(r) === key);
+}
+
+/** 落盘前的语义过滤：与现有 allow 规则语义重复的 draft 丢弃。预览侧
+ *  （PermissionDialog 的 rememberDrafts）与落盘侧（usePermissionRememberContext
+ *  的 persistRemember）共用，保证「预览出的行 = 会写入的规则」——预览过滤后
+ *  为空则记住按钮本就不显示，落盘端不会再出现「0 条写入却弹成功 toast」。 */
+export function filterRememberableDrafts(
+  drafts: readonly PermissionRuleDraft[],
+  existingRules: readonly PermissionRule[],
+): PermissionRuleDraft[] {
+  return drafts.filter((d) => !isDraftCovered(d, existingRules));
+}
+
+// ---------------------------------------------------------------------------
 // 会话级规则推导（「允许」文件工具 → 本会话内同文件不再询问）
 // ---------------------------------------------------------------------------
 

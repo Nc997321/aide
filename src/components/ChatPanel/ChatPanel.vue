@@ -14,10 +14,13 @@ import BtwDrawer from "../BtwDrawer.vue";
 import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, ContextUsage, ModelOption, ModelSwitchResult, PermissionModeOption, PermissionRequest, RateLimitInfo, TaskItem } from "@/types/chat";
 import type { WorkspaceInfo } from "@/types";
 import { api } from "@/api";
-import { permissionsApi } from "@/api/permissions";
 import { deriveSessionFileRules } from "@/utils/permissionRuleDerivation";
 import { trail } from "../../utils/diagnostics/scrollTrail";
-import type { PermissionRuleDraft, PermissionScope, PermissionSettingsView } from "@/types/permissions";
+import type { PermissionRuleDraft, PermissionScope } from "@/types/permissions";
+import {
+  usePermissionRememberContext,
+  type RememberPersistResult,
+} from "@/composables/usePermissionRememberContext";
 import type { PendingJump, SendOptions } from "@/composables/useChatSession";
 import { useChatScroll } from "@/composables/useChatScroll";
 import { useProviders } from "@/composables/useProviders";
@@ -197,39 +200,46 @@ const displayModels = computed<ModelOption[]>(() => identity.displayModels.value
 const { toastState, showToast } = useToast();
 
 
-// ── 「允许并记住」作用域解析 ──
-// 权限请求出现时拉一次权限设置视图，决定「记住」默认落到哪个作用域（项目本地
-// 优先，不可编辑则回退用户全局），并缓存规则列表供点击时去重。权限请求不频繁，
-// 一次 prompt 一次 get() 可接受。请求消失时清空，避免跨请求串用旧视图。
+// ── 「允许并记住」上下文 ──
+// 快照拉取/竞态守卫/落盘全部收口在 usePermissionRememberContext（显式三态
+// loading/ready/failed + 代际号），ChatPanel 只透传 state 给弹窗、按落盘
+// 回执分派 toast。注意 requestId 钉在 props.permission（真实权限请求）上而非
+// displayedPermission——sendConfirm 是本地合成请求，不该触发权限快照拉取。
 // workspacePath prop 是弹窗所属会话自己的工作区（PaneGroup 按会话注册解析，
 // 不随活动工作区变化）——「记住」的可用性判定与落盘必须钉在它上面：弹窗挂起
 // 期间切了工作区，Rust 侧按当前活动工作区解析会把规则写进新工作区（bug）。
-const rememberScope = ref<PermissionScope | null>(null);
-const rememberView = ref<PermissionSettingsView | null>(null);
-const rememberWsRoot = ref<string | null>(null);
-watch(
-  () => props.permission?.id,
-  async (id) => {
-    if (!id || !props.permission) {
-      rememberScope.value = null;
-      rememberView.value = null;
-      rememberWsRoot.value = null;
+const {
+  state: rememberState,
+  persistRemember,
+} = usePermissionRememberContext({
+  requestId: () => props.permission?.id ?? null,
+  workspacePath: () => props.workspacePath,
+});
+
+/** 落点作用域的中文措辞（toast 用）。 */
+function scopeWordFor(scope: PermissionScope): string {
+  return scope === "local" ? "本项目本地" : scope === "user" ? "用户全局" : scope;
+}
+
+/** 「允许并记住」落盘回执 → toast 文案。落盘失败仍放行本次（不阻塞用户），仅提示。 */
+function toastRememberResult(result: RememberPersistResult): void {
+  switch (result.outcome) {
+    case "persisted":
+      showToast(
+        `已记住到${scopeWordFor(result.scope)}（${result.count} 条），下次自动放行`,
+        "success",
+      );
       return;
-    }
-    rememberWsRoot.value = props.workspacePath ?? null;
-    try {
-      const view = await permissionsApi.get(rememberWsRoot.value ?? undefined);
-      rememberView.value = view;
-      const local = view.scopes.find((s) => s.scope === "local");
-      const user = view.scopes.find((s) => s.scope === "user");
-      rememberScope.value = local?.editable ? "local" : user?.editable ? "user" : null;
-    } catch {
-      rememberScope.value = null;
-      rememberView.value = null;
-    }
-  },
-  { immediate: true },
-);
+    case "all-covered":
+      showToast("现有规则已放行同类调用，无需重复记住", "success");
+      return;
+    case "no-editable-scope":
+      showToast("没有可写入的权限作用域，本次仍已放行", "danger");
+      return;
+    case "failed":
+      showToast(`记住规则失败：${result.error}（本次仍已放行）`, "danger");
+  }
+}
 
 // 滚动诊断环：弹窗显隐标记。滚轮定格的嫌疑方向之一是弹窗挤压/死区——留下
 // show/hide 时间戳，定格时与 wheel/scroll 记录互证（弹窗出现前后滚轮是否还
@@ -238,35 +248,6 @@ watch(
   () => props.permission?.id ?? null,
   (id) => trail("perm", id ? `show:${props.permission?.name}` : "hide"),
 );
-
-/** 点击「允许并记住」：先落盘 allow 规则（Rust 广播新快照给 sidecar，后续同类调用
- *  自动放行），再走正常 approve 放行本次。目标作用域已有等价 allow 规则时跳过创建，
- *  避免重复点击堆积重复规则。落盘失败仍放行本次（不阻塞用户），仅提示。
- *  落盘用 rememberWsRoot 显式钉住弹窗所属会话的工作区（弹窗挂起期间切工作区时，
- *  缺省按当前活动工作区解析会把规则写进新工作区）。 */
-async function persistRememberRule(
-  scope: PermissionScope,
-  rules: PermissionRuleDraft[],
-): Promise<void> {
-  const scopeWord = scope === "local" ? "本项目本地" : scope === "user" ? "用户全局" : scope;
-  try {
-    const view = rememberView.value ?? (await permissionsApi.get(rememberWsRoot.value ?? undefined));
-    const key = (r: { effect: string; tool: string; matcher: unknown }) =>
-      `${r.effect}|${r.tool}|${JSON.stringify(r.matcher)}`;
-    const fresh = rules.filter((rule) => {
-      const draftKey = key({ effect: "allow", tool: rule.tool, matcher: rule.matcher });
-      return !view.rules.some(
-        (r) => r.scope === scope && r.effect === "allow" && key(r) === draftKey,
-      );
-    });
-    if (fresh.length > 0) {
-      await permissionsApi.createMany(scope, fresh, rememberWsRoot.value ?? undefined);
-    }
-    showToast(`已记住到${scopeWord}，下次自动放行`, "success");
-  } catch (e) {
-    showToast(`记住规则失败：${String((e as Error)?.message ?? e)}（本次仍已放行）`, "danger");
-  }
-}
 
 /** PermissionDialog 的 respond 统一入口：处理「记住」持久化 + 会话规则推导 +
  *  权限模式同步 + 放行。发送前确认（变体 C，name="__sendConfirm__"）在此本地
@@ -296,7 +277,9 @@ async function onPermissionRespond(
   // 防御性更新对话框展示用 ref；输入框选择器是用户侧事实源，不经此同步。
   if (nextMode) permissionMode.value = nextMode;
   if (approved && persistRule) {
-    await persistRememberRule(persistRule.scope, persistRule.rules);
+    // 落盘（现拉最新规则库 + 语义过滤，收口在 composable）→ 回执分派 toast；
+    // 失败仍放行本次（toastRememberResult 内提示），不阻塞用户。
+    toastRememberResult(await persistRemember(persistRule));
   }
   // 会话级规则：手动模式下点普通「允许」放行文件工具（Edit/Write/MultiEdit/
   // NotebookEdit）时，推导精确文件 allow 规则随放行透传 sidecar 入库——本会话内
@@ -570,8 +553,7 @@ function onOpenBgDock(taskId: string) {
     <PermissionDialog
       :permission="displayedPermission"
       :queue-count="permissionQueueCount"
-      :remember-scope="rememberScope"
-      :remember-rules="rememberView?.rules ?? []"
+      :remember-context="rememberState"
       :current-mode="permissionMode"
       @respond="onPermissionRespond"
     />

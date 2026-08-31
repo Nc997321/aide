@@ -5,7 +5,8 @@ import { nextTick } from "vue";
 import PermissionDialog from "./PermissionDialog.vue";
 import { useModal } from "../composables/useModal";
 import type { PermissionRequest } from "../types/chat";
-import type { PermissionRule } from "../types/permissions";
+import type { PermissionRule, PermissionScope } from "../types/permissions";
+import type { RememberContextState } from "../composables/usePermissionRememberContext";
 
 // 组件的键盘 handler 挂 window——测试间不卸载会残留 listener：旧 listener 先
 // preventDefault 事件，本测试的 listener 见 defaultPrevented 让路（生产语义正确，
@@ -18,16 +19,53 @@ const bashPermission = (): PermissionRequest => ({
   input: { command: "ls -la" },
 });
 
+// ── rememberContext 契约 helpers ──
+// rememberContext 必填（生产侧 ChatPanel 恒传）：不关心记住态的用例统一走
+// mountDialog / mountAttached 注入 loading 默认；关心记住态的用例用 readyCtx
+// 显式构造就绪快照。
+
+/** loading 上下文（快照未就绪）。对象只读共享，弹窗不修改它。 */
+const LOADING_CTX: RememberContextState = { status: "loading" };
+
+/** ready 上下文：rules = 现有规则快照（默认空），scope = 可持久化作用域
+ *  （默认 "local"；null = 无可写作用域，记住 UI 不显示）。 */
+function readyCtx(
+  rules: PermissionRule[] = [],
+  scope: PermissionScope | null = "local",
+): RememberContextState {
+  return { status: "ready", rules, scope };
+}
+
+/** 统一 mount：默认注入 loading 上下文，props 覆盖式合并。 */
+function mountDialog(props: Record<string, unknown>) {
+  return mount(PermissionDialog, {
+    props: { rememberContext: LOADING_CTX, ...props },
+  });
+}
+
+/** 现有 Bash 前缀 allow 规则（快照构造用）。 */
+function allowRule(value: string): PermissionRule {
+  return {
+    id: `r-${value}`,
+    scope: "local",
+    order: 0,
+    effect: "allow",
+    tool: "Bash",
+    matcher: { kind: "bash", mode: "prefix", value },
+    source: { label: "test", readOnly: false },
+  };
+}
+
 describe("PermissionDialog — ordinary tool confirmation", () => {
   it("exposes only deny and allow (no always-allow button)", () => {
-    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+    const wrapper = mountDialog({ permission: bashPermission() });
     expect(wrapper.find('[data-action="always-allow"]').exists()).toBe(false);
     expect(wrapper.find('[data-action="allow"]').exists()).toBe(true);
     expect(wrapper.find('[data-action="deny"]').exists()).toBe(true);
   });
 
   it("emits respond(approved=true) when allow is clicked (no always payload)", async () => {
-    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+    const wrapper = mountDialog({ permission: bashPermission() });
     await wrapper.get('[data-action="allow"]').trigger("click");
     const events = wrapper.emitted("respond");
     expect(events).toBeTruthy();
@@ -36,7 +74,7 @@ describe("PermissionDialog — ordinary tool confirmation", () => {
   });
 
   it("deny click opens the reason input instead of responding immediately", async () => {
-    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+    const wrapper = mountDialog({ permission: bashPermission() });
     await wrapper.get('[data-action="deny"]').trigger("click");
     expect(wrapper.emitted("respond")).toBeUndefined(); // 尚未拒绝
     expect(wrapper.find('[data-action="deny-reason"]').exists()).toBe(true); // 输入区展开
@@ -45,7 +83,7 @@ describe("PermissionDialog — ordinary tool confirmation", () => {
   });
 
   it("submitting with a reason emits respond with reason at the end", async () => {
-    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+    const wrapper = mountDialog({ permission: bashPermission() });
     await wrapper.get('[data-action="deny"]').trigger("click");
     await wrapper.get('[data-action="deny-reason"]').setValue("别删目录，改成移动");
     await wrapper.get('[data-action="deny-submit"]').trigger("click");
@@ -53,14 +91,14 @@ describe("PermissionDialog — ordinary tool confirmation", () => {
   });
 
   it("submitting with an empty reason is a plain deny (reason undefined)", async () => {
-    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+    const wrapper = mountDialog({ permission: bashPermission() });
     await wrapper.get('[data-action="deny"]').trigger("click");
     await wrapper.get('[data-action="deny-submit"]').trigger("click");
     expect(wrapper.emitted("respond")![0]).toEqual(["p1", false, undefined, undefined, undefined, undefined]);
   });
 
   it("Enter in the reason input submits the deny", async () => {
-    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+    const wrapper = mountDialog({ permission: bashPermission() });
     await wrapper.get('[data-action="deny"]').trigger("click");
     await wrapper.get('[data-action="deny-reason"]').setValue("改用相对路径");
     await wrapper.get('[data-action="deny-reason"]').trigger("keydown.enter");
@@ -68,7 +106,7 @@ describe("PermissionDialog — ordinary tool confirmation", () => {
   });
 
   it("back restores the button row without responding", async () => {
-    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+    const wrapper = mountDialog({ permission: bashPermission() });
     await wrapper.get('[data-action="deny"]').trigger("click");
     await wrapper.get('[data-action="deny-reason"]').setValue("放弃理由");
     await wrapper.get('[data-action="deny-back"]').trigger("click");
@@ -77,7 +115,7 @@ describe("PermissionDialog — ordinary tool confirmation", () => {
   });
 
   it("a new request resets the deny input state", async () => {
-    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+    const wrapper = mountDialog({ permission: bashPermission() });
     await wrapper.get('[data-action="deny"]').trigger("click");
     await wrapper.get('[data-action="deny-reason"]').setValue("旧理由");
     await wrapper.setProps({ permission: { id: "p2", name: "Bash", input: { command: "ls" } } });
@@ -86,24 +124,32 @@ describe("PermissionDialog — ordinary tool confirmation", () => {
 });
 
 describe("PermissionDialog — 允许并记住", () => {
-  it("无 rememberScope 时不显示记住按钮", () => {
-    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+  it("ready 但无可持久化作用域（scope=null）时不显示记住按钮且无占位行", () => {
+    const wrapper = mountDialog({
+      permission: bashPermission(),
+      rememberContext: readyCtx([], null),
+    });
     expect(wrapper.find('[data-action="remember"]').exists()).toBe(false);
+    expect(wrapper.find(".perm-remember-hint").exists()).toBe(false);
   });
 
-  it("有 rememberScope 且可推导时显示记住按钮 + 规则行", () => {
-    const wrapper = mount(PermissionDialog, {
-      props: { permission: bashPermission(), rememberScope: "local" },
+  it("ready 且可推导时显示记住按钮 + 规则行 + 段说明行", () => {
+    const wrapper = mountDialog({
+      permission: bashPermission(),
+      rememberContext: readyCtx(),
     });
     expect(wrapper.find('[data-action="remember"]').exists()).toBe(true);
     const ruleInput = wrapper.find(".perm-remember-value");
     expect(ruleInput.exists()).toBe(true);
     expect((ruleInput.element as HTMLInputElement).value).toBe("ls -la");
+    // 说明行：链式命令按段放行、已放行的段不再列出（防「拆段被误读成另一条命令」）
+    expect(wrapper.find(".perm-remember-lead").text()).toContain("已放行的段不再列出");
   });
 
   it("点击记住按钮 emit 带 persistRule 的 respond", async () => {
-    const wrapper = mount(PermissionDialog, {
-      props: { permission: bashPermission(), rememberScope: "local" },
+    const wrapper = mountDialog({
+      permission: bashPermission(),
+      rememberContext: readyCtx(),
     });
     await wrapper.get('[data-action="remember"]').trigger("click");
     const events = wrapper.emitted("respond");
@@ -121,13 +167,17 @@ describe("PermissionDialog — 允许并记住", () => {
   });
 
   it("计划批准不显示记住按钮", () => {
-    const wrapper = mount(PermissionDialog, {
-      props: {
-        permission: { id: "p2", name: "ExitPlanMode", input: { plan: "do X" } },
-        rememberScope: "local",
-      },
+    const wrapper = mountDialog({
+      permission: { id: "p2", name: "ExitPlanMode", input: { plan: "do X" } },
+      rememberContext: readyCtx(),
     });
     expect(wrapper.find('[data-action="remember"]').exists()).toBe(false);
+    // loading + 非工具形态同样无占位行（rememberPossible 排除）
+    const loadingWrapper = mountDialog({
+      permission: { id: "p2", name: "ExitPlanMode", input: { plan: "do X" } },
+      rememberContext: LOADING_CTX,
+    });
+    expect(loadingWrapper.find(".perm-remember-hint").exists()).toBe(false);
   });
 });
 
@@ -139,15 +189,17 @@ describe("PermissionDialog — 允许并记住（多段 + 参数透明化）", (
   });
 
   it("链式命令一次列出多条规则（每段一条）", () => {
-    const wrapper = mount(PermissionDialog, {
-      props: { permission: pipePermission(), rememberScope: "local" },
+    const wrapper = mountDialog({
+      permission: pipePermission(),
+      rememberContext: readyCtx(),
     });
     expect(wrapper.findAll(".perm-remember-rule")).toHaveLength(2); // npx vitest run + tail -8
   });
 
   it("编辑规则值后 emit 携带编辑后的值", async () => {
-    const wrapper = mount(PermissionDialog, {
-      props: { permission: bashPermission(), rememberScope: "local" },
+    const wrapper = mountDialog({
+      permission: bashPermission(),
+      rememberContext: readyCtx(),
     });
     await wrapper.find(".perm-remember-value").setValue("ls");
     await wrapper.get('[data-action="remember"]').trigger("click");
@@ -158,8 +210,9 @@ describe("PermissionDialog — 允许并记住（多段 + 参数透明化）", (
   });
 
   it("末尾数字参数（tail -8 形态）提示并可一键改宽", async () => {
-    const wrapper = mount(PermissionDialog, {
-      props: { permission: pipePermission(), rememberScope: "local" },
+    const wrapper = mountDialog({
+      permission: pipePermission(),
+      rememberContext: readyCtx(),
     });
     expect(wrapper.find(".perm-remember-note").text()).toContain("仅匹配字面参数");
     await wrapper.get(".perm-remember-simplify").trigger("click");
@@ -168,8 +221,9 @@ describe("PermissionDialog — 允许并记住（多段 + 参数透明化）", (
   });
 
   it("编辑成含控制符的值→行标红、按钮禁用", async () => {
-    const wrapper = mount(PermissionDialog, {
-      props: { permission: bashPermission(), rememberScope: "local" },
+    const wrapper = mountDialog({
+      permission: bashPermission(),
+      rememberContext: readyCtx(),
     });
     await wrapper.find(".perm-remember-value").setValue("ls; rm -rf /");
     expect(wrapper.find(".perm-remember-error").exists()).toBe(true);
@@ -178,44 +232,88 @@ describe("PermissionDialog — 允许并记住（多段 + 参数透明化）", (
     ).toBe(true);
   });
 
-  it("非 Bash 规则（WebFetch）只读展示，无可编辑输入", () => {
-    const wrapper = mount(PermissionDialog, {
-      props: {
-        permission: { id: "p5", name: "WebFetch", input: { url: "https://x.com/p" } },
-        rememberScope: "local",
-      },
+  it("编辑成空值→行标红「规则值不能为空」、按钮禁用", async () => {
+    const wrapper = mountDialog({
+      permission: bashPermission(),
+      rememberContext: readyCtx(),
+    });
+    await wrapper.find(".perm-remember-value").setValue("   ");
+    expect(wrapper.find(".perm-remember-error").text()).toBe("规则值不能为空");
+    expect(
+      (wrapper.get('[data-action="remember"]').element as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it("非 Bash 规则（WebFetch）只读展示，无可编辑输入；点击记住原样透传 draft", async () => {
+    const wrapper = mountDialog({
+      permission: { id: "p5", name: "WebFetch", input: { url: "https://x.com/p" } },
+      rememberContext: readyCtx(),
     });
     expect(wrapper.find(".perm-remember-static").exists()).toBe(true);
     expect(wrapper.find(".perm-remember-value").exists()).toBe(false);
+
+    // 点击记住：非 Bash draft 原样透传（不带可编辑值改写）
+    await wrapper.get('[data-action="remember"]').trigger("click");
+    const persist = wrapper.emitted("respond")![0][4] as {
+      scope: string;
+      rules: { tool: string; matcher: unknown }[];
+    };
+    expect(persist.rules).toEqual([
+      { effect: "allow", tool: "WebFetch", matcher: { kind: "field", field: "url", equals: "https://x.com/p" } },
+    ]);
   });
 
-  it("规则异步到达后已覆盖段收缩出预览，输入框值与新行对齐（不残留旧行值）", async () => {
-    // 回归：rememberRules 由 ChatPanel 异步拉取，弹窗先以空规则渲染全部段；
-    // 规则到达后 editableValues 必须随 rememberDrafts 重同步——否则 rm 行
-    // 残留 cd 行的值，点「允许并记住」会把错误值写进规则库。
-    const allowRule = (value: string): PermissionRule => ({
-      id: `r-${value}`,
-      scope: "local",
-      order: 0,
-      effect: "allow",
-      tool: "Bash",
-      matcher: { kind: "bash", mode: "prefix", value },
-      source: { label: "test", readOnly: false },
-    });
-    const wrapper = mount(PermissionDialog, {
-      props: {
-        permission: {
-          id: "p6",
-          name: "Bash",
-          input: { command: "cd /tmp/x && rm -f a.jar && grep foo" },
-        },
-        rememberScope: "local",
-        rememberRules: [],
+  it("快照未就绪（loading）→ 占位行、无按钮无规则行；就绪后已覆盖段不出现", async () => {
+    const wrapper = mountDialog({
+      permission: {
+        id: "p6",
+        name: "Bash",
+        input: { command: "cd /tmp/x && rm -f a.jar && grep foo" },
       },
+      rememberContext: LOADING_CTX,
     });
-    expect(wrapper.findAll(".perm-remember-rule")).toHaveLength(3); // 规则未到达：全量
+    // loading：占位行 + 记住按钮/规则行都不渲染（就绪后随行一起出现）
+    expect(wrapper.find(".perm-remember-hint").exists()).toBe(true);
+    expect(wrapper.find('[data-action="remember"]').exists()).toBe(false);
+    expect(wrapper.find(".perm-remember-rule").exists()).toBe(false);
+    // 普通「允许/拒绝」不受 loading 影响
+    expect(wrapper.find('[data-action="allow"]').exists()).toBe(true);
+    expect(wrapper.find('[data-action="deny"]').exists()).toBe(true);
 
-    await wrapper.setProps({ rememberRules: [allowRule("cd"), allowRule("grep")] });
+    await wrapper.setProps({
+      rememberContext: readyCtx([allowRule("cd"), allowRule("grep")]),
+    });
+    await nextTick();
+
+    // 就绪：cd/grep 段已被现有规则覆盖 → 只剩 rm 段一行，按钮随行出现
+    expect(wrapper.find(".perm-remember-hint").exists()).toBe(false);
+    const inputs = wrapper.findAll(".perm-remember-value");
+    expect(inputs).toHaveLength(1);
+    expect((inputs[0].element as HTMLInputElement).value).toBe("rm -f a.jar");
+    expect(wrapper.find('[data-action="remember"]').exists()).toBe(true);
+
+    await wrapper.get('[data-action="remember"]').trigger("click");
+    const persist = wrapper.emitted("respond")![0][4] as {
+      rules: { matcher: { value: string } }[];
+    };
+    expect(persist.rules).toHaveLength(1);
+    expect(persist.rules[0].matcher.value).toBe("rm -f a.jar");
+  });
+
+  it("ready 后规则集变化（队列下一请求的快照）：行收缩且输入框值与新行对齐（不残留旧行值）", async () => {
+    // 回归：行集变化时 editableValues 必须随 rememberDrafts 重同步——否则 rm 行
+    // 残留 cd 行的值，点「允许并记住」会把错误值写进规则库。
+    const wrapper = mountDialog({
+      permission: {
+        id: "p6",
+        name: "Bash",
+        input: { command: "cd /tmp/x && rm -f a.jar && grep foo" },
+      },
+      rememberContext: readyCtx(),
+    });
+    expect(wrapper.findAll(".perm-remember-rule")).toHaveLength(3); // 空快照：全量段
+
+    await wrapper.setProps({ rememberContext: readyCtx([allowRule("cd"), allowRule("grep")]) });
     await nextTick();
 
     const inputs = wrapper.findAll(".perm-remember-value");
@@ -229,6 +327,40 @@ describe("PermissionDialog — 允许并记住（多段 + 参数透明化）", (
     expect(persist.rules).toHaveLength(1);
     expect(persist.rules[0].matcher.value).toBe("rm -f a.jar");
   });
+
+  it("ready → loading（新请求）：规则行与按钮清空（旧快照不得泄漏进新请求首帧）", async () => {
+    const wrapper = mountDialog({
+      permission: {
+        id: "p7",
+        name: "Bash",
+        input: { command: "rm -f a.jar" },
+      },
+      rememberContext: readyCtx(),
+    });
+    expect(wrapper.find(".perm-remember-rule").exists()).toBe(true);
+
+    await wrapper.setProps({ permission: { id: "p8", name: "Bash", input: { command: "cargo check" } }, rememberContext: LOADING_CTX });
+    await nextTick();
+
+    expect(wrapper.find(".perm-remember-rule").exists()).toBe(false);
+    expect(wrapper.find('[data-action="remember"]').exists()).toBe(false);
+    // 新请求可推导 → 占位行出现（不再是旧行）
+    expect(wrapper.find(".perm-remember-hint").exists()).toBe(true);
+  });
+
+  it("ready 且链式段全部被现有规则覆盖 → 无规则行无按钮（不出现「0 条写入却成功」）", () => {
+    const wrapper = mountDialog({
+      permission: {
+        id: "p9",
+        name: "Bash",
+        input: { command: "pnpm test | grep x" },
+      },
+      rememberContext: readyCtx([allowRule("pnpm test"), allowRule("grep")]),
+    });
+    expect(wrapper.find(".perm-remember-rule").exists()).toBe(false);
+    expect(wrapper.find('[data-action="remember"]').exists()).toBe(false);
+    expect(wrapper.find(".perm-remember-hint").exists()).toBe(false); // ready 无占位
+  });
 });
 
 describe("PermissionDialog — 进入编辑模式", () => {
@@ -239,8 +371,10 @@ describe("PermissionDialog — 进入编辑模式", () => {
   });
 
   it("手动模式下编辑工具显示「进入编辑模式」、顶替「允许并记住」", () => {
-    const wrapper = mount(PermissionDialog, {
-      props: { permission: editPermission(), rememberScope: "local", currentMode: "default" },
+    const wrapper = mountDialog({
+      permission: editPermission(),
+      rememberContext: readyCtx(),
+      currentMode: "default",
     });
     expect(wrapper.find('[data-action="edit-mode"]').exists()).toBe(true);
     expect(wrapper.find('[data-action="remember"]').exists()).toBe(false);
@@ -251,7 +385,11 @@ describe("PermissionDialog — 进入编辑模式", () => {
   it("文件工具「允许」/「进入编辑模式」按钮带会话级规则 tooltip", () => {
     const bindings = new Map<string, string>();
     const wrapper = mount(PermissionDialog, {
-      props: { permission: editPermission(), rememberScope: "local", currentMode: "default" },
+      props: {
+        permission: editPermission(),
+        rememberContext: readyCtx(),
+        currentMode: "default",
+      },
       global: {
         directives: {
           tooltip: {
@@ -269,7 +407,11 @@ describe("PermissionDialog — 进入编辑模式", () => {
   it("非文件工具（Bash）「允许」按钮无会话级规则 tooltip", () => {
     const bindings = new Map<string, string>();
     mount(PermissionDialog, {
-      props: { permission: bashPermission(), rememberScope: "local", currentMode: "default" },
+      props: {
+        permission: bashPermission(),
+        rememberContext: readyCtx(),
+        currentMode: "default",
+      },
       global: {
         directives: {
           tooltip: {
@@ -284,8 +426,10 @@ describe("PermissionDialog — 进入编辑模式", () => {
   });
 
   it("点击「进入编辑模式」emit 带 nextMode=acceptEdits 的放行", async () => {
-    const wrapper = mount(PermissionDialog, {
-      props: { permission: editPermission(), rememberScope: "local", currentMode: "default" },
+    const wrapper = mountDialog({
+      permission: editPermission(),
+      rememberContext: readyCtx(),
+      currentMode: "default",
     });
     await wrapper.get('[data-action="edit-mode"]').trigger("click");
     const events = wrapper.emitted("respond");
@@ -294,8 +438,10 @@ describe("PermissionDialog — 进入编辑模式", () => {
   });
 
   it("非编辑工具（Bash）不显示，仍走「允许并记住」", () => {
-    const wrapper = mount(PermissionDialog, {
-      props: { permission: bashPermission(), rememberScope: "local", currentMode: "default" },
+    const wrapper = mountDialog({
+      permission: bashPermission(),
+      rememberContext: readyCtx(),
+      currentMode: "default",
     });
     expect(wrapper.find('[data-action="edit-mode"]').exists()).toBe(false);
     expect(wrapper.find('[data-action="remember"]').exists()).toBe(true);
@@ -303,8 +449,10 @@ describe("PermissionDialog — 进入编辑模式", () => {
 
   it("已在编辑/自动/最高权限模式时不显示（弹窗属 ask 规则例外，回到记住按钮）", () => {
     for (const mode of ["acceptEdits", "auto", "bypassPermissions"]) {
-      const wrapper = mount(PermissionDialog, {
-        props: { permission: editPermission(), rememberScope: "local", currentMode: mode },
+      const wrapper = mountDialog({
+        permission: editPermission(),
+        rememberContext: readyCtx(),
+        currentMode: mode,
       });
       expect(wrapper.find('[data-action="edit-mode"]').exists()).toBe(false);
       expect(wrapper.find('[data-action="remember"]').exists()).toBe(true);
@@ -312,9 +460,7 @@ describe("PermissionDialog — 进入编辑模式", () => {
   });
 
   it("模式还没就位（空串）时按手动模式处理：显示", () => {
-    const wrapper = mount(PermissionDialog, {
-      props: { permission: editPermission(), currentMode: "" },
-    });
+    const wrapper = mountDialog({ permission: editPermission(), currentMode: "" });
     expect(wrapper.find('[data-action="edit-mode"]').exists()).toBe(true);
   });
 });
@@ -349,7 +495,7 @@ describe("PermissionDialog — 折叠（计划批准 / 澄清提问）", () => {
     (w.find(".perm-body").element as HTMLElement).style.display;
 
   it("计划批准默认展开，点折叠按钮收起正文、再点展开", async () => {
-    const wrapper = mount(PermissionDialog, { props: { permission: planPermission() } });
+    const wrapper = mountDialog({ permission: planPermission() });
     expect(bodyDisplay(wrapper)).toBe("");
     expect(wrapper.find(".perm-collapse-caret").text()).toBe("▾");
     expect(wrapper.find(".perm-collapse").attributes("aria-expanded")).toBe("true");
@@ -365,7 +511,7 @@ describe("PermissionDialog — 折叠（计划批准 / 澄清提问）", () => {
   });
 
   it("澄清提问同样可折叠", async () => {
-    const wrapper = mount(PermissionDialog, { props: { permission: questionPermission() } });
+    const wrapper = mountDialog({ permission: questionPermission() });
     expect(wrapper.find(".perm-collapse").exists()).toBe(true);
     await wrapper.get(".perm-collapse").trigger("click");
     await nextTick();
@@ -373,12 +519,12 @@ describe("PermissionDialog — 折叠（计划批准 / 澄清提问）", () => {
   });
 
   it("工具调用弹窗不渲染折叠按钮（弹窗本就矮，折叠无意义）", () => {
-    const wrapper = mount(PermissionDialog, { props: { permission: bashPermission() } });
+    const wrapper = mountDialog({ permission: bashPermission() });
     expect(wrapper.find(".perm-collapse").exists()).toBe(false);
   });
 
   it("新请求到达时折叠状态复位为展开", async () => {
-    const wrapper = mount(PermissionDialog, { props: { permission: planPermission() } });
+    const wrapper = mountDialog({ permission: planPermission() });
     await wrapper.get(".perm-collapse").trigger("click");
     await nextTick();
     expect(bodyDisplay(wrapper)).toBe("none");
@@ -391,7 +537,7 @@ describe("PermissionDialog — 折叠（计划批准 / 澄清提问）", () => {
   });
 
   it("折叠时操作按钮随正文一起隐藏——先看上下文再展开决定", async () => {
-    const wrapper = mount(PermissionDialog, { props: { permission: planPermission() } });
+    const wrapper = mountDialog({ permission: planPermission() });
     const actionsEl = () => wrapper.find(".perm-actions").element as HTMLElement;
     // 操作按钮在 perm-body 内；展开时正文块无 inline display
     expect((actionsEl().closest(".perm-body") as HTMLElement | null)?.style.display).toBe("");
@@ -403,7 +549,7 @@ describe("PermissionDialog — 折叠（计划批准 / 澄清提问）", () => {
   });
 
   it("计划批准「继续修改计划」同样支持拒绝理由", async () => {
-    const wrapper = mount(PermissionDialog, { props: { permission: planPermission() } });
+    const wrapper = mountDialog({ permission: planPermission() });
     await wrapper.get('[data-action="deny"]').trigger("click");
     expect(wrapper.find('[data-action="deny-reason"]').exists()).toBe(true);
     await wrapper.get('[data-action="deny-reason"]').setValue("不要动 X，只做 Y");
@@ -412,7 +558,7 @@ describe("PermissionDialog — 折叠（计划批准 / 澄清提问）", () => {
   });
 
   it("澄清提问「跳过」不支持理由输入（保持原样）", () => {
-    const wrapper = mount(PermissionDialog, { props: { permission: questionPermission() } });
+    const wrapper = mountDialog({ permission: questionPermission() });
     // question 的拒绝按钮是「跳过」，点了直接 respond，不展开理由输入
     expect(wrapper.find('[data-action="deny"]').exists()).toBe(false);
     expect(wrapper.find('[data-action="deny-reason"]').exists()).toBe(false);
@@ -430,7 +576,10 @@ describe("PermissionDialog — 键盘确认（Enter/Esc）", () => {
   });
 
   function mountAttached(props: Record<string, unknown>) {
-    return mount(PermissionDialog, { props, attachTo: document.body });
+      return mount(PermissionDialog, {
+      props: { rememberContext: LOADING_CTX, ...props },
+      attachTo: document.body,
+    });
   }
 
   function press(key: string, init: KeyboardEventInit = {}, target: EventTarget = window): KeyboardEvent {
@@ -718,7 +867,7 @@ describe("PermissionDialog — 键盘确认（Enter/Esc）", () => {
   // ── 按键提示 chip ──
 
   it("工具调用：允许/拒绝带 chip，允许并记住/进入编辑模式不带", () => {
-    const wrapper = mountAttached({ permission: bashPermission(), rememberScope: "local" });
+    const wrapper = mountAttached({ permission: bashPermission(), rememberContext: readyCtx() });
     expect(wrapper.get('[data-action="allow"] .perm-btn-key').text()).toBe("Enter");
     expect(wrapper.get('[data-action="deny"] .perm-btn-key').text()).toBe("Esc");
     expect(wrapper.find('[data-action="remember"] .perm-btn-key').exists()).toBe(false);
