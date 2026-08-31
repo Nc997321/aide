@@ -5,10 +5,13 @@ import { useContextMenu } from "../composables/useContextMenu";
 import { useFileViewer } from "../composables/useFileViewer";
 import { useSessionState } from "../composables/useSessionState";
 import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
+import { useModal } from "../composables/useModal";
 import { fileTreeAreaMenuItems } from "../menus/contextMenus";
-import { api } from "../api";
+import { api, listen } from "../api";
 import { useOnboarding } from "../composables/useOnboarding";
 import { useFileClipboard, getParentPath } from "../composables/useFileClipboard";
+import { planWatchRefresh } from "../utils/fileTreeWatch";
+import { mergeFileEntries } from "../utils/fileTree";
 import type { FileEntry, WorkspaceInfo } from "../types";
 
 const props = defineProps<{ sessionId: string }>();
@@ -102,8 +105,9 @@ async function loadChildren(dirPath: string) {
   try {
     const entries = await api.listDirectory(dirPath, showHidden.value);
     if (dirPath === projectInfo.value.root) {
-      // Refresh root: replace treeData entirely
-      treeData.value = entries;
+      // Refresh root: 按路径合并不整体替换——整体替换会让已展开子目录跌进
+      // children=null 的过渡态，子列表卸载等补加载回来，整树闪烁波
+      treeData.value = mergeFileEntries(treeData.value, entries);
     } else {
       setChildren(treeData.value, dirPath, entries);
     }
@@ -115,7 +119,7 @@ async function loadChildren(dirPath: string) {
 function setChildren(nodes: FileEntry[], targetPath: string, entries: FileEntry[]): boolean {
   for (const node of nodes) {
     if (node.path === targetPath) {
-      node.children = entries;
+      node.children = mergeFileEntries(node.children, entries);
       return true;
     }
     if (node.children && setChildren(node.children, targetPath, entries)) {
@@ -130,7 +134,8 @@ function selectFile(path: string) {
 }
 
 const fileViewer = useFileViewer();
-const { clipboard, copy, cut, clear, executePaste } = useFileClipboard();
+const { clipboard, copyWithOs, cutWithOs, clear, executePaste, resolvePasteEntry } = useFileClipboard();
+const modal = useModal();
 
 function openFile(path: string) {
   selectFile(path);
@@ -148,6 +153,7 @@ async function loadRoot() {
       // 无显式工作区（首次使用 / 工作区被删 / 路径失效）：显示空态，绝不
       // 加载任何目录——历史上这里会回退到家目录，把整个用户目录渲染出来
       // 并触发 CodeGraph 全量索引（405 万符号 / 3GB 的事故）。
+      void api.fileTreeWatch("").catch(() => {});
       treeData.value = [];
       expandedDirs.value = new Set();
       loading.value = false;
@@ -160,6 +166,8 @@ async function loadRoot() {
     treeData.value = entries;
     expandedDirs.value = new Set([root]);
     await autoExpandSingleChild(root);
+    // 监听跟随当前工作区根（后端同 root 幂等短路，反复 loadRoot 无害）
+    void api.fileTreeWatch(root).catch(() => {});
   } catch (e) {
     errorMsg.value = `加载文件树失败: ${e}`;
     treeData.value = [];
@@ -172,8 +180,18 @@ function toggleHidden() {
   loadRoot();
 }
 
-onMounted(() => {
-  loadRoot();
+onMounted(async () => {
+  // 工作区外部改动 → 自动刷新（组件 v-show 常驻挂载，监听贯穿应用生命周期；
+  // unlisten 见下方 onUnmounted）
+  unlistenFs = await listen<string[]>("file-tree-changed", (e) => onTreeChanged(e.payload));
+  void loadRoot();
+});
+
+onUnmounted(() => {
+  unlistenFs?.();
+  unlistenFs = null;
+  if (watchRefreshTimer) clearTimeout(watchRefreshTimer);
+  watchRefreshTimer = null;
 });
 
 const { show } = useContextMenu();
@@ -210,9 +228,9 @@ watch(
   },
 );
 
-async function refreshAllExpanded() {
+async function refreshAllExpanded(immediate = false) {
   // Small delay to let useConversationChanges.captureChanges finish git ops
-  await new Promise((r) => setTimeout(r, 300));
+  if (!immediate) await new Promise((r) => setTimeout(r, 300));
   // 原地刷新：不重置 expandedDirs、不触发 loading 闪烁，只逐目录重载子节点，
   // 保持视觉展开状态。旧的 loadRoot() 推倒重建会把 expandedDirs 清成 [root]，
   // 再用 loadExpandedDescendants(root) 恢复——但 root 不在 treeData 中
@@ -255,6 +273,46 @@ async function refreshDir(dirPath: string) {
   if (base) await reloadExpandedDescendants(base);
 }
 
+/**
+ * 多目录刷新统一入口：root 直接受影响走整体刷新，其余逐目录原地刷新。
+ * executePaste / 系统剪贴板来源的多路径粘贴共用。
+ */
+function refreshDirs(dirs: string[]) {
+  for (const d of dirs) {
+    if (d === projectInfo.value.root) void refreshAllExpanded(true);
+    else void refreshDir(d);
+  }
+}
+
+// ── 工作区文件系统监听（filewatch.rs → "file-tree-changed" → 树刷新）────────
+// 三层降噪：后端归集/冷却合并 → planWatchRefresh 相关性过滤 → 此处 250ms
+// trailing 防抖合并连续批次，只发一次刷新。
+let unlistenFs: (() => void) | null = null;
+let watchRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let watchPlanFull = false;
+const watchPendingDirs = new Set<string>();
+
+function onTreeChanged(dirs: string[]) {
+  if (!projectInfo.value.root) return;
+  const plan = planWatchRefresh(dirs, projectInfo.value.root, [...expandedDirs.value]);
+  if (plan.full) watchPlanFull = true;
+  plan.dirs.forEach((d) => watchPendingDirs.add(d));
+  if (watchRefreshTimer) clearTimeout(watchRefreshTimer);
+  watchRefreshTimer = setTimeout(applyWatchRefresh, 250);
+}
+
+async function applyWatchRefresh() {
+  watchRefreshTimer = null;
+  const full = watchPlanFull;
+  const dirs = [...watchPendingDirs];
+  watchPlanFull = false;
+  watchPendingDirs.clear();
+  // 防抖窗口后工作区可能已切换（dir 集合过时），refreshDir 内部 findNode
+  // 找不到节点时是无害 no-op，跨根目录 listDirectory 失败也只进 errorMsg。
+  if (full) await refreshAllExpanded(true);
+  else dirs.forEach((d) => refreshDirs([d]));
+}
+
 function getSelectedNodeIsDir(): boolean {
   if (!selectedPath.value) return false;
   const node = findNode(treeData.value, selectedPath.value);
@@ -262,30 +320,84 @@ function getSelectedNodeIsDir(): boolean {
 }
 
 async function onTreeKeydown(e: KeyboardEvent) {
-  if (e.ctrlKey && e.key === 'c') {
+  if (e.ctrlKey && (e.key === 'c' || e.key === 'x')) {
     if (!selectedPath.value) return;
+    const isCut = e.key === 'x';
+    if (isCut && selectedPath.value === projectInfo.value.root) return;
     e.preventDefault();
-    copy(selectedPath.value);
-  } else if (e.ctrlKey && e.key === 'x') {
-    if (!selectedPath.value || selectedPath.value === projectInfo.value.root) return;
-    e.preventDefault();
-    cut(selectedPath.value);
+    (isCut ? cutWithOs : copyWithOs)([selectedPath.value]);
   } else if (e.ctrlKey && e.key === 'v') {
-    if (!clipboard.value) return;
     e.preventDefault();
+    // 应用内剪贴板为空 → 兜底读系统剪贴板（Explorer 复制/剪切 → 树内粘贴）
+    const source = await resolvePasteEntry();
+    if (!source) return;
     const targetDir = selectedPath.value
       ? (getSelectedNodeIsDir() ? selectedPath.value : getParentPath(selectedPath.value))
       : projectInfo.value.root;
-    const srcParent = getParentPath(clipboard.value.path);
-    await executePaste(
-      targetDir,
-      () => refreshDir(srcParent),
-      () => refreshDir(targetDir),
-    );
+    if (!targetDir) return;
+    await executePaste(targetDir, {
+      onDestRefresh: refreshDirs,
+      onSrcRefresh: refreshDirs,
+    });
   } else if (e.key === 'Escape') {
     if (!clipboard.value) return;
     e.preventDefault();
     clear();
+  } else if (e.key === 'Enter') {
+    if (!selectedPath.value) return;
+    e.preventDefault();
+    const node = findNode(treeData.value, selectedPath.value);
+    if (!node) return;
+    if (node.is_dir) void toggleDir(node.path);
+    else openFile(node.path);
+  } else if (e.key === 'F2') {
+    if (!selectedPath.value) return;
+    e.preventDefault();
+    void renameNode(selectedPath.value);
+  } else if (e.key === 'Delete') {
+    if (!selectedPath.value) return;
+    e.preventDefault();
+    void deleteNode(selectedPath.value);
+  }
+}
+
+/** F2 重命名（root 拦截；选中项跟随新路径；剪切态与展开态不在改造范围内） */
+async function renameNode(path: string) {
+  if (!path || path === projectInfo.value.root) return;
+  const node = findNode(treeData.value, path);
+  if (!node) return;
+  const newName = await modal.prompt("重命名", `「${node.name}」的新名称`, "重命名");
+  if (!newName || newName === node.name) return;
+  const newPath = path.slice(0, path.length - node.name.length) + newName;
+  try {
+    await api.moveFile(path, newPath);
+    if (selectedPath.value === path) selectedPath.value = newPath;
+    refreshDirs([getParentPath(path)]);
+  } catch (err) {
+    await modal.confirm("重命名失败", String(err), "确定", false);
+  }
+}
+
+/** Delete 删除（root 拦截 + 确认弹窗，语义与右键菜单一致） */
+async function deleteNode(path: string) {
+  if (!path || path === projectInfo.value.root) return;
+  const node = findNode(treeData.value, path);
+  if (!node) return;
+  const ok = await modal.confirm(
+    node.is_dir ? "删除文件夹" : "删除文件",
+    node.is_dir
+      ? `确定要删除「${node.name}」及其所有内容吗？`
+      : `确定要删除「${node.name}」吗？`,
+    "删除",
+    true,
+  );
+  if (!ok) return;
+  try {
+    await api.deleteFile(path);
+    if (selectedPath.value === path) selectedPath.value = "";
+    refreshDirs([getParentPath(path)]);
+  } catch (err) {
+    await modal.confirm("删除失败", String(err), "确定", false);
   }
 }
 
@@ -453,6 +565,7 @@ defineExpose({ loadRoot, revealFile });
           :project-root="projectInfo.root"
           :on-refresh-dir="(p: string) => refreshDir(p)"
           :session-id="sessionId"
+          @select="selectFile"
           @toggle="toggleDir"
           @open="openFile"
         />

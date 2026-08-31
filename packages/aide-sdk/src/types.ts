@@ -17,6 +17,15 @@ export interface FileEntry {
   children: FileEntry[] | null;
 }
 
+/** clipboard_read_files 返回（Rust `commands::clipboard::ClipboardFilesRead` 镜像）：
+ *  系统剪贴板里的文件路径列表 + 操作语义（copy/cut，来自 Windows Preferred
+ *  DropEffect / Linux gnome-copied-files 头 / macOS 恒 copy）。paths 为空 =
+ *  剪贴板没有文件。 */
+export interface ClipboardFilesRead {
+  paths: string[];
+  op: "copy" | "cut";
+}
+
 /** 历史消息里的一个内容块——跟 Rust 侧 `commands/mod.rs` 的 `HistoryBlock` 镜像。
  *  text/thinking/tool_call 三种；子代理调用和图片维持降级行为，不出现在历史里。 */
 export type HistoryBlock =

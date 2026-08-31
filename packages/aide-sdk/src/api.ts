@@ -1,6 +1,7 @@
 import { getTransport } from "./transport";
 import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem, LoadMessagesResult,
+  ClipboardFilesRead,
   ProjectInfo, DiffEntry, DiffPair, LastEventInfo, ChangeRound, AppSettings,
   CommitEntry, CommitDetail, BranchInfo, GitStatusEntry, StashEntry,
   AheadBehind, FetchPullOutcome, TagEntry, CompareResult,
@@ -169,8 +170,13 @@ export const api = {
   },
 
   // 剪贴板（文件 / 图片粘贴进 Claude TUI）
-  clipboardReadFiles(): Promise<string[]> {
+  clipboardReadFiles(): Promise<ClipboardFilesRead> {
     return getTransport().invoke("clipboard_read_files");
+  },
+  /** 文件路径写入系统剪贴板（文件管理器语义），文件树 Ctrl+C/X 双写用；
+   *  op 决定资源管理器粘贴时是复制还是移动 */
+  clipboardWriteFiles(paths: string[], op: "copy" | "cut"): Promise<void> {
+    return getTransport().invoke("clipboard_write_files", { paths, op });
   },
   clipboardReadImage(): Promise<string | null> {
     return getTransport().invoke("clipboard_read_image");
@@ -265,6 +271,11 @@ export const api = {
   },
   createDir(parentPath: string, name: string): Promise<void> {
     return getTransport().invoke("create_dir", { parentPath, name });
+  },
+  /** 工作区文件系统监听：外部改动经 `file-tree-changed` 事件推送。
+   *  空串 = 停止监听；同 root 幂等短路。FileTree loadRoot 成功后调用 */
+  fileTreeWatch(root: string): Promise<void> {
+    return getTransport().invoke("file_tree_watch", { root });
   },
 
   // 符号搜索（跳转到定义）

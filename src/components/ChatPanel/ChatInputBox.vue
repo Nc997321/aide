@@ -610,9 +610,9 @@ async function handlePaste(e: ClipboardEvent) {
   try {
     // 串行读：clipboardReadFiles 与 clipboardReadImage 各自 OpenClipboard，
     // 同进程并发打开会互斥失败（粘贴偶发为空的真实根因），先 files 后 image。
-    const files = await api.clipboardReadFiles();
+    const filesRes = await api.clipboardReadFiles();
     const img = await api.clipboardReadImage();
-    const res = resolvePastePayload(files, img, peekFileClipboard(), plainText);
+    const res = resolvePastePayload(filesRes.paths, img, peekFileClipboard(), plainText);
     await applyPasteResolution(res);
   } catch {
     if (plainText) insertAtCursor(plainText);
@@ -710,7 +710,7 @@ async function handleDrop(e: DragEvent) {
     // copy 条目，所以不把 entry 喂给它——直接把路径推进 paths 走 files 分支
     // （拖入输入框一律当"引用"，且图片文件能正确转成附件而非 @path）。
     entry = peekFileClipboard();
-    if (entry) paths.push(entry.path);
+    if (entry) paths.push(...entry.paths);
   }
 
   const res = resolvePastePayload(paths, null, null, "");

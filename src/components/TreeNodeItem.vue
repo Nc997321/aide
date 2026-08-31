@@ -29,6 +29,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   toggle: [path: string];
   open: [path: string];
+  /** 资源管理器语义选中：单击仅高亮，双击才是展开/打开 */
+  select: [path: string];
 }>();
 
 const { show } = useContextMenu();
@@ -41,6 +43,11 @@ const isDragOver = ref(false);
 const insertPos = ref<'top' | 'bottom' | null>(null);
 
 function handleClick() {
+  // 文件管理器语义：单击只选中（Ctrl+C/V 作用于选区），不展开不开文件。
+  emit("select", props.node.path);
+}
+
+function handleDblClick() {
   if (props.node.is_dir) {
     emit("toggle", props.node.path);
   } else {
@@ -73,7 +80,7 @@ function onContextMenu(e: MouseEvent) {
 function onDragStart(e: DragEvent) {
   e.dataTransfer!.setData('text/plain', props.node.path);
   e.dataTransfer!.effectAllowed = 'move';
-  cut(props.node.path);
+  cut([props.node.path]);
 }
 
 function onDragOver(e: DragEvent) {
@@ -109,7 +116,9 @@ async function onDrop(e: DragEvent) {
   // Read the source path directly from the clipboard set in onDragStart instead.
   const entry = clipboard.value;
   if (!entry) return;
-  const srcPath = entry.path;
+  // 拖拽一次只携带单节点（onDragStart 只放一个）；多条 OS 来源不走拖拽
+  if (entry.paths.length !== 1) return;
+  const srcPath = entry.paths[0];
 
   const targetDir = props.node.is_dir ? props.node.path : getParentPath(props.node.path);
   const srcParent = getParentPath(srcPath);
@@ -145,8 +154,10 @@ async function onDrop(e: DragEvent) {
   try {
     await executePaste(
       targetDir,
-      () => refresh(srcParent),
-      () => refresh(targetDir),
+      {
+        onSrcRefresh: (dirs) => dirs.forEach(refresh),
+        onDestRefresh: (dirs) => dirs.forEach(refresh),
+      },
     );
   } catch (err) {
     await modal.confirm("移动失败", String(err), "确定", false);
@@ -214,7 +225,7 @@ const nodePadding = computed(() =>
           'drag-over-folder': isDragOver,
           'drag-insert-top': insertPos === 'top',
           'drag-insert-bottom': insertPos === 'bottom',
-          'cut-state': clipboard?.op === 'cut' && clipboard?.path === node.path,
+          'cut-state': clipboard?.op === 'cut' && !!clipboard?.paths.includes(node.path),
           'git-dir': node.is_dir,
         },
         gitDecoClass,
@@ -222,6 +233,7 @@ const nodePadding = computed(() =>
       :style="{ paddingLeft: nodePadding + 'px' }"
       draggable="true"
       @click="handleClick"
+      @dblclick="handleDblClick"
       @contextmenu.prevent.stop="onContextMenu"
       @mouseenter="hovered = true"
       @mouseleave="hovered = false"
@@ -303,6 +315,7 @@ const nodePadding = computed(() =>
         :project-root="projectRoot"
         :on-refresh-dir="onRefreshDir"
         :session-id="sessionId"
+        @select="(p: string) => emit('select', p)"
         @toggle="(p: string) => emit('toggle', p)"
         @open="(p: string) => emit('open', p)"
       />

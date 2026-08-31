@@ -1,7 +1,7 @@
 import type { MenuItem } from "../composables/useContextMenu";
 import { useModal } from "../composables/useModal";
 import { useFileViewer } from "../composables/useFileViewer";
-import { useFileClipboard, getParentPath } from "../composables/useFileClipboard";
+import { useFileClipboard } from "../composables/useFileClipboard";
 import { usePaneLayout } from "../composables/usePaneLayout";
 import { useMentionInserter } from "../composables/useMentionInserter";
 import { api } from "../api";
@@ -49,7 +49,9 @@ export function fileMenuItems(
       },
     },
     { label: "添加到对话", action: () => mentionInserter.insertMention(path, false) },
-    { label: "剪切", action: () => cb.cut(path) },
+    // 文件语义复制/剪切（= Ctrl+C/X）：应用内 + 系统剪贴板双写
+    { label: "复制", action: () => cb.copyWithOs([path]) },
+    { label: "剪切", action: () => cb.cutWithOs([path]) },
     sep(),
     {
       label: "删除",
@@ -114,23 +116,32 @@ export function directoryMenuItems(
     },
     sep(),
     { label: "添加到对话", action: () => mentionInserter.insertMention(path, true) },
-    // 根目录不可剪切
-    ...(path !== projectRoot ? [{ label: "剪切", action: () => cb.cut(path) }] : []),
-    ...(cb.clipboard.value ? [
-      {
-        label: "粘贴",
-        action: async () => {
-          const entry = cb.clipboard.value;
-          if (!entry) return;
-          const srcParent = getParentPath(entry.path);
-          await cb.executePaste(
-            path,
-            () => (refreshDir ? refreshDir(srcParent) : onRefresh?.()),
-            () => onRefresh?.(),
-          );
-        },
-      },
+    // 根目录不可复制/剪切（同键盘路径的 root 拦截）
+    ...(path !== projectRoot ? [
+      { label: "复制", action: () => cb.copyWithOs([path]) },
+      { label: "剪切", action: () => cb.cutWithOs([path]) },
     ] : []),
+    {
+      // 粘贴常驻：应用内剪贴板无条目时兜底读系统剪贴板（与 Ctrl+V 同源）
+      label: "粘贴",
+      action: async () => {
+        const entry = await cb.resolvePasteEntry();
+        if (!entry) {
+          await modal.notice("剪贴板为空", "应用内和系统剪贴板都没有可粘贴的文件");
+          return;
+        }
+        await cb.executePaste(path, {
+          onSrcRefresh: (dirs) => {
+            if (refreshDir) {
+              dirs.forEach(refreshDir);
+              return;
+            }
+            onRefresh?.();
+          },
+          onDestRefresh: () => onRefresh?.(),
+        });
+      },
+    },
     sep(),
     {
       label: "删除",
@@ -171,6 +182,19 @@ export function fileTreeAreaMenuItems(
         if (!name) return;
         await api.createDir(rootPath, name);
         onRefresh();
+      },
+    },
+    // 粘贴进工作区根（应用内为空时兜底读系统剪贴板，与 Ctrl+V 同源）。
+    // 区域菜单只有整树刷新可用，粘贴后的源/目标目录刷新统一走 onRefresh。
+    {
+      label: "粘贴",
+      action: async () => {
+        const entry = await cb.resolvePasteEntry();
+        if (!entry) {
+          await modal.notice("剪贴板为空", "应用内和系统剪贴板都没有可粘贴的文件");
+          return;
+        }
+        await cb.executePaste(rootPath, { onSrcRefresh: () => onRefresh(), onDestRefresh: () => onRefresh() });
       },
     },
   ];

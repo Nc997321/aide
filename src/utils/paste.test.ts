@@ -28,21 +28,28 @@ describe("resolvePastePayload", () => {
   });
 
   it("in-app copy entry becomes @path text when plain text is empty", () => {
-    const entry: ClipboardEntry = { op: "copy", path: "/proj/f.ts" };
+    const entry: ClipboardEntry = { op: "copy", paths: ["/proj/f.ts"] };
     const r = resolvePastePayload([], null, entry, "");
     expect(r.text).toBe("@/proj/f.ts ");
     expect(r.imagePaths).toEqual([]);
   });
 
+  it("multi-path in-app copy entry joins all @path mentions", () => {
+    const entry: ClipboardEntry = { op: "copy", paths: ["/proj/a.ts", "/proj/b.ts"] };
+    const r = resolvePastePayload([], null, entry, "");
+    expect(r.text).toBe("@/proj/a.ts @/proj/b.ts ");
+    expect(r.imagePaths).toEqual([]);
+  });
+
   it("plain text wins over in-app copy entry", () => {
-    const entry: ClipboardEntry = { op: "copy", path: "/proj/f.ts" };
+    const entry: ClipboardEntry = { op: "copy", paths: ["/proj/f.ts"] };
     const r = resolvePastePayload([], null, entry, "hello world");
     expect(r.text).toBe("hello world");
     expect(r.imagePaths).toEqual([]);
   });
 
   it("in-app cut entry is ignored, falls through to plain text", () => {
-    const entry: ClipboardEntry = { op: "cut", path: "/proj/f.ts" };
+    const entry: ClipboardEntry = { op: "cut", paths: ["/proj/f.ts"] };
     const r = resolvePastePayload([], null, entry, "fallback");
     expect(r.text).toBe("fallback");
     expect(r.imagePaths).toEqual([]);

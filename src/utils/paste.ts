@@ -44,8 +44,9 @@ export function resolvePastePayload(
   if (text) {
     return { text, imagePaths: [] };
   }
-  if (entry && entry.op === "copy") {
-    return { text: `@${entry.path} `, imagePaths: [] };
+  if (entry && entry.op === "copy" && entry.paths.length > 0) {
+    // 多条来源（OS 多选复制）逐条转 @path mention
+    return { text: entry.paths.map((p) => `@${p}`).join(" ") + " ", imagePaths: [] };
   }
   return { text, imagePaths: [] };
 }
