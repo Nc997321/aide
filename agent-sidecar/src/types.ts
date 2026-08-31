@@ -272,6 +272,11 @@ export type SidecarCommand =
       // 加载项目 CLAUDE.md / .claude/skills/ / .mcp.json；false = 受限模式，
       // startLoop 据此跳过项目级自动配置。省略时 sidecar 按信任处理。
       trusted?: boolean;
+      // 工作区级代码索引开关：Rust 按 cwd 查 state.json 的 codegraph_workspaces
+      // 注入（每工作区默认关）。true（或省略，向后兼容/测试）= 开，挂载 aide-codegraph
+      // MCP；false = 该工作区未开索引，不注册 codegraph MCP 工具（chat.rs /
+      // automation scheduler 四处构造点下发）。
+      codegraph_enabled?: boolean;
       // 权限策略快照：Rust 在每次设置变更后推送，sidecar 在 PreToolUse 时
       // 用它做本地策略评估。省略 = 沿用上次快照或空策略（无匹配 → hook 不表态）。
       permission_policy?: PermissionPolicySnapshot;

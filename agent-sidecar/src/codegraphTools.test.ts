@@ -17,6 +17,29 @@ describe("codegraphMcpRegistration", () => {
     expect(off).toBeNull();
   });
 
+  describe("工作区索引开关（enabled）", () => {
+    it("enabled=false → null（该工作区索引未开，不注册 MCP）", () => {
+      const spec = codegraphMcpRegistration(
+        "/proj",
+        () => {},
+        {} as NodeJS.ProcessEnv,
+        true,
+        false,
+      );
+      expect(spec).toBeNull();
+    });
+
+    it("enabled=true → 正常注册（缺省 true 向后兼容）", () => {
+      const spec = codegraphMcpRegistration("/proj", () => {}, {} as NodeJS.ProcessEnv, true, true);
+      expect(spec).not.toBeNull();
+    });
+
+    it("untrusted 优先于 enabled（两门并列，任一不满足即 null）", () => {
+      const spec = codegraphMcpRegistration("/proj", () => {}, {} as NodeJS.ProcessEnv, false, true);
+      expect(spec).toBeNull();
+    });
+  });
+
   it("allow rule matches the MCP server name prefix", () => {
     expect(CODEGRAPH_ALLOW_RULE).toBe("mcp__aide-codegraph");
   });

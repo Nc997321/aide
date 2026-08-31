@@ -70,7 +70,7 @@ export interface BuiltinMcpServer {
   purpose: string;
 }
 export const builtinMcpServers = ref<BuiltinMcpServer[]>([
-  { id: "aide-codegraph", transport: "in-process", purpose: "内置代码索引（find_symbol / semantic_search / call_graph），codegraph 开 + 受信任工作区时挂载" },
+  { id: "aide-codegraph", transport: "in-process", purpose: "内置代码索引（find_symbol / semantic_search / call_graph），该工作区开启代码索引（右侧栏「代码索引」面板）+ 受信任时挂载" },
   { id: "aide-docs", transport: "in-process", purpose: "内置文档工具（read_docx / write_docx / read_pdf，docx↔markdown、pdf→markdown），受信任工作区时挂载" },
 ]);
 

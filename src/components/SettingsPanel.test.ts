@@ -17,7 +17,6 @@ vi.mock("../composables/useSettings", () => ({
         apiKeyConfigured: false, backend: "fastembed", baseUrl: "",
         dim: 768, model: "", format: "ollama",
       },
-      codegraphEnabled: true,
       remote: { enabled: false, relayUrl: "", deviceId: "", permissionMode: "auto" },
       jdkRegistries: [], openWithExtensions: {},
     }),
@@ -95,8 +94,9 @@ describe("SettingsPanel", () => {
     // 编辑器 tab 在通用之后；「关于」tab 固定在末尾（2026-08-09 新增，版本与声明）。
     // 远程控制 tab 于 2026-08-16 加在诊断之后、关于之前。
     // 主题样式 tab 于 2026-08-25 加在通用之后（主题切换 + 会话列表样式，主题从通用搬入）。
+    // 代码索引 tab 于 2026-08-31 迁出（工作区级开关下沉右侧栏「代码索引」tab）。
     expect(labels).toEqual([
-      "通用", "主题样式", "编辑器", "模型", "扩展", "市场", "代码索引", "诊断", "远程控制", "关于",
+      "通用", "主题样式", "编辑器", "模型", "扩展", "市场", "诊断", "远程控制", "关于",
     ]);
   });
 
@@ -115,17 +115,6 @@ describe("SettingsPanel", () => {
     expect(text).toContain("中继 URL");
     expect(text).toContain("配对码");
     expect(text).toContain("未连接");
-  });
-
-  it("代码索引总开关：切换调 update 落盘（关 → 门面 setEnabled 释放索引）", async () => {
-    mountPanel("codegraph");
-    const toggle = document.body.querySelector<HTMLInputElement>(".tab-codegraph .toggle input");
-    expect(toggle).not.toBeNull();
-    expect(toggle!.checked).toBe(true);
-    toggle!.checked = false;
-    toggle!.dispatchEvent(new Event("change"));
-    await flushPromises();
-    expect(updateMock).toHaveBeenCalledWith({ codegraphEnabled: false });
   });
 
   it("offers one-click apply when a live proxy is detected and settings empty", async () => {

@@ -3,9 +3,8 @@ import { ref, watch, onMounted, computed } from "vue";
 import { useSettings } from "../composables/useSettings";
 import { useOnboarding } from "../composables/useOnboarding";
 import { useCustomizations } from "../composables/useCustomizations";
-import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
 import { api } from "../api";
-import type { RemoteStatus, SecretMutation, SessionListStyle, VimBindings } from "../types";
+import type { RemoteStatus, SessionListStyle, VimBindings } from "../types";
 import { eventToVimKey } from "../extensions/vimKeybindings";
 import type { CustomizationItem } from "../types/customization";
 import CustomizationList from "./customizations/CustomizationList.vue";
@@ -27,14 +26,6 @@ const sessionListStyleOptions = [
   { value: "card", label: "卡片（渐变质感）" },
   { value: "row", label: "行式（简洁列表）" },
 ];
-const cgBackendOptions = [
-  { value: "fastembed", label: "fastembed（本地 ONNX）" },
-  { value: "http", label: "HTTP（Ollama / 云端）" },
-];
-const cgFormatOptions = [
-  { value: "ollama", label: "ollama（/api/embed）" },
-  { value: "openai", label: "openai（/v1/embeddings）" },
-];
 import { formatShortcut, detectConflicts } from "../utils/shortcut";
 import { applyTheme, themes } from "../themes";
 
@@ -46,7 +37,7 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-type Tab = "general" | "appearance" | "editor" | "providers" | "extensions" | "marketplace" | "codegraph" | "diagnostics" | "about" | "remote";
+type Tab = "general" | "appearance" | "editor" | "providers" | "extensions" | "marketplace" | "diagnostics" | "about" | "remote";
 
 const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 
@@ -64,7 +55,7 @@ onMounted(async () => {
 
 // ── Settings (通用) ──
 
-const { settings, update, setCodegraphEmbedder } = useSettings();
+const { settings, update } = useSettings();
 const onboarding = useOnboarding();
 
 /** 重新运行首次引导：置 onboarded=false + 打开向导 + 关闭设置面板。 */
@@ -221,98 +212,6 @@ function removeVimBinding(mode: keyof VimBindings, index: number) {
   if (isRecordingVimKey(mode, index)) setRecordingState(null);
   persistVimBindings();
 }
-
-// ── CodeGraph embedding 后端 ──
-// 整块写入：任一字段变动都把完整的 codegraphEmbedder 回写后端。下次 build
-// 读新配置；model_name/dim 变 → meta 不匹配 → 自动全量重建（KISS，无 reinit 命令）。
-
-const cgBackend = ref(settings.codegraphEmbedder.backend);
-const cgBaseUrl = ref(settings.codegraphEmbedder.baseUrl);
-// Credentials never join the global settings singleton: this is always blank on load.
-const cgApiKey = ref("");
-const cgModel = ref(settings.codegraphEmbedder.model);
-const cgFormat = ref(settings.codegraphEmbedder.format);
-const cgDim = ref(settings.codegraphEmbedder.dim);
-// undefined = 后端按模型自动（fastembed≈0.35，http≈0.55）；用户填了数字则覆盖。
-const cgScoreThreshold = ref<number | undefined>(settings.codegraphEmbedder.scoreThreshold);
-
-// 最近一次 codegraph build 结果（模块级单例，trackBuild 成功时落盘），
-// 显示上次构建健康：完整 / 残缺(N skipped) / 未完成恢复中 / 语义不可用。
-const { lastBuild: cgLastBuild } = useCodeGraphProgress();
-const cgHealthKind = computed<"complete" | "degraded" | "incomplete" | "muted">(() => {
-  const h = cgLastBuild.value?.health;
-  if (h === "complete") return "complete";
-  if (h === "degraded") return "degraded";
-  if (h === "incomplete") return "incomplete";
-  return "muted";
-});
-const cgHealthText = computed(() => {
-  const r = cgLastBuild.value;
-  if (!r) return "";
-  const sym = r.total_symbols ?? 0;
-  switch (r.health) {
-    case "complete": return `完整 · ${sym} 符号`;
-    case "degraded": return `残缺 · ${sym} indexed, ${r.skipped_count ?? 0} skipped, ${r.failed_count ?? 0} failed`;
-    case "incomplete": return `未完成，恢复中（${r.embed_status ?? "—"}）`;
-    case "structure_only": return `语义不可用 · embedder 缺失`;
-    default: return `已索引 · ${sym} 符号`;
-  }
-});
-
-function codegraphConfig() {
-  return {
-    backend: cgBackend.value,
-    baseUrl: cgBaseUrl.value,
-    apiKeyConfigured: settings.codegraphEmbedder.apiKeyConfigured,
-    model: cgModel.value,
-    format: cgFormat.value,
-    dim: cgDim.value,
-    scoreThreshold: cgScoreThreshold.value,
-  } as const;
-}
-
-function flushCodegraphEmbedder() {
-  void setCodegraphEmbedder(codegraphConfig());
-}
-
-async function saveCodegraphApiKey() {
-  const value = cgApiKey.value;
-  const mutation: SecretMutation = value ? { action: "set", value } : { action: "unchanged" };
-  await setCodegraphEmbedder(codegraphConfig(), mutation);
-  cgApiKey.value = "";
-}
-
-async function clearCodegraphApiKey() {
-  await setCodegraphEmbedder(codegraphConfig(), { action: "clear" });
-  cgApiKey.value = "";
-}
-
-// 总开关：落盘 + 门面联动（关 → 释放活跃索引停后台 embed；开 → 当前工作区立即重建）。
-async function onCodegraphEnabledChange(e: Event) {
-  const enabled = (e.target as HTMLInputElement).checked;
-  await update({ codegraphEnabled: enabled });
-  useCodeGraphProgress().setEnabled(enabled);
-}
-
-// 空输入 = undefined（后端按模型自动）；v-model.number 会把空串 coerce 成 0、丢失"自动"
-// 语义，所以手绑 :value/@input。非法/负数归零为 undefined。
-function onScoreThresholdInput(e: Event) {
-  const el = e.target as HTMLInputElement;
-  cgScoreThreshold.value = el.value === "" ? undefined : Number.parseFloat(el.value);
-}
-watch(cgBackend, flushCodegraphEmbedder);
-watch(cgBaseUrl, flushCodegraphEmbedder);
-watch(cgModel, flushCodegraphEmbedder);
-watch(cgFormat, flushCodegraphEmbedder);
-watch(cgDim, (v) => {
-  const clamped = Math.max(0, Math.floor(v) || 0);
-  cgDim.value = clamped;
-  flushCodegraphEmbedder();
-});
-watch(cgScoreThreshold, (v) => {
-  if (v !== undefined && (Number.isNaN(v) || v < 0)) cgScoreThreshold.value = undefined;
-  flushCodegraphEmbedder();
-});
 
 // ── 远程控制 ──
 // 开关走专用命令（remote_set_enabled 同时启停网关）；URL/权限模式走 update 落盘。
@@ -574,14 +473,6 @@ function onOverlayClick(e: MouseEvent) {
             >
               <Icon class="nav-icon" name="market" :size="16" />
               <span class="nav-label">市场</span>
-            </button>
-            <button
-              class="nav-item"
-              :class="{ active: activeTab === 'codegraph' }"
-              @click="activeTab = 'codegraph'"
-            >
-              <Icon class="nav-icon" name="cube" :size="16" />
-              <span class="nav-label">代码索引</span>
             </button>
             <button
               class="nav-item"
@@ -938,137 +829,6 @@ function onOverlayClick(e: MouseEvent) {
             <!-- ── 市场 Tab ── -->
             <div v-else-if="activeTab === 'marketplace'" class="tab-marketplace">
               <MarketplaceTab @go-settings="activeTab = 'general'" />
-            </div>
-
-            <!-- ── 代码索引 Tab ── -->
-            <div v-else-if="activeTab === 'codegraph'" class="tab-codegraph">
-              <div class="settings-field">
-                <label class="field-label">启用代码索引</label>
-                <div class="toggle-row">
-                  <span class="field-hint">关闭后不再扫描/加载索引（启动、文件变更、保存均不触发）</span>
-                  <label class="toggle">
-                    <input type="checkbox" :checked="settings.codegraphEnabled" @change="onCodegraphEnabledChange" />
-                    <span class="toggle-track"></span>
-                  </label>
-                </div>
-              </div>
-
-              <template v-if="settings.codegraphEnabled">
-              <div class="settings-field">
-                <label class="field-label">Embedding 后端</label>
-                <ThemedSelect
-                  :model-value="cgBackend"
-                  :options="cgBackendOptions"
-                  @update:model-value="(v: string) => (cgBackend = v as 'fastembed' | 'http')"
-                />
-                <span class="field-hint">
-                  fastembed = 本地 ONNX 离线推理（首次会下载模型）；http = Ollama / OpenAI 兼容云端，速度更快
-                </span>
-              </div>
-
-              <template v-if="cgBackend === 'http'">
-                <div class="settings-field">
-                  <label class="field-label">API 格式</label>
-                  <ThemedSelect
-                    :model-value="cgFormat"
-                    :options="cgFormatOptions"
-                    @update:model-value="(v: string) => (cgFormat = v as 'ollama' | 'openai')"
-                  />
-                  <span class="field-hint">
-                    ollama：原生 /api/embed（本地或远程 Ollama）；openai：/v1/embeddings（OpenAI / Jina 等兼容）
-                  </span>
-                </div>
-
-                <div class="settings-field">
-                  <label class="field-label">服务地址</label>
-                  <input
-                    v-model="cgBaseUrl"
-                    class="text-input"
-                    placeholder="http://localhost:11434（Ollama）或 https://api.openai.com"
-                  />
-                  <span class="field-hint">Ollama 本地默认 http://localhost:11434，也支持远程 HTTP 地址</span>
-                </div>
-
-                <div class="settings-field">
-                  <label class="field-label">API Key</label>
-                  <input
-                    v-model="cgApiKey"
-                    class="text-input"
-                    type="password"
-                    autocomplete="new-password"
-                    :placeholder="settings.codegraphEmbedder.apiKeyConfigured ? '已配置；输入新值后替换' : 'OpenAI / Jina 必填；Ollama 原生可空'"
-                  />
-                  <div class="cg-secret-actions">
-                    <span class="field-hint">{{ settings.codegraphEmbedder.apiKeyConfigured ? '已配置（密钥不会回显）' : '未配置' }}</span>
-                    <button class="cg-secret-btn" :disabled="!cgApiKey" @click="saveCodegraphApiKey">替换</button>
-                    <button v-if="settings.codegraphEmbedder.apiKeyConfigured" class="cg-secret-btn" @click="clearCodegraphApiKey">清除</button>
-                  </div>
-                </div>
-
-                <div class="settings-field">
-                  <label class="field-label">模型</label>
-                  <input
-                    v-model="cgModel"
-                    class="text-input"
-                    placeholder="nomic-embed-text（Ollama）/ text-embedding-3-small（OpenAI）"
-                  />
-                </div>
-
-                <div class="settings-field">
-                  <label class="field-label">向量维度</label>
-                  <div class="field-control">
-                    <input
-                      v-model.number="cgDim"
-                      type="number"
-                      min="0"
-                      class="text-input"
-                      style="width: 100px"
-                    />
-                    <span class="field-hint">0 = 自动从首次响应探测；nomic-embed-text=768，text-embedding-3-small=1536</span>
-                  </div>
-                </div>
-              </template>
-
-              <div v-else class="cg-info">
-                <span class="field-hint">
-                  本地 ONNX 推理（all-MiniLM-L6-v2，384 维）。首次使用会从 HuggingFace 下载 ~23MB 模型到本地缓存。
-                  慢（约 50 个/秒）但离线可用——结构层（精确跳转）始终先就绪，语义搜索后台补全。
-                </span>
-              </div>
-
-              <div class="settings-field">
-                <label class="field-label">语义搜索分数阈值</label>
-                <div class="field-control">
-                  <input
-                    :value="cgScoreThreshold"
-                    @input="onScoreThresholdInput"
-                    type="number"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    class="text-input"
-                    style="width: 100px"
-                    placeholder="自动"
-                  />
-                  <span class="field-hint">留空 = 后端按模型自动（fastembed≈0.35，http≈0.55）；范围 0~1，改后立即生效、无需重建索引</span>
-                </div>
-              </div>
-
-              <div class="cg-rebuild-note">
-                <Icon name="warning" :size="13" />
-                切换后端或模型会触发全量重建索引（向量维度 / 模型空间不兼容）。
-              </div>
-
-              <div v-if="cgLastBuild" class="cg-health" :class="`cg-health-${cgHealthKind}`">
-                <span class="cg-health-dot" />
-                <span class="cg-health-text">{{ cgHealthText }}</span>
-              </div>
-              </template>
-              <div v-else class="cg-info">
-                <span class="field-hint">
-                  代码索引已关闭：启动、文件变更、保存都不会扫描或加载索引。重新打开后对当前工作区立即重建。
-                </span>
-              </div>
             </div>
 
             <!-- ── 诊断 Tab ── -->
@@ -1774,46 +1534,6 @@ function onOverlayClick(e: MouseEvent) {
   letter-spacing: 0.08em;
   color: var(--aide-text-primary);
 }
-
-.cg-info {
-  margin-top: 4px;
-  margin-bottom: 16px;
-}
-
-.cg-rebuild-note {
-  margin-top: 12px;
-  padding: 10px 12px;
-  border-radius: var(--aide-radius-md);
-  background: color-mix(in srgb, var(--aide-warning) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--aide-warning) 25%, transparent);
-  font-size: 11px;
-  color: var(--aide-warning);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.cg-health {
-  margin-top: 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--aide-text-secondary);
-}
-.cg-health-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: var(--aide-text-secondary);
-}
-.cg-health-complete .cg-health-dot { background: var(--aide-success); }
-.cg-health-degraded .cg-health-dot { background: var(--aide-warning); }
-.cg-health-incomplete .cg-health-dot { background: var(--aide-danger); }
-.cg-health-complete .cg-health-text { color: var(--aide-success); }
-.cg-health-degraded .cg-health-text { color: var(--aide-warning); }
-.cg-health-incomplete .cg-health-text { color: var(--aide-danger); }
 
 /* ── Scrollbar ── */
 

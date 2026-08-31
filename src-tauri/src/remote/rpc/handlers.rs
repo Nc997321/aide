@@ -643,15 +643,8 @@ pub fn codegraph_reindex_file(
         }
         let a: Args = parse(params)?;
         let state = app.state::<Arc<crate::codegraph::CodeGraphService>>();
-        let settings = app.state::<Arc<SettingsService>>();
         to_json(
-            crate::codegraph::commands::codegraph_reindex_file(
-                a.project_root,
-                a.file,
-                state,
-                settings,
-            )
-            .await,
+            crate::codegraph::commands::codegraph_reindex_file(a.project_root, a.file, state).await,
         )
     })
 }
@@ -663,8 +656,7 @@ pub fn codegraph_rescan(
     Box::pin(async move {
         let a: ProjectRootArgs = parse(params)?;
         let state = app.state::<Arc<crate::codegraph::CodeGraphService>>();
-        let settings = app.state::<Arc<SettingsService>>();
-        to_json(crate::codegraph::commands::codegraph_rescan(a.project_root, state, settings).await)
+        to_json(crate::codegraph::commands::codegraph_rescan(a.project_root, state).await)
     })
 }
 

@@ -335,12 +335,15 @@ impl AutomationService {
     /// 构造发给 runtime 的 send 命令（纯函数，单测锁定协议形状）。
     /// 模型/effort 与普通会话同形走 env 通道（worker 读作初始值 → options.model/effort）；
     /// model 空 = 跟随提供商默认（自定义 provider 的正确兜底）。
+    /// trusted / codegraph_enabled 由调用方算好传入（政策读属外壳，不进纯函数，
+    /// 与 `start_run` 里 trusted 的注入同款）。
     fn build_send_command(
         task: &AutomationTask,
         run_id: &str,
         prompt: &str,
         cwd: &str,
         trusted: bool,
+        codegraph_enabled: bool,
     ) -> Value {
         let mut env = serde_json::Map::new();
         if !task.model.is_empty() {
@@ -361,6 +364,9 @@ impl AutomationService {
             "permission_mode": Self::preset_permission_mode(task.permission_preset),
             "auto_title": false,
             "trusted": trusted,
+            // 工作区级代码索引开关：未开启的工作区不挂载 aide-codegraph MCP
+            // （与 chat.rs 的下发同语义；调用方按 cwd 查 state.json 注入）。
+            "codegraph_enabled": codegraph_enabled,
             "automation": {
                 "task_id": task.id,
                 "run_id": run_id,
@@ -436,6 +442,8 @@ impl AutomationService {
             .clone()
             .unwrap_or_else(|| super::task_dir(&task.id).to_string_lossy().to_string());
         let trusted = crate::commands::workspace::is_path_trusted(&cwd);
+        // 政策读在这里（外壳）算好，纯函数 build_send_command 只管拼装。
+        let codegraph_enabled = crate::commands::workspace::is_codegraph_enabled_for_path(&cwd);
 
         let run = RunRecord {
             run_id: run_id.clone(),
@@ -500,7 +508,8 @@ impl AutomationService {
             self.persist_task(&task_mut)?;
         }
 
-        let cmd = Self::build_send_command(&task, &run_id, &prompt, &cwd, trusted);
+        let cmd =
+            Self::build_send_command(&task, &run_id, &prompt, &cwd, trusted, codegraph_enabled);
 
         let app = self
             .app
@@ -998,6 +1007,9 @@ impl AutomationService {
             "prompt": Self::distill_prompt(&task),
             "cwd": cwd,
             "trusted": trusted,
+            // 工作区级代码索引开关：未开启的工作区不挂载 aide-codegraph MCP
+            // （与 chat.rs 的下发同语义）。
+            "codegraph_enabled": crate::commands::workspace::is_codegraph_enabled_for_path(&cwd),
             "permission_mode": Self::preset_permission_mode(task.permission_preset),
             "auto_title": false,
             "resume_session_id": run.session_id,
@@ -1346,12 +1358,15 @@ mod tests {
             "提示词",
             "C:/ws",
             true,
+            false,
         );
         // run_id 即 session_id（1:1 映射契约）
         assert_eq!(cmd["session_id"], "run_1");
         assert_eq!(cmd["permission_mode"], "auto");
         assert_eq!(cmd["auto_title"], false);
         assert_eq!(cmd["trusted"], true);
+        // 工作区级索引开关随 cmd 下发（未开 → false，sidecar 不挂 codegraph MCP）
+        assert_eq!(cmd["codegraph_enabled"], false);
         // 模型/effort 走 env 通道（worker 读作初始值）
         assert_eq!(cmd["env"]["ANTHROPIC_MODEL"], "claude-sonnet-5");
         assert_eq!(cmd["env"]["CLAUDE_CODE_EFFORT_LEVEL"], "medium");
@@ -1365,6 +1380,21 @@ mod tests {
         assert!(cmd["automation"].get("max_budget_usd").is_none());
     }
 
+    /// 下发的带值路径（true 侧）：开关开 → cmd 带 codegraph_enabled == true，
+    /// sidecar 按此挂载 aide-codegraph MCP。
+    #[test]
+    fn send_command_codegraph_enabled_true_side() {
+        let cmd = AutomationService::build_send_command(
+            &task(PermissionPreset::Auto),
+            "run_3",
+            "p",
+            "C:/ws",
+            true,
+            true,
+        );
+        assert_eq!(cmd["codegraph_enabled"], true);
+    }
+
     #[test]
     fn send_command_full_preset_bypasses() {
         let cmd = AutomationService::build_send_command(
@@ -1372,6 +1402,7 @@ mod tests {
             "run_2",
             "p",
             "C:/ws",
+            false,
             false,
         );
         assert_eq!(cmd["permission_mode"], "bypassPermissions");
@@ -1383,7 +1414,7 @@ mod tests {
         // 空模型 = 跟随提供商默认：env 里不出这个 key（worker 回落 provider env）
         let mut t = task(PermissionPreset::Full);
         t.model = String::new();
-        let cmd = AutomationService::build_send_command(&t, "run_2", "p", "C:/ws", false);
+        let cmd = AutomationService::build_send_command(&t, "run_2", "p", "C:/ws", false, false);
         assert!(cmd["env"].get("ANTHROPIC_MODEL").is_none());
         assert_eq!(cmd["automation"]["tools"][0], "*");
     }

@@ -1,7 +1,6 @@
 import { ref, readonly } from "vue";
 import { api } from "../api";
 import { useNotifications } from "./useNotifications";
-import { useSettings } from "./useSettings";
 import { useWorkspaceTrust } from "./useWorkspaceTrust";
 import type { BuildProgress, BuildIndexResult } from "../types";
 
@@ -23,40 +22,57 @@ import type { BuildProgress, BuildIndexResult } from "../types";
  * lastIndexedRoot 守卫防重复——这样「只打开项目不打开文件」也能建索引。
  *
  * 渲染层（FileTree.vue）只读 `building` + `progress`，不关心 poll 生命周期。
+ *
+ * 开关（工作区级下沉后）：索引开关是 `~/.aide/state.json` 的
+ * `codegraph_workspaces[<trust_key>].enabled`，**每工作区默认关**。权威在后端
+ * （Rust gate 兜底），前端 `enabledForRoot` 只是会话内存缓存，承担 UI 渲染与
+ * rescan/rebuild/reindexFile 的同步短路；门判定以 `refreshEnabledFor` 的
+ * 每次权威拉取为准，不基于陈旧缓存。
  */
 
 const { push, dismiss, dismissMany, notifications, registerActionHandler } = useNotifications();
-const { settings } = useSettings();
 const { isTrusted, trust } = useWorkspaceTrust();
 
 const progress = ref<BuildProgress>({ active: false, done: 0, total: 0, current: "", index_ready: false });
 const building = ref(false);
-/** 最近一次 build 结果（成功落盘的），供 SettingsPanel 显示索引健康
+/** 最近一次 build 结果（成功落盘的），供代码索引面板显示索引健康
  *  （完整/残缺/未完成/语义不可用）。null = 还没建过。失败不覆盖（保留上次成功）。 */
 const lastBuild = ref<BuildIndexResult | null>(null);
+/** lastBuild 归属的 root——健康条按当前工作区比对，不把上一个工作区的健康
+ *  状态错读给另一个工作区。 */
+const lastBuildRoot = ref("");
 
 let timer: number | null = null;
 let lastIndexedRoot = "";
 // 当前已知「不信任」的 root（memoize，避免每次 ensureIndex 都查一次 state.json）。
 // 信任工作区后由 onWorkspaceTrusted 清空，使下一次 ensureIndex 能真正建索引。
 let untrustedCurrent = "";
-// 当前 root（ensureIndex 通过后记录）：setEnabled(true) 用它立即重建。
-let currentRoot = "";
+// 各工作区索引开关的会话内存缓存（仅渲染 + 同步短路用；权威在 state.json，
+// ensureIndex 每次权威拉取刷新）。键为原始 root 路径。
+const enabledForRoot = ref<Record<string, boolean>>({});
 
-/**
- * 门面统一门控：总开关关闭时所有写操作（build/rescan/rebuild/reindex）一律
- * no-op。开关逻辑只存在于门面内部——触发点（FileTree/useFileViewer/会话事件）
- * 不感知开关，也不会在调用点散落 if。
- */
-function guard(): boolean {
-  return settings.codegraphEnabled;
+function isRootEnabled(root: string): boolean {
+  return !!enabledForRoot.value[root];
 }
 
+/** 权威拉取某工作区开关并回写缓存。读失败按关处理（安全侧，与 Rust gate 兜底一致）。 */
+async function refreshEnabledFor(root: string): Promise<boolean> {
+  const enabled = await api.isWorkspaceCodegraphEnabled(root).catch(() => false);
+  enabledForRoot.value = { ...enabledForRoot.value, [root]: enabled };
+  return enabled;
+}
+
+/**
+ * 门面统一门控：工作区开关关闭时所有写操作（build/rescan/rebuild/reindex）一律
+ * no-op。开关逻辑只存在于门面内部——触发点（FileTree/useFileViewer/会话事件）
+ * 不感知开关，也不会在调用点散落 if。同步短路读缓存；权威判定在 ensureIndex
+ * （每次拉取）与 Rust gate。
+ */
+
 /** 释放活跃索引 + 清 dedup 守卫（停后台 embed、释放 shard）。disabled 分支与
- *  setEnabled(false) 共用，消除 ensureIndex 里 close 逻辑的重复。
- *  currentRoot / untrustedCurrent 不清——前者记录「当前工作区」（ensureIndex
- *  顶部无条件更新，setEnabled(true) 据此重建），后者是调用方管理的 memo
- *  （untrusted 分支先设再调本函数，清了会丢 memo）。 */
+ *  setRootEnabled(false) 共用，消除 ensureIndex 里 close 逻辑的重复。
+ *  untrustedCurrent 不清——它是调用方管理的 memo（untrusted 分支先设再调本
+ *  函数，清了会丢 memo）。 */
 function closeActive() {
   const prev = lastIndexedRoot;
   lastIndexedRoot = "";
@@ -113,9 +129,10 @@ function trackBuild(p: Promise<BuildIndexResult>, root: string) {
           stopPoll();
           return;
         }
-        // 缓存最近一次 build 结果，供 SettingsPanel 显示索引健康
+        // 缓存最近一次 build 结果，供代码索引面板显示索引健康
         // （完整/残缺/未完成/语义不可用）。
         lastBuild.value = r;
+        lastBuildRoot.value = root;
         if (r.loaded) {
           console.info("[codegraph] reused existing index:", r);
           // 快速路径复用既有索引也算完全成功：自愈同 root 旧通知。
@@ -205,9 +222,10 @@ function selfHeal(root: string) {
  */
 async function ensureIndex(root: string) {
   if (!root || root === lastIndexedRoot) return;
-  currentRoot = root; // 记录当前工作区（无论开关），setEnabled(true) 据此重建
-  // 总开关门控：关闭时不建索引；若还有活跃索引（刚关开关）则释放。
-  if (!guard()) {
+  // 开关门（**前置于 trust 门**）：每工作区默认关，未开的 root 完全静默 return
+  // ——不发「工作区不受信任」通知，否则没开索引用户满屏信任提示。关闭且仍有
+  // 活跃索引（刚关开关/从开了索引的工作区切过来）时顺带释放。
+  if (!(await refreshEnabledFor(root))) {
     closeActive();
     return;
   }
@@ -268,18 +286,23 @@ function onWorkspaceTrusted(root: string) {
 }
 
 /**
- * 总开关切换（SettingsPanel 调用）。关 → 释放活跃索引（停后台 embed）；
- * 开 → 清守卫并对当前工作区立即重建。
+ * 工作区开关切换（代码索引面板调用）。先落盘（后端权威），再拉权威值刷新
+ * 缓存；开 → 清守卫并 ensureIndex（未信任工作区走它既有的 untrusted 通知流，
+ * 开关即意向——信任把关在建索引门，不在开开关处）；关 → 释放该 root 的
+ * 活跃索引（停后台 embed）。
  */
-function setEnabled(enabled: boolean) {
-  if (enabled) {
-    untrustedCurrent = "";
-    lastIndexedRoot = ""; // 清 dedup 守卫，让 ensureIndex 真正跑
-    if (currentRoot) void ensureIndex(currentRoot);
-  } else {
-    closeActive();
-    untrustedCurrent = "";
+async function setRootEnabled(root: string, enabled: boolean) {
+  if (!root) return;
+  await api.setWorkspaceCodegraphEnabled(root, enabled);
+  await refreshEnabledFor(root);
+  if (!enabled) {
+    if (lastIndexedRoot === root) closeActive();
+    return;
   }
+  // 开：清 dedup/不信任 memo，让 ensureIndex 真正跑（信任门在它内部）。
+  if (untrustedCurrent === root) untrustedCurrent = "";
+  if (lastIndexedRoot === root) lastIndexedRoot = "";
+  void ensureIndex(root);
 }
 
 /**
@@ -289,7 +312,7 @@ function setEnabled(enabled: boolean) {
  */
 async function rescan(root: string) {
   if (!root || root === untrustedCurrent) return;
-  if (!guard()) return; // 总开关关闭：不重扫
+  if (!isRootEnabled(root)) return; // 工作区开关关闭：不重扫（同步短路，Rust gate 兜底权威）
   try {
     const r = await api.codegraphRescan(root);
     if (!r.active_index) {
@@ -319,7 +342,7 @@ async function rescan(root: string) {
  */
 function rebuild(root: string) {
   if (!root || root === untrustedCurrent) return;
-  if (!guard()) return; // 总开关关闭：不重建
+  if (!isRootEnabled(root)) return; // 工作区开关关闭：不重建（同步短路，Rust gate 兜底权威）
   trackBuild(api.codegraphBuildIndex(root, { force: true }), root);
 }
 
@@ -328,7 +351,7 @@ function rebuild(root: string) {
  * null——调用方按「未触发」处理（静默，不推通知）。
  */
 async function reindexFile(root: string, file: string) {
-  if (!guard()) return null;
+  if (!isRootEnabled(root)) return null; // 工作区开关关闭：按「未触发」处理
   return api.codegraphReindexFile(root, file);
 }
 
@@ -344,7 +367,8 @@ async function reindexFile(root: string, file: string) {
 let rescanTimer: number | null = null;
 function scheduleRescan() {
   if (!lastIndexedRoot) return;
-  if (!guard()) return; // 总开关关闭：不重扫
+  // 不查开关：lastIndexedRoot 只在「开关门 + 信任门」双门通过后才写入，天然
+  // 隐含该工作区已开启（关开关走 closeActive 会清空 lastIndexedRoot）。
   if (typeof window === "undefined") return; // node/test 环境
   if (rescanTimer != null) clearTimeout(rescanTimer);
   rescanTimer = window.setTimeout(() => {
@@ -379,9 +403,10 @@ function __resetForTest() {
   }
   progress.value = { active: false, done: 0, total: 0, current: "", index_ready: false };
   lastBuild.value = null;
+  lastBuildRoot.value = "";
   lastIndexedRoot = "";
   untrustedCurrent = "";
-  currentRoot = "";
+  enabledForRoot.value = {};
 }
 
 export function useCodeGraphProgress() {
@@ -389,9 +414,13 @@ export function useCodeGraphProgress() {
     progress: readonly(progress),
     building: readonly(building),
     lastBuild: readonly(lastBuild),
+    lastBuildRoot: readonly(lastBuildRoot),
+    enabledForRoot: readonly(enabledForRoot),
     ensureIndex,
     onWorkspaceTrusted,
-    setEnabled,
+    setRootEnabled,
+    isRootEnabled,
+    refreshEnabledFor,
     trackBuild,
     rescan,
     rebuild,

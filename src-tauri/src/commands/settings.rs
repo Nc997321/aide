@@ -239,10 +239,6 @@ pub struct AppSettings {
     /// 零配置开箱即用；切 http 走 Ollama / OpenAI 兼容云端。
     #[serde(default)]
     pub codegraph_embedder: CodeGraphEmbedderConfig,
-    /// 代码索引总开关（默认开）。关闭后 build/rescan/reindex 全部门控跳过——
-    /// 启动、文件变更、保存都不再扫描/加载索引。前端门面 + 本字段双门控。
-    #[serde(default = "default_codegraph_enabled")]
-    pub codegraph_enabled: bool,
     /// 已启用的固定市场源 source_id 列表（默认空；前端首次进入可写默认两条）。
     #[serde(default)]
     pub enabled_marketplaces: Vec<String>,
@@ -329,9 +325,6 @@ fn default_auto_naming() -> bool {
 fn default_thinking_enabled() -> bool {
     true
 }
-fn default_codegraph_enabled() -> bool {
-    true
-}
 fn default_theme() -> String {
     "glass".to_string()
 }
@@ -361,7 +354,6 @@ impl Default for AppSettings {
             recent_limit: default_recent_limit(),
             pane_layouts: Value::Null,
             codegraph_embedder: CodeGraphEmbedderConfig::default(),
-            codegraph_enabled: default_codegraph_enabled(),
             enabled_marketplaces: Vec::new(),
             enabled_plugins: std::collections::BTreeMap::new(),
             jdk_registry: Vec::new(),
@@ -538,14 +530,8 @@ pub(crate) fn public_settings(service: &SettingsService) -> Result<AppSettings, 
     Ok(settings)
 }
 
-/// 代码索引总开关当前值（默认开）。读失败回退默认开——设置损坏不该把索引
-/// 静默关掉，与 `load_embedder_config` 的容错风格一致。
-pub(crate) fn codegraph_enabled(service: &SettingsService) -> bool {
-    public_settings(service)
-        .map(|s| s.codegraph_enabled)
-        .unwrap_or(true)
-}
-
+// 代码索引开关已是工作区级（`commands::workspace::codegraph_workspaces`，
+// 每工作区默认关），全局 settings 字段已删除——本文件只剩 embedder 配置职责。
 pub(crate) fn resolve_codegraph_embedder(
     service: &SettingsService,
 ) -> Result<RuntimeCodeGraphEmbedderConfig, String> {
@@ -894,19 +880,14 @@ mod tests {
         );
     }
 
-    /// 代码索引总开关随 AppSettings 落盘/读取，camelCase 一致；缺字段回填默认开。
+    /// 代码索引开关已下沉工作区级：AppSettings 不再有 codegraph_enabled 字段，
+    /// 旧 settings.json 残留的 codegraphEnabled 键被 serde 静默忽略（零迁移）。
     #[test]
-    fn codegraph_enabled_round_trip_and_default() {
-        // 缺 codegraphEnabled → 默认开
-        let s: AppSettings = serde_json::from_str(r#"{"fontSize":14}"#).unwrap();
-        assert!(s.codegraph_enabled);
-
-        // 关闭 round-trip
+    fn codegraph_enabled_legacy_key_is_ignored() {
         let s: AppSettings =
             serde_json::from_str(r#"{"fontSize":14,"codegraphEnabled":false}"#).unwrap();
-        assert!(!s.codegraph_enabled);
         let out = serde_json::to_string(&s).unwrap();
-        assert!(out.contains("\"codegraphEnabled\":false"), "{out}");
+        assert!(!out.contains("codegraphEnabled"), "{out}");
     }
 
     /// JDK 注册表随 AppSettings 落盘/读取，camelCase 一致；缺字段回填空。

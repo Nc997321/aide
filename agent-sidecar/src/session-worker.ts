@@ -941,7 +941,10 @@ export class SessionWorker {
         this.collectingTitle = true;
         this.titleUserText = cmd.prompt;
       }
-      this.startLoop(cmd.cwd ?? this.cwd, cmd.trusted !== false);
+      // 开关兜底方向与「每工作区默认关」一致（=== true）：主进程四条下发路径
+      // （chat send/btw + automation build/distill）都恒发该 key，缺 key =
+      // 新路径忘了下发 → fail-closed 不挂 MCP，而不是静默开启。
+      this.startLoop(cmd.cwd ?? this.cwd, cmd.trusted !== false, cmd.codegraph_enabled === true);
       this.queue.push({
         type: "user",
         message: buildUserMessage(cmd.prompt, cmd.images ?? []),
@@ -984,7 +987,7 @@ export class SessionWorker {
   // 主循环
   // ================================================================
 
-  async startLoop(cwd?: string, trusted = true): Promise<void> {
+  async startLoop(cwd?: string, trusted = true, codegraphEnabled = true): Promise<void> {
     try {
       while (!this.stopped) {
         try {
@@ -1016,13 +1019,20 @@ export class SessionWorker {
           // 轻量 btw 不再跳过——问答支线要保持与主会话请求前缀逐字节一致,
           // 少注册 MCP 工具 = 工具列表不同 = prompt cache 必崩(2026-08-09 实锤);
           // 模型误调由 policy hook 的轻量全 deny 兜底,不会卡。
+          // 挂载还随工作区索引开关（codegraph_enabled，主进程下发，每工作区默认关）。
           const effectiveCwd = cwd ?? this.cwd ?? "";
           const codegraphMcp = this.taskTools
             ? null
-            : codegraphMcpRegistration(effectiveCwd, (e) => this.emit(e), process.env, trusted);
-          // 文档工具(docx + pdf):注册条件与 codegraph 完全相同(任务支线跳过、!trusted 跳过、
-          // AIDE_DOCX_TOOLS=off 跳过)。无 emit 参数——docx/pdf 一次性同步解析,不像 codegraph
-          // 要 IPC 客户端(emit+request_id+超时那套不适用)。详见 docsMcp.ts。
+            : codegraphMcpRegistration(
+                effectiveCwd,
+                (e) => this.emit(e),
+                process.env,
+                trusted,
+                codegraphEnabled,
+              );
+          // 文档工具(docx + pdf):注册条件=任务支线跳过、!trusted 跳过、AIDE_DOCX_TOOLS=off
+          // 跳过——**不跟随 codegraph_enabled**（docx/pdf 不扫盘不建索引，见 docsMcp.ts）。
+          // 无 emit 参数——docx/pdf 一次性同步解析,不像 codegraph 要 IPC 客户端。
           const docsMcp = this.taskTools
             ? null
             : docsMcpRegistration(effectiveCwd, process.env, trusted);

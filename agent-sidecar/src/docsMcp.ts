@@ -1,8 +1,9 @@
 // aide-docs MCP server 统一注册：docx（read_docx / write_docx）+ pdf（read_pdf）工具合并。
 // 组织文件在上层，子实现各自独立（docxTools.ts / pdfTools.ts + docx/ / pdf/ 子目录）。
 //
-// 注册条件与 codegraphMcpRegistration 完全相同——docs 跟 codegraph 同步即可：
-// `trusted=false`（受限模式）时返回 null：不信任工作区不暴露文档读取工具。
+// 注册条件：仅 `trusted=false`（受限模式）时返回 null——不信任工作区不暴露文档
+// 读取工具。**刻意不跟随代码索引的工作区开关**（codegraphMcpRegistration 自
+// 那以后多一道条件）：docx/pdf 工具不扫盘不建索引，工作区关索引不应牵连文档工具。
 // AIDE_DOCX_TOOLS=off 时返回 null（A/B 实测与调试用，不进设置面板）。
 //
 // server 实例 per-worker 构造：handler 闭包持有该会话的 cwd。**无 emit 参数**——docx/pdf

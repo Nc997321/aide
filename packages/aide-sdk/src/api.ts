@@ -742,6 +742,17 @@ export const api = {
   untrustWorkspace(path: string): Promise<number> {
     return getTransport().invoke("untrust_workspace", { path });
   },
+  /** 读某工作区的代码索引开关（每工作区默认关，后端权威）。 */
+  isWorkspaceCodegraphEnabled(path: string): Promise<boolean> {
+    return getTransport().invoke("workspace_get_codegraph_enabled", { workspaceRoot: path });
+  },
+  /** 设某工作区的代码索引开关（每工作区默认关；信任把关在建索引门，不在写开关处）。 */
+  setWorkspaceCodegraphEnabled(path: string, enabled: boolean): Promise<void> {
+    return getTransport().invoke("workspace_set_codegraph_enabled", {
+      workspaceRoot: path,
+      enabled,
+    });
+  },
 };
 
 export { permissionsApi } from "./api/permissions";

@@ -3,7 +3,7 @@
 //! 六个命令的**签名与返回形状与迁移前完全一致**（前端 / remote-rpc 调用方
 //! 零改动），命令体从「进程内直调引擎」改为「政策判定 + 转发 RPC」：
 //!
-//! - 门控（trust / codegraphEnabled 总开关）——政策，留主进程；
+//! - 门控（trust / 工作区索引开关）——政策，留主进程；
 //! - settings 读取（embedder 配置 / 查询阈值）——同上，序列化后随参数下传；
 //! - proxy 探测——同上；
 //! - `ensure_aide_excluded`（信任工作区的 .aide/ git exclude）——主进程的
@@ -48,9 +48,11 @@ pub async fn codegraph_build_index(
                                           // 政策层：门控 + embedder 配置 + proxy 探测 + .aide/ exclude——全部
                                           // 阻塞 IO，收进 spawn_blocking（与迁移前的命令体一致）。
     let prep = tokio::task::spawn_blocking(move || {
-        if let Some(reason) =
-            gate::skip_reason(crate::commands::workspace::is_path_trusted(&gate_root), &ss)
-        {
+        // 政策读（trust + 工作区开关）是调用方表达式；gate 只做纯判定。
+        if let Some(reason) = gate::skip_reason(
+            crate::commands::workspace::is_path_trusted(&gate_root),
+            crate::commands::workspace::is_codegraph_enabled_for_path(&gate_root),
+        ) {
             return Err(json!({
                 "loaded": false,
                 "skipped": reason,
@@ -118,15 +120,16 @@ pub async fn codegraph_reindex_file(
     project_root: String,
     file: String,
     state: tauri::State<'_, Arc<CodeGraphService>>,
-    settings_service: tauri::State<'_, Arc<crate::settings::SettingsService>>,
 ) -> Result<Value, String> {
     let svc = state.inner().clone();
-    let ss = settings_service.inner().clone();
     let gate_root = project_root.clone(); // project_root 本体留给 svc 调用
-                                          // 门控：不信任 / 总开关关闭则跳过（读 settings，轻量 IO）。
+                                          // 门控：不信任 / 该工作区索引开关未开则跳过（读 state.json，轻量 IO）。
     let skip = tokio::task::spawn_blocking(move || {
-        gate::skip_reason(crate::commands::workspace::is_path_trusted(&gate_root), &ss)
-            .map(|reason| json!({ "reindexed": false, "skipped": reason }))
+        gate::skip_reason(
+            crate::commands::workspace::is_path_trusted(&gate_root),
+            crate::commands::workspace::is_codegraph_enabled_for_path(&gate_root),
+        )
+        .map(|reason| json!({ "reindexed": false, "skipped": reason }))
     })
     .await
     .map_err(|e| format!("join error: {e}"))?;
@@ -141,21 +144,21 @@ pub async fn codegraph_reindex_file(
 pub async fn codegraph_rescan(
     project_root: String,
     state: tauri::State<'_, Arc<CodeGraphService>>,
-    settings_service: tauri::State<'_, Arc<crate::settings::SettingsService>>,
 ) -> Result<Value, String> {
     let svc = state.inner().clone();
-    let ss = settings_service.inner().clone();
     let gate_root = project_root.clone(); // project_root 本体留给 svc 调用
     let skip = tokio::task::spawn_blocking(move || {
-        gate::skip_reason(crate::commands::workspace::is_path_trusted(&gate_root), &ss).map(
-            |reason| {
-                json!({
-                    "active_index": false,
-                    "rescanned_files": 0,
-                    "skipped": reason,
-                })
-            },
+        gate::skip_reason(
+            crate::commands::workspace::is_path_trusted(&gate_root),
+            crate::commands::workspace::is_codegraph_enabled_for_path(&gate_root),
         )
+        .map(|reason| {
+            json!({
+                "active_index": false,
+                "rescanned_files": 0,
+                "skipped": reason,
+            })
+        })
     })
     .await
     .map_err(|e| format!("join error: {e}"))?;

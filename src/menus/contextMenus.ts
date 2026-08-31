@@ -158,11 +158,7 @@ export function directoryMenuItems(
 
 // ── File tree blank area ──
 
-export function fileTreeAreaMenuItems(
-  rootPath: string,
-  onRefresh: () => void,
-  codegraph?: { rescan: (root: string) => void; rebuild: (root: string) => void },
-): MenuItem[] {
+export function fileTreeAreaMenuItems(rootPath: string, onRefresh: () => void): MenuItem[] {
   const items: MenuItem[] = [
     { label: "刷新", action: onRefresh },
     sep(),
@@ -198,15 +194,7 @@ export function fileTreeAreaMenuItems(
       },
     },
   ];
-  if (codegraph) {
-    items.push(
-      sep(),
-      // 增量：只 reindex mtime>indexed_at 的改动文件，保留其余符号/向量。快。
-      { label: "更新索引（仅改动文件）", action: () => codegraph.rescan(rootPath) },
-      // 全量：force=true 跳过快速路径，走版本化目录 + 进度条从头重建。
-      { label: "全量重建索引", action: () => codegraph.rebuild(rootPath) },
-    );
-  }
+  // 索引维护（更新/全量重建）已迁右侧栏「代码索引」tab——菜单不再收口开关类操作。
   return items;
 }
 

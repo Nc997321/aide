@@ -32,7 +32,6 @@ const defaults: AppSettings = {
     format: "ollama",
     dim: 0,
   },
-  codegraphEnabled: true,
   jdkRegistry: [],
   jdkPromptDismissed: [],
   leftSidebarPinned: true,
@@ -102,7 +101,6 @@ export function useSettings() {
         ...defaults.codegraphEmbedder,
         ...(s.codegraphEmbedder ?? {}),
       };
-      settings.codegraphEnabled = s.codegraphEnabled ?? defaults.codegraphEnabled;
       settings.jdkRegistry = s.jdkRegistry ?? defaults.jdkRegistry;
       settings.jdkPromptDismissed = s.jdkPromptDismissed ?? defaults.jdkPromptDismissed;
       settings.leftSidebarPinned = s.leftSidebarPinned ?? defaults.leftSidebarPinned;
@@ -144,7 +142,6 @@ export function useSettings() {
     if (partial.recentLimit !== undefined) settings.recentLimit = partial.recentLimit;
     if (partial.paneLayouts !== undefined) settings.paneLayouts = partial.paneLayouts;
     if (partial.codegraphEmbedder !== undefined) settings.codegraphEmbedder = partial.codegraphEmbedder;
-    if (partial.codegraphEnabled !== undefined) settings.codegraphEnabled = partial.codegraphEnabled;
     if (partial.leftSidebarPinned !== undefined) settings.leftSidebarPinned = partial.leftSidebarPinned;
     if (partial.sessionListStyle !== undefined) settings.sessionListStyle = partial.sessionListStyle;
     if (partial.onboarded !== undefined) settings.onboarded = partial.onboarded;

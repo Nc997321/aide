@@ -198,15 +198,8 @@ const { show } = useContextMenu();
 
 function onAreaContextMenu(e: MouseEvent) {
   e.preventDefault();
-  show(
-    e.clientX,
-    e.clientY,
-    // 刷新/新建走原地刷新（保持展开状态），不再 loadRoot 推倒重建把树收起到根
-    fileTreeAreaMenuItems(projectInfo.value.root, refreshAllExpanded, {
-      rescan: (root: string) => cg.rescan(root),
-      rebuild: (root: string) => cg.rebuild(root),
-    }),
-  );
+  // 索引维护（更新/全量重建）已迁右侧栏「代码索引」tab，菜单只剩刷新/新建/粘贴。
+  show(e.clientX, e.clientY, fileTreeAreaMenuItems(projectInfo.value.root, refreshAllExpanded));
 }
 
 // Refresh file tree when the active session finishes a response round

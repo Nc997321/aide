@@ -32,7 +32,7 @@ const SNIPPET_HARD_CAP = 300;
 function fallbackText(reason: string): string {
   return (
     `Code index unavailable (${reason}). Fall back to Grep/Glob for this query. ` +
-    `The user can build the index in Settings → 代码索引.`
+    `The user can enable the index for this workspace in the 右侧栏 代码索引 panel.`
   );
 }
 
@@ -59,7 +59,7 @@ export function formatToolResponse(
     return (
       `The code index's semantic layer is degraded — the shard has far fewer vectors ` +
       `than symbols (${resp.health ?? "vector shortfall"}), so semantic search would ` +
-      `return wrong/empty results. Rebuild the index in Settings → 代码索引 (全量重建). ` +
+      `return wrong/empty results. Rebuild it via the 右侧栏 代码索引 panel (全量重建). ` +
       `Fall back to Grep for this query.`
     );
   }
@@ -124,17 +124,23 @@ function textResult(text: string) {
 
 /**
  * 默认注册；AIDE_CODEGRAPH_TOOLS=off 时返回 null（A/B 实测与调试用，不进设置面板）。
- * `trusted=false`（受限模式）时也返回 null：不信任工作区不建索引，注册了 codegraph
- * MCP 只会诱导模型对必然返回 no_index 的工具空调用。server 实例 per-worker 构造：
- * handler 闭包持有该会话的 emit 与 cwd。省略 trusted = 信任（向后兼容）。
+ * 挂载条件（并列，任一不满足即 null）：
+ * - `trusted=false`（受限模式）：不信任工作区不建索引，注册了 codegraph
+ *   MCP 只会诱导模型对必然返回 no_index 的工具空调用。
+ * - `codegraphEnabled=false`：该工作区索引开关未开（每工作区默认关，右侧栏
+ *   「代码索引」面板控制——主进程在 cmd JSON 下发 codegraph_enabled）。
+ * server 实例 per-worker 构造：handler 闭包持有该会话的 emit 与 cwd。
+ * 省略 trusted / enabled = 信任且开启（向后兼容，测试/手工调用用）。
  */
 export function codegraphMcpRegistration(
   cwd: string,
   emit: (e: ChatEvent) => void,
   env: NodeJS.ProcessEnv = process.env,
   trusted = true,
+  enabled = true,
 ): Record<string, unknown> | null {
   if (!trusted) return null;
+  if (!enabled) return null;
   if (env.AIDE_CODEGRAPH_TOOLS === "off") return null;
 
   const run = async (

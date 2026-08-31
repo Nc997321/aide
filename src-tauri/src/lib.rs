@@ -492,6 +492,9 @@ pub fn run() {
             commands::workspace::workspace_set_lsp_enabled,
             commands::workspace::workspace_set_lsp_excludes,
             commands::workspace::workspace_get_lsp_excludes,
+            // 工作区级代码索引开关（每工作区默认关，右侧栏面板读写）
+            commands::workspace::workspace_get_codegraph_enabled,
+            commands::workspace::workspace_set_codegraph_enabled,
             // 工作区级 JDK（一个工作区一个 JDK，所有运行配置共享）
             commands::workspace::workspace_get_jdk,
             commands::workspace::workspace_set_jdk,

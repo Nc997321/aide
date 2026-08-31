@@ -205,7 +205,8 @@ describe("SessionWorker — codegraph MCP registration", () => {
       cwd: "/proj",
     });
     worker.handleCommand({
-      cmd: "send", session_id: "s-cg", prompt: "你好", cwd: "/proj", env: {}, auto_title: false,
+      // 生产协议恒发 codegraph_enabled（主进程四处构造点下发）——fixture 同形
+      cmd: "send", session_id: "s-cg", prompt: "你好", cwd: "/proj", env: {}, auto_title: false, codegraph_enabled: true,
     } as any);
     await new Promise((r) => setTimeout(r, 50));
     worker.stop();
@@ -231,7 +232,7 @@ describe("SessionWorker — codegraph MCP registration", () => {
     });
     worker.handleCommand({
       cmd: "send", session_id: "btw-lw", prompt: "问一句", cwd: "/proj",
-      env: {}, btw: true, lightweight: true, fork_from: "main-sid",
+      env: {}, btw: true, lightweight: true, fork_from: "main-sid", codegraph_enabled: true,
     } as any);
     await new Promise((r) => setTimeout(r, 50));
     worker.stop();
@@ -286,7 +287,7 @@ describe("SessionWorker — codegraph MCP registration", () => {
     });
     worker.handleCommand({
       cmd: "send", session_id: "btw-full", prompt: "问一句", cwd: "/proj",
-      env: {}, btw: true, fork_from: "main-sid",
+      env: {}, btw: true, fork_from: "main-sid", codegraph_enabled: true,
     } as any);
     await new Promise((r) => setTimeout(r, 50));
     worker.stop();

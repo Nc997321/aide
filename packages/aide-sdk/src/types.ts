@@ -132,9 +132,6 @@ export interface AppSettings {
   paneLayouts: Record<string, unknown>;
   /** CodeGraph embedding 后端配置（fastembed 本地 / http 远程）。默认 fastembed。 */
   codegraphEmbedder: CodeGraphEmbedderConfig;
-  /** 代码索引总开关（默认开）。关闭后 build/rescan/reindex 全部门控跳过——
-   *  启动、文件变更、保存都不再扫描/加载索引。前端门面 + Rust 命令双门控。 */
-  codegraphEnabled: boolean;
   /** JDK 注册表：本机已登记的 JDK（扫描 + 手动添加），供运行配置按项目选 JDK。
    *  机器级资源，非按工作区。 */
   jdkRegistry?: JdkEntry[];
