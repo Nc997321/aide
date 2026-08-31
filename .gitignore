@@ -1,6 +1,3 @@
-# Claude Code local settings
-.claude/
-
 # Dependencies
 node_modules/
 
@@ -44,8 +41,6 @@ _design_preview/
 src-tauri/.fastembed_cache/
 # 内嵌的 CodeGraph embedding 模型（87MB，构建时从 HF cache 复制/下载，不入库）
 src-tauri/resources/codegraph-model/
-# LLVM 覆盖率插桩运行的原始数据（LLVM_PROFILE_FILE 未设时写到 cwd）
-*.profraw
 # llvm-cov 分支覆盖实测的工作目录（profdata/lcov/报告等大文件；工具脚本在 scripts/ 下）
 src-tauri/cov-work/
 relay-server/target/
