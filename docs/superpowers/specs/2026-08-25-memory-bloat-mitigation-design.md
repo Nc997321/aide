@@ -229,7 +229,7 @@ P0 是无后端时的止血态（单向淘汰最早），P1 字节游标直接�
 | `store.messages` 全量保留 + `useMessageWindow`「扩窗只增不减」 | 内存膨胀直接根源；`useMessageWindow.ts:4-6` 注释明说「数据层照旧全量在 store」 | 打开只 hydrate 尾部一页；store 估算字节有界（`maybeEvict` 64MB 阈值降级大 block）；`useMessageWindow` 整模块删除，滚动层只管取回/锚定/置底、不管内存 | 新机制直接取代 |
 | `tool_result` 回填的 `flatMap.find` O(N) 全表扫描（6 处，`useChatSession.ts:678`+890-950） | 每个工具事件全量扫描 + 分配新数组，随会话变长线性退化 | P0-2 `Map<id,block>` 解耦，6 处全删改 O(1) 查 | 新机制直接取代 |
 | `useChatScroll`「上滚扩窗一次性同步挂 30 条」（`expandOlderAnchored`） | 注释自认「上滚的卡是后续议题」 | 上滚取回一页后 `mountedCount` 到顶一次挂载（一页条数，几十条可接受）；不再同步挂全部已加载数据 | 新机制直接取代 |
-| 两层窗口叠加（`useMessageWindow` 尾部 15 + `useChatScroll` mountedCount 6→15） | 数据窗口/渲染预算两层切片，对冲全量在内存的 jam | ✅ 2026-08-26 落地（终稿 ⑩）：窗口层删除，`useMessageWindow` 整文件删除；`visibleMessages` = messages 尾部 `mountedCount`，mountedCount 仅作首帧渲染预算（6→全量每帧 +40，防切会话首帧 jam），取回后到顶 | 简化 |
+| 两层窗口叠加（`useMessageWindow` 尾部 15 + `useChatScroll` mountedCount 6→15） | 数据窗口/渲染预算两层切片，对冲全量在内存的 jam | ✅ 2026-08-26 落地（终稿 ⑩）：窗口层删除，`useMessageWindow` 整文件删除；`visibleMessages` = messages 尾部 `mountedCount`，mountedCount 仅作首帧渲染预算（6→全量每帧 +40，防切会话首帧 jam），取回后到顶。✅ 2026-08-31 演进：切回不再绕过 ramp 一次性全量挂载，统一走分帧通道（切回=离底距离锚定 + 帧耗时 AIMD 自适应 chunk，修「切回长会话流光掉帧」，见 `useChatScroll.ts` 头注释） | 简化 |
 | `save_session_changes` 每轮全量 `to_string_pretty` 落盘（`session.rs:710`） | 每轮 O(总轮数) 增长（虽 async 不堵主线程） | ✅ P2-4 已改：文件格式改 JSONL（每行一轮 compact），新增 `append_session_change` O(1) append 单轮，前端 `diskTailIndex` 锚点判断纯追加走 append、revert 场景全量覆盖；`load_session_changes` 兼容旧 pretty 数组（首字符 `[` 判定）。compact 也省了 to_string_pretty 的序列化 CPU | 顺手优化 |
 | `last_jsonl_message` 逐行读完整文件取末行（`session.rs:878`） | 会话列表逐会话整读 jsonl | P1 改后端字节游标时顺手改 seek 到文件尾读末段找最后换行 | 顺手优化（P1 已含） |
 

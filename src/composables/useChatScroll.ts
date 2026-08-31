@@ -28,7 +28,15 @@ import {
  * - 上滚到顶部触发带 → loadOlder 取更早一页 unshift 头部 + 视口补偿
  *   （scrollTop += 高度差，看到的旧内容不跳）；
  * - 加载在途时顶部停留 → topPending → 完成后自动续取（连翻不中断）；
- * - 切会话首帧渲染预算（mountedCount 6 行 → 全量，每帧 +40 行）防首帧 jam。
+ * - 切会话统一走同一条分帧挂载通道（首帧 mountedCount 6 行 → 全量），防主线程
+ *   秒级 jam（切回长会话一次性全量挂数万个节点 = 输入框流光掉帧的元凶）：
+ *   - 首开/未 hydrate：钉底跟随（bottom）；
+ *   - 切回有位置记忆：按「离底距离不变」逐帧锚定（anchor）——挂载只发生在已挂
+ *     尾部之上（尾行=live 段=列表底），离底距离全程不变；锚点上方没挂齐前钳在
+ *     底部（先看到 live 尾），挂齐后视口自然停在离开时的内容位置，ramp 收尾
+ *     双帧校准 + 近底恢复跟随（沿用原 restore 语义）；
+ *   - 挂载量按帧耗时自适应（AIMD：帧贴不进 vsync 就收缩、健康就渐进放大），
+ *     重消息行不再按固定 40 行/帧爆帧。
  *
  * 内存双保险：recycle 管「页级驻留上限」（字节区间可从 jsonl 确定性重取），
  * evict 管「页内大 block 降级」——2026-08-26 的「只加载不回收」定稿被
@@ -40,7 +48,7 @@ export interface ChatScrollOptions {
   pageBytes?: number;
   /** 首帧渲染预算起点：切会话首帧只挂这么多行。默认 6。 */
   rampInitial?: number;
-  /** 每帧追加行数。默认 40。 */
+  /** 自适应挂载量的初始值（帧预算控制器会继续放大/收缩）。默认 40。 */
   rampChunk?: number;
   /** P1 双向分页：由上层（ChatPanel）绑定当前会话注入。缺省 = 无后端取回。 */
   pagination?: ChatScrollPagination;
@@ -62,6 +70,17 @@ export interface ChatScrollPagination {
 const DEFAULT_PAGE_BYTES = 256 * 1024;
 const DEFAULT_RAMP_INITIAL = 6;
 const DEFAULT_RAMP_CHUNK = 40;
+/** 帧预算控制器的目标挂载耗时（略小于一帧，给流光等同帧主线程动画留余量）：
+ *  帧耗时超过 SHRINK_MS 才收缩（带宽吸收抖动，不逐帧振荡），否则按 +1/8 渐进
+ *  放大——挂载帧整体收敛在 60fps 边缘，切回长会话的挂载总量不变但每帧流畅。 */
+const RAMP_FRAME_TARGET_MS = 12;
+const RAMP_FRAME_SHRINK_MS = 20;
+const RAMP_CHUNK_MIN = 1;
+/** 自适应上限（轻行很快冲顶；重行由 SHRINK 判定接管收缩）。 */
+const RAMP_CHUNK_MAX = 400;
+/** 锚定 ramp 的接管判定：落点写入前后 scrollTop 偏差超过容差 = 用户（滚条拖动等，
+ *  wheel 接管另有通道）自己动了 → 取消 ramp 全量挂载。容差只吸收亚像素/取整。 */
+const RAMP_ANCHOR_TOLERANCE_PX = 4;
 /** 滚动停驻判定：距最后一次 scroll 事件这么久才结算回收/取回（滚动途中不动结构，
  *  避免快速翻页时页在脚下被抽走）。 */
 const SCROLL_SETTLE_MS = 200;
@@ -124,10 +143,11 @@ export function useChatScroll(
   // ── 首帧渲染预算（唯一一层窗口化：防切会话一次性挂载 jam）──────────────
   // 数据层窗口化由页级回收负责（骨架）；这里只控制「首帧挂多少行」再逐帧补到全量。
   const mountedCount = ref(rampInitial);
-  /** 会话滚动位置记忆（sid → scrollTop）：切走记录、切回恢复。切回钉底只用于
-   *  首次打开（无记忆）；组件级 Map——会话切换组件常驻，位置随会话保留，
-   *  组件重建（关 tab 重开）后自然为空，回落首帧钉底行为。 */
-  const scrollPositions = new Map<string, number>();
+  /** 会话滚动位置记忆（sid → {top, distBottom}）：切走记录、切回恢复。切回钉底
+   *  只用于首次打开（无记忆）；组件级 Map——会话切换组件常驻，位置随会话保留，
+   *  组件重建（关 tab 重开）后自然为空，回落首帧钉底行为。distBottom = 离开时刻
+   *  的离底距离，锚定 ramp 的落点基准（见 RampPin.anchor 注释）。 */
+  const scrollPositions = new Map<string, { top: number; distBottom: number }>();
   /** 进 v-for 的实际列表：rows 尾部 mountedCount 行（首帧 ramp 渐进，之后全量）。 */
   const visibleRows: ComputedRef<readonly Row[]> = computed(() => {
     const list = rows.value;
@@ -137,6 +157,8 @@ export function useChatScroll(
   const ramping = ref(false);
   /** 切过去时会话还没 hydrate（messages 为空）→ 挂起等 messages 到齐再 ramp。 */
   let rampPending = false;
+  /** 挂起的 ramp 落点策略（rampPending 对应）：无记忆=bottom，切回=anchor。 */
+  let rampPendingPin: RampPin | null = null;
   /** ramp 在途帧句柄（cancel 函数；null=空闲）。 */
   let rafHandle: (() => void) | null = null;
 
@@ -146,6 +168,75 @@ export function useChatScroll(
       rafHandle = null;
     }
     ramping.value = false;
+  }
+
+  /**
+   * 分帧挂载的每帧落点策略——切会话渲染只有这一条通道，入口差异只收在
+   * 「怎么落 scrollTop」上：
+   *  - bottom：钉底跟随（首开/未 hydrate），含 live 段逐帧长高的追底；
+   *  - anchor：离底距离不变（distBottom = 离开时刻实测的 scrollHeight - scrollTop）。
+   *    分帧挂载只发生在已挂尾部之上（尾行=live 段=列表底），已挂区域的行高不变，
+   *    离底距离对同内容的映射在挂载全程不变。锚点上方尚未挂齐（锚点会落在负值）、
+   *    或锚点本就在最后一屏内（distBottom < clientHeight）两种情形统一钳在底部：
+   *    先看到 live 尾，行从上方不断挂入，锚点挂齐后视口自然锁定在离开时的内容位置。
+   */
+  type RampPin = { kind: "bottom" } | { kind: "anchor"; distBottom: number };
+  let rampPin: RampPin = { kind: "bottom" };
+  /** anchor 模式最近一次写入的落点（接管判定基准，见 rampPin 内偏差检查）。 */
+  let lastAnchorTop: number | null = null;
+  /** 帧预算控制器的当前挂载量（每次 startRamp 重置回 rampChunk 起步）。 */
+  let rampChunkCur = rampChunk;
+
+  /** anchor 落点纯函数：不合法/未挂齐 → 底部。写保护见 rampPin。 */
+  function anchoredScrollTop(el: HTMLDivElement, distBottom: number): number {
+    const max = Math.max(0, el.scrollHeight - el.clientHeight);
+    const anchorTop = el.scrollHeight - distBottom;
+    return anchorTop < 0 || anchorTop > max ? max : anchorTop;
+  }
+
+  function rampLand() {
+    const el = scrollEl.value;
+    if (rampPin.kind === "bottom") {
+      if (el && autoScroll.value) {
+        trail("write", `ramp pin m=${mountedCount.value}`);
+        el.scrollTop = el.scrollHeight;
+      }
+      return;
+    }
+    if (!el) return;
+    const target = anchoredScrollTop(el, rampPin.distBottom);
+    // 接管判定：两次锚定写入之间 scrollTop 被第三方移走（滚条拖动）→ 视为用户
+    // 接管。wheel 接管走 onWheel/userTookScroll；此处覆盖滚条分支。程序化写入
+    // 前后必然相等（写入值永不超出 [0, max]，浏览器不会钳位），亚像素差在容差内。
+    if (lastAnchorTop !== null && Math.abs(el.scrollTop - lastAnchorTop) > RAMP_ANCHOR_TOLERANCE_PX) {
+      trail("wheelTakeover", `anchor deviate ${Math.round(el.scrollTop)}≠${lastAnchorTop}`);
+      userTookScroll();
+      return;
+    }
+    trail("write", `ramp anchor m=${mountedCount.value} top=${Math.round(target)}`);
+    el.scrollTop = target;
+    lastAnchorTop = target;
+  }
+
+  /** ramp 收尾：bottom 无动作；anchor 沿用原切回 restore 的双帧校准（第一帧设一次、
+   *  第二帧重校准）+ 落点近底才恢复跟随——防止残留 scroll 回波把跟随误刷新后
+   *  又被 toBottom 拉走（2026-08-26 trail 实锤的时序）。 */
+  function finishRamp() {
+    ramping.value = false;
+    const pin = rampPin;
+    if (pin.kind !== "anchor") return;
+    scheduleFrame(() => {
+      const el = scrollEl.value;
+      if (!el) return;
+      el.scrollTop = anchoredScrollTop(el, pin.distBottom);
+      scheduleFrame(() => {
+        const el2 = scrollEl.value;
+        if (!el2) return;
+        el2.scrollTop = anchoredScrollTop(el2, pin.distBottom);
+        trail("write", `anchor restore ${Math.round(el2.scrollTop)}`);
+        if (el2.scrollHeight - el2.scrollTop - el2.clientHeight < 48) autoScroll.value = true;
+      });
+    });
   }
 
   /** 用户滚动接管：ramp 即停、已加载数据全量挂载（防中间段缺失）、脱离自动跟随。
@@ -159,33 +250,39 @@ export function useChatScroll(
     mountedCount.value = Math.max(mountedCount.value, rows.value.length);
   }
 
-  function startRamp() {
+  function startRamp(pin: RampPin = { kind: "bottom" }) {
     cancelRamp();
     ramping.value = true;
+    rampPin = pin;
+    rampChunkCur = rampChunk;
+    lastAnchorTop = null;
     mountedCount.value = rampInitial;
-    // 首帧同步置底：ramp 每帧加内容后，RO 触发的 scrollToBottom 落在下一帧 rAF，
-    // 本帧会用上一帧的 scrollTop 渲染造成一帧抖动；这里在调度下一 tick 前同步把
-    // scrollTop 钉到底，覆盖上一帧残留。
-    if (scrollEl.value && autoScroll.value) {
-      trail("write", "ramp pin0");
-      scrollEl.value.scrollTop = scrollEl.value.scrollHeight;
-    }
+    // 首帧同步落位：ramp 每帧加内容后，RO 触发的 scrollToBottom 落在下一帧 rAF，
+    // 本帧会用上一帧的 scrollTop 渲染造成一帧抖动；这里在调度下一 tick 前同步
+    // 落位，覆盖上一帧残留（bottom=钉底 / anchor=离底锚定）。
+    rampLand();
+    rafHandle = scheduleFrame(tick); // 首帧只渲染 rampInitial 行，下一帧才开始递增
+
     function tick() {
-      if (!ramping.value) return; // 被切走 / 用户上滚接管取消
+      if (!ramping.value) return; // 被切走 / 用户接管取消
       const target = rows.value.length;
-      const next = Math.min(target, mountedCount.value + rampChunk);
-      if (next <= mountedCount.value) {
-        ramping.value = false;
+      if (mountedCount.value >= target) {
+        finishRamp();
         return;
       }
-      mountedCount.value = next;
-      if (scrollEl.value && autoScroll.value) {
-        trail("write", `ramp pin m=${mountedCount.value}`);
-        scrollEl.value.scrollTop = scrollEl.value.scrollHeight;
-      }
-      rafHandle = scheduleFrame(tick);
+      const t0 = performance.now();
+      mountedCount.value = Math.min(target, mountedCount.value + rampChunkCur);
+      rafHandle = scheduleFrame(() => {
+        if (!ramping.value) return; // 本帧间被取消：不落位、不再续帧
+        // 帧预算控制器：t0→rAF 回调的耗时 ≈ 本 chunk 的 patch + 布局 + 绘制。
+        const dt = performance.now() - t0;
+        rampChunkCur = dt > RAMP_FRAME_SHRINK_MS
+          ? Math.max(RAMP_CHUNK_MIN, Math.round(rampChunkCur * (RAMP_FRAME_TARGET_MS / dt)))
+          : Math.min(RAMP_CHUNK_MAX, rampChunkCur + Math.max(2, rampChunkCur >> 3));
+        rampLand();
+        rafHandle = scheduleFrame(tick);
+      });
     }
-    rafHandle = scheduleFrame(tick);
   }
 
   // ── 滚动状态 ────────────────────────────────────────────────────────────────
@@ -267,6 +364,9 @@ export function useChatScroll(
     const el = scrollEl.value;
     const sid = sessionId();
     if (!el || !sid || restoring.value || loadingOlder.value) return;
+    // 结构性操作（页级取回 splice messages）不与 ramp 并行：先按接管语义落定
+    // （ramp 停 + 全量挂载），再取回——否则行模型在分帧挂载中途变化，锚定/窗口都失真
+    if (ramping.value) userTookScroll();
     const rowIndex = rows.value.findIndex((r) => r.kind === "skeleton" && r.pageIndex === pageIndex);
     if (rowIndex < 0) return;
     restoring.value = true;
@@ -372,11 +472,16 @@ export function useChatScroll(
       "scroll",
       `top=${Math.round(el.scrollTop)} sh=${el.scrollHeight} ch=${el.clientHeight} auto=${autoScroll.value ? 1 : 0}`,
     );
-    if (prev >= 0 && el.scrollTop < prev - 1) {
+    // 锚定 ramp 期间跳过两个自动分支：锚定写入在帧间会让 scrollTop 回落（底部钳制
+    // → 锚点落位）——按「用户上滚」处理会让 ramp 第一帧就自毁成全量挂载；钳底帧的
+    // dist<48 也会把 autoScroll 误刷成 true 让 RO 置底与锚定互相打架。接管保留两条
+    // 独立通道：onWheel（userTookScroll 直调）与 rampPin 的落点偏差检测（滚条拖动）。
+    const anchoring = ramping.value && rampPin.kind === "anchor";
+    if (prev >= 0 && el.scrollTop < prev - 1 && !anchoring) {
       // 向上滚动：用户接管（ramp 停 + 数据全量 + 脱离跟随），再按实时离底距离重判跟随态
       userTookScroll();
       autoScroll.value = dist < 48;
-    } else if (prev >= 0 && dist < 48) {
+    } else if (prev >= 0 && dist < 48 && !anchoring) {
       // 到达/停在底部：恢复跟随（下滚到底、jump 落定、钳位回底都走这里）。
       // prev >= 0 挡掉切会话后首个残留 scroll 事件（基线未建立时的旧位置回波）——
       // 它会把恢复分支刚置 false 的 autoScroll 误刷成 true，位置随即被 toBottom 拉走。
@@ -407,11 +512,16 @@ export function useChatScroll(
   // 流式/ramp 期间每个增量都触发的话会压垮 UI 线程。合并到每帧至多一次；rAF 回调
   // 晚于 Vue 的微任务渲染批次，天然拿到更新后的 DOM。
   let scrollQueued = false;
+  // 置底帧代际：每次切会话 +1，为上一状态排队的置底帧作废——不仅防跨会话污染
+  // （旧会话的置底落在新会话上），也防同会话切回后冲掉锚定 ramp 刚写好的位置。
+  let toBottomGeneration = 0;
   function scrollToBottom() {
     if (!autoScroll.value || scrollQueued) return;
     scrollQueued = true;
+    const gen = toBottomGeneration;
     scheduleFrame(() => {
       scrollQueued = false;
+      if (gen !== toBottomGeneration) return;
       const el = scrollEl.value;
       if (el) {
         trail("write", `toBottom ${Math.round(el.scrollTop)}→${el.scrollHeight}`);
@@ -444,9 +554,12 @@ export function useChatScroll(
 
   // 点「回到底部」：平滑滚到底并恢复自动置底。先收按钮再滚——平滑滚动途中用户
   // 滚轮打断时 scroll 事件会把按钮按真实距离重新点亮，不会丢状态。
+  // 点击即接管：ramp 在途时先落定（停 ramp + 全量挂载），否则后续每帧锚定写入
+  // 会与平滑滚动互相扯。
   function jumpToBottom() {
     const el = scrollEl.value;
     if (!el) return;
+    if (ramping.value) userTookScroll();
     trail("write", `jump smooth from=${Math.round(el.scrollTop)}`);
     newWhileAway.value = false;
     farFromBottom.value = false;
@@ -488,12 +601,21 @@ export function useChatScroll(
     sessionId,
     (newId, oldId) => {
       trail("session", newId ?? "null"); // 切会话标记：定格「自愈」的分界线
-      // 离开的会话：记录当前位置（watch 在渲染前执行，scrollEl 还是旧 DOM，读数准确）。
-      // 切回时恢复——否则每次切回都被强制钉底（2026-08-26 用户实锤「一下从切换
-      // 前的位置被拖回底部」）。
-      if (oldId && scrollEl.value) scrollPositions.set(oldId, scrollEl.value.scrollTop);
+      // 离开的会话：记录位置 + 离底距离（watch 在渲染前执行，scrollEl 还是旧 DOM，
+      // 读数准确）。切回时锚定恢复——否则每次切回都被强制钉底（2026-08-26 用户实锤
+      // 「一下从切换前的位置被拖回底部」）。distBottom 对锚定的价值：分帧挂载只
+      // 发生在已挂尾部之上，离底距离全程不变，比裸 scrollTop 更抗其上历史的高度
+      // 漂移（只受锚点下方 tail 的高度变化影响）。
+      if (oldId && scrollEl.value) {
+        scrollPositions.set(oldId, {
+          top: scrollEl.value.scrollTop,
+          distBottom: scrollEl.value.scrollHeight - scrollEl.value.scrollTop,
+        });
+      }
       cancelRamp();
       rampPending = false;
+      rampPendingPin = null;
+      toBottomGeneration++; // 旧会话排队中的置底帧全部作废
       topPending = false; // 旧会话的「顶部待续」不带进新会话
       if (settleTimer) {
         clearTimeout(settleTimer); // 旧会话的待结算不带进新会话
@@ -511,43 +633,40 @@ export function useChatScroll(
         autoScroll.value = true;
         scrollToBottom();
         if (messages().length > 0) startRamp();
-        else rampPending = true; // 未 hydrate：等 messages 到齐
+        else {
+          rampPending = true; // 未 hydrate：等 messages 到齐
+          rampPendingPin = null;
+        }
         return;
       }
-      // 切回已有记忆：全量挂载（ramp 逐帧 pin 底会破坏位置）+ 恢复离开时的滚动位置。
-      // 双帧恢复：第一帧设 scrollTop（内容可能尚未渲染完，scrollHeight 未就绪时会被
-      // clamp/误判）；第二帧（内容渲染完成、布局就绪）重新校准位置，恢复点在底部
-      // 附近（≤48px）才重新进入跟随——否则残留 scroll 事件把 autoScroll 误刷成 true
-      // 后，随后的 toBottom 会把位置拉回底部（2026-08-26 trail 实锤
-      // `restore 1437 → scroll auto=1 → toBottom 2854`）。
-      // 骨架高度有台账记账（实测/估算），恢复位置跨回收仍然近似准确。
+      // 切回已有记忆：同一条分帧通道，仅落点策略换成「离底距离锚定」。首帧只挂
+      // rampInitial 行（不再一次性全量挂载——切回长会话的巨型同步 patch 是输入框
+      // 流光掉帧的元凶），锚点上方挂齐前钳底，挂齐后停在离开位置；ramp 收尾
+      // finishRamp 里双帧校准 + 近底恢复跟随（原 restore 语义原样收编）。
+      // 骨架高度有台账记账（实测/估算），锚定落点跨回收仍然近似准确。
       autoScroll.value = false;
-      mountedCount.value = Math.max(mountedCount.value, rows.value.length);
-      scheduleFrame(() => {
-        const el = scrollEl.value;
-        if (!el) return;
-        el.scrollTop = saved;
-        scheduleFrame(() => {
-          const el2 = scrollEl.value;
-          if (!el2) return;
-          el2.scrollTop = saved;
-          trail("write", `restore ${saved}`);
-          if (el2.scrollHeight - el2.scrollTop - el2.clientHeight < 48) autoScroll.value = true;
-        });
-      });
+      if (messages().length > 0) {
+        startRamp({ kind: "anchor", distBottom: saved.distBottom });
+      } else {
+        rampPending = true; // 切回时会话还没 hydrate：等 messages 到齐再锚定 ramp
+        rampPendingPin = { kind: "anchor", distBottom: saved.distBottom };
+      }
     },
     { immediate: true },
   );
 
   // hydrate 补交：切到未加载会话时挂起的 ramp，在 messages 0→N 那一下触发。
   // pre-flush 保证那一帧渲染前 mountedCount 已重置回首帧预算。rampPending 仅 0→N
-  // 触发一次，流式逐条追加（n 持续增）不重复 ramp。
+  // 触发一次，流式逐条追加（n 持续增）不重复 ramp。落点策略随挂起时的入口
+  // （首开=bottom / 切回=anchor）。
   watch(
     () => messages().length,
     (n) => {
       if (rampPending && n > 0) {
         rampPending = false;
-        startRamp();
+        const pin = rampPendingPin ?? { kind: "bottom" as const };
+        rampPendingPin = null;
+        startRamp(pin);
       }
     },
   );

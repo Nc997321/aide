@@ -185,7 +185,7 @@ describe("useChatScroll", () => {
     expect(visibleRows.value.length).toBe(100);
   });
 
-  it("切走再切回：恢复离开时的滚动位置（不钉底、全量挂载）", async () => {
+  it("切走再切回：锚定 ramp 分帧挂载，收尾后恢复离开时的滚动位置（不钉底）", async () => {
     const list = ref(makeMessages(100));
     const sid = ref<string | null>("s1");
     const { schedule, flush } = manualScheduler();
@@ -196,15 +196,89 @@ describe("useChatScroll", () => {
     );
     // s1 滚动到中间位置（用户离开现场）
     scrollEl.value = fakeScrollEl({ scrollTop: 500, scrollHeight: 1817, clientHeight: 817 });
-    // 切走（真实用户操作有间隔，watch 分两批触发）：记录 s1=500
+    // 切走（真实用户操作有间隔，watch 分两批触发）：记录 s1 位置（top=500, distBottom=1317）
     sid.value = "s2";
     await nextTick();
-    // 切回：恢复分支（全量挂载 + 一帧后 scrollTop 回 500）
+    // 切回：锚定 ramp 首帧只挂尾部（不全量同步挂载——一次性巨型 patch 是流光掉帧元凶）
     sid.value = "s1";
     await nextTick();
-    flush(); // 执行 restore 帧
+    expect(visibleRows.value.length).toBe(6); // 首帧渲染预算，未全量
+    expect(scrollEl.value!.scrollTop).toBe(500); // pin0 已锚定到离开位置
+    flush(); // 分帧跑完 → 全量 + 双帧校准
     expect(scrollEl.value!.scrollTop).toBe(500); // 恢复离开时的位置，而不是被拖回底部
-    expect(visibleRows.value.length).toBe(100); // 全量挂载（不 ramp 不 pin）
+    expect(visibleRows.value.length).toBe(100); // 挂载终态仍是全量（scroll 完整性）
+    expect(ramping.value).toBe(false);
+  });
+
+  it("切回锚定 ramp：锚定写入不被 onScroll 误判成用户上滚（防全量自毁）", async () => {
+    const list = ref(makeMessages(100));
+    const sid = ref<string | null>("s1");
+    const { schedule } = manualScheduler();
+    const { scrollEl, visibleRows, ramping, onScroll } = useChatScroll(
+      () => list.value,
+      () => sid.value,
+      { scheduleFrame: schedule },
+    );
+    scrollEl.value = fakeScrollEl({ scrollTop: 500, scrollHeight: 1817, clientHeight: 817 });
+    sid.value = "s2";
+    await nextTick();
+    sid.value = "s1"; // 锚定 ramp（tick 在队未 flush）
+    await nextTick();
+    // 基线：第一次 onScroll 只建立 prevScrollTop
+    onScroll();
+    // 模拟锚定写入造成的 scrollTop 回落（钳底 → 锚点落位的过程形态）：
+    // 锚定期间不能被当成用户上滚接管，否则第一帧锚定就把自己打成全量挂载
+    scrollEl.value = fakeScrollEl({ scrollTop: 300, scrollHeight: 1817, clientHeight: 817 });
+    onScroll();
+    expect(ramping.value).toBe(true); // ramp 未被取消
+    expect(visibleRows.value.length).toBeLessThan(100); // 未全量
+  });
+
+  it("切回锚定 ramp：两次写入间 scrollTop 被第三方移走（滚条等）→ 视作接管，取消 ramp 全量挂载", async () => {
+    const list = ref(makeMessages(100));
+    const sid = ref<string | null>("s1");
+    const { schedule, flush } = manualScheduler();
+    const { scrollEl, visibleRows, ramping } = useChatScroll(
+      () => list.value,
+      () => sid.value,
+      { scheduleFrame: schedule },
+    );
+    scrollEl.value = fakeScrollEl({ scrollTop: 500, scrollHeight: 1817, clientHeight: 817 });
+    sid.value = "s2";
+    await nextTick();
+    sid.value = "s1"; // 锚定 ramp（pin0 已写 500，tick 在队未 flush）
+    await nextTick();
+    expect(ramping.value).toBe(true);
+    // 模拟滚条拖动：落点写入之间 scrollTop 被移到 100（偏差 > 容差 4px）
+    scrollEl.value = fakeScrollEl({ scrollTop: 100, scrollHeight: 1817, clientHeight: 817 });
+    flush();
+    expect(ramping.value).toBe(false); // 视作接管
+    expect(visibleRows.value.length).toBe(100); // 全量挂载（接管语义）
+  });
+
+  it("切回（messages 未就绪）：hydrate 到齐后按锚定策略 ramp，位置=离底距离锚定", async () => {
+    const list = ref(makeMessages(100));
+    const sid = ref<string | null>("s1");
+    const { schedule, flush } = manualScheduler();
+    const { scrollEl, visibleRows, ramping } = useChatScroll(
+      () => list.value,
+      () => sid.value,
+      { scheduleFrame: schedule },
+    );
+    scrollEl.value = fakeScrollEl({ scrollTop: 500, scrollHeight: 1817, clientHeight: 817 });
+    sid.value = "s2"; // 先建立 s1 的位置记忆
+    await nextTick();
+    // 模拟「切回时会话消息清空（重开/hydrate 未完）」：切回时走 rampPending 挂起，
+    // 落点策略应为 anchor（不再 hydrate 后钉底把位置冲掉）
+    list.value = [];
+    sid.value = "s1";
+    await nextTick();
+    expect(ramping.value).toBe(false); // messages 空，ramp 挂起未启动
+    list.value = makeMessages(100); // hydrate 到齐（0→N）
+    await nextTick(); // length watcher 触发锚定 ramp
+    expect(scrollEl.value!.scrollTop).toBe(500); // pin0 已按 distBottom 锚定
+    flush();
+    expect(visibleRows.value.length).toBe(100);
     expect(ramping.value).toBe(false);
   });
 
