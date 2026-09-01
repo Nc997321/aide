@@ -79,9 +79,8 @@ describe("ModelSwitchConfirm", () => {
       "model_switch_confirm_decision",
       { sessionId: "s-1", confirmId: "c-seed", approve: true },
     );
-    // 决定已发出：决定回传后弹窗置回 null（store 清态，关闭）
-    const chatStore = (await import("@aide/sdk/chat")).useChatSession;
-    expect(chatStore).toBeDefined();
+    // 决定已发出 + 弹窗关闭（decide 的 finally 清挂起态）
+    expect(w.find(".mswitch-panel").exists()).toBe(false);
   });
 
   it("取消 → 回传 approve:false 且弹窗关闭（草稿回滚在 rollbackModelChoice）", async () => {
