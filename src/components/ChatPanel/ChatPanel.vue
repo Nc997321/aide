@@ -8,7 +8,7 @@ import TaskListPanel from "../TaskListPanel.vue";
 import InterruptButton from "../InterruptButton.vue";
 import PermissionDialog from "../PermissionDialog.vue";
 import BgTaskDock from "../BgTaskDock.vue";
-import WorkspacePicker from "../../ui/WorkspacePicker.vue";
+import HeroWelcome from "./hero/HeroWelcome.vue";
 import ChatInputBox from "./ChatInputBox.vue";
 import ModelSwitchConfirm from "./ModelSwitchConfirm.vue";
 import BtwDrawer from "../BtwDrawer.vue";
@@ -333,11 +333,12 @@ const contextCompactionVal = computed(() => props.contextCompaction ?? null);
 
 // ── hero（零会话欢迎态）────────────────────────────────────────────────────
 // 判定 = 未绑定会话且无消息：零 tab 布局与「新会话」空白预览 tab 共用这一套
-// 居中样式。hero 不是独立组件——输入盒/工具栏/发送路径全部复用，只是换布局文案。
+// 居中样式。hero 是独立欢迎组件（HeroWelcome：时间问候 + 轮换文案），
+// 输入盒/工具栏/发送路径仍全部复用。
 const isHero = computed(() => !props.sessionId && props.messages.length === 0);
-// 归属显示交给 WorkspacePicker（path → 末段目录名），hero 只需传 props.workspacePath。
+// 归属显示交给欢迎组件内嵌的 WorkspacePicker（path → 末段目录名）。
 // 模型名由 ChatInputBox 上报（hero-model-name 事件）——选中模型在输入框组件内，
-// hero 头只读展示，不持有选择状态。
+// hero 欢迎区只读展示，不持有选择状态。
 const heroModelName = ref("");
 
 // 离开 hero 的 FLIP 过渡：状态翻转瞬间（DOM 还没变，flush:"pre"）记录输入盒
@@ -585,21 +586,15 @@ function onOpenBgDock(taskId: string) {
       @update:selected-id="(id: string) => emit('update:bgDockSelectedId', id)"
     />
 
-    <!-- hero 标题区（零会话欢迎态）：logo + 一行纯展示信息，
-         模型/权限模式的实际选择在输入盒工具栏 -->
+    <!-- hero 欢迎区（零会话欢迎态）：时间问候 + 轮换文案（HeroWelcome）。
+         模型/权限模式的实际选择仍在输入盒工具栏。 -->
     <Transition name="hero-fade">
-      <div v-if="isHero" class="chat-hero-head">
-        <AppLogo :size="56" class="chat-hero-logo" />
-        <div class="chat-hero-title">
-          新会话位于
-          <WorkspacePicker
-            :path="props.workspacePath ?? ''"
-            @select="(ws) => emit('select-workspace', ws)"
-          />
-          <span class="chat-hero-sep">·</span>
-          使用 <span class="chat-hero-model">{{ heroModelName || "默认模型" }}</span>
-        </div>
-      </div>
+      <HeroWelcome
+        v-if="isHero"
+        :workspace-path="props.workspacePath ?? ''"
+        :model-name="heroModelName"
+        @select-workspace="(ws) => emit('select-workspace', ws)"
+      />
     </Transition>
 
     <!-- 输入区（textarea + 工具栏 + 全部输入逻辑）已拆为独立组件 ChatInputBox：
@@ -850,37 +845,6 @@ function onOpenBgDock(taskId: string) {
    .chat-messages 会让它吃掉剩余空间、破坏输入盒居中 */
 .chat-panel--hero .chat-scroll-wrap {
   display: none;
-}
-
-.chat-hero-head {
-  align-self: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 20px;
-  user-select: none;
-}
-
-.chat-hero-logo {
-  border-radius: 12px;
-  box-shadow: var(--aide-shadow-md);
-}
-
-.chat-hero-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  color: var(--aide-text-secondary);
-}
-
-.chat-hero-sep {
-  color: var(--aide-text-muted);
-}
-
-.chat-hero-model {
-  color: var(--aide-accent);
 }
 
 /* 离开 hero：消息区淡入（配合 FLIP 的输入盒落底） */
