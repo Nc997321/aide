@@ -130,7 +130,7 @@ const health = computed<{ color: "success" | "warning" | "danger"; text: string 
 
         <!-- 索引健康（上次成功构建的结果，按工作区归属） -->
         <div v-else-if="health" class="cg-info">
-          <ABadge :color="health.color">{{ health.text }}</ABadge>
+          <ABadge :value="health.text" :color="health.color" />
         </div>
       </template>
 

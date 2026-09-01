@@ -143,11 +143,25 @@ export function useChatScroll(
   // ── 首帧渲染预算（唯一一层窗口化：防切会话一次性挂载 jam）──────────────
   // 数据层窗口化由页级回收负责（骨架）；这里只控制「首帧挂多少行」再逐帧补到全量。
   const mountedCount = ref(rampInitial);
-  /** 会话滚动位置记忆（sid → {top, distBottom}）：切走记录、切回恢复。切回钉底
+  /** 会话滚动位置记忆（sid → ScrollMemory）：切走记录、切回恢复。切回钉底
    *  只用于首次打开（无记忆）；组件级 Map——会话切换组件常驻，位置随会话保留，
    *  组件重建（关 tab 重开）后自然为空，回落首帧钉底行为。distBottom = 离开时刻
-   *  的离底距离，锚定 ramp 的落点基准（见 RampPin.anchor 注释）。 */
-  const scrollPositions = new Map<string, { top: number; distBottom: number }>();
+   *  的离底距离（distBottom 锚定的兜底基准，见 RampPin.anchor 注释）；anchor =
+   *  内容锚点（优先落点，见 ScrollMemory.anchor）。 */
+  interface ScrollMemory {
+    top: number;
+    distBottom: number;
+    /** 内容锚点（2026-09-01 根因修复）：distBottom 是像素度量，切走后视口
+     *  下方内容一旦被后台 evict 改写（大 block 降级变矮 / 页释放成估算骨架，
+     *  events.ts 的 maybeEvict 对后台会话照常触发），切回落点 = H_new -
+     *  distBottom 会系统性偏上并被正反馈锁定——「每次切回固定在上方某处」
+     *  （useChatScroll.geometry.test.ts 坐实）。锚点改记「视口顶所在行 id +
+     *  行内偏移」：行身份跨降级/释放/取回稳定，落点对齐离开时刻看的内容。
+     *  仅带 data-row-id 的行（page/skeleton）可锚；live 行无 id（测高成本
+     *  设计）→ 无锚回退 distBottom（尾部场景后台收缩小、失真有限）。 */
+    anchor?: { rowId: string; offsetInRow: number };
+  }
+  const scrollPositions = new Map<string, ScrollMemory>();
   /** 进 v-for 的实际列表：rows 尾部 mountedCount 行（首帧 ramp 渐进，之后全量）。 */
   const visibleRows: ComputedRef<readonly Row[]> = computed(() => {
     const list = rows.value;
@@ -174,24 +188,58 @@ export function useChatScroll(
    * 分帧挂载的每帧落点策略——切会话渲染只有这一条通道，入口差异只收在
    * 「怎么落 scrollTop」上：
    *  - bottom：钉底跟随（首开/未 hydrate），含 live 段逐帧长高的追底；
-   *  - anchor：离底距离不变（distBottom = 离开时刻实测的 scrollHeight - scrollTop）。
-   *    分帧挂载只发生在已挂尾部之上（尾行=live 段=列表底），已挂区域的行高不变，
-   *    离底距离对同内容的映射在挂载全程不变。锚点上方尚未挂齐（锚点会落在负值）、
-   *    或锚点本就在最后一屏内（distBottom < clientHeight）两种情形统一钳在底部：
-   *    先看到 live 尾，行从上方不断挂入，锚点挂齐后视口自然锁定在离开时的内容位置。
+   *  - anchor：优先「内容锚点」（ScrollMemory.anchor：视口顶对齐锚行文档位置 +
+   *    行内偏移，锚行身份跨后台 evict 收缩稳定）；无锚/锚行已消失回退「离底距离
+   *    不变」（distBottom）。分帧挂载只发生在已挂尾部之上（尾行=live 段=列表底）：
+   *    锚行未挂载（窗口之外）时钳在底部——先看到 live 尾，行从上方不断挂入，
+   *    锚行挂入后视口逐帧跟随锚行（其文档位置随上方挂入下移），挂齐后停在
+   *    离开时刻看的内容行上；distBottom 兜底路径保持原语义（锚点上方未挂齐
+   *    落负值 / 锚点在最后一屏内统一钳底）。
    */
-  type RampPin = { kind: "bottom" } | { kind: "anchor"; distBottom: number };
+  type RampPin =
+    | { kind: "bottom" }
+    | { kind: "anchor"; distBottom: number; anchor?: ScrollMemory["anchor"] };
   let rampPin: RampPin = { kind: "bottom" };
   /** anchor 模式最近一次写入的落点（接管判定基准，见 rampPin 内偏差检查）。 */
   let lastAnchorTop: number | null = null;
   /** 帧预算控制器的当前挂载量（每次 startRamp 重置回 rampChunk 起步）。 */
   let rampChunkCur = rampChunk;
 
-  /** anchor 落点纯函数：不合法/未挂齐 → 底部。写保护见 rampPin。 */
-  function anchoredScrollTop(el: HTMLDivElement, distBottom: number): number {
+  /** 锚行元素当前文档位置（相对滚动内容顶，含行上方已挂内容）；null = 锚行
+   *  未挂载（尾部窗口之外）或无几何可读（jsdom/未布局）。遍历 children 比对
+   *  data-row-id 而非 querySelector：不依赖 id 的 CSS 选择器安全性。 */
+  function anchorRowTop(
+    el: HTMLDivElement,
+    anchor: NonNullable<ScrollMemory["anchor"]>,
+  ): number | null {
+    const root = contentEl.value;
+    if (!root) return null;
+    const elRect = el.getBoundingClientRect();
+    if (elRect.height <= 0) return null;
+    for (let i = 0; i < root.children.length; i++) {
+      const child = root.children[i] as HTMLElement;
+      if (child.dataset?.rowId !== anchor.rowId) continue;
+      const rect = child.getBoundingClientRect();
+      if (rect.height <= 0) return null;
+      return el.scrollTop + (rect.top - elRect.top);
+    }
+    return null;
+  }
+
+  /** anchor 落点统一函数（rampLand 每帧 / finishRamp 双帧校准共用）：
+   *  锚行优先（对齐内容身份），锚行已不在 rows（页被丢等结构变化）或无锚
+   *  记忆回退 distBottom 公式；锚行在 rows 但未挂载钳底（等挂载）。返回值
+   *  已 clamp 到 [0, max]，可直接写入（接管判定的「写入值不被浏览器钳位」
+   *  前提因此保持）。 */
+  function landAnchored(el: HTMLDivElement, pin: Extract<RampPin, { kind: "anchor" }>): number {
     const max = Math.max(0, el.scrollHeight - el.clientHeight);
-    const anchorTop = el.scrollHeight - distBottom;
-    return anchorTop < 0 || anchorTop > max ? max : anchorTop;
+    const clamp = (v: number) => (v < 0 ? 0 : v > max ? max : v);
+    if (pin.anchor && rows.value.some((r) => r.id === pin.anchor!.rowId)) {
+      const top = anchorRowTop(el, pin.anchor);
+      if (top !== null) return clamp(top + pin.anchor.offsetInRow);
+      return max; // 锚行在 rows 但未挂载：钳底，挂入后自然跟到锚行
+    }
+    return clamp(el.scrollHeight - pin.distBottom);
   }
 
   function rampLand() {
@@ -204,10 +252,11 @@ export function useChatScroll(
       return;
     }
     if (!el) return;
-    const target = anchoredScrollTop(el, rampPin.distBottom);
+    const target = landAnchored(el, rampPin);
     // 接管判定：两次锚定写入之间 scrollTop 被第三方移走（滚条拖动）→ 视为用户
     // 接管。wheel 接管走 onWheel/userTookScroll；此处覆盖滚条分支。程序化写入
-    // 前后必然相等（写入值永不超出 [0, max]，浏览器不会钳位），亚像素差在容差内。
+    // 前后必然相等（landAnchored 返回值已 clamp 到 [0, max]，浏览器不会再钳位），
+    // 亚像素差在容差内。
     if (lastAnchorTop !== null && Math.abs(el.scrollTop - lastAnchorTop) > RAMP_ANCHOR_TOLERANCE_PX) {
       trail("wheelTakeover", `anchor deviate ${Math.round(el.scrollTop)}≠${lastAnchorTop}`);
       userTookScroll();
@@ -219,8 +268,9 @@ export function useChatScroll(
   }
 
   /** ramp 收尾：bottom 无动作；anchor 沿用原切回 restore 的双帧校准（第一帧设一次、
-   *  第二帧重校准）+ 落点近底才恢复跟随——防止残留 scroll 回波把跟随误刷新后
-   *  又被 toBottom 拉走（2026-08-26 trail 实锤的时序）。 */
+   *  第二帧重校准，统一走 landAnchored——锚行优先、distBottom 兜底）+ 落点近底才
+   *  恢复跟随——防止残留 scroll 回波把跟随误刷新后又被 toBottom 拉走
+   *  （2026-08-26 trail 实锤的时序）。 */
   function finishRamp() {
     ramping.value = false;
     const pin = rampPin;
@@ -228,11 +278,11 @@ export function useChatScroll(
     scheduleFrame(() => {
       const el = scrollEl.value;
       if (!el) return;
-      el.scrollTop = anchoredScrollTop(el, pin.distBottom);
+      el.scrollTop = landAnchored(el, pin);
       scheduleFrame(() => {
         const el2 = scrollEl.value;
         if (!el2) return;
-        el2.scrollTop = anchoredScrollTop(el2, pin.distBottom);
+        el2.scrollTop = landAnchored(el2, pin);
         trail("write", `anchor restore ${Math.round(el2.scrollTop)}`);
         if (el2.scrollHeight - el2.scrollTop - el2.clientHeight < 48) autoScroll.value = true;
       });
@@ -320,6 +370,31 @@ export function useChatScroll(
       if (h > 0 && el.dataset.rowId) heights.set(el.dataset.rowId, h);
     }
     return heights;
+  }
+
+  /** 切走时测内容锚点：视口顶所在的带 data-row-id 行 + 行内偏移（px）。
+   *  在 watch(sessionId)（pre-flush）里调用，children/scrollTop 都是离开会话的
+   *  现场值。返回 null = 视口顶落在无 id 行（live 段 / 顶部 gate 区）或无 DOM
+   *  几何（jsdom/未布局）→ 调用方只记 distBottom，切回走兜底锚定。 */
+  function measureViewportAnchor(): ScrollMemory["anchor"] | null {
+    const el = scrollEl.value;
+    const root = contentEl.value;
+    if (!el || !root) return null;
+    const elRect = el.getBoundingClientRect();
+    if (elRect.height <= 0) return null;
+    const vpTopDoc = el.scrollTop;
+    for (let i = 0; i < root.children.length; i++) {
+      const child = root.children[i] as HTMLElement;
+      const rect = child.getBoundingClientRect();
+      if (rect.height <= 0) continue;
+      const topDoc = el.scrollTop + (rect.top - elRect.top);
+      if (topDoc + rect.height <= vpTopDoc) continue; // 整行在视口顶上方
+      // 第一个底超过视口顶的行 = 视口顶所在行
+      const rowId = child.dataset?.rowId;
+      if (!rowId) return null; // live 段行/门按钮：无行身份，不可锚
+      return { rowId, offsetInRow: Math.max(0, vpTopDoc - topDoc) };
+    }
+    return null;
   }
 
   /** 滚动停驻结算：量高 → 定位视口页 → 上报热区 → 超预算释放热区外页 →
@@ -602,14 +677,14 @@ export function useChatScroll(
     (newId, oldId) => {
       trail("session", newId ?? "null"); // 切会话标记：定格「自愈」的分界线
       // 离开的会话：记录位置 + 离底距离（watch 在渲染前执行，scrollEl 还是旧 DOM，
-      // 读数准确）。切回时锚定恢复——否则每次切回都被强制钉底（2026-08-26 用户实锤
-      // 「一下从切换前的位置被拖回底部」）。distBottom 对锚定的价值：分帧挂载只
-      // 发生在已挂尾部之上，离底距离全程不变，比裸 scrollTop 更抗其上历史的高度
-      // 漂移（只受锚点下方 tail 的高度变化影响）。
+      // 读数准确）+ 内容锚点（视口顶所在行，见 ScrollMemory.anchor——后台 evict 收缩
+      // 下 distBottom 会系统性偏上，锚点是修复）。切回时锚定恢复——否则每次切回都被
+      // 强制钉底（2026-08-26 用户实锤「一下从切换前的位置被拖回底部」）。
       if (oldId && scrollEl.value) {
         scrollPositions.set(oldId, {
           top: scrollEl.value.scrollTop,
           distBottom: scrollEl.value.scrollHeight - scrollEl.value.scrollTop,
+          anchor: measureViewportAnchor() ?? undefined,
         });
       }
       cancelRamp();
@@ -639,17 +714,16 @@ export function useChatScroll(
         }
         return;
       }
-      // 切回已有记忆：同一条分帧通道，仅落点策略换成「离底距离锚定」。首帧只挂
-      // rampInitial 行（不再一次性全量挂载——切回长会话的巨型同步 patch 是输入框
-      // 流光掉帧的元凶），锚点上方挂齐前钳底，挂齐后停在离开位置；ramp 收尾
-      // finishRamp 里双帧校准 + 近底恢复跟随（原 restore 语义原样收编）。
-      // 骨架高度有台账记账（实测/估算），锚定落点跨回收仍然近似准确。
+      // 切回已有记忆：同一条分帧通道，落点策略「锚行优先、distBottom 兜底」。首帧
+      // 只挂 rampInitial 行（不再一次性全量挂载——切回长会话的巨型同步 patch 是
+      // 输入框流光掉帧的元凶），锚行挂入前钳底，挂入后视口跟随锚行，收尾
+      // finishRamp 双帧校准 + 近底恢复跟随（原 restore 语义原样收编）。
       autoScroll.value = false;
       if (messages().length > 0) {
-        startRamp({ kind: "anchor", distBottom: saved.distBottom });
+        startRamp({ kind: "anchor", distBottom: saved.distBottom, anchor: saved.anchor });
       } else {
         rampPending = true; // 切回时会话还没 hydrate：等 messages 到齐再锚定 ramp
-        rampPendingPin = { kind: "anchor", distBottom: saved.distBottom };
+        rampPendingPin = { kind: "anchor", distBottom: saved.distBottom, anchor: saved.anchor };
       }
     },
     { immediate: true },
