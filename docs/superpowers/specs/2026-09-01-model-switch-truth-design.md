@@ -86,6 +86,6 @@ cmd.model_switch_confirm_decision: { sid, approve: boolean, confirmId }
 | SDK gate | needsConfirm/provider 决策包（model 维度废除回归） | `confirmGate.test.ts` | vitest 绿 |
 | UI 集成 | ChatPanel：同会话切换模型发送**不再弹** __sendConfirm__（旧行为废除回归） | `ChatPanel.test.ts` | vitest 绿 |
 
-| UI 弹窗 | ModelSwitchConfirm：渲染成本明细、decide(true/false) 回传与清态、api 失败 finally 兜底 | `ModelSwitchConfirm.test.ts` 4 例 | vitest 绿 |
+| UI 弹窗 | ModelSwitchConfirm：渲染成本明细、decide(true/false) 回传与清态+关窗、api 失败 finally 兜底 | `ModelSwitchConfirm.test.ts` 4 例 | vitest 绿（decide(true) 关窗断言已补，死断言已清） |
 
 机械检查终态：前端 **156 files / 1718 全绿**；sidecar **40 files / 577 全绿**（含 modelSwitchGuard 11 例）；vue-tsc 与 tsc 双零错误；dist/runtime.js 已重建。覆盖率（v8 实测）：guard 全量 statements 97.56/branch 93.75/lines 100；modelSwitch.ts 100/90/100；events.ts 79.78/67.45/82.35（新 case 语句全覆盖）。22 个旧设计断言按换代改写（非回归）：基线 provider 化、settleOnSend 签名收窄、成功回执换轴、门控 model 维度删除、成功链路零本地副作用。

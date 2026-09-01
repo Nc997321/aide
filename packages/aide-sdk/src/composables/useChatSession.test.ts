@@ -533,7 +533,7 @@ describe("useChatSession per-session store", () => {
     expect(chat.modelSwitchResult.value).toMatchObject({ ok: false, model: "k3", display: "k3", error: "model_not_found", seq: 3 });
   });
 
-  it("models_available 不在此层持久化（current 可能是别名，持久化归 ChatPanel 在列校验）", async () => {
+  it("models_available 进程坐实对账：currentModel 坐实到路由层（落盘 IPC 在 identity 层 commitModelFromRuntime 直测）", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);
     await flush();
@@ -545,9 +545,9 @@ describe("useChatSession per-session store", () => {
       session_id: "uuid-a",
     });
     await flush();
-    // 回归：sidecar 会把第三方 wire id 解析成 Claude 别名广播，本层不做
-    // 在列校验，持久化别名会污染会话记忆（恢复必然失败）——故本层一律不写。
-    expect(invokeMock).not.toHaveBeenCalledWith("set_session_model", expect.anything());
+    // 路由层断言：models_available 进 case 即坐实 currentModel（bindRuntime+对账落盘
+    // 的入口在 events.ts models_available case；落盘 IPC 的分支覆盖在
+    // useSessionIdentity.test 的 commitModelFromRuntime 四例直测——对账表分层说明）
     expect(chat.currentModel.value).toBe("sonnet");
   });
 
@@ -714,6 +714,22 @@ describe("useChatSession per-session store", () => {
     await flush();
     expect(chat.modelSwitchConfirm.value?.source).toBe("sdk");
     expect(chat.modelSwitchConfirm.value?.cacheTtl).toBe("5m");
+
+    // "1h" 合法臂：原值接受（不经兜底改写）
+    emit({
+      type: "model_switch_confirm",
+      confirm_id: "switch-confirm-x3",
+      from_model: "kimi",
+      to_model: "fable-x",
+      source: "sdk",
+      context_tokens: 80_000,
+      prompt_cache_warm: true,
+      estimated_cache_write_usd: 0,
+      cache_ttl: "1h",
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.modelSwitchConfirm.value?.cacheTtl).toBe("1h");
   });
 
   it("model_committed：清确认弹窗 + currentModel 坐实 + 落盘 requested_model（事件驱动落盘主链路）", async () => {
@@ -747,6 +763,19 @@ describe("useChatSession per-session store", () => {
     await flush();
     const modelCalls = invokeMock.mock.calls.filter((c) => c[0] === "set_session_model");
     expect(modelCalls.length).toBe(0); // 首坐实已落盘；同值重放被幂等跳过（不再写盘）
+    expect(chat.currentModel.value).toBe("fable"); // requested 命名空间坐实
+    expect(chat.modelSwitchConfirm.value).toBeNull(); // 切换完成终结弹窗
+
+    // requested=null（CLI 内部 auto/resume 切换）：不碰 currentModel 账面（resolved
+    // 全名与下拉别名跨命名空间），仅确认弹窗照常清（终态语义）
+    emit({
+      type: "model_committed",
+      from_model: "fable", to_model: "auto-resolved:full", requested_model: null, source: "auto",
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.currentModel.value).toBe("fable"); // 不被 resolved 全名污染
+    expect(chat.modelSwitchConfirm.value).toBeNull();
   });
 
   it("model_switch_result 终态清挂起弹窗（超时 deny 前端黑洞回归）", async () => {
