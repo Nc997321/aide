@@ -10,6 +10,6 @@ defineProps<{ provider: ProviderConfig }>();
 <template>
   <ProviderActionsCpa v-if="provider.kind === 'cpa_gpt'" :provider-id="provider.id" />
   <ProviderActionsAnthropic v-else-if="provider.kind === 'system_default'" :provider-id="provider.id" />
-  <ProviderActionsGeneric v-else-if="provider.kind === 'ollama' || provider.kind === 'kimi' || provider.kind === 'deepseek'" :provider-id="provider.id" />
+  <ProviderActionsGeneric v-else-if="provider.kind === 'ollama' || provider.kind === 'kimi' || provider.kind === 'deepseek' || provider.kind === 'zhipu'" :provider-id="provider.id" />
   <!-- Custom：无专属操作区，不渲染 -->
 </template>

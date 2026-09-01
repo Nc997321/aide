@@ -38,5 +38,13 @@
     "base_url": "https://api.deepseek.com/anthropic",
     "auth_mode": "auth_token",
     "actions": ["test_connection"]
+  },
+  {
+    "kind": "zhipu",
+    "name": "智谱",
+    "icon": "Z",
+    "base_url": "https://open.bigmodel.cn/api/anthropic",
+    "auth_mode": "api_key",
+    "actions": ["test_connection"]
   }
 ]
