@@ -32,15 +32,32 @@ onMounted(() => {
   terminal.open(containerRef.value);
   fitAddon.fit();
   terminal.write(props.content.replace(/\n/g, "\r\n"));
+  written = props.content; // 首写基线对齐，后续 watch 只判增量
 });
 
 onBeforeUnmount(() => {
   terminal?.dispose();
 });
 
+/** 已写入 xterm 的内容基线（增量判定的 SSOT；onMounted 的首次写入后与 props.content 对齐）。 */
+let written = "";
+
+// 输出变更：流式 stdout 是追加型——前缀未变时只把增量写入 xterm（成本 O(delta)），
+// 不再 clear + 全量重写。逐条全量重写会让 xterm 对累计 buffer 整段重折行重渲染，
+// 成本 O(累计) × delta 率 = 大输出命令（构建/安装日志）流式期主线程连续长任务
+// （freeze-1788224842632 系列：160px 定高盒子外层尺寸不变，RO/滚动环零事件）。
+// 前缀不匹配（revert/截断导致内容变短或整体替换）才退回 clear + 全量重写。
 watch(() => props.content, (val) => {
-  terminal?.clear();
-  terminal?.write(val.replace(/\n/g, "\r\n"));
+  if (!terminal) return;
+  if (val.startsWith(written)) {
+    // 字符级替换（\n → \r\n）逐字符上下文无关、无切点边界效应，与整段替换等价
+    terminal.write(val.slice(written.length).replace(/\n/g, "\r\n"));
+    written = val;
+    return;
+  }
+  terminal.clear();
+  terminal.write(val.replace(/\n/g, "\r\n"));
+  written = val;
 });
 
 watch(() => settings.theme, async () => {
