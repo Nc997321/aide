@@ -1,4 +1,4 @@
-//! Zhipu（智谱）kind：catalog 预置 base_url，api_key 认证（x-api-key），仅 test_connection。
+//! Zhipu（智谱）kind：catalog 预置 base_url，auth_token 认证（Authorization: Bearer），仅 test_connection。
 
 use super::{PresetStrategy, ProviderStrategy};
 use crate::runtime::provider::{catalog::catalog_find, ProviderKind};
@@ -25,8 +25,8 @@ mod tests {
             name: "".into(),
             icon: "".into(),
             base_url: "".into(),
-            api_key: "k".into(),
-            auth_token: "".into(),
+            api_key: "".into(),
+            auth_token: "k".into(),
             model: String::new(),
             model_mappings: ProviderModelMappings::default(),
             effort_level: "".into(),
@@ -44,10 +44,10 @@ mod tests {
             env.get("ANTHROPIC_BASE_URL"),
             Some(&"https://open.bigmodel.cn/api/anthropic".to_string())
         );
-        assert_eq!(env.get("ANTHROPIC_API_KEY"), Some(&"k".to_string()));
+        assert_eq!(env.get("ANTHROPIC_AUTH_TOKEN"), Some(&"k".to_string()));
         assert!(
-            env.get("ANTHROPIC_AUTH_TOKEN").is_none(),
-            "Zhipu 走 x-api-key，不应注入 Bearer token"
+            env.get("ANTHROPIC_API_KEY").is_none(),
+            "Zhipu 走 Bearer（ANTHROPIC_AUTH_TOKEN），不应注入 x-api-key"
         );
     }
 
