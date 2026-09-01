@@ -163,6 +163,20 @@ mod tests {
     }
 
     #[test]
+    fn kimi_defaults_parsed_from_catalog() {
+        let p = catalog_find(ProviderKind::Kimi).unwrap();
+        let d = p.defaults.as_ref().expect("kimi must carry defaults");
+        assert_eq!(d.anthropic_model, "k3[1m]");
+        assert_eq!(d.default_opus_model, "k3[1m]");
+        assert_eq!(d.default_sonnet_model, "k3[1m]");
+        assert_eq!(d.default_haiku_model, "k3[1m]");
+        assert_eq!(d.subagent, "k3[1m]");
+        assert_eq!(d.effort_level, "high");
+        assert_eq!(d.auto_compact_window, "1048576");
+        assert_eq!(d.max_context_tokens, "1048576");
+    }
+
+    #[test]
     fn catalog_loads_five_presets() {
         let c = catalog();
         assert!(c.len() >= 5, "catalog must have 5 presets, got {}", c.len());
