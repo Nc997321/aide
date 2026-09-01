@@ -7,6 +7,7 @@ import { useSettings } from "../../composables/useSettings";
 import type { SecretMutation } from "../../types";
 import ThemedSelect from "../ThemedSelect.vue";
 import Icon from "../Icon.vue";
+import { AButton } from "../../ui";
 
 const { settings, setCodegraphEmbedder } = useSettings();
 
@@ -128,8 +129,8 @@ watch(cgScoreThreshold, (v) => {
         />
         <div class="cg-secret-actions">
           <span class="field-hint">{{ settings.codegraphEmbedder.apiKeyConfigured ? '已配置（密钥不会回显）' : '未配置' }}</span>
-          <button class="cg-secret-btn" :disabled="!cgApiKey" @click="saveCodegraphApiKey">替换</button>
-          <button v-if="settings.codegraphEmbedder.apiKeyConfigured" class="cg-secret-btn" @click="clearCodegraphApiKey">清除</button>
+          <AButton size="sm" :disabled="!cgApiKey" @click="saveCodegraphApiKey">替换</AButton>
+          <AButton v-if="settings.codegraphEmbedder.apiKeyConfigured" size="sm" @click="clearCodegraphApiKey">清除</AButton>
         </div>
       </div>
 
@@ -150,19 +151,11 @@ watch(cgScoreThreshold, (v) => {
             type="number"
             min="0"
             class="text-input"
-            style="width: 100px"
           />
           <span class="field-hint">0 = 自动从首次响应探测；nomic-embed-text=768，text-embedding-3-small=1536</span>
         </div>
       </div>
     </template>
-
-    <div v-else class="cg-info">
-      <span class="field-hint">
-        本地 ONNX 推理（all-MiniLM-L6-v2，384 维）。首次使用会从 HuggingFace 下载 ~23MB 模型到本地缓存。
-        慢（约 50 个/秒）但离线可用——结构层（精确跳转）始终先就绪，语义搜索后台补全。
-      </span>
-    </div>
 
     <div class="settings-field">
       <label class="field-label">语义搜索分数阈值</label>
@@ -175,7 +168,6 @@ watch(cgScoreThreshold, (v) => {
           max="1"
           step="0.05"
           class="text-input"
-          style="width: 100px"
           placeholder="自动"
         />
         <span class="field-hint">留空 = 后端按模型自动（fastembed≈0.35，http≈0.55）；范围 0~1，改后立即生效、无需重建索引</span>
@@ -203,7 +195,7 @@ watch(cgScoreThreshold, (v) => {
 }
 
 .settings-field {
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 .settings-field:last-child {
   margin-bottom: 0;
@@ -213,19 +205,35 @@ watch(cgScoreThreshold, (v) => {
   display: block;
   font-size: 13px;
   color: var(--aide-text-primary);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   font-weight: 500;
 }
 
 .field-hint {
-  font-size: 12px;
+  display: block;
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.5;
   color: var(--aide-text-muted);
 }
 
+/* 数字输入 + 提示：窄侧栏里不并排硬挤，输入一行、提示整行换行到下方 */
 .field-control {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 4px 10px;
+}
+
+.field-control .text-input {
+  width: 100px;
+  flex-shrink: 0;
+}
+
+.field-control .field-hint {
+  margin-top: 0;
+  flex: 1;
+  min-width: 120px;
 }
 
 .text-input {
@@ -255,21 +263,11 @@ watch(cgScoreThreshold, (v) => {
   margin-top: 6px;
 }
 
-.cg-secret-btn {
-  border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-sm);
-  background: var(--aide-bg-base);
-  color: var(--aide-text-secondary);
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  padding: 3px 8px;
+.cg-secret-actions .field-hint {
+  margin-top: 0;
+  flex: 1;
+  min-width: 0;
 }
-.cg-secret-btn:hover:not(:disabled) {
-  border-color: var(--aide-accent);
-  color: var(--aide-text-primary);
-}
-.cg-secret-btn:disabled { opacity: 0.5; cursor: default; }
 
 .cg-info {
   margin-top: 4px;

@@ -11,6 +11,7 @@
 // 切工作区/挂载时 refreshEnabledFor 权威拉取。开关 off 时操作按钮禁用。
 import { computed, watch } from "vue";
 import { useCodeGraphProgress } from "../../composables/useCodeGraphProgress";
+import { AButton, ABadge } from "../../ui";
 import CodegraphEmbedderConfig from "./CodegraphEmbedderConfig.vue";
 
 const props = defineProps<{ workspaceRoot: string }>();
@@ -53,82 +54,148 @@ function rebuildIndex() {
 }
 
 // 索引健康：lastBuild 按归属 root 过滤——上一个工作区的健康状态不给当前工作区看。
-const health = computed<{ kind: string; text: string } | null>(() => {
+// kind → ABadge color（success/warning/danger），文案原样。
+const health = computed<{ color: "success" | "warning" | "danger"; text: string } | null>(() => {
   const r = cg.lastBuild.value;
   if (!r || cg.lastBuildRoot.value !== props.workspaceRoot) return null;
   const sym = r.total_symbols ?? 0;
   switch (r.health) {
-    case "complete": return { kind: "complete", text: `完整 · ${sym} 符号` };
-    case "degraded": return { kind: "degraded", text: `残缺 · ${sym} indexed, ${r.skipped_count ?? 0} skipped, ${r.failed_count ?? 0} failed` };
-    case "incomplete": return { kind: "incomplete", text: `未完成，恢复中（${r.embed_status ?? "—"}）` };
-    case "structure_only": return { kind: "incomplete", text: `语义不可用 · embedder 缺失` };
-    default: return { kind: "complete", text: `已索引 · ${sym} 符号` };
+    case "complete": return { color: "success", text: `完整 · ${sym} 符号` };
+    case "degraded": return { color: "warning", text: `残缺 · ${sym} indexed, ${r.skipped_count ?? 0} skipped, ${r.failed_count ?? 0} failed` };
+    case "incomplete": return { color: "danger", text: `未完成，恢复中（${r.embed_status ?? "—"}）` };
+    case "structure_only": return { color: "danger", text: `语义不可用 · embedder 缺失` };
+    default: return { color: "success", text: `已索引 · ${sym} 符号` };
   }
 });
 </script>
 
 <template>
   <div class="cg-panel">
-    <div v-if="!workspaceRoot" class="cg-info">
-      <span class="field-hint">未选择工作区。代码索引按工作区开关：打开一个项目后在此启用。</span>
+    <!-- 面板壳：同 PermissionsPanel 的 panel-header + 滚动内容区结构 -->
+    <div class="panel-header">
+      <span class="panel-title">代码索引</span>
     </div>
 
-    <template v-else>
-      <!-- 开关：每工作区独立（state.json），默认关 -->
-      <div class="settings-field">
-        <div class="toggle-row">
+    <div class="cg-scroll">
+      <div v-if="!workspaceRoot" class="cg-info">
+        <span class="field-hint">未选择工作区。代码索引按工作区开关：打开一个项目后在此启用。</span>
+      </div>
+
+      <template v-else>
+        <!-- 开关：每工作区独立（state.json），默认关。标签+开关一行，说明文字整行换行 -->
+        <div class="settings-field">
+          <div class="toggle-row">
+            <span class="field-label">索引开关</span>
+            <label class="toggle">
+              <input type="checkbox" :checked="rootEnabled" @change="onToggleChange" />
+              <span class="toggle-track"></span>
+            </label>
+          </div>
           <span class="field-hint">
             {{ rootEnabled
               ? '索引开启：项目加载、文件变更、会话结束都会更新索引'
               : '当前工作区未开启代码索引（每工作区独立，默认关）' }}
           </span>
-          <label class="toggle">
-            <input type="checkbox" :checked="rootEnabled" @change="onToggleChange" />
-            <span class="toggle-track"></span>
-          </label>
         </div>
-      </div>
 
-      <!-- 索引维护：更新/全量重建（自右键菜单迁入），off 时禁用 -->
-      <div class="cg-action-row">
-        <button class="cg-action-btn" :disabled="!canMaintain" title="只 reindex mtime 变动的文件（通常几秒）" @click="updateIndex">
-          更新索引（仅改动文件）
-        </button>
-        <button class="cg-action-btn" :disabled="!canMaintain" title="跳过快速路径从零重建，怀疑索引损坏时用" @click="rebuildIndex">
-          全量重建索引
-        </button>
-      </div>
+        <!-- 索引维护：更新/全量重建（自右键菜单迁入），off 时禁用。窄侧栏纵向堆叠 -->
+        <div class="cg-action-row">
+          <AButton
+            class="cg-action-btn"
+            variant="primary"
+            size="sm"
+            :disabled="!canMaintain"
+            title="只 reindex mtime 变动的文件（通常几秒）"
+            @click="updateIndex"
+          >
+            更新索引（仅改动文件）
+          </AButton>
+          <AButton
+            class="cg-action-btn"
+            size="sm"
+            :disabled="!canMaintain"
+            title="跳过快速路径从零重建，怀疑索引损坏时用"
+            @click="rebuildIndex"
+          >
+            全量重建索引
+          </AButton>
+        </div>
 
-      <!-- 关闭态说明（开态下这里显示构建进度的职责由文件树底部进度条承担） -->
-      <div v-if="!rootEnabled" class="cg-info">
-        <span class="field-hint">
-          代码索引已关闭：启动、文件变更、保存都不会扫描或加载索引。重新打开后对当前工作区立即构建。
-        </span>
-      </div>
+        <!-- 关闭态说明（开态下这里显示构建进度的职责由文件树底部进度条承担） -->
+        <div v-if="!rootEnabled" class="cg-info">
+          <span class="field-hint">
+            代码索引已关闭：启动、文件变更、保存都不会扫描或加载索引。重新打开后对当前工作区立即构建。
+          </span>
+        </div>
 
-      <!-- 索引健康（上次成功构建的结果，按工作区归属） -->
-      <div v-else-if="health" class="cg-health" :class="`cg-health-${health.kind}`">
-        <span class="cg-health-dot" />
-        <span class="cg-health-text">{{ health.text }}</span>
-      </div>
-    </template>
+        <!-- 索引健康（上次成功构建的结果，按工作区归属） -->
+        <div v-else-if="health" class="cg-info">
+          <ABadge :color="health.color">{{ health.text }}</ABadge>
+        </div>
+      </template>
 
-    <!-- Embedding 后端配置：全局机器配置，不受开关态隐藏（配置是提前填的） -->
-    <CodegraphEmbedderConfig />
+      <!-- Embedding 后端配置：全局机器配置，不受开关态隐藏（配置是提前填的） -->
+      <CodegraphEmbedderConfig />
+    </div>
   </div>
 </template>
 
 <style scoped>
+/* ===== 面板壳：同 PermissionsPanel 结构 ===== */
 .cg-panel {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--aide-bg-deep);
+  overflow: hidden;
 }
 
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--aide-surface-default);
+  flex-shrink: 0;
+}
+
+.panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--aide-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cg-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+.cg-scroll::-webkit-scrollbar { width: 4px; }
+.cg-scroll::-webkit-scrollbar-track { background: transparent; }
+.cg-scroll::-webkit-scrollbar-thumb { background: var(--aide-surface-hover); border-radius: 2px; }
+
+/* ===== 开关行 ===== */
 .settings-field {
-  margin-bottom: 16px;
+  margin-bottom: 14px;
+}
+
+.field-label {
+  display: block;
+  font-size: 13px;
+  color: var(--aide-text-primary);
+  font-weight: 500;
 }
 
 .field-hint {
-  font-size: 12px;
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
   color: var(--aide-text-muted);
 }
 
@@ -186,60 +253,19 @@ const health = computed<{ kind: string; text: string } | null>(() => {
   transition: transform 0.15s, background 0.15s;
 }
 
+/* ===== 维护操作：窄侧栏纵向堆叠，宽度铺满 ===== */
 .cg-action-row {
   display: flex;
+  flex-direction: column;
   gap: 8px;
   margin-bottom: 14px;
 }
 
 .cg-action-btn {
-  flex: 1;
-  border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-md);
-  background: var(--aide-bg-base);
-  color: var(--aide-text-secondary);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  padding: 7px 10px;
-  transition: border-color 0.15s, color 0.15s;
-}
-
-.cg-action-btn:hover:not(:disabled) {
-  border-color: var(--aide-accent);
-  color: var(--aide-text-primary);
-}
-
-.cg-action-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
+  width: 100%;
 }
 
 .cg-info {
-  margin-top: 4px;
   margin-bottom: 14px;
 }
-
-.cg-health {
-  margin-top: 4px;
-  margin-bottom: 14px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--aide-text-secondary);
-}
-.cg-health-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: var(--aide-text-secondary);
-}
-.cg-health-complete .cg-health-dot { background: var(--aide-success); }
-.cg-health-degraded .cg-health-dot { background: var(--aide-warning); }
-.cg-health-incomplete .cg-health-dot { background: var(--aide-danger); }
-.cg-health-complete .cg-health-text { color: var(--aide-success); }
-.cg-health-degraded .cg-health-text { color: var(--aide-warning); }
-.cg-health-incomplete .cg-health-text { color: var(--aide-danger); }
 </style>
