@@ -1,13 +1,13 @@
 # Aide
 
-Unofficial desktop interface for Claude Code, built on the [Claude Agent SDK](https://docs.anthropic.com/en/docs/claude-code/sdk). Tauri v2 + Vue 3.
+A native desktop client for Claude Code, built on the [Claude Agent SDK](https://docs.anthropic.com/en/docs/claude-code/sdk). Tauri v2 + Vue 3.
 
 > **Disclaimer:** This project is **not affiliated with, endorsed by, or sponsored by Anthropic.**
 > "Claude" is a trademark of Anthropic PBC. All trademarks belong to their respective owners.
 
 ## What is Aide?
 
-Aide gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) a desktop GUI. Conversations are driven by the Claude Agent SDK `query()` in a bundled Node.js sidecar (no terminal wrapper), giving you:
+Aide is a standalone desktop client that drives the Claude Agent SDK directly — no Claude Code CLI installation required. Conversations run in a bundled Node.js sidecar, giving you:
 
 - Multi-panel layout with draggable splitters
 - Session list backed by Claude Code's real storage (no data lock-in)
@@ -16,25 +16,27 @@ Aide gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) a deskt
 - File tree with one-click file opening
 - Context menus for files, folders, and sessions
 
-Aide ships the Claude Code runtime through Anthropic's official Claude Agent SDK distribution — no separate CLI installation is required. You authenticate with your own provider credentials (Settings → 模型).
+Aide bundles the Claude Agent SDK runtime through Anthropic's official distribution. You authenticate with your own provider credentials (Settings → 模型).
 
 ## Features
 
-- **Chat with Claude** — streaming via the Claude Agent SDK in a Node.js sidecar, rendered as styled chat bubbles
+- **Chat with Claude** — streaming via the Claude Agent SDK in a Node.js sidecar, rendered as styled chat bubbles, with an interrupt (stop) button
 - **Context compaction feedback** — shows a live, theme-aware status while the agent is compressing context, without inventing a percentage
 - **Session management** — reads directly from the aide-managed Claude config dir (`~/.aide/claude/`), in Claude Code's native format, so nothing is locked into a private database
 - **File tree** — lazy-loaded directory browser, filtered (skips `.`, `node_modules`, `target`, `dist`)
+- **File viewer & editor** — CodeMirror-based editing with syntax highlighting
 - **Workspace scanning** — lists all projects you've used Claude with
 - **Right-click menus** — context-aware menus on files, directories, sessions, and messages
-- **Dark theme** — Catppuccin-inspired color scheme
+- **Multiple themes** — glass (default), warm-dark, catppuccin, smoky-pink-glass
+- **Session search** — quick search across sessions
+- **Git panel** — branch and file status at a glance
+- **LSP integration** — go-to-definition and diagnostics for supported languages
+- **Plugin marketplace** — browse and install plugins from the marketplace
+- **Background tasks (btw)** — run long-running tasks alongside the chat
+- **Remote access** — connect from a browser via the remote PWA + relay server
 - **Ctrl+N** — quick new session
 
-### Work in progress
-
-- Code syntax highlighting
-- Stop button for in-progress responses
-- Workspace switcher UI
-- Session search
+See [PLANS.md](./PLANS.md) for the product backlog.
 
 ## Prerequisites
 
@@ -77,19 +79,25 @@ pnpm tauri build
 ```
 aide/
 ├── src/                    # Vue 3 frontend
-│   ├── App.vue             # Three-panel layout + drag splitters
-│   ├── components/         # ChatPanel, SidebarLeft, FileTree, ContextMenu, TreeNodeItem
-│   ├── composables/        # useContextMenu state layer
-│   ├── menus/              # Context menu configuration
-│   └── styles/             # Dark theme CSS
+│   ├── App.vue             # Layout + theme bootstrap
+│   ├── components/         # ChatPanel, SidebarLeft, FileTree, GitPanel, ...
+│   ├── composables/        # useChatSession, useSettings, useGit, ...
+│   ├── themes/             # Theme tokens (glass / warm-dark / catppuccin / smoky-pink-glass)
+│   └── ui/                 # Shared UI primitives (AButton, AInput, ...)
 ├── src-tauri/              # Rust / Tauri backend
 │   ├── src/
 │   │   ├── lib.rs          # App entry point
-│   │   ├── commands.rs     # 17 Tauri commands
-│   │   └── pty.rs          # PTY support
+│   │   ├── commands/       # Tauri commands (filesystem, git, session, settings, ...)
+│   │   ├── remote/         # Remote protocol v2 (relay client + RPC whitelist)
+│   │   ├── lsp/            # LSP integration
+│   │   ├── codegraph/      # Code graph index
+│   │   └── ...             # policy, runtime, diagnostics, skills, ...
 │   ├── Cargo.toml
 │   └── tauri.conf.json
-├── agent-sidecar/          # Node.js sidecar — Claude Agent SDK query() workers
+├── packages/aide-sdk/      # @aide/sdk — shared SDK facade (types, api, transport, useChatSession)
+├── agent-sidecar/          # Node.js sidecar — Claude Agent SDK workers
+├── remote-pwa/             # Remote PWA client (WebSocket)
+├── relay-server/           # Relay server for remote connections
 ├── package.json
 ├── vite.config.ts
 └── PLANS.md                # Product backlog & architecture notes
@@ -99,11 +107,13 @@ aide/
 
 ```
 User types message
-  → Vue forwards it to the agent runtime (sidecar)
+  → Vue forwards it to the agent runtime (sidecar) via Tauri IPC
     → Node.js worker runs Claude Agent SDK query() with streaming input
       → SDK events stream back to the UI
         → Vue appends text to chat bubble (marked renders Markdown)
 ```
+
+Desktop and remote PWA share the same SDK facade (`@aide/sdk`): a transport abstraction swaps Tauri IPC for WebSocket, so the chat logic is identical in both.
 
 Session data lives in `~/.aide/claude/` (aide-managed `CLAUDE_CONFIG_DIR`), in Claude Code's native storage format. Aide never duplicates your conversations into a private database — it reads and displays what the runtime already stores.
 

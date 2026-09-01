@@ -1,6 +1,6 @@
 # CLAUDE.md — Aide
 
-非官方桌面应用，用 Tauri v2 + Vue 3 为 Claude Agent SDK 提供带会话管理和文件树的 Chat 桌面壳（Node.js sidecar 驱动对话，不再是 xterm 套壳终端）。
+非官方桌面应用，用 Tauri v2 + Vue 3 为 Claude Agent SDK 提供带会话管理和文件树的 Chat 桌面客户端（Node.js sidecar 驱动对话，不再是 xterm 套壳终端）。
 
 ## 技术栈
 
