@@ -345,7 +345,7 @@ function removeModelTag(idx: number) {
           </div>
 
           <div class="form-field model-var-field">
-            <label>Opus 别名映射</label>
+            <label>旗舰模型（Opus）</label>
             <input
               v-model="form.modelMappings.defaultOpusModel"
               class="text-input"
@@ -354,7 +354,7 @@ function removeModelTag(idx: number) {
           </div>
 
           <div class="form-field model-var-field">
-            <label>Sonnet 别名映射</label>
+            <label>均衡模型（Sonnet）</label>
             <input
               v-model="form.modelMappings.defaultSonnetModel"
               class="text-input"
@@ -364,7 +364,7 @@ function removeModelTag(idx: number) {
           </div>
 
           <div class="form-field model-var-field">
-            <label>Haiku 别名映射</label>
+            <label>轻量模型（Haiku）</label>
             <input
               v-model="form.modelMappings.defaultHaikuModel"
               class="text-input"
@@ -382,7 +382,7 @@ function removeModelTag(idx: number) {
               placeholder="留空跟随主模型"
             />
             <span class="form-hint">主代理未指定模型时子代理的兜底，通常选便宜快的——主代理显式派发（如 sonnet）时以派发为准</span>
-            <span class="form-hint">填具体模型 id 建议与上方某个别名映射保持一致；对不上别名的独立 id 会退回全局钉死（显式派发不生效）</span>
+            <span class="form-hint">填具体模型 id 建议与上方某个档位映射保持一致；对不上别名的独立 id 会退回全局钉死（显式派发不生效）</span>
             <span class="form-hint">仅对当前激活的供应商生效——系统默认下填的不会作用到自定义供应商的会话</span>
           </div>
         </div>
