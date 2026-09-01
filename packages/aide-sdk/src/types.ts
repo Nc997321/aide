@@ -255,6 +255,8 @@ export interface CatalogDefaults {
   default_haiku_model: string;
   subagent: string;
   max_context_tokens: string;
+  effort_level: string;
+  auto_compact_window: string;
 }
 
 export interface CatalogPreset {

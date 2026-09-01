@@ -31,6 +31,10 @@ pub struct CatalogDefaults {
     pub subagent: String,
     #[serde(default)]
     pub max_context_tokens: String,
+    #[serde(default)]
+    pub effort_level: String,
+    #[serde(default)]
+    pub auto_compact_window: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -143,6 +147,19 @@ mod tests {
         assert_eq!(d.max_context_tokens, "983616");
         // 无默认值的预置不携带 defaults（向后兼容：老 JSON 无此字段也能解析）
         assert!(catalog_find(ProviderKind::Zhipu).unwrap().defaults.is_none());
+    }
+
+    #[test]
+    fn deepseek_defaults_parsed_from_catalog() {
+        let p = catalog_find(ProviderKind::DeepSeek).unwrap();
+        let d = p.defaults.as_ref().expect("deepseek must carry defaults");
+        assert_eq!(d.anthropic_model, "deepseek-v4-pro[1m]");
+        assert_eq!(d.default_opus_model, "deepseek-v4-pro[1m]");
+        assert_eq!(d.default_sonnet_model, "deepseek-v4-pro[1m]");
+        assert_eq!(d.default_haiku_model, "deepseek-v4-flash");
+        assert_eq!(d.subagent, "deepseek-v4-flash");
+        assert_eq!(d.effort_level, "max");
+        assert_eq!(d.auto_compact_window, "786432");
     }
 
     #[test]

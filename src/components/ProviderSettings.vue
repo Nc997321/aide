@@ -86,7 +86,7 @@ function buildDraft(kind: ProviderKind): ProviderConfig {
   };
   if (kind === "custom") return base;
   const enriched = enrichForDisplay(base);
-  // catalog 携带 defaults（如千问）→ 预填模型档位映射 + 上下文窗口，
+  // catalog 携带 defaults（如千问/DeepSeek）→ 预填模型档位映射 + 行为字段，
   // 用户只需填凭证；保存时这些值随草稿一次性落盘。
   const d = presetForKind(kind)?.defaults;
   if (d) {
@@ -98,6 +98,8 @@ function buildDraft(kind: ProviderKind): ProviderConfig {
       subagent: d.subagent,
     };
     enriched.maxContextTokens = d.max_context_tokens;
+    enriched.effortLevel = d.effort_level;
+    enriched.autoCompactWindow = d.auto_compact_window;
   }
   return enriched;
 }
