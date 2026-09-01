@@ -139,6 +139,30 @@ export interface ModelSwitchResult {
   deferred?: boolean;
 }
 
+/** 模型切换的成本确认请求（SDK PreModelSwitch hook 触发，仅「缓存热 + 上下文
+ *  ≥阈值」时发出）。sidecar 挂起等前端决定，超时 10s 按 deny 收尾。 */
+export interface ModelSwitchConfirmRequest {
+  /** 与 sidecar 挂起的 hook 一一对应——决定回传时必须带它，过期 ID 静默忽略。 */
+  confirmId: string;
+  fromModel: string;
+  toModel: string;
+  source: string;
+  contextTokens: number;
+  promptCacheWarm: boolean;
+  /** SDK 报告的切过去重铺缓存预估美元成本。 */
+  estimatedCacheWriteUsd: number;
+  cacheTtl: string;
+}
+
+/** 模型切换的进程坐实（SDK PostModelSwitch）：切换真实完成。requestedModel 是
+ *  用户命名空间的下拉别名（落盘/恢复用），resolvedTo 是 CLI resolved 全名。 */
+export interface ModelCommitted {
+  fromModel: string;
+  toModel: string;
+  requestedModel: string | null;
+  source: string;
+}
+
 /** 权限模式选项——同 ModelOption：value 是 provider 自己认的不透明标识，
  *  语义由 sidecar 解释，跟 agent-sidecar/src/types.ts 里的同名类型镜像。 */
 export interface PermissionModeOption {

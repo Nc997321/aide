@@ -46,9 +46,12 @@ export function applyModelSwitch(p: ModelSwitchParams): void {
   p.query
     .setModel(p.model)
     .then(() => {
+      // 只坐实本地账 + 广播同步下拉。成功回执不发在这里——SDK 0.3.252 起切换的
+      //「真实完成」由 PostModelSwitch hook 坐实（model_committed 事件驱动 ok 回执，
+      // 见 modelSwitchGuard.onCommitted）。hook 挂起（成本确认弹窗）期间 setModel
+      // 不 resolve，旧直发回执会把「弹窗等待中」当成功上报。
       p.commit(p.model);
       broadcast(p.model);
-      p.emit({ type: "model_switch_result", ok: true, model: p.model, display });
     })
     .catch((e: unknown) => {
       broadcast(p.currentModel);

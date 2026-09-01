@@ -17,6 +17,7 @@ import {
 } from "./automation.js";
 import { generateSessionTitle } from "./titleGenerator.js";
 import { applyModelSwitch } from "./modelSwitch.js";
+import { makeModelSwitchGuard, type ModelSwitchGuard } from "./modelSwitchGuard.js";
 import { applyEffortSwitch, normalizeEffort } from "./effortSwitch.js";
 import type { EffortSettable } from "./effortSwitch.js";
 import { cliSubagentModelEnvValue } from "./subagentModelDefault.js";
@@ -255,6 +256,8 @@ export class SessionWorker {
 
   // ---- 输出尾部轮询（per-session，替代模块级全局） ----
   private outputTails = new Map<string, OutputTail>();
+  /** 模型切换守卫（PreModelSwitch/PostModelSwitch 一对）：懒建单例，见 makeModelSwitchGuard。 */
+  private modelSwitchGuard: ModelSwitchGuard | null = null;
   private outputTailTimer: NodeJS.Timeout | undefined;
 
   // ---- 后台 shell 任务：tracker + 输出 tail（per-session） ----
@@ -322,6 +325,35 @@ export class SessionWorker {
       this.lastStopEffort = effort?.level ?? "";
       return {};
     };
+  }
+
+  /** 模型切换守卫（SDK PreModelSwitch/PostModelSwitch 一对）：懒建单例。
+   *  btw/automation 一次性支线返回 null（无切换语义，hook 不注册）。 */
+  private makeModelSwitchGuard(): ModelSwitchGuard | null {
+    if (this.btwMode || this.automationConfig) return null;
+    if (!this.modelSwitchGuard) {
+      this.modelSwitchGuard = makeModelSwitchGuard({
+        emit: (e) => this.emit(e),
+        onCommitted: (p) => {
+          // requested 是用户命名空间（下拉别名，restoreModel 可恢复）——优先落账；
+          // to_model 是 CLI resolved 全名，经 resolveDropdownValue 映回下拉 value。
+          const value = p.requested ?? this.resolveDropdownValue(p.to);
+          const display = this.lastModels.find((m) => m.value === value)?.displayName ?? value;
+          if (value) this.currentModel = value;
+          this.emit({
+            type: "model_committed",
+            from_model: p.from,
+            to_model: p.to,
+            requested_model: p.requested,
+            source: p.source,
+          });
+          // 回执=事实：成功回执由 model_committed 到达驱动（原 setModel.then 直发会把
+          //「hook 阻塞中/未生效」当成功——设计稿 §3 的回执换轴）
+          this.emit({ type: "model_switch_result", ok: true, model: value, display });
+        },
+      });
+    }
+    return this.modelSwitchGuard;
   }
 
   /** 每条 send 都携带 Rust 当前计算出的 provider 环境；在命令真正执行时更新，
@@ -861,6 +893,10 @@ export class SessionWorker {
         emit: (e) => this.emit(e),
         commit: (m) => { this.currentModel = m; },
       });
+    } else if (cmd.cmd === "model_switch_confirm_decision") {
+      // 模型切换成本确认的用户决定 → 挂起的 PreModelSwitch hook 裁决。
+      // ID 对不上（过期弹窗晚到）是正常时序：guard 内部静默忽略。
+      this.modelSwitchGuard?.resolveConfirm(cmd.confirm_id, cmd.approve);
 
     } else if (cmd.cmd === "set_effort") {
       this.applyEffort(cmd.effort);
@@ -1077,6 +1113,7 @@ export class SessionWorker {
             session: {
               makePolicyHook: (cwd) => this.makePolicyHook(cwd),
               makeStopEffortHook: () => this.makeStopEffortHook(),
+              makeModelSwitchGuard: () => this.makeModelSwitchGuard(),
             },
           });
           // 用户扩展（settings.json 的 mcpServers/hooks）：mcpServers 与 codegraph 按
@@ -1483,5 +1520,7 @@ export class SessionWorker {
     cancelAllCodegraphQueries("session stopped");
     this.stopAllOutputTails();
     this.stopAllBgTaskTails();
+    // 挂起中的切换确认按 deny 收尾（进程都没了，确认没有继续等的意义）
+    this.modelSwitchGuard?.dispose();
   }
 }

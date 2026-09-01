@@ -38,7 +38,9 @@ interface Binding {
 }
 
 const bindings = reactive<Record<string, Binding>>({});
-const lastIdentityState = ref<Identity | null>(null);
+/** 上次发送坐实的供应商 id 门控基线（模型维度基线已废除——模型身份由
+ *  model_committed 事件落盘驱动，见 2026-09-01 设计稿 §2）。 */
+const lastProviderState = ref<string | null>(null);
 const currentSid = ref<string | null>(null);
 const defaultModels = ref<ModelOption[]>([]);
 // 空白面板（无会话）时用户手选的模型——不绑 sid（会话还没创建），首条发送后落到 pending 会话。
@@ -101,7 +103,7 @@ async function restoreBinding(sid: string): Promise<void> {
   await healProviderIfDirty(sid, meta, resolved);
   const restored = restoreModel(currentDisplayModels(sid), meta?.model ?? null);
   bindings[sid] = { meta, runtimeModel: "", draft: "", restored, sdkModels: [] };
-  lastIdentityState.value = { provider: resolved, model: restored };
+  lastProviderState.value = resolved;
 }
 
 // resolve 快路径：有内存绑定 → 只读盘刷基线，不动注册表不写盘。
@@ -116,7 +118,7 @@ async function refreshBinding(sid: string, bound: string): Promise<void> {
   // 不再 ?? emptyBinding 兜底。
   const prev = bindings[sid];
   bindings[sid] = { ...prev, meta, restored };
-  lastIdentityState.value = { provider: resolved, model: restored };
+  lastProviderState.value = resolved;
 }
 
 /** sid 切换入口（取代 restoreBinding + refreshLastUsed）。有绑定走快路径，无绑定走慢路径。
@@ -128,36 +130,46 @@ async function resolve(sid: string): Promise<void> {
   else await restoreBinding(sid);
 }
 
-/** 发送前统一收尾（取代 noteSent + stampProvider + pendingModelCommit 落盘）。
- *  sid 非空：绑定确保 + 落盘 + 基线推进，三者同源。sid 空（空白面板首发）：只推进基线
- *  （会话还没创建，落盘推迟到 finalize 用 realId）。
- *  落盘失败：基线照常推进（本次发送照用 chosen），但 binding.meta 不更新——内存 meta
- *  与盘一致（盘没写成，内存也不记 chosen），重开读盘回落而非读到假身份。setProvider 仍
- *  在落盘前调用：本次发送 providerOf(sid) 要是 chosen 传 Rust，落盘失败只影响跨重启。
- *  失败时若尚无 binding 则建空绑定——保证 resolve 快路径"providerOf 非空 ⟹ binding 已建"
- *  不变式不被失败打破。 */
-async function settleOnSend(sid: string, chosen: Identity): Promise<void> {
-  lastIdentityState.value = chosen;
+/** 发送前统一收尾（供应商维度）：绑定确保 + provider 落盘 + 门控基线推进，三者同源。
+ *  模型身份的落盘不在这里——已移交 model_committed 事件驱动（commitModelFromRuntime），
+ *  旧「发送时把下拉草稿写盘」的设计在 setModel 被驳回/被确认弹窗拦截时会写入假身份
+ *  （2026-09-01 设计稿 §2 的废除项）。
+ *  sid 空（空白面板首发）：只推进基线（会话还没创建，落盘推迟到 finalize 用 realId）。 */
+async function settleOnSend(sid: string, effectiveProvider: string): Promise<void> {
+  lastProviderState.value = effectiveProvider;
   if (!sid) return;
-  if (!providerOf(sid)) setProvider(sid, chosen.provider);
+  if (!providerOf(sid)) setProvider(sid, effectiveProvider);
   const prev = bindings[sid] ?? emptyBinding();
-  const newMeta = { provider: chosen.provider, model: chosen.model || null };
-  // 只落盘变化的字段——provider/model 与上次盘上一致则跳过对应 IPC（省冗余写）。
-  // prev.meta 是上次成功落盘值（落盘失败时不更新），与盘一致，故"没变"=盘已是目标值。
-  const providerChanged = prev.meta?.provider !== newMeta.provider;
-  const modelChanged = (prev.meta?.model ?? null) !== newMeta.model;
-  if (!providerChanged && !modelChanged) return;
+  if (prev.meta?.provider === effectiveProvider) return;
   try {
-    await writeSessionMeta(sid, {
-      provider: providerChanged ? newMeta.provider : undefined,
-      model: modelChanged ? newMeta.model : undefined,
-    });
-    bindings[sid] = { ...prev, meta: newMeta };
+    await writeSessionMeta(sid, { provider: effectiveProvider });
+    bindings[sid] = { ...prev, meta: { provider: effectiveProvider, model: prev.meta?.model ?? null } };
   } catch (e) {
     // 落盘失败也建绑定（空绑定，meta 保持盘上状态）：provider 已在 try 前 setProvider，
     // 绑定不建则 resolve 快路径"providerOf 非空 ⟹ binding 已建"不变式被失败打破。
     if (!bindings[sid]) bindings[sid] = emptyBinding();
     console.warn("[sessionIdentity] settleOnSend persist failed:", sid, e);
+  }
+}
+
+/** 模型身份的进程坐实落盘（model_committed 事件驱动）：bindRuntime + 落盘一体。
+ *  落盘值用 requestedModel（用户命名空间的下拉别名，restoreModel 可恢复）；
+ *  to_model 是 CLI resolved 全名，不进记忆。requested=null（CLI 内部 source 非
+ *  sdk 的切换）→ 只 bindRuntime 不落盘（没有用户选择可恢复）。 */
+async function commitModelFromRuntime(
+  sid: string,
+  committed: { fromModel: string; toModel: string; requestedModel: string | null; source: string },
+): Promise<void> {
+  if (!sid) return;
+  if (committed.requestedModel) bindRuntime(sid, committed.requestedModel);
+  const prev = bindings[sid] ?? emptyBinding();
+  if (!committed.requestedModel || prev.meta?.model === committed.requestedModel) return;
+  try {
+    await writeSessionMeta(sid, { model: committed.requestedModel });
+    bindings[sid] = { ...prev, meta: { provider: prev.meta?.provider ?? null, model: committed.requestedModel } };
+  } catch (e) {
+    if (!bindings[sid]) bindings[sid] = emptyBinding();
+    console.warn("[sessionIdentity] commitModelFromRuntime persist failed:", sid, e);
   }
 }
 
@@ -211,13 +223,13 @@ function migrateBinding(oldSid: string, newSid: string): void {
 /** 面板无会话（sid 清空，取代 continuity.clear）。清当前 + 基线。 */
 function clearCurrent(): void {
   currentSid.value = null;
-  lastIdentityState.value = null;
+  lastProviderState.value = null;
 }
 
 /** @internal 测试重置模块级状态（与 useProviders.__resetForTest 同构）。 */
 function __resetIdentityForTest(): void {
   for (const k of Object.keys(bindings)) delete bindings[k];
-  lastIdentityState.value = null;
+  lastProviderState.value = null;
   currentSid.value = null;
   defaultModels.value = [];
   pendingDraft.value = "";
@@ -259,13 +271,14 @@ const effectiveModel = computed<string>(() => {
   );
 });
 
-const lastIdentity: ComputedRef<Identity | null> = computed(() => lastIdentityState.value);
+const lastProvider: ComputedRef<string | null> = computed(() => lastProviderState.value);
 
 /** 访问器（模块级状态共享，任意实例同一组）。 */
 export function useSessionIdentity() {
   return {
     resolve,
     settleOnSend,
+    commitModelFromRuntime,
     setUserChoice,
     setSdkModels,
     bindRuntime,
@@ -278,7 +291,7 @@ export function useSessionIdentity() {
     effectiveModel,
     effectiveProvider,
     displayModels,
-    lastIdentity,
+    lastProvider,
     providerOf,
   };
 }

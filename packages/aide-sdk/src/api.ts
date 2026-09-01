@@ -126,6 +126,11 @@ export const api = {
   setModel(sessionId: string, model: string): Promise<boolean> {
     return getTransport().invoke("set_model", { sessionId, model });
   },
+  /** 模型切换成本确认的用户决定（model_switch_confirm 弹窗回传）；confirmId 对
+   *  不上时 sidecar 静默忽略。 */
+  modelSwitchConfirmDecision(sessionId: string, confirmId: string, approve: boolean): Promise<void> {
+    return getTransport().invoke("model_switch_confirm_decision", { sessionId, confirmId, approve });
+  },
   /** 记住/读回会话的模型选择（会话元数据，重启不丢）——与运行时 set_model 互补：
    *  这个管「下次进会话恢复什么」，set_model 管「当前进程切到什么」。 */
   setSessionModel(id: string, model: string): Promise<void> {

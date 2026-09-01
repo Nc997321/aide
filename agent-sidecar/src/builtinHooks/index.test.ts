@@ -2,10 +2,12 @@ import { describe, it, expect } from "vitest";
 import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
 import { BUILTIN_HOOKS, buildBuiltinHooks } from "./index";
 
-// session 桩：registry 通过依赖注入的 ctx.session 调 2 个 private 方法（policy/stopEffort）。
+// session 桩：registry 通过依赖注入的 ctx.session 调 private 方法（policy/stopEffort/
+// modelSwitchGuard）。guard 返回 null（支线场景）→ 两个 switch hook 不挂载。
 const sessionStub = {
   makePolicyHook: (): HookCallback => async () => ({}),
   makeStopEffortHook: (): HookCallback => async () => ({}),
+  makeModelSwitchGuard: () => null,
 };
 
 describe("builtinHooks registry", () => {
@@ -17,7 +19,7 @@ describe("builtinHooks registry", () => {
     expect(first.alwaysMounted).toBe(true);
   });
 
-  it("顺序固定：policy → subagentModel → skillGuard(PreToolUse)，stopEffort(Stop)", () => {
+  it("顺序固定：policy → subagentModel → skillGuard(PreToolUse)，stopEffort(Stop)，switchGuard 一对", () => {
     const pre = BUILTIN_HOOKS.filter((h) => h.event === "PreToolUse").map((h) => h.id);
     expect(pre).toEqual(["policy", "subagentModel", "skillGuard"]);
     const stop = BUILTIN_HOOKS.filter((h) => h.event === "Stop").map((h) => h.id);

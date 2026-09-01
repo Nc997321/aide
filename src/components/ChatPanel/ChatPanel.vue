@@ -10,6 +10,7 @@ import PermissionDialog from "../PermissionDialog.vue";
 import BgTaskDock from "../BgTaskDock.vue";
 import WorkspacePicker from "../../ui/WorkspacePicker.vue";
 import ChatInputBox from "./ChatInputBox.vue";
+import ModelSwitchConfirm from "./ModelSwitchConfirm.vue";
 import BtwDrawer from "../BtwDrawer.vue";
 import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, ContextUsage, ModelOption, ModelSwitchResult, PermissionModeOption, PermissionRequest, RateLimitInfo, TaskItem } from "@/types/chat";
 import type { WorkspaceInfo } from "@/types";
@@ -151,31 +152,24 @@ const displayedPermission = computed<PermissionRequest | null>(
   () => sendConfirm.value?.request ?? props.permission ?? null,
 );
 
-/** 构造发送前确认的合成请求（变体 C）：按「供应商变了/模型变了/都变」组合文案，
- *  复用 PermissionDialog 的 AskUserQuestion 视觉语言渲染。input 全前端字段，不进 sidecar。 */
+/** 构造发送前确认的合成请求（变体 C）：仅供应商 respawn 维度（模型维度的切换
+ *  确认在 PreModelSwitch hook 的切换前弹窗，不在发送门控）。复用 PermissionDialog
+ *  的 AskUserQuestion 视觉语言渲染。input 全前端字段，不进 sidecar。 */
 function buildSendConfirmRequest(decision: ConfirmDecision, effectiveModel: string): PermissionRequest {
-  const newProviderName = sessionProvider.value.name || decision.effective.provider;
-  const oldProviderName = decision.last.provider
-    ? (allProviders.value.find((p) => p.id === decision.last.provider)?.name ?? decision.last.provider)
+  const newProviderName = sessionProvider.value.name || decision.effective;
+  const oldProviderName = decision.last
+    ? (allProviders.value.find((p) => p.id === decision.last)?.name ?? decision.last)
     : "";
-  const { changed } = decision;
-  const title = changed === "both"
-    ? "本次发送将切换供应商/模型"
-    : changed === "provider"
-      ? "本次发送将切换供应商"
-      : "本次发送将切换模型";
-  const question = changed === "both"
-    ? `将以 ${newProviderName}/${effectiveModel} 发送（原 ${oldProviderName}/${decision.last.model}）`
-    : changed === "provider"
-      ? `将以 ${newProviderName} 发送（原 ${oldProviderName}）`
-      : `将以 ${effectiveModel} 发送（原 ${decision.last.model}）`;
-  const info = changed === "model"
-    ? `切换模型会导致提示缓存失效（冷缓存），下一轮起新模型生效；与该会话上次使用的 ${decision.last.model} 不同`
-    : `切换供应商会重新拉起会话进程，提示缓存失效（冷缓存）；与该会话上次使用的 ${oldProviderName} 不同，对话历史将迁移到新会话继续。`;
   return {
     id: `send-confirm-${crypto.randomUUID()}`,
     name: "__sendConfirm__",
-    input: { title, chip: "切换确认", question, info, confirmLabel: `继续发送 · ${effectiveModel}` },
+    input: {
+      title: "本次发送将切换供应商",
+      chip: "切换确认",
+      question: `将以 ${newProviderName}/${effectiveModel} 发送（原 ${oldProviderName}）`,
+      info: `切换供应商会重新拉起会话进程，提示缓存失效；对话历史将迁移到新会话继续。模型身份由进程坐实事件记录，无需在此确认。`,
+      confirmLabel: `继续发送 · ${effectiveModel}`,
+    },
   };
 }
 
@@ -266,7 +260,7 @@ async function onPermissionRespond(
   const sc = sendConfirm.value;
   if (sc && sc.request.id === id) {
     if (approved) {
-      identity.settleOnSend(props.sessionId ?? "", { provider: sc.effectiveProvider, model: sc.effectiveModel });
+      identity.settleOnSend(props.sessionId ?? "", sc.effectiveProvider);
       emit("send", sc.pendingSend.prompt, sc.pendingSend.opts);
       sendConfirmedNonce.value++;
     }
@@ -298,18 +292,17 @@ async function onPermissionRespond(
  *  输入保留——与旧实现「取消时内容回退对话框」语义一致）。 */
 const sendConfirmedNonce = ref(0);
 
-/** 输入框的发送请求统一入口：跑发送前确认门控（变体 C）。需确认 → 弹确认形态
- *  （不清输入，取消时内容回退对话框）；否则直接发送 + 推进 lastUsed 基线 +
+/** 输入框的发送请求统一入口：跑发送前确认门控（provider respawn 维度——模型
+ *  维度的切换确认已移交 SDK PreModelSwitch hook 的切换前弹窗，本门控不再比对
+ *  模型；见 2026-09-01-model-switch-truth-design.md §2）。需确认 → 弹确认形态
+ *  （不清输入，取消时内容回退对话框）；否则直接发送 + 推进 provider 基线 +
  *  递增 sendConfirmedNonce（输入框据此清空输入）。 */
 function onSendRequest(prompt: string, opts: SendOptions & { effectiveProvider: string; effectiveModel: string }) {
   // 拆出确认门控用的 provider/模型，真实发送只带纯 SendOptions（不给 useChatSession 传额外字段）
   const { effectiveProvider, effectiveModel, ...sendOpts } = opts;
   const sidForGate = props.sessionId;
   if (sidForGate && !isPendingSession(sidForGate) && !props.isBusy) {
-    const decision = buildConfirmDecision(
-      { provider: effectiveProvider, model: effectiveModel },
-      identity.lastIdentity.value,
-    );
+    const decision = buildConfirmDecision(effectiveProvider, identity.lastProvider.value);
     if (decision) {
       sendConfirm.value = {
         request: buildSendConfirmRequest(decision, effectiveModel),
@@ -320,7 +313,7 @@ function onSendRequest(prompt: string, opts: SendOptions & { effectiveProvider: 
       return;
     }
   }
-  identity.settleOnSend(sidForGate ?? "", { provider: effectiveProvider, model: effectiveModel });
+  identity.settleOnSend(sidForGate ?? "", effectiveProvider);
   emit("send", prompt, sendOpts);
   sendConfirmedNonce.value++;
 }
@@ -556,6 +549,13 @@ function onOpenBgDock(taskId: string) {
       :remember-context="rememberState"
       :current-mode="permissionMode"
       @respond="onPermissionRespond"
+    />
+
+    <!-- 模型切换成本确认：sidecar PreModelSwitch hook 挂起时由 store.modelSwitchConfirm
+         驱动（切换发生前弹窗，SDK 真相裁决），与发送前确认（respawn 维度）不同轴 -->
+    <ModelSwitchConfirm
+      v-if="props.sessionId && !isPendingSession(props.sessionId)"
+      :session-id="props.sessionId"
     />
 
     <!-- 活动状态行（上下文压缩 / 正在思考）：inline dock，固定位于后台任务 dock 上方——

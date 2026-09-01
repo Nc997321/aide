@@ -188,55 +188,28 @@ describe("ChatPanel 跨会话串修复", () => {
     wrapper.unmount();
   });
 
-  it("发送前确认：waiting 会话（isBusy=false）切换模型后发送 → 弹确认、不直接发；同模型发送不弹", async () => {
+  it("发送前确认只守供应商 respawn 维度：同会话切换模型后发送不再弹确认（切换成本确认已移交 PreModelSwitch 弹窗，2026-09-01 设计稿 §2）", async () => {
     sessionProviderMock.mockImplementation(async () => "p_test");
-    sessionModelMock.mockImplementation(async () => "kimi"); // lastUsed = kimi
+    sessionModelMock.mockImplementation(async () => "kimi");
     const wrapper = mount(ChatPanel, { props: baseProps({ sessionId: "A", currentModel: "haiku", isBusy: false }) });
     await flush();
-    expect(modelValueOf(wrapper)).toBe("kimi"); // 恢复 lastUsed
+    expect(modelValueOf(wrapper)).toBe("kimi"); // 恢复身份
 
-    // 用户切换模型到 deepseek
+    // 用户切换模型到 deepseek——模型维度的门控已废除：发送直接执行，不弹 __sendConfirm__
     const modelStub = wrapper.findAllComponents({ name: "ThemedSelect" }).find((s) => s.props("title") === "模型");
     modelStub?.vm.$emit("update:modelValue", "deepseek");
     await nextTick();
     expect(modelValueOf(wrapper)).toBe("deepseek");
 
-    // 输入并发送
+    // 输入并发送：直接发出（切换成本确认走 PreModelSwitch hook 的切换前弹窗）
     await wrapper.find("textarea").setValue("hello");
     await wrapper.find("textarea").trigger("keydown", { key: "Enter" });
     await flush();
-
-    // 门控触发：send 未发出；PermissionDialog 显示 __sendConfirm__ 确认形态
-    expect(wrapper.emitted("send")).toBeUndefined();
-    const permDialog = wrapper.findComponent({ name: "PermissionDialog" });
-    const perm = permDialog?.props("permission") as { name: string } | null;
-    expect(perm?.name).toBe("__sendConfirm__");
-
-    // 点「继续发送」→ 才真正发送；PermissionDialog 回传的 id 必须匹配 sendConfirm.request.id
-    await wrapper.find("button.perm-btn--solid").trigger("click");
-    await flush();
     expect(wrapper.emitted("send")).toBeTruthy();
-    const sendArgs = wrapper.emitted("send")![0];
-    expect(sendArgs[0]).toBe("hello"); // 原始 prompt
-    // 确认形态已关闭（displayedPermission 不再是 __sendConfirm__）
-    const pdAfter = wrapper.findComponent({ name: "PermissionDialog" });
-    expect((pdAfter?.props("permission") as { name: string } | null)?.name).not.toBe("__sendConfirm__");
+    const pd = wrapper.findComponent({ name: "PermissionDialog" });
+    expect((pd?.props("permission") as { name: string } | null)?.name).not.toBe("__sendConfirm__");
 
-    // 同模型再发不弹：取消确认后把 selectedModel 维持 deepseek、noteSent 未推进前，再发仍弹；
-    // 这里验证「未切换」场景——重新 mount 一个会话，selectedModel==lastUsed 时发送不弹。
     wrapper.unmount();
-    sessionModelMock.mockImplementation(async () => "deepseek"); // lastUsed = deepseek
-    const w2 = mount(ChatPanel, { props: baseProps({ sessionId: "C", currentModel: "haiku", isBusy: false }) });
-    await flush();
-    expect(modelValueOf(w2)).toBe("deepseek"); // lastUsed=deepseek
-    await w2.find("textarea").setValue("hello");
-    await w2.find("textarea").trigger("keydown", { key: "Enter" });
-    await flush();
-    // selectedModel == lastUsed → needsConfirm false → 直接发（send 已 emit），无确认
-    expect(w2.emitted("send")).toBeTruthy();
-    const pd2 = w2.findComponent({ name: "PermissionDialog" });
-    expect((pd2?.props("permission") as { name: string } | null)?.name).not.toBe("__sendConfirm__");
-    w2.unmount();
   });
 });
 

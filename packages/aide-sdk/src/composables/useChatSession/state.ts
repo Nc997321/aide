@@ -7,6 +7,7 @@ import type {
   ContextCompactionState,
   ContextUsage,
   ModelOption,
+  ModelSwitchConfirmRequest,
   ModelSwitchResult,
   PermissionModeOption,
   PermissionRequest,
@@ -60,6 +61,9 @@ export interface SessionStore {
   /** 最近一次模型切换的坐实回执（sidecar model_switch_result）；null 表示
    *  本会话还没切过。seq 单调递增，连续相同结果也能触发 watcher。 */
   modelSwitchResult: ModelSwitchResult | null;
+  /** 模型切换成本确认（sidecar PreModelSwitch hook 挂起时发出）：非 null 即
+   *  弹确认对话框，前端决定回传后置回 null。同一时刻至多一个挂起。 */
+  modelSwitchConfirm: ModelSwitchConfirmRequest | null;
   /** sidecar 坐实的当前 effort 档位（effort_changed 事件）；空串表示还没学到
    *  （选择器本地值为准，这个用于坐实同步/失败回滚）。 */
   currentEffort: string;
@@ -311,6 +315,7 @@ export function getStore(sid: string): SessionStore {
       models: [],
       currentModel: "",
       modelSwitchResult: null,
+      modelSwitchConfirm: null,
       currentEffort: "",
       effortSwitchError: null,
       contextUsage: null,
@@ -534,10 +539,7 @@ export async function finalizeSession(tempId: string, realId: string) {
   // 首条 pending：onSendRequest 时 sid=null 只推进了基线没落盘（会话还没创建），
   // 这里拿到 realId 后补落盘。effectiveProvider/effectiveModel 来自 L2（currentSid 仍 null
   // → activeProvider + pendingDraft），与 onSendRequest 推进的基线同源。
-  await identity.settleOnSend(realId, {
-    provider: identity.effectiveProvider.value,
-    model: identity.effectiveModel.value,
-  });
+  await identity.settleOnSend(realId, identity.effectiveProvider.value);
 }
 
 /** 测试钩子：重置全部模块级状态（__resetForTest 的宿主侧实现）。 */

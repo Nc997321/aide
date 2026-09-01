@@ -205,6 +205,36 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       };
       break;
     }
+    case "model_switch_confirm": {
+      // 模型切换成本确认（SDK PreModelSwitch hook 挂起）：非 null 即弹确认框；
+      // 决定经 api.modelSwitchConfirmDecision 回传，回传后由 UI 置 null。
+      store.modelSwitchConfirm = {
+        confirmId: e["confirm_id"] as string,
+        fromModel: e["from_model"] as string,
+        toModel: e["to_model"] as string,
+        source: e["source"] as string,
+        contextTokens: e["context_tokens"] as number,
+        promptCacheWarm: e["prompt_cache_warm"] === true,
+        estimatedCacheWriteUsd: e["estimated_cache_write_usd"] as number,
+        cacheTtl: e["cache_ttl"] as string,
+      };
+      break;
+    }
+    case "model_committed": {
+      // 进程坐实（SDK PostModelSwitch）：切换真实完成。requested 是用户命名空间
+      // 的下拉别名——落盘/恢复用它；resolved 全名只进 runtime 显示。落盘在此处
+      // 事实驱动（旧 settleOnSend 发送时写草稿的设计已废除，见 2026-09-01 设计稿 §2）。
+      const requested = typeof e["requested_model"] === "string" ? (e["requested_model"] as string) : null;
+      store.modelSwitchConfirm = null;
+      store.currentModel = requested ?? store.currentModel;
+      void identity.commitModelFromRuntime(sid, {
+        fromModel: e["from_model"] as string,
+        toModel: e["to_model"] as string,
+        requestedModel: requested,
+        source: e["source"] as string,
+      });
+      break;
+    }
     case "effort_changed": {
       // effort 切换坐实/回滚——成功带新值，失败（sidecar 驳回）带回滚后的旧值
       //  + error。选择器据此同步（失败时弹提示并拉回旧值）。

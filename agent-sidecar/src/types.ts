@@ -145,6 +145,30 @@ export type ChatEvent =
   // 「成功/失败」瞬时提示。ok:false 时 error 带 CLI 驳回原因，下拉已被回滚
   // 广播拉回旧值。display 是喂给提示文案的人类可读名（displayName，兜底 value）。
   | { type: "model_switch_result"; ok: boolean; model: string; display: string; error?: string }
+  // 模型切换的成本确认请求（SDK PreModelSwitch hook 触发，仅在「缓存热 + 上下文
+  // 有体量」时发出）：sidecar 挂起等前端决定，超时 10s 按 deny 收尾（挂起不悬死）。
+  // estimated_cache_write_usd 是 SDK 报告的切过去重铺缓存预估美元成本。
+  | {
+      type: "model_switch_confirm";
+      confirm_id: string;
+      from_model: string;
+      to_model: string;
+      source: string;
+      context_tokens: number;
+      prompt_cache_warm: boolean;
+      estimated_cache_write_usd: number;
+      cache_ttl: string;
+    }
+  // 模型切换的进程坐实（SDK PostModelSwitch）：切换真实完成后到达。前端据此落盘
+  // 模型身份（用 requested_model——用户命名空间的下拉别名，可被 restoreModel 恢复；
+  // to_model 是 CLI resolved 全名，不做记忆值）并发出成功回执。
+  | {
+      type: "model_committed";
+      from_model: string;
+      to_model: string;
+      requested_model: string | null;
+      source: string;
+    }
   | { type: "permission_modes_available"; modes: PermissionModeOption[]; current: string; error?: string }
   // 会话建立时 SDK 回传的权威 slash commands 清单（内置命令 + skills + 自定义命令），
   // 仅当 SDK 提供该字段时才发（见 mapper.ts 的 Array.isArray 判断）。
@@ -310,6 +334,9 @@ export type SidecarCommand =
   // 成功后任务会走正常终态通道（bg_task_ended, status:"stopped"），不需要额外回执事件。
   | { cmd: "stop_bg_task"; session_id: string; task_id: string }
   | { cmd: "set_model"; session_id: string; model: string }
+  // 模型切换成本确认的用户决定（前端确认对话框 → sidecar），对 model_switch_confirm
+  // 挂起的 hook resolve。超时/会话停止时 sidecar 自行按 deny 收尾。
+  | { cmd: "model_switch_confirm_decision"; session_id: string; confirm_id: string; approve: boolean }
   // 会话级思考深度切换（provider-agnostic 不透明字符串；Claude sidecar 解释为
   // low/medium/high/xhigh/max）。首条消息前的初始值走 send 的 env 通道
   // （CLAUDE_CODE_EFFORT_LEVEL，与 ANTHROPIC_MODEL 同形），这里只管存活会话的切换。

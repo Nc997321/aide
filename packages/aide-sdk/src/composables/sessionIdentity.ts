@@ -13,6 +13,6 @@
 export { useSessionIdentity } from "./sessionIdentity/identity";
 export type { Identity } from "./sessionIdentity/identity";
 export { needsConfirm, buildConfirmDecision } from "./sessionIdentity/gate";
-export type { ConfirmChanged, ConfirmDecision } from "./sessionIdentity/gate";
+export type { ConfirmDecision } from "./sessionIdentity/gate";
 export { readSessionMeta, writeSessionMeta } from "./sessionIdentity/persistence";
 export type { SessionMeta, SessionMetaPatch } from "./sessionIdentity/persistence";

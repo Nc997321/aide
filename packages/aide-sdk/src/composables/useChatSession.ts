@@ -466,6 +466,13 @@ export function useChatSession(sessionId: Ref<string | null>) {
     }
   }
 
+  /** 模型切换被用户取消后的本地回滚：把下拉草稿拉回当前坐实模型。draft 优先级
+   *  高于 runtime 坐实，回滚广播只改 runtime——不清 draft，deny 后下拉仍卡在新
+   *  模型上。由确认对话框的取消分支调用。 */
+  function rollbackModelChoice(): void {
+    identity.setUserChoice(current.value?.currentModel ?? "");
+  }
+
   /** 切权限模式：进程活着就即时生效（sidecar 回发事件同步下拉），进程还没
    *  起来时静默失败——模式会随下一条消息的 permission_mode 字段带过去。 */
   async function setPermissionMode(mode: string) {
@@ -587,6 +594,15 @@ export function useChatSession(sessionId: Ref<string | null>) {
     currentModel: computed(() => current.value?.currentModel ?? ""),
     /** 模型切换坐实回执（含 seq），面板据此弹成功/失败提示；null 表示没切过。 */
     modelSwitchResult: computed(() => current.value?.modelSwitchResult ?? null),
+    /** 模型切换成本确认（PreModelSwitch hook 挂起）：非 null 即弹确认框；可写——
+     *  决定回传后由弹窗置回 null 关闭（决定已发出，等待属超时兜底不再展示）。 */
+    modelSwitchConfirm: computed({
+      get: () => current.value?.modelSwitchConfirm ?? null,
+      set: (v) => {
+        const s = current.value;
+        if (s) s.modelSwitchConfirm = v;
+      },
+    }),
     /** sidecar 坐实的当前 effort（空串 = 还没学到，选择器以本地值为准）。 */
     currentEffort: computed(() => current.value?.currentEffort ?? ""),
     /** effort 切换失败回执（含 seq），面板据此弹失败提示。 */
@@ -623,6 +639,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
     interrupt,
     onSessionCreated,
     setModel,
+    rollbackModelChoice,
     setEffort,
     setPermissionMode,
     /** 图片 400 回滚后待放回输入框的文本（空串 = 无待回填）。 */

@@ -79,7 +79,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       await id.resolve("s1");
       expect(id.providerOf("s1")).toBe("p_a");
       expect(setSessionProviderMock).not.toHaveBeenCalled();
-      expect(id.lastIdentity.value).toEqual({ provider: "p_a", model: "kimi" });
+      expect(id.lastProvider.value).toBe("p_a");
     });
 
     it("provider 被删但模型反查命中 → 修正绑定 + self-heal 写回", async () => {
@@ -136,7 +136,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionModelMock.mockResolvedValue(null);
       await id.resolve("s1");
       expect(id.providerOf("s1")).toBe("p_a");
-      expect(id.lastIdentity.value).toEqual({ provider: "p_a", model: "kimi" });
+      expect(id.lastProvider.value).toBe("p_a");
     });
   });
 
@@ -152,22 +152,22 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
       expect(setSessionProviderMock).not.toHaveBeenCalled();
-      expect(id.lastIdentity.value).toEqual({ provider: "p_a", model: "kimi" });
+      expect(id.lastProvider.value).toBe("p_a");
     });
   });
 
-  describe("settleOnSend（落盘 = 基线同源）", () => {
-    it("无绑定 → setProvider + 落盘 + 推进基线，三者同源", async () => {
+  describe("settleOnSend（供应商维度：绑定确保 + 落盘 + 基线同源；模型落盘已移交 model_committed）", () => {
+    it("无绑定 → setProvider + 落盘 provider + 推进基线，三者同源；模型不再由它落盘", async () => {
       allProviders.value = [makeProvider("p_a", "kimi")];
       activeProviderId.value = "p_a";
-      await id.settleOnSend("s1", { provider: "p_a", model: "kimi" });
+      await id.settleOnSend("s1", "p_a");
       expect(id.providerOf("s1")).toBe("p_a");
       expect(setSessionProviderMock).toHaveBeenCalledWith("s1", "p_a");
-      expect(setSessionModelMock).toHaveBeenCalledWith("s1", "kimi");
-      expect(id.lastIdentity.value).toEqual({ provider: "p_a", model: "kimi" });
+      expect(setSessionModelMock).not.toHaveBeenCalled();
+      expect(id.lastProvider.value).toBe("p_a");
     });
 
-    it("已有绑定 → 仍落盘 model + 推进基线（注册表由 if(!providerOf) 保护不覆盖）", async () => {
+    it("已有绑定且 provider 同值 → 跳过 IPC（省冗余写）", async () => {
       allProviders.value = [makeProvider("p_a", "kimi")];
       activeProviderId.value = "p_a";
       sessionProviderMock.mockResolvedValueOnce("p_a");
@@ -175,70 +175,63 @@ describe("useSessionIdentity (L2 identity)", () => {
       await id.resolve("s1");
       setSessionProviderMock.mockClear();
       setSessionModelMock.mockClear();
-      await id.settleOnSend("s1", { provider: "p_a", model: "new-model" });
-      expect(setSessionModelMock).toHaveBeenCalledWith("s1", "new-model");
-      expect(id.providerOf("s1")).toBe("p_a");
-      expect(id.lastIdentity.value).toEqual({ provider: "p_a", model: "new-model" });
-    });
-
-    it("model 为空 + 盘已有 model → 落盘空串（删字段）", async () => {
-      allProviders.value = [makeProvider("p_a", "kimi")];
-      activeProviderId.value = "p_a";
-      await id.settleOnSend("s1", { provider: "p_a", model: "kimi" }); // 盘建 model
-      setSessionModelMock.mockClear();
-      await id.settleOnSend("s1", { provider: "p_a", model: "" }); // model 变 kimi → ""（删）
-      expect(setSessionModelMock).toHaveBeenCalledWith("s1", "");
-    });
-
-    it("provider+model 都没变 → 跳过 IPC（省冗余写）", async () => {
-      allProviders.value = [makeProvider("p_a", "kimi")];
-      activeProviderId.value = "p_a";
-      await id.settleOnSend("s1", { provider: "p_a", model: "kimi" });
-      setSessionProviderMock.mockClear();
-      setSessionModelMock.mockClear();
-      await id.settleOnSend("s1", { provider: "p_a", model: "kimi" });
+      await id.settleOnSend("s1", "p_a");
       expect(setSessionProviderMock).not.toHaveBeenCalled();
       expect(setSessionModelMock).not.toHaveBeenCalled();
+      expect(id.providerOf("s1")).toBe("p_a");
+      expect(id.lastProvider.value).toBe("p_a");
     });
 
-    it("首次 + model 空 → 只写 provider（model 盘无，删=no-op）", async () => {
-      allProviders.value = [makeProvider("p_a", "kimi")];
+    it("provider 变化 → 只写 provider（model 落盘是 model_committed 的职责）", async () => {
+      allProviders.value = [makeProvider("p_a", "kimi"), makeProvider("p_b", "deepseek")];
       activeProviderId.value = "p_a";
-      await id.settleOnSend("s1", { provider: "p_a", model: "" });
-      expect(setSessionProviderMock).toHaveBeenCalledWith("s1", "p_a");
+      sessionProviderMock.mockResolvedValueOnce("p_a");
+      sessionModelMock.mockResolvedValueOnce("kimi");
+      await id.resolve("s1");
+      await id.settleOnSend("s1", "p_b");
+      expect(setSessionProviderMock).toHaveBeenCalledWith("s1", "p_b");
       expect(setSessionModelMock).not.toHaveBeenCalled();
+      expect(id.lastProvider.value).toBe("p_b");
     });
 
     it("落盘失败 → console.warn 降级，基线照常推进", async () => {
-      allProviders.value = [makeProvider("p_a", "kimi")];
+      allProviders.value = [makeProvider("p_a", "kimi"), makeProvider("p_b", "deepseek")];
       activeProviderId.value = "p_a";
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      setSessionModelMock.mockRejectedValueOnce(new Error("disk full"));
-      await id.settleOnSend("s1", { provider: "p_a", model: "kimi" });
+      sessionProviderMock.mockResolvedValueOnce("p_a");
+      sessionModelMock.mockResolvedValueOnce("kimi");
+      await id.resolve("s1");
+      setSessionProviderMock.mockRejectedValueOnce(new Error("disk full"));
+      await id.settleOnSend("s1", "p_b");
       expect(warnSpy).toHaveBeenCalledWith(
         "[sessionIdentity] settleOnSend persist failed:",
         "s1",
         expect.any(Error),
       );
-      expect(id.lastIdentity.value).toEqual({ provider: "p_a", model: "kimi" });
-      // 失败后绑定已建立（空绑定，meta 保持盘上状态）→ 后续 resolve 走快路径不崩（不变式回归）
-      sessionProviderMock.mockResolvedValue("p_a");
-      sessionModelMock.mockResolvedValue("kimi");
+      expect(id.lastProvider.value).toBe("p_b");
+      // 失败后绑定已建立（空绑定，meta 保持盘上状态）→ 后续 resolve 走快路径不崩（不变式回归）。
+      // 模型 mock 与 p_b 自洽（deepseek）：consistentProviderId 按模型反查会把它归回 p_a。
+      sessionProviderMock.mockResolvedValue("p_b");
+      sessionModelMock.mockResolvedValue("deepseek");
       await id.resolve("s1");
-      expect(id.lastIdentity.value).toEqual({ provider: "p_a", model: "kimi" });
+      expect(id.lastProvider.value).toBe("p_b");
       warnSpy.mockRestore();
     });
 
-    it("落盘失败但 binding 已存在 → 不覆写（runtimeModel 等保持）", async () => {
+    it("落盘失败但 binding 已存在 → 注册表不覆盖（setProvider 仅无绑定时兜底）、model 侧不被触碰", async () => {
       allProviders.value = [makeProvider("p_a", "kimi", { knownModels: ["kimi", "runtime"] })];
       activeProviderId.value = "p_a";
       sessionProviderMock.mockResolvedValue("p_a");
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
       id.bindRuntime("s1", "runtime");
-      setSessionModelMock.mockRejectedValueOnce(new Error("disk full"));
-      await id.settleOnSend("s1", { provider: "p_a", model: "new-model" }); // model 变 → 进 try → catch（落盘失败）
-      expect(id.effectiveModel.value).toBe("runtime"); // binding 未覆写，runtimeModel 保持
+      setSessionProviderMock.mockClear();
+      setSessionProviderMock.mockRejectedValueOnce(new Error("disk full"));
+      await id.settleOnSend("s1", "p_b"); // provider 变 → 进 try → catch（落盘失败）
+      // 已有绑定注册表不覆盖（if(!providerOf) 守护）——供应商 respawn 的注册表变更
+      // 由 provider_switched 链路处理，settleOnSend 只管账面与落盘
+      expect(id.providerOf("s1")).toBe("p_a");
+      expect(id.effectiveModel.value).toBe("runtime"); // model 侧 binding 完全未被触碰
     });
   });
 
@@ -295,9 +288,9 @@ describe("useSessionIdentity (L2 identity)", () => {
     });
   });
 
-  describe("lastIdentity=null → 门控不误弹（本次 bug 回归）", () => {
-    it("resolve 前 lastIdentity=null（无基线）", () => {
-      expect(id.lastIdentity.value).toBeNull();
+  describe("lastProvider=null → 门控不误弹（本次 bug 回归）", () => {
+    it("resolve 前 lastProvider=null（无基线）", () => {
+      expect(id.lastProvider.value).toBeNull();
     });
   });
 
@@ -349,15 +342,15 @@ describe("useSessionIdentity (L2 identity)", () => {
       expect(id.providerOf("real-id")).toBe("p_a");
     });
 
-    it("clearCurrent 清 lastIdentity + currentSid（effectiveModel 回落 activeProvider 默认）", async () => {
+    it("clearCurrent 清 lastProvider + currentSid（effectiveModel 回落 activeProvider 默认）", async () => {
       allProviders.value = [makeProvider("p_a", "kimi")];
       activeProviderId.value = "p_a";
       sessionProviderMock.mockResolvedValue("p_a");
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
-      expect(id.lastIdentity.value).not.toBeNull();
+      expect(id.lastProvider.value).not.toBeNull();
       id.clearCurrent();
-      expect(id.lastIdentity.value).toBeNull();
+      expect(id.lastProvider.value).toBeNull();
       expect(id.effectiveModel.value).toBe("kimi");
     });
 
@@ -392,8 +385,8 @@ describe("useSessionIdentity (L2 identity)", () => {
       activeProviderId.value = "p_a";
       setSessionModelMock.mockClear();
       setSessionProviderMock.mockClear();
-      await id.settleOnSend("", { provider: "p_a", model: "kimi" });
-      expect(id.lastIdentity.value).toEqual({ provider: "p_a", model: "kimi" });
+      await id.settleOnSend("", "p_a");
+      expect(id.lastProvider.value).toBe("p_a");
       expect(setSessionModelMock).not.toHaveBeenCalled();
       expect(setSessionProviderMock).not.toHaveBeenCalled();
     });
@@ -555,7 +548,75 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionModelMock.mockResolvedValue(null);
       await id.resolve("s1");
       expect(id.providerOf("s1")).toBe("p_a");
-      expect(id.lastIdentity.value).toEqual({ provider: "p_a", model: "kimi" });
+      expect(id.lastProvider.value).toBe("p_a");
+    });
+  });
+
+  describe("commitModelFromRuntime（model_committed 事件驱动落盘）", () => {
+    it("带 requestedModel → bindRuntime 坐实 + 落盘 model（用户命名空间别名）", async () => {
+      allProviders.value = [makeProvider("p_a", "kimi", { knownModels: ["kimi", "fable"] })];
+      activeProviderId.value = "p_a";
+      sessionProviderMock.mockResolvedValue("p_a");
+      sessionModelMock.mockResolvedValue("kimi");
+      await id.resolve("s1");
+      setSessionModelMock.mockClear();
+      await id.commitModelFromRuntime("s1", {
+        fromModel: "kimi", toModel: "fable-resolved", requestedModel: "fable", source: "sdk",
+      });
+      expect(id.effectiveModel.value).toBe("fable");
+      expect(setSessionModelMock).toHaveBeenCalledWith("s1", "fable");
+    });
+
+    it("requestedModel=null（CLI 内部切换）→ 只 bindRuntime，不落盘（无用户选择可恢复）", async () => {
+      allProviders.value = [makeProvider("p_a", "kimi", { knownModels: ["kimi", "auto-model"] })];
+      activeProviderId.value = "p_a";
+      sessionProviderMock.mockResolvedValue("p_a");
+      sessionModelMock.mockResolvedValue("kimi");
+      await id.resolve("s1");
+      setSessionModelMock.mockClear();
+      await id.commitModelFromRuntime("s1", {
+        fromModel: "kimi", toModel: "auto-model", requestedModel: null, source: "auto",
+      });
+      // 无用户选择可恢复：不 bindRuntime 不落盘，下拉回落盘面恢复值
+      expect(id.effectiveModel.value).toBe("kimi");
+      expect(setSessionModelMock).not.toHaveBeenCalled();
+    });
+
+    it("model 同值 → 跳过落盘 IPC（bindRuntime 幂等）", async () => {
+      allProviders.value = [makeProvider("p_a", "kimi", { knownModels: ["kimi", "fable"] })];
+      activeProviderId.value = "p_a";
+      sessionProviderMock.mockResolvedValue("p_a");
+      sessionModelMock.mockResolvedValue("kimi");
+      await id.resolve("s1");
+      await id.commitModelFromRuntime("s1", {
+        fromModel: "fable-resolved", toModel: "fable-resolved", requestedModel: "fable", source: "sdk",
+      });
+      setSessionModelMock.mockClear();
+      await id.commitModelFromRuntime("s1", {
+        fromModel: "fable-resolved", toModel: "fable-resolved", requestedModel: "fable", source: "sdk",
+      });
+      expect(setSessionModelMock).not.toHaveBeenCalled();
+      expect(id.effectiveModel.value).toBe("fable");
+    });
+
+    it("落盘失败 → console.warn 降级，runtime 坐实已生效", async () => {
+      allProviders.value = [makeProvider("p_a", "kimi", { knownModels: ["kimi", "fable"] })];
+      activeProviderId.value = "p_a";
+      sessionProviderMock.mockResolvedValue("p_a");
+      sessionModelMock.mockResolvedValue("kimi");
+      await id.resolve("s1");
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      setSessionModelMock.mockRejectedValueOnce(new Error("disk full"));
+      await id.commitModelFromRuntime("s1", {
+        fromModel: "kimi", toModel: "fable-resolved", requestedModel: "fable", source: "sdk",
+      });
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[sessionIdentity] commitModelFromRuntime persist failed:",
+        "s1",
+        expect.any(Error),
+      );
+      expect(id.effectiveModel.value).toBe("fable");
+      warnSpy.mockRestore();
     });
   });
 });
