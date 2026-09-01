@@ -37,6 +37,15 @@ export const smokyPinkGlass: ThemeTokens = {
   danger: "#dd6b72",
   info: "#7C93B8",
   agentAccent: "#B87F7E",
+
+  // 用量分段色板（dataviz 校验器相邻对口径 ALL PASS，浅色组；对白底 Contrast
+  // WARN 由明细可见文字+2px 间隙兜底，见设计稿 §4）
+  chart1: "#2a78d6",
+  chart2: "#eb6834",
+  chart3: "#1baf7a",
+  chart4: "#eda100",
+  chart5: "#e87ba4",
+  chartFallback: "rgba(90,90,105,.24)",
   border: "rgba(124,137,154,.18)",
   borderSubtle: "rgba(124,137,154,.10)",
   borderStrong: "rgba(207,166,160,.42)",

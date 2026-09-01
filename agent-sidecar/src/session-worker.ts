@@ -656,14 +656,22 @@ export class SessionWorker {
   private async emitContextUsage(q: Awaited<ReturnType<typeof query>>): Promise<void> {
     try {
       const usage = await q.getContextUsage();
+      // DTO 拍平：categories 只留 name/tokens/isDeferred——SDK 的 color 是 CLI 品牌
+      // 色，前端按主题 token 上色，不透传（provider-agnostic，见 types.ts 注释）。
       this.emit({
         type: "context_usage",
         total_tokens: usage.totalTokens,
         max_tokens: usage.maxTokens,
         percentage: usage.percentage,
+        raw_max_tokens: usage.rawMaxTokens,
+        categories: usage.categories?.map((c) => ({
+          name: c.name,
+          tokens: c.tokens,
+          isDeferred: c.isDeferred,
+        })),
       });
     } catch {
-      // 拿不到就跳过
+      // 拿不到就跳过（旧 CLI/SDK 版本不支持时静默，前端按缺省降级）
     }
   }
 
@@ -1012,6 +1020,12 @@ export class SessionWorker {
           // （用户全局 env / Rust provider 注入），必须在最后显式删除。
           delete cliEnv.CLAUDE_CODE_EFFORT_LEVEL;
           cliEnv.CLAUDE_CODE_SUBAGENT_MODEL = cliSubagentModelEnvValue(process.env);
+          // SDK 0.3.233 起 Todo/task 工具(TaskCreate/TaskGet/TaskUpdate/TaskList/
+          // TodoWrite)在新模型(Opus 4.8/Sonnet 5/Fable 5)上不再默认进工具面——Aide
+          // 的 TaskListPanel 与轮间 TODO 覆盖逻辑依赖它们，显式 env 保持默认可用。
+          // 选 env 而非 query.tools：只恢复这一组的默认地位，不触碰 tools 白名单
+          // (btw taskTools/automation 收窄语义不变，白名单没列的照样不注入)。
+          cliEnv.CLAUDE_CODE_ENABLE_TODO_TOOLS = "1";
 
           // codegraph agent 工具：默认注册（AIDE_CODEGRAPH_TOOLS=off 关闭）。
           // handler 闭包持有本会话的 emit（经 DeltaCoalescer，红线）与 cwd。

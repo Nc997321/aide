@@ -146,11 +146,22 @@ export interface PermissionModeOption {
   displayName: string;
 }
 
-/** 当前会话的上下文窗口用量——每轮结束后由 sidecar 刷新一次。 */
+/** 上下文占用的单条分类（provider 自报，name 为不透明标签——UI 按名映射色板，
+ *  未知名落兜底色）。categories 是 provider 自报的占用分类拆解；缺省时环形照常
+ *  工作、明细退化为空。rawMaxTokens 为完整窗（含保留给响应的区间），配合
+ *  maxTokens 表达"保留区"；缺省不画。每轮结束后由 sidecar 刷新一次。 */
+export interface ContextUsageCategory {
+  name: string;
+  tokens: number;
+  isDeferred?: boolean;
+}
+
 export interface ContextUsage {
   totalTokens: number;
   maxTokens: number;
   percentage: number;
+  rawMaxTokens?: number;
+  categories?: ContextUsageCategory[];
 }
 
 /** 上下文压缩的瞬态展示状态。它不属于 ChatMessage，也不进历史记录；成功事件会

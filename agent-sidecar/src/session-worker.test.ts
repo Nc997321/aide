@@ -955,3 +955,94 @@ describe("SessionWorker — 思考开关（send.thinking_enabled → spawn think
     expect(captured.thinking).toEqual({ type: "disabled" });
   });
 });
+
+// ================================================================
+// context_usage 事件（SDK 0.3.246 数据扩展）
+// ================================================================
+
+async function waitForUsageEvent(events: ChatEvent[]): Promise<ChatEvent | undefined> {
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    const hit = events.find((e) => e.type === "context_usage");
+    if (hit) return hit;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  return undefined;
+}
+
+/** 造一个 yield 一条 result 后挂起的 query mock，getContextUsage 返回 fixture。
+ *  挂起是关键：防止 generator 耗尽后 startLoop 的 while 立即发起第二轮 query。 */
+function makeUsageWorker(
+  events: ChatEvent[],
+  getContextUsage: () => Promise<unknown>,
+): { worker: SessionWorker; release: () => void } {
+  // release! 非空断言：Promise executor 同步执行，gate 构造后必已赋值
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const worker = new SessionWorker("s-usage", (e) => events.push(e), {
+    queryFn: (() => {
+      const q: any = (async function* () {
+        yield { type: "result" };
+        await gate;
+      })();
+      q.getContextUsage = getContextUsage;
+      return q;
+    }) as any,
+  });
+  return { worker, release };
+}
+
+describe("SessionWorker — context_usage event extension", () => {
+  it("透传 raw_max_tokens 与拍平后的 categories，丢弃 SDK color", async () => {
+    const events: ChatEvent[] = [];
+    const { worker, release } = makeUsageWorker(events, async () => ({
+      categories: [
+        { name: "System Prompt", tokens: 11_000, color: "#7B61FF" },
+        { name: "Tools", tokens: 30_700, color: "#34D399", isDeferred: true },
+      ],
+      totalTokens: 125_500,
+      maxTokens: 160_000,
+      rawMaxTokens: 200_000,
+      percentage: 62.8,
+      gridRows: [],
+      model: "test-model",
+      memoryFiles: [],
+      mcpTools: [],
+      agents: [],
+    }));
+    void worker.startLoop("C:/tmp-ws");
+    const ev = (await waitForUsageEvent(events)) as
+      | Extract<ChatEvent, { type: "context_usage" }>
+      | undefined;
+    worker.stop();
+    release();
+    await flushPromises();
+
+    expect(ev).toBeDefined();
+    expect(ev?.raw_max_tokens).toBe(200_000);
+    expect(ev?.categories).toEqual([
+      { name: "System Prompt", tokens: 11_000, isDeferred: undefined },
+      { name: "Tools", tokens: 30_700, isDeferred: true },
+    ]);
+    // DTO 拍平：SDK 的 color 是 CLI 品牌色，不进核心协议
+    expect(JSON.stringify(ev?.categories)).not.toContain("color");
+    expect(JSON.stringify(ev)).not.toContain("7B61FF");
+  });
+
+  it("getContextUsage 抛错时静默无事件（旧 CLI 降级，与既有约定一致）", async () => {
+    const events: ChatEvent[] = [];
+    const { worker, release } = makeUsageWorker(events, async () => {
+      throw new Error("unsupported");
+    });
+    void worker.startLoop("C:/tmp-ws");
+    // 负断言：等 query 真正跑进 getContextUsage 抛错路径（与 makeUsageWorker
+    // 的 result yield 时机一致）后再收，避免慢机上事件晚到假阴。
+    await new Promise((r) => setTimeout(r, 150));
+    await flushPromises();
+    worker.stop();
+    release();
+    await flushPromises();
+
+    expect(events.some((e) => e.type === "context_usage")).toBe(false);
+  });
+});

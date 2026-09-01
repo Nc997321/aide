@@ -28,6 +28,14 @@ export const glass: ThemeTokens = {
   info: "#7dd3fc",
   agentAccent: "#e0a3d8",
 
+  // 用量分段色板（dataviz 校验器相邻对口径 ALL PASS，对 bgDeep≈#0a0c12 验光）
+  chart1: "#3987e5",
+  chart2: "#d95926",
+  chart3: "#199e70",
+  chart4: "#c98500",
+  chart5: "#d55181",
+  chartFallback: "rgba(255,255,255,.28)",
+
   border: "rgba(255,255,255,.1)",
   borderSubtle: "rgba(255,255,255,.06)",
   borderStrong: "rgba(255,255,255,.17)",

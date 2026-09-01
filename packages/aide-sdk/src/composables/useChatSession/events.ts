@@ -1,10 +1,12 @@
 import { api } from "../../api";
 import { builtinHooks, type BuiltinHookManifest } from "../../composables/useCustomizations";
+import type { ContextUsageCategory } from "../../types/chat";
 import type { HealthSnapshot } from "../../composables/useDiagnosticsDashboard";
 import type {
   BgTask,
   ChatMessage,
   ContextCompactionState,
+  ContextUsage,
   ModelOption,
   PermissionModeOption,
   SubagentBlock,
@@ -48,6 +50,14 @@ import {
   unregisterSubagent,
   unregisterToolCall,
 } from "./state";
+
+/** context_usage.categories 的 wire 形状守卫：name 为字符串标签、tokens 为数值，
+ *  其余字段（isDeferred 等）可选——跨边界数据逐元素重建，非法元素静默剔除。 */
+function isUsageCategory(v: unknown): v is ContextUsageCategory {
+  if (typeof v !== "object" || v === null) return false;
+  const r = v as Record<string, unknown>;
+  return typeof r["name"] === "string" && typeof r["tokens"] === "number";
+}
 
 /**
  * 流式事件总路由（拆分自原 2000+ 行宿主）：按事件类型分发到 per-sid store。
@@ -213,6 +223,14 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         totalTokens: e["total_tokens"] as number,
         maxTokens: e["max_tokens"] as number,
         percentage: e["percentage"] as number,
+        // 可选扩展字段：缺省（旧 sidecar/降级）时 undefined，环形照常工作
+        rawMaxTokens:
+          typeof e["raw_max_tokens"] === "number" ? e["raw_max_tokens"] : undefined,
+        // wire 数据逐元素重建（M3：Array.isArray 只收窄到 any[]，元素形状必须
+        // type-guard 校验，否则 name 缺失时 toLowerCase 直接炸组件）
+        categories: Array.isArray(e["categories"])
+          ? e["categories"].filter(isUsageCategory)
+          : undefined,
       };
       break;
     }

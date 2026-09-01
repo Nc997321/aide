@@ -28,6 +28,15 @@ export const catppuccin: ThemeTokens = {
   info:    "#89dceb",
   agentAccent: "#89dceb",
 
+  // 用量分段色板（dataviz 校验器相邻对口径 ALL PASS；先复用基准组，
+  // 换 catppuccin 自家色系前必须重跑校验器）
+  chart1: "#3987e5",
+  chart2: "#d95926",
+  chart3: "#199e70",
+  chart4: "#c98500",
+  chart5: "#d55181",
+  chartFallback: "rgba(255,255,255,.26)",
+
   border:       "rgba(255, 255, 255, 0.06)",
   borderSubtle: "rgba(255, 255, 255, 0.03)",
   borderStrong: "rgba(255,255,255,.14)",

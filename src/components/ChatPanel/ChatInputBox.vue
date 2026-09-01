@@ -2,6 +2,8 @@
 import { ref, watch, nextTick, computed } from "vue";
 import ThemedSelect from "../ThemedSelect.vue";
 import ChatSendButton from "../ChatSendButton.vue";
+import ContextUsageRing from "./ContextUsageRing.vue";
+import ContextUsagePanel from "./ContextUsagePanel.vue";
 import AToast from "@/ui/AToast.vue";
 import type { SkillMeta, ProviderConfig } from "@/types";
 import type {
@@ -239,6 +241,15 @@ watch(
   },
 );
 
+// ---- 上下文用量弹层（环形指示的落点与开关，见 ContextUsageRing/Panel）----
+// 声明必须在下方 immediate session watch 之前——回调引用 usagePanelOpen，
+// 声明滞后会 TDZ（Cannot access before initialization，ChatPanel.test 实锤）。
+const usageRingRef = ref<InstanceType<typeof ContextUsageRing> | null>(null);
+const usagePanelOpen = ref(false);
+const usageRingEl = computed<HTMLElement | null>(
+  () => (usageRingRef.value?.$el as HTMLElement | undefined) ?? null,
+);
+
 // 会话切换：恢复这个会话记住的 effort（没有则落 provider 默认/high）。
 // pending 会话不恢复不重置——选择是用户刚做的/随 initialEffort 走的。
 // tempId→realId 定名搬迁同理：同一场会话换名，选择不洗（此前定名时落进下面
@@ -246,6 +257,9 @@ watch(
 watch(
   () => props.sessionId,
   async (sid, prevSid) => {
+    // 用量弹层随会话销毁：面板锚的是旧会话的环形，切走后留在原地只是噪音。
+    // 定名搬迁（tempId→realId，同一场会话）不拆面板。
+    if (!isFinalizedSessionPair(prevSid, sid)) usagePanelOpen.value = false;
     // 定名搬迁（首轮发送后 SDK 确认真实 id）：不重置不恢复；用户开工前显式
     // 选过的档位随定名持久化进会话元数据（对齐 setEffort 契约，重开会话恢复）。
     if (isFinalizedSessionPair(prevSid, sid)) {
@@ -1046,17 +1060,6 @@ const { actions: quickActions } = useQuickActions();
           >⚠️ 跳过确认</span>
         </div>
         <div
-          v-if="contextUsage"
-          class="chat-ctx-usage"
-          v-tooltip="`上下文用量：${contextUsage.totalTokens.toLocaleString()} / ${contextUsage.maxTokens.toLocaleString()} tokens`"
-        >
-          <span class="chat-ctx-label">ctx</span>
-          <div class="chat-ctx-bar">
-            <div class="chat-ctx-bar-fill" :style="{ width: contextUsage.percentage + '%' }" />
-          </div>
-          <span class="chat-ctx-percent">{{ Math.round(contextUsage.percentage) }}%</span>
-        </div>
-        <div
           v-for="w in rateLimitWindows"
           :key="w.key"
           class="chat-quota"
@@ -1070,22 +1073,39 @@ const { actions: quickActions } = useQuickActions();
           </div>
           <span class="chat-ctx-percent">{{ w.pct }}%</span>
         </div>
-        <ChatSendButton
-          :disabled="(!inputText.trim() && !pendingImages.length && !pendingMentions.length) || sending"
-          :busy="isBusy && !btwMode"
-          :actions="quickActions"
-          :btw-active="btwMode"
-          :btw-disabled="!sessionId"
-          :btw-disabled-reason="'先发送一条消息开始主对话，才能顺便问一下'"
-          @send="handleSend()"
-          @select="handleQuickAction"
-        />
+        <!-- 右侧组整体吸边：auto margin 挂在组容器上而不是发送按钮——否则
+             弹性空隙会插在环形与发送之间，环形被留在左侧队列（真踩过） -->
+        <div class="chat-toolbar-right">
+          <ContextUsageRing
+            v-if="contextUsage"
+            ref="usageRingRef"
+            :usage="contextUsage"
+            @open="usagePanelOpen = true"
+          />
+          <ChatSendButton
+            :disabled="(!inputText.trim() && !pendingImages.length && !pendingMentions.length) || sending"
+            :busy="isBusy && !btwMode"
+            :actions="quickActions"
+            :btw-active="btwMode"
+            :btw-disabled="!sessionId"
+            :btw-disabled-reason="'先发送一条消息开始主对话，才能顺便问一下'"
+            @send="handleSend()"
+            @select="handleQuickAction"
+          />
+        </div>
       </div>
     </div>
     <Transition name="btw-toast">
       <div v-if="btwRevertToast" class="btw-revert-toast">已切回主对话输入</div>
     </Transition>
     <AToast :state="toastState" />
+    <ContextUsagePanel
+      v-if="usagePanelOpen"
+      :usage="contextUsage ?? null"
+      :anchor="usageRingEl"
+      :rate-limit="rateLimit ?? null"
+      @close="usagePanelOpen = false"
+    />
   </div>
 </template>
 
@@ -1227,18 +1247,7 @@ const { actions: quickActions } = useQuickActions();
   white-space: nowrap;
 }
 
-.chat-ctx-usage {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--aide-text-muted);
-}
-
-.chat-ctx-label {
-  white-space: nowrap;
-}
-
+/* chat-ctx-bar / chat-ctx-bar-fill / chat-ctx-percent 仍被 5h 额度胶囊使用 */
 .chat-ctx-bar {
   width: 48px;
   height: 5px;
@@ -1315,8 +1324,13 @@ const { actions: quickActions } = useQuickActions();
 
 /* 分裂式发送按钮（ChatSendButton 根元素）：始终靠右。按钮自身的外观在
  * ChatSendButton.vue 内。 */
-.chat-send-split {
+/* 工具条右侧组（环形 + 发送分裂按钮）整体吸边；auto 在组容器上，
+   环形才真正贴着发送按钮，且环形缺省（无用量数据）时发送仍吸右 */
+.chat-toolbar-right {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .skill-dropdown {

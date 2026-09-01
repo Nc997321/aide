@@ -152,7 +152,18 @@ export type ChatEvent =
   // 内建 hook 清单：query 启动后 emit 一次（扩展管理设置页的 hook 列表用，
   // Task 3 只发、前端消费在 Task 10）。provider-agnostic 不透明数组。
   | { type: "builtin_hooks_manifest"; manifest: BuiltinHookManifest[] }
-  | { type: "context_usage"; total_tokens: number; max_tokens: number; percentage: number }
+  // 上下文窗口用量。categories 是 provider 自报的占用分类拆解（如系统提示/工具/
+  // 消息/MCP/技能），name 为不透明标签——前端按名映射色板，未知名落兜底色，
+  // 核心协议不识别具体分类语义；缺省时前端退化为只显示总量。raw_max_tokens 为
+  // 完整上下文窗（含保留给响应的区间），配合 max_tokens 表达"保留区"；缺省不画。
+  | {
+      type: "context_usage";
+      total_tokens: number;
+      max_tokens: number;
+      percentage: number;
+      raw_max_tokens?: number;
+      categories?: { name: string; tokens: number; isDeferred?: boolean }[];
+    }
   // 上下文压缩生命周期——provider-agnostic：只表达任何 agent 都可能提供的阶段，
   // 不把 Claude 的 system/status / compact_result 细节泄露到核心协议。没有真实可测
   // 百分比时绝不带进度数值；detail/error 仅在 provider 能给出人类可读信息时提供。

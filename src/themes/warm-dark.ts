@@ -22,6 +22,14 @@ export const warmDark: ThemeTokens = {
   danger: "#e87070",
   info: "#7eb8d8",
   agentAccent: "#c9a06c",
+
+  // 用量分段色板（dataviz 校验器相邻对口径 ALL PASS，暖暗底复用基准组）
+  chart1: "#3987e5",
+  chart2: "#d95926",
+  chart3: "#199e70",
+  chart4: "#c98500",
+  chart5: "#d55181",
+  chartFallback: "rgba(255,235,210,.26)",
   border: "rgba(255,214,160,.09)",
   borderSubtle: "rgba(255,214,160,.045)",
   borderStrong: "rgba(255,220,175,.16)",

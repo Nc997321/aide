@@ -33,6 +33,20 @@ export interface ThemeTokens {
   danger: string;
   info: string;
 
+  /** 用量分段色板（上下文用量弹层的分段条/明细 dot）：chart1~5 按固定顺序映射
+   *  稳定分类（系统提示/工具/消息/MCP/技能），颜色跟着实体走不跟位置——类别
+   *  缺席不重排不换色；未知名/溢出落 chartFallback（中性色）。改值必须重跑
+   *  dataviz 色板校验器（相邻对口径 + 2px 间隙二次编码，对该主题的 bgDeep
+   *  合成底验光），不许裸眼定色。2026-09-01 种子值见
+   *  docs/superpowers/specs/2026-09-01-context-usage-panel-design.md §4 */
+  chart1: string;
+  chart2: string;
+  chart3: string;
+  chart4: string;
+  chart5: string;
+  /** 分类色板兜底：provider 报了未知名/超出 5 类时的中性段 */
+  chartFallback: string;
+
   /** 聊天域「代理活动」装饰色：思考块竖线 / 子代理卡（左边条+类型 pill+嵌套虚线）/
    *  后台运行徽章 / 用量徽章↓输入。与 info 分槽——info 是功能色（toast/git 徽章/
    *  通知/文件图标），保持语义蓝；agentAccent 是纯装饰色，跟主题气质走

@@ -618,6 +618,56 @@ describe("useChatSession per-session store", () => {
     expect(chat.contextUsage.value).toEqual({ totalTokens: 52000, maxTokens: 100000, percentage: 52 });
   });
 
+  it("context_usage 透传 rawMaxTokens/categories，缺省字段保持 undefined", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+
+    emit({
+      type: "context_usage",
+      total_tokens: 125500,
+      max_tokens: 160000,
+      raw_max_tokens: 200000,
+      percentage: 62.8,
+      categories: [
+        null, // 非法元素：wire 守卫剔除，不炸 toLowerCase
+        { tokens: 999 }, // 缺 name：剔除
+        { name: "Broken", tokens: "nope" }, // tokens 非数值：剔除
+        { name: "System Prompt", tokens: 11000 },
+        { name: "Tools", tokens: 30700, isDeferred: true },
+      ],
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.contextUsage.value).toEqual({
+      totalTokens: 125500,
+      maxTokens: 160000,
+      percentage: 62.8,
+      rawMaxTokens: 200000,
+      categories: [
+        { name: "System Prompt", tokens: 11000 },
+        { name: "Tools", tokens: 30700, isDeferred: true },
+      ],
+    });
+
+    // 旧 sidecar / 降级：不带扩展字段也不炸，环形照常
+    emit({
+      type: "context_usage",
+      total_tokens: 10,
+      max_tokens: 20,
+      percentage: 50,
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.contextUsage.value).toEqual({
+      totalTokens: 10,
+      maxTokens: 20,
+      percentage: 50,
+      rawMaxTokens: undefined,
+      categories: undefined,
+    });
+  });
+
   it("context_compaction 只维护会话瞬态状态，失败会保留到下一轮", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);
