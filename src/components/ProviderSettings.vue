@@ -11,6 +11,9 @@
  *   改为 updateProvider(__system_default__, …)；组装字段与改前逐字段一致（见 task-9-report）。
  * - 底部挂 ProviderActions 按 kind dispatch（Custom 自动不渲染）。
  * - "+ 添加" 打开 ProviderCatalogPicker，preset 卡片 + Custom 入口。
+ * - 添加走草稿态：picker 选中只建本地 draft（不进 store、不落盘），左侧列表显示
+ *   「未保存草稿」虚线项；点「保存」才 addPresetProvider/addProvider 一次性落盘
+ *   （身份 + 行为字段 + 凭证单次 setProviders），「取消」丢弃。避免半成品入库。
  */
 import { ref, computed, watch, onMounted } from "vue";
 import { useProviders } from "../composables/useProviders";
@@ -43,18 +46,58 @@ const {
   deleteProvider,
   setActiveProvider,
   addPresetProvider,
-  addCustomProvider,
+  addProvider,
   SYSTEM_DEFAULT_ID,
 } = useProviders();
-const { presetForKind, loadCatalog } = useProviderCatalog();
+const { presetForKind, enrichForDisplay, loadCatalog } = useProviderCatalog();
 const { toastState, showToast } = useToast();
 const modal = useModal();
 
 const selectedId = ref<string>(SYSTEM_DEFAULT_ID);
 const showPicker = ref(false);
 
+// ── 添加流程草稿态：picker 选中 → 本地草稿（不进 store、不落盘）→
+//    填完表单点「保存」才 addPresetProvider/addProvider 一次性落盘。
+//    草稿在左侧列表显示「未保存」标记；「取消」或放弃即丢弃。
+const draft = ref<ProviderConfig | null>(null);
+
+function buildDraft(kind: ProviderKind): ProviderConfig {
+  const base: ProviderConfig = {
+    id: `draft-${crypto.randomUUID?.() ?? Date.now()}`,
+    kind,
+    name: "",
+    icon: "provider",
+    baseUrl: "",
+    apiKeyConfigured: false,
+    authTokenConfigured: false,
+    model: "",
+    modelMappings: {
+      anthropicModel: "",
+      defaultOpusModel: "",
+      defaultSonnetModel: "",
+      defaultHaikuModel: "",
+      subagent: "",
+    },
+    effortLevel: "",
+    autoCompactWindow: "",
+    autocompactPctOverride: "",
+    maxContextTokens: "",
+    knownModels: [],
+  };
+  return kind === "custom" ? base : enrichForDisplay(base);
+}
+
+const isDraft = computed(() => !!draft.value && selectedId.value === draft.value.id);
+
+function discardDraft() {
+  draft.value = null;
+  selectedId.value = SYSTEM_DEFAULT_ID;
+  showToast("已放弃未保存的更改", "info");
+}
+
 const selectedProvider = computed<ProviderConfig | undefined>(() =>
-  displayList.value.find((p) => p.id === selectedId.value),
+  displayList.value.find((p) => p.id === selectedId.value)
+  ?? (draft.value && draft.value.id === selectedId.value ? draft.value : undefined),
 );
 
 const isPreset = computed(() => selectedProvider.value?.kind !== "custom");
@@ -112,28 +155,17 @@ async function handleAdd() {
   showPicker.value = true;
 }
 
-async function onPickerSelect(kind: ProviderKind) {
+function onPickerSelect(kind: ProviderKind) {
   showPicker.value = false;
-  try {
-    const p = await addPresetProvider(kind);
-    selectedId.value = p.id;
-    showToast("已添加：" + p.name, "success");
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    showToast("添加失败：" + msg, "danger");
-  }
+  // 不再立即 addPresetProvider 落盘——先进草稿态，保存时才写入
+  draft.value = buildDraft(kind);
+  selectedId.value = draft.value.id;
 }
 
-async function onPickerCustom() {
+function onPickerCustom() {
   showPicker.value = false;
-  try {
-    const p = await addCustomProvider();
-    selectedId.value = p.id;
-    showToast("已添加自定义供应商", "success");
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    showToast("添加失败：" + msg, "danger");
-  }
+  draft.value = buildDraft("custom");
+  selectedId.value = draft.value.id;
 }
 
 async function handleSave() {
@@ -143,6 +175,49 @@ async function handleSave() {
   // type="number" input 在 Vue 3 v-model 下会被 looseToNumber 成 JS number；
   // Rust 侧字段是 String，传数字会让 setProviders 反序列化失败、保存静默丢失——
   // 这里强制转字符串（保留改前行为）。
+  const secrets = {
+    apiKey: apiKeyInput.value ? { action: "set" as const, value: apiKeyInput.value } : apiKeyMutation.value,
+    authToken: authTokenInput.value ? { action: "set" as const, value: authTokenInput.value } : authTokenMutation.value,
+  };
+
+  // 草稿保存：首次落盘（身份 + 行为字段 + 凭证一次性写入）
+  if (isDraft.value) {
+    try {
+      const p = f.kind === "custom"
+        ? await addProvider({
+            kind: "custom",
+            name: f.name.trim() || "新供应商",
+            icon: f.icon,
+            baseUrl: f.baseUrl.trim(),
+            modelMappings: mappings,
+            effortLevel: f.effortLevel,
+            autoCompactWindow: String(f.autoCompactWindow ?? ""),
+            autocompactPctOverride: String(f.autocompactPctOverride ?? ""),
+            maxContextTokens: String(f.maxContextTokens ?? ""),
+            knownModels: [...f.knownModels],
+          }, secrets)
+        : await addPresetProvider(f.kind, {
+            modelMappings: mappings,
+            effortLevel: f.effortLevel,
+            autoCompactWindow: String(f.autoCompactWindow ?? ""),
+            autocompactPctOverride: String(f.autocompactPctOverride ?? ""),
+            maxContextTokens: String(f.maxContextTokens ?? ""),
+            knownModels: [...f.knownModels],
+          }, secrets);
+      draft.value = null;
+      selectedId.value = p.id;
+      apiKeyInput.value = "";
+      authTokenInput.value = "";
+      apiKeyMutation.value = { action: "unchanged" };
+      authTokenMutation.value = { action: "unchanged" };
+      showToast("已添加：" + p.name, "success");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showToast("添加失败：" + msg, "danger");
+    }
+    return;
+  }
+
   await updateProvider(f.id, {
     name: f.name,
     icon: f.icon,
@@ -153,10 +228,7 @@ async function handleSave() {
     autocompactPctOverride: String(f.autocompactPctOverride ?? ""),
     maxContextTokens: String(f.maxContextTokens ?? ""),
     knownModels: [...f.knownModels],
-  }, {
-    apiKey: apiKeyInput.value ? { action: "set", value: apiKeyInput.value } : apiKeyMutation.value,
-    authToken: authTokenInput.value ? { action: "set", value: authTokenInput.value } : authTokenMutation.value,
-  });
+  }, secrets);
   apiKeyInput.value = "";
   authTokenInput.value = "";
   apiKeyMutation.value = { action: "unchanged" };
@@ -165,6 +237,7 @@ async function handleSave() {
 }
 
 async function handleDelete() {
+  if (isDraft.value) return; // 草稿无落盘，删除按钮隐藏，此为双保险
   if (!selectedProvider.value || isSystemDefault.value) return;
   const ok = await modal.confirm(
     "删除供应商",
@@ -227,6 +300,20 @@ function removeModelTag(idx: number) {
         >
           ○
         </button>
+      </div>
+
+      <!-- 未保存草稿：列表尾部显示，虚线边框 + 未保存标记；点选可回到草稿继续编辑 -->
+      <div
+        v-if="draft"
+        class="provider-item provider-item--draft"
+        :class="{ active: selectedId === draft.id }"
+        @click="selectProvider(draft.id)"
+      >
+        <span class="pi-icon"><ProviderLogo :kind="draft.kind" :text="draft.icon" :size="16" /></span>
+        <div class="pi-info">
+          <div class="pi-name">{{ draft.kind === "custom" ? (draft.name || "(新供应商)") : draft.name }}</div>
+          <div class="pi-model pi-model--draft">未保存草稿</div>
+        </div>
       </div>
 
       <button class="add-btn" @click="handleAdd">+ 添加供应商</button>
@@ -467,18 +554,21 @@ function removeModelTag(idx: number) {
           </div>
         </div>
 
-        <!-- 专属操作区：按 kind dispatch（Custom 不渲染） -->
-        <ProviderActions v-if="selectedProvider" :provider="selectedProvider" />
+        <!-- 专属操作区：按 kind dispatch（Custom 不渲染；草稿未落盘也无操作） -->
+        <ProviderActions v-if="selectedProvider && !isDraft" :provider="selectedProvider" />
       </div>
 
-      <!-- Action buttons -->
+      <!-- Action buttons：草稿态是「取消 + 保存」，已存条目是「删除 + 保存」 -->
       <div class="form-actions">
-        <button v-if="!isSystemDefault" class="btn-delete" @click="handleDelete">
+        <button v-if="isDraft" class="btn-delete" @click="discardDraft">
+          取消
+        </button>
+        <button v-else-if="!isSystemDefault" class="btn-delete" @click="handleDelete">
           删除
         </button>
         <button class="btn-save" @click="handleSave">保存</button>
       </div>
-      <div class="respawn-hint">
+      <div v-if="!isDraft" class="respawn-hint">
         修改连接身份（Base URL / API Key / Auth Token）或模型变量后，正在运行的会话不会自动应用——需停止该会话后重新发送才会用上新配置。
       </div>
     </div>
@@ -496,6 +586,7 @@ function removeModelTag(idx: number) {
 
   <ProviderCatalogPicker
     v-if="showPicker"
+    :extra-disabled-kinds="draft ? [draft.kind] : []"
     @select="onPickerSelect"
     @select-custom="onPickerCustom"
     @cancel="showPicker = false"
@@ -574,6 +665,17 @@ function removeModelTag(idx: number) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 未保存草稿项：虚线边框 + 强调色标记，提示尚未落盘 */
+.provider-item--draft {
+  border-style: dashed;
+  border-color: var(--aide-accent);
+}
+
+.pi-model--draft {
+  color: var(--aide-accent);
+  font-weight: 600;
 }
 
 .pi-check {

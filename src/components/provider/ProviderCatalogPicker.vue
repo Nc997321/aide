@@ -5,6 +5,11 @@ import { useProviders } from "@/composables/useProviders";
 import ProviderLogo from "../ProviderLogo.vue";
 import type { ProviderKind } from "@/types";
 
+const props = defineProps<{
+  /** 额外置灰的 kind（如未保存草稿占用的类型），提示语与「已添加」区分 */
+  extraDisabledKinds?: ProviderKind[];
+}>();
+
 const emit = defineEmits<{
   (e: "select", kind: ProviderKind): void;
   (e: "select-custom"): void;
@@ -19,7 +24,7 @@ onMounted(() => { void loadCatalog(); });
 const addedKinds = computed<ProviderKind[]>(() => allProviders.value.map((p) => p.kind));
 const presets = computed(() => availablePresets(addedKinds.value));
 const disabledKinds = computed<Set<ProviderKind>>(() => {
-  return new Set(allProviders.value.map((p) => p.kind));
+  return new Set([...addedKinds.value, ...(props.extraDisabledKinds ?? [])]);
 });
 
 function pick(kind: ProviderKind) {
@@ -39,7 +44,9 @@ function pick(kind: ProviderKind) {
           class="preset-card"
           :class="{ disabled: disabledKinds.has(p.kind) }"
           :disabled="disabledKinds.has(p.kind)"
-          v-tooltip="disabledKinds.has(p.kind) ? '已添加（单实例）' : p.base_url || 'Anthropic 官方端点'"
+          v-tooltip="disabledKinds.has(p.kind)
+            ? ((props.extraDisabledKinds ?? []).includes(p.kind) ? '编辑中（未保存草稿）' : '已添加（单实例）')
+            : (p.base_url || 'Anthropic 官方端点')"
           @click="pick(p.kind)"
         >
           <span class="preset-logo"><ProviderLogo :kind="p.kind" :text="p.icon" :size="24" /></span>

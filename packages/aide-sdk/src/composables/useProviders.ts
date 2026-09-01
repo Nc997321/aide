@@ -85,15 +85,30 @@ async function load(): Promise<void> {
   loaded.value = true;
 }
 
-async function addProvider(partial: Partial<ProviderConfig> = {}): Promise<ProviderConfig> {
+/** 追加一条 provider 并整体落盘（secrets 只附加到该条）。 */
+async function insertProvider(
+  p: ProviderConfig,
+  secrets: Partial<Pick<ProviderConfigInput, "apiKey" | "authToken">> = {},
+): Promise<ProviderConfig> {
+  allProviders.value = [...allProviders.value, p];
+  await api.setProviders(
+    allProviders.value.map((provider) => providerInput(provider, provider.id === p.id ? secrets : undefined)),
+  );
+  return p;
+}
+
+async function addProvider(
+  partial: Partial<ProviderConfig> = {},
+  secrets: Partial<Pick<ProviderConfigInput, "apiKey" | "authToken">> = {},
+): Promise<ProviderConfig> {
   const p: ProviderConfig = {
     id: generateId(),
     kind: partial.kind ?? "custom",
     name: partial.name ?? "新供应商",
     icon: partial.icon ?? "provider",
     baseUrl: partial.baseUrl ?? "",
-    apiKeyConfigured: false,
-    authTokenConfigured: false,
+    apiKeyConfigured: secrets.apiKey?.action === "set",
+    authTokenConfigured: secrets.authToken?.action === "set",
     model: partial.model ?? "",
     modelMappings: partial.modelMappings ?? emptyMappings(),
     effortLevel: partial.effortLevel ?? "",
@@ -102,17 +117,21 @@ async function addProvider(partial: Partial<ProviderConfig> = {}): Promise<Provi
     maxContextTokens: partial.maxContextTokens ?? "",
     knownModels: partial.knownModels ?? [],
   };
-  allProviders.value = [...allProviders.value, p];
-  await persist();
-  return p;
+  return insertProvider(p, secrets);
 }
 
 /**
  * 新增预置 kind 实例。单实例约束：同 kind 已存在则抛错（picker 也会置灰，这是双保险）。
  * 身份字段（name/icon/baseUrl）从 catalog 富化填入——仅显示用；落盘时 Rust strip 只存
- * kind + 凭证 + mappings + 行为字段。凭证留空待用户填。
+ * kind + 凭证 + mappings + 行为字段。
+ * fields：草稿表单收集的行为字段（mappings/effort/压缩参数/模型列表等）；
+ * secrets：保存时一并写入的凭据（避免先落盘空凭据再补一次）。
  */
-async function addPresetProvider(kind: ProviderKind): Promise<ProviderConfig> {
+async function addPresetProvider(
+  kind: ProviderKind,
+  fields: Partial<ProviderConfig> = {},
+  secrets: Partial<Pick<ProviderConfigInput, "apiKey" | "authToken">> = {},
+): Promise<ProviderConfig> {
   if (allProviders.value.some((p) => p.kind === kind)) {
     throw new Error(`该供应商类型已存在（单实例约束）：${kind}`);
   }
@@ -120,15 +139,20 @@ async function addPresetProvider(kind: ProviderKind): Promise<ProviderConfig> {
   const p: ProviderConfig = enrichForDisplay({
     id: generateId(),
     kind,
-    name: "", icon: "", baseUrl: "",
-    apiKeyConfigured: false, authTokenConfigured: false, model: "",
-    modelMappings: emptyMappings(),
-    effortLevel: "", autoCompactWindow: "", autocompactPctOverride: "", maxContextTokens: "",
-    knownModels: [],
+    name: "",
+    icon: "",
+    baseUrl: "",
+    apiKeyConfigured: secrets.apiKey?.action === "set",
+    authTokenConfigured: secrets.authToken?.action === "set",
+    model: fields.model ?? "",
+    modelMappings: fields.modelMappings ?? emptyMappings(),
+    effortLevel: fields.effortLevel ?? "",
+    autoCompactWindow: fields.autoCompactWindow ?? "",
+    autocompactPctOverride: fields.autocompactPctOverride ?? "",
+    maxContextTokens: fields.maxContextTokens ?? "",
+    knownModels: fields.knownModels ?? [],
   });
-  allProviders.value = [...allProviders.value, p];
-  await persist();
-  return p;
+  return insertProvider(p, secrets);
 }
 
 /** 新增 Custom 实例——全部字段可编辑，身份由用户填。 */
