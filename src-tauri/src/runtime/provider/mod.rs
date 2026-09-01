@@ -22,6 +22,7 @@ pub enum ProviderKind {
     #[serde(rename = "deepseek")]
     DeepSeek,
     Zhipu,
+    Qwen,
     #[default]
     Custom,
 }
@@ -611,6 +612,7 @@ fn classify_by_base_url(base_url: &str) -> ProviderKind {
         ProviderKind::Kimi,
         ProviderKind::DeepSeek,
         ProviderKind::Zhipu,
+        ProviderKind::Qwen,
         ProviderKind::SystemDefault,
     ] {
         if let Some(preset) = catalog_find(kind) {

@@ -236,6 +236,7 @@ export type ProviderKind =
   | "kimi"
   | "deepseek"
   | "zhipu"
+  | "qwen"
   | "custom";
 
 /** 与 Rust `AuthMode` enum 对齐（serde rename_all = "snake_case"）。 */
@@ -245,6 +246,17 @@ export type AuthMode = "api_key" | "auth_token";
  * 与 Rust `CatalogPreset` 对齐。⚠️ Rust 此 struct 无 rename_all → 字段 snake_case
  *（与 ProviderConfig 的 camelCase 不同形）。`base_url`/`auth_mode` 保持 snake。
  */
+/** 预置供应商的表单默认值（与 Rust `CatalogDefaults` 对齐，snake_case）。
+ *  仅前端建草稿时预填用——保存后落进 ProviderConfig.modelMappings / maxContextTokens。 */
+export interface CatalogDefaults {
+  anthropic_model: string;
+  default_opus_model: string;
+  default_sonnet_model: string;
+  default_haiku_model: string;
+  subagent: string;
+  max_context_tokens: string;
+}
+
 export interface CatalogPreset {
   kind: ProviderKind;
   name: string;
@@ -252,6 +264,8 @@ export interface CatalogPreset {
   base_url: string;
   auth_mode: AuthMode;
   actions: string[];
+  /** 预填表单的默认模型值；无默认值的预置不携带（Rust Option → JSON 缺省） */
+  defaults?: CatalogDefaults;
 }
 
 /** Claude 专属的模型 env 变量映射——5 个变量统一在此，换 provider 时整块重写。

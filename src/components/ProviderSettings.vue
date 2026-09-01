@@ -84,7 +84,22 @@ function buildDraft(kind: ProviderKind): ProviderConfig {
     maxContextTokens: "",
     knownModels: [],
   };
-  return kind === "custom" ? base : enrichForDisplay(base);
+  if (kind === "custom") return base;
+  const enriched = enrichForDisplay(base);
+  // catalog 携带 defaults（如千问）→ 预填模型档位映射 + 上下文窗口，
+  // 用户只需填凭证；保存时这些值随草稿一次性落盘。
+  const d = presetForKind(kind)?.defaults;
+  if (d) {
+    enriched.modelMappings = {
+      anthropicModel: d.anthropic_model,
+      defaultOpusModel: d.default_opus_model,
+      defaultSonnetModel: d.default_sonnet_model,
+      defaultHaikuModel: d.default_haiku_model,
+      subagent: d.subagent,
+    };
+    enriched.maxContextTokens = d.max_context_tokens;
+  }
+  return enriched;
 }
 
 const isDraft = computed(() => !!draft.value && selectedId.value === draft.value.id);

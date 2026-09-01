@@ -124,6 +124,7 @@ pub mod custom;
 pub mod deepseek;
 pub mod kimi;
 pub mod ollama;
+pub mod qwen;
 pub mod system_default;
 pub mod zhipu;
 
@@ -140,6 +141,7 @@ pub fn strategy_for(kind: ProviderKind) -> Box<dyn ProviderStrategy> {
         ProviderKind::Kimi => crate::runtime::provider::strategy::kimi::strategy(),
         ProviderKind::DeepSeek => crate::runtime::provider::strategy::deepseek::strategy(),
         ProviderKind::Zhipu => crate::runtime::provider::strategy::zhipu::strategy(),
+        ProviderKind::Qwen => crate::runtime::provider::strategy::qwen::strategy(),
     }
 }
 
@@ -218,6 +220,7 @@ mod tests {
             ProviderKind::Kimi,
             ProviderKind::DeepSeek,
             ProviderKind::Zhipu,
+            ProviderKind::Qwen,
         ] {
             let s = strategy_for(k);
             assert_eq!(

@@ -14,6 +14,25 @@ pub enum AuthMode {
     AuthToken,
 }
 
+/// 预置供应商的表单默认值（模型档位映射 + 上下文窗口）。
+/// 仅前端建草稿时预填用——不参与运行时 env 组装；用户保存草稿后这些值落进
+/// provider 的 modelMappings / maxContextTokens，由既有注入链路生效。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct CatalogDefaults {
+    #[serde(default)]
+    pub anthropic_model: String,
+    #[serde(default)]
+    pub default_opus_model: String,
+    #[serde(default)]
+    pub default_sonnet_model: String,
+    #[serde(default)]
+    pub default_haiku_model: String,
+    #[serde(default)]
+    pub subagent: String,
+    #[serde(default)]
+    pub max_context_tokens: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CatalogPreset {
     pub kind: ProviderKind,
@@ -22,6 +41,9 @@ pub struct CatalogPreset {
     pub base_url: String,
     pub auth_mode: AuthMode,
     pub actions: Vec<String>,
+    /// 预填表单的默认模型值；无默认值的预置（如 Anthropic 官方）不写此字段
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defaults: Option<CatalogDefaults>,
 }
 
 static CATALOG: OnceLock<Vec<CatalogPreset>> = OnceLock::new();
@@ -110,6 +132,18 @@ pub fn resolve_preset_identity(kind: ProviderKind) -> Option<(String, String, St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qwen_defaults_parsed_from_catalog() {
+        let p = catalog_find(ProviderKind::Qwen).unwrap();
+        let d = p.defaults.as_ref().expect("qwen must carry defaults");
+        assert_eq!(d.anthropic_model, "qwen3.8-max");
+        assert_eq!(d.default_haiku_model, "qwen3.6-flash");
+        assert_eq!(d.subagent, "qwen3.7-max");
+        assert_eq!(d.max_context_tokens, "983616");
+        // 无默认值的预置不携带 defaults（向后兼容：老 JSON 无此字段也能解析）
+        assert!(catalog_find(ProviderKind::Zhipu).unwrap().defaults.is_none());
+    }
 
     #[test]
     fn catalog_loads_five_presets() {
