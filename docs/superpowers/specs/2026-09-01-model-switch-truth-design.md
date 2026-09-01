@@ -79,11 +79,13 @@ cmd.model_switch_confirm_decision: { sid, approve: boolean, confirmId }
 | sidecar 策略 | shouldConfirmModelSwitch 三臂（冷放行/热小体量放行/热大体量询问） | `modelSwitchGuard.test.ts` 策略 describe | vitest 绿 |
 | sidecar hook | PreModelSwitch 挂起（事件字段断言）/allow 零表态/deny 输出/过期 ID 忽略/连续切换接管/超时兜底（fake timers）/dispose | 同上 6 例 | vitest 绿 |
 | sidecar hook | PostModelSwitch 分流（onCommitted 字段映射） | 同上 | vitest 绿 |
-| sidecar 注册 | buildBuiltinHooks 的 PreModelSwitch/PostModelSwitch 分组、guard=null 不挂载 | `builtinHooks/index.test.ts` | vitest 绿 |
-| sidecar 回执 | applyModelSwitch 成功仅坐实+广播（ok 回执换轴断言）；失败回滚+err 回执不变 | `modelSwitch.test.ts` | vitest 绿 |
-| SDK 路由 | events.ts：model_switch_confirm 建状态、model_committed 清弹窗+commitModelFromRuntime | `useChatSession.test.ts`（透传用例） | vitest 绿 |
+| sidecar 注册 | buildBuiltinHooks：guard=null 两键缺席+不入 manifest / guard 非空两 hook 分组+manifest 登记 | `builtinHooks/index.test.ts` 6 例 | vitest 绿 |
+| sidecar 回执 | applyModelSwitch 成功**零本地副作用**（坐实/广播/回执全交 model_committed 链，deny-.resolve 幻影防护）；失败回滚+err 回执不变 | `modelSwitch.test.ts` | modelSwitch.ts stmt 100%/branch 90%/lines 100%（v8） |
+| SDK 路由 | events.ts：model_switch_confirm 建状态（字段映射+非法枚举兜底）、model_committed 清弹窗+currentModel 坐实+落盘、model_switch_result 终态清弹窗（超时 deny 黑洞回归）、models_available spawn 对账落盘链 | `useChatSession.test.ts` 4 例 | events.ts stmt 79.78%/branch 67.45%/lines 82.35%（v8 实测，新 case 语句已覆盖；未覆盖为既有其他行） |
 | SDK identity | settleOnSend provider-only（绑定/落盘/基线/失败降级/IPC 节流）+ commitModelFromRuntime 四例 | `useSessionIdentity.test.ts` | vitest 绿 |
 | SDK gate | needsConfirm/provider 决策包（model 维度废除回归） | `confirmGate.test.ts` | vitest 绿 |
 | UI 集成 | ChatPanel：同会话切换模型发送**不再弹** __sendConfirm__（旧行为废除回归） | `ChatPanel.test.ts` | vitest 绿 |
 
-机械检查终态：前端 **155 files / 1709 全绿**；sidecar **40 files / 575 全绿**；vue-tsc 与 tsc 双零错误；dist/runtime.js 已重建。22 个旧设计断言按换代改写（非回归）：基线 provider 化、settleOnSend 签名收窄、成功回执换轴、门控 model 维度删除。
+| UI 弹窗 | ModelSwitchConfirm：渲染成本明细、decide(true/false) 回传与清态、api 失败 finally 兜底 | `ModelSwitchConfirm.test.ts` 4 例 | vitest 绿 |
+
+机械检查终态：前端 **156 files / 1718 全绿**；sidecar **40 files / 577 全绿**（含 modelSwitchGuard 11 例）；vue-tsc 与 tsc 双零错误；dist/runtime.js 已重建。覆盖率（v8 实测）：guard 全量 statements 97.56/branch 93.75/lines 100；modelSwitch.ts 100/90/100；events.ts 79.78/67.45/82.35（新 case 语句全覆盖）。22 个旧设计断言按换代改写（非回归）：基线 provider 化、settleOnSend 签名收窄、成功回执换轴、门控 model 维度删除、成功链路零本地副作用。

@@ -43,24 +43,18 @@ export function applyModelSwitch(p: ModelSwitchParams): void {
     broadcast(p.model);
     return;
   }
-  p.query
-    .setModel(p.model)
-    .then(() => {
-      // 只坐实本地账 + 广播同步下拉。成功回执不发在这里——SDK 0.3.252 起切换的
-      //「真实完成」由 PostModelSwitch hook 坐实（model_committed 事件驱动 ok 回执，
-      // 见 modelSwitchGuard.onCommitted）。hook 挂起（成本确认弹窗）期间 setModel
-      // 不 resolve，旧直发回执会把「弹窗等待中」当成功上报。
-      p.commit(p.model);
-      broadcast(p.model);
-    })
-    .catch((e: unknown) => {
-      broadcast(p.currentModel);
-      p.emit({
-        type: "model_switch_result",
-        ok: false,
-        model: p.model,
-        display,
-        error: String((e as Error)?.message ?? e),
-      });
+  // 成功链路零动作：坐实/广播/回执全部交给 PostModelSwitch 的 model_committed 链
+  // （回执=事实）。SDK 不保证 setModel 在 hook deny 后必 reject——若 resolve 而无
+  // PostModelSwitch 到达，此处的 commit/broadcast 会把「被拒的新模型」坐实进程账面，
+  // 此后用户重选同一模型被同值守卫吞掉（永远切不过去）。
+  p.query.setModel(p.model).catch((e: unknown) => {
+    broadcast(p.currentModel);
+    p.emit({
+      type: "model_switch_result",
+      ok: false,
+      model: p.model,
+      display,
+      error: String((e as Error)?.message ?? e),
     });
+  });
 }

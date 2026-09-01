@@ -668,6 +668,112 @@ describe("useChatSession per-session store", () => {
     });
   });
 
+  it("model_switch_confirm 建成本确认状态（wire 字段映射 + 非法枚举兜底）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    expect(chat.modelSwitchConfirm.value).toBeNull();
+
+    emit({
+      type: "model_switch_confirm",
+      confirm_id: "switch-confirm-x1",
+      from_model: "kimi",
+      to_model: "fable-resolved:full-id",
+      source: "sdk",
+      context_tokens: 123456,
+      prompt_cache_warm: true,
+      estimated_cache_write_usd: 1.25,
+      cache_ttl: "5m",
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.modelSwitchConfirm.value).toEqual({
+      confirmId: "switch-confirm-x1",
+      fromModel: "kimi",
+      toModel: "fable-resolved:full-id",
+      source: "sdk",
+      contextTokens: 123456,
+      promptCacheWarm: true,
+      estimatedCacheWriteUsd: 1.25,
+      cacheTtl: "5m",
+    });
+
+    // 非法 source/cache_ttl（wire 脏值）→ 收窄兜底，不把 string 塞进字面量联合
+    emit({
+      type: "model_switch_confirm",
+      confirm_id: "switch-confirm-x2",
+      from_model: "kimi",
+      to_model: "fable-x",
+      source: "hijack",
+      context_tokens: 80_000,
+      prompt_cache_warm: false,
+      estimated_cache_write_usd: 0,
+      cache_ttl: "bogus",
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.modelSwitchConfirm.value?.source).toBe("sdk");
+    expect(chat.modelSwitchConfirm.value?.cacheTtl).toBe("5m");
+  });
+
+  it("model_committed：清确认弹窗 + currentModel 坐实 + 落盘 requested_model（事件驱动落盘主链路）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+
+    emit({
+      type: "model_switch_confirm",
+      confirm_id: "c1", from_model: "kimi", to_model: "fable", source: "sdk",
+      context_tokens: 10, prompt_cache_warm: true, estimated_cache_write_usd: 0, cache_ttl: "5m",
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.modelSwitchConfirm.value).not.toBeNull();
+
+    // 切换真实完成：弹窗清 + currentModel 同步（requested 命名空间）+ 落盘
+    emit({
+      type: "model_committed",
+      from_model: "kimi", to_model: "fable-resolved:full", requested_model: "fable", source: "sdk",
+      session_id: "uuid-a",
+    });
+    await flush();
+    invokeMock.mockClear();
+    // 同值重放：幂等（不重复落盘）
+    emit({
+      type: "model_committed",
+      from_model: "kimi", to_model: "fable-resolved:full", requested_model: "fable", source: "sdk",
+      session_id: "uuid-a",
+    });
+    await flush();
+    const modelCalls = invokeMock.mock.calls.filter((c) => c[0] === "set_session_model");
+    expect(modelCalls.length).toBe(0); // 首坐实已落盘；同值重放被幂等跳过（不再写盘）
+  });
+
+  it("model_switch_result 终态清挂起弹窗（超时 deny 前端黑洞回归）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+
+    emit({
+      type: "model_switch_confirm",
+      confirm_id: "c-timeout", from_model: "kimi", to_model: "fable", source: "sdk",
+      context_tokens: 80_000, prompt_cache_warm: true, estimated_cache_write_usd: 0, cache_ttl: "5m",
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.modelSwitchConfirm.value).not.toBeNull();
+
+    // sidecar 10s 超时自动 deny → setModel reject → ok:false 终态回执
+    emit({
+      type: "model_switch_result",
+      ok: false, model: "fable", display: "Fable", error: "model_switch_timeout",
+      session_id: "uuid-a",
+    });
+    await flush();
+    // 黑洞回归：弹窗被终结（不再滞留），否则后到的 allow 被静默吞掉
+    expect(chat.modelSwitchConfirm.value).toBeNull();
+  });
+
   it("context_compaction 只维护会话瞬态状态，失败会保留到下一轮", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);

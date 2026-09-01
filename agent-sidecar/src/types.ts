@@ -153,13 +153,15 @@ export type ChatEvent =
       confirm_id: string;
       from_model: string;
       to_model: string;
-      source: string;
+      // SDK 预声明的切换来源枚举（PreModelSwitchHookInput.source）
+      source: "command" | "picker" | "sdk";
       context_tokens: number;
       prompt_cache_warm: boolean;
       estimated_cache_write_usd: number;
-      cache_ttl: string;
+      cache_ttl: "5m" | "1h";
     }
-  // 模型切换的进程坐实（SDK PostModelSwitch）：切换真实完成后到达。前端据此落盘
+  // 模型切换的进程坐实（SDK PostModelSwitch）：切换真实完成后到达（source 同 SDK 枚举；
+  // 前端 own 的 models_available spawn 对账不经事件通道）。前端据此落盘
   // 模型身份（用 requested_model——用户命名空间的下拉别名，可被 restoreModel 恢复；
   // to_model 是 CLI resolved 全名，不做记忆值）并发出成功回执。
   | {
@@ -167,7 +169,7 @@ export type ChatEvent =
       from_model: string;
       to_model: string;
       requested_model: string | null;
-      source: string;
+      source: "command" | "picker" | "sdk" | "auto" | "resume";
     }
   | { type: "permission_modes_available"; modes: PermissionModeOption[]; current: string; error?: string }
   // 会话建立时 SDK 回传的权威 slash commands 清单（内置命令 + skills + 自定义命令），

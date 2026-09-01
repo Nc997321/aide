@@ -336,10 +336,13 @@ export class SessionWorker {
         emit: (e) => this.emit(e),
         onCommitted: (p) => {
           // requested 是用户命名空间（下拉别名，restoreModel 可恢复）——优先落账；
-          // to_model 是 CLI resolved 全名，经 resolveDropdownValue 映回下拉 value。
+          // to_model 是 CLI resolved 全名，经 resolveDropdownValue 归一回下拉 value。
+          // 账面（currentModel）与回执只在用户显式切换（source='sdk'）时更新/发出：
+          // resume/auto 是 CLI 内部动作（恢复会话/自动兜底），发 ok 回执会让前端弹
+          // 用户没做的「已切换」提示，且 resolved 全名直写账面会与下拉别名命名空间
+          // 混注（同值守卫跨命名空间比较会误吞/漏判）。
           const value = p.requested ?? this.resolveDropdownValue(p.to);
           const display = this.lastModels.find((m) => m.value === value)?.displayName ?? value;
-          if (value) this.currentModel = value;
           this.emit({
             type: "model_committed",
             from_model: p.from,
@@ -347,9 +350,12 @@ export class SessionWorker {
             requested_model: p.requested,
             source: p.source,
           });
-          // 回执=事实：成功回执由 model_committed 到达驱动（原 setModel.then 直发会把
-          //「hook 阻塞中/未生效」当成功——设计稿 §3 的回执换轴）
-          this.emit({ type: "model_switch_result", ok: true, model: value, display });
+          if (p.source === "sdk") {
+            if (value) this.currentModel = value;
+            // 回执=事实：成功回执由 model_committed 到达驱动（setModel.then 直发会把
+            //「hook 阻塞中/未生效」当成功——设计稿 §3 的回执换轴）
+            this.emit({ type: "model_switch_result", ok: true, model: value, display });
+          }
         },
       });
     }

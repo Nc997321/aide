@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
+import { makeModelSwitchGuard } from "../modelSwitchGuard";
 import { BUILTIN_HOOKS, buildBuiltinHooks } from "./index";
+import type { ChatEvent } from "../types.js";
 
 // session 桩：registry 通过依赖注入的 ctx.session 调 private 方法（policy/stopEffort/
 // modelSwitchGuard）。guard 返回 null（支线场景）→ 两个 switch hook 不挂载。
@@ -38,5 +40,37 @@ describe("builtinHooks registry", () => {
     };
     const { hooks } = buildBuiltinHooks(ctx);
     expect(hooks.PreToolUse[0].matcher).toBe(".*");
+  });
+
+  it("guard=null（支线场景）→ PreModelSwitch/PostModelSwitch 两键缺席且不入 manifest", () => {
+    const ctx = {
+      cwd: "/x",
+      env: {},
+      session: sessionStub,
+    };
+    const { hooks, manifest } = buildBuiltinHooks(ctx);
+    expect(hooks.PreModelSwitch).toBeUndefined();
+    expect(hooks.PostModelSwitch).toBeUndefined();
+    expect(manifest.some((m) => m.id === "modelSwitchGuard" || m.id === "modelSwitchCommitted")).toBe(false);
+  });
+
+  it("guard 非空 → 两 hook 分组挂载 + manifest 登记（switchGuard 一对）", () => {
+    const guard = makeModelSwitchGuard({
+      emit: (_e: ChatEvent) => {},
+      onCommitted: () => {},
+    });
+    const ctx = {
+      cwd: "/x",
+      env: {},
+      session: {
+        ...sessionStub,
+        makeModelSwitchGuard: () => guard,
+      },
+    };
+    const { hooks, manifest } = buildBuiltinHooks(ctx);
+    expect(hooks.PreModelSwitch).toHaveLength(1);
+    expect(hooks.PostModelSwitch).toHaveLength(1);
+    expect(manifest.some((m) => m.id === "modelSwitchGuard" && m.event === "PreModelSwitch")).toBe(true);
+    expect(manifest.some((m) => m.id === "modelSwitchCommitted" && m.event === "PostModelSwitch")).toBe(true);
   });
 });

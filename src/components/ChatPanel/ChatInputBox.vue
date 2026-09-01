@@ -138,7 +138,7 @@ function handleModelChange(value: string) {
     btwModel.value = value;
     return;
   }
-  // 用户手选 → L2 草稿（不落盘，发送时 settleOnSend 才落盘）。运行时切换走 emit set-model。
+  // 用户手选 → L2 草稿（不落盘；落盘由 model_committed/models_available 的进程坐实事件驱动，见 2026-09-01 设计稿）。
   identity.setUserChoice(value);
   emit("set-model", value);
 }

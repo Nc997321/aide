@@ -5,8 +5,8 @@ import {
   shouldConfirmModelSwitch,
   CONFIRM_CONTEXT_TOKENS_THRESHOLD,
   CONFIRM_DECISION_TIMEOUT_MS,
-  type ChatEvent,
 } from "./modelSwitchGuard.js";
+import type { ChatEvent } from "./types.js";
 
 /**
  * 模型切换守卫的分支覆盖：策略三臂（冷放行/热小体量放行/热大体量询问）、
@@ -35,8 +35,9 @@ function makeHarness(): Harness {
   return { guard, pre: guard.preSwitchHook, post: guard.postSwitchHook, committed, events };
 }
 
+/** HookCallback 三参签名：工具缝参数（toolUseID/options）对守卫无意义，测试桩给空值。 */
 async function preResult(pre: HookCallback, input: HookInput): Promise<Record<string, unknown>> {
-  return (await pre(input)) as Record<string, unknown>;
+  return (await pre(input, undefined, { signal: new AbortController().signal })) as Record<string, unknown>;
 }
 
 function denyDecisionOf(result: Record<string, unknown>): string | undefined {
@@ -122,7 +123,7 @@ describe("makeModelSwitchGuard", () => {
     const { post, committed, events } = makeHarness();
     await post(switchInput({
       from_model: "sonnet", to_model: "fable-x", requested_model: "fable", source: "sdk",
-    }, "PostModelSwitch"));
+    }, "PostModelSwitch"), undefined, { signal: new AbortController().signal });
     expect(committed).toEqual([{ from: "sonnet", to: "fable-x", requested: "fable", source: "sdk" }]);
     expect(events).toHaveLength(0);
   });

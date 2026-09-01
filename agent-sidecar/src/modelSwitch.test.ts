@@ -33,15 +33,13 @@ describe("applyModelSwitch", () => {
     ]);
   });
 
-  it("切换成功：本地坐实 + 广播同步下拉；成功回执不再直发（由 PostModelSwitch 的 model_committed 到达驱动，见 modelSwitchGuard.onCommitted）", async () => {
+  it("切换成功：零本地副作用（坐实/广播/回执全部交给 PostModelSwitch 的 model_committed 链——SDK 不保证 hook deny 后 setModel 必 reject，.then 的坐实会把被拒模型写进账面）", async () => {
     const setModel = vi.fn(() => Promise.resolve());
     const { events, committed } = setup("sonnet", { setModel });
     expect(setModel).toHaveBeenCalledWith("opus");
     await flush();
-    expect(committed).toEqual(["opus"]);
-    expect(events).toEqual([
-      { type: "models_available", models: MODELS, current: "opus" },
-    ]);
+    expect(committed).toEqual([]);
+    expect(events).toEqual([]);
   });
 
   it("切换失败（CLI 驳回）：不坐实、回滚广播拉回旧值、失败回执带原因", async () => {
@@ -61,7 +59,7 @@ describe("applyModelSwitch", () => {
     ]);
   });
 
-  it("模型不在已知列表里：仅本地坐实 + 广播，无直发回执（display 组装随回执移至 model_committed 链路）", async () => {
+  it("模型不在已知列表里：成功链路零副作用（display 组装随回执一并移至 model_committed 链路）", async () => {
     const events: ChatEvent[] = [];
     applyModelSwitch({
       model: "some-third-party-id",
@@ -72,9 +70,7 @@ describe("applyModelSwitch", () => {
       commit: () => {},
     });
     await flush();
-    expect(events).toEqual([
-      { type: "models_available", models: MODELS, current: "some-third-party-id" },
-    ]);
+    expect(events).toEqual([]);
   });
 
   it("同值/空值守卫：不坐实、不广播、不回执", () => {

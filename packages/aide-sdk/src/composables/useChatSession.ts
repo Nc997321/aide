@@ -438,11 +438,11 @@ export function useChatSession(sessionId: Ref<string | null>) {
    *  Rust 返回 false，这里本地合成 deferred 回执（选择随下一条消息的
    *  initialModel 生效）——两条路都给用户可见反馈，不允许静默。
    *
-   *  ⚠️ 不在此处持久化（set_session_model）：切换是「草稿」，只有用户真正发送
-   *  才落盘（见 ChatPanel.performSend 的 setSessionModel）。否则切换后不发送、关闭
-   *  重开会读回切换后的模型（用户报告的 bug）。存活会话运行时切换（set_model）
-   *  不发 models_available，currentModel watcher 也不会持久化——所以这里去掉
-   *  立即落盘即可阻断「下拉切换 → 落盘」路径，落盘改到发送时。 */
+   *  ⚠️ 不在此处持久化（set_session_model）：切换是「草稿」，落盘由**进程坐实事件**
+   *  驱动（model_committed → commitModelFromRuntime，盘上身份=进程现实；首发前选定
+   *  场景由 models_available 对账补位——统见 2026-09-01-model-switch-truth-design.md）。
+   *  旧「落盘改到发送时」的 settleOnSend 模型落盘已废除：setModel 被驳回时发送前落盘
+   *  会把错模型写进盘。 */
   async function setModel(model: string) {
     const sid = sessionId.value;
     if (!sid) return;

@@ -56,9 +56,10 @@ export interface BuiltinHookManifest {
 export const builtinHooks = ref<BuiltinHookManifest[]>([
   { id: "policy", event: "PreToolUse", matcher: ".*", purpose: "工具权限门控（权威前置层，不可越过）" },
   { id: "subagentModel", event: "PreToolUse", matcher: "^(Agent|Task)$", purpose: "子代理模型选择兜底（条件挂）" },
-  { id: "imageGuard", event: "PreToolUse", matcher: "^Read$", purpose: "读图保护（image input 不可用时 deny）" },
   { id: "skillGuard", event: "PreToolUse", matcher: "^Skill$", purpose: "子代理重型 skill 名单拦截（条件挂）" },
   { id: "stopEffort", event: "Stop", matcher: "—", purpose: "读本轮 effort 盖到 message_stop" },
+  { id: "modelSwitchGuard", event: "PreModelSwitch", matcher: "—", purpose: "模型切换成本确认（缓存热+大体量才问，条件挂，支线不挂）" },
+  { id: "modelSwitchCommitted", event: "PostModelSwitch", matcher: "—", purpose: "模型切换坐实上报（前端落盘依据，条件挂，支线不挂）" },
 ]);
 
 // 内置 MCP server 静态清单（前端展示镜像）——in-process server 不写 settings.json、

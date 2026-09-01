@@ -146,12 +146,13 @@ export interface ModelSwitchConfirmRequest {
   confirmId: string;
   fromModel: string;
   toModel: string;
-  source: string;
+  /** SDK 预声明的切换来源枚举（PreModelSwitchHookInput.source） */
+  source: "command" | "picker" | "sdk";
   contextTokens: number;
   promptCacheWarm: boolean;
   /** SDK 报告的切过去重铺缓存预估美元成本。 */
   estimatedCacheWriteUsd: number;
-  cacheTtl: string;
+  cacheTtl: "5m" | "1h";
 }
 
 /** 模型切换的进程坐实（SDK PostModelSwitch）：切换真实完成。requestedModel 是
@@ -160,7 +161,8 @@ export interface ModelCommitted {
   fromModel: string;
   toModel: string;
   requestedModel: string | null;
-  source: string;
+  /** PostModelSwitch 枚举 + Aide 自有的 spawn 坐实对账来源（models_available 对账） */
+  source: "command" | "picker" | "sdk" | "auto" | "resume" | "spawn";
 }
 
 /** 权限模式选项——同 ModelOption：value 是 provider 自己认的不透明标识，

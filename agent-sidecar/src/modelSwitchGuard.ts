@@ -1,4 +1,9 @@
-import type { HookCallback, HookInput } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  HookCallback,
+  HookInput,
+  PreModelSwitchHookInput,
+  PostModelSwitchHookInput,
+} from "@anthropic-ai/claude-agent-sdk";
 import type { ChatEvent } from "./types.js";
 
 /**
@@ -15,41 +20,16 @@ export const CONFIRM_CONTEXT_TOKENS_THRESHOLD = 50_000;
 /** 前端决策超时：超时按 deny 收尾（挂起不悬死）。政策源：设计稿 §4。 */
 export const CONFIRM_DECISION_TIMEOUT_MS = 10_000;
 
-/** PreModelSwitch 输入的事实袋（SDK 输入字段全可选，逐字段 typeof 收窄后的形状）。 */
-export interface PreModelSwitchFacts {
-  from_model?: unknown;
-  to_model?: unknown;
-  source?: unknown;
-  context_tokens?: unknown;
-  prompt_cache_warm?: unknown;
-  estimated_cache_write_usd?: unknown;
-  cache_ttl?: unknown;
-}
-
 /** 策略：是否需要用户确认。冷缓存重铺是必然成本（问了只烦）；热 + 大体量才问。 */
 export function shouldConfirmModelSwitch(promptCacheWarm: boolean, contextTokens: number): boolean {
   return promptCacheWarm && contextTokens >= CONFIRM_CONTEXT_TOKENS_THRESHOLD;
 }
 
-/** SDK hook 输入 → 切换事实袋（Record 收窄是 SDK 库边界的既定例外，字段名穿透）。 */
-export function extractSwitchFacts(input: HookInput): PreModelSwitchFacts {
-  const r = input as Record<string, unknown>;
-  return {
-    from_model: r["from_model"],
-    to_model: r["to_model"],
-    source: r["source"],
-    context_tokens: r["context_tokens"],
-    prompt_cache_warm: r["prompt_cache_warm"],
-    estimated_cache_write_usd: r["estimated_cache_write_usd"],
-    cache_ttl: r["cache_ttl"],
-  };
-}
-
 export interface ModelSwitchGuardDeps {
   /** 向前端发事件（SessionWorker 注入，DeltaCoalescer 汇聚红线）。 */
   emit: (e: ChatEvent) => void;
-  /** 切换坐实回调（SessionWorker 注入：拼 current/broadcast 与前端事件）。 */
-  onCommitted: (payload: { from: string; to: string; requested: string | null; source: string }) => void;
+  /** 切换坐实回调（SessionWorker 注入：拼 current 账面与前端事件）。source 同 SDK 枚举。 */
+  onCommitted: (payload: { from: string; to: string; requested: string | null; source: "command" | "picker" | "sdk" | "auto" | "resume" }) => void;
 }
 
 export interface ModelSwitchGuard {
@@ -81,14 +61,15 @@ export function makeModelSwitchGuard(deps: ModelSwitchGuardDeps): ModelSwitchGua
 
   const preSwitchHook: HookCallback = async (input: HookInput) => {
     if (input.hook_event_name !== "PreModelSwitch") return {};
-    const facts = extractSwitchFacts(input);
-    const warm = facts.prompt_cache_warm === true;
-    const tokens = typeof facts.context_tokens === "number" ? facts.context_tokens : 0;
-    if (!shouldConfirmModelSwitch(warm, tokens)) return {};
+    // SDK 类型已精确声明该判别成员的全部字段（PreModelSwitchHookInput，含
+    // requested_model: string | null）——判别收窄后编译器可推，无需 typeof 阶梯。
+    const facts = input as PreModelSwitchHookInput;
+    if (!shouldConfirmModelSwitch(facts.prompt_cache_warm, facts.context_tokens)) return {};
     // 连续切换（旧确认还挂着）：旧请求按 deny 收尾，新请求接管槽位
     settlePending(false);
 
     activeConfirmId = `switch-confirm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // release! 非空断言：Promise executor 同步执行，gate 构造后必已赋值
     let release!: (allow: boolean) => void;
     const gate = new Promise<boolean>((r) => { release = r; });
     pending = { resolve: release };
@@ -97,14 +78,13 @@ export function makeModelSwitchGuard(deps: ModelSwitchGuardDeps): ModelSwitchGua
     deps.emit({
       type: "model_switch_confirm",
       confirm_id: activeConfirmId,
-      from_model: typeof facts.from_model === "string" ? facts.from_model : "",
-      to_model: typeof facts.to_model === "string" ? facts.to_model : "",
-      source: typeof facts.source === "string" ? facts.source : "sdk",
-      context_tokens: tokens,
-      prompt_cache_warm: warm,
-      estimated_cache_write_usd:
-        typeof facts.estimated_cache_write_usd === "number" ? facts.estimated_cache_write_usd : 0,
-      cache_ttl: typeof facts.cache_ttl === "string" ? facts.cache_ttl : "5m",
+      from_model: facts.from_model,
+      to_model: facts.to_model,
+      source: facts.source,
+      context_tokens: facts.context_tokens,
+      prompt_cache_warm: facts.prompt_cache_warm,
+      estimated_cache_write_usd: facts.estimated_cache_write_usd,
+      cache_ttl: facts.cache_ttl,
     });
 
     const allow = await gate;
@@ -122,12 +102,12 @@ export function makeModelSwitchGuard(deps: ModelSwitchGuardDeps): ModelSwitchGua
 
   const postSwitchHook: HookCallback = async (input: HookInput) => {
     if (input.hook_event_name !== "PostModelSwitch") return {};
-    const r = input as Record<string, unknown>;
+    const facts = input as PostModelSwitchHookInput;
     deps.onCommitted({
-      from: typeof r["from_model"] === "string" ? r["from_model"] : "",
-      to: typeof r["to_model"] === "string" ? r["to_model"] : "",
-      requested: typeof r["requested_model"] === "string" ? r["requested_model"] : null,
-      source: typeof r["source"] === "string" ? r["source"] : "",
+      from: facts.from_model,
+      to: facts.to_model,
+      requested: facts.requested_model,
+      source: facts.source,
     });
     return {};
   };
@@ -136,7 +116,7 @@ export function makeModelSwitchGuard(deps: ModelSwitchGuardDeps): ModelSwitchGua
     preSwitchHook,
     postSwitchHook,
     resolveConfirm(confirmId: string, approve: boolean): void {
-      // confirmId 对不上（过期的确认框晚点）不算数：只有当前挂起的 ID 能裁决
+      // confirmId 对不上（过期的确认框晚到）不算数：只有当前挂起的 ID 能裁决
       if (pending && confirmId === activeConfirmId) settlePending(approve);
     },
     dispose(): void {

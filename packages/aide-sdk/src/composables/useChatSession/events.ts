@@ -186,15 +186,26 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       store.currentModel = e["current"] as string;
       sharedModels.value = store.models;
       // 坐实 L2 身份层：runtimeModel 供 effectiveModel 优先级，sdkModels 供系统默认下拉。
-      // 不在此落盘（current 可能是 sidecar 解析的 Claude 别名，落盘会污染记忆）——
-      // 落盘只在发送前 settleOnSend（用户选的有效模型，可恢复）。
+      // 进程坐实对账落盘：current 是 sidecar 坐实的下拉 value（resolveDropdownValue
+      // 归一），按「盘上身份=进程现实」把它落盘（同值跳过在 commitModelFromRuntime 内）。
+      // 这是「首发前选定模型」唯一能落盘的通路——该场景全程不发生 model switch、
+      // 无 PostModelSwitch，settleOnSend 收窄后模型落盘无人补位（审查打回项 3）。
       identity.bindRuntime(sid, store.currentModel);
       identity.setSdkModels(sid, store.models);
+      void identity.commitModelFromRuntime(sid, {
+        fromModel: "",
+        toModel: store.currentModel,
+        requestedModel: store.currentModel,
+        source: "spawn",
+      });
       break;
     }
     case "model_switch_result": {
-      // 模型切换坐实回执——只有用户显式切换才收到（init/assistant 坐实不发），
-      // 交给面板弹瞬时提示。seq 单调递增：连续两次切同一个模型也触发 watcher。
+      // 模型切换终态回执（用户显式切换被受理：成功由 model_committed 驱动的
+      // onCommitted 发出，失败/超时由 applyModelSwitch catch 发出）。任何终态都
+      // 终结挂起的成本确认弹窗——否则超时自动 deny 后弹窗滞留，用户点「继续切换」
+      // 被已清空的挂起槽静默吞掉且不走回滚（下拉卡在从未生效的模型上）。
+      store.modelSwitchConfirm = null;
       store.modelSwitchResult = {
         ok: e["ok"] as boolean,
         model: e["model"] as string,
@@ -208,15 +219,17 @@ export function handleChatEvent(e: Record<string, unknown>): void {
     case "model_switch_confirm": {
       // 模型切换成本确认（SDK PreModelSwitch hook 挂起）：非 null 即弹确认框；
       // 决定经 api.modelSwitchConfirmDecision 回传，回传后由 UI 置 null。
+      const src = e["source"];
+      const ttl = e["cache_ttl"];
       store.modelSwitchConfirm = {
         confirmId: e["confirm_id"] as string,
         fromModel: e["from_model"] as string,
         toModel: e["to_model"] as string,
-        source: e["source"] as string,
+        source: src === "command" || src === "picker" ? src : "sdk",
         contextTokens: e["context_tokens"] as number,
         promptCacheWarm: e["prompt_cache_warm"] === true,
         estimatedCacheWriteUsd: e["estimated_cache_write_usd"] as number,
-        cacheTtl: e["cache_ttl"] as string,
+        cacheTtl: ttl === "1h" ? "1h" : "5m",
       };
       break;
     }
