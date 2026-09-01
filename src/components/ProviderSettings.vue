@@ -14,6 +14,9 @@
  * - 添加走草稿态：picker 选中只建本地 draft（不进 store、不落盘），左侧列表显示
  *   「未保存草稿」虚线项；点「保存」才 addPresetProvider/addProvider 一次性落盘
  *   （身份 + 行为字段 + 凭证单次 setProviders），「取消」丢弃。避免半成品入库。
+ * - knownModels 手动标签编辑已移除：会话面板下拉动态列表由 sidecar models_available
+ *   提供、映射字段值也进列表（providerModelList），字段保留仅为兼容旧存量数据
+ *   （仍参与下拉兜底与一致性校验）；datalist 建议源改为映射字段现有值合并。
  */
 import { ref, computed, watch, onMounted } from "vue";
 import { useProviders } from "../composables/useProviders";
@@ -268,20 +271,22 @@ async function handleDelete() {
   showToast("已删除", "info");
 }
 
-// ── known_models 标签管理（保留现有逻辑，改成不可变更新以配合 watch 深拷贝）──
-const newModelTag = ref("");
-function addModelTag() {
-  if (!form.value) return;
-  const tag = newModelTag.value.trim();
-  if (tag && !form.value.knownModels.includes(tag)) {
-    form.value.knownModels = [...form.value.knownModels, tag];
-  }
-  newModelTag.value = "";
-}
-function removeModelTag(idx: number) {
-  if (!form.value) return;
-  form.value.knownModels = form.value.knownModels.filter((_, i) => i !== idx);
-}
+// ── 模型建议（datalist autocomplete 源）：映射字段现有值 + 存量 knownModels。
+//    手动标签编辑 UI 已移除——会话面板下拉的动态列表由 sidecar models_available
+//    提供，映射字段值也进列表（providerModelList），knownModels 仅兼容旧数据。──
+const modelSuggestions = computed<string[]>(() => {
+  const f = form.value;
+  if (!f) return [];
+  const vals = [
+    f.modelMappings.anthropicModel,
+    f.modelMappings.defaultOpusModel,
+    f.modelMappings.defaultSonnetModel,
+    f.modelMappings.defaultHaikuModel,
+    f.modelMappings.subagent,
+    ...f.knownModels,
+  ].filter((v): v is string => !!v);
+  return [...new Set(vals)];
+});
 </script>
 
 <template>
@@ -549,28 +554,6 @@ function removeModelTag(idx: number) {
           </div>
         </div>
 
-        <!-- 模型列表：会话面板模型下拉的数据源（真实模型 id，不做别名映射） -->
-        <div class="form-section">
-          <label>模型列表</label>
-          <span class="form-hint">会话面板的模型下拉从这里取，填该供应商的真实模型 id</span>
-          <div class="tags-area">
-            <span
-              v-for="(m, idx) in form.knownModels"
-              :key="idx"
-              class="model-tag"
-            >
-              {{ m }}
-              <button class="tag-remove" @click="removeModelTag(idx)">×</button>
-            </span>
-            <input
-              v-model="newModelTag"
-              class="tag-input"
-              placeholder="输入后回车添加"
-              @keydown.enter.prevent="addModelTag"
-            />
-          </div>
-        </div>
-
         <!-- 专属操作区：按 kind dispatch（Custom 不渲染；草稿未落盘也无操作） -->
         <ProviderActions v-if="selectedProvider && !isDraft" :provider="selectedProvider" />
       </div>
@@ -609,9 +592,10 @@ function removeModelTag(idx: number) {
     @cancel="showPicker = false"
   />
 
-  <!-- 已知模型 datalist（子代理/默认模型输入的 autocomplete 源） -->
+  <!-- 模型建议 datalist（子代理/默认模型输入的 autocomplete 源）：
+       映射字段现有值 + 存量 knownModels（旧数据仍生效，只是不再手动编辑） -->
   <datalist id="known-models-list">
-    <option v-for="m in form?.knownModels ?? []" :key="m" :value="m" />
+    <option v-for="m in modelSuggestions" :key="m" :value="m" />
   </datalist>
 </template>
 
@@ -899,60 +883,6 @@ select.text-input {
   font-size: 11px;
   color: var(--aide-text-muted);
   margin: 4px 0 6px;
-}
-
-/* ── Tags ── */
-
-.tags-area {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 6px;
-  background: var(--aide-bg-base);
-  border: 1px solid var(--aide-surface-hover);
-  border-radius: var(--aide-radius-sm);
-  min-height: 32px;
-  align-items: center;
-}
-
-.model-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  background: var(--aide-surface-default);
-  border-radius: 4px;
-  padding: 2px 6px;
-  font-size: 11px;
-  color: var(--aide-text-primary);
-}
-
-.tag-remove {
-  background: none;
-  border: none;
-  color: var(--aide-text-muted);
-  cursor: pointer;
-  font-size: 12px;
-  padding: 0 2px;
-  line-height: 1;
-}
-
-.tag-remove:hover {
-  color: var(--aide-danger);
-}
-
-.tag-input {
-  border: none;
-  background: transparent;
-  outline: none;
-  font-size: 11px;
-  color: var(--aide-text-primary);
-  min-width: 80px;
-  flex: 1;
-  font-family: inherit;
-}
-
-.tag-input::placeholder {
-  color: var(--aide-text-muted);
 }
 
 /* ── Action buttons ── */
