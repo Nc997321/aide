@@ -19,7 +19,7 @@ import { useToast } from "../composables/useToast";
 import { useModal } from "../composables/useModal";
 import ProviderActions from "./provider/ProviderActions.vue";
 import ProviderCatalogPicker from "./provider/ProviderCatalogPicker.vue";
-import IconOrChar from "./IconOrChar.vue";
+import ProviderLogo from "./ProviderLogo.vue";
 import Icon from "./Icon.vue";
 import AToast from "../ui/AToast.vue";
 import ThemedSelect from "./ThemedSelect.vue";
@@ -205,7 +205,7 @@ function removeModelTag(idx: number) {
         :class="{ active: selectedId === p.id }"
         @click="selectProvider(p.id)"
       >
-        <span class="pi-icon"><IconOrChar :text="p.icon" :size="16" /></span>
+        <span class="pi-icon"><ProviderLogo :kind="p.kind" :text="p.icon" :size="16" /></span>
         <div class="pi-info">
           <div class="pi-name">{{ p.name || "(未命名)" }}</div>
           <div v-if="p.modelMappings.anthropicModel || p.model" class="pi-model">
@@ -249,7 +249,10 @@ function removeModelTag(idx: number) {
             class="text-input"
             placeholder="如 DeepSeek"
           />
-          <div v-else class="readonly-name">{{ form.name }}</div>
+          <div v-else class="readonly-name">
+            <ProviderLogo :kind="form.kind" :text="form.icon" :size="16" />
+            <span>{{ form.name }}</span>
+          </div>
         </div>
 
         <!-- 图标选择器：仅 Custom 可编辑（预置 kind 由 catalog 锁定 icon） -->
@@ -683,6 +686,9 @@ select.text-input {
 
 /* 预置只读字段：平铺非输入框外观 */
 .readonly-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 13px;
   color: var(--aide-text-primary);
   padding: 6px 0;

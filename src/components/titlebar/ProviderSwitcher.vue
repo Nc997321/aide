@@ -10,7 +10,7 @@
  */
 import { ref, onMounted, onUnmounted } from "vue";
 import { useProviders } from "../../composables/useProviders";
-import IconOrChar from "../IconOrChar.vue";
+import ProviderLogo from "../ProviderLogo.vue";
 import Icon from "../Icon.vue";
 
 const emit = defineEmits<{
@@ -63,7 +63,7 @@ onUnmounted(() => document.removeEventListener("click", onClickOutside));
       v-tooltip="'切换供应商'"
       @click.stop="toggle"
     >
-      <span class="provider-trigger-icon"><IconOrChar :text="activeProvider.icon" :size="13" /></span>
+      <span class="provider-trigger-icon"><ProviderLogo :kind="activeProvider.kind" :text="activeProvider.icon" :size="13" /></span>
       <span class="provider-trigger-name">{{ activeProvider.name }}</span>
       <svg class="provider-trigger-chevron" :class="{ open }" width="8" height="5" viewBox="0 0 8 5" fill="none" stroke="currentColor" stroke-width="1.5">
         <path d="M0.5 0.5L4 4L7.5 0.5"/>
@@ -79,7 +79,7 @@ onUnmounted(() => document.removeEventListener("click", onClickOutside));
           :class="{ active: p.id === activeProviderId }"
           @click="onSelect(p.id)"
         >
-          <span class="provider-opt-icon"><IconOrChar :text="p.icon" :size="14" /></span>
+          <span class="provider-opt-icon"><ProviderLogo :kind="p.kind" :text="p.icon" :size="14" /></span>
           <span class="provider-opt-name">{{ p.name }}</span>
           <span v-if="p.id === activeProviderId" class="provider-opt-check">✓</span>
         </div>

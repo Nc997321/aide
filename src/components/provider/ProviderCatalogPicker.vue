@@ -2,6 +2,7 @@
 import { computed, onMounted } from "vue";
 import { useProviderCatalog } from "@/composables/useProviderCatalog";
 import { useProviders } from "@/composables/useProviders";
+import ProviderLogo from "../ProviderLogo.vue";
 import type { ProviderKind } from "@/types";
 
 const emit = defineEmits<{
@@ -41,7 +42,7 @@ function pick(kind: ProviderKind) {
           v-tooltip="disabledKinds.has(p.kind) ? '已添加（单实例）' : p.base_url || 'Anthropic 官方端点'"
           @click="pick(p.kind)"
         >
-          <span class="preset-icon">{{ p.icon }}</span>
+          <span class="preset-logo"><ProviderLogo :kind="p.kind" :text="p.icon" :size="24" /></span>
           <span class="preset-name">{{ p.name }}</span>
           <span class="preset-desc">{{ p.actions.length }} 项专属操作</span>
         </button>
@@ -60,7 +61,7 @@ function pick(kind: ProviderKind) {
 .preset-card { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 14px 10px; border-radius: var(--aide-radius-md); background: var(--aide-surface-default); border: 1px solid var(--aide-border); cursor: pointer; font-size: 14px; color: var(--aide-text-primary); }
 .preset-card:hover:not(.disabled) { background: var(--aide-surface-hover); border-color: var(--aide-accent); }
 .preset-card.disabled { opacity: 0.4; cursor: not-allowed; }
-.preset-icon { font-size: 22px; font-weight: 700; color: var(--aide-accent); }
+.preset-logo { display: inline-flex; align-items: center; justify-content: center; height: 28px; }
 .preset-name { font-weight: 600; }
 .preset-desc { font-size: 12px; color: var(--aide-text-muted); }
 .custom-entry { width: 100%; margin-top: 14px; padding: 10px; border-radius: var(--aide-radius-md); background: transparent; color: var(--aide-text-secondary); border: 1px dashed var(--aide-border); cursor: pointer; font-size: 14px; }
