@@ -145,8 +145,6 @@ mod tests {
         assert_eq!(d.default_haiku_model, "qwen3.6-flash");
         assert_eq!(d.subagent, "qwen3.7-max");
         assert_eq!(d.max_context_tokens, "983616");
-        // 无默认值的预置不携带 defaults（向后兼容：老 JSON 无此字段也能解析）
-        assert!(catalog_find(ProviderKind::Zhipu).unwrap().defaults.is_none());
     }
 
     #[test]
@@ -174,6 +172,23 @@ mod tests {
         assert_eq!(d.effort_level, "high");
         assert_eq!(d.auto_compact_window, "1048576");
         assert_eq!(d.max_context_tokens, "1048576");
+    }
+
+    #[test]
+    fn zhipu_defaults_parsed_from_catalog() {
+        let p = catalog_find(ProviderKind::Zhipu).unwrap();
+        let d = p.defaults.as_ref().expect("zhipu must carry defaults");
+        assert_eq!(d.anthropic_model, "glm-5.3-flash");
+        assert_eq!(d.default_opus_model, "glm-5.3");
+        assert_eq!(d.default_sonnet_model, "glm-5.3-flash");
+        assert_eq!(d.default_haiku_model, "glm-5.3-flash");
+        assert_eq!(d.subagent, "glm-5.3-flash");
+        assert_eq!(d.max_context_tokens, "1048576");
+        // 未提供 effort / auto_compact_window → 空（serde default，不预填）
+        assert_eq!(d.effort_level, "");
+        assert_eq!(d.auto_compact_window, "");
+        // 无 defaults 的预置（如 Ollama）仍为 None——向后兼容
+        assert!(catalog_find(ProviderKind::Ollama).unwrap().defaults.is_none());
     }
 
     #[test]
