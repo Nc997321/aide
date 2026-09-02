@@ -296,6 +296,62 @@ pub async fn lsp_definition(
 }
 
 #[tauri::command]
+pub async fn lsp_references(
+    workspace_root: String,
+    file_path: String,
+    line: usize,
+    column: usize,
+    word: String,
+    state: tauri::State<'_, Arc<LspState>>,
+) -> Result<LspJumpResult, String> {
+    // 与 lsp_definition 同构（status 透传），仅 method 换为 textDocument/references
+    // （符号→使用点，方向与 definition 相反）。context.includeDeclaration=false：
+    // 查引用场景声明本身是噪声，前端另有自引用过滤兜底。
+    let lang = lang_from_ext_of(&file_path);
+    let Some(lang_id) = lang else {
+        return Ok(LspJumpResult {
+            status: JumpStatus::Ok,
+            results: vec![],
+        });
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(LspJumpResult {
+            status: JumpStatus::NotReady,
+            results: vec![],
+        });
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let params = serde_json::json!({
+        "textDocument":{"uri":uri},
+        "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)},
+        "context":{"includeDeclaration":false}
+    });
+    let outcome = h
+        .request(
+            "textDocument/references",
+            params,
+            crate::lsp::manager::DEFINITION_TIMEOUT,
+        )
+        .await?;
+    let (status, value) = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => (JumpStatus::Ok, v),
+        crate::lsp::manager::RequestOutcome::Timeout => {
+            (JumpStatus::Timeout, serde_json::Value::Null)
+        }
+        crate::lsp::manager::RequestOutcome::NotReady => {
+            (JumpStatus::NotReady, serde_json::Value::Null)
+        }
+        crate::lsp::manager::RequestOutcome::ServerGone => {
+            (JumpStatus::Gone, serde_json::Value::Null)
+        }
+    };
+    let locs = parse_locations(&value);
+    let results = crate::lsp::protocol::locations_to_query_results(&locs, &word, &workspace_root);
+    Ok(LspJumpResult { status, results })
+}
+
+#[tauri::command]
 pub async fn lsp_completion(
     workspace_root: String,
     file_path: String,
@@ -929,6 +985,49 @@ mod tests {
         assert_eq!(locs.len(), 1);
         let qr = crate::lsp::protocol::locations_to_query_results(&locs, "sym", "/mock");
         assert_eq!(qr[0].symbol.file, "def.rs"); // 相对 mock workspace root
+    }
+
+    #[tokio::test]
+    async fn mock_end_to_end_references() {
+        // lsp_references 同构链路：textDocument/references（带 context.includeDeclaration）
+        // → Location[] → parse_locations → locations_to_query_results（相对化+1-based）。
+        let mock = crate::lsp::mock_server::spawn_mock_lsp();
+        let transport = crate::lsp::transport::LspTransport::with_reader_source(
+            mock.transport_stdin,
+            mock.transport_stdout,
+        );
+        let router = crate::lsp::rpc::Router::new();
+        let table = transport.table_handle();
+        let mut reader = tokio::io::BufReader::new(transport.take_reader_source().await);
+        let table_r = table.clone();
+        let mut framer = crate::lsp::transport::Framer::new();
+        let (msg, id, tx, rx) = router.next_request("initialize", serde_json::json!({
+            "rootUri":"file:///mock","capabilities":{},"workspaceFolders":[{"uri":"file:///mock","name":"mock"}]
+        }));
+        table.lock().await.insert(id, tx);
+        transport.send(&msg).await.unwrap();
+        let _ = pump_until(&mut reader, &mut framer, &table_r, rx).await.unwrap();
+        // references（与 lsp_references 命令同参形状：position 0-based + context）
+        let (msg, id, tx, rx) = router.next_request(
+            "textDocument/references",
+            serde_json::json!({
+                "textDocument":{"uri":"file:///mock/main.rs"},
+                "position":{"line":2,"character":6},
+                "context":{"includeDeclaration":false}
+            }),
+        );
+        table.lock().await.insert(id, tx);
+        transport.send(&msg).await.unwrap();
+        let result = pump_until(&mut reader, &mut framer, &table_r, rx)
+            .await
+            .unwrap();
+        let locs = parse_locations(&result);
+        assert_eq!(locs.len(), 2);
+        let qr = crate::lsp::protocol::locations_to_query_results(&locs, "sym", "/mock");
+        assert_eq!(qr[0].symbol.file, "use1.rs");
+        assert_eq!(qr[0].symbol.line, 6); // 0-based 5 → 1-based 6
+        assert_eq!(qr[1].symbol.file, "use2.rs");
+        assert_eq!(qr[1].symbol.line, 10);
     }
 
     async fn pump_until(

@@ -80,7 +80,8 @@ class ImplMarker extends GutterMarker {
       ev.stopPropagation();
       // 复刻跳转视口对齐：点击处在编辑器视口的垂直偏移，让目标行落在同高度
       const viewportY = ev.clientY - this.view.scrollDOM.getBoundingClientRect().top;
-      this.onGoto({ ...this.data, viewportY });
+      // clientX/Y 供宿主把多结果浮层锚定在标记旁（补全式）
+      this.onGoto({ ...this.data, viewportY, clientX: ev.clientX, clientY: ev.clientY });
     });
     return el;
   }
@@ -88,6 +89,9 @@ class ImplMarker extends GutterMarker {
 
 export interface GutterGotoPayload extends ImplMarkerData {
   viewportY: number;
+  /** 点击坐标（client 系），供结果浮层锚定在标记旁；可选以兼容旧构造方。 */
+  clientX?: number;
+  clientY?: number;
 }
 
 // ── 占位 spacer：固定 gutter 宽度（无标记行也留位，对齐行号 gutter）──

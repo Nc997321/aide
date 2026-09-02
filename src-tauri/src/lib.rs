@@ -504,6 +504,7 @@ pub fn run() {
             lsp::lsp_did_change,
             lsp::lsp_did_close,
             lsp::lsp_definition,
+            lsp::lsp_references,
             lsp::lsp_completion,
             lsp::lsp_completion_resolve,
             lsp::lsp_signature_help,

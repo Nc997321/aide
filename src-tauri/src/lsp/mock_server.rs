@@ -81,6 +81,13 @@ async fn mock_responder<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(mut reader:
                     "jsonrpc":"2.0","id":id,
                     "result":[{"uri":"file:///mock/def.rs","range":{"start":{"line":2,"character":4},"end":{"line":2,"character":8}}}]
                 })),
+                "textDocument/references" => Some(serde_json::json!({
+                    "jsonrpc":"2.0","id":id,
+                    "result":[
+                        {"uri":"file:///mock/use1.rs","range":{"start":{"line":5,"character":2},"end":{"line":5,"character":8}}},
+                        {"uri":"file:///mock/use2.rs","range":{"start":{"line":9,"character":0},"end":{"line":9,"character":4}}}
+                    ]
+                })),
                 "shutdown" => Some(serde_json::json!({"jsonrpc":"2.0","id":id,"result":null})),
                 _ => id.map(|i| serde_json::json!({"jsonrpc":"2.0","id":i,"result":null})),
             };

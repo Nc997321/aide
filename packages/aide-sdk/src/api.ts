@@ -704,6 +704,10 @@ export const api = {
   lspDefinition(workspaceRoot: string, filePath: string, line: number, column: number, word: string): Promise<LspJumpResult> {
     return getTransport().invoke("lsp_definition", { workspaceRoot, filePath, line, column, word });
   },
+  /** 查引用（语言无关，按扩展名分派）：符号 → 全部使用点。status 语义与 lspDefinition 一致。 */
+  lspReferences(workspaceRoot: string, filePath: string, line: number, column: number, word: string): Promise<LspJumpResult> {
+    return getTransport().invoke("lsp_references", { workspaceRoot, filePath, line, column, word });
+  },
   lspCompletion(workspaceRoot: string, filePath: string, line: number, column: number): Promise<CmCompletion[]> {
     return getTransport().invoke("lsp_completion", { workspaceRoot, filePath, line, column });
   },

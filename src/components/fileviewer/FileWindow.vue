@@ -258,6 +258,42 @@ const lastSourceLine = ref<number | null>(null);
 /** 触发跳转时源符号在编辑器视口中的垂直偏移——跳转目标按此偏移定位，回退时复刻滚动位置 */
 const lastSourceViewportY = ref<number | null>(null);
 
+// ── goto 浮层锚定（补全式：浮层出现在触发符号旁，而非贴底全宽）──
+const fwBodyRef = ref<HTMLElement | null>(null);
+/** 锚点（相对 .fw-body 定位系）：x/y = 触发点；h = 捕获时 .fw-body 高度（翻转变换用）；
+ *  flip = 触发点贴近底部，浮层放不下 → 向上翻。null = 无锚点（兜底贴底旧形态）。 */
+const gotoAnchor = ref<{ x: number; y: number; h: number; flip: boolean } | null>(null);
+/** 浮层固定宽度（px）；与 CSS min(380px, calc(100% - 16px)) 对应，横向钳制用 */
+const GOTO_POPOVER_W = 380;
+/** 触发点下方放不下浮层（含 header ~37px + 余量）→ 翻转阈值 */
+const GOTO_FLIP_BUDGET = 330;
+
+/** 捕获锚点：client 坐标 → .fw-body 定位系，横向钳制留 8px 边距。 */
+function captureGotoAnchor(clientX: number, clientY: number) {
+  const el = fwBodyRef.value;
+  if (!el) { gotoAnchor.value = null; return; }
+  const rect = el.getBoundingClientRect();
+  const x = Math.min(Math.max(8, clientX - rect.left), Math.max(8, rect.width - GOTO_POPOVER_W - 8));
+  const y = clientY - rect.top;
+  gotoAnchor.value = { x, y, h: rect.height, flip: y > rect.height - GOTO_FLIP_BUDGET };
+}
+
+/** 锚定内联样式：有锚点 → 符号旁（下方放不下上翻）；无锚点 → undefined 走贴底兜底 CSS。 */
+const gotoPopoverStyle = computed(() => {
+  const a = gotoAnchor.value;
+  if (!a) return undefined;
+  return a.flip
+    ? { left: `${a.x}px`, bottom: `${a.h - a.y + 6}px`, top: "auto", right: "auto", width: `min(${GOTO_POPOVER_W}px, calc(100% - 16px))` }
+    : { left: `${a.x}px`, top: `${a.y + 22}px`, bottom: "auto", right: "auto", width: `min(${GOTO_POPOVER_W}px, calc(100% - 16px))` };
+});
+
+/** 点编辑器空白/正文任意处关闭浮层（补全一致契约：点外部即关）。
+ *  capture 相位先于 CodeEditor 内部 click：若随后的点击本身是 Ctrl/Alt+Click 或 gutter
+ *  标记（重开浮层的新触发），对应 search* 会同步接管 seq 并重新置 visible——无闪烁。 */
+function onEditorAreaClick() {
+  if (gotoActive.value) goto.dismiss();
+}
+
 /** 单结果直接跳、多结果留浮层供选（search* 已把 visible 置 true）。跳转定义/实现/父类共用。 */
 function jumpOrPick() {
   if (goto.results.value.length === 1) {
@@ -265,26 +301,45 @@ function jumpOrPick() {
   }
 }
 
-async function onGotoDefinition(payload: { word: string; filePath: string; line: number; column: number; wordColumn: number; viewportY: number }) {
+/** 绝对路径 → 相对 projectRoot 的正斜杠路径（goto source 用）；越界（非本工作区）返空串。 */
+function relPathOf(absPath: string): string {
+  const root = projectRoot.value;
+  const sep = root.includes("\\") ? "\\" : "/";
+  return absPath.startsWith(root)
+    ? absPath.slice(root.length + sep.length).replace(/\\/g, "/")
+    : "";
+}
+
+async function onGotoDefinition(payload: { word: string; filePath: string; line: number; column: number; wordColumn: number; viewportY: number; clientX: number; clientY: number }) {
   gotoOwnerId.value = props.win.id;
   lastSourceLine.value = payload.line;
   lastSourceViewportY.value = payload.viewportY;
-  const root = projectRoot.value;
-  const sep = root.includes("\\") ? "\\" : "/";
-  const relPath = payload.filePath.startsWith(root)
-    ? payload.filePath.slice(root.length + sep.length).replace(/\\/g, "/")
-    : "";
+  captureGotoAnchor(payload.clientX, payload.clientY);
   const ext = payload.filePath.split(".").pop()?.toLowerCase() || "";
-  await goto.search(payload.word, root, { sourceFile: relPath, sourceFileAbs: payload.filePath, sourceLine: payload.line, sourceExt: ext, sourceColumn: payload.column, sourceWordColumn: payload.wordColumn });
+  await goto.search(payload.word, projectRoot.value, { sourceFile: relPathOf(payload.filePath), sourceFileAbs: payload.filePath, sourceLine: payload.line, sourceExt: ext, sourceColumn: payload.column, sourceWordColumn: payload.wordColumn });
+  jumpOrPick();
+}
+
+/** Alt+Click 符号 → 查引用（LSP references → grep 兜底）。
+ *  与 onGotoDefinition 同构；单命中 jumpOrPick 直接跳（引用场景跳转即全部目的），
+ *  多命中浮层锚在符号旁供选。 */
+async function onGotoReferences(payload: { word: string; filePath: string; line: number; column: number; wordColumn: number; viewportY: number; clientX: number; clientY: number }) {
+  gotoOwnerId.value = props.win.id;
+  lastSourceLine.value = payload.line;
+  lastSourceViewportY.value = payload.viewportY;
+  captureGotoAnchor(payload.clientX, payload.clientY);
+  const ext = payload.filePath.split(".").pop()?.toLowerCase() || "";
+  await goto.searchAllReferences(payload.word, projectRoot.value, { sourceFile: relPathOf(payload.filePath), sourceFileAbs: payload.filePath, sourceLine: payload.line, sourceExt: ext, sourceColumn: payload.column, sourceWordColumn: payload.wordColumn });
   jumpOrPick();
 }
 
 /** gutter 标记点击（跳实现）：结果已随标记缓存，直接填 results 走 jumpOrPick。
- *  payload.line/viewportY 用于回退复刻滚动。 */
+ *  payload.line/viewportY 用于回退复刻滚动；clientX/Y 锚定浮层（旧调用方缺省 → 贴底兜底）。 */
 async function onGotoGutter(payload: GutterGotoPayload) {
   gotoOwnerId.value = props.win.id;
   lastSourceLine.value = payload.line;
   lastSourceViewportY.value = payload.viewportY;
+  if (payload.clientX != null && payload.clientY != null) captureGotoAnchor(payload.clientX, payload.clientY);
   await goto.searchImplementations(payload.word, projectRoot.value, payload.results);
   jumpOrPick();
 }
@@ -537,7 +592,7 @@ function onEditorContextMenu(e: MouseEvent) {
       <button class="fw-close" @click="requestClose">&times;</button>
     </div>
 
-    <div class="fw-body">
+    <div ref="fwBodyRef" class="fw-body">
       <div v-if="win.error" class="fw-error">{{ win.error }}</div>
 
       <div v-else-if="isImage" class="fw-image-wrap">
@@ -558,7 +613,7 @@ function onEditorContextMenu(e: MouseEvent) {
 
       <!-- Markdown 分屏：左编辑右实时预览 -->
       <div v-else-if="win.isMarkdown && win.mdMode === 'split'" class="fw-split">
-        <div class="fw-split-pane fw-editor" @contextmenu="onEditorContextMenu">
+        <div class="fw-split-pane fw-editor" @contextmenu="onEditorContextMenu" @click.capture="onEditorAreaClick">
           <CodeEditor
             ref="codeEditorRef"
             v-model="win.editContent"
@@ -567,6 +622,7 @@ function onEditorContextMenu(e: MouseEvent) {
             :workspaceRoot="projectRoot"
             :lspLang="lspLangFor(win.filePath)"
             @goto-definition="onGotoDefinition"
+            @goto-references="onGotoReferences"
             @gutter-goto="onGotoGutter"
             @vim-ex="onVimEx"
           />
@@ -576,7 +632,7 @@ function onEditorContextMenu(e: MouseEvent) {
       </div>
 
       <!-- 默认：直接可编辑（含 Markdown 全编辑） -->
-      <div v-else class="fw-editor" @contextmenu="onEditorContextMenu">
+      <div v-else class="fw-editor" @contextmenu="onEditorContextMenu" @click.capture="onEditorAreaClick">
         <CodeEditor
           ref="codeEditorRef"
           v-model="win.editContent"
@@ -585,13 +641,14 @@ function onEditorContextMenu(e: MouseEvent) {
           :workspaceRoot="projectRoot"
           :lspLang="lspLangFor(win.filePath)"
           @goto-definition="onGotoDefinition"
+          @goto-references="onGotoReferences"
           @gutter-goto="onGotoGutter"
           @vim-ex="onVimEx"
         />
       </div>
 
-      <!-- 跳转结果浮层 -->
-      <div v-if="gotoActive" ref="gotoPopoverRef" tabindex="-1" class="goto-popover" @keydown="onGotoKeydown">
+      <!-- 跳转/引用结果浮层（锚定触发符号旁，补全式） -->
+      <div v-if="gotoActive" ref="gotoPopoverRef" tabindex="-1" class="goto-popover" :style="gotoPopoverStyle" @keydown="onGotoKeydown">
         <div class="goto-popover-header">
           <span class="goto-popover-title">「{{ goto.searchWord.value }}」的{{ gotoModeLabel }}</span>
           <button class="goto-popover-close" @click="goto.dismiss()">&times;</button>
@@ -930,7 +987,7 @@ function onEditorContextMenu(e: MouseEvent) {
 }
 
 /* ── Goto popover ── */
-
+/* 基础形态为无锚点兜底（贴底全宽）；锚定符号旁时由内联 style 覆盖四角+宽度（见 gotoPopoverStyle）。 */
 .goto-popover {
   position: absolute;
   bottom: 8px;
@@ -944,12 +1001,14 @@ function onEditorContextMenu(e: MouseEvent) {
   z-index: 10;
   display: flex;
   flex-direction: column;
-  animation: fw-slide-up 0.12s ease;
+  overflow: hidden;
+  animation: fw-pop-in 0.12s ease;
 }
 
-@keyframes fw-slide-up {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+/* 锚定弹出（补全式微缩放淡入）；向上翻（flip）时也自然（无方向性位移） */
+@keyframes fw-pop-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 .goto-popover-header {

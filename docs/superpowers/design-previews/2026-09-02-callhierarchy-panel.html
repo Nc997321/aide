@@ -1,0 +1,1169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>callHierarchy 面板原型 · 2026-09-02</title>
+<!--
+  callHierarchy 交互原型（右侧栏面板方案）
+
+  演示点：
+  1. 入口：编辑器 gutter 的 ⇄ 标记（挂在现有 documentSymbol/实现标记生态旁）
+  2. 面板：树形 + incoming/outgoing 方向切换 + 点击跳转（面板常驻不关，并排浏览）
+  3. 懒展开：点箭头逐层追问「谁又调用了它」（模拟 LSP 往返延迟）
+  4. fromRanges：同一调用者的多个调用点分组展示（×N）
+  5. 对照组：右上按钮体验「FileResolveOverlay 式模态弹窗」为什么不适合这个场景
+  6. 引用弹窗：点代码里带虚线下划线的符号名（ServerHandle / restart_workspace）
+     → 符号旁弹出补全式锚定浮层（references，替代现有底部 goto-popover；
+     真实产品为 Alt+点击触发，普通点击仍是跳定义——原型简化为直接点击）
+
+  主题：--aide-* token 取自 src/themes/smoky-pink-glass.ts（浅色）。
+  示例符号/行号取自真实 src-tauri/src/lsp/manager.rs（init_handshake@639 等），
+  代码体为示意性摘录，折叠区隔断模拟审阅器折叠。
+-->
+<style>
+  :root {
+    /* —— smoky-pink-glass 浅色主题 token（真实值） —— */
+    --aide-bg-deep: rgba(250, 250, 252, .55);
+    --aide-bg-base: rgba(243, 241, 242, .55);
+    --aide-bg-raised: rgba(255, 255, 255, .62);
+    --aide-bg-overlay: rgba(96, 86, 94, .28);
+    --aide-surface-default: rgba(255, 255, 255, .48);
+    --aide-surface-hover: rgba(255, 255, 255, .72);
+    --aide-surface-active: rgba(255, 255, 255, .85);
+    --aide-text-primary: #23262d;
+    --aide-text-secondary: #5c6470;
+    --aide-text-muted: #7b8492;
+    --aide-text-on-accent: #674945;
+    --aide-accent: #CFA6A0;
+    --aide-accent-hover: #BE938D;
+    --aide-accent-subtle: rgba(207, 166, 160, .18);
+    --aide-success: #3f9e69;
+    --aide-warning: #C98A3D;
+    --aide-danger: #dd6b72;
+    --aide-info: #7C93B8;
+    --aide-border: rgba(124, 137, 154, .18);
+    --aide-border-subtle: rgba(124, 137, 154, .10);
+    --aide-border-strong: rgba(207, 166, 160, .42);
+    --aide-shadow-sm: 0 2px 8px rgba(87, 101, 120, .08);
+    --aide-shadow-md: 0 8px 24px rgba(87, 101, 120, .1);
+    --aide-shadow-lg: 0 18px 55px rgba(93, 108, 128, .16), 0 3px 12px rgba(67, 82, 102, .06);
+    --aide-highlight-inset: inset 0 1px 0 rgba(255, 255, 255, .9);
+    --aide-radius-sm: 8px;
+    --aide-radius-md: 12px;
+    --aide-radius-lg: 18px;
+    --aide-ease: cubic-bezier(.2, .8, .2, 1);
+    --aide-syntax-keyword: #A77872;
+    --aide-syntax-number: #6D7FB8;
+    --aide-font-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 13px;
+    color: var(--aide-text-primary);
+    background: linear-gradient(160deg, #f4eff0 0%, #eceef3 55%, #e9e4ea 100%);
+    min-height: 100vh;
+    padding: 18px 22px 30px;
+  }
+
+  /* ============ 页面说明条（原型外框，非产品 UI） ============ */
+  .page-note {
+    max-width: 1180px; margin: 0 auto 14px;
+    background: var(--aide-bg-raised);
+    border: 1px solid var(--aide-border);
+    border-radius: var(--aide-radius-md);
+    box-shadow: var(--aide-shadow-sm), var(--aide-highlight-inset);
+    backdrop-filter: blur(10px);
+    padding: 12px 16px;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  .page-note h1 { font-size: 14px; font-weight: 600; }
+  .page-note .desc { color: var(--aide-text-secondary); font-size: 12px; line-height: 1.7; flex: 1 1 320px; }
+  .page-note .desc b { color: var(--aide-text-primary); font-weight: 600; }
+  .note-btns { display: flex; gap: 8px; align-items: center; }
+  .pn-btn {
+    border: 1px solid var(--aide-border-strong);
+    background: var(--aide-surface-default);
+    color: var(--aide-text-secondary);
+    border-radius: var(--aide-radius-sm);
+    padding: 6px 12px; font-size: 12px; cursor: pointer;
+    transition: all .16s var(--aide-ease);
+  }
+  .pn-btn:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+  .pn-btn.primary {
+    background: linear-gradient(180deg, #E5CBC7, #CFA6A0);
+    color: var(--aide-text-on-accent); border-color: transparent; font-weight: 600;
+    box-shadow: 0 4px 14px rgba(160, 112, 106, .25);
+  }
+  .pn-btn.primary:hover { background: linear-gradient(180deg, #EBCFCB, #BE938D); }
+  .reopen-count {
+    font-size: 11px; color: var(--aide-text-muted);
+    background: var(--aide-surface-default);
+    border: 1px solid var(--aide-border);
+    border-radius: 999px; padding: 3px 10px;
+    min-width: 92px; text-align: center;
+  }
+  .reopen-count b { color: var(--aide-danger); }
+
+  /* ============ 模拟 app 窗口 ============ */
+  .app-window {
+    max-width: 1180px; margin: 0 auto;
+    height: 720px;
+    display: flex; flex-direction: column;
+    background: var(--aide-bg-base);
+    border: 1px solid var(--aide-border);
+    border-radius: var(--aide-radius-lg);
+    box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
+    backdrop-filter: blur(14px);
+    overflow: hidden;
+  }
+  .titlebar {
+    height: 38px; flex: none;
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--aide-border);
+    background: var(--aide-bg-raised);
+    font-size: 12px; color: var(--aide-text-secondary);
+  }
+  .titlebar .traffic { display: flex; gap: 6px; }
+  .titlebar .traffic i { width: 10px; height: 10px; border-radius: 50%; background: var(--aide-border-strong); }
+  .titlebar .crumb { font-family: var(--aide-font-mono); font-size: 11.5px; }
+  .titlebar .crumb b { color: var(--aide-text-primary); font-weight: 600; }
+  .app-main { flex: 1; display: flex; min-height: 0; }
+
+  /* ============ 编辑器区 ============ */
+  .editor-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .file-tab {
+    flex: none; display: flex; align-items: center; gap: 8px;
+    height: 34px; padding: 0 12px;
+    border-bottom: 1px solid var(--aide-border);
+    background: var(--aide-surface-default);
+    font-family: var(--aide-font-mono); font-size: 12px;
+    color: var(--aide-text-primary);
+  }
+  .file-tab .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--aide-accent); }
+  .file-tab .x { color: var(--aide-text-muted); margin-left: 4px; cursor: default; }
+  .cm-wrap {
+    flex: 1; overflow: auto;
+    background: var(--aide-bg-deep);
+    font-family: var(--aide-font-mono);
+    font-size: 12.5px; line-height: 21px;
+    padding: 10px 0 40vh;
+  }
+  .line { display: flex; min-height: 21px; }
+  .line:hover { background: rgba(124, 137, 154, .05); }
+  .ln {
+    flex: none; width: 48px; text-align: right; padding-right: 10px;
+    color: var(--aide-text-muted); user-select: none; font-size: 11.5px;
+  }
+  .gmark { flex: none; width: 20px; display: flex; align-items: center; justify-content: center; }
+  .gmark span {
+    font-size: 11px; cursor: pointer; border-radius: 4px;
+    width: 15px; height: 15px; line-height: 15px; text-align: center;
+    transition: background .12s;
+  }
+  .gmark .m-call { color: var(--aide-accent); font-weight: 700; }
+  .gmark .m-call:hover, .gmark .m-call.pulse { background: var(--aide-accent-subtle); }
+  .gmark .m-call.pulse { animation: pulse 1.1s var(--aide-ease) 3; }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(207, 166, 160, 0); }
+    50% { box-shadow: 0 0 0 5px rgba(207, 166, 160, .35); }
+  }
+  .gmark .m-impl { color: var(--aide-success); }
+  .gmark .m-impl:hover { background: rgba(63, 158, 105, .12); }
+  .code { flex: 1; white-space: pre; color: var(--aide-text-primary); }
+  .line.flash { background: var(--aide-accent-subtle); box-shadow: inset 3px 0 0 var(--aide-accent); }
+  .line.flash .code { transition: none; }
+
+  .fold-gap {
+    display: flex; align-items: center; gap: 10px;
+    height: 22px; padding: 0 68px;
+    color: var(--aide-text-muted); font-size: 11px; font-style: italic;
+    user-select: none;
+  }
+  .fold-gap::before, .fold-gap::after {
+    content: ""; flex: 1; height: 1px;
+    background: var(--aide-border-subtle);
+  }
+
+  /* 语法着色（对齐 cmHighlight tag→色映射思想：fn→accent、类型→keyword 系） */
+  .tk-k { color: var(--aide-syntax-keyword); }
+  .tk-s { color: var(--aide-syntax-number); }
+  .tk-n { color: var(--aide-syntax-number); }
+  .tk-c { color: var(--aide-text-muted); font-style: italic; }
+  .tk-f { color: var(--aide-accent); font-weight: 600; }
+
+  /* ============ 右侧栏面板（骨架照搬 codegraph-panel：panel-header + 滚动区） ============ */
+  .sidebar {
+    flex: none; width: 302px;
+    border-left: 1px solid var(--aide-border);
+    background: var(--aide-bg-raised);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .panel-header {
+    flex: none;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--aide-border);
+    font-size: 13px; font-weight: 600;
+  }
+  .panel-close {
+    border: none; background: none; color: var(--aide-text-muted);
+    font-size: 14px; cursor: pointer; padding: 2px 6px; border-radius: 4px;
+  }
+  .panel-close:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+
+  .ch-root {
+    flex: none; margin: 10px 12px 0;
+    display: flex; align-items: center; gap: 8px;
+    background: var(--aide-accent-subtle);
+    border: 1px solid var(--aide-border-strong);
+    border-radius: var(--aide-radius-sm);
+    padding: 7px 10px;
+  }
+  .ch-root .kind-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--aide-accent); flex: none;
+  }
+  .ch-root .name { font-family: var(--aide-font-mono); font-size: 12.5px; font-weight: 600; color: var(--aide-accent-hover); }
+  .ch-root .where { margin-left: auto; font-family: var(--aide-font-mono); font-size: 10.5px; color: var(--aide-text-muted); }
+
+  .ch-seg {
+    flex: none; margin: 10px 12px 0;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+    border: 1px solid var(--aide-border);
+    border-radius: var(--aide-radius-sm); overflow: hidden;
+  }
+  .ch-seg button {
+    border: none; background: var(--aide-surface-default);
+    padding: 6px 4px; font-size: 12px; cursor: pointer;
+    color: var(--aide-text-secondary);
+    transition: all .16s var(--aide-ease);
+  }
+  .ch-seg button + button { border-left: 1px solid var(--aide-border); }
+  .ch-seg button.on {
+    background: var(--aide-accent-subtle); color: var(--aide-accent-hover); font-weight: 600;
+  }
+  .ch-seg button:not(.on):hover { background: var(--aide-surface-hover); }
+  .ch-seg button:disabled { opacity: .45; cursor: default; }
+
+  .ch-scroll { flex: 1; overflow-y: auto; padding: 10px 8px 16px; min-height: 0; }
+  .ch-empty {
+    height: 100%; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 10px;
+    color: var(--aide-text-muted); font-size: 12px; text-align: center;
+    line-height: 1.8; padding: 0 22px;
+  }
+  .ch-empty .big { font-size: 22px; }
+
+  /* 树节点 */
+  .tn { border-radius: 6px; }
+  .tn-row {
+    display: flex; align-items: center; gap: 5px;
+    padding: 3px 6px; border-radius: 6px;
+    min-height: 25px; cursor: pointer;
+  }
+  .tn-row:hover { background: var(--aide-surface-hover); }
+  .tn-row.active-site { background: var(--aide-accent-subtle); }
+  .chev {
+    flex: none; width: 16px; height: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; color: var(--aide-text-muted);
+    transition: transform .16s var(--aide-ease);
+    border-radius: 3px;
+  }
+  .chev:hover { background: var(--aide-border); color: var(--aide-text-primary); }
+  .chev.open { transform: rotate(90deg); }
+  .chev.leaf { visibility: hidden; }
+  .tn-name {
+    font-family: var(--aide-font-mono); font-size: 12px;
+    color: var(--aide-accent-hover); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .tn-row.cross-file .tn-name { color: var(--aide-info); }
+  .tn-count {
+    flex: none; font-size: 10px; color: var(--aide-text-secondary);
+    background: var(--aide-surface-default);
+    border: 1px solid var(--aide-border);
+    border-radius: 999px; padding: 0 5px; line-height: 15px;
+  }
+  .tn-file {
+    margin-left: auto; flex: none;
+    font-family: var(--aide-font-mono); font-size: 10px;
+    color: var(--aide-text-muted);
+    white-space: nowrap;
+  }
+  .tn-row.cross-file .tn-file { color: var(--aide-info); font-weight: 600; }
+  .tn-children { }
+  .cs-row {
+    display: flex; align-items: center; gap: 5px;
+    padding: 2px 6px 2px 0; border-radius: 6px;
+    font-family: var(--aide-font-mono); font-size: 11px;
+    color: var(--aide-text-muted); cursor: pointer;
+  }
+  .cs-row:hover { background: var(--aide-surface-hover); color: var(--aide-text-secondary); }
+  .cs-row .arr { flex: none; width: 16px; text-align: center; opacity: .7; }
+  .tn-term {
+    padding: 4px 6px 4px 0; font-size: 11px; font-style: italic;
+    color: var(--aide-text-muted);
+  }
+  .tn-loading {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 6px 5px 0; font-size: 11.5px; color: var(--aide-text-muted);
+  }
+  .spin {
+    width: 11px; height: 11px; border-radius: 50%;
+    border: 2px solid var(--aide-border);
+    border-top-color: var(--aide-accent);
+    animation: rot .7s linear infinite; flex: none;
+  }
+  @keyframes rot { to { transform: rotate(360deg); } }
+
+  /* ============ toast ============ */
+  .toast {
+    position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%);
+    z-index: 9600;
+    display: flex; align-items: center; gap: 8px;
+    background: var(--aide-bg-raised);
+    border: 1px solid var(--aide-border-strong);
+    border-radius: var(--aide-radius-md);
+    box-shadow: var(--aide-shadow-md), var(--aide-highlight-inset);
+    backdrop-filter: blur(10px);
+    padding: 9px 16px; font-size: 12px; color: var(--aide-text-secondary);
+    max-width: 480px;
+    opacity: 0; pointer-events: none;
+    transition: opacity .2s var(--aide-ease), bottom .2s var(--aide-ease);
+  }
+  .toast.show { opacity: 1; bottom: 34px; }
+  .toast b { color: var(--aide-text-primary); }
+
+  /* ============ 对照组：模态弹窗（FileResolveOverlay 风格复刻） ============ */
+  .fr-overlay {
+    position: fixed; inset: 0; z-index: 9500;
+    display: none; align-items: center; justify-content: center;
+    background: var(--aide-bg-overlay);
+    backdrop-filter: blur(3px);
+  }
+  .fr-overlay.show { display: flex; }
+  .fr-picker {
+    width: 460px; max-width: calc(100vw - 48px); max-height: 70vh;
+    display: flex; flex-direction: column;
+    border-radius: var(--aide-radius-md);
+    background: var(--aide-bg-raised);
+    border: 1px solid var(--aide-border-strong);
+    box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
+    backdrop-filter: blur(10px);
+    overflow: hidden;
+  }
+  .fr-picker-head {
+    padding: 14px 16px; font-size: 13px; font-weight: 600;
+    border-bottom: 1px solid var(--aide-border);
+  }
+  .fr-picker-head small { display: block; font-weight: 400; font-size: 11px; color: var(--aide-text-muted); margin-top: 4px; }
+  .fr-picker-list { flex: 1; overflow-y: auto; padding: 6px; }
+  .fr-picker-item {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%; padding: 9px 10px; border: none; background: none;
+    border-radius: var(--aide-radius-sm); cursor: pointer; text-align: left;
+    color: var(--aide-text-secondary); font-size: 12px;
+    font-family: var(--aide-font-mono);
+    transition: background .12s, color .12s;
+  }
+  .fr-picker-item:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+  .fr-picker-item .sym { color: var(--aide-accent-hover); font-weight: 600; }
+  .fr-picker-item .loc { margin-left: auto; font-size: 10.5px; color: var(--aide-text-muted); }
+  .fr-picker-actions {
+    display: flex; justify-content: flex-end; padding: 10px 16px;
+    border-top: 1px solid var(--aide-border);
+  }
+  .fr-picker-cancel {
+    border-radius: var(--aide-radius-sm);
+    border: 1px solid var(--aide-border);
+    background: var(--aide-surface-default);
+    color: var(--aide-text-secondary);
+    padding: 6px 16px; font-size: 13px; cursor: pointer;
+  }
+  .fr-picker-cancel:hover { background: var(--aide-surface-hover); }
+
+  /* ============ 引用弹窗（补全式锚定浮层，替代底部 goto-popover） ============ */
+  .cm-wrap { position: relative; }
+  .ref-sym {
+    cursor: pointer;
+    border-bottom: 1px dashed var(--aide-border-strong);
+    border-radius: 2px;
+    transition: background .12s, color .12s;
+  }
+  .ref-sym:hover { background: var(--aide-accent-subtle); color: var(--aide-accent-hover); }
+  .ref-sym.pulse { animation: pulse 1.1s var(--aide-ease) 3; }
+  .ref-pop {
+    position: absolute; z-index: 20;
+    width: 318px; max-height: 262px;
+    display: flex; flex-direction: column;
+    background: var(--aide-bg-raised);
+    border: 1px solid var(--aide-border-strong);
+    border-radius: var(--aide-radius-sm);
+    box-shadow: var(--aide-shadow-md), var(--aide-highlight-inset);
+    backdrop-filter: blur(10px);
+    overflow: hidden;
+    outline: none;
+    animation: refIn .14s var(--aide-ease);
+  }
+  @keyframes refIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .ref-pop-head {
+    flex: none; display: flex; align-items: center; gap: 6px;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--aide-border);
+    font-size: 12px; color: var(--aide-text-secondary);
+  }
+  .ref-pop-head .sym { font-family: var(--aide-font-mono); font-weight: 600; color: var(--aide-accent-hover); }
+  .ref-pop-head .n { margin-left: auto; font-size: 11px; color: var(--aide-text-muted); }
+  .ref-pop-close {
+    border: none; background: none; color: var(--aide-text-muted);
+    font-size: 14px; cursor: pointer; padding: 0 4px; border-radius: 4px;
+  }
+  .ref-pop-close:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+  .ref-pop-body { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .ref-item {
+    display: flex; align-items: baseline; gap: 7px;
+    padding: 5px 10px; cursor: pointer; font-size: 12px;
+    color: var(--aide-text-secondary);
+  }
+  .ref-item:hover, .ref-item.sel { background: var(--aide-accent-subtle); color: var(--aide-text-primary); }
+  .ref-item .src {
+    flex: none; font-size: 10px; font-weight: 600;
+    color: var(--aide-success);
+    border: 1px solid rgba(63, 158, 105, .35);
+    border-radius: 4px; padding: 0 4px; line-height: 14px;
+  }
+  .ref-item .what {
+    font-family: var(--aide-font-mono); font-size: 11.5px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ref-item .loc {
+    margin-left: auto; flex: none;
+    font-family: var(--aide-font-mono); font-size: 10.5px; color: var(--aide-text-muted);
+  }
+  .ref-pop-foot {
+    flex: none; padding: 5px 10px;
+    border-top: 1px solid var(--aide-border);
+    font-size: 10.5px; color: var(--aide-text-muted);
+    display: flex; gap: 10px;
+  }
+
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: var(--aide-border-strong); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+
+<!-- 原型说明条（非产品 UI） -->
+<div class="page-note">
+  <div>
+    <h1>callHierarchy · 右侧栏面板原型</h1>
+    <div class="desc">
+      ① 点编辑器 gutter 的 <b style="color:var(--aide-accent)">⇄</b> 查看调用层级（在现有 ↓ 跳实现标记旁）；
+      ② <b>调用者 / 被调用</b>方向切换；③ 点箭头<b>懒展开</b>逐层追问（×N = 该调用者的多个调用点）；
+      ④ 点节点<b>跳转</b>——面板常驻不关，边看树边看代码；⑤ 右侧按钮体验<b>对照组：模态弹窗版</b>为什么不行；
+      ⑥ 点代码里<b>带虚线下划线的符号名</b>（ServerHandle 等）→ 符号旁弹<b>引用浮层</b>（补全式锚定，
+      替代现有底部 goto-popover；唯一引用不弹列表直接跳）。
+      符号与行号取自真实 manager.rs。
+    </div>
+  </div>
+  <div class="note-btns">
+    <button class="pn-btn" id="btn-demo">▶ 自动演示</button>
+    <button class="pn-btn" id="btn-refs">引用弹窗演示</button>
+    <button class="pn-btn primary" id="btn-modal">对照组：模态弹窗版</button>
+    <span class="reopen-count">弹窗已重开 <b id="reopen-n">0</b> 次</span>
+  </div>
+</div>
+
+<!-- 模拟 aide 主窗口 -->
+<div class="app-window">
+  <div class="titlebar">
+    <div class="traffic"><i></i><i></i><i></i></div>
+    <span class="crumb">src-tauri/src/lsp / <b>manager.rs</b> — aide</span>
+  </div>
+  <div class="app-main">
+    <div class="editor-pane">
+      <div class="file-tab"><span class="dot"></span>manager.rs<span class="x">×</span></div>
+      <div class="cm-wrap" id="cm"></div>
+    </div>
+    <aside class="sidebar">
+      <div class="panel-header">
+        <span>调用层级</span>
+        <button class="panel-close" id="panel-close" title="关闭">×</button>
+      </div>
+      <div id="ch-root-box"></div>
+      <div class="ch-seg" id="ch-seg">
+        <button data-dir="incoming" class="on">⇠ 调用者</button>
+        <button data-dir="outgoing">被调用 ⇢</button>
+      </div>
+      <div class="ch-scroll" id="ch-tree"></div>
+    </aside>
+  </div>
+</div>
+
+<!-- toast -->
+<div class="toast" id="toast"></div>
+
+<!-- 对照组：FileResolveOverlay 风格模态弹窗 -->
+<div class="fr-overlay" id="fr-overlay">
+  <div class="fr-picker">
+    <div class="fr-picker-head">
+      init_handshake 的调用者，请选择
+      <small>模态弹窗版（对照组）——选完即关，盖住编辑器</small>
+    </div>
+    <div class="fr-picker-list" id="fr-list"></div>
+    <div class="fr-picker-actions">
+      <button class="fr-picker-cancel" id="fr-cancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ================================================================
+ * 数据：代码区（真实行号锚点 + 折叠区隔断）
+ * ================================================================ */
+const SECTIONS = [
+  { start: 83, lines: [
+    `    /// 统一 JSON-RPC 请求入口：自增 id，挂起等 server 响应（带超时）`,
+    `    pub async fn request<T: DeserializeOwned>(`,
+    `        &self,`,
+    `        method: &str,`,
+    `        params: serde_json::Value,`,
+    `    ) -> Result<T, LspError> {`,
+    `        let id = self.next_id.fetch_add(1, Ordering::SeqCst);`,
+    `        self.transport.send(Frame::request(id, method, params)).await?;`,
+    `        self.pending.wait(id).await`,
+    `    }`,
+  ]},
+  { gap: "27 行已折叠（mod tests 前的 impl 头部）" },
+  { start: 120, lines: [
+    `    /// 惰性启动：首次请求某语言的 server 时才 spawn + 握手；`,
+    `    /// 已有活实例（is_alive 心跳通过）则直接复用`,
+    `    pub async fn ensure_server(`,
+    `        &self,`,
+    `        workspace: &str,`,
+    `        lang: LanguageId,`,
+    `    ) -> Result<Arc<ServerHandle>, LspError> {`,
+    `        if let Some(h) = self.get(workspace, &lang) {`,
+    `            if h.is_alive() {`,
+    `                return Ok(h);`,
+    `            }`,
+    `        }`,
+    `        // 冷启动：spawn 进程并完成 initialize 握手`,
+    `        let handle = spawn_and_init(workspace, &lang).await?;`,
+    `        self.servers.write().insert((workspace.into(), lang), handle.clone());`,
+    `        Ok(handle)`,
+    `    }`,
+  ]},
+  { gap: "46 行已折叠（get / kill_workspace / kill_server）" },
+  { start: 183, lines: [
+    `    /// 工作区重启：优雅关闭全部 server 后逐语言重新拉起`,
+    `    pub async fn restart_workspace(`,
+    `        &self,`,
+    `        workspace: &str,`,
+    `    ) -> Result<(), LspError> {`,
+    `        self.kill_workspace(workspace).await;`,
+    `        self.ensure_server(workspace, LanguageId::Java).await?;`,
+    `        Ok(())`,
+    `    }`,
+    `}`,
+  ]},
+  { gap: "75 行已折叠（build_exclude_globs / shutdown_handle / ensure_data_dir）" },
+  { start: 268, lines: [
+    `/// 启动 server 进程并完成 initialize 握手（进程来源由 profile 决定）`,
+    `async fn spawn_and_init(`,
+    `    workspace: &str,`,
+    `    lang: &LanguageId,`,
+    `) -> Result<Arc<ServerHandle>, LspError> {`,
+    `    let profile = registry::profile_for(lang)?;`,
+    `    let prog = locate_server_binary(profile)?;`,
+    ``,
+    `    // stdin/stdout 管道，stderr 单独收集进日志`,
+    `    let child = build_spawn_command(&prog, profile.launch_args())`,
+    `        .stdin(Stdio::piped())`,
+    `        .stdout(Stdio::piped())`,
+    `        .stderr(Stdio::piped())`,
+    `        .spawn()?;`,
+    `    let handle = Arc::new(ServerHandle::new(child));`,
+    `    start_reader(handle.reader_tx(), handle.transport(), profile);`,
+    ``,
+    `    // —— 握手：initialize 偶发超时，先常规路径，失败整体重试一次 ——`,
+    `    if let Err(e) = init_handshake(&handle, profile.as_ref()).await {`,
+    `        warn!("握手失败：{e}，1.5s 后整体重试一次");`,
+    `        tokio::time::sleep(Duration::from_millis(1500)).await;`,
+    `        // 重试：换 jdtls 的 -data 目录再握（workspace 锁残留时有效）`,
+    `        init_handshake(&handle, profile.as_ref()).await?;`,
+    `    }`,
+    ``,
+    `    Ok(handle)`,
+    `}`,
+  ]},
+  { gap: "84 行已折叠（build_spawn_command / spawn_real / spawn_test / start_reader / lookup_section）" },
+  { start: 638, lines: [
+    `/// LSP initialize 握手：capabilities/settings 声明 → initialize → 等就绪 → initialized`,
+    `async fn init_handshake(`,
+    `    handle: &Arc<ServerHandle>,`,
+    `    profile: &dyn Profile,`,
+    `) -> Result<(), LspError> {`,
+    `    // capabilities 按客户端实际消费声明（definition.linkSupport 故意不声明）`,
+    `    let caps = profile.capabilities();`,
+    `    let settings = profile.settings();`,
+    `    let params = json!({`,
+    `        "processId": std::process::id(),`,
+    `        "capabilities": caps,`,
+    `        "initializationOptions": profile.init_options(),`,
+    `        // workspace/configuration 由 answer_server_request 应答`,
+    `    });`,
+    ``,
+    `    let _res: InitializeResult = handle`,
+    `        .request("initialize", params)`,
+    `        .await?;`,
+    ``,
+    `    // 等 server 报 ready（如 jdtls 的 ServiceReady）再发 initialized`,
+    `    wait_service_ready(handle).await;`,
+    `    handle`,
+    `        .request("initialized", json!({}))`,
+    `        .await?;`,
+    `    let _ = settings;`,
+    `    Ok(())`,
+    `}`,
+  ]},
+];
+
+/* gutter 标记：⇄ = 查看调用层级（本原型可点）；↓ = 现有跳实现标记（装饰） */
+const CALL_MARKS = { 84: "request", 122: "ensure_server", 184: "restart_workspace", 269: "spawn_and_init", 639: "init_handshake" };
+const IMPL_MARKS = [84, 269];
+const FILE_NAME = "manager.rs";
+
+/* 引用弹窗数据：ServerHandle = 多引用（弹列表）；restart_workspace = 唯一引用（直接跳） */
+const REF_SYMS = ["ServerHandle", "restart_workspace"];
+const REF_SET = new Set(REF_SYMS);
+const REFS = {
+  ServerHandle: [
+    { what: "返回类型 · ensure_server", file: "manager.rs", line: 126 },
+    { what: "返回类型 · spawn_and_init", file: "manager.rs", line: 272 },
+    { what: "构造点 · ServerHandle::new", file: "manager.rs", line: 282 },
+    { what: "参数类型 · init_handshake", file: "manager.rs", line: 640 },
+  ],
+  restart_workspace: [
+    { what: "命令入口 · lsp_restart_workspace", file: "mod.rs", line: 88 },
+  ],
+};
+
+/* ================================================================
+ * 数据：调用层级树（incoming / outgoing；sites 行号均在上面的渲染区里）
+ * null 文件 = 跨文件节点（真实实现会打开该文件，原型里 toast 提示）
+ * ================================================================ */
+const HIER = {
+  incoming: {
+    init_handshake: [
+      { name: "spawn_and_init", file: FILE_NAME, sites: [{ line: 286, col: 22 }, { line: 290, col: 9 }] },
+    ],
+    spawn_and_init: [
+      { name: "ensure_server", file: FILE_NAME, sites: [{ line: 133, col: 22 }] },
+      { name: "lsp_ensure_server", file: "mod.rs", sites: [{ line: 74, col: 26 }] },
+    ],
+    ensure_server: [
+      { name: "restart_workspace", file: FILE_NAME, sites: [{ line: 189, col: 14 }] },
+    ],
+    restart_workspace: [],
+    request: [
+      { name: "init_handshake", file: FILE_NAME, sites: [{ line: 654, col: 9 }, { line: 660, col: 9 }] },
+    ],
+  },
+  outgoing: {
+    init_handshake: [
+      { name: "request", file: FILE_NAME, sites: [{ line: 654, col: 9 }, { line: 660, col: 9 }] },
+      { name: "capabilities", file: "registry.rs", sites: [{ line: 24, col: 10 }] },
+      { name: "settings", file: "registry.rs", sites: [{ line: 31, col: 10 }] },
+    ],
+    request: [
+      { name: "send", file: "transport.rs", sites: [{ line: 90, col: 9 }] },
+      { name: "wait", file: "pending.rs", sites: [{ line: 91, col: 9 }] },
+    ],
+    ensure_server: [],
+    restart_workspace: [],
+    spawn_and_init: [],
+  },
+};
+
+/* ================================================================
+ * 编辑器渲染
+ * ================================================================ */
+const KEYWORDS = new Set(["pub","async","fn","let","match","if","else","return","for","in","impl","struct","use","mut","self","await","as","dyn","const","Some","None","Ok","Err"]);
+const TRACKED = ["init_handshake","spawn_and_init","ensure_server","restart_workspace","request"];
+
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function tokenize(line) {
+  if (!line) return "";
+  let html = "";
+  const re = /(\/\/.*$)|("(?:[^"\\]|\\.)*")|\b(\d+)\b|\b([A-Za-z_][A-Za-z0-9_]*)\b|(\S)|(\s+)/g;
+  let m;
+  while ((m = re.exec(line)) !== null) {
+    if (m[1]) html += `<span class="tk-c">${esc(m[1])}</span>`;
+    else if (m[2]) html += `<span class="tk-s">${esc(m[2])}</span>`;
+    else if (m[3]) html += `<span class="tk-n">${m[3]}</span>`;
+    else if (m[4]) {
+      const w = m[4];
+      if (REF_SET.has(w)) html += `<span class="ref-sym${TRACKED.includes(w) ? " tk-f" : ""}" data-sym="${w}" title="查看引用（真实产品：Alt+点击）">${w}</span>`;
+      else if (KEYWORDS.has(w)) html += `<span class="tk-k">${w}</span>`;
+      else if (TRACKED.includes(w)) html += `<span class="tk-f">${w}</span>`;
+      else html += esc(w);
+    }
+    else html += esc(m[0]);
+  }
+  return html;
+}
+
+const cmEl = document.getElementById("cm");
+(function renderEditor() {
+  const frag = document.createDocumentFragment();
+  for (const sec of SECTIONS) {
+    if (sec.gap) {
+      const g = document.createElement("div");
+      g.className = "fold-gap";
+      g.textContent = `⋯ ${sec.gap}`;
+      frag.appendChild(g);
+      continue;
+    }
+    sec.lines.forEach((text, i) => {
+      const ln = sec.start + i;
+      const row = document.createElement("div");
+      row.className = "line";
+      row.dataset.line = ln;
+      row.id = "L" + ln;
+      let marks = "";
+      if (CALL_MARKS[ln]) marks += `<span class="m-call" data-sym="${CALL_MARKS[ln]}" title="查看调用层级（callHierarchy）">⇄</span>`;
+      if (IMPL_MARKS.includes(ln)) marks += `<span class="m-impl" title="跳转到实现（现有能力，原型不演示）">↓</span>`;
+      row.innerHTML = `<span class="ln">${ln}</span><span class="gmark">${marks}</span><span class="code">${tokenize(text)}</span>`;
+      frag.appendChild(row);
+    });
+  }
+  cmEl.appendChild(frag);
+})();
+
+/* 点击分发：ref-sym → 引用弹窗；gutter ⇄ → 面板换根 */
+cmEl.addEventListener("click", (e) => {
+  const rsym = e.target.closest(".ref-sym");
+  if (rsym) { openRefPop(rsym.dataset.sym, rsym); return; }
+  const mark = e.target.closest(".m-call");
+  if (mark) { setRoot(mark.dataset.sym); return; }
+  if (e.target.closest(".m-impl")) toast("「跳转到实现」是现有能力（↓ 绿标），原型只演示 <b>⇄ 调用层级</b>");
+});
+
+/* ================================================================
+ * 引用弹窗（references popover）：符号旁锚定，补全式交互
+ * 真实产品：Alt+点击触发；数据源 LSP textDocument/references → codegraph → grep
+ * 唯一引用 → 不弹列表直接跳（沿用现有 goto popover 的 jumpOrPick 惯例）
+ * ================================================================ */
+let refPop = null;
+function closeRefPop() {
+  if (refPop) { refPop.remove(); refPop = null; }
+}
+
+function openRefPop(sym, anchorSpan) {
+  closeRefPop();
+  const refs = REFS[sym] || [];
+  if (refs.length === 0) return;
+
+  if (refs.length === 1) {
+    const r = refs[0];
+    if (r.file === FILE_NAME) jumpTo(r.line, true);
+    toast(`唯一引用 · 直接跳转 <b>${r.file}:${r.line}</b>（不弹列表）`);
+    return;
+  }
+
+  const pop = document.createElement("div");
+  pop.className = "ref-pop";
+  pop.tabIndex = -1;
+  pop.innerHTML = `
+    <div class="ref-pop-head">
+      <span class="sym">${sym}</span>&nbsp;的引用 <span class="n">${refs.length} 处</span>
+      <button class="ref-pop-close" title="关闭 (Esc)">×</button>
+    </div>
+    <div class="ref-pop-body"></div>
+    <div class="ref-pop-foot">
+      <span>↑↓ 选择</span><span>Enter 跳转</span><span>Esc 关闭</span>
+      <span style="margin-left:auto">同补全交互</span>
+    </div>`;
+  const body = pop.querySelector(".ref-pop-body");
+  let sel = 0;
+
+  const pickRef = (r) => {
+    closeRefPop();
+    if (r.file === FILE_NAME) {
+      jumpTo(r.line, true);
+      toast(`已压栈跳转 · 窗口 <b>← 后退</b>逐级弹回，后退后弹窗自动重开`);
+    } else {
+      toast(`跳转 <b>${r.file}:${r.line}</b>（原型未内置该文件）· 已压栈，← 后退可回`);
+    }
+  };
+  const renderItems = () => {
+    body.innerHTML = "";
+    refs.forEach((r, i) => {
+      const it = document.createElement("div");
+      it.className = "ref-item" + (i === sel ? " sel" : "");
+      it.innerHTML = `<span class="src">LSP</span><span class="what">${r.what}</span><span class="loc">${r.file}:${r.line}</span>`;
+      it.addEventListener("click", (ev) => { ev.stopPropagation(); pickRef(r); });
+      body.appendChild(it);
+    });
+  };
+  renderItems();
+
+  pop.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.stopPropagation(); closeRefPop(); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); sel = (sel + 1) % refs.length; renderItems(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); sel = (sel - 1 + refs.length) % refs.length; renderItems(); }
+    else if (e.key === "Enter") { e.preventDefault(); pickRef(refs[sel]); }
+  });
+  pop.querySelector(".ref-pop-close").addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeRefPop();
+  });
+
+  cmEl.appendChild(pop);
+  /* 锚定：符号正下方、左对齐符号；视口下半放不下则向上翻 */
+  const W = 318, EST_H = 210;
+  const spanRect = anchorSpan.getBoundingClientRect();
+  const cmRect = cmEl.getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(spanRect.left - cmRect.left, cmEl.clientWidth - W - 8)) + "px";
+  const below = spanRect.bottom - cmRect.top + 4;
+  if (below + EST_H < cmEl.clientHeight) {
+    pop.style.top = below + "px";
+  } else {
+    pop.style.top = Math.max(4, spanRect.top - cmRect.top - EST_H) + "px";
+  }
+  pop.focus();
+  refPop = pop;
+}
+
+/* 点击弹窗/符号以外任意处关闭 */
+document.addEventListener("click", (e) => {
+  if (refPop && !e.target.closest(".ref-pop") && !e.target.closest(".ref-sym")) closeRefPop();
+});
+
+/* ================================================================
+ * 面板状态与渲染
+ * ================================================================ */
+const rootBox = document.getElementById("ch-root-box");
+const treeEl = document.getElementById("ch-tree");
+const segEl = document.getElementById("ch-seg");
+
+const state = {
+  root: null,           // 当前根符号
+  direction: "incoming",
+  expanded: new Map(),  // nodeId -> "loading" | "loaded"
+};
+
+function nodeId(path) { return path.join("/"); }
+
+function setRoot(sym) {
+  state.root = sym;
+  state.expanded.clear();
+  renderRootChip();
+  renderSeg();
+  renderTreeLoading();
+  // 模拟 prepareCallHierarchy + incomingCalls 往返
+  setTimeout(() => {
+    renderTree();
+    jumpTo(declLine(sym), false);
+  }, 520);
+}
+function declLine(sym) {
+  for (const [ln, s] of Object.entries(CALL_MARKS)) if (s === sym) return Number(ln);
+  return null;
+}
+
+function renderRootChip() {
+  if (!state.root) { rootBox.innerHTML = ""; return; }
+  rootBox.innerHTML = `
+    <div class="ch-root">
+      <span class="kind-dot"></span>
+      <span class="name">${state.root}</span>
+      <span class="where">${FILE_NAME}:${declLine(state.root)}</span>
+    </div>`;
+}
+
+function renderSeg() {
+  segEl.querySelectorAll("button").forEach((b) => {
+    b.classList.toggle("on", b.dataset.dir === state.direction);
+    b.disabled = !state.root;
+  });
+}
+segEl.addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (!btn || !state.root || btn.dataset.dir === state.direction) return;
+  state.direction = btn.dataset.dir;
+  state.expanded.clear();
+  renderSeg();
+  renderTreeLoading();
+  setTimeout(renderTree, 480);
+});
+
+function renderTreeLoading() {
+  treeEl.innerHTML = `<div class="tn-loading"><span class="spin"></span>正在查询${state.direction === "incoming" ? "调用者" : "被调用者"}…</div>`;
+}
+
+function childrenOf(sym) {
+  return (HIER[state.direction] && HIER[state.direction][sym]) || [];
+}
+
+function renderTree() {
+  treeEl.innerHTML = "";
+  if (!state.root) {
+    treeEl.innerHTML = `
+      <div class="ch-empty">
+        <span class="big">⇄</span>
+        将光标放在符号上，或点击编辑器 gutter 的
+        <b style="color:var(--aide-accent)">⇄</b> 标记<br>
+        查看它的调用层级
+      </div>`;
+    return;
+  }
+  // 根行 + 直接展开第一层（prepareCallHierarchy 的结果就是第一层调用者）
+  const myPath = [state.root];
+  state.expanded.set(nodeId(myPath), "loaded");
+  const node = renderNode({ name: state.root, file: FILE_NAME, root: true }, myPath);
+  node.appendChild(buildChildrenBox({ name: state.root, root: true }, myPath));
+  const wrap = document.createElement("div");
+  wrap.className = "tn";
+  wrap.appendChild(node);
+  treeEl.appendChild(wrap);
+}
+
+/* 渲染一层节点列表。path = 从根到当前节点名的路径（去重防环） */
+function renderNodes(items, path) {
+  const box = document.createElement("div");
+  box.className = "tn-children";
+  for (const it of items) {
+    if (path.includes(it.name)) continue; // 环防御
+    box.appendChild(renderNode(it, path));
+  }
+  return box;
+}
+
+/* 节点的下一层内容：调用点行（fromRanges）+ 嵌套调用者（或终止行） */
+function buildChildrenBox(it, myPath) {
+  const box = document.createElement("div");
+  box.className = "tn-children";
+  box.style.paddingLeft = "14px";
+  // 1) fromRanges 调用点行
+  if (it.sites && !it.root) {
+    for (const s of it.sites) {
+      const cs = document.createElement("div");
+      cs.className = "cs-row";
+      cs.style.paddingLeft = "22px";
+      cs.innerHTML = `<span class="arr">⤳</span>L${s.line}:${s.col}`;
+      cs.title = "fromRanges：跳到该调用点";
+      cs.addEventListener("click", () => jumpTo(s.line, true));
+      box.appendChild(cs);
+    }
+  }
+  // 2) 下一层
+  const kids = childrenOf(it.name);
+  if (kids.length === 0) {
+    const t = document.createElement("div");
+    t.className = "tn-term";
+    t.style.paddingLeft = "38px";
+    t.textContent = state.direction === "incoming" ? "— 链到此为止（入口）" : "— 链到此为止（叶子）";
+    box.appendChild(t);
+  } else {
+    box.appendChild(renderNodes(kids, myPath));
+  }
+  return box;
+}
+
+function renderNode(it, path) {
+  const node = document.createElement("div");
+  node.className = "tn";
+
+  const myPath = it.root ? path : [...path, it.name];
+  const id = nodeId(myPath);
+  const expandedState = state.expanded.get(id);
+
+  const row = document.createElement("div");
+  row.className = "tn-row" + (it.file !== FILE_NAME ? " cross-file" : "");
+  row.innerHTML = `
+    <span class="chev ${expandedState === "loaded" ? "open" : ""}">▶</span>
+    <span class="tn-name">${it.name}</span>
+    ${it.sites && it.sites.length > 1 ? `<span class="tn-count" title="fromRanges：同一符号的多个调用点">×${it.sites.length}</span>` : ""}
+    <span class="tn-file">${it.file}</span>`;
+  row.querySelector(".tn-name").addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    activate(row, it);
+  });
+  row.addEventListener("click", () => activate(row, it));
+  row.querySelector(".chev").addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    toggleExpand(node, row, it, myPath);
+  });
+  node.appendChild(row);
+  return node;
+}
+
+/* 点击节点主体：同文件 → 跳转；跨文件 → toast（真实实现会打开该文件） */
+function activate(row, it) {
+  if (it.file === FILE_NAME && it.sites && it.sites.length) {
+    jumpTo(it.sites[0].line, true);
+    highlightSite(row);
+  } else if (it.file === FILE_NAME && !it.sites) {
+    jumpTo(declLine(it.name), true);
+  } else {
+    toast(`跳转 <b>${it.file}:${it.sites ? it.sites[0].line : "?"}</b>（原型未内置该文件，真实实现会打开）`);
+  }
+}
+function highlightSite(row) {
+  document.querySelectorAll(".tn-row.active-site").forEach((r) => r.classList.remove("active-site"));
+  row.classList.add("active-site");
+}
+
+/* 展开节点：懒加载（模拟 LSP 往返），完成后挂 fromRanges 行 + 下一层 */
+function toggleExpand(nodeEl, rowEl, it, myPath) {
+  const id = nodeId(myPath);
+  const chev = rowEl.querySelector(".chev");
+  const existing = nodeEl.querySelector(":scope > .tn-children");
+  if (existing) {
+    existing.remove();
+    state.expanded.delete(id);
+    chev.classList.remove("open");
+    return;
+  }
+  chev.classList.add("open");
+  const loading = document.createElement("div");
+  loading.className = "tn-loading";
+  loading.style.paddingLeft = "22px";
+  loading.innerHTML = `<span class="spin"></span>`;
+  nodeEl.appendChild(loading);
+  state.expanded.set(id, "loading");
+
+  setTimeout(() => {
+    loading.remove();
+    state.expanded.set(id, "loaded");
+    nodeEl.appendChild(buildChildrenBox(it, myPath));
+  }, 460);
+}
+
+/* ================================================================
+ * 跳转 + flash
+ * ================================================================ */
+function jumpTo(line, flash) {
+  if (!line) return;
+  const el = document.getElementById("L" + line);
+  if (!el) { toast(`L${line} 不在渲染区（折叠区），真实实现会展开后跳转`); return; }
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  if (flash) {
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 1100);
+  }
+}
+
+/* ================================================================
+ * toast
+ * ================================================================ */
+const toastEl = document.getElementById("toast");
+let toastTimer = null;
+function toast(html) {
+  toastEl.innerHTML = html;
+  toastEl.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove("show"), 3000);
+}
+
+/* ================================================================
+ * 面板关闭 / 打开
+ * ================================================================ */
+document.getElementById("panel-close").addEventListener("click", () => {
+  state.root = null;
+  state.expanded.clear();
+  renderRootChip();
+  renderSeg();
+  renderTree();
+});
+
+/* ================================================================
+ * 对照组：FileResolveOverlay 式模态弹窗
+ * ================================================================ */
+const frOverlay = document.getElementById("fr-overlay");
+const frList = document.getElementById("fr-list");
+const reopenN = document.getElementById("reopen-n");
+let reopenCount = 0;
+
+document.getElementById("btn-modal").addEventListener("click", () => {
+  reopenCount++;
+  reopenN.textContent = reopenCount;
+  // FileResolveOverlay 的形态：扁平候选列表，选一个就关
+  frList.innerHTML = "";
+  const caller = HIER.incoming.init_handshake[0];
+  caller.sites.forEach((s) => {
+    const b = document.createElement("button");
+    b.className = "fr-picker-item";
+    b.innerHTML = `<span class="sym">${caller.name}</span><span class="loc">${caller.file} · L${s.line}:${s.col}</span>`;
+    b.addEventListener("click", () => {
+      closeFr();
+      jumpTo(s.line, true);
+      toast(`弹窗已关闭。想再追一层「谁又调用了 <b>${caller.name}</b>」？只能再开一次弹窗——面板版不用，点树上的箭头就行`);
+    });
+    frList.appendChild(b);
+  });
+  frOverlay.classList.add("show");
+});
+function closeFr() { frOverlay.classList.remove("show"); }
+document.getElementById("fr-cancel").addEventListener("click", closeFr);
+frOverlay.addEventListener("click", (e) => { if (e.target === frOverlay) closeFr(); });
+
+/* ================================================================
+ * 引用弹窗演示：脉冲 ServerHandle@L272 → 弹出锚定浮层
+ * ================================================================ */
+document.getElementById("btn-refs").addEventListener("click", () => {
+  const target = [...document.querySelectorAll('.ref-sym[data-sym="ServerHandle"]')]
+    .find((s) => Number(s.closest(".line").dataset.line) === 272);
+  if (!target) return;
+  target.scrollIntoView({ block: "center" });
+  target.classList.add("pulse");
+  setTimeout(() => {
+    target.classList.remove("pulse");
+    openRefPop("ServerHandle", target);
+  }, 620);
+});
+
+/* ================================================================
+ * 自动演示：gutter 脉冲 → 打开面板 → 展开第一层 → 跳到调用点
+ * ================================================================ */
+document.getElementById("btn-demo").addEventListener("click", runDemo);
+function runDemo() {
+  const mark = document.querySelector('.m-call[data-sym="init_handshake"]');
+  if (mark) {
+    mark.classList.add("pulse");
+    setTimeout(() => mark.classList.remove("pulse"), 3400);
+  }
+  setTimeout(() => {
+    setRoot("init_handshake");
+    // 面板加载完后自动展开 spawn_and_init 一层，演示懒加载 + fromRanges
+    setTimeout(() => {
+      const row = [...treeEl.querySelectorAll(".tn-row")]
+        .find((r) => r.querySelector(".tn-name").textContent === "spawn_and_init");
+      if (row) row.querySelector(".chev").click();
+      setTimeout(() => {
+        const cs = treeEl.querySelector(".cs-row");
+        if (cs) cs.click();
+      }, 700);
+    }, 900);
+  }, 1200);
+}
+
+/* 初始：空态 + 1.6s 后自动演示 */
+renderRootChip();
+renderSeg();
+renderTree();
+setTimeout(runDemo, 1600);
+</script>
+</body>
+</html>

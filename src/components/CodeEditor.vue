@@ -37,9 +37,14 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "update:modelValue", value: string): void;
-  (e: "goto-definition", payload: { word: string; filePath: string; line: number; column: number; wordColumn: number; viewportY: number }): void;
+  /** Ctrl/Cmd+Click 符号 → 跳定义。clientX/clientY 为点击坐标（client 系），
+   *  供宿主把结果浮层锚定在符号旁（补全式）。 */
+  (e: "goto-definition", payload: { word: string; filePath: string; line: number; column: number; wordColumn: number; viewportY: number; clientX: number; clientY: number }): void;
+  /** Alt+Click 符号 → 查引用（LSP textDocument/references → grep 兜底）。
+   *  payload 语义与 goto-definition 相同：位置取词、坐标锚定浮层。 */
+  (e: "goto-references", payload: { word: string; filePath: string; line: number; column: number; wordColumn: number; viewportY: number; clientX: number; clientY: number }): void;
   /** gutter 标记点击（跳实现）：results 为缓存实现列表，viewportY 复刻点击处视口偏移
-   *  以对齐目标行；line 为标记所在行（回退 sourceLine）。 */
+   *  以对齐目标行；line 为标记所在行（回退 sourceLine）；clientX/clientY 锚定浮层。 */
   (e: "gutter-goto", payload: GutterGotoPayload): void;
   /** vim ex 命令（:w/:wq/:q/:q!）请求文件操作，由宿主组件（FileWindow）执行 */
   (e: "vim-ex", command: VimExCommand): void;
@@ -152,7 +157,36 @@ async function createEditor() {
       implGutterCompartment.of([]),
       EditorView.domEventHandlers({
         click(event, view) {
-          if (event.ctrlKey || event.metaKey) {
+          // Alt+Click（无 Ctrl/Cmd/Shift 修饰）→ 查引用；Ctrl/Cmd+Click → 跳定义。
+          // 取词/视口偏移两分支同构，仅事件不同；坐标（clientX/Y）随 payload 传出，
+          // 宿主把结果浮层锚在点击符号旁。
+          if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+            const pos = view.posAtCoords({
+              x: event.clientX,
+              y: event.clientY,
+            });
+            if (pos !== null) {
+              const wordAt = view.state.wordAt(pos);
+              if (wordAt) {
+                const word = view.state.doc.sliceString(wordAt.from, wordAt.to);
+                if (word) {
+                  event.preventDefault();
+                  const lineObj = view.state.doc.lineAt(pos);
+                  const viewportY = event.clientY - view.scrollDOM.getBoundingClientRect().top;
+                  emit("goto-references", {
+                    word,
+                    filePath: props.filePath,
+                    line: lineObj.number,
+                    column: pos - lineObj.from + 1,
+                    wordColumn: wordAt.from - lineObj.from + 1,
+                    viewportY,
+                    clientX: event.clientX,
+                    clientY: event.clientY,
+                  });
+                }
+              }
+            }
+          } else if (event.ctrlKey || event.metaKey) {
             const pos = view.posAtCoords({
               x: event.clientX,
               y: event.clientY,
@@ -178,6 +212,8 @@ async function createEditor() {
                     column: pos - lineObj.from + 1,
                     wordColumn: wordAt.from - lineObj.from + 1,
                     viewportY,
+                    clientX: event.clientX,
+                    clientY: event.clientY,
                   });
                 }
               }

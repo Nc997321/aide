@@ -46,8 +46,10 @@ let requestSeq = 0;
 let lastProjectRoot = "";
 let lastSourceExt = "";
 let lastSourceFile = "";
+let lastSourceFileAbs = "";
 let lastSourceLine = 0;
 let lastSourceColumn = 0;
+let lastSourceWordColumn = 0;
 
 export function useGotoDefinition() {
   /** 跑 codegraph→grep 本地索引两层（不调 LSP）。供 search() 的 ok-empty/not_ready/gone 分支
@@ -138,8 +140,10 @@ export function useGotoDefinition() {
     lastProjectRoot = projectRoot;
     lastSourceExt = source?.sourceExt || "";
     lastSourceFile = source?.sourceFile || "";
+    lastSourceFileAbs = source?.sourceFileAbs || "";
     lastSourceLine = source?.sourceLine || 0;
     lastSourceColumn = source?.sourceColumn ?? 0;
+    lastSourceWordColumn = source?.sourceWordColumn ?? 0;
     results.value = [];
     selectedIndex.value = 0;
     visible.value = true;
@@ -285,39 +289,82 @@ export function useGotoDefinition() {
     return results.value[selectedIndex.value] ?? null;
   }
 
-  async function searchAllReferences(word: string, projectRoot: string) {
+  /** 「查引用」：LSP 权威（textDocument/references，符号 → 全部使用点）→ grep 文本兜底。
+   *  本地兜底不走 codegraph——codegraphGotoDefinition 查到的是定义点，在引用场景会拿
+   *  定义冒充使用点；grep 的 word-boundary 全量文本出现位更贴近使用点语义（[匹配] 标签如实标注）。
+   *  - source 提供（Alt+Click 入口）：带完整源位置走 LSP；requestSeq 防串台。
+   *  - source 缺省（「未找到定义 · 搜索所有引用」hint 链接）：复用上次 search() 缓存的
+   *    lastSource*（跨函数共享，含绝对路径）。
+   *  - status 语义照搬定义跳转：ok-empty/not_ready/gone → grep；timeout → 降级提示不 auto-fallback。
+   *  单命中是否直接跳由调用方决定（Alt+Click 入口 jumpOrPick；hint 链接保持列表探索）。 */
+  async function searchAllReferences(
+    word: string,
+    projectRoot: string,
+    source?: { sourceFile: string; sourceFileAbs?: string; sourceLine: number; sourceExt: string; sourceColumn?: number; sourceWordColumn?: number },
+  ) {
     if (!word || !projectRoot) return;
-    requestSeq++; // 取消任何进行中的定义跳转 await
-    searching.value = false;
-    degraded.value = null;
+    const mySeq = ++requestSeq; // 取消任何进行中的定义跳转 await
 
     searchWord.value = word;
     targetProjectRoot.value = projectRoot;
+    lastProjectRoot = projectRoot;
+    if (source) {
+      lastSourceExt = source.sourceExt || "";
+      lastSourceFile = source.sourceFile || "";
+      lastSourceFileAbs = source.sourceFileAbs || "";
+      lastSourceLine = source.sourceLine || 0;
+      lastSourceColumn = source.sourceColumn ?? 0;
+      lastSourceWordColumn = source.sourceWordColumn ?? 0;
+    }
+    // hint 链接路径：无 source 参数时沿用缓存（仅当同一 projectRoot，防跨工作区串台）
+    const srcAbs = source?.sourceFileAbs || (lastProjectRoot === projectRoot ? lastSourceFileAbs : "");
+    const srcLine = source ? source.sourceLine : lastSourceLine;
+    const keyCol = source
+      ? (source.sourceWordColumn ?? source.sourceColumn ?? 0)
+      : (lastSourceWordColumn || lastSourceColumn);
+
     results.value = [];
     selectedIndex.value = 0;
     visible.value = true;
     isGrepFallback.value = false;
     mode.value = "references";
+    degraded.value = null;
+    // 与 search() 一致：只要有 await 在途就置 loading，避免 grep 往返期间闪「未找到引用」
+    searching.value = true;
 
-    // Try CodeGraph with broader scope (no current-file filter)
-    try {
-      const cgResults = await api.codegraphGotoDefinition(
-        word, "", 0, 0, projectRoot,
-      );
-      if (cgResults.length > 0) {
-        results.value = cgResults.map(r => ({
-          ...r,
-          source: r.confidence === "Structure" ? ("ast" as const) : ("semantic" as const),
-        }));
-        return;
+    // 0. LSP 引用（源位置已知 + server 在线 → 权威；点击处本身也是使用点，stampLsp 滤掉）
+    if (srcAbs && srcLine > 0 && useLsp().isLspOn(projectRoot)) {
+      try {
+        const jump = await api.lspReferences(projectRoot, srcAbs, srcLine, keyCol, word);
+        if (mySeq !== requestSeq) return;
+        if (jump.status === "ok") {
+          const filtered = stampLsp(jump.results, projectRoot, srcAbs, srcLine);
+          if (filtered.length > 0) {
+            results.value = filtered;
+            searching.value = false;
+            return;
+          }
+          // ok 但空 = server 确认无引用 → grep 文本兜底（字符串/注释里仍可能出现）
+        } else if (jump.status === "timeout") {
+          // 结果未知，与定义跳转 timeout 同语义：降级提示 + 手动「用本地索引」链接
+          degraded.value = "timeout";
+          searching.value = false;
+          return;
+        }
+        // not_ready / gone → grep 兜底
+      } catch {
+        if (mySeq !== requestSeq) return;
+        // invoke 抛错（通道/序列化）→ grep 兜底
       }
-    } catch { /* fall through */ }
+    }
+    if (mySeq !== requestSeq) return;
 
-    // Fallback to grep
+    // 1. grep 文本兜底（word-boundary 精确匹配 = 全部文本使用点）
     isGrepFallback.value = true;
     try {
       const matches = await api.grepSymbol(word, projectRoot, lastSourceExt || undefined);
-      // 同 search() 的 grep 兜底：confidence/score 是类型占位，渲染走 source:"grep"/isGrepFallback。
+      if (mySeq !== requestSeq) return;
+      // grep 是文本匹配，confidence/score 仅是类型占位（同 runLocalTiers 注释），勿据此判断。
       results.value = matches.map(m => ({
         symbol: {
           name: word,
@@ -332,8 +379,11 @@ export function useGotoDefinition() {
         source: "grep" as const,
       }));
     } catch {
+      if (mySeq !== requestSeq) return;
       results.value = [];
     }
+    if (mySeq !== requestSeq) return;
+    searching.value = false;
   }
 
   return {
@@ -372,7 +422,9 @@ export function __resetGotoForTest() {
   lastProjectRoot = "";
   lastSourceExt = "";
   lastSourceFile = "";
+  lastSourceFileAbs = "";
   lastSourceLine = 0;
   lastSourceColumn = 0;
+  lastSourceWordColumn = 0;
   resolver.__resetForTest();
 }

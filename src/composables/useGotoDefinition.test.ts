@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// mock api: lspDefinition / codegraphGotoDefinition / grepSymbol
+// mock api: lspDefinition / lspReferences / codegraphGotoDefinition / grepSymbol
 vi.mock("../api", () => ({
   api: {
     lspDefinition: vi.fn(),
+    lspReferences: vi.fn(),
     codegraphGotoDefinition: vi.fn(),
     grepSymbol: vi.fn(),
     workspaceSetLspEnabled: vi.fn().mockResolvedValue(undefined),
@@ -216,5 +217,116 @@ describe("useGotoDefinition.search provider chain", () => {
     await search("foo", "/p", { sourceFile: "p/main.rs", sourceFileAbs: "/p/main.rs", sourceLine: 1, sourceExt: "rs", sourceColumn: 5, sourceWordColumn: 3 });
     expect(api.lspDefinition).toHaveBeenCalledTimes(2); // 预取 + 失效后重取
     expect(results.value.length).toBe(1);
+  });
+});
+
+describe("useGotoDefinition.searchAllReferences provider chain", () => {
+  beforeEach(() => {
+    useLsp().__resetForTest();
+    __resetGotoForTest();
+    vi.clearAllMocks();
+  });
+
+  it("lsp_references_first_self_ref_filtered", async () => {
+    // LSP 返回两个使用点：点击处本身（同文件同行，滤掉）+ 真正使用点 → 只留后者
+    (api.lspReferences as any).mockResolvedValue({
+      status: "ok",
+      results: [
+        { symbol: { name: "foo", file: "/p/main.rs", line: 3, column: 6, kind: "Variable", parent: null }, confidence: "Structure", score: null },
+        { symbol: { name: "foo", file: "/p/other.rs", line: 12, column: 8, kind: "Variable", parent: null }, confidence: "Structure", score: null },
+      ],
+    });
+    useLsp().lspEnabledWorkspaces.value.add("/p");
+    const { searchAllReferences, results, searching } = useGotoDefinition();
+    await searchAllReferences("foo", "/p", { sourceFile: "main.rs", sourceFileAbs: "/p/main.rs", sourceLine: 3, sourceExt: "rs", sourceColumn: 6, sourceWordColumn: 5 });
+    expect(api.lspReferences).toHaveBeenCalledTimes(1);
+    expect(api.grepSymbol).not.toHaveBeenCalled(); // LSP 命中不落兜底
+    expect(api.codegraphGotoDefinition).not.toHaveBeenCalled(); // 引用链不走 codegraph（定义冒充使用点）
+    expect(results.value.length).toBe(1);
+    expect(results.value[0].source).toBe("lsp");
+    expect(results.value[0].symbol.file).toBe("/p/other.rs");
+    expect(searching.value).toBe(false);
+  });
+
+  it("lsp_references_timeout_degraded_no_grep", async () => {
+    // timeout：结果未知 → 降级提示，不 auto-fallback grep（与定义跳转同语义）
+    (api.lspReferences as any).mockResolvedValue({ status: "timeout", results: [] });
+    useLsp().lspEnabledWorkspaces.value.add("/p");
+    const { searchAllReferences, results, degraded, searching } = useGotoDefinition();
+    await searchAllReferences("foo", "/p", { sourceFile: "main.rs", sourceFileAbs: "/p/main.rs", sourceLine: 3, sourceExt: "rs", sourceColumn: 6 });
+    expect(api.grepSymbol).not.toHaveBeenCalled();
+    expect(degraded.value).toBe("timeout");
+    expect(results.value.length).toBe(0);
+    expect(searching.value).toBe(false);
+  });
+
+  it("lsp_references_ok_empty_falls_to_grep", async () => {
+    // server 确认无引用 → grep 文本兜底（字符串/注释里的出现仍有价值）
+    (api.lspReferences as any).mockResolvedValue({ status: "ok", results: [] });
+    (api.grepSymbol as any).mockResolvedValue([
+      { file: "p/notes.md", line: 7 },
+    ]);
+    useLsp().lspEnabledWorkspaces.value.add("/p");
+    const { searchAllReferences, results } = useGotoDefinition();
+    await searchAllReferences("foo", "/p", { sourceFile: "main.rs", sourceFileAbs: "/p/main.rs", sourceLine: 3, sourceExt: "rs", sourceColumn: 6 });
+    expect(api.grepSymbol).toHaveBeenCalledTimes(1);
+    expect(results.value.length).toBe(1);
+    expect(results.value[0].source).toBe("grep");
+    expect(results.value[0].symbol.file).toBe("p/notes.md");
+  });
+
+  it("lsp_references_error_falls_to_grep", async () => {
+    // invoke 抛错（通道/序列化）→ grep 兜底，不抛出
+    (api.lspReferences as any).mockRejectedValue(new Error("channel dead"));
+    (api.grepSymbol as any).mockResolvedValue([]);
+    useLsp().lspEnabledWorkspaces.value.add("/p");
+    const { searchAllReferences, results } = useGotoDefinition();
+    await searchAllReferences("foo", "/p", { sourceFile: "main.rs", sourceFileAbs: "/p/main.rs", sourceLine: 3, sourceExt: "rs", sourceColumn: 6 });
+    expect(api.grepSymbol).toHaveBeenCalledTimes(1);
+    expect(results.value.length).toBe(0);
+  });
+
+  it("lsp_off_goes_straight_grep", async () => {
+    (api.grepSymbol as any).mockResolvedValue([
+      { file: "p/a.rs", line: 1 },
+      { file: "p/b.rs", line: 2 },
+    ]);
+    // LSP 未开 → 不调 lspReferences，直接 grep
+    const { searchAllReferences, results } = useGotoDefinition();
+    await searchAllReferences("foo", "/p", { sourceFile: "main.rs", sourceFileAbs: "/p/main.rs", sourceLine: 3, sourceExt: "rs", sourceColumn: 6 });
+    expect(api.lspReferences).not.toHaveBeenCalled();
+    expect(api.grepSymbol).toHaveBeenCalledTimes(1);
+    expect(results.value.length).toBe(2);
+    expect(results.value.every(r => r.source === "grep")).toBe(true);
+  });
+
+  it("hint_link_without_source_reuses_cached_source_for_lsp", async () => {
+    // 「未找到定义 · 搜索所有引用」hint 链接无 source 参数 → 复用上次缓存源位置走 LSP
+    (api.lspReferences as any).mockResolvedValue({
+      status: "ok",
+      results: [
+        { symbol: { name: "foo", file: "/p/other.rs", line: 12, column: 8, kind: "Variable", parent: null }, confidence: "Structure", score: null },
+      ],
+    });
+    useLsp().lspEnabledWorkspaces.value.add("/p");
+    const { searchAllReferences } = useGotoDefinition();
+    // 带源首查（如 Alt+Click）→ 缓存 lastSource*
+    await searchAllReferences("foo", "/p", { sourceFile: "main.rs", sourceFileAbs: "/p/main.rs", sourceLine: 9, sourceExt: "rs", sourceColumn: 6 });
+    vi.clearAllMocks();
+    // hint 链接二次查（无 source）
+    await searchAllReferences("foo", "/p");
+    expect(api.lspReferences).toHaveBeenCalledTimes(1);
+    expect(api.lspReferences).toHaveBeenCalledWith("/p", "/p/main.rs", 9, 6, "foo");
+  });
+
+  it("no_cached_source_goes_grep_only", async () => {
+    // 冷启动直接查引用（无任何缓存源位置）→ 无 LSP，grep 兜底（旧行为）
+    (api.grepSymbol as any).mockResolvedValue([]);
+    useLsp().lspEnabledWorkspaces.value.add("/p");
+    const { searchAllReferences, results } = useGotoDefinition();
+    await searchAllReferences("foo", "/p");
+    expect(api.lspReferences).not.toHaveBeenCalled();
+    expect(api.grepSymbol).toHaveBeenCalledTimes(1);
+    expect(results.value.length).toBe(0);
   });
 });
