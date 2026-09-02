@@ -310,7 +310,16 @@ export function useChatScroll(
     // 首帧同步落位：ramp 每帧加内容后，RO 触发的 scrollToBottom 落在下一帧 rAF，
     // 本帧会用上一帧的 scrollTop 渲染造成一帧抖动；这里在调度下一 tick 前同步
     // 落位，覆盖上一帧残留（bottom=钉底 / anchor=离底锚定）。
-    rampLand();
+    // ——anchor（切回）例外：startRamp 在 watch(sessionId) 的 pre-flush 里执行，
+    // 此刻 DOM 还是【上一个会话】的——在旧 DOM 上读 scrollHeight 算出的 target
+    // 是错的，写入无意义；更糟的是它把接管判定基线（lastAnchorTop）锚到旧 DOM
+    // 的值上——patch 内容替换后 scrollTop 的任何变化（布局期钳位/挂载期写入）
+    // 都会被 tick 帧误判成「滚条拖动」取消 ramp（2026-09-01 trail 实锤：首帧
+    // 写 0 → patch 后 scrollTop 被置到新 DOM 的 max → anchor deviate 误判 →
+    // 位置钉死在误判点）。anchor 的首帧落位交给 tick 第一帧（新 DOM）完成，
+    // lastAnchorTop 从新 DOM 建立——首帧天然跳过偏差判定（null 基线），中途
+    // 的跳变会被首帧直接覆盖为正确落点。
+    if (pin.kind === "bottom") rampLand();
     rafHandle = scheduleFrame(tick); // 首帧只渲染 rampInitial 行，下一帧才开始递增
 
     function tick() {

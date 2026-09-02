@@ -199,11 +199,16 @@ describe("useChatScroll", () => {
     // 切走（真实用户操作有间隔，watch 分两批触发）：记录 s1 位置（top=500, distBottom=1317）
     sid.value = "s2";
     await nextTick();
+    // s2 首开 bottom ramp 同步钉底写 1817（bottom 首帧保留同步落位——同 DOM 防抖）
+    expect(scrollEl.value!.scrollTop).toBe(1817);
     // 切回：锚定 ramp 首帧只挂尾部（不全量同步挂载——一次性巨型 patch 是流光掉帧元凶）
     sid.value = "s1";
     await nextTick();
     expect(visibleRows.value.length).toBe(6); // 首帧渲染预算，未全量
-    expect(scrollEl.value!.scrollTop).toBe(500); // pin0 已锚定到离开位置
+    // anchor 首帧不写旧 DOM（2026-09-01 修复）：watch pre-flush 时 DOM 还是 s2 的，
+    // 写入既无意义又会把接管基线锚到旧值——切回瞬间 scrollTop 保持残留（1817），
+    // 落位交给 tick 首帧（新 DOM）
+    expect(scrollEl.value!.scrollTop).toBe(1817);
     flush(); // 分帧跑完 → 全量 + 双帧校准
     expect(scrollEl.value!.scrollTop).toBe(500); // 恢复离开时的位置，而不是被拖回底部
     expect(visibleRows.value.length).toBe(100); // 挂载终态仍是全量（scroll 完整性）
@@ -276,8 +281,10 @@ describe("useChatScroll", () => {
     expect(ramping.value).toBe(false); // messages 空，ramp 挂起未启动
     list.value = makeMessages(100); // hydrate 到齐（0→N）
     await nextTick(); // length watcher 触发锚定 ramp
-    expect(scrollEl.value!.scrollTop).toBe(500); // pin0 已按 distBottom 锚定
+    // anchor 首帧不写旧 DOM（2026-09-01 修复）：落位在 flush 的 tick 首帧（新 DOM）
+    expect(scrollEl.value!.scrollTop).toBe(1817); // 切回瞬间保持残留（s2 钉底值）
     flush();
+    expect(scrollEl.value!.scrollTop).toBe(500); // tick 首帧按 distBottom 锚定
     expect(visibleRows.value.length).toBe(100);
     expect(ramping.value).toBe(false);
   });

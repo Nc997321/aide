@@ -255,4 +255,27 @@ describe("useChatScroll 几何仿真：切回位置记忆（锚点修复）", ()
     // 锚行 m50 新顶 50×70=3500 + 行内偏移 50 = 3550（视口顶对齐离开时刻的精确内容位置）
     expect(api.scrollEl.value!.scrollTop).toBe(3550);
   });
+
+  it("trail 现场复刻（2026-09-01 Ctrl+Shift+D 落盘）：切回经 hero 中转 + 布局期 scrollTop 被第三方置底 → 首帧覆盖恢复、不误判接管", async () => {
+    // 现场：write ramp anchor m=6 top=0（旧 hero DOM 上算出 0 并锚基线）→ patch 后
+    // scrollTop 被置到新 DOM 的 max（scroll top=3795=sh-ch）→ tick 帧 anchor
+    // deviate 3795≠0 → 误判滚条拖动 → ramp 取消 → 位置钉死在置底点（ch 恢复后
+    // 即「上方某一处」）。修复：anchor 首帧不再写旧 DOM、基线从新 DOM 建立——
+    // 首帧天然跳过偏差判定，置底被覆盖为正确落点。
+    const { sid, list, flush, api, model } = setup();
+    flush(); // 首开挂满（钉底）
+    api.scrollEl.value!.scrollTop = 5000; // 用户在中部离开（distBottom=5000）
+    sid.value = "s2";
+    list.value = []; // hero 中转（复刻 trail 的 session null：messages 清空）
+    await nextTick();
+    model.scrollTop = 0; // hero 期间 RO/钳位回波把 scrollTop 归零（trail: toBottom 0→0）
+    sid.value = "s1";
+    list.value = makeMessages(100); // 切回：messages 到位，startRamp（不再写旧 DOM）
+    await nextTick(); // tick 入队、DOM 待 patch
+    // ★ 布局期神秘置底（绕过仿真 clamp 直接写模型 = 浏览器/组件在 patch 后的写入）
+    model.scrollTop = 10000 - 817; // 新 DOM 的 max（trail: top=3795=sh-ch 同构）
+    flush(); // tick 帧：lastAnchorTop 仍为 null → 跳过接管判定 → 覆盖为正确落点
+    expect(api.scrollEl.value!.scrollTop).toBe(5000); // 恢复离开位置（而非钉死 9183）
+    expect(api.ramping.value).toBe(false); // ramp 正常收尾（未被 deviate 取消）
+  });
 });
