@@ -37,12 +37,6 @@ describe("ProcessGroup — 过程胶囊", () => {
     expect(wrapper.findAll(".pg-body > *")).toHaveLength(3);
   });
 
-  it("段内有失败工具时摘要带失败计数", () => {
-    const segments = processSegmentsOf([tool("Read"), tool("Grep", { isError: true }), thinking("t")]);
-    const wrapper = mount(ProcessGroup, { props: { segments }, global: { stubs: STUBS } });
-    expect(wrapper.find(".pg-err").text()).toContain("1 失败");
-  });
-
   it("段内有子代理时摘要带子代理数", () => {
     const subagent: ContentBlock = {
       type: "subagent", id: "s1", agentName: "Explore", description: "", entries: [], isPending: false,

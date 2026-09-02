@@ -63,10 +63,9 @@ describe("segmentBlocks", () => {
 });
 
 describe("groupStats", () => {
-  it("按次数降序统计种类，累计失败数", () => {
+  it("按次数降序统计种类", () => {
     const stats = groupStats([tool("Read"), tool("Glob"), tool("Read"), tool("Grep", { isError: true })]);
     expect(stats.total).toBe(4);
-    expect(stats.errorCount).toBe(1);
     expect(stats.kinds).toEqual([
       { name: "Read", count: 2 },
       { name: "Glob", count: 1 },
@@ -136,7 +135,7 @@ describe("segmentBlocks 过程合并（finalized）", () => {
 });
 
 describe("processStats", () => {
-  it("统计思考段数 / 工具总数 / 失败数 / 子代理数", () => {
+  it("统计思考段数 / 工具总数 / 子代理数", () => {
     const segs = segmentBlocks(
       [
         tool("Read"), tool("Grep", { isError: true }), thinking("t1"),
@@ -146,13 +145,13 @@ describe("processStats", () => {
     );
     expect(segs).toHaveLength(1);
     const stats = processStats((segs[0] as { segments: Segment[] }).segments);
-    expect(stats).toEqual({ thinkingCount: 2, toolTotal: 3, toolErrorCount: 1, subagentCount: 1 });
+    expect(stats).toEqual({ thinkingCount: 2, toolTotal: 3, subagentCount: 1 });
   });
 
   it("无思考/无工具时为 0", () => {
     const stats = processStats([
       { kind: "tool_group", blocks: [tool("Read")], index: 0 },
     ]);
-    expect(stats).toEqual({ thinkingCount: 0, toolTotal: 1, toolErrorCount: 0, subagentCount: 0 });
+    expect(stats).toEqual({ thinkingCount: 0, toolTotal: 1, subagentCount: 0 });
   });
 });

@@ -86,47 +86,41 @@ export function segmentBlocks(blocks: ContentBlock[], opts?: { finalized?: boole
   return opts?.finalized ? mergeProcessRuns(segments) : segments;
 }
 
-/** 工具组收起态摘要所需的统计：总数、失败数、按次数降序的种类分布。 */
+/** 工具组收起态摘要所需的统计：总数、按次数降序的种类分布。 */
 export interface GroupStats {
   total: number;
-  errorCount: number;
   kinds: { name: string; count: number }[];
 }
 
 export function groupStats(blocks: ToolCallBlock[]): GroupStats {
   const counts = new Map<string, number>();
-  let errorCount = 0;
   for (const b of blocks) {
     counts.set(b.name, (counts.get(b.name) ?? 0) + 1);
-    if (b.isError) errorCount++;
   }
   const kinds = [...counts.entries()]
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count);
-  return { total: blocks.length, errorCount, kinds };
+  return { total: blocks.length, kinds };
 }
 
-/** process 胶囊收起态摘要所需的统计：思考段数、工具调用总数/失败数、子代理数。 */
+/** process 胶囊收起态摘要所需的统计：思考段数、工具调用总数、子代理数。 */
 export interface ProcessStats {
   thinkingCount: number;
   toolTotal: number;
-  toolErrorCount: number;
   subagentCount: number;
 }
 
 export function processStats(segments: Segment[]): ProcessStats {
   let thinkingCount = 0;
   let toolTotal = 0;
-  let toolErrorCount = 0;
   let subagentCount = 0;
   for (const seg of segments) {
     if (seg.kind === "tool_group") {
       toolTotal += seg.blocks.length;
-      for (const b of seg.blocks) if (b.isError) toolErrorCount++;
     } else if (seg.kind === "block") {
       if (seg.block.type === "thinking") thinkingCount++;
       else if (seg.block.type === "subagent") subagentCount++;
     }
   }
-  return { thinkingCount, toolTotal, toolErrorCount, subagentCount };
+  return { thinkingCount, toolTotal, subagentCount };
 }

@@ -70,7 +70,6 @@ const runningSummary = computed(() =>
       <template v-else>
         <span class="tg-n">{{ stats.total }}</span> 次工具调用
         <span class="tg-kinds">{{ kindsLabel }}</span>
-        <span v-if="stats.errorCount > 0" class="tg-err"> · {{ stats.errorCount }} 失败</span>
       </template>
       <span v-if="bgRunningCount > 0" class="tg-bg">● {{ bgRunningCount }} 后台运行中</span>
     </button>
@@ -168,10 +167,6 @@ const runningSummary = computed(() =>
   direction: rtl;
   text-align: left;
 }
-.tg-err {
-  color: var(--aide-danger);
-}
-
 /* 组内后台任务提示：与 ToolCallBlock 的 ti-bgchip 同一配方 */
 .tg-bg {
   flex-shrink: 0;

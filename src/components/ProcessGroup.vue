@@ -32,7 +32,7 @@ const expanded = ref(false);
 
 const stats = computed(() => processStats(props.segments));
 
-/** 摘要：「4 段思考 · 9 次工具调用 · 1 个子代理」，缺项不出现；失败数单独红色徽章。 */
+/** 摘要：「4 段思考 · 9 次工具调用 · 1 个子代理」，缺项不出现。 */
 const summary = computed(() => {
   const parts: string[] = [];
   if (stats.value.thinkingCount > 0) parts.push(`${stats.value.thinkingCount} 段思考`);
@@ -48,7 +48,6 @@ const summary = computed(() => {
       <span class="pg-caret" aria-hidden="true"></span>
       <span class="pg-pill">过程</span>
       <span class="pg-summary">{{ summary }}</span>
-      <span v-if="stats.toolErrorCount > 0" class="pg-err">{{ stats.toolErrorCount }} 失败</span>
     </button>
     <div v-if="expanded" class="pg-body">
       <template v-for="seg in segments" :key="seg.index">
@@ -129,11 +128,6 @@ const summary = computed(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--aide-text-muted);
-}
-
-.pg-err {
-  flex-shrink: 0;
-  color: var(--aide-danger);
 }
 
 /* 展开体：限高内滚（阅读模式，同 ThinkingBlock 非流式的 overflow:auto） */
