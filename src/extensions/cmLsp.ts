@@ -306,10 +306,19 @@ export function cmLsp(opts: CmLspOpts): Extension {
     cmInlayHints({ workspaceRoot: opts.workspaceRoot, filePath: opts.filePath, lang: opts.lang }),
     EditorView.baseTheme({
       ".aide-lsp-hover": {
-        maxWidth: "480px", padding: "6px 10px",
+        maxWidth: "min(640px, 92vw)", padding: "6px 10px",
         fontSize: "12.5px", lineHeight: "1.5",
       },
-      ".aide-lsp-hover pre": { margin: "4px 0", padding: "6px", overflow: "auto" },
+      // 长签名折行而非横向滚动/被边界裁掉（hover 里滚动条无人会发现）；
+      // overflow:auto 仅兜底超长不可断 token（长 URL）。
+      ".aide-lsp-hover pre": { margin: "4px 0", padding: "6px", overflow: "auto", whiteSpace: "pre-wrap" },
+      // Tailwind preflight 把 ul/ol 的 list-style 清成 none、padding 清零——hover 里
+      // jdtls 的「* **Parameters:** / 2空格缩进 * **参数名**」嵌套列表会被拍平成顶格
+      // 堆叠（无圆点无缩进，层级全失）。同 .msg-text 配方复原标记与缩进。
+      ".aide-lsp-hover ul, .aide-lsp-hover ol": { padding: "4px 0 4px 20px", listStyle: "outside" },
+      ".aide-lsp-hover ul": { listStyle: "disc outside" },
+      ".aide-lsp-hover ol": { listStyle: "decimal outside" },
+      ".aide-lsp-hover li": { margin: "2px 0" },
     }),
   ];
 }
