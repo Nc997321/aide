@@ -4,6 +4,21 @@ import type { PermissionRequest } from "@/types/chat";
 import type { PermissionRuleDraft, PermissionScope } from "@/types/permissions";
 import type { RememberContextState } from "@/composables/usePermissionRememberContext";
 import {
+  PLAN_TOOL_NAME,
+  QUESTION_TOOL_NAME,
+  judgePermissionKind,
+  parseQuestions,
+  toggleQuestionSelection,
+  canSubmitQuestions as questionsAnswered,
+  packQuestionAnswers,
+  isEditToolName,
+  canEnterEditMode as editModeOfferable,
+  permissionInputRows,
+  permissionInputJson,
+  type PermissionInputRow,
+  type QuestionSpec,
+} from "@aide/sdk/utils/permissionShape";
+import {
   deriveRememberRule,
   deriveSessionFileRules,
   describeRuleMatcher,
@@ -14,18 +29,6 @@ import {
 import { marked } from "@/utils/markdown";
 import { useModal } from "@/composables/useModal";
 import Icon from "./Icon.vue";
-
-interface QuestionOption {
-  label: string;
-  description: string;
-}
-
-interface QuestionSpec {
-  question: string;
-  header: string;
-  options: QuestionOption[];
-  multiSelect?: boolean;
-}
 
 const props = defineProps<{
   permission: PermissionRequest | null;
@@ -68,7 +71,7 @@ const emit = defineEmits<{
 
 /** ExitPlanMode = plan 模式的出口确认：呈现的是"批准这份计划"而不是
  *  "允许一次工具调用"，计划正文按 Markdown 渲染，批准后 sidecar 自动切回默认模式。 */
-const isPlanApproval = computed(() => props.permission?.name === "ExitPlanMode");
+const isPlanApproval = computed(() => props.permission?.name === PLAN_TOOL_NAME);
 
 /** AskUserQuestion：Claude 提出的澄清问题——本质仍是一次 canUseTool 调用，但语义是
  *  "回答问题"而非"批准操作"，需要真正可选的问题/选项 UI，而不是通用允许/拒绝弹窗
@@ -77,7 +80,7 @@ const isPlanApproval = computed(() => props.permission?.name === "ExitPlanMode")
  *  是 Claude 专属语义，留在 sidecar（agent-sidecar/src/permissions.ts）处理——和
  *  ExitPlanMode 一样，前端按工具名特判的只是"用哪种 UI 展示"，协议本身仍是
  *  {id, name, input} / (id, approved, answers?, nextMode?) 的通用形状。 */
-const isQuestion = computed(() => props.permission?.name === "AskUserQuestion");
+const isQuestion = computed(() => props.permission?.name === QUESTION_TOOL_NAME);
 
 /** 发送前确认（变体 C）：本地合成的「确认请求」，复用本组件的 AskUserQuestion 视觉
  *  语言（问号火漆印 + 「需要确认」eyebrow + 问题 chip），但用信息卡 + 取消/继续发送
@@ -100,15 +103,10 @@ const confirmInput = computed<{
 
 /** 三种确认口吻用同一枚"火漆印"图钉，用图形区分种类：工具调用=锁、
  *  计划批准=清单、澄清提问/发送确认=问号——不按具体工具名再细分图标，换新工具/
- *  第三方 provider 接入时也不用维护一张图标映射表。 */
+ *  第三方 provider 接入时也不用维护一张图标映射表。confirm（__sendConfirm__
+ *  桌面本地合成）在 SDK 三态之外，这里先行特判。 */
 const kind = computed<"plan" | "question" | "tool" | "confirm">(() =>
-  isConfirm.value
-    ? "confirm"
-    : isPlanApproval.value
-      ? "plan"
-      : isQuestion.value
-        ? "question"
-        : "tool",
+  isConfirm.value ? "confirm" : judgePermissionKind(props.permission?.name),
 );
 
 const eyebrowLabel = computed(() => {
@@ -272,11 +270,9 @@ const planHtml = computed(() => {
   return marked.parse(String(input?.plan ?? "")) as string;
 });
 
-const questions = computed<QuestionSpec[]>(() => {
-  if (!isQuestion.value) return [];
-  const input = props.permission?.input as { questions?: QuestionSpec[] } | undefined;
-  return input?.questions ?? [];
-});
+const questions = computed<QuestionSpec[]>(() =>
+  isQuestion.value ? parseQuestions(props.permission?.input) : [],
+);
 
 // 每题的选择状态：下标 -> 选中的 label 列表（单选最多 1 个，多选可多个）。
 // 选"其他"时改用 freeText，两者互斥（选项 click 会清空 freeText 状态，反之亦然）。
@@ -301,12 +297,7 @@ watch(
 
 function toggleOption(qi: number, label: string, multiSelect?: boolean) {
   useFreeText[qi] = false;
-  const cur = selections[qi] ?? [];
-  if (multiSelect) {
-    selections[qi] = cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label];
-  } else {
-    selections[qi] = [label];
-  }
+  selections[qi] = toggleQuestionSelection(selections[qi] ?? [], label, multiSelect);
 }
 
 function selectFreeText(qi: number) {
@@ -315,17 +306,17 @@ function selectFreeText(qi: number) {
 }
 
 const canSubmitQuestions = computed(() =>
-  questions.value.length > 0 &&
-  questions.value.every((_, i) => (useFreeText[i] ? freeText[i]?.trim().length > 0 : (selections[i]?.length ?? 0) > 0)),
+  questionsAnswered(questions.value, selections, freeText, useFreeText),
 );
 
 function submitAnswers() {
   if (!props.permission || !canSubmitQuestions.value) return;
-  const answers: Record<string, string> = {};
-  questions.value.forEach((q, i) => {
-    answers[q.question] = useFreeText[i] ? freeText[i].trim() : selections[i].join(", ");
-  });
-  emit("respond", props.permission.id, true, answers);
+  emit(
+    "respond",
+    props.permission.id,
+    true,
+    packQuestionAnswers(questions.value, selections, freeText, useFreeText),
+  );
 }
 
 // ── 「允许并记住」：把这次工具调用就地推导成一组 allow 规则 ──
@@ -431,20 +422,15 @@ function applySimplified(i: number) {
 // 手动模式下编辑会一直弹窗；对不熟悉规则机制的用户，「允许并记住」（记一条文件夹
 // 规则）不如直接切到编辑模式解渴。已在编辑/自动/最高权限模式时弹窗本就不该为
 // 编辑出现（出现了说明是 ask 规则等例外），此时藏起本按钮、露出「允许并记住」。
-const EDIT_TOOL_NAMES = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
-const canEnterEditMode = computed(
-  () =>
-    !!props.permission &&
-    EDIT_TOOL_NAMES.has(props.permission.name) &&
-    !["acceptEdits", "auto", "bypassPermissions"].includes(props.currentMode ?? ""),
+// 工具名单与模式判定在 @aide/sdk/utils/permissionShape（与远程 PWA 共用）。
+const canEnterEditMode = computed(() =>
+  editModeOfferable(props.permission?.name, props.currentMode),
 );
 
 // ── 会话级规则提示：文件工具弹窗里点「允许」会推导一条精确文件规则（本会话内
 // 同文件不再询问，换文件仍确认）——「允许」按钮的 tooltip 让用户知道普通允许
 // ≠ 只放行这一次。与「允许并记住」（持久化文件夹规则）互补：允许=单文件、记住=目录级。
-const isFileTool = computed(
-  () => !!props.permission && EDIT_TOOL_NAMES.has(props.permission.name),
-);
+const isFileTool = computed(() => isEditToolName(props.permission?.name));
 const sessionDrafts = computed<PermissionRuleDraft[]>(() =>
   props.permission ? deriveSessionFileRules(props.permission.name, props.permission.input) : [],
 );
@@ -475,26 +461,17 @@ function emitAllowAndRemember() {
   });
 }
 
-interface InputRow {
-  label: string;
-  value: string;
-}
-
 /** 常见工具的输入拆成"标签 + 值"两列（值用等宽字体单独一行展示，长命令/
- *  长路径不再和标签挤在同一行文本里）；认不出的工具名退回原始 JSON。 */
-const inputRows = computed<InputRow[] | null>(() => {
+ *  长路径不再和标签挤在同一行文本里）；认不出的工具名退回原始 JSON。
+ *  拆行规则在 @aide/sdk/utils/permissionShape（与远程 PWA 共用）。 */
+const inputRows = computed<PermissionInputRow[] | null>(() => {
   if (!props.permission) return null;
-  const input = props.permission.input as Record<string, unknown>;
-  const name = props.permission.name;
-  if (name === "Bash") return [{ label: "命令", value: String(input?.command ?? "") }];
-  if (name === "Write" || name === "Edit") return [{ label: "文件", value: String(input?.file_path ?? "") }];
-  if (name === "WebFetch") return [{ label: "URL", value: String(input?.url ?? "") }];
-  return null;
+  return permissionInputRows(props.permission.name, props.permission.input);
 });
 
 const inputJson = computed(() => {
   if (!props.permission || inputRows.value) return "";
-  return JSON.stringify(props.permission.input, null, 2).slice(0, 200);
+  return permissionInputJson(props.permission.input).slice(0, 200);
 });
 </script>
 

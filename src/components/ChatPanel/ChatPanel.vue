@@ -36,7 +36,7 @@ import {
   hasMoreOlder,
 } from "@/composables/useChatSession";
 import { useToast } from "@/composables/useToast";
-import { effortLabel } from "@/utils/effort";
+import { effortLabel } from "@aide/sdk/utils/effort";
 
 const props = defineProps<{
   sessionId: string | null;

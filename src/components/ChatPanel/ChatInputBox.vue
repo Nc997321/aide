@@ -26,7 +26,7 @@ import { useBtwSession } from "@/composables/useBtwSession";
 import { useSessionIdentity } from "@/composables/sessionIdentity";
 import { isPendingSession, isFinalizedSessionPair } from "@/composables/useChatSession";
 import { useToast } from "@/composables/useToast";
-import { EFFORT_OPTIONS, normalizeEffortOption } from "@/utils/effort";
+import { EFFORT_OPTIONS, normalizeEffortOption } from "@aide/sdk/utils/effort";
 
 const props = defineProps<{
   sessionId: string | null;
@@ -170,13 +170,17 @@ watch(
 );
 
 // ── Effort 选择器 ──
-// 会话级思考深度：三档制（快速/思考/深度思考，见 @/utils/effort）。默认解析顺序：
+// 会话级思考深度：三档制（快速/思考/深度思考，@aide/sdk/utils/effort）。默认解析顺序：
 // 会话记忆（sessionEffort 元数据）→ provider 配置的 effortLevel → "high"。切换经
 // set-effort 走 sidecar applyFlagSettings 即时生效（SDK 官方中途通道，不重启进程、
 // 实测不碰 prompt 缓存）；进程没起时选择随下一条消息的 initialEffort（env 通道）带上。
 // sidecar 坐实/回滚由 props.currentEffort 同步。快速(low) 时 worker 关思考模式
 // （thinkingForEffort），思考/深度思考时开启——见 agent-sidecar/src/effortSwitch.ts。
 const selectedEffort = ref("high");
+
+/** ThemedSelect 的 options 收 mutable 数组；SDK 的 EFFORT_OPTIONS 是 as const
+ *  只读常量表（PWA 侧依赖其字面量类型收窄 EffortValue），浅拷贝适配。 */
+const effortSelectOptions = [...EFFORT_OPTIONS];
 /** 用户在当前会话视图里手动改过 = true——异步恢复/provider 就绪回调不得覆盖。 */
 let effortTouchedByUser = false;
 /** 上次用户手动切 effort 的时刻——坐实 toast 的新鲜度守卫（仿模型回执的 5s 窗口）。 */
@@ -1038,7 +1042,7 @@ const { actions: quickActions } = useQuickActions();
              开启思考（worker 侧 thinkingForEffort 联动）；默认 思考(high) -->
         <ThemedSelect
           :model-value="displayedEffort"
-          :options="EFFORT_OPTIONS"
+          :options="effortSelectOptions"
           title="effort（思考深度）：快速=关闭思考模式、思考/深度思考=开启思考；切换从下一轮起生效，不影响缓存"
           @update:model-value="handleEffortChange"
         />

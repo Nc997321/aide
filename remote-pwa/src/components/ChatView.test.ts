@@ -7,7 +7,8 @@ import ChatView from "./ChatView.vue";
 /**
  * ChatView 适配层测试：真 store（包内 useChatSession）+ 假传输。
  * 重逻辑（事件归一/分页/回收）在包内已测，这里只验适配行为：
- * 历史装载、发送参数、权限条应答、中断、新建会话的 id 生命周期。
+ * 历史装载、发送参数（含 initialEffort）、权限弹窗应答、中断、
+ * effort 选择器、抽屉/供应商/新会话入口、id 生命周期。
  */
 
 interface InvokeCall {
@@ -50,6 +51,7 @@ function mountChat(overrides?: {
   session?: { id: string | null; name: string };
   workspaceKey?: string | null;
   workspacePath?: string | null;
+  workspaceName?: string | null;
   /** 额外的命令应答（hydrate 在挂载时同步发起，必须在 mount 前就位） */
   handlers?: Record<string, (params: Record<string, unknown>) => unknown>;
 }) {
@@ -66,6 +68,8 @@ function mountChat(overrides?: {
       session: overrides?.session ?? { id: "s1", name: "测试会话" },
       workspaceKey: overrides?.workspaceKey ?? null,
       workspacePath: overrides?.workspacePath ?? null,
+      workspaceName: overrides?.workspaceName ?? null,
+      provider: { kind: "zhipu", icon: "Z", name: "测试供应商" },
       connState: "authed" as const,
       client: transport,
     },
@@ -98,7 +102,7 @@ describe("ChatView（共享闭包适配）", () => {
     expect(wrapper.html()).toContain("<strong>你好！</strong>");
   });
 
-  it("发送：本地气泡上屏 + send_message 带工作区路径", async () => {
+  it("发送：本地气泡上屏 + send_message 带工作区路径与 initialEffort", async () => {
     const { wrapper, transport } = mountChat({
       workspaceKey: "C--proj",
       workspacePath: "C:/proj",
@@ -114,11 +118,13 @@ describe("ChatView（共享闭包适配）", () => {
       expect(send).toBeTruthy();
       expect(send?.params["prompt"]).toBe("帮我跑下测试");
       expect(send?.params["workspaceRoot"]).toBe("C:/proj");
+      // 恒带当前档位（存活会话幂等；未起会话/离线随首条消息生效）
+      expect(send?.params["initialEffort"]).toBe("high");
     });
     expect(wrapper.text()).toContain("帮我跑下测试"); // 本地气泡
   });
 
-  it("权限请求事件 → 极简条出现 → 允许应答 → permission_response 且条消失", async () => {
+  it("权限请求事件 → 弹窗出现 → 允许应答 → permission_response 且弹窗消失", async () => {
     const { wrapper, transport } = mountChat();
     await vi.waitFor(() => expect(transport.chatEventCb).toBeTruthy());
     transport.emitChatEvent({
@@ -132,14 +138,14 @@ describe("ChatView（共享闭包适配）", () => {
       expect(wrapper.text()).toContain("Bash");
       expect(wrapper.text()).toContain("rm -rf dist");
     });
-    await wrapper.find(".ch-perm-allow").trigger("click");
+    await wrapper.find(".pm-btn-allow").trigger("click");
     await vi.waitFor(() => {
       const resp = transport.calls.find((c) => c.command === "permission_response");
       expect(resp?.params["id"]).toBe("perm-1");
       expect(resp?.params["approved"]).toBe(true);
     });
     await vi.waitFor(() => {
-      expect(wrapper.find(".ch-perm").exists()).toBe(false);
+      expect(wrapper.find(".pm-mask").exists()).toBe(false);
     });
   });
 
@@ -200,7 +206,7 @@ describe("ChatView（共享闭包适配）", () => {
     expect(transport.calls.some((c) => c.command === "send_message")).toBe(false);
   });
 
-  it("权限条点拒绝：permission_response approved=false", async () => {
+  it("权限弹窗点拒绝：两步表单 → permission_response approved=false", async () => {
     const { wrapper, transport } = mountChat();
     await vi.waitFor(() => expect(transport.chatEventCb).toBeTruthy());
     transport.emitChatEvent({
@@ -210,8 +216,12 @@ describe("ChatView（共享闭包适配）", () => {
       name: "Write",
       input: { file_path: "C:/proj/a.ts" },
     });
-    await vi.waitFor(() => expect(wrapper.find(".ch-perm").exists()).toBe(true));
-    await wrapper.find(".ch-perm-deny").trigger("click");
+    await vi.waitFor(() => expect(wrapper.find(".pm-mask").exists()).toBe(true));
+    // 第一步：点「拒绝」→ 按钮行换表单
+    await wrapper.find(".pm-btn-deny").trigger("click");
+    await vi.waitFor(() => expect(wrapper.find(".pm-deny-form").exists()).toBe(true));
+    // 第二步：确认拒绝（表单内同名按钮）
+    await wrapper.find(".pm-deny-form .pm-btn-deny").trigger("click");
     await vi.waitFor(() => {
       const resp = transport.calls.find((c) => c.command === "permission_response");
       expect(resp?.params["approved"]).toBe(false);
@@ -273,19 +283,20 @@ describe("ChatView（共享闭包适配）", () => {
       input: { command: longCmd },
     });
     await vi.waitFor(() => {
-      const el = wrapper.find(".ch-perm-input");
+      const el = wrapper.find(".pm-summary");
       expect(el.exists()).toBe(true);
       expect(el.text().length).toBe(121); // 120 + …
       expect(el.text().endsWith("…")).toBe(true);
     });
   });
 
-  it("连接态文案/灯色：connecting→重连中，idle→未连接", async () => {
+  it("连接态灯色：connecting→warn 点；offline→离线横幅", async () => {
     const { wrapper } = mountChat();
     await wrapper.setProps({ connState: "connecting" });
-    expect(wrapper.text()).toContain("重连中");
-    await wrapper.setProps({ connState: "idle" });
-    expect(wrapper.text()).toContain("未连接");
+    expect(wrapper.find(".pv-pill .dot").classes()).toContain("warn");
+    await wrapper.setProps({ connState: "offline" });
+    expect(wrapper.find(".ch-offbar").classes()).toContain("show");
+    expect(wrapper.text()).toContain("设备离线");
   });
 
   it("permission 请求不带可摘要字段时摘要区不渲染", async () => {
@@ -298,7 +309,117 @@ describe("ChatView（共享闭包适配）", () => {
       name: "WebFetch",
       input: {}, // 无语义化字段
     });
-    await vi.waitFor(() => expect(wrapper.find(".ch-perm").exists()).toBe(true));
-    expect(wrapper.find(".ch-perm-input").exists()).toBe(false);
+    await vi.waitFor(() => expect(wrapper.find(".pm-mask").exists()).toBe(true));
+    expect(wrapper.find(".pm-summary").exists()).toBe(false);
+  });
+
+  // ── v3：抽屉导航 + 供应商 pill + 新会话 ＋ ──
+
+  it("顶栏 ☰ → emit openDrawer；＋ → emit newSession", async () => {
+    const { wrapper } = mountChat();
+    // ☰ 是第一个 .ch-back（新会话 ＋ 是第二个）
+    const backs = wrapper.findAll(".ch-back");
+    expect(backs.length).toBe(2);
+    await backs[0].trigger("click");
+    await backs[1].trigger("click");
+    expect(wrapper.emitted("openDrawer")).toBeTruthy();
+    expect(wrapper.emitted("newSession")).toBeTruthy();
+  });
+
+  it("顶栏供应商 pill：authed 点击 → emit openProviders；离线点击不 emit 只 toast", async () => {
+    const { wrapper } = mountChat();
+    await wrapper.find(".pv-pill").trigger("click");
+    expect(wrapper.emitted("openProviders")).toBeTruthy();
+    await wrapper.setProps({ connState: "offline" });
+    await wrapper.find(".pv-pill").trigger("click");
+    // 离线：只提示，不再 emit
+    expect(wrapper.emitted("openProviders")!.length).toBe(1);
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain("设备离线，无法切换供应商");
+    });
+  });
+
+  it("effort 选择器：点档位 → set_session_effort + set_effort；chip 显示当前档", async () => {
+    const { wrapper, transport } = mountChat();
+    await vi.waitFor(() => {
+      expect(transport.calls.some((c) => c.command === "load_messages")).toBe(true);
+    });
+    // chip 默认档（session_effort 应答 null → 归一 high）
+    expect(wrapper.find(".ef-chip").text()).toContain("思考");
+    await wrapper.find(".ef-chip").trigger("click");
+    await vi.waitFor(() => expect(wrapper.find(".ef-pop").classes()).toContain("show"));
+    // 选「快速」（low）：已有会话非临时 → 持久化 + 即时切换两连发
+    const opts = wrapper.findAll(".ef-pop .ws-opt");
+    expect(opts.length).toBe(3); // 三档制
+    await opts[0].trigger("click");
+    await vi.waitFor(() => {
+      const persist = transport.calls.find((c) => c.command === "set_session_effort");
+      expect(persist?.params["id"]).toBe("s1");
+      expect(persist?.params["effort"]).toBe("low");
+    });
+    await vi.waitFor(() => {
+      const live = transport.calls.find((c) => c.command === "set_effort");
+      expect(live?.params["sessionId"]).toBe("s1");
+      expect(live?.params["effort"]).toBe("low");
+    });
+  });
+
+  it("挂载读取会话档位：session_effort 应答归一显示（medium→思考）", async () => {
+    const { wrapper } = mountChat({
+      handlers: {
+        session_effort: () => "medium", // 历史遗留档位归一映射
+      },
+    });
+    await vi.waitFor(() => {
+      expect(wrapper.find(".ef-chip").text()).toContain("思考");
+    });
+  });
+
+  it("新会话空态：无消息时显示 logo + 发往工作区名，首条消息后消失", async () => {
+    const { wrapper, transport } = mountChat({
+      session: { id: null, name: "新会话" },
+      workspaceName: "aide",
+    });
+    await vi.waitFor(() => expect(wrapper.find(".ch-empty").exists()).toBe(true));
+    expect(wrapper.text()).toContain("发往工作区");
+    expect(wrapper.text()).toContain("aide");
+    const textarea = wrapper.find("textarea");
+    await textarea.setValue("第一句话");
+    await textarea.trigger("keydown", { key: "Enter" });
+    // 气泡进临时 sid 的 store：先等 sessionBound，模拟 App 把 id 绑回路由态
+    // （生产时序），messages 跟随 sidRef → 空态消失。
+    let tempSid = "";
+    await vi.waitFor(() => {
+      expect(wrapper.emitted("sessionBound")).toBeTruthy();
+      tempSid = (wrapper.emitted("sessionBound")![0] as [string])[0];
+    });
+    await wrapper.setProps({ session: { id: tempSid, name: "新会话" } });
+    await vi.waitFor(() => {
+      expect(wrapper.find(".ch-empty").exists()).toBe(false);
+    });
+  });
+
+  it("顶栏 pill 渲染品牌 svg（kind 命中商标库）；custom kind 回退 icon 字符", async () => {
+    const { wrapper } = mountChat();
+    // zhipu → SDK 商标库品牌色（与桌面同库）
+    expect(wrapper.find(".pv-pill svg.pl-svg").exists()).toBe(true);
+    expect(wrapper.find(".pv-pill svg.pl-svg path").attributes("fill")).toBe("#3859FF");
+    // custom（无商标条目）→ 回退 icon 字符
+    await wrapper.setProps({ provider: { kind: "custom", icon: "C", name: "自建供应商" } });
+    expect(wrapper.find(".pv-pill svg.pl-svg").exists()).toBe(false);
+    expect(wrapper.find(".pv-pill .pl-glyph").text()).toBe("C");
+    expect(wrapper.find(".pv-pill .pv-name").text()).toBe("自建供应商");
+  });
+
+  it("历史会话空态：hydrate 后仍无消息 → 防闪窗口后显示引导，可一键开抽屉", async () => {
+    const { wrapper } = mountChat(); // 默认 load_messages 返回空 + session.id 非空
+    // 800ms 防闪窗口内：不显示空态提示（hydrate 在途 messages 也为空）
+    expect(wrapper.text()).not.toContain("此会话暂无消息");
+    await new Promise((r) => setTimeout(r, 850));
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain("此会话暂无消息");
+    });
+    await wrapper.find(".ch-empty-btn").trigger("click");
+    expect(wrapper.emitted("openDrawer")).toBeTruthy();
   });
 });

@@ -5,7 +5,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { useAutomation } from "../../composables/useAutomation";
 import { useWorkspaces } from "../../composables/useWorkspaces";
 import { useToast } from "../../composables/useToast";
-import { EFFORT_OPTIONS } from "../../utils/effort";
+import { EFFORT_OPTIONS } from "@aide/sdk/utils/effort";
 import { mcpServerApi } from "../../api/customization";
 import ThemedSelect from "../ThemedSelect.vue";
 import DirTreePicker from "../DirTreePicker.vue";

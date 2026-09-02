@@ -13,7 +13,7 @@ import { segmentBlocks, isChangeTool, type Segment } from "@/utils/blockSegments
 import { useFileResolver } from "@/composables/useFileResolver";
 import { parseFileLink, shouldOpenExternally } from "@/utils/fileLink";
 import { isModelInList } from "@/utils/modelSelect";
-import { effortLabel } from "@/utils/effort";
+import { effortLabel } from "@aide/sdk/utils/effort";
 
 const props = defineProps<{
   message: ChatMessage;
