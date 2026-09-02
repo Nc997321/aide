@@ -169,6 +169,7 @@ pub struct LspCapabilities {
     pub implementation_provider: bool,
     pub document_symbol_provider: bool,
     pub call_hierarchy_provider: bool,
+    pub inlay_hint_provider: bool,
 }
 
 impl LspCapabilities {
@@ -181,6 +182,7 @@ impl LspCapabilities {
             implementation_provider: provider_on(c, "implementationProvider"),
             document_symbol_provider: provider_on(c, "documentSymbolProvider"),
             call_hierarchy_provider: provider_on(c, "callHierarchyProvider"),
+            inlay_hint_provider: provider_on(c, "inlayHintProvider"),
         }
     }
 }
@@ -348,6 +350,64 @@ pub fn call_hierarchy_calls_to_nodes(
         .collect()
 }
 
+// ── inlayHints 归一化 ──
+//
+// 协议：textDocument/inlayHint（params 必带 range）→ InlayHint[]。每条：
+// position（hint 显示处）、label（string | InlayHintLabelPart[]）、kind（1=Type,
+// 2=Parameter）、paddingLeft/paddingRight、tooltip/textEdits/data（v1 不消费——
+// tooltip 待 hover 接入，textEdits 待 click-to-insert）。
+
+/// inlay hint 视图模型：kind 分流样式（type=类型提示缀后 / param=参数名提示缀前），
+/// label 为 parts 扁平化拼接文本，行列 1-based（与跳转结果约定一致）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InlayHintItem {
+    /// "type" | "param"（规范 kind 只有 1/2，其余跳过）
+    pub kind: String,
+    pub line: usize,
+    pub column: usize,
+    pub label: String,
+    pub padding_left: bool,
+    pub padding_right: bool,
+}
+
+pub fn inlay_hints_to_view(result: &serde_json::Value) -> Vec<InlayHintItem> {
+    let Some(arr) = result.as_array() else {
+        return vec![];
+    };
+    arr.iter()
+        .filter_map(|h| {
+            let kind = match h.get("kind").and_then(|v| v.as_u64()) {
+                Some(1) => "type",
+                Some(2) => "param",
+                _ => return None, // 规范外 kind 不消费
+            };
+            // label：string 直取；parts 数组扁平拼接（v1 不做分段样式）
+            let label = match h.get("label") {
+                Some(serde_json::Value::String(s)) => s.clone(),
+                Some(serde_json::Value::Array(parts)) => parts
+                    .iter()
+                    .filter_map(|p| p.get("value").and_then(|v| v.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(""),
+                _ => return None, // 无 label 的 hint 无渲染意义
+            };
+            if label.is_empty() {
+                return None;
+            }
+            let pos = h.get("position")?;
+            Some(InlayHintItem {
+                kind: kind.to_string(),
+                line: (pos.get("line").and_then(|v| v.as_u64()).unwrap_or(0) + 1) as usize,
+                column: (pos.get("character").and_then(|v| v.as_u64()).unwrap_or(0) + 1) as usize,
+                label,
+                padding_left: h.get("paddingLeft").and_then(|v| v.as_bool()).unwrap_or(false),
+                padding_right: h.get("paddingRight").and_then(|v| v.as_bool()).unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
 pub fn completion_items_to_cm(items: &[CompletionItem]) -> Vec<CmCompletion> {
     items
         .iter()
@@ -496,17 +556,27 @@ mod tests {
         let c4 = LspCapabilities::from_caps(Some(&caps4));
         assert!(c4.call_hierarchy_provider);
 
+        // inlayHintProvider：bool 与对象两形态（rust-analyzer 对象形态带 resolveProvider）
+        let caps7 = serde_json::json!({"inlayHintProvider": true});
+        let c7 = LspCapabilities::from_caps(Some(&caps7));
+        assert!(c7.inlay_hint_provider);
+        let caps8 = serde_json::json!({"inlayHintProvider": {"resolveProvider": true}});
+        let c8 = LspCapabilities::from_caps(Some(&caps8));
+        assert!(c8.inlay_hint_provider);
+
         // 缺失 → 不支持
         let c5 = LspCapabilities::from_caps(Some(&serde_json::json!({})));
         assert!(!c5.implementation_provider);
         assert!(!c5.document_symbol_provider);
         assert!(!c5.call_hierarchy_provider);
+        assert!(!c5.inlay_hint_provider);
 
         // None（server 未握手）→ 全 false
         let c6 = LspCapabilities::from_caps(None);
         assert!(!c6.implementation_provider);
         assert!(!c6.document_symbol_provider);
         assert!(!c6.call_hierarchy_provider);
+        assert!(!c6.inlay_hint_provider);
     }
 
     #[test]
@@ -566,6 +636,48 @@ mod tests {
 
         // 非数组响应（null/异常形状）→ 空，不 panic
         assert!(call_hierarchy_calls_to_nodes(&serde_json::Value::Null, "incoming", "C:/proj").is_empty());
+    }
+
+    #[test]
+    fn inlay_hints_normalization() {
+        // parts label 扁平拼接（param：kind 2，padding 透传）
+        let hints = serde_json::json!([
+            {"position":{"line":2,"character":8},"kind":2,
+             "label":[{"value":"count"},{"value":": "}],
+             "paddingLeft":true,"paddingRight":true},
+            {"position":{"line":3,"character":4},"kind":1,
+             "label":"usize","paddingLeft":true},
+            // 规范外 kind（9 非 1/2）→ 跳过
+            {"position":{"line":4,"character":0},"kind":9,"label":"skip"},
+            // 缺 kind → 跳过
+            {"position":{"line":5,"character":0},"label":"orphan"},
+            // parts 拼接后为空 → 跳过
+            {"position":{"line":6,"character":0},"kind":1,
+             "label":[{"value":""}]},
+            // 无 position → 跳过
+            {"kind":1,"label":"nowhere"},
+            // 非 string/array label 形态（number）→ 跳过
+            {"position":{"line":7,"character":0},"kind":1,"label":42}
+        ]);
+        let items = inlay_hints_to_view(&hints);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].kind, "param");
+        assert_eq!(items[0].line, 3); // 0-based 2 → 1-based
+        assert_eq!(items[0].column, 9);
+        assert_eq!(items[0].label, "count: ");
+        assert!(items[0].padding_left);
+        assert!(items[0].padding_right);
+        assert_eq!(items[1].kind, "type");
+        assert_eq!(items[1].line, 4);
+        assert_eq!(items[1].column, 5);
+        assert_eq!(items[1].label, "usize");
+        assert!(items[1].padding_left);
+        assert!(!items[1].padding_right); // 缺省 false
+
+        // kind 缺省但 label 有效（部分 server 省略 kind）→ 仍跳过（kind 是样式分流依据）
+        // —— 上面 orphan 用例已覆盖。
+        // 非数组响应（null）→ 空，不 panic
+        assert!(inlay_hints_to_view(&serde_json::Value::Null).is_empty());
     }
 
     #[test]

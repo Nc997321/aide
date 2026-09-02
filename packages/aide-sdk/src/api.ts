@@ -13,7 +13,7 @@ import type {
   MigrationStatus, MigrationSummary,
   CmCompletion,
   DocumentSymbolItem, LspCapabilities, SignatureHelpResult, SemanticToken,
-  CallHierarchyResult, CallHierarchyDirection,
+  CallHierarchyResult, CallHierarchyDirection, InlayHintItem,
   RemoteStatus,
 } from "./types";
 import type { ModelOption, PermissionModeOption } from "./types/chat";
@@ -729,6 +729,11 @@ export const api = {
   /** 语义着色 token 全量（语言无关，按扩展名分派）。空数组=无结果/未就绪，前端清空装饰。 */
   lspSemanticTokens(workspaceRoot: string, filePath: string): Promise<SemanticToken[]> {
     return getTransport().invoke("lsp_semantic_tokens", { workspaceRoot, filePath });
+  },
+  /** 查 inlay hints（语言无关，按扩展名分派）：参数名/类型提示。fromLine/toLine 为可视区
+   *  行范围（1-based 含头含尾）。空数组=无结果/未就绪，前端清空装饰（同 semanticTokens）。 */
+  lspInlayHints(workspaceRoot: string, filePath: string, fromLine: number, toLine: number): Promise<InlayHintItem[]> {
+    return getTransport().invoke("lsp_inlay_hints", { workspaceRoot, filePath, fromLine, toLine });
   },
   /** 保存通知：触发 server（如 jdtls）的编译级诊断刷新（语言无关，按扩展名分派）。 */
   lspDidSave(workspaceRoot: string, filePath: string): Promise<void> {

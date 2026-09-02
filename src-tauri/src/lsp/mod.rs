@@ -603,6 +603,59 @@ pub async fn lsp_semantic_tokens(
     Ok(crate::lsp::protocol::semantic_tokens_to_view(&result))
 }
 
+/// 查 inlay hints（语言无关，按扩展名分派）：参数名/类型提示。params 必带 range
+/// （协议要求），前端传可视区行范围（1-based 含头含尾）→ 此处转 0-based：end 行取
+/// to_line 使 0-based end 落在「1-based to_line 的下一行行首」= 覆盖 to_line 整行。
+/// 非 Ok（timeout/notready/gone）映射空（装饰类请求静默，同 semanticTokens）。
+#[tauri::command]
+pub async fn lsp_inlay_hints(
+    workspace_root: String,
+    file_path: String,
+    from_line: usize,
+    to_line: usize,
+    state: tauri::State<'_, Arc<LspState>>,
+) -> Result<Vec<crate::lsp::protocol::InlayHintItem>, String> {
+    let Some(lang_id) = lang_from_ext_of(&file_path) else {
+        return Ok(vec![]);
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(vec![]);
+    };
+    // 握手已完成且 server 未声明 inlayHintProvider → 早退不发请求（读握手结果，
+    // 语言无关；跳转类请求有明确「确认无定义」语义需发请求，装饰类高频请求则以
+    // capability 短路省钱）。握手未完成（None）不早退——走正常请求路径由 server
+    // 回 NotInitialized，前端退避重试兜底。
+    {
+        let caps = h.capabilities.lock().await;
+        if let Some(raw) = caps.as_ref() {
+            if !crate::lsp::protocol::LspCapabilities::from_caps(Some(raw)).inlay_hint_provider {
+                return Ok(vec![]);
+            }
+        }
+    }
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let params = serde_json::json!({
+        "textDocument": {"uri": uri},
+        "range": {
+            "start": {"line": (from_line as u64).saturating_sub(1), "character": 0},
+            "end": {"line": to_line as u64, "character": 0}
+        }
+    });
+    let outcome = h
+        .request(
+            "textDocument/inlayHint",
+            params,
+            crate::lsp::manager::REQUEST_TIMEOUT,
+        )
+        .await?;
+    let result = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        _ => serde_json::Value::Null,
+    };
+    Ok(crate::lsp::protocol::inlay_hints_to_view(&result))
+}
+
 /// textDocument/didSave 通知（语言无关，按扩展名分派到对应 server）。
 /// 部分 server（如 jdtls）的编译级诊断依赖 save 触发完整编译刷新——
 /// didChange 只做增量分析，编译错误级的部分不 save 永远不出现。
@@ -1198,6 +1251,61 @@ mod tests {
         assert_eq!(nodes[0].call_sites.len(), 2);
         assert_eq!(nodes[0].call_sites[0].line, 287);
         assert_eq!(nodes[0].call_sites[1].column, 10);
+    }
+
+    #[tokio::test]
+    async fn mock_end_to_end_inlay_hints() {
+        // lsp_inlay_hints 同构链路：textDocument/inlayHint（params 必带 range，
+        // 1-based 含头含尾 → 0-based）→ InlayHint[] → inlay_hints_to_view
+        // （parts 拼接 / kind 过滤 / 1-based / padding 透传）。
+        let mock = crate::lsp::mock_server::spawn_mock_lsp();
+        let transport = crate::lsp::transport::LspTransport::with_reader_source(
+            mock.transport_stdin,
+            mock.transport_stdout,
+        );
+        let router = crate::lsp::rpc::Router::new();
+        let table = transport.table_handle();
+        let mut reader = tokio::io::BufReader::new(transport.take_reader_source().await);
+        let table_r = table.clone();
+        let mut framer = crate::lsp::transport::Framer::new();
+        let (msg, id, tx, rx) = router.next_request("initialize", serde_json::json!({
+            "rootUri":"file:///mock","capabilities":{},"workspaceFolders":[{"uri":"file:///mock","name":"mock"}]
+        }));
+        table.lock().await.insert(id, tx);
+        transport.send(&msg).await.unwrap();
+        let _ = pump_until(&mut reader, &mut framer, &table_r, rx).await.unwrap();
+        // inlayHint（与 lsp_inlay_hints 命令同参形状：可视区 1-based 3..=5 →
+        // start.line=2、end.line=5 覆盖整段）
+        let (msg, id, tx, rx) = router.next_request(
+            "textDocument/inlayHint",
+            serde_json::json!({
+                "textDocument":{"uri":"file:///mock/main.rs"},
+                "range":{
+                    "start":{"line":2,"character":0},
+                    "end":{"line":5,"character":0}
+                }
+            }),
+        );
+        table.lock().await.insert(id, tx);
+        transport.send(&msg).await.unwrap();
+        let result = pump_until(&mut reader, &mut framer, &table_r, rx)
+            .await
+            .unwrap();
+        let hints = crate::lsp::protocol::inlay_hints_to_view(&result);
+        // mock 3 条中 kind=9 规范外 → 归一化后 2 条
+        assert_eq!(hints.len(), 2);
+        assert_eq!(hints[0].kind, "param");
+        assert_eq!(hints[0].label, "count: "); // parts 扁平拼接
+        assert_eq!(hints[0].line, 3); // 0-based 2 → 1-based
+        assert_eq!(hints[0].column, 9);
+        assert!(hints[0].padding_left);
+        assert!(hints[0].padding_right);
+        assert_eq!(hints[1].kind, "type");
+        assert_eq!(hints[1].label, "usize");
+        assert_eq!(hints[1].line, 4);
+        assert_eq!(hints[1].column, 5);
+        assert!(hints[1].padding_left);
+        assert!(!hints[1].padding_right);
     }
 
     async fn pump_until(

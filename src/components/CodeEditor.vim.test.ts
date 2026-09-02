@@ -41,6 +41,7 @@ vi.mock("../composables/useLsp", () => ({
       implementationProvider: false,
       documentSymbolProvider: false,
       callHierarchyProvider: false,
+      inlayHintProvider: false,
     }),
   }),
 }));

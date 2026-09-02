@@ -6,6 +6,7 @@ import { watch, type WatchStopHandle } from "vue";
 import { api } from "../api";
 import { useLsp, type LspDiagnostic } from "../composables/useLsp";
 import { cmSemanticTokens } from "./cmSemanticTokens";
+import { cmInlayHints } from "./cmInlayHints";
 import { cmSignatureHelp } from "./cmSignatureHelp";
 import { isUserEdit } from "../utils/cmModelSync";
 import { renderMarkdown } from "../utils/markdown";
@@ -302,6 +303,7 @@ export function cmLsp(opts: CmLspOpts): Extension {
     lspHover(opts.workspaceRoot, opts.filePath),
     cmSignatureHelp({ workspaceRoot: opts.workspaceRoot, filePath: opts.filePath, lang: opts.lang }),
     cmSemanticTokens({ workspaceRoot: opts.workspaceRoot, filePath: opts.filePath, lang: opts.lang }),
+    cmInlayHints({ workspaceRoot: opts.workspaceRoot, filePath: opts.filePath, lang: opts.lang }),
     EditorView.baseTheme({
       ".aide-lsp-hover": {
         maxWidth: "480px", padding: "6px 10px",

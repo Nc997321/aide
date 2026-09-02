@@ -123,7 +123,19 @@ async fn mock_responder<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(mut reader:
                         "fromRanges":[{"start":{"line":660,"character":9},"end":{"line":660,"character":22}}]
                     }]
                 })),
-                "shutdown" => Some(serde_json::json!({"jsonrpc":"2.0","id":id,"result":null})),
+                // inlay hints：一个参数名提示（param，label 为 parts 数组）+ 一个类型
+                // 提示（type，label 为纯字符串）
+                "textDocument/inlayHint" => Some(serde_json::json!({
+                    "jsonrpc":"2.0","id":id,
+                    "result":[
+                        {"position":{"line":2,"character":8},"kind":2,
+                         "label":[{"value":"count"},{"value":": "}],
+                         "paddingLeft":true,"paddingRight":true},
+                        {"position":{"line":3,"character":4},"kind":1,
+                         "label":"usize","paddingLeft":true},
+                        {"position":{"line":4,"character":0},"kind":9,"label":"skip"}
+                    ]
+                })),
                 _ => id.map(|i| serde_json::json!({"jsonrpc":"2.0","id":i,"result":null})),
             };
             if let Some(r) = resp {

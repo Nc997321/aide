@@ -579,11 +579,12 @@ export interface DocumentSymbolItem {
 }
 
 /** 某语言 server 的可选能力开关（来自 initialize 握手 capabilities）。前端据此决定是否
- *  启用「跳转到实现」「调用层级 ⇄」gutter 标记等可选能力。 */
+ *  启用「跳转到实现」「调用层级 ⇄」gutter 标记、inlay hints 装饰等可选能力。 */
 export interface LspCapabilities {
   implementationProvider: boolean;
   documentSymbolProvider: boolean;
   callHierarchyProvider: boolean;
+  inlayHintProvider: boolean;
 }
 
 // ── 调用层级（lsp_call_hierarchy）──
@@ -617,6 +618,20 @@ export interface CallHierarchyResult {
 
 /** 调用层级方向：incoming = 谁调用了它（调用方）；outgoing = 它调用了谁（被调用方）。 */
 export type CallHierarchyDirection = "incoming" | "outgoing";
+
+// ── inlay hints（lsp_inlay_hints）──
+
+/** inlay hint 视图条目（Rust 侧 inlay_hints_to_view 归一）。kind 分流样式：
+ *  "type" = 类型提示（缀于表达式后）、"param" = 参数名提示（缀于实参前）。
+ *  label 已是 parts 扁平拼接文本；行列 1-based（position 处）；padding 控制渲染间距。 */
+export interface InlayHintItem {
+  kind: "type" | "param";
+  line: number;
+  column: number;
+  label: string;
+  paddingLeft: boolean;
+  paddingRight: boolean;
+}
 
 export interface BuildIndexResult {
   /** true = reused a fresh on-disk index; false = full rebuild. */
