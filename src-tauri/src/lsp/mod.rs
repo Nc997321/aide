@@ -331,6 +331,109 @@ pub async fn lsp_completion(
     Ok(crate::lsp::protocol::completion_items_to_cm(&items))
 }
 
+/// completionItem/resolve（语言无关，按扩展名分派到对应 server）：支持 resolve 的
+/// server（如 jdtls）补全条目常不带文档，前端选中条目时把原始 item 回传，
+/// 取回完整 detail/documentation。
+/// 失败路径（server 未就绪/超时/不支持 resolve）返回 null 字段，前端 info 面板不显示。
+#[tauri::command]
+pub async fn lsp_completion_resolve(
+    workspace_root: String,
+    file_path: String,
+    item: serde_json::Value,
+    state: tauri::State<'_, Arc<LspState>>,
+) -> Result<serde_json::Value, String> {
+    let empty = serde_json::json!({"detail": null, "documentation": null});
+    let Some(lang_id) = lang_from_ext_of(&file_path) else {
+        return Ok(empty);
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(empty);
+    };
+    let outcome = h
+        .request(
+            "completionItem/resolve",
+            item,
+            crate::lsp::manager::REQUEST_TIMEOUT,
+        )
+        .await?;
+    let result = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        _ => serde_json::Value::Null,
+    };
+    Ok(serde_json::json!({
+        "detail": result.get("detail").and_then(|v| v.as_str()),
+        "documentation": crate::lsp::protocol::extract_documentation(result.get("documentation")),
+    }))
+}
+
+/// textDocument/signatureHelp（语言无关，按扩展名分派）：方法调用的参数提示。
+/// 返回归一化形状（protocol::signature_help_to_view），无结果/未就绪返回 null。
+#[tauri::command]
+pub async fn lsp_signature_help(
+    workspace_root: String,
+    file_path: String,
+    line: usize,
+    column: usize,
+    state: tauri::State<'_, Arc<LspState>>,
+) -> Result<serde_json::Value, String> {
+    let Some(lang_id) = lang_from_ext_of(&file_path) else {
+        return Ok(serde_json::Value::Null);
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(serde_json::Value::Null);
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let params = serde_json::json!({
+        "textDocument":{"uri":uri},
+        "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
+    });
+    let outcome = h
+        .request(
+            "textDocument/signatureHelp",
+            params,
+            crate::lsp::manager::REQUEST_TIMEOUT,
+        )
+        .await?;
+    let result = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        _ => serde_json::Value::Null,
+    };
+    Ok(crate::lsp::protocol::signature_help_to_view(&result))
+}
+
+/// textDocument/didSave 通知（语言无关，按扩展名分派到对应 server）。
+/// 部分 server（如 jdtls）的编译级诊断依赖 save 触发完整编译刷新——
+/// didChange 只做增量分析，编译错误级的部分不 save 永远不出现。
+/// 文档未 open（防御，同 did_change）时静默跳过。
+#[tauri::command]
+pub async fn lsp_did_save(
+    workspace_root: String,
+    file_path: String,
+    state: tauri::State<'_, Arc<LspState>>,
+) -> Result<(), String> {
+    let Some(lang_id) = lang_from_ext_of(&file_path) else {
+        return Ok(());
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(());
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    {
+        let docs = h.docs.lock().await;
+        if !docs.contains(&uri) {
+            return Ok(()); // doc not open — skip
+        }
+    }
+    let notif = serde_json::json!({
+        "jsonrpc":"2.0","method":"textDocument/didSave",
+        "params":{"textDocument":{"uri":uri}}
+    });
+    h.transport.send(&notif).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn lsp_hover(
     workspace_root: String,

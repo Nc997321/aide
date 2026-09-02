@@ -17,6 +17,65 @@ pub struct CmCompletion {
     /// 前端拿它给 CM 做前缀过滤，缺省回落 label。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filter_text: Option<String>,
+    /// 原始 CompletionItem（仅当 documentation 缺失且带 data 时附带，语言无关）：
+    /// 支持 resolve 的 server（如 jdtls）补全条目常不带文档，客户端须回传完整
+    /// item 调 completionItem/resolve 才能拿到文档/签名。前端把它原样传回。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolve_item: Option<serde_json::Value>,
+}
+
+/// LSP documentation 字段归一：字符串形态或 {value, kind} MarkupContent 形态 → 纯文本。
+pub fn extract_documentation(v: Option<&serde_json::Value>) -> Option<String> {
+    match v? {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Object(m) => {
+            m.get("value").and_then(|v| v.as_str()).map(|s| s.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// textDocument/signatureHelp 结果归一为前端直用的形状（原始 Value 在）：
+/// { signatures: [{label, documentation, parameters: [{label, documentation}],
+///                 activeParameter}], activeSignature, activeParameter }
+/// documentation 归一为纯文本；参数 label 只保留字符串形态（未声明
+/// labelOffsetSupport，服务器按 spec 不会发 [start,end] 偏移形态）。
+pub fn signature_help_to_view(result: &serde_json::Value) -> serde_json::Value {
+    let null = serde_json::Value::Null;
+    let Some(sigs) = result.get("signatures").and_then(|v| v.as_array()) else {
+        return null;
+    };
+    let signatures: Vec<serde_json::Value> = sigs
+        .iter()
+        .map(|s| {
+            let parameters = s
+                .get("parameters")
+                .and_then(|v| v.as_array())
+                .map(|params| {
+                    params
+                        .iter()
+                        .map(|p| {
+                            serde_json::json!({
+                                "label": p.get("label").and_then(|v| v.as_str()).unwrap_or(""),
+                                "documentation": extract_documentation(p.get("documentation")),
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            serde_json::json!({
+                "label": s.get("label").and_then(|v| v.as_str()).unwrap_or(""),
+                "documentation": extract_documentation(s.get("documentation")),
+                "parameters": parameters,
+                "activeParameter": s.get("activeParameter").and_then(|v| v.as_u64()),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "signatures": signatures,
+        "activeSignature": result.get("activeSignature").and_then(|v| v.as_u64()),
+        "activeParameter": result.get("activeParameter").and_then(|v| v.as_u64()),
+    })
 }
 
 /// 文档符号的扁平条目（documentSymbol 结果归一）。前端据此枚举声明行、按 kind 筛
@@ -102,19 +161,29 @@ pub fn locations_to_query_results(
 pub fn completion_items_to_cm(items: &[CompletionItem]) -> Vec<CmCompletion> {
     items
         .iter()
-        .map(|it| CmCompletion {
-            label: it.label.clone(),
-            detail: it.detail.clone(),
-            documentation: it.documentation.as_ref().map(|d| match d {
-                lsp_types::Documentation::String(s) => s.clone(),
-                lsp_types::Documentation::MarkupContent(m) => m.value.clone(),
-            }),
-            kind: it.kind.map(|k| {
-                // CompletionItemKind's inner i32 is private; extract via serde
-                serde_json::from_value::<i32>(serde_json::to_value(k).unwrap()).unwrap_or(0) as u32
-            }),
-            insert_text: it.insert_text.clone(),
-            filter_text: it.filter_text.clone(),
+        .map(|it| {
+            // resolve 载荷：仅当文档缺失且带 data（服务器需要 data 定位 proposal）。
+            // 已带文档的条目直接用，省 IPC 体积。
+            let resolve_item = if it.documentation.is_none() && it.data.is_some() {
+                serde_json::to_value(it).ok()
+            } else {
+                None
+            };
+            CmCompletion {
+                label: it.label.clone(),
+                detail: it.detail.clone(),
+                documentation: it.documentation.as_ref().map(|d| match d {
+                    lsp_types::Documentation::String(s) => s.clone(),
+                    lsp_types::Documentation::MarkupContent(m) => m.value.clone(),
+                }),
+                kind: it.kind.map(|k| {
+                    // CompletionItemKind's inner i32 is private; extract via serde
+                    serde_json::from_value::<i32>(serde_json::to_value(k).unwrap()).unwrap_or(0) as u32
+                }),
+                insert_text: it.insert_text.clone(),
+                filter_text: it.filter_text.clone(),
+                resolve_item,
+            }
         })
         .collect()
 }
@@ -343,5 +412,78 @@ mod tests {
         }];
         let cm = completion_items_to_cm(&items);
         assert_eq!(cm[0].filter_text.as_deref(), Some("apiService"));
+    }
+
+    #[test]
+    fn completion_items_attach_resolve_item_only_when_undocumented_with_data() {
+        // 无文档 + 带 data → 附带原始 item（前端选中时回传调 completionItem/resolve）；
+        // 已带文档 → 不附带（省 IPC）；无 data → resolve 无从定位，也不附带。
+        let undocumented = CompletionItem {
+            label: "foo".into(),
+            data: Some(serde_json::json!({"proposalId": 42})),
+            ..Default::default()
+        };
+        let documented = CompletionItem {
+            label: "bar".into(),
+            documentation: Some(lsp_types::Documentation::String("docs".into())),
+            data: Some(serde_json::json!({"proposalId": 7})),
+            ..Default::default()
+        };
+        let no_data = CompletionItem {
+            label: "baz".into(),
+            ..Default::default()
+        };
+        let cm = completion_items_to_cm(&[undocumented, documented, no_data]);
+        assert_eq!(cm[0].label, "foo");
+        let raw = cm[0].resolve_item.as_ref().expect("undocumented+data → raw item");
+        assert_eq!(raw["data"]["proposalId"], serde_json::json!(42));
+        assert_eq!(raw["label"], serde_json::json!("foo"));
+        assert!(cm[1].resolve_item.is_none(), "已带文档不附带 resolve 载荷");
+        assert!(cm[2].resolve_item.is_none(), "无 data 不附带 resolve 载荷");
+    }
+
+    #[test]
+    fn extract_documentation_string_and_markup_forms() {
+        assert_eq!(
+            extract_documentation(Some(&serde_json::json!("plain doc"))),
+            Some("plain doc".into())
+        );
+        assert_eq!(
+            extract_documentation(Some(&serde_json::json!({"value": "md doc", "kind": "markdown"}))),
+            Some("md doc".into())
+        );
+        assert_eq!(extract_documentation(Some(&serde_json::Value::Null)), None);
+        assert_eq!(extract_documentation(None), None);
+    }
+
+    #[test]
+    fn signature_help_to_view_normalizes_shape() {
+        let raw = serde_json::json!({
+            "signatures": [{
+                "label": "foo(int a, String b)",
+                "documentation": {"value": "does foo", "kind": "markdown"},
+                "parameters": [
+                    {"label": "int a"},
+                    {"label": "String b", "documentation": "the b"}
+                ],
+                "activeParameter": 1
+            }],
+            "activeSignature": 0,
+            "activeParameter": 0
+        });
+        let v = signature_help_to_view(&raw);
+        assert_eq!(v["activeSignature"], serde_json::json!(0));
+        let sig = &v["signatures"][0];
+        assert_eq!(sig["label"], serde_json::json!("foo(int a, String b)"));
+        assert_eq!(sig["documentation"], serde_json::json!("does foo"));
+        assert_eq!(sig["activeParameter"], serde_json::json!(1));
+        assert_eq!(sig["parameters"][1]["documentation"], serde_json::json!("the b"));
+    }
+
+    #[test]
+    fn signature_help_to_view_null_when_no_signatures() {
+        // 无结果（cursor 不在调用内）/server 返空 → Null，前端拿 null 直接不弹层。
+        assert!(signature_help_to_view(&serde_json::json!({})).is_null());
+        assert!(signature_help_to_view(&serde_json::Value::Null).is_null());
     }
 }

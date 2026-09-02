@@ -550,11 +550,21 @@ fn start_reader(
                     }
                     Action::ServerRequest {
                         id,
-                        method: _,
-                        params: _,
+                        method,
+                        params,
                     } => {
-                        // v1：回空 response（不实现 workspace/configuration 等细节）
-                        tracing::debug!("[lsp] server request ignored: id={:?}", id);
+                        // 协议要求 server→client 请求必须回 response。此前直接忽略 →
+                        // jdtls 启动后 workspace/configuration 挂起（settings 拿不到、
+                        // 部分初始化路径延迟——「整体卡顿」嫌疑之一）。
+                        let result = answer_server_request(lang, &method, &params);
+                        let resp = serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": result
+                        });
+                        if let Err(e) = handle.transport.send(&resp).await {
+                            tracing::debug!("[lsp] server request respond failed: {e}");
+                        }
                     }
                     Action::ServerStatus {
                         status_type,
@@ -584,6 +594,48 @@ fn start_reader(
 
 // ── init_handshake ──
 
+/// 应答 server→client 请求。纯函数，单测核心。
+/// - `workspace/configuration`：按 `params.items[].section` 从该语言 profile 的
+///   settings 提取（section 支持点路径如 "java.completion"；section null → 整个
+///   settings 对象），逐项成数组（与 items 顺序一一对应）。
+/// - 其余（client/registerCapability、window/workDoneProgress/create 等）→ null
+///   （同意注册/空结果）。
+pub(crate) fn answer_server_request(
+    lang: LanguageId,
+    method: &str,
+    params: &serde_json::Value,
+) -> serde_json::Value {
+    if method != "workspace/configuration" {
+        return serde_json::Value::Null;
+    }
+    let settings = crate::lsp::profiles::profile(lang).settings();
+    let Some(items) = params.get("items").and_then(|v| v.as_array()) else {
+        return serde_json::Value::Array(vec![settings]);
+    };
+    serde_json::Value::Array(
+        items
+            .iter()
+            .map(|item| match item.get("section").and_then(|s| s.as_str()) {
+                Some(section) if !section.is_empty() => lookup_section(&settings, section),
+                // section null/空 = 拉全部配置 → 整个 settings 对象
+                _ => settings.clone(),
+            })
+            .collect(),
+    )
+}
+
+/// settings 点路径下钻："java.completion" → settings.java.completion。取不到 → Null。
+fn lookup_section(settings: &serde_json::Value, section: &str) -> serde_json::Value {
+    let mut cur = settings;
+    for part in section.split('.') {
+        match cur.get(part) {
+            Some(v) => cur = v,
+            None => return serde_json::Value::Null,
+        }
+    }
+    cur.clone()
+}
+
 async fn init_handshake(
     handle: &ServerHandle,
     workspace: &str,
@@ -596,15 +648,45 @@ async fn init_handshake(
     // 注意：capabilities 只声明规范允许的字段——`workspace.workspaceEdit` 的类型是
     // 对象（WorkspaceEditClientCapabilities），传布尔会炸 jdtls 的 Gson 严格解析
     // （实测 error -32700 → ClientPreferences 永不设置 → 后续诊断/补全全 NPE）。
+    // 声明原则：只声明我们真消费/真受益的能力——jdtls 按「客户端能看什么」下菜，
+    // 不声明 hover/completion 细节会降级（纯文本 hover、补全无文档）；
+    // 故意不声明 definition.linkSupport（返回 DefinitionLink 会破坏 parse_locations
+    // 的 Location 解析）与 codeAction/rename（前端暂不消费，声明无收益）。
     let params = serde_json::json!({
         "processId": std::process::id(),
         "rootUri": root_uri,
         "capabilities": {
             "textDocument": {
-                "synchronization": {"didSave": false},
+                // didSave=true：客户端保存时发 didSave 通知（语言无关，所有语言
+                // 的保存路径都走 useFileViewer.save → lsp_did_save）。部分 server
+                // （如 jdtls）靠它触发完整编译刷新编译级诊断；rust-analyzer 同样受益。
+                "synchronization": {"didSave": true},
                 // 声明树用 DocumentSymbol[]（带 range/children）而非扁平 SymbolInformation[]，
                 // 「跳转到实现」gutter 标记据此枚举可视区声明行。解析器仍兼容 SymbolInformation 兜底。
-                "documentSymbol": {"hierarchicalSupport": true}
+                "documentSymbol": {"hierarchicalSupport": true},
+                // hover 走 markdown：jdtls 的 javadoc/签名渲染信息量大增（审阅场景核心）。
+                "hover": {"contentFormat": ["markdown", "plaintext"]},
+                // signatureHelp：方法调用参数提示（cmSignatureHelp 扩展消费）。
+                // 不声明 parameterInformation.labelOffsetSupport——参数 label 走纯字符串，
+                // 前端解析简单；documentation 同 hover 走 markdown。
+                "signatureHelp": {
+                    "signatureInformation": {
+                        "documentationFormat": ["markdown", "plaintext"]
+                    }
+                },
+                "completion": {
+                    "completionItem": {
+                        "documentationFormat": ["markdown", "plaintext"],
+                        // jdtls 的补全文档/详细签名是异步的（completionItem/resolve）——
+                        // 声明后补全条目才带完整 javadoc 与签名。
+                        "resolveSupport": {"properties": ["documentation", "detail", "additionalTextEdits"]}
+                    }
+                }
+            },
+            "workspace": {
+                // 声明后 jdtls 启动即发 workspace/configuration 拉配置——
+                // reader 循环的 ServerRequest 分支负责应答（此前被忽略导致请求挂起）。
+                "configuration": true
             }
         },
         "workspaceFolders": [{"uri": root_uri, "name": workspace}],
@@ -656,6 +738,65 @@ async fn init_handshake(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn answer_server_request_configuration_java_section() {
+        // jdtls 典型请求：section="java" → 应答 settings.java（downloadSources 等）
+        let params = serde_json::json!({
+            "items": [{"scopeUri": null, "section": "java"}]
+        });
+        let answer = answer_server_request(LanguageId::Java, "workspace/configuration", &params);
+        let arr = answer.as_array().expect("array response");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["maven"]["downloadSources"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn answer_server_request_configuration_dotted_section_and_null() {
+        let params = serde_json::json!({
+            "items": [
+                {"section": "java.completion"},
+                {"section": serde_json::Value::Null},
+                {"section": "java.nonexistent.deep"}
+            ]
+        });
+        let answer = answer_server_request(LanguageId::Java, "workspace/configuration", &params);
+        let arr = answer.as_array().expect("array response");
+        assert_eq!(arr.len(), 3);
+        // 点路径下钻
+        assert_eq!(arr[0]["enabled"], serde_json::json!(true));
+        // section null → 整个 settings 对象（顶层含 java 键）
+        assert!(arr[1].get("java").is_some());
+        // 取不到的路径 → Null（不 panic、不误给默认对象）
+        assert!(arr[2].is_null());
+    }
+
+    #[test]
+    fn answer_server_request_non_java_lang_returns_empty_settings() {
+        // 非 Java profile 未覆写 settings() → 空 settings；section 下钻不到 → Null
+        // （LSP 合规：客户端无此配置节），section null → 整个（空）settings 对象
+        let params = serde_json::json!({"items": [{"section": "rust"}, {"section": null}]});
+        let answer = answer_server_request(LanguageId::Rust, "workspace/configuration", &params);
+        let arr = answer.as_array().expect("array response");
+        assert!(arr[0].is_null());
+        assert_eq!(arr[1], serde_json::json!({}));
+    }
+
+    #[test]
+    fn answer_server_request_other_methods_null() {
+        // registerCapability / workDoneProgress/create 等 → null（同意/空结果）
+        assert_eq!(
+            answer_server_request(
+                LanguageId::Java,
+                "client/registerCapability",
+                &serde_json::json!({})
+            ),
+            serde_json::Value::Null
+        );
+        // items 缺失的 configuration 请求 → 单元素数组（兜底整个 settings）
+        let answer = answer_server_request(LanguageId::Java, "workspace/configuration", &serde_json::json!({}));
+        assert!(answer.as_array().is_some());
+    }
 
     #[test]
     fn exclude_globs_union_with_workspace_excludes() {

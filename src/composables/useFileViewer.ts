@@ -397,6 +397,12 @@ export function useFileViewer() {
     try {
       await api.writeFileContent(win.filePath, win.editContent);
       win.content = win.editContent;
+      // LSP didSave（best-effort，语言无关，按扩展名分派到对应 server）：
+      // 部分 server（如 jdtls）的编译级诊断依赖 save 触发完整编译刷新。
+      // 失败/旧 SDK 无此方法均静默，绝不阻断保存主流程（含后续 codegraph 逻辑）。
+      if (projectRoot.value) {
+        void Promise.resolve(api.lspDidSave?.(projectRoot.value, win.filePath)).catch(() => {});
+      }
       // 增量更新 codegraph 索引（best-effort，绝不阻断保存主流程）。
       // 后端返回结构化状态：更新成功 / 被跳过（带原因）/ 失败。
       // 反馈分流：

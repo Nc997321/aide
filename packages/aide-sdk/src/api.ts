@@ -12,7 +12,7 @@ import type {
   CatalogPreset, PortProbeResult, LoginStatusResult, ConnectionStatus,
   MigrationStatus, MigrationSummary,
   CmCompletion,
-  DocumentSymbolItem, LspCapabilities,
+  DocumentSymbolItem, LspCapabilities, SignatureHelpResult,
   RemoteStatus,
 } from "./types";
 import type { ModelOption, PermissionModeOption } from "./types/chat";
@@ -706,6 +706,18 @@ export const api = {
   },
   lspCompletion(workspaceRoot: string, filePath: string, line: number, column: number): Promise<CmCompletion[]> {
     return getTransport().invoke("lsp_completion", { workspaceRoot, filePath, line, column });
+  },
+  /** 选中补全条目时回传原始 item，取回完整 detail/documentation（语言无关）。 */
+  lspCompletionResolve(workspaceRoot: string, filePath: string, item: unknown): Promise<{ detail: string | null; documentation: string | null }> {
+    return getTransport().invoke("lsp_completion_resolve", { workspaceRoot, filePath, item });
+  },
+  /** 方法调用参数提示（语言无关）。无结果/未就绪返回 null。 */
+  lspSignatureHelp(workspaceRoot: string, filePath: string, line: number, column: number): Promise<SignatureHelpResult | null> {
+    return getTransport().invoke("lsp_signature_help", { workspaceRoot, filePath, line, column });
+  },
+  /** 保存通知：触发 server（如 jdtls）的编译级诊断刷新（语言无关，按扩展名分派）。 */
+  lspDidSave(workspaceRoot: string, filePath: string): Promise<void> {
+    return getTransport().invoke("lsp_did_save", { workspaceRoot, filePath });
   },
   lspHover(workspaceRoot: string, filePath: string, line: number, column: number): Promise<{ content: string | null }> {
     return getTransport().invoke("lsp_hover", { workspaceRoot, filePath, line, column });

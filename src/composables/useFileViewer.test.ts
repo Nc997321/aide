@@ -8,6 +8,7 @@ vi.mock("@aide/sdk/api", () => ({
     readFileContent: vi.fn(async (path: string) => `content of ${path}`),
     readFileBinary: vi.fn(async () => new ArrayBuffer(0)),
     writeFileContent: vi.fn(async () => undefined),
+    lspDidSave: vi.fn(async () => undefined),
     getProjectInfo: vi.fn(async () => ({ root: "C:/proj" })),
     isWorkspaceTrusted: vi.fn(async () => true),
     isWorkspaceCodegraphEnabled: vi.fn(async () => true),

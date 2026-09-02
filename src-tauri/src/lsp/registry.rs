@@ -53,6 +53,14 @@ pub trait ServerProfile {
         serde_json::json!({})
     }
 
+    /// `workspace/configuration` 请求的应答 settings（顶层 `{"<section>": {...}}` 形态，
+    /// 与 init_options 内嵌的 settings 同源——见 profiles/java.rs 的 java_settings）。
+    /// 默认空对象（多数 server 不发该请求）；Java 覆写：jdtls 启动后主动拉配置，
+    /// 不应答则请求挂起 + settings 全默认值（见 manager.rs answer_server_request）。
+    fn settings(&self) -> serde_json::Value {
+        serde_json::json!({})
+    }
+
     /// 握手判活超时（Java 例外 30s：jdtls 首次启动 OSGi + 索引 10-30s 常见）。
     fn handshake_timeout(&self) -> Duration {
         Duration::from_secs(5)

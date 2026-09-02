@@ -722,6 +722,22 @@ export interface CmCompletion {
   insert_text?: string;
   /** LSP filterText：过滤用文本（可能与 label/insert_text 不同）。CM 用它做前缀过滤。 */
   filter_text?: string;
+  /** 原始 LSP CompletionItem（仅当 documentation 缺失且带 data 时返回）：
+   *  支持 resolve 的 server 补全条目不带文档，前端选中条目时把它原样回传
+   *  lsp_completion_resolve 换取完整文档/签名。 */
+  resolve_item?: unknown;
+}
+
+/** lsp_signature_help 归一化结果（Rust protocol::signature_help_to_view）。 */
+export interface SignatureHelpResult {
+  signatures: {
+    label: string;
+    documentation?: string | null;
+    parameters: { label: string; documentation?: string | null }[];
+    activeParameter?: number | null;
+  }[];
+  activeSignature?: number | null;
+  activeParameter?: number | null;
 }
 
 // ── Provider action types ──

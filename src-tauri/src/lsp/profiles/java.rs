@@ -15,6 +15,37 @@ use std::time::Duration;
 pub const METADATA_REDIRECT_ARG: &str =
     "--jvm-arg=-Djava.import.generatesMetadataFilesAtProjectRoot=false";
 
+/// 堆参数（对齐 vscode-java 默认 -Xmx2G）。jdtls 默认堆偏小，大项目索引/解析
+/// 期间 GC 抖动 → 跳转/补全响应慢——跳转体验的核心成本项。仅内置来源（Which）
+/// 注入；Explicit 用户自配不掺和（同 lombok 原则）。
+pub const HEAP_ARG: &str = "--jvm-arg=-Xmx2G";
+
+/// Java settings（initializationOptions.settings 与 workspace/configuration 应答同源）。
+/// 关键项：
+/// - downloadSources（maven/eclipse 双通道）：跳进依赖库直接读源码 jar，而非
+///   fernflower 现场反编译 class——跳转进库符号从秒级降到毫秒级，审阅体验核心。
+/// - codeLens 双关（references/implementations）：审阅场景无 gutter 需求，关掉省请求。
+/// - validateAllOpenBuffersOnChanges=false：避免 jdtls 每次编辑全量重校验打开的
+///   buffer（大项目卡顿来源）。
+fn java_settings() -> Value {
+    serde_json::json!({
+        "java": {
+            "maven": {"downloadSources": true},
+            "eclipse": {"downloadSources": true},
+            "import": {
+                "maven": {"enabled": true},
+                "gradle": {"enabled": true}
+            },
+            "completion": {"enabled": true},
+            "signatureHelp": {"enabled": true},
+            "referencesCodeLens": {"enabled": false},
+            "implementationsCodeLens": {"enabled": false},
+            "edit": {"validateAllOpenBuffersOnChanges": false},
+            "autobuild": {"enabled": true}
+        }
+    })
+}
+
 pub struct JavaProfile;
 
 impl ServerProfile for JavaProfile {
@@ -49,6 +80,7 @@ impl ServerProfile for JavaProfile {
                 "-data".to_string(),
                 d.to_string_lossy().into_owned(),
                 METADATA_REDIRECT_ARG.to_string(),
+                HEAP_ARG.to_string(),
             ],
             None => vec![],
         }
@@ -78,7 +110,23 @@ impl ServerProfile for JavaProfile {
     }
 
     fn init_options(&self, _exclude_globs: &[String]) -> Value {
-        serde_json::json!({})
+        serde_json::json!({
+            // jdtls 扩展握手（vscode-java 同款）：classFileContentsSupport 允许
+            // 打开 class 文件内容（跳进无源码的库时给反编译文本而非报错）。
+            "extendedClientCapabilities": {
+                "progressReportProvider": false,
+                "classFileContentsSupport": true,
+                "overrideDefaultAddAllExcludesToIgnore": true
+            },
+            // settings 内嵌一份（jdtls 初始化时读）；运行期靠 workspace/configuration
+            // 拉取，应答走 settings()——两处同源 java_settings()。
+            "settings": java_settings(),
+        })
+    }
+
+    /// workspace/configuration 应答（与 init_options 内嵌 settings 同源）。
+    fn settings(&self) -> Value {
+        java_settings()
     }
 
     fn handshake_timeout(&self) -> Duration {
@@ -200,19 +248,51 @@ mod tests {
     }
 
     #[test]
-    fn launch_args_has_data_and_redirect() {
+    fn launch_args_has_data_redirect_and_heap() {
         let args = JavaProfile.launch_args(Some(data()));
         assert_eq!(
             args,
             vec![
                 "-data",
                 "C:/cache/jdtls-ws",
-                "--jvm-arg=-Djava.import.generatesMetadataFilesAtProjectRoot=false"
+                "--jvm-arg=-Djava.import.generatesMetadataFilesAtProjectRoot=false",
+                "--jvm-arg=-Xmx2G"
             ]
         );
         assert!(!args.contains(&"--stdio".to_string()), "jdtls 不认 --stdio");
         // data_dir 缺失（理论路径）：退化无参数
         assert_eq!(JavaProfile.launch_args(None), Vec::<String>::new());
+    }
+
+    #[test]
+    fn init_options_feeds_settings_and_extended_capabilities() {
+        let opts = JavaProfile.init_options(&[]);
+        // 扩展握手：classFileContentsSupport 允许跳进无源码库时给 class 内容
+        assert_eq!(
+            opts["extendedClientCapabilities"]["classFileContentsSupport"],
+            serde_json::json!(true)
+        );
+        // settings 内嵌：跳转进依赖库读源码而非反编译（跳转体验核心项）
+        assert_eq!(
+            opts["settings"]["java"]["maven"]["downloadSources"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            opts["settings"]["java"]["eclipse"]["downloadSources"],
+            serde_json::json!(true)
+        );
+        // codeLens 双关（审阅场景无 gutter 需求，省请求）
+        assert_eq!(
+            opts["settings"]["java"]["referencesCodeLens"]["enabled"],
+            serde_json::json!(false)
+        );
+    }
+
+    #[test]
+    fn settings_matches_init_options_embedded_settings() {
+        // 同源约束：workspace/configuration 应答与 initializationOptions.settings 一致，
+        // 避免两处漂移（jdtls 运行期以 configuration 应答为准）。
+        assert_eq!(JavaProfile.settings(), JavaProfile.init_options(&[])["settings"]);
     }
 
     #[test]

@@ -5,6 +5,7 @@ import { linter, type Diagnostic as CmDiagnostic } from "@codemirror/lint";
 import { watch, type WatchStopHandle } from "vue";
 import { api } from "../api";
 import { useLsp, type LspDiagnostic } from "../composables/useLsp";
+import { cmSignatureHelp } from "./cmSignatureHelp";
 import { isUserEdit } from "../utils/cmModelSync";
 import { renderMarkdown } from "../utils/markdown";
 
@@ -154,12 +155,28 @@ function lspCompletionSource(workspaceRoot: string, filePath: string, lang: stri
           // CM 类型里 CompletionInfo 只有 Node/{dom} 两种形态（运行时虽兼容 string），
           // 返回 { dom } 最贴近原语义：懒渲染、复用 hover 的 markdown 样式类。
           const doc = it.documentation;
+          // 无文档但带 resolve 载荷：CM 选中条目时懒调 completionItem/resolve
+          // （语言无关，支持 resolve 的 server 如 jdtls 常只给 data 不给文档）。
+          // resolve 返回 detail+documentation 拼接渲染；失败/空 → null 不显示面板。
+          const resolveInfo =
+            !doc && it.resolve_item
+              ? async () => {
+                  try {
+                    const r = await api.lspCompletionResolve(workspaceRoot, filePath, it.resolve_item);
+                    const parts = [r.detail, r.documentation].filter(Boolean) as string[];
+                    if (!parts.length) return null;
+                    return { dom: makeHoverDom(parts.join("\n\n")) };
+                  } catch {
+                    return null;
+                  }
+                }
+              : undefined;
           return {
             label: it.label,
             filterText: it.filter_text || undefined,
             apply: it.insert_text || it.label,
             detail: it.detail,
-            info: doc ? () => ({ dom: makeHoverDom(doc) }) : undefined,
+            info: doc ? () => ({ dom: makeHoverDom(doc) }) : resolveInfo,
             type: completionKind(it.kind),
           };
         }),
@@ -282,6 +299,7 @@ export function cmLsp(opts: CmLspOpts): Extension {
     plugin,
     autocompletion({ override: [lspCompletionSource(opts.workspaceRoot, opts.filePath, opts.lang)], activateOnTyping: true }),
     lspHover(opts.workspaceRoot, opts.filePath),
+    cmSignatureHelp({ workspaceRoot: opts.workspaceRoot, filePath: opts.filePath, lang: opts.lang }),
     EditorView.baseTheme({
       ".aide-lsp-hover": {
         maxWidth: "480px", padding: "6px 10px",
