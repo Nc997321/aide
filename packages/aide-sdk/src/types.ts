@@ -86,6 +86,10 @@ export interface ChangeRound {
   rewindTo?: number;
   /** 本轮对应的用户提问，作为变更面板轮次标题 */
   prompt?: string;
+  /** 运行时态：轮次进行中（files 随轮实时刷新）。仅内存/UI 使用，
+   *  固化落盘前必清——save 层已过滤，wire 上不出现该字段；Rust 端
+   *  ChangeRoundData 亦无 deny_unknown_fields，即使出现也被忽略。 */
+  pending?: boolean;
 }
 
 export interface Keybindings {

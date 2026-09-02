@@ -4,6 +4,7 @@ import type { ChangeRound, ChangeFile } from "../composables/useConversationChan
 import { useFileResolver } from "../composables/useFileResolver";
 import { useSessionWorkspaces } from "../composables/useSessionWorkspaces";
 import { api } from "../api";
+import ChangeFileTree from "./ChangeFileTree.vue";
 
 // P2-4 合一：rounds 与撤回操作由 App.vue 的 useConversationChanges 唯一实例
 // 经 props 透传（ChangeLogPanel 恒挂在活动会话，sessionId 与实例恒同）。
@@ -59,6 +60,10 @@ async function openFile(f: ChangeFile) {
   await openResolved(f.path, await workspaceRootOf(props.sessionId));
 }
 
+function revertFileInRound(round: ChangeRound, f: ChangeFile) {
+  void props.revertSingleFile(round, f.path);
+}
+
 const totalFiles = computed(() => {
   let n = 0;
   for (const r of props.rounds) n += r.files.length;
@@ -72,13 +77,14 @@ const renderItems = computed<RenderItem[]>(() => {
   const items: RenderItem[] = [];
   let i = 0;
   while (i < list.length) {
-    if (list[i].files.length > 0) {
+    // 进行中轮次永不进折叠分组（files 为空是常态，等文件出现）
+    if (list[i].files.length > 0 || list[i].pending) {
       items.push({ kind: "round", round: list[i] });
       i++;
       continue;
     }
     let j = i;
-    while (j < list.length && list[j].files.length === 0) j++;
+    while (j < list.length && list[j].files.length === 0 && !list[j].pending) j++;
     const group = list.slice(i, j);
     const groupKey = String(group[0].index);
     if (group.length > NOCHANGE_COLLAPSE_THRESHOLD && !expandedGroups.value.has(groupKey)) {
@@ -115,7 +121,7 @@ const renderItems = computed<RenderItem[]>(() => {
             v-tooltip="`展开 ${item.hiddenCount} 轮无变更记录`"
             @click="expandGroup(item.key)"
           >⋯ {{ item.hiddenCount }} 轮无变更 ⋯</div>
-          <div v-else class="changelog-round">
+          <div v-else class="changelog-round" :class="{ 'changelog-round--live': item.round.pending }">
             <div class="changelog-round-header">
               <span class="changelog-round-label">轮 {{ item.round.index }}</span>
               <span
@@ -123,6 +129,11 @@ const renderItems = computed<RenderItem[]>(() => {
                 :class="{ 'changelog-round-title--empty': !item.round.prompt }"
                 v-tooltip="item.round.prompt || undefined"
               >{{ item.round.prompt || '（无提问记录）' }}</span>
+              <span
+                v-if="item.round.pending"
+                class="changelog-round-live"
+                v-tooltip="'本轮进行中，文件变更实时刷新'"
+              ><i class="live-dot"></i>进行中</span>
               <button
                 v-if="item.round.rewindTo !== undefined"
                 class="changelog-round-revert"
@@ -131,28 +142,17 @@ const renderItems = computed<RenderItem[]>(() => {
               ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button>
             </div>
             <div class="changelog-round-time">{{ item.round.time }}</div>
-            <div v-if="item.round.files.length === 0" class="changelog-nochange">无变更</div>
             <div
-              v-for="f in item.round.files"
-              :key="f.path"
-              class="changelog-file"
-              :class="{ 'changelog-file--deleted': f.status === 'D' }"
-              v-tooltip="f.status === 'D' ? '文件已删除，可点右侧撤回恢复' : undefined"
-              @click="openFile(f)"
-            >
-              <span class="changelog-file-status" :class="`status-${f.status || 'M'}`">{{ f.status || 'M' }}</span>
-              <span class="changelog-file-path" v-tooltip="f.path">{{ f.path }}</span>
-              <span v-if="f.additions > 0 || f.deletions > 0" class="changelog-file-stats">
-                <span v-if="f.additions > 0" class="stat-add">+{{ f.additions }}</span>
-                <span v-if="f.additions > 0 && f.deletions > 0" class="stat-sep"> </span>
-                <span v-if="f.deletions > 0" class="stat-del">-{{ f.deletions }}</span>
-              </span>
-              <button
-                class="changelog-file-revert"
-                v-tooltip="'撤回此文件'"
-                @click.stop="revertSingleFile(item.round, f.path)"
-              ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button>
-            </div>
+              v-if="item.round.files.length === 0"
+              class="changelog-nochange"
+              :class="{ 'changelog-nochange--pending': item.round.pending }"
+            >{{ item.round.pending ? '等待文件变更…' : '无变更' }}</div>
+            <ChangeFileTree
+              v-else
+              :files="item.round.files"
+              :open-file="(f: ChangeFile) => openFile(f)"
+              :revert-file="(f: ChangeFile) => revertFileInRound(item.round, f)"
+            />
           </div>
         </template>
       </template>
@@ -259,6 +259,37 @@ const renderItems = computed<RenderItem[]>(() => {
   font-style: italic;
 }
 
+/* ── 进行中轮次 ── */
+
+.changelog-round-live {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--aide-accent);
+  background: color-mix(in srgb, var(--aide-accent) 10%, transparent);
+  border-radius: 8px;
+  padding: 1px 7px;
+}
+
+.live-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--aide-accent);
+  animation: live-breathe 1.4s ease-in-out infinite;
+}
+
+@keyframes live-breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot { animation: none; }
+}
+
 .changelog-round-time {
   padding: 0 12px 4px;
   font-size: 10px;
@@ -282,28 +313,15 @@ const renderItems = computed<RenderItem[]>(() => {
   background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
 }
 
-/* ── File rows ── */
-
-.changelog-file {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 6px 10px;
-  font-size: 12px;
-  border-radius: var(--aide-radius-sm);
-  cursor: pointer;
-  transition: background var(--aide-ease-t), color var(--aide-ease-t);
-}
-.changelog-file:hover {
-  background: var(--aide-surface-default);
-  color: var(--aide-text-primary);
-}
-
 .changelog-nochange {
   padding: 4px 12px;
   font-size: 11px;
   color: var(--aide-text-muted);
   font-style: italic;
+}
+
+.changelog-nochange--pending {
+  color: var(--aide-text-secondary);
 }
 
 .changelog-collapsed {
@@ -318,84 +336,6 @@ const renderItems = computed<RenderItem[]>(() => {
 .changelog-collapsed:hover {
   color: var(--aide-text-secondary);
   background: var(--aide-surface-default);
-}
-
-.changelog-file-status {
-  flex-shrink: 0;
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 700;
-  border-radius: 3px;
-}
-.status-M {
-  background: color-mix(in srgb, var(--aide-warning) 15%, transparent);
-  color: var(--aide-warning);
-}
-.status-A {
-  background: color-mix(in srgb, var(--aide-success) 15%, transparent);
-  color: var(--aide-success);
-}
-.status-D {
-  background: color-mix(in srgb, var(--aide-danger) 15%, transparent);
-  color: var(--aide-danger);
-}
-
-/* 已删除条目：磁盘无对应物，不可点开（撤回按钮仍可用，能恢复内容） */
-.changelog-file--deleted {
-  cursor: default;
-  opacity: 0.6;
-}
-.changelog-file--deleted:hover {
-  background: none;
-  color: inherit;
-}
-.changelog-file--deleted .changelog-file-path {
-  text-decoration: line-through;
-}
-
-.changelog-file-path {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--aide-text-secondary);
-  font-size: 12px;
-  font-family: var(--aide-font-mono);
-  font-size: 11.5px;
-}
-
-.changelog-file-stats {
-  flex-shrink: 0;
-  font-size: 11px;
-  font-family: var(--aide-font-mono);
-}
-
-.stat-add { color: var(--aide-success); }
-.stat-del { color: var(--aide-danger); }
-
-.changelog-file-revert {
-  flex-shrink: 0;
-  background: none;
-  border: none;
-  color: var(--aide-text-muted);
-  cursor: pointer;
-  font-size: 12px;
-  padding: 1px 4px;
-  border-radius: 2px;
-  opacity: 0;
-  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
-  font-family: inherit;
-}
-.changelog-file:hover .changelog-file-revert {
-  opacity: 1;
-}
-.changelog-file-revert:hover {
-  color: var(--aide-danger);
-  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
 }
 
 /* ── Scrollbar ── */
