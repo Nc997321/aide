@@ -12,7 +12,7 @@ import type {
   CatalogPreset, PortProbeResult, LoginStatusResult, ConnectionStatus,
   MigrationStatus, MigrationSummary,
   CmCompletion,
-  DocumentSymbolItem, LspCapabilities, SignatureHelpResult,
+  DocumentSymbolItem, LspCapabilities, SignatureHelpResult, SemanticToken,
   RemoteStatus,
 } from "./types";
 import type { ModelOption, PermissionModeOption } from "./types/chat";
@@ -714,6 +714,10 @@ export const api = {
   /** 方法调用参数提示（语言无关）。无结果/未就绪返回 null。 */
   lspSignatureHelp(workspaceRoot: string, filePath: string, line: number, column: number): Promise<SignatureHelpResult | null> {
     return getTransport().invoke("lsp_signature_help", { workspaceRoot, filePath, line, column });
+  },
+  /** 语义着色 token 全量（语言无关，按扩展名分派）。空数组=无结果/未就绪，前端清空装饰。 */
+  lspSemanticTokens(workspaceRoot: string, filePath: string): Promise<SemanticToken[]> {
+    return getTransport().invoke("lsp_semantic_tokens", { workspaceRoot, filePath });
   },
   /** 保存通知：触发 server（如 jdtls）的编译级诊断刷新（语言无关，按扩展名分派）。 */
   lspDidSave(workspaceRoot: string, filePath: string): Promise<void> {

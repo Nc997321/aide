@@ -681,6 +681,17 @@ async fn init_handshake(
                         // 声明后补全条目才带完整 javadoc 与签名。
                         "resolveSupport": {"properties": ["documentation", "detail", "additionalTextEdits"]}
                     }
+                },
+                // semanticTokens 语义着色（cmSemanticTokens 扩展消费）：语法高亮分不清
+                // 「字段还是方法调用、类型还是参数」，语义 token 按声明列表的索引编码，
+                // 前端据 tokenType 上色。tokenTypes/tokenModifiers 与 protocol.rs 解码
+                // 表同源（单一出处）；只声明 full（全量）请求——不做 delta 增量，server
+                // 会退回全量，前端 didChange 防抖后整刷（语言无关，任何 server 生效）。
+                "semanticTokens": {
+                    "tokenTypes": crate::lsp::protocol::SEMANTIC_TOKEN_TYPES,
+                    "tokenModifiers": crate::lsp::protocol::SEMANTIC_TOKEN_MODIFIERS,
+                    "formats": ["relative"],
+                    "requests": {"full": true}
                 }
             },
             "workspace": {

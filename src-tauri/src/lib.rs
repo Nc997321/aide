@@ -507,6 +507,7 @@ pub fn run() {
             lsp::lsp_completion,
             lsp::lsp_completion_resolve,
             lsp::lsp_signature_help,
+            lsp::lsp_semantic_tokens,
             lsp::lsp_did_save,
             lsp::lsp_hover,
             lsp::lsp_implementation,

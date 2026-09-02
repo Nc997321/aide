@@ -5,6 +5,7 @@ import { linter, type Diagnostic as CmDiagnostic } from "@codemirror/lint";
 import { watch, type WatchStopHandle } from "vue";
 import { api } from "../api";
 import { useLsp, type LspDiagnostic } from "../composables/useLsp";
+import { cmSemanticTokens } from "./cmSemanticTokens";
 import { cmSignatureHelp } from "./cmSignatureHelp";
 import { isUserEdit } from "../utils/cmModelSync";
 import { renderMarkdown } from "../utils/markdown";
@@ -300,6 +301,7 @@ export function cmLsp(opts: CmLspOpts): Extension {
     autocompletion({ override: [lspCompletionSource(opts.workspaceRoot, opts.filePath, opts.lang)], activateOnTyping: true }),
     lspHover(opts.workspaceRoot, opts.filePath),
     cmSignatureHelp({ workspaceRoot: opts.workspaceRoot, filePath: opts.filePath, lang: opts.lang }),
+    cmSemanticTokens({ workspaceRoot: opts.workspaceRoot, filePath: opts.filePath, lang: opts.lang }),
     EditorView.baseTheme({
       ".aide-lsp-hover": {
         maxWidth: "480px", padding: "6px 10px",

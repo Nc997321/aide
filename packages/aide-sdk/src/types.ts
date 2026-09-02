@@ -740,6 +740,17 @@ export interface SignatureHelpResult {
   activeParameter?: number | null;
 }
 
+/** lsp_semantic_tokens 归一化结果（Rust protocol::semantic_tokens_to_view：
+ *  LSP delta 编码已解码为绝对坐标）。line 1-based（doc.line() 直用）、
+ *  startChar 0-based；tokenType/tokenModifiers 为标准字符串（协议表同源）。 */
+export interface SemanticToken {
+  line: number;
+  startChar: number;
+  length: number;
+  tokenType: string;
+  tokenModifiers: string[];
+}
+
 // ── Provider action types ──
 
 /** Rust `commands::provider::PortProbeResult`。 */

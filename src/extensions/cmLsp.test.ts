@@ -11,6 +11,7 @@ vi.mock("../api", () => ({
     lspCompletion: vi.fn().mockResolvedValue([]),
     lspCompletionResolve: vi.fn().mockResolvedValue({ detail: null, documentation: null }),
     lspSignatureHelp: vi.fn().mockResolvedValue(null),
+    lspSemanticTokens: vi.fn().mockResolvedValue([]),
     lspDidSave: vi.fn().mockResolvedValue(undefined),
     lspHover: vi.fn().mockResolvedValue({ content: null }),
     lspDefinition: vi.fn().mockResolvedValue({ status: "ok", results: [] }),

@@ -403,6 +403,39 @@ pub async fn lsp_signature_help(
     Ok(crate::lsp::protocol::signature_help_to_view(&result))
 }
 
+/// textDocument/semanticTokens/full（语言无关，按扩展名分派到对应 server）：
+/// 语义着色 token 全量。返回归一化数组（protocol::semantic_tokens_to_view：
+/// delta 解码为绝对坐标 + tokenType 字符串），无结果/未就绪/不支持 → 空数组
+/// （前端据此清空装饰）。只请求 full——不做 delta 增量，前端 didChange 防抖后整刷。
+#[tauri::command]
+pub async fn lsp_semantic_tokens(
+    workspace_root: String,
+    file_path: String,
+    state: tauri::State<'_, Arc<LspState>>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let Some(lang_id) = lang_from_ext_of(&file_path) else {
+        return Ok(vec![]);
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(vec![]);
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let params = serde_json::json!({"textDocument": {"uri": uri}});
+    let outcome = h
+        .request(
+            "textDocument/semanticTokens/full",
+            params,
+            crate::lsp::manager::REQUEST_TIMEOUT,
+        )
+        .await?;
+    let result = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        _ => serde_json::Value::Null,
+    };
+    Ok(crate::lsp::protocol::semantic_tokens_to_view(&result))
+}
+
 /// textDocument/didSave 通知（语言无关，按扩展名分派到对应 server）。
 /// 部分 server（如 jdtls）的编译级诊断依赖 save 触发完整编译刷新——
 /// didChange 只做增量分析，编译错误级的部分不 save 永远不出现。

@@ -78,6 +78,75 @@ pub fn signature_help_to_view(result: &serde_json::Value) -> serde_json::Value {
     })
 }
 
+/// 客户端声明的 semanticTokens tokenTypes（LSP 标准 22 类，数组顺序即索引）。
+/// manager.rs 握手声明与此同源（单一出处防漂移）：server 按客户端声明的顺序
+/// 返回类型索引，前端据此拿到 tokenType 字符串。
+pub const SEMANTIC_TOKEN_TYPES: [&str; 22] = [
+    "namespace", "type", "class", "enum", "interface", "struct", "typeParameter",
+    "parameter", "variable", "property", "enumMember", "event", "function", "method",
+    "macro", "keyword", "modifier", "comment", "string", "number", "regexp", "operator",
+];
+
+/// 客户端声明的 tokenModifiers（LSP 标准 10 项，数组顺序即位掩码 bit 位）。
+pub const SEMANTIC_TOKEN_MODIFIERS: [&str; 10] = [
+    "declaration", "definition", "readonly", "static", "deprecated",
+    "abstract", "async", "modification", "documentation", "defaultLibrary",
+];
+
+/// textDocument/semanticTokens/full 结果归一：LSP delta 编码（5 元组：
+/// deltaLine / deltaStartChar / length / tokenType / tokenModifiers 位掩码）→
+/// 绝对坐标 token 数组。line 转 1-based（前端 doc.line() 直用，同
+/// DocumentSymbolItem 约定），startChar 保持 0-based（CM 列即 0-based）。
+/// 防御：未知类型索引（server 发了未声明类型）跳过该 token；data 非 5 倍数
+/// 忽略尾部残缺；无 data / null → 空数组（前端据此清空既有装饰）。
+pub fn semantic_tokens_to_view(result: &serde_json::Value) -> Vec<serde_json::Value> {
+    let Some(data) = result.get("data").and_then(|v| v.as_array()) else {
+        return vec![];
+    };
+    let mut out = Vec::with_capacity(data.len() / 5);
+    let mut line: u64 = 0;
+    let mut start: u64 = 0;
+    for chunk in data.chunks(5) {
+        if chunk.len() < 5 {
+            break;
+        }
+        let (Some(dl), Some(dc), Some(len), Some(tt), Some(tm)) = (
+            chunk[0].as_u64(),
+            chunk[1].as_u64(),
+            chunk[2].as_u64(),
+            chunk[3].as_u64(),
+            chunk[4].as_u64(),
+        ) else {
+            continue;
+        };
+        // delta 规则（LSP spec）：deltaLine=0 时 deltaStartChar 相对上一 token
+        // 起始列累加；跨行时为绝对列。
+        if dl == 0 {
+            start += dc;
+        } else {
+            line += dl;
+            start = dc;
+        }
+        let Some(token_type) = SEMANTIC_TOKEN_TYPES.get(tt as usize) else {
+            continue;
+        };
+        let modifiers: Vec<&str> = SEMANTIC_TOKEN_MODIFIERS
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| (tm >> i) & 1 == 1)
+            .map(|(_, m)| *m)
+            .collect();
+        out.push(serde_json::json!({
+            "line": line + 1,
+            "startChar": start,
+            "length": len,
+            "tokenType": token_type,
+            "tokenModifiers": modifiers,
+        }));
+    }
+    out
+}
+
 /// 文档符号的扁平条目（documentSymbol 结果归一）。前端据此枚举声明行、按 kind 筛
 /// Class/Interface/Method/Function，对可视区内的声明查 implementation 挂 gutter 标记。
 /// kind 保留 LSP SymbolKind 原值（前端再映射），不在此裁剪——解析与筛选职责分离。
@@ -485,5 +554,55 @@ mod tests {
         // 无结果（cursor 不在调用内）/server 返空 → Null，前端拿 null 直接不弹层。
         assert!(signature_help_to_view(&serde_json::json!({})).is_null());
         assert!(signature_help_to_view(&serde_json::Value::Null).is_null());
+    }
+
+    #[test]
+    fn semantic_tokens_decode_delta_across_lines_and_within_line() {
+        // 三个 token：L0C0 len5 method（dl=0 绝对起点）；L0C10 len3 variable
+        // （dl=0 → 列相对上一 token 累加 0+10）；L2C4 len7 class（跨行 dl=2，
+        // 列为绝对值）。line 输出 1-based（前端 doc.line() 直用）。
+        let raw = serde_json::json!({
+            "data": [0, 0, 5, 13, 1, 0, 10, 3, 8, 2, 2, 4, 7, 2, 3]
+        });
+        let v = semantic_tokens_to_view(&raw);
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[0]["line"], serde_json::json!(1));
+        assert_eq!(v[0]["startChar"], serde_json::json!(0));
+        assert_eq!(v[0]["length"], serde_json::json!(5));
+        assert_eq!(v[0]["tokenType"], serde_json::json!("method"));
+        assert_eq!(v[0]["tokenModifiers"], serde_json::json!(["declaration"]));
+        assert_eq!(v[1]["line"], serde_json::json!(1));
+        assert_eq!(v[1]["startChar"], serde_json::json!(10));
+        assert_eq!(v[1]["tokenType"], serde_json::json!("variable"));
+        assert_eq!(v[1]["tokenModifiers"], serde_json::json!(["definition"]));
+        assert_eq!(v[2]["line"], serde_json::json!(3));
+        assert_eq!(v[2]["startChar"], serde_json::json!(4));
+        assert_eq!(v[2]["tokenType"], serde_json::json!("class"));
+        // 位掩码 3 = declaration(bit0) + definition(bit1)
+        assert_eq!(
+            v[2]["tokenModifiers"],
+            serde_json::json!(["declaration", "definition"])
+        );
+    }
+
+    #[test]
+    fn semantic_tokens_defensive_skips_unknown_type_and_truncated_tail() {
+        // tokenType 索引超出声明表（99）→ 跳过该 token；data 非 5 倍数 →
+        // 尾部残缺块忽略（不 panic）。有效 token 仍正常输出。
+        let raw = serde_json::json!({
+            "data": [0, 0, 3, 99, 0, 1, 2, 6, 14, 0, 7, 7, 7]
+        });
+        let v = semantic_tokens_to_view(&raw);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0]["tokenType"], serde_json::json!("macro"));
+        assert_eq!(v[0]["line"], serde_json::json!(2));
+    }
+
+    #[test]
+    fn semantic_tokens_empty_when_no_data() {
+        // server 返 null / 无 data 键 / data 非数组 → 空数组（前端清空装饰）。
+        assert!(semantic_tokens_to_view(&serde_json::Value::Null).is_empty());
+        assert!(semantic_tokens_to_view(&serde_json::json!({})).is_empty());
+        assert!(semantic_tokens_to_view(&serde_json::json!({"data": null})).is_empty());
     }
 }
