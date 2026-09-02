@@ -38,6 +38,12 @@ fn java_settings() -> Value {
             },
             "completion": {"enabled": true},
             "signatureHelp": {"enabled": true},
+            // inlayHints.parameterNames 默认 literals（仅字面量实参给参数名提示），
+            // 覆盖面不足——变量/表达式实参在审阅场景恰恰最需要形参名辅助读懂。
+            // 提到 all 让全部实参都有提示（lambda parameterTypes 默认关，保持克制不开）。
+            "inlayHints": {
+                "parameterNames": {"enabled": "all"}
+            },
             "referencesCodeLens": {"enabled": false},
             "implementationsCodeLens": {"enabled": false},
             "edit": {"validateAllOpenBuffersOnChanges": false},
