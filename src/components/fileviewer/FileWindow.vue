@@ -1010,10 +1010,14 @@ function onEditorContextMenu(e: MouseEvent) {
   left: 8px;
   right: 8px;
   max-height: 280px;
-  background: var(--aide-surface-default);
-  border: 1px solid var(--aide-surface-hover);
-  border-radius: 8px;
-  box-shadow: var(--aide-shadow-md);
+  /* 标准浮层配方（bg-raised + surface-blur + border-strong + shadow-lg）：
+     毛玻璃主题浮层带 blur，实底主题 surface-blur 为 "none" 无害 */
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border-strong);
+  border-radius: var(--aide-radius-lg);
+  box-shadow: var(--aide-shadow-lg);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   z-index: 10;
   display: flex;
   flex-direction: column;

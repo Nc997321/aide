@@ -271,9 +271,12 @@ async function createEditor() {
           backgroundColor: "color-mix(in srgb, var(--aide-danger) 15%, transparent)",
         },
         ".cm-tooltip": {
-          backgroundColor: "var(--aide-surface-default) !important",
+          // 标准浮层配方（bg-raised + surface-blur + border-strong）：hover 详情 /
+          // 补全 / 签名帮助共用容器，毛玻璃主题带 blur，实底主题 surface-blur 为 "none" 无害
+          backgroundColor: "var(--aide-bg-raised) !important",
           color: "var(--aide-text-primary) !important",
-          border: "1px solid var(--aide-surface-hover) !important",
+          border: "1px solid var(--aide-border-strong) !important",
+          backdropFilter: "var(--aide-surface-blur) !important",
         },
         // ── 搜索面板 / goto-line 对话框（@codemirror/search，basicSetup 已含）──
         // 真实 DOM（读 @codemirror/search 源码确认）：面板是 .cm-panel.cm-search
