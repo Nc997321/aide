@@ -124,7 +124,7 @@ export function useLsp() {
   /** 查某语言 server 的可选能力开关（带缓存）。server 未启动/未就绪 → 默认全 false；
    *  server 后续就绪时调用方应重查（CodeEditor 的 isLspOn watch 触发 reconfigure）。 */
   async function getCapabilities(workspaceRoot: string, lang: string): Promise<LspCapabilities> {
-    if (!workspaceRoot || !lang) return { implementationProvider: false, documentSymbolProvider: false };
+    if (!workspaceRoot || !lang) return { implementationProvider: false, documentSymbolProvider: false, callHierarchyProvider: false };
     const key = `${workspaceRoot}:${lang}`;
     const cached = capabilities.value.get(key);
     if (cached) return cached;
@@ -133,7 +133,7 @@ export function useLsp() {
       capabilities.value = new Map(capabilities.value).set(key, caps);
       return caps;
     } catch {
-      return { implementationProvider: false, documentSymbolProvider: false };
+      return { implementationProvider: false, documentSymbolProvider: false, callHierarchyProvider: false };
     }
   }
 

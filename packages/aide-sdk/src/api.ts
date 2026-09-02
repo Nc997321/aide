@@ -13,6 +13,7 @@ import type {
   MigrationStatus, MigrationSummary,
   CmCompletion,
   DocumentSymbolItem, LspCapabilities, SignatureHelpResult, SemanticToken,
+  CallHierarchyResult, CallHierarchyDirection,
   RemoteStatus,
 } from "./types";
 import type { ModelOption, PermissionModeOption } from "./types/chat";
@@ -707,6 +708,12 @@ export const api = {
   /** 查引用（语言无关，按扩展名分派）：符号 → 全部使用点。status 语义与 lspDefinition 一致。 */
   lspReferences(workspaceRoot: string, filePath: string, line: number, column: number, word: string): Promise<LspJumpResult> {
     return getTransport().invoke("lsp_references", { workspaceRoot, filePath, line, column, word });
+  },
+  /** 查调用层级（语言无关，按扩展名分派）：prepareCallHierarchy → incoming/outgoing 展开
+   *  一层。root=null 表示该位置不是可调用符号；树的更深层由前端递归调用（查询点=子节点
+   *  声明位置）。 */
+  lspCallHierarchy(workspaceRoot: string, filePath: string, line: number, column: number, direction: CallHierarchyDirection): Promise<CallHierarchyResult> {
+    return getTransport().invoke("lsp_call_hierarchy", { workspaceRoot, filePath, line, column, direction });
   },
   lspCompletion(workspaceRoot: string, filePath: string, line: number, column: number): Promise<CmCompletion[]> {
     return getTransport().invoke("lsp_completion", { workspaceRoot, filePath, line, column });

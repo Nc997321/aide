@@ -3,6 +3,7 @@ import { computed, watch, ref, nextTick } from "vue";
 import { useFileViewer, isWindowDirty } from "../../composables/useFileViewer";
 import type { FileWindowState, MarkdownMode } from "../../composables/useFileViewer";
 import { useGotoDefinition } from "../../composables/useGotoDefinition";
+import { useCallHierarchy } from "../../composables/useCallHierarchy";
 import { useModal } from "../../composables/useModal";
 import { useNotifications } from "../../composables/useNotifications";
 import type { QueryResult } from "../../types";
@@ -47,6 +48,7 @@ const props = defineProps<{
 
 const { closeWindow, save, projectRoot, gotoOwnerId, indexHintWinId, revealInTreePath, navigateInPlace, navigateBack, navStackHasDirty, openAndScrollTo } = useFileViewer();
 const goto = useGotoDefinition();
+const callHierarchy = useCallHierarchy();
 const modal = useModal();
 const { push: pushNotification } = useNotifications();
 const { show: showContextMenu } = useContextMenu();
@@ -344,6 +346,18 @@ async function onGotoGutter(payload: GutterGotoPayload) {
   jumpOrPick();
 }
 
+/** gutter ⇄ 标记点击：声明位置设为层级根，右侧栏面板换根（App.vue watch 切 tab）。 */
+function onGutterCallHierarchy(payload: { word: string; line: number; column: number }) {
+  if (!projectRoot.value) return;
+  void callHierarchy.openHierarchy({
+    workspaceRoot: projectRoot.value,
+    filePath: props.win.filePath,
+    line: payload.line,
+    column: payload.column,
+    word: payload.word,
+  });
+}
+
 async function onSearchAllReferences() {
   await goto.searchAllReferences(goto.searchWord.value, projectRoot.value);
 }
@@ -624,6 +638,7 @@ function onEditorContextMenu(e: MouseEvent) {
             @goto-definition="onGotoDefinition"
             @goto-references="onGotoReferences"
             @gutter-goto="onGotoGutter"
+            @gutter-callhierarchy="onGutterCallHierarchy"
             @vim-ex="onVimEx"
           />
         </div>
@@ -643,6 +658,7 @@ function onEditorContextMenu(e: MouseEvent) {
           @goto-definition="onGotoDefinition"
           @goto-references="onGotoReferences"
           @gutter-goto="onGotoGutter"
+          @gutter-callhierarchy="onGutterCallHierarchy"
           @vim-ex="onVimEx"
         />
       </div>

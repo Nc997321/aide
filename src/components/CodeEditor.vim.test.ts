@@ -40,6 +40,7 @@ vi.mock("../composables/useLsp", () => ({
     getCapabilities: vi.fn().mockResolvedValue({
       implementationProvider: false,
       documentSymbolProvider: false,
+      callHierarchyProvider: false,
     }),
   }),
 }));

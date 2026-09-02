@@ -579,11 +579,44 @@ export interface DocumentSymbolItem {
 }
 
 /** 某语言 server 的可选能力开关（来自 initialize 握手 capabilities）。前端据此决定是否
- *  启用「跳转到实现」gutter 标记等可选能力。 */
+ *  启用「跳转到实现」「调用层级 ⇄」gutter 标记等可选能力。 */
 export interface LspCapabilities {
   implementationProvider: boolean;
   documentSymbolProvider: boolean;
+  callHierarchyProvider: boolean;
 }
+
+// ── 调用层级（lsp_call_hierarchy）──
+
+/** 调用点（fromRanges）：节点与父节点之间发生调用的位置，逐个可跳。行列 1-based。 */
+export interface CallHierarchySite {
+  line: number;
+  column: number;
+}
+
+/** 调用层级树节点。file 为相对 workspaceRoot 的路径（跨工作区为绝对，同 QueryResult 约定）；
+ *  kind 为 LSP SymbolKind 原值。callSites = 该节点与父节点间的调用点。 */
+export interface CallHierarchyNode {
+  name: string;
+  kind: number;
+  detail?: string;
+  file: string;
+  line: number;
+  column: number;
+  callSites: CallHierarchySite[];
+}
+
+/** lsp_call_hierarchy 结果：root = prepare 到的层级根（null = 该位置不是可调用符号，
+ *  如类名/字段——前端提示走引用查询）；nodes = 根的第一层调用方/被调用方。展开下一层
+ *  由前端递归调用（查询点 = 子节点声明位置）。 */
+export interface CallHierarchyResult {
+  status: JumpStatus;
+  root: CallHierarchyNode | null;
+  nodes: CallHierarchyNode[];
+}
+
+/** 调用层级方向：incoming = 谁调用了它（调用方）；outgoing = 它调用了谁（被调用方）。 */
+export type CallHierarchyDirection = "incoming" | "outgoing";
 
 export interface BuildIndexResult {
   /** true = reused a fresh on-disk index; false = full rebuild. */

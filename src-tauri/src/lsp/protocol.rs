@@ -168,6 +168,7 @@ pub struct DocumentSymbolItem {
 pub struct LspCapabilities {
     pub implementation_provider: bool,
     pub document_symbol_provider: bool,
+    pub call_hierarchy_provider: bool,
 }
 
 impl LspCapabilities {
@@ -179,6 +180,7 @@ impl LspCapabilities {
         Self {
             implementation_provider: provider_on(c, "implementationProvider"),
             document_symbol_provider: provider_on(c, "documentSymbolProvider"),
+            call_hierarchy_provider: provider_on(c, "callHierarchyProvider"),
         }
     }
 }
@@ -224,6 +226,125 @@ pub fn locations_to_query_results(
 ) -> Vec<QueryResult> {
     locs.iter()
         .map(|l| location_to_query_result(l, word, workspace_root))
+        .collect()
+}
+
+// ── 调用层级（callHierarchy）归一化 ──
+//
+// 协议形状（全程按 JSON 处理，不引 lsp_types 强类型：CallHierarchyItem 可能带 server
+// 私有 data 字段，展开下一层时要原样回传，Value 直存直转最稳）：
+// - textDocument/prepareCallHierarchy → CallHierarchyItem[] | null
+//   （item: name/kind/detail/uri/range/selectionRange/data）
+// - callHierarchy/incomingCalls {item} → [{from: item, fromRanges: Range[]}]
+//   （from = 调用方；fromRanges = 调用方文件内的调用点）
+// - callHierarchy/outgoingCalls {item} → [{to: item, fromRanges: Range[]}]
+//   （to = 被调用方；fromRanges = 发起文件内的调用点）
+
+/// 调用层级树节点（第一层 = 根的直接调用方/被调用方，展开层 = 递归同构）。
+/// file 归一为相对 workspace_root（uri_to_rel_path，与跳转结果一致）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallHierarchyNode {
+    pub name: String,
+    /// LSP SymbolKind 原值（前端映射图标），不在此裁剪
+    pub kind: u32,
+    /// CallHierarchyItem.detail（签名/所属类型等，server 有则给）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub file: String,
+    /// 1-based 声明行（selectionRange.start.line + 1）
+    pub line: usize,
+    /// 1-based 声明列
+    pub column: usize,
+    /// 调用点（fromRanges）：该节点与父节点之间发生调用的位置，逐个可跳
+    pub call_sites: Vec<CallHierarchySite>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallHierarchySite {
+    /// 1-based
+    pub line: usize,
+    /// 1-based
+    pub column: usize,
+}
+
+/// prepareCallHierarchy 响应 → CallHierarchyItem 原样数组（保留 data 供展开时回传）。
+/// null / 非数组 / 空数组 → 空 Vec（符号不可做层级根，如类名/局部变量）。
+pub fn prepare_call_hierarchy_items(result: &serde_json::Value) -> Vec<serde_json::Value> {
+    match result.as_array() {
+        Some(items) => items.clone(),
+        None => vec![],
+    }
+}
+
+/// CallHierarchyItem JSON → CallHierarchyNode（file 归一相对工作区，行列 1-based）。
+/// selectionRange.start 缺失时回退 range.start，再缺失给 1（宁可给个可跳的行）。
+pub fn call_hierarchy_item_to_node(item: &serde_json::Value, workspace_root: &str) -> CallHierarchyNode {
+    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let kind = item.get("kind").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let detail = item
+        .get("detail")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let uri = item.get("uri").and_then(|v| v.as_str()).unwrap_or("");
+    let file = uri_to_rel_path(uri, workspace_root);
+    let (line, column) = item
+        .get("selectionRange")
+        .or_else(|| item.get("range"))
+        .and_then(|r| r.get("start"))
+        .map(|s| {
+            (
+                (s.get("line").and_then(|v| v.as_u64()).unwrap_or(0) + 1) as usize,
+                (s.get("character").and_then(|v| v.as_u64()).unwrap_or(0) + 1) as usize,
+            )
+        })
+        .unwrap_or((1, 1));
+    CallHierarchyNode {
+        name,
+        kind,
+        detail,
+        file,
+        line,
+        column,
+        call_sites: vec![],
+    }
+}
+
+/// incomingCalls / outgoingCalls 响应 → 节点列表。
+/// incoming：节点 = from（调用方），call_sites = fromRanges（调用方文件内的调用点）；
+/// outgoing：节点 = to（被调用方），call_sites = fromRanges（发起文件内的调用点）。
+fn ranges_to_sites(ranges: &serde_json::Value) -> Vec<CallHierarchySite> {
+    let Some(arr) = ranges.as_array() else {
+        return vec![];
+    };
+    arr.iter()
+        .filter_map(|r| {
+            let start = r.get("start")?;
+            Some(CallHierarchySite {
+                line: (start.get("line").and_then(|v| v.as_u64()).unwrap_or(0) + 1) as usize,
+                column: (start.get("character").and_then(|v| v.as_u64()).unwrap_or(0) + 1) as usize,
+            })
+        })
+        .collect()
+}
+
+pub fn call_hierarchy_calls_to_nodes(
+    result: &serde_json::Value,
+    direction: &str,
+    workspace_root: &str,
+) -> Vec<CallHierarchyNode> {
+    let Some(arr) = result.as_array() else {
+        return vec![];
+    };
+    arr.iter()
+        .filter_map(|call| {
+            // incoming 取 from，outgoing 取 to（协议字段名固定，方向由调用方传入）
+            let item = call.get(if direction == "outgoing" { "to" } else { "from" })?;
+            let mut node = call_hierarchy_item_to_node(item, workspace_root);
+            node.call_sites = ranges_to_sites(call.get("fromRanges").unwrap_or(&serde_json::Value::Null));
+            Some(node)
+        })
         .collect()
 }
 
@@ -356,6 +477,7 @@ mod tests {
         let c = LspCapabilities::from_caps(Some(&caps));
         assert!(c.implementation_provider);
         assert!(!c.document_symbol_provider);
+        assert!(!c.call_hierarchy_provider);
 
         // 对象形态（含 workDoneProgress 等）：key 在即视为支持
         let caps2 = serde_json::json!({
@@ -366,15 +488,84 @@ mod tests {
         assert!(c2.implementation_provider);
         assert!(c2.document_symbol_provider);
 
+        // callHierarchyProvider：bool 与对象两形态
+        let caps3 = serde_json::json!({"callHierarchyProvider": true});
+        let c3 = LspCapabilities::from_caps(Some(&caps3));
+        assert!(c3.call_hierarchy_provider);
+        let caps4 = serde_json::json!({"callHierarchyProvider": {"workDoneProgress": true}});
+        let c4 = LspCapabilities::from_caps(Some(&caps4));
+        assert!(c4.call_hierarchy_provider);
+
         // 缺失 → 不支持
-        let c3 = LspCapabilities::from_caps(Some(&serde_json::json!({})));
-        assert!(!c3.implementation_provider);
-        assert!(!c3.document_symbol_provider);
+        let c5 = LspCapabilities::from_caps(Some(&serde_json::json!({})));
+        assert!(!c5.implementation_provider);
+        assert!(!c5.document_symbol_provider);
+        assert!(!c5.call_hierarchy_provider);
 
         // None（server 未握手）→ 全 false
-        let c4 = LspCapabilities::from_caps(None);
-        assert!(!c4.implementation_provider);
-        assert!(!c4.document_symbol_provider);
+        let c6 = LspCapabilities::from_caps(None);
+        assert!(!c6.implementation_provider);
+        assert!(!c6.document_symbol_provider);
+        assert!(!c6.call_hierarchy_provider);
+    }
+
+    #[test]
+    fn call_hierarchy_prepare_items_and_normalization() {
+        // prepare：数组原样保留（含 server 私有 data）；null → 空
+        let prep = serde_json::json!([
+            {"name":"init_handshake","kind":6,"detail":"fn(self)",
+             "uri":"file:///C:/proj/src-tauri/src/lsp/manager.rs",
+             "range":{"start":{"line":638,"character":4},"end":{"line":700,"character":5}},
+             "selectionRange":{"start":{"line":638,"character":7},"end":{"line":638,"character":23}},
+             "data":{"serverPrivate":"ctx-42"}}
+        ]);
+        let items = prepare_call_hierarchy_items(&prep);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["data"]["serverPrivate"], "ctx-42"); // data 原样保留（展开回传用）
+        assert!(prepare_call_hierarchy_items(&serde_json::Value::Null).is_empty());
+
+        // item → node：file 相对工作区、行列 1-based、selectionRange 优先
+        let node = call_hierarchy_item_to_node(&items[0], "C:/proj");
+        assert_eq!(node.name, "init_handshake");
+        assert_eq!(node.kind, 6);
+        assert_eq!(node.file, "src-tauri/src/lsp/manager.rs");
+        assert_eq!(node.line, 639); // 638 + 1
+        assert_eq!(node.column, 8); // 7 + 1
+
+        // incoming：节点取 from，fromRanges → 调用点
+        let incoming = serde_json::json!([
+            {"from":{"name":"spawn_and_init","kind":6,
+                     "uri":"file:///C:/proj/src-tauri/src/lsp/manager.rs",
+                     "range":{"start":{"line":268,"character":4},"end":{"line":290,"character":5}},
+                     "selectionRange":{"start":{"line":268,"character":7},"end":{"line":268,"character":22}}},
+             "fromRanges":[
+                {"start":{"line":286,"character":22},"end":{"line":286,"character":37}},
+                {"start":{"line":291,"character":9},"end":{"line":291,"character":24}}
+             ]}
+        ]);
+        let nodes = call_hierarchy_calls_to_nodes(&incoming, "incoming", "C:/proj");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, "spawn_and_init");
+        assert_eq!(nodes[0].line, 269);
+        assert_eq!(nodes[0].call_sites.len(), 2);
+        assert_eq!(nodes[0].call_sites[0].line, 287);
+        assert_eq!(nodes[0].call_sites[0].column, 23);
+
+        // outgoing：节点取 to
+        let outgoing = serde_json::json!([
+            {"to":{"name":"ensure_server","kind":6,
+                   "uri":"file:///C:/proj/src-tauri/src/lsp/manager.rs",
+                   "range":{"start":{"line":121,"character":4},"end":{"line":140,"character":5}},
+                   "selectionRange":{"start":{"line":121,"character":7},"end":{"line":121,"character":20}}},
+             "fromRanges":[{"start":{"line":660,"character":9},"end":{"line":660,"character":22}}]}
+        ]);
+        let nodes2 = call_hierarchy_calls_to_nodes(&outgoing, "outgoing", "C:/proj");
+        assert_eq!(nodes2.len(), 1);
+        assert_eq!(nodes2[0].name, "ensure_server");
+        assert_eq!(nodes2[0].call_sites[0].line, 661);
+
+        // 非数组响应（null/异常形状）→ 空，不 panic
+        assert!(call_hierarchy_calls_to_nodes(&serde_json::Value::Null, "incoming", "C:/proj").is_empty());
     }
 
     #[test]

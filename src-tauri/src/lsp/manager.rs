@@ -692,7 +692,12 @@ async fn init_handshake(
                     "tokenModifiers": crate::lsp::protocol::SEMANTIC_TOKEN_MODIFIERS,
                     "formats": ["relative"],
                     "requests": {"full": true}
-                }
+                },
+                // 调用层级（CallHierarchyPanel 消费）：prepareCallHierarchy + incoming/
+                // outgoingCalls。客户端能力全字段可选，空对象即合法；声明后 server
+                // （如 jdtls/rust-analyzer）才会在其 capabilities 里回报 callHierarchyProvider
+                // ——前端据此决定 gutter ⇄ 标记是否装载（语言无关，任何 server 同一判断）。
+                "callHierarchy": {}
             },
             "workspace": {
                 // 声明后 jdtls 启动即发 workspace/configuration 拉配置——

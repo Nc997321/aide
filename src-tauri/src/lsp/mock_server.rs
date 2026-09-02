@@ -88,6 +88,41 @@ async fn mock_responder<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(mut reader:
                         {"uri":"file:///mock/use2.rs","range":{"start":{"line":9,"character":0},"end":{"line":9,"character":4}}}
                     ]
                 })),
+                // 调用层级：prepare 给一个根 item（含 data 验证回传链）；incoming 返回
+                // 一个调用方（from + 两个 fromRanges）；outgoing 返回一个被调用方（to）。
+                "textDocument/prepareCallHierarchy" => Some(serde_json::json!({
+                    "jsonrpc":"2.0","id":id,
+                    "result":[{
+                        "name":"init_handshake","kind":6,"detail":"fn(self)",
+                        "uri":"file:///mock/main.rs",
+                        "range":{"start":{"line":638,"character":4},"end":{"line":700,"character":5}},
+                        "selectionRange":{"start":{"line":638,"character":7},"end":{"line":638,"character":23}},
+                        "data":{"ctx":42}
+                    }]
+                })),
+                "callHierarchy/incomingCalls" => Some(serde_json::json!({
+                    "jsonrpc":"2.0","id":id,
+                    "result":[{
+                        "from":{"name":"spawn_and_init","kind":6,
+                                "uri":"file:///mock/main.rs",
+                                "range":{"start":{"line":268,"character":4},"end":{"line":290,"character":5}},
+                                "selectionRange":{"start":{"line":268,"character":7},"end":{"line":268,"character":22}}},
+                        "fromRanges":[
+                            {"start":{"line":286,"character":22},"end":{"line":286,"character":37}},
+                            {"start":{"line":291,"character":9},"end":{"line":291,"character":24}}
+                        ]
+                    }]
+                })),
+                "callHierarchy/outgoingCalls" => Some(serde_json::json!({
+                    "jsonrpc":"2.0","id":id,
+                    "result":[{
+                        "to":{"name":"ensure_server","kind":6,
+                              "uri":"file:///mock/main.rs",
+                              "range":{"start":{"line":121,"character":4},"end":{"line":140,"character":5}},
+                              "selectionRange":{"start":{"line":121,"character":7},"end":{"line":121,"character":20}}},
+                        "fromRanges":[{"start":{"line":660,"character":9},"end":{"line":660,"character":22}}]
+                    }]
+                })),
                 "shutdown" => Some(serde_json::json!({"jsonrpc":"2.0","id":id,"result":null})),
                 _ => id.map(|i| serde_json::json!({"jsonrpc":"2.0","id":i,"result":null})),
             };

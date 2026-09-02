@@ -351,6 +351,117 @@ pub async fn lsp_references(
     Ok(LspJumpResult { status, results })
 }
 
+/// 调用层级（callHierarchy）结果包装：root = prepare 到的层级根（prepare 空 → None，
+/// 前端据此提示「该符号不支持调用层级」——类名/局部变量等不可调用符号）；nodes = 根的
+/// 第一层调用方/被调用方。树形展开由前端逐层递归调用本命令实现（查询点 = 子节点声明位置）。
+#[derive(Debug, Serialize)]
+pub struct CallHierarchyResult {
+    pub status: JumpStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<crate::lsp::protocol::CallHierarchyNode>,
+    pub nodes: Vec<crate::lsp::protocol::CallHierarchyNode>,
+}
+
+/// 查调用层级（语言无关，按扩展名分派）：prepareCallHierarchy 拿层级根 →
+/// callHierarchy/incomingCalls | outgoingCalls 展开一层。两段请求，任一段超时/未就绪
+/// 整体透传 status（root 可能已就位——前端保留展示并提示重试）。
+/// prepare 返回多 item（重载等罕见场景）取第一个；v1 不做根选择 UI。
+#[tauri::command]
+pub async fn lsp_call_hierarchy(
+    workspace_root: String,
+    file_path: String,
+    line: usize,
+    column: usize,
+    direction: String,
+    state: tauri::State<'_, Arc<LspState>>,
+) -> Result<CallHierarchyResult, String> {
+    let dir = match direction.as_str() {
+        "incoming" | "outgoing" => direction.as_str(),
+        _ => return Err(format!("invalid direction: {direction}")),
+    };
+    let lang = lang_from_ext_of(&file_path);
+    let Some(lang_id) = lang else {
+        return Ok(CallHierarchyResult {
+            status: JumpStatus::Ok,
+            root: None,
+            nodes: vec![],
+        });
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(CallHierarchyResult {
+            status: JumpStatus::NotReady,
+            root: None,
+            nodes: vec![],
+        });
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let prepare_params = serde_json::json!({
+        "textDocument":{"uri":uri},
+        "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
+    });
+    let empty_result = |status: JumpStatus| CallHierarchyResult {
+        status,
+        root: None,
+        nodes: vec![],
+    };
+    // 1. prepare：拿层级根 item（原样 JSON——展开请求要带 data 回传 server）
+    let outcome = h
+        .request(
+            "textDocument/prepareCallHierarchy",
+            prepare_params,
+            crate::lsp::manager::DEFINITION_TIMEOUT,
+        )
+        .await?;
+    let prepare_value = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        crate::lsp::manager::RequestOutcome::Timeout => {
+            return Ok(empty_result(JumpStatus::Timeout))
+        }
+        crate::lsp::manager::RequestOutcome::NotReady => {
+            return Ok(empty_result(JumpStatus::NotReady))
+        }
+        crate::lsp::manager::RequestOutcome::ServerGone => {
+            return Ok(empty_result(JumpStatus::Gone))
+        }
+    };
+    let items = crate::lsp::protocol::prepare_call_hierarchy_items(&prepare_value);
+    let Some(root_item) = items.into_iter().next() else {
+        // server 确认该位置不是可调用符号（类名/字段等）→ Ok + root None
+        return Ok(empty_result(JumpStatus::Ok));
+    };
+    let root = crate::lsp::protocol::call_hierarchy_item_to_node(&root_item, &workspace_root);
+    // 2. 方向展开：item 原样回传（保 data）
+    let call_params = serde_json::json!({"item": root_item});
+    let method = if dir == "outgoing" {
+        "callHierarchy/outgoingCalls"
+    } else {
+        "callHierarchy/incomingCalls"
+    };
+    let outcome = h
+        .request(method, call_params, crate::lsp::manager::DEFINITION_TIMEOUT)
+        .await?;
+    let (status, value) = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => (JumpStatus::Ok, v),
+        crate::lsp::manager::RequestOutcome::Timeout => {
+            (JumpStatus::Timeout, serde_json::Value::Null)
+        }
+        crate::lsp::manager::RequestOutcome::NotReady => {
+            (JumpStatus::NotReady, serde_json::Value::Null)
+        }
+        crate::lsp::manager::RequestOutcome::ServerGone => {
+            (JumpStatus::Gone, serde_json::Value::Null)
+        }
+    };
+    let nodes =
+        crate::lsp::protocol::call_hierarchy_calls_to_nodes(&value, dir, &workspace_root);
+    Ok(CallHierarchyResult {
+        status,
+        root: Some(root),
+        nodes,
+    })
+}
+
 #[tauri::command]
 pub async fn lsp_completion(
     workspace_root: String,
@@ -1028,6 +1139,65 @@ mod tests {
         assert_eq!(qr[0].symbol.line, 6); // 0-based 5 → 1-based 6
         assert_eq!(qr[1].symbol.file, "use2.rs");
         assert_eq!(qr[1].symbol.line, 10);
+    }
+
+    #[tokio::test]
+    async fn mock_end_to_end_call_hierarchy() {
+        // lsp_call_hierarchy 两段链路：prepareCallHierarchy → 根 item（含 data）→
+        // callHierarchy/incomingCalls（item 原样回传）→ from/fromRanges → 树节点归一化。
+        let mock = crate::lsp::mock_server::spawn_mock_lsp();
+        let transport = crate::lsp::transport::LspTransport::with_reader_source(
+            mock.transport_stdin,
+            mock.transport_stdout,
+        );
+        let router = crate::lsp::rpc::Router::new();
+        let table = transport.table_handle();
+        let mut reader = tokio::io::BufReader::new(transport.take_reader_source().await);
+        let table_r = table.clone();
+        let mut framer = crate::lsp::transport::Framer::new();
+        let (msg, id, tx, rx) = router.next_request("initialize", serde_json::json!({
+            "rootUri":"file:///mock","capabilities":{},"workspaceFolders":[{"uri":"file:///mock","name":"mock"}]
+        }));
+        table.lock().await.insert(id, tx);
+        transport.send(&msg).await.unwrap();
+        let _ = pump_until(&mut reader, &mut framer, &table_r, rx).await.unwrap();
+        // 1. prepare（与 lsp_call_hierarchy 命令同参形状：position 0-based）
+        let (msg, id, tx, rx) = router.next_request(
+            "textDocument/prepareCallHierarchy",
+            serde_json::json!({
+                "textDocument":{"uri":"file:///mock/main.rs"},
+                "position":{"line":638,"character":7}
+            }),
+        );
+        table.lock().await.insert(id, tx);
+        transport.send(&msg).await.unwrap();
+        let prep = pump_until(&mut reader, &mut framer, &table_r, rx)
+            .await
+            .unwrap();
+        let items = crate::lsp::protocol::prepare_call_hierarchy_items(&prep);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["data"]["ctx"], 42); // data 原样保留
+        let root = crate::lsp::protocol::call_hierarchy_item_to_node(&items[0], "/mock");
+        assert_eq!(root.name, "init_handshake");
+        assert_eq!(root.file, "main.rs");
+        assert_eq!(root.line, 639); // 0-based 638 → 1-based
+        // 2. incoming 展开（item 原样回传——保 data）
+        let (msg, id, tx, rx) = router.next_request(
+            "callHierarchy/incomingCalls",
+            serde_json::json!({"item": items[0]}),
+        );
+        table.lock().await.insert(id, tx);
+        transport.send(&msg).await.unwrap();
+        let result = pump_until(&mut reader, &mut framer, &table_r, rx)
+            .await
+            .unwrap();
+        let nodes = crate::lsp::protocol::call_hierarchy_calls_to_nodes(&result, "incoming", "/mock");
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, "spawn_and_init");
+        assert_eq!(nodes[0].line, 269);
+        assert_eq!(nodes[0].call_sites.len(), 2);
+        assert_eq!(nodes[0].call_sites[0].line, 287);
+        assert_eq!(nodes[0].call_sites[1].column, 10);
     }
 
     async fn pump_until(

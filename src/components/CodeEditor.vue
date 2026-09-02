@@ -46,6 +46,9 @@ const emit = defineEmits<{
   /** gutter 标记点击（跳实现）：results 为缓存实现列表，viewportY 复刻点击处视口偏移
    *  以对齐目标行；line 为标记所在行（回退 sourceLine）；clientX/clientY 锚定浮层。 */
   (e: "gutter-goto", payload: GutterGotoPayload): void;
+  /** gutter ⇄ 标记点击（调用层级）：声明位置 = prepareCallHierarchy 查询点，
+   *  宿主（FileWindow）转 useCallHierarchy().openHierarchy 打开右侧栏面板。 */
+  (e: "gutter-callhierarchy", payload: { word: string; line: number; column: number }): void;
   /** vim ex 命令（:w/:wq/:q/:q!）请求文件操作，由宿主组件（FileWindow）执行 */
   (e: "vim-ex", command: VimExCommand): void;
 }>();
@@ -447,10 +450,12 @@ async function createEditor() {
   resolveReady?.();
 }
 
-/** 按 LSP 开关 + server capability 决定是否装载实现标记 gutter。
+/** 按 LSP 开关 + server capability 决定是否装载 gutter 标记扩展。
  *  - LSP 关 / 无 workspaceRoot / 无 lspLang → 卸载（[]）
- *  - LSP 开但 server 不支持 implementationProvider 或 documentSymbolProvider → 卸载
- *  - 都支持 → 装 cmImplGutter（可视区渐进查 implementation + 反推向上箭头） */
+ *  - LSP 开但 server 不支持 documentSymbolProvider → 卸载（标记全部依赖符号表）
+ *  - documentSymbol + implementationProvider → ↓ 跳实现 + ⇄ 调用层级（若支持 callHierarchyProvider）
+ *  - documentSymbol + 仅 callHierarchyProvider → 只 ⇄（↓ 无意义）
+ *  - documentSymbol + 仅 implementationProvider → 只 ↓（现有行为） */
 async function applyImplGutter() {
   if (!view) return;
   const { workspaceRoot, lspLang } = props;
@@ -460,7 +465,8 @@ async function applyImplGutter() {
   }
   const caps = await useLsp().getCapabilities(workspaceRoot, lspLang);
   if (!view) return; // editor 可能已 destroy
-  const on = caps.implementationProvider && caps.documentSymbolProvider;
+  const on = caps.documentSymbolProvider
+    && (caps.implementationProvider || caps.callHierarchyProvider);
   view.dispatch({
     effects: implGutterCompartment.reconfigure(
       on
@@ -469,6 +475,7 @@ async function applyImplGutter() {
             filePath: props.filePath,
             lang: lspLang,
             onGotoImplementation: (p) => emit("gutter-goto", p),
+            onShowCallHierarchy: (p) => emit("gutter-callhierarchy", p),
           })
         : [],
     ),
