@@ -12,6 +12,7 @@ import { useOnboarding } from "../composables/useOnboarding";
 import { useFileClipboard, getParentPath } from "../composables/useFileClipboard";
 import { planWatchRefresh } from "../utils/fileTreeWatch";
 import { mergeFileEntries } from "../utils/fileTree";
+import WorkspacePicker from "../ui/WorkspacePicker.vue";
 import type { FileEntry, WorkspaceInfo } from "../types";
 
 const props = defineProps<{ sessionId: string }>();
@@ -395,46 +396,14 @@ async function deleteNode(path: string) {
 }
 
 // ── 工作区（项目）切换器 ───────────────────────────────────────────────────
-// path-bar 上的项目名即切换入口：点开列出所有工作区，选中后把 wsKey 抛给
-// App.vue，由侧栏（单一数据源）执行真正切换并广播 workspace-changed，避免
+// path-bar 上的项目名即切换入口：下拉列表/勾选/missing 禁用/开合交互由共享组件
+// WorkspacePicker 承担，这里只保留「切换」语义的同 root 守卫——选中后把 wsKey
+// 抛给 App.vue，由侧栏（单一数据源）执行真正切换并广播 workspace-changed，避免
 // 文件树自己 setWorkspace 造成侧栏 activeWorkspace 与实际工作区脱节。
-const wsDropdownOpen = ref(false);
-const wsLoading = ref(false);
-const workspaceList = ref<WorkspaceInfo[]>([]);
-const wsSwitcherRef = ref<HTMLElement>();
-
-async function toggleWsDropdown() {
-  if (wsDropdownOpen.value) {
-    wsDropdownOpen.value = false;
-    return;
-  }
-  wsDropdownOpen.value = true;
-  wsLoading.value = true;
-  try {
-    workspaceList.value = await api.listWorkspaces();
-  } catch {
-    workspaceList.value = [];
-  }
-  wsLoading.value = false;
-}
-
-function wsLabel(ws: WorkspaceInfo): string {
-  return ws.name.split(/[\\/]/).filter(Boolean).pop() || ws.name;
-}
-
-function onSelectWorkspace(ws: WorkspaceInfo) {
-  wsDropdownOpen.value = false;
-  if (ws.missing || ws.name === projectInfo.value.root) return;
+function onPickWorkspace(ws: WorkspaceInfo) {
+  if (ws.name === projectInfo.value.root) return;
   emit("switch-workspace", ws.key);
 }
-
-function onWsClickOutside(e: MouseEvent) {
-  if (wsSwitcherRef.value && !wsSwitcherRef.value.contains(e.target as Node)) {
-    wsDropdownOpen.value = false;
-  }
-}
-onMounted(() => document.addEventListener("click", onWsClickOutside));
-onUnmounted(() => document.removeEventListener("click", onWsClickOutside));
 
 /**
  * 在文件树中定位并高亮指定文件：展开所有祖先目录 → 选中 → 滚动到可见。
@@ -505,31 +474,17 @@ defineExpose({ loadRoot, revealFile });
 <template>
   <div class="file-tree">
     <div class="path-bar">
-      <div ref="wsSwitcherRef" class="ws-switcher">
-        <button class="ws-trigger" v-tooltip="projectInfo.root" @click.stop="toggleWsDropdown">
-          <svg class="ws-folder" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-          <span class="ws-project-name">{{ projectInfo.name || "未打开工作区" }}</span>
-          <span v-if="projectInfo.branch" class="path-branch">{{ projectInfo.branch }}</span>
-          <svg class="ws-chevron" :class="{ open: wsDropdownOpen }" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 3.5L5 6L7.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-        <div v-if="wsDropdownOpen" class="ws-dropdown">
-          <div v-if="wsLoading" class="ws-dropdown-status">加载中…</div>
-          <template v-else>
-            <button
-              v-for="ws in workspaceList"
-              :key="ws.key"
-              class="ws-option"
-              :class="{ active: ws.name === projectInfo.root, missing: ws.missing }"
-              :disabled="ws.missing"
-              v-tooltip="ws.missing ? '路径已失效' : ws.name"
-              @click="onSelectWorkspace(ws)"
-            >
-              <span class="ws-option-name">{{ wsLabel(ws) }}</span>
-              <span v-if="ws.name === projectInfo.root" class="ws-option-check">✓</span>
+      <div class="ws-switcher">
+        <WorkspacePicker :path="projectInfo.root" @select="onPickWorkspace">
+          <template #trigger="{ open, toggle }">
+            <button class="ws-trigger" v-tooltip="projectInfo.root" @click.stop="toggle">
+              <svg class="ws-folder" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              <span class="ws-project-name">{{ projectInfo.name || "未打开工作区" }}</span>
+              <span v-if="projectInfo.branch" class="path-branch">{{ projectInfo.branch }}</span>
+              <svg class="ws-chevron" :class="{ open }" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 3.5L5 6L7.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
-            <div v-if="workspaceList.length === 0" class="ws-dropdown-status">无其它项目</div>
           </template>
-        </div>
+        </WorkspacePicker>
       </div>
       <button class="hidden-toggle" :class="{ active: showHidden }" @click.stop="toggleHidden" v-tooltip="showHidden ? '隐藏隐藏文件' : '显示隐藏文件'">
         <svg v-if="!showHidden" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -619,9 +574,13 @@ defineExpose({ loadRoot, revealFile });
 }
 
 .ws-switcher {
-  position: relative;
   min-width: 0;
   flex: 1;
+}
+
+/* 共享 WorkspacePicker 占满 path-bar，触发按钮（slot）随之全宽、名称省略号生效 */
+.ws-switcher .workspace-picker {
+  width: 100%;
 }
 
 .ws-trigger {
@@ -675,70 +634,6 @@ defineExpose({ loadRoot, revealFile });
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.ws-dropdown {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  min-width: 200px;
-  max-width: 320px;
-  max-height: 320px;
-  overflow-y: auto;
-  z-index: 200;
-  padding: 4px;
-  background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-sm);
-  box-shadow: var(--aide-shadow-lg);
-}
-
-.ws-dropdown-status {
-  padding: 8px 10px;
-  font-size: 11px;
-  color: var(--aide-text-muted);
-  text-align: center;
-}
-
-.ws-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 10px;
-  border: none;
-  background: none;
-  border-radius: var(--aide-radius-sm);
-  cursor: pointer;
-  color: var(--aide-text-secondary);
-  font-size: 12px;
-  text-align: left;
-  transition: background 0.12s, color 0.12s;
-}
-.ws-option:hover {
-  background: var(--aide-surface-hover);
-  color: var(--aide-text-primary);
-}
-.ws-option.active {
-  color: var(--aide-accent);
-}
-.ws-option.missing {
-  opacity: 0.45;
-  cursor: not-allowed;
-  text-decoration: line-through;
-}
-
-.ws-option-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ws-option-check {
-  flex-shrink: 0;
-  color: var(--aide-accent);
-  font-size: 11px;
 }
 
 .hidden-toggle {
