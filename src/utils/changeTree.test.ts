@@ -54,7 +54,7 @@ describe("buildChangeTree", () => {
     expect(a.children.map((n) => (n.kind === "dir" ? n.name : ""))).toEqual(["b", "c"]);
   });
 
-  it("目录聚合子树 +N/-M 统计（含合并链末端）", () => {
+  it("目录节点只带名称/路径/子节点（不做行数聚合统计）", () => {
     const tree = buildChangeTree([
       f("a/b/x.ts", 10, 2),
       f("a/c/y.ts", 3, 5),
@@ -62,8 +62,10 @@ describe("buildChangeTree", () => {
     ]);
     const a = tree[0];
     if (a.kind !== "dir") throw new Error("unreachable");
-    expect(a.additions).toBe(14);
-    expect(a.deletions).toBe(8);
+    expect(a.name).toBe("a");
+    expect("additions" in a).toBe(false);
+    expect("deletions" in a).toBe(false);
+    expect(a.children).toHaveLength(3);
   });
 
   it("Windows 反斜杠路径兼容（分割用，file.path 原样保留）", () => {

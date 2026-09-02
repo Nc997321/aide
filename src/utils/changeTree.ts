@@ -1,6 +1,6 @@
 import type { ChangeFile } from "../types";
 
-/** 变更树节点：目录（含聚合统计与子节点）或文件（携带原始 ChangeFile）。 */
+/** 变更树节点：目录或文件（携带原始 ChangeFile）。 */
 export type ChangeTreeNode =
   | {
       kind: "dir";
@@ -8,9 +8,6 @@ export type ChangeTreeNode =
       name: string;
       /** 目录路径（相对仓库根，正斜杠）——折叠状态的 key */
       path: string;
-      /** 子树聚合统计 */
-      additions: number;
-      deletions: number;
       children: ChangeTreeNode[];
     }
   | {
@@ -34,21 +31,6 @@ function fileName(path: string): string {
   return i >= 0 ? norm.slice(i + 1) : norm;
 }
 
-function statsOf(dir: DirNode): { additions: number; deletions: number } {
-  let additions = 0;
-  let deletions = 0;
-  for (const f of dir.files) {
-    additions += f.additions;
-    deletions += f.deletions;
-  }
-  for (const sub of dir.dirs.values()) {
-    const s = statsOf(sub);
-    additions += s.additions;
-    deletions += s.deletions;
-  }
-  return { additions, deletions };
-}
-
 /** 目录节点：单链目录自动合并（只有一个子目录且无直属文件 → 并成一段路径显示），
  *  有分叉才展开层级。path 取合并链末端（折叠 key 跟随最深目录）。 */
 function compactDir(dir: DirNode): ChangeTreeNode {
@@ -58,8 +40,7 @@ function compactDir(dir: DirNode): ChangeTreeNode {
     cur = [...cur.dirs.values()][0];
     name = `${name}/${cur.name}`;
   }
-  const { additions, deletions } = statsOf(cur);
-  return { kind: "dir", name, path: cur.path, additions, deletions, children: childrenOf(cur) };
+  return { kind: "dir", name, path: cur.path, children: childrenOf(cur) };
 }
 
 /** 子节点列表：目录在前、文件在后，各自按名排序。 */
@@ -75,7 +56,6 @@ function childrenOf(dir: DirNode): ChangeTreeNode[] {
 /** 从 git diff 文件列表（轮次 files）构建变更树：
  *  - 路径按 "/"（兼容 "\"）逐层建目录
  *  - 单链目录自动合并，窄面板省纵向空间
- *  - 目录聚合子树 +N/-M
  *  - 排序：目录在前文件在后，各自按名排序 */
 export function buildChangeTree(files: ChangeFile[]): ChangeTreeNode[] {
   const root: DirNode = { name: "", path: "", dirs: new Map(), files: [] };

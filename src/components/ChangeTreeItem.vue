@@ -43,10 +43,6 @@ const rowPadding = () => `${props.depth * 14 + 8}px`;
           />
         </svg>
         <span class="cft-dir-name" v-tooltip="node.path">{{ node.name }}</span>
-        <span class="cft-dir-stats">
-          <span v-if="node.additions > 0" class="cft-add">+{{ node.additions }}</span>
-          <span v-if="node.deletions > 0" class="cft-del">-{{ node.deletions }}</span>
-        </span>
       </div>
       <template v-if="!isCollapsed()">
         <ChangeTreeItem
@@ -151,13 +147,6 @@ const rowPadding = () => `${props.depth * 14 + 8}px`;
 }
 .cft-dir:hover .cft-dir-name {
   color: var(--aide-text-primary);
-}
-
-.cft-dir-stats {
-  flex-shrink: 0;
-  font-size: 10.5px;
-  font-family: var(--aide-font-mono);
-  opacity: 0.75;
 }
 
 .cft-file:hover {

@@ -134,9 +134,8 @@ describe("ChangeLogPanel — 变更文件点击打开", () => {
     const dirs = wrapper.findAll(".cft-dir");
     expect(dirs).toHaveLength(1);
     expect(dirs[0].text()).toContain("src/composables");
-    // 聚合统计
-    expect(dirs[0].text()).toContain("+3");
-    expect(dirs[0].text()).toContain("-1");
+    // 目录行不带行数统计（只有名称）
+    expect(dirs[0].text()).not.toContain("+3");
     // 文件行
     const files = wrapper.findAll(".cft-file");
     expect(files).toHaveLength(2);
