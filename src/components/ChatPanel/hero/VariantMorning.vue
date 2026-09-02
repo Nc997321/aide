@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import type { WorkspaceInfo } from "@/types";
-import AppLogo from "../../AppLogo.vue";
 import WorkspacePicker from "../../../ui/WorkspacePicker.vue";
 import type { HeroViewProps } from "./types";
 
@@ -13,15 +12,16 @@ const emit = defineEmits<{
 
 <template>
   <div class="va">
-    <!-- eyebrow：日期 + 时钟，等宽宽字距，像台账上的时间戳 -->
-    <div class="va-eyebrow">
-      <AppLogo :size="20" />
-      <span>{{ chime.dateLabel }}</span>
-      <span class="va-eyebrow-dot">·</span>
-      <span class="va-eyebrow-clock">{{ chime.clockLabel }}</span>
+    <!-- 问候行：日期 + 时钟在「下午好」前作前缀（带等宽字距、像时间戳），图标已移除 -->
+    <div class="va-greeting">
+      <span class="va-eyebrow">
+        <span>{{ chime.dateLabel }}</span>
+        <span class="va-eyebrow-dot">·</span>
+        <span class="va-eyebrow-clock">{{ chime.clockLabel }}</span>
+      </span>
+      <span class="va-greeting-text">{{ chime.greeting }}。</span>
     </div>
 
-    <p class="va-greeting">{{ chime.greeting }}。</p>
     <h1 class="va-headline">{{ copy.headline }}</h1>
     <p class="va-body">{{ copy.body }}</p>
 
@@ -50,11 +50,21 @@ const emit = defineEmits<{
   user-select: none;
 }
 
+.va-greeting {
+  /* 行内横排：日期时间前缀 + 问候文本；inline-flex 让宽度按内容决定，水平居中由父 .va 的 align-items:center 处理 */
+  display: inline-flex;
+  align-items: baseline;
+  gap: 14px;
+  margin: 0;
+  font-size: clamp(19px, 2.4vw, 25px);
+  font-weight: 500;
+  color: var(--aide-text-secondary);
+}
+
 .va-eyebrow {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 9px;
-  margin-bottom: 18px;
   font-family: var(--aide-font-mono);
   font-size: 12.5px;
   letter-spacing: 0.08em;
@@ -64,13 +74,6 @@ const emit = defineEmits<{
   color: var(--aide-border);
 }
 .va-eyebrow-clock {
-  color: var(--aide-text-secondary);
-}
-
-.va-greeting {
-  margin: 0;
-  font-size: clamp(19px, 2.4vw, 25px);
-  font-weight: 500;
   color: var(--aide-text-secondary);
 }
 

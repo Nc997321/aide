@@ -12,10 +12,6 @@ vi.mock("../../../ui/WorkspacePicker.vue", () => ({
     template: `<button data-test="ws-picker" @click="$emit('select', { path: 'C:/demo' })">{{ path || '未选择' }}</button>`,
   },
 }));
-// AppLogo 用根路径 /icon.png 导入，vitest 解析不了 asset，mock 成桩。
-vi.mock("../../AppLogo.vue", () => ({
-  default: { name: "AppLogo", props: { size: Number }, template: `<span data-test="app-logo" />` },
-}));
 
 import HeroWelcome from "./HeroWelcome.vue";
 
