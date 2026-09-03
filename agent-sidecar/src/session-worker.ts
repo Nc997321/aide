@@ -16,7 +16,7 @@ import {
   filterMcpServers,
   type AutomationConfig,
 } from "./automation.js";
-import { generateSessionTitle } from "./titleGenerator.js";
+import { titleFromContent } from "./titleGenerator.js";
 import { applyModelSwitch } from "./modelSwitch.js";
 import { makeModelSwitchGuard, type ModelSwitchGuard } from "./modelSwitchGuard.js";
 import { applyEffortSwitch, normalizeEffort } from "./effortSwitch.js";
@@ -218,8 +218,9 @@ export class SessionWorker {
   private turnActive = false;
   private stopped = false;
 
-  // ---- 会话自动命名（首轮回复开始时小模型生成标题，见 titleGenerator.ts） ----
-  /** 设置面板开关（send.auto_title 下发），缺省开启。 */
+  // ---- 会话自动命名（截取首条用户消息内容作标题，见 titleGenerator.ts） ----
+  /** 缺省开启，普通会话无开关、恒命名。auto_title:false 是内部 opt-out——
+   *  自动化/headless 运行（scheduler、smoke）不给会话起标题。 */
   private autoTitle = true;
   /** 思考开关（send.thinking_enabled 下发），缺省开启。关闭 = 从能力上禁用思考：
    *  ① 请求层——spawn 时 thinking: disabled（官方 API 真正不思考、省 token）；
@@ -228,11 +229,8 @@ export class SessionWorker {
    *  thinking 字段=端点默认，模型总会出思考块，2026-08-21 mock 端点实锤），
    *  无法能力级禁用，仅靠 ② 隐藏显示。 */
   private thinkingEnabled = true;
-  /** 每个 worker 只尝试一次（防止 resume/多轮重复生成）。 */
+  /** 每个 worker 只命名一次（防止 resume/多轮重复生成）。 */
   private titleAttempted = false;
-  /** 首轮回复触发：新会话首条 send 置 collectingTitle，收到首条主线程 assistant 消息时触发。 */
-  private collectingTitle = false;
-  private titleUserText = "";
 
   // ---- BTW / 轻量模式 ----
   // 非 readonly：btw send 命令在 handleSend 里动态置 true（构造期选项还拿不到
@@ -980,8 +978,9 @@ export class SessionWorker {
       // 重开已有会话：resume_session_id → resumeSource，startLoop 据此 resume。
       // 普通新会话不带这字段，resumeSource 保持空 → 全新会话。
       if (cmd.resume_session_id) this.resumeSource = cmd.resume_session_id;
-      // 自动命名触发：只有「全新会话」（非 resume / 非 btw / 非供应商切换 fork）
-      // 才在首轮回复开始时生成标题——老会话已有名字，fork 会话语义上属于源会话。
+      // 自动命名：只有「全新会话」（非 resume / 非 btw / 非供应商切换 fork）
+      // 才生成标题——老会话已有名字，fork 会话语义上属于源会话。标题即首条
+      // 用户消息的内容截取，发消息时同步产出，不等回复、不调模型。
       if (
         this.autoTitle &&
         !this.titleAttempted &&
@@ -989,8 +988,7 @@ export class SessionWorker {
         !cmd.btw &&
         !cmd.provider_switched
       ) {
-        this.collectingTitle = true;
-        this.titleUserText = cmd.prompt;
+        this.emitSessionTitle(cmd.prompt);
       }
       // 开关兜底方向与「每工作区默认关」一致（=== true）：主进程四条下发路径
       // （chat send/btw + automation build/distill）都恒发该 key，缺 key =
@@ -1229,12 +1227,6 @@ export class SessionWorker {
             }
             if (msg.type === "result") {
               this.turnActive = false;
-              // 兜底：首轮未收到任何主线程 assistant 消息就结束（出错/空轮），
-              // 放弃命名，仅清理标志，避免泄漏到下一轮。正常流程下标志已在
-              // 首条 assistant 消息时清掉，这里是 no-op。
-              if (this.collectingTitle) {
-                this.collectingTitle = false;
-              }
               if (this.promoteJumpQueue()) {
                 this.toolLifecycle.reset();
                 void this.emitContextUsage(q);
@@ -1290,20 +1282,6 @@ export class SessionWorker {
             if (this.jumpQueueCtl.has() && this.toolLifecycle.isIdle()) {
               // interrupt 拒绝 = 无在跑回合（首条消息后插队）——契约性吞掉。
               this.currentQuery?.interrupt().catch(() => {});
-            }
-
-            // 首轮回复开始：收到第一条主线程 assistant 消息即触发自动命名
-            // （fire-and-forget，不阻塞后续轮次）。提前到"回复时"而非"整轮
-            // 结束的 result"——标题几乎与回复同时出现；标题仅基于用户输入
-            // （userText），不等助手文本。置 false 保证只触发一次；子代理消息
-            // （parent_tool_use_id 非空）不计——它不是主线程回复。
-            if (
-              this.collectingTitle &&
-              msg.type === "assistant" &&
-              !msg.parent_tool_use_id
-            ) {
-              this.collectingTitle = false;
-              void this.emitSessionTitle();
             }
 
             if (msg.type === "system" && msg.subtype === "init") {
@@ -1424,21 +1402,13 @@ export class SessionWorker {
   // 会话自动命名
   // ================================================================
 
-  /** 首轮回复开始时后台生成会话标题（fire-and-forget）。独立的小模型 query——
-   *  全新 SDK 会话，不占主对话上下文；标题模型默认 haiku，AIDE_TITLE_MODEL
-   *  可覆盖。标题仅基于用户输入（userText），不等助手回复。任何失败（超时/
-   *  空响应/provider 不支持）generateSessionTitle 内部静默返回 null，这里就
-   *  不发事件，会话保留默认名。 */
-  private async emitSessionTitle(): Promise<void> {
+  /** 用首条用户消息的内容截取会话标题（见 titleGenerator.ts）。本地纯截取——
+   *  不调模型、零延迟，send 时同步发出 session_title。内容为空白时
+   *  titleFromContent 返回 null，这里就不发事件，会话保留默认名。 */
+  private emitSessionTitle(userText: string): void {
     if (this.titleAttempted) return;
     this.titleAttempted = true;
-    const title = await generateSessionTitle(this.queryFn, {
-      userText: this.titleUserText,
-      model: process.env.AIDE_TITLE_MODEL || "haiku",
-      env: { ...process.env, ...this.envOverrides },
-      cwd: this.cwd,
-      executablePath: resolveClaudeExe(),
-    });
+    const title = titleFromContent(userText);
     if (title && !this.stopped) this.emit({ type: "session_title", title });
   }
 

@@ -10,7 +10,7 @@ vi.mock("../composables/useSettings", () => ({
   useSettings: () => ({
     settings: reactive({
       theme: "warm-dark", fontSize: 14, fontFamily: "", proxy: "",
-      autoNaming: true, recentLimit: 10,
+      recentLimit: 10,
       keybindings: {}, shellPath: "", workbenchHeight: 0,
       editor: { indentSize: 4, vimMode: false, vimKeybindings: { normal: [], insert: [], visual: [] } },
       codegraphEmbedder: {

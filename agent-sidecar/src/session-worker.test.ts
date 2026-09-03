@@ -386,16 +386,14 @@ describe("SessionWorker — codegraph MCP registration", () => {
 });
 
 /**
- * 会话自动命名：全新会话首轮回复开始时（首条主线程 assistant 消息到达），
- * sidecar 用独立的小模型 query 生成标题并发 session_title 事件。
+ * 会话自动命名：全新会话的首条 send 同步截取消息内容作标题并发
+ * session_title 事件——纯本地截取，不再调用模型、不等助手回复。
  *
  * 关键不变量：
  * - 只有「全新会话」（非 resume / 非 btw / 非 provider_switched）才生成
- * - auto_title:false（设置关闭）不生成
- * - 每个 worker 只尝试一次
- * - 主对话 query 与标题 query 都是同一个 queryFn：靠 prompt 类型区分
- *   （主对话是 async iterable，标题是一次性 string）
- * - 触发于首条 assistant 消息而非整轮 result（标题仅基于 userText）
+ * - auto_title:false（自动化/headless 内部 opt-out）不生成
+ * - 每个 worker 只命名一次
+ * - 首条消息为空白时不发事件（会话保留默认名）
  */
 
 /** 主对话假 query：产出一条 assistant 文本 + result 后结束。 */
@@ -413,88 +411,49 @@ function mainTurnMessages() {
   ];
 }
 
-function makeTitleWorker(titleMessages: unknown[]) {
+function makeTitleWorker() {
   const events: any[] = [];
-  const queryFn = ((args: any) => {
-    const msgs = typeof args.prompt === "string" ? titleMessages : mainTurnMessages();
-    return (async function* () {
-      for (const m of msgs) yield m;
-    })();
-  }) as any;
+  const queryFn = (() => (async function* () {
+    for (const m of mainTurnMessages()) yield m;
+  })()) as any;
   const worker = new SessionWorker("s-title", (e) => events.push(e), {
     queryFn,
   });
   return { worker, events };
 }
 
-async function waitForEvent(events: any[], type: string, timeoutMs = 3000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const hit = events.find((e) => e.type === type);
-    if (hit) return hit;
-    await new Promise((r) => setTimeout(r, 10));
-  }
-  return undefined;
-}
-
 describe("SessionWorker — 会话自动命名", () => {
-  it("全新会话首轮回复开始即发出 session_title（不等整轮结束）", async () => {
-    const { worker, events } = makeTitleWorker([
-      { type: "assistant", message: { content: [{ type: "text", text: "修复登录 Bug" }] } },
-      { type: "result", subtype: "success" },
-    ]);
+  it("全新会话发送首条消息即发出 session_title（截取消息内容，不等回复）", () => {
+    const { worker, events } = makeTitleWorker();
     worker.handleCommand({
-      cmd: "send", session_id: "s-title", prompt: "帮我修登录页 bug", cwd: "/tmp", env: {}, auto_title: true,
+      cmd: "send", session_id: "s-title", prompt: "帮我修登录页 bug", cwd: "/tmp", env: {},
     } as any);
-    const evt = await waitForEvent(events, "session_title");
+    // 标题在 send 时同步产出——不调模型、不等助手回复，无需等待
+    const evt = events.find((e) => e.type === "session_title");
     expect(evt).toBeDefined();
-    expect(evt.title).toBe("修复登录 Bug");
+    expect(evt.title).toBe("帮我修登录页 bug");
     worker.stop();
   });
 
-  it("主轮只产 assistant 不产 result 时仍发出标题（钉住提前触发）", async () => {
-    // 旧行为在 result 时触发——主轮没有 result 就不会发标题；新行为在首条
-    // assistant 消息触发，故即便回复尚未结束（无 result）标题也照发。
-    const events: any[] = [];
-    const titleMessages = [
-      { type: "assistant", message: { content: [{ type: "text", text: "登录修复" }] } },
-      { type: "result", subtype: "success" },
-    ];
-    const queryFn = ((args: any) => {
-      const msgs = typeof args.prompt === "string"
-        ? titleMessages
-        : [
-            // 主轮：只产一条主线程 assistant，不产 result（模拟回复进行中）
-            {
-              type: "assistant",
-              parent_tool_use_id: null,
-              message: { model: "claude-sonnet-4-5", content: [{ type: "text", text: "好的，我看看。" }] },
-            },
-          ];
-      return (async function* () {
-        for (const m of msgs) yield m;
-      })();
-    }) as any;
-    const worker = new SessionWorker("s-title2", (e) => events.push(e), {
-      queryFn,
-    });
+  it("标题压缩空白并截到 30 字", () => {
+    const { worker, events } = makeTitleWorker();
     worker.handleCommand({
-      cmd: "send", session_id: "s-title2", prompt: "帮我修登录页 bug", cwd: "/tmp", env: {}, auto_title: true,
+      cmd: "send", session_id: "s-title",
+      prompt: "第一行\n第二行   第三行" + "长".repeat(40),
+      cwd: "/tmp", env: {},
     } as any);
-    const evt = await waitForEvent(events, "session_title");
+    const evt = events.find((e) => e.type === "session_title");
     expect(evt).toBeDefined();
-    expect(evt.title).toBe("登录修复");
+    expect([...evt.title].length).toBe(30);
+    expect(evt.title.startsWith("第一行 第二行 第三行")).toBe(true);
     worker.stop();
   });
 
   it("resume 的老会话不生成标题", async () => {
-    const { worker, events } = makeTitleWorker([
-      { type: "assistant", message: { content: [{ type: "text", text: "不该出现" }] } },
-      { type: "result", subtype: "success" },
-    ]);
+    const { worker, events } = makeTitleWorker();
     worker.handleCommand({
       cmd: "send", session_id: "s-title", prompt: "继续", cwd: "/tmp", env: {},
-      resume_session_id: "old-sid", auto_title: true,
+      resume_session_id: "old-sid",
     } as any);
     // 等主轮跑完（result 已被消费）再断言没有标题事件
     await new Promise((r) => setTimeout(r, 300));
@@ -502,11 +461,8 @@ describe("SessionWorker — 会话自动命名", () => {
     worker.stop();
   });
 
-  it("auto_title:false（设置关闭）不生成标题", async () => {
-    const { worker, events } = makeTitleWorker([
-      { type: "assistant", message: { content: [{ type: "text", text: "不该出现" }] } },
-      { type: "result", subtype: "success" },
-    ]);
+  it("auto_title:false（自动化/headless 内部 opt-out）不生成标题", async () => {
+    const { worker, events } = makeTitleWorker();
     worker.handleCommand({
       cmd: "send", session_id: "s-title", prompt: "帮我修登录页 bug", cwd: "/tmp", env: {}, auto_title: false,
     } as any);
@@ -515,12 +471,10 @@ describe("SessionWorker — 会话自动命名", () => {
     worker.stop();
   });
 
-  it("标题模型回复为空时静默放弃（不发事件）", async () => {
-    const { worker, events } = makeTitleWorker([
-      { type: "result", subtype: "success" }, // 没有 assistant 文本
-    ]);
+  it("首条消息为空白时静默放弃（不发事件）", async () => {
+    const { worker, events } = makeTitleWorker();
     worker.handleCommand({
-      cmd: "send", session_id: "s-title", prompt: "帮我修登录页 bug", cwd: "/tmp", env: {}, auto_title: true,
+      cmd: "send", session_id: "s-title", prompt: "   ", cwd: "/tmp", env: {},
     } as any);
     await new Promise((r) => setTimeout(r, 300));
     expect(events.some((e) => e.type === "session_title")).toBe(false);

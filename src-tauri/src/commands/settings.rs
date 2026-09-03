@@ -203,10 +203,6 @@ pub struct AppSettings {
     pub terminal_font_family: String,
     #[serde(default = "default_notifications_enabled")]
     pub notifications_enabled: bool,
-    /// 会话自动命名：首轮对话后由 sidecar 用小模型生成会话标题（默认开）。
-    /// 关闭后 send 命令带 auto_title:false，sidecar 不再发起标题生成。
-    #[serde(default = "default_auto_naming")]
-    pub auto_naming: bool,
     /// 启用思考：默认开。关闭 = 从能力上禁用思考——请求层（thinking 参数）在
     /// 新建会话 spawn 时生效（官方 API 真正不思考、省 token）；展示层剥除立即
     /// 生效（sidecar 剥掉 thinking 块）。例外：ollama 兼容端点不认 thinking 参数
@@ -319,9 +315,6 @@ fn default_font_family() -> String {
 fn default_notifications_enabled() -> bool {
     true
 }
-fn default_auto_naming() -> bool {
-    true
-}
 fn default_thinking_enabled() -> bool {
     true
 }
@@ -343,7 +336,6 @@ impl Default for AppSettings {
             editor_font_family: String::new(),
             terminal_font_family: String::new(),
             notifications_enabled: default_notifications_enabled(),
-            auto_naming: default_auto_naming(),
             thinking_enabled: default_thinking_enabled(),
             proxy: String::new(),
             shell_path: String::new(),
@@ -765,19 +757,6 @@ mod tests {
         let json = r#"{"open_with_extensions": [".py"]}"#;
         let s: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(s.open_with_extensions, vec![".py".to_string()]);
-    }
-
-    /// 自动命名开关随 AppSettings 落盘/读取，camelCase 一致；旧 config 缺字段时
-    /// 回填默认 true（功能默认开启）。
-    #[test]
-    fn auto_naming_round_trip_and_default() {
-        let s: AppSettings = serde_json::from_str(r#"{"fontSize":14}"#).unwrap();
-        assert!(s.auto_naming, "旧 config 缺 autoNaming 字段应回填 true");
-
-        let s2: AppSettings = serde_json::from_str(r#"{"autoNaming":false}"#).unwrap();
-        assert!(!s2.auto_naming);
-        let out = serde_json::to_string(&s2).unwrap();
-        assert!(out.contains("\"autoNaming\":false"), "{out}");
     }
 
     /// Vim 设置随 AppSettings 落盘/读取：vimMode/vimKeybindings camelCase 一致、

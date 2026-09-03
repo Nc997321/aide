@@ -11,7 +11,7 @@ vi.mock("../composables/useSettings", () => ({
   useSettings: () => ({
     settings: reactive({
       onboarded: true, theme: "warm-dark", fontSize: 14, fontFamily: "", proxy: "",
-      autoNaming: true, recentLimit: 10,
+      recentLimit: 10,
       editor: { indentSize: 4, vimMode: false, vimKeybindings: { normal: [], insert: [], visual: [] } },
       codegraphEmbedder: { apiKeyConfigured: false, backend: "fastembed", baseUrl: "", dim: 768, model: "", format: "ollama" },
       remote: { enabled: false, relayUrl: "", deviceId: "", permissionMode: "auto" },

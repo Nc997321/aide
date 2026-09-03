@@ -15,7 +15,7 @@ vi.mock("../composables/useSettings", () => {
   const { reactive } = require("vue") as typeof import("vue");
   const settings = reactive({
     onboarded: true, theme: "warm-dark", fontSize: 14, fontFamily: "", proxy: "",
-    autoNaming: true, recentLimit: 10,
+    recentLimit: 10,
     editor: {
       indentSize: 4, vimMode: true,
       vimKeybindings: { normal: [], insert: [], visual: [] } as VimBindings,

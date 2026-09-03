@@ -74,7 +74,6 @@ struct SendOptions<'a> {
     permission_mode: Option<String>,
     jump_queue: bool,
     provider_switched: bool,
-    auto_title: bool,
     thinking_enabled: bool,
 }
 
@@ -117,7 +116,6 @@ fn base_send_command(
         "prompt": prompt,
         "cwd": cwd,
         "env": env_vars,
-        "auto_title": opts.auto_title,
         "thinking_enabled": opts.thinking_enabled,
     })
 }
@@ -201,8 +199,6 @@ pub async fn send_message(
     let provider_env = build_runtime_env_vars(&active, &proxy);
     let provider_switched = runtime_mgr.connection_drifted(&session_id, &provider_env);
     runtime_mgr.upsert_fingerprint(&session_id, &provider_env);
-    // 自动命名开关下发 sidecar（设置读取失败时默认开启）
-    let auto_title = settings.as_ref().map(|s| s.auto_naming).unwrap_or(true);
     // 思考开关下发 sidecar（设置读取失败时默认开启）：只在 spawn（建 query）时
     // 生效——会话内 CLI 锁死无法恢复，故仅影响之后新建的会话/btw 支线。
     let thinking_enabled = settings
@@ -223,7 +219,6 @@ pub async fn send_message(
             permission_mode,
             jump_queue: jump_queue.unwrap_or(false),
             provider_switched,
-            auto_title,
             thinking_enabled,
         },
     );
@@ -513,10 +508,9 @@ pub fn get_default_permission_modes(
 mod tests {
     use super::*;
 
-    /// 默认开 auto_title/thinking_enabled（与 send_message 生产路径的默认一致）。
+    /// 默认开 thinking_enabled（与 send_message 生产路径的默认一致）。
     fn base_opts() -> SendOptions<'static> {
         SendOptions {
-            auto_title: true,
             thinking_enabled: true,
             ..Default::default()
         }
@@ -824,25 +818,6 @@ mod tests {
         assert_eq!(cmd["session_id"], "main-sid");
         assert_eq!(cmd["resume_session_id"], "resume-xyz");
         assert_eq!(cmd["provider_switched"], true);
-    }
-
-    /// 自动命名开关（settings.autoNaming）随 send 命令下发给 sidecar：
-    /// false 时 sidecar 首轮后不生成会话标题。
-    #[test]
-    fn build_send_command_carries_auto_title_flag() {
-        let on = build_send_command("s", "hi", "/tmp", &HashMap::new(), base_opts());
-        assert_eq!(on["auto_title"], true);
-        let off = build_send_command(
-            "s",
-            "hi",
-            "/tmp",
-            &HashMap::new(),
-            SendOptions {
-                auto_title: false,
-                ..base_opts()
-            },
-        );
-        assert_eq!(off["auto_title"], false);
     }
 
     /// 思考开关（settings.thinkingEnabled）随 send 命令下发给 sidecar：
