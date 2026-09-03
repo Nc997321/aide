@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { SessionWorker } from "./session-worker.js";
 import type { ChatEvent } from "./types.js";
 import type { PermissionPolicySnapshot } from "./policy/types.js";
@@ -184,6 +187,68 @@ describe("SessionWorker — btw 回合结束自毁", () => {
     expect(worker._testIsStopped()).toBe(false);
     expect(selfStopped).toBeNull();
     worker.stop();
+  });
+
+  it("btw teardown removes the claude.exe registry entry (幽灵会话回归)", async () => {
+    // 2026-09-02 实锤：git-commit 支线退场后 sessions/<pid>.json 残留（claude.exe
+    // 被强杀不自清），list_sessions 第二遍扫描把它列成侧栏幽灵会话
+    // cypress-agent-c6。自毁收尾必须按 sessionId（routingKey 过户后的 realId）删条目。
+    const regDir = mkdtempSync(path.join(os.tmpdir(), "btw-reg-"));
+    const sessionsDir = path.join(regDir, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const entry = path.join(sessionsDir, "424242.json");
+    writeFileSync(
+      entry,
+      JSON.stringify({ pid: 424242, sessionId: "real-btw", name: "cypress-agent-c6" }),
+      "utf8",
+    );
+    const other = path.join(sessionsDir, "999.json");
+    writeFileSync(other, JSON.stringify({ pid: 999, sessionId: "sid-other" }), "utf8");
+    const prevConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = regDir;
+    try {
+      const hangingQuery = (() => (async function* () {
+        yield { type: "system", subtype: "init", session_id: "real-btw" };
+        yield { type: "result", subtype: "success", is_error: false };
+        await new Promise(() => {}); // streaming-input 等待中，自毁必须主动关
+      })()) as any;
+      let selfStopped: SessionWorker | null = null;
+      // 测试不经 SessionManager——emit 闭包复刻它的 re-key（session_init 到达时
+      // routingKey 过户到 realId），这是清理匹配的真实前置链路。
+      let worker: SessionWorker;
+      worker = new SessionWorker("btw-temp", (e: ChatEvent) => {
+        if (e.type === "session_init" && e.session_id !== worker.routingKey) {
+          worker.routingKey = e.session_id;
+        }
+      }, {
+        btwMode: true,
+        queryFn: hangingQuery,
+        onSelfStop: (w) => { selfStopped = w; },
+      });
+
+      worker.handleCommand({
+        cmd: "send", session_id: "btw-temp", prompt: "提交", cwd: "/tmp",
+        env: {}, btw: true, fork_from: "main-sid",
+      } as any);
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+
+      expect(selfStopped).toBe(worker);
+      expect(existsSync(entry)).toBe(false); // 本会话条目已清
+      expect(existsSync(other)).toBe(true); // 别的会话条目不动
+
+      // 幂等：自毁后重复触发（stopped 真臂）不得再走清理/回调
+      const calls = [] as SessionWorker[];
+      (worker as any).onSelfStop = (w: SessionWorker) => { calls.push(w); };
+      (worker as any).selfTeardown();
+      (worker as any).selfTeardown();
+      expect(calls.length).toBe(0);
+    } finally {
+      if (prevConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prevConfigDir;
+      rmSync(regDir, { recursive: true, force: true });
+    }
   });
 });
 

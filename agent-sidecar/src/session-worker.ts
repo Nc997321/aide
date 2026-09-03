@@ -8,6 +8,7 @@ import { BgTaskTracker } from "./bgTasks.js";
 import { BgTaskTail } from "./bgTaskOutputTail.js";
 import { JumpQueueController } from "./jumpQueue.js";
 import { DeltaCoalescer } from "./deltaCoalescer.js";
+import { removeSessionRegistryEntryFromEnv } from "./claudeRegistry.js";
 import { btwQueryOverrides, forkResumeOptions } from "./btwOptions.js";
 import {
   automationHookVerdict,
@@ -1496,11 +1497,15 @@ export class SessionWorker {
   }
 
   /** btw 支线回合结束自毁：关 query/queue 释放 claude.exe，并通知 manager 把自己
-   *  摘出注册表。静默路径——stop() 本身不发 session_dead，前端 done 态不被打扰。 */
+   *  摘出注册表。静默路径——stop() 本身不发 session_dead，前端 done 态不被打扰。
+   *  收尾再清掉本会话的 claude.exe pid 注册条目：条目是 claude.exe 启动时写的，
+   *  强杀不清理，残留会被 list_sessions 第二遍扫描成侧栏幽灵会话
+   *  （2026-09-02 实锤：git-commit 支线的 cypress-agent-c6）。 */
   private selfTeardown(): void {
     if (this.stopped) return;
     this.stop();
     this.onSelfStop?.(this);
+    removeSessionRegistryEntryFromEnv(process.env, this.routingKey);
   }
 
   /** 停止会话：关闭 query，释放 claude.exe，清理资源 */
