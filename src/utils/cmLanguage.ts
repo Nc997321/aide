@@ -65,6 +65,20 @@ export async function loadLanguageExtension(e: string): Promise<Extension> {
         const { properties } = await import("@codemirror/legacy-modes/mode/properties");
         return StreamLanguage.define(properties);
       }
+      case "sql": {
+        const { standardSQL } = await import("@codemirror/legacy-modes/mode/sql");
+        return StreamLanguage.define(standardSQL);
+      }
+      case "sh":
+      case "bash":
+      case "zsh": {
+        const { shell } = await import("@codemirror/legacy-modes/mode/shell");
+        return StreamLanguage.define(shell);
+      }
+      case "ps1": {
+        const { powerShell } = await import("@codemirror/legacy-modes/mode/powershell");
+        return StreamLanguage.define(powerShell);
+      }
       default:
         return [];
     }

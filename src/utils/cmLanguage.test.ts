@@ -10,6 +10,11 @@ describe("loadLanguageExtension", () => {
     expect(await loadLanguageExtension("yaml")).not.toEqual([]);
     expect(await loadLanguageExtension("properties")).not.toEqual([]);
     expect(await loadLanguageExtension("jsonl")).not.toEqual([]);
+    expect(await loadLanguageExtension("sql")).not.toEqual([]);
+    expect(await loadLanguageExtension("sh")).not.toEqual([]);
+    expect(await loadLanguageExtension("bash")).not.toEqual([]);
+    expect(await loadLanguageExtension("zsh")).not.toEqual([]);
+    expect(await loadLanguageExtension("ps1")).not.toEqual([]);
   });
 
   it("未知扩展名返回空数组", async () => {
