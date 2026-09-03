@@ -504,12 +504,15 @@ export const api = {
     return getTransport().invoke("session_truncate_jsonl", { sessionId, bytePos });
   },
 
-  // 通知（绕过插件 dev 模式限制）
+  // 通知（绕过插件 dev 模式限制）。sessionId 供「点击 toast 定位会话」：
+  // Windows 侧 toast 激活回调直接携带它 emit open-session-from-notification。
   notifySend(title: string, body: string, sessionId?: string): Promise<void> {
     return getTransport().invoke("notify_send", { title, body, sessionId: sessionId ?? null });
   },
-  getPendingNotification(): Promise<string | null> {
-    return getTransport().invoke("get_pending_notification");
+  /** 按 session 反查桌面通知上下文：真实所属工作区根路径 + 会话显示名。
+   *  查不到进程内路由（从未 send / 换 key 后未再 send）返回 null，调用方回退。 */
+  sessionNotificationInfo(sessionId: string): Promise<{ workspace: string; name: string } | null> {
+    return getTransport().invoke("session_notification_info", { sessionId });
   },
 
   // 通知中心持久化

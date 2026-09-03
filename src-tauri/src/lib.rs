@@ -332,7 +332,7 @@ pub fn run() {
             commands::settings::set_settings,
             commands::proxy::detect_available_proxy,
             commands::settings::notify_send,
-            commands::settings::get_pending_notification,
+            commands::settings::session_notification_info,
             commands::permissions::get_permission_settings,
             commands::permissions::create_permission_rule,
             commands::permissions::create_permission_rules,

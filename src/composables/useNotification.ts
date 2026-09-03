@@ -1,20 +1,9 @@
-import { watch, reactive } from "vue";
+import { watch } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useSessionState, type SessionStatus } from "./useSessionState";
 import { useWindowFocus } from "./useWindowFocus";
 import { useSettings } from "./useSettings";
 import { api } from "../api";
-
-// Module-level reactive set of sessions that completed while app was unfocused
-export const pendingSessions = reactive(new Set<string>());
-
-export function clearPending(ids?: string[]) {
-  if (ids) {
-    for (const id of ids) pendingSessions.delete(id);
-  } else {
-    pendingSessions.clear();
-  }
-}
 
 let progressClearTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -70,19 +59,25 @@ export function useNotification() {
     }
   }
 
+  /** 工作区根路径取末段做通知标题（跨平台分隔符），空则回退应用名。 */
+  function workspaceBasename(root: string): string {
+    const trimmed = root.replace(/[\\/]+$/, "");
+    const seg = trimmed.split(/[\\/]/).pop() ?? "";
+    return seg || "Aide";
+  }
+
   async function fireNotification(id: string, status: SessionStatus) {
-    const [title, body] = await Promise.all([getProjectName(), getSessionName(id)]);
-    if (status === "attention") {
-      pendingSessions.add(id);
-      try {
-        api.notifySend(title, `${body} 需要确认`, id);
-      } catch (_) { /* 系统通知 API 不可用时静默（通知是增强体验，失败不阻断主流程） */ }
-    } else {
-      pendingSessions.add(id);
-      try {
-        api.notifySend(title, `${body} 已回复`, id);
-      } catch (_) { /* 系统通知 API 不可用时静默（同上） */ }
-    }
+    // 按会话真实所属工作区显示：send_message 注册的进程内路由反查；
+    // 查不到（从未 send / finalize 换 key 后未再 send）回退当前工作区旧行为。
+    const info = await api.sessionNotificationInfo(id).catch(() => null);
+    const [title, body] = info
+      ? [workspaceBasename(info.workspace), info.name]
+      : await Promise.all([getProjectName(), getSessionName(id)]);
+    const suffix = status === "attention" ? "需要确认" : "已回复";
+    try {
+      // sessionId 随通知暂存到 Rust：点击 toast 唤起窗口后据此定位会话
+      await api.notifySend(title, `${body} ${suffix}`, id);
+    } catch (_) { /* 系统通知 API 不可用时静默（通知是增强体验，失败不阻断主流程） */ }
   }
 
   watch(

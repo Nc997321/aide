@@ -473,6 +473,16 @@ impl AgentRuntimeManager {
         }
     }
 
+    /// 查询会话注册的工作区根（`send_message` 时注册/刷新）。
+    /// 桌面通知按 session 反查所属工作区用；未注册（从未 send）返回 None。
+    pub fn session_workspace_root(&self, session_id: &str) -> Option<PathBuf> {
+        self.session_routes
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .and_then(|route| route.workspace_root.clone())
+    }
+
     /// 权限规则保存成功后，向受影响的 session 推送新快照。
     /// user/managed/session 影响所有 session；project/local 只影响同 project root
     /// 的 session。每条发 `{cmd:"update_permission_policy", session_id, policy}`，

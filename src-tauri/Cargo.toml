@@ -96,6 +96,9 @@ lsp-types = "0.97.0"
 # macOS-only crates (and vice versa). arboard (images) is cross-platform above.
 [target.'cfg(windows)'.dependencies]
 clipboard-win = "5"
+# 桌面通知的点击激活回调（notify-rust 没接通 on_activated，直接用它）：
+# 与 notify-rust 同源同版本（它改名为 winrt_notification），不新增依赖树。
+tauri-winrt-notification = "0.7"
 # HKCU 注册表写入：把 Aide 加入「打开方式」列表（per-user、免管理员）
 winreg = "0.55"
 # SHChangeNotify：写完注册表后通知 shell 刷新文件关联缓存（复用 tauri 已拉的版本）

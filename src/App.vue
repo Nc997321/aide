@@ -24,7 +24,6 @@ import CallHierarchyPanel from "./components/callhierarchy-panel/CallHierarchyPa
 import { useCallHierarchy } from "./composables/useCallHierarchy";
 import PermissionsPanel from "./components/permissions/PermissionsPanel.vue";
 import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
-import NotificationBanner from "./components/NotificationBanner.vue";
 import TitleBar from "./components/titlebar/TitleBar.vue";
 import ACommandPalette from "./ui/ACommandPalette.vue";
 import { ARailBar } from "./ui";
@@ -40,7 +39,7 @@ import { useSettings } from "./composables/useSettings";
 import { useOnboarding } from "./composables/useOnboarding";
 import { useWindowFocus } from "./composables/useWindowFocus";
 import { useModal } from "./composables/useModal";
-import { useNotification, pendingSessions, clearPending } from "./composables/useNotification";
+import { useNotification } from "./composables/useNotification";
 import { useGit } from "./composables/useGit";
 import { useSearchProviders } from "./composables/useSearchProviders";
 import { useProviders } from "./composables/useProviders";
@@ -209,6 +208,7 @@ const onboarding = useOnboarding();
 
 // 「打开方式」事件监听句柄，onUnmounted 时释放
 let unlistenOpenFile: (() => void) | null = null;
+let unlistenOpenSessionFromNotification: (() => void) | null = null;
 const workbenchHeight = ref(settings.workbenchHeight || Math.floor(window.innerHeight * 0.45));
 const wb = useWorkbenchTerminal();
 const { run: runProject } = useRunProject();
@@ -269,72 +269,10 @@ function onWorkbenchHeightChange(v: number) {
   updateSettings({ workbenchHeight: v });
 }
 
-// ── Notification banner for completed sessions ──
-const { isFocused } = useWindowFocus();
+// ── 会话完成只走桌面通知（useNotification）；内部浮层已移除 ──
+// 点击定位由 Windows toast 的进程内 Activated 回调驱动：notify_send 聚焦窗口
+// 并 emit "open-session-from-notification"，监听器在 onMounted 注册。
 const { notice, choice } = useModal();
-const bannerVisible = ref(false);
-
-interface PendingSessionInfo {
-  id: string;
-  name: string;
-  wsKey: string;
-  wsName: string;
-}
-
-const pendingSessionInfos = ref<PendingSessionInfo[]>([]);
-
-// When window regains focus, check for pending sessions and show banner
-watch(isFocused, async (focused, wasFocused) => {
-  if (focused && wasFocused === false) {
-    // Window just regained focus
-    // Also check Rust-side pending notification (in case frontend missed it)
-    const rustPending = await api.getPendingNotification();
-    if (rustPending) {
-      pendingSessions.add(rustPending);
-    }
-
-    if (pendingSessions.size > 0) {
-      // Build the pending session info list
-      const infos: PendingSessionInfo[] = [];
-      const [sessions, workspaces, projectInfo] = await Promise.all([
-        api.listSessions(),
-        api.listWorkspaces(),
-        api.getProjectInfo(),
-      ]);
-
-      // Find the current workspace by matching project root
-      const currentWs = workspaces.find(w => w.name === projectInfo.root);
-      const wsKey = currentWs?.key || "";
-      const wsName = currentWs?.name || projectInfo.root;
-
-      for (const id of pendingSessions) {
-        const session = sessions.find(s => s.id === id);
-        if (session) {
-          infos.push({
-            id,
-            name: session.name,
-            wsKey,
-            wsName,
-          });
-        }
-      }
-
-      pendingSessionInfos.value = infos;
-      bannerVisible.value = true;
-    }
-  }
-});
-
-function onBannerNavigate(sessionId: string, wsKey: string) {
-  bannerVisible.value = false;
-  clearPending([sessionId]);
-  sidebarRef.value?.selectSessionFromWorkspace(wsKey, sessionId);
-}
-
-function onBannerDismiss() {
-  bannerVisible.value = false;
-  clearPending();
-}
 
 // ── Conversation changes（P2-4 合一：唯一实例，badge + 变更面板共用，
 //    ChangeLogPanel 不再自建 useConversationChanges，走 props 透传）──
@@ -902,6 +840,18 @@ onMounted(async () => {
     });
   } catch (_) { /* best effort */ }
 
+  // ── 桌面通知点击定位（release 干净路径）──
+  // Windows 点击 toast 按 AUMID 无参拉起二次实例 → 单实例回调取走暂存的
+  // 会话 id 并 emit 此事件。只打开会话、不切换活动工作区（QQ/微信式）。
+  try {
+    unlistenOpenSessionFromNotification = await listen<string>(
+      "open-session-from-notification",
+      (e) => {
+        if (e.payload) sidebarRef.value?.selectSessionFromWorkspace("", e.payload);
+      },
+    );
+  } catch (_) { /* best effort */ }
+
   // 注册「查看」动作：市场更新通知点击 → 打开设置 → 市场标签页
   registerActionHandler("marketplace", () => openSettingsMarket());
 
@@ -966,6 +916,7 @@ onUnmounted(() => {
   window.removeEventListener("keyup", handleKeyup, { capture: true });
   wb.dispose();
   unlistenOpenFile?.();
+  unlistenOpenSessionFromNotification?.();
 });
 </script>
 
@@ -999,13 +950,6 @@ onUnmounted(() => {
       :class="{ 'is-dragging': leftResize.isDragging.value || rightResize.isDragging.value }"
       :style="{ gridTemplateColumns }"
     >
-      <NotificationBanner
-        :sessions="pendingSessionInfos"
-        :visible="bannerVisible"
-        @navigate="onBannerNavigate"
-        @dismiss="onBannerDismiss"
-      />
-
       <!-- 贴边热区：未固定时鼠标贴左边缘滑出侧栏（QQ 式自动隐藏）。
            侧栏已展开时停用——热区 z 高于侧栏，否则向左划出侧栏会先撞上
            热区重新触发展开，永远收不回去。 -->
