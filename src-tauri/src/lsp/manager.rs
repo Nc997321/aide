@@ -63,6 +63,12 @@ pub struct ServerHandle {
     /// LSP 请求命令据此 gate：未就绪直接返空（前端 fallback CodeGraph），不挂起等索引。
     pub ready: AtomicBool,
     pub dead: Arc<AtomicBool>,
+    /// 主动关停意图：只由「我们决定终结这个 server」的路径（shutdown_handle /
+    /// 握手失败清理）在杀进程前置位。reader EOF 据此分类——stopping=true 是
+    /// 预期内死亡（静默）；false 而 EOF 是异常死亡（emit lsp-server-dead 通知前端）。
+    /// 原因知识留在它的主人（kill 决策点）处，reader 只读不猜。
+    /// 边界：关停决策前已发生的崩溃不在此分类保证内（那本就是异常死亡，可能先播报）。
+    pub stopping: Arc<AtomicBool>,
     /// initialize 握手返回的 server capabilities（原始 JSON）。供前端按语言查
     /// implementationProvider / documentSymbolProvider 等，决定是否启用 gutter 标记等
     /// 可选能力。None = 未握手成功。
@@ -239,6 +245,9 @@ pub fn is_excluded(path: &str, exclude_globs: &[String]) -> bool {
 // ── shutdown_handle ──
 
 async fn shutdown_handle(h: &ServerHandle) {
+    // 先表态「这次死亡是我们主动发起的」——reader 随后观察到 EOF 时不播报。
+    // 必须早于 shutdown/exit 发送：EOF 只可能在进程退出后到来，happens-before 成立。
+    h.stopping.store(true, Ordering::Relaxed);
     // 发 shutdown request → exit notification → 标 dead
     let (msg, id, tx, _rx) = h.router.next_request("shutdown", serde_json::Value::Null);
     h.transport.table.lock().await.insert(id, tx);
@@ -288,6 +297,7 @@ async fn spawn_and_init(
     let router = Arc::new(Router::new());
     let docs = Arc::new(TokioMutex::new(OpenDocs::new()));
     let dead = Arc::new(AtomicBool::new(false));
+    let stopping = Arc::new(AtomicBool::new(false));
     let initialized = AtomicBool::new(false);
     let ready = AtomicBool::new(false);
 
@@ -299,6 +309,7 @@ async fn spawn_and_init(
         initialized,
         ready,
         dead: Arc::clone(&dead),
+        stopping,
         capabilities: Arc::new(TokioMutex::new(None)),
         _child: child,
     });
@@ -327,6 +338,9 @@ async fn spawn_and_init(
         );
         // 握手失败/超时：显式杀子进程，防孤儿堆积（否则每次重探又 spawn 一个新进程，
         // 系统上堆满不响应 initialize 的 server，越用越慢——"探测中永不结束"的放大器）。
+        // 这是我们主动清理（真实错误已走 EnsureError 回传），先置 stopping 防 reader
+        // EOF 误报 lsp-server-dead。
+        handle.stopping.store(true, Ordering::Relaxed);
         if let Some(child) = &handle._child {
             let mut c = child.lock().await;
             let _ = c.kill().await;
@@ -500,17 +514,18 @@ async fn spawn_test(
 
 // ── start_reader ──
 
-fn start_reader(
+fn start_reader<R: tauri::Runtime>(
     handle: Arc<ServerHandle>,
     lang: LanguageId,
     workspace: String,
-    app: tauri::AppHandle,
+    app: tauri::AppHandle<R>,
 ) {
     use tauri::Emitter;
     use tokio::io::{AsyncReadExt, BufReader};
 
     let table = handle.transport.table_handle();
     let dead = Arc::clone(&handle.dead);
+    let stopping = Arc::clone(&handle.stopping);
     tokio::spawn(async move {
         let reader_source = handle.transport.take_reader_source().await;
         let mut reader = BufReader::new(reader_source);
@@ -548,11 +563,7 @@ fn start_reader(
                     Action::ShowMessage(s) => {
                         let _ = app.emit("lsp-show-message", s);
                     }
-                    Action::ServerRequest {
-                        id,
-                        method,
-                        params,
-                    } => {
+                    Action::ServerRequest { id, method, params } => {
                         // 协议要求 server→client 请求必须回 response。此前直接忽略 →
                         // jdtls 启动后 workspace/configuration 挂起（settings 拿不到、
                         // 部分初始化路径延迟——「整体卡顿」嫌疑之一）。
@@ -585,10 +596,13 @@ fn start_reader(
                 }
             }
         }
-        // EOF：reject 所有 waiter + 标 dead
+        // EOF：reject 所有 waiter + 标 dead。主动关停（stopping 已置位）是预期内
+        // 死亡——静默；否则 server 异常死亡，播报前端（toast 提示，下次 did_open 重拉）。
         table.lock().await.reject_all();
         dead.store(true, Ordering::Relaxed);
-        let _ = app.emit("lsp-server-dead", ());
+        if !stopping.load(Ordering::Relaxed) {
+            let _ = app.emit("lsp-server-dead", ());
+        }
     });
 }
 
@@ -723,7 +737,7 @@ async fn init_handshake(
         Err(_) => {
             return Err(EnsureError::HandshakeFailed(
                 "initialize timeout (>5s, no capabilities)".into(),
-            ))
+            ));
         }
     };
     // 校验响应是 result 而非 error——server 侧解析/处理失败时（如 jdtls 对非法
@@ -810,7 +824,11 @@ mod tests {
             serde_json::Value::Null
         );
         // items 缺失的 configuration 请求 → 单元素数组（兜底整个 settings）
-        let answer = answer_server_request(LanguageId::Java, "workspace/configuration", &serde_json::json!({}));
+        let answer = answer_server_request(
+            LanguageId::Java,
+            "workspace/configuration",
+            &serde_json::json!({}),
+        );
         assert!(answer.as_array().is_some());
     }
 
@@ -875,6 +893,7 @@ mod tests {
             initialized: AtomicBool::new(true),
             ready: AtomicBool::new(ready),
             dead: Arc::new(AtomicBool::new(false)),
+            stopping: Arc::new(AtomicBool::new(false)),
             capabilities: Arc::new(TokioMutex::new(None)),
             _child: None,
         })
@@ -980,5 +999,92 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outcome, RequestOutcome::ServerGone);
+    }
+
+    // ── reader EOF 分类：主动关停静默 / 异常死亡播报 ──
+
+    /// 带 lsp-server-dead 计数监听的 mock app（计数器即「播报次数」断言面）。
+    fn dead_spy_app() -> (
+        tauri::App<tauri::test::MockRuntime>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use tauri::Listener;
+        let app = tauri::test::mock_app();
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&hits);
+        app.listen("lsp-server-dead", move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        (app, hits)
+    }
+
+    /// 等 reader 观察到 EOF（dead 置位）；2s 未到视为失败。
+    async fn wait_reader_eof(h: &ServerHandle) {
+        for _ in 0..200 {
+            if h.dead.load(Ordering::Relaxed) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("reader 未在 2s 内观察到 EOF");
+    }
+
+    #[tokio::test]
+    async fn reader_eof_intentional_shutdown_stays_silent() {
+        let (app, hits) = dead_spy_app();
+        let mock = mock_server::spawn_mock_lsp();
+        let transport =
+            LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
+        let mock_join = mock.join;
+        let h = make_handle(transport, true);
+        start_reader(
+            h.clone(),
+            LanguageId::Rust,
+            "/w".into(),
+            app.handle().clone(),
+        );
+        // 主动关停：shutdown_handle 先置 stopping，mock 答 shutdown 后退出 → EOF。
+        // 注意：不能用 wait_reader_eof 等收尾——shutdown_handle 自己也置 dead，
+        // 等 dead 无法区分是 shutdown_handle 置的还是 reader 尾部置的。确定性锚点是
+        // mock.join（server 真退出=EOF 已产生），随后给 reader 尾部一个执行窗口。
+        shutdown_handle(&h).await;
+        tokio::time::timeout(std::time::Duration::from_secs(2), mock_join)
+            .await
+            .expect("mock 应在 shutdown 后退出")
+            .expect("mock responder 不应 panic");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(h.dead.load(Ordering::Relaxed), "shutdown 后 dead 必须置位");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "主动关停不得播报 lsp-server-dead"
+        );
+    }
+
+    #[tokio::test]
+    async fn reader_eof_unexpected_death_announces() {
+        let (app, hits) = dead_spy_app();
+        let mock = mock_server::spawn_mock_lsp_die();
+        let transport =
+            LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
+        let h = make_handle(transport, true);
+        start_reader(
+            h.clone(),
+            LanguageId::Rust,
+            "/w".into(),
+            app.handle().clone(),
+        );
+        // 异常死亡：die mock 读到一帧即退出（无任何关停意图）→ EOF
+        h.transport
+            .send(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"textDocument/definition","params":{}}))
+            .await
+            .unwrap();
+        wait_reader_eof(&h).await;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "异常死亡必须播报 lsp-server-dead"
+        );
     }
 }

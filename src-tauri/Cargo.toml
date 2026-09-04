@@ -120,6 +120,11 @@ objc2 = "0.2"
 objc2-app-kit = { version = "0.2", features = ["NSPasteboard", "NSPasteboardItem"] }
 objc2-foundation = { version = "0.2", features = ["NSString", "NSURL", "NSArray"] }
 
+[dev-dependencies]
+# test feature 提供 tauri::test::mock_app（MockRuntime）——单测里验证事件播报/静默
+# 分类（如 lsp-server-dead 只在异常死亡时 emit）。仅测试构建生效，不进发布包。
+tauri = { version = "2", features = ["test"] }
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

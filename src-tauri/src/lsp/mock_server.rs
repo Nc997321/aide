@@ -62,7 +62,7 @@ async fn mock_responder<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(mut reader:
     });
     let _ = writer.write_all(&format_frame(&diag)).await;
 
-    loop {
+    'outer: loop {
         let n = match reader.read(&mut buf).await {
             Ok(0) => break, // transport 关闭
             Ok(n) => n,
@@ -142,7 +142,7 @@ async fn mock_responder<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(mut reader:
                 let _ = writer.write_all(&format_frame(&r)).await;
             }
             if method == "shutdown" {
-                break; // 模拟 shutdown 后退出
+                break 'outer; // 模拟 shutdown 后退出（须出外层 loop，仅 break for 会继续等读）
             }
         }
     }
