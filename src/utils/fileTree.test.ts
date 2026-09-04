@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mergeFileEntries } from "./fileTree";
+import { mergeFileEntries, treeRowPaddingLeft, hoverRevealPaddingLeft } from "./fileTree";
 import type { FileEntry } from "../types";
 
 function entry(path: string, is_dir: boolean, children: FileEntry[] | null = null): FileEntry {
@@ -46,5 +46,28 @@ describe("mergeFileEntries 按路径合并（刷新不闪）", () => {
   it("空新列表 → 清空（目录被清空）", () => {
     const merged = mergeFileEntries([entry("C:\\p\\a.ts")], []);
     expect(merged).toStrictEqual([]);
+  });
+});
+
+describe("hoverRevealPaddingLeft 悬停截断名按需左移", () => {
+  it("未截断（缺口 0 或 1px 亚像素容差内）→ 正常 padding，不左移", () => {
+    expect(hoverRevealPaddingLeft(5, 0)).toBe(treeRowPaddingLeft(5));
+    expect(hoverRevealPaddingLeft(5, 1)).toBe(treeRowPaddingLeft(5));
+  });
+
+  it("缺口小于上限 → 只左移实际缺口+2px 余量，不再固定跳满 depth×12", () => {
+    // depth 5：正常 98，缺口 20 → 98−22=76（+2px 余量：整数测量贴边拟合会被 ellipsis 放大成截字符）
+    expect(hoverRevealPaddingLeft(5, 20)).toBe(98 - 22);
+  });
+
+  it("缺口超过可用缩进 → 一直左移到面板左缘（padding 全用完，只留 4px 防贴边）", () => {
+    // depth 5：正常 98，缺口 100 > 可用 94 → padding 压到 4px；越过参考线是有意设计
+    expect(hoverRevealPaddingLeft(5, 100)).toBe(4);
+  });
+
+  it("depth 0 同样按需左移，上限同样是左缘 4px", () => {
+    // depth 0 上限只有 4px：缺口 2+余量 2 正好顶满
+    expect(hoverRevealPaddingLeft(0, 2)).toBe(4);
+    expect(hoverRevealPaddingLeft(0, 50)).toBe(4);
   });
 });

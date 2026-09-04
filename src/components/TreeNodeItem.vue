@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed } from "vue";
 import { useContextMenu } from "../composables/useContextMenu";
 import { fileMenuItems, directoryMenuItems } from "../menus/contextMenus";
 import { useFileClipboard } from "../composables/useFileClipboard";
 import { useModal } from "../composables/useModal";
 import { useGit } from "../composables/useGit";
 import { getFileIcon } from "../utils/fileIcons";
+import { TREE_INDENT_PX, treeRowPaddingLeft, hoverRevealPaddingLeft } from "../utils/fileTree";
 
 interface FileEntry {
   name: string;
@@ -193,25 +194,24 @@ const gitBadge = computed(() => {
 
 const hovered = ref(false);
 const nameEl = ref<HTMLSpanElement | null>(null);
-const isOverflow = ref(false);
+/** 名字被截断的像素缺口；0 = 未截断。悬停左移只补这个缺口（详见 hoverRevealPaddingLeft）。 */
+const overflowPx = ref(0);
 
-onMounted(() => {
+/**
+ * 悬停瞬间测量缺口再左移：此时行还在正常 padding，测量必准。
+ * 不能用 ResizeObserver 维持测量——它只在盒子尺寸变化时触发，感知不到
+ * 选中加粗/字体加载这类「内容变宽但盒子不变」（flex 定宽）的变化，会吃旧值。
+ */
+function onRowEnter() {
   const el = nameEl.value;
-  if (!el) return;
-  const check = () => {
-    if (hovered.value) return;
-    isOverflow.value = el.scrollWidth > el.clientWidth + 1;
-  };
-  check();
-  const ro = new ResizeObserver(check);
-  ro.observe(el);
-  onUnmounted(() => ro.disconnect());
-});
+  if (el) overflowPx.value = Math.max(0, el.scrollWidth - el.clientWidth);
+  hovered.value = true;
+}
 
 const nodePadding = computed(() =>
-  hovered.value && isOverflow.value
-    ? props.depth * 6 + 8
-    : props.depth * 18 + 8
+  hovered.value
+    ? hoverRevealPaddingLeft(props.depth, overflowPx.value)
+    : treeRowPaddingLeft(props.depth)
 );
 </script>
 
@@ -235,7 +235,7 @@ const nodePadding = computed(() =>
       @click="handleClick"
       @dblclick="handleDblClick"
       @contextmenu.prevent.stop="onContextMenu"
-      @mouseenter="hovered = true"
+      @mouseenter="onRowEnter"
       @mouseleave="hovered = false"
       @dragstart="onDragStart"
       @dragover="onDragOver"
@@ -248,7 +248,7 @@ const nodePadding = computed(() =>
         v-for="i in depth"
         :key="i"
         class="indent-guide"
-        :style="{ left: (i * 18 - 2) + 'px' }"
+        :style="{ left: (i * TREE_INDENT_PX - 2) + 'px' }"
       />
 
       <!-- Active indicator bar -->

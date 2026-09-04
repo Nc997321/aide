@@ -24,3 +24,33 @@ export function mergeFileEntries(oldList: FileEntry[] | null, entries: FileEntry
     return prev && prev.is_dir === e.is_dir ? prev : e;
   });
 }
+
+/** 文件树每级缩进（px）：行 padding 与 indent-guide 定位共用的事实源。 */
+export const TREE_INDENT_PX = 18;
+/** 行内容距左侧的基础留白（px），与 .tree-node 的 padding 基准一致。 */
+export const TREE_ROW_BASE_PADDING_PX = 8;
+/** 悬停左移时行内容距面板左缘的最小留白（px）——防止贴上 active bar/面板边缘。 */
+const TREE_ROW_HOVER_MIN_PADDING_PX = 4;
+/**
+ * 悬停左移的拟合余量（px）：scrollWidth/clientWidth 是整数化测量，边界拟合
+ * 最多差 ~1px，而 text-overflow: ellipsis 会把亚像素短缺放大成砍 1~2 个字符
+ * （要给 "…" 腾位置）——多移 2px 保证完整显示。
+ */
+const TREE_HOVER_REVEAL_SLACK_PX = 2;
+
+/** 正常态行 padding-left。 */
+export function treeRowPaddingLeft(depth: number): number {
+  return depth * TREE_INDENT_PX + TREE_ROW_BASE_PADDING_PX;
+}
+
+/**
+ * 悬停截断名的按需左移：缺多少移多少（overflowPx + 拟合余量），一直移到名字
+ * 完整显示为止。越过缩进参考线是有意设计——唯一上限是面板左缘：行 padding
+ * 可全部用完，只留 TREE_ROW_HOVER_MIN_PADDING_PX 防贴边。名字比整个侧栏
+ * 还宽时，剩余部分物理上放不下，仍截断。缺口 ≤1px 视为未截断（亚像素容差）。
+ */
+export function hoverRevealPaddingLeft(depth: number, overflowPx: number): number {
+  if (overflowPx <= 1) return treeRowPaddingLeft(depth);
+  const maxShift = treeRowPaddingLeft(depth) - TREE_ROW_HOVER_MIN_PADDING_PX;
+  return treeRowPaddingLeft(depth) - Math.min(overflowPx + TREE_HOVER_REVEAL_SLACK_PX, maxShift);
+}
