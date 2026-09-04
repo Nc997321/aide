@@ -197,5 +197,5 @@ src/components/MemoryObservatory/
 
 - **P0**：四条命令（含删除）+ 入口 + 记忆 tab（含删除流）+ 演化 tab（生长曲线/最近变化/快照 diff）
 - **P1**：memoryEvents hook + 事件台账 + 影响 tab 完整版（可达性分级 + 16 行使用统计）+ 全文预览打磨
-- **P2**：跨项目聚合视图（扫 `projects/*/memory/` 全量，全局健康/搜索/演化）+ 全局记忆卡片（`~/.aide/memory/shared.md`，经用户 CLAUDE.md 的 `@import` 进入所有会话）——统一管理方向按此落地，junction 共享存储方案明确放弃
+- **P2**：跨项目聚合视图（扫 `projects/*/memory/` 全量，全局健康/搜索/演化）——只做「看」的统一管理；全局 shared.md（经 CLAUDE.md `@import` 写入所有会话）与 junction 共享存储两个「写」方案均明确放弃
 - P3 候选（不承诺）：记忆编辑、主题自动聚类、存量 transcript 一次性回填（需另立一期评审）
