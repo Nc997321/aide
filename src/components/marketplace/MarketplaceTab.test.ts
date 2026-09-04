@@ -19,13 +19,14 @@ const api = vi.hoisted(() => ({
 vi.mock("../../api/marketplace", () => ({ marketplaceApi: api }));
 
 import MarketplaceTab from "./MarketplaceTab.vue";
+import { useMarketplace } from "../../composables/useMarketplace";
 
 const catalogEntry: PluginEntry[] = [
   {
     name: "code-review", displayName: "Code Review", description: "官方代码审查",
     version: "1.0.0", versionId: "v1.0.0", sourceId: "claude-plugins-official",
     marketName: "claude-plugins-official", category: "cat-code", homepage: "", repository: "",
-    availability: "available", unsupported: [],
+    availability: "available", unsupported: [], isFeatured: false,
   },
 ];
 
@@ -100,5 +101,52 @@ describe("MarketplaceTab 已安装视图补齐本地插件", () => {
     const cards = w.findAll(".plugin-list .card");
     expect(cards).toHaveLength(1);
     expect(w.text()).toContain("Rust 后端质量");
+  });
+});
+
+describe("MarketplaceTab 推荐视图（精选首页）", () => {
+  async function mountWithFeatured() {
+    api.fetchMarketplace.mockResolvedValue([
+      { ...catalogEntry[0], isFeatured: true, icon: "data:image/png;base64,AAAA" },
+    ]);
+    // useMarketplace 的 searchQuery 是模块级状态、跨用例共享——前面的搜索用例会污染，先复位。
+    useMarketplace().searchQuery.value = "";
+    const w = await mountTab();
+    return w;
+  }
+
+  it("有精选插件时出现「推荐」分类并默认选中，渲染 Hero + 精选网格", async () => {
+    const w = await mountWithFeatured();
+
+    const featuredTag = w.findAll(".ftag").find((t) => t.text().includes("推荐"));
+    expect(featuredTag).toBeTruthy();
+    expect(featuredTag!.classes()).toContain("active");
+    expect(w.find(".hero").exists()).toBe(true);
+    expect(w.text()).toContain("发现更多可能性");
+    expect(w.text()).toContain("精选推荐");
+    const cards = w.findAll(".featured-grid .card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].classes()).toContain("featured");
+  });
+
+  it("精选卡渲染图标 img（icon data URL 透传）", async () => {
+    const w = await mountWithFeatured();
+    const img = w.find(".featured-grid img.picon");
+    expect(img.exists()).toBe(true);
+    expect(img.attributes("src")).toBe("data:image/png;base64,AAAA");
+  });
+
+  it("推荐视图下搜索 → 回退普通列表（Hero 隐藏）", async () => {
+    const w = await mountWithFeatured();
+    await w.find("input").setValue("code");
+    expect(w.find(".hero").exists()).toBe(false);
+    expect(w.findAll(".plugin-list .card")).toHaveLength(1);
+  });
+
+  it("无精选插件 → 无「推荐」分类，默认仍在「全部」", async () => {
+    const w = await mountTab();
+    expect(w.findAll(".ftag").some((t) => t.text().includes("推荐"))).toBe(false);
+    const allTag = w.findAll(".ftag").find((t) => t.text().includes("全部"));
+    expect(allTag!.classes()).toContain("active");
   });
 });

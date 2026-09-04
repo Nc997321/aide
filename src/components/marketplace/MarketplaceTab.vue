@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 import { useMarketplace } from "../../composables/useMarketplace";
+import { openExternal } from "../../api";
 import MarketplacePluginCard from "./MarketplacePluginCard.vue";
 import Icon from "../Icon.vue";
 
@@ -13,6 +14,7 @@ const {
   plugins,
   filteredPlugins,
   allEntries,
+  featuredPlugins,
   hiddenCount,
   installedPlugins,
   loading,
@@ -35,7 +37,16 @@ const highlightSources = ref(false);
 onMounted(async () => {
   await fetchSources();
   await Promise.all([fetchPlugins(), refreshInstalled()]);
+  // 有精选插件时默认落「推荐」视图（仿设计稿首屏：Hero + 精选网格）
+  if (featuredPlugins.value.length > 0 && activeCategory.value === "all") {
+    activeCategory.value = "featured";
+  }
 });
+
+// 插件开发文档（Hero 横幅入口）
+function openPluginDevDocs() {
+  void openExternal("https://code.claude.com/docs/en/create-plugins");
+}
 
 function handleAction(kind: string) {
   switch (kind) {
@@ -112,8 +123,27 @@ const categories = computed(() => {
   if (installedVisibleCount.value > 0) {
     all.unshift({ key: "installed", label: "已安装", count: installedVisibleCount.value });
   }
+  // 「推荐」伪分类（精选推荐视图）置于最前，仅在有精选插件时出现。
+  if (featuredPlugins.value.length > 0) {
+    all.unshift({ key: "featured", label: "推荐", count: featuredPlugins.value.length });
+  }
   return all;
 });
+
+// 右侧栏「热门标签」：真实分类按插件数排序取前 8（不含伪分类），点击跳转分类。
+const sideTags = computed(() =>
+  categories.value
+    .filter((c) => !["featured", "installed", "all"].includes(c.key))
+    .slice(0, 8),
+);
+
+// 推荐视图 = Hero + 精选网格；搜索时回退到普通列表（在结果里找，不把精选当面罩）。
+const showFeaturedHome = computed(
+  () =>
+    activeCategory.value === "featured" &&
+    searchQuery.value.trim() === "" &&
+    !loading.value,
+);
 
 const visiblePlugins = computed(() => {
   const cat = activeCategory.value;
@@ -121,7 +151,8 @@ const visiblePlugins = computed(() => {
     return filteredPlugins.value.filter((p) => getInstalled(p.marketName, p.name));
   }
   let result = filteredPlugins.value;
-  if (cat !== "all") {
+  // featured 是伪分类：搜索时按「全部」处理，不按 category 字段过滤。
+  if (cat !== "all" && cat !== "featured") {
     result = result.filter((p) => p.category === cat);
   }
   return result;
@@ -158,6 +189,7 @@ const enabledCount = computed(() => {
       <div class="row">
         <div>
           <h1>插件市场</h1>
+          <div class="sub">扩展 Aide 的能力，让 AI 更懂你的工作</div>
         </div>
         <div class="search">
           <span class="ic">⌕</span>
@@ -183,6 +215,7 @@ const enabledCount = computed(() => {
       </div>
     </div>
 
+    <div class="content">
     <div class="list">
       <div class="filter-row">
         <span
@@ -196,6 +229,34 @@ const enabledCount = computed(() => {
         </span>
       </div>
 
+      <!-- 推荐视图：Hero + 精选推荐网格（仿设计稿首屏） -->
+      <template v-if="showFeaturedHome">
+        <div class="hero">
+          <div class="hero-text">
+            <div class="hero-title">发现更多可能性</div>
+            <div class="hero-sub">精选优质插件，扩展 Aide 的能力边界</div>
+            <button class="hero-btn" @click="openPluginDevDocs">
+              了解插件开发 <span class="arrow">→</span>
+            </button>
+          </div>
+          <div class="hero-art" aria-hidden="true">
+            <div class="hero-orb"></div>
+            <div class="hero-cube"><Icon name="package" :size="40" /></div>
+          </div>
+        </div>
+
+        <h3 class="sec-title">精选推荐</h3>
+        <div class="featured-grid">
+          <MarketplacePluginCard
+            v-for="p in featuredPlugins"
+            :key="p.name"
+            :entry="p"
+            variant="featured"
+          />
+        </div>
+      </template>
+
+      <template v-else>
       <div v-if="hiddenCount > 0" class="hidden-row" @click="showHidden = !showHidden">
         已隐藏 {{ hiddenCount }} 个 Aide 不可用的插件
         <span class="caret">{{ showHidden ? "▾" : "▸" }}</span>
@@ -247,6 +308,25 @@ const enabledCount = computed(() => {
           :entry="p"
         />
       </div>
+      </template>
+    </div>
+
+    <!-- 右侧栏：热门标签（真实分类计数，点击跳转） -->
+    <aside v-if="sideTags.length" class="side">
+      <div class="side-card">
+        <h4>热门标签</h4>
+        <div
+          v-for="t in sideTags"
+          :key="t.key"
+          class="side-tag"
+          :class="{ active: activeCategory === t.key }"
+          @click="activeCategory = t.key"
+        >
+          <span class="t">{{ t.label }}</span>
+          <span class="n">{{ t.count }}</span>
+        </div>
+      </div>
+    </aside>
     </div>
 
     <div class="foot">
@@ -338,6 +418,183 @@ const enabledCount = computed(() => {
   font-size: 17px;
   font-weight: 600;
   letter-spacing: 0.01em;
+}
+
+.main-head .sub {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--aide-text-muted);
+}
+
+/* ── 内容区：主列 + 右侧栏（仿设计稿双栏） ── */
+
+.content {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+}
+
+/* ── Hero 横幅 ── */
+
+.hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 12px;
+  padding: 20px 24px;
+  border-radius: var(--aide-radius-md);
+  border: 1px solid var(--aide-border-subtle);
+  background: linear-gradient(
+    120deg,
+    var(--aide-bg-raised) 0%,
+    var(--aide-surface-default) 55%,
+    var(--aide-accent-subtle) 130%
+  );
+  overflow: hidden;
+  box-shadow: var(--aide-highlight-inset);
+}
+
+.hero-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--aide-text-primary);
+}
+
+.hero-sub {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--aide-text-secondary);
+}
+
+.hero-btn {
+  margin-top: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 14px;
+  border-radius: var(--aide-radius-sm);
+  cursor: pointer;
+  border: 1px solid var(--aide-border);
+  background: var(--aide-bg-raised);
+  color: var(--aide-text-primary);
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.hero-btn:hover {
+  background: var(--aide-surface-hover);
+  border-color: var(--aide-accent);
+  color: var(--aide-accent);
+}
+
+.hero-btn .arrow {
+  font-size: 14px;
+}
+
+.hero-art {
+  position: relative;
+  flex: 0 0 auto;
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--aide-accent);
+}
+
+.hero-orb {
+  position: absolute;
+  inset: -30px;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--aide-accent) 22%, transparent) 0%,
+    transparent 65%
+  );
+  pointer-events: none;
+}
+
+.hero-cube {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: var(--aide-accent-subtle);
+  border: 1px solid color-mix(in srgb, var(--aide-accent) 35%, transparent);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--aide-accent) 18%, transparent);
+}
+
+.sec-title {
+  margin: 18px 0 4px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--aide-text-primary);
+}
+
+/* 精选推荐网格：自适应 2~3 列（仿设计稿卡片墙） */
+.featured-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 6px;
+}
+
+/* ── 右侧栏 ── */
+
+.side {
+  border-left: 1px solid var(--aide-border);
+  padding: 16px 14px;
+  overflow-y: auto;
+}
+
+.side-card h4 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aide-text-primary);
+}
+
+.side-tag {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-radius: var(--aide-radius-sm);
+  font-size: 12px;
+  color: var(--aide-text-secondary);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.side-tag:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
+}
+
+.side-tag.active {
+  color: var(--aide-accent);
+  background: var(--aide-accent-subtle);
+}
+
+.side-tag .n {
+  font-size: 11px;
+  color: var(--aide-text-muted);
+}
+
+/* 窄面板（宽度 < 860px）隐藏右侧栏，主列占满 */
+@media (max-width: 860px) {
+  .content {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .side {
+    display: none;
+  }
 }
 
 /* ── Search ── */
@@ -510,7 +767,7 @@ const enabledCount = computed(() => {
 /* ── Plugin list ── */
 
 .list {
-  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 8px 22px 22px;
 }

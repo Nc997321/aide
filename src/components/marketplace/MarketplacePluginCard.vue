@@ -7,7 +7,11 @@ import { useModal } from "../../composables/useModal";
 
 const props = defineProps<{
   entry: PluginEntry;
+  /** list = 默认列表卡；featured = 精选推荐网格卡（仿设计稿：图标+名称在上，操作在底部） */
+  variant?: "list" | "featured";
 }>();
+
+const featured = computed(() => props.variant === "featured");
 
 const {
   getInstalled,
@@ -20,6 +24,12 @@ const {
 } = useMarketplace();
 
 const installed = computed(() => getInstalled(props.entry.marketName, props.entry.name));
+
+// 无图标时回退：取名称第一个英文字母大写（无英文字母 → "P"）。
+const iconLetter = computed(() => {
+  const m = (props.entry.displayName || props.entry.name).match(/[A-Za-z]/);
+  return m ? m[0].toUpperCase() : "P";
+});
 
 const statusClass = computed(() => {
   if (installed.value && installed.value.enabled) return "on";
@@ -106,49 +116,101 @@ function openGit() {
 </script>
 
 <template>
-  <div class="card">
-    <div>
-      <div class="top">
+  <div class="card" :class="{ featured }">
+    <!-- 精选推荐网格卡 -->
+    <template v-if="featured">
+      <div class="f-head">
+        <img v-if="entry.icon" class="picon" :src="entry.icon" :alt="entry.displayName || entry.name" />
+        <div v-else class="picon picon-placeholder">{{ iconLetter }}</div>
         <span class="name" v-tooltip="'在 GitHub 查看详情'" @click="openGit">{{ entry.displayName || entry.name }}</span>
-        <span class="ver">v{{ installed?.version || entry.version || "—" }}</span>
+      </div>
+      <div class="desc">{{ entry.description }}</div>
+      <div class="f-tags">
         <span class="badge" :class="badgeClass">{{ sourceLabel }}</span>
         <span v-if="entry.category" class="cat">{{ entry.category }}</span>
       </div>
-      <div class="desc">{{ entry.description }}</div>
       <span v-if="entry.availability === 'mixed'" class="caveat">{{ caveatText }}</span>
-      <span v-else-if="entry.availability === 'unavailable'" class="caveat unavailable-caveat">在 Aide 中不可用</span>
-    </div>
-    <div class="actions">
-      <div class="status" :class="statusClass"><span class="d"></span>{{ statusText }}</div>
-      <div class="btns">
-        <button
-          v-if="hasUpdate(entry)"
-          class="btn"
-          @click="updatePlugin(entry)"
-        >更新</button>
-        <button
-          v-if="!installed"
-          class="btn primary"
-          :disabled="entry.availability === 'unavailable' || isInstalling(entry.name)"
-          @click="onInstall"
-        >安装</button>
-        <button
-          v-else-if="installed.enabled"
-          class="btn"
-          @click="setEnabled({ market: entry.marketName, name: entry.name }, false)"
-        >禁用</button>
-        <button
-          v-else
-          class="btn primary"
-          @click="setEnabled({ market: entry.marketName, name: entry.name }, true)"
-        >启用</button>
-        <button
-          v-if="installed"
-          class="btn danger"
-          @click="uninstallPlugin({ market: entry.marketName, name: entry.name })"
-        >卸载</button>
+      <div class="f-foot">
+        <span class="f-meta">{{ sourceLabel }}<span class="f-ver"> · v{{ installed?.version || entry.version || "—" }}</span></span>
+        <div class="btns">
+          <button
+            v-if="hasUpdate(entry)"
+            class="btn"
+            @click="updatePlugin(entry)"
+          >更新</button>
+          <button
+            v-if="!installed"
+            class="btn primary"
+            :disabled="entry.availability === 'unavailable' || isInstalling(entry.name)"
+            @click="onInstall"
+          >安装</button>
+          <button
+            v-else-if="installed.enabled"
+            class="btn"
+            @click="setEnabled({ market: entry.marketName, name: entry.name }, false)"
+          >禁用</button>
+          <button
+            v-else
+            class="btn primary"
+            @click="setEnabled({ market: entry.marketName, name: entry.name }, true)"
+          >启用</button>
+          <button
+            v-if="installed"
+            class="btn danger"
+            @click="uninstallPlugin({ market: entry.marketName, name: entry.name })"
+          >卸载</button>
+        </div>
       </div>
-    </div>
+    </template>
+    <!-- 默认列表卡 -->
+    <template v-else>
+      <div class="body">
+        <img v-if="entry.icon" class="picon" :src="entry.icon" :alt="entry.displayName || entry.name" />
+        <div v-else class="picon picon-placeholder">{{ iconLetter }}</div>
+        <div>
+          <div class="top">
+            <span class="name" v-tooltip="'在 GitHub 查看详情'" @click="openGit">{{ entry.displayName || entry.name }}</span>
+            <span class="ver">v{{ installed?.version || entry.version || "—" }}</span>
+            <span class="badge" :class="badgeClass">{{ sourceLabel }}</span>
+            <span v-if="entry.category" class="cat">{{ entry.category }}</span>
+          </div>
+          <div class="desc">{{ entry.description }}</div>
+          <span v-if="entry.availability === 'mixed'" class="caveat">{{ caveatText }}</span>
+          <span v-else-if="entry.availability === 'unavailable'" class="caveat unavailable-caveat">在 Aide 中不可用</span>
+        </div>
+      </div>
+      <div class="actions">
+        <div class="status" :class="statusClass"><span class="d"></span>{{ statusText }}</div>
+        <div class="btns">
+          <button
+            v-if="hasUpdate(entry)"
+            class="btn"
+            @click="updatePlugin(entry)"
+          >更新</button>
+          <button
+            v-if="!installed"
+            class="btn primary"
+            :disabled="entry.availability === 'unavailable' || isInstalling(entry.name)"
+            @click="onInstall"
+          >安装</button>
+          <button
+            v-else-if="installed.enabled"
+            class="btn"
+            @click="setEnabled({ market: entry.marketName, name: entry.name }, false)"
+          >禁用</button>
+          <button
+            v-else
+            class="btn primary"
+            @click="setEnabled({ market: entry.marketName, name: entry.name }, true)"
+          >启用</button>
+          <button
+            v-if="installed"
+            class="btn danger"
+            @click="uninstallPlugin({ market: entry.marketName, name: entry.name })"
+          >卸载</button>
+        </div>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -177,6 +239,83 @@ function openGit() {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.card .body {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.picon {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  flex: 0 0 auto;
+  object-fit: cover;
+  box-shadow: var(--aide-highlight-inset);
+}
+
+.picon-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--aide-accent);
+  background: var(--aide-accent-subtle);
+  border: 1px solid color-mix(in srgb, var(--aide-accent) 30%, transparent);
+}
+
+/* ── 精选推荐网格卡（仿设计稿：纵向排布，操作置底） ── */
+
+.card.featured {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 0;
+}
+
+.card.featured .f-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.card.featured .picon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+}
+
+.card.featured .f-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.card.featured .f-foot {
+  margin-top: auto;
+  padding-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card.featured .f-meta {
+  font-size: 11px;
+  color: var(--aide-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card.featured .f-ver {
+  color: var(--aide-text-muted);
 }
 
 .card .name {

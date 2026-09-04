@@ -7,7 +7,7 @@ use std::os::windows::process::CommandExt;
 use tauri::State;
 
 use crate::commands::marketplace::sources::{parse_marketplace_json, RawSource};
-use crate::commands::marketplace::{manifest, source_cache_dir, sources, PluginEntry};
+use crate::commands::marketplace::{bundled, manifest, source_cache_dir, sources, PluginEntry};
 use crate::settings::SettingsService;
 
 // ── fetch_marketplace (async, source-aware) ──
@@ -16,19 +16,12 @@ use crate::settings::SettingsService;
 pub async fn fetch_marketplace(source_id: String) -> Result<Vec<PluginEntry>, String> {
     // async 命令不埋 trace_command（CLAUDE.md：async 的 spawn_blocking 任务不在主线程）
     tokio::task::spawn_blocking(move || -> Result<Vec<PluginEntry>, String> {
-        let repo = sources::fixed_repo(&source_id)
-            .ok_or("未知市场源")?
-            .to_string();
         let market_name = sources::default_market_name(&source_id)
             .unwrap_or(&source_id)
             .to_string();
         let cache = source_cache_dir(&source_id);
         // 克隆或拉取
-        if !cache.exists() {
-            std::fs::create_dir_all(cache.parent().unwrap_or(&cache)).map_err(|e| e.to_string())?;
-            let url = format!("https://github.com/{}.git", repo);
-            git_clone(&url, &cache)?;
-        }
+        ensure_source_cache(&source_id)?;
         let mjson = cache.join(".claude-plugin").join("marketplace.json");
         let content = std::fs::read_to_string(&mjson)
             .or_else(|_| std::fs::read_to_string(cache.join("registry.json")))
@@ -61,17 +54,41 @@ pub async fn fetch_marketplace(source_id: String) -> Result<Vec<PluginEntry>, St
                     repository: raw.repository.clone().unwrap_or_default(),
                     availability: avail,
                     unsupported: unsup,
+                    // 内置清单元数据（图标/精选）由 merge_bundled_metadata 后处理填入
+                    icon: None,
+                    is_featured: false,
                 }
             })
             .collect();
+        let mut plugins: Vec<PluginEntry> = plugins;
+        bundled::merge_bundled_metadata(&mut plugins);
         Ok(plugins)
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
+/// 确保市场源仓库已克隆到缓存目录（缺失则浅克隆）。启动期内置插件安装与
+/// fetch_marketplace 共用；已存在时不 pull（启动路径不做网络慢操作，更新经 UI 刷新）。
+pub(super) fn ensure_source_cache(source_id: &str) -> Result<(), String> {
+    let cache = source_cache_dir(source_id);
+    if cache.exists() {
+        return Ok(());
+    }
+    let repo = sources::fixed_repo(source_id).ok_or("未知市场源")?;
+    std::fs::create_dir_all(cache.parent().unwrap_or(&cache)).map_err(|e| e.to_string())?;
+    let url = format!("https://github.com/{}.git", repo);
+    git_clone(&url, &cache)
+}
+
+/// 已安装插件的版本身份（最新版本目录名）；未安装 → None。
+pub(super) fn installed_version_id(market: &str, plugin: &str) -> Option<String> {
+    latest_version_dir(&plugins_cache_root().join(market).join(plugin))
+        .map(|p| p.file_name().unwrap_or_default().to_string_lossy().to_string())
+}
+
 /// Resolve version from source (short sha if available; empty otherwise — full resolution at install).
-fn resolved_version_from_source(src: &Option<RawSource>) -> String {
+pub(super) fn resolved_version_from_source(src: &Option<RawSource>) -> String {
     match src {
         Some(RawSource::Github { sha: Some(s), .. })
         | Some(RawSource::Url { sha: Some(s), .. })
@@ -141,7 +158,7 @@ fn cache_install_path(
         .join(version)
 }
 
-fn plugins_cache_root() -> std::path::PathBuf {
+pub(super) fn plugins_cache_root() -> std::path::PathBuf {
     crate::commands::marketplace::plugins_dir().join("cache")
 }
 
@@ -176,7 +193,7 @@ pub(crate) fn lookup_entry(
     Ok((market_name, entry))
 }
 
-fn read_marketplace_plugin_root(source_id: &str) -> Option<String> {
+pub(super) fn read_marketplace_plugin_root(source_id: &str) -> Option<String> {
     let cache = crate::commands::marketplace::source_cache_dir(source_id);
     let mjson = cache.join(".claude-plugin").join("marketplace.json");
     let content = std::fs::read_to_string(&mjson).ok()?;
@@ -340,7 +357,7 @@ fn clone_subdir(
     Ok(())
 }
 
-fn resolve_and_install(
+pub(super) fn resolve_and_install(
     source_id: &str,
     market: &str,
     plugin: &str,
@@ -562,32 +579,47 @@ pub async fn install_plugin(
 ) -> Result<(), String> {
     let service = service.inner().clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let (market, entry) = lookup_entry(&source_id, &plugin_name)?;
-        let plugin_root = read_marketplace_plugin_root(&source_id);
-        let target = resolve_and_install(
-            &source_id,
-            &market,
-            &plugin_name,
-            &entry,
-            plugin_root.as_deref(),
-        )?;
-        // 官方规则：plugin.json 可选，SDK 按目录布局自动发现组件，故不强制校验其存在。
-        // 仅检查安装结果目录非空（ref/sha 错误会得到空目录）。
-        if std::fs::read_dir(&target)
-            .map(|mut i| i.next().is_none())
-            .unwrap_or(true)
-        {
-            let _ = std::fs::remove_dir_all(&target);
-            return Err("安装结果为空目录：插件源 ref/sha 可能无效".into());
-        }
-        // 默认启用状态：defaultEnabled（entry > 无→true）
-        let enable = entry.default_enabled.unwrap_or(true);
-        set_enabled_in_settings(&service, &market, &plugin_name, enable);
-        rewrite_enabled_manifest(&service)?;
-        Ok(())
+        install_plugin_blocking(&service, &source_id, &plugin_name, None)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// 安装插件（阻塞实现，UI 命令与启动期内置插件安装共用）。
+/// `default_enabled_override`：内置清单首次安装时覆盖 marketplace.json 的
+/// defaultEnabled；None = 按 marketplace 条目（无 → 默认启用）。
+pub(crate) fn install_plugin_blocking(
+    service: &SettingsService,
+    source_id: &str,
+    plugin_name: &str,
+    default_enabled_override: Option<bool>,
+) -> Result<(), String> {
+    let (market, entry) = lookup_entry(source_id, plugin_name)?;
+    let plugin_root = read_marketplace_plugin_root(source_id);
+    let target = resolve_and_install(
+        source_id,
+        &market,
+        plugin_name,
+        &entry,
+        plugin_root.as_deref(),
+    )?;
+    // 官方规则：plugin.json 可选，SDK 按目录布局自动发现组件，故不强制校验其存在。
+    // 仅检查安装结果目录非空（ref/sha 错误会得到空目录）。
+    if std::fs::read_dir(&target)
+        .map(|mut i| i.next().is_none())
+        .unwrap_or(true)
+    {
+        let _ = std::fs::remove_dir_all(&target);
+        return Err("安装结果为空目录：插件源 ref/sha 可能无效".into());
+    }
+    // 默认启用状态：内置清单覆盖 > defaultEnabled（entry）> 无→true
+    let enable = default_enabled_override
+        .or(entry.default_enabled)
+        .unwrap_or(true);
+    set_enabled_in_settings(service, &market, plugin_name, enable);
+    bundled::clear_tombstone(service, plugin_name, &market);
+    rewrite_enabled_manifest(service)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -604,6 +636,8 @@ pub async fn uninstall_plugin(
         }
         std::fs::remove_dir_all(&root).map_err(|e| e.to_string())?;
         remove_enabled_in_settings(&service, &marketplace, &plugin_name);
+        // 内置插件被显式卸载 → 记墓碑，启动时不再复活安装
+        bundled::mark_uninstalled_if_bundled(&service, &plugin_name, &marketplace);
         rewrite_enabled_manifest(&service)?;
         Ok(())
     })

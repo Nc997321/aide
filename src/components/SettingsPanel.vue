@@ -9,7 +9,6 @@ import { eventToVimKey } from "../extensions/vimKeybindings";
 import type { CustomizationItem } from "../types/customization";
 import CustomizationList from "./customizations/CustomizationList.vue";
 import CustomizationDetail from "./customizations/CustomizationDetail.vue";
-import MarketplaceTab from "./marketplace/MarketplaceTab.vue";
 import DiagnosticsDashboard from "./DiagnosticsDashboard.vue";
 import ProviderSettings from "./ProviderSettings.vue";
 import ThemedSelect from "./ThemedSelect.vue";
@@ -18,7 +17,6 @@ import Icon from "./Icon.vue";
 
 const themeOptions = [
   { value: "warm-dark", label: "Warm Dark" },
-  { value: "catppuccin", label: "Catppuccin Mocha" },
   { value: "glass", label: "Glass（experimental）" },
   { value: "smoky-pink-glass", label: "Smoky Pink Glass（light）" },
 ];
@@ -37,7 +35,7 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-type Tab = "general" | "appearance" | "editor" | "providers" | "extensions" | "marketplace" | "diagnostics" | "about" | "remote";
+type Tab = "general" | "appearance" | "editor" | "providers" | "extensions" | "diagnostics" | "about" | "remote";
 
 const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 
@@ -466,14 +464,6 @@ function onOverlayClick(e: MouseEvent) {
             </button>
             <button
               class="nav-item"
-              :class="{ active: activeTab === 'marketplace' }"
-              @click="activeTab = 'marketplace'"
-            >
-              <Icon class="nav-icon" name="market" :size="16" />
-              <span class="nav-label">市场</span>
-            </button>
-            <button
-              class="nav-item"
               :class="{ active: activeTab === 'diagnostics' }"
               @click="activeTab = 'diagnostics'"
             >
@@ -811,11 +801,6 @@ function onOverlayClick(e: MouseEvent) {
                 @delete="handleDelete"
                 @back="clearSelection"
               />
-            </div>
-
-            <!-- ── 市场 Tab ── -->
-            <div v-else-if="activeTab === 'marketplace'" class="tab-marketplace">
-              <MarketplaceTab @go-settings="activeTab = 'general'" />
             </div>
 
             <!-- ── 诊断 Tab ── -->
@@ -1472,14 +1457,6 @@ function onOverlayClick(e: MouseEvent) {
   display: flex;
   height: 100%;
   margin: -20px;
-}
-
-/* ── Marketplace tab ── */
-
-.tab-marketplace {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
 }
 
 /* ── CodeGraph tab ── */

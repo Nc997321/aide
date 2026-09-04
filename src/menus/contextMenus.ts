@@ -264,6 +264,17 @@ export function automationSectionMenuItems(onNewTask: () => void): MenuItem[] {
   return [{ label: "新建自动化任务", action: onNewTask }];
 }
 
+/** 「插件」导航行 ⋯：打开市场面板 + 刷新全部市场源。 */
+export function marketplaceSectionMenuItems(
+  onOpen: () => void,
+  onRefreshAll: () => void,
+): MenuItem[] {
+  return [
+    { label: "打开插件市场", action: onOpen },
+    { label: "刷新全部市场源", action: onRefreshAll },
+  ];
+}
+
 // ── Workspace context menu（侧栏工作区行右键/⋯ 共用） ──
 
 export function workspaceMenuItems(

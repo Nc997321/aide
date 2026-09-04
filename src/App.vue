@@ -12,7 +12,9 @@ const OnboardingWizard = defineAsyncComponent(() => import("./components/onboard
 const RunConfigsDialog = defineAsyncComponent(() => import("./components/RunConfigsDialog.vue"));
 import PaneLayout from "./components/PaneLayout.vue";
 import AutomationMain from "./components/automation/AutomationMain.vue";
+import MarketplaceTab from "./components/marketplace/MarketplaceTab.vue";
 import { useAutomation } from "./composables/useAutomation";
+import { useMarketplace } from "./composables/useMarketplace";
 import { useChatSession, setAuthRequiredHandler } from "./composables/useChatSession";
 import { usePaneLayout } from "./composables/usePaneLayout";
 import { usePaneLayoutPersistence } from "./composables/paneLayout/persistence";
@@ -169,6 +171,7 @@ const paletteRef = ref<InstanceType<typeof ACommandPalette> | null>(null);
 // （右面板 / 权限弹窗 / 标题栏 / 侧栏高亮）沿用旧的单一 activeSessionId 语义。
 const paneLayout = usePaneLayout();
 const automation = useAutomation();
+const marketplace = useMarketplace();
 const paneLayoutPersistence = usePaneLayoutPersistence();
 const activeSessionId = paneLayout.activeSessionId;
 // App 级 useChatSession 只用来拿全局单例的 onSessionCreated 回调（module 级
@@ -348,8 +351,9 @@ function onSearchFilesChanged() {
 }
 
 function onSessionChanged(id: string) {
-  // 选中会话时关掉自动化面板，主区切回聊天
+  // 选中会话时关掉自动化/插件市场面板，主区切回聊天
   automation.closePanel();
+  marketplace.closePanel();
   // 打开语义（预览覆盖/全局唯一聚焦）由布局层统一裁决
   paneLayout.openSession(id);
 }
@@ -421,9 +425,9 @@ function openSettings() {
   settingsVisible.value = true;
 }
 
-function openSettingsMarket() {
-  settingsInitialTab.value = "marketplace";
-  settingsVisible.value = true;
+// 插件市场已迁出设置页为一级主区视图：通知「查看」动作 → 打开主区市场面板
+function openMarketplacePanel() {
+  marketplace.openPanel();
 }
 
 async function onRunProject(id?: string) {
@@ -852,8 +856,11 @@ onMounted(async () => {
     );
   } catch (_) { /* best effort */ }
 
-  // 注册「查看」动作：市场更新通知点击 → 打开设置 → 市场标签页
-  registerActionHandler("marketplace", () => openSettingsMarket());
+  // 注册「查看」动作：市场更新通知点击 → 打开主区插件市场面板
+  registerActionHandler("marketplace", () => openMarketplacePanel());
+
+  // 侧栏「插件」入口的已安装计数（best effort，不阻塞首屏）
+  void marketplace.refreshInstalled();
 
   // 启动后台静默检查插件市场更新（方案 B：只通知，不自动应用）
   // 通知走应用内通知中心（右上角铃铛），不走系统通知。
@@ -996,10 +1003,19 @@ onUnmounted(() => {
       />
 
       <!-- Center panel: 多 tab + 任意分屏（每组自治接线见 panelayout/PaneGroup.vue）。
-           自动化面板激活时盖在上面；PaneLayout 用 v-show 保活（流式会话不掉线） -->
+           自动化/插件市场面板激活时盖在上面；PaneLayout 用 v-show 保活（流式会话不掉线） -->
       <div class="panel-center">
         <AutomationMain v-if="automation.state.view !== null" class="h-full" />
-        <PaneLayout v-show="automation.state.view === null" :workspace-path="workspacePath" class="h-full" />
+        <MarketplaceTab
+          v-else-if="marketplace.panelOpen.value"
+          class="h-full"
+          @go-settings="openSettings"
+        />
+        <PaneLayout
+          v-show="automation.state.view === null && !marketplace.panelOpen.value"
+          :workspace-path="workspacePath"
+          class="h-full"
+        />
       </div>
 
       <!-- Right resize handle -->

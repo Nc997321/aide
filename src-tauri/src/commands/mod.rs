@@ -239,7 +239,7 @@ pub fn claude_sessions_dir() -> PathBuf {
 ///
 /// 历史路径是 `~/.claude-code-desktop/`；启动时 `migration::ensure_aide_data_dir_migrated()`
 /// 会把老目录原子 rename 到此处（同文件系统、瞬时、无需用户确认）。所有 Aide 自有数据
-/// （state.json / sessions / recent / notifications / diagnostics / log / claude-agent-sdk/
+/// （state.json / sessions / recent / notifications / diagnostics / log /
 /// 以及 claude/ 子目录）都在这棵树下。
 pub fn our_config_dir() -> PathBuf {
     user_home()

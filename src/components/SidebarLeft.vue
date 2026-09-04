@@ -16,6 +16,7 @@ import { api, openExternal } from "../api";
 import AToast from "../ui/AToast.vue";
 import AppLogo from "./AppLogo.vue";
 import AutomationSidebarSection from "./automation/AutomationSidebarSection.vue";
+import MarketplaceSidebarEntry from "./marketplace/MarketplaceSidebarEntry.vue";
 import SidebarSectionHead from "./SidebarSectionHead.vue";
 import { useToast } from "../composables/useToast";
 import type { Session, WorkspaceInfo } from "../types";
@@ -595,6 +596,10 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
       <!-- 自动化分区：分区树的第二个根分区（会话工作区树之下，同区滚动），
            选中任务由 App.vue 把主区切成 AutomationMain（PaneLayout v-show 保活） -->
       <AutomationSidebarSection />
+
+      <!-- 插件市场入口：与自动化平级的导航行，单击切换主区 MarketplaceTab
+           （插件市场已从设置页迁出为一级主区视图） -->
+      <MarketplaceSidebarEntry />
     </div>
 
     <!-- Update banner -->

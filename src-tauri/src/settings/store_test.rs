@@ -392,7 +392,7 @@ fn migration_cleanup_moves_live_keys_to_state_and_deletes_legacy() {
 fn migration_backup_is_redacted_and_unknown_safe_fields_are_preserved() {
     let fixture = TestStore::with_legacy_config(json!({
         "settings": {
-            "theme": "catppuccin",
+            "theme": "warm-dark",
             "futureSafe": {"enabled": true},
             "codegraphEmbedder": {"backend": "http", "apiKey": "cg-secret"}
         },
