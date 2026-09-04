@@ -796,3 +796,16 @@ export const api = {
 };
 
 export { permissionsApi } from "./api/permissions";
+export { memoryObservatoryApi, CLAUDE_MD_ALIAS } from "./api/memoryObservatory";
+export type {
+  MemoryIndexEntry,
+  MemoryIndexInfo,
+  MemoryTopic,
+  ClaudeMdInfo,
+  MemoryLimits,
+  MemoryScanResult,
+  MemorySnapshotDiff,
+  MemoryDeleteResult,
+  MemoryEvent,
+  MemoryEventsResult,
+} from "./api/memoryObservatory";

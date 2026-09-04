@@ -8,6 +8,7 @@ import ModalDialog from "./components/ModalDialog.vue";
 import { defineAsyncComponent } from "vue";
 const FileViewer = defineAsyncComponent(() => import("./components/FileViewer.vue"));
 const SettingsPanel = defineAsyncComponent(() => import("./components/SettingsPanel.vue"));
+const MemoryObservatory = defineAsyncComponent(() => import("./components/MemoryObservatory/MemoryObservatory.vue"));
 const OnboardingWizard = defineAsyncComponent(() => import("./components/onboarding/OnboardingWizard.vue"));
 const RunConfigsDialog = defineAsyncComponent(() => import("./components/RunConfigsDialog.vue"));
 import PaneLayout from "./components/PaneLayout.vue";
@@ -198,6 +199,7 @@ onSessionCreated((tempId, realId) => {
 });
 const settingsVisible = ref(false);
 const settingsInitialTab = ref<string | undefined>(undefined);
+const observatoryVisible = ref(false);
 const { push: pushNotification, registerActionHandler } = useNotifications();
 const { activeKey: activeWorkspaceKey } = useWorkspaces();
 const workspacePath = ref("");
@@ -982,6 +984,7 @@ onUnmounted(() => {
           @new-session="onNewSession"
           @workspace-changed="onSidebarWsChanged"
           @open-settings="openSettings"
+          @open-memory-observatory="observatoryVisible = true"
           @remove-workspace="onRemoveWorkspace"
           @toggle-pin="toggleLeftPinned"
         />
@@ -1064,6 +1067,13 @@ onUnmounted(() => {
         @confirm="onRemoveWorkspaceConfirm"
       />
       <SettingsPanel v-if="settingsVisible" :initial-tab="settingsInitialTab" @close="settingsVisible = false" />
+      <MemoryObservatory
+        v-if="observatoryVisible && activeWorkspaceKey"
+        :workspace-key="activeWorkspaceKey"
+        :workspace-name="projectName"
+        :current-session-id="activeSessionId"
+        @close="observatoryVisible = false"
+      />
       <OnboardingWizard v-if="onboarding.visible.value" @workspace-selected="onSidebarWsChanged" />
       <RunConfigsDialog
         v-if="runConfigsDialogVisible"

@@ -8,6 +8,7 @@ pub mod filesystem;
 pub mod git;
 pub mod jdk;
 pub mod marketplace;
+pub mod memory_observatory;
 pub mod migration;
 pub mod notifications;
 pub mod onboarding;

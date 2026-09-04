@@ -4,6 +4,19 @@
 export { api } from "./api";
 export type { SendMessageParams, PermissionResponseParams, StartBtwParams, DiagHeartbeatPayload } from "./api";
 export { permissionsApi } from "./api/permissions";
+export { memoryObservatoryApi, CLAUDE_MD_ALIAS } from "./api/memoryObservatory";
+export type {
+  MemoryIndexEntry,
+  MemoryIndexInfo,
+  MemoryTopic,
+  ClaudeMdInfo,
+  MemoryLimits,
+  MemoryScanResult,
+  MemorySnapshotDiff,
+  MemoryDeleteResult,
+  MemoryEvent,
+  MemoryEventsResult,
+} from "./api/memoryObservatory";
 
 export type { AideTransport } from "./transport";
 export { setTransport, getTransport, listen, openExternal } from "./transport";

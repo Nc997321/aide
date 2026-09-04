@@ -324,6 +324,11 @@ pub fn run() {
             commands::workspace::create_workspace,
             commands::workspace::remove_workspace,
             commands::workspace::unhide_workspace,
+            commands::memory_observatory::memory_observatory_scan,
+            commands::memory_observatory::memory_observatory_read_file,
+            commands::memory_observatory::memory_observatory_snapshot,
+            commands::memory_observatory::memory_observatory_delete_file,
+            commands::memory_observatory::memory_observatory_events,
             // 工作区信任（Trusted Workspace）
             commands::workspace::is_workspace_trusted,
             commands::workspace::trust_workspace,

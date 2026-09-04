@@ -47,9 +47,20 @@ export function assembleMcpServers(codegraph: Record<string, any> | null, user: 
   return { ...(codegraph ?? {}), ...user };
 }
 
-/** 合并内建 hook（前）与用户 hook（后），按事件分组。内建不可被越过。 */
-export function assembleHooks(builtin: { PreToolUse: any[]; Stop: any[] }, user: Record<string, any>): Record<string, any> {
-  const events = new Set<string>(["PreToolUse", "Stop", ...Object.keys(user)]);
+/** 合并内建 hook（前）与用户 hook（后），按事件分组。内建不可被越过。
+ *  事件集合必须覆盖内建侧已用的全部事件——漏列会让该事件的内建 hook 静默丢失。 */
+export function assembleHooks(
+  builtin: { PreToolUse: any[]; Stop: any[]; PostToolUse?: any[] },
+  user: Record<string, any>,
+): Record<string, any> {
+  // 事件顺序守恒：PreToolUse → Stop 固定在前（既有契约），内建新增事件随后，
+  // 用户事件最后；同一事件组内内建 hook 不可被越过。
+  const events = new Set<string>([
+    "PreToolUse",
+    "Stop",
+    ...Object.keys(builtin),
+    ...Object.keys(user),
+  ]);
   const out: Record<string, any> = {};
   for (const ev of events) {
     const b = (builtin as Record<string, unknown[]>)[ev] ?? [];

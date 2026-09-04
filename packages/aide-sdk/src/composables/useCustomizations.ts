@@ -57,6 +57,7 @@ export const builtinHooks = ref<BuiltinHookManifest[]>([
   { id: "policy", event: "PreToolUse", matcher: ".*", purpose: "工具权限门控（权威前置层，不可越过）" },
   { id: "subagentModel", event: "PreToolUse", matcher: "^(Agent|Task)$", purpose: "子代理模型选择兜底（条件挂）" },
   { id: "skillGuard", event: "PreToolUse", matcher: "^Skill$", purpose: "子代理重型 skill 名单拦截（条件挂）" },
+  { id: "memoryEvents", event: "PostToolUse", matcher: "^(Read|Write|Edit|MultiEdit)$", purpose: "记忆观测台事件台账（memory 目录读写埋点，只记录不干预）" },
   { id: "stopEffort", event: "Stop", matcher: "—", purpose: "读本轮 effort 盖到 message_stop" },
   { id: "modelSwitchGuard", event: "PreModelSwitch", matcher: "—", purpose: "模型切换成本确认（缓存热+大体量才问，条件挂，支线不挂）" },
   { id: "modelSwitchCommitted", event: "PostModelSwitch", matcher: "—", purpose: "模型切换坐实上报（前端落盘依据，条件挂，支线不挂）" },
