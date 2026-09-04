@@ -16,12 +16,18 @@ export const CODEGRAPH_ALLOW_RULE = "mcp__aide-codegraph";
  * 连 prompt 里直接点名 "Use the find_symbol tool" 都会被无视、照样 Grep；
  * 加上这段 instructions 后同一 prompt 立刻改用我们的工具。这不是优化是必需品，
  * 删除或弱化前必须先跑 agent-sidecar/smoke-mcp.ts 验证行为不退化。
+ *
+ * 2026-09-04 扩写：加入「追符号不追字符串」纪律与已知盲区清单（本项目实测边界），
+ * 让模型命中盲区时直接退 Grep 而不是对索引空调用。任务级输出契约（链路图/
+ * 工具占比报告/防作弊）不进这里——那是 codegraph-explore skill 的职责。
  */
-export const CODEGRAPH_INSTRUCTIONS = `This environment has a PRE-BUILT code index for the current workspace, exposed as the aide-codegraph MCP tools (find_symbol / semantic_search / call_graph). Rules:
-1. When you need to find where a symbol is defined, you MUST call mcp__aide-codegraph__find_symbol FIRST — do NOT use Grep for definition lookup.
-2. When you need callers or callees of a function, you MUST call mcp__aide-codegraph__call_graph FIRST.
-3. When you know what the code does but not its name, use mcp__aide-codegraph__semantic_search.
-Grep is for text/pattern search, NOT for locating symbols. These tools are exact, instant, and far cheaper than a grep-then-read fan-out.`;
+export const CODEGRAPH_INSTRUCTIONS = `This environment has a PRE-BUILT code index for the current workspace, exposed as the aide-codegraph MCP tools. Rules:
+1. Need a definition (function/class/method/interface/enum) → mcp__aide-codegraph__find_symbol FIRST; it returns the full source body with file:line, so prefer it over reading whole files. NEVER use Grep to locate a definition.
+2. Need callers/callees → mcp__aide-codegraph__call_graph FIRST. It is a verifier, not a discovery tool: when candidates > 1 (name-level join), Read the listed locations to disambiguate — do not guess.
+3. Know what the code does but not its name → mcp__aide-codegraph__semantic_search (short natural-language description; retry from different angles on a miss). Results are similarity candidates — verify at the returned file:line before relying on them.
+4. Trace symbols, not strings: event/command names are string literals the graph cannot see — find the named symbol behind them first, then chain via find_symbol/call_graph. (A Tauri invoke name usually equals its Rust fn name → find_symbol CAN catch it.)
+5. Known blind spots — when the query target is one of these, go straight to Grep: Vue template component refs <X/> and custom events emit/@xxx; Tauri event/command string literals like app.emit("xxx"); cross-language IPC boundaries (Rust↔sidecar stdio, sidecar→frontend, invoke→Rust); anonymous switch cases and structural tags like </script>.
+6. Fall back to Grep only after the index fails or misses, and state the reason in a few words (e.g. "blind spot: Vue template ref"). Grep is for text/pattern search, NOT for locating symbols. These tools are exact, instant, and far cheaper than a grep-then-read fan-out.`;
 
 const SNIPPET_HARD_CAP = 300;
 

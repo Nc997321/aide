@@ -42,6 +42,32 @@ This workspace is pre-indexed. The \`aide-codegraph\` MCP tools answer code-navi
 ## Ambiguity
 
 \`call_graph\` and \`semantic_search\` are name-level / similarity-level: when candidates > 1, Read the listed locations to disambiguate instead of guessing.
+
+## Tracing a chain across the codebase
+
+1. **Entry point**: start from the most distinctive single point on the chain — a UI component if UI is involved, otherwise a named handler/manager. Find it with \`semantic_search\`, verify, then expand outward on both sides with \`find_symbol\` / \`call_graph\`.
+2. **Symbols, not strings**: event names and command names are string literals the call graph cannot see. Find the named symbol behind the string first, then chain from it. (In this workspace a Tauri invoke name usually equals its Rust fn name, so \`find_symbol\` can catch it.)
+3. **\`call_graph\` is a verifier, not a discovery tool** — confirm each hop, don't spray. When same-name candidates > 1, Read to disambiguate.
+4. **Stop when you have enough**: each hop carries file:line; confirm each IPC boundary once on each side and stop — do not expand internal implementations of intermediate nodes.
+5. **For source, prefer \`find_symbol\`** (it returns the full body) over reading whole files.
+
+## Known blind spots — go straight to Grep, note "blind spot: <which>"
+
+- Vue template component refs \`<X/>\`, custom events \`emit\` / \`@xxx\` — no symbol edges.
+- Tauri event/command string literals like \`app.emit("xxx")\` — no symbol edges.
+- Cross-language IPC boundaries (Rust↔sidecar stdin/stdout, sidecar→frontend, invoke→Rust) — the symbol chain breaks.
+- Anonymous switch cases, structural tags like \`</script>\` — not symbols.
+- \`call_graph\` same-name join noise — Read to disambiguate.
+
+## Trace-task output contract (only when the task asks for a full chain trace)
+
+1. **Bidirectional chain graph** — every node labeled with file:line.
+2. **Tool contribution report** — codegraph vs Grep+Read share. Counting rules: source bodies returned by \`find_symbol\` count as find_symbol; verification Reads after codegraph pointed the way count as codegraph; the Grep bucket holds only blind-spot fallbacks.
+3. **Blind-spot log** — which nodes codegraph could not reach and why, classified against the list above.
+
+## Anti-gaming
+
+Never skip codegraph and Grep the whole chain directly. Before any Grep, state why codegraph cannot answer (a blind-spot shorthand is fine). If you catch yourself using Grep to find a definition or a call relation, stop and switch to \`find_symbol\` / \`call_graph\`.
 `;
 
 type Env = Record<string, string | undefined>;

@@ -131,7 +131,9 @@ describe("formatToolResponse", () => {
       return value;
     });
     // instructions 缺失时模型会无视工具（连 prompt 直接点名都不用），此处防回归。
-    expect(json).toContain("MUST call mcp__aide-codegraph__find_symbol FIRST");
+    expect(json).toContain("mcp__aide-codegraph__find_symbol FIRST");
     expect(json).toContain("mcp__aide-codegraph__call_graph FIRST");
+    // 2026-09-04 扩写防回归：盲区清单是本轮新增的核心增量。
+    expect(json).toContain("Known blind spots");
   });
 });
