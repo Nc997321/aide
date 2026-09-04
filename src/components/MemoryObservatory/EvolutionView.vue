@@ -7,7 +7,7 @@ import { computed } from "vue";
 import type { MemoryScanResult, MemorySnapshotDiff } from "@aide/sdk/api";
 import { growthCurve, recentChanges, daysSinceLatest, fmtDay } from "./observatory";
 
-const props = defineProps<{ scan: MemoryScanResult; diff: MemorySnapshotDiff | null }>();
+const props = defineProps<{ scan: MemoryScanResult; diff: MemorySnapshotDiff | null; hideDiff?: boolean }>();
 
 const curve = computed(() => growthCurve(props.scan.topics));
 const changes = computed(() => recentChanges(props.scan.topics));
@@ -58,7 +58,7 @@ const chart = computed(() => {
       <div v-else class="empty">还没有记忆</div>
     </div>
 
-    <div class="cols">
+    <div class="cols" :class="{ single: hideDiff }">
       <div>
         <div class="section-label">最近变化 · 7 天</div>
         <div v-if="changes.length === 0" class="empty">近 7 天无变化</div>
@@ -68,7 +68,7 @@ const chart = computed(() => {
           <span class="nm">{{ c.name.replace(/\.md$/, "") }}</span>
         </div>
       </div>
-      <div>
+      <div v-if="!hideDiff">
         <div class="section-label">
           距上次观测
           <span v-if="diff?.previousTs" class="muted">· 快照 diff</span>
@@ -103,6 +103,7 @@ const chart = computed(() => {
 .end { fill: var(--aide-accent); }
 
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.cols.single { grid-template-columns: 1fr; }
 .section-label { font-size: 11px; color: var(--aide-text-muted); letter-spacing: 0.05em; margin-bottom: 8px; }
 .section-label .muted { color: var(--aide-text-muted); opacity: 0.7; }
 .evo-item {

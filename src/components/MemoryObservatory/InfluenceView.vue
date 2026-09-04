@@ -17,6 +17,7 @@ import {
   usageByMemory,
   fmtDay,
   type DayCount,
+  type ReachLevels,
 } from "./observatory";
 
 const props = defineProps<{
@@ -24,10 +25,15 @@ const props = defineProps<{
   events: MemoryEvent[];
   sessionNames: Record<string, string>;
   currentSessionId?: string | null;
+  /** P2 全局模式：可达性分级由父级 sumReachLevels 汇总后传入（合成 scan 的窗口语义不成立）。 */
+  reachOverride?: ReachLevels | null;
+  /** P2 全局模式：workspaceKey → 项目显示名，活动 feed 标注来源项目。 */
+  projectNames?: Record<string, string>;
+  showProject?: boolean;
 }>();
 
 // ── 可达性分级 ──
-const reach = computed(() => reachLevels(props.scan));
+const reach = computed(() => props.reachOverride ?? reachLevels(props.scan));
 const reachRows = computed(() => {
   const r = reach.value;
   const total = r.l0 + r.l1.length + r.l2.length + r.l3.length || 1;
@@ -66,6 +72,10 @@ const sessionChip = computed(() => {
 function sessionLabel(id: string): string {
   if (!id) return "";
   return props.sessionNames[id] ?? `${id.slice(0, 8)}…`;
+}
+
+function projectLabel(key: string): string {
+  return props.projectNames?.[key] ?? key;
 }
 
 const OP_META: Record<string, { sym: string; cls: string; label: string }> = {
@@ -177,6 +187,7 @@ const learnChart = computed(() => sparkline(learnTrend.value));
             <span class="op" :class="opMeta(e.op).cls">{{ opMeta(e.op).sym }}</span>
             <span class="nm">{{ e.memoryId.replace(/\.md$/, "") }}</span>
             <span class="meta">
+              <template v-if="showProject && e.workspaceKey">[{{ projectLabel(e.workspaceKey) }}] </template>
               <template v-if="e.sessionId">{{ sessionLabel(e.sessionId) }} · </template>{{ fmtDay(e.ts) }}
             </span>
           </div>

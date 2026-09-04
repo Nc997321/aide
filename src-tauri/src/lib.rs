@@ -329,6 +329,7 @@ pub fn run() {
             commands::memory_observatory::memory_observatory_snapshot,
             commands::memory_observatory::memory_observatory_delete_file,
             commands::memory_observatory::memory_observatory_events,
+            commands::memory_observatory::memory_observatory_scan_all,
             // 工作区信任（Trusted Workspace）
             commands::workspace::is_workspace_trusted,
             commands::workspace::trust_workspace,

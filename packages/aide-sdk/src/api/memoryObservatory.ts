@@ -76,6 +76,19 @@ export interface MemoryEventsResult {
   sessionNames: Record<string, string>;
 }
 
+/** P2 跨项目聚合：一个项目的 key + 它的扫描结果。 */
+export interface ProjectScanResult {
+  key: string;
+  scan: MemoryScanResult;
+}
+
+export interface MemoryScanAllResult {
+  /** 按最近修改倒序；空项目（无 topic 无索引）已被后端剔除。 */
+  projects: ProjectScanResult[];
+  /** 全局指令全用户唯一，只在顶层带一次（per-project scan.claudeMd 恒为 null）。 */
+  claudeMd: ClaudeMdInfo | null;
+}
+
 /** readFile 的 CLAUDE.md 特判名（与后端 CLAUDE_MD_ALIAS 一致）。 */
 export const CLAUDE_MD_ALIAS = "__claude_md__";
 
@@ -93,8 +106,13 @@ export const memoryObservatoryApi = {
   deleteFile(workspaceKey: string, name: string): Promise<MemoryDeleteResult> {
     return getTransport().invoke("memory_observatory_delete_file", { workspaceKey, name });
   },
-  /** 事件台账：memory 目录读写事件（read/created/updated/deleted）+ 会话名映射。 */
-  events(workspaceKey: string): Promise<MemoryEventsResult> {
+  /** 事件台账：memory 目录读写事件（read/created/updated/deleted）+ 会话名映射。
+   *  workspaceKey 传 null = 不过滤（P2 跨项目聚合）。 */
+  events(workspaceKey: string | null): Promise<MemoryEventsResult> {
     return getTransport().invoke("memory_observatory_events", { workspaceKey });
+  },
+  /** P2 跨项目只读聚合：全量扫描 projects 下所有项目的 memory 目录。 */
+  scanAll(): Promise<MemoryScanAllResult> {
+    return getTransport().invoke("memory_observatory_scan_all");
   },
 };

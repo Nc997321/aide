@@ -33,7 +33,7 @@ pub struct EventsResult {
     pub session_names: HashMap<String, String>,
 }
 
-pub fn read_events(workspace_key: &str) -> Result<EventsResult, String> {
+pub fn read_events(workspace_key: Option<&str>) -> Result<EventsResult, String> {
     read_events_inner(
         &resolve::events_log(),
         &crate::commands::our_sessions_dir(),
@@ -42,7 +42,8 @@ pub fn read_events(workspace_key: &str) -> Result<EventsResult, String> {
 }
 
 /// 与路径来源解耦的读取本体（fixture 测试直接喂文件）。
-fn read_events_inner(log: &Path, sessions_dir: &Path, workspace_key: &str) -> Result<EventsResult, String> {
+/// `workspace_key` 为 None 时不过滤（P2 跨项目聚合视图用）。
+fn read_events_inner(log: &Path, sessions_dir: &Path, workspace_key: Option<&str>) -> Result<EventsResult, String> {
     let mut events: Vec<MemoryEvent> = Vec::new();
     if let Ok(content) = fs::read_to_string(log) {
         for line in content.lines() {
@@ -52,7 +53,7 @@ fn read_events_inner(log: &Path, sessions_dir: &Path, workspace_key: &str) -> Re
             }
             // 单行损坏不拖垮整本台账
             let Ok(ev) = serde_json::from_str::<MemoryEvent>(line) else { continue };
-            if ev.workspace_key == workspace_key {
+            if workspace_key.is_none_or(|k| ev.workspace_key == k) {
                 events.push(ev);
             }
         }
@@ -125,11 +126,15 @@ mod tests {
         fs::create_dir_all(&sessions).unwrap();
         fs::write(sessions.join("s1.json"), r#"{"name":"修冻结的那轮"}"#).unwrap();
 
-        let r = read_events_inner(&log, &sessions, "K").unwrap();
+        let r = read_events_inner(&log, &sessions, Some("K")).unwrap();
         assert_eq!(r.events.len(), 2);
         assert_eq!(r.events[0].memory_id, "a.md");
         assert_eq!(r.session_names.get("s1").unwrap(), "修冻结的那轮");
         assert!(!r.session_names.contains_key("s2"), "别的会话不查名");
+
+        // None = 不过滤（跨项目聚合）
+        let all = read_events_inner(&log, &sessions, None).unwrap();
+        assert_eq!(all.events.len(), 3);
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -137,7 +142,7 @@ mod tests {
     #[test]
     fn missing_log_yields_empty() {
         let dir = tmp("missing");
-        let r = read_events_inner(&dir.join("nope.jsonl"), &dir, "K").unwrap();
+        let r = read_events_inner(&dir.join("nope.jsonl"), &dir, Some("K")).unwrap();
         assert!(r.events.is_empty());
         assert!(r.session_names.is_empty());
     }

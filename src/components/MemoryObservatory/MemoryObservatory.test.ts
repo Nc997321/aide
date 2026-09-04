@@ -19,6 +19,7 @@ import {
   sessionMemoryIds,
   sessionsOfMemory,
   reachLevels,
+  sumReachLevels,
 } from "./observatory";
 
 function topic(p: Partial<MemoryTopic> & { name: string }): MemoryTopic {
@@ -167,6 +168,38 @@ describe("observatory 纯函数", () => {
     expect([...sessionMemoryIds(events, "s1")]).toEqual(["a.md"]);
     expect(recentActivity(events, 10)).toHaveLength(3); // feed 全量保留
   });
+
+  it("sumReachLevels：跨项目汇总，CLAUDE.md 只算一次", () => {
+    const mk = (windowEntries: number, topics: MemoryTopic[]): MemoryScanResult => ({
+      index: {
+        lines: windowEntries,
+        bytes: 100,
+        entries: Array.from({ length: windowEntries }, (_, i) => ({
+          title: `t${i}`,
+          file: `t${i}.md`,
+          desc: "",
+          line: i + 1,
+          byteOffset: 0,
+        })),
+      },
+      topics,
+      orphans: [],
+      deadlinks: [],
+      claudeMd: null, // per-project scan 不含全局指令
+      limits: { maxLines: 200, maxBytes: 25600 },
+    });
+    const r = sumReachLevels(
+      [
+        mk(2, [topic({ name: "a.md" }), topic({ name: "o.md", indexed: false, withinWindow: false })]),
+        mk(3, [topic({ name: "b.md", withinWindow: false })]),
+      ],
+      true,
+    );
+    expect(r.l0).toBe(2 + 3 + 1); // 窗口条目之和 + CLAUDE.md 一次
+    expect(r.l1).toHaveLength(1);
+    expect(r.l2).toHaveLength(1);
+    expect(r.l3).toHaveLength(1);
+  });
 });
 
 // ── 组件：删除确认流 + 状态联动 ──
@@ -176,6 +209,7 @@ const mocks = vi.hoisted(() => ({
   readFile: vi.fn(async () => "# 内容"),
   deleteFile: vi.fn(async () => ({ deleted: true, indexLineRemoved: true })),
   events: vi.fn(async () => ({ events: [], sessionNames: {} })),
+  scanAll: vi.fn(async () => ({ projects: [], claudeMd: null })),
 }));
 
 vi.mock("@aide/sdk/api", () => ({
@@ -225,6 +259,7 @@ describe("MemoryObservatory 面板", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.events.mockResolvedValue({ events: [], sessionNames: {} });
+    mocks.scanAll.mockResolvedValue({ projects: [], claudeMd: null });
   });
 
   it("加载后展示 stat / 清单 / 告警计数", async () => {
@@ -293,5 +328,55 @@ describe("MemoryObservatory 面板", () => {
     await vi.waitFor(() => expect(w.text()).not.toContain("描述甲"));
     await w.findAll(".mo-tab").find((t) => t.text().includes("影响"))!.trigger("click");
     expect(w.text()).toContain("最近活动");
+  });
+
+  it("全部项目 scope：分组渲染 + 搜索过滤 + 影响 tab 用汇总可达性", async () => {
+    mocks.scanAll.mockResolvedValue({
+      projects: [
+        {
+          key: "C--proj-a",
+          scan: {
+            index: { lines: 1, bytes: 40, entries: [{ title: "甲A", file: "a.md", desc: "项目A的记忆", line: 1, byteOffset: 0 }] },
+            topics: [topic({ name: "a.md", modifiedMs: Date.now() })],
+            orphans: [],
+            deadlinks: [],
+            claudeMd: null,
+            limits: { maxLines: 200, maxBytes: 25600 },
+          },
+        },
+        {
+          key: "C--proj-b",
+          scan: {
+            index: null,
+            topics: [topic({ name: "b.md", indexed: false, withinWindow: false, modifiedMs: Date.now() })],
+            orphans: ["b.md"],
+            deadlinks: [],
+            claudeMd: null,
+            limits: { maxLines: 200, maxBytes: 25600 },
+          },
+        },
+      ],
+      claudeMd: { path: "/x/CLAUDE.md", bytes: 100, modifiedMs: null },
+    });
+    const w = await mountPanel();
+    await w.findAll(".mo-scope button").find((b) => b.text() === "全部项目")!.trigger("click");
+    await vi.waitFor(() => expect(w.text()).toContain("甲A"));
+
+    expect(mocks.scanAll).toHaveBeenCalled();
+    expect(mocks.events).toHaveBeenLastCalledWith(null); // 全局 = 不过滤
+    expect(w.text()).toContain("C--proj-a"); // 未登记工作区回落 key
+    expect(w.text()).toContain("1 孤儿"); // 分组健康计数
+
+    // 搜索过滤：只留命中项目
+    await w.find(".search input").setValue("项目A");
+    expect(w.text()).toContain("甲A");
+    expect(w.findAll(".group")).toHaveLength(1);
+
+    // 影响 tab：reachOverride 生效（L3 计入 proj-b 的孤儿）
+    await w.find(".search input").setValue("");
+    await w.findAll(".mo-tab").find((t) => t.text().includes("影响"))!.trigger("click");
+    expect(w.text()).toContain("L3 · 沉没");
+    const l3row = w.findAll(".reach-row").find((r) => r.text().includes("L3"))!;
+    expect(l3row.find(".lv-n").text()).toBe("1");
   });
 });

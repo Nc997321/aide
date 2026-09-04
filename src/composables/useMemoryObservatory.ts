@@ -1,14 +1,26 @@
-// 记忆观测台面板状态闭包：scan/snapshot 加载、删除流、预览缓存。
-// 桌面专属（不进 remote REGISTRY），故放 src/composables 而非共享包。
+// 记忆观测台面板状态闭包：scan/snapshot/events 加载、双 scope（当前项目 / 全部项目）、
+// 删除流、预览缓存。桌面专属（不进 remote REGISTRY），故放 src/composables 而非共享包。
 import { reactive, ref } from "vue";
 import { memoryObservatoryApi } from "@aide/sdk/api";
-import type { MemoryEvent, MemoryScanResult, MemorySnapshotDiff } from "@aide/sdk/api";
+import type {
+  ClaudeMdInfo,
+  MemoryEvent,
+  MemoryScanResult,
+  MemorySnapshotDiff,
+  ProjectScanResult,
+} from "@aide/sdk/api";
+
+export type ObservatoryScope = "project" | "all";
 
 export function useMemoryObservatory() {
   const loading = ref(false);
   const error = ref<string | null>(null);
+  const scope = ref<ObservatoryScope>("project");
   const scan = ref<MemoryScanResult | null>(null);
   const diff = ref<MemorySnapshotDiff | null>(null);
+  // P2 跨项目聚合：scope === "all" 时填充
+  const projectScans = ref<ProjectScanResult[]>([]);
+  const globalClaudeMd = ref<ClaudeMdInfo | null>(null);
   const events = ref<MemoryEvent[]>([]);
   const sessionNames = ref<Record<string, string>>({});
   const previews = reactive(new Map<string, string>());
@@ -21,22 +33,41 @@ export function useMemoryObservatory() {
     loading.value = true;
     error.value = null;
     try {
-      const [s, d, ev] = await Promise.all([
-        memoryObservatoryApi.scan(workspaceKey),
-        memoryObservatoryApi.snapshot(workspaceKey),
-        memoryObservatoryApi.events(workspaceKey),
-      ]);
-      if (seq !== loadSeq) return; // 过期响应丢弃
-      scan.value = s;
-      diff.value = d;
-      events.value = ev.events;
-      sessionNames.value = ev.sessionNames;
+      if (scope.value === "all") {
+        // 全局模式：全量项目扫描 + 不过滤的事件台账；快照 diff 是单项目语义，跳过。
+        const [all, ev] = await Promise.all([
+          memoryObservatoryApi.scanAll(),
+          memoryObservatoryApi.events(null),
+        ]);
+        if (seq !== loadSeq) return;
+        projectScans.value = all.projects;
+        globalClaudeMd.value = all.claudeMd;
+        events.value = ev.events;
+        sessionNames.value = ev.sessionNames;
+      } else {
+        const [s, d, ev] = await Promise.all([
+          memoryObservatoryApi.scan(workspaceKey),
+          memoryObservatoryApi.snapshot(workspaceKey),
+          memoryObservatoryApi.events(workspaceKey),
+        ]);
+        if (seq !== loadSeq) return; // 过期响应丢弃
+        scan.value = s;
+        diff.value = d;
+        events.value = ev.events;
+        sessionNames.value = ev.sessionNames;
+      }
       previews.clear();
     } catch (e) {
       if (seq === loadSeq) error.value = String(e);
     } finally {
       if (seq === loadSeq) loading.value = false;
     }
+  }
+
+  async function setScope(s: ObservatoryScope, workspaceKey: string) {
+    if (scope.value === s) return;
+    scope.value = s;
+    await load(workspaceKey);
   }
 
   async function preview(workspaceKey: string, name: string): Promise<string> {
@@ -62,30 +93,61 @@ export function useMemoryObservatory() {
         }
         previews.delete(name);
       }
-      // 后端已写 deleted 事件；本地同步一条，避免为重扫台账再发一次请求。
-      events.value = [
-        ...events.value,
-        { ts: Date.now(), sessionId: "", workspaceKey, op: "deleted", memoryId: name },
-      ];
-      confirming.value = null;
+      syncDeleted(workspaceKey, name);
       return r.deleted || r.indexLineRemoved;
     } finally {
       deleting.value = false;
     }
   }
 
+  /** 全局模式删除：更新 projectScans 里对应项目的扫描结果。 */
+  async function removeGlobal(workspaceKey: string, name: string): Promise<boolean> {
+    deleting.value = true;
+    try {
+      const r = await memoryObservatoryApi.deleteFile(workspaceKey, name);
+      const p = projectScans.value.find((x) => x.key === workspaceKey);
+      if (p) {
+        const s = p.scan;
+        s.topics = s.topics.filter((t) => t.name !== name);
+        s.orphans = s.orphans.filter((n) => n !== name);
+        s.deadlinks = s.deadlinks.filter((n) => n !== name);
+        if (r.indexLineRemoved && s.index) {
+          s.index.entries = s.index.entries.filter((e) => e.file !== name);
+        }
+      }
+      syncDeleted(workspaceKey, name);
+      return r.deleted || r.indexLineRemoved;
+    } finally {
+      deleting.value = false;
+    }
+  }
+
+  function syncDeleted(workspaceKey: string, name: string) {
+    // 后端已写 deleted 事件；本地同步一条，避免为重扫台账再发一次请求。
+    events.value = [
+      ...events.value,
+      { ts: Date.now(), sessionId: "", workspaceKey, op: "deleted", memoryId: name },
+    ];
+    confirming.value = null;
+  }
+
   return {
     loading,
     error,
+    scope,
     scan,
     diff,
+    projectScans,
+    globalClaudeMd,
     events,
     sessionNames,
     previews,
     confirming,
     deleting,
     load,
+    setScope,
     preview,
     remove,
+    removeGlobal,
   };
 }

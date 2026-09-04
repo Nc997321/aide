@@ -808,4 +808,6 @@ export type {
   MemoryDeleteResult,
   MemoryEvent,
   MemoryEventsResult,
+  ProjectScanResult,
+  MemoryScanAllResult,
 } from "./api/memoryObservatory";

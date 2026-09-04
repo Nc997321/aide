@@ -63,6 +63,22 @@ pub struct ScanResult {
     pub limits: Limits,
 }
 
+/// 跨项目聚合（P2）：一个项目的 key + 它的扫描结果。
+/// per-project 扫描不含 claude_md（全局指令全用户唯一，在 scan_all 顶层带一次）。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectScan {
+    pub key: String,
+    pub scan: ScanResult,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanAllResult {
+    pub projects: Vec<ProjectScan>,
+    pub claude_md: Option<ClaudeMdInfo>,
+}
+
 pub fn scan(workspace_key: &str) -> Result<ScanResult, String> {
     let dirs = resolve::memory_dirs(workspace_key);
     scan_dirs(
@@ -71,6 +87,53 @@ pub fn scan(workspace_key: &str) -> Result<ScanResult, String> {
         super::MEMORY_INDEX_MAX_LINES,
         super::MEMORY_INDEX_MAX_BYTES,
     )
+}
+
+/// 跨项目全量扫描（P2 只读聚合）：遍历 projects 下所有含 memory/ 的项目目录。
+pub fn scan_all() -> Result<ScanAllResult, String> {
+    let projects = scan_projects_dir(&crate::commands::claude_projects_dir());
+    let claude_md = fs::metadata(resolve::claude_md_path())
+        .ok()
+        .map(|m| ClaudeMdInfo {
+            path: resolve::claude_md_path().to_string_lossy().to_string(),
+            bytes: m.len(),
+            modified_ms: resolve::to_ms(m.modified()),
+        });
+    Ok(ScanAllResult { projects, claude_md })
+}
+
+/// 与 projects 根目录解耦的扫描本体（fixture 测试直接喂目录）。
+fn scan_projects_dir(projects_dir: &std::path::Path) -> Vec<ProjectScan> {
+    let mut out: Vec<ProjectScan> = Vec::new();
+    let Ok(rd) = fs::read_dir(projects_dir) else { return out };
+    // 全局指令不进 per-project 扫描（避免 N 份重复），喂一个必不存在的路径。
+    let no_claude = std::path::PathBuf::new();
+    for entry in rd.flatten() {
+        let mem = entry.path().join("memory");
+        if !mem.is_dir() {
+            continue;
+        }
+        let Ok(scan) = scan_dirs(
+            &[mem],
+            &no_claude,
+            super::MEMORY_INDEX_MAX_LINES,
+            super::MEMORY_INDEX_MAX_BYTES,
+        ) else {
+            continue;
+        };
+        if scan.topics.is_empty() && scan.index.is_none() {
+            continue; // 空项目不进聚合视图
+        }
+        out.push(ProjectScan {
+            key: entry.file_name().to_string_lossy().to_string(),
+            scan,
+        });
+    }
+    // 最近有动静的项目排前面
+    out.sort_by_key(|p| {
+        std::cmp::Reverse(p.scan.topics.iter().filter_map(|t| t.modified_ms).max().unwrap_or(0))
+    });
+    out
 }
 
 /// 与目录来源解耦的扫描本体（fixture 测试直接喂目录）。
@@ -244,6 +307,32 @@ mod tests {
         let r = scan_dirs(&[], &missing, 200, 25 * 1024).unwrap();
         assert!(r.index.is_none());
         assert!(r.topics.is_empty());
+    }
+
+    #[test]
+    fn scan_projects_dir_aggregates_and_skips_empty() {
+        let root = fixture_dir("all");
+        let pa = root.join("C--proj-a");
+        let pb = root.join("C--proj-b");
+        let pe = root.join("C--proj-empty");
+        fs::create_dir_all(pa.join("memory")).unwrap();
+        fs::create_dir_all(pb.join("memory")).unwrap();
+        fs::create_dir_all(&pe).unwrap(); // 无 memory/ 目录
+        let pc = root.join("C--proj-c");
+        fs::create_dir_all(pc.join("memory")).unwrap(); // 有目录但空
+        fs::write(pa.join("memory/MEMORY.md"), "- [甲](a.md) — x\n").unwrap();
+        fs::write(pa.join("memory/a.md"), "A").unwrap();
+        fs::write(pb.join("memory/b.md"), "B").unwrap();
+
+        let out = scan_projects_dir(&root);
+        assert_eq!(out.len(), 2, "空项目与无 memory 目录的项目不进聚合");
+        let keys: Vec<&str> = out.iter().map(|p| p.key.as_str()).collect();
+        assert!(keys.contains(&"C--proj-a") && keys.contains(&"C--proj-b"));
+        let a = out.iter().find(|p| p.key == "C--proj-a").unwrap();
+        assert_eq!(a.scan.topics.len(), 1);
+        assert!(a.scan.claude_md.is_none(), "per-project 扫描不带全局指令");
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
 

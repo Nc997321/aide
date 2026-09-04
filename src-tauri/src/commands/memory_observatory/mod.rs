@@ -4,9 +4,9 @@
 //! （MEMORY.md 索引 + topic 笔记）+ 用户级 `~/.aide/claude/CLAUDE.md`。
 //! spec：docs/superpowers/specs/2026-09-04-memory-observatory-design.md
 //!
-//! 四条命令全部 async + spawn_blocking（遍历 + 读几十个小文件，遵守主线程禁令）。
-//! 事件台账 hook（sidecar 侧 PostToolUse → events.jsonl）是 P1，本模块的
-//! scan 暂不读 events。
+//! 命令全部 async + spawn_blocking（遍历 + 读几十个小文件，遵守主线程禁令）。
+//! P1：事件台账（sidecar PostToolUse → events.jsonl，events.rs 读取聚合）。
+//! P2：跨项目只读聚合（scan_all 遍历 projects/*/memory/；events 传 None 不过滤）。
 
 mod delete;
 mod events;
@@ -79,9 +79,17 @@ pub async fn memory_observatory_delete_file(
 
 #[tauri::command]
 pub async fn memory_observatory_events(
-    workspace_key: String,
+    workspace_key: Option<String>,
 ) -> Result<events::EventsResult, String> {
-    tokio::task::spawn_blocking(move || events::read_events(&workspace_key))
+    tokio::task::spawn_blocking(move || events::read_events(workspace_key.as_deref()))
         .await
         .map_err(|e| format!("memory_observatory_events task panicked: {e}"))?
+}
+
+/// P2 跨项目聚合：全量扫描 projects/*/memory/（只读）。
+#[tauri::command]
+pub async fn memory_observatory_scan_all() -> Result<scan::ScanAllResult, String> {
+    tokio::task::spawn_blocking(scan::scan_all)
+        .await
+        .map_err(|e| format!("memory_observatory_scan_all task panicked: {e}"))?
 }

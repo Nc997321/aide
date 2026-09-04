@@ -189,6 +189,22 @@ export function reachLevels(scan: MemoryScanResult): ReachLevels {
   return { l0: windowEntries + (scan.claudeMd ? 1 : 0), l1, l2, l3 };
 }
 
+/** P2 跨项目可达性汇总：L0 = 各项目窗口内索引条目之和 + 全局 CLAUDE.md 一条（只算一次）。 */
+export function sumReachLevels(scans: MemoryScanResult[], hasClaudeMd: boolean): ReachLevels {
+  let l0 = 0;
+  const l1: MemoryTopic[] = [];
+  const l2: MemoryTopic[] = [];
+  const l3: MemoryTopic[] = [];
+  for (const s of scans) {
+    const r = reachLevels(s);
+    l0 += r.l0 - (s.claudeMd ? 1 : 0); // per-project scan 正常不含 claudeMd，防御性剔除
+    l1.push(...r.l1);
+    l2.push(...r.l2);
+    l3.push(...r.l3);
+  }
+  return { l0: l0 + (hasClaudeMd ? 1 : 0), l1, l2, l3 };
+}
+
 export function dayKey(ms: number): string {
   const d = new Date(ms);
   const p = (n: number) => String(n).padStart(2, "0");
