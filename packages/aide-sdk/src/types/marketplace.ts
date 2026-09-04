@@ -13,6 +13,10 @@ export interface PluginEntry {
   repository: string;
   availability: "available" | "mixed" | "unavailable" | "unknown";
   unsupported: string[];
+  /** Aide 内置清单提供的图标（data:image/png;base64 URL）；无图标 → undefined，前端回退首字母占位。 */
+  icon?: string;
+  /** Aide 精选推荐标记（内置清单驱动）。 */
+  isFeatured: boolean;
 }
 
 export interface InstalledPlugin {

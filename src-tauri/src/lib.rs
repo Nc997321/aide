@@ -239,6 +239,22 @@ pub fn run() {
                 svc.inner().clone().start(app.handle().clone());
             }
 
+            // 内置插件：后台确保已安装/版本更新（git 网络 IO，必须 spawn_blocking +
+            // 失败只记日志，不阻塞启动——CLAUDE.md 主线程红线）。用户已卸载（墓碑）
+            // 或手动禁用的内置插件不会被复活/重置，见 marketplace/bundled.rs。
+            {
+                let service = app
+                    .state::<std::sync::Arc<settings::SettingsService>>()
+                    .inner()
+                    .clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = tokio::task::spawn_blocking(move || {
+                        commands::marketplace::bundled::ensure_bundled_plugins_installed(&service);
+                    })
+                    .await;
+                });
+            }
+
             // 冷启动带参：首次即被 `aide.exe <path>` 唤起时，single-instance 回调
             // 不会触发（首个实例），这里把路径暂存到 PendingOpenFile，前端 mount
             // 时通过 consume_pending_open_file 取走兜底；同时 emit 一份，若前端

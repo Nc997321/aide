@@ -50,7 +50,7 @@ fn legacy_aide_data_dir() -> PathBuf {
 /// 这是 Aide **自有数据目录**的升级（区别于 `~/.claude/` 的 Claude CLI 数据迁移——
 /// 那个走用户弹窗，因为涉及外部 CLI 的数据）。本函数无需用户确认：同文件系统 rename
 /// 瞬时完成，把 config.json（legacy）/ state.json / sessions / recent / notifications /
-/// diagnostics / log / claude-agent-sdk/ / claude/ 等整棵树搬到新根。
+/// diagnostics / log / claude/ 等整棵树搬到新根。
 ///
 /// **必须在任何读 state.json 之前调用**（lib.rs setup 第一步），否则 `our_config_dir()`
 /// 已指向 `~/.aide/` 而 state 还在老目录，provider 设置会读空。

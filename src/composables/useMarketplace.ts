@@ -16,6 +16,14 @@ const errorActions = ref<ErrorAction[]>([]);
 const searchQuery = ref("");
 const hiddenCount = ref(0);
 
+/** 主区面板开关：插件市场从设置页迁出后为一级主区视图（与自动化面板同范式——
+ *  true 时 App.vue 用 MarketplaceTab 盖住 PaneLayout，PaneLayout v-show 保活；
+ *  选中会话时 App 调 closePanel 切回聊天）。 */
+const panelOpen = ref(false);
+function openPanel() { panelOpen.value = true; }
+function closePanel() { panelOpen.value = false; }
+function togglePanel() { panelOpen.value = !panelOpen.value; }
+
 const keyOf = (market: string, name: string) => `${name}@${market}`;
 
 // 已安装但不在任何已启用市场源目录里的插件（local 市场直装、源被禁用后仍安装的）。
@@ -39,6 +47,7 @@ const installedOnlyEntries = computed<PluginEntry[]>(() => {
       repository: "",
       availability: "available",
       unsupported: [],
+      isFeatured: false,
     });
   }
   return out;
@@ -46,6 +55,11 @@ const installedOnlyEntries = computed<PluginEntry[]>(() => {
 
 // 展示全集 = 目录条目 + 已装但不在目录的条目；「全部」「已安装」共用，计数一致。
 const allEntries = computed<PluginEntry[]>(() => [...plugins.value, ...installedOnlyEntries.value]);
+
+// 精选推荐（内置清单驱动，后端 merge 时已打标）。仅「全部」视图展示，搜索时隐藏。
+const featuredPlugins = computed<PluginEntry[]>(() =>
+  allEntries.value.filter((p) => p.isFeatured && p.availability !== "unavailable"),
+);
 
 const filteredPlugins = computed(() => {
   const q = searchQuery.value.toLowerCase().trim();
@@ -136,7 +150,8 @@ function del(set: Ref<Set<string>>, name: string) {
 export function useMarketplace() {
   return {
     sources, plugins, installedPlugins, loading, installing, updating,
-    error, errorActions, searchQuery, hiddenCount, filteredPlugins, allEntries,
+    error, errorActions, searchQuery, hiddenCount, filteredPlugins, allEntries, featuredPlugins,
+    panelOpen, openPanel, closePanel, togglePanel,
     isInstalled, isInstalling, getInstalled, hasUpdate,
     fetchSources, fetchPlugins, refreshInstalled,
     installPlugin, uninstallPlugin, updatePlugin, setEnabled, refreshSource, setSourceEnabled,

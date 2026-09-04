@@ -22,7 +22,7 @@ const catalogEntry: PluginEntry[] = [
     name: "code-review", displayName: "Code Review", description: "官方代码审查",
     version: "1.0.0", versionId: "v1.0.0", sourceId: "claude-plugins-official",
     marketName: "claude-plugins-official", category: "cat-code", homepage: "", repository: "",
-    availability: "available", unsupported: [],
+    availability: "available", unsupported: [], isFeatured: false,
   },
 ];
 
@@ -134,5 +134,41 @@ describe("useMarketplace 已装但不在目录的插件合成", () => {
     expect(m.filteredPlugins.value.map((p) => p.name)).toEqual(["rust-backend", "ts-quality"]);
     m.searchQuery.value = "";
     expect(m.filteredPlugins.value).toHaveLength(3);
+  });
+});
+
+describe("useMarketplace 主区面板开关", () => {
+  it("open/close/toggle 切换 panelOpen（迁出设置页后的一级视图语义）", async () => {
+    const m = useMarketplace();
+    m.closePanel();
+    expect(m.panelOpen.value).toBe(false);
+    m.openPanel();
+    expect(m.panelOpen.value).toBe(true);
+    m.togglePanel();
+    expect(m.panelOpen.value).toBe(false);
+    m.togglePanel();
+    expect(m.panelOpen.value).toBe(true);
+    m.closePanel();
+    expect(m.panelOpen.value).toBe(false);
+  });
+});
+
+describe("useMarketplace 精选推荐", () => {
+  it("featuredPlugins 只收 isFeatured 且可用的条目，合成条目恒不入选", async () => {
+    const m = await seed({
+      sources: [{ id: "claude-plugins-official", name: "官方", repo: "o/r", enabled: true }],
+      catalog: [
+        { ...catalogEntry[0], isFeatured: true },
+        {
+          name: "broken", displayName: "Broken", description: "不可用",
+          version: "", versionId: "", sourceId: "claude-plugins-official",
+          marketName: "claude-plugins-official", category: "", homepage: "", repository: "",
+          availability: "unavailable", unsupported: [], isFeatured: true,
+        },
+      ],
+      installed: installedLocal,
+    });
+
+    expect(m.featuredPlugins.value.map((p) => p.name)).toEqual(["code-review"]);
   });
 });
