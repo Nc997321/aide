@@ -196,8 +196,18 @@ export const api = {
   getProjectInfo(): Promise<ProjectInfo> {
     return getTransport().invoke("get_project_info");
   },
-  listDirectory(path: string, showHidden?: boolean): Promise<FileEntry[]> {
-    return getTransport().invoke("list_directory", { path, showHidden: showHidden ?? false });
+  /**
+   * 列目录。
+   * @param showHidden 是否显示点开头的隐藏项（.git / .vscode / .env …）
+   * @param includeIgnored 是否显示构建噪音目录（node_modules / target / dist）。
+   *   与 showHidden 分开：隐藏项按需可见，噪音目录几乎从不该出现在目录选择器里。
+   */
+  listDirectory(path: string, showHidden?: boolean, includeIgnored?: boolean): Promise<FileEntry[]> {
+    return getTransport().invoke("list_directory", {
+      path,
+      showHidden: showHidden ?? false,
+      includeIgnored: includeIgnored ?? false,
+    });
   },
   listFsRoots(): Promise<FileEntry[]> {
     return getTransport().invoke("list_fs_roots");

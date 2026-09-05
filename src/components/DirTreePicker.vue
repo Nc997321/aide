@@ -26,6 +26,16 @@ const tree = ref<TreeNode[]>([]);
 const selectedPath = ref<string>("");
 const selectedPaths = ref<Set<string>>(new Set());
 
+/**
+ * 显示点开头的隐藏项（.git / .vscode / .config / .env …），默认开。
+ *
+ * 选择目录时它们必须可见：`.vscode`、`.claude`、`.config` 这类目录本身就是合法的
+ * 打开目标，之前被 `show_hidden=false` 挡掉，用户根本点不到。
+ * node_modules / target / dist 不走这个开关——它们是构建噪音而非隐藏文件，条目量
+ * 又极大（node_modules 常伴数千子目录），放进选择器只会淹没结果并拖慢列目录。
+ */
+const showHidden = ref(true);
+
 const MAX_CHILDREN = 500;
 
 // model → selectedPath / selectedPaths 同步
@@ -82,7 +92,7 @@ async function loadChildren(node: TreeNode) {
   if (node.loaded || node.loading) return;
   node.loading = true;
   try {
-    const entries = await api.listDirectory(node.path, false);
+    const entries = await api.listDirectory(node.path, showHidden.value, false);
     let filtered = entries;
     if (props.mode === "directory") {
       filtered = entries.filter(e => e.is_dir);
@@ -104,6 +114,29 @@ async function loadChildren(node: TreeNode) {
     node.loaded = true;
   }
   node.loading = false;
+}
+
+/**
+ * 开关切换后整树失效重载：清掉 loaded 标记，只重新拉取展开中的节点；
+ * 折叠节点保持惰性（下次展开时自然按新开关取列表），不做整个目录的重扫。
+ */
+async function refreshLoaded(nodes: TreeNode[]) {
+  for (const node of nodes) {
+    if (!node.loaded) continue;
+    node.loaded = false;
+    node.hasError = false;
+    if (node.expanded) {
+      await loadChildren(node);
+      await refreshLoaded(node.children);
+    } else {
+      node.children = [];
+    }
+  }
+}
+
+async function toggleHidden() {
+  showHidden.value = !showHidden.value;
+  await refreshLoaded(tree.value);
 }
 
 async function toggleNode(node: TreeNode) {
@@ -193,6 +226,21 @@ function onAddrInput(e: Event) {
         spellcheck="false"
         @input="onAddrInput"
       />
+      <button
+        class="hidden-toggle"
+        :class="{ active: showHidden }"
+        v-tooltip="showHidden ? '隐藏以 . 开头的项' : '显示以 . 开头的项'"
+        @click="toggleHidden"
+      >
+        <svg v-if="showHidden" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+          <circle cx="12" cy="12" r="3"/>
+        </svg>
+        <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+          <line x1="1" y1="1" x2="23" y2="23"/>
+        </svg>
+      </button>
     </div>
 
     <!-- 快速入口（root 锁定时隐藏） -->
@@ -242,6 +290,14 @@ function onAddrInput(e: Event) {
 }
 .up-btn:hover:not(:disabled) { background: var(--aide-surface-hover); }
 .up-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.hidden-toggle {
+  width: 28px; display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--aide-surface-hover);
+  background: var(--aide-surface-default); border-radius: var(--aide-radius-md);
+  color: var(--aide-text-secondary); cursor: pointer;
+}
+.hidden-toggle:hover { background: var(--aide-surface-hover); }
+.hidden-toggle.active { color: var(--aide-accent); border-color: var(--aide-accent); }
 .quick-roots { display: flex; flex-wrap: wrap; gap: 6px; }
 .root-chip {
   font-size: 11px; padding: 3px 10px; border-radius: 10px;

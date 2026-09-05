@@ -104,7 +104,8 @@ function findNode(nodes: FileEntry[], path: string): FileEntry | null {
 
 async function loadChildren(dirPath: string) {
   try {
-    const entries = await api.listDirectory(dirPath, showHidden.value);
+    // 文件树的「显示隐藏文件」沿用旧语义：隐藏项与 node_modules/target/dist 同开关。
+    const entries = await api.listDirectory(dirPath, showHidden.value, showHidden.value);
     if (dirPath === projectInfo.value.root) {
       // Refresh root: 按路径合并不整体替换——整体替换会让已展开子目录跌进
       // children=null 的过渡态，子列表卸载等补加载回来，整树闪烁波
@@ -163,7 +164,7 @@ async function loadRoot() {
     // 项目加载锚点：触发 CodeGraph 索引构建（若未建/切项目）。
     // ensureIndex 内部 lastIndexedRoot 守卫 + close 上一个，同一 root 不重复。
     cg.ensureIndex(root);
-    const entries = await api.listDirectory(root, showHidden.value);
+    const entries = await api.listDirectory(root, showHidden.value, showHidden.value);
     treeData.value = entries;
     expandedDirs.value = new Set([root]);
     await autoExpandSingleChild(root);

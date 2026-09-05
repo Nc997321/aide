@@ -167,7 +167,7 @@ n.summary(&title).body(&body).show();
 | 命令 | 说明 |
 |------|------|
 | `get_project_info` | `{root, name, branch}`，检测 `.git`/`package.json`/`Cargo.toml` |
-| `list_directory` | 过滤 `.`开头、`node_modules`、`target`、`dist` |
+| `list_directory` | 两个独立开关：`show_hidden`（`.`开头）与 `include_ignored`（`node_modules`/`target`/`dist`），默认全关 |
 | `file_open` | 系统默认程序打开（Windows: `cmd /c start`） |
 | `read_file_content` / `write_file_content` | 读写文件内容 |
 | `delete_file` / `create_file` / `create_dir` | 文件系统操作 |

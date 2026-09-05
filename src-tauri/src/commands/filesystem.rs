@@ -113,19 +113,36 @@ pub async fn detect_run_command(cwd: String) -> Result<Option<String>, String> {
     .map_err(|e| format!("detect_run_command task panicked: {}", e))?
 }
 
+/// 列目录。
+///
+/// 两个过滤维度刻意分开（`show_hidden` / `include_ignored`），因为它们服务的场景不同：
+/// - `show_hidden`：点开头的文件/目录（`.git` / `.vscode` / `.env` …）。选择目录时需要
+///   看见它们（否则 `.vscode`、`.config` 这类目录在「打开目录」里根本点不到）。
+/// - `include_ignored`：构建噪音目录（`node_modules` / `target` / `dist`）。它们不是隐藏
+///   文件，条目量却极大（node_modules 常伴数千子目录），在目录选择器里只会淹没结果并
+///   拖慢列目录，所以默认仍过滤。
+///
+/// 历史实现把两者绑在同一个 `show_hidden` 上，导致「想看见隐藏目录」必须连带吞下
+/// node_modules；文件树那边沿用旧语义（两个开关同值）以保持行为不变。
 #[tauri::command]
 pub async fn list_directory(
     path: String,
     show_hidden: Option<bool>,
+    include_ignored: Option<bool>,
 ) -> Result<Vec<FileEntry>, String> {
     // IPC 边界保留 Option（前端可省略）；None 与 false 等价，进实现前归一成 bool。
     let show_hidden = show_hidden.unwrap_or(false);
-    tokio::task::spawn_blocking(move || list_directory_blocking(path, show_hidden))
+    let include_ignored = include_ignored.unwrap_or(false);
+    tokio::task::spawn_blocking(move || list_directory_blocking(path, show_hidden, include_ignored))
         .await
         .map_err(|e| format!("list_directory task panicked: {}", e))?
 }
 
-fn list_directory_blocking(path: String, show_hidden: bool) -> Result<Vec<FileEntry>, String> {
+fn list_directory_blocking(
+    path: String,
+    show_hidden: bool,
+    include_ignored: bool,
+) -> Result<Vec<FileEntry>, String> {
     let dir = PathBuf::from(&path);
     if !dir.is_dir() {
         return Err(format!("Not a directory: {}", path));
@@ -140,11 +157,11 @@ fn list_directory_blocking(path: String, show_hidden: bool) -> Result<Vec<FileEn
         };
         let name = entry.file_name().to_string_lossy().to_string();
 
-        if !show_hidden {
-            if name.starts_with('.') || name == "node_modules" || name == "target" || name == "dist"
-            {
-                continue;
-            }
+        if !show_hidden && name.starts_with('.') {
+            continue;
+        }
+        if !include_ignored && (name == "node_modules" || name == "target" || name == "dist") {
+            continue;
         }
 
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
