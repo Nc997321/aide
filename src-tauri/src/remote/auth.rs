@@ -1,6 +1,6 @@
 use rand::Rng;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::settings::{SettingsError, SettingsScope, SettingsService};
 
@@ -55,6 +55,10 @@ impl PairingState {
     }
 }
 
+/// long-lived token 与签发时刻在 secrets 中的 key。两者生命周期完全绑定：
+/// 同签（issue）同销（revoke），不可只留其一。
+const TOKEN_ISSUED_AT_KEY: &str = "remote/tokenIssuedAt";
+
 /// 长期 token 存储：签发/校验/吊销 + 设备身份。secrets 访问内聚在本层。
 /// 每个方法都是 secrets()/settings 的薄封装（1-3 行 IO），不写专门测试
 /// （集成测试无法构造 SettingsService，见 tests/remote_auth.rs 注释）。
@@ -68,13 +72,31 @@ impl TokenStore {
     }
 
     /// 签发长期 token 并持久化（覆盖旧 token = 吊销旧设备）。
+    /// 同时记录签发时刻：设置面板「已配对设备」据此显示配对时间。
     pub fn issue(&self) -> Result<String, String> {
         let token = generate_token();
         self.service
             .secrets()
             .set("remote/token", &token)
             .map_err(|e| e.to_string())?;
+        // 时间戳与 token 同生共死：不写会残留上一台的签发时间，写失败则宁可
+        // 整体失败（revoke 走同一对 key，不会出现"有签发时间却没 token"的脏状态）
+        self.service
+            .secrets()
+            .set(TOKEN_ISSUED_AT_KEY, &now_millis().to_string())
+            .map_err(|e| e.to_string())?;
         Ok(token)
+    }
+
+    /// token 签发时刻（Unix 毫秒）。无 token / 记录缺失返回 None——老版本
+    /// 签发的 token 没有时间戳，此处降级为「已配对，时间未知」，不报错。
+    pub fn issued_at(&self) -> Option<i64> {
+        self.service
+            .secrets()
+            .get(TOKEN_ISSUED_AT_KEY)
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse::<i64>().ok())
     }
 
     /// 校验 token（与 secrets 中存储的比对）。
@@ -88,12 +110,14 @@ impl TokenStore {
             == Some(token)
     }
 
-    /// 吊销所有远程设备（清 token）。
+    /// 吊销所有远程设备（清 token + 签发时刻）。
     pub fn revoke(&self) -> Result<(), String> {
-        self.service
-            .secrets()
-            .delete("remote/token")
-            .map_err(|e| e.to_string())
+        let secrets = self.service.secrets();
+        // 两个 key 一起清：残留时间戳会让 UI 显示"配对于 X"却没有设备
+        secrets
+            .delete(TOKEN_ISSUED_AT_KEY)
+            .map_err(|e| e.to_string())?;
+        secrets.delete("remote/token").map_err(|e| e.to_string())
     }
 
     /// 读取/生成 device_id（持久化到 settings.remote.deviceId）。
@@ -144,6 +168,15 @@ impl TokenStore {
         .map_err(|e| e.to_string())??;
         Ok(id)
     }
+}
+
+/// 当前 Unix 毫秒时间戳（签发时刻记录用）。系统时钟异常时退化为 0，
+/// 由调用方按「时间未知」展示，不让时钟问题阻断配对。
+fn now_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// 长期 token（32 字节 hex，64 字符）。

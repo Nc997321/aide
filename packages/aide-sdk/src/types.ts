@@ -171,6 +171,8 @@ export interface RemoteStatus {
   pairingCode: string | null;
   connected: boolean;
   tokenConfigured: boolean;
+  /** token 签发时刻（Unix 毫秒）。旧版签发的 token 无记录 → null。 */
+  tokenIssuedAt: number | null;
 }
 
 /** 代码编辑器设置。缩进字符固定为 Tab，缩进格数控制 Tab 显示列宽。 */

@@ -222,6 +222,30 @@ const remoteRelayUrl = ref(settings.remote.relayUrl);
 const remotePermissionMode = ref(settings.remote.permissionMode);
 const remoteStatus = ref<RemoteStatus | null>(null);
 
+/** 配对时间相对描述。粒度随间隔变粗：分钟 → 小时 → 天 → 具体日期。 */
+function describeIssuedAt(ms: number): string {
+  const diff = Date.now() - ms;
+  // 时钟回拨/未来时间戳不猜，直接给绝对时间
+  if (diff < 0) return new Date(ms).toLocaleString();
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return "刚刚";
+  if (mins < 60) return `${mins} 分钟前`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} 天前`;
+  return new Date(ms).toLocaleDateString();
+}
+
+/** 「已配对设备」摘要：当前是单设备模型（新配对踢旧设备），所以最多一台。
+ *  旧版签发的 token 没有时间戳记录，降级显示「时间未知」而非编一个。 */
+const pairedDeviceSummary = computed(() => {
+  const st = remoteStatus.value;
+  if (!st?.tokenConfigured) return "无";
+  if (st.tokenIssuedAt == null) return "1 台（配对时间未知）";
+  return `1 台 · 配对於 ${describeIssuedAt(st.tokenIssuedAt)}`;
+});
+
 async function refreshRemoteStatus() {
   remoteStatus.value = await api.remoteGetStatus();
 }
@@ -858,9 +882,12 @@ function onOverlayClick(e: MouseEvent) {
               <div class="settings-field">
                 <label class="field-label">已配对设备</label>
                 <div class="field-control">
-                  <span class="field-hint">{{ remoteStatus?.tokenConfigured ? "有（token 已签发）" : "无" }}</span>
-                  <button class="cg-secret-btn" @click="revokeRemote">吊销所有设备</button>
+                  <span class="field-hint">{{ pairedDeviceSummary }}</span>
+                  <button class="cg-secret-btn" @click="revokeRemote">吊销设备</button>
                 </div>
+                <span class="field-hint">
+                  同时只允许一台：新设备配对会自动顶掉当前这台，旧设备将提示重新配对
+                </span>
               </div>
             </div>
 

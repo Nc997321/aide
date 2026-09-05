@@ -15,6 +15,8 @@ pub struct RemoteStatus {
     pub pairing_code: Option<String>,
     pub connected: bool,
     pub token_configured: bool,
+    /// token 签发时刻（Unix 毫秒）。旧版签发的 token 无此记录 → None。
+    pub token_issued_at: Option<i64>,
 }
 
 /// 设置面板状态快照。secrets 读取是同步 IO，与 public_settings 一起包进
@@ -24,17 +26,25 @@ pub async fn remote_get_status(app: AppHandle) -> Result<RemoteStatus, String> {
     let gateway = app.state::<Arc<RemoteGateway>>().inner().clone();
     let service = app.state::<Arc<SettingsService>>();
     let service2 = service.inner().clone();
-    let (settings, token_configured) = tokio::task::spawn_blocking(move || {
-        let settings = public_settings(&service2)?;
-        let token_configured = service2
-            .secrets()
-            .get("remote/token")
-            .map_err(|e| e.to_string())?
-            .is_some();
-        Ok::<_, String>((settings, token_configured))
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let gateway2 = gateway.clone();
+    let (settings, token_configured, token_issued_at) =
+        tokio::task::spawn_blocking(move || {
+            let settings = public_settings(&service2)?;
+            let token_configured = service2
+                .secrets()
+                .get("remote/token")
+                .map_err(|e| e.to_string())?
+                .is_some();
+            // 无 token 时不必读时间戳；有 token 但无记录（旧版签发）→ None
+            let token_issued_at = if token_configured {
+                gateway2.tokens.issued_at()
+            } else {
+                None
+            };
+            Ok::<_, String>((settings, token_configured, token_issued_at))
+        })
+        .await
+        .map_err(|e| e.to_string())??;
     let pairing_code = gateway.pairing.lock().unwrap().current();
     Ok(RemoteStatus {
         enabled: settings.remote.enabled,
@@ -43,6 +53,7 @@ pub async fn remote_get_status(app: AppHandle) -> Result<RemoteStatus, String> {
         pairing_code,
         connected: gateway.is_connected(),
         token_configured,
+        token_issued_at,
     })
 }
 
