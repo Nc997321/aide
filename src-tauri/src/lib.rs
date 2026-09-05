@@ -89,6 +89,9 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
         if let Some(p) = argv.get(1) {
             if let Some(w) = app.get_webview_window("main") {
+                // 窗口可能已被「点 X」隐藏到托盘：必须先 show 再 focus——
+                // set_focus 对隐藏窗口无效，否则从资源管理器唤起毫无反应。
+                let _ = w.show();
                 let _ = w.set_focus();
             }
             let _ = app.emit("open-file-preview", p.clone());
@@ -103,9 +106,13 @@ pub fn run() {
                     tauri_plugin_window_state::StateFlags::SIZE
                         | tauri_plugin_window_state::StateFlags::POSITION
                         | tauri_plugin_window_state::StateFlags::MAXIMIZED
-                        | tauri_plugin_window_state::StateFlags::VISIBLE
                         | tauri_plugin_window_state::StateFlags::FULLSCREEN,
                     // Exclude DECORATIONS — let tauri.conf.json be authoritative
+                    //
+                    // Exclude VISIBLE — 托盘化后「点 X = 隐藏窗口」，一旦把
+                    // visible=false 持久化，下次启动 restore 会把窗口恢复成
+                    // 不可见：只剩托盘图标、窗口怎么点都叫不出来。可见性一律
+                    // 由 setup 里显式 show() 决定，不进持久化。
                 )
                 .build(),
         )
@@ -116,9 +123,28 @@ pub fn run() {
             std::sync::Arc::new(settings::KeyringSecretStore::new()),
         )))
         .manage(runtime::AgentRuntimeManager::new())
+        // 后台任务快照注册表：事件泵喂入（runtime/mod.rs），list_bg_tasks RPC 读
+        .manage(std::sync::Arc::new(runtime::bg_registry::BgTaskRegistry::default()))
         .manage(std::sync::Arc::new(skills::SkillRegistry::new()))
         .manage(workspace_state)
         .manage(PendingOpenFile(std::sync::Mutex::new(None)))
+        // 点标题栏 X = 隐藏到托盘，进程常驻：automation 定时调度、agent runtime
+        // （node 常驻）、remote 网关都需要 aide.exe 活着。真正退出的唯一出口是
+        // 托盘菜单「退出 Aide」→ commands::app::quit_app，那里先杀常驻子进程
+        // 再 exit(0)（Windows 无父子进程级联 kill，不显式收就留孤儿）。
+        //
+        // 隐藏是瞬时的：试过让前端播 CSS 收缩动画再 hide，但窗口是
+        // decorations(false) + DWM 阴影，窗口矩形本身肉眼可见——CSS 只缩放了
+        // WebView 内容，空框仍钉在原地，观感比没动画更怪。要真收缩得 Rust
+        // 侧逐帧 set_size/set_position（内容还被裁不是缩放），代价远大于收益。
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+            }
+        })
         // 工作区文件监听（filewatch.rs）：外部改动自动刷新文件树；
         // Arc 包装——file_tree_watch 命令把 Arc clone 进 spawn_blocking
         // （State 引用不能跨 spawn_blocking，CLAUDE.md 红线）
@@ -166,6 +192,9 @@ pub fn run() {
             .min_inner_size(900.0, 600.0)
             .center()
             .decorations(false)
+            // 托盘化后 window-state 不再持久化/恢复 VISIBLE（会把「隐藏到托盘」
+            // 存成 visible=false，下次启动窗口叫不出来），可见性这里定死。
+            .visible(true)
             .disable_drag_drop_handler()
             .build()?;
 
@@ -268,6 +297,13 @@ pub fn run() {
                 }
             }
 
+            // 托盘：点 X 隐藏窗口后的唯一出口（左键切换显示 / 右键菜单退出）。
+            // 失败只记日志不阻断启动——Linux 缺 libappindicator 时 tray 不可用，
+            // 托盘是增强项，不该让整个 app 起不来。
+            if let Err(e) = setup_tray(app.handle()) {
+                tracing::error!("tray setup failed: {e}（点 X 将退化为直接退出）");
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -367,6 +403,9 @@ pub fn run() {
             commands::git::git_unstage_file,
             commands::git::git_revert_file,
             commands::app::get_app_version,
+            // 托盘菜单「退出 Aide」的出口。刻意不进 remote RPC 白名单——远端
+            // PWA 不该有把桌面端进程干掉的能力。
+            commands::app::quit_app,
             commands::git::git_remote_url,
             commands::git::git_log,
             commands::git::git_show,
@@ -547,6 +586,80 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// 托盘：点标题栏 X 隐藏窗口后的唯一出口。
+///
+/// - 左键单击：显示 ⇄ 隐藏 切换（最高频的恢复动作）
+/// - 右键菜单：显示 Aide / 退出 Aide
+///
+/// `show_menu_on_left_click(false)` 是关键：默认左键也会弹菜单，那样左键切换
+/// 这个动作就被吃掉了，只能靠右键菜单恢复。
+fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+    let show = MenuItemBuilder::with_id("show", "显示 Aide").build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", "退出 Aide").build(app)?;
+    let menu = MenuBuilder::new(app).items(&[&show, &quit]).build()?;
+
+    let mut builder = TrayIconBuilder::with_id("main")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip("Aide")
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show" => show_main_window(app),
+            "quit" => {
+                // 退出前必须收常驻子进程（Windows 无级联 kill）。清理是 async，
+                // 交给 tauri 的 async_runtime，收完再 exit(0)。
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::commands::app::shutdown_children(&app).await;
+                    app.exit(0);
+                });
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                toggle_main_window(tray.app_handle());
+            }
+        });
+
+    // 图标复用主窗口图标（bundle.icon 里的 png，generate_context! 已内嵌成 Image）
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+
+    builder.build(app)?;
+    Ok(())
+}
+
+/// 显示并聚焦主窗口（托盘「显示 Aide」与二次启动唤起共用）。
+fn show_main_window(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+/// 左键切换：已显示且聚焦 → 隐藏；否则显示并聚焦。
+fn toggle_main_window(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(w) = app.get_webview_window("main") {
+        if w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false) {
+            let _ = w.hide();
+        } else {
+            show_main_window(app);
+        }
+    }
 }
 
 /// Apply Catppuccin Mocha dark theme to the Windows title bar via DWM.

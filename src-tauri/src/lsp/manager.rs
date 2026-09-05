@@ -170,6 +170,21 @@ impl LspManager {
         }
     }
 
+    /// 退出清理：杀掉所有工作区的所有 server（`kill_workspace` 的全量版）。
+    ///
+    /// 托盘「退出 Aide」走这条——aide.exe 退出不会带走子进程（Windows 没有父子
+    /// 进程级联 kill），不显式收就留 java/node 孤儿。`shutdown_handle` 内部已含
+    /// shutdown 请求 + kill 兜底，这里只负责把 map 清空。
+    pub async fn kill_all(&self) {
+        let removed: Vec<Arc<ServerHandle>> = {
+            let mut map = self.handles.lock().await;
+            map.drain().map(|(_, h)| h).collect()
+        };
+        for h in removed {
+            shutdown_handle(&h).await;
+        }
+    }
+
     /// 预留：按语言单独回收 server（`kill_workspace` 的细粒度版）。v1 仅用
     /// `kill_workspace`（关区即杀），per-lang 回收待「禁用某语言 LSP」类开关接入。
     #[allow(dead_code)]

@@ -58,6 +58,11 @@ impl LspState {
     pub fn new() -> Self {
         Self(Arc::new(TokioMutex::new(LspManager::new())))
     }
+
+    /// 退出清理：全量杀掉所有 LSP server（托盘「退出 Aide」的唯一调用点）。
+    pub async fn kill_all(&self) {
+        self.0.lock().await.kill_all().await;
+    }
 }
 
 fn lang_from_id_str(s: &str) -> Option<crate::lsp::detector::LanguageId> {

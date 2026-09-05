@@ -22,7 +22,12 @@ default-members = ["."]
 # → open_devtools 在 release 因 command 未注册而 invoke reject、catch 静默。需要
 # 生产实例活体解剖滚轮定格这类状态病时，`tauri build --features devtools` 打诊断包
 # （dev build 由 debug_assertions 自动启用 devtools，无需此 feature）。
-tauri = { version = "2", features = [] }
+# 开 `tray-icon` + `image-png`：点标题栏 X 改为隐藏到托盘（automation 定时任务 /
+# agent runtime 需要进程常驻），托盘菜单「退出 Aide」是唯一真退出出口。两者都不在
+# tauri default feature 里（default = wry/compression/common-controls-v6/dynamic-acl/
+# x11/dbus），不开则 `tauri::tray::TrayIconBuilder` 与 `app.default_window_icon()`
+# 都不可用——`image-png` 供 generate_context! 解析 bundle.icon 里的 32x32.png。
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 
 tauri-plugin-shell = "2"
 
