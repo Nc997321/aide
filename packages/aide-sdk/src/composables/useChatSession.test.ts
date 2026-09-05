@@ -442,6 +442,59 @@ describe("useChatSession per-session store", () => {
     expect(chat.pendingPermission.value).toBeNull();
   });
 
+  it("远程客户端应答：permission_cancelled 撤下弹窗并把 attention 拉回 running", async () => {
+    const { state } = useSessionState();
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    emit({ type: "permission_request", id: "p1", name: "Bash", input: {}, session_id: "uuid-a" });
+    await flush();
+    expect(state["uuid-a"]).toBe("attention");
+
+    // 决策由手机做出：本机不执行 respondPermission，只有 sidecar 回灌的这条事件——
+    // 没有它，桌面弹窗永久挂着、会话状态也卡在 attention（远程控制权限残留事故）。
+    emit({ type: "permission_cancelled", id: "p1", session_id: "uuid-a" });
+    await flush();
+    expect(chat.pendingPermission.value).toBeNull();
+    expect(state["uuid-a"]).toBe("running");
+  });
+
+  it("本地应答后回灌的 permission_cancelled 不再改写状态机（幂等）", async () => {
+    const { state } = useSessionState();
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    emit({ type: "permission_request", id: "p1", name: "Bash", input: {}, session_id: "uuid-a" });
+    await flush();
+
+    await chat.respondPermission("p1", true); // 本地已乐观出队并置 running
+    await flush();
+    expect(state["uuid-a"]).toBe("running");
+
+    // sidecar 对本机决策同样广播：弹窗早已出队，不得二次动状态
+    emit({ type: "permission_cancelled", id: "p1", session_id: "uuid-a" });
+    await flush();
+    expect(state["uuid-a"]).toBe("running");
+    expect(chat.pendingPermission.value).toBeNull();
+  });
+
+  it("interrupt 收尾后迟到的 permission_cancelled 不把 waiting 推回 running", async () => {
+    const { state } = useSessionState();
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    emit({ type: "permission_request", id: "p1", name: "Bash", input: {}, session_id: "uuid-a" });
+    await flush();
+
+    await chat.interrupt(); // finally 清空队列并置 waiting
+    emit({ type: "permission_cancelled", id: "p1", session_id: "uuid-a" }); // sidecar cancelAll 迟到
+    await flush();
+    expect(state["uuid-a"]).toBe("waiting");
+  });
+
   it("models_available 更新可选模型列表和当前选中项", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);

@@ -174,6 +174,30 @@ describe("PermissionManager — resolve / cancelAll（无 always / appliedMode /
     expect(((await p) as any).updatedPermissions).toBeUndefined();
   });
 
+  it("未知 id 的 resolve 返回 undefined 且不广播（重复应答 / 迟到达）", () => {
+    const { mgr, cancelledIds } = setup();
+    expect(mgr.resolve("nope", true)).toBeUndefined();
+    expect(cancelledIds()).toEqual([]);
+  });
+
+  it("正常决策也广播 permission_cancelled（远程应答回灌：桌面弹窗只认事件）", async () => {
+    const { mgr, callback, requestIds, cancelledIds } = setup();
+    const p1 = callback("Read", { file_path: "a.java" }, {});
+    const p2 = callback("Bash", { command: "ls" }, {});
+    const [id1, id2] = requestIds();
+
+    // 远程客户端（手机 / PWA）只发 permission_response 命令，桌面前端不做任何本地
+    // 对账——没有这条广播，桌面弹窗永久残留，再点一次还 resolve 成 undefined。
+    mgr.resolve(id1, true);
+    expect(cancelledIds()).toEqual([id1]);
+    expect(((await p1) as any).behavior).toBe("allow");
+
+    // 拒绝同样广播：UI 只需知道「这条请求终结了」，不区分结果
+    mgr.resolve(id2, false, undefined, "不需要");
+    expect(cancelledIds().sort()).toEqual([id1, id2].sort());
+    expect(((await p2) as any).behavior).toBe("deny");
+  });
+
   it("拒绝只结算自身，其余请求原样挂起（无连带放行）", async () => {
     const { mgr, callback, requestIds } = setup();
     const p1 = callback("Read", { file_path: "a.java" }, {});

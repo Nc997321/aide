@@ -127,6 +127,10 @@ export type ChatEvent =
       input: unknown;
       fromSubagent?: { id: string; agentName: string };
     }
+  // 撤下一条挂起的权限请求。语义是「这条请求已终结，从队列移除」而**不是**
+  // 「被取消」——批准、拒绝、abort、interrupt、模式切换连带放行都会发它
+  // （正常决策也发：远程客户端做的决策只走命令通道，不广播这条事件，桌面端的
+  // 弹窗就撤不下来）。前端按 id 从 pendingPermissions 里过滤，重复到达是 no-op。
   | { type: "permission_cancelled"; id: string }
   // effort：本轮实际生效的思考深度（sidecar 从回合结束信号里读到的权威值，
   // 可能含 provider 侧的静默降级）。可选字段——provider 没有 effort 概念就不带。

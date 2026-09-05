@@ -24,7 +24,8 @@ interface PendingEntry {
     message?: string;
   }) => void;
   toolName: string;
-  /** Notify the frontend to dismiss this request (interrupt / cancel). */
+  /** Notify every connected client to dismiss this request. Fired on all
+   *  terminal paths (settled by anyone, aborted, interrupt, bulk-approve). */
   emitCancelled: () => void;
 }
 
@@ -139,7 +140,14 @@ export class PermissionManager {
 
   /** Settle a pending request (returns undefined when no matching pending id).
    *  The controller uses the returned `toolName` to detect ExitPlanMode /
-   *  EnterPlanMode and apply the follow-up mode change. */
+   *  EnterPlanMode and apply the follow-up mode change.
+   *
+   *  无论谁做的决策都广播 `permission_cancelled`：命令通道（本机点击 / 远程 RPC）
+   *  和事件通道是两条独立的管道，而 UI 状态只认事件通道。本机点击时前端在 invoke
+   *  之前就已乐观出队（`useChatSession.ts`），但**远程客户端**的决策只走命令通道
+   *  到达这里，桌面前端没有任何本地对账动作——不广播，桌面弹窗就永久挂着（用户
+   *  再点一次还会 resolve 成 undefined，静默无反应）。前端把该事件读成「从队列
+   *  移除」，所以对本机决策重放一次是幂等的 no-op。 */
   resolve(
     id: string,
     approved: boolean,
@@ -150,6 +158,9 @@ export class PermissionManager {
     const entry = this.pending.get(id);
     if (!entry) return undefined;
     this.pending.delete(id);
+    // 先撤 UI 再放行工具：事件同步发出，工具续跑是微任务，弹窗不会盖在已执行的
+    // 工具结果上。pending 已删，后续 abort 的 delete 返回 false，不会重复广播。
+    entry.emitCancelled();
     entry.resolve({ approved, answers, message });
     return { toolName: entry.toolName };
   }

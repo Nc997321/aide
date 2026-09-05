@@ -178,7 +178,21 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       break;
     }
     case "permission_cancelled": {
-      store.pendingPermissions = store.pendingPermissions.filter((p) => p.id !== e["id"]);
+      // 语义是「这条请求已终结」而不是「被取消」——批准/拒绝也走这里（远程客户端
+      // 应答时本机没有对账动作，全靠这条事件撤弹窗）。
+      const cancelledId = e["id"] as string;
+      const wasQueued = store.pendingPermissions.some((p) => p.id === cancelledId);
+      store.pendingPermissions = store.pendingPermissions.filter((p) => p.id !== cancelledId);
+      // 队列清空 → 回到 running：只有本事件能把远程做出的决策反映到状态机上
+      // （本地应答的回退在 respondPermission 里，那条路不会走到这里）。
+      // 两重守卫：
+      //  - wasQueued：本机应答时弹窗早已乐观出队，重放事件不该再动状态机；
+      //  - attention：interrupt/stop 的 cancelAll 同样发本事件，那些场景终态是
+      //    waiting/stopped，不能把已收口的会话推回 running。
+      if (wasQueued && store.pendingPermissions.length === 0 && sessionState[sid] === "attention") {
+        setSessionState(sid, "running");
+        armStalled(sid); // 放行后恢复生成 → 重启软超时计时
+      }
       break;
     }
     case "models_available": {
