@@ -12,9 +12,10 @@
 | 代码高亮 | highlight.js 11.x（仅打包 15 种语言，含 properties/ini；编辑器侧 yaml/properties 走 @codemirror/legacy-modes + StreamLanguage） |
 | Markdown 渲染 | marked 18.x（文件查看器 .md 预览） |
 | 样式 | Tailwind CSS 3 + 多主题（glass 默认 / warm-dark / catppuccin / smoky-pink-glass），全项目三角箭头统一 `font-size: 14px` |
-| 包管理 | pnpm（workspace：`packages/*` + `remote-pwa`；agent-sidecar 刻意不进 workspace，走 `npm --prefix`） |
+| 包管理 | pnpm（workspace：`packages/*` + `remote-pwa`；agent-sidecar 刻意不进 workspace：依赖在子目录独立 pnpm 安装，构建脚本经 `npm --prefix` 执行绕 pnpm stub） |
 | Rust 编译 | MSVC 工具链（VS Build Tools 2022） |
 | 共享 SDK | `packages/aide-sdk`（@aide/sdk）：types + api 门面 + transport + useChatSession 闭包，桌面与 remote-pwa 共用；TS 源码直出无构建链，改即生效 |
+| 鸿蒙端 | ArkTS（`ohos/`，脚手架已建）：WS 客户端连 relay-server，远程协议 v2 的第三个前端；不进 pnpm workspace（ohpm/hvigor 独立），产物由 `ohos/.gitignore` 自治；SDK 走过筛副本（Vue-free 子集）+ 同步脚本，**改协议需三端同步**（remote.rs ↔ remote.ts ↔ ohos） |
 
 ## @aide/sdk：能力单一事实源
 

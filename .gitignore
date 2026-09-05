@@ -1,5 +1,8 @@
 # Dependencies
 node_modules/
+# 根 workspace 用 pnpm；仅 ignore 根目录的 npm 残留锁（前导斜杠限定），
+# agent-sidecar 走 npm --prefix，其 package-lock.json 是合法文件、勿全局 ignore
+/package-lock.json
 
 # Build output
 dist/
