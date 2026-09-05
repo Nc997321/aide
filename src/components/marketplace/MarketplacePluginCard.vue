@@ -131,7 +131,7 @@ function openGit() {
       </div>
       <span v-if="entry.availability === 'mixed'" class="caveat">{{ caveatText }}</span>
       <div class="f-foot">
-        <span class="f-meta">{{ sourceLabel }}<span class="f-ver"> · v{{ installed?.version || entry.version || "—" }}</span></span>
+        <span class="f-meta">{{ sourceLabel }}<span v-if="installed?.version || entry.version" class="f-ver"> · {{ installed?.version || entry.version }}</span></span>
         <div class="btns">
           <button
             v-if="hasUpdate(entry)"

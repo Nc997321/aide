@@ -27,6 +27,7 @@ const {
   setSourceEnabled,
   refreshSource,
   getInstalled,
+  closePanel,
 } = useMarketplace();
 
 const activeCategory = ref("all");
@@ -191,9 +192,16 @@ const enabledCount = computed(() => {
           <h1>插件市场</h1>
           <div class="sub">扩展 Aide 的能力，让 AI 更懂你的工作</div>
         </div>
-        <div class="search">
-          <span class="ic">⌕</span>
-          <input v-model="searchQuery" placeholder="搜索插件名或描述…" />
+        <div class="head-right">
+          <div class="search">
+            <span class="ic">⌕</span>
+            <input v-model="searchQuery" placeholder="搜索插件名或描述…" />
+          </div>
+          <!-- 关闭 = 主区切回聊天（与记忆观测台头部 ✕ 同规格同语义：面板关掉，
+               PaneLayout 由 v-show 保活，会话不掉线） -->
+          <button class="mkt-close" v-tooltip="'关闭'" @click="closePanel">
+            <Icon name="close" :size="13" :stroke-width="1.4" />
+          </button>
         </div>
       </div>
     </div>
@@ -411,6 +419,32 @@ const enabledCount = computed(() => {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.head-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 关闭按钮：与 MemoryObservatory 的 .mo-close 同规格（26px / radius-sm /
+   muted → hover 提亮），两个主区视图的关闭入口视觉一致 */
+.mkt-close {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--aide-radius-sm);
+  background: transparent;
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.mkt-close:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
 }
 
 .main-head h1 {

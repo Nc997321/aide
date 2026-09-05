@@ -16,6 +16,7 @@ import AutomationMain from "./components/automation/AutomationMain.vue";
 import MarketplaceTab from "./components/marketplace/MarketplaceTab.vue";
 import { useAutomation } from "./composables/useAutomation";
 import { useMarketplace } from "./composables/useMarketplace";
+import { useMemoryObservatory } from "./composables/useMemoryObservatory";
 import { useChatSession, setAuthRequiredHandler } from "./composables/useChatSession";
 import { usePaneLayout } from "./composables/usePaneLayout";
 import { usePaneLayoutPersistence } from "./composables/paneLayout/persistence";
@@ -66,7 +67,9 @@ import RemoveWorkspaceDialog from "./components/RemoveWorkspaceDialog.vue";
 import type { WorkspaceInfo } from "./types";
 
 const leftCollapsed = ref(false);
-const rightCollapsed = ref(false);
+// 右侧栏默认收起：只留竖直 toolbar（IDEA 式），按需点 rail 图标或 Ctrl+3~7 展开。
+// 注意调用层级面板在 rootQuery 变化时会强制展开（见下方 watch）。
+const rightCollapsed = ref(true);
 const rightTab = ref<"files" | "changes" | "git" | "search" | "codegraph" | "callhierarchy" | "permissions">("files");
 const { unstagedFiles, hasChanges, loadStatus, currentBranch } = useGit();
 
@@ -173,6 +176,8 @@ const paletteRef = ref<InstanceType<typeof ACommandPalette> | null>(null);
 const paneLayout = usePaneLayout();
 const automation = useAutomation();
 const marketplace = useMarketplace();
+// 观测台面板开关（模块级状态，主区视图范式；数据闭包在 MemoryObservatory 组件内部）
+const observatory = useMemoryObservatory();
 const paneLayoutPersistence = usePaneLayoutPersistence();
 const activeSessionId = paneLayout.activeSessionId;
 // App 级 useChatSession 只用来拿全局单例的 onSessionCreated 回调（module 级
@@ -202,7 +207,6 @@ onSessionCreated((tempId, realId) => {
 });
 const settingsVisible = ref(false);
 const settingsInitialTab = ref<string | undefined>(undefined);
-const observatoryVisible = ref(false);
 const { push: pushNotification, registerActionHandler } = useNotifications();
 const { activeKey: activeWorkspaceKey } = useWorkspaces();
 const workspacePath = ref("");
@@ -352,10 +356,17 @@ function onSearchFilesChanged() {
   fileTreeRef.value?.loadRoot();
 }
 
+// 插件市场 ⇄ 记忆观测台互斥：主区 v-if 链有优先级（市场在前），不互斥的话
+// 先开的那个会一直挡住后开的，点侧栏入口毫无反应。放在 App 层做，覆盖全部入口
+// （底部入口行、市场的 ⋯ 菜单「打开市场」、标题栏/通知的 openPanel）。
+watch(marketplace.panelOpen, (open) => { if (open) observatory.closePanel(); });
+watch(observatory.panelOpen, (open) => { if (open) marketplace.closePanel(); });
+
 function onSessionChanged(id: string) {
-  // 选中会话时关掉自动化/插件市场面板，主区切回聊天
+  // 选中会话时关掉自动化/插件市场/记忆观测台面板，主区切回聊天
   automation.closePanel();
   marketplace.closePanel();
+  observatory.closePanel();
   // 打开语义（预览覆盖/全局唯一聚焦）由布局层统一裁决
   paneLayout.openSession(id);
 }
@@ -991,7 +1002,6 @@ onUnmounted(() => {
           @new-session="onNewSession"
           @workspace-changed="onSidebarWsChanged"
           @open-settings="openSettings"
-          @open-memory-observatory="observatoryVisible = true"
           @remove-workspace="onRemoveWorkspace"
           @toggle-pin="toggleLeftPinned"
         />
@@ -1014,8 +1024,16 @@ onUnmounted(() => {
           class="h-full"
           @go-settings="openSettings"
         />
+        <MemoryObservatory
+          v-else-if="observatory.panelOpen.value && activeWorkspaceKey"
+          class="h-full"
+          :workspace-key="activeWorkspaceKey"
+          :workspace-name="projectName"
+          :current-session-id="activeSessionId"
+          @close="observatory.closePanel()"
+        />
         <PaneLayout
-          v-show="automation.state.view === null && !marketplace.panelOpen.value"
+          v-show="automation.state.view === null && !marketplace.panelOpen.value && !observatory.panelOpen.value"
           :workspace-path="workspacePath"
           class="h-full"
         />
@@ -1083,13 +1101,6 @@ onUnmounted(() => {
         @confirm="onRemoveWorkspaceConfirm"
       />
       <SettingsPanel v-if="settingsVisible" :initial-tab="settingsInitialTab" @close="settingsVisible = false" />
-      <MemoryObservatory
-        v-if="observatoryVisible && activeWorkspaceKey"
-        :workspace-key="activeWorkspaceKey"
-        :workspace-name="projectName"
-        :current-session-id="activeSessionId"
-        @close="observatoryVisible = false"
-      />
       <OnboardingWizard v-if="onboarding.visible.value" @workspace-selected="onSidebarWsChanged" />
       <RunConfigsDialog
         v-if="runConfigsDialogVisible"

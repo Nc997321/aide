@@ -289,10 +289,18 @@ describe("MemoryObservatory 面板", () => {
     expect(mocks.deleteFile).toHaveBeenCalledWith("C--x", "a.md");
   });
 
-  it("Esc 关闭", async () => {
+  // 主区视图（非模态）：不再接 Esc / 点外部关闭，关闭入口只剩头部 ✕
+  // （另有侧栏底部入口再点一次、选中会话两条路径，都在 App.vue）
+  it("头部 ✕ 关闭", async () => {
+    const w = await mountPanel();
+    await w.find(".mo-close").trigger("click");
+    expect(w.emitted("close")).toBeTruthy();
+  });
+
+  it("不接 Esc（主区视图无模态语义）", async () => {
     const w = await mountPanel();
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-    expect(w.emitted("close")).toBeTruthy();
+    expect(w.emitted("close")).toBeFalsy();
   });
 
   it("影响 tab：可达性分级 + 使用统计 + 本次任务 chip", async () => {

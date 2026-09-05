@@ -12,6 +12,16 @@ import type {
 
 export type ObservatoryScope = "project" | "all";
 
+/** 主区面板开关（模块级单例，与 useMarketplace 同范式）：
+ *  true 时 App.vue 用 MemoryObservatory 盖住 PaneLayout，PaneLayout v-show 保活；
+ *  选中会话时 App 调 closePanel 切回聊天。
+ *  2026-09-05：观测台从模态（App 的 observatoryVisible）改为一级主区视图，
+ *  与插件市场/自动化面板并列——侧栏底部入口区两行语义一致。 */
+const panelOpen = ref(false);
+function openPanel() { panelOpen.value = true; }
+function closePanel() { panelOpen.value = false; }
+function togglePanel() { panelOpen.value = !panelOpen.value; }
+
 export function useMemoryObservatory() {
   const loading = ref(false);
   const error = ref<string | null>(null);
@@ -149,5 +159,9 @@ export function useMemoryObservatory() {
     preview,
     remove,
     removeGlobal,
+    panelOpen,
+    openPanel,
+    closePanel,
+    togglePanel,
   };
 }

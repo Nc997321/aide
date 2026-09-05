@@ -63,6 +63,16 @@ beforeEach(() => {
   api.listInstalledPlugins.mockResolvedValue(installedLocal);
 });
 
+describe("MarketplaceTab 头部关闭入口", () => {
+  it("✕ 关闭面板（与记忆观测台同语义：主区切回聊天，不卸载会话）", async () => {
+    const m = useMarketplace();
+    m.openPanel();
+    const w = await mountTab();
+    await w.find(".mkt-close").trigger("click");
+    expect(m.panelOpen.value).toBe(false);
+  });
+});
+
 describe("MarketplaceTab 已安装视图补齐本地插件", () => {
   it("「已安装」分类出现且计数含 local 插件", async () => {
     const w = await mountTab();

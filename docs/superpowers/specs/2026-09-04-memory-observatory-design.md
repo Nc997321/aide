@@ -164,8 +164,8 @@ src/components/MemoryObservatory/
 
 ### 6.1 入口与挂载
 
-- `SidebarLeft.vue` 底部状态栏加按钮（设置按钮左侧），图标用简洁的圆点阵/脑形线性图标，`v-tooltip="'记忆观测台'"`，emit `open-memory-observatory`
-- `App.vue` 仿 SettingsPanel 模式：`defineAsyncComponent` + `observatoryVisible` flag，居中弹层（宽 ~880px、高 ~85vh），close / 点击外部 / Esc 三路关闭（复用 ContextUsagePanel 已验证的关闭模式）
+- **2026-09-05 改版（现行）**：入口在 `SidebarBottomDock.vue` 底部固定区第二行（与「插件」同形态的图标+文字行），主区面板范式——`useMemoryObservatory` 模块级 `panelOpen` / `openPanel|closePanel|togglePanel`，`App.vue` 在 `.panel-center` 的 v-if 链里挂 `MemoryObservatory`（自动化 > 插件市场 > 观测台），`PaneLayout` 用 v-show 保活。关闭三路：头部 ✕ / 侧栏入口再点一次 / 选中会话（`onSessionChanged`）。无遮罩、无点外部关闭、无 Esc（那三样是模态语义）。插件市场 ⇄ 观测台在 App 用 watch 互斥，否则 v-if 链的优先级会让后开的被先开的挡住。
+- 初版（已废弃）：底部状态栏图标按钮 emit `open-memory-observatory` + `App.vue` 的 `observatoryVisible` flag 居中弹层（宽 ~880px、高 ~85vh），close / 点击外部 / Esc 三路关闭
 
 ### 6.2 面板结构
 

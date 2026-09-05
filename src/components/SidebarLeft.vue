@@ -16,7 +16,7 @@ import { api, openExternal } from "../api";
 import AToast from "../ui/AToast.vue";
 import AppLogo from "./AppLogo.vue";
 import AutomationSidebarSection from "./automation/AutomationSidebarSection.vue";
-import MarketplaceSidebarEntry from "./marketplace/MarketplaceSidebarEntry.vue";
+import SidebarBottomDock from "./SidebarBottomDock.vue";
 import SidebarSectionHead from "./SidebarSectionHead.vue";
 import { useToast } from "../composables/useToast";
 import type { Session, WorkspaceInfo } from "../types";
@@ -34,7 +34,6 @@ const emit = defineEmits<{
   "workspace-changed": [path: string];
   "remove-workspace": [ws: WorkspaceInfo];
   "open-settings": [];
-  "open-memory-observatory": [];
   "toggle-pin": [];
 }>();
 
@@ -598,10 +597,11 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
            选中任务由 App.vue 把主区切成 AutomationMain（PaneLayout v-show 保活） -->
       <AutomationSidebarSection />
 
-      <!-- 插件市场入口：与自动化平级的导航行，单击切换主区 MarketplaceTab
-           （插件市场已从设置页迁出为一级主区视图） -->
-      <MarketplaceSidebarEntry />
     </div>
+
+    <!-- 底部固定入口区：插件 + 记忆观测台（无子树的功能入口收拢于此，不再占用
+         分区树列表位；见 SidebarBottomDock 组件头注释） -->
+    <SidebarBottomDock />
 
     <!-- Update banner -->
     <div v-if="updateAvailable" class="update-banner" @click="openUpdate">
@@ -624,13 +624,6 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 17v5"/>
             <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/>
-          </svg>
-        </button>
-        <button class="status-bar-btn" v-tooltip="'记忆观测台'" @click="emit('open-memory-observatory')">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <ellipse cx="12" cy="5" rx="9" ry="3"/>
-            <path d="M3 5v6c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/>
-            <path d="M3 11v6c0 1.66 4.03 3 9 3s9-1.34 9-3v-6"/>
           </svg>
         </button>
         <button class="status-bar-btn" v-tooltip="'设置'" @click="emit('open-settings')">

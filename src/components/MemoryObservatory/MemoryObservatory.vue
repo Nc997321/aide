@@ -1,10 +1,13 @@
 <script setup lang="ts">
 /**
- * 记忆观测台弹层壳：三 tab（记忆 / 演化 / 影响）+ 双 scope（当前项目 / 全部项目，
- * P2 跨项目只读聚合）+ 三路关闭（close / 点外部 / Esc）。数据闭包见 useMemoryObservatory。
+ * 记忆观测台主区视图壳：三 tab（记忆 / 演化 / 影响）+ 双 scope（当前项目 / 全部项目，
+ * P2 跨项目只读聚合）+ 关闭（头部 ✕ / 侧栏底部入口再点一次 / 选中会话）。
+ * 2026-09-05：由 Teleport 模态改为填满主区（与插件市场 MarketplaceTab 同范式，
+ * 不再有遮罩、点外部关闭与 Esc——那是模态语义，主区视图不需要）。
+ * 数据闭包见 useMemoryObservatory。
  * spec：docs/superpowers/specs/2026-09-04-memory-observatory-design.md
  */
-import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
+import { computed, ref, watch, onMounted } from "vue";
 import Icon from "@/components/Icon.vue";
 import { useMemoryObservatory } from "@/composables/useMemoryObservatory";
 import { useWorkspaces } from "@/composables/useWorkspaces";
@@ -48,30 +51,17 @@ const globalReach = computed(() =>
     : null,
 );
 
-onMounted(() => {
-  mo.load(props.workspaceKey);
-  window.addEventListener("keydown", onKey, true);
-});
-onBeforeUnmount(() => window.removeEventListener("keydown", onKey, true));
+onMounted(() => mo.load(props.workspaceKey));
 watch(
   () => props.workspaceKey,
   (k) => k && mo.load(k),
 );
-
-function onKey(e: KeyboardEvent) {
-  if (e.key === "Escape") {
-    e.stopPropagation();
-    emit("close");
-  }
-}
 </script>
 
 <template>
-  <Teleport to="body">
-    <div class="mo-overlay" @click.self="emit('close')">
-      <div class="mo-panel" role="dialog" aria-modal="true">
+  <div class="mo-panel">
         <header class="mo-head">
-          <span class="mo-logo"><Icon name="cube" :size="14" /></span>
+          <span class="mo-logo"><Icon name="brain" :size="14" /></span>
           <h1>记忆观测台</h1>
           <div class="mo-scope">
             <button :class="{ on: mo.scope.value === 'project' }" @click="mo.setScope('project', props.workspaceKey)">
@@ -136,33 +126,15 @@ function onKey(e: KeyboardEvent) {
             />
           </template>
         </div>
-      </div>
-    </div>
-  </Teleport>
+  </div>
 </template>
 
 <style scoped>
-.mo-overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--aide-bg-overlay);
-  backdrop-filter: blur(6px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 200;
-}
+/* 主区视图：撑满 .panel-center（与 MarketplaceTab 同形态），不再有模态尺寸/阴影 */
 .mo-panel {
-  width: 880px;
-  max-width: 92vw;
-  height: 85vh;
-  max-height: 780px;
-  background: var(--aide-bg-base);
-  border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-lg);
-  box-shadow: var(--aide-shadow-lg);
   display: flex;
   flex-direction: column;
+  height: 100%;
   overflow: hidden;
 }
 .mo-head {
