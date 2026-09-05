@@ -10,6 +10,7 @@ use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex as TokioMutex;
 pub mod env;
 pub mod provider;
+pub mod bg_registry;
 use crate::runtime::provider::connection_fingerprint;
 use crate::settings::{SettingsScope, SettingsService};
 
@@ -362,6 +363,14 @@ impl AgentRuntimeManager {
                         {
                             svc.observe_chat_event(&event);
                         }
+                        // 后台任务注册表：远程快照源（list_bg_tasks RPC）。桌面常驻
+                        // 在线、是唯一看全 bg_task_* 流的一端；手机打开会话/重连时
+                        // 对账离线期间错过的任务。进程级死亡兜底见 emit_runtime_dead。
+                        if let Some(reg) =
+                            app.try_state::<Arc<crate::runtime::bg_registry::BgTaskRegistry>>()
+                        {
+                            reg.feed(&event);
+                        }
                         let _ = chat_events_tx.send(event.clone());
                         let _ = app.emit("chat-event", event);
                     }
@@ -430,7 +439,9 @@ impl AgentRuntimeManager {
     }
 
     /// 杀死 Runtime 进程（全局 stop / app 退出）。
-    #[allow(dead_code)]
+    ///
+    /// 调用点：托盘菜单「退出 Aide」经 `commands::app::shutdown_children` 调到这里
+    /// ——aide.exe 退出不会带走 node 子进程，必须显式收。
     pub async fn kill_runtime(&self) {
         self.killed.store(true, Ordering::Relaxed);
         let child = { self.child.lock().unwrap().clone() };
@@ -621,6 +632,11 @@ fn emit_runtime_dead(app: &AppHandle, tail_handle: &Arc<Mutex<VecDeque<String>>>
         Some(tail.join("\n"))
     };
     crate::diagnostics::trace::record("runtime", reason, "worker");
+    // Runtime 进程整体死亡：所有会话的后台任务随之覆灭，注册表全清
+    // （sidecar 没机会发终态事件，不清会让快照里的任务永卡 running）。
+    if let Some(reg) = app.try_state::<Arc<crate::runtime::bg_registry::BgTaskRegistry>>() {
+        reg.clear_all();
+    }
     let event = serde_json::json!({
         "type": "runtime_dead",
         "reason": reason,

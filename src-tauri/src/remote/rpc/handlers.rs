@@ -138,6 +138,38 @@ pub fn stop_chat_session(
     })
 }
 
+/// stop_bg_task 参数 DTO（镜像前端 api.stopBgTask）。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StopBgTaskArgs {
+    session_id: String,
+    task_id: String,
+}
+
+pub fn stop_bg_task(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let a: StopBgTaskArgs = parse(params)?;
+        let runtime = app.state::<AgentRuntimeManager>();
+        to_json(crate::commands::chat::stop_bg_task(a.session_id, a.task_id, runtime).await)
+    })
+}
+
+/// 后台任务快照：远程客户端打开会话/重连后对账 bgTasks（bg_task_* 事件流
+/// 只做实时转发无重放，离线期间错过的任务靠这里回填）。
+pub fn list_bg_tasks(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let a: SessionIdArgs = parse(params)?;
+        let reg = app.state::<std::sync::Arc<crate::runtime::bg_registry::BgTaskRegistry>>();
+        to_json(Ok(reg.list(&a.session_id)))
+    })
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SetModelArgs {

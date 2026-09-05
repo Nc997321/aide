@@ -47,10 +47,13 @@ static REGISTRY: &[(&str, Handler)] = &[
     ("permission_response", handlers::permission_response),
     ("interrupt_session", handlers::interrupt_session),
     ("stop_chat_session", handlers::stop_chat_session),
+    ("stop_bg_task", handlers::stop_bg_task),
     ("set_model", handlers::set_model),
     ("set_effort", handlers::set_effort),
     ("set_permission_mode", handlers::set_permission_mode),
     ("start_btw_session", handlers::start_btw_session),
+    // ── 后台任务快照（远程对账：打开会话/重连时回填 bgTasks）──
+    ("list_bg_tasks", handlers::list_bg_tasks),
     // ── 会话管理与元数据 ──
     ("list_sessions", handlers::list_sessions),
     (
