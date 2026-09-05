@@ -82,6 +82,10 @@ export async function hydrate(sid: string): Promise<void> {
     const result = await api.loadMessages(sid, null, HYDRATE_PAGE_BYTES);
     if (!result || !Array.isArray(result.messages)) {
       trail("pager", `hydrate ${sid.slice(0, 8)} EMPTY-RESULT`);
+      // 响应形状异常（版本错配/网关裁剪）不是「真空会话」：回滚 hydrated 让
+      // 重开重试，否则一次坏响应把会话永久钉死在空态（真空走下方正常路径，
+      // msgs 为空数组时保持 hydrated 不重试）。
+      store.hydrated = false;
       return;
     }
     // hydrate 期间可能已有实时消息进来：历史插到最前
@@ -98,6 +102,11 @@ export async function hydrate(sid: string): Promise<void> {
     maybeEvict(sid, store);
   } catch (e) {
     console.warn("Failed to load messages:", e);
+    // 加载失败（断线/桌面忙）：回滚 hydrated，重开会话时重试——否则 PWA 这类
+    // SPA 的模块级 store 里一次失败把会话永久钉死在「此会话暂无消息」
+    // （hydrated=true 使 hydrate 的 skip 分支拦截一切后续加载）。
+    store.hydrated = false;
+    trail("pager", `hydrate ${sid.slice(0, 8)} FAILED ${String(e).slice(0, 80)}`);
   }
 }
 

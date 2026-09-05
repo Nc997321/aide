@@ -241,4 +241,61 @@ describe("P1 双向分页", () => {
     expect(chat.messages.value.length).toBe(0);
     expect(hasMoreOlder("uuid-a")).toBe(false);
   });
+
+  // ── hydrate 失败粘滞回归（2026-09-04 PWA「此会话暂无消息」根因）──
+  // 失败（reject / 响应形状异常）必须回滚 hydrated，重开会话时重试；
+  // 否则 SPA 模块级 store 里一次断线把会话永久钉死在空态。
+
+  it("hydrate 失败（断线 reject）→ 回滚 hydrated，重开重试恢复消息", async () => {
+    invokeMock.mockRejectedValueOnce(new Error("未连接"));
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    expect(chat.messages.value.length).toBe(0);
+
+    // 网络恢复后切走再切回（组件重建/会话重开的同一 watch 路径）
+    invokeMock.mockResolvedValue(pageResponse(4, "retry"));
+    sid.value = null;
+    await flush();
+    sid.value = "uuid-a";
+    await flush();
+    await flush();
+    expect(chat.messages.value.length).toBe(4);
+    // 重试真的发起了第二次 load_messages（而非 skip 分支吞掉）
+    expect(loadMessagesCalls().filter((c) => c[1]?.sessionId === "uuid-a").length).toBe(2);
+  });
+
+  it("hydrate 响应形状异常（非 LoadMessagesResult）→ 同样回滚可重试", async () => {
+    invokeMock.mockResolvedValueOnce({ unexpected: true });
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    expect(chat.messages.value.length).toBe(0);
+
+    invokeMock.mockResolvedValue(pageResponse(2, "recover"));
+    sid.value = null;
+    await flush();
+    sid.value = "uuid-a";
+    await flush();
+    await flush();
+    expect(chat.messages.value.length).toBe(2);
+  });
+
+  it("真空会话（合法空数组）保持 hydrated 不重试", async () => {
+    invokeMock.mockResolvedValueOnce({ messages: [], nextOffsetBytes: 0, endOffsetBytes: 0 });
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await flush();
+    expect(chat.messages.value.length).toBe(0);
+
+    // 重开：真空不再发 load_messages（无第 2 次调用）
+    sid.value = null;
+    await flush();
+    sid.value = "uuid-a";
+    await flush();
+    await flush();
+    const calls = loadMessagesCalls().filter((c) => c[1]?.sessionId === "uuid-a");
+    expect(calls.length).toBe(1);
+  });
 });
