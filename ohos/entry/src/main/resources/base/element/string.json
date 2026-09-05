@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "aide 的 HarmonyOS 客户端主模块"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "aide 远程客户端"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Aide"
+    }
+  ]
+}

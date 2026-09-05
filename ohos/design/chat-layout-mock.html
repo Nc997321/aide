@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>会话页排版草案</title>
+<style>
+:root{
+  --page-bg:#F1F3F5;--card:#FFFFFF;--input-bg:#F5F6FA;--text:#1D2129;--text-2:#86909C;
+  --accent:#0A59F7;--ok:#00B42A;--warn:#FF7D00;--danger:#F53F3F;--line:#E5E6EB;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"HarmonyOS Sans SC",-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#E9EBEE;color:var(--text)}
+.wrap{display:flex;gap:36px;justify-content:center;align-items:flex-start;padding:28px;flex-wrap:wrap}
+.panel{width:330px;max-width:92vw}
+h1{font-size:18px;margin-bottom:12px}
+.seg{display:flex;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:14px}
+.seg button{flex:1;border:0;background:transparent;padding:10px 0;font-size:14px;color:var(--text-2);cursor:pointer}
+.seg button.on{background:var(--accent);color:#fff}
+.replay{width:100%;padding:11px;border:0;border-radius:10px;background:var(--text);color:#fff;font-size:14px;cursor:pointer;margin-bottom:16px}
+.note{background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px 14px;font-size:13px;line-height:1.7;color:var(--text-2);margin-bottom:10px}
+.note b{color:var(--text)}
+.phone{width:392px;max-width:94vw;background:#111;border-radius:30px;padding:10px;box-shadow:0 16px 48px rgba(0,0,0,.22)}
+.screen{height:780px;background:var(--page-bg);border-radius:22px;display:flex;flex-direction:column;overflow:hidden}
+.topbar{display:flex;align-items:center;gap:6px;padding:12px 12px 10px;background:var(--card);border-bottom:1px solid var(--line)}
+.back{display:flex;padding:2px;color:var(--text)}
+.title{flex:1;font-size:17px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stopbtn{display:none;font-size:12px;color:var(--danger);border:1px solid var(--danger);border-radius:14px;padding:3px 10px;background:transparent}
+.screen.running .stopbtn{display:inline-block}
+.tl{flex:1;overflow-y:auto;padding:8px 16px 16px;display:flex;flex-direction:column;gap:16px;scroll-behavior:smooth}
+.day{align-self:center;font-size:12px;color:var(--text-2)}
+.m-user{display:flex;flex-direction:column;align-items:flex-end}
+.b-user{max-width:82%;background:var(--accent);color:#fff;font-size:15px;line-height:1.55;padding:10px 14px;border-radius:16px 16px 4px 16px;white-space:pre-wrap}
+.m-ai{display:flex;flex-direction:column;align-items:flex-start;gap:8px;width:100%}
+.ai-text{font-size:15px;line-height:1.65;white-space:pre-wrap}
+.think{width:100%;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.think-h{display:flex;align-items:center;gap:6px;padding:9px 12px;font-size:13px;color:var(--text-2);cursor:pointer;user-select:none}
+.think-h svg{flex:none}
+.think-h .chev{margin-left:auto;transition:transform .2s;display:flex}
+.think.open .chev{transform:rotate(180deg)}
+.think-b{display:none;margin:0 12px;border-top:1px dashed var(--line);padding:10px 2px 12px;font-size:13px;line-height:1.65;color:var(--text-2);white-space:pre-wrap}
+.think.open .think-b{display:block}
+.think.live .think-b{display:block;border-top:0;padding-top:0}
+.think.live .think-h{cursor:default}
+.act{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-2);padding:2px;transition:opacity .45s;max-width:100%}
+.act.fade{opacity:0}
+.spin{width:13px;height:13px;flex:none;border-radius:50%;border:2px solid var(--accent);border-top-color:transparent;animation:rot .8s linear infinite}
+@keyframes rot{to{transform:rotate(360deg)}}
+.act .tname,.step .n{color:var(--text);font-weight:500;flex:none}
+.act .targ,.step .arg,.statusline .arg{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#dock{display:flex;flex-direction:column}
+#dock:empty{display:none}
+.dockcard{margin:8px 12px 2px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:7px;transition:opacity .4s,transform .4s}
+.dockcard.fade{opacity:0;transform:translateY(8px)}
+.dockcard .cap{font-size:12px;color:var(--text-2)}
+.step{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-2);min-width:0}
+.step.run{color:var(--text)}
+.step .ok{color:var(--ok);flex:none;font-weight:700}
+.statusline{display:flex;align-items:center;gap:7px;padding:7px 20px 3px;font-size:12px;color:var(--text-2);transition:opacity .45s}
+.statusline.fade{opacity:0}
+.statusline b{color:var(--text);font-weight:500}
+.inputbar{display:flex;gap:8px;align-items:flex-end;padding:10px 12px;background:var(--card);border-top:1px solid var(--line)}
+.field{flex:1;background:var(--input-bg);border-radius:20px;min-height:40px;padding:10px 14px;font-size:14px;color:var(--text-2);display:flex;align-items:center}
+.send{width:40px;height:40px;flex:none;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff}
+.bgt-bar{display:flex;align-items:center;gap:8px;margin:8px 12px 2px;padding:7px 12px;background:var(--card);border:1px solid var(--line);border-radius:10px;font-size:12px;color:var(--text-2);cursor:pointer;user-select:none;transition:opacity .45s}
+.bgt-bar.fade{opacity:0}
+.bgt-dot{width:7px;height:7px;border-radius:50%;background:var(--ok);animation:bgt-pulse 1.6s infinite;flex:none}
+@keyframes bgt-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.bgt-bar .txt{font-weight:600;color:var(--text);white-space:nowrap}
+.bgt-bar .cmd{font-family:Consolas,monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bgt-bar .caret{margin-left:auto;font-size:12px;flex:none;transition:transform .2s}
+.bgt-bar.open .caret{transform:rotate(180deg)}
+.bgt-bar.done .bgt-dot{animation:none}
+.bgt-panel{margin:6px 12px 2px;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:none;flex-direction:column}
+.bgt-panel.open{display:flex}
+.bgt-item{display:flex;align-items:center;gap:8px;padding:9px 12px;font-size:12px}
+.bgt-item .st{width:14px;text-align:center;flex:none;color:var(--ok);animation:bgt-pulse 1.6s infinite}
+.bgt-item .st.set{animation:none}
+.bgt-item .main{flex:1;min-width:0;display:flex;flex-direction:column}
+.bgt-item .nm{color:var(--text);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bgt-item .cd{font-family:Consolas,monospace;font-size:10.5px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bgt-item .dur{font-family:Consolas,monospace;font-size:10.5px;color:var(--text-2);flex:none}
+.bgt-item .stop{flex:none;font-size:11px;padding:2px 7px;border-radius:6px;border:1px solid var(--line);color:var(--text-2)}
+.bgt-out{margin:0 12px 10px;background:var(--input-bg);border-radius:8px;padding:8px 10px;font-family:Consolas,monospace;font-size:11px;line-height:1.6;color:var(--text-2);max-height:132px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="panel">
+    <h1>会话页排版草案</h1>
+    <div class="seg" id="seg">
+      <button data-v="v1" class="on">V1 瞬态行</button>
+      <button data-v="v2">V2 停靠卡</button>
+      <button data-v="v3">V3 状态行</button>
+    </div>
+    <button class="replay" id="replay">▶ 重放一轮模拟（看运行时表现）</button>
+    <div class="note"><b>V1 时间线内瞬态行</b>：工具运行时消息流里出现一行「正在执行 ××」，本轮结束整行淡出消失。历史里永远只有思考卡 + 对话。代价：行的出现/消失会让时间线轻微跳动。</div>
+    <div class="note"><b>V2 停靠活动卡</b>：运行期在输入框上方停靠一张「正在执行」卡，步骤逐条打勾，回合结束整卡滑走。时间线零跳动，运行过程看得最清楚。</div>
+    <div class="note"><b>V3 极简状态行</b>：时间线严格只有气泡 / 正文 / 思考入口，运行状态只是输入框上一行小字轮播当前工具。最克制，信息也最少。</div>
+    <div class="note"><b>三版通用语义</b>：工具事件只进瞬态 liveActivity，不进消息流，回合结束清空（= 不驻留内存）；历史加载时跳过 tool_call 块；卡片一律白底描边、间距走 8 的倍数、图标统一 SVG。</div>
+    <div class="note"><b>后台任务（bg_task_*，三版同款停靠区）</b>：状态条胶囊有任务才出现（● N 个运行中 + 命令名），点开看任务列表（状态/命令/走表时长/终止）+ 尾部输出贴尾滚动（移动端不做 xterm）。跨轮次存活——回合结束不清，bg_task_ended 才收；全部完成后状态条变 ✓ 停留数秒淡出。桌面端 BgTaskDock 同语义。tasks_update（代理待办清单）是另一个域，未在此演示。</div>
+  </div>
+  <div class="phone">
+    <div class="screen" id="screen">
+      <div class="topbar">
+        <span class="back" id="back"></span>
+        <span class="title">aide · 工作区会话</span>
+        <button class="stopbtn">停止</button>
+      </div>
+      <div class="tl" id="tl"></div>
+      <div id="dock"></div>
+      <div class="inputbar">
+        <div class="field">发送消息</div>
+        <div class="send" id="send"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+var ICONS = {
+  back: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
+  send: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
+  spark: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>',
+  chev: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>'
+};
+document.getElementById('back').innerHTML = ICONS.back;
+document.getElementById('send').innerHTML = ICONS.send;
+
+var tl = document.getElementById('tl');
+var dock = document.getElementById('dock');
+var screen = document.getElementById('screen');
+var variant = 'v1';
+var timers = [];
+
+function later(fn, ms){ timers.push(setTimeout(fn, ms)); }
+function clearTimers(){ timers.forEach(clearTimeout); timers = []; }
+function el(html){ var t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; }
+function scroll(){ tl.scrollTop = tl.scrollHeight; }
+
+function thinkCard(label, body, open){
+  var c = el('<div class="think' + (open ? ' open' : '') + '">' +
+    '<div class="think-h">' + ICONS.spark + '<span class="lb"></span><span class="chev">' + ICONS.chev + '</span></div>' +
+    '<div class="think-b"></div></div>');
+  c.querySelector('.lb').textContent = label;
+  c.querySelector('.think-b').textContent = body;
+  c.querySelector('.think-h').addEventListener('click', function(){ c.classList.toggle('open'); });
+  return c;
+}
+function userMsg(text){
+  var m = el('<div class="m-user"><div class="b-user"></div></div>');
+  m.firstChild.textContent = text;
+  tl.appendChild(m); scroll();
+}
+function aiGroup(){ var g = el('<div class="m-ai"></div>'); tl.appendChild(g); scroll(); return g; }
+function daySep(label){ tl.appendChild(el('<div class="day"></div>')).textContent = label; }
+
+function buildRest(){
+  tl.innerHTML = ''; dock.innerHTML = '';
+  screen.classList.remove('running');
+  daySep('昨天');
+  userMsg('会话列表下拉刷新在低端机上有点卡，帮我看看');
+  var g1 = aiGroup();
+  g1.appendChild(thinkCard('已思考 8 秒 · 点击展开', '卡顿一般来自三处：下拉触发频率、列表是否整页重建、数据是否全量拉取。先确认 Refresh 的回调有没有做节流，再查 sessions 每次刷新的拉取量。', false));
+  var t1 = el('<div class="ai-text"></div>');
+  t1.textContent = '定位到了：下拉每次都全量拉取并整页重建列表。\n改成增量刷新 + 本地缓存后低端机能稳住帧率，改动在工作区里。';
+  g1.appendChild(t1);
+  userMsg('好，顺便把空态插画换成系统素材');
+  var g2 = aiGroup();
+  var t2 = el('<div class="ai-text"></div>');
+  t2.textContent = '换好了，下次进空态页就能看到效果。';
+  g2.appendChild(t2);
+  daySep('今天 09:24');
+  userMsg('路由守卫好像没生效，帮我查一下');
+  var g3 = aiGroup();
+  g3.appendChild(thinkCard('已思考 12 秒 · 点击展开', '守卫没生效通常是三种情况：注册时机太晚、异步判断没等 resolve 就放行、或被后注册的守卫覆盖。先看注册代码，再重点查异步分支。', false));
+  var t3 = el('<div class="ai-text"></div>');
+  t3.textContent = '问题在 beforeEach 里异步判断还没 resolve 就放行了。\n把守卫改成返回 Promise，等结果出来再放行，改动已放在工作区。';
+  g3.appendChild(t3);
+  scroll();
+}
+
+function typeInto(node, text, speed, done){
+  var i = 0;
+  (function step(){
+    if (i <= text.length){ node.textContent = text.slice(0, i); i++; scroll(); later(step, speed); }
+    else if (done){ done(); }
+  })();
+}
+
+var TOOLS = [
+  ['Bash', 'pnpm test -- --run router'],
+  ['Read', 'tests/router.spec.ts'],
+  ['Grep', 'beforeEach'],
+  ['Bash', 'pnpm dev']
+];
+
+var bgClock = null;
+function clearBg(){ if (bgClock){ clearInterval(bgClock); bgClock = null; } }
+function fmtDur(ms){
+  var s = Math.max(0, Math.floor(ms / 1000));
+  var hh = String(Math.floor(s / 3600)).padStart(2, '0');
+  var mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+  var ss = String(s % 60).padStart(2, '0');
+  return hh + ':' + mm + ':' + ss;
+}
+
+function startBgTask(){
+  var bar = el('<div class="bgt-bar"><span class="bgt-dot"></span><span class="txt">1 个后台任务运行中</span><span class="cmd">pnpm dev</span><span class="caret">▾</span></div>');
+  var panel = el('<div class="bgt-panel"><div class="bgt-item"><span class="st">●</span><span class="main"><span class="nm">启动开发服务器</span><span class="cd">pnpm dev</span></span><span class="dur">00:00:03</span><span class="stop">■ 终止</span></div><div class="bgt-out"></div></div>');
+  dock.appendChild(bar);
+  dock.appendChild(panel);
+  var t0 = Date.now() - 3000;
+  bgClock = setInterval(function(){
+    panel.querySelector('.dur').textContent = fmtDur(Date.now() - t0);
+  }, 1000);
+  bar.addEventListener('click', function(){
+    bar.classList.toggle('open');
+    panel.classList.toggle('open');
+  });
+  var out = panel.querySelector('.bgt-out');
+  var lines = ['$ pnpm dev', '', '  VITE v6.0.7  ready in 412 ms', '', '  ➜  Local:   http://localhost:5173/', '  ➜  Network: use --host to expose', '  ➜  press h + enter to show help'];
+  var li = 0;
+  (function push(){
+    if (li < lines.length){
+      out.textContent += (li ? '\n' : '') + lines[li];
+      out.scrollTop = out.scrollHeight;
+      li++; later(push, 750);
+    }
+  })();
+  return {
+    finish: function(){
+      clearBg();
+      bar.querySelector('.txt').textContent = '✓ 后台任务已完成';
+      bar.querySelector('.cmd').textContent = 'pnpm dev · 12s';
+      bar.classList.add('done');
+      panel.querySelector('.st').classList.add('set');
+      panel.querySelector('.st').textContent = '✓';
+      panel.querySelector('.stop').style.display = 'none';
+      later(function(){
+        bar.classList.add('fade');
+        panel.classList.remove('open');
+        later(function(){ bar.remove(); panel.remove(); }, 500);
+      }, 2500);
+    }
+  };
+}
+
+function runInline(g, onBg, onDone){
+  var row = el('<div class="act"><span class="spin"></span><span class="tname"></span><span class="targ"></span></div>');
+  g.appendChild(row); scroll();
+  var i = 0;
+  (function next(){
+    if (i < TOOLS.length){
+      if (i === TOOLS.length - 1) { onBg(); }
+      row.querySelector('.tname').textContent = TOOLS[i][0] + ' ·';
+      row.querySelector('.targ').textContent = TOOLS[i][1];
+      i++; later(next, 1150);
+    } else {
+      row.classList.add('fade');
+      later(function(){ row.remove(); }, 480);
+      onDone();
+    }
+  })();
+}
+
+function runDock(g, onBg, onDone){
+  var card = el('<div class="dockcard"><div class="cap">正在执行</div></div>');
+  dock.appendChild(card);
+  var i = -1;
+  (function next(){
+    var rows = card.querySelectorAll('.step');
+    if (i >= 0 && rows[i]){
+      var p = rows[i];
+      p.classList.remove('run');
+      p.querySelector('.spin').outerHTML = '<span class="ok">✓</span>';
+    }
+    i++;
+    if (i < TOOLS.length){
+      if (i === TOOLS.length - 1) { onBg(); }
+      var s = el('<div class="step run"><span class="spin"></span><span class="n"></span><span class="arg"></span></div>');
+      s.querySelector('.n').textContent = TOOLS[i][0];
+      s.querySelector('.arg').textContent = TOOLS[i][1];
+      card.appendChild(s);
+      later(next, 1150);
+    } else {
+      later(function(){
+        card.classList.add('fade');
+        later(function(){ card.remove(); }, 420);
+      }, 400);
+      onDone();
+    }
+  })();
+}
+
+function runStatus(g, onBg, onDone){
+  var line = el('<div class="statusline"><span class="spin"></span><span class="txt"></span></div>');
+  dock.appendChild(line);
+  var i = 0;
+  (function next(){
+    if (i < TOOLS.length){
+      if (i === TOOLS.length - 1) { onBg(); }
+      line.querySelector('.txt').innerHTML = '正在执行 <b></b> · <span class="arg"></span>';
+      line.querySelector('b').textContent = TOOLS[i][0];
+      line.querySelector('.arg').textContent = TOOLS[i][1];
+      i++; later(next, 1150);
+    } else {
+      line.classList.add('fade');
+      later(function(){ line.remove(); }, 480);
+      onDone();
+    }
+  })();
+}
+
+function finishTurn(g){
+  var th = g.querySelector('.think');
+  if (th){
+    th.classList.remove('live');
+    th.classList.remove('open');
+    th.querySelector('.lb').textContent = '已思考 6 秒 · 点击展开';
+    th.querySelector('.chev').style.display = '';
+  }
+  var t = el('<div class="ai-text"></div>');
+  g.appendChild(t); scroll();
+  typeInto(t, '用例跑完了，12 个全绿。守卫已生效，这轮改动可以提交了。', 26, function(){
+    screen.classList.remove('running');
+  });
+}
+
+function play(){
+  clearTimers();
+  clearBg();
+  buildRest();
+  screen.classList.add('running');
+  later(function(){ userMsg('跑一遍用例验证下守卫'); }, 600);
+  later(function(){
+    var g = aiGroup();
+    var th = el('<div class="think live open"><div class="think-h">' + ICONS.spark +
+      '<span class="lb">思考中…</span><span class="chev" style="display:none">' + ICONS.chev + '</span></div><div class="think-b"></div></div>');
+    g.appendChild(th); scroll();
+    typeInto(th.querySelector('.think-b'),
+      '验证守卫要先跑路由相关用例；跑之前确认测试入口和过滤参数，失败再看是不是 mock 没对上。',
+      18, null);
+    later(function(){
+      var bgRef = { h: null };
+      var mkBg = function(){ bgRef.h = startBgTask(); };
+      var onDone = function(){
+        finishTurn(g);
+        later(function(){ if (bgRef.h) { bgRef.h.finish(); } }, 5000);
+      };
+      if (variant === 'v1'){ runInline(g, mkBg, onDone); }
+      else if (variant === 'v2'){ runDock(g, mkBg, onDone); }
+      else { runStatus(g, mkBg, onDone); }
+    }, 2600);
+  }, 1300);
+}
+
+document.getElementById('replay').addEventListener('click', play);
+document.getElementById('seg').addEventListener('click', function(e){
+  var b = e.target.closest('button');
+  if (!b){ return; }
+  variant = b.dataset.v;
+  document.querySelectorAll('.seg button').forEach(function(x){ x.classList.toggle('on', x === b); });
+});
+
+buildRest();
+</script>
+</body>
+</html>
