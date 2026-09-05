@@ -49,7 +49,15 @@ function metaText(t: AutomationTask): string {
       @menu="onSectionMenu"
     >
       <template #icon>
-        <svg viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <!-- 闹钟：定时任务的直觉符号（原闪电与「技能/AI 能力」的语义撞车） -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="13.5" r="7.5"/>
+          <path d="M7 8L4.4 5.4"/>
+          <path d="M17 8L19.6 5.4"/>
+          <path d="M7.6 19.5L5.8 21.4"/>
+          <path d="M16.4 19.5L18.2 21.4"/>
+          <path d="M12 9.8V13.5l2.6 1.7"/>
+        </svg>
       </template>
     </SidebarSectionHead>
 
@@ -159,7 +167,8 @@ function metaText(t: AutomationTask): string {
 .r2 {
   font-size: 11.5px;
   color: var(--aide-text-muted);
-  padding-left: 14px;
+  /* 与状态点同列：点是整卡的缩进锚，meta 行左缘对齐点的左缘（都是 20px） */
+  padding-left: 0;
   line-height: 1.45;
 }
 .r2.live {
