@@ -81,3 +81,35 @@ async fn phone_disconnect_keeps_desktop_connection_for_next_phone() {
     ).await.expect("桌面端连接在手机断开后未能保持").unwrap().unwrap();
     assert_eq!(second, Message::Text("second".into()));
 }
+
+/// 回归：桌面连接空闲（未桥接）期间发的 Ping 必须被自动回 Pong。
+/// tungstenite 读到 Ping 只是把 Pong 排进 additional 队列，真正刷出
+/// socket 要等下一次 read poll——空闲连接必须有人持续 poll。
+#[tokio::test]
+async fn idle_desktop_ping_gets_ponged() {
+    let url = start_server().await;
+    let (mut d_ws, _) = connect_async(&url).await.unwrap();
+    d_ws.send(Message::Text(r#"{"type":"register","device_id":"dev-5","pairing_code":"999000"}"#.into())).await.unwrap();
+    d_ws.send(Message::Ping(vec![1, 2, 3])).await.unwrap();
+    let msg = tokio::time::timeout(std::time::Duration::from_secs(3), d_ws.next())
+        .await.expect("空闲连接上没有收到 Pong").unwrap().unwrap();
+    assert_eq!(msg, Message::Pong(vec![1, 2, 3]));
+}
+
+/// 回归：桌面空闲期间主动 close（下线），路由表必须及时清掉该连接，
+/// 之后手机的 connect 得到「device offline」，而不是桥到僵尸连接上。
+#[tokio::test]
+async fn idle_desktop_close_evicts_entry() {
+    let url = start_server().await;
+    let (mut d_ws, _) = connect_async(&url).await.unwrap();
+    d_ws.send(Message::Text(r#"{"type":"register","device_id":"dev-6","pairing_code":"777888"}"#.into())).await.unwrap();
+    // 桌面优雅下线；close() 能返回本身就证明看守在 poll 并刷出了 close 应答
+    d_ws.close(None).await.unwrap();
+    // 等看守摘除登记
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let (mut p_ws, _) = connect_async(&url).await.unwrap();
+    p_ws.send(Message::Text(r#"{"type":"connect","device_id":"dev-6"}"#.into())).await.unwrap();
+    let next = tokio::time::timeout(std::time::Duration::from_secs(3), p_ws.next())
+        .await.expect("connect 不该挂死");
+    assert!(next.is_none() || next.unwrap().is_err());
+}
