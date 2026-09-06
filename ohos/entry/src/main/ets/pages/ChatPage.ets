@@ -99,6 +99,9 @@ struct ChatPage {
   private source: ChatMessagesSource = new ChatMessagesSource();
   /** 列表视口高（onAreaChange 回写；思考卡一屏限高的换算基准）。 */
   @Local listHeight: number = 0;
+  /** 页面根高度（onAreaChange 回写；计划卡正文限高的换算基准。不用 List 视口
+   *  高折算：权限卡出现会压缩 List，用它做限高会形成布局反馈环）。 */
+  @Local rootHeight: number = 0;
   /** 消息结构变更同步回调（aboutToAppear 注册 / aboutToDisappear 反注册）。 */
   private syncSource: () => void = () => {
     const before: number = this.source.totalCount();
@@ -441,6 +444,11 @@ struct ChatPage {
     return Math.max(this.listHeight - THINK_CAP_RESERVE, THINK_CAP_MIN);
   }
 
+  /** 计划卡正文一屏限高：根高度折半（保底 200，短计划不撑空、长计划按钮仍在卡尾）。 */
+  private planBodyMax(): number {
+    return Math.max(this.rootHeight * 0.5, 200);
+  }
+
   @Builder
   subagentView(b: SubagentBlock) {
     Column({ space: 8 }) {
@@ -735,7 +743,7 @@ struct ChatPage {
       // 弹窗期间输入框整块让位（对照原型「弹窗期间输入框隐藏」）：未决请求
       // 挂着时新消息本就会排队等答完，答完输入框回归
       if (this.store.pendingPermissions.length > 0) {
-        PermissionSheet({ store: this.store })
+        PermissionSheet({ store: this.store, planBodyMax: this.planBodyMax() })
       } else {
         this.inputBarView()
       }
@@ -743,5 +751,11 @@ struct ChatPage {
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.page_bg'))
+    .onAreaChange((_o: Area, n: Area) => {
+      const h: number = typeof n.height === 'number' ? n.height : 0;
+      if (h > 0) {
+        this.rootHeight = h;
+      }
+    })
   }
 }

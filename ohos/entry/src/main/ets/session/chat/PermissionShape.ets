@@ -34,6 +34,18 @@ export function judgePermissionKind(name: string): PermissionKind {
   return 'tool';
 }
 
+// ── ExitPlanMode：计划正文 ──
+
+/** 计划正文（input.plan 字符串；形状不对 → 空串，正文区退占位提示）。 */
+export function planText(input: Object): string {
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    return '';
+  }
+  const rec: Record<string, Object> = input as Record<string, Object>;
+  const v: Object | undefined = rec['plan'];
+  return v !== undefined && typeof v === 'string' ? v as string : '';
+}
+
 // ── AskUserQuestion：问题规约与答案打包 ──
 
 /** 选项（上游 QuestionOption；description 上游可缺省，这里拍平为零串）。 */

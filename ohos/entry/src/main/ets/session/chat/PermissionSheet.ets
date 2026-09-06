@@ -5,21 +5,29 @@
  *  - 澄清提问（AskUserQuestion）：标题「需要澄清」，逐题整行选项卡（圆点 +
  *    选项 + 描述），「其他」行内直接输入回答；未全部作答前「提交回答」置灰，
  *    作答打包 answers 走 permission_response；「跳过」= 无理由拒绝。
- *  - 工具调用（含 plan/未知，plan 卡定稿前同工具卡）：工具名做标题 + 入参
- *    摘要盒；允许 / 拒绝整行排布；拒绝两步式——点拒绝原地展开理由输入
- *    （可留空）→ 确认拒绝 / 返回，理由走协议 message 通道。
+ *  - 计划批准（ExitPlanMode）：标题「计划待批准」，计划正文（input.plan）
+ *    按消息区同一 Markdown 管线渲染、一屏限高内滚——批准前必须能读完全文，
+ *    「批准并执行 / 继续修改计划」恒在卡尾；批准带 nextMode='auto'（sidecar
+ *    切模式后开始执行）。
+ *  - 工具调用（未知工具同款卡）：工具名做标题 + 入参摘要盒；允许 / 拒绝整行
+ *    排布；拒绝两步式——点拒绝原地展开理由输入（可留空）→ 确认拒绝 / 返回，
+ *    理由走协议 message 通道。
  * 作答草稿状态随 PermissionRequest 实例走（@Trace 字段级观察，队头切换即
  * 全新草稿）；组件零业务逻辑，只做展示与派发（对照 PWA PermissionSheet）。
  */
 import { ChatStore } from './ChatStore';
 import { PermissionRequest } from './ChatBlocks';
-import { QuestionSpec, QuestionOption, judgePermissionKind } from './PermissionShape';
+import { QuestionSpec, QuestionOption, judgePermissionKind, planText } from './PermissionShape';
 import { chatModel, RespondPermissionOpts } from '../ChatModel';
 import { toolSummary, inputJson } from './ChatWire';
+import { MarkdownText } from './MarkdownText';
 
 @ComponentV2
 export struct PermissionSheet {
   @Require @Param store: ChatStore;
+  /** 计划正文滚动区的限高（页面按根高度折算传入——不能用 List 视口高：
+   *  卡片出现会压缩 List，用它会形成布局反馈环）。 */
+  @Require @Param planBodyMax: number;
 
   // ── 作答草稿读取（草稿数组整体替换，读侧随渲染追踪）──
 
@@ -69,6 +77,47 @@ export struct PermissionSheet {
     .alignItems(HorizontalAlign.Center)
   }
 
+  /** 拒绝两步式的理由表单（点拒绝原地替换按钮行；空理由 = 普通拒绝）。 */
+  @Builder
+  denyForm(p: PermissionRequest, placeholder: string) {
+    TextInput({ text: p.denyReason, placeholder: placeholder })
+      .onChange((value: string) => {
+        p.denyReason = value;
+      })
+      .fontSize(13)
+      .fontColor($r('app.color.text_primary'))
+      .placeholderColor($r('app.color.text_secondary'))
+      .caretColor($r('app.color.accent'))
+      .backgroundColor($r('app.color.input_bg'))
+      .borderRadius(10)
+      .padding({ left: 12, right: 12 })
+      .height(40)
+      .width('100%')
+    Button('确认拒绝')
+      .fontSize(14)
+      .fontColor($r('app.color.status_danger'))
+      .backgroundColor(Color.Transparent)
+      .border({ width: 1, color: $r('app.color.status_danger') })
+      .borderRadius(18)
+      .height(40)
+      .width('100%')
+      .onClick(() => {
+        const reason: string = p.denyReason.trim();
+        const opts: RespondPermissionOpts = { answers: null, reason: reason !== '' ? reason : null, nextMode: null };
+        void chatModel.respondPermission(p.id, false, opts);
+      })
+    Button('返回')
+      .fontSize(14)
+      .fontColor($r('app.color.text_primary'))
+      .backgroundColor($r('app.color.input_bg'))
+      .borderRadius(18)
+      .height(40)
+      .width('100%')
+      .onClick(() => {
+        p.denyOpen = false;
+      })
+  }
+
   // ── 澄清提问卡（AskUserQuestion）──
 
   @Builder
@@ -100,7 +149,7 @@ export struct PermissionSheet {
           if (!p.canSubmitAnswers()) {
             return;
           }
-          const opts: RespondPermissionOpts = { answers: p.packAnswers(), reason: null };
+          const opts: RespondPermissionOpts = { answers: p.packAnswers(), reason: null, nextMode: null };
           void chatModel.respondPermission(p.id, true, opts);
         })
 
@@ -224,6 +273,78 @@ export struct PermissionSheet {
     })
   }
 
+  // ── 计划批准卡（ExitPlanMode）──
+
+  /** 计划批准卡：正文 Markdown 一屏限高内滚（短计划不撑空、长计划按钮仍恒在卡尾）。 */
+  @Builder
+  planCard(p: PermissionRequest) {
+    Column({ space: 10 }) {
+      Row() {
+        Text('计划待批准')
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+        Blank()
+        this.queueBadgeView()
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      if (p.fromSubagentName !== '') {
+        Text(`来自子代理 ${p.fromSubagentName}`)
+          .fontSize(11)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
+      }
+
+      Scroll() {
+        if (planText(p.input) !== '') {
+          MarkdownText({ raw: planText(p.input), live: false })
+        } else {
+          Text('（无计划正文）')
+            .fontSize(13)
+            .fontColor($r('app.color.text_secondary'))
+        }
+      }
+      .width('100%')
+      .align(Alignment.Top)
+      .constraintSize({ maxHeight: this.planBodyMax })
+      .scrollBar(BarState.Auto)
+      .edgeEffect(EdgeEffect.Spring)
+
+      if (!p.denyOpen) {
+        Button('批准并执行')
+          .fontSize(14)
+          .fontColor(Color.White)
+          .backgroundColor($r('app.color.accent'))
+          .borderRadius(18)
+          .height(40)
+          .width('100%')
+          .onClick(() => {
+            const opts: RespondPermissionOpts = { answers: null, reason: null, nextMode: 'auto' };
+            void chatModel.respondPermission(p.id, true, opts);
+          })
+        Button('继续修改计划')
+          .fontSize(14)
+          .fontColor($r('app.color.text_primary'))
+          .backgroundColor($r('app.color.input_bg'))
+          .borderRadius(18)
+          .height(40)
+          .width('100%')
+          .onClick(() => {
+            p.denyOpen = true;
+          })
+      } else {
+        this.denyForm(p, '告诉它计划哪里需要调整（可留空）…')
+      }
+    }
+    .width('100%')
+    .padding(12)
+    .borderRadius(12)
+    .backgroundColor($r('app.color.card_bg'))
+    .border({ width: 1, color: $r('app.color.line') })
+  }
+
   // ── 工具调用卡 ──
 
   @Builder
@@ -280,42 +401,7 @@ export struct PermissionSheet {
             p.denyOpen = true;
           })
       } else {
-        TextInput({ text: p.denyReason, placeholder: '告诉它为什么拒绝（可留空）…' })
-          .onChange((value: string) => {
-            p.denyReason = value;
-          })
-          .fontSize(13)
-          .fontColor($r('app.color.text_primary'))
-          .placeholderColor($r('app.color.text_secondary'))
-          .caretColor($r('app.color.accent'))
-          .backgroundColor($r('app.color.input_bg'))
-          .borderRadius(10)
-          .padding({ left: 12, right: 12 })
-          .height(40)
-          .width('100%')
-        Button('确认拒绝')
-          .fontSize(14)
-          .fontColor($r('app.color.status_danger'))
-          .backgroundColor(Color.Transparent)
-          .border({ width: 1, color: $r('app.color.status_danger') })
-          .borderRadius(18)
-          .height(40)
-          .width('100%')
-          .onClick(() => {
-            const reason: string = p.denyReason.trim();
-            const opts: RespondPermissionOpts = { answers: null, reason: reason !== '' ? reason : null };
-            void chatModel.respondPermission(p.id, false, opts);
-          })
-        Button('返回')
-          .fontSize(14)
-          .fontColor($r('app.color.text_primary'))
-          .backgroundColor($r('app.color.input_bg'))
-          .borderRadius(18)
-          .height(40)
-          .width('100%')
-          .onClick(() => {
-            p.denyOpen = false;
-          })
+        this.denyForm(p, '告诉它为什么拒绝（可留空）…')
       }
     }
     .width('100%')
@@ -331,6 +417,8 @@ export struct PermissionSheet {
         if (i === 0) {
           if (judgePermissionKind(p.name) === 'question') {
             this.questionCard(p)
+          } else if (judgePermissionKind(p.name) === 'plan') {
+            this.planCard(p)
           } else {
             this.toolCard(p)
           }

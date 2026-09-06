@@ -42,6 +42,8 @@ export interface ChatPageParams {
 export interface RespondPermissionOpts {
   /** AskUserQuestion 作答（问题文本 → 答案；语义由 sidecar 解释重组）。 */
   answers: Record<string, string> | null;
+  /** 「批准并执行」的目标模式（计划批准 = 'auto'，sidecar 收到后切模式）；null = 不切。 */
+  nextMode: string | null;
   /** 拒绝理由（协议参数名 message；sidecar 透传给 SDK 的 deny message）。 */
   reason: string | null;
 }
@@ -170,9 +172,9 @@ export class ChatModel {
   /**
    * 权限应答（出队后 invoke，失败提示不回滚队列——sidecar 会重发）。
    * opts 语义对照上游 respondPermission：answers = AskUserQuestion 选项
-   * 作答、reason = 拒绝理由；null = 不携带（Rust Option 缺键即 None）。
-   * nextMode/sessionRules 未过筛：前者随「进入自动模式/计划批准」UI 定稿后
-   * 接入，后者的规则草稿推导在桌面 src/utils，ohos 同 PWA「允许」= 仅本次放行。
+   * 作答、reason = 拒绝理由、nextMode = 「批准并执行」的目标模式（计划
+   * 批准 = 'auto'）；null = 不携带（Rust Option 缺键即 None）。
+   * sessionRules 未过筛：规则草稿推导在桌面 src/utils，ohos 同 PWA「允许」= 仅本次放行。
    */
   async respondPermission(id: string, approved: boolean, opts: RespondPermissionOpts | null): Promise<void> {
     const sid: string = this.store.sid;
@@ -184,7 +186,7 @@ export class ChatModel {
         id: id,
         approved: approved,
         answers: opts !== null ? opts.answers : null,
-        nextMode: null,
+        nextMode: opts !== null ? opts.nextMode : null,
         message: opts !== null ? opts.reason : null,
         sessionRules: null
       });

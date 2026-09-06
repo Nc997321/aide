@@ -106,6 +106,12 @@ h1{font-size:18px;margin-bottom:12px}
 .pm-btn.danger{background:transparent;border:1px solid var(--danger);color:var(--danger)}
 .pm-deny{display:none;flex-direction:column;gap:10px}
 .pm-deny-in{background:var(--input-bg);border:0;border-radius:10px;padding:10px 12px;font-size:13px;color:var(--text);outline:none}
+/* ── 计划批准卡：正文 markdown 一屏限高内滚（按钮恒在卡尾）── */
+.pm-plan{max-height:280px;overflow-y:auto;font-size:13px;line-height:1.7;color:var(--text)}
+.pm-plan h4{font-size:14px;margin-bottom:6px}
+.pm-plan ol{padding-left:18px;display:flex;flex-direction:column;gap:5px}
+.pm-plan p{margin-top:8px;font-size:12px;color:var(--text-2)}
+.pm-plan code{font-family:Consolas,monospace;font-size:11.5px;background:var(--input-bg);border-radius:4px;padding:1px 5px}
 </style>
 </head>
 <body>
@@ -114,6 +120,7 @@ h1{font-size:18px;margin-bottom:12px}
     <h1>会话页排版草案</h1>
     <button class="replay" id="replay">▶ 重放模拟（含权限应答互动）</button>
     <div class="note"><b>V1 时间线内瞬态行（已选定）</b>：工具运行时消息流里出现一行「正在执行 ××」，本轮结束整行淡出消失。历史里永远只有思考卡 + 对话。代价：行的出现/消失会让时间线轻微跳动。</div>
+    <div class="note"><b>权限应答 · 计划批准（ExitPlanMode）</b>：plan 模式的出口确认——呈现的是「批准这份计划」而非「允许一次工具调用」。计划正文（input.plan）按消息区同一 Markdown 管线渲染，<b>一屏限高内滚</b>：批准前必须能读完全文，且「批准并执行 / 继续修改计划」恒在卡尾、不被长计划推出屏外。「批准并执行」带 nextMode='auto'（sidecar 切模式后开始执行）；「继续修改计划」走两步式拒绝（理由可留空），模型改完再送一版计划。</div>
     <div class="note"><b>权限应答 · 澄清提问（AskUserQuestion）</b>：模型在等你的「回答」而不是「允许」。逐题整行选项卡（圆点 + 选项 + 描述），「其他」行内直接输入回答；未作答前「提交回答」置灰。多题时逐题纵向排列、多选题带「可多选」标签，全部作答后提交门才开。跳过 = 无理由拒绝，模型自己想别的办法。作答打包 answers 走 permission_response。</div>
     <div class="note"><b>权限应答 · 工具调用（含 Bash）</b>：一个动作一行——允许（主按钮）/ 拒绝（次按钮）整行排布。拒绝走两步式：点拒绝原地展开理由输入（可留空）→ 确认拒绝 / 返回；理由走协议 message 通道，模型能看到为什么被拒。</div>
     <div class="note"><b>弹窗期间输入框隐藏</b>：挂着未决请求时，新消息本就会排队等这轮答完，与其留着占屏不如整块让位；答完输入框回归。并行请求 FIFO：永远只确认队头，卡片头部显示「还有 N 条排队」。</div>
@@ -352,6 +359,49 @@ function questionCard(onSubmit, onSkip){
   return c;
 }
 
+/** 计划批准卡（ExitPlanMode）：正文 markdown 限高内滚 + 批准并执行（nextMode=auto）/
+ *  继续修改计划（两步式拒绝，改完再送一版）。onApprove()/onRevise(reason)。 */
+function planCard(onApprove, onRevise){
+  var c = el('<div class="pm fade"></div>');
+  c.innerHTML =
+    '<div class="pm-tt"><span class="pm-title">计划待批准</span><span class="queue" style="display:none">还有 1 条排队</span></div>' +
+    '<div class="pm-plan">' +
+      '<h4>守卫修复 · 验证 · 部署</h4>' +
+      '<ol>' +
+        '<li><b>修守卫</b>：beforeEach 异步分支改为返回 Promise，resolve 前不放行；同步分支保持现状。</li>' +
+        '<li><b>补用例</b>：为异步分支补 2 条用例（超时拒绝 / 正常放行），挂进 tests/router.spec.ts。</li>' +
+        '<li><b>局部验证</b>：先跑 <code>pnpm test -- --run router</code>，红了先修再继续，不带病前进。</li>' +
+        '<li><b>全量回归</b>：路由全绿后跑 <code>pnpm test -- --run</code>，确认没有殃及别处。</li>' +
+        '<li><b>构建部署</b>：<code>pnpm build</code> 后部署测试环境，附变更说明与用例结果。</li>' +
+      '</ol>' +
+      '<p>预计 10 分钟；部署前会再确认一次目标环境。中途用例失败就停下来汇报，不自行改别处代码。</p>' +
+    '</div>' +
+    '<div class="pm-acts" style="display:flex;flex-direction:column;gap:10px">' +
+      '<button class="pm-btn primary">批准并执行</button>' +
+      '<button class="pm-btn ghost">继续修改计划</button>' +
+    '</div>' +
+    '<div class="pm-deny">' +
+      '<input class="pm-deny-in" placeholder="告诉它计划哪里需要调整（可留空）…">' +
+      '<button class="pm-btn danger">确认拒绝</button>' +
+      '<button class="pm-btn ghost">返回</button>' +
+    '</div>';
+  var acts = c.querySelector('.pm-acts');
+  var deny = c.querySelector('.pm-deny');
+  var denyIn = c.querySelector('.pm-deny-in');
+  c.querySelector('.pm-btn.primary').addEventListener('click', function(){ onApprove(); });
+  c.querySelector('.pm-acts .ghost').addEventListener('click', function(){
+    acts.style.display = 'none';
+    deny.style.display = 'flex';
+    denyIn.focus();
+  });
+  deny.querySelector('.ghost').addEventListener('click', function(){
+    deny.style.display = 'none';
+    acts.style.display = 'flex';
+  });
+  deny.querySelector('.danger').addEventListener('click', function(){ onRevise(denyIn.value.trim()); });
+  return c;
+}
+
 /** 工具调用卡：一个动作一行；拒绝两步式展开理由表单。onAllow()/onDeny(reason)。 */
 function toolCard(onAllow, onDeny){
   var c = el('<div class="pm fade"></div>');
@@ -396,27 +446,48 @@ function play(){
       '<span class="lb">思考中…</span><span class="chev" style="display:none">' + ICONS.chev + '</span></div><div class="think-b"></div></div>');
     g.appendChild(th); scroll();
     typeInto(th.querySelector('.think-b'),
-      '验证守卫要先跑路由相关用例；跑之前跟你确认一下验证范围，别全量回归浪费时间。',
+      '这个任务要动守卫代码、跑测试还要部署，先列个计划给你确认；批准后我会再跟你对一下验证范围就动手。',
       18, null);
     later(function(){
-      // 互动 1：澄清提问（模型等答案；1.4s 后 Bash 请求入队，演示 FIFO 排队徽标）
-      var bashTimer = null;
-      var qc = questionCard(function(){ answered(); }, function(){ answered(); });
-      showPm(qc);
-      bashTimer = later(function(){
-        bashTimer = null;
-        qc.querySelector('.queue').style.display = '';
-      }, 1400);
-      function answered(){
-        if (bashTimer){ clearTimeout(bashTimer); bashTimer = null; }
-        dismissPm(qc, function(){
-          // 互动 2：工具调用（Bash）——允许走全流程，拒绝走受限流程
-          var tc = toolCard(
-            function(){ dismissPm(tc, function(){ runFlow(g, true); }); },
-            function(reason){ dismissPm(tc, function(){ runFlow(g, false, reason); }); }
-          );
-          showPm(tc);
+      // 互动 1：计划批准（plan 模式出口；批准带 nextMode=auto 切模式后开始执行，
+      // 「继续修改计划」= 两步式拒绝，模型按反馈改完再送一版）
+      showPlan();
+      function showPlan(){
+        var pc = planCard(function(){
+          dismissPm(pc, showQuestion);
+        }, function(reason){
+          dismissPm(pc, function(){
+            var t = el('<div class="ai-text"></div>');
+            g.appendChild(t); scroll();
+            typeInto(t, reason !== ''
+              ? `收到：「${reason}」。计划已按这个调整——部署前先过一遍冒烟，再送一版。`
+              : '收到，计划已调整，再送一版。', 22, function(){
+              later(showPlan, 500);
+            });
+          });
         });
+        showPm(pc);
+      }
+      // 互动 2：澄清提问（模型等答案；1.4s 后 Bash 请求入队，演示 FIFO 排队徽标）
+      function showQuestion(){
+        var bashTimer = null;
+        var qc = questionCard(function(){ answered(); }, function(){ answered(); });
+        showPm(qc);
+        bashTimer = later(function(){
+          bashTimer = null;
+          qc.querySelector('.queue').style.display = '';
+        }, 1400);
+        function answered(){
+          if (bashTimer){ clearTimeout(bashTimer); bashTimer = null; }
+          dismissPm(qc, function(){
+            // 互动 3：工具调用（Bash）——允许走全流程，拒绝走受限流程
+            var tc = toolCard(
+              function(){ dismissPm(tc, function(){ runFlow(g, true); }); },
+              function(reason){ dismissPm(tc, function(){ runFlow(g, false, reason); }); }
+            );
+            showPm(tc);
+          });
+        }
       }
     }, 2600);
   }, 1300);
