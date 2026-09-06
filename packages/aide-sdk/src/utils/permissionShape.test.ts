@@ -3,7 +3,7 @@ import {
   EDIT_TOOL_NAMES,
   PLAN_TOOL_NAME,
   QUESTION_TOOL_NAME,
-  canEnterEditMode,
+  canEnterAutoMode,
   canSubmitQuestions,
   isEditToolName,
   judgePermissionKind,
@@ -119,9 +119,9 @@ describe("packQuestionAnswers", () => {
   });
 });
 
-// ── 编辑模式判定 ──
+// ── 进入自动模式判定 ──
 
-describe("EDIT_TOOL_NAMES / isEditToolName / canEnterEditMode", () => {
+describe("EDIT_TOOL_NAMES / isEditToolName / canEnterAutoMode", () => {
   it("四个内置编辑工具", () => {
     expect([...EDIT_TOOL_NAMES].sort()).toEqual(["Edit", "MultiEdit", "NotebookEdit", "Write"]);
     expect(isEditToolName("Edit")).toBe(true);
@@ -131,19 +131,19 @@ describe("EDIT_TOOL_NAMES / isEditToolName / canEnterEditMode", () => {
   });
 
   it("编辑工具 + 手动模式 → true；空串模式（清单未就位）按手动处理", () => {
-    expect(canEnterEditMode("Edit", "default")).toBe(true);
-    expect(canEnterEditMode("Write", "")).toBe(true);
-    expect(canEnterEditMode("Write", undefined)).toBe(true);
+    expect(canEnterAutoMode("Edit", "manual")).toBe(true);
+    expect(canEnterAutoMode("Write", "")).toBe(true);
+    expect(canEnterAutoMode("Write", undefined)).toBe(true);
   });
 
-  it("已在编辑/自动/最高权限模式 → false（弹窗属 ask 规则例外，选项隐藏）", () => {
-    for (const mode of ["acceptEdits", "auto", "bypassPermissions"]) {
-      expect(canEnterEditMode("Edit", mode)).toBe(false);
+  it("已在自动/最高权限模式 → false（弹窗属 ask 规则例外，选项隐藏）", () => {
+    for (const mode of ["auto", "bypassPermissions"]) {
+      expect(canEnterAutoMode("Edit", mode)).toBe(false);
     }
   });
 
   it("非编辑工具恒 false（不论模式）", () => {
-    expect(canEnterEditMode("Bash", "default")).toBe(false);
+    expect(canEnterAutoMode("Bash", "manual")).toBe(false);
   });
 });
 

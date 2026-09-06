@@ -155,7 +155,7 @@ export interface AppSettings {
 }
 
 /** 远程控制网关设置。relayUrl 为自建中继地址（wss://…），permissionMode 决定
- *  远程会话的工具批准策略（auto / acceptEdits / default）。 */
+ *  远程会话的工具批准策略（auto / manual）。 */
 export interface RemoteSettings {
   enabled: boolean;
   relayUrl: string;

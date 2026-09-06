@@ -12,7 +12,7 @@ import {
   canSubmitQuestions as questionsAnswered,
   packQuestionAnswers,
   isEditToolName,
-  canEnterEditMode as editModeOfferable,
+  canEnterAutoMode as autoModeOfferable,
   permissionInputRows,
   permissionInputJson,
   type PermissionInputRow,
@@ -45,10 +45,10 @@ const props = defineProps<{
    *    = 会写入的规则）；scope=null 表示无可持久化作用域，不显示记住 UI；
    *  - failed：拉取失败 → 同不显示记住 UI，普通允许不受影响。 */
   rememberContext: RememberContextState;
-  /** 当前权限模式（ChatPanel 的 selectedPermissionMode）。编辑工具在非编辑模式下
-   *  把「允许并记住」换成「进入编辑模式」——对不了解规则机制的用户，逐条点允许/
-   *  记住都不解渴，切模式才是"之后别再问"的那个选项（对齐 CLI 的 "allow all
-   *  edits this session"）。可能为空串（模式清单还没就位），按"显示"处理。 */
+  /** 当前权限模式（ChatPanel 的 selectedPermissionMode）。编辑工具在非自动/最高
+   *  权限模式下把「允许并记住」换成「进入自动模式」——对不了解规则机制的用户，
+   *  逐条点允许/记住都不解渴，切模式才是"之后别再问"的那个选项。可能为空串
+   *  （模式清单还没就位），按"显示"处理。 */
   currentMode?: string;
 }>();
 
@@ -335,14 +335,14 @@ const rememberDrafts = computed<PermissionRuleDraft[]>(() => {
 });
 
 /** 「记住」功能对这类请求整体可用：真实工具调用（计划批准 / 澄清提问 / 发送前
- *  确认都不是），且不是「进入编辑模式」优先的编辑工具。与快照就绪态正交。 */
+ *  确认都不是），且不是「进入自动模式」优先的编辑工具。与快照就绪态正交。 */
 const rememberPossible = computed(
   () =>
     !!props.permission &&
     !isConfirm.value &&
     !isPlanApproval.value &&
     !isQuestion.value &&
-    !canEnterEditMode.value,
+    !canEnterAutoMode.value,
 );
 
 /** 快照未就绪的占位门：loading 且该请求确实有可推导规则才显示占位行——
@@ -418,13 +418,13 @@ function applySimplified(i: number) {
   if (s !== null) editableValues[i] = s;
 }
 
-// ── 「进入编辑模式」：编辑类工具的"一劳永逸"选项 ──
+// ── 「进入自动模式」：编辑类工具的"一劳永逸"选项 ──
 // 手动模式下编辑会一直弹窗；对不熟悉规则机制的用户，「允许并记住」（记一条文件夹
-// 规则）不如直接切到编辑模式解渴。已在编辑/自动/最高权限模式时弹窗本就不该为
-// 编辑出现（出现了说明是 ask 规则等例外），此时藏起本按钮、露出「允许并记住」。
+// 规则）不如直接切到自动模式解渴。已在自动/最高权限模式时弹窗本就不该为编辑出现
+// （出现了说明是 ask 规则等例外），此时藏起本按钮、露出「允许并记住」。
 // 工具名单与模式判定在 @aide/sdk/utils/permissionShape（与远程 PWA 共用）。
-const canEnterEditMode = computed(() =>
-  editModeOfferable(props.permission?.name, props.currentMode),
+const canEnterAutoMode = computed(() =>
+  autoModeOfferable(props.permission?.name, props.currentMode),
 );
 
 // ── 会话级规则提示：文件工具弹窗里点「允许」会推导一条精确文件规则（本会话内
@@ -679,11 +679,10 @@ const inputJson = computed(() => {
             </button>
             <div class="perm-actions-primary">
               <template v-if="isPlanApproval">
-                <button class="perm-btn perm-btn--outline" @click="emit('respond', permission.id, true, undefined, undefined)">
+                <!-- 批准后落到哪个模式由 nextMode 显式钉死，不靠 sidecar 回落：
+                     删掉 acceptEdits 后编辑的「不再逐条问」归 auto 承担。 -->
+                <button class="perm-btn perm-btn--outline" @click="emit('respond', permission.id, true, undefined, 'manual')">
                   批准，手动确认编辑
-                </button>
-                <button class="perm-btn perm-btn--outline" @click="emit('respond', permission.id, true, undefined, 'acceptEdits')">
-                  批准，自动接受编辑
                 </button>
                 <button class="perm-btn perm-btn--solid" @click="emit('respond', permission.id, true, undefined, 'auto')">
                   批准，使用 Auto 模式
@@ -692,13 +691,13 @@ const inputJson = computed(() => {
               </template>
               <template v-else>
                 <button
-                  v-if="canEnterEditMode"
+                  v-if="canEnterAutoMode"
                   class="perm-btn perm-btn--outline"
-                  data-action="edit-mode"
-                  v-tooltip="'本会话所有文件编辑自动接受'"
-                  @click="emit('respond', permission.id, true, undefined, 'acceptEdits')"
+                  data-action="auto-mode"
+                  v-tooltip="'切到自动模式：本会话编辑等工具由模型判定后自动放行'"
+                  @click="emit('respond', permission.id, true, undefined, 'auto')"
                 >
-                  进入编辑模式
+                  进入自动模式
                 </button>
                 <button
                   v-if="canRemember"

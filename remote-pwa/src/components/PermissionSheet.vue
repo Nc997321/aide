@@ -9,7 +9,7 @@ import {
   toggleQuestionSelection,
   canSubmitQuestions as questionsAnswered,
   packQuestionAnswers,
-  canEnterEditMode as editModeOfferable,
+  canEnterAutoMode as autoModeOfferable,
   permissionSummaryLine,
   permissionInputJson,
   type PermissionKind,
@@ -19,7 +19,7 @@ import { renderMarkdown } from "@aide/sdk/utils/markdown";
 
 /**
  * 权限确认弹窗（远程版）：对齐桌面 PermissionDialog 的远程可用子集——
- * 工具调用（允许/拒绝+理由/进入编辑模式）、澄清提问（AskUserQuestion 选项
+ * 工具调用（允许/拒绝+理由/进入自动模式）、澄清提问（AskUserQuestion 选项
  * 作答）、计划批准（ExitPlanMode markdown 渲染）。形态判定/答案打包等纯逻辑
  * 走 SDK 的 permissionShape（与桌面共用），数据通道走 SDK 的 respondPermission
  * （answers/nextMode/reason 参数已封装）。
@@ -36,8 +36,8 @@ const props = defineProps<{
   permission: PermissionRequest | null;
   /** 挂起的权限请求总数（含当前这条）——并行工具调用会排队，逐条确认。 */
   queueCount?: number;
-  /** 当前权限模式（chat.currentPermissionMode）：编辑工具在非编辑模式下把
-   *  「允许」旁加一枚「进入编辑模式」——切模式比逐条允许更解渴。空串（清单
+  /** 当前权限模式（chat.currentPermissionMode）：编辑工具在非自动/最高权限模式下
+   *  把「允许」旁加一枚「进入自动模式」——切模式比逐条允许更解渴。空串（清单
    *  未就位）按"显示"处理（对齐桌面）。 */
   currentMode?: string;
 }>();
@@ -149,11 +149,11 @@ function submitAnswers() {
   emit("respond", p.id, true, packQuestionAnswers(questions.value, selections, freeText, useFreeText));
 }
 
-// ── 「进入编辑模式」：编辑类工具的一劳永逸选项（nextMode 通道；
+// ── 「进入自动模式」：编辑类工具的一劳永逸选项（nextMode 通道；
 //    工具名单与模式判定在 @aide/sdk/utils/permissionShape）──
 
-const canEnterEditMode = computed(
-  () => kind.value === "tool" && editModeOfferable(props.permission?.name, props.currentMode),
+const canEnterAutoMode = computed(
+  () => kind.value === "tool" && autoModeOfferable(props.permission?.name, props.currentMode),
 );
 
 // ── 工具输入展示：语义摘要一行（SDK 按字段优先级提取）+ 完整 JSON 折叠 ──
@@ -253,12 +253,12 @@ watch(
             {{ kind === "plan" ? "继续修改计划" : "拒绝" }}
           </button>
           <button
-            v-if="canEnterEditMode"
+            v-if="canEnterAutoMode"
             type="button"
-            class="pm-btn pm-btn-editmode"
-            @click="emit('respond', permission.id, true, undefined, 'acceptEdits')"
+            class="pm-btn pm-btn-automode"
+            @click="emit('respond', permission.id, true, undefined, 'auto')"
           >
-            进入编辑模式
+            进入自动模式
           </button>
           <button
             type="button"

@@ -1874,7 +1874,7 @@ details[open] > summary .caret {
   background: var(--surface-default);
   border-color: var(--border-subtle);
 }
-.pm-btn-editmode {
+.pm-btn-automode {
   flex: 1.4;
   color: var(--accent);
   background: var(--accent-subtle);

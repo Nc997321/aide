@@ -26,7 +26,7 @@ vi.mock("@aide/sdk/api", () => ({
       sessionEffort: vi.fn(async () => null),
       setSessionEffort: vi.fn(async () => undefined),
       getDefaultModels: vi.fn(async () => []),
-      getDefaultPermissionModes: vi.fn(async () => [{ value: "default", displayName: "默认" }]),
+      getDefaultPermissionModes: vi.fn(async () => [{ value: "auto", displayName: "自动模式" }]),
       scanPluginSkills: vi.fn(async () => []),
       readFileContent: vi.fn(async () => ""),
     },
@@ -91,8 +91,8 @@ function baseProps(overrides: Record<string, unknown> = {}) {
     models: [],
     currentModel: "",
     currentEffort: "",
-    permissionModes: [{ value: "default", displayName: "默认" }],
-    currentPermissionMode: "default",
+    permissionModes: [{ value: "auto", displayName: "自动模式" }],
+    currentPermissionMode: "auto",
     focused: true,
     ...overrides,
   };
@@ -158,20 +158,20 @@ describe("ChatPanel 跨会话串修复", () => {
     wrapper.unmount();
   });
 
-  it("权限模式：两会话 currentPermissionMode 同值（都 default），A 用户改下拉到 acceptEdits 后切 B，B 显示 default 不串", async () => {
-    const wrapper = mount(ChatPanel, { props: baseProps({ sessionId: "A", currentPermissionMode: "default" }) });
+  it("权限模式：两会话 currentPermissionMode 同值（都 auto），A 用户改下拉到 manual 后切 B，B 显示 auto 不串", async () => {
+    const wrapper = mount(ChatPanel, { props: baseProps({ sessionId: "A", currentPermissionMode: "auto" }) });
     await flush()
-    // 模拟用户在 A 把下拉改成 acceptEdits（selectedPermissionMode 本地值）
+    // 模拟用户在 A 把下拉改成 manual（selectedPermissionMode 本地值）
     const permStub = wrapper.findAllComponents({ name: "ThemedSelect" }).find((s) => s.props("title") === "权限模式");
-    permStub?.vm.$emit("update:modelValue", "acceptEdits");
+    permStub?.vm.$emit("update:modelValue", "manual");
     await nextTick();
-    expect(permValueOf(wrapper)).toBe("acceptEdits");
+    expect(permValueOf(wrapper)).toBe("manual");
 
-    // 切到 B：B 的 currentPermissionMode 也是 default（同值，currentPermissionMode watcher 不触发）
-    await wrapper.setProps({ sessionId: "B", currentPermissionMode: "default" });
+    // 切到 B：B 的 currentPermissionMode 也是 auto（同值，currentPermissionMode watcher 不触发）
+    await wrapper.setProps({ sessionId: "B", currentPermissionMode: "auto" });
     await flush()
-    // 修复后 sessionId watcher 每次切换都重置 → 从 B 的 currentPermissionMode 落 default
-    expect(permValueOf(wrapper)).toBe("default");
+    // 修复后 sessionId watcher 每次切换都重置 → 从 B 的 currentPermissionMode 落 auto
+    expect(permValueOf(wrapper)).toBe("auto");
 
     wrapper.unmount();
   });

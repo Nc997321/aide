@@ -15,6 +15,18 @@ use crate::settings::SettingsService;
 
 // ── 聊天控制 ──
 
+/// 权限模式 id 迁移：`default` 已更名为 `manual`（对齐 CLI 的 --permission-mode
+/// choices，两者 CLI 都接受，aide 统一用 `manual`）。远程侧的两个来源——老 PWA
+/// 客户端随消息带的旧 id、桌面设置里存的旧值——都要归一化，否则 sidecar 会收到
+/// 一个模式清单里已不存在的 id。
+fn normalize_permission_mode(mode: String) -> String {
+    if mode == "default" {
+        "manual".to_string()
+    } else {
+        mode
+    }
+}
+
 /// send_message 参数 DTO（镜像前端 SendMessageParams）。
 /// `jump_queue` 前端只发 true/缺省——缺省即 false，二态语义用 serde(default)
 /// 封闭（None≡Some(false)，见 chat.rs 的 unwrap_or(false)），不留 Option<bool> 三态。
@@ -42,14 +54,16 @@ pub fn send_message(app: AppHandle, params: Value) -> BoxFuture<'static, Result<
         let a: SendMessageArgs = parse(params)?;
         // 远程权限模式兜底：PWA 未随消息带 permissionMode 时读桌面「远程控制」设置
         // （保留旧 bridge 语义：远程会话默认受 remote.permission_mode 约束）。
-        let permission_mode = match a.permission_mode {
-            Some(m) => Some(m),
-            None => Some(
+        // 两路都过一遍 normalize：`default` 已更名为 `manual`，老 PWA 客户端与旧
+        // 存盘配置仍可能带旧 id，归一化后再下发，避免 sidecar 收到清单外的模式。
+        let permission_mode = Some(normalize_permission_mode(match a.permission_mode {
+            Some(m) => m,
+            None => {
                 crate::remote::read_remote_settings(&app)
                     .await?
-                    .permission_mode,
-            ),
-        };
+                    .permission_mode
+            }
+        }));
         let runtime = app.state::<AgentRuntimeManager>();
         let ws_state = app.state::<WorkspaceState>();
         let settings = app.state::<Arc<SettingsService>>();

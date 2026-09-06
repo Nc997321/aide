@@ -101,25 +101,25 @@ export function packQuestionAnswers(
   return answers;
 }
 
-// ── 「进入编辑模式」：编辑类工具的一劳永逸选项 ──
+// ── 「进入自动模式」：编辑类工具的一劳永逸选项 ──
 
-/** 会改文件的内置工具：手动模式下逐条弹窗最烦，切 acceptEdits 一次解渴
- *  （对齐 CLI 的 "allow all edits this session"）。 */
+/** 会改文件的内置工具：手动模式下逐条弹窗最烦，切 auto 一次解渴
+ *  （aide 不提供 acceptEdits——编辑的「不再逐条问」由 auto 承担）。 */
 export const EDIT_TOOL_NAMES: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
 export function isEditToolName(name: string | undefined | null): boolean {
   return !!name && EDIT_TOOL_NAMES.has(name);
 }
 
-/** 编辑工具 + 当前不在编辑/自动/最高权限模式 → 显示「进入编辑模式」。
- *  已在编辑/自动/最高权限模式时弹窗本就不该为编辑出现（出现了说明是 ask 规则
- *  等例外），此时该选项隐藏、露出「允许并记住」。模式空串（清单未就位）按
- *  手动模式处理。 */
-export function canEnterEditMode(
+/** 编辑工具 + 当前不在自动/最高权限模式 → 显示「进入自动模式」（切过去后编辑
+ *  不再逐条询问）。已在自动/最高权限模式时弹窗本就不该为编辑出现（出现了说明是
+ *  ask 规则等例外），此时该选项隐藏、露出「允许并记住」。模式空串（清单未就位）
+ *  按手动模式处理。 */
+export function canEnterAutoMode(
   name: string | undefined | null,
   currentMode: string | undefined,
 ): boolean {
-  return isEditToolName(name) && !["acceptEdits", "auto", "bypassPermissions"].includes(currentMode ?? "");
+  return isEditToolName(name) && !["auto", "bypassPermissions"].includes(currentMode ?? "");
 }
 
 // ── 工具输入展示 ──

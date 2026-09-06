@@ -73,11 +73,14 @@ export function buildPluginsOption(): { type: "local"; path: string }[] {
   }
 }
 
+// 顺序即默认：`auto` 居首 = 新会话的默认权限模式（前端「清单首项即 provider 默认
+// 模式」，见 ChatInputBox.vue）。模式 id 对齐 CLI 的 --permission-mode choices
+// （CLI 已把 `default` 更名为 `manual`，两者 CLI 都接受，aide 统一用 `manual`）。
+// 不提供 `acceptEdits`——编辑工具的「一劳永逸」由 auto 承担。
 const PERMISSION_MODES: PermissionModeOption[] = [
-  { value: "default", displayName: "默认权限" },
-  { value: "acceptEdits", displayName: "编辑模式" },
-  { value: "plan", displayName: "计划模式" },
   { value: "auto", displayName: "自动模式" },
+  { value: "manual", displayName: "手动模式" },
+  { value: "plan", displayName: "计划模式" },
   { value: "bypassPermissions", displayName: "最高权限" },
 ];
 
@@ -85,10 +88,15 @@ const EXTRA_MODE_LABELS: Record<string, string> = {
   dontAsk: "本次会话不再询问",
 };
 
-/** 「进入编辑模式」按钮连带放行的工具集：acceptEdits 的语义就是编辑工具自动接受，
+/** 「进入自动模式」按钮连带放行的工具集：切到 auto 后编辑工具不再逐条询问，
  *  切模式时队列里还挂着的同类请求一并放行——否则一轮并行 3 个 Edit，用户点完
- *  「进入编辑模式」还得把剩下 2 条逐个点掉，等于没切。 */
+ *  「进入自动模式」还得把剩下 2 条逐个点掉，等于没切。 */
 const EDIT_TOOL_NAMES: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
+/** 切到这些模式后编辑工具不再逐条询问（即「进入自动模式」按钮在弹窗里被藏起的
+ *  模式）→ 切换前已挂起的编辑请求连带放行。否则旧弹窗留在屏幕上，而前端
+ *  currentMode 已是新模式、按钮又被藏起，用户只能逐条点掉。 */
+const EDIT_AUTO_MODE_NAMES: ReadonlySet<string> = new Set(["auto", "bypassPermissions"]);
 
 /** 会话级规则的文件工具家族：Edit/Write/MultiEdit 共享同一份 file_path 精确文件规则
  *  （同一文件是同一操作对象，工具差异只是写入方式——Write 新文件放行后，Edit 同文件
@@ -219,7 +227,7 @@ export class SessionWorker {
   private lastConcreteModel = "";
   private lastModels: ModelOption[] = [];
   private aliasByResolvedPrefix: { value: string; resolvedPrefix: string }[] = [];
-  private currentPermissionMode = "default";
+  private currentPermissionMode = "auto";
   private pendingFork = false;
   private shouldForkNextConnect = false;
   private turnActive = false;
@@ -883,16 +891,20 @@ export class SessionWorker {
         this.addSessionRules(cmd.sessionRules);
       }
       if (cmd.approved && outcome?.toolName === "ExitPlanMode") {
-        this.applyPermissionMode(cmd.nextMode || "default");
+        // 批准计划后落到哪个模式由 nextMode 钉死（「手动确认编辑」传 manual、
+        // 「使用 Auto 模式」传 auto）；此处回落只兜底未带 nextMode 的调用方
+        // （如尚未实现三选一的远端），取与清单首项一致的 auto。
+        this.applyPermissionMode(cmd.nextMode || "auto");
       } else if (cmd.approved && outcome?.toolName === "EnterPlanMode") {
         // 模型主动进入计划模式（非用户预选）：对齐本地账本并广播，让前端下拉同步
         this.applyPermissionMode("plan");
       } else if (cmd.approved && cmd.nextMode) {
-        // 「进入编辑模式」：编辑工具的权限弹窗提供的一劳永逸选项——放行本次 +
-        // 切到 acceptEdits，之后编辑不再逐条确认（对齐 CLI 的 "allow all edits
-        // this session"）。切完把还挂着的其它编辑请求连带放行，别让用户逐条点。
+        // 「进入自动模式」：编辑工具的权限弹窗提供的一劳永逸选项——放行本次 +
+        // 切到 auto，之后编辑不再逐条确认（aide 不提供 acceptEdits，编辑的
+        // 「不再逐条问」归 auto 承担）。切完把还挂着的其它编辑请求连带放行，
+        // 别让用户逐条点。
         this.applyPermissionMode(cmd.nextMode);
-        if (cmd.nextMode === "acceptEdits") this.permMgr.approveMatching(EDIT_TOOL_NAMES);
+        if (EDIT_AUTO_MODE_NAMES.has(cmd.nextMode)) this.permMgr.approveMatching(EDIT_TOOL_NAMES);
       }
 
     } else if (cmd.cmd === "update_permission_policy") {
@@ -916,10 +928,10 @@ export class SessionWorker {
 
     } else if (cmd.cmd === "set_permission_mode") {
       this.applyPermissionMode(cmd.mode);
-      // 与「进入编辑模式」按钮同语义：切到 acceptEdits 时把切换之前已挂起的
-      // 编辑请求连带放行——否则旧弹窗留在屏幕上，而前端 currentMode 已是
-      // acceptEdits，「进入编辑模式」按钮又被藏起来，用户只能逐条点掉。
-      if (cmd.mode === "acceptEdits") this.permMgr.approveMatching(EDIT_TOOL_NAMES);
+      // 与「进入自动模式」按钮同语义：切到 auto/bypass 时把切换之前已挂起的
+      // 编辑请求连带放行——否则旧弹窗留在屏幕上，而前端 currentMode 已是新模式，
+      // 「进入自动模式」按钮又被藏起来，用户只能逐条点掉。
+      if (EDIT_AUTO_MODE_NAMES.has(cmd.mode)) this.permMgr.approveMatching(EDIT_TOOL_NAMES);
 
     } else if (cmd.cmd === "set_model") {
       applyModelSwitch({

@@ -961,7 +961,7 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
   });
 });
 
-describe("SessionWorker — set_permission_mode acceptEdits flush", () => {
+describe("SessionWorker — set_permission_mode auto flush", () => {
   it("approves pending edit requests and dismisses their dialogs, leaving other tools pending", async () => {
     const { worker, events } = makeWorker();
     const cb = worker._testCanUseTool();
@@ -974,13 +974,17 @@ describe("SessionWorker — set_permission_mode acceptEdits flush", () => {
     expect(editReq).toBeTruthy();
     expect(bashReq).toBeTruthy();
 
-    worker.handleCommand({ cmd: "set_permission_mode", session_id: "test-sid", mode: "acceptEdits" } as any);
+    // 真实场景是「手动模式下遇到 Edit 弹窗 → 切 auto」。不能直接发 auto：sidecar
+    // 初值即 auto（清单首项），mode 未变会被幂等短路（session-worker.ts:683），
+    // 既测不到连带放行也拿不到广播。
+    worker.handleCommand({ cmd: "set_permission_mode", session_id: "test-sid", mode: "manual" } as any);
+    worker.handleCommand({ cmd: "set_permission_mode", session_id: "test-sid", mode: "auto" } as any);
 
-    // 挂起的 Edit 被放行（对齐「进入编辑模式」按钮语义），弹窗经 permission_cancelled 撤下。
+    // 挂起的 Edit 被放行（对齐「进入自动模式」按钮语义），弹窗经 permission_cancelled 撤下。
     await expect(editDecision).resolves.toMatchObject({ behavior: "allow" });
     expect(events.some((e: any) => e.type === "permission_cancelled" && e.id === editReq.id)).toBe(true);
     // 模式本身已落账并广播。
-    expect(events.some((e: any) => e.type === "permission_modes_available" && e.current === "acceptEdits")).toBe(true);
+    expect(events.some((e: any) => e.type === "permission_modes_available" && e.current === "auto")).toBe(true);
     // Bash 不在编辑工具集内：仍挂着，既没放行也没撤弹窗。
     expect(events.some((e: any) => e.type === "permission_cancelled" && e.id === bashReq.id)).toBe(false);
     let bashSettled = false;

@@ -267,7 +267,8 @@ async function onPermissionRespond(
     sendConfirm.value = null;
     return;
   }
-  // nextMode 由 PermissionDialog 的「进入编辑模式/自动」按钮传（acceptEdits/auto），
+  // nextMode 由 PermissionDialog 的「批准，手动确认编辑 / 批准，使用 Auto 模式」
+  // 按钮传（manual/auto），以及编辑工具的「进入自动模式」按钮传（auto）；
   // 防御性更新对话框展示用 ref；输入框选择器是用户侧事实源，不经此同步。
   if (nextMode) permissionMode.value = nextMode;
   if (approved && persistRule) {
@@ -278,7 +279,7 @@ async function onPermissionRespond(
   // 会话级规则：手动模式下点普通「允许」放行文件工具（Edit/Write/MultiEdit/
   // NotebookEdit）时，推导精确文件 allow 规则随放行透传 sidecar 入库——本会话内
   // 同文件不再询问。仅普通允许走这条：「允许并记住」已持久化目录级规则（folder
-  // ⊇ file，会话规则冗余）；「进入编辑模式」切 acceptEdits 已覆盖。发送前确认
+  // ⊇ file，会话规则冗余）；「进入自动模式」切 auto 已覆盖。发送前确认
   // 已提前 return，走到这里 props.permission 必为真实权限请求。
   let sessionRules: PermissionRuleDraft[] | undefined;
   if (approved && !persistRule && !nextMode && props.permission && props.permission.id === id) {
@@ -322,7 +323,7 @@ function onSendRequest(prompt: string, opts: SendOptions & { effectiveProvider: 
  *  selectedPermissionMode 变化时经 permission-mode-changed 事件同步。 */
 const permissionMode = ref("");
 
-// ── 权限模式（plan / acceptEdits / default）——和模型下拉同一套模式：
+// ── 权限模式（plan / auto / manual）——和模型下拉同一套模式：
 // 会话没起进程时用静态兜底清单，用户的选择随每条消息的 permission_mode 带走；
 // 进程活着时切换走运行时命令，显示状态靠 sidecar 回发的事件坐实。
 const displayPermissionModes = computed<PermissionModeOption[]>(() =>

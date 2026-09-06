@@ -43,7 +43,7 @@ export interface ModelOption {
 }
 
 // 权限模式——同 ModelOption：value 是 provider 自己认的模式标识（Claude 的
-// "default"/"plan"/"acceptEdits"），核心协议只当不透明字符串透传，不解释语义。
+// "manual"/"plan"/"auto"），核心协议只当不透明字符串透传，不解释语义。
 export interface PermissionModeOption {
   value: string;
   displayName: string;

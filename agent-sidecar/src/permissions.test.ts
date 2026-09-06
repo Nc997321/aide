@@ -99,7 +99,7 @@ describe("PermissionManager — permission_request 不再携带 SDK 专属字段
     expect((events[0] as any).alwaysAllowLabel).toBeUndefined();
     // suggestions 也不再被解读（即便 SDK 仍传，sidecar 一律忽略）
     mgr.makeCallback((e) => events.push(e))("Edit", { file_path: "x.ts" }, {
-      suggestions: [{ type: "setMode", mode: "acceptEdits", destination: "session" }],
+      suggestions: [{ type: "setMode", mode: "auto", destination: "session" }],
     });
     expect((events[1] as any).alwaysAllowLabel).toBeUndefined();
   });
@@ -223,7 +223,7 @@ describe("PermissionManager — resolve / cancelAll（无 always / appliedMode /
     expect(cancelledIds().sort()).toEqual([id1, id2].sort());
   });
 
-  it("approveMatching 只放行匹配工具的挂起请求（切 acceptEdits 连带放行并排 Edit）", async () => {
+  it("approveMatching 只放行匹配工具的挂起请求（切 auto 连带放行并排 Edit）", async () => {
     const { mgr, callback, requestIds, cancelledIds } = setup();
     const pEdit1 = callback("Edit", { file_path: "a.ts" }, {});
     const pBash = callback("Bash", { command: "ls" }, {});

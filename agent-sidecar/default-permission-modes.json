@@ -1,7 +1,6 @@
 [
-  { "value": "default", "displayName": "手动模式" },
-  { "value": "acceptEdits", "displayName": "编辑模式" },
-  { "value": "plan", "displayName": "计划模式" },
   { "value": "auto", "displayName": "自动模式" },
+  { "value": "manual", "displayName": "手动模式" },
+  { "value": "plan", "displayName": "计划模式" },
   { "value": "bypassPermissions", "displayName": "最高权限" }
 ]

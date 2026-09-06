@@ -6,7 +6,7 @@ import PermissionSheet from "./PermissionSheet.vue";
 /**
  * PermissionSheet 形态分发测试（纯组件级，无传输）：
  * tool / plan / question 三形态渲染与应答打包、拒绝两步表单、
- * 编辑模式入口、AskUserQuestion 选择状态机、新请求复位。
+ * 进入自动模式入口、AskUserQuestion 选择状态机、新请求复位。
  */
 
 function mountSheet(permission: PermissionRequest | null, extra?: { queueCount?: number; currentMode?: string }) {
@@ -57,24 +57,24 @@ describe("PermissionSheet（形态分发）", () => {
     await w.find(".pm-deny-form .pm-btn-deny").trigger("click");
     expect(w.emitted("respond")![0]).toEqual(["p1", false, undefined, undefined, "别动 dist"]);
   });
-  it("编辑工具（Edit）在非编辑模式：显示「进入编辑模式」→ nextMode=acceptEdits", async () => {
-    const w = mountSheet(toolPerm({ name: "Edit", input: { file_path: "a.ts" } }), { currentMode: "default" });
-    const btn = w.find(".pm-btn-editmode");
+  it("编辑工具（Edit）在非自动模式：显示「进入自动模式」→ nextMode=auto", async () => {
+    const w = mountSheet(toolPerm({ name: "Edit", input: { file_path: "a.ts" } }), { currentMode: "manual" });
+    const btn = w.find(".pm-btn-automode");
     expect(btn.exists()).toBe(true);
     await btn.trigger("click");
-    expect(w.emitted("respond")![0]).toEqual(["p1", true, undefined, "acceptEdits"]);
+    expect(w.emitted("respond")![0]).toEqual(["p1", true, undefined, "auto"]);
   });
 
-  it("编辑工具在 acceptEdits / auto / bypassPermissions：无编辑模式按钮", async () => {
-    for (const mode of ["acceptEdits", "auto", "bypassPermissions"]) {
+  it("编辑工具在 auto / bypassPermissions：无进入自动模式按钮", async () => {
+    for (const mode of ["auto", "bypassPermissions"]) {
       const w = mountSheet(toolPerm({ name: "Edit" }), { currentMode: mode });
-      expect(w.find(".pm-btn-editmode").exists()).toBe(false);
+      expect(w.find(".pm-btn-automode").exists()).toBe(false);
     }
   });
 
-  it("非编辑工具（Bash）无论模式：无编辑模式按钮", () => {
-    const w = mountSheet(toolPerm({ name: "Bash" }), { currentMode: "default" });
-    expect(w.find(".pm-btn-editmode").exists()).toBe(false);
+  it("非编辑工具（Bash）无论模式：无进入自动模式按钮", () => {
+    const w = mountSheet(toolPerm({ name: "Bash" }), { currentMode: "manual" });
+    expect(w.find(".pm-btn-automode").exists()).toBe(false);
   });
 
   it("子代理请求：显示来源", () => {

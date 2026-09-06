@@ -214,12 +214,16 @@ function removeVimBinding(mode: keyof VimBindings, index: number) {
 // 状态快照（配对码/连接/已签发 token）每次进入 tab 时刷新。
 const remotePermissionModeOptions = [
   { value: "auto", label: "自动模式（自动批准非危险工具）" },
-  { value: "acceptEdits", label: "编辑模式（文件编辑自动批准）" },
-  { value: "default", label: "手动模式（不推荐远程使用）" },
+  { value: "manual", label: "手动模式（不推荐远程使用）" },
 ];
 const remoteEnabled = ref(settings.remote.enabled);
 const remoteRelayUrl = ref(settings.remote.relayUrl);
-const remotePermissionMode = ref(settings.remote.permissionMode);
+/** 旧值迁移：权限模式 id 由 `default` 更名为 `manual`（对齐 CLI 命名）。已存盘的
+ *  "default" 读回来匹配不上新清单，映射成 manual，别让下拉显示空白。 */
+function normalizePermissionMode(v: string | undefined): string {
+  return !v || v === "default" ? "manual" : v;
+}
+const remotePermissionMode = ref(normalizePermissionMode(settings.remote.permissionMode));
 const remoteStatus = ref<RemoteStatus | null>(null);
 
 /** 配对时间相对描述。粒度随间隔变粗：分钟 → 小时 → 天 → 具体日期。 */

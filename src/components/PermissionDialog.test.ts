@@ -363,32 +363,32 @@ describe("PermissionDialog — 允许并记住（多段 + 参数透明化）", (
   });
 });
 
-describe("PermissionDialog — 进入编辑模式", () => {
+describe("PermissionDialog — 进入自动模式", () => {
   const editPermission = (): PermissionRequest => ({
     id: "p3",
     name: "Edit",
     input: { file_path: "src/a.ts", old_string: "a", new_string: "b" },
   });
 
-  it("手动模式下编辑工具显示「进入编辑模式」、顶替「允许并记住」", () => {
+  it("手动模式下编辑工具显示「进入自动模式」、顶替「允许并记住」", () => {
     const wrapper = mountDialog({
       permission: editPermission(),
       rememberContext: readyCtx(),
-      currentMode: "default",
+      currentMode: "manual",
     });
-    expect(wrapper.find('[data-action="edit-mode"]').exists()).toBe(true);
+    expect(wrapper.find('[data-action="auto-mode"]').exists()).toBe(true);
     expect(wrapper.find('[data-action="remember"]').exists()).toBe(false);
     // 会话级规则提示移入按钮 tooltip（v-tooltip 指令，非原生 title）
     expect(wrapper.get('[data-action="allow"]').attributes("title")).toBeUndefined();
   });
 
-  it("文件工具「允许」/「进入编辑模式」按钮带会话级规则 tooltip", () => {
+  it("文件工具「允许」/「进入自动模式」按钮带会话级规则 tooltip", () => {
     const bindings = new Map<string, string>();
     const wrapper = mount(PermissionDialog, {
       props: {
         permission: editPermission(),
         rememberContext: readyCtx(),
-        currentMode: "default",
+        currentMode: "manual",
       },
       global: {
         directives: {
@@ -401,7 +401,7 @@ describe("PermissionDialog — 进入编辑模式", () => {
       },
     });
     expect(bindings.get("allow")).toBe("该文件本次会话不再询问");
-    expect(bindings.get("edit-mode")).toBe("本会话所有文件编辑自动接受");
+    expect(bindings.get("auto-mode")).toBe("切到自动模式：本会话编辑等工具由模型判定后自动放行");
   });
 
   it("非文件工具（Bash）「允许」按钮无会话级规则 tooltip", () => {
@@ -410,7 +410,7 @@ describe("PermissionDialog — 进入编辑模式", () => {
       props: {
         permission: bashPermission(),
         rememberContext: readyCtx(),
-        currentMode: "default",
+        currentMode: "manual",
       },
       global: {
         directives: {
@@ -425,43 +425,43 @@ describe("PermissionDialog — 进入编辑模式", () => {
     expect(bindings.get("allow")).toBeUndefined();
   });
 
-  it("点击「进入编辑模式」emit 带 nextMode=acceptEdits 的放行", async () => {
+  it("点击「进入自动模式」emit 带 nextMode=auto 的放行", async () => {
     const wrapper = mountDialog({
       permission: editPermission(),
       rememberContext: readyCtx(),
-      currentMode: "default",
+      currentMode: "manual",
     });
-    await wrapper.get('[data-action="edit-mode"]').trigger("click");
+    await wrapper.get('[data-action="auto-mode"]').trigger("click");
     const events = wrapper.emitted("respond");
     expect(events).toBeTruthy();
-    expect(events![0]).toEqual(["p3", true, undefined, "acceptEdits"]);
+    expect(events![0]).toEqual(["p3", true, undefined, "auto"]);
   });
 
   it("非编辑工具（Bash）不显示，仍走「允许并记住」", () => {
     const wrapper = mountDialog({
       permission: bashPermission(),
       rememberContext: readyCtx(),
-      currentMode: "default",
+      currentMode: "manual",
     });
-    expect(wrapper.find('[data-action="edit-mode"]').exists()).toBe(false);
+    expect(wrapper.find('[data-action="auto-mode"]').exists()).toBe(false);
     expect(wrapper.find('[data-action="remember"]').exists()).toBe(true);
   });
 
-  it("已在编辑/自动/最高权限模式时不显示（弹窗属 ask 规则例外，回到记住按钮）", () => {
-    for (const mode of ["acceptEdits", "auto", "bypassPermissions"]) {
+  it("已在自动/最高权限模式时不显示（弹窗属 ask 规则例外，回到记住按钮）", () => {
+    for (const mode of ["auto", "bypassPermissions"]) {
       const wrapper = mountDialog({
         permission: editPermission(),
         rememberContext: readyCtx(),
         currentMode: mode,
       });
-      expect(wrapper.find('[data-action="edit-mode"]').exists()).toBe(false);
+      expect(wrapper.find('[data-action="auto-mode"]').exists()).toBe(false);
       expect(wrapper.find('[data-action="remember"]').exists()).toBe(true);
     }
   });
 
   it("模式还没就位（空串）时按手动模式处理：显示", () => {
     const wrapper = mountDialog({ permission: editPermission(), currentMode: "" });
-    expect(wrapper.find('[data-action="edit-mode"]').exists()).toBe(true);
+    expect(wrapper.find('[data-action="auto-mode"]').exists()).toBe(true);
   });
 });
 
@@ -854,26 +854,25 @@ describe("PermissionDialog — 键盘确认（Enter/Esc）", () => {
     expect(respondEvent(wrapper, 1, 2)).toEqual(["sc1", true]);
   });
 
-  it("计划批准：点击三个批准按钮（手动 / 自动接受 / Auto）", async () => {
+  it("计划批准：两个批准按钮分别带 nextMode=manual / auto（无 acceptEdits 档）", async () => {
     const wrapper = mountAttached({ permission: planPerm() });
     const buttons = wrapper.findAll(".perm-actions-primary .perm-btn");
-    expect(buttons).toHaveLength(3);
+    expect(buttons).toHaveLength(2);
     for (const b of buttons) await b.trigger("click");
-    expect(respondEvent(wrapper, 0, 3)).toEqual(["pp1", true, undefined, undefined]);
-    expect(respondEvent(wrapper, 1, 3)).toEqual(["pp1", true, undefined, "acceptEdits"]);
-    expect(respondEvent(wrapper, 2, 3)).toEqual(["pp1", true, undefined, "auto"]);
+    expect(respondEvent(wrapper, 0, 2)).toEqual(["pp1", true, undefined, "manual"]);
+    expect(respondEvent(wrapper, 1, 2)).toEqual(["pp1", true, undefined, "auto"]);
   });
 
   // ── 按键提示 chip ──
 
-  it("工具调用：允许/拒绝带 chip，允许并记住/进入编辑模式不带", () => {
+  it("工具调用：允许/拒绝带 chip，允许并记住/进入自动模式不带", () => {
     const wrapper = mountAttached({ permission: bashPermission(), rememberContext: readyCtx() });
     expect(wrapper.get('[data-action="allow"] .perm-btn-key').text()).toBe("Enter");
     expect(wrapper.get('[data-action="deny"] .perm-btn-key').text()).toBe("Esc");
     expect(wrapper.find('[data-action="remember"] .perm-btn-key').exists()).toBe(false);
   });
 
-  it("计划批准：Auto 主按钮带 Enter chip，两个 outline 批准不带；理由态两键带 chip", async () => {
+  it("计划批准：Auto 主按钮带 Enter chip，outline 批准不带；理由态两键带 chip", async () => {
     const wrapper = mountAttached({ permission: planPerm() });
     const solid = wrapper.get(".perm-btn--solid");
     expect(solid.text()).toContain("批准，使用 Auto 模式");

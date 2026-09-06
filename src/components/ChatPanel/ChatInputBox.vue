@@ -80,7 +80,7 @@ const emit = defineEmits<{
   /** hero 头展示的模型名（选中模型变化时上报，ChatPanel 的 hero 标题行用） */
   "hero-model-name": [name: string];
   /** 权限模式变化（用户切换/侧边同步/会话切换）——ChatPanel 的 PermissionDialog
-   *  current-mode 展示用（「进入编辑模式」按钮的显隐判定）。 */
+   *  current-mode 展示用（「进入自动模式」按钮的显隐判定）。 */
   "permission-mode-changed": [mode: string];
 }>();
 
@@ -306,7 +306,7 @@ watch(() => props.sessionProvider.id, () => {
   selectedEffort.value = providerDefaultEffort();
 });
 
-// ── 权限模式（plan / acceptEdits / default）——和模型下拉同一套模式：
+// ── 权限模式（plan / auto / manual）——和模型下拉同一套模式：
 // 会话没起进程时用静态兜底清单，用户的选择随每条消息的 permission_mode 带走；
 // 进程活着时切换走运行时命令，显示状态靠 sidecar 回发的事件坐实。
 const selectedPermissionMode = ref("");
