@@ -1418,14 +1418,17 @@ describe("useChatSession 会话自动命名", () => {
     for (const k of Object.keys(useSessionNames().names)) delete useSessionNames().names[k];
   });
 
-  it("session_title 事件触发 auto_rename_session，采纳后更新名字注册表", async () => {
-    const sid = ref<string | null>("uuid-a");
-    useChatSession(sid);
+  it("已定名会话的 session_title 触发 auto_rename_session，采纳后更新名字注册表", async () => {
+    const sid = ref<string | null>(null);
+    const chat = useChatSession(sid);
     await flush();
+    const tempId = (await chat.sendMessage("first")) as string;
+    emit({ type: "session_init", sdk_session_id: "uuid-a", session_id: tempId });
+    await flush();
+
     invokeMock.mockImplementation(async (cmd: string) =>
       cmd === "auto_rename_session" ? true : undefined,
     );
-
     emit({ type: "session_title", title: "修复登录 Bug", session_id: "uuid-a" });
     await flush();
 
@@ -1438,17 +1441,68 @@ describe("useChatSession 会话自动命名", () => {
   });
 
   it("auto_rename_session 拒绝（用户已手动改名）时不更新注册表", async () => {
-    const sid = ref<string | null>("uuid-a");
-    useChatSession(sid);
+    const sid = ref<string | null>(null);
+    const chat = useChatSession(sid);
     await flush();
-    invokeMock.mockResolvedValue(false);
+    const tempId = (await chat.sendMessage("first")) as string;
+    emit({ type: "session_init", sdk_session_id: "uuid-a", session_id: tempId });
+    await flush();
 
+    invokeMock.mockResolvedValue(false);
     emit({ type: "session_title", title: "修复登录 Bug", session_id: "uuid-a" });
     await flush();
 
     const { useSessionNames } = await import("./useSessionNames");
     // 注册表没有该 id → 退化为 id 前 8 位
     expect(useSessionNames().displayName("uuid-a")).toBe("uuid-a");
+  });
+
+  it("旁观端收到别的客户端发起的会话标题：只暂存不落盘", async () => {
+    // PWA 发起新会话时桌面端也会收到同一条 session_title（sid = 对方的临时
+    // id，本端既非 pending 也还没定名）。落盘由发起方负责——本端若抢写，
+    // 一是给对方的 tempId 建孤儿元数据，二是随后用 id 前 8 位覆盖对方写好的
+    // 名字。两端都暂存、各自 finalize 时取用，写入的名字一致。
+    const sid = ref<string | null>("temp-from-pwa");
+    useChatSession(sid);
+    await flush();
+
+    emit({ type: "session_title", title: "修复登录 Bug", session_id: "temp-from-pwa" });
+    await flush();
+
+    expect(
+      invokeMock.mock.calls.some((c) => c[0] === "auto_rename_session"),
+    ).toBe(false);
+    const { useSessionNames } = await import("./useSessionNames");
+    expect(useSessionNames().takePendingTitle("temp-from-pwa")).toBe("修复登录 Bug");
+  });
+
+  it("未定名会话的 session_title 只暂存不落盘，定名时随 finalize 迁到真实 id", async () => {
+    // 回归：session_title 早于 session_init 到达。此前直接 auto_rename，
+    // 标题写进 <tempId>.json，随后 create_session(realId, 默认名) 建真文件
+    // → 标题成孤儿、名字恒为「新会话 HH:MM:SS」。
+    const sid = ref<string | null>(null);
+    const chat = useChatSession(sid);
+    await flush();
+
+    const tempId = (await chat.sendMessage("帮我修登录页 bug")) as string;
+    emit({ type: "session_title", title: "帮我修登录页", session_id: tempId });
+    await flush();
+
+    expect(
+      invokeMock.mock.calls.some((c) => c[0] === "auto_rename_session"),
+    ).toBe(false);
+
+    const { useSessionNames } = await import("./useSessionNames");
+    // 暂存可取出，且取走即弃（落盘方只能用一次，不会覆盖用户后改的名字）
+    expect(useSessionNames().takePendingTitle(tempId)).toBe("帮我修登录页");
+    expect(useSessionNames().takePendingTitle(tempId)).toBeUndefined();
+
+    // 定名（session_init）→ 标题迁到真实 id，落盘方据此写最终名
+    useSessionNames().setPendingTitle(tempId, "帮我修登录页");
+    emit({ type: "session_init", sdk_session_id: "sdk-uuid-title", session_id: tempId });
+    await flush();
+    expect(useSessionNames().takePendingTitle("sdk-uuid-title")).toBe("帮我修登录页");
+    expect(useSessionNames().takePendingTitle(tempId)).toBeUndefined();
   });
 
   it("send_message 失败 → console.warn + 忙态复位（fire-and-forget 兜底不静默）", async () => {

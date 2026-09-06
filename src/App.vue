@@ -191,7 +191,15 @@ const { onSessionCreated } = useChatSession(computed(() => null));
 // tab 绑定同步换成真实 id；空白面板预起的名字存放在 tab 上（takePendingName）。
 onSessionCreated((tempId, realId) => {
   paneLayout.rebindSession(tempId, realId);
-  const name = paneLayout.takePendingName(realId) || realId.substring(0, 8);
+  // 无条件取走 tab 预起的名字（一次性，取空也不留垃圾在布局持久化里），
+  // 它只是「还没有标题时」的占位。
+  const pendingName = paneLayout.takePendingName(realId);
+  // 名字优先级：sidecar 截取首条消息生成的标题 > 空白面板预起的名字 > id 前 8 位。
+  // 标题在 session_init 之前就到了（session_title），暂存在临时 id 下，
+  // finalizeSession 定名时已迁到 realId——这里直接取用，一次落盘即最终名
+  // （此前是先用默认名落盘、再 auto_rename，标题必被覆盖成孤儿）。
+  const name =
+    useSessionNames().takePendingTitle(realId) || pendingName || realId.substring(0, 8);
   useSessionNames().setName(realId, name);
   void api.createSession(realId, name).then((session) => {
     sidebarRef.value?.addSession({ id: session.id, name: session.name, timestamp: session.timestamp });

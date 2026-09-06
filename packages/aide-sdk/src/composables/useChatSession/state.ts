@@ -113,6 +113,10 @@ export const sharedRateLimit = ref<RateLimitInfo | null>(null);
 export const diag = useDiagnosticsDashboard();
 /** 迁移窗口期：旧 key → 新 id（Rust rename 完成前的在途事件转发） */
 export const aliasMap = new Map<string, string>();
+/** 已完成定名的真实 id（finalizeSession 记）。判据用途：session_title 到达时
+ *  区分「会话已存在（可安全改名）」与「尚未定名的临时 id（此刻落盘必成孤儿）」——
+ *  后者包括别的客户端发起、本端只是事件旁观者的情况。 */
+export const finalizedSids = new Set<string>();
 /** 尚未被 SDK 确认的临时 key（纯内存，从未落盘）。resume 判定与 hydrate 跳过都靠它。 */
 export const pendingSids = new Set<string>();
 /** 已收口销毁的会话 id——拦截一切延迟到达的流式事件 / 定时器 / 失败兜底，防止
@@ -529,7 +533,11 @@ export async function finalizeSession(tempId: string, realId: string) {
   // btw 支线抽屉绑定/支线记忆 key 跟随定名（git-commit 可从 pending 会话发起，
   // ownerSid 记的是临时 id；不迁抽屉永久失绑）
   useBtwSession().rebindOwner(tempId, realId);
+  // 待用标题跟随定名（session_title 早于本函数到达，暂存在 tempId 下；
+  // 不迁则落盘方取不到，会话只能退回默认名「新会话 HH:MM:SS」）
+  useSessionNames().migratePendingTitle(tempId, realId);
   // 2. Runtime 内部管理 session 映射（SessionManager 的 Map），不需要 Rust 改名
+  finalizedSids.add(realId); // 此后到达的 session_title 属于「已存在会话」，可安全改名
   // 3. 通知 App.vue：这是第一次创建，去写元数据、加侧栏、记最近访问
   for (const cb of sessionCreatedCallbacks) cb(tempId, realId);
   // 首条 pending：onSendRequest 时 sid=null 只推进了基线没落盘（会话还没创建），
@@ -548,9 +556,11 @@ export function resetAllState(): void {
   disposedSids.clear();
   pendingSids.clear();
   aliasMap.clear();
+  finalizedSids.clear();
   for (const k of Object.keys(lastDispatchedPrompt)) delete lastDispatchedPrompt[k];
   sessionCreatedCallbacks.clear();
   const { state, removeSessionState } = useSessionState();
   for (const k of Object.keys(state)) removeSessionState(k);
   useSessionWorkspaces().clearAll(); // 归属注册表同属模块级状态，一并归零
+  useSessionNames().clearPendingTitles(); // 待用标题同上
 }

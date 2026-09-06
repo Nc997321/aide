@@ -9,6 +9,7 @@ import {
 } from "@aide/sdk";
 import type { ProviderConfig, Session, WorkspaceInfo } from "@aide/sdk/types";
 import { useProviders } from "@aide/sdk/composables/useProviders";
+import { useSessionNames } from "@aide/sdk/composables/useSessionNames";
 import { clearCreds, loadCreds, loadRelayUrl, saveCreds, saveRelayUrl } from "./storage";
 import ConnectView from "./components/ConnectView.vue";
 import ChatView from "./components/ChatView.vue";
@@ -290,7 +291,11 @@ function onSessionFinalized({ tempId, realId }: { tempId: string; realId: string
   if (activeSession.value?.id === tempId) {
     activeSession.value = { ...activeSession.value, id: realId };
   }
-  void api.createSession(realId, "新会话").catch((e) => console.warn("createSession failed:", e));
+  // 名字取 sidecar 截取首条消息生成的标题（session_title 早于本回调到达，
+  // 已随 finalizeSession 从 tempId 迁到 realId）；没有标题才退回占位名。
+  const name = useSessionNames().takePendingTitle(realId) || "新会话";
+  useSessionNames().setName(realId, name);
+  void api.createSession(realId, name).catch((e) => console.warn("createSession failed:", e));
 }
 
 /** 断开连接（抽屉 quit）：停自动重连 + 清凭据 + 回配对屏，弹层全部收起。

@@ -23,7 +23,14 @@ import { useCodeGraphProgress } from "../useCodeGraphProgress";
 import { useSessionNames } from "../useSessionNames";
 import { useSessionIdentity } from "../../composables/sessionIdentity";
 import { useSessionState, markSessionUntracked } from "../useSessionState";
-import { armStalled, sessionHealth, sessionState, stores, aliasMap } from "./state";
+import {
+  armStalled,
+  sessionHealth,
+  sessionState,
+  stores,
+  aliasMap,
+  finalizedSids,
+} from "./state";
 import { maybeEvict } from "./evict";
 import {
   BG_TASKS_CAP,
@@ -379,14 +386,31 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       break;
     }
     case "session_title": {
-      // 会话自动命名：sidecar 首轮回复开始时生成的标题。是否采纳由 Rust 原子判定
-      // （nameSource==manual 拒写）——返回 true 才更新名字注册表，侧栏卡片
-      // 显示走注册表（SidebarLeft 模板 names[s.id] || s.name），一处更新全局生效。
+      // 会话自动命名：sidecar 在 send 时同步截取首条消息生成的标题。
+      //
+      // 时机陷阱（2026-09-06 实锤）：这个事件早于 session_init 到达，此时会话
+      // 只有临时 id、元数据尚未落盘。拿 sid（= tempId）去 auto_rename 会把标题
+      // 写进 <tempId>.json，紧接着 create_session(realId, 默认名) 建真正的文件
+      // ——标题变成孤儿，名字永远是「新会话 HH:MM:SS」。故未定名的会话只暂存，
+      // 定名（finalizeSession）后由落盘方直接用作名字，一次写盘即最终名。
       const title = e["title"] as string;
       if (title) {
-        void api.autoRenameSession(sid, title).then((adopted) => {
-          if (adopted) useSessionNames().setName(sid, title);
-        }).catch(() => { /* 自动命名失败静默——保留默认名 */ });
+        if (finalizedSids.has(sid)) {
+          // 已定名会话的迟到标题（正常路径下不会发生）：走原子改名，是否采纳由
+          // Rust 判定（nameSource==manual 拒写）——返回 true 才更新名字注册表，
+          // 侧栏卡片显示走注册表（SidebarLeft 模板 names[s.id] || s.name）。
+          void api.autoRenameSession(sid, title).then((adopted) => {
+            if (adopted) useSessionNames().setName(sid, title);
+          }).catch(() => { /* 自动命名失败静默——保留默认名 */ });
+          break;
+        }
+        // 尚未定名：sid 还是临时 id，此刻落盘会写进 <tempId>.json 成为孤儿。
+        // 暂存即可——定名（finalizeSession）时随其它注册表迁到真实 id，
+        // 由落盘方（各端 onSessionCreated）直接用作名字。
+        // 注意这里不能用「本端是否 pending」判断：别的客户端（PWA）发起的会话，
+        // 本端不是 pending 但同样只是旁观者，落盘由发起方负责——两端都暂存，
+        // 最终写下的名字一致，谁后写都不出错。
+        useSessionNames().setPendingTitle(sid, title);
       }
       break;
     }

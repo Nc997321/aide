@@ -47,9 +47,29 @@ sidecar 与 UI 之间是两条独立管道：
 
 **判读**：新增一个会改变对话状态的命令时，问一句"别的客户端怎么知道？"——答不上来就是漏了广播。
 
-**两个已实锤的事故**（同一个根因，2026-09-06）：
+**已实锤的事故**（前两条同一个根因，2026-09-06）：
 1. 远程应答权限后桌面弹窗不消失、状态卡 `attention`——`PermissionManager.resolve()` 只 resolve promise 不发事件。
 2. 远程（鸿蒙/PWA）发的消息桌面端看不见——sidecar `send` 处理从不广播用户消息事件。
+3. 自动命名恒失效、会话名永远是「新会话 HH:MM:SS」——标题早于 `session_init` 到达，
+   写到了临时 id 上（详见下节）。
+
+### 会话命名：落盘时机必须晚于定名
+
+sidecar 在 `send` 时同步发 `session_title`（`agent-sidecar/src/session-worker.ts:1035`，
+位于 `startLoop` 之前），那一刻会话只有前端生成的临时 id、元数据尚未落盘。
+
+**规则**：任何"按会话 id 写元数据"的动作（名字 / 模型 / 档位 / provider 绑定）都必须等
+`session_init` 定名之后——即 `finalizeSession` → 各端 `onSessionCreated` 那条路径
+（`src/App.vue` / `remote-pwa/src/App.vue`）。注意**两处的回调都会跑**（事件是广播的），
+所以它们必须算出同一个名字，否则互相覆盖、结果取决于谁后写。早到的值先暂存，
+定名时随注册表搬迁：`useSessionNames` 的 pendingTitles、`identity.migrateBinding`、
+`useSessionWorkspaces().migrate` 是同一套范式。
+
+判据用 `finalizedSids`（`packages/aide-sdk/src/composables/useChatSession/state.ts`）区分
+「已定名，可安全改名」与「还是临时 id，只能暂存」。**不要用「本端是否 pending」判断**：
+别的客户端（PWA）发起的会话，本端不是 pending 但同样只是旁观者——抢写会给对方的
+tempId 建孤儿元数据，并用 id 前 8 位覆盖对方已经写好的名字。两端都暂存、各自 finalize
+时取用，写入的名字一致，谁后写都不出错。
 
 ### 用户气泡的单一渲染来源
 
