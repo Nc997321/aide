@@ -121,6 +121,51 @@ Java/jdtls 专属配置**只准**待在 `src-tauri/src/lsp/profiles/java.rs`。�
 relay（`relay-server/`）是**哑管道**：只做 device_id/pairing_code 配对与 WS 桥接，不解析业务数据。
 agent 始终跑在**用户桌面**，桌面不在线 = `connect: device offline`。
 
+## 架构红线：可替换技术必须藏在端口后面（端口 / 适配器分离）
+
+**凡是「有多个竞争实现」或「成熟度不确定」的第三方技术，一律不许在业务代码里直接引用。**
+领域层只定义 trait（端口），具体实现放适配器层，装配处注入。换技术 = 换一个适配器文件，
+`domain/` 与 `api/` 一行不动。
+
+判据：**这个技术点未来是否可能出现第二个实现，且切换只需替换一个文件？**
+有 → 抽象（文档解析、中文分词、向量检索后端）；没有 → **不要抽象**（HTTP 框架、ORM、
+序列化——换这些等于重写，抽象层纯属仪式感债务）。抽象不足是债，抽象过度同样是债。
+
+`knowledge-server/` 是这套结构的样板：
+
+```
+src/port/       只定义 trait 与领域类型，禁止出现任何第三方库类型
+src/adapter/    具体实现，整个 crate 里唯一允许引用第三方库的地方
+src/domain/     业务逻辑，只依赖 port
+src/api/        HTTP 出口，只依赖 port + domain
+```
+
+配套约束：
+
+- **按扩展名分派**：解析后端注册表按文件扩展名挑选实现，不写 `if is_docx()` 这类分支
+  （与上面「语言无关（LSP）」红线同构）。
+- **同扩展名多后端 = 回退链**：注册顺序即优先级，前一个失败自动落到下一个。
+  「新后端先上、老后端兜底」因此是配置问题而不是代码问题
+  （例：docx 先 `docx-to-md` 保真度高但才 0.1.0，失败落 `docx-lite`）。
+- **产物类型是领域自己的**：解析器返回 `ParsedDocument`（本项目类型），不泄漏第三方库
+  类型——否则换了库，上层照样被污染，抽象形同虚设。
+- **降级要如实上报**：后端丢失了什么信息（如 docx-lite 不保留标题层级）写进 `warnings`，
+  让「导入后内容少了」可解释，禁止静默吞掉。
+- **CPU 密集的端口保持同步**：解析这类操作做成 async 只增加 `async-trait` 依赖与
+  `Box<dyn Future>` 分配，不带来真并发；要避免阻塞请求线程，由调用方 `spawn_blocking` 包一层。
+- **回退要留痕**：回退链命中哪个后端要记录在结果里，否则「这篇文档结构怎么丢了」
+  会变成无法排障的玄学。
+
+**验收方式（可机械执行，进 review checklist）**：grep 第三方库名，
+`src/adapter/` 之外**不允许出现任何 `use` 语句、类型引用或函数调用**，注释里出现不算违例。
+
+```
+# knowledge-server 下的正例（当前状态）：
+# docx/jieba/pdf_extract 的实质引用 100% 落在 src/adapter/ 内
+grep -rn "docx\|jieba\|pdf_extract" knowledge-server/src --include=*.rs \
+  | grep -v "^.*adapter/"        # 剩下的应当全是注释行
+```
+
 ## ⚠️ Windows 必读坑点：`CREATE_NO_WINDOW`
 
 **所有 `Command::new("git")`（或任何 CLI 工具）必须加 `CREATE_NO_WINDOW (0x08000000)` 标志**，否则 Windows 会为每个子进程弹出一个控制台窗口，在 release build 中表现为大量错误弹窗。
