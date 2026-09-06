@@ -19,14 +19,6 @@ function onSectionMenu(e: MouseEvent) {
   show(e.clientX, e.clientY, automationSectionMenuItems(() => auto.openEditor(null)));
 }
 
-function dotClass(t: AutomationTask): string {
-  if (t.lastRunStatus === "running") return "running";
-  if (!t.enabled) return "idle";
-  if (t.lastRunStatus === "failed") return "fail";
-  if (t.lastRunStatus === "succeeded") return "ok";
-  return "idle";
-}
-
 /** 节点第二行的状态摘要 */
 function metaText(t: AutomationTask): string {
   if (t.lastRunStatus === "running") return "running";
@@ -74,7 +66,6 @@ function metaText(t: AutomationTask): string {
         @click="auto.selectTask(t.id)"
       >
         <div class="r1">
-          <span class="status-dot" :class="dotClass(t)" />
           <span class="nm">{{ t.name }}<span v-if="!t.enabled" class="off">停</span></span>
           <span class="sched">{{ scheduleText(t.schedule) }}</span>
         </div>
@@ -167,37 +158,11 @@ function metaText(t: AutomationTask): string {
 .r2 {
   font-size: 11.5px;
   color: var(--aide-text-muted);
-  /* 与状态点同列：点是整卡的缩进锚，meta 行左缘对齐点的左缘（都是 20px） */
+  /* meta 行左缘与标题左缘对齐（任务节点 padding-left=20px） */
   padding-left: 0;
   line-height: 1.45;
 }
 .r2.live {
   color: var(--aide-info);
-}
-
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: var(--aide-text-muted);
-}
-.status-dot.ok {
-  background: var(--aide-success);
-}
-.status-dot.fail {
-  background: var(--aide-danger);
-}
-.status-dot.running {
-  background: var(--aide-info);
-  animation: auto-pulse 1.2s infinite;
-}
-.status-dot.idle {
-  background: var(--aide-text-muted);
-}
-@keyframes auto-pulse {
-  50% {
-    opacity: 0.35;
-  }
 }
 </style>
