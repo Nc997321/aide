@@ -8,6 +8,7 @@
 import { computed } from "vue";
 import { useMarketplace } from "../composables/useMarketplace";
 import { useMemoryObservatory } from "../composables/useMemoryObservatory";
+import { useKnowledgeBase } from "../composables/useKnowledgeBase";
 import { useContextMenu } from "../composables/useContextMenu";
 import { marketplaceSectionMenuItems } from "../menus/contextMenus";
 
@@ -15,6 +16,9 @@ const { panelOpen, togglePanel, openPanel, installedPlugins, sources, refreshSou
   useMarketplace();
 // 观测台与插件同范式：底部入口只管主区面板开关（模块级状态），不再走事件冒泡到 App
 const { panelOpen: observatoryOpen, togglePanel: toggleObservatory } = useMemoryObservatory();
+// 知识库：与上面两个同范式（模块级面板开关），但**不依赖 aide 的会话状态**——
+// 它连的是独立进程 knowledge-server，没配对也能用（只要那个服务活着）。
+const { panelOpen: kbOpen, togglePanel: toggleKb } = useKnowledgeBase();
 const { show } = useContextMenu();
 
 /** 已安装插件数（0 时不占位，与旧侧栏入口同规则） */
@@ -79,6 +83,15 @@ function onDockMenu(e: MouseEvent) {
         <path d="M6.01 9.125a4.5 4.5 0 0 0-.001 5.75"/>
       </svg>
       <span class="dock-label">记忆观测台</span>
+    </div>
+
+    <div class="dock-row" :class="{ on: kbOpen }" v-tooltip="'团队知识库'" @click="toggleKb">
+      <!-- 书本（24 网格内联版，与上面两行同一字形语言） -->
+      <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+      </svg>
+      <span class="dock-label">知识库</span>
     </div>
   </div>
 </template>

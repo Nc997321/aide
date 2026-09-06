@@ -9,6 +9,7 @@ import { defineAsyncComponent } from "vue";
 const FileViewer = defineAsyncComponent(() => import("./components/FileViewer.vue"));
 const SettingsPanel = defineAsyncComponent(() => import("./components/SettingsPanel.vue"));
 const MemoryObservatory = defineAsyncComponent(() => import("./components/MemoryObservatory/MemoryObservatory.vue"));
+const KnowledgeBase = defineAsyncComponent(() => import("./components/KnowledgeBase/KnowledgeBase.vue"));
 const OnboardingWizard = defineAsyncComponent(() => import("./components/onboarding/OnboardingWizard.vue"));
 const RunConfigsDialog = defineAsyncComponent(() => import("./components/RunConfigsDialog.vue"));
 import PaneLayout from "./components/PaneLayout.vue";
@@ -17,6 +18,7 @@ import MarketplaceTab from "./components/marketplace/MarketplaceTab.vue";
 import { useAutomation } from "./composables/useAutomation";
 import { useMarketplace } from "./composables/useMarketplace";
 import { useMemoryObservatory } from "./composables/useMemoryObservatory";
+import { useKnowledgeBase } from "./composables/useKnowledgeBase";
 import { useChatSession, setAuthRequiredHandler } from "./composables/useChatSession";
 import { usePaneLayout } from "./composables/usePaneLayout";
 import { usePaneLayoutPersistence } from "./composables/paneLayout/persistence";
@@ -178,6 +180,7 @@ const automation = useAutomation();
 const marketplace = useMarketplace();
 // 观测台面板开关（模块级状态，主区视图范式；数据闭包在 MemoryObservatory 组件内部）
 const observatory = useMemoryObservatory();
+const knowledgeBase = useKnowledgeBase();
 const paneLayoutPersistence = usePaneLayoutPersistence();
 const activeSessionId = paneLayout.activeSessionId;
 // App 级 useChatSession 只用来拿全局单例的 onSessionCreated 回调（module 级
@@ -364,13 +367,22 @@ function onSearchFilesChanged() {
   fileTreeRef.value?.loadRoot();
 }
 
-// 自动化 ⇄ 插件市场 ⇄ 记忆观测台三者互斥：主区 v-if 链有优先级（自动化 > 市场 >
-// 观测台），不互斥的话先开的那个会一直挡住后开的，点侧栏入口毫无反应（自动化漏了
-// 互斥就是这个症状）。放在 App 层做，覆盖全部入口（侧栏任务节点、底部入口行、
-// 市场的 ⋯ 菜单「打开市场」、标题栏/通知的 openPanel）。
-watch(marketplace.panelOpen, (open) => { if (open) { observatory.closePanel(); automation.closePanel(); } });
-watch(observatory.panelOpen, (open) => { if (open) { marketplace.closePanel(); automation.closePanel(); } });
-watch(() => automation.state.view, (v) => { if (v !== null) { marketplace.closePanel(); observatory.closePanel(); } });
+// 自动化 ⇄ 插件市场 ⇄ 记忆观测台 ⇄ 知识库四者互斥：主区 v-if 链有优先级（自动化 >
+// 市场 > 观测台 > 知识库），不互斥的话先开的那个会一直挡住后开的，点侧栏入口毫无
+// 反应（自动化漏了互斥就是这个症状）。放在 App 层做，覆盖全部入口（侧栏任务节点、
+// 底部入口行、市场的 ⋯ 菜单「打开市场」、标题栏/通知的 openPanel）。
+//
+// 四个面板两两互斥，写成"打开谁就关掉其余三个"比写一个 N×N 的表好维护。
+function closeOtherPanels(except: string) {
+  if (except !== "marketplace") marketplace.closePanel();
+  if (except !== "observatory") observatory.closePanel();
+  if (except !== "automation") automation.closePanel();
+  if (except !== "kb") knowledgeBase.closePanel();
+}
+watch(marketplace.panelOpen, (open) => { if (open) closeOtherPanels("marketplace"); });
+watch(observatory.panelOpen, (open) => { if (open) closeOtherPanels("observatory"); });
+watch(knowledgeBase.panelOpen, (open) => { if (open) closeOtherPanels("kb"); });
+watch(() => automation.state.view, (v) => { if (v !== null) closeOtherPanels("automation"); });
 
 function onSessionChanged(id: string) {
   // 选中会话时关掉自动化/插件市场/记忆观测台面板，主区切回聊天
@@ -1042,8 +1054,11 @@ onUnmounted(() => {
           :current-session-id="activeSessionId"
           @close="observatory.closePanel()"
         />
+        <!-- 知识库不接 workspaceKey：它连的是独立进程 knowledge-server，
+             与当前打开的工作区、会话、配对状态都无关——没配对也能用。 -->
+        <KnowledgeBase v-else-if="knowledgeBase.panelOpen.value" class="h-full" @close="knowledgeBase.closePanel()" />
         <PaneLayout
-          v-show="automation.state.view === null && !marketplace.panelOpen.value && !observatory.panelOpen.value"
+          v-show="automation.state.view === null && !marketplace.panelOpen.value && !observatory.panelOpen.value && !knowledgeBase.panelOpen.value"
           :workspace-path="workspacePath"
           class="h-full"
         />
