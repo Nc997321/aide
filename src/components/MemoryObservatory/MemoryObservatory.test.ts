@@ -268,6 +268,14 @@ describe("MemoryObservatory 面板", () => {
     mocks.scanAll.mockResolvedValue({ projects: [], claudeMd: null });
   });
 
+  it("首个 scope 按钮用项目名，不再有按钮组外侧的 .mo-ws 小字", async () => {
+    const w = await mountPanel();
+    const scopeBtns = w.findAll(".mo-scope button");
+    expect(scopeBtns[0].text()).toBe("x");
+    expect(scopeBtns[1].text()).toBe("全局");
+    expect(w.find(".mo-ws").exists()).toBe(false);
+  });
+
   it("加载后展示 stat / 清单 / 告警计数", async () => {
     const w = await mountPanel();
     expect(mocks.scan).toHaveBeenCalledWith("C--x");
@@ -395,7 +403,7 @@ describe("MemoryObservatory 面板", () => {
     expect(w.text()).toContain("最近活动");
   });
 
-  it("全部项目 scope：分组渲染 + 搜索过滤 + 影响 tab 用汇总可达性", async () => {
+  it("全局 scope：分组渲染 + 搜索过滤 + 影响 tab 用汇总可达性", async () => {
     mocks.scanAll.mockResolvedValue({
       projects: [
         {
@@ -424,7 +432,7 @@ describe("MemoryObservatory 面板", () => {
       claudeMd: { path: "/x/CLAUDE.md", bytes: 100, modifiedMs: null },
     });
     const w = await mountPanel();
-    await w.findAll(".mo-scope button").find((b) => b.text() === "全部项目")!.trigger("click");
+    await w.findAll(".mo-scope button").find((b) => b.text() === "全局")!.trigger("click");
     await vi.waitFor(() => expect(w.text()).toContain("甲A"));
 
     expect(mocks.scanAll).toHaveBeenCalled();

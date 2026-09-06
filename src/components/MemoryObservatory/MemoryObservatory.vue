@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 记忆观测台主区视图壳：三 tab（记忆 / 演化 / 影响）+ 双 scope（当前项目 / 全部项目，
+ * 记忆观测台主区视图壳：三 tab（记忆 / 演化 / 影响）+ 双 scope（当前项目名 / 全局，
  * P2 跨项目只读聚合）+ 关闭（头部 ✕ / 侧栏底部入口再点一次 / 选中会话）。
  * 2026-09-05：由 Teleport 模态改为填满主区（与插件市场 MarketplaceTab 同范式，
  * 不再有遮罩、点外部关闭与 Esc——那是模态语义，主区视图不需要）。
@@ -64,14 +64,18 @@ watch(
           <span class="mo-logo"><Icon name="brain" :size="14" /></span>
           <h1>记忆观测台</h1>
           <div class="mo-scope">
-            <button :class="{ on: mo.scope.value === 'project' }" @click="mo.setScope('project', props.workspaceKey)">
-              当前项目
+            <!-- 首个 scope 直接用项目名，省掉按钮组外侧那个像挂在「全局」后面的工作区小字 -->
+            <button
+              :class="{ on: mo.scope.value === 'project' }"
+              :title="workspaceName ? `当前项目 · ${workspaceName}` : '当前项目'"
+              @click="mo.setScope('project', props.workspaceKey)"
+            >
+              {{ workspaceName || "当前项目" }}
             </button>
             <button :class="{ on: mo.scope.value === 'all' }" @click="mo.setScope('all', props.workspaceKey)">
-              全部项目
+              全局
             </button>
           </div>
-          <span v-if="workspaceName && mo.scope.value === 'project'" class="mo-ws">{{ workspaceName }}</span>
           <span class="mo-spacer" />
           <button
             class="mo-refresh"
@@ -151,7 +155,6 @@ watch(
 }
 .mo-logo { color: var(--aide-accent); display: inline-flex; }
 .mo-head h1 { font-size: 14px; font-weight: 600; color: var(--aide-text-primary); }
-.mo-ws { font-size: 11px; color: var(--aide-text-muted); font-family: ui-monospace, Consolas, monospace; }
 .mo-scope {
   display: inline-flex;
   border: 1px solid var(--aide-border);
@@ -166,6 +169,11 @@ watch(
   font-size: 11px;
   padding: 2px 11px;
   cursor: pointer;
+  /* 项目名取代「当前项目」文案后长度不可控：截断而非撑破头部，全名走 title */
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .mo-scope button.on { background: var(--aide-surface-active); color: var(--aide-text-primary); }
 .mo-spacer { flex: 1; }

@@ -1,4 +1,4 @@
-// 记忆观测台面板状态闭包：scan/snapshot/events 加载、双 scope（当前项目 / 全部项目）、
+// 记忆观测台面板状态闭包：scan/snapshot/events 加载、双 scope（当前项目 / 全局）、
 // 删除流。桌面专属（不进 remote REGISTRY），故放 src/composables 而非共享包。
 //
 // 2026-09-06：删 previews Map 与 preview()。原行内"纯文本 pre-wrap"预览用户体验差
