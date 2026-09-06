@@ -31,6 +31,76 @@
 
 当前主力平台是 Windows，但所有新代码必须兼容 macOS/Linux——路径拼接用 `PathBuf`/`path.join`（不硬编码 `\\`）、平台特有逻辑（如 `creation_flags`）必须 `#[cfg(windows)]` 隔离、shell 脚本 dev.ps1 / dev.sh 保持功能对等。
 
+## 架构红线：多端一致性（命令 / 事件双通道契约）
+
+桌面端、remote-pwa、鸿蒙端共享同一会话。**UI 状态只认事件通道，不认本地乐观更新。**
+
+sidecar 与 UI 之间是两条独立管道：
+
+| 通道 | 方向 | 内容 |
+|---|---|---|
+| 命令通道 | UI → sidecar（单播） | `send` / `permission_response` / `interrupt` / `set_permission_mode`… |
+| 事件通道 | sidecar → **所有** UI（广播） | `permission_request` / `user_message` / `permission_cancelled` / `jump_promoted`… |
+
+**规则**：任何"某个客户端做了操作"要反映到其他客户端（或驱动本端状态机），必须由 sidecar 广播事件。
+调用方自己改本地状态（乐观更新）只对本端可见，远端永远看不到。
+
+**判读**：新增一个会改变对话状态的命令时，问一句"别的客户端怎么知道？"——答不上来就是漏了广播。
+
+**两个已实锤的事故**（同一个根因，2026-09-06）：
+1. 远程应答权限后桌面弹窗不消失、状态卡 `attention`——`PermissionManager.resolve()` 只 resolve promise 不发事件。
+2. 远程（鸿蒙/PWA）发的消息桌面端看不见——sidecar `send` 处理从不广播用户消息事件。
+
+### 用户气泡的单一渲染来源
+
+三端都**不本地渲染用户气泡**，只认 sidecar 广播的 `user_message`
+（`agent-sidecar/src/session-worker.ts:410` 的 `pushUserMessage` 统一三处入队点：首条 `:1029` / 续发 `:1056` / 插队 promote `:434`）。
+「模型收到」与「各端看见」是同一个动作的两个面。
+
+- **已知代价，接受**：本地发送也多一个 RTT 才出气泡（手机经 relay 约 100ms）。
+  **禁止**加"超时兜底本地渲染"来消除延迟——排队消息（`jumpQueue`）可能几十秒后才接入，
+  兜底必然误触发，且会重新引入两端状态不一致。
+- **插队消息在 promote 时广播**，不是 `jump_queued` 登记时——否则气泡会插在上回合回复中间。
+  `jump_promoted` 现在只负责清提示条 + 补忙碌态（`events.ts:592`）。
+- automation 的 `send` **不跳过**广播（用 `run_id` 独立会话，事件按 sid 路由，只有打开该 run tab 才订阅）。
+- 事件到远程客户端**全量转发无过滤**（`src-tauri/src/remote/relay_client.rs:61` subscribe 即发）；
+  白名单（`remote/rpc.rs` 的 REGISTRY）只管**入站 invoke**。所以事件侧改动对三端同时生效，无需分别注册。
+
+### `display` 渲染描述通道
+
+发给模型的 `prompt` 是 @引用**展开后**的完整文本（`packages/aide-sdk/src/composables/useChatSession.ts:228`
+`item.mentions?.sendText ?? item.prompt`）——结构信息在前端就被编译掉了，sidecar 只拿到一个字符串，
+**无法还原**「正文 / 引用卡片 / 动作胶囊」的边界。所以渲染信息必须随 send 命令下发再回灌：
+发起方构造 → Rust 原样搬运（`commands/chat.rs:140` `attach_display`，**不校验结构**）→ sidecar 广播 → 各端渲染。
+
+- **⚠️ `UserMessageBlock` 在两个包各定义一份且必须同形**：`agent-sidecar/src/types.ts:79` 与
+  `packages/aide-sdk/src/types/chat.ts:277`。两个包无法共享类型，shape 漂移会让 display
+  **静默失效**（接收端识别不了就降级成纯文本，不报错）。**新增 block 形态时两边一起改。**
+- 降级约定：display 缺失 / 未知形态 → 纯文本气泡或跳过该块，**整条消息不能消失**。
+- `text` 取 display 的原文而非 prompt，让只渲染文本的端（鸿蒙 v1）不会看到展开后的引用内容。
+
+### `permission_cancelled` 的语义
+
+已扩成「这条请求已终结（批准 / 拒绝 / abort / 连带放行）」，**不是**"被取消"。
+`permissions.ts:163` 在 `resolve()` 里无条件调用 `emitCancelled()`（先撤 UI 再放行工具）。
+**今后新增任何会终结挂起请求的代码路径，都要发它。**
+
+## 架构红线：语言无关（LSP）
+
+Java/jdtls 专属配置**只准**待在 `src-tauri/src/lsp/profiles/java.rs`。公共层
+（`manager.rs` / `mod.rs` / `protocol.rs` / `cmLsp.ts`）必须语言无关——新命令一律按文件扩展名分派
+（`lang_from_ext_of`），对任何 language server 生效。公共文件的注释里 jdtls 只能作为**例子**出现，不能作为设计原因。
+
+## 架构红线：远程控制是单设备模型（刻意设计，改动前先确认）
+
+`remote/auth.rs` 的 `TokenStore` 只存单个 `remote/token`——**新设备配对 = 覆盖旧 token = 静默踢掉旧设备**
+（旧设备下次连上直接 `revoked` 回连接屏）。这是安全设计（限制 token 累积），**不是缺陷**。
+
+若要改成多设备共存，必须意识到这是**安全降级**：配对码泄露后恶意设备不会顶掉合法设备，而是静默共存。改前先跟用户确认。
+
+relay（`relay-server/`）是**哑管道**：只做 device_id/pairing_code 配对与 WS 桥接，不解析业务数据。
+agent 始终跑在**用户桌面**，桌面不在线 = `connect: device offline`。
+
 ## ⚠️ Windows 必读坑点：`CREATE_NO_WINDOW`
 
 **所有 `Command::new("git")`（或任何 CLI 工具）必须加 `CREATE_NO_WINDOW (0x08000000)` 标志**，否则 Windows 会为每个子进程弹出一个控制台窗口，在 release build 中表现为大量错误弹窗。
