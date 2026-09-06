@@ -1,0 +1,49 @@
+# 私有化部署：一条命令起 PostgreSQL + knowledge-server。
+#
+#   docker compose up -d
+#
+# 客户不需要自己装数据库、建库、配连接串——这是自托管产品的标准交付形态。
+#
+# 需要向量检索时，把 db 的 image 换成 pgvector/pgvector:pg17，
+# 然后手动执行 migrations/optional/003_vector.sql（见 README）。
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aide_kb
+      POSTGRES_USER: aide
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-aide}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aide -d aide_kb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # 刻意不把 5432 映射到宿主机：数据库只在 compose 内部网络可达。
+    # 需要排障时再临时加 ports，别默认开。
+
+  knowledge:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        # 等 healthcheck 通过再起，否则服务会连不上库就退出重启循环
+        condition: service_healthy
+    environment:
+      KB_DB_URL: postgres://aide:${DB_PASSWORD:-aide}@db:5432/aide_kb
+      KB_HOST: 0.0.0.0
+      KB_PORT: 8788
+      KB_STORAGE_DIR: /app/storage
+      # 默认值只放行 aide 桌面端。客户实际前端地址要显式改它，别用 *
+      KB_CORS_ALLOWED_ORIGINS: ${KB_CORS_ALLOWED_ORIGINS:-http://tauri.localhost,tauri://localhost}
+    ports:
+      - "8788:8788"
+    volumes:
+      - kbdata:/app/storage
+
+volumes:
+  pgdata:
+  kbdata:
