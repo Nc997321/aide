@@ -73,6 +73,14 @@ watch(
           </div>
           <span v-if="workspaceName && mo.scope.value === 'project'" class="mo-ws">{{ workspaceName }}</span>
           <span class="mo-spacer" />
+          <button
+            class="mo-refresh"
+            v-tooltip="'刷新'"
+            :disabled="mo.loading.value"
+            @click="mo.load(props.workspaceKey)"
+          >
+            <Icon name="refresh" :size="13" :stroke-width="1.4" />
+          </button>
           <button class="mo-close" v-tooltip="'关闭'" @click="emit('close')">
             <Icon name="close" :size="13" :stroke-width="1.4" />
           </button>
@@ -96,11 +104,9 @@ watch(
               v-if="mo.scope.value === 'project'"
               v-show="tab === 'memory'"
               :scan="mo.scan.value!"
-              :previews="mo.previews"
               :confirming="mo.confirming.value"
               :deleting="mo.deleting.value"
               :events="mo.events.value"
-              @preview="(n) => mo.preview(props.workspaceKey, n)"
               @confirm="(n) => (mo.confirming.value = n)"
               @delete="(n) => mo.remove(props.workspaceKey, n)"
             />
@@ -163,7 +169,8 @@ watch(
 }
 .mo-scope button.on { background: var(--aide-surface-active); color: var(--aide-text-primary); }
 .mo-spacer { flex: 1; }
-.mo-close {
+/* 头部工具按钮：与 .mo-close 同规格（26px 方形、hover 淡底），刷新增加，与 ✕ 同列左邻 */
+.mo-refresh, .mo-close {
   width: 26px;
   height: 26px;
   border: none;
@@ -175,7 +182,11 @@ watch(
   align-items: center;
   justify-content: center;
 }
-.mo-close:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+.mo-refresh:hover, .mo-close:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+.mo-refresh:disabled { opacity: 0.4; cursor: default; }
+/* loading 时让 ⤴ 字形轻微旋转，把"在跑"的语义给到图标本身 */
+.mo-refresh:disabled :deep(.aide-icon) { animation: mo-spin 1s linear infinite; }
+@keyframes mo-spin { to { transform: rotate(360deg); } }
 
 .mo-tabs {
   display: flex;

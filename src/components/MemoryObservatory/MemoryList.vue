@@ -1,22 +1,23 @@
 <script setup lang="ts">
 /**
- * 记忆 tab：索引余量 stat 行 + 健康告警 chips + 记忆清单（预览 / 行内删除确认）
- * + 全局指令 CLAUDE.md 卡片。
+ * 记忆 tab：索引余量 stat 行 + 健康告警 chips + 记忆清单（行内删除确认）+ 全局指令 CLAUDE.md。
+ * 2026-09-06：行点击直接打开 FileViewer.open(topic.path) 弹窗——与文件树点 markdown
+ * 文件同范式（marked 渲染、可编辑保存）。删除原「行内 pre-wrap 纯文本预览」与
+ * usage line（去影响 tab 看）。死链行（status='deadlink'）不开弹窗，保留删除入口
+ * （仅摘索引行）。
  */
 import { computed, ref } from "vue";
 import type { MemoryEvent, MemoryScanResult, MemoryTopic } from "@aide/sdk/api";
-import { CLAUDE_MD_ALIAS } from "@aide/sdk/api";
-import { statusOf, STATUS_META, indexUsage, usageByMemory, sessionsOfMemory, fmtDay, fmtSize } from "./observatory";
+import { statusOf, STATUS_META, indexUsage, fmtDay, fmtSize } from "./observatory";
+import { useFileViewer } from "@/composables/useFileViewer";
 
 const props = defineProps<{
   scan: MemoryScanResult;
-  previews: Map<string, string>;
   confirming: string | null;
   deleting: boolean;
   events?: MemoryEvent[];
 }>();
 const emit = defineEmits<{
-  preview: [name: string];
   confirm: [name: string | null];
   delete: [name: string];
 }>();
@@ -25,7 +26,6 @@ const usage = computed(() => indexUsage(props.scan));
 const alertCount = computed(() => props.scan.orphans.length + props.scan.deadlinks.length);
 
 const filter = ref<"orphan" | "deadlink" | null>(null);
-const openRow = ref<string | null>(null);
 
 interface Row {
   key: string;
@@ -34,6 +34,8 @@ interface Row {
   size: number | null;
   modifiedMs: number | null;
   status: "indexed" | "edge" | "orphan" | "deadlink";
+  /** 完整磁盘路径——直接 FileViewer.open(path)。死链为空（无法打开）。 */
+  path: string;
   /** 删除/预览用的文件名；死链 = 索引里的目标名。 */
   file: string;
   deletable: boolean;
@@ -47,6 +49,7 @@ const rows = computed<Row[]>(() => {
     size: t.size,
     modifiedMs: t.modifiedMs,
     status: statusOf(t),
+    path: t.path,
     file: t.name,
     deletable: true,
   }));
@@ -59,6 +62,7 @@ const rows = computed<Row[]>(() => {
       size: null,
       modifiedMs: null,
       status: "deadlink",
+      path: "", // 无路径可开
       file: dl,
       deletable: true, // 走「仅摘索引行」路径
     });
@@ -82,25 +86,13 @@ function badgeLabel(s: Row["status"]): string {
   return s === "deadlink" ? "死链" : STATUS_META[s].label;
 }
 
-function toggleRow(r: Row) {
-  if (r.status === "deadlink") return; // 无文件可预览
-  openRow.value = openRow.value === r.key ? null : r.key;
-  if (openRow.value === r.key) emit("preview", r.file);
-}
-
-const claudeMdOpen = ref(false);
-function toggleClaudeMd() {
-  claudeMdOpen.value = !claudeMdOpen.value;
-  if (claudeMdOpen.value) emit("preview", CLAUDE_MD_ALIAS);
-}
-
-// ── 使用统计（事件台账）：预览块头部展示「使用 N 次 · K 个会话 · 最近 MM-DD」──
-const usageStats = computed(() => usageByMemory(props.events ?? []));
-function usageLine(file: string): string | null {
-  const u = usageStats.value.get(file);
-  if (!u) return null;
-  const sessions = sessionsOfMemory(props.events ?? [], file).size;
-  return `使用 ${u.reads} 次 · ${sessions} 个会话 · 最近 ${fmtDay(u.lastTs)}`;
+/** 行点击直开 FileViewer：复用现有 markdown 预览/编辑器（marked 渲染 + 可编辑保存）。
+ *  死链不开弹窗——文件已不存在。删除按钮 @click.stop 优先拦截，避免误触发。 */
+const fileViewer = useFileViewer();
+function openInViewer(r: Row) {
+  if (r.status === "deadlink") return;
+  if (!r.path) return;
+  void fileViewer.open(r.path);
 }
 </script>
 
@@ -149,7 +141,7 @@ function usageLine(file: string): string | null {
     <!-- 清单 -->
     <div class="list-head"><span>记忆</span><span>大小</span><span>修改</span><span>状态</span><span /></div>
     <div v-for="r in rows" :key="r.key" class="row">
-      <div class="row-main" @click="toggleRow(r)">
+      <div class="row-main" :class="{ disabled: !r.path }" @click="openInViewer(r)" :title="!r.path ? '文件已不存在' : '在 markdown 编辑器中打开'">
         <div class="row-title">
           <span class="t">{{ r.title }}</span>
           <span v-if="r.desc" class="d">{{ r.desc }}</span>
@@ -169,11 +161,6 @@ function usageLine(file: string): string | null {
           </svg>
         </button>
         <span v-else />
-      </div>
-
-      <div v-if="openRow === r.key" class="row-preview">
-        <div v-if="usageLine(r.file)" class="preview-meta">{{ usageLine(r.file) }}</div>
-        {{ previews.get(r.file) ?? "读取中…" }}
       </div>
 
       <div v-if="confirming === r.file" class="row-confirm">
@@ -197,7 +184,7 @@ function usageLine(file: string): string | null {
     <template v-if="scan.claudeMd">
       <div class="section-label">全局指令 · 每会话全量加载</div>
       <div class="row">
-        <div class="row-main" @click="toggleClaudeMd">
+        <div class="row-main" @click="fileViewer.open(scan.claudeMd.path)" title="在 markdown 编辑器中打开">
           <div class="row-title">
             <span class="t">CLAUDE.md</span>
             <span class="d">{{ scan.claudeMd.path }}</span>
@@ -207,7 +194,6 @@ function usageLine(file: string): string | null {
           <span class="badge b-global">常驻</span>
           <span />
         </div>
-        <div v-if="claudeMdOpen" class="row-preview">{{ previews.get(CLAUDE_MD_ALIAS) ?? "读取中…" }}</div>
       </div>
     </template>
   </div>
@@ -266,7 +252,9 @@ function usageLine(file: string): string | null {
   cursor: pointer;
   border-radius: var(--aide-radius-sm);
 }
-.row-main:hover { background: var(--aide-surface-hover); }
+/* 死链不可开弹窗——保持灰色 + default 光标，删除按钮仍可点 */
+.row-main.disabled { cursor: default; opacity: 0.6; }
+.row-main:hover:not(.disabled) { background: var(--aide-surface-hover); }
 .row-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .row-title .t {
   font-weight: 500;
@@ -311,27 +299,6 @@ function usageLine(file: string): string | null {
 .row-main:hover .del { opacity: 1; }
 .del:hover { color: var(--aide-danger); background: var(--aide-surface-active); }
 
-.row-preview {
-  margin: 0 10px 10px;
-  padding: 12px 14px;
-  background: var(--aide-surface-default);
-  border: 1px solid var(--aide-border-subtle);
-  border-radius: var(--aide-radius-md);
-  color: var(--aide-text-secondary);
-  font-size: 12px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 260px;
-  overflow-y: auto;
-}
-.preview-meta {
-  color: var(--aide-text-muted);
-  font-size: 11px;
-  margin-bottom: 8px;
-  padding-bottom: 7px;
-  border-bottom: 1px solid var(--aide-border-subtle);
-  white-space: normal;
-}
 .row-confirm {
   margin: 0 10px 10px;
   padding: 10px 14px;

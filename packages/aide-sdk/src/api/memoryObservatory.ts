@@ -19,6 +19,10 @@ export interface MemoryIndexInfo {
 
 export interface MemoryTopic {
   name: string;
+  /** 完整磁盘路径；观测台行点击直接 FileViewer.open(path) 打开 markdown 文件
+   * 预览/编辑器。多 memory 目录同 workspace 时后命中目录覆盖前命中同名条目，
+   * path 始终是当前活跃实体的完整路径。 */
+  path: string;
   size: number;
   createdMs: number | null;
   modifiedMs: number | null;

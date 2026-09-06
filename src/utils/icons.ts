@@ -44,6 +44,12 @@ export const GLYPHS: Record<string, string> = {
   // ── 内联控件 ──
   close: '<path d="M4 4L12 12M12 4L4 12"/>',
   back: '<path d="M13 8H4M4 8L7 5M4 8L7 11"/>',
+  /** 循环箭头：观测台「刷新」按钮。半弧 + 端点 V 形箭头，双向组成回环观感 */
+  refresh:
+    '<path d="M3.5 8a4.5 4.5 0 0 1 8.8 -1.4"/>' +
+    '<path d="M10.7 4.7l1.6 2 -2.1 .9"/>' +
+    '<path d="M12.5 8a4.5 4.5 0 0 1 -8.8 1.4"/>' +
+    '<path d="M5.3 11.3l-1.6 -2 2.1 -.9"/>',
   /** 向下箭头：回到底部 */
   "arrow-down": '<path d="M8 3v10M8 13l-4.5-4.5M8 13l4.5-4.5"/>',
   reset: '<path d="M4 8A4 4 0 1 1 4 4"/><path d="M2.6 5.4L4 4L5.4 5.4"/>',

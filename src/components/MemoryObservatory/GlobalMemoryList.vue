@@ -1,13 +1,14 @@
 <script setup lang="ts">
 /**
  * 全局记忆清单（P2 跨项目只读聚合）：全局健康 stat + 搜索 + 按项目分组的记忆行。
- * 预览走 readFile(projectKey, name)（单项目命令对任意 key 都成立），删除复用
- * 单项目删除命令；确认流行内展开。预览缓存在本组件本地（跨项目同名文件要区分 key）。
+ * 2026-09-06：行点击直接打开 FileViewer.open(topic.path)——后端在每次 scan 时已把
+ * 各自项目目录拼成完整绝对路径，前端不再走 readFile 二次往返。删除复用单项目删除
+ * 命令（带 projectKey），确认行保留行内展开。
  */
-import { computed, reactive, ref } from "vue";
-import { memoryObservatoryApi, CLAUDE_MD_ALIAS } from "@aide/sdk/api";
+import { computed, ref } from "vue";
 import type { ClaudeMdInfo, MemoryTopic, ProjectScanResult } from "@aide/sdk/api";
 import { statusOf, STATUS_META, fmtDay, fmtSize } from "./observatory";
+import { useFileViewer } from "@/composables/useFileViewer";
 
 const props = defineProps<{
   projects: ProjectScanResult[];
@@ -18,6 +19,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ delete: [key: string, name: string] }>();
 
+const fileViewer = useFileViewer();
 const query = ref("");
 
 const totals = computed(() => {
@@ -41,6 +43,8 @@ interface Row {
   size: number;
   modifiedMs: number | null;
   status: "indexed" | "edge" | "orphan";
+  /** 完整磁盘路径，后端 scan 时已附上。 */
+  path: string;
 }
 
 function rowOf(projectKey: string, scan: ProjectScanResult["scan"], t: MemoryTopic): Row {
@@ -54,6 +58,7 @@ function rowOf(projectKey: string, scan: ProjectScanResult["scan"], t: MemoryTop
     size: t.size,
     modifiedMs: t.modifiedMs,
     status: statusOf(t),
+    path: t.path,
   };
 }
 
@@ -91,24 +96,9 @@ function projectName(key: string): string {
   return props.projectNames[key] ?? key;
 }
 
-// ── 预览（本地缓存，跨项目同名用复合 key 区分）──
-const previews = reactive(new Map<string, string>());
-const openRow = ref<string | null>(null);
-
-async function toggleRow(r: Row) {
-  openRow.value = openRow.value === r.key ? null : r.key;
-  if (openRow.value === r.key && !previews.has(r.key)) {
-    previews.set(r.key, await memoryObservatoryApi.readFile(r.projectKey, r.name));
-  }
-}
-
-const claudeMdOpen = ref(false);
-async function toggleClaudeMd() {
-  claudeMdOpen.value = !claudeMdOpen.value;
-  if (claudeMdOpen.value && !previews.has(CLAUDE_MD_ALIAS)) {
-    // CLAUDE_MD_ALIAS 后端特判，projectKey 任意
-    previews.set(CLAUDE_MD_ALIAS, await memoryObservatoryApi.readFile(props.projects[0]?.key ?? "", CLAUDE_MD_ALIAS));
-  }
+function openInViewer(r: Row) {
+  if (!r.path) return;
+  void fileViewer.open(r.path);
 }
 
 // ── 行内删除确认 ──
@@ -155,7 +145,7 @@ function badgeClass(s: Row["status"]): string {
         <span v-if="g.deadlinks" class="gmeta danger">{{ g.deadlinks }} 死链</span>
       </div>
       <div v-for="r in g.rows" :key="r.key" class="row">
-        <div class="row-main" @click="toggleRow(r)">
+        <div class="row-main" @click="openInViewer(r)" title="在 markdown 编辑器中打开">
           <div class="row-title">
             <span class="t">{{ r.title }}</span>
             <span v-if="r.desc" class="d">{{ r.desc }}</span>
@@ -170,7 +160,6 @@ function badgeClass(s: Row["status"]): string {
             </svg>
           </button>
         </div>
-        <div v-if="openRow === r.key" class="row-preview">{{ previews.get(r.key) ?? "读取中…" }}</div>
         <div v-if="confirming === r.key" class="row-confirm">
           <span class="q">
             删除「{{ r.title }}」？
@@ -187,7 +176,7 @@ function badgeClass(s: Row["status"]): string {
     <template v-if="claudeMd">
       <div class="section-label">全局指令 · 每会话全量加载</div>
       <div class="row">
-        <div class="row-main" @click="toggleClaudeMd">
+        <div class="row-main" @click="fileViewer.open(claudeMd.path)" title="在 markdown 编辑器中打开">
           <div class="row-title">
             <span class="t">CLAUDE.md</span>
             <span class="d">{{ claudeMd.path }}</span>
@@ -197,7 +186,6 @@ function badgeClass(s: Row["status"]): string {
           <span class="badge b-global">常驻</span>
           <span />
         </div>
-        <div v-if="claudeMdOpen" class="row-preview">{{ previews.get(CLAUDE_MD_ALIAS) ?? "读取中…" }}</div>
       </div>
     </template>
   </div>
@@ -273,19 +261,6 @@ function badgeClass(s: Row["status"]): string {
 .row-main:hover .del { opacity: 1; }
 .del:hover { color: var(--aide-danger); background: var(--aide-surface-active); }
 
-.row-preview {
-  margin: 0 10px 10px;
-  padding: 12px 14px;
-  background: var(--aide-surface-default);
-  border: 1px solid var(--aide-border-subtle);
-  border-radius: var(--aide-radius-md);
-  color: var(--aide-text-secondary);
-  font-size: 12px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 260px;
-  overflow-y: auto;
-}
 .row-confirm {
   margin: 0 10px 10px;
   padding: 10px 14px;

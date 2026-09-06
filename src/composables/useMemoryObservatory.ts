@@ -1,6 +1,11 @@
 // 记忆观测台面板状态闭包：scan/snapshot/events 加载、双 scope（当前项目 / 全部项目）、
-// 删除流、预览缓存。桌面专属（不进 remote REGISTRY），故放 src/composables 而非共享包。
-import { reactive, ref } from "vue";
+// 删除流。桌面专属（不进 remote REGISTRY），故放 src/composables 而非共享包。
+//
+// 2026-09-06：删 previews Map 与 preview()。原行内"纯文本 pre-wrap"预览用户体验差
+// （无 markdown 渲染、不可编辑），改为点行直接打开 FileViewer.open(path) 弹窗——
+// 与文件树点击 markdown 文件完全一致（marked 渲染、可编辑保存到盘）。磁盘基线
+// 刷新靠面板头部「刷新」按钮 + 现成 mo.load(workspaceKey)。
+import { ref } from "vue";
 import { memoryObservatoryApi } from "@aide/sdk/api";
 import type {
   ClaudeMdInfo,
@@ -33,7 +38,6 @@ export function useMemoryObservatory() {
   const globalClaudeMd = ref<ClaudeMdInfo | null>(null);
   const events = ref<MemoryEvent[]>([]);
   const sessionNames = ref<Record<string, string>>({});
-  const previews = reactive(new Map<string, string>());
   const confirming = ref<string | null>(null);
   const deleting = ref(false);
   let loadSeq = 0;
@@ -66,7 +70,6 @@ export function useMemoryObservatory() {
         events.value = ev.events;
         sessionNames.value = ev.sessionNames;
       }
-      previews.clear();
     } catch (e) {
       if (seq === loadSeq) error.value = String(e);
     } finally {
@@ -80,13 +83,7 @@ export function useMemoryObservatory() {
     await load(workspaceKey);
   }
 
-  async function preview(workspaceKey: string, name: string): Promise<string> {
-    const cached = previews.get(name);
-    if (cached != null) return cached;
-    const text = await memoryObservatoryApi.readFile(workspaceKey, name);
-    previews.set(name, text);
-    return text;
-  }
+  /** 行点击直开 FileViewer 弹窗（无独立 preview 概念，详见模块头注释）。 */
 
   /** 删除记忆：成功后本地状态同步（行移除 + 孤儿/死链计数联动），不重扫。 */
   async function remove(workspaceKey: string, name: string): Promise<boolean> {
@@ -101,7 +98,6 @@ export function useMemoryObservatory() {
         if (r.indexLineRemoved && s.index) {
           s.index.entries = s.index.entries.filter((e) => e.file !== name);
         }
-        previews.delete(name);
       }
       syncDeleted(workspaceKey, name);
       return r.deleted || r.indexLineRemoved;
@@ -151,12 +147,10 @@ export function useMemoryObservatory() {
     globalClaudeMd,
     events,
     sessionNames,
-    previews,
     confirming,
     deleting,
     load,
     setScope,
-    preview,
     remove,
     removeGlobal,
     panelOpen,

@@ -210,6 +210,8 @@ const mocks = vi.hoisted(() => ({
   deleteFile: vi.fn(async () => ({ deleted: true, indexLineRemoved: true })),
   events: vi.fn(async () => ({ events: [], sessionNames: {} })),
   scanAll: vi.fn(async () => ({ projects: [], claudeMd: null })),
+  // FileViewer 单例的 open()；2026-09-06 起记忆行点击走这条路径，与文件树点 markdown 同范式
+  fileViewerOpen: vi.fn(async () => undefined),
 }));
 
 vi.mock("@aide/sdk/api", () => ({
@@ -219,6 +221,10 @@ vi.mock("@aide/sdk/api", () => ({
 
 vi.mock("@/components/Icon.vue", () => ({
   default: { template: "<span />" },
+}));
+
+vi.mock("@/composables/useFileViewer", () => ({
+  useFileViewer: () => ({ open: mocks.fileViewerOpen }),
 }));
 
 import MemoryObservatory from "./MemoryObservatory.vue";
@@ -295,6 +301,57 @@ describe("MemoryObservatory 面板", () => {
     const w = await mountPanel();
     await w.find(".mo-close").trigger("click");
     expect(w.emitted("close")).toBeTruthy();
+  });
+
+  // 行点击 → FileViewer.open(path)：与文件树点 markdown 文件同范式，marked 渲染
+  // + 可编辑保存。死链（无 path）不触发；CLAUDE.md 走 claudeMd.path。
+  it("记忆行点击调 FileViewer.open(path)", async () => {
+    mocks.scan.mockResolvedValueOnce({
+      ...scanFixture(),
+      topics: [
+        topic({ name: "a.md", path: "/proj/memory/a.md", modifiedMs: Date.UTC(2026, 8, 2) }),
+        topic({ name: "b.md", path: "/proj/memory/b.md", indexed: false, withinWindow: false, modifiedMs: Date.UTC(2026, 8, 1) }),
+      ],
+      deadlinks: [],
+    });
+    mocks.snapshot.mockResolvedValueOnce({ previousTs: null, added: [], removed: [], modified: [] });
+    const w = await mount(MemoryObservatory, {
+      props: { workspaceKey: "C--x", workspaceName: "x" },
+      global: { directives: { tooltip: () => {} }, stubs: { Teleport: true } },
+    });
+    await vi.waitFor(() => expect(w.text()).toContain("甲"));
+    mocks.fileViewerOpen.mockClear();
+
+    const liveRow = w.findAll(".row").find((r) => r.text().includes("甲"))!;
+    await liveRow.find(".row-main").trigger("click");
+    expect(mocks.fileViewerOpen).toHaveBeenCalledTimes(1);
+    expect(mocks.fileViewerOpen).toHaveBeenCalledWith("/proj/memory/a.md");
+  });
+
+  it("死链行点击不调 FileViewer.open（无文件可开）", async () => {
+    const w = await mountPanel();
+    await w.findAll(".chip").find((c) => c.text().includes("死链"))!.trigger("click");
+    // 死链行不显示文件名（fixture.title="死链"），只露"索引引用的文件已不存在"这条 desc
+    await vi.waitFor(() => expect(w.text()).toContain("索引引用的文件已不存在"));
+    mocks.fileViewerOpen.mockClear();
+    const deadRow = w.findAll(".row").find((r) => r.text().includes("索引引用的文件已不存在"))!;
+    await deadRow.find(".row-main").trigger("click");
+    expect(mocks.fileViewerOpen).not.toHaveBeenCalled();
+  });
+
+  it("CLAUDE.md 行点击调 FileViewer.open(claudeMd.path)", async () => {
+    const w = await mountPanel();
+    mocks.fileViewerOpen.mockClear();
+    const claudeRow = w.findAll(".row").find((r) => r.text().includes("CLAUDE.md"))!;
+    await claudeRow.find(".row-main").trigger("click");
+    expect(mocks.fileViewerOpen).toHaveBeenCalledWith("/home/.aide/claude/CLAUDE.md");
+  });
+
+  it("头部 ⤴ 刷新按钮重调 scan", async () => {
+    const w = await mountPanel();
+    mocks.scan.mockClear();
+    await w.find(".mo-refresh").trigger("click");
+    expect(mocks.scan).toHaveBeenCalledWith("C--x");
   });
 
   it("不接 Esc（主区视图无模态语义）", async () => {

@@ -23,6 +23,12 @@ pub struct IndexInfo {
 #[serde(rename_all = "camelCase")]
 pub struct TopicInfo {
     pub name: String,
+    /// 完整磁盘路径：观测台点击该条直接调 FileViewer.open(path) 复用 markdown
+    /// 文件预览/编辑器；多 memory 目录后命中目录覆盖前命中同名条目，path 始终
+    /// 是当前活跃实体的完整路径。前端只看 FileViewer 处理（写盘由 FileViewer.save
+    /// 走通用 write_file_content，confinement 在 FileViewer 上层 vs. 观测台删除
+    /// 命令各自的路径解析层把关）。
+    pub path: String,
     pub size: u64,
     pub created_ms: Option<i64>,
     pub modified_ms: Option<i64>,
@@ -171,6 +177,7 @@ fn scan_dirs(
                 name.clone(),
                 TopicInfo {
                     name,
+                    path: entry.path().to_string_lossy().to_string(),
                     size: meta.len(),
                     created_ms: resolve::to_ms(meta.created()),
                     modified_ms: resolve::to_ms(meta.modified()),

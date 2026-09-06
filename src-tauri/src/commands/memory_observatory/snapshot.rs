@@ -126,6 +126,7 @@ mod tests {
                 .iter()
                 .map(|(n, s, m)| crate::commands::memory_observatory::scan::TopicInfo {
                     name: n.to_string(),
+                    path: String::new(),
                     size: *s,
                     created_ms: Some(*m),
                     modified_ms: Some(*m),
