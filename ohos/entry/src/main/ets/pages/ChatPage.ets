@@ -30,8 +30,10 @@ import { ChatModel, chatModel, ChatPageParams } from '../session/ChatModel';
 import { ChatStore } from '../session/chat/ChatStore';
 import {
   ContentBlock, TextBlock, ThinkingBlock, ToolCallBlock, SubagentEntry,
-  SubagentBlock, ChatMessage, PendingJump, PermissionRequest, LiveActivity
+  SubagentBlock, ChatMessage, PendingJump, LiveActivity
 } from '../session/chat/ChatBlocks';
+import { toolSummary } from '../session/chat/ChatWire';
+import { PermissionSheet } from '../session/chat/PermissionSheet';
 import { MarkdownText } from '../session/chat/MarkdownText';
 import { BgTaskDock } from '../session/chat/BgTaskDock';
 import { ThinkingCard } from '../session/chat/ThinkingCard';
@@ -71,30 +73,7 @@ function timeLabel(ms: number): string {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${hhmm}`;
 }
 
-/** 工具入参单行摘要（对照 PWA toolArg：file_path/command/pattern/path/url 优先）。 */
-function toolSummary(input: Object): string {
-  if (typeof input === 'string') {
-    return input;
-  }
-  const rec: Record<string, Object> = input as Record<string, Object>;
-  const keys: string[] = ['file_path', 'command', 'pattern', 'path', 'url'];
-  for (let i = 0; i < keys.length; i++) {
-    const v: Object | undefined = rec[keys[i]];
-    if (v !== undefined && typeof v === 'string' && v !== '') {
-      return v;
-    }
-  }
-  return '';
-}
-
-/** 工具入参 JSON（权限卡展示；序列化失败兜底 String——对照 PWA toolInput）。 */
-function inputJson(input: Object): string {
-  try {
-    return JSON.stringify(input);
-  } catch (e) {
-    return String(input);
-  }
-}
+/** 工具入参单行摘要与 JSON 兜底统一走 ChatWire（toolSummary/inputJson）。 */
 
 @Entry
 @ComponentV2
@@ -631,87 +610,6 @@ struct ChatPage {
     .padding({ left: 16, right: 16, top: 2, bottom: 2 })
   }
 
-  /** 权限弹层（FIFO 永远应答队头；v1 仅允许/拒绝两键）。 */
-  @Builder
-  permissionSheetView() {
-    Column({ space: 8 }) {
-      Row({ space: 6 }) {
-        Text('⚠').fontSize(13).fontColor($r('app.color.status_warn'))
-        Text('工具调用请求')
-          .fontSize(13)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
-        Blank()
-        if (this.store.pendingPermissions.length > 1) {
-          Text(`还有 ${this.store.pendingPermissions.length - 1} 条排队`)
-            .fontSize(11)
-            .fontColor($r('app.color.text_secondary'))
-        }
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Center)
-
-      ForEach(this.store.pendingPermissions, (p: PermissionRequest, i: number) => {
-        if (i === 0) {
-          this.permissionCard(p)
-        }
-      }, (p: PermissionRequest, i: number) => `${i}-${p.id}`)
-    }
-    .width('100%')
-    .padding({ left: 12, right: 12, top: 4, bottom: 4 })
-  }
-
-  @Builder
-  permissionCard(p: PermissionRequest) {
-    Column({ space: 8 }) {
-      if (p.fromSubagentName !== '') {
-        Text(`来自子代理 ${p.fromSubagentName}`)
-          .fontSize(11)
-          .fontColor($r('app.color.text_secondary'))
-          .width('100%')
-      }
-      Text(p.name)
-        .fontSize(15)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'))
-        .width('100%')
-      Text(toolSummary(p.input) !== '' ? toolSummary(p.input) : inputJson(p.input))
-        .fontSize(12)
-        .fontColor($r('app.color.text_secondary'))
-        .maxLines(2)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .width('100%')
-      Row({ space: 10 }) {
-        Button('拒绝')
-          .fontSize(14)
-          .fontColor($r('app.color.text_primary'))
-          .backgroundColor($r('app.color.input_bg'))
-          .borderRadius(18)
-          .height(36)
-          .layoutWeight(1)
-          .onClick(() => {
-            void this.model.respondPermission(p.id, false);
-          })
-        Button('允许')
-          .fontSize(14)
-          .fontColor(Color.White)
-          .backgroundColor($r('app.color.accent'))
-          .borderRadius(18)
-          .height(36)
-          .layoutWeight(1)
-          .onClick(() => {
-            void this.model.respondPermission(p.id, true);
-          })
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .padding(12)
-    .borderRadius(12)
-    .backgroundColor($r('app.color.card_bg'))
-    .border({ width: 1, color: $r('app.color.line') })
-  }
-
   @Builder
   inputBarView() {
     Row({ space: 8 }) {
@@ -834,10 +732,13 @@ struct ChatPage {
       if (this.store.pendingJumps.length > 0) {
         this.pendingJumpsView()
       }
+      // 弹窗期间输入框整块让位（对照原型「弹窗期间输入框隐藏」）：未决请求
+      // 挂着时新消息本就会排队等答完，答完输入框回归
       if (this.store.pendingPermissions.length > 0) {
-        this.permissionSheetView()
+        PermissionSheet({ store: this.store })
+      } else {
+        this.inputBarView()
       }
-      this.inputBarView()
     }
     .width('100%')
     .height('100%')

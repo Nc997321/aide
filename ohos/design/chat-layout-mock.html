@@ -14,9 +14,6 @@ body{font-family:"HarmonyOS Sans SC",-apple-system,"PingFang SC","Microsoft YaHe
 .wrap{display:flex;gap:36px;justify-content:center;align-items:flex-start;padding:28px;flex-wrap:wrap}
 .panel{width:330px;max-width:92vw}
 h1{font-size:18px;margin-bottom:12px}
-.seg{display:flex;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:14px}
-.seg button{flex:1;border:0;background:transparent;padding:10px 0;font-size:14px;color:var(--text-2);cursor:pointer}
-.seg button.on{background:var(--accent);color:#fff}
 .replay{width:100%;padding:11px;border:0;border-radius:10px;background:var(--text);color:#fff;font-size:14px;cursor:pointer;margin-bottom:16px}
 .note{background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px 14px;font-size:13px;line-height:1.7;color:var(--text-2);margin-bottom:10px}
 .note b{color:var(--text)}
@@ -50,16 +47,11 @@ h1{font-size:18px;margin-bottom:12px}
 .act .targ,.step .arg,.statusline .arg{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #dock{display:flex;flex-direction:column}
 #dock:empty{display:none}
-.dockcard{margin:8px 12px 2px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:7px;transition:opacity .4s,transform .4s}
-.dockcard.fade{opacity:0;transform:translateY(8px)}
-.dockcard .cap{font-size:12px;color:var(--text-2)}
-.step{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-2);min-width:0}
-.step.run{color:var(--text)}
-.step .ok{color:var(--ok);flex:none;font-weight:700}
 .statusline{display:flex;align-items:center;gap:7px;padding:7px 20px 3px;font-size:12px;color:var(--text-2);transition:opacity .45s}
 .statusline.fade{opacity:0}
 .statusline b{color:var(--text);font-weight:500}
 .inputbar{display:flex;gap:8px;align-items:flex-end;padding:10px 12px;background:var(--card);border-top:1px solid var(--line)}
+.inputbar.hidden{display:none}
 .field{flex:1;background:var(--input-bg);border-radius:20px;min-height:40px;padding:10px 14px;font-size:14px;color:var(--text-2);display:flex;align-items:center}
 .send{width:40px;height:40px;flex:none;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff}
 .bgt-bar{display:flex;align-items:center;gap:8px;margin:8px 12px 2px;padding:7px 12px;background:var(--card);border:1px solid var(--line);border-radius:10px;font-size:12px;color:var(--text-2);cursor:pointer;user-select:none;transition:opacity .45s}
@@ -82,23 +74,51 @@ h1{font-size:18px;margin-bottom:12px}
 .bgt-item .dur{font-family:Consolas,monospace;font-size:10.5px;color:var(--text-2);flex:none}
 .bgt-item .stop{flex:none;font-size:11px;padding:2px 7px;border-radius:6px;border:1px solid var(--line);color:var(--text-2)}
 .bgt-out{margin:0 12px 10px;background:var(--input-bg);border-radius:8px;padding:8px 10px;font-family:Consolas,monospace;font-size:11px;line-height:1.6;color:var(--text-2);max-height:132px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+/* ── 权限应答卡：挂起期间占据输入框位置（输入框隐藏，答完回归）── */
+.pm{margin:8px 12px 10px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:10px;transition:opacity .4s,transform .4s}
+.pm.fade{opacity:0;transform:translateY(8px)}
+.pm-tt{display:flex;align-items:center}
+.pm-title{font-size:15px;font-weight:600}
+.pm-tt .queue{margin-left:auto;font-size:11px;color:var(--text-2)}
+.pm-sum{font-size:12px;color:var(--text-2);background:var(--input-bg);border-radius:8px;padding:7px 10px;font-family:Consolas,monospace;word-break:break-all}
+.pm-tool{font-size:15px;font-weight:600}
+.pm-q{display:flex;flex-direction:column;gap:8px}
+.pm-q-h{display:flex;align-items:center;gap:6px}
+.pm-q-h .h{font-size:13px;font-weight:600}
+.pm-q-h .multi{font-size:10px;color:var(--text-2);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.pm-q-t{font-size:12px;color:var(--text-2)}
+.pm-opt{display:flex;align-items:flex-start;gap:9px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;user-select:none;transition:border-color .15s,background .15s}
+.pm-opt:hover{border-color:var(--accent)}
+.pm-opt.on{border-color:var(--accent);background:var(--input-bg)}
+.pm-radio{width:16px;height:16px;flex:none;border-radius:50%;border:1.5px solid var(--line);margin-top:1px;display:flex;align-items:center;justify-content:center}
+.pm-opt.on .pm-radio{border-color:var(--accent)}
+.pm-radio i{width:8px;height:8px;border-radius:50%;background:var(--accent);display:none}
+.pm-opt.on .pm-radio i{display:block}
+.pm-opt .tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.pm-opt .l1{font-size:13px;color:var(--text)}
+.pm-opt.on .l1{color:var(--accent);font-weight:500}
+.pm-opt .l2{font-size:11px;color:var(--text-2)}
+.pm-free-in{flex:1;min-width:0;border:0;background:transparent;padding:0;font-size:13px;color:var(--text);outline:none;cursor:text;user-select:text}
+.pm-btn{width:100%;border:0;border-radius:18px;padding:10px 0;font-size:14px;cursor:pointer}
+.pm-btn.primary{background:var(--accent);color:#fff}
+.pm-btn.primary:disabled{background:#C9CDD4;color:#fff;cursor:not-allowed}
+.pm-btn.ghost{background:var(--input-bg);color:var(--text)}
+.pm-btn.danger{background:transparent;border:1px solid var(--danger);color:var(--danger)}
+.pm-deny{display:none;flex-direction:column;gap:10px}
+.pm-deny-in{background:var(--input-bg);border:0;border-radius:10px;padding:10px 12px;font-size:13px;color:var(--text);outline:none}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="panel">
     <h1>会话页排版草案</h1>
-    <div class="seg" id="seg">
-      <button data-v="v1" class="on">V1 瞬态行</button>
-      <button data-v="v2">V2 停靠卡</button>
-      <button data-v="v3">V3 状态行</button>
-    </div>
-    <button class="replay" id="replay">▶ 重放一轮模拟（看运行时表现）</button>
-    <div class="note"><b>V1 时间线内瞬态行</b>：工具运行时消息流里出现一行「正在执行 ××」，本轮结束整行淡出消失。历史里永远只有思考卡 + 对话。代价：行的出现/消失会让时间线轻微跳动。</div>
-    <div class="note"><b>V2 停靠活动卡</b>：运行期在输入框上方停靠一张「正在执行」卡，步骤逐条打勾，回合结束整卡滑走。时间线零跳动，运行过程看得最清楚。</div>
-    <div class="note"><b>V3 极简状态行</b>：时间线严格只有气泡 / 正文 / 思考入口，运行状态只是输入框上一行小字轮播当前工具。最克制，信息也最少。</div>
-    <div class="note"><b>三版通用语义</b>：工具事件只进瞬态 liveActivity，不进消息流，回合结束清空（= 不驻留内存）；历史加载时跳过 tool_call 块；卡片一律白底描边、间距走 8 的倍数、图标统一 SVG。</div>
-    <div class="note"><b>后台任务（bg_task_*，三版同款停靠区）</b>：状态条胶囊有任务才出现（● N 个运行中 + 命令名），点开看任务列表（状态/命令/走表时长/终止）+ 尾部输出贴尾滚动（移动端不做 xterm）。跨轮次存活——回合结束不清，bg_task_ended 才收；全部完成后状态条变 ✓ 停留数秒淡出。桌面端 BgTaskDock 同语义。tasks_update（代理待办清单）是另一个域，未在此演示。</div>
+    <button class="replay" id="replay">▶ 重放模拟（含权限应答互动）</button>
+    <div class="note"><b>V1 时间线内瞬态行（已选定）</b>：工具运行时消息流里出现一行「正在执行 ××」，本轮结束整行淡出消失。历史里永远只有思考卡 + 对话。代价：行的出现/消失会让时间线轻微跳动。</div>
+    <div class="note"><b>权限应答 · 澄清提问（AskUserQuestion）</b>：模型在等你的「回答」而不是「允许」。逐题整行选项卡（圆点 + 选项 + 描述），「其他」行内直接输入回答；未作答前「提交回答」置灰。多题时逐题纵向排列、多选题带「可多选」标签，全部作答后提交门才开。跳过 = 无理由拒绝，模型自己想别的办法。作答打包 answers 走 permission_response。</div>
+    <div class="note"><b>权限应答 · 工具调用（含 Bash）</b>：一个动作一行——允许（主按钮）/ 拒绝（次按钮）整行排布。拒绝走两步式：点拒绝原地展开理由输入（可留空）→ 确认拒绝 / 返回；理由走协议 message 通道，模型能看到为什么被拒。</div>
+    <div class="note"><b>弹窗期间输入框隐藏</b>：挂着未决请求时，新消息本就会排队等这轮答完，与其留着占屏不如整块让位；答完输入框回归。并行请求 FIFO：永远只确认队头，卡片头部显示「还有 N 条排队」。</div>
+    <div class="note"><b>通用语义</b>：工具事件只进瞬态 liveActivity，不进消息流，回合结束清空（= 不驻留内存）；历史加载时跳过 tool_call 块；卡片一律白底描边、间距走 8 的倍数、图标统一 SVG。</div>
+    <div class="note"><b>后台任务（bg_task_*，停靠区同款）</b>：状态条胶囊有任务才出现（● N 个运行中 + 命令名），点开看任务列表（状态/命令/走表时长/终止）+ 尾部输出贴尾滚动（移动端不做 xterm）。跨轮次存活——回合结束不清，bg_task_ended 才收；全部完成后状态条变 ✓ 停留数秒淡出。桌面端 BgTaskDock 同语义。</div>
   </div>
   <div class="phone">
     <div class="screen" id="screen">
@@ -109,7 +129,7 @@ h1{font-size:18px;margin-bottom:12px}
       </div>
       <div class="tl" id="tl"></div>
       <div id="dock"></div>
-      <div class="inputbar">
+      <div class="inputbar" id="inputbar">
         <div class="field">发送消息</div>
         <div class="send" id="send"></div>
       </div>
@@ -129,10 +149,10 @@ document.getElementById('send').innerHTML = ICONS.send;
 var tl = document.getElementById('tl');
 var dock = document.getElementById('dock');
 var screen = document.getElementById('screen');
-var variant = 'v1';
+var inputbar = document.getElementById('inputbar');
 var timers = [];
 
-function later(fn, ms){ timers.push(setTimeout(fn, ms)); }
+function later(fn, ms){ var t = setTimeout(fn, ms); timers.push(t); return t; }
 function clearTimers(){ timers.forEach(clearTimeout); timers = []; }
 function el(html){ var t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstChild; }
 function scroll(){ tl.scrollTop = tl.scrollHeight; }
@@ -156,6 +176,7 @@ function daySep(label){ tl.appendChild(el('<div class="day"></div>')).textConten
 
 function buildRest(){
   tl.innerHTML = ''; dock.innerHTML = '';
+  inputbar.classList.remove('hidden');
   screen.classList.remove('running');
   daySep('昨天');
   userMsg('会话列表下拉刷新在低端机上有点卡，帮我看看');
@@ -192,6 +213,10 @@ var TOOLS = [
   ['Read', 'tests/router.spec.ts'],
   ['Grep', 'beforeEach'],
   ['Bash', 'pnpm dev']
+];
+var DENY_TOOLS = [
+  ['Read', 'tests/router.spec.ts'],
+  ['Grep', 'beforeEach']
 ];
 
 var bgClock = null;
@@ -245,15 +270,15 @@ function startBgTask(){
   };
 }
 
-function runInline(g, onBg, onDone){
+function runInline(g, tools, onBg, onDone){
   var row = el('<div class="act"><span class="spin"></span><span class="tname"></span><span class="targ"></span></div>');
   g.appendChild(row); scroll();
   var i = 0;
   (function next(){
-    if (i < TOOLS.length){
-      if (i === TOOLS.length - 1) { onBg(); }
-      row.querySelector('.tname').textContent = TOOLS[i][0] + ' ·';
-      row.querySelector('.targ').textContent = TOOLS[i][1];
+    if (i < tools.length){
+      if (i === tools.length - 1 && onBg) { onBg(); }
+      row.querySelector('.tname').textContent = tools[i][0] + ' ·';
+      row.querySelector('.targ').textContent = tools[i][1];
       i++; later(next, 1150);
     } else {
       row.classList.add('fade');
@@ -263,55 +288,7 @@ function runInline(g, onBg, onDone){
   })();
 }
 
-function runDock(g, onBg, onDone){
-  var card = el('<div class="dockcard"><div class="cap">正在执行</div></div>');
-  dock.appendChild(card);
-  var i = -1;
-  (function next(){
-    var rows = card.querySelectorAll('.step');
-    if (i >= 0 && rows[i]){
-      var p = rows[i];
-      p.classList.remove('run');
-      p.querySelector('.spin').outerHTML = '<span class="ok">✓</span>';
-    }
-    i++;
-    if (i < TOOLS.length){
-      if (i === TOOLS.length - 1) { onBg(); }
-      var s = el('<div class="step run"><span class="spin"></span><span class="n"></span><span class="arg"></span></div>');
-      s.querySelector('.n').textContent = TOOLS[i][0];
-      s.querySelector('.arg').textContent = TOOLS[i][1];
-      card.appendChild(s);
-      later(next, 1150);
-    } else {
-      later(function(){
-        card.classList.add('fade');
-        later(function(){ card.remove(); }, 420);
-      }, 400);
-      onDone();
-    }
-  })();
-}
-
-function runStatus(g, onBg, onDone){
-  var line = el('<div class="statusline"><span class="spin"></span><span class="txt"></span></div>');
-  dock.appendChild(line);
-  var i = 0;
-  (function next(){
-    if (i < TOOLS.length){
-      if (i === TOOLS.length - 1) { onBg(); }
-      line.querySelector('.txt').innerHTML = '正在执行 <b></b> · <span class="arg"></span>';
-      line.querySelector('b').textContent = TOOLS[i][0];
-      line.querySelector('.arg').textContent = TOOLS[i][1];
-      i++; later(next, 1150);
-    } else {
-      line.classList.add('fade');
-      later(function(){ line.remove(); }, 480);
-      onDone();
-    }
-  })();
-}
-
-function finishTurn(g){
+function finishTurn(g, allowed){
   var th = g.querySelector('.think');
   if (th){
     th.classList.remove('live');
@@ -321,9 +298,90 @@ function finishTurn(g){
   }
   var t = el('<div class="ai-text"></div>');
   g.appendChild(t); scroll();
-  typeInto(t, '用例跑完了，12 个全绿。守卫已生效，这轮改动可以提交了。', 26, function(){
+  var text = allowed
+    ? '用例跑完了，12 个全绿。守卫已生效，这轮改动可以提交了。'
+    : '好，测试命令先不跑。守卫改动本身已经在工作区里，你确认过随时喊我继续。';
+  typeInto(t, text, 26, function(){
     screen.classList.remove('running');
   });
+}
+
+// ── 权限应答卡（占位输入框；答完淡出回归）──
+
+function showPm(node){
+  inputbar.classList.add('hidden');
+  dock.appendChild(node);
+  requestAnimationFrame(function(){ requestAnimationFrame(function(){ node.classList.remove('fade'); }); });
+}
+function dismissPm(node, done){
+  node.classList.add('fade');
+  later(function(){ node.remove(); inputbar.classList.remove('hidden'); if (done) done(); }, 380);
+}
+
+/** 澄清提问卡：整行选项卡 + 其他行内输入 + 提交门；onSubmit/onSkip(answered)。 */
+function questionCard(onSubmit, onSkip){
+  var c = el('<div class="pm fade"></div>');
+  c.innerHTML =
+    '<div class="pm-tt"><span class="pm-title">需要澄清</span><span class="queue" style="display:none">还有 1 条排队</span></div>' +
+    '<div class="pm-q">' +
+      '<div class="pm-q-h"><span class="h">验证范围</span><span class="pm-q-t">守卫修复要验证到什么程度？</span></div>' +
+      '<div class="pm-opt"><span class="pm-radio"><i></i></span><span class="tx"><span class="l1">仅路由用例</span><span class="l2">只跑 router 相关，最快出结果</span></span></div>' +
+      '<div class="pm-opt"><span class="pm-radio"><i></i></span><span class="tx"><span class="l1">全量用例</span><span class="l2">回归一遍全部，稳但慢</span></span></div>' +
+      '<div class="pm-opt pm-free"><span class="pm-radio"><i></i></span><span class="l1">其他</span><input class="pm-free-in" placeholder="输入你的回答…"></div>' +
+    '</div>' +
+    '<button class="pm-btn primary" disabled>提交回答</button>' +
+    '<button class="pm-btn ghost">跳过</button>';
+  var submit = c.querySelector('.pm-btn.primary');
+  var freeIn = c.querySelector('.pm-free-in');
+  var freeOpt = c.querySelector('.pm-free');
+  function sync(){
+    var on = freeOpt.classList.contains('on');
+    submit.disabled = !on ? !c.querySelector('.pm-opt.on') : freeIn.value.trim() === '';
+  }
+  c.querySelectorAll('.pm-opt').forEach(function(o){
+    o.addEventListener('click', function(){
+      c.querySelectorAll('.pm-opt').forEach(function(x){ x.classList.remove('on'); });
+      o.classList.add('on');
+      if (o === freeOpt){ freeIn.focus(); }
+      sync();
+    });
+  });
+  freeIn.addEventListener('input', sync);
+  submit.addEventListener('click', function(){ onSubmit(); });
+  c.querySelector('.pm-btn.ghost').addEventListener('click', function(){ onSkip(); });
+  return c;
+}
+
+/** 工具调用卡：一个动作一行；拒绝两步式展开理由表单。onAllow()/onDeny(reason)。 */
+function toolCard(onAllow, onDeny){
+  var c = el('<div class="pm fade"></div>');
+  c.innerHTML =
+    '<div class="pm-tool">Bash</div>' +
+    '<div class="pm-sum">pnpm test -- --run router</div>' +
+    '<div class="pm-acts" style="display:flex;flex-direction:column;gap:10px">' +
+      '<button class="pm-btn primary">允许</button>' +
+      '<button class="pm-btn ghost">拒绝</button>' +
+    '</div>' +
+    '<div class="pm-deny">' +
+      '<input class="pm-deny-in" placeholder="告诉它为什么拒绝（可留空）…">' +
+      '<button class="pm-btn danger">确认拒绝</button>' +
+      '<button class="pm-btn ghost">返回</button>' +
+    '</div>';
+  var acts = c.querySelector('.pm-acts');
+  var deny = c.querySelector('.pm-deny');
+  var denyIn = c.querySelector('.pm-deny-in');
+  c.querySelector('.pm-btn.primary').addEventListener('click', function(){ onAllow(); });
+  c.querySelector('.pm-acts .ghost').addEventListener('click', function(){
+    acts.style.display = 'none';
+    deny.style.display = 'flex';
+    denyIn.focus();
+  });
+  deny.querySelector('.ghost').addEventListener('click', function(){
+    deny.style.display = 'none';
+    acts.style.display = 'flex';
+  });
+  deny.querySelector('.danger').addEventListener('click', function(){ onDeny(denyIn.value.trim()); });
+  return c;
 }
 
 function play(){
@@ -331,36 +389,50 @@ function play(){
   clearBg();
   buildRest();
   screen.classList.add('running');
-  later(function(){ userMsg('跑一遍用例验证下守卫'); }, 600);
+  later(function(){ userMsg('跑一遍用例验证下守卫，测完部署到测试环境'); }, 600);
   later(function(){
     var g = aiGroup();
     var th = el('<div class="think live open"><div class="think-h">' + ICONS.spark +
       '<span class="lb">思考中…</span><span class="chev" style="display:none">' + ICONS.chev + '</span></div><div class="think-b"></div></div>');
     g.appendChild(th); scroll();
     typeInto(th.querySelector('.think-b'),
-      '验证守卫要先跑路由相关用例；跑之前确认测试入口和过滤参数，失败再看是不是 mock 没对上。',
+      '验证守卫要先跑路由相关用例；跑之前跟你确认一下验证范围，别全量回归浪费时间。',
       18, null);
     later(function(){
-      var bgRef = { h: null };
-      var mkBg = function(){ bgRef.h = startBgTask(); };
-      var onDone = function(){
-        finishTurn(g);
-        later(function(){ if (bgRef.h) { bgRef.h.finish(); } }, 5000);
-      };
-      if (variant === 'v1'){ runInline(g, mkBg, onDone); }
-      else if (variant === 'v2'){ runDock(g, mkBg, onDone); }
-      else { runStatus(g, mkBg, onDone); }
+      // 互动 1：澄清提问（模型等答案；1.4s 后 Bash 请求入队，演示 FIFO 排队徽标）
+      var bashTimer = null;
+      var qc = questionCard(function(){ answered(); }, function(){ answered(); });
+      showPm(qc);
+      bashTimer = later(function(){
+        bashTimer = null;
+        qc.querySelector('.queue').style.display = '';
+      }, 1400);
+      function answered(){
+        if (bashTimer){ clearTimeout(bashTimer); bashTimer = null; }
+        dismissPm(qc, function(){
+          // 互动 2：工具调用（Bash）——允许走全流程，拒绝走受限流程
+          var tc = toolCard(
+            function(){ dismissPm(tc, function(){ runFlow(g, true); }); },
+            function(reason){ dismissPm(tc, function(){ runFlow(g, false, reason); }); }
+          );
+          showPm(tc);
+        });
+      }
     }, 2600);
   }, 1300);
 }
 
+function runFlow(g, allowed){
+  var bgRef = { h: null };
+  var mkBg = allowed ? function(){ bgRef.h = startBgTask(); } : null;
+  var tools = allowed ? TOOLS : DENY_TOOLS;
+  runInline(g, tools, mkBg, function(){
+    finishTurn(g, allowed);
+    if (allowed){ later(function(){ if (bgRef.h){ bgRef.h.finish(); } }, 5000); }
+  });
+}
+
 document.getElementById('replay').addEventListener('click', play);
-document.getElementById('seg').addEventListener('click', function(e){
-  var b = e.target.closest('button');
-  if (!b){ return; }
-  variant = b.dataset.v;
-  document.querySelectorAll('.seg button').forEach(function(x){ x.classList.toggle('on', x === b); });
-});
 
 buildRest();
 </script>

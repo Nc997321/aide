@@ -57,6 +57,20 @@ export interface LoadMessagesResult {
 }
 
 /**
+ * 会话级权限规则草稿（镜像上游 types/permissions.ts 的 PermissionRuleDraft，
+ * 随 permission_response 放行透传 sidecar 入库）。ohos 端不推导规则草稿
+ * （推导逻辑 deriveSessionFileRules 在桌面 src/utils，同 PWA 的协议边界），
+ * 收录仅为保持 permission_response DTO 形状完整；matcher 上游是判别联合，
+ * 这里按 JSON 值域收窄为 Record。
+ */
+export interface PermissionRuleDraft {
+  /** 'allow' | 'deny' | 'ask'。 */
+  effect: string;
+  tool: string;
+  matcher: Record<string, Object>;
+}
+
+/**
  * 后台任务快照条目（list_bg_tasks 返回；Rust runtime::bg_registry::
  * BgTaskSnapshot 的 serde camelCase 镜像）。桌面侧从事件流顺手累积，
  * 手机打开会话/重连时对账 bgTasks 用——bg_task_* 事件流只做实时转发

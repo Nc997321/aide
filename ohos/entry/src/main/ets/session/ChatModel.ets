@@ -17,7 +17,9 @@
  *  - 断线重连整页重载（对照 reloadSessionMessages）：清消息/游标后重新 hydrate
  *  - 监听挂在传输实例上只挂一次（重建实例会让 listener 挂死连接）
  * 未过筛（随 UI 扩容）：evict 字节降级、页级回收 recycle、模型/effort/权限
- * 模式选择器、btw 支线、图片消息、AskUserQuestion 选项作答（v1 仅允许/拒绝）。
+ * 模式选择器、btw 支线、图片消息、nextMode（「进入自动模式/计划批准」UI
+ * 定稿后接入）、「允许并记住」规则推导（sessionRules；deriveSessionFileRules
+ * 在桌面 src/utils，ohos 同 PWA 不推导）。
  * 本类无可观察状态（全在 ChatStore），是纯服务持有者；页面经 chatModel.store
  * 观察（@ObservedV2 字段级追踪，store 实例终生不变）。
  */
@@ -34,6 +36,14 @@ import { routeChatEvent } from './chat/ChatEvents';
 export interface ChatPageParams {
   sid: string;
   name: string;
+}
+
+/** 权限应答的可选载荷（对照上游 respondPermission 的 opts；可空项 null = 不携带）。 */
+export interface RespondPermissionOpts {
+  /** AskUserQuestion 作答（问题文本 → 答案；语义由 sidecar 解释重组）。 */
+  answers: Record<string, string> | null;
+  /** 拒绝理由（协议参数名 message；sidecar 透传给 SDK 的 deny message）。 */
+  reason: string | null;
 }
 
 export class ChatModel {
@@ -157,13 +167,27 @@ export class ChatModel {
     }
   }
 
-  /** 权限应答（v1 仅允许/拒绝；出队后 invoke，失败提示不回滚队列——sidecar 会重发）。 */
-  async respondPermission(id: string, approved: boolean): Promise<void> {
+  /**
+   * 权限应答（出队后 invoke，失败提示不回滚队列——sidecar 会重发）。
+   * opts 语义对照上游 respondPermission：answers = AskUserQuestion 选项
+   * 作答、reason = 拒绝理由；null = 不携带（Rust Option 缺键即 None）。
+   * nextMode/sessionRules 未过筛：前者随「进入自动模式/计划批准」UI 定稿后
+   * 接入，后者的规则草稿推导在桌面 src/utils，ohos 同 PWA「允许」= 仅本次放行。
+   */
+  async respondPermission(id: string, approved: boolean, opts: RespondPermissionOpts | null): Promise<void> {
     const sid: string = this.store.sid;
     this.store.pendingPermissions = this.store.pendingPermissions
       .filter((p: PermissionRequest) => p.id !== id);
     try {
-      await api.permissionResponse(sid, id, approved);
+      await api.permissionResponse({
+        sessionId: sid,
+        id: id,
+        approved: approved,
+        answers: opts !== null ? opts.answers : null,
+        nextMode: null,
+        message: opts !== null ? opts.reason : null,
+        sessionRules: null
+      });
     } catch (e) {
       if (this.store.sid === sid) {
         this.store.sysNote = `权限应答失败：${e instanceof Error ? e.message : String(e)}`;

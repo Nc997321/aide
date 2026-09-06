@@ -10,6 +10,7 @@
  * 上游 ImageBlock / ActionBlock 未收录：ohos 端暂无图片发送与动作胶囊通路。
  */
 import { uuid, emptyRecord } from './ChatWire';
+import { QuestionSpec, toggleQuestionSelection, canSubmitQuestions, packQuestionAnswers } from './PermissionShape';
 
 /** 块公共面：type 判别 + ForEach 稳定 key。 */
 export interface ContentBlock {
@@ -235,6 +236,86 @@ export class PermissionRequest {
   input: Object = emptyRecord();
   /** 发起方子代理名（空串 = 主线程）——无它用户无从知道是谁在问。 */
   fromSubagentName: string = '';
+  /** AskUserQuestion 解析出的问题清单（事件到达时解析；空 = 非提问/形状不对）。 */
+  questions: QuestionSpec[] = [];
+  /** 逐题作答草稿（与 questions 下标对齐）：选中的 label 列表 / 自由文本 /
+   *  是否走自由文本（与选项互斥）。状态随请求实例走——队头切换即全新草稿，
+   *  无跨请求残留（对照 PWA 在组件里 watch id 复位，这里数据即状态）。 */
+  @Trace selections: string[][] = [];
+  @Trace freeText: string[] = [];
+  @Trace useFreeText: boolean[] = [];
+  /** 拒绝理由表单开关 + 草稿（提交前临时态；同样随请求实例走）。 */
+  @Trace denyOpen: boolean = false;
+  @Trace denyReason: string = '';
+
+  /** 事件到达时解析问题清单并初始化逐题草稿（permission_request 专用入口）。 */
+  initQuestions(specs: QuestionSpec[]): void {
+    this.questions = specs;
+    const sels: string[][] = [];
+    const texts: string[] = [];
+    const frees: boolean[] = [];
+    for (let i = 0; i < specs.length; i++) {
+      sels.push([]);
+      texts.push('');
+      frees.push(false);
+    }
+    this.selections = sels;
+    this.freeText = texts;
+    this.useFreeText = frees;
+  }
+
+  /** 选项点击：单选覆盖、多选增删；改选选项退出自由文本（对照 PWA toggleOption）。 */
+  toggleOption(qi: number, label: string): void {
+    if (qi < 0 || qi >= this.questions.length) {
+      return;
+    }
+    const cur: string[] | undefined = this.selections[qi];
+    this.replaceSelections(qi, toggleQuestionSelection(cur !== undefined ? cur : [], label, this.questions[qi].multiSelect));
+    this.replaceUseFreeText(qi, false);
+  }
+
+  /** 改走自由文本作答：与选项选择互斥（对照 PWA selectFreeText）。 */
+  useFreeTextAnswer(qi: number): void {
+    if (qi < 0 || qi >= this.questions.length) {
+      return;
+    }
+    this.replaceUseFreeText(qi, true);
+    this.replaceSelections(qi, []);
+  }
+
+  setFreeText(qi: number, text: string): void {
+    this.replaceFreeText(qi, text);
+  }
+
+  /** 全部问题已作答（提交门；零问题恒 false——只剩跳过）。 */
+  canSubmitAnswers(): boolean {
+    return canSubmitQuestions(this.questions, this.selections, this.freeText, this.useFreeText);
+  }
+
+  /** 打包 answers（问题文本 → 答案；仅在 canSubmitAnswers 通过后调用）。 */
+  packAnswers(): Record<string, string> {
+    return packQuestionAnswers(this.questions, this.selections, this.freeText, this.useFreeText);
+  }
+
+  // 草稿更新统一整体替换数组引用（@Trace 字段级观察的最稳路径，数组很小无成本）
+
+  private replaceSelections(qi: number, v: string[]): void {
+    const next: string[][] = this.selections.slice();
+    next[qi] = v;
+    this.selections = next;
+  }
+
+  private replaceFreeText(qi: number, v: string): void {
+    const next: string[] = this.freeText.slice();
+    next[qi] = v;
+    this.freeText = next;
+  }
+
+  private replaceUseFreeText(qi: number, v: boolean): void {
+    const next: boolean[] = this.useFreeText.slice();
+    next[qi] = v;
+    this.useFreeText = next;
+  }
 }
 
 // ── 子代理条目累积（对照 state.ts；P2-1 写入时上限，防单个子代理块撑爆内存）──

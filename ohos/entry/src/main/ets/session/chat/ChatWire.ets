@@ -30,3 +30,28 @@ export function obj(p: Record<string, Object>, key: string): Object {
   const v: Object | undefined = p[key];
   return v !== undefined ? v : emptyRecord();
 }
+
+/** 工具入参单行摘要（对照 PWA toolArg：file_path/command/pattern/path/url 优先）。 */
+export function toolSummary(input: Object): string {
+  if (typeof input === 'string') {
+    return input;
+  }
+  const rec: Record<string, Object> = input as Record<string, Object>;
+  const keys: string[] = ['file_path', 'command', 'pattern', 'path', 'url'];
+  for (let i = 0; i < keys.length; i++) {
+    const v: Object | undefined = rec[keys[i]];
+    if (v !== undefined && typeof v === 'string' && v !== '') {
+      return v;
+    }
+  }
+  return '';
+}
+
+/** 工具入参 JSON（权限卡展示；序列化失败兜底 String——对照 PWA toolInput）。 */
+export function inputJson(input: Object): string {
+  try {
+    return JSON.stringify(input);
+  } catch (e) {
+    return String(input);
+  }
+}

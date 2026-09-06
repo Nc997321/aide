@@ -7,7 +7,8 @@
  *    「流式展开 → 段收尾自动收起 → 跨工具合并续写」生命周期，见 ThinkingCard）、
  *    工具调用生命周期（V1：瞬态行 liveActivities，
  *    不入消息 blocks——运行期可见、结束即焚）、后台 shell 任务（bg_task_*，
- *    跨轮次存活，停靠区展示）、子代理时间线、权限请求队列、跳队
+ *    跨轮次存活，停靠区展示）、子代理时间线、权限请求队列（AskUserQuestion
+ *    的问题清单随请求解析成草稿）、跳队
  *    （jump_queued/promoted）、轮次收尾（message_stop）、notification、
  *    error、session_dead、session_title
  *  - 显式忽略（随对应 UI 扩容接入）：models_available / model_switch_* /
@@ -28,6 +29,7 @@ import {
   ChatMessage, PermissionRequest, LiveActivity, BgTask, SUBAGENT_ENTRY_CAP,
   appendSubagentTextEntry, appendBgOutput
 } from './ChatBlocks';
+import { parseQuestions } from './PermissionShape';
 import { uuid, str, bool, obj } from './ChatWire';
 
 /** 流式事件总路由（对照 handleChatEvent）。 */
@@ -115,6 +117,8 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
       if (fsObj !== undefined && typeof fsObj === 'object') {
         req.fromSubagentName = str(fsObj as Record<string, Object>, 'agentName');
       }
+      // AskUserQuestion 的问题清单随请求落草稿（形状不对 → 空，弹窗退空态）
+      req.initQuestions(parseQuestions(req.input));
       store.pendingPermissions = store.pendingPermissions.concat([req]);
       break;
     }

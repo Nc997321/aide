@@ -13,7 +13,7 @@
  * None，serde 语义等价）。
  */
 import { getTransport } from './transport';
-import { Session, WorkspaceInfo, LoadMessagesResult, BgTaskInfo } from './types';
+import { Session, WorkspaceInfo, LoadMessagesResult, BgTaskInfo, PermissionRuleDraft } from './types';
 
 /** send_message 的完整负载（镜像前端 SendMessageParams；可空项 null = Rust None）。 */
 export interface SendMessageParams {
@@ -34,6 +34,21 @@ export interface SendMessageParams {
   permissionMode: string | null;
   /** 排队发送标记：sidecar 在安全边界自行 interrupt 后再发。 */
   jumpQueue: boolean;
+}
+
+/** permission_response 的完整负载（镜像上游 PermissionResponseParams；可空项 null = Rust None）。 */
+export interface PermissionResponseParams {
+  sessionId: string;
+  id: string;
+  approved: boolean;
+  /** AskUserQuestion 类工具的作答（问题文本 → 答案）；null = 非提问场景。 */
+  answers: Record<string, string> | null;
+  /** 「允许并切换模式」的目标模式（manual/auto 等）；null = 不切。 */
+  nextMode: string | null;
+  /** 拒绝理由（UI 的 reason → 协议的 message，sidecar 透传给 SDK 的 deny message）；null = 无。 */
+  message: string | null;
+  /** 「允许并记住」的会话级规则草稿；ohos 端不推导（同 PWA），恒 null 占位保持 DTO 形状完整。 */
+  sessionRules: PermissionRuleDraft[] | null;
 }
 
 export class AideApi {
@@ -98,15 +113,29 @@ export class AideApi {
   }
 
   /**
-   * 权限弹窗应答。ohos 端 v1 只有允许/拒绝两键：answers/nextMode/message/
-   * sessionRules 均缺省（Rust Option 缺键即 None），与上游空 opts 语义一致。
+   * 权限弹窗应答（参数形状与上游零偏差）。answers = AskUserQuestion 选项
+   * 作答；nextMode = 「允许并切换模式」（编辑工具的 auto / 计划批准
+   * 的 auto）；message = 拒绝理由；sessionRules = 规则草稿（ohos 不推导，
+   * 恒缺键 = Rust None，与上游空 opts 语义一致）。
    */
-  permissionResponse(sessionId: string, id: string, approved: boolean): Promise<void> {
+  permissionResponse(params: PermissionResponseParams): Promise<void> {
     const args: Record<string, Object> = {
-      'sessionId': sessionId,
-      'id': id,
-      'approved': approved
+      'sessionId': params.sessionId,
+      'id': params.id,
+      'approved': params.approved
     };
+    if (params.answers !== null) {
+      args['answers'] = params.answers;
+    }
+    if (params.nextMode !== null) {
+      args['nextMode'] = params.nextMode;
+    }
+    if (params.message !== null) {
+      args['message'] = params.message;
+    }
+    if (params.sessionRules !== null) {
+      args['sessionRules'] = params.sessionRules;
+    }
     return getTransport().invoke<void>('permission_response', args);
   }
 
