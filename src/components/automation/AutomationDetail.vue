@@ -12,6 +12,7 @@ import { usePaneLayout } from "../../composables/usePaneLayout";
 import { useModal } from "../../composables/useModal";
 import { useToast } from "../../composables/useToast";
 import { marked } from "../../utils/markdown";
+import Icon from "../Icon.vue";
 import type { RunRecord, RunUsage } from "../../api/automation";
 
 const auto = useAutomation();
@@ -157,6 +158,11 @@ const PLAYBOOK_CARD: Record<string, { title: string; desc: string }> = {
       <button class="btn sm" :disabled="task.lastRunStatus === 'running'" @click="onRunNow">▶ 立即运行</button>
       <button class="btn sm" @click="auto.openEditor(task.id)">编辑</button>
       <button class="btn sm danger-ghost" @click="onDelete">删除</button>
+      <!-- 关闭面板回聊天（与记忆观测台/插件市场头部 ✕ 同规格同语义：面板关掉，
+           主区切回 PaneLayout，会话不卸载）。删除是真的删任务，别混。 -->
+      <button class="d-close" v-tooltip="'关闭面板'" @click="auto.closePanel()">
+        <Icon name="close" :size="13" :stroke-width="1.4" />
+      </button>
     </div>
 
     <!-- 提示词 -->
@@ -267,6 +273,26 @@ const PLAYBOOK_CARD: Record<string, { title: string; desc: string }> = {
 }
 .spacer {
   flex: 1;
+}
+
+/* 规格照抄 MemoryObservatory 的 .mo-close（26px 方形、hover 淡底），三处主区
+   面板的 ✕ 是同一语义：关面板，不卸载会话 */
+.d-close {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--aide-radius-sm);
+  background: transparent;
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.d-close:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
 }
 
 .switch {

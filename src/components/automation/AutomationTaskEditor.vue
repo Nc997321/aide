@@ -9,6 +9,7 @@ import { EFFORT_OPTIONS } from "@aide/sdk/utils/effort";
 import { mcpServerApi } from "../../api/customization";
 import ThemedSelect from "../ThemedSelect.vue";
 import DirTreePicker from "../DirTreePicker.vue";
+import Icon from "../Icon.vue";
 import type { AutomationTaskInput, Schedule } from "../../api/automation";
 
 const auto = useAutomation();
@@ -277,6 +278,11 @@ async function save(andRun: boolean) {
     <div class="e-head">
       <span class="back-link" @click="auto.backToDetail()"><span class="tri">◂</span> 返回</span>
       <h2>{{ editing ? `编辑 · ${editing.name}` : "新建自动化任务" }}</h2>
+      <span class="e-spacer" />
+      <!-- ✕ = 关闭面板回聊天；「返回」/「取消」= 回详情。两级退出，别合并 -->
+      <button class="e-close" v-tooltip="'关闭面板'" @click="auto.closePanel()">
+        <Icon name="close" :size="13" :stroke-width="1.4" />
+      </button>
     </div>
 
     <div class="form-wrap">
@@ -461,6 +467,27 @@ async function save(andRun: boolean) {
 .e-head h2 {
   font-size: 16px;
   font-weight: 600;
+}
+.e-spacer {
+  flex: 1;
+}
+/* 规格照抄 MemoryObservatory 的 .mo-close，三处主区面板 ✕ 同一语义 */
+.e-close {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--aide-radius-sm);
+  background: transparent;
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.e-close:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
 }
 .back-link {
   color: var(--aide-text-muted);

@@ -356,11 +356,13 @@ function onSearchFilesChanged() {
   fileTreeRef.value?.loadRoot();
 }
 
-// 插件市场 ⇄ 记忆观测台互斥：主区 v-if 链有优先级（市场在前），不互斥的话
-// 先开的那个会一直挡住后开的，点侧栏入口毫无反应。放在 App 层做，覆盖全部入口
-// （底部入口行、市场的 ⋯ 菜单「打开市场」、标题栏/通知的 openPanel）。
-watch(marketplace.panelOpen, (open) => { if (open) observatory.closePanel(); });
-watch(observatory.panelOpen, (open) => { if (open) marketplace.closePanel(); });
+// 自动化 ⇄ 插件市场 ⇄ 记忆观测台三者互斥：主区 v-if 链有优先级（自动化 > 市场 >
+// 观测台），不互斥的话先开的那个会一直挡住后开的，点侧栏入口毫无反应（自动化漏了
+// 互斥就是这个症状）。放在 App 层做，覆盖全部入口（侧栏任务节点、底部入口行、
+// 市场的 ⋯ 菜单「打开市场」、标题栏/通知的 openPanel）。
+watch(marketplace.panelOpen, (open) => { if (open) { observatory.closePanel(); automation.closePanel(); } });
+watch(observatory.panelOpen, (open) => { if (open) { marketplace.closePanel(); automation.closePanel(); } });
+watch(() => automation.state.view, (v) => { if (v !== null) { marketplace.closePanel(); observatory.closePanel(); } });
 
 function onSessionChanged(id: string) {
   // 选中会话时关掉自动化/插件市场/记忆观测台面板，主区切回聊天
