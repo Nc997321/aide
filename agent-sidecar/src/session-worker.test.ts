@@ -55,6 +55,85 @@ describe("SessionWorker — jump queue", () => {
   });
 });
 
+/**
+ * 用户消息广播（方案 C：三端统一只认事件，不再本地乐观渲染气泡）。
+ *
+ * 关键不变量：
+ * - 模型收到消息 与 各端看见气泡 是同一个动作的两个面（pushUserMessage 保证）
+ * - display 原样回灌，text 取原始输入而非展开后的 prompt
+ * - 插队消息在真正接入（promote）时才广播，不是登记时
+ */
+describe("SessionWorker — user_message 广播", () => {
+  function workerWithStubbedQueue(sid = "s1") {
+    const events: ChatEvent[] = [];
+    const worker = new SessionWorker(sid, (e) => events.push(e), {});
+    // 拦住 queue.push：不进 SDK 输入流，只验证入队内容
+    const pushed: any[] = [];
+    (worker.queue as any).push = (m: any) => pushed.push(m);
+    return { worker, events, pushed };
+  }
+
+  it("首条 send：入队模型输入的同时广播 user_message", async () => {
+    const { worker, events, pushed } = workerWithStubbedQueue();
+    worker.handleCommand({ cmd: "send", session_id: "s1", prompt: "你好", cwd: "/tmp" } as any);
+    await flushPromises();
+
+    // 模型侧：一条 user 输入
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0].type).toBe("user");
+    // UI 侧：广播给所有客户端——远程客户端（手机）发的消息靠这条才在桌面端出现
+    expect(events.filter((e) => e.type === "user_message")).toEqual([
+      { type: "user_message", text: "你好" },
+    ]);
+  });
+
+  it("display 原样回灌；text 取原始输入而非展开后的 prompt", async () => {
+    const { worker, events } = workerWithStubbedQueue();
+    const display = [
+      { type: "text", text: "看看这个文件" },
+      { type: "mention", path: "src/a.ts", content: "const a = 1;" },
+    ];
+    worker.handleCommand({
+      cmd: "send",
+      session_id: "s1",
+      // 发给模型的是展开后的完整文本（@引用内容已混进 prompt）
+      prompt: "看看这个文件\n<file>const a = 1;</file>",
+      display,
+      cwd: "/tmp",
+    } as any);
+    await flushPromises();
+
+    const um: any = events.find((e) => e.type === "user_message");
+    expect(um.display).toEqual(display);
+    // 关键：只渲染 text 的接收端（鸿蒙 v1）不该看到展开后的那一坨
+    expect(um.text).toBe("看看这个文件");
+  });
+
+  it("插队消息：登记时不广播，promote 真正接入时才广播", async () => {
+    const { worker, events } = workerWithStubbedQueue();
+    // 伪造「有活 query + 轮次进行中」以走插队分支
+    (worker as any).currentQuery = { interrupt: () => Promise.resolve() };
+    (worker as any).turnActive = true;
+    worker.handleCommand({
+      cmd: "send",
+      session_id: "s1",
+      prompt: "插队",
+      jump_queue: true,
+      cwd: "/tmp",
+    } as any);
+    await flushPromises();
+    // 登记阶段只应有提示条事件，不该冒出用户气泡（否则气泡会插在上轮回复中间）
+    expect(events.filter((e) => e.type === "user_message")).toHaveLength(0);
+
+    // 安全边界到达 → 接入
+    (worker as any).promoteJumpQueue();
+    await flushPromises();
+    expect(events.filter((e) => e.type === "user_message").map((e: any) => e.text)).toEqual([
+      "插队",
+    ]);
+  });
+});
+
 describe("SessionWorker — fork source / routing key invariants", () => {
   it("constructor: fork source starts empty (no resume for normal session)", () => {
     const { worker } = makeWorker();

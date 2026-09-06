@@ -262,6 +262,26 @@ export interface ChatMessage {
   modelLabel?: string;
 }
 
+/** 用户气泡的渲染描述（发起方构造 → sidecar 原样回灌 → 所有客户端渲染）。
+ *
+ *  ⚠️ 必须与 `agent-sidecar/src/types.ts` 的 `UserMessageBlock` 保持同形——两个包
+ *  无法共享类型定义，shape 漂移会让 display 静默失效（接收端识别不了就降级成纯
+ *  文本气泡）。加形态时两边一起改。
+ *
+ *  为什么需要它：发给模型的 prompt 是 @引用展开后的完整文本，结构信息在发送前就
+ *  被编译掉了，sidecar 只拿到一个字符串。没有这层描述，带引用的消息在接收端会退
+ *  化成一坨分不清彼此的文本——而现在桌面端是刻意拆成独立卡片显示的。
+ *
+ *  端无关：只描述"有什么"，不描述"怎么画"。mention 渲染成 Read 工具卡片是桌面端
+ *  的选择，鸿蒙/PWA 可以渲染成折叠块或忽略。 */
+export type UserMessageBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mediaType: string }
+  /** 动作胶囊（/compact 等斜杠命令）：显示 label/icon，发给模型的仍是底层 prompt。 */
+  | { type: "action"; actionId: string; label: string; icon?: string }
+  /** @引用：path 供展示标题，content 是展开进 prompt 的那部分内容。 */
+  | { type: "mention"; path: string; content: string };
+
 export interface PermissionRequest {
   id: string;
   name: string;

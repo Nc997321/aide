@@ -213,11 +213,19 @@ describe("P0-3 旧消息淘汰 maybeEvict", () => {
     expect(thinking && "truncated" in thinking ? thinking.truncated?.kind : undefined).toBe("thinking");
   });
 
-  it("大 image 块超阈值降级（renderSendBubble 用户气泡后）", async () => {
+  it("大 image 块超阈值降级（用户气泡里的图片）", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);
     await flush();
-    await chat.sendMessage("看图", { images: [{ data: "x".repeat(500), mediaType: "image/png" }] });
+    const bigImage = { data: "x".repeat(500), mediaType: "image/png" };
+    await chat.sendMessage("看图", { images: [bigImage] });
+    // 气泡由 sidecar 的 user_message 渲染（方案 C），display 回灌图片块后才会被淘汰
+    emit({
+      type: "user_message",
+      text: "看图",
+      session_id: "uuid-a",
+      display: [{ type: "image", ...bigImage }],
+    });
     await flush();
     const image = chat.messages.value.flatMap((m) => m.blocks).find((b) => b.type === "image");
     expect(image && "truncated" in image ? image.truncated : undefined).toBeDefined();

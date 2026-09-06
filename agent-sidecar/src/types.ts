@@ -66,6 +66,24 @@ export interface TaskItem {
   activeForm?: string;
 }
 
+/** 用户气泡的渲染描述（发起方构造 → sidecar 原样回灌 → 各端渲染）。
+ *
+ *  为什么需要它：发给模型的 `prompt` 是 @引用展开后的完整文本（用户自己打的字和
+ *  引用文件内容已经混成一个字符串），结构信息在前端就被编译掉了，sidecar 拿不到。
+ *  没有这层描述，带引用的消息在接收端会退化成一坨分不清彼此的文本——而现在桌面端
+ *  是刻意把它们拆成独立卡片显示的。
+ *
+ *  语言/端无关：这里只描述"有什么"，不描述"怎么画"。mention 渲染成 Read 工具卡片
+ *  是桌面端的选择，鸿蒙端可以渲染成折叠块。新增形态时各端自行决定如何降级。
+ *  缺失整个 display 字段时（鸿蒙 v1 只有纯文本），接收方渲染纯文本气泡。 */
+export type UserMessageBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mediaType: string }
+  // 动作胶囊（/compact 等斜杠命令）：显示 label/icon，发给模型的仍是 prompt。
+  | { type: "action"; actionId: string; label: string; icon?: string }
+  // @引用：path 供展示标题，content 是展开内容（模型收到的那部分）。
+  | { type: "mention"; path: string; content: string };
+
 // Sidecar → Rust（每行一个 JSON，写入 stdout）
 export type ChatEvent =
   | { type: "session_init"; session_id: string }
@@ -143,6 +161,15 @@ export type ChatEvent =
   | { type: "jump_queued"; prompt: string }
   // 待插队消息已全部接入后续轮次（或不再需要提示）——前端清掉提示条。
   | { type: "jump_promoted" }
+  // 用户消息已入队的权威广播——**三端（桌面/鸿蒙/PWA）只认这条事件渲染用户气泡**，
+  // 不再本地乐观渲染。这是「命令 → 事件」回灌闭环缺失的那一环：send 走命令通道，
+  // agent 回复走事件通道，于是两端都能看见回复、只有发起方能看见自己提的问题。
+  // 远程客户端发的消息要靠它才出现在桌面端，桌面端发的也靠它出现在手机上。
+  // 幂等性由「单一渲染来源」保证：发起方不再本地画气泡，收到事件才画，因此不存在
+  // 重复渲染，也不需要 message_id 去重。
+  // 时序：插队消息在真正接入（promoteJumpQueue）时才发，不是登记（jump_queued）时发
+  // ——接收端看到气泡的时机与模型真正收到这条消息的时机一致。
+  | { type: "user_message"; text: string; display?: UserMessageBlock[] }
   | { type: "models_available"; models: ModelOption[]; current: string }
   // 模型切换的坐实回执——只在用户显式 set_model 后由 sidecar 运行时路径发出
   // （init/assistant 坐实、query 未起的本地落账都不发），让前端能给出
@@ -257,6 +284,10 @@ export type SidecarCommand =
       session_id: string;
       prompt: string;
       images?: ImageAttachment[];
+      // 发起方附带的渲染描述：sidecar 不解释内容，只原样随 user_message 事件回灌。
+      // 桌面端用它把 @引用/动作胶囊渲染成独立卡片；鸿蒙/PWA 不发此字段，接收端
+      // 降级为纯文本气泡。
+      display?: UserMessageBlock[];
       cwd?: string;
       permission_mode?: string;
       // 供应商连接身份真的漂移了才带 true——下一次 query() 时 forkSession。

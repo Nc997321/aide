@@ -16,7 +16,7 @@ import type {
   CallHierarchyResult, CallHierarchyDirection, InlayHintItem,
   RemoteStatus,
 } from "./types";
-import type { ModelOption, PermissionModeOption } from "./types/chat";
+import type { ModelOption, PermissionModeOption, UserMessageBlock } from "./types/chat";
 import type { PermissionRuleDraft } from "./types/permissions";
 
 /** send_message 的完整负载（IPC 边界 DTO）。可空字段 null = Rust None。 */
@@ -27,6 +27,11 @@ export interface SendMessageParams {
   workspaceRoot?: string | null;
   /** 图片附件（sidecar 图片输入对象） */
   images?: { data: string; mediaType: string }[] | null;
+  /** 用户气泡的渲染描述（@引用卡片 / 动作胶囊）。sidecar 不解释内容，只原样随
+   *  `user_message` 事件回灌——这是远程客户端发的消息能在所有端正确渲染的关键
+   *  （发给模型的 prompt 已把 @引用展开成一坨文本，结构信息只存在于这里）。
+   *  不传（鸿蒙 v1 / PWA）→ 接收端降级渲染纯文本气泡。 */
+  display?: UserMessageBlock[] | null;
   /** 会话身份层解析出的 provider 绑定；null = 会话元数据 → 全局 active 兜底 */
   provider?: string | null;
   resumeId?: string | null;

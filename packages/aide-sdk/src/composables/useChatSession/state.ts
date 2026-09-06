@@ -29,19 +29,15 @@ import { useBtwSession } from "../useBtwSession";
  * 每会话独立 store：前台/后台事件走同一条写入路径，切换会话零拷贝。
  */
 
-/** 排队消息的待渲染快照——忙碌排队时不立即落成对话气泡，只暂存到这里并在输入区
- *  上方显示"待发出"提示条；等 sidecar 到达安全边界（当前工具跑完）发回
- *  jump_promoted 时，再 flush 成真正的用户气泡。text 是提示条显示文本（与用户气泡
- *  标题一致：action.label 优先，否则 prompt），blocks 是气泡渲染数据（与直发
- *  dispatchSend 同构，jump_promoted 时原样 push 进 messages）。 */
+/** 排队消息的"待发出"提示条条目——忙碌排队时消息还没真正接入模型，输入区上方
+ *  显示这一条占位；sidecar 到达安全边界接入后发 jump_promoted 清空它。
+ *
+ *  只存提示文本、不存气泡渲染数据：气泡由 sidecar 的 user_message 事件统一渲染
+ *  （方案 C 单一渲染来源）。以前这里存 blocks 供 jump_promoted 时 flush 成气泡，
+ *  那样做意味着只有发起方能看见自己提的问题。 */
 export interface PendingJump {
+  /** 提示条显示文本（与用户气泡标题一致：action.label 优先，否则 prompt）。 */
   text: string;
-  blocks: (
-    | import("../../types/chat").ImageBlock
-    | import("../../types/chat").TextBlock
-    | import("../../types/chat").ToolCallBlock
-    | import("../../types/chat").ActionBlock
-  )[];
 }
 
 export interface SessionStore {

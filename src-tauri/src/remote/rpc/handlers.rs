@@ -25,6 +25,9 @@ struct SendMessageArgs {
     prompt: String,
     workspace_root: Option<String>,
     images: Option<Vec<Value>>,
+    /// 发起方附带的渲染描述（@引用卡片/动作胶囊），原样透传给 sidecar 回灌。
+    /// 鸿蒙 v1 不发送此字段 → 桌面端降级为纯文本气泡。
+    display: Option<Value>,
     provider: Option<String>,
     resume_id: Option<String>,
     initial_model: Option<String>,
@@ -55,6 +58,7 @@ pub fn send_message(app: AppHandle, params: Value) -> BoxFuture<'static, Result<
                 a.session_id,
                 a.prompt,
                 a.images,
+                a.display,
                 a.resume_id,
                 a.initial_model,
                 a.initial_effort,

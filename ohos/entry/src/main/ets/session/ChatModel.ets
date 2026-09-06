@@ -10,9 +10,10 @@
  *  - chat/ChatEvents.ets     流式事件总路由（events.ts）
  *  - chat/ChatWire.ets       JSON 边界小工具
  * 语义对齐：
- *  - 发送链路三段（对照 prepareSend/renderSendBubble/sendQueued）：本地状态
- *    就绪（isBusy + 气泡或排队）→ fire-and-forget invoke → 失败 catch 兜底复位；
- *    忙碌排队带 jumpQueue 透传，jump_promoted 时 flush
+ *  - 发送链路两段（对照 prepareSend/sendQueued）：本地状态就绪（isBusy + 排队提示）
+ *    → fire-and-forget invoke → 失败 catch 兜底复位；忙碌排队带 jumpQueue 透传
+ *  - **不本地渲染用户气泡**：气泡由 sidecar 广播的 user_message 事件统一渲染，
+ *    本地发送也多一个 RTT 才出气泡。对照上游 useChatSession.ts 的方案 C
  *  - 断线重连整页重载（对照 reloadSessionMessages）：清消息/游标后重新 hydrate
  *  - 监听挂在传输实例上只挂一次（重建实例会让 listener 挂死连接）
  * 未过筛（随 UI 扩容）：evict 字节降级、页级回收 recycle、模型/effort/权限
@@ -28,7 +29,6 @@ import { ChatStore } from './chat/ChatStore';
 import { ChatMessage, PendingJump, PermissionRequest } from './chat/ChatBlocks';
 import { hydrate as hydrateStore, loadOlder as loadOlderStore } from './chat/ChatPagination';
 import { routeChatEvent } from './chat/ChatEvents';
-import { uuid } from './chat/ChatWire';
 
 /** 会话页路由参数（SessionsPage → ChatPage；声明一次，两页共用）。 */
 export interface ChatPageParams {
@@ -93,14 +93,13 @@ export class ChatModel {
     this.store.isBusy = true;
     this.store.sysNote = '';
     if (wasBusy) {
-      // 排队：不立即落气泡——jump_promoted 时 flush；也不 finishStreaming（当前
-      // assistant 仍在流式，提前收尾会让工具结果/后续文本错位新建）
+      // 排队：只登记"待发出"提示条——气泡等 sidecar 真正接入这条消息时广播的
+      // user_message 渲染。不 finishStreaming（当前 assistant 仍在流式，提前收尾
+      // 会让工具结果/后续文本错位新建）。
       this.store.pendingJumps = this.store.pendingJumps.concat([new PendingJump(text)]);
-    } else {
-      this.store.finishStreaming();
-      this.store.appendMessage(ChatMessage.userText(uuid(), text));
-      this.store.bumpTail();
     }
+    // 直发路径同样不落气泡：与桌面端同源，统一由 user_message 事件渲染。本地乐观
+    // 渲染意味着只有发起方看得见自己提的问题——手机上发的在桌面端消失，反之亦然。
     this.dispatchSend(sid, text, wasBusy);
   }
 

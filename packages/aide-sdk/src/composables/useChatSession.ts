@@ -4,9 +4,7 @@ import { api } from "../api";
 import type {
   ActionBlock,
   ChatMessage,
-  ImageBlock,
-  TextBlock,
-  ToolCallBlock,
+  UserMessageBlock,
 } from "../types/chat";
 import type { PermissionRuleDraft } from "../types/permissions";
 import { useSessionState } from "./useSessionState";
@@ -173,63 +171,40 @@ function prepareSend(sid: string, item: QueuedSend): "queued" | "direct" {
 }
 
 /**
- * 气泡渲染：direct 立即落成用户气泡；queued 只暂存到 pendingJumps（输入区上方
- * "待发出"提示条），等 jump_promoted 时 flush 成用户气泡。text 是提示条显示文本
- * （与用户气泡标题一致）。
+ * 构造用户气泡的**渲染描述**——随 send 命令下发给 sidecar，由它随 `user_message`
+ * 事件原样回灌给所有客户端。**发送方自己不画气泡**（方案 C：单一渲染来源）。
+ *
+ * 为什么不本地渲染：本地渲染意味着只有发起方能看见自己提的问题——手机上发的
+ * 消息在桌面端永远不显示，反之亦然。sidecar 是唯一同时看得见「命令」和「事件」
+ * 的地方，由它广播才能让所有端一致，也因此不存在重复渲染、不需要 id 去重。
+ *
+ * 拆块的理由：@path 引用展开出来的文件内容不混进用户气泡的文本，而是独立的
+ * mention 块（桌面端渲染成类 Read 工具的折叠卡片），避免用户自己打的字和引用
+ * 内容糊在一起。发给模型的内容仍是完整的 mentions.sendText，只是显示时拆开。
  */
-function renderSendBubble(
-  sid: string,
-  store: SessionStore,
-  item: QueuedSend,
-  text: string,
-  queued: boolean,
-) {
-  // 动作胶囊：用户气泡只放一个 ActionBlock（胶囊显示 label/icon），不再混文本/
-  // 图片/引用——发给 sidecar 的仍是 item.prompt（/compact /clear），显示与命令解耦。
-  // 普通消息：@path 引用展开出来的文件内容不进用户气泡的文本——渲染成独立的、
-  // 类似工具调用的折叠卡片（复用 ToolCallBlock.vue 对 name:"Read" 的现有渲染），
-  // 避免用户自己打的字和引用文件内容混在一个气泡里。发给模型的内容仍然
-  // 完整（mentions.sendText），只是本地显示时拆开。
-  const blocks: (ImageBlock | TextBlock | ToolCallBlock | ActionBlock)[] = item.action
-    ? [{
-        type: "action",
-        actionId: item.action.id,
-        label: item.action.label,
-        icon: item.action.icon,
-      }]
+function buildUserDisplay(item: QueuedSend): UserMessageBlock[] {
+  return item.action
+    ? [
+        {
+          type: "action",
+          actionId: item.action.id,
+          label: item.action.label,
+          ...(item.action.icon ? { icon: item.action.icon } : {}),
+        },
+      ]
     : [
-        ...(item.images ?? []).map((img): ImageBlock => ({
-          type: "image",
+        ...(item.images ?? []).map((img) => ({
+          type: "image" as const,
           data: img.data,
           mediaType: img.mediaType,
         })),
         ...(item.prompt ? [{ type: "text" as const, text: item.prompt }] : []),
-        ...(item.mentions?.resolved ?? []).map((m): ToolCallBlock => ({
-          type: "tool_call",
-          id: crypto.randomUUID(),
-          name: "Read",
-          input: { file_path: m.path },
-          result: m.content,
-          isError: false,
-          isPending: false,
+        ...(item.mentions?.resolved ?? []).map((m) => ({
+          type: "mention" as const,
+          path: m.path,
+          content: m.content,
         })),
       ];
-  if (queued) {
-    // 排队：当前轮还在跑（工具/生成中），消息要等安全边界（当前工具跑完）由
-    // sidecar 接入。不立即落成对话气泡——只暂存到 pendingJumps，输入区上方显示
-    // "待发出"提示条，jump_promoted 时再 flush。也不调 finishStreaming：当前
-    // assistant 仍在流式，提前收尾会让工具结果/后续文本错位新建到用户气泡之后。
-    store.pendingJumps.push({ text, blocks });
-  } else {
-    finishStreaming(store); // 上一条 assistant 不再续写
-    store.messages.push({
-      id: crypto.randomUUID(),
-      role: "user",
-      blocks,
-      timestamp: Date.now(),
-    });
-  }
-  maybeEvict(sid, store);
 }
 
 /**
@@ -240,6 +215,7 @@ function renderSendBubble(
 function sendQueued(
   sid: string,
   item: QueuedSend,
+  display: UserMessageBlock[],
   opts: { resumeId?: string; jumpQueue?: boolean },
 ) {
   // 会话已收口：不再向已销毁会话发 send_message（会复活 sidecar 进程）
@@ -255,6 +231,8 @@ function sendQueued(
     prompt: sendText,
     workspaceRoot: sessionWs?.wsPath || null,
     images: item.images?.length ? item.images : null,
+    // 渲染描述：sidecar 不解释、原样随 user_message 回灌（见 buildUserDisplay）。
+    display,
     // 会话自持的 provider 身份（L2 身份层 resolve/settleOnSend 解析出的绑定）——
     // 传给 Rust 让 runtime env 按它构造，不再只认全局 active。无绑定（新会话
     // 还没解析完）传 null，Rust 回落会话元数据 → 全局 active。
@@ -365,8 +343,16 @@ export function useChatSession(sessionId: Ref<string | null>) {
     // 忙碌（忙碌 → "queued" 排队，直发 → "direct"）；renderSendBubble 渲染气泡；
     // sendQueued 真实发送（fire-and-forget，内部 catch 兜底）。
     const queued = prepareSend(sid, item);
-    renderSendBubble(sid, store, item, lastDispatchedPrompt[sid], queued === "queued");
-    sendQueued(sid, item, { resumeId: resolvedResumeId, jumpQueue: queued === "queued" });
+    // 排队：输入区上方立刻显示"待发出"提示条——不等 sidecar 的 jump_queued 回传
+    // （有 RTT，手机端尤其明显）。气泡本身不在这里画：sidecar 真正接入这条消息
+    // 时会广播 user_message，由 events.ts 统一渲染。
+    if (queued === "queued") {
+      store.pendingJumps.push({ text: lastDispatchedPrompt[sid] });
+    }
+    sendQueued(sid, item, buildUserDisplay(item), {
+      resumeId: resolvedResumeId,
+      jumpQueue: queued === "queued",
+    });
     return sid;
   }
 

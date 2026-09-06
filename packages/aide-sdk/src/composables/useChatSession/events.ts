@@ -5,6 +5,7 @@ import type { HealthSnapshot } from "../../composables/useDiagnosticsDashboard";
 import type {
   BgTask,
   ChatMessage,
+  ContentBlock,
   ContextCompactionState,
   ContextUsage,
   ModelOption,
@@ -15,6 +16,7 @@ import type {
   TextBlock,
   ThinkingBlock,
   ToolCallBlock,
+  UserMessageBlock,
 } from "../../types/chat";
 import { useBtwSession } from "../useBtwSession";
 import { useCodeGraphProgress } from "../useCodeGraphProgress";
@@ -63,6 +65,51 @@ function isUsageCategory(v: unknown): v is ContextUsageCategory {
  * 流式事件总路由（拆分自原 2000+ 行宿主）：按事件类型分发到 per-sid store。
  * 任意事件到达都证伪「卡住」（清 stalled 橙点）；running 期间重置软超时。
  */
+/**
+ * 用户消息的渲染描述 → 气泡块。
+ *
+ * display 缺失时（鸿蒙 v1 这类只发纯文本的客户端）降级成单个文本块——保证任何
+ * 客户端发的消息在桌面上都看得见，不因协议版本差而整个消失。
+ *
+ * mention 复用 ToolCallBlock 的 Read 卡片渲染，与本地 @引用显示保持一致；未知形态
+ * 直接跳过而不是抛错，这样 sidecar 未来新增 block 类型时老前端不会白屏。
+ */
+function blocksFromDisplay(
+  display: UserMessageBlock[] | undefined,
+  text: string,
+): ContentBlock[] {
+  const mapped = (display ?? [])
+    .map((b): ContentBlock | null => {
+      switch (b.type) {
+        case "text":
+          return b.text ? { type: "text", text: b.text } : null;
+        case "image":
+          return { type: "image", data: b.data, mediaType: b.mediaType };
+        case "action":
+          return {
+            type: "action",
+            actionId: b.actionId,
+            label: b.label,
+            ...(b.icon ? { icon: b.icon } : {}),
+          };
+        case "mention":
+          return {
+            type: "tool_call",
+            id: crypto.randomUUID(),
+            name: "Read",
+            input: { file_path: b.path },
+            result: b.content,
+            isError: false,
+            isPending: false,
+          };
+        default:
+          return null;
+      }
+    })
+    .filter((b): b is ContentBlock => b !== null);
+  return mapped.length ? mapped : text ? [{ type: "text", text }] : [];
+}
+
 export function handleChatEvent(e: Record<string, unknown>): void {
   // 内置 hook 清单：sidecar 会话启动时 emit 的全局元数据（无 session_id），路由到扩展管理。
   if (e["type"] === "builtin_hooks_manifest") {
@@ -541,26 +588,43 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       break;
     }
     case "jump_promoted": {
-      // 安全边界到达：把暂存的排队消息 flush 成用户气泡（追加在当前 assistant 之后），
-      // 清提示条。新轮次由 sidecar 直接发起、不经过 dispatchSend，这里把忙碌态补回来
-      // （否则按钮区会闪"发送"且没有停止按钮）。上一轮若留下失败说明，也不能覆盖
-      // 已经开始的下一轮。finishStreaming 收尾上一轮 assistant（工具跑完/被 interrupt
-      // 时可能仍在 streaming），保证用户气泡插在其后、新轮 assistant 输出再新建。
-      finishStreaming(store);
-      for (const jump of store.pendingJumps) {
-        store.messages.push({
-          id: crypto.randomUUID(),
-          role: "user",
-          blocks: jump.blocks,
-          timestamp: Date.now(),
-        });
-      }
+      // 安全边界到达：排队的消息已被 sidecar 接入模型。这里**只清提示条**——气泡
+      // 由紧邻其前的 user_message 事件渲染（sidecar 逐条入队、逐条广播 user_message，
+      // 全部发完才发 jump_promoted）。新轮次由 sidecar 直接发起、不经过
+      // dispatchSend，这里把忙碌态补回来（否则按钮区会闪"发送"且没有停止按钮）。
+      // 上一轮若留下失败说明，也不能覆盖已经开始的下一轮。
       store.pendingJumps.length = 0;
       store.contextCompaction = null;
       store.isBusy = true;
       setSessionState(sid, "running");
       armStalled(sid);
       // 落盘已在发送前（settleOnSend）完成，此处不再落盘。
+      break;
+    }
+    case "user_message": {
+      // 用户气泡的**唯一渲染点**——本地、手机、PWA 发的消息全部落到这里。发送方
+      // 不再本地乐观渲染（buildUserDisplay 只构造描述随命令下发），所以不会重复，
+      // 也不需要 message_id 去重；代价是本地发送也多一个 RTT 才出气泡。
+      //
+      // finishStreaming 收尾上一条 assistant：无论谁发的，气泡都必须插在上一条
+      // assistant 之后，否则流式续写会误把新回合内容接进上一条消息里。
+      finishStreaming(store);
+      store.messages.push({
+        id: crypto.randomUUID(),
+        role: "user",
+        blocks: blocksFromDisplay(
+          e["display"] as UserMessageBlock[] | undefined,
+          e["text"] as string,
+        ),
+        timestamp: Date.now(),
+      });
+      maybeEvict(sid, store);
+      // 远程客户端（手机/PWA）发的消息不经过本地 prepareSend，忙碌态与软超时
+      // 表必须在这里补——否则桌面端看着消息出现，按钮区却仍显示"发送"、没有
+      // 停止按钮。本地发送路径已设过同值，重复设置幂等。
+      store.isBusy = true;
+      setSessionState(sid, "running");
+      armStalled(sid);
       break;
     }
     case "notification": {

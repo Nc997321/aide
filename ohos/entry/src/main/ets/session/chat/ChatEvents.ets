@@ -208,13 +208,22 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
     case 'jump_queued':
       // 忙碌排队时已暂存 pendingJumps；sidecar 此处回传仅作确认，不重复入队
       break;
-    case 'jump_promoted': {
-      // 安全边界到达：暂存消息 flush 成用户气泡（追加在当前 assistant 之后）。
-      // 新轮次由 sidecar 直接发起，不经过发送链路，这里把忙碌态补回来
+    case 'user_message': {
+      // 用户气泡的**唯一渲染点**（与桌面端同源）：本地、桌面端、PWA 发的消息
+      // 全部落到这里。发送方不再本地乐观渲染，所以不会重复、不需要 id 去重；
+      // 代价是本地发送也多一个 RTT 才出气泡（手机经 relay 约 100ms）。
+      // finishStreaming 收尾上一条 assistant：气泡必须插在它之后，否则流式续写
+      // 会误把新回合内容接进上一条消息。
       store.finishStreaming();
-      for (let i = 0; i < store.pendingJumps.length; i++) {
-        store.appendMessage(ChatMessage.userText(uuid(), store.pendingJumps[i].text));
-      }
+      store.appendMessage(ChatMessage.userText(uuid(), str(payload, 'text')));
+      store.isBusy = true;
+      store.bumpTail();
+      break;
+    }
+    case 'jump_promoted': {
+      // 安全边界到达：排队的消息已被 sidecar 接入模型，气泡由紧邻其前的
+      // user_message 事件渲染（sidecar 逐条入队、逐条广播）。这里只清提示条 +
+      // 补忙碌态——新轮次由 sidecar 直接发起，不经过发送链路。
       store.pendingJumps = [];
       store.isBusy = true;
       store.bumpTail();

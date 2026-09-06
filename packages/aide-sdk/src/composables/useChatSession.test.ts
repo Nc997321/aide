@@ -33,6 +33,23 @@ async function flush() {
   await nextTick();
 }
 
+/**
+ * 模拟完整发送闭环：前端发命令 + sidecar 收到后广播 user_message。
+ *
+ * 方案 C 之后用户气泡只由 `user_message` 事件渲染（发送方不再本地乐观渲染），
+ * 测试要复现真实链路就必须补 sidecar 这一跳——否则消息发出去了但界面上没有。
+ */
+async function sendViaSidecar(
+  chat: ReturnType<typeof useChatSession>,
+  sessionId: string,
+  prompt: string,
+  opts?: Parameters<typeof chat.sendMessage>[1],
+) {
+  await chat.sendMessage(prompt, opts);
+  emit({ type: "user_message", text: prompt, session_id: sessionId });
+  await flush();
+}
+
 describe("useChatSession per-session store", () => {
   beforeEach(() => {
     __resetForTest();
@@ -861,7 +878,7 @@ describe("useChatSession per-session store", () => {
     const chat = useChatSession(sid);
     await flush();
     expect(chat.contextCompaction.value).toBeNull();
-    await chat.sendMessage("压缩上下文");
+    await sendViaSidecar(chat, "uuid-a", "压缩上下文");
 
     emit({ type: "context_compaction", stage: "compacting", session_id: "uuid-a" });
     await flush();
@@ -962,8 +979,8 @@ describe("useChatSession per-session store", () => {
     const chat = useChatSession(sid);
     await flush();
 
-    // 第一条消息：会话进入忙碌（dispatchSend 设 isBusy=true）
-    await chat.sendMessage("q");
+    // 第一条消息：会话进入忙碌（sidecar 广播 user_message 后 isBusy=true）
+    await sendViaSidecar(chat, "uuid-a", "q");
     emit({ type: "text_delta", delta: "回复中", session_id: "uuid-a" });
     await flush();
     expect(chat.isBusy.value).toBe(true);
@@ -977,7 +994,8 @@ describe("useChatSession per-session store", () => {
     expect(chat.pendingJumps.value.length).toBe(1);
     expect(chat.pendingJumps.value[0].text).toBe("排队消息");
 
-    // 工具跑完，sidecar 到达安全边界接入排队消息
+    // 工具跑完，sidecar 到达安全边界接入排队消息：先广播气泡，再发 promoted 收尾
+    emit({ type: "user_message", text: "排队消息", session_id: "uuid-a" });
     emit({ type: "jump_promoted", session_id: "uuid-a" });
     await flush();
 
@@ -995,14 +1013,14 @@ describe("useChatSession per-session store", () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);
     await flush();
-    await chat.sendMessage("q");
+    await sendViaSidecar(chat, "uuid-a", "q");
     emit({ type: "text_delta", delta: "回复中", session_id: "uuid-a" });
     await flush();
 
     // 工具持续在跑：连续排队两条
     await chat.sendMessage("排队1");
     await chat.sendMessage("排队2");
-    // dispatchSend 每条暂存一次，提示条 2 项；用户气泡仍只有第一条 q
+    // 每条暂存一次，提示条 2 项；用户气泡仍只有第一条 q
     expect(chat.pendingJumps.value.length).toBe(2);
     expect(chat.pendingJumps.value.map((j) => j.text)).toEqual(["排队1", "排队2"]);
     expect(chat.messages.value.filter((m) => m.role === "user").length).toBe(1);
@@ -1013,7 +1031,9 @@ describe("useChatSession per-session store", () => {
     await flush();
     expect(chat.pendingJumps.value.length).toBe(2);
 
-    // 工具跑完，一次 flush 全部成用户气泡，顺序保留
+    // 工具跑完：sidecar 逐条广播 user_message 成气泡，再一次 jump_promoted 收尾
+    emit({ type: "user_message", text: "排队1", session_id: "uuid-a" });
+    emit({ type: "user_message", text: "排队2", session_id: "uuid-a" });
     emit({ type: "jump_promoted", session_id: "uuid-a" });
     await flush();
     const userMsgs = chat.messages.value.filter((m) => m.role === "user");
@@ -1023,6 +1043,79 @@ describe("useChatSession per-session store", () => {
     );
     expect(texts).toEqual(["q", "排队1", "排队2"]);
     expect(chat.pendingJumps.value.length).toBe(0);
+  });
+
+  it("远程客户端发的消息只带 user_message 事件 → 桌面端照样出气泡并进入忙碌", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+
+    // 关键场景：手机发的消息。桌面端从未调过 sendMessage、只收到事件——这正是
+    // 方案 C 要修的病例（以前只有发起方能看见自己提的问题）。
+    emit({ type: "user_message", text: "手机上问的问题", session_id: "uuid-a" });
+    await flush();
+
+    const userMsgs = chat.messages.value.filter((m) => m.role === "user");
+    expect(userMsgs).toHaveLength(1);
+    expect(userMsgs[0].blocks).toEqual([{ type: "text", text: "手机上问的问题" }]);
+    // 忙碌态必须跟上：远程消息不经过本地 prepareSend，靠事件处理里补
+    expect(chat.isBusy.value).toBe(true);
+  });
+
+  it("user_message 带 display：@引用渲染成独立卡片，不与正文混成一坨", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+
+    emit({
+      type: "user_message",
+      text: "看看这个文件",
+      session_id: "uuid-a",
+      display: [
+        { type: "text", text: "看看这个文件" },
+        { type: "mention", path: "src/a.ts", content: "const a = 1;" },
+      ],
+    });
+    await flush();
+
+    const msg = chat.messages.value.find((m) => m.role === "user");
+    // 两块：正文 + 引用卡片。合并成一块就说明 display 没被消费（退化成纯文本）
+    expect(msg?.blocks).toHaveLength(2);
+    const tool = msg?.blocks.find((b) => b.type === "tool_call");
+    expect(tool && "input" in tool ? tool.input : null).toEqual({ file_path: "src/a.ts" });
+    expect(tool && "result" in tool ? tool.result : "").toBe("const a = 1;");
+  });
+
+  it("user_message 带 display：动作胶囊渲染成 action 块（/compact 之类）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+
+    emit({
+      type: "user_message",
+      text: "/compact",
+      session_id: "uuid-a",
+      display: [{ type: "action", actionId: "compact", label: "压缩上下文", icon: "zip" }],
+    });
+    await flush();
+
+    const msg = chat.messages.value.find((m) => m.role === "user");
+    expect(msg?.blocks).toEqual([
+      { type: "action", actionId: "compact", label: "压缩上下文", icon: "zip" },
+    ]);
+  });
+
+  it("user_message 无 display（鸿蒙 v1）→ 降级成纯文本气泡，不丢消息", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+
+    // 老客户端不认识 display 字段：接收端不能因为协议差就整条丢掉
+    emit({ type: "user_message", text: "纯文本消息", session_id: "uuid-a" });
+    await flush();
+
+    const msg = chat.messages.value.find((m) => m.role === "user");
+    expect(msg?.blocks).toEqual([{ type: "text", text: "纯文本消息" }]);
   });
 
   it("message_stop 带 usage 时挂到最后一条 assistant 消息", async () => {

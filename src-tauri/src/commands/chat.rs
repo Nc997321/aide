@@ -68,6 +68,10 @@ async fn resolve_send_provider(
 #[derive(Default)]
 struct SendOptions<'a> {
     images: Option<&'a [serde_json::Value]>,
+    // 发起方附带的渲染描述（@引用卡片/动作胶囊），Rust 不解释结构、原样透传给
+    // sidecar，由它随 user_message 事件回灌到所有客户端。None（鸿蒙/PWA）→ 接收
+    // 端降级渲染纯文本气泡。
+    display: Option<serde_json::Value>,
     resume_id: Option<String>,
     initial_model: Option<String>,
     initial_effort: Option<String>,
@@ -93,6 +97,7 @@ fn build_send_command(
 ) -> serde_json::Value {
     let mut cmd = base_send_command(session_id, prompt, cwd, env_vars, &opts);
     attach_images(&mut cmd, opts.images);
+    attach_display(&mut cmd, opts.display);
     attach_resume(&mut cmd, opts.resume_id);
     attach_env_override(&mut cmd, "ANTHROPIC_MODEL", opts.initial_model);
     attach_env_override(&mut cmd, "CLAUDE_CODE_EFFORT_LEVEL", opts.initial_effort);
@@ -125,6 +130,17 @@ fn attach_images(cmd: &mut serde_json::Value, images: Option<&[serde_json::Value
     if let Some(imgs) = images {
         if !imgs.is_empty() {
             cmd["images"] = json!(imgs);
+        }
+    }
+}
+
+/// 渲染描述原样透传（不校验结构——形状由发起端与 sidecar 的协议约定，Rust 层
+/// 只做搬运：校验会把「新增 block 形态」变成需要改 Rust 的破坏性变更）。
+/// None 与 null 均不落字段（无 display 等于「按纯文本渲染」）。
+fn attach_display(cmd: &mut serde_json::Value, display: Option<serde_json::Value>) {
+    if let Some(d) = display {
+        if !d.is_null() {
+            cmd["display"] = d;
         }
     }
 }
@@ -170,6 +186,8 @@ pub async fn send_message(
     session_id: String,
     prompt: String,
     images: Option<Vec<serde_json::Value>>,
+    // 发起方附带的渲染描述（见 SendOptions.display）；None = 按纯文本气泡渲染。
+    display: Option<serde_json::Value>,
     resume_id: Option<String>,
     initial_model: Option<String>,
     initial_effort: Option<String>,
@@ -213,6 +231,7 @@ pub async fn send_message(
         &provider_env,
         SendOptions {
             images: images.as_deref(),
+            display,
             resume_id,
             initial_model,
             initial_effort,
@@ -799,6 +818,41 @@ mod tests {
         assert_eq!(on["jump_queue"], true);
         let off = build_send_command("s", "hi", "/tmp", &HashMap::new(), base_opts());
         assert!(off.get("jump_queue").is_none());
+    }
+
+    /// display（用户气泡渲染描述）原样透传，Rust 层不解释结构。None 与 null 都不落
+    /// 字段——两者对 sidecar 等价于「按纯文本渲染」（鸿蒙 v1 就是不带这个字段）。
+    #[test]
+    fn build_send_command_carries_display_when_present() {
+        let display = json!([{ "type": "text", "text": "hi" }]);
+        let cmd = build_send_command(
+            "s",
+            "hi",
+            "/tmp",
+            &HashMap::new(),
+            SendOptions {
+                display: Some(display.clone()),
+                ..base_opts()
+            },
+        );
+        assert_eq!(cmd["display"], display);
+
+        // 缺省：不落字段
+        let absent = build_send_command("s", "hi", "/tmp", &HashMap::new(), base_opts());
+        assert!(absent.get("display").is_none());
+
+        // 显式 null：与缺省同义，也不落字段
+        let nulled = build_send_command(
+            "s",
+            "hi",
+            "/tmp",
+            &HashMap::new(),
+            SendOptions {
+                display: Some(serde_json::Value::Null),
+                ..base_opts()
+            },
+        );
+        assert!(nulled.get("display").is_none());
     }
 
     /// 回归：provider_switched 仍照常带，且不干扰 resume_session_id。

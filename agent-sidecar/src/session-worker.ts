@@ -1,4 +1,11 @@
-import type { ChatEvent, ImageAttachment, ModelOption, PermissionModeOption, SidecarCommand } from "./types.js";
+import type {
+  ChatEvent,
+  ImageAttachment,
+  ModelOption,
+  PermissionModeOption,
+  SidecarCommand,
+  UserMessageBlock,
+} from "./types.js";
 import { MessageQueue } from "./generator.js";
 import { PermissionManager } from "./permissions.js";
 import { TaskTracker } from "./tasks.js";
@@ -387,6 +394,35 @@ export class SessionWorker {
     });
   }
 
+  /**
+   * 用户消息入队（喂给模型）+ 权威广播（喂给所有客户端 UI）。三处入队点——首条、
+   * 续发、插队 promote——**必须**都走这里：「模型收到」与「各端看见」是同一个
+   * 动作的两个面，漏掉广播就是「只有发起方能看见自己提的问题」（远程客户端发
+   * 的消息在桌面端消失，反之亦然）。方案 C 的核心：三端都不再本地乐观渲染，
+   * 只认这条事件，因此不存在重复渲染、也不需要 message_id 去重。
+   *
+   * 为什么是入队时广播、而不是 send 命令到达时：插队消息登记（jump_queued）后
+   * 要等安全边界才真正接入，提前广播会让气泡插在上一个回合的回复中间。
+   *
+   * text 优先取 display 里的原始输入而非展开后的 prompt——@引用内容已混进
+   * prompt，只渲染 text 的接收端（鸿蒙 v1）不该看到那一坨。
+   */
+  private pushUserMessage(
+    prompt: string,
+    images: ImageAttachment[] | undefined,
+    display: UserMessageBlock[] | undefined,
+  ): void {
+    const text =
+      display?.find((b): b is Extract<UserMessageBlock, { type: "text" }> => b.type === "text")
+        ?.text ?? prompt;
+    this.queue.push({
+      type: "user",
+      message: buildUserMessage(prompt, images ?? []),
+      parent_tool_use_id: null,
+    });
+    this.emit({ type: "user_message", text, ...(display?.length ? { display } : {}) });
+  }
+
   /** 从当前轮安全边界接入插队消息；会话已关闭时丢弃，禁止向 closed queue 写入。 */
   private promoteJumpQueue(): boolean {
     const jumps = this.jumpQueueCtl.takeAll();
@@ -395,11 +431,7 @@ export class SessionWorker {
     // 被 CLI 正确执行。权限模式不在此回放——存活期间用户切模式走
     // set_permission_mode 实时通道已生效，入队快照只会把新模式回退成旧值。
     for (const jump of jumps) {
-      this.queue.push({
-        type: "user",
-        message: buildUserMessage(jump.prompt, jump.images ?? []),
-        parent_tool_use_id: null,
-      });
+      this.pushUserMessage(jump.prompt, jump.images, jump.display);
     }
     this.emit({ type: "jump_promoted" });
     this.turnActive = true;
@@ -994,11 +1026,7 @@ export class SessionWorker {
       // （chat send/btw + automation build/distill）都恒发该 key，缺 key =
       // 新路径忘了下发 → fail-closed 不挂 MCP，而不是静默开启。
       this.startLoop(cmd.cwd ?? this.cwd, cmd.trusted !== false, cmd.codegraph_enabled === true);
-      this.queue.push({
-        type: "user",
-        message: buildUserMessage(cmd.prompt, cmd.images ?? []),
-        parent_tool_use_id: null,
-      });
+      this.pushUserMessage(cmd.prompt, cmd.images, cmd.display);
       this.turnActive = true;
       return;
     }
@@ -1008,6 +1036,7 @@ export class SessionWorker {
       this.jumpQueueCtl.request({
         prompt: cmd.prompt,
         images: cmd.images,
+        display: cmd.display,
       });
       if (this.toolLifecycle.isIdle()) {
         // interrupt 拒绝 = 没有可打断的回合（用户已插队）——契约性吞掉。
@@ -1024,11 +1053,7 @@ export class SessionWorker {
     // 发送时刻的快照——handleSend 可能被图片 probe 推迟（enqueueSend 串行化），
     // 等待期间用户切的新模式会被这里的旧值回退。模式随消息携带只保留给
     // 上面「首条消息」分支（进程未起时 set_permission_mode 静默失败的兜底）。
-    this.queue.push({
-      type: "user",
-      message: buildUserMessage(cmd.prompt, cmd.images ?? []),
-      parent_tool_use_id: null,
-    });
+    this.pushUserMessage(cmd.prompt, cmd.images, cmd.display);
     this.turnActive = true;
   }
 
