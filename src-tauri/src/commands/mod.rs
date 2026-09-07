@@ -236,6 +236,26 @@ pub fn claude_sessions_dir() -> PathBuf {
     claude_home().join("sessions")
 }
 
+/// **作用域化的 Claude 配置根**（对应子进程 `CLAUDE_CONFIG_DIR`）。
+///
+/// 这是「指定目录」能力的基础设施：**任何**需要把产物/配置隔离到自己目录的
+/// 调用方（automation 任务、后台支线…）都走这里，不要各自拼路径。
+///
+/// - 不隔离 → 用 [`claude_home()`]（`~/.aide/claude`）
+/// - 隔离 → `~/.aide/scopes/<kind>/<id>/claude`
+///
+/// 为什么需要它：`~/.aide/claude/projects/` 被 `list_workspaces()` 全量扫描当作
+/// 用户工作区，任何往那里写转录的内部流程都会污染侧栏（2026-09-07 bug）。
+/// 隔离后子进程的 `projects/` 落在自己的 scope 下，与用户工作区天然分离，
+/// 无需在读取侧做任何过滤/硬编码名单。
+pub fn scoped_claude_home(kind: &str, id: &str) -> PathBuf {
+    our_config_dir()
+        .join("scopes")
+        .join(kind)
+        .join(id)
+        .join("claude")
+}
+
 /// Aide 自管理配置根目录：`~/.aide/`。
 ///
 /// 历史路径是 `~/.claude-code-desktop/`；启动时 `migration::ensure_aide_data_dir_migrated()`
@@ -353,9 +373,51 @@ pub fn find_session_jsonl_in(projects_dir: &std::path::Path, id: &str) -> Vec<Pa
     hits
 }
 
-/// `find_session_jsonl_in` scoped to Claude's real `<claude_home>/projects/` dir.
+/// 会话转录可能存在的所有配置根（claude home）：全局 + 每个作用域的
+/// `scopes/<kind>/<id>/claude`（见 [`scoped_claude_home`]）。
+///
+/// 读侧必须与写侧对称：内部流程（automation 等）的转录被写到作用域隔离
+/// 目录，只扫全局的话，点开运行记录就是空白（2026-09-07 实锤）。一切按
+/// session id 找转录的路径统一走这里，不要各自决定「去哪找会话」。
+///
+/// 参数化核心（参照 [`find_session_jsonl_in`] 的可测设计）：`aide_base`
+/// = Aide 配置根（生产传 [`our_config_dir`]，测试传 temp dir）。
+pub fn session_config_roots_in(aide_base: &std::path::Path) -> Vec<PathBuf> {
+    let mut roots = vec![aide_base.join("claude")];
+    let scopes = aide_base.join("scopes");
+    if let Ok(kinds) = fs::read_dir(&scopes) {
+        for kind in kinds.flatten() {
+            if let Ok(ids) = fs::read_dir(kind.path()) {
+                for id in ids.flatten() {
+                    if id.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                        roots.push(id.path().join("claude"));
+                    }
+                }
+            }
+        }
+    }
+    roots
+}
+
+/// [`session_config_roots_in`] 的生产入口（真实配置根）。
+pub fn session_config_roots() -> Vec<PathBuf> {
+    session_config_roots_in(&our_config_dir())
+}
+
+/// 多根查找核心：对每个配置根的 `projects/` 做一次 [`find_session_jsonl_in`]。
+fn find_session_jsonl_across_roots(roots: &[PathBuf], id: &str) -> Vec<PathBuf> {
+    roots
+        .iter()
+        .flat_map(|root| find_session_jsonl_in(&root.join("projects"), id))
+        .collect()
+}
+
+/// `find_session_jsonl_in` scoped to **所有已知配置根**：先全局，再各作用域。
+///
+/// session id 全局唯一（UUID），多根扫描至多命中一处；全局排第一保证
+/// 历史会话（会话目录隔离落地之前落的盘）优先命中，行为与改动前兼容。
 pub fn find_session_jsonl_globally(id: &str) -> Vec<PathBuf> {
-    find_session_jsonl_in(&claude_projects_dir(), id)
+    find_session_jsonl_across_roots(&session_config_roots(), id)
 }
 
 // Re-export from workspace module
@@ -415,6 +477,52 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         assert!(find_session_jsonl_in(&root, "no-such-id").is_empty());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 会话目录隔离（2026-09-07）：automation 的转录落在作用域配置根下，
+    /// 读侧必须对称——只扫全局的话，点开运行记录就是空白（线上实锤）。
+    #[test]
+    fn finds_jsonl_in_scoped_config_root_not_just_global() {
+        let base = std::env::temp_dir().join("aide_mod_test_scoped_roots");
+        let _ = fs::remove_dir_all(&base);
+
+        // 全局配置根（历史会话形态）不放目标 id，防误命中
+        let global_proj = base.join("claude").join("projects").join("C--ws");
+        fs::create_dir_all(&global_proj).unwrap();
+        fs::write(global_proj.join("other-id.jsonl"), b"{}").unwrap();
+
+        // 作用域配置根（automation 隔离形态）：目标 jsonl 在这里
+        let scoped_proj = base
+            .join("scopes")
+            .join("automation")
+            .join("aut_x")
+            .join("claude")
+            .join("projects")
+            .join("C--ws");
+        fs::create_dir_all(&scoped_proj).unwrap();
+        let id = "11111111-2222-3333-4444-555555555555";
+        fs::write(scoped_proj.join(format!("{id}.jsonl")), b"{}").unwrap();
+
+        let roots = session_config_roots_in(&base);
+        assert_eq!(roots.len(), 2, "全局 + 一个作用域");
+        assert_eq!(roots[0], base.join("claude"), "全局恒排第一");
+
+        let hits = find_session_jsonl_across_roots(&roots, id);
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].starts_with(&base.join("scopes")));
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// scopes 目录不存在（没人用过隔离）→ 退化为只有全局，不报错。
+    #[test]
+    fn session_config_roots_fall_back_to_global_only() {
+        let base = std::env::temp_dir().join("aide_mod_test_no_scopes");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("claude")).unwrap();
+        let roots = session_config_roots_in(&base);
+        assert_eq!(roots, vec![base.join("claude")]);
+        let _ = fs::remove_dir_all(&base);
     }
 
     // 回归：HistoryBlock 的线上 JSON 形状要跟前端 src/types/chat.ts 的 ContentBlock
