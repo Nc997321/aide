@@ -2,6 +2,11 @@
 #
 #   docker compose up -d
 #
+# 本文件是**交付给客户**的基础文件，刻意不含 build——客户机器上没有源码，
+# 镜像从 registry 拉（KB_IMAGE，见 .env.example）。
+# 仓库内开发/验证用 overlay 补 build：
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
 # 客户不需要自己装数据库、建库、配连接串——这是自托管产品的标准交付形态。
 #
 # 需要向量检索时，把 db 的 image 换成 pgvector/pgvector:pg17，
@@ -26,7 +31,8 @@ services:
     # 需要排障时再临时加 ports，别默认开。
 
   knowledge:
-    build: .
+    # 默认钉在当前发布版本（交付时随版本更新这个标签）；客户可用 .env 的 KB_IMAGE 覆盖。
+    image: ${KB_IMAGE:-registry.cn-shanghai.aliyuncs.com/aide-org/aide-knowledge:0.1.0}
     restart: unless-stopped
     depends_on:
       db:

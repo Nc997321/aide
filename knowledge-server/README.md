@@ -29,13 +29,17 @@ src/main.rs     唯一的装配点
 ## 自托管（给团队用，一条命令起）
 
 ```bash
-# 从 aide 仓库取 compose 文件，放到内网那台机器的任意空目录：
+# 从 aide 仓库取两个文件，放到内网那台机器的任意空目录：
 #   knowledge-server/docker-compose.yml
-# （aide 桌面端第一屏「我自己部署一个」也指向同一个文件。）
+#   knowledge-server/.env.example
+# （aide 桌面端第一屏「我自己部署一个」也指向同一个 compose 文件。）
 
+cp .env.example .env    # 改 DB_PASSWORD；KB_IMAGE 已有默认值，升级新版时再覆盖
 docker compose up -d
 ```
 
+compose 不含 `build:`——客户机器上没有源码，应用镜像从阿里云 ACR 拉
+（默认钉在当前发布版本，`KB_IMAGE` 可覆盖）。
 这一条会把 PostgreSQL 和知识库服务一起拉起来，不用单独装数据库。
 默认监听 `8788`；浏览器先打开 `http://<host>:8788/api/health` 确认活没活。
 数据库的端口**不映射到宿主机**，刻意只让 compose 内部能访问——排障时再加。
@@ -45,6 +49,28 @@ docker compose up -d
 1. 打开侧栏「知识库」→ 第一屏三个按钮之一选「我自己部署一个」→ 跟着指引填服务地址
 2. 改完地址失焦会自动重连
 3. 第一次连上会让你**创建第一个管理员**，之后由他生成邀请链接给同事
+
+### 镜像发布（客户不接触源码）
+
+交付 compose 里没有 `build:`，应用镜像走阿里云 ACR 个人版
+（`registry.cn-shanghai.aliyuncs.com/aide-org/aide-knowledge`，仓库内开发验证用 overlay 补 build）。
+发布流程：
+
+```bash
+docker login registry.cn-shanghai.aliyuncs.com   # 密码在 ACR 控制台「访问凭证」里设
+./release.sh 0.1.0                               # = docker build + push，传纯标签自动补全地址
+```
+
+推完**同步 compose 里 knowledge 服务默认镜像的标签**（脚本末尾会提醒）。
+客户侧拿到 `docker-compose.yml` + `.env.example`，改好 `DB_PASSWORD` 后
+`docker compose up -d` 即可；要升级时在 `.env` 里用 `KB_IMAGE` 覆盖标签，
+重新 `up -d`，pgdata/kbdata 数据卷不动。
+
+**仓库内开发验证**用 overlay 补 build（交付文件不含它）：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+```
 
 ### 内网给团队开放
 

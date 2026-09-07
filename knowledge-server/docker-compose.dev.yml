@@ -1,0 +1,14 @@
+# 仓库内开发/验证 overlay：只负责给基础 compose 补 build，其余配置全部以
+# docker-compose.yml 为单一来源，避免两份完整文件漂移。
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# 客户侧**不会拿到本文件**——交付 compose 不含 build，镜像从 registry 拉。
+# build 产物会打上 KB_IMAGE 指定的名字（.env 里配），方便 build 完直接 push。
+
+services:
+  knowledge:
+    build: .
+    # 基础文件对 KB_IMAGE 是硬校验（:?），那是给客户机器的；开发机上给本地默认值，
+    # 没配 .env 也能直接 build。要模拟客户拉取流程时，.env 里设 KB_IMAGE 覆盖即可。
+    image: ${KB_IMAGE:-aide-knowledge:local}
