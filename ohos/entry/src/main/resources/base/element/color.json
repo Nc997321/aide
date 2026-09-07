@@ -29,6 +29,10 @@
       "value": "#0A59F7"
     },
     {
+      "name": "accent_weak",
+      "value": "#140A59F7"
+    },
+    {
       "name": "status_ok",
       "value": "#00B42A"
     },
@@ -37,8 +41,16 @@
       "value": "#FF7D00"
     },
     {
+      "name": "status_warn_weak",
+      "value": "#1AFF7D00"
+    },
+    {
       "name": "status_danger",
       "value": "#F53F3F"
+    },
+    {
+      "name": "status_danger_weak",
+      "value": "#1AF53F3F"
     },
     {
       "name": "btn_disabled_bg",

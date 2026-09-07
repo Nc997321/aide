@@ -9,20 +9,23 @@
  *    不入消息 blocks——运行期可见、结束即焚）、后台 shell 任务（bg_task_*，
  *    跨轮次存活，停靠区展示）、子代理时间线、权限请求队列（AskUserQuestion
  *    的问题清单随请求解析成草稿）、跳队
- *    （jump_queued/promoted）、轮次收尾（message_stop）、notification、
- *    error、session_dead、session_title
- *  - 显式忽略（随对应 UI 扩容接入）：models_available / model_switch_* /
- *    effort_changed / context_usage / context_compaction / tasks_update /
+ *    （jump_queued/promoted）、轮次收尾（message_stop）、模型切换回执
+ *    （model_switch_result）、notification、error、session_dead、
+ *    session_title
+ *  - 显式忽略（随对应 UI 扩容接入）：models_available / model_switch_confirm
+ *    （decision RPC 不在远程白名单，成本确认远程不可用） / effort_changed /
+ *    context_usage / context_compaction / tasks_update /
  *    rate_limit / health / permission_modes_available /
  *    slash_commands_available / image_input_*
- *  - 不收录（上游有、ohos 端无对应通路）：session_init 的 tempId 过户与
- *    非交互别名链（ohos 只从列表打开既有会话，aide id 即 sdk id）、
- *    诊断仪表盘（stalled 软超时）
+ *  - 不收录（上游有、ohos 端无对应通路）：非交互别名链（自动化 run_xxx
+ *    路由键，ohos 不消费自动化事件）、诊断仪表盘（stalled 软超时）；
+ *    tempId 过户已随新会话 spawn 收录（见 finalizeSpawn）
  * 上游路由前有 disposedSids 拦截；ohos 等价物 = session_id 不等于当前
  * store.sid 即丢弃（btw 支线/其他会话/迟到事件不进本 store）。
  */
 import { api } from '../../sdk/api';
 import { sessionsModel } from '../SessionsModel';
+import { Session } from '../../sdk/types';
 import { ChatStore } from './ChatStore';
 import {
   ContentBlock, TextBlock, ThinkingBlock, SubagentEntry, SubagentBlock,
@@ -43,10 +46,20 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
     return;
   }
   switch (type) {
-    case 'session_init':
+    case 'session_init': {
+      if (store.pendingSpawn) {
+        // spawn 定名：sidecar 已把路由键 re-key 成 SDK 真实 id（此后事件全带
+        // 真实 id，原子切换无别名混流窗口），store 原地过户 + 落元数据
+        const realId: string = str(payload, 'sdk_session_id');
+        if (realId !== '' && realId !== store.sid) {
+          void finalizeSpawn(store, realId);
+          break;
+        }
+      }
       // 既有会话续聊：aide id 即 sdk id，无需过户/别名链；
       // running 标记由发送侧的 isBusy 承担
       break;
+    }
     case 'text_delta': {
       const msg: ChatMessage = store.getOrCreateAssistant();
       store.stampModel(msg, payload);
@@ -233,6 +246,17 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
       store.bumpTail();
       break;
     }
+    case 'model_switch_result': {
+      // 模型切换终态回执（对照 ModelSwitchResult 事件）：成功坐实 store.model；
+      // 失败落提示不回滚——记忆元数据已随 pickModel 写入，选择仍随下一条消息
+      // 生效（远程无 decision RPC，桌面侧成本确认超时自动 deny 也走这里）。
+      if (bool(payload, 'ok')) {
+        store.model = str(payload, 'model');
+      } else {
+        pushAssistantNotice(store, `模型切换未生效：${str(payload, 'error')}`);
+      }
+      break;
+    }
     case 'notification': {
       pushAssistantNotice(store, str(payload, 'message'));
       break;
@@ -256,9 +280,17 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
     }
     case 'session_title': {
       const title: string = str(payload, 'title');
-      if (title !== '') {
-        adoptSessionTitle(store, title);
+      if (title === '') {
+        break;
       }
+      if (store.pendingSpawn) {
+        // init 前到达（tempId 尚无元数据，此刻 auto_rename 会写孤儿标题）：
+        // 暂存到 finalize 一次落盘，顶栏名先行点亮——对照 PWA 暂存标题
+        store.pendingSpawnTitle = title;
+        store.sessionName = title;
+        break;
+      }
+      adoptSessionTitle(store, title);
       break;
     }
     default:
@@ -295,5 +327,29 @@ async function adoptSessionTitle(store: ChatStore, title: string): Promise<void>
     }
   } catch (e) {
     // 自动命名失败静默——保留默认名
+  }
+}
+
+/**
+ * spawn 定名收尾（PWA finalizeSession + App.vue onSessionCreated 的手机侧等价
+ * 物）：store 原地过户到真实 id（sidecar 已 re-key，无混流窗口）；名字优先级 =
+ * 暂存标题（可能早于 init 到达）> 真实 id 前 8 位；create_session 落元数据 +
+ * 列表头插一次完成。桌面侧把远程 spawn 的 session_init 视作非交互来源不登记，
+ * 元数据必须由发起端落（否则会话名退 id）。落盘失败静默——会话仍在跑，
+ * 列表重拉时 jsonl 扫描兜底。
+ */
+async function finalizeSpawn(store: ChatStore, realId: string): Promise<void> {
+  const title: string = store.pendingSpawnTitle;
+  const wsKey: string = store.spawnWsKey;
+  store.sid = realId;
+  store.pendingSpawn = false;
+  store.pendingSpawnTitle = '';
+  const name: string = title !== '' ? title : realId.substring(0, 8);
+  store.sessionName = name;
+  try {
+    const created: Session = await api.createSession(realId, name);
+    sessionsModel.adoptNewSession(created, wsKey);
+  } catch (e) {
+    // 元数据落盘失败静默——jsonl 扫描兜底（名字退 id）
   }
 }

@@ -5,15 +5,22 @@
  * （方法体与命令名/参数形状零偏差）。仅收录远程白名单（src-tauri/src/remote/rpc.rs
  * REGISTRY）内且当前页面域实际消费的命令；新页面需要时对照上游同步补入。
  * 本文件已收录：list_sessions / list_sessions_for_workspace / list_workspaces
+ * / get_active_workspace（工作区域配套：跟随槽位解析活动工作区真名）
  * / load_messages / send_message / interrupt_session / permission_response
- * / auto_rename_session / stop_bg_task / list_bg_tasks（后两者为远程对账
- * 配套：终止走 stop_bg_task，快照回填走 list_bg_tasks）。
+ * / auto_rename_session / create_session / stop_bg_task / list_bg_tasks
+ * （后两者为远程对账配套：终止走 stop_bg_task，快照回填走 list_bg_tasks；
+ * create_session 为手机端 spawn 定名登记）；
+ * get_providers / get_active_provider_id / set_active_provider_id
+ * （抽屉供应商域：列表 + 当前激活 + 切换）；
+ * get_default_models / set_model / set_session_model / session_model
+ * / set_effort / set_session_effort / session_effort（输入区模型/思考程度
+ * chip 域：系统默认选项集 + 存活会话运行时切换 + 会话记忆读写）。
  * 参数序列化差异：上游 TS 的 undefined 字段经 JSON.stringify 自动丢弃；ArkTS
  * Record 值域不含 null，故 None 参数以「缺键」表达（Rust 侧 Option 字段缺键即
  * None，serde 语义等价）。
  */
 import { getTransport } from './transport';
-import { Session, WorkspaceInfo, LoadMessagesResult, BgTaskInfo, PermissionRuleDraft } from './types';
+import { Session, WorkspaceInfo, ActiveWorkspace, LoadMessagesResult, BgTaskInfo, PermissionRuleDraft, ProviderConfigView, ModelOption } from './types';
 
 /** send_message 的完整负载（镜像前端 SendMessageParams；可空项 null = Rust None）。 */
 export interface SendMessageParams {
@@ -63,6 +70,11 @@ export class AideApi {
 
   listWorkspaces(): Promise<WorkspaceInfo[]> {
     return getTransport().invoke<WorkspaceInfo[]>('list_workspaces');
+  }
+
+  /** 桌面当前活动工作区（key 与 list_workspaces 同源；path = 解码路径）；null = 未设置。 */
+  getActiveWorkspace(): Promise<ActiveWorkspace | null> {
+    return getTransport().invoke<ActiveWorkspace | null>('get_active_workspace');
   }
 
   /** 历史分页读取：offsetBytes null = 从尾部取；limit = 页字节预算。 */
@@ -144,6 +156,15 @@ export class AideApi {
     return getTransport().invoke<boolean>('auto_rename_session', { 'id': id, 'name': name });
   }
 
+  /**
+   * 落会话元数据：手机端 spawn 定名后自行登记（对照 PWA App.vue 的
+   * onSessionCreated → api.createSession）——桌面侧把远程 spawn 的 session_init
+   * 视作非交互来源不登记，元数据缺失时会话名将退回 id（jsonl 扫描兜底可见）。
+   */
+  createSession(id: string, name: string): Promise<Session> {
+    return getTransport().invoke<Session>('create_session', { 'id': id, 'name': name });
+  }
+
   /** 终止后台任务；终态经 bg_task_ended(status:"stopped") 回来，无单独回执。 */
   stopBgTask(sessionId: string, taskId: string): Promise<void> {
     return getTransport().invoke<void>('stop_bg_task', { 'sessionId': sessionId, 'taskId': taskId });
@@ -155,6 +176,72 @@ export class AideApi {
    */
   listBgTasks(sessionId: string): Promise<BgTaskInfo[]> {
     return getTransport().invoke<BgTaskInfo[]>('list_bg_tasks', { 'sessionId': sessionId });
+  }
+
+  // ── 供应商（抽屉徽标 + 切换弹层）──
+
+  /** 供应商列表（桌面脱敏视图：密钥只回配置与否的布尔，明文不落协议）。 */
+  getProviders(): Promise<ProviderConfigView[]> {
+    return getTransport().invoke<ProviderConfigView[]>('get_providers');
+  }
+
+  /** 桌面当前激活供应商 id（设置 activeProvider；空串语义由桌面侧决定）。 */
+  getActiveProviderId(): Promise<string> {
+    return getTransport().invoke<string>('get_active_provider_id');
+  }
+
+  /**
+   * 切换激活供应商：写桌面设置 activeProvider（handler 参数键 providerId，
+   * camelCase 镜像）。新发起的会话随新供应商解析（resolve_send_provider
+   * 的全局 active 兜底）；已在跑的会话不受影响。
+   */
+  setActiveProviderId(providerId: string): Promise<void> {
+    return getTransport().invoke<void>('set_active_provider_id', { 'providerId': providerId });
+  }
+
+  // ── 模型 / 思考程度（输入区 chip 域）──
+
+  /**
+   * 切换存活会话的模型；返回 false = 无活进程（选择随下一条消息 initialModel
+   * 生效，调用方走 deferred 提示路径）。成本确认流程远程不可用：decision RPC
+   * 不在白名单，confirm 超时由 sidecar 自动 deny（经 model_switch_result 事件回执）。
+   */
+  setModel(sessionId: string, model: string): Promise<boolean> {
+    return getTransport().invoke<boolean>('set_model', { 'sessionId': sessionId, 'model': model });
+  }
+
+  /**
+   * 记住/读回会话的模型选择（会话元数据，重启不丢）——与运行时 set_model 互补：
+   * 这个管「下次进会话恢复什么」，set_model 管「当前进程切到什么」。
+   */
+  setSessionModel(id: string, model: string): Promise<void> {
+    return getTransport().invoke<void>('set_session_model', { 'id': id, 'model': model });
+  }
+
+  sessionModel(id: string): Promise<string | null> {
+    return getTransport().invoke<string | null>('session_model', { 'id': id });
+  }
+
+  /**
+   * 切换存活会话的 effort；返回 false = 无活进程（选择随下一条消息 env 通道
+   * CLAUDE_CODE_EFFORT_LEVEL 生效，与 initialModel 同一语义）。
+   */
+  setEffort(sessionId: string, effort: string): Promise<boolean> {
+    return getTransport().invoke<boolean>('set_effort', { 'sessionId': sessionId, 'effort': effort });
+  }
+
+  /** 记住/读回会话的 effort 选择（会话元数据，重启不丢）。 */
+  setSessionEffort(id: string, effort: string): Promise<void> {
+    return getTransport().invoke<void>('set_session_effort', { 'id': id, 'effort': effort });
+  }
+
+  sessionEffort(id: string): Promise<string | null> {
+    return getTransport().invoke<string | null>('session_effort', { 'id': id });
+  }
+
+  /** 系统默认供应商的模型选项（Claude 别名 sonnet/opus/haiku 等）。 */
+  getDefaultModels(): Promise<ModelOption[]> {
+    return getTransport().invoke<ModelOption[]>('get_default_models');
   }
 }
 

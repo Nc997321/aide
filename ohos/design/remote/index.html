@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aide 鸿蒙端远程原型 v3 · 抽屉导航</title>
+<style>
+  :root {
+    --text: #1D2129; --text-2: #86909C; --accent: #0A59F7; --ok: #00B42A;
+    --warn: #FF7D00; --danger: #F53F3F; --line: #E5E6EB;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font: 14px/1.65 "HarmonyOS Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #E9EBEE; color: var(--text);
+    padding: 34px 20px 40px;
+  }
+  .page-head { text-align: center; margin-bottom: 30px; }
+  .page-head h1 { font-size: 20px; font-weight: 700; }
+  .page-head h1 small { font-size: 12px; color: var(--accent); font-weight: 600; margin-left: 8px; vertical-align: 2px; }
+  .page-head p { font-size: 12.5px; color: var(--text-2); margin-top: 8px; max-width: 960px; margin-left: auto; margin-right: auto; line-height: 1.9; }
+  .page-head p b { color: #4E5969; }
+
+  .stage {
+    display: flex; gap: 28px; justify-content: center; align-items: flex-start;
+    flex-wrap: wrap; max-width: 1400px; margin: 0 auto;
+  }
+  .phone-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .phone-label { font-size: 13px; font-weight: 700; color: #4E5969; letter-spacing: .5px; }
+  .phone-label span { color: var(--text-2); font-weight: 500; margin-left: 6px; font-size: 11.5px; }
+
+  /* 手机框（纯布景，中性深色边框） */
+  .phone {
+    width: 375px; height: 740px; flex: none;
+    border-radius: 46px; padding: 11px;
+    background: linear-gradient(160deg, #23242e, #101118 40%, #1a1b23);
+    border: 1px solid rgba(255,255,255,.17);
+    box-shadow: 0 20px 60px rgba(0,0,0,.35), inset 0 1px 1px rgba(255,255,255,.14);
+    position: relative;
+  }
+  .phone::before, .phone::after {
+    content: ""; position: absolute; right: -2.5px; width: 3px; border-radius: 2px; background: #2c2d38;
+  }
+  .phone::before { top: 150px; height: 56px; }
+  .phone::after { top: 220px; height: 88px; }
+  .screen {
+    width: 100%; height: 100%; border-radius: 36px; overflow: hidden;
+    background: #F1F3F5; position: relative;
+  }
+  .screen iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; max-width: 375px; }
+  .chips .cap { width: 100%; text-align: center; font-size: 10.5px; color: var(--text-2); margin-bottom: -1px; }
+  .chip {
+    padding: 4px 11px; font-size: 11px; cursor: pointer; border-radius: 99px;
+    color: #4E5969; background: #fff; border: 1px solid var(--line);
+    font-family: inherit; transition: all .16s;
+  }
+  .chip:hover { border-color: #C9CDD4; color: var(--text); }
+
+  /* ===== 说明卡 ===== */
+  .cover { max-width: 1180px; margin: 44px auto 0; }
+  .cover summary {
+    display: inline-flex; align-items: center; gap: 8px; cursor: pointer; list-style: none;
+    font-size: 12.5px; font-weight: 600; color: #4E5969;
+    padding: 7px 14px; border-radius: 99px; background: #fff; border: 1px solid var(--line);
+  }
+  .cover summary::-webkit-details-marker { display: none; }
+  .cover-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 14px; }
+  .cover-card {
+    padding: 14px 16px; border-radius: 14px; font-size: 12px; line-height: 2;
+    background: #fff; border: 1px solid var(--line);
+  }
+  .cover-card h4 { font-size: 12.5px; color: var(--accent); margin-bottom: 4px; }
+  .cover-card li { list-style: none; color: var(--text-2); }
+  .cover-card li::before { content: "✓ "; color: var(--ok); font-weight: 700; margin-right: 3px; }
+  .cover-card li em { font-style: normal; color: #4E5969; }
+  .cover-card.todo li::before { content: "→ "; color: var(--warn); }
+  .cover-card.skip li::before { content: "✗ "; color: var(--danger); }
+  .cover-card a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <h1>aide 鸿蒙端远程原型<small>v3 · 抽屉导航 · 对照 remote-pwa v3</small></h1>
+  <p>信息架构对照 <b>docs/prototypes/remote-pwa.html v3</b>（聊天升主屏、会话列表收抽屉、供应商 / 思考程度切换），UI 沿用鸿蒙端既定浅色原生风格（token 镜像 entry color.json）。<b>工作区切换为本页独立重设计</b>（remote-pwa 版式过密，见屏 3）。三个手机框是同一个 <b>app.html</b> 的 iframe 实例——URL 参数决定初始形态，展台经 postMessage 遥控演示，供应商 / 思考程度 / 工作区改动会跨屏同步；也可单独打开 app.html 交互。</p>
+</header>
+
+<div class="stage">
+
+  <!-- ================= 屏 1 · 连接 / 配对 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 1 · 连接 / 配对<span>启动 &amp; 未配对时</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="s1" src="app.html?screen=connect&amp;id=s1" title="连接配对"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">状态预览</span>
+      <button class="chip" data-target="s1" data-send='{"cmd":"conn","state":"idle"}'>待机</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"conn","state":"connecting"}'>连接中</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"conn","state":"connected"}'>已连接</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"conn","state":"offline"}'>设备离线</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"conn","state":"badcode"}'>配对码无效</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"conn","state":"revoked"}'>需重新配对</button>
+    </div>
+  </section>
+
+  <!-- ================= 屏 2 · 聊天主屏 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 2 · 聊天主屏<span>连接后直达 · 屏内可直接点按</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="s2" src="app.html?screen=chat&amp;id=s2" title="聊天主屏"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">演示控制</span>
+      <button class="chip" data-target="s2" data-send='{"cmd":"demo","action":"replay"}'>↻ 重播流式</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"demo","action":"stop"}'>⏹ 停止会话 ↗</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"demo","action":"new"}'>＋ 新会话空态</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"demo","action":"md"}'>点模型 ↗</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"demo","action":"ef"}'>点思考程度 ↗</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"demo","action":"drawer"}'>打开抽屉 ↗</button>
+      <button class="chip" id="btnOffline">模拟断线</button>
+      <button class="chip" id="btnReconnect" style="display:none">恢复连接</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"demo","action":"sendhint"}'>发条消息试试 ↓</button>
+    </div>
+  </section>
+
+  <!-- ================= 屏 3 · 抽屉导航 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 3 · 抽屉导航<span>工作区卡为本页重设计</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="s3" src="app.html?screen=chat&amp;drawer=1&amp;demo=0&amp;id=s3" title="抽屉导航"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">演示控制</span>
+      <button class="chip" id="btnDrawer3">关闭抽屉</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"ws"}'>点工作区卡 ↗</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"pvbadge"}'>点供应商徽标 ↗</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"search"}'>搜索试试 ↓</button>
+    </div>
+  </section>
+</div>
+
+<!-- ===== 说明卡 ===== -->
+<details class="cover">
+  <summary><span class="caret">▾</span>结构说明 · v3 变更 · 工作区重设计 · 实施清单</summary>
+  <div class="cover-grid">
+    <div class="cover-card">
+      <h4>原型结构 · iframe 拆分（为什么好维护）</h4>
+      <ul>
+        <li><em>app.html = 应用本体</em>：三屏共用一份 DOM 与状态，URL 参数决定初始形态（?screen=connect / ?screen=chat&amp;drawer=1&amp;demo=0）。改动几乎只发生在这一个文件，且与未来 ArkTS 页面一一对应（ConnectPage / ChatPage + 抽屉弹层）。</li>
+        <li><em>index.html = 展台</em>：手机框 + iframe + 演示胶囊，postMessage 遥控（含三屏状态互相同步）。纯布景，基本不用动。</li>
+        <li>单独打开 app.html 也能玩：默认聊天屏 + 自动流式演示。</li>
+        <li>会话页深挖（权限应答卡 / 后台任务 / 思考卡限高）继续留在 <em><a href="../chat-layout-mock.html">../chat-layout-mock.html</a></em>，本页不重复。</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>屏 1 · 连接 / 配对（对照 ConnectPage，结构不变）</h4>
+      <ul>
+        <li><em>中继 URL + 6 位配对码</em>、连接按钮、五种状态卡（文案与现实现一致）</li>
+        <li>已配对自动连接；<em>连接成功直达聊天主屏</em>（v3 起不再落会话列表整屏）</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>屏 2 · 聊天主屏（v3 新导航）</h4>
+      <ul>
+        <li><em>聊天升主屏</em>：会话列表不再是独立整屏（现 SessionsPage 退场）</li>
+        <li><em>顶栏副标题</em>：工作区色点 + 名称，纯展示不响应点击；工作区 / 供应商切换都在抽屉里（离线时供应商切换给 toast）</li>
+        <li><em>模型 chip</em>：输入工具行最左，列表跟随供应商（别名 / 真实 id 对齐桌面 ModelOption），切供应商自动回落该供应商的记忆/默认</li>
+        <li><em>思考程度 chip</em>：模型 chip 右侧，三档，会话级、随下一条消息生效；usage 尾注跟随当前档</li>
+        <li>顶栏右侧 <em>⏹ 停止会话</em>（interrupt_session 语义）：回复中变红可点，中断后残段冻结 + 系统分隔线；<em>＋ 新会话</em> 收进抽屉「历史会话」标题行（刷新左侧）→ 居中空态（发往当前工作区提示）</li>
+        <li>消息区语义沿用 chat-layout-mock <em>V1</em>：思考卡可折叠；工具调用只走瞬态行，回合结束淡出不进历史；断线橙横幅 + 输入禁用，重连 toast + 系统分隔线</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>屏 3 · 抽屉 + 工作区重设计（替代 remote-pwa 版式）</h4>
+      <ul>
+        <li><em>设备卡</em>：logo + 设备名 + 连接状态；供应商徽标为唯一切换入口，点开半模态</li>
+        <li><em>工作区卡（重设计）</em>：字母头像按工作区着色，名称 / 路径 /「N 个会话 · 已启动 / 回复中 / 待确认」计数一眼可读，右侧「切换 ›」明确 affordance</li>
+        <li><em>切换弹层（重设计）</em>：半模态工作区选项卡（色彩头像 + 路径 + 会话数 / 三态计数 + 选中描边），脚注注明工作区由桌面 aide 管理</li>
+        <li>会话项：名称 + 预览 + 相对时间 + <em>状态点</em>（待确认 橙 / 回复中 绿 / 已启动 蓝，只留点不带文字，颜色语义同工作区卡计数）；点击直达该会话；底部搜索过滤当前工作区</li>
+      </ul>
+    </div>
+    <div class="cover-card todo">
+      <h4>实施清单（ohos 工程 · 本页只出原型，未动代码）</h4>
+      <ul>
+        <li>导航：<em>Index authed → 直达 ChatPage</em>（最近会话 / 空态）；SessionsPage 整屏退化为抽屉组件（mask + panel 自绘，或 Navigation SidePathContainer）</li>
+        <li>新组件：<em>Drawer</em>（设备卡 + 会话列表 + 搜索）、<em>ProviderSheet</em>（抽屉徽标单入口）、<em>EffortChip</em>（输入工具行）、<em>WorkspaceCard + WorkspaceSheet</em>（按本页版式）</li>
+        <li>协议缺口（与 PWA 共用，见 remote-pwa 对照卡）：<em>ListProviders / SetActiveProvider</em>、send_message 扩展 <em>effort</em>、event <em>provider_changed</em>、list_sessions 扩展 <em>last_preview / started / pending_confirm</em>（抽屉会话徽标三态的数据来源）</li>
+      </ul>
+    </div>
+    <div class="cover-card skip">
+      <h4>未采纳（Kimi 有、我们没有对应能力）</h4>
+      <ul>
+        <li>⋮ 更多菜单：无对应功能清单</li>
+        <li>语音输入按钮：协议无音频链路</li>
+        <li>账号头像体系：aide 是单设备桌面，用设备卡代替</li>
+      </ul>
+    </div>
+  </div>
+</details>
+
+<script>
+/* 展台 = 纯布景：只做两件事——把演示胶囊的点击转成 postMessage 发给对应 iframe，
+   以及充当三屏间「供应商 / 思考程度 / 工作区」状态同步的中继。 */
+const send = (id, msg) => document.getElementById(id).contentWindow.postMessage(msg, '*');
+
+document.querySelectorAll('[data-send]').forEach(b => b.addEventListener('click', () => {
+  send(b.dataset.target, JSON.parse(b.dataset.send));
+}));
+
+/* 断线 / 重连（按钮互换） */
+const btnOffline = document.getElementById('btnOffline');
+const btnReconnect = document.getElementById('btnReconnect');
+btnOffline.addEventListener('click', () => {
+  send('s2', { cmd: 'demo', action: 'offline' });
+  btnOffline.style.display = 'none';
+  btnReconnect.style.display = '';
+});
+btnReconnect.addEventListener('click', () => {
+  send('s2', { cmd: 'demo', action: 'reconnect' });
+  btnReconnect.style.display = 'none';
+  btnOffline.style.display = '';
+});
+
+/* 屏 3 抽屉开合 */
+const btnDrawer3 = document.getElementById('btnDrawer3');
+let dr3 = true;
+btnDrawer3.addEventListener('click', () => {
+  dr3 = !dr3;
+  send('s3', { cmd: 'drawer', open: dr3 });
+  btnDrawer3.textContent = dr3 ? '关闭抽屉' : '打开抽屉';
+});
+
+/* sync 中继：广播到除来源外的其余屏 */
+window.addEventListener('message', e => {
+  const d = e.data;
+  if (d && d.event === 'sync') {
+    ['s1', 's2', 's3'].forEach(id => {
+      const w = document.getElementById(id).contentWindow;
+      if (w !== e.source) w.postMessage(d, '*');
+    });
+  }
+});
+</script>
+</body>
+</html>

@@ -136,7 +136,7 @@ export class SubagentBlock implements ContentBlock {
 @ObservedV2
 export class ChatMessage {
   id: string = '';
-  /** 'user' | 'assistant'（历史行 role==='claude' 映射为 assistant）。 */
+  /** 'user' | 'assistant'（历史行 role==='claude' 映射为 assistant）| 'system'（UI 痕迹，不落盘）。 */
   role: string = 'assistant';
   @Trace blocks: ContentBlock[] = [];
   timestamp: number = 0;
@@ -160,6 +160,16 @@ export class ChatMessage {
     m.role = 'assistant';
     m.timestamp = Date.now();
     m.streaming = true;
+    return m;
+  }
+
+  /** 系统分隔线（ohos 专有：中断标记等时间线痕迹；纯内存，重载/切换即消）。 */
+  static systemNote(id: string, text: string): ChatMessage {
+    const m: ChatMessage = new ChatMessage();
+    m.id = id;
+    m.role = 'system';
+    m.timestamp = Date.now();
+    m.blocks = [new TextBlock(uuid(), text)];
     return m;
   }
 }

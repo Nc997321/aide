@@ -1,6 +1,6 @@
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { window } from '@kit.ArkUI';
+import { window, KeyboardAvoidMode, UIContext } from '@kit.ArkUI';
 import { connModel } from '../conn/ConnModel';
 import { initStorage } from '../sdk/storage';
 
@@ -25,6 +25,10 @@ export default class EntryAbility extends UIAbility {
         hilog.error(0x0000, 'aide', 'Failed to load the content. Cause: %{public}s', JSON.stringify(err) ?? '');
         return;
       }
+      // 键盘避让用 RESIZE（压缩模式）：顶栏驻留、输入区贴键盘；默认 OFFSET
+      // 整窗上移会在键盘下方留出大块空白（用户反馈问题）
+      const ui: UIContext = windowStage.getMainWindowSync().getUIContext();
+      ui.setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
       hilog.info(0x0000, 'aide', 'Succeeded in loading the content.');
     });
   }

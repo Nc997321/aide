@@ -5,7 +5,8 @@
  * （保持与上游字段/注释语义零偏差，serde camelCase 镜像）。
  * 本文件已收录：Session / WorkspaceInfo（会话列表页域）；
  * HistoryBlock / ChatMessageItem / LoadMessagesResult（会话页历史域）；
- * BgTaskInfo（后台任务快照域；ohos 专有 RPC list_bg_tasks，上游 SDK 暂无对应）。
+ * BgTaskInfo（后台任务快照域；ohos 专有 RPC list_bg_tasks，上游 SDK 暂无对应）；
+ * ProviderModelMappings / ProviderConfigView（抽屉供应商域；get_providers 返回）。
  */
 
 export interface Session {
@@ -20,6 +21,14 @@ export interface WorkspaceInfo {
   /** 工作区路径（解码后）。 */
   name: string;
   missing: boolean;
+}
+
+/** get_active_workspace 返回体；null = 桌面未设置活动工作区。 */
+export interface ActiveWorkspace {
+  /** 编码键（与 WorkspaceInfo.key 同源，可直接对配列表）。 */
+  key: string;
+  /** 解码后的工作区路径（与 WorkspaceInfo.name 同构）。 */
+  path: string;
 }
 
 /**
@@ -89,4 +98,50 @@ export interface BgTaskInfo {
   /** 尾部输出（截头保尾，上限与 BG_OUTPUT_CAP 同值）。 */
   output: string;
   truncatedBytes: number;
+}
+
+/**
+ * 供应商模型映射（Rust ProviderModelMappings 的 serde camelCase 镜像）：
+ * anthropic 模型别名 → 供应商真实模型 id。ohos 端暂不消费（模型 chip 随
+ * 后续增量接入），收录仅为保持 ProviderConfigView DTO 形状完整。
+ */
+export interface ProviderModelMappings {
+  anthropicModel: string;
+  defaultOpusModel: string;
+  defaultSonnetModel: string;
+  defaultHaikuModel: string;
+  subagent: string;
+}
+
+/**
+ * 供应商配置视图（get_providers 返回；Rust ProviderConfigView 的 serde
+ * camelCase 镜像）。桌面侧脱敏视图：密钥只回「是否已配置」布尔，明文
+ * 不落协议（对照 ProviderConfig 原始结构，api_key/auth_token 均被替换）。
+ */
+export interface ProviderConfigView {
+  id: string;
+  /** 'system_default' | 'cpa_gpt' | 'ollama' | 'kimi' | 'deepseek' | 'zhipu' | 'qwen' | 'custom'（snake_case 枚举）。 */
+  kind: string;
+  name: string;
+  icon: string;
+  baseUrl: string;
+  apiKeyConfigured: boolean;
+  authTokenConfigured: boolean;
+  /** 已废弃（模型默认值权威源改到 modelMappings.anthropicModel）；镜像保留。 */
+  model: string;
+  modelMappings: ProviderModelMappings;
+  effortLevel: string;
+  autoCompactWindow: string;
+  autocompactPctOverride: string;
+  maxContextTokens: string;
+  knownModels: string[];
+}
+
+/**
+ * 纯展示用的模型选项（get_default_models 返回；对照上游 ModelOption）——
+ * 值和名字完全由 provider 决定，核心层不关心具体是什么模型。
+ */
+export interface ModelOption {
+  value: string;
+  displayName: string;
 }

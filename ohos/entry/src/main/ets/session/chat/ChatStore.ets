@@ -16,7 +16,7 @@
  * 平台差异：Vue reactive/ref → @ObservedV2 + @Trace。
  */
 import { ChatMessage, ContentBlock, PendingJump, PermissionRequest, ThinkingBlock, SubagentBlock, LiveActivity, BgTask } from './ChatBlocks';
-import { BgTaskInfo } from '../../sdk/types';
+import { BgTaskInfo, ModelOption } from '../../sdk/types';
 import { uuid, str } from './ChatWire';
 
 /** 流式跟尾节流间隔（毫秒）：text/thinking 增量高频到达，逐 bump 会把
@@ -34,6 +34,16 @@ export class ChatStore {
   /** hydrate 失败标记（驱动「加载失败可重试」态；上游 PWA 无此态，回滚后重开才能重试）。 */
   @Trace hydrateFailed: boolean = false;
   @Trace isBusy: boolean = false;
+  /**
+   * spawn 在途：本地 tempId 作路由键、等 session_init 回执过户真实 id
+   * （对照 PWA pendingSids；sidecar 在 init 时 re-key，此后事件全带真实 id）。
+   * 期间 session_title 只暂存不落盘（tempId 无元数据），finalize 一次写盘。
+   */
+  @Trace pendingSpawn: boolean = false;
+  /** spawn 定名缓冲（session_title 可能早于 session_init 到达；对照 PWA 暂存标题）。 */
+  @Trace pendingSpawnTitle: string = '';
+  /** spawn 发起时手机侧浏览的工作区 key：finalize 头插列表的归属核对（防切换竞态）。 */
+  @Trace spawnWsKey: string = '';
   /** 挂起的权限请求队列（FIFO，弹层永远显示队头；并行工具会同时发多条）。 */
   @Trace pendingPermissions: PermissionRequest[] = [];
   /** 已派发、等安全边界的排队消息（jump_promoted 时 flush）。 */
@@ -59,6 +69,20 @@ export class ChatStore {
   @Trace sysNote: string = '';
   /** 尾部追加时刻（页面据此滚到底；loadOlder 头部插入不 bump）。 */
   @Trace tailAt: number = 0;
+
+  // ── 模型 / 思考程度（输入区 chip 域；选项集随激活供应商，当前值会话记忆优先）──
+
+  /** 当前供应商的模型选项集（空 = 未加载；chip 回退占位文案，点击重同步）。 */
+  @Trace modelOptions: ModelOption[] = [];
+  /** 当前模型选择（协议 value；空 = 未选，语义 = 选项集首位即默认）。 */
+  @Trace model: string = '';
+  /** 当前思考档（恒为归一后三档 low/high/max；空 = 未同步）。 */
+  @Trace effort: string = '';
+  /** 模型浮层展开（自绘小面板；与 effortPop 互斥，Index 返回键经 handlePopups 收）。 */
+  @Trace modelPop: boolean = false;
+  /** 思考程度浮层展开（自绘小面板；与 modelPop 互斥）。 */
+  @Trace effortPop: boolean = false;
+
   /** 上次流式跟尾 bump 时刻（bumpTailThrottled 节流窗）。 */
   private lastStreamBumpAt: number = 0;
   /** 消息列表结构变更回调注册表（页面 LazyForEach 数据源对账用，见 ChatMessagesSource）。 */
@@ -191,6 +215,23 @@ export class ChatStore {
     this.liveActivities = [];
     this.bgTasks = [];
     this.pendingSubagents.clear();
+    this.pendingSpawn = false;
+    this.pendingSpawnTitle = '';
+    this.spawnWsKey = '';
+    // 模型/effort 域随复位清空（切会话即切供应商上下文），open/newSession 随后重同步
+    this.modelOptions = [];
+    this.model = '';
+    this.effort = '';
+    this.modelPop = false;
+    this.effortPop = false;
+  }
+
+  /** 收 chip 浮层（返回键/遮罩/输入框聚焦共用）：true = 有浮层被收起（消费返回键）。 */
+  handlePopups(): boolean {
+    const had: boolean = this.modelPop || this.effortPop;
+    this.modelPop = false;
+    this.effortPop = false;
+    return had;
   }
 
   /**

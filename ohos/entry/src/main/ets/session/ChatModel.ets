@@ -16,8 +16,13 @@
  *    本地发送也多一个 RTT 才出气泡。对照上游 useChatSession.ts 的方案 C
  *  - 断线重连整页重载（对照 reloadSessionMessages）：清消息/游标后重新 hydrate
  *  - 监听挂在传输实例上只挂一次（重建实例会让 listener 挂死连接）
- * 未过筛（随 UI 扩容）：evict 字节降级、页级回收 recycle、模型/effort/权限
- * 模式选择器、btw 支线、图片消息、nextMode（「进入自动模式/计划批准」UI
+ *  - 模型/effort 域（syncModelEffort/pickModel/pickEffort）：选项集随激活供应
+ *    商（系统默认 get_default_models，第三方配置推导）；当前值会话记忆优先、
+ *    不在选项集内回落默认；存活会话切换 = set_model/set_effort 运行时 +
+ *    set_session_* 记忆双写（返回 false = 无活进程走 deferred）；空会话选择
+ *    只入 store，随首条消息 initialModel/initialEffort 带出
+ * 未过筛（随 UI 扩容）：evict 字节降级、页级回收 recycle、权限模式选择器、
+ * btw 支线、图片消息、nextMode（「进入自动模式/计划批准」UI
  * 定稿后接入）、「允许并记住」规则推导（sessionRules；deriveSessionFileRules
  * 在桌面 src/utils，ohos 同 PWA 不推导）。
  * 本类无可观察状态（全在 ChatStore），是纯服务持有者；页面经 chatModel.store
@@ -26,16 +31,67 @@
 import { AideEvent } from '../sdk/transport';
 import { ConnModel, connModel } from '../conn/ConnModel';
 import { api } from '../sdk/api';
-import { BgTaskInfo } from '../sdk/types';
+import { BgTaskInfo, ModelOption, ProviderConfigView } from '../sdk/types';
 import { ChatStore } from './chat/ChatStore';
 import { ChatMessage, PendingJump, PermissionRequest } from './chat/ChatBlocks';
 import { hydrate as hydrateStore, loadOlder as loadOlderStore } from './chat/ChatPagination';
 import { routeChatEvent } from './chat/ChatEvents';
+import { uuid } from './chat/ChatWire';
+import { sessionsModel } from './SessionsModel';
+import { workspaceModel } from './WorkspaceModel';
+import { providerModel } from './ProviderModel';
 
-/** 会话页路由参数（SessionsPage → ChatPage；声明一次，两页共用）。 */
-export interface ChatPageParams {
-  sid: string;
-  name: string;
+/** 思考档位（对照原型 EF_FAKE；文案以 design/remote/app.html 为准——桌面
+ * effort.ts 的 快速/思考/深度思考 是桌面侧文案，ohos 端不沿用）。 */
+export interface EffortTier {
+  value: string;
+  label: string;
+  desc: string;
+}
+
+/** 三档制（选择器没有「无」档）：low 快速 / high 均衡 / max 极致。 */
+export const EFFORT_TIERS: EffortTier[] = [
+  { value: 'low', label: '快速', desc: '最快回答，适合简单问答' },
+  { value: 'high', label: '均衡', desc: '默认 · 速度与质量兼顾' },
+  { value: 'max', label: '极致', desc: '不计成本的最强档' }
+];
+
+/**
+ * 任意档位值归一到三档（对照桌面 normalizeEffortOption）：medium→high、
+ * xhigh→max（历史遗留档位，API 仍可能回 报）；非法/空 → high（默认即均衡）。
+ */
+export function normalizeEffort(v: string): string {
+  const raw: string = v.trim().toLowerCase();
+  if (raw === 'low' || raw === 'high' || raw === 'max') {
+    return raw;
+  }
+  if (raw === 'medium') {
+    return 'high';
+  }
+  if (raw === 'xhigh') {
+    return 'max';
+  }
+  return 'high';
+}
+
+/** 档位值 → 展示名（store 内恒为归一后三档；未同步的空值回退「均衡」）。 */
+export function effortLabel(v: string): string {
+  for (let i = 0; i < EFFORT_TIERS.length; i++) {
+    if (EFFORT_TIERS[i].value === v) {
+      return EFFORT_TIERS[i].label;
+    }
+  }
+  return '均衡';
+}
+
+/** 选项集内按 value 找展示名；找不到返回 null（chip 回退占位/默认文案）。 */
+export function modelDisplayName(opts: ModelOption[], value: string): string | null {
+  for (let i = 0; i < opts.length; i++) {
+    if (opts[i].value === value) {
+      return opts[i].displayName;
+    }
+  }
+  return null;
 }
 
 /** 权限应答的可选载荷（对照上游 respondPermission 的 opts；可空项 null = 不携带）。 */
@@ -73,11 +129,12 @@ export class ChatModel {
     });
   }
 
-  /** 打开会话（路由进入）：整体复位 + 立即 hydrate + 后台任务快照对账。 */
+  /** 打开会话（路由进入）：整体复位 + 立即 hydrate + 后台任务快照对账 + 模型域同步。 */
   open(sid: string, name: string): void {
     this.store.resetForOpen(sid, name);
     void hydrateStore(this.store);
     void this.syncBgTasks();
+    void this.syncModelEffort();
   }
 
   /** 历史加载失败后的显式重试（d88dd73c 回滚保证此处可恢复）。 */
@@ -94,17 +151,28 @@ export class ChatModel {
    * 发消息。忙碌（上一轮还在生成）走排队：带 jumpQueue 透传给 sidecar，由它在
    * 安全边界（当前工具跑完）interrupt 后再发；等待期间消息暂存 pendingJumps
    * 显示「待发出」条。离线直接拒绝（对照 PWA offline 禁用输入）。
+   * 新会话（空态）发送 = spawn：本地 uuid 作路由键 + resumeId 缺省由桌面现拉起
+   * 进程（对照 PWA sendMessage 空白面板首发），workspaceRoot 取手机侧所选
+   * 工作区；真实 id 由 session_init 回执过户（finalizeSpawn，见 ChatEvents）。
    */
   send(prompt: string): void {
     const text: string = prompt.trim();
-    if (text === '' || connModel.state !== 'authed' || this.store.sid === '') {
+    if (text === '' || connModel.state !== 'authed') {
       return;
     }
-    const sid: string = this.store.sid;
+    let sid: string = this.store.sid;
+    const spawn: boolean = sid === '';
+    if (spawn) {
+      sid = uuid();
+      this.store.resetForOpen(sid, '新会话');
+      this.store.pendingSpawn = true;
+      this.store.spawnWsKey = workspaceModel.selectedKey;
+      this.store.hydrated = true; // 新会话无历史可拉：跳过 hydrate，避免加载卡常驻
+    }
     const wasBusy: boolean = this.store.isBusy;
     this.store.isBusy = true;
     this.store.sysNote = '';
-    if (wasBusy) {
+    if (!spawn && wasBusy) {
       // 排队：只登记"待发出"提示条——气泡等 sidecar 真正接入这条消息时广播的
       // user_message 渲染。不 finishStreaming（当前 assistant 仍在流式，提前收尾
       // 会让工具结果/后续文本错位新建）。
@@ -112,21 +180,23 @@ export class ChatModel {
     }
     // 直发路径同样不落气泡：与桌面端同源，统一由 user_message 事件渲染。本地乐观
     // 渲染意味着只有发起方看得见自己提的问题——手机上发的在桌面端消失，反之亦然。
-    this.dispatchSend(sid, text, wasBusy);
+    this.dispatchSend(sid, text, wasBusy, spawn);
   }
 
   /** 真实发送（fire-and-forget；失败兜底复位——对照上游 sendQueued 的 catch）。 */
-  private async dispatchSend(sid: string, text: string, wasBusy: boolean): Promise<void> {
+  private async dispatchSend(sid: string, text: string, wasBusy: boolean, spawn: boolean): Promise<void> {
     try {
       await api.sendMessage({
         sessionId: sid,
         prompt: text,
-        workspaceRoot: null,
+        workspaceRoot: spawn ? workspaceModel.selectedRoot() : null,
         images: null,
         provider: null,
-        resumeId: sid,
-        initialModel: null,
-        initialEffort: null,
+        resumeId: spawn ? null : sid,
+        // spawn 才带 chip 选择（空 = 未选，由桌面按供应商默认解析）；存活会话
+        // 的切换已由 pickModel 经 set_model/set_session_model 落定，不重复携带
+        initialModel: spawn && this.store.model !== '' ? this.store.model : null,
+        initialEffort: spawn && this.store.effort !== '' ? this.store.effort : null,
         permissionMode: null,
         jumpQueue: wasBusy
       });
@@ -136,8 +206,18 @@ export class ChatModel {
       }
       this.store.isBusy = false;
       this.store.pendingJumps = [];
+      if (spawn) {
+        // spawn 失败：tempId 无落盘痕迹，原地作废退回空态
+        this.store.resetForOpen('', '');
+      }
       this.store.sysNote = `发送失败：${e instanceof Error ? e.message : String(e)}`;
     }
+  }
+
+  /** 新会话（抽屉「＋」）：回空态等待首条消息 spawn（对照原型 showEmpty）。 */
+  newSession(): void {
+    this.store.resetForOpen('', '新会话');
+    void this.syncModelEffort();
   }
 
   /** 中断当前生成（sidecar 仍存活）：复位忙碌态并收尾流式消息。 */
@@ -152,6 +232,15 @@ export class ChatModel {
       if (this.store.sid === sid) {
         // 用户主动打断：待排队消息一并作废（sidecar 同）；权限队列同样清空
         this.store.resetRuntimeState();
+        if (this.store.messages.length > 0) {
+          // 落系统分隔线（对照原型 m-sys）：残段已冻结，本轮被中断的时间线
+          // 痕迹——纯内存不落盘，重载/切换即消
+          this.store.appendMessage(ChatMessage.systemNote(uuid(), '已停止会话 · 本轮回复已中断'));
+          this.store.bumpTail();
+        }
+        // 中断不产生 message_stop 事件：列表徽标（回复中/待确认）同步让位，
+        // 已启动保留（进程仍存活）。事件面幂等，迟到事件重复到达无害
+        sessionsModel.markRoundEnd(sid);
       }
     }
   }
@@ -180,6 +269,8 @@ export class ChatModel {
     const sid: string = this.store.sid;
     this.store.pendingPermissions = this.store.pendingPermissions
       .filter((p: PermissionRequest) => p.id !== id);
+    // 本机已应答：列表「待确认」徽标同步终结（事件面幂等）
+    sessionsModel.clearWaitConfirm(sid);
     try {
       await api.permissionResponse({
         sessionId: sid,
@@ -194,6 +285,157 @@ export class ChatModel {
       if (this.store.sid === sid) {
         this.store.sysNote = `权限应答失败：${e instanceof Error ? e.message : String(e)}`;
       }
+    }
+  }
+
+  // ── 模型 / 思考程度（输入区 chip 域；语义对齐见类头）──
+
+  /**
+   * 模型/effort 域同步（打开会话 / 新会话 / 切供应商后调用，幂等）：
+   *  - 选项集：激活供应商（system_default → get_default_models，第三方 → 配置
+   *    推导）；供应商未加载时先补拉一次（防重入内置于模型，离线静默）
+   *  - 模型当前值：会话记忆（session_model 元数据，不在选项集内回落默认——
+   *    供应商已切换/模型下架的场景）→ 无记忆 = 默认（选项集首位，store 记 ''）
+   *  - effort 当前值：会话记忆（归一化）→ 供应商 effortLevel → 'high'
+   *  - 空会话（未 spawn）跳过记忆读取——会话 id 尚不存在，选择随首条消息带出
+   */
+  async syncModelEffort(): Promise<void> {
+    const sid: string = this.store.sid;
+    let p: ProviderConfigView | null = providerModel.activeProvider();
+    if (p === null) {
+      await providerModel.refresh();
+      p = providerModel.activeProvider();
+    }
+    if (p === null) {
+      return; // 离线/拉取失败：chip 留占位，点击 chip 重试（onModelChipTap 兜底）
+    }
+    try {
+      const opts: ModelOption[] = await this.fetchModelOptions(p);
+      if (this.store.sid !== sid) {
+        return; // 会话已切走：不回写新会话
+      }
+      this.store.modelOptions = opts;
+      let model: string = '';
+      if (sid !== '') {
+        try {
+          const remembered: string | null = await api.sessionModel(sid);
+          if (this.store.sid !== sid) {
+            return;
+          }
+          if (remembered !== null && modelDisplayName(opts, remembered) !== null) {
+            model = remembered;
+          }
+        } catch (e) {
+          // 记忆读失败静默——回落默认
+        }
+      }
+      this.store.model = model;
+      let effort: string = '';
+      if (sid !== '') {
+        try {
+          const remembered: string | null = await api.sessionEffort(sid);
+          if (this.store.sid !== sid) {
+            return;
+          }
+          if (remembered !== null) {
+            effort = normalizeEffort(remembered);
+          }
+        } catch (e) {
+          // 记忆读失败静默——回落供应商默认
+        }
+      }
+      this.store.effort = effort !== '' ? effort : normalizeEffort(p.effortLevel);
+    } catch (e) {
+      // 选项集拉取失败静默——chip 留占位，点击重开浮层即重同步
+    }
+  }
+
+  /**
+   * 供应商的模型选项集（对照桌面 providerModelList + 系统默认特例）：
+   * 系统默认走 get_default_models（Claude 别名），第三方从配置推导（model +
+   * modelMappings 五字段 + knownModels 去重；displayName = value）。
+   */
+  private async fetchModelOptions(p: ProviderConfigView): Promise<ModelOption[]> {
+    if (p.kind === 'system_default') {
+      return await api.getDefaultModels();
+    }
+    const seen: string[] = [];
+    const push = (v: string): void => {
+      const t: string = v.trim();
+      if (t !== '' && !seen.includes(t)) {
+        seen.push(t);
+      }
+    };
+    push(p.model);
+    push(p.modelMappings.anthropicModel);
+    push(p.modelMappings.defaultOpusModel);
+    push(p.modelMappings.defaultSonnetModel);
+    push(p.modelMappings.defaultHaikuModel);
+    push(p.modelMappings.subagent);
+    for (let i = 0; i < p.knownModels.length; i++) {
+      push(p.knownModels[i]);
+    }
+    const opts: ModelOption[] = [];
+    for (let i = 0; i < seen.length; i++) {
+      const o: ModelOption = { value: seen[i], displayName: seen[i] };
+      opts.push(o);
+    }
+    return opts;
+  }
+
+  /**
+   * 选择模型（浮层选项点击）。返回语义：
+   *  - 'same'     未变（当前即所选）
+   *  - 'spawn'    空会话：只入 store（无真实 id 可写元数据，随首条消息
+   *               initialModel 带出）
+   *  - 'live'     存活进程已切换（set_model true；终态以 model_switch_result 坐实）
+   *  - 'deferred' 无活进程（set_model false）：记忆已写，下一条消息生效
+   *  - 'error'    RPC 失败（回滚显示）
+   */
+  async pickModel(value: string): Promise<string> {
+    const fallback: string = this.store.modelOptions.length > 0 ? this.store.modelOptions[0].value : '';
+    if (value === this.store.model || (this.store.model === '' && value === fallback)) {
+      return 'same';
+    }
+    const prev: string = this.store.model;
+    const sid: string = this.store.sid;
+    this.store.model = value; // 乐观更新（失败回滚）
+    if (sid === '') {
+      return 'spawn';
+    }
+    try {
+      const live: boolean = await api.setModel(sid, value);
+      await api.setSessionModel(sid, value); // 记忆恒写（live/deferred 都记住选择）
+      return live ? 'live' : 'deferred';
+    } catch (e) {
+      if (this.store.sid === sid) {
+        this.store.model = prev;
+      }
+      return 'error';
+    }
+  }
+
+  /** 选择思考档（语义同 pickModel；effort 三档制无「无」档，恒有当前值）。 */
+  async pickEffort(raw: string): Promise<string> {
+    const value: string = normalizeEffort(raw);
+    if (value === this.store.effort) {
+      return 'same';
+    }
+    const prev: string = this.store.effort;
+    const sid: string = this.store.sid;
+    this.store.effort = value;
+    if (sid === '') {
+      return 'spawn';
+    }
+    try {
+      const live: boolean = await api.setEffort(sid, value);
+      await api.setSessionEffort(sid, value);
+      return live ? 'live' : 'deferred';
+    } catch (e) {
+      if (this.store.sid === sid) {
+        this.store.effort = prev;
+      }
+      return 'error';
     }
   }
 
