@@ -94,13 +94,17 @@ Aide 自己的元数据: `~/.aide/sessions/<sessionId>.json` — 只存 displayN
 
 ## 工作区系统
 
-`WorkspaceState` 存两个字段：
+**显式注册表（2026-09-07 起）**：工作区列表的唯一事实源是 state.json 的 `registeredWorkspaces` 数组（`commands/workspace/registry.rs`），`list_workspaces` 只读它——不再扫 `~/.aide/claude/projects/` 推导。内部流程（automation 等）以 cwd 身份往 Claude 目录写转录，不再可能混进侧栏；`try_decode` 反向解码猜错的「路径不存在」假警告随之消失。设计决策与事故背景见 `docs/superpowers/plans/2026-09-07-workspace-explicit-registry.md`。
+
+登记触发点（全部幂等，按 key 去重）：打开目录（`create_workspace`）、`send_message` 前的会话 cwd ensure（首聊回落 home 的隐式工作区照常出现；automation 走 scopes 隔离不经此路径）、启动一次性迁移（`ensure_registry_migrated`，扫历史转录目录播种，marker 幂等）、`unhide_workspace` 重登记。条目 `{ key, path, addedAt }`：path 是身份主人，key 由 `path_to_key(path)` 注册时算出后冻结（sessions/recent/lsp/codegraph/jdk 各段共用该身份）；`missing` = 注册路径磁盘不存在（准确信号）。
+
+`WorkspaceState` 存两个字段（内存激活态，与注册表正交）：
 - `key`：encoded 目录名（如 `C--document-owner-cypress-agent`），定位 `~/.aide/claude/projects/<key>/` 下的会话
 - `path`：真实文件系统路径，用于文件树、PTY cwd 等文件操作
 
-路径解析（`resolve_path_from_key`）：DFS 搜索文件系统，对每个 `-` 尝试分隔符或字面量，找到磁盘上存在的路径，解决编码有损问题。
+路径解析（`resolve_path_from_key`）：DFS 搜索文件系统，对每个 `-` 尝试分隔符或字面量，找到磁盘上存在的路径，解决编码有损问题。注册表落地后它的运行时用途只剩两个：启动迁移解码历史目录 key、活动工作区恢复的回退（恢复优先查注册表）。
 
-持久化：`set_workspace` 时 key 写到 `~/.aide/config.json`，启动时读回。
+持久化：激活 key 写 state.json 的 `workspace` 字段，启动时读回。`hiddenWorkspaces` 黑名单不再是列表过滤源——`remove_workspace` hide 仍写它（降级回旧版重扫目录时不复活），迁移跳过它，`list_workspaces` 不读它。转录隔离双防线：automation 等内部流程写 `~/.aide/scopes/<kind>/<id>/claude`（不进被任何列表消费的全局目录）+ 登记制本身。
 
 ## 设置系统
 
@@ -192,8 +196,8 @@ n.summary(&title).body(&body).show();
 | `load_messages` | 解析 `.jsonl` 提取 user/assistant 文本 |
 | `create_session` | `id, name` — 调用方传入真实 id（首次 `session_init` 之后才调用，见「会话 ID 生命周期」） |
 | `delete_session` / `rename_session` | 删除 / 重命名 |
-| `list_workspaces` | 扫描 `~/.claude/projects/`，DFS 解析真实路径 |
-| `set_workspace` | 存 key + path 到 config.json |
+| `list_workspaces` | 读 `registeredWorkspaces` 注册表（显式登记，见「工作区系统」） |
+| `set_workspace` | 存 key + path 到 state.json |
 | `get_settings` / `set_settings` | 读写设置（合并，不覆盖 workspace） |
 | `notify_send` | 直接发系统通知 |
 
