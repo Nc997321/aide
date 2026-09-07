@@ -216,6 +216,25 @@ pub fn delete_transcript_dirs(
     Ok(removed)
 }
 
+/// send_message 路径的登记 ensure：先只读预检（`with_state_mut` 恒落盘，
+/// 不预检就是每条消息写一次盘），miss 才进写临界区。空路径拒绝。失败返回
+/// Err 由调用方 warn（不阻塞发送）——登记是会话 cwd 这一已知事实的落账，
+/// 不该有阻塞消息发送的权力。
+pub fn ensure_workspace_registered(path: &std::path::Path) -> Result<(), String> {
+    if path.as_os_str().is_empty() {
+        return Err("empty workspace path".into());
+    }
+    let path_str = path.to_string_lossy();
+    let key = super::path_to_key(&normalize_registration_path(&path_str));
+    if registered_path_for_key(&crate::commands::settings::load_state(), &key).is_some() {
+        return Ok(());
+    }
+    crate::commands::settings::with_state_mut(|config| {
+        register_in_config(config, &path_str, now_ms());
+        Ok(())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,5 +486,45 @@ mod tests {
         std::fs::create_dir_all(&projects).unwrap();
         assert_eq!(delete_transcript_dirs(&projects, "C--nope").unwrap(), 0);
         let _ = std::fs::remove_dir_all(&projects);
+    }
+
+    // ── ensure_workspace_registered：send 路径外壳 ──
+
+    #[test]
+    fn ensure_workspace_registered_rejects_empty_path() {
+        assert!(ensure_workspace_registered(std::path::Path::new("")).is_err());
+    }
+
+    #[test]
+    fn ensure_workspace_registered_registers_then_hits_precheck() {
+        let dir = std::env::temp_dir().join("aide_ensure_ws_hit");
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = path_to_key(&dir.to_string_lossy());
+        // 清理残留（同名测试目录可能带着上次运行的注册条目）
+        crate::commands::settings::with_state_mut(|c| {
+            unregister_in_config(c, &key);
+            Ok(())
+        })
+        .unwrap();
+
+        // 首调：登记
+        ensure_workspace_registered(&dir).unwrap();
+        assert_eq!(
+            registered_path_for_key(&crate::commands::settings::load_state(), &key)
+                .as_deref(),
+            Some(dir.to_string_lossy().as_ref())
+        );
+
+        // 二调：预检命中 → Ok，条目不重复
+        ensure_workspace_registered(&dir).unwrap();
+        assert_eq!(registered(&crate::commands::settings::load_state()).iter().filter(|w| w.key == key).count(), 1);
+
+        // 清理（state.json 是真实文件，测试键必摘）
+        crate::commands::settings::with_state_mut(|c| {
+            unregister_in_config(c, &key);
+            Ok(())
+        })
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

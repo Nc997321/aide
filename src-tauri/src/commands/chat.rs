@@ -204,6 +204,13 @@ pub async fn send_message(
     let cwd = session_cwd(&workspace_root, &workspace_state);
     let cwd_str = cwd.to_string_lossy().to_string();
 
+    // 显式注册：会话 cwd 在发送前幂等落账进工作区注册表（新装首聊回落 home
+    // 的隐式工作区由此照常出现在侧栏；automation 走 scopes 不经此路径）。
+    // 登记失败不阻塞发送——它是落账不是门禁。
+    if let Err(e) = crate::commands::workspace::ensure_workspace_registered(&cwd) {
+        tracing::warn!(?e, cwd = %cwd.display(), "send_message: register workspace failed");
+    }
+
     let active =
         resolve_send_provider(settings_service.inner().clone(), &session_id, provider).await?;
     // Clone the Arc before `get_settings` takes the `State` by value — the
