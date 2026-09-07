@@ -68,11 +68,22 @@ pub fn run() {
     ) {
         eprintln!("[aide] state.json seeding failed: {e}");
     }
+    // 工作区显式注册表一次性迁移（扫 claude/projects 播种，marker 幂等）必须在
+    // 活动工作区恢复之前——恢复路径优先查注册表。失败不阻断启动，下次重试。
+    if let Err(e) = commands::workspace::ensure_registry_migrated() {
+        eprintln!("[aide] workspace registry migration failed: {e}");
+    }
     let saved_key = commands::load_workspace_state();
     let workspace_state = WorkspaceState::new();
     if let Some(key) = saved_key {
-        // Resolve the encoded key back to a filesystem path
-        if let Some(path) = commands::resolve_path_from_key(&key) {
+        // 活动工作区 path 解析：注册表优先（真实 path 权威源）；解码回退兜
+        // 注册表落地前的旧数据（resolve_path_from_key 仅存的运行时用途之一）。
+        let path = commands::workspace::registered_path_for_key(
+            &commands::settings::load_state(),
+            &key,
+        )
+        .or_else(|| commands::resolve_path_from_key(&key));
+        if let Some(path) = path {
             *workspace_state.path.lock().unwrap() = Some(std::path::PathBuf::from(&path));
         }
         *workspace_state.key.lock().unwrap() = Some(key);

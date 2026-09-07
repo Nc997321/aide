@@ -18,8 +18,9 @@ pub use git_exclude::ensure_aide_excluded;
 // docs/superpowers/plans/2026-09-07-workspace-explicit-registry.md
 mod registry;
 pub use registry::{
-    infos_from_registry, normalize_registration_path, register_in_config, registered,
-    RegisteredWorkspace, unregister_in_config,
+    ensure_registry_migrated, infos_from_registry, normalize_registration_path,
+    register_in_config, registered, registered_path_for_key, RegisteredWorkspace,
+    unregister_in_config,
 };
 
 /// 路径 → 编码 key：把 : \ / 替换为 -，与 Claude CLI

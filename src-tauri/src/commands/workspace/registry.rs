@@ -122,9 +122,80 @@ pub fn infos_from_registry(
     infos
 }
 
+// ── 启动一次性迁移（薄外壳 + 参数化核心）──
+//
+// 写侧与读侧的过渡桥：注册表落地前的历史转录目录（`~/.aide/claude/projects/`
+// 全量扫描时代）按旧语义一次性播种进注册表——可解码的登记，hiddenWorkspaces
+// 里用户隐藏过的不复活（降级容忍，见计划 D5），解码失败的（automations-
+// aut-xxx 类内部目录）直接出局。marker 之后的启动不再扫目录。
+
+/// 迁移核心（参数化可测，照 `session_config_roots_in` 范式）：扫 `projects_dir`
+/// → hiddenWorkspaces 跳过 → `resolve_path_from_key` 解码失败跳过 → 幂等登记。
+/// 返回本次新登记数；收尾写 marker `registeredWorkspacesMigrated`（重跑天然
+/// 安全：marker 拦截 + 登记 dup-key false 双保险）。生产壳传真实路径。
+pub fn migrate_registry_in(
+    state: &mut serde_json::Value,
+    projects_dir: &std::path::Path,
+    now_ms: u64,
+) -> usize {
+    if !state.is_object() {
+        *state = serde_json::json!({});
+    }
+    if state.get("registeredWorkspacesMigrated").and_then(|v| v.as_bool()) == Some(true) {
+        return 0;
+    }
+    let hidden = super::hidden_keys(state);
+    let mut count = 0usize;
+    if let Ok(entries) = std::fs::read_dir(projects_dir) {
+        for entry in entries.flatten() {
+            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let key = entry.file_name().to_string_lossy().to_string();
+            if hidden.iter().any(|h| h == &key) {
+                continue;
+            }
+            let Some(path) = super::resolve_path_from_key(&key) else {
+                continue;
+            };
+            if register_in_config(state, &path, now_ms) {
+                count += 1;
+            }
+        }
+    }
+    state["registeredWorkspacesMigrated"] = serde_json::Value::Bool(true);
+    count
+}
+
+/// 启动迁移外壳：单 `with_state_mut` 临界区（扫描 + 登记 + marker 原子落盘）。
+/// marker 已真则直接 Ok，跳过扫目录。失败由调用方记日志下次启动重试。
+pub fn ensure_registry_migrated() -> Result<(), String> {
+    crate::commands::settings::with_state_mut(|state| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let count = migrate_registry_in(state, &crate::commands::claude_projects_dir(), now);
+        if count > 0 {
+            tracing::info!("workspace registry migration: {count} workspaces seeded");
+        }
+        Ok(())
+    })
+}
+
+/// 按 key 查注册条目的 path（启动恢复活动工作区用：注册表是真实 path 的
+/// 权威源，免去 try_decode 逐段探测）。查不到 → None，调用方走回退。
+pub fn registered_path_for_key(config: &serde_json::Value, key: &str) -> Option<String> {
+    registered(config)
+        .into_iter()
+        .find(|w| w.key == key)
+        .map(|w| w.path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::workspace::path_to_key;
     use serde_json::json;
 
     // ── registered：容错解析 ──
@@ -275,5 +346,73 @@ mod tests {
     #[test]
     fn infos_empty_registry_empty() {
         assert!(infos_from_registry(&json!({}), |_| true).is_empty());
+    }
+
+    // ── 启动迁移 ──
+
+    #[test]
+    fn migrates_decodable_dirs_skips_hidden_and_undecodable() {
+        // 真实存在的目录 → 解码成功登记；幽灵 key（无任何前缀存在）→ 解码失败出局；
+        // 存在但被 hiddenWorkspaces 记录的 → 用户隐藏过，不复活。
+        let real = std::env::temp_dir().join("aide_mig_ws_real_x");
+        let hidden_dir = std::env::temp_dir().join("aide_mig_ws_hidden_y");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::create_dir_all(&hidden_dir).unwrap();
+        let projects_dir = std::env::temp_dir().join("aide_mig_projects_x");
+        let _ = std::fs::remove_dir_all(&projects_dir);
+        std::fs::create_dir_all(&projects_dir).unwrap();
+        let real_key = path_to_key(&real.to_string_lossy());
+        let hidden_key = path_to_key(&hidden_dir.to_string_lossy());
+        // 形如合法 key（盘符 + --）但目标不存在 → try_decode 全前缀落空
+        let ghost_key = "C--zzghost-aide-test-zz";
+        std::fs::create_dir_all(projects_dir.join(&real_key)).unwrap();
+        std::fs::create_dir_all(projects_dir.join(&hidden_key)).unwrap();
+        std::fs::create_dir_all(projects_dir.join(ghost_key)).unwrap();
+
+        let mut state = json!({
+            "hiddenWorkspaces": [hidden_key],
+            "other": 1,
+        });
+        let count = migrate_registry_in(&mut state, &projects_dir, 77);
+
+        assert_eq!(count, 1, "只登记可解码且未隐藏的那一个");
+        let got = registered(&state);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].path, real.to_string_lossy());
+        assert_eq!(got[0].added_at, 77);
+        assert_eq!(state["registeredWorkspacesMigrated"], json!(true));
+        assert_eq!(state["other"], 1, "无关 state 字段保留");
+
+        let _ = std::fs::remove_dir_all(&projects_dir);
+        let _ = std::fs::remove_dir_all(&real);
+        let _ = std::fs::remove_dir_all(&hidden_dir);
+    }
+
+    #[test]
+    fn migrate_registry_in_marker_is_idempotent() {
+        let real = std::env::temp_dir().join("aide_mig_ws_idem_z");
+        std::fs::create_dir_all(&real).unwrap();
+        let projects_dir = std::env::temp_dir().join("aide_mig_projects_idem");
+        let _ = std::fs::remove_dir_all(&projects_dir);
+        std::fs::create_dir_all(projects_dir.join(path_to_key(&real.to_string_lossy()))).unwrap();
+
+        let mut state = json!({});
+        assert_eq!(migrate_registry_in(&mut state, &projects_dir, 1), 1);
+        // 二次调用：marker 拦截，0 新增、条目不重复
+        assert_eq!(migrate_registry_in(&mut state, &projects_dir, 2), 0);
+        assert_eq!(registered(&state).len(), 1);
+
+        let _ = std::fs::remove_dir_all(&projects_dir);
+        let _ = std::fs::remove_dir_all(&real);
+    }
+
+    #[test]
+    fn registered_path_for_key_found_and_miss() {
+        let cfg = json!({ "registeredWorkspaces": [
+            { "key": "C--a", "path": "C:\\a", "addedAt": 1 },
+        ]});
+        assert_eq!(registered_path_for_key(&cfg, "C--a"), Some(r"C:\a".to_string()));
+        assert_eq!(registered_path_for_key(&cfg, "C--zzz"), None);
+        assert_eq!(registered_path_for_key(&json!({}), "C--a"), None);
     }
 }
