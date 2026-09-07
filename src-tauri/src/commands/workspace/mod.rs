@@ -58,14 +58,6 @@ pub fn resolve_project_dirs(projects_dir: &std::path::Path, key: &str) -> Vec<Pa
     dirs
 }
 
-/// 从工作区列表里滤掉黑名单中的 key（隐藏语义）。
-pub fn filter_hidden(infos: Vec<WorkspaceInfo>, hidden: &[String]) -> Vec<WorkspaceInfo> {
-    infos
-        .into_iter()
-        .filter(|w| !hidden.contains(&w.key))
-        .collect()
-}
-
 /// 读 state 里的 hiddenWorkspaces 黑名单。
 pub fn hidden_keys(config: &serde_json::Value) -> Vec<String> {
     config
@@ -348,30 +340,16 @@ pub async fn workspace_set_jdk(workspace_root: String, jdk_home: String) -> Resu
     set_workspace_jdk(&key, &jdk_home)
 }
 
+/// 工作区列表 = 显式注册表（state.json `registeredWorkspaces`，见子模块
+/// registry）。登记制下内部目录在结构上不可能混进侧栏；name 恒为注册的真实
+/// 路径，missing = 路径磁盘不存在（准确信号）。扫描 + hiddenWorkspaces 过滤
+/// + try_decode 反向解码随旧机制一并退役（hiddenWorkspaces 仅存于迁移跳过
+/// 与 remove-hide 的降级兼容写）。
 #[tauri::command]
 pub async fn list_workspaces() -> Result<Vec<WorkspaceInfo>, String> {
     tokio::task::spawn_blocking(|| {
-        let dir = claude_projects_dir();
-        if !dir.exists() {
-            return Ok(Vec::new());
-        }
-        let mut workspaces = Vec::new();
-        let read_dir =
-            fs::read_dir(&dir).map_err(|e| format!("Failed to read projects dir: {}", e))?;
-        for entry in read_dir {
-            let Ok(entry) = entry else {
-                continue;
-            };
-            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                let key = entry.file_name().to_string_lossy().to_string();
-                let resolved = resolve_path_from_key(&key);
-                let missing = resolved.is_none();
-                let name = resolved.unwrap_or_else(|| key.clone());
-                workspaces.push(WorkspaceInfo { key, name, missing });
-            }
-        }
-        let hidden = hidden_keys(&super::settings::load_state());
-        Ok(filter_hidden(workspaces, &hidden))
+        let config = super::settings::load_state();
+        Ok(infos_from_registry(&config, |p| std::path::Path::new(p).exists()))
     })
     .await
     .map_err(|e| format!("list_workspaces panicked: {}", e))?
@@ -758,32 +736,9 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn filter_hidden_empty_passthrough() {
-        let infos = vec![sample("k1"), sample("k2")];
-        let hidden: Vec<String> = vec![];
-        assert_eq!(filter_hidden(infos, &hidden).len(), 2);
-    }
-
-    #[test]
-    fn filter_hidden_filters_matching() {
-        let infos = vec![sample("k1"), sample("k2"), sample("k3")];
-        let hidden = vec!["k2".to_string()];
-        let out = filter_hidden(infos, &hidden);
-        assert_eq!(
-            out.iter().map(|w| w.key.clone()).collect::<Vec<_>>(),
-            vec!["k1", "k3"]
-        );
-    }
-
-    #[test]
-    fn filter_hidden_multiple() {
-        let infos = vec![sample("a"), sample("b"), sample("c")];
-        let hidden = vec!["a".to_string(), "c".to_string()];
-        let out = filter_hidden(infos, &hidden);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].key, "b");
-    }
+    // ── filter_hidden 随扫描机制退役（list 换注册表源，唯一调用方消失，死代码删除）──
+    // hiddenWorkspaces 纯函数（hidden_keys/hide_in_config/unhide_in_config）保留：
+    // 迁移跳过与 remove-hide 降级兼容写仍在消费。
 
     // ── Task 2: hiddenWorkspaces config 纯函数 ──
 
@@ -1024,13 +979,6 @@ mod tests {
         );
     }
 
-    fn sample(key: &str) -> WorkspaceInfo {
-        WorkspaceInfo {
-            key: key.to_string(),
-            name: key.to_string(),
-            missing: false,
-        }
-    }
 }
 
 fn try_decode(prefix: &str, remaining: &str) -> Option<String> {
