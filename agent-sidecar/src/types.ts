@@ -319,6 +319,11 @@ export type SidecarCommand =
         mcp_allowlist: string[];
         // 任务目录绝对路径：写工具落进此目录即放行（蒸馏/自愈合写回在 cwd 之外）
         task_dir?: string;
+        // 会话目录绝对路径（协议一等字段，非 env 影子参数）：子进程
+        // CLAUDE_CONFIG_DIR 指到这里，转录落 <session_dir>/projects/<cwd 编码>/。
+        // Rust 侧恒发（scoped_claude_home 作用域隔离目录或任务显式指定）；
+        // 省略/空 = 旧版主进程未下发，跟随 sidecar 全局配置根。
+        session_dir?: string;
         max_turns?: number;
         max_budget_usd?: number;
         // 蒸馏轮置 true：resume 运行会话但 fork 成新 SDK 会话 id——否则 worker

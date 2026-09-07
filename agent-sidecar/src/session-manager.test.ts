@@ -142,6 +142,7 @@ describe("SessionWorker — 自动化会话硬停补终态（2026-08-23 蒸馏�
         tools: ["*"],
         mcpAllowlist: [],
         taskDir: "",
+        sessionDir: "",
         maxTurns: 10,
         maxBudgetUsd: 1,
       };

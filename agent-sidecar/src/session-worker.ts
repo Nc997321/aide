@@ -1002,6 +1002,7 @@ export class SessionWorker {
         tools: cmd.automation.tools ?? ["*"],
         mcpAllowlist: cmd.automation.mcp_allowlist ?? [],
         taskDir: cmd.automation.task_dir ?? "",
+        sessionDir: cmd.automation.session_dir ?? "",
         maxTurns: cmd.automation.max_turns,
         maxBudgetUsd: cmd.automation.max_budget_usd,
       };
@@ -1093,6 +1094,15 @@ export class SessionWorker {
           // per-session env 覆盖（provider 连接参数）
           for (const [k, v] of Object.entries(this.envOverrides)) {
             if (v) cliEnv[k] = v;
+          }
+          // 会话目录：协议一等字段（automation.session_dir）优先于透传/env。
+          // automation 任务的子进程 CLAUDE_CONFIG_DIR 指向作用域隔离配置根，
+          // 转录落 <sessionDir>/projects/<cwd 编码>/，不进全局 projects
+          //（list_workspaces 全量扫描那里，混进去即侧栏污染，2026-09-07）。
+          // 注意指令加载(loadAideInstructions)仍读全局——指令是用户全局配置，
+          // 隔离的只是子进程自己的写盘位置。
+          if (this.automationConfig?.sessionDir) {
+            cliEnv.CLAUDE_CONFIG_DIR = this.automationConfig.sessionDir;
           }
           // {...process.env} 的扩散和 envOverrides 都可能带进 CLAUDE_CODE_EFFORT_LEVEL
           // （用户全局 env / Rust provider 注入），必须在最后显式删除。
@@ -1404,12 +1414,19 @@ export class SessionWorker {
     "请继续处理用户的问题。刚才读取图片文件未获得可用内容，请忽略该次操作。" +
     "若该文件内容确实无法读取，可自然地向用户说明无法查看该文件并继续，不要提及任何技术细节。";
 
+  /** 子进程实际生效的配置根（CLAUDE_CONFIG_DIR）：automation 下发了 session_dir
+   *  就用它——注册条目（sessions/<pid>.json）与转录 jsonl 都写在它下面，
+   *  收尾清理/路径解析必须与启动时一致；否则跟随 sidecar 全局。 */
+  private subprocessConfigDir(): string | undefined {
+    return this.automationConfig?.sessionDir || process.env.CLAUDE_CONFIG_DIR;
+  }
+
   /** 从 SDK 会话历史移除带图消息（含 synthetic 400 行），让下一轮 query 重放干净历史。
    *  调用时机：abort 之后（CLI 已退出，文件不再被写）。失败静默——会话保持现状，
    *  至少不 crash。 */
   private async performImageRollback(): Promise<void> {
     try {
-      const configDir = process.env.CLAUDE_CONFIG_DIR;
+      const configDir = this.subprocessConfigDir();
       const sid = this.resumeSource;
       if (!configDir || !sid) return;
       const jsonl = findSessionJsonl(join(configDir, "projects"), sid);
@@ -1512,7 +1529,12 @@ export class SessionWorker {
     if (this.stopped) return;
     this.stop();
     this.onSelfStop?.(this);
-    removeSessionRegistryEntryFromEnv(process.env, this.routingKey);
+    // 注册条目跟随子进程实际生效的配置根（automation 隔离后条目写在
+    // <sessionDir>/sessions/ 下，清全局就漏了——幽灵会话回归）
+    removeSessionRegistryEntryFromEnv(
+      { CLAUDE_CONFIG_DIR: this.subprocessConfigDir() },
+      this.routingKey,
+    );
   }
 
   /** 停止会话：关闭 query，释放 claude.exe，清理资源 */

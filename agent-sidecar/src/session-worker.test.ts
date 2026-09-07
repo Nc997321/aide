@@ -203,6 +203,68 @@ describe("SessionWorker — fork source / routing key invariants", () => {
   });
 });
 
+/**
+ * 会话目录隔离（2026-09-07 侧栏污染 bug 的根因修复面）。
+ *
+ * 关键不变量：
+ * - `automation.session_dir` 是协议一等字段，解析进 AutomationConfig.sessionDir
+ * - 子进程生效配置根 = sessionDir 优先，sidecar 全局兜底（收尾清理/路径解析
+ *   必须与启动时一致，否则幽灵注册条目回归）
+ */
+describe("SessionWorker — automation session_dir（会话目录隔离）", () => {
+  it("协议字段 automation.session_dir 解析进配置，收尾跟随它", () => {
+    const emptyQuery = (() => (async function* () {})()) as any;
+    const { worker } = makeWorker();
+    (worker as any).queryFn = emptyQuery;
+    worker.handleCommand({
+      cmd: "send",
+      session_id: "aut-run-1",
+      prompt: "做点事",
+      cwd: "C:/ws",
+      env: {},
+      automation: {
+        task_id: "aut_t",
+        run_id: "run_1",
+        tools: ["*"],
+        mcp_allowlist: [],
+        task_dir: "C:\\Users\\h\\.aide\\automations\\aut_t",
+        session_dir: "C:\\Users\\h\\.aide\\scopes\\automation\\aut_t\\claude",
+      },
+    } as any);
+    const cfg = (worker as any).automationConfig;
+    expect(cfg.sessionDir).toBe("C:\\Users\\h\\.aide\\scopes\\automation\\aut_t\\claude");
+    // 子进程生效配置根跟随协议字段（注册条目/转录都在它下面）
+    expect((worker as any).subprocessConfigDir()).toBe(
+      "C:\\Users\\h\\.aide\\scopes\\automation\\aut_t\\claude",
+    );
+    worker.stop();
+  });
+
+  it("未下发 session_dir（旧版主进程兼容）→ 收尾跟随 sidecar 全局配置根", () => {
+    const emptyQuery = (() => (async function* () {})()) as any;
+    const { worker } = makeWorker();
+    (worker as any).queryFn = emptyQuery;
+    worker.handleCommand({
+      cmd: "send",
+      session_id: "aut-run-2",
+      prompt: "做点事",
+      cwd: "C:/ws",
+      env: {},
+      automation: {
+        task_id: "aut_t",
+        run_id: "run_2",
+        tools: ["*"],
+        mcp_allowlist: [],
+        task_dir: "",
+        // session_dir 省略 = 旧版主进程
+      },
+    } as any);
+    expect((worker as any).automationConfig.sessionDir).toBe("");
+    expect((worker as any).subprocessConfigDir()).toBe(process.env.CLAUDE_CONFIG_DIR);
+    worker.stop();
+  });
+});
+
 describe("SessionWorker — btw 回合结束自毁", () => {
   // 回归：btw worker 跑完不退出 → claude.exe 永远挂着 → CLI pid 元数据被
   // list_sessions 扫成侧栏幽灵空会话 + 每条 btw 白占几百 MB（2026-08-02 实锤）。

@@ -15,6 +15,7 @@ const cfg = (over: Partial<AutomationConfig> = {}): AutomationConfig => ({
   tools: ["*"],
   mcpAllowlist: ["aide-codegraph"],
   taskDir: "C:\\Users\\h\\.aide\\automations\\aut_x",
+  sessionDir: "",
   ...over,
 });
 

@@ -24,6 +24,12 @@ export interface AutomationConfig {
    *  （playbook.md / scripts/ 的蒸馏写入与运行中的手册自愈合写回都在 cwd 之外，
    *  auto 模式写目录外会被兜底 deny，必须有这个例外）。 */
   taskDir: string;
+  /** 会话目录（协议一等字段 `automation.session_dir`，非 env 影子参数）：子进程
+   *  CLAUDE_CONFIG_DIR 指到这里，转录落 `<sessionDir>/projects/<cwd 编码>/`。
+   *  默认是 Rust 侧 `scoped_claude_home` 的作用域隔离目录，不进全局
+   *  `~/.aide/claude/projects`（该目录被 list_workspaces 全量扫描，混进去即
+   *  侧栏污染，2026-09-07 bug）。空串 = 未下发（旧版主进程），跟随全局。 */
+  sessionDir: string;
   maxTurns?: number;
   maxBudgetUsd?: number;
 }
