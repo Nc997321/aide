@@ -13,6 +13,15 @@ use crate::settings::{SettingsScope, SettingsService};
 mod git_exclude;
 pub use git_exclude::ensure_aide_excluded;
 
+// registry：显式注册表（list_workspaces 的数据源）。纯核心只吃 Value + &str，
+// IO 谓词/时钟由外壳注入。设计取舍全记录：
+// docs/superpowers/plans/2026-09-07-workspace-explicit-registry.md
+mod registry;
+pub use registry::{
+    infos_from_registry, normalize_registration_path, register_in_config, registered,
+    RegisteredWorkspace, unregister_in_config,
+};
+
 /// 路径 → 编码 key：把 : \ / 替换为 -，与 Claude CLI
 /// `~/.aide/claude/projects/` 目录命名一致。
 pub fn path_to_key(path: &str) -> String {
