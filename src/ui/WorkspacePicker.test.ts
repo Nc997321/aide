@@ -27,7 +27,10 @@ function mountPicker(path = "") {
 }
 
 /** 挂起中的拉取放行阀：mock 返回未决 Promise，测试显式 release 数据。
- *  「加载中…」断言因此确定（拉取挂起中必现），不再赌微任务竞速。 */
+ *  「加载中…」断言因此确定（拉取挂起中必现），不再赌微任务竞速。
+ *  `!`（定值断言）理由：beforeEach 的 mockImplementation 每次被调用时同步
+ *  赋值，而它只在组件触发拉取后才执行——`!` 让「开合不再触发拉取」的回归
+ *  显式 TypeError 而非静默通过。 */
 let release!: (ws: Ws[]) => void;
 
 /** 点开下拉：断言加载态出现 → 放行数据 → 返回列表行文本数组。 */
@@ -83,10 +86,19 @@ describe("WorkspacePicker 触发按钮", () => {
   });
 
   it("拉取经 useWorkspaces 单例：展开后共享列表被填充（收口契约，防回退直调）", async () => {
+    // 自包含化（判别力与执行顺序解耦）：先借一次失败拉取清空共享单例、断言
+    // 起点为空，再经 openAndLoad 放行——若组件回退直调（不写单例），残留的
+    // 前序数据会让本测试在全绿下静默失效；起点置空后该回归必然暴露。
+    listWorkspaces.mockRejectedValueOnce(new Error("清场"));
     const w = mountPicker("C:/repos/alpha");
-    await openAndLoad(w);
+    await w.get(".wp-trigger").trigger("click");
+    await flushPromises();
 
     const { workspaces } = useWorkspaces();
+    expect(workspaces.value).toEqual([]);
+
+    await w.get(".wp-trigger").trigger("click"); // 关闭，重开走 openAndLoad
+    await openAndLoad(w);
     expect(workspaces.value.map((x) => x.key)).toEqual(["a", "b", "g"]);
   });
 });

@@ -7,7 +7,9 @@ const workspaces = ref<WorkspaceInfo[]>([]);
 const activeKey = ref<string | null>(null);
 
 export function useWorkspaces() {
-  /** 重新拉取工作区列表（已过滤黑名单）。 */
+  /** 重新拉取工作区列表（后端按显式注册表返回，见 workspace/registry）。
+   *  副作用注意：失败会把共享列表清空——所有消费方（侧栏/选择器）同步回落
+   *  空态；重新触发拉取即重试。WorkspacePicker 收口后也经此刷新。 */
   async function refresh() {
     try {
       workspaces.value = await api.listWorkspaces();
