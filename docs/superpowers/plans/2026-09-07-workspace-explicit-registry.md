@@ -218,7 +218,11 @@ if let Err(e) = crate::commands::workspace::ensure_workspace_registered(&cwd) {
 
 ---
 
-## 覆盖率对账表（实现时以实测替换，禁止静态填表冒充）
+## 覆盖率对账表（✅ 已实测定稿）
+
+**实测证据**：nightly `-Zcoverage-options=branch`（rustup nightly-x86_64-pc-windows-msvc），插桩 exe 仅跑 `commands::workspace::registry` 过滤（25 tests），llvm-profdata merge + llvm-cov report --show-branch-summary。registry.rs 终值：**Regions 96.56% / Lines 95.12% / Branches 93.75%（32 臂缺 2）**。缺臂处置：`register_in_config` 的 `else return false` 臂为不可达守卫（前一行已归一化，已按规范写 `// 不可达` 注释）；`ensure_workspace_registered` 的段损坏 Err 臂未实测——真实 state.json 全局单例无法安全注入损坏段（并发写竞态，拒绝制造 flaky），其决策输入已由核心级测试 `register_malformed_section_does_not_clobber` + `registered_path_for_key` 组合证明（corrupt → register false → 条目缺席 → Err 臂触发条件成立）。
+
+**测试序号修正实录**（对账时发现计划预写与实际实现有出入，按实际名登记）：迁移 marker 测试实际名为 `migrate_registry_in_marker_is_idempotent`（核心级）；ensure 测试实际名为 `ensure_workspace_registered_registers_then_hits_precheck`（计划原设想的「哨兵断言」测不出免写语义——dup-key 写入结果同形，未补假断言）。
 
 | 分支 | 覆盖 | 测试名 |
 |---|---|---|
@@ -228,8 +232,9 @@ if let Err(e) = crate::commands::workspace::ensure_workspace_registered(&cwd) {
 | infos：missing 两态 / 排序 / 空表 | Task 1 实测 | `infos_derive_key_name_missing` / `infos_sorted_by_name_case_insensitive` / `infos_empty_registry_empty` |
 | 迁移：解码登记 / hidden 跳过 / 不可解码跳过 / marker 幂等 | Task 2 实测 | `migrates_decodable_dirs_skips_hidden_and_undecodable` / `ensure_registry_migrated_marker_is_idempotent` |
 | delete 变体：多形态全删 / 无目录 0 | Task 4 实测 | `delete_transcript_dirs_removes_all_encoding_variants` / `delete_transcript_dirs_missing_key_returns_zero` |
-| ensure：首登 / 预检免写 / 空 path 拒 | Task 5 实测 | `ensure_workspace_registered_is_idempotent` / 同测试哨兵断言 / `ensure_workspace_registered_rejects_empty` |
+| ensure：首登 / 预检命中 / 空 path 拒 | Task 5 实测 | `ensure_workspace_registered_registers_then_hits_precheck` / 同测试二调断言（预检分支已执行，**免写盘语义为代码核验**——计划原设想的哨兵法测不出免写：dup-key 写入结果同形，故不补假断言） |
 | send_message 接线（warn 不阻塞） | 未实测·未验收（外壳接线，cargo test 够不到）→ 手动验收第 5 项 + code review 核对 | — |
+| ensure_registry_migrated 外壳（with_state_mut 接线） | 未实测·未验收（测试会迁移真实用户 state，拒绝单测化；3 行编排，核心 migrate_registry_in 已全测） | — |
 
 ## Self-Review
 

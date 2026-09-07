@@ -5,9 +5,12 @@
 // 目录在结构上不可能混进侧栏，key 反向解码猜错的 UI 态从根上消失。
 // 设计取舍全记录：docs/superpowers/plans/2026-09-07-workspace-explicit-registry.md
 //
-// 本文件是纯核心：只吃 `serde_json::Value` + `&str`，不碰 IO、不碰时钟——
-// `now_ms` 由外壳注入、存在性由谓词闭包注入，脱离环境可单测。IO 壳
-// （迁移 / ensure）在本文件后续任务追加，命令编排留在宿主 mod.rs。
+// 本文件的分层：**数据核心是纯的**——registered / register / unregister /
+// normalize / infos 只吃 `serde_json::Value` + `&str`，时钟由外壳注入
+// （now_ms 入参）、存在性由谓词闭包注入，脱离环境可单测；**迁移核心是
+// 参数化扫描**——migrate_registry_in 的 IO 限定为读入参目录（照
+// session_config_roots_in 范式，temp dir 可测），真实路径由 ensure 外壳
+// 传入。命令编排留在宿主 mod.rs。
 
 use crate::commands::WorkspaceInfo;
 
@@ -119,7 +122,7 @@ pub fn infos_from_registry(
             }
         })
         .collect();
-    infos.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    infos.sort_by_key(|w| w.name.to_lowercase());
     infos
 }
 
@@ -142,26 +145,44 @@ pub fn migrate_registry_in(
     if !state.is_object() {
         *state = serde_json::json!({});
     }
-    if state.get("registeredWorkspacesMigrated").and_then(|v| v.as_bool()) == Some(true) {
+    if state
+        .get("registeredWorkspacesMigrated")
+        .and_then(|v| v.as_bool())
+        == Some(true)
+    {
         return 0;
     }
     let hidden = super::hidden_keys(state);
     let mut count = 0usize;
-    if let Ok(entries) = std::fs::read_dir(projects_dir) {
-        for entry in entries.flatten() {
-            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                continue;
+    match std::fs::read_dir(projects_dir) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                let key = entry.file_name().to_string_lossy().to_string();
+                if hidden.iter().any(|h| h == &key) {
+                    continue;
+                }
+                let Some(path) = super::resolve_path_from_key(&key) else {
+                    continue;
+                };
+                if register_in_config(state, &path, now_ms) {
+                    count += 1;
+                }
             }
-            let key = entry.file_name().to_string_lossy().to_string();
-            if hidden.iter().any(|h| h == &key) {
-                continue;
-            }
-            let Some(path) = super::resolve_path_from_key(&key) else {
-                continue;
-            };
-            if register_in_config(state, &path, now_ms) {
-                count += 1;
-            }
+        }
+        // 目录不存在 = 无历史可迁，marker 照常落（幂等语义不受影响）
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        // 权限/IO 类失败：不动 marker（下次启动重试），已登记条目不受影响——
+        // 照落 marker 会把权限异常固化成永久跳过（rust-reviewer 违反项 3）。
+        Err(e) => {
+            tracing::warn!(
+                ?e,
+                dir = %projects_dir.display(),
+                "workspace registry migration: read_dir failed; retry next startup"
+            );
+            return 0;
         }
     }
     state["registeredWorkspacesMigrated"] = serde_json::Value::Bool(true);
@@ -205,10 +226,12 @@ pub(super) fn now_ms() -> u64 {
 /// （Aide 的 path_to_key 保留点号 / SDK 把点编成横杠，同一工作区磁盘上可能
 /// 两目录并存——旧 delete 只删入参精确目录，横杠形态残留，见计划 D8）。
 /// 返回删除的目录数；目录不存在计 0 不报错。
-pub fn delete_transcript_dirs(
-    projects_dir: &std::path::Path,
-    key: &str,
-) -> std::io::Result<usize> {
+///
+/// ⚠️ 已知边界（dot 归一的代价）：同父目录下点/横杠孪生名的两个**不同**
+/// 工作区（`a.b` 与 `a-b` 编码后同名 `a-b`）无法互相区分，删除其一会把
+/// 另一者的转录目录连带删掉。触发条件极低（同父目录孪生名都开过工作区），
+/// 且 dashed 形态无法反查归属，故接受此口径并在此显式记录。
+pub fn delete_transcript_dirs(projects_dir: &std::path::Path, key: &str) -> std::io::Result<usize> {
     let mut removed = 0usize;
     for dir in super::resolve_project_dirs(projects_dir, key) {
         std::fs::remove_dir_all(&dir)?;
@@ -232,7 +255,16 @@ pub fn ensure_workspace_registered(path: &std::path::Path) -> Result<(), String>
     }
     crate::commands::settings::with_state_mut(|config| {
         register_in_config(config, &path_str, now_ms());
-        Ok(())
+        // register 的 false 有两种含义：并发竞态下的 dup（良性，条目已在）与
+        // 段损坏（非数组，写入被拒）——按「写后仍在不在」判别，后者如实报错，
+        // 否则新装首聊的工作区会静默缺席且无日志（rust-reviewer 违反项 2）。
+        if registered_path_for_key(config, &key).is_some() {
+            Ok(())
+        } else {
+            Err(format!(
+                "workspace register failed: registeredWorkspaces 段损坏（非数组）？path={path_str}"
+            ))
+        }
     })
 }
 
@@ -455,7 +487,10 @@ mod tests {
         let cfg = json!({ "registeredWorkspaces": [
             { "key": "C--a", "path": "C:\\a", "addedAt": 1 },
         ]});
-        assert_eq!(registered_path_for_key(&cfg, "C--a"), Some(r"C:\a".to_string()));
+        assert_eq!(
+            registered_path_for_key(&cfg, "C--a"),
+            Some(r"C:\a".to_string())
+        );
         assert_eq!(registered_path_for_key(&cfg, "C--zzz"), None);
         assert_eq!(registered_path_for_key(&json!({}), "C--a"), None);
     }
@@ -523,8 +558,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&projects);
         let _ = std::fs::remove_dir_all(&real);
 
-        // projects 目录缺失：0 新增，marker 照常落（幂等语义不受扫描失败影响）
-        let mut state2 = json!({});
+        // projects 目录缺失：0 新增，marker 照常落（幂等语义不受扫描失败影响）；
+        // state 用 Null 形态顺带覆盖迁移的配置归一分支
+        let mut state2 = serde_json::Value::Null;
         let missing_dir = std::env::temp_dir().join("aide_mig_projects_nonexistent_zz");
         let _ = std::fs::remove_dir_all(&missing_dir);
         assert_eq!(migrate_registry_in(&mut state2, &missing_dir, 1), 0);
@@ -539,11 +575,32 @@ mod tests {
         std::fs::create_dir_all(projects2.join(path_to_key(&real2.to_string_lossy()))).unwrap();
         let mut state3 = json!({});
         assert!(register_in_config(&mut state3, &real2.to_string_lossy(), 1));
-        assert_eq!(migrate_registry_in(&mut state3, &projects2, 2), 0, "dup 不计账");
+        assert_eq!(
+            migrate_registry_in(&mut state3, &projects2, 2),
+            0,
+            "dup 不计账"
+        );
         assert_eq!(registered(&state3).len(), 1);
         assert_eq!(registered(&state3)[0].added_at, 1, "原条目不被迁移覆盖");
         let _ = std::fs::remove_dir_all(&projects2);
         let _ = std::fs::remove_dir_all(&real2);
+    }
+
+    #[test]
+    fn migrate_registry_in_non_dir_failure_does_not_set_marker() {
+        // 权限/IO 类失败的可复现代理：projects「目录」实际是文件 → read_dir
+        // 报错且非 NotFound → 不落 marker，下次启动重试（对照：缺目录 NotFound
+        // 照落 marker）
+        let marker_file = std::env::temp_dir().join("aide_mig_projects_isfile");
+        let _ = std::fs::remove_dir_all(&marker_file);
+        std::fs::write(&marker_file, b"not a dir").unwrap();
+        let mut state = json!({});
+        assert_eq!(migrate_registry_in(&mut state, &marker_file, 1), 0);
+        assert!(
+            state.get("registeredWorkspacesMigrated").is_none(),
+            "非 NotFound 失败不落 marker"
+        );
+        let _ = std::fs::remove_file(&marker_file);
     }
 
     #[test]
@@ -561,14 +618,19 @@ mod tests {
         // 首调：登记
         ensure_workspace_registered(&dir).unwrap();
         assert_eq!(
-            registered_path_for_key(&crate::commands::settings::load_state(), &key)
-                .as_deref(),
+            registered_path_for_key(&crate::commands::settings::load_state(), &key).as_deref(),
             Some(dir.to_string_lossy().as_ref())
         );
 
         // 二调：预检命中 → Ok，条目不重复
         ensure_workspace_registered(&dir).unwrap();
-        assert_eq!(registered(&crate::commands::settings::load_state()).iter().filter(|w| w.key == key).count(), 1);
+        assert_eq!(
+            registered(&crate::commands::settings::load_state())
+                .iter()
+                .filter(|w| w.key == key)
+                .count(),
+            1
+        );
 
         // 清理（state.json 是真实文件，测试键必摘）
         crate::commands::settings::with_state_mut(|c| {

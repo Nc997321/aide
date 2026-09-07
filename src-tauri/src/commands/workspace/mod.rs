@@ -17,10 +17,11 @@ pub use git_exclude::ensure_aide_excluded;
 // IO 谓词/时钟由外壳注入。设计取舍全记录：
 // docs/superpowers/plans/2026-09-07-workspace-explicit-registry.md
 mod registry;
+// 包外公面只暴露真实消费者（M4）：delete_transcript_dirs / RegisteredWorkspace /
+// registered 仅本模块树内部消费，走 registry:: 直呼，不再 re-export。
 pub use registry::{
-    delete_transcript_dirs, ensure_registry_migrated, ensure_workspace_registered,
-    infos_from_registry, normalize_registration_path, register_in_config, registered,
-    registered_path_for_key, RegisteredWorkspace, unregister_in_config,
+    ensure_registry_migrated, ensure_workspace_registered, infos_from_registry,
+    normalize_registration_path, register_in_config, registered_path_for_key, unregister_in_config,
 };
 
 /// 路径 → 编码 key：把 : \ / 替换为 -，与 Claude CLI
@@ -349,7 +350,9 @@ pub async fn workspace_set_jdk(workspace_root: String, jdk_home: String) -> Resu
 pub async fn list_workspaces() -> Result<Vec<WorkspaceInfo>, String> {
     tokio::task::spawn_blocking(|| {
         let config = super::settings::load_state();
-        Ok(infos_from_registry(&config, |p| std::path::Path::new(p).exists()))
+        Ok(infos_from_registry(&config, |p| {
+            std::path::Path::new(p).exists()
+        }))
     })
     .await
     .map_err(|e| format!("list_workspaces panicked: {}", e))?
@@ -389,9 +392,16 @@ pub fn create_workspace(
         return Err(format!("目录不存在: {}", path));
     }
     let key = path_to_key(&path);
-    // 登记（幂等）+ 重新登记 = 自动从黑名单移除（降级兼容清理）
+    // 登记（幂等）+ 重新登记 = 自动从黑名单移除（降级兼容清理）。登记后校验
+    // 条目确实在表：register false 的段损坏分支如实报错（激活一个未注册的
+    // 工作区会让侧栏静默缺失），dup 竞态良性放行（rust-reviewer 违反项 2 同形）。
     super::settings::with_state_mut(|config| {
         register_in_config(config, &path, registry::now_ms());
+        if registered_path_for_key(config, &key).is_none() {
+            return Err(format!(
+                "登记失败：registeredWorkspaces 段损坏（非数组）？path={path}"
+            ));
+        }
         unhide_in_config(config, &key);
         Ok(())
     })?;
@@ -447,7 +457,7 @@ pub async fn remove_workspace(
         "delete" => {
             let key_clone = key.clone();
             tokio::task::spawn_blocking(move || -> std::io::Result<usize> {
-                delete_transcript_dirs(&claude_projects_dir(), &key_clone)
+                registry::delete_transcript_dirs(&claude_projects_dir(), &key_clone)
             })
             .await
             .map_err(|e| format!("删除任务失败: {}", e))?
@@ -494,6 +504,10 @@ pub fn unhide_workspace(key: String) -> Result<(), String> {
         match resolve_path_from_key(&key) {
             Some(path) => {
                 register_in_config(config, &path, registry::now_ms());
+                // 段损坏时登记被拒：尽力而为语义下不报错，但留痕（降级窗口命令）
+                if registered_path_for_key(config, &path_to_key(&path)).is_none() {
+                    tracing::warn!(key = %key, "unhide_workspace: 登记被拒（registeredWorkspaces 段损坏？）");
+                }
             }
             None => {
                 tracing::warn!(key = %key, "unhide_workspace: key 解码失败，仅清兼容位");
@@ -994,7 +1008,6 @@ mod tests {
             "empty set must remove the key from workspace_jdks"
         );
     }
-
 }
 
 fn try_decode(prefix: &str, remaining: &str) -> Option<String> {
