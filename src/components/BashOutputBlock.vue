@@ -86,44 +86,9 @@ watch(() => settings.theme, async () => {
   -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
-/* 头部小标签行：GALLERY .bo-head */
-.bash-output::before {
-  content: '▸ bash';
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  padding: 6px 12px;
-  font-size: 10.5px;
-  color: var(--aide-text-muted);
-  background: var(--aide-bg-base);
-  border-bottom: 1px solid var(--aide-border-subtle);
-  letter-spacing: .06em;
-  text-transform: uppercase;
-  font-weight: 600;
-}
-
-.bash-output::after {
-  content: 'exit 0';
-  display: flex;
-  align-items: center;
-  padding: 6px 12px;
-  font-size: 10.5px;
-  color: var(--aide-text-muted);
-  background: var(--aide-bg-base);
-  border-bottom: 1px solid var(--aide-border-subtle);
-  letter-spacing: .06em;
-  text-transform: uppercase;
-  font-weight: 600;
-}
-
-.bash-output.is-error::after {
-  content: 'exit 1';
-}
-
 .bash-output .xterm {
   width: 100% !important;
-  height: calc(100% - 27px) !important;
+  height: 100% !important;
 }
 
 .bash-output .xterm-viewport {
