@@ -375,6 +375,10 @@ impl AutomationService {
                 "mcp_allowlist": task.connectors,
                 // 任务目录写例外（手册自愈合写回/蒸馏产物都在 cwd 之外）
                 "task_dir": super::task_dir(&task.id).to_string_lossy(),
+                // 会话目录（子进程 CLAUDE_CONFIG_DIR）：显式字段下发，**不塞进 env**
+                // ——env 的语义是 provider 连接参数（见 session-worker.ts 注释），
+                // 混进去就是影子参数。默认取作用域隔离目录，任务可显式指定。
+                "session_dir": super::session_dir(task).to_string_lossy(),
                 "max_turns": RUN_MAX_TURNS,
             }
         })
@@ -475,6 +479,10 @@ impl AutomationService {
                 super::append_run(&task_id_owned, &run_for_write)?;
                 // 无工作空间的任务以任务目录为 cwd（scratch home），先确保存在
                 std::fs::create_dir_all(&cwd_for_dir).map_err(|e| format!("create cwd dir: {e}"))?;
+                // 会话目录（隔离配置根）也先建好：SDK 会自建，但显式建可保证后续
+                // 按路径读转录时目录已存在，少一类竞态。
+                std::fs::create_dir_all(super::session_dir(&task_for_write))
+                    .map_err(|e| format!("create session dir: {e}"))?;
                 let meta = serde_json::json!({
                     "id": sid,
                     "name": format!("{} · {}", task_for_write.name, run_for_write.started_at[5..16].replace('T', " ")),
@@ -1185,6 +1193,7 @@ impl AutomationService {
             name: input.name,
             prompt: input.prompt,
             workspace_path: input.workspace_path,
+            session_dir: input.session_dir,
             model: input.model,
             effort: input.effort,
             permission_preset: input.permission_preset,
@@ -1223,6 +1232,7 @@ impl AutomationService {
             name: input.name,
             prompt: input.prompt,
             workspace_path: input.workspace_path,
+            session_dir: input.session_dir,
             model: input.model,
             effort: input.effort,
             permission_preset: input.permission_preset,
@@ -1315,6 +1325,7 @@ mod tests {
             name: "测试任务".into(),
             prompt: "做点事".into(),
             workspace_path: Some("C:/ws".into()),
+            session_dir: None,
             model: "claude-sonnet-5".into(),
             effort: "medium".into(),
             permission_preset: preset,
@@ -1417,6 +1428,48 @@ mod tests {
         let cmd = AutomationService::build_send_command(&t, "run_2", "p", "C:/ws", false, false);
         assert!(cmd["env"].get("ANTHROPIC_MODEL").is_none());
         assert_eq!(cmd["automation"]["tools"][0], "*");
+    }
+
+    /// 「指定目录」能力契约之一：不指定时回落**基础设施**的作用域隔离目录，
+    /// 而不是 automation 自己拼的路径、也不是全局 `~/.aide/claude`。
+    /// 后者被 `list_workspaces()` 全量扫描，落进去就是侧栏污染（2026-09-07 bug）。
+    #[test]
+    fn session_dir_default_delegates_to_scoped_home() {
+        let t = task(PermissionPreset::Auto);
+        let dir = super::super::session_dir(&t);
+        assert_eq!(dir, crate::commands::scoped_claude_home("automation", "aut_test"));
+        // 隔离性硬断言：绝不能落在被扫描的用户工作区根下
+        assert!(
+            !dir.starts_with(crate::commands::claude_home()),
+            "会话目录落进了全局 claude home，会被 list_workspaces 扫到：{}",
+            dir.display()
+        );
+    }
+
+    /// 契约之二：任务显式指定 `session_dir` 时**显式值优先**。
+    #[test]
+    fn session_dir_explicit_wins() {
+        let mut t = task(PermissionPreset::Auto);
+        t.session_dir = Some("D:/custom/cfg".into());
+        assert_eq!(super::super::session_dir(&t), std::path::Path::new("D:/custom/cfg"));
+        // 空串/空白视为未指定（前端表单清空后不应指向根路径）
+        t.session_dir = Some("   ".into());
+        assert_eq!(super::super::session_dir(&t), crate::commands::scoped_claude_home("automation", "aut_test"));
+    }
+
+    /// 契约之三：`session_dir` 是**协议里的一等字段**，不是塞在 env 里的影子参数。
+    /// env 的语义是 provider 连接参数（见 session-worker.ts），混进去会让调用方
+    /// 以为改 env 能改产物位置。
+    #[test]
+    fn send_command_session_dir_is_explicit_field_not_env() {
+        let mut t = task(PermissionPreset::Auto);
+        t.session_dir = Some("D:/custom/cfg".into());
+        let cmd = AutomationService::build_send_command(&t, "run_1", "p", "C:/ws", true, false);
+        assert_eq!(cmd["automation"]["session_dir"], "D:/custom/cfg");
+        assert!(
+            cmd["env"].get("CLAUDE_CONFIG_DIR").is_none(),
+            "CLAUDE_CONFIG_DIR 不该藏在 env 里（影子参数）"
+        );
     }
 
     #[test]

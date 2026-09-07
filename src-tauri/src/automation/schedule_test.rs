@@ -236,6 +236,7 @@ fn valid_input() -> AutomationTaskInput {
         name: "日报".into(),
         prompt: "汇总提交".into(),
         workspace_path: None,
+        session_dir: None,
         model: "claude-sonnet-5".into(),
         effort: "medium".into(),
         permission_preset: PermissionPreset::Auto,

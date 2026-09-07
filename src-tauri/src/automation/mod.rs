@@ -100,6 +100,15 @@ pub struct AutomationTask {
     pub name: String,
     pub prompt: String,
     pub workspace_path: Option<String>,
+    /// 任务会话目录（下发给子进程的 `CLAUDE_CONFIG_DIR`）：转录落在
+    /// `<本目录>/projects/<cwd 编码>/`。None = 回落默认，见 [`session_dir`]。
+    ///
+    /// 为什么要能指定：默认配置根是 `~/.aide/claude/`，转录会落进
+    /// `~/.aide/claude/projects/`——而该目录被 `list_workspaces()` 全量扫描当作
+    /// 用户工作区，automation 的目录混进去就是侧栏污染（2026-09-07 bug）。
+    /// 想让任务产物落在别处（或干脆复用某个已有配置根），显式指定本字段。
+    #[serde(default)]
+    pub session_dir: Option<String>,
     /// 显式按任务指定，不继承主会话（btw 踩过的坑）
     pub model: String,
     pub effort: String, // low|medium|high|xhigh|max
@@ -130,6 +139,9 @@ pub struct AutomationTaskInput {
     pub name: String,
     pub prompt: String,
     pub workspace_path: Option<String>,
+    /// 见 [`AutomationTask::session_dir`]；None = 回落默认。
+    #[serde(default)]
+    pub session_dir: Option<String>,
     pub model: String,
     pub effort: String,
     pub permission_preset: PermissionPreset,
@@ -286,6 +298,20 @@ pub fn automations_dir() -> PathBuf {
 
 pub fn task_dir(id: &str) -> PathBuf {
     automations_dir().join(id)
+}
+
+/// 任务的会话目录（转录 / 子进程配置根）。
+///
+/// 解析优先级：**任务显式指定 `session_dir`** > 默认（作用域隔离目录）。
+///
+/// 本模块**不自己拼路径**——「隔离目录怎么落」是基础设施职责，下沉在
+/// [`crate::commands::scoped_claude_home`]，automation 只是它的上层调用方。
+/// 调用方想指定目录就设 [`AutomationTask::session_dir`]。
+pub fn session_dir(task: &AutomationTask) -> PathBuf {
+    match task.session_dir.as_deref().map(str::trim) {
+        Some(p) if !p.is_empty() => PathBuf::from(p),
+        _ => crate::commands::scoped_claude_home("automation", &task.id),
+    }
 }
 
 pub fn task_json_path(id: &str) -> PathBuf {
