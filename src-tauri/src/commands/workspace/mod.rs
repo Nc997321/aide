@@ -18,9 +18,9 @@ pub use git_exclude::ensure_aide_excluded;
 // docs/superpowers/plans/2026-09-07-workspace-explicit-registry.md
 mod registry;
 pub use registry::{
-    ensure_registry_migrated, infos_from_registry, normalize_registration_path,
-    register_in_config, registered, registered_path_for_key, RegisteredWorkspace,
-    unregister_in_config,
+    delete_transcript_dirs, ensure_registry_migrated, infos_from_registry,
+    normalize_registration_path, register_in_config, registered, registered_path_for_key,
+    RegisteredWorkspace, unregister_in_config,
 };
 
 /// 路径 → 编码 key：把 : \ / 替换为 -，与 Claude CLI
@@ -373,21 +373,25 @@ pub fn set_workspace(
     Ok(())
 }
 
+/// 登记一个磁盘目录为工作区并立即切换（显式注册的主入口）。
+/// 幂等：dup-key 再登记不动既有条目（path 主人是先登记者），仅补激活。
+/// 注册不伪造目录（删旧 create_dir_all）：SDK 实际写的是横杠形态编码目录，
+/// sessions 扫描对缺失目录已有容错（计划 D7）。
 #[tauri::command]
 pub fn create_workspace(
     workspace_state: State<'_, WorkspaceState>,
     path: String,
 ) -> Result<WorkspaceInfo, String> {
+    // normalize 先行：注册表条目、激活 key、返回的 WorkspaceInfo 三者同源
+    let path = normalize_registration_path(&path);
     let p = std::path::Path::new(&path);
     if !p.exists() {
         return Err(format!("目录不存在: {}", path));
     }
     let key = path_to_key(&path);
-    // 建编码目录（幂等：已存在不报错）
-    let dir = claude_projects_dir().join(&key);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建工作区目录失败: {}", e))?;
-    // 重新登记 = 自动从黑名单移除
+    // 登记（幂等）+ 重新登记 = 自动从黑名单移除（降级兼容清理）
     super::settings::with_state_mut(|config| {
+        register_in_config(config, &path, registry::now_ms());
         unhide_in_config(config, &key);
         Ok(())
     })?;
@@ -423,6 +427,9 @@ fn save_workspace_state(path: &str) -> Result<(), String> {
     })
 }
 
+/// 移除工作区：hide = 摘出注册表（转录保留）+ 黑名单兼容写（降级容忍 D5）；
+/// delete = 摘出注册表 + 变体转录目录全删（D8 加固）。若移除的是当前激活
+/// 工作区，清空激活态。
 #[tauri::command]
 pub async fn remove_workspace(
     workspace_state: State<'_, WorkspaceState>,
@@ -432,24 +439,22 @@ pub async fn remove_workspace(
     match mode.as_str() {
         "hide" => {
             super::settings::with_state_mut(|config| {
+                unregister_in_config(config, &key);
                 hide_in_config(config, &key);
                 Ok(())
             })?;
         }
         "delete" => {
             let key_clone = key.clone();
-            tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-                let dir = claude_projects_dir().join(&key_clone);
-                if dir.exists() {
-                    std::fs::remove_dir_all(&dir)?;
-                }
-                Ok(())
+            tokio::task::spawn_blocking(move || -> std::io::Result<usize> {
+                delete_transcript_dirs(&claude_projects_dir(), &key_clone)
             })
             .await
             .map_err(|e| format!("删除任务失败: {}", e))?
             .map_err(|e| format!("删除目录失败: {}", e))?;
-            // 已删，从黑名单移除（若曾被隐藏）
+            // 已摘表，从黑名单移除（若曾被隐藏）
             super::settings::with_state_mut(|config| {
+                unregister_in_config(config, &key);
                 unhide_in_config(config, &key);
                 Ok(())
             })?;
@@ -480,9 +485,20 @@ pub async fn remove_workspace(
     Ok(())
 }
 
+/// 重新显示（重登记）一个工作区：按 key 解码回真实 path 后登记；顺带清
+/// 黑名单兼容位。解码失败（目标已不存在）静默 ok——list 不再读黑名单，
+/// 此命令仅服务降级窗口，尽力而为语义不变。
 #[tauri::command]
 pub fn unhide_workspace(key: String) -> Result<(), String> {
     super::settings::with_state_mut(|config| {
+        match resolve_path_from_key(&key) {
+            Some(path) => {
+                register_in_config(config, &path, registry::now_ms());
+            }
+            None => {
+                tracing::warn!(key = %key, "unhide_workspace: key 解码失败，仅清兼容位");
+            }
+        }
         unhide_in_config(config, &key);
         Ok(())
     })

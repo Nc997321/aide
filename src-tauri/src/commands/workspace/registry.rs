@@ -192,6 +192,30 @@ pub fn registered_path_for_key(config: &serde_json::Value, key: &str) -> Option<
         .map(|w| w.path)
 }
 
+/// 当前 Unix 毫秒（命令外壳用；纯核心一律由调用方注入时钟，不自己取）。
+pub(super) fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// 彻底删除一个工作区的全部转录目录：按 dot 归一匹配全部编码变体
+/// （Aide 的 path_to_key 保留点号 / SDK 把点编成横杠，同一工作区磁盘上可能
+/// 两目录并存——旧 delete 只删入参精确目录，横杠形态残留，见计划 D8）。
+/// 返回删除的目录数；目录不存在计 0 不报错。
+pub fn delete_transcript_dirs(
+    projects_dir: &std::path::Path,
+    key: &str,
+) -> std::io::Result<usize> {
+    let mut removed = 0usize;
+    for dir in super::resolve_project_dirs(projects_dir, key) {
+        std::fs::remove_dir_all(&dir)?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,5 +438,34 @@ mod tests {
         assert_eq!(registered_path_for_key(&cfg, "C--a"), Some(r"C:\a".to_string()));
         assert_eq!(registered_path_for_key(&cfg, "C--zzz"), None);
         assert_eq!(registered_path_for_key(&json!({}), "C--a"), None);
+    }
+
+    // ── delete_transcript_dirs：变体目录全删 ──
+
+    #[test]
+    fn delete_transcript_dirs_removes_all_encoding_variants() {
+        let projects = std::env::temp_dir().join("aide_del_variants_x");
+        let _ = std::fs::remove_dir_all(&projects);
+        // 同一工作区双编码形态（Aide 保留点号 / SDK 点号→横杠）
+        std::fs::create_dir_all(projects.join("C--proj-ws4.0")).unwrap();
+        std::fs::create_dir_all(projects.join("C--proj-ws4-0")).unwrap();
+        std::fs::create_dir_all(projects.join("C--proj-other")).unwrap();
+
+        let removed = delete_transcript_dirs(&projects, "C--proj-ws4.0").unwrap();
+        assert_eq!(removed, 2, "点号与横杠变体都删");
+        assert!(!projects.join("C--proj-ws4.0").exists());
+        assert!(!projects.join("C--proj-ws4-0").exists());
+        assert!(projects.join("C--proj-other").exists(), "无关目录不动");
+
+        let _ = std::fs::remove_dir_all(&projects);
+    }
+
+    #[test]
+    fn delete_transcript_dirs_missing_key_returns_zero() {
+        let projects = std::env::temp_dir().join("aide_del_missing_x");
+        let _ = std::fs::remove_dir_all(&projects);
+        std::fs::create_dir_all(&projects).unwrap();
+        assert_eq!(delete_transcript_dirs(&projects, "C--nope").unwrap(), 0);
+        let _ = std::fs::remove_dir_all(&projects);
     }
 }
