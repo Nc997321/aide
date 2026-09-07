@@ -95,6 +95,19 @@ cargo run                     # 启动时自动应用 migrations/*.sql
 
 启动后会打出一句话说明应用了哪些迁移；`/api/health` 会回报实际装配的解析后端与分词器。
 
+### 端到端冒烟
+
+装完 PG（或 `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`）
+后一键验证后端主链路
+（bootstrap → 邀请/加入 → 建空间 → 建文档 → 编辑锁 → 保存（含合并窗口）→ 回滚 → 检索 → 登出）：
+
+```bash
+./smoke.sh                   # 默认 http://127.0.0.1:8788，可传自定义地址
+# 要求干净库；重复跑先 docker compose down -v
+```
+
+需要 curl 与 python（解析 JSON）。锁 TTL 过期抢占这类需要真实等待 300s 的行为不在覆盖范围。
+
 ### 向量检索是可选的
 
 `migrations/optional/003_vector.sql` 需要 **pgvector**（不是 PG 自带，Windows 上要单独装），

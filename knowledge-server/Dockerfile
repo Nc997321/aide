@@ -1,6 +1,8 @@
 # 多阶段构建：编译在完整的 rust 镜像里，运行只带一个二进制。
-# edition 2024 需要 Rust 1.85+，别降版本号。
-FROM rust:1.85-bookworm AS build
+# edition 2024 需要 Rust 1.85+。⚠️ 版本要对齐「生成 Cargo.lock 的工具链」：
+# 本机 rustc 1.96 解析出的依赖（syn 3 / icu 2.3 / time 0.3.55）MSRV 都高于 1.85，
+# 钉旧版本会在容器里报 "requires rustc 1.xx or newer"。升本机工具链时同步升这里。
+FROM rust:1.96-bookworm AS build
 
 WORKDIR /src
 RUN apt-get update \
