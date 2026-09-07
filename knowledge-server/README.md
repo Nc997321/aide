@@ -53,11 +53,13 @@ compose 不含 `build:`——客户机器上没有源码，应用镜像从阿里
 ### 镜像发布（客户不接触源码）
 
 交付 compose 里没有 `build:`，应用镜像走阿里云 ACR 个人版
-（`registry.cn-shanghai.aliyuncs.com/aide-org/aide-knowledge`，仓库内开发验证用 overlay 补 build）。
+（`registry.example.com/aide/aide-knowledge`，
+仓库内开发验证用 overlay 补 build）。⚠️ 域名是 2024-09 后个人版实例的 **crpi- 专属域名**
+（访问凭证页复制），旧 `registry.cn-*.aliyuncs.com` 对新建实例已失效。
 发布流程：
 
 ```bash
-docker login registry.cn-shanghai.aliyuncs.com   # 密码在 ACR 控制台「访问凭证」里设
+docker login registry.example.com   # 密码在 ACR 控制台「访问凭证」里设
 ./release.sh 0.1.0                               # = docker build + push，传纯标签自动补全地址
 ```
 
