@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { api } from "../api";
+import { useWorkspaces } from "../composables/useWorkspaces";
 import type { WorkspaceInfo } from "../types";
 
 /**
@@ -11,6 +11,9 @@ import type { WorkspaceInfo } from "../types";
  * - hero「新会话位于 X」（VariantMorning）：写入空白 tab 的 pendingWs / 零 tab
  *   布局的 defaultWs，不切全局；
  * - 文件树 path-bar（FileTree）：上抛 switch-workspace，由侧栏执行真正切换。
+ *
+ * 列表消费 useWorkspaces 模块级单例（与侧栏同源，展开时 refresh 顺带刷新共享
+ * 状态，其他消费方免费受益）；组件不自持第二份列表状态。
  *
  * 触发按钮默认内置行内形态；异形按钮（如 path-bar 的全宽形态）走 #trigger
  * slot，slot props：open（开合态，供 chevron 旋转）/ toggle（开合切换）/
@@ -29,7 +32,7 @@ const emit = defineEmits<{
 
 const open = ref(false);
 const loading = ref(false);
-const list = ref<WorkspaceInfo[]>([]);
+const { workspaces: list, refresh: refreshWorkspaces } = useWorkspaces();
 const rootRef = ref<HTMLElement | null>(null);
 /** Teleport 到 body 的下拉面板引用与定位态 */
 const menuRef = ref<HTMLElement | null>(null);
@@ -48,14 +51,11 @@ function toggle() {
   }
   open.value = true;
   loading.value = true;
-  list.value = [];
-  api
-    .listWorkspaces()
-    .then((ws) => { list.value = ws; })
-    // 失败静默收窄为空列表：轻量选择器不值得为拉取失败弹错，降级为仅当前项
-    // 可见（空态文案「无其它工作区」），重开下拉即重试。
-    .catch(() => { list.value = []; })
-    .finally(() => { loading.value = false; });
+  // 每次展开经统一状态层重拉（与原直调语义一致）：refresh 内部 catch 收窄为
+  // 空列表——轻量选择器不值得为拉取失败弹错，降级为空态「无其它工作区」，
+  // 重开下拉即重试；成功侧顺带刷新共享列表，侧栏等其他消费方同步受益。
+  // 不 await：开合是同步 UI 动作，加载态由 loading 呈现（refresh 不会 reject）。
+  void refreshWorkspaces().finally(() => { loading.value = false; });
 }
 
 function pick(ws: WorkspaceInfo) {

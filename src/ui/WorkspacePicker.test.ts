@@ -2,14 +2,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 
-// mock 边界指 @aide/sdk/api（共享 SDK 门面）——WorkspacePicker 经 src/api.ts 壳
-// re-export 到同一实例，mock 包模块即覆盖组件内的 api 调用。
+// mock 边界指 @aide/sdk/api（共享 SDK 门面）——组件经 useWorkspaces 单例 →
+// src/api.ts 壳 re-export 到同一实例，mock 包模块即覆盖整条链的 api 调用。
 const listWorkspaces = vi.fn();
 vi.mock("@aide/sdk/api", () => ({
   api: { listWorkspaces: (...args: unknown[]) => listWorkspaces(...args) },
 }));
 
 import WorkspacePicker from "./WorkspacePicker.vue";
+import { useWorkspaces } from "../composables/useWorkspaces";
 
 type Ws = { key: string; name: string; missing?: boolean };
 
@@ -25,17 +26,24 @@ function mountPicker(path = "") {
   });
 }
 
-/** 点开下拉并等待惰性加载完成，返回列表行文本数组。 */
-async function openAndLoad(wrapper: ReturnType<typeof mountPicker>) {
+/** 挂起中的拉取放行阀：mock 返回未决 Promise，测试显式 release 数据。
+ *  「加载中…」断言因此确定（拉取挂起中必现），不再赌微任务竞速。 */
+let release!: (ws: Ws[]) => void;
+
+/** 点开下拉：断言加载态出现 → 放行数据 → 返回列表行文本数组。 */
+async function openAndLoad(wrapper: ReturnType<typeof mountPicker>, data: Ws[] = [WS_A, WS_B, WS_GONE]) {
   await wrapper.get(".wp-trigger").trigger("click");
   expect(wrapper.text()).toContain("加载中…");
+  release(data);
   await flushPromises();
   return wrapper.findAll(".wp-option").map((o) => o.text());
 }
 
 beforeEach(() => {
   listWorkspaces.mockReset();
-  listWorkspaces.mockResolvedValue([WS_A, WS_B, WS_GONE]);
+  listWorkspaces.mockImplementation(
+    () => new Promise<Ws[]>((r) => { release = r; }),
+  );
 });
 
 afterEach(() => {
@@ -66,12 +74,20 @@ describe("WorkspacePicker 触发按钮", () => {
   });
 
   it("api 拉取失败 → 空列表兜底（catch 收窄），显示「无其它工作区」", async () => {
-    listWorkspaces.mockRejectedValue(new Error("boom"));
+    listWorkspaces.mockRejectedValueOnce(new Error("boom"));
     const w = mountPicker("C:/repos/alpha");
     await w.get(".wp-trigger").trigger("click");
     await flushPromises();
     expect(w.find(".wp-dropdown").text()).toContain("无其它工作区");
     expect(w.findAll(".wp-option")).toHaveLength(0);
+  });
+
+  it("拉取经 useWorkspaces 单例：展开后共享列表被填充（收口契约，防回退直调）", async () => {
+    const w = mountPicker("C:/repos/alpha");
+    await openAndLoad(w);
+
+    const { workspaces } = useWorkspaces();
+    expect(workspaces.value.map((x) => x.key)).toEqual(["a", "b", "g"]);
   });
 });
 
@@ -193,6 +209,8 @@ describe("WorkspacePicker #trigger slot 接管（FileTree 形态）", () => {
     });
 
     await w.get(".ft-trigger").trigger("click");
+    expect(w.find(".wp-dropdown").text()).toContain("加载中…");
+    release([WS_A, WS_B, WS_GONE]);
     await flushPromises();
     await w.findAll(".wp-option")[1].trigger("click");
     expect(w.emitted("select")?.[0]?.[0]).toEqual(WS_B);
