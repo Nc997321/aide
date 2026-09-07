@@ -6,7 +6,12 @@
 // 界面上明确写出来，免得管理员以为还能翻历史。
 import { computed, ref, watch } from "vue";
 import Icon from "@/components/Icon.vue";
-import { inviteLink, type KbInvite, type KbSpace, type KbUserRow } from "./kbClient";
+import {
+  inviteLink,
+  type KbInvite,
+  type KbSpace,
+  type KbUserRow,
+} from "./kbClient";
 
 const props = defineProps<{
   users: KbUserRow[];
@@ -16,12 +21,15 @@ const props = defineProps<{
   currentUserId: string | null;
   /** 父组件刚生成出来的邀请。用 prop 而不是方法回调，状态只有一个来源。 */
   lastInvite: KbInvite | null;
+  /** 父组件刚创建成功的空间，变化时清空创建表单（与 lastInvite 同一模式）。 */
+  lastCreatedSpace: KbSpace | null;
 }>();
 
 const emit = defineEmits<{
   invite: [username: string, displayName: string, isAdmin: boolean, spaceId: string | null, spaceRole: string | null];
   revoke: [id: string];
   refresh: [];
+  createSpace: [key: string, name: string, visibility: "private" | "internal" | "public"];
 }>();
 
 const username = ref("");
@@ -31,6 +39,32 @@ const spaceId = ref<string>("");
 const spaceRole = ref<string>("viewer");
 
 const copied = ref(false);
+
+// ── 创建空间 ──
+// 后端对 key 的约束（spaces.rs validate_key）：2~40 位，小写字母/数字/连字符。
+// 这里不重复校验长度，交给服务端报错——但输入时顺手转小写，少一次往返失败。
+const spaceKey = ref("");
+const spaceName = ref("");
+const spaceVisibility = ref<"private" | "internal" | "public">("internal");
+
+const canCreateSpace = computed(
+  () =>
+    spaceKey.value.trim() !== "" &&
+    spaceName.value.trim() !== "" &&
+    !props.busy,
+);
+
+function onCreateSpace(): void {
+  if (!canCreateSpace.value) return;
+  emit(
+    "createSpace",
+    spaceKey.value.trim().toLowerCase(),
+    spaceName.value.trim(),
+    spaceVisibility.value,
+  );
+  // 成功与否由父层反馈：成功会更新 lastCreatedSpace（下方 watch 清空表单），
+  // 失败只显示错误、保留输入，改完直接再点
+}
 
 // 父组件每次成功生成邀请都会换一个新的 lastInvite 对象，
 // 这里跟着刷新"刚生成的链接"区域并把表单清掉。
@@ -42,6 +76,16 @@ watch(
     username.value = "";
     displayName.value = "";
     isAdmin.value = false;
+  },
+);
+
+watch(
+  () => props.lastCreatedSpace,
+  (s) => {
+    if (!s) return;
+    spaceKey.value = "";
+    spaceName.value = "";
+    spaceVisibility.value = "internal";
   },
 );
 
@@ -83,6 +127,28 @@ function fmtTime(iso: string | null): string {
 
 <template>
   <div class="kb-members">
+    <section class="kb-block">
+      <h3>创建空间</h3>
+      <div class="kb-form">
+        <input
+          v-model="spaceKey"
+          type="text"
+          placeholder="标识（小写字母/数字/-，如 eng-handbook）"
+          class="kb-key-input"
+          spellcheck="false"
+        />
+        <input v-model="spaceName" type="text" placeholder="空间名称" />
+        <select v-model="spaceVisibility">
+          <option value="private">私有（仅成员可见）</option>
+          <option value="internal">内部（登录可见）</option>
+          <option value="public">公开（所有人可读）</option>
+        </select>
+        <button class="kb-primary" :disabled="!canCreateSpace" @click="onCreateSpace">
+          创建
+        </button>
+      </div>
+    </section>
+
     <section class="kb-block">
       <h3>邀请新成员</h3>
       <div class="kb-form">
@@ -198,6 +264,10 @@ function fmtTime(iso: string | null): string {
   border: 1px solid var(--aide-border);
   border-radius: 6px;
   outline: none;
+}
+.kb-key-input {
+  font-family: var(--aide-font-mono, ui-monospace, monospace);
+  width: 240px;
 }
 .kb-check {
   display: inline-flex;

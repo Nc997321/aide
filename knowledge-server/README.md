@@ -138,7 +138,7 @@ Bearer 顺带带来：服务端无状态（查 `sessions` 表）、三种前端�
 
 - 文档级 ACL 的读写接口（权限模型与合并逻辑已在 `domain/permission.rs`，只差出口）
 - 向量检索（`migrations/optional/003_vector.sql` 已备好，等 pgvector 就位）
-- 前端的编辑/版本回滚/导入（可读可搜已在 aide 桌面端 `src/components/KnowledgeBase/` 落地）
+- 摄取管道的 UI（接口已有，docx/pdf 导入目前靠 curl / psql 手动走）
 - 标签 / 双链的读写接口（表已建）
 
 ## 前端在哪
@@ -147,3 +147,7 @@ Bearer 顺带带来：服务端无状态（查 `sessions` 表）、三种前端�
 它直连本服务的 REST，**不走 aide-sdk 的 transport**（那套的后端是 aide 的 Rust 命令）——
 只沿用了 SDK 的工程约定（DTO 镜像 serde camelCase、门面平铺方法）与
 `renderMarkdown` 这个纯工具函数。
+
+可读可搜可编辑：文档编辑（编辑锁 + 30s 心跳 + 冲突禁存）、版本历史与回滚、
+创建空间均已落地；编辑锁的状态机在 `src/composables/useKbDocLock.ts`（API 注入式，
+可脱离网络单测）。

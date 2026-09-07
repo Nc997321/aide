@@ -148,6 +148,19 @@ export interface KbHealth {
   tokenizer: string;
 }
 
+/** 编辑锁的当前持有人（LockHolder 的镜像）。 */
+export interface KbLockHolder {
+  userId: string;
+  displayName: string;
+  expiresAt: string;
+}
+
+/** 取锁结果。held=true 表示自己拿到了；false 时 holder 是当前持锁人。 */
+export interface KbLockView {
+  held: boolean;
+  holder: KbLockHolder | null;
+}
+
 /** 服务端错误体：{ error, message }。message 是中文，直接给用户看。 */
 export class KbError extends Error {
   constructor(
@@ -331,6 +344,18 @@ export const kb = {
     versionNo: number,
   ): Promise<{ documentId: string; revisionId: string; versionNo: number; merged: boolean }> {
     return request("POST", `/api/documents/${id}/revert`, { versionNo });
+  },
+
+  // 编辑锁。取锁 POST / 心跳 POST / 释放 DELETE——路径见 knowledge-server/src/api/mod.rs。
+  // 心跳必须以小于 KB_LOCK_TTL_SECONDS（默认 300s）的间隔打，前端约定 30s。
+  acquireLock(id: string): Promise<KbLockView> {
+    return request("POST", `/api/documents/${id}/lock`);
+  },
+  lockHeartbeat(id: string): Promise<{ renewed: boolean }> {
+    return request("POST", `/api/documents/${id}/lock/heartbeat`);
+  },
+  releaseLock(id: string): Promise<{ released: boolean }> {
+    return request("DELETE", `/api/documents/${id}/lock`);
   },
 
   // 检索

@@ -65,10 +65,41 @@ const activeSpaceName = computed(
   () => k.spaces.value.find((s) => s.id === k.activeSpaceId.value)?.name ?? "",
 );
 
+// 正在编辑的文档 id。openDoc 切换前检查它，避免编辑中的草稿被侧栏一次点击冲掉
+// （编辑内容本身在 KbDocumentView 里，组件卸载即丢——所以要在卸载前问一句）。
+const editingDocId = ref<string | null>(null);
+
 async function openDoc(id: string): Promise<void> {
+  if (editingDocId.value && editingDocId.value !== id) {
+    if (!window.confirm("正在编辑的文档尚未完成，切换将丢弃未保存的修改。确认切换？")) {
+      return;
+    }
+    // 用户确认放弃：KbDocumentView 卸载时 onScopeDispose 会释放编辑锁
+    editingDocId.value = null;
+  }
   activeDocId.value = id;
   k.clearSearch();
   await k.openDocument(id);
+}
+
+/** 保存/回滚后刷新正文与侧栏（侧栏要反映新的 versionNo 与 updatedAt）。
+ *  保存请求进行期间用户可能已切走文档——那时只刷列表，不把用户拉回来。 */
+async function refreshDoc(id: string): Promise<void> {
+  const spaceId = k.activeSpaceId.value;
+  if (activeDocId.value === id) await k.openDocument(id);
+  if (spaceId) await k.loadDocuments(spaceId);
+}
+
+function onEditing(on: boolean): void {
+  editingDocId.value = on ? activeDocId.value : null;
+}
+
+async function onCreateSpace(
+  key: string,
+  name: string,
+  visibility: "private" | "internal" | "public",
+): Promise<void> {
+  await k.createSpace({ key, name, visibility });
 }
 
 // 搜索防抖：中文输入每敲一个字都发请求既浪费又会让结果闪烁
@@ -216,6 +247,7 @@ onMounted(() => k.init());
             :error="null"
             :current-user-id="k.user.value.id"
             :last-invite="k.lastInvite.value"
+            :last-created-space="k.lastCreatedSpace.value"
             @invite="
               (u, n, a, sid, role) => {
                 void k.invite({ username: u, displayName: n, isAdmin: a, spaceId: sid, spaceRole: role });
@@ -226,6 +258,11 @@ onMounted(() => k.init());
                 void k.revokeUser(id);
               }
             "
+            @create-space="
+              (key, name, vis) => {
+                void onCreateSpace(key, name, vis);
+              }
+            "
             @refresh="k.loadUsers()"
           />
           <KbSearchView
@@ -234,7 +271,14 @@ onMounted(() => k.init());
             :busy="k.searching.value"
             @open="(id) => openDoc(id)"
           />
-          <KbDocumentView v-else-if="k.activeDoc.value" :doc="k.activeDoc.value" />
+          <KbDocumentView
+            v-else-if="k.activeDoc.value"
+            :doc="k.activeDoc.value"
+            :editable="!k.demoMode.value"
+            @saved="(id) => refreshDoc(id)"
+            @reverted="(id) => refreshDoc(id)"
+            @editing="onEditing"
+          />
           <div v-else class="kb-empty">
             <p>从左侧选一篇文档</p>
             <small>{{ activeSpaceName || "知识库" }}</small>

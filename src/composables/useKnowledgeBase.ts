@@ -58,6 +58,8 @@ export function useKnowledgeBase() {
   const lastInvite = ref<KbInvite | null>(null);
   const spaces = ref<KbSpace[]>([]);
   const activeSpaceId = ref<string | null>(null);
+  /** 最近一次创建成功的空间。KbMembers 的表单靠它感知"可以清空了"（与 lastInvite 同模式）。 */
+  const lastCreatedSpace = ref<KbSpace | null>(null);
   const documents = ref<KbDocumentSummary[]>([]);
   const activeDoc = ref<KbDocument | null>(null);
   const loading = ref(false);
@@ -316,6 +318,25 @@ export function useKnowledgeBase() {
     await loadDocuments(id);
   }
 
+  /** 创建空间。成功后选中新空间（loadSpaces 保留已选 id，所以先选再刷）。 */
+  async function createSpace(input: {
+    key: string;
+    name: string;
+    visibility?: "private" | "internal" | "public";
+  }): Promise<boolean> {
+    error.value = null;
+    try {
+      const s = await kb.createSpace(input);
+      lastCreatedSpace.value = s;
+      activeSpaceId.value = s.id;
+      await loadSpaces();
+      return true;
+    } catch (e) {
+      fail(e, "创建空间失败");
+      return false;
+    }
+  }
+
   async function loadDocuments(spaceId: string): Promise<void> {
     const seq = ++loadSeq;
     try {
@@ -391,6 +412,7 @@ export function useKnowledgeBase() {
     lastInvite,
     spaces,
     activeSpaceId,
+    lastCreatedSpace,
     documents,
     activeDoc,
     loading,
@@ -410,6 +432,8 @@ export function useKnowledgeBase() {
     logout,
     loadSpaces,
     selectSpace,
+    createSpace,
+    loadDocuments,
     openDocument,
     search,
     clearSearch,
