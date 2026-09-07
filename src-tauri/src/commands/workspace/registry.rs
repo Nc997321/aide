@@ -62,6 +62,7 @@ pub fn register_in_config(config: &mut serde_json::Value, path: &str, now_ms: u6
         *config = serde_json::json!({});
     }
     let Some(obj) = config.as_object_mut() else {
+        // 不可达：上一分支已把一切非对象（含 null）归一化为 {}，此处恒 Some
         return false;
     };
     let arr = obj
@@ -493,6 +494,56 @@ mod tests {
     #[test]
     fn ensure_workspace_registered_rejects_empty_path() {
         assert!(ensure_workspace_registered(std::path::Path::new("")).is_err());
+    }
+
+    #[test]
+    fn register_in_config_normalizes_null_config() {
+        // 新装 state.json 为 null 的兜底：登记照常成功并归一化为对象
+        let mut cfg = serde_json::Value::Null;
+        assert!(register_in_config(&mut cfg, r"C:\repos\alpha", 7));
+        assert_eq!(registered(&cfg)[0].path, r"C:\repos\alpha");
+    }
+
+    #[test]
+    fn migrate_registry_in_skips_files_missing_dir_and_dups() {
+        // ① projects 目录混入同名 .jsonl 时代的杂物：非目录条目跳过
+        let real = std::env::temp_dir().join("aide_mig_ws_file_z");
+        std::fs::create_dir_all(&real).unwrap();
+        let projects = std::env::temp_dir().join("aide_mig_projects_mixed");
+        let _ = std::fs::remove_dir_all(&projects);
+        std::fs::create_dir_all(&projects).unwrap();
+        let real_key = path_to_key(&real.to_string_lossy());
+        std::fs::create_dir_all(projects.join(&real_key)).unwrap();
+        // 伪条目：合法 key 形态的「文件」——迁移只认目录
+        std::fs::write(projects.join("C--zzfile-aide-test-zz"), b"junk").unwrap();
+
+        let mut state = json!({});
+        assert_eq!(migrate_registry_in(&mut state, &projects, 1), 1);
+        assert_eq!(registered(&state).len(), 1);
+        let _ = std::fs::remove_dir_all(&projects);
+        let _ = std::fs::remove_dir_all(&real);
+
+        // projects 目录缺失：0 新增，marker 照常落（幂等语义不受扫描失败影响）
+        let mut state2 = json!({});
+        let missing_dir = std::env::temp_dir().join("aide_mig_projects_nonexistent_zz");
+        let _ = std::fs::remove_dir_all(&missing_dir);
+        assert_eq!(migrate_registry_in(&mut state2, &missing_dir, 1), 0);
+        assert_eq!(state2["registeredWorkspacesMigrated"], json!(true));
+
+        // dup 塌缩：registry 里已有同 key 条目（如 marker 丢失回滚后重迁），
+        // 再迁移不重复计账
+        let real2 = std::env::temp_dir().join("aide_mig_ws_dup_w");
+        std::fs::create_dir_all(&real2).unwrap();
+        let projects2 = std::env::temp_dir().join("aide_mig_projects_dup");
+        let _ = std::fs::remove_dir_all(&projects2);
+        std::fs::create_dir_all(projects2.join(path_to_key(&real2.to_string_lossy()))).unwrap();
+        let mut state3 = json!({});
+        assert!(register_in_config(&mut state3, &real2.to_string_lossy(), 1));
+        assert_eq!(migrate_registry_in(&mut state3, &projects2, 2), 0, "dup 不计账");
+        assert_eq!(registered(&state3).len(), 1);
+        assert_eq!(registered(&state3)[0].added_at, 1, "原条目不被迁移覆盖");
+        let _ = std::fs::remove_dir_all(&projects2);
+        let _ = std::fs::remove_dir_all(&real2);
     }
 
     #[test]
