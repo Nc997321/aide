@@ -23,6 +23,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   join: [];
   login: [];
+  /** 空库（initialized === false）时唯一的正向入口：去 KbLogin 的「创建管理员」。 */
+  setup: [];
   demo: [];
   /** 改完服务地址后重新探测一次 */
   retry: [];
@@ -77,6 +79,16 @@ async function copyStartCmd(): Promise<void> {
     <div class="kb-choices">
       <!-- join/login 只在服务已初始化（探测过且 initialized=true）下才有意义。
            探测失败（null）时也保留，提示用户换个地址；空库（false）下隐藏，避免把用户领进死路。 -->
+      <button
+        v-if="props.initialized === false"
+        class="kb-choice"
+        @click="emit('setup')"
+      >
+        <span class="kb-choice-t">初始化知识库</span>
+        <span class="kb-choice-d">这个实例还没有任何用户，创建第一个管理员</span>
+        <span class="kb-choice-go">创建管理员 →</span>
+      </button>
+
       <button
         v-if="props.initialized !== false"
         class="kb-choice"

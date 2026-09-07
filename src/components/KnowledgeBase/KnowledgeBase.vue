@@ -128,6 +128,7 @@ onMounted(() => k.init());
       :initialized="k.initialized.value"
       @join="enterForm('join')"
       @login="enterForm('login')"
+      @setup="view = 'form'"
       @demo="k.enterDemo()"
       @retry="() => {
         k.init();
