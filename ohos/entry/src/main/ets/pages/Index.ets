@@ -35,6 +35,10 @@ struct Index {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor($r('app.color.page_bg'))
+    // 背景用 background() 而非 backgroundColor()：背景层自动延伸进状态栏与
+    // 底部导航条避让区（官方组件级沉浸方案，内容仍在安全区内布局）——上下
+    // 系统栏与页面连成一体；手势导航的底部白条不认 navigationBarColor，只能
+    // 靠背景延伸盖住
+    .background($r('app.color.page_bg'))
   }
 }
