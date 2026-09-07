@@ -12,6 +12,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { useChatScroll } from "./useChatScroll";
+import { getOrCreateLedger } from "./useChatSession/state";
 import type { ChatMessage } from "@/types/chat";
 
 function makeMessages(n: number): ChatMessage[] {
@@ -58,7 +59,8 @@ function fakeScrollEl(opts: { scrollTop: number; scrollHeight: number; clientHei
 describe("useChatScroll", () => {
   it("P1 异步取回更早页后锚定：unshift 后全量可见、视觉位置保持", async () => {
     const list = ref(makeMessages(100));
-    const sid = ref<string | null>("s1");
+    // 独立 sid：本用例会写 pageLedgers（模块级），避免污染同文件其他 "s1" 用例
+    const sid = ref<string | null>("s-p1");
     // manualScheduler：unshift 触发 onNewContent 的置底只入队不执行，
     // 否则 syncScheduler 会把 scrollTop 钉到 scrollHeight、误触「加载期间用户滚动」
     // 放弃补偿（真实浏览器里 rAF 异步 + 上滚时 autoScroll=false 置底 no-op，无此问题）
@@ -71,7 +73,12 @@ describe("useChatScroll", () => {
         pagination: fakePagination({
           hasMore: () => true,
           loadOlder: async () => {
+            // 生产语义（pagination.ts loadOlderPage）：unshift 的同时必建台账页
             list.value.unshift(...makeMessages(30));
+            getOrCreateLedger("s-p1").unshift({
+              id: "pg-older", startOffset: 0, endOffset: 30, count: 30, bytes: 30,
+              loaded: true, restorable: true, heightPx: 0,
+            });
             return 30;
           },
         }),
@@ -79,12 +86,14 @@ describe("useChatScroll", () => {
     );
     scrollEl.value = fakeScrollEl({ scrollTop: 100, scrollHeight: 2000, clientHeight: 500 });
     await expandOlderAnchored();
-    // unshift 30 条 → 130 条全部可见（无台账=全 live 行）
-    expect(visibleRows.value.length).toBe(130);
+    // live 窗口化（2026-09-07）：100 条会话在切入时收拢（隐藏 60）；loadOlder 建
+    // 台账页（prepend 只移 liveStart，窗口锚定内容不动）→ 行模型 = pg(30) + liveskel(60)
+    // + 40 尾窗 = 42：新加载的页可见、旧隐藏前缀内容不变
+    expect(visibleRows.value.length).toBe(42);
     expect(scrollEl.value.scrollTop).toBe(100);
   });
 
-  it("切会话分帧挂载：首帧 6 条，ramp 跑完到全量（100），ramping 收尾 false", () => {
+  it("切会话分帧挂载：ramp 跑完到窗口全量（41 = liveskel + 40 尾窗），ramping 收尾 false", () => {
     const list = ref(makeMessages(100));
     const sid = ref<string | null>("s1");
     const { schedule } = syncScheduler();
@@ -93,8 +102,9 @@ describe("useChatScroll", () => {
       () => sid.value,
       { scheduleFrame: schedule },
     );
-    // 同步调度器下 ramp 在 immediate sessionId watcher 里一气跑完（6 → 46 → 86 → 100）
-    expect(visibleRows.value.length).toBe(100);
+    // 同步调度器下 ramp 在 immediate sessionId watcher 里一气跑完（挂载量逐帧补齐）
+    // live 窗口化：切入即收拢（隐藏 60）→ rows = liveskel + 40 尾窗 = 41
+    expect(visibleRows.value.length).toBe(41);
     expect(ramping.value).toBe(false);
   });
 
@@ -125,7 +135,8 @@ describe("useChatScroll", () => {
     // hydrate：整份历史一次性灌入
     list.value = makeMessages(50);
     await nextTick(); // pre-flush length watcher 触发 startRamp
-    expect(visibleRows.value.length).toBe(50);
+    // live 窗口化：灌入后 liveSeg 50 > K → 收拢（隐藏 10）→ rows = liveskel + 40 尾窗
+    expect(visibleRows.value.length).toBe(41);
     expect(ramping.value).toBe(false);
   });
 
@@ -178,11 +189,12 @@ describe("useChatScroll", () => {
     scrollEl.value = fakeScrollEl({ scrollTop: 900, scrollHeight: 1817, clientHeight: 817 });
     onScroll();
     expect(ramping.value).toBe(true);
-    // 用户上滚 900→700：接管——ramp 停、数据全量挂载（防中间段缺失）
+    // 用户上滚 900→700：接管——ramp 停、数据全量挂载（防中间段缺失）；
+    // live 窗口化后「全量」= 窗口全量（liveskel + 40 尾窗 = 41 行）
     scrollEl.value = fakeScrollEl({ scrollTop: 700, scrollHeight: 1817, clientHeight: 817 });
     onScroll();
     expect(ramping.value).toBe(false);
-    expect(visibleRows.value.length).toBe(100);
+    expect(visibleRows.value.length).toBe(41);
   });
 
   it("切走再切回：锚定 ramp 分帧挂载，收尾后恢复离开时的滚动位置（不钉底）", async () => {
@@ -204,14 +216,15 @@ describe("useChatScroll", () => {
     // 切回：锚定 ramp 首帧只挂尾部（不全量同步挂载——一次性巨型 patch 是流光掉帧元凶）
     sid.value = "s1";
     await nextTick();
-    expect(visibleRows.value.length).toBe(6); // 首帧渲染预算，未全量
+    // live 窗口化：liveskel 常驻挂载（隐藏前缀的唯一高度代表）+ 首帧渲染预算 6 行尾窗
+    expect(visibleRows.value.length).toBe(7); // liveskel + 首帧 6 行，未全量
     // anchor 首帧不写旧 DOM（2026-09-01 修复）：watch pre-flush 时 DOM 还是 s2 的，
     // 写入既无意义又会把接管基线锚到旧值——切回瞬间 scrollTop 保持残留（1817），
     // 落位交给 tick 首帧（新 DOM）
     expect(scrollEl.value!.scrollTop).toBe(1817);
-    flush(); // 分帧跑完 → 全量 + 双帧校准
+    flush(); // 分帧跑完 → 窗口全量 + 双帧校准
     expect(scrollEl.value!.scrollTop).toBe(500); // 恢复离开时的位置，而不是被拖回底部
-    expect(visibleRows.value.length).toBe(100); // 挂载终态仍是全量（scroll 完整性）
+    expect(visibleRows.value.length).toBe(41); // 挂载终态 = 窗口全量（liveskel + 40 尾窗）
     expect(ramping.value).toBe(false);
   });
 
@@ -258,7 +271,7 @@ describe("useChatScroll", () => {
     scrollEl.value = fakeScrollEl({ scrollTop: 100, scrollHeight: 1817, clientHeight: 817 });
     flush();
     expect(ramping.value).toBe(false); // 视作接管
-    expect(visibleRows.value.length).toBe(100); // 全量挂载（接管语义）
+    expect(visibleRows.value.length).toBe(41); // 全量挂载（接管语义；窗口全量 = liveskel + 40 尾窗）
   });
 
   it("切回（messages 未就绪）：hydrate 到齐后按锚定策略 ramp，位置=离底距离锚定", async () => {
@@ -285,7 +298,8 @@ describe("useChatScroll", () => {
     expect(scrollEl.value!.scrollTop).toBe(1817); // 切回瞬间保持残留（s2 钉底值）
     flush();
     expect(scrollEl.value!.scrollTop).toBe(500); // tick 首帧按 distBottom 锚定
-    expect(visibleRows.value.length).toBe(100);
+    // live 窗口化：hydrate 到齐后补收拢（隐藏 60）→ rows = liveskel + 40 尾窗
+    expect(visibleRows.value.length).toBe(41);
     expect(ramping.value).toBe(false);
   });
 
@@ -298,11 +312,12 @@ describe("useChatScroll", () => {
       () => sid.value,
       { scheduleFrame: schedule },
     );
-    // 无记忆：autoScroll=true 钉底 + ramp 启动（tick 在队未 flush）
+    // 无记忆：autoScroll=true 钉底 + ramp 启动（tick 在队未 flush）；
+    // live 窗口化：切入即收拢（隐藏 60）→ ramp 跑完到窗口全量（41）
     scrollEl.value = fakeScrollEl({ scrollTop: 0, scrollHeight: 1817, clientHeight: 817 });
     expect(ramping.value).toBe(true);
-    flush(); // ramp 跑完 → 全量
-    expect(visibleRows.value.length).toBe(100);
+    flush(); // ramp 跑完 → 窗口全量
+    expect(visibleRows.value.length).toBe(41);
     expect(ramping.value).toBe(false);
   });
 

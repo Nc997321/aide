@@ -212,6 +212,13 @@ export function unregisterSubagent(sid: string, id: string): void {
  *  useConversationChanges.captureChanges）。只读快照，纯展示。 */
 export const lastDispatchedPrompt: Record<string, string> = {};
 
+/** 按会话取消息只读视图——滚动层切走收拢/释放操作「离开会话」，而 watcher
+ *  时刻 props.messages 已是新会话的，旧会话数据必须经此按 sid 取。会话不存在
+ *  （未 hydrate / 已收口）返回空数组。 */
+export function messagesOf(sid: string): readonly ChatMessage[] {
+  return stores[sid]?.messages ?? [];
+}
+
 /** 取某会话最近派发的用户提问（无则空串）。 */
 export function getLastDispatchedPrompt(sid: string): string {
   return lastDispatchedPrompt[sid] ?? "";

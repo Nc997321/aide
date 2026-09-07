@@ -8,8 +8,11 @@ import type { BgTask, ModelOption } from "@/types/chat";
  *    释放时以实测高度建骨架 → 总高不变、滚动零跳变）；
  *  - skeleton：已释放页占位——内联 heightPx 撑住原高度，点击进入视口即取回
  *    （滚动层 prefetch 通常先到，点击是兜底）；
- *  - live：流式段单条（永不回收，不测高——页/骨架全在 live 段之前，定位/补偿
- *    公式只需要页区高度，live 行不带 data-row-id 避免每条消息一次布局读）。 */
+ *  - liveskel：live 段隐藏前缀占位（显示层窗口化，2026-09-07 切长会话尖峰
+ *    修复）——内联 heightPx 撑住隐藏区高度，点击/上滚逐步展开（新行来自
+ *    store 内存，无 IO）；
+ *  - live：流式段单条（窗口内的常驻尾行；live 行不带 data-row-id 避免每条
+ *    消息一次布局读——窗口化后挂载量有界，测高经 .chat-row-live 类选择器）。 */
 defineProps<{
   row: Row;
   workspacePath?: string;
@@ -21,6 +24,8 @@ const emit = defineEmits<{
   "open-bg-dock": [taskId: string];
   /** 骨架行点击取回（滚动层 restoreAnchored 的兜底入口） */
   restore: [pageIndex: number];
+  /** liveskel 点击展开一个 chunk（滚动层 expandLiveAnchored 的兜底入口） */
+  "expand-live": [];
 }>();
 </script>
 
@@ -44,6 +49,15 @@ const emit = defineEmits<{
     @click="emit('restore', row.pageIndex)"
   >
     <span class="chat-row-skeleton-label">{{ row.count }} 条历史消息已折叠 · 点此加载</span>
+  </button>
+  <button
+    v-else-if="row.kind === 'liveskel'"
+    class="chat-row-skeleton chat-row-liveskel"
+    :data-row-id="row.id"
+    :style="{ height: row.heightPx + 'px' }"
+    @click="emit('expand-live')"
+  >
+    <span class="chat-row-skeleton-label">上方 {{ row.count }} 条消息已折叠 · 上滚或点此逐步展开</span>
   </button>
   <div v-else class="chat-row-live">
     <ChatMessage

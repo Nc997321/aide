@@ -675,6 +675,8 @@ export async function canSendOrPrompt(): Promise<boolean> {
 export { toggleBgDock, stopSessionById, disposeSession, getLastDispatchedPrompt, isPendingSession, isFinalizedSessionPair };
 export { __setEvictThresholdsForTest };
 export { loadOlderPage, hasMoreOlder, resetPaginationForRevert };
+export { messagesOf } from "./useChatSession/state";
+export { liveMessageCount } from "./useChatSession/recycle";
 
 /** 远程重连后整页重载：清消息 + 分页状态后重新 hydrate。
  *  桌面靠 Tauri 事件不断流从不需要；远端断线期间有事件缺口，重连后以此对齐。

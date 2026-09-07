@@ -34,6 +34,7 @@ import {
   toggleBgDock,
   loadOlderPage,
   hasMoreOlder,
+  messagesOf,
 } from "@/composables/useChatSession";
 import { useToast } from "@/composables/useToast";
 import { effortLabel } from "@aide/sdk/utils/effort";
@@ -436,6 +437,7 @@ const {
   newWhileAway,
   expandOlderAnchored,
   restoreAnchored,
+  expandLiveAnchored,
 } = useChatScroll(() => props.messages, () => props.sessionId, {
   // P1 双向分页：所有分页函数绑定当前会话（props.sessionId 变化时闭包读新值）。
   // sessionId 为空（新会话未创建）时全链路 no-op。
@@ -443,6 +445,9 @@ const {
     hasMore: () => (props.sessionId ? hasMoreOlder(props.sessionId) : false),
     loadOlder: (limit) => (props.sessionId ? loadOlderPage(props.sessionId, limit) : Promise.resolve(0)),
   },
+  // 切走收拢/释放操作「离开会话」：watcher 时刻 props.messages 已是新会话的，
+  // 旧会话数据经此按 sid 取（live 窗口化，见 useChatScroll.collapseAndTightenForSwitchAway）。
+  messagesOf: (sid) => (sid ? messagesOf(sid) : []),
 });
 
 // 顶部入口按钮的「磁盘还有更早页」开关（模板里直接读，sessionId 空时 no-op）。
@@ -523,6 +528,7 @@ function onOpenBgDock(taskId: string) {
           :bg-tasks="bgTasks"
           @open-bg-dock="onOpenBgDock"
           @restore="restoreAnchored"
+          @expand-live="expandLiveAnchored"
         />
       </div>
       </div>

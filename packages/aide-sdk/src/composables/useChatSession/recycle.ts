@@ -24,15 +24,33 @@ import { pageLedgers, stores, type PageEntry } from "./state";
  */
 
 /** 渲染行模型：ChatPanel 的 v-for 单元。page=已加载页（消息组）；skeleton=已释放页
- *  占位（内联 heightPx 撑高度）；live=页边界之后的流式段（逐条）。 */
+ *  占位（内联 heightPx 撑高度）；liveskel=live 段隐藏前缀占位（显示层窗口化，
+ *  见 buildRows 的 live 参数）；live=页边界之后的流式段（逐条）。 */
 export type Row =
   | { kind: "page"; id: string; pageIndex: number; messages: ChatMessage[] }
   | { kind: "skeleton"; id: string; pageIndex: number; count: number; heightPx: number }
+  | { kind: "liveskel"; id: string; count: number; heightPx: number }
   | { kind: "live"; id: string; message: ChatMessage };
+
+/** live 段常驻尾窗行数：钉底滑动/无几何收拢/展开步长共用的窗口粒度。
+ *  DOM 里的 live 行数恒 ≤ K（外加阅读展开的增量，切走即收拢回窗）。 */
+export const LIVE_TAIL_ROWS = 40;
+
+/** live 段窗口状态（显示层所有，滚动层持有并传入 buildRows）。hiddenCount 是
+ *  live 段的相对量（隐藏前缀条数），页释放/取回只移动 liveStart、不动它——
+ *  窗口锚定的是内容，无须跨层平移；唯一要跟的是无台账 prepend（上翻把更早
+ *  消息并进 live 段，滚动层按取回条数显式 +count）。 */
+export interface LiveWindowState {
+  /** 隐藏前缀条数（live 段头部起的隐藏行数）。 */
+  hiddenCount: number;
+  /** 隐藏前缀的总高（px）——收拢时实测、滑动时逐条累加真实行高、无 DOM 时
+   *  按条数 × ESTIMATE 兜底；liveskel 行高直接取它（总高守恒 → 滚动零跳变）。 */
+  hiddenPx: number;
+}
 
 /** 无 DOM 可测时的单条消息估算高度（聊天气泡含 padding/代码块，取偏保守值——
  *  误差在下次实测时自校正，只影响从未上过屏的后台会话骨架）。 */
-const ESTIMATE_MESSAGE_HEIGHT_PX = 120;
+export const ESTIMATE_MESSAGE_HEIGHT_PX = 120;
 /** 已加载页总字节预算（jsonl UTF-8 字节，≈内存代理）：超出才释放热区外页。 */
 export const RECYCLE_BYTES_BUDGET = 16 * 1024 * 1024;
 /** 热区半径：视口所在页 ±K 页不释放。 */
@@ -171,12 +189,58 @@ export function releaseFarthestPages(
   return released;
 }
 
+/** liveskel 行的稳定 id（跨 recompute 不变，v-for key / 高度表 / 锚定都靠它）。 */
+export function liveSkeletonId(sid: string): string {
+  return `liveskel:${sid}`;
+}
+
+/** live 段行构建（ledger 与 no-ledger 两路共用）：隐藏前缀（live 头部 hiddenCount
+ *  条）→ 一条 liveskel 占位 + 尾窗 live 行。hiddenCount 只做几何夹紧
+ *  （[0, liveSeg]）——收拢/滑动/展开全是滚动层策略（见 useChatScroll），本函数
+ *  对政策无感知：传入什么 hiddenCount 就表达什么窗口。 */
+function appendLiveWindowRows(
+  rows: Row[],
+  sid: string,
+  messages: readonly ChatMessage[],
+  liveStart: number,
+  live: LiveWindowState | null | undefined,
+): void {
+  const len = messages.length;
+  const liveSeg = len - liveStart;
+  if (!live || live.hiddenPx <= 0 || live.hiddenCount <= 0) {
+    for (let i = liveStart; i < len; i++) {
+      rows.push({ kind: "live", id: messages[i].id, message: messages[i] });
+    }
+    return;
+  }
+  const hidden = Math.min(Math.max(live.hiddenCount, 0), liveSeg);
+  if (hidden > 0) {
+    rows.push({
+      kind: "liveskel",
+      id: liveSkeletonId(sid),
+      count: hidden,
+      heightPx: Math.max(1, Math.round(live.hiddenPx)),
+    });
+  }
+  for (let i = liveStart + hidden; i < len; i++) {
+    rows.push({ kind: "live", id: messages[i].id, message: messages[i] });
+  }
+}
+
 /** 台账+消息数组 → 渲染行。纯函数（ChatPanel computed 里调用）：
- *  无台账/空台账 = 全 live（未分页会话的兼容路径——游标探测分支、纯流式新会话）。 */
-export function buildRows(sid: string, messages: readonly ChatMessage[]): Row[] {
+ *  无台账/空台账 = 全 live（未分页会话的兼容路径——游标探测分支、纯流式新会话）。
+ *  live 窗口（可选）把 live 段切成「隐藏前缀 liveskel + 常驻尾窗」——显示层
+ *  窗口化，store.messages 不动（切长会话尖峰修复，见 plans/2026-09-07-live-window-recycle）。 */
+export function buildRows(
+  sid: string,
+  messages: readonly ChatMessage[],
+  live?: LiveWindowState | null,
+): Row[] {
   const ledger = pageLedgers.get(sid);
   if (!ledger || ledger.length === 0) {
-    return messages.map((m) => ({ kind: "live", id: m.id, message: m }));
+    const rows: Row[] = [];
+    appendLiveWindowRows(rows, sid, messages, 0, live ?? null);
+    return rows;
   }
   const rows: Row[] = [];
   let cursor = 0;
@@ -194,25 +258,24 @@ export function buildRows(sid: string, messages: readonly ChatMessage[]): Row[] 
       rows.push({ kind: "skeleton", id: p.id, pageIndex: i, count: p.count, heightPx: p.heightPx });
     }
   }
-  for (; cursor < messages.length; cursor++) {
-    rows.push({ kind: "live", id: messages[cursor].id, message: messages[cursor] });
-  }
+  appendLiveWindowRows(rows, sid, messages, cursor, live ?? null);
   return rows;
 }
 
-/** 累积高度表（每行的顶偏移）：骨架用记账高度，其余用实测/估算。 */
+/** 累积高度表（每行的顶偏移）：骨架/liveskel 用记账高度，其余用实测/估算。 */
 export function buildCumulative(rows: readonly Row[], heights: ReadonlyMap<string, number>): number[] {
   const cum: number[] = new Array(rows.length + 1);
   cum[0] = 0;
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
-    const h = heights.get(r.id) ?? (r.kind === "skeleton" ? r.heightPx : ESTIMATE_MESSAGE_HEIGHT_PX);
+    const collapsed = r.kind === "skeleton" || r.kind === "liveskel";
+    const h = heights.get(r.id) ?? (collapsed ? r.heightPx : ESTIMATE_MESSAGE_HEIGHT_PX);
     cum[i + 1] = cum[i] + h;
   }
   return cum;
 }
 
-/** 视口顶所在行的页索引（二分行累积表）；落在 live 段/无页时返回 -1。 */
+/** 视口顶所在行的页索引（二分行累积表）；落在 live 段/liveskel/无页时返回 -1。 */
 export function findViewportPageIndex(scrollTop: number, rows: readonly Row[], cum: readonly number[]): number {
   let lo = 0;
   let hi = rows.length - 1;
@@ -227,7 +290,27 @@ export function findViewportPageIndex(scrollTop: number, rows: readonly Row[], c
     }
   }
   const row = rows[rowIdx];
-  return row && row.kind !== "live" ? row.pageIndex : -1;
+  return row && (row.kind === "page" || row.kind === "skeleton") ? row.pageIndex : -1;
+}
+
+/** liveskel 是否进入预取边距带（视口 ±margin×屏高）——进入即应展开
+ *  （与 findRestorableSkeleton 的页骨架带判定同构，两者互斥命中时 liveskel
+ *  优先：它是从 live 尾窗往上读历史的必经门）。纯函数。 */
+export function liveSkeletonInBand(
+  scrollTop: number,
+  clientHeight: number,
+  rows: readonly Row[],
+  cum: readonly number[],
+  margin = 1.5,
+): boolean {
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (r.kind !== "liveskel") continue;
+    const top = cum[i];
+    const bottom = cum[i + 1];
+    return !(bottom < scrollTop - clientHeight * margin || top > scrollTop + clientHeight * (1 + margin));
+  }
+  return false;
 }
 
 /** 距视口最近的待取回骨架页索引（prefetch 边距 = ±margin×视口高）；无则 -1。 */

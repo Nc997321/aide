@@ -1,4 +1,4 @@
-import { computed, getCurrentInstance, getCurrentScope, nextTick, onMounted, onScopeDispose, onUnmounted, ref, watch } from "vue";
+import { computed, getCurrentInstance, getCurrentScope, nextTick, onMounted, onScopeDispose, onUnmounted, reactive, ref, watch } from "vue";
 import type { ComputedRef } from "vue";
 import { trail } from "../utils/diagnostics/scrollTrail";
 import type { ChatMessage, TextBlock } from "@/types/chat";
@@ -8,13 +8,17 @@ import {
   findRestorableSkeleton,
   findViewportPageIndex,
   isRecycleMutating,
-  loadedPagesBytes,
   liveMessageCount,
+  liveSkeletonInBand,
+  loadedPagesBytes,
+  ESTIMATE_MESSAGE_HEIGHT_PX,
+  LIVE_TAIL_ROWS,
   RECYCLE_BYTES_BUDGET,
   releaseFarthestPages,
   restorePage,
   setViewportHot,
   computeRestoreScrollTop,
+  type LiveWindowState,
   type Row,
 } from "./useChatSession/recycle";
 
@@ -41,6 +45,11 @@ import {
  * 内存双保险：recycle 管「页级驻留上限」（字节区间可从 jsonl 确定性重取），
  * evict 管「页内大 block 降级」——2026-08-26 的「只加载不回收」定稿被
  * freeze-1787901573714（渲染进程 1.08GB GC 螺旋 87s 未恢复）证伪推翻。
+ * 第三层（2026-09-07）：live 段窗口化——live 段此前全量挂载且永不回收，切长
+ * 会话瞬峰 1.4-1.55GB 实测定案在其上（memory/long-session-switch-renderer-spike）。
+ * live 窗口 = liveskel（隐藏前缀占位，显示层状态）+ LIVE_TAIL_ROWS 常驻尾窗，
+ * 数据层零改动：收拢在切走时实测（collapseAndTightenForSwitchAway），展开走
+ * store 内存（无 IO），钉底流式滑动在 onNewContent。
  */
 
 export interface ChatScrollOptions {
@@ -52,6 +61,10 @@ export interface ChatScrollOptions {
   rampChunk?: number;
   /** P1 双向分页：由上层（ChatPanel）绑定当前会话注入。缺省 = 无后端取回。 */
   pagination?: ChatScrollPagination;
+  /** 按会话取消息数组——切走收拢/释放操作「离开会话」，而 watcher 时刻
+   *  props.messages 已是新会话的，必须经此取旧会话数据。缺省回落当前会话
+   *  （单会话测试场景够用）。 */
+  messagesOf?: (sid: string) => readonly ChatMessage[];
   /** 可注入的帧调度器：返回一个 cancel 函数。默认 requestAnimationFrame；
    * 测试传同步调度器（vitest 是 node 环境，无 rAF）。scrollToBottom 与 ramp
    * 共用同一调度器。 */
@@ -135,10 +148,18 @@ export function useChatScroll(
   const scheduleFrame = options.scheduleFrame ?? defaultScheduleFrame;
   const pagination = options.pagination;
 
-  /** 行列表：页台账驱动的渲染模型（无台账 = 全 live 兼容路径）。 */
-  const rows: ComputedRef<readonly Row[]> = computed(() =>
-    buildRows(sessionId() ?? "", messages()),
-  );
+  /** 行列表：页台账驱动的渲染模型（无台账 = 全 live 兼容路径）；live 窗口把
+   *  live 段切成「liveskel 隐藏前缀 + 常驻尾窗」（显示层窗口化，store/台账不动）。 */
+  const rows: ComputedRef<readonly Row[]> = computed(() => {
+    const sid = sessionId() ?? "";
+    return buildRows(sid, messages(), liveWindows.get(sid));
+  });
+
+  /** live 段窗口状态（per-instance，sid → { topIdx, perRowPx }）：隐藏前缀由一条
+   *  liveskel 行代表，尾窗 LIVE_TAIL_ROWS 行常驻。切长会话尖峰修复的显示层
+   *  状态（见 plans/2026-09-07-live-window-recycle）——收拢在切走时实测，
+   *  展开来自 store 内存（无 IO），钉底流式滑动在 onNewContent。 */
+  const liveWindows = reactive(new Map<string, LiveWindowState>());
 
   // ── 首帧渲染预算（唯一一层窗口化：防切会话一次性挂载 jam）──────────────
   // 数据层窗口化由页级回收负责（骨架）；这里只控制「首帧挂多少行」再逐帧补到全量。
@@ -162,10 +183,18 @@ export function useChatScroll(
     anchor?: { rowId: string; offsetInRow: number };
   }
   const scrollPositions = new Map<string, ScrollMemory>();
-  /** 进 v-for 的实际列表：rows 尾部 mountedCount 行（首帧 ramp 渐进，之后全量）。 */
+  /** 进 v-for 的实际列表：rows 尾部 mountedCount 行（首帧 ramp 渐进，之后全量）。
+   *  liveskel 例外：它是隐藏前缀的唯一高度代表，必须始终挂载（否则总高失真、
+   *  锚定落点漂移）——尾切片未含它时前置补入；已含（liveskel 落在切片内，
+   *  如过藏态）直接返回，绝不重复输出（Vue 重复 key + 高度翻倍）。 */
   const visibleRows: ComputedRef<readonly Row[]> = computed(() => {
     const list = rows.value;
-    return list.length <= mountedCount.value ? list : list.slice(-mountedCount.value);
+    if (list.length <= mountedCount.value) return list;
+    const lsIdx = list.findIndex((r) => r.kind === "liveskel");
+    if (lsIdx < 0) return list.slice(-mountedCount.value);
+    const tail = list.slice(-mountedCount.value);
+    if (lsIdx >= list.length - mountedCount.value) return tail;
+    return [list[lsIdx], ...tail];
   });
 
   const ramping = ref(false);
@@ -406,12 +435,158 @@ export function useChatScroll(
     return null;
   }
 
+  // ── live 段窗口：收拢 / 滑动 / 展开 ────────────────────────────────────────
+  // 切长会话尖峰的显示层修复：live 段 = liveskel（隐藏前缀，一条占位行）+
+  // LIVE_TAIL_ROWS 常驻尾窗。数据层（store/台账）零改动——隐藏前缀的行本就在
+  // store 里，展开不产生 IO；总高由实测/估算的 liveskel 高度守恒，滚动零跳变。
+
+  /** 收拢 live 窗口（视口锚定）：保留「视口上方 4 屏 + 视口以下全部」的 live 行，
+   *  其余（更早的前缀）收进一条 liveskel。视口整体在 live 区上方（在页区阅读）
+   *  时整段收拢到底部窗。在旧 DOM 还在时调用（切走 watcher pre-flush）：隐藏区
+   *  实测总高直接记账（总高守恒 → distBottom 落点在收拢后仍诚实）。无几何
+   *  （jsdom/未布局）回退条数 × 估算。已展开更宽的窗口不回退。 */
+  function collapseLiveWindow(sid: string, msgs: readonly ChatMessage[]): void {
+    const len = msgs.length;
+    const liveSeg = liveMessageCount(sid, len);
+    if (liveSeg <= LIVE_TAIL_ROWS) {
+      liveWindows.delete(sid);
+      return;
+    }
+    const root = contentEl.value;
+    const el = scrollEl.value;
+    const liveEls = root?.querySelectorAll<HTMLElement>(".chat-row-live");
+    let hiddenCount = -1;
+    let hiddenPx = -1;
+    if (root && el && liveEls && liveEls.length > 0) {
+      const contentTop = root.getBoundingClientRect().top;
+      const docTopOf = (node: Element) => node.getBoundingClientRect().top - contentTop;
+      const mountedTail = liveEls.length; // 挂载 live 行数（= [liveStart+已藏, len) 区）
+      const baseRel = liveSeg - mountedTail; // 挂载首行的 live 段相对下标
+      const lsEl = root.querySelector<HTMLElement>(`[data-row-id="liveskel:${sid}"]`);
+      const regionStart = lsEl ?? liveEls[0]; // live 区（含隐藏前缀）的第一个元素
+      let kept = -1;
+      if (docTopOf(regionStart) > el.scrollTop + el.clientHeight) {
+        // 视口整体在 live 区上方：整段收拢到底部窗（live 区全在视口下方，随便藏）
+        hiddenCount = liveSeg - LIVE_TAIL_ROWS;
+      } else {
+        // 视口锚定：保留视口上方 4 屏起的行，视口以下全保——distBottom/锚行
+        // 落点所依赖的「视口处内容」原样挂载，切回精确恢复
+        const keepAbove = el.scrollTop - el.clientHeight * 4;
+        for (let i = 0; i < mountedTail; i++) {
+          if (docTopOf(liveEls[i]) >= keepAbove) {
+            kept = i;
+            break;
+          }
+        }
+        hiddenCount = kept >= 0 ? baseRel + kept : baseRel;
+      }
+      // 隐藏区实测总高 = 首个保留行 docTop − 区域顶（含已有 liveskel 的记账高）
+      const bottomIdx = hiddenCount === liveSeg - LIVE_TAIL_ROWS
+        ? Math.max(0, mountedTail - LIVE_TAIL_ROWS)
+        : kept;
+      const bottomEl = bottomIdx >= 0 ? liveEls[bottomIdx] : undefined;
+      if (regionStart && bottomEl) {
+        const measured = bottomEl.getBoundingClientRect().top - regionStart.getBoundingClientRect().top;
+        if (measured > 0) hiddenPx = Math.round(measured);
+      }
+    }
+    if (hiddenCount < 0) hiddenCount = liveSeg - LIVE_TAIL_ROWS;
+    const existing = liveWindows.get(sid);
+    if (existing && existing.hiddenCount > hiddenCount) return; // 已展开更宽：收拢不回退
+    if (hiddenPx < 0) {
+      hiddenPx =
+        existing && existing.hiddenCount === hiddenCount
+          ? existing.hiddenPx
+          : hiddenCount * ESTIMATE_MESSAGE_HEIGHT_PX;
+    }
+    liveWindows.set(sid, { hiddenCount, hiddenPx: Math.max(1, hiddenPx) });
+    trail("recycle", `liveCollapse ${sid.slice(0, 8)} hidden=${hiddenCount} hiddenPx=${hiddenPx}`);
+  }
+
+  /** 切入会话时的窗口保障：live 段超窗而未收拢（重开/后台增长）→ 滑到尾窗，
+   *  新增隐藏行按估算累加（真实行高在下次收拢/展开实测收敛）；live 段缩到
+   *  窗内（revert 等）→ 清窗口。只增隐藏、不展开。 */
+  function slideLiveWindowToTail(sid: string): void {
+    const len = messages().length;
+    const liveSeg = liveMessageCount(sid, len);
+    if (liveSeg <= LIVE_TAIL_ROWS) {
+      liveWindows.delete(sid);
+      return;
+    }
+    const targetHidden = liveSeg - LIVE_TAIL_ROWS;
+    const existing = liveWindows.get(sid);
+    if (!existing) {
+      // 无实测来源（旧 DOM 已不在）：条数 × 估算兜底
+      liveWindows.set(sid, { hiddenCount: targetHidden, hiddenPx: targetHidden * ESTIMATE_MESSAGE_HEIGHT_PX });
+      return;
+    }
+    if (existing.hiddenCount >= liveSeg) {
+      // 过藏（dispose 后同 sid 重开，内容已换，旧窗口大于现存 live 段）：
+      // 按 px/条比例折算重建到尾窗，防 stale 大窗口把 live 段整段吞掉
+      liveWindows.set(sid, {
+        hiddenCount: targetHidden,
+        hiddenPx: Math.max(1, Math.round((existing.hiddenPx * targetHidden) / existing.hiddenCount)),
+      });
+      return;
+    }
+    if (existing.hiddenCount < targetHidden) {
+      const added = targetHidden - existing.hiddenCount;
+      liveWindows.set(sid, { hiddenCount: targetHidden, hiddenPx: existing.hiddenPx + added * ESTIMATE_MESSAGE_HEIGHT_PX });
+    }
+  }
+
+  /** 展开 liveskel 一个 chunk：新行来自 store 内存（无 IO）。视口补偿复用
+   *  sh-delta 公式（新行插在视口上方/骑跨统一）；展开后实测新行总高扣减
+   *  隐藏区记账——liveskel 剩余高度随之自校正。 */
+  const expandingLive = ref(false);
+  async function expandLiveAnchored(): Promise<void> {
+    const el = scrollEl.value;
+    const sid = sessionId();
+    const win = sid ? liveWindows.get(sid) : undefined;
+    if (!el || !sid || !win || expandingLive.value || restoring.value || loadingOlder.value) return;
+    const liveSeg = liveMessageCount(sid, messages().length);
+    const hidden = Math.min(win.hiddenCount, liveSeg);
+    if (hidden <= 0) return;
+    if (ramping.value) userTookScroll();
+    expandingLive.value = true;
+    try {
+      const chunk = Math.min(hidden, LIVE_TAIL_ROWS);
+      const newHidden = hidden - chunk;
+      const prevTop = el.scrollTop;
+      const prevHeight = el.scrollHeight;
+      liveWindows.set(sid, { ...win, hiddenCount: newHidden });
+      await nextTick();
+      if (el.scrollTop !== prevTop) return; // 展开期间用户滚动：放弃补偿
+      // 实测新行总高 → 扣减隐藏区总高（liveskel 高度随之自校正）
+      const liveEls = contentEl.value?.querySelectorAll<HTMLElement>(".chat-row-live");
+      if (liveEls && liveEls.length >= chunk) {
+        let measured = 0;
+        for (let i = 0; i < chunk; i++) measured += liveEls[i].getBoundingClientRect().height;
+        measured = Math.round(measured);
+        if (newHidden <= 0) {
+          liveWindows.delete(sid); // 全量展开：liveskel 退役
+        } else {
+          const corrected = measured > 0 ? Math.max(1, win.hiddenPx - measured) : win.hiddenPx;
+          liveWindows.set(sid, { hiddenCount: newHidden, hiddenPx: corrected });
+        }
+        await nextTick(); // 修正后的 liveskel 高度进 DOM，再读几何补偿
+      }
+      if (el.scrollTop !== prevTop) return; // 校正期间用户滚动：放弃补偿
+      el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
+      mountedCount.value = Math.max(mountedCount.value, rows.value.length);
+      trail("expand", `live ${Math.round(prevTop)}→${Math.round(el.scrollTop)} hidden=${newHidden}`);
+      scheduleSettle(); // 展开后复查：另一侧的骨架/窗口可能进入预取带
+    } finally {
+      expandingLive.value = false;
+    }
+  }
+
   /** 滚动停驻结算：量高 → 定位视口页 → 上报热区 → 超预算释放热区外页 →
-   *  prefetch 边距内骨架取回。ramp/mutate 在途不动结构。 */
+   *  prefetch 边距内 liveskel 展开 / 骨架取回。ramp/mutate 在途不动结构。 */
   function settleRecycle() {
     const el = scrollEl.value;
     const sid = sessionId();
-    if (!el || !sid || ramping.value || loadingOlder.value || restoring.value || isRecycleMutating(sid)) return;
+    if (!el || !sid || ramping.value || loadingOlder.value || restoring.value || expandingLive.value || isRecycleMutating(sid)) return;
     const heights = measureRowHeights();
     const cum = buildCumulative(rows.value, heights);
     const pageIdx = findViewportPageIndex(el.scrollTop, rows.value, cum);
@@ -428,9 +603,13 @@ export function useChatScroll(
         },
       );
     }
-    // prefetch：骨架接近视口即取回（带视口补偿，内容不跳）
-    const skelIdx = findRestorableSkeleton(el.scrollTop, el.clientHeight, rows.value, cum, SKELETON_PREFETCH_MARGIN);
-    if (skelIdx >= 0) void restoreAnchored(skelIdx);
+    // prefetch：liveskel 优先（进入 live 段的必经门），其次页骨架——两者都带视口补偿
+    if (liveSkeletonInBand(el.scrollTop, el.clientHeight, rows.value, cum, SKELETON_PREFETCH_MARGIN)) {
+      void expandLiveAnchored();
+    } else {
+      const skelIdx = findRestorableSkeleton(el.scrollTop, el.clientHeight, rows.value, cum, SKELETON_PREFETCH_MARGIN);
+      if (skelIdx >= 0) void restoreAnchored(skelIdx);
+    }
   }
 
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -442,12 +621,37 @@ export function useChatScroll(
     }, SCROLL_SETTLE_MS);
   }
 
+  /** 切走收尾：收拢 live 窗口（旧 DOM 实测）+ 收紧已加载页（热区 ±1 豁免）。
+   *  在 watch(sessionId) pre-flush 里调用——此刻 scrollEl/children 还是离开
+   *  会话的，props.messages 已是新会话的（旧会话数据经 messagesOf 取）。
+   *  目的：切走后该会话的 DOM = 骨架 div + liveskel + 尾窗，切回零尖峰。 */
+  function collapseAndTightenForSwitchAway(oldId: string): void {
+    const msgs = options.messagesOf?.(oldId) ?? messages();
+    const heights = measureRowHeights();
+    collapseLiveWindow(oldId, msgs);
+    if (isRecycleMutating(oldId)) return; // 取回在途：本次不收紧，下次切走重试
+    const oldRows = buildRows(oldId, msgs, liveWindows.get(oldId) ?? null);
+    const el = scrollEl.value;
+    const cum = buildCumulative(oldRows, heights);
+    const pageIdx = el ? findViewportPageIndex(el.scrollTop, oldRows, cum) : -1;
+    const released = releaseFarthestPages(
+      oldId,
+      { budget: 0, hotPageIndex: pageIdx >= 0 ? pageIdx : undefined },
+      (i) => {
+        // 待释放页若挂着：实测行高作骨架高（总高不变）；未挂载 → recycle 内估算
+        const row = oldRows.find((r) => r.kind === "page" && r.pageIndex === i);
+        return row ? heights.get(row.id) : undefined;
+      },
+    );
+    if (released > 0) trail("recycle", `switchAway ${oldId.slice(0, 8)} released=${released} hot=${pageIdx}`);
+  }
+
   /** 取回骨架页 + 视口补偿：骨架/真实内容的高度差按「页顶相对视口位置不变」
    *  补偿（computeRestoreScrollTop 纯函数），骨架在视口上方/骑跨两情形统一。 */
   async function restoreAnchored(pageIndex: number) {
     const el = scrollEl.value;
     const sid = sessionId();
-    if (!el || !sid || restoring.value || loadingOlder.value) return;
+    if (!el || !sid || restoring.value || loadingOlder.value || expandingLive.value) return;
     // 结构性操作（页级取回 splice messages）不与 ramp 并行：先按接管语义落定
     // （ramp 停 + 全量挂载），再取回——否则行模型在分帧挂载中途变化，锚定/窗口都失真
     if (ramping.value) userTookScroll();
@@ -476,7 +680,7 @@ export function useChatScroll(
    *  （一页几十条，一次性挂载可接受；首帧 ramp 只服务于切会话首帧）。 */
   async function expandOlderAnchored() {
     const el = scrollEl.value;
-    if (!el || loadingOlder.value || restoring.value || !(pagination?.hasMore() ?? false)) return;
+    if (!el || loadingOlder.value || restoring.value || expandingLive.value || !(pagination?.hasMore() ?? false)) return;
     loadingOlder.value = true;
     try {
       cancelRamp(); // 用户接管，停掉自动 ramp
@@ -484,6 +688,9 @@ export function useChatScroll(
       const prevTop = el.scrollTop;
       const count = await pagination!.loadOlder(pageBytes);
       if (count > 0) {
+        // live 窗口不动：loadOlderPage 必建台账页（prepend 只移动 liveStart），
+        // hiddenCount 是 live 段相对量、锚定同一内容——页释放/取回/插入均不改它
+        //（recycle.ts LiveWindowState 不变量）。
         if (el.scrollTop !== prevTop) return; // 加载期间用户滚动，放弃补偿
         await nextTick();
         // 视口补偿：新页插在顶部，scrollTop 同步下移 = 看到的旧内容位置不变
@@ -614,9 +821,29 @@ export function useChatScroll(
     });
   }
 
-  // 新消息/流式增量到达：上翻阅读中则点亮「回到底部」的新消息小点；
-  // 置底本身仍交给 scrollToBottom（autoScroll=false 时它自己 no-op）
+  // 新消息/流式增量到达：钉底时 live 窗口滑到尾窗（挂载 live 行数恒 ≤ K，DOM
+  // 有界）。滑动量以 DOM 实测为准（挂载尾 − K）：真 append 时挂载尾 +1 → 滑 1；
+  // 无台账 prepend（上翻把更早消息并进 live 段头部）不触发——那批行的平移由
+  // expandOlderAnchored 显式 +count 负责，两套机制对同一事件只走一条。滑出行
+  // 此刻仍挂载（watcher 在渲染前跑），实测其高折入隐藏区总高，总高守恒；
+  // 非钉底=用户在 live 区阅读，不滑动、不偷位置。上翻阅读中点亮「回到底部」
+  // 圆点；置底交给 scrollToBottom（autoScroll=false 时 no-op）。
   function onNewContent() {
+    const sid = sessionId();
+    if (sid && autoScroll.value) {
+      const win = liveWindows.get(sid);
+      const els = contentEl.value?.querySelectorAll<HTMLElement>(".chat-row-live") ?? [];
+      const overflow = els.length - LIVE_TAIL_ROWS;
+      if (win && overflow > 0) {
+        let add = 0;
+        for (let i = 0; i < overflow; i++) {
+          // 零高（面板隐藏/未布局）回退估算，防 hiddenPx 漏记（同 measureRowHeights 惯例）
+          const h = Math.round(els[i].getBoundingClientRect().height);
+          add += h > 0 ? h : ESTIMATE_MESSAGE_HEIGHT_PX;
+        }
+        liveWindows.set(sid, { hiddenCount: win.hiddenCount + overflow, hiddenPx: win.hiddenPx + add });
+      }
+    }
     if (!autoScroll.value) newWhileAway.value = true;
     scrollToBottom();
   }
@@ -695,6 +922,10 @@ export function useChatScroll(
           distBottom: scrollEl.value.scrollHeight - scrollEl.value.scrollTop,
           anchor: measureViewportAnchor() ?? undefined,
         });
+        // 切走收尾（读旧 DOM，必须在本 watcher 里、渲染前）：live 窗口收拢 +
+        // 已加载页收紧——切走后会话 DOM 只剩骨架 + liveskel + 尾窗（见
+        // collapseAndTightenForSwitchAway）。
+        collapseAndTightenForSwitchAway(oldId);
       }
       cancelRamp();
       rampPending = false;
@@ -711,6 +942,8 @@ export function useChatScroll(
       farFromBottom.value = false;
       newWhileAway.value = false;
       if (!newId) return; // hero（零会话）：不 ramp
+      // 切入保障：live 段超窗而未收拢（重开/后台增长）→ 滑到尾窗，切回零尖峰
+      slideLiveWindowToTail(newId);
       const saved = scrollPositions.get(newId);
       if (saved === undefined) {
         // 首次打开（无位置记忆）：钉底看最新 + 分帧挂载
@@ -741,7 +974,8 @@ export function useChatScroll(
   // hydrate 补交：切到未加载会话时挂起的 ramp，在 messages 0→N 那一下触发。
   // pre-flush 保证那一帧渲染前 mountedCount 已重置回首帧预算。rampPending 仅 0→N
   // 触发一次，流式逐条追加（n 持续增）不重复 ramp。落点策略随挂起时的入口
-  // （首开=bottom / 切回=anchor）。
+  // （首开=bottom / 切回=anchor）。live 窗口在此补收拢：切入时消息未到（窗口被
+  // 清）→ 到齐后按尾窗重收拢，distBottom 落点在总高守恒下恢复精确。
   watch(
     () => messages().length,
     (n) => {
@@ -749,6 +983,8 @@ export function useChatScroll(
         rampPending = false;
         const pin = rampPendingPin ?? { kind: "bottom" as const };
         rampPendingPin = null;
+        const sid = sessionId();
+        if (sid) slideLiveWindowToTail(sid);
         startRamp(pin);
       }
     },
@@ -780,5 +1016,6 @@ export function useChatScroll(
     newWhileAway,
     expandOlderAnchored,
     restoreAnchored,
+    expandLiveAnchored,
   };
 }
