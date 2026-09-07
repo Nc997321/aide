@@ -45,8 +45,12 @@ impl Config {
             revision_merge_window_seconds: env_parse("KB_REVISION_MERGE_WINDOW_SECONDS", 300),
             cors_allowed_origins: env_list(
                 "KB_CORS_ALLOWED_ORIGINS",
-                // 默认只放行 Tauri v2 WebView 的两个常见 origin 与本机 dev server
-                "http://tauri.localhost,tauri://localhost,http://localhost:5173",
+                // 默认放行三种形态：Tauri v2 打包版（tauri://localhost）、Tauri v2 dev
+                // （WebView 加载 http://tauri.localhost）与本机 tauri dev 的前端 dev server
+                // （vite.config.ts 把端口钉在 1420，不是 5173——之前写 5173 是错的）。
+                // 独立部署的浏览器前端（如 http://localhost:5173 裸 vite）不在默认里，
+                // 需要时用 KB_CORS_ALLOWED_ORIGINS 显式加。
+                "http://tauri.localhost,tauri://localhost,http://localhost:1420",
             ),
             allowed_cidrs: env_list("KB_ALLOWED_CIDR", ""),
         }

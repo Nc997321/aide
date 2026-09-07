@@ -37,8 +37,10 @@ services:
       KB_HOST: 0.0.0.0
       KB_PORT: 8788
       KB_STORAGE_DIR: /app/storage
-      # 默认值只放行 aide 桌面端。客户实际前端地址要显式改它，别用 *
-      KB_CORS_ALLOWED_ORIGINS: ${KB_CORS_ALLOWED_ORIGINS:-http://tauri.localhost,tauri://localhost}
+      # 默认放行 aide 桌面端（打包版 tauri://localhost、dev 形态 http://tauri.localhost）
+      # 与本机 tauri dev 的前端 dev server（1420，见 vite.config.ts；5173 是裸 vite 专用，
+      # 需要浏览器直连时用 KB_CORS_ALLOWED_ORIGINS 显式加）。客户实际前端地址要显式改它，别用 *
+      KB_CORS_ALLOWED_ORIGINS: ${KB_CORS_ALLOWED_ORIGINS:-http://tauri.localhost,tauri://localhost,http://localhost:1420}
     ports:
       - "8788:8788"
     volumes:
