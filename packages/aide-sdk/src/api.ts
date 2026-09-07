@@ -638,6 +638,10 @@ export const api = {
   listWorkspaces(): Promise<WorkspaceInfo[]> {
     return getTransport().invoke("list_workspaces");
   },
+  /** 桌面当前活动工作区（key = 编码键，与 listWorkspaces 同源；path = 解码路径）；null = 未设置。远程只读——活动工作区由桌面独占管理。 */
+  getActiveWorkspace(): Promise<{ key: string; path: string } | null> {
+    return getTransport().invoke("get_active_workspace");
+  },
   setWorkspace(key: string, path: string): Promise<void> {
     return getTransport().invoke("set_workspace", { key, path });
   },

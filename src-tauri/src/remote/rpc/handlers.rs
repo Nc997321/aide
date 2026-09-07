@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Manager};
 
@@ -461,6 +461,36 @@ pub fn session_provider(
 }
 
 // ── 工作区与信任 ──
+
+/// 活动工作区快照：key 与 list_workspaces 的 key 同源（编码键），path 为解码
+/// 路径；未设置工作区（key/path 任一为 None）序列化为 null，手机端退占位名。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActiveWorkspace {
+    key: String,
+    path: String,
+}
+
+/// 查询桌面当前活动工作区（远程展示用：手机端「跟随桌面」槽位解析真名）。
+/// 纯状态读取，无 IO；与 set_workspace（桌面内部命令，未白名单）相对——远程
+/// 只读不写，活动工作区仍由桌面独占管理。
+pub fn get_active_workspace(
+    app: AppHandle,
+    _params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let ws_state = app.state::<WorkspaceState>();
+        let key = ws_state.key.lock().map_err(|e| e.to_string())?.clone();
+        let path = ws_state.path.lock().map_err(|e| e.to_string())?.clone();
+        match (key, path) {
+            (Some(k), Some(p)) => to_json(Ok(Some(ActiveWorkspace {
+                key: k,
+                path: p.to_string_lossy().to_string(),
+            }))),
+            _ => to_json(Ok(None::<ActiveWorkspace>)),
+        }
+    })
+}
 
 pub fn list_workspaces(
     _app: AppHandle,
