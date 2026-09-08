@@ -71,6 +71,14 @@ const NEAR_BOTTOM_TAIL: number = 3;
 /** toast 深底（原型 rgba(29,33,41,.9)）。 */
 const TOAST_BG: ResourceColor = '#E61D2129';
 
+/** 模型浮层卡宽自适应上下限：上限 = 原型 .md-pop 定宽 236（长选项截断的
+ *  上界），下限盖住空态文案「正在获取模型列表…」。 */
+const MODEL_POP_MIN_W: number = 150;
+const MODEL_POP_MAX_W: number = 236;
+
+/** 思考程度浮层卡宽（原型 .ef-pop 定宽 218；三档行结构固定，无需自适应）。 */
+const EFFORT_POP_W: number = 218;
+
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
 }
@@ -124,6 +132,8 @@ export struct ChatPage {
   /** 页面根高度（onAreaChange 回写；计划卡正文限高的换算基准。不用 List 视口
    *  高折算：权限卡出现会压缩 List，用它做限高会形成布局反馈环）。 */
   @Local rootHeight: number = 0;
+  /** 页面根宽度（onAreaChange 回写；思考程度浮层右缘收边的换算基准）。 */
+  @Local rootWidth: number = 0;
   /** 工具行实测高（onAreaChange 回写；浮层底缘锚定的换算基准：底缘 = 输入栏
    *  底 padding 8 + 工具行高 + 间距 8 = 工具行上缘再让 8px，对照原型
    *  .md-pop bottom: calc(100% + 8px)——面板浮在输入框区上方，紧贴其 chip）。 */
@@ -330,7 +340,9 @@ export struct ChatPage {
     .width('100%')
     .padding({ left: 10, right: 10, top: 8, bottom: 10 })
     .alignItems(VerticalAlign.Center)
-    .backgroundColor($r('app.color.card_bg'))
+    // background() 而非 backgroundColor()：顶栏贴安全区顶缘，白卡背景延伸进
+    // 状态栏避让区（组件级沉浸）——状态栏与顶栏连成一体，不再灰白割裂
+    .background($r('app.color.card_bg'))
     .border({ width: { bottom: 1 }, color: $r('app.color.line') })
   }
 
@@ -854,7 +866,9 @@ export struct ChatPage {
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-    .backgroundColor($r('app.color.card_bg'))
+    // background() 而非 backgroundColor()：输入栏贴安全区底缘，白色卡背景
+    // 延伸进底部导航条避让区（组件级沉浸）——否则灰条出现在白卡下方仍显割裂
+    .background($r('app.color.card_bg'))
     .border({ width: { top: 1 }, color: $r('app.color.line') })
   }
 
@@ -921,9 +935,11 @@ export struct ChatPage {
     })
   }
 
-  /** 模型浮层（原型 .md-pop：宽 236、radius 14、选项行 accent 描边 + 勾）。
-   *  结构同供应商弹层：遮罩即全屏容器（点空白收起），面板为子节点（空 onClick
-   *  防落穿），底缘锚在工具行上方 8px（chipBarHeight + 输入栏底 padding 8 + 间距 8）。 */
+  /** 模型浮层（原型 .md-pop：radius 14、选项行 accent 描边 + 勾）。
+   *  卡宽随最长选项行内容量测自适应（夹在 MODEL_POP_MIN/MAX_W；桌面原型定宽
+   *  236 在手机上会在短模型名后留大片空白）。结构同供应商弹层：遮罩即全屏
+   *  容器（点空白收起），面板为子节点（空 onClick 防落穿），底缘锚在工具行
+   *  上方 8px（chipBarHeight + 输入栏底 padding 8 + 间距 8）。 */
   @Builder
   modelPopView() {
     Column() {
@@ -940,7 +956,7 @@ export struct ChatPage {
             .padding({ top: 14, bottom: 14 })
         }
       }
-      .width(236)
+      .width(this.modelPopWidth())
       .padding(6)
       .borderRadius(14)
       .backgroundColor($r('app.color.card_bg'))
@@ -1007,7 +1023,8 @@ export struct ChatPage {
   }
 
   /** 思考程度浮层（原型 .ef-pop：宽 218；选项行带 30px 档位图标圆）。
-   *  结构同模型浮层：遮罩即全屏容器，左缘锚在思考 chip（模型 chip 右缘 + 间距 8）。 */
+   *  结构同模型浮层：遮罩即全屏容器，左缘锚在思考 chip（模型 chip 右缘 + 间距
+   *  8）；锚位 + 卡宽将右缘顶出屏幕时整体左收（effortPopLeft，右边距仍 12）。 */
   @Builder
   effortPopView() {
     Column() {
@@ -1016,13 +1033,13 @@ export struct ChatPage {
           this.effortOptRow(t)
         }, (t: EffortTier) => t.value)
       }
-      .width(218)
+      .width(EFFORT_POP_W)
       .padding(6)
       .borderRadius(14)
       .backgroundColor($r('app.color.card_bg'))
       .border({ width: 1, color: $r('app.color.line') })
       .shadow({ radius: 36, color: '#241D2129', offsetX: 0, offsetY: 12 })
-      .margin({ left: 12 + this.modelChipWidth + 8, bottom: this.chipBarHeight + 16 })
+      .margin({ left: this.effortPopLeft(), bottom: this.chipBarHeight + 16 })
       .onClick(() => {
         // 空点击拦截落穿
       })
@@ -1098,7 +1115,7 @@ export struct ChatPage {
   }
 
   /** 档位图标（原型 EF_ICONS：低=闪电 / 中=天平 / 高=钻石；sys.symbol 无天平，
-   * 以表盘 dial 代「均衡/有度」意）。 */
+   *  以表盘 dial 代「均衡/有度」意）。 */
   private effortIcon(v: string): Resource {
     if (v === 'low') {
       return $r('sys.symbol.bolt');
@@ -1107,6 +1124,48 @@ export struct ChatPage {
       return $r('sys.symbol.diamond');
     }
     return $r('sys.symbol.dial');
+  }
+
+  /** 文本单行宽量测：字号以 fp 传入（与 Text 组件一致），px 结果回 vp。
+   *  量测只支持默认字体，mono 文本由调用方加冗余兜住。 */
+  private textWidthVp(text: string, fontSize: number, weight: FontWeight): number {
+    const w: number = this.getUIContext().getMeasureUtils().measureText({
+      textContent: text,
+      fontSize: fontSize,
+      fontWeight: weight
+    });
+    return this.getUIContext().px2vp(w);
+  }
+
+  /** 模型浮层卡宽：最长选项行内容量测（名称截断上限 + 6 + 值 + 6 + 勾位恒
+   *  预留——选中态不改变卡宽）+ 行/面板 padding 与边框，夹在上下限之间。 */
+  private modelPopWidth(): number {
+    let inner: number = 0;
+    for (let i = 0; i < this.store.modelOptions.length; i++) {
+      const o: ModelOption = this.store.modelOptions[i];
+      const hasValue: boolean = o.value !== o.displayName;
+      let w: number = Math.min(this.textWidthVp(o.displayName, 14, FontWeight.Medium), hasValue ? 96 : 160);
+      if (hasValue) {
+        w += 6 + this.textWidthVp(o.value, 10, FontWeight.Normal) * 1.15;
+      }
+      w += 6 + 16;
+      if (w > inner) {
+        inner = w;
+      }
+    }
+    const total: number = inner + 36;
+    return Math.min(Math.max(total, MODEL_POP_MIN_W), MODEL_POP_MAX_W);
+  }
+
+  /** 思考浮层左缘：锚思考 chip（模型 chip 右缘 + 间距 8）；锚位 + 卡宽将右缘
+   *  顶出屏幕时整体左收（右边距 12 对齐输入栏），极窄屏兜底 12。 */
+  private effortPopLeft(): number {
+    const anchor: number = 12 + this.modelChipWidth + 8;
+    if (this.rootWidth <= 0) {
+      return anchor;
+    }
+    const limit: number = this.rootWidth - EFFORT_POP_W - 12;
+    return Math.max(12, Math.min(anchor, limit));
   }
 
   /** chip 文案：选中项展示名 → 默认（选项集首位）→ 占位「模型」。 */
@@ -1293,6 +1352,10 @@ export struct ChatPage {
       const h: number = typeof n.height === 'number' ? n.height : 0;
       if (h > 0) {
         this.rootHeight = h;
+      }
+      const w: number = typeof n.width === 'number' ? n.width : 0;
+      if (w > 0) {
+        this.rootWidth = w;
       }
     })
   }
