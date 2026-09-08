@@ -30,7 +30,7 @@
  */
 import { AideEvent } from '../sdk/transport';
 import { ConnModel, connModel } from '../conn/ConnModel';
-import { api } from '../sdk/api';
+import { api, MetaField } from '../sdk/api';
 import { BgTaskInfo, ModelOption, ProviderConfigView } from '../sdk/types';
 import { ChatStore } from './chat/ChatStore';
 import { ChatMessage, PendingJump, PermissionRequest } from './chat/ChatBlocks';
@@ -405,7 +405,7 @@ export class ChatModel {
     }
     try {
       const live: boolean = await api.setModel(sid, value);
-      await api.setSessionModel(sid, value); // 记忆恒写（live/deferred 都记住选择）
+      await api.setSessionMeta(sid, { model: MetaField.set(value) }); // 记忆恒写（live/deferred 都记住选择）
       return live ? 'live' : 'deferred';
     } catch (e) {
       if (this.store.sid === sid) {
@@ -429,7 +429,7 @@ export class ChatModel {
     }
     try {
       const live: boolean = await api.setEffort(sid, value);
-      await api.setSessionEffort(sid, value);
+      await api.setSessionMeta(sid, { effort: MetaField.set(value) });
       return live ? 'live' : 'deferred';
     } catch (e) {
       if (this.store.sid === sid) {

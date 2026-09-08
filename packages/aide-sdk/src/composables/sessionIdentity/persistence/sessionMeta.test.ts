@@ -1,17 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { SessionMetaPatch } from "../../../types/chat";
 
-// ── api mock：sessionProvider/sessionModel 读受控；setSessionProvider/setSessionModel 记录写回 ──
+// ── api mock：sessionProvider/sessionModel 读受控；setSessionMeta 记录写回 ──
 const sessionProviderMock = vi.fn<(id: string) => Promise<string | null>>();
 const sessionModelMock = vi.fn<(id: string) => Promise<string | null>>();
-const setSessionProviderMock = vi.fn<(id: string, provider: string) => Promise<void>>();
-const setSessionModelMock = vi.fn<(id: string, model: string) => Promise<void>>();
+const setSessionMetaMock = vi.fn<(id: string, patch: SessionMetaPatch) => Promise<void>>();
 
 vi.mock("../../../api", () => ({
   api: {
     sessionProvider: (id: string) => sessionProviderMock(id),
     sessionModel: (id: string) => sessionModelMock(id),
-    setSessionProvider: (id: string, provider: string) => setSessionProviderMock(id, provider),
-    setSessionModel: (id: string, model: string) => setSessionModelMock(id, model),
+    setSessionMeta: (id: string, patch: SessionMetaPatch) => setSessionMetaMock(id, patch),
   },
 }));
 
@@ -21,10 +20,8 @@ describe("sessionMeta (L1 persistence)", () => {
   beforeEach(() => {
     sessionProviderMock.mockReset();
     sessionModelMock.mockReset();
-    setSessionProviderMock.mockReset();
-    setSessionModelMock.mockReset();
-    setSessionProviderMock.mockResolvedValue(undefined);
-    setSessionModelMock.mockResolvedValue(undefined);
+    setSessionMetaMock.mockReset();
+    setSessionMetaMock.mockResolvedValue(undefined);
   });
 
   describe("readSessionMeta", () => {
@@ -60,56 +57,47 @@ describe("sessionMeta (L1 persistence)", () => {
   });
 
   describe("writeSessionMeta", () => {
-    it("provider 非空 → 调 setSessionProvider，不调 setSessionModel", async () => {
-      await writeSessionMeta("s1", { provider: "p_a" });
-      expect(setSessionProviderMock).toHaveBeenCalledWith("s1", "p_a");
-      expect(setSessionModelMock).not.toHaveBeenCalled();
+    it("set 语义 → patch 原样下发", async () => {
+      await writeSessionMeta("s1", {
+        provider: { op: "set", value: "p_a" },
+        model: { op: "set", value: "m1" },
+        effort: { op: "set", value: "high" },
+      });
+      expect(setSessionMetaMock).toHaveBeenCalledWith("s1", {
+        provider: { op: "set", value: "p_a" },
+        model: { op: "set", value: "m1" },
+        effort: { op: "set", value: "high" },
+      });
     });
 
-    it("model 非空 → 调 setSessionModel，不调 setSessionProvider", async () => {
-      await writeSessionMeta("s1", { model: "deepseek-v4-flash:0731-cloud" });
-      expect(setSessionModelMock).toHaveBeenCalledWith("s1", "deepseek-v4-flash:0731-cloud");
-      expect(setSessionProviderMock).not.toHaveBeenCalled();
+    it("回归（2026-09-08）：多字段只发一次 IPC——此前是 Promise.all 两条单字段命令，各写一遍 <sid>.json，后写的覆盖先写的", async () => {
+      await writeSessionMeta("s1", {
+        provider: { op: "set", value: "p_a" },
+        model: { op: "set", value: "m1" },
+      });
+      expect(setSessionMetaMock).toHaveBeenCalledTimes(1);
     });
 
-    it("provider=null → 删字段（传空串）", async () => {
-      await writeSessionMeta("s1", { provider: null });
-      expect(setSessionProviderMock).toHaveBeenCalledWith("s1", "");
+    it("clear 语义 → 下发 { op: 'clear' }（取代空串魔法值）", async () => {
+      await writeSessionMeta("s1", { provider: { op: "clear" } });
+      expect(setSessionMetaMock).toHaveBeenCalledWith("s1", { provider: { op: "clear" } });
     });
 
-    it("model='' → 删字段（传空串）", async () => {
-      await writeSessionMeta("s1", { model: "" });
-      expect(setSessionModelMock).toHaveBeenCalledWith("s1", "");
-    });
-    it("model=null → 删字段（传空串，?? null 臂）", async () => {
-      await writeSessionMeta("s1", { model: null });
-      expect(setSessionModelMock).toHaveBeenCalledWith("s1", "");
-    });
-    it("provider=null → 删字段（传空串，?? null 臂）", async () => {
-      await writeSessionMeta("s1", { provider: null });
-      expect(setSessionProviderMock).toHaveBeenCalledWith("s1", "");
+    it("省略的字段不进 patch（keep 由 api 层补齐）", async () => {
+      await writeSessionMeta("s1", { model: { op: "set", value: "m1" } });
+      expect(setSessionMetaMock).toHaveBeenCalledWith("s1", { model: { op: "set", value: "m1" } });
     });
 
-    it("provider=undefined → 不调 setSessionProvider", async () => {
-      await writeSessionMeta("s1", { model: "x" });
-      expect(setSessionProviderMock).not.toHaveBeenCalled();
-    });
-
-    it("model=undefined → 不调 setSessionModel", async () => {
-      await writeSessionMeta("s1", { provider: "p_a" });
-      expect(setSessionModelMock).not.toHaveBeenCalled();
-    });
-
-    it("同时 provider+model → 两个都调", async () => {
-      await writeSessionMeta("s1", { provider: "p_a", model: "m1" });
-      expect(setSessionProviderMock).toHaveBeenCalledWith("s1", "p_a");
-      expect(setSessionModelMock).toHaveBeenCalledWith("s1", "m1");
-    });
-
-    it("空 patch → 两个都不调", async () => {
+    it("空 patch → 仍下发一次（全 keep，盘上不动）", async () => {
       await writeSessionMeta("s1", {});
-      expect(setSessionProviderMock).not.toHaveBeenCalled();
-      expect(setSessionModelMock).not.toHaveBeenCalled();
+      expect(setSessionMetaMock).toHaveBeenCalledWith("s1", {});
+    });
+
+    it("写失败冒泡给调用方（L1 不吞错，落盘失败影响跨重启）", async () => {
+      setSessionMetaMock.mockRejectedValueOnce(new Error("disk full"));
+      await expect(
+        writeSessionMeta("s1", { provider: { op: "set", value: "p_a" } }),
+      ).rejects.toThrow("disk full");
     });
   });
 });

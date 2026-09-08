@@ -9,6 +9,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Manager};
 
 use super::{parse, to_json, BoxFuture};
+use crate::commands::session::MetaField;
 use crate::commands::WorkspaceState;
 use crate::runtime::AgentRuntimeManager;
 use crate::settings::SettingsService;
@@ -387,30 +388,32 @@ pub fn session_last_event(
     })
 }
 
+/// 会话元数据写入的**唯一**远程入口。
+///
+/// 三个字段都是 `MetaField` 三态（keep / clear / set），缺省 keep——远程端（OHO）
+/// 只写其中一个字段时其余原样保留。取代此前的 set_session_model / set_session_effort /
+/// set_session_provider 三个单字段命令：它们各写一遍 `<id>.json`，并发时互相覆盖。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SetSessionMetaArgs {
     id: String,
-    /// model / effort / provider 共用值字段——按调用命令分别落到对应参数名。
-    #[serde(rename = "model")]
-    model: Option<String>,
-    #[serde(rename = "effort")]
-    effort: Option<String>,
-    #[serde(rename = "provider")]
-    provider: Option<String>,
+    #[serde(default)]
+    provider: MetaField,
+    #[serde(default)]
+    model: MetaField,
+    #[serde(default)]
+    effort: MetaField,
 }
 
-// 元数据三件套各自独立包装（值字段互斥，由调用命令决定取哪个）——
-// 比一个「万能 meta 包装」更直白，serde 漏传直接报错。
-
-pub fn set_session_model(
+pub fn set_session_meta(
     _app: AppHandle,
     params: Value,
 ) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: SetSessionMetaArgs = parse(params)?;
-        let model = a.model.ok_or("缺少 model 字段")?;
-        to_json(crate::commands::session::set_session_model(a.id, model).await)
+        to_json(
+            crate::commands::session::set_session_meta(a.id, a.provider, a.model, a.effort).await,
+        )
     })
 }
 
@@ -421,32 +424,10 @@ pub fn session_model(_app: AppHandle, params: Value) -> BoxFuture<'static, Resul
     })
 }
 
-pub fn set_session_effort(
-    _app: AppHandle,
-    params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let a: SetSessionMetaArgs = parse(params)?;
-        let effort = a.effort.ok_or("缺少 effort 字段")?;
-        to_json(crate::commands::session::set_session_effort(a.id, effort).await)
-    })
-}
-
 pub fn session_effort(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: SessionIdOnlyArgs = parse(params)?;
         to_json(crate::commands::session::session_effort(a.id).await)
-    })
-}
-
-pub fn set_session_provider(
-    _app: AppHandle,
-    params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let a: SetSessionMetaArgs = parse(params)?;
-        let provider = a.provider.ok_or("缺少 provider 字段")?;
-        to_json(crate::commands::session::set_session_provider(a.id, provider).await)
     })
 }
 

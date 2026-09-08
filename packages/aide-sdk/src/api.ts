@@ -16,7 +16,7 @@ import type {
   CallHierarchyResult, CallHierarchyDirection, InlayHintItem,
   RemoteStatus,
 } from "./types";
-import type { ModelOption, PermissionModeOption, UserMessageBlock } from "./types/chat";
+import type { ModelOption, PermissionModeOption, UserMessageBlock, MetaField, SessionMetaPatch } from "./types/chat";
 import type { PermissionRuleDraft } from "./types/permissions";
 
 /** send_message 的完整负载（IPC 边界 DTO）。可空字段 null = Rust None。 */
@@ -137,10 +137,21 @@ export const api = {
   modelSwitchConfirmDecision(sessionId: string, confirmId: string, approve: boolean): Promise<void> {
     return getTransport().invoke("model_switch_confirm_decision", { sessionId, confirmId, approve });
   },
-  /** 记住/读回会话的模型选择（会话元数据，重启不丢）——与运行时 set_model 互补：
-   *  这个管「下次进会话恢复什么」，set_model 管「当前进程切到什么」。 */
-  setSessionModel(id: string, model: string): Promise<void> {
-    return getTransport().invoke("set_session_model", { id, model });
+  /** 会话元数据的唯一写入入口：provider / model / effort 一次写齐（一次读、一次写）。
+   *
+   *  取代 set_session_provider / set_session_model / set_session_effort 三个单字段命令——
+   *  它们各自对同一个 `<id>.json` 做一遍 read-modify-write，L1 并发写两个字段时后写的
+   *  覆盖先写的（lost update）。省略的字段按 keep 处理（不动盘上值）。
+   *
+   *  注意与运行时命令区分：`setModel` / `setEffort` 切的是**当前进程**，本命令写的是
+   *  **下次进会话恢复什么**。 */
+  setSessionMeta(id: string, patch: SessionMetaPatch): Promise<void> {
+    return getTransport().invoke("set_session_meta", {
+      id,
+      provider: patch.provider ?? { op: "keep" },
+      model: patch.model ?? { op: "keep" },
+      effort: patch.effort ?? { op: "keep" },
+    });
   },
   sessionModel(id: string): Promise<string | null> {
     return getTransport().invoke("session_model", { id });
@@ -150,17 +161,8 @@ export const api = {
   setEffort(sessionId: string, effort: string): Promise<boolean> {
     return getTransport().invoke("set_effort", { sessionId, effort });
   },
-  /** 记住/读回会话的 effort 选择（会话元数据，重启不丢）。 */
-  setSessionEffort(id: string, effort: string): Promise<void> {
-    return getTransport().invoke("set_session_effort", { id, effort });
-  },
   sessionEffort(id: string): Promise<string | null> {
     return getTransport().invoke("session_effort", { id });
-  },
-  /** 记住/读回会话绑定的供应商 id（会话元数据，重开 app 后恢复会话供应商绑定，
-   *  只恢复该会话绑定不动全局激活）。provider 为空 = 清除（回落全局激活供应商）。 */
-  setSessionProvider(id: string, provider: string): Promise<void> {
-    return getTransport().invoke("set_session_provider", { id, provider });
   },
   sessionProvider(id: string): Promise<string | null> {
     return getTransport().invoke("session_provider", { id });

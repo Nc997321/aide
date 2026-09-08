@@ -290,3 +290,26 @@ export interface PermissionRequest {
    *  没有它，用户会在毫无上下文的情况下突然看到权限框弹出来，不知道是谁在问。 */
   fromSubagent?: { id: string; agentName: string };
 }
+
+/**
+ * 会话元数据字段的三态写入语义（与 Rust `MetaField` 同形，serde tag = `op`）。
+ *
+ * 取代此前「空串 = 删字段」的魔法值约定：那种写法把**操作类型编码进值域**，
+ * 读代码的人必须先知道约定才能读懂，而且无法表达「本次不动这个字段」——
+ * 合并写入时只能靠传空串绕过，正是多字段并发写互相覆盖（lost update）的温床。
+ */
+export type MetaField =
+  /** 本次不动这个字段。 */
+  | { op: "keep" }
+  /** 删掉这个字段，回到「没记过」。 */
+  | { op: "clear" }
+  /** 写入该值。 */
+  | { op: "set"; value: string };
+
+/** 一次会话元数据写入的 patch。省略的字段 = keep（不动盘上值）。
+ *  三个字段合并成一次调用下发，杜绝「两次独立 read-modify-write 互相覆盖」。 */
+export interface SessionMetaPatch {
+  provider?: MetaField;
+  model?: MetaField;
+  effort?: MetaField;
+}

@@ -12,15 +12,55 @@
  * create_session 为手机端 spawn 定名登记）；
  * get_providers / get_active_provider_id / set_active_provider_id
  * （抽屉供应商域：列表 + 当前激活 + 切换）；
- * get_default_models / set_model / set_session_model / session_model
- * / set_effort / set_session_effort / session_effort（输入区模型/思考程度
- * chip 域：系统默认选项集 + 存活会话运行时切换 + 会话记忆读写）。
+ * get_default_models / set_model / set_session_meta / session_model
+ * / set_effort / session_effort（输入区模型/思考程度
+ * chip 域：系统默认选项集 + 存活会话运行时切换 + 会话记忆读写；
+ * 记忆写入统一走 set_session_meta 三态 patch）。
  * 参数序列化差异：上游 TS 的 undefined 字段经 JSON.stringify 自动丢弃；ArkTS
  * Record 值域不含 null，故 None 参数以「缺键」表达（Rust 侧 Option 字段缺键即
  * None，serde 语义等价）。
  */
 import { getTransport } from './transport';
 import { Session, WorkspaceInfo, ActiveWorkspace, LoadMessagesResult, BgTaskInfo, PermissionRuleDraft, ProviderConfigView, ModelOption } from './types';
+
+/**
+ * 会话元数据字段的三态写入语义（镜像 Rust `MetaField`，serde tag = `op`）。
+ *
+ * 取代「空串 = 删字段」的魔法值约定：那种写法把**操作类型编码进值域**，读代码的
+ * 人必须先知道约定才能读懂，且无法表达「本次不动这个字段」——合并写入时只能靠
+ * 传空串绕过，正是多字段并发写互相覆盖（lost update）的温床。
+ */
+export class MetaField {
+  op: string;
+  value: string;
+
+  constructor(op: string, value: string) {
+    this.op = op;
+    this.value = value;
+  }
+
+  /** 本次不动这个字段。 */
+  static keep(): MetaField {
+    return new MetaField('keep', '');
+  }
+
+  /** 删掉这个字段，回到「没记过」。 */
+  static clear(): MetaField {
+    return new MetaField('clear', '');
+  }
+
+  /** 写入该值。 */
+  static set(value: string): MetaField {
+    return new MetaField('set', value);
+  }
+}
+
+/** 一次会话元数据写入的 patch；省略的字段 = keep（不动盘上值）。 */
+export interface SessionMetaPatch {
+  provider?: MetaField;
+  model?: MetaField;
+  effort?: MetaField;
+}
 
 /** send_message 的完整负载（镜像前端 SendMessageParams；可空项 null = Rust None）。 */
 export interface SendMessageParams {
@@ -211,11 +251,22 @@ export class AideApi {
   }
 
   /**
-   * 记住/读回会话的模型选择（会话元数据，重启不丢）——与运行时 set_model 互补：
-   * 这个管「下次进会话恢复什么」，set_model 管「当前进程切到什么」。
+   * 会话元数据的**唯一**写入入口：provider / model / effort 一次写齐（一次读、一次写）。
+   *
+   * 取代 set_session_model / set_session_effort 两个单字段命令——它们各自对同一个
+   * `<id>.json` 做一遍 read-modify-write，并发写两个字段时后写的覆盖先写的。
+   * 省略的字段按 keep 处理（不动盘上值）。
+   *
+   * 注意与运行时命令区分：setModel / setEffort 切的是**当前进程**，本命令写的是
+   * **下次进会话恢复什么**。
    */
-  setSessionModel(id: string, model: string): Promise<void> {
-    return getTransport().invoke<void>('set_session_model', { 'id': id, 'model': model });
+  setSessionMeta(id: string, patch: SessionMetaPatch): Promise<void> {
+    return getTransport().invoke<void>('set_session_meta', {
+      'id': id,
+      'provider': patch.provider ?? MetaField.keep(),
+      'model': patch.model ?? MetaField.keep(),
+      'effort': patch.effort ?? MetaField.keep()
+    });
   }
 
   sessionModel(id: string): Promise<string | null> {
@@ -228,11 +279,6 @@ export class AideApi {
    */
   setEffort(sessionId: string, effort: string): Promise<boolean> {
     return getTransport().invoke<boolean>('set_effort', { 'sessionId': sessionId, 'effort': effort });
-  }
-
-  /** 记住/读回会话的 effort 选择（会话元数据，重启不丢）。 */
-  setSessionEffort(id: string, effort: string): Promise<void> {
-    return getTransport().invoke<void>('set_session_effort', { 'id': id, 'effort': effort });
   }
 
   sessionEffort(id: string): Promise<string | null> {

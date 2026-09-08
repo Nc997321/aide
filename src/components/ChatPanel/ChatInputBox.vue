@@ -23,7 +23,7 @@ import { useQuickActions } from "@/composables/useQuickActions";
 import type { QuickAction } from "@/composables/useQuickActions";
 import { useModal } from "@/composables/useModal";
 import { useBtwSession } from "@/composables/useBtwSession";
-import { useSessionIdentity } from "@/composables/sessionIdentity";
+import { useSessionIdentity, writeSessionMeta } from "@/composables/sessionIdentity";
 import { isPendingSession, isFinalizedSessionPair } from "@/composables/useChatSession";
 import { useToast } from "@/composables/useToast";
 import { EFFORT_OPTIONS, normalizeEffortOption } from "@aide/sdk/utils/effort";
@@ -268,7 +268,7 @@ watch(
     // 选过的档位随定名持久化进会话元数据（对齐 setEffort 契约，重开会话恢复）。
     if (isFinalizedSessionPair(prevSid, sid)) {
       if (effortTouchedByUser && sid) {
-        void api.setSessionEffort(sid, selectedEffort.value).catch(() => {});
+        void writeSessionMeta(sid, { effort: { op: "set", value: selectedEffort.value } }).catch(() => {});
       }
       return;
     }

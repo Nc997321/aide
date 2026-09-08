@@ -1558,13 +1558,13 @@ describe("useChatSession 会话自动命名", () => {
     expect(sendCall?.[1]).toMatchObject({ sessionId: "uuid-c", provider: null });
   });
 
-  it("setEffort 持久化失败（set_session_effort reject）→ console.warn 降级", async () => {
+  it("setEffort 持久化失败（set_session_meta reject）→ console.warn 降级", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);
     await flush();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     invokeMock.mockImplementation(async (cmd: string) => {
-      if (cmd === "set_session_effort") throw new Error("disk full");
+      if (cmd === "set_session_meta") throw new Error("disk full");
       return undefined;
     });
 

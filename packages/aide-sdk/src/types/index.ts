@@ -36,6 +36,8 @@ export type {
   ContentBlock,
   ChatMessage,
   PermissionRequest,
+  MetaField,
+  SessionMetaPatch,
 } from "./chat";
 
 export type { SkillMeta } from "./skill";

@@ -2,21 +2,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useProviders } from "../../../composables/useProviders";
 import { useSessionProviders } from "../../../composables/useSessionProviders";
 import type { ProviderConfig, ProviderModelMappings } from "../../../types";
-import type { ModelOption } from "../../../types/chat";
+import type { ModelOption, SessionMetaPatch } from "../../../types/chat";
 
-// ── api mock：sessionProvider/sessionModel 读受控；setSession* 记录写回；getDefaultModels 系统默认兜底列表 ──
+// ── api mock：sessionProvider/sessionModel 读受控；setSessionMeta 记录写回；getDefaultModels 系统默认兜底列表 ──
 const sessionProviderMock = vi.fn<(id: string) => Promise<string | null>>();
 const sessionModelMock = vi.fn<(id: string) => Promise<string | null>>();
-const setSessionProviderMock = vi.fn<(id: string, provider: string) => Promise<void>>();
-const setSessionModelMock = vi.fn<(id: string, model: string) => Promise<void>>();
+const setSessionMetaMock = vi.fn<(id: string, patch: SessionMetaPatch) => Promise<void>>();
 const getDefaultModelsMock = vi.fn<() => Promise<ModelOption[]>>();
 
 vi.mock("../../../api", () => ({
   api: {
     sessionProvider: (id: string) => sessionProviderMock(id),
     sessionModel: (id: string) => sessionModelMock(id),
-    setSessionProvider: (id: string, provider: string) => setSessionProviderMock(id, provider),
-    setSessionModel: (id: string, model: string) => setSessionModelMock(id, model),
+    setSessionMeta: (id: string, patch: SessionMetaPatch) => setSessionMetaMock(id, patch),
     getDefaultModels: () => getDefaultModelsMock(),
   },
 }));
@@ -59,11 +57,9 @@ describe("useSessionIdentity (L2 identity)", () => {
   beforeEach(() => {
     sessionProviderMock.mockReset();
     sessionModelMock.mockReset();
-    setSessionProviderMock.mockReset();
-    setSessionModelMock.mockReset();
+    setSessionMetaMock.mockReset();
     getDefaultModelsMock.mockReset();
-    setSessionProviderMock.mockResolvedValue(undefined);
-    setSessionModelMock.mockResolvedValue(undefined);
+    setSessionMetaMock.mockResolvedValue(undefined);
     getDefaultModelsMock.mockResolvedValue([]);
     for (const k of Object.keys(providers)) delete providers[k];
     id = useSessionIdentity();
@@ -78,7 +74,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
       expect(id.providerOf("s1")).toBe("p_a");
-      expect(setSessionProviderMock).not.toHaveBeenCalled();
+      expect(setSessionMetaMock).not.toHaveBeenCalled();
       expect(id.lastProvider.value).toBe("p_a");
     });
 
@@ -89,7 +85,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
       expect(id.providerOf("s1")).toBe("p_a");
-      expect(setSessionProviderMock).toHaveBeenCalledWith("s1", "p_a");
+      expect(setSessionMetaMock).toHaveBeenCalledWith("s1", { provider: { op: "set", value: "p_a" } });
     });
 
     it("provider 被删且模型反查无果 → 回落 activeProvider", async () => {
@@ -108,7 +104,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
       expect(id.providerOf("s1")).toBe("p_a");
-      expect(setSessionProviderMock).toHaveBeenCalledWith("s1", "p_a");
+      expect(setSessionMetaMock).toHaveBeenCalledWith("s1", { provider: { op: "set", value: "p_a" } });
     });
 
     it("self-heal 写盘失败 → console.warn 降级，仍修正绑定", async () => {
@@ -117,7 +113,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       sessionProviderMock.mockResolvedValue("p_deleted");
       sessionModelMock.mockResolvedValue("kimi");
-      setSessionProviderMock.mockRejectedValueOnce(new Error("disk full"));
+      setSessionMetaMock.mockRejectedValueOnce(new Error("disk full"));
       await id.resolve("s1");
       expect(warnSpy).toHaveBeenCalledWith(
         "[sessionIdentity] self-heal provider failed:",
@@ -147,11 +143,11 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionProviderMock.mockResolvedValueOnce("p_a");
       sessionModelMock.mockResolvedValueOnce("kimi");
       await id.resolve("s1");
-      setSessionProviderMock.mockClear();
+      setSessionMetaMock.mockClear();
       sessionProviderMock.mockResolvedValue("p_a");
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
-      expect(setSessionProviderMock).not.toHaveBeenCalled();
+      expect(setSessionMetaMock).not.toHaveBeenCalled();
       expect(id.lastProvider.value).toBe("p_a");
     });
   });
@@ -162,8 +158,8 @@ describe("useSessionIdentity (L2 identity)", () => {
       activeProviderId.value = "p_a";
       await id.settleOnSend("s1", "p_a");
       expect(id.providerOf("s1")).toBe("p_a");
-      expect(setSessionProviderMock).toHaveBeenCalledWith("s1", "p_a");
-      expect(setSessionModelMock).not.toHaveBeenCalled();
+      expect(setSessionMetaMock).toHaveBeenCalledWith("s1", { provider: { op: "set", value: "p_a" } });
+      expect(setSessionMetaMock).toHaveBeenCalledTimes(1);
       expect(id.lastProvider.value).toBe("p_a");
     });
 
@@ -173,11 +169,9 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionProviderMock.mockResolvedValueOnce("p_a");
       sessionModelMock.mockResolvedValueOnce("kimi");
       await id.resolve("s1");
-      setSessionProviderMock.mockClear();
-      setSessionModelMock.mockClear();
+      setSessionMetaMock.mockClear();
       await id.settleOnSend("s1", "p_a");
-      expect(setSessionProviderMock).not.toHaveBeenCalled();
-      expect(setSessionModelMock).not.toHaveBeenCalled();
+      expect(setSessionMetaMock).not.toHaveBeenCalled();
       expect(id.providerOf("s1")).toBe("p_a");
       expect(id.lastProvider.value).toBe("p_a");
     });
@@ -189,8 +183,8 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionModelMock.mockResolvedValueOnce("kimi");
       await id.resolve("s1");
       await id.settleOnSend("s1", "p_b");
-      expect(setSessionProviderMock).toHaveBeenCalledWith("s1", "p_b");
-      expect(setSessionModelMock).not.toHaveBeenCalled();
+      expect(setSessionMetaMock).toHaveBeenCalledWith("s1", { provider: { op: "set", value: "p_b" } });
+      expect(setSessionMetaMock).toHaveBeenCalledTimes(1);
       expect(id.lastProvider.value).toBe("p_b");
     });
 
@@ -201,7 +195,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionProviderMock.mockResolvedValueOnce("p_a");
       sessionModelMock.mockResolvedValueOnce("kimi");
       await id.resolve("s1");
-      setSessionProviderMock.mockRejectedValueOnce(new Error("disk full"));
+      setSessionMetaMock.mockRejectedValueOnce(new Error("disk full"));
       await id.settleOnSend("s1", "p_b");
       expect(warnSpy).toHaveBeenCalledWith(
         "[sessionIdentity] settleOnSend persist failed:",
@@ -225,8 +219,8 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
       id.bindRuntime("s1", "runtime");
-      setSessionProviderMock.mockClear();
-      setSessionProviderMock.mockRejectedValueOnce(new Error("disk full"));
+      setSessionMetaMock.mockClear();
+      setSessionMetaMock.mockRejectedValueOnce(new Error("disk full"));
       await id.settleOnSend("s1", "p_b"); // provider 变 → 进 try → catch（落盘失败）
       // 已有绑定注册表不覆盖（if(!providerOf) 守护）——供应商 respawn 的注册表变更
       // 由 provider_switched 链路处理，settleOnSend 只管账面与落盘
@@ -301,10 +295,10 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionProviderMock.mockResolvedValue("p_a");
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
-      setSessionModelMock.mockClear();
+      setSessionMetaMock.mockClear();
       id.bindRuntime("s1", "sidecar-current");
       expect(id.effectiveModel.value).toBe("sidecar-current");
-      expect(setSessionModelMock).not.toHaveBeenCalled();
+      expect(setSessionMetaMock).not.toHaveBeenCalled();
     });
 
     it("setUserChoice 草稿（在列表），不落盘", async () => {
@@ -313,10 +307,10 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionProviderMock.mockResolvedValue("p_a");
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
-      setSessionModelMock.mockClear();
+      setSessionMetaMock.mockClear();
       id.setUserChoice("draft-model");
       expect(id.effectiveModel.value).toBe("draft-model");
-      expect(setSessionModelMock).not.toHaveBeenCalled();
+      expect(setSessionMetaMock).not.toHaveBeenCalled();
     });
 
     it("releaseBinding 删绑定，effectiveProvider 回落 activeProvider", async () => {
@@ -383,12 +377,10 @@ describe("useSessionIdentity (L2 identity)", () => {
     it("settleOnSend sid 空 → 只推进基线不落盘（空白面板首发）", async () => {
       allProviders.value = [makeProvider("p_a", "kimi")];
       activeProviderId.value = "p_a";
-      setSessionModelMock.mockClear();
-      setSessionProviderMock.mockClear();
+      setSessionMetaMock.mockClear();
       await id.settleOnSend("", "p_a");
       expect(id.lastProvider.value).toBe("p_a");
-      expect(setSessionModelMock).not.toHaveBeenCalled();
-      expect(setSessionProviderMock).not.toHaveBeenCalled();
+      expect(setSessionMetaMock).not.toHaveBeenCalled();
     });
   });
 
@@ -559,12 +551,12 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionProviderMock.mockResolvedValue("p_a");
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
-      setSessionModelMock.mockClear();
+      setSessionMetaMock.mockClear();
       await id.commitModelFromRuntime("s1", {
         fromModel: "kimi", toModel: "fable-resolved", requestedModel: "fable", source: "sdk",
       });
       expect(id.effectiveModel.value).toBe("fable");
-      expect(setSessionModelMock).toHaveBeenCalledWith("s1", "fable");
+      expect(setSessionMetaMock).toHaveBeenCalledWith("s1", { model: { op: "set", value: "fable" } });
     });
 
     it("requestedModel=null（CLI 内部切换）→ 只 bindRuntime，不落盘（无用户选择可恢复）", async () => {
@@ -573,13 +565,13 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionProviderMock.mockResolvedValue("p_a");
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
-      setSessionModelMock.mockClear();
+      setSessionMetaMock.mockClear();
       await id.commitModelFromRuntime("s1", {
         fromModel: "kimi", toModel: "auto-model", requestedModel: null, source: "auto",
       });
       // 无用户选择可恢复：不 bindRuntime 不落盘，下拉回落盘面恢复值
       expect(id.effectiveModel.value).toBe("kimi");
-      expect(setSessionModelMock).not.toHaveBeenCalled();
+      expect(setSessionMetaMock).not.toHaveBeenCalled();
     });
 
     it("model 同值 → 跳过落盘 IPC（bindRuntime 幂等）", async () => {
@@ -591,11 +583,11 @@ describe("useSessionIdentity (L2 identity)", () => {
       await id.commitModelFromRuntime("s1", {
         fromModel: "fable-resolved", toModel: "fable-resolved", requestedModel: "fable", source: "sdk",
       });
-      setSessionModelMock.mockClear();
+      setSessionMetaMock.mockClear();
       await id.commitModelFromRuntime("s1", {
         fromModel: "fable-resolved", toModel: "fable-resolved", requestedModel: "fable", source: "sdk",
       });
-      expect(setSessionModelMock).not.toHaveBeenCalled();
+      expect(setSessionMetaMock).not.toHaveBeenCalled();
       expect(id.effectiveModel.value).toBe("fable");
     });
 
@@ -606,7 +598,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      setSessionModelMock.mockRejectedValueOnce(new Error("disk full"));
+      setSessionMetaMock.mockRejectedValueOnce(new Error("disk full"));
       await id.commitModelFromRuntime("s1", {
         fromModel: "kimi", toModel: "fable-resolved", requestedModel: "fable", source: "sdk",
       });

@@ -14,6 +14,7 @@ pub use jsonl::{session_jsonl_size, session_last_event, session_truncate_jsonl};
 // 供自动化 RunRecord.summary 读取末条消息摘要（automation/scheduler.rs）
 pub(crate) use jsonl::last_jsonl_message;
 
+use serde::Deserialize;
 use serde_json::Value;
 use std::fs;
 use tauri::State;
@@ -277,31 +278,100 @@ pub fn delete_session(
     Ok(())
 }
 
-#[tauri::command]
-pub fn rename_session(id: String, name: String) -> Result<(), String> {
+/// 会话元数据字段的三态写入语义。
+///
+/// 取代此前「空串 = 删字段」的魔法值约定（`if s.is_empty() { remove } else { write }`）：
+/// 那种写法把操作类型编码进值域，读代码的人必须知道约定才能读懂，且无法表达
+/// 「本次不动这个字段」——合并写入时只能靠"传空串"绕过，正是多字段并发写互相
+/// 覆盖（lost update）的温床。
+///
+/// 前端 L1（`sessionMeta.ts` 的 MetaField）与本枚举同形，serde tag 对齐。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum MetaField {
+    /// 本次不动这个字段（缺省值——命令参数可省略）。
+    Keep,
+    /// 删掉这个字段，回到「没记过」。
+    Clear,
+    /// 写入该值。
+    Set { value: String },
+}
+
+impl Default for MetaField {
+    fn default() -> Self {
+        MetaField::Keep
+    }
+}
+
+/// `<id>.json` 的一次写入所需全部字段。缺省 = Keep（serde default + MetaField::default）。
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct SessionMetaPatch {
+    pub name: MetaField,
+    /// "manual" / "auto"：重命名守门字段，由 rename / auto_rename 内部置，不对外暴露。
+    pub name_source: MetaField,
+    pub provider: MetaField,
+    pub model: MetaField,
+    pub effort: MetaField,
+}
+
+fn apply_field(v: &mut Value, key: &str, f: &MetaField) {
+    match f {
+        MetaField::Keep => {}
+        MetaField::Clear => {
+            v.as_object_mut().map(|o| o.remove(key));
+        }
+        MetaField::Set { value } => {
+            v[key] = Value::String(value.clone());
+        }
+    }
+}
+
+/// 会话元数据 `<id>.json` 的**唯一**写入路径：一次读、合并 patch、一次写。
+///
+/// 此前每个命令（rename / set_session_model / set_session_provider / set_session_effort）
+/// 各自做一遍 read-modify-write，两个字段并发写会互相覆盖。收敛到这里之后：
+///  - 多字段合并写入天然原子（同一份 Value 上改完一次落盘）；
+///  - 将来要加串行化/文件锁，只需改这一处。
+fn write_session_meta_blocking(id: &str, patch: &SessionMetaPatch) -> Result<(), String> {
     let dir = our_sessions_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create sessions dir: {}", e))?;
     let path = dir.join(format!("{}.json", id));
 
-    let meta = if path.exists() {
+    let mut v: Value = if path.exists() {
         let content = fs::read_to_string(&path).map_err(|e| format!("Failed to read: {}", e))?;
-        let mut v: Value =
-            serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?;
-        v["name"] = Value::String(name.clone());
-        v
+        serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?
     } else {
-        serde_json::json!({ "id": id, "name": name })
+        serde_json::json!({ "id": id })
     };
-    // 手动重命名：标记 nameSource=manual，此后自动生成的标题一律不得覆盖
-    // （auto_rename_session 据此拒写）。
-    let mut meta = meta;
-    meta["nameSource"] = Value::String("manual".to_string());
+
+    apply_field(&mut v, "name", &patch.name);
+    apply_field(&mut v, "nameSource", &patch.name_source);
+    apply_field(&mut v, "provider", &patch.provider);
+    apply_field(&mut v, "model", &patch.model);
+    apply_field(&mut v, "effort", &patch.effort);
 
     fs::write(
         &path,
-        serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?,
+        serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?,
     )
     .map_err(|e| format!("Failed to write: {}", e))
+}
+
+#[tauri::command]
+pub fn rename_session(id: String, name: String) -> Result<(), String> {
+    // 手动重命名：标记 nameSource=manual，此后自动生成的标题一律不得覆盖
+    // （auto_rename_session 据此拒写）。
+    write_session_meta_blocking(
+        &id,
+        &SessionMetaPatch {
+            name: MetaField::Set { value: name },
+            name_source: MetaField::Set {
+                value: "manual".to_string(),
+            },
+            ..Default::default()
+        },
+    )
 }
 
 /// 自动命名（sidecar 首轮对话后生成的会话标题）：仅当用户没手动命名过时采纳。
@@ -317,63 +387,62 @@ pub async fn auto_rename_session(id: String, name: String) -> Result<bool, Strin
 }
 
 fn auto_rename_session_blocking(id: &str, name: &str) -> Result<bool, String> {
-    let dir = our_sessions_dir();
-    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create sessions dir: {}", e))?;
-    let path = dir.join(format!("{}.json", id));
-
-    let mut v: Value = if path.exists() {
+    // 守门读：nameSource=manual 拒写。判与写仍是两段（与原实现同），
+    // 但写这一侧走唯一路径 write_session_meta_blocking。
+    let path = our_sessions_dir().join(format!("{}.json", id));
+    if path.exists() {
         let content = fs::read_to_string(&path).map_err(|e| format!("Failed to read: {}", e))?;
-        serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?
-    } else {
-        serde_json::json!({ "id": id })
-    };
-
-    if v.get("nameSource").and_then(|s| s.as_str()) == Some("manual") {
-        return Ok(false);
+        let v: Value =
+            serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?;
+        if v.get("nameSource").and_then(|s| s.as_str()) == Some("manual") {
+            return Ok(false);
+        }
     }
-    v["name"] = Value::String(name.to_string());
-    v["nameSource"] = Value::String("auto".to_string());
 
-    fs::write(
-        &path,
-        serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| format!("Failed to write: {}", e))?;
+    write_session_meta_blocking(
+        id,
+        &SessionMetaPatch {
+            name: MetaField::Set {
+                value: name.to_string(),
+            },
+            name_source: MetaField::Set {
+                value: "auto".to_string(),
+            },
+            ..Default::default()
+        },
+    )?;
     Ok(true)
 }
 
-/// 记住会话的模型选择：merge 写进会话元数据 `<id>.json` 的 `model` 字段
-/// （与 rename_session 同一模式），重开会话/重启 app 后由前端恢复选择器。
-/// model 为空 = 清除（跟随 provider 默认）。磁盘 IO 离开主线程（杀软扫描
-/// 小文件也可能堵，见 CLAUDE.md「同步 command 禁止重 IO」）。
+/// 会话元数据的唯一写入命令：provider / model / effort 一次写齐（一次读、一次写）。
+///
+/// 取代 set_session_provider / set_session_model / set_session_effort 三个单字段命令：
+/// 它们各自对同一个 `<id>.json` 做一遍 read-modify-write，前端 L1 并发写两个字段时
+/// 后写的覆盖先写的（lost update）。合并后结构上不可能再丢字段。
+///
+/// name 不在参数里——重命名带 nameSource 守门语义，走 rename_session /
+/// auto_rename_session，内部与本命令共用 `write_session_meta_blocking`。
+/// 磁盘 IO 离开主线程（见 CLAUDE.md「同步 command 禁止重 IO」）。
 #[tauri::command]
-pub async fn set_session_model(id: String, model: String) -> Result<(), String> {
+pub async fn set_session_meta(
+    id: String,
+    provider: MetaField,
+    model: MetaField,
+    effort: MetaField,
+) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let dir = our_sessions_dir();
-        fs::create_dir_all(&dir).map_err(|e| format!("Failed to create sessions dir: {}", e))?;
-        let path = dir.join(format!("{}.json", id));
-
-        let mut v: Value = if path.exists() {
-            let content =
-                fs::read_to_string(&path).map_err(|e| format!("Failed to read: {}", e))?;
-            serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?
-        } else {
-            serde_json::json!({ "id": id })
-        };
-        if model.is_empty() {
-            v.as_object_mut().map(|o| o.remove("model"));
-        } else {
-            v["model"] = Value::String(model);
-        }
-
-        fs::write(
-            &path,
-            serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?,
+        write_session_meta_blocking(
+            &id,
+            &SessionMetaPatch {
+                provider,
+                model,
+                effort,
+                ..Default::default()
+            },
         )
-        .map_err(|e| format!("Failed to write: {}", e))
     })
     .await
-    .map_err(|e| format!("set_session_model task panicked: {}", e))?
+    .map_err(|e| format!("set_session_meta task panicked: {}", e))?
 }
 
 /// 读回会话记住的模型选择；没有元数据文件或没记过 → None。
@@ -396,39 +465,6 @@ pub async fn session_model(id: String) -> Result<Option<String>, String> {
     .map_err(|e| format!("session_model task panicked: {}", e))?
 }
 
-/// 记住会话的 effort 选择：merge 写进会话元数据 `<id>.json` 的 `effort` 字段
-/// （与 set_session_model 同一模式），重开会话/重启 app 后由前端恢复选择器。
-/// effort 为空 = 清除（退回 provider 默认 / high）。磁盘 IO 离开主线程。
-#[tauri::command]
-pub async fn set_session_effort(id: String, effort: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        let dir = our_sessions_dir();
-        fs::create_dir_all(&dir).map_err(|e| format!("Failed to create sessions dir: {}", e))?;
-        let path = dir.join(format!("{}.json", id));
-
-        let mut v: Value = if path.exists() {
-            let content =
-                fs::read_to_string(&path).map_err(|e| format!("Failed to read: {}", e))?;
-            serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?
-        } else {
-            serde_json::json!({ "id": id })
-        };
-        if effort.is_empty() {
-            v.as_object_mut().map(|o| o.remove("effort"));
-        } else {
-            v["effort"] = Value::String(effort);
-        }
-
-        fs::write(
-            &path,
-            serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| format!("Failed to write: {}", e))
-    })
-    .await
-    .map_err(|e| format!("set_session_effort task panicked: {}", e))?
-}
-
 /// 读回会话记住的 effort 选择；没有元数据文件或没记过 → None。
 #[tauri::command]
 pub async fn session_effort(id: String) -> Result<Option<String>, String> {
@@ -447,40 +483,6 @@ pub async fn session_effort(id: String) -> Result<Option<String>, String> {
     })
     .await
     .map_err(|e| format!("session_effort task panicked: {}", e))?
-}
-
-/// 记住会话 spawn 时绑定的供应商 id：merge 写进会话元数据 `<id>.json` 的 `provider`
-/// 字段（与 set_session_model / set_session_effort 同一模式），重开 app 后由前端恢复
-/// 会话的供应商绑定（只恢复该会话绑定，不动全局激活供应商）。provider 为空 = 清除。
-/// 磁盘 IO 离开主线程（同 set_session_model，见 CLAUDE.md「同步 command 禁止重 IO」）。
-#[tauri::command]
-pub async fn set_session_provider(id: String, provider: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        let dir = our_sessions_dir();
-        fs::create_dir_all(&dir).map_err(|e| format!("Failed to create sessions dir: {}", e))?;
-        let path = dir.join(format!("{}.json", id));
-
-        let mut v: Value = if path.exists() {
-            let content =
-                fs::read_to_string(&path).map_err(|e| format!("Failed to read: {}", e))?;
-            serde_json::from_str(&content).map_err(|e| format!("Invalid JSON: {}", e))?
-        } else {
-            serde_json::json!({ "id": id })
-        };
-        if provider.is_empty() {
-            v.as_object_mut().map(|o| o.remove("provider"));
-        } else {
-            v["provider"] = Value::String(provider);
-        }
-
-        fs::write(
-            &path,
-            serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| format!("Failed to write: {}", e))
-    })
-    .await
-    .map_err(|e| format!("set_session_provider task panicked: {}", e))?
 }
 
 /// 读回会话绑定的供应商 id；没有元数据文件或没记过 → None（前端回落全局激活供应商）。
@@ -823,9 +825,7 @@ mod tests {
         create_session(id.clone(), "模型会话".to_string()).unwrap();
         assert_eq!(session_model(id.clone()).await.unwrap(), None);
 
-        set_session_model(id.clone(), "sonnet".to_string())
-            .await
-            .unwrap();
+        write_model(&id, MetaField::Set { value: "sonnet".to_string() }).await;
         assert_eq!(
             session_model(id.clone()).await.unwrap(),
             Some("sonnet".to_string())
@@ -837,14 +837,12 @@ mod tests {
         assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("模型会话"));
 
         // 覆盖写 + 清空（清空后读回 None）
-        set_session_model(id.clone(), "opus".to_string())
-            .await
-            .unwrap();
+        write_model(&id, MetaField::Set { value: "opus".to_string() }).await;
         assert_eq!(
             session_model(id.clone()).await.unwrap(),
             Some("opus".to_string())
         );
-        set_session_model(id.clone(), String::new()).await.unwrap();
+        write_model(&id, MetaField::Clear).await;
         assert_eq!(session_model(id.clone()).await.unwrap(), None);
 
         let _ = fs::remove_file(&path);
@@ -871,9 +869,7 @@ mod tests {
         create_session(id.clone(), "供应商会话".to_string()).unwrap();
         assert_eq!(session_provider(id.clone()).await.unwrap(), None);
 
-        set_session_provider(id.clone(), "p_abc".to_string())
-            .await
-            .unwrap();
+        write_provider(&id, MetaField::Set { value: "p_abc".to_string() }).await;
         assert_eq!(
             session_provider(id.clone()).await.unwrap(),
             Some("p_abc".to_string())
@@ -885,19 +881,71 @@ mod tests {
         assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("供应商会话"));
 
         // 覆盖写 + 清空（清空后读回 None）
-        set_session_provider(id.clone(), "p_def".to_string())
-            .await
-            .unwrap();
+        write_provider(&id, MetaField::Set { value: "p_def".to_string() }).await;
         assert_eq!(
             session_provider(id.clone()).await.unwrap(),
             Some("p_def".to_string())
         );
-        set_session_provider(id.clone(), String::new())
-            .await
-            .unwrap();
+        write_provider(&id, MetaField::Clear).await;
         assert_eq!(session_provider(id.clone()).await.unwrap(), None);
 
         let _ = fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn set_session_meta_writes_all_fields_in_one_pass() {
+        // 回归（2026-09-08）：此前 provider / model / effort 各是一条命令，每条都
+        // 自己 read-modify-write 一遍 `<id>.json`；前端 L1 用 Promise.all 并发写两个
+        // 字段时，后落盘的覆盖先落盘的（lost update）。合并命令一次读、一次写，
+        // 调用方一次写齐，结构上不可能再丢字段。
+        let id = "test-meta-onepass-aa11bb22".to_string();
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        let _ = fs::remove_file(&path);
+
+        create_session(id.clone(), "一次写会话".to_string()).unwrap();
+
+        set_session_meta(
+            id.clone(),
+            MetaField::Set { value: "p_1".to_string() },
+            MetaField::Set { value: "m_1".to_string() },
+            MetaField::Set { value: "high".to_string() },
+        )
+        .await
+        .unwrap();
+
+        // 三个字段必须同时在盘上（旧实现下 model 会被 provider 的写覆盖掉）
+        assert_eq!(session_provider(id.clone()).await.unwrap(), Some("p_1".to_string()));
+        assert_eq!(session_model(id.clone()).await.unwrap(), Some("m_1".to_string()));
+        assert_eq!(session_effort(id.clone()).await.unwrap(), Some("high".to_string()));
+
+        // Keep 的字段不动：只改 model，provider/effort 必须原样
+        set_session_meta(
+            id.clone(),
+            MetaField::Keep,
+            MetaField::Set { value: "m_2".to_string() },
+            MetaField::Keep,
+        )
+        .await
+        .unwrap();
+        assert_eq!(session_provider(id.clone()).await.unwrap(), Some("p_1".to_string()));
+        assert_eq!(session_model(id.clone()).await.unwrap(), Some("m_2".to_string()));
+        assert_eq!(session_effort(id.clone()).await.unwrap(), Some("high".to_string()));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    /// 测试辅助：只写 model 字段（其余 Keep）。
+    async fn write_model(id: &str, model: MetaField) {
+        set_session_meta(id.to_string(), MetaField::Keep, model, MetaField::Keep)
+            .await
+            .unwrap();
+    }
+
+    /// 测试辅助：只写 provider 字段（其余 Keep）。
+    async fn write_provider(id: &str, provider: MetaField) {
+        set_session_meta(id.to_string(), provider, MetaField::Keep, MetaField::Keep)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

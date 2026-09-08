@@ -1,6 +1,7 @@
 import { computed, ref, watch, type Ref } from "vue";
 import { getTransport } from "../transport";
 import { api } from "../api";
+import { writeSessionMeta } from "./sessionIdentity";
 import type {
   ActionBlock,
   ChatMessage,
@@ -479,7 +480,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
     const sid = sessionId.value;
     if (!sid) return;
     if (!isPendingSession(sid)) {
-      void api.setSessionEffort(sid, effort).catch((e) => {
+      void writeSessionMeta(sid, { effort: { op: "set", value: effort } }).catch((e) => {
         // effort 持久化失败：重开会话恢复不到该档位（回落上次持久化的值）——
         // 降级提示，本次运行的生效通道（applyFlagSettings）不受影响。
         console.warn("[chat] persist effort failed:", sid, effort, e);

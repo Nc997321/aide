@@ -88,7 +88,7 @@ function currentDisplayModels(sid: string): ModelOption[] {
 
 async function healProviderIfDirty(sid: string, meta: SessionMeta | null, resolved: string): Promise<void> {
   if (meta?.provider && meta.provider !== resolved) {
-    await writeSessionMeta(sid, { provider: resolved }).catch((e) => {
+    await writeSessionMeta(sid, { provider: { op: "set", value: resolved } }).catch((e) => {
       console.warn("[sessionIdentity] self-heal provider failed:", sid, resolved, e);
     });
   }
@@ -142,7 +142,7 @@ async function settleOnSend(sid: string, effectiveProvider: string): Promise<voi
   const prev = bindings[sid] ?? emptyBinding();
   if (prev.meta?.provider === effectiveProvider) return;
   try {
-    await writeSessionMeta(sid, { provider: effectiveProvider });
+    await writeSessionMeta(sid, { provider: { op: "set", value: effectiveProvider } });
     bindings[sid] = { ...prev, meta: { provider: effectiveProvider, model: prev.meta?.model ?? null } };
   } catch (e) {
     // 落盘失败也建绑定（空绑定，meta 保持盘上状态）：provider 已在 try 前 setProvider，
@@ -165,7 +165,7 @@ async function commitModelFromRuntime(
   const prev = bindings[sid] ?? emptyBinding();
   if (!committed.requestedModel || prev.meta?.model === committed.requestedModel) return;
   try {
-    await writeSessionMeta(sid, { model: committed.requestedModel });
+    await writeSessionMeta(sid, { model: { op: "set", value: committed.requestedModel } });
     bindings[sid] = { ...prev, meta: { provider: prev.meta?.provider ?? null, model: committed.requestedModel } };
   } catch (e) {
     if (!bindings[sid]) bindings[sid] = emptyBinding();
