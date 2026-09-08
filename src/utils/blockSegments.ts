@@ -103,24 +103,32 @@ export function groupStats(blocks: ToolCallBlock[]): GroupStats {
   return { total: blocks.length, kinds };
 }
 
-/** process 胶囊收起态摘要所需的统计：思考段数、工具调用总数、子代理数。 */
+/** process 胶囊收起态摘要所需的统计：思考段数、工具调用总数、子代理数、工具种类分布。 */
 export interface ProcessStats {
   thinkingCount: number;
-  toolTotal: number;
   subagentCount: number;
+  /** 跨 tool_group 段聚合的种类分布（按次数降序）——过程内工具组不再各自折叠后，
+   *  原先由 ToolCallGroup 摘要承载的"调用了什么"上提到过程摘要行，故在此一并统计。
+   *  不单独统计工具总数：摘要逐项列出各类型次数，总数由分布相加即可得出；
+   *  种类过多被折叠时由 UI 把剩余项合并成「其余 N 项 ×M」，总数仍可加总。 */
+  kinds: { name: string; count: number }[];
 }
 
 export function processStats(segments: Segment[]): ProcessStats {
   let thinkingCount = 0;
-  let toolTotal = 0;
   let subagentCount = 0;
+  const toolBlocks: ToolCallBlock[] = [];
   for (const seg of segments) {
     if (seg.kind === "tool_group") {
-      toolTotal += seg.blocks.length;
+      toolBlocks.push(...seg.blocks);
     } else if (seg.kind === "block") {
       if (seg.block.type === "thinking") thinkingCount++;
       else if (seg.block.type === "subagent") subagentCount++;
     }
   }
-  return { thinkingCount, toolTotal, subagentCount };
+  return {
+    thinkingCount,
+    subagentCount,
+    kinds: groupStats(toolBlocks).kinds,
+  };
 }

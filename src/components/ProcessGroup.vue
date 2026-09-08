@@ -2,16 +2,22 @@
 /**
  * 过程胶囊（ProcessGroup）：定稿消息里 ≥2 个连续过程段（思考/查询工具组/子代理）
  * 合并成的折叠卡——收起（默认）= 一行摘要「过程 | N 段思考 · M 次工具调用」；
- * 展开 = 段内各段按原序渲染（复用 ThinkingBlock / ToolCallGroup / SubagentCallBlock）。
+ * 展开 = 段内各段按原序渲染。
+ *
+ * 层级（2026-09-08 精简）：工具组段在过程内直接平铺成逐条 ToolCallBlock，不再套
+ * ToolCallGroup 的「N 次工具调用」折叠壳。理由：外层"过程"已经折了一层，组内再折
+ * 一次意味着看一条命令要连点三次；而中间层承载的信息——总数、类型分布——收起态摘要
+ * 已覆盖，单条的类型由 ToolCallBlock 自己的工具名承载，中间层不产生新信息。
+ * ToolCallGroup 保留给流式/单组场景（ChatMessage），本组件不再复用它。
  *
  * 只装"过程"：文本块（回复）与变更卡从不在段内——分段层保证（blockSegments.ts
  * 二阶段），这里不做防御。process 段只在定稿后产生，故内部没有流式态要处理
- * （ThinkingBlock 不传 streaming、ToolCallGroup 不传 live）。展开状态不持久化，
- * 随窗口化卸载重置（与 ToolCallGroup 一致）。
+ * （ThinkingBlock 不传 streaming、ToolCallBlock 一律按完成态渲染）。展开状态不
+ * 持久化，随窗口化卸载重置（与 ToolCallGroup 一致）。
  */
 import { computed, ref } from "vue";
 import type { BgTask } from "@/types/chat";
-import ToolCallGroup from "./ToolCallGroup.vue";
+import ToolCallBlock from "./ToolCallBlock.vue";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
 import { processStats, type Segment } from "@/utils/blockSegments";
@@ -19,7 +25,7 @@ import { processStats, type Segment } from "@/utils/blockSegments";
 const props = defineProps<{
   /** process 段内的原始段（原序）：tool_group / block(thinking) / block(subagent) */
   segments: Segment[];
-  /** 后台任务列表（ChatMessage 链透传）——段内 ToolCallGroup 的徽章数据源 */
+  /** 后台任务列表（ChatMessage 链透传）——段内 ToolCallBlock 的徽章数据源 */
   bgTasks?: BgTask[];
 }>();
 
@@ -32,11 +38,28 @@ const expanded = ref(false);
 
 const stats = computed(() => processStats(props.segments));
 
-/** 摘要：「4 段思考 · 9 次工具调用 · 1 个子代理」，缺项不出现。 */
+/** 摘要里逐项列出的工具种类数，超出的合并计数 */
+const KINDS_SHOWN = 3;
+
+/** 工具种类：降序取前 KINDS_SHOWN，其余合并成「其余 N 项 ×M」。
+ *  不写"N 次工具调用"——每项自带次数、相加即得总数；但被合并的那部分必须保留
+ *  次数，否则种类一多总数就加不出来了（这是省掉总数唯一的代价，在此抵消）。 */
+const kindsLabel = computed(() => {
+  const kinds = stats.value.kinds;
+  const top = kinds.slice(0, KINDS_SHOWN).map((k) => `${k.name} ×${k.count}`);
+  if (kinds.length <= KINDS_SHOWN) return top.join(" · ");
+  const rest = kinds.slice(KINDS_SHOWN);
+  const restTotal = rest.reduce((sum, k) => sum + k.count, 0);
+  return `${top.join(" · ")} · 其余 ${rest.length} 项 ×${restTotal}`;
+});
+
+/** 摘要：「3 段思考 · Bash ×2 · Read ×2 · 1 个子代理」，缺项不出现。
+ *  种类分布原先由 ToolCallGroup 的组内摘要承载——平铺后中间层没了，这条信息上提
+ *  到过程行，不能因为删了折叠壳就顺带把"调用了什么"一起删掉。 */
 const summary = computed(() => {
   const parts: string[] = [];
   if (stats.value.thinkingCount > 0) parts.push(`${stats.value.thinkingCount} 段思考`);
-  if (stats.value.toolTotal > 0) parts.push(`${stats.value.toolTotal} 次工具调用`);
+  if (stats.value.kinds.length > 0) parts.push(kindsLabel.value);
   if (stats.value.subagentCount > 0) parts.push(`${stats.value.subagentCount} 个子代理`);
   return parts.join(" · ");
 });
@@ -47,16 +70,20 @@ const summary = computed(() => {
     <button class="pg-head" :aria-expanded="expanded" @click="expanded = !expanded">
       <span class="pg-caret" aria-hidden="true"></span>
       <span class="pg-pill">过程</span>
-      <span class="pg-summary">{{ summary }}</span>
+      <span class="pg-summary" v-tooltip="summary">{{ summary }}</span>
     </button>
     <div v-if="expanded" class="pg-body">
       <template v-for="seg in segments" :key="seg.index">
-        <ToolCallGroup
-          v-if="seg.kind === 'tool_group'"
-          :blocks="seg.blocks"
-          :bg-tasks="bgTasks"
-          @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
-        />
+        <!-- 工具组段：组内逐条平铺，不套折叠壳（见文件头"层级"注释） -->
+        <template v-if="seg.kind === 'tool_group'">
+          <ToolCallBlock
+            v-for="b in seg.blocks"
+            :key="b.id"
+            :block="b"
+            :bg-tasks="bgTasks"
+            @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
+          />
+        </template>
         <ThinkingBlock
           v-else-if="seg.kind === 'block' && seg.block.type === 'thinking'"
           :text="seg.block.text"
@@ -139,6 +166,13 @@ const summary = computed(() => {
   padding: 10px 12px;
   max-height: 440px;
   overflow: auto;
+}
+
+/* 段内纵向间距统一由 .pg-body 的 gap 说了算：清掉 ToolCallBlock 自带的相邻
+   margin（.tool-item + .tool-item），否则工具条之间（gap+10px）比工具条与思考块
+   之间（gap）宽出一截，平铺后层级看着不齐 */
+.pg-body :deep(.tool-item + .tool-item) {
+  margin-top: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -135,7 +135,7 @@ describe("segmentBlocks 过程合并（finalized）", () => {
 });
 
 describe("processStats", () => {
-  it("统计思考段数 / 工具总数 / 子代理数", () => {
+  it("统计思考段数 / 子代理数 / 工具种类分布", () => {
     const segs = segmentBlocks(
       [
         tool("Read"), tool("Grep", { isError: true }), thinking("t1"),
@@ -145,13 +145,26 @@ describe("processStats", () => {
     );
     expect(segs).toHaveLength(1);
     const stats = processStats((segs[0] as { segments: Segment[] }).segments);
-    expect(stats).toEqual({ thinkingCount: 2, toolTotal: 3, subagentCount: 1 });
+    expect(stats).toEqual({
+      thinkingCount: 2,
+      subagentCount: 1,
+      // 次数相同时按出现顺序（Read → Grep → Glob），groupStats 的排序是稳定的
+      kinds: [
+        { name: "Read", count: 1 },
+        { name: "Grep", count: 1 },
+        { name: "Glob", count: 1 },
+      ],
+    });
   });
 
   it("无思考/无工具时为 0", () => {
     const stats = processStats([
       { kind: "tool_group", blocks: [tool("Read")], index: 0 },
     ]);
-    expect(stats).toEqual({ thinkingCount: 0, toolTotal: 1, subagentCount: 0 });
+    expect(stats).toEqual({
+      thinkingCount: 0,
+      subagentCount: 0,
+      kinds: [{ name: "Read", count: 1 }],
+    });
   });
 });
