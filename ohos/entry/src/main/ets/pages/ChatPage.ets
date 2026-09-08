@@ -1207,6 +1207,9 @@ export struct ChatPage {
         toastModel.show('已选择模型 · 下一条消息生效', 'info');
       } else if (r === 'spawn') {
         toastModel.show('已选择模型 · 随首条消息生效', 'info');
+      } else if (r === 'blocked') {
+        // 存活会话跨供应商选型被拦：想换供应商得先停会话（docs/session-identity-alignment.md §3.3）
+        toastModel.show(`该会话正在 ${this.model.blockedProviderName} 上运行，如需换供应商请先停止会话`, 'warn');
       } else if (r === 'error') {
         toastModel.show('切换失败，请重试', 'warn');
       }
