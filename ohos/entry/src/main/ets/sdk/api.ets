@@ -13,9 +13,10 @@
  * get_providers / get_active_provider_id / set_active_provider_id
  * （抽屉供应商域：列表 + 当前激活 + 切换）；
  * get_default_models / set_model / set_session_meta / session_model
- * / set_effort / session_effort（输入区模型/思考程度
- * chip 域：系统默认选项集 + 存活会话运行时切换 + 会话记忆读写；
- * 记忆写入统一走 set_session_meta 三态 patch）。
+ * / set_effort / session_effort / session_provider / session_alive
+ * （输入区模型/思考程度 chip 域：系统默认选项集 + 存活会话运行时切换 +
+ * 会话记忆读写；记忆写入统一走 set_session_meta 三态 patch；会话供应商/
+ * 存活判定决定模型下拉口径，见 docs/session-identity-alignment.md）。
  * 参数序列化差异：上游 TS 的 undefined 字段经 JSON.stringify 自动丢弃；ArkTS
  * Record 值域不含 null，故 None 参数以「缺键」表达（Rust 侧 Option 字段缺键即
  * None，serde 语义等价）。
@@ -92,7 +93,8 @@ export interface PermissionResponseParams {
   answers: Record<string, string> | null;
   /** 「允许并切换模式」的目标模式（manual/auto 等）；null = 不切。 */
   nextMode: string | null;
-  /** 拒绝理由（UI 的 reason → 协议的 message，sidecar 透传给 SDK 的 deny message）；null = 无。 */
+  /** 拒绝理由（UI 的 reason → 协议的 message，sidecar 交给 CLI 当 user feedback，
+   *  由官方模板包装后反馈给模型）；null = 无。 */
   message: string | null;
   /** 「允许并记住」的会话级规则草稿；ohos 端不推导（同 PWA），恒 null 占位保持 DTO 形状完整。 */
   sessionRules: PermissionRuleDraft[] | null;
@@ -274,6 +276,14 @@ export class AideApi {
   }
 
   /**
+   * 会话绑定的供应商 id（spawn 改绑经 set_session_meta 写入的元数据）；
+   * null = 没记过（含供应商被删的场景，由调用方回退全局激活）。
+   */
+  sessionProvider(id: string): Promise<string | null> {
+    return getTransport().invoke<string | null>('session_provider', { 'id': id });
+  }
+
+  /**
    * 切换存活会话的 effort；返回 false = 无活进程（选择随下一条消息 env 通道
    * CLAUDE_CODE_EFFORT_LEVEL 生效，与 initialModel 同一语义）。
    */
@@ -283,6 +293,16 @@ export class AideApi {
 
   sessionEffort(id: string): Promise<string | null> {
     return getTransport().invoke<string | null>('session_effort', { 'id': id });
+  }
+
+  /**
+   * 会话进程是否存活（Rust 侧唯一权威存活表：session_init 登记 / session_dead
+   * 与 stop_chat_session 移除 / runtime_dead 全清）。手机端据它决定模型下拉
+   * 口径（docs/session-identity-alignment.md）；桌面不在线时调用失败，按
+   * false 处理。
+   */
+  sessionAlive(id: string): Promise<boolean> {
+    return getTransport().invoke<boolean>('session_alive', { 'id': id });
   }
 
   /** 系统默认供应商的模型选项（Claude 别名 sonnet/opus/haiku 等）。 */

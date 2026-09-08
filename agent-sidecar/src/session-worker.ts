@@ -7,7 +7,7 @@ import type {
   UserMessageBlock,
 } from "./types.js";
 import { MessageQueue } from "./generator.js";
-import { PermissionManager } from "./permissions.js";
+import { PermissionManager, policyDenyMessage } from "./permissions.js";
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
 import { ToolLifecycleTracker } from "./toolLifecycle.js";
@@ -446,7 +446,10 @@ export class SessionWorker {
     return true;
   }
 
-  /** SDK canUseTool 回调：返回类型对齐 CanUseTool 契约（input/opts 由 SDK 传入）。 */
+  /** SDK canUseTool 回调：返回类型对齐 CanUseTool 契约（input/opts 由 SDK 传入）。
+   *  这是 Aide 人工确认的**唯一**应答点：策略裁决为 ask 时 makePolicyHook 只回
+   *  `permissionDecision:"ask"`，由 CLI 转到这里弹窗等用户（详见 makePolicyHook
+   *  的 ask 分支注释）。CLI 拿到这里的 deny 会用官方模板包装拒绝结果。 */
   private makeCanUseToolCallback(): CanUseTool {
     const permissionCallback = this.permMgr.makeCallback(
       (e) => this.emit(e),
@@ -454,9 +457,13 @@ export class SessionWorker {
     );
     return async (toolName, input, opts) => {
       // btw 支线没有权限弹窗通路(permission_request 会被前端 btw 路由吞掉,
-      // 干等 resolve → 永久挂起):落到这里的一律 deny。注意这是兜底死代码——
-      // allowDangerouslySkipPermissions 下 CLI 实则不会调 canUseTool(2026-08-09
-      // 实测),真正的白名单拦截在 makePolicyHook 的 taskTools defer→deny 分支。
+      // 干等 resolve → 永久挂起):落到这里的一律 deny。
+      // 注：allowDangerouslySkipPermissions 只让 CLI 跳过**规则层**的询问——
+      // hook 不表态（{} 或 defer）时工具被静默放行、这里确实不会被调用
+      // (2026-08-09 实测,btw 任务支线的 ipconfig 就是这么漏过去的,所以
+      // taskTools 白名单外的命令必须在 hook 里 deny)。但 hook 显式返回
+      // permissionDecision:"ask" 时,该决策会作为预置决策绕过规则层直接进
+      // 权限流水线,这里**会**被调用。
       if (this.btwMode) {
         return {
           behavior: "deny" as const,
@@ -521,9 +528,10 @@ export class SessionWorker {
 
   /** Authoritative PreToolUse hook: evaluates the Aide policy snapshot before
    *  any other hook (image guard, skill guard, etc.) runs. `allow`/`deny` are
-   *  returned directly; `ask` opens the human confirmation flow via
-   *  `permMgr.request`; no-match returns `{}` (no opinion) so the CLI falls
-   *  back to its normal permission flow. Applies to every tool including Read.
+   *  returned directly; `ask` hands the decision back to the CLI so it routes
+   *  through `canUseTool` (Aide's confirmation flow — see the case body);
+   *  no-match returns `{}` (no opinion) so the CLI falls back to its normal
+   *  permission flow. Applies to every tool including Read.
    *  `allowDangerouslySkipPermissions` does NOT bypass this hook — the hook is
    *  registered unconditionally on `matcher: ".*"`.
    *  NB: the no-match branch must NOT return `permissionDecision:"defer"` — the
@@ -591,12 +599,15 @@ export class SessionWorker {
             hookSpecificOutput: {
               hookEventName: "PreToolUse" as const,
               permissionDecision: "deny" as const,
-              permissionDecisionReason: decision.reason,
+              // 策略拒绝的理由同样会被 CLI 原样塞进 tool_result 正文（SDK 通道
+              // 不做任何包装），必须自带官方外框（hRe），否则弱模型把理由读成
+              // 工具输出——与「写入2」事故同根。
+              permissionDecisionReason: policyDenyMessage(decision.reason),
             },
           };
         case "ask": {
           // btw 支线没有权限弹窗通路(permission_request 会被前端 btw 路由吞掉,
-          // permMgr.request 干等 resolve → 永久挂起)——ask 一律当 deny 处理。
+          // 落到 canUseTool 的请求干等应答 → 永久挂起)——ask 一律当 deny 处理。
           if (this.btwMode) {
             return {
               hookSpecificOutput: {
@@ -607,23 +618,22 @@ export class SessionWorker {
               },
             };
           }
-          const answer = await this.permMgr.request(
-            toolName,
-            toolInput,
-            {},
-            (e) => this.emit(e),
-            this.subagentTracker,
-          );
+          // 策略要求人工确认 → 交还 CLI 的第一类通道（canUseTool），不在 hook 里
+          // 自己弹窗等结果。这条返回值的下游链路（claude.exe，2026-09-08 运行时
+          // 实证）：permissionDecision:"ask" → hookPermissionResult{behavior:"ask"}
+          // → xRn 把它作为预置决策传给完整权限流水线（绕过规则检查，因此
+          // bypassPermissions 不会短路）→ case "ask" → 控制协议问 SDK 宿主 →
+          // canUseTool → 弹窗。注意：SDK 通道的 deny message 是**原样**进
+          // tool_result 的（带官方模板的 cancelAndAbort 只在终端交互 UI 生效），
+          // 因此外框由 permissions.ts 的 userDenyMessage 自行拼装。
+          // 旧实现在这里 await 用户应答后返回 deny + 用户原话：CLI 会把原话
+          // 裸塞进 tool_result，模型读成工具输出（「写入2」被当成 Write 的
+          // 返回内容，2026-09-08 事故）。语义位置错了——所以是换通道 +
+          // 宿主自带外框，不是改措辞。
           return {
             hookSpecificOutput: {
               hookEventName: "PreToolUse" as const,
-              permissionDecision: answer.approved ? ("allow" as const) : ("deny" as const),
-              permissionDecisionReason: answer.approved
-                ? "Aide policy requires confirmation"
-                // 用户拒绝附理由：理由作为 hook 原因反馈给模型，模型按理由直接调整，
-                // 不用再停下追问一轮。无理由时保持旧缺省文案。
-                : (answer.message ?? "User denied Aide policy confirmation"),
-              ...(answer.updatedInput ? { updatedInput: answer.updatedInput } : {}),
+              permissionDecision: "ask" as const,
             },
           };
         }

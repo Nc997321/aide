@@ -371,7 +371,8 @@ export function useChatSession(sessionId: Ref<string | null>) {
   /** answers：仅 AskUserQuestion 场景（问题文本 → 选中答案的不透明映射），
    *  由 PermissionDialog.vue 收集，这里只透传，语义由 sidecar 解释。
    *  reason：拒绝理由（仅 approved=false 时用户输入），Rust 参数名 message
-   *  （serde 自动 camelCase 映射），sidecar 透传给 SDK 的 deny message。
+   *  （serde 自动 camelCase 映射），sidecar 交给 CLI 当 user feedback（由官方
+   *  模板包装后反馈给模型，不是工具结果正文）。
    *  sessionRules：会话级规则草稿（「允许」文件工具时前端推导，如「本会话内
    *  同文件不再询问」），随放行透传到 sidecar 入库，worker 销毁即消失。 */
   async function respondPermission(

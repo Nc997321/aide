@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:
 import * as os from "node:os";
 import * as path from "node:path";
 import { SessionWorker } from "./session-worker.js";
+import { userDenyMessage } from "./permissions.js";
 import type { ChatEvent } from "./types.js";
 import type { PermissionPolicySnapshot } from "./policy/types.js";
 
@@ -666,29 +667,54 @@ describe("SessionWorker — Aide 权限策略 PreToolUse hook", () => {
     expect(out.hookSpecificOutput?.permissionDecision).toBeUndefined();
   });
 
-  it("policy ask emits permission_request and resolves allow when approved", async () => {
+  it("policy ask → permissionDecision ask：人工确认交还 canUseTool 通道", async () => {
     const { worker, events } = makeWorker();
     worker._testApplyPermissionPolicy(rule("ask", "Bash"));
     const hook = worker._testPolicyHook("/tmp");
-    const pending = hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } } as any);
+    const out: any = await hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } } as any);
+    // 2026-09-08：这里曾 await 用户应答后返回 deny + 用户原话，CLI 把它标成
+    // permission-rule 并把原话裸塞进 tool_result（模型读成命令输出）。改为交还
+    // CLI 的 canUseTool 通道，拒绝才能落到官方模板 + toolDenialKind:user-rejected。
+    expect(out.hookSpecificOutput.permissionDecision).toBe("ask");
+    // 应答权已交出：hook 自己不再弹窗（弹窗由 canUseTool 回调发起）
+    expect(events.some((e: any) => e.type === "permission_request")).toBe(false);
+  });
+
+  it("policy ask 的应答点：canUseTool 批准后 allow", async () => {
+    const { worker, events } = makeWorker();
+    const cb = worker._testCanUseTool();
+    const pending = cb("Bash", { command: "ls" }, {} as any);
     await flushPromises();
-    const req = events.find((e: any) => e.type === "permission_request");
+    const req: any = events.find((e: any) => e.type === "permission_request");
     expect(req).toBeDefined();
     worker.permMgr.resolve(req.id, true);
     const out: any = await pending;
-    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
+    expect(out.behavior).toBe("allow");
   });
 
-  it("policy ask resolves deny when the user rejects", async () => {
+  it("policy ask 的应答点：canUseTool 拒绝后 deny，理由包进官方外框（绝不裸传）", async () => {
     const { worker, events } = makeWorker();
-    worker._testApplyPermissionPolicy(rule("ask", "Bash"));
-    const hook = worker._testPolicyHook("/tmp");
-    const pending = hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } } as any);
+    const cb = worker._testCanUseTool();
+    const withReason = cb("Bash", { command: "ls" }, {} as any);
     await flushPromises();
-    const req = events.find((e: any) => e.type === "permission_request");
-    worker.permMgr.resolve(req.id, false);
-    const out: any = await pending;
-    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+    const req1: any = events.find((e: any) => e.type === "permission_request");
+    worker.permMgr.resolve(req1.id, false, undefined, "别删目录");
+    const deny: any = await withReason;
+    expect(deny.behavior).toBe("deny");
+    expect(deny.decisionClassification).toBe("user_reject");
+    expect(deny.message).toBe(userDenyMessage("别删目录"));
+
+    // 无理由时同样带完整外框（STOP 变体）。裸传空串或中文兜底都会让模型把
+    // tool_result 正文读成工具输出（正是 2026-09-08 事故的形态）。
+    const noReason = cb("Bash", { command: "ls" }, {} as any);
+    await flushPromises();
+    const reqs = events.filter((e: any) => e.type === "permission_request");
+    worker.permMgr.resolve(reqs[reqs.length - 1].id, false);
+    expect(await noReason).toEqual({
+      behavior: "deny",
+      decisionClassification: "user_reject",
+      message: userDenyMessage(),
+    });
   });
 
   it("policy hook applies to Read too (not just authorize-only tools)", async () => {
@@ -708,18 +734,17 @@ describe("SessionWorker — Aide 权限策略 PreToolUse hook", () => {
     expect(out.hookSpecificOutput.permissionDecision).toBe("deny"); // revision 2 still active
   });
 
-  it("policy ask for AskUserQuestion reshapes answers into updatedInput", async () => {
+  it("AskUserQuestion 的答案经 canUseTool 重塑进 updatedInput", async () => {
     const { worker, events } = makeWorker();
-    worker._testApplyPermissionPolicy(rule("ask", "AskUserQuestion"));
-    const hook = worker._testPolicyHook("/tmp");
+    const cb = worker._testCanUseTool();
     const input = { questions: [{ question: "q", options: [{ label: "a" }] }] };
-    const pending = hook({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion", tool_input: input } as any);
+    const pending = cb("AskUserQuestion", input, {} as any);
     await flushPromises();
     const req = events.find((e: any) => e.type === "permission_request");
     worker.permMgr.resolve(req.id, true, { q: "a" });
     const out: any = await pending;
-    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
-    expect(out.hookSpecificOutput.updatedInput).toEqual({ questions: input.questions, answers: { q: "a" } });
+    expect(out.behavior).toBe("allow");
+    expect(out.updatedInput).toEqual({ questions: input.questions, answers: { q: "a" } });
   });
 });
 
@@ -860,42 +885,43 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
     worker.stop();
   });
 
-  it("permission_response with a message surfaces the deny reason to the SDK", async () => {
+  it("permission_response with a message surfaces the deny reason as CLI feedback", async () => {
     const { worker, events } = makeWorker();
-    worker._testApplyPermissionPolicy(rule("ask", "Bash"));
-    const hook = worker._testPolicyHook("/tmp");
-    const pending = hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "rm -rf /tmp/cache" } } as any);
+    const cb = worker._testCanUseTool();
+    const pending = cb("Bash", { command: "rm -rf /tmp/cache" }, {} as any);
     await flushPromises();
     const req = events.find((e: any) => e.type === "permission_request");
     // 拒绝 + 理由：Rust permission_response 命令带 message 字段
     worker.handleCommand({ cmd: "permission_response", session_id: "test-sid", id: req.id, approved: false, message: "别删目录，改成只清空里层的 .tmp 文件" } as any);
-    const out: any = await pending;
-    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
-    // 用户理由走 permissionDecisionReason 反馈给模型（hook 路径，非 canUseTool 的 message）
-    expect(out.hookSpecificOutput.permissionDecisionReason).toBe("别删目录，改成只清空里层的 .tmp 文件");
+    // 理由包进官方 YFe 外框后交给 CLI（SDK 通道不做包装，外框由宿主负责；
+    // 2026-09-08：裸理由进工具结果位被模型读成命令输出）
+    expect(await pending).toEqual({
+      behavior: "deny",
+      decisionClassification: "user_reject",
+      message: userDenyMessage("别删目录，改成只清空里层的 .tmp 文件"),
+    });
   });
 
   it("permission_response no longer carries always (command shape, no updatedPermissions)", async () => {
     const { worker, events } = makeWorker();
-    // send a permission_request via the policy ask path, then resolve without `always`
-    worker._testApplyPermissionPolicy(rule("ask", "Bash"));
-    const hook = worker._testPolicyHook("/tmp");
-    const pending = hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } } as any);
+    // send a permission_request via the canUseTool path, then resolve without `always`
+    const cb = worker._testCanUseTool();
+    const pending = cb("Bash", { command: "ls" }, {} as any);
     await flushPromises();
     const req = events.find((e: any) => e.type === "permission_request");
     // Simulate the Rust permission_response command (no `always` field).
     worker.handleCommand({ cmd: "permission_response", session_id: "test-sid", id: req.id, approved: true } as any);
     const out: any = await pending;
-    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
-    expect((out.hookSpecificOutput as any).updatedPermissions).toBeUndefined();
+    expect(out.behavior).toBe("allow");
+    expect((out as any).updatedPermissions).toBeUndefined();
   });
 
   it("permission_response with sessionRules auto-allows the same file for the rest of the session", async () => {
     const { worker, events } = makeWorker();
     worker._testApplyPermissionPolicy(rule("ask", "Edit"));
-    const hook = worker._testPolicyHook("/tmp");
-    // 首次调用该文件 → ask，弹窗
-    const first = hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/x.ts" } } as any);
+    // 首次调用该文件 → hook 交还 CLI → canUseTool 弹窗
+    const cb = worker._testCanUseTool();
+    const first = cb("Edit", { file_path: "/tmp/x.ts" }, {} as any);
     await flushPromises();
     const req = events.find((e: any) => e.type === "permission_request");
     expect(req).toBeTruthy();
@@ -904,12 +930,11 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
       cmd: "permission_response", session_id: "test-sid", id: req.id, approved: true,
       sessionRules: [{ effect: "allow", tool: "Edit", matcher: { kind: "path", field: "file_path", file: "/tmp/x.ts" } }],
     } as any);
-    const out: any = await first;
-    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
-    // 再次调用同一文件 → 直接放行，不再弹 permission_request
-    const second = hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/x.ts" } } as any);
-    await flushPromises();
-    const out2: any = await second;
+    const firstOut: any = await first;
+    expect(firstOut.behavior).toBe("allow");
+    // 再次调用同一文件 → 会话规则命中，hook 直接放行，不再弹 permission_request
+    const hook = worker._testPolicyHook("/tmp");
+    const out2: any = await hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/x.ts" } } as any);
     expect(out2.hookSpecificOutput.permissionDecision).toBe("allow");
     expect(events.filter((e: any) => e.type === "permission_request").length).toBe(1);
   });
@@ -917,8 +942,8 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
   it("session rule covers only the exact file — a different file still asks", async () => {
     const { worker, events } = makeWorker();
     worker._testApplyPermissionPolicy(rule("ask", "Edit"));
-    const hook = worker._testPolicyHook("/tmp");
-    const first = hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/x.ts" } } as any);
+    const cb = worker._testCanUseTool();
+    const first = cb("Edit", { file_path: "/tmp/x.ts" }, {} as any);
     await flushPromises();
     const req = events.find((e: any) => e.type === "permission_request");
     worker.handleCommand({
@@ -926,23 +951,20 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
       sessionRules: [{ effect: "allow", tool: "Edit", matcher: { kind: "path", field: "file_path", file: "/tmp/x.ts" } }],
     } as any);
     await first;
-    // 不同文件 → 仍走 ask。pathEqualsFile 走真实 fs（canonicalizeWithTail），
-    // 单次 setImmediate 不够，等 I/O 落定再查事件。
-    const other = hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/y.ts" } } as any);
-    await new Promise((r) => setTimeout(r, 50));
-    const reqs = events.filter((e: any) => e.type === "permission_request");
-    expect(reqs.length).toBe(2);
-    // 收尾：拒绝第二条挂起请求，避免测试悬挂
-    worker.handleCommand({ cmd: "permission_response", session_id: "test-sid", id: reqs[1].id, approved: false } as any);
-    await other;
+    // 不同文件 → 仍走 ask（交还 canUseTool，hook 这里不再自己弹窗）。
+    // pathEqualsFile 走真实 fs（canonicalizeWithTail），等 I/O 落定再断言。
+    const hook = worker._testPolicyHook("/tmp");
+    const other: any = await hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/y.ts" } } as any);
+    expect(other.hookSpecificOutput.permissionDecision).toBe("ask");
+    expect(events.filter((e: any) => e.type === "permission_request").length).toBe(1);
   });
 
   it("file-family expansion: Write approval auto-allows Edit/MultiEdit on the same file", async () => {
     const { worker, events } = makeWorker();
     worker._testApplyPermissionPolicy(rule("ask", "Write"));
-    const hook = worker._testPolicyHook("/tmp");
-    // Write 新文件 → ask，允许（草稿是 Write 工具的精确文件规则）
-    const first = hook({ hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: "/tmp/x.ts" } } as any);
+    // Write 新文件 → ask → canUseTool 弹窗，允许（草稿是 Write 工具的精确文件规则）
+    const cb = worker._testCanUseTool();
+    const first = cb("Write", { file_path: "/tmp/x.ts" }, {} as any);
     await flushPromises();
     const req = events.find((e: any) => e.type === "permission_request");
     worker.handleCommand({
@@ -950,6 +972,7 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
       sessionRules: [{ effect: "allow", tool: "Write", matcher: { kind: "path", field: "file_path", file: "/tmp/x.ts" } }],
     } as any);
     await first;
+    const hook = worker._testPolicyHook("/tmp");
     // Edit 同一文件 → 家族规则命中，不再弹窗
     const edit = hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/x.ts" } } as any);
     await flushPromises();
@@ -973,9 +996,9 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
         { id: "r2", scope: "user", order: 1, effect: "ask", tool: "NotebookEdit", matcher: { kind: "tool" }, source: { label: "user", readOnly: false } },
       ],
     });
-    const hook = worker._testPolicyHook("/tmp");
     // Write 放行（家族展开：Edit/Write/MultiEdit 三条同路径规则）
-    const first = hook({ hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: "/tmp/x.ipynb" } } as any);
+    const cb = worker._testCanUseTool();
+    const first = cb("Write", { file_path: "/tmp/x.ipynb" }, {} as any);
     await flushPromises();
     const req = events.find((e: any) => e.type === "permission_request");
     worker.handleCommand({
@@ -983,14 +1006,14 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
       sessionRules: [{ effect: "allow", tool: "Write", matcher: { kind: "path", field: "file_path", file: "/tmp/x.ipynb" } }],
     } as any);
     await first;
-    // NotebookEdit 同路径（notebook_path 字段）不在家族内 → 仍问
+    const hook = worker._testPolicyHook("/tmp");
+    // NotebookEdit 同路径（notebook_path 字段）不在家族内 → 仍问（交还 canUseTool）
     const nb = hook({ hook_event_name: "PreToolUse", tool_name: "NotebookEdit", tool_input: { notebook_path: "/tmp/x.ipynb" } } as any);
     await new Promise((r) => setTimeout(r, 50));
-    expect(events.filter((e: any) => e.type === "permission_request").length).toBe(2);
-    // 收尾：拒绝 NotebookEdit 挂单请求，避免测试悬挂
-    const reqs = events.filter((e: any) => e.type === "permission_request");
-    worker.handleCommand({ cmd: "permission_response", session_id: "test-sid", id: reqs[1].id, approved: false } as any);
-    await nb;
+    const nbOut: any = await nb;
+    expect(nbOut.hookSpecificOutput.permissionDecision).toBe("ask");
+    // hook 不再自己弹窗：全程只弹过 Write 那一次
+    expect(events.filter((e: any) => e.type === "permission_request").length).toBe(1);
   });
 
   it("file-family expansion dedupes across the family (Write then Edit drafts → 3 rules)", async () => {
@@ -1007,12 +1030,12 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
   it("duplicate session rules are deduplicated by (tool, matcher) within the family", async () => {
     const { worker, events } = makeWorker();
     worker._testApplyPermissionPolicy(rule("ask", "Edit"));
-    const hook = worker._testPolicyHook("/tmp");
+    const cb = worker._testCanUseTool();
     const draft = { effect: "allow" as const, tool: "Edit", matcher: { kind: "path" as const, field: "file_path" as const, file: "/tmp/x.ts" } };
     // 规则落地前同一文件已有两条挂起请求（并发 Edit），都带相同草稿：
     // 家族展开后固定 3 条（Edit/Write/MultiEdit 各一），重复草稿不新增膨胀
-    const p1 = hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/x.ts" } } as any);
-    const p2 = hook({ hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: "/tmp/x.ts" } } as any);
+    const p1 = cb("Edit", { file_path: "/tmp/x.ts" }, {} as any);
+    const p2 = cb("Edit", { file_path: "/tmp/x.ts" }, {} as any);
     await flushPromises();
     const reqs = events.filter((e: any) => e.type === "permission_request");
     expect(reqs.length).toBe(2);

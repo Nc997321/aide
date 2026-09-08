@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { PermissionManager } from "./permissions.js";
+import { PermissionManager, userDenyMessage } from "./permissions.js";
 import { SubagentTracker } from "./subagents.js";
 import type { ChatEvent } from "./types.js";
 
@@ -36,7 +36,7 @@ describe("PermissionManager — AskUserQuestion answers 重组", () => {
     expect(result).toEqual({ behavior: "allow", updatedInput: input });
   });
 
-  it("denying AskUserQuestion returns deny with the default message, ignoring any stray answers", async () => {
+  it("denying AskUserQuestion returns the framed nhe-style deny (no feedback), ignoring any stray answers", async () => {
     const events: ChatEvent[] = [];
     const mgr = new PermissionManager();
     const callback = mgr.makeCallback((e) => events.push(e));
@@ -46,10 +46,14 @@ describe("PermissionManager — AskUserQuestion answers 重组", () => {
     mgr.resolve(id, false);
 
     const result = await resultPromise;
-    expect(result).toEqual({ behavior: "deny", message: "用户拒绝" });
+    expect(result).toEqual({
+      behavior: "deny",
+      decisionClassification: "user_reject",
+      message: userDenyMessage(),
+    });
   });
 
-  it("deny with a user reason surfaces the reason as the SDK deny message", async () => {
+  it("deny with a user reason wraps it in the official YFe framing (never raw into the tool_result)", async () => {
     const events: ChatEvent[] = [];
     const mgr = new PermissionManager();
     const callback = mgr.makeCallback((e) => events.push(e));
@@ -59,10 +63,17 @@ describe("PermissionManager — AskUserQuestion answers 重组", () => {
     mgr.resolve(id, false, undefined, "别删目录，改成只清空里层的 .tmp 文件");
 
     const result = await resultPromise;
-    expect(result).toEqual({ behavior: "deny", message: "别删目录，改成只清空里层的 .tmp 文件" });
+    expect(result).toEqual({
+      behavior: "deny",
+      decisionClassification: "user_reject",
+      message: userDenyMessage("别删目录，改成只清空里层的 .tmp 文件"),
+    });
+    // 外框必须在：SDK 通道把 message 原样塞进 tool_result，裸理由会被读成工具输出
+    expect((result as any).message).toContain("The user doesn't want to proceed");
+    expect((result as any).message).toContain("别删目录，改成只清空里层的 .tmp 文件");
   });
 
-  it("deny without a reason still falls back to the default 用户拒绝 message", async () => {
+  it("deny without a reason still carries the full official framing (STOP variant)", async () => {
     const events: ChatEvent[] = [];
     const mgr = new PermissionManager();
     const callback = mgr.makeCallback((e) => events.push(e));
@@ -72,7 +83,11 @@ describe("PermissionManager — AskUserQuestion answers 重组", () => {
     mgr.resolve(id, false);
 
     const result = await resultPromise;
-    expect(result).toEqual({ behavior: "deny", message: "用户拒绝" });
+    expect(result).toEqual({
+      behavior: "deny",
+      decisionClassification: "user_reject",
+      message: userDenyMessage(),
+    });
   });
 
   it("approving a non-AskUserQuestion tool ignores an answers payload (defensive: no accidental reshape)", async () => {

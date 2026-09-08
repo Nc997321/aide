@@ -63,8 +63,10 @@ const emit = defineEmits<{
      *  permissionsApi.createMany 落盘（Rust 一次原子写 + 一次广播），再走正常
      *  approve。纯前端字段，不进 SidecarCommand 协议。 */
     persistRule?: { scope: PermissionScope; rules: PermissionRuleDraft[] },
-    /** 拒绝理由：仅 approved=false 且用户输入时带。全链路透传到 SDK 的 deny message，
-     *  作为工具错误反馈给模型——模型按理由直接调整，不用再追问一轮。 */
+    /** 拒绝理由：仅 approved=false 且用户输入时带。全链路透传到 CLI 作为 user
+     *  feedback——CLI 会把它拼进官方拒绝模板（"…the user said: <feedback>"）再
+     *  反馈给模型。**不能**直接当工具结果正文：那会被模型读成命令输出
+     *  （2026-09-08：「写入2」被当成 Write 的返回值）。 */
     reason?: string,
   ];
 }>();

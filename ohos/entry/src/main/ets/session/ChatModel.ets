@@ -16,11 +16,14 @@
  *    本地发送也多一个 RTT 才出气泡。对照上游 useChatSession.ts 的方案 C
  *  - 断线重连整页重载（对照 reloadSessionMessages）：清消息/游标后重新 hydrate
  *  - 监听挂在传输实例上只挂一次（重建实例会让 listener 挂死连接）
- *  - 模型/effort 域（syncModelEffort/pickModel/pickEffort）：选项集随激活供应
- *    商（系统默认 get_default_models，第三方配置推导）；当前值会话记忆优先、
+ *  - 模型/effort 域（syncModelEffort/pickModel/pickEffort）：下拉口径对照
+ *    桌面判定表（docs/session-identity-alignment.md §5）——存活会话锁定会话
+ *    自己的供应商（session_alive + session_provider），未存活/新会话随全局
+ *    激活（系统默认 get_default_models，第三方配置推导）；当前值会话记忆优先、
  *    不在选项集内回落默认；存活会话切换 = set_model/set_effort 运行时 +
- *    set_session_* 记忆双写（返回 false = 无活进程走 deferred）；空会话选择
- *    只入 store，随首条消息 initialModel/initialEffort 带出
+ *    set_session_meta 记忆双写（返回 false = 无活进程走 deferred）；空会话选择
+ *    只入 store，随首条消息 initialModel/initialEffort 带出；存活会话跨
+ *    供应商选型在 pickModel 拦截（'blocked'，不改 store.model）
  * 未过筛（随 UI 扩容）：evict 字节降级、页级回收 recycle、权限模式选择器、
  * btw 支线、图片消息、nextMode（「进入自动模式/计划批准」UI
  * 定稿后接入）、「允许并记住」规则推导（sessionRules；deriveSessionFileRules
@@ -100,7 +103,8 @@ export interface RespondPermissionOpts {
   answers: Record<string, string> | null;
   /** 「批准并执行」的目标模式（计划批准 = 'auto'，sidecar 收到后切模式）；null = 不切。 */
   nextMode: string | null;
-  /** 拒绝理由（协议参数名 message；sidecar 透传给 SDK 的 deny message）。 */
+  /** 拒绝理由（协议参数名 message；sidecar 交给 CLI 当 user feedback，由官方
+   *  模板包装后反馈给模型）。 */
   reason: string | null;
 }
 
@@ -292,8 +296,10 @@ export class ChatModel {
 
   /**
    * 模型/effort 域同步（打开会话 / 新会话 / 切供应商后调用，幂等）：
-   *  - 选项集：激活供应商（system_default → get_default_models，第三方 → 配置
-   *    推导）；供应商未加载时先补拉一次（防重入内置于模型，离线静默）
+   *  - 选项集口径（对照 docs/session-identity-alignment.md §5 判定表）：空
+   *    会话/未存活进程 → 全局激活供应商；存活进程 → 会话自己的供应商
+   *    （session_provider 元数据，缺失/已删回退全局激活）；供应商未加载时
+   *    先补拉一次（防重入内置于模型，离线静默）
    *  - 模型当前值：会话记忆（session_model 元数据，不在选项集内回落默认——
    *    供应商已切换/模型下架的场景）→ 无记忆 = 默认（选项集首位，store 记 ''）
    *  - effort 当前值：会话记忆（归一化）→ 供应商 effortLevel → 'high'
@@ -308,6 +314,13 @@ export class ChatModel {
     }
     if (p === null) {
       return; // 离线/拉取失败：chip 留占位，点击 chip 重试（onModelChipTap 兜底）
+    }
+    if (sid !== '') {
+      // 存活会话锁 spawn 时的供应商：下拉口径换到会话供应商（拿不到回退全局）
+      p = await this.sessionDropdownProvider(sid, p);
+      if (this.store.sid !== sid) {
+        return; // 会话已切走：不回写新会话
+      }
     }
     try {
       const opts: ModelOption[] = await this.fetchModelOptions(p);
@@ -351,6 +364,39 @@ export class ChatModel {
   }
 
   /**
+   * 会话的下拉口径供应商：存活进程锁定 spawn 时的供应商（session_provider
+   * 元数据 → providerModel 查配置），未存活/元数据缺失/配置已删 → 全局激活
+   * 兜底。存活查询失败按未存活处理（桌面不在线时远程调用必失败，见
+   * docs/session-identity-alignment.md §6）。
+   */
+  private async sessionDropdownProvider(sid: string, fallback: ProviderConfigView): Promise<ProviderConfigView> {
+    let alive: boolean = false;
+    try {
+      alive = await api.sessionAlive(sid);
+    } catch (e) {
+      return fallback; // 查询失败（桌面离线等）：按未存活跟随全局
+    }
+    if (!alive) {
+      return fallback; // 未存活：与桌面「未启动跟随全局」一致
+    }
+    let spid: string | null = null;
+    try {
+      spid = await api.sessionProvider(sid);
+    } catch (e) {
+      return fallback;
+    }
+    if (spid === null) {
+      return fallback; // 会话从没记过供应商
+    }
+    for (let i = 0; i < providerModel.providers.length; i++) {
+      if (providerModel.providers[i].id === spid) {
+        return providerModel.providers[i];
+      }
+    }
+    return fallback; // 供应商配置已删除
+  }
+
+  /**
    * 供应商的模型选项集（对照桌面 providerModelList + 系统默认特例）：
    * 系统默认走 get_default_models（Claude 别名），第三方从配置推导（model +
    * modelMappings 五字段 + knownModels 去重；displayName = value）。
@@ -383,11 +429,17 @@ export class ChatModel {
     return opts;
   }
 
+  /** pickModel 返回 'blocked' 时的会话供应商展示名（toast 文案用；非观察态）。 */
+  blockedProviderName: string = '';
+
   /**
    * 选择模型（浮层选项点击）。返回语义：
    *  - 'same'     未变（当前即所选）
    *  - 'spawn'    空会话：只入 store（无真实 id 可写元数据，随首条消息
    *               initialModel 带出）
+   *  - 'blocked'  存活会话跨供应商选型被拦（不改 store.model，供应商名见
+   *               blockedProviderName——set_model 把模型名直发当前进程，
+   *               不属于会话供应商的模型必然 400）
    *  - 'live'     存活进程已切换（set_model true；终态以 model_switch_result 坐实）
    *  - 'deferred' 无活进程（set_model false）：记忆已写，下一条消息生效
    *  - 'error'    RPC 失败（回滚显示）
@@ -397,12 +449,20 @@ export class ChatModel {
     if (value === this.store.model || (this.store.model === '' && value === fallback)) {
       return 'same';
     }
-    const prev: string = this.store.model;
     const sid: string = this.store.sid;
-    this.store.model = value; // 乐观更新（失败回滚）
     if (sid === '') {
+      this.store.model = value;
       return 'spawn';
     }
+    try {
+      if (await api.sessionAlive(sid) && await this.isCrossProviderPick(sid, value)) {
+        return 'blocked';
+      }
+    } catch (e) {
+      // 存活查询失败按未存活放行——无从判定，由桌面端门控兜底
+    }
+    const prev: string = this.store.model;
+    this.store.model = value; // 乐观更新（失败回滚）
     try {
       const live: boolean = await api.setModel(sid, value);
       await api.setSessionMeta(sid, { model: MetaField.set(value) }); // 记忆恒写（live/deferred 都记住选择）
@@ -412,6 +472,45 @@ export class ChatModel {
         this.store.model = prev;
       }
       return 'error';
+    }
+  }
+
+  /**
+   * 存活会话上 value 是否跨供应商：不属于会话供应商（session_provider 元
+   * 数据）的模型列表 → true。元数据缺失/配置已删/列表拉取失败 → false
+   * （无从对照，放行由桌面端门控兜底）。
+   */
+  private async isCrossProviderPick(sid: string, value: string): Promise<boolean> {
+    let spid: string | null = null;
+    try {
+      spid = await api.sessionProvider(sid);
+    } catch (e) {
+      return false;
+    }
+    if (spid === null) {
+      return false;
+    }
+    let p: ProviderConfigView | null = null;
+    for (let i = 0; i < providerModel.providers.length; i++) {
+      if (providerModel.providers[i].id === spid) {
+        p = providerModel.providers[i];
+        break;
+      }
+    }
+    if (p === null) {
+      return false; // 供应商配置已删除：无从推导模型列表
+    }
+    try {
+      const opts: ModelOption[] = await this.fetchModelOptions(p);
+      for (let i = 0; i < opts.length; i++) {
+        if (opts[i].value === value) {
+          return false;
+        }
+      }
+      this.blockedProviderName = p.name;
+      return true;
+    } catch (e) {
+      return false;
     }
   }
 

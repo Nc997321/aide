@@ -20,13 +20,43 @@ interface PendingEntry {
   resolve: (decision: {
     approved: boolean;
     answers?: Record<string, string>;
-    /** 拒绝理由（用户输入）：透传给 SDK 的 deny message，作为工具错误反馈给模型。 */
+    /** 拒绝理由（用户输入）：作为 user feedback 交给 CLI，由官方模板包装后
+     *  反馈给模型（见 makeCallback 的 deny 分支）。 */
     message?: string;
   }) => void;
   toolName: string;
   /** Notify every connected client to dismiss this request. Fired on all
    *  terminal paths (settled by anyone, aborted, interrupt, bulk-approve). */
   emitCancelled: () => void;
+}
+
+// ---- deny 文案：官方外框（SDK 通道契约） ------------------------------------
+// SDK 通道里 canUseTool/hook 的 deny message 会被 CLI **原样**塞进 tool_result
+// 正文并标 toolDenialKind:"permission-rule"（2026-09-08 运行时实证 + 反汇编：
+// 带 YFe 模板的 cancelAndAbort 是终端交互 UI 的路径，SDK 宿主不走）。因此外框
+// （"这是拒绝、工具未执行、用户说了什么"）必须由宿主自己写——官方文档的 deny
+// 示例（docs/reference/处理批准和用户输入.md「建议替代方案」）也是自带外框的。
+// 模板原文取自 claude.exe（YFe/nhe/hRe，@279529599 起）。
+//
+// 读取方：packages/aide-sdk/src/utils/toolDenial.ts 的 parseToolDenial 按这两个
+// 前缀反解「是否拒绝 + 拒绝理由」，前端据此渲染拒绝态。**改这里的外框必须同步
+// 那边的前缀**，否则 UI 静默退化成普通报错（不崩、只是认不出来）。
+const DENY_BASE =
+  "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).";
+const DENY_POLICY_BASE =
+  "Permission for this tool use was denied. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). Try a different approach or report the limitation to complete your task.";
+
+/** 人工拒绝（用户在弹窗点了拒绝）。有附言 → YFe 形态；无附言 → nhe 形态。 */
+export function userDenyMessage(feedback?: string): string {
+  const f = feedback?.trim();
+  return f
+    ? `${DENY_BASE} To tell you how to proceed, the user said:\n${f}`
+    : `${DENY_BASE} STOP what you are doing and wait for the user to tell you how to proceed.`;
+}
+
+/** 策略/规则拒绝（非人工）。外框用 hRe（"Try a different approach"），理由追加在后。 */
+export function policyDenyMessage(reason?: string): string {
+  return reason ? `${DENY_POLICY_BASE}\n\n${reason}` : DENY_POLICY_BASE;
 }
 
 /**
@@ -95,7 +125,7 @@ export class PermissionManager {
       },
     );
     if (!decision.approved) {
-      // 拒绝理由：仅 deny 路径有意义（用户输入），透传给 SDK 的 deny message。
+      // 拒绝理由：仅 deny 路径有意义（用户输入），作为 user feedback 交给 CLI。
       return { approved: false, ...(decision.message ? { message: decision.message } : {}) };
     }
     // AskUserQuestion: SDK requires the answers reshaped into updatedInput
@@ -129,7 +159,14 @@ export class PermissionManager {
         subagents,
       );
       if (!result.approved) {
-        return { behavior: "deny" as const, message: result.message ?? "用户拒绝" };
+        // 人工拒绝：官方外框 + 用户附言（见文件顶部的 userDenyMessage 注释）。
+        // decisionClassification 如实上报「人工拒绝」——SDK 宿主弹窗后按文档要求
+        // 设置，CLI 不再保守推断（sdk.d.ts PermissionDecisionClassification）。
+        return {
+          behavior: "deny" as const,
+          message: userDenyMessage(result.message),
+          decisionClassification: "user_reject" as const,
+        };
       }
       return {
         behavior: "allow" as const,

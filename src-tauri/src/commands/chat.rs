@@ -286,8 +286,9 @@ pub async fn permission_response(
     always: Option<bool>,
     answers: Option<HashMap<String, String>>,
     next_mode: Option<String>,
-    // 拒绝理由：仅 approved=false 时生效，sidecar 透传给 SDK 的 deny message
-    // （作为工具错误反馈给模型，让模型按理由直接调整，不再追问一轮）。
+    // 拒绝理由：仅 approved=false 时生效，sidecar 交给 CLI 当 user feedback
+    // （CLI 用官方模板包装后反馈给模型）。它不是工具结果正文——裸传会让模型
+    // 把用户的话读成命令输出（2026-09-08 事故）。
     message: Option<String>,
     // 会话级规则草稿（前端在「允许」文件工具时推导，如「本会话内同文件不再询问」）：
     // 不透明透传给 sidecar 入库（PermissionRuleDraft 形状，Rust 不校验内容）。
@@ -574,8 +575,8 @@ mod tests {
         assert_eq!(cmd["approved"], true);
     }
 
-    /// 回归：拒绝带理由时 permission_response 必须携带 message（sidecar 透传给
-    /// SDK 的 deny message）；无理由时不得出现该键（保持旧行为）。
+    /// 回归：拒绝带理由时 permission_response 必须携带 message（sidecar 交给
+    /// CLI 当 user feedback）；无理由时不得出现该键（保持旧行为）。
     #[test]
     fn permission_response_cmd_message_optional() {
         let with_msg = json!({
