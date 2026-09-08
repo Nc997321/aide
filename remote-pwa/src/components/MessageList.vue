@@ -43,6 +43,11 @@ function userText(m: ChatMessage): string {
     .join("\n");
 }
 
+/** 用户气泡里的图片块（user_message display 回灌；无则空数组）。 */
+function userImages(m: ChatMessage): Extract<ContentBlock, { type: "image" }>[] {
+  return m.blocks.filter((b): b is Extract<ContentBlock, { type: "image" }> => b.type === "image");
+}
+
 /** 流式尾块判定：生成中 + 末条消息 + 末个块——该块用非高亮渲染（hljs O(n²) 放大器，
  *  见 utils/markdown.ts）；定稿块走 renderMarkdown（缓存 + 高亮一次）。 */
 function isStreamingTail(m: ChatMessage, bi: number): boolean {
@@ -142,7 +147,12 @@ watch(
       <div v-if="m.markerFor" class="m-sys">↑ 更早的消息已折叠（重新进入会话可恢复）</div>
 
       <div v-else-if="m.role === 'user'" class="m-row user">
-        <div class="m-bubble-user">{{ userText(m) }}</div>
+        <div class="m-bubble-user">
+          <div v-if="userImages(m).length" class="m-user-imgs">
+            <img v-for="(b, bi) in userImages(m)" :key="bi" class="m-img" :src="`data:${b.mediaType};base64,${b.data}`" :alt="b.mediaType" />
+          </div>
+          <div v-if="userText(m)" class="m-user-txt">{{ userText(m) }}</div>
+        </div>
       </div>
 
       <div v-else class="m-row">

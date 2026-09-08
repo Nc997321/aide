@@ -939,6 +939,19 @@ details[open] > summary .caret {
   border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
 }
+/* 用户气泡图片（user_message display 回灌的 image 块，纵向堆叠） */
+.m-user-imgs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.m-user-imgs:not(:last-child) {
+  margin-bottom: 4px;
+}
+.m-user-txt {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 /* usage 尾注 */
 .m-usage {
@@ -1030,6 +1043,67 @@ details[open] > summary .caret {
   justify-content: flex-end;
   align-items: center;
   gap: 6px;
+}
+/* 待发图片预览条（工具行上方，横向铺开可换行） */
+.ch-attach {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ch-attach-item {
+  position: relative;
+  width: 54px;
+  height: 54px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-default);
+}
+.ch-attach-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.ch-attach-x {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+}
+/* 工具行图片入口（图标圆钮，排左侧与 effort chip 同行） */
+.ch-img-btn {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  margin-right: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--ease-t);
+}
+.ch-img-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-default);
+}
+.ch-img-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .ch-input-row {
   display: flex;

@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { mount, type VueWrapper } from "@vue/test-utils";
 import { setTransport, type AideTransport } from "@aide/sdk";
 import { __resetForTest } from "@aide/sdk/chat";
 import ChatView from "./ChatView.vue";
+
+// canvas/ImageBitmap 在 jsdom 不可用：编码器打桩（编码逻辑自身在 imageEncode.test.ts 验）
+vi.mock("../imageEncode", () => ({
+  fileToAttachment: vi.fn(async (_file: File) => ({ data: "aGk=", mediaType: "image/png" })),
+}));
 
 /**
  * ChatView 适配层测试：真 store（包内 useChatSession）+ 假传输。
@@ -102,7 +107,7 @@ describe("ChatView（共享闭包适配）", () => {
     expect(wrapper.html()).toContain("<strong>你好！</strong>");
   });
 
-  it("发送：本地气泡上屏 + send_message 带工作区路径与 initialEffort", async () => {
+  it("发送：send_message 带工作区路径与 initialEffort；user_message 广播回灌后气泡上屏", async () => {
     const { wrapper, transport } = mountChat({
       workspaceKey: "C--proj",
       workspacePath: "C:/proj",
@@ -121,7 +126,11 @@ describe("ChatView（共享闭包适配）", () => {
       // 恒带当前档位（存活会话幂等；未起会话/离线随首条消息生效）
       expect(send?.params["initialEffort"]).toBe("high");
     });
-    expect(wrapper.text()).toContain("帮我跑下测试"); // 本地气泡
+    // 方案 C：发送方不本地画气泡——sidecar 广播 user_message 才上屏（模拟该时序）
+    transport.emitChatEvent({ type: "user_message", session_id: "s1", text: "帮我跑下测试" });
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain("帮我跑下测试");
+    });
   });
 
   it("权限请求事件 → 弹窗出现 → 允许应答 → permission_response 且弹窗消失", async () => {
@@ -339,7 +348,7 @@ describe("ChatView（共享闭包适配）", () => {
     });
   });
 
-  it("effort 选择器：点档位 → set_session_effort + set_effort；chip 显示当前档", async () => {
+  it("effort 选择器：点档位 → set_session_meta 持久化 + set_effort；chip 显示当前档", async () => {
     const { wrapper, transport } = mountChat();
     await vi.waitFor(() => {
       expect(transport.calls.some((c) => c.command === "load_messages")).toBe(true);
@@ -348,14 +357,15 @@ describe("ChatView（共享闭包适配）", () => {
     expect(wrapper.find(".ef-chip").text()).toContain("思考");
     await wrapper.find(".ef-chip").trigger("click");
     await vi.waitFor(() => expect(wrapper.find(".ef-pop").classes()).toContain("show"));
-    // 选「快速」（low）：已有会话非临时 → 持久化 + 即时切换两连发
+    // 选「快速」（low）：已有会话非临时 → meta patch 持久化 + 即时切换两连发
     const opts = wrapper.findAll(".ef-pop .ws-opt");
     expect(opts.length).toBe(3); // 三档制
     await opts[0].trigger("click");
     await vi.waitFor(() => {
-      const persist = transport.calls.find((c) => c.command === "set_session_effort");
+      // 持久化走 meta patch：op:"set" 显式落值，provider/model 省略字段落 keep
+      const persist = transport.calls.find((c) => c.command === "set_session_meta");
       expect(persist?.params["id"]).toBe("s1");
-      expect(persist?.params["effort"]).toBe("low");
+      expect(persist?.params["effort"]).toEqual({ op: "set", value: "low" });
     });
     await vi.waitFor(() => {
       const live = transport.calls.find((c) => c.command === "set_effort");
@@ -421,5 +431,93 @@ describe("ChatView（共享闭包适配）", () => {
     });
     await wrapper.find(".ch-empty-btn").trigger("click");
     expect(wrapper.emitted("openDrawer")).toBeTruthy();
+  });
+
+  // ── 图片发送 ──
+
+  /** 往隐藏 file input 塞假文件并触发 change（jsdom 无 DataTransfer，defineProperty 直塞）。 */
+  async function pickImages(
+    wrapper: VueWrapper,
+    files: File[],
+  ): Promise<void> {
+    const input = wrapper.find('input[type="file"]');
+    Object.defineProperty(input.element, "files", { value: files });
+    await input.trigger("change");
+  }
+
+  it("选图随消息发送：send_message 带 images，display 含 image 块，发送后预览清空", async () => {
+    const { wrapper, transport } = mountChat();
+    await vi.waitFor(() => {
+      expect(transport.calls.some((c) => c.command === "load_messages")).toBe(true);
+    });
+    await pickImages(wrapper, [new File(["x"], "a.png", { type: "image/png" })]);
+    await vi.waitFor(() => expect(wrapper.find(".ch-attach-item").exists()).toBe(true));
+    const textarea = wrapper.find("textarea");
+    await textarea.setValue("看这张图");
+    await textarea.trigger("keydown", { key: "Enter" });
+    await vi.waitFor(() => {
+      const send = transport.calls.find((c) => c.command === "send_message");
+      expect(send).toBeTruthy();
+      expect(send?.params["images"]).toEqual([{ data: "aGk=", mediaType: "image/png" }]);
+      // display 由闭包构造：image 块在前、text 块在后（其他端按此渲染气泡）
+      const display = send?.params["display"] as Array<{ type: string; data?: string }>;
+      expect(display[0]).toMatchObject({ type: "image", data: "aGk=", mediaType: "image/png" });
+      expect(display[1]).toMatchObject({ type: "text", text: "看这张图" });
+    });
+    await vi.waitFor(() => expect(wrapper.find(".ch-attach-item").exists()).toBe(false));
+  });
+
+  it("无文字纯图片可发送：prompt 空串，模型只收图片块", async () => {
+    const { wrapper, transport } = mountChat();
+    await pickImages(wrapper, [new File(["x"], "a.png", { type: "image/png" })]);
+    await vi.waitFor(() => expect(wrapper.find(".ch-attach-item").exists()).toBe(true));
+    await wrapper.find("textarea").trigger("keydown", { key: "Enter" });
+    await vi.waitFor(() => {
+      const send = transport.calls.find((c) => c.command === "send_message");
+      expect(send).toBeTruthy();
+      expect(send?.params["prompt"]).toBe("");
+      expect(send?.params["images"]).toEqual([{ data: "aGk=", mediaType: "image/png" }]);
+    });
+  });
+
+  it("接收侧：user_message display 图片块在用户气泡渲染为 img", async () => {
+    const { wrapper, transport } = mountChat();
+    await vi.waitFor(() => expect(transport.chatEventCb).toBeTruthy());
+    transport.emitChatEvent({
+      type: "user_message",
+      session_id: "s1",
+      text: "看图",
+      display: [
+        { type: "image", data: "aGk=", mediaType: "image/png" },
+        { type: "text", text: "看图" },
+      ],
+    });
+    await vi.waitFor(() => {
+      const imgs = wrapper.findAll(".m-bubble-user img.m-img");
+      expect(imgs.length).toBe(1);
+      expect(imgs[0].attributes("src")).toBe("data:image/png;base64,aGk=");
+    });
+  });
+
+  it("编码中发送被拦（picking 守卫），编码完成后可发", async () => {
+    const { wrapper, transport } = mountChat();
+    // 让编码挂起：promise 手动放行
+    let release!: (v: { data: string; mediaType: string }) => void;
+    const { fileToAttachment } = vi.mocked(await import("../imageEncode"));
+    fileToAttachment.mockImplementationOnce(
+      () => new Promise((r) => (release = r)),
+    );
+    await pickImages(wrapper, [new File(["x"], "a.png", { type: "image/png" })]);
+    // 编码挂起中：发送钮禁用，Enter 不发
+    expect(wrapper.find(".ch-send").attributes("disabled")).toBeDefined();
+    await wrapper.find("textarea").trigger("keydown", { key: "Enter" });
+    expect(transport.calls.some((c) => c.command === "send_message")).toBe(false);
+    release({ data: "aGk=", mediaType: "image/png" });
+    await vi.waitFor(() => expect(wrapper.find(".ch-attach-item").exists()).toBe(true));
+    await wrapper.find("textarea").setValue("看图");
+    await wrapper.find("textarea").trigger("keydown", { key: "Enter" });
+    await vi.waitFor(() => {
+      expect(transport.calls.some((c) => c.command === "send_message")).toBe(true);
+    });
   });
 });

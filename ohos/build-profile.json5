@@ -1,12 +1,26 @@
 {
   "app": {
-    "signingConfigs": [],
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:\\Users\\<user>\\.ohos\\config\\default.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "REDACTED",
+          "profile": "C:\\Users\\<user>\\.ohos\\config\\default.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:\\Users\\<user>\\.ohos\\config\\default.p12",
+          "storePassword": "REDACTED"
+        }
+      }
+    ],
     "products": [
       {
         "name": "default",
         "signingConfig": "default",
         // 保守起步：API 12 起步保证兼容面；用 DevEco 打开后按本机 SDK 版本上调
-        "compatibleSdkVersion": "5.0.0(12)",
+        "compatibleSdkVersion": "6.1.0(23)",
         "runtimeOS": "HarmonyOS",
         "buildOption": {
           "strictMode": {

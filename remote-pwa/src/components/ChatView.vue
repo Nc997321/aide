@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { ConnState, RemoteTransport } from "@aide/sdk";
-import { reloadSessionMessages, useChatSession } from "@aide/sdk/chat";
+import { reloadSessionMessages, useChatSession, type ImageAttachment } from "@aide/sdk/chat";
 import { useSessionWorkspaces } from "@aide/sdk/composables/useSessionWorkspaces";
 import { api } from "@aide/sdk";
 import { EFFORT_OPTIONS, effortLabel, normalizeEffortOption, type EffortValue } from "@aide/sdk/utils/effort";
+import { fileToAttachment } from "../imageEncode";
 import MessageList from "./MessageList.vue";
 import PermissionSheet from "./PermissionSheet.vue";
 import ProviderLogo from "./ProviderLogo.vue";
@@ -40,6 +41,46 @@ const emit = defineEmits<{
 
 const input = ref("");
 const ta = ref<HTMLTextAreaElement | null>(null);
+
+// ── 图片附件（选图 → 压缩/编码 → 随 sendMessage.images 下发）──
+
+/** 待发图片；预览条即时渲染，发送时随 images 下发并清空。 */
+const attach = ref<ImageAttachment[]>([]);
+/** 编码中（大图手机上 1-3s）：禁用发送与再选，防中途发送漏图。 */
+const picking = ref(false);
+const fileEl = ref<HTMLInputElement | null>(null);
+/** 单条消息图片上限：防 relay JSON 载荷爆炸（5 张 1568px JPEG 在 MB 级内）。 */
+const MAX_ATTACH = 5;
+
+function onAttachClick(): void {
+  fileEl.value?.click();
+}
+
+function removeAttach(i: number): void {
+  attach.value.splice(i, 1);
+}
+
+/** file input change：逐张编码（单张失败提示不阻断），超出上限拒绝新增。 */
+async function onPickImages(e: Event): Promise<void> {
+  const el = e.target as HTMLInputElement;
+  const files = Array.from(el.files ?? []);
+  el.value = ""; // 允许重选同一文件
+  if (!files.length) return;
+  const room = MAX_ATTACH - attach.value.length;
+  if (files.length > room) showToast(`一次最多 ${MAX_ATTACH} 张图`, "warn");
+  picking.value = true;
+  try {
+    for (const f of files.slice(0, room)) {
+      try {
+        attach.value.push(await fileToAttachment(f));
+      } catch (err) {
+        showToast(`图片处理失败：${err instanceof Error ? err.message : String(err)}`, "warn");
+      }
+    }
+  } finally {
+    picking.value = false;
+  }
+}
 const toastShow = ref(false);
 const toastText = ref("");
 const toastKind = ref<"ok" | "info" | "warn">("info");
@@ -147,8 +188,11 @@ function workspaceBinding(): { wsKey: string; wsPath: string } | undefined {
 
 async function send(): Promise<void> {
   const text = input.value.trim();
-  if (!text || offline.value) return;
+  // 有图无文字也可发（prompt 空串 → 模型只收到图片块）
+  if ((!text && attach.value.length === 0) || offline.value || picking.value) return;
+  const images = attach.value.length ? [...attach.value] : undefined;
   input.value = "";
+  attach.value = [];
   autoGrow();
   sysNote.value = null;
   try {
@@ -156,6 +200,7 @@ async function send(): Promise<void> {
       workspace: workspaceBinding(),
       // 离线期间选的档位随首条消息生效（存活会话已由 setEffort 即时坐实，幂等）
       initialEffort: effortChoice.value,
+      images,
     });
     if (!props.session.id && sid) emit("sessionBound", sid);
   } catch (e) {
@@ -331,7 +376,18 @@ onUnmounted(() => {
     <div v-if="pendingJumpCount > 0" class="ch-jumps">待发出 {{ pendingJumpCount }} 条（当前轮安全边界后自动发送）</div>
 
     <div class="ch-input">
+      <div v-if="attach.length" class="ch-attach">
+        <div v-for="(a, i) in attach" :key="i" class="ch-attach-item">
+          <img :src="`data:${a.mediaType};base64,${a.data}`" alt="" />
+          <button class="ch-attach-x" title="移除图片" @click="removeAttach(i)">
+            <svg width="8" height="8" viewBox="0 0 8 8"><path d="M1 1l6 6M7 1L1 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+      </div>
       <div class="ch-tools">
+        <button class="ch-img-btn" title="发送图片" :disabled="offline" @click="onAttachClick">
+          <svg width="17" height="17" viewBox="0 0 18 18" fill="none"><rect x="1.5" y="3.5" width="15" height="11" rx="2.5" stroke="currentColor" stroke-width="1.5"/><circle cx="6.2" cy="7.4" r="1.5" fill="currentColor"/><path d="M3 13.4l3.6-3.2a1.4 1.4 0 0 1 1.9 0l3.8 3.3M10.6 10l1.5-1.3a1.4 1.4 0 0 1 1.9 0l2.5 2.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
         <div class="ef-wrap">
           <button class="ef-chip" title="思考程度" @click.stop="effortPopOpen = !effortPopOpen">
             <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M8.8 1.5L3.5 9h3.7l-.9 5.5L11.6 7H7.9l.9-5.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
@@ -377,10 +433,11 @@ onUnmounted(() => {
         >
           <svg width="13" height="13" viewBox="0 0 14 14"><rect x="1.5" y="1.5" width="11" height="11" rx="2" fill="currentColor"/></svg>
         </button>
-        <button v-else class="ch-send" title="发送" :disabled="offline" @click="send">
+        <button v-else class="ch-send" title="发送" :disabled="offline || picking" @click="send">
           <svg width="17" height="17" viewBox="0 0 18 18" fill="none"><path d="M9 14.5v-11M4 8l5-5 5 5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
       </div>
+      <input ref="fileEl" type="file" accept="image/*" multiple hidden @change="onPickImages" />
     </div>
   </div>
 </template>
