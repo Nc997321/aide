@@ -7,6 +7,7 @@ import { buildChangeInfo, locateAnchorLine, locateEditStartLine, type ChangeInfo
 import { isChangeTool } from "@/utils/blockSegments";
 import { summarizeToolInput } from "@/utils/toolSummary";
 import { truncatedLabel } from "@/utils/messageBytes";
+import { parseToolDenial } from "@aide/sdk/utils/toolDenial";
 import { useFileResolver } from "@/composables/useFileResolver";
 import { useSettings } from "@/composables/useSettings";
 
@@ -38,6 +39,30 @@ const isBash = computed(() => props.block.name === "Bash");
 /** 该工具调用转入后台的任务（按 toolUseId 匹配、仍在运行才显示徽章）。 */
 const bgTask = computed(
   () => props.bgTasks?.find((t) => t.toolUseId === props.block.id && t.status === "running") ?? null,
+);
+
+/**
+ * 拒绝态：从结果正文反解，协议里没有独立字段——外框（"The user doesn't want to
+ * proceed…"）本身就是「这次是被拒绝而不是失败」的载体，再带一个 `denied` 就是同一
+ * 真相的第二份。truncated 的正文已被占位摘要替换，反解不出东西，退回常规错误态。
+ * 实时（sidecar 事件）与回看（Rust 解析 jsonl）拿到的是同一份 result 全文，故两条
+ * 路径在这里自动一致，不存在「刚发生能识别、回看识别不了」的分裂。
+ */
+const denial = computed(() => (props.block.truncated ? null : parseToolDenial(props.block.result)));
+
+/** 人工拒绝 vs 命中权限规则：UI 要如实区分，别把规则拦截说成"你拒绝的"。 */
+const denialLabel = computed(() => (denial.value?.kind === "policy" ? "规则拒绝" : "已拒绝"));
+
+const denialReasonTip = computed(() =>
+  denial.value?.reason
+    ? `${denial.value.kind === "policy" ? "命中权限规则" : "你拒绝了这次调用"}：${denial.value.reason}`
+    : "",
+);
+
+const denialPillTip = computed(() =>
+  denial.value?.kind === "policy"
+    ? "命中权限规则被拦截，工具未执行"
+    : "你拒绝了这次调用，工具未执行",
 );
 
 /** 变更类工具且非错误时的统一 diff 数据；null 回退到普通结果文本展示。 */
@@ -95,12 +120,23 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
   <div class="tool-item">
     <button class="ti-row" :aria-expanded="expanded" @click="expanded = !expanded">
       <span
-        :class="['ti-dot', block.isPending ? 'ti-dot--run' : block.isError ? 'ti-dot--err' : '']"
+        :class="[
+          'ti-dot',
+          block.isPending ? 'ti-dot--run' : denial ? 'ti-dot--deny' : block.isError ? 'ti-dot--err' : '',
+        ]"
       ></span>
       <span class="ti-name">{{ block.name }}</span>
       <!-- bdo dir=ltr：外层容器是 rtl（左侧省略），内层强制路径本身仍按 ltr 排，
            省略号落在路径头部、文件名始终可见 -->
       <span class="ti-summary" v-tooltip="inputSummary"><bdo dir="ltr">{{ inputSummary }}</bdo></span>
+      <!-- 拒绝态（方案 B）：理由直接进头行，不展开就知道为什么被拒。长理由截断 +
+           tooltip 给全文；没填理由就不显示这一项，只留状态徽章。 -->
+      <span
+        v-if="denial?.reason"
+        class="ti-deny-reason"
+        v-tooltip="denialReasonTip"
+      >{{ denial.reason }}</span>
+      <span v-if="denial" class="ti-deny-pill" v-tooltip="denialPillTip">{{ denialLabel }}</span>
       <span
         v-if="bgTask"
         class="ti-bgchip"
@@ -195,6 +231,11 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
 .ti-dot--run {
   background: var(--aide-warning);
 }
+/* 拒绝：琥珀——与"执行中"同色但状态互斥（pending 优先），且始终配「已拒绝」徽章，
+   不会和黄色运行中态混淆。红点留给真报错（命令真的跑了、跑失败了）。 */
+.ti-dot--deny {
+  background: var(--aide-warning);
+}
 
 .ti-name {
   font-weight: 600;
@@ -216,6 +257,30 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
   font-family: var(--aide-font-mono);
   font-size: 11px;
   color: var(--aide-text-muted);
+}
+
+/* 头行拒绝理由：路径摘要 flex:1 把它推到右侧紧邻徽章。上限 42% 防止长理由把
+   路径挤没，超出省略 + tooltip 全文。 */
+.ti-deny-reason {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--aide-text-secondary);
+}
+
+.ti-deny-pill {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: var(--aide-warning);
+  background: color-mix(in srgb, var(--aide-warning) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-warning) 25%, transparent);
 }
 
 .ti-diff {

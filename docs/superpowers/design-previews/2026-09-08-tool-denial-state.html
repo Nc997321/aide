@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark" data-page-node-id="gLgJI5icTYQto1SXrfAVbY">
+<head data-page-node-id="A2Cf8d2cfWWuhWJ0FBT8HE">
+<meta charset="utf-8" data-page-node-id="earmKI4AcFNU7PWEvi0sk8">
+<meta name="viewport" content="width=device-width, initial-scale=1" data-page-node-id="i8DBy1PElXKgShoCNmsTR1">
+<title>aide 工具块「拒绝态」显示形态候选</title>
+<style>
+:root{
+  --bg-deep:#141218; --bg-base:#1a1820; --bg-raised:#221f29;
+  --surface:#292631; --surface-hover:#322e3c; --surface-active:#3d3848;
+  --text-primary:#ece5db; --text-secondary:#b3aa9c; --text-muted:#7d7568;
+  --accent:#d9ab78; --success:#8bc48a; --warning:#e8c374; --danger:#e87070; --info:#7eb8d8;
+  --agent-accent:#c9a06c;
+  --border:rgba(255,214,160,.09); --border-subtle:rgba(255,214,160,.045); --border-strong:rgba(255,220,175,.16);
+  --radius-sm:6px; --radius-md:9px; --radius-lg:13px;
+  --font-ui:'Inter Variable','PingFang SC','Microsoft YaHei',sans-serif;
+  --font-mono:'JetBrains Mono','Cascadia Code','Consolas','PingFang SC',monospace;
+}
+[data-theme="light"]{
+  --bg-deep:#f7f6f7; --bg-base:#fbfafb; --bg-raised:#ffffff;
+  --surface:#ffffff; --surface-hover:#f2eff2; --surface-active:#e8e4e8;
+  --text-primary:#23262d; --text-secondary:#5c6470; --text-muted:#7b8492;
+  --accent:#a8726b; --success:#3f9e69; --warning:#c98a3d; --danger:#dd6b72; --info:#7c93b8;
+  --agent-accent:#b87f7e;
+  --border:rgba(124,137,154,.18); --border-subtle:rgba(124,137,154,.10); --border-strong:rgba(124,137,154,.28);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg-deep);color:var(--text-primary);font-family:var(--font-ui);font-size:13px;line-height:1.6;padding:28px 32px 60px}
+h1{font-size:15px;font-weight:500;margin-bottom:6px}
+.lead{color:var(--text-secondary);max-width:760px;margin-bottom:18px}
+.toolbar{display:flex;gap:8px;margin-bottom:26px}
+button{font-family:inherit;font-size:12px;color:var(--text-secondary);background:transparent;border:.5px solid var(--border-strong);border-radius:var(--radius-sm);padding:4px 12px;cursor:pointer}
+button:hover{color:var(--accent);background:var(--surface-hover)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:22px}
+.case{background:var(--bg-base);border:1px solid var(--border-subtle);border-radius:var(--radius-lg);padding:16px 18px}
+.case-head{display:flex;align-items:baseline;gap:8px;margin-bottom:14px}
+.case-tag{font-size:12px;font-weight:500;color:var(--accent)}
+.case-title{font-size:13px;color:var(--text-secondary)}
+.note{margin-top:12px;padding-top:12px;border-top:1px solid var(--border-subtle);font-size:12px;color:var(--text-muted);line-height:1.7}
+.note b{font-weight:500;color:var(--text-secondary)}
+.thread{display:flex;flex-direction:column;gap:10px}
+.bubble{align-self:flex-end;max-width:82%;background:var(--surface);border:1px solid var(--border-subtle);border-radius:16px 16px 16px 4px;padding:10px 14px;font-size:13px}
+.assist{font-size:13px;color:var(--text-secondary)}
+.tool{font-size:11.5px;border:1px solid var(--border-subtle);border-radius:var(--radius-md);background:var(--bg-base);overflow:hidden}
+.tool + .tool{margin-top:10px}
+.ti-row{display:flex;align-items:center;gap:9px;width:100%;padding:6px 12px;font-size:12px;color:var(--text-secondary)}
+.dot{width:5px;height:5px;border-radius:50%;background:var(--surface-active);flex:none}
+.dot--err{background:var(--danger)}
+.dot--deny{background:var(--warning)}
+.dot--ok{background:var(--success)}
+.ti-name{font-weight:600;color:var(--text-primary);flex:none;min-width:38px}
+.ti-sum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;font-family:var(--font-mono);font-size:11px;color:var(--text-muted)}
+.pill{flex:none;font-size:10.5px;padding:1px 8px;border-radius:999px;white-space:nowrap}
+.pill--err{color:var(--danger);background:color-mix(in srgb,var(--danger) 14%,transparent);border:1px solid color-mix(in srgb,var(--danger) 30%,transparent)}
+.pill--deny{color:var(--warning);background:color-mix(in srgb,var(--warning) 14%,transparent);border:1px solid color-mix(in srgb,var(--warning) 32%,transparent)}
+.pill--ok{color:var(--success);background:color-mix(in srgb,var(--success) 12%,transparent);border:1px solid color-mix(in srgb,var(--success) 28%,transparent)}
+.chev{flex:none;width:8px;height:12px;color:var(--text-muted)}
+.ti-body{border-top:1px solid var(--border-subtle);background:var(--bg-deep)}
+.res{margin:0;padding:11px 14px;font-family:var(--font-mono);font-size:11.5px;line-height:1.7;color:var(--text-secondary);white-space:pre-wrap}
+.res--err{color:var(--danger)}
+.say{display:flex;gap:8px;align-items:flex-start;padding:11px 14px;border-bottom:1px solid var(--border-subtle)}
+.who{width:20px;height:20px;border-radius:50%;background:var(--surface-active);color:var(--text-primary);font-size:10px;display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px}
+.say span{font-size:12.5px;color:var(--text-primary)}
+.foot{padding:9px 14px;font-size:12px;color:var(--text-muted);font-style:italic}
+.tool--dim{opacity:.78;border-left:2px solid var(--warning)}
+.deny-tail{display:flex;gap:8px;align-items:flex-start;margin-top:8px;padding-left:2px}
+.deny-tail .who{background:color-mix(in srgb,var(--info) 26%,transparent);color:var(--text-primary)}
+.deny-tail span{font-size:12.5px;color:var(--text-primary);background:var(--surface);border:1px solid var(--border-subtle);border-radius:4px 12px 12px 12px;padding:5px 10px}
+.deny-inline{font-size:11.5px;color:var(--text-primary);flex:none;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.case--chosen{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 28%,transparent)}
+.chosen-tag{background:var(--accent);color:#fff}
+.chosen-note b{color:var(--accent)}
+</style>
+</head>
+<body data-page-node-id="RJ9tJdpXN1GPZD8QfEgwGW">
+<h1 data-page-node-id="wHY25g9VrI8hDduAxpyEeF">工具块「拒绝态」显示形态候选</h1>
+<p class="lead" data-page-node-id="Asum9UxoeTuKBUY2O0CCZc">同一个场景：用户让 Write 写入 1，弹窗拒绝并附言「写入2，不要1」。现在工具块把它当普通工具结果渲染，看不出这是拒绝。以下四种形态都保留绑定关系（拒绝挂在那次调用上），区别在信息密度与视觉重量。</p>
+
+<div class="toolbar" data-page-node-id="o3LH5Mk5nc4i7FPMynFbuZ">
+  <button id="tg" data-page-node-id="D9oA795JYkuV0Nepj8lTgi">切换深/浅主题（仅配色，形态不变）</button>
+</div>
+
+<div class="grid" data-page-node-id="3KX2nSuxuXTfgYeBXVYBW8">
+
+  <div class="case" data-page-node-id="2oakBcSYAP2bBirqvFPkE3">
+    <div class="case-head" data-page-node-id="KDVlteZeXJjk4EsAl7nSJc"><span class="case-tag" data-page-node-id="CMisLqtFqNKBmlUAcZb48I">基线</span><span class="case-title" data-page-node-id="scnOJfIcGMahbr9MUzTDWb">真报错：红点 + 错误 chip</span></div>
+    <div class="thread" data-page-node-id="xp8VNIOBl8AFvihFfVtzvo">
+      <div class="bubble" data-page-node-id="IICGk3ewJiuGyleuJpkMIm">删掉 /tmp/cache 这个目录</div>
+      <div class="assist" data-page-node-id="DJeuC6KMtKjywvjOXGia4D">我来清理这个目录。</div>
+      <div class="tool" data-page-node-id="4oiITyAslbpbMmJkXO8crg">
+        <div class="ti-row" data-page-node-id="QKRgaKy6ud8SDJQ5Rs4PWc">
+          <span class="dot dot--err" data-page-node-id="PEsSyrChkDm7kPs3ZzngP2"></span><span class="ti-name" data-page-node-id="CCec9lu7eMaLRuFcO622wP">Bash</span>
+          <span class="ti-sum" data-page-node-id="rr9qhpfRd6FI65mHbn1rVO">rm -rf /tmp/cache</span>
+          <span class="pill pill--err" data-page-node-id="NLmhAt1a4bMxnpTDwD424A">错误</span>
+          <svg class="chev" viewBox="0 0 8 12" fill="none" data-page-node-id="cNC2UwaDvpWVCgwaEcCUz5"><path d="M2 1.5l4 4.5-4 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="yfFqdBGDzEGQvBHDsfNFMw"/></svg>
+        </div>
+        <div class="ti-body" data-page-node-id="afw0FBd3PsdPgOrF7mZXxk"><pre class="res res--err" data-page-node-id="fD0VD13kTBKZdkO5wZ9X0H">rm: cannot remove '/tmp/cache': Permission denied</pre></div>
+      </div>
+    </div>
+    <p class="note" data-page-node-id="C25k2L6tp10C4d2BXDaj5K"><b data-page-node-id="OiTkBkX0oX6fpApenQ12vV">参照组。</b>拒绝态必须和它长得不一样，否则用户回看时永远分不清「工具失败」和「我不让跑」。</p>
+  </div>
+
+  <div class="case" data-page-node-id="bS2652UCyvyjPO5TbLolHo">
+    <div class="case-head" data-page-node-id="UuDkf5h0zSQaXKjrZ2q4Vp"><span class="case-tag" data-page-node-id="n8w0m3D9UGF0aimHyGaPjG">方案 A</span><span class="case-title" data-page-node-id="RmLEUpXPlMEHmczP0iIAtw">头行徽章 + 展开体附言</span></div>
+    <div class="thread" data-page-node-id="7BSmySCrBShThuRHmsgCY7">
+      <div class="bubble" data-page-node-id="aQ2JnNgjP29PdbsbYh4Ed6">用 write 新建一个 test.md 并写入 1</div>
+      <div class="assist" data-page-node-id="9KGRB5wmcHYuHEA3KHpN4g">我先创建文件。</div>
+      <div class="tool" data-page-node-id="zHmsKS1P5tdfMfHkOFCR3i">
+        <div class="ti-row" data-page-node-id="hHGV7wIW4lqURzzI0jtmuT">
+          <span class="dot dot--deny" data-page-node-id="wvGGYkEBBiFcOBWFHfmEp5"></span><span class="ti-name" data-page-node-id="qE6N3nDpkzuX6ltepfVCfm">Write</span>
+          <span class="ti-sum" data-page-node-id="3mMWfxda8woPVc41MtdYiV">C:\Users\<user>\IdeaProjects\side\test.md</span>
+          <span class="pill pill--deny" data-page-node-id="V5xrJATTgKa8dgllh3qOVj">已拒绝</span>
+          <svg class="chev" viewBox="0 0 8 12" fill="none" data-page-node-id="U7tMt5kW20glOWTgB2lDWl"><path d="M2 1.5l4 4.5-4 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="6KIrfklBq2pI0sFPFkSTwj"/></svg>
+        </div>
+        <div class="ti-body" data-page-node-id="7Vk1SPnC4JnxclJ7k9v98N">
+          <div class="say" data-page-node-id="K6a8WNYlbA3vACRLX6DrGR"><span class="who" data-page-node-id="KLswud9Y4Ow9lJq7Es0hKU">你</span><span data-page-node-id="tMl5DUhRv6HIEXZAqoMQqn">写入2，不要1</span></div>
+          <pre class="res" data-page-node-id="JgUYDpPbduiEJqfCNs5A7J">The user doesn't want to proceed with this tool use. The tool use was rejected... To tell you how to proceed, the user said: 写入2，不要1</pre>
+        </div>
+      </div>
+    </div>
+    <p class="note" data-page-node-id="UiAeifGlup6pu5TX0CKo7w"><b data-page-node-id="5pBdXr1KtZoybBgChRi1Bw">取舍：</b>收起时看不到附言，只看到「已拒绝」；要点开才知道自己当时说了什么。信息分层干净，视觉最轻。适合拒绝是少数派的场景。</p>
+  </div>
+
+  <div class="case case--chosen" data-page-node-id="O3gAunEyrHkAOezDrl1f5n">
+    <div class="case-head" data-page-node-id="wQetPqwTx5JnWoNnq1OFsD"><span class="case-tag chosen-tag" data-page-node-id="zdNUvoQ1Dz62jHgJK9NZ72">方案 B · 已实现</span><span class="case-title" data-page-node-id="mCb42ubrYtIoo0sy6ZORBC">拒绝理由进头行摘要（不展开可见）</span></div>
+    <div class="thread" data-page-node-id="ztDwU6lhhmsfjhzbJDLAPX">
+      <div class="bubble" data-page-node-id="6OBqIwrrH7gEYNWcq9hzJH">用 write 新建一个 test.md 并写入 1</div>
+      <div class="assist" data-page-node-id="iQO6N4p2QIDwtmsesxgZcH">我先创建文件。</div>
+      <div class="tool" data-page-node-id="nmrkr7AtwACqEwKeZvh1qa">
+        <div class="ti-row" data-page-node-id="WItv2q02cD4CTnspRdy9dq">
+          <span class="dot dot--deny" data-page-node-id="FyGUiVqxH7VF11ee9gXk72"></span><span class="ti-name" data-page-node-id="0UzqSVpF52SaFzzMBHFevP">Write</span>
+          <span class="ti-sum" data-page-node-id="B2JhvO2tRRA5ipJQeIa6ak">C:\Users\<user>\IdeaProjects\side\test.md</span>
+          <span class="deny-inline" data-page-node-id="R9e294i7i5UexGsMsod59j">写入2，不要1</span>
+          <span class="pill pill--deny" data-page-node-id="H6j2Rr0mVzaPQjml6sfAhh">已拒绝</span>
+          <svg class="chev" viewBox="0 0 8 12" fill="none" data-page-node-id="sIYC6s6WNoSaPVVc8XkN6Z"><path d="M2 1.5l4 4.5-4 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="FQXXXiFuXLpcPGoG5owMVw"/></svg>
+        </div>
+        <div class="ti-body" data-page-node-id="siisHNaCgW3tVibAbGhcce"><pre class="res" data-page-node-id="bNYJvTz9xnC47QGGiGHfUP">The user doesn't want to proceed with this tool use. ...</pre></div>
+      </div>
+    </div>
+    <p class="note chosen-note" data-page-node-id="V3iVyEhUNx12mRhHi2gPuC"><b data-page-node-id="doZOJn9aXyS3iKMka8Mybg">取舍：</b>回扫最快——不点开就知道为什么拒。代价是头行挤了三个信息（工具名 / 路径 / 理由），长理由要截断（上限 42% + tooltip 全文），和路径摘要抢空间，窄窗口下会互相挤压。<br><b>已落地：</b><code>src/components/ToolCallBlock.vue</code> —— 状态点转琥珀、理由进头行、徽章区分「已拒绝 / 规则拒绝」；拒绝判定由 <code>@aide/sdk/utils/toolDenial.ts</code> 从结果正文反解，协议零新增字段。</p>
+  </div>
+
+  <div class="case" data-page-node-id="FXWvpC4RDCo49ee4Yr47FE">
+    <div class="case-head" data-page-node-id="ieYvShogz35JUXxi7sKxBk"><span class="case-tag" data-page-node-id="F8eiX1fccEyRusMfFxKbZg">方案 C</span><span class="case-title" data-page-node-id="TCaCGFsvnp1ai0Yd57DTr5">整卡降级 + 左侧竖条</span></div>
+    <div class="thread" data-page-node-id="kBulhcsgMBZRP1SkVe4Se2">
+      <div class="bubble" data-page-node-id="mwybUdVjlnwP28zN4N0l3d">用 write 新建一个 test.md 并写入 1</div>
+      <div class="assist" data-page-node-id="kopuwmIs76wGNs32ySQFMz">我先创建文件。</div>
+      <div class="tool tool--dim" data-page-node-id="LtChTOY1tmeiSh4fTkhEF6">
+        <div class="ti-row" data-page-node-id="s5uPFLLsUAJFFSwizMMT83">
+          <span class="dot dot--deny" data-page-node-id="PaeZPfmJcO1cvWqQoNOOGW"></span><span class="ti-name" data-page-node-id="K7V43cNIhP1HScK4gUmFBS">Write</span>
+          <span class="ti-sum" data-page-node-id="heJWyyq2h0Y0I5vz8tNXZk">C:\Users\<user>\IdeaProjects\side\test.md</span>
+          <span class="pill pill--deny" data-page-node-id="GmX2dauVvzNIbXqqCVWWvQ">已拒绝</span>
+          <svg class="chev" viewBox="0 0 8 12" fill="none" data-page-node-id="9oub9wMwXHnbwW7FpjAvj3"><path d="M2 1.5l4 4.5-4 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="YCnUm3U0PO7Y4fxTL8jV1O"/></svg>
+        </div>
+        <div class="ti-body" data-page-node-id="pHaw72xYCEjUjjMnRodOtm"><div class="foot" data-page-node-id="3FXgk7l4m1J27ciXmQYBf3">你：写入2，不要1</div></div>
+      </div>
+    </div>
+    <p class="note" data-page-node-id="HDLxXcisn88XJnov8pBBBS"><b data-page-node-id="c5WOrBMa2Y78Ht2UExNGsw">取舍：</b>整卡降透明度 + 琥珀竖条，一眼「这条没生效」，视觉重量最接近「未执行」的语义。代价：降透明度会让整块文字对比度偏低，浅色主题下尤其发灰；附言做脚注容易被当成系统提示。</p>
+  </div>
+
+  <div class="case" data-page-node-id="P00xSoSJ7HoZp0ypZQFB8f">
+    <div class="case-head" data-page-node-id="c1mwOhO9zj51ilPl2D6Bs9"><span class="case-tag" data-page-node-id="OYUK6ORRRRo7k4a1Q8ptTj">方案 D</span><span class="case-title" data-page-node-id="So5ERmeDo2H7rZGV9TTJ2D">工具块下方挂「你说」小气泡</span></div>
+    <div class="thread" data-page-node-id="M5otZssuxFJtnMpi2RSKsu">
+      <div class="bubble" data-page-node-id="0cTDwF59GYTfiNQklOHyEh">用 write 新建一个 test.md 并写入 1</div>
+      <div class="assist" data-page-node-id="u3h2RC1jR1bYlXhpYgalMi">我先创建文件。</div>
+      <div data-page-node-id="jCptsZy9RlYcKZMHVvXckO">
+        <div class="tool" data-page-node-id="YGELM3FFxTGKxOHaZEkuts">
+          <div class="ti-row" data-page-node-id="iRF3jXeXUoZboPBPFCRxAr">
+            <span class="dot dot--deny" data-page-node-id="2keKS2qjuodgTInjRtmg2H"></span><span class="ti-name" data-page-node-id="Jxx6IWsdkkBJrl7MDezGBW">Write</span>
+            <span class="ti-sum" data-page-node-id="LB4JBACocDqGfzZbS0nIu7">C:\Users\<user>\IdeaProjects\side\test.md</span>
+            <span class="pill pill--deny" data-page-node-id="9sKws0pjvL1pWL7UF5tkNz">已拒绝</span>
+            <svg class="chev" viewBox="0 0 8 12" fill="none" data-page-node-id="7fjQlIYBOmOjmuwcEUUzMP"><path d="M2 1.5l4 4.5-4 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="IAocVWZYC8fJ5jWwnIr1H2"/></svg>
+          </div>
+        </div>
+        <div class="deny-tail" data-page-node-id="sjt5LZZsoDbLFA6NNeDBWS"><span class="who" data-page-node-id="Zw8L72cdySDnSWSIjKaN4S">你</span><span data-page-node-id="smNFnCBVq37Jls8frhJYDM">写入2，不要1</span></div>
+      </div>
+    </div>
+    <p class="note" data-page-node-id="WV0lnJm1kyMilWxT9oj1RW"><b data-page-node-id="GyTjPBRE3w6iUfMJOqW9KL">取舍：</b>语气最像「你说的话」，且不用展开。但它是挂在工具块下的<em data-page-node-id="qqIY65jsVQp7KPt55dTBzb">伪气泡</em>——回看时可能和真实用户轮次混淆，这也是我不建议把它做成真正用户消息的原因（转录里它是 tool_result，不是一轮 user）。</p>
+  </div>
+
+  <div class="case" data-page-node-id="CYuuS4rsaIF3IyDApydNGT">
+    <div class="case-head" data-page-node-id="KqSKWGiLmyVSochz3IN9jE"><span class="case-tag" data-page-node-id="kTi4hACeyC0bhCUqrGY59l">方案 B′</span><span class="case-title" data-page-node-id="U7LpqnPAbDhojmZBQNYZhE">A + B 组合：徽章在头行，理由收起时以灰字尾随</span></div>
+    <div class="thread" data-page-node-id="kQyYbxFOGrJuqErraHJGPt">
+      <div class="bubble" data-page-node-id="Y2E75QGFGEEGRUcW5rOq6e">用 write 新建一个 test.md 并写入 1</div>
+      <div class="tool" data-page-node-id="KpzV6fQFDNp3HXBndXxsBE">
+        <div class="ti-row" data-page-node-id="uufrssnoeVFlyuGPNtU2NQ">
+          <span class="dot dot--deny" data-page-node-id="4pr191L8MlCrNoTpQfrUM4"></span><span class="ti-name" data-page-node-id="zBJ2qP1datBynrrboWq4E4">Write</span>
+          <span class="ti-sum" data-page-node-id="JGC53WoVboN1cHBinXbyJR">C:\Users\<user>\IdeaProjects\side\test.md</span>
+          <span class="deny-inline" style="color:var(--text-muted)" data-page-node-id="094zyQvAZqbktW4wsp5Ngj">已拒绝 · 写入2，不要1</span>
+          <svg class="chev" viewBox="0 0 8 12" fill="none" data-page-node-id="JMoTbD5BezNfZzXQhkiDY1"><path d="M2 1.5l4 4.5-4 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="vg7uHka9ESHgFjMzdxlyh0"/></svg>
+        </div>
+        <div class="ti-body" data-page-node-id="fHt8CD0CdO551vfp3hFsSk"><div class="say" data-page-node-id="p9smpyX0hmPx5ICP58JAoe"><span class="who" data-page-node-id="BOdDhsDsGyTZJRa6kjjIbR">你</span><span data-page-node-id="Tm2lQX0jeCcvf35btdHoLq">写入2，不要1</span></div></div>
+      </div>
+    </div>
+    <p class="note" data-page-node-id="3AVFL613EAMS5UsaCqBJ3q"><b data-page-node-id="xsTAULZHkMR9b1Gy2NbGqu">取舍：</b>收起态有一行可读摘要，展开态有完整附言，两头都不丢。头行元素最少（不抢 chip 位）。代价是「已拒绝」变成纯文字 badge，视觉强度弱于 chip——需要靠点的颜色补。</p>
+  </div>
+
+</div>
+
+<script>
+const b=document.getElementById('tg');
+b.addEventListener('click',()=>{const r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark';});
+</script>
+</body>
+</html>
