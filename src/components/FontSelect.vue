@@ -14,21 +14,23 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import ThemedSelect from "./ThemedSelect.vue";
+import {
+  isFontInstalled,
+  CJK_MONO_FALLBACK,
+  type FontMeasurer,
+} from "@aide/sdk/utils/fonts";
 
 /** 候选等宽字体（探测本机已安装的，只显示装了的）。Inter Variable 是内置
- *  UI 字体（@fontsource 打包），界面字体想恢复 Inter 风格可选中它。 */
+ *  UI 字体（@fontsource 打包），界面字体想恢复 Inter 风格可选中它。
+ *  Maple Mono v7 家族名（v6 的 "SC NF" 已废弃）：CN=中文版，NF=Nerd Font 图标。 */
 const CANDIDATES = [
   "JetBrains Mono", "Cascadia Code", "Fira Code", "Consolas",
   "Menlo", "Monaco", "Source Code Pro", "IBM Plex Mono",
   "DejaVu Sans Mono", "Noto Sans Mono", "Sarasa Mono SC",
-  "Sarasa Term SC", "Maple Mono", "Maple Mono SC NF", "Hack",
+  "Sarasa Term SC", "Maple Mono", "Maple Mono CN", "Maple Mono NF CN", "Hack",
   "Ubuntu Mono", "Cascadia Mono", "Cousine", "Liberation Mono",
   "Inter Variable",
 ];
-
-/** 选中字体时存储的栈：尾部垫 CJK 回退，否则西文 mono 无中文字形，
- *  Windows 中文落宋体（与 utils/fonts.ts MONO_FONT_STACK 同策略）。 */
-const CJK_FALLBACK = "'PingFang SC', 'Microsoft YaHei', monospace";
 
 const props = defineProps<{ modelValue: string }>();
 const emit = defineEmits<{ (e: "update:modelValue", v: string): void }>();
@@ -43,52 +45,59 @@ const options = computed(() => [
   { value: "__custom__", label: "自定义…" },
 ]);
 
-async function isInstalled(name: string): Promise<boolean> {
-  try {
-    const faces = await document.fonts.load(`16px "${name}"`);
-    return faces.length > 0;
-  } catch {
-    return false;
-  }
+/** 本组件写入的栈的定形（canonical form）。选中态解析只认它：自定义栈的
+ *  CJK 回退尾（YaHei 等）按设计就是本机已装字体，走栈探测分不出「选了
+ *  候选」还是「随便一个栈」——walk 栈会总命中 YaHei，把打字回写成整栈。 */
+function storedStack(name: string): string {
+  return `'${name}', ${CJK_MONO_FALLBACK}`;
 }
 
-/** 解析 font-family 栈 → 第一个本机已安装的字体名（跳过 generic 关键字） */
-async function firstAvailable(stack: string): Promise<string | null> {
-  const names = stack
-    .split(",")
-    .map((s) => s.trim().replace(/^['"]|['"]$/g, ""))
-    .filter((n) => n && !["monospace", "sans-serif", "serif"].includes(n));
-  for (const n of names) {
-    if (await isInstalled(n)) return n;
+// canvas 只读排版度量、不渲染。jsdom / 无 canvas 环境 getContext 返回 null，
+// 探测降级为「全部未装」——只少候选列表，自定义输入等其余功能不受影响。
+// ctx 缓存收在组件实例作用域（undefined=未探测过），不做模块级单例。
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+const measure: FontMeasurer = (fontSpec, text) => {
+  if (measureCtx === undefined) {
+    measureCtx = document.createElement("canvas").getContext("2d");
   }
-  return null;
+  if (!measureCtx) return 0;
+  measureCtx.font = fontSpec;
+  return measureCtx.measureText(text).width;
+};
+
+/** 从持久化值解析选中项：候选的定形 → 该字体名；其余（默认栈 / 遗留配置 /
+ *  自定义栈）→ null，落「自定义…」。 */
+function resolveSelection(value: string): string | null {
+  return installedFonts.value.find((n) => value === storedStack(n)) ?? null;
 }
 
-async function syncFromModel() {
-  const current = await firstAvailable(props.modelValue);
-  if (current) {
-    // 当前字体不在候选列表（用户自定义过）→ 动态补进下拉框
-    if (!installedFonts.value.includes(current)) {
-      installedFonts.value = [...installedFonts.value, current];
-    }
-    selectedValue.value = current;
-  } else {
-    selectedValue.value = "__custom__";
-    customValue.value = props.modelValue || "";
+function syncFromModel() {
+  const found = resolveSelection(props.modelValue);
+  if (found) {
+    selectedValue.value = found;
+    return;
   }
+  selectedValue.value = "__custom__";
+  customValue.value = props.modelValue || "";
 }
 
-onMounted(async () => {
-  const installed: string[] = [];
-  for (const name of CANDIDATES) {
-    if (await isInstalled(name)) installed.push(name);
-  }
-  installedFonts.value = installed;
-  await syncFromModel();
+onMounted(() => {
+  installedFonts.value = CANDIDATES.filter((n) => isFontInstalled(n, measure));
+  syncFromModel();
 });
 
-// 外部改值（如 load 完成）→ 重新解析选中项
-watch(() => props.modelValue, syncFromModel);
+// v-model 回环：本地 emit 的值回灌 prop 会再触发本 watcher。跳过自己刚发
+// 出去的值，否则自定义输入打一个字符就被回写成整栈；外部改动照常同步。
+let lastEmitted: string | null = null;
+watch(() => props.modelValue, () => {
+  if (lastEmitted !== null && props.modelValue === lastEmitted) {
+    lastEmitted = null;
+    return;
+  }
+  // 非匹配分支也清令牌：乱序/迟到的回灌不至于吞掉后续外部改动，收敛为幂等 re-sync
+  lastEmitted = null;
+  syncFromModel();
+});
 
 // 用户在下拉框选择 → 落盘（选中字体时垫 CJK 回退；选"自定义…"等输入）
 watch(selectedValue, (v) => {
@@ -96,7 +105,10 @@ watch(selectedValue, (v) => {
     customValue.value = props.modelValue || "";
     return;
   }
-  emit("update:modelValue", `'${v}', ${CJK_FALLBACK}`);
+  const stack = storedStack(v);
+  if (stack === props.modelValue) return; // syncFromModel 的程序性回写（同值），不重发
+  lastEmitted = stack;
+  emit("update:modelValue", stack);
 });
 
 function onCustomInput() {
@@ -104,7 +116,9 @@ function onCustomInput() {
   if (!v) return;
   // 单字体名（无逗号）→ 垫 CJK 回退；完整栈 → 原样
   const clean = v.replace(/^['"]|['"]$/g, "");
-  emit("update:modelValue", v.includes(",") ? v : `'${clean}', ${CJK_FALLBACK}`);
+  const out = v.includes(",") ? v : `'${clean}', ${CJK_MONO_FALLBACK}`;
+  lastEmitted = out;
+  emit("update:modelValue", out);
 }
 </script>
 

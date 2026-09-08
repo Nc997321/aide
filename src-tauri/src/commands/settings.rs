@@ -303,9 +303,10 @@ fn default_font_size() -> u32 {
     14
 }
 fn default_font_family() -> String {
-    // 与前端 utils/fonts.ts MONO_FONT_STACK 保持一致——尾部垫 CJK 回退，
-    // 否则西文 mono 无中文字形，Windows 中文落宋体
-    "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'PingFang SC', 'Microsoft YaHei', monospace".to_string()
+    // 与前端 utils/fonts.ts MONO_FONT_STACK 保持一致——首位随包内置的
+    // Maple Mono NF CN（global.css @font-face 注册，woff2 由官方 v7.9 TTF
+    // 转码），尾部垫 CJK 回退，否则西文 mono 无中文字形，Windows 中文落宋体
+    "'Maple Mono NF CN', 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'PingFang SC', 'Microsoft YaHei', monospace".to_string()
 }
 fn default_notifications_enabled() -> bool {
     true
