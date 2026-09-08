@@ -374,7 +374,11 @@ pub async fn stop_chat_session(
     runtime_mgr: State<'_, AgentRuntimeManager>,
 ) -> Result<(), String> {
     let cmd = json!({ "cmd": "session_stop", "session_id": session_id });
-    runtime_mgr.send_to_runtime(&cmd).await
+    let out = runtime_mgr.send_to_runtime(&cmd).await;
+    // 不等 session_dead 事件就先落存活表：手机端点了停止就该立刻能换供应商，
+    // 事件到达有 RTT（且进程已死时可能根本不来）。
+    runtime_mgr.mark_session_dead(&session_id);
+    out
 }
 
 /// 启动 btw 支线：不再 spawn 独立进程，改为发 send 命令到 Runtime，

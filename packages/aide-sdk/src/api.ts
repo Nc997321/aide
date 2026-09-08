@@ -167,6 +167,11 @@ export const api = {
   sessionProvider(id: string): Promise<string | null> {
     return getTransport().invoke("session_provider", { id });
   },
+  /** 会话进程是否存活（唯一权威来源：Rust 侧存活表）。
+   *  存活 → 会话锁定自己的供应商；未存活 → 跟随全局激活供应商。 */
+  sessionAlive(id: string): Promise<boolean> {
+    return getTransport().invoke("session_alive", { id });
+  },
   getDefaultModels(): Promise<ModelOption[]> {
     return getTransport().invoke("get_default_models");
   },

@@ -441,6 +441,15 @@ pub fn session_provider(
     })
 }
 
+/// 会话进程是否存活（远程端决定模型下拉口径的依据，详见命令侧文档）。
+pub fn session_alive(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let a: SessionIdOnlyArgs = parse(params)?;
+        let runtime = app.state::<crate::runtime::AgentRuntimeManager>();
+        to_json(crate::commands::session::session_alive(a.id, runtime))
+    })
+}
+
 // ── 工作区与信任 ──
 
 /// 活动工作区快照：key 与 list_workspaces 的 key 同源（编码键），path 为解码

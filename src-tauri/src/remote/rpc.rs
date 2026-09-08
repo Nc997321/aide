@@ -69,6 +69,7 @@ static REGISTRY: &[(&str, Handler)] = &[
     ("session_model", handlers::session_model),
     ("session_effort", handlers::session_effort),
     ("session_provider", handlers::session_provider),
+    ("session_alive", handlers::session_alive),
     ("set_session_meta", handlers::set_session_meta),
     // ── 工作区与信任 ──
     ("get_active_workspace", handlers::get_active_workspace),

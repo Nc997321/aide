@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -42,6 +42,15 @@ pub struct AgentRuntimeManager {
     /// session_id → 工作区路由。`send_message` 注册/刷新；权限规则保存后
     /// `broadcast_policy_change` 据此决定哪些 session 收到 `update_permission_policy`。
     session_routes: Mutex<HashMap<String, ActiveSessionRoute>>,
+    /// 会话进程存活表：`session_init` 登记、`session_dead` / `stop_chat_session` /
+    /// `runtime_dead` 移除。
+    ///
+    /// **唯一权威来源**。此前没有它，Rust 侧无从回答"这条会话的进程还活着吗"：
+    ///  - 前端的 `useSessionState` 是事件驱动的镜像，远程 RPC 跑在 Rust 侧拿不到；
+    ///  - `session_routes` 只在 spawn 时登记、**从不移除**（连 stop 都不清），不能当判据。
+    /// 手机端据此判断"该跟随全局供应商还是锁定会话自己的供应商"（对齐桌面第 3 笔
+    /// 的语义：有活进程才锁定，没活进程就跟随全局）。
+    session_alive: Mutex<HashSet<String>>,
     /// 测试缝合：true 时 `send_to_runtime` 把命令录进 `sent_commands` 而非写真实
     /// stdin（单测里 stdin 永远 None）。生产恒为 false，`sent_commands` 保持空。
     test_mode: bool,
@@ -60,6 +69,7 @@ impl AgentRuntimeManager {
             fingerprints: Mutex::new(HashMap::new()),
             spawn_lock: TokioMutex::new(()),
             session_routes: Mutex::new(HashMap::new()),
+            session_alive: Mutex::new(HashSet::new()),
             test_mode: false,
             sent_commands: Arc::new(Mutex::new(Vec::new())),
             chat_events: {
@@ -371,6 +381,21 @@ impl AgentRuntimeManager {
                         {
                             reg.feed(&event);
                         }
+                        // 会话存活表：session_init 登记 / session_dead 移除。远程端
+                        // 判断「跟随全局还是锁定会话供应商」的唯一权威来源（前端的
+                        // useSessionState 在 Rust 侧拿不到）。
+                        if let Some(mgr) = app.try_state::<AgentRuntimeManager>() {
+                            let ety = event.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                            if ety == "session_init" || ety == "session_dead" {
+                                if let Some(sid) = event.get("session_id").and_then(|s| s.as_str()) {
+                                    if ety == "session_init" {
+                                        mgr.mark_session_alive(sid);
+                                    } else {
+                                        mgr.mark_session_dead(sid);
+                                    }
+                                }
+                            }
+                        }
                         let _ = chat_events_tx.send(event.clone());
                         let _ = app.emit("chat-event", event);
                     }
@@ -486,6 +511,32 @@ impl AgentRuntimeManager {
 
     /// 查询会话注册的工作区根（`send_message` 时注册/刷新）。
     /// 桌面通知按 session 反查所属工作区用；未注册（从未 send）返回 None。
+    // ── 会话进程存活表（远程端判断供应商口径的唯一权威来源）──
+
+    /// 登记会话进程存活（`session_init` 到达时）。
+    pub fn mark_session_alive(&self, session_id: &str) {
+        if session_id.is_empty() {
+            return;
+        }
+        self.session_alive.lock().unwrap().insert(session_id.to_string());
+    }
+
+    /// 标记会话进程结束（`session_dead` 事件 / `stop_chat_session` 命令）。
+    pub fn mark_session_dead(&self, session_id: &str) {
+        self.session_alive.lock().unwrap().remove(session_id);
+    }
+
+    /// 会话进程是否存活。手机端据此判断：存活 → 锁定会话自己的供应商；
+    /// 未存活 → 跟随全局激活供应商（与桌面「有活进程才锁定」同一语义）。
+    pub fn is_session_alive(&self, session_id: &str) -> bool {
+        self.session_alive.lock().unwrap().contains(session_id)
+    }
+
+    /// Runtime 进程整体死亡：所有会话一并标记结束（同 `bg_registry.clear_all`）。
+    pub fn clear_all_session_alive(&self) {
+        self.session_alive.lock().unwrap().clear();
+    }
+
     pub fn session_workspace_root(&self, session_id: &str) -> Option<PathBuf> {
         self.session_routes
             .lock()
@@ -637,6 +688,11 @@ fn emit_runtime_dead(app: &AppHandle, tail_handle: &Arc<Mutex<VecDeque<String>>>
     if let Some(reg) = app.try_state::<Arc<crate::runtime::bg_registry::BgTaskRegistry>>() {
         reg.clear_all();
     }
+    // 同理：存活表全清（没有 session_dead 会来，不清会让手机端一直以为会话还活着
+    // → 一直锁定旧供应商、切不动）。
+    if let Some(mgr) = app.try_state::<AgentRuntimeManager>() {
+        mgr.clear_all_session_alive();
+    }
     let event = serde_json::json!({
         "type": "runtime_dead",
         "reason": reason,
@@ -776,5 +832,36 @@ mod tests {
         assert!(mgr.fingerprints.lock().unwrap().contains_key("s1"));
         let desired = env(&[("ANTHROPIC_BASE_URL", "https://provider-b.example.com")]);
         assert!(mgr.connection_drifted("s1", &desired));
+    }
+
+    #[test]
+    fn session_alive_lifecycle() {
+        let mgr = AgentRuntimeManager::new();
+        // 初始为空
+        assert!(!mgr.is_session_alive("s1"));
+        // session_init 登记
+        mgr.mark_session_alive("s1");
+        assert!(mgr.is_session_alive("s1"));
+        // session_dead / stop 移除
+        mgr.mark_session_dead("s1");
+        assert!(!mgr.is_session_alive("s1"));
+        // 未登记过的 sid 移除不崩、仍为 false
+        mgr.mark_session_dead("never-existed");
+        assert!(!mgr.is_session_alive("never-existed"));
+        // 空 id 不登记（防事件缺 session_id 时污染成 "" 键）
+        mgr.mark_session_alive("");
+        assert!(!mgr.is_session_alive(""));
+    }
+
+    #[test]
+    fn runtime_dead_clears_all_session_alive() {
+        // 回归：进程整体死亡时没有 session_dead 会来，不清会让远程端一直以为
+        // 会话还活着 → 一直锁定旧供应商、切不动。
+        let mgr = AgentRuntimeManager::new();
+        mgr.mark_session_alive("s1");
+        mgr.mark_session_alive("s2");
+        mgr.clear_all_session_alive();
+        assert!(!mgr.is_session_alive("s1"));
+        assert!(!mgr.is_session_alive("s2"));
     }
 }
