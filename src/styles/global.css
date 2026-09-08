@@ -2,6 +2,25 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Maple Mono NF CN —— 随包内置的默认字体（官方 v7.9 TTF 转 woff2，OFL-1.1，
+ * LICENSE 见同目录）。中英文严格 2:1 的等宽字体。家族名必须与字体内部名、
+ * 各默认栈（utils/fonts.ts MONO_FONT_STACK / UI_FONT_STACK）一致。
+ * 只注册 400/700 两枚：字重 500/600 由 CSS 匹配落到 400/700。 */
+@font-face {
+  font-family: "Maple Mono NF CN";
+  src: url("../assets/fonts/maple-mono-nf-cn-regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Maple Mono NF CN";
+  src: url("../assets/fonts/maple-mono-nf-cn-bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -11,11 +30,12 @@
 :root {
   /* 首屏兜底：与 warm-dark 精修值一致，applyTheme 运行前生效。 */
   color-scheme: dark;
-  /* 等宽栈尾部垫 CJK 回退：西文 mono 无中文字形，不垫则 Windows 落到宋体 */
-  --aide-font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'PingFang SC', 'Microsoft YaHei', monospace;
+  /* 等宽栈：首位随包 Maple Mono NF CN（上方 @font-face），尾部垫 CJK 回退：
+     西文 mono 无中文字形，不垫则 Windows 落到宋体 */
+  --aide-font-mono: 'Maple Mono NF CN', 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'PingFang SC', 'Microsoft YaHei', monospace;
   /* 界面正文（按钮/标签/面板）首屏兜底：useSettings 同步 --aide-font-ui，
-     默认栈（用户未设置）时保持 Inter，用户显式选字体后跟随。 */
-  --aide-font-ui: 'Inter Variable', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+     默认栈（用户未设置）时随包字体优先、Inter 兜底，用户显式选字体后跟随。 */
+  --aide-font-ui: 'Maple Mono NF CN', 'Inter Variable', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --aide-bg-deep: #141218;
   --aide-bg-base: #1a1820;
   --aide-bg-raised: #221f29;
@@ -69,7 +89,8 @@ html, body, #app {
   /* 玻璃后门：普通主题 ambientScene 为 "none" → 无图像；玻璃主题为极光渐变 */
   background-image: var(--aide-ambient-scene);
   color: var(--aide-text-primary);
-  /* 界面正文跟随 --aide-font-ui（useSettings 同步，默认 Inter，用户选字体后跟随） */
+  /* 界面正文跟随 --aide-font-ui（useSettings 同步：默认 = 随包 Maple 优先、
+     Inter 兜底，用户选字体后跟随所选栈） */
   font-family: var(--aide-font-ui);
   font-size: 13px;
 }
