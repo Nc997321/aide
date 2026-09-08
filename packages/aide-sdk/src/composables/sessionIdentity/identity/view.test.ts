@@ -82,6 +82,24 @@ describe("sessionIdentityView (L2b 视图)", () => {
     await b.focusSession("s2");
     expect(a.currentSid.value).toBe("s1");
     expect(b.currentSid.value).toBe("s2");
+    // 未启动 → 都跟随全局，不看盘上 meta（这正是第 3 笔的行为变更）
+    expect(a.effectiveProvider.value).toBe("p_a");
+    expect(b.effectiveProvider.value).toBe("p_a");
+  });
+
+  it("已 spawn 的会话锁定自己的供应商，两个面板互不干扰", async () => {
+    allProviders.value = [makeProvider("p_a", "kimi"), makeProvider("p_b", "deepseek")];
+    activeProviderId.value = "p_a";
+    sessionProviderMock.mockImplementation(async (id) => (id === "s2" ? "p_b" : "p_a"));
+    sessionModelMock.mockImplementation(async (id) => (id === "s2" ? "deepseek" : "kimi"));
+    const a = createSessionIdentityView();
+    const b = createSessionIdentityView();
+    await sessionIdentityStore.settleOnSend("s1", "p_a");
+    await sessionIdentityStore.settleOnSend("s2", "p_b");
+    await a.focusSession("s1");
+    await b.focusSession("s2");
+    // 全局再切到 p_b，s1 仍锁 p_a（有活进程），s2 是 p_b
+    activeProviderId.value = "p_b";
     expect(a.effectiveProvider.value).toBe("p_a");
     expect(b.effectiveProvider.value).toBe("p_b");
   });

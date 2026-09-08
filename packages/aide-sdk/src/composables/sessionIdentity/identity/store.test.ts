@@ -67,13 +67,14 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
   });
 
   describe("resolve 慢路径（无内存绑定）", () => {
-    it("provider 仍在 + 模型可信 → setProvider 恢复，不写回", async () => {
+    it("未启动会话只记基线、不写注册表（有活进程才锁定；下拉跟随全局）", async () => {
       allProviders.value = [makeProvider("p_a", "kimi")];
       activeProviderId.value = "p_a";
       sessionProviderMock.mockResolvedValue("p_a");
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
-      expect(id.providerOf("s1")).toBe("p_a");
+      expect(id.providerOf("s1")).toBeNull();
+      expect(id.effectiveProviderOf("s1")).toBe("p_a");
       expect(setSessionMetaMock).not.toHaveBeenCalled();
       expect(id.lastProviderOf("s1")).toBe("p_a");
     });
@@ -84,7 +85,8 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
       sessionProviderMock.mockResolvedValue("p_deleted");
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
-      expect(id.providerOf("s1")).toBe("p_a");
+      expect(id.effectiveProviderOf("s1")).toBe("p_a");
+      expect(id.lastProviderOf("s1")).toBe("p_a");
       expect(setSessionMetaMock).toHaveBeenCalledWith("s1", { provider: { op: "set", value: "p_a" } });
     });
 
@@ -94,7 +96,7 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
       sessionProviderMock.mockResolvedValue("p_deleted");
       sessionModelMock.mockResolvedValue("unknown-model");
       await id.resolve("s1");
-      expect(id.providerOf("s1")).toBe("p_a");
+      expect(id.effectiveProviderOf("s1")).toBe("p_a");
     });
 
     it("污染特征（provider 被盖写、model 是原供应商的）→ 按模型修正 + self-heal", async () => {
@@ -103,7 +105,10 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
       sessionProviderMock.mockResolvedValue("p_b");
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
-      expect(id.providerOf("s1")).toBe("p_a");
+      // 盘上身份按模型反查修正为 p_a（self-heal），但**视图跟随全局** p_b：
+      // 两者不同正是门控要提醒的场景（effective=p_b ≠ last=p_a）。
+      expect(id.effectiveProviderOf("s1")).toBe("p_b");
+      expect(id.lastProviderOf("s1")).toBe("p_a");
       expect(setSessionMetaMock).toHaveBeenCalledWith("s1", { provider: { op: "set", value: "p_a" } });
     });
 
@@ -121,7 +126,7 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
         "p_a",
         expect.any(Error),
       );
-      expect(id.providerOf("s1")).toBe("p_a");
+      expect(id.lastProviderOf("s1")).toBe("p_a");
       warnSpy.mockRestore();
     });
 
@@ -131,7 +136,7 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
       sessionProviderMock.mockResolvedValue(null);
       sessionModelMock.mockResolvedValue(null);
       await id.resolve("s1");
-      expect(id.providerOf("s1")).toBe("p_a");
+      expect(id.effectiveProviderOf("s1")).toBe("p_a");
       expect(id.lastProviderOf("s1")).toBe("p_a");
     });
   });
@@ -218,6 +223,7 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
       sessionProviderMock.mockResolvedValue("p_a");
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
+      await id.settleOnSend("s1", "p_a"); // 已 spawn 过 → 注册表有绑定
       id.bindRuntime("s1", "runtime");
       setSessionMetaMock.mockClear();
       setSessionMetaMock.mockRejectedValueOnce(new Error("disk full"));
@@ -319,6 +325,7 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
       sessionProviderMock.mockResolvedValue("p_a");
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
+      await id.settleOnSend("s1", "p_a"); // 已 spawn → 锁定 p_a
       expect(id.providerOf("s1")).toBe("p_a");
       id.releaseBinding("s1");
       expect(id.providerOf("s1")).toBeNull();
@@ -331,6 +338,7 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
       sessionProviderMock.mockResolvedValue("p_a");
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("temp-id");
+      await id.settleOnSend("temp-id", "p_a"); // 已 spawn → 有绑定可迁
       id.migrateBinding("temp-id", "real-id");
       expect(id.providerOf("temp-id")).toBeNull();
       expect(id.providerOf("real-id")).toBe("p_a");
@@ -481,6 +489,7 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
       sessionProviderMock.mockResolvedValueOnce("p_a");
       sessionModelMock.mockResolvedValueOnce("kimi");
       await id.resolve("s1");
+      await id.settleOnSend("s1", "p_a"); // 已 spawn → 有绑定，第二次 resolve 才走快路径
       sessionProviderMock.mockResolvedValue("p_deleted");
       sessionModelMock.mockResolvedValue("unknown-model");
       await id.resolve("s1");
@@ -493,6 +502,7 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
       sessionProviderMock.mockResolvedValueOnce("p_a");
       sessionModelMock.mockResolvedValueOnce("kimi");
       await id.resolve("s1");
+      await id.settleOnSend("s1", "p_a"); // 已 spawn → 有绑定，第二次 resolve 才走快路径
       sessionProviderMock.mockResolvedValue(null);
       sessionModelMock.mockResolvedValue(null);
       await id.resolve("s1");

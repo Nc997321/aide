@@ -165,10 +165,12 @@ function buildSendConfirmRequest(decision: ConfirmDecision, effectiveModel: stri
     id: `send-confirm-${crypto.randomUUID()}`,
     name: "__sendConfirm__",
     input: {
-      title: "本次发送将切换供应商",
+      // 不说"本次"：确认后会话身份会落盘改写（settleOnSend），下次打开仍是新供应商，
+      // 且没有反向入口改回去。文案必须让用户在点确认前就知道这是**永久**改动。
+      title: `此会话将改用 ${newProviderName}`,
       chip: "切换确认",
       question: `将以 ${newProviderName}/${effectiveModel} 发送（原 ${oldProviderName}）`,
-      info: `切换供应商会重新拉起会话进程，提示缓存失效；对话历史将迁移到新会话继续。模型身份由进程坐实事件记录，无需在此确认。`,
+      info: `确认后这条会话的供应商会改为 ${newProviderName} 并写入会话记录，以后打开都是它。运行中的会话还会重新拉起进程、提示缓存失效；对话历史迁移到新会话继续。`,
       confirmLabel: `继续发送 · ${effectiveModel}`,
     },
   };

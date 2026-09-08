@@ -107,12 +107,16 @@ async function healProviderIfDirty(sid: string, meta: SessionMeta | null, resolv
   }
 }
 
-// resolve 慢路径：无内存绑定 → 读盘 + 一致性校验 + setProvider + self-heal + 恢复模型 + 置基线
+// resolve 慢路径：无内存绑定 → 读盘 + 一致性校验 + self-heal + 恢复模型 + 置基线。
+//
+// **不 setProvider**：注册表的写入方只有「发送 / spawn」一个（见 useSessionProviders
+// 的契约注释），此处若写，等于把「仅仅打开预览」也变成绑定时机 —— 未启动会话就
+// 被锁死在盘上记的供应商，全局切了供应商下拉也不动它，且无从改回。
+// 现在的语义统一为：**有活进程才锁定（spawn 时写），没活进程就跟随全局**。
 async function restoreBinding(sid: string): Promise<void> {
   const meta = await readSessionMeta(sid);
   const resolved = consistentProviderId(allProviders.value, meta?.provider ?? null, meta?.model ?? null)
     ?? activeProviderId.value;
-  setProvider(sid, resolved);
   await healProviderIfDirty(sid, meta, resolved);
   const restored = restoreModel(displayModelsOf(sid), meta?.model ?? null);
   bindings[sid] = { meta, runtimeModel: "", draft: "", restored, sdkModels: [] };
