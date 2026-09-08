@@ -21,7 +21,7 @@ import type {
 import { useBtwSession } from "../useBtwSession";
 import { useCodeGraphProgress } from "../useCodeGraphProgress";
 import { useSessionNames } from "../useSessionNames";
-import { useSessionIdentity } from "../../composables/sessionIdentity";
+import { sessionIdentityStore } from "../../composables/sessionIdentity";
 import { useSessionState, markSessionUntracked } from "../useSessionState";
 import {
   armStalled,
@@ -136,7 +136,7 @@ export function handleChatEvent(e: Record<string, unknown>): void {
   if (disposedSids.has(sid)) return;
   const store = getStore(sid);
 
-  const identity = useSessionIdentity();
+  const identity = sessionIdentityStore;
   const { setSessionState, setSessionHealth, removeSessionState } = useSessionState();
 
   switch (e["type"]) {

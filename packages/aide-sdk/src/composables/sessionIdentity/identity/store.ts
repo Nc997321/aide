@@ -1,4 +1,4 @@
-import { computed, reactive, ref, type ComputedRef } from "vue";
+import { reactive, ref } from "vue";
 import { api } from "../../../api";
 import { useProviders } from "../../../composables/useProviders";
 import { useSessionProviders } from "../../../composables/useSessionProviders";
@@ -10,18 +10,18 @@ import type { ProviderConfig } from "../../../types";
 import type { ModelOption } from "../../../types/chat";
 
 /**
- * L2 身份层：会话供应商/模型身份的单一真相源（SSOT）。
+ * L2a 会话身份仓库（全局一份，按 sid 存储）。
  *
- * 取代 useSessionContinuity（lastUsed 基线）+ useChatSession 的 stampProvider/
- * commitPendingModel/pendingModelCommit（落盘草稿）+ ChatInputBox 的 selectedModel
- * （4 watcher 维护）。模块级状态 + 工厂访问器（与 useSessionProviders:15 同构），
- * 任意组件 useSessionIdentity() 共享同一份 bindings/lastIdentity。
+ * 只回答一件事：**这条会话是什么身份**（绑定了哪个供应商、记住/坐实的模型是什么）。
+ * 它不知道"谁正在看这条会话"——那是 L2b 视图层（`./view.ts`）的事。
  *
- * 依赖红线：identity → persistence（L1）+ useSessionProviders 注册表 + utils 纯函数
- * （consistentProviderId/providerModelList）+ @/api（defaultModels）。不依赖 gate。
+ * 拆分动机：此前这两类状态共用一个模块级单例（`currentSid` / `lastProviderState`
+ * / `pendingDraft` 是单值），而分屏布局下多个面板同时挂载（`App.vue` 的 PaneLayout
+ * 用 v-show 保活），谁最后切面板谁就改全局 → 下拉显示错会话的模型、草稿写进别人
+ * 会话、门控基线串。按归属拆开后这些都不再可能。
  *
- * 治本点：settleOnSend 一处同时落盘 + 推进基线，落盘值 = 门控基线 = 发送值三者同源，
- * 根除"lastUsedModel=null 被抹成 '' 与真实模型比"的误判（本次 bug 温床）。
+ * 依赖红线：store → persistence（L1）+ useSessionProviders 注册表 + utils 纯函数 + @/api。
+ * 不依赖 view、不依赖 gate。
  */
 
 export interface Identity {
@@ -38,13 +38,10 @@ interface Binding {
 }
 
 const bindings = reactive<Record<string, Binding>>({});
-/** 上次发送坐实的供应商 id 门控基线（模型维度基线已废除——模型身份由
- *  model_committed 事件落盘驱动，见 2026-09-01 设计稿 §2）。 */
-const lastProviderState = ref<string | null>(null);
-const currentSid = ref<string | null>(null);
+/** 上次发送坐实的供应商 id，**按 sid** 记录（门控基线）。
+ *  此前是单值导致跨会话串：A 面板的门控去比 B 会话的基线 → 误弹/漏弹。 */
+const lastProviderBySid = reactive<Record<string, string>>({});
 const defaultModels = ref<ModelOption[]>([]);
-// 空白面板（无会话）时用户手选的模型——不绑 sid（会话还没创建），首条发送后落到 pending 会话。
-const pendingDraft = ref("");
 
 // 模块级 composable 依赖（与 useSessionProviders 同构：返回模块级共享 ref，无 lifecycle）
 const { allProviders, activeProviderId, SYSTEM_DEFAULT_ID } = useProviders();
@@ -55,8 +52,8 @@ function emptyBinding(): Binding {
 }
 
 function providerConfigOf(pid: string): ProviderConfig | null {
-  // 可达兜底（非不可达）：pid 来自 effectiveProvider（providerOf / activeProviderId），
-  // 但会话绑定可悬空指向已删除的供应商（deleteProvider 不清会话注册表，快路径也不修正）
+  // 可达兜底（非不可达）：pid 来自 providerOf / activeProviderId，但会话绑定可
+  // 悬空指向已删除的供应商（deleteProvider 不清会话注册表，快路径也不修正）
   // ——find 可能 undefined，调用方回退空列表（见 providerModelsOf）。
   return allProviders.value.find((x) => x.id === pid) ?? null;
 }
@@ -67,23 +64,39 @@ function providerModelsOf(pid: string): ModelOption[] {
   return p ? providerModelList(p).map((v) => ({ value: v, displayName: v })) : [];
 }
 
-/** 空白面板（无会话）下拉选项：无 binding，系统默认用 defaultModels（无 sdkModels），
- *  第三方用 providerModelList(activeProvider)。不传 sid——空白面板没有会话身份。 */
+/** 全局口径的模型选项（无会话归属时用）：系统默认用 defaultModels，
+ *  第三方用 providerModelList。不传 sid——这里不牵涉会话身份。 */
 function activeProviderModels(): ModelOption[] {
   const pid = activeProviderId.value;
   if (pid === SYSTEM_DEFAULT_ID) return defaultModels.value;
   return providerModelsOf(pid);
 }
 
-/** 当前会话下拉选项：系统默认用 SDK 动态列表（无则 defaultModels 静态兜底），
- *  第三方用 providerModelList（静态配置）。取代 ChatPanel.displayModels + providerModels。 */
-function currentDisplayModels(sid: string): ModelOption[] {
+/** 会话口径的模型选项：系统默认用 SDK 动态列表（无则 defaultModels 静态兜底），
+ *  第三方用 providerModelList（静态配置）。 */
+function displayModelsOf(sid: string): ModelOption[] {
   const pid = resolveEffectiveProvider(providerOf(sid), activeProviderId.value);
   if (pid === SYSTEM_DEFAULT_ID) {
     const sdk = bindings[sid]?.sdkModels ?? [];
     return sdk.length ? sdk : defaultModels.value;
   }
   return providerModelsOf(pid);
+}
+
+/** 会话的生效供应商：绑定 id > 全局 active。sid 为空 → 全局 active。 */
+function effectiveProviderOf(sid: string | null): string {
+  if (!sid) return activeProviderId.value; // 不传空串给 providerOf
+  return resolveEffectiveProvider(providerOf(sid), activeProviderId.value);
+}
+
+/** 会话的生效模型：draft > runtime > restored > 列表首项（详见 resolver 的兜底链）。
+ *  sid 为空的空白面板分支不在这里——草稿是视图态，由 view 处理。 */
+function effectiveModelOf(sid: string): string {
+  const b = bindings[sid] ?? emptyBinding();
+  return resolveEffectiveModel(
+    { draft: b.draft, runtime: b.runtimeModel, restored: b.restored },
+    displayModelsOf(sid).map((m) => m.value),
+  );
 }
 
 async function healProviderIfDirty(sid: string, meta: SessionMeta | null, resolved: string): Promise<void> {
@@ -101,42 +114,34 @@ async function restoreBinding(sid: string): Promise<void> {
     ?? activeProviderId.value;
   setProvider(sid, resolved);
   await healProviderIfDirty(sid, meta, resolved);
-  const restored = restoreModel(currentDisplayModels(sid), meta?.model ?? null);
+  const restored = restoreModel(displayModelsOf(sid), meta?.model ?? null);
   bindings[sid] = { meta, runtimeModel: "", draft: "", restored, sdkModels: [] };
-  lastProviderState.value = resolved;
+  lastProviderBySid[sid] = resolved;
 }
 
 // resolve 快路径：有内存绑定 → 只读盘刷基线，不动注册表不写盘。
-// bound 由 resolve 传入——快路径门控（providerOf(sid) 真值）即证明，不再重读重兜底。
 async function refreshBinding(sid: string, bound: string): Promise<void> {
   const meta = await readSessionMeta(sid);
   const resolved = consistentProviderId(allProviders.value, meta?.provider ?? null, meta?.model ?? null)
     ?? bound;
-  const restored = restoreModel(currentDisplayModels(sid), meta?.model ?? null);
-  // 不变式：快路径 ⟹ binding 已建——restoreBinding 建 provider 时同块建 binding；
-  // settleOnSend 建 provider 后落盘成败都建（见 settleOnSend catch）。类型层已非空，
-  // 不再 ?? emptyBinding 兜底。
+  const restored = restoreModel(displayModelsOf(sid), meta?.model ?? null);
   const prev = bindings[sid];
   bindings[sid] = { ...prev, meta, restored };
-  lastProviderState.value = resolved;
+  lastProviderBySid[sid] = resolved;
 }
 
-/** sid 切换入口（取代 restoreBinding + refreshLastUsed）。有绑定走快路径，无绑定走慢路径。
- *  await 必须在模型恢复前完成（同现 ChatInputBox:180 语义）。 */
+/** 会话身份恢复入口（由 view 在切会话时驱动）。有绑定走快路径，无绑定走慢路径。 */
 async function resolve(sid: string): Promise<void> {
-  currentSid.value = sid;
   const bound = providerOf(sid);
   if (bound) await refreshBinding(sid, bound);
   else await restoreBinding(sid);
 }
 
 /** 发送前统一收尾（供应商维度）：绑定确保 + provider 落盘 + 门控基线推进，三者同源。
- *  模型身份的落盘不在这里——已移交 model_committed 事件驱动（commitModelFromRuntime），
- *  旧「发送时把下拉草稿写盘」的设计在 setModel 被驳回/被确认弹窗拦截时会写入假身份
- *  （2026-09-01 设计稿 §2 的废除项）。
+ *  模型身份的落盘不在这里——由 model_committed 事件驱动（commitModelFromRuntime）。
  *  sid 空（空白面板首发）：只推进基线（会话还没创建，落盘推迟到 finalize 用 realId）。 */
 async function settleOnSend(sid: string, effectiveProvider: string): Promise<void> {
-  lastProviderState.value = effectiveProvider;
+  if (sid) lastProviderBySid[sid] = effectiveProvider;
   if (!sid) return;
   if (!providerOf(sid)) setProvider(sid, effectiveProvider);
   const prev = bindings[sid] ?? emptyBinding();
@@ -153,9 +158,7 @@ async function settleOnSend(sid: string, effectiveProvider: string): Promise<voi
 }
 
 /** 模型身份的进程坐实落盘（model_committed 事件驱动）：bindRuntime + 落盘一体。
- *  落盘值用 requestedModel（用户命名空间的下拉别名，restoreModel 可恢复）；
- *  to_model 是 CLI resolved 全名，不进记忆。requested=null（CLI 内部 source 非
- *  sdk 的切换）→ 只 bindRuntime 不落盘（没有用户选择可恢复）。 */
+ *  requestedModel=null（CLI 内部切换）→ 只 bindRuntime 不落盘（没有用户选择可恢复）。 */
 async function commitModelFromRuntime(
   sid: string,
   committed: { fromModel: string; toModel: string; requestedModel: string | null; source: string },
@@ -173,20 +176,9 @@ async function commitModelFromRuntime(
   }
 }
 
-/** 定名搬迁后 currentSid 跟到 realId（finalizeSession 已 migrateBinding 迁绑定，
- *  这里不读盘，只让 effectiveModel 指向新 sid 的 binding）。 */
-function adoptSid(sid: string): void {
-  currentSid.value = sid;
-}
-
-/** 用户手选草稿（取代 handleModelChange 直写 selectedModel）。只写 draft，不落盘。
- *  空白面板（currentSid null）写 pendingDraft——会话还没创建，draft 无 sid 可绑。 */
-function setUserChoice(model: string): void {
-  const sid = currentSid.value;
-  if (!sid) {
-    pendingDraft.value = model;
-    return;
-  }
+/** 用户手选草稿（带 sid）。只写 draft，不落盘——落盘由 model_committed 坐实事件驱动。 */
+function setUserChoice(sid: string, model: string): void {
+  if (!sid) return;
   const prev = bindings[sid] ?? emptyBinding();
   bindings[sid] = { ...prev, draft: model };
 }
@@ -197,45 +189,50 @@ function setSdkModels(sid: string, models: ModelOption[]): void {
   bindings[sid] = { ...prev, sdkModels: models };
 }
 
-/** sidecar 运行时坐实当前模型（取代 currentModel watcher 直写 selectedModel）。不落盘。 */
+/** sidecar 运行时坐实当前模型。不落盘。 */
 function bindRuntime(sid: string, model: string): void {
   const prev = bindings[sid] ?? emptyBinding();
   bindings[sid] = { ...prev, runtimeModel: model };
 }
 
-/** 释放绑定（取代 clearProvider，stop 会话用）。删注册表 + binding；落盘身份保留。
- *  不动 currentSid/lastIdentity：会话还在面板（只是进程停了），effectiveModel 自动回落 activeProvider。 */
+/** 释放绑定（stop 会话用）。删注册表 + binding；落盘身份保留。 */
 function releaseBinding(sid: string): void {
   clearProvider(sid);
   delete bindings[sid];
 }
 
-/** 定名搬迁（取代 migrateProvider）。绑定随 sid 迁移。 */
+/** 定名搬迁（tempId → realId）：绑定与基线随 sid 迁移。 */
 function migrateBinding(oldSid: string, newSid: string): void {
   migrateProvider(oldSid, newSid);
   if (bindings[oldSid]) {
     bindings[newSid] = bindings[oldSid];
     delete bindings[oldSid];
   }
-  if (currentSid.value === oldSid) currentSid.value = newSid;
+  if (lastProviderBySid[oldSid] !== undefined) {
+    lastProviderBySid[newSid] = lastProviderBySid[oldSid];
+    delete lastProviderBySid[oldSid];
+  }
 }
 
-/** 面板无会话（sid 清空，取代 continuity.clear）。清当前 + 基线。 */
-function clearCurrent(): void {
-  currentSid.value = null;
-  lastProviderState.value = null;
+/** 本次 spawn 将使用的供应商（与 Rust `resolve_send_provider` 的回落顺序一致：
+ *  会话绑定 > 全局 active）。spawn 前记录，定名后由 finalizeSpawn 落到 realId。 */
+function spawnProviderOf(sid: string): string {
+  return providerOf(sid) ?? activeProviderId.value;
 }
 
-/** @internal 测试重置模块级状态（与 useProviders.__resetForTest 同构）。 */
-function __resetIdentityForTest(): void {
-  for (const k of Object.keys(bindings)) delete bindings[k];
-  lastProviderState.value = null;
-  currentSid.value = null;
-  defaultModels.value = [];
-  pendingDraft.value = "";
+/** 定名后坐实身份（tempId → realId 之后调用）：把 spawn 时记录的 provider 落盘 + 推进基线。
+ *
+ *  取代此前的 `settleOnSend(realId, identity.effectiveProvider.value)`——后者读的是
+ *  **视图**状态（"某个面板正在看谁"）：新建会话首发后若用户切走 tab，effectiveProvider
+ *  就成了别的会话的供应商 → **新会话被落盘成别人的供应商**。定名坐实只能用
+ *  这条会话自己的记录，与面板无关。
+ */
+async function finalizeSpawn(realId: string): Promise<void> {
+  const pid = lastProviderBySid[realId] ?? activeProviderId.value;
+  await settleOnSend(realId, pid);
 }
 
-/** 读系统默认静态兜底模型列表（ChatPanel onMounted 调，取代原 ChatPanel:185-198）。 */
+/** 读系统默认静态兜底模型列表（ChatPanel onMounted 调）。 */
 async function refreshDefaultModels(): Promise<void> {
   try {
     defaultModels.value = await api.getDefaultModels();
@@ -244,54 +241,39 @@ async function refreshDefaultModels(): Promise<void> {
   }
 }
 
-const effectiveProvider = computed<string>(() => {
-  const sid = currentSid.value;
-  // 空白面板（currentSid null）直接用 activeProviderId——不传空串给 providerOf
-  return sid ? resolveEffectiveProvider(providerOf(sid), activeProviderId.value) : activeProviderId.value;
-});
-
-const displayModels = computed<ModelOption[]>(() => {
-  const sid = currentSid.value;
-  // 空白面板/新建 pending（currentSid null）用 activeProvider 列表——下拉要能选模型
-  return sid ? currentDisplayModels(sid) : activeProviderModels();
-});
-
-const effectiveModel = computed<string>(() => {
-  const sid = currentSid.value;
-  if (!sid) {
-    // 空白面板：pendingDraft（在 activeProvider 列表里）> 列表首项
-    const list = activeProviderModels();
-    if (pendingDraft.value && list.some((m) => m.value === pendingDraft.value)) return pendingDraft.value;
-    return list[0]?.value ?? "";
-  }
-  const b = bindings[sid] ?? emptyBinding();
-  return resolveEffectiveModel(
-    { draft: b.draft, runtime: b.runtimeModel, restored: b.restored },
-    currentDisplayModels(sid).map((m) => m.value),
-  );
-});
-
-const lastProvider: ComputedRef<string | null> = computed(() => lastProviderState.value);
-
-/** 访问器（模块级状态共享，任意实例同一组）。 */
-export function useSessionIdentity() {
-  return {
-    resolve,
-    settleOnSend,
-    commitModelFromRuntime,
-    setUserChoice,
-    setSdkModels,
-    bindRuntime,
-    releaseBinding,
-    migrateBinding,
-    clearCurrent,
-    adoptSid,
-    __resetIdentityForTest,
-    refreshDefaultModels,
-    effectiveModel,
-    effectiveProvider,
-    displayModels,
-    lastProvider,
-    providerOf,
-  };
+/** @internal 测试重置全部仓库状态。 */
+function __resetForTest(): void {
+  for (const k of Object.keys(bindings)) delete bindings[k];
+  for (const k of Object.keys(lastProviderBySid)) delete lastProviderBySid[k];
+  defaultModels.value = [];
 }
+
+/** 全局唯一的会话身份仓库。非组件调用方（事件 / stop / 发送收尾）一律用它——
+ *  它们没有面板归属，也不该读视图状态。 */
+export const sessionIdentityStore = {
+  // ── 状态 ──
+  defaultModels,
+  // ── 查询 ──
+  providerOf,
+  activeProviderModels,
+  displayModelsOf,
+  effectiveProviderOf,
+  effectiveModelOf,
+  spawnProviderOf,
+  lastProviderOf: (sid: string | null): string | null =>
+    sid ? (lastProviderBySid[sid] ?? null) : null,
+  // ── 写入 ──
+  resolve,
+  settleOnSend,
+  finalizeSpawn,
+  commitModelFromRuntime,
+  setUserChoice,
+  setSdkModels,
+  bindRuntime,
+  releaseBinding,
+  migrateBinding,
+  refreshDefaultModels,
+  __resetForTest,
+};
+
+export type SessionIdentityStore = typeof sessionIdentityStore;

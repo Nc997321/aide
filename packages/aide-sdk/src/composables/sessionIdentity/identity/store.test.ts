@@ -19,7 +19,7 @@ vi.mock("../../../api", () => ({
   },
 }));
 
-import { useSessionIdentity } from "./useSessionIdentity";
+import { sessionIdentityStore } from "./store";
 
 const emptyMappings = (): ProviderModelMappings => ({
   anthropicModel: "",
@@ -49,7 +49,7 @@ function makeProvider(id: string, model = `${id}-default`, extra: Partial<Provid
   };
 }
 
-describe("useSessionIdentity (L2 identity)", () => {
+describe("sessionIdentityStore (L2a 仓库)", () => {
   const { allProviders, activeProviderId } = useProviders();
   const { providers } = useSessionProviders();
   let id: ReturnType<typeof useSessionIdentity>;
@@ -62,8 +62,8 @@ describe("useSessionIdentity (L2 identity)", () => {
     setSessionMetaMock.mockResolvedValue(undefined);
     getDefaultModelsMock.mockResolvedValue([]);
     for (const k of Object.keys(providers)) delete providers[k];
-    id = useSessionIdentity();
-    id.__resetIdentityForTest();
+    id = sessionIdentityStore;
+    id.__resetForTest();
   });
 
   describe("resolve 慢路径（无内存绑定）", () => {
@@ -75,7 +75,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       await id.resolve("s1");
       expect(id.providerOf("s1")).toBe("p_a");
       expect(setSessionMetaMock).not.toHaveBeenCalled();
-      expect(id.lastProvider.value).toBe("p_a");
+      expect(id.lastProviderOf("s1")).toBe("p_a");
     });
 
     it("provider 被删但模型反查命中 → 修正绑定 + self-heal 写回", async () => {
@@ -132,7 +132,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionModelMock.mockResolvedValue(null);
       await id.resolve("s1");
       expect(id.providerOf("s1")).toBe("p_a");
-      expect(id.lastProvider.value).toBe("p_a");
+      expect(id.lastProviderOf("s1")).toBe("p_a");
     });
   });
 
@@ -148,7 +148,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
       expect(setSessionMetaMock).not.toHaveBeenCalled();
-      expect(id.lastProvider.value).toBe("p_a");
+      expect(id.lastProviderOf("s1")).toBe("p_a");
     });
   });
 
@@ -160,7 +160,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       expect(id.providerOf("s1")).toBe("p_a");
       expect(setSessionMetaMock).toHaveBeenCalledWith("s1", { provider: { op: "set", value: "p_a" } });
       expect(setSessionMetaMock).toHaveBeenCalledTimes(1);
-      expect(id.lastProvider.value).toBe("p_a");
+      expect(id.lastProviderOf("s1")).toBe("p_a");
     });
 
     it("已有绑定且 provider 同值 → 跳过 IPC（省冗余写）", async () => {
@@ -173,7 +173,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       await id.settleOnSend("s1", "p_a");
       expect(setSessionMetaMock).not.toHaveBeenCalled();
       expect(id.providerOf("s1")).toBe("p_a");
-      expect(id.lastProvider.value).toBe("p_a");
+      expect(id.lastProviderOf("s1")).toBe("p_a");
     });
 
     it("provider 变化 → 只写 provider（model 落盘是 model_committed 的职责）", async () => {
@@ -185,7 +185,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       await id.settleOnSend("s1", "p_b");
       expect(setSessionMetaMock).toHaveBeenCalledWith("s1", { provider: { op: "set", value: "p_b" } });
       expect(setSessionMetaMock).toHaveBeenCalledTimes(1);
-      expect(id.lastProvider.value).toBe("p_b");
+      expect(id.lastProviderOf("s1")).toBe("p_b");
     });
 
     it("落盘失败 → console.warn 降级，基线照常推进", async () => {
@@ -202,13 +202,13 @@ describe("useSessionIdentity (L2 identity)", () => {
         "s1",
         expect.any(Error),
       );
-      expect(id.lastProvider.value).toBe("p_b");
+      expect(id.lastProviderOf("s1")).toBe("p_b");
       // 失败后绑定已建立（空绑定，meta 保持盘上状态）→ 后续 resolve 走快路径不崩（不变式回归）。
       // 模型 mock 与 p_b 自洽（deepseek）：consistentProviderId 按模型反查会把它归回 p_a。
       sessionProviderMock.mockResolvedValue("p_b");
       sessionModelMock.mockResolvedValue("deepseek");
       await id.resolve("s1");
-      expect(id.lastProvider.value).toBe("p_b");
+      expect(id.lastProviderOf("s1")).toBe("p_b");
       warnSpy.mockRestore();
     });
 
@@ -225,7 +225,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       // 已有绑定注册表不覆盖（if(!providerOf) 守护）——供应商 respawn 的注册表变更
       // 由 provider_switched 链路处理，settleOnSend 只管账面与落盘
       expect(id.providerOf("s1")).toBe("p_a");
-      expect(id.effectiveModel.value).toBe("runtime"); // model 侧 binding 完全未被触碰
+      expect(id.effectiveModelOf("s1")).toBe("runtime"); // model 侧 binding 完全未被触碰
     });
   });
 
@@ -238,7 +238,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionProviderMock.mockResolvedValue("p_a");
       sessionModelMock.mockResolvedValue(null);
       await id.resolve("s1");
-      expect(id.effectiveModel.value).toBe("deepseek-v4-flash:0731-cloud");
+      expect(id.effectiveModelOf("s1")).toBe("deepseek-v4-flash:0731-cloud");
     });
 
     it("draft 在列表 → 优先于 runtime/restored", async () => {
@@ -247,9 +247,9 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionProviderMock.mockResolvedValue("p_a");
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
-      id.setUserChoice("user-picked");
+      id.setUserChoice("s1", "user-picked");
       id.bindRuntime("s1", "runtime-model");
-      expect(id.effectiveModel.value).toBe("user-picked");
+      expect(id.effectiveModelOf("s1")).toBe("user-picked");
     });
 
     it("runtime 在列表 → 优先于 restored（draft 空/不在列表）", async () => {
@@ -259,7 +259,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
       id.bindRuntime("s1", "runtime-model");
-      expect(id.effectiveModel.value).toBe("runtime-model");
+      expect(id.effectiveModelOf("s1")).toBe("runtime-model");
     });
 
     it("runtime 别名不在列表 → 跳过用 restored（不污染下拉）", async () => {
@@ -269,7 +269,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
       id.bindRuntime("s1", "sonnet");
-      expect(id.effectiveModel.value).toBe("kimi");
+      expect(id.effectiveModelOf("s1")).toBe("kimi");
     });
 
     it("全空 provider（无 model/mappings/knownModels）→ effectiveModel=''", async () => {
@@ -278,13 +278,13 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionProviderMock.mockResolvedValue("p_a");
       sessionModelMock.mockResolvedValue(null);
       await id.resolve("s1");
-      expect(id.effectiveModel.value).toBe("");
+      expect(id.effectiveModelOf("s1")).toBe("");
     });
   });
 
   describe("lastProvider=null → 门控不误弹（本次 bug 回归）", () => {
     it("resolve 前 lastProvider=null（无基线）", () => {
-      expect(id.lastProvider.value).toBeNull();
+      expect(id.lastProviderOf("s1")).toBeNull();
     });
   });
 
@@ -297,7 +297,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       await id.resolve("s1");
       setSessionMetaMock.mockClear();
       id.bindRuntime("s1", "sidecar-current");
-      expect(id.effectiveModel.value).toBe("sidecar-current");
+      expect(id.effectiveModelOf("s1")).toBe("sidecar-current");
       expect(setSessionMetaMock).not.toHaveBeenCalled();
     });
 
@@ -308,8 +308,8 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
       setSessionMetaMock.mockClear();
-      id.setUserChoice("draft-model");
-      expect(id.effectiveModel.value).toBe("draft-model");
+      id.setUserChoice("s1", "draft-model");
+      expect(id.effectiveModelOf("s1")).toBe("draft-model");
       expect(setSessionMetaMock).not.toHaveBeenCalled();
     });
 
@@ -322,7 +322,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       expect(id.providerOf("s1")).toBe("p_a");
       id.releaseBinding("s1");
       expect(id.providerOf("s1")).toBeNull();
-      expect(id.effectiveProvider.value).toBe("p_b");
+      expect(id.effectiveProviderOf("s1")).toBe("p_b");
     });
 
     it("migrateBinding 迁移绑定到新 sid", async () => {
@@ -336,50 +336,12 @@ describe("useSessionIdentity (L2 identity)", () => {
       expect(id.providerOf("real-id")).toBe("p_a");
     });
 
-    it("clearCurrent 清 lastProvider + currentSid（effectiveModel 回落 activeProvider 默认）", async () => {
-      allProviders.value = [makeProvider("p_a", "kimi")];
-      activeProviderId.value = "p_a";
-      sessionProviderMock.mockResolvedValue("p_a");
-      sessionModelMock.mockResolvedValue("kimi");
-      await id.resolve("s1");
-      expect(id.lastProvider.value).not.toBeNull();
-      id.clearCurrent();
-      expect(id.lastProvider.value).toBeNull();
-      expect(id.effectiveModel.value).toBe("kimi");
-    });
-
-    it("空白面板（currentSid null）setUserChoice → pendingDraft，effectiveModel 用它", async () => {
-      allProviders.value = [makeProvider("p_a", "kimi", { knownModels: ["kimi", "picked"] })];
-      activeProviderId.value = "p_a";
-      id.setUserChoice("picked");
-      expect(id.effectiveModel.value).toBe("picked");
-    });
-
-    it("空白面板 pendingDraft 不在 activeProvider 列表 → 回落列表首项", async () => {
-      allProviders.value = [makeProvider("p_a", "kimi")];
-      activeProviderId.value = "p_a";
-      id.setUserChoice("not-in-list");
-      expect(id.effectiveModel.value).toBe("kimi");
-    });
-
-    it("adoptSid 设 currentSid（定名后跟到 realId，不读盘）", async () => {
-      allProviders.value = [makeProvider("p_a", "kimi")];
-      activeProviderId.value = "p_a";
-      sessionProviderMock.mockResolvedValue("p_a");
-      sessionModelMock.mockResolvedValue("kimi");
-      await id.resolve("temp-id");
-      id.migrateBinding("temp-id", "real-id");
-      id.adoptSid("real-id");
-      expect(id.effectiveProvider.value).toBe("p_a");
-      expect(id.effectiveModel.value).toBe("kimi");
-    });
-
-    it("settleOnSend sid 空 → 只推进基线不落盘（空白面板首发）", async () => {
+    it("settleOnSend sid 空 → 不落盘也不记基线（空白面板首发由 sendMessage 拿 tempId 后坐实）", async () => {
       allProviders.value = [makeProvider("p_a", "kimi")];
       activeProviderId.value = "p_a";
       setSessionMetaMock.mockClear();
       await id.settleOnSend("", "p_a");
-      expect(id.lastProvider.value).toBe("p_a");
+      expect(id.lastProviderOf("s1")).toBeNull();
       expect(setSessionMetaMock).not.toHaveBeenCalled();
     });
   });
@@ -391,7 +353,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionProviderMock.mockResolvedValue("p_a");
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
-      expect(id.displayModels.value.map((m) => m.value)).toEqual(["kimi", "k2"]);
+      expect(id.displayModelsOf("s1").map((m) => m.value)).toEqual(["kimi", "k2"]);
     });
 
     it("系统默认 → sdkModels 优先", async () => {
@@ -404,7 +366,7 @@ describe("useSessionIdentity (L2 identity)", () => {
         { value: "sonnet", displayName: "Sonnet" },
         { value: "opus", displayName: "Opus" },
       ]);
-      expect(id.displayModels.value.map((m) => m.value)).toEqual(["sonnet", "opus"]);
+      expect(id.displayModelsOf("s1").map((m) => m.value)).toEqual(["sonnet", "opus"]);
     });
 
     it("系统默认 → 无 sdkModels 则 defaultModels 兜底", async () => {
@@ -415,7 +377,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionModelMock.mockResolvedValue(null);
       await id.refreshDefaultModels();
       await id.resolve("s1");
-      expect(id.displayModels.value.map((m) => m.value)).toEqual(["sonnet"]);
+      expect(id.displayModelsOf("s1").map((m) => m.value)).toEqual(["sonnet"]);
     });
 
     it("refreshDefaultModels 失败 → console.warn 降级", async () => {
@@ -435,13 +397,13 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionProviderMock.mockResolvedValue("p_a");
       sessionModelMock.mockResolvedValue("kimi");
       await id.resolve("s1");
-      expect(id.displayModels.value.map((m) => m.value)).toEqual(["kimi"]);
+      expect(id.displayModelsOf("s1").map((m) => m.value)).toEqual(["kimi"]);
       // 模拟 deleteProvider：allProviders 移除 p_a（active 重置系统默认），
       // 会话注册表仍悬空指向 p_a（快路径 resolve 不修正悬空绑定）→ 兜底空列表
       allProviders.value = [];
       activeProviderId.value = "__system_default__";
       await id.resolve("s1");
-      expect(id.displayModels.value.map((m) => m.value)).toEqual([]);
+      expect(id.displayModelsOf("s1").map((m) => m.value)).toEqual([]);
     });
   });
 
@@ -449,38 +411,34 @@ describe("useSessionIdentity (L2 identity)", () => {
     it("setUserChoice 在 binding 不存在时建空 binding", () => {
       allProviders.value = [makeProvider("p_a", "kimi", { knownModels: ["kimi", "x"] })];
       activeProviderId.value = "p_a";
-      id.adoptSid("s1");
-      id.setUserChoice("x");
-      expect(id.effectiveModel.value).toBe("x");
+      id.setUserChoice("s1", "x");
+      expect(id.effectiveModelOf("s1")).toBe("x");
     });
 
     it("bindRuntime 在 binding 不存在时建空 binding", () => {
       allProviders.value = [makeProvider("p_a", "kimi", { knownModels: ["kimi", "runtime"] })];
       activeProviderId.value = "p_a";
-      id.adoptSid("s1");
       id.bindRuntime("s1", "runtime");
-      expect(id.effectiveModel.value).toBe("runtime");
+      expect(id.effectiveModelOf("s1")).toBe("runtime");
     });
 
     it("setSdkModels 在 binding 不存在时建空 binding", () => {
       allProviders.value = [];
       activeProviderId.value = "__system_default__";
-      id.adoptSid("s1");
       id.setSdkModels("s1", [{ value: "sonnet", displayName: "Sonnet" }]);
-      expect(id.displayModels.value.map((m) => m.value)).toEqual(["sonnet"]);
+      expect(id.displayModelsOf("s1").map((m) => m.value)).toEqual(["sonnet"]);
     });
 
     it("effectiveModel currentSid 非空但 binding 无 → emptyBinding 兜底", () => {
       allProviders.value = [makeProvider("p_a", "kimi")];
       activeProviderId.value = "p_a";
-      id.adoptSid("s1");
-      expect(id.effectiveModel.value).toBe("kimi");
+      expect(id.effectiveModelOf("s1")).toBe("kimi");
     });
 
     it("effectiveProvider currentSid null → activeProviderId", () => {
       allProviders.value = [makeProvider("p_a", "kimi")];
       activeProviderId.value = "p_a";
-      expect(id.effectiveProvider.value).toBe("p_a");
+      expect(id.effectiveProviderOf("s1")).toBe("p_a");
     });
 
     it("migrateBinding 无 oldSid binding + currentSid !== oldSid → 不迁不动", () => {
@@ -492,13 +450,13 @@ describe("useSessionIdentity (L2 identity)", () => {
     it("displayModels currentSid null → activeProviderModels（空白面板/新建会话用 active 列表）", () => {
       allProviders.value = [makeProvider("p_a", "kimi")];
       activeProviderId.value = "p_a";
-      expect(id.displayModels.value.map((m) => m.value)).toEqual(["kimi"]);
+      expect(id.activeProviderModels().map((m) => m.value)).toEqual(["kimi"]);
     });
 
     it("effectiveModel currentSid null + activeProvider 无模型 → ''", () => {
       allProviders.value = [makeProvider("p_a", "")];
       activeProviderId.value = "p_a";
-      expect(id.effectiveModel.value).toBe("");
+      expect(id.effectiveModelOf("s1")).toBe("");
     });
 
     it("空白面板 + activeProvider 系统默认 → defaultModels 首项", async () => {
@@ -506,7 +464,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       activeProviderId.value = "__system_default__";
       getDefaultModelsMock.mockResolvedValue([{ value: "sonnet", displayName: "Sonnet" }]);
       await id.refreshDefaultModels();
-      expect(id.effectiveModel.value).toBe("sonnet");
+      expect(id.effectiveModelOf("s1")).toBe("sonnet");
     });
 
     it("displayModels 系统默认 + binding 无 → defaultModels（sdkModels ?? []）", async () => {
@@ -514,8 +472,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       activeProviderId.value = "__system_default__";
       getDefaultModelsMock.mockResolvedValue([{ value: "sonnet", displayName: "Sonnet" }]);
       await id.refreshDefaultModels();
-      id.adoptSid("s1");
-      expect(id.displayModels.value.map((m) => m.value)).toEqual(["sonnet"]);
+      expect(id.displayModelsOf("s1").map((m) => m.value)).toEqual(["sonnet"]);
     });
 
     it("resolve 快路径 meta.provider 被删 + model 反查无果 → consistentProviderId null ?? bound", async () => {
@@ -540,7 +497,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       sessionModelMock.mockResolvedValue(null);
       await id.resolve("s1");
       expect(id.providerOf("s1")).toBe("p_a");
-      expect(id.lastProvider.value).toBe("p_a");
+      expect(id.lastProviderOf("s1")).toBe("p_a");
     });
   });
 
@@ -555,7 +512,7 @@ describe("useSessionIdentity (L2 identity)", () => {
       await id.commitModelFromRuntime("s1", {
         fromModel: "kimi", toModel: "fable-resolved", requestedModel: "fable", source: "sdk",
       });
-      expect(id.effectiveModel.value).toBe("fable");
+      expect(id.effectiveModelOf("s1")).toBe("fable");
       expect(setSessionMetaMock).toHaveBeenCalledWith("s1", { model: { op: "set", value: "fable" } });
     });
 
@@ -570,7 +527,7 @@ describe("useSessionIdentity (L2 identity)", () => {
         fromModel: "kimi", toModel: "auto-model", requestedModel: null, source: "auto",
       });
       // 无用户选择可恢复：不 bindRuntime 不落盘，下拉回落盘面恢复值
-      expect(id.effectiveModel.value).toBe("kimi");
+      expect(id.effectiveModelOf("s1")).toBe("kimi");
       expect(setSessionMetaMock).not.toHaveBeenCalled();
     });
 
@@ -588,7 +545,7 @@ describe("useSessionIdentity (L2 identity)", () => {
         fromModel: "fable-resolved", toModel: "fable-resolved", requestedModel: "fable", source: "sdk",
       });
       expect(setSessionMetaMock).not.toHaveBeenCalled();
-      expect(id.effectiveModel.value).toBe("fable");
+      expect(id.effectiveModelOf("s1")).toBe("fable");
     });
 
     it("落盘失败 → console.warn 降级，runtime 坐实已生效", async () => {
@@ -607,7 +564,7 @@ describe("useSessionIdentity (L2 identity)", () => {
         "s1",
         expect.any(Error),
       );
-      expect(id.effectiveModel.value).toBe("fable");
+      expect(id.effectiveModelOf("s1")).toBe("fable");
       warnSpy.mockRestore();
     });
   });

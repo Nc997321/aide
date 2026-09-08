@@ -22,7 +22,7 @@ import {
   finishStreaming,
   getLastDispatchedPrompt,
   getStore,
-  identity,
+  identityStore,
   isFinalizedSessionPair,
   isPendingSession,
   lastDispatchedPrompt,
@@ -124,6 +124,10 @@ interface QueuedSend {
   images?: ImageAttachment[];
   mentions?: FileMentionResolution;
   permissionMode?: string;
+  /** 发送时的模型（调用环境透传，invoke 时展开为 initialModel）。
+   *  显式走数据流（输入区 → sendMessage opts → item → dispatchSend），不再由
+   *  dispatchSend 反过来去读身份层的**视图**状态（那会读到别的面板的会话）。 */
+  initialModel?: string | null;
   /** 发送时的 effort 档位（与 permissionMode 同级：调用环境透传，invoke 时展开
    *  为 initialEffort）。与 initialModel 同一条 env 通道（CLAUDE_CODE_EFFORT_LEVEL）。 */
   effort?: string;
@@ -221,8 +225,10 @@ function sendQueued(
 ) {
   // 会话已收口：不再向已销毁会话发 send_message（会复活 sidecar 进程）
   if (disposedSids.has(sid)) return;
-  // effectiveModel（L2 身份层）与落盘值同源——settleOnSend 已在发送前落盘，这里只取值传 Rust。
-  const initialModel = identity.effectiveModel.value || null;
+  // initialModel 由调用方经 item 显式传入（输入区的当前选择）；没传（自动化 /
+  // 快捷动作等无 UI 选择来源的调用）时回落到**会话自己的**身份，不再读视图态——
+  // 此前读 identity.effectiveModel 会读到别的面板正在看的那条会话的模型。
+  const initialModel = item.initialModel || (sid ? identityStore.effectiveModelOf(sid) : "") || null;
   // 混合 tab：会话可能归属别的工作区，sidecar 必须在它自己的项目目录里跑。
   // 注册表没有记录（新会话）时传 null，Rust 侧回落当前活动工作区。
   const sessionWs = useSessionWorkspaces().workspaceOf(sid);
@@ -237,7 +243,7 @@ function sendQueued(
     // 会话自持的 provider 身份（L2 身份层 resolve/settleOnSend 解析出的绑定）——
     // 传给 Rust 让 runtime env 按它构造，不再只认全局 active。无绑定（新会话
     // 还没解析完）传 null，Rust 回落会话元数据 → 全局 active。
-    provider: identity.providerOf(sid) || null,
+    provider: identityStore.providerOf(sid) || null,
     resumeId: opts.resumeId ?? null,
     // 只在这个 sidecar 进程还没起来时（第一条消息）有意义，Rust 侧只在
     // spawn 分支用它覆盖 provider 默认模型；之后切模型走 setModel()。
@@ -302,6 +308,10 @@ export function useChatSession(sessionId: Ref<string | null>) {
       // 种进注册表——dispatchSend 的 workspaceRoot、finalize 后的落盘归属都读它，
       // 不再受「发出后用户切了工作区」影响。
       if (opts.workspace) useSessionWorkspaces().setWorkspace(sid, opts.workspace);
+      // 新会话：spawn 将用的 provider 当场坐实到 tempId（定名后由 finalizeSpawn
+      // 迁到 realId 并落盘）。此前靠 ChatPanel 的 settleOnSend("") 推进一个全局单值
+      // 基线——既会跨会话串（别的面板一切就改基线），又落不了盘。
+      await identityStore.settleOnSend(sid, identityStore.spawnProviderOf(sid));
     }
     await ensureGlobalListener();
     // 等待监听器期间会话可能被关闭：不重建 store、不继续发送
@@ -327,6 +337,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
     const item: QueuedSend = {
       prompt,
       images: opts.images,
+      initialModel: opts.initialModel ?? null,
       mentions: opts.mentions,
       permissionMode: opts.permissionMode,
       effort: opts.initialEffort,
@@ -457,7 +468,9 @@ export function useChatSession(sessionId: Ref<string | null>) {
    *  高于 runtime 坐实，回滚广播只改 runtime——不清 draft，deny 后下拉仍卡在新
    *  模型上。由确认对话框的取消分支调用。 */
   function rollbackModelChoice(): void {
-    identity.setUserChoice(current.value?.currentModel ?? "");
+    const sid = sessionId.value;
+    if (!sid) return;
+    identityStore.setUserChoice(sid, current.value?.currentModel ?? "");
   }
 
   /** 切权限模式：进程活着就即时生效（sidecar 回发事件同步下拉），进程还没

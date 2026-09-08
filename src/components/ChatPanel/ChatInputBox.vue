@@ -23,7 +23,7 @@ import { useQuickActions } from "@/composables/useQuickActions";
 import type { QuickAction } from "@/composables/useQuickActions";
 import { useModal } from "@/composables/useModal";
 import { useBtwSession } from "@/composables/useBtwSession";
-import { useSessionIdentity, writeSessionMeta } from "@/composables/sessionIdentity";
+import { useSessionIdentityView, writeSessionMeta } from "@/composables/sessionIdentity";
 import { isPendingSession, isFinalizedSessionPair } from "@/composables/useChatSession";
 import { useToast } from "@/composables/useToast";
 import { EFFORT_OPTIONS, normalizeEffortOption } from "@aide/sdk/utils/effort";
@@ -87,7 +87,7 @@ const emit = defineEmits<{
 const rootEl = ref<HTMLElement | null>(null);
 defineExpose({ rootEl });
 
-const identity = useSessionIdentity();
+const identity = useSessionIdentityView();
 
 const displayModels = computed<ModelOption[]>(() => identity.displayModels.value);
 const displayPermissionModes = computed<PermissionModeOption[]>(() => props.permissionModes);
@@ -113,19 +113,16 @@ watch(
       if (sid) identity.adoptSid(sid);
       return;
     }
-    if (!sid) {
+    // 无会话 / 新建（pending）会话：清 currentSid——displayModels 走空白面板分支
+    // （activeProvider 列表），首次发送 lastIdentity=null 不弹确认。不 resolve
+    // （pending 还没身份可恢复）。
+    if (!sid || isPendingSession(sid)) {
       identity.clearCurrent();
       return;
     }
-    // 新建（pending）会话：清 currentSid/基线——displayModels 走空白面板分支（activeProvider 列表），
-    // 首次发送 lastIdentity=null 不弹确认。不 resolve（pending 还没身份可恢复）。
-    if (isPendingSession(sid)) {
-      identity.clearCurrent();
-      return;
-    }
-    await identity.resolve(sid);
-    // 读回期间切走 → 放弃（切回来时再走一遍）。
-    if (props.sessionId !== sid) return;
+    // 读回期间又切走 → focusSession 的 seq 守卫返回 false（本面板已切到别的会话，
+    // 结果不该落到这个 sid 上）；切回来时会再走一遍。
+    await identity.focusSession(sid);
   },
   { immediate: true },
 );

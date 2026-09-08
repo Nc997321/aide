@@ -20,7 +20,7 @@ import type {
 import { useSessionState } from "../useSessionState";
 import { useSessionNames } from "../useSessionNames";
 import { useSessionWorkspaces } from "../useSessionWorkspaces";
-import { useSessionIdentity } from "../../composables/sessionIdentity";
+import { sessionIdentityStore } from "../../composables/sessionIdentity";
 import { useBtwSession } from "../useBtwSession";
 
 /**
@@ -298,7 +298,7 @@ export const sessionCreatedCallbacks = new Set<(tempId: string, realId: string) 
 
 /** 会话身份（provider/model SSOT）——绑定、落盘、恢复、门控基线统一在 L2 身份层。
  *  模块级共享：events 与宿主发送链路都要用。 */
-export const identity = useSessionIdentity();
+export const identityStore = sessionIdentityStore;
 export const { state: sessionState, health: sessionHealth } = useSessionState();
 const { setSessionState, setSessionHealth, removeSessionState, armStalled } = useSessionState();
 export { setSessionState, setSessionHealth, armStalled };
@@ -420,7 +420,7 @@ export async function stopSessionById(sid: string) {
     setSessionState(sid, "stopped");
     // 释放 provider 绑定：下拉随即回落到全局 active provider，体现"stop 后供应商
     // 才改变"；下次发消息会重新盖戳当前 active provider 并用它 spawn。
-    identity.releaseBinding(sid);
+    identityStore.releaseBinding(sid);
   }
 }
 
@@ -438,7 +438,7 @@ export function disposeSession(sid: string): void {
   disposedSids.add(sid);
   delete stores[sid];
   removeSessionState(sid);
-  identity.releaseBinding(sid);
+  identityStore.releaseBinding(sid);
   clearBgDockAutoHide(sid);
   pendingSids.delete(sid);
   delete lastDispatchedPrompt[sid];
@@ -534,7 +534,7 @@ export async function finalizeSession(tempId: string, realId: string) {
     pageLedgers.delete(tempId);
   }
   // provider 绑定也跟着搬迁：临时 id 在 sendMessage 时已盖戳，拿到真实 id 后不能丢
-  identity.migrateBinding(tempId, realId);
+  identityStore.migrateBinding(tempId, realId);
   // 工作区归属同样搬迁（sendMessage 首发时 seed 的创建时绑定快照）
   useSessionWorkspaces().migrate(tempId, realId);
   // btw 支线抽屉绑定/支线记忆 key 跟随定名（git-commit 可从 pending 会话发起，
@@ -547,10 +547,11 @@ export async function finalizeSession(tempId: string, realId: string) {
   finalizedSids.add(realId); // 此后到达的 session_title 属于「已存在会话」，可安全改名
   // 3. 通知 App.vue：这是第一次创建，去写元数据、加侧栏、记最近访问
   for (const cb of sessionCreatedCallbacks) cb(tempId, realId);
-  // 首条 pending：onSendRequest 时 sid=null 只推进了基线没落盘（会话还没创建），
-  // 这里拿到 realId 后补落盘。effectiveProvider/effectiveModel 来自 L2（currentSid 仍 null
-  // → activeProvider + pendingDraft），与 onSendRequest 推进的基线同源。
-  await identity.settleOnSend(realId, identity.effectiveProvider.value);
+  // 首条 pending：spawn 时已把 provider 记在 tempId 上（sendMessage 内 settleOnSend），
+  // migrateBinding 随定名迁到 realId；这里补落盘 + 推进基线。
+  // 不再读视图态——此前读 identity.effectiveProvider 会造成「首发后切走 tab →
+  // 新会话被落盘成别人面板那条会话的供应商」。
+  await identityStore.finalizeSpawn(realId);
 }
 
 /** 测试钩子：重置全部模块级状态（__resetForTest 的宿主侧实现）。 */

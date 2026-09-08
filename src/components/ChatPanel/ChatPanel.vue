@@ -28,7 +28,7 @@ import { useProviders } from "@/composables/useProviders";
 import type { ProviderConfig } from "@/types";
 import { setChatPaneRect } from "@/composables/useChatPaneWidth";
 import { useBtwSession } from "@/composables/useBtwSession";
-import { useSessionIdentity, buildConfirmDecision, type ConfirmDecision } from "@/composables/sessionIdentity";
+import { provideSessionIdentityView, sessionIdentityStore, buildConfirmDecision, type ConfirmDecision } from "@/composables/sessionIdentity";
 import {
   isPendingSession,
   toggleBgDock,
@@ -118,7 +118,7 @@ onUnmounted(() => { widthObserver?.disconnect(); widthObserver = null; });
 watch(() => props.focused, () => reportWidth());
 
 const { allProviders, systemDefault, SYSTEM_DEFAULT_ID } = useProviders();
-const identity = useSessionIdentity();
+const identity = provideSessionIdentityView();
 
 // 会话所属 provider：存活会话锁定它 spawn 那一刻的 provider（存在 useSessionProviders
 // 注册表里），全局切换供应商不影响已启动会话的模型下拉；没有绑定（新会话/已 stop/
@@ -181,7 +181,7 @@ function buildSendConfirmRequest(decision: ConfirmDecision, effectiveModel: stri
 const defaultPermissionModes = ref<PermissionModeOption[]>([]);
 onMounted(async () => {
   // 系统默认静态兜底模型列表归 L2（identity.refreshDefaultModels）；权限模式仍在此读。
-  void identity.refreshDefaultModels();
+  void sessionIdentityStore.refreshDefaultModels();
   try {
     defaultPermissionModes.value = await api.getDefaultPermissionModes();
   } catch {
@@ -261,7 +261,9 @@ async function onPermissionRespond(
   const sc = sendConfirm.value;
   if (sc && sc.request.id === id) {
     if (approved) {
-      identity.settleOnSend(props.sessionId ?? "", sc.effectiveProvider);
+      // 空白面板（sid 为空）的 spawn 落盘已由 useChatSession.sendMessage 在生成 tempId 后处理；
+      // 这里只坐实已有会话——传空 sid 无法落盘，且会污染全局基线。
+      if (props.sessionId) sessionIdentityStore.settleOnSend(props.sessionId, sc.effectiveProvider);
       emit("send", sc.pendingSend.prompt, sc.pendingSend.opts);
       sendConfirmedNonce.value++;
     }
@@ -315,7 +317,9 @@ function onSendRequest(prompt: string, opts: SendOptions & { effectiveProvider: 
       return;
     }
   }
-  identity.settleOnSend(sidForGate ?? "", effectiveProvider);
+  // 空白面板（sid 为空）：没有会话可落盘，spawn 时由 useChatSession.sendMessage
+  // 拿到 tempId 后坐实（见 store.spawnProviderOf / finalizeSpawn）。
+  if (sidForGate) sessionIdentityStore.settleOnSend(sidForGate, effectiveProvider);
   emit("send", prompt, sendOpts);
   sendConfirmedNonce.value++;
 }
