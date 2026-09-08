@@ -109,5 +109,21 @@ lost update 从结构上消失，且"将来要加文件锁只需改一处"。
 - [x] 第 1 笔验证：`vue-tsc --noEmit` 零错误；前端/SDK 14 个测试文件 **222 passed**；
       Rust `cargo test --lib commands::session` **65 passed**（含新增
       `set_session_meta_writes_all_fields_in_one_pass`）；`cargo check` 仅既有 `automation run_id` warning
-- [ ] 第 2 笔、第 3 笔
-- [ ] 第 4 笔（暂缓，等 1/2/3 落地后重估）
+## 7. 提交记录
+
+| commit | 内容 |
+|---|---|
+| `14a4dc5` | refactor(session)：`<sid>.json` 写入收敛为唯一入口（MetaField 三态 + 删三个单字段命令） |
+| `3d69a05` | docs：本文档 |
+| `fd78438` | refactor(identity)：会话身份层拆 store / view 两层 |
+| `3204f7b` | fix(identity)：未启动的会话跟随全局供应商，改绑前弹确认 |
+
+三笔代码提交都通过 `vue-tsc --noEmit` 零错误 + 全量 173 文件 1941 测试；
+Rust 侧 `cargo test --lib commands::session` 65 passed。
+
+- [x] 第 2 笔：identity 拆 store（全局按 sid）/ view（每面板一份）；三处非组件路径
+      读视图状态已显式化（含修掉「首发后切 tab → 新会话落盘成别人供应商」）
+- [x] 第 3 笔：删掉 `restoreBinding` 里的 `setProvider`（注册表的第二个写入方），
+      未启动会话跟随全局；门控文案改为「此会话将改用 X」（确认 = 永久改绑）
+- [ ] 第 4 笔（暂缓）：鸿蒙端按会话供应商算选项集。需要鸿蒙端能判断"会话是否存活"，
+      `session_provider` 的远程 RPC 已就绪（`remote/rpc.rs:73`），只差封装与接线
