@@ -138,7 +138,7 @@ impl CodeGraphService {
         proxy: Option<String>,
     ) -> Result<Value, String> {
         self.ensure_running().await?;
-        let v = self
+        let res = self
             .roundtrip(
                 methods::BUILD_INDEX,
                 json!({
@@ -148,7 +148,20 @@ impl CodeGraphService {
                     "proxy": proxy,
                 }),
             )
-            .await?;
+            .await;
+        // 请求已终结（ok / err / gate 早退）⇒ 本进程不再认为有构建在跑。
+        //
+        // runner 侧的 build_active 存在不复位的早退路径（build.rs:275 的 Phase 1
+        // 失败 `?`、锁中毒 `?`——复位只在 187/201 两条复用路径与 421 正常完成），
+        // 泄漏后 progress 通知会一直报 active=true。进度镜像的拥有者是本进程，
+        // 所以由这里兜底收敛：否则 idle_reaper 永判 busy、runner 永不空闲回收
+        // （进程隔离的核心收益——RSS 归零——直接失效）。
+        //
+        // 安全性：runner 的 Phase 2 与 resume 都是**同步**跑完才回响应
+        // （build.rs:421 / resume.rs:157），不存在「响应已回、构建还在后台」的
+        // 窗口，因此收敛不会掐掉在途构建。
+        self.inner.build_active.store(false, Ordering::Relaxed);
+        let v = res?;
         // 记住成功路径的 root：空闲回收/崩溃重启后的 warm reload 目标。
         if v.get("skipped").is_none() {
             *self
@@ -253,13 +266,19 @@ impl CodeGraphService {
             .lock()
             .map(|g| g.clone())
             .unwrap_or_else(|p| p.into_inner().clone());
-        json!({
-            "active": self.inner.build_active.load(Ordering::Relaxed),
-            "done": self.inner.build_done.load(Ordering::Relaxed),
-            "total": self.inner.build_total.load(Ordering::Relaxed),
-            "current": current,
-            "index_ready": self.inner.index_ready.load(Ordering::Relaxed),
-        })
+        // 与 runner 侧 methods::progress_snapshot 同源：序列化同一个
+        // `ProgressPayload`（跨进程合同类型），而不是手拼同样五个键的 json——
+        // 手拼版本在给 ProgressPayload 加字段时不会报错，会静默丢字段。
+        let payload = ProgressPayload {
+            active: self.inner.build_active.load(Ordering::Relaxed),
+            done: self.inner.build_done.load(Ordering::Relaxed),
+            total: self.inner.build_total.load(Ordering::Relaxed),
+            current,
+            index_ready: self.inner.index_ready.load(Ordering::Relaxed),
+        };
+        // 静态形状的序列化不会失败；真失败时退化为带 error 的对象，好过
+        // 悄悄返回空对象让前端按 undefined 处理。
+        serde_json::to_value(payload).unwrap_or_else(|e| json!({ "error": e.to_string() }))
     }
 
     // ── runner 生命周期 ────────────────────────────────────────────────

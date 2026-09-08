@@ -32,13 +32,13 @@ pub struct ProjectIndex {
 /// `inner` is a double buffer: the active index is read under a read lock;
 /// a rebuild builds a fresh `ProjectIndex` offline (in spawn_blocking) and
 /// swaps it in under a brief write lock. `embedder` is a lazy-initialized
-/// ONNX model guarded by its own mutex. Registered in Tauri state as
-/// `Arc<CodeGraphState>` so each command can clone the Arc and move it into
-/// a `spawn_blocking` closure (a `State<'_, _>` cannot cross that boundary).
+/// ONNX model guarded by its own mutex. 本进程（aide-codegraph runner）内的
+/// 单例：`main.rs` 构造一次，`Arc` 共享给每个请求的 `spawn_blocking` 任务
+/// ——进程隔离后它只活在 runner 里，已不再注册进 Tauri state。
 ///
 /// Fields are `pub(crate)` so the build / commands / incremental / resume
 /// submodules can drive the state machine; the struct is only constructed
-/// here (`new`) and registered in `lib.rs`.
+/// here (`new`) 与 `main.rs`。
 pub struct CodeGraphState {
     pub(crate) inner: RwLock<Option<ProjectIndex>>,
     /// Lazily-initialized embedder, created from the configured backend on the
@@ -73,7 +73,8 @@ pub struct CodeGraphState {
     /// load（不抖动 `inner`、不污染前端 goto 等单例消费者——这是 A2 相对「写
     /// 单例」方案的核心优势）。覆盖旧 slot 时旧 `Arc<ProjectIndex>` 的
     /// `CodeShard` drop 可能因 flush IO panic，须在锁外用
-    /// `guard::drop_catching_panics` 释放（见 `commands.rs` close 路径）。
+    /// `guard::drop_catching_panics` 释放（见 `agent.rs` 的 query_cache 覆盖
+    /// 路径：148/154 行）。
     pub(crate) query_cache: Mutex<Option<(PathBuf, Arc<ProjectIndex>)>>,
 }
 

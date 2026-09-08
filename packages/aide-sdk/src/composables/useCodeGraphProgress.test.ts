@@ -220,4 +220,77 @@ describe("useCodeGraphProgress", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(codegraphNotes()).toHaveLength(0);
   });
+
+  // ── 回归：进度「冷启动窗口」（2026-09-08 实测）────────────────────────
+  // build 请求发出后，后端要 spawn runner（进程启动 + ort/ONNX 初始化）并经
+  // 250ms 一帧的 progress 通知才会把 active 翻 true，实测窗口 >500ms。旧实现
+  // 首个 poll（500ms）撞进这个窗口就 stopPoll 且不可恢复 → 「进程在跑、索引
+  // 在建、进度条永不出现」。
+  const IDLE_PROGRESS = { active: false, done: 0, total: 0, current: "", index_ready: true };
+
+  it("runner 冷启动窗口：请求已发出但后端迟迟未置 active → 进度条仍要出现", async () => {
+    const cg = useCodeGraphProgress();
+    // build 挂起（分钟级全量构建）：Promise 不落定，进度条只能靠 poll 驱动
+    vi.mocked(api.codegraphBuildIndex).mockReturnValueOnce(new Promise(() => {}));
+    let calls = 0;
+    vi.mocked(api.codegraphBuildProgress).mockImplementation(async () => {
+      calls += 1;
+      // 前 3 帧（t=0/500/1000ms）后端尚未置 active；第 4 帧（t=1500ms）起生效
+      const active = calls >= 4;
+      return {
+        active,
+        done: active ? 3 : 0,
+        total: 10,
+        current: active ? "src/a.ts" : "",
+        index_ready: false,
+      };
+    });
+    cg.ensureIndex("C:/cold-start");
+    await vi.advanceTimersByTimeAsync(0); // 开关门 + trust 门的 await 链
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1200); // 首帧 + 2 个 interval：仍 inactive
+    expect(cg.building.value).toBe(false); // 未开跑就不显示（不闪）
+    await vi.advanceTimersByTimeAsync(500); // 第 4 帧：active=true
+    expect(cg.building.value).toBe(true); // ← 旧实现这里仍是 false（已永久停 poll）
+    expect(cg.progress.value.done).toBe(3);
+
+    cg.stopPoll();
+    vi.mocked(api.codegraphBuildProgress).mockResolvedValue(IDLE_PROGRESS);
+  });
+
+  it("快速路径（复用既有索引）：始终未 active → 进度条不闪，Promise 落定即停 poll", async () => {
+    const cg = useCodeGraphProgress();
+    vi.mocked(api.codegraphBuildIndex).mockResolvedValueOnce({ loaded: true, total_symbols: 10 });
+    vi.mocked(api.codegraphBuildProgress).mockImplementation(async () => IDLE_PROGRESS);
+    cg.ensureIndex("C:/fast-path");
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+    const settled = vi.mocked(api.codegraphBuildProgress).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(3000); // 宽限期内，但 Promise 已停 poll
+    expect(cg.building.value).toBe(false);
+    expect(vi.mocked(api.codegraphBuildProgress).mock.calls.length).toBe(settled);
+    vi.mocked(api.codegraphBuildProgress).mockResolvedValue(IDLE_PROGRESS);
+  });
+
+  it("宽限期兜底：Promise 不落定且始终未 active → 5s 后停 poll（不无限空转）", async () => {
+    const cg = useCodeGraphProgress();
+    vi.mocked(api.codegraphBuildIndex).mockReturnValueOnce(new Promise(() => {}));
+    vi.mocked(api.codegraphBuildProgress).mockImplementation(async () => ({
+      active: false,
+      done: 0,
+      total: 0,
+      current: "",
+      index_ready: false,
+    }));
+    cg.ensureIndex("C:/grace");
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+    const started = vi.mocked(api.codegraphBuildProgress).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(6000);
+    const afterGrace = vi.mocked(api.codegraphBuildProgress).mock.calls.length;
+    expect(afterGrace).toBeGreaterThan(started); // 宽限期内确实在等（覆盖冷启动）
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(vi.mocked(api.codegraphBuildProgress).mock.calls.length).toBe(afterGrace); // 已收敛
+    vi.mocked(api.codegraphBuildProgress).mockResolvedValue(IDLE_PROGRESS);
+  });
 });

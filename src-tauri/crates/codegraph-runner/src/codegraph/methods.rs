@@ -294,41 +294,11 @@ pub fn rescan(st: &Arc<CodeGraphState>, project_root: &str) -> Result<Value, Str
         .clone()
         .unwrap_or_else(|| ("fastembed:all-MiniLM-L6-v2".to_string(), 384));
 
-    let mut rescanned = 0usize;
-    let mut errors = 0usize;
-    for abs in &changed {
-        // Per-file write lock (released at end of iteration) so goto can
-        // interleave between files. Same inner→embedder lock order as
-        // reindex_file (build never holds both, so no deadlock cycle).
-        let mut guard = st.inner.write().map_err(|e| e.to_string())?;
-        let pi = match guard.as_mut() {
-            Some(pi) => pi,
-            None => break, // index closed mid-rescan — stop
-        };
-        if !pi.embed_ready.load(Ordering::Relaxed) {
-            break;
-        }
-        let emb = st.embedder.lock().map_err(|e| e.to_string())?;
-        let embedder_ref: Option<&dyn super::embed::Embedder> = emb.as_ref().map(|b| b.as_ref());
-        let shard = pi.shard.clone();
-        match super::indexer::reindex_one(
-            &root,
-            abs,
-            &mut pi.symbols,
-            &mut pi.edges,
-            &shard,
-            embedder_ref,
-            &model_name,
-            dim,
-            &st.parser_manager,
-        ) {
-            Ok(_) => rescanned += 1,
-            Err(e) => {
-                tracing::warn!("codegraph: rescan reindex failed {}: {}", abs.display(), e);
-                errors += 1;
-            }
-        }
-    }
+    // 复用 `build::reindex_files`（incremental 与 resume 共用同一份实现）。
+    // 这里原先是它的逐行重复拷贝，且**已经漂移**：那份会响应 `build_cancel`
+    // （切工作区时及时停手），这份不响应——高频路径（保存后增量、会话结束
+    // 防抖重扫）两份并存只会继续漂移，故收敛为一份。
+    let (rescanned, errors) = super::build::reindex_files(st, &root, &changed, &model_name, dim)?;
 
     Ok(json!({
         "active_index": true,

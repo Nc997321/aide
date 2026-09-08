@@ -44,6 +44,20 @@ const lastBuildRoot = ref("");
 
 let timer: number | null = null;
 let lastIndexedRoot = "";
+/** poll 间隔：2 条/秒，前端拉不推，天然节流。 */
+const POLL_INTERVAL_MS = 500;
+/**
+ * 「请求已发出、后端还没置 active」的宽限期（见 startPoll 内注释）。
+ * 只影响「Promise 未落定 + 一直没看到 active」这种中间态：Promise 一落定就
+ * stopPoll，所以快速路径不会因为宽限期多显示一帧；宽限期内空转几次 poll 无
+ * UI 成本（building 仍为 false）。取 5s 覆盖 runner 冷启动的最坏情况（进程
+ * spawn + ort/ONNX 初始化，实测 1s 上下，慢机器/冷盘会更久）。
+ */
+const ACTIVE_GRACE_MS = 5000;
+/** 本轮 poll 是否已见过 active=true（区分「还没开始」与「已结束」）。 */
+let sawActive = false;
+/** 本轮 poll 起始时刻（宽限期计时）。 */
+let pollStartedAt = 0;
 // 当前已知「不信任」的 root（memoize，避免每次 ensureIndex 都查一次 state.json）。
 // 信任工作区后由 onWorkspaceTrusted 清空，使下一次 ensureIndex 能真正建索引。
 let untrustedCurrent = "";
@@ -91,23 +105,35 @@ function startPoll() {
   if (timer != null) return; // 已在 poll
   if (typeof window === "undefined") return; // node/test 环境（无 DOM timer）
   // 不 eager 设 building=true：快速路径（load_project_index 复用既有索引，
-  // 后端 build_active 从未置 true）会让首个 poll 立刻看到 active=false 并
-  // stopPoll，eager true 会造成进度条闪一帧再消失。改为由 poll 看到真实
-  // active=true 才设 building——真构建延后 ≤500ms 显示（可接受），快速路径
-  // 不闪。Promise 落定也会 stopPoll 兜底。
-  timer = window.setInterval(async () => {
+  // 后端 build_active 从未置 true）下 eager true 会让进度条闪一帧再消失。
+  // 改为由 poll 看到真实 active=true 才设 building。
+  //
+  // 停止条件不能是「看到一次 inactive 就停」——存在「build 请求已发出、后端
+  // 还没置 active」的窗口：首次构建要先 spawn runner（进程启动 + ort/ONNX
+  // 初始化），runner 的 progress 通知又是 250ms 一帧，主进程 atomics 要等
+  // runner 跑起来之后才会翻 true，实测（2026-09-08）这个窗口 >500ms——旧实现
+  // 首个 poll 就撞进去 stopPoll，而 stopPoll 不可恢复（timer 清空且没有后续
+  // 触发点），结果是「任务管理器里 codegraph 进程在跑、索引在建，前端进度条
+  // 永远不出现」。故：见过 active 之后翻 false = 真结束，才停；一直没见到就
+  // 宽限 ACTIVE_GRACE_MS，超时（快速路径/门控早退且 Promise 迟迟不落定）才停。
+  sawActive = false;
+  pollStartedAt = Date.now();
+  const tick = async () => {
     try {
       const p = await api.codegraphBuildProgress();
       progress.value = p;
       if (p.active) {
+        sawActive = true;
         building.value = true;
-      } else {
-        stopPoll();
+        return;
       }
+      if (sawActive || Date.now() - pollStartedAt >= ACTIVE_GRACE_MS) stopPoll();
     } catch {
       stopPoll();
     }
-  }, 500);
+  };
+  timer = window.setInterval(tick, POLL_INTERVAL_MS);
+  void tick(); // 首帧立即拉，不白等一个 interval（省 500ms 点亮延迟）
 }
 
 /**
@@ -397,6 +423,8 @@ registerActionHandler("codegraph", (n) => {
 /** 仅测试用：清 timer、复位状态、清守卫，防 interval 跨用例泄漏。 */
 function __resetForTest() {
   stopPoll();
+  sawActive = false;
+  pollStartedAt = 0;
   if (rescanTimer != null) {
     clearTimeout(rescanTimer);
     rescanTimer = null;
