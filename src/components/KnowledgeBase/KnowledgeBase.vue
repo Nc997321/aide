@@ -9,8 +9,8 @@
 import { computed, onMounted, ref, watch } from "vue";
 import Icon from "@/components/Icon.vue";
 import { useKnowledgeBase } from "@/composables/useKnowledgeBase";
-import KbWelcome from "./KbWelcome.vue";
 import KbLogin from "./KbLogin.vue";
+import KbGuide from "./KbGuide.vue";
 import KbDocumentView from "./KbDocumentView.vue";
 import KbSearchView from "./KbSearchView.vue";
 import KbMembers from "./KbMembers.vue";
@@ -20,24 +20,26 @@ const emit = defineEmits<{ close: [] }>();
 const k = useKnowledgeBase();
 const activeDocId = ref<string | null>(null);
 
-/** 视图分流：探测中 → welcome（KbWelcome 首屏）↔ form（KbLogin 表单）→ main（已登录）。
- *  main 由 k.user 非空条件渲染（demoMode 时 user=DEMO_USER，自动落 main）。
- *  welcome ↔ form 切换只影响未登录用户的下一站：表单可「← 返回」回 welcome。 */
-const view = ref<"welcome" | "form">("welcome");
-const formMode = ref<"login" | "join">("login");
-
-function enterForm(mode: "login" | "join"): void {
-  formMode.value = mode;
-  view.value = "form";
-}
-function backToWelcome(): void {
-  view.value = "welcome";
-}
+// 视图分流只有一条轴：登录与否。未登录直接是 KbLogin 表单（模式由服务端
+// initialized 决定：空库 → 创建管理员，否则 → 口令登录/邀请链接），
+// 登录成功 k.user 非空即落主界面。没有营销首屏，没有「先看看长什么样」。
 
 // 「文档 / 成员」二态——与 view 分流是两套轴，互不干扰。
 const innerView = ref<"doc" | "members">("doc");
 
 const isAdmin = computed(() => k.user.value?.isAdmin === true);
+
+// ── 内置指南 ──
+// 登录进来主区默认是《使用指南》（一篇随应用打包的真文档，见 KbGuide.vue）——
+// 空库、没选文档时看到的不是空白，而是产品本来的样子。点任何文档或搜索
+// 都会离开指南；侧栏的「使用指南」条目随时回来。
+const showGuide = ref(true);
+
+function openGuide(): void {
+  activeDocId.value = null;
+  k.clearSearch();
+  showGuide.value = true;
+}
 
 // 进入成员页时拉一次名单；非管理员不会看到入口，这里再兜一层防止直接切。
 watch(innerView, (v) => {
@@ -61,10 +63,6 @@ const depthOf = computed<Record<string, number>>(() => {
   return out;
 });
 
-const activeSpaceName = computed(
-  () => k.spaces.value.find((s) => s.id === k.activeSpaceId.value)?.name ?? "",
-);
-
 // 正在编辑的文档 id。openDoc 切换前检查它，避免编辑中的草稿被侧栏一次点击冲掉
 // （编辑内容本身在 KbDocumentView 里，组件卸载即丢——所以要在卸载前问一句）。
 const editingDocId = ref<string | null>(null);
@@ -78,6 +76,7 @@ async function openDoc(id: string): Promise<void> {
     editingDocId.value = null;
   }
   activeDocId.value = id;
+  showGuide.value = false;
   k.clearSearch();
   await k.openDocument(id);
 }
@@ -150,28 +149,12 @@ onMounted(() => k.init());
     <!-- 探测中：先不出登录框，否则每次开面板都会闪一下表单再切换 -->
     <div v-if="!k.ready.value" class="kb-empty"><p>连接知识库服务…</p></div>
 
-    <!-- 第一屏：welcome / form 二选一。
-         main（已登录）由 k.user 非空条件渲染，demoMode 下 user=DEMO_USER 自动落 main。 -->
-    <KbWelcome
-      v-else-if="!k.user.value && view === 'welcome'"
-      :busy="k.loading.value"
-      :error="k.error.value"
-      :initialized="k.initialized.value"
-      @join="enterForm('join')"
-      @login="enterForm('login')"
-      @setup="view = 'form'"
-      @demo="k.enterDemo()"
-      @retry="() => {
-        k.init();
-      }"
-    />
-
+    <!-- 未登录：直接是表单。改服务地址失焦后重新探测，空库/已初始化随之切换。 -->
     <KbLogin
       v-else-if="!k.user.value"
       :busy="k.loading.value"
       :error="k.error.value"
       :initialized="k.initialized.value"
-      :prefer-mode="formMode"
       @setup="
         (u, n, p, e) => {
           void k.setup(u, n, p, e);
@@ -187,12 +170,19 @@ onMounted(() => k.init());
           void k.join(t);
         }
       "
-      @cancel="backToWelcome()"
+      @retry="k.init()"
     />
 
     <template v-else>
       <div class="kb-body">
         <aside class="kb-side">
+          <div class="kb-sidesec">
+            <div class="kb-sec-title">指南</div>
+            <button class="kb-docitem" :class="{ on: showGuide }" @click="openGuide()">
+              使用指南
+            </button>
+          </div>
+
           <div class="kb-sidesec">
             <div class="kb-sec-title">空间</div>
             <button
@@ -232,7 +222,9 @@ onMounted(() => k.init());
             >
               {{ innerView === "members" ? "返回文档" : "成员" }}
             </button>
-            <button class="kb-link" @click="k.logout()">退出</button>
+            <!-- 「退出登录」不是「关闭面板」：点了会吊销服务端会话并清本地 token，
+                 下次进来必须重新登录。关面板用标题栏的 ×。 -->
+            <button class="kb-link" @click="k.logout()">退出登录</button>
           </div>
         </aside>
 
@@ -274,15 +266,15 @@ onMounted(() => k.init());
           <KbDocumentView
             v-else-if="k.activeDoc.value"
             :doc="k.activeDoc.value"
-            :editable="!k.demoMode.value"
+            :editable="true"
             @saved="(id) => refreshDoc(id)"
             @reverted="(id) => refreshDoc(id)"
             @editing="onEditing"
           />
-          <div v-else class="kb-empty">
-            <p>从左侧选一篇文档</p>
-            <small>{{ activeSpaceName || "知识库" }}</small>
-          </div>
+          <!-- 内置指南：登录后的默认主区内容，长得就像一篇文档 -->
+          <KbGuide v-else-if="showGuide" />
+          <!-- 兜底：文档加载失败等极端情况才会落到这里 -->
+          <div v-else class="kb-empty"><p>从左侧选一篇文档</p></div>
         </main>
       </div>
     </template>

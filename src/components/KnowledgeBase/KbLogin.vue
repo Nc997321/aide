@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// 知识库入口。三种互斥状态，由服务端的 initialized 决定走哪条：
+// 知识库入口。打开面板未登录时直接落在这里，没有中间首屏。
+// 三种互斥状态，由服务端的 initialized 决定走哪条：
 //
 //   setup —— 空库，创建第一个管理员（口令可选）
 //   login —— 用用户名/邮箱 + 口令登录
@@ -8,32 +9,38 @@
 // ⚠️ 刻意**没有注册入口**：私有化部署下服务地址就在客户内网，
 // "谁能注册"等价于"谁能进内网"，而 internal/public 空间对任何已登录用户可读。
 // 账号一律由管理员创建，见 knowledge-server/src/api/auth.rs 的模块注释。
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { getBaseUrl, parseInviteToken, setBaseUrl } from "./kbClient";
+import KbGuide from "./KbGuide.vue";
 
 const props = defineProps<{
   busy: boolean;
   error: string | null;
   /** null = 还没探到（服务连不上）。此时按"已初始化"走，显示登录页 + 网络错误。 */
   initialized: boolean | null;
-  /** KnowledgeBase.vue 在 KbWelcome 触发 join/login 时显式指定。 */
-  preferMode?: "login" | "join";
 }>();
 
 const emit = defineEmits<{
   setup: [username: string, displayName: string, password: string, email: string];
   login: [account: string, password: string];
   join: [token: string];
-  cancel: [];
+  /** 改完服务地址后重新探测（initialized 可能翻转，模式随之切换）。 */
+  retry: [];
 }>();
 
 type Mode = "setup" | "login" | "join";
 
-/** 初始化优先级：preferMode > initialized 推断。空库时无论 preferMode 是什么都只能 setup。 */
-const mode = ref<Mode>(
-  props.initialized === false
-    ? "setup"
-    : props.preferMode ?? "login",
+/** 空库时只能是 setup；否则默认 login。 */
+const mode = ref<Mode>(props.initialized === false ? "setup" : "login");
+
+/** 改服务地址重新探测后，initialized 可能翻转——模式必须跟着走，
+ *  否则指向一台空库还停在登录页（必然 401）。 */
+watch(
+  () => props.initialized,
+  (v) => {
+    if (v === false) mode.value = "setup";
+    else if (v === true && mode.value === "setup") mode.value = "login";
+  },
 );
 
 // 空库时不该让人看到"去登录"——那个入口此刻必然失败。
@@ -59,6 +66,7 @@ const showAddr = ref(false);
 function onBaseBlur(): void {
   setBaseUrl(baseUrl.value);
   baseUrl.value = getBaseUrl();
+  emit("retry");
 }
 
 const canSubmit = computed(() => {
@@ -89,8 +97,12 @@ function onInvitePaste(e: ClipboardEvent): void {
 </script>
 
 <template>
+  <!-- 双栏：左边表单，右边内置指南。登录前就能看到产品本来的样子——
+       第一次搭服务的人需要的部署指引也正好在指南第一节。窄面板下指南被
+       压缩（min-width:0），文字自然折行，不会挤坏表单。 -->
   <div class="kb-login">
-    <form class="kb-card" @submit.prevent="onSubmit">
+    <div class="kb-login-form">
+      <form class="kb-card" @submit.prevent="onSubmit">
       <h2>{{ mode === "setup" ? "初始化知识库" : mode === "join" ? "加入知识库" : "登录知识库" }}</h2>
       <p v-if="mode === 'setup'" class="kb-sub">
         这个实例还没有任何用户。创建第一个管理员，之后由他邀请同事。
@@ -162,7 +174,6 @@ function onInvitePaste(e: ClipboardEvent): void {
       </button>
 
       <div class="kb-foot">
-        <button type="button" class="kb-link" @click="emit('cancel')">← 返回</button>
         <button type="button" class="kb-link" @click="showAddr = !showAddr">服务地址</button>
       </div>
 
@@ -172,17 +183,33 @@ function onInvitePaste(e: ClipboardEvent): void {
         <small>默认 http://127.0.0.1:8788。改完失焦生效。</small>
       </label>
     </form>
+    </div>
+    <aside class="kb-login-guide">
+      <KbGuide deploy />
+    </aside>
   </div>
 </template>
 
 <style scoped>
 .kb-login {
   display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+.kb-login-form {
+  width: 360px;
+  flex-shrink: 0;
+  display: flex;
   align-items: center;
   justify-content: center;
-  height: 100%;
   padding: 24px;
   overflow: auto;
+}
+.kb-login-guide {
+  flex: 1;
+  min-width: 0;
+  border-left: 1px solid var(--aide-border);
+  overflow: hidden;
 }
 .kb-card {
   width: 320px;

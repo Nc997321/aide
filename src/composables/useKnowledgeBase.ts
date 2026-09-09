@@ -4,10 +4,6 @@
 //
 // 数据通道见 components/KnowledgeBase/kbClient.ts：直连 knowledge-server 的 REST，
 // **不走 aide-sdk 的 transport**，因为知识库是独立进程而非 aide 的 Rust 命令。
-//
-// 演示模式（demoMode）：不连服务器，user/spaces/documents/search 全走
-// components/KnowledgeBase/demoData.ts。入口在 KnowledgeBase.vue 的 KbWelcome「
-// 先看看它长什么样」按钮——给还没决定要不要用的人一份可点开、可检索的样例。
 import { ref } from "vue";
 import {
   kb,
@@ -19,20 +15,9 @@ import {
   type KbDocumentSummary,
   type KbDocument,
   type KbSearchResult,
-  type KbSearchHit,
   type KbInvite,
   type KbUserRow,
 } from "@/components/KnowledgeBase/kbClient";
-import { DEMO_DOCS, DEMO_SPACES, demoSearch } from "@/components/KnowledgeBase/demoData";
-
-/** 演示模式的假身份。isAdmin=false → 不显示成员管理入口。 */
-const DEMO_USER: KbUser = {
-  id: "demo",
-  username: "demo",
-  email: null,
-  displayName: "演示数据",
-  isAdmin: false,
-};
 
 /** 主区面板开关（模块级单例，与 useMemoryObservatory 同范式）：
  *  true 时 App.vue 用 KnowledgeBase 盖住 PaneLayout，PaneLayout v-show 保活。 */
@@ -51,8 +36,6 @@ export function useKnowledgeBase() {
   const ready = ref(false); // 首次探测是否完成
   /** 服务实例有没有初始化过。null = 还没探到（服务连不上 / 正在查）。 */
   const initialized = ref<boolean | null>(null);
-  /** 演示模式：所有读路径走 demoData，不发任何请求。user 永远不为 null。 */
-  const demoMode = ref(false);
   const user = ref<KbUser | null>(null);
   const users = ref<KbUserRow[]>([]);
   const lastInvite = ref<KbInvite | null>(null);
@@ -86,12 +69,6 @@ export function useKnowledgeBase() {
    *   3. 都已初始化但没 token → 落到登录页
    */
   async function init(): Promise<void> {
-    // 演示模式下不会调用 init（enterDemo 已把状态填好）。这里加个保险：
-    // 万一被误调，ready 立刻翻 true 让 UI 进主界面，不去连不存在 / 不该连的服务。
-    if (demoMode.value) {
-      ready.value = true;
-      return;
-    }
     ready.value = false;
     error.value = null;
     initialized.value = null;
@@ -124,41 +101,6 @@ export function useKnowledgeBase() {
     } finally {
       ready.value = true;
     }
-  }
-
-  /** 进入演示模式：不连服务器，把假数据装到状态里。KnowledgeBase.vue 一渲染就显示主界面。
-   *  演示下不写 token、不改服务端，纯前端把戏——退出也只清本地状态。
-   *  isAdmin=false（成员管理入口对演示用户隐藏，符合预期）。 */
-  function enterDemo(): void {
-    demoMode.value = true;
-    user.value = DEMO_USER;
-    initialized.value = true;
-    spaces.value = DEMO_SPACES;
-    activeSpaceId.value = DEMO_SPACES[0]?.id ?? null;
-    documents.value = DEMO_DOCS.filter((d) => d.spaceId === activeSpaceId.value);
-    activeDoc.value = null;
-    searchResult.value = null;
-    query.value = "";
-    error.value = null;
-    loading.value = false;
-    searching.value = false;
-    users.value = [];
-    lastInvite.value = null;
-    ready.value = true;
-  }
-
-  /** 退出演示：回到欢迎页（user=null）。不自动重连，等用户在欢迎页改完地址再 retry。 */
-  function exitDemo(): void {
-    demoMode.value = false;
-    user.value = null;
-    spaces.value = [];
-    documents.value = [];
-    activeDoc.value = null;
-    searchResult.value = null;
-    query.value = "";
-    error.value = null;
-    initialized.value = null;
-    ready.value = true;
   }
 
   async function login(account: string, password: string): Promise<boolean> {
@@ -265,10 +207,6 @@ export function useKnowledgeBase() {
   }
 
   async function logout(): Promise<void> {
-    if (demoMode.value) {
-      exitDemo();
-      return;
-    }
     try {
       await kb.logout();
     } catch {
@@ -288,14 +226,6 @@ export function useKnowledgeBase() {
     const seq = ++loadSeq;
     loading.value = true;
     try {
-      if (demoMode.value) {
-        spaces.value = DEMO_SPACES;
-        if (!activeSpaceId.value || !DEMO_SPACES.some((s) => s.id === activeSpaceId.value)) {
-          activeSpaceId.value = DEMO_SPACES[0]?.id ?? null;
-        }
-        if (activeSpaceId.value) await loadDocuments(activeSpaceId.value);
-        return;
-      }
       const list = await kb.listSpaces();
       if (seq !== loadSeq) return;
       spaces.value = list;
@@ -340,10 +270,6 @@ export function useKnowledgeBase() {
   async function loadDocuments(spaceId: string): Promise<void> {
     const seq = ++loadSeq;
     try {
-      if (demoMode.value) {
-        documents.value = DEMO_DOCS.filter((d) => d.spaceId === spaceId);
-        return;
-      }
       const list = await kb.listDocuments(spaceId);
       if (seq !== loadSeq) return;
       documents.value = list;
@@ -356,11 +282,6 @@ export function useKnowledgeBase() {
     const seq = ++loadSeq;
     activeDoc.value = null;
     try {
-      if (demoMode.value) {
-        const doc = DEMO_DOCS.find((d) => d.id === id) ?? null;
-        activeDoc.value = doc;
-        return;
-      }
       const doc = await kb.getDocument(id);
       if (seq !== loadSeq) return;
       activeDoc.value = doc;
@@ -379,12 +300,6 @@ export function useKnowledgeBase() {
     const seq = ++searchSeq;
     searching.value = true;
     try {
-      if (demoMode.value) {
-        const hits: KbSearchHit[] = demoSearch(trimmed, activeSpaceId.value);
-        if (seq !== searchSeq) return;
-        searchResult.value = { query: trimmed, hits };
-        return;
-      }
       const r = await kb.search(trimmed, {
         spaceId: activeSpaceId.value ?? undefined,
         limit: 30,
@@ -406,7 +321,6 @@ export function useKnowledgeBase() {
   return {
     ready,
     initialized,
-    demoMode,
     user,
     users,
     lastInvite,
@@ -421,8 +335,6 @@ export function useKnowledgeBase() {
     searching,
     searchResult,
     init,
-    enterDemo,
-    exitDemo,
     login,
     setup,
     join,
