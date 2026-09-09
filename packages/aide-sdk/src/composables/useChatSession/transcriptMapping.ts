@@ -1,6 +1,7 @@
 import type { ChatMessage, TextBlock, ThinkingBlock, ToolCallBlock } from "../../types/chat";
 import type { ChatMessageItem, HistoryBlock } from "../../types";
 import { splitMentionSections } from "../../utils/fileMentions";
+import { annotateReadRelay } from "../../utils/lspRelay";
 
 /**
  * transcript 映射（纯函数层）：Rust 侧重建的历史 block → 前端渲染用 ContentBlock。
@@ -9,14 +10,19 @@ import { splitMentionSections } from "../../utils/fileMentions";
  */
 
 /** load_messages 返回的 ChatMessageItem[] → 前端 ChatMessage[]（历史 block 转换 +
- *  mention 段拆分）。消息 id 每次重新生成（crypto.randomUUID）。 */
+ *  mention 段拆分 + Read 接力标注）。消息 id 每次重新生成（crypto.randomUUID）。 */
 export function itemsToChatMessages(items: ChatMessageItem[]): ChatMessage[] {
-  return items.map((item) => ({
+  const messages = items.map((item) => ({
     id: crypto.randomUUID(),
     role: (item.role === "claude" ? "assistant" : item.role) as "user" | "assistant",
     blocks: item.blocks.flatMap((b) => historyBlockToContentBlocks(b, item.role === "user")),
     timestamp: item.timestamp,
   }));
+  // F 方案（Read 接力显示）：历史消息就地标注 assistant Read 的接力结论，与实时
+  // 路径（events.ts tool_use_start）共用同一判定核心。lspRelay 不落盘，每次加载
+  // 重新推导——两条路径永不分叉。
+  annotateReadRelay(messages);
+  return messages;
 }
 
 /** Rust 侧重建的历史 block → 前端渲染用的 ContentBlock。tool_call 历史消息永远是

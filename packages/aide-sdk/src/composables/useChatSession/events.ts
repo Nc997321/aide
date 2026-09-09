@@ -19,6 +19,7 @@ import type {
   UserMessageBlock,
 } from "../../types/chat";
 import { useBtwSession } from "../useBtwSession";
+import { judgeReadRelay, lastLspContextInMessages } from "../../utils/lspRelay";
 import { useCodeGraphProgress } from "../useCodeGraphProgress";
 import { useSessionNames } from "../useSessionNames";
 import { sessionIdentityStore } from "../../composables/sessionIdentity";
@@ -206,6 +207,13 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         input: e["input"],
         isPending: true,
       };
+      // F 方案（Read 接力显示）：Read 入场即判定是否沿用了上一个 LSP 调用的坐标，
+      // 结论钉在块上随块渲染。判定核心与回看路径（transcriptMapping）共用同一实现；
+      // 各以可见范围为限（见 lspRelay.ts 注释），跨页角部可能中性。
+      if (block.name === "Read") {
+        const relay = judgeReadRelay(block.input, lastLspContextInMessages(store.messages));
+        if (relay) block.lspRelay = relay;
+      }
       msg.blocks.push(block);
       registerToolCall(sid, toolId, block);
       break;

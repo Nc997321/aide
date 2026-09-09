@@ -17,6 +17,12 @@ export interface TextBlock {
   truncated?: TruncatedInfo;
 }
 
+/** F 方案「Read 接力显示」的接力结论：hit=沿 LSP 坐标按行号区间读（绿标），
+ *  miss=LSP 刚给出定位却整文件读（黄标）。判定核心见 utils/lspRelay.ts，
+ *  实时（events.ts tool_use_start）与回看（transcriptMapping）两条构建路径共用。
+ *  仅 assistant 的 Read 调用会被标注；mention 合成 Read 卡永不标注。 */
+export type LspRelayVerdict = "hit" | "miss";
+
 export interface ToolCallBlock {
   type: "tool_call";
   id: string;
@@ -26,6 +32,7 @@ export interface ToolCallBlock {
   isError?: boolean;
   isPending: boolean;
   truncated?: TruncatedInfo;
+  lspRelay?: LspRelayVerdict;
 }
 
 export interface ImageBlock {
