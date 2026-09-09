@@ -112,6 +112,14 @@ const renderItems = computed<RenderItem[]>(() => {
       <span v-if="totalFiles > 0" class="changelog-badge">{{ totalFiles }}</span>
     </div>
 
+    <!-- 统计口径常驻：归集只吃文件编辑工具的 tool_use 事件，Bash 造成的改动不在列
+         （Claude Code 官方 checkpointing 同样只跟踪 Write/Edit/NotebookEdit，
+         见 docs/reference/使用checkpointing回滚文件更改.md）。不写清楚，
+         「Bash 改了文件但面板没有」会被当成 bug 反复查。
+         文案刻意不列举工具名——那是 changeCard.ts:96 白名单的实现细节，
+         抄一份到 UI 就是两处漂移。 -->
+    <div class="changelog-scope">仅统计文件编辑工具产生的改动；Bash 命令造成的不在此列</div>
+
     <div class="changelog-body">
       <template v-if="rounds.length === 0">
         <div class="changelog-empty">暂无变更记录</div>
@@ -218,6 +226,18 @@ const renderItems = computed<RenderItem[]>(() => {
   min-width: 16px;
   text-align: center;
   line-height: 1.4;
+}
+
+/* ── 统计口径说明（header 下方常驻一行） ── */
+
+.changelog-scope {
+  padding: 5px 12px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--aide-text-muted);
+  background: var(--aide-bg-deep);
+  border-bottom: 1px solid var(--aide-border);
+  flex-shrink: 0;
 }
 
 /* ── Body ── */

@@ -180,6 +180,15 @@ describe("ChangeLogPanel — 变更文件点击打开", () => {
     expect(wrapper.findAll(".cft-file")).toHaveLength(2);
   });
 
+  it("统计口径常驻一行：空状态也说明「Bash 改动不在列」", () => {
+    mocks.rounds = [];
+    const wrapper = mountPanel();
+
+    // 空状态最容易被误读成「Bash 改了文件但面板漏了」——口径必须在此时也可见
+    expect(wrapper.find(".changelog-empty").exists()).toBe(true);
+    expect(wrapper.get(".changelog-scope").text()).toContain("Bash");
+  });
+
   it("点轮内行 = 展开该文件 diff（并排），再点收起", async () => {
     const wrapper = mountPanel();
     expect(wrapper.findAllComponents(ChangeDiffPane)).toHaveLength(0);
