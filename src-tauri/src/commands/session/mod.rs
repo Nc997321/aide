@@ -15,6 +15,7 @@ pub use jsonl::{session_jsonl_size, session_last_event, session_truncate_jsonl};
 pub(crate) use jsonl::last_jsonl_message;
 
 use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 use std::fs;
 use tauri::State;
@@ -495,6 +496,70 @@ pub async fn session_provider(id: String) -> Result<Option<String>, String> {
         .map_err(|e| format!("session_provider task panicked: {}", e))?
 }
 
+/// 发送前的身份漂移判定（桌面端与鸿蒙端共用）：本次将生效的 provider / model 与
+/// 会话上次坐实的基线逐维比对，**先供应商、再模型**——两者都相同才算无漂移。
+///
+/// 基线口径与 `session_provider` / `session_model` 完全一致（同一份 `<id>.json`）；
+/// 基线缺失（无元数据 / 字段为空 / 会话从未发过）→ 该维度 false：无基线不弹确认，
+/// 与桌面 `needsConfirm` 的 `last = null → false` 同义。
+///
+/// 判定下沉到 Rust 的理由：规则只此一份，两端 UI 都调它，避免同一规则在
+/// aide-sdk（confirmGate）与 ArkTS 侧各存一份、日后各自漂移。
+/// 本命令只回答「哪一维漂了」，**不做 UI 决策**——弹不弹、文案怎么写归调用方。
+#[derive(Serialize)]
+pub struct IdentityDrift {
+    #[serde(rename = "providerDrift")]
+    pub provider_drift: bool,
+    #[serde(rename = "modelDrift")]
+    pub model_drift: bool,
+    /// 会话记住的供应商 id（无 → null）：UI 组文案用。
+    #[serde(rename = "lastProvider")]
+    pub last_provider: Option<String>,
+    #[serde(rename = "lastModel")]
+    pub last_model: Option<String>,
+}
+
+/// 纯判定（可单测）：本次值 vs 基线。**空串 = 本次未指定**（由下游按供应商默认
+/// 解析），无从比对 → 该维度 false；基线缺失同理。
+fn compute_identity_drift(
+    last_provider: Option<&str>,
+    last_model: Option<&str>,
+    provider_id: &str,
+    model: &str,
+) -> (bool, bool) {
+    let provider_drift = last_provider
+        .filter(|_| !provider_id.is_empty())
+        .map(|last| last != provider_id)
+        .unwrap_or(false);
+    let model_drift = last_model
+        .filter(|_| !model.is_empty())
+        .map(|last| last != model)
+        .unwrap_or(false);
+    (provider_drift, model_drift)
+}
+
+#[tauri::command]
+pub async fn session_identity_drift(
+    id: String,
+    provider_id: String,
+    model: String,
+) -> Result<IdentityDrift, String> {
+    let last_provider = session_provider(id.clone()).await.unwrap_or(None);
+    let last_model = session_model(id).await.unwrap_or(None);
+    let (provider_drift, model_drift) = compute_identity_drift(
+        last_provider.as_deref(),
+        last_model.as_deref(),
+        &provider_id,
+        &model,
+    );
+    Ok(IdentityDrift {
+        provider_drift,
+        model_drift,
+        last_provider,
+        last_model,
+    })
+}
+
 /// 会话进程是否存活（唯一权威来源：Rust 侧存活表，见 `AgentRuntimeManager::session_alive`）。
 ///
 /// 远程端用它决定模型下拉的口径：
@@ -693,6 +758,56 @@ pub fn find_sessions_since(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── 身份漂移判定（session_identity_drift 的纯函数核心）──
+
+    #[test]
+    fn drift_none_when_provider_and_model_both_match() {
+        // 两者都一样才不弹窗
+        assert_eq!(
+            compute_identity_drift(Some("p_a"), Some("m1"), "p_a", "m1"),
+            (false, false)
+        );
+    }
+
+    #[test]
+    fn drift_detected_on_provider_change() {
+        assert_eq!(
+            compute_identity_drift(Some("p_a"), Some("m1"), "p_b", "m1"),
+            (true, false)
+        );
+    }
+
+    #[test]
+    fn drift_detected_on_model_change_only() {
+        assert_eq!(
+            compute_identity_drift(Some("p_a"), Some("m1"), "p_a", "m2"),
+            (false, true)
+        );
+    }
+
+    #[test]
+    fn drift_detected_on_both_change() {
+        assert_eq!(
+            compute_identity_drift(Some("p_a"), Some("m1"), "p_b", "m2"),
+            (true, true)
+        );
+    }
+
+    #[test]
+    fn drift_false_without_baseline() {
+        // 无基线 = 首次 / 未知，不弹确认（与桌面 needsConfirm 的 last=null 同义）
+        assert_eq!(compute_identity_drift(None, None, "p_a", "m1"), (false, false));
+    }
+
+    #[test]
+    fn drift_false_when_current_value_unspecified() {
+        // 空串 = 本次未指定，由下游按供应商默认解析，无从比对
+        assert_eq!(
+            compute_identity_drift(Some("p_a"), Some("m1"), "", ""),
+            (false, false)
+        );
+    }
 
     #[test]
     fn create_session_writes_metadata_under_caller_supplied_id() {

@@ -373,6 +373,7 @@ pub fn run() {
             commands::session::session_effort,
             commands::session::session_provider,
             commands::session::session_alive,
+            commands::session::session_identity_drift,
             commands::session::load_messages,
             commands::session::session_last_event,
             commands::session::load_session_changes,

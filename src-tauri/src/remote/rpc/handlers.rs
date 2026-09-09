@@ -441,6 +441,26 @@ pub fn session_provider(
     })
 }
 
+/// 发送前身份漂移判定（远程端复用桌面同一份规则，详见命令侧文档）。
+pub fn session_identity_drift(
+    _app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Args {
+            id: String,
+            provider_id: String,
+            model: String,
+        }
+        let a: Args = parse(params)?;
+        to_json(
+            crate::commands::session::session_identity_drift(a.id, a.provider_id, a.model).await,
+        )
+    })
+}
+
 /// 会话进程是否存活（远程端决定模型下拉口径的依据，详见命令侧文档）。
 pub fn session_alive(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
