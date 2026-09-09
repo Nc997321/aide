@@ -3,7 +3,7 @@
 // （N 次串行 spawn 每次启动 ~1s 的开销）；组装成 [`DiffPair`]（too_big /
 // binary / eol_only 短路）。build/assemble 尾段与 compare::git_diff_pair_refs 共用。
 use super::runtime::{git_run, git_run_blocking, GIT_LOCK, GIT_TIMEOUT};
-use crate::commands::{project_root_for_commands, WorkspaceState};
+use crate::commands::{project_root_for, WorkspaceState};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
@@ -420,8 +420,10 @@ pub async fn git_diff_pair(
     path: String,
     staged: Option<bool>,
     commit_hash: Option<String>,
+    // 会话所属工作区；省略 = 当前活动工作区（见 `project_root_for` 的存在理由）
+    cwd: Option<String>,
 ) -> Result<DiffPair, String> {
-    let root = project_root_for_commands(&workspace_state);
+    let root = project_root_for(&workspace_state, cwd.as_deref());
     if !root.join(".git").exists() {
         return Err("Not a git repository".into());
     }

@@ -2,7 +2,7 @@
 // checkout -- <path>（撤回文件）、discard all、reset（取消全部暂存）、
 // commit（含 amend 保留原信息）。变更面板的操作按钮走这组。
 use super::runtime::{git_run, git_run_async, git_run_blocking};
-use crate::commands::{project_root_for_commands, WorkspaceState};
+use crate::commands::{project_root_for, project_root_for_commands, WorkspaceState};
 use tauri::State;
 
 #[tauri::command]
@@ -43,8 +43,11 @@ pub async fn git_unstage_file(
 pub async fn git_revert_file(
     workspace_state: State<'_, WorkspaceState>,
     path: String,
+    // 会话所属工作区；省略 = 当前活动工作区。撤回是唯一的破坏性操作，
+    // 不传 cwd 会在用户当前所看的工作区里执行 `checkout --`，误回滚另一工作区的同名文件。
+    cwd: Option<String>,
 ) -> Result<(), String> {
-    let root = project_root_for_commands(&workspace_state);
+    let root = project_root_for(&workspace_state, cwd.as_deref());
     git_run_async(vec!["checkout".into(), "--".into(), path], root).await?;
     Ok(())
 }

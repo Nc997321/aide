@@ -350,11 +350,16 @@ export const api = {
   },
 
   // Git（自足的「状态读取」组；写操作调用后需调用方自行刷新状态）
-  gitDiffFiles(): Promise<DiffEntry[]> {
-    return getTransport().invoke("git_diff_files");
+  /**
+   * 工作区覆写：会话归属于某个工作区，但主进程的 `WorkspaceState` 是全局单例、
+   * 随用户切 tab 改写。任何「按会话」的 git 操作都必须带它，否则会打到用户
+   * 当前正看着的那个工作区（变更面板窜数据的根因）。不传 = 当前活动工作区。
+   */
+  gitDiffFiles(cwd?: string): Promise<DiffEntry[]> {
+    return getTransport().invoke("git_diff_files", { cwd: cwd ?? null });
   },
-  gitRevertFile(path: string): Promise<void> {
-    return getTransport().invoke("git_revert_file", { path });
+  gitRevertFile(path: string, cwd?: string): Promise<void> {
+    return getTransport().invoke("git_revert_file", { path, cwd: cwd ?? null });
   },
   gitBranches(): Promise<BranchInfo[]> {
     return getTransport().invoke("git_branches");
@@ -452,11 +457,15 @@ export const api = {
   },
   /** 行级 diff 双份原文：工作区变更（staged）或历史提交（commitHash），二选一。
    *  未指定的键拍平为 null（Rust Option None）。 */
-  gitDiffPair(path: string, opts?: { staged?: boolean; commitHash?: string }): Promise<DiffPair> {
+  gitDiffPair(
+    path: string,
+    opts?: { staged?: boolean; commitHash?: string; cwd?: string },
+  ): Promise<DiffPair> {
     return getTransport().invoke("git_diff_pair", {
       path,
       staged: opts?.staged ?? null,
       commitHash: opts?.commitHash ?? null,
+      cwd: opts?.cwd ?? null,
     });
   },
   /** 行级 diff 双份原文：任意两 ref 直比（分支对比视图）。base 必填（对比场景恒有）。 */

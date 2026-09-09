@@ -195,6 +195,20 @@ pub fn project_root_for_commands(ws: &WorkspaceState) -> PathBuf {
     user_home().unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// 带可选工作区覆写的根解析：调用方显式给了 cwd 就用它，否则回落全局活动工作区。
+///
+/// 存在理由：会话归属于某个工作区，但 `WorkspaceState` 是**全局单例**、随用户切 tab 改写
+/// （`workspace/mod.rs:362-377` `set_workspace`，由 `SidebarLeft.vue:261` 触发）。
+/// 任何「按会话」的 git 操作（变更归集、撤回、取 diff）若不带 cwd，就会打到用户
+/// 当前正看着的那个工作区 —— 这正是变更面板窜数据的根因。调用方拿得到会话工作区时
+/// **必须**传 cwd；传 None 仅用于确实只关心当前工作区的场景。
+pub fn project_root_for(ws: &WorkspaceState, cwd: Option<&str>) -> PathBuf {
+    match cwd {
+        Some(c) if !c.trim().is_empty() => PathBuf::from(c),
+        _ => project_root_for_commands(ws),
+    }
+}
+
 pub fn detect_git_branch(root: &PathBuf) -> String {
     let head = root.join(".git").join("HEAD");
     if let Ok(content) = fs::read_to_string(&head) {
@@ -426,6 +440,42 @@ pub use workspace::{load_workspace_state, resolve_path_from_key, resolve_project
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ws_with_path(p: &std::path::Path) -> WorkspaceState {
+        let ws = WorkspaceState::new();
+        *ws.path.lock().unwrap() = Some(p.to_path_buf());
+        ws
+    }
+
+    /// 显式 cwd 必须赢过全局工作区 —— 否则按会话的 git 操作仍会打到用户当前所看的那个工作区。
+    #[test]
+    fn project_root_prefers_explicit_cwd() {
+        let global = std::env::temp_dir().join("aide_root_global");
+        let mine = std::env::temp_dir().join("aide_root_session");
+        fs::create_dir_all(&global).unwrap();
+        fs::create_dir_all(&mine).unwrap();
+        let ws = ws_with_path(&global);
+        assert_eq!(project_root_for(&ws, Some(&mine.to_string_lossy())), mine);
+    }
+
+    /// 省略 cwd 走全局，行为与改动前完全一致（向后兼容既有调用方）。
+    #[test]
+    fn project_root_falls_back_to_global() {
+        let global = std::env::temp_dir().join("aide_root_global2");
+        fs::create_dir_all(&global).unwrap();
+        let ws = ws_with_path(&global);
+        assert_eq!(project_root_for(&ws, None), global);
+    }
+
+    /// 空串 / 纯空白视同省略：旧版主进程会传空串，拼出 "" 会把 git 打到安装目录。
+    #[test]
+    fn blank_cwd_is_treated_as_absent() {
+        let global = std::env::temp_dir().join("aide_root_global3");
+        fs::create_dir_all(&global).unwrap();
+        let ws = ws_with_path(&global);
+        assert_eq!(project_root_for(&ws, Some("")), global);
+        assert_eq!(project_root_for(&ws, Some("   ")), global);
+    }
 
     /// Aide's cwd→folder encoding: replace `:`, `\`, `/` with `-` (keeps `.`).
     /// Used here only to model the folder name Aide *would* compute, so the test
