@@ -15,7 +15,7 @@ const props = withDefaults(
   defineProps<{
     block: ToolCallBlock;
     /** 变更类工具（Edit/Write/NotebookEdit）由 ChatMessage 传 true：变更卡默认展开，
-     *  其余调用点（ToolCallGroup / SubagentCallBlock）不传，保持收起。 */
+     *  其余调用点（SubagentCallBlock 等）不传，保持收起。 */
     defaultExpanded?: boolean;
     /** 「打开 ↗」定位用；缺省时 openResolved 退化为按原路径直接打开 */
     workspacePath?: string;

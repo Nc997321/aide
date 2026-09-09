@@ -46,7 +46,7 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
   <div class="sa" :class="`sa--${status}`">
     <!-- 分支括号：左侧铜色细线 + 方括号节点，标识「这是一段被嵌套的子线程」——
          不是卡片盒子，而是主线程墨线的一条分支。方括号（上+左+下描边、右开口）
-         字面即「围合一个子线程」，与 ToolCallGroup 的圆环节点（主脊上的里程碑点）
+         字面即「围合一个子线程」，与工具调用条目的圆点（主脊上的里程碑点）
          形状区分、材质同源。 -->
     <span class="sa-rail" aria-hidden="true">
       <span class="sa-node"></span>

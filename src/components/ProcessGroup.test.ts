@@ -45,7 +45,7 @@ describe("ProcessGroup — 过程胶囊", () => {
     const segments = processSegmentsOf([tool("Read"), tool("Grep"), thinking("t")]);
     const wrapper = mount(ProcessGroup, { props: { segments }, global: { stubs: STUBS, directives: { tooltip: {} } } });
     await wrapper.find(".pg-head").trigger("click");
-    // 平铺 = 2 条工具卡 + 1 个思考块；若仍套 ToolCallGroup 则只有 2 个（1 组 + 1 思考）
+    // 平铺 = 2 条工具卡 + 1 个思考块；若仍套组内折叠壳则只有 2 个（1 组 + 1 思考）
     expect(wrapper.findAll(".pg-body > *")).toHaveLength(3);
   });
 

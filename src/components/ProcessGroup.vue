@@ -5,15 +5,16 @@
  * 展开 = 段内各段按原序渲染。
  *
  * 层级（2026-09-08 精简）：工具组段在过程内直接平铺成逐条 ToolCallBlock，不再套
- * ToolCallGroup 的「N 次工具调用」折叠壳。理由：外层"过程"已经折了一层，组内再折
+ * 一层「N 次工具调用」的组内折叠壳。理由：外层"过程"已经折了一层，组内再折
  * 一次意味着看一条命令要连点三次；而中间层承载的信息——总数、类型分布——收起态摘要
  * 已覆盖，单条的类型由 ToolCallBlock 自己的工具名承载，中间层不产生新信息。
- * ToolCallGroup 保留给流式/单组场景（ChatMessage），本组件不再复用它。
+ * 2026-09-09：流式期与定稿后的单个工具组段也一并平铺（原走 ChatMessage），
+ * 组内折叠壳这条路径全库已不再存在。
  *
  * 只装"过程"：文本块（回复）与变更卡从不在段内——分段层保证（blockSegments.ts
  * 二阶段），这里不做防御。process 段只在定稿后产生，故内部没有流式态要处理
  * （ThinkingBlock 不传 streaming、ToolCallBlock 一律按完成态渲染）。展开状态不
- * 持久化，随窗口化卸载重置（与 ToolCallGroup 一致）。
+ * 持久化，随窗口化卸载重置。
  */
 import { computed, ref } from "vue";
 import type { BgTask } from "@/types/chat";
@@ -54,7 +55,7 @@ const kindsLabel = computed(() => {
 });
 
 /** 摘要：「3 段思考 · Bash ×2 · Read ×2 · 1 个子代理」，缺项不出现。
- *  种类分布原先由 ToolCallGroup 的组内摘要承载——平铺后中间层没了，这条信息上提
+ *  种类分布原先由组内摘要承载——平铺后中间层没了，这条信息上提
  *  到过程行，不能因为删了折叠壳就顺带把"调用了什么"一起删掉。 */
 const summary = computed(() => {
   const parts: string[] = [];
@@ -98,7 +99,7 @@ const summary = computed(() => {
 </template>
 
 <style scoped>
-/* 过程胶囊：视觉沿用 ToolCallGroup 的摘要卡语言（bg-base + 细边 + 内高光） */
+/* 过程胶囊：视觉沿用工具调用卡的摘要卡语言（bg-base + 细边 + 内高光） */
 .process-group {
   background: var(--aide-bg-base);
   border: 1px solid var(--aide-border-subtle);

@@ -3,8 +3,10 @@ import type { ContentBlock, ToolCallBlock } from "@/types/chat";
 /**
  * 消息 blocks 的渲染分段，分两阶段：
  *
- * 一阶段（所有消息）：连续的查询类 tool_call 聚成一个墨线组（ToolCallGroup），
- * 其余块原样透传。index 是段首块在原 blocks 里的下标——既当 v-for 的稳定 key，
+ * 一阶段（所有消息）：连续的查询类 tool_call 聚成一个 tool_group 段，其余块原样
+ * 透传。该段不再对应某个折叠组件——渲染时一律逐条平铺（ChatMessage 流式期与
+ * ProcessGroup 定稿后皆然），它现在的职责只剩二阶段的合并判定。
+ * index 是段首块在原 blocks 里的下标——既当 v-for 的稳定 key，
  * 也让 ChatMessage 能继续用原始下标判定流式尾块（blockHtml 的缓存策略）。
  *
  * 二阶段（仅定稿消息，opts.finalized）：把 ≥2 个"过程块"的连续段合并成一个
@@ -86,9 +88,8 @@ export function segmentBlocks(blocks: ContentBlock[], opts?: { finalized?: boole
   return opts?.finalized ? mergeProcessRuns(segments) : segments;
 }
 
-/** 工具组收起态摘要所需的统计：总数、按次数降序的种类分布。 */
+/** 一组工具调用按次数降序的种类分布。 */
 export interface GroupStats {
-  total: number;
   kinds: { name: string; count: number }[];
 }
 
@@ -100,15 +101,15 @@ export function groupStats(blocks: ToolCallBlock[]): GroupStats {
   const kinds = [...counts.entries()]
     .map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count);
-  return { total: blocks.length, kinds };
+  return { kinds };
 }
 
-/** process 胶囊收起态摘要所需的统计：思考段数、工具调用总数、子代理数、工具种类分布。 */
+/** process 胶囊收起态摘要所需的统计：思考段数、子代理数、工具种类分布。 */
 export interface ProcessStats {
   thinkingCount: number;
   subagentCount: number;
   /** 跨 tool_group 段聚合的种类分布（按次数降序）——过程内工具组不再各自折叠后，
-   *  原先由 ToolCallGroup 摘要承载的"调用了什么"上提到过程摘要行，故在此一并统计。
+   *  原先由组内摘要承载的"调用了什么"上提到过程摘要行，故在此一并统计。
    *  不单独统计工具总数：摘要逐项列出各类型次数，总数由分布相加即可得出；
    *  种类过多被折叠时由 UI 把剩余项合并成「其余 N 项 ×M」，总数仍可加总。 */
   kinds: { name: string; count: number }[];

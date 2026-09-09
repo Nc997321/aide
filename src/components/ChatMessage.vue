@@ -4,7 +4,6 @@ import type { ChatMessage, ModelOption, BgTask } from "@/types/chat";
 import { renderStreaming, renderMarkdown } from "@/utils/markdown";
 import { truncatedLabel } from "@/utils/messageBytes";
 import ToolCallBlock from "./ToolCallBlock.vue";
-import ToolCallGroup from "./ToolCallGroup.vue";
 import ProcessGroup from "./ProcessGroup.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
 import ThinkingBlock from "./ThinkingBlock.vue";
@@ -65,20 +64,17 @@ const isActionChip = computed(
 const { openResolved } = useFileResolver();
 
 /** user 消息不分组（@mention 的 tool_call 是附件展示，保持逐条）；
- *  assistant 消息连续 tool_call 聚成墨线组（spec·分组行为）；定稿（streaming=false）
- *  后再走二阶段：≥2 个过程段（思考/工具组/子代理）的连续段合成一个过程胶囊——
- *  回复文本与变更卡留在原位不动，只收拢"模型干活"的痕迹。 */
+ *  assistant 消息连续的查询类 tool_call 聚成 tool_group 段——但该段只用于定稿二阶段
+ *  的合并判定，**渲染时一律逐条平铺**（与 ProcessGroup 段内一致，见 ProcessGroup
+ *  文件头"层级"注释）："连续工具调用"的归属靠 .msg-turn 的 gap 表达，不再套一层
+ *  「N 次工具调用」组内折叠壳（该折叠壳组件已全库移除）。
+ *  定稿（streaming=false）后再走二阶段：≥2 个过程段（思考/工具组/子代理）的连续段
+ *  合成一个过程胶囊——回复文本与变更卡留在原位不动，只收拢"模型干活"的痕迹。 */
 const segments = computed<Segment[]>(() =>
   isUser.value
     ? props.message.blocks.map((block, index) => ({ kind: "block" as const, block, index }))
     : segmentBlocks(props.message.blocks, { finalized: !props.message.streaming }),
 );
-
-/** 组是否"活着"：消息还在流式生成，且该组是最后一段（新工具块会继续追加进组）。 */
-function isLiveGroup(seg: Segment): boolean {
-  if (seg.kind !== "tool_group" || !props.message.streaming) return false;
-  return seg.index + seg.blocks.length === props.message.blocks.length;
-}
 
 // 只响应渲染期已判定为文件的 code（见 utils/markdown.ts codespan 渲染器 +
 // utils/fileLink.ts 判定规则），点击层不再自己做路径识别。openResolved 会先探测
@@ -122,13 +118,18 @@ function handleTextClick(e: MouseEvent) {
   <div :class="['msg-row', isUser ? 'msg-row--user' : 'msg-row--assistant']">
     <div :class="isActionChip ? 'msg-action-wrap' : (isUser ? 'msg-bubble msg-bubble--user' : 'msg-turn')">
       <template v-for="seg in segments" :key="seg.index">
-        <ToolCallGroup
-          v-if="seg.kind === 'tool_group'"
-          :blocks="seg.blocks"
-          :live="isLiveGroup(seg)"
-          :bg-tasks="bgTasks"
-          @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
-        />
+        <!-- 工具组段：组内逐条平铺，不套折叠壳（见组件头部注释）。流式期同样平铺——
+             pending 那条自带执行中圆点与「等待结果…」，"正在执行"无需组摘要代播；
+             「已完成 N」这类计数平铺后可直接数出，同 ProcessGroup 摘要不列工具总数。 -->
+        <template v-if="seg.kind === 'tool_group'">
+          <ToolCallBlock
+            v-for="b in seg.blocks"
+            :key="b.id"
+            :block="b"
+            :bg-tasks="bgTasks"
+            @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
+          />
+        </template>
         <ProcessGroup
           v-else-if="seg.kind === 'process'"
           :segments="seg.segments"
@@ -304,6 +305,13 @@ function handleTextClick(e: MouseEvent) {
   line-height: 1.7;
   color: var(--aide-text-primary);
   word-break: break-word;
+}
+
+/* 工具组段平铺后，纵向间距统一由 .msg-turn 的 gap 说了算：清掉 ToolCallBlock 自带的
+   相邻 margin（.tool-item + .tool-item），否则工具条之间（gap+10px）比工具条与思考
+   块之间（gap）宽出一截，平铺后层级看着不齐（与 .pg-body 的处理同源）。 */
+.msg-turn :deep(.tool-item + .tool-item) {
+  margin-top: 0;
 }
 
 /* .msg-text 的 Markdown 正文样式已提到 styles/global.css（btw 抽屉共用）——

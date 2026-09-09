@@ -65,7 +65,6 @@ describe("segmentBlocks", () => {
 describe("groupStats", () => {
   it("按次数降序统计种类", () => {
     const stats = groupStats([tool("Read"), tool("Glob"), tool("Read"), tool("Grep", { isError: true })]);
-    expect(stats.total).toBe(4);
     expect(stats.kinds).toEqual([
       { name: "Read", count: 2 },
       { name: "Glob", count: 1 },
