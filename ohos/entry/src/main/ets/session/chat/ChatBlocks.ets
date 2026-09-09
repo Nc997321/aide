@@ -96,6 +96,9 @@ export class VideoBlock implements ContentBlock {
   }
 }
 
+/** 工具调用块：user 侧 = @引用 Read 卡片（可展开看文件内容）；assistant 侧 =
+ * Edit/Write 常驻折叠行（写盘留痕，始终显示不可展开）。其余 assistant 工具
+ * 不落 blocks（瞬态行，见 LiveActivity）。 */
 @ObservedV2
 export class ToolCallBlock implements ContentBlock {
   type: string = 'tool_call';
@@ -222,8 +225,9 @@ export class ChatMessage {
 
 /**
  * 瞬态运行行：正在执行的主线程工具调用（bash/read/grep/glob…）。
- * V1 排版语义：只进 store.liveActivities，不进消息 blocks；tool_result /
+ * 排版语义：只进 store.liveActivities，不进消息 blocks；tool_result /
  * 轮次收尾即移除——运行期可见、结束即焚，不驻留历史与内存。
+ * Edit/Write 例外：不建 LiveActivity，落消息 blocks 常驻折叠行（ToolCallBlock）。
  */
 export class LiveActivity {
   id: string = '';

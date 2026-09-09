@@ -218,11 +218,16 @@
   .think.open .think-b { display: block; }
   .think.live .think-b { display: block; border-top: none; padding-top: 0; }
 
-  /* 瞬态工具行（V1 语义：回合结束整行淡出，不进历史） */
+  /* 瞬态工具行（读/搜/命令类：回合结束整行淡出，不进历史；Edit/Write 走常驻编辑行） */
   .act { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); transition: opacity .45s; }
   .act.fade { opacity: 0; }
   .act .tname { color: var(--text); font-weight: 600; flex: none; }
   .act .targ { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 常驻编辑行（Edit/Write：写盘类工具落时间线，始终显示、单行折叠不可展开） */
+  .edit-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); }
+  .edit-row .e-ic { flex: none; display: flex; color: var(--accent); }
+  .edit-row .tname { color: var(--text); font-weight: 600; flex: none; }
+  .edit-row .targ { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* 输入区 */
   .ch-input {
@@ -726,6 +731,7 @@ let activeWs = WS_FAKE[0];
 
 const ICONS = {
   spark: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>',
+  pencil: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>',
   chev: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
   chevR: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   check: '<svg class="opt-check" width="18" height="18" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M5 8.2l2 2 4-4.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -893,7 +899,7 @@ function applySync(d) {
   if (w && w.key !== activeWs.key) { activeWs = w; syncWs(); }
 }
 
-/* ---- 历史与消息块（V1 语义：思考卡 + 瞬态工具行 + usage 尾注） ---- */
+/* ---- 历史与消息块（思考卡 + 瞬态工具行 + 常驻编辑行 + usage 尾注） ---- */
 function thinkCard(label, body, open) {
   const c = el(`<div class="think${open ? " open" : ""}"><div class="think-h">${ICONS.spark}<span class="lb"></span><span class="chev">${ICONS.chev}</span></div><div class="think-b"></div></div>`);
   c.querySelector(".lb").textContent = label;
@@ -903,6 +909,13 @@ function thinkCard(label, body, open) {
   });
   return c;
 }
+/* 常驻编辑行终态（Edit/Write 完成：铅笔图标 + 工具名 + 路径；始终显示、不可展开） */
+function editRow(name, arg) {
+  const r = el(`<div class="edit-row"><span class="e-ic">${ICONS.pencil}</span><span class="tname"></span><span class="targ"></span></div>`);
+  r.querySelector(".tname").textContent = name + " ·";
+  r.querySelector(".targ").textContent = arg;
+  return r;
+}
 function buildHistory() {
   const h = chat.querySelector(".ch-history");
   if (h.innerHTML) return;
@@ -911,6 +924,8 @@ function buildHistory() {
   const g1 = el('<div class="m-row"><div class="m-assistant"></div></div>');
   g1.firstChild.appendChild(thinkCard("已思考 12 秒 · 点击展开",
     "用户要的是 protocol.rs 的 TS 镜像。先看 Rust 侧的 serde 结构，注意 ChatEvent 是 untagged enum，TS 侧用判别联合即可。load_messages 返回的 HistoryBlock 只有三种，比实时事件窄。", false));
+  g1.firstChild.appendChild(editRow("Write", "remote-pwa/src/types.ts"));
+  g1.firstChild.appendChild(editRow("Edit", "remote-pwa/src/index.ts"));
   const t1 = el('<div class="m-text"></div>');
   t1.textContent = "整理好了，types.ts 已建好：协议消息、ChatEvent 判别联合、Session / ChatMessageItem 三个数据形状都镜像了 Rust 侧。配对和鉴权走两条消息（pair / auth），中继层只认 connect。";
   g1.firstChild.appendChild(t1);
@@ -928,15 +943,17 @@ function buildHistory() {
 
 /* ---- 流式演示剧本 ---- */
 const AUTO_SCRIPT = [
-  { t: "think", text: "用户想在鸿蒙端确认 v3 导航。这屏演示聊天升主屏后的形态：会话列表收进左侧抽屉、供应商从抽屉徽标切、工具行 chip 切思考程度。我先跑两个工具把与 PWA 的对照关系核一遍。" },
+  { t: "think", text: "用户想在鸿蒙端确认 v3 导航。这屏演示聊天升主屏后的形态：会话列表收进左侧抽屉、供应商从抽屉徽标切、工具行 chip 切思考程度。我先跑两个工具把与 PWA 的对照关系核一遍，再把新导航落进工程文件。" },
   { t: "act", tools: [["Read", "pages/ChatPage.ets"], ["Grep", "remote-pwa · 14 处匹配"]] },
-  { t: "text", text: "对照完了，v3 信息架构在鸿蒙端这样落：\n\n· ☰ 打开抽屉：设备卡 / 供应商徽标 / 工作区卡 / 历史会话 / 搜索\n· 顶栏副标题：工作区色点 + 名称，纯展示；工作区与供应商切换都收进抽屉\n· 顶栏 ⏹ 停止会话：中断进行中的回复；＋ 新会话在抽屉「历史会话」标题行（刷新左侧）\n· 会话状态点：橙 = 待确认，绿 = 回复中，蓝 = 已启动（列表只留点，文字计数在工作区卡）\n· 模型 chip：跟随供应商的模型列表，切供应商自动回落默认\n· 思考程度 chip：三档，随下一条消息生效，usage 尾注跟随\n\n你看到的流式效果，就是真实协议下 text_delta 逐条推送的样子。" },
+  { t: "edit", tools: [["Edit", "entry/src/main/ets/pages/ChatPage.ets"], ["Write", "entry/src/main/ets/pages/ChatDrawer.ets"]] },
+  { t: "text", text: "对照完了，v3 信息架构在鸿蒙端这样落：\n\n· ☰ 打开抽屉：设备卡 / 供应商徽标 / 工作区卡 / 历史会话 / 搜索\n· 顶栏副标题：工作区色点 + 名称，纯展示；工作区与供应商切换都收进抽屉\n· 顶栏 ⏹ 停止会话：中断进行中的回复；＋ 新会话在抽屉「历史会话」标题行（刷新左侧）\n· 会话状态点：橙 = 待确认，绿 = 回复中，蓝 = 已启动（列表只留点，文字计数在工作区卡）\n· 模型 chip：跟随供应商的模型列表，切供应商自动回落默认\n· 思考程度 chip：三档，随下一条消息生效，usage 尾注跟随\n· Edit/Write 常驻折叠行：写盘操作始终留痕时间线（上方铅笔行），读/搜类工具行结束即淡出\n\n你看到的流式效果，就是真实协议下 text_delta 逐条推送的样子。" },
   { t: "usage", text: "8.7k tok · cache 94% · effort high" },
 ];
 const REPLY_SCRIPT = [
   { t: "think", text: "这是从原型输入框发出的消息，演示一条完整的实时回复链路：send_message → 桌面执行 → 事件流回推。" },
   { t: "act", tools: [["Bash", "pnpm test protocol"]] },
-  { t: "text", text: "收到！真实环境下，这条消息会经中继推到桌面 aide 执行，事件再逐条流回这里。发送期间输入框和按钮是禁用的——就是你现在看到的状态。" },
+  { t: "edit", tools: [["Edit", "packages/aide-sdk/src/composables/useChatSession/transcriptMapping.ts"]] },
+  { t: "text", text: "收到！真实环境下，这条消息会经中继推到桌面 aide 执行，事件再逐条流回这里。Edit/Write 写盘会留成常驻折叠行（铅笔图标），Bash/Read/Grep 等工具行结束即淡出。发送期间输入框和按钮是禁用的——就是你现在看到的状态。" },
   { t: "usage", text: "3.1k tok · cache 91% · effort high" },
 ];
 
@@ -989,6 +1006,18 @@ async function playScript(script) {
       line.classList.add("fade");
       await sleep(480);
       line.remove();
+    } else if (step.t === "edit") {
+      // Edit/Write：逐条落常驻行——运行中转 spinner，完成换铅笔图标定稿，不淡出不移除
+      for (const [name, arg] of step.tools) {
+        if (myId !== chat._runId) return;
+        const row = el('<div class="edit-row"><span class="spinner"></span><span class="tname"></span><span class="targ"></span></div>');
+        row.querySelector(".tname").textContent = name + " ·";
+        row.querySelector(".targ").textContent = arg;
+        box.appendChild(row);
+        scrollBottom();
+        await sleep(1150);
+        row.querySelector(".spinner").outerHTML = `<span class="e-ic">${ICONS.pencil}</span>`;
+      }
     } else if (step.t === "text") {
       const p = el('<div class="m-text"><span class="cursor"></span></div>');
       box.appendChild(p);
@@ -1069,6 +1098,8 @@ function stopSession() {
   const mount = chat.querySelector(".live-slot");
   mount.querySelectorAll(".cursor").forEach(c => c.remove());
   mount.querySelectorAll(".act").forEach(a => a.remove());
+  // 常驻编辑行不随中断消失：在途 spinner 收束为铅笔终态（写盘已发生的事实留痕）
+  mount.querySelectorAll(".edit-row .spinner").forEach(sp => { sp.outerHTML = `<span class="e-ic">${ICONS.pencil}</span>`; });
   mount.querySelectorAll(".think.live").forEach(t => {
     t.classList.remove("live", "open");
     t.querySelector(".lb").textContent = "已中断";

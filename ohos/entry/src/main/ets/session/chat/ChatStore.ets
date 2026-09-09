@@ -15,7 +15,7 @@
  *    LazyForEach 数据源据此与 messages 对账（虚拟加载，见 ChatMessagesSource）
  * 平台差异：Vue reactive/ref → @ObservedV2 + @Trace。
  */
-import { ChatMessage, ContentBlock, PendingJump, PermissionRequest, ThinkingBlock, SubagentBlock, LiveActivity, BgTask } from './ChatBlocks';
+import { ChatMessage, ContentBlock, PendingJump, PermissionRequest, ThinkingBlock, SubagentBlock, LiveActivity, BgTask, ToolCallBlock } from './ChatBlocks';
 import { BgTaskInfo, ModelOption } from '../../sdk/types';
 import { uuid, str } from './ChatWire';
 
@@ -51,8 +51,9 @@ export class ChatStore {
   /** 上滚取回进行中。 */
   @Trace loadingOlder: boolean = false;
   /**
-   * 正在执行的主线程工具调用（V1 瞬态行：tool_use_start 入列、tool_result /
+   * 正在执行的主线程工具调用（瞬态行：tool_use_start 入列、tool_result /
    * 轮次收尾移除；不进 messages，会话历史与内存皆不留痕）。
+   * Edit/Write 例外：不在此列——落消息 blocks 常驻折叠行（见 backfillToolResult）。
    */
   @Trace liveActivities: LiveActivity[] = [];
   /**
@@ -112,7 +113,7 @@ export class ChatStore {
     this.pendingSubagents.delete(id);
   }
 
-  // ── 瞬态工具行（V1：入列 bumpTail 供近底跟随；移除不 bump，行消失不打扰阅读位）──
+  // ── 工具行（瞬态：入列 bumpTail 供近底跟随，移除不 bump；Edit/Write 常驻：blocks 内回填定稿）──
 
   addLiveActivity(a: LiveActivity): void {
     this.liveActivities = this.liveActivities.concat([a]);
@@ -124,6 +125,29 @@ export class ChatStore {
       return;
     }
     this.liveActivities = this.liveActivities.filter((x: LiveActivity) => x.id !== id);
+  }
+
+  /**
+   * Edit/Write 常驻折叠行回填（tool_result 定稿：spinner → 图标；找不到
+   * 对应块静默丢弃——乱序/非本会话/已复位）。自尾向前扫：pending 块只可能
+   * 出现在最近的 assistant 消息里，倒序首个命中即回填。
+   */
+  backfillToolResult(toolUseId: string, content: string, isError: boolean): void {
+    if (toolUseId === '') {
+      return;
+    }
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const blocks: ContentBlock[] = this.messages[i].blocks;
+      for (let j = blocks.length - 1; j >= 0; j--) {
+        const b: ContentBlock = blocks[j];
+        if (b instanceof ToolCallBlock && b.id === toolUseId) {
+          b.result = content;
+          b.isError = isError;
+          b.isPending = false;
+          return;
+        }
+      }
+    }
   }
 
   // ── 后台任务（bg_task_*；按 id upsert，output 增量追加）──
@@ -335,12 +359,22 @@ export class ChatStore {
     }
   }
 
-  /** 流式收尾：摘掉 streaming 标记 + 末位思考卡收尾收起（均幂等）。isBusy 由调用方置。 */
+  /** 流式收尾：摘掉 streaming 标记 + 末位思考卡收尾收起 + pending 折叠行兜底
+   *  定稿（tool_result 丢失——中断/异常——时停转 spinner；均幂等）。isBusy 由调用方置。 */
   finishStreaming(): void {
     const last: ChatMessage | undefined = this.messages[this.messages.length - 1];
-    if (last !== undefined && last.streaming) {
+    if (last === undefined) {
+      return;
+    }
+    if (last.streaming) {
       last.streaming = false;
       this.sealThinking(last);
+    }
+    for (let i = 0; i < last.blocks.length; i++) {
+      const b: ContentBlock = last.blocks[i];
+      if (b instanceof ToolCallBlock && b.isPending) {
+        b.isPending = false;
+      }
     }
   }
 

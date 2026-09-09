@@ -5,8 +5,9 @@
  * （handleChatEvent），按 ohos 端消费面裁剪：
  *  - 收录：文本/思考增量（思考经 store.appendThinkingDelta/sealThinking 走
  *    「流式展开 → 段收尾自动收起 → 跨工具合并续写」生命周期，见 ThinkingCard）、
- *    工具调用生命周期（V1：瞬态行 liveActivities，
- *    不入消息 blocks——运行期可见、结束即焚）、后台 shell 任务（bg_task_*，
+ *    工具调用生命周期（Edit/Write 落消息 blocks 常驻折叠行，tool_result
+ *    按 id 回填定稿；其余工具瞬态行 liveActivities，不入消息 blocks——
+ *    运行期可见、结束即焚）、后台 shell 任务（bg_task_*，
  *    跨轮次存活，停靠区展示）、子代理时间线、权限请求队列（AskUserQuestion
  *    的问题清单随请求解析成草稿）、跳队
  *    （jump_queued/promoted）、轮次收尾（message_stop）、模型切换回执
@@ -33,7 +34,7 @@ import {
   appendSubagentTextEntry, appendBgOutput, ToolCallBlock, ImageBlock, VideoBlock
 } from './ChatBlocks';
 import { parseQuestions } from './PermissionShape';
-import { uuid, str, bool, obj, num, emptyRecord } from './ChatWire';
+import { uuid, str, bool, obj, num, emptyRecord, isEditTool } from './ChatWire';
 
 /** 流式事件总路由（对照 handleChatEvent）。 */
 export function routeChatEvent(store: ChatStore, payload: Record<string, Object>): void {
@@ -85,8 +86,9 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
       break;
     }
     case 'tool_use_start': {
-      // V1 瞬态：工具不落消息流，只入 liveActivities；getOrCreateAssistant
-      // 仍保留——sidecar 可能把 model 盖在首个块事件（可能是工具）上
+      // Edit/Write 落消息 blocks 常驻折叠行；其余工具瞬态（不落消息流，只入
+      // liveActivities）。getOrCreateAssistant 两路都保留——sidecar 可能把
+      // model 盖在首个块事件（可能是工具）上
       const msg: ChatMessage = store.getOrCreateAssistant();
       store.stampModel(msg, payload);
       // 工具插在两段思考之间：给上一张思考卡留段落断口，续写不顶行
@@ -97,11 +99,21 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
       store.sealThinking(msg); // 思考段收尾：工具执行期收起（续写时重新展开）
       const toolId: string = str(payload, 'id');
       if (toolId !== '') {
-        store.addLiveActivity(new LiveActivity(toolId, str(payload, 'name'), obj(payload, 'input')));
+        const toolName: string = str(payload, 'name');
+        if (isEditTool(toolName)) {
+          // 常驻折叠行 spinner 态入列；tool_result 按 id 回填定稿（不走
+          // liveActivities，避免同屏双行）
+          msg.blocks.push(new ToolCallBlock(toolId, toolName, obj(payload, 'input'), '', false, true));
+          store.bumpTail();
+        } else {
+          store.addLiveActivity(new LiveActivity(toolId, toolName, obj(payload, 'input')));
+        }
       }
       break;
     }
     case 'tool_result': {
+      // Edit/Write 折叠行按 id 回填定稿（找不到静默丢弃）；其余工具只撤瞬态行
+      store.backfillToolResult(str(payload, 'id'), str(payload, 'content'), bool(payload, 'is_error'));
       store.removeLiveActivity(str(payload, 'id'));
       break;
     }

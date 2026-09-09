@@ -5,15 +5,16 @@
  * 分页首载与上滚取回必须走同一映射——否则取回的消息形状与首次加载不一致
  * （渲染/回填分叉）。上游 evict 降级块（truncated 占位）未过筛，历史块恒为
  * 完整态；后续接入 evict 时本文件与上游同步补 truncated 分支。
- * V1 语义裁剪：assistant 的 tool_call 块不入时间线（工具仅运行期经
- * liveActivities 瞬态可见）；被工具打断的相邻思考段合并为一张卡；
+ * 语义裁剪：assistant 的 tool_call 块只保留 Edit/Write（常驻折叠行，与
+ * 流式路径同形），其余不入时间线（仅运行期经 liveActivities 瞬态可见）；
+ * 被（被滤除的）工具打断的相邻思考段合并为一张卡；
  * user 的 tool_call / @引用附件保留为文件卡片。
  */
 import { HistoryBlock, ChatMessageItem } from '../../sdk/types';
 import {
   ContentBlock, TextBlock, ThinkingBlock, ToolCallBlock, ChatMessage
 } from './ChatBlocks';
-import { uuid, emptyRecord } from './ChatWire';
+import { uuid, emptyRecord, isEditTool } from './ChatWire';
 
 /** @mention 引用段：transcript 落盘的用户文本 = 原文 + 引用文件展开内容。 */
 interface MentionSection {
@@ -58,7 +59,9 @@ function splitMentionSections(text: string): MentionSplit {
  */
 function historyBlockToContentBlocks(block: HistoryBlock, isUser: boolean): ContentBlock[] {
   if (block.type === 'tool_call') {
-    if (!isUser) {
+    // assistant 侧只保留 Edit/Write（常驻折叠行，与流式路径同形）；user 侧是
+    // @引用 Read 卡片——同为 ToolCallBlock，渲染端按消息角色分发
+    if (!isUser && !isEditTool(block.name !== undefined ? block.name : '')) {
       return [];
     }
     const result: string = block.result !== undefined && block.result !== null ? block.result : '';
@@ -118,8 +121,9 @@ export function itemsToChatMessages(items: ChatMessageItem[]): ChatMessage[] {
     const converted: ContentBlock[] = historyBlockToContentBlocks(item.blocks[j], item.role === 'user');
     for (let k = 0; k < converted.length; k++) {
       const cb: ContentBlock = converted[k];
-      // V1：工具块滤除后，被工具打断的相邻思考段合并回同一张卡——推理线
-      // 本就连续（对照官方 app 每轮一个 Thinking 块）；隔 text/subagent 不合并
+      // 被滤除的工具块落位后，被其打断的相邻思考段合并回同一张卡——推理线
+      // 本就连续（对照官方 app 每轮一个 Thinking 块）；隔 text/subagent/
+      // Edit-Write 折叠行不合并（编辑行是时间线事件，非可滤除块）
       const prev: ContentBlock | undefined = blocks[blocks.length - 1];
       if (cb instanceof ThinkingBlock && prev instanceof ThinkingBlock) {
         prev.text = prev.text === '' ? cb.text : `${prev.text}\n${cb.text}`;

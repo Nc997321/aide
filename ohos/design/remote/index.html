@@ -176,7 +176,7 @@
         <li><em>模型 chip</em>：输入工具行最左，列表跟随供应商（别名 / 真实 id 对齐桌面 ModelOption），切供应商自动回落该供应商的记忆/默认</li>
         <li><em>思考程度 chip</em>：模型 chip 右侧，三档，会话级、随下一条消息生效；usage 尾注跟随当前档</li>
         <li>顶栏右侧 <em>⏹ 停止会话</em>（interrupt_session 语义）：回复中变红可点，中断后残段冻结 + 系统分隔线；<em>＋ 新会话</em> 收进抽屉「历史会话」标题行（刷新左侧）→ 居中空态（发往当前工作区提示）</li>
-        <li>消息区语义沿用 chat-layout-mock <em>V1</em>：思考卡可折叠；工具调用只走瞬态行，回合结束淡出不进历史；断线橙横幅 + 输入禁用，重连 toast + 系统分隔线</li>
+        <li>消息区语义：思考卡可折叠；<em>Edit/Write 写盘落常驻折叠行</em>（铅笔图标 + 路径，运行中转 spinner、完成定稿，始终显示不可展开，历史重载同形）；读/搜/命令类工具只走瞬态行，回合结束淡出不进历史；断线橙横幅 + 输入禁用，重连 toast + 系统分隔线</li>
       </ul>
     </div>
     <div class="cover-card">
@@ -193,6 +193,7 @@
       <ul>
         <li>导航：<em>Index authed → 直达 ChatPage</em>（最近会话 / 空态）；SessionsPage 整屏退化为抽屉组件（mask + panel 自绘，或 Navigation SidePathContainer）</li>
         <li>新组件：<em>Drawer</em>（设备卡 + 会话列表 + 搜索）、<em>ProviderSheet</em>（抽屉徽标单入口）、<em>EffortChip</em>（输入工具行）、<em>WorkspaceCard + WorkspaceSheet</em>（按本页版式）</li>
+        <li>时间线：<em>Edit/Write 常驻折叠行</em>——tool_use_start 即入消息 blocks（spinner 态），tool_result 回填定稿；历史映射保留这两类 tool_call，其余工具维持瞬态行语义</li>
         <li>协议缺口（与 PWA 共用，见 remote-pwa 对照卡）：<em>ListProviders / SetActiveProvider</em>、send_message 扩展 <em>effort</em>、event <em>provider_changed</em>、list_sessions 扩展 <em>last_preview / started / pending_confirm</em>（抽屉会话徽标三态的数据来源）</li>
       </ul>
     </div>

@@ -24,7 +24,9 @@
  * V1 排版语义（对照 design/chat-layout-mock.html）：
  *  - 永久驻留：用户气泡 / assistant 正文 / 可折叠思考卡 / @引用文件小卡片
  *  - 主线程工具调用（bash/read/grep/glob…）只走 store.liveActivities 瞬态行：
- *    运行期出现在时间线末尾，tool_result / 轮次收尾即整行消失，不进 blocks
+ *    运行期出现在时间线末尾，tool_result / 轮次收尾即整行消失，不进 blocks；
+ *    Edit/Write 例外：落 blocks 常驻折叠行（spinner → 铅笔定稿，不可展开，
+ *    历史重载同形，见 editRowView）
  *  - 子代理块保留（默认收起，过程可点开）；历史思考默认收起
  * 视觉基线：白卡 card_bg + 1px line 描边、间距统一 8 的倍数、图标统一 sys.symbol。
  * 信息架构对照 remote-pwa 的 ChatView/MessageList/PermissionSheet 三件套
@@ -831,7 +833,42 @@ export struct ChatPage {
       ThinkingCard({ block: b, maxHeight: this.thinkingMaxH() })
     } else if (b instanceof SubagentBlock) {
       this.subagentView(b)
+    } else if (b instanceof ToolCallBlock) {
+      this.editRowView(b)
     }
+  }
+
+  /**
+   * Edit/Write 常驻折叠行（对照原型 .edit-row）：spinner → 铅笔图标 + 工具名 +
+   * mono 路径，单行始终显示、不可展开（写盘留痕）。pending 态由 tool_result
+   * 回填 / finishStreaming 兜底收束（ChatStore.backfillToolResult）。
+   */
+  @Builder
+  editRowView(b: ToolCallBlock) {
+    Row({ space: 8 }) {
+      if (b.isPending) {
+        LoadingProgress().width(13).height(13).color($r('app.color.accent'))
+      } else {
+        SymbolGlyph($r('sys.symbol.pencil_line'))
+          .fontSize(13)
+          .fontColor([b.isError ? $r('app.color.status_danger') : $r('app.color.accent')])
+      }
+      Text(`${b.name} ·`)
+        .fontSize(13)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+      if (toolSummary(b.input) !== '') {
+        Text(toolSummary(b.input))
+          .fontSize(12)
+          .fontColor($r('app.color.text_secondary'))
+          .fontFamily('monospace')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+      }
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
   }
 
   /** 思考卡内容一屏限高：列表视口 − 头行/边距预留，保底最小可滚高度。 */
@@ -952,7 +989,7 @@ export struct ChatPage {
     }
   }
 
-  // ── 瞬态工具行（V1：运行期可见，结束即焚）──
+  // ── 瞬态工具行（运行期可见，结束即焚；Edit/Write 常驻折叠行见 editRowView）──
 
   @Builder
   liveRow(a: LiveActivity) {

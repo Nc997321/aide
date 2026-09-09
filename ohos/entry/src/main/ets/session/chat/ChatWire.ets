@@ -53,6 +53,12 @@ export function toolSummary(input: Object): string {
   return '';
 }
 
+/** 写盘类工具判定：Edit/Write 落消息 blocks 常驻折叠行（原型 .edit-row 语义）；
+ * 其余工具维持 liveActivities 瞬态行。 */
+export function isEditTool(name: string): boolean {
+  return name === 'Edit' || name === 'Write';
+}
+
 /** 工具入参 JSON（权限卡展示；序列化失败兜底 String——对照 PWA toolInput）。 */
 export function inputJson(input: Object): string {
   try {
