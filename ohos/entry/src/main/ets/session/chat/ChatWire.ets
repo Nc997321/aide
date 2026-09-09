@@ -26,6 +26,12 @@ export function bool(p: Record<string, Object>, key: string): boolean {
   return v !== undefined && typeof v === 'boolean' ? v as boolean : false;
 }
 
+/** Record 载荷取数值（缺省/类型不符 → 0）。 */
+export function num(p: Record<string, Object>, key: string): number {
+  const v: Object | undefined = p[key];
+  return v !== undefined && typeof v === 'number' ? v as number : 0;
+}
+
 export function obj(p: Record<string, Object>, key: string): Object {
   const v: Object | undefined = p[key];
   return v !== undefined ? v : emptyRecord();

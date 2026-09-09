@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aide 鸿蒙端图片发送原型 · 识图搜索</title>
+<style>
+  :root {
+    --text: #1D2129; --text-2: #86909C; --accent: #0A59F7; --ok: #00B42A;
+    --warn: #FF7D00; --danger: #F53F3F; --line: #E5E6EB;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font: 14px/1.65 "HarmonyOS Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #E9EBEE; color: var(--text);
+    padding: 34px 20px 40px;
+  }
+  .page-head { text-align: center; margin-bottom: 30px; }
+  .page-head h1 { font-size: 20px; font-weight: 700; }
+  .page-head h1 small { font-size: 12px; color: var(--accent); font-weight: 600; margin-left: 8px; vertical-align: 2px; }
+  .page-head p { font-size: 12.5px; color: var(--text-2); margin-top: 8px; max-width: 960px; margin-left: auto; margin-right: auto; line-height: 1.9; }
+  .page-head p b { color: #4E5969; }
+
+  .stage {
+    display: flex; gap: 28px; justify-content: center; align-items: flex-start;
+    flex-wrap: wrap; max-width: 1400px; margin: 0 auto;
+  }
+  .phone-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .phone-label { font-size: 13px; font-weight: 700; color: #4E5969; letter-spacing: .5px; }
+  .phone-label span { color: var(--text-2); font-weight: 500; margin-left: 6px; font-size: 11.5px; }
+
+  .phone {
+    width: 375px; height: 740px; flex: none;
+    border-radius: 46px; padding: 11px;
+    background: linear-gradient(160deg, #23242e, #101118 40%, #1a1b23);
+    border: 1px solid rgba(255,255,255,.17);
+    box-shadow: 0 20px 60px rgba(0,0,0,.35), inset 0 1px 1px rgba(255,255,255,.14);
+    position: relative;
+  }
+  .phone::before, .phone::after {
+    content: ""; position: absolute; right: -2.5px; width: 3px; border-radius: 2px; background: #2c2d38;
+  }
+  .phone::before { top: 150px; height: 56px; }
+  .phone::after { top: 220px; height: 88px; }
+  .screen {
+    width: 100%; height: 100%; border-radius: 36px; overflow: hidden;
+    background: #F1F3F5; position: relative;
+  }
+  .screen iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; max-width: 375px; }
+  .chips .cap { width: 100%; text-align: center; font-size: 10.5px; color: var(--text-2); margin-bottom: -1px; }
+  .chip {
+    padding: 4px 11px; font-size: 11px; cursor: pointer; border-radius: 99px;
+    color: #4E5969; background: #fff; border: 1px solid var(--line);
+    font-family: inherit; transition: all .16s;
+  }
+  .chip:hover { border-color: #C9CDD4; color: var(--text); }
+
+  .cover { max-width: 1180px; margin: 44px auto 0; }
+  .cover summary {
+    display: inline-flex; align-items: center; gap: 8px; cursor: pointer; list-style: none;
+    font-size: 12.5px; font-weight: 600; color: #4E5969;
+    padding: 7px 14px; border-radius: 99px; background: #fff; border: 1px solid var(--line);
+  }
+  .cover summary::-webkit-details-marker { display: none; }
+  .cover-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 14px; }
+  .cover-card {
+    padding: 14px 16px; border-radius: 14px; font-size: 12px; line-height: 2;
+    background: #fff; border: 1px solid var(--line);
+  }
+  .cover-card h4 { font-size: 12.5px; color: var(--accent); margin-bottom: 4px; }
+  .cover-card li { list-style: none; color: var(--text-2); }
+  .cover-card li::before { content: "✓ "; color: var(--ok); font-weight: 700; margin-right: 3px; }
+  .cover-card li em { font-style: normal; color: #4E5969; }
+  .cover-card.todo li::before { content: "→ "; color: var(--warn); }
+  .cover-card.skip li::before { content: "✗ "; color: var(--danger); }
+  .cover-card a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <h1>aide 鸿蒙端附件原型<small>拍照 · 图片 · 视频 · 文件 · 识图搜索</small></h1>
+  <p>附件能力对照鸿蒙系统能力：<b>PhotoViewPicker（图库选择器 · 图片/视频免权限多选，系统选择器自带拍摄入口）</b>、<b>CameraPicker（拉起系统相机拍照）</b>、<b>DocumentViewPicker（任意格式文件）</b>；消息链路对照 remote-pwa ImageAttachment（图先文后 · 上限 5 个）。UI 沿用鸿蒙端浅色原生风格（token 镜像 entry color.json）。三个手机框是同一个 <b>app.html</b> 的 iframe 实例——URL 参数决定初始形态，展台经 postMessage 遥控演示，<b>模型 / 思考程度改动跨屏同步</b>；也可单独打开 app.html 交互。会话页基础版式见 <b><a href="../remote/index.html">../remote/index.html</a></b>。</p>
+</header>
+
+<div class="stage">
+
+  <!-- ================= 屏 1 · 输入区 / 附件态 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 1 · 输入区 / 附件态<span>已附 3 张 · 屏内可直接点按</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="s1" src="app.html?state=attach&amp;demo=0&amp;id=s1" title="输入区附件态"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">演示控制</span>
+      <button class="chip" data-target="s1" data-send='{"cmd":"plus"}'>＋ 菜单 ↗</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"camera"}'>拍一张 ↗</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"add"}'>加一张图</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"fill"}'>填入提问 ↓</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"clear"}'>清空附件</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"pick"}'>选图面板 ↗</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"modelpop"}'>点模型 ↗</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"send"}'>发送 ↗</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"sendimg"}'>识图搜索演示 ↗</button>
+    </div>
+  </section>
+
+  <!-- ================= 屏 2 · 选图面板 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 2 · 选择面板<span>图片 / 视频 PhotoViewPicker · 文件 DocumentViewPicker</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="s2" src="app.html?state=picker&amp;album=shots&amp;demo=0&amp;id=s2" title="选择面板"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">分段与相册</span>
+      <button class="chip" data-target="s2" data-send='{"cmd":"pick"}'>图片段</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"video"}'>视频段 ↗</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"file"}'>文件段 ↗</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"album","album":"recent"}'>最近</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"album","album":"shots"}'>截屏</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"album","album":"camera"}'>相机</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"selshots"}'>预选 2 张</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"pkdone"}'>完成 ↗</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"pkcancel"}'>取消 ↗</button>
+    </div>
+  </section>
+
+  <!-- ================= 屏 3 · 消息流 / 识图搜索 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 3 · 消息流 / 识图搜索<span>自动循环演示中</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="s3" src="app.html?state=sent&amp;demo=1&amp;id=s3" title="消息流识图搜索"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">演示控制</span>
+      <button class="chip" data-target="s3" data-send='{"cmd":"replay"}'>↻ 重播识图演示</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"stop"}'>⏹ 停止会话 ↗</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"reject"}'>模型拦截演示 ↗</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"sendonly"}'>只发图试试 ↗</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"sendfile"}'>发个文件 ↗</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"lightbox"}'>点图放大 ↗</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"empty"}'>新会话空态 ↗</button>
+    </div>
+  </section>
+</div>
+
+<!-- ===== 说明卡 ===== -->
+<details class="cover">
+  <summary><span class="caret">▾</span>结构说明 · 交互细节 · 协议语义 · 实施清单</summary>
+  <div class="cover-grid">
+    <div class="cover-card">
+      <h4>原型结构 · iframe 拆分</h4>
+      <ul>
+        <li><em>app.html = 应用本体</em>：三屏共用一份 DOM 与状态，URL 参数决定初始形态（?state=attach / picker / sent）。改动几乎只发生在这一个文件，与未来 ArkTS 页面一一对应（ChatPage 输入区扩展 + PicturePicker / ImageViewer 弹层）。</li>
+        <li><em>index.html = 展台</em>：手机框 + iframe + 演示胶囊，postMessage 遥控；模型 / 思考程度跨屏同步。纯布景，基本不用动。</li>
+        <li>单独打开 app.html 也能玩：默认消息流 + 识图搜索自动循环演示。</li>
+        <li>会话页基础版式（思考卡 / 工具行 / 抽屉导航）留在 <em><a href="../remote/index.html">../remote/index.html</a></em> 与 <em><a href="../chat-layout-mock.html">../chat-layout-mock.html</a></em>，本页只叠加图片能力。</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>屏 1 · ＋ 菜单与附件条</h4>
+      <ul>
+        <li><em>＋ 在工具行最右端</em>（思考程度右侧、发送按钮正下方），点开弹出菜单：<em>拍照 / 图片 / 视频 / 文件</em>（对应 CameraPicker / PhotoViewPicker·IMAGE / VIDEO / DocumentViewPicker）</li>
+        <li>附件条 64px 缩略图混排：<em>图片、视频（时长角标）、文件（扩展名徽标横卡）</em>，移除角标 + 续选格，<em>上限 5 个</em></li>
+        <li>选中的图片/视频逐张「编码中」转圈（模拟重编码），未完成时发送禁用；文件即时</li>
+        <li><em>附件先文字后</em>；可只发附件不带文字，placeholder 提示「问问这些内容…」</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>屏 2 · 选择面板（三段）</h4>
+      <ul>
+        <li>顶层分段 <em>图片 / 视频 / 文件</em>；图片段含相册 tab：<em>最近 / 截屏 / 相机</em>（截屏相册直达系统截屏）</li>
+        <li>图片/视频走 <em>PhotoViewPicker</em>（免权限 · maxSelectNumber 5），视频以<em>首帧缩略图 + 时长</em>呈现</li>
+        <li>文件段走 <em>DocumentViewPicker</em>：列表行（扩展名徽标 + 名称 + 大小 + 日期），多选角标计数</li>
+        <li>角标计数 + 选中描边 + 完成按钮带数量；面板内再点已选项即取消；取消不落任何附件</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>拍照（CameraPicker）</h4>
+      <ul>
+        <li><em>cameraPicker.pick</em> 拉起系统相机（CAMERA_POSITION_BACK · PHOTO），拍完 uri 直接回传应用——无需申请相机权限</li>
+        <li>原型交互：全屏取景（九宫格辅助线）→ 点快门 → 白闪 → 照片进附件条（走同一条重编码链路）</li>
+        <li>与系统图库选择器右上角的「拍摄」入口同源：都是拉起系统相机后 uri 回传</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>屏 3 · 消息栅格 / 识图搜索</h4>
+      <ul>
+        <li>栅格：<em>1 张原比例（≤200×220）/ 2 张 132² / 3+ 张三列 92px</em>；视频卡（首帧 + 时长 + 播放钮）与图片同格，文件卡跨满列横条；点图/视频全屏带「N / i」计数</li>
+        <li><em>识图搜索演示</em>：构建报错截图 + 「搜一下这个报错怎么解决」→ 模型读图（TS2322 · ChatModel.ets:128）→ 自行发起 WebSearch → 给出修复清单</li>
+        <li>附件回执按类型分列工具行（images / videos / files）；纯文本走常规回复；usage 尾注 effort 档随思考程度实时替换</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>模型守卫 · image_input_rejected</h4>
+      <ul>
+        <li>选中不支持图片的模型（如 deepseek-v4-pro）时，发送按钮退化为 <em>「模型不支持图片」守卫行</em>，点守卫行直接打开模型浮层</li>
+        <li><em>拦截演示</em>（协议 event: image_input_rejected + rollback）：消息短暂出现在流里 → 整条退回输入框 → 图片回附件条 → 系统分隔线说明 → 自动弹模型浮层</li>
+        <li>切换回支持图片的模型后守卫行消失、恢复发送</li>
+      </ul>
+    </div>
+    <div class="cover-card todo">
+      <h4>实施清单（ohos 工程 · 本页只出原型，未动代码）</h4>
+      <ul>
+        <li>协议：<em>SendMessageParams.images 放开</em>（api.ets 已占位），图先文后；新增 <em>attachments</em>（视频/文件：uri + 名称 + 大小 + 媒体类型）；ChatEvents 路由 <em>image_input_rejected / image_input_rollback</em>（退回输入框不丢内容）</li>
+        <li>选图：<em>PhotoViewHelper</em>（PhotoViewPicker · IMAGE/VIDEO · MULTI · maxSelectNumber 5 · 免权限）+ <em>FilePickerHelper</em>（DocumentViewPicker · 任意格式）+ <em>CameraHelper</em>（cameraPicker.pick · PHOTO · 免权限）</li>
+        <li>编码：<em>imageEncode</em>（pixelMap → JPEG 长边 1568 · 质量 0.85 → 裸 base64 → ImageAttachment，对齐 remote-pwa src/imageEncode.ts）；视频取首帧做缩略图，文件读字节 base64</li>
+        <li>UI：<em>AttachmentStrip</em>（输入区混排）、<em>PlusMenu</em>（工具行右端）、<em>PickerSheet</em>（三段半模态）、<em>CameraSheet</em>、<em>ImageViewer</em>（全屏 + 计数）、ChatBlocks 加 <em>ImageBlock / VideoBlock / FileBlock</em></li>
+        <li>守卫：模型能力表（img: bool）→ 发送按钮降级守卫行 + 拦截回退动画（附件全类型生效）</li>
+      </ul>
+    </div>
+    <div class="cover-card skip">
+      <h4>未采纳（保持与 remote-pwa 能力一致）</h4>
+      <ul>
+        <li>自定义相机界面：直接拉起系统相机（CameraPicker），不做应用内取景与录像</li>
+        <li>原图开关 / 分辨率档位：固定重编码参数</li>
+        <li>分享接收 / 剪贴板粘贴图片、本地 OCR：协议无对应能力</li>
+      </ul>
+    </div>
+  </div>
+</details>
+
+<script>
+/* 展台 = 纯布景：把演示胶囊的点击转成 postMessage 发给对应 iframe，
+   并充当三屏间「模型 / 思考程度」状态同步的中继。 */
+document.querySelectorAll('[data-send]').forEach(b => b.addEventListener('click', () => {
+  document.getElementById(b.dataset.target).contentWindow.postMessage(JSON.parse(b.dataset.send), '*');
+}));
+
+window.addEventListener('message', e => {
+  const d = e.data;
+  if (d && d.event === 'sync') {
+    ['s1', 's2', 's3'].forEach(id => {
+      const w = document.getElementById(id).contentWindow;
+      if (w !== e.source) w.postMessage(d, '*');
+    });
+  }
+});
+</script>
+</body>
+</html>

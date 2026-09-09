@@ -25,18 +25,21 @@
  *    只入 store，随首条消息 initialModel/initialEffort 带出；存活会话跨
  *    供应商选型在 pickModel 拦截（'blocked'，不改 store.model）
  * 未过筛（随 UI 扩容）：evict 字节降级、页级回收 recycle、权限模式选择器、
- * btw 支线、图片消息、nextMode（「进入自动模式/计划批准」UI
+ * btw 支线、nextMode（「进入自动模式/计划批准」UI
  * 定稿后接入）、「允许并记住」规则推导（sessionRules；deriveSessionFileRules
- * 在桌面 src/utils，ohos 同 PWA 不推导）。
+ * 在桌面 src/utils，ohos 同 PWA 不推导）。图片消息已接入（附件域见
+ * ChatAttachments；协议无 attachments 字段，文本类文件按桌面 mention 标记
+ * 内联进 prompt）。
  * 本类无可观察状态（全在 ChatStore），是纯服务持有者；页面经 chatModel.store
  * 观察（@ObservedV2 字段级追踪，store 实例终生不变）。
  */
 import { AideEvent } from '../sdk/transport';
 import { ConnModel, connModel } from '../conn/ConnModel';
 import { api, MetaField } from '../sdk/api';
-import { BgTaskInfo, ModelOption, ProviderConfigView } from '../sdk/types';
+import { BgTaskInfo, ModelOption, ProviderConfigView, SendImage, SendDisplayBlock } from '../sdk/types';
 import { ChatStore } from './chat/ChatStore';
 import { ChatMessage, PendingJump, PermissionRequest } from './chat/ChatBlocks';
+import { ChatAttachments, attachmentsModel } from './chat/ChatAttachments';
 import { hydrate as hydrateStore, loadOlder as loadOlderStore } from './chat/ChatPagination';
 import { routeChatEvent } from './chat/ChatEvents';
 import { uuid } from './chat/ChatWire';
@@ -136,6 +139,7 @@ export class ChatModel {
   /** 打开会话（路由进入）：整体复位 + 立即 hydrate + 后台任务快照对账 + 模型域同步。 */
   open(sid: string, name: string): void {
     this.store.resetForOpen(sid, name);
+    attachmentsModel.reset();
     void hydrateStore(this.store);
     void this.syncBgTasks();
     void this.syncModelEffort();
@@ -158,11 +162,27 @@ export class ChatModel {
    * 新会话（空态）发送 = spawn：本地 uuid 作路由键 + resumeId 缺省由桌面现拉起
    * 进程（对照 PWA sendMessage 空白面板首发），workspaceRoot 取手机侧所选
    * 工作区；真实 id 由 session_init 回执过户（finalizeSpawn，见 ChatEvents）。
+   * 附件（att 非空且有项）：发送瞬间同步快照 images/display/组合 prompt 后
+   * 立即清条——排队路径载荷随 SendMessageArgs 透传 sidecar 暂存（jumpQueue
+   * 重放不丢附件），气泡由 user_message display 回灌渲染，均不依赖输入区
+   * 状态。空文本 + 有附件合法（附件-only 消息）；纯空发送拦截。
    */
-  send(prompt: string): void {
+  send(prompt: string, att: ChatAttachments | null): void {
     const text: string = prompt.trim();
-    if (text === '' || connModel.state !== 'authed') {
+    if (text === '' && (att === null || att.items.length === 0)) {
       return;
+    }
+    if (connModel.state !== 'authed') {
+      return;
+    }
+    let images: SendImage[] | null = null;
+    let display: SendDisplayBlock[] | null = null;
+    let full: string = text;
+    if (att !== null && att.items.length > 0) {
+      images = att.buildImages();
+      display = att.buildDisplay(text);
+      full = att.composePrompt(text);
+      att.reset();
     }
     let sid: string = this.store.sid;
     const spawn: boolean = sid === '';
@@ -180,21 +200,24 @@ export class ChatModel {
       // 排队：只登记"待发出"提示条——气泡等 sidecar 真正接入这条消息时广播的
       // user_message 渲染。不 finishStreaming（当前 assistant 仍在流式，提前收尾
       // 会让工具结果/后续文本错位新建）。
-      this.store.pendingJumps = this.store.pendingJumps.concat([new PendingJump(text)]);
+      this.store.pendingJumps = this.store.pendingJumps
+        .concat([new PendingJump(text !== '' ? text : '附件消息')]);
     }
     // 直发路径同样不落气泡：与桌面端同源，统一由 user_message 事件渲染。本地乐观
     // 渲染意味着只有发起方看得见自己提的问题——手机上发的在桌面端消失，反之亦然。
-    this.dispatchSend(sid, text, wasBusy, spawn);
+    this.dispatchSend(sid, full, images, display, wasBusy, spawn);
   }
 
   /** 真实发送（fire-and-forget；失败兜底复位——对照上游 sendQueued 的 catch）。 */
-  private async dispatchSend(sid: string, text: string, wasBusy: boolean, spawn: boolean): Promise<void> {
+  private async dispatchSend(sid: string, text: string, images: SendImage[] | null,
+    display: SendDisplayBlock[] | null, wasBusy: boolean, spawn: boolean): Promise<void> {
     try {
       await api.sendMessage({
         sessionId: sid,
         prompt: text,
         workspaceRoot: spawn ? workspaceModel.selectedRoot() : null,
-        images: null,
+        images: images,
+        display: display,
         provider: null,
         resumeId: spawn ? null : sid,
         // spawn 才带 chip 选择（空 = 未选，由桌面按供应商默认解析）；存活会话
@@ -221,6 +244,7 @@ export class ChatModel {
   /** 新会话（抽屉「＋」）：回空态等待首条消息 spawn（对照原型 showEmpty）。 */
   newSession(): void {
     this.store.resetForOpen('', '新会话');
+    attachmentsModel.reset();
     void this.syncModelEffort();
   }
 

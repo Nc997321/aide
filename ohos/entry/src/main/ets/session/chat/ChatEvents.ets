@@ -30,10 +30,10 @@ import { ChatStore } from './ChatStore';
 import {
   ContentBlock, TextBlock, ThinkingBlock, SubagentEntry, SubagentBlock,
   ChatMessage, PermissionRequest, LiveActivity, BgTask, SUBAGENT_ENTRY_CAP,
-  appendSubagentTextEntry, appendBgOutput
+  appendSubagentTextEntry, appendBgOutput, ToolCallBlock, ImageBlock, VideoBlock
 } from './ChatBlocks';
 import { parseQuestions } from './PermissionShape';
-import { uuid, str, bool, obj } from './ChatWire';
+import { uuid, str, bool, obj, num, emptyRecord } from './ChatWire';
 
 /** 流式事件总路由（对照 handleChatEvent）。 */
 export function routeChatEvent(store: ChatStore, payload: Record<string, Object>): void {
@@ -231,8 +231,11 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
       // 代价是本地发送也多一个 RTT 才出气泡（手机经 relay 约 100ms）。
       // finishStreaming 收尾上一条 assistant：气泡必须插在它之后，否则流式续写
       // 会误把新回合内容接进上一条消息。
+      // display 回灌：手机/PWA 带附件的消息随事件回传块数组，据此渲染图片/
+      // 视频/文件引用富气泡（对照桌面 blocksFromDisplay）；无 display 的纯文本
+      // 消息退 userText 单文本块。
       store.finishStreaming();
-      store.appendMessage(ChatMessage.userText(uuid(), str(payload, 'text')));
+      store.appendMessage(parseUserDisplay(payload['display'], str(payload, 'text')));
       store.isBusy = true;
       store.bumpTail();
       break;
@@ -300,6 +303,55 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
 }
 
 // ── 内部 ──
+
+/**
+ * user_message.display → 用户富气泡（对照桌面 blocksFromDisplay + PWA
+ * buildUserDisplay 的镜像解析）：text → TextBlock、image → ImageBlock、
+ * mention → Read 工具卡（与历史重载的 transcript 拆分形态一致，桌面/手机
+ * 同卡）、video → ohos 专有 VideoBlock（桌面不识别，安全跳过）。未知类型
+ * 跳过不破坏解析；无 display / 全空回退纯文本单块（text 可为空——
+ * 附件-only 消息在 text 位渲染空文本气泡）。
+ */
+function parseUserDisplay(d: Object | undefined, text: string): ChatMessage {
+  const blocks: ContentBlock[] = [];
+  if (d !== undefined && d instanceof Array) {
+    const arr: Object[] = d as Object[];
+    for (let i = 0; i < arr.length; i++) {
+      const item: Object | undefined = arr[i];
+      if (item === undefined || typeof item !== 'object') {
+        continue;
+      }
+      const rec: Record<string, Object> = item as Record<string, Object>;
+      const kind: string = str(rec, 'type');
+      if (kind === 'text') {
+        const t: string = str(rec, 'text');
+        if (t !== '') {
+          blocks.push(new TextBlock(uuid(), t));
+        }
+      } else if (kind === 'image') {
+        const data: string = str(rec, 'data');
+        if (data !== '') {
+          const mt: string = str(rec, 'mediaType');
+          blocks.push(new ImageBlock(uuid(), `data:${mt !== '' ? mt : 'image/jpeg'};base64,${data}`));
+        }
+      } else if (kind === 'mention') {
+        const input: Record<string, Object> = emptyRecord();
+        input['file_path'] = str(rec, 'path');
+        blocks.push(new ToolCallBlock(uuid(), 'Read', input, str(rec, 'content'), false, false));
+      } else if (kind === 'video') {
+        const poster: string = str(rec, 'poster');
+        if (poster !== '') {
+          blocks.push(new VideoBlock(uuid(), `data:image/jpeg;base64,${poster}`,
+            num(rec, 'durationMs'), str(rec, 'name')));
+        }
+      }
+    }
+  }
+  if (blocks.length === 0) {
+    return ChatMessage.userText(uuid(), text);
+  }
+  return ChatMessage.userBlocks(uuid(), blocks);
+}
 
 /** 落一条纯文本 assistant 提示（notification / error / session_dead 共用形状）。 */
 function pushAssistantNotice(store: ChatStore, text: string): void {

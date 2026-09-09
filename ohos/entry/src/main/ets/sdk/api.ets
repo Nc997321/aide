@@ -24,7 +24,7 @@
  * None，serde 语义等价）。
  */
 import { getTransport } from './transport';
-import { Session, WorkspaceInfo, ActiveWorkspace, LoadMessagesResult, BgTaskInfo, PermissionRuleDraft, ProviderConfigView, ModelOption, IdentityDrift } from './types';
+import { Session, WorkspaceInfo, ActiveWorkspace, LoadMessagesResult, BgTaskInfo, PermissionRuleDraft, ProviderConfigView, ModelOption, IdentityDrift, SendImage, SendDisplayBlock } from './types';
 
 /**
  * 会话元数据字段的三态写入语义（镜像 Rust `MetaField`，serde tag = `op`）。
@@ -71,8 +71,10 @@ export interface SendMessageParams {
   prompt: string;
   /** 会话归属工作区根路径；null = Rust 回落当前活动工作区。 */
   workspaceRoot: string | null;
-  /** 图片附件；ohos 端暂无图片发送通路，恒 null（占位保持 DTO 形状完整）。 */
-  images: null;
+  /** 图片附件（拍照/相册/视频首帧海报；Rust Option<Vec<ImageAttachment>>）；null = 无图。 */
+  images: SendImage[] | null;
+  /** 用户气泡 display 回灌块（富形态，桌面/PWA 据此渲染；Rust Option<Value> 透传）；null = 纯文本气泡。 */
+  display: SendDisplayBlock[] | null;
   /** 会话身份层解析出的 provider 绑定；null = 会话元数据 → 全局 active 兜底。 */
   provider: string | null;
   resumeId: string | null;
@@ -145,6 +147,12 @@ export class AideApi {
     };
     if (params.workspaceRoot !== null) {
       args['workspaceRoot'] = params.workspaceRoot;
+    }
+    if (params.images !== null) {
+      args['images'] = params.images;
+    }
+    if (params.display !== null) {
+      args['display'] = params.display;
     }
     if (params.provider !== null) {
       args['provider'] = params.provider;

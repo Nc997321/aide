@@ -82,6 +82,8 @@ export class ChatStore {
   @Trace modelPop: boolean = false;
   /** 思考程度浮层展开（自绘小面板；与 modelPop 互斥）。 */
   @Trace effortPop: boolean = false;
+  /** 附件选入菜单展开（输入区「＋」；与 chip 浮层互斥由打开方保证）。 */
+  @Trace plusPop: boolean = false;
 
   /** 上次流式跟尾 bump 时刻（bumpTailThrottled 节流窗）。 */
   private lastStreamBumpAt: number = 0;
@@ -224,13 +226,15 @@ export class ChatStore {
     this.effort = '';
     this.modelPop = false;
     this.effortPop = false;
+    this.plusPop = false;
   }
 
   /** 收 chip 浮层（返回键/遮罩/输入框聚焦共用）：true = 有浮层被收起（消费返回键）。 */
   handlePopups(): boolean {
-    const had: boolean = this.modelPop || this.effortPop;
+    const had: boolean = this.modelPop || this.effortPop || this.plusPop;
     this.modelPop = false;
     this.effortPop = false;
+    this.plusPop = false;
     return had;
   }
 

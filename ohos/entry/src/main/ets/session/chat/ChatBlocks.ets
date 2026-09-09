@@ -7,7 +7,10 @@
  * → interface 判别面 + 各块独立 class，消费端 instanceof 分发。
  * 平台差异：Vue reactive(block) 代理回填 → @ObservedV2 + @Trace 字段级观察
  * （流式增量 last.text += delta 直接驱动渲染，无需替换引用）。
- * 上游 ImageBlock / ActionBlock 未收录：ohos 端暂无图片发送与动作胶囊通路。
+ * 上游 ImageBlock 已随附件发送接入（选入/编码见 ChatAttachments，回灌解析
+ * 见 ChatEvents parseUserDisplay）；ActionBlock 仍未收录：ohos 端暂无动作
+ * 胶囊通路。VideoBlock 为 ohos 专有（协议无视频通道，取首帧海报 + 元数据；
+ * 桌面 blocksFromDisplay 对未知类型安全跳过）。
  */
 import { uuid, emptyRecord } from './ChatWire';
 import { QuestionSpec, toggleQuestionSelection, canSubmitQuestions, packQuestionAnswers } from './PermissionShape';
@@ -57,6 +60,39 @@ export class ThinkingBlock implements ContentBlock {
     const b: ThinkingBlock = new ThinkingBlock(id, text);
     b.collapsed = true;
     return b;
+  }
+}
+
+/** 用户消息图片块（附件发送 → user_message display 回灌；data: URI 即终态）。 */
+@ObservedV2
+export class ImageBlock implements ContentBlock {
+  type: string = 'image';
+  id: string = '';
+  /** data: URI（data:image/jpeg;base64,…；非流式，@Trace 保持与兄弟块一致）。 */
+  @Trace dataUri: string = '';
+
+  constructor(id: string, dataUri: string) {
+    this.id = id;
+    this.dataUri = dataUri;
+  }
+}
+
+/** 用户消息视频块（ohos 专有：首帧海报 + 时长/文件名；模型侧只收海报图）。 */
+@ObservedV2
+export class VideoBlock implements ContentBlock {
+  type: string = 'video';
+  id: string = '';
+  /** 首帧海报（data: URI，恒 jpeg）。 */
+  @Trace posterUri: string = '';
+  /** 时长毫秒（徽标 m:ss，见 ChatAttachments durationLabel）。 */
+  @Trace durationMs: number = 0;
+  @Trace name: string = '';
+
+  constructor(id: string, posterUri: string, durationMs: number, name: string) {
+    this.id = id;
+    this.posterUri = posterUri;
+    this.durationMs = durationMs;
+    this.name = name;
   }
 }
 
@@ -151,6 +187,16 @@ export class ChatMessage {
     m.role = 'user';
     m.timestamp = Date.now();
     m.blocks = [new TextBlock(uuid(), text)];
+    return m;
+  }
+
+  /** 用户富气泡（附件发送 / display 回灌）：块序照回灌数组（媒体 → 文本 → 引用）。 */
+  static userBlocks(id: string, blocks: ContentBlock[]): ChatMessage {
+    const m: ChatMessage = new ChatMessage();
+    m.id = id;
+    m.role = 'user';
+    m.timestamp = Date.now();
+    m.blocks = blocks;
     return m;
   }
 

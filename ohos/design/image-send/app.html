@@ -1,0 +1,1586 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aide 远程 · 图片发送与识图搜索原型（应用本体）</title>
+<style>
+  /* ===== token：镜像 entry color.json（浅色），与 design/remote v3 原型一致 ===== */
+  :root {
+    --page-bg: #F1F3F5;
+    --card: #FFFFFF;
+    --input-bg: #F5F6FA;
+    --text: #1D2129;
+    --text-2: #86909C;
+    --accent: #0A59F7;
+    --accent-weak: rgba(10,89,247,.08);
+    --ok: #00B42A;
+    --warn: #FF7D00;
+    --warn-weak: rgba(255,125,0,.1);
+    --danger: #F53F3F;
+    --danger-weak: rgba(245,63,63,.1);
+    --line: #E5E6EB;
+    --disabled: #C9CDD4;
+    --radius: 12px;
+    --shadow: 0 2px 10px rgba(29,33,41,.05);
+    --mono: Consolas, "Cascadia Code", monospace;
+    --ease: .18s cubic-bezier(.2,.8,.2,1);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--page-bg); color: var(--text); overflow: hidden;
+    font: 14px/1.6 "HarmonyOS Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  button { font-family: inherit; cursor: pointer; }
+  .page { display: none; height: 100vh; max-width: 420px; margin: 0 auto; flex-direction: column; position: relative; }
+  .page.show { display: flex; }
+
+  /* ===== 状态栏 ===== */
+  .statusbar {
+    height: 38px; flex: none; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 20px; font-size: 12.5px; font-weight: 600;
+  }
+  .sb-icons { display: flex; align-items: center; gap: 6px; }
+
+  /* ===== 通用小组件 ===== */
+  .spinner {
+    width: 14px; height: 14px; flex: none; border-radius: 50%;
+    border: 2px solid var(--line); border-top-color: var(--accent);
+    animation: rot .7s linear infinite;
+  }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--ok); }
+  .dot.warn { background: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
+  .dot.info { background: var(--accent); }
+  @keyframes pulse { 50% { opacity: .4; } }
+  .logo {
+    width: 56px; height: 56px; border-radius: 16px; flex: none;
+    background: linear-gradient(135deg, #4C8DFF, #0A59F7); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 30px; font-weight: 800; box-shadow: 0 6px 18px rgba(10,89,247,.28);
+  }
+
+  /* ===== 顶栏 ===== */
+  .ch-top {
+    flex: none; display: flex; align-items: center; gap: 4px;
+    padding: 8px 10px 10px; background: var(--card); border-bottom: 1px solid var(--line);
+    position: relative; z-index: 4;
+  }
+  .icon-btn {
+    width: 34px; height: 34px; flex: none; display: flex; align-items: center; justify-content: center;
+    border-radius: 10px; border: none; background: none; color: var(--text-2);
+    transition: background var(--ease);
+  }
+  .icon-btn:active { background: var(--input-bg); }
+  .icon-btn.ch-stop { color: var(--disabled); }
+  .icon-btn.ch-stop.can { color: var(--danger); }
+  .icon-btn.ch-stop.can:active { background: var(--danger-weak); }
+  .ch-title { flex: 1; display: flex; flex-direction: column; align-items: center; min-width: 0; }
+  .ch-name { font-size: 16px; font-weight: 600; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ch-sub { display: inline-flex; align-items: center; gap: 5px; margin-top: 3px; font-size: 10.5px; font-weight: 500; color: var(--text-2); }
+  .ch-sub .dot { width: 6px; height: 6px; background: var(--accent); }
+
+  /* ===== toast（压过选图面板 z9 与全屏预览 z11） ===== */
+  .ch-toast {
+    position: absolute; top: 96px; left: 50%; transform: translateX(-50%) translateY(-8px);
+    display: flex; align-items: center; gap: 7px; padding: 8px 15px; border-radius: 99px; z-index: 12;
+    font-size: 12px; font-weight: 600; color: #fff; background: rgba(29,33,41,.9);
+    box-shadow: 0 8px 24px rgba(0,0,0,.18); opacity: 0; pointer-events: none;
+    transition: all .3s cubic-bezier(.2,.8,.2,1); white-space: nowrap; max-width: 88%; overflow: hidden;
+  }
+  .ch-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .ch-toast .dot { width: 6px; height: 6px; }
+
+  /* ===== 空态 ===== */
+  .ch-empty {
+    display: none; flex: 1; flex-direction: column; align-items: center; justify-content: center;
+    gap: 7px; padding: 30px; text-align: center;
+  }
+  .ch-empty.show { display: flex; }
+  .ch-empty b { font-size: 16px; }
+  .ch-empty p { font-size: 12px; color: var(--text-2); }
+  .ch-empty p em { font-style: normal; color: var(--accent); font-weight: 600; }
+
+  /* ===== 消息区 ===== */
+  .ch-msgs { flex: 1; overflow-y: auto; padding: 14px 14px 12px; }
+  .ch-msgs::-webkit-scrollbar { width: 0; }
+  .m-time { text-align: center; font-size: 11px; color: var(--text-2); margin: 2px 0 12px; }
+  .m-sys {
+    display: flex; align-items: center; gap: 10px; text-align: center;
+    font-size: 11px; color: var(--accent); margin: 10px 0;
+  }
+  .m-sys::before, .m-sys::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .m-row { display: flex; margin-bottom: 14px; }
+  .m-row.user { justify-content: flex-end; }
+  .m-msg { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-width: 88%; }
+  .m-bubble-user {
+    max-width: 100%; padding: 10px 13px; font-size: 14.5px; line-height: 1.55;
+    color: #fff; background: var(--accent); border-radius: 16px 16px 4px 16px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  /* 图片栅格：图先文后；1 张原比例，2 张 132 方格，3+ 张 92 三列 */
+  .g-grid { display: grid; gap: 5px; grid-template-columns: repeat(3, 92px); }
+  .g-grid.n2 { grid-template-columns: repeat(2, 132px); }
+  .g-grid.n1 { display: block; }
+  .gi {
+    width: 100%; height: 92px; object-fit: cover; border-radius: 10px; display: block;
+    cursor: zoom-in; background: var(--input-bg);
+  }
+  .g-grid.n2 .gi { height: 132px; }
+  .g-grid.n1 .gi { width: auto; height: auto; max-width: 200px; max-height: 220px; }
+  /* 视频卡：首帧 poster + 时长 + 播放钮 */
+  .v-card { position: relative; height: 92px; border-radius: 10px; overflow: hidden; background: var(--input-bg); cursor: zoom-in; }
+  .v-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .g-grid.n2 .v-card { height: 132px; }
+  .g-grid.n1 .v-card { max-width: 200px; }
+  .v-dur {
+    position: absolute; right: 5px; bottom: 5px; padding: 1px 6px; border-radius: 4px;
+    background: rgba(0,0,0,.62); color: #fff; font-size: 9.5px; font-family: var(--mono);
+  }
+  .v-play {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    width: 30px; height: 30px; border-radius: 50%; background: rgba(15,16,20,.5); color: #fff;
+    display: flex; align-items: center; justify-content: center; pointer-events: none;
+  }
+  /* 文件卡：跨满列横条 */
+  .f-card {
+    grid-column: 1 / -1; display: flex; align-items: center; gap: 10px;
+    padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card);
+  }
+  .f-card .af-ic { width: 34px; height: 34px; border-radius: 10px; font-size: 9px; }
+  .f-card .f-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .f-card .f-name { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .f-card .f-size { font-size: 10.5px; color: var(--text-2); }
+  .m-assistant { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+  .m-text { font-size: 15px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+  .cursor {
+    display: inline-block; width: 2px; height: 1em; margin-left: 1px;
+    background: var(--accent); vertical-align: -2px; animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .m-usage { font-family: var(--mono); font-size: 11px; color: var(--text-2); text-align: right; }
+
+  /* 思考卡（折叠；live = 流式进行中） */
+  .think { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .think-h {
+    display: flex; align-items: center; gap: 7px; padding: 10px 12px;
+    font-size: 13px; color: var(--text-2); cursor: pointer; user-select: none;
+  }
+  .think-h svg { flex: none; }
+  .think-h .lb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .think-h .chev { margin-left: auto; display: flex; transition: transform var(--ease); }
+  .think.open .chev { transform: rotate(180deg); }
+  .think-b {
+    display: none; margin: 0 12px; border-top: 1px dashed var(--line); padding: 10px 2px 12px;
+    font-size: 13px; line-height: 1.65; color: var(--text-2); white-space: pre-wrap; word-break: break-word;
+  }
+  .think.open .think-b { display: block; }
+  .think.live .think-b { display: block; border-top: none; padding-top: 0; }
+
+  /* 瞬态工具行（回合结束淡出，不进历史） */
+  .act { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); transition: opacity .45s; }
+  .act.fade { opacity: 0; }
+  .act .tname { color: var(--text); font-weight: 600; flex: none; }
+  .act .targ { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ===== 输入区 ===== */
+  .ch-input {
+    flex: none; display: flex; flex-direction: column; gap: 8px;
+    padding: 8px 12px 14px; background: var(--card); border-top: 1px solid var(--line);
+    position: relative; z-index: 4;
+  }
+  /* 模型守卫警示行：有附件且当前模型不支持图片时出现 */
+  .img-guard {
+    display: none; align-items: center; gap: 7px; padding: 8px 12px; border-radius: 10px;
+    background: var(--warn-weak); color: var(--warn); font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .img-guard.show { display: flex; animation: rise .25s; }
+  .img-guard .g-ic { display: flex; flex: none; }
+  .img-guard.shake { animation: shake .3s; }
+  @keyframes shake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+
+  /* 附件预览条：输入行上方，有图才出现 */
+  .at-strip { display: none; gap: 8px; padding: 2px 1px 0; overflow-x: auto; }
+  .at-strip.show { display: flex; animation: rise .25s; }
+  .at-strip::-webkit-scrollbar { height: 0; }
+  .at-thumb { position: relative; width: 64px; height: 64px; flex: none; border-radius: 12px; overflow: hidden; background: var(--input-bg); }
+  .at-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .at-rm {
+    position: absolute; top: 3px; right: 3px; width: 18px; height: 18px; border-radius: 50%;
+    border: none; padding: 0; background: rgba(29,33,41,.72); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .at-busy { position: absolute; inset: 0; background: rgba(255,255,255,.66); display: flex; align-items: center; justify-content: center; }
+  .at-add {
+    width: 64px; height: 64px; flex: none; border-radius: 12px;
+    border: 1.5px dashed var(--disabled); background: none; color: var(--text-2);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  }
+  .at-add small { font-size: 9px; font-weight: 600; }
+  /* 视频缩略图：时长角标 */
+  .at-thumb .v-badge {
+    position: absolute; left: 4px; bottom: 4px; padding: 1px 5px; border-radius: 4px;
+    background: rgba(0,0,0,.62); color: #fff; font-size: 9px; font-family: var(--mono); line-height: 1.5;
+  }
+  /* 文件附件：横卡（图标 + 名称 + 大小） */
+  .at-file {
+    position: relative; width: 152px; height: 64px; flex: none; border-radius: 12px;
+    border: 1px solid var(--line); background: var(--card);
+    display: flex; align-items: center; gap: 9px; padding: 0 10px;
+  }
+  .at-file .af-name { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .at-file .af-sub { font-size: 9.5px; color: var(--text-2); white-space: nowrap; }
+  .at-file .af-meta { flex: 1; min-width: 0; }
+  .at-file .at-rm { position: static; width: 16px; height: 16px; flex: none; background: none; color: var(--text-2); }
+  /* 扩展名徽标（附件条 / 消息卡 / 文件列表共用） */
+  .af-ic { flex: none; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-weight: 800; color: #fff; letter-spacing: .3px; }
+  .at-file .af-ic { width: 32px; height: 32px; font-size: 8.5px; }
+  .ext-ets { background: #7B61FF; } .ext-pdf { background: #F53F3F; } .ext-docx { background: #0A59F7; }
+  .ext-zip { background: #FF7D00; } .ext-csv { background: #00B42A; }
+
+  .ch-ta-row { display: flex; align-items: flex-end; gap: 8px; }
+  .ch-ta-wrap {
+    flex: 1; display: flex; align-items: flex-end; background: var(--input-bg); border-radius: 20px;
+    border: 1px solid transparent; transition: all var(--ease);
+  }
+  .ch-ta-wrap:focus-within { border-color: var(--accent); background: var(--card); box-shadow: 0 0 0 2.5px var(--accent-weak); }
+  .ch-input textarea {
+    flex: 1; resize: none; border: none; outline: none; background: none;
+    padding: 10px 14px; font: 14px/1.5 inherit; color: var(--text); max-height: 104px;
+  }
+  .ch-input textarea::placeholder { color: var(--text-2); }
+  .ch-send {
+    width: 34px; height: 34px; flex: none; border-radius: 50%; border: none; margin: 3px 3px 3px 0;
+    background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 8px rgba(10,89,247,.25); transition: all var(--ease);
+  }
+  .ch-send:active:not(:disabled) { transform: scale(.9); }
+  .ch-send:disabled { background: var(--disabled); box-shadow: none; }
+
+  /* 工具行 chips + 浮层（＋ 在最右端，与上方发送按钮对齐） */
+  .ch-bar { display: flex; align-items: center; gap: 8px; }
+  .plus-wrap { position: relative; margin-left: auto; }
+  .ch-plus {
+    width: 32px; height: 32px; flex: none; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--input-bg); color: var(--text-2);
+    display: flex; align-items: center; justify-content: center; transition: all var(--ease);
+  }
+  .ch-plus:active:not(:disabled) { background: var(--card); border-color: var(--accent); color: var(--accent); }
+  .ch-plus:disabled { opacity: .5; }
+  .plus-pop {
+    position: absolute; right: 0; bottom: calc(100% + 8px); width: 224px; padding: 6px; z-index: 6;
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: 0 12px 36px rgba(29,33,41,.14);
+    opacity: 0; visibility: hidden; transform: translateY(6px) scale(.97);
+    transform-origin: bottom right; transition: all var(--ease);
+  }
+  .plus-pop.show { opacity: 1; visibility: visible; transform: none; }
+  .plus-pop .opt { padding: 9px 10px; }
+  .plus-pop .opt-name { font-size: 13.5px; }
+  .plus-ic {
+    width: 30px; height: 30px; flex: none; border-radius: 9px; background: var(--input-bg); color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .ef-chip, .md-chip {
+    display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px; border-radius: 99px;
+    border: 1px solid var(--line); background: var(--input-bg);
+    font-size: 11px; font-weight: 600; color: var(--text-2);
+  }
+  .ef-chip .ef-ic { display: flex; color: var(--warn); }
+  .ef-chip .ef-ic svg { width: 11px; height: 11px; }
+  .ef-chip svg:last-child, .md-chip svg:last-child { opacity: .6; }
+  .md-chip .md-ic { display: flex; color: var(--accent); }
+  .md-chip .md-label { max-width: 128px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .md-wrap, .ef-wrap { position: relative; }
+  .md-pop, .ef-pop {
+    position: absolute; left: 0; bottom: calc(100% + 8px); width: 236px; padding: 6px; z-index: 6;
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: 0 12px 36px rgba(29,33,41,.14);
+    opacity: 0; visibility: hidden; transform: translateY(6px) scale(.97);
+    transform-origin: bottom left; transition: all var(--ease);
+  }
+  .md-pop.show, .ef-pop.show { opacity: 1; visibility: visible; transform: none; }
+  .opt {
+    width: 100%; display: flex; align-items: center; gap: 11px; padding: 11px;
+    border-radius: 14px; border: 1.5px solid transparent; background: none;
+    text-align: left; color: var(--text); transition: all var(--ease); margin-bottom: 6px;
+  }
+  .opt:active { background: var(--input-bg); }
+  .opt.on { border-color: var(--accent); background: var(--accent-weak); }
+  .opt:last-child { margin-bottom: 0; }
+  .opt-txt { flex: 1; min-width: 0; }
+  .opt-name { display: block; font-size: 14px; font-weight: 600; }
+  .opt-id { font-style: normal; font-family: var(--mono); font-size: 10px; color: var(--text-2); font-weight: 400; margin-left: 6px; }
+  .opt-desc { display: block; font-size: 11px; color: var(--text-2); margin-top: 1px; }
+  .opt-check { flex: none; color: var(--accent); opacity: 0; transition: opacity var(--ease); }
+  .opt.on .opt-check { opacity: 1; }
+  .pv-ic {
+    width: 34px; height: 34px; flex: none; border-radius: 50%; background: var(--input-bg);
+    display: flex; align-items: center; justify-content: center; font-size: 15px;
+  }
+  .ef-pop .pv-ic { width: 30px; height: 30px; font-size: 13px; }
+  /* 模型浮层「不支持图片」标 */
+  .noimg {
+    display: inline-flex; align-items: center; padding: 1px 7px; margin-left: 6px; border-radius: 99px;
+    background: var(--warn-weak); color: var(--warn); font-size: 10px; font-weight: 700; vertical-align: 1px;
+  }
+
+  /* ===== 系统选图面板（模拟 PhotoViewPicker：免权限 · 多选上限 5） ===== */
+  .pk-mask {
+    position: absolute; inset: 0; z-index: 9; background: var(--card);
+    display: flex; flex-direction: column;
+    transform: translateY(100%); transition: transform .28s cubic-bezier(.2,.8,.2,1);
+  }
+  .pk-mask.show { transform: none; }
+  .pk-top { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .pk-top b { font-size: 15px; }
+  .pk-cancel { border: none; background: none; color: var(--text-2); font-size: 14px; padding: 4px 2px; }
+  .pk-done { border: none; border-radius: 99px; padding: 6px 15px; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; }
+  .pk-done:disabled { background: var(--disabled); }
+  /* 顶层分段：图片（PhotoViewPicker·IMAGE）/ 视频（VIDEO）/ 文件（DocumentViewPicker） */
+  .pk-segs { flex: none; display: flex; gap: 8px; padding: 12px 14px 10px; }
+  .pk-seg {
+    flex: 1; padding: 7px 0; border-radius: 99px; border: 1px solid var(--line); background: none;
+    font-size: 13px; color: var(--text-2); transition: all var(--ease);
+  }
+  .pk-seg.on { background: var(--accent-weak); border-color: var(--accent); color: var(--accent); font-weight: 700; }
+  .pk-tabs { flex: none; display: flex; gap: 20px; padding: 8px 16px 0; border-bottom: 1px solid var(--line); }
+  .pk-tab { position: relative; border: none; background: none; padding: 2px 1px 10px; font-size: 13.5px; color: var(--text-2); }
+  .pk-tab.on { color: var(--text); font-weight: 700; }
+  .pk-tab.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2.5px; border-radius: 2px; background: var(--accent); }
+  .pk-n { font-style: normal; font-size: 10px; color: var(--text-2); margin-left: 3px; font-weight: 400; }
+  .pk-grid { flex: 1; overflow-y: auto; padding: 4px 3px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; align-content: start; }
+  .pk-grid::-webkit-scrollbar { width: 0; }
+  .pk-it { position: relative; aspect-ratio: 1/1; border: none; padding: 0; border-radius: 6px; overflow: hidden; background: var(--input-bg); }
+  .pk-it img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* 选中环：::after 盖在 img 之上，inset 描边才可见 */
+  .pk-it.on::after { content: ""; position: absolute; inset: 0; border-radius: 6px; box-shadow: inset 0 0 0 3px var(--accent); }
+  .pk-ord {
+    position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; border-radius: 50%;
+    background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+    display: none; align-items: center; justify-content: center;
+  }
+  .pk-it.on .pk-ord { display: flex; }
+  .pk-vdur {
+    position: absolute; left: 6px; bottom: 6px; padding: 1px 5px; border-radius: 4px;
+    background: rgba(0,0,0,.62); color: #fff; font-size: 9.5px; font-family: var(--mono);
+  }
+  /* 文件段：列表行 */
+  .pk-list { flex: 1; overflow-y: auto; display: none; }
+  .pk-list::-webkit-scrollbar { width: 0; }
+  .pk-file {
+    width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    border: none; border-bottom: 1px solid var(--line); background: none; text-align: left;
+  }
+  .pk-file:active { background: var(--input-bg); }
+  .pk-file .pf-ic { width: 36px; height: 36px; border-radius: 10px; font-size: 9.5px; }
+  .pk-file .pf-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .pk-file .pf-name { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+  .pk-file .pf-sub { font-size: 11px; color: var(--text-2); margin-top: 1px; }
+  .pk-file .pf-ord {
+    width: 22px; height: 22px; flex: none; border-radius: 50%; border: 1.5px solid var(--disabled);
+    color: transparent; font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .pk-file.on .pf-ord { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .pk-foot { flex: none; padding: 9px; text-align: center; font-size: 11.5px; color: var(--text-2); border-top: 1px solid var(--line); }
+
+  /* ===== 全屏预览 ===== */
+  .lb-mask {
+    position: absolute; inset: 0; z-index: 11; background: rgba(15,16,20,.94);
+    display: none; align-items: center; justify-content: center;
+  }
+  .lb-mask.show { display: flex; }
+  .lb-mask img { max-width: 92%; max-height: 76%; border-radius: 8px; }
+  .lb-count { position: absolute; top: 46px; left: 0; right: 0; text-align: center; color: rgba(255,255,255,.85); font-size: 13px; font-weight: 600; }
+  .lb-x {
+    position: absolute; top: 40px; right: 16px; width: 34px; height: 34px; border-radius: 50%;
+    border: none; background: rgba(255,255,255,.14); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  /* ===== 系统相机（模拟 CameraPicker：拉起系统相机拍照，uri 回传） ===== */
+  .cam-mask {
+    position: absolute; inset: 0; z-index: 10; background: #0B0C10;
+    display: none; flex-direction: column;
+  }
+  .cam-mask.show { display: flex; }
+  .cam-view { flex: 1; position: relative; overflow: hidden; }
+  .cam-view img { width: 100%; height: 100%; object-fit: cover; display: block; filter: blur(1.5px) brightness(.82) saturate(.92); }
+  .cam-grid {
+    position: absolute; inset: 0;
+    background-image: linear-gradient(rgba(255,255,255,.13) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(255,255,255,.13) 1px, transparent 1px);
+    background-size: 33.4% 33.4%;
+  }
+  .cam-top { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: space-between; padding: 42px 16px 0; }
+  .cam-top span { color: #fff; font-size: 14px; font-weight: 600; }
+  .cam-x {
+    width: 34px; height: 34px; border-radius: 50%; border: none;
+    background: rgba(255,255,255,.16); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .cam-cap { position: absolute; bottom: 18px; left: 0; right: 0; text-align: center; color: rgba(255,255,255,.78); font-size: 11px; }
+  .cam-bar { flex: none; height: 96px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.42); position: relative; }
+  .cam-shutter { width: 64px; height: 64px; border-radius: 50%; border: 4px solid #fff; background: none; padding: 3px; }
+  .cam-shutter i { display: block; width: 100%; height: 100%; border-radius: 50%; background: #fff; transition: transform .12s, background .12s; }
+  .cam-shutter:active i { transform: scale(.85); background: rgba(255,255,255,.72); }
+  .cam-flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 1; }
+  .cam-flash.go { animation: camflash .55s ease-out; }
+  @keyframes camflash { 0% { opacity: 0; } 25% { opacity: 1; } 100% { opacity: 0; } }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+</style>
+</head>
+<body>
+
+<div class="page" id="page-chat">
+  <div class="statusbar">
+    <span>21:47</span>
+    <span class="sb-icons">
+      <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4" y="5" width="3" height="6" rx="1"/><rect x="8" y="2.5" width="3" height="8.5" rx="1"/><rect x="12" y="0" width="3" height="11" rx="1" opacity=".35"/></svg>
+      <svg width="14" height="11" viewBox="0 0 16 12" fill="currentColor"><path d="M8 9.6a1.6 1.6 0 1 0 .01 3.2A1.6 1.6 0 0 0 8 9.6zM8 5.6c-1.7 0-3.2.66-4.3 1.75l1.4 1.42A4.1 4.1 0 0 1 8 7.6c1.13 0 2.15.45 2.9 1.17l1.4-1.42A5.9 5.9 0 0 0 8 5.6zM8 1.4C5.1 1.4 2.4 2.5.35 4.4l1.42 1.42A8.9 8.9 0 0 1 8 3.4c2.44 0 4.65.95 6.23 2.42L15.65 4.4A10.9 10.9 0 0 0 8 1.4z" transform="translate(0,-1)"/></svg>
+      <svg width="22" height="11" viewBox="0 0 25 12" fill="none"><rect x=".5" y=".5" width="21" height="11" rx="3.5" stroke="currentColor" opacity=".4"/><rect x="2" y="2" width="15" height="8" rx="2" fill="currentColor"/><path d="M23.5 4v4a2 2 0 0 0 0-4z" fill="currentColor" opacity=".4"/></svg>
+    </span>
+  </div>
+
+  <div class="ch-top">
+    <button class="icon-btn back" title="返回（原型内未接线）">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12 4.5l-5.5 5.5L12 15.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <div class="ch-title">
+      <div class="ch-name">图片发送与识图搜索</div>
+      <div class="ch-sub"><span class="dot"></span><span>aide</span></div>
+    </div>
+    <button class="icon-btn ch-stop" title="停止会话">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.2" stroke="currentColor" stroke-width="1.6"/><rect x="6.7" y="6.7" width="6.6" height="6.6" rx="1.6" fill="currentColor"/></svg>
+    </button>
+  </div>
+
+  <div class="ch-toast"><span class="dot"></span><span class="txt"></span></div>
+
+  <div class="ch-empty">
+    <div class="logo">a</div>
+    <b>新会话</b>
+    <p>发消息或图片即创建 · 发往工作区 <em>aide</em></p>
+  </div>
+
+  <div class="ch-msgs"><div class="ch-history"></div><div class="live-slot"></div></div>
+
+  <div class="ch-input">
+    <div class="img-guard" title="点此切换模型">
+      <span class="g-ic"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.7" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.6v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="11.5" r=".95" fill="currentColor"/></svg></span>
+      <span class="txt"></span>
+    </div>
+    <div class="at-strip"></div>
+    <div class="ch-ta-row">
+      <div class="ch-ta-wrap">
+        <textarea rows="1" placeholder="发消息或图片给桌面 aide…"></textarea>
+        <button class="ch-send" title="发送">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="ch-bar">
+      <div class="md-wrap">
+        <button class="md-chip" title="模型">
+          <span class="md-ic"></span>
+          <span class="md-label"></span>
+          <svg width="9" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="md-pop"></div>
+      </div>
+      <div class="ef-wrap">
+        <button class="ef-chip" title="思考程度">
+          <span class="ef-ic"></span>
+          <span class="ef-label"></span>
+          <svg width="9" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="ef-pop"></div>
+      </div>
+      <div class="plus-wrap">
+        <button class="ch-plus" title="添加拍照 / 图片 / 视频 / 文件">
+          <svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M10 4.5v11M4.5 10h11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+        <div class="plus-pop">
+          <button class="opt" data-act="camera">
+            <span class="plus-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3.5"/></svg></span>
+            <span class="opt-txt"><span class="opt-name">拍照</span><span class="opt-desc">拉起系统相机 · CameraPicker</span></span>
+          </button>
+          <button class="opt" data-act="img">
+            <span class="plus-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-4.5-4.5L7 20"/></svg></span>
+            <span class="opt-txt"><span class="opt-name">图片</span><span class="opt-desc">系统相册选择 · 免权限</span></span>
+          </button>
+          <button class="opt" data-act="video">
+            <span class="plus-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m22 8-6 4 6 4V8z"/><rect x="2" y="6" width="14" height="12" rx="3"/></svg></span>
+            <span class="opt-txt"><span class="opt-name">视频</span><span class="opt-desc">系统相册选择 · 首帧缩略图</span></span>
+          </button>
+          <button class="opt" data-act="file">
+            <span class="plus-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><path d="M14 2v6h6"/></svg></span>
+            <span class="opt-txt"><span class="opt-name">文件</span><span class="opt-desc">文档 / 压缩包等 · DocumentViewPicker</span></span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 系统选图面板 -->
+  <div class="pk-mask">
+    <div class="pk-top">
+      <button class="pk-cancel">取消</button>
+      <b>选择图片</b>
+      <button class="pk-done">完成</button>
+    </div>
+    <div class="pk-segs"></div>
+    <div class="pk-tabs"></div>
+    <div class="pk-grid"></div>
+    <div class="pk-list"></div>
+    <div class="pk-foot"></div>
+  </div>
+
+  <!-- 全屏预览 -->
+  <div class="lb-mask">
+    <div class="lb-count"></div>
+    <button class="lb-x" title="关闭">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+    <img alt="">
+  </div>
+
+  <!-- 系统相机（模拟 CameraPicker） -->
+  <div class="cam-mask">
+    <div class="cam-view">
+      <img src="" alt="">
+      <div class="cam-grid"></div>
+      <div class="cam-top">
+        <button class="cam-x" title="关闭">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+        <span>拍照</span>
+      </div>
+      <div class="cam-cap">取景完成 · 点快门拍摄（模拟 CameraPicker，拍完进附件条）</div>
+    </div>
+    <div class="cam-bar">
+      <button class="cam-shutter" title="拍摄"><i></i></button>
+    </div>
+    <div class="cam-flash"></div>
+  </div>
+</div>
+<script>
+"use strict";
+/* ============ URL 参数：展台 iframe 用它决定初始形态 ============
+   ?state=attach     输入区预置 3 张附件（带编码动画）
+   ?state=picker     初始打开选图面板（&album=recent|shots|camera）
+   ?state=sent       常规历史 + 自动演示识图搜索（默认形态）
+   &demo=0|1         是否自动演示（单独打开时默认 1）
+   &id=sN            展台实例标识（跨屏同步辨别来源）            */
+const params = new URLSearchParams(location.search);
+const MY_ID = params.get("id") || "solo";
+const STATE0 = params.get("state") || "sent";
+const ALBUM0 = params.get("album") || "recent";
+const DEMO0 = params.has("demo") ? params.get("demo") === "1" : true;
+
+const $ = s => document.querySelector(s);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const esc = s => { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; };
+const el = html => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; };
+
+const chat = $("#page-chat");
+const MAX = 5;
+
+/* ================= 图标（lucide 风格线性） ================= */
+const ICONS = {
+  spark: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>',
+  sparkMd: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>',
+  chev: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+  check: '<svg class="opt-check" width="18" height="18" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M5 8.2l2 2 4-4.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  x: '<svg width="9" height="9" viewBox="0 0 16 16" fill="none"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
+  plus: '<svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 4.5v11M4.5 10h11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  play: '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>',
+};
+const EF_ICONS = {
+  fast: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>',
+  bal: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="M7 21h10"/><path d="M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/></svg>',
+  max: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12l4 6-10 13L2 9Z"/><path d="M11 3 8 9l4 13 4-13-3-6"/><path d="M2 9h20"/></svg>',
+};
+
+/* ================= 假图库（SVG data URI，encodeURIComponent 安全转义） ================= */
+const mksvg = (w, h, inner) => "data:image/svg+xml," + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + " " + h + '">' + inner + "</svg>");
+const LIB = {
+  err: { label: "构建报错截图", src: mksvg(400, 300, [
+    '<rect width="400" height="300" fill="#1E2030"/>',
+    '<rect width="400" height="24" fill="#171927"/>',
+    '<circle cx="13" cy="12" r="3.5" fill="#FF5F57"/><circle cx="28" cy="12" r="3.5" fill="#FEBC2E"/><circle cx="43" cy="12" r="3.5" fill="#28C840"/>',
+    '<rect y="24" width="90" height="276" fill="#171927"/>',
+    '<text x="12" y="48" font-size="9" fill="#6B7390" font-family="monospace">entry</text>',
+    '<text x="12" y="66" font-size="9" fill="#9AA3C0" font-family="monospace">pages</text>',
+    '<text x="12" y="84" font-size="9" fill="#9AA3C0" font-family="monospace">sdk</text>',
+    '<text x="12" y="102" font-size="9" fill="#6B7390" font-family="monospace">model</text>',
+    '<text x="104" y="52" font-size="10" fill="#8B93B3" font-family="monospace">ChatModel.ets</text>',
+    '<text x="104" y="80" font-size="10" fill="#C8CEE0" font-family="monospace">const text = ta.value.trim()</text>',
+    '<rect x="100" y="69" width="210" height="14" fill="rgba(245,63,63,.16)"/>',
+    '<text x="104" y="100" font-size="10" fill="#C8CEE0" font-family="monospace">const n: number = text</text>',
+    '<text x="104" y="140" font-size="10" fill="#FF7B72" font-family="monospace">ERROR TS2322: string not</text>',
+    '<text x="104" y="157" font-size="10" fill="#FF7B72" font-family="monospace">assignable to number</text>',
+    '<text x="104" y="184" font-size="10" fill="#8B93B3" font-family="monospace">at ChatModel.ets:128:11</text>',
+    '<rect x="104" y="200" width="192" height="1" fill="#2A2D42"/>',
+    '<text x="104" y="224" font-size="10" fill="#6B7390" font-family="monospace">BUILD FAILED in 6s</text>',
+    '<text x="104" y="244" font-size="10" fill="#6B7390" font-family="monospace">hvigorw assembleHap</text>',
+  ].join("")) },
+  crash: { label: "崩溃弹窗截图", src: mksvg(400, 300, [
+    '<rect width="400" height="300" fill="#E9EBEF"/>',
+    '<rect x="70" y="62" width="260" height="176" rx="12" fill="#FFFFFF" stroke="#D7DAE0"/>',
+    '<circle cx="200" cy="104" r="17" fill="#FEF0E6"/>',
+    '<path d="M200 93l10 18h-20z" fill="#FF7D00"/>',
+    '<text x="200" y="146" text-anchor="middle" font-size="15" fill="#1D2129" font-family="sans-serif">应用出现异常</text>',
+    '<text x="200" y="168" text-anchor="middle" font-size="11" fill="#86909C" font-family="sans-serif">com.aide.remote 已停止运行</text>',
+    '<rect x="150" y="188" width="100" height="30" rx="15" fill="#0A59F7"/>',
+    '<text x="200" y="208" text-anchor="middle" font-size="12" fill="#FFFFFF" font-family="sans-serif">重新打开</text>',
+  ].join("")) },
+  settings: { label: "设置页截图", src: mksvg(400, 300, [
+    '<rect width="400" height="300" fill="#F1F3F5"/>',
+    '<rect width="400" height="40" fill="#FFFFFF"/>',
+    '<text x="200" y="26" text-anchor="middle" font-size="14" fill="#1D2129" font-family="sans-serif">设置</text>',
+    '<rect x="14" y="52" width="372" height="38" rx="10" fill="#FFFFFF"/><circle cx="36" cy="71" r="9" fill="rgba(10,89,247,.12)"/><rect x="54" y="67" width="110" height="8" rx="4" fill="#1D2129" opacity=".8"/><rect x="316" y="64.5" width="34" height="13" rx="6.5" fill="#0A59F7"/><circle cx="343" cy="71" r="5" fill="#FFFFFF"/>',
+    '<rect x="14" y="98" width="372" height="38" rx="10" fill="#FFFFFF"/><circle cx="36" cy="117" r="9" fill="rgba(255,125,0,.14)"/><rect x="54" y="113" width="90" height="8" rx="4" fill="#1D2129" opacity=".8"/><rect x="316" y="110.5" width="34" height="13" rx="6.5" fill="#C9CDD4"/><circle cx="323" cy="117" r="5" fill="#FFFFFF"/>',
+    '<rect x="14" y="144" width="372" height="38" rx="10" fill="#FFFFFF"/><circle cx="36" cy="163" r="9" fill="rgba(15,163,163,.16)"/><rect x="54" y="159" width="130" height="8" rx="4" fill="#1D2129" opacity=".8"/><rect x="316" y="156.5" width="34" height="13" rx="6.5" fill="#0A59F7"/><circle cx="343" cy="163" r="5" fill="#FFFFFF"/>',
+    '<rect x="14" y="190" width="372" height="38" rx="10" fill="#FFFFFF"/><circle cx="36" cy="209" r="9" fill="rgba(140,123,255,.16)"/><rect x="54" y="205" width="70" height="8" rx="4" fill="#1D2129" opacity=".8"/><rect x="316" y="202.5" width="34" height="13" rx="6.5" fill="#C9CDD4"/><circle cx="323" cy="209" r="5" fill="#FFFFFF"/>',
+  ].join("")) },
+  terminal: { label: "终端报错截图", src: mksvg(400, 300, [
+    '<rect width="400" height="300" fill="#14161C"/>',
+    '<rect width="400" height="24" fill="#1B1E27"/>',
+    '<circle cx="13" cy="12" r="3.5" fill="#FF5F57"/><circle cx="28" cy="12" r="3.5" fill="#FEBC2E"/><circle cx="43" cy="12" r="3.5" fill="#28C840"/>',
+    '<text x="14" y="52" font-size="11" fill="#7EE787" font-family="monospace">$ hvigorw assembleHap</text>',
+    '<text x="14" y="78" font-size="10" fill="#9DA6C2" font-family="monospace">> Task :entry:CompileArkTS</text>',
+    '<text x="14" y="100" font-size="10" fill="#9DA6C2" font-family="monospace">> Task :entry:BuildJSWithHvigor</text>',
+    '<text x="14" y="128" font-size="10" fill="#FF7B72" font-family="monospace">ERROR: arkts-no-untyped-obj</text>',
+    '<text x="14" y="148" font-size="10" fill="#FF7B72" font-family="monospace">at ChatModel.ets:128</text>',
+    '<text x="14" y="176" font-size="10" fill="#9DA6C2" font-family="monospace">BUILD FAILED in 12s</text>',
+    '<text x="14" y="212" font-size="11" fill="#7EE787" font-family="monospace">$ _</text>',
+  ].join("")) },
+  sunset: { label: "日落", src: mksvg(400, 300, [
+    '<defs><linearGradient id="g1" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFB36B"/><stop offset=".55" stop-color="#FF7E78"/><stop offset="1" stop-color="#C6547E"/></linearGradient></defs>',
+    '<rect width="400" height="300" fill="url(#g1)"/>',
+    '<circle cx="200" cy="170" r="48" fill="#FFE9B8"/>',
+    '<path d="M0 236 Q100 214 200 236 T400 236 V300 H0 Z" fill="#8E4A66"/>',
+    '<rect y="252" width="400" height="48" fill="#7A4060"/>',
+  ].join("")) },
+  mountain: { label: "雪山", src: mksvg(400, 300, [
+    '<defs><linearGradient id="g2" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#8FC9F7"/><stop offset="1" stop-color="#EAF5FF"/></linearGradient></defs>',
+    '<rect width="400" height="300" fill="url(#g2)"/>',
+    '<circle cx="322" cy="58" r="22" fill="#FFF4D6"/>',
+    '<path d="M0 300 L96 130 L170 230 L240 118 L330 232 L400 176 V300 Z" fill="#7FA8C9"/>',
+    '<path d="M96 130 L64 178 L88 172 L108 190 L132 166 Z" fill="#F2F8FE"/>',
+    '<path d="M240 118 L204 172 L232 166 L252 186 L276 158 Z" fill="#FFFFFF"/>',
+    '<path d="M0 300 L60 236 L140 300 Z" fill="#5E7FA3"/>',
+  ].join("")) },
+  city: { label: "城市夜景", src: mksvg(400, 300, [
+    '<defs><linearGradient id="g3" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#232C5C"/><stop offset="1" stop-color="#4A3A78"/></linearGradient></defs>',
+    '<rect width="400" height="300" fill="url(#g3)"/>',
+    '<circle cx="76" cy="56" r="20" fill="#FFF6D8"/>',
+    '<rect x="30" y="140" width="58" height="160" fill="#171D3B"/>',
+    '<rect x="96" y="100" width="66" height="200" fill="#141A36"/>',
+    '<rect x="170" y="150" width="50" height="150" fill="#171D3B"/>',
+    '<rect x="228" y="84" width="70" height="216" fill="#12172F"/>',
+    '<rect x="304" y="128" width="60" height="172" fill="#171D3B"/>',
+    '<rect x="38" y="152" width="8" height="8" fill="#FFD976"/><rect x="54" y="152" width="8" height="8" fill="#FFD976" opacity=".55"/><rect x="70" y="168" width="8" height="8" fill="#FFD976"/><rect x="38" y="188" width="8" height="8" fill="#FFD976" opacity=".6"/><rect x="54" y="188" width="8" height="8" fill="#FFD976"/>',
+    '<rect x="106" y="116" width="8" height="8" fill="#FFD976"/><rect x="122" y="116" width="8" height="8" fill="#FFD976" opacity=".5"/><rect x="138" y="132" width="8" height="8" fill="#FFD976"/><rect x="106" y="152" width="8" height="8" fill="#FFD976" opacity=".65"/><rect x="122" y="168" width="8" height="8" fill="#FFD976"/><rect x="138" y="184" width="8" height="8" fill="#FFD976" opacity=".7"/>',
+    '<rect x="238" y="100" width="8" height="8" fill="#FFD976"/><rect x="254" y="100" width="8" height="8" fill="#FFD976" opacity=".6"/><rect x="270" y="116" width="8" height="8" fill="#FFD976"/><rect x="238" y="136" width="8" height="8" fill="#FFD976" opacity=".55"/><rect x="254" y="152" width="8" height="8" fill="#FFD976"/><rect x="270" y="168" width="8" height="8" fill="#FFD976" opacity=".75"/>',
+    '<rect x="314" y="144" width="8" height="8" fill="#FFD976"/><rect x="330" y="160" width="8" height="8" fill="#FFD976" opacity=".6"/><rect x="346" y="144" width="8" height="8" fill="#FFD976"/><rect x="314" y="180" width="8" height="8" fill="#FFD976" opacity=".7"/>',
+  ].join("")) },
+  abstract: { label: "抽象色块", src: mksvg(400, 300, [
+    '<rect width="400" height="300" fill="#F3EFFB"/>',
+    '<circle cx="90" cy="90" r="80" fill="#8C7BFF" opacity=".45"/>',
+    '<circle cx="300" cy="70" r="90" fill="#4CC2FF" opacity=".4"/>',
+    '<circle cx="330" cy="230" r="100" fill="#FF7EB6" opacity=".38"/>',
+    '<circle cx="120" cy="240" r="70" fill="#63E6BE" opacity=".4"/>',
+    '<circle cx="210" cy="150" r="34" fill="#1D2129" opacity=".14"/>',
+  ].join("")) },
+};
+/* 相册（模拟 PhotoViewPicker 相册切换；「截屏」相册直达系统截屏） */
+const ALBUMS = [
+  { id: "recent", name: "最近", items: ["sunset", "err", "mountain", "settings", "abstract", "terminal"] },
+  { id: "shots", name: "截屏", items: ["err", "crash", "settings", "terminal"] },
+  { id: "camera", name: "相机", items: ["sunset", "city", "mountain", "abstract"] },
+];
+/* 视频库（模拟 PhotoViewPicker · VIDEO_TYPE；原型以首帧 poster + 时长呈现） */
+const VIDEOS = [
+  { id: "v-build", label: "构建失败录屏", poster: "terminal", dur: "00:47" },
+  { id: "v-crash", label: "崩溃复现录屏", poster: "crash", dur: "00:12" },
+  { id: "v-city", label: "城市延时", poster: "city", dur: "01:30" },
+  { id: "v-mtn", label: "雪山上空", poster: "mountain", dur: "00:05" },
+];
+/* 文件库（模拟 DocumentViewPicker · 任意格式文档） */
+const FILES = [
+  { id: "f-api", name: "api.ets", ext: "ets", size: "18 KB", date: "今天 21:02" },
+  { id: "f-chat", name: "ChatModel.ets", ext: "ets", size: "12 KB", date: "昨天 18:44" },
+  { id: "f-design", name: "设计稿-识图搜索.pdf", ext: "pdf", size: "3.1 MB", date: "9月6日" },
+  { id: "f-req", name: "需求说明.docx", ext: "docx", size: "86 KB", date: "9月5日" },
+  { id: "f-proto", name: "原型.zip", ext: "zip", size: "2.4 MB", date: "9月3日" },
+  { id: "f-data", name: "会话数据.csv", ext: "csv", size: "4 KB", date: "9月1日" },
+];
+/* 拍照产出池（模拟 CameraPicker 返回的 uri） */
+const CAM_POOL = ["city", "sunset", "mountain", "abstract"];
+
+/* ================= 模型与思考程度 ================= */
+/* img=false → 不支持图片输入（deepseek-v4-pro）：浮层打标、守卫行、发送拦截 */
+const MODELS = [
+  { value: "sonnet", displayName: "Sonnet", desc: "默认 · 日常编码主力 · 支持图片", img: true },
+  { value: "opus", displayName: "Opus", desc: "最强 · 复杂任务 · 支持图片", img: true },
+  { value: "deepseek-v4-pro", displayName: "deepseek-v4-pro", desc: "1M 上下文 · 纯文本模型", img: false },
+];
+const mdPick = { cur: "sonnet" };
+const activeModel = () => MODELS.find(m => m.value === mdPick.cur) || MODELS[0];
+const EF_FAKE = [
+  { id: "low", name: "快速", icon: EF_ICONS.fast, desc: "最快最省，适合简单问答" },
+  { id: "high", name: "均衡", icon: EF_ICONS.bal, desc: "默认 · 速度与质量兼顾" },
+  { id: "max", name: "极致", icon: EF_ICONS.max, desc: "不计成本的最强档" },
+];
+let activeEffort = EF_FAKE[1];
+
+/* ================= 附件条 ================= */
+const at = [];
+function renderStrip() {
+  const strip = chat.querySelector(".at-strip");
+  if (!at.length) { strip.classList.remove("show"); strip.innerHTML = ""; return; }
+  strip.classList.add("show");
+  strip.innerHTML = at.map((it, i) => {
+    if (it.type === "file") return `
+    <div class="at-file" data-i="${i}" title="${esc(it.name)}">
+      <span class="af-ic ext-${it.ext}">${esc(it.ext.toUpperCase())}</span>
+      <span class="af-meta"><span class="af-name">${esc(it.name)}</span><span class="af-sub">${esc(it.size)} · 文件</span></span>
+      <button class="at-rm" data-i="${i}" title="移除">${ICONS.x}</button>
+    </div>`;
+    return `
+    <div class="at-thumb" data-i="${i}">
+      <img src="${it.src}" alt="">
+      ${it.type === "video" ? `<span class="v-badge">${esc(it.dur)}</span>` : ""}
+      ${it.enc ? '<span class="at-busy"><span class="spinner"></span></span>' : ""}
+      <button class="at-rm" data-i="${i}" title="移除">${ICONS.x}</button>
+    </div>`;
+  }).join("") + (at.length < MAX ? `
+    <button class="at-add" title="继续添加">${ICONS.plus}<small>${at.length}/${MAX}</small></button>` : "");
+}
+/* 模拟端侧处理：图片/视频重编码逐张错峰（340ms + k*260ms），文件即时 */
+function attachItems(items, animate) {
+  const room = MAX - at.length;
+  items.slice(0, Math.max(0, room)).forEach((nit, k) => {
+    const it = { ...nit, enc: animate && nit.type !== "file" };
+    at.push(it);
+    if (it.enc) setTimeout(() => { it.enc = false; renderStrip(); updateInputState(); }, 340 + k * 260);
+  });
+  if (items.length > room) flashHint(`最多附 ${MAX} 个附件`, "warn");
+  renderStrip();
+  updateInputState();
+  updateGuard();
+}
+function attachIds(ids, animate) {
+  attachItems(ids.map(id => ({ id, type: "img", src: LIB[id].src })), animate);
+}
+function waitForEncode() {
+  return new Promise(res => {
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      if (!at.some(x => x.enc) || Date.now() - t0 > 4200) { clearInterval(iv); res(); }
+    }, 120);
+  });
+}
+function updateGuard() {
+  const bad = at.length > 0 && !activeModel().img;
+  const g = chat.querySelector(".img-guard");
+  g.classList.toggle("show", bad);
+  if (bad) g.querySelector(".txt").textContent = `${activeModel().displayName} 不支持图片/文件输入 · 点此切换模型或移除附件`;
+}
+
+/* ================= toast / 滚动 / 自适应 ================= */
+let hintTimer = null;
+function flashHint(text, kind = "info") {
+  const t = chat.querySelector(".ch-toast");
+  t.querySelector(".dot").className = "dot " + (kind === "ok" ? "ok" : kind === "warn" ? "warn" : "info");
+  t.querySelector(".txt").textContent = text;
+  t.classList.add("show");
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => t.classList.remove("show"), 2200);
+}
+function scrollBottom() { const m = chat.querySelector(".ch-msgs"); m.scrollTop = m.scrollHeight; }
+function autoGrow() {
+  const ta = chat.querySelector("textarea");
+  ta.style.height = "auto";
+  ta.style.height = Math.min(ta.scrollHeight, 104) + "px";
+}
+
+/* ================= 模型 / 思考程度浮层 ================= */
+function syncModel() {
+  chat.querySelector(".md-ic").innerHTML = ICONS.sparkMd;
+  chat.querySelector(".md-label").textContent = activeModel().displayName;
+}
+function renderMdOpts() {
+  chat.querySelector(".md-pop").innerHTML = MODELS.map(m => `
+    <button class="opt${m.value === activeModel().value ? " on" : ""}" data-md="${m.value}">
+      <span class="opt-txt">
+        <span class="opt-name">${esc(m.displayName)}${m.img ? "" : '<span class="noimg">不支持图片</span>'}</span>
+        <span class="opt-desc">${esc(m.desc)}</span>
+      </span>
+      ${ICONS.check}
+    </button>`).join("");
+}
+function syncEffort() {
+  chat.querySelector(".ef-label").textContent = `思考 · ${activeEffort.name}`;
+  chat.querySelector(".ef-ic").innerHTML = activeEffort.icon;
+}
+function renderEfOpts() {
+  chat.querySelector(".ef-pop").innerHTML = EF_FAKE.map(e2 => `
+    <button class="opt${e2.id === activeEffort.id ? " on" : ""}" data-ef="${e2.id}">
+      <span class="pv-ic">${e2.icon}</span>
+      <span class="opt-txt"><span class="opt-name">${esc(e2.name)}<i class="opt-id">${esc(e2.id)}</i></span><span class="opt-desc">${esc(e2.desc)}</span></span>
+      ${ICONS.check}
+    </button>`).join("");
+}
+function setModel(v) {
+  const m = MODELS.find(x => x.value === v);
+  if (!m || m.value === activeModel().value) return;
+  mdPick.cur = m.value;
+  syncModel();
+  updateGuard();
+  broadcastSync();
+  if (!m.img && at.length) flashHint(`${m.displayName} 不支持图片输入`, "warn");
+}
+
+/* ================= 系统选择面板（图片/视频 · PhotoViewPicker；文件 · DocumentViewPicker） ================= */
+const pk = { seg: "img", album: "recent", sel: [] };
+const SEGS = [
+  { id: "img", name: "图片", title: "选择图片" },
+  { id: "video", name: "视频", title: "选择视频" },
+  { id: "file", name: "文件", title: "选择文件" },
+];
+function renderPicker() {
+  const seg = SEGS.find(s => s.id === pk.seg);
+  chat.querySelector(".pk-top b").textContent = seg.title;
+  chat.querySelector(".pk-segs").innerHTML = SEGS.map(s =>
+    `<button class="pk-seg${s.id === pk.seg ? " on" : ""}" data-seg="${s.id}">${s.name}</button>`).join("");
+  const tabs = chat.querySelector(".pk-tabs");
+  const grid = chat.querySelector(".pk-grid");
+  const list = chat.querySelector(".pk-list");
+  if (pk.seg === "img") {
+    tabs.style.display = "";
+    tabs.innerHTML = ALBUMS.map(a =>
+      `<button class="pk-tab${a.id === pk.album ? " on" : ""}" data-album="${a.id}">${a.name}<i class="pk-n">${a.items.length}</i></button>`).join("");
+  } else {
+    tabs.style.display = "none";
+  }
+  if (pk.seg === "file") {
+    grid.style.display = "none";
+    list.style.display = "";
+    list.innerHTML = FILES.map(f => `
+      <button class="pk-file${pk.sel.includes(f.id) ? " on" : ""}" data-id="${f.id}">
+        <span class="pf-ic af-ic ext-${f.ext}">${esc(f.ext.toUpperCase())}</span>
+        <span class="pf-meta"><span class="pf-name">${esc(f.name)}</span><span class="pf-sub">${esc(f.size)} · ${esc(f.date)}</span></span>
+        <span class="pf-ord">${pk.sel.includes(f.id) ? pk.sel.indexOf(f.id) + 1 : ""}</span>
+      </button>`).join("");
+  } else {
+    grid.style.display = "";
+    list.style.display = "none";
+    grid.innerHTML = (pk.seg === "video" ? VIDEOS.map(v => ({ id: v.id, poster: v.poster, label: v.label, dur: v.dur })) :
+      (ALBUMS.find(a => a.id === pk.album) || ALBUMS[0]).items.map(id => ({ id, poster: id, label: LIB[id].label }))).map(it => `
+      <button class="pk-it${pk.sel.includes(it.id) ? " on" : ""}" data-id="${it.id}" title="${esc(it.label)}">
+        <img src="${LIB[it.poster].src}" alt="">
+        ${it.dur ? `<span class="pk-vdur">${it.dur}</span>` : ""}
+        <span class="pk-ord">${pk.sel.includes(it.id) ? pk.sel.indexOf(it.id) + 1 : ""}</span>
+      </button>`).join("");
+  }
+  const done = chat.querySelector(".pk-done");
+  done.textContent = pk.sel.length ? `完成（${pk.sel.length}）` : "完成";
+  done.disabled = !pk.sel.length;
+  const footHint = {
+    img: `已选 ${pk.sel.length}/${MAX} 张 · 最多 ${MAX} 张，选好点「完成」带入输入区`,
+    video: `已选 ${pk.sel.length}/${MAX} 个 · 视频以首帧缩略图 + 时长随消息呈现（原型）`,
+    file: `已选 ${pk.sel.length}/${MAX} 个 · 文件保留原名随消息下发（原型）`,
+  };
+  chat.querySelector(".pk-foot").textContent = footHint[pk.seg];
+}
+function openPicker(seg) {
+  if (seg && SEGS.some(s => s.id === seg) && seg !== pk.seg) { pk.seg = seg; pk.sel = []; }
+  renderPicker();
+  chat.querySelector(".pk-mask").classList.add("show");
+}
+function closePicker() { chat.querySelector(".pk-mask").classList.remove("show"); pk.sel = []; }
+function setSeg(seg) {
+  if (!SEGS.some(s => s.id === seg) || seg === pk.seg) return;
+  pk.seg = seg;
+  pk.sel = [];
+  renderPicker();
+}
+function setAlbum(id) {
+  if (!ALBUMS.some(a => a.id === id)) return;
+  pk.album = id;
+  pk.sel = [];
+  if (chat.querySelector(".pk-mask").classList.contains("show")) renderPicker();
+}
+function pkToggle(id) {
+  const i = pk.sel.indexOf(id);
+  if (i >= 0) { pk.sel.splice(i, 1); renderPicker(); return; }
+  if (at.length + pk.sel.length >= MAX) { flashHint(`最多附 ${MAX} 个附件`, "warn"); return; }
+  pk.sel.push(id);
+  renderPicker();
+}
+function commitPicker() {
+  if (!pk.sel.length) return;
+  if (pk.seg === "img") {
+    attachIds(pk.sel.slice(), true);
+  } else if (pk.seg === "video") {
+    attachItems(pk.sel.map(id => {
+      const v = VIDEOS.find(x => x.id === id);
+      return { id: v.id, type: "video", src: LIB[v.poster].src, dur: v.dur, name: v.label };
+    }), true);
+  } else {
+    attachItems(pk.sel.map(id => {
+      const f = FILES.find(x => x.id === id);
+      return { id: f.id, type: "file", name: f.name, ext: f.ext, size: f.size };
+    }), true);
+  }
+  pk.sel = [];
+  closePicker();
+}
+
+/* ================= 系统相机（模拟 CameraPicker：拍照 → uri 回传 → 附件条） ================= */
+function openCamera() {
+  const cam = chat.querySelector(".cam-mask");
+  cam.querySelector(".cam-view img").src = LIB[CAM_POOL[Math.floor(Math.random() * CAM_POOL.length)]].src;
+  cam.classList.add("show");
+}
+function closeCamera() { chat.querySelector(".cam-mask").classList.remove("show"); }
+async function shoot() {
+  const cam = chat.querySelector(".cam-mask");
+  if (!cam.classList.contains("show") || cam._busy) return;
+  cam._busy = true;
+  try {
+    const flash = chat.querySelector(".cam-flash");
+    flash.classList.add("go");
+    await sleep(240);
+    closeCamera();
+    attachIds([CAM_POOL[Math.floor(Math.random() * CAM_POOL.length)]], true);
+    flashHint("已拍摄 · 图片进入附件条", "ok");
+    await sleep(340);
+    flash.classList.remove("go");
+  } finally {
+    cam._busy = false;
+  }
+}
+
+/* ================= 全屏预览 ================= */
+function openLb(src, count, idx) {
+  const lb = chat.querySelector(".lb-mask");
+  lb.querySelector("img").src = src;
+  lb.querySelector(".lb-count").textContent = count > 1 ? `${idx + 1} / ${count}` : "预览";
+  lb.classList.add("show");
+}
+
+/* ================= 历史 ================= */
+function thinkCard(label, body, open) {
+  const c = el(`<div class="think${open ? " open" : ""}"><div class="think-h">${ICONS.spark}<span class="lb"></span><span class="chev">${ICONS.chev}</span></div><div class="think-b"></div></div>`);
+  c.querySelector(".lb").textContent = label;
+  c.querySelector(".think-b").textContent = body;
+  c.querySelector(".think-h").addEventListener("click", () => {
+    if (!c.classList.contains("live")) c.classList.toggle("open");
+  });
+  return c;
+}
+/* 用户消息：附件先文字后（图先文后语义扩展到视频/文件）；纯附件可不带文字 */
+function videoCard(it) {
+  const d = el(`<div class="v-card"><img src="${it.src}" alt=""><span class="v-dur">${esc(it.dur || "")}</span><span class="v-play">${ICONS.play}</span></div>`);
+  d.dataset.src = it.src;
+  return d;
+}
+function fileCard(it) {
+  const d = el(`<div class="f-card"><span class="af-ic ext-${it.ext}">${esc((it.ext || "file").toUpperCase())}</span><span class="f-meta"><span class="f-name"></span><span class="f-size"></span></span></div>`);
+  d.querySelector(".f-name").textContent = it.name || "文件";
+  d.querySelector(".f-size").textContent = it.size || "";
+  return d;
+}
+function userRow(items, text) {
+  const msg = el('<div class="m-msg"></div>');
+  if (items && items.length) {
+    const mediaN = items.filter(x => x.type !== "file").length;
+    const g = el(`<div class="g-grid n${mediaN || 1}"></div>`);
+    items.forEach(it => {
+      if (it.type === "file") g.appendChild(fileCard(it));
+      else if (it.type === "video") g.appendChild(videoCard(it));
+      else {
+        const im = document.createElement("img");
+        im.className = "gi";
+        im.src = it.src;
+        im.alt = "";
+        g.appendChild(im);
+      }
+    });
+    msg.appendChild(g);
+  }
+  if (text) {
+    const b = el('<div class="m-bubble-user"></div>');
+    b.textContent = text;
+    msg.appendChild(b);
+  }
+  const row = el('<div class="m-row user"></div>');
+  row.appendChild(msg);
+  return row;
+}
+function buildHistory() {
+  const h = chat.querySelector(".ch-history");
+  if (h.innerHTML) return;
+  h.appendChild(el('<div class="m-time">今天 21:32</div>'));
+  h.appendChild(userRow([{ src: LIB.sunset.src }, { src: LIB.mountain.src }], "上次拍的两张，顺便看下 PWA 的图片链路是怎么设计的"));
+  const g1 = el('<div class="m-row"><div class="m-assistant"></div></div>');
+  g1.firstChild.appendChild(thinkCard("已思考 8 秒 · 点击展开",
+    "PWA 的 ImageAttachment 是 { data: base64, mediaType }，附件条上限 5 张，发送前重编码；消息里图在文前，模型先读图再读文。", false));
+  const t1 = el('<div class="m-text"></div>');
+  t1.textContent = "PWA 链路：选图 → 重编码（长边 1568 · 质量 0.85）→ 裸 base64 放进 send_message 的 images → 桌面透传模型；渲染图先文后。鸿蒙端协议里 images 字段已占位，就差选图与重编码这层。";
+  g1.firstChild.appendChild(t1);
+  g1.firstChild.appendChild(el('<div class="m-usage">9.8k tok · cache 95% · effort high</div>'));
+  h.appendChild(g1);
+  h.appendChild(el('<div class="m-time">21:40</div>'));
+  h.appendChild(el('<div class="m-row user"><div class="m-msg"><div class="m-bubble-user">行，出个图片发送的原型，要能演示识图搜索</div></div></div>'));
+  const g2 = el('<div class="m-row"><div class="m-assistant"></div></div>');
+  const t2 = el('<div class="m-text"></div>');
+  t2.textContent = "好，原型就绪：＋ 选图（截屏相册直达）、附件条、图先文后的消息栅格、全屏预览，外加识图搜索与模型守卫两个演示。";
+  g2.firstChild.appendChild(t2);
+  g2.firstChild.appendChild(el('<div class="m-usage">2.1k tok · cache 93% · effort high</div>'));
+  h.appendChild(g2);
+  h.appendChild(el('<div class="m-time">21:47</div>'));
+}
+
+/* ================= 回复剧本 ================= */
+/* 识图搜索：截图里的报错即检索词，模型读图后自行发起 WebSearch */
+const REPLY_IMG = () => ([
+  { t: "think", text: "图里是 hvigor 构建报错：ERROR TS2322，把 string 赋给了 number，位置在 ChatModel.ets:128。先确认 ArkTS 严格模式对这类赋值的规则，再搜下同类报错的修复姿势。" },
+  { t: "act", tools: [["WebSearch", "ArkTS TS2322 类型不匹配 严格模式"]] },
+  { t: "text", text: "搜到了，截图里的报错这么修：\n\n报错：ERROR TS2322 · ChatModel.ets:128 —— 把 string 赋给了 number 类型的字段。\n\n1. 字段类型改成 Array<string> | null，与协议 images 字段对齐\n2. 赋值处改为 images ?? []，别把可能为空的值直接塞进强类型字段\n3. 重跑 hvigorw assembleHap 验证\n\n已在桌面工作区改好、编译通过。这就是识图搜索：截图里的报错文本就是检索词，读图后由模型自行发起 WebSearch。" },
+  { t: "usage", text: "6.4k tok · cache 90% · effort high" },
+]);
+/* 附件回执（图片 / 视频 / 文件混排） */
+function tally(items) {
+  const c = { img: 0, video: 0, file: 0 };
+  items.forEach(x => { if (x.type === "video") c.video++; else if (x.type === "file") c.file++; else c.img++; });
+  return c;
+}
+function descParts(c) {
+  const parts = [];
+  if (c.img) parts.push(`${c.img} 张图片`);
+  if (c.video) parts.push(`${c.video} 个视频`);
+  if (c.file) parts.push(`${c.file} 个文件`);
+  return parts.join("、");
+}
+const REPLY_ACK = c => {
+  const acts = [];
+  if (c.img) acts.push(["Read", `images · ${c.img} 张`]);
+  if (c.video) acts.push(["Read", `videos · ${c.video} 个`]);
+  if (c.file) acts.push(["Read", `files · ${c.file} 个`]);
+  const total = c.img + c.video + c.file;
+  return [
+    { t: "think", text: `用户发来附件消息（${descParts(c)}）。图片已重编码为 JPEG base64；视频以首帧缩略图 + 元数据下发；文件保留原名 base64 随消息透传，桌面侧落盘到工作区。` },
+    { t: "act", tools: acts },
+    { t: "text", text: `附件已收到（${descParts(c)}）。真实链路：图片/视频走 PhotoViewPicker（免权限多选），文件走 DocumentViewPicker；图片重编码（长边 1568 · 质量 0.85）后随 images 字段下发，文件随 attachments 字段下发、桌面侧落盘为工作区文件。\n\n想看识图搜索：发构建报错截图 + 「搜一下这个报错怎么解决」。` },
+    { t: "usage", text: `${total > 2 ? "4.1k" : "2.8k"} tok · cache 92% · effort high` },
+  ];
+};
+/* 纯文本 */
+const REPLY_PLAIN = () => ([
+  { t: "think", text: "纯文本消息，走常规链路。" },
+  { t: "text", text: "收到。这个原型里可以：点 ＋ 从截屏相册选图发送；或发构建报错截图 + 「搜一下这个报错怎么解决」看识图搜索。" },
+  { t: "usage", text: "1.9k tok · cache 88% · effort high" },
+]);
+
+async function typeInto(node, text, myId, cps) {
+  for (const ch of text) {
+    if (myId !== chat._runId) return false;
+    node.insertBefore(document.createTextNode(ch), node.querySelector(".cursor"));
+    scrollBottom();
+    await sleep(cps);
+  }
+  return true;
+}
+async function playScript(script) {
+  const myId = chat._runId;
+  const mount = chat.querySelector(".live-slot");
+  const row = el('<div class="m-row"><div class="m-assistant"></div></div>');
+  mount.appendChild(row);
+  scrollBottom();
+  const box = row.firstChild;
+  for (const step of script) {
+    if (myId !== chat._runId) return;
+    if (step.t === "think") {
+      const d = el(`<div class="think live open"><div class="think-h">${ICONS.spark}<span class="lb">思考中…</span><span class="chev" style="display:none">${ICONS.chev}</span></div><div class="think-b"><span class="cursor"></span></div></div>`);
+      d.querySelector(".think-h").addEventListener("click", () => {
+        if (!d.classList.contains("live")) d.classList.toggle("open");
+      });
+      box.appendChild(d);
+      scrollBottom();
+      const body = d.querySelector(".think-b");
+      if (!await typeInto(body, step.text, myId, 14)) return;
+      body.querySelector(".cursor").remove();
+      d.querySelector(".lb").textContent = `已思考 ${Math.max(1, Math.round(step.text.length / 40))} 秒 · 点击展开`;
+      d.querySelector(".chev").style.display = "";
+      d.classList.remove("live");
+      await sleep(350);
+      d.classList.remove("open");
+    } else if (step.t === "act") {
+      const line = el('<div class="act"><span class="spinner"></span><span class="tname"></span><span class="targ"></span></div>');
+      box.appendChild(line);
+      scrollBottom();
+      for (const [name, arg] of step.tools) {
+        if (myId !== chat._runId) return;
+        line.querySelector(".tname").textContent = name + " ·";
+        line.querySelector(".targ").textContent = arg;
+        scrollBottom();
+        await sleep(1150);
+      }
+      line.classList.add("fade");
+      await sleep(480);
+      line.remove();
+    } else if (step.t === "text") {
+      const p = el('<div class="m-text"><span class="cursor"></span></div>');
+      box.appendChild(p);
+      scrollBottom();
+      if (!await typeInto(p, step.text, myId, 24)) return;
+      p.querySelector(".cursor").remove();
+    } else if (step.t === "usage") {
+      await sleep(250);
+      const txt = step.text.replace(/effort \w+/, `effort ${activeEffort.id}`);
+      box.appendChild(el(`<div class="m-usage">${esc(txt)}</div>`));
+      scrollBottom();
+    }
+  }
+}
+
+/* ================= 输入态 / 空态 / 发送 ================= */
+function updateInputState() {
+  const ta = chat.querySelector("textarea");
+  const enc = at.some(x => x.enc);
+  chat.querySelector(".ch-send").disabled = !!chat._streaming || enc;
+  chat.querySelector(".ch-plus").disabled = !!chat._streaming;
+  ta.placeholder = at.length ? "问问这些内容…（可只发附件）" : "发消息或图片给桌面 aide…";
+  chat.querySelector(".ch-stop").classList.toggle("can", !!chat._streaming);
+}
+/* 新会话空态：fresh 标志保证发首条消息时不再回填假历史 */
+function showEmpty() {
+  chat._runId++;
+  chat._loop++;
+  chat._fresh = true;
+  chat._streaming = false;
+  at.length = 0;
+  renderStrip();
+  updateGuard();
+  updateInputState();
+  chat.querySelector(".ch-history").innerHTML = "";
+  chat.querySelector(".live-slot").innerHTML = "";
+  chat.querySelector(".ch-msgs").style.display = "none";
+  chat.querySelector(".ch-empty").classList.add("show");
+  chat.querySelector(".ch-name").textContent = "新会话";
+}
+function ensureChatVisible() {
+  chat._fresh = false;
+  chat.querySelector(".ch-empty").classList.remove("show");
+  chat.querySelector(".ch-msgs").style.display = "";
+  buildHistory();
+}
+function stopSession() {
+  if (!chat._streaming) { flashHint("当前没有进行中的回复"); return; }
+  chat._runId++;
+  chat._loop++;
+  chat._streaming = false;
+  const mount = chat.querySelector(".live-slot");
+  mount.querySelectorAll(".cursor").forEach(c => c.remove());
+  mount.querySelectorAll(".act").forEach(a => a.remove());
+  mount.querySelectorAll(".think.live").forEach(t => {
+    t.classList.remove("live", "open");
+    t.querySelector(".lb").textContent = "已中断";
+    const chev = t.querySelector(".chev");
+    if (chev) chev.style.display = "";
+  });
+  mount.appendChild(el('<div class="m-sys">已停止会话 · 本轮回复已中断</div>'));
+  updateInputState();
+  flashHint("已停止会话", "warn");
+  scrollBottom();
+}
+/* 发送核心：图先文后落消息，按内容选剧本（err 截图 → 识图搜索） */
+async function doSend(imgs, text) {
+  if (!imgs.length && !text) return false;
+  if (imgs.length && !activeModel().img) {
+    flashHint("当前模型不支持附件，请先切换模型", "warn");
+    const g = chat.querySelector(".img-guard");
+    g.classList.remove("shake"); void g.offsetWidth; g.classList.add("shake");
+    return false;
+  }
+  chat._runId++;
+  if (chat.querySelector(".ch-empty").classList.contains("show")) {
+    chat.querySelector(".ch-empty").classList.remove("show");
+    chat.querySelector(".ch-msgs").style.display = "";
+    if (!chat._fresh) buildHistory();
+  }
+  const mount = chat.querySelector(".live-slot");
+  mount.innerHTML = "";
+  mount.appendChild(userRow(imgs, text));
+  at.length = 0;
+  renderStrip();
+  updateGuard();
+  const ta = chat.querySelector("textarea");
+  ta.value = "";
+  autoGrow();
+  scrollBottom();
+  chat._streaming = true;
+  updateInputState();
+  await sleep(480);
+  const counts = tally(imgs);
+  const script = counts.img && imgs.some(x => x.id === "err") ? REPLY_IMG()
+    : imgs.length ? REPLY_ACK(counts)
+    : REPLY_PLAIN();
+  await playScript(script);
+  chat._streaming = false;
+  updateInputState();
+  return true;
+}
+async function sendMsg() {
+  if (chat._streaming) return;
+  const imgs = at.filter(x => !x.enc);
+  const text = chat.querySelector("textarea").value.trim();
+  if (!imgs.length && !text) { flashHint("说点什么，或添加附件"); return; }
+  if (at.some(x => x.enc)) return;
+  chat._loop++;
+  await doSend(imgs, text);
+}
+
+/* ================= 演示剧本 ================= */
+async function runImgDemo() {
+  if (chat._streaming || !activeModel().img) return;
+  at.length = 0;
+  renderStrip();
+  updateGuard();
+  const ta = chat.querySelector("textarea");
+  ta.value = "搜一下这个报错怎么解决";
+  autoGrow();
+  attachIds(["err"], true);
+  await waitForEncode();
+  if (chat._streaming) return;
+  await sleep(420);
+  await doSend(at.filter(x => !x.enc).slice(), ta.value.trim());
+}
+async function autoLoop() {
+  const myLoop = ++chat._loop;
+  await sleep(500);
+  while (myLoop === chat._loop) {
+    await runImgDemo();
+    if (myLoop !== chat._loop) return;
+    await sleep(6500);
+    if (myLoop !== chat._loop) return;
+    chat.querySelector(".live-slot").innerHTML = "";
+    scrollBottom();
+  }
+}
+/* image_input_rejected / rollback 语义：消息退回输入框，图片回附件条 */
+async function demoReject() {
+  if (chat._streaming) return;
+  chat._runId++;
+  chat._loop++;
+  const myId = chat._runId;
+  setModel("deepseek-v4-pro");
+  at.length = 0;
+  attachIds(["err"], false);
+  const ta = chat.querySelector("textarea");
+  ta.value = "";
+  autoGrow();
+  ensureChatVisible();
+  const mount = chat.querySelector(".live-slot");
+  mount.innerHTML = "";
+  mount.appendChild(userRow(at.slice(), "搜一下这个报错怎么解决"));
+  at.length = 0;
+  renderStrip();
+  updateGuard();
+  scrollBottom();
+  chat._streaming = true;
+  updateInputState();
+  const line = el('<div class="act"><span class="spinner"></span><span class="tname">发送中 ·</span><span class="targ">images: 1 张 · deepseek-v4-pro</span></div>');
+  mount.appendChild(line);
+  scrollBottom();
+  await sleep(1400);
+  line.remove();
+  if (myId !== chat._runId) return;
+  const urow = mount.querySelector(".m-row.user");
+  if (urow) urow.remove();
+  attachIds(["err"], false);
+  mount.appendChild(el('<div class="m-sys">image_input_rejected · 模型不支持图片输入，消息已退回</div>'));
+  scrollBottom();
+  chat._streaming = false;
+  updateInputState();
+  flashHint("图片已退回输入框 · 切换模型后重试", "warn");
+  await sleep(650);
+  if (myId !== chat._runId) return;
+  chat.querySelector(".md-chip").click();
+}
+async function sendOnly() {
+  if (chat._streaming) return;
+  chat._loop++;
+  ensureChatVisible();
+  chat.querySelector(".live-slot").innerHTML = "";
+  at.length = 0;
+  renderStrip();
+  updateGuard();
+  const ta = chat.querySelector("textarea");
+  ta.value = "";
+  autoGrow();
+  attachIds(["sunset"], true);
+  await waitForEncode();
+  await doSend(at.filter(x => !x.enc).slice(), "");
+}
+/* 只发一个文件（无文字）：走 attachments 链路回执 */
+async function sendFileDemo() {
+  if (chat._streaming) return;
+  chat._loop++;
+  ensureChatVisible();
+  chat.querySelector(".live-slot").innerHTML = "";
+  at.length = 0;
+  renderStrip();
+  updateGuard();
+  const ta = chat.querySelector("textarea");
+  ta.value = "";
+  autoGrow();
+  attachItems([{ id: "f-api", type: "file", name: "api.ets", ext: "ets", size: "18 KB" }], true);
+  await sleep(220);
+  await doSend(at.slice(), "");
+}
+async function runImgDemoOnce() {
+  if (chat._streaming) return;
+  chat._loop++;
+  ensureChatVisible();
+  chat.querySelector(".live-slot").innerHTML = "";
+  await runImgDemo();
+}
+function replayDemo() {
+  chat._loop++;
+  ensureChatVisible();
+  chat.querySelector(".live-slot").innerHTML = "";
+  autoLoop();
+}
+function openFirstHistoryImage() {
+  const im = chat.querySelector(".ch-history img.gi");
+  if (!im) return;
+  const grid = im.closest(".g-grid");
+  const all = grid ? Array.from(grid.querySelectorAll(".gi")) : [im];
+  openLb(im.src, all.length, all.indexOf(im));
+}
+
+/* ================= 跨屏同步（模型 / 思考程度） ================= */
+function broadcastSync() {
+  if (window.parent === window) return;
+  window.parent.postMessage({ event: "sync", from: MY_ID, md: activeModel().value, ef: activeEffort.id }, "*");
+}
+function applySync(d) {
+  if (typeof d.md === "string" && MODELS.some(m => m.value === d.md) && d.md !== activeModel().value) {
+    mdPick.cur = d.md;
+    syncModel();
+    updateGuard();
+  }
+  const ef = EF_FAKE.find(x => x.id === d.ef);
+  if (ef && ef.id !== activeEffort.id) { activeEffort = ef; syncEffort(); }
+}
+
+/* ================= 初始化 ================= */
+function initChat() {
+  chat.classList.add("show");
+  chat._runId = 0;
+  chat._loop = 0;
+  chat._streaming = false;
+  chat._fresh = false;
+  buildHistory();
+
+  chat.querySelector(".back").addEventListener("click", () => flashHint("返回会话列表（原型内未接线）"));
+  chat.querySelector(".ch-stop").addEventListener("click", stopSession);
+  /* ＋ 菜单（工具行右端）：拍照 / 图片 / 视频 / 文件 */
+  const plusWrap = chat.querySelector(".plus-wrap");
+  const plusPop = chat.querySelector(".plus-pop");
+  chat.querySelector(".ch-plus").addEventListener("click", e => {
+    e.stopPropagation();
+    if (chat._streaming) return;
+    plusPop.classList.toggle("show");
+  });
+  plusPop.addEventListener("click", e => {
+    const btn = e.target.closest(".opt");
+    if (!btn) return;
+    plusPop.classList.remove("show");
+    if (chat._streaming) return;
+    if (btn.dataset.act === "camera") openCamera();
+    else if (btn.dataset.act === "img") openPicker("img");
+    else if (btn.dataset.act === "video") openPicker("video");
+    else if (btn.dataset.act === "file") openPicker("file");
+  });
+
+  const ta = chat.querySelector("textarea");
+  ta.addEventListener("input", autoGrow);
+  ta.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMsg(); } });
+  chat.querySelector(".ch-send").addEventListener("click", sendMsg);
+
+  /* 附件条：移除 / 续选 / 点缩略图放大 */
+  const strip = chat.querySelector(".at-strip");
+  strip.addEventListener("click", e => {
+    const rm = e.target.closest(".at-rm");
+    if (rm) { at.splice(+rm.dataset.i, 1); renderStrip(); updateGuard(); updateInputState(); return; }
+    if (e.target.closest(".at-add")) { if (!chat._streaming) openPicker("img"); return; }
+    const th = e.target.closest(".at-thumb");
+    if (th) { const it2 = at[+th.dataset.i]; openLb(it2.src, at.length, +th.dataset.i); return; }
+    if (e.target.closest(".at-file")) flashHint("文件预览（原型内未接线）");
+  });
+
+  /* 守卫行点击 → 打开模型浮层（stopPropagation 防被 document 关闭） */
+  chat.querySelector(".img-guard").addEventListener("click", e => {
+    e.stopPropagation();
+    chat.querySelector(".md-chip").click();
+  });
+
+  /* 模型浮层 */
+  const mdWrap = chat.querySelector(".md-wrap");
+  const mdPop = chat.querySelector(".md-pop");
+  chat.querySelector(".md-chip").addEventListener("click", e => {
+    e.stopPropagation();
+    if (!mdPop.classList.contains("show")) renderMdOpts();
+    mdPop.classList.toggle("show");
+  });
+  mdPop.addEventListener("click", e => {
+    const btn = e.target.closest(".opt");
+    if (!btn) return;
+    mdPop.classList.remove("show");
+    if (btn.dataset.md === activeModel().value) return;
+    setModel(btn.dataset.md);
+    if (activeModel().img || !at.length) flashHint(`模型 · ${activeModel().displayName}`, "ok");
+  });
+
+  /* 思考程度浮层 */
+  const efWrap = chat.querySelector(".ef-wrap");
+  const efPop = chat.querySelector(".ef-pop");
+  chat.querySelector(".ef-chip").addEventListener("click", e => {
+    e.stopPropagation();
+    if (!efPop.classList.contains("show")) renderEfOpts();
+    efPop.classList.toggle("show");
+  });
+  efPop.addEventListener("click", e => {
+    const btn = e.target.closest(".opt");
+    if (!btn) return;
+    const ef = EF_FAKE.find(x => x.id === btn.dataset.ef);
+    efPop.classList.remove("show");
+    if (!ef || ef.id === activeEffort.id) return;
+    activeEffort = ef;
+    syncEffort();
+    flashHint(`思考程度 · ${ef.name}，随下一条消息生效`, "ok");
+    broadcastSync();
+  });
+  document.addEventListener("click", e => {
+    if (!mdWrap.contains(e.target)) mdPop.classList.remove("show");
+    if (!efWrap.contains(e.target)) efPop.classList.remove("show");
+    if (!plusWrap.contains(e.target)) plusPop.classList.remove("show");
+  });
+
+  /* 消息区附件：视频卡 / 文件卡 / 图片 → 预览或提示 */
+  chat.querySelector(".ch-msgs").addEventListener("click", e => {
+    const vc = e.target.closest(".v-card");
+    if (vc) {
+      const grid = vc.closest(".g-grid");
+      const all = Array.from(grid.querySelectorAll(".gi, .v-card"));
+      openLb(vc.dataset.src, all.length, all.indexOf(vc));
+      return;
+    }
+    if (e.target.closest(".f-card")) { flashHint("文件预览（原型内未接线）"); return; }
+    const im = e.target.closest("img.gi");
+    if (!im) return;
+    const grid = im.closest(".g-grid");
+    const all = grid ? Array.from(grid.querySelectorAll(".gi")) : [im];
+    openLb(im.src, all.length, all.indexOf(im));
+  });
+
+  /* 全屏预览关闭 */
+  const lb = chat.querySelector(".lb-mask");
+  lb.addEventListener("click", () => lb.classList.remove("show"));
+
+  /* 选择面板：分段 / 相册 / 网格（图+视频）/ 文件列表 */
+  chat.querySelector(".pk-cancel").addEventListener("click", closePicker);
+  chat.querySelector(".pk-done").addEventListener("click", commitPicker);
+  chat.querySelector(".pk-segs").addEventListener("click", e => {
+    const s = e.target.closest(".pk-seg");
+    if (s) setSeg(s.dataset.seg);
+  });
+  chat.querySelector(".pk-tabs").addEventListener("click", e => {
+    const t = e.target.closest(".pk-tab");
+    if (t) setAlbum(t.dataset.album);
+  });
+  chat.querySelector(".pk-grid").addEventListener("click", e => {
+    const it = e.target.closest(".pk-it");
+    if (it) pkToggle(it.dataset.id);
+  });
+  chat.querySelector(".pk-list").addEventListener("click", e => {
+    const f = e.target.closest(".pk-file");
+    if (f) pkToggle(f.dataset.id);
+  });
+
+  /* 系统相机 */
+  chat.querySelector(".cam-x").addEventListener("click", closeCamera);
+  chat.querySelector(".cam-shutter").addEventListener("click", shoot);
+
+  /* 初始形态 */
+  syncModel();
+  syncEffort();
+  updateInputState();
+  if (STATE0 === "attach") attachIds(["sunset", "err", "mountain"], true);
+  if (STATE0 === "picker") { setAlbum(ALBUM0); openPicker(); }
+  if (DEMO0) autoLoop();
+}
+
+/* ================= 展台遥控（postMessage） ================= */
+window.addEventListener("message", e => {
+  const d = e.data;
+  if (!d || typeof d !== "object") return;
+  if (d.event === "sync" && d.from !== MY_ID) { applySync(d); return; }
+  const ta = chat.querySelector("textarea");
+  switch (d.cmd) {
+    case "plus": chat.querySelector(".ch-plus").click(); break;
+    case "camera":
+      if (!chat._streaming) { openCamera(); setTimeout(() => shoot(), 850); }
+      break;
+    case "pick": if (!chat._streaming) openPicker("img"); break;
+    case "video": if (!chat._streaming) openPicker("video"); break;
+    case "file": if (!chat._streaming) openPicker("file"); break;
+    case "album": setAlbum(d.album || "recent"); break;
+    case "selshots": {
+      if (pk.seg !== "img") { pk.seg = "img"; pk.sel = []; }
+      const alb = ALBUMS.find(a => a.id === pk.album) || ALBUMS[0];
+      pk.sel = alb.items.slice(0, Math.min(2, Math.max(0, MAX - at.length)));
+      if (chat.querySelector(".pk-mask").classList.contains("show")) renderPicker();
+      else openPicker();
+      break;
+    }
+    case "pkdone": commitPicker(); break;
+    case "pkcancel": closePicker(); break;
+    case "add": {
+      const pool = ["sunset", "mountain", "city", "abstract"];
+      attachIds([pool[Math.floor(Math.random() * pool.length)]], true);
+      break;
+    }
+    case "fill": ta.value = "搜一下这个报错怎么解决"; autoGrow(); break;
+    case "clear":
+      at.length = 0; renderStrip(); updateGuard(); updateInputState();
+      ta.value = ""; autoGrow();
+      break;
+    case "send": sendMsg(); break;
+    case "sendimg": runImgDemoOnce(); break;
+    case "sendonly": sendOnly(); break;
+    case "sendfile": sendFileDemo(); break;
+    case "reject": demoReject(); break;
+    case "replay": replayDemo(); break;
+    case "stop": stopSession(); break;
+    case "lightbox": openFirstHistoryImage(); break;
+    case "empty": showEmpty(); break;
+    case "modelpop": chat.querySelector(".md-chip").click(); break;
+  }
+});
+
+initChat();
+</script>
+</body>
+</html>

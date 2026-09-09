@@ -10,6 +10,10 @@
  *  - toast 宿主：toastModel 全局单例（抽屉切换供应商/工作区/会话等轻提示）
  *  - 输入区工具行（原型 .ch-bar）：模型/思考程度两 chip，弹层为自绘小面板
  *    （.md-pop/.ef-pop：全屏遮罩 + 锚输入栏上方，返回键经 store.handlePopups 收）
+ *  - 附件域（原型 .plus-pop/.at-strip/.lightbox）：＋ 菜单选入（拍照/图片/
+ *    视频/文件）→ 输入行上方附件条（编码/错误遮罩、点格移除）→ 气泡媒体
+ *    栅格（1 Contain 大图 / 2 双列 / 3+ 三列）+ 全屏灯箱；选入与编码在
+ *    ChatAttachments（单例），忙碌排队照发（载荷随消息透传 sidecar）
  *  - 抽屉：ChatDrawer（自遮罩 + 左滑面板 + 供应商/工作区半模态）
  *  - 连接状态反应：needsPairing / idle 不再 router.back——Index 观察 conn
  *    状态自动落回连接页
@@ -36,6 +40,7 @@
  * 思考卡：ThinkingCard 独立组件（一屏限高内滚 + active 段贴内底 +
  * 段收尾自动收起），状态机在 ChatStore，页面只传视口限高。
  */
+import { common } from '@kit.AbilityKit';
 import { ConnModel, connModel } from '../conn/ConnModel';
 import { ChatModel, chatModel, EFFORT_TIERS, effortLabel, modelDisplayName } from '../session/ChatModel';
 import { EffortTier } from '../session/ChatModel';
@@ -45,8 +50,9 @@ import { ProviderModel, providerModel } from '../session/ProviderModel';
 import { ChatStore } from '../session/chat/ChatStore';
 import {
   ContentBlock, TextBlock, ThinkingBlock, ToolCallBlock, SubagentEntry,
-  SubagentBlock, ChatMessage, PendingJump, LiveActivity
+  SubagentBlock, ChatMessage, PendingJump, LiveActivity, ImageBlock, VideoBlock
 } from '../session/chat/ChatBlocks';
+import { Attachment, ChatAttachments, attachmentsModel, durationLabel } from '../session/chat/ChatAttachments';
 import { toolSummary } from '../session/chat/ChatWire';
 import { PermissionSheet } from '../session/chat/PermissionSheet';
 import { MarkdownText } from '../session/chat/MarkdownText';
@@ -78,6 +84,9 @@ const MODEL_POP_MAX_W: number = 236;
 
 /** 思考程度浮层卡宽（原型 .ef-pop 定宽 218；三档行结构固定，无需自适应）。 */
 const EFFORT_POP_W: number = 218;
+
+/** 附件选入菜单卡宽（原型 .plus-pop 定宽 224：四行图标 + 名称 + 描述）。 */
+const PLUS_POP_W: number = 224;
 
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
@@ -111,6 +120,12 @@ export struct ChatPage {
   @Local toast: ToastModel = toastModel;
   @Local pv: ProviderModel = providerModel;
   @Local draft: string = '';
+  /** 附件域（单例：选入/编码/移除全在 ChatAttachments；发送后与切会话整体复位）。 */
+  @Local att: ChatAttachments = attachmentsModel;
+  /** 图片灯箱态（lbUri 空串 = 关闭；count/idx 仅计数文案——单图无滑动切换）。 */
+  @Local lbUri: string = '';
+  @Local lbCount: number = 0;
+  @Local lbIdx: number = 0;
   /** 列表重建纪元（if 分支开关）：翻转即销毁重建 List——initialIndex 仅创建
    * 时生效、动态改值不重锚，重建是 LazyForEach「顶部远跳底部」的唯一通道。 */
   @Local listEpoch: number = 0;
@@ -160,6 +175,11 @@ export struct ChatPage {
     this.store.onMessagesStructureChanged(this.syncSource);
     this.syncSource();
     this.model.ensureListener();
+    // 附件选入失败轻提示注入（ChatAttachments 不 import toastModel 防循环依赖：
+    // ChatDrawer → ChatModel → ChatAttachments 已成链，再回指即环）
+    attachmentsModel.pickToast = (msg: string): void => {
+      toastModel.show(msg, 'warn');
+    };
     // 模型/effort 域首同步（供应商未加载时 syncModelEffort 自行补拉）
     void this.model.syncModelEffort();
   }
@@ -222,8 +242,12 @@ export struct ChatPage {
 
   // ── 交互 ──
 
+  /** 可发：已连接 + 附件无编码中/错误项 +（有草稿或有附件）；附件-only 合法。 */
   canSend(): boolean {
-    return this.conn.state === 'authed' && this.draft.trim() !== '';
+    return this.conn.state === 'authed'
+      && !this.att.anyEncoding()
+      && !this.att.anyError()
+      && (this.draft.trim() !== '' || this.att.items.length > 0);
   }
 
   onSend(): void {
@@ -232,9 +256,34 @@ export struct ChatPage {
     }
     const text: string = this.draft;
     this.draft = '';
-    this.model.send(text);
+    // 附件随发送即时清条（model 内同步快照载荷后 reset）；气泡由 user_message
+    // display 回灌渲染，不依赖输入区状态
+    this.model.send(text, this.att);
     // 发送后收起键盘：清除 TextArea 焦点（发送按钮本身不可聚焦，不清则输入法常驻）
     this.getUIContext().getFocusController().clearFocus();
+  }
+
+  /** 输入框占位：有附件提示可只发附件 / 忙碌排队 / 常规。 */
+  private inputPlaceholder(): string {
+    if (this.att.items.length > 0) {
+      return '问问这些内容…（可只发附件）';
+    }
+    return this.store.isBusy ? '回复中，发送将排队等候' : '发送消息';
+  }
+
+  // ── 图片灯箱（单图直显，无滑动切换）──
+
+  private openLightbox(uri: string, count: number, idx: number): void {
+    if (uri === '') {
+      return;
+    }
+    this.lbUri = uri;
+    this.lbCount = count;
+    this.lbIdx = idx;
+  }
+
+  private closeLightbox(): void {
+    this.lbUri = '';
   }
 
   /** 停止会话可点（interrupt_session 语义；闲态置灰）。 */
@@ -565,6 +614,10 @@ export struct ChatPage {
   @Builder
   userMessage(m: ChatMessage) {
     Column({ space: 8 }) {
+      // 媒体栅格先行（display 块序：媒体 → 文本 → 引用）；文本/引用照旧走块循环
+      if (this.userMediaBlocks(m).length > 0) {
+        this.userMediaGrid(this.userMediaBlocks(m))
+      }
       ForEach(m.blocks, (b: ContentBlock) => {
         if (b instanceof TextBlock) {
           Text(b.text)
@@ -582,6 +635,157 @@ export struct ChatPage {
     }
     .width('100%')
     .alignItems(HorizontalAlign.End)
+  }
+
+  /** 用户消息里的媒体块（图片/视频单独栅格渲染；下方块循环对它们无分支自动跳过）。 */
+  private userMediaBlocks(m: ChatMessage): ContentBlock[] {
+    const out: ContentBlock[] = [];
+    for (let i = 0; i < m.blocks.length; i++) {
+      const b: ContentBlock = m.blocks[i];
+      if (b instanceof ImageBlock || b instanceof VideoBlock) {
+        out.push(b);
+      }
+    }
+    return out;
+  }
+
+  /** 媒体分行（3+ 格三列手动分行，替代 Flex wrap 的行距缺失；右端对齐）。 */
+  private mediaRows(blocks: ContentBlock[]): ContentBlock[][] {
+    const rows: ContentBlock[][] = [];
+    let cur: ContentBlock[] = [];
+    for (let i = 0; i < blocks.length; i++) {
+      cur.push(blocks[i]);
+      if (cur.length === 3) {
+        rows.push(cur);
+        cur = [];
+      }
+    }
+    if (cur.length > 0) {
+      rows.push(cur);
+    }
+    return rows;
+  }
+
+  /** 用户媒体栅格：1 = Contain 大图/视频卡；2 = 双格 132；3+ = 三列小格 92。 */
+  @Builder
+  userMediaGrid(blocks: ContentBlock[]) {
+    if (blocks.length === 1) {
+      this.userMediaSingle(blocks[0])
+    } else if (blocks.length === 2) {
+      Row({ space: 5 }) {
+        ForEach(blocks, (b: ContentBlock, i: number) => {
+          this.userMediaTile(b, i, 2, 132)
+        }, (b: ContentBlock) => b.id)
+      }
+      .alignItems(VerticalAlign.Center)
+    } else {
+      Column({ space: 5 }) {
+        ForEach(this.mediaRows(blocks), (row: ContentBlock[], ri: number) => {
+          Row({ space: 5 }) {
+            ForEach(row, (b: ContentBlock, ci: number) => {
+              this.userMediaTile(b, ri * 3 + ci, blocks.length, 92)
+            }, (b: ContentBlock) => b.id)
+          }
+        }, (_row: ContentBlock[], ri: number) => `media-row-${ri}`)
+      }
+      .alignItems(HorizontalAlign.End)
+    }
+  }
+
+  /** 单媒体：图 = Contain ≤200×220（点击进灯箱）；视频 = 200×92 海报卡。 */
+  @Builder
+  userMediaSingle(b: ContentBlock) {
+    if (b instanceof ImageBlock) {
+      Image(b.dataUri)
+        .objectFit(ImageFit.Contain)
+        .borderRadius(10)
+        .constraintSize({ maxWidth: 200, maxHeight: 220 })
+        .onClick(() => {
+          this.openLightbox(b.dataUri, 1, 0);
+        })
+    } else if (b instanceof VideoBlock) {
+      this.vCard(b, 0, 1)
+    }
+  }
+
+  /** 视频卡（首帧海报 + 播放钮 + 时长徽标；点击进灯箱看海报大图——协议无视频流）。 */
+  @Builder
+  vCard(b: VideoBlock, idx: number, count: number) {
+    Stack({ alignContent: Alignment.Center }) {
+      Image(b.posterUri)
+        .width('100%')
+        .height('100%')
+        .objectFit(ImageFit.Cover)
+        .borderRadius(10)
+      Column() {
+        Text('▶')
+          .fontSize(13)
+          .fontColor(Color.White)
+      }
+      .width(30)
+      .height(30)
+      .borderRadius(15)
+      .backgroundColor('#800F1014')
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
+      Text(durationLabel(b.durationMs))
+        .fontSize(9.5)
+        .fontColor(Color.White)
+        .fontFamily('monospace')
+        .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+        .borderRadius(7)
+        .backgroundColor('#9E000000')
+        .position({ x: '100%', y: '100%' })
+        .markAnchor({ x: '100%', y: '100%' })
+        .offset({ x: -5, y: -5 })
+    }
+    .width(200)
+    .height(92)
+    .borderRadius(10)
+    .onClick(() => {
+      this.openLightbox(b.posterUri, count, idx);
+    })
+  }
+
+  /** 栅格小格（2 列 132 / 3+ 列 92；视频格内嵌小播放钮 + 时长徽标；点格进灯箱）。 */
+  @Builder
+  userMediaTile(b: ContentBlock, idx: number, count: number, size: number) {
+    Stack({ alignContent: Alignment.BottomEnd }) {
+      Image(b instanceof ImageBlock ? b.dataUri : (b instanceof VideoBlock ? b.posterUri : ''))
+        .width('100%')
+        .height('100%')
+        .objectFit(ImageFit.Cover)
+        .borderRadius(10)
+      if (b instanceof VideoBlock) {
+        Column() {
+          Text('▶')
+            .fontSize(11)
+            .fontColor(Color.White)
+        }
+        .width(26)
+        .height(26)
+        .borderRadius(13)
+        .backgroundColor('#800F1014')
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+        .position({ x: '50%', y: '50%' })
+        .markAnchor({ x: '50%', y: '50%' })
+        Text(durationLabel(b.durationMs))
+          .fontSize(9)
+          .fontColor(Color.White)
+          .fontFamily('monospace')
+          .padding({ left: 5, right: 5, top: 1.5, bottom: 1.5 })
+          .borderRadius(7)
+          .backgroundColor('#9E000000')
+          .margin(5)
+      }
+    }
+    .width(size)
+    .height(size)
+    .borderRadius(10)
+    .onClick(() => {
+      this.openLightbox(b instanceof ImageBlock ? b.dataUri : (b instanceof VideoBlock ? b.posterUri : ''), count, idx);
+    })
   }
 
   /** 用户消息里的 @mention 引用文件卡片（transcript 拆出的 Read 附件，无展开态）。 */
@@ -809,12 +1013,374 @@ export struct ChatPage {
     .padding({ left: 16, right: 16, top: 2, bottom: 2 })
   }
 
+  // ── 附件条 + 选入菜单（原型 .at-strip / .plus-pop；状态在 ChatAttachments）──
+
+  /** 附件条：输入行上方横向滚动（媒体格 64 / 文件卡 152 / ＋ 追加格；点格即移除）。 */
+  @Builder
+  atStripView() {
+    Scroll() {
+      Row({ space: 8 }) {
+        ForEach(this.att.items, (it: Attachment, i: number) => {
+          if (it.type === 'file') {
+            this.atFileCard(it, i)
+          } else {
+            this.atMediaTile(it, i)
+          }
+        }, (it: Attachment, i: number) => `${it.id}-${i}`)
+        if (this.att.room() > 0) {
+          this.atAddTile()
+        }
+      }
+      .alignItems(VerticalAlign.Center)
+    }
+    .scrollable(ScrollDirection.Horizontal)
+    .scrollBar(BarState.Off)
+    .width('100%')
+  }
+
+  /** 附件条媒体格（64×64：图 = 本图缩略 / 视频 = 首帧 + 时长徽标；遮罩示编码/错误）。 */
+  @Builder
+  atMediaTile(it: Attachment, i: number) {
+    Stack({ alignContent: Alignment.TopEnd }) {
+      if (it.thumb !== null) {
+        Image(it.thumb)
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Cover)
+          .borderRadius(12)
+      } else {
+        Column()
+          .width('100%')
+          .height('100%')
+          .borderRadius(12)
+          .backgroundColor($r('app.color.input_bg'))
+      }
+      if (it.state === 'encoding') {
+        Column() {
+          LoadingProgress().width(16).height(16).color($r('app.color.accent'))
+        }
+        .width('100%')
+        .height('100%')
+        .borderRadius(12)
+        .backgroundColor('#A6FFFFFF')
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+      } else if (it.state === 'error') {
+        Column() {
+          Text('!')
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.status_warn'))
+        }
+        .width('100%')
+        .height('100%')
+        .borderRadius(12)
+        .backgroundColor('#A6FFFFFF')
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+      }
+      if (it.type === 'video' && it.state === 'ready') {
+        Text(durationLabel(it.durationMs))
+          .fontSize(9.5)
+          .fontColor(Color.White)
+          .fontFamily('monospace')
+          .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+          .borderRadius(7)
+          .backgroundColor('#9E000000')
+          .position({ x: '100%', y: '100%' })
+          .markAnchor({ x: '100%', y: '100%' })
+          .offset({ x: -5, y: -5 })
+      }
+      // 移除角标（无独立点击：整格点击即移除，✕ 区落进同一手势）
+      Row() {
+        SymbolGlyph($r('sys.symbol.xmark'))
+          .fontSize(9)
+          .fontColor([Color.White])
+      }
+      .width(18)
+      .height(18)
+      .borderRadius(9)
+      .backgroundColor('#B81D2129')
+      .justifyContent(FlexAlign.Center)
+      .alignItems(VerticalAlign.Center)
+      .margin(4)
+    }
+    .width(64)
+    .height(64)
+    .onClick(() => {
+      this.att.remove(i);
+    })
+  }
+
+  /** 附件条文件卡（152×64：扩展名徽标 + 名称 + 大小/错误行；点卡即移除）。 */
+  @Builder
+  atFileCard(it: Attachment, i: number) {
+    Row({ space: 8 }) {
+      Row() {
+        Text(it.ext !== '' ? it.ext : '?')
+          .fontSize(9.5)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Color.White)
+      }
+      .width(32)
+      .height(32)
+      .borderRadius(9)
+      .backgroundColor(this.extBadgeColor(it.ext))
+      .justifyContent(FlexAlign.Center)
+      .alignItems(VerticalAlign.Center)
+
+      Column({ space: 2 }) {
+        Text(it.name)
+          .fontSize(11)
+          .fontColor($r('app.color.text_primary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        if (it.state === 'error') {
+          Text(it.errorText !== '' ? it.errorText : '无法读取')
+            .fontSize(9.5)
+            .fontColor($r('app.color.status_warn'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        } else {
+          Text(`${it.sizeLabel} · 文件`)
+            .fontSize(9.5)
+            .fontColor($r('app.color.text_secondary'))
+            .maxLines(1)
+        }
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+    }
+    .width(152)
+    .height(64)
+    .padding({ left: 10, right: 10 })
+    .borderRadius(12)
+    .backgroundColor($r('app.color.card_bg'))
+    .border({ width: 1, color: $r('app.color.line') })
+    .alignItems(VerticalAlign.Center)
+    .onClick(() => {
+      this.att.remove(i);
+    })
+  }
+
+  /** 文件徽标色（扩展名 → 强调色；代码紫 / PDF 红 / 文档蓝 / 压缩橙 / 表格绿）。 */
+  private extBadgeColor(ext: string): ResourceColor {
+    if (ext === 'ets' || ext === 'ts') {
+      return '#7B61FF';
+    }
+    if (ext === 'pdf') {
+      return '#F53F3F';
+    }
+    if (ext === 'doc' || ext === 'docx') {
+      return '#0A59F7';
+    }
+    if (ext === 'zip') {
+      return '#FF7D00';
+    }
+    if (ext === 'csv') {
+      return '#00B42A';
+    }
+    return '#86909C';
+  }
+
+  /** ＋ 追加格（余量 > 0 时末位虚线格；点击重开选入菜单）。 */
+  @Builder
+  atAddTile() {
+    Column({ space: 4 }) {
+      SymbolGlyph($r('sys.symbol.plus'))
+        .fontSize(16)
+        .fontColor([$r('app.color.text_secondary')])
+      Text(`${this.att.items.length}/5`)
+        .fontSize(9)
+        .fontColor($r('app.color.text_secondary'))
+        .fontFamily('monospace')
+    }
+    .width(64)
+    .height(64)
+    .borderRadius(12)
+    .border({ width: 1.2, color: $r('app.color.line'), style: BorderStyle.Dashed })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .onClick(() => {
+      this.store.plusPop = true;
+      this.store.modelPop = false;
+      this.store.effortPop = false;
+    })
+  }
+
+  /** ＋ 按钮（chip 行右端；忙碌不置灰——排队照发，附件随消息透传 sidecar）。 */
+  @Builder
+  plusBtn() {
+    Row() {
+      SymbolGlyph($r('sys.symbol.plus'))
+        .fontSize(15)
+        .fontColor([$r('app.color.text_secondary')])
+    }
+    .width(32)
+    .height(32)
+    .borderRadius(10)
+    .backgroundColor($r('app.color.input_bg'))
+    .border({ width: 1, color: $r('app.color.line') })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(VerticalAlign.Center)
+    .onClick(() => {
+      this.store.plusPop = !this.store.plusPop;
+      this.store.modelPop = false;
+      this.store.effortPop = false;
+    })
+  }
+
+  /** 附件选入菜单（原型 .plus-pop：遮罩 + 工具行上方右侧面板，四入口；结构同 md-pop）。 */
+  @Builder
+  plusPopView() {
+    Column() {
+      Column({ space: 4 }) {
+        this.plusRow('photo', '拍照', '系统相机直拍直回', $r('sys.symbol.camera'))
+        this.plusRow('image', '图片', '相册图片，自动压缩', $r('sys.symbol.picture'))
+        this.plusRow('video', '视频', '取首帧画面与时长', $r('sys.symbol.video'))
+        this.plusRow('file', '文件', '文本类文件内联发送', $r('sys.symbol.doc'))
+      }
+      .width(PLUS_POP_W)
+      .padding(6)
+      .borderRadius(14)
+      .backgroundColor($r('app.color.card_bg'))
+      .border({ width: 1, color: $r('app.color.line') })
+      .shadow({ radius: 36, color: '#241D2129', offsetX: 0, offsetY: 12 })
+      .margin({ right: 12, bottom: this.chipBarHeight + 16 })
+      .onClick(() => {
+        // 空点击拦截落穿
+      })
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.End)
+    .alignItems(HorizontalAlign.End)
+    .onClick(() => {
+      // 遮罩即容器：空白处点击收起
+      this.store.handlePopups();
+    })
+    .transition(TransitionEffect.OPACITY.animation({ duration: 220 }))
+  }
+
+  /** 选入入口行（图标圆 + 名称 + 描述）。 */
+  @Builder
+  plusRow(kind: string, name: string, desc: string, icon: Resource) {
+    Row({ space: 10 }) {
+      Row() {
+        SymbolGlyph(icon)
+          .fontSize(14)
+          .fontColor([$r('app.color.text_primary')])
+      }
+      .width(30)
+      .height(30)
+      .borderRadius(9)
+      .backgroundColor($r('app.color.input_bg'))
+      .justifyContent(FlexAlign.Center)
+      .alignItems(VerticalAlign.Center)
+
+      Column({ space: 1 }) {
+        Text(name)
+          .fontSize(13.5)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+        Text(desc)
+          .fontSize(11)
+          .fontColor($r('app.color.text_secondary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+    }
+    .width('100%')
+    .padding({ left: 9, right: 9, top: 8, bottom: 8 })
+    .borderRadius(12)
+    .alignItems(VerticalAlign.Center)
+    .onClick(() => {
+      this.onPlusPick(kind);
+    })
+  }
+
+  /** 选入分发：先收菜单再过余量闸门（满 5 仅提示）；拍照需 UI 宿主 Context。 */
+  private onPlusPick(kind: string): void {
+    this.store.plusPop = false;
+    if (this.att.room() <= 0) {
+      toastModel.show('最多附 5 个附件', 'warn');
+      return;
+    }
+    if (kind === 'photo') {
+      const c: common.Context | undefined = this.getUIContext().getHostContext();
+      if (c !== undefined) {
+        void this.att.takePhoto(c);
+      }
+      return;
+    }
+    if (kind === 'image') {
+      void this.att.pickImages();
+      return;
+    }
+    if (kind === 'video') {
+      void this.att.pickVideos();
+      return;
+    }
+    if (kind === 'file') {
+      void this.att.pickFiles();
+    }
+  }
+
+  /** 图片灯箱（全屏遮罩 + 计数 + 大图；点遮罩/✕ 关闭；✕ 为兄弟节点不与遮罩竞争手势）。 */
+  @Builder
+  lightboxView() {
+    Stack({ alignContent: Alignment.TopEnd }) {
+      Column({ space: 24 }) {
+        Text(this.lbCount > 1 ? `${this.lbIdx + 1} / ${this.lbCount}` : '预览')
+          .fontSize(12)
+          .fontColor('#B3FFFFFF')
+          .margin({ top: 40 })
+        Image(this.lbUri)
+          .objectFit(ImageFit.Contain)
+          .constraintSize({ maxWidth: '92%', maxHeight: '76%' })
+          .borderRadius(8)
+      }
+      .width('100%')
+      .height('100%')
+      .alignItems(HorizontalAlign.Center)
+      .onClick(() => {
+        this.closeLightbox();
+      })
+
+      Row() {
+        SymbolGlyph($r('sys.symbol.xmark'))
+          .fontSize(14)
+          .fontColor([Color.White])
+      }
+      .width(34)
+      .height(34)
+      .borderRadius(17)
+      .backgroundColor('#24FFFFFF')
+      .justifyContent(FlexAlign.Center)
+      .alignItems(VerticalAlign.Center)
+      .margin({ top: 40, right: 16 })
+      .onClick(() => {
+        this.closeLightbox();
+      })
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('#F00F1014')
+    .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+  }
+
   @Builder
   inputBarView() {
-    // 原型 .ch-input：输入行在上、工具行（.ch-bar 两 chip）在下
+    // 原型 .ch-input：附件条（有附件时）在上、输入行、工具行（.ch-bar）在下
     Column({ space: 8 }) {
+      if (this.att.items.length > 0) {
+        this.atStripView()
+      }
       Row({ space: 8 }) {
-        TextArea({ text: this.draft, placeholder: this.store.isBusy ? '回复中，发送将排队等候' : '发送消息' })
+        TextArea({ text: this.draft, placeholder: this.inputPlaceholder() })
           .onChange((value: string) => {
             this.draft = value;
           })
@@ -850,10 +1416,12 @@ export struct ChatPage {
       .width('100%')
       .alignItems(VerticalAlign.Bottom)
 
-      // 工具行（原型 .ch-bar）：模型 / 思考程度
+      // 工具行（原型 .ch-bar）：模型 / 思考程度 / ＋ 附件（右端）
       Row({ space: 8 }) {
         this.modelChip()
         this.effortChip()
+        Blank()
+        this.plusBtn()
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
@@ -1332,12 +1900,15 @@ export struct ChatPage {
       .width('100%')
       .height('100%')
 
-      // chip 浮层（自绘小面板：遮罩 + 锚输入栏上方；toast/抽屉之下）
+      // chip / 附件浮层（自绘小面板：遮罩 + 锚输入栏上方；toast/抽屉之下）
       if (this.store.modelPop) {
         this.modelPopView()
       }
       if (this.store.effortPop) {
         this.effortPopView()
+      }
+      if (this.store.plusPop) {
+        this.plusPopView()
       }
 
       // toast 宿主（顶栏下方居中；toastModel 由抽屉/本页共享写入）
@@ -1347,6 +1918,11 @@ export struct ChatPage {
 
       // 抽屉（自遮罩 + 左滑面板 + 供应商/工作区半模态；关闭时零渲染）
       ChatDrawer()
+
+      // 图片灯箱（最顶层：全屏遮罩 + 大图 + 关闭；点任意处关闭）
+      if (this.lbUri !== '') {
+        this.lightboxView()
+      }
     }
     .width('100%')
     .height('100%')

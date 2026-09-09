@@ -6,7 +6,8 @@
  * 本文件已收录：Session / WorkspaceInfo（会话列表页域）；
  * HistoryBlock / ChatMessageItem / LoadMessagesResult（会话页历史域）；
  * BgTaskInfo（后台任务快照域；ohos 专有 RPC list_bg_tasks，上游 SDK 暂无对应）；
- * ProviderModelMappings / ProviderConfigView（抽屉供应商域；get_providers 返回）。
+ * ProviderModelMappings / ProviderConfigView（抽屉供应商域；get_providers 返回）；
+ * SendImage / SendDisplayBlock（发送域：图片附件 + 用户气泡 display 回灌块）。
  */
 
 export interface Session {
@@ -164,4 +165,39 @@ export interface IdentityDrift {
   lastProvider: string | null;
   /** 会话记住的模型；null = 没记过。 */
   lastModel: string | null;
+}
+
+/**
+ * 发送图片附件（镜像 agent-sidecar types.ts 的 ImageAttachment；Rust
+ * SendMessageArgs.images 数组项的 serde camelCase 形状）。data 为不带
+ * data: 前缀的裸 base64（协议约定，渲染前缀由各端渲染层自拼）；
+ * mediaType 限 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'。
+ */
+export interface SendImage {
+  data: string;
+  mediaType: string;
+}
+
+/**
+ * send_message 的 display 回灌块：用户消息的富形态（图片/文本/文件引用），
+ * 桌面/PWA 端按块渲染用户气泡（blocksFromDisplay 逐块映射，未知 type 安全
+ * 跳过——ohos 专有 video 臂即借此降级）。镜像上游 UserMessageBlock 判别
+ * 联合 + ohos 扩展臂；ArkTS 无判别联合化为单 interface 按 type 分发，
+ * 字段全可选（各臂只填自己的字段，undefined 经 JSON.stringify 丢弃）。
+ * 块顺序约定 = PWA buildUserDisplay：媒体（image/video）→ text → mention。
+ */
+export interface SendDisplayBlock {
+  type: string;
+  /** text 臂。 */
+  text?: string;
+  /** image 臂：裸 base64 + 媒体类型。 */
+  data?: string;
+  mediaType?: string;
+  /** mention 臂（桌面渲染为 Read 卡）。 */
+  path?: string;
+  content?: string;
+  /** video 臂（ohos 专有：首帧海报 + 元数据；桌面跳过）。 */
+  poster?: string;
+  durationMs?: number;
+  name?: string;
 }
