@@ -1,6 +1,6 @@
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -704,17 +704,33 @@ fn emit_runtime_dead(app: &AppHandle, tail_handle: &Arc<Mutex<VecDeque<String>>>
 #[cfg(windows)]
 fn windows_path_with_git_usr_bin() -> Option<String> {
     let git_exe = which::which("git").ok()?;
-    let git_cmd_dir = git_exe.parent()?;
-    let git_root = git_cmd_dir.parent()?;
-    let usr_bin = git_root.join("usr").join("bin");
+    let usr_bin = git_install_usr_bin(git_exe.parent()?)?;
     if !usr_bin.is_dir() {
         return None;
     }
     let current_path = std::env::var("PATH").unwrap_or_default();
     Some(prepend_path_entry(
-        &current_path,
+        &crate::runtime::env::strip_cargo_target_segments(&current_path),
         &usr_bin.to_string_lossy(),
     ))
+}
+
+/// 从 git.exe 所在目录向上找 Git 安装根下的 `usr\bin`。
+/// which 可能解析到 `Git\cmd\git.exe`（cmd 前置时）或 `Git\usr\bin\git.exe`
+/// （usr\bin 前置时，如 MSYS shell 启动的进程）——旧的「固定上溯两层」算法
+/// 在后者会算出 `Git\usr\usr\bin`（不存在）→ None → 整个 PATH 重建被静默
+/// 跳过，子进程链原样继承脏 PATH（2026-09-09 实锤：dev 从 MSYS bash 启动时
+/// LSP 报 "rust-analyzer not found" 的第二处根因）。
+fn git_install_usr_bin(start: &Path) -> Option<PathBuf> {
+    let mut dir = start.to_path_buf();
+    for _ in 0..4 {
+        let candidate = dir.join("usr").join("bin");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        dir = dir.parent()?.to_path_buf();
+    }
+    None
 }
 
 #[cfg(windows)]
@@ -760,6 +776,42 @@ mod tests {
         let path = "c:\\git\\usr\\bin;C:\\Windows";
         let result = prepend_path_entry(path, "C:\\Git\\usr\\bin");
         assert_eq!(result, path);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn git_install_usr_bin_finds_root_from_cmd_layout() {
+        // git 解析自 Git\cmd\git.exe（cmd 前置的标准安装）
+        let root = std::env::temp_dir().join("aide-test-gitroot-cmd");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Git").join("cmd")).unwrap();
+        std::fs::create_dir_all(root.join("Git").join("usr").join("bin")).unwrap();
+        let found = git_install_usr_bin(&root.join("Git").join("cmd"));
+        assert_eq!(found, Some(root.join("Git").join("usr").join("bin")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn git_install_usr_bin_finds_root_from_usr_bin_layout() {
+        // which 解析到 Git\usr\bin\git.exe（usr\bin 前置，MSYS shell 启动的进程）——
+        // 旧的固定两层算法在这里算出 Git\usr\usr\bin 而失败
+        let root = std::env::temp_dir().join("aide-test-gitroot-usrbin");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Git").join("usr").join("bin")).unwrap();
+        let found = git_install_usr_bin(&root.join("Git").join("usr").join("bin"));
+        assert_eq!(found, Some(root.join("Git").join("usr").join("bin")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn git_install_usr_bin_returns_none_without_usr_bin() {
+        let root = std::env::temp_dir().join("aide-test-gitroot-none");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Git").join("cmd")).unwrap();
+        assert_eq!(git_install_usr_bin(&root.join("Git").join("cmd")), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

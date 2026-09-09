@@ -357,6 +357,53 @@ fn clone_subdir(
     Ok(())
 }
 
+/// marketplace.json 的内联组件物化：官方 LSP 插件在仓库里只有 LICENSE/README，
+/// `lspServers` 与插件元数据以内联字段随清单走——安装拷贝的目录因此缺
+/// `.claude-plugin/plugin.json`（harness 识别本地插件的清单）与 `.lsp.json`
+/// （LSP 服务器配置），装出来是空壳、harness 起不了 LSP 工具。
+/// 落盘后把「缺失的」内联形态补写成文件；已存在的文件一律不覆盖——源目录
+/// 自带完整文件的插件不受影响，重装/更新幂等，且能就地修复旧的空壳安装。
+fn materialize_inline_components(
+    entry: &crate::commands::marketplace::sources::RawPluginEntry,
+    target: &std::path::Path,
+) -> Result<(), String> {
+    let manifest_dir = target.join(".claude-plugin");
+    let manifest_path = manifest_dir.join("plugin.json");
+    if !manifest_path.exists() {
+        let mut obj = serde_json::Map::new();
+        obj.insert("name".into(), serde_json::json!(entry.name));
+        if let Some(v) = entry.description.as_ref() {
+            obj.insert("description".into(), serde_json::json!(v));
+        }
+        if let Some(v) = entry.version.as_ref() {
+            obj.insert("version".into(), serde_json::json!(v));
+        }
+        if let Some(v) = entry.author.as_ref() {
+            obj.insert("author".into(), v.clone());
+        }
+        if let Some(v) = entry.homepage.as_ref() {
+            obj.insert("homepage".into(), serde_json::json!(v));
+        }
+        if let Some(v) = entry.repository.as_ref() {
+            obj.insert("repository".into(), serde_json::json!(v));
+        }
+        std::fs::create_dir_all(&manifest_dir)
+            .map_err(|e| format!("创建 .claude-plugin 失败: {e}"))?;
+        let body = serde_json::to_string_pretty(&serde_json::Value::Object(obj))
+            .map_err(|e| format!("序列化 plugin.json 失败: {e}"))?;
+        std::fs::write(&manifest_path, body).map_err(|e| format!("写 plugin.json 失败: {e}"))?;
+    }
+    if let Some(lsp) = entry.lsp_servers.as_ref() {
+        let lsp_path = target.join(".lsp.json");
+        if !lsp_path.exists() {
+            let body = serde_json::to_string_pretty(lsp)
+                .map_err(|e| format!("序列化 .lsp.json 失败: {e}"))?;
+            std::fs::write(&lsp_path, body).map_err(|e| format!("写 .lsp.json 失败: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn resolve_and_install(
     source_id: &str,
     market: &str,
@@ -368,7 +415,7 @@ pub(super) fn resolve_and_install(
     let version = entry.version.clone().unwrap_or_default();
     let target_root = plugins_cache_root().join(market).join(plugin);
     std::fs::create_dir_all(&target_root).map_err(|e| e.to_string())?;
-    match src {
+    let target = match src {
         crate::commands::marketplace::sources::RawSource::Npm { .. } => {
             return Err("NPM_UNSUPPORTED: npm 源插件暂不支持安装".into());
         }
@@ -385,11 +432,10 @@ pub(super) fn resolve_and_install(
                 version
             };
             let target = target_root.join(&ver);
-            if target.exists() {
-                return Ok(target);
+            if !target.exists() {
+                copy_dir_recursive(&from, &target)?;
             }
-            copy_dir_recursive(&from, &target)?;
-            Ok(target)
+            target
         }
         crate::commands::marketplace::sources::RawSource::Github { repo, r#ref, sha } => {
             let url = format!("https://github.com/{}.git", repo);
@@ -406,7 +452,7 @@ pub(super) fn resolve_and_install(
                     sha: sha.as_deref(),
                 },
                 ver,
-            )
+            )?
         }
         crate::commands::marketplace::sources::RawSource::Url { url, r#ref, sha } => {
             let ver = if !version.is_empty() {
@@ -422,7 +468,7 @@ pub(super) fn resolve_and_install(
                     sha: sha.as_deref(),
                 },
                 ver,
-            )
+            )?
         }
         crate::commands::marketplace::sources::RawSource::GitSubdir {
             url,
@@ -455,9 +501,13 @@ pub(super) fn resolve_and_install(
                 copy_dir_recursive(&from, &target)?;
             }
             let _ = std::fs::remove_dir_all(&tmp);
-            Ok(target)
+            target
         }
-    }
+    };
+    // 内联组件物化（幂等）： Relative 臂对已存在的 target 也走到这里，
+    // 旧的空壳安装因此可以被「再点一次安装/更新」就地修复。
+    materialize_inline_components(entry, &target)?;
+    Ok(target)
 }
 
 // ── 启用键读写 helpers ──
@@ -794,5 +844,119 @@ mod tests {
             ),
             "./plugins/agent-sdk-dev"
         );
+    }
+}
+
+/// 内联组件物化（官方 LSP 插件是「仓库里只有 LICENSE/README、配置内联在
+/// marketplace.json」的形态）——空壳回归与幂等保护。
+#[cfg(test)]
+mod materialize_inline_tests {
+    use super::*;
+    use crate::commands::marketplace::sources::RawPluginEntry;
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "aide-mat-{}-{}-{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|t| t.subsec_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn lsp_entry() -> RawPluginEntry {
+        // author/homepage/repository 照官方 marketplace.json 实况带值（rust-analyzer-lsp
+        // 条目即带 author 对象）——带值臂是真实生产路径，不允许 0 覆盖。
+        RawPluginEntry {
+            name: "rust-analyzer-lsp".into(),
+            description: Some("Rust language server".into()),
+            version: Some("1.0.0".into()),
+            author: Some(serde_json::json!({
+                "name": "Anthropic",
+                "email": "support@anthropic.com"
+            })),
+            homepage: Some("https://github.com/anthropics/claude-plugins-official".into()),
+            repository: Some("https://github.com/anthropics/claude-plugins-official".into()),
+            lsp_servers: Some(serde_json::json!({
+                "rust-analyzer": {
+                    "command": "rust-analyzer",
+                    "extensionToLanguage": { ".rs": "rust" }
+                }
+            })),
+            ..RawPluginEntry::default()
+        }
+    }
+
+    #[test]
+    fn inline_lsp_and_manifest_materialized() {
+        let target = scratch("fresh");
+        std::fs::write(target.join("LICENSE"), "x").unwrap();
+        materialize_inline_components(&lsp_entry(), &target).unwrap();
+        let lsp: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(target.join(".lsp.json")).unwrap())
+                .unwrap();
+        assert_eq!(lsp["rust-analyzer"]["command"], "rust-analyzer");
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(target.join(".claude-plugin").join("plugin.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["name"], "rust-analyzer-lsp");
+        assert_eq!(manifest["version"], "1.0.0");
+        // author 对象形态原样落盘（双形态解析兼容的另一半）
+        assert_eq!(manifest["author"]["name"], "Anthropic");
+        assert_eq!(manifest["author"]["email"], "support@anthropic.com");
+        std::fs::remove_dir_all(&target).unwrap();
+    }
+
+    #[test]
+    fn existing_files_not_overwritten() {
+        let target = scratch("keep");
+        std::fs::create_dir_all(target.join(".claude-plugin")).unwrap();
+        std::fs::write(target.join(".lsp.json"), r#"{ "own": true }"#).unwrap();
+        std::fs::write(
+            target.join(".claude-plugin").join("plugin.json"),
+            r#"{ "name": "own" }"#,
+        )
+        .unwrap();
+        materialize_inline_components(&lsp_entry(), &target).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(target.join(".lsp.json")).unwrap(),
+            r#"{ "own": true }"#
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join(".claude-plugin").join("plugin.json")).unwrap(),
+            r#"{ "name": "own" }"#
+        );
+        std::fs::remove_dir_all(&target).unwrap();
+    }
+
+    /// 错误臂：`.claude-plugin` 被文件占用 → create_dir_all 失败，错误带上下文上传。
+    /// 其余 4 个错误闭包（两次序列化 + 两次写文件）需 FS 故障注入（盘满/权限），
+    /// 不可移植，对账表中标注「未实测·错误臂」。
+    #[test]
+    fn manifest_dir_conflict_returns_error() {
+        let target = scratch("err");
+        std::fs::write(target.join(".claude-plugin"), "占位为文件而非目录").unwrap();
+        let result = materialize_inline_components(&lsp_entry(), &target);
+        assert!(result.is_err(), "目录被文件占用时应报错");
+        assert!(result.unwrap_err().contains("创建 .claude-plugin 失败"));
+        std::fs::remove_dir_all(&target).unwrap();
+    }
+
+    #[test]
+    fn no_lsp_servers_no_lsp_file() {
+        let target = scratch("nolsp");
+        let entry = RawPluginEntry {
+            name: "plain".into(),
+            ..RawPluginEntry::default()
+        };
+        materialize_inline_components(&entry, &target).unwrap();
+        assert!(!target.join(".lsp.json").exists());
+        assert!(target.join(".claude-plugin").join("plugin.json").exists());
+        std::fs::remove_dir_all(&target).unwrap();
     }
 }

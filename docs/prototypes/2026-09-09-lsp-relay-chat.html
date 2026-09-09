@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aide 会话页 · LSP 接力显示</title>
+<style>
+  /* ── glass 主题 token（照抄 src/themes/glass.ts）── */
+  :root{
+    --aide-bg-deep:rgba(8,10,16,.82);
+    --aide-bg-base:rgba(17,19,29,.52);
+    --aide-bg-raised:rgba(24,26,38,.48);
+    --aide-surface-default:rgba(255,255,255,.06);
+    --aide-surface-hover:rgba(255,255,255,.1);
+    --aide-surface-active:rgba(255,255,255,.14);
+    --aide-text-primary:#eef0f8;
+    --aide-text-secondary:#b9bdd0;
+    --aide-text-muted:#7c8296;
+    --aide-accent:#a5b8ff;
+    --aide-accent-subtle:rgba(150,170,255,.16);
+    --aide-success:#6ee7a8;
+    --aide-warning:#fcd34d;
+    --aide-danger:#f87171;
+    --aide-border:rgba(255,255,255,.1);
+    --aide-border-subtle:rgba(255,255,255,.06);
+    --aide-highlight-inset:inset 0 1px 0 rgba(255,255,255,.12);
+    --aide-shadow-sm:0 1px 2px rgba(0,0,0,.3);
+    --aide-radius-sm:8px;
+    --aide-radius-md:10px;
+    --aide-radius-lg:14px;
+    --aide-ease-t:.16s cubic-bezier(.2,.8,.2,1);
+    --aide-surface-blur:blur(20px) saturate(150%);
+    --aide-syntax-keyword:#c3b3f7;
+    --aide-syntax-number:#f0b08c;
+    --aide-font-mono:"Maple Mono NF CN","Cascadia Code",Consolas,monospace;
+    --ambient:radial-gradient(560px 380px at 10% -8%,rgba(124,108,255,.32),transparent 65%),
+              radial-gradient(520px 420px at 96% 6%,rgba(64,190,220,.22),transparent 65%),
+              radial-gradient(640px 340px at 60% 112%,rgba(210,110,190,.16),transparent 70%),#0a0b11;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font:13px/1.6 "Maple Mono NF CN","Cascadia Code",Consolas,monospace;
+       color:var(--aide-text-primary);background:var(--ambient);user-select:none}
+  .chat{max-width:860px;height:100vh;margin:0 auto;display:flex;flex-direction:column}
+  .msgs{flex:1;overflow-y:auto;padding:18px 0 10px}
+
+  /* ── 消息行（照抄 ChatMessage.vue）── */
+  .msg-row{display:flex;padding:4px 12px}
+  .msg-row--user{justify-content:flex-end}
+  .msg-row--assistant{justify-content:flex-start}
+  .msg-bubble{max-width:85%;border-radius:var(--aide-radius-md);padding:8px 12px;
+    font-size:13px;line-height:1.6;word-break:break-word;user-select:text}
+  .msg-bubble--user{
+    background:linear-gradient(180deg,var(--aide-surface-default),var(--aide-bg-raised));
+    border:1px solid var(--aide-border);
+    border-radius:var(--aide-radius-lg) var(--aide-radius-lg) var(--aide-radius-lg) 5px;
+    color:var(--aide-text-primary);
+    box-shadow:var(--aide-shadow-sm),var(--aide-highlight-inset)}
+  .msg-turn{user-select:text;max-width:100%}
+  .msg-text{font-size:13px;line-height:1.7;color:var(--aide-text-primary);white-space:pre-wrap}
+  .msg-text code{color:var(--aide-accent);font-family:inherit}
+
+  /* ── 工具调用块（照抄 ToolCallBlock.vue）── */
+  .tool-item{font-size:11.5px;border:1px solid var(--aide-border-subtle);
+    border-radius:var(--aide-radius-md);background:var(--aide-bg-base);
+    overflow:hidden;box-shadow:var(--aide-highlight-inset);
+    backdrop-filter:var(--aide-surface-blur);-webkit-backdrop-filter:var(--aide-surface-blur);
+    margin-top:10px}
+  .ti-row{display:flex;align-items:center;gap:9px;width:100%;padding:4px 12px;
+    background:none;border:none;cursor:pointer;text-align:left;font-size:12px;
+    color:var(--aide-text-secondary);font-family:inherit;transition:background var(--aide-ease-t)}
+  .ti-row:hover{background:var(--aide-surface-default)}
+  .ti-dot{width:5px;height:5px;border-radius:50%;background:var(--aide-surface-active);flex-shrink:0}
+  .ti-name{font-weight:600;color:var(--aide-text-primary);flex-shrink:0;min-width:38px}
+  .ti-summary{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    direction:rtl;text-align:left;font-family:var(--aide-font-mono);font-size:11px;
+    color:var(--aide-text-muted)}
+  .ti-meta{margin-left:auto;flex-shrink:0;display:flex;gap:8px;align-items:center;
+    font-family:var(--aide-font-mono);font-size:11px}
+  .ti-chev{flex-shrink:0;font-size:9px;color:var(--aide-text-muted);transition:transform var(--aide-ease-t)}
+  .ti-chev--open{transform:rotate(90deg)}
+  .ti-body{border-top:1px solid var(--aide-border-subtle);background:var(--aide-bg-deep)}
+  .ti-result{max-height:220px;overflow:auto;white-space:pre-wrap;font-family:var(--aide-font-mono);
+    font-size:11.5px;line-height:1.7;color:var(--aide-text-secondary);margin:0;padding:11px 14px}
+  .ti-relay-note{display:flex;gap:8px;align-items:center;padding:7px 14px;
+    border-top:1px dashed var(--aide-border-subtle);font-size:11px;color:var(--aide-text-muted)}
+
+  /* ── F 方案新增：接力徽章（复用 ti-deny-pill 几何，success/warning 两色）── */
+  .relay-pill{flex-shrink:0;font-size:10.5px;padding:1px 8px;border-radius:999px;white-space:nowrap}
+  .relay-pill--hit{color:var(--aide-success);
+    background:color-mix(in srgb,var(--aide-success) 12%,transparent);
+    border:1px solid color-mix(in srgb,var(--aide-success) 25%,transparent)}
+  .relay-pill--miss{color:var(--aide-warning);
+    background:color-mix(in srgb,var(--aide-warning) 12%,transparent);
+    border:1px solid color-mix(in srgb,var(--aide-warning) 25%,transparent)}
+  .range{color:var(--aide-text-primary)}
+  .ln{color:var(--aide-text-muted);display:inline-block;width:34px;text-align:right;margin-right:10px;user-select:none}
+  .kw{color:var(--aide-syntax-keyword)} .num{color:var(--aide-syntax-number)} .fn{color:var(--aide-accent)}
+
+  /* ── 输入框（ChatInputBox 简化形态）── */
+  .composer{padding:10px 12px 14px}
+  .input-shell{display:flex;align-items:center;gap:10px;padding:9px 12px;
+    border:1px solid var(--aide-border);border-radius:var(--aide-radius-lg);
+    background:var(--aide-bg-base);backdrop-filter:var(--aide-surface-blur);
+    box-shadow:var(--aide-highlight-inset)}
+  .input-ph{flex:1;font-size:13px;color:var(--aide-text-muted)}
+  .send{width:28px;height:28px;border:none;border-radius:var(--aide-radius-sm);cursor:pointer;
+    background:linear-gradient(180deg,rgba(160,180,255,.42),rgba(130,150,255,.3));
+    color:#eef0ff;font-size:13px;display:flex;align-items:center;justify-content:center}
+</style>
+</head>
+<body>
+<div class="chat">
+  <div class="msgs">
+
+    <div class="msg-row msg-row--user">
+      <div class="msg-bubble msg-bubble--user">attach_display 在哪定义？看看它的实现</div>
+    </div>
+
+    <div class="msg-row msg-row--assistant">
+      <div class="msg-turn">
+        <!-- LSP 定位：接力链起点 -->
+        <div class="tool-item">
+          <button class="ti-row" onclick="tog(this)">
+            <span class="ti-dot"></span>
+            <span class="ti-name">LSP</span>
+            <span class="ti-summary">定位符号 attach_display · src-tauri/src/commands/chat.rs:140-146</span>
+            <span class="ti-meta">0.05s</span>
+            <span class="ti-chev">▶</span>
+          </button>
+          <div class="ti-body" hidden>
+            <pre class="ti-result">fn attach_display(cmd: &amp;mut serde_json::Value, display: Option&lt;serde_json::Value&gt;)
+
+文档注释：渲染描述原样透传（不校验结构——形状由发起端与 sidecar 的协议约定）。
+None 与 null 均不落字段（无 display 等于「按纯文本渲染」）。</pre>
+          </div>
+        </div>
+
+        <!-- Read：F 方案核心 —— 头行显示行号区间 + 接力判定 -->
+        <div class="tool-item">
+          <button class="ti-row" onclick="tog(this)">
+            <span class="ti-dot"></span>
+            <span class="ti-name">Read</span>
+            <span class="ti-summary">src-tauri/src/commands/chat.rs</span>
+            <span class="ti-meta">
+              <span class="relay-pill relay-pill--hit">✓ LSP 接力</span>
+              <span><span class="range">140–146 行</span> · 7 行</span>
+            </span>
+            <span class="ti-chev ti-chev--open">▶</span>
+          </button>
+          <div class="ti-body">
+            <pre class="ti-result"><span class="ln">140</span><span class="kw">fn</span> <span class="fn">attach_display</span>(cmd: &amp;<span class="kw">mut</span> serde_json::Value, display: Option&lt;serde_json::Value&gt;) {
+<span class="ln">141</span>    <span class="kw">if let</span> Some(d) = display {
+<span class="ln">142</span>        <span class="kw">if</span> !d.<span class="fn">is_null</span>() {
+<span class="ln">143</span>            cmd[<span class="num">"display"</span>] = d;
+<span class="ln">144</span>        }
+<span class="ln">145</span>    }
+<span class="ln">146</span>}</pre>
+            <div class="ti-relay" style="padding:7px 14px;border-top:1px dashed var(--aide-border-subtle);font-size:11px;color:var(--aide-text-muted)">
+              offset:140 · limit:7　←　读取区间 = LSP 定位范围，零换算
+            </div>
+          </div>
+        </div>
+
+        <div class="msg-text" style="margin-top:10px">定义在 <code>chat.rs:140</code>，是一个 7 行的透传函数：display 为 None 或 null 时不落字段，等于按纯文本渲染。</div>
+      </div>
+    </div>
+
+    <div class="msg-row msg-row--user">
+      <div class="msg-bubble msg-bubble--user">那 build_send_command 呢？整体逻辑看一下</div>
+    </div>
+
+    <div class="msg-row msg-row--assistant">
+      <div class="msg-turn">
+        <!-- 反例：未接力 —— 行为监视的黄色信号 -->
+        <div class="tool-item">
+          <button class="ti-row" onclick="tog(this)">
+            <span class="ti-dot"></span>
+            <span class="ti-name">Read</span>
+            <span class="ti-summary">src-tauri/src/commands/chat.rs</span>
+            <span class="ti-meta">
+              <span class="relay-pill relay-pill--miss">⚠ 未接力 · 整文件读</span>
+              <span>1,842 行</span>
+            </span>
+            <span class="ti-chev">▶</span>
+          </button>
+          <div class="ti-body" hidden>
+            <pre class="ti-result">（无 offset/limit —— 模型没有沿用 LSP 给出的行号，整文件进了上下文）</pre>
+          </div>
+        </div>
+        <div class="msg-text" style="margin-top:10px">build_send_command 负责把 SDK 请求组装成 sidecar 命令：先 base_send_command 铺底，再依次 attach 图片 / display / resume / 环境变量 / 档位 …</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="composer">
+    <div class="input-shell">
+      <span class="input-ph">输入消息…（@ 引用文件 / 工作区）</span>
+      <button class="send">↑</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function tog(btn){
+  const body = btn.nextElementSibling;
+  const chev = btn.querySelector(".ti-chev");
+  body.hidden = !body.hidden;
+  chev.classList.toggle("ti-chev--open", !body.hidden);
+}
+</script>
+</body>
+</html>

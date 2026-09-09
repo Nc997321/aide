@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LSP 可见性 UX 原型 · 5 方案</title>
+<style>
+  :root{
+    --bg:#16171c; --surface:rgba(255,255,255,.045); --surface2:rgba(255,255,255,.07);
+    --border:rgba(255,255,255,.09); --text:#e6e8ee; --dim:#9aa0ae;
+    --accent:#7aa2f7; --success:#9ece6a; --warn:#e0af68; --danger:#f7768e;
+    --mono:ui-monospace,'Cascadia Code','Maple Mono NF CN',Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,'Segoe UI','Microsoft YaHei',sans-serif;padding-bottom:60px}
+  .bar{position:sticky;top:0;z-index:9;background:rgba(22,23,28,.85);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:10px 16px}
+  .bar h1{font-size:13px;font-weight:600;color:var(--dim);letter-spacing:.5px;margin-bottom:8px}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap}
+  .tab{border:1px solid var(--border);background:var(--surface);color:var(--dim);border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer}
+  .tab.on{background:var(--accent);color:#0d1117;border-color:transparent;font-weight:600}
+  .note{margin-top:8px;font-size:12.5px;color:var(--dim)}
+  .note b{color:var(--text);font-weight:600}
+  main{max-width:780px;margin:24px auto;padding:0 16px}
+  .win{border:1px solid var(--border);border-radius:14px;background:rgba(255,255,255,.02);overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,.35)}
+  .win-head{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border);background:var(--surface)}
+  .tabstrip{display:flex;gap:4px;align-items:center}
+  .stab{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--dim);padding:3px 10px;border-radius:7px;background:transparent}
+  .stab.on{background:var(--surface2);color:var(--text)}
+  .dot{width:7px;height:7px;border-radius:50%}
+  .msgs{padding:14px 14px 18px;display:flex;flex-direction:column;gap:12px;min-height:420px}
+  .msg-u{align-self:flex-end;max-width:78%;background:var(--surface2);border:1px solid var(--border);border-radius:12px 12px 12px 4px;padding:9px 13px}
+  .msg-a{align-self:flex-start;max-width:92%}
+  .proc{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--dim);padding:2px 2px;flex-wrap:wrap}
+  .chip{display:inline-flex;align-items:center;gap:5px;background:var(--surface);border:1px solid var(--border);border-radius:7px;padding:2.5px 9px;font-size:12px;color:var(--text)}
+  .chip .op{color:var(--accent);font-weight:600}
+  .chip .t{color:var(--dim)}
+  .ok{color:var(--success)} .warn{color:var(--warn)} .bad{color:var(--danger)}
+  .card{border:1px solid var(--border);border-radius:10px;background:var(--surface);margin-top:6px;overflow:hidden}
+  .card-h{display:flex;align-items:center;gap:8px;padding:7px 11px;font-size:12.5px;cursor:pointer}
+  .card-h .ic{font-size:13px}
+  .card-h .ttl{font-weight:600}
+  .card-h .meta{margin-left:auto;color:var(--dim);font-size:11.5px;font-family:var(--mono)}
+  .card-b{padding:8px 11px;border-top:1px dashed var(--border);font-family:var(--mono);font-size:12px;color:var(--dim)}
+  .card-b .loc{color:var(--accent)}
+  .reply{margin-top:8px;font-size:13.5px;color:var(--text)}
+  .edit{margin-top:8px}
+  .diag{border:1px solid rgba(247,118,110,.35);border-radius:10px;background:rgba(247,118,110,.07);margin-top:8px;overflow:hidden}
+  .diag-h{display:flex;align-items:center;gap:8px;padding:8px 11px;font-size:12.5px}
+  .diag-h b{color:var(--danger)}
+  .diag-list{border-top:1px solid rgba(247,118,110,.2);padding:6px 11px 8px;display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:12px}
+  .diag-list .ln{color:var(--dim)} .diag-list .sev{font-weight:700}
+  .panel{border-left:1px solid var(--border);width:250px;background:rgba(255,255,255,.02);padding:12px;display:flex;flex-direction:column;gap:10px;font-size:12.5px;flex-shrink:0}
+  .sec-t{font-size:11.5px;color:var(--dim);letter-spacing:.6px;font-weight:600}
+  .srv{display:flex;align-items:center;gap:7px;background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:7px 10px}
+  .kv{display:flex;justify-content:space-between;color:var(--dim)} .kv b{color:var(--text);font-weight:600}
+  .feed{display:flex;flex-direction:column;gap:6px;font-family:var(--mono);font-size:11.5px}
+  .feed .r{display:flex;gap:6px;align-items:baseline} .feed .tm{color:var(--dim);flex-shrink:0}
+  .body{display:flex;align-items:stretch} .body .col{flex:1;min-width:0}
+  .spin{width:7px;height:7px;border-radius:50%;background:var(--warn);box-shadow:0 0 6px var(--warn)}
+  .legend{margin-top:14px;font-size:12px;color:var(--dim);border-top:1px dashed var(--border);padding-top:10px}
+  .v-sec{display:none} .v-sec.on{display:block}
+  details summary{cursor:pointer;list-style:none}
+  details summary::-webkit-details-marker{display:none}
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <h1>LSP 可见性原型 · 同一场景 × 5 方案</h1>
+  <div class="tabs" id="tabs">
+    <button class="tab on" data-v="a">A · 流内工具卡</button>
+    <button class="tab" data-v="b">B · 轻量状态</button>
+    <button class="tab" data-v="c">C · 诊断事件卡</button>
+    <button class="tab" data-v="d">D · 活动面板</button>
+    <button class="tab" data-v="e">E · 组合（推荐）</button>
+    <button class="tab" data-v="f">F · Read 接力显示</button>
+  </div>
+  <div class="note" id="note"></div>
+</div>
+
+<main>
+  <!-- ═══════════ 方案 A：流内专属工具卡 ═══════════ -->
+  <!-- ═══════════ 方案 F：Read 接力显示 ═══════════ -->
+  <section class="v-sec" data-v="f">
+    <div class="win">
+      <div class="win-head"><div class="tabstrip"><span class="stab on"><span class="dot" style="background:var(--success)"></span>LSP 验证会话</span></div></div>
+      <div class="msgs">
+        <div class="msg-u">attach_display 在哪定义？看看它的实现</div>
+        <div class="msg-a">
+          <div class="proc">⟨过程⟩ 2 步</div>
+          <div class="card">
+            <div class="card-h"><span class="ic">🎯</span><span class="ttl">LSP · 定位符号 <code>attach_display</code></span><span class="meta">chat.rs:140-146</span></div>
+          </div>
+          <div class="card" style="border-color:rgba(158,206,106,.45)">
+            <div class="card-h"><span class="ic">📄</span><span class="ttl">Read <code>chat.rs</code></span>
+              <span class="chip" style="padding:1px 8px;font-size:11px;color:var(--success)">✓ LSP 接力</span>
+              <span class="meta">140–146 行 · 7 行</span></div>
+            <div class="card-b">offset:140 · limit:7　<span style="color:var(--dim)">← 读取区间 = LSP 定位范围，零换算</span></div>
+          </div>
+          <div class="reply">定义在 <b>chat.rs:140</b>，是一个 7 行的透传函数（实现体如上）。</div>
+          <div class="card" style="opacity:.75">
+            <div class="card-h"><span class="ic">📄</span><span class="ttl" style="color:var(--dim)">反例 · 若模型无视 LSP</span>
+              <span class="chip" style="padding:1px 8px;font-size:11px;color:var(--warn)">⚠ 整文件读 · 1,842 行</span>
+              <span class="meta">无 offset/limit</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="legend">取向：<b>把 offset/limit 从后台数据变成证据链</b>。Read 卡片显示「行号区间 + 行数」，并与紧邻的 LSP 调用做接力判定（返回行号落在读取区间内 = 绿「接力」；无 offset = 黄「整读」）。这是「LSP 确实在起作用」最直接的行为监视器，纯前端渲染，不动任何工具。可与 E 的徽标/诊断条叠加。</div>
+  </section>
+
+  <section class="v-sec on" data-v="a">
+    <div class="win">
+      <div class="win-head"><div class="tabstrip"><span class="stab on"><span class="dot" style="background:var(--success)"></span>LSP 验证会话</span></div></div>
+      <div class="msgs">
+        <div class="msg-u">attach_display 在哪定义？谁在调用它？</div>
+        <div class="msg-a">
+          <div class="proc">⟨过程⟩ 3 步 · LSP ×3</div>
+          <div class="card">
+            <div class="card-h"><span class="ic">🎯</span><span class="ttl">LSP · 定位符号 <code>attach_display</code></span><span class="meta">chat.rs:140 · 0.05s</span></div>
+          </div>
+          <div class="card">
+            <div class="card-h"><span class="ic">📖</span><span class="ttl">LSP · 类型悬浮</span><span class="meta">签名 + 文档注释 · 416B</span></div>
+            <div class="card-b"><span class="loc">chat.rs:140</span> fn attach_display(cmd: &amp;mut serde_json::Value, display: Option&lt;serde_json::Value&gt;)<br><span style="color:var(--dim)">└ 附原文注释：渲染描述原样透传（不校验结构…）</span></div>
+          </div>
+          <div class="card">
+            <div class="card-h"><span class="ic">🔗</span><span class="ttl">LSP · 查找引用 <code>attach_display</code></span><span class="meta">1 处 · 0.05s</span></div>
+            <div class="card-b"><span class="loc">chat.rs:100</span> attach_display(&amp;mut cmd, opts.display);</div>
+          </div>
+          <div class="reply">定义在 <b>chat.rs:140</b>，唯一调用点 <b>chat.rs:100</b>（build_send_command 内）。</div>
+        </div>
+      </div>
+    </div>
+    <div class="legend">取向：<b>信息就地可见</b>。每次 LSP 调用渲染成一张专属卡（操作中文映射 + 命中位置/耗时），细节默认折叠。代价：对话流变密；与既有「过程卡片」体系同构，复用现成组件改形态。</div>
+  </section>
+
+  <!-- ═══════════ 方案 B：轻量状态（chip + TAB 徽标） ═══════════ -->
+  <section class="v-sec" data-v="b">
+    <div class="win">
+      <div class="win-head">
+        <div class="tabstrip">
+          <span class="stab on"><span class="dot" style="background:var(--success)"></span>LSP验证 <span class="chip" style="padding:1px 7px;font-size:11px">LSP<span class="ok">✓</span></span></span>
+          <span class="stab">重构会话</span>
+        </div>
+      </div>
+      <div class="msgs">
+        <div class="msg-u">attach_display 在哪定义？谁在调用它？</div>
+        <div class="msg-a">
+          <div class="proc">
+            ⟨过程⟩
+            <span class="chip"><span class="op">LSP</span> 定位 · 引用 ×2 <span class="ok">✓</span> <span class="t">0.1s</span></span>
+          </div>
+          <div class="reply">定义在 <b>chat.rs:140</b>，唯一调用点 <b>chat.rs:100</b>（build_send_command 内）。</div>
+        </div>
+        <div class="msg-u">把 display 参数抽成独立函数</div>
+        <div class="msg-a">
+          <div class="proc">
+            ⟨过程⟩
+            <span class="chip"><span class="op">LSP</span> 编辑 · 诊断 <span class="ok">✓ 0 错误</span></span>
+          </div>
+          <div class="reply">已抽取 <code>attach_display</code> 为独立函数，LSP 诊断无错误。</div>
+        </div>
+      </div>
+    </div>
+    <div class="legend">取向：<b>零干扰</b>。TAB 上一个「LSP✓」徽标表示 server 就绪；过程行内一个 chip 汇总 LSP 动作与结果，不占纵向空间。代价：细节要看别处；「在起作用」的存在感最弱，但最不打扰。</div>
+  </section>
+
+  <!-- ═══════════ 方案 C：诊断事件卡 ═══════════ -->
+  <section class="v-sec" data-v="c">
+    <div class="win">
+      <div class="win-head"><div class="tabstrip"><span class="stab on"><span class="dot" style="background:var(--success)"></span>LSP 验证会话</span></div></div>
+      <div class="msgs">
+        <div class="msg-u">把 display 参数抽成独立函数</div>
+        <div class="msg-a">
+          <div class="edit card">
+            <div class="card-h"><span class="ic">✏️</span><span class="ttl">编辑 <code>chat.rs</code> · 抽取函数</span><span class="meta">−6 +14 行</span></div>
+          </div>
+          <div class="diag">
+            <div class="diag-h"><span class="ic">🩺</span><b>LSP 诊断</b><span class="dim" style="color:var(--dim)">rust-analyzer · 已自动进入模型上下文</span><span class="meta" style="margin-left:auto;color:var(--dim);font-size:11.5px">2 错误 · 1 警告</span></div>
+            <div class="diag-list">
+              <div><span class="sev bad">E</span> <span class="ln">chat.rs:118</span> cannot borrow `cmd` as immutable because it is also borrowed as mutable <span style="color:var(--dim)">(E0502)</span></div>
+              <div><span class="sev bad">E</span> <span class="ln">chat.rs:126</span> missing field `display` in initializer</div>
+              <div><span class="sev warn">W</span> <span class="ln">chat.rs:31</span> unused import: `serde_json::Value`</div>
+            </div>
+          </div>
+          <div class="reply">抽取时引入了 2 个错误，正在修复…（模型已看到诊断，无需重新编译）</div>
+        </div>
+      </div>
+    </div>
+    <div class="legend">取向：<b>只突出最有价值的时刻</b>——编辑后的诊断反馈。这是 LSP 独有能力（codegraph/Grep 都没有），渲染成醒目事件条，模型与用户同时看到。代价：导航类调用不可见，需要与 A/B 组合。</div>
+  </section>
+
+  <!-- ═══════════ 方案 D：活动面板 ═══════════ -->
+  <section class="v-sec" data-v="d">
+    <div class="win">
+      <div class="body">
+        <div class="msgs" style="flex:1">
+          <div class="msg-u">attach_display 在哪定义？谁在调用它？</div>
+          <div class="msg-a">
+            <div class="proc">⟨过程⟩ 3 步</div>
+            <div class="reply">定义在 <b>chat.rs:140</b>，唯一调用点 <b>chat.rs:100</b>。</div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="sec-t">语言服务器</div>
+          <div class="srv"><span class="dot ok">●</span> rust-analyzer <span style="margin-left:auto;color:var(--dim);font-size:11px">就绪 · 70s</span></div>
+          <div class="kv"><span>本次查询</span><b>8 次</b></div>
+          <div class="kv"><span>命中</span><b>6 处</b></div>
+          <div class="kv"><span>诊断推送</span><b>3 条</b></div>
+          <div class="sec-t" style="margin-top:4px">最近活动</div>
+          <div class="feed">
+            <div class="r"><span class="tm">10:32:41</span><span>引用 attach_display → <span class="ok">1</span></span></div>
+            <div class="r"><span class="tm">10:32:39</span><span>hover 签名+注释</span></div>
+            <div class="r"><span class="tm">10:32:37</span><span>定位符号 → chat.rs:140</span></div>
+            <div class="r"><span class="tm">10:31:28</span><span class="warn">rust-analyzer 索引完成 (70s)</span></div>
+            <div class="r"><span class="tm">10:30:18</span><span class="tm" style="color:var(--dim)">rust-analyzer 启动，索引中…</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="legend">取向：<b>仪表盘</b>。server 状态（含冷索引倒计时）、会话统计、逐条活动流水集中一板，可见性最强。代价：占一列版面、开发量最大（需要 hook 聚合 + 新面板组件），且平时信息密度其实用不满。</div>
+  </section>
+
+  <!-- ═══════════ 方案 E：组合 ═══════════ -->
+  <section class="v-sec" data-v="e">
+    <div class="win">
+      <div class="win-head">
+        <div class="tabstrip">
+          <span class="stab on"><span class="dot" style="background:var(--success)"></span>LSP验证 <span class="chip" style="padding:1px 7px;font-size:11px">LSP<span class="ok">✓</span> · 8 次</span></span>
+          <span class="stab">重构会话</span>
+        </div>
+      </div>
+      <div class="msgs">
+        <div class="msg-u">把 display 参数抽成独立函数</div>
+        <div class="msg-a">
+          <div class="proc">
+            ⟨过程⟩
+            <span class="chip"><span class="op">LSP</span> 引用 ×4 <span class="ok">✓</span></span>
+            <span class="chip"><span class="op">LSP</span> 定位 <span class="ok">✓</span></span>
+            <span class="chip"><span class="op">✏️</span> 编辑 <code>chat.rs</code></span>
+          </div>
+          <div class="card">
+            <div class="card-h"><span class="ic">🔗</span><span class="ttl">LSP · 查找引用 <code>attach_display</code></span><span class="meta">4 处 · 0.05s</span></div>
+            <div class="card-b"><span class="loc">chat.rs:100</span> · <span class="loc">chat.rs:118</span> · <span class="loc">chat.rs:126</span> · <span class="loc">scheduler.rs:340</span></div>
+          </div>
+          <div class="diag">
+            <div class="diag-h"><span class="ic">🩺</span><b>LSP 诊断</b><span style="margin-left:auto;color:var(--dim);font-size:11.5px" class="bad">1 错误</span></div>
+            <div class="diag-list"><div><span class="sev bad">E</span> <span class="ln">chat.rs:126</span> missing field `display` in initializer</div></div>
+          </div>
+          <div class="reply">抽取完成，还剩 1 个错误，正在修复…</div>
+        </div>
+      </div>
+    </div>
+    <div class="legend"><b>推荐组合：B 的 TAB 徽标 + A 的关键卡 + C 的诊断条</b>。日常导航收敛成 chip（不吵），跨文件引用等「值一张卡」的操作展开成卡，编辑后诊断永远醒目——三档信息密度各司其职，都不需要新面板。</div>
+  </section>
+</main>
+
+<script>
+const NOTES = {
+  a: '<b>A · 流内工具卡</b> — 信息就地可见，细节可展开；复用过程卡片体系。缺点：流变密。',
+  b: '<b>B · 轻量状态</b> — TAB 徽标 + 过程行 chip，零打扰。缺点：看不到 LSP 具体干了什么。',
+  c: '<b>C · 诊断事件卡</b> — 只放大 LSP 独有能力（编辑后诊断）；最醒目的「在起作用」信号。',
+  d: '<b>D · 活动面板</b> — 仪表盘式，可见性最强；开发量最大，版面占用最多。',
+  e: '<b>E · 组合</b> — B 徽标 + A 关键卡 + C 诊断条：三档密度各司其职，无新增面板。',
+  f: '<b>F · Read 接力显示</b> — Read 卡片显示行号区间，并判定是否用了 LSP 坐标（绿=接力/黄=整文件读）。你提的「从 offset+limit 上看到 LSP 起作用」的直接可视化。'
+};
+const tabs = document.getElementById('tabs');
+const note = document.getElementById('note');
+function show(v){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on', t.dataset.v===v));
+  document.querySelectorAll('.v-sec').forEach(s=>s.classList.toggle('on', s.dataset.v===v));
+  note.innerHTML = NOTES[v];
+}
+tabs.addEventListener('click', e=>{ if(e.target.dataset.v) show(e.target.dataset.v); });
+show('a');
+</script>
+</body>
+</html>

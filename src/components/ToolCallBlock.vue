@@ -6,6 +6,7 @@ import DiffViewer from "./fileviewer/DiffViewer.vue";
 import { buildChangeInfo, locateAnchorLine, locateEditStartLine, type ChangeInfo } from "@/utils/changeCard";
 import { isChangeTool } from "@/utils/blockSegments";
 import { summarizeToolInput } from "@/utils/toolSummary";
+import { readRangeLabel } from "@aide/sdk/utils/lspRelay";
 import { truncatedLabel } from "@/utils/messageBytes";
 import { parseToolDenial } from "@aide/sdk/utils/toolDenial";
 import { useFileResolver } from "@/composables/useFileResolver";
@@ -114,6 +115,22 @@ watch(
 );
 
 const inputSummary = computed(() => summarizeToolInput(props.block.name, props.block.input));
+
+/** F 方案（Read 接力显示）：接力徽章（绿=沿 LSP 坐标区间读 / 黄=LSP 已给定位
+ *  却整文件读，判定来自 utils/lspRelay.ts，结论已随块标注）。被拒的 Read 不显示
+ *  ——「未接力」谈不上，拒绝态由 denial 徽章独自承担。 */
+const relayPill = computed(() => {
+  if (props.block.name !== "Read" || !props.block.lspRelay || denial.value) return null;
+  return props.block.lspRelay === "hit"
+    ? { cls: "relay-pill--hit", text: "✓ LSP 接力", tip: "读取区间 = 上一个 LSP 调用给出的位置" }
+    : { cls: "relay-pill--miss", text: "⚠ 未接力 · 整文件读", tip: "LSP 已在该文件上给出定位，这次却整文件读进上下文" };
+});
+
+/** Read 的行号区间文案（offset 1-based、limit 行数）。仅 Read 显示，其它工具与
+ *  @mention 合成卡（无 offset/limit）自然为 null。 */
+const readRange = computed(() =>
+  props.block.name === "Read" ? readRangeLabel(props.block.input) : null,
+);
 </script>
 
 <template>
@@ -143,6 +160,16 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
         v-tooltip="'命令仍在后台运行——点击打开后台任务面板看实时输出'"
         @click.stop="emit('open-bg-dock', bgTask.id)"
       >● 后台运行中</span>
+      <!-- F 方案（Read 接力显示）：接力徽章 + 行号区间。仅 Read 有此元素，
+           mention 合成卡（无 offset/limit）与其它工具自然不显示。 -->
+      <span v-if="block.name === 'Read' && (relayPill || readRange)" class="ti-relay">
+        <span
+          v-if="relayPill"
+          :class="['relay-pill', relayPill.cls]"
+          v-tooltip="relayPill.tip"
+        >{{ relayPill.text }}</span>
+        <span v-if="readRange" class="ti-range">{{ readRange }}</span>
+      </span>
       <span v-if="changeInfo" class="ti-diff">
         <span class="stat-add">+{{ changeInfo.addCount }}</span>
         <span v-if="changeInfo.delCount > 0" class="stat-del">-{{ changeInfo.delCount }}</span>
@@ -313,6 +340,43 @@ const inputSummary = computed(() => summarizeToolInput(props.block.name, props.b
 @keyframes ti-bgchip-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
+}
+
+/* F 方案「Read 接力显示」：接力徽章 + 行号区间，钉在头行右侧（ti-diff 的位置——
+   Read 无变更统计，不冲突）。徽章几何复用 ti-deny-pill 规格（10.5px 药丸 +
+   color-mix 12% 底 25% 描边），success/warning 两色；颜色全走语义 token（F5）。
+   warning 色在此的语义=「模型整文件读」，与 deny-pill 的「用户拒绝」、ti-dot--run
+   的「执行中」同色系不同义——互斥共存（denial 在场时接力徽章不显示）。 */
+.ti-relay {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.relay-pill {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.relay-pill--hit {
+  color: var(--aide-success);
+  background: color-mix(in srgb, var(--aide-success) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-success) 25%, transparent);
+}
+.relay-pill--miss {
+  color: var(--aide-warning);
+  background: color-mix(in srgb, var(--aide-warning) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-warning) 25%, transparent);
+}
+.ti-range {
+  flex-shrink: 0;
+  font-family: var(--aide-font-mono);
+  font-size: 11px;
+  color: var(--aide-text-muted);
+  white-space: nowrap;
 }
 
 /* 「打开 ↗」：嵌在头行 button 里的短语级链接，stopPropagation 不触发折叠 */
