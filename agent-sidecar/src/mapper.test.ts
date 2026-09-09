@@ -774,6 +774,27 @@ describe("mapSdkMessage routing for subagent tools", () => {
     ]);
   });
 
+  it("子代理内部的 Edit：input 原样透传（file_path + old_string + new_string 都在）", () => {
+    // 桌面端变更归集器吃这个事件生成 diff 片段（src/composables/useChangeAttribution.ts
+    // 的 TOOL_NAME_FIELD），input 必须完整——截断或改名都会让子代理改的文件从
+    // 变更列表里消失。此例即该契约的守护测试。
+    const events: ChatEvent[] = [];
+    const tasks = new TaskTracker();
+    const subagents = new SubagentTracker();
+    const tools = new ToolLifecycleTracker();
+    mapSdkMessage(assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "改代码" }),
+  (e) => events.push(e),
+  { tasks: tasks, subagents: subagents, tools: tools });
+    events.length = 0;
+    const input = { file_path: "src/a.ts", old_string: "const a = 1;", new_string: "const a = 2;" };
+    mapSdkMessage(assistantToolUse("inner1", "Edit", input, "a1"),
+  (e) => events.push(e),
+  { tasks: tasks, subagents: subagents, tools: tools });
+    expect(events).toEqual([
+      { type: "subagent_progress", id: "a1", toolUseId: "inner1", toolName: "Edit", input },
+    ]);
+  });
+
   it("attaches model on the first adoptable subagent-internal assistant message, only once", () => {
     const events: ChatEvent[] = [];
     const tasks = new TaskTracker();

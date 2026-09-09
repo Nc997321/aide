@@ -20,7 +20,7 @@ export type { ChangeSegment, TouchedFile };
  *
  * ## 本模块的位置
  *
- * 纯内存旁路：吃 `tool_use_start` 事件 → 按 sid 分桶 → 调用方用 `drain(sid)`
+ * 纯内存旁路：吃工具调用事件 → 按 sid 分桶 → 调用方用 `drain(sid)`
  * 游标取走增量（一次轮固化 = 一次 drain；轮进行中的实时刷新 = 反复 drain+merge）。
  * git 在下游只做**校验者**：补 status / 行数，**不发现新条目**——发现权归事件，
  * 这是「外来文件混不进列表」的唯一保证。
@@ -39,6 +39,23 @@ const MAX_SEGMENT_CHARS = 20_000;
 /** 单文件片段数上限：同一文件在一轮里被反复 Edit 时只保留前 N 个片段。
  *  行数统计不受影响——「改了哪些文件、改了多少」是核心需求，片段只是增强。 */
 const MAX_SEGMENTS_PER_FILE = 12;
+
+/** 可归集的工具调用事件 → 工具名所在的字段。不在表内的事件类型一律不归集。
+ *
+ *  两个来源语义等价，只是字段名不同：
+ *  - `tool_use_start`：主线程工具调用，工具名在 `name`
+ *  - `subagent_progress`：子代理**内部**的工具调用，工具名在 `toolName`
+ *    （`agent-sidecar/src/mapper.ts:297`，Agent/Task 自身走 `subagent_start`，
+ *    内部 Edit/Write 只发 `subagent_progress`）
+ *
+ *  子代理是主会话派出去干活的，它改的文件同样属于这一轮——漏掉它等于「派了人
+ *  去改文件，变更列表里却什么都不显示」。两条路径互斥（sync 子代理走
+ *  `parent_tool_use_id` 流式，async 子代理走 `.output` 回放，不会同发一次），
+ *  因此不存在重复计数。 */
+const TOOL_NAME_FIELD: Record<string, string> = {
+  tool_use_start: "name",
+  subagent_progress: "toolName",
+};
 
 /** 与 git 侧 `DiffEntry.status` 对齐（"M"/"A"/"D"）。
  *  事件侧只能分辨 M/A：删除是 Bash/mv 的产物，工具调用事件里看不到（已知代价）。 */
@@ -98,12 +115,13 @@ export function createChangeAttribution(deps: AttributionDeps): ChangeAttributio
   const buckets = new Map<string, Bucket>();
 
   function ingest(event: Record<string, unknown>): void {
-    if (event["type"] !== "tool_use_start") return;
+    const nameField = TOOL_NAME_FIELD[String(event["type"])];
+    if (!nameField) return;
     const sid = event["session_id"];
     if (typeof sid !== "string" || !sid) return;
     if (deps.isTracked && !deps.isTracked(sid)) return;
 
-    const name = event["name"];
+    const name = event[nameField];
     if (typeof name !== "string") return;
     // 白名单内嵌在 buildChangeInfo：只认 Edit / Write / NotebookEdit 三种能解析出
     // 文件路径与新旧文本的工具，其余（Read/Bash/Grep…）返回 null 静默跳过。

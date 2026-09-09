@@ -25,6 +25,21 @@ function write(path: string, content = "line1\nline2", sid: string = SID) {
   return toolUse("Write", { file_path: path, content }, sid);
 }
 
+/** 子代理内部的工具调用：事件类型 subagent_progress、工具名字段 toolName
+ *  （与主线程 tool_use_start/name 同形不同名，见 useChangeAttribution 的
+ *  TOOL_NAME_FIELD 注释）。id 是父级 Agent 的 tool_use_id。 */
+function subToolUse(name: string, input: unknown, sid: string = SID) {
+  return { type: "subagent_progress", session_id: sid, id: "agent-1", toolUseId: "tu-1", toolName: name, input };
+}
+
+function subEdit(path: string, oldString = "a", newString = "b", sid: string = SID) {
+  return subToolUse("Edit", { file_path: path, old_string: oldString, new_string: newString }, sid);
+}
+
+function subWrite(path: string, content = "line1\nline2", sid: string = SID) {
+  return subToolUse("Write", { file_path: path, content }, sid);
+}
+
 /** 默认 deps：所有会话都归属 ROOT、都可跟踪。 */
 function make(overrides: Partial<Parameters<typeof createChangeAttribution>[0]> = {}) {
   return createChangeAttribution({
@@ -96,6 +111,39 @@ describe("createChangeAttribution.ingest", () => {
     a.ingest(edit(`${ROOT}/sub/b.rs`));
     const files = a.drain(SID)!.files;
     expect(files.map((f) => f.path).sort()).toEqual(["a.ts", "sub/b.rs"]);
+  });
+
+  it("子代理内部 Edit（subagent_progress / toolName）→ 同样归集到父会话", () => {
+    const a = make();
+    a.ingest(subEdit(`${ROOT}/a.ts`));
+    const files = a.drain(SID)!.files;
+    expect(files).toHaveLength(1);
+    expect(files[0].path).toBe("a.ts");
+    expect(files[0].status).toBe("M");
+    expect(files[0].segments).toHaveLength(1);
+  });
+
+  it("子代理内部 Write → 新增态 A", () => {
+    const a = make();
+    a.ingest(subWrite(`${ROOT}/new.ts`));
+    expect(a.drain(SID)!.files[0].status).toBe("A");
+  });
+
+  it("主线程与子代理改同一文件 → 合并成一条，行数与片段都累加", () => {
+    const a = make();
+    a.ingest(edit(`${ROOT}/a.ts`, "a", "b"));
+    a.ingest(subEdit(`${ROOT}/a.ts`, "b", "c"));
+    const files = a.drain(SID)!.files;
+    expect(files).toHaveLength(1);
+    expect(files[0].additions).toBe(2);
+    expect(files[0].deletions).toBe(2);
+    expect(files[0].segments).toHaveLength(2);
+  });
+
+  it("subagent_progress 的非变更类工具（Read）→ 不归集", () => {
+    const a = make();
+    a.ingest(subToolUse("Read", { file_path: `${ROOT}/a.ts` }));
+    expect(a.drain(SID)).toBeNull();
   });
 });
 
