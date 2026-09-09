@@ -1,5 +1,9 @@
 import { buildChangeInfo } from "../utils/changeCard";
-import type { ChangeFile } from "../types";
+import type { ChangeFile, ChangeSegment, TouchedFile } from "../types";
+
+// 形状定义在共享类型层（与 ChangeFile 同层）：ChangeRound.touches 在 SDK 的
+// types.ts 里，桌面端再定义一份会与它循环依赖。
+export type { ChangeSegment, TouchedFile };
 
 /**
  * 变更归属归集器：回答「这一轮改了哪些文件」，答案取自**事件流**，不从工作树反推。
@@ -39,26 +43,6 @@ const MAX_SEGMENTS_PER_FILE = 12;
 /** 与 git 侧 `DiffEntry.status` 对齐（"M"/"A"/"D"）。
  *  事件侧只能分辨 M/A：删除是 Bash/mv 的产物，工具调用事件里看不到（已知代价）。 */
 export type TouchedStatus = "M" | "A";
-
-/** 一次工具调用造成的改动片段（片段级 diff：不是全文件）。 */
-export interface ChangeSegment {
-  oldText: string;
-  newText: string;
-  addCount: number;
-  delCount: number;
-}
-
-export interface TouchedFile {
-  /** 相对工作区根的路径——撤回（`git checkout -- <rel>`）、展示、git 校验都要这个。
-   *  绝对路径不另存：`join(wsRoot, relPath)` 是确定组合，存两份就互为派生、
-   *  可能因工作区切换而不一致。 */
-  relPath: string;
-  status: TouchedStatus;
-  additions: number;
-  deletions: number;
-  /** 本轮内该文件的片段序列，按发生顺序。空数组 = 无片段 → 走累计视图。 */
-  segments: ChangeSegment[];
-}
 
 /** 一次 drain 的结果。`wsRoot` 是**会话级**事实（这个会话属于哪个工作区），
  *  文件条目不再各自重复一份。 */
@@ -139,13 +123,14 @@ export function createChangeAttribution(deps: AttributionDeps): ChangeAttributio
     const rel = toRelPath(bucket.wsRoot, info.filePath);
     if (!rel) return;
 
-    // Write 写整文件：相对 HEAD 一律视为新增（即使覆盖已存在的文件——本轮语义下
-    // 「本会话新建」比「本会话修改」更贴近，且 status 下游由 git 校验覆盖）。
+    // Write 写整文件 → 本轮语义下视为新增。事件侧只能分辨 M/A，这里**不做 git
+    // 校验去纠偏**：git 只被允许校验已有条目（发现权归事件），唯一能纠的是
+    // 「Write 覆盖了已存在文件」这类罕见情形，为它把第二个数据源请回来不值。
     const isWrite = name === "Write";
     let file = bucket.files.get(rel);
     if (!file) {
       file = {
-        relPath: rel,
+        path: rel,
         status: isWrite ? "A" : "M",
         additions: 0,
         deletions: 0,
@@ -192,10 +177,10 @@ export function mergeTouches(base: TouchedFile[], incoming: TouchedFile[]): Touc
   // 单一追加路径：新建条目与已存在条目走同一套累加/封顶规则——分成两条分支的话，
   // 上限只会在其中一条上生效（首次合并漏掉封顶就是这么来的）。
   const absorb = (src: TouchedFile) => {
-    let cur = merged.get(src.relPath);
+    let cur = merged.get(src.path);
     if (!cur) {
-      cur = { relPath: src.relPath, status: "M", additions: 0, deletions: 0, segments: [] };
-      merged.set(src.relPath, cur);
+      cur = { path: src.path, status: "M", additions: 0, deletions: 0, segments: [] };
+      merged.set(src.path, cur);
     }
     if (src.status === "A") cur.status = "A";
     cur.additions += src.additions;
@@ -214,7 +199,7 @@ export function mergeTouches(base: TouchedFile[], incoming: TouchedFile[]): Touc
  *  `ChangeFile` 是全链路唯一接缝，落盘格式与面板 props 都不因归集换源而变。 */
 export function toChangeFiles(files: TouchedFile[]): ChangeFile[] {
   return files.map((f) => ({
-    path: f.relPath,
+    path: f.path,
     status: f.status,
     additions: f.additions,
     deletions: f.deletions,

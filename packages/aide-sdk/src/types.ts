@@ -90,6 +90,10 @@ export interface ChangeRound {
    *  固化落盘前必清——save 层已过滤，wire 上不出现该字段；Rust 端
    *  ChangeRoundData 亦无 deny_unknown_fields，即使出现也被忽略。 */
   pending?: boolean;
+  /** 运行时态：本轮触碰明细（多出 `segments` 片段），仅内存，落盘前剥离。
+   *  与 `files` 同源——`files` 是它的落盘投影（`toChangeFiles`）。
+   *  历史轮（从磁盘加载）只有 `files`、没有它 → 点开走累计视图。 */
+  touches?: TouchedFile[];
 }
 
 export interface Keybindings {
@@ -227,6 +231,30 @@ export interface ChangeFile {
   status: string;
   additions: number;
   deletions: number;
+}
+
+/** 一次工具调用造成的改动片段（片段级 diff：不是全文件）。 */
+export interface ChangeSegment {
+  oldText: string;
+  newText: string;
+  addCount: number;
+  delCount: number;
+}
+
+/**
+ * 变更归集的条目：比 `ChangeFile` 多一份**本轮片段**（纯内存，不落盘）。
+ *
+ * `path` 是相对工作区根的路径——撤回（`git checkout -- <rel>`）、展示、git 校验
+ * 都要它。绝对路径不另存：所属工作区是**会话级**事实（`ChangeRound` 的消费者从
+ * 会话归属拿根），两者组合是确定的，各存一份就互为派生、可能因切工作区不一致。
+ */
+export interface TouchedFile {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  /** 本轮内该文件的片段序列，按发生顺序。空数组 = 无片段 → 走累计视图。 */
+  segments: ChangeSegment[];
 }
 
 // ── Provider types ──

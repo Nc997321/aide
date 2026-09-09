@@ -7,19 +7,27 @@ const fsMocks = vi.hoisted(() => ({
   unlistens: 0,
 }));
 
+/** chat-event 的订阅回调（归集器的事件入口，模块级只建一次 → 累积多个）。 */
+const chatMocks = vi.hoisted(() => ({
+  handlers: [] as Array<(e: { payload: unknown }) => void>,
+}));
+
 vi.mock("../api", () => ({
   api: {
     saveSessionChanges: vi.fn().mockResolvedValue(undefined),
     appendSessionChange: vi.fn().mockResolvedValue(undefined),
     loadSessionChanges: vi.fn().mockResolvedValue([]),
     sessionJsonlSize: vi.fn().mockResolvedValue(100),
+    // gitDiffFiles 保留在 mock 里是为了断言「不再被调用」——归集换了数据源后，
+    // 它若被调用就说明又退回了全局工作区 diff。
     gitDiffFiles: vi.fn().mockResolvedValue([]),
     gitRevertFile: vi.fn().mockResolvedValue(undefined),
     truncateSessionJsonl: vi.fn().mockResolvedValue(undefined),
     stopChatSession: vi.fn().mockResolvedValue(undefined),
   },
-  listen: vi.fn().mockImplementation(async (_ev: string, cb: (e: { payload: string[] }) => void) => {
-    fsMocks.fsHandler = cb;
+  listen: vi.fn().mockImplementation(async (ev: string, cb: (e: { payload: unknown }) => void) => {
+    if (ev === "chat-event") chatMocks.handlers.push(cb);
+    else fsMocks.fsHandler = cb as (e: { payload: string[] }) => void;
     return () => {
       fsMocks.unlistens++;
     };
@@ -34,10 +42,37 @@ vi.mock("./useModal", () => ({
   useModal: () => ({ confirm: vi.fn().mockResolvedValue(true) }),
 }));
 
-import { useConversationChanges, type ChangeRound } from "./useConversationChanges";
+import {
+  useConversationChanges,
+  __resetForTest,
+  type ChangeRound,
+} from "./useConversationChanges";
+import { useSessionWorkspaces } from "./useSessionWorkspaces";
 import { api, listen } from "../api";
 
 const SID = "uuid-1";
+/** 会话所属工作区根：归集器据此把绝对路径收成相对路径，撤回据此传 cwd。 */
+const WS_ROOT = "C:/proj";
+
+/** 推一条 chat-event 到归集器（走真实订阅回调）。 */
+function emitChat(payload: Record<string, unknown>) {
+  for (const h of chatMocks.handlers) h({ payload });
+}
+
+/** 变更类工具调用事件——变更归属的唯一入口。 */
+function toolUse(sid: string, path: string, oldString = "a", newString = "b") {
+  return {
+    type: "tool_use_start",
+    session_id: sid,
+    name: "Edit",
+    input: { file_path: path, old_string: oldString, new_string: newString },
+  };
+}
+
+/** 绑定会话 → 工作区（未绑定的会话不归集）。 */
+function bindWs(sid: string, wsPath: string = WS_ROOT) {
+  useSessionWorkspaces().setWorkspace(sid, { wsKey: `k-${sid}`, wsPath });
+}
 
 /** 挂载 hook：effectScope 隔离（全局 sessionState watch 跨实例共享，
  *  不隔离会让前置实例响应本测试的状态写入、污染调用计数）。 */
@@ -51,6 +86,7 @@ async function mountWithSid(sid = SID) {
   await nextTick();
   sidRef.value = sid;
   await nextTick();
+  bindWs(sid);
   await flushAsync(); // watch 回调内 loadSessionChanges 链落定
   return { hook, sidRef };
 }
@@ -78,6 +114,7 @@ function round(index: number, paths: string[], rewindTo?: number): ChangeRound {
 
 describe("useConversationChanges 用户操作错误处理（P0）", () => {
   beforeEach(() => {
+    __resetForTest(); // 归集器是模块级单例：不复位会把上个测试的桶带过来
     for (const k of Object.keys(apiMock)) apiMock[k as keyof typeof apiMock].mockClear();
     for (const k of Object.keys(apiMock)) apiMock[k as keyof typeof apiMock].mockResolvedValue(undefined);
     apiMock.loadSessionChanges.mockResolvedValue([]);
@@ -94,6 +131,7 @@ describe("useConversationChanges 用户操作错误处理（P0）", () => {
     disposers.length = 0;
     const { state, removeSessionState } = useSessionState();
     for (const sid of Object.keys(state)) removeSessionState(sid);
+    useSessionWorkspaces().clearAll();
     vi.restoreAllMocks();
   });
 
@@ -148,10 +186,11 @@ describe("useConversationChanges 用户操作错误处理（P0）", () => {
 
     await expect(hook.revertRound(hook.rounds.value[1])).resolves.not.toThrow();
     expect(apiMock.truncateSessionJsonl).toHaveBeenCalledWith(SID, 80);
-    // 只恢复 index>=2 的轮（第 1 轮的文件不碰）
+    // 只恢复 index>=2 的轮（第 1 轮的文件不碰）；cwd 必须带会话所属工作区——
+    // 走全局活动工作区会在用户当前所看的项目里 checkout，误回滚同名文件
     expect(apiMock.gitRevertFile).toHaveBeenCalledTimes(2);
-    expect(apiMock.gitRevertFile).toHaveBeenCalledWith("b.ts");
-    expect(apiMock.gitRevertFile).toHaveBeenCalledWith("c.ts");
+    expect(apiMock.gitRevertFile).toHaveBeenCalledWith("b.ts", WS_ROOT);
+    expect(apiMock.gitRevertFile).toHaveBeenCalledWith("c.ts", WS_ROOT);
     expect(hook.rounds.value).toHaveLength(1);
     expect(apiMock.saveSessionChanges).toHaveBeenCalledTimes(1);
   });
@@ -261,37 +300,87 @@ describe("useConversationChanges 用户操作错误处理（P0）", () => {
     expect(hook.rounds.value[0].index).toBe(9);
   });
 
-  it("快照基线 per-sid 隔离：B 的 delta 用 B 自己的快照算，不泄漏 A 的基线", async () => {
-    const A = "uuid-snap-a";
-    const B = "uuid-snap-b";
+  it("归属隔离：改动只记进发起它的那个会话的轮（事件按 sid 分桶）", async () => {
+    const A = "uuid-attr-a";
+    const B = "uuid-attr-b";
     const { setSessionState } = useSessionState();
     const { hook, sidRef } = await mountWithSid(A);
+    bindWs(B);
 
-    apiMock.gitDiffFiles
-      .mockResolvedValueOnce([{ path: "x.ts", status: "M", additions: 5, deletions: 0 }]) // A 快照
-      .mockResolvedValueOnce([{ path: "x.ts", status: "M", additions: 10, deletions: 0 }]) // B 快照
-      .mockResolvedValueOnce([{ path: "x.ts", status: "M", additions: 15, deletions: 0 }]); // B 固化 diff
-
+    // A 跑一轮，期间 B 的改动事件同时到达——旧实现此刻读的是全局 git diff，
+    // 会把 B 改的文件一并算进 A 这一轮。
     setSessionState(A, "running");
     await nextTick();
     await flushAsync();
-    sidRef.value = B;
+    emitChat(toolUse(A, `${WS_ROOT}/a.ts`));
+    emitChat(toolUse(B, `${WS_ROOT}/x.ts`));
+    setSessionState(A, "waiting");
     await nextTick();
     await flushAsync();
+
+    await vi.waitFor(() => {
+      expect(hook.rounds.value[0].files).toEqual([
+        expect.objectContaining({ path: "a.ts" }),
+      ]);
+    });
+
+    // B 那一份只会出现在 B 自己的轮里
     setSessionState(B, "running");
     await nextTick();
     await flushAsync();
     setSessionState(B, "waiting");
     await nextTick();
     await flushAsync();
-
-    // B 的 delta = 15 - 10 = +5；若泄漏 A 的 +5 基线会算成 +10
+    sidRef.value = B;
+    await nextTick();
+    await flushAsync();
     await vi.waitFor(() => {
-      expect(hook.rounds.value).toHaveLength(1);
       expect(hook.rounds.value[0].files).toEqual([
-        expect.objectContaining({ path: "x.ts", additions: 5, deletions: 0 }),
+        expect.objectContaining({ path: "x.ts" }),
       ]);
     });
+  });
+
+  it("归集不再读全局 git diff：整条链路一次 gitDiffFiles 都不调", async () => {
+    const A = "uuid-nogit";
+    const { setSessionState } = useSessionState();
+    const { hook } = await mountWithSid(A);
+
+    setSessionState(A, "running");
+    await nextTick();
+    await flushAsync();
+    emitChat(toolUse(A, `${WS_ROOT}/a.ts`));
+    setSessionState(A, "waiting");
+    await nextTick();
+    await flushAsync();
+
+    await vi.waitFor(() => expect(hook.rounds.value[0].files).toHaveLength(1));
+    expect(apiMock.gitDiffFiles).not.toHaveBeenCalled();
+  });
+
+  it("落盘剥掉运行时字段：touches / pending 不上盘（磁盘形状不变）", async () => {
+    const A = "uuid-strip";
+    const { setSessionState } = useSessionState();
+    const { hook } = await mountWithSid(A);
+
+    setSessionState(A, "running");
+    await nextTick();
+    await flushAsync();
+    emitChat(toolUse(A, `${WS_ROOT}/a.ts`));
+    setSessionState(A, "waiting");
+    await nextTick();
+    await flushAsync();
+
+    await vi.waitFor(() => {
+      expect(apiMock.saveSessionChanges).toHaveBeenCalledWith(A, [
+        expect.objectContaining({ index: 1 }),
+      ]);
+    });
+    // 内存里保留片段（本轮精确 diff），磁盘上只有落盘形状
+    expect(hook.rounds.value[0].touches?.[0].segments).toHaveLength(1);
+    const saved = apiMock.saveSessionChanges.mock.calls.at(-1)?.[1] as ChangeRound[];
+    expect(saved[0]).not.toHaveProperty("touches");
+    expect(saved[0]).not.toHaveProperty("pending");
   });
 
   it("进行中轮实时刷新：running 即显示 → 文件事件更新 files → 固化落盘并退订", async () => {
@@ -301,16 +390,11 @@ describe("useConversationChanges 用户操作错误处理（P0）", () => {
       const { setSessionState } = useSessionState();
       const { hook } = await mountWithSid(LIVE);
 
-      apiMock.gitDiffFiles
-        .mockResolvedValueOnce([]) // 快照：空基线
-        .mockResolvedValueOnce([{ path: "a.ts", status: "A", additions: 2, deletions: 0 }]) // 实时拉取
-        .mockResolvedValueOnce([{ path: "a.ts", status: "A", additions: 3, deletions: 0 }]); // 固化最终 diff
-
       setSessionState(LIVE, "running");
       await nextTick();
       await flushAsync();
 
-      // running 即建轮：pending + files 空（旧实现要等整轮结束才出现）
+      // running 即建轮：pending + files 空（等归集增量进来才填）
       expect(hook.rounds.value).toHaveLength(1);
       expect(hook.rounds.value[0].pending).toBe(true);
       expect(hook.rounds.value[0].files).toEqual([]);
@@ -319,29 +403,24 @@ describe("useConversationChanges 用户操作错误处理（P0）", () => {
       await flushAsync();
       expect(listenMock).toHaveBeenCalledWith("file-tree-changed", expect.any(Function));
 
-      // 文件事件 → 250ms 防抖 → delta 更新 pending 轮 files
+      // 工具改了文件 → 文件事件触发 → 250ms 防抖 → 增量并入 pending 轮
+      emitChat(toolUse(LIVE, `${WS_ROOT}/a.ts`, "old", "new\nnew2"));
       fsMocks.fsHandler!({ payload: [] });
       await vi.advanceTimersByTimeAsync(260);
       await flushAsync();
       expect(hook.rounds.value[0].files).toEqual([
-        expect.objectContaining({ path: "a.ts", additions: 2, deletions: 0 }),
+        expect.objectContaining({ path: "a.ts", additions: 2, deletions: 1 }),
       ]);
 
-      // 固化：最终 diff（无条件锚点，不依赖事件）+ 清 pending + 落盘 + 退订
+      // 固化：防抖间隙里新来的增量一并取走（不会丢） + 清 pending + 落盘 + 退订
+      emitChat(toolUse(LIVE, `${WS_ROOT}/b.ts`));
       setSessionState(LIVE, "waiting");
       await nextTick();
       await flushAsync();
       expect(hook.rounds.value[0].pending).toBe(false);
-      expect(hook.rounds.value[0].files[0]).toMatchObject({ additions: 3 });
+      expect(hook.rounds.value[0].files.map((f) => f.path).sort()).toEqual(["a.ts", "b.ts"]);
       expect(apiMock.saveSessionChanges).toHaveBeenCalledWith(LIVE, [expect.objectContaining({ index: 1 })]);
       expect(fsMocks.unlistens).toBe(1); // 固化即退订
-
-      // 退订后的迟到事件：无 pending 轮 → 不再拉 diff
-      const calls = apiMock.gitDiffFiles.mock.calls.length;
-      fsMocks.fsHandler!({ payload: [] });
-      await vi.advanceTimersByTimeAsync(260);
-      await flushAsync();
-      expect(apiMock.gitDiffFiles.mock.calls.length).toBe(calls);
     } finally {
       vi.useRealTimers();
     }
@@ -402,6 +481,6 @@ describe("useConversationChanges 用户操作错误处理（P0）", () => {
     expect(hook.rounds.value).toHaveLength(1);
     expect(hook.rounds.value[0].index).toBe(1);
     expect(apiMock.truncateSessionJsonl).toHaveBeenCalledWith(A, 80);
-    expect(apiMock.gitRevertFile).toHaveBeenCalledWith("b.ts");
+    expect(apiMock.gitRevertFile).toHaveBeenCalledWith("b.ts", WS_ROOT);
   });
 });

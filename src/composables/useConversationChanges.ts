@@ -1,14 +1,68 @@
 import { computed, reactive, watch, getCurrentScope, onScopeDispose } from "vue";
-import { useSessionState } from "./useSessionState";
+import { useSessionState, isSessionUntracked } from "./useSessionState";
+import { useSessionWorkspaces } from "./useSessionWorkspaces";
 import { isPendingSession, getLastDispatchedPrompt, resetPaginationForRevert } from "./useChatSession";
 import { useModal } from "./useModal";
 import { api, listen } from "../api";
-import type { ChangeRound, ChangeFile } from "../types";
+import type { ChangeRound, ChangeFile, TouchedFile } from "../types";
+import {
+  createChangeAttribution,
+  mergeTouches,
+  toChangeFiles,
+  type ChangeAttribution,
+} from "./useChangeAttribution";
 
 export type { ChangeRound, ChangeFile };
 
 /** 文件事件防抖：后端已归集（300ms 静默 + 2s 冷却），前端 250ms trailing 合并即可。 */
 const LIVE_REFRESH_DEBOUNCE = 250;
+
+// ── 变更归属归集器（模块级单例）──
+// 必须是模块级：若每个 useConversationChanges 实例各建一个归集器，事件只会被
+// 其中一个收到——先 drain 的人拿走全部，另一个永远为空。订阅同样只建一次
+// （回调读的是模块变量，实例替换后自动指向新的，不需要退订重订）。
+let attribution: ChangeAttribution | null = null;
+let attributionAttached = false;
+
+/** 会话所属工作区根——会话级事实，撤回/git 调用都从这里取，不随轮次漂移。 */
+function sessionWsRoot(sid: string): string | null {
+  return useSessionWorkspaces().workspaceOf(sid)?.wsPath || null;
+}
+
+function changeAttribution(): ChangeAttribution {
+  if (!attribution) {
+    attribution = createChangeAttribution({
+      rootOf: sessionWsRoot,
+      // 自动化运行没有轮次视图：归集进去的数据永远无人消费，只会在内存里堆积。
+      isTracked: (sid) => !isSessionUntracked(sid),
+    });
+  }
+  if (!attributionAttached) {
+    attributionAttached = true;
+    void listen("chat-event", (e) => {
+      attribution?.ingest((e.payload ?? {}) as Record<string, unknown>);
+    }).catch(() => {
+      // 订阅失败 = 归集器收不到事件 → 所有轮都无变更。与 git 拉取失败同级退化，
+      // 不静默：控制台留痕。
+      console.warn("[changelog] chat-event subscribe failed, change attribution disabled");
+    });
+  }
+  return attribution;
+}
+
+/** 测试钩子：丢弃归集器单例（与 useNotifications / useChatSession 的
+ *  __resetForTest 同惯例）。订阅句柄不动。 */
+export function __resetForTest(): void {
+  attribution = null;
+}
+
+/** 把一批归集增量并入轮次。
+ *  `touches` 是内存数据源（含片段），`files` 是它的落盘投影——两者同源，
+ *  同步点只有这一处，不存在第二处赋值让它们漂移。 */
+function applyTouches(round: ChangeRound, incoming: TouchedFile[]): void {
+  round.touches = mergeTouches(round.touches ?? [], incoming);
+  round.files = toChangeFiles(round.touches);
+}
 
 /** per-sid 轮次跟踪器：轮次、快照、回退位、落盘队列全按会话隔离——
  *  切会话只切视图指向，任何会话的状态都不会污染另一会话。 */
@@ -23,12 +77,18 @@ interface RoundTracker {
   lastState: string;
   /** 撤回进行中：阻止 stopChatSession 触发的固化把「被杀轮」记录回来。 */
   reverting: boolean;
-  /** 本轮开始时的 git diff 快照（delta 基线）。 */
-  snapshotDiff: Map<string, { additions: number; deletions: number }> | null;
   /** 本轮开始时的 .jsonl 字节位置（/rewind 锚点）。 */
   pendingRewindPosition: number | null;
   /** 本会话磁盘操作串行队列（快照/固化/落盘互不交错）。 */
   pendingOp: Promise<unknown>;
+}
+
+/** 剥掉运行时字段（`pending` / `touches`）：两者只活在内存里。 */
+function stripRuntimeFields(r: ChangeRound): ChangeRound {
+  const copy = { ...r };
+  delete copy.pending;
+  delete copy.touches;
+  return copy;
 }
 
 function newTracker(): RoundTracker {
@@ -39,31 +99,15 @@ function newTracker(): RoundTracker {
     loaded: false,
     lastState: "",
     reverting: false,
-    snapshotDiff: null,
     pendingRewindPosition: null,
     pendingOp: Promise.resolve(),
   };
 }
 
-/** 与快照求 delta：本轮真正新增/变化的文件（沿用原 captureChanges 语义）。 */
-function deltaFiles(
-  current: ChangeFile[],
-  snapshot: Map<string, { additions: number; deletions: number }> | null,
-): ChangeFile[] {
-  if (!snapshot || snapshot.size === 0) return current;
-  const files: ChangeFile[] = [];
-  for (const f of current) {
-    const prev = snapshot.get(f.path);
-    if (!prev) {
-      files.push(f);
-    } else if (prev.additions !== f.additions || prev.deletions !== f.deletions) {
-      files.push({ ...f, additions: f.additions - prev.additions, deletions: f.deletions - prev.deletions });
-    }
-  }
-  return files;
-}
-
 export function useConversationChanges(sessionId: () => string) {
+  // 挂载即建立事件订阅：工具的改动事件可能早于本轮第一次 drain 到达（首轮尤其
+  // 明显——固轮要等状态转 waiting），订阅晚了那一轮就整个漏采。
+  void changeAttribution();
   /** per-sid tracker 表（reactive Map：computed/视图直接跟踪键与数组内容）。 */
   const trackers = reactive(new Map<string, RoundTracker>());
   const { state: sessionState } = useSessionState();
@@ -100,12 +144,13 @@ export function useConversationChanges(sessionId: () => string) {
   }
 
   /** Persist rounds to disk（纯追加走 append 单轮，其余全量覆盖）。
-   *  pending 轮不落盘（wire 上不出现运行时字段；固化后才可持久化）。 */
+   *  pending 轮不落盘；`touches` 是内存片段，落盘前剥掉——磁盘形状
+   *  （Rust `ChangeRoundData`）不因归集换源而改变，老数据照读。 */
   async function save(sid: string) {
     if (!sid || isPendingSession(sid)) return;
     const t = trackers.get(sid);
     if (!t) return;
-    const list = t.rounds.filter((r) => !r.pending);
+    const list = t.rounds.filter((r) => !r.pending).map(stripRuntimeFields);
     const tail = list[list.length - 1];
     try {
       if (tail && tail.index === t.diskTailIndex + 1) {
@@ -122,8 +167,11 @@ export function useConversationChanges(sessionId: () => string) {
     }
   }
 
-  /** 轮开始（状态 → running）：立即拍快照 + 建 pending 轮（标题=本轮提问）。
-   *  prompt 同步取——异步链落定前注册表可能已被清。 */
+  /** 轮开始（状态 → running）：建 pending 轮（标题=本轮提问）+ 记 rewind 锚点。
+   *  prompt 同步取——异步链落定前注册表可能已被清。
+   *
+   *  不再拍 git 快照：本轮改了哪些文件由归集器的游标增量给出（drain 取走即
+   *  清空），不需要「轮首 diff 基线」这种依赖全局工作区单例的时间窗推断。 */
   function startRound(sid: string) {
     if (isPendingSession(sid)) return;
     const prompt = getLastDispatchedPrompt(sid) || undefined;
@@ -132,16 +180,11 @@ export function useConversationChanges(sessionId: () => string) {
       // 上一次固化失败遗留的 pending 轮：标记为已固化（数据尽力而为），避免双 pending
       const stale = t.rounds.find((r) => r.pending);
       if (stale) stale.pending = false;
-      // 快照（无条件锚点 1）
+      // rewind 锚点（唯一的异步取数，失败则本轮不可回退）
       try {
         t.pendingRewindPosition = await api.sessionJsonlSize(sid);
-        const current = await api.gitDiffFiles();
-        t.snapshotDiff = new Map(
-          current.map((f) => [f.path, { additions: f.additions, deletions: f.deletions }]),
-        );
       } catch (_) {
         t.pendingRewindPosition = null;
-        t.snapshotDiff = null;
       }
       t.roundCounter += 1;
       t.rounds.push({
@@ -155,44 +198,42 @@ export function useConversationChanges(sessionId: () => string) {
     });
   }
 
-  /** 轮结束（状态 → waiting/stopped）：最终 diff（无条件锚点 2，不依赖事件）→ 固化落盘。 */
+  /** 轮结束（状态 → waiting/stopped）：取走归集增量 → 固化落盘。
+   *  增量只可能属于本会话（事件带 session_id），跨会话/跨工作区窜数据在源头
+   *  就不可能发生——旧实现在这里读的是全局 git diff，拍的是用户当前所看的
+   *  工作区，后台会话因此记进别的项目。 */
   function solidifyRound(sid: string) {
     const t = trackers.get(sid);
     if (!t) return;
     t.pendingOp = t.pendingOp.then(async () => {
       if (t.reverting) return; // 撤回进行中：被杀轮不记录（轮记录已被清理）
-      try {
-        const current = await api.gitDiffFiles();
-        const files = deltaFiles(current, t.snapshotDiff);
-        const round = [...t.rounds].reverse().find((r) => r.pending);
-        if (round) {
-          round.files = files;
-          round.pending = false;
-        } else {
-          // 没有 pending 轮（app 启动前就开始的轮等边界）：照旧创建固化轮
-          t.roundCounter += 1;
-          t.rounds.push({
-            index: t.roundCounter,
-            time: new Date().toLocaleTimeString(),
-            files,
-            rewindTo: t.pendingRewindPosition ?? undefined,
-            prompt: getLastDispatchedPrompt(sid) || undefined,
-          });
-        }
-        t.snapshotDiff = null;
-        t.pendingRewindPosition = null;
-        await save(sid);
-      } catch (e) {
-        // diff 计算或落盘失败：本轮变更记录丢失（内存里未 push 或未持久化）。
-        console.warn("[changelog] captureChanges failed, this round's changes were not recorded:", e);
+      const touches = changeAttribution().drain(sid);
+      const round = [...t.rounds].reverse().find((r) => r.pending);
+      if (round) {
+        applyTouches(round, touches?.files ?? []);
+        round.pending = false;
+      } else {
+        // 没有 pending 轮（app 启动前就开始的轮等边界）：照旧创建固化轮
+        t.roundCounter += 1;
+        const created: ChangeRound = {
+          index: t.roundCounter,
+          time: new Date().toLocaleTimeString(),
+          files: [],
+          rewindTo: t.pendingRewindPosition ?? undefined,
+          prompt: getLastDispatchedPrompt(sid) || undefined,
+        };
+        applyTouches(created, touches?.files ?? []);
+        t.rounds.push(created);
       }
+      t.pendingRewindPosition = null;
+      await save(sid);
     });
   }
 
   // ── 实时刷新：活动视图存在 pending 轮 → 订阅 file-tree-changed 事件 ──
-  // 纯事件驱动（零兜底轮询）：数据完整性由轮首快照 + 轮末固化两个无条件锚点
-  // 保证，中间刷新只影响「进行中显示多新鲜」——事件链断裂最坏 = 回到轮末才
-  // 显示，自动自愈，零数据风险。
+  // 纯事件驱动（零兜底轮询）：进行中的轮每收到文件事件就把归集增量并入轮次，
+  // 只影响「显示多新鲜」——事件链断裂最坏 = 回到轮末固化时才显示，数据不丢
+  // （增量一直躺在归集器的桶里，固化时 drain 一并取走）。
   let unlistenFs: (() => void) | null = null;
   let fsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -233,13 +274,11 @@ export function useConversationChanges(sessionId: () => string) {
       const t = sid ? trackers.get(sid) : undefined;
       if (!t) return;
       const round = [...t.rounds].reverse().find((r) => r.pending);
-      if (!round) return; // 防抖期间已固化/撤回：无事可刷
-      try {
-        const current = await api.gitDiffFiles();
-        round.files = deltaFiles(current, t.snapshotDiff);
-      } catch (_) {
-        // 拉取失败：保持现状，下个文件事件再来
-      }
+      if (!round) return; // 防抖期间已固化/撤回：增量留在桶里，由固轮时一并取走
+      // 先确认有 pending 轮再 drain：drain 取走即清空，无轮可挂就等于丢增量
+      const touches = changeAttribution().drain(sid);
+      if (!touches) return;
+      applyTouches(round, touches.files);
     }, LIVE_REFRESH_DEBOUNCE);
   }
 
@@ -270,7 +309,10 @@ export function useConversationChanges(sessionId: () => string) {
       // 无界增长；视图切换创建的 tracker 可能尚未进状态表，视图持有期间不逐出）
       const keep = viewSid();
       for (const sid of [...trackers.keys()]) {
-        if (sid !== keep && !(sid in sessionState)) trackers.delete(sid);
+        if (sid !== keep && !(sid in sessionState)) {
+          trackers.delete(sid);
+          changeAttribution().forget(sid); // 桶随 tracker 一起收口，防无界增长
+        }
       }
     },
     { deep: true },
@@ -288,10 +330,13 @@ export function useConversationChanges(sessionId: () => string) {
   // ── 对外：视图投影（切会话 = 换投影，不动任何会话的状态） ──
   const rounds = computed<ChangeRound[]>(() => trackers.get(viewSid())?.rounds ?? []);
 
-  /** Revert a single file to its staged (pre-Claude) version */
+  /** Revert a single file to its staged (pre-Claude) version.
+   *  cwd 传会话所属工作区：撤回是唯一的破坏性操作，走全局活动工作区会在用户
+   *  当前所看的项目里执行 `checkout -- <path>`，误回滚另一项目的同名文件。 */
   async function revertFile(filePath: string) {
+    const cwd = sessionWsRoot(viewSid()) ?? undefined;
     try {
-      await api.gitRevertFile(filePath);
+      await api.gitRevertFile(filePath, cwd);
     } catch (e) {
       // 用户主动操作（撤回文件）失败绝不静默：上报并向上抛，
       // 让 revertRound/revertSingleFile 的调用方能感知回滚未完成。
@@ -349,8 +394,6 @@ export function useConversationChanges(sessionId: () => string) {
       }
     } finally {
       t.reverting = false;
-      // 被杀轮的快照/回退位已无意义，清掉（下轮 running 时重拍）
-      t.snapshotDiff = null;
       t.pendingRewindPosition = null;
     }
     t.rounds = t.rounds.filter((r) => r.index < round.index);

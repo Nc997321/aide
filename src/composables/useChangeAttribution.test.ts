@@ -56,7 +56,7 @@ describe("createChangeAttribution.ingest", () => {
     expect(r!.wsRoot).toBe(ROOT);
     expect(r!.files).toHaveLength(1);
     const f = r!.files[0];
-    expect(f.relPath).toBe("src/a.ts");
+    expect(f.path).toBe("src/a.ts");
     expect(f.status).toBe("M");
     expect(f.additions).toBe(3);
     expect(f.deletions).toBe(2);
@@ -95,7 +95,7 @@ describe("createChangeAttribution.ingest", () => {
     a.ingest(edit(`${ROOT}/a.ts`));
     a.ingest(edit(`${ROOT}/sub/b.rs`));
     const files = a.drain(SID)!.files;
-    expect(files.map((f) => f.relPath).sort()).toEqual(["a.ts", "sub/b.rs"]);
+    expect(files.map((f) => f.path).sort()).toEqual(["a.ts", "sub/b.rs"]);
   });
 });
 
@@ -122,20 +122,20 @@ describe("归属与边界", () => {
     const a = make();
     a.ingest(edit(`${ROOT}/a.ts`, "x", "y", SID));
     a.ingest(edit(`${ROOT}/b.ts`, "x", "y", OTHER_SID));
-    expect(a.drain(SID)!.files.map((f) => f.relPath)).toEqual(["a.ts"]);
-    expect(a.drain(OTHER_SID)!.files.map((f) => f.relPath)).toEqual(["b.ts"]);
+    expect(a.drain(SID)!.files.map((f) => f.path)).toEqual(["a.ts"]);
+    expect(a.drain(OTHER_SID)!.files.map((f) => f.path)).toEqual(["b.ts"]);
   });
 
   it("Windows 分隔符混用：绝对路径用反斜杠也能归一", () => {
     const a = make();
     a.ingest(edit("C:\\proj\\src\\a.ts"));
-    expect(a.drain(SID)!.files[0].relPath).toBe("src/a.ts");
+    expect(a.drain(SID)!.files[0].path).toBe("src/a.ts");
   });
 
   it("工作区根带尾部分隔符也能正确切分", () => {
     const a = make({ rootOf: () => "C:/proj/" });
     a.ingest(edit(`${ROOT}/src/a.ts`));
-    expect(a.drain(SID)!.files[0].relPath).toBe("src/a.ts");
+    expect(a.drain(SID)!.files[0].path).toBe("src/a.ts");
   });
 });
 
@@ -153,7 +153,7 @@ describe("游标语义", () => {
     a.drain(SID);
     a.ingest(edit(`${ROOT}/b.ts`));
     const r = a.drain(SID)!;
-    expect(r.files.map((f) => f.relPath)).toEqual(["b.ts"]);
+    expect(r.files.map((f) => f.path)).toEqual(["b.ts"]);
   });
 
   it("forget 丢弃未取走的桶", () => {
@@ -211,12 +211,12 @@ describe("toRelPath", () => {
 
 describe("mergeTouches", () => {
   const base: TouchedFile[] = [
-    { relPath: "a.ts", status: "M", additions: 1, deletions: 1, segments: [{ oldText: "x", newText: "y", addCount: 1, delCount: 1 }] },
+    { path: "a.ts", status: "M", additions: 1, deletions: 1, segments: [{ oldText: "x", newText: "y", addCount: 1, delCount: 1 }] },
   ];
 
   it("同路径合并：行数累加、片段拼接", () => {
     const out = mergeTouches(base, [
-      { relPath: "a.ts", status: "M", additions: 2, deletions: 0, segments: [{ oldText: "p", newText: "q", addCount: 2, delCount: 0 }] },
+      { path: "a.ts", status: "M", additions: 2, deletions: 0, segments: [{ oldText: "p", newText: "q", addCount: 2, delCount: 0 }] },
     ]);
     expect(out).toHaveLength(1);
     expect(out[0].additions).toBe(3);
@@ -225,23 +225,23 @@ describe("mergeTouches", () => {
 
   it("新增态优先：任一段是 Write 即视为新建", () => {
     const out = mergeTouches(base, [
-      { relPath: "a.ts", status: "A", additions: 0, deletions: 0, segments: [] },
+      { path: "a.ts", status: "A", additions: 0, deletions: 0, segments: [] },
     ]);
     expect(out[0].status).toBe("A");
   });
 
   it("新路径直接入列，不改动原数组", () => {
     const out = mergeTouches(base, [
-      { relPath: "b.ts", status: "M", additions: 1, deletions: 0, segments: [] },
+      { path: "b.ts", status: "M", additions: 1, deletions: 0, segments: [] },
     ]);
-    expect(out.map((f) => f.relPath).sort()).toEqual(["a.ts", "b.ts"]);
+    expect(out.map((f) => f.path).sort()).toEqual(["a.ts", "b.ts"]);
     expect(base).toHaveLength(1);
   });
 
   it("片段数上限在合并时同样生效", () => {
     const many = Array.from({ length: 20 }, () => ({ oldText: "x", newText: "y", addCount: 1, delCount: 1 }));
     const out = mergeTouches([], [
-      { relPath: "a.ts", status: "M", additions: 20, deletions: 20, segments: many },
+      { path: "a.ts", status: "M", additions: 20, deletions: 20, segments: many },
     ]);
     expect(out[0].segments).toHaveLength(12);
   });
@@ -250,7 +250,7 @@ describe("mergeTouches", () => {
 describe("toChangeFiles / isSegmentedRound", () => {
   it("toChangeFiles 剥掉片段，输出落盘形状", () => {
     const files: TouchedFile[] = [
-      { relPath: "a.ts", status: "M", additions: 2, deletions: 1, segments: [{ oldText: "x", newText: "y", addCount: 2, delCount: 1 }] },
+      { path: "a.ts", status: "M", additions: 2, deletions: 1, segments: [{ oldText: "x", newText: "y", addCount: 2, delCount: 1 }] },
     ];
     expect(toChangeFiles(files)).toEqual([
       { path: "a.ts", status: "M", additions: 2, deletions: 1 },
@@ -259,8 +259,8 @@ describe("toChangeFiles / isSegmentedRound", () => {
 
   it("isSegmentedRound：所有文件都有片段才算整轮片段视图", () => {
     const withSeg: TouchedFile[] = [
-      { relPath: "a.ts", status: "M", additions: 1, deletions: 0, segments: [{ oldText: "x", newText: "y", addCount: 1, delCount: 0 }] },
-      { relPath: "b.ts", status: "M", additions: 1, deletions: 0, segments: [{ oldText: "x", newText: "y", addCount: 1, delCount: 0 }] },
+      { path: "a.ts", status: "M", additions: 1, deletions: 0, segments: [{ oldText: "x", newText: "y", addCount: 1, delCount: 0 }] },
+      { path: "b.ts", status: "M", additions: 1, deletions: 0, segments: [{ oldText: "x", newText: "y", addCount: 1, delCount: 0 }] },
     ];
     expect(isSegmentedRound(withSeg)).toBe(true);
 
