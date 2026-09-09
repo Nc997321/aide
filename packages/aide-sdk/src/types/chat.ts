@@ -122,6 +122,26 @@ export interface ModelOption {
   displayName: string;
 }
 
+/**
+ * 发送前身份漂移判定结果（对照 Rust `IdentityDrift`）。
+ *
+ * 基线 = 会话元数据 `<id>.json` 的 provider / model 字段，与 sessionProvider /
+ * sessionModel 同一口径；基线缺失（会话从未发过 / 字段为空）→ 该维度 false。
+ *
+ * 只报「哪一维漂了」，**弹不弹、文案怎么写归 UI**——判定规则在 Rust 侧只有一份，
+ * 桌面端与鸿蒙端共用，避免同一规则在两端各存一份后各自漂移。
+ */
+export interface IdentityDrift {
+  /** 供应商维度漂移（基线存在且与本次不同）。 */
+  providerDrift: boolean;
+  /** 模型维度漂移（同上）。 */
+  modelDrift: boolean;
+  /** 会话记住的供应商 id；null = 没记过。 */
+  lastProvider: string | null;
+  /** 会话记住的模型；null = 没记过。 */
+  lastModel: string | null;
+}
+
 /** 模型切换的坐实回执——跟 agent-sidecar/src/types.ts 的 model_switch_result 事件
  *  镜像（前端侧补一个 seq：单调递增，连续两次切同一个模型也能触发 watcher）。
  *  ok:false 时 error 带驳回原因，下拉已被 sidecar 的回滚广播拉回旧值。 */

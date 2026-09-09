@@ -153,25 +153,32 @@ const displayedPermission = computed<PermissionRequest | null>(
   () => sendConfirm.value?.request ?? props.permission ?? null,
 );
 
-/** 构造发送前确认的合成请求（变体 C）：仅供应商 respawn 维度（模型维度的切换
- *  确认在 PreModelSwitch hook 的切换前弹窗，不在发送门控）。复用 PermissionDialog
- *  的 AskUserQuestion 视觉语言渲染。input 全前端字段，不进 sidecar。 */
-function buildSendConfirmRequest(decision: ConfirmDecision, effectiveModel: string): PermissionRequest {
+/** 构造发送前确认的合成请求：供应商漂移与「仅模型漂移」两种文案。
+ *
+ * 供应商漂移 = 要 respawn（进程重拉、历史迁移），必须说清是**永久**改动；
+ * 仅模型漂移 = 供应商没换，只换模型，文案侧重模型本身。两者都复用
+ * PermissionDialog 的 AskUserQuestion 视觉语言渲染，input 全前端字段，不进 sidecar。 */
+function buildSendConfirmRequest(decision: ConfirmDecision): PermissionRequest {
   const newProviderName = sessionProvider.value.name || decision.effective;
   const oldProviderName = decision.last
     ? (allProviders.value.find((p) => p.id === decision.last)?.name ?? decision.last)
-    : "";
+    : "未记录";
+  const oldModel = decision.lastModel ?? "未记录";
   return {
     id: `send-confirm-${crypto.randomUUID()}`,
     name: "__sendConfirm__",
     input: {
-      // 不说"本次"：确认后会话身份会落盘改写（settleOnSend），下次打开仍是新供应商，
+      // 不说"本次"：确认后会话身份会落盘改写（settleOnSend），下次打开仍是新供应商/模型，
       // 且没有反向入口改回去。文案必须让用户在点确认前就知道这是**永久**改动。
-      title: `此会话将改用 ${newProviderName}`,
-      chip: "切换确认",
-      question: `将以 ${newProviderName}/${effectiveModel} 发送（原 ${oldProviderName}）`,
-      info: `确认后这条会话的供应商会改为 ${newProviderName} 并写入会话记录，以后打开都是它。运行中的会话还会重新拉起进程、提示缓存失效；对话历史迁移到新会话继续。`,
-      confirmLabel: `继续发送 · ${effectiveModel}`,
+      title: decision.providerDrift
+        ? `此会话将改用 ${newProviderName}`
+        : `此会话将改用 ${decision.effectiveModel}`,
+      chip: decision.providerDrift ? "切换确认" : "模型变更",
+      question: `将以 ${newProviderName}/${decision.effectiveModel} 发送（原 ${oldProviderName}/${oldModel}）`,
+      info: decision.providerDrift
+        ? `确认后这条会话的供应商会改为 ${newProviderName} 并写入会话记录，以后打开都是它。运行中的会话还会重新拉起进程、提示缓存失效；对话历史迁移到新会话继续。`
+        : `供应商仍是 ${newProviderName}，仅模型由 ${oldModel} 改为 ${decision.effectiveModel}。确认后模型选择会写入会话记录。`,
+      confirmLabel: `继续发送 · ${decision.effectiveModel}`,
     },
   };
 }
@@ -298,20 +305,21 @@ async function onPermissionRespond(
  *  输入保留——与旧实现「取消时内容回退对话框」语义一致）。 */
 const sendConfirmedNonce = ref(0);
 
-/** 输入框的发送请求统一入口：跑发送前确认门控（provider respawn 维度——模型
- *  维度的切换确认已移交 SDK PreModelSwitch hook 的切换前弹窗，本门控不再比对
- *  模型；见 2026-09-01-model-switch-truth-design.md §2）。需确认 → 弹确认形态
- *  （不清输入，取消时内容回退对话框）；否则直接发送 + 推进 provider 基线 +
- *  递增 sendConfirmedNonce（输入框据此清空输入）。 */
-function onSendRequest(prompt: string, opts: SendOptions & { effectiveProvider: string; effectiveModel: string }) {
+/** 输入框的发送请求统一入口：跑发送前确认门控（**供应商 + 模型两维**——判定规则
+ *  下沉 Rust，桌面端与手机端共用同一份 `session_identity_drift`；两维都相同才不弹）。
+ *  需确认 → 弹确认形态（不清输入，取消时内容回退对话框）；否则直接发送 + 推进
+ *  provider 基线 + 递增 sendConfirmedNonce（输入框据此清空输入）。 */
+async function onSendRequest(prompt: string, opts: SendOptions & { effectiveProvider: string; effectiveModel: string }) {
   // 拆出确认门控用的 provider/模型，真实发送只带纯 SendOptions（不给 useChatSession 传额外字段）
   const { effectiveProvider, effectiveModel, ...sendOpts } = opts;
   const sidForGate = props.sessionId;
   if (sidForGate && !isPendingSession(sidForGate) && !props.isBusy) {
-    const decision = buildConfirmDecision(effectiveProvider, identity.lastProvider.value);
+    const decision = await buildConfirmDecision(sidForGate, effectiveProvider, effectiveModel);
+    // 判定是异步的：等回执期间用户可能已切走会话——此时结果属于旧会话，丢弃。
+    if (props.sessionId !== sidForGate) return;
     if (decision) {
       sendConfirm.value = {
-        request: buildSendConfirmRequest(decision, effectiveModel),
+        request: buildSendConfirmRequest(decision),
         pendingSend: { prompt, opts: sendOpts },
         effectiveProvider,
         effectiveModel,

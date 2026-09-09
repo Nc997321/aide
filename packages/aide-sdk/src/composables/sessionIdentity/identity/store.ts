@@ -118,7 +118,11 @@ async function restoreBinding(sid: string): Promise<void> {
   const resolved = consistentProviderId(allProviders.value, meta?.provider ?? null, meta?.model ?? null)
     ?? activeProviderId.value;
   await healProviderIfDirty(sid, meta, resolved);
-  const restored = restoreModel(displayModelsOf(sid), meta?.model ?? null);
+  // 未锁定（未启动 / stop 后）→ 模型跟随全局，恢复通道不生效：与供应商维度同口径
+  // （providerOf 为空 ⟹ effectiveProvider 回落 activeProviderId），否则会出现
+  // 「供应商 chip 是全局的、模型 chip 却是这条会话上次用的」两个 chip 口径打架。
+  // 差异由发送门控兜住：盘上基线是会话原模型、本次生效是全局默认 → 弹确认。
+  const restored = "";
   bindings[sid] = { meta, runtimeModel: "", draft: "", restored, sdkModels: [] };
   lastProviderBySid[sid] = resolved;
 }

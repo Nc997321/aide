@@ -1,32 +1,65 @@
 /**
- * L3 门控层：发送前确认的纯判定（provider respawn 维度）。
+ * L3 门控层：发送前确认的判定入口。
  *
- * 模型维度的门控已废除（2026-09-01-model-switch-truth-design.md §2）：模型切换
- * 的成本确认由 SDK PreModelSwitch hook 在切换发生前裁决（sidecar 挂起 → 前端弹窗），
- * 「上次发送的模型」基线对比是错位之源，已删除。
+ * 判定规则 2026-09-08 起下沉 Rust（`src-tauri/src/commands/session::compute_identity_drift`）：
+ * 规则只此一份，桌面端与鸿蒙端（ArkTS 无 aide-sdk 可复用）共用，本层不再本地
+ * 实现比较逻辑——只负责调用，并判定「要不要弹」。
  *
- * 本文件只回答一件事：本次发送是否涉及**供应商 respawn**（进程重新拉起、历史迁移）。
- * 取 last=null 直接 false 的约定（无基线 = 首次 spawn / 未知，不弹）。
+ * **两维都判，先供应商、再模型**：两者都相同才不弹窗。
+ *  - 供应商漂移：要 respawn（进程重拉、历史迁移），代价大，文案必须说清是永久改动；
+ *  - 仅模型漂移：供应商没换，只换模型，文案侧重模型本身。
  *
- * 文案组装（provider name 查找、PermissionRequest 包装）不在此层——由 ChatPanel 拿
- * ConfirmDecision + allProviders 组装，保持本层零依赖、可纯函数测试。
+ * 修订记录：2026-09-01 曾废除模型维度（只判供应商），理由是「上次发送的模型基线
+ * 对比是错位之源」；2026-09-08 恢复——未启动的旧会话点开后模型跟全局走、不跟会话
+ * 记忆（与供应商同口径），此时发送若不提示，用户不知道模型已经换了。
+ *
+ * 基线由 Rust 从会话元数据 `<id>.json` 读（与 sessionProvider / sessionModel
+ * 同一口径）；基线缺失 → 该维度 false（无基线不弹）。判定调用失败 → 放行（null），
+ * 不因门控自身故障卡住发送。
  */
+
+import { api } from "../../../api";
 
 export interface ConfirmDecision {
   /** 本次发送将生效的供应商 id。 */
   effective: string;
-  /** 上次发送坐实的供应商 id（needsConfirm 为 true 时必非 null）。 */
-  last: string;
+  /** 会话记住的供应商 id（无 → null）。 */
+  last: string | null;
+  /** 本次发送将生效的模型。 */
+  effectiveModel: string;
+  /** 会话记住的模型（无 → null）。 */
+  lastModel: string | null;
+  /** 供应商维度漂移（true = 需要 respawn）。 */
+  providerDrift: boolean;
+  /** 模型维度漂移。 */
+  modelDrift: boolean;
 }
 
-/** 是否弹发送前确认：`last=null`（首次 / 无基线）→ false；供应商不同 → true。 */
-export function needsConfirm(effective: string, last: string | null): boolean {
-  if (!last) return false;
-  return effective !== last;
-}
-
-/** 判定 + 组装决策。无需确认（last=null 或同供应商）→ null。 */
-export function buildConfirmDecision(effective: string, last: string | null): ConfirmDecision | null {
-  if (!last || !needsConfirm(effective, last)) return null;
-  return { effective, last };
+/**
+ * 判定本次发送是否要弹确认。无需确认（两维都相同 / 无基线 / 查询失败）→ null。
+ */
+export async function buildConfirmDecision(
+  sid: string,
+  effective: string,
+  effectiveModel: string,
+): Promise<ConfirmDecision | null> {
+  // 判空不是防御性冗余：transport 未实现该命令时（测试替身 / 旧版主进程）会
+  // resolve 出 undefined，判空缺失会让门控抛错、进而卡住发送路径。
+  let drift: Awaited<ReturnType<typeof api.sessionIdentityDrift>> | null = null;
+  try {
+    drift = await api.sessionIdentityDrift(sid, effective, effectiveModel);
+  } catch {
+    return null; // 门控自身故障不阻塞发送
+  }
+  if (!drift || (!drift.providerDrift && !drift.modelDrift)) {
+    return null;
+  }
+  return {
+    effective,
+    last: drift.lastProvider,
+    effectiveModel,
+    lastModel: drift.lastModel,
+    providerDrift: drift.providerDrift,
+    modelDrift: drift.modelDrift,
+  };
 }

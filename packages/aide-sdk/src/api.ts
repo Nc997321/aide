@@ -16,7 +16,7 @@ import type {
   CallHierarchyResult, CallHierarchyDirection, InlayHintItem,
   RemoteStatus,
 } from "./types";
-import type { ModelOption, PermissionModeOption, UserMessageBlock, MetaField, SessionMetaPatch } from "./types/chat";
+import type { ModelOption, PermissionModeOption, UserMessageBlock, MetaField, SessionMetaPatch, IdentityDrift } from "./types/chat";
 import type { PermissionRuleDraft } from "./types/permissions";
 
 /** send_message 的完整负载（IPC 边界 DTO）。可空字段 null = Rust None。 */
@@ -171,6 +171,28 @@ export const api = {
    *  存活 → 会话锁定自己的供应商；未存活 → 跟随全局激活供应商。 */
   sessionAlive(id: string): Promise<boolean> {
     return getTransport().invoke("session_alive", { id });
+  },
+  /**
+   * 发送前身份漂移判定：本次将生效的 provider / model 与会话上次坐实的基线逐维
+   * 比对，**先供应商、再模型**——两者都相同才判无漂移。
+   *
+   * 判定规则在 Rust 侧只有一份（`commands/session::compute_identity_drift`），
+   * 桌面端与鸿蒙端共用，不各自实现。基线缺失（会话从未发过 / 字段为空）→ 该
+   * 维度 false（无基线不弹确认）；providerId / model 传空串 = 本次未指定，
+   * 同样判 false。
+   *
+   * 只回答「哪一维漂了」，**弹不弹、文案怎么写归调用方**。
+   */
+  sessionIdentityDrift(
+    id: string,
+    providerId: string,
+    model: string,
+  ): Promise<IdentityDrift> {
+    return getTransport().invoke("session_identity_drift", {
+      id,
+      providerId,
+      model,
+    });
   },
   getDefaultModels(): Promise<ModelOption[]> {
     return getTransport().invoke("get_default_models");

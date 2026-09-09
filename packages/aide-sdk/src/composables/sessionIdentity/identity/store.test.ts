@@ -79,6 +79,24 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
       expect(id.lastProviderOf("s1")).toBe("p_a");
     });
 
+    it("未启动会话：模型也跟全局（不套用会话记忆），供应商/模型口径一致", async () => {
+      // 回归：此前 restoreBinding 无条件 restoreModel(meta.model)，于是点开一个已停掉
+      // 的旧会话会出现「供应商 chip 是全局的、模型 chip 却是这条会话上次用的」。
+      // 未锁定（providerOf 为空）⟹ 两个维度都跟随全局，差异交给发送门控提示。
+      allProviders.value = [
+        makeProvider("p_a", "m_shared"),
+        makeProvider("p_b", "m_b_default", { knownModels: ["m_b_default", "m_shared"] }),
+      ];
+      activeProviderId.value = "p_b";
+      sessionProviderMock.mockResolvedValue("p_a"); // 会话记录：供应商 p_a
+      sessionModelMock.mockResolvedValue("m_shared"); // 会话记录：模型 m_shared（p_b 也认）
+      await id.resolve("s1");
+      expect(id.providerOf("s1")).toBeNull(); // 未锁定
+      expect(id.effectiveProviderOf("s1")).toBe("p_b"); // 供应商跟全局
+      expect(id.effectiveModelOf("s1")).toBe("m_b_default"); // 模型也跟全局，不是 m_shared
+      expect(id.lastProviderOf("s1")).toBe("p_a"); // 门控基线仍是盘上身份 → 会提示漂移
+    });
+
     it("provider 被删但模型反查命中 → 修正绑定 + self-heal 写回", async () => {
       allProviders.value = [makeProvider("p_a", "kimi")];
       activeProviderId.value = "p_a";
