@@ -68,10 +68,9 @@ const badgeClass = computed(() => {
 });
 
 const caveatText = computed(() => {
-  // 仅 UNSUPPORTED 组件（lsp/output_styles/themes/monitors）会出现于 entry.unsupported；
-  // mcp_servers 属于 SUPPORTED，永不在其中，故不列入此映射。
+  // 仅 UNSUPPORTED 组件（output_styles/themes/monitors）会出现于 entry.unsupported；
+  // lsp_servers 与 mcp_servers 同属 SUPPORTED，永不出现于其中，故不列入此映射。
   const mapComp: Record<string, string> = {
-    lsp_servers: "LSP",
     output_styles: "输出样式",
     themes: "主题",
     monitors: "后台监控",
