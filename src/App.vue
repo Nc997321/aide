@@ -296,7 +296,7 @@ const { notice, choice } = useModal();
 
 // ── Conversation changes（P2-4 合一：唯一实例，badge + 变更面板共用，
 //    ChangeLogPanel 不再自建 useConversationChanges，走 props 透传）──
-const { rounds, revertRound, revertSingleFile } = useConversationChanges(() => activeSessionId.value);
+const { rounds, revertRound, revertSingleFile, revertFileGlobally } = useConversationChanges(() => activeSessionId.value);
 const changeCount = computed(() => {
   let n = 0;
   for (const r of rounds.value) n += r.files.length;
@@ -1088,6 +1088,7 @@ onUnmounted(() => {
               :rounds="rounds"
               :revert-round="revertRound"
               :revert-single-file="revertSingleFile"
+              :revert-file-globally="revertFileGlobally"
             />
             <GitPanel v-show="rightTab === 'git'" ref="gitPanelRef" />
             <SearchPanel

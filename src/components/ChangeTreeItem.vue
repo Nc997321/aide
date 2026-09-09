@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { getFileIcon } from "../utils/fileIcons";
+import ChangeDiffPane from "./ChangeDiffPane.vue";
 import type { ChangeTreeNode } from "../utils/changeTree";
 import type { ChangeFile } from "../types";
 
 defineOptions({ name: "ChangeTreeItem" });
 
+/** 本组件只服务变更面板（不是通用树），diff 渲染直接依赖 ChangeDiffPane：
+ *  递归组件自引用的插槽 prop 会让类型推断成环，宁可多三个 props。 */
 const props = defineProps<{
   node: ChangeTreeNode;
   depth: number;
@@ -12,6 +15,12 @@ const props = defineProps<{
   openFile: (f: ChangeFile) => void;
   revertFile: (f: ChangeFile) => void;
   toggleDir: (path: string) => void;
+  /** 当前展开 diff 的文件路径（单开）；null = 无 */
+  expandedPath: string | null;
+  toggleExpand: (path: string) => void;
+  workspaceRoot?: string;
+  diffMode?: "split" | "unified";
+  cumulativeNote?: string;
 }>();
 
 const isCollapsed = () => props.collapsedDirs.has(props.node.kind === "dir" ? props.node.path : "");
@@ -54,36 +63,57 @@ const rowPadding = () => `${props.depth * 14 + 8}px`;
           :open-file="openFile"
           :revert-file="revertFile"
           :toggle-dir="toggleDir"
+          :expanded-path="expandedPath"
+          :toggle-expand="toggleExpand"
+          :workspace-root="workspaceRoot"
+          :diff-mode="diffMode"
+          :cumulative-note="cumulativeNote"
         />
       </template>
     </template>
 
-    <div
-      v-else
-      class="cft-file"
-      :class="{ 'cft-file--deleted': node.file.status === 'D' }"
-      :style="{ paddingLeft: rowPadding() }"
-      v-tooltip="node.file.path"
-      @click="openFile(node.file)"
-    >
-      <span class="cft-status" :class="`status-${node.file.status || 'M'}`">{{ node.file.status || 'M' }}</span>
-      <svg
-        class="cft-file-icon"
-        :style="{ color: getFileIcon(node.file.path).color }"
-        width="14" height="14" viewBox="0 0 24 24" fill="none"
+    <div v-else>
+      <div
+        class="cft-file"
+        :class="{ 'cft-file--deleted': node.file.status === 'D', 'cft-file--open': expandedPath === node.file.path }"
+        :style="{ paddingLeft: rowPadding() }"
+        v-tooltip="node.file.path"
+        @click="toggleExpand(node.file.path)"
       >
-        <path :d="getFileIcon(node.file.path).path" fill="currentColor" opacity="0.85"/>
-      </svg>
-      <span class="cft-name">{{ node.name }}</span>
-      <span v-if="node.file.additions > 0 || node.file.deletions > 0" class="cft-stats">
-        <span v-if="node.file.additions > 0" class="cft-add">+{{ node.file.additions }}</span>
-        <span v-if="node.file.deletions > 0" class="cft-del">-{{ node.file.deletions }}</span>
-      </span>
-      <button
-        class="cft-revert"
-        v-tooltip="'撤回此文件'"
-        @click.stop="revertFile(node.file)"
-      ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button>
+        <span class="cft-status" :class="`status-${node.file.status || 'M'}`">{{ node.file.status || 'M' }}</span>
+        <svg
+          class="cft-file-icon"
+          :style="{ color: getFileIcon(node.file.path).color }"
+          width="14" height="14" viewBox="0 0 24 24" fill="none"
+        >
+          <path :d="getFileIcon(node.file.path).path" fill="currentColor" opacity="0.85"/>
+        </svg>
+        <span class="cft-name">{{ node.name }}</span>
+        <span v-if="node.file.additions > 0 || node.file.deletions > 0" class="cft-stats">
+          <span v-if="node.file.additions > 0" class="cft-add">+{{ node.file.additions }}</span>
+          <span v-if="node.file.deletions > 0" class="cft-del">-{{ node.file.deletions }}</span>
+        </span>
+        <button
+          v-if="node.file.status !== 'D'"
+          class="cft-act"
+          v-tooltip="'在编辑器中打开'"
+          @click.stop="openFile(node.file)"
+        ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg></button>
+        <button
+          class="cft-act cft-act--revert"
+          v-tooltip="'撤回此文件'"
+          @click.stop="revertFile(node.file)"
+        ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button>
+      </div>
+      <ChangeDiffPane
+        v-if="expandedPath === node.file.path"
+        :path="node.file.path"
+        :status="node.file.status"
+        :segments="[]"
+        :workspace-root="workspaceRoot"
+        :mode="diffMode ?? 'unified'"
+        :cumulative-note="cumulativeNote"
+      />
     </div>
   </div>
 </template>
@@ -153,15 +183,17 @@ const rowPadding = () => `${props.depth * 14 + 8}px`;
   color: var(--aide-text-primary);
 }
 
+/* 已删除条目：磁盘上无对应物（「打开 ↗」不渲染），但 diff 仍可展开——
+   git 拿得到删除前的全文，这是唯一能看见它内容的地方。 */
 .cft-file--deleted {
-  cursor: default;
   opacity: 0.6;
-}
-.cft-file--deleted:hover {
-  background: none;
 }
 .cft-file--deleted .cft-name {
   text-decoration: line-through;
+}
+
+.cft-file--open {
+  background: var(--aide-surface-default);
 }
 
 .cft-status {
@@ -210,7 +242,7 @@ const rowPadding = () => `${props.depth * 14 + 8}px`;
 .cft-add { color: var(--aide-success); }
 .cft-del { color: var(--aide-danger); }
 
-.cft-revert {
+.cft-act {
   flex-shrink: 0;
   background: none;
   border: none;
@@ -223,10 +255,14 @@ const rowPadding = () => `${props.depth * 14 + 8}px`;
   transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
   font-family: inherit;
 }
-.cft-file:hover .cft-revert {
+.cft-file:hover .cft-act {
   opacity: 1;
 }
-.cft-revert:hover {
+.cft-act:hover {
+  color: var(--aide-accent);
+  background: color-mix(in srgb, var(--aide-accent) 12%, transparent);
+}
+.cft-act--revert:hover {
   color: var(--aide-danger);
   background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
 }

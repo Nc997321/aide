@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { mergeChangeFiles } from "../utils/changeFiles";
 import type { ChangeRound, ChangeFile } from "../composables/useConversationChanges";
 import { useFileResolver } from "../composables/useFileResolver";
 import { useSessionWorkspaces } from "../composables/useSessionWorkspaces";
-import { api } from "../api";
 import ChangeFileTree from "./ChangeFileTree.vue";
+import ChangeFileList from "./ChangeFileList.vue";
+import type { TouchedFile } from "../types";
 
 // P2-4 合一：rounds 与撤回操作由 App.vue 的 useConversationChanges 唯一实例
 // 经 props 透传（ChangeLogPanel 恒挂在活动会话，sessionId 与实例恒同）。
@@ -14,10 +16,18 @@ const props = defineProps<{
   rounds: ChangeRound[];
   revertRound: (round: ChangeRound) => Promise<void>;
   revertSingleFile: (round: ChangeRound, filePath: string) => Promise<void>;
+  /** 撤回某文件在**所有轮**中的记录（顶部统一树是跨轮视图，撤回的语义天然是
+   *  「这个文件整体回到 HEAD」，不是「某一轮里的这一条」）。 */
+  revertFileGlobally: (filePath: string) => Promise<void>;
 }>();
 
 const { openResolved } = useFileResolver();
 const sessionWs = useSessionWorkspaces();
+
+/** 会话所属工作区根。**归集时绑定的实体归属字段**，这里只查表读一次：
+ *  不再「查不到就退回全局活动工作区」——那是消费端猜测，曾导致条目被拼到
+ *  旧工作区根下集体报「找不到文件」。未注册就是没有，交给解析器按相对路径处理。 */
+const wsRoot = computed(() => sessionWs.workspaceOf(props.sessionId)?.wsPath || undefined);
 
 // 连续无变更轮次 > 2 时，中间折叠成一行省略号，点击可展开
 const NOCHANGE_COLLAPSE_THRESHOLD = 2;
@@ -34,35 +44,28 @@ function expandGroup(key: string) {
 }
 
 /**
- * 变更条目所属的工作区根：优先会话注册表（混合 tab 布局下会话可来自任意工作区，
- * 捕获变更时 git 就以它为 cwd），未注册时退回当前活动工作区。
- * 点击时现取、不缓存——曾缓存于 onMounted，工作区切换/晚恢复后失锚，
- * 所有点击都被拼到旧根下报「找不到文件」。
- */
-async function workspaceRootOf(sessionId: string): Promise<string | undefined> {
-  const registered = sessionWs.workspaceOf(sessionId)?.wsPath;
-  if (registered) return registered;
-  try {
-    const info = await api.getProjectInfo();
-    return info.root || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
  * 打开变更文件：走文件解析器的「探测 → 工作区内按名搜索 → 多命中浮层」完整兜底，
  * 与聊天文件链接同一条路径——条目被移动/改名后仍能被搜索找回，而不是直接报错。
- * 已删除（D）条目磁盘上无对应物，不可点开；内容可用「撤回此文件」恢复。
+ * 已删除（D）条目磁盘上无对应物，「打开 ↗」不渲染；内容用 diff 或「撤回」恢复。
  */
 async function openFile(f: ChangeFile) {
   if (f.status === "D") return;
-  await openResolved(f.path, await workspaceRootOf(props.sessionId));
+  await openResolved(f.path, wsRoot.value);
 }
 
 function revertFileInRound(round: ChangeRound, f: ChangeFile) {
   void props.revertSingleFile(round, f.path);
 }
+
+/** 轮内平铺的行：内存有本轮片段就带片段（点开 = 本轮精确 diff），历史轮没有 →
+ *  空片段数组，走累计视图。补齐成同一种形状，渲染层不做「有没有 touches」的分支。 */
+function rowsOf(round: ChangeRound): TouchedFile[] {
+  if (round.touches) return round.touches;
+  return round.files.map((f) => ({ ...f, segments: [] }));
+}
+
+/** 顶部统一树的输入：全会话累计（D2）。跨轮同路径合并，行数累加、状态取最新。 */
+const allFiles = computed(() => mergeChangeFiles(props.rounds));
 
 const totalFiles = computed(() => {
   let n = 0;
@@ -114,6 +117,18 @@ const renderItems = computed<RenderItem[]>(() => {
         <div class="changelog-empty">暂无变更记录</div>
       </template>
       <template v-else>
+        <!-- 顶部：全会话统一文件树（全面板只此一棵，轮次区不再各自建树） -->
+        <div v-if="allFiles.length > 0" class="changelog-all">
+          <div class="changelog-all-head">全部文件 · {{ allFiles.length }}</div>
+          <ChangeFileTree
+            :files="allFiles"
+            :open-file="openFile"
+            :revert-file="(f: ChangeFile) => void props.revertFileGlobally(f.path)"
+            :workspace-root="wsRoot"
+            diff-mode="unified"
+            cumulative-note="全会话累计：显示该文件相对 HEAD 的全部差异"
+          />
+        </div>
         <template v-for="item in renderItems" :key="item.kind === 'round' ? `r-${item.round.index}` : `c-${item.key}`">
           <div
             v-if="item.kind === 'collapsed'"
@@ -147,10 +162,12 @@ const renderItems = computed<RenderItem[]>(() => {
               class="changelog-nochange"
               :class="{ 'changelog-nochange--pending': item.round.pending }"
             >{{ item.round.pending ? '等待文件变更…' : '无变更' }}</div>
-            <ChangeFileTree
+            <ChangeFileList
               v-else
-              :files="item.round.files"
-              :open-file="(f: ChangeFile) => openFile(f)"
+              :rows="rowsOf(item.round)"
+              :workspace-root="wsRoot"
+              mode="split"
+              :open-file="openFile"
               :revert-file="(f: ChangeFile) => revertFileInRound(item.round, f)"
             />
           </div>
@@ -215,6 +232,21 @@ const renderItems = computed<RenderItem[]>(() => {
   font-size: 11px;
   color: var(--aide-text-muted);
   text-align: center;
+}
+
+/* ── 顶部统一文件树 ── */
+
+.changelog-all {
+  border-bottom: 1px solid var(--aide-border);
+  background: var(--aide-bg-deep);
+}
+
+.changelog-all-head {
+  padding: 5px 12px 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--aide-text-muted);
 }
 
 /* ── Round groups ── */

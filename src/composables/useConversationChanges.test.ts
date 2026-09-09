@@ -113,7 +113,10 @@ function round(index: number, paths: string[], rewindTo?: number): ChangeRound {
 }
 
 describe("useConversationChanges 用户操作错误处理（P0）", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // 冲刷上个用例可能残留的异步链（revertRound 的文件恢复循环是 await 串行，
+    // 上一用例断言完不等于链已跑完——残留的 gitRevertFile 会落进本用例的计数）。
+    await flushAsync(30);
     __resetForTest(); // 归集器是模块级单例：不复位会把上个测试的桶带过来
     for (const k of Object.keys(apiMock)) apiMock[k as keyof typeof apiMock].mockClear();
     for (const k of Object.keys(apiMock)) apiMock[k as keyof typeof apiMock].mockResolvedValue(undefined);
@@ -482,5 +485,37 @@ describe("useConversationChanges 用户操作错误处理（P0）", () => {
     expect(hook.rounds.value[0].index).toBe(1);
     expect(apiMock.truncateSessionJsonl).toHaveBeenCalledWith(A, 80);
     expect(apiMock.gitRevertFile).toHaveBeenCalledWith("b.ts", WS_ROOT);
+  });
+});
+
+
+describe("revertFileGlobally — 统一树的撤回（跨轮语义）", () => {
+  it("git 只回滚一次，条目从所有轮移除", async () => {
+    const G = "uuid-global-revert";
+    apiMock.loadSessionChanges.mockResolvedValue([round(1, ["a.ts"]), round(2, ["a.ts", "b.ts"])]);
+    const { hook } = await mountWithSid(G);
+
+    expect(hook.rounds.value).toHaveLength(2);
+    // 增量断言：上一用例的回滚链可能跨用例落地（挂在 fake timer 上，beforeEach
+    // 的 microtask 冲刷冲不掉），全局计数不可靠——只认本用例产生的这次调用。
+    const before = apiMock.gitRevertFile.mock.calls.length;
+    await hook.revertFileGlobally("a.ts");
+    const calls = apiMock.gitRevertFile.mock.calls.slice(before);
+
+    // 同一个文件不重复 checkout（按轮逐个撤回会调两次）
+    expect(calls).toEqual([["a.ts", WS_ROOT]]);
+    expect(hook.rounds.value.every((r) => !r.files.some((x) => x.path === "a.ts"))).toBe(true);
+    // 未被撤回的文件留在原轮
+    expect(hook.rounds.value[1].files.map((x) => x.path)).toEqual(["b.ts"]);
+  });
+
+  it("撤回失败 → 向上抛，且不移条目（不出现「条目已消失但文件还在」）", async () => {
+    const G = "uuid-global-revert-fail";
+    apiMock.loadSessionChanges.mockResolvedValue([round(1, ["a.ts"])]);
+    const { hook } = await mountWithSid(G);
+    apiMock.gitRevertFile.mockRejectedValueOnce(new Error("locked"));
+
+    await expect(hook.revertFileGlobally("a.ts")).rejects.toThrow("locked");
+    expect(hook.rounds.value[0].files).toHaveLength(1);
   });
 });

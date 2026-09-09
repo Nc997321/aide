@@ -76,7 +76,10 @@ function lineCount(text: string): number {
   return text.length === 0 ? 0 : text.split("\n").length;
 }
 
-function makePair(oldText: string, newText: string, status: DiffPair["status"]): DiffPair {
+/** 片段文本 → DiffPair。`status` 决定两侧标签（新增文件旧侧显示「（空）」）。
+ *  export 供变更面板复用：面板的片段视图与这里的变更卡喂**同一个** DiffViewer，
+ *  不维护第二套 pair 构造。 */
+export function makePair(oldText: string, newText: string, status: DiffPair["status"]): DiffPair {
   return {
     oldText,
     newText,

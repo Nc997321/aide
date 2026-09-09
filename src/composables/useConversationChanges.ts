@@ -403,10 +403,28 @@ export function useConversationChanges(sessionId: () => string) {
     await save(sid);
   }
 
-  /** Revert a single file and remove it from its round */
+  /** Revert a single file and remove it from its round.
+   *  `touches` 与 `files` 同源，必须一起删：只删 files 的话，该轮若还在刷新
+   *  （pending 或后续 drain），applyTouches 会用残留的 touches 把它加回来。 */
   async function revertSingleFile(round: ChangeRound, filePath: string) {
     await revertFile(filePath);
     round.files = round.files.filter((f) => f.path !== filePath);
+    if (round.touches) round.touches = round.touches.filter((f) => f.path !== filePath);
+    const sid = viewSid();
+    if (sid) await save(sid);
+  }
+
+  /** 撤回某文件在**所有轮**中的记录：git 只回滚一次，条目从每一轮里移除。
+   *  顶部统一树是跨轮视图，「撤回这个文件」的语义天然是它整体回到 HEAD，
+   *  不是某一轮里的那一条——按轮逐个撤回会对同一个文件重复 checkout。 */
+  async function revertFileGlobally(filePath: string) {
+    await revertFile(filePath);
+    const t = trackers.get(viewSid());
+    if (!t) return;
+    for (const r of t.rounds) {
+      r.files = r.files.filter((f) => f.path !== filePath);
+      if (r.touches) r.touches = r.touches.filter((f) => f.path !== filePath);
+    }
     const sid = viewSid();
     if (sid) await save(sid);
   }
@@ -414,5 +432,5 @@ export function useConversationChanges(sessionId: () => string) {
   // 作用域销毁（测试/App 卸载）时退订文件事件，防监听器泄漏
   if (getCurrentScope()) onScopeDispose(detachLiveRefresh);
 
-  return { rounds, revertRound, revertSingleFile };
+  return { rounds, revertRound, revertSingleFile, revertFileGlobally };
 }
