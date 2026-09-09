@@ -41,6 +41,16 @@ export function markSessionUntracked(id: string) {
   clearStalled(id);
 }
 
+/**
+ * 是否「不跟踪」会话（自动化运行/蒸馏轮等无用户面板的来源）。
+ *
+ * 只读查询——旁路消费者（如变更归集）需要据此拒绝建桶：不跟踪会话没有轮次视图，
+ * 归集进去的数据永远无人消费，只会在内存里堆积。
+ */
+export function isSessionUntracked(id: string): boolean {
+  return untrackedSids.has(id);
+}
+
 function clearStalled(id: string) {
   const t = stalledTimers[id];
   if (t) {
