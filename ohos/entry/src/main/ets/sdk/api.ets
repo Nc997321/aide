@@ -14,15 +14,17 @@
  * （抽屉供应商域：列表 + 当前激活 + 切换）；
  * get_default_models / set_model / set_session_meta / session_model
  * / set_effort / session_effort / session_provider / session_alive
+ * / session_identity_drift
  * （输入区模型/思考程度 chip 域：系统默认选项集 + 存活会话运行时切换 +
  * 会话记忆读写；记忆写入统一走 set_session_meta 三态 patch；会话供应商/
- * 存活判定决定模型下拉口径，见 docs/session-identity-alignment.md）。
+ * 存活判定决定模型下拉口径，见 docs/session-identity-alignment.md；
+ * session_identity_drift 为发送前身份漂移判定，规则下沉 Rust 两端共用）。
  * 参数序列化差异：上游 TS 的 undefined 字段经 JSON.stringify 自动丢弃；ArkTS
  * Record 值域不含 null，故 None 参数以「缺键」表达（Rust 侧 Option 字段缺键即
  * None，serde 语义等价）。
  */
 import { getTransport } from './transport';
-import { Session, WorkspaceInfo, ActiveWorkspace, LoadMessagesResult, BgTaskInfo, PermissionRuleDraft, ProviderConfigView, ModelOption } from './types';
+import { Session, WorkspaceInfo, ActiveWorkspace, LoadMessagesResult, BgTaskInfo, PermissionRuleDraft, ProviderConfigView, ModelOption, IdentityDrift } from './types';
 
 /**
  * 会话元数据字段的三态写入语义（镜像 Rust `MetaField`，serde tag = `op`）。
@@ -303,6 +305,22 @@ export class AideApi {
    */
   sessionAlive(id: string): Promise<boolean> {
     return getTransport().invoke<boolean>('session_alive', { 'id': id });
+  }
+
+  /**
+   * 发送前身份漂移判定：本次将生效的 provider / model 与会话上次坐实的基线逐维
+   * 比对，**先供应商、再模型**——两者都相同才判无漂移。
+   *
+   * 判定规则在 Rust 侧只有一份（桌面端与手机端共用），本接口只透传：弹不弹确认、
+   * 文案怎么写归 UI。基线缺失（会话从未发过 / 字段为空）→ 对应维度 false。
+   * providerId / model 传空串 = 本次未指定，该维度无从比对，同样 false。
+   */
+  sessionIdentityDrift(id: string, providerId: string, model: string): Promise<IdentityDrift> {
+    return getTransport().invoke<IdentityDrift>('session_identity_drift', {
+      'id': id,
+      'providerId': providerId,
+      'model': model
+    });
   }
 
   /** 系统默认供应商的模型选项（Claude 别名 sonnet/opus/haiku 等）。 */

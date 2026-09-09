@@ -296,13 +296,14 @@ export class ChatModel {
 
   /**
    * 模型/effort 域同步（打开会话 / 新会话 / 切供应商后调用，幂等）：
-   *  - 选项集口径（对照 docs/session-identity-alignment.md §5 判定表）：空
-   *    会话/未存活进程 → 全局激活供应商；存活进程 → 会话自己的供应商
-   *    （session_provider 元数据，缺失/已删回退全局激活）；供应商未加载时
-   *    先补拉一次（防重入内置于模型，离线静默）
-   *  - 模型当前值：会话记忆（session_model 元数据，不在选项集内回落默认——
-   *    供应商已切换/模型下架的场景）→ 无记忆 = 默认（选项集首位，store 记 ''）
-   *  - effort 当前值：会话记忆（归一化）→ 供应商 effortLevel → 'high'
+   *  - **存活只查一次，供应商与模型共用同一口径**：未存活（新会话 / 历史会话 /
+   *    查询失败）→ 两者都跟全局激活供应商及其默认模型；存活 → 两者都跟会话。
+   *    此前模型无条件套用 session_model 记忆，于是点开一个已停掉的旧会话会出现
+   *    「供应商 chip 是全局的、模型 chip 却是这条会话上次用的」口径打架。
+   *  - 模型当前值：存活 → 会话记忆（session_model，不在选项集内回落默认——
+   *    供应商已切换/模型下架的场景）；未存活 → 默认（选项集首位，store 记 ''）
+   *  - effort 当前值：恒读会话记忆（session_effort）→ 供应商 effortLevel → 'high'。
+   *    effort 不参与「冷缓存 / respawn」语义，没有跟随全局的必要，不受存活影响。
    *  - 空会话（未 spawn）跳过记忆读取——会话 id 尚不存在，选择随首条消息带出
    */
   async syncModelEffort(): Promise<void> {
@@ -315,11 +316,22 @@ export class ChatModel {
     if (p === null) {
       return; // 离线/拉取失败：chip 留占位，点击 chip 重试（onModelChipTap 兜底）
     }
+    let alive: boolean = false;
     if (sid !== '') {
-      // 存活会话锁 spawn 时的供应商：下拉口径换到会话供应商（拿不到回退全局）
-      p = await this.sessionDropdownProvider(sid, p);
+      try {
+        alive = await api.sessionAlive(sid);
+      } catch (e) {
+        alive = false; // 查询失败（桌面离线等）：按未存活跟随全局
+      }
       if (this.store.sid !== sid) {
         return; // 会话已切走：不回写新会话
+      }
+      if (alive) {
+        // 存活会话锁 spawn 时的供应商：下拉口径换到会话供应商（拿不到回退全局）
+        p = await this.aliveSessionProvider(sid, p);
+        if (this.store.sid !== sid) {
+          return; // 会话已切走：不回写新会话
+        }
       }
     }
     try {
@@ -329,7 +341,7 @@ export class ChatModel {
       }
       this.store.modelOptions = opts;
       let model: string = '';
-      if (sid !== '') {
+      if (sid !== '' && alive) {
         try {
           const remembered: string | null = await api.sessionModel(sid);
           if (this.store.sid !== sid) {
@@ -364,21 +376,13 @@ export class ChatModel {
   }
 
   /**
-   * 会话的下拉口径供应商：存活进程锁定 spawn 时的供应商（session_provider
-   * 元数据 → providerModel 查配置），未存活/元数据缺失/配置已删 → 全局激活
-   * 兜底。存活查询失败按未存活处理（桌面不在线时远程调用必失败，见
-   * docs/session-identity-alignment.md §6）。
+   * 存活会话的下拉口径供应商：锁定 spawn 时的供应商（session_provider 元数据
+   * → providerModel 查配置），元数据缺失/配置已删 → 全局激活兜底。
+   *
+   * 前置条件：调用方已确认会话存活——存活查询在 syncModelEffort 里只做一次，
+   * 供应商与模型共用同一个结果。未存活会话不进这里，直接跟全局。
    */
-  private async sessionDropdownProvider(sid: string, fallback: ProviderConfigView): Promise<ProviderConfigView> {
-    let alive: boolean = false;
-    try {
-      alive = await api.sessionAlive(sid);
-    } catch (e) {
-      return fallback; // 查询失败（桌面离线等）：按未存活跟随全局
-    }
-    if (!alive) {
-      return fallback; // 未存活：与桌面「未启动跟随全局」一致
-    }
+  private async aliveSessionProvider(sid: string, fallback: ProviderConfigView): Promise<ProviderConfigView> {
     let spid: string | null = null;
     try {
       spid = await api.sessionProvider(sid);

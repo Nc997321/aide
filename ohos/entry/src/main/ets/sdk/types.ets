@@ -145,3 +145,23 @@ export interface ModelOption {
   value: string;
   displayName: string;
 }
+
+/**
+ * 发送前身份漂移判定结果（`session_identity_drift`；对照 Rust IdentityDrift）。
+ *
+ * 基线 = 会话元数据 `<id>.json` 的 provider / model 字段，与 session_provider /
+ * session_model 同一口径；基线缺失（会话从未发过 / 字段为空）→ 该维度 false。
+ *
+ * 只报「哪一维漂了」，**弹不弹、文案怎么写归 UI**——判定规则在 Rust 侧只有一份，
+ * 桌面端与手机端共用，避免同一规则在两端各存一份后各自漂移。
+ */
+export interface IdentityDrift {
+  /** 供应商维度漂移（基线存在且与本次不同）。 */
+  providerDrift: boolean;
+  /** 模型维度漂移（同上）。 */
+  modelDrift: boolean;
+  /** 会话记住的供应商 id；null = 没记过。 */
+  lastProvider: string | null;
+  /** 会话记住的模型；null = 没记过。 */
+  lastModel: string | null;
+}
