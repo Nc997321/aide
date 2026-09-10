@@ -111,7 +111,7 @@ describe("memoryEvents hook", () => {
     writeFileSync(fp, "x");
     await invoke(hook, { tool_name: "Bash", tool_input: { command: "ls" } });
     await invoke(hook, { tool_name: "Read", tool_input: { file_path: "C:/other/x.md" } });
-    await hook({ hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: fp } }, "tu1", {} as any);
+    await hook({ hook_event_name: "PreToolUse", session_id: "s1", transcript_path: "", cwd, tool_use_id: "tu1", tool_name: "Read", tool_input: { file_path: fp } }, "tu1", {} as any);
     await invoke(hook, { tool_name: "Read", tool_input: {} });
     expect(readEvents()).toHaveLength(0);
   });

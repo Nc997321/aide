@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
-import type { ChatEvent } from "./types.js";
+import type { ChatEvent } from "../types.js";
 import {
   queryCodegraph,
   type CodegraphQueryResponse,

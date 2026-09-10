@@ -1,13 +1,13 @@
 import * as readline from "readline";
 import { SessionManager } from "./session-manager.js";
 import { ensureWindowsBashEnv } from "./winBashEnv.js";
-import { ensureCodegraphSkill } from "./codegraphSkill.js";
+import { ensureCodegraphSkill } from "./extensions/codegraphSkill.js";
 import { setStdoutBackpressureNotifier, writeStdoutFrame } from "./stdoutFrames.js";
 
 // test-mcp 子命令：探活 MCP server。被 Rust test_mcp_connection spawn 调用
 // （agent-runtime test-mcp <config-json>）。最早分支，跳过会话初始化，输出 JSON 退出。
 if (process.argv[2] === "test-mcp") {
-  const { runTestMcp } = await import("./testMcp.js");
+  const { runTestMcp } = await import("./extensions/testMcp.js");
   await runTestMcp(process.argv[3] ?? "{}");
   process.exit(0);
 }

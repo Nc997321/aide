@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import * as path from "node:path";
 import type { HookCallback, HookInput } from "@anthropic-ai/claude-agent-sdk";
-import { toForwardSlashes, safeDirname } from "../winPaths.js";
+import { toForwardSlashes, safeDirname } from "../../winPaths.js";
 
 /**
  * memoryEvents 内建 hook：记忆观测台的事件台账埋点（spec §4.2）。

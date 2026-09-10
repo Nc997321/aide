@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
-import { makeModelSwitchGuard } from "../modelSwitchGuard";
+import { makeModelSwitchGuard } from "../../modelSwitchGuard";
 import { BUILTIN_HOOKS, buildBuiltinHooks } from "./index";
-import type { ChatEvent } from "../types.js";
+import type { ChatEvent } from "../../types.js";
 
 // session 桩：registry 通过依赖注入的 ctx.session 调 private 方法（policy/stopEffort/
 // modelSwitchGuard）。guard 返回 null（支线场景）→ 两个 switch hook 不挂载。

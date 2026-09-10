@@ -29,11 +29,11 @@ import { makeModelSwitchGuard, type ModelSwitchGuard } from "./modelSwitchGuard.
 import { applyEffortSwitch, normalizeEffort } from "./effortSwitch.js";
 import type { EffortSettable } from "./effortSwitch.js";
 import { cliSubagentModelEnvValue } from "./subagentModelDefault.js";
-import { codegraphMcpRegistration, CODEGRAPH_ALLOW_RULE } from "./codegraphTools.js";
-import { docsMcpRegistration, DOCS_ALLOW_RULE } from "./docsMcp.js";
-import { buildBuiltinHooks } from "./builtinHooks/index.js";
+import { codegraphMcpRegistration, CODEGRAPH_ALLOW_RULE } from "./extensions/codegraphTools.js";
+import { docsMcpRegistration, DOCS_ALLOW_RULE } from "./extensions/docsMcp.js";
+import { buildBuiltinHooks } from "./extensions/builtinHooks/index.js";
 import { loadUserMcpServers, loadUserHooks, assembleMcpServers, assembleHooks } from "./userExtensions.js";
-import { cancelAllCodegraphQueries } from "./codegraphClient.js";
+import { cancelAllCodegraphQueries } from "./extensions/codegraphClient.js";
 import { detectImageUnsupported, findSessionJsonl, rollbackImageMessage } from "./imageRollback.js";
 import { resolveClaudeExe } from "./claudeExe.js";
 import {
@@ -51,7 +51,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { loadAideInstructions } from "./instructions.js";
-import { buildDispatchPluginsOption } from "./dispatchPlugins.js";
+import { buildDispatchPluginsOption } from "./extensions/dispatchPlugins.js";
 import { evaluatePolicy } from "./policy/evaluate.js";
 import type { PermissionPolicySnapshot, PermissionRule } from "./policy/types.js";
 import type { PermissionRuleDraft } from "./types.js";

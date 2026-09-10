@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { toForwardSlashes, safeDirname } from "./winPaths.js";
+import { toForwardSlashes, safeDirname } from "../winPaths.js";
 
 /**
  * codegraph-explore skill 自动落地（内建，免用户配置）。
