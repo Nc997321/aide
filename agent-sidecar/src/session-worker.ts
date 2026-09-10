@@ -226,7 +226,11 @@ export class SessionWorker {
   private lastStopEffort = "";
   private lastConcreteModel = "";
   private lastModels: ModelOption[] = [];
-  private aliasByResolvedPrefix: { value: string; resolvedPrefix: string }[] = [];
+  /** 列表里的真实模型 id（lastModels 的 value 集合），用于把 SDK 回报的 wire id
+   *  归一成列表里的那一个（wire id 可能带变体后缀）。 */
+  private realModels: string[] = [];
+  /** 真名 → SDK 别名。**唯一**保留别名的用途：把 model 下发给 SDK 时反查回去。 */
+  private aliasByRealModel = new Map<string, string>();
   private currentPermissionMode = "auto";
   private pendingFork = false;
   private shouldForkNextConnect = false;
@@ -719,21 +723,38 @@ export class SessionWorker {
     try {
       const init = await q.initializationResult();
       const selectable = filterSelectableModels(init.models);
-      this.lastModels = selectable.map((m) => ({ value: m.value, displayName: m.displayName }));
-      this.aliasByResolvedPrefix = selectable
-        .filter((m) => m.resolvedModel)
-        .map((m) => ({ value: m.value, resolvedPrefix: m.resolvedModel as string }));
+      // 下拉与落盘一律用**真实模型 id**（SDK 的 resolvedModel），不用 SDK 的 value
+      // 别名：别名是 Claude 词汇（sonnet/opus/haiku），第三方 provider 下会被用户
+      // 看见、会被写进会话元数据，还会在身份漂移判定时与真名互相误判。别名只保留
+      // 在「把 model 交给 SDK」这一环——经 toSdkModel 翻译回去。
+      this.lastModels = selectable.map((m) => ({
+        value: (m.resolvedModel as string | undefined) ?? m.value,
+        displayName: m.displayName,
+      }));
+      this.realModels = this.lastModels.map((m) => m.value);
+      this.aliasByRealModel = new Map(
+        selectable.filter((m) => m.resolvedModel).map((m) => [m.resolvedModel as string, m.value]),
+      );
       this.emit({ type: "models_available", models: this.lastModels, current: this.currentModel });
     } catch {
       // SDK 版本不支持时静默跳过
     }
   }
 
+  /** 真名 → SDK 别名。**唯一**需要别名的地方：把 model 交给 SDK（spawn options、
+   *  setModel）时翻译回去；SDK 的 model 入参认的是它自己那份 value。 */
+  private toSdkModel(realModel: string): string {
+    return this.aliasByRealModel.get(realModel) ?? realModel;
+  }
+
   private resolveDropdownValue(concreteModel: string): string {
-    const hit = this.aliasByResolvedPrefix.find(
-      (a) => concreteModel === a.resolvedPrefix || concreteModel.startsWith(`${a.resolvedPrefix}-`),
+    // 列表里已有完全一致的真名 → 直接用（wire id 与列表同值，最常见）
+    if (this.realModels.includes(concreteModel)) return concreteModel;
+    // 否则按前缀归一：wire id 常带变体后缀（glm-5.3-flash-cloud）
+    const hit = this.realModels.find(
+      (r) => concreteModel === r || concreteModel.startsWith(`${r}-`),
     );
-    return hit ? hit.value : concreteModel;
+    return hit ?? concreteModel;
   }
 
   // ================================================================
@@ -944,9 +965,12 @@ export class SessionWorker {
       if (EDIT_AUTO_MODE_NAMES.has(cmd.mode)) this.permMgr.approveMatching(EDIT_TOOL_NAMES);
 
     } else if (cmd.cmd === "set_model") {
+      const q = this.currentQuery;
       applyModelSwitch({
+        // cmd.model 是下拉 value = 真名。SDK 的 setModel 认的是它自己那份别名，
+        // 这里包一层翻译——modelSwitch 内部只跟真名打交道，不需要知道别名存在。
         model: cmd.model,
-        query: this.currentQuery,
+        query: q ? { setModel: (m) => q.setModel(this.toSdkModel(m)) } : null,
         models: this.lastModels,
         currentModel: this.currentModel,
         emit: (e) => this.emit(e),
@@ -1238,7 +1262,8 @@ export class SessionWorker {
               // text 仍走整块，避开历史 partial 卡死坑，见 2026-08-07-thinking-streaming-design）。
               // btw 轻量支线保持 partial=off（mapper 的子代理隔离守卫也对 btw 生效）。
               includePartialMessages: !this.btwMode && !this.automationConfig,
-              ...(this.currentModel ? { model: this.currentModel } : {}),
+              // 下发给 SDK 的是它自己那份 value（别名）；内部一律用真名。
+              ...(this.currentModel ? { model: this.toSdkModel(this.currentModel) } : {}),
               // effort 的 spawn 通道（会话中切换走 set_effort → applyFlagSettings）。
               ...(this.currentEffort ? { effort: this.currentEffort as EffortLevel } : {}),
               // 请求可读思考文本：Claude 官方模型 thinking.display 默认 omitted（block

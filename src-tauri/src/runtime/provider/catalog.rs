@@ -1,6 +1,6 @@
 //! Provider 预置 catalog——编译进 resources 的只读静态清单，预置 kind 身份的唯一来源。
 //! 加载时机：Lazy 首次访问。dev 从 CARGO_MANIFEST_DIR/resources 读，
-//! release 从 resource_dir/agent-runtime 读（与 default-models.json 同级）。
+//! release 从 resource_dir/agent-runtime 读（与 default-permission-modes.json 同级）。
 
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -48,6 +48,10 @@ pub struct CatalogPreset {
     /// 预填表单的默认模型值；无默认值的预置（如 Anthropic 官方）不写此字段
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub defaults: Option<CatalogDefaults>,
+    /// 该预置的模型选项集（前端下拉/兜底列表的唯一来源）。
+    /// 系统默认用 4 个 Anthropic 别名；第三方预置（如有）也走这里；不写 = 空列表。
+    #[serde(default)]
+    pub models: Vec<String>,
 }
 
 static CATALOG: OnceLock<Vec<CatalogPreset>> = OnceLock::new();
@@ -213,6 +217,19 @@ mod tests {
     fn system_default_has_empty_base_url() {
         let p = catalog_find(ProviderKind::SystemDefault).unwrap();
         assert_eq!(p.base_url, "");
+    }
+
+    /// catalog.system_default.models 决定前端「系统默认供应商」的 known_models。
+    /// 不再依赖 default-models.json——单一真源就是 catalog 预设。
+    /// 改 catalog.json → 改 view() 输出 → 改前端下拉/兜底列表。
+    #[test]
+    fn system_default_models_parsed_from_catalog() {
+        let p = catalog_find(ProviderKind::SystemDefault).unwrap();
+        assert_eq!(
+            p.models,
+            vec!["opus", "sonnet", "haiku", "fable"],
+            "system_default must carry the 4 Anthropic aliases as its model set"
+        );
     }
 
     #[test]

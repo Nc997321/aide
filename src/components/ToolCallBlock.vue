@@ -127,7 +127,8 @@ const relayPill = computed(() => {
 });
 
 /** Read 的行号区间文案（offset 1-based、limit 行数）。仅 Read 显示，其它工具与
- *  @mention 合成卡（无 offset/limit）自然为 null。 */
+ *  @mention 合成卡（整文件引用，无 range 即无 offset/limit）自然为 null；
+ *  选区引用（@path:12-48）由 mention→Read 映射补上 offset/limit，因此也显示。 */
 const readRange = computed(() =>
   props.block.name === "Read" ? readRangeLabel(props.block.input) : null,
 );
@@ -161,7 +162,8 @@ const readRange = computed(() =>
         @click.stop="emit('open-bg-dock', bgTask.id)"
       >● 后台运行中</span>
       <!-- F 方案（Read 接力显示）：接力徽章 + 行号区间。仅 Read 有此元素，
-           mention 合成卡（无 offset/limit）与其它工具自然不显示。 -->
+           整文件 @mention 合成卡（无 offset/limit）与其它工具自然不显示；
+           选区引用（@path:12-48）带 offset/limit，照常显示行区间。 -->
       <span v-if="block.name === 'Read' && (relayPill || readRange)" class="ti-relay">
         <span
           v-if="relayPill"

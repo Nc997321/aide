@@ -81,8 +81,9 @@ export type UserMessageBlock =
   | { type: "image"; data: string; mediaType: string }
   // 动作胶囊（/compact 等斜杠命令）：显示 label/icon，发给模型的仍是 prompt。
   | { type: "action"; actionId: string; label: string; icon?: string }
-  // @引用：path 供展示标题，content 是展开内容（模型收到的那部分）。
-  | { type: "mention"; path: string; content: string };
+  // @引用：path 供展示标题，content 是展开内容（模型收到的那部分）。range 表示
+  // 只引用了这一段（编辑器选区），缺省=整文件。与 aide-sdk/src/types/chat.ts 同形。
+  | { type: "mention"; path: string; content: string; range?: { start: number; end: number } };
 
 // Sidecar → Rust（每行一个 JSON，写入 stdout）
 export type ChatEvent =

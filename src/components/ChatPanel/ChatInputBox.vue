@@ -13,7 +13,7 @@ import type { ImageAttachment, PendingJump, SendOptions } from "@/composables/us
 import { api } from "@/api";
 import { resolvePastePayload } from "@/utils/paste";
 import type { PasteResolution } from "@/utils/paste";
-import { resolveFileMentions } from "@/utils/fileMentions";
+import { resolveFileMentions, formatMentionPath } from "@/utils/fileMentions";
 import { nextPermissionMode } from "@/utils/permissionModeCycle";
 import { peekFileClipboard, clearFileClipboard } from "@/composables/useFileClipboard";
 import { useInlineMention } from "@/composables/useInlineMention";
@@ -539,16 +539,21 @@ function selectSkill(skill: SkillMeta | undefined) {
 // 但只有聚焦组激活 tab（= 选中的会话，props.focused）消费——多工作区会话
 // 并存时引用芯片只进选中的那个输入框，与其它会话无关。
 const mentionInserter = useMentionInserter();
-/** 输入框上方的文件引用芯片（路径去重）；发送时展开成 @path 前缀拼进 prompt。 */
-const pendingMentions = ref<Array<{ path: string; isDir: boolean }>>([]);
+/** 输入框上方的文件引用芯片（同一文件的同一区间只留一份；整文件与区间引用互不覆盖）；
+ *  发送时展开成 `@path` / `@path:12-48` 前缀拼进 prompt。 */
+const pendingMentions = ref<Array<{ path: string; isDir: boolean; range?: { start: number; end: number } }>>([]);
+/** 芯片去重键：路径 + 区间（同一文件可以既整引又引其中一段）。 */
+function mentionKey(path: string, range?: { start: number; end: number }): string {
+  return formatMentionPath(path, range);
+}
 watch(
   () => mentionInserter.pending.value?.nonce,
   () => {
     if (!props.focused) return;
     const m = mentionInserter.consumeMention();
     if (!m) return;
-    if (!pendingMentions.value.some((x) => x.path === m.path)) {
-      pendingMentions.value.push({ path: m.path, isDir: m.isDir });
+    if (!pendingMentions.value.some((x) => mentionKey(x.path, x.range) === mentionKey(m.path, m.range))) {
+      pendingMentions.value.push({ path: m.path, isDir: m.isDir, range: m.range });
     }
     nextTick(() => textareaEl.value?.focus());
   },
@@ -560,9 +565,9 @@ const { onInput: handleMentionInput, scan: scanMentions } = useInlineMention({
   inputText,
   textareaEl,
   workspacePath: () => props.workspacePath ?? "",
-  addMention: (path, isDir) => {
-    if (!pendingMentions.value.some((m) => m.path === path)) {
-      pendingMentions.value.push({ path, isDir });
+  addMention: (path, isDir, range) => {
+    if (!pendingMentions.value.some((m) => mentionKey(m.path, m.range) === mentionKey(path, range))) {
+      pendingMentions.value.push({ path, isDir, range });
     }
   },
 });
@@ -758,7 +763,7 @@ async function performSend() {
   // 引用芯片 → @path 前缀：发送时才展开成文本，走与手打/粘贴 @path 完全相同的
   // resolveFileMentions 管道（历史 transcript 也因此天然兼容，无需迁移）。
   const mentionPrefix = pendingMentions.value.length
-    ? pendingMentions.value.map((m) => "@" + m.path).join(" ") + " "
+    ? pendingMentions.value.map((m) => "@" + formatMentionPath(m.path, m.range)).join(" ") + " "
     : "";
   // 忙碌时不再拦截：useChatSession 会带排队标记透传，sidecar 在安全边界续发
   if (!text && !hasImages && !mentionPrefix) return;
@@ -978,9 +983,9 @@ const { actions: quickActions } = useQuickActions();
       <div v-if="pendingMentions.length" class="mention-strip">
         <div
           v-for="(m, i) in pendingMentions"
-          :key="m.path"
+          :key="mentionKey(m.path, m.range)"
           class="mention-chip"
-          v-tooltip="m.path"
+          v-tooltip="formatMentionPath(m.path, m.range)"
         >
           <svg
             v-if="m.isDir"
@@ -997,7 +1002,10 @@ const { actions: quickActions } = useQuickActions();
           >
             <path :d="mentionIcon(mentionName(m.path)).path" fill="currentColor" opacity="0.85"/>
           </svg>
-          <span class="mention-chip-name">{{ mentionName(m.path) }}</span>
+          <!-- 区间引用（编辑器选区）在文件名后带 :起-止，一眼区分整文件引用 -->
+          <span class="mention-chip-name">
+            {{ mentionName(m.path) }}<span v-if="m.range" class="mention-chip-range">:{{ m.range.start }}-{{ m.range.end }}</span>
+          </span>
           <button class="mention-chip-remove" @click="pendingMentions.splice(i, 1)">×</button>
         </div>
       </div>
@@ -1463,6 +1471,11 @@ const { actions: quickActions } = useQuickActions();
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 选区引用的行号后缀：弱化成次要色，不与文件名抢视线 */
+.mention-chip-range {
+  color: var(--aide-text-muted);
 }
 
 .mention-chip-remove {

@@ -185,6 +185,17 @@ enum AuthStatus {
 
 impl ProviderConfig {
     fn view(self, auth: AuthStatus) -> ProviderConfigView {
+        // SystemDefault 没有"用户自配的 known_models"——它的模型列表唯一来源是
+        // 编译进 catalog 的预设（Anthropic 官方 4 个别名：opus/sonnet/haiku/fable）。
+        // 此前 view() 输出 known_models=Vec::new()，前端只能用 default-models.json 兜底；
+        // 改后：catalog 是单一真源，default-models.json 整个文件可删。
+        let known_models = if self.kind == ProviderKind::SystemDefault {
+            crate::runtime::provider::catalog::catalog_find(self.kind)
+                .map(|p| p.models.clone())
+                .unwrap_or_default()
+        } else {
+            self.known_models
+        };
         ProviderConfigView {
             id: self.id,
             kind: self.kind,
@@ -199,7 +210,7 @@ impl ProviderConfig {
             auto_compact_window: self.auto_compact_window,
             autocompact_pct_override: self.autocompact_pct_override,
             max_context_tokens: self.max_context_tokens,
-            known_models: self.known_models,
+            known_models,
         }
     }
 }
@@ -1166,5 +1177,28 @@ mod tests {
         // p3's creds merged into the SystemDefault entry
         assert_eq!(c["providers"][0]["id"], "__system_default__");
         assert_eq!(c["providers"][0]["api_key"], "sk-p3");
+    }
+
+    /// view() 转换：SystemDefault kind 的 known_models 从 catalog 预设拿，
+    /// 而不是读 self.known_models（持久化里写空 / 没写都无所谓）。
+    /// 第三方 kind 走 self.known_models，行为不变。
+    #[test]
+    fn system_default_view_reads_known_models_from_catalog() {
+        let cfg = system_default_provider();
+        let view = cfg.view(AuthStatus::None);
+        assert_eq!(
+            view.known_models,
+            vec!["opus", "sonnet", "haiku", "fable"],
+            "SystemDefault view().known_models must come from catalog preset, not cfg.known_models"
+        );
+    }
+
+    #[test]
+    fn non_system_default_view_keeps_self_known_models() {
+        let mut cfg = system_default_provider();
+        cfg.kind = ProviderKind::Ollama;
+        cfg.known_models = vec!["qwen2.5:7b".to_string(), "llama3.1:8b".to_string()];
+        let view = cfg.view(AuthStatus::None);
+        assert_eq!(view.known_models, vec!["qwen2.5:7b", "llama3.1:8b"]);
     }
 }

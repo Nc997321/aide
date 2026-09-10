@@ -2,20 +2,20 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useProviders } from "../../../composables/useProviders";
 import { useSessionProviders } from "../../../composables/useSessionProviders";
 import type { ProviderConfig, ProviderModelMappings } from "../../../types";
-import type { ModelOption, SessionMetaPatch } from "../../../types/chat";
+import type { SessionMetaPatch } from "../../../types/chat";
 
-// ── api mock：sessionProvider/sessionModel 读受控；setSessionMeta 记录写回；getDefaultModels 系统默认兜底列表 ──
+// ── api mock：sessionProvider/sessionModel 读受控；setSessionMeta 记录写回 ──
+// 系统默认供应商的模型列表（known_models）由 Rust view() 从 catalog 预设注入，
+// 通过 get_providers → allProviders 一条路径到达——本测试不直接调 getDefaultModels。
 const sessionProviderMock = vi.fn<(id: string) => Promise<string | null>>();
 const sessionModelMock = vi.fn<(id: string) => Promise<string | null>>();
 const setSessionMetaMock = vi.fn<(id: string, patch: SessionMetaPatch) => Promise<void>>();
-const getDefaultModelsMock = vi.fn<() => Promise<ModelOption[]>>();
 
 vi.mock("../../../api", () => ({
   api: {
     sessionProvider: (id: string) => sessionProviderMock(id),
     sessionModel: (id: string) => sessionModelMock(id),
     setSessionMeta: (id: string, patch: SessionMetaPatch) => setSessionMetaMock(id, patch),
-    getDefaultModels: () => getDefaultModelsMock(),
   },
 }));
 
@@ -49,6 +49,15 @@ function makeProvider(id: string, model = `${id}-default`, extra: Partial<Provid
   };
 }
 
+/** 模拟"系统默认供应商"——已知 knownModels 由 Rust view() 从 catalog 预设读，测试不
+ *  关心 catalog 内容，只关心 SDK 拿到带 knownModels 的 ProviderConfig 后的下游行为。 */
+function makeSystemDefault(knownModels: string[]): ProviderConfig {
+  return makeProvider("__system_default__", "", {
+    kind: "system_default",
+    knownModels,
+  });
+}
+
 describe("sessionIdentityStore (L2a 仓库)", () => {
   const { allProviders, activeProviderId } = useProviders();
   const { providers } = useSessionProviders();
@@ -58,9 +67,7 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
     sessionProviderMock.mockReset();
     sessionModelMock.mockReset();
     setSessionMetaMock.mockReset();
-    getDefaultModelsMock.mockReset();
     setSessionMetaMock.mockResolvedValue(undefined);
-    getDefaultModelsMock.mockResolvedValue([]);
     for (const k of Object.keys(providers)) delete providers[k];
     id = sessionIdentityStore;
     id.__resetForTest();
@@ -383,7 +390,7 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
     });
 
     it("系统默认 → sdkModels 优先", async () => {
-      allProviders.value = [];
+      allProviders.value = [makeSystemDefault(["sonnet", "opus", "haiku", "fable"])];
       activeProviderId.value = "__system_default__";
       sessionProviderMock.mockResolvedValue("__system_default__");
       sessionModelMock.mockResolvedValue(null);
@@ -395,26 +402,15 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
       expect(id.displayModelsOf("s1").map((m) => m.value)).toEqual(["sonnet", "opus"]);
     });
 
-    it("系统默认 → 无 sdkModels 则 defaultModels 兜底", async () => {
-      allProviders.value = [];
+    it("系统默认 → 无 sdkModels 则 knownModels 兜底（view() 从 catalog 注入）", async () => {
+      allProviders.value = [makeSystemDefault(["sonnet", "opus", "haiku", "fable"])];
       activeProviderId.value = "__system_default__";
-      getDefaultModelsMock.mockResolvedValue([{ value: "sonnet", displayName: "Sonnet" }]);
       sessionProviderMock.mockResolvedValue("__system_default__");
       sessionModelMock.mockResolvedValue(null);
-      await id.refreshDefaultModels();
       await id.resolve("s1");
-      expect(id.displayModelsOf("s1").map((m) => m.value)).toEqual(["sonnet"]);
-    });
-
-    it("refreshDefaultModels 失败 → console.warn 降级", async () => {
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      getDefaultModelsMock.mockRejectedValueOnce(new Error("net"));
-      await id.refreshDefaultModels();
-      expect(warnSpy).toHaveBeenCalledWith(
-        "[sessionIdentity] load default models failed:",
-        expect.any(Error),
-      );
-      warnSpy.mockRestore();
+      expect(id.displayModelsOf("s1").map((m) => m.value)).toEqual([
+        "sonnet", "opus", "haiku", "fable",
+      ]);
     });
 
     it("已绑定供应商被删除（悬空绑定）→ 第三方分支兜底 []，不崩", async () => {
@@ -485,20 +481,18 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
       expect(id.effectiveModelOf("s1")).toBe("");
     });
 
-    it("空白面板 + activeProvider 系统默认 → defaultModels 首项", async () => {
-      allProviders.value = [];
+    it("空白面板 + activeProvider 系统默认 → knownModels 首项", async () => {
+      allProviders.value = [makeSystemDefault(["sonnet", "opus", "haiku", "fable"])];
       activeProviderId.value = "__system_default__";
-      getDefaultModelsMock.mockResolvedValue([{ value: "sonnet", displayName: "Sonnet" }]);
-      await id.refreshDefaultModels();
       expect(id.effectiveModelOf("s1")).toBe("sonnet");
     });
 
-    it("displayModels 系统默认 + binding 无 → defaultModels（sdkModels ?? []）", async () => {
-      allProviders.value = [];
+    it("displayModels 系统默认 + binding 无 → knownModels（sdkModels ?? []）", async () => {
+      allProviders.value = [makeSystemDefault(["sonnet", "opus", "haiku", "fable"])];
       activeProviderId.value = "__system_default__";
-      getDefaultModelsMock.mockResolvedValue([{ value: "sonnet", displayName: "Sonnet" }]);
-      await id.refreshDefaultModels();
-      expect(id.displayModelsOf("s1").map((m) => m.value)).toEqual(["sonnet"]);
+      expect(id.displayModelsOf("s1").map((m) => m.value)).toEqual([
+        "sonnet", "opus", "haiku", "fable",
+      ]);
     });
 
     it("resolve 快路径 meta.provider 被删 + model 反查无果 → consistentProviderId null ?? bound", async () => {

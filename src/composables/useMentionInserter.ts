@@ -1,8 +1,11 @@
 import { ref } from "vue";
+import type { MentionRange } from "@aide/sdk/types/chat";
 
 export interface MentionRequest {
   path: string;
   isDir: boolean;
+  /** 只引用一段时才有（编辑器选区「添加到对话」）。缺省 = 整文件。 */
+  range?: MentionRange;
   nonce: number;
 }
 
@@ -22,9 +25,10 @@ const pending = ref<MentionRequest | null>(null);
 let nextNonce = 0;
 
 export function useMentionInserter() {
-  /** 菜单侧：请求把一个文件/目录引用添加到选中会话的输入框。 */
-  function insertMention(path: string, isDir: boolean) {
-    pending.value = { path, isDir, nonce: ++nextNonce };
+  /** 菜单侧：请求把一个文件/目录引用添加到选中会话的输入框。
+   *  range = 编辑器选区的行号区间（1-based 闭区间），只引用这一段。 */
+  function insertMention(path: string, isDir: boolean, range?: MentionRange) {
+    pending.value = { path, isDir, range, nonce: ++nextNonce };
   }
 
   /** ChatPanel 侧（仅聚焦实例）：取走待注入引用（一次性），无则返回 null。 */

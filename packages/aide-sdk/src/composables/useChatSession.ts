@@ -208,6 +208,7 @@ function buildUserDisplay(item: QueuedSend): UserMessageBlock[] {
           type: "mention" as const,
           path: m.path,
           content: m.content,
+          ...(m.range ? { range: m.range } : {}),
         })),
       ];
 }
@@ -311,7 +312,10 @@ export function useChatSession(sessionId: Ref<string | null>) {
       // 新会话：spawn 将用的 provider 当场坐实到 tempId（定名后由 finalizeSpawn
       // 迁到 realId 并落盘）。此前靠 ChatPanel 的 settleOnSend("") 推进一个全局单值
       // 基线——既会跨会话串（别的面板一切就改基线），又落不了盘。
-      await identityStore.settleOnSend(sid, identityStore.spawnProviderOf(sid));
+      // 只记内存、不落盘：此刻 id 还是临时号，写盘只会留下没人读的孤儿元数据，
+      // 且会让 finalizeSpawn 误判「已落盘」而跳过正式 id 的写入——正式档案是定名时
+      // 新建的空卡，内存里那份快照对它不成立。
+      identityStore.prepareSpawn(sid, identityStore.spawnProviderOf(sid));
     }
     await ensureGlobalListener();
     // 等待监听器期间会话可能被关闭：不重建 store、不继续发送

@@ -668,7 +668,87 @@ function waitReady(): Promise<void> {
   return readyPromise;
 }
 
-defineExpose({ scrollToLine, flashLine, waitReady });
+/**
+ * 当前主选区覆盖的行号区间（1-based 闭区间），供宿主「添加选中到对话」引用。
+ *
+ * 空选区（单光标）返回 null：那不是"选了零行"，而是"没选东西"——宿主据此决定
+ * 菜单项是否可用。多光标只取主选区（main），与"一次引用一段"的语义一致。
+ * 选区在行尾结束（to 落在下一行行首）时不算多选一行——否则选中一行却报两行。
+ */
+function selectionLines(): { start: number; end: number } | null {
+  if (!view) return null;
+  const { from, to } = view.state.selection.main;
+  if (from === to) return null;
+  const doc = view.state.doc;
+  const startLine = doc.lineAt(from).number;
+  const endLine = doc.lineAt(to).number;
+  // to 恰在某行行首（含行尾换行之后）→ 回退一行
+  const lastLine = to > doc.line(endLine).from ? endLine : endLine - 1;
+  const end = Math.max(startLine, lastLine);
+  return { start: startLine, end };
+}
+
+/** 主选区文本；无选区返回空串（与 selectionLines 的 null 语义不同：这里是"要复制的内容"）。 */
+function selectedText(): string {
+  if (!view) return "";
+  const { from, to } = view.state.selection.main;
+  return from === to ? "" : view.state.sliceDoc(from, to);
+}
+
+/**
+ * 用 text 替换主选区（插入后光标落在文本末尾）。
+ *
+ * 走 `view.dispatch` 而不是直接改 DOM：updateListener 判定为用户编辑 → 回流
+ * v-model → dirty 成立、与 parent-sync 通道不冲突。cut/paste 都走这里。
+ */
+function replaceSelection(text: string): void {
+  if (!view) return;
+  const { from, to } = view.state.selection.main;
+  view.dispatch({
+    changes: { from, to, insert: text },
+    selection: { anchor: from + text.length },
+    scrollIntoView: true,
+  });
+  view.focus();
+}
+
+/** 右键菜单的复制/剪切/粘贴：剪贴板用现成的 Web API（与「复制路径」同一条通道），
+ *  文档改动走 replaceSelection 统一入口。无选区时复制/剪切是空操作（菜单已置灰）。 */
+async function copySelection(): Promise<void> {
+  const text = selectedText();
+  if (!text) return;
+  await navigator.clipboard.writeText(text);
+}
+
+async function cutSelection(): Promise<void> {
+  const text = selectedText();
+  if (!text) return;
+  await navigator.clipboard.writeText(text);
+  replaceSelection("");
+}
+
+async function pasteFromClipboard(): Promise<void> {
+  const text = await navigator.clipboard.readText();
+  if (!text) return;
+  replaceSelection(text);
+}
+
+function selectAll(): void {
+  if (!view) return;
+  view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
+  view.focus();
+}
+
+defineExpose({
+  scrollToLine,
+  flashLine,
+  waitReady,
+  selectionLines,
+  copySelection,
+  cutSelection,
+  pasteFromClipboard,
+  selectAll,
+});
 
 onMounted(() => {
   createEditor();

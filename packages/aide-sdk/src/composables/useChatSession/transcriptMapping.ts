@@ -61,7 +61,11 @@ function historyBlockToContentBlocks(
       type: "tool_call",
       id: crypto.randomUUID(),
       name: "Read",
-      input: { file_path: s.path },
+      // 带 range 的引用（编辑器选区）补 offset/limit → 卡片显示行号区间，与直发
+      // 路径（events.ts mention→Read）同形。两段映射必须一致，否则回看与实时分叉。
+      input: s.range
+        ? { file_path: s.path, offset: s.range.start, limit: s.range.end - s.range.start + 1 }
+        : { file_path: s.path },
       result: s.content,
       isError: false,
       isPending: false,

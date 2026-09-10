@@ -197,8 +197,8 @@ function buildSendConfirmRequest(decision: ConfirmDecision): PermissionRequest {
 // 让用户进会话就能选模型，不用等发完第一条消息。
 const defaultPermissionModes = ref<PermissionModeOption[]>([]);
 onMounted(async () => {
-  // 系统默认静态兜底模型列表归 L2（identity.refreshDefaultModels）；权限模式仍在此读。
-  void sessionIdentityStore.refreshDefaultModels();
+  // 系统默认 / 第三方供应商的 known_models 都在 get_providers 一次性返回，
+  // 跟着 allProviders 一起走——不需要单独刷。权限模式仍在此读。
   try {
     defaultPermissionModes.value = await api.getDefaultPermissionModes();
   } catch {

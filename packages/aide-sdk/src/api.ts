@@ -194,6 +194,8 @@ export const api = {
       model,
     });
   },
+  /** 系统默认供应商（Anthropic 官方）的模型选项，Rust 从 catalog 预设读。
+   *  数据源 = provider-catalog.json 的 system_default.models（4 个别名）。 */
   getDefaultModels(): Promise<ModelOption[]> {
     return getTransport().invoke("get_default_models");
   },

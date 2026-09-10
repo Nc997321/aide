@@ -524,8 +524,20 @@ fn read_sidecar_data_json(
 }
 
 #[tauri::command]
-pub fn get_default_models(app_handle: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    read_sidecar_data_json(&app_handle, "default-models.json")
+pub fn get_default_models() -> Result<serde_json::Value, String> {
+    // 单一真源：catalog 预设里 system_default 的 models 字段。
+    // 此前是读 agent-sidecar/default-models.json 兜底——SDK 协议翻译层需要别名
+    // 与真名两种形态，但现在下拉/比对/展示已统一用真名（详见 sonnet 越界修复），
+    // 这条数据是前端唯一的"系统默认供应商"模型列表入口，删冗余文件后归位。
+    use crate::runtime::provider::{catalog, ProviderKind};
+    let models = catalog::catalog_find(ProviderKind::SystemDefault)
+        .map(|p| p.models.clone())
+        .unwrap_or_default();
+    let arr: Vec<serde_json::Value> = models
+        .into_iter()
+        .map(|m| serde_json::json!({ "value": m, "displayName": m }))
+        .collect();
+    Ok(serde_json::Value::Array(arr))
 }
 
 #[tauri::command]

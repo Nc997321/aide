@@ -753,10 +753,10 @@ pub fn codegraph_rescan(
 // ── 默认值目录 ──
 
 pub fn get_default_models(
-    app: AppHandle,
+    _app: AppHandle,
     _params: Value,
 ) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move { to_json(crate::commands::chat::get_default_models(app.clone())) })
+    Box::pin(async move { to_json(crate::commands::chat::get_default_models()) })
 }
 
 pub fn get_default_permission_modes(

@@ -426,8 +426,9 @@ export class ChatModel {
 
   /**
    * 供应商的模型选项集（对照桌面 providerModelList + 系统默认特例）：
-   * 系统默认走 get_default_models（Claude 别名），第三方从配置推导（model +
-   * modelMappings 五字段 + knownModels 去重；displayName = value）。
+   * 系统默认走 get_default_models（Rust 从 catalog 预设读，4 个 Anthropic 别名
+   * opus/sonnet/haiku/fable；catalog 是单一真源，不再读 agent-sidecar/default-models.json），
+   * 第三方从配置推导（model + modelMappings 五字段 + knownModels 去重；displayName = value）。
    */
   private async fetchModelOptions(p: ProviderConfigView): Promise<ModelOption[]> {
     if (p.kind === 'system_default') {

@@ -20,7 +20,6 @@
     "targets": "all",
     "resources": {
       "../agent-sidecar/dist/aide-agent*": "agent-runtime/",
-      "../agent-sidecar/default-models.json": "agent-runtime/default-models.json",
       "../agent-sidecar/default-permission-modes.json": "agent-runtime/default-permission-modes.json",
       "resources/provider-catalog.json": "agent-runtime/provider-catalog.json",
       "codegraph-dist/*": "codegraph/",

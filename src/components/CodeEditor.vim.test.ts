@@ -192,3 +192,142 @@ describe("CodeEditor vim mode", () => {
     expect(await vimActive()).toBe(false);
   });
 });
+
+// 编辑器右键菜单的复制/剪切/粘贴/全选：剪贴板用 Web API（stub 掉），文档改动走
+// replaceSelection（dispatch）→ updateListener 判定用户编辑 → 回流 update:modelValue。
+describe("CodeEditor 剪贴板动作", () => {
+  const clipboard = {
+    written: [] as string[],
+    pendingRead: "" as string,
+    writeText: (t: string) => {
+      clipboard.written.push(t);
+      return Promise.resolve();
+    },
+    readText: () => Promise.resolve(clipboard.pendingRead),
+  };
+
+  beforeEach(() => {
+    clipboard.written = [];
+    clipboard.pendingRead = "";
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      clipboard: { writeText: clipboard.writeText, readText: clipboard.readText },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function mountWithText(text: string) {
+    wrapper = mount(CodeEditor, {
+      props: { filePath: "/p/a.ts", modelValue: text },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    return (await getView())!;
+  }
+
+  function selectLines(v: EditorView, start: number, end: number) {
+    v.dispatch({
+      selection: { anchor: v.state.doc.line(start).from, head: v.state.doc.line(end).to },
+    });
+  }
+
+  it("复制：选中内容进剪贴板，文档不变", async () => {
+    const v = await mountWithText("L1\nL2\nL3");
+    selectLines(v, 2, 2);
+    await wrapper!.vm.copySelection();
+    expect(clipboard.written).toEqual(["L2"]);
+    expect(v.state.doc.toString()).toBe("L1\nL2\nL3");
+  });
+
+  it("剪切：内容进剪贴板且从文档移除（v-model 回流）", async () => {
+    const v = await mountWithText("L1\nL2\nL3");
+    selectLines(v, 2, 2);
+    await wrapper!.vm.cutSelection();
+    expect(clipboard.written).toEqual(["L2"]);
+    expect(v.state.doc.toString()).toBe("L1\n\nL3");
+    expect(wrapper!.emitted("update:modelValue")?.at(-1)?.[0]).toBe("L1\n\nL3");
+  });
+
+  it("粘贴：替换选区并回流 v-model", async () => {
+    const v = await mountWithText("L1\nL2\nL3");
+    selectLines(v, 2, 2);
+    clipboard.pendingRead = "PASTED";
+    await wrapper!.vm.pasteFromClipboard();
+    expect(v.state.doc.toString()).toBe("L1\nPASTED\nL3");
+    expect(wrapper!.emitted("update:modelValue")?.at(-1)?.[0]).toBe("L1\nPASTED\nL3");
+  });
+
+  it("粘贴：无选区时光标处插入，不覆盖", async () => {
+    const v = await mountWithText("ab");
+    v.dispatch({ selection: { anchor: 1, head: 1 } });
+    clipboard.pendingRead = "X";
+    await wrapper!.vm.pasteFromClipboard();
+    expect(v.state.doc.toString()).toBe("aXb");
+  });
+
+  it("全选：选区覆盖整篇文档", async () => {
+    const v = await mountWithText("L1\nL2\nL3");
+    wrapper!.vm.selectAll();
+    const { from, to } = v.state.selection.main;
+    expect(from).toBe(0);
+    expect(to).toBe(v.state.doc.length);
+  });
+
+  it("无选区时复制/剪切是空操作（菜单已置灰，这里只保证不误改文档）", async () => {
+    const v = await mountWithText("L1\nL2");
+    await wrapper!.vm.copySelection();
+    await wrapper!.vm.cutSelection();
+    expect(clipboard.written).toEqual([]);
+    expect(v.state.doc.toString()).toBe("L1\nL2");
+  });
+});
+
+// 「添加选中到对话」取行号区间（1-based 闭区间）：空选区 = 没选东西（null），
+// 选区止于行尾换行时不多算一行——否则选中一行会报成两行。
+describe("CodeEditor selectionLines", () => {
+  async function mountWithText(text: string) {
+    wrapper = mount(CodeEditor, {
+      props: { filePath: "/p/a.ts", modelValue: text },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    return (await getView())!;
+  }
+
+  function selectRange(v: EditorView, fromLine: number, fromOffset: number, toLine: number, toOffset: number) {
+    v.dispatch({
+      selection: {
+        anchor: v.state.doc.line(fromLine).from + fromOffset,
+        head: v.state.doc.line(toLine).from + toOffset,
+      },
+    });
+  }
+
+  it("空选区返回 null（不是「选了零行」）", async () => {
+    const v = await mountWithText("L1\nL2\nL3");
+    selectRange(v, 2, 0, 2, 0);
+    expect(wrapper!.vm.selectionLines()).toBeNull();
+  });
+
+  it("跨行选区返回起止行号", async () => {
+    const v = await mountWithText("L1\nL2\nL3\nL4\nL5");
+    selectRange(v, 2, 0, 4, 2); // 第 2 行行首 → 第 4 行中间
+    expect(wrapper!.vm.selectionLines()).toEqual({ start: 2, end: 4 });
+  });
+
+  it("选区止于行尾换行（head 落在下一行行首）不多算一行", async () => {
+    const v = await mountWithText("L1\nL2\nL3");
+    // 整行选中时 CM 的 head 落在下一行行首——仍应报 2-2，不是 2-3
+    selectRange(v, 2, 0, 3, 0);
+    expect(wrapper!.vm.selectionLines()).toEqual({ start: 2, end: 2 });
+  });
+
+  it("行内部分选中仍算该行", async () => {
+    const v = await mountWithText("L1\nL2 abc\nL3");
+    selectRange(v, 2, 1, 2, 3);
+    expect(wrapper!.vm.selectionLines()).toEqual({ start: 2, end: 2 });
+  });
+});

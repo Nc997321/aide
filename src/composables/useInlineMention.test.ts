@@ -136,7 +136,28 @@ describe("useInlineMention", () => {
     await nextTick(); // 让 async scanAndConvert 跑完
 
     expect(mocks.pathTypes).toHaveBeenCalledWith(["C:/repo/src/utils/paste.ts"]);
-    expect(addMention).toHaveBeenCalledWith("C:/repo/src/utils/paste.ts", false);
+    expect(addMention).toHaveBeenCalledWith("C:/repo/src/utils/paste.ts", false, undefined);
+    expect(inputText.value).toBe("");
+  });
+
+  it("手打 @path:12-48：剥掉行号后缀再校验，芯片带回区间", async () => {
+    mocks.pathTypes.mockResolvedValue(["file"]);
+    const inputText = ref("@src/a.ts:12-48 ");
+    const addMention = vi.fn();
+    const { onInput } = useInlineMention({
+      inputText,
+      textareaEl: ref(undefined),
+      workspacePath: () => "C:/repo",
+      addMention,
+    });
+
+    onInput(makeEvent());
+    await nextTick();
+    await nextTick();
+
+    // path_types 只认真实路径——行号后缀必须先剥掉，否则校验必 misses
+    expect(mocks.pathTypes).toHaveBeenCalledWith(["C:/repo/src/a.ts"]);
+    expect(addMention).toHaveBeenCalledWith("C:/repo/src/a.ts", false, { start: 12, end: 48 });
     expect(inputText.value).toBe("");
   });
 
@@ -175,8 +196,8 @@ describe("useInlineMention", () => {
     await nextTick();
 
     expect(mocks.pathTypes).toHaveBeenCalledWith(["C:/repo/a.ts", "C:/repo/b"]);
-    expect(addMention).toHaveBeenNthCalledWith(1, "C:/repo/a.ts", false);
-    expect(addMention).toHaveBeenNthCalledWith(2, "C:/repo/b", true);
+    expect(addMention).toHaveBeenNthCalledWith(1, "C:/repo/a.ts", false, undefined);
+    expect(addMention).toHaveBeenNthCalledWith(2, "C:/repo/b", true, undefined);
     expect(inputText.value).toBe("");
   });
 
@@ -217,7 +238,7 @@ describe("useInlineMention", () => {
     await scan();
 
     expect(mocks.pathTypes).toHaveBeenCalledWith(["C:/repo/src/a.ts"]);
-    expect(addMention).toHaveBeenCalledWith("C:/repo/src/a.ts", false);
+    expect(addMention).toHaveBeenCalledWith("C:/repo/src/a.ts", false, undefined);
     expect(inputText.value).toBe("");
   });
 });

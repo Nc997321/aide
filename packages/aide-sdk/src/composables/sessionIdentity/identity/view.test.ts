@@ -2,19 +2,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useProviders } from "../../../composables/useProviders";
 import { useSessionProviders } from "../../../composables/useSessionProviders";
 import type { ProviderConfig, ProviderModelMappings } from "../../../types";
-import type { ModelOption, SessionMetaPatch } from "../../../types/chat";
+import type { SessionMetaPatch } from "../../../types/chat";
 
 const sessionProviderMock = vi.fn<(id: string) => Promise<string | null>>();
 const sessionModelMock = vi.fn<(id: string) => Promise<string | null>>();
 const setSessionMetaMock = vi.fn<(id: string, patch: SessionMetaPatch) => Promise<void>>();
-const getDefaultModelsMock = vi.fn<() => Promise<ModelOption[]>>();
 
 vi.mock("../../../api", () => ({
   api: {
     sessionProvider: (id: string) => sessionProviderMock(id),
     sessionModel: (id: string) => sessionModelMock(id),
     setSessionMeta: (id: string, patch: SessionMetaPatch) => setSessionMetaMock(id, patch),
-    getDefaultModels: () => getDefaultModelsMock(),
   },
 }));
 
@@ -61,9 +59,7 @@ describe("sessionIdentityView (L2b 视图)", () => {
     sessionProviderMock.mockReset();
     sessionModelMock.mockReset();
     setSessionMetaMock.mockReset();
-    getDefaultModelsMock.mockReset();
     setSessionMetaMock.mockResolvedValue(undefined);
-    getDefaultModelsMock.mockResolvedValue([]);
     sessionProviderMock.mockResolvedValue(null);
     sessionModelMock.mockResolvedValue(null);
     for (const k of Object.keys(providers)) delete providers[k];

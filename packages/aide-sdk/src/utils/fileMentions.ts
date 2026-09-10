@@ -1,8 +1,14 @@
+import type { MentionRange } from "../types/chat";
+
 const MAX_MENTION_CHARS = 50_000;
+
+export type { MentionRange };
 
 export interface ResolvedMention {
   path: string;
   content: string;
+  /** 只引用一段时才有；缺省 = 整文件。 */
+  range?: MentionRange;
 }
 
 export interface FileMentionResolution {
@@ -14,8 +20,43 @@ export interface FileMentionResolution {
   resolved: ResolvedMention[];
 }
 
-/** 从消息文本中提取 `@<path>` 引用（Aide 自己的文本约定，来自文件树/剪贴板粘贴——
- *  见 paste.ts）。要求 `@` 前是行首或空白，避免误伤 "user@example.com" 这类文本。 */
+/**
+ * `@path:12-48` 的行号后缀解析（贪婪 `.+` 取**最后一个**冒号）。
+ *
+ * Windows 盘符冒号在 index 1 且后面不是数字，天然不匹配；Unix/Windows 的正常
+ * 路径也不会以 `:<数字>` 结尾（冒号在 Windows 文件名里非法），所以这个后缀不
+ * 会与真实路径冲突——早先担心的 `C:\dir\12` 类歧义实测不成立，没留回退分支。
+ * 非法区间（start<1 或 end<start）当普通路径处理，最终表现为"读不到就忽略"。
+ */
+const RANGE_SUFFIX = /^(.+):(\d+)(?:-(\d+))?$/;
+
+export function parseMentionPath(raw: string): { path: string; range?: MentionRange } {
+  const m = RANGE_SUFFIX.exec(raw);
+  if (!m) return { path: raw };
+  const start = Number(m[2]);
+  const end = m[3] === undefined ? start : Number(m[3]);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end < start) return { path: raw };
+  return { path: m[1], range: { start, end } };
+}
+
+/** parseMentionPath 的逆操作：拼回 `@path` / `@path:12-48` 字面量。 */
+export function formatMentionPath(path: string, range?: MentionRange): string {
+  return range ? `${path}:${range.start}-${range.end}` : path;
+}
+
+/** 按 1-based 闭区间切行。起点超出文件长度 → 空串（调用方给出提示文案）。 */
+function sliceLines(content: string, range: MentionRange): string {
+  const lines = content.split(/\r?\n/);
+  if (range.start > lines.length) return "";
+  const start = Math.max(range.start, 1);
+  const end = Math.min(range.end, lines.length);
+  return lines.slice(start - 1, end).join("\n");
+}
+
+/** 从消息文本中提取 `@<path>` 引用（Aide 自己的文本约定，来自文件树/剪贴板粘贴/
+ *  编辑器选区——见 paste.ts 与 useMentionInserter）。要求 `@` 前是行首或空白，
+ *  避免误伤 "user@example.com" 这类文本。带行号后缀（`@path:12-48`）时原样保留，
+ *  由 parseMentionPath 在使用点解析。 */
 export function extractFileMentions(text: string): string[] {
   // 路径在非空白字符里截止于常见中文标点——中文提示词经常紧跟在路径后面
   // 不留空格（如"@C:\a.md 看看这个，顺便……"里的逗号），\S+ 会把标点也吞进路径。
@@ -41,18 +82,31 @@ export async function resolveFileMentions(
 
   const resolved: ResolvedMention[] = [];
   const sections: string[] = [];
-  for (const path of paths) {
+  for (const raw of paths) {
+    const { path, range } = parseMentionPath(raw);
+    let content: string;
     try {
-      let content = await readFile(path);
-      if (content.length > MAX_MENTION_CHARS) {
-        const total = content.length;
-        content = `${content.slice(0, MAX_MENTION_CHARS)}\n...(内容过长，已截断，完整文件共 ${total} 字符)`;
-      }
-      resolved.push({ path, content });
-      sections.push(`--- 引用文件：${path} ---\n${content}\n--- 文件结束：${path} ---`);
+      content = await readFile(path);
     } catch {
       // 读取失败（不存在/二进制/无权限等）——原样保留 @path 文本，不阻断发送
+      continue;
     }
+
+    if (range) {
+      content = sliceLines(content, range);
+      // 范围整个落在文件之外：不静默丢弃引用（用户会以为没发出去），给一句
+      // 可读的提示当成内容，模型也知道该引用为什么是空的。
+      if (!content) {
+        content = `（指定的行范围 ${range.start}-${range.end} 超出文件长度）`;
+      }
+    }
+    const total = content.length;
+    if (total > MAX_MENTION_CHARS) {
+      content = `${content.slice(0, MAX_MENTION_CHARS)}\n...(内容过长，已截断，完整内容共 ${total} 字符)`;
+    }
+    resolved.push(range ? { path, content, range } : { path, content });
+    const label = formatMentionPath(path, range);
+    sections.push(`--- 引用文件：${label} ---\n${content}\n--- 文件结束：${label} ---`);
   }
   const sendText = sections.length ? `${text}\n\n${sections.join("\n\n")}` : text;
   return { sendText, resolved };
@@ -81,8 +135,11 @@ export function splitMentionSections(text: string): MentionSplit {
   const displayText = text
     .replace(
       /\n*--- 引用文件：(.+) ---\n([\s\S]*?)\n--- 文件结束：\1 ---/g,
-      (_match, path: string, content: string) => {
-        sections.push({ path, content });
+      (_match, raw: string, content: string) => {
+        // 标记里的路径可能带 `@path:12-48` 的行号后缀，回看时同样要还原成
+        // 「路径 + 区间」，否则卡片标题丢了行号、与直发路径形状不一致。
+        const { path, range } = parseMentionPath(raw);
+        sections.push(range ? { path, content, range } : { path, content });
         return "";
       },
     )

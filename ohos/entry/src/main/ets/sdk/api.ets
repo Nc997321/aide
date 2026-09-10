@@ -331,7 +331,8 @@ export class AideApi {
     });
   }
 
-  /** 系统默认供应商的模型选项（Claude 别名 sonnet/opus/haiku 等）。 */
+  /** 系统默认供应商的模型选项（Anthropic 4 个别名，Rust 从 catalog 预设读）。
+   *  此前底层读 agent-sidecar/default-models.json 兜底文件——已删，catalog 单一真源。 */
   getDefaultModels(): Promise<ModelOption[]> {
     return getTransport().invoke<ModelOption[]>('get_default_models');
   }

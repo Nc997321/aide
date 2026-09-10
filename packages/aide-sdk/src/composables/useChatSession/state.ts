@@ -547,8 +547,8 @@ export async function finalizeSession(tempId: string, realId: string) {
   finalizedSids.add(realId); // 此后到达的 session_title 属于「已存在会话」，可安全改名
   // 3. 通知 App.vue：这是第一次创建，去写元数据、加侧栏、记最近访问
   for (const cb of sessionCreatedCallbacks) cb(tempId, realId);
-  // 首条 pending：spawn 时已把 provider 记在 tempId 上（sendMessage 内 settleOnSend），
-  // migrateBinding 随定名迁到 realId；这里补落盘 + 推进基线。
+  // 首条 pending：spawn 时已把 provider 记在 tempId 上（sendMessage 内 prepareSpawn，
+  // 只记内存不落盘），migrateBinding 随定名迁到 realId；这里补落盘 + 推进基线。
   // 不再读视图态——此前读 identity.effectiveProvider 会造成「首发后切走 tab →
   // 新会话被落盘成别人面板那条会话的供应商」。
   await identityStore.finalizeSpawn(realId);

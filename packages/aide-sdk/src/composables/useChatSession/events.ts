@@ -100,12 +100,17 @@ function blocksFromDisplay(
             label: b.label,
             ...(b.icon ? { icon: b.icon } : {}),
           };
+        // @引用 → 合成 Read 卡（与历史回看路径 transcriptMapping 同形）。带 range
+        // 时补 offset/limit，让卡片头行显示行号区间——模型并未真的调 Read，这里
+        // 只是借用 Read 卡的展示形态。lspRelay 跳过用户消息，不会被误判成接力。
         case "mention":
           return {
             type: "tool_call",
             id: crypto.randomUUID(),
             name: "Read",
-            input: { file_path: b.path },
+            input: b.range
+              ? { file_path: b.path, offset: b.range.start, limit: b.range.end - b.range.start + 1 }
+              : { file_path: b.path },
             result: b.content,
             isError: false,
             isPending: false,

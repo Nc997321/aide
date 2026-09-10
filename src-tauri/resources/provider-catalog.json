@@ -5,7 +5,8 @@
     "icon": "A",
     "base_url": "",
     "auth_mode": "api_key",
-    "actions": ["refresh_models", "view_quota", "test_connection"]
+    "actions": ["refresh_models", "view_quota", "test_connection"],
+    "models": ["opus", "sonnet", "haiku", "fable"]
   },
   {
     "kind": "cpa_gpt",

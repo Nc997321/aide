@@ -1,5 +1,4 @@
-import { reactive, ref } from "vue";
-import { api } from "../../../api";
+import { reactive } from "vue";
 import { useProviders } from "../../../composables/useProviders";
 import { useSessionProviders } from "../../../composables/useSessionProviders";
 import { consistentProviderId, providerModelList } from "../../../utils/provider";
@@ -41,10 +40,9 @@ const bindings = reactive<Record<string, Binding>>({});
 /** 上次发送坐实的供应商 id，**按 sid** 记录（门控基线）。
  *  此前是单值导致跨会话串：A 面板的门控去比 B 会话的基线 → 误弹/漏弹。 */
 const lastProviderBySid = reactive<Record<string, string>>({});
-const defaultModels = ref<ModelOption[]>([]);
 
 // 模块级 composable 依赖（与 useSessionProviders 同构：返回模块级共享 ref，无 lifecycle）
-const { allProviders, activeProviderId, SYSTEM_DEFAULT_ID } = useProviders();
+const { allProviders, activeProviderId } = useProviders();
 const { setProvider, providerOf, clearProvider, migrateProvider } = useSessionProviders();
 
 function emptyBinding(): Binding {
@@ -64,22 +62,19 @@ function providerModelsOf(pid: string): ModelOption[] {
   return p ? providerModelList(p).map((v) => ({ value: v, displayName: v })) : [];
 }
 
-/** 全局口径的模型选项（无会话归属时用）：系统默认用 defaultModels，
- *  第三方用 providerModelList。不传 sid——这里不牵涉会话身份。 */
+/** 全局口径的模型选项（无会话归属时用）。统一走 providerModelsOf——
+ *  第三方供应商模型来自用户配置 known_models，系统默认供应商的 known_models
+ *  由 Rust view() 转换从 catalog 预设读。两条路径同源，不再有 if 分支。 */
 function activeProviderModels(): ModelOption[] {
-  const pid = activeProviderId.value;
-  if (pid === SYSTEM_DEFAULT_ID) return defaultModels.value;
-  return providerModelsOf(pid);
+  return providerModelsOf(activeProviderId.value);
 }
 
-/** 会话口径的模型选项：系统默认用 SDK 动态列表（无则 defaultModels 静态兜底），
- *  第三方用 providerModelList（静态配置）。 */
+/** 会话口径的模型选项。第三方走用户配置；系统默认走 SDK 动态列表（无 sdk
+ *  列表时由 view() 注入的 known_models——即 catalog 预设兜底）填充。 */
 function displayModelsOf(sid: string): ModelOption[] {
   const pid = resolveEffectiveProvider(providerOf(sid), activeProviderId.value);
-  if (pid === SYSTEM_DEFAULT_ID) {
-    const sdk = bindings[sid]?.sdkModels ?? [];
-    return sdk.length ? sdk : defaultModels.value;
-  }
+  const sdk = bindings[sid]?.sdkModels ?? [];
+  if (sdk.length) return sdk;
   return providerModelsOf(pid);
 }
 
@@ -165,6 +160,19 @@ async function settleOnSend(sid: string, effectiveProvider: string): Promise<voi
   }
 }
 
+/** 会话还没创建时的 spawn 预备（id 仍是临时号）：只把将用的 provider 记进内存
+ *  （门控基线 + 注册表绑定），**不落盘**。
+ *
+ *  与 settleOnSend 的分工不是"要不要写盘"的开关，而是两者面对的对象不同：本函数
+ *  面对一个**盘上还不存在的会话**，settleOnSend 面对一个**已在盘上有档案的会话**。
+ *  临时号写盘必然留下没人读的孤儿文件，且会让 finalizeSpawn 误判"已落盘"而跳过
+ *  正式 id 的写入——落盘统一推迟到 finalizeSpawn。 */
+function prepareSpawn(sid: string, provider: string): void {
+  if (!sid) return;
+  lastProviderBySid[sid] = provider;
+  if (!providerOf(sid)) setProvider(sid, provider);
+}
+
 /** 模型身份的进程坐实落盘（model_committed 事件驱动）：bindRuntime + 落盘一体。
  *  requestedModel=null（CLI 内部切换）→ 只 bindRuntime 不落盘（没有用户选择可恢复）。 */
 async function commitModelFromRuntime(
@@ -240,27 +248,15 @@ async function finalizeSpawn(realId: string): Promise<void> {
   await settleOnSend(realId, pid);
 }
 
-/** 读系统默认静态兜底模型列表（ChatPanel onMounted 调）。 */
-async function refreshDefaultModels(): Promise<void> {
-  try {
-    defaultModels.value = await api.getDefaultModels();
-  } catch (e) {
-    console.warn("[sessionIdentity] load default models failed:", e);
-  }
-}
-
 /** @internal 测试重置全部仓库状态。 */
 function __resetForTest(): void {
   for (const k of Object.keys(bindings)) delete bindings[k];
   for (const k of Object.keys(lastProviderBySid)) delete lastProviderBySid[k];
-  defaultModels.value = [];
 }
 
 /** 全局唯一的会话身份仓库。非组件调用方（事件 / stop / 发送收尾）一律用它——
  *  它们没有面板归属，也不该读视图状态。 */
 export const sessionIdentityStore = {
-  // ── 状态 ──
-  defaultModels,
   // ── 查询 ──
   providerOf,
   activeProviderModels,
@@ -272,6 +268,7 @@ export const sessionIdentityStore = {
     sid ? (lastProviderBySid[sid] ?? null) : null,
   // ── 写入 ──
   resolve,
+  prepareSpawn,
   settleOnSend,
   finalizeSpawn,
   commitModelFromRuntime,
@@ -280,7 +277,6 @@ export const sessionIdentityStore = {
   bindRuntime,
   releaseBinding,
   migrateBinding,
-  refreshDefaultModels,
   __resetForTest,
 };
 

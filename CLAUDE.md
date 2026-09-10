@@ -99,6 +99,20 @@ tempId 建孤儿元数据，并用 id 前 8 位覆盖对方已经写好的名字
 - 降级约定：display 缺失 / 未知形态 → 纯文本气泡或跳过该块，**整条消息不能消失**。
 - `text` 取 display 的原文而非 prompt，让只渲染文本的端（鸿蒙 v1）不会看到展开后的引用内容。
 
+### @引用的行号区间（`@path:12-48`）
+
+引用可以只指向文件的一段（编辑器右键「添加选中到对话」）。文本约定 = `@path` 后跟 `:<起>-<止>`
+（1-based 闭区间，单行 `:<n>`），**解析唯一真相源是 `packages/aide-sdk/src/utils/fileMentions.ts`
+的 `parseMentionPath` / `formatMentionPath`**，收发两端共用；包裹标记格式同理只有这一处
+（`splitMentionSections` 必须与 `resolveFileMentions` 一起改）。
+
+- 解析取**最后一个**冒号：Windows 盘符冒号后面不是纯数字，天然不匹配，无需特判。
+- **模型不会因此只读这一段**——内置 Read 不认识我们的后缀。省 token 靠发送前切片注入
+  （`resolveFileMentions` 读全文后按行切），不靠 Read 的 offset/limit。
+- 引用内容读的是**磁盘内容**：未保存的编辑不在引用里（选区行号也可能漂移）。
+- mention 块带可选 `range`（`UserMessageBlock` 两份类型一起加），桌面端渲染成 Read 卡时
+  补 `offset`/`limit` 以显示行号区间；无 range = 整文件，与旧消息完全兼容。
+
 ### `permission_cancelled` 的语义
 
 已扩成「这条请求已终结（批准 / 拒绝 / abort / 连带放行）」，**不是**"被取消"。

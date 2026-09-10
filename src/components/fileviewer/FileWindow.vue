@@ -15,7 +15,8 @@ import DiffViewer from "./DiffViewer.vue";
 import { firstChangedLine } from "./diffLocate";
 import { extToLang, highlightCode } from "../../utils/highlight";
 import { formatContent } from "../../utils/format";
-import { useContextMenu } from "../../composables/useContextMenu";
+import { useContextMenu, type MenuItem } from "../../composables/useContextMenu";
+import { useMentionInserter } from "../../composables/useMentionInserter";
 import { isHtmlFilePath } from "../../utils/fileLink";
 import { marked } from "../../utils/markdown";
 
@@ -52,6 +53,7 @@ const callHierarchy = useCallHierarchy();
 const modal = useModal();
 const { push: pushNotification } = useNotifications();
 const { show: showContextMenu } = useContextMenu();
+const mentionInserter = useMentionInserter();
 
 const gotoPopoverRef = ref<HTMLElement | null>(null);
 const codeEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null);
@@ -503,14 +505,59 @@ function formatFile() {
   props.win.editContent = result.text;
 }
 
-/** 编辑器右键菜单：JSON/JSONL 弹自定义菜单（格式化 + 保存），其余放行原生菜单 */
+/**
+ * 编辑器右键菜单（统一接管，不再放行原生菜单——半原生半自定义会让「全选」这类
+ * 项有时有有时没有）。
+ *
+ * - 有选区 → 追加「添加选中到对话」：引用形态是 `path + 行号区间`，发送时只把
+ *   这一段读出来拼进 prompt（模型不必读全文）。
+ * - 复制/剪切/粘贴/全选：剪贴板走现成的 Web Clipboard API，文档改动由 CodeEditor
+ *   的 replaceSelection 统一入口落（走 dispatch → v-model → dirty 成立）。
+ * - JSON/JSONL 追加格式化/保存。
+ */
 function onEditorContextMenu(e: MouseEvent) {
-  if (!canFormat.value) return;
+  const editor = codeEditorRef.value;
+  const range = editor?.selectionLines() ?? null;
+  const items: MenuItem[] = [];
+  if (range) {
+    items.push({
+      label: `添加选中到对话（第 ${range.start}-${range.end} 行）`,
+      action: () => mentionInserter.insertMention(props.win.filePath, false, range),
+    });
+    items.push({ label: "", separator: true });
+  }
+  items.push(
+    { label: "复制", kbd: "Ctrl+C", disabled: !range, action: () => runClipboardAction(editor?.copySelection()) },
+    { label: "剪切", kbd: "Ctrl+X", disabled: !range, action: () => runClipboardAction(editor?.cutSelection()) },
+    { label: "粘贴", kbd: "Ctrl+V", action: () => runClipboardAction(editor?.pasteFromClipboard()) },
+    { label: "全选", kbd: "Ctrl+A", action: () => editor?.selectAll() },
+  );
+  if (canFormat.value) {
+    items.push({ label: "", separator: true });
+    items.push(
+      { label: "格式化", kbd: "Shift+Alt+F", action: formatFile },
+      { label: "保存", kbd: "Ctrl+S", action: () => save(props.win.id) },
+    );
+  }
   e.preventDefault();
-  showContextMenu(e.clientX, e.clientY, [
-    { label: "格式化", kbd: "Shift+Alt+F", action: formatFile },
-    { label: "保存", kbd: "Ctrl+S", action: () => save(props.win.id) },
-  ]);
+  showContextMenu(e.clientX, e.clientY, items);
+}
+
+/**
+ * 剪贴板动作收口：读剪贴板需要用户授权（WebView 里可能被拒），失败不能静默——
+ * 否则用户点了「粘贴」没反应只会以为菜单坏了。
+ */
+function runClipboardAction(p: Promise<void> | undefined): void {
+  void Promise.resolve(p).catch((err: unknown) => {
+    pushNotification({
+      severity: "error",
+      source: "fileviewer",
+      title: "剪贴板操作失败",
+      body: String(err),
+      timestamp: Date.now(),
+      dedupKey: "fileviewer:editor-clipboard",
+    });
+  });
 }
 </script>
 
