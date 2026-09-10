@@ -3,7 +3,7 @@ import type { ChatEvent, ImageAttachment, RateLimitWindow, TurnUsage } from "./t
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
 import { ToolLifecycleTracker } from "./toolLifecycle.js";
-import { BgTaskTracker } from "./bgTasks.js";
+import { BgTaskTracker } from "./desktop/bgTasks.js";
 import { startOutputTail as globalStartOutputTail, stopOutputTail as globalStopOutputTail } from "./subagentOutputTail.js";
 
 /** 子代理嵌套深度告警阈值（warn-only，不阻止调用）。深度 > 阈值时发

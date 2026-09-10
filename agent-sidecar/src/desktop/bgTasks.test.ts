@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { BgTaskTracker, parseBackgroundAck } from "./bgTasks.js";
-import { mapSdkMessage } from "./mapper.js";
-import { TaskTracker } from "./tasks.js";
-import { SubagentTracker } from "./subagents.js";
-import { ToolLifecycleTracker } from "./toolLifecycle.js";
-import type { ChatEvent } from "./types.js";
+import { mapSdkMessage } from "../mapper.js";
+import { TaskTracker } from "../tasks.js";
+import { SubagentTracker } from "../subagents.js";
+import { ToolLifecycleTracker } from "../toolLifecycle.js";
+import type { ChatEvent } from "../types.js";
 
 // ---- parseBackgroundAck：claude.exe 实锤的两种回执变体 ----
 

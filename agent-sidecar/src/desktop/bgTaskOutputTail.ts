@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import { StringDecoder } from "node:string_decoder";
-import type { ChatEvent } from "./types.js";
+import type { ChatEvent } from "../types.js";
 
 /** 单次 tick 的读上限（1MB）：超限截断、剩余下次续读——防大输出文件一次读爆
  *  内存（sync 全量 allocUnsafe 曾是 OOM 与事件循环卡死的来源，审查 P0-2）。 */

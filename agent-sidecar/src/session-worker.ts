@@ -11,18 +11,18 @@ import { PermissionManager, policyDenyMessage } from "./permissions.js";
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
 import { ToolLifecycleTracker } from "./toolLifecycle.js";
-import { BgTaskTracker } from "./bgTasks.js";
-import { BgTaskTail } from "./bgTaskOutputTail.js";
-import { JumpQueueController } from "./jumpQueue.js";
+import { BgTaskTracker } from "./desktop/bgTasks.js";
+import { BgTaskTail } from "./desktop/bgTaskOutputTail.js";
+import { JumpQueueController } from "./desktop/jumpQueue.js";
 import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { removeSessionRegistryEntryFromEnv } from "./claudeRegistry.js";
-import { btwQueryOverrides, forkResumeOptions } from "./btwOptions.js";
+import { btwQueryOverrides, forkResumeOptions } from "./desktop/btwOptions.js";
 import {
   automationHookVerdict,
   automationQueryOverrides,
   filterMcpServers,
   type AutomationConfig,
-} from "./automation.js";
+} from "./desktop/automation.js";
 import { titleFromContent } from "./titleGenerator.js";
 import { applyModelSwitch } from "./modelSwitch.js";
 import { makeModelSwitchGuard, type ModelSwitchGuard } from "./modelSwitchGuard.js";
