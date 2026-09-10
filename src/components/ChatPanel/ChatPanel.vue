@@ -160,10 +160,18 @@ const displayedPermission = computed<PermissionRequest | null>(
  * PermissionDialog 的 AskUserQuestion 视觉语言渲染，input 全前端字段，不进 sidecar。 */
 function buildSendConfirmRequest(decision: ConfirmDecision): PermissionRequest {
   const newProviderName = sessionProvider.value.name || decision.effective;
-  const oldProviderName = decision.last
-    ? (allProviders.value.find((p) => p.id === decision.last)?.name ?? decision.last)
-    : "未记录";
-  const oldModel = decision.lastModel ?? "未记录";
+  // 「原」一侧只在确有漂移的维度上展示记录值；某维度 drift=false 时按当前值填，
+  // 否则一旦盘上某字段缺失（如「仅模型变」+ 旧供应商未记录）就会出现
+  // "原 未记录/sonnet" 之类自相矛盾的文字。Rust 侧 drift=true ⟹ 对应 last 非空，
+  // 此处保留兜底是防御，不应该触发。
+  const oldProviderName = decision.providerDrift
+    ? (decision.last
+      ? (allProviders.value.find((p) => p.id === decision.last)?.name ?? decision.last)
+      : newProviderName)
+    : newProviderName;
+  const oldModel = decision.modelDrift
+    ? (decision.lastModel ?? decision.effectiveModel)
+    : decision.effectiveModel;
   return {
     id: `send-confirm-${crypto.randomUUID()}`,
     name: "__sendConfirm__",

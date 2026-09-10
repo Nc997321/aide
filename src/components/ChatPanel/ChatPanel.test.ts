@@ -188,26 +188,47 @@ describe("ChatPanel 跨会话串修复", () => {
     wrapper.unmount();
   });
 
-  it("发送前确认只守供应商 respawn 维度：同会话切换模型后发送不再弹确认（切换成本确认已移交 PreModelSwitch 弹窗，2026-09-01 设计稿 §2）", async () => {
+  it("发送门控改为供应商+模型两维：同会话切换模型后发送会弹确认（2026-09-08 修订；模型维度的「上次发送基线对比」现仅用于发送门控）", async () => {
+    // drift mock 反映「基线 kimi，用户切换 deepseek」：供应商维度无漂移（都 p_test），
+    // 模型维度漂移。基线侧 last=null/lastModel="kimi"——盘上只记了模型没记供应商的
+    // 老数据场景，验证 dialog 文案不再出现「未记录」。
+    const driftMock = vi.fn(async () => ({
+      providerDrift: false,
+      modelDrift: true,
+      lastProvider: null,
+      lastModel: "kimi",
+    }));
+    const api = (await import("@aide/sdk/api")).api as unknown as {
+      sessionIdentityDrift: typeof driftMock;
+    };
+    api.sessionIdentityDrift = driftMock;
+
     sessionProviderMock.mockImplementation(async () => "p_test");
     sessionModelMock.mockImplementation(async () => "kimi");
     const wrapper = mount(ChatPanel, { props: baseProps({ sessionId: "A", currentModel: "haiku", isBusy: false }) });
     await flush();
     expect(modelValueOf(wrapper)).toBe("kimi"); // 恢复身份
 
-    // 用户切换模型到 deepseek——模型维度的门控已废除：发送直接执行，不弹 __sendConfirm__
+    // 用户切换模型到 deepseek：仅模型漂移，弹「模型变更」确认形态
     const modelStub = wrapper.findAllComponents({ name: "ThemedSelect" }).find((s) => s.props("title") === "模型");
     modelStub?.vm.$emit("update:modelValue", "deepseek");
     await nextTick();
     expect(modelValueOf(wrapper)).toBe("deepseek");
 
-    // 输入并发送：直接发出（切换成本确认走 PreModelSwitch hook 的切换前弹窗）
     await wrapper.find("textarea").setValue("hello");
     await wrapper.find("textarea").trigger("keydown", { key: "Enter" });
     await flush();
-    expect(wrapper.emitted("send")).toBeTruthy();
+    expect(wrapper.emitted("send")).toBeFalsy(); // 门控拦截，尚未真发
     const pd = wrapper.findComponent({ name: "PermissionDialog" });
-    expect((pd?.props("permission") as { name: string } | null)?.name).not.toBe("__sendConfirm__");
+    const input = (pd?.props("permission") as { input: { title: string; chip: string; question: string; info: string } } | null)?.input;
+    expect(input?.name === undefined || true).toBe(true); // 形状断言在下
+    expect(pd?.props("permission") as { name: string } | null).toMatchObject({ name: "__sendConfirm__" });
+    expect(input).toMatchObject({
+      chip: "模型变更",
+      // 旧实现会渲染 "原 未记录/kimi"——自相矛盾。新规则 providerDrift=false ⟹ 旧供应商取当前
+      question: "将以 p_test/deepseek 发送（原 p_test/kimi）",
+      info: "供应商仍是 p_test，仅模型由 kimi 改为 deepseek。确认后模型选择会写入会话记录。",
+    });
 
     wrapper.unmount();
   });
