@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import type { ChatEvent } from "../types.js";
+import type { ChatEvent } from "../engine/types.js";
 import {
   queryCodegraph,
   resolveCodegraphResult,

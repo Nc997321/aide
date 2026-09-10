@@ -16,7 +16,7 @@ import {
   toForwardSlashes,
   safeDirname,
   WIN_DRIVE_ABS,
-} from "../../winPaths.js";
+} from "../../engine/winPaths.js";
 
 // re-export：docxTools.ts / path.test.ts 仍从 ./docx/path 引 safeDirname，保持不破。
 export { safeDirname };

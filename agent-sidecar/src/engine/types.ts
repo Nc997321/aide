@@ -1,5 +1,5 @@
 import type { PermissionMatcher, PermissionPolicySnapshot } from "./policy/types.js";
-import type { BuiltinHookManifest } from "./extensions/builtinHooks/index.js";
+import type { BuiltinHookManifest } from "../extensions/builtinHooks/index.js";
 
 /** 会话级权限规则草稿（前端推导、随 permission_response 透传）。与前端
  *  `PermissionRuleDraft` 同形：effect/tool/matcher，id/scope/order 由 sidecar

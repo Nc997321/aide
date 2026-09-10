@@ -1,8 +1,8 @@
 import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
-import { makeSubagentModelHook } from "../../subagentModelDefault";
+import { makeSubagentModelHook } from "../../engine/subagentModelDefault";
 import { makeSkillGuardHook } from "../skillGuard";
 import { makeMemoryEventsHook } from "./memoryEvents";
-import type { ModelSwitchGuard } from "../../modelSwitchGuard";
+import type { ModelSwitchGuard } from "../../engine/modelSwitchGuard";
 
 export interface HookBuildContext {
   cwd: string | undefined;

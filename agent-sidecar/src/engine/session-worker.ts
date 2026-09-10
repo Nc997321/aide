@@ -11,29 +11,29 @@ import { PermissionManager, policyDenyMessage } from "./permissions.js";
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
 import { ToolLifecycleTracker } from "./toolLifecycle.js";
-import { BgTaskTracker } from "./desktop/bgTasks.js";
-import { BgTaskTail } from "./desktop/bgTaskOutputTail.js";
-import { JumpQueueController } from "./desktop/jumpQueue.js";
+import { BgTaskTracker } from "../desktop/bgTasks.js";
+import { BgTaskTail } from "../desktop/bgTaskOutputTail.js";
+import { JumpQueueController } from "../desktop/jumpQueue.js";
 import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { removeSessionRegistryEntryFromEnv } from "./claudeRegistry.js";
-import { btwQueryOverrides, forkResumeOptions } from "./desktop/btwOptions.js";
+import { btwQueryOverrides, forkResumeOptions } from "../desktop/btwOptions.js";
 import {
   automationHookVerdict,
   automationQueryOverrides,
   filterMcpServers,
   type AutomationConfig,
-} from "./desktop/automation.js";
+} from "../desktop/automation.js";
 import { titleFromContent } from "./titleGenerator.js";
 import { applyModelSwitch } from "./modelSwitch.js";
 import { makeModelSwitchGuard, type ModelSwitchGuard } from "./modelSwitchGuard.js";
 import { applyEffortSwitch, normalizeEffort } from "./effortSwitch.js";
 import type { EffortSettable } from "./effortSwitch.js";
 import { cliSubagentModelEnvValue } from "./subagentModelDefault.js";
-import { codegraphMcpRegistration, CODEGRAPH_ALLOW_RULE } from "./extensions/codegraphTools.js";
-import { docsMcpRegistration, DOCS_ALLOW_RULE } from "./extensions/docsMcp.js";
-import { buildBuiltinHooks } from "./extensions/builtinHooks/index.js";
+import { codegraphMcpRegistration, CODEGRAPH_ALLOW_RULE } from "../extensions/codegraphTools.js";
+import { docsMcpRegistration, DOCS_ALLOW_RULE } from "../extensions/docsMcp.js";
+import { buildBuiltinHooks } from "../extensions/builtinHooks/index.js";
 import { loadUserMcpServers, loadUserHooks, assembleMcpServers, assembleHooks } from "./userExtensions.js";
-import { cancelAllCodegraphQueries } from "./extensions/codegraphClient.js";
+import { cancelAllCodegraphQueries } from "../extensions/codegraphClient.js";
 import { detectImageUnsupported, findSessionJsonl, rollbackImageMessage } from "./imageRollback.js";
 import { resolveClaudeExe } from "./claudeExe.js";
 import {
@@ -51,7 +51,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { loadAideInstructions } from "./instructions.js";
-import { buildDispatchPluginsOption } from "./extensions/dispatchPlugins.js";
+import { buildDispatchPluginsOption } from "../extensions/dispatchPlugins.js";
 import { evaluatePolicy } from "./policy/evaluate.js";
 import type { PermissionPolicySnapshot, PermissionRule } from "./policy/types.js";
 import type { PermissionRuleDraft } from "./types.js";

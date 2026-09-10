@@ -1,8 +1,8 @@
 import * as readline from "readline";
-import { SessionManager } from "./session-manager.js";
-import { ensureWindowsBashEnv } from "./winBashEnv.js";
+import { SessionManager } from "./engine/session-manager.js";
+import { ensureWindowsBashEnv } from "./engine/winBashEnv.js";
 import { ensureCodegraphSkill } from "./extensions/codegraphSkill.js";
-import { setStdoutBackpressureNotifier, writeStdoutFrame } from "./stdoutFrames.js";
+import { setStdoutBackpressureNotifier, writeStdoutFrame } from "./engine/stdoutFrames.js";
 
 // test-mcp 子命令：探活 MCP server。被 Rust test_mcp_connection spawn 调用
 // （agent-runtime test-mcp <config-json>）。最早分支，跳过会话初始化，输出 JSON 退出。

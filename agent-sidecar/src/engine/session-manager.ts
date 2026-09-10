@@ -1,7 +1,7 @@
 import type { ChatEvent, SidecarCommand } from "./types.js";
 import { SessionWorker } from "./session-worker.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { resolveCodegraphResult } from "./extensions/codegraphClient.js";
+import { resolveCodegraphResult } from "../extensions/codegraphClient.js";
 import { isDroppableEvent, writeStdoutFrame } from "./stdoutFrames.js";
 
 export interface SessionManagerOptions {

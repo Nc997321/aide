@@ -1,4 +1,4 @@
-import type { ChatEvent } from "../types.js";
+import type { ChatEvent } from "../engine/types.js";
 
 /**
  * 后台 shell 任务追踪器（per-session，纯状态、不碰 IO——tail 的启动/停止由调用方

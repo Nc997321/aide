@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import type { ChatEvent } from "../types.js";
+import type { ChatEvent } from "../engine/types.js";
 
 export type CodegraphTool = "find_symbol" | "semantic_search" | "call_graph";
 

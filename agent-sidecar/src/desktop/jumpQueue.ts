@@ -1,4 +1,4 @@
-import type { ImageAttachment, UserMessageBlock } from "../types.js";
+import type { ImageAttachment, UserMessageBlock } from "../engine/types.js";
 
 export interface JumpRequest {
   prompt: string;
