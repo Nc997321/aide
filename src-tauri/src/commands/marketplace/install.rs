@@ -83,8 +83,12 @@ pub(super) fn ensure_source_cache(source_id: &str) -> Result<(), String> {
 
 /// 已安装插件的版本身份（最新版本目录名）；未安装 → None。
 pub(super) fn installed_version_id(market: &str, plugin: &str) -> Option<String> {
-    latest_version_dir(&plugins_cache_root().join(market).join(plugin))
-        .map(|p| p.file_name().unwrap_or_default().to_string_lossy().to_string())
+    latest_version_dir(&plugins_cache_root().join(market).join(plugin)).map(|p| {
+        p.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string()
+    })
 }
 
 /// Resolve version from source (short sha if available; empty otherwise — full resolution at install).

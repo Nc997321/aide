@@ -797,7 +797,10 @@ mod tests {
     #[test]
     fn drift_false_without_baseline() {
         // 无基线 = 首次 / 未知，不弹确认（与桌面 needsConfirm 的 last=null 同义）
-        assert_eq!(compute_identity_drift(None, None, "p_a", "m1"), (false, false));
+        assert_eq!(
+            compute_identity_drift(None, None, "p_a", "m1"),
+            (false, false)
+        );
     }
 
     #[test]
@@ -956,7 +959,13 @@ mod tests {
         create_session(id.clone(), "模型会话".to_string()).unwrap();
         assert_eq!(session_model(id.clone()).await.unwrap(), None);
 
-        write_model(&id, MetaField::Set { value: "sonnet".to_string() }).await;
+        write_model(
+            &id,
+            MetaField::Set {
+                value: "sonnet".to_string(),
+            },
+        )
+        .await;
         assert_eq!(
             session_model(id.clone()).await.unwrap(),
             Some("sonnet".to_string())
@@ -968,7 +977,13 @@ mod tests {
         assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("模型会话"));
 
         // 覆盖写 + 清空（清空后读回 None）
-        write_model(&id, MetaField::Set { value: "opus".to_string() }).await;
+        write_model(
+            &id,
+            MetaField::Set {
+                value: "opus".to_string(),
+            },
+        )
+        .await;
         assert_eq!(
             session_model(id.clone()).await.unwrap(),
             Some("opus".to_string())
@@ -1000,7 +1015,13 @@ mod tests {
         create_session(id.clone(), "供应商会话".to_string()).unwrap();
         assert_eq!(session_provider(id.clone()).await.unwrap(), None);
 
-        write_provider(&id, MetaField::Set { value: "p_abc".to_string() }).await;
+        write_provider(
+            &id,
+            MetaField::Set {
+                value: "p_abc".to_string(),
+            },
+        )
+        .await;
         assert_eq!(
             session_provider(id.clone()).await.unwrap(),
             Some("p_abc".to_string())
@@ -1012,7 +1033,13 @@ mod tests {
         assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("供应商会话"));
 
         // 覆盖写 + 清空（清空后读回 None）
-        write_provider(&id, MetaField::Set { value: "p_def".to_string() }).await;
+        write_provider(
+            &id,
+            MetaField::Set {
+                value: "p_def".to_string(),
+            },
+        )
+        .await;
         assert_eq!(
             session_provider(id.clone()).await.unwrap(),
             Some("p_def".to_string())
@@ -1037,30 +1064,56 @@ mod tests {
 
         set_session_meta(
             id.clone(),
-            MetaField::Set { value: "p_1".to_string() },
-            MetaField::Set { value: "m_1".to_string() },
-            MetaField::Set { value: "high".to_string() },
+            MetaField::Set {
+                value: "p_1".to_string(),
+            },
+            MetaField::Set {
+                value: "m_1".to_string(),
+            },
+            MetaField::Set {
+                value: "high".to_string(),
+            },
         )
         .await
         .unwrap();
 
         // 三个字段必须同时在盘上（旧实现下 model 会被 provider 的写覆盖掉）
-        assert_eq!(session_provider(id.clone()).await.unwrap(), Some("p_1".to_string()));
-        assert_eq!(session_model(id.clone()).await.unwrap(), Some("m_1".to_string()));
-        assert_eq!(session_effort(id.clone()).await.unwrap(), Some("high".to_string()));
+        assert_eq!(
+            session_provider(id.clone()).await.unwrap(),
+            Some("p_1".to_string())
+        );
+        assert_eq!(
+            session_model(id.clone()).await.unwrap(),
+            Some("m_1".to_string())
+        );
+        assert_eq!(
+            session_effort(id.clone()).await.unwrap(),
+            Some("high".to_string())
+        );
 
         // Keep 的字段不动：只改 model，provider/effort 必须原样
         set_session_meta(
             id.clone(),
             MetaField::Keep,
-            MetaField::Set { value: "m_2".to_string() },
+            MetaField::Set {
+                value: "m_2".to_string(),
+            },
             MetaField::Keep,
         )
         .await
         .unwrap();
-        assert_eq!(session_provider(id.clone()).await.unwrap(), Some("p_1".to_string()));
-        assert_eq!(session_model(id.clone()).await.unwrap(), Some("m_2".to_string()));
-        assert_eq!(session_effort(id.clone()).await.unwrap(), Some("high".to_string()));
+        assert_eq!(
+            session_provider(id.clone()).await.unwrap(),
+            Some("p_1".to_string())
+        );
+        assert_eq!(
+            session_model(id.clone()).await.unwrap(),
+            Some("m_2".to_string())
+        );
+        assert_eq!(
+            session_effort(id.clone()).await.unwrap(),
+            Some("high".to_string())
+        );
 
         let _ = fs::remove_file(&path);
     }

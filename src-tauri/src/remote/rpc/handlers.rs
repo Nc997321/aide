@@ -165,10 +165,7 @@ struct StopBgTaskArgs {
     task_id: String,
 }
 
-pub fn stop_bg_task(
-    app: AppHandle,
-    params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
+pub fn stop_bg_task(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: StopBgTaskArgs = parse(params)?;
         let runtime = app.state::<AgentRuntimeManager>();
@@ -178,10 +175,7 @@ pub fn stop_bg_task(
 
 /// 后台任务快照：远程客户端打开会话/重连后对账 bgTasks（bg_task_* 事件流
 /// 只做实时转发无重放，离线期间错过的任务靠这里回填）。
-pub fn list_bg_tasks(
-    app: AppHandle,
-    params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
+pub fn list_bg_tasks(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: SessionIdArgs = parse(params)?;
         let reg = app.state::<std::sync::Arc<crate::runtime::bg_registry::BgTaskRegistry>>();

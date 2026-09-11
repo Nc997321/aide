@@ -105,13 +105,18 @@ pub fn scan_all() -> Result<ScanAllResult, String> {
             bytes: m.len(),
             modified_ms: resolve::to_ms(m.modified()),
         });
-    Ok(ScanAllResult { projects, claude_md })
+    Ok(ScanAllResult {
+        projects,
+        claude_md,
+    })
 }
 
 /// 与 projects 根目录解耦的扫描本体（fixture 测试直接喂目录）。
 fn scan_projects_dir(projects_dir: &std::path::Path) -> Vec<ProjectScan> {
     let mut out: Vec<ProjectScan> = Vec::new();
-    let Ok(rd) = fs::read_dir(projects_dir) else { return out };
+    let Ok(rd) = fs::read_dir(projects_dir) else {
+        return out;
+    };
     // 全局指令不进 per-project 扫描（避免 N 份重复），喂一个必不存在的路径。
     let no_claude = std::path::PathBuf::new();
     for entry in rd.flatten() {
@@ -137,7 +142,14 @@ fn scan_projects_dir(projects_dir: &std::path::Path) -> Vec<ProjectScan> {
     }
     // 最近有动静的项目排前面
     out.sort_by_key(|p| {
-        std::cmp::Reverse(p.scan.topics.iter().filter_map(|t| t.modified_ms).max().unwrap_or(0))
+        std::cmp::Reverse(
+            p.scan
+                .topics
+                .iter()
+                .filter_map(|t| t.modified_ms)
+                .max()
+                .unwrap_or(0),
+        )
     });
     out
 }
@@ -156,7 +168,9 @@ fn scan_dirs(
     let mut have_index = false;
     for dir in dirs {
         let idx_path = dir.join("MEMORY.md");
-        let Ok(content) = fs::read_to_string(&idx_path) else { continue };
+        let Ok(content) = fs::read_to_string(&idx_path) else {
+            continue;
+        };
         have_index = true;
         index_lines += content.lines().count();
         index_bytes += content.len();
@@ -222,12 +236,19 @@ fn scan_dirs(
     });
 
     Ok(ScanResult {
-        index: have_index.then_some(IndexInfo { lines: index_lines, bytes: index_bytes, entries }),
+        index: have_index.then_some(IndexInfo {
+            lines: index_lines,
+            bytes: index_bytes,
+            entries,
+        }),
         topics,
         orphans,
         deadlinks,
         claude_md,
-        limits: Limits { max_lines, max_bytes },
+        limits: Limits {
+            max_lines,
+            max_bytes,
+        },
     })
 }
 
@@ -245,7 +266,11 @@ mod tests {
     #[test]
     fn scan_flags_orphans_and_deadlinks() {
         let dir = fixture_dir("orphan");
-        fs::write(dir.join("MEMORY.md"), "# Project Memory\n\n- [甲](a.md) — 有文件\n- [乙](gone.md) — 没文件\n").unwrap();
+        fs::write(
+            dir.join("MEMORY.md"),
+            "# Project Memory\n\n- [甲](a.md) — 有文件\n- [乙](gone.md) — 没文件\n",
+        )
+        .unwrap();
         fs::write(dir.join("a.md"), "A").unwrap();
         fs::write(dir.join("b.md"), "B（索引没引用）").unwrap();
         let missing_claude = dir.join("no-such-CLAUDE.md");
@@ -342,4 +367,3 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 }
-

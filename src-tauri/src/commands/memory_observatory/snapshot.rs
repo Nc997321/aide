@@ -53,7 +53,11 @@ fn sigs_of(scan: &ScanResult) -> Vec<FileSig> {
     let mut v: Vec<FileSig> = scan
         .topics
         .iter()
-        .map(|t| FileSig { name: t.name.clone(), size: t.size, mtime_ms: t.modified_ms })
+        .map(|t| FileSig {
+            name: t.name.clone(),
+            size: t.size,
+            mtime_ms: t.modified_ms,
+        })
         .collect();
     v.sort_by(|a, b| a.name.cmp(&b.name));
     v
@@ -65,7 +69,9 @@ fn diff(prev: &Snapshot, cur: &[FileSig]) -> SnapshotDiff {
     for f in cur {
         match prev.files.iter().find(|p| p.name == f.name) {
             None => added.push(f.name.clone()),
-            Some(p) if p.size != f.size || p.mtime_ms != f.mtime_ms => modified.push(f.name.clone()),
+            Some(p) if p.size != f.size || p.mtime_ms != f.mtime_ms => {
+                modified.push(f.name.clone())
+            }
             _ => {}
         }
     }
@@ -75,7 +81,12 @@ fn diff(prev: &Snapshot, cur: &[FileSig]) -> SnapshotDiff {
         .filter(|p| !cur.iter().any(|f| f.name == p.name))
         .map(|p| p.name.clone())
         .collect();
-    SnapshotDiff { previous_ts: Some(prev.ts), added, removed, modified }
+    SnapshotDiff {
+        previous_ts: Some(prev.ts),
+        added,
+        removed,
+        modified,
+    }
 }
 
 /// 读最后一条快照 → diff → append 新快照 → 滚动截断。
@@ -100,7 +111,12 @@ pub fn take_snapshot(scan: &ScanResult, path: &PathBuf) -> Result<SnapshotDiff, 
         .last()
         .and_then(|l| serde_json::from_str::<Snapshot>(l).ok())
         .map(|prev| diff(&prev, &cur.files))
-        .unwrap_or(SnapshotDiff { previous_ts: None, added: vec![], removed: vec![], modified: vec![] });
+        .unwrap_or(SnapshotDiff {
+            previous_ts: None,
+            added: vec![],
+            removed: vec![],
+            modified: vec![],
+        });
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("create snapshots dir: {e}"))?;
@@ -124,21 +140,26 @@ mod tests {
             index: None,
             topics: files
                 .iter()
-                .map(|(n, s, m)| crate::commands::memory_observatory::scan::TopicInfo {
-                    name: n.to_string(),
-                    path: String::new(),
-                    size: *s,
-                    created_ms: Some(*m),
-                    modified_ms: Some(*m),
-                    indexed: true,
-                    within_window: true,
-                    source_dir: String::new(),
-                })
+                .map(
+                    |(n, s, m)| crate::commands::memory_observatory::scan::TopicInfo {
+                        name: n.to_string(),
+                        path: String::new(),
+                        size: *s,
+                        created_ms: Some(*m),
+                        modified_ms: Some(*m),
+                        indexed: true,
+                        within_window: true,
+                        source_dir: String::new(),
+                    },
+                )
                 .collect(),
             orphans: vec![],
             deadlinks: vec![],
             claude_md: None,
-            limits: Limits { max_lines: 200, max_bytes: 25 * 1024 },
+            limits: Limits {
+                max_lines: 200,
+                max_bytes: 25 * 1024,
+            },
         }
     }
 

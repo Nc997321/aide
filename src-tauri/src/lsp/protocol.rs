@@ -28,9 +28,10 @@ pub struct CmCompletion {
 pub fn extract_documentation(v: Option<&serde_json::Value>) -> Option<String> {
     match v? {
         serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Object(m) => {
-            m.get("value").and_then(|v| v.as_str()).map(|s| s.to_string())
-        }
+        serde_json::Value::Object(m) => m
+            .get("value")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         _ => None,
     }
 }
@@ -82,15 +83,42 @@ pub fn signature_help_to_view(result: &serde_json::Value) -> serde_json::Value {
 /// manager.rs 握手声明与此同源（单一出处防漂移）：server 按客户端声明的顺序
 /// 返回类型索引，前端据此拿到 tokenType 字符串。
 pub const SEMANTIC_TOKEN_TYPES: [&str; 22] = [
-    "namespace", "type", "class", "enum", "interface", "struct", "typeParameter",
-    "parameter", "variable", "property", "enumMember", "event", "function", "method",
-    "macro", "keyword", "modifier", "comment", "string", "number", "regexp", "operator",
+    "namespace",
+    "type",
+    "class",
+    "enum",
+    "interface",
+    "struct",
+    "typeParameter",
+    "parameter",
+    "variable",
+    "property",
+    "enumMember",
+    "event",
+    "function",
+    "method",
+    "macro",
+    "keyword",
+    "modifier",
+    "comment",
+    "string",
+    "number",
+    "regexp",
+    "operator",
 ];
 
 /// 客户端声明的 tokenModifiers（LSP 标准 10 项，数组顺序即位掩码 bit 位）。
 pub const SEMANTIC_TOKEN_MODIFIERS: [&str; 10] = [
-    "declaration", "definition", "readonly", "static", "deprecated",
-    "abstract", "async", "modification", "documentation", "defaultLibrary",
+    "declaration",
+    "definition",
+    "readonly",
+    "static",
+    "deprecated",
+    "abstract",
+    "async",
+    "modification",
+    "documentation",
+    "defaultLibrary",
 ];
 
 /// textDocument/semanticTokens/full 结果归一：LSP delta 编码（5 元组：
@@ -282,8 +310,15 @@ pub fn prepare_call_hierarchy_items(result: &serde_json::Value) -> Vec<serde_jso
 
 /// CallHierarchyItem JSON → CallHierarchyNode（file 归一相对工作区，行列 1-based）。
 /// selectionRange.start 缺失时回退 range.start，再缺失给 1（宁可给个可跳的行）。
-pub fn call_hierarchy_item_to_node(item: &serde_json::Value, workspace_root: &str) -> CallHierarchyNode {
-    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+pub fn call_hierarchy_item_to_node(
+    item: &serde_json::Value,
+    workspace_root: &str,
+) -> CallHierarchyNode {
+    let name = item
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let kind = item.get("kind").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     let detail = item
         .get("detail")
@@ -342,9 +377,14 @@ pub fn call_hierarchy_calls_to_nodes(
     arr.iter()
         .filter_map(|call| {
             // incoming 取 from，outgoing 取 to（协议字段名固定，方向由调用方传入）
-            let item = call.get(if direction == "outgoing" { "to" } else { "from" })?;
+            let item = call.get(if direction == "outgoing" {
+                "to"
+            } else {
+                "from"
+            })?;
             let mut node = call_hierarchy_item_to_node(item, workspace_root);
-            node.call_sites = ranges_to_sites(call.get("fromRanges").unwrap_or(&serde_json::Value::Null));
+            node.call_sites =
+                ranges_to_sites(call.get("fromRanges").unwrap_or(&serde_json::Value::Null));
             Some(node)
         })
         .collect()
@@ -401,8 +441,14 @@ pub fn inlay_hints_to_view(result: &serde_json::Value) -> Vec<InlayHintItem> {
                 line: (pos.get("line").and_then(|v| v.as_u64()).unwrap_or(0) + 1) as usize,
                 column: (pos.get("character").and_then(|v| v.as_u64()).unwrap_or(0) + 1) as usize,
                 label,
-                padding_left: h.get("paddingLeft").and_then(|v| v.as_bool()).unwrap_or(false),
-                padding_right: h.get("paddingRight").and_then(|v| v.as_bool()).unwrap_or(false),
+                padding_left: h
+                    .get("paddingLeft")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                padding_right: h
+                    .get("paddingRight")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
             })
         })
         .collect()
@@ -428,7 +474,8 @@ pub fn completion_items_to_cm(items: &[CompletionItem]) -> Vec<CmCompletion> {
                 }),
                 kind: it.kind.map(|k| {
                     // CompletionItemKind's inner i32 is private; extract via serde
-                    serde_json::from_value::<i32>(serde_json::to_value(k).unwrap()).unwrap_or(0) as u32
+                    serde_json::from_value::<i32>(serde_json::to_value(k).unwrap()).unwrap_or(0)
+                        as u32
                 }),
                 insert_text: it.insert_text.clone(),
                 filter_text: it.filter_text.clone(),
@@ -635,7 +682,10 @@ mod tests {
         assert_eq!(nodes2[0].call_sites[0].line, 661);
 
         // 非数组响应（null/异常形状）→ 空，不 panic
-        assert!(call_hierarchy_calls_to_nodes(&serde_json::Value::Null, "incoming", "C:/proj").is_empty());
+        assert!(
+            call_hierarchy_calls_to_nodes(&serde_json::Value::Null, "incoming", "C:/proj")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -807,7 +857,10 @@ mod tests {
         };
         let cm = completion_items_to_cm(&[undocumented, documented, no_data]);
         assert_eq!(cm[0].label, "foo");
-        let raw = cm[0].resolve_item.as_ref().expect("undocumented+data → raw item");
+        let raw = cm[0]
+            .resolve_item
+            .as_ref()
+            .expect("undocumented+data → raw item");
         assert_eq!(raw["data"]["proposalId"], serde_json::json!(42));
         assert_eq!(raw["label"], serde_json::json!("foo"));
         assert!(cm[1].resolve_item.is_none(), "已带文档不附带 resolve 载荷");
@@ -821,7 +874,9 @@ mod tests {
             Some("plain doc".into())
         );
         assert_eq!(
-            extract_documentation(Some(&serde_json::json!({"value": "md doc", "kind": "markdown"}))),
+            extract_documentation(Some(
+                &serde_json::json!({"value": "md doc", "kind": "markdown"})
+            )),
             Some("md doc".into())
         );
         assert_eq!(extract_documentation(Some(&serde_json::Value::Null)), None);
@@ -849,7 +904,10 @@ mod tests {
         assert_eq!(sig["label"], serde_json::json!("foo(int a, String b)"));
         assert_eq!(sig["documentation"], serde_json::json!("does foo"));
         assert_eq!(sig["activeParameter"], serde_json::json!(1));
-        assert_eq!(sig["parameters"][1]["documentation"], serde_json::json!("the b"));
+        assert_eq!(
+            sig["parameters"][1]["documentation"],
+            serde_json::json!("the b")
+        );
     }
 
     #[test]

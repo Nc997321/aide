@@ -206,7 +206,9 @@ mod tests {
         let reg = BgTaskRegistry::default();
         reg.feed(&started("t1", "s1"));
         let big = "x".repeat(OUTPUT_CAP_BYTES * 2 + 100);
-        reg.feed(&json!({ "type": "bg_task_output", "id": "t1", "session_id": "s1", "delta": big }));
+        reg.feed(
+            &json!({ "type": "bg_task_output", "id": "t1", "session_id": "s1", "delta": big }),
+        );
         let list = reg.list("s1");
         assert!(list[0].output.len() <= OUTPUT_CAP_BYTES + 3); // 尾部对齐可能多吃几个字节
         assert!(list[0].truncated_bytes > 0);

@@ -620,12 +620,7 @@ pub async fn set_settings(
 /// open-session-from-notification（带 session_id），前端据此打开会话。
 /// 其他平台维持 notify-rust（macOS 系统级自带激活行为，Linux 各发行版不一）。
 #[tauri::command]
-pub fn notify_send(
-    app: tauri::AppHandle,
-    title: String,
-    body: String,
-    session_id: Option<String>,
-) {
+pub fn notify_send(app: tauri::AppHandle, title: String, body: String, session_id: Option<String>) {
     let _trace = crate::diagnostics::trace_command("notify_send");
 
     #[cfg(windows)]

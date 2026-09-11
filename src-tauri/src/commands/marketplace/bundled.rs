@@ -37,7 +37,10 @@ pub struct BundledPlugin {
 
 macro_rules! icon {
     ($file:literal) => {
-        Some(include_bytes!(concat!("../../../resources/builtin-icons/", $file)))
+        Some(include_bytes!(concat!(
+            "../../../resources/builtin-icons/",
+            $file
+        )))
     };
 }
 
@@ -188,10 +191,7 @@ fn tombstone_add(map: &mut serde_json::Map<String, serde_json::Value>, key: &str
 }
 
 fn tombstone_remove(map: &mut serde_json::Map<String, serde_json::Value>, key: &str) {
-    if let Some(a) = map
-        .get_mut(TOMBSTONE_KEY)
-        .and_then(|v| v.as_array_mut())
-    {
+    if let Some(a) = map.get_mut(TOMBSTONE_KEY).and_then(|v| v.as_array_mut()) {
         a.retain(|v| v.as_str() != Some(key));
     }
 }
@@ -201,13 +201,11 @@ fn tombstones(service: &SettingsService) -> Vec<String> {
         .ok()
         .flatten()
         .and_then(|s| {
-            s.get(TOMBSTONE_KEY)?
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
+            s.get(TOMBSTONE_KEY)?.as_array().map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
         })
         .unwrap_or_default()
 }
@@ -261,7 +259,11 @@ pub fn ensure_bundled_plugins_installed(service: &SettingsService) {
                 }
             }
             Err(e) => {
-                tracing::warn!("内置插件 {}@{} 安装/更新失败（跳过，不影响启动）: {e}", bp.name, market);
+                tracing::warn!(
+                    "内置插件 {}@{} 安装/更新失败（跳过，不影响启动）: {e}",
+                    bp.name,
+                    market
+                );
             }
         }
     }
@@ -357,13 +359,11 @@ mod tests {
         ];
         merge_bundled_metadata(&mut entries);
         assert!(entries[0].is_featured);
-        assert!(
-            entries[0]
-                .icon
-                .as_deref()
-                .unwrap_or("")
-                .starts_with("data:image/png;base64,")
-        );
+        assert!(entries[0]
+            .icon
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("data:image/png;base64,"));
         assert!(!entries[1].is_featured);
         assert!(entries[1].icon.is_none());
     }

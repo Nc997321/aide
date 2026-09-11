@@ -458,8 +458,7 @@ pub async fn lsp_call_hierarchy(
             (JumpStatus::Gone, serde_json::Value::Null)
         }
     };
-    let nodes =
-        crate::lsp::protocol::call_hierarchy_calls_to_nodes(&value, dir, &workspace_root);
+    let nodes = crate::lsp::protocol::call_hierarchy_calls_to_nodes(&value, dir, &workspace_root);
     Ok(CallHierarchyResult {
         status,
         root: Some(root),
@@ -1175,7 +1174,9 @@ mod tests {
         }));
         table.lock().await.insert(id, tx);
         transport.send(&msg).await.unwrap();
-        let _ = pump_until(&mut reader, &mut framer, &table_r, rx).await.unwrap();
+        let _ = pump_until(&mut reader, &mut framer, &table_r, rx)
+            .await
+            .unwrap();
         // references（与 lsp_references 命令同参形状：position 0-based + context）
         let (msg, id, tx, rx) = router.next_request(
             "textDocument/references",
@@ -1218,7 +1219,9 @@ mod tests {
         }));
         table.lock().await.insert(id, tx);
         transport.send(&msg).await.unwrap();
-        let _ = pump_until(&mut reader, &mut framer, &table_r, rx).await.unwrap();
+        let _ = pump_until(&mut reader, &mut framer, &table_r, rx)
+            .await
+            .unwrap();
         // 1. prepare（与 lsp_call_hierarchy 命令同参形状：position 0-based）
         let (msg, id, tx, rx) = router.next_request(
             "textDocument/prepareCallHierarchy",
@@ -1239,7 +1242,7 @@ mod tests {
         assert_eq!(root.name, "init_handshake");
         assert_eq!(root.file, "main.rs");
         assert_eq!(root.line, 639); // 0-based 638 → 1-based
-        // 2. incoming 展开（item 原样回传——保 data）
+                                    // 2. incoming 展开（item 原样回传——保 data）
         let (msg, id, tx, rx) = router.next_request(
             "callHierarchy/incomingCalls",
             serde_json::json!({"item": items[0]}),
@@ -1249,7 +1252,8 @@ mod tests {
         let result = pump_until(&mut reader, &mut framer, &table_r, rx)
             .await
             .unwrap();
-        let nodes = crate::lsp::protocol::call_hierarchy_calls_to_nodes(&result, "incoming", "/mock");
+        let nodes =
+            crate::lsp::protocol::call_hierarchy_calls_to_nodes(&result, "incoming", "/mock");
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].name, "spawn_and_init");
         assert_eq!(nodes[0].line, 269);
@@ -1278,7 +1282,9 @@ mod tests {
         }));
         table.lock().await.insert(id, tx);
         transport.send(&msg).await.unwrap();
-        let _ = pump_until(&mut reader, &mut framer, &table_r, rx).await.unwrap();
+        let _ = pump_until(&mut reader, &mut framer, &table_r, rx)
+            .await
+            .unwrap();
         // inlayHint（与 lsp_inlay_hints 命令同参形状：可视区 1-based 3..=5 →
         // start.line=2、end.line=5 覆盖整段）
         let (msg, id, tx, rx) = router.next_request(

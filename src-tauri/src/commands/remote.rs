@@ -27,24 +27,23 @@ pub async fn remote_get_status(app: AppHandle) -> Result<RemoteStatus, String> {
     let service = app.state::<Arc<SettingsService>>();
     let service2 = service.inner().clone();
     let gateway2 = gateway.clone();
-    let (settings, token_configured, token_issued_at) =
-        tokio::task::spawn_blocking(move || {
-            let settings = public_settings(&service2)?;
-            let token_configured = service2
-                .secrets()
-                .get("remote/token")
-                .map_err(|e| e.to_string())?
-                .is_some();
-            // 无 token 时不必读时间戳；有 token 但无记录（旧版签发）→ None
-            let token_issued_at = if token_configured {
-                gateway2.tokens.issued_at()
-            } else {
-                None
-            };
-            Ok::<_, String>((settings, token_configured, token_issued_at))
-        })
-        .await
-        .map_err(|e| e.to_string())??;
+    let (settings, token_configured, token_issued_at) = tokio::task::spawn_blocking(move || {
+        let settings = public_settings(&service2)?;
+        let token_configured = service2
+            .secrets()
+            .get("remote/token")
+            .map_err(|e| e.to_string())?
+            .is_some();
+        // 无 token 时不必读时间戳；有 token 但无记录（旧版签发）→ None
+        let token_issued_at = if token_configured {
+            gateway2.tokens.issued_at()
+        } else {
+            None
+        };
+        Ok::<_, String>((settings, token_configured, token_issued_at))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let pairing_code = gateway.pairing.lock().unwrap().current();
     Ok(RemoteStatus {
         enabled: settings.remote.enabled,

@@ -1437,7 +1437,10 @@ mod tests {
     fn session_dir_default_delegates_to_scoped_home() {
         let t = task(PermissionPreset::Auto);
         let dir = super::super::session_dir(&t);
-        assert_eq!(dir, crate::commands::scoped_claude_home("automation", "aut_test"));
+        assert_eq!(
+            dir,
+            crate::commands::scoped_claude_home("automation", "aut_test")
+        );
         // 隔离性硬断言：绝不能落在被扫描的用户工作区根下
         assert!(
             !dir.starts_with(crate::commands::claude_home()),
@@ -1451,10 +1454,16 @@ mod tests {
     fn session_dir_explicit_wins() {
         let mut t = task(PermissionPreset::Auto);
         t.session_dir = Some("D:/custom/cfg".into());
-        assert_eq!(super::super::session_dir(&t), std::path::Path::new("D:/custom/cfg"));
+        assert_eq!(
+            super::super::session_dir(&t),
+            std::path::Path::new("D:/custom/cfg")
+        );
         // 空串/空白视为未指定（前端表单清空后不应指向根路径）
         t.session_dir = Some("   ".into());
-        assert_eq!(super::super::session_dir(&t), crate::commands::scoped_claude_home("automation", "aut_test"));
+        assert_eq!(
+            super::super::session_dir(&t),
+            crate::commands::scoped_claude_home("automation", "aut_test")
+        );
     }
 
     /// 契约之三：`session_dir` 是**协议里的一等字段**，不是塞在 env 里的影子参数。

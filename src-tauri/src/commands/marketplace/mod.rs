@@ -74,11 +74,12 @@ pub struct InstalledPlugin {
     pub enabled: bool,
 }
 
-
 /// 桥接清单路径：sidecar 经 env `AIDE_ENABLED_PLUGINS_FILE` 读它。
 /// `~/.aide/claude/plugins/enabled-plugins.json`
 pub fn enabled_plugins_manifest_path() -> PathBuf {
-    super::claude_home().join("plugins").join("enabled-plugins.json")
+    super::claude_home()
+        .join("plugins")
+        .join("enabled-plugins.json")
 }
 
 /// 已安装插件本体所在目录：`~/.aide/claude/plugins/`。
@@ -91,7 +92,9 @@ pub fn plugins_dir() -> PathBuf {
 /// 市场源仓库克隆目录（marketplace.json 来源）：
 /// `~/.aide/claude/plugins/marketplace-cache/`
 pub fn marketplace_cache_dir() -> PathBuf {
-    super::claude_home().join("plugins").join("marketplace-cache")
+    super::claude_home()
+        .join("plugins")
+        .join("marketplace-cache")
 }
 
 pub fn source_cache_dir(source_id: &str) -> PathBuf {

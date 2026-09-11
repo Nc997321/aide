@@ -3,7 +3,14 @@ use crate::commands::marketplace::sources::RawPluginEntry;
 // ── Availability classification (list-time) ──
 
 const UNSUPPORTED: &[&str] = &["output_styles", "themes", "monitors"];
-const SUPPORTED: &[&str] = &["skills", "commands", "agents", "hooks", "mcp_servers", "lsp_servers"];
+const SUPPORTED: &[&str] = &[
+    "skills",
+    "commands",
+    "agents",
+    "hooks",
+    "mcp_servers",
+    "lsp_servers",
+];
 
 fn has(entry: &RawPluginEntry, field: &str) -> bool {
     match field {

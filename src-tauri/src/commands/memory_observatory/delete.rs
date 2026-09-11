@@ -38,7 +38,9 @@ fn delete_in_dirs(dirs: &[std::path::PathBuf], name: &str) -> Result<DeleteResul
     let mut index_line_removed = false;
     for dir in dirs {
         let idx = dir.join("MEMORY.md");
-        let Ok(content) = fs::read_to_string(&idx) else { continue };
+        let Ok(content) = fs::read_to_string(&idx) else {
+            continue;
+        };
         let kept: Vec<&str> = content
             .lines()
             .filter(|l| !parse::parse_links(l).iter().any(|(_, f)| f == name))
@@ -57,7 +59,10 @@ fn delete_in_dirs(dirs: &[std::path::PathBuf], name: &str) -> Result<DeleteResul
     if !deleted && !index_line_removed {
         return Err(format!("memory not found: {name}"));
     }
-    Ok(DeleteResult { deleted, index_line_removed })
+    Ok(DeleteResult {
+        deleted,
+        index_line_removed,
+    })
 }
 
 #[cfg(test)]
@@ -74,7 +79,11 @@ mod tests {
     #[test]
     fn delete_removes_file_and_index_line() {
         let dir = fixture_dir("basic");
-        fs::write(dir.join("MEMORY.md"), "# M\n- [甲](a.md) — x\n- [乙](b.md) — y\n").unwrap();
+        fs::write(
+            dir.join("MEMORY.md"),
+            "# M\n- [甲](a.md) — x\n- [乙](b.md) — y\n",
+        )
+        .unwrap();
         fs::write(dir.join("a.md"), "A").unwrap();
         fs::write(dir.join("b.md"), "B").unwrap();
 
@@ -106,7 +115,11 @@ mod tests {
     #[test]
     fn delete_deadlink_only_removes_index_line() {
         let dir = fixture_dir("deadlink");
-        fs::write(dir.join("MEMORY.md"), "- [幽](gone.md) — x\n- [在](stay.md) — y\n").unwrap();
+        fs::write(
+            dir.join("MEMORY.md"),
+            "- [幽](gone.md) — x\n- [在](stay.md) — y\n",
+        )
+        .unwrap();
         fs::write(dir.join("stay.md"), "S").unwrap();
 
         let r = delete_in_dirs(&[dir.clone()], "gone.md").unwrap();

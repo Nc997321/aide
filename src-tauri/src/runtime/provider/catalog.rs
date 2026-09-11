@@ -192,7 +192,10 @@ mod tests {
         assert_eq!(d.effort_level, "");
         assert_eq!(d.auto_compact_window, "");
         // 无 defaults 的预置（如 Ollama）仍为 None——向后兼容
-        assert!(catalog_find(ProviderKind::Ollama).unwrap().defaults.is_none());
+        assert!(catalog_find(ProviderKind::Ollama)
+            .unwrap()
+            .defaults
+            .is_none());
     }
 
     #[test]

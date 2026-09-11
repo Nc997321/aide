@@ -8,9 +8,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex as TokioMutex;
+pub mod bg_registry;
 pub mod env;
 pub mod provider;
-pub mod bg_registry;
 use crate::runtime::provider::connection_fingerprint;
 use crate::settings::{SettingsScope, SettingsService};
 
@@ -387,7 +387,8 @@ impl AgentRuntimeManager {
                         if let Some(mgr) = app.try_state::<AgentRuntimeManager>() {
                             let ety = event.get("type").and_then(|t| t.as_str()).unwrap_or("");
                             if ety == "session_init" || ety == "session_dead" {
-                                if let Some(sid) = event.get("session_id").and_then(|s| s.as_str()) {
+                                if let Some(sid) = event.get("session_id").and_then(|s| s.as_str())
+                                {
                                     if ety == "session_init" {
                                         mgr.mark_session_alive(sid);
                                     } else {
@@ -518,7 +519,10 @@ impl AgentRuntimeManager {
         if session_id.is_empty() {
             return;
         }
-        self.session_alive.lock().unwrap().insert(session_id.to_string());
+        self.session_alive
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string());
     }
 
     /// 标记会话进程结束（`session_dead` 事件 / `stop_chat_session` 命令）。

@@ -298,7 +298,10 @@ mod tests {
     fn settings_matches_init_options_embedded_settings() {
         // 同源约束：workspace/configuration 应答与 initializationOptions.settings 一致，
         // 避免两处漂移（jdtls 运行期以 configuration 应答为准）。
-        assert_eq!(JavaProfile.settings(), JavaProfile.init_options(&[])["settings"]);
+        assert_eq!(
+            JavaProfile.settings(),
+            JavaProfile.init_options(&[])["settings"]
+        );
     }
 
     #[test]

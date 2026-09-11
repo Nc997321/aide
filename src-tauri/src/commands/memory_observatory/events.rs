@@ -43,7 +43,11 @@ pub fn read_events(workspace_key: Option<&str>) -> Result<EventsResult, String> 
 
 /// 与路径来源解耦的读取本体（fixture 测试直接喂文件）。
 /// `workspace_key` 为 None 时不过滤（P2 跨项目聚合视图用）。
-fn read_events_inner(log: &Path, sessions_dir: &Path, workspace_key: Option<&str>) -> Result<EventsResult, String> {
+fn read_events_inner(
+    log: &Path,
+    sessions_dir: &Path,
+    workspace_key: Option<&str>,
+) -> Result<EventsResult, String> {
     let mut events: Vec<MemoryEvent> = Vec::new();
     if let Ok(content) = fs::read_to_string(log) {
         for line in content.lines() {
@@ -52,7 +56,9 @@ fn read_events_inner(log: &Path, sessions_dir: &Path, workspace_key: Option<&str
                 continue;
             }
             // 单行损坏不拖垮整本台账
-            let Ok(ev) = serde_json::from_str::<MemoryEvent>(line) else { continue };
+            let Ok(ev) = serde_json::from_str::<MemoryEvent>(line) else {
+                continue;
+            };
             if workspace_key.is_none_or(|k| ev.workspace_key == k) {
                 events.push(ev);
             }
@@ -76,7 +82,10 @@ fn read_events_inner(log: &Path, sessions_dir: &Path, workspace_key: Option<&str
         }
     }
 
-    Ok(EventsResult { events, session_names })
+    Ok(EventsResult {
+        events,
+        session_names,
+    })
 }
 
 /// 删除命令补写一条 deleted 事件（观测台自己的删除走这里；别的来源的消失

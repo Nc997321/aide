@@ -28,13 +28,17 @@ pub fn parse_links(line: &str) -> Vec<(String, String)> {
             i += 1;
             continue;
         }
-        let Some(close) = find_byte(bytes, i + 1, b']') else { break };
+        let Some(close) = find_byte(bytes, i + 1, b']') else {
+            break;
+        };
         // 必须紧跟 `(`
         if close + 1 >= bytes.len() || bytes[close + 1] != b'(' {
             i = close + 1;
             continue;
         }
-        let Some(end) = find_byte(bytes, close + 2, b')') else { break };
+        let Some(end) = find_byte(bytes, close + 2, b')') else {
+            break;
+        };
         let title = &line[i + 1..close];
         let target = &line[close + 2..end];
         if target.ends_with(".md")
@@ -63,7 +67,13 @@ pub fn parse_index(content: &str) -> Vec<IndexEntry> {
             let desc = line
                 .rsplit(')')
                 .next()
-                .map(|s| s.trim().trim_start_matches('—').trim().trim_start_matches('-').trim())
+                .map(|s| {
+                    s.trim()
+                        .trim_start_matches('—')
+                        .trim()
+                        .trim_start_matches('-')
+                        .trim()
+                })
                 .unwrap_or("")
                 .to_string();
             entries.push(IndexEntry {
@@ -121,11 +131,25 @@ mod tests {
 
     #[test]
     fn window_uses_lines_and_bytes() {
-        let e = IndexEntry { title: "t".into(), file: "f.md".into(), desc: "".into(), line: 201, byte_offset: 0 };
+        let e = IndexEntry {
+            title: "t".into(),
+            file: "f.md".into(),
+            desc: "".into(),
+            line: 201,
+            byte_offset: 0,
+        };
         assert!(!within_window(&e, 200, 25 * 1024));
-        let e2 = IndexEntry { line: 1, byte_offset: 26 * 1024, ..e };
+        let e2 = IndexEntry {
+            line: 1,
+            byte_offset: 26 * 1024,
+            ..e
+        };
         assert!(!within_window(&e2, 200, 25 * 1024));
-        let e3 = IndexEntry { line: 1, byte_offset: 100, ..e2 };
+        let e3 = IndexEntry {
+            line: 1,
+            byte_offset: 100,
+            ..e2
+        };
         assert!(within_window(&e3, 200, 25 * 1024));
     }
 }
