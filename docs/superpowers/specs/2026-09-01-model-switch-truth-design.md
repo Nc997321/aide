@@ -4,6 +4,17 @@
 - 状态：设计定稿，开工
 - 关联：2026-09-01-context-usage-panel-design.md（SDK 0.3.252 升级）
 - 关联记忆：builtin-mcp-hooks-frontend-mirror（hook 登记联动）；UI 变体先出可视原型
+- ⚠️ 失效标注（落地后修订，正文与本文冲突时以标注为准）：
+  - **§2 模型维度废除已于 2026-09-08 部分恢复**：发送前门控的模型维度为「未启动
+    旧会话模型跟全局走」场景恢复（文案「此会话将改用 X」，确认=永久改绑），见
+    docs/discussions/2026-09-08-session-identity-and-provider-locking.md 与
+    confirmGate.ts 修订记录；验收 #7「发送无『将切换模型』弹窗」不再成立。
+  - **§3 落盘值「落 requested_model」已于 2026-09-11 换轴（a3284fc）**：requested 是
+    CLI 别名命名空间回显（sonnet 事故：裸别名上屏/选中值掉出选项集合/别名写盘），
+    落盘与坐实改由 model_switch_result(ok) 的归一真名值驱动；同日新增因果门——成本
+    确认只挂 worker 发起的切换意图（createUserSwitchIntentTracker），进程内部对账
+    切换（respawn 重带 options.model、网关驳回回落）静默放行。§3 流程图与 §4 策略
+    描述均未含上述修订。
 
 ## 1. 背景与目标
 
