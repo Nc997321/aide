@@ -12,6 +12,7 @@ const MemoryObservatory = defineAsyncComponent(() => import("./components/Memory
 const KnowledgeBase = defineAsyncComponent(() => import("./components/KnowledgeBase/KnowledgeBase.vue"));
 const OnboardingWizard = defineAsyncComponent(() => import("./components/onboarding/OnboardingWizard.vue"));
 const RunConfigsDialog = defineAsyncComponent(() => import("./components/RunConfigsDialog.vue"));
+const BrowserPanel = defineAsyncComponent(() => import("./components/Browser/BrowserPanel.vue"));
 import PaneLayout from "./components/PaneLayout.vue";
 import AutomationMain from "./components/automation/AutomationMain.vue";
 import MarketplaceTab from "./components/marketplace/MarketplaceTab.vue";
@@ -173,6 +174,8 @@ const gitPanelRef = ref<InstanceType<typeof GitPanel> | null>(null);
 const titleBarRef = ref<InstanceType<typeof TitleBar> | null>(null);
 const paletteOpen = ref(false);
 const paletteRef = ref<InstanceType<typeof ACommandPalette> | null>(null);
+// 内嵌浏览器面板开关（Ctrl+Shift+B 切换）。桌面壳专属，原生子 webview 浮在主区之上。
+const browserOpen = ref(false);
 // 「当前会话」= 聚焦分屏组激活 tab 的会话——布局层的计算属性，所有下游
 // （右面板 / 权限弹窗 / 标题栏 / 侧栏高亮）沿用旧的单一 activeSessionId 语义。
 const paneLayout = usePaneLayout();
@@ -668,6 +671,14 @@ function handleKeydown(e: KeyboardEvent) {
     void dumpScrollTrail();
   }
 
+  // Ctrl+Shift+B：切换内嵌浏览器面板（桌面壳专属，原生子 webview）
+  if (e.ctrlKey && e.shiftKey && (e.code === "KeyB" || e.key === "B")) {
+    e.preventDefault();
+    e.stopPropagation();
+    browserOpen.value = !browserOpen.value;
+    return;
+  }
+
   // Ctrl+Shift+F：全局搜索（只查找）；Ctrl+Shift+R：全局搜索+替换（IDEA 语义）
   if (e.ctrlKey && e.shiftKey && (e.code === "KeyF" || e.key === "F")) {
     e.preventDefault();
@@ -1133,6 +1144,9 @@ onUnmounted(() => {
         @close="runConfigsDialogVisible = false"
       />
       <WorkbenchTerminal :workspace-key="activeWorkspaceKey ?? ''" :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
+
+      <!-- 内嵌浏览器面板（Ctrl+Shift+B）：原生 WebView2 子视图浮在占位洞之上 -->
+      <BrowserPanel :open="browserOpen" @close="browserOpen = false" />
     </div>
 
     <ACommandPalette

@@ -27,7 +27,9 @@ default-members = ["."]
 # tauri default feature 里（default = wry/compression/common-controls-v6/dynamic-acl/
 # x11/dbus），不开则 `tauri::tray::TrayIconBuilder` 与 `app.default_window_icon()`
 # 都不可用——`image-png` 供 generate_context! 解析 bundle.icon 里的 32x32.png。
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# `unstable`：内嵌浏览器 multiwebview 需要——`Window::add_child` / `WebviewBuilder::new`
+# 均 `#[cfg(feature="unstable")]`（已核实 tauri 2.11.2 源码）。锁死在 browser/adapter 内使用。
+tauri = { version = "2", features = ["tray-icon", "image-png", "unstable"] }
 
 tauri-plugin-shell = "2"
 
@@ -64,6 +66,9 @@ ignore = "0.4"
 regex = "1"
 arboard = "1"
 percent-encoding = "2"
+# 内嵌浏览器纯核心的 URL 解析/scheme 校验（browser::core::url_guard）。已在依赖树
+# （tauri/ureq 传递引入 2.5.8），这里提为直接依赖、同版本、零额外编译成本。
+url = "2.5"
 png = "0.17"
 base64 = "0.22"
 # 文本文件编码兜底解码：read_file_content 原 fs::read_to_string 严格要求合法 UTF-8，

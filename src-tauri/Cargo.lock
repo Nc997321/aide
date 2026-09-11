@@ -94,6 +94,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "ureq",
+ "url",
  "which",
  "windows 0.61.3",
  "winreg 0.55.0",

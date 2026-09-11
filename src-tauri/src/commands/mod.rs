@@ -1,4 +1,5 @@
 pub mod app;
+pub mod browser;
 pub mod chat;
 pub mod clipboard;
 pub mod customizations;

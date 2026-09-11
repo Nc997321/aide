@@ -1,4 +1,7 @@
 mod automation;
+// 内嵌浏览器子系统（骨架阶段：纯核心+领域类型+端口签名已落地并单测；adapter/命令待
+// 可视原型定 A/B 后填充）。私有模块，对外经 commands 暴露命令。
+mod browser;
 mod codegraph;
 // commands/remote/settings 公开给集成测试（tests/ 目录只能访问 crate 公开 API，
 // 测试分离布局要求源文件零测试代码，集成测试是唯一测试面）
@@ -78,11 +81,9 @@ pub fn run() {
     if let Some(key) = saved_key {
         // 活动工作区 path 解析：注册表优先（真实 path 权威源）；解码回退兜
         // 注册表落地前的旧数据（resolve_path_from_key 仅存的运行时用途之一）。
-        let path = commands::workspace::registered_path_for_key(
-            &commands::settings::load_state(),
-            &key,
-        )
-        .or_else(|| commands::resolve_path_from_key(&key));
+        let path =
+            commands::workspace::registered_path_for_key(&commands::settings::load_state(), &key)
+                .or_else(|| commands::resolve_path_from_key(&key));
         if let Some(path) = path {
             *workspace_state.path.lock().unwrap() = Some(std::path::PathBuf::from(&path));
         }
@@ -135,7 +136,9 @@ pub fn run() {
         )))
         .manage(runtime::AgentRuntimeManager::new())
         // 后台任务快照注册表：事件泵喂入（runtime/mod.rs），list_bg_tasks RPC 读
-        .manage(std::sync::Arc::new(runtime::bg_registry::BgTaskRegistry::default()))
+        .manage(std::sync::Arc::new(
+            runtime::bg_registry::BgTaskRegistry::default(),
+        ))
         .manage(std::sync::Arc::new(skills::SkillRegistry::new()))
         .manage(workspace_state)
         .manage(PendingOpenFile(std::sync::Mutex::new(None)))
@@ -165,6 +168,11 @@ pub fn run() {
         .manage(std::sync::Arc::new(codegraph::CodeGraphService::new()))
         .manage(std::sync::Arc::new(lsp::LspState::new()))
         .manage(std::sync::Arc::new(automation::AutomationService::new()))
+        // 内嵌浏览器：平台引擎（Windows=Webview2Engine）+ 领域视图注册表。
+        .manage(std::sync::Arc::new(
+            browser::adapter::PlatformEngine::new(),
+        ))
+        .manage(browser::state::BrowserState::new())
         .setup(|app| {
             app.state::<std::sync::Arc<settings::SettingsService>>()
                 .initialize_blocking()
@@ -318,6 +326,13 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::browser::browser_create,
+            commands::browser::browser_navigate,
+            commands::browser::browser_set_bounds,
+            commands::browser::browser_set_visible,
+            commands::browser::browser_go_back,
+            commands::browser::browser_go_forward,
+            commands::browser::browser_close,
             commands::shell::pty_write,
             commands::shell::pty_resize,
             commands::shell::pty_kill,

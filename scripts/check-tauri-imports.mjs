@@ -5,6 +5,8 @@
 //   - main.ts：全局错误捕获在 SDK 初始化前运行（初始化路径，roadmap 明示豁免）
 //   - useWindowControls/useWindowFocus/useNotification：窗口 chrome/焦点/任务栏进度，
 //     桌面壳专属语义，无远程对应能力
+//   - useEmbeddedBrowser：内嵌浏览器（原生子 webview），桌面壳专属——remote-pwa 本身跑在
+//     真浏览器里、ohos 走 relay，无远程对应能力；加进共享门面只会给 RemoteTransport 塞空能力
 //   - *.test.ts：vi.mock("@tauri-apps/*") 是合法 mock 边界（拦截 SDK transport 的静态导入）
 // 新增例外必须在此登记并写明理由，否则 CI 失败。
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -20,6 +22,7 @@ const EXCEPTIONS = new Set([
   "src/composables/useWindowControls.ts",
   "src/composables/useWindowFocus.ts",
   "src/composables/useNotification.ts",
+  "src/composables/useEmbeddedBrowser.ts",
 ]);
 const isTest = (p) => p.endsWith(".test.ts") || p.includes("/tests/");
 
