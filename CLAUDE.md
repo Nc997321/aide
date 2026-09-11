@@ -121,4 +121,4 @@ sidecar 名义是「引擎副车架」，实际长成了「所有 Node 侧逻辑
 1. sidecar 新增逻辑先判归——不要默认"跟会话有关就进 sidecar"，先问是不是 engine 职责。
 2. 内置 MCP/Hooks 新增必须同步登记前端镜像（`useCustomizations`），这条义务是 extensions 层的现状约束，未来外迁后随迁。
 3. 拆分走渐进：新代码守边界，已成型大块（docx/pdf、codegraph）在触碰时顺势外迁，**不做一次性大动刀**（协议双通道契约与测试体系都挂在这个进程上）。
-4. 后续方向：headless 引擎组件（sidecar 对外服务化 + 协议版本化）——公司项目（agri）若走"复用二进制"路线时启用，届时按此边界裁剪。**机制/策略边界**：引擎提供机制，不认识"租户"——① 会话创建接受任意元数据（hooks 可读、工具调用可注入请求头）；② 事件**按会话路由**（订阅制；桌面版全量转发是多客户端下的泄露隐患，automation 按 sid 路由即此隐含能力，headless 升为契约）。"多租户"是宿主网关的策略（鉴权/会话映射/计费）：网关在会话元数据里塞 token = 单实例多用户；每实例只装一个租户 = 实例级隔离（后者不改 TokenStore 单设备安全模型）。两条路线引擎都支持，靠的只是上述两个机制。
+4. headless 引擎组件**已落地**（`src/headless-server.ts` + `--headless` 子命令，PROTOCOL_VERSION=1，2026-09-11 正式验收 P0 清零）：对接契约唯一必读 [docs/reference/headless-integration.md](docs/reference/headless-integration.md)，验收台账 [docs/headless-test-checklist.md](docs/headless-test-checklist.md)（smoke-headless-* 家族可复跑）。**机制/策略边界**：引擎提供机制，不认识"租户"——① 会话创建接受任意元数据（hooks 可读、工具调用可注入请求头）；② 事件**按会话路由**（订阅制；桌面版全量转发是多客户端下的泄露隐患，automation 按 sid 路由即此隐含能力，headless 升为契约）。"多租户"是宿主网关的策略（鉴权/会话映射/计费）：网关在会话元数据里塞 token = 单实例多用户；每实例只装一个租户 = 实例级隔离（后者不改 TokenStore 单设备安全模型）。两条路线引擎都支持，靠的只是上述两个机制。

@@ -1,13 +1,17 @@
 # Headless 引擎测试清单
 
-> 2026-09-11 建。**同日第一轮正式验收 + 修复轮已执行**（结果回填各表「结果」列，发现清单见
-> §7-F1~F9；F3/F4 两个 P0 已核实修复，C4/C6/C7 闭环；脚本沉淀 `agent-sidecar/smoke-headless-*.{ts}`，
-> 复跑即回归）。建稿背景：headless 宿主
+> 2026-09-11 建。**同日第一轮正式验收 + 修复轮 + 补测轮（B9/B10）已执行**（结果回填各表
+> 「结果」列，发现清单见 §7-F1~F11；F3/F4 两个 P0 已核实修复，C4/C6/C7 闭环，B9/B10 补测
+> 闭环；脚本沉淀 `agent-sidecar/smoke-headless-*.{ts}`，复跑即回归）。建稿背景：headless 宿主
 > （`agent-sidecar/src/headless-server.ts`，`node dist/runtime.js headless`）
 > 此前只有单测（725 用例内覆盖）+ 一条 MCP 头注入 smoke。本清单是正式测试
 > 的执行底稿，结合 agri-ai-agent 项目（`C:\document\project\zhongke\agri-ai-agent`，MCP 方案
 > 2026-09-10 定稿：Aide 引擎当编排大脑、业务做 Spring AI MCP server、token 走 HTTP header 透传）
 > 把「网关形态」作为验收主轴。
+>
+> **对接文档已收口**：清单里所有「对接文档写明」项（B1 re-key / C4 三句 / A11 / A20 / D5 /
+> F1/F2/F5~F10 文档级处置）统一落在 [`reference/headless-integration.md`](reference/headless-integration.md)
+>（网关实现方唯一必读；本清单继续当验收底稿用）。
 >
 > 勾选约定：`[ ]` 待测 / `[x]` 通过 / `[!]` 失败（记缺陷号）。优先级 P0=对接前必过、P1=正式验收、P2=可延后。
 > 自动化标记：✅已有自动化（列明位置）/ 🔧可脚本化（建议沉淀进 smoke 家族）/ 👤手动。
@@ -22,9 +26,12 @@
 | **A 组宿主级验收**（本轮新增沉淀） | A 组协议面 dist 黑盒全臂 | `agent-sidecar/smoke-headless-host.ts`（2026-09-11 实测 22/22） |
 | **D 组网关彩排 + C/B 死端点臂**（本轮新增沉淀） | 鉴权/多租户/mock MCP/re-key/停止/并发/崩溃恢复/背压 | `agent-sidecar/smoke-headless-gateway.ts`（2026-09-11 第一轮 19/20，唯一 FAIL=C4 死端点臂→发现 F3；**修复轮 20/20**——C4「error 终态后续发→重启→新头命中」端到端闭环） |
 | **真模型批次**（本轮新增沉淀） | B2/B4/B5/B7/B8/B11/B14 + C6/C7 + D1/D2/D3 | `agent-sidecar/smoke-headless-realmodel.ts` + `smoke-headless-provider-env.ts`（复用当前 aide provider：settings.json activeProvider + Windows 凭据管理器；真 token 只进内存与 send.env，C8 扫描含真 token 哨兵）。修复前基线 10/12；a3284fc 统一基线 11/13（两 FAIL=C6/C7 取证缺口→发现 F4）；**修复轮 C6/C7 双闭环**（C7 探针改自检脚本+bypassPermissions，见 F9） |
+| **B 组补测批次**（B9/B10 遗留项收口） | B10 策略活推裁决面（deny→allow→旧 rev 忽略→零重启）+ B9 stop_bg_task + C8-lite | `agent-sidecar/smoke-headless-policy.ts`（真模型；B10 用 manual 模式做对照基线——零弹窗即策略 hook 在裁决；2026-09-11 实测 **6/6**） |
 | 死端点 error 时序探针 | B1 error 帧到达时刻专项观测 | `agent-sidecar/smoke-headless-deaderror-probe.ts`（诊断工具，不进台账） |
+| session_init 重发判别探针 | 同 sid 续发 init 重发的根因判别（PID 跨轮不变 + id 唯一 + 零 error 帧 = 存活 query 每轮重发 init，良性 CLI 行为） | `agent-sidecar/probe-reinit.ts`（诊断工具，不进台账；B10-4 判据与对接文档幂等 re-key 条目的证据源） |
+| 会话进程身份/生命周期探针 | runtime 子进程归属判别（PS CIM 父进程面）：manual+策略臂会话 claude.exe(36992, 父=runtime) 跨轮存活实锤；同刻 tasklist 全表漏检——F11 证据源 | `agent-sidecar/probe-session-proc.ts`（诊断工具，不进台账） |
 | Bash 结局全轨迹探针 | C7 残层诊断：tool_use 输入/分类器拒信/终态帧/进程悬挂盘点 | `agent-sidecar/smoke-headless-bashprobe.ts`（诊断工具，不进台账；F9 证据源，可复跑） |
-| 共享库 | 进程编排/SSE 客户端/PID 与 RSS 观测/mock MCP/哨兵扫描/台账 | `agent-sidecar/smoke-headless-lib.ts` |
+| 共享库 | 进程编排/SSE 客户端/PID 与 RSS 观测（**PS CIM 观测层**，tasklist 仅兜底——F11）/mock MCP/哨兵扫描/台账 | `agent-sidecar/smoke-headless-lib.ts` |
 
 ## 1. 环境准备（每次验收前置）
 
@@ -78,12 +85,12 @@ AIDE_HEADLESS_TOKEN=<secret> CLAUDE_CONFIG_DIR=<临时配置根> node dist/runti
 | B6 | session_stop | POST session_stop | worker 停止、claude.exe 释放（进程表核实）；再 send 同 sid = 新会话（resume 语义另测） | P0 | 🔧→✅ | [x] dist 实测：PID 全退场；停止后同 sid 再 send=新 SDK 会话（带 resume_session_id 才接续，见 B11） |
 | B7 | set_model / set_effort / set_permission_mode | 存活会话逐个下发 | models_available / effort_changed / permission_modes_available 回执事件；非法值拒绝且不脏账面 | P1 | 👤→✅ | [~] effort_changed(low)✓ permission_modes_available✓ 非法 effort("banana")不脏账面✓；**models_available 第三方 provider 不发（发现 F7，观察项）** |
 | B8 | model_switch_confirm_decision | 缓存热+大上下文时切模型 | model_switch_confirm 事件 → POST decision(approve/deny)；不应答 10s 自动 deny | P2 | 👤→✅ | [x] a3284fc 基线 realmodel 实测全臂：大上下文轮（ctx=156773, warm=true）set_model→confirm→decision(approve)→`model_switch_result ok:true model:"qwen3.8-flash"`（**真名命名空间，落盘轴换轴修复在 wire 事件面可见**）；不应答臂→10s 后 `ok:false error:"Model switch blocked…缓存重铺成本确认"` 自动 deny ✓ |
-| B9 | stop_bg_task | prompt 诱导后台任务（run_in_background）→ POST stop_bg_task | bg_task_ended(status:stopped) | P2 | 👤 | [ ] 本轮未测（P2 留下轮） |
-| B10 | update_permission_policy | 会话中推策略快照（revision 递增） | 后续工具调用按新策略裁决；旧 revision 被忽略 | P1 | 🔧 | [ ] 本轮未测（第一轮出口不含；A6 只钉了入队面 200） |
+| B9 | stop_bg_task | prompt 诱导后台任务（run_in_background）→ POST stop_bg_task | bg_task_ended(status:stopped) | P2 | 👤→✅ | [x] policy-smoke 实测（2026-09-11，两度 PASS）：bypassPermissions 会话诱导 Bash sleep 60 后台任务 → bg_task_started(id) → POST stop_bg_task → bg_task_ended(status:stopped) 在 session_stop **之前**到达（worker 关闭的 stopAllRunning 会合成同款终态，判序防作弊） |
+| B10 | update_permission_policy | 会话中推策略快照（revision 递增） | 后续工具调用按新策略裁决；旧 revision 被忽略 | P1 | 🔧→✅ | [x] policy-smoke 实测（manual 模式对照基线：无规则匹配必弹窗=B4 已钉，故零弹窗即策略 hook 在裁决）：rev1 deny 首带→hook 直拒（零弹窗/零落盘/规则 id 进 tool_result）；存活会话推 rev2 allow→下一轮零弹窗落盘；重放 rev1（旧）→入队 200 但裁决面忽略、allow 仍生效；零重启三判据（init id 唯一×3 轮+零 error 帧+runtime 子 claude.exe 42492 三采样点不变，F10/F11 判据）全过 |
 | B11 | resume 语义 | send 带 resume_session_id（此前会话的真 id） | 上下文接续（问它上一轮说了什么） | P1 | 👤→✅ | [x] realmodel 实测：session_stop 后凭真 id resume，答出上一轮约定词 |
 | B12 | 并发多会话 | 3 个 sid 并行 send | 事件按 sid 各归各；无交叉污染；内存/进程数随会话数线性、停止后回收 | P1 | 🔧→✅ | [x] dist 实测：3/3 成流零串扰、claude.exe 1:1 净增、回收干净（10 会话面见 D6） |
 | B13 | 同会话并发 send | 同 sid 快速两连发 | 第二条排队/插队语义与桌面一致（sendQueue 串行化），不崩不乱序 | P1 | 🔧→✅ | [x] dist 实测三连发排队不丢不乱序 |
-| B14 | 网关误发桌面字段 | send 带 btw/automation | 行为如实记录（schema 放行、引擎按桌面语义执行——btw 自毁/automation 白名单）；**对接文档应写明网关不该发**，或决定后续从 headless schema 剥除 | P2 | 👤→✅ | [x] realmodel 实测记录：btw 轮正常执行；回合结束后再 send=自毁重建（session_init×2）。automation 面未测。对接文档写明网关不该发（发现 F8） |
+| B14 | 网关误发桌面字段 | send 带 btw/automation | 行为如实记录（schema 放行、引擎按桌面语义执行——btw 自毁/automation 白名单）；**对接文档应写明网关不该发**，或决定后续从 headless schema 剥除 | P2 | 👤→✅ | [x] realmodel 实测记录：btw 轮正常执行；回合结束后再 send 观测 session_init×2——**证据强度降级见 F10**（init 每轮重发同 id 即可解释计数，自毁重建需 init id 变化判别，该轮未记录 id，留下轮复核）。automation 面未测。对接文档写明网关不该发（发现 F8） |
 
 ## 4. C 组：机制①（会话元数据 + MCP 头注入）——agri 多租户的引擎侧底座
 
@@ -157,8 +164,18 @@ realmodel 收敛过程实录（模型面/环境面抖动，均已在脚本内加
 prompt 禁先读；⑤ 多挂活 CLI 放大 qwen 慢尾致 D1 message_stop 偶发超 150s 轮次窗 →
 C7 会话用完即 session_stop 释放负载。
 
-**未执行（留下轮）**：B9/B10（P1/P2，能造但未排上）、
-E 组全部（依赖 agri starter 接入，见 §6 前置）。
+**补测轮（同日第三批，B9/B10 收口）**：沉淀 `smoke-headless-policy.ts`（真模型，实测 **6/6**：
+B10 四判 + B9 + C8-lite），B9/B10 双闭环。两个新发现：**F10**（session_init 每轮重发同 id，
+re-key 须幂等、init 计数不是重启判据——B14 证据强度连带降级）与 **F11**（tasklist 进程枚举
+本机间歇漏检活进程，/FI 与全表形态都中招——`smoke-headless-lib.ts` 观测层整体切 PS CIM，
+归属判据 claudeChildrenOf(runtimePid)；历史台账的 PID 类结论强度降级为「tasklist 观测面未见异常」）。
+诊断沉淀 `probe-reinit.ts` / `probe-session-proc.ts`（均可复跑）。
+**观测层切换后全家族回归复跑（同日，HEAD=05c024a，src 零改动）：host 22/22 ✓、
+gateway 20/20 ✓、realmodel 13/13 ✓（317s，残留 0）、policy 6/6 ✓——四批全绿**。
+（本轮 B14 仍记 session_init=2，与 F10 的「计数不可判别」一致，复核留下轮。）
+
+**未执行（留下轮）**：E 组全部（依赖 agri starter 接入，见 §6 前置）；
+B14 btw 自毁复核（按 F10 新判据钉 init id 变化）。
 
 ### 已知风险回填（预登记四项 → 实测结论）
 
@@ -169,7 +186,7 @@ E 组全部（依赖 agri starter 接入，见 §6 前置）。
 | B14 btw/automation 放行面 | btw 实测按桌面语义执行（自毁重建）；automation 面未动。**建议后续从 headless schema 剥除 btw/lightweight 或文档明令网关不发** |
 | D5 无会话持久化 | **实锤**：崩溃全丢、旧键重发得全新会话；resume_session_id 是唯一续接通道（B11 实测可用） |
 
-### 发现清单（F1-F8，待核实处置——本轮验收只测不改）
+### 发现清单（F1-F11；文档级处置统一收口 `reference/headless-integration.md`，见 §7 头注）
 
 | # | 级别 | 现象（实测证据） | 影响 | 定位线索 |
 |---|---|---|---|---|
@@ -182,9 +199,13 @@ E 组全部（依赖 agri starter 接入，见 §6 前置）。
 | **F7** | P2·观察 | 第三方 provider（qwen）下 set_model 无 models_available 回执（effort/modes 回执正常）；非法 effort 正确不脏账面。**a3284fc 统一基线复验仍在=独立于模型切换修复的发现**（set_model 的 result 面正常，仅 roster 清单事件缺席） | 网关 UI 若依赖 models_available 渲染选择器，第三方 provider 下拿不到清单——headless 协议文档需注明缺席语义 | modelRoster/switch guard 对非 anthropic catalog 的行为 |
 | **F8** | P2·契约 | btw 字段在 headless schema 放行且按桌面语义执行（回合后自毁重建）；automation 面未测 | 误用面：网关发 btw 会造出「一轮一会话」的静默重建；对接文档明令禁发或 schema 剥除 | `headless-schema.ts` sendCommand btw/lightweight 字段 |
 | **F9** | P1·环境（修复轮新发现，非引擎缺陷） | **auto 模式权限分类器在 qwen provider 下 flaky**：① 裸 `env` 被按「Credential Materialization」**正当拦截**（deny 文本进 tool_result，48s 分类延迟）；② 良性命令（`node <自检脚本>`，一字未改）也吃到 `Stage 2 classifier error - blocking based on stage 1 assessment (usually transient — retrying often succeeds)` 的 fail-closed 拒绝（154s），模型重试一次后超轮次预算（bashprobe 全轨迹实锤）。旁证：realmodel D1 臂偶发 message_stop 超 150s 轮次窗（文本/hits 全对，仅收口慢——同源慢尾） | 网关长驻会话若用 auto 模式 + 第三方 provider，工具面稳定性受分类器质量支配；对接侧须显式规划：permission_policy 规则前置（规则命中不依赖分类器）/ 明确 permission_mode 选型 / 轮次预算放宽 | CLI 内部 auto-mode classifier（sidecar 不可控）；证据=`smoke-headless-bashprobe.ts` 可复跑；C7 探针已按此改 bypassPermissions+自检脚本（红线语义不变） |
+| **F10** | P2·契约观察（B10 补测轮新发现，良性） | 同 sid 续发时 `session_init` **每轮重发（同一 id）**：probe-reinit 实锤——两轮 send 得 init×2、id 唯一、claude.exe PID 跨轮不变（76952）、零 error 帧、stop_reason=end_turn×2。流式输入 CLI 每轮重发 system/init，query 存活未重启 | 两个含义：① 网关 re-key 必须**幂等**（init id 变化才是会话重启判据，计数不是）——已写入对接文档 §0 条1/§3；② **B14 证据强度降级**：btw 轮的 session_init×2 可被每轮重发完全解释，不构成自毁重建的实证（btw 自毁代码路径本身存在，smoke 判据留下轮按 id 复核） | `engine/mapper.ts` system/init 分支；证据=`probe-reinit.ts`（bypass+纯文本形态）+ `probe-session-proc.ts`（manual+策略形态：会话 claude.exe 36992 父=runtime、跨轮存活，归属实锤）可复跑；B10-4 已按新判据（init id 唯一+零 error+runtime 子进程 claude.exe 集合三采样点不变）钉死零重启 |
+| **F11** | P2·验收工具观测面（B10 补测轮新发现） | **tasklist 进程枚举在本机间歇性漏掉活进程，/FI 过滤与全表形态都中招**：probe-session-proc 同刻双观测实锤——PS CIM 可见 runtime(77696) 子进程 claude.exe(36992) 轮中/轮后均存活，同一时刻 tasklist 全表差分恒空（此前 /FI 形态 22 次采样亦全空）；疑与杀软挂钩进程枚举有关 | smoke 家族的 PID 判据全部踩在这个观测面上（B12/D6 的 1:1 净增、A16 残留回收、B10-4 零重启判据）——漏检=静默失真（残留误报 0 / 活进程误判消失）。**已修**：`smoke-headless-lib.ts` 观测层整体切 PS CIM（Win32_Process）：procTable/claudePids/claudeChildrenOf（父进程归属判据，tasklist 无此面）/rssKBOf（WorkingSetSize），tasklist 仅兜底；历史台账里「残留 0 / claude.exe 净增」结论强度降级为「tasklist 观测面未见异常」 | `smoke-headless-lib.ts` 进程面观测层；证据=`probe-session-proc.ts` 可复跑 |
 
 **出口判定（修复轮更新）**：第一轮出口「双租户彩排通过 + 两条安全红线有实测证据」——
 双租户彩排 ✅（D1/D2/D3 + gateway 全套，修复轮 20/20）；C8 日志红线 ✅（含真 token 哨兵）；
 **C7 cliEnv 红线 ✅ 已闭环（修复轮：Bash 子进程自检脚本 verdict clean、envKeys=141 实证真实 env）**；
 C6 shell hook 红线 ✅ 已闭环（hook env 落盘零哨兵）。**agri 对接前的 P0 阻塞项清零**；
-遗留=P1 以下：F9（对接文档写明权限模式选型）、F1/F2/F5/F6/F7/F8（文档/策略级处置）、B9/B10（补测）、E 组（待 agri）。
+遗留处置（补测轮更新）：B9/B10 ✅ 已补测闭环（policy-smoke 6/6）；F9 与 F1/F2/F5~F8 的
+文档级处置 ✅ 已收口 `reference/headless-integration.md`（对接文档唯一必读）；F10/F11 新增
+（均 P2，观测面/判据已修）；剩余=E 组（待 agri starter）+ B14 复核（P2）。
