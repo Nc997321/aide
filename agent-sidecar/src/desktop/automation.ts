@@ -1,3 +1,5 @@
+import type { SidecarCommand } from "../engine/types.js";
+
 /** 自动化运行（无人值守 headless 会话）的配置与纯函数判定。
  *
  *  与 btw 支线的关键区别：
@@ -32,6 +34,25 @@ export interface AutomationConfig {
   sessionDir: string;
   maxTurns?: number;
   maxBudgetUsd?: number;
+}
+
+/** send.automation 协议字段 → AutomationConfig（缺省值归一：preset 白名单二值化、
+ *  tools/mcpAllowlist 兜底、taskDir/sessionDir 空串 = 未下发）。
+ *  从 session-worker handleSend 迁出（拆分批 3，纯移动）。 */
+export function buildAutomationConfig(
+  a: NonNullable<Extract<SidecarCommand, { cmd: "send" }>["automation"]>,
+): AutomationConfig {
+  return {
+    taskId: a.task_id,
+    runId: a.run_id,
+    preset: a.preset === "full" ? "full" : "auto",
+    tools: a.tools ?? ["*"],
+    mcpAllowlist: a.mcp_allowlist ?? [],
+    taskDir: a.task_dir ?? "",
+    sessionDir: a.session_dir ?? "",
+    maxTurns: a.max_turns,
+    maxBudgetUsd: a.max_budget_usd,
+  };
 }
 
 /** "mcp__<server>__<tool>" → server key；非 MCP 工具名返回 null。

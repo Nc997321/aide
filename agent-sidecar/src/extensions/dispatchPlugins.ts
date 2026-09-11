@@ -90,3 +90,20 @@ export function buildDispatchPluginsOption(
 
   return out;
 }
+
+/** 读 Rust 维护的 enabled-plugins.json（AIDE_ENABLED_PLUGINS_FILE），构建 SDK
+ *  options.plugins 的市场插件条目。损坏/缺席 → 空数组（降级不阻塞会话）。
+ *  历史住 session-worker.ts 模块级，插件域归位迁来（纯移动）。 */
+export function buildPluginsOption(): { type: "local"; path: string }[] {
+  const file = process.env.AIDE_ENABLED_PLUGINS_FILE;
+  if (!file) return [];
+  try {
+    const arr = JSON.parse(readFileSync(file, "utf8")) as { path: string }[];
+    return arr
+      .filter((e) => e.path && existsSync(e.path))
+      .map((e) => ({ type: "local" as const, path: e.path }));
+  } catch {
+    // 清单损坏/不可读：不带市场插件（降级，不阻塞会话）
+    return [];
+  }
+}

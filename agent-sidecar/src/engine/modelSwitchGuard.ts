@@ -4,7 +4,15 @@ import type {
   PreModelSwitchHookInput,
   PostModelSwitchHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { ChatEvent } from "./types.js";
+import type { ChatEvent, ModelOption } from "./types.js";
+
+/** PostModelSwitch 坐实载荷（SDK 预声明的切换来源枚举随 source 透传）。 */
+export interface ModelCommittedPayload {
+  from: string;
+  to: string;
+  requested: string | null;
+  source: "command" | "picker" | "sdk" | "auto" | "resume";
+}
 
 /**
  * 模型切换守卫 — SDK 0.3.252 PreModelSwitch/PostModelSwitch hook 落地。
@@ -29,7 +37,7 @@ export interface ModelSwitchGuardDeps {
   /** 向前端发事件（SessionWorker 注入，DeltaCoalescer 汇聚红线）。 */
   emit: (e: ChatEvent) => void;
   /** 切换坐实回调（SessionWorker 注入：拼 current 账面与前端事件）。source 同 SDK 枚举。 */
-  onCommitted: (payload: { from: string; to: string; requested: string | null; source: "command" | "picker" | "sdk" | "auto" | "resume" }) => void;
+  onCommitted: (payload: ModelCommittedPayload) => void;
 }
 
 export interface ModelSwitchGuard {
@@ -123,5 +131,47 @@ export function makeModelSwitchGuard(deps: ModelSwitchGuardDeps): ModelSwitchGua
       settlePending(false);
       clearTimeout(timeoutTimer);
     },
+  };
+}
+// ---- worker 侧坐实回执处理（session-worker.makeModelSwitchGuard 的 onCommitted
+//      闭包迁出，拆分批 3，纯移动）----
+
+/** 坐实回执处理的依赖：名册查询与账面写入都由 worker 注入（模型名册与
+ *  currentModel 账面归 worker 所有，本模块只编排事件语义）。 */
+export interface RosterCommitDeps {
+  emit: (e: ChatEvent) => void;
+  /** wire id → 下拉 value 归一（ModelRoster.resolveDropdownValue）。 */
+  resolveDropdown: (wire: string) => string;
+  /** 可选模型列表（ModelRoster.models 活值）。 */
+  models: () => readonly ModelOption[];
+  /** 账面写入（worker 的 currentModel）。 */
+  setModel: (realName: string) => void;
+}
+
+export function makeRosterCommitHandler(
+  deps: RosterCommitDeps,
+): (p: ModelCommittedPayload) => void {
+  return (p) => {
+    // requested 是用户命名空间（下拉别名，restoreModel 可恢复）——优先落账；
+    // to_model 是 CLI resolved 全名，经 resolveDropdownValue 归一回下拉 value。
+    // 账面（currentModel）与回执只在用户显式切换（source='sdk'）时更新/发出：
+    // resume/auto 是 CLI 内部动作（恢复会话/自动兜底），发 ok 回执会让前端弹
+    // 用户没做的「已切换」提示，且 resolved 全名直写账面会与下拉别名命名空间
+    // 混注（同值守卫跨命名空间比较会误吞/漏判）。
+    const value = p.requested ?? deps.resolveDropdown(p.to);
+    const display = deps.models().find((m) => m.value === value)?.displayName ?? value;
+    deps.emit({
+      type: "model_committed",
+      from_model: p.from,
+      to_model: p.to,
+      requested_model: p.requested,
+      source: p.source,
+    });
+    if (p.source === "sdk") {
+      if (value) deps.setModel(value);
+      // 回执=事实：成功回执由 model_committed 到达驱动（setModel.then 直发会把
+      //「hook 阻塞中/未生效」当成功——设计稿 §3 的回执换轴）
+      deps.emit({ type: "model_switch_result", ok: true, model: value, display });
+    }
   };
 }

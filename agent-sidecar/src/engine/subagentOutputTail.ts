@@ -17,7 +17,10 @@ export function parseOutputLine(line: string, id: string, emit: (e: ChatEvent) =
 }
 
 /** 一个 async 子代理的 .output tail：从上次 offset 读新增的完整行，逐行解析转发。 */
-class OutputTail {
+/** 一个 async 子代理的 .output tail：从上次 offset 读新增的完整行，逐行解析转发。
+ *  两种宿主共用本类：模块级全局池（下方 legacy 路径，mapper 缺省走它）与
+ *  SessionWorker 的 per-instance TailPool（engine/tailPool.ts）。 */
+export class OutputTail {
   private offset = 0;
   private leftover = "";
   private modelClaimed = false;
@@ -28,7 +31,6 @@ class OutputTail {
     private readonly id: string,
     private readonly outputFile: string,
     private readonly emit: (e: ChatEvent) => void,
-    private readonly onStop: (id: string) => void,
   ) {}
   /** 异步增量读（fs/promises，不阻塞事件循环）；单次最多读 MAX_TAIL_READ_BYTES，
    *  超出部分下次 tick 续读——大输出文件不再一次 allocUnsafe 全量 + 同步 readSync
@@ -66,9 +68,9 @@ const tails = new Map<string, OutputTail>();
 let timer: NodeJS.Timeout | undefined;
 
 /** 启动一个 .output tail，加入全局轮询。幂等：同 id 重复启动忽略。 */
-export function startOutputTail(id: string, outputFile: string, emit: (e: ChatEvent) => void, onStop: (id: string) => void): void {
+export function startOutputTail(id: string, outputFile: string, emit: (e: ChatEvent) => void): void {
   if (tails.has(id)) return;
-  tails.set(id, new OutputTail(id, outputFile, emit, onStop));
+  tails.set(id, new OutputTail(id, outputFile, emit));
   ensureTimer();
 }
 

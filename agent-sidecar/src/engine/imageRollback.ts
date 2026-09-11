@@ -5,6 +5,9 @@
 import { existsSync, readFileSync, readdirSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { classifyImageInputResult, extractMessageText, IMAGE_UNSUPPORTED_400 } from "./imageInputCapability.js";
+import { buildUserMessage } from "./mapper.js";
+import type { ChatEvent } from "./types.js";
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
 /** 识别「模型不支持图片」的 400 错误消息（SDK 的两种形态）：
  *  - synthetic assistant 消息（真实 SDK 事件流形状：is_api_error_message + model="<synthetic>"，
@@ -218,4 +221,56 @@ export function rollbackImageMessage(jsonlPath: string): RollbackResult {
 
   writeFileSync(jsonlPath, kept.join("\n"));
   return { text: removedText, removed: true, kind: "tool" };
+}
+
+// ---- 回滚执行（历史住 session-worker.ts 的 performImageRollback 方法体，纯移动
+//      注依赖化：worker 只留薄接线，检测 → 调这里 → 预置注入消息） ----
+
+/** 场景 B 自动继续的注入消息：CLI resume 会话后必须收到输入才会重放历史
+ *  （2026-08-21 实锤：resume 无输入 → CLI 0 事件直接退出）。注入这条 user
+ *  消息触发 CLI 重放历史（含错误文本 tool_result）→ 模型自行判断下一步：
+ *  能读就读，不能读就自然告知用户跳过。措辞刻意不预设"有文本可读"
+ *  （图片可能是纯视觉内容，OCR 无效），并引导模型回复时别复述技术细节
+ *  （"模型不支持图片输入"这类内部错误，用户看到会一头雾水）。该消息只进
+ *  会话 jsonl，SDK 事件流不回显 user 消息，前端不会出现多余气泡。 */
+export const ROLLBACK_TOOL_CONTINUE =
+  "请继续处理用户的问题。刚才读取图片文件未获得可用内容，请忽略该次操作。" +
+  "若该文件内容确实无法读取，可自然地向用户说明无法查看该文件并继续，不要提及任何技术细节。";
+
+export interface ImageRollbackDeps {
+  /** 子进程实际生效的配置根（worker 的 subprocessConfigDir）；空 = 静默跳过。 */
+  configDir: string | undefined;
+  /** fork/resume 源（SDK 会话 ID）；空 = 静默跳过。 */
+  sessionId: string;
+  emit: (e: ChatEvent) => void;
+}
+
+/** 从 SDK 会话历史移除带图消息（含 synthetic 400 行），让下一轮 query 重放干净
+ *  历史。调用时机：abort 之后（CLI 已退出，文件不再被写）。返回场景 B 需要预置
+ *  到下一轮私有迭代器的注入消息（null = 无需注入）。失败静默返回 null——会话
+ *  保持现状，至少不 crash。 */
+export function rollbackImageHistory(deps: ImageRollbackDeps): SDKUserMessage | null {
+  try {
+    const { configDir, sessionId } = deps;
+    if (!configDir || !sessionId) return null;
+    const jsonl = findSessionJsonl(join(configDir, "projects"), sessionId);
+    if (!jsonl) return null;
+    const result = rollbackImageMessage(jsonl);
+    if (!result.removed) return null;
+    deps.emit({ type: "image_input_rollback", text: result.text });
+    if (result.kind !== "tool") return null;
+    // 场景 B（模型 Read 图片）：回滚只替换了 tool_result，模型还没回复——
+    // resume 后 CLI 等输入，不注入消息模型不会自动继续。注入后 CLI 重放
+    // 历史（含错误文本 tool_result）→ 模型改读文本/跳过。
+    // 注意：调用方不能 queue.push——旧迭代器挂起的 resolveNext 会把消息吞掉
+    // （见 worker 的 rollbackInjection 字段注释），必须预置到下一轮私有迭代器。
+    return {
+      type: "user",
+      message: buildUserMessage(ROLLBACK_TOOL_CONTINUE, []),
+      parent_tool_use_id: null,
+    };
+  } catch {
+    // 回滚失败（文件占用等）：会话保持现状，至少不 crash
+    return null;
+  }
 }

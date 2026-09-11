@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -415,7 +415,7 @@ describe("SessionWorker — codegraph MCP registration", () => {
       // 生产协议恒发 codegraph_enabled（主进程四处构造点下发）——fixture 同形
       cmd: "send", session_id: "s-cg", prompt: "你好", cwd: "/proj", env: {}, auto_title: false, codegraph_enabled: true,
     } as any);
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(() => expect(captured).toBeDefined());
     worker.stop();
     expect(captured?.mcpServers?.["aide-codegraph"]).toBeDefined();
     expect(captured?.allowedTools).toContain("mcp__aide-codegraph");
@@ -441,7 +441,9 @@ describe("SessionWorker — codegraph MCP registration", () => {
       cmd: "send", session_id: "btw-lw", prompt: "问一句", cwd: "/proj",
       env: {}, btw: true, lightweight: true, fork_from: "main-sid", codegraph_enabled: true,
     } as any);
-    await new Promise((r) => setTimeout(r, 50));
+    // 固定 sleep 在覆盖率插桩下不够（startLoop 含 await loadAideInstructions）——
+    // 等 captured 落定再断言（2026-09-11 coverage 跑实测超时翻车）。
+    await vi.waitFor(() => expect(captured).toBeDefined());
     worker.stop();
     expect(captured?.mcpServers?.["aide-codegraph"]).toBeDefined();
     expect(captured?.tools).toBeUndefined(); // 不动工具列表 = 与主会话一致
@@ -468,7 +470,7 @@ describe("SessionWorker — codegraph MCP registration", () => {
       env: {}, btw: true, tools: ["Bash", "Read", "Glob", "Grep"],
       // fork_from 省略 = 全新会话(不 fork 主会话)
     } as any);
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(() => expect(captured).toBeDefined());
     worker.stop();
     expect(captured?.mcpServers?.["aide-codegraph"]).toBeUndefined();
     expect(captured?.tools).toEqual(["Bash", "Read", "Glob", "Grep"]);
@@ -496,7 +498,7 @@ describe("SessionWorker — codegraph MCP registration", () => {
       cmd: "send", session_id: "btw-full", prompt: "问一句", cwd: "/proj",
       env: {}, btw: true, fork_from: "main-sid", codegraph_enabled: true,
     } as any);
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(() => expect(captured).toBeDefined());
     worker.stop();
     expect(captured?.mcpServers?.["aide-codegraph"]).toBeDefined();
     expect(captured?.persistSession).toBe(false);
@@ -518,7 +520,7 @@ describe("SessionWorker — codegraph MCP registration", () => {
       worker.handleCommand({
         cmd: "send", session_id: "s-cg-off", prompt: "你好", cwd: "/proj", env: {}, auto_title: false,
       } as any);
-      await new Promise((r) => setTimeout(r, 50));
+      await vi.waitFor(() => expect(captured).toBeDefined());
       worker.stop();
       expect(captured?.mcpServers?.["aide-codegraph"]).toBeUndefined();
     } finally {
@@ -854,7 +856,7 @@ describe("SessionWorker — btw 权限守卫(无弹窗通路,一律 deny 不挂�
       cmd: "send", session_id: "btw-suffix", prompt: "原问题", cwd: "/proj",
       env: {}, btw: true, lightweight: true, fork_from: "main-sid",
     } as any);
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(() => expect(capturedPrompt).toBeDefined());
     // prompt 是 queue 的 async iterator——取出第一条 user 消息验证尾部指令
     const iter = (capturedPrompt as AsyncIterable<any>)[Symbol.asyncIterator]();
     const msg = (await iter.next()).value;
@@ -1114,7 +1116,7 @@ describe("SessionWorker — 思考开关（send.thinking_enabled → spawn think
       cmd: "send", session_id: "s-th", prompt: "hi", cwd: "/proj", env: {},
       ...cmd,
     } as any);
-    await new Promise((r) => setTimeout(r, 50));
+    await vi.waitFor(() => expect(captured).toBeDefined());
     worker.stop();
     return captured;
   }

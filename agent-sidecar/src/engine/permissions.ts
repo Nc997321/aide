@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ChatEvent } from "./types.js";
+import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import type { SubagentTracker } from "./subagents.js";
 
 /** Context passed to `PermissionManager.request` — the optional abort signal
@@ -228,4 +229,40 @@ export class PermissionManager {
     }
     return settled;
   }
+}
+/** 无人应答支线的 canUseTool 守卫（session-worker.makeCanUseToolCallback 迁出，
+ *  拆分批 3，纯移动）：btw/automation 命中一律 deny，否则委托人工确认回调。
+ *  这是 Aide 人工确认的**唯一**应答点：策略裁决为 ask 时 policy hook 只回
+ *  `permissionDecision:"ask"`，由 CLI 转到这里弹窗等用户。CLI 拿到这里的 deny
+ *  会用官方模板包装拒绝结果。 */
+export function makeGuardedCanUseTool(deps: {
+  permissionCallback: CanUseTool;
+  isBtw: () => boolean;
+  isAutomation: () => boolean;
+}): CanUseTool {
+  return async (toolName, input, opts) => {
+    // btw 支线没有权限弹窗通路(permission_request 会被前端 btw 路由吞掉,
+    // 干等 resolve → 永久挂起):落到这里的一律 deny。
+    // 注：allowDangerouslySkipPermissions 只让 CLI 跳过**规则层**的询问——
+    // hook 不表态（{} 或 defer）时工具被静默放行、这里确实不会被调用
+    // (2026-08-09 实测,btw 任务支线的 ipconfig 就是这么漏过去的,所以
+    // taskTools 白名单外的命令必须在 hook 里 deny)。但 hook 显式返回
+    // permissionDecision:"ask" 时,该决策会作为预置决策绕过规则层直接进
+    // 权限流水线,这里**会**被调用。
+    if (deps.isBtw()) {
+      return {
+        behavior: "deny" as const,
+        message: "btw 支线无人应答权限请求(仅策略白名单内操作可用)",
+      };
+    }
+    // 自动化运行同理无人应答：policy hook 已对白名单内操作 allow、其余 deny，
+    // 能落到这里的都是 hook 未覆盖的边角——一律 deny（绝不 defer 等弹窗）。
+    if (deps.isAutomation()) {
+      return {
+        behavior: "deny" as const,
+        message: "自动化运行无人值守(仅白名单内工具可用)",
+      };
+    }
+    return deps.permissionCallback(toolName, input, opts);
+  };
 }

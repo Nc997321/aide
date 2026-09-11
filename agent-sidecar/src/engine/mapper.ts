@@ -322,7 +322,7 @@ export interface MapperDeps {
   /** SessionWorker 注入的 output tail 回调（per-instance，替代模块级全局）。
    *  缺省时走全局 subagentOutputTail（旧路径兼容）。 */
   outputTailHooks?: {
-    start: (id: string, outputFile: string, emit: (e: ChatEvent) => void, onStop: (id: string) => void) => void;
+    start: (id: string, outputFile: string, emit: (e: ChatEvent) => void) => void;
     stop: (id: string) => void;
   };
   /** 后台 shell 任务：tracker + 输出 tail 钩子（per-session，SessionWorker 注入）。
@@ -615,10 +615,10 @@ function mapMainThreadMessage(msg: any, emit: (e: ChatEvent) => void, deps: Mapp
         if (ack && subagents.isActive(block.tool_use_id)) {
           subagents.registerAsync(block.tool_use_id, ack.agentId, ack.outputFile);
           emit({ type: "subagent_async_launched", id: block.tool_use_id, agentId: ack.agentId, outputFile: ack.outputFile });
-          (outputTailHooks?.start ?? globalStartOutputTail)(block.tool_use_id, ack.outputFile, emit, (_tailId) => {
-            // 无增长超时兜底由 Task 3 的 task-notification 主路径收尾；此处仅做安全网：
-            // tail 自身不判定 done，只负责进度回放。stopOutputTail 由 task-notification 分支调。
-          });
+          // 无增长超时兜底由 task-notification 主路径收尾：tail 自身不判定 done，
+          // 只负责进度回放。stopOutputTail 由 task-notification 分支调。
+          // （历史第 4 参 onStop 从未被任何实现调用——死参已删，S4。）
+          (outputTailHooks?.start ?? globalStartOutputTail)(block.tool_use_id, ack.outputFile, emit);
           continue;
         }
         // 后台 Bash 回执（"Command running in background with ID: … Output is being

@@ -90,7 +90,7 @@ describe("OutputTail 状态机（真实临时文件 + fake timers）", () => {
     const rest = line.slice(splitAt);
 
     writeFileSync(filePath, half); // 没有换行——一条不完整的行
-    startOutputTail(id, filePath, (e) => events.push(e), () => {});
+    startOutputTail(id, filePath, (e) => events.push(e));
 
     await tickOnce();
     expect(events).toEqual([]); // 半行应被缓冲为 leftover，本轮不产出任何事件
@@ -108,7 +108,7 @@ describe("OutputTail 状态机（真实临时文件 + fake timers）", () => {
     const line2 = JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "B" }] } });
 
     writeFileSync(filePath, line1 + "\n");
-    startOutputTail(id, filePath, (e) => events.push(e), () => {});
+    startOutputTail(id, filePath, (e) => events.push(e));
 
     await tickOnce();
     expect(events).toEqual([{ type: "subagent_text_delta", id, delta: "A".repeat(200) }]);
@@ -131,7 +131,7 @@ describe("OutputTail 状态机（真实临时文件 + fake timers）", () => {
     const shortLine = JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "tail" }] } });
     writeFileSync(filePath, tailLine + "\n" + shortLine + "\n");
 
-    startOutputTail(id, filePath, (e) => events.push(e), () => {});
+    startOutputTail(id, filePath, (e) => events.push(e));
     await tickOnce();
     // 第一次 tick：读量被钳在 1MB（未一次 allocUnsafe 全量），截断的半行
     // 无换行 → leftover 缓冲，本轮零事件
