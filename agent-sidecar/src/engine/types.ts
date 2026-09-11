@@ -339,6 +339,17 @@ export type SidecarCommand =
       // per-session provider 连接参数覆盖（ANTHROPIC_BASE_URL / API_KEY 等）。
       // Runtime 启动后进程 env 不变，不同会话用不同 provider 靠此字段传递。
       env?: Record<string, string>;
+      // 会话元数据（headless 网关塞租户上下文）：引擎不解释内容，进程内 hooks 经
+      // HookBuildContext.session.metadata() 读取。**绝不注入 cliEnv**——子进程 env
+      // 会被 Bash 工具继承，模型可外带凭据（安全红线，见 sessionMetadata.ts）。
+      // 每条 send 刷新（缺席 = 清空）。省略 = 无元数据（桌面路径恒省略）。
+      metadata?: Record<string, unknown>;
+      // MCP HTTP/SSE 请求头注入（会话级授权身份，headless 网关下发）：
+      // serverName → headers，"*" = 所有 http/sse 型 server（同键精确名优先）。
+      // 注入头覆盖 server 配置自带同名头。mcpServers 随 query() spawn 固化——
+      // 刷新的新头在下一次 query() 重连才生效。值是凭据：不得进日志（N5）。
+      // 每条 send 刷新（缺席 = 清空）。省略 = 无注入（桌面路径恒省略）。
+      mcp_headers?: Record<string, Record<string, string>>;
       // 会话自动命名开关（来自设置面板）：false 时首轮后不生成会话标题。
       // 省略 = 开启。provider-agnostic：标题生成是通用能力。
       auto_title?: boolean;

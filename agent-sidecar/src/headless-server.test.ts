@@ -47,6 +47,34 @@ describe("validateInvokeBody", () => {
     expect(ok.command).toHaveProperty("cwd", "C:/x");
   });
 
+  it("send.metadata 非纯对象拒绝；纯对象/缺席透传", () => {
+    const base = { cmd: "send", session_id: "s1", prompt: "p" };
+    expect(validateInvokeBody({ ...base, metadata: "x" }).ok).toBe(false);
+    expect(validateInvokeBody({ ...base, metadata: ["a"] }).ok).toBe(false);
+    expect(validateInvokeBody({ ...base, metadata: null }).ok).toBe(false);
+    expect(validateInvokeBody(base).ok).toBe(true); // 缺席合法（桌面/无网关场景）
+    const ok = validateInvokeBody({ ...base, metadata: { tenant: "acme", n: 1 } });
+    if (!ok.ok) throw new Error("expected ok");
+    expect(ok.command).toMatchObject({ metadata: { tenant: "acme", n: 1 } });
+  });
+
+  it("send.mcp_headers 非法形状拒绝且错误不回显值（N5）；合法含 \"*\" 透传", () => {
+    const base = { cmd: "send", session_id: "s1", prompt: "p" };
+    expect(validateInvokeBody({ ...base, mcp_headers: "Bearer s3cret" }).ok).toBe(false);
+    expect(validateInvokeBody({ ...base, mcp_headers: { biz: "x" } }).ok).toBe(false);
+    const validShape = validateInvokeBody({ ...base, mcp_headers: { biz: { Authorization: "Bearer s3cret" } } });
+    expect(validShape.ok).toBe(true); // 形状合法（值是 string）——语义不校验
+    const badValue = validateInvokeBody({ ...base, mcp_headers: { biz: { Authorization: 42 } } });
+    expect(badValue.ok).toBe(false);
+    if (!badValue.ok) expect(badValue.error).not.toContain("42"); // 只报形状不回显值
+    const ok = validateInvokeBody({
+      ...base,
+      mcp_headers: { "*": { "X-Tenant": "acme" }, biz: { Authorization: "Bearer t" } },
+    });
+    if (!ok.ok) throw new Error("expected ok");
+    expect(ok.command).toMatchObject({ mcp_headers: { "*": { "X-Tenant": "acme" } } });
+  });
+
   it("permission_response：id 缺失 / approved 非 boolean 拒绝；合法通过", () => {
     expect(validateInvokeBody({ cmd: "permission_response", session_id: "s1", approved: true })).toEqual(
       expect.objectContaining({ ok: false }),

@@ -10,6 +10,7 @@
 // 不鉴权又要求对外监听 = 启动即拒绝（安全基线不靠自觉，见 M6）。
 import { createServer, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from "node:http";
 import type { ChatEvent, SidecarCommand } from "./engine/types.js";
+import { isPlainObject, parseMcpHeaders } from "./engine/sessionMetadata.js";
 
 // ---- 核心：命令白名单（骨架最小集；codegraph_result / update_permission_policy /
 //      stop_bg_task / model_switch_confirm_decision 属桌面扩展通道，正式版再放） ----
@@ -35,9 +36,10 @@ export function isInvokableCommand(cmd: unknown): cmd is InvokableCommand {
  * 白名单 + 必填字段逐命令校验后整体断言。
  *
  * ⚠️ 如实说明（骨架轻校验的边界）：可选字段（images/display/env…）的**类型**
- * 本路径未校验（错误形状会透传到命令层暴露，不会静默丢）；字段级完整 schema
- * （zod 逐命令收窄重建）留正式版。session_id 在 headless 形态恒必填——客户端
- * 生成并用它订阅事件流，没有它订阅表无从建。
+ * 本路径未校验（错误形状会透传到命令层暴露，不会静默丢）；例外是
+ * metadata / mcp_headers——直达 hooks 与 MCP 网络请求配置，在此深校验（M3）。
+ * 字段级完整 schema（zod 逐命令收窄重建）留正式版。session_id 在 headless
+ * 形态恒必填——客户端生成并用它订阅事件流，没有它订阅表无从建。
  */
 export function validateInvokeBody(
   body: unknown,
@@ -60,6 +62,17 @@ export function validateInvokeBody(
     case "send": {
       if (typeof b.prompt !== "string" || b.prompt.length === 0) {
         return { ok: false, error: "send requires non-empty prompt (string)" };
+      }
+      // metadata/mcp_headers 深校验（M3）：错误消息只报形状不回显值——
+      // mcp_headers 的值是凭据（N5）。
+      if (b.metadata !== undefined && !isPlainObject(b.metadata)) {
+        return { ok: false, error: "send.metadata must be a plain object (Record<string, unknown>)" };
+      }
+      if (b.mcp_headers !== undefined && parseMcpHeaders(b.mcp_headers) === undefined) {
+        return {
+          ok: false,
+          error: 'send.mcp_headers must be Record<serverName|"*", Record<headerName, string>>',
+        };
       }
       return { ok: true, command: b as SidecarCommand };
     }

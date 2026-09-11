@@ -10,6 +10,7 @@ const sessionStub = {
   makePolicyHook: (): HookCallback => async () => ({}),
   makeStopEffortHook: (): HookCallback => async () => ({}),
   makeModelSwitchGuard: () => null,
+  metadata: () => ({}),
 };
 
 describe("builtinHooks registry", () => {

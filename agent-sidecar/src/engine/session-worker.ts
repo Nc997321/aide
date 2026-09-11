@@ -33,6 +33,7 @@ import { codegraphMcpRegistration, CODEGRAPH_ALLOW_RULE } from "../extensions/co
 import { docsMcpRegistration, DOCS_ALLOW_RULE } from "../extensions/docsMcp.js";
 import { buildBuiltinHooks } from "../extensions/builtinHooks/index.js";
 import { loadUserMcpServers, loadUserHooks, assembleMcpServers, assembleHooks } from "./userExtensions.js";
+import { applyMcpHeaders, parseMcpHeaders, type McpHeaderMap, type SessionMetadata } from "./sessionMetadata.js";
 import { cancelAllCodegraphQueries } from "../extensions/codegraphClient.js";
 import { detectImageUnsupported, findSessionJsonl, rollbackImageMessage } from "./imageRollback.js";
 import { resolveClaudeExe } from "./claudeExe.js";
@@ -172,6 +173,10 @@ export interface SessionWorkerOptions {
   lightweightMode?: boolean;
   initialModel?: string;
   envOverrides?: Record<string, string>;
+  /** 会话元数据（headless 网关下发，引擎不解释；hooks 经 HookBuildContext 读取）。 */
+  metadata?: SessionMetadata;
+  /** MCP 头注入表（构造器过 parseMcpHeaders 收窄——stdin 是协议面，类型不等于可信，N1）。 */
+  mcpHeaders?: McpHeaderMap;
   /** 测试缝：覆盖 SDK query 实现。生产省略用真 query。 */
   queryFn?: typeof query;
   /** btw 支线回合结束自毁回调：worker 自停后由 SessionManager 把自己摘出注册表。 */
@@ -272,6 +277,13 @@ export class SessionWorker {
   // ---- Provider env 覆盖（per-session） ----
   private envOverrides: Record<string, string>;
 
+  // ---- 会话级元数据 / MCP 头注入（headless 网关机制，见 sessionMetadata.ts） ----
+  // 每条 send 刷新（缺席 = 清空，与 envOverrides 同形）；元数据只暴露给进程内
+  // hooks（HookBuildContext.session.metadata），绝不进 cliEnv（Bash 工具子进程
+  // 继承 env，模型可外带凭据——安全红线）。
+  private metadata: SessionMetadata;
+  private mcpHeaders: McpHeaderMap | undefined;
+
   // ---- 输出尾部轮询（per-session，替代模块级全局） ----
   private outputTails = new Map<string, OutputTail>();
   /** 模型切换守卫（PreModelSwitch/PostModelSwitch 一对）：懒建单例，见 makeModelSwitchGuard。 */
@@ -306,6 +318,8 @@ export class SessionWorker {
     this.lightweightMode = opts.lightweightMode ?? false;
     this.cwd = opts.cwd;
     this.envOverrides = opts.envOverrides ?? {};
+    this.metadata = opts.metadata ?? {};
+    this.mcpHeaders = this.sanitizeMcpHeaders(opts.mcpHeaders);
     this.currentModel = opts.initialModel ?? this.envOverrides.ANTHROPIC_MODEL ?? this.currentModel;
     // provider env 通道携带的 effort 初始值（Rust 把 provider effort_level / 前端选择器
     // 值都注入 CLAUDE_CODE_EFFORT_LEVEL，与 ANTHROPIC_MODEL 同形）——只作初始值读出来，
@@ -380,15 +394,30 @@ export class SessionWorker {
     return this.modelSwitchGuard;
   }
 
-  /** 每条 send 都携带 Rust 当前计算出的 provider 环境；在命令真正执行时更新，
-   * 防止等待前一条图片 probe 时提前覆盖其连接身份。 */
-  private applySendRuntimeConfig(env: Record<string, string> | undefined): void {
-    this.envOverrides = env ?? {};
+  /** MCP 头注入表的边界收窄 + 失败可见（N1）：非法形状整体忽略（fail-closed，
+   *  半对半错的注入表比没有更糟）。错误只报形状不报值——值是凭据（N5）。 */
+  private sanitizeMcpHeaders(raw: McpHeaderMap | undefined): McpHeaderMap | undefined {
+    if (raw === undefined) return undefined;
+    const parsed = parseMcpHeaders(raw);
+    if (parsed === undefined) {
+      console.error(`[session ${this.routingKey}] send.mcp_headers 形状非法，已忽略本次注入（值不落日志，N5）`);
+    }
+    return parsed;
+  }
+
+  /** 每条 send 都携带宿主当前计算出的运行时配置（Rust provider 环境 / headless
+   * 网关的会话元数据与 MCP 头注入）；在命令真正执行时更新，防止等待前一条图片
+   * probe 时提前覆盖其连接身份。元数据/注入表每条 send 刷新（缺席 = 清空，
+   * token 轮换语义）；新头在下一次 query() 重连才生效（mcpServers 随 spawn 固化）。 */
+  private applySendRuntimeConfig(cmd: Extract<SidecarCommand, { cmd: "send" }>): void {
+    this.envOverrides = cmd.env ?? {};
     const selectedModel = this.envOverrides.ANTHROPIC_MODEL;
     if (selectedModel) this.currentModel = selectedModel;
     // 前端选择器每条消息都带当前 effort（同 initialModel 语义，同值幂等无回执）；
     // 没带的调用方回落 provider env 默认。
     this.applyEffort(this.envOverrides.CLAUDE_CODE_EFFORT_LEVEL);
+    this.metadata = cmd.metadata ?? {};
+    this.mcpHeaders = this.sanitizeMcpHeaders(cmd.mcp_headers);
   }
 
   /** set_effort 命令 / send env 通道共用的入口：query 未起存本地（startLoop
@@ -988,7 +1017,7 @@ export class SessionWorker {
 
   private async handleSend(cmd: Extract<SidecarCommand, { cmd: "send" }>): Promise<void> {
     if (this.stopped) return;
-    this.applySendRuntimeConfig(cmd.env);
+    this.applySendRuntimeConfig(cmd);
     if (cmd.auto_title !== undefined) this.autoTitle = cmd.auto_title;
     if (cmd.thinking_enabled !== undefined) this.thinkingEnabled = cmd.thinking_enabled;
     // 首条 send 携带的策略快照在 query 起来前落地——PreToolUse hook 首次评估就能用。
@@ -1200,12 +1229,26 @@ export class SessionWorker {
               makePolicyHook: (cwd) => this.makePolicyHook(cwd),
               makeStopEffortHook: () => this.makeStopEffortHook(),
               makeModelSwitchGuard: () => this.makeModelSwitchGuard(),
+              // 会话元数据读取口（函数形式读活值——每条 send 刷新后可见）。
+              metadata: () => this.metadata,
             },
           });
           // 用户扩展（settings.json 的 mcpServers/hooks）：mcpServers 与 codegraph 按
           // name 共存；hooks 内建在前、用户追加（内建 policy 恒为 PreToolUse[0]，不可越过）。
           const userMcp = loadUserMcpServers();
           const userHooks = loadUserHooks();
+
+          // mcpServers 终装（提出 options 字面量，装配链可读）：内建(codegraph/docs)
+          // + 用户配置 → automation 白名单过滤 → 会话级头注入。applyMcpHeaders 只动
+          // http/sse 条目（内建 sdk 型天然不受影响）；桌面路径 mcpHeaders=undefined
+          // 时零拷贝直通（见 sessionMetadata.ts）。
+          const assembledMcp = assembleMcpServers({ ...(codegraphMcp ?? {}), ...(docsMcp ?? {}) }, userMcp);
+          const effectiveMcp = applyMcpHeaders(
+            this.automationConfig
+              ? filterMcpServers(assembledMcp, this.automationConfig.mcpAllowlist)
+              : assembledMcp,
+            this.mcpHeaders,
+          );
 
           // 每次迭代新建 abort 信号：abort 过的 controller 不能复用（回滚后
           // 下一轮 query 需要全新的）。回滚时 abort 杀 CLI 进程、停一切写入。
@@ -1252,12 +1295,7 @@ export class SessionWorker {
               hooks: assembleHooks(builtinHooks, userHooks),
               // 自动化：未预授权的连接器（MCP server）不挂载——其工具对模型根本
               // 不存在（第一层收口）；policy hook 白名单裁决是第二层。
-              mcpServers: this.automationConfig
-                ? filterMcpServers(
-                    assembleMcpServers({ ...(codegraphMcp ?? {}), ...(docsMcp ?? {}) }, userMcp),
-                    this.automationConfig.mcpAllowlist,
-                  )
-                : assembleMcpServers({ ...(codegraphMcp ?? {}), ...(docsMcp ?? {}) }, userMcp),
+              mcpServers: effectiveMcp,
               // 主会话开 partial：让 thinking_delta 逐字流式（mapper 只放 thinking_delta，
               // text 仍走整块，避开历史 partial 卡死坑，见 2026-08-07-thinking-streaming-design）。
               // btw 轻量支线保持 partial=off（mapper 的子代理隔离守卫也对 btw 生效）。

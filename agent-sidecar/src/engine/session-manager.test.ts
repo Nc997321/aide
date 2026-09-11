@@ -175,3 +175,26 @@ describe("SessionWorker — 自动化会话硬停补终态（2026-08-23 蒸馏�
     expect(emittedEvents("s1").filter((e) => e.type === "message_stop")).toHaveLength(0);
   });
 });
+
+describe("SessionManager — 会话元数据 / MCP 头注入传递（headless 机制①接线）", () => {
+  it("getOrCreate 把 send 的 metadata / mcp_headers 传进 worker", () => {
+    const manager = new SessionManager();
+    // 直接走 handleCommand(send) 同款 getOrCreate（构造不 spawn，安全）
+    const worker = (manager as any).getOrCreate("s-meta", {
+      cmd: "send", session_id: "s-meta", prompt: "p", cwd: "/tmp", env: {},
+      metadata: { tenant: "acme" },
+      mcp_headers: { "*": { "X-Tenant": "acme" } },
+    }) as any;
+    expect(worker.metadata).toEqual({ tenant: "acme" });
+    expect(worker.mcpHeaders).toEqual({ "*": { "X-Tenant": "acme" } });
+  });
+
+  it("缺席 metadata / mcp_headers → worker 落空态（桌面路径行为不变）", () => {
+    const manager = new SessionManager();
+    const worker = (manager as any).getOrCreate("s-plain", {
+      cmd: "send", session_id: "s-plain", prompt: "p", cwd: "/tmp", env: {},
+    }) as any;
+    expect(worker.metadata).toEqual({});
+    expect(worker.mcpHeaders).toBeUndefined();
+  });
+});

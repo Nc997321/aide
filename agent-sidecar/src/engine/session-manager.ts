@@ -1,6 +1,5 @@
 import type { ChatEvent, SidecarCommand } from "./types.js";
 import { SessionWorker } from "./session-worker.js";
-import { query } from "@anthropic-ai/claude-agent-sdk";
 import { resolveCodegraphResult } from "../extensions/codegraphClient.js";
 import { isDroppableEvent, writeStdoutFrame } from "./stdoutFrames.js";
 
@@ -130,6 +129,10 @@ export class SessionManager {
       btwMode: !!cmd.btw,
       lightweightMode: !!cmd.lightweight,
       envOverrides: cmd.env ?? {},
+      // 会话元数据 / MCP 头注入（headless 网关下发，桌面恒缺席）：worker 侧
+      // 统一走边界收窄（sessionMetadata.ts），manager 不重复校验。
+      metadata: cmd.metadata,
+      mcpHeaders: cmd.mcp_headers,
       // btw 回合结束自毁：按当前 routingKey 摘除（可能已 re-key 成真实会话 ID）。
       onSelfStop: (w) => {
         this.workers.delete(w.routingKey);
@@ -212,7 +215,7 @@ export class SessionManager {
   /** 关闭所有会话并清理资源。Rust kill runtime 时调用。 */
   shutdown(): void {
     if (this.healthTimer) { clearInterval(this.healthTimer); this.healthTimer = null; }
-    for (const [sid, worker] of this.workers) {
+    for (const worker of this.workers.values()) {
       try { worker.stop(); } catch { /* 吞错：确保所有 worker 都遍历到 */ }
     }
     this.workers.clear();
