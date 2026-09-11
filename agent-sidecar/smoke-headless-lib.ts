@@ -231,14 +231,59 @@ export function rawSubscribe(
 }
 
 // ---- 观测：进程面 ----
+// ⚠️ tasklist 在本机**间歇性漏掉活进程**（F11，2026-09-11 双探针实锤）：
+// /FI 过滤形态与全表形态都会漏——probe-session-proc 同一时刻 PS CIM 可见
+// runtime 子进程 claude.exe(36992)，tasklist 全表差分恒空。漏检让残留回收与
+// PID 判据静默失真，因此观测层一律走 PS CIM（Win32_Process），tasklist 只做
+// CIM 不可用时的兜底。CIM 单次 ~1-2s，家族脚本都是稀疏调用，可接受。
 
-/** claude.exe PID 快照（tasklist CSV 一次全量，不逐进程 spawn）。 */
-export function claudePids(): Set<number> {
-  const out = execSync("tasklist /FO CSV /NH /FI \"IMAGENAME eq claude.exe\"", { encoding: "utf8" });
-  const set = new Set<number>();
+/** CIM 进程表：pid → { name, ppid }。PS 失败抛错由调用方兜底策略处理。 */
+export function procTable(): Map<number, { name: string; ppid: number }> {
+  const ps = "Get-CimInstance Win32_Process | ForEach-Object { $_.ProcessId.ToString() + '|' + $_.ParentProcessId.ToString() + '|' + $_.Name }";
+  const out = execSync(`powershell.exe -NonInteractive -NoProfile -Command "${ps}"`, { encoding: "utf8", timeout: 30_000 });
+  const map = new Map<number, { name: string; ppid: number }>();
   for (const line of out.split(/\r?\n/)) {
-    const m = line.match(/^"claude\.exe","(\d+)"/i);
-    if (m) set.add(Number(m[1]));
+    const m = line.match(/^(\d+)\|(\d+)\|(.+?)\s*$/);
+    if (m) map.set(Number(m[1]), { name: m[3] as string, ppid: Number(m[2]) });
+  }
+  return map;
+}
+
+/** tasklist 全表兜底（CIM/PS 不可用时）：pid → 名字，仅名字列可靠、无父进程。 */
+function procTableViaTasklist(): Map<number, { name: string; ppid: number }> {
+  const out = execSync("tasklist /FO CSV /NH", { encoding: "utf8", timeout: 30_000 });
+  const map = new Map<number, { name: string; ppid: number }>();
+  for (const line of out.split(/\r?\n/)) {
+    const m = line.match(/^"([^"]+)","(\d+)"/);
+    if (m) map.set(Number(m[2]), { name: m[1] as string, ppid: 0 });
+  }
+  return map;
+}
+
+/** 进程表（CIM 优先，tasklist 兜底）——家族脚本进程观测唯一入口。 */
+export function procTableSafe(): Map<number, { name: string; ppid: number }> {
+  try {
+    const t = procTable();
+    if (t.size > 0) return t;
+  } catch { /* PS 不可用/超时 → 兜底 */ }
+  return procTableViaTasklist();
+}
+
+/** claude.exe PID 快照。 */
+export function claudePids(): Set<number> {
+  const set = new Set<number>();
+  for (const [pid, p] of procTableSafe()) {
+    if (p.name.toLowerCase() === "claude.exe") set.add(pid);
+  }
+  return set;
+}
+
+/** 指定父进程（= runtime node 进程）名下的 claude.exe——会话 CLI 的归属判据
+ *  （tasklist 无父进程面，兜底形态返回空集，调用方按「观测不可用」处理）。 */
+export function claudeChildrenOf(ppid: number): Set<number> {
+  const set = new Set<number>();
+  for (const [pid, p] of procTableSafe()) {
+    if (p.ppid === ppid && p.name.toLowerCase() === "claude.exe") set.add(pid);
   }
   return set;
 }
@@ -247,11 +292,21 @@ export function diffPids(before: Set<number>, after: Set<number>): number[] {
   return [...after].filter((p) => !before.has(p));
 }
 
-/** 指定 PID 的 RSS（KB），进程已消失返回 undefined。tasklist 列格式如 "12,345 K"。 */
+/** 指定 PID 的工作集（KB），进程已消失返回 undefined。CIM WorkingSetSize
+ *  （字节）优先——tasklist /FI 同受 F11 漏检影响，只做兜底（列格式 "12,345 K"）。 */
 export function rssKBOf(pid: number): number | undefined {
-  const out = execSync(`tasklist /FO CSV /NH /FI "PID eq ${pid}"`, { encoding: "utf8" });
-  const m = out.match(/"([0-9][0-9.,]*)\s*K"/);
-  return m ? Number(m[1].replace(/[.,]/g, "")) : undefined;
+  try {
+    const ps = `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').WorkingSetSize`;
+    const out = execSync(`powershell.exe -NonInteractive -NoProfile -Command "${ps}"`, { encoding: "utf8", timeout: 20_000 }).trim();
+    if (/^\d+$/.test(out)) return Math.round(Number(out) / 1024);
+  } catch { /* 进程不存在或 PS 不可用 → tasklist 兜底 */ }
+  try {
+    const out = execSync(`tasklist /FO CSV /NH /FI "PID eq ${pid}"`, { encoding: "utf8" });
+    const m = out.match(/"([0-9][0-9.,]*)\s*K"/);
+    return m ? Number(m[1].replace(/[.,]/g, "")) : undefined;
+  } catch {
+    return undefined; // 双观测面都不可用 = 进程已消失或环境异常，按签名契约返回 undefined 不抛
+  }
 }
 
 export function killPid(pid: number): void {
