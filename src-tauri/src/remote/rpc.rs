@@ -48,6 +48,10 @@ static REGISTRY: &[(&str, Handler)] = &[
     ("interrupt_session", handlers::interrupt_session),
     ("stop_chat_session", handlers::stop_chat_session),
     ("stop_bg_task", handlers::stop_bg_task),
+    // 已知缺口：PWA 经本条目能发起 set_model，但无成本确认弹窗 UI、REGISTRY 也无
+    // model_switch_confirm_decision 回传通道——热缓存+大上下文切换时 PreModelSwitch
+    // 挂起 10s 超时按 deny 收尾（与桌面 2026-09-11 补转发层前的失效模式同形）。
+    // PWA 补弹窗时须连同决策命令一起收录本表。
     ("set_model", handlers::set_model),
     ("set_effort", handlers::set_effort),
     ("set_permission_mode", handlers::set_permission_mode),

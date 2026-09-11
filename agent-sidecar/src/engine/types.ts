@@ -193,9 +193,10 @@ export type ChatEvent =
       cache_ttl: "5m" | "1h";
     }
   // 模型切换的进程坐实（SDK PostModelSwitch）：切换真实完成后到达（source 同 SDK 枚举；
-  // 前端 own 的 models_available spawn 对账不经事件通道）。前端据此落盘
-  // 模型身份（用 requested_model——用户命名空间的下拉别名，可被 restoreModel 恢复；
-  // to_model 是 CLI resolved 全名，不做记忆值）并发出成功回执。
+  // 前端 own 的 models_available spawn 对账不经事件通道）。前端据此**只终结挂起的
+  // 成本确认弹窗**——落盘与坐实已换轴到 model_switch_result(ok)（sidecar 归一真名值）。
+  // requested_model 是 CLI 别名命名空间回显，纯信息字段，不进账面/不落盘
+  // （2026-09-11 sonnet 事故）。
   | {
       type: "model_committed";
       from_model: string;

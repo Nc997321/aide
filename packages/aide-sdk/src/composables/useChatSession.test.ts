@@ -802,7 +802,7 @@ describe("useChatSession per-session store", () => {
     expect(chat.modelSwitchConfirm.value?.cacheTtl).toBe("1h");
   });
 
-  it("model_committed：清确认弹窗 + currentModel 坐实 + 落盘 requested_model（事件驱动落盘主链路）", async () => {
+  it("model_committed：只终结确认弹窗（别名回显不进账面——sonnet 事故回归）", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);
     await flush();
@@ -816,36 +816,45 @@ describe("useChatSession per-session store", () => {
     await flush();
     expect(chat.modelSwitchConfirm.value).not.toBeNull();
 
-    // 切换真实完成：弹窗清 + currentModel 同步（requested 命名空间）+ 落盘
+    // requested 是 CLI 别名命名空间回显：不得进 currentModel、不得落盘
+    invokeMock.mockClear();
     emit({
       type: "model_committed",
-      from_model: "kimi", to_model: "fable-resolved:full", requested_model: "fable", source: "sdk",
+      from_model: "kimi", to_model: "qwen3.8-max", requested_model: "sonnet", source: "sdk",
       session_id: "uuid-a",
     });
+    await flush();
+    expect(chat.modelSwitchConfirm.value).toBeNull(); // 切换完成终结弹窗
+    expect(chat.currentModel.value).not.toBe("sonnet"); // 别名不污染账面
+    expect(invokeMock.mock.calls.filter((c) => c[0] === "set_session_meta")).toHaveLength(0);
+  });
+
+  it("model_switch_result(ok)：坐实 currentModel + 落盘 sidecar 归一真名值（事件驱动落盘主链路）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
     await flush();
     invokeMock.mockClear();
-    // 同值重放：幂等（不重复落盘）
-    emit({
-      type: "model_committed",
-      from_model: "kimi", to_model: "fable-resolved:full", requested_model: "fable", source: "sdk",
-      session_id: "uuid-a",
-    });
-    await flush();
-    const modelCalls = invokeMock.mock.calls.filter((c) => c[0] === "set_session_model");
-    expect(modelCalls.length).toBe(0); // 首坐实已落盘；同值重放被幂等跳过（不再写盘）
-    expect(chat.currentModel.value).toBe("fable"); // requested 命名空间坐实
-    expect(chat.modelSwitchConfirm.value).toBeNull(); // 切换完成终结弹窗
 
-    // requested=null（CLI 内部 auto/resume 切换）：不碰 currentModel 账面（resolved
-    // 全名与下拉别名跨命名空间），仅确认弹窗照常清（终态语义）
     emit({
-      type: "model_committed",
-      from_model: "fable", to_model: "auto-resolved:full", requested_model: null, source: "auto",
+      type: "model_switch_result",
+      ok: true, model: "qwen3.8-max", display: "Qwen3.8 Max",
       session_id: "uuid-a",
     });
     await flush();
-    expect(chat.currentModel.value).toBe("fable"); // 不被 resolved 全名污染
-    expect(chat.modelSwitchConfirm.value).toBeNull();
+    expect(chat.currentModel.value).toBe("qwen3.8-max");
+    const metaCalls = invokeMock.mock.calls.filter((c) => c[0] === "set_session_meta");
+    expect(metaCalls).toHaveLength(1);
+    expect(JSON.stringify(metaCalls[0][1])).toContain("qwen3.8-max");
+
+    // 同值重放：幂等（不重复落盘）
+    invokeMock.mockClear();
+    emit({
+      type: "model_switch_result",
+      ok: true, model: "qwen3.8-max", display: "Qwen3.8 Max",
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(invokeMock.mock.calls.filter((c) => c[0] === "set_session_meta")).toHaveLength(0);
   });
 
   it("model_switch_result 终态清挂起弹窗（超时 deny 前端黑洞回归）", async () => {
@@ -1810,8 +1819,7 @@ describe("回填注册表（P0-2：Map O(1) 查找替代 flatMap）", () => {
     emit({ type: "tool_result", id: "t2", content: "r2", is_error: false, session_id: "uuid-a" });
     await flush();
     const tools = chat.messages.value.flatMap((m) => m.blocks).filter((b) => b.type === "tool_call") as
-      | { id: string; result?: string; isPending?: boolean }
-      | undefined;
+      { id: string; result?: string; isPending?: boolean }[];
     const t1 = tools.find((t) => t?.id === "t1");
     const t2 = tools.find((t) => t?.id === "t2");
     expect(t1?.result).toBe("r1");

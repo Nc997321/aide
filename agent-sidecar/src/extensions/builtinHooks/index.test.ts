@@ -59,6 +59,7 @@ describe("builtinHooks registry", () => {
     const guard = makeModelSwitchGuard({
       emit: (_e: ChatEvent) => {},
       onCommitted: () => {},
+      consumeUserSwitchIntent: () => true,
     });
     const ctx = {
       cwd: "/x",

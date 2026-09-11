@@ -7,7 +7,6 @@ import type {
   ChatMessage,
   ContentBlock,
   ContextCompactionState,
-  ContextUsage,
   ModelOption,
   PermissionModeOption,
   SubagentBlock,
@@ -291,6 +290,19 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         seq: (store.modelSwitchResult?.seq ?? 0) + 1,
         at: Date.now(),
       };
+      // 成功回执的 model 是 sidecar 归一后的真名命名空间值（to_model 经 roster
+      // 归一）——选中值坐实与落盘由它驱动。不从 model_committed.requested 取：
+      // 那是 CLI 别名命名空间回显，进账面曾造成裸别名上屏 + 选中值掉出选项
+      // 集合 + 别名写盘（2026-09-11 sonnet 事故）。
+      if (store.modelSwitchResult.ok) {
+        store.currentModel = store.modelSwitchResult.model;
+        void identity.commitModelFromRuntime(sid, {
+          fromModel: "",
+          toModel: store.modelSwitchResult.model,
+          requestedModel: store.modelSwitchResult.model,
+          source: "sdk",
+        });
+      }
       break;
     }
     case "model_switch_confirm": {
@@ -311,18 +323,11 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       break;
     }
     case "model_committed": {
-      // 进程坐实（SDK PostModelSwitch）：切换真实完成。requested 是用户命名空间
-      // 的下拉别名——落盘/恢复用它；resolved 全名只进 runtime 显示。落盘在此处
-      // 事实驱动（旧 settleOnSend 发送时写草稿的设计已废除，见 2026-09-01 设计稿 §2）。
-      const requested = typeof e["requested_model"] === "string" ? (e["requested_model"] as string) : null;
+      // 进程坐实（SDK PostModelSwitch）：切换真实完成。本 case 只终结挂起的成本
+      // 确认弹窗——选中值坐实与落盘已换轴到 model_switch_result(ok)（携带 sidecar
+      // 归一的真名值）；requested_model 是 CLI 别名命名空间回显，纯信息字段，
+      // 不进账面（2026-09-11 sonnet 事故：裸别名上屏 + 选中值掉出选项集合 + 别名写盘）。
       store.modelSwitchConfirm = null;
-      store.currentModel = requested ?? store.currentModel;
-      void identity.commitModelFromRuntime(sid, {
-        fromModel: e["from_model"] as string,
-        toModel: e["to_model"] as string,
-        requestedModel: requested,
-        source: e["source"] as string,
-      });
       break;
     }
     case "effort_changed": {

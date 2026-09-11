@@ -141,7 +141,8 @@ async function resolve(sid: string): Promise<void> {
 }
 
 /** 发送前统一收尾（供应商维度）：绑定确保 + provider 落盘 + 门控基线推进，三者同源。
- *  模型身份的落盘不在这里——由 model_committed 事件驱动（commitModelFromRuntime）。
+ *  模型身份的落盘不在这里——由 model_switch_result(ok) 事件驱动（commitModelFromRuntime，
+ *  值取 sidecar 归一的真名；2026-09-11 起不再经 model_committed.requested 别名回显）。
  *  sid 空（空白面板首发）：只推进基线（会话还没创建，落盘推迟到 finalize 用 realId）。 */
 async function settleOnSend(sid: string, effectiveProvider: string): Promise<void> {
   if (sid) lastProviderBySid[sid] = effectiveProvider;
@@ -173,8 +174,9 @@ function prepareSpawn(sid: string, provider: string): void {
   if (!providerOf(sid)) setProvider(sid, provider);
 }
 
-/** 模型身份的进程坐实落盘（model_committed 事件驱动）：bindRuntime + 落盘一体。
- *  requestedModel=null（CLI 内部切换）→ 只 bindRuntime 不落盘（没有用户选择可恢复）。 */
+/** 模型身份的进程坐实落盘（model_switch_result(ok) 事件驱动）：bindRuntime + 落盘一体。
+ *  requestedModel 语义 = 要落盘/绑定的下拉 value（真名命名空间）；调用方传 null 时
+ *  不落盘（没有用户选择可恢复）。命名空间红线：别名（CLI 回显）不许进这里。 */
 async function commitModelFromRuntime(
   sid: string,
   committed: { fromModel: string; toModel: string; requestedModel: string | null; source: string },
@@ -192,7 +194,8 @@ async function commitModelFromRuntime(
   }
 }
 
-/** 用户手选草稿（带 sid）。只写 draft，不落盘——落盘由 model_committed 坐实事件驱动。 */
+/** 用户手选草稿（带 sid）。只写 draft，不落盘——落盘由 model_switch_result(ok)
+ *  坐实事件驱动（commitModelFromRuntime，sidecar 归一真名值）。 */
 function setUserChoice(sid: string, model: string): void {
   if (!sid) return;
   const prev = bindings[sid] ?? emptyBinding();

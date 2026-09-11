@@ -33,11 +33,39 @@ export function shouldConfirmModelSwitch(promptCacheWarm: boolean, contextTokens
   return promptCacheWarm && contextTokens >= CONFIRM_CONTEXT_TOKENS_THRESHOLD;
 }
 
+/**
+ * 用户切换意图追踪器（因果门纯核心）。PreModelSwitch 的 source 枚举只有
+ * command/picker/sdk，而进程内部对账（respawn 重带 options.model、网关驳回后的
+ * 回落重启）同样戴 sdk 标签——枚举区分不了「用户点了下拉」与「进程自己对账」，
+ * 只有因果能区分：worker 在发 setModel 前记意图，PreModelSwitch 到达时把 to_model
+ * 归一回真名与意图比对（归一由持有名册的 worker 做，本追踪器只认真名）。
+ */
+export function createUserSwitchIntentTracker(now: () => number = Date.now) {
+  let intent: { model: string; at: number } | null = null;
+  return {
+    /** worker 发 setModel 前记一笔（仅 query 在跑时记——deferred 分支无 hook）。 */
+    note(model: string): void {
+      intent = { model, at: now() };
+    },
+    /** 单次消费：命中/过期/不匹配都清意图——残留意图不得误认下一次对账切换。 */
+    take(resolvedToRealName: string, ttlMs: number = CONFIRM_DECISION_TIMEOUT_MS): boolean {
+      const cur = intent;
+      intent = null;
+      if (!cur) return false;
+      if (now() - cur.at > ttlMs) return false;
+      return resolvedToRealName === cur.model;
+    },
+  };
+}
+
 export interface ModelSwitchGuardDeps {
   /** 向前端发事件（SessionWorker 注入，DeltaCoalescer 汇聚红线）。 */
   emit: (e: ChatEvent) => void;
   /** 切换坐实回调（SessionWorker 注入：拼 current 账面与前端事件）。source 同 SDK 枚举。 */
   onCommitted: (payload: ModelCommittedPayload) => void;
+  /** 因果门：本次 PreModelSwitch 是否 worker 刚发起的用户切换（to_model 已归一真名）。
+   *  否 = 进程内部对账切换，静默放行不打扰用户（2026-09-11 双弹窗事故）。 */
+  consumeUserSwitchIntent: (resolvedToRealName: string) => boolean;
 }
 
 export interface ModelSwitchGuard {
@@ -73,6 +101,10 @@ export function makeModelSwitchGuard(deps: ModelSwitchGuardDeps): ModelSwitchGua
     // requested_model: string | null）——判别收窄后编译器可推，无需 typeof 阶梯。
     const facts = input as PreModelSwitchHookInput;
     if (!shouldConfirmModelSwitch(facts.prompt_cache_warm, facts.context_tokens)) return {};
+    // 因果门（先于成本策略无意义——策略已过才问）：非 worker 发起的切换（进程 respawn
+    // 重带 options.model、网关驳回后回落重启等内部对账）静默放行——给用户弹「切到他
+    // 没选的模型」的确认既误导又把内部对账挂起 10s（2026-09-11 双弹窗事故）。
+    if (!deps.consumeUserSwitchIntent(facts.to_model)) return {};
     // 连续切换（旧确认还挂着）：旧请求按 deny 收尾，新请求接管槽位
     settlePending(false);
 
@@ -152,13 +184,15 @@ export function makeRosterCommitHandler(
   deps: RosterCommitDeps,
 ): (p: ModelCommittedPayload) => void {
   return (p) => {
-    // requested 是用户命名空间（下拉别名，restoreModel 可恢复）——优先落账；
-    // to_model 是 CLI resolved 全名，经 resolveDropdownValue 归一回下拉 value。
+    // 账面/显示/回执值一律取**真名命名空间**：to_model 是进程真实切到的 resolved
+    // wire 名（事实），经 resolveDropdown 归一回下拉 value。requested_model 是 CLI
+    // **别名命名空间**回显（还可能被 CLI 归一成默认别名）——拿它落账曾造成裸别名
+    // 上屏 + 下拉选中值掉出选项集合（2026-09-11 sonnet 事故），现降级为纯信息
+    // 字段随 model_committed 原样透传，不进账面。
     // 账面（currentModel）与回执只在用户显式切换（source='sdk'）时更新/发出：
     // resume/auto 是 CLI 内部动作（恢复会话/自动兜底），发 ok 回执会让前端弹
-    // 用户没做的「已切换」提示，且 resolved 全名直写账面会与下拉别名命名空间
-    // 混注（同值守卫跨命名空间比较会误吞/漏判）。
-    const value = p.requested ?? deps.resolveDropdown(p.to);
+    // 用户没做的「已切换」提示。
+    const value = deps.resolveDropdown(p.to);
     const display = deps.models().find((m) => m.value === value)?.displayName ?? value;
     deps.emit({
       type: "model_committed",

@@ -21,7 +21,12 @@ import {
 } from "../desktop/automation.js";
 import { titleFromContent } from "./titleGenerator.js";
 import { applyModelSwitch } from "./modelSwitch.js";
-import { makeModelSwitchGuard, makeRosterCommitHandler, type ModelSwitchGuard } from "./modelSwitchGuard.js";
+import {
+  createUserSwitchIntentTracker,
+  makeModelSwitchGuard,
+  makeRosterCommitHandler,
+  type ModelSwitchGuard,
+} from "./modelSwitchGuard.js";
 import { applyEffortSwitch, normalizeEffort } from "./effortSwitch.js";
 import type { EffortSettable } from "./effortSwitch.js";
 import { buildCliEnv } from "./cliEnv.js";
@@ -186,6 +191,9 @@ export class SessionWorker {
   );
   /** 模型切换守卫（PreModelSwitch/PostModelSwitch 一对）：懒建单例，见 makeModelSwitchGuard。 */
   private modelSwitchGuard: ModelSwitchGuard | null = null;
+  /** 用户切换意图（因果门）：set_model 下发前记、PreModelSwitch 到达时单次消费——
+   *  区分「用户点了下拉」与进程内部对账切换（见 createUserSwitchIntentTracker）。 */
+  private readonly userSwitchIntent = createUserSwitchIntentTracker();
 
   // ---- 后台 shell 任务：tracker + 输出 tail（per-session） ----
   readonly bgTaskTracker = new BgTaskTracker();
@@ -273,6 +281,8 @@ export class SessionWorker {
         emit: (e) => this.emit(e),
         // 坐实回执编排归位 modelSwitchGuard.ts 的 makeRosterCommitHandler
         //（拆分批 3）；名册查询与账面写入的所有权留 worker，闭包注入。
+        consumeUserSwitchIntent: (resolvedTo) =>
+          this.userSwitchIntent.take(this.modelRoster.resolveDropdownValue(resolvedTo)),
         onCommitted: makeRosterCommitHandler({
           emit: (e) => this.emit(e),
           resolveDropdown: (w) => this.modelRoster.resolveDropdownValue(w),
@@ -519,6 +529,8 @@ export class SessionWorker {
 
     } else if (cmd.cmd === "set_model") {
       const q = this.currentQuery;
+      // 因果门意图记笔：仅 query 在跑时记（deferred 分支不触 hook，记了会残留误认）。
+      if (q) this.userSwitchIntent.note(cmd.model);
       applyModelSwitch({
         // cmd.model 是下拉 value = 真名。SDK 的 setModel 认的是它自己那份别名，
         // 这里包一层翻译——modelSwitch 内部只跟真名打交道，不需要知道别名存在。

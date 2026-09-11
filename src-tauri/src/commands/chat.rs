@@ -346,6 +346,25 @@ pub async fn set_model(
     runtime_mgr.send_to_runtime(&cmd).await.map(|_| true)
 }
 
+/// 模型切换成本确认（model_switch_confirm 弹窗）的用户决定：转发 sidecar 裁决挂起的
+/// PreModelSwitch hook。confirm_id 对不上（过期弹窗晚到）由 sidecar 静默忽略；
+/// 挂起超时 sidecar 自行按 deny 收尾——本命令只负责送达，不承载裁决语义。
+#[tauri::command]
+pub async fn model_switch_confirm_decision(
+    session_id: String,
+    confirm_id: String,
+    approve: bool,
+    runtime_mgr: State<'_, AgentRuntimeManager>,
+) -> Result<(), String> {
+    let cmd = json!({
+        "cmd": "model_switch_confirm_decision",
+        "session_id": session_id,
+        "confirm_id": confirm_id,
+        "approve": approve
+    });
+    runtime_mgr.send_to_runtime(&cmd).await
+}
+
 /// 会话级 effort 切换（provider-agnostic 字符串档位，Claude sidecar 解释为
 /// low/medium/high/xhigh/max）。镜像 set_model：Runtime 不在时返回 false，
 /// 前端按 deferred 处理（值会随下一条 send 的 env 通道带上）。
@@ -650,6 +669,22 @@ mod tests {
         let cmd = json!({ "cmd": "set_model", "session_id": "test-sid", "model": "sonnet" });
         assert_eq!(cmd["session_id"], "test-sid");
         assert_eq!(cmd["model"], "sonnet");
+    }
+
+    /// 回归：决策命令的 wire 形状必须与 sidecar SidecarCommand 的
+    /// model_switch_confirm_decision 成员同形（缺 confirm_id/approve 任一键，
+    /// guard 的 resolveConfirm 会因 ID 对不上静默忽略，切换挂到超时 deny）。
+    #[test]
+    fn model_switch_confirm_decision_cmd_shape() {
+        let cmd = json!({
+            "cmd": "model_switch_confirm_decision",
+            "session_id": "test-sid",
+            "confirm_id": "switch-confirm-1",
+            "approve": true
+        });
+        assert_eq!(cmd["session_id"], "test-sid");
+        assert_eq!(cmd["confirm_id"], "switch-confirm-1");
+        assert_eq!(cmd["approve"], true);
     }
 
     /// 回归：普通 send 不携带 btw/fork_from/provider_switched，SessionWorker 不应该

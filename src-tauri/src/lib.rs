@@ -546,6 +546,7 @@ pub fn run() {
             commands::chat::interrupt_session,
             commands::chat::stop_bg_task,
             commands::chat::set_model,
+            commands::chat::model_switch_confirm_decision,
             commands::chat::set_effort,
             commands::chat::set_permission_mode,
             commands::chat::get_default_models,
