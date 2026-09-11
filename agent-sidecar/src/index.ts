@@ -12,6 +12,12 @@ if (process.argv[2] === "test-mcp") {
   process.exit(0);
 }
 
+// Windows：给 Bash 工具的非交互 bash 注入 BASH_ENV（chcp 65001），让 Windows
+// 原生 CLI 输出 UTF-8，防 GBK 乱码。引擎级平台行为——桌面与 headless 两宿主
+// 共享（headless 会话同样跑 Bash 工具；2026-09-11 验收发现 headless 分支漏挂）。
+// test-mcp 探活分支在上面已退出，不需要。
+ensureWindowsBashEnv(process.env);
+
 // headless 子命令：HTTP/SSE 宿主。业务前端直连（不走桌面 Rust 宿主），事件按会话
 // 订阅。配置走 env：AIDE_HEADLESS_PORT（默认 18090）、AIDE_HEADLESS_TOKEN（鉴权，
 // 省略则只允许回环监听）。桌面路径零改动，本分支不触碰任何 stdio 初始化。
@@ -56,9 +62,7 @@ if (process.argv[2] === "headless") {
 // ---- 桌面宿主（stdin/stdout 协议，由 Rust 拉起）：原顶层初始化原样收进本函数，
 //      执行顺序不变；headless 分支不再走这里。 ----
 async function mainDesktop(): Promise<void> {
-  // Windows：给 Bash 工具的非交互 bash 注入 BASH_ENV（chcp 65001），
-  // 让 Windows 原生 CLI 输出 UTF-8，防 GBK 乱码。内建于 runtime，免用户配置。
-  ensureWindowsBashEnv(process.env);
+  // （ensureWindowsBashEnv 已上移到 host 分支前的共同路径——headless 共享）
 
   // codegraph-explore skill 落地：任务级触发「探索代码先用索引工具」，
   // 与 MCP instructions 互补。内建于 runtime，免用户配置。

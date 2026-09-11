@@ -1235,3 +1235,80 @@ describe("SessionWorker — context_usage event extension", () => {
     expect(events.some((e) => e.type === "context_usage")).toBe(false);
   });
 });
+
+/**
+ * F3：错误终态（in-band error result）终止 query 循环——存活 query 的 env/注入头
+ * 随 spawn 固化，续发只会喂僵尸 CLI（死端点 error 后同 worker 续发永不重连 MCP）。
+ * 良性打断豁免：interrupt 后原 query 必须存活（B5 契约）。
+ */
+describe("SessionWorker — 错误终态终止循环（F3）", () => {
+  function makeQuery(behavior: "error" | "benign") {
+    const state = { spawns: 0, closes: 0 };
+    const queryFn = (() => {
+      state.spawns++;
+      const gen = (async function* () {
+        yield behavior === "error"
+          ? { type: "result", subtype: "error_during_execution", is_error: true, errors: ["API Error: 500"] }
+          : { type: "result", subtype: "error_during_execution" }; // 无错误细节 = 良性打断形状
+        await new Promise(() => {}); // 模拟 streaming-input CLI 挂住不自退
+      })();
+      (gen as any).close = () => { state.closes++; };
+      return gen;
+    }) as any;
+    return { state, queryFn };
+  }
+  const send = (sid: string, prompt: string) =>
+    ({ cmd: "send", session_id: sid, prompt, cwd: "/tmp", env: {}, auto_title: false }) as any;
+
+  it("error result → 错误帧发出 + close 旧 query + currentQuery 置空；下一条 send 重启新 query", async () => {
+    const { state, queryFn } = makeQuery("error");
+    const events: ChatEvent[] = [];
+    const worker = new SessionWorker("s-f3", (e) => events.push(e), { queryFn });
+    worker.handleCommand(send("s-f3", "一"));
+    await vi.waitFor(() => expect(state.closes).toBe(1));
+    expect(events.some((e) => e.type === "error")).toBe(true);
+    expect(worker._testIsStopped()).toBe(false); // worker 存活，等续发
+    expect(worker.isActive()).toBe(false);
+    worker.handleCommand(send("s-f3", "二"));
+    await vi.waitFor(() => expect(state.spawns).toBe(2)); // 重启点：新 query 重新定装 env/头
+    worker.stop();
+  });
+
+  it("良性打断 result 不终止：query 存活，续发不重启（B5 契约）", async () => {
+    const { state, queryFn } = makeQuery("benign");
+    const events: ChatEvent[] = [];
+    const worker = new SessionWorker("s-b5", (e) => events.push(e), { queryFn });
+    worker.handleCommand(send("s-b5", "一"));
+    await vi.waitFor(() => expect(events.some((e) => e.type === "message_stop")).toBe(true));
+    expect(state.closes).toBe(0);
+    worker.handleCommand(send("s-b5", "二"));
+    await new Promise((r) => setImmediate(r));
+    expect(state.spawns).toBe(1); // 消息喂进原 query，不重启
+    worker.stop();
+  });
+});
+
+describe("SessionWorker — result 时插队 promote 的 continue 臂（循环不退出）", () => {
+  it("第一条 result 接入插队 → continue：不 close 不重启，循环继续消费后续消息", async () => {
+    const state = { spawns: 0, closes: 0 };
+    const queryFn = (() => {
+      state.spawns++;
+      const gen = (async function* () {
+        yield { type: "result", subtype: "success" }; // 第一条：promote 插队 → continue
+        yield { type: "result", subtype: "success" }; // 第二条：无插队 → 正常分派
+        await new Promise(() => {}); // 模拟 streaming-input CLI 挂住
+      })();
+      (gen as any).close = () => { state.closes++; };
+      return gen;
+    }) as any;
+    const events: ChatEvent[] = [];
+    const worker = new SessionWorker("s-jump", (e) => events.push(e), { queryFn });
+    worker.jumpQueueCtl.request({ prompt: "插队消息" }); // 启动前挂上插队
+    worker.handleCommand({ cmd: "send", session_id: "s-jump", prompt: "一", cwd: "/tmp", env: {}, auto_title: false } as any);
+    await vi.waitFor(() => expect(events.some((e) => e.type === "jump_promoted")).toBe(true));
+    expect(state.closes).toBe(0);   // continue 臂：循环存活
+    expect(state.spawns).toBe(1);   // 未重启
+    expect(events.filter((e) => e.type === "message_stop").length).toBeGreaterThanOrEqual(1); // 第二条 result 正常收轮
+    worker.stop();
+  });
+});

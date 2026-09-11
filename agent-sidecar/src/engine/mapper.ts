@@ -68,6 +68,19 @@ export function isBenignAbortResult(msg: any): boolean {
   return meaningfulResultErrors(msg).length === 0;
 }
 
+/**
+ * result 消息是否为「错误终态」（鉴权/额度/上限/执行错误等，良性打断除外）。
+ * 与 mapResultMessage 的错误路由是同一谓词（单一来源）；turnMessages 据此发
+ * "terminate" 信号终止 query 循环——错误终态后存活 query 的 env/注入头已随
+ * spawn 固化，续发只会喂僵尸 CLI（F3），终止后下一条 send 以 resume 重启。
+ * msg 用 any 沿本文件 result 辅助函数既有先例（SDK 边界消息，字段散落且
+ * success 也可能带 is_error:true——运行时实证，见 mapResultMessage 注释）。
+ */
+export function isErrorResult(msg: any): boolean {
+  if (msg.is_error !== true && msg.subtype === "success") return false;
+  return !isBenignAbortResult(msg);
+}
+
 /** 压缩失败说明直接来自 provider，进入 UI 前压成一行并限长，避免诊断堆栈或
  * 异常长文本把瞬态状态条撑成大块内容。 */
 function compactErrorText(value: unknown): string | undefined {
@@ -670,18 +683,19 @@ function mapResultMessage(msg: any, emit: (e: ChatEvent) => void, deps: MapperDe
   // 错误 result（鉴权/额度/达上限等）SDK 不抛异常，会走到这里。以前和成功一样
   // 压成 message_stop，错误细节全被吞掉 → 前端静默落 waiting，用户"发消息没反应"。
   // 现在路由到 error 通道（fatal:false，进程仍存活可重试），前端会渲染错误气泡。
-  if (msg.is_error === true || msg.subtype !== "success") {
-    // 主动打断的 result 不是错误——压成 message_stop 正常收轮，
-    // 不弹红色错误气泡（见 isBenignAbortResult 注释）。
-    if (isBenignAbortResult(msg)) {
-      emit({
-        type: "message_stop",
-        stop_reason: "interrupted",
-        total_cost_usd: msg.total_cost_usd ?? null,
-        usage: null,
-      });
-      return;
-    }
+  // 主动打断的 result 不是错误——压成 message_stop 正常收轮，
+  // 不弹红色错误气泡（见 isBenignAbortResult 注释）。先判良性再判错误：
+  // isErrorResult 内部已豁免良性打断，两谓词顺序保证打断路由不被吞。
+  if (isBenignAbortResult(msg)) {
+    emit({
+      type: "message_stop",
+      stop_reason: "interrupted",
+      total_cost_usd: msg.total_cost_usd ?? null,
+      usage: null,
+    });
+    return;
+  }
+  if (isErrorResult(msg)) {
     emit({ type: "error", message: describeResultError(msg), fatal: false });
     return;
   }

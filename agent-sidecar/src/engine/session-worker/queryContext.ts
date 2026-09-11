@@ -81,7 +81,9 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   // 用户扩展（settings.json 的 mcpServers/hooks）：mcpServers 与 codegraph 按
   // name 共存；hooks 内建在前、用户追加（内建 policy 恒为 PreToolUse[0]，不可越过）。
   const userMcp = loadUserMcpServers();
-  const userHooks = loadUserHooks();
+  // command 型条目在这里编译成 HookCallback（F4：SDK hooks 通道只认函数）；
+  // cwd 注入 hook 子进程工作目录。
+  const userHooks = loadUserHooks({ cwd: deps.cwd });
 
   // mcpServers 终装：内建(codegraph/docs) + 用户配置 → automation 白名单过滤
   //（未预授权的连接器不挂载——其工具对模型根本不存在，第一层收口；policy hook

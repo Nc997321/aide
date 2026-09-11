@@ -5,7 +5,13 @@ import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
 // 桩签名带形参：vi.fn() 零参签名会导致调用点 TS2554（Expected 0 arguments）
 const mapSdkMessage = vi.fn((..._args: unknown[]) => undefined);
-vi.mock("../mapper.js", () => ({ mapSdkMessage: (...args: unknown[]) => mapSdkMessage(...args) }));
+// isErrorResult 桩：缺省 false（良性/成功），terminate 臂测试里翻 true——
+// 真实谓词的形状判别归 mapper.test.ts 直测，这里只钉「分派语义」。
+const isErrorResult = vi.fn((_msg: unknown) => false);
+vi.mock("../mapper.js", () => ({
+  mapSdkMessage: (...args: unknown[]) => mapSdkMessage(...args),
+  isErrorResult: (msg: unknown) => isErrorResult(msg),
+}));
 const detectImageUnsupported = vi.fn((_msg: unknown) => false);
 vi.mock("../imageRollback.js", () => ({
   detectImageUnsupported: (msg: unknown) => detectImageUnsupported(msg),
@@ -39,6 +45,7 @@ const msg = (m: Record<string, unknown>) => m as unknown as SDKMessage;
 beforeEach(() => {
   mapSdkMessage.mockClear();
   detectImageUnsupported.mockReset().mockReturnValue(false);
+  isErrorResult.mockReset().mockReturnValue(false);
 });
 
 describe("handleQueryMessage", () => {
@@ -70,6 +77,30 @@ describe("handleQueryMessage", () => {
     expect(out).toBeUndefined();
     expect(mapSdkMessage).toHaveBeenCalled();
     expect(ctx.onResult).toHaveBeenCalledWith(q);
+  });
+
+  it("错误终态 result → terminate（F3：先 map 错误帧 + onResult，再发终止信号）", () => {
+    isErrorResult.mockReturnValue(true);
+    const ctx = stubCtx();
+    const out = handleQueryMessage(msg({ type: "result", subtype: "error_during_execution" }), q, ctx);
+    expect(out).toBe("terminate");
+    expect(mapSdkMessage).toHaveBeenCalled();          // 错误帧必须先发出去
+    expect(ctx.onResult).toHaveBeenCalledWith(q);      // 遥测/自毁调度不受影响
+  });
+
+  it("错误终态但有插队待接入 → continue 优先（插队回合接管，终止推迟到它的 result）", () => {
+    isErrorResult.mockReturnValue(true);
+    const ctx = stubCtx({ promoteJumpQueue: () => true });
+    const out = handleQueryMessage(msg({ type: "result", subtype: "error_during_execution" }), q, ctx);
+    expect(out).toBe("continue");
+    expect(ctx.onResult).not.toHaveBeenCalled();
+  });
+
+  it("良性打断（interrupt）result 不 terminate——isErrorResult 为 false 即原 query 存活（B5 契约）", () => {
+    const ctx = stubCtx();
+    const out = handleQueryMessage(msg({ type: "result", subtype: "error_during_execution" }), q, ctx);
+    expect(out).toBeUndefined();
+    expect(isErrorResult).toHaveBeenCalled();
   });
 
   it("主线程 assistant 带 EnterPlanMode tool_use → applyPlanMode；子代理/无块不触发", () => {

@@ -5,6 +5,7 @@ import {
   buildRateLimitEvent,
   isAdoptableAssistantModel,
   filterSelectableModels,
+  isErrorResult,
 } from "./mapper.js";
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
@@ -1224,5 +1225,26 @@ describe("mapSdkMessage 子代理嵌套软警告（warn-only）", () => {
   (e) => events.push(e),
   { tasks: tasks(), subagents: subagents, tools: tools() });
     expect(events.find((e) => e.type === "subagent_nesting_warning")).toBeUndefined();
+  });
+});
+
+describe("isErrorResult（F3：错误终态判定——turnMessages 的 terminate 信号源）", () => {
+  it("干净成功 result → false", () => {
+    expect(isErrorResult({ type: "result", subtype: "success", is_error: false })).toBe(false);
+  });
+  it("错误 subtype → true", () => {
+    expect(isErrorResult({ type: "result", subtype: "error_during_execution", is_error: true, errors: ["API Error: 401"] })).toBe(true);
+    expect(isErrorResult({ type: "result", subtype: "error_max_turns" })).toBe(true);
+  });
+  it("success subtype 但 is_error:true（429 等运行时实证形态）→ true", () => {
+    expect(isErrorResult({ type: "result", subtype: "success", is_error: true, api_error_status: 429 })).toBe(true);
+  });
+  it("良性打断（error_during_execution 且无用户可读错误）→ false（B5 契约：interrupt 后原 query 存活）", () => {
+    expect(isErrorResult({ type: "result", subtype: "error_during_execution" })).toBe(false);
+    expect(isErrorResult({ type: "result", subtype: "error_during_execution", errors: ["[ede_diagnostic] result_type=user"] })).toBe(false);
+  });
+  it("打断形状但带 api_error_status / 可读错误 → 不是良性，true", () => {
+    expect(isErrorResult({ type: "result", subtype: "error_during_execution", api_error_status: 500 })).toBe(true);
+    expect(isErrorResult({ type: "result", subtype: "error_during_execution", result: "provider 炸了" })).toBe(true);
   });
 });

@@ -662,6 +662,8 @@ export class SessionWorker {
   // ---- 主循环 ----
 
   async startLoop(cwd?: string, trusted = true, codegraphEnabled = true): Promise<void> {
+    // 本循环最后 spawn 的 query（代际守卫用，见 finally）。
+    let loopQuery: Awaited<ReturnType<typeof query>> | null = null;
     try {
       while (!this.stopped) {
         try {
@@ -743,6 +745,7 @@ export class SessionWorker {
             }),
           });
           this.currentQuery = q;
+          loopQuery = q;
           this.shouldForkNextConnect = false;
           // 内建 hook 清单回传前端（扩展设置页 hook 列表用；Task 10 消费，重复 emit 幂等）。
           this.emit({ type: "builtin_hooks_manifest", manifest: queryCtx.hookManifest });
@@ -768,10 +771,29 @@ export class SessionWorker {
             onMainThreadAssistant: (m) => this.adoptAssistantModel(m),
             onResult: (qq) => this.finishTurn(qq),
           };
+          let errorTerminated = false;
           for await (const msg of q) {
-            if (handleQueryMessage(msg, q, turn) === "continue") continue;
+            const verdict = handleQueryMessage(msg, q, turn);
+            if (verdict === "continue") continue;
+            if (verdict === "terminate") {
+              errorTerminated = true;
+              // 同步置空 currentQuery：错误帧在 mapSdkMessage 时已发往宿主，续发
+              // 可能抢在 break 隐含的 await gen.return()（异步清理，可达数十 ms）
+              // 完成之前到达——那一刻必须看到「query 已终」走 !currentQuery 重启
+              // 分支，而不是把消息喂进僵尸 query（F3 竞态窗口封闭）。
+              this.currentQuery = null;
+              break;
+            }
           }
-          // for await 正常结束（queue closed）
+          if (errorTerminated) {
+            // 错误终态（F3）：主动回收 CLI 子进程（N4 孤儿红线）。close 放在迭代
+            // 结束之后——迭代中 close 自己是已知陷阱（见 finishTurn 的 setImmediate
+            // 先例）。worker 不 stopped：下一条 send 走 handleSend 的 !currentQuery
+            // 分支以 resume 重启，env/mcp_headers 随新 spawn 重新定装（C4 token
+            // 轮换的异常恢复路径由此闭环）。
+            q.close();
+          }
+          // for await 结束（queue closed 或错误终态）→ 退出 while
           break;
         } catch (e: unknown) {
           this.currentQuery = null;
@@ -798,7 +820,11 @@ export class SessionWorker {
         }
       }
     } finally {
-      this.currentQuery = null;
+      // 代际守卫：只回收仍属于本循环的句柄。terminate 路径已在循环体内同步置空，
+      // 窗口期续发可能已抢先 startLoop 换上下一代 query——无守卫会把新句柄误清
+      // （isActive/interrupt/stop 全部失联，而新循环还活着）。stop() 先置空的
+      // 常规路径在守卫下语义不变。
+      if (this.currentQuery === loopQuery) this.currentQuery = null;
     }
   }
 

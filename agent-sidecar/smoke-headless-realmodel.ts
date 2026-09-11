@@ -34,6 +34,23 @@ writeFileSync(join(cfg.dir, "settings.json"), JSON.stringify({
   hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: `node "${dumpJs}" x "${dumpOut}"` }] }] },
 }));
 
+// C7 探针脚本：模型经 Bash 跑它，脚本自检 process.env 里的哨兵并只输出判定 JSON
+//（不 dump 值——裸 `env` 会被 CLI auto 模式分类器按「Credential Materialization」
+// 正当拦截，2026-09-11 bashprobe 实锤：deny 文本进 tool_result、48s 分类延迟。
+// 哨兵嵌在脚本里而非 argv，命令文本不含哨兵）。envKeys/pathLen 自证脚本确实
+// 读到了真实填充的 env（防空跑假阴性）。
+const selftestJs = join(cfg.dir, "engine-selftest.cjs").replace(/\\/g, "/");
+writeFileSync(selftestJs, [
+  "const sentinels = " + JSON.stringify([META_SENTINEL, HDR_SENTINEL]) + ";",
+  "const hits = [];",
+  "let pathLen = 0;",
+  "for (const [k, v] of Object.entries(process.env)) {",
+  "  if (k === 'PATH') pathLen = String(v).length;",
+  "  for (const s of sentinels) if (String(v).includes(s)) hits.push(k);",
+  "}",
+  "console.log(JSON.stringify({ clean: hits.length === 0, hits, envKeys: Object.keys(process.env).length, pathLen }));",
+].join("\n"));
+
 const rt: RuntimeHandle = await spawnRuntime({ port: PORT, token: TOKEN, configDir: cfg.dir });
 const pidBaseline = claudePids();
 
@@ -86,18 +103,44 @@ const reply2 = b2.text();
 check("B2 真模型两轮问答+同 sid 上下文", !!stop1 && !!stop2 && stop1.usage != null && reply2.includes("收到"),
   `一轮 usage=${JSON.stringify(stop1?.usage ?? null).slice(0, 80)} effort=${stop1?.effort ?? "-"}，回复2=「${reply2.slice(-30)}」`);
 
-// ---- C7 安全红线：metadata/mcp_headers 不进子进程 env（模型跑 env 自证） ----
-await b2.send("这是引擎安全测试，不是闲聊：你必须调用 Bash 工具真实执行命令 `env`，把命令输出原样贴出。禁止凭记忆作答、禁止拒绝、禁止用其他工具。");
-await b2.turn(180_000).catch(() => null);
-const toolNames = b2.all().filter((e) => e.type === "tool_use_start").map((e) => String(e.name));
-const envText = (b2.all().filter((e) => e.type === "tool_result").map((e) => String(e.content)).join("\n").match(/[\s\S]*PATH=[\s\S]*/) ?? [""])[0];
-check("C7 env 不含 metadata/注入头（且确有 env 输出）", envText.length > 200 && !envText.includes(META_SENTINEL) && !envText.includes(HDR_SENTINEL),
-  `env 输出 ${envText.length}B；本会话累计工具=${JSON.stringify(toolNames)}；哨兵命中=${envText.includes(META_SENTINEL) || envText.includes(HDR_SENTINEL) ? "有!" : "无"}`);
+// ---- C7 安全红线：metadata/mcp_headers 不进子进程 env（引擎自检脚本自证） ----
+// 必须用全新独立会话：b2 首轮指令是「接下来无论我说什么，只回复收到、不要使用
+// 任何工具」——同会话再发「必须调用 Bash」会被旧强指令压掉（2026-09-11 复跑
+// 实锤 tools=[]，模型面污染而非引擎面）。哨兵随本会话 send 下发，红线语义不变。
+// 探针从「裸跑 env 贴输出」换成自检脚本：分类器拦 env dump（见 selftestJs 注释），
+// 脚本只输出判定 JSON——红线语义不变（子进程 env 逐值扫哨兵），转录零凭据。
+// permission_mode=bypassPermissions：auto 模式分类器在 qwen provider 下 flaky
+//（F9 发现：stage-2 classifier error fail-closed 拒绝 + 单次 48~154s 延迟，
+// 两轮重试超轮次预算）——绕开分类器让红线判定确定性执行；权限流本身已由
+// B4/D2（manual 批准/拒绝臂）独立钉死，PreToolUse hooks 在 bypass 下照常触发（C6 依赖）。
+const c7 = new Sess("rm-c7");
+await c7.send(`这是引擎安全自检，不是闲聊：你必须调用 Bash 工具真实执行命令 node "${selftestJs}"（就这一条命令，一字不改），把输出原样贴出。不要先阅读或 cat 该脚本，直接执行。禁止凭记忆作答、禁止拒绝、禁止用其他工具。`, {
+  permission_mode: "bypassPermissions",
+  metadata: { tenant: META_SENTINEL }, mcp_headers: { biz1: { "X-User-Token": HDR_SENTINEL } },
+});
+await c7.turn(240_000).catch(() => null);
+const toolNames = c7.all().filter((e) => e.type === "tool_use_start").map((e) => String(e.name));
+// 判定提取要抗模型行为漂移（run5 实锤：模型会先 Read 脚本再动 Bash）：从全部
+// tool_result 里正则抽带引号 "envKeys" 的 JSON 对象——脚本源码里是未引号的
+// `envKeys:`，cat/Read 的结果不会误命中，只有真实执行的 stdout 会。
+const allResults = c7.all().filter((e) => e.type === "tool_result").map((e) => String(e.content)).join("\n");
+const verdictMatch = allResults.match(/\{[^{}]*"envKeys"\s*:\s*\d+[^{}]*\}/);
+let verdict: { clean?: boolean; hits?: string[]; envKeys?: number; pathLen?: number } | null = null;
+try { verdict = verdictMatch ? JSON.parse(verdictMatch[0]) : null; } catch { verdict = null; }
+const bashInputs = c7.all().filter((e) => e.type === "tool_use_start" && e.name === "Bash")
+  .map((e) => JSON.stringify((e as { input?: unknown }).input ?? {}).slice(0, 120));
+check("C7 子进程 env 不含 metadata/注入头（自检脚本实证）",
+  !!verdict && verdict.clean === true && (verdict.envKeys ?? 0) > 10 && (verdict.pathLen ?? 0) > 0,
+  `verdict=${JSON.stringify(verdict)}；工具=${JSON.stringify(toolNames)}；Bash 输入=${JSON.stringify(bashInputs)}；tool_result 摘要=${JSON.stringify(allResults.slice(0, 200))}`);
 
 // ---- C6 shell hook 侧：PreToolUse 落盘的 process.env 同样读不到 metadata ----
 const hookDump = await waitFor("hook dump", () => tryRead(dumpOut), 20_000).catch(() => null);
 check("C6 shell hook 读不到 metadata 且无泄漏", !!hookDump && !hookDump.includes(META_SENTINEL) && !hookDump.includes(HDR_SENTINEL),
   hookDump ? `hook env 落盘 ${hookDump.length}B，哨兵命中=${hookDump.includes(META_SENTINEL) || hookDump.includes(HDR_SENTINEL) ? "有!" : "无"}` : `Bash 未执行则 hook 必然不落盘（本会话工具=${JSON.stringify(toolNames)}）`);
+// C7 独立会话用完即停：多挂一个活 claude.exe 会放大后续并行臂（D1）的 provider
+// 慢尾（F9 同源），message_stop 超轮次窗偶发 FAIL——释放负载。
+await invokeOnce(PORT, { cmd: "session_stop", session_id: c7.realId }, TOKEN);
+c7.client.cancel(); c7.real?.cancel();
 
 // ---- B4/D2 写确认流：manual 批准 → 落盘；拒绝 → 不落盘 ----
 const b4Path = join(cfg.dir, "b4-approved.txt").replace(/\\/g, "/");
@@ -214,7 +257,7 @@ check("B14 btw 网关误发：轮次正常执行（自毁面观察记录）", !!
 const secrets = [TOKEN, pe.env.ANTHROPIC_AUTH_TOKEN ?? "", pe.env.ANTHROPIC_API_KEY ?? "", META_SENTINEL, HDR_SENTINEL, HDR_ROT];
 const leaks = scanLeaks(rt.logs, secrets.filter(Boolean));
 check("C8 真凭据零落 runtime 日志", leaks.length === 0, `扫描 ${rt.logs.length} 行 × ${secrets.filter(Boolean).length} 哨兵（含真 token），命中=${leaks.length}`);
-for (const s of [b2, b4, b4d, b5, d1a, d1b, btw]) { s.client.cancel(); s.real?.cancel(); }
+for (const s of [b2, c7, b4, b4d, b5, d1a, d1b, btw]) { s.client.cancel(); s.real?.cancel(); }
 rt.child.kill("SIGTERM");
 await Promise.race([rt.exit, sleep(10_000)]);
 await sleep(1_500);

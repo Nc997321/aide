@@ -5,7 +5,7 @@
 import type { Query, SDKAssistantMessage, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ChatEvent } from "../types.js";
 import { detectImageUnsupported } from "../imageRollback.js";
-import { mapSdkMessage, type MapperDeps } from "../mapper.js";
+import { isErrorResult, mapSdkMessage, type MapperDeps } from "../mapper.js";
 
 export interface TurnContext {
   btwMode: () => boolean;
@@ -37,7 +37,7 @@ export function handleQueryMessage(
   msg: SDKMessage,
   q: Query,
   turn: TurnContext,
-): "continue" | undefined {
+): "continue" | "terminate" | undefined {
   // 图片 400 回滚：模型不支持图片时，历史里带图消息重放必 400（会话报废）。
   // 检测到即 abort 杀 CLI（停一切写入），catch 里执行回滚（去图重写历史），
   // 下一轮 query 重放干净历史。btw 是一次性支线（400 后自毁），无需回滚。
@@ -85,6 +85,11 @@ export function handleQueryMessage(
     turn.onMainThreadAssistant(msg);
   } else if (msg.type === "result") {
     turn.onResult(q);
+    // 错误终态（鉴权/额度/上限/执行错误，良性打断豁免——interrupt 后会话必须
+    // 原 query 可用，B5 契约）：存活 query 的 env/注入头随 spawn 固化，续发只会
+    // 喂僵尸 CLI（F3：死端点 error 后同 worker 续发永不重连 MCP）。终止循环让
+    // 下一条 send 走 !currentQuery 分支以 resume 重启，新配置随新 spawn 定装。
+    if (isErrorResult(msg)) return "terminate";
   }
   return undefined;
 }

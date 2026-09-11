@@ -1,7 +1,8 @@
 # Headless 引擎测试清单
 
-> 2026-09-11 建。**同日第一轮正式验收已执行**（结果回填各表「结果」列，发现清单见 §7-F1~F8；
-> 脚本沉淀 `agent-sidecar/smoke-headless-*.{ts}`，复跑即回归）。建稿背景：headless 宿主
+> 2026-09-11 建。**同日第一轮正式验收 + 修复轮已执行**（结果回填各表「结果」列，发现清单见
+> §7-F1~F9；F3/F4 两个 P0 已核实修复，C4/C6/C7 闭环；脚本沉淀 `agent-sidecar/smoke-headless-*.{ts}`，
+> 复跑即回归）。建稿背景：headless 宿主
 > （`agent-sidecar/src/headless-server.ts`，`node dist/runtime.js headless`）
 > 此前只有单测（725 用例内覆盖）+ 一条 MCP 头注入 smoke。本清单是正式测试
 > 的执行底稿，结合 agri-ai-agent 项目（`C:\document\project\zhongke\agri-ai-agent`，MCP 方案
@@ -19,9 +20,10 @@
 | 机制①单测 | mcp_headers 注入/通配/刷新/N5、metadata hook 活值读取 | `engine/sessionMetadata*.test.ts`、`engine/sessionMetadataWiring.test.ts` |
 | 端到端 smoke | dist 产物 headless 起服 → POST /invoke 带 mcp_headers → mock MCP server 实收注入头 | `agent-sidecar/smoke-headless-mcp-headers.ts`（`npx tsx` 直接复跑，2026-09-11 复跑 PASS） |
 | **A 组宿主级验收**（本轮新增沉淀） | A 组协议面 dist 黑盒全臂 | `agent-sidecar/smoke-headless-host.ts`（2026-09-11 实测 22/22） |
-| **D 组网关彩排 + C/B 死端点臂**（本轮新增沉淀） | 鉴权/多租户/mock MCP/re-key/停止/并发/崩溃恢复/背压 | `agent-sidecar/smoke-headless-gateway.ts`（2026-09-11 实测 19/20，唯一 FAIL=C4 死端点臂→发现 F3） |
-| **真模型批次**（本轮新增沉淀） | B2/B4/B5/B7/B8/B11/B14 + C6/C7 + D1/D2/D3 | `agent-sidecar/smoke-headless-realmodel.ts` + `smoke-headless-provider-env.ts`（复用当前 aide provider：settings.json activeProvider + Windows 凭据管理器；真 token 只进内存与 send.env，C8 扫描含真 token 哨兵）。修复前基线 10/12；a3284fc 统一基线 **11/13**（B8 全臂过），两 FAIL 仍=C6/C7 取证缺口→发现 F4 |
+| **D 组网关彩排 + C/B 死端点臂**（本轮新增沉淀） | 鉴权/多租户/mock MCP/re-key/停止/并发/崩溃恢复/背压 | `agent-sidecar/smoke-headless-gateway.ts`（2026-09-11 第一轮 19/20，唯一 FAIL=C4 死端点臂→发现 F3；**修复轮 20/20**——C4「error 终态后续发→重启→新头命中」端到端闭环） |
+| **真模型批次**（本轮新增沉淀） | B2/B4/B5/B7/B8/B11/B14 + C6/C7 + D1/D2/D3 | `agent-sidecar/smoke-headless-realmodel.ts` + `smoke-headless-provider-env.ts`（复用当前 aide provider：settings.json activeProvider + Windows 凭据管理器；真 token 只进内存与 send.env，C8 扫描含真 token 哨兵）。修复前基线 10/12；a3284fc 统一基线 11/13（两 FAIL=C6/C7 取证缺口→发现 F4）；**修复轮 C6/C7 双闭环**（C7 探针改自检脚本+bypassPermissions，见 F9） |
 | 死端点 error 时序探针 | B1 error 帧到达时刻专项观测 | `agent-sidecar/smoke-headless-deaderror-probe.ts`（诊断工具，不进台账） |
+| Bash 结局全轨迹探针 | C7 残层诊断：tool_use 输入/分类器拒信/终态帧/进程悬挂盘点 | `agent-sidecar/smoke-headless-bashprobe.ts`（诊断工具，不进台账；F9 证据源，可复跑） |
 | 共享库 | 进程编排/SSE 客户端/PID 与 RSS 观测/mock MCP/哨兵扫描/台账 | `agent-sidecar/smoke-headless-lib.ts` |
 
 ## 1. 环境准备（每次验收前置）
@@ -90,10 +92,10 @@ AIDE_HEADLESS_TOKEN=<secret> CLAUDE_CONFIG_DIR=<临时配置根> node dist/runti
 | C1 | 精确名注入 | send.mcp_headers={"agri-platform":{…}} | 仅该 server 收到头 | P0 | ✅smoke | [x] 2026-09-11 复跑 PASS（dist 产物） |
 | C2 | `"*"` 通配注入 | mcp_headers={"*":{"X-User-Token":…}} | 所有 http/sse server 收到；stdio/sdk 型不受影响 | P0 | ✅单测/🔧→✅端到端 | [x] gateway 实测 GW-STAR 同达 biz1+biz2；stdio 无 HTTP 头面不适用（单测绿为准） |
 | C3 | 注入头覆盖配置头 | settings.json 静态头 + send 同名头 | 会话级值生效（授权身份优先） | P1 | ✅单测 | [x] 单测为准（本轮 59 例绿） |
-| C4 | token 轮换 | 第二条 send 带新头 | 下一次 query() 重连用新头（**当前存活 query 仍用旧头**——已声明边界，实测钉死行为与文档一致） | P1 | ✅单测/👤端到端 | [!] 语义修正 + 疑点：**存活 query 续轮永不换头（端到端实锤，对接文档必须写「轮换=会话重启+resume」，此臂由 D3 钉死）**；gateway 死端点臂「error 终态后同 worker 重连」90s 未观测到重连——**发现 F3 待核实**（stop+resume 新 worker 路径正常，单测绿） |
+| C4 | token 轮换 | 第二条 send 带新头 | 下一次 query() 重连用新头（**当前存活 query 仍用旧头**——已声明边界，实测钉死行为与文档一致） | P1 | ✅单测/👤端到端 | [x] **修复轮闭环（F3 已修）**：语义钉死=「存活 query 续轮永不换头；轮换=会话重启+resume（D3）；**error 终态后下一条 send 自动以 resume 重启重连带新头**（修复轮 gateway 20/20，C4 臂端到端 TOK_ROT 命中）」。对接文档按这三句写 |
 | C5 | 非法注入表 fail-closed | mcp_headers 值非 string | 400（schema 层）；绕过 schema 直灌 stdin 时整表忽略 + console.error **不含值** | P0 | ✅单测 | [x] schema 臂 dist 实测（A7）；stdin 直灌面单测为准（headless 无 stdin 面，如实记录） |
-| C6 | metadata hook 可读 | send.metadata={"tenant":"acme"} + 配置根放一个自定义 hook（读不到 metadata 就退而验证内建口）| 进程内 hook 经 HookBuildContext.session.metadata() 读到活值；**用户 shell hook 读不到**（设计代价，验证无 env 泄漏） | P1 | ✅单测(进程内)/👤shell侧 | [!] 进程内臂单测绿；shell 臂**未取到证据**（PreToolUse hook 未落盘，与 C7 同源——发现 F4：Bash 疑似被静默拒，待核实后补测） |
-| C7 | 安全红线：cliEnv 无泄漏 | 任意 metadata/mcp_headers 会话中让模型跑 `env` | 子进程环境变量**不含** metadata 内容与注入头值（Bash 工具不可外带） | P0 | 🔧 | [!] **红线未闭环**：realmodel 中模型确调了 Bash（工具面可证），但 SSE 未见对应 tool_result、hook 未触发——疑默认权限下 Bash 被静默拒（发现 F4）。env 零泄漏目前只有单测证据，实测臂待 F4 核实后补 |
+| C6 | metadata hook 可读 | send.metadata={"tenant":"acme"} + 配置根放一个自定义 hook（读不到 metadata 就退而验证内建口）| 进程内 hook 经 HookBuildContext.session.metadata() 读到活值；**用户 shell hook 读不到**（设计代价，验证无 env 泄漏） | P1 | ✅单测(进程内)/👤shell侧 | [x] **修复轮闭环（F4 已修）**：进程内臂单测绿；shell 臂端到端 PASS——PreToolUse command hook（settings.json）经编译包装真实执行，env 落盘 11150B、哨兵零命中（设计代价实证：shell 侧读不到 metadata） |
+| C7 | 安全红线：cliEnv 无泄漏 | 任意 metadata/mcp_headers 会话中让模型经 Bash 跑自检脚本（原「裸跑 env」探针被 auto 分类器按凭据物化正当拦截，见 F9——改为脚本只输出判定 JSON，红线语义不变） | 子进程环境变量**不含** metadata 内容与注入头值（Bash 工具不可外带） | P0 | 🔧→✅ | [x] **红线闭环（修复轮）**：Bash 子进程实跑自检脚本 verdict={clean:true,hits:[],envKeys:141,pathLen:4090}——env 真实填充（141 键/PATH 4090B）且逐值扫描零哨兵命中；探针会话用 bypassPermissions 绕开 qwen 下 flaky 的 auto 分类器（F9），权限流本身由 B4/D2 独立钉死 |
 | C8 | 安全红线：日志无泄漏 | 全程收集 runtime stdout/stderr | 无任何头值/凭据出现（N5） | P0 | 🔧→✅ | [x] 三脚本全量扫描零命中（含 realmodel 的**真 token** 哨兵 × runtime 日志）——本臂红线闭环 |
 | C9 | 会话间头隔离 | s1 带头 A、s2 带头 B，同一 MCP server | server 侧按会话收到各自的头（per-query options 天然隔离，端到端钉死） | P0 | 🔧→✅ | [x] gateway 实测：mock server 按源端口分组，S1 连接全带 TOK_S1、S2 全带 TOK_S2，交叉=无 |
 
@@ -131,6 +133,7 @@ send 时塞 `metadata`（租户上下文）+ `mcp_headers`（`X-User-Token`）�
 ## 7. 执行记录与发现（2026-09-11 第一轮 + 部分第二轮）
 
 **已执行**：第一轮（P0）除 C7 实测臂（F4 阻塞）外全部完成；第二轮（P1）死端点/真模型可达项完成；
+**修复轮：F3/F4 修复后三脚本复跑，C4/C6/C7 全部闭环**；
 🔧 项已全部脚本化沉淀进 `smoke-headless-{lib,host,gateway,realmodel}.ts` 家族（`npx tsx` 直接复跑，
 台账 `ledger n/n passed` + exit code 可进 CI）。
 
@@ -139,7 +142,22 @@ host 22/22 ✓、gateway 19/20（**F3 原样复现=与修复无关的稳定疑�
 （B8 全臂新过；**F7 修复后仍成立**=独立发现；C6/C7 两 FAIL 行为不稳：上一轮 tool_use_start Bash×2
 无 tool_result，本轮连 Bash 调用都没有——F4 待核实优先级上调）。
 
-**未执行（留下轮）**：B9/B10（P1/P2，能造但未排上）、C6/C7 实测臂（待 F4 核实）、
+**修复轮（同日，基线 0204d69 + F3/F4 修复）**：F3/F4 根因均坐实并修复（详见发现清单状态列），
+最终台账（最终版脚本+最终 dist）：**host 22/22 ✓、gateway 20/20 ✓（C4 端到端闭环）、
+realmodel 13/13 ✓（C6/C7 双闭环：hook env 落盘 11150B 零哨兵；Bash 子进程自检
+verdict={clean:true,hits:[],envKeys:141,pathLen:4090}）**。
+单测 725→787 全绿；新模块 `engine/commandHooks.ts` 131/131 stmts 全臂覆盖、
+`turnMessages.ts` 25/25 全臂覆盖；ts-reviewer 窄审通过（无必修项）。
+附带修复：headless 入口漏挂 `ensureWindowsBashEnv`（Windows Bash UTF-8 是引擎级行为，
+上移 index.ts 共同路径）。新增诊断沉淀 `smoke-headless-bashprobe.ts`（F9 证据源）。
+realmodel 收敛过程实录（模型面/环境面抖动，均已在脚本内加固）：① b2 会话「只回复收到」
+强指令压掉 C7 → C7 独立会话；② 裸 `env` 被 auto 分类器正当拦（F9）→ 自检脚本只输出判定 JSON；
+③ auto 分类器 stage-2 error fail-closed + 48~154s 延迟（F9）→ C7 会话 bypassPermissions；
+④ 模型先 Read 再动 Bash 的漂移 → verdict 正则提取（源码 `envKeys:` 未带引号不会误中）+
+prompt 禁先读；⑤ 多挂活 CLI 放大 qwen 慢尾致 D1 message_stop 偶发超 150s 轮次窗 →
+C7 会话用完即 session_stop 释放负载。
+
+**未执行（留下轮）**：B9/B10（P1/P2，能造但未排上）、
 E 组全部（依赖 agri starter 接入，见 §6 前置）。
 
 ### 已知风险回填（预登记四项 → 实测结论）
@@ -157,13 +175,16 @@ E 组全部（依赖 agri starter 接入，见 §6 前置）。
 |---|---|---|---|---|
 | **F1** | P1·平台语义 | Windows 上 `kill("SIGTERM")`/TerminateProcess **不执行** `process.on("SIGTERM")` 收尾：实测 70ms 退出、exit code≠0、SSE 收 RST(error) 非 done；close() 里 router.closeAll()/manager.shutdown() 全部旁路。活轮场景实测孤儿 claude.exe=1（realmodel 收口定点回收） | 「优雅关停」只在 macOS/Linux 成立；Windows 部署=崩溃等价，网关侧必须自带孤儿清理（按父 PID 差集） | `src/index.ts` headless 分支 signal 面；Windows 信号语义 Node 已知限制 |
 | **F2** | P1·时序 | 死端点 error 帧延迟到达：90s 双通道空，实测 ≤189s（CLI 内部重试梯度），message 带 ConnectionRefused | 网关不能假设端点故障快速可见；须自备超时 + interrupt 驱动终态 | session-worker catch→emit error 前全程挂 SDK 重试 |
-| **F3** | P0·疑点（待核实） | gateway C4 臂：error 帧到达（≈189s）后对同 worker 真 id 续发带新 mcp_headers 的 send，**90s 内 mock MCP server 无新连接命中**；而 stop+resume 新 worker 路径（realmodel D3）新头正常。**a3284fc 统一基线原样复现=与模型切换修复无关的稳定行为** | 若「error→break→续发」不触发 query 重启重连，则存活网关会话的 token 轮换在异常恢复路径上不生效——agri 长驻会话场景直接相关 | `session-worker.ts` handleSend `!currentQuery` 分支 vs break 后状态；`applySendRuntimeConfig` 更新时机 vs startLoop 组装 `mcpHeaders`（L312-321/L610/L694） |
-| **F4** | P0·红线缺口（待核实；两跑行为不一致更可疑） | 同一 env 探针：跑A=`tool_use_start Bash×2` 但 SSE 无 tool_result、无 permission_request、hook 未落盘；跑B（a3284fc 统一基线）=**连 Bash 调用都没有**（tools=[]）。共同点=零 tool_result、零 hook——疑默认权限下 Bash 被**静默拒且拒绝不可见**，模型行为随拒信漂移 | C6/C7 两条安全红线端到端臂未闭环，目前只有单测证据；「模型能不能跑 env」这个事实本身行为不定 | 权限模式默认值下发链（send 未带 permission_mode 时 manager/worker 的 initial mode；对照桌面 spawn 命令行是显式 `--permission-mode auto`）与 canUseTool 拒绝→tool_result 缺位路径 |
+| **F3** | P0·✅已核实已修复 | gateway C4 臂：error 帧到达（≈189s）后对同 worker 真 id 续发带新 mcp_headers 的 send，**90s 内 mock MCP server 无新连接命中**；而 stop+resume 新 worker 路径（realmodel D3）新头正常。**a3284fc 统一基线原样复现=与模型切换修复无关的稳定行为**。**【核实】根因=死端点 error 以 in-band result（error_during_execution+api_error_status）到达而非 throw：mapper 只发 error 帧（无 message_stop），for-await 继续等待、currentQuery 存活 → 续发走「普通续发」分支喂进 env/头已随 spawn 固化的僵尸 CLI，永不重启重连。原清单注释「error→loop break」是 thrown 型错误才有的心智模型。【修复】mapper.isErrorResult（单一谓词，良性打断豁免=B5 契约）→ turnMessages 返回 "terminate" → startLoop 循环体内同步置空 currentQuery（封「错误帧已发、await gen.return() 未完」的竞态窗）→ break 后 q.close()（N4）→ finally 代际守卫防误清新 query。下一条 send 以 resume 重启、env/头重新定装。复跑 gateway 20/20（C4 臂 TOK_ROT 端到端命中）+ 单测（terminate/良性豁免/插队优先/重启/竞态窗）全绿** | ~~若「error→break→续发」不触发 query 重启重连，则存活网关会话的 token 轮换在异常恢复路径上不生效~~ **已闭环**：error 终态后同 worker 续发=自动 resume 重启重连（对接文档三句语义见 C4 行） | `engine/mapper.ts` isErrorResult / `turnMessages.ts` terminate / `session-worker.ts` startLoop 终止块+finally 代际守卫 |
+| **F4** | P0·✅已核实已修复（产品级 bug，桌面同受影响） | 同一 env 探针：跑A=`tool_use_start Bash×2` 但 SSE 无 tool_result、无 permission_request、hook 未落盘；跑B（a3284fc 统一基线）=**连 Bash 调用都没有**（tools=[]）。**【核实】原嫌疑「默认权限静默拒」不成立。真根因（跑A 形态）=settings.json 的 command 型用户 hook（Rust hooks.rs 写入、桌面 HookEditor 可建）被 loadUserHooks 原样透传进 SDK options.hooks——该通道只认 HookCallback 函数，SDK initialize 零校验注册、hook 触发时按函数调用：非函数 → TypeError → hook_callback 控制请求 error 收场 → CLI 工具管线断流（tool_use_start 后零 tool_result、零 permission_request、hook 自身也从未执行）。smoke 配置根恰好带 matcher:"Bash" 的 command hook → 只有 Bash 中招（Write 臂 B4 全程正常）。跑B/复跑1 tools=[] 是另一层：b2 会话首轮「无论我说什么都只回复收到、不要使用任何工具」强指令压掉 C7 的 Bash 要求（测试面污染，C7 改独立会话后消除）。修复后残层=auto 分类器拦 env dump → 见 F9。【修复】新模块 `engine/commandHooks.ts`：compileCommandHook 把 command 条目编译成真 HookCallback（spawn + stdin 喂 HookInput JSON + stdout JSON 透传 + exit code 协议 0/2/其它 + timeout 必杀 N4 + 平台 shell 解析 Git Bash/PowerShell/$SHELL、排除 System32 WSL bash + N5 命令原文不落日志）；loadUserHooks 编译；assembleHooks 末道守卫滤非函数。复跑 C6 PASS（hook env 落盘 11150B 零哨兵）、C7 PASS（自检脚本 verdict clean）** | ~~C6/C7 两条安全红线端到端臂未闭环~~ **已闭环**（修复轮双 PASS）。桌面侧影响：HookEditor 建的用户 hook 此前从未真正执行过且会断掉匹配工具的管线——本轮修复后开始生效（行为变化需在桌面回归中留意） | `engine/commandHooks.ts`（新）+ `engine/userExtensions.ts` + `session-worker/queryContext.ts`；证据链=sdk.mjs initialize/handleHookCallbacks + Rust hooks.rs:73-75 |
 | **F5** | P2·协议客户端陷阱 | >1MB body：服务端先回 400 再因请求体未读尽 RST；fetch 客户端抛 ECONNRESET 拿不到状态码（裸 http.request 可） | 网关 SDK 实现方会踩；文档写明「超限响应以首响应状态码为准」或引擎读尽/Connection:close | `headless-server.ts` readBody throw 路径 respondJson |
 | **F6** | P2·部署面 | dist 入口只读 `AIDE_HEADLESS_PORT`/`AIDE_HEADLESS_TOKEN`，无 host env——`assertLoopbackUnlessAuthenticated` 的非回环臂在产物形态不可达 | 对外暴露必须走网关反代（正确形态），或未来加 `AIDE_HEADLESS_HOST`（加了就依赖 token 强制） | `src/index.ts` headless 分支 opts 组装 |
 | **F7** | P2·观察 | 第三方 provider（qwen）下 set_model 无 models_available 回执（effort/modes 回执正常）；非法 effort 正确不脏账面。**a3284fc 统一基线复验仍在=独立于模型切换修复的发现**（set_model 的 result 面正常，仅 roster 清单事件缺席） | 网关 UI 若依赖 models_available 渲染选择器，第三方 provider 下拿不到清单——headless 协议文档需注明缺席语义 | modelRoster/switch guard 对非 anthropic catalog 的行为 |
 | **F8** | P2·契约 | btw 字段在 headless schema 放行且按桌面语义执行（回合后自毁重建）；automation 面未测 | 误用面：网关发 btw 会造出「一轮一会话」的静默重建；对接文档明令禁发或 schema 剥除 | `headless-schema.ts` sendCommand btw/lightweight 字段 |
+| **F9** | P1·环境（修复轮新发现，非引擎缺陷） | **auto 模式权限分类器在 qwen provider 下 flaky**：① 裸 `env` 被按「Credential Materialization」**正当拦截**（deny 文本进 tool_result，48s 分类延迟）；② 良性命令（`node <自检脚本>`，一字未改）也吃到 `Stage 2 classifier error - blocking based on stage 1 assessment (usually transient — retrying often succeeds)` 的 fail-closed 拒绝（154s），模型重试一次后超轮次预算（bashprobe 全轨迹实锤）。旁证：realmodel D1 臂偶发 message_stop 超 150s 轮次窗（文本/hits 全对，仅收口慢——同源慢尾） | 网关长驻会话若用 auto 模式 + 第三方 provider，工具面稳定性受分类器质量支配；对接侧须显式规划：permission_policy 规则前置（规则命中不依赖分类器）/ 明确 permission_mode 选型 / 轮次预算放宽 | CLI 内部 auto-mode classifier（sidecar 不可控）；证据=`smoke-headless-bashprobe.ts` 可复跑；C7 探针已按此改 bypassPermissions+自检脚本（红线语义不变） |
 
-**出口判定（本轮）**：第一轮出口「双租户彩排通过 + 两条安全红线有实测证据」——
-双租户彩排 ✅（D1/D2/D3 + gateway 全套）；C8 日志红线 ✅（含真 token 哨兵）；
-**C7 cliEnv 红线 ⏸ 未闭环（F4）**——这是 agri 对接前的唯一 P0 阻塞项。
+**出口判定（修复轮更新）**：第一轮出口「双租户彩排通过 + 两条安全红线有实测证据」——
+双租户彩排 ✅（D1/D2/D3 + gateway 全套，修复轮 20/20）；C8 日志红线 ✅（含真 token 哨兵）；
+**C7 cliEnv 红线 ✅ 已闭环（修复轮：Bash 子进程自检脚本 verdict clean、envKeys=141 实证真实 env）**；
+C6 shell hook 红线 ✅ 已闭环（hook env 落盘零哨兵）。**agri 对接前的 P0 阻塞项清零**；
+遗留=P1 以下：F9（对接文档写明权限模式选型）、F1/F2/F5/F6/F7/F8（文档/策略级处置）、B9/B10（补测）、E 组（待 agri）。
