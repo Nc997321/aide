@@ -2,11 +2,11 @@ import { describe, it, expect } from "vitest";
 import { EFFORT_OPTIONS, effortLabel, normalizeEffortOption } from "./effort";
 
 describe("EFFORT_OPTIONS", () => {
-  it("三档制：low/high/max = 快速/思考/深度思考", () => {
+  it("三档制：low/high/max = 快速/进阶/极致", () => {
     expect(EFFORT_OPTIONS).toEqual([
       { value: "low", label: "快速" },
-      { value: "high", label: "思考" },
-      { value: "max", label: "深度思考" },
+      { value: "high", label: "进阶" },
+      { value: "max", label: "极致" },
     ]);
   });
 });
@@ -14,13 +14,13 @@ describe("EFFORT_OPTIONS", () => {
 describe("effortLabel", () => {
   it("三档制直映", () => {
     expect(effortLabel("low")).toBe("快速");
-    expect(effortLabel("high")).toBe("思考");
-    expect(effortLabel("max")).toBe("深度思考");
+    expect(effortLabel("high")).toBe("进阶");
+    expect(effortLabel("max")).toBe("极致");
   });
 
   it("历史遗留档位归一到相邻档位（API 仍可能回报）", () => {
-    expect(effortLabel("medium")).toBe("思考");
-    expect(effortLabel("xhigh")).toBe("深度思考");
+    expect(effortLabel("medium")).toBe("进阶");
+    expect(effortLabel("xhigh")).toBe("极致");
   });
 
   it("未知值原样大写返回（如 API 回报的新档位）", () => {
@@ -29,7 +29,7 @@ describe("effortLabel", () => {
 
   it("大小写不敏感", () => {
     expect(effortLabel("LOW")).toBe("快速");
-    expect(effortLabel("XHigh")).toBe("深度思考");
+    expect(effortLabel("XHigh")).toBe("极致");
   });
 });
 
@@ -45,7 +45,7 @@ describe("normalizeEffortOption", () => {
     expect(normalizeEffortOption("xhigh")).toBe("max");
   });
 
-  it("非法/空值 → high（选择器没有默认档，默认就落思考）", () => {
+  it("非法/空值 → high（选择器没有默认档，默认就落进阶）", () => {
     expect(normalizeEffortOption("")).toBe("high");
     expect(normalizeEffortOption(undefined)).toBe("high");
     expect(normalizeEffortOption(null)).toBe("high");

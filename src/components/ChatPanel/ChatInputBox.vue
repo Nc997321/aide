@@ -167,12 +167,12 @@ watch(
 );
 
 // ── Effort 选择器 ──
-// 会话级思考深度：三档制（快速/思考/深度思考，@aide/sdk/utils/effort）。默认解析顺序：
+// 会话级思考深度：三档制（快速/进阶/极致，@aide/sdk/utils/effort）。默认解析顺序：
 // 会话记忆（sessionEffort 元数据）→ provider 配置的 effortLevel → "high"。切换经
 // set-effort 走 sidecar applyFlagSettings 即时生效（SDK 官方中途通道，不重启进程、
 // 实测不碰 prompt 缓存）；进程没起时选择随下一条消息的 initialEffort（env 通道）带上。
 // sidecar 坐实/回滚由 props.currentEffort 同步。快速(low) 时 worker 关思考模式
-// （thinkingForEffort），思考/深度思考时开启——见 agent-sidecar/src/effortSwitch.ts。
+// （thinkingForEffort），进阶/极致时开启——见 agent-sidecar/src/effortSwitch.ts。
 const selectedEffort = ref("high");
 
 /** ThemedSelect 的 options 收 mutable 数组；SDK 的 EFFORT_OPTIONS 是 as const
@@ -187,7 +187,7 @@ let lastEffortToastValue = "";
 
 /** provider 配置的默认档位（设置面板的 effortLevel 是 LOW/MAX 风格大写）；
  *  没配或非法值 → "high"（用户决定：选择器没有"默认"档，默认就落 high）。
- *  历史 medium/xhigh 值经 normalizeEffortOption 迁移到 思考/深度思考。 */
+ *  历史 medium/xhigh 值经 normalizeEffortOption 迁移到 进阶/极致。 */
 function providerDefaultEffort(): string {
   return normalizeEffortOption(props.sessionProvider.effortLevel);
 }
@@ -216,7 +216,7 @@ function handleEffortChange(value: string) {
 // 的是旧值 ≠ 选定值，天然不弹（失败提示走 effortSwitchError）。比较必须在回滚
 // 同步赋值之前。守卫：用户在本视图手动改过（挡初始同步/恢复）+ 5s 新鲜度窗口
 // （挡切 tab 回来的旧回执重弹）+ 同值去重。API 回报的历史档位（medium/xhigh）
-// 先归一（max 静默降级 xhigh 时选择器仍显示 深度思考，不落未知档位）。
+// 先归一（max 静默降级 xhigh 时选择器仍显示 极致，不落未知档位）。
 watch(() => props.currentEffort, (v) => {
   if (!v) return;
   const nv = normalizeEffortOption(v);
@@ -1043,12 +1043,12 @@ const { actions: quickActions } = useQuickActions();
           @update:model-value="handleModelChange"
         />
         <!-- effort 选择器：会话级思考深度，切换即时生效（sidecar applyFlagSettings，
-             不重启进程、不碰 prompt 缓存）；三档制：快速=关闭思考模式、思考/深度思考=
+             不重启进程、不碰 prompt 缓存）；三档制：快速=关闭思考模式、进阶/极致=
              开启思考（worker 侧 thinkingForEffort 联动）；默认 思考(high) -->
         <ThemedSelect
           :model-value="displayedEffort"
           :options="effortSelectOptions"
-          title="effort（思考深度）：快速=关闭思考模式、思考/深度思考=开启思考；切换从下一轮起生效，不影响缓存"
+          title="effort（思考深度）：快速=关闭思考模式、进阶/极致=开启思考；切换从下一轮起生效，不影响缓存"
           @update:model-value="handleEffortChange"
         />
         <div

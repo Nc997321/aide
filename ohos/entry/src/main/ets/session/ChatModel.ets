@@ -48,7 +48,7 @@ import { workspaceModel } from './WorkspaceModel';
 import { providerModel } from './ProviderModel';
 
 /** 思考档位（对照原型 EF_FAKE；文案以 design/remote/app.html 为准——桌面
- * effort.ts 的 快速/思考/深度思考 是桌面侧文案，ohos 端不沿用）。 */
+ * effort.ts 的 快速/进阶/极致 是桌面侧文案，ohos 端不沿用）。 */
 export interface EffortTier {
   value: string;
   label: string;
