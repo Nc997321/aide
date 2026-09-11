@@ -39,11 +39,18 @@ export interface WsLike {
   onerror: ((ev: Event) => void) | null;
 }
 
-/** 桌面 → 手机消息（镜像 src-tauri/src/remote/protocol.rs 的 DesktopToPhone）。 */
+/** relay connect_error 原因：封闭三值 + `(string & {})` 逃逸臂——已知值可类型收窄、
+ *  新增 reason 前向兼容（落「忽略」语义），与 relay ConnectErrorReason 枚举对账。 */
+type ConnectErrorReason = "unknown_code" | "device_offline" | "superseded" | (string & {});
+
+/** 桌面 → 手机消息（镜像 src-tauri/src/remote/protocol.rs 的 DesktopToPhone）。
+ *  connect_error 是 relay 源帧（非桌面），首消息/桥接顶替阶段由中继下发，
+ *  与桌面帧同流到达——契约表见 docs/reference/remote-protocol.md。 */
 type DesktopToPhone =
   | { type: "pair_ok"; device_id: string; token: string }
   | { type: "auth_ok" }
   | { type: "auth_error"; message: string }
+  | { type: "connect_error"; reason: ConnectErrorReason }
   | { type: "event"; event: Record<string, unknown> }
   | { type: "invoke_ok"; id: number; payload: unknown }
   | { type: "invoke_err"; id: number; error: string };
@@ -56,6 +63,9 @@ interface PendingInvoke {
 const WS_OPEN = 1;
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_MAX_MS = 30000;
+/** 手机腿活体帧间隔：relay 据此武装 60s 静默超时（首帧 keepalive 才武装，
+ *  老客户端不发 = 保持旧行为）。契约见 docs/reference/remote-protocol.md。 */
+const KEEPALIVE_INTERVAL_MS = 20000;
 /** 远程网关只透传 chat-event 这一种事件；其他事件名 listen 了也收不到。 */
 const CHAT_EVENT = "chat-event";
 
@@ -75,6 +85,9 @@ export class RemoteTransport implements AideTransport {
   private reconnecting = false;
   private pending = new Map<number, PendingInvoke>();
   private nextInvokeId = 0;
+  private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  /** 被新连接顶替（superseded）：onclose 据此回 idle 不重连，防互踢循环。 */
+  private kickedBySupersede = false;
   /** 配对码请求挂起（ws 未打开时 pair() 先行调用）；onopen 补发，重连自动续配。 */
   private pendingPair: string | null = null;
   private pairWaiter: {
@@ -175,10 +188,12 @@ export class RemoteTransport implements AideTransport {
     }
     if (this.ws) {
       this.closedByUser = true; // 旧连接关闭不触发重连
+      this.stopKeepalive();
       this.ws.close();
       this.ws = null;
     }
     this.closedByUser = false;
+    this.kickedBySupersede = false;
     this.reconnecting = false;
     this.creds = creds;
     this.pendingPair = null; // 新一轮连接，旧配对挂起作废
@@ -203,6 +218,7 @@ export class RemoteTransport implements AideTransport {
   /** 主动断开：停止重连，回 idle。 */
   disconnect(): void {
     this.closedByUser = true;
+    this.stopKeepalive();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -221,6 +237,28 @@ export class RemoteTransport implements AideTransport {
     return `${this.relayUrl.replace(/\/+$/, "")}/ws`;
   }
 
+  /** 起活体帧定时器：relay 收到首帧 keepalive 才武装手机腿静默超时。
+   *  tick 守卫 ws 身份与 readyState——真 onclose 异步，tick 可落在 close 与事件之间。 */
+  private startKeepalive(ws: WsLike): void {
+    this.stopKeepalive();
+    this.keepaliveTimer = setInterval(() => {
+      if (this.ws !== ws || ws.readyState !== WS_OPEN) return;
+      try {
+        ws.send(JSON.stringify({ type: "keepalive" }));
+      } catch (e) {
+        // 发送抛错 = 连接将死：onclose 会清定时器，此处无需出声
+        console.warn("[aide-sdk] keepalive send failed:", e);
+      }
+    }, KEEPALIVE_INTERVAL_MS);
+  }
+
+  private stopKeepalive(): void {
+    if (this.keepaliveTimer) {
+      clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = null;
+    }
+  }
+
   private openOnce(): void {
     this.setState("connecting");
     const ws = this.wsFactory(this.wsUrl());
@@ -230,6 +268,7 @@ export class RemoteTransport implements AideTransport {
       const creds = this.creds;
       // 不可达：connect() 恒先设 creds 再 openOnce（防御性守卫，避免静默发出无凭据首包）
       if (!creds) return;
+      this.startKeepalive(ws);
       // 中继层首条消息（路由用）：配对码或已配对凭据
       ws.send(JSON.stringify(
         "code" in creds
@@ -258,7 +297,20 @@ export class RemoteTransport implements AideTransport {
     ws.onclose = () => {
       if (this.ws !== ws) return; // 已被新连接替换
       this.ws = null;
+      this.stopKeepalive();
       if (this.closedByUser) {
+        this.setState("idle");
+        return;
+      }
+      // 被新连接顶替：会话已易主，重连只会与新连接互踢——停在这里等用户决策
+      if (this.kickedBySupersede) {
+        this.failPending("已被新连接顶替");
+        // waiter 不能被早返回漏掉：bridged 阶段挂起的 pair() 正是 superseded 的典型窗口
+        const err = new Error("已被新连接顶替");
+        this.pairWaiter?.reject(err);
+        this.pairWaiter = null;
+        this.authWaiter?.reject(err);
+        this.authWaiter = null;
         this.setState("idle");
         return;
       }
@@ -334,6 +386,23 @@ export class RemoteTransport implements AideTransport {
         this.authWaiter = null;
         this.pairWaiter?.reject(new Error(msg.message));
         this.pairWaiter = null;
+        break;
+      }
+      case "connect_error": {
+        // relay 源帧：unknown_code = 码路由未命中（码错/桌面未上报），回配对屏报码错
+        // 且停止重试（重试同一个死码无意义）；superseded = 被新连接顶替；
+        // device_offline 等其余原因忽略——onclose 照旧走 offline 退避
+        if (msg.reason === "unknown_code") {
+          this.pendingPair = null;
+          this.setState("needsPairing");
+          const err = new Error("配对码无效或已过期");
+          this.authWaiter?.reject(err);
+          this.authWaiter = null;
+          this.pairWaiter?.reject(err);
+          this.pairWaiter = null;
+        } else if (msg.reason === "superseded") {
+          this.kickedBySupersede = true;
+        }
         break;
       }
       case "event": {

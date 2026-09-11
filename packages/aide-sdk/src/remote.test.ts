@@ -481,3 +481,121 @@ describe("RemoteTransport 边界与防御臂", () => {
     expect(events).toEqual([{ type: "text_delta", delta: "alive" }]); // 监听跨过重连仍然生效
   });
 });
+
+describe("RemoteTransport keepalive 与 connect_error", () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function authed() {
+    const { t, ws } = makeTransport();
+    t.connect({ deviceId: "dev-1", token: "tok" });
+    ws().open();
+    ws().receive('{"type":"auth_ok"}');
+    return { t, ws };
+  }
+
+  it("connect 打开后按 20s 发 keepalive；disconnect 后停发", () => {
+    const { t, ws } = makeTransport();
+    t.connect({ code: "123456" });
+    ws().open();
+    const keepalives = () => ws().sent.filter((s) => s === '{"type":"keepalive"}');
+    vi.advanceTimersByTime(20000);
+    expect(keepalives()).toHaveLength(1);
+    vi.advanceTimersByTime(40000);
+    expect(keepalives()).toHaveLength(3);
+    t.disconnect();
+    vi.advanceTimersByTime(60000);
+    expect(keepalives()).toHaveLength(3);
+  });
+
+  it("connect_error unknown_code：落 needsPairing、拒 pair、不重连（死码重试无意义）", async () => {
+    const { t, ws } = makeTransport();
+    const seen = states(t);
+    t.connect({ code: "999999" });
+    ws().open();
+    const pair = t.pair("999999");
+    ws().receive('{"type":"connect_error","reason":"unknown_code"}');
+    await expect(pair).rejects.toThrow(/配对码/);
+    expect(seen).toContain("needsPairing");
+    ws().serverClose();
+    vi.advanceTimersByTime(60000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("connect_error superseded：close 后回 idle 不重连，挂起的 invoke 被拒（防互踢）", async () => {
+    const { t, ws } = authed();
+    const seen = states(t);
+    const inv = t.invoke("list_sessions"); // 挂起的 invoke：superseded 必须拒掉而非悬挂
+    ws().receive('{"type":"connect_error","reason":"superseded"}');
+    ws().serverClose();
+    await expect(inv).rejects.toThrow(/顶替/);
+    expect(seen[seen.length - 1]).toBe("idle");
+    vi.advanceTimersByTime(60000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("bridged 阶段 pair() 挂起时遭 superseded：pair promise 被拒不悬挂", async () => {
+    const { t, ws } = makeTransport();
+    t.connect({ code: "123456" });
+    ws().open();
+    const pair = t.pair("123456");
+    ws().receive('{"type":"connect_error","reason":"superseded"}');
+    ws().serverClose();
+    await expect(pair).rejects.toThrow(/顶替/);
+    expect(t.state).toBe("idle");
+  });
+
+  it("keepalive tick 守卫：连接已非 OPEN（真 onclose 未到）不发不炸", () => {
+    const { t, ws } = makeTransport();
+    t.connect({ code: "123456" });
+    ws().open();
+    ws().readyState = 2; // CLOSING：真 onclose 异步未到，tick 落在窗口内
+    vi.advanceTimersByTime(20000);
+    expect(ws().sent.filter((s) => s === '{"type":"keepalive"}')).toHaveLength(0);
+  });
+
+  it("keepalive send 抛错：catch 记 warn，不炸定时器链", () => {
+    const { t, ws } = makeTransport();
+    t.connect({ code: "123456" });
+    ws().open();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    ws().send = () => {
+      throw new Error("boom");
+    };
+    vi.advanceTimersByTime(20000);
+    expect(warn).toHaveBeenCalledTimes(1);
+    // 再走一跳：定时器链未炸（第二 tick 仍然触发）
+    vi.advanceTimersByTime(20000);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+
+  it("connect_error unknown_code（token 凭据场景）：authWaiter 同拒", () => {
+    const { t, ws } = makeTransport();
+    t.connect({ deviceId: "dev-1", token: "tok" });
+    ws().open(); // 自动 auth 挂起 authWaiter
+    ws().receive('{"type":"connect_error","reason":"unknown_code"}');
+    expect(t.state).toBe("needsPairing");
+  });
+
+  it("connect_error 未知 reason：忽略（隐式 else 臂，前向兼容未来原因）", () => {
+    const { t, ws } = authed();
+    ws().receive('{"type":"connect_error","reason":"some_future_reason"}');
+    expect(t.state).toBe("authed");
+  });
+
+  it("connect_error device_offline：忽略，断线后照旧 offline 退避重试", () => {
+    const { t, ws } = authed();
+    ws().receive('{"type":"connect_error","reason":"device_offline"}');
+    expect(t.state).toBe("authed");
+    ws().serverClose();
+    expect(t.state).toBe("offline");
+    vi.advanceTimersByTime(1000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+});

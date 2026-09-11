@@ -35,6 +35,9 @@ async fn connect_once(gateway: &Arc<RemoteGateway>) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
 
+    // 防陈旧：清掉断连期积压的换码宣告——它们若在新连接 register 之后发出，
+    // 会把刚注册的新码从中继码路由里清掉
+    gateway.codes.clear_pending();
     // 注册（配对码过期/为空则刷新，避免配对中途换码）
     let code = super::lock_recover(&gateway.pairing).ensure_valid();
     let device_id = gateway.tokens.device_id().await?;
@@ -74,6 +77,12 @@ async fn connect_once(gateway: &Arc<RemoteGateway>) -> Result<(), String> {
         tokio::select! {
             Some(text) = event_rx.recv() => {
                 if sink.send(Message::Text(text)).await.is_err() { break; }
+            }
+            // 中途换码宣告（设置面板「刷新」）：帧形状与 relay-server/src/protocol.rs
+            // 的 update_code_of 守卫镜像对账
+            code = gateway.codes.take() => {
+                let frame = json!({ "type": "update_code", "code": code });
+                if sink.send(Message::Text(frame.to_string())).await.is_err() { break; }
             }
             msg = stream.next() => {
                 let Some(msg) = msg else { break; };

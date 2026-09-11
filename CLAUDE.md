@@ -72,6 +72,8 @@ Java/jdtls 专属配置**只准**待在 `src-tauri/src/lsp/profiles/java.rs`。�
 
 relay（`relay-server/`）是**哑管道**：只做配对与 WS 桥接，不解析业务数据。agent 始终跑在**用户桌面**，桌面不在线 = `connect: device offline`。
 
+**relay 层帧契约**（register/connect/update_code/keepalive/connect_error + 码 TTL/双向活体常量、supersede 与 opt-in 静默语义）：唯一必读 [docs/reference/remote-protocol.md](docs/reference/remote-protocol.md)；**新增/改帧 = 三端同步**（relay ↔ aide-sdk remote.ts ↔ ohos 镜像）。
+
 ## 架构红线：可替换技术必须藏在端口后面
 
 **凡是「有多个竞争实现」或「成熟度不确定」的第三方技术，一律不许在业务代码里直接引用。** 领域层只定义 trait（端口），实现放适配器层。判据：**这个技术点未来是否可能出现第二个实现，且切换只需替换一个文件？** 有 → 抽象；没有 → **不要抽象**（换 HTTP 框架/ORM 等于重写，抽象层是仪式感债务）。

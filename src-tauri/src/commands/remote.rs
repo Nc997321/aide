@@ -97,6 +97,9 @@ pub async fn remote_set_enabled(enabled: bool, app: AppHandle) -> Result<(), Str
 pub async fn remote_refresh_pairing_code(app: AppHandle) -> Result<String, String> {
     let gateway = app.state::<Arc<RemoteGateway>>().inner().clone();
     let code = gateway.pairing.lock().unwrap().refresh();
+    // 上报中继：旧实装只改本地 PairingState，relay 码路由里还是旧码，
+    // 刷新后的新码对手机永远 unknown device
+    gateway.announce_code(code.clone());
     Ok(code)
 }
 
