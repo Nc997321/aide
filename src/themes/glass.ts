@@ -62,7 +62,6 @@ export const glass: ThemeTokens = {
   ambientScene:
     "radial-gradient(560px 380px at 10% -8%, rgba(124,108,255,.32), transparent 65%), radial-gradient(520px 420px at 96% 6%, rgba(64,190,220,.22), transparent 65%), radial-gradient(640px 340px at 60% 112%, rgba(210,110,190,.16), transparent 70%), #0a0b11",
 
-  stalled: "#f0a868",
   syntaxKeyword: "#c3b3f7",
   syntaxNumber: "#f0b08c",
 };

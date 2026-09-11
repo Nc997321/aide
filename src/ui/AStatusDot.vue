@@ -51,12 +51,6 @@ defineProps<{
   animation: a-dot-pulse 2s ease-in-out infinite;
 }
 
-/* 健康度轴：疑似卡住 → 橙 */
-.a-status-dot--stalled {
-  background: var(--aide-stalled);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--aide-stalled) 50%, transparent);
-  animation: a-dot-pulse 2s ease-in-out infinite;
-}
 
 @keyframes a-dot-pulse {
   0%, 100% { opacity: 0.7; }

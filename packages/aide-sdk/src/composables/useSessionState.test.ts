@@ -25,14 +25,6 @@ describe("useSessionState dotTone 两轴投影", () => {
     expect(dotTone("x")).toBe("warning");
   });
 
-  it("stalled(橙) 压过活跃度、但低于 warning", () => {
-    setSessionState("x", "running");
-    setSessionHealth("x", "stalled");
-    expect(dotTone("x")).toBe("stalled");
-    setSessionHealth("x", "warning");
-    expect(dotTone("x")).toBe("warning");
-  });
-
   it("health ok 时投影回落到活跃度本身", () => {
     setSessionState("x", "running");
     expect(dotTone("x")).toBe("running");
@@ -43,8 +35,8 @@ describe("useSessionState dotTone 两轴投影", () => {
   });
 });
 
-describe("useSessionState 软超时(stalled)", () => {
-  const { state, health, setSessionState, armStalled, removeSessionState, dotTone } =
+describe("useSessionState running 恒绿（stalled 软超时已撤，2026-09-11 用户定案）", () => {
+  const { state, health, setSessionState, removeSessionState, dotTone } =
     useSessionState();
 
   beforeEach(() => {
@@ -55,28 +47,16 @@ describe("useSessionState 软超时(stalled)", () => {
     vi.useRealTimers();
   });
 
-  it("running 且连续 90s 无事件 → 判 stalled", () => {
+  it("running 长时间无任何事件也不变色（长工具调用不是卡住）", () => {
     setSessionState("x", "running");
-    armStalled("x");
-    vi.advanceTimersByTime(90_000);
-    expect(health["x"]).toBe("stalled");
-    expect(dotTone("x")).toBe("stalled");
+    vi.advanceTimersByTime(10 * 60_000); // 10 分钟静默
+    expect(health["x"]).toBeUndefined();
+    expect(dotTone("x")).toBe("running");
   });
 
-  it("阈值内再次 armStalled(有事件到达)重置计时 → 不判 stalled", () => {
+  it("卡死检测交回进程级通道：session_dead → stopped 灰点仍生效", () => {
     setSessionState("x", "running");
-    armStalled("x");
-    vi.advanceTimersByTime(60_000);
-    armStalled("x"); // 事件到达，重置
-    vi.advanceTimersByTime(60_000); // 距上次仅 60s < 90s
-    expect(health["x"]).toBeUndefined();
-  });
-
-  it("进入 attention(权限弹窗)暂停软超时 → 不误判卡住", () => {
-    setSessionState("x", "running");
-    armStalled("x");
-    setSessionState("x", "attention"); // setSessionState 对非 running 清定时器
-    vi.advanceTimersByTime(90_000);
-    expect(health["x"]).toBeUndefined();
+    setSessionState("x", "stopped"); // 看门狗判死路径
+    expect(dotTone("x")).toBe("stopped");
   });
 });

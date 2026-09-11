@@ -915,13 +915,13 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 
 /* ── 状态流光：会话条目左缘 2px 竖条，原状态点（AStatusDot）的颜色/动效一比一搬来——
    绿 running / 蓝 waiting（回复完成待输入，常亮）/ 黄 attention（权限等待，脉动）/
-   红 warning（可恢复错误，脉动）/ 橙 stalled（疑似卡住，脉动）；stopped（dead）无流光。
-   优先级坍缩沿用 dotTone（dead > warning > stalled > attention/running/waiting）。 ── */
+   红 warning（可恢复错误，脉动）；stopped（dead）无流光。running 恒绿——旧「90s
+   无事件判 stalled 橙」已撤（长工具调用误报，2026-09-11 用户定案）。
+   优先级坍缩沿用 dotTone（dead > warning > attention/running/waiting）。 ── */
 .session-row.tone-running::after,
 .session-row.tone-waiting::after,
 .session-row.tone-attention::after,
-.session-row.tone-warning::after,
-.session-row.tone-stalled::after {
+.session-row.tone-warning::after {
   content: "";
   position: absolute;
   left: 0;
@@ -943,10 +943,6 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 }
 .session-row.tone-warning::after {
   background: linear-gradient(180deg, transparent, var(--aide-danger), transparent);
-  animation: session-glow-pulse 2s ease-in-out infinite;
-}
-.session-row.tone-stalled::after {
-  background: linear-gradient(180deg, transparent, var(--aide-stalled), transparent);
   animation: session-glow-pulse 2s ease-in-out infinite;
 }
 @keyframes session-glow-pulse {

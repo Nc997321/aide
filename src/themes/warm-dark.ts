@@ -50,7 +50,6 @@ export const warmDark: ThemeTokens = {
   easeT: ".16s cubic-bezier(.2,.8,.2,1)",
   surfaceBlur: "none",
   ambientScene: "none",
-  stalled: "#e0955c",
   syntaxKeyword: "#b09bc8",
   syntaxNumber: "#e8a87c",
 };

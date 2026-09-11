@@ -25,8 +25,6 @@ import { useSessionNames } from "../useSessionNames";
 import { sessionIdentityStore } from "../../composables/sessionIdentity";
 import { useSessionState, markSessionUntracked } from "../useSessionState";
 import {
-  armStalled,
-  sessionHealth,
   sessionState,
   stores,
   aliasMap,
@@ -71,7 +69,6 @@ function isUsageCategory(v: unknown): v is ContextUsageCategory {
 
 /**
  * 流式事件总路由（拆分自原 2000+ 行宿主）：按事件类型分发到 per-sid store。
- * 任意事件到达都证伪「卡住」（清 stalled 橙点）；running 期间重置软超时。
  */
 /**
  * 用户消息的渲染描述 → 气泡块。
@@ -257,8 +254,7 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       //  - attention：interrupt/stop 的 cancelAll 同样发本事件，那些场景终态是
       //    waiting/stopped，不能把已收口的会话推回 running。
       if (wasQueued && store.pendingPermissions.length === 0 && sessionState[sid] === "attention") {
-        setSessionState(sid, "running");
-        armStalled(sid); // 放行后恢复生成 → 重启软超时计时
+        setSessionState(sid, "running"); // 放行后恢复生成（running 恒绿，无软超时）
       }
       break;
     }
@@ -634,7 +630,6 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       store.contextCompaction = null;
       store.isBusy = true;
       setSessionState(sid, "running");
-      armStalled(sid);
       // 落盘已在发送前（settleOnSend）完成，此处不再落盘。
       break;
     }
@@ -656,12 +651,11 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         timestamp: Date.now(),
       });
       maybeEvict(sid, store);
-      // 远程客户端（手机/PWA）发的消息不经过本地 prepareSend，忙碌态与软超时
-      // 表必须在这里补——否则桌面端看着消息出现，按钮区却仍显示"发送"、没有
-      // 停止按钮。本地发送路径已设过同值，重复设置幂等。
+      // 远程客户端（手机/PWA）发的消息不经过本地 prepareSend，忙碌态必须在这里
+      // 补——否则桌面端看着消息出现，按钮区却仍显示"发送"、没有停止按钮。
+      // 本地发送路径已设过同值，重复设置幂等。
       store.isBusy = true;
       setSessionState(sid, "running");
-      armStalled(sid);
       break;
     }
     case "notification": {
@@ -751,10 +745,6 @@ export function handleChatEvent(e: Record<string, unknown>): void {
     }
   }
 
-  // 任意事件到达都证伪“卡住”：清掉 stalled 橙点（warning 红点不在此清，只在下条消息清）。
-  if (sessionHealth[sid] === "stalled") setSessionHealth(sid, "ok");
-  // running 期间据事件重置软超时；连续静默 STALLED_MS 才会重新判 stalled。
-  if (sessionState[sid] === "running") armStalled(sid);
   // P0-3：事件驱动增长（push + 就地 +=）后检查淘汰阈值（节流，单点覆盖全部 case）
   maybeEvict(sid, store);
 }

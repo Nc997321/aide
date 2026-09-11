@@ -300,8 +300,8 @@ export const sessionCreatedCallbacks = new Set<(tempId: string, realId: string) 
  *  模块级共享：events 与宿主发送链路都要用。 */
 export const identityStore = sessionIdentityStore;
 export const { state: sessionState, health: sessionHealth } = useSessionState();
-const { setSessionState, setSessionHealth, removeSessionState, armStalled } = useSessionState();
-export { setSessionState, setSessionHealth, armStalled };
+const { setSessionState, setSessionHealth, removeSessionState } = useSessionState();
+export { setSessionState, setSessionHealth };
 
 /** 取会话 store（不存在则现场建一个空 store）。事件流/组件同步读共用——空 store
  *  重建是「首次打开」的常态路径（组件标记 disposed 的会话）。

@@ -5,40 +5,39 @@ import { reactive } from "vue";
 // 死亡」的语义混用（活着却显示死了）。
 //
 //   活跃度轴 activity —— 进程存活时它在干嘛（沿用历史语义，众多转换监听依赖它）
-//   健康度轴 health   —— 它健不健康（新增；stopped 即 dead，故 health 不含 dead）
+//   健康度轴 health   —— 它健不健康（stopped 即 dead，故 health 不含 dead）
 //
 // 状态点是两轴的一个纯投影（dotTone）。
+//
+// 历史注：健康度轴曾有第三态 stalled（running 且 90s 无事件 → 橙点「疑似卡住」
+// 软超时）。2026-09-11 用户定案撤销：长工具调用（构建/长命令）本来就可能几分钟
+// 无事件，橙点把「正在干活」误报成「出问题」，且与 attention（等权限）的暖色
+// 语义难以区分——运行态恒绿、等权限才有自己的颜色。卡死检测交回进程级通道：
+// Rust 心跳看门狗（session_dead → stopped 灰点）+ 可恢复错误（warning 红点）。
 
 /** 活跃度轴：stopped=进程没了 / running=生成中 / waiting=存活空闲 / attention=等权限。 */
 export type SessionStatus = "stopped" | "running" | "waiting" | "attention";
 
-/** 健康度轴：ok=正常 / warning=上轮可恢复错误(进程仍活) / stalled=疑似卡住。
+/** 健康度轴：ok=正常 / warning=上轮可恢复错误(进程仍活)。
  *  dead 不在此轴——进程死亡由 activity=stopped 表达，两轴在死亡处坍缩。 */
-export type SessionHealth = "ok" | "warning" | "stalled";
+export type SessionHealth = "ok" | "warning";
 
-/** 状态点投影色调：活跃度四态 + 健康度的红(warning)/橙(stalled)。 */
-export type DotTone = SessionStatus | "warning" | "stalled";
-
-/** 软超时阈值：running 且连续这么久无任何 chat-event → 判 stalled（疑似卡在 await
- *  等心跳抓不到的假死）。纯 UI 软提示，不杀进程；任何事件到达即自动回落。 */
-const STALLED_MS = 90_000;
+/** 状态点投影色调：活跃度四态 + 健康度的红(warning)。 */
+export type DotTone = SessionStatus | "warning";
 
 // 模块级 reactive 单例——跨 ChatPanel / SidebarLeft / 通知等共享同一份状态。
 const state = reactive<Record<string, SessionStatus>>({});
 const health = reactive<Record<string, SessionHealth>>({});
-// 每会话一个软超时定时器（非 reactive，纯副作用句柄）。
-const stalledTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 // 非交互式会话（自动化运行/蒸馏轮等，无用户面板）：session_init 时发现事件路由键
 // 与 SDK 真实 id 不一致即可判定，标记后所有状态写入静默丢弃——不登记就不会产生
 // 「永远收不到终态的孤儿 running 条目」。removeSessionState 时解除标记。
 const untrackedSids = new Set<string>();
 
-/** 标记一个会话为「不跟踪」：清掉已有条目，后续 setSessionState/armStalled 全部 no-op。 */
+/** 标记一个会话为「不跟踪」：清掉已有条目，后续 setSessionState 全部 no-op。 */
 export function markSessionUntracked(id: string) {
   untrackedSids.add(id);
   delete state[id];
   delete health[id];
-  clearStalled(id);
 }
 
 /**
@@ -51,22 +50,10 @@ export function isSessionUntracked(id: string): boolean {
   return untrackedSids.has(id);
 }
 
-function clearStalled(id: string) {
-  const t = stalledTimers[id];
-  if (t) {
-    clearTimeout(t);
-    delete stalledTimers[id];
-  }
-}
-
 export function useSessionState() {
   function setSessionState(id: string, status: SessionStatus) {
     if (untrackedSids.has(id)) return;
     state[id] = status;
-    // 离开 running（waiting/attention/stopped）即停软超时：attention 期间用户可能
-    // 长时间不答权限弹窗，不该误判卡住；waiting/stopped 也不需要计时。
-    // 重新进入 running 由 armStalled 显式起表。
-    if (status !== "running") clearStalled(id);
   }
 
   function setSessionHealth(id: string, h: SessionHealth) {
@@ -78,29 +65,16 @@ export function useSessionState() {
     untrackedSids.delete(id);
     delete state[id];
     delete health[id];
-    clearStalled(id);
-  }
-
-  /** 重置软超时定时器：running 期间每收到一个事件调用一次；超过 STALLED_MS 无事件
-   *  则把 health 置 stalled。回调里再次校验 running，避免在已离开 running 后误触发。 */
-  function armStalled(id: string) {
-    if (untrackedSids.has(id)) return;
-    clearStalled(id);
-    stalledTimers[id] = setTimeout(() => {
-      delete stalledTimers[id];
-      if (state[id] === "running") health[id] = "stalled";
-    }, STALLED_MS);
   }
 
   /** 状态点投影——单点颜色由两轴按优先级坍缩：
-   *  dead(灰) > warning(红) > stalled(橙) > 活跃度(attention 黄/running 绿/waiting 蓝)。
-   *  无条目默认 stopped（灰）。 */
+   *  dead(灰) > warning(红) > 活跃度(attention/running/waiting 各自色)。
+   *  无条目默认 stopped（灰）。running 恒为绿（无软超时变色，见文件头历史注）。 */
   function dotTone(id: string): DotTone {
     const activity = state[id] ?? "stopped";
     if (activity === "stopped") return "stopped";
     const h = health[id] ?? "ok";
     if (h === "warning") return "warning";
-    if (h === "stalled") return "stalled";
     return activity;
   }
 
@@ -110,7 +84,6 @@ export function useSessionState() {
     setSessionState,
     setSessionHealth,
     removeSessionState,
-    armStalled,
     dotTone,
   };
 }

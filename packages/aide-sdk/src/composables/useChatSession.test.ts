@@ -365,7 +365,7 @@ describe("useChatSession per-session store", () => {
     expect(dotTone("uuid-a")).toBe("running");
   });
 
-  it("stalled(橙)在新事件到达后回落为 ok——事件证伪“卡住”", async () => {
+  it("running 长静默不变色（stalled 软超时已撤）；事件到达照常处理", async () => {
     vi.useFakeTimers();
     try {
       const { health, dotTone } = useSessionState();
@@ -373,14 +373,14 @@ describe("useChatSession per-session store", () => {
       const chat = useChatSession(sid);
       await flush();
       await chat.sendMessage("q");
-      // running 后连续 90s 无事件 → stalled（橙）
+      // 旧行为：90s 无事件 → stalled 橙。新行为：running 恒绿（2026-09-11 用户定案，
+      // 长工具调用本来就可能几分钟无事件；卡死交回 Rust 看门狗 session_dead 灰点）。
       vi.advanceTimersByTime(90_000);
-      expect(health["uuid-a"]).toBe("stalled");
-      expect(dotTone("uuid-a")).toBe("stalled");
-      // 新事件到达 → 证伪卡住，回落 ok，投影回 running（绿）
-      emit({ type: "text_delta", delta: "又活了", session_id: "uuid-a" });
-      await flush();
       expect(health["uuid-a"]).toBe("ok");
+      expect(dotTone("uuid-a")).toBe("running");
+      // 事件流本身不受影响
+      emit({ type: "text_delta", delta: "还在跑", session_id: "uuid-a" });
+      await flush();
       expect(dotTone("uuid-a")).toBe("running");
     } finally {
       vi.useRealTimers();

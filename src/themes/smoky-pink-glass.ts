@@ -73,11 +73,9 @@ export const smokyPinkGlass: ThemeTokens = {
   ambientScene:
     "radial-gradient(circle at 8% 0%, rgba(255,255,255,.96) 0 17%, transparent 42%), radial-gradient(circle at 100% 0%, rgba(225,196,192,.28) 0 15%, transparent 38%), radial-gradient(circle at 72% 100%, rgba(207,166,160,.18) 0 18%, transparent 42%), linear-gradient(135deg, #faf9fa 0%, #f2eff1 46%, #f8f3f2 100%)",
 
-  // 状态机六态在浅底的配色纪律：running 绿(success) / waiting 灰蓝(info) /
-  // attention 琥珀(warning) / stalled 赤陶(独立于 warning，两态不能撞色) /
-  // warning 红(danger) / stopped 空心灰圈。stalled 语义介于「注意」与「错误」
-  // 之间，取带粉调的赤陶橙，既融入烟粉色系又与琥珀 warning 一眼可辨。
-  stalled: "#D1795E",
+  // 状态机五态在浅底的配色纪律：running 绿(success) / waiting 灰蓝(info) /
+  // attention 琥珀(warning) / warning 红(danger) / stopped 空心灰圈。
+  //（旧第六态 stalled 赤陶橙已撤——running 恒绿，2026-09-11 用户定案。）
   syntaxKeyword: "#A77872",
   syntaxNumber: "#6D7FB8",
 };

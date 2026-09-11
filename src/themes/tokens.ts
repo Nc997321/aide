@@ -69,7 +69,6 @@ export interface ThemeTokens {
 
   spaceUnit: string;
 
-  stalled: string;
   syntaxKeyword: string;
   syntaxNumber: string;
 

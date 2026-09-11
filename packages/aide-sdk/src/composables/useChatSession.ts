@@ -167,11 +167,10 @@ function prepareSend(sid: string, item: QueuedSend): "queued" | "direct" {
   // 动作胶囊用 label 做标题更可读，底层 prompt 是 /compact 这种斜杠命令。
   lastDispatchedPrompt[sid] =
     item.action?.label || item.prompt || (item.images?.length ? "[图片]" : "");
-  const { setSessionState, setSessionHealth, armStalled } = useSessionState();
+  const { setSessionState, setSessionHealth } = useSessionState();
   setSessionState(sid, "running");
-  // 新一轮开始：清掉上轮可能残留的 warning（红点），并起软超时表。
+  // 新一轮开始：清掉上轮可能残留的 warning（红点）。
   setSessionHealth(sid, "ok");
-  armStalled(sid);
   return wasBusy ? "queued" : "direct";
 }
 
@@ -395,10 +394,9 @@ export function useChatSession(sessionId: Ref<string | null>) {
     store.pendingPermissions = store.pendingPermissions.filter((p) => p.id !== id);
     // 并发权限请求逐条确认：队列还有剩余时保持 attention（弹窗随队头自动切到
     // 下一条），全部清空才回到 running。
-    const { setSessionState, armStalled } = useSessionState();
+    const { setSessionState } = useSessionState();
     if (store.pendingPermissions.length === 0) {
-      setSessionState(sid, "running");
-      armStalled(sid); // 权限批准后恢复生成 → 重启软超时计时
+      setSessionState(sid, "running"); // 权限批准后恢复生成（running 恒绿）
     }
     await api.permissionResponse({
       sessionId: sid,
