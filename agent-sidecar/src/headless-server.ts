@@ -10,104 +10,28 @@
 // 不鉴权又要求对外监听 = 启动即拒绝（安全基线不靠自觉，见 M6）。
 import { createServer, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from "node:http";
 import type { ChatEvent, SidecarCommand } from "./engine/types.js";
-import { isPlainObject, parseMcpHeaders } from "./engine/sessionMetadata.js";
+import { parseInvokeBody } from "./headless-schema.js";
 
-// ---- 核心：命令白名单（骨架最小集；codegraph_result / update_permission_policy /
-//      stop_bg_task / model_switch_confirm_decision 属桌面扩展通道，正式版再放） ----
-const INVOKABLE_COMMANDS = [
-  "send",
-  "permission_response",
-  "interrupt",
-  "set_permission_mode",
-  "session_stop",
-  "set_model",
-  "set_effort",
-] as const;
+// ---- 命令白名单 = headless-schema.ts 的 invokeBodySchema 判别联合（唯一真相，
+//      正式版 10 命令 = 骨架 7 + 桌面扩展通道按需收编 3；codegraph_result 永关
+//      ——headless 无 Rust 回包方，理由见 schema union 注释）。骨架期这里的
+//      INVOKABLE_COMMANDS 清单已删——两份白名单必然漂移，一致性用例在测试侧钉住。
 
-export type InvokableCommand = (typeof INVOKABLE_COMMANDS)[number];
-
-/** 白名单判定：headless 只放行骨架协议面内的命令。 */
-export function isInvokableCommand(cmd: unknown): cmd is InvokableCommand {
-  return typeof cmd === "string" && (INVOKABLE_COMMANDS as readonly string[]).includes(cmd);
-}
+/** headless 协议版本：/invoke 请求-响应形状、SSE 帧形状、命令面发生不兼容变化
+ *  时递增。三处暴露：headless-listening 行（index.ts）、/invoke 成功响应、
+ *  SSE 订阅首帧 hello——客户端连上即知版本，不匹配可拒连。 */
+export const PROTOCOL_VERSION = 1;
 
 /**
- * 校验 invoke body → SidecarCommand。HTTP 边界类型保护失效（M3）：unknown 进，
- * 白名单 + 必填字段逐命令校验后整体断言。
- *
- * ⚠️ 如实说明（骨架轻校验的边界）：可选字段（images/display/env…）的**类型**
- * 本路径未校验（错误形状会透传到命令层暴露，不会静默丢）；例外是
- * metadata / mcp_headers——直达 hooks 与 MCP 网络请求配置，在此深校验（M3）。
- * 字段级完整 schema（zod 逐命令收窄重建）留正式版。session_id 在 headless
- * 形态恒必填——客户端生成并用它订阅事件流，没有它订阅表无从建。
+ * 校验 invoke body → SidecarCommand。委托 headless-schema.ts 的 parseInvokeBody：
+ * zod 判别联合逐命令收窄重建（M3），loose 面保留未知字段（前向兼容不静默丢），
+ * 错误消息只含 path+code 不回显值（N5）。session_id 在 headless 形态恒必填
+ * ——客户端生成并用它订阅事件流，没有它订阅表无从建。
  */
 export function validateInvokeBody(
   body: unknown,
 ): { ok: true; command: SidecarCommand } | { ok: false; error: string } {
-  if (typeof body !== "object" || body === null) {
-    return { ok: false, error: "body must be a JSON object" };
-  }
-  const b = body as Record<string, unknown>;
-
-  if (!isInvokableCommand(b.cmd)) {
-    return { ok: false, error: `unknown or not invokable command: ${String(b.cmd)}` };
-  }
-
-  if (typeof b.session_id !== "string" || b.session_id.length === 0) {
-    // headless 约束：客户端生成并持有 sessionId（发送与事件订阅同一把钥匙）
-    return { ok: false, error: "session_id is required (client-owned in headless mode)" };
-  }
-
-  switch (b.cmd) {
-    case "send": {
-      if (typeof b.prompt !== "string" || b.prompt.length === 0) {
-        return { ok: false, error: "send requires non-empty prompt (string)" };
-      }
-      // metadata/mcp_headers 深校验（M3）：错误消息只报形状不回显值——
-      // mcp_headers 的值是凭据（N5）。
-      if (b.metadata !== undefined && !isPlainObject(b.metadata)) {
-        return { ok: false, error: "send.metadata must be a plain object (Record<string, unknown>)" };
-      }
-      if (b.mcp_headers !== undefined && parseMcpHeaders(b.mcp_headers) === undefined) {
-        return {
-          ok: false,
-          error: 'send.mcp_headers must be Record<serverName|"*", Record<headerName, string>>',
-        };
-      }
-      return { ok: true, command: b as SidecarCommand };
-    }
-    case "permission_response": {
-      if (typeof b.id !== "string" || b.id.length === 0) {
-        return { ok: false, error: "permission_response requires id (string)" };
-      }
-      if (typeof b.approved !== "boolean") {
-        return { ok: false, error: "permission_response requires approved (boolean)" };
-      }
-      return { ok: true, command: b as SidecarCommand };
-    }
-    case "set_permission_mode": {
-      if (typeof b.mode !== "string" || b.mode.length === 0) {
-        return { ok: false, error: "set_permission_mode requires mode (string)" };
-      }
-      return { ok: true, command: b as SidecarCommand };
-    }
-    case "set_model": {
-      if (typeof b.model !== "string" || b.model.length === 0) {
-        return { ok: false, error: "set_model requires model (string)" };
-      }
-      return { ok: true, command: b as SidecarCommand };
-    }
-    case "set_effort": {
-      if (typeof b.effort !== "string" || b.effort.length === 0) {
-        return { ok: false, error: "set_effort requires effort (string)" };
-      }
-      return { ok: true, command: b as SidecarCommand };
-    }
-    case "interrupt":
-    case "session_stop": {
-      return { ok: true, command: b as SidecarCommand };
-    }
-  }
+  return parseInvokeBody(body);
 }
 
 // ---- 事件路由：按会话隔离（headless 的机制②，多客户端互不见对方的会话事件） ----
@@ -266,7 +190,8 @@ function handleInvoke(manager: HeadlessManager, body: unknown, res: ServerRespon
     respondJson(res, 500, { ok: false, error: `command dispatch failed: ${String(e)}` });
     return;
   }
-  respondJson(res, 200, { ok: true }); // 已入队；真实结果经 GET /events 推送
+  // 已入队；真实结果经 GET /events 推送。protocol 随响应暴露（版本化三处之一）。
+  respondJson(res, 200, { ok: true, protocol: PROTOCOL_VERSION });
 }
 
 /** GET /events：SSE 流，按订阅键只收该会话的事件；断开自动摘除。 */
@@ -282,6 +207,8 @@ function handleEvents(url: URL, router: SessionEventRouter, res: ServerResponse)
     connection: "keep-alive",
   });
   res.flushHeaders(); // 立即发出响应头：SSE 无首帧前客户端的 response 事件不会触发
+  // 协议版本握手首帧（版本化三处之一）：客户端连上即知版本，不匹配可主动断开。
+  res.write(sseFrame({ type: "hello", protocol: PROTOCOL_VERSION, sessionId }));
   router.subscribe(sessionId, res);
   res.on("close", () => {
     router.unsubscribe(res);

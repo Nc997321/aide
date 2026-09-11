@@ -16,7 +16,7 @@ if (process.argv[2] === "test-mcp") {
 // 订阅。配置走 env：AIDE_HEADLESS_PORT（默认 18090）、AIDE_HEADLESS_TOKEN（鉴权，
 // 省略则只允许回环监听）。桌面路径零改动，本分支不触碰任何 stdio 初始化。
 if (process.argv[2] === "headless") {
-  const { startHeadlessServer } = await import("./headless-server.js");
+  const { startHeadlessServer, PROTOCOL_VERSION } = await import("./headless-server.js");
   const port = Number(process.env.AIDE_HEADLESS_PORT ?? "18090");
   const token = process.env.AIDE_HEADLESS_TOKEN || undefined;
   const handle = await startHeadlessServer({
@@ -29,7 +29,8 @@ if (process.argv[2] === "headless") {
     },
   });
   // 监听地址是宿主内部的安全基线（不鉴权禁对外），这里只报端口。
-  console.log(JSON.stringify({ type: "headless-listening", port: handle.port }));
+  // protocol 随 listening 行暴露（版本化三处之一，另两处见 headless-server.ts）。
+  console.log(JSON.stringify({ type: "headless-listening", port: handle.port, protocol: PROTOCOL_VERSION }));
   const shutdownHeadless = (): void => {
     // fire-and-forget 的收尾：close 失败要落日志可见，且信号驱动的退出必须真退出
     // （worker 的 SDK 连接是持久句柄，不 exit 进程会滞留——N4）。

@@ -11,15 +11,18 @@ import { get as httpGet } from "node:http";
 // ---- 核心层直测（纯逻辑，无 IO） ----
 
 describe("validateInvokeBody", () => {
-  it("非对象 body 拒绝", () => {
+  it("非对象 body 拒绝（null/字符串/数字/数组四臂）", () => {
     expect(validateInvokeBody(null).ok).toBe(false);
     expect(validateInvokeBody("send")).toEqual(expect.objectContaining({ ok: false }));
     expect(validateInvokeBody(42)).toEqual(expect.objectContaining({ ok: false }));
+    const arr = validateInvokeBody([{ cmd: "send", session_id: "s1", prompt: "p" }]);
+    expect(arr.ok).toBe(false); // 数组不是命令对象
+    if (!arr.ok) expect(arr.error).toContain("array");
   });
 
-  it("未知命令 / 桌面扩展通道命令拒绝", () => {
-    expect(validateInvokeBody({ cmd: "codegraph_result", session_id: "s1" }).ok).toBe(false);
-    expect(validateInvokeBody({ cmd: "update_permission_policy", session_id: "s1" })).toEqual(
+  it("未知命令 / 永关通道命令拒绝（codegraph_result：headless 无 Rust 回包方）", () => {
+    expect(validateInvokeBody({ cmd: "codegraph_result", session_id: "s1", request_id: "r", ok: true }).ok).toBe(false);
+    expect(validateInvokeBody({ cmd: "totally_unknown_cmd", session_id: "s1" })).toEqual(
       expect.objectContaining({ ok: false }),
     );
     expect(validateInvokeBody({ cmd: 42, session_id: "s1" })).toEqual(expect.objectContaining({ ok: false }));
@@ -253,7 +256,7 @@ describe("startHeadlessServer (http/sse integration)", () => {
       body: JSON.stringify({ cmd: "send", session_id: "s1", prompt: "hi", cwd: "/tmp" }),
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+    expect(await res.json()).toEqual({ ok: true, protocol: 1 });
     expect(commands).toHaveLength(1);
     expect(commands[0]).toMatchObject({ cmd: "send", session_id: "s1", prompt: "hi" });
   });
@@ -423,6 +426,111 @@ describe("startHeadlessServer security baseline", () => {
         body: JSON.stringify({ cmd: "send", session_id: "s", prompt: "p" }),
       });
       expect(goodAuth.status).toBe(200);
+    } finally {
+      await handle.close();
+    }
+  });
+});
+// ---- 正式版：zod schema（headless-schema.ts）+ 白名单对账 + 协议版本化 ----
+
+describe("validateInvokeBody — 正式版 schema（10 命令面）", () => {
+  const base = { session_id: "s1" };
+
+  it("白名单对账：10 命令最小合法体全过；codegraph_result 永关（与 schema union 一致性钉子）", () => {
+    const minimal: Record<string, object> = {
+      send: { prompt: "p" },
+      permission_response: { id: "p1", approved: true },
+      interrupt: {},
+      set_permission_mode: { mode: "auto" },
+      session_stop: {},
+      set_model: { model: "m" },
+      set_effort: { effort: "high" },
+      update_permission_policy: { policy: { revision: 1, rules: [] } },
+      stop_bg_task: { task_id: "t1" },
+      model_switch_confirm_decision: { confirm_id: "c1", approve: false },
+    };
+    for (const [cmd, fields] of Object.entries(minimal)) {
+      const v = validateInvokeBody({ cmd, ...base, ...fields });
+      expect(v.ok, `command ${cmd} should parse`).toBe(true);
+    }
+    expect(Object.keys(minimal)).toHaveLength(10);
+    // 桌面 Rust 回包通道永关：headless 无回包方，schema union 里没有它
+    expect(validateInvokeBody({ cmd: "codegraph_result", request_id: "r1", ok: true }).ok).toBe(false);
+  });
+
+  it("update_permission_policy：规则字段级校验（scope/effect/matcher 枚举收窄）", () => {
+    const rule = { id: "r1", scope: "user", order: 0, effect: "deny", tool: "Bash", matcher: { kind: "tool" } };
+    expect(validateInvokeBody({ cmd: "update_permission_policy", ...base, policy: { revision: 1, rules: [rule] } }).ok).toBe(true);
+    expect(validateInvokeBody({ cmd: "update_permission_policy", ...base, policy: { revision: 1, rules: [{ ...rule, scope: "galaxy" }] } }).ok).toBe(false);
+    expect(validateInvokeBody({ cmd: "update_permission_policy", ...base, policy: { revision: "x", rules: [] } }).ok).toBe(false);
+    // matcher 联合：path 缺 field 拒绝，bash mode 枚举收窄
+    expect(validateInvokeBody({ cmd: "update_permission_policy", ...base, policy: { revision: 1, rules: [{ ...rule, matcher: { kind: "path", file: "/a" } }] } }).ok).toBe(false);
+    expect(validateInvokeBody({ cmd: "update_permission_policy", ...base, policy: { revision: 1, rules: [{ ...rule, matcher: { kind: "bash", mode: "regex" } }] } }).ok).toBe(false);
+  });
+
+  it("stop_bg_task / model_switch_confirm_decision 必填字段缺失拒绝", () => {
+    expect(validateInvokeBody({ cmd: "stop_bg_task", ...base }).ok).toBe(false);
+    expect(validateInvokeBody({ cmd: "stop_bg_task", ...base, task_id: "" }).ok).toBe(false);
+    expect(validateInvokeBody({ cmd: "model_switch_confirm_decision", ...base, confirm_id: "c1" }).ok).toBe(false);
+    expect(validateInvokeBody({ cmd: "model_switch_confirm_decision", ...base, confirm_id: "c1", approve: "yes" }).ok).toBe(false);
+  });
+
+  it("send 深校验：images/automation/permission_policy 形状臂", () => {
+    expect(validateInvokeBody({ cmd: "send", ...base, prompt: "p", images: [{ data: "aa", mediaType: 42 }] }).ok).toBe(false);
+    expect(validateInvokeBody({ cmd: "send", ...base, prompt: "p", images: [{ data: "aa", mediaType: "image/png" }] }).ok).toBe(true);
+    expect(validateInvokeBody({
+      cmd: "send", ...base, prompt: "p",
+      automation: { task_id: "t", tools: ["*"], mcp_allowlist: [] }, // 缺 run_id
+    }).ok).toBe(false);
+    expect(validateInvokeBody({ cmd: "send", ...base, prompt: "p", permission_policy: { revision: 1 } }).ok).toBe(false); // 缺 rules
+  });
+
+  it("前向兼容：display 未知块形态与顶层未知字段都透传（loose 不剥不拒）", () => {
+    const v = validateInvokeBody({
+      cmd: "send", ...base, prompt: "p",
+      display: [{ type: "future-block", whatever: 1 }],
+      future_protocol_field: "x",
+    });
+    if (!v.ok) throw new Error("expected ok");
+    expect(v.command).toMatchObject({
+      display: [{ type: "future-block", whatever: 1 }],
+      future_protocol_field: "x",
+    });
+  });
+
+  it("N5：深校验失败的错误消息不回显凭据值", () => {
+    const v = validateInvokeBody({
+      cmd: "send", ...base, prompt: "p",
+      mcp_headers: { biz: { Authorization: "Bearer s3cret-value", Bad: 42 } },
+    });
+    expect(v.ok).toBe(false);
+    if (!v.ok) {
+      expect(v.error).not.toContain("s3cret-value");
+      expect(v.error).toContain("mcp_headers"); // 只报 path + code
+    }
+  });
+});
+
+describe("协议版本化（PROTOCOL_VERSION = 1）", () => {
+  it("SSE 订阅首帧是 hello：带 protocol 与 sessionId", async () => {
+    const handle = await startHeadlessServer({
+      port: 0,
+      createManager: () => ({ handleCommand: () => {}, shutdown: () => {} }),
+    });
+    try {
+      // 首个 data 帧即 hello（订阅前写入，先于任何会话事件）；收到即断开
+      const firstFrame = await new Promise<string>((resolve, reject) => {
+        const req = httpGet(`http://127.0.0.1:${handle.port}/events?sessionId=s-ver`, (res) => {
+          res.once("data", (c: Buffer) => {
+            req.destroy(); // promise 已 settle，destroy 引发的 error 事件被忽略
+            resolve(c.toString());
+          });
+        });
+        req.on("error", reject);
+      });
+      expect(firstFrame).toContain('"type":"hello"');
+      expect(firstFrame).toContain('"protocol":1');
+      expect(firstFrame).toContain('"sessionId":"s-ver"');
     } finally {
       await handle.close();
     }
