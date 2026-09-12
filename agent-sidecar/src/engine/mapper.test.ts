@@ -213,27 +213,32 @@ describe("mapSdkMessage streaming (includePartialMessages)", () => {
     ]);
   });
 
-  it("partial=on: does not forward stream_event text_delta (text 走整块)", () => {
+  it("partial=on: stream_event text_delta 逐字转发（2026-09-13 解禁正文流式）", () => {
     const events: ChatEvent[] = [];
     events.push(...mapPartial(streamTextDelta("你"), true));
     events.push(...mapPartial(streamTextDelta("好"), true));
-    expect(events).toEqual([]);
+    expect(events).toEqual([
+      { type: "text_delta", delta: "你" },
+      { type: "text_delta", delta: "好" },
+    ]);
   });
 
   it("partial=on: skips thinking block in assistant message (已被 stream_event 逐字发过, 去重)", () => {
     expect(mapPartial(assistantThinking("整块思考"), true)).toEqual([]);
   });
 
-  it("partial=on: assistant text block 整块照发", () => {
-    expect(mapPartial(assistantText("完整文本"), true)).toEqual([{ type: "text_delta", delta: "完整文本" }]);
+  it("partial=on: assistant text block 不再重发正文，只发空增量补模型徽标", () => {
+    // 正文已由 stream_event 逐字发过；整块路径留一个空 delta 让 withModel 把
+    // wire model 带出去（前端对空 delta 只盖戳不入块）。
+    expect(mapPartial(assistantText("完整文本"), true)).toEqual([{ type: "text_delta", delta: "" }]);
   });
 
-  it("partial=on: assistant text+thinking mixed, thinking 跳过、text 整块发", () => {
+  it("partial=on: assistant text+thinking mixed, thinking 跳过、text 只补戳", () => {
     const msg = {
       type: "assistant",
       message: { content: [{ type: "thinking", thinking: "思考" }, { type: "text", text: "正文" }] },
     };
-    expect(mapPartial(msg, true)).toEqual([{ type: "text_delta", delta: "正文" }]);
+    expect(mapPartial(msg, true)).toEqual([{ type: "text_delta", delta: "" }]);
   });
 
   it("partial=on: 空 thinking（display=omitted）两边都不发", () => {
@@ -244,9 +249,9 @@ describe("mapSdkMessage streaming (includePartialMessages)", () => {
   // 思考开关关闭（showThinking=false）：ollama 兼容端点不认 thinking 参数、模型总会
   // 出思考块（2026-08-21 mock 端点实锤：disabled 时请求体无 thinking 字段），API 层
   // 关不掉，只能在展示层剥——thinking_delta 流 / assistant 整块 / 子代理块全剥，text 照发。
-  it("showThinking=false: partial=on 剥 thinking_delta 流，assistant text 整块照发", () => {
+  it("showThinking=false: partial=on 剥 thinking_delta 流，text 只补戳", () => {
     expect(mapPartial(streamThinkingDelta("我在想"), true, undefined, undefined, false)).toEqual([]);
-    expect(mapPartial(assistantText("完整文本"), true, undefined, undefined, false)).toEqual([{ type: "text_delta", delta: "完整文本" }]);
+    expect(mapPartial(assistantText("完整文本"), true, undefined, undefined, false)).toEqual([{ type: "text_delta", delta: "" }]);
   });
 
   it("showThinking=false: partial=off 剥 assistant thinking 整块（ollama 主路径），text 照发", () => {

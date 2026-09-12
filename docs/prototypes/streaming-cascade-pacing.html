@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>B 渐显波 · 节奏控制 · 原型</title>
+<style>
+  /* ===== glass 主题 token（对齐 src/themes/glass.ts） ===== */
+  :root {
+    --bg-deep: #0a0b11;
+    --bg-base: rgba(17, 19, 29, .52);
+    --surface-default: rgba(255, 255, 255, .06);
+    --surface-hover: rgba(255, 255, 255, .1);
+    --text-primary: #eef0f8;
+    --text-secondary: #b9bdd0;
+    --text-muted: #7c8296;
+    --accent: #a5b8ff;
+    --agent-accent: #e0a3d8;
+    --danger: #f87171;
+    --border: rgba(255, 255, 255, .1);
+    --border-subtle: rgba(255, 255, 255, .06);
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --ease-t: .16s cubic-bezier(.2, .8, .2, 1);
+    color-scheme: dark;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    height: 100vh;
+    display: flex;
+    overflow: hidden;
+    color: var(--text-primary);
+    font: 14px/1.7 "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    background:
+      radial-gradient(560px 380px at 10% -8%, rgba(124, 108, 255, .32), transparent 65%),
+      radial-gradient(520px 420px at 96% 6%, rgba(64, 190, 220, .22), transparent 65%),
+      radial-gradient(640px 340px at 60% 112%, rgba(210, 110, 190, .16), transparent 70%),
+      var(--bg-deep);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ===== 左侧控制栏（仅原型用） ===== */
+  .rail {
+    width: 268px; flex-shrink: 0;
+    padding: 16px 14px;
+    display: flex; flex-direction: column; gap: 13px;
+    overflow-y: auto;
+    background: var(--bg-base);
+    border-right: 1px solid var(--border);
+    backdrop-filter: blur(20px) saturate(150%);
+  }
+  .rail h1 { font-size: 14px; font-weight: 600; }
+  .rail h2 { font-size: 12px; font-weight: 600; color: var(--text-secondary); letter-spacing: .04em; }
+  .rail p { font-size: 12px; line-height: 1.65; color: var(--text-muted); }
+  .rail .seg { display: flex; flex-wrap: wrap; gap: 5px; }
+  .rail button {
+    flex: 1; min-width: 62px;
+    padding: 7px 6px;
+    font: inherit; font-size: 12px;
+    color: var(--text-primary);
+    background: var(--surface-default);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: background var(--ease-t);
+  }
+  .rail button:hover { background: var(--surface-hover); }
+  .rail button.on { background: rgba(150, 170, 255, .22); border-color: rgba(150, 170, 255, .4); }
+
+  .meter {
+    padding: 9px 11px;
+    border-radius: var(--radius-md);
+    background: rgba(0, 0, 0, .28);
+    border: 1px solid var(--border-subtle);
+    font: 12px/1.9 "JetBrains Mono", Consolas, monospace;
+  }
+  .meter b { font-weight: 600; color: var(--accent); }
+  .meter .warn { color: var(--danger); }
+
+  /* ===== 面板 ===== */
+  main {
+    flex: 1;
+    padding: 16px;
+    overflow-y: auto;
+    display: flex; flex-direction: column; gap: 11px;
+  }
+  .pane {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: rgba(24, 26, 38, .48);
+    backdrop-filter: blur(20px) saturate(150%);
+    padding: 12px 14px 14px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .38), inset 0 1px 0 rgba(255, 255, 255, .12);
+  }
+  .pane.rec { border-color: rgba(150, 170, 255, .38); }
+  .pane.reject { border-color: rgba(248, 113, 113, .3); }
+
+  .head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 4px; }
+  .head .name { font-size: 13px; font-weight: 600; }
+  .head .tag {
+    font-size: 11px; padding: 1px 7px; border-radius: 99px;
+    background: rgba(150, 170, 255, .18); color: var(--accent);
+  }
+  .head .tag.bad { background: rgba(248, 113, 113, .16); color: var(--danger); }
+  .head .note { font-size: 12px; color: var(--text-muted); }
+
+  /* 实时读数条 */
+  .stats {
+    display: flex; gap: 16px; flex-wrap: wrap;
+    margin-bottom: 8px;
+    font: 11px/1.6 "JetBrains Mono", Consolas, monospace;
+    color: var(--text-muted);
+  }
+  .stats b { font-weight: 600; color: var(--text-secondary); }
+  .stats b.hot { color: var(--accent); }
+  .stats b.bad { color: var(--danger); }
+
+  .bubble {
+    padding: 10px 13px;
+    border-radius: var(--radius-md);
+    background: var(--surface-default);
+    border-left: 2px solid var(--agent-accent);
+    min-height: 84px;
+  }
+  .msg { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+  /* ============================================================
+     B · 渐显波本体 —— 每个到达块一个 span，进场 = 白闪 + 淡入
+     ============================================================ */
+  .chunk { animation: wave-in .46s cubic-bezier(.22, .75, .3, 1) both; }
+  @keyframes wave-in {
+    from { opacity: 0; color: #ffffff; }
+    to   { opacity: 1; color: var(--text-primary); }
+  }
+</style>
+</head>
+<body>
+
+<aside class="rail">
+  <h1>B · 渐显波 —— 节奏控制</h1>
+  <p>四个面板吃**同一串到达事件**（每 40ms 一拍，对齐 sidecar 的 FLUSH_INTERVAL_MS），只有节奏策略不同。</p>
+
+  <h2>流量档位</h2>
+  <div class="seg" id="profile">
+    <button data-p="slow">慢 18 字/s</button>
+    <button data-p="mixed" class="on">混合波形</button>
+    <button data-p="fast">快 190 字/s</button>
+    <button data-p="burst">单次大爆发</button>
+  </div>
+
+  <h2>缓冲窗口 horizon</h2>
+  <div class="seg" id="horizon">
+    <button data-h="200">200ms</button>
+    <button data-h="350" class="on">350ms</button>
+    <button data-h="600">600ms</button>
+  </div>
+  <p>公式：速率 = clamp(积压 ÷ horizon, 20, 180) 字/秒。<b>horizon 就是稳态落后时间</b>——模型快了积压就厚、放得就快，不用手调。</p>
+
+  <h2>操作</h2>
+  <div class="seg"><button id="replay">重播</button><button id="reset">清零计量</button></div>
+
+  <h2>实测</h2>
+  <div class="meter">
+    <div>FPS <b id="fps">–</b></div>
+    <div>长任务 <b id="ltc">0</b> 次 / 最长 <b id="ltm">0</b> ms <span id="ltw"></span></div>
+  </div>
+</aside>
+
+<main id="grid"></main>
+
+<script>
+/* ============================================================
+   源文本与流量波形
+   ============================================================ */
+const TEXT =
+  "根因不是 emit。把 20 份冻结报告铺开看：探针延迟中位数 0.08 ms，pending 恒为 0，" +
+  "Windows 的 IsHungAppWindow 全程 false。真正被堵住的是渲染进程——16 份报告里 " +
+  "msedgewebview2.exe 烧到 106–240% CPU，longTask 22 到 113 次。已经修掉 4 个 O(n²) 渲染点。";
+
+const TICK_MS = 40;            // 对齐 deltaCoalescer 的 FLUSH_INTERVAL_MS
+const CHUNK_CHARS = 2;         // 粒度归一的块大小
+const STAGGER_MS = 12;         // 同一次到达内，块与块之间的错峰
+const STAGGER_CAP_MS = 200;    // 错峰总摊开的上限
+const MIN_CPS = 20;            // 自适应缓冲的最低释放速率（字/秒）
+const MAX_CPS = 180;           // 最高释放速率（字/秒）——再快就不追了，交给跳帧
+const MAX_PER_FRAME = 4;       // 每帧释放上限（字）
+const SKIP_THRESHOLD = 800;    // 积压超过这么多字：不做动画，直接落定
+const HOLD_MS = 1200;
+
+/**
+ * 波形：给定已流逝秒数，返回此刻模型每秒吐多少字。
+ * 分段是按 TEXT.length 反推的——要让整段约 5s 流完，四段波形才有机会各走一遍；
+ * 否则第一段快波就把文本流光了，后面几段全是空转。
+ */
+const PROFILES = {
+  slow: { rate: () => 18, baselineMs: 7900 },
+  fast: { rate: () => 190, baselineMs: 750 },
+  // 某一拍突然倒进来一大段（工具结果 / 子代理输出那种）。
+  // 爆发量要留得住尾巴：一拍把全文倒光的话，源立刻结束 → 触发收尾 flush →
+  // 积压瞬间清零，这档就永远看不到缓冲在干什么了。
+  burst: { rate: (t) => (t > 0.9 && t < 0.96 ? 1750 : 25), baselineMs: 3900 },
+  mixed: {
+    rate: (t) => {
+      if (t < 1.2) return 12;      // 起手慢
+      if (t < 2.2) return 75;      // 提到速度
+      if (t < 3.4) return 8;       // 卡住/思考
+      if (t < 4.4) return 30;
+      return 15;
+    },
+    baselineMs: 5300,
+  },
+};
+let profileKey = "mixed";
+let horizonMs = 350;
+
+/* ============================================================
+   通用小件
+   ============================================================ */
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/** 把一段文本按 CHUNK_CHARS 切成块。 */
+function toChunks(text) {
+  const out = [];
+  for (let i = 0; i < text.length; i += CHUNK_CHARS) out.push(text.slice(i, i + CHUNK_CHARS));
+  return out;
+}
+
+/* ============================================================
+   四种节奏策略
+   每个策略只实现两个口子：onArrive(收到一段) / tick(每帧) / onEnd(源结束)
+   ============================================================ */
+function makeRaw(pane) {
+  // 原样到达：一次到达 = 一个块。块有多大就闪多大。
+  return {
+    onArrive(chunk, t) {
+      pane.pushSpan(chunk, 0);
+      pane.markArrived(chunk.length, t);
+      pane.markShown(chunk.length, t);
+    },
+    tick() {},
+    onEnd() {},
+  };
+}
+
+function makeNormalized(pane) {
+  // 粒度归一 + 块内错峰：零缓冲，只是把到达的长块摊成一道波。
+  return {
+    onArrive(chunk, t) {
+      const parts = toChunks(chunk);
+      // 错峰间隔：块少就按 STAGGER_MS，块多则压缩，保证总摊开不超过上限
+      const step = Math.min(STAGGER_MS, STAGGER_CAP_MS / Math.max(1, parts.length));
+      parts.forEach((p, i) => pane.pushSpan(p, i * step));
+      pane.markArrived(chunk.length, t);
+      pane.markShown(chunk.length, t);
+    },
+    tick() {},
+    onEnd() {},
+  };
+}
+
+function makeAdaptive(pane) {
+  // 自适应播放缓冲：到达进 backlog，释放速率随积压自适应，稳态落后 = horizon。
+  let arrived = 0;
+  let released = 0;
+  let acc = 0;
+  let ended = false;
+  return {
+    onArrive(chunk, t) {
+      arrived += chunk.length;
+      pane.markArrived(chunk.length, t);
+      // 大积压跳帧：动画已经不是重点，别让用户等一个读不过来的东西
+      if (arrived - released > SKIP_THRESHOLD) {
+        pane.pushSpan(TEXT.slice(released, arrived), 0, true);
+        released = arrived;
+        acc = 0;
+      }
+    },
+    tick(dt) {
+      if (released >= arrived) return;
+      const gap = arrived - released;
+      // 收尾：源已结束就全量 flush，绝不拖着让"已完成"的消息继续吐字
+      if (ended) {
+        for (const part of toChunks(TEXT.slice(released, arrived))) pane.pushSpan(part, 0);
+        pane.markShown(gap, performance.now());
+        released = arrived;
+        acc = 0;
+        return;
+      }
+      const speed = clamp(gap / (horizonMs / 1000), MIN_CPS, MAX_CPS);
+      acc += speed * dt;
+      // 单帧上限必须按 dt 折算，不能是固定字数。
+      // 固定 N 字/帧的隐含吞吐是 N × 帧率：4 字/帧在 60fps 下是 240 字/s，
+      // 掉到 10fps 就只剩 40 字/s——低于到达速率时积压会无上限增长，落后再也追不回来。
+      const cap = Math.max(1, Math.ceil(MAX_CPS * dt));
+      const n = Math.min(Math.floor(acc), cap, gap);
+      if (n <= 0) return;
+      acc -= n;
+      for (const part of toChunks(TEXT.slice(released, released + n))) pane.pushSpan(part, 0);
+      released += n;
+      pane.markShown(n, performance.now());
+    },
+    onEnd(t) {
+      ended = true;
+      pane.flag("源结束 → 立即 flush");
+      pane.markShown(0, t);
+    },
+  };
+}
+
+function makeFixedSlow(pane) {
+  // 反例：不管积压多少，恒定 30 字/秒。落后无上限增长。
+  const CPS = 30;
+  let arrived = 0;
+  let released = 0;
+  let acc = 0;
+  return {
+    onArrive(chunk, t) {
+      arrived += chunk.length;
+      pane.markArrived(chunk.length, t);
+    },
+    tick(dt) {
+      if (released >= arrived) return;
+      acc += CPS * dt;
+      const n = Math.min(Math.floor(acc), arrived - released);
+      if (n <= 0) return;
+      acc -= n;
+      for (const part of toChunks(TEXT.slice(released, released + n))) pane.pushSpan(part, 0);
+      released += n;
+      pane.markShown(n, performance.now());
+    },
+    onEnd() {},
+  };
+}
+
+const SPECS = [
+  { key: "baseline", name: "现状 · 打字机", note: "逐字 append，无动画（基线对照）", make: null },
+  { key: "raw", name: "B · 原样到达", note: "一次到达就是一个块——40ms 里攒了多少字就闪多大一片", make: makeRaw },
+  { key: "norm", name: "B · 粒度归一 + 块内错峰", tag: "零延迟", rec: true,
+    note: "切 2 字/块，同批错峰 12ms——不发缓冲也长成一道波", make: makeNormalized },
+  { key: "buf", name: "B · 粒度归一 + 自适应缓冲", tag: "稳态落后 = horizon", rec: true,
+    note: "在归一之上加播放缓冲，让块的出现节奏均匀", make: makeAdaptive },
+  { key: "fixed", name: "B · 固定 30 字/秒", tag: "反例", bad: true,
+    note: "不管积压恒定慢放——落后无上限，看它怎么越欠越多", make: makeFixedSlow },
+];
+
+/* ============================================================
+   面板
+   ============================================================ */
+function createPane(spec) {
+  const el = document.createElement("section");
+  el.className = "pane" + (spec.rec ? " rec" : "") + (spec.bad ? " reject" : "");
+  el.innerHTML =
+    '<div class="head"><span class="name"></span>' +
+    (spec.tag ? '<span class="tag' + (spec.bad ? " bad" : "") + '"></span>' : "") +
+    '<span class="note"></span></div>' +
+    '<div class="stats">' +
+    '<span>落后源 <b class="lag">0</b> ms</span>' +
+    '<span>积压 <b class="gap">0</b> 字</span>' +
+    '<span>已显示 <b class="shown">0</b> / <b class="total">0</b> 字</span>' +
+    '<span class="flag"></span></div>' +
+    '<div class="bubble"><div class="msg"></div></div>';
+
+  el.querySelector(".name").textContent = spec.name;
+  el.querySelector(".note").textContent = spec.note;
+  if (spec.tag) el.querySelector(".tag").textContent = spec.tag;
+  const q = (s) => el.querySelector(s);
+
+  const pane = {
+    el, spec,
+    msg: q(".msg"),
+    ui: { lag: q(".lag"), gap: q(".gap"), shown: q(".shown"), total: q(".total"), flag: q(".flag") },
+    arrived: 0, shown: 0, arrivalTimes: [], lastSample: { t: performance.now(), n: 0 }, cps: 0,
+    strategy: null,
+  };
+
+  /** 追加一个块。skip 用于跳帧——不加动画，直接落定。 */
+  pane.pushSpan = (text, delayMs, skip) => {
+    if (!text) return;
+    const span = document.createElement("span");
+    span.className = "chunk";
+    if (skip) span.style.animation = "none";
+    else if (delayMs > 0) span.style.animationDelay = delayMs + "ms";
+    span.textContent = text;
+    pane.msg.appendChild(span);
+  };
+
+  pane.markArrived = (n, t) => {
+    for (let i = 0; i < n; i++) pane.arrivalTimes.push(t);
+    pane.arrived += n;
+  };
+
+  pane.markShown = (n, t) => {
+    pane.shown += n;
+    pane.lastSample.n += n;
+  };
+
+  pane.flag = (text) => { pane.ui.flag.textContent = "· " + text; };
+
+  pane.sample = (now) => {
+    if (now - pane.lastSample.t >= 400) {
+      pane.cps = Math.round((pane.lastSample.n * 1000) / (now - pane.lastSample.t));
+      pane.lastSample = { t: now, n: 0 };
+    }
+    // 落后 = 最老的「还没显示」的那个字已经等了多久。
+    // 不能用"最后一个已显示的字"来算——源一旦结束时间戳就不再更新，
+    // 那个口径会一直往上爬，量到的是"跑完之后干等了多久"，四个面板会得出同一个假数。
+    const idx = pane.shown;
+    const lag = pane.shown < pane.arrived && idx < pane.arrivalTimes.length
+      ? now - pane.arrivalTimes[idx]
+      : 0;
+    pane.ui.lag.textContent = Math.max(0, Math.round(lag));
+    pane.ui.lag.className = "lag" + (lag > horizonMs * 2.5 ? " bad" : lag > 60 ? " hot" : "");
+    const gap = pane.arrived - pane.shown;
+    pane.ui.gap.textContent = gap;
+    pane.ui.gap.className = "gap" + (gap > 120 ? " bad" : gap > 0 ? " hot" : "");
+    pane.ui.shown.textContent = pane.shown;
+    pane.ui.total.textContent = pane.arrived;
+  };
+
+  pane.reset = () => {
+    pane.msg.textContent = "";
+    pane.arrived = 0; pane.shown = 0; pane.arrivalTimes = []; pane.cps = 0;
+    pane.lastSample = { t: performance.now(), n: 0 };
+    pane.ui.flag.textContent = "";
+    pane.sample(performance.now());
+  };
+  return pane;
+}
+
+/* ============================================================
+   基线（打字机）：不吃到达事件，自己在同一条时间轴上匀速吐
+   ============================================================ */
+function runBaseline(pane, totalMs) {
+  const step = 2;                                  // 与块粒度一致，保证收尾时间对齐
+  const tickMs = (totalMs * step) / TEXT.length;
+  let i = 0;
+  pane.timer = setInterval(() => {
+    if (i >= TEXT.length) { clearInterval(pane.timer); return; }
+    pane.pushSpan(TEXT.slice(i, i + step), 0, true);
+    pane.markArrived(step, performance.now());
+    pane.markShown(step, performance.now());
+    i += step;
+  }, tickMs);
+}
+
+/* ============================================================
+   共享流量源：所有面板吃同一串到达事件
+   ============================================================ */
+const grid = document.getElementById("grid");
+const panes = SPECS.map((spec) => {
+  const pane = createPane(spec);
+  grid.appendChild(pane.el);
+  return pane;
+});
+const btPanes = panes.filter((p) => p.spec.key !== "baseline");
+
+let srcTimer = null;
+let srcStart = 0;
+let srcIndex = 0;
+let baselineMs = PROFILES[profileKey].baselineMs;
+
+function resetAll() {
+  clearTimeout(srcTimer);
+  for (const p of panes) {
+    clearInterval(p.timer);
+    p.reset();
+    p.strategy = p.spec.make ? p.spec.make(p) : null;
+  }
+}
+
+function startSource() {
+  resetAll();
+  srcStart = performance.now();
+  srcIndex = 0;
+  runBaseline(panes[0], baselineMs);
+
+  const step = () => {
+    const t = (performance.now() - srcStart) / 1000;
+    const rate = PROFILES[profileKey].rate(t);
+    let n = Math.max(1, Math.round(rate * (TICK_MS / 1000)));
+    n = Math.min(n, TEXT.length - srcIndex);
+    if (n <= 0) {
+      const now = performance.now();
+      for (const p of btPanes) p.strategy.onEnd(now);
+      return;
+    }
+    const chunk = TEXT.slice(srcIndex, srcIndex + n);
+    srcIndex += n;
+    const now = performance.now();
+    for (const p of btPanes) p.strategy.onArrive(chunk, now);
+    srcTimer = setTimeout(step, TICK_MS);
+  };
+  step();
+}
+
+/* 每帧：先驱动四个策略，再采样读数 */
+let lastFrame = performance.now();
+function frame(now) {
+  // 封顶放宽到 250ms：这个 dt 是缓冲速率的积分基准，封得越紧、低帧率下少放得越多，
+  // 落后就越追不回来。250ms 只用来兜住"切走标签页 / 长卡顿"回来时的一次性冲击。
+  const dt = Math.min(0.25, (now - lastFrame) / 1000);
+  lastFrame = now;
+  for (const p of btPanes) p.strategy.tick(dt);
+  for (const p of panes) p.sample(now);
+  requestAnimationFrame(frame);
+}
+
+/* ============================================================
+   控制
+   ============================================================ */
+document.getElementById("profile").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-p]");
+  if (!btn) return;
+  profileKey = btn.dataset.p;
+  baselineMs = PROFILES[profileKey].baselineMs;
+  for (const b of e.currentTarget.querySelectorAll("button")) b.classList.toggle("on", b === btn);
+  startSource();
+});
+
+document.getElementById("horizon").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-h]");
+  if (!btn) return;
+  horizonMs = Number(btn.dataset.h);
+  for (const b of e.currentTarget.querySelectorAll("button")) b.classList.toggle("on", b === btn);
+  startSource();
+});
+
+document.getElementById("replay").addEventListener("click", startSource);
+
+/* ============================================================
+   帧率 / 长任务
+   ============================================================ */
+const fpsEl = document.getElementById("fps");
+const ltcEl = document.getElementById("ltc");
+const ltmEl = document.getElementById("ltm");
+const ltwEl = document.getElementById("ltw");
+let frames = 0;
+let lastSample = performance.now();
+let ltCount = 0;
+let ltMax = 0;
+
+function renderLt() {
+  ltcEl.textContent = ltCount;
+  ltmEl.textContent = Math.round(ltMax);
+  ltwEl.innerHTML = ltMax > 50 ? '<span class="warn">⚠</span>' : "";
+}
+
+requestAnimationFrame(function tick(now) {
+  frames += 1;
+  if (now - lastSample >= 500) {
+    const fps = Math.round((frames * 1000) / (now - lastSample));
+    fpsEl.textContent = fps;
+    fpsEl.className = fps < 50 ? "warn" : "";
+    frames = 0;
+    lastSample = now;
+  }
+  requestAnimationFrame(tick);
+});
+
+try {
+  new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) { ltCount += 1; ltMax = Math.max(ltMax, entry.duration); }
+    renderLt();
+  }).observe({ entryTypes: ["longtask"] });
+} catch {
+  ltwEl.textContent = "（不支持 longtask）";
+}
+
+document.getElementById("reset").addEventListener("click", () => {
+  ltCount = 0; ltMax = 0; renderLt();
+});
+
+/* ============================================================
+   启动
+   ============================================================ */
+requestAnimationFrame(frame);
+
+// 自动循环：一轮跑完留点时间看残留的积压，再重播。
+// restarting 闸门是必须的——setInterval 每 300ms 看一次，不加锁会在 HOLD_MS
+// 窗口里反复排程，叠出好几次并发重播，把面板搅成乱码。
+let restarting = false;
+setInterval(() => {
+  if (restarting) return;
+  const done = btPanes.every((p) => p.arrived >= TEXT.length && p.shown >= p.arrived);
+  if (!done) return;
+  restarting = true;
+  setTimeout(() => { restarting = false; startSource(); }, HOLD_MS);
+}, 300);
+
+startSource();
+</script>
+</body>
+</html>

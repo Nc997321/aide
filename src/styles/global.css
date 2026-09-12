@@ -152,6 +152,20 @@ html, body, #app {
   opacity: 1;
 }
 
+/* ── 流式渐显波（正文 StreamingText / 思考块 ThinkingBlock 共用） ──
+   新到达的一片字淡入，密集重叠成一"道"推过去的波。只碰 opacity——合成层属性，
+   不用为一个槽位去改全部主题文件（glass 正文本身已是 #eef0f8，白闪几乎看不见）。 */
+.aide-wave-chunk {
+  animation: aide-wave-in 0.46s cubic-bezier(0.22, 0.75, 0.3, 1) both;
+}
+@keyframes aide-wave-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aide-wave-chunk { animation: none; }
+}
+
 /* ── Markdown 正文（.msg-text：聊天消息 / btw 抽屉共用） ──
    与 utils/markdown.ts 的 marked 渲染输出配套。原定义在 ChatMessage.vue 的
    scoped 块里，btw 抽屉复用时提到全局——选择器语义不变，仅去掉 scoped 限定。 */

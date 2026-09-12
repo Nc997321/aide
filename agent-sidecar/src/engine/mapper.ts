@@ -510,14 +510,24 @@ function mapMainThreadMessage(msg: any, emit: (e: ChatEvent) => void, deps: Mapp
     return;
   }
 
-  // partial=on 时的逐字增量。主会话只放 thinking 流式——thinking_delta 逐字转发；
-  // text_delta 仍走下方 assistant 整块（text 不流式，避开历史 partial 卡死坑）。
+  // partial=on 时的逐字增量：thinking 与 text 都逐字转发。
+  //
+  // text 曾长期只走下方 assistant 整块（"B 方案 text 不流式"），关的理由是怕重演
+  // 历史那次卡死——根因是前端每个增量把整块正文重跑 markdown 再整块换 innerHTML。
+  // 2026-09-13 解禁：前端已把正文切成「前缀定格 + 有界尾巴」（StreamingText /
+  // streamSplit），完成段落不再重渲、尾部有段落级上界，重解析范围不再随全文增长。
+  // 模型徽标不受影响——整块路径仍在，只改为发空增量补戳（见下方 text 分支）。
   // partial=off（btw/title）SDK 不发 stream_event，本分支不触发。
   if (msg.type === "stream_event") {
     if (!partialMode) return;
     const ev = msg.event;
-    if (ev?.type === "content_block_delta" && ev.delta?.type === "thinking_delta" && ev.delta.thinking && showThinking) {
+    if (ev?.type !== "content_block_delta") return;
+    if (ev.delta?.type === "thinking_delta" && ev.delta.thinking && showThinking) {
       emit({ type: "thinking_delta", delta: ev.delta.thinking });
+      return;
+    }
+    if (ev.delta?.type === "text_delta" && ev.delta.text) {
+      emit({ type: "text_delta", delta: ev.delta.text });
     }
     return;
   }
@@ -536,10 +546,12 @@ function mapMainThreadMessage(msg: any, emit: (e: ChatEvent) => void, deps: Mapp
     };
     for (const block of msg.message.content) {
       if (block.type === "text") {
-        // text 整块：partial=on 时 stream_event 的 text_delta 被 mapper 丢弃（B 方案
-        // text 不流式），text 只从完整 assistant message 整块发；partial=off 时 SDK
-        // 不发 stream_event，也是整块发。两条路都落到这里，是 text 的唯一来源。
-        if (block.text) emit(withModel({ type: "text_delta", delta: block.text }));
+        // partial=on：正文已由 stream_event 的 text_delta 逐字发过，这里**不再重发
+        // 正文**，只借一个空增量把模型徽标补上——徽标走 isAdoptableAssistantModel
+        // 推导，而那是 wire model 唯一可信的来源，不能跟着整块一起去掉。
+        // 空增量只盖戳不入块（见 events.ts 的 text_delta 分支）。
+        // partial=off（btw/title）没有 stream_event，仍是正文的唯一来源，整块发。
+        if (block.text) emit(withModel({ type: "text_delta", delta: partialMode ? "" : block.text }));
         continue;
       } else if (block.type === "thinking") {
         // 主线程 thinking block 整块。partial=on 时已被 stream_event 的 thinking_delta

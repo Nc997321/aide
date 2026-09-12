@@ -1827,3 +1827,71 @@ describe("回填注册表（P0-2：Map O(1) 查找替代 flatMap）", () => {
     expect(__pendingEmptyForTest("uuid-a")).toBe(true); // 都已注销
   });
 });
+
+/** 只看 assistant 消息的块——.flatMap 会把用户气泡自己的 text 块一起数进来。 */
+function assistantBlocks(chat: ReturnType<typeof useChatSession>) {
+  return chat.messages.value.find((m) => m.role === "assistant")?.blocks ?? [];
+}
+
+describe("正文逐字流式 + 空增量补戳（2026-09-13）", () => {
+  // 本块是文件里第一个 describe 的兄弟，不继承它的 beforeEach——
+  // 不重置的话 store 会在用例之间累积（表现为块数越跑越多）
+  beforeEach(() => {
+    __resetForTest();
+    invokeMock.mockClear();
+    invokeMock.mockResolvedValue(undefined);
+    const { state, removeSessionState } = useSessionState();
+    for (const k of Object.keys(state)) removeSessionState(k);
+  });
+
+  it("逐字 text_delta 累积到同一个 text 块（不每帧新建块）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await sendViaSidecar(chat, "uuid-a", "q");
+
+    emit({ type: "text_delta", delta: "逐", session_id: "uuid-a" });
+    emit({ type: "text_delta", delta: "字", session_id: "uuid-a" });
+    emit({ type: "text_delta", delta: "正文", session_id: "uuid-a" });
+    await flush();
+
+    // 只看 assistant —— flatMap 会把用户气泡自己的 text 块也数进来
+    const texts = assistantBlocks(chat).filter((b) => b.type === "text");
+    expect(texts.length).toBe(1);
+    expect((texts[0] as { text: string }).text).toBe("逐字正文");
+  });
+
+  it("空 text_delta 只盖模型徽标，不入空 text 块", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await sendViaSidecar(chat, "uuid-a", "q");
+
+    // 逐字期不带 model（stream_event 里没有），收尾时整块路径用空增量把 wire model 带过来
+    emit({ type: "text_delta", delta: "逐字正文", session_id: "uuid-a" });
+    emit({ type: "text_delta", delta: "", model: "wire-model", modelLabel: "展示名", session_id: "uuid-a" });
+    await flush();
+
+    const texts = assistantBlocks(chat).filter((b) => b.type === "text");
+    expect(texts.length).toBe(1); // 没有凭空多出空块
+    expect((texts[0] as { text: string }).text).toBe("逐字正文");
+
+    const msg = chat.messages.value.find((m) => m.role === "assistant");
+    expect(msg?.model).toBe("wire-model");
+    expect(msg?.modelLabel).toBe("展示名");
+  });
+
+  it("只在 tool_use 之后到达的空增量也不新建 text 块（块数不漂移）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await sendViaSidecar(chat, "uuid-a", "q");
+
+    emit({ type: "text_delta", delta: "先说话", session_id: "uuid-a" });
+    emit({ type: "tool_use_start", id: "t1", name: "Bash", input: { command: "ls" }, session_id: "uuid-a" });
+    emit({ type: "text_delta", delta: "", model: "wire-model", session_id: "uuid-a" });
+    await flush();
+
+    expect(assistantBlocks(chat).map((b) => b.type)).toEqual(["text", "tool_call"]);
+  });
+});

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from "vue";
 import type { TruncatedInfo } from "@/types/chat";
+import { useStreamChunks } from "@/composables/useStreamChunks";
 /** 主线程思考块——partial=on 时 sidecar 把 thinking_delta 逐字转发（流式），partial=off /
  *  历史回放走 thinking 整块。视觉对齐子代理 .sa-thinking（灰斜体小字 + agentAccent 色调），独立成
  *  组件与 ToolCallBlock / SubagentCallBlock 同级。
@@ -13,16 +14,10 @@ import type { TruncatedInfo } from "@/types/chat";
  *  性能红线（freeze-1788224842632 长任务环链坐实）：thinking delta 每条都会整段替换
  *  thinking-body 的文本节点，浏览器对全文重排版——overflow:hidden 只裁显示不省排版，
  *  长思考下「每条 delta 一次 O(全文) 全文档布局」= 主线程 230-550ms 连续长任务
- *  （切换回运行中的长会话时集中爆发）。故流式期渲染尾部窗口（streamingBody），钉底
- *  读数每帧合并一次（schedulePin）。 */
+ *  （切换回运行中的长会话时集中爆发）。现在的对策见下方 useStreamChunks 段：
+ *  正文切成「稳定的前缀文本节点 + 有界的尾部 span」，重排范围从窗口上限缩到尾巴上界；
+ *  钉底读数仍按帧合并一次（schedulePin）。 */
 const props = defineProps<{ text: string; truncated?: TruncatedInfo; streaming?: boolean }>();
-
-/** 流式渲染窗口（UTF-16 码元）：只在尾部保留这么多字符。选字符而非字节——
- *  排版成本的直接量纲是字形数（字符是它的直接代理）；且 JS 字符串没有 O(1) 的
- *  UTF-8 字节长，按字节窗口化需每条 delta 现算全文字节，等于把 O(n²) 从排版
- *  换到编码上。可见窗口只有 320px（≈十几行），逐字可见内容不受影响；
- *  头部「xx 字」计数始终显示全文真实长度。 */
-const STREAM_TAIL_CHARS = 8000;
 
 /** 用户是否手动 toggle 过——一旦操作，details 开合完全由用户决定，流式默认不再覆盖。 */
 const userOverride = ref(false);
@@ -30,16 +25,24 @@ const userOpen = ref(false);
 const open = computed(() => (userOverride.value ? userOpen.value : !!props.streaming));
 const bodyRef = ref<HTMLDivElement | undefined>();
 
-/** 流式期渲染体：超窗截尾（钉底可见的恰是尾部），前缀 … 指代溢出部分；
- *  非流式（含结束后）渲染全文——折叠态 details 子树不排版，全文布局只付一次。
- *  切点落在低代理上时右移一位，保住完整代理对（emoji 等），代价可容忍少 1 字符。 */
-const streamingBody = computed(() => {
-  if (!props.streaming || props.text.length <= STREAM_TAIL_CHARS) return props.text;
-  const cut = props.text.length - STREAM_TAIL_CHARS;
-  const code = props.text.charCodeAt(cut);
-  const from = cut < props.text.length - 1 && code >= 0xdc00 && code <= 0xdfff ? cut + 1 : cut;
-  return "…" + props.text.slice(from);
-});
+/** 尾巴块数上界。可见窗口 320px ≈ 17 行 ≈ 680 字，800 字（400 块）留足余量；
+ *  超出即把最老的块批量并进 settled（见 useStreamChunks 的 drain）。 */
+const TAIL_MAX_CHUNKS = 400;
+
+/** 流式期把思考正文切成「已落定前缀 + 逐块淡入的尾巴」。
+ *
+ *  思考是纯文本，没有 markdown 安全边界问题——切在哪都不影响渲染，这与正文
+ *  （必须切在围栏外空行）不同，所以这里只按块数上界滚动退役。
+ *
+ *  顺带也是性能修复：本组件头部的 freeze-1788224842632 记录的长任务来自
+ *  「每条 delta 整段替换 thinking-body 的文本节点 → 浏览器对全文重排版」。
+ *  改为「稳定的前缀文本节点 + 有界的尾部 span」后，重排范围从窗口上限（8000 字）
+ *  缩到尾巴上界（800 字），前缀只在批量退役时才重写一次。
+ *
+ *  非流式时把源锁成空串：历史消息挂载时不必白算一遍块表（模板那时走
+ *  streamingBody 全文渲染，根本不看块表）。 */
+const streamSource = computed(() => (props.streaming ? props.text : ""));
+const { settled, clipped, chunks } = useStreamChunks(streamSource, { maxChunks: TAIL_MAX_CHUNKS });
 
 // 流式期：thinking-body 限高 320px + 钉底跟随（逐字增长时内部滚到底），让用户看到
 // 最新生成的内容；否则视窗停在顶部，新内容在底部生成却看不到，需手动下拉内部滚动条。
@@ -100,7 +103,23 @@ function onToggle(e: Event) {
       <span class="thinking-label">思考</span>
       <span class="thinking-count">{{ truncated ? Math.round(truncated.originalBytes / 2) : text.length }} 字</span>
     </summary>
-    <div ref="bodyRef" class="thinking-body">{{ streamingBody }}</div>
+    <!-- 流式期：前缀文本节点 + 逐块淡入的尾巴。模板刻意写成紧凑形式——容器的
+         white-space 是 pre-wrap，元素之间任何残留的空白文本节点都会渲染成可见空格。
+         非流式期回整段渲染（折叠态子树不排版，全文布局只付一次）。 -->
+    <div ref="bodyRef" class="thinking-body">
+      <template v-if="streaming"
+        ><span v-if="clipped">…</span
+        ><span>{{ settled }}</span
+        ><span
+          v-for="(c, i) in chunks"
+          :key="i"
+          class="aide-wave-chunk"
+          :style="{ animationDelay: c.delay + 'ms' }"
+        >{{ c.text }}</span
+      ></template>
+      <!-- 非流式（含结束后）：整段渲染。折叠态 details 子树不排版，全文布局只付一次。 -->
+      <template v-else>{{ text }}</template>
+    </div>
   </details>
 </template>
 

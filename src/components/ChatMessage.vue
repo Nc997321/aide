@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ChatMessage, ModelOption, BgTask } from "@/types/chat";
-import { renderStreaming, renderMarkdown } from "@/utils/markdown";
+import { renderMarkdown } from "@/utils/markdown";
 import { truncatedLabel } from "@/utils/messageBytes";
+import StreamingText from "./StreamingText.vue";
 import ToolCallBlock from "./ToolCallBlock.vue";
 import ProcessGroup from "./ProcessGroup.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
@@ -86,14 +87,6 @@ function isStreamingTail(index: number): boolean {
   return !!props.message.streaming && index === props.message.blocks.length - 1;
 }
 
-/** 文本块 → HTML：已定稿的块走 renderMarkdown 缓存（重渲染零解析成本，含语法
- *  高亮）；流式中的最后一块每个增量都在变，走 renderStreaming——结构照常实时
- *  渲染，唯独代码围栏不跑 hljs（每个增量重高亮成长中的大围栏是 O(n²) 卡死放大器，
- *  见 utils/markdown.ts）。块定稿后自然切回 renderMarkdown 补上高亮。 */
-function blockHtml(text: string, index: number): string {
-  return isStreamingTail(index) ? renderStreaming(text) : renderMarkdown(text);
-}
-
 function handleTextClick(e: MouseEvent) {
   const target = e.target as HTMLElement;
 
@@ -136,10 +129,12 @@ function handleTextClick(e: MouseEvent) {
           :bg-tasks="bgTasks"
           @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
         />
-        <div
+        <!-- 正文渲染收进 StreamingText（分段 + 渐显波；@click 靠单根 fallthrough
+             落到 .msg-text 上，与工具块的文件码点击共用 handleTextClick）。 -->
+        <StreamingText
           v-else-if="seg.block.type === 'text'"
-          class="msg-text"
-          v-html="blockHtml(seg.block.text, seg.index)"
+          :text="seg.block.text"
+          :streaming="isStreamingTail(seg.index)"
           @click="handleTextClick"
         />
         <ThinkingBlock

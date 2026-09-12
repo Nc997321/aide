@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>流式「冲浪」效果 · 原型</title>
+<style>
+  /* ===== glass 主题 token（对齐 src/themes/glass.ts） ===== */
+  :root {
+    --bg-deep: #0a0b11;
+    --bg-base: rgba(17, 19, 29, .52);
+    --surface-default: rgba(255, 255, 255, .06);
+    --surface-hover: rgba(255, 255, 255, .1);
+    --text-primary: #eef0f8;
+    --text-secondary: #b9bdd0;
+    --text-muted: #7c8296;
+    --accent: #a5b8ff;
+    --agent-accent: #e0a3d8;
+    --border: rgba(255, 255, 255, .1);
+    --border-subtle: rgba(255, 255, 255, .06);
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --ease-t: .16s cubic-bezier(.2, .8, .2, 1);
+    color-scheme: dark;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    height: 100vh;
+    display: flex;
+    overflow: hidden;
+    color: var(--text-primary);
+    font: 14px/1.7 "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    background:
+      radial-gradient(560px 380px at 10% -8%, rgba(124, 108, 255, .32), transparent 65%),
+      radial-gradient(520px 420px at 96% 6%, rgba(64, 190, 220, .22), transparent 65%),
+      radial-gradient(640px 340px at 60% 112%, rgba(210, 110, 190, .16), transparent 70%),
+      var(--bg-deep);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ===== 左侧控制栏（仅原型用） ===== */
+  .rail {
+    width: 252px; flex-shrink: 0;
+    padding: 16px 14px;
+    display: flex; flex-direction: column; gap: 14px;
+    overflow-y: auto;
+    background: var(--bg-base);
+    border-right: 1px solid var(--border);
+    backdrop-filter: blur(20px) saturate(150%);
+  }
+  .rail h1 { font-size: 14px; font-weight: 600; }
+  .rail h2 { font-size: 12px; font-weight: 600; color: var(--text-secondary); letter-spacing: .04em; }
+  .rail p { font-size: 12px; line-height: 1.65; color: var(--text-muted); }
+  .rail .seg { display: flex; gap: 6px; }
+  .rail button {
+    flex: 1;
+    padding: 7px 8px;
+    font: inherit; font-size: 12px;
+    color: var(--text-primary);
+    background: var(--surface-default);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: background var(--ease-t);
+  }
+  .rail button:hover { background: var(--surface-hover); }
+  .rail button.on { background: rgba(150, 170, 255, .22); border-color: rgba(150, 170, 255, .4); }
+
+  .meter {
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    background: rgba(0, 0, 0, .28);
+    border: 1px solid var(--border-subtle);
+    font: 12px/1.9 "JetBrains Mono", Consolas, monospace;
+  }
+  .meter b { font-weight: 600; color: var(--accent); }
+  .meter .warn { color: #f87171; }
+
+  /* ===== 原型网格 ===== */
+  main {
+    flex: 1;
+    padding: 18px;
+    overflow-y: auto;
+    display: grid;
+    gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(430px, 1fr));
+    align-content: start;
+  }
+  .pane {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: rgba(24, 26, 38, .48);
+    backdrop-filter: blur(20px) saturate(150%);
+    padding: 13px 15px 16px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .38), inset 0 1px 0 rgba(255, 255, 255, .12);
+  }
+  .pane-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 11px; }
+  .pane-head .name { font-size: 13px; font-weight: 600; }
+  .pane-head .note { font-size: 12px; color: var(--text-muted); }
+
+  /* 聊天气泡（近似桌面端 assistant 消息） */
+  .bubble {
+    padding: 12px 14px;
+    border-radius: var(--radius-md);
+    background: var(--surface-default);
+    border-left: 2px solid var(--agent-accent);
+    min-height: 92px;
+  }
+  .msg { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+  /* ============================================================
+     A · 扫光带 —— 一道窄高光带循环扫过文字
+     做法：background-clip:text + 平铺渐变平移。整段文字 = 一块背景，
+     高光带是渐变里的白色 stop；动画只动 background-position。
+     size 200% 时 background-position 的位移 = -容器宽 × p%，光带停在
+     容器 x = 容器宽 × (1 - p%)。所以 110% → -10% 正好是「从左侧画布外
+     进、到右侧画布外出一趟」——区间取满一个 tile 会让一半周期在画布外空转。
+     ============================================================ */
+  .fx-sweep .msg {
+    background-image: linear-gradient(100deg,
+      var(--text-primary) 0%, var(--text-primary) 44%,
+      #ffffff 50%,
+      var(--text-primary) 56%, var(--text-primary) 100%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: fx-sweep 1.45s linear infinite;
+  }
+  @keyframes fx-sweep {
+    from { background-position: 110% 0; }
+    to   { background-position: -10% 0; }
+  }
+
+  /* ============================================================
+     B · 渐显波 —— 新落的字从「白闪」迅速沉到常态
+     做法：每个 chunk 一个 span，进场动画只碰 opacity + color。
+     密集重叠的短动画连起来就是一道推过去的浪。
+     ============================================================ */
+  .fx-cascade .chunk { animation: fx-wave-in .46s cubic-bezier(.22, .75, .3, 1) both; }
+  @keyframes fx-wave-in {
+    from { opacity: 0; color: #ffffff; }
+    to   { opacity: 1; color: var(--text-primary); }
+  }
+
+  /* ============================================================
+     C · 波光流动 —— 整段文字像水面反光一样持续流动
+     同 A 的机制，但高光带更宽更软、更慢、带一点冷蓝。
+     size 260% 时位移 = -1.6 × 容器宽 × p%，高光中心在渐变 32%（≈0.83 容器宽）处，
+     解出 61.25% → -20% 即「左侧画布外进、右侧画布外出」。
+     ============================================================ */
+  .fx-flow .msg {
+    background-image: linear-gradient(96deg,
+      var(--text-secondary) 0%, #d7e3ff 18%, #ffffff 32%,
+      #d7e3ff 46%, var(--text-secondary) 68%, var(--text-secondary) 100%);
+    background-size: 260% 100%;
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: fx-flow 2.6s linear infinite;
+  }
+  @keyframes fx-flow {
+    from { background-position: 61.25% 0; }
+    to   { background-position: -20% 0; }
+  }
+
+  /* ============================================================
+     D · 彗尾 —— 亮头钉死在最新写出的几个字上，向后拖出渐隐尾迹
+     做法：整段拆成「已定稿」+「尾迹」两个 span，每来一个新字就重切一刀。
+     尾迹 span 自带一道左暗右亮的渐变，切点处颜色连续，看不出接缝。
+     ============================================================ */
+  .fx-comet .msg .settled { color: var(--text-primary); }
+  .fx-comet .msg .head {
+    background-image: linear-gradient(90deg,
+      var(--text-primary) 0%, #c9d8ff 52%, #ffffff 100%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+    text-shadow: 0 0 9px rgba(190, 212, 255, .5);
+  }
+
+  /* ============================================================
+     E · 扫光带 ＋ 渐显波 —— A 与 B 叠加
+     注意：父层 background-clip:text 会把子 span 的 color 吃掉
+     （-webkit-text-fill-color 是继承属性），所以这里只剩 opacity 淡入。
+     ============================================================ */
+  .fx-sweep.fx-cascade .chunk { animation: fx-fade-in .46s cubic-bezier(.22, .75, .3, 1) both; }
+  @keyframes fx-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+</style>
+</head>
+<body>
+
+<aside class="rail">
+  <h1>流式「冲浪」候选</h1>
+  <p>六个面板跑同一段文本、同样的速度。挑一个（或组合）我就去桌面端落地。</p>
+
+  <h2>速度</h2>
+  <div class="seg" id="speed">
+    <button data-ms="3400">慢</button>
+    <button data-ms="2200" class="on">中</button>
+    <button data-ms="1400">快</button>
+  </div>
+
+  <h2>实测帧率</h2>
+  <div class="meter">
+    <div>FPS <b id="fps">–</b></div>
+    <div>长任务 <b id="ltc">0</b> 次</div>
+    <div>最长 <b id="ltm">0</b> ms</div>
+    <div id="ltw"></div>
+  </div>
+  <p>长任务 = 单帧超过 50 ms 的卡顿，<code>PerformanceObserver('longtask')</code> 原生口径。这段文本比真实回复短，真实场景的代价按行数线性放大——A/C/E 是整块重绘，行数多时要单独压测。</p>
+
+  <h2>操作</h2>
+  <div class="seg">
+    <button id="replay">全部重播</button>
+    <button id="reset">清零计量</button>
+  </div>
+</aside>
+
+<main id="grid"></main>
+
+<script>
+/* ============================================================
+   流式内容与节奏
+   ============================================================ */
+const TEXT = "根因不是 emit。把 20 份冻结报告铺开看：探针延迟中位数 0.08 ms，pending 恒为 0，IsHungAppWindow 全程 false。真正被堵住的是渲染进程——16 份报告里 msedgewebview2.exe 烧到 106–240% CPU。";
+
+const TAIL_LEN = 12;      // 彗尾长度（字）
+const HOLD_MS = 1100;     // 流完后停留多久再重播
+let streamMs = 2200;      // 整段流完的时长
+
+/* kind: plain = 纯文本节点；chunk = 每个字一个 span；comet = 已定稿 + 尾迹两段 */
+const SPECS = [
+  { key: "plain",   name: "现状 · 打字机",   cls: "",                  kind: "plain",
+    note: "逐字 append，无任何动效（对照基线）" },
+  { key: "sweep",   name: "A · 扫光带",      cls: "fx-sweep",          kind: "plain",
+    note: "一道高光带扫过文字，1.45s 一轮" },
+  { key: "cascade", name: "B · 渐显波",      cls: "fx-cascade",        kind: "chunk",
+    note: "新字白闪一下再沉下去，浪推过来" },
+  { key: "flow",    name: "C · 波光流动",    cls: "fx-flow",           kind: "plain",
+    note: "整段像水面反光持续流动，2.6s 一轮" },
+  { key: "comet",   name: "D · 彗尾",        cls: "fx-comet",          kind: "comet",
+    note: "亮头钉在最新 12 个字，向后渐隐" },
+  { key: "combo",   name: "E · 扫光＋渐显波", cls: "fx-sweep fx-cascade", kind: "chunk",
+    note: "A 叠 B：光带扫过的同时新字淡入" },
+];
+
+/* ============================================================
+   面板：建 DOM + 驱动流式
+   ============================================================ */
+function createPane(spec) {
+  const el = document.createElement("section");
+  el.className = "pane " + spec.cls;
+  el.innerHTML =
+    '<div class="pane-head"><span class="name"></span><span class="note"></span></div>' +
+    '<div class="bubble"><div class="msg"></div></div>';
+  el.querySelector(".name").textContent = spec.name;
+  el.querySelector(".note").textContent = spec.note;
+
+  const msg = el.querySelector(".msg");
+  const pane = { el, msg, spec, full: "", timer: null, hold: null, textNode: null };
+
+  if (spec.kind === "comet") {
+    msg.innerHTML = '<span class="settled"></span><span class="head"></span>';
+    pane.settled = msg.querySelector(".settled");
+    pane.head = msg.querySelector(".head");
+  } else if (spec.kind === "plain") {
+    pane.textNode = document.createTextNode("");
+    msg.appendChild(pane.textNode);
+  }
+  return pane;
+}
+
+/** 清空面板并停掉在跑的定时器。 */
+function clearPane(pane) {
+  clearInterval(pane.timer);
+  clearTimeout(pane.hold);
+  pane.full = "";
+  if (pane.spec.kind === "comet") {
+    pane.settled.textContent = "";
+    pane.head.textContent = "";
+  } else if (pane.spec.kind === "plain") {
+    pane.textNode.data = "";
+  } else {
+    pane.msg.textContent = "";
+  }
+}
+
+/** 写入一小片文字。comet 需要重切「已定稿 / 尾迹」的刀口，其余直接追加。 */
+function writePiece(pane, piece) {
+  const kind = pane.spec.kind;
+  if (kind === "comet") {
+    pane.full += piece;
+    const cut = Math.max(0, pane.full.length - TAIL_LEN);
+    pane.settled.textContent = pane.full.slice(0, cut);
+    pane.head.textContent = pane.full.slice(cut);
+    return;
+  }
+  if (kind === "chunk") {
+    const span = document.createElement("span");
+    span.className = "chunk";
+    span.textContent = piece;
+    pane.msg.appendChild(span);
+    return;
+  }
+  pane.textNode.data += piece;
+}
+
+/** 跑一轮：整段文字在 streamMs 内流完，chunk 类每拍写 2 个字。 */
+function runPane(pane) {
+  clearPane(pane);
+  const step = pane.spec.kind === "chunk" ? 2 : 1;
+  const tickMs = (streamMs * step) / TEXT.length;
+  let i = 0;
+
+  pane.timer = setInterval(() => {
+    if (i >= TEXT.length) {
+      clearInterval(pane.timer);
+      pane.hold = setTimeout(() => runPane(pane), HOLD_MS);
+      return;
+    }
+    writePiece(pane, TEXT.slice(i, i + step));
+    i += step;
+  }, tickMs);
+}
+
+/* ============================================================
+   启动 + 全局控制
+   ============================================================ */
+const grid = document.getElementById("grid");
+const panes = SPECS.map((spec) => {
+  const pane = createPane(spec);
+  grid.appendChild(pane.el);
+  return pane;
+});
+const replayAll = () => panes.forEach(runPane);
+replayAll();
+
+document.getElementById("replay").addEventListener("click", replayAll);
+
+document.getElementById("speed").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-ms]");
+  if (!btn) return;
+  streamMs = Number(btn.dataset.ms);
+  for (const b of e.currentTarget.querySelectorAll("button")) b.classList.toggle("on", b === btn);
+  replayAll();
+});
+
+/* ============================================================
+   帧率 / 长任务实测
+   ============================================================ */
+const fpsEl = document.getElementById("fps");
+let frames = 0;
+let lastSample = performance.now();
+requestAnimationFrame(function tick(now) {
+  frames += 1;
+  if (now - lastSample >= 500) {
+    const fps = Math.round((frames * 1000) / (now - lastSample));
+    fpsEl.textContent = fps;
+    fpsEl.classList.toggle("warn", fps < 50);
+    frames = 0;
+    lastSample = now;
+  }
+  requestAnimationFrame(tick);
+});
+
+const ltcEl = document.getElementById("ltc");
+const ltmEl = document.getElementById("ltm");
+const ltwEl = document.getElementById("ltw");
+let ltCount = 0;
+let ltMax = 0;
+
+function renderLt() {
+  ltcEl.textContent = ltCount;
+  ltmEl.textContent = Math.round(ltMax);
+  ltwEl.innerHTML = ltMax > 50 ? '<span class="warn">⚠ 有卡顿</span>' : "";
+}
+
+try {
+  new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      ltCount += 1;
+      ltMax = Math.max(ltMax, entry.duration);
+    }
+    renderLt();
+  }).observe({ entryTypes: ["longtask"] });
+} catch {
+  ltwEl.textContent = "（本环境不支持 longtask）";
+}
+
+// 首屏加载本身就会记几笔长任务，跑热了再清零才量得准
+document.getElementById("reset").addEventListener("click", () => {
+  ltCount = 0;
+  ltMax = 0;
+  renderLt();
+});
+</script>
+</body>
+</html>

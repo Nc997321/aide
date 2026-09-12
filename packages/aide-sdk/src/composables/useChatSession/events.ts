@@ -173,11 +173,17 @@ export function handleChatEvent(e: Record<string, unknown>): void {
     case "text_delta": {
       const msg = getOrCreateAssistant(store);
       stampMessageModel(msg, e);
+      const delta = e["delta"] as string;
+      // 空增量 = 只补模型徽标的打戳通路：正文逐字流式时（partial=on）文本已由
+      // stream_event 发完，sidecar 的整块路径改发空增量把 wire model 带过来。
+      // 不能让空串走到下面的 push——那会凭空多出一个空 text 块，块数错位会连累
+      // 流式尾块判定（isStreamingTail 取 blocks.length - 1）。
+      if (!delta) break;
       const last = msg.blocks[msg.blocks.length - 1];
       if (last?.type === "text") {
-        (last as TextBlock).text += e["delta"] as string;
+        (last as TextBlock).text += delta;
       } else {
-        msg.blocks.push({ type: "text", text: e["delta"] as string });
+        msg.blocks.push({ type: "text", text: delta });
       }
       break;
     }
