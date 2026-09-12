@@ -65,5 +65,13 @@
 ## 排查指引
 
 - 手机「配对码无效或已过期」= 桌面层拒（码过期/错）；手机「offline 重试」却配不上 =
-  relay 层拒或桥接劫持——先看 relay stderr 的 `registered/bridging/connect ->` 三行日志。
+  relay 层拒或桥接劫持——先看 relay 日志 `relay-server/relay.err.log` 的
+  `registered/bridging/connect ->` 三行。手动起走 `relay-server/run.ps1` / `run.sh`；
+  开机自启走 `~/.aide/remote/start-remote.vbs`（ASCII-only 文件，勿写非 ASCII 字节）——
+  两条路径都固定落该日志文件，与 cwd 无关。
+- 手机没连时桌面仍全量转发事件（设计如此），relay 逐帧丢弃；**丢帧日志已限频**：
+  `idle device … dropped` 每设备每 60s 一条、带 `suppressed N`，`grep "sent data frame, dropped"`
+  仍可统计。**relay 热路径（每帧/每连接）新增日志必须过限频器并保留 grep 指纹**——2026-09-12
+  两份实证：`registered device` 洪流 1.9GB（3757 万行，桌面重连热循环）、丢帧日志 ~5 条/秒；
+  范式见 `handler.rs` 的 `IdleDropLog`。
 - 桌面设置面板码显示「—」= `PairingState` 过期（10 分钟），点刷新即触发 update_code 上报。
