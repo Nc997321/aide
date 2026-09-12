@@ -64,6 +64,68 @@
 
 ## 排查指引
 
+- **「手机连不上」先分三段**（2026-09-12 定型）：① nginx `logs/access.log` **有没有记录**——
+  一条都没有 = 手机侧（DNS / 链路）根本没发出，别在服务端找；到了但 101 后立刻断 =
+  relay / 配对层。**400 行即时落盘、101 行在连接关闭时才落盘**（nginx 对 upgrade 长连接
+  的 access log 在 close 时写，状态码后的数字 = 该连接生命周期累计字节，如 `101 22127`
+  = 一条传过 22KB 的已死连接）——判「是否已连上」别等 101 行，用 relay 日志 `bridging
+  phone` 行计数或手机 netstat 对照。② 该日志格式已带 `$http_host`（紧跟 `"$request"` 的引号字段，形如
+  `"home.aideai.store:8000"` 或 `"[2409:…]:8000"`），**直接区分「按域名来」还是「按字面量来」**
+  （改动 2026-09-12 之前的行没有该字段）。③ 域名不通而字面量通 = 解析路径（运营商 / 光猫
+  DNS 缓存旧 AAAA）出问题，与 relay / nginx / 防火墙无关；本机对照 `nslookup -type=AAAA`
+  走光猫 vs `nslookup … 223.5.5.5`。域名只有 AAAA 记录（无 A），任何过时缓存 = 直接连不上。
+  **典型形态是间歇性**（换解析节点 / 缓存过期即自愈）：「刚刚不行、现在又行了」≠ 修好了。
+- **② 的判读（2026-09-12 DoH 直连上线 + 真机实测定型）**：手机 app 连接前先走 DoH（阿里公共
+  解析 `dns.alidns.com`）取字面量直连，域名降为兜底（仅 `ws://`）。但**ohos webSocket 栈对
+  v6 字面量 URL 生成的 Host 头不带方括号**（形如 `"2409:…:8000"`），nginx 按规范回 400——
+  且 `WebSocketRequestOptions.header` 自定义 Host 被 netstack 无视（实测无法客户端修正），
+  **服务端对该 400 永远无责，别在 nginx/relay 上找**。ohos 栈对被拒握手不回调 close/error，
+  唯一感知路径是客户端 15s 握手看门狗，强杀时计入 DoH 熔断（10min）→ 下一跳自动回落域名。
+  **2026-09-13 起 app 对 v6 解析结果直接跳过字面量直连**（doh.ets：解析出 v6 → 直接走
+  域名——该探测对本部署注定 400、白烧 15s 握手看门狗且用户可感；v4 字面量保留直连探测，
+  无方括号问题）。故判读：**域名 Host 101 = 健康态**；**孤立字面量 Host 400 = 旧版本
+  app**（新版冷启动不再探 v6，v4 场景另议）→ 升级客户端。客户端侧对照指纹：hilog
+  `[doh]`（新版命中 `解析为 v6，跳过字面量直连…走域名`；旧版命中 `-> 字面量直连` /
+  `直连失败，熔断期内回落`）。上一条「域名不通而字面量通 = 解析路径问题」的判读，此后
+  仅适用于手动 nslookup 对照排查（app 产生的字面量 400 不指示解析问题）。
+- **「锁屏后必重连」→「锁屏播报待命」（2026-09-12 定型 / 09-13 待命上线）**：手机腿 20s
+  keepalive 帧由 app 进程发出；熄屏后鸿蒙资源调度冻结整个进程 → keepalive 断供 → relay 60s
+  静默超时清腿（冻结还会主动掐 TCP：doze 事件后 ~3s nginx 即出 101 死亡行）。**长时任务借道
+  逐一实测**：`MULTI_DEVICE_CONNECTION` 授予后 ~60s 被行为校验取消（自建 relay WS 非 softbus
+  分布式链路；指纹 `OnContinuousTaskStop … cancelReason 2` → `DOZE_AFTER_CONTINUOUS_TASK_FINISH`
+  → `NORMAL_FREEZE_AFTER_DOZE`）；`AUDIO_PLAYBACK` 纯待命同样 +60s 被查（指纹
+  `TASK_DETECTION backgroundMode:2` → `OnContinuousTaskAudioStateChange state=1` →
+  `cancelReason 0` → `DOZE_BY_CONTINUOUS_DETECTION_FAILED`）——**任务只是资格，系统还要验
+  行为**。但息屏后播报是真实需求（TtsModel `isBackStage` 后台 TTS 需要活进程），2026-09-13
+  三轮实测打通「播报待命」：`AUDIO_PLAYBACK` 任务 + **180Hz 近静音正弦垫底音**
+  （BroadcastStandby.ets；VOICE_ASSISTANT 单声道 16k S16LE，100ms 块恰 18 整周期无缝循环，
+  峰值 300/32767 ≈ -40dB——手机喇叭物理放不出 180Hz，人耳不可闻但 RMS 非零；module.json5
+  已重新声明 `backgroundModes: ["audioPlayback"]`）。三轮指纹：①无垫音 +60s `state=1` 取消；
+  ②**全零垫音被静音播放检测器识破**——熄屏 +17s `DOZE_BY_SILENT_PLAYBACK` 直接冻结（cgroup
+  `freezer:/Frozen` 实锤；微信有 `Doze has special:ERR_HAS_CONTINUOUS_TASK` 豁免，三方 app
+  没有）；③180Hz 正弦垫——检测器静默、校验通过，熄屏 11 分钟进程未冻结、同一条 WS 零重连，
+  且锁屏状态下 agent 回复到达 → `[tts] speak` → 出声播报（用户验收，firstSoundDelay 0.157s）。
+  **安全约束**：垫音严格随任务启停（后台有音频无任务 = 被查杀）；`loadTtsEnabled()` 开（默认）
+  才挂任务——播报关 = 无任务无垫音无打扰。**降级链**：垫音失败 → 纯任务仅 60s 容忍；任务被
+  取消 → 垫音即停、回落冻结形态。**判读变化**：待命生效时熄屏**不再重连**（连接一直活着）；
+  熄屏后仍见 bridging 递增 = 待命未生效（开关关 / 任务被取消 / 垫音失败）→ 查 hilog
+  `standby task started` / `silent bed started`。冻结 + 秒级恢复仍是兜底：EntryAbility
+  `onForeground` 见 `state === 'offline'` 即调 `connModel.autoConnect()` 立即重连（不等退避
+  计时器——计时器随进程冻结迟到）；仅 offline 态触发，authed/connecting 活态不动（`connect()`
+  会掐活连接）。2026-09-12/13 两次实测验收：解锁 → `Ability onForeground` → 毫秒级触发
+  poke、秒级完成重连；其中一次为熄屏后 ~1 分钟连接已被掐死——蜂窝熄屏无线电休眠可**早于
+  进程冻结**断 TCP，与冻结断供 keepalive 殊途同归，秒连方案两者通吃。另 Push Kit 勘误：后台
+  数据消息到不了非前台 app（端侧缓存最多 7 天），push 唤不醒冻结进程——锁屏播报唯一真解
+  是长时任务 + 垫音。
+- **「卡 connecting 永不动」僵死（2026-09-12 发现 / 09-13 修复，指纹归档）**：app 停在
+  `connecting` 十几分钟不动（UI 可点、无 crash、无日志流动）；手机 netstat 对 relay TCP
+  ESTABLISHED 但**服务器视角零字节**——HTTP 升级请求从未发出。根因 = ohos netstack 对
+  「TCP 已建立但握手管道卡死」的 socket，`close()` **同步抛异常**（对比：被 400 拒的
+  socket `close()` 只走回调报错、不同步抛）→ 异常裸穿 remote.ets 看门狗回调 → 状态机
+  后续（setState('offline') / scheduleReconnect）永不执行 → 永久卡死。修复 = ws-ohos.ets
+  适配层 startConnect / send / close 三处 try/catch 兜住同步异常（close 抛 → 捕获记
+  日志，状态机照常走 offline → 退避重连），remote.ets 镜像零改动。指纹：**15s 看门狗
+  到期后无任何后续日志** = 老版本此 bug 实锤 → 升级客户端（2026-09-13 构建起已防护）。
 - 手机「配对码无效或已过期」= 桌面层拒（码过期/错）；手机「offline 重试」却配不上 =
   relay 层拒或桥接劫持——先看 relay 日志 `relay-server/relay.err.log` 的
   `registered/bridging/connect ->` 三行。手动起走 `relay-server/run.ps1` / `run.sh`；
