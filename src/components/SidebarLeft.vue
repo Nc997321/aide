@@ -16,7 +16,7 @@ import { api, openExternal } from "../api";
 import AToast from "../ui/AToast.vue";
 import AppLogo from "./AppLogo.vue";
 import AutomationSidebarSection from "./automation/AutomationSidebarSection.vue";
-import SidebarBottomDock from "./SidebarBottomDock.vue";
+import SidebarNavGroup from "./SidebarNavGroup.vue";
 import SidebarSectionHead from "./SidebarSectionHead.vue";
 import { useToast } from "../composables/useToast";
 import type { Session, WorkspaceInfo } from "../types";
@@ -473,6 +473,11 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
       </div>
     </div>
 
+    <!-- 顶部导航组（品牌区之下、分区树之上，WorkBuddy 式）：「新增会话」+ 三个
+         无子树功能入口；插件/观测台/知识库原先钉在侧栏底部，收进这里与分区树
+         同区滚动，底部不再另起一条导航带。 -->
+    <SidebarNavGroup @new-session="newSession" />
+
     <!-- Workspace + Session list（「会话」降级为分区树的根分区之一，与自动化平级；
          session-style-* 挂会话列表样式皮肤（card/row，设置「主题样式」tab 切换）） -->
     <div class="session-list" :class="`session-style-${settings.sessionListStyle ?? 'card'}`">
@@ -598,10 +603,6 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
       <AutomationSidebarSection />
 
     </div>
-
-    <!-- 底部固定入口区：插件 + 记忆观测台（无子树的功能入口收拢于此，不再占用
-         分区树列表位；见 SidebarBottomDock 组件头注释） -->
-    <SidebarBottomDock />
 
     <!-- Update banner -->
     <div v-if="updateAvailable" class="update-banner" @click="openUpdate">
