@@ -27,7 +27,7 @@
  *    运行期出现在时间线末尾，tool_result / 轮次收尾即整行消失，不进 blocks；
  *    Edit/Write 例外：落 blocks 常驻折叠行（spinner → 铅笔定稿，不可展开，
  *    历史重载同形，见 editRowView）
- *  - 子代理块保留（默认收起，过程可点开）；历史思考默认收起
+ *  - 子代理块保留（默认收起，过程可点开）；思考卡一律默认收起（流式/历史），点击展开
  * 视觉基线：白卡 card_bg + 1px line 描边、间距统一 8 的倍数、图标统一 sys.symbol。
  * 信息架构对照 remote-pwa 的 ChatView/MessageList/PermissionSheet 三件套
  * （状态与编排全在 ChatModel/ChatStore，页面零业务逻辑）。
@@ -61,6 +61,9 @@ import { MarkdownText } from '../session/chat/MarkdownText';
 import { BgTaskDock } from '../session/chat/BgTaskDock';
 import { ThinkingCard } from '../session/chat/ThinkingCard';
 import { ChatMessagesSource } from '../session/chat/ChatMessagesSource';
+import { VoiceChip } from '../session/chat/VoiceChip';
+import { readerModel } from '../session/chat/ReaderModel';
+import { ttsModel } from '../session/chat/TtsModel';
 import { ChatDrawer, drawerState, toastModel, ToastModel, wsAccentColor } from '../session/ChatDrawer';
 import { WorkspaceModel, workspaceModel } from '../session/WorkspaceModel';
 
@@ -182,6 +185,16 @@ export struct ChatPage {
     attachmentsModel.pickToast = (msg: string): void => {
       toastModel.show(msg, 'warn');
     };
+    // 语音播报：持久化开关落读 + toast 通道注入（TtsModel 同样不 import
+    // ChatDrawer 防环，见 TtsModel 文件头）
+    ttsModel.hydrate();
+    ttsModel.pickToast = (msg: string, kind: string): void => {
+      toastModel.show(msg, kind);
+    };
+    // 听书模式：toast 通道注入（ReaderModel 同样不 import 页面防环）
+    readerModel.pickToast = (msg: string, kind: string): void => {
+      toastModel.show(msg, kind);
+    };
     // 模型/effort 域首同步（供应商未加载时 syncModelEffort 自行补拉）
     void this.model.syncModelEffort();
   }
@@ -189,6 +202,8 @@ export struct ChatPage {
   aboutToDisappear(): void {
     this.store.offMessagesStructureChanged(this.syncSource);
     drawerState.close(); // 浮层随卸载复位：单例不随组件销毁，防落回连接页后残置
+    ttsModel.stop(); // 离屏即停：落回连接页不念了（对照原型离开聊天屏）
+    readerModel.stop(); // 听书同理：离屏收面板，落回连接页不再朗读
   }
 
   // ── 滚动反应 ──
@@ -820,9 +835,25 @@ export struct ChatPage {
       ForEach(m.blocks, (b: ContentBlock) => {
         this.blockView(b, m.streaming && m.blocks[m.blocks.length - 1] === b)
       }, (b: ContentBlock) => b.id)
+      // 语音 chip：正文消息尾部（对照原型 .sp-chip 挂 assistant 消息末尾）——
+      // 点 = 听书（小艺朗读面板），长按 = 自动播报开关；三态见 VoiceChip
+      if (this.hasSpeechText(m)) {
+        VoiceChip({ msg: m, store: this.store })
+      }
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
+  }
+
+  /** 有可播报正文？（TextBlock 非空即挂 chip；思考/工具/子代理块不算） */
+  private hasSpeechText(m: ChatMessage): boolean {
+    for (let i = 0; i < m.blocks.length; i++) {
+      const b: ContentBlock = m.blocks[i];
+      if (b instanceof TextBlock && b.text.trim() !== '') {
+        return true;
+      }
+    }
+    return false;
   }
 
   @Builder

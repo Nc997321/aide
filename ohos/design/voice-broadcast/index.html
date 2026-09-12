@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aide 鸿蒙端 · 语音播报原型</title>
+<style>
+  :root {
+    --text: #1D2129; --text-2: #86909C; --accent: #0A59F7; --ok: #00B42A;
+    --warn: #FF7D00; --danger: #F53F3F; --line: #E5E6EB;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font: 14px/1.65 "HarmonyOS Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #E9EBEE; color: var(--text);
+    padding: 34px 20px 40px;
+  }
+  .page-head { text-align: center; margin-bottom: 18px; }
+  .page-head h1 { font-size: 20px; font-weight: 700; }
+  .page-head h1 small { font-size: 12px; color: var(--accent); font-weight: 600; margin-left: 8px; vertical-align: 2px; }
+  .page-head p { font-size: 12.5px; color: var(--text-2); margin-top: 8px; max-width: 960px; margin-left: auto; margin-right: auto; line-height: 1.9; }
+  .page-head p b { color: #4E5969; }
+  .page-head p a { color: var(--accent); }
+
+  /* 声音总开关（展台级：同时遥控两个 iframe） */
+  .sound-row {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    margin: 0 0 26px; flex-wrap: wrap;
+  }
+  .sound-row .chip { font-size: 12px; padding: 6px 16px; }
+  .sound-row .chip.on { border-color: var(--accent); color: var(--accent); background: rgba(10,89,247,.06); }
+  .sound-row .sound-tip { font-size: 11.5px; color: var(--text-2); max-width: 460px; line-height: 1.7; }
+
+  .stage {
+    display: flex; gap: 28px; justify-content: center; align-items: flex-start;
+    flex-wrap: wrap; max-width: 1400px; margin: 0 auto;
+  }
+  .phone-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .phone-label { font-size: 13px; font-weight: 700; color: #4E5969; letter-spacing: .5px; }
+  .phone-label span { color: var(--text-2); font-weight: 500; margin-left: 6px; font-size: 11.5px; }
+
+  /* 手机框（纯布景，中性深色边框） */
+  .phone {
+    width: 375px; height: 740px; flex: none;
+    border-radius: 46px; padding: 11px;
+    background: linear-gradient(160deg, #23242e, #101118 40%, #1a1b23);
+    border: 1px solid rgba(255,255,255,.17);
+    box-shadow: 0 20px 60px rgba(0,0,0,.35), inset 0 1px 1px rgba(255,255,255,.14);
+    position: relative;
+  }
+  .phone::before, .phone::after {
+    content: ""; position: absolute; right: -2.5px; width: 3px; border-radius: 2px; background: #2c2d38;
+  }
+  .phone::before { top: 150px; height: 56px; }
+  .phone::after { top: 220px; height: 88px; }
+  .screen {
+    width: 100%; height: 100%; border-radius: 36px; overflow: hidden;
+    background: #F1F3F5; position: relative;
+  }
+  .screen iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; max-width: 375px; }
+  .chips .cap { width: 100%; text-align: center; font-size: 10.5px; color: var(--text-2); margin-bottom: -1px; }
+  .chip {
+    padding: 4px 11px; font-size: 11px; cursor: pointer; border-radius: 99px;
+    color: #4E5969; background: #fff; border: 1px solid var(--line);
+    font-family: inherit; transition: all .16s;
+  }
+  .chip:hover { border-color: #C9CDD4; color: var(--text); }
+
+  /* ===== 说明卡 ===== */
+  .cover { max-width: 1180px; margin: 44px auto 0; }
+  .cover summary {
+    display: inline-flex; align-items: center; gap: 8px; cursor: pointer; list-style: none;
+    font-size: 12.5px; font-weight: 600; color: #4E5969;
+    padding: 7px 14px; border-radius: 99px; background: #fff; border: 1px solid var(--line);
+  }
+  .cover summary::-webkit-details-marker { display: none; }
+  .cover-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 14px; }
+  .cover-card {
+    padding: 14px 16px; border-radius: 14px; font-size: 12px; line-height: 2;
+    background: #fff; border: 1px solid var(--line);
+  }
+  .cover-card h4 { font-size: 12.5px; color: var(--accent); margin-bottom: 4px; }
+  .cover-card li { list-style: none; color: var(--text-2); }
+  .cover-card li::before { content: "✓ "; color: var(--ok); font-weight: 700; margin-right: 3px; }
+  .cover-card li em { font-style: normal; color: #4E5969; }
+  .cover-card.todo li::before { content: "→ "; color: var(--warn); }
+  .cover-card.skip li::before { content: "✗ "; color: var(--danger); }
+  .cover-card a { color: var(--accent); }
+  .cover-card code {
+    font-family: Consolas, "Cascadia Code", monospace; font-size: 11px;
+    background: #F5F6FA; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px;
+  }
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <h1>aide 鸿蒙端 · 语音播报原型<small>正文自动朗读 · 小艺语音通道 · 权限请求播报</small></h1>
+  <p>在 <b><a href="../remote/index.html">v3 底稿（../remote/index.html）</a></b> 之上做的增量层：底稿三屏与抽屉导航不动，只加语音播报——每条正文回复下挂一个<b>喇叭 chip（即持久开关）</b>、回复完成自动经系统小艺通道朗读、权限请求（Bash 确认等）用固定模板播报。两个手机框是同一个 <b>app.html</b> 的 iframe 实例；展台默认<b>静默演示</b>（均衡器动画模拟播报），开关状态跨屏同步，也可单独打开 app.html 交互。</p>
+</header>
+
+<div class="sound-row">
+  <button class="chip" id="btnSound">开启真实发声（朗读）</button>
+  <span class="sound-tip">浏览器策略要求帧内先有过用户手势：请先在手机屏内点任意处（如点一下喇叭），再开此开关；最稳的体验是单独打开 app.html?sound=1。</span>
+</div>
+
+<div class="stage">
+
+  <!-- ================= 屏 A · 自动演示 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 A · 自动演示<span>流式回复 → 自动播报 → 权限横幅</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="s1" src="app.html?screen=chat&amp;id=s1" title="自动演示"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">演示控制</span>
+      <button class="chip" data-target="s1" data-send='{"cmd":"demo","action":"replay"}'>↻ 重播流式</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"demo","action":"stop"}'>⏹ 停止会话 ↗</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"perm","tool":"Bash","arg":"pnpm build"}'>触发权限播报 ↗</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"demo","action":"new"}'>＋ 新会话空态</button>
+    </div>
+  </section>
+
+  <!-- ================= 屏 B · 手动交互 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 B · 手动交互<span>直接点屏内喇叭试三态</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="s2" src="app.html?screen=chat&amp;demo=0&amp;id=s2" title="手动交互"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">演示控制</span>
+      <button class="chip" data-target="s2" data-send='{"cmd":"perm","tool":"Bash","arg":"pnpm build"}'>触发权限播报 ↗</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"demo","action":"drawer"}'>打开抽屉 ↗</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"demo","action":"md"}'>点模型 ↗</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"demo","action":"sendhint"}'>发条消息试试 ↓</button>
+    </div>
+  </section>
+</div>
+
+<!-- ===== 说明卡 ===== -->
+<details class="cover">
+  <summary><span class="caret">▾</span>结构说明 · 喇叭状态机 · 权限播报模板 · 实施清单</summary>
+  <div class="cover-grid">
+    <div class="cover-card">
+      <h4>原型结构 · v3 底稿的增量层</h4>
+      <ul>
+        <li><em>底稿不动</em>：连接屏 / 抽屉 / 工作区 / 供应商切换全部沿用 <em><a href="../remote/index.html">../remote/index.html</a></em>（app.html 由底稿字节级复制后只加语音增量）。</li>
+        <li><em>喇叭 chip</em>：挂在每条 assistant 消息末尾（正文之后），三态 = 播报中（均衡器）/ 重播 / 永久关。</li>
+        <li><em>权限横幅</em>：aide 请求权限时顶在离线横幅下方，播报固定模板，带允许 / 拒绝按钮。</li>
+        <li><em>静默演示</em>：展台默认用「均衡器 + 模拟时长」演示播报节奏；开「真实发声」后走 Web SpeechSynthesis（真机上对应小艺）。</li>
+        <li>开关状态（tts）随既有 sync 通道跨屏同步，且记入 localStorage 模拟持久化。</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>喇叭状态机（持久开关，无设置页）</h4>
+      <ul>
+        <li><em>默认开</em>：回复完成自动播报正文，chip 图标转为<em>均衡器动画</em>（accent 底）。</li>
+        <li><em>播报中点 chip</em>：立即停止 + <em>永久关闭</em>（持久化），chip 变<em>虚线灰态静音图标</em>。</li>
+        <li><em>关着点 chip</em>：<em>永久打开</em>并重播该条。</li>
+        <li><em>开着点其他条目</em>：只重播那条，不动开关。</li>
+        <li><em>打断规则</em>：新播报打断旧播报；发新消息 / 切会话 / 停止会话 / 新会话空态都会先停旧播报。</li>
+        <li><em>纯图标</em>：喇叭 / 静音 / 均衡器即三态，无文字标签；点击后 toast 反馈结果。</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>播报内容（只读正文）</h4>
+      <ul>
+        <li>代码块 → <em>「（代码略）」</em>；图片跳过；链接取文字；标题 / 引用 / 列表 / 粗斜体 / 删除线 / 表格线等 Markdown 标记全部剥掉。</li>
+        <li>单次 <em>10000 字封顶</em>（对齐 textToSpeech 单次上限）。</li>
+        <li>思考卡 / 工具行 / usage 尾注<em>不读</em>；用户消息不读。</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>权限播报模板</h4>
+      <ul>
+        <li>固定模板：<em>「需要确认。aide 请求{动作}：{单行摘要}。请回到手机处理。」</em></li>
+        <li>动作映射：Bash→运行命令 · Write→写入文件 · Edit→编辑文件 · webfetch / web_search→访问网络 · 其余「执行 X 操作」。</li>
+        <li><em>横幅本体可点</em>：播报中点横幅 = 停止并永久关闭（与喇叭 chip 同语义）；允许 / 拒绝应答后横幅收起。</li>
+        <li>提问类（AskUserQuestion 型请求）：真机播第一题文本，本原型未展开。</li>
+      </ul>
+    </div>
+    <div class="cover-card todo">
+      <h4>实施清单（ohos 工程 · 本页只出原型，未动代码）</h4>
+      <ul>
+        <li><em>TtsModel 单例</em>：Core Speech Kit <code>textToSpeech</code>，createEngine 走 <code>zh-CN</code> + interaction-broadcast；speak 用 <code>queueMode:0, playType:1</code>（合成即播）；listener 按 <code>requestId</code> 过滤（stop 会先 onComplete 再 onStop，两回调都会来）。</li>
+        <li><em>持久化</em>：preferences 记 <code>tts_enabled</code>（默认开）。</li>
+        <li><em>SpeakChip 组件</em>：三态渲染（playing / on / off），点击语义照抄本页状态机。</li>
+        <li><em>ChatStore</em>：回复完成钩子 → 正文转纯文本（本页 speechText 的 ArkTS 版）→ speak；新回复开播前先 stop 旧播报。</li>
+        <li><em>PermissionSheet</em>：待确认项到达 → 动作映射 + 单行摘要 → 模板播报 + 横幅；应答 / 切走即停。</li>
+        <li><em>生命周期</em>：切会话 / 离开 ChatPage / interrupt_session → <code>tts.stop()</code>。</li>
+        <li><em>异常</em>：模拟器无小艺引擎 → 创建失败 1002300005，降级静默 + toast 提示；1002300007 服务异常重建引擎；无需任何权限声明。</li>
+      </ul>
+    </div>
+    <div class="cover-card skip">
+      <h4>未采纳</h4>
+      <ul>
+        <li>设置页开关：喇叭 chip 本身就是持久开关（用户拍板）</li>
+        <li>语速 / 音色选择：用小艺默认通道与音色</li>
+        <li>后台播报：保持前台播报语义，离开聊天页即停</li>
+        <li>朗读思考内容 / 工具行 / 提问选项全文：只读正文与权限模板</li>
+      </ul>
+    </div>
+  </div>
+</details>
+
+<script>
+/* 展台 = 纯布景：演示胶囊 → postMessage 遥控；sync 中继转发（含新增 tts 字段）；
+   「真实发声」总开关同时遥控两个 iframe。 */
+const send = (id, msg) => document.getElementById(id).contentWindow.postMessage(msg, '*');
+const SCREENS = ['s1', 's2'];
+
+document.querySelectorAll('[data-send]').forEach(b => b.addEventListener('click', () => {
+  send(b.dataset.target, JSON.parse(b.dataset.send));
+}));
+
+/* 真实发声总开关（默认静默：均衡器动画 + 模拟时长） */
+const btnSound = document.getElementById('btnSound');
+let snd = false;
+btnSound.addEventListener('click', () => {
+  snd = !snd;
+  SCREENS.forEach(id => send(id, { cmd: 'sound', on: snd }));
+  btnSound.textContent = snd ? '关闭真实发声（正在朗读）' : '开启真实发声（朗读）';
+  btnSound.classList.toggle('on', snd);
+});
+
+/* sync 中继：广播到除来源外的其余屏（pv / md / ef / ws / tts） */
+window.addEventListener('message', e => {
+  const d = e.data;
+  if (d && d.event === 'sync') {
+    SCREENS.forEach(id => {
+      const w = document.getElementById(id).contentWindow;
+      if (w !== e.source) w.postMessage(d, '*');
+    });
+  }
+});
+</script>
+</body>
+</html>

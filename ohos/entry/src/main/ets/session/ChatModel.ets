@@ -42,6 +42,8 @@ import { ChatMessage, PendingJump, PermissionRequest } from './chat/ChatBlocks';
 import { ChatAttachments, attachmentsModel } from './chat/ChatAttachments';
 import { hydrate as hydrateStore, loadOlder as loadOlderStore } from './chat/ChatPagination';
 import { routeChatEvent } from './chat/ChatEvents';
+import { ttsModel } from './chat/TtsModel';
+import { readerModel } from './chat/ReaderModel';
 import { uuid } from './chat/ChatWire';
 import { sessionsModel } from './SessionsModel';
 import { workspaceModel } from './WorkspaceModel';
@@ -138,6 +140,8 @@ export class ChatModel {
 
   /** 打开会话（路由进入）：整体复位 + 立即 hydrate + 后台任务快照对账 + 模型域同步。 */
   open(sid: string, name: string): void {
+    ttsModel.stop(); // 切走即停：不念旧会话（对照原型 pickSession）
+    readerModel.stop(); // 听书同理：面板播放列表是旧会话快照，切走即收
     this.store.resetForOpen(sid, name);
     attachmentsModel.reset();
     void hydrateStore(this.store);
@@ -175,6 +179,7 @@ export class ChatModel {
     if (connModel.state !== 'authed') {
       return;
     }
+    ttsModel.stop(); // 用户发新消息 = 不再念旧回复（排队路径同；对照原型 sendMsg）
     let images: SendImage[] | null = null;
     let display: SendDisplayBlock[] | null = null;
     let full: string = text;
@@ -243,6 +248,8 @@ export class ChatModel {
 
   /** 新会话（抽屉「＋」）：回空态等待首条消息 spawn（对照原型 showEmpty）。 */
   newSession(): void {
+    ttsModel.stop(); // 离开当前会话即停（对照原型 showEmpty）
+    readerModel.stop(); // 听书同理：不读旧会话
     this.store.resetForOpen('', '新会话');
     attachmentsModel.reset();
     void this.syncModelEffort();
@@ -259,6 +266,7 @@ export class ChatModel {
     } finally {
       if (this.store.sid === sid) {
         // 用户主动打断：待排队消息一并作废（sidecar 同）；权限队列同样清空
+        ttsModel.stop(); // 停止会话即停播报（对照原型 stopSession）
         this.store.resetRuntimeState();
         if (this.store.messages.length > 0) {
           // 落系统分隔线（对照原型 m-sys）：残段已冻结，本轮被中断的时间线
@@ -297,6 +305,7 @@ export class ChatModel {
     const sid: string = this.store.sid;
     this.store.pendingPermissions = this.store.pendingPermissions
       .filter((p: PermissionRequest) => p.id !== id);
+    ttsModel.stopPermission(id); // 已应答：这条的播报（若在播）停
     // 本机已应答：列表「待确认」徽标同步终结（事件面幂等）
     sessionsModel.clearWaitConfirm(sid);
     try {

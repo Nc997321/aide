@@ -4,7 +4,7 @@
  * 过筛自 packages/aide-sdk/src/composables/useChatSession/events.ts
  * （handleChatEvent），按 ohos 端消费面裁剪：
  *  - 收录：文本/思考增量（思考经 store.appendThinkingDelta/sealThinking 走
- *    「流式展开 → 段收尾自动收起 → 跨工具合并续写」生命周期，见 ThinkingCard）、
+ *    「默认收起 → 点击展开 → 段收尾自动收起 → 跨工具合并续写」生命周期，见 ThinkingCard）、
  *    工具调用生命周期（Edit/Write 落消息 blocks 常驻折叠行，tool_result
  *    按 id 回填定稿；其余工具瞬态行 liveActivities，不入消息 blocks——
  *    运行期可见、结束即焚）、后台 shell 任务（bg_task_*，
@@ -35,6 +35,8 @@ import {
 } from './ChatBlocks';
 import { parseQuestions } from './PermissionShape';
 import { uuid, str, bool, obj, num, emptyRecord, isEditTool } from './ChatWire';
+import { ttsModel } from './TtsModel';
+import { readerModel } from './ReaderModel';
 
 /** 流式事件总路由（对照 handleChatEvent）。 */
 export function routeChatEvent(store: ChatStore, payload: Record<string, Object>): void {
@@ -96,7 +98,7 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
       if (last instanceof ThinkingBlock && !last.text.endsWith('\n')) {
         last.text += '\n\n';
       }
-      store.sealThinking(msg); // 思考段收尾：工具执行期收起（续写时重新展开）
+      store.sealThinking(msg); // 思考段收尾：工具执行期收起（续写仅重挂 active，不重新展开）
       const toolId: string = str(payload, 'id');
       if (toolId !== '') {
         const toolName: string = str(payload, 'name');
@@ -145,11 +147,18 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
       // AskUserQuestion 的问题清单随请求落草稿（形状不对 → 空，弹窗退空态）
       req.initQuestions(parseQuestions(req.input));
       store.pendingPermissions = store.pendingPermissions.concat([req]);
+      // 语音播报：只在请求落到队头时播固定模板（排队中的后续请求等应答后由
+      // 弹窗接管，不叠播）；开关关/引擎缺在 TtsModel 内静默
+      if (store.pendingPermissions.length === 1) {
+        readerModel.stop(); // 权限播报顶掉听书（互斥：两引擎通道不同会叠音）
+        ttsModel.speakPermission(req);
+      }
       break;
     }
     case 'permission_cancelled': {
       const id: string = str(payload, 'id');
       store.pendingPermissions = store.pendingPermissions.filter((p: PermissionRequest) => p.id !== id);
+      ttsModel.stopPermission(id); // 桌面侧已取消：正在播的对应播报停
       break;
     }
     case 'subagent_start': {
@@ -232,6 +241,13 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
       store.isBusy = false;
       store.liveActivities = [];
       store.bumpTail(); // 收尾终贴：补回跟尾节流窗里丢掉的最后一截
+      // 语音播报：回复完成自动播末位 assistant 正文（开关关/引擎缺静默；
+      // 新播报打断旧播报在 TtsModel.start 内）
+      const done: ChatMessage | undefined = store.messages[store.messages.length - 1];
+      if (done !== undefined && done.role === 'assistant') {
+        readerModel.stop(); // 自动播报顶掉听书（互斥：新声音优先，同 TTS 抢占规则）
+        ttsModel.speakReply(done);
+      }
       break;
     }
     case 'jump_queued':
@@ -246,6 +262,7 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
       // display 回灌：手机/PWA 带附件的消息随事件回传块数组，据此渲染图片/
       // 视频/文件引用富气泡（对照桌面 blocksFromDisplay）；无 display 的纯文本
       // 消息退 userText 单文本块。
+      ttsModel.stop(); // 用户发新消息（本机/桌面/PWA 同源）= 不再念旧回复
       store.finishStreaming();
       store.appendMessage(parseUserDisplay(payload['display'], str(payload, 'text')));
       store.isBusy = true;
@@ -268,11 +285,16 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
       if (bool(payload, 'ok')) {
         store.model = str(payload, 'model');
       } else {
+        store.finishStreaming(); // 落提示前收尾在途流式（同 notification 分支）
         pushAssistantNotice(store, `模型切换未生效：${str(payload, 'error')}`);
       }
       break;
     }
     case 'notification': {
+      // 通知可能与流式回合交错：先收尾在途消息再落提示——否则它让出末位后
+      // streaming 仍挂真（末块光标/active 思考卡冻结在旧消息里）；续写由
+      // getOrCreateAssistant 新起一条（带光标），通知气泡也不与正文混排
+      store.finishStreaming();
       pushAssistantNotice(store, str(payload, 'message'));
       break;
     }
