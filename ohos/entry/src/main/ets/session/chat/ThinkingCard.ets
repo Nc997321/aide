@@ -1,9 +1,11 @@
 /**
- * 思考卡组件：流式思考内容的一屏限高滚动视图。
+ * 思考卡组件：思考内容的一屏限高滚动视图。
  *
  * 生命周期语义（状态机在 ChatStore.appendThinkingDelta / sealThinking，
  * 本组件只做展示与跟尾，不持有业务状态）：
- *  - active 段（流式中）：卡片展开，内容增长自动贴内底（onAreaChange 为
+ *  - 全程默认收起（含流式中）：仅用户点头行翻转，store 永不自动展开；
+ *    头行以「思考中…」标记 active 段（收起态下唯一的进行中信号）
+ *  - active 段（流式中）展开态：内容增长自动贴内底（onAreaChange 为
  *    布局后回调，此时滚动目标已是新高度）；用户上滚离底即停跟、回底复跟
  *    （onScrollStop 后以 isAtEnd 复估跟尾位，单一回调天然覆盖拖拽/惯性/
  *    程序滚动全部来源，且不依赖已废弃的 onScroll 方向语义）
@@ -25,7 +27,7 @@ export struct ThinkingCard {
     Column({ space: 8 }) {
       Row({ space: 6 }) {
         Text('✦').fontSize(12).fontColor($r('app.color.text_secondary'))
-        Text(this.block.active && this.block.text === '' ? '思考中…' : '思考')
+        Text(this.block.active ? '思考中…' : '思考')
           .fontSize(13)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_secondary'))

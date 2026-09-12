@@ -38,7 +38,7 @@ export class ThinkingBlock implements ContentBlock {
   type: string = 'thinking';
   id: string = '';
   @Trace text: string = '';
-  /** 折叠态（用户点击翻转；思考段收尾 sealThinking 自动置真——完成即收起）。 */
+  /** 折叠态（默认收起，仅用户点击翻转；段收尾 sealThinking 亦置真——完成即收起）。 */
   @Trace collapsed: boolean = false;
   /** 本思考段仍在流式增长（「思考中…」与流式光标的依据；收尾置假）。 */
   @Trace active: boolean = false;
@@ -48,10 +48,11 @@ export class ThinkingBlock implements ContentBlock {
     this.text = text;
   }
 
-  /** 流式段新卡：active + 展开（appendThinkingDelta 新起段用）。 */
+  /** 流式段新卡：active + 收起（流式也不自动展开，仅用户点击；appendThinkingDelta 新起段用）。 */
   static streaming(id: string, text: string): ThinkingBlock {
     const b: ThinkingBlock = new ThinkingBlock(id, text);
     b.active = true;
+    b.collapsed = true;
     return b;
   }
 

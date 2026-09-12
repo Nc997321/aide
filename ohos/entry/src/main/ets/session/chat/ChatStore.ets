@@ -129,8 +129,8 @@ export class ChatStore {
 
   /**
    * Edit/Write 常驻折叠行回填（tool_result 定稿：spinner → 图标；找不到
-   * 对应块静默丢弃——乱序/非本会话/已复位）。自尾向前扫：pending 块只可能
-   * 出现在最近的 assistant 消息里，倒序首个命中即回填。
+   * 对应块静默丢弃——乱序/非本会话/已复位）。自尾向前扫：通知分泡后 pending
+   * 块可能散布多条 assistant 消息，倒序首个命中即回填。
    */
   backfillToolResult(toolUseId: string, content: string, isError: boolean): void {
     if (toolUseId === '') {
@@ -313,15 +313,14 @@ export class ChatStore {
   /**
    * 思考增量入列：末位是思考卡则原地续写——V1 工具不入时间线，被工具打断的
    * 相邻思考段合并回同一张卡（推理线本就连续，对照历史映射的合并分支）；
-   * 否则新起一张展开的流式卡。续写已收起的卡 = 工具结束后思考恢复：
-   * 重新展开（sealed → active）。
+   * 否则新起一张收起的流式卡。续写已收起的卡 = 工具结束后思考恢复：
+   * 仅重挂 active，不强行展开（展开只属于用户点击）。
    */
   appendThinkingDelta(msg: ChatMessage, chunk: string): void {
     const last: ContentBlock | undefined = msg.blocks[msg.blocks.length - 1];
     if (last instanceof ThinkingBlock) {
       if (!last.active) {
         last.active = true;
-        last.collapsed = false;
       }
       last.text += chunk;
       return;
@@ -378,10 +377,15 @@ export class ChatStore {
     }
   }
 
-  /** 取/建流式续写目标的 assistant 消息（新建即置 streaming）。 */
+  /**
+   * 取/建流式续写目标的 assistant 消息（新建即置 streaming）。
+   * 复用仅限「流式中」的 assistant：末位是通知/历史等非流式 assistant 时新起
+   * 一条——若复用，delta 会接进 streaming=false 的消息（正文光标消失、通知
+   * 与正文混排，且 finishStreaming 门卫不过 → 思考卡 active 冻结成假光标）。
+   */
   getOrCreateAssistant(): ChatMessage {
     const last: ChatMessage | undefined = this.messages[this.messages.length - 1];
-    if (last !== undefined && last.role === 'assistant') {
+    if (last !== undefined && last.role === 'assistant' && last.streaming) {
       return last;
     }
     const msg: ChatMessage = ChatMessage.assistantStreaming(uuid());
