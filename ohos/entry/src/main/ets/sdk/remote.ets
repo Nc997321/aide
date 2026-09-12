@@ -10,6 +10,9 @@
  *  - for-of Map → forEach；无参 catch → catch (e)
  *  - unknown → Object；ReturnType<typeof setTimeout> → number
  *  - 默认 wsFactory 从浏览器 WebSocket → createOhosWs（ws-ohos.ets）
+ * ohos 端增强（上游 remote.ts 暂无，宜回流三端同步）：
+ *  - 握手看门狗 HANDSHAKE_TIMEOUT_MS：openOnce 起计时，握手有结论前超时则强制
+ *    掐断走 offline 退避——否则中继挂死/半开连接/TCP 黑洞会永远停在 connecting/bridged
  */
 import type { AideTransport, AideEvent } from './transport';
 import { createOhosWs } from './ws-ohos';
@@ -165,6 +168,10 @@ const BACKOFF_MAX_MS = 30000;
 /** 手机腿活体帧间隔：relay 据此武装 60s 静默超时（首帧 keepalive 才武装）。
  *  契约见 docs/reference/remote-protocol.md。 */
 const KEEPALIVE_INTERVAL_MS = 20000;
+/** 握手全程上限：openOnce → authed/needsPairing。覆盖三类系统层救不了的场景：
+ *  TCP 黑洞（webSocket.connect 无超时参数）、中继应用挂死（协议 pong 由对端 WS
+ *  库自动回，协议级心跳探不出）、半开连接（send 静默成功）。 */
+const HANDSHAKE_TIMEOUT_MS = 15000;
 /** 远程网关只透传 chat-event 这一种事件；其他事件名 listen 了也收不到。 */
 const CHAT_EVENT = 'chat-event';
 
@@ -195,6 +202,8 @@ export class RemoteTransport implements AideTransport {
   private pairWaiter: PairWaiter | null = null;
   private authWaiter: AuthWaiter | null = null;
   private keepaliveTimer: number | null = null;
+  /** 握手看门狗：openOnce 时武装；authed/needsPairing（有结论）或连接关闭时解除。 */
+  private handshakeTimer: number | null = null;
   /** 被新连接顶替（superseded）：onclose 据此回 idle 不重连，防互踢循环。 */
   private kickedBySupersede = false;
 
@@ -295,6 +304,7 @@ export class RemoteTransport implements AideTransport {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.stopHandshakeTimer();
     if (this.ws) {
       this.closedByUser = true; // 旧连接关闭不触发重连
       this.stopKeepalive();
@@ -329,6 +339,7 @@ export class RemoteTransport implements AideTransport {
   disconnect(): void {
     this.closedByUser = true;
     this.stopKeepalive();
+    this.stopHandshakeTimer();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -372,10 +383,54 @@ export class RemoteTransport implements AideTransport {
     }
   }
 
+  /**
+   * 握手看门狗：超时仍在 connecting/bridged（TCP 黑洞/中继挂死/半开连接）时
+   * 强制掐断并补 offline 转移，落回既有退避重连。不依赖 ws.close() 的 close
+   * 事件——挂死连接的关闭握手同样可能永不到达，故转移逻辑在此完整执行；
+   * 迟到的 onclose 由 ws 身份守卫（this.ws !== ws）拦下。
+   */
+  private startHandshakeTimer(ws: WsLike): void {
+    this.stopHandshakeTimer();
+    this.handshakeTimer = setTimeout(() => {
+      this.handshakeTimer = null;
+      // 身份守卫：已被新连接替换 / 用户已断开 / 握手已有结论
+      if (this.ws !== ws || this.closedByUser) {
+        return;
+      }
+      const s: ConnState = this._state;
+      if (s !== 'connecting' && s !== 'bridged') {
+        return;
+      }
+      // 掐断：先置空 this.ws（拦下迟到/同步的 onclose），再补 offline 转移
+      this.ws = null;
+      this.stopKeepalive();
+      ws.close();
+      this.failPending('握手超时');
+      if (this.pairWaiter) {
+        this.pairWaiter.reject(new Error('握手超时'));
+        this.pairWaiter = null;
+      }
+      if (this.authWaiter) {
+        this.authWaiter.reject(new Error('握手超时'));
+        this.authWaiter = null;
+      }
+      this.setState('offline');
+      this.scheduleReconnect();
+    }, HANDSHAKE_TIMEOUT_MS);
+  }
+
+  private stopHandshakeTimer(): void {
+    if (this.handshakeTimer !== null) {
+      clearTimeout(this.handshakeTimer);
+      this.handshakeTimer = null;
+    }
+  }
+
   private openOnce(): void {
     this.setState('connecting');
     const ws = this.wsFactory(this.wsUrl());
     this.ws = ws;
+    this.startHandshakeTimer(ws);
 
     ws.onopen = (ev: WsOpenEvent) => {
       const creds = this.creds;
@@ -420,6 +475,7 @@ export class RemoteTransport implements AideTransport {
       }
       this.ws = null;
       this.stopKeepalive();
+      this.stopHandshakeTimer();
       if (this.closedByUser) {
         this.setState('idle');
         return;
@@ -597,6 +653,10 @@ export class RemoteTransport implements AideTransport {
       return;
     }
     this._state = s;
+    // 握手有结论（配对/认证成功或被拒）：解除看门狗
+    if (s === 'authed' || s === 'needsPairing') {
+      this.stopHandshakeTimer();
+    }
     this.stateCbs.forEach((cb: StateCb) => cb(s));
   }
 }

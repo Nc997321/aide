@@ -13,7 +13,7 @@ import { common } from '@kit.AbilityKit';
 import { RemoteTransport, ConnState, ConnectCreds, ConnectByCode, ConnectByToken, PairOk } from '../sdk/remote';
 import { setTransport } from '../sdk/transport';
 import { makeOpenUrl } from '../sdk/ws-ohos';
-import { StoredCreds, loadCreds, saveCreds, clearCreds, saveRelayUrl, loadRelayUrl } from '../sdk/storage';
+import { StoredCreds, loadCreds, saveCreds, clearCreds, saveRelayUrl, loadRelayUrl, DEFAULT_RELAY_URL } from '../sdk/storage';
 
 /** needsPairing 的归因：badcode = 本次配对码被拒；revoked = 已存 token 被吊销。 */
 export type PairError = 'badcode' | 'revoked' | undefined;
@@ -23,8 +23,8 @@ export class ConnModel {
   @Trace state: ConnState = 'idle';
   @Trace pairError: PairError = undefined;
   @Trace hasCreds: boolean = false;
-  /** 上次输入的中继地址（未配对时也保留，连接页预填）。 */
-  @Trace savedRelayUrl: string = '';
+  /** 上次输入的中继地址（未配对时也保留，连接页预填；未存过用缺省值）。 */
+  @Trace savedRelayUrl: string = DEFAULT_RELAY_URL;
   /** 桌面侧执行错误（invoke_err 无对应挂起请求时上报）；UI 可选展示。 */
   @Trace lastError: string = '';
 
