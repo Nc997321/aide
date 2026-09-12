@@ -15,6 +15,8 @@
 //!   （2026-07-08 首次真实冻结实锤主线程被同步命令堵死后补上，见
 //!   `docs/superpowers/specs/2026-07-08-freeze-diagnostics-design.md`）。
 
+#[cfg(any(debug_assertions, feature = "devtools"))]
+pub mod experiment;
 mod report;
 mod ring;
 mod stackwalk;

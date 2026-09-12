@@ -317,7 +317,7 @@ fn close_freeze(inner: &DiagInner, fz: ActiveFreeze, outcome: FreezeOutcome) {
 }
 
 /// 主窗口 HWND（Windows 判「未响应」用）。在主线程解析一次，存成整数共享。
-fn resolve_hwnd(app: &AppHandle) -> Arc<AtomicIsize> {
+pub(super) fn resolve_hwnd(app: &AppHandle) -> Arc<AtomicIsize> {
     let hwnd = Arc::new(AtomicIsize::new(0));
     #[cfg(windows)]
     {
@@ -436,7 +436,7 @@ mod tests {
 /// Windows：问操作系统这个窗口是否已被判定「未响应」（≥5s 不处理消息）。
 /// 与我们自己的心跳判定互相印证。
 #[cfg(windows)]
-fn is_hung_window(hwnd: isize) -> Option<bool> {
+pub(super) fn is_hung_window(hwnd: isize) -> Option<bool> {
     if hwnd == 0 {
         return None;
     }
@@ -448,6 +448,6 @@ fn is_hung_window(hwnd: isize) -> Option<bool> {
 }
 
 #[cfg(not(windows))]
-fn is_hung_window(_hwnd: isize) -> Option<bool> {
+pub(super) fn is_hung_window(_hwnd: isize) -> Option<bool> {
     None
 }

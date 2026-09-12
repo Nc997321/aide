@@ -18,6 +18,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
+use std::path::PathBuf;
 use tauri::State;
 
 use super::{
@@ -199,7 +200,17 @@ fn list_sessions_blocking(
 /// 之后才会调用这个命令（见 CLAUDE.md「会话 ID 生命周期」），所以这里的 id
 /// 从一开始就是终身 id，不存在草稿 id 需要事后改名的情况。
 #[tauri::command]
-pub fn create_session(id: String, name: String) -> Result<Session, String> {
+pub async fn create_session(id: String, name: String) -> Result<Session, String> {
+    tokio::task::spawn_blocking(move || create_session_blocking(id, name))
+        .await
+        .map_err(|e| format!("create_session task panicked: {e}"))?
+}
+
+/// 磁盘 IO 离开主线程：`create_dir_all` + `fs::write` 是真落盘，且固定在
+/// `session_init` 之后由 onSessionCreated 触发（App.vue），恰好压在会话起步的
+/// 繁忙点上。2026-09-05 一份 2.9 秒的主线程阻塞报告正卡在这个位置——当时它连
+/// trace 都没埋，是 `stuckCommand=None` 的结构性盲区。
+fn create_session_blocking(id: String, name: String) -> Result<Session, String> {
     use std::time::{SystemTime, UNIX_EPOCH};
     let dir = our_sessions_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create sessions dir: {}", e))?;
@@ -226,10 +237,16 @@ pub fn create_session(id: String, name: String) -> Result<Session, String> {
 }
 
 #[tauri::command]
-pub fn delete_session(
-    _workspace_state: State<'_, WorkspaceState>,
-    id: String,
-) -> Result<(), String> {
+pub async fn delete_session(id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || delete_session_blocking(id))
+        .await
+        .map_err(|e| format!("delete_session task panicked: {e}"))?
+}
+
+/// 磁盘 IO 离开主线程：删元数据 + 全局搜 jsonl 逐个删 + 扫 claude sessions 目录，
+/// 每一步都是真 IO（全局搜索本身就是遍历）。原先挂着一个从未使用的
+/// `State<WorkspaceState>` 形参，一并去掉——死参数。
+fn delete_session_blocking(id: String) -> Result<(), String> {
     let our_path = our_sessions_dir().join(format!("{}.json", id));
     if our_path.exists() {
         fs::remove_file(&our_path).map_err(|e| format!("Failed to delete metadata: {}", e))?;
@@ -274,7 +291,8 @@ pub fn delete_session(
     }
 
     // 同步移除「最近访问」中已删会话（双保险，配合 list_recent 自愈）。
-    let _ = super::recent::remove_recent_session(id);
+    // 走阻塞实现而非 async 命令：本函数已在阻塞线程上，不必再绕一次跨线程。
+    let _ = super::recent::remove_recent_session_blocking(&id);
 
     Ok(())
 }
@@ -360,7 +378,14 @@ fn write_session_meta_blocking(id: &str, patch: &SessionMetaPatch) -> Result<(),
 }
 
 #[tauri::command]
-pub fn rename_session(id: String, name: String) -> Result<(), String> {
+pub async fn rename_session(id: String, name: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || rename_session_blocking(id, name))
+        .await
+        .map_err(|e| format!("rename_session task panicked: {e}"))?
+}
+
+/// 磁盘 IO 离开主线程（读-改-写会话元数据 json）。
+fn rename_session_blocking(id: String, name: String) -> Result<(), String> {
     // 手动重命名：标记 nameSource=manual，此后自动生成的标题一律不得覆盖
     // （auto_rename_session 据此拒写）。
     write_session_meta_blocking(
@@ -700,16 +725,24 @@ fn normalize_path_for_compare(p: &str) -> String {
 /// current workspace. Results are sorted newest-first so the caller can pick the
 /// first ID that isn't already mapped to an active PTY.
 #[tauri::command]
-pub fn find_sessions_since(
+pub async fn find_sessions_since(
     workspace_state: State<'_, WorkspaceState>,
     since_ms: u64,
 ) -> Result<Vec<String>, String> {
+    // 工作区根路径在主线程上取好（锁内一次 exists() stat，够轻），
+    // 真正的重活（扫目录 + 逐个读 json 解析）整体搬进阻塞线程。
+    let root = project_root_for_commands(&workspace_state);
+    tokio::task::spawn_blocking(move || find_sessions_since_blocking(root, since_ms))
+        .await
+        .map_err(|e| format!("find_sessions_since task panicked: {e}"))?
+}
+
+fn find_sessions_since_blocking(root: PathBuf, since_ms: u64) -> Result<Vec<String>, String> {
     let sessions_dir = claude_sessions_dir();
     if !sessions_dir.exists() {
         return Ok(Vec::new());
     }
 
-    let root = project_root_for_commands(&workspace_state);
     let root_normalized = normalize_path_for_compare(&root.to_string_lossy());
 
     let read_dir =
@@ -820,7 +853,7 @@ mod tests {
         let path = our_sessions_dir().join(format!("{}.json", id));
         let _ = fs::remove_file(&path); // 防止上次失败留下的残留
 
-        let session = create_session(id.clone(), "测试会话".to_string()).unwrap();
+        let session = create_session_blocking(id.clone(), "测试会话".to_string()).unwrap();
         assert_eq!(session.id, id);
         assert_eq!(session.name, "测试会话");
 
@@ -839,7 +872,7 @@ mod tests {
         let path = our_sessions_dir().join(format!("{}.json", id));
         let _ = fs::remove_file(&path);
 
-        create_session(id.clone(), "新会话 12:00:00".to_string()).unwrap();
+        create_session_blocking(id.clone(), "新会话 12:00:00".to_string()).unwrap();
         let content = fs::read_to_string(&path).unwrap();
         let v: Value = serde_json::from_str(&content).unwrap();
         assert_eq!(v.get("nameSource").and_then(|x| x.as_str()), Some("auto"));
@@ -854,8 +887,8 @@ mod tests {
         let path = our_sessions_dir().join(format!("{}.json", id));
         let _ = fs::remove_file(&path);
 
-        create_session(id.clone(), "新会话 12:00:00".to_string()).unwrap();
-        rename_session(id.clone(), "我自己起的名".to_string()).unwrap();
+        create_session_blocking(id.clone(), "新会话 12:00:00".to_string()).unwrap();
+        rename_session_blocking(id.clone(), "我自己起的名".to_string()).unwrap();
         let content = fs::read_to_string(&path).unwrap();
         let v: Value = serde_json::from_str(&content).unwrap();
         assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("我自己起的名"));
@@ -870,7 +903,7 @@ mod tests {
         let path = our_sessions_dir().join(format!("{}.json", id));
         let _ = fs::remove_file(&path);
 
-        create_session(id.clone(), "新会话 12:00:00".to_string()).unwrap();
+        create_session_blocking(id.clone(), "新会话 12:00:00".to_string()).unwrap();
         let adopted = auto_rename_session(id.clone(), "修复登录 Bug".to_string())
             .await
             .unwrap();
@@ -891,8 +924,8 @@ mod tests {
         let path = our_sessions_dir().join(format!("{}.json", id));
         let _ = fs::remove_file(&path);
 
-        create_session(id.clone(), "新会话 12:00:00".to_string()).unwrap();
-        rename_session(id.clone(), "我自己起的名".to_string()).unwrap();
+        create_session_blocking(id.clone(), "新会话 12:00:00".to_string()).unwrap();
+        rename_session_blocking(id.clone(), "我自己起的名".to_string()).unwrap();
         let adopted = auto_rename_session(id.clone(), "修复登录 Bug".to_string())
             .await
             .unwrap();
@@ -956,7 +989,7 @@ mod tests {
         let path = our_sessions_dir().join(format!("{}.json", id));
         let _ = fs::remove_file(&path);
 
-        create_session(id.clone(), "模型会话".to_string()).unwrap();
+        create_session_blocking(id.clone(), "模型会话".to_string()).unwrap();
         assert_eq!(session_model(id.clone()).await.unwrap(), None);
 
         write_model(
@@ -1012,7 +1045,7 @@ mod tests {
         let path = our_sessions_dir().join(format!("{}.json", id));
         let _ = fs::remove_file(&path);
 
-        create_session(id.clone(), "供应商会话".to_string()).unwrap();
+        create_session_blocking(id.clone(), "供应商会话".to_string()).unwrap();
         assert_eq!(session_provider(id.clone()).await.unwrap(), None);
 
         write_provider(
@@ -1060,7 +1093,7 @@ mod tests {
         let path = our_sessions_dir().join(format!("{}.json", id));
         let _ = fs::remove_file(&path);
 
-        create_session(id.clone(), "一次写会话".to_string()).unwrap();
+        create_session_blocking(id.clone(), "一次写会话".to_string()).unwrap();
 
         set_session_meta(
             id.clone(),
@@ -1141,5 +1174,35 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    /// 覆盖新加的 async 包装层：async 命令 → spawn_blocking → `*_blocking`。
+    /// 其余测试直接打 `*_blocking`，绕过了这一层——而取 State、跨线程搬运返回值、
+    /// panic 转 Err 这些恰恰只在包装层出错，编译期看不出来，必须真跑一趟。
+    #[tokio::test]
+    async fn session_commands_round_trip_through_async_wrappers() {
+        let id = "test-async-roundtrip-aa11bb22".to_string();
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        let _ = fs::remove_file(&path);
+
+        let session = create_session(id.clone(), "异步往返".to_string())
+            .await
+            .unwrap();
+        assert_eq!(session.id, id);
+        assert!(path.exists(), "async 包装后仍应落盘元数据");
+
+        rename_session(id.clone(), "改过的名".to_string())
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("改过的名"));
+        assert_eq!(
+            v.get("nameSource").and_then(|x| x.as_str()),
+            Some("manual"),
+            "手动改名必须标 manual，否则自动标题会覆盖它"
+        );
+
+        delete_session(id.clone()).await.unwrap();
+        assert!(!path.exists(), "async 包装后仍应删除元数据");
     }
 }

@@ -189,7 +189,7 @@
 | 模型/effort 继承主会话（btw 坑） | task.json 显式字段，send 必带 |
 | skip-permissions 下 canUseTool 不被调 | 自动化不用 bypass，走 default + 编程裁决 |
 | 同步命令堵主线程 | 命令面全 async/spawn_blocking；调度器本就在 tokio |
-| 跨线程 emit 投递曾致卡死（方案C 背景） | 自动化事件低频；实时输出复用现有 chat-event 管道，不新增 emit 通道 |
+| 跨线程 emit 投递曾致卡死（**该归因已于 2026-09-13 证伪，见 [决策记录 §更正](../discussions/2026-07-09-sidecar-sse-streaming-architecture.md)**；但"不新增 emit 通道、复用现有 chat-event 管道"的设计结论不变） | 自动化事件低频；实时输出复用现有 chat-event 管道，不新增 emit 通道 |
 | CREATE_NO_WINDOW / verbatim 路径 | 不新 spawn 进程（共享 runtime），无新暴露面 |
 | Fable 烧钱 | 编辑器默认 Sonnet + effort 中，Fable 选项带成本警告 |
 

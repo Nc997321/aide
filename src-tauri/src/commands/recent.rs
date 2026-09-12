@@ -185,16 +185,41 @@ pub fn now_ms() -> u64 {
 }
 
 // ── Tauri 命令 ──
+//
+// 全部 async + spawn_blocking。这些命令做的是 recent.json 落盘，`list_recent`
+// 还要逐会话做一次全局 jsonl 搜索 + 逐条读元数据——落在主线程就是冻结。
+//
+// 实锤（2026-09-05 freeze-1788610528313）：`remove_recent_session` 的
+// `cmd_enter`→`cmd_exit` 跨了 **7.87 秒**，全程主线程被占（探针 pending 爬升、
+// IsHungAppWindow 真、无人烧 CPU = 纯 IO 等待）；一份 2.9 秒的同类阻塞紧随
+// `session_init`（见 `create_session`）。
+//
+// 搬离主线程后不再埋 `trace_command`：guard 在 dispatch 后立刻 drop，对 async
+// 命令没有意义（见 CLAUDE.md「trace_command 兜底」）。
 
 #[tauri::command]
-pub fn record_recent_session(
+pub async fn record_recent_session(
     service: State<'_, Arc<SettingsService>>,
     ws_key: String,
     ws_name: String,
     session_id: String,
     name: String,
 ) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("record_recent_session");
+    let service = service.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        record_recent_session_blocking(&service, ws_key, ws_name, session_id, name)
+    })
+    .await
+    .map_err(|e| format!("record_recent_session task panicked: {e}"))?
+}
+
+fn record_recent_session_blocking(
+    service: &SettingsService,
+    ws_key: String,
+    ws_name: String,
+    session_id: String,
+    name: String,
+) -> Result<(), String> {
     let entry = RecentSession {
         ws_key,
         ws_name,
@@ -203,36 +228,53 @@ pub fn record_recent_session(
         ts: now_ms(),
     };
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
-    push_session(&mut guard, entry, current_limit(&service));
+    push_session(&mut guard, entry, current_limit(service));
     save_recent_file(&guard)
 }
 
 #[tauri::command]
-pub fn record_recent_file(
+pub async fn record_recent_file(
     service: State<'_, Arc<SettingsService>>,
     ws_key: String,
     path: String,
     name: String,
 ) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("record_recent_file");
+    let service = service.inner().clone();
+    tokio::task::spawn_blocking(move || record_recent_file_blocking(&service, ws_key, path, name))
+        .await
+        .map_err(|e| format!("record_recent_file task panicked: {e}"))?
+}
+
+fn record_recent_file_blocking(
+    service: &SettingsService,
+    ws_key: String,
+    path: String,
+    name: String,
+) -> Result<(), String> {
     let entry = RecentFile {
         path,
         name,
         ts: now_ms(),
     };
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
-    push_file(&mut guard, &ws_key, entry, current_limit(&service));
+    push_file(&mut guard, &ws_key, entry, current_limit(service));
     save_recent_file(&guard)
 }
 
 #[tauri::command]
-pub fn list_recent(
+pub async fn list_recent(
     ws_key: String,
     service: State<'_, Arc<SettingsService>>,
 ) -> Result<RecentView, String> {
-    let _trace = crate::diagnostics::trace_command("list_recent");
+    let service = service.inner().clone();
+    tokio::task::spawn_blocking(move || list_recent_blocking(ws_key, &service))
+        .await
+        .map_err(|e| format!("list_recent task panicked: {e}"))?
+}
+
+fn list_recent_blocking(ws_key: String, service: &SettingsService) -> Result<RecentView, String> {
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
-    let limit = current_limit(&service);
+    let limit = current_limit(service);
     let mut need_save = prune_stale(&mut guard, &ws_key);
     // 名字自愈：快照名过期（自动标题/手动改名）时以权威名覆盖并落盘
     if overlay_session_names(&mut guard) {
@@ -257,8 +299,15 @@ pub fn list_recent(
 }
 
 #[tauri::command]
-pub fn remove_recent_session(session_id: String) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("remove_recent_session");
+pub async fn remove_recent_session(session_id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || remove_recent_session_blocking(&session_id))
+        .await
+        .map_err(|e| format!("remove_recent_session task panicked: {e}"))?
+}
+
+/// 阻塞实现。`delete_session` 自己就在阻塞线程上（它也要删 jsonl），直接调这个
+/// 而不是回调 async 命令——省一次跨线程往返。
+pub(crate) fn remove_recent_session_blocking(session_id: &str) -> Result<(), String> {
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
     let before = guard.sessions.len();
     guard.sessions.retain(|s| s.session_id != session_id);
@@ -269,10 +318,15 @@ pub fn remove_recent_session(session_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn clear_recent(category: Option<String>) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("clear_recent");
+pub async fn clear_recent(category: Option<String>) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || clear_recent_blocking(category.as_deref()))
+        .await
+        .map_err(|e| format!("clear_recent task panicked: {e}"))?
+}
+
+fn clear_recent_blocking(category: Option<&str>) -> Result<(), String> {
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
-    match category.as_deref() {
+    match category {
         Some("sessions") => guard.sessions.clear(),
         Some("files") => guard.files.clear(),
         _ => {

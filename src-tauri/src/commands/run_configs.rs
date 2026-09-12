@@ -34,6 +34,7 @@ fn configs_path(ws_key: &str) -> std::path::PathBuf {
 
 #[tauri::command]
 pub fn list_run_configs(ws_key: String) -> Result<Vec<RunConfig>, String> {
+    let _trace = crate::diagnostics::trace_command("list_run_configs");
     let path = configs_path(&ws_key);
     if !path.exists() {
         return Ok(Vec::new());
@@ -82,6 +83,7 @@ fn migrate_per_config_java_home(ws_key: &str, configs: &mut [RunConfig], path: &
 
 #[tauri::command]
 pub fn save_run_configs(ws_key: String, configs: Vec<RunConfig>) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("save_run_configs");
     let path = configs_path(&ws_key);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;

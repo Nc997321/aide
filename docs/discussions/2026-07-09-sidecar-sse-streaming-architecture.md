@@ -1,9 +1,41 @@
 # 决策记录:流式 chat-event 搬离主线程 emit 路径
 
 **日期**:2026-07-09
-**状态**:已选定**方案 C(内存缓冲 + 同步轮询)**为根治方案,在 `v1` 分支实施中;方案 B(SSE)降为兜底。本文记录根因、调查、三方案对比与决策。
+**状态**:**⚠️ 根因结论已作废（2026-09-13），方案 C/B 均不需要实施。见下方更正块。**原文保留作推理历史。
 **关联**:`docs/superpowers/specs/2026-07-08-freeze-diagnostics-design.md`(卡死黑匣子)、记忆条 `aide-session-init-freeze-rootcause.md`。
 **当前 git**:master 已推 `53418ef`(诊断三件套:native 栈捕获 + 去 tauri/tracing 止血 + emit 轨迹环);`v1` 分支已从 master 建出、干净,用于实施 C。过渡 build(含 stackwalk+tracing 止血)在 `src-tauri/target/release/bundle/nsis/Aide_0.2.6_x64-setup.exe`。
+
+---
+
+## ⚠️ 2026-09-13 更正：本文的根因结论已被证伪
+
+**第 2 节「卡死根因定位到 emit 投递路径」是推断，从未被栈帧证实**（native 栈捕获 stackwalk 是这份结论之后才加的），且被后续证据全面推翻。
+
+**证伪实验**（代码 `src-tauri/src/diagnostics/experiment.rs`；复跑 `AIDE_EMIT_EXPERIMENT=6000 pnpm tauri dev` → `~/.aide/diagnostics/emit-experiment-*.json`）：以 ~600 事件/秒（真实流式的 ~50 倍）从后台线程 `app.emit("chat-event")`，同时每 100ms 测一次主线程 no-op 探针延迟——
+
+| 场景 | 投递次数 | 探针 p50 | max | 投出未兑现 | Windows 判未响应 |
+|---|---|---|---|---|---|
+| idle（基线） | 0 | 0.15ms | 0.85ms | 0 | 0/60 |
+| eval（直投递路径，不依赖监听器） | 3887 | 0.20ms | 1.93ms | 0 | 0/60 |
+| **emit（本文指控的那条）** | 3325 | 0.51ms | **3.80ms** | 0 | 0/60 |
+| block（渲染进程钉死 6 秒，零事件） | 0 | 0.19ms | 7.50ms | 0 | 0/60 |
+| block_emit（钉死 + 事件流） | 3698 | 0.70ms | **21.31ms** | 0 | 0/60 |
+
+主线程最坏响应 21 毫秒。本文所述「主线程 park、pending 单调爬、22 分钟不恢复」复现不出来——差三个数量级。
+
+**机制层**（读 tauri 2.11.2 / wry 0.55.1 源码，本机 `~/.cargo/registry/`）：`app.emit` → worker 线程 `send_user_message`（fire-and-forget）→ 主线程 `webview.evaluate_script` → wry `ICoreWebView2::ExecuteScript`（**异步 API + 完成回调**，`webview2/mod.rs:1330`）。唯一让 emit 变成阻塞 RPC 的是 tauri 的 `tracing` feature（`getter!` = `rx.recv()`），而且它阻塞的是 **worker 而非主线程**——§8 把它当"止血"处理是对的，但它从来不是主线程卡死的原因。
+
+**2026-08/09 的 20 份冻结报告**（`~/.aide/diagnostics/`）签名与本文假设互斥：`pending` 全 0（探针每 500ms 一枚，31 秒那份 45 帧里一枚没漏）、探针延迟 0.08–0.60ms、`isHungAppWindow` 20 份全部 false。其中 16/20 是**渲染进程**烧 CPU（`msedgewebview2.exe` 106–240% + 前端 `longTaskCount` 22–113）。
+
+**真根因两类**：
+1. **渲染进程饱和**——已找到并修复 4 个独立 O(n²)（hljs 流式高亮、消息列表无窗口化、渲染进程堆 1.08GB GC 螺旋、thinking delta 全文重排版）。
+2. **同步 fs 命令占主线程**——2026-09-05 报告实锤 `remove_recent_session` 的 `cmd_enter`→`cmd_exit` 跨 **7.87 秒**（`pending` 爬升 + `isHungAppWindow` 真 + 无人烧 CPU，与 §2 描述的主线程签名完全一致）。
+
+**注意：本文最初的那个判断才是对的。** 调查早期曾定「一批同步 `fs::IO` 命令漏过了 async 清扫，在 `session_init` 后连发」（即 `create_session` / `record_recent_session` / `recent.rs` 整组），它在第二份报告（流式中、全程无 create_session）之后被当作错误结论丢弃了——**丢弃得不对**：那批命令今天仍在制造主线程冻结，只是肇事者换成了同一簇里的另一条。
+
+**处置**：方案 C 从未实施，也不需要实施——它要解决的问题不存在。2026-09-13 已把 `recent.rs` 5 条 + `session/mod.rs` 4 条同步 fs 命令改 `async` + `spawn_blocking`，并给 4 条盲区命令补了 trace 埋点。
+
+**下文全部内容保留作推理历史，读时以本节为准。**
 
 ---
 

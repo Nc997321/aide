@@ -420,6 +420,7 @@ pub async fn delete_file(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn create_file(parent_path: String, name: String) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("create_file");
     let file_path = PathBuf::from(&parent_path).join(&name);
     if file_path.exists() {
         return Err(format!("Already exists: {}", name));
@@ -429,6 +430,7 @@ pub fn create_file(parent_path: String, name: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn create_dir(parent_path: String, name: String) -> Result<(), String> {
+    let _trace = crate::diagnostics::trace_command("create_dir");
     let dir_path = PathBuf::from(&parent_path).join(&name);
     if dir_path.exists() {
         return Err(format!("Already exists: {}", name));

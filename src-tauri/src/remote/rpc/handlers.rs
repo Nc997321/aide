@@ -310,16 +310,15 @@ struct CreateSessionArgs {
 pub fn create_session(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: CreateSessionArgs = parse(params)?;
-        // 同步命令体：小文件 IO，relay 任务线程（非主线程）上直接调，等价语义。
-        to_json(crate::commands::session::create_session(a.id, a.name))
+        // 与桌面同一实现（内部 spawn_blocking 落盘），这里 await 即可。
+        to_json(crate::commands::session::create_session(a.id, a.name).await)
     })
 }
 
-pub fn delete_session(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
+pub fn delete_session(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: SessionIdOnlyArgs = parse(params)?;
-        let ws_state = app.state::<WorkspaceState>();
-        to_json(crate::commands::session::delete_session(ws_state, a.id))
+        to_json(crate::commands::session::delete_session(a.id).await)
     })
 }
 
@@ -333,7 +332,7 @@ struct SessionIdOnlyArgs {
 pub fn rename_session(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: CreateSessionArgs = parse(params)?;
-        to_json(crate::commands::session::rename_session(a.id, a.name))
+        to_json(crate::commands::session::rename_session(a.id, a.name).await)
     })
 }
 
