@@ -12,10 +12,19 @@
     ],
     "deliveryWithInstall": true,
     "installationFree": false,
-    // WebSocket 连中继必需（system_grant，无需 reason/usedScene）
+    // 均 system_grant，无需 reason/usedScene：
+    //  - INTERNET：WebSocket 连中继
+    //  - KEEP_BACKGROUND_RUNNING：Speech Kit TextReader.init 硬性要求（缺则 201）
+    //  - GET_NETWORK_INFO：朗读面板音色切换需要感知网络类型
     "requestPermissions": [
       {
         "name": "ohos.permission.INTERNET"
+      },
+      {
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
+      },
+      {
+        "name": "ohos.permission.GET_NETWORK_INFO"
       }
     ],
     "pages": "$profile:main_pages",
@@ -29,6 +38,13 @@
         "startWindowIcon": "$media:startIcon",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
+        // 播报待命：熄屏后 TtsModel 后台播报（textToSpeech isBackStage）需要
+        // AUDIO_PLAYBACK 长时任务防进程冻结；TTS 属官方分类「用户可感知的其他
+        // 播放任务」，无需接 AVSession。曾声明的 multiDeviceConnection 已回退
+        // （系统校验真实分布式链路，~60s 必杀，见 remote-protocol.md）。
+        "backgroundModes": [
+          "audioPlayback"
+        ],
         "skills": [
           {
             "entities": [
