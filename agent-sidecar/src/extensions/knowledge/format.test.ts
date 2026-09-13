@@ -20,9 +20,9 @@ describe("stripHighlight", () => {
 describe("formatFailure（每条失败原因都给下一步，永不抛）", () => {
   // 第三项 = 该臂的「下一步」针：只钉回显抓不到「漏写下一步」，必须逐臂机械断言。
   const cases: [KbFailure, string, string][] = [
-    [{ kind: "unauthorized" }, "sign in again", "sign in again"],
+    [{ kind: "unauthorized" }, "(401)", "sign in again"],
     [{ kind: "forbidden" }, "permission", "Ask the user"],
-    [{ kind: "not_found" }, "search", "Use search"],
+    [{ kind: "not_found" }, "(404)", "Use search"],
     [{ kind: "locked", message: "被占用" }, "被占用", "Wait a moment and retry"],
     [{ kind: "bad_request", message: "标题不能为空" }, "标题不能为空", "Correct the input"],
     [{ kind: "server", status: 502 }, "502", "Retry once"],
