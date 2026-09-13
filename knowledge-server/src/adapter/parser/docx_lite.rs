@@ -36,12 +36,17 @@ impl DocumentParser for DocxLiteParser {
         })?;
 
         // 纯文本本身就是合法的 Markdown，可以直接存。
-        // 但结构丢失是事实，写进 warnings 让用户看得见。
+        // 但两件事是事实，必须写进 warnings 让用户看得见：
+        //   - 结构丢失
+        //   - 图片丢弃（它只做 extract_text，没有读 media 的 API，**也数不出张数**）
+        // 数不出张数就无条件说明这个限制 —— 沉默是这里唯一的错误选项。
         Ok(ParsedDocument {
             title: None,
             markdown: text,
-            warnings: vec!["docx-lite 后端只做文本提取，标题层级与列表结构已丢失".to_string()],
-            // 这个后端不做图（文案在 Task 6 补「不提取图片」）
+            warnings: vec![
+                "docx-lite 后端只做文本提取：标题层级与列表结构已丢失，且不提取图片"
+                    .to_string(),
+            ],
             assets: Vec::new(),
         })
     }
@@ -55,4 +60,47 @@ pub(crate) const LOSES_STRUCTURE: bool = true;
 #[allow(dead_code)]
 pub(crate) fn _use_no_warnings() -> Vec<String> {
     no_warnings()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DocxLiteParser;
+    use crate::port::DocumentParser;
+    use std::path::PathBuf;
+
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name)
+    }
+
+    /// 这个后端只做文本提取，图片会丢。它**数不出**丢了几张
+    /// （底层没有读 media 的 API），所以只能无条件说明这个限制 ——
+    /// 沉默是这里唯一的错误选项。
+    #[test]
+    fn warns_about_images_unconditionally() {
+        let parsed = DocxLiteParser
+            .parse(&fixture("plain.docx"))
+            .expect("解析最小 docx 失败");
+
+        assert!(
+            parsed.warnings.iter().any(|w| w.contains("不提取图片")),
+            "warning 必须说明不提取图片，实际：{:?}",
+            parsed.warnings
+        );
+        assert!(parsed.assets.is_empty(), "docx-lite 不产出附件");
+        assert!(!parsed.markdown.is_empty(), "正文不能为空");
+    }
+
+    /// 结构丢失也必须继续上报（原有的那半句不能被新文案挤掉）。
+    #[test]
+    fn still_reports_lost_structure() {
+        let parsed = DocxLiteParser.parse(&fixture("plain.docx")).expect("解析失败");
+
+        assert!(
+            parsed.warnings.iter().any(|w| w.contains("结构")),
+            "结构丢失的警告不能丢，实际：{:?}",
+            parsed.warnings
+        );
+    }
 }
