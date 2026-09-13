@@ -29,6 +29,12 @@ CREATE UNIQUE INDEX users_username_lower_uidx ON users (lower(username));
 -- 写出来是为了让这个意图显式可见，顺带索引更小。
 CREATE UNIQUE INDEX users_email_lower_uidx ON users (lower(email)) WHERE email IS NOT NULL;
 
+-- ⚠️ 用户实际上是**不可删除**的，这是有意的，不是遗漏。
+-- sessions / space_members / document_acl / document_locks / invitations.created_by
+-- 对 users 都是 CASCADE，但 spaces.owner_id、documents.created_by、revisions.author_id
+-- 用的是默认的 NO ACTION —— 只要这个人建过空间或文档，DELETE 就会失败。
+-- 停用成员走 is_active = false（README「账号」节），历史版本因此不会失去作者。
+
 CREATE TABLE sessions (
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id    uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
