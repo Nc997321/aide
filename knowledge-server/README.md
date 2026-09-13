@@ -58,19 +58,54 @@ compose 不含 `build:`——客户机器上没有源码，应用镜像从阿里
 
 ```bash
 docker login registry.example.com   # 密码在 ACR 控制台「访问凭证」里设
-./release.sh 0.1.0                               # = docker build + push，传纯标签自动补全地址
+./release.sh 0.2.1                               # = docker build + push（例：新版本号，标签随版本走）
 ```
 
-推完**同步 compose 里 knowledge 服务默认镜像的标签**（脚本末尾会提醒）。
-客户侧拿到 `docker-compose.yml` + `.env.example`，改好 `DB_PASSWORD` 后
-`docker compose up -d` 即可；要升级时在 `.env` 里用 `KB_IMAGE` 覆盖标签，
-重新 `up -d`，pgdata/kbdata 数据卷不动。
+推完**再**同步 compose 里 knowledge 服务默认镜像的标签（脚本末尾会提醒）。
+⚠️ 顺序不能反：**先 push 再改标签**——反过来新拿到 compose 的客户会去拉一个不存在的 tag。
+**别用旧标签覆盖重推**：已经拉过该标签的机器不会跟着换 digest，客户还得额外学一步
+`docker compose pull`。发完记得**主动通知客户**（没有更新检查机制），并附上 `.env` 里那行
+`KB_IMAGE`——老客户手里那份 compose 是交付时下载的，默认标签停在那一版，不写这行就永远
+停在那一版。客户侧拿到 `docker-compose.yml` + `.env.example`，改好 `DB_PASSWORD` 后
+`docker compose up -d` 即可；升级与回滚见下节。
 
 **仓库内开发验证**用 overlay 补 build（交付文件不含它）：
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
+
+### 客户侧升级与回滚
+
+```bash
+# 1) 在 .env 里改/加一行，指向新标签
+KB_IMAGE=registry.example.com/aide/aide-knowledge:0.2.1
+
+# 2) 拉应用镜像（db 没变，不用拉）
+docker compose pull knowledge
+
+# 3) 重建（不需要先删容器，也不需要 down）
+docker compose up -d knowledge
+
+# 4) 确认起来了
+docker compose logs --tail=50 knowledge
+curl -s http://127.0.0.1:8788/api/health
+```
+
+- **升级只用 `up -d`，永远别加 `-v`**：`docker compose down -v` 会把 `pgdata`（数据库）与
+  `kbdata`（附件）两个卷一起删掉 = 删库。手动 `docker rm -f` 容器同样没必要——`up -d`
+  发现镜像 digest 变了会自己重建，只换容器不碰卷。
+- 第 2 步在**换标签**时可省（新标签本地没有，`up -d` 会自己拉）。它只在「同一个标签被重新
+  推过、远端 digest 变了」时必要——而发布约定就是不覆盖旧标签，所以那个场面不该出现。
+- 回滚 = 把 `KB_IMAGE` 改回旧标签 → `docker compose pull knowledge && docker compose up -d knowledge`。
+  **能不能直接退，看这次发布有没有动 `migrations/`**：没动（纯 API / 客户端修正）可以直接退；
+  动了就要意识到 schema 已经前进了——迁移在服务启动时执行（`src/main.rs` 的 `db::migrate`），
+  sqlx 不会自己往回走。
+- 升级前顺手备份（可选，两秒）：`docker compose exec -T db pg_dump -U aide aide_kb > kb-$(date +%F).sql`
+
+**怎么确认新版真的生效**：health 端点只报 status / parsers / tokenizer，**不报版本**——判据
+是行为（比如换了上传上限的版本，拿一个刚过大小的文件试导入），或看 `docker compose ps`
+里 knowledge 服务的镜像 tag / digest。
 
 ### 内网给团队开放
 
