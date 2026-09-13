@@ -6,8 +6,9 @@ import { query, createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod";
 import { existsSync } from "node:fs";
 // 直接用生产门面导出的 instructions 常量，确保冒烟用的就是注入模型的那一份（防文案漂移）。
-import { CODEGRAPH_INSTRUCTIONS } from "./src/codegraphTools.js";
-import { DOCS_INSTRUCTIONS } from "./src/docsMcp.js";
+import { CODEGRAPH_INSTRUCTIONS } from "./src/extensions/codegraphTools.js";
+import { DOCS_INSTRUCTIONS } from "./src/extensions/docsMcp.js";
+import { KNOWLEDGE_INSTRUCTIONS } from "./src/extensions/knowledgeMcp.js";
 
 // dev 默认用 SDK 平台包里的 claude.exe，免设 AIDE_CLAUDE_EXE。
 const DEFAULT_CLAUDE_EXE =
@@ -178,3 +179,40 @@ if (!pdfTools.some((n) => n.includes("read_pdf"))) {
   process.exit(1);
 }
 console.log("\nPASS: read_pdf was called");
+
+// 5) knowledge 冒烟——验证 instructions 让模型在「用户点名知识库」时采纳 search。
+// 用 mock handler：本段验的是 instructions 的采纳率，不是知识库连通性（那由手工 E2E 验）。
+const knowledgeServer = createSdkMcpServer({
+  name: "aide-knowledge",
+  version: "1.0.0",
+  instructions: KNOWLEDGE_INSTRUCTIONS,
+  tools: [
+    tool(
+      "search",
+      "Full-text search across the team knowledge base. Returns matching documents with a snippet, each carrying the documentId needed by read_document.",
+      { query: z.string().describe("Search keywords"), spaceId: z.string().optional().describe("Restrict to one space id") },
+      async (args) => ({
+        content: [{ type: "text" as const, text: `MOCK search(${String((args as any).query)}) -> 上线检查清单 (documentId d1)` }],
+      }),
+    ),
+    tool(
+      "list_spaces",
+      "List the knowledge base spaces the signed-in user can see.",
+      {},
+      async () => ({ content: [{ type: "text" as const, text: "MOCK spaces: 工程 (id s1)" }] }),
+    ),
+  ],
+});
+
+const knowledgeTools = await runQuery(
+  "knowledge",
+  "帮我查一下知识库里关于「上线检查」的内容。",
+  { "aide-knowledge": knowledgeServer },
+  ["mcp__aide-knowledge__search", "mcp__aide-knowledge__list_spaces"],
+  "knowledge",
+);
+if (!knowledgeTools.some((n) => n.includes("search") || n.includes("list_spaces"))) {
+  console.error("\nFAIL: model did not call a knowledge tool — KNOWLEDGE_INSTRUCTIONS may be ineffective");
+  process.exit(1);
+}
+console.log("\nPASS: knowledge tool was called");
