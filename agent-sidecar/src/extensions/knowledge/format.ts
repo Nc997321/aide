@@ -24,7 +24,13 @@ export const KB_READ_MAX_CHARS = 100_000;
 export const KB_CONTENT_MAX_BYTES = 256 * 1024;
 /** append / update **写回后整篇正文**上限——没有这道闸，append 能绕过单次上限撑爆文档。 */
 export const KB_DOC_MAX_BYTES = 1024 * 1024;
-/** `ingest_file` 导入文件上限。 */
+/**
+ * `ingest_file` 导入文件上限。
+ *
+ * **服务端同步点**：`knowledge-server/src/api/mod.rs` 的 `INGEST_BODY_LIMIT`——那条必须
+ * **严格大于**本值（客户端量文件、服务端量整个 multipart 体，差着分帧开销几百字节）。
+ * 改了这里而没跟着改那边，超限的失败会退回服务端那句看不出原因的 400。此值另有实测用例钉住。
+ */
 export const KB_INGEST_MAX_BYTES = 32 * 1024 * 1024;
 
 /** 摘要里的 `[[HL]]…[[/HL]]` 哨兵剥掉——服务端标记不该混进模型后续写回的正文。 */

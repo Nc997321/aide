@@ -28,14 +28,21 @@ pub mod ip_filter;
 pub mod search;
 pub mod spaces;
 
-/// 请求体上限。**必须 ≥ 客户端 ingest 闸**（`agent-sidecar` 的 `KB_INGEST_MAX_BYTES` = 32 MiB）。
+/// `/api/ingest` 的请求体上限。**必须严格大于客户端 ingest 闸**（`agent-sidecar` 的
+/// `KB_INGEST_MAX_BYTES` = 32 MiB）：客户端量的是**文件大小**，这里限的是**整个 multipart
+/// 体**，两者之差是分帧开销（boundary、段头、结尾，几百字节且随文件名变长）——取等号的话，
+/// 恰好 32 MiB 的文件（最自然的边界用例）会在客户端放行、在这里被拒。
 ///
-/// axum 的 `Multipart` 提取器默认只收 2 MiB（`req.with_limited_body()` → axum-core 的
-/// `DEFAULT_LIMIT`），本 crate 原本没设 `DefaultBodyLimit`——于是一个 5 MB 的 PDF 会卡在
-/// 这条线以下，报出来的是 multer 的 "failed to read stream"，而 `ingest.rs` 把**所有**
-/// 读体失败都归成 BadRequest，从外部完全看不出是尺寸问题（客户端那道 32 MiB 闸也因此形同
-/// 虚设：文件先被整份读进内存、上传，再被这里模糊拒绝）。
-const REQUEST_BODY_LIMIT: usize = 32 * 1024 * 1024;
+/// 为什么必须显式设：axum 的 `Multipart` 提取器走 `req.with_limited_body()`，没设
+/// `DefaultBodyLimit` 时落到 axum-core 的 `DEFAULT_LIMIT = 2 MiB`。那个值太小——5 MB 的
+/// PDF 会卡在那条线以下，报出来的是 multer 的读体/解析错误（`ingest.rs` 把**所有**读体
+/// 失败都归成 BadRequest），从外部完全看不出是尺寸问题；客户端那道 32 MiB 闸也因此形同
+/// 虚设：文件先被整份读进内存、上传，再被这里模糊拒绝。
+///
+/// 只挂 `/api/ingest` 一条路由，**不是全局**：其余路由都是 JSON，客户端对正文另有
+/// 256 KiB/次 + 1 MiB/篇 两道闸，没必要陪着放宽——尤其 `/api/auth/*` 是未鉴权入口，
+/// 让它们在读体阶段就能缓冲 32 MiB 是平白多出来的面。
+const INGEST_BODY_LIMIT: usize = 32 * 1024 * 1024 + 64 * 1024;
 
 /// 全局依赖。三个端口/配置的注入点全在这里，
 /// **换实现只改 `main.rs` 里构造 `AppState` 的那几行**，本文件不动。
@@ -139,15 +146,15 @@ pub fn build_router(state: AppState) -> AppResult<Router> {
         )
         // 检索
         .route("/api/search", get(search::search))
-        // 摄取
-        .route("/api/ingest", post(ingest::upload))
+        // 摄取。请求体上限单挂这一条（默认 2 MiB 太小，理由见 INGEST_BODY_LIMIT）
+        .route(
+            "/api/ingest",
+            post(ingest::upload).layer(DefaultBodyLimit::max(INGEST_BODY_LIMIT)),
+        )
         .route("/api/ingest/formats", get(ingest::formats))
         // 顺序有讲究：axum 里**后加的层在外层**，请求先经过它。
         // trace 最外（连被拒的请求也要留痕）→ cors 次之（被拒的响应也带 CORS 头，
         // 否则浏览器只报一句 CORS 错误，看不出其实是 403）→ IP 白名单在最内。
-        // DefaultBodyLimit 也放最内：它不拒绝请求，只在提取器读体时生效，与上面的
-        // 顺序无关，放最内是为了让「trace 最外」这句继续成立。
-        .layer(DefaultBodyLimit::max(REQUEST_BODY_LIMIT))
         .layer(ip_layer)
         .layer(cors)
         .layer(TraceLayer::new_for_http())

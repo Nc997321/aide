@@ -67,7 +67,7 @@
 | `KB_CONTENT_MAX_BYTES` | 256 KiB | **单次调用传入的 `content` 参数**上限（append 只算新增段落），超限返回引导文本 |
 | `KB_DOC_MAX_BYTES` | 1 MiB | **写回后的整篇正文**上限。P2 落地只挂在 append：replace 的正文就是整篇，已被单次闸 256 KiB 蕴含（真加进去是一条走不到的分支，实现轮取严删去）——这道闸真正拦的是 append 的**累积** |
 | `KB_READ_MAX_CHARS` | 100 000 | `read_document` 输出上限 |
-| `KB_INGEST_MAX_BYTES` | 32 MiB | 导入文件上限。**服务端必须同步**：`knowledge-server` 的 `REQUEST_BODY_LIMIT`（axum `Multipart` 提取器默认只收 2 MiB，不设那层的话 2–32 MiB 的文件会先被整份读进内存、上传，再被服务端拒成一句含糊的 "failed to read stream"） |
+| `KB_INGEST_MAX_BYTES` | 32 MiB | 导入文件上限。**服务端必须同步**：`knowledge-server` 的 `INGEST_BODY_LIMIT`（只挂 `/api/ingest` 一条路由，不全局放宽），且必须**严格大于**本值——客户端量的是文件、服务端量的是整个 multipart 体，两者差着分帧开销；取等号时恰好 32 MiB 的文件会在客户端放行、被服务端拒成一句看不出原因的 400。那层不显式设的话是 axum 的 2 MiB（`Multipart` 的 `with_limited_body()`） |
 | `KB_HTTP_TIMEOUT_MS` | 15 000 | 读 / 写请求超时 |
 | `KB_INGEST_TIMEOUT_MS` | 120 000 | 导入请求超时（上传 + 服务端解析） |
 
@@ -476,5 +476,5 @@ P1 落地后知识库才能真正被 agent 用起来；P2 是先有读的闭环�
 |---|---|---|
 | `append_document` 漏了单次 256 KiB 段落闸（spec §4.2 常量表与格式器注释都写明了「append 只算新增段落」，实现只查了拼完整篇） | 补闸（位于 GET 之前，与 create / update 同位） | 上表 `appendToDocument` 新增行 + commit `1fd321f9` |
 | `useCustomizations.ts` 的镜像文案仍写「写工具见 P2」——spec §6.5 明确要求 P2 回填四个写工具名（计划里漏了这条任务） | 按实际形态回填：读四个自动放行 / 写四个每次要确认 | 纯静态文案，无分支；`builtinMcpServers` 无测试断言 |
-| 客户端 32 MiB 闸对不上服务端的 2 MiB 硬顶（axum `Multipart` 的 `with_limited_body()` → axum-core `DEFAULT_LIMIT = 2_097_152`，且本 crate 未设 `DefaultBodyLimit`） | 服务端加 `DefaultBodyLimit::max(REQUEST_BODY_LIMIT = 32 MiB)`（客户端保持 spec 的 32 MiB） | `knowledge-server` `cargo check --all-targets` 通过、`cargo test` 10 passed；**需重新部署服务端才生效**（未重部署时 2–32 MiB 仍走服务端那句含糊拒绝） |
+| 客户端 32 MiB 闸对不上服务端的 2 MiB 硬顶（axum `Multipart` 的 `with_limited_body()` → axum-core `DEFAULT_LIMIT = 2_097_152`，且本 crate 未设 `DefaultBodyLimit`） | 服务端加 `INGEST_BODY_LIMIT`：**只挂 `/api/ingest`**（`post(upload).layer(DefaultBodyLimit::max(...))`），值 = 32 MiB **+ 64 KiB**（必须严格大于客户端闸：客户端量文件、服务端量整个 multipart 体） | `knowledge-server` `cargo check --all-targets` 通过、`cargo test` 10 passed；**已随 0.2.0 之前的那版层一起发过一版，本修正（严格大于 + 只挂一条路由）在 0.2.0 镜像之后，需再发一版才上线上** |
 | `update_document` 对 >100k 字符的旧文会静默丢尾部（模型手里没有 read 截断之外的正文） | 写入照旧 + 回执警告（`warnTruncatedSource`），不阻断 | 上表 `updateDocument` 与 `format.ts` 新增行 |
