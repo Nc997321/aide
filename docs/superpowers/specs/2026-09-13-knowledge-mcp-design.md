@@ -334,10 +334,10 @@ P1 落地后知识库才能真正被 agent 用起来；P2 是先有读的闭环�
 | | `timeout` 臂 | ✅ | format.test.ts > formatFailure（…）> { kind: 'timeout' } 的文案含关键指引与下一步 |
 | | `bad_response` 臂 | ✅ | format.test.ts > formatFailure（…）> { kind: 'bad_response', detail: 'not JSON' } 的文案含关键指引与下一步 |
 | | switch 穷尽性（漏一臂 → TS `never`）| ✅（类型层，无用例） | — |
-| `formatSearchHits` | `hits` 缺失（undefined）→ `hits.length` 抛 → `kbCall` 的 catch 兜成 `bad_response` 文本 | ⬜ | —（可达：服务端 200 不返回 hits；**本函数无分支**，形状不符在解引用处抛。`?? []` 防御臂已删——它会把「形状不符」静默变成「零命中」；catch 臂由 knowledgeTools.test.ts > 200 但响应形状不对（畸形 2xx）> list_spaces / list_documents 两条覆盖） |
+| `formatSearchHits` | `hits` 缺失（undefined）→ `hits.length` 抛 → `kbCall` 的 catch 兜成 `bad_response` 文本 | ⬜ | —（可达：服务端 200 不返回 hits；本条**不是函数内的分支**，而是缺字段时的**抛出路径**（该函数本身对这两个字段不再设防御臂）。`?? []` 防御臂已删——它会把「形状不符」静默变成「零命中」；catch 臂由 knowledgeTools.test.ts > 200 但响应形状不对（畸形 2xx）> list_spaces / list_documents 两条覆盖） |
 | | 零命中 → 换关键词指引 | ✅ | format.test.ts > formatSearchHits > 零命中给换关键词的指引（不是错误） |
 | | 带值路径：行列表（title / documentId / space / 版本 + 剥哨兵 snippet）| ✅ | format.test.ts > formatSearchHits > 命中列表带 documentId / 空间 / 摘要；knowledgeTools.test.ts > search > 拼 q / spaceId / limit，返回命中 |
-| `formatDocument` | `content` 缺失（undefined）→ `body.length` 抛 → `kbCall` 的 catch 兜成 `bad_response` 文本 | ⬜ | —（可达：DTO 契约要求必填；**本函数无分支**，形状不符在解引用处抛。`?? ""` 防御臂已删——空正文在 P2 的 append（读当前正文 → 拼接 → 写回）里等于丢内容；catch 臂同上两条覆盖） |
+| `formatDocument` | `content` 缺失（undefined）→ `body.length` 抛 → `kbCall` 的 catch 兜成 `bad_response` 文本 | ⬜ | —（可达：DTO 契约要求必填；本条**不是函数内的分支**，而是缺字段时的**抛出路径**（该函数本身对这两个字段不再设防御臂）。`?? ""` 防御臂已删——空正文在 P2 的 append（读当前正文 → 拼接 → 写回）里等于丢内容；catch 臂同上两条覆盖） |
 | | 超限 → 截断 + ⚠ 注明 | ✅ | format.test.ts > formatDocument > 超长截断并注明（不静默丢内容） |
 | | 带值路径：未超限 → 全文 | ✅ | format.test.ts > formatDocument > 带标题 / id / 版本号 / 正文；knowledgeTools.test.ts > read_document > 取全文并做 URL 编码（id 不会拼出额外路径段） |
 | `formatSpaces` | 空数组 → 检查成员资格指引 | ✅ | format.test.ts > formatSpaces / formatDocumentList > 零空间时给出检查成员资格的指引 |

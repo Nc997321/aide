@@ -75,8 +75,9 @@ P2 会新建 `agent-sidecar/src/extensions/knowledge/space.ts` 与 `knowledge/op
 //! 为什么凭据落文件而不是进 env：Bash 工具子进程会继承 sidecar 的 env，模型跑
 //! `env` 就能把 token 带走（红线见 agent-sidecar/src/engine/sessionMetadata.ts）。
 //! 这里只把**路径**经 env 交给 sidecar（AIDE_KB_CONFIG_FILE），凭据本体落盘。
-//! 为什么独立文件而不写进 state.json：诊断快照会 dump state.json，独立文件隔离掉
-//! 那条路径（风险与 localStorage 里已存的明文 token 等价，见设计 spec §6.1）。
+//! 为什么独立文件而不写进 state.json：生命周期与并发面隔离——登出即删，不混进
+//! state 的 load-modify-save 临界区（风险与 localStorage 里已存的明文 token
+//! 等价，见设计 spec §6.1）。
 
 use serde_json::{json, Value};
 use std::fs;
