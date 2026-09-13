@@ -63,6 +63,7 @@ describe("instructions 是 MCP 采纳率的必需品", () => {
     expect(json).toContain("USE ONLY ON EXPLICIT REQUEST");
     expect(json).toContain("never guess document ids");
     expect(json).toContain("browse instead of guessing");
+    expect(json).toContain("Cite documents as 知识库《标题》");
     expect(json).toContain("FAILURES COME BACK AS TEXT");
     expect(json).toContain("it lives in a server, not in the workspace");
   });

@@ -446,6 +446,9 @@ describe("SessionWorker — codegraph MCP registration", () => {
     await vi.waitFor(() => expect(captured).toBeDefined());
     worker.stop();
     expect(captured?.mcpServers?.["aide-codegraph"]).toBeDefined();
+    // 装配落位：queryContext 的 assembleMcpServers 少汇一个 server 是**静默失效**
+    // （模型手里没有这些工具，无任何报错）——allowedTools 白名单断不到这一层。
+    expect(captured?.mcpServers?.["aide-knowledge"]).toBeDefined();
     expect(captured?.tools).toBeUndefined(); // 不动工具列表 = 与主会话一致
     expect(captured?.allowedTools).toEqual([
       "Agent", "Task", "mcp__aide-codegraph", "mcp__aide-docs",
