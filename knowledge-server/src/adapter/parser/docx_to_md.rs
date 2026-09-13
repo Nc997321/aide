@@ -57,3 +57,63 @@ impl DocumentParser for DocxToMdParser {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::DocxToMdParser;
+    use crate::port::DocumentParser;
+    use std::path::PathBuf;
+
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name)
+    }
+
+    /// 真实文档端到端：docx-to-md 把内嵌图写成 `data:` URL，再由
+    /// `extract_data_url_images` 抽成附件。
+    ///
+    /// 这条链路是 v1 的核心，而它建立在**一个前提假设**上 ——
+    /// 「docx-to-md 默认产出 `![](data:...;base64,...)`」。合成输入测不出这个假设，
+    /// 只有拿真 docx 跑才行（fixture 由一份真实说明书改造：图片替换成 1x1 PNG，
+    /// 保留完整的 OOXML 结构与 16 个图片引用）。
+    #[test]
+    fn extracts_images_from_real_docx() {
+        let parsed = DocxToMdParser
+            .parse(&fixture("with_image.docx"))
+            .expect("解析 fixture 失败");
+
+        assert!(
+            !parsed.assets.is_empty(),
+            "这份 fixture 含 16 张内嵌图，必须抽出来"
+        );
+        assert!(
+            !parsed.markdown.contains("base64"),
+            "正文里不得残留 base64（否则整个倒排索引被污染）"
+        );
+        assert_eq!(
+            parsed.markdown.matches("{{asset:").count(),
+            parsed.assets.len(),
+            "占位符个数必须与 assets 一一对应"
+        );
+        assert!(
+            parsed.assets.iter().all(|a| a.mime.starts_with("image/")),
+            "只该抽出 image/*"
+        );
+        assert!(
+            parsed.assets.iter().all(|a| !a.bytes.is_empty()),
+            "抽出的图不能是空字节"
+        );
+    }
+
+    /// 无图文档不该被这条链路影响 —— 带值路径的反面同样要钉。
+    #[test]
+    fn text_only_docx_yields_no_assets() {
+        let parsed = DocxToMdParser
+            .parse(&fixture("plain.docx"))
+            .expect("解析 fixture 失败");
+
+        assert!(parsed.assets.is_empty());
+        assert!(!parsed.markdown.contains("{{asset:"));
+    }
+}

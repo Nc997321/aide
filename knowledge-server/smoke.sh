@@ -15,8 +15,9 @@
 # 会直接退出，因为 bootstrap 只在空库时可用。
 #
 # 不覆盖（需要真实时间或并发，不适合冒烟）：
-#   锁 TTL 过期被他人取走（默认 300s）、心跳迟到的旧持有人不复活、
-#   文档级 ACL、摄取管道（docx/pdf）。
+#   锁 TTL 过期被他人取走（默认 300s）、心跳迟到的旧持有人不复活、文档级 ACL。
+#   摄取只覆盖「含图 docx 的资源通道」这一条链路（fixture 见 tests/fixtures/）；
+#   pdf 与其它格式、批量导入不在范围内。
 set -euo pipefail
 
 BASE="${1:-http://127.0.0.1:8788}"
@@ -204,6 +205,87 @@ STATUS="${body##*$'\n'}"
 body="${body%$'\n'*}"
 expect "$STATUS" "200" "search → 200"
 expect "$(field "$body" hits.0.documentId)" "$DOC_ID" "命中文档正确"
+
+say "资源通道：docx 内嵌图片"
+
+FIXTURE="tests/fixtures/with_image.docx"
+ASSET_BIN="$(mktemp)"
+if [ -f "$FIXTURE" ]; then
+  # 摄取走 multipart，不能用 api()（那个固定发 JSON）
+  # ⚠️ 查询参数是 camelCase 的 spaceId：服务端 UploadQuery 带
+  #    #[serde(rename_all = "camelCase")]，写成 space_id 会 400
+  resp="$(curl -sS --max-time 60 -X POST "$BASE/api/ingest?spaceId=$SPACE_ID" \
+    -H "Accept: application/json" -H "Authorization: Bearer $TOKEN_B" \
+    -F "file=@$FIXTURE" -w $'\n%{http_code}')"
+  STATUS="${resp##*$'\n'}"
+  resp="${resp%$'\n'*}"
+  expect "$STATUS" "201" "上传含图 docx → 201"
+
+  IMG_DOC_ID="$(field "$resp" documentId)"
+  [ -n "$IMG_DOC_ID" ] || { echo "  ✗ 未拿到文档 id" >&2; exit 1; }
+  expect "$(field "$resp" backend)" "docx-to-md" "首选 docx 后端生效（没回落到 lite）"
+  # 空数组序列化成 `[]`（不是空串）—— field 帮手如实打印 JSON 字面量
+  expect "$(field "$resp" warnings)" "[]" "无降级警告 —— 图片没被丢"
+
+  body="$(api GET "/api/documents/$IMG_DOC_ID" "" "$TOKEN_B")"
+  STATUS="$(cat "$CODE_FILE")"
+  expect "$STATUS" "200" "读回含图文档 → 200"
+  CONTENT="$(field "$body" content)"
+
+  case "$CONTENT" in
+    *"asset://"*) echo "  ✓ 正文里有 asset:// 引用" ;;
+    *) echo "  ✗ 正文里没有 asset:// 引用" >&2; exit 1 ;;
+  esac
+  case "$CONTENT" in
+    *base64*) echo "  ✗ 正文里仍有 base64（倒排索引会被污染）" >&2; exit 1 ;;
+    *) echo "  ✓ 正文里没有 base64" ;;
+  esac
+  case "$CONTENT" in
+    *"{{asset:"*) echo "  ✗ 正文里残留解析期占位符" >&2; exit 1 ;;
+    *) echo "  ✓ 正文里没有残留占位符" ;;
+  esac
+
+  ASSET_ID="$(printf '%s' "$CONTENT" | "$PY" -c 'import sys,re
+m = re.search(r"asset://([0-9a-fA-F-]{36})", sys.stdin.read())
+print(m.group(1) if m else "")')"
+  [ -n "$ASSET_ID" ] || { echo "  ✗ 正文里没有可解析的 asset:// id" >&2; exit 1; }
+
+  hdr="$(curl -sS --max-time 15 -D - -o "$ASSET_BIN" \
+    "$BASE/api/assets/$ASSET_ID" -H "Authorization: Bearer $TOKEN_B")"
+  if printf '%s' "$hdr" | grep -qi '^content-type: image/'; then
+    echo "  ✓ 资源 Content-Type 是 image/*"
+  else
+    echo "  ✗ 资源 Content-Type 不是 image/*：" >&2
+    printf '%s\n' "$hdr" | head -5 >&2
+    exit 1
+  fi
+  if [ -s "$ASSET_BIN" ]; then
+    echo "  ✓ 资源字节非空（$(wc -c < "$ASSET_BIN" | tr -d ' ') 字节）"
+  else
+    echo "  ✗ 资源字节为空" >&2
+    exit 1
+  fi
+
+  code="$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "$BASE/api/assets/$ASSET_ID")"
+  expect "$code" "401" "未鉴权取图 → 401（不是 404/500）"
+else
+  echo "  (跳过：$FIXTURE 不存在)"
+fi
+rm -f "$ASSET_BIN"
+
+say "解析失败不留孤儿文件"
+count_storage() {
+  docker compose exec -T knowledge sh -c 'ls -1 /app/storage 2>/dev/null | wc -l' 2>/dev/null | tr -d '\r '
+}
+if BEFORE="$(count_storage)" && [ -n "$BEFORE" ]; then
+  printf 'not a supported format' > /tmp/kb-bad-fixture.xyz
+  curl -sS --max-time 15 -o /dev/null -X POST "$BASE/api/ingest?spaceId=$SPACE_ID" \
+    -H "Authorization: Bearer $TOKEN_B" -F "file=@/tmp/kb-bad-fixture.xyz" || true
+  AFTER="$(count_storage)"
+  expect "$AFTER" "$BEFORE" "不支持的格式被拒后，存储目录文件数不变"
+else
+  echo "  (跳过：拿不到容器内的 /app/storage —— 远程 BASE 时正常)"
+fi
 
 say "登出"
 body="$(api POST /api/auth/logout "" "$TOKEN_E")"
