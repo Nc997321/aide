@@ -383,7 +383,7 @@ Expected: 无 error。
 
 - [ ] **Step 7: 手工端到端验证**
 
-1. `pnpm dev` 起 dev 版 app。
+1. `pnpm tauri dev` 起 dev 版 app（⚠️ 不是 `pnpm dev`——那只是 `vite`，起不了 Tauri 壳，也就不会 spawn sidecar）。
 2. 打开知识库面板，登录（或建管理员）。
 3. Run: `cat ~/.aide/knowledge.json`
    Expected: 出现 `{"version": 1, "baseUrl": "...", "token": "..."}`。
@@ -1734,7 +1734,7 @@ Expected: 全绿——尤其 `useCustomizations` 与 `queryContext` 相关用例
 
 - [ ] **Step 6: 前端镜像可见性手工验证**
 
-`pnpm dev` → 设置 → 扩展面板 → 「内置 MCP」区。
+`pnpm tauri dev`（不是 `pnpm dev`）→ 设置 → 扩展面板 → 「内置 MCP」区。
 Expected: 出现 `aide-knowledge`，标注 `内置 · 只读 · in-process`，purpose 文案正确。
 
 - [ ] **Step 7: 提交**
@@ -1821,7 +1821,7 @@ Expected: 五段全 PASS（`read_docx was called` / `write_docx was called` / `r
 
 前置：本机起 knowledge-server（`cd knowledge-server && cargo run`，需一个 PG，见其 README），库里至少有 1 个空间 + 1 篇文档。
 
-1. `pnpm build:sidecar` 重建 sidecar（**改 src 必须重建，dev 跑的是 dist**），再 `pnpm dev`。
+1. `pnpm build:sidecar` 重建 sidecar（**改 src 必须重建，dev 跑的是 dist**），再 `pnpm tauri dev`（⚠️ 不是 `pnpm dev`——那只是 `vite`，起不了 Tauri 壳，也就不会 spawn sidecar）。
 2. 知识库面板登录。
 3. 新开一个会话，发：「帮我查一下知识库里关于 X 的内容」（X = 你库里的真实关键词）。
    Expected: agent 调 `search`（工具卡片可见），结果里出现文档标题与 documentId；让它「读一下这篇」，它调 `read_document` 并给出内容摘要。

@@ -1025,7 +1025,7 @@ Expected: 全绿——`session-worker.test.ts` 里 P1 加的「写工具不在 a
 
 - [ ] **Step 6: 权限弹窗手工验收（本计划的核心验收）**
 
-`pnpm build:sidecar && pnpm dev`，知识库面板登录，新开会话：
+`pnpm build:sidecar` 后 `pnpm tauri dev`（⚠️ 不是 `pnpm dev`——那只是 `vite`，起不了 Tauri 壳，也就不会 spawn sidecar），知识库面板登录，新开会话：
 
 1. 发「把这段结论存到知识库：<一段文字>」→ **必须弹出权限确认**，弹窗里有工具名 `create_document` 与标题/正文参数；批准后文档出现在知识库面板的对应空间里。
 2. 发「把刚才那条追加到刚才那篇文档末尾」→ 弹窗 → 批准 → 面板里该文档版本号 +1，旧内容仍在。
