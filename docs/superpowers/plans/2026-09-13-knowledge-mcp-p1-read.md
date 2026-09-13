@@ -1,5 +1,17 @@
 # 知识库 MCP 插件 P1（读通路）实施计划
 
+> **⚠️ 失效标注（落地后修订，正文与本文冲突时以标注为准）：**
+>
+> - **凭据文件已按构建档位分名（2026-09-13 落地，`b5b19bbe`）**：
+>   **dev（debug 构建）= `~/.aide/knowledge.dev.json`，release = `~/.aide/knowledge.json`**
+>   ——见 `src-tauri/src/commands/knowledge.rs` 的 `kb_config_path()`。
+> - 原因：localStorage 按 WebView **origin** 分区（dev 前端来自 `http://localhost:1420`，
+>   release 来自 Tauri 自己的源），两档各持一份凭据；共用同一文件时后写的一档会覆盖
+>   另一档，表现为「面板显示未登录、agent 却能读写知识库」，或「release 的 agent 以
+>   dev 那次登录的账号身份读写」（换账号时）。
+> - **本文档其余处出现的 `~/.aide/knowledge.json`（含验收步骤里的 `cat`、手改 token）
+>   在 dev 档验收时一律以上述 dev 名为准。**
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 让 agent 在用户明确提及知识库时，能通过内置 MCP 工具 `aide-knowledge` 检索并读取知识库文档。

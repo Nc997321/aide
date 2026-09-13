@@ -13,7 +13,7 @@
 
 ## 2. 范围
 
-**做**：读 4 工具（search / read_document / list_spaces / list_documents）+ 写 4 工具（create_document / append_document / update_document / ingest_file），凭据经 `~/.aide/knowledge.json` 到 sidecar，工具**每次调用现读**该文件。
+**做**：读 4 工具（search / read_document / list_spaces / list_documents）+ 写 4 工具（create_document / append_document / update_document / ingest_file），凭据经凭据文件（名称随档位，见 §6.1）到 sidecar，工具**每次调用现读**该文件。
 
 **不做（v1 明确排除）**：自动检索把片段注入上下文；会话结束自动归档；知识库自维护（改名/标签/合并/去重）；`knowledge` SKILL.md；向量检索（知识库侧本来就没有）；删除文档（知识库无此接口）；标签与双链（表已建、接口未做）。
 
@@ -23,7 +23,7 @@
 
 | 方案 | 凭据路径 | 新鲜度 | 否决理由 |
 |---|---|---|---|
-| **A（定案）** | 前端推 → Rust 写 `~/.aide/knowledge.json` → 工具**每次调用**读文件 | 调用级 | — |
+| **A（定案）** | 前端推 → Rust 写凭据文件（名称随档位，见 §6.1） → 工具**每次调用**读文件 | 调用级 | — |
 | B | 前端推 → Rust 每条 `send` 塞 `cmd["kb"]` → MCP 闭包持值 | 会话级 | 会话中途重新登录后，工具整会话拿死 token；错误路径无法自愈 |
 | C | 工具 emit → Rust 代发 HTTP | 调用级 | 要照搬 codegraphClient 的超时/pending/取消整套 IPC（~150 行 + Rust HTTP 客户端），对"最简单的读写"过重 |
 
@@ -130,7 +130,7 @@ localStorage 是唯一真相源（`getBaseUrl()` / `getToken()`）。推送时�
 
 | 项 | 内容 |
 |---|---|
-| 新命令 | `knowledge_set_runtime_config(base_url: String, token: Option<String>)` → 原子写 / 删 `~/.aide/knowledge.json`；返回 `Result<(), String>` |
+| 新命令 | `knowledge_set_runtime_config(base_url: String, token: Option<String>)` → 原子写 / 删凭据文件（名称随档位，见 §6.1）；返回 `Result<(), String>` |
 | 同步还是 async | 轻 IO（一个几百字节文件）→ **保持同步 + 首行埋 `crate::diagnostics::trace_command("knowledge_set_runtime_config")`**（构建期守卫 `pnpm check:sync-io` 会扫所有做 IO 的同步命令） |
 | 新增 env | spawn sidecar 时注入 `AIDE_KB_CONFIG_FILE`（绝对路径）。**只有路径，不是凭据** |
 | 失败 | 写文件失败返回 Err 给前端（前端 best-effort 忽略，不阻塞登录） |
@@ -219,12 +219,12 @@ export const KNOWLEDGE_READ_RULES = [
 
 ## 9. 已知代价与风险
 
-1. **token 明文落盘**（`~/.aide/knowledge.json`）：与 localStorage 现存风险等价；硬约束是永不进日志/错误消息。
+1. **token 明文落盘**（`~/.aide/knowledge.json`，dev 档为 `~/.aide/knowledge.dev.json`，见 §6.1）：与 localStorage 现存风险等价；硬约束是永不进日志/错误消息。
 2. **恒挂 ~8 个工具 schema**：不用知识库的用户也背 ~1k token 基座（进 prompt cache，约 10% 计费）；换取"中途登录即生效 + 可表达未登录"。
 3. **知识库服务不由本应用 spawn**：它是独立部署的（docker compose / 手工 `cargo run`）。服务没起 → 工具返回网络引导文本，不是崩溃。
 4. **代理**：sidecar 的 fetch 不自动走 HTTP_PROXY。知识库在 LAN/localhost 时无影响；远端部署 + 企业代理的组合留给后续（前端 kbClient 同样是裸 fetch，两边行为一致）。
 5. **无乐观锁**：知识库 PUT 没有 versionNo，并发写入靠 300s 合并窗口兜底。追加工具内先读后拼已是最优，但仍非严格 CAS。
-6. **多端**：remote-pwa / 鸿蒙驱动同一个桌面 sidecar，工具自动可用，无需改动；headless 无凭据文件 → 恒挂 + 引导文本。网关将来要打通得**两步**，少一步仍读不到：① 把凭据写进 `~/.aide/knowledge.json`；② 自己设 `AIDE_KB_CONFIG_FILE` 指向该文件——headless **不经过** `spawn_runtime`，而这个 env 只在 `spawn_runtime` 里注入（`runtime/mod.rs`），只写文件的话 `readKbConfig` 拿不到路径，工具照旧回「未连接」。兜底备选：让 `config.ts` 在没有 env 时回落默认路径（`~/.aide/knowledge.json`）。
+6. **多端**：remote-pwa / 鸿蒙驱动同一个桌面 sidecar，工具自动可用，无需改动；headless 无凭据文件 → 恒挂 + 引导文本。网关将来要打通得**两步**，少一步仍读不到：① 把凭据写进凭据文件（名称随档位，见 §6.1）；② 自己设 `AIDE_KB_CONFIG_FILE` 指向该文件——headless **不经过** `spawn_runtime`，而这个 env 只在 `spawn_runtime` 里注入（`runtime/mod.rs`），只写文件的话 `readKbConfig` 拿不到路径，工具照旧回「未连接」。兜底备选：让 `config.ts` 在没有 env 时回落默认路径（凭据文件，名称随档位，见 §6.1，headless 运维自己选名字即可）。
 
 ## 10. 实施分期（供 writing-plans 参考）
 
