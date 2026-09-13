@@ -165,8 +165,7 @@ export type OpenUrlFn = (url: string) => void;
 const WS_OPEN = 1;
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_MAX_MS = 30000;
-/** 手机腿活体帧间隔：relay 据此武装 60s 静默超时（首帧 keepalive 才武装）。
- *  契约见 docs/reference/remote-protocol.md。 */
+/** 手机腿活体帧间隔：relay 据此武装 60s 静默超时（首帧 keepalive 才武装）。 */
 const KEEPALIVE_INTERVAL_MS = 20000;
 /** 握手全程上限：openOnce → authed/needsPairing。覆盖三类系统层救不了的场景：
  *  TCP 黑洞（webSocket.connect 无超时参数）、中继应用挂死（协议 pong 由对端 WS

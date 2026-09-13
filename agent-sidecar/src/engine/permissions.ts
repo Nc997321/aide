@@ -36,7 +36,7 @@ interface PendingEntry {
 // 正文并标 toolDenialKind:"permission-rule"（2026-09-08 运行时实证 + 反汇编：
 // 带 YFe 模板的 cancelAndAbort 是终端交互 UI 的路径，SDK 宿主不走）。因此外框
 // （"这是拒绝、工具未执行、用户说了什么"）必须由宿主自己写——官方文档的 deny
-// 示例（docs/reference/处理批准和用户输入.md「建议替代方案」）也是自带外框的。
+// 示例（「建议替代方案」一节）也是自带外框的。
 // 模板原文取自 claude.exe（YFe/nhe/hRe，@279529599 起）。
 //
 // 读取方：packages/aide-sdk/src/utils/toolDenial.ts 的 parseToolDenial 按这两个

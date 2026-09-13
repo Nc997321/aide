@@ -10,8 +10,7 @@
 > 把「网关形态」作为验收主轴。
 >
 > **对接文档已收口**：清单里所有「对接文档写明」项（B1 re-key / C4 三句 / A11 / A20 / D5 /
-> F1/F2/F5~F10 文档级处置）统一落在 [`reference/headless-integration.md`](reference/headless-integration.md)
->（网关实现方唯一必读；本清单继续当验收底稿用）。
+> F1/F2/F5~F10 文档级处置）统一落在对接文档（网关实现方唯一必读；本清单继续当验收底稿用）。
 >
 > 勾选约定：`[ ]` 待测 / `[x]` 通过 / `[!]` 失败（记缺陷号）。优先级 P0=对接前必过、P1=正式验收、P2=可延后。
 > 自动化标记：✅已有自动化（列明位置）/ 🔧可脚本化（建议沉淀进 smoke 家族）/ 👤手动。
@@ -186,7 +185,7 @@ B14 btw 自毁复核（按 F10 新判据钉 init id 变化）。
 | B14 btw/automation 放行面 | btw 实测按桌面语义执行（自毁重建）；automation 面未动。**建议后续从 headless schema 剥除 btw/lightweight 或文档明令网关不发** |
 | D5 无会话持久化 | **实锤**：崩溃全丢、旧键重发得全新会话；resume_session_id 是唯一续接通道（B11 实测可用） |
 
-### 发现清单（F1-F11；文档级处置统一收口 `reference/headless-integration.md`，见 §7 头注）
+### 发现清单（F1-F11；文档级处置统一收口对接文档，见 §7 头注）
 
 | # | 级别 | 现象（实测证据） | 影响 | 定位线索 |
 |---|---|---|---|---|
@@ -207,5 +206,5 @@ B14 btw 自毁复核（按 F10 新判据钉 init id 变化）。
 **C7 cliEnv 红线 ✅ 已闭环（修复轮：Bash 子进程自检脚本 verdict clean、envKeys=141 实证真实 env）**；
 C6 shell hook 红线 ✅ 已闭环（hook env 落盘零哨兵）。**agri 对接前的 P0 阻塞项清零**；
 遗留处置（补测轮更新）：B9/B10 ✅ 已补测闭环（policy-smoke 6/6）；F9 与 F1/F2/F5~F8 的
-文档级处置 ✅ 已收口 `reference/headless-integration.md`（对接文档唯一必读）；F10/F11 新增
+文档级处置 ✅ 已收口对接文档（网关实现方唯一必读）；F10/F11 新增
 （均 P2，观测面/判据已修）；剩余=E 组（待 agri starter）+ B14 复核（P2）。

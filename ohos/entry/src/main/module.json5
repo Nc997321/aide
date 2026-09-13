@@ -41,7 +41,7 @@
         // 播报待命：熄屏后 TtsModel 后台播报（textToSpeech isBackStage）需要
         // AUDIO_PLAYBACK 长时任务防进程冻结；TTS 属官方分类「用户可感知的其他
         // 播放任务」，无需接 AVSession。曾声明的 multiDeviceConnection 已回退
-        // （系统校验真实分布式链路，~60s 必杀，见 remote-protocol.md）。
+        // （系统校验真实分布式链路，~60s 必杀）。
         "backgroundModes": [
           "audioPlayback"
         ],

@@ -2,14 +2,14 @@
 
 - 日期：2026-08-03
 - 状态：待实现
-- 关联：`docs/reference/SDK 中的 Agent Skills.md`、`docs/reference/agent-sdk-plugins.md`、`docs/superpowers/specs/2026-07-13-marketplace-extension-design.md`
+- 关联：`docs/superpowers/specs/2026-07-13-marketplace-extension-design.md`
 - 关联记忆：`aide-trust-workspace-skills-moot`（受信任工作区 + skills/.mcp.json 门控 moot）
 
 ## 1. 背景与问题（实锤）
 
 Aide 用 `settingSources: []`（`agent-sidecar/src/session-worker.ts:864`）隔离 SDK 的文件系统 settings 体系——注释明示「否则 SDK 仍会去读 `.claude/settings*.json`，与 Aide 独立设置体系冲突」。这是**设计意图**，不能动。
 
-副作用：SDK 的文件系统 skill 发现机制被一并断掉。而 SDK 的发现机制只认 `.claude/skills`（`SDK 中的 Agent Skills.md` 第 101-104 行），Aide 的散装 skills/agents 在 **`.aide/claude/`** 命名空间（与 CLI 的 `.claude/` 隔离，见 `skills.rs:67-69`），**SDK 发现机制覆盖不到**。即便开 `settingSources:["user","project"]`，SDK 发现的是 `.claude/skills`，对 Aide 的 `.aide/claude/skills` 无用，还会带入 CLI 的 `.claude/` 污染。
+副作用：SDK 的文件系统 skill 发现机制被一并断掉。而 SDK 的发现机制只认 `.claude/skills`，Aide 的散装 skills/agents 在 **`.aide/claude/`** 命名空间（与 CLI 的 `.claude/` 隔离，见 `skills.rs:67-69`），**SDK 发现机制覆盖不到**。即便开 `settingSources:["user","project"]`，SDK 发现的是 `.claude/skills`，对 Aide 的 `.aide/claude/skills` 无用，还会带入 CLI 的 `.claude/` 污染。
 
 结果：Aide 的散装工件**全部进不了 agent**，且 **UI 展示与实际可用脱节**：
 
@@ -20,8 +20,8 @@ Aide 用 `settingSources: []`（`agent-sidecar/src/session-worker.ts:864`）隔�
 
 ## 2. 文档依据
 
-- `SDK 中的 Agent Skills.md` 第 32 行 Note：「如果显式设置 `settingSources`，请包含 `'user'` 或 `'project'` 以保持 Skill 发现，**或使用 `plugins` 选项从特定路径加载 Skills**」。第一条路对 Aide 无用（命名空间不匹配），**第二条路是唯一通道**。
-- `agent-sdk-plugins.md`：plugins 从本地路径加载，示例 `{type:"local", path:"./my-plugin"}` 为**真实目录**（非 symlink）；清单 `.claude-plugin/plugin.json` 可选，省略时按目录布局自动发现组件；plugin 内 skill 自动加 `plugin-name:` 前缀（命名空间）。
+- 官方 SDK 文档 Note：「如果显式设置 `settingSources`，请包含 `'user'` 或 `'project'` 以保持 Skill 发现，**或使用 `plugins` 选项从特定路径加载 Skills**」。第一条路对 Aide 无用（命名空间不匹配），**第二条路是唯一通道**。
+- 官方 Plugins 文档：plugins 从本地路径加载，示例 `{type:"local", path:"./my-plugin"}` 为**真实目录**（非 symlink）；清单 `.claude-plugin/plugin.json` 可选，省略时按目录布局自动发现组件；plugin 内 skill 自动加 `plugin-name:` 前缀（命名空间）。
 - SDK 类型 `SdkPluginConfig = { type:"local"; path:string; skipMcpDiscovery?:boolean }`（`agent-sidecar/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:3879`）——**无 `name` 字段**，plugin name 只能靠清单指定或 SDK 推导。
 - `sdk.mjs` 实锤 plugin name 约束：`name: l.string().min(1).refine(e => !e.includes(" "), ...)` + 正则 `^[A-Za-z0-9][-A-Za-z0-9._]*$`，kebab-case、不能空格。
 - `.gitignore:43` 实锤 `.aide/` 是 gitignore 本地数据目录——清单写进 `.aide/claude/.claude-plugin/` **不进版本库**。
@@ -78,7 +78,7 @@ plugins: this.lightweightMode
 - 项目级：仅 `trusted` 时；`pluginRoot = path.join(cwd, ".aide", "claude")`；同样 existsSync + ensureManifest("aide-project") → push
 - 目录不存在 / ensure 失败 → 跳过该条（降级，不阻塞）
 
-**`~/.aide/claude/plugins/` 这个 CLI 缓存子目录**：它在用户级 plugin 根下。SDK 扫 plugin 根只认固定组件名 `skills/`/`agents/`/`hooks/`/`commands/`/`.claude-plugin/`/`.mcp.json`（`agent-sdk-plugins.md:271-285`），`plugins/` 不在列，SDK 应忽略。已评估为低风险，实现时通过 init 消息的 `plugins`/`skills`/`slash_commands` 字段确认无意外组件混入（验收项）。
+**`~/.aide/claude/plugins/` 这个 CLI 缓存子目录**：它在用户级 plugin 根下。SDK 扫 plugin 根只认固定组件名 `skills/`/`agents/`/`hooks/`/`commands/`/`.claude-plugin/`/`.mcp.json`，`plugins/` 不在列，SDK 应忽略。已评估为低风险，实现时通过 init 消息的 `plugins`/`skills`/`slash_commands` 字段确认无意外组件混入（验收项）。
 
 ## 6. 注入与门控
 

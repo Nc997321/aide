@@ -72,7 +72,7 @@ Java/jdtls 专属配置**只准**待在 `src-tauri/src/lsp/profiles/java.rs`。�
 
 relay（`relay-server/`）是**哑管道**：只做配对与 WS 桥接，不解析业务数据。agent 始终跑在**用户桌面**，桌面不在线 = `connect: device offline`。
 
-**relay 层帧契约**（register/connect/update_code/keepalive/connect_error + 码 TTL/双向活体常量、supersede 与 opt-in 静默语义）：唯一必读 [docs/reference/remote-protocol.md](docs/reference/remote-protocol.md)；**新增/改帧 = 三端同步**（relay ↔ aide-sdk remote.ts ↔ ohos 镜像）。
+**relay 层帧契约**（register/connect/update_code/keepalive/connect_error + 码 TTL/双向活体常量、supersede 与 opt-in 静默语义）；**新增/改帧 = 三端同步**（relay ↔ aide-sdk remote.ts ↔ ohos 镜像）。
 
 ## 架构红线：可替换技术必须藏在端口后面
 
@@ -102,10 +102,10 @@ let mut cmd = Command::new("git");
 
 ## 关键约定
 
-- **同步 command 禁止重 IO / 重 CPU**：一律 `async fn` + `spawn_blocking`。两个坑：(1) 带 `State<'_,T>` 引用参数的 async 命令必须返回 `Result`（E0277）；(2) `State<T>` 不能跨 `spawn_blocking`，state 注册成 `Arc<T>` 后 clone 进闭包。**已改 async 的命令清单、判读方法、事故档案见 [docs/reference/async-commands.md](docs/reference/async-commands.md)。**
+- **同步 command 禁止重 IO / 重 CPU**：一律 `async fn` + `spawn_blocking`。两个坑：(1) 带 `State<'_,T>` 引用参数的 async 命令必须返回 `Result`（E0277）；(2) `State<T>` 不能跨 `spawn_blocking`，state 注册成 `Arc<T>` 后 clone 进闭包。
 - **`trace_command` 兜底**：保留同步但做 IO/子进程/外部调用的命令，第一行埋 `let _trace = crate::diagnostics::trace_command("函数名");`（在任何 IO/spawn 之前，cfg 分支之前）。**只对同步命令有意义，禁止给 async 命令埋**（guard 在 dispatch 后立刻 drop）。已埋 52 条。决策：重 IO/CPU → async；轻 → 不动；介于之间且保留同步 → 埋。**这条规则由构建期守卫强制**：`pnpm check:sync-io`（已挂进 `pnpm build`）扫描所有同步 Tauri 命令，做 IO/子进程却没埋点的直接报错——未埋点的同步命令卡死时冻结报告 `stuckCommand` 恒为 `None`，肇事者定不到（2026-07 一整轮误判就死在这个盲区）。豁免在 `scripts/check-sync-io-commands.mjs` 登记并写明理由。
-- **主题系统是配色的唯一来源**：所有颜色/背景/边框/阴影/圆角/间距必须走 `src/themes/` 语义 token 的 `var(--aide-*)`，禁止硬编码 hex；`tailwind.config.js` 的 `theme.extend` 为空。新增语义色 → `ThemeTokens` 加槽位 + 每个主题文件给值；新增主题 → 新增实现 `ThemeTokens` 的文件 + `themes/index.ts` 注册。`colorScheme` 是例外（浏览器原生 `color-scheme` 属性）。**封闭契约见 [docs/reference/theme-development.md](docs/reference/theme-development.md)。**
-- **VC++ Redistributable 随包分发**（NSIS POSTINSTALL 静默装 vc_redist）：aide.exe 依赖 `MSVCP140.dll`/`VCRUNTIME140.dll`，缺/旧 → 「双击无反应」（C++ 运行库加载阶段崩溃，早于任何 Rust 代码）。机制与维护见 [docs/reference/vcredist-distribution.md](docs/reference/vcredist-distribution.md)。
+- **主题系统是配色的唯一来源**：所有颜色/背景/边框/阴影/圆角/间距必须走 `src/themes/` 语义 token 的 `var(--aide-*)`，禁止硬编码 hex；`tailwind.config.js` 的 `theme.extend` 为空。新增语义色 → `ThemeTokens` 加槽位 + 每个主题文件给值；新增主题 → 新增实现 `ThemeTokens` 的文件 + `themes/index.ts` 注册。`colorScheme` 是例外（浏览器原生 `color-scheme` 属性）。
+- **VC++ Redistributable 随包分发**（NSIS POSTINSTALL 静默装 vc_redist）：aide.exe 依赖 `MSVCP140.dll`/`VCRUNTIME140.dll`，缺/旧 → 「双击无反应」（C++ 运行库加载阶段崩溃，早于任何 Rust 代码）。
 
 ## agent-sidecar 职责边界（engine / extensions / desktop 三层）
 
@@ -123,4 +123,4 @@ sidecar 名义是「引擎副车架」，实际长成了「所有 Node 侧逻辑
 1. sidecar 新增逻辑先判归——不要默认"跟会话有关就进 sidecar"，先问是不是 engine 职责。
 2. 内置 MCP/Hooks 新增必须同步登记前端镜像（`useCustomizations`），这条义务是 extensions 层的现状约束，未来外迁后随迁。
 3. 拆分走渐进：新代码守边界，已成型大块（docx/pdf、codegraph）在触碰时顺势外迁，**不做一次性大动刀**（协议双通道契约与测试体系都挂在这个进程上）。
-4. headless 引擎组件**已落地**（`src/headless-server.ts` + `--headless` 子命令，PROTOCOL_VERSION=1，2026-09-11 正式验收 P0 清零）：对接契约唯一必读 [docs/reference/headless-integration.md](docs/reference/headless-integration.md)，验收台账 [docs/headless-test-checklist.md](docs/headless-test-checklist.md)（smoke-headless-* 家族可复跑）。**机制/策略边界**：引擎提供机制，不认识"租户"——① 会话创建接受任意元数据（hooks 可读、工具调用可注入请求头）；② 事件**按会话路由**（订阅制；桌面版全量转发是多客户端下的泄露隐患，automation 按 sid 路由即此隐含能力，headless 升为契约）。"多租户"是宿主网关的策略（鉴权/会话映射/计费）：网关在会话元数据里塞 token = 单实例多用户；每实例只装一个租户 = 实例级隔离（后者不改 TokenStore 单设备安全模型）。两条路线引擎都支持，靠的只是上述两个机制。
+4. headless 引擎组件**已落地**（`src/headless-server.ts` + `--headless` 子命令，PROTOCOL_VERSION=1，2026-09-11 正式验收 P0 清零）：验收台账 [docs/headless-test-checklist.md](docs/headless-test-checklist.md)（smoke-headless-* 家族可复跑）。**机制/策略边界**：引擎提供机制，不认识"租户"——① 会话创建接受任意元数据（hooks 可读、工具调用可注入请求头）；② 事件**按会话路由**（订阅制；桌面版全量转发是多客户端下的泄露隐患，automation 按 sid 路由即此隐含能力，headless 升为契约）。"多租户"是宿主网关的策略（鉴权/会话映射/计费）：网关在会话元数据里塞 token = 单实例多用户；每实例只装一个租户 = 实例级隔离（后者不改 TokenStore 单设备安全模型）。两条路线引擎都支持，靠的只是上述两个机制。

@@ -2,7 +2,7 @@
 
 - 日期：2026-08-03
 - 状态：草案，待实施
-- 关联：`docs/superpowers/specs/2026-07-10-codegraph-design.md`、`docs/reference/codegraph-agent-tools-playbook.md`
+- 关联：`docs/superpowers/specs/2026-07-10-codegraph-design.md`
 
 ## 1. 背景与动机
 

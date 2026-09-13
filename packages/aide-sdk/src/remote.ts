@@ -45,7 +45,7 @@ type ConnectErrorReason = "unknown_code" | "device_offline" | "superseded" | (st
 
 /** 桌面 → 手机消息（镜像 src-tauri/src/remote/protocol.rs 的 DesktopToPhone）。
  *  connect_error 是 relay 源帧（非桌面），首消息/桥接顶替阶段由中继下发，
- *  与桌面帧同流到达——契约表见 docs/reference/remote-protocol.md。 */
+ *  与桌面帧同流到达。 */
 type DesktopToPhone =
   | { type: "pair_ok"; device_id: string; token: string }
   | { type: "auth_ok" }
@@ -64,7 +64,7 @@ const WS_OPEN = 1;
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_MAX_MS = 30000;
 /** 手机腿活体帧间隔：relay 据此武装 60s 静默超时（首帧 keepalive 才武装，
- *  老客户端不发 = 保持旧行为）。契约见 docs/reference/remote-protocol.md。 */
+ *  老客户端不发 = 保持旧行为）。 */
 const KEEPALIVE_INTERVAL_MS = 20000;
 /** 远程网关只透传 chat-event 这一种事件；其他事件名 listen 了也收不到。 */
 const CHAT_EVENT = "chat-event";

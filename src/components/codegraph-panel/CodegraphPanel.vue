@@ -243,7 +243,7 @@ const health = computed<{ color: "success" | "warning" | "danger"; text: string 
 }
 
 .toggle input:checked + .toggle-track {
-  /* 开关是 accentGradient 槽位的既定消费场景（theme-development.md §2.2） */
+  /* 开关是 accentGradient 槽位的既定消费场景 */
   background: var(--aide-accent-gradient);
 }
 

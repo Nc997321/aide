@@ -113,9 +113,8 @@ const renderItems = computed<RenderItem[]>(() => {
     </div>
 
     <!-- 统计口径常驻：归集只吃文件编辑工具的 tool_use 事件，Bash 造成的改动不在列
-         （Claude Code 官方 checkpointing 同样只跟踪 Write/Edit/NotebookEdit，
-         见 docs/reference/使用checkpointing回滚文件更改.md）。不写清楚，
-         「Bash 改了文件但面板没有」会被当成 bug 反复查。
+         （Claude Code 官方 checkpointing 同样只跟踪 Write/Edit/NotebookEdit）。
+         不写清楚，「Bash 改了文件但面板没有」会被当成 bug 反复查。
          文案刻意不列举工具名——那是 changeCard.ts:96 白名单的实现细节，
          抄一份到 UI 就是两处漂移。 -->
     <div class="changelog-scope">仅统计文件编辑工具产生的改动；Bash 命令造成的不在此列</div>

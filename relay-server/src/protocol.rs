@@ -1,8 +1,7 @@
 //! 中继层帧契约：relay 唯一理解的几种帧（register/connect 首消息 + 中途控制帧）。
 //! 哑管道边界：本文件之外的帧一律原样转发，不解析。
 //! 三端镜像义务：桌面发送侧 src-tauri/src/remote/relay_client.rs（update_code）、
-//! 手机发送侧 packages/aide-sdk/src/remote.ts（keepalive）/ 接收侧（connect_error）；
-//! 契约表与常量语义见 docs/reference/remote-protocol.md。
+//! 手机发送侧 packages/aide-sdk/src/remote.ts（keepalive）/ 接收侧（connect_error）。
 
 use serde_json::Value;
 

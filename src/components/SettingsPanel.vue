@@ -1364,7 +1364,7 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .toggle input:checked + .toggle-track {
-  /* 开关是 accentGradient 槽位的既定消费场景（theme-development.md §2.2「主按钮/开关/选中条渐变」），
+  /* 开关是 accentGradient 槽位的既定消费场景（「主按钮/开关/选中条渐变」），
      不用 success 绿——浅色主题下绿轨道与主题色割裂 */
   background: var(--aide-accent-gradient);
 }
