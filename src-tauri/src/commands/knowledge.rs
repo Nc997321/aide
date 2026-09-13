@@ -1,4 +1,5 @@
-//! 知识库运行时凭据：桌面前端推送 → 落 `~/.aide/knowledge.json` → agent-sidecar 的
+//! 知识库运行时凭据：桌面前端推送 → 落 `~/.aide/knowledge.json`（dev 档为
+//! `~/.aide/knowledge.dev.json`，按构建档位分名，见 `kb_config_path`）→ agent-sidecar 的
 //! 进程内 MCP 工具（aide-knowledge）**每次调用现读**。
 //!
 //! 为什么凭据落文件而不是进 env：Bash 工具子进程会继承 sidecar 的 env，模型跑
@@ -13,9 +14,20 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// 凭据文件路径：`~/.aide/knowledge.json`（与 state.json 同目录，刻意独立）。
+/// 凭据文件路径：**按构建档位分名**——dev（debug 构建）= `~/.aide/knowledge.dev.json`，
+/// release = `~/.aide/knowledge.json`（与 state.json 同目录，刻意独立）。
+///
+/// 为什么分名：localStorage 按 WebView **origin** 分区（dev 前端来自 `http://localhost:1420`，
+/// release 来自 Tauri 自己的源），两档各持一份凭据。共用同一文件时后写的一档会覆盖另一档，
+/// 表现为「面板显示未登录、agent 却能读写知识库」，或「release 的 agent 以 dev 那次登录的
+/// 账号身份读写」（换账号时）。
 pub fn kb_config_path() -> PathBuf {
-    crate::commands::our_config_dir().join("knowledge.json")
+    let file = if cfg!(debug_assertions) {
+        "knowledge.dev.json"
+    } else {
+        "knowledge.json"
+    };
+    crate::commands::our_config_dir().join(file)
 }
 
 /// 入参 → 动作：登出删文件 / 否则写。分支判定与副作用分离，便于直接单测。
@@ -96,6 +108,22 @@ mod tests {
         assert_eq!(v["version"], 1);
         assert_eq!(v["baseUrl"], "http://kb:8788");
         assert_eq!(v["token"], "tok");
+    }
+
+    #[test]
+    fn config_file_name_is_scoped_to_build_profile() {
+        // cargo test 跑在 debug 档 → 期望 dev 名。有人把路径改回单一硬编码名时，这条会红。
+        let name = kb_config_path()
+            .file_name()
+            .expect("kb_config_path 永远带文件名")
+            .to_string_lossy()
+            .to_string();
+        let expected = if cfg!(debug_assertions) {
+            "knowledge.dev.json"
+        } else {
+            "knowledge.json"
+        };
+        assert_eq!(name, expected);
     }
 
     #[test]

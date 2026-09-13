@@ -103,7 +103,9 @@
 
 ### 6.1 凭据文件协议
 
-路径：`~/.aide/knowledge.json`（`our_config_dir()` 下，**独立文件**，不混进 `state.json`——生命周期与并发面隔离：登出即删，不必挤进 state 的 load-modify-save 临界区，一次凭据轮换也不值得触发一次全量状态落盘）。
+路径：**按构建档位分名**——dev（debug 构建）= `~/.aide/knowledge.dev.json`，release = `~/.aide/knowledge.json`（`our_config_dir()` 下，**独立文件**，不混进 `state.json`——生命周期与并发面隔离：登出即删，不必挤进 state 的 load-modify-save 临界区，一次凭据轮换也不值得触发一次全量状态落盘）。
+
+为什么分名：localStorage 按 WebView **origin** 分区（dev 前端来自 `build.devUrl` 的 `http://localhost:1420`，release 来自 Tauri 自己的源），两档各持一份凭据。共用同一文件时，后写的一档会覆盖另一档——表现为「面板显示未登录、agent 却能读写知识库」（另一档写的文件还在），或「release 的 agent 以 dev 那次登录的账号身份读写」（换账号时）。代价是两档各持一份，**dev 里需要单独登录一次**（dev 首次推送即自建 `knowledge.dev.json`；已有 release 凭据不受影响，release 侧行为不变）。
 
 ```json
 { "version": 1, "baseUrl": "http://127.0.0.1:8788", "token": "<bearer>" }
