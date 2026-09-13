@@ -168,6 +168,17 @@ describe("appendToDocument（读旧正文 → 拼接 → 整篇写回）", () =>
       .toContain("permission");
   });
 
+  it("单次追加段落超 256 KiB → 拒绝，GET 都不发（与 create / update 同一条闸）", async () => {
+    const getJson = vi.fn();
+    const sendJson = vi.fn();
+    const text = await appendToDocument(fakeClient({ getJson, sendJson }), {
+      documentId: "d1", content: "x".repeat(KB_CONTENT_MAX_BYTES + 1),
+    });
+    expect(text).toContain("Refused");
+    expect(getJson).not.toHaveBeenCalled();
+    expect(sendJson).not.toHaveBeenCalled();
+  });
+
   it("追加后整篇超 1 MiB → 拒绝且不发 PUT（单次上限挡不住累积）", async () => {
     const big = { ...doc, content: "x".repeat(KB_DOC_MAX_BYTES - 10) };
     const getJson = vi.fn(async () => ({ ok: true, data: big }) as KbResult<never>);

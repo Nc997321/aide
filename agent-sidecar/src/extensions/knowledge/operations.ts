@@ -99,6 +99,13 @@ export async function updateDocument(client: KbClient, args: UpdateArgs): Promis
 
 /** 追加 = 读当前正文 → 拼在末尾 → 整篇写回。沉淀类内容的默认写法。 */
 export async function appendToDocument(client: KbClient, args: AppendArgs): Promise<string> {
+  // 单次段落闸：与 create / update 同一条（spec §4.2 的常量表写明「append 只算新增段落」）。
+  // 少了它，一次 append 能塞进近 1 MiB 新正文——而这段正文会**整段铺在权限弹窗里**让用户
+  // 读（§9 第 7 条），且「单次调用」的语义在写侧三件里就它没有约束。
+  if (!withinLimit(args.content, KB_CONTENT_MAX_BYTES)) {
+    return formatTooLarge("content", KB_CONTENT_MAX_BYTES);
+  }
+
   const cur = await client.getJson<KbDocument>(docPath(args.documentId));
   if (!cur.ok) return formatFailure(cur.failure);
 
