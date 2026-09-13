@@ -8,7 +8,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
 
-use crate::port::ParseError;
+use crate::port::{BlobError, ParseError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -35,6 +35,9 @@ pub enum AppError {
 
     #[error("内部错误：{0}")]
     Internal(String),
+
+    #[error("存储错误：{0}")]
+    Blob(#[from] BlobError),
 }
 
 pub type AppResult<T> = Result<T, AppError>;
@@ -48,7 +51,7 @@ impl IntoResponse for AppError {
             AppError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
             AppError::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
             AppError::Parse(_) => (StatusCode::UNPROCESSABLE_ENTITY, "parse_failed"),
-            AppError::Database(_) | AppError::Internal(_) => {
+            AppError::Database(_) | AppError::Internal(_) | AppError::Blob(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
             }
         };

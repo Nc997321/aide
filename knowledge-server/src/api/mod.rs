@@ -20,6 +20,7 @@ use crate::config::Config;
 use crate::error::{AppError, AppResult};
 use crate::port::{BlobStore, ParserChain, Tokenizer};
 
+pub mod assets;
 pub mod auth;
 pub mod documents;
 pub mod extract;
@@ -154,6 +155,9 @@ pub fn build_router(state: AppState) -> AppResult<Router> {
             post(ingest::upload).layer(DefaultBodyLimit::max(INGEST_BODY_LIMIT)),
         )
         .route("/api/ingest/formats", get(ingest::formats))
+        // 文档内嵌资源的取用。前端用带 Bearer 的 fetch 取字节转 objectURL
+        // （`<img src>` 发不出 Authorization 头，见 design spec §8.2）
+        .route("/api/assets/{id}", get(assets::get))
         // 顺序有讲究：axum 里**后加的层在外层**，请求先经过它。
         // trace 最外（连被拒的请求也要留痕）→ cors 次之（被拒的响应也带 CORS 头，
         // 否则浏览器只报一句 CORS 错误，看不出其实是 403）→ IP 白名单在最内。
