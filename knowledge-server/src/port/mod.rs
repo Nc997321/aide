@@ -12,5 +12,8 @@ pub mod document_parser;
 pub mod tokenizer;
 
 pub use blob_store::{BlobError, BlobStore};
-pub use document_parser::{DocumentParser, ParsedDocument, ParseError, ParseOutcome, ParserChain};
+pub use document_parser::{
+    placeholder, DocumentParser, ParsedAsset, ParsedDocument, ParseError, ParseOutcome, ParserChain,
+    PLACEHOLDER_CLOSE, PLACEHOLDER_OPEN,
+};
 pub use tokenizer::Tokenizer;

@@ -40,6 +40,7 @@ impl DocumentParser for PdfParser {
             title: None,
             markdown: text,
             warnings,
+            assets: Vec::new(),
         })
     }
 }

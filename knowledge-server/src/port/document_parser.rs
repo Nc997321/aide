@@ -10,19 +10,47 @@
 
 use std::path::Path;
 
+/// 解析产出的附件（目前只有图片）。
+///
+/// 领域自己的类型，不泄漏任何第三方库类型 —— 这样换解析库时上层拿到的是同一个结构。
+#[derive(Debug, Clone)]
+pub struct ParsedAsset {
+    pub mime: String,
+    pub bytes: Vec<u8>,
+}
+
+/// 解析期占位符的前缀与后缀。
+///
+/// ⚠️ **必须与持久化引用 `asset://<uuid>` 用不同的记号。**
+/// 解析期是「下标」且临时，持久化是「uuid」且永久。若两者共用一个前缀，
+/// 一旦替换环节出 bug，残留的 `asset://0` 会被下游当成一个**合法的** asset id
+/// 继续走 —— 静默指向不存在的资源，排查成本极高。
+pub const PLACEHOLDER_OPEN: &str = "{{asset:";
+pub const PLACEHOLDER_CLOSE: &str = "}}";
+
+/// 由下标生成解析期占位符。adapter 与 domain **共用这一个函数**，
+/// 语法只在这一处定义（谁都不许自己拼字符串）。
+pub fn placeholder(idx: usize) -> String {
+    format!("{PLACEHOLDER_OPEN}{idx}{PLACEHOLDER_CLOSE}")
+}
+
 /// 解析产物。本项目自己的类型，不泄漏任何第三方库的类型——
 /// 这样无论底层换成哪个库，上层拿到的都是同一个结构。
 #[derive(Debug, Clone)]
 pub struct ParsedDocument {
     /// 统一转成 Markdown。知识库的一等存储格式就是 Markdown。
+    /// 附件位置以解析期占位符 `{{asset:<下标>}}` 标记，见 [`placeholder`]。
     pub markdown: String,
 
     /// 从文档属性或首个标题推断出的标题，推断不出则为 None。
     pub title: Option<String>,
 
-    /// 解析器主动报告的降级信息，例如「3 个文本框未提取」「含图片 12 张，已跳过」。
+    /// 解析器主动报告的降级信息，例如「3 个文本框未提取」。
     /// 保留这些是为了让「导入后内容少了」能被解释清楚，而不是变成玄学。
     pub warnings: Vec<String>,
+
+    /// 附件原始字节 + MIME。markdown 里的 `{{asset:<下标>}}` 按**下标**对应本数组。
+    pub assets: Vec<ParsedAsset>,
 }
 
 /// 解析失败。只描述事实，不含第三方错误类型——否则又把实现细节漏上来了。
@@ -82,4 +110,17 @@ pub trait ParserChain: Send + Sync {
     /// 链上挂了哪些后端，**按尝试顺序**返回。
     /// 给 `/api/health` 用：排障时一眼能看出实际装配了什么、优先级如何。
     fn backend_ids(&self) -> Vec<&'static str>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{placeholder, PLACEHOLDER_OPEN};
+
+    /// 占位符语法是 adapter 与 domain 之间的契约，两端共用这一个函数 —— 钉住它。
+    #[test]
+    fn placeholder_format_is_stable() {
+        assert_eq!(placeholder(0), "{{asset:0}}");
+        assert_eq!(placeholder(12), "{{asset:12}}");
+        assert!(placeholder(3).starts_with(PLACEHOLDER_OPEN));
+    }
 }

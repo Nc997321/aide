@@ -29,6 +29,7 @@ impl DocumentParser for MarkdownParser {
             title: first_heading(&content),
             markdown: content,
             warnings: no_warnings(),
+            assets: Vec::new(),
         })
     }
 }

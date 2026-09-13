@@ -48,6 +48,8 @@ impl DocumentParser for DocxToMdParser {
             title: first_heading(&markdown),
             markdown,
             warnings: no_warnings(),
+            // 抽图在下一个任务接（Task 5）：本轮先让端口变更编译通过
+            assets: Vec::new(),
         })
     }
 }

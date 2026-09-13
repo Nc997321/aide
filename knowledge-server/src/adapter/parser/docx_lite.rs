@@ -41,6 +41,8 @@ impl DocumentParser for DocxLiteParser {
             title: None,
             markdown: text,
             warnings: vec!["docx-lite 后端只做文本提取，标题层级与列表结构已丢失".to_string()],
+            // 这个后端不做图（文案在 Task 6 补「不提取图片」）
+            assets: Vec::new(),
         })
     }
 }
