@@ -1,0 +1,63 @@
+// aide-knowledge（知识库读写）MCP server 注册。
+// 组织文件在上层，子实现各自独立（knowledgeTools.ts + knowledge/ 子目录）。
+//
+// 注册条件（任一不满足即 null）：
+// - `AIDE_KB_TOOLS=off`：operator 级开关（调试 / 不想让 agent 碰知识库的部署）。
+// - `!trusted`：受限模式不暴露知识库读写。
+// - `taskTools` 非空：btw 任务支线全新会话，前缀最小化（沿 docsMcp 写法）。
+// **刻意不设「配置了才挂」的第四道门**：未登录也挂载，调用返回「去知识库面板登录」
+// 的引导文本——工具列表跨会话稳定，且会话中途第一次登录能当场生效（设计 spec §5.1）。
+//
+// server 实例 per-worker 构造；**无 emit 参数**——本 server 直连知识库的 HTTP，
+// 不像 codegraph 要回主进程查索引（无 IPC 客户端）。
+import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { buildKnowledgeTools } from "./knowledgeTools.js";
+
+/**
+ * allowedTools 规则：**工具级**，只放行四个读工具。
+ *
+ * ⚠️ 不要照抄 codegraph/docs 的 server 级规则（`mcp__aide-codegraph`）——那是「整个
+ * server 都只读」才成立的写法。本 server 混着写工具，server 级规则会把写操作一起
+ * 放行，破坏「写必弹窗」（设计 spec §7）。
+ */
+export const KNOWLEDGE_READ_RULES = [
+  "mcp__aide-knowledge__search",
+  "mcp__aide-knowledge__read_document",
+  "mcp__aide-knowledge__list_spaces",
+  "mcp__aide-knowledge__list_documents",
+] as const;
+
+/**
+ * MCP instructions 块（initialize 时呈现给模型）。2026-07-26 codegraph 冒烟实锤：
+ * 没有它时模型对第三方 MCP 工具视而不见，连 prompt 直接点名都会被无视——这不是优化
+ * 是必需品。删除或弱化前必须先跑 agent-sidecar/smoke-mcp.ts 验证行为不退化。
+ */
+export const KNOWLEDGE_INSTRUCTIONS = `This environment has built-in tools for the user's team knowledge base (知识库), exposed as the aide-knowledge MCP server. Rules:
+1. USE ONLY ON EXPLICIT REQUEST. Call these tools only when the user explicitly mentions the knowledge base (知识库 / 存到知识库 / 查一下知识库). Never search the knowledge base proactively.
+2. To find content you MUST call mcp__aide-knowledge__search first — never guess document ids, and never try to read knowledge base content with Grep/Read (it lives in a server, not in the workspace). Then mcp__aide-knowledge__read_document with the documentId from the hits.
+3. Don't know what exists? Use mcp__aide-knowledge__list_spaces then mcp__aide-knowledge__list_documents to browse instead of guessing.
+4. Cite documents as 知识库《标题》, and summarize instead of pasting a whole document back to the user.
+5. FAILURES COME BACK AS TEXT with the next step (not connected / login expired / locked / unreachable). Follow the hint: if it says the user must sign in, tell them to sign in from the 知识库 panel and retry.`;
+
+/**
+ * 默认注册。`trusted=false` 或 `taskTools` 非空或 `AIDE_KB_TOOLS=off` → null。
+ * 省略 trusted = 信任（向后兼容，测试与手工调用用）。
+ */
+export function knowledgeMcpRegistration(
+  env: NodeJS.ProcessEnv = process.env,
+  trusted = true,
+  taskTools?: string[],
+): Record<string, unknown> | null {
+  if (!trusted) return null;
+  if (taskTools) return null;
+  if (env.AIDE_KB_TOOLS === "off") return null;
+
+  const server = createSdkMcpServer({
+    name: "aide-knowledge",
+    version: "1.0.0",
+    instructions: KNOWLEDGE_INSTRUCTIONS,
+    tools: buildKnowledgeTools(env),
+  });
+
+  return { "aide-knowledge": server };
+}

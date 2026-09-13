@@ -5,6 +5,7 @@
 import type { ChatEvent } from "../types.js";
 import { codegraphMcpRegistration } from "../../extensions/codegraphTools.js";
 import { docsMcpRegistration } from "../../extensions/docsMcp.js";
+import { knowledgeMcpRegistration } from "../../extensions/knowledgeMcp.js";
 import { buildBuiltinHooks, type HookBuildContext, type BuiltinHookManifest } from "../../extensions/builtinHooks/index.js";
 import { loadUserMcpServers, loadUserHooks, assembleMcpServers, assembleHooks } from "../userExtensions.js";
 import { applyMcpHeaders, type McpHeaderMap } from "../sessionMetadata.js";
@@ -61,6 +62,11 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   const docsMcp = deps.taskTools
     ? null
     : docsMcpRegistration(deps.cwd, deps.processEnv, deps.trusted);
+  // 知识库读写（P1 只有读工具）：注册条件=任务支线跳过、!trusted 跳过、
+  // AIDE_KB_TOOLS=off 跳过。**未登录也挂**——凭据每次调用现读，未配置时工具返回
+  // 「去知识库面板登录」的引导文本（设计 spec §5.1）。无 emit 参数：直连知识库
+  // 的 HTTP，不走主进程 IPC（不像 codegraph）。
+  const knowledgeMcp = knowledgeMcpRegistration(deps.processEnv, deps.trusted, deps.taskTools);
 
   // Aide 指令加载：不依赖 SDK 文件系统 setting source，自己读 global + project
   // CLAUDE.md 追加到 preset system prompt。settingSources 必须为空，否则 SDK
@@ -90,7 +96,10 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   // 白名单裁决是第二层）→ 会话级头注入。applyMcpHeaders 只动 http/sse 条目
   //（内建 sdk 型天然不受影响）；桌面路径 mcpHeaders=undefined 时零拷贝直通
   //（见 sessionMetadata.ts）。
-  const assembledMcp = assembleMcpServers({ ...(codegraphMcp ?? {}), ...(docsMcp ?? {}) }, userMcp);
+  const assembledMcp = assembleMcpServers(
+    { ...(codegraphMcp ?? {}), ...(docsMcp ?? {}), ...(knowledgeMcp ?? {}) },
+    userMcp,
+  );
   const mcpServers = applyMcpHeaders(
     deps.automationConfig
       ? filterMcpServers(assembledMcp, deps.automationConfig.mcpAllowlist)

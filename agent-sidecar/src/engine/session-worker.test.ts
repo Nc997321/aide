@@ -447,7 +447,13 @@ describe("SessionWorker — codegraph MCP registration", () => {
     worker.stop();
     expect(captured?.mcpServers?.["aide-codegraph"]).toBeDefined();
     expect(captured?.tools).toBeUndefined(); // 不动工具列表 = 与主会话一致
-    expect(captured?.allowedTools).toEqual(["Agent", "Task", "mcp__aide-codegraph", "mcp__aide-docs"]);
+    expect(captured?.allowedTools).toEqual([
+      "Agent", "Task", "mcp__aide-codegraph", "mcp__aide-docs",
+      "mcp__aide-knowledge__search",
+      "mcp__aide-knowledge__read_document",
+      "mcp__aide-knowledge__list_spaces",
+      "mcp__aide-knowledge__list_documents",
+    ]);
     expect(captured?.skills).toBe("all");
     expect(captured?.persistSession).toBe(false);
   });
@@ -526,6 +532,31 @@ describe("SessionWorker — codegraph MCP registration", () => {
     } finally {
       delete process.env.AIDE_CODEGRAPH_TOOLS;
     }
+  });
+});
+
+/**
+ * knowledge MCP 放行规则：**工具级**（mcp__aide-knowledge__xxx）而非 server 级
+ * （mcp__aide-knowledge）。server 级规则会把 P2 的写工具一起放行，破坏「写必弹窗」
+ * （设计 spec §7）——P1 只有读工具，这条断言就是 P2 的防回归网。
+ */
+describe("SessionWorker — knowledge MCP 放行规则（工具级）", () => {
+  it("knowledge 写工具不在 allowedTools（写必弹窗）", async () => {
+    // 复用上面 lightweight btw 用例的捕获方式
+    let captured: any;
+    const fakeQuery = ((args: any) => {
+      captured = args?.options ?? args;
+      return (async function* () {})();
+    }) as any;
+    const worker = new SessionWorker("kb-write-rule", () => {}, { queryFn: fakeQuery, cwd: "/proj" });
+    worker.handleCommand({
+      cmd: "send", session_id: "kb-write-rule", prompt: "你好", cwd: "/proj", env: {}, codegraph_enabled: true,
+    } as any);
+    await vi.waitFor(() => expect(captured).toBeDefined());
+    worker.stop();
+    const rules: string[] = captured?.allowedTools ?? [];
+    for (const r of rules) expect(r).not.toBe("mcp__aide-knowledge");
+    expect(rules).not.toContain("mcp__aide-knowledge__create_document");
   });
 });
 

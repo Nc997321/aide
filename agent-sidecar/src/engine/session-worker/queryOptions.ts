@@ -6,6 +6,7 @@
 import type { Options, PermissionMode, EffortLevel, CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import { CODEGRAPH_ALLOW_RULE } from "../../extensions/codegraphTools.js";
 import { DOCS_ALLOW_RULE } from "../../extensions/docsMcp.js";
+import { KNOWLEDGE_READ_RULES } from "../../extensions/knowledgeMcp.js";
 import { buildPluginsOption, buildDispatchPluginsOption } from "../../extensions/dispatchPlugins.js";
 import { forkResumeOptions, btwQueryOverrides } from "../../desktop/btwOptions.js";
 import { automationQueryOverrides, type AutomationConfig } from "../../desktop/automation.js";
@@ -70,7 +71,8 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
     },
     // allowedTools 统一:问答支线(轻量/完整)与主会话同形,保持前缀一致;
     // btw 任务支线由 btwQueryOverrides 在后方覆盖成白名单。
-    allowedTools: ["Agent", "Task", CODEGRAPH_ALLOW_RULE, DOCS_ALLOW_RULE],
+    // 知识库只放行**读**工具（工具级规则）——写工具走权限弹窗，见 knowledgeMcp.ts。
+    allowedTools: ["Agent", "Task", CODEGRAPH_ALLOW_RULE, DOCS_ALLOW_RULE, ...KNOWLEDGE_READ_RULES],
     // btw 任务支线:skills/plugins 全关——全新会话没有缓存可吃,
     // 前缀最小化(skill 清单/plugin 自带 MCP 工具都不进上下文)。
     // 轻量 btw 保持 "all"/全量:与主会话前缀对齐吃 prompt cache。
