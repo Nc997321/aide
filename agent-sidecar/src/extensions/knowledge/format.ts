@@ -6,6 +6,8 @@ import type {
   KbDocument,
   KbDocumentSummary,
   KbFailure,
+  KbIngestResult,
+  KbSaveResult,
   KbSearchResult,
   KbSpace,
 } from "./client.js";
@@ -17,6 +19,13 @@ export const KB_NOT_CONNECTED_TEXT =
 
 /** `read_document` 输出上限：超出截断并显式注明。 */
 export const KB_READ_MAX_CHARS = 100_000;
+
+/** 单次调用传入的 `content` 上限（append 只算新增段落）。 */
+export const KB_CONTENT_MAX_BYTES = 256 * 1024;
+/** append / update **写回后整篇正文**上限——没有这道闸，append 能绕过单次上限撑爆文档。 */
+export const KB_DOC_MAX_BYTES = 1024 * 1024;
+/** `ingest_file` 导入文件上限。 */
+export const KB_INGEST_MAX_BYTES = 32 * 1024 * 1024;
 
 /** 摘要里的 `[[HL]]…[[/HL]]` 哨兵剥掉——服务端标记不该混进模型后续写回的正文。 */
 export function stripHighlight(s: string): string {
@@ -89,4 +98,28 @@ export function formatDocumentList(docs: KbDocumentSummary[]): string {
       `- ${d.title} — id ${d.id}${d.parentId ? ` (under ${d.parentId})` : ""}, v${d.versionNo}, updated ${d.updatedAt}`,
   );
   return `Documents in this space (${docs.length}):\n${lines.join("\n")}`;
+}
+
+/** 人类可读的字节数（文案用；整数档位，不做小数）。 */
+function humanBytes(n: number): string {
+  return n >= 1024 * 1024 ? `${Math.round(n / (1024 * 1024))} MiB` : `${Math.round(n / 1024)} KiB`;
+}
+
+/** 超限一律「拒绝 + 给下一步」，绝不截断后照写（写进共享知识库的内容不能被悄悄剪）。 */
+export function formatTooLarge(what: string, maxBytes: number): string {
+  return `Refused: ${what} exceeds ${humanBytes(maxBytes)} for one tool call. Split it into smaller pieces instead.`;
+}
+
+/** 写成功回执。`verb` 是过去式动词（Created / Updated / Appended to），由调用方给。 */
+export function formatSavedDocument(res: KbSaveResult, verb: string): string {
+  const merged = res.merged
+    ? " (merged into the current revision: same author within the merge window)"
+    : "";
+  return `${verb} the knowledge base document. documentId ${res.documentId}, version ${res.versionNo}${merged}.`;
+}
+
+/** 导入回执。解析器的降级警告如实透出（服务端按端口/适配器范式把丢失信息放这里）。 */
+export function formatIngestResult(res: KbIngestResult): string {
+  const warnings = res.warnings?.length ? `\n⚠ Parser warnings: ${res.warnings.join("; ")}` : "";
+  return `Imported "${res.title}" into the knowledge base. documentId ${res.documentId}, revision ${res.revisionId}, parser ${res.backend}.${warnings}`;
 }

@@ -1,12 +1,18 @@
 import { describe, it, expect } from "vitest";
 import {
+  KB_CONTENT_MAX_BYTES,
+  KB_DOC_MAX_BYTES,
+  KB_INGEST_MAX_BYTES,
   KB_NOT_CONNECTED_TEXT,
   KB_READ_MAX_CHARS,
   formatDocument,
   formatDocumentList,
   formatFailure,
+  formatIngestResult,
+  formatSavedDocument,
   formatSearchHits,
   formatSpaces,
+  formatTooLarge,
   stripHighlight,
 } from "./format.js";
 import type { KbDocument, KbFailure } from "./client.js";
@@ -111,7 +117,7 @@ describe("formatSpaces / formatDocumentList", () => {
     expect(text).toContain("v2");
     const empty = formatDocumentList([]);
     expect(empty).toContain("no documents");
-    expect(empty).not.toContain("create_document"); // P1 没有写工具，文案不许点名不存在的工具
+    expect(empty).not.toContain("create_document"); // 空列表文案不点名任何工具：消息保持中性，不替模型指挥工具
   });
 });
 
@@ -119,5 +125,46 @@ describe("KB_NOT_CONNECTED_TEXT", () => {
   it("指向知识库面板登录（这是「未配置」唯一的用户可见出口）", () => {
     expect(KB_NOT_CONNECTED_TEXT).toContain("知识库 panel");
     expect(KB_NOT_CONNECTED_TEXT).toContain("sign in");
+  });
+});
+
+describe("写侧文案与尺寸常量", () => {
+  it("尺寸常量就是设计定的三个数（不是拍脑袋的近似值）", () => {
+    expect(KB_CONTENT_MAX_BYTES).toBe(256 * 1024);
+    expect(KB_DOC_MAX_BYTES).toBe(1024 * 1024);
+    expect(KB_INGEST_MAX_BYTES).toBe(32 * 1024 * 1024);
+  });
+
+  it("formatTooLarge 说清超了什么、上限多少、下一步怎么办", () => {
+    const text = formatTooLarge("content", KB_CONTENT_MAX_BYTES);
+    expect(text).toContain("content");
+    expect(text).toContain("256 KiB");
+    expect(text).toContain("Split");
+  });
+
+  it("formatTooLarge 在 MiB 档不显示成 1024 KiB", () => {
+    expect(formatTooLarge("the file", KB_INGEST_MAX_BYTES)).toContain("32 MiB");
+    expect(formatTooLarge("the file", KB_INGEST_MAX_BYTES)).not.toContain("KiB");
+  });
+
+  it("formatSavedDocument 带动词、documentId 与版本号；合并窗口单独提示", () => {
+    const text = formatSavedDocument({ documentId: "d1", revisionId: "r1", versionNo: 4, merged: false }, "Created");
+    expect(text).toContain("Created");
+    expect(text).toContain("d1");
+    expect(text).toContain("4");
+    expect(text).not.toContain("merge window");
+    expect(formatSavedDocument({ documentId: "d1", revisionId: "r1", versionNo: 2, merged: true }, "Updated"))
+      .toContain("merge window");
+  });
+
+  it("formatIngestResult 带标题/documentId/parser；有 warnings 时如实列出", () => {
+    const base = formatIngestResult({ documentId: "d1", revisionId: "r1", title: "规范", backend: "docx-to-md" });
+    expect(base).toContain("规范");
+    expect(base).toContain("d1");
+    expect(base).toContain("docx-to-md");
+    expect(base).not.toContain("warnings");
+    expect(
+      formatIngestResult({ documentId: "d1", revisionId: "r1", title: "规范", backend: "docx-lite", warnings: ["结构丢失"] }),
+    ).toContain("结构丢失");
   });
 });
