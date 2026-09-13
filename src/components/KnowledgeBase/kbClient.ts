@@ -374,4 +374,39 @@ export const kb = {
   formats(): Promise<{ extensions: string[] }> {
     return request("GET", "/api/ingest/formats");
   },
+
+  /** 取资源字节（文档正文里 `asset://<uuid>` 引用的图片）。
+   *
+   *  为什么不能用 `<img src="/api/assets/xxx">`：浏览器的图片请求**发不出**
+   *  `Authorization` 头，而本服务用 Bearer 鉴权，那样必然 401（spec §8.2）。
+   *  调用方拿到 Blob 后转 objectURL 交给 img。
+   *
+   *  不复用上面的 `request()`：那个内核对非 JSON 响应会 JSON.parse 炸掉，
+   *  而这里要的是二进制。
+   */
+  async getAsset(id: string): Promise<Blob> {
+    const url = `${getBaseUrl()}/api/assets/${encodeURIComponent(id)}`;
+    const headers: Record<string, string> = {};
+    const token = getToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    let resp: Response;
+    try {
+      resp = await fetch(url, { headers });
+    } catch {
+      // fetch 只在网络层失败才走到这里，最常见成因是服务没起
+      throw new KbError(
+        "network",
+        `连不上知识库服务（${getBaseUrl()}）。确认 knowledge-server 已启动`,
+        0,
+      );
+    }
+
+    if (resp.status === 401) setToken(null);
+    if (!resp.ok) {
+      // 不能让 403 静默变成一张空图 —— 上层据此决定退化成 alt 文本
+      throw new KbError("asset_error", `图片加载失败（HTTP ${resp.status}）`, resp.status);
+    }
+    return await resp.blob();
+  },
 };
