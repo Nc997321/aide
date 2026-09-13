@@ -1,0 +1,118 @@
+// 多步写操作：返回**给模型看的文本**（成功与失败都是文本），与 knowledgeTools.ts 的
+// kbCall 同属「失败也返回文本」这条红线（codegraphTools.ts:50 先例）。
+//
+// 为什么这些操作要多一步 GET：知识库的 PUT 是整篇替换且**没有乐观锁**，只有 300s
+// 同作者合并窗口与文档行锁兜底。所以凡改已有文档，必须先把当前正文读回来再拼，
+// 否则并发下静默覆盖别人的修改（设计 spec §4.2）。
+import {
+  docPath,
+  type KbClient,
+  type KbDocument,
+  type KbSaveResult,
+  type KbSpace,
+} from "./client.js";
+import { decideSpace, type SpaceDecision } from "./space.js";
+import {
+  KB_CONTENT_MAX_BYTES,
+  KB_DOC_MAX_BYTES,
+  formatFailure,
+  formatSavedDocument,
+  formatTooLarge,
+} from "./format.js";
+
+/** 新建文档的载荷（domain DTO：一个概念，不是杂物 options 袋）。 */
+export interface NewDocument {
+  spaceId: string;
+  title: string;
+  content: string;
+  parentId?: string;
+}
+
+export interface UpdateArgs {
+  documentId: string;
+  content: string;
+  title?: string;
+  changeNote?: string;
+}
+
+export interface AppendArgs {
+  documentId: string;
+  content: string;
+  changeNote?: string;
+}
+
+/** 正文是否在字节上限内（用 UTF-8 字节数，不用 JS 的 UTF-16 长度）。 */
+function withinLimit(content: string, maxBytes: number): boolean {
+  return Buffer.byteLength(content, "utf8") <= maxBytes;
+}
+
+/**
+ * 写目标空间：显式传入直接用；省略 → 拉可见空间交给 decideSpace 决策
+ * （多空间/零空间都回「问用户」的文本，绝不替用户挑）。
+ */
+export async function resolveWriteTarget(client: KbClient, requested?: string): Promise<SpaceDecision> {
+  if (requested) return { kind: "ok", id: requested };
+  const spaces = await client.getJson<KbSpace[]>("/api/spaces");
+  if (!spaces.ok) return { kind: "ask", text: formatFailure(spaces.failure) };
+  return decideSpace(undefined, spaces.data);
+}
+
+/** 新建文档。空间由调用方先经 resolveWriteTarget 解析好。 */
+export async function createDocument(client: KbClient, doc: NewDocument): Promise<string> {
+  if (!withinLimit(doc.content, KB_CONTENT_MAX_BYTES)) {
+    return formatTooLarge("content", KB_CONTENT_MAX_BYTES);
+  }
+  const saved = await client.sendJson<KbSaveResult>("/api/documents", "POST", {
+    spaceId: doc.spaceId,
+    title: doc.title,
+    content: doc.content,
+    ...(doc.parentId ? { parentId: doc.parentId } : {}),
+  });
+  return saved.ok ? formatSavedDocument(saved.data, "Created") : formatFailure(saved.failure);
+}
+
+/** 整篇替换。先读当前版本：既拿到沿用用的 title，也让 404/403 在读这一跳就如实返回。 */
+export async function updateDocument(client: KbClient, args: UpdateArgs): Promise<string> {
+  // 只查「单次正文」上限——**刻意不查 KB_DOC_MAX_BYTES**：replace 的正文就是整篇，
+  // 256 KiB 的单次上限已经蕴含 1 MiB 的整篇上限（spec §4.2 把整篇上限写成
+  // 「append / update 共用」，对 update 而言那条是冗余臂：真加进来会是一条永远
+  // 走不到的分支）。整篇上限真正拦得住的是 append 的**累积**。
+  if (!withinLimit(args.content, KB_CONTENT_MAX_BYTES)) {
+    return formatTooLarge("content", KB_CONTENT_MAX_BYTES);
+  }
+  const cur = await client.getJson<KbDocument>(docPath(args.documentId));
+  if (!cur.ok) return formatFailure(cur.failure);
+
+  const saved = await client.sendJson<KbSaveResult>(docPath(args.documentId), "PUT", {
+    title: args.title ?? cur.data.title,
+    content: args.content,
+    ...(args.changeNote ? { changeNote: args.changeNote } : {}),
+  });
+  return saved.ok ? formatSavedDocument(saved.data, "Updated") : formatFailure(saved.failure);
+}
+
+/** 追加 = 读当前正文 → 拼在末尾 → 整篇写回。沉淀类内容的默认写法。 */
+export async function appendToDocument(client: KbClient, args: AppendArgs): Promise<string> {
+  const cur = await client.getJson<KbDocument>(docPath(args.documentId));
+  if (!cur.ok) return formatFailure(cur.failure);
+
+  // 读回的正文必须是串：形态漂移（服务端换版本 / 中间代理）时若照 `?? ""` 拼，
+  // 写回的是「只有新段落」的文档 = 静默删掉别人的正文。**宁可不写**（spec 附录 B
+  // 记过这条：P1 删掉 `?? ""` 防御臂正是因为这个后果）。
+  const current = cur.data.content;
+  if (typeof current !== "string") {
+    return formatFailure({ kind: "bad_response", detail: "document payload has no `content` string" });
+  }
+
+  const body = `${current}\n\n${args.content}`;
+  if (!withinLimit(body, KB_DOC_MAX_BYTES)) {
+    return formatTooLarge("the document after appending", KB_DOC_MAX_BYTES);
+  }
+
+  const saved = await client.sendJson<KbSaveResult>(docPath(args.documentId), "PUT", {
+    title: cur.data.title,
+    content: body,
+    ...(args.changeNote ? { changeNote: args.changeNote } : {}),
+  });
+  return saved.ok ? formatSavedDocument(saved.data, "Appended to") : formatFailure(saved.failure);
+}
