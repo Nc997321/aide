@@ -2,6 +2,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// readFileSync 默认透传真实实现；只有 readFails 打开时抛。这一臂（stat 通过、read 抛，
+// 如 EACCES / EBUSY）要进程外的权限状态才触发，没有可移植的真实复现法，故用一层薄
+// mock 钉住；statSync 等其余 fs 能力仍是真实现（ingest 的尺寸/存在性用例照常）。
+const fsProbe = vi.hoisted(() => ({ readError: null as Error | string | null }));
+vi.mock("node:fs", async (importOriginal) => {
+  const real = await importOriginal<typeof import("node:fs")>();
+  const realRead = real.readFileSync;
+  return {
+    ...real,
+    readFileSync: (path: Parameters<typeof realRead>[0], options?: Parameters<typeof realRead>[1]) => {
+      if (fsProbe.readError !== null) throw fsProbe.readError;
+      return realRead(path, options);
+    },
+  };
+});
 import {
   appendToDocument,
   createDocument,
@@ -106,6 +122,17 @@ describe("updateDocument（整篇替换，先读后写）", () => {
     expect(sendJson).not.toHaveBeenCalled();
   });
 
+  it("新正文超 256 KiB → 拒绝，GET 都不发（尺寸闸在读之前）", async () => {
+    const getJson = vi.fn();
+    const sendJson = vi.fn();
+    const text = await updateDocument(fakeClient({ getJson, sendJson }), {
+      documentId: "d1", content: "x".repeat(KB_CONTENT_MAX_BYTES + 1),
+    });
+    expect(text).toContain("Refused");
+    expect(getJson).not.toHaveBeenCalled();
+    expect(sendJson).not.toHaveBeenCalled();
+  });
+
   it("409（他人持锁）→ 带服务端 message 的重试引导", async () => {
     const getJson = vi.fn(async () => ({ ok: true, data: doc }) as KbResult<never>);
     const sendJson = vi.fn(async () => ({ ok: false, failure: { kind: "locked", message: "正被张三编辑" } }) as KbResult<never>);
@@ -125,6 +152,20 @@ describe("appendToDocument（读旧正文 → 拼接 → 整篇写回）", () =>
       expect.objectContaining({ title: "原标题", content: "旧正文\n\n新增段落" }),
     );
     expect(text).toContain("Appended");
+  });
+
+  it("读失败（404）→ 直接返回失败文本，不发 PUT", async () => {
+    const sendJson = vi.fn();
+    const text = await appendToDocument(fakeClient({ sendJson }), { documentId: "gone", content: "x" });
+    expect(text).toContain("404");
+    expect(sendJson).not.toHaveBeenCalled();
+  });
+
+  it("写回被拒（403）→ 透出权限引导，绝不谎报成功", async () => {
+    const getJson = vi.fn(async () => ({ ok: true, data: doc }) as KbResult<never>);
+    const sendJson = vi.fn(async () => ({ ok: false, failure: { kind: "forbidden" } }) as KbResult<never>);
+    expect(await appendToDocument(fakeClient({ getJson, sendJson }), { documentId: "d1", content: "x" }))
+      .toContain("permission");
   });
 
   it("追加后整篇超 1 MiB → 拒绝且不发 PUT（单次上限挡不住累积）", async () => {
@@ -230,5 +271,33 @@ describe("ingestFile（导入磁盘文件）", () => {
     }) as KbResult<never>);
     const text = await ingestFile(fakeClient({ sendFile }), dir, { filePath: "a.xlsx", spaceId: "s1" });
     expect(text).toContain("不支持的文件类型");
+  });
+
+  it("stat 过但 read 抛（EACCES）→ 报出原始原因，不发请求", async () => {
+    writeFileSync(join(dir, "spec.md"), "x"); // 文件真实存在 → 尺寸闸与 isFile 都过
+    fsProbe.readError = new Error("EACCES: permission denied, open 'spec.md'");
+    try {
+      const sendFile = vi.fn();
+      const text = await ingestFile(fakeClient({ sendFile }), dir, { filePath: "spec.md", spaceId: "s1" });
+      expect(text).toContain("Could not read");
+      expect(text).toContain("EACCES");
+      expect(sendFile).not.toHaveBeenCalled();
+    } finally {
+      fsProbe.readError = null; // 复位：漏复位会污染后续用例
+    }
+  });
+
+  it("抛的不是 Error → 也要有话说（String(e) 臂，不吞错）", async () => {
+    writeFileSync(join(dir, "spec.md"), "x");
+    fsProbe.readError = "boom-as-string";
+    try {
+      const sendFile = vi.fn();
+      const text = await ingestFile(fakeClient({ sendFile }), dir, { filePath: "spec.md", spaceId: "s1" });
+      expect(text).toContain("Could not read");
+      expect(text).toContain("boom-as-string");
+      expect(sendFile).not.toHaveBeenCalled();
+    } finally {
+      fsProbe.readError = null;
+    }
   });
 });

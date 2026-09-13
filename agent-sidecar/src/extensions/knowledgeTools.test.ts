@@ -12,6 +12,24 @@ type AnyTool = {
   handler: (args: unknown, extra: unknown) => Promise<{ content: { text: string }[] }>;
 };
 
+// createKbClient 默认透传真实实现；throwRaw 打开时给出一个抛**非 Error** 的假 client——
+// 这是形状漂移之外的另一条降级臂（String(e) 分支）。真实代码里只有我们自己 throw 非
+// Error 才走得进去，故用一层薄 mock 把这条防御臂钉死；其余能力全是真实现。
+const clientProbe = vi.hoisted(() => ({ throwRaw: null as string | null }));
+vi.mock("./knowledge/client.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./knowledge/client.js")>();
+  return {
+    ...real,
+    createKbClient: (...args: Parameters<typeof real.createKbClient>) => {
+      if (clientProbe.throwRaw === null) return real.createKbClient(...args);
+      const boom = async (): Promise<never> => {
+        throw clientProbe.throwRaw;
+      };
+      return { getJson: boom, sendJson: boom, sendFile: boom };
+    },
+  };
+});
+
 /** 会话 cwd 由调用点给：多数用例不碰磁盘（默认 /proj），ingest_file 用例传临时目录。 */
 function toolByName(env: NodeJS.ProcessEnv, name: string, cwd = "/proj"): AnyTool {
   const tools = buildKnowledgeTools(env, cwd) as unknown as AnyTool[];
@@ -59,7 +77,14 @@ describe("buildKnowledgeTools", () => {
 });
 
 describe("未配置凭据（恒挂的降级路径）", () => {
-  it("未登录时写工具同样只回引导文本，且不发请求", async () => {
+  it("未登录时读工具（kbCall 壳）只回引导文本，且不发请求", async () => {
+    const calls = stubFetch({ status: 200, body: "{}" });
+    const r = await toolByName({} as NodeJS.ProcessEnv, "search").handler({ query: "x" }, undefined);
+    expect(r.content[0]!.text).toContain("sign in");
+    expect(calls).toEqual([]);
+  });
+
+  it("未登录时写工具（kbWrite 壳）同样只回引导文本，且不发请求", async () => {
     const calls = stubFetch({ status: 200, body: "{}" });
     const r = await toolByName({} as NodeJS.ProcessEnv, "create_document")
       .handler({ title: "t", content: "c" }, undefined);
@@ -228,5 +253,83 @@ describe("写工具", () => {
     await expect(p).resolves.toBeDefined();
     const r = await p;
     expect(r.content[0]!.text).toContain("unexpected response shape");
+  });
+
+  it("抛出的不是 Error → 也降级成文本（String(e) 臂，不穿出 handler）", async () => {
+    clientProbe.throwRaw = "boom-as-string";
+    try {
+      const p = toolByName(credEnv, "search").handler({ query: "x" }, undefined);
+      await expect(p).resolves.toBeDefined();
+      const r = await p;
+      expect(r.content[0]!.text).toContain("boom-as-string");
+    } finally {
+      clientProbe.throwRaw = null; // 复位：漏复位会污染后续用例
+    }
+  });
+
+  /** 写工具的两跳（GET 当前文档 → PUT 写回）假 fetch：GET 给 doc，其余给 save 回执。 */
+  function stubReadWrite() {
+    const urls: string[] = [];
+    const bodies: unknown[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      urls.push(url);
+      if (init.method === "PUT") bodies.push(JSON.parse(String(init.body)));
+      const body = init.method === "GET"
+        ? { id: "d1", spaceId: "s1", slug: "a", title: "原标题", content: "旧", versionNo: 1, status: "published" }
+        : { documentId: "d1", revisionId: "r", versionNo: 2, merged: false };
+      return { status: 200, text: async () => JSON.stringify(body) } as Response;
+    });
+    return { urls, bodies };
+  }
+
+  it("update_document：先 GET 再 PUT，title/changeNote 给了就带上", async () => {
+    const { urls, bodies } = stubReadWrite();
+    const r = await toolByName(credEnv, "update_document")
+      .handler({ documentId: "d1", content: "新正文", title: "新标题", changeNote: "重写一节" }, undefined);
+    expect(urls).toEqual(["http://kb.test/api/documents/d1", "http://kb.test/api/documents/d1"]);
+    expect(bodies[0]).toEqual({ title: "新标题", content: "新正文", changeNote: "重写一节" });
+    expect(r.content[0]!.text).toContain("Updated");
+  });
+
+  it("update_document：省略 title/changeNote → 沿用当前标题、不带 changeNote", async () => {
+    const { bodies } = stubReadWrite();
+    await toolByName(credEnv, "update_document").handler({ documentId: "d1", content: "新正文" }, undefined);
+    expect(bodies[0]).toEqual({ title: "原标题", content: "新正文" });
+  });
+
+  it("create_document：给了 parentId 就带上（嵌套文档）", async () => {
+    const bodies: unknown[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return { status: 200, text: async () => JSON.stringify({ documentId: "d", revisionId: "r", versionNo: 1, merged: false }) } as Response;
+    });
+    await toolByName(credEnv, "create_document")
+      .handler({ spaceId: "s1", title: "t", content: "c", parentId: "p1" }, undefined);
+    expect(bodies[0]).toEqual({ spaceId: "s1", title: "t", content: "c", parentId: "p1" });
+  });
+
+  it("append_document：changeNote 给了就带上（写进版本历史）", async () => {
+    const { bodies } = stubReadWrite();
+    await toolByName(credEnv, "append_document").handler({ documentId: "d1", content: "新", changeNote: "补一条" }, undefined);
+    expect(bodies[0]).toEqual({ title: "原标题", content: "旧\n\n新", changeNote: "补一条" });
+  });
+
+  it("ingest_file：给了 parentId → 进查询串（两者都可选，undefined 不进 URL）", async () => {
+    writeFileSync(join(cwdDir, "note2.md"), "# 笔记");
+    const urls = stubFetch({ status: 201, body: JSON.stringify({ documentId: "d", revisionId: "r", title: "笔记", backend: "markdown" }) });
+    await toolByName(credEnv, "ingest_file", cwdDir)
+      .handler({ filePath: "note2.md", spaceId: "s1", parentId: "p1" }, undefined);
+    expect(urls).toEqual(["http://kb.test/api/ingest?spaceId=s1&parentId=p1"]);
+  });
+
+  it("ingest_file：省略 spaceId 且多空间 → 回问用户，不上传（文件是否存在都轮不到）", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      urls.push(url);
+      return { status: 200, text: async () => JSON.stringify([{ id: "s1", key: "a", name: "工程", visibility: "internal" }, { id: "s2", key: "b", name: "产品", visibility: "internal" }]) } as Response;
+    });
+    const r = await toolByName(credEnv, "ingest_file", cwdDir).handler({ filePath: "never-read.md" }, undefined);
+    expect(urls).toEqual(["http://kb.test/api/spaces"]);
+    expect(r.content[0]!.text).toContain("Ask the user");
   });
 });

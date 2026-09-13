@@ -119,6 +119,13 @@ describe("formatSpaces / formatDocumentList", () => {
     expect(empty).toContain("no documents");
     expect(empty).not.toContain("create_document"); // 空列表文案不点名任何工具：消息保持中性，不替模型指挥工具
   });
+
+  it("子文档带 parentId 时追加 (under …)（列表里能看出层级）", () => {
+    const text = formatDocumentList([
+      { id: "d2", parentId: "d1", slug: "b", title: "子页", versionNo: 1, status: "draft", updatedAt: "2026-09-13T00:00:00Z" },
+    ]);
+    expect(text).toContain("(under d1)");
+  });
 });
 
 describe("KB_NOT_CONNECTED_TEXT", () => {
