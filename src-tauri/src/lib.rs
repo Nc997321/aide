@@ -667,7 +667,8 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
             }
         });
 
-    // 图标复用主窗口图标（bundle.icon 里的 png，generate_context! 已内嵌成 Image）
+    // 图标复用主窗口图标（generate_context! 已内嵌成 Image）。来源按平台分派：
+    // Windows 取 bundle.icon 里第一个 .ico，其余平台取第一个 .png。
     if let Some(icon) = app.default_window_icon() {
         builder = builder.icon(icon.clone());
     }

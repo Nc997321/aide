@@ -1,5 +1,5 @@
 // 离线壳缓存：versioned cache-first。发版时 bump CACHE 版本号即全量刷新。
-const CACHE = "aide-remote-v3"; // 2026-09-04 hydrate 失败重试修复发版（v2 时漏 bump：v3 抽屉导航版未到达老设备）
+const CACHE = "aide-remote-v4"; // 2026-09-13 品牌图标发版（SHELL 含 icon-512.png，不 bump 则老设备永远吃缓存里的旧 logo）
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon-512.png"];
 
 self.addEventListener("install", (e) => {
