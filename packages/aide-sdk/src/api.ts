@@ -852,6 +852,19 @@ export const api = {
       enabled,
     });
   },
+
+  /**
+   * 把知识库凭据镜像给 Rust（→ `~/.aide/knowledge.json` → sidecar 的 aide-knowledge
+   * 内置工具每次调用现读）。**桌面专属能力**：remote-pwa 没有知识库面板，也不进
+   * remote REGISTRY（REGISTRY 只白名单入站 invoke，桌面走 TauriTransport 直达命令）。
+   * `token: null` = 登出（Rust 删文件）。
+   */
+  setKnowledgeRuntimeConfig(input: { baseUrl: string; token: string | null }): Promise<void> {
+    return getTransport().invoke("knowledge_set_runtime_config", {
+      baseUrl: input.baseUrl,
+      token: input.token,
+    });
+  },
 };
 
 export { permissionsApi } from "./api/permissions";

@@ -18,6 +18,7 @@ import {
   type KbInvite,
   type KbUserRow,
 } from "@/components/KnowledgeBase/kbClient";
+import { pushKnowledgeRuntime } from "@/components/KnowledgeBase/kbRuntime";
 
 /** 主区面板开关（模块级单例，与 useMemoryObservatory 同范式）：
  *  true 时 App.vue 用 KnowledgeBase 盖住 PaneLayout，PaneLayout v-show 保活。 */
@@ -69,6 +70,9 @@ export function useKnowledgeBase() {
    *   3. 都已初始化但没 token → 落到登录页
    */
   async function init(): Promise<void> {
+    // 无条件镜像一次（含未登录）：token 被别处清掉时顺带删主进程的文件，
+    // 且「改服务地址」也落到这条路径（KbLogin onBaseBlur → setBaseUrl → retry → init）。
+    void pushKnowledgeRuntime();
     ready.value = false;
     error.value = null;
     initialized.value = null;
@@ -108,6 +112,7 @@ export function useKnowledgeBase() {
     error.value = null;
     try {
       user.value = await kb.login(account, password);
+      void pushKnowledgeRuntime();
       initialized.value = true;
       await loadSpaces();
       return true;
@@ -136,6 +141,7 @@ export function useKnowledgeBase() {
         ...(password ? { password } : {}),
         ...(email ? { email } : {}),
       });
+      void pushKnowledgeRuntime();
       initialized.value = true;
       await loadSpaces();
       return true;
@@ -153,6 +159,7 @@ export function useKnowledgeBase() {
     error.value = null;
     try {
       user.value = await kb.join(token);
+      void pushKnowledgeRuntime();
       initialized.value = true;
       await loadSpaces();
       return true;
@@ -213,6 +220,7 @@ export function useKnowledgeBase() {
       // 服务端清不掉也不影响本地退出
     }
     setToken(null);
+    void pushKnowledgeRuntime(); // token 已清 → 主进程删文件
     user.value = null;
     spaces.value = [];
     documents.value = [];

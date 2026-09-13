@@ -9,6 +9,7 @@ import { vScrollMemory } from "./directives/scrollMemory";
 import { initPlatform } from "./utils/platform";
 import { startDiagnostics } from "./composables/useDiagnostics";
 import { useNotifications } from "./composables/useNotifications";
+import { pushKnowledgeRuntime } from "./components/KnowledgeBase/kbRuntime";
 
 // Detect Windows build number early for xterm.js ConPTY integration.
 // Async but non-blocking — terminal creation happens later.
@@ -50,3 +51,6 @@ startDiagnostics();
 
 // 通知中心：启动时从盘注入历史 error/warning 通知（未读）。
 useNotifications().hydrate();
+
+// 知识库凭据镜像到主进程（agent 侧 aide-knowledge 工具每次调用现读该文件）
+void pushKnowledgeRuntime();
