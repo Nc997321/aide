@@ -1,4 +1,5 @@
-// 知识库运行时凭据：桌面前端 → Rust 写 `~/.aide/knowledge.json` → 这里**每次工具调用现读**。
+// 知识库运行时凭据：桌面前端 → Rust 写 `~/.aide/` 下的凭据文件（名称随构建档位：
+// dev = `knowledge.dev.json`、release = `knowledge.json`，路径经 env 传入）→ 这里**每次工具调用现读**。
 //
 // 为什么现读而不是会话级下发：MCP server 的闭包值随 query() spawn 冻结
 // （session-worker.ts 的 startLoop → queryContext.ts），会话中途重新登录知识库后

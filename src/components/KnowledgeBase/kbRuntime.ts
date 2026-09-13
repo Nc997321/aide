@@ -1,4 +1,6 @@
-// 知识库凭据 → 主进程单向镜像（`~/.aide/knowledge.json` → sidecar 内置工具 aide-knowledge）。
+// 知识库凭据 → 主进程单向镜像（写入 `~/.aide/` 下的凭据文件，名称随构建档位：
+// dev = `knowledge.dev.json`、release = `knowledge.json`；sidecar 内置工具 aide-knowledge
+// 每次调用现读该文件）。
 //
 // localStorage 是唯一真相源（kbClient 的 getBaseUrl/getToken）。**凭据每次变更都要跟一次**，
 // 现有调用点：

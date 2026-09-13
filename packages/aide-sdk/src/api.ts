@@ -854,7 +854,8 @@ export const api = {
   },
 
   /**
-   * 把知识库凭据镜像给 Rust（→ `~/.aide/knowledge.json` → sidecar 的 aide-knowledge
+   * 把知识库凭据镜像给 Rust（→ `~/.aide/` 下的凭据文件，名称随构建档位：
+   * dev = `knowledge.dev.json`、release = `knowledge.json` → sidecar 的 aide-knowledge
    * 内置工具每次调用现读）。**桌面专属能力**：remote-pwa 没有知识库面板，也不进
    * remote REGISTRY（REGISTRY 只白名单入站 invoke，桌面走 TauriTransport 直达命令）。
    * `token: null` = 登出（Rust 删文件）。
