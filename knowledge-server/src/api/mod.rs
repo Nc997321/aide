@@ -18,7 +18,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::config::Config;
 use crate::error::{AppError, AppResult};
-use crate::port::{ParserChain, Tokenizer};
+use crate::port::{BlobStore, ParserChain, Tokenizer};
 
 pub mod auth;
 pub mod documents;
@@ -54,6 +54,8 @@ pub struct AppState {
     pub parsers: Arc<dyn ParserChain>,
     /// 分词器（端口）。写入与查询共用同一个实例，保证切词结果一致。
     pub tokenizer: Arc<dyn Tokenizer>,
+    /// 二进制存储（端口）。今天是文件系统，换对象存储只改 `main.rs` 一行。
+    pub blobs: Arc<dyn BlobStore>,
 }
 
 /// 按配置构造 CORS 层。

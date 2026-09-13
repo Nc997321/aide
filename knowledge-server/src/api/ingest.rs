@@ -110,20 +110,75 @@ pub async fn upload(
         author_id: user.id,
     };
 
-    // 解析是 CPU 密集的同步操作，必须挪出 tokio 的工作线程。
-    // 这一步也是端口发挥作用的时刻：这里只知道有个 ParserChain，
-    // 不知道背后是 docx-to-md、docx-lite 还是 pdf-extract。
+    // ── 次序（见 design spec §6.1）：解析 → 写 blob → 开事务 → 落库 → 清理 ──
+    // blob 的 IO 不进事务；每一步失败都要把已产生的副作用清掉。
+
+    // 1) 解析。CPU 密集的同步操作，必须挪出 tokio 的工作线程。
+    //    这一步也是端口发挥作用的时刻：这里只知道有个 ParserChain，
+    //    不知道背后是 docx-to-md、docx-lite 还是 pdf-extract。
     let parsers = state.parsers.clone();
     let parse_input = input.clone();
     let parsed = tokio::task::spawn_blocking(move || {
         ingest::parse_file(parsers.as_ref(), &parse_input)
     })
     .await
-    .map_err(|e| AppError::Internal(format!("解析任务异常退出：{e}")))??;
+    // ⚠️ 这里**不能**写 `??`：那会在解析失败时直接 return，跳过下面的清理 ——
+    // 那正是「每次失败都留下一个孤儿文件」这个 bug 的成因。
+    // 只解开 JoinError 这一层，内层 Result 显式处理以便清理。
+    .map_err(|e| AppError::Internal(format!("解析任务异常退出：{e}")))?;
 
+    let mut parsed = match parsed {
+        Ok(p) => p,
+        Err(e) => {
+            // 解析失败：已落盘的原始文件必须删掉，否则每次失败都留一个孤儿
+            remove_quietly(&stored_path).await;
+            return Err(e);
+        }
+    };
+
+    // 2) 写 blob + 替换占位符。文件 IO，仍在事务之外。
+    //    ⚠️ `parsed` 被 move 进闭包，改动必须连着结果一起带回来，否则白改。
+    let blobs = state.blobs.clone();
+    let (parsed, pending) = match tokio::task::spawn_blocking(move || {
+        let pending = ingest::prepare_assets(blobs.as_ref(), &mut parsed);
+        (parsed, pending)
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            remove_quietly(&stored_path).await;
+            return Err(AppError::Internal(format!("资源写入任务异常退出：{e}")));
+        }
+    };
+
+    // 3) 落库：文档 + 首个版本 + 附件行，同一个事务。
     let mut tx = state.db.begin().await?;
-    let outcome = ingest::ingest_parsed(&mut *tx, state.tokenizer.as_ref(), &input, parsed).await?;
+    let outcome =
+        match ingest::ingest_parsed(&mut *tx, state.tokenizer.as_ref(), &input, parsed, &pending)
+            .await
+        {
+            Ok(o) => o,
+            Err(e) => {
+                drop(tx); // 回滚
+                // 事务失败 = 库回滚了，但 blob 已经写进盘。不清理就会留下
+                // 「库里没有、盘上有」的孤儿 —— 这正是要消灭的那类不一致。
+                let blobs = state.blobs.clone();
+                let keys: Vec<String> = pending.iter().map(|a| a.storage_key.clone()).collect();
+                let _ = tokio::task::spawn_blocking(move || {
+                    for k in keys {
+                        let _ = blobs.delete(&k);
+                    }
+                })
+                .await;
+                remove_quietly(&stored_path).await;
+                return Err(e);
+            }
+        };
     tx.commit().await?;
+
+    // 4) 成功后删原始文件：知识库存的是解析后的知识，不是原件（spec §6.1）
+    remove_quietly(&stored_path).await;
 
     tracing::info!(
         document_id = %outcome.document_id,
@@ -161,6 +216,18 @@ fn sanitize_file_name(name: &str) -> String {
         "upload.bin".to_string()
     } else {
         base
+    }
+}
+
+/// 删除临时文件，失败只记日志。
+///
+/// 清理路径上的失败不该盖过真正的错误 —— 调用方正在返回 `AppError`，
+/// 这里再抛一个只会让用户看到「清理失败」而看不到根因。
+async fn remove_quietly(path: &std::path::Path) {
+    if let Err(e) = tokio::fs::remove_file(path).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(path = %path.display(), error = %e, "清理临时文件失败");
+        }
     }
 }
 

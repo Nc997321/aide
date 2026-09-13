@@ -110,8 +110,18 @@ pub async fn ingest_parsed(
     conn: &mut PgConnection,
     tokenizer: &dyn Tokenizer,
     input: &IngestInput,
-    parsed: ParsedFile,
+    mut parsed: ParsedFile,
+    assets: &[PendingAsset],
 ) -> AppResult<IngestOutcome> {
+    // 最后一道防线：任何残留的解析期占位符都不许进正文
+    // （见 strip_leftover_placeholders —— 它进正文比丢一张图更糟）
+    let (clean, removed) = strip_leftover_placeholders(&parsed.markdown);
+    if removed > 0 {
+        tracing::warn!(removed, "正文里残留了解析期占位符，已移除");
+        parsed.warnings.push(format!("{removed} 处图片引用无效，已移除"));
+    }
+    parsed.markdown = clean;
+
     let slug = unique_slug(&mut *conn, input.space_id, input.parent_id, &parsed.title).await?;
 
     let (document_id, revision_id) = versioning::create_document(
@@ -128,6 +138,8 @@ pub async fn ingest_parsed(
     )
     .await?;
 
+    insert_assets(&mut *conn, document_id, input.author_id, assets).await?;
+
     Ok(IngestOutcome {
         document_id,
         revision_id,
@@ -135,6 +147,33 @@ pub async fn ingest_parsed(
         backend: parsed.backend,
         warnings: parsed.warnings,
     })
+}
+
+/// 附件行入库。
+///
+/// id 由调用方（`prepare_assets`）生成 —— 与 blob 的写入次序解耦，
+/// 因此这里不需要读数据库默认值，正文里的引用也能在事务外就拼好。
+async fn insert_assets(
+    conn: &mut PgConnection,
+    document_id: Uuid,
+    author_id: Uuid,
+    assets: &[PendingAsset],
+) -> AppResult<()> {
+    for a in assets {
+        sqlx::query(
+            r#"INSERT INTO assets (id, document_id, mime, size_bytes, storage_key, created_by)
+               VALUES ($1, $2, $3, $4, $5, $6)"#,
+        )
+        .bind(a.id)
+        .bind(document_id)
+        .bind(&a.mime)
+        .bind(a.size_bytes)
+        .bind(&a.storage_key)
+        .bind(author_id)
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -163,7 +202,9 @@ pub async fn ingest_file(
     input: &IngestInput,
 ) -> AppResult<IngestOutcome> {
     let parsed = parse_file(parsers, input)?;
-    ingest_parsed(&mut *conn, tokenizer, input, parsed).await
+    // 这个入口没有 BlobStore，因此不落附件（正文里的占位符由 ingest_parsed 的防线清掉）。
+    // 真要支持附件，得把 blobs 也传进来 —— 等批量导入脚本真写的时候一起做。
+    ingest_parsed(&mut *conn, tokenizer, input, parsed, &[]).await
 }
 
 /// 把解析期占位符换成持久化引用，并把附件字节写进 `BlobStore`。

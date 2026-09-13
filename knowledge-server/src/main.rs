@@ -3,8 +3,8 @@
 //! 分层：`api` → `domain` → `port` ← `adapter`
 //! 依赖方向永远朝内，`adapter` 是唯一允许出现第三方解析/分词库的目录。
 //!
-//! 全进程只有一处把具体实现接到端口上，就是下面 `main` 里的两行 `Arc::new`。
-//! 换解析库、换分词算法，改那里即可，`domain/` 与 `api/` 一行不动。
+//! 全进程只有一处把具体实现接到端口上，就是下面 `main` 里的三行 `Arc::new`。
+//! 换解析库、换分词算法、换附件存储，改那里即可，`domain/` 与 `api/` 一行不动。
 
 mod adapter;
 mod api;
@@ -21,12 +21,13 @@ use std::time::Duration;
 
 use sqlx::PgPool;
 
+use crate::adapter::blob_store::FilesystemBlobStore;
 use crate::adapter::parser::ParserRegistry;
 use crate::adapter::tokenizer::JiebaTokenizer;
 use crate::api::{AppState, build_router};
 use crate::config::Config;
 use crate::domain::locking;
-use crate::port::{ParserChain, Tokenizer};
+use crate::port::{BlobStore, ParserChain, Tokenizer};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -50,16 +51,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     spawn_lock_reaper(pool.clone());
 
     // ⚠️ 唯一的实现注入点。
-    // 想换解析后端（例如把 docx-to-md 换成 office_oxide）或换分词实现，
-    // 只改这两行以及 adapter 下对应的实现文件。
+    // 想换解析后端（例如把 docx-to-md 换成 office_oxide）、换分词实现，
+    // 或把附件存储换成对象存储，只改这三行以及 adapter 下对应的实现文件。
     let parsers: Arc<dyn ParserChain> = Arc::new(ParserRegistry::with_defaults());
     let tokenizer: Arc<dyn Tokenizer> = Arc::new(JiebaTokenizer::new());
+    let blobs: Arc<dyn BlobStore> = Arc::new(FilesystemBlobStore::new(&config.storage_dir));
 
     let state = AppState {
         db: pool,
         config: config.clone(),
         parsers,
         tokenizer,
+        blobs,
     };
 
     let app = build_router(state)?;
