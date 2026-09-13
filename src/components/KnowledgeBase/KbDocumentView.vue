@@ -8,10 +8,11 @@
 // draft 的脏检查基线（baseTitle/baseContent）是本地变量而不是 props.doc：
 // props.doc 由父层异步刷新，保存成功到刷新落地之间若跟 props.doc 比会误报 dirty，
 // 导致「完成」弹出莫名的保存确认。
-import { computed, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { kb, KbError } from "./kbClient";
 import type { KbDocument } from "./kbClient";
 import { renderKbMarkdown } from "./markdown";
+import { createAssetLoader, type AssetLoader } from "./assetLoader";
 import { useKbDocLock } from "@/composables/useKbDocLock";
 import KbHistory from "./KbHistory.vue";
 
@@ -46,6 +47,31 @@ const saveErr = ref<string | null>(null);
 /** 取锁本身的失败（网络 / 403），与保存失败分开显示 */
 const lockErr = ref<string | null>(null);
 const showHistory = ref(false);
+
+// ── 正文内嵌资源（asset://）────────────────────────────────────────────────
+// markdown 里存的是稳定的 `asset://<uuid>`，真实字节要带 Bearer 去取再转
+// objectURL（`<img src>` 发不出 Authorization 头，见 design spec §8.2）。
+// 所以渲染完还需要这一趟「装载」，它依赖 DOM 已挂载。
+const viewBody = ref<HTMLElement | null>(null);
+let assetLoader: AssetLoader | null = null;
+
+/** 换文档或切回看态时重新装载。旧的一批先回收，否则 objectURL 会泄漏。 */
+async function loadAssets() {
+  await nextTick();
+  assetLoader?.dispose();
+  assetLoader = null;
+
+  if (!viewBody.value) return;
+  assetLoader = createAssetLoader((id) => kb.getAsset(id));
+  await assetLoader.load(viewBody.value);
+}
+
+watch(
+  () => [props.doc.id, props.doc.content, editing.value, showHistory.value],
+  loadAssets,
+  { immediate: true },
+);
+onBeforeUnmount(() => assetLoader?.dispose());
 
 let baseTitle = "";
 let baseContent = "";
@@ -227,8 +253,10 @@ function onReverted(): void {
     </template>
 
     <!-- v-html 同上；正文只在查看态渲染（历史/编辑态各有自己的内容区） -->
+    <!-- ref=viewBody：assetLoader 要在这一层查 img[src^="asset://"] 换成 objectURL -->
     <div
       v-if="!editing && !showHistory"
+      ref="viewBody"
       class="kb-body msg-text"
       v-html="renderKbMarkdown(doc.content ?? '')"
     />
