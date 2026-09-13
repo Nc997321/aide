@@ -99,13 +99,22 @@ export const KB_INGEST_TIMEOUT_MS = 120_000;
 
 type FetchLike = typeof fetch;
 
+/** 编码可能抛 URIError（孤立代理项）——入参来自模型，必须兜住：永不抛是本模块红线。 */
+function safeEncode(s: string): string {
+  try {
+    return encodeURIComponent(s);
+  } catch {
+    return encodeURIComponent(s.replace(/[\uD800-\uDFFF]/g, "\uFFFD"));
+  }
+}
+
 /** 查询串：undefined 跳过（可选参数不该出现在 URL 里）。纯函数，测试直接覆盖。 */
 export function withQuery(path: string, query?: KbQuery): string {
   if (!query) return path;
   const parts: string[] = [];
   for (const [k, v] of Object.entries(query)) {
     if (v === undefined) continue;
-    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+    parts.push(`${safeEncode(k)}=${safeEncode(String(v))}`);
   }
   return parts.length > 0 ? `${path}?${parts.join("&")}` : path;
 }
@@ -115,7 +124,7 @@ export function withQuery(path: string, query?: KbQuery): string {
  * 字符串），一旦裸拼就会多出一段路径、打到别的端点上。读写两侧共用这一个构造器。
  */
 export function docPath(documentId: string): string {
-  return `/api/documents/${encodeURIComponent(documentId)}`;
+  return `/api/documents/${safeEncode(documentId)}`;
 }
 
 /** HTTP 状态 + 错误体 → 领域失败。错误体形状 `{error, message}`（message 是中文）。 */
@@ -146,8 +155,25 @@ function extractMessage(bodyText: string): string {
 /** 原始响应：「拿到了响应」与「没拿到」的分界（拿不到 → KbFailure）。 */
 type RawResult = { ok: true; status: number; text: string } | { ok: false; failure: KbFailure };
 
-export function createKbClient(cfg: KbRuntimeConfig, fetchImpl: FetchLike = fetch): KbClient {
-  async function raw(
+/** 响应判定：2xx 解析成 data，其余归一成 KbFailure。不引用闭包状态，故放模块作用域。 */
+async function finish<T>(r: RawResult): Promise<KbResult<T>> {
+  if (!r.ok) return r;
+  if (r.status < 200 || r.status >= 300) {
+    return { ok: false, failure: toFailure(r.status, r.text) };
+  }
+  try {
+    return { ok: true, data: JSON.parse(r.text) as T };
+  } catch {
+    return { ok: false, failure: { kind: "bad_response", detail: "response body is not JSON" } };
+  }
+}
+
+/**
+ * 造 raw：cfg/fetchImpl 由这层闭包带进来，返回的闭包仍是 4 个输入。
+ * 拆这一层的目的是让 createKbClient 只剩拼装，三者各自都不超 40 行。
+ */
+function makeRaw(cfg: KbRuntimeConfig, fetchImpl: FetchLike) {
+  return async function raw(
     method: string,
     path: string,
     body: RequestInit["body"],
@@ -181,20 +207,11 @@ export function createKbClient(cfg: KbRuntimeConfig, fetchImpl: FetchLike = fetc
     } finally {
       clearTimeout(timer);
     }
-  }
+  };
+}
 
-  async function finish<T>(r: RawResult): Promise<KbResult<T>> {
-    if (!r.ok) return r;
-    if (r.status < 200 || r.status >= 300) {
-      return { ok: false, failure: toFailure(r.status, r.text) };
-    }
-    try {
-      return { ok: true, data: JSON.parse(r.text) as T };
-    } catch {
-      return { ok: false, failure: { kind: "bad_response", detail: "response body is not JSON" } };
-    }
-  }
-
+export function createKbClient(cfg: KbRuntimeConfig, fetchImpl: FetchLike = fetch): KbClient {
+  const raw = makeRaw(cfg, fetchImpl);
   return {
     async getJson<T>(path: string, query?: KbQuery): Promise<KbResult<T>> {
       return finish<T>(await raw("GET", withQuery(path, query), undefined, KB_HTTP_TIMEOUT_MS));

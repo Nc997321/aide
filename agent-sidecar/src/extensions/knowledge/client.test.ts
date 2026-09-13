@@ -24,6 +24,11 @@ describe("withQuery", () => {
     expect(withQuery("/api/spaces", {})).toBe("/api/spaces");
     expect(withQuery("/api/spaces")).toBe("/api/spaces");
   });
+
+  it("孤立代理项不抛（模型能传进来）→ 替换字符（键、值两条路径）", () => {
+    expect(withQuery("/api/search", { q: "\uD800" })).toBe("/api/search?q=%EF%BF%BD");
+    expect(withQuery("/api/search", { "\uD800": "x" })).toBe("/api/search?%EF%BF%BD=x");
+  });
 });
 
 describe("docPath", () => {
@@ -33,6 +38,11 @@ describe("docPath", () => {
 
   it("带斜杠的 id 被编码（裸拼会多出一段路径）", () => {
     expect(docPath("d/1")).toBe("/api/documents/d%2F1");
+  });
+
+  it("孤立代理项不抛（模型能传进来）→ 替换字符；合法代理对原样编码", () => {
+    expect(docPath("\uD800")).toBe("/api/documents/%EF%BF%BD");
+    expect(docPath("😀")).toBe("/api/documents/%F0%9F%98%80");
   });
 });
 
@@ -114,6 +124,9 @@ describe("createKbClient", () => {
     expect(r).toEqual({ ok: true, data: { documentId: "d1" } });
     expect(calls[0]!.url).toBe("http://kb:8788/api/ingest?spaceId=s1");
     expect(calls[0]!.init.body).toBeInstanceOf(FormData);
+    const form = calls[0]!.init.body as FormData;
+    expect(form.get("file")).toBeInstanceOf(File);
+    expect((form.get("file") as File).name).toBe("a.md");
   });
 
   it("垃圾 baseUrl（面板自由文本可产生）→ network 文本失败，不抛", async () => {
