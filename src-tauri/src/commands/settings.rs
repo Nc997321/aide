@@ -462,7 +462,7 @@ pub fn seed_state_from_legacy(legacy_path: &Path, state_path: &Path) -> Result<(
 
 /// 原子替换：同文件系统 rename 是原子的。Windows 上杀软锁目标文件时 rename
 /// 失败，重试几次（锁通常瞬态）；都失败则保留原文件。
-fn persist_file(tmp: &Path, dest: &Path) -> Result<(), String> {
+pub(crate) fn persist_file(tmp: &Path, dest: &Path) -> Result<(), String> {
     if let Err(e) = fs::rename(tmp, dest) {
         #[cfg(windows)]
         {

@@ -557,6 +557,8 @@ pub fn run() {
             commands::chat::get_default_permission_modes,
             commands::chat::stop_chat_session,
             commands::chat::start_btw_session,
+            // Knowledge base runtime credentials (→ ~/.aide/knowledge.json)
+            commands::knowledge::knowledge_set_runtime_config,
             // Plugin skills scanning
             commands::shell::scan_plugin_skills,
             // Code graph

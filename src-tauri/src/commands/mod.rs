@@ -8,6 +8,7 @@ pub mod file_assoc;
 pub mod filesystem;
 pub mod git;
 pub mod jdk;
+pub mod knowledge;
 pub mod marketplace;
 pub mod memory_observatory;
 pub mod migration;

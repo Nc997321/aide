@@ -161,6 +161,11 @@ impl AgentRuntimeManager {
         let manifest = crate::commands::marketplace::enabled_plugins_manifest_path();
         cmd.env("AIDE_ENABLED_PLUGINS_FILE", dunce::simplified(&manifest));
 
+        // 知识库凭据文件的**路径**（凭据本体走文件、不走 env——env 会被 Bash 工具
+        // 子进程继承，模型跑 `env` 即可外带，见 agent-sidecar/src/engine/sessionMetadata.ts）。
+        let kb_config = crate::commands::knowledge::kb_config_path();
+        cmd.env("AIDE_KB_CONFIG_FILE", dunce::simplified(&kb_config));
+
         // release：原生 CLI 随 app 分发
         #[cfg(not(debug_assertions))]
         {
