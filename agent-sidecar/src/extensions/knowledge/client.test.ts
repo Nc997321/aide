@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createKbClient, docPath, toFailure, withQuery, type KbRuntimeConfig } from "./client.js";
+import { createKbClient, docPath, spaceDocsPath, toFailure, withQuery, type KbRuntimeConfig } from "./client.js";
 
 const cfg: KbRuntimeConfig = { baseUrl: "http://kb:8788", token: "tok" };
 
@@ -43,6 +43,21 @@ describe("docPath", () => {
   it("孤立代理项不抛（模型能传进来）→ 替换字符；合法代理对原样编码", () => {
     expect(docPath("\uD800")).toBe("/api/documents/%EF%BF%BD");
     expect(docPath("😀")).toBe("/api/documents/%F0%9F%98%80");
+  });
+});
+
+describe("spaceDocsPath", () => {
+  it("uuid 原样进路径", () => {
+    expect(spaceDocsPath("s1")).toBe("/api/spaces/s1/documents");
+  });
+
+  it("带斜杠的 id 被编码（裸拼会多出一段路径）", () => {
+    expect(spaceDocsPath("d/1")).toBe("/api/spaces/d%2F1/documents");
+  });
+
+  it("孤立代理项不抛（模型能传进来）→ 替换字符；合法代理对原样编码", () => {
+    expect(spaceDocsPath("\uD800")).toBe("/api/spaces/%EF%BF%BD/documents");
+    expect(spaceDocsPath("😀")).toBe("/api/spaces/%F0%9F%98%80/documents");
   });
 });
 

@@ -127,6 +127,14 @@ export function docPath(documentId: string): string {
   return `/api/documents/${safeEncode(documentId)}`;
 }
 
+/**
+ * 空间文档树路径。与 `docPath` 同职责：**本文件是所有 REST 路径构造的唯一归属地**，
+ * 工具层不手拼 URL。id 必须编码——编码挡的是拼接手误与孤立代理项（见 safeEncode）。
+ */
+export function spaceDocsPath(spaceId: string): string {
+  return `/api/spaces/${safeEncode(spaceId)}/documents`;
+}
+
 /** HTTP 状态 + 错误体 → 领域失败。错误体形状 `{error, message}`（message 是中文）。 */
 export function toFailure(status: number, bodyText: string): KbFailure {
   const message = extractMessage(bodyText);

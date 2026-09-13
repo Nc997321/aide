@@ -126,10 +126,10 @@ describe("list_spaces / list_documents", () => {
   });
 });
 
-// 以下 2 条超出 brief（brief 的 9 条逐字未动）——保的是 tool 层「永不抛」红线：
-// brief 里 list_documents 的 spaceId 裸 encodeURIComponent，而 zod 的 z.string()
-// 不拦孤立代理项（"\uD800"），抛出去就穿出 handler（实测 URIError: URI malformed）。
-// client.ts 的 safeEncode 是私有的，故 knowledgeTools.ts 自带 spaceDocsPath 兜住。
+// 以下 2 条超出 brief（brief 的 9 条逐字未动）——钉的是 tool 层「永不抛」红线：
+// 裸 encodeURIComponent 对孤立代理项（"\uD800"）抛 URIError 会穿出 handler
+// （实测 URIError: URI malformed），而 zod 的 z.string() 不拦它。
+// 编码归属地在 client.ts 的 spaceDocsPath（修复轮 1 起由它导出），工具层只调用。
 describe("list_documents 的 spaceId 编码兜底", () => {
   it("孤立代理项不抛，落到 U+FFFD 再编码", async () => {
     const calls = stubFetch({ status: 200, body: JSON.stringify([]) });

@@ -13,6 +13,7 @@ import { readKbConfig } from "./knowledge/config.js";
 import {
   createKbClient,
   docPath,
+  spaceDocsPath,
   type KbClient,
   type KbDocument,
   type KbDocumentSummary,
@@ -90,21 +91,6 @@ function buildListSpacesTool(env: NodeJS.ProcessEnv) {
     {},
     () => kbCall<KbSpace[]>(env, (c) => c.getJson<KbSpace[]>("/api/spaces"), formatSpaces),
   );
-}
-
-/**
- * 空间文档树的路径：本文件唯一自拼的 URL（其余都走 client.ts 的 docPath / withQuery）。
- * `spaceId` 直接来自模型，zod 的 `z.string()` 不拦孤立代理项（"\uD800"），裸
- * `encodeURIComponent` 会抛 URIError 穿出工具 → 击穿「永不抛」红线（T4 评审 fix
- * round 1 的同一处坑；client.ts 的 safeEncode 就是为此而生，但它未导出）。
- * 这里按 safeEncode 的两步兜住，合法代理对（emoji）不受影响。
- */
-function spaceDocsPath(spaceId: string): string {
-  try {
-    return `/api/spaces/${encodeURIComponent(spaceId)}/documents`;
-  } catch {
-    return `/api/spaces/${encodeURIComponent(spaceId.replace(/[\uD800-\uDFFF]/g, String.fromCharCode(0xFFFD)))}/documents`;
-  }
 }
 
 function buildListDocumentsTool(env: NodeJS.ProcessEnv) {
