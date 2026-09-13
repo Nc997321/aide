@@ -250,19 +250,128 @@ P1 落地后知识库才能真正被 agent 用起来；P2 是先有读的闭环�
 
 错误体统一 `{error: <code>, message: <中文>}`；DTO 一律 camelCase。
 
-## 附录 B：分支覆盖对账表（模板，实现轮填实测）
+## 附录 B：分支覆盖对账表（P1 实现轮实测）
+
+图例：✅ = 有用例触达该臂（执行到但未专门断言的标「未断言」）；⬜ = 可达但无用例；⛔ = 不可达（附理由）。
+测试名列写实存用例名 `文件 > describe > it`；`it.each` 的行按 vitest 渲染值书写（`{ kind: 'unauthorized' } 的文案含关键指引与下一步`）。
+模板行里的 `resolveSpaceId` 属 P2（本期未实现，见 §4.2 与 §10），`formatKbError` / `kbFetch` 是设计期的临时命名，落地名分别是 `formatFailure` / `raw`+`finish`——三者按落地名重列。
+
+### knowledge/config.ts
 
 | 函数 | 分支 | 覆盖 | 测试名 |
 |---|---|---|---|
-| `parseKbConfig`（config.ts） | 文件缺失 | ⬜ | — |
-| | JSON 坏 | ⬜ | — |
-| | token 空 | ⬜ | — |
-| | version 未知 | ⬜ | — |
-| | 正常 | ⬜ | — |
-| `resolveSpaceId`（knowledgeTools.ts） | 传入 spaceId | ⬜ | — |
-| | 省略 + 0 空间 | ⬜ | — |
-| | 省略 + 1 空间 | ⬜ | — |
-| | 省略 + 多空间 | ⬜ | — |
-| `formatKbError`（format.ts） | 各失败原因 | ⬜ | — |
-| `kbFetch`（client.ts） | 2xx / 401 / 403 / 404 / 409 / 5xx / 超时 / 网络 / 畸形 JSON | ⬜ | — |
-| `knowledgeMcpRegistration` | env off / !trusted / taskTools / 正常 | ⬜ | — |
+| `parseKbConfig` | `JSON.parse` 抛（坏 JSON）→ null | ✅ | config.test.ts > parseKbConfig > JSON 坏 → null（不抛） |
+| | 非对象（数组 / 字符串 / `null`）→ null | ✅ | config.test.ts > parseKbConfig > 非对象（数组/字符串/null）→ null |
+| | `version !== 1` → null | ✅ | config.test.ts > parseKbConfig > version 不认识 → null（fail-closed，给将来演进留门） |
+| | `baseUrl` 非串或空 → null | ✅ | config.test.ts > parseKbConfig > baseUrl 缺失或空 → null |
+| | `token` 非串或空 → null | ✅ | config.test.ts > parseKbConfig > token 缺失或空 → null |
+| | 带值路径：正常形状 → 配置 | ✅ | config.test.ts > parseKbConfig > 正常形状 → 配置，尾斜杠被剥掉 |
+| | 带值路径：尾斜杠剥离（`replace(/\/+$/, "")` 命中）| ✅ | config.test.ts > parseKbConfig > 正常形状 → 配置，尾斜杠被剥掉 |
+| | 带值路径：无尾斜杠（replace 无匹配）| ✅（未断言，经 readKbConfig 透传触达） | config.test.ts > readKbConfig > 正常文件 → 配置 |
+| `readKbConfig` | env 无 `AIDE_KB_CONFIG_FILE` → null | ✅ | config.test.ts > readKbConfig > env 没给路径 → null（不是错误：说明这台机器没登录过知识库） |
+| | `readFileSync` 抛（文件不存在 / 权限）→ null | ✅ | config.test.ts > readKbConfig > 路径指向不存在的文件 → null |
+| | 读到了但内容坏 → 透传 `parseKbConfig` 的 null | ⬜ | —（可达：文件存在但 JSON 坏；parseKbConfig 已单测，这一层无用例） |
+| | 带值路径：读出 `{baseUrl, token}` | ✅ | config.test.ts > readKbConfig > 正常文件 → 配置 |
+
+### knowledge/client.ts
+
+| 函数 | 分支 | 覆盖 | 测试名 |
+|---|---|---|---|
+| `safeEncode` | `encodeURIComponent` 成功（普通串 / 合法代理对）| ✅ | client.test.ts > docPath > 孤立代理项不抛（模型能传进来）→ 替换字符；合法代理对原样编码（emoji 臂） |
+| | 抛 URIError → 替换 U+FFFD 再编码 | ✅ | client.test.ts > withQuery > 孤立代理项不抛（模型能传进来）→ 替换字符（键、值两条路径）；client.test.ts > docPath > 孤立代理项不抛…；knowledgeTools.test.ts > list_documents 的 spaceId 编码兜底 > 孤立代理项不抛，落到 U+FFFD 再编码 |
+| `withQuery` | `query` 省略（undefined）→ 原路径 | ✅ | client.test.ts > withQuery > 没有有效键时保持原路径（不冒出一个 ?） |
+| | `query` 给了但全被跳过（`parts` 空）→ 原路径 | ✅ | client.test.ts > withQuery > 没有有效键时保持原路径（不冒出一个 ?）（`{}` 那半条） |
+| | 值为 `undefined` 的键跳过 | ✅ | client.test.ts > withQuery > 拼查询串，undefined 的键跳过 |
+| | 带值路径：`?k=v&…` | ✅ | client.test.ts > withQuery > 拼查询串，undefined 的键跳过；client.test.ts > createKbClient > sendFile 走 multipart，字段名 file（工具层 URL 断言亦覆盖） |
+| | 键 / 值都走 `safeEncode` | ✅ | client.test.ts > withQuery > 孤立代理项不抛（模型能传进来）→ 替换字符（键、值两条路径） |
+| `docPath` | 带值路径：正常 id 原样 | ✅ | client.test.ts > docPath > uuid 原样进路径；knowledgeTools.test.ts > read_document > 取全文并做 URL 编码（id 不会拼出额外路径段） |
+| | 含 `/` 的 id 被编码 | ✅ | client.test.ts > docPath > 带斜杠的 id 被编码（裸拼会多出一段路径） |
+| | 孤立代理项 / 合法代理对 | ✅ | client.test.ts > docPath > 孤立代理项不抛（模型能传进来）→ 替换字符；合法代理对原样编码 |
+| `spaceDocsPath` | 带值路径：正常 id 原样 | ✅ | client.test.ts > spaceDocsPath > uuid 原样进路径；knowledgeTools.test.ts > list_spaces / list_documents > list_documents 打空间文档树 |
+| | 含 `/` 的 id 被编码 | ✅ | client.test.ts > spaceDocsPath > 带斜杠的 id 被编码（裸拼会多出一段路径） |
+| | 孤立代理项 / 合法代理对 | ✅ | client.test.ts > spaceDocsPath > 孤立代理项不抛（模型能传进来）→ 替换字符；合法代理对原样编码；knowledgeTools.test.ts > list_documents 的 spaceId 编码兜底 > 孤立代理项不抛，落到 U+FFFD 再编码 / 合法代理对（emoji）不被改写 |
+| `extractMessage` | 合法 JSON 且 `message` 非空串 → 用服务端 message | ✅ | client.test.ts > createKbClient > 409 → locked，并带上服务端 message |
+| | 合法 JSON 但非对象 / `message` 缺失或非串 → 截断原文 | ✅（未断言回退值本身） | client.test.ts > toFailure > 403 → forbidden；未知 4xx → bad_request 且带服务端 message（`"{}"` 那半条） |
+| | `JSON.parse` 抛 → 截断原文 | ✅ | client.test.ts > toFailure > 错误体不是 JSON → message 退回截断原文（不抛） |
+| | 截断到 200 字符 | ✅ | 同上（`f.message.length === 200`） |
+| `toFailure` | 401 → `unauthorized` | ✅ | client.test.ts > createKbClient > 401 → unauthorized（401 不当作通用 bad_request） |
+| | 403 → `forbidden` | ✅ | client.test.ts > toFailure > 403 → forbidden；未知 4xx → bad_request 且带服务端 message |
+| | 404 → `not_found` | ✅（经工具层，client 层无直测） | knowledgeTools.test.ts > read_document > 404 → 引导回 search |
+| | 409 → `locked` + 服务端 message | ✅ | client.test.ts > createKbClient > 409 → locked，并带上服务端 message |
+| | ≥500 → `server` + status | ✅ | client.test.ts > createKbClient > 500 → server，带状态码 |
+| | 其余状态码 → `bad_request` | ✅ | client.test.ts > toFailure > 403 → forbidden；未知 4xx → bad_request 且带服务端 message（422 那半条） |
+| `raw`（`makeRaw` 闭包） | 拿到响应 → `{ok:true,status,text}` | ✅ | client.test.ts > createKbClient > GET 成功 → data；带 Bearer 头与 Accept |
+| | `ctl.signal.aborted` → `timeout` | ✅ | client.test.ts > createKbClient > 超时 → timeout（用假定时器把 15s 推快） |
+| | 非 abort 抛错 → `network` + baseUrl + detail | ✅ | client.test.ts > createKbClient > fetch 抛错 → network，带 baseUrl 与原始信息（不带 token）；client.test.ts > createKbClient > 垃圾 baseUrl（面板自由文本可产生）→ network 文本失败，不抛 |
+| | 抛的**不是** `Error` → `String(e)` 臂 | ⬜ | —（可达但无用例：fetch 实现抛非 Error 时） |
+| | `body` 是 string → 补 `Content-Type: application/json` | ✅ | client.test.ts > createKbClient > POST 带 JSON body 与 Content-Type |
+| | `body` 非 string（GET / FormData）→ 不补 Content-Type | ✅（未断言缺席） | client.test.ts > createKbClient > GET 成功 → data；带 Bearer 头与 Accept |
+| | `body === undefined` → 不设 body | ✅（未断言缺席） | client.test.ts > createKbClient > GET 成功 → data；带 Bearer 头与 Accept |
+| | `finally` 清掉超时定时器（成功 / 失败两侧）| ✅（行为断言：成功路径后假定时器无悬挂；无独立用例） | client.test.ts > createKbClient > 超时 → timeout（用假定时器把 15s 推快） |
+| `finish` | `!r.ok` → 透传 failure | ✅ | client.test.ts > createKbClient > fetch 抛错 → network…；client.test.ts > createKbClient > 超时 → timeout… |
+| | 非 2xx → `toFailure` | ✅ | client.test.ts > createKbClient > 401 → unauthorized… |
+| | 2xx + JSON 可解析 → `{ok:true,data}` | ✅ | client.test.ts > createKbClient > GET 成功 → data；带 Bearer 头与 Accept |
+| | 2xx + JSON 抛 → `bad_response` | ✅ | client.test.ts > createKbClient > 2xx 但 body 不是 JSON → bad_response |
+| `createKbClient` | `getJson` = `withQuery` + `KB_HTTP_TIMEOUT_MS` | ✅ | client.test.ts > createKbClient > 超时 → timeout（用假定时器把 15s 推快）（15s 即该常量）；client.test.ts > withQuery > 拼查询串，undefined 的键跳过 |
+| | `sendJson` = `JSON.stringify` + 方法透传（POST / PUT）| ✅ | client.test.ts > createKbClient > POST 带 JSON body 与 Content-Type（POST 臂）；client.test.ts > createKbClient > 409 → locked，并带上服务端 message（PUT 臂） |
+| | `sendFile` = FormData + `KB_INGEST_TIMEOUT_MS` | ✅ | client.test.ts > createKbClient > sendFile 走 multipart，字段名 file |
+| | `fetchImpl` 缺省 = 全局 `fetch` | ✅ | client.test.ts > createKbClient > 垃圾 baseUrl（面板自由文本可产生）→ network 文本失败，不抛（未传第二参） |
+| | `fetchImpl` 注入臂 | ✅ | client.test.ts > createKbClient > GET 成功 → data；带 Bearer 头与 Accept（其余 createKbClient 用例同理） |
+
+### knowledge/format.ts
+
+| 函数 | 分支 | 覆盖 | 测试名 |
+|---|---|---|---|
+| `stripHighlight` | 含 `[[HL]]` / `[[/HL]]` → 剥掉、文字保留 | ✅ | format.test.ts > stripHighlight > 剥掉 [[HL]] / [[/HL]] 哨兵，保留文字 |
+| | 无哨兵（`replaceAll` 无匹配） | ⬜ | —（可达：服务端未产生高亮时 snippet 不带哨兵） |
+| `formatFailure` | `unauthorized` 臂（含「不需要开新会话」） | ✅ | format.test.ts > formatFailure（每条失败原因都给下一步，永不抛）> { kind: 'unauthorized' } 的文案含关键指引与下一步；同 describe > unauthorized 明确说不需要开新会话（现读凭据，重登即生效） |
+| | `forbidden` 臂 | ✅ | format.test.ts > formatFailure（…）> { kind: 'forbidden' } 的文案含关键指引与下一步 |
+| | `not_found` 臂 | ✅ | format.test.ts > formatFailure（…）> { kind: 'not_found' } 的文案含关键指引与下一步 |
+| | `locked` 臂（回显 message） | ✅ | format.test.ts > formatFailure（…）> { kind: 'locked', message: '被占用' } 的文案含关键指引与下一步 |
+| | `bad_request` 臂（回显 message） | ✅ | format.test.ts > formatFailure（…）> { kind: 'bad_request', message: '标题不能为空' } 的文案含关键指引与下一步 |
+| | `server` 臂（回显 status） | ✅ | format.test.ts > formatFailure（…）> { kind: 'server', status: 502 } 的文案含关键指引与下一步 |
+| | `network` 臂（回显 baseUrl，不漏 token） | ✅ | format.test.ts > formatFailure（…）> { kind: 'network', baseUrl: 'http://kb:8788', detail: 'ECONNREFUSED' } 的文案含关键指引与下一步；同 describe > network 文案带 baseUrl 但不含 token |
+| | `timeout` 臂 | ✅ | format.test.ts > formatFailure（…）> { kind: 'timeout' } 的文案含关键指引与下一步 |
+| | `bad_response` 臂 | ✅ | format.test.ts > formatFailure（…）> { kind: 'bad_response', detail: 'not JSON' } 的文案含关键指引与下一步 |
+| | switch 穷尽性（漏一臂 → TS `never`）| ✅（类型层，无用例） | — |
+| `formatSearchHits` | `data.hits` 缺失 → `?? []` | ⬜ | —（可达：服务端 200 不返回 hits；防御臂，另经 `kbCall` 的 catch 兜底） |
+| | 零命中 → 换关键词指引 | ✅ | format.test.ts > formatSearchHits > 零命中给换关键词的指引（不是错误） |
+| | 带值路径：行列表（title / documentId / space / 版本 + 剥哨兵 snippet）| ✅ | format.test.ts > formatSearchHits > 命中列表带 documentId / 空间 / 摘要；knowledgeTools.test.ts > search > 拼 q / spaceId / limit，返回命中 |
+| `formatDocument` | `content` 缺失 → `?? ""` | ⬜ | —（可达：DTO 契约要求必填；防御臂） |
+| | 超限 → 截断 + ⚠ 注明 | ✅ | format.test.ts > formatDocument > 超长截断并注明（不静默丢内容） |
+| | 带值路径：未超限 → 全文 | ✅ | format.test.ts > formatDocument > 带标题 / id / 版本号 / 正文；knowledgeTools.test.ts > read_document > 取全文并做 URL 编码（id 不会拼出额外路径段） |
+| `formatSpaces` | 空数组 → 检查成员资格指引 | ✅ | format.test.ts > formatSpaces / formatDocumentList > 零空间时给出检查成员资格的指引 |
+| | 有空间 + `role` 在 → 追加「your role」 | ✅ | format.test.ts > formatSpaces / formatDocumentList > 空间列表带 id 与名称 |
+| | 有空间 + `role` 缺席 → 省略 role 段 | ✅（未断言省略） | knowledgeTools.test.ts > list_spaces / list_documents > list_spaces 打 /api/spaces 并渲染空间（用例数据无 role 字段） |
+| `formatDocumentList` | 空数组 → 「no documents」（不点名不存在的工具）| ✅ | format.test.ts > formatSpaces / formatDocumentList > 文档列表带 id / 版本 / 更新时间；空列表不提到不存在的工具 |
+| | `parentId` 空（null / undefined）→ 省略 `(under …)` | ✅（未断言省略） | 同上（用例数据 `parentId: null`） |
+| | `parentId` 在 → 追加 `(under …)` | ⬜ | —（可达：子文档；用例只给了 null） |
+| | 带值路径：行列表（title / id / vN / updatedAt）| ✅ | 同上 |
+
+### knowledgeTools.ts / knowledgeMcp.ts
+
+| 函数 | 分支 | 覆盖 | 测试名 |
+|---|---|---|---|
+| `kbCall` | `readKbConfig` 为 null → 未连接引导文本（不发请求）| ✅ | knowledgeTools.test.ts > 未配置凭据（恒挂的降级路径）> 任何工具都返回「未连接 + 去登录」，且不发请求 |
+| | 带值路径：`r.ok` → `onOk(data)` | ✅ | knowledgeTools.test.ts > search > 拼 q / spaceId / limit，返回命中（余三工具的 happy 用例同） |
+| | `!r.ok` → `formatFailure(r.failure)` | ✅ | knowledgeTools.test.ts > search > 401 → 引导重新登录（不是抛错）；knowledgeTools.test.ts > search > 网络失败 → 带 baseUrl 的文本；knowledgeTools.test.ts > read_document > 404 → 引导回 search |
+| | `run` / 格式化器抛 → `bad_response` 文本（永不 reject）| ✅ | knowledgeTools.test.ts > 200 但响应形状不对（畸形 2xx）> list_spaces：resolves（不是 rejects），降级成 bad_response 文本；同 describe > list_documents：resolves（不是 rejects），降级成 bad_response 文本 |
+| | `createKbClient(cfg)` 走缺省 fetch（工具层不注入）| ✅ | 工具层全部用例（`vi.stubGlobal("fetch", …)` 顶掉的正是默认参数） |
+| `buildSearchTool` | 只给 `query`（`spaceId`/`limit` 省略）| ✅ | knowledgeTools.test.ts > search > 401 → 引导重新登录（不是抛错） |
+| | 三个入参都给 → URL 拼全 | ✅ | knowledgeTools.test.ts > search > 拼 q / spaceId / limit，返回命中 |
+| `buildReadDocumentTool` | `documentId` → `docPath` 编码 | ✅ | knowledgeTools.test.ts > read_document > 取全文并做 URL 编码（id 不会拼出额外路径段） |
+| | 404 失败路径 | ✅ | knowledgeTools.test.ts > read_document > 404 → 引导回 search |
+| `buildListSpacesTool` | 无参 → `/api/spaces` | ✅ | knowledgeTools.test.ts > list_spaces / list_documents > list_spaces 打 /api/spaces 并渲染空间 |
+| | 畸形 2xx 降级 | ✅ | knowledgeTools.test.ts > 200 但响应形状不对（畸形 2xx）> list_spaces：resolves（不是 rejects），降级成 bad_response 文本 |
+| `buildListDocumentsTool` | `spaceId` → `spaceDocsPath` 编码 | ✅ | knowledgeTools.test.ts > list_spaces / list_documents > list_documents 打空间文档树 |
+| | 孤立代理项 spaceId 不抛 | ✅ | knowledgeTools.test.ts > list_documents 的 spaceId 编码兜底 > 孤立代理项不抛，落到 U+FFFD 再编码 |
+| | 合法代理对 / emoji 不被改写 | ✅ | knowledgeTools.test.ts > list_documents 的 spaceId 编码兜底 > 合法代理对（emoji）不被改写 |
+| | 畸形 2xx 降级 | ✅ | knowledgeTools.test.ts > 200 但响应形状不对（畸形 2xx）> list_documents：resolves（不是 rejects），降级成 bad_response 文本 |
+| `buildKnowledgeTools` | 只暴露 4 个读工具（名字与顺序）| ✅ | knowledgeTools.test.ts > buildKnowledgeTools > P1 只暴露 4 个读工具 |
+| `knowledgeMcpRegistration` | 门 1：`!trusted` → null | ✅ | knowledgeMcp.test.ts > knowledgeMcpRegistration — 门控矩阵 > !trusted → null（受限模式不暴露知识库读写）；同 describe > trusted 优先于 env（两道门并列，任一不满足即 null） |
+| | 门 2：`taskTools` 真值 → null | ✅ | knowledgeMcp.test.ts > knowledgeMcpRegistration — 门控矩阵 > btw 任务支线（taskTools 非空）→ null（前缀最小化） |
+| | 门 2 的 `taskTools === []`（真值判定把空数组也拦下）| ⛔ | 不可达：上游 session-worker.ts:579 只在 `cmd.tools?.length` 时写 `this.taskTools`，空数组不会传下来（与 codegraph/docs 两处 `deps.taskTools ? …` 同约定） |
+| | 门 3：`AIDE_KB_TOOLS === "off"` → null | ✅ | knowledgeMcp.test.ts > knowledgeMcpRegistration — 门控矩阵 > AIDE_KB_TOOLS=off → null |
+| | 带值路径：三道门全通 → `{"aide-knowledge": server}` | ✅ | knowledgeMcp.test.ts > knowledgeMcpRegistration — 门控矩阵 > 默认注册（缺省 trusted=true、无 taskTools）；knowledgeMcp.test.ts > instructions 是 MCP 采纳率的必需品 > 工具描述快照 + instructions 关键句（防静默消失） |
+| | 装配落位（三处少汇一处即静默失效）| ✅ | session-worker.test.ts > SessionWorker — codegraph MCP registration > lightweight btw keeps full mcpServers / skills / plugins (cache prefix parity) |
+| | `KNOWLEDGE_READ_RULES` 工具级、逐字（非 server 级、无写工具）| ✅ | knowledgeMcp.test.ts > 放行规则是**工具级**的（server 级会连写工具一起放行）> 四条常量逐字固定 / 没有任何一条等于 server 前缀（防漂移成 mcp__aide-knowledge）；session-worker.test.ts > SessionWorker — knowledge MCP 放行规则（工具级）> knowledge 写工具不在 allowedTools（写必弹窗） |
