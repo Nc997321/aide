@@ -386,18 +386,10 @@ export struct ChatDrawer {
   deviceHead() {
     Column({ space: 12 }) {
       Row({ space: 10 }) {
-        Row() {
-          Text('a')
-            .fontSize(20)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Color.White)
-        }
-        .width(38)
-        .height(38)
-        .borderRadius(11)
-        .linearGradient({ angle: 135, colors: [['#4C8DFF', 0], ['#0A59F7', 1]] })
-        .justifyContent(FlexAlign.Center)
-        .alignItems(VerticalAlign.Center)
+        Image($r('app.media.startIcon'))
+          .width(38)
+          .height(38)
+          .borderRadius(11)
 
         Column({ space: 2 }) {
           Text('桌面 aide')

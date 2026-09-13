@@ -468,19 +468,11 @@ export struct ChatPage {
   @Builder
   emptyState() {
     Column({ space: 7 }) {
-      Row() {
-        Text('a')
-          .fontSize(30)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Color.White)
-      }
-      .width(56)
-      .height(56)
-      .borderRadius(16)
-      .linearGradient({ angle: 135, colors: [['#4C8DFF', 0], ['#0A59F7', 1]] })
-      .justifyContent(FlexAlign.Center)
-      .alignItems(VerticalAlign.Center)
-      .margin({ bottom: 3 })
+      Image($r('app.media.startIcon'))
+        .width(56)
+        .height(56)
+        .borderRadius(16)
+        .margin({ bottom: 3 })
 
       Text('新会话')
         .fontSize(16)
