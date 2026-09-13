@@ -1,11 +1,15 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   appendToDocument,
   createDocument,
+  ingestFile,
   resolveWriteTarget,
   updateDocument,
 } from "./operations.js";
-import { KB_CONTENT_MAX_BYTES, KB_DOC_MAX_BYTES } from "./format.js";
+import { KB_CONTENT_MAX_BYTES, KB_DOC_MAX_BYTES, KB_INGEST_MAX_BYTES } from "./format.js";
 import type { KbClient, KbDocument, KbResult } from "./client.js";
 
 /** 假 client：只实现被测路径用到的方法，返回值由用例给定。 */
@@ -151,5 +155,80 @@ describe("appendToDocument（读旧正文 → 拼接 → 整篇写回）", () =>
     const text = await appendToDocument(fakeClient({ getJson, sendJson }), { documentId: "d1", content: "x" });
     expect(text).toContain("unexpected response");
     expect(sendJson).not.toHaveBeenCalled();
+  });
+});
+
+describe("ingestFile（导入磁盘文件）", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "kb-ingest-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("相对路径按会话 cwd 解析，multipart 文件名取 basename", async () => {
+    writeFileSync(join(dir, "spec.md"), "# 规范\n正文");
+    const sendFile = vi.fn(async () => ({
+      ok: true, data: { documentId: "d1", revisionId: "r1", title: "规范", backend: "markdown" },
+    }) as KbResult<never>);
+    const text = await ingestFile(fakeClient({ sendFile }), dir, { filePath: "spec.md", spaceId: "s1" });
+    expect(sendFile).toHaveBeenCalledTimes(1);
+    // 第三个位置参数就是上传体：只看 filename 与字节数（`as` 是为了给未定型 mock 的
+    // calls 元组一个形状——不给的话 `calls[0][2]` 是「空元组没有索引 2」）。
+    const upload = (
+      sendFile.mock.calls[0] as unknown as [unknown, unknown, { filename: string; data: Uint8Array }]
+    )[2];
+    expect(sendFile).toHaveBeenCalledWith(
+      "/api/ingest",
+      { spaceId: "s1", parentId: undefined },
+      expect.objectContaining({ filename: "spec.md" }),
+    );
+    expect(upload.filename).toBe("spec.md");
+    expect(upload.data.byteLength).toBeGreaterThan(0);
+    expect(text).toContain("Imported");
+    expect(text).toContain("markdown");
+  });
+
+  it("绝对路径直接用", async () => {
+    const abs = join(dir, "abs.txt");
+    writeFileSync(abs, "x");
+    const sendFile = vi.fn(async () => ({ ok: true, data: { documentId: "d", revisionId: "r", title: "t", backend: "markdown" } }) as KbResult<never>);
+    await ingestFile(fakeClient({ sendFile }), "/some/other/cwd", { filePath: abs, spaceId: "s1" });
+    const upload = (sendFile.mock.calls[0] as unknown as [unknown, unknown, { filename: string }])[2];
+    expect(upload.filename).toBe("abs.txt");
+  });
+
+  it("文件不存在 → 说明相对路径规则，不发请求", async () => {
+    const sendFile = vi.fn();
+    const text = await ingestFile(fakeClient({ sendFile }), dir, { filePath: "nope.md", spaceId: "s1" });
+    expect(text).toContain("File not found");
+    expect(text).toContain("working directory");
+    expect(sendFile).not.toHaveBeenCalled();
+  });
+
+  it("路径是目录 → 明确说不是文件，不发请求", async () => {
+    const sendFile = vi.fn();
+    const text = await ingestFile(fakeClient({ sendFile }), dir, { filePath: ".", spaceId: "s1" });
+    expect(text).toContain("Not a file");
+    expect(sendFile).not.toHaveBeenCalled();
+  });
+
+  it("超过 32 MiB → 拒绝且不读文件、不发请求", async () => {
+    const big = join(dir, "big.bin");
+    writeFileSync(big, Buffer.alloc(KB_INGEST_MAX_BYTES + 1));
+    const sendFile = vi.fn();
+    const text = await ingestFile(fakeClient({ sendFile }), dir, { filePath: "big.bin", spaceId: "s1" });
+    expect(text).toContain("Refused");
+    expect(sendFile).not.toHaveBeenCalled();
+  });
+
+  it("服务端解析失败（400）→ 透出服务端 message", async () => {
+    writeFileSync(join(dir, "a.xlsx"), "x");
+    const sendFile = vi.fn(async () => ({
+      ok: false, failure: { kind: "bad_request", message: "不支持的文件类型" },
+    }) as KbResult<never>);
+    const text = await ingestFile(fakeClient({ sendFile }), dir, { filePath: "a.xlsx", spaceId: "s1" });
+    expect(text).toContain("不支持的文件类型");
   });
 });

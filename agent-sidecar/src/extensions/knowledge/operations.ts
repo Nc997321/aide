@@ -4,18 +4,24 @@
 // 为什么这些操作要多一步 GET：知识库的 PUT 是整篇替换且**没有乐观锁**，只有 300s
 // 同作者合并窗口与文档行锁兜底。所以凡改已有文档，必须先把当前正文读回来再拼，
 // 否则并发下静默覆盖别人的修改（设计 spec §4.2）。
+import { readFileSync, statSync } from "node:fs";
+import { basename, isAbsolute, resolve } from "node:path";
 import {
   docPath,
   type KbClient,
   type KbDocument,
+  type KbIngestResult,
   type KbSaveResult,
   type KbSpace,
+  type KbUpload,
 } from "./client.js";
 import { decideSpace, type SpaceDecision } from "./space.js";
 import {
   KB_CONTENT_MAX_BYTES,
   KB_DOC_MAX_BYTES,
+  KB_INGEST_MAX_BYTES,
   formatFailure,
+  formatIngestResult,
   formatSavedDocument,
   formatTooLarge,
 } from "./format.js";
@@ -115,4 +121,50 @@ export async function appendToDocument(client: KbClient, args: AppendArgs): Prom
     ...(args.changeNote ? { changeNote: args.changeNote } : {}),
   });
   return saved.ok ? formatSavedDocument(saved.data, "Appended to") : formatFailure(saved.failure);
+}
+
+export interface IngestArgs {
+  filePath: string;
+  spaceId?: string;
+  parentId?: string;
+}
+
+/**
+ * 导入磁盘文件（md/txt/docx/pdf，服务端按扩展名分派解析器）。
+ *
+ * 路径规则沿 `buildDocxTools(cwd)` 先例：相对路径按会话 cwd 解析，绝对路径直接用。
+ * 扩展名**不在客户端预判**——服务端 `/api/ingest/formats` 是唯一权威，不支持的
+ * 类型由它 400 + 中文 message，我们原样透出（避免两处格式清单漂移）。
+ * 尺寸在**读文件之前**用 stat 挡掉，避免为了报错把 32 MiB 读进内存。
+ */
+export async function ingestFile(client: KbClient, cwd: string, args: IngestArgs): Promise<string> {
+  const abs = isAbsolute(args.filePath) ? args.filePath : resolve(cwd, args.filePath);
+
+  let size: number;
+  try {
+    const st = statSync(abs);
+    if (!st.isFile()) {
+      return `Not a file: ${args.filePath}. Pass a path to a regular file on disk.`;
+    }
+    size = st.size;
+  } catch {
+    return `File not found: ${args.filePath}. Check the path (relative paths resolve against the session working directory).`;
+  }
+
+  if (size > KB_INGEST_MAX_BYTES) return formatTooLarge("the file", KB_INGEST_MAX_BYTES);
+
+  let data: Buffer;
+  try {
+    data = readFileSync(abs);
+  } catch (e) {
+    return `Could not read ${args.filePath}: ${e instanceof Error ? e.message : String(e)}`;
+  }
+
+  const upload: KbUpload = { filename: basename(abs), data };
+  const r = await client.sendFile<KbIngestResult>(
+    "/api/ingest",
+    { spaceId: args.spaceId, parentId: args.parentId },
+    upload,
+  );
+  return r.ok ? formatIngestResult(r.data) : formatFailure(r.failure);
 }
