@@ -509,6 +509,11 @@ function onReverted(): void {
 .kb-preview :deep(td) {
   padding: 5px 10px;
   border: 1px solid var(--aide-border);
+  /* 列宽下限：不设则 auto 布局把富余宽度全给长文本列，窄列被压到一个汉字宽，
+     两字单元格逐字竖排（实测 800px 容器复现）。5em = 60px，扣掉单元格
+     padding+border 22px 后内容盒 38px，够两字（Maple Mono NF CN 1.2em = 28.8px）。
+     桌面聊天同一问题见 src/styles/global.css。 */
+  min-width: 5em;
 }
 .kb-body :deep(th),
 .kb-preview :deep(th) {

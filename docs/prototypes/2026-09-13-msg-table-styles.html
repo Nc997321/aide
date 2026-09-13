@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>聊天表格款式原型 · 2026-09-13</title>
+<style>
+  @font-face { font-family:"Maple Mono NF CN"; src:url("../../src/assets/fonts/maple-mono-nf-cn-regular.woff2") format("woff2"); font-weight:400; }
+  @font-face { font-family:"Maple Mono NF CN"; src:url("../../src/assets/fonts/maple-mono-nf-cn-bold.woff2") format("woff2"); font-weight:700; }
+  * { box-sizing: border-box; }
+  :root { --aide-color-scheme: dark; --aide-bg-deep: rgba(8,10,16,.82); --aide-bg-base: rgba(17,19,29,.52); --aide-bg-raised: rgba(24,26,38,.48); --aide-bg-overlay: rgba(8,10,16,.55); --aide-surface-default: rgba(255,255,255,.06); --aide-surface-hover: rgba(255,255,255,.1); --aide-surface-active: rgba(255,255,255,.14); --aide-selection-bg: rgba(255,255,255,.14); --aide-text-primary: #eef0f8; --aide-text-secondary: #b9bdd0; --aide-text-muted: #7c8296; --aide-text-on-accent: #eef0ff; --aide-accent: #a5b8ff; --aide-accent-hover: #bcc9ff; --aide-accent-subtle: rgba(150,170,255,.16); --aide-success: #6ee7a8; --aide-warning: #fcd34d; --aide-danger: #f87171; --aide-info: #7dd3fc; --aide-agent-accent: #e0a3d8; --aide-chart1: #3987e5; --aide-chart2: #d95926; --aide-chart3: #199e70; --aide-chart4: #c98500; --aide-chart5: #d55181; --aide-chart-fallback: rgba(255,255,255,.28); --aide-border: rgba(255,255,255,.1); --aide-border-subtle: rgba(255,255,255,.06); --aide-border-strong: rgba(255,255,255,.17); --aide-highlight-inset: inset 0 1px 0 rgba(255,255,255,.12); --aide-accent-gradient: linear-gradient(180deg, rgba(160,180,255,.42), rgba(130,150,255,.3)); --aide-accent-glow: 0 4px 18px rgba(140,160,255,.38); --aide-accent-ring: 0 0 0 2.5px rgba(150,170,255,.42); --aide-ambient-glow: radial-gradient(700px 240px at 50% -60px, rgba(150,170,255,.12), transparent 70%); --aide-shadow-sm: 0 1px 2px rgba(0,0,0,.3); --aide-shadow-md: 0 8px 24px rgba(0,0,0,.38); --aide-shadow-lg: 0 20px 60px rgba(0,0,0,.55); --aide-shadow-inset: inset 0 1px 3px rgba(0,0,0,.3); --aide-radius-sm: 8px; --aide-radius-md: 10px; --aide-radius-lg: 14px; --aide-space-unit: 4px; --aide-ease: cubic-bezier(.2,.8,.2,1); --aide-ease-t: .16s cubic-bezier(.2,.8,.2,1); --aide-surface-blur: blur(20px) saturate(150%); --aide-syntax-keyword: #c3b3f7; --aide-syntax-number: #f0b08c; }
+  html, body { margin:0; }
+  body {
+    background: var(--aide-ambient-scene);
+    color: var(--aide-text-primary);
+    font-family: 'Maple Mono NF CN', 'Inter Variable', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    font-size: 13px; line-height: 1.7;
+    padding: 22px 0 60px;
+  }
+  .page { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+  h1 { font-size: 18px; margin: 0 0 6px; }
+  .sub { color: var(--aide-text-muted); font-size: 12px; margin-bottom: 18px; }
+  .sub code { background: var(--aide-bg-deep); padding: 1px 5px; border-radius: 3px; }
+  .bar { display:flex; gap:8px; align-items:center; margin-bottom: 20px; flex-wrap: wrap; }
+  .bar button {
+    font-family: inherit; font-size: 12px; cursor: pointer;
+    color: var(--aide-text-secondary); background: var(--aide-surface-default);
+    border: 1px solid var(--aide-border); border-radius: var(--aide-radius-sm); padding: 5px 12px;
+  }
+  .bar button[aria-pressed="true"] { color: var(--aide-accent); border-color: var(--aide-accent); background: var(--aide-accent-subtle); }
+  .bar .lbl { color: var(--aide-text-muted); font-size: 11.5px; margin-right: 2px; }
+
+  .card { border: 1px solid var(--aide-border); border-radius: var(--aide-radius-md);
+          background: var(--aide-bg-base); padding: 16px 18px 20px; margin-bottom: 18px; }
+  .card > h2 { font-size: 13.5px; margin: 0 0 3px; display:flex; align-items:center; gap:8px; }
+  .card > h2 .tag { font-size: 10.5px; font-weight: 400; color: var(--aide-text-muted);
+                    border: 1px solid var(--aide-border); border-radius: 999px; padding: 1px 8px; }
+  .card > p { margin: 0 0 14px; color: var(--aide-text-secondary); font-size: 12px; }
+
+  /* 聊天正文：复刻 ChatMessage.vue 的 .msg-turn + global.css 的 .msg-text */
+  .msg-row { display: flex; padding: 4px 12px; }
+  .msg-turn { min-width: 0; flex: 1; border-left: 2px solid color-mix(in srgb, var(--aide-accent) 45%, transparent);
+              padding: 2px 0 2px 18px; font-size: 13px; line-height: 1.7; word-break: break-word; }
+  .msg-text p { margin: 0 0 8px; }
+  .msg-text p:last-child { margin-bottom: 0; }
+  .msg-text code { font-family: 'Maple Mono NF CN', 'JetBrains Mono', Consolas, monospace;
+                   font-size: 12px; background: var(--aide-bg-deep); padding: 1px 5px; border-radius: 3px; }
+  .msg-text th, .msg-text td { min-width: 3em; }   /* 已落地的列宽下限（四处同款） */
+
+  /* A · 对齐 remote-pwa（下限须把 padding+border 加回去，否则 3em 被吃掉又塌） */
+  .v-a table { border-collapse: collapse; margin: 6px 0; }
+  .v-a th, .v-a td { padding: 4px 8px; border: 1px solid var(--aide-border); min-width: calc(3em + 18px); }
+  .v-a th { background: var(--aide-bg-deep); font-weight: 600; }
+
+  /* B · 轻网格（只横线） */
+  .v-b table { border-collapse: collapse; margin: 6px 0; }
+  .v-b th, .v-b td { padding: 6px 10px; text-align: left; min-width: calc(3em + 20px); }
+  .v-b th { background: var(--aide-surface-default); font-weight: 600; border-bottom: 1px solid var(--aide-border-strong); }
+  .v-b td { border-bottom: 1px solid var(--aide-border-subtle); }
+  .v-b tr:last-child td { border-bottom: none; }
+
+  /* C · 极简书脊（与现有铜色书脊同族） */
+  .v-c table { border-collapse: collapse; margin: 8px 0; }
+  .v-c th, .v-c td { padding: 5px 12px 5px 0; text-align: left; vertical-align: top; min-width: calc(3em + 12px); }
+  .v-c th { font-weight: 600; font-size: 11px; letter-spacing: .06em; color: var(--aide-text-muted);
+            border-bottom: 1px solid var(--aide-border-strong); }
+  .v-c th:first-child, .v-c td:first-child { padding-left: 0; }
+  .v-c td { border-bottom: 1px solid var(--aide-border-subtle); }
+  .v-c tr:last-child td { border-bottom: none; }
+
+  details { margin-top: 2px; }
+  summary { cursor: pointer; color: var(--aide-text-muted); font-size: 11.5px; }
+  details pre { background: var(--aide-bg-deep); border: 1px solid var(--aide-border);
+                border-radius: var(--aide-radius-sm); padding: 10px 12px; overflow-x: auto;
+                font-family: 'Maple Mono NF CN', Consolas, monospace; font-size: 11.5px; line-height: 1.6;
+                color: var(--aide-text-secondary); margin: 8px 0 0; }
+</style></head>
+<body>
+<div class="page">
+  <h1>聊天表格款式原型</h1>
+  <div class="sub">
+    桌面端 <code>.msg-text</code> 的 markdown 表格。列宽塌陷已单独修复（四处同款：单元格下限 <code>3em</code> + 该款式自己的 padding，本页各款已按此算好），
+    这里只挑<b>外观</b>。颜色全部走 <code>--aide-*</code> token，切换主题即自动跟随。
+  </div>
+  <div class="bar" id="themeBar">
+    <span class="lbl">主题</span>
+    <button data-theme="glass">glass（默认）</button>
+    <button data-theme="warm-dark">warm-dark</button>
+    <button data-theme="smoky-pink-glass">smoky-pink-glass</button>
+  </div>
+
+  <section class="card v-0">
+    <h2>现状 <span class="tag">零样式</span></h2>
+    <p>只修了列宽，没有内边距、没有分隔线：单元格文字彼此贴住，行与行分不开。</p>
+    <div class="msg-row"><div class="msg-turn"><div class="msg-text">
+      <p>清理并补漏的明细如下（表格来自一次真实对话）：</p>
+      <table>
+<thead>
+<tr>
+<th>批次</th>
+<th>位置</th>
+<th>处数</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>首轮</td>
+<td><code>CLAUDE.md</code></td>
+<td>5</td>
+</tr>
+<tr>
+<td>首轮</td>
+<td>源码注释：<code>relay-server/src/protocol.rs</code>、<code>packages/aide-sdk/src/remote.ts</code>（2）、<code>ohos/.../doh.ets</code>、<code>ohos/.../remote.ets</code>、<code>agent-sidecar/src/engine/permissions.ts</code>、<code>src/components/ChangeLogPanel.vue</code></td>
+<td>7</td>
+</tr>
+<tr>
+<td>首轮</td>
+<td>docs/superpowers/ 下 3 篇（前端关联、Step 6 验收项）</td>
+<td>4</td>
+</tr>
+<tr>
+<td>补漏</td>
+<td>docs/headless-test-checklist.md（相对路径 reference/... 链接）</td>
+<td>3</td>
+</tr>
+<tr>
+<td>补漏</td>
+<td>docs/headless-test-checklist.md 之外的 superpowers/specs/2026-08-03-…md（裸文件名引用 <code>SDK 中的 Agent Skills.md</code> 第 101-104 行、<code>agent-sdk-plugins.md</code>:271-285）</td>
+<td>4</td>
+</tr>
+<tr>
+<td>补漏</td>
+<td>ohos/entry/src/main/module.json5</td>
+<td>1</td>
+</tr>
+<tr>
+<td>补漏</td>
+<td>CodegraphPanel.vue、SettingsPanel.vue（裸 theme-development.md §2.2）</td>
+<td>2</td>
+</tr>
+</tbody></table>
+
+
+    </div></div></div>
+  </section>
+
+  <section class="card v-a">
+    <h2>A · 全网格 <span class="tag">与 remote-pwa 一致</span></h2>
+    <p>1px 四边框 + 表头底色。信息密度最高，但竖线多，与「书脊 + 墨线」的正文气质最远。</p>
+    <div class="msg-row"><div class="msg-turn"><div class="msg-text">
+      <p>清理并补漏的明细如下（表格来自一次真实对话）：</p>
+      <table>
+<thead>
+<tr>
+<th>批次</th>
+<th>位置</th>
+<th>处数</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>首轮</td>
+<td><code>CLAUDE.md</code></td>
+<td>5</td>
+</tr>
+<tr>
+<td>首轮</td>
+<td>源码注释：<code>relay-server/src/protocol.rs</code>、<code>packages/aide-sdk/src/remote.ts</code>（2）、<code>ohos/.../doh.ets</code>、<code>ohos/.../remote.ets</code>、<code>agent-sidecar/src/engine/permissions.ts</code>、<code>src/components/ChangeLogPanel.vue</code></td>
+<td>7</td>
+</tr>
+<tr>
+<td>首轮</td>
+<td>docs/superpowers/ 下 3 篇（前端关联、Step 6 验收项）</td>
+<td>4</td>
+</tr>
+<tr>
+<td>补漏</td>
+<td>docs/headless-test-checklist.md（相对路径 reference/... 链接）</td>
+<td>3</td>
+</tr>
+<tr>
+<td>补漏</td>
+<td>docs/headless-test-checklist.md 之外的 superpowers/specs/2026-08-03-…md（裸文件名引用 <code>SDK 中的 Agent Skills.md</code> 第 101-104 行、<code>agent-sdk-plugins.md</code>:271-285）</td>
+<td>4</td>
+</tr>
+<tr>
+<td>补漏</td>
+<td>ohos/entry/src/main/module.json5</td>
+<td>1</td>
+</tr>
+<tr>
+<td>补漏</td>
+<td>CodegraphPanel.vue、SettingsPanel.vue（裸 theme-development.md §2.2）</td>
+<td>2</td>
+</tr>
+</tbody></table>
+
+
+    </div></div></div>
+    <details><summary>CSS</summary><pre>.msg-text table { border-collapse: collapse; margin: 6px 0; }
+.msg-text th, .msg-text td { padding: 4px 8px; border: 1px solid var(--aide-border);
+                             min-width: calc(3em + 18px); }
+.msg-text th { background: var(--aide-bg-deep); font-weight: 600; }</pre></details>
+  </section>
+
+  <section class="card v-b">
+    <h2>B · 轻网格 <span class="tag">只横线</span></h2>
+    <p>去掉所有竖线与外框，只留行分隔细线；表头左对齐 + 底色。数据表最好扫，改动也最小。</p>
+    <div class="msg-row"><div class="msg-turn"><div class="msg-text">
+      <p>清理并补漏的明细如下（表格来自一次真实对话）：</p>
+      <table>
+<thead>
+<tr>
+<th>批次</th>
+<th>位置</th>
+<th>处数</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>首轮</td>
+<td><code>CLAUDE.md</code></td>
+<td>5</td>
+</tr>
+<tr>
+<td>首轮</td>
+<td>源码注释：<code>relay-server/src/protocol.rs</code>、<code>packages/aide-sdk/src/remote.ts</code>（2）、<code>ohos/.../doh.ets</code>、<code>ohos/.../remote.ets</code>、<code>agent-sidecar/src/engine/permissions.ts</code>、<code>src/components/ChangeLogPanel.vue</code></td>
+<td>7</td>
+</tr>
+<tr>
+<td>首轮</td>
+<td>docs/superpowers/ 下 3 篇（前端关联、Step 6 验收项）</td>
+<td>4</td>
+</tr>
+<tr>
+<td>补漏</td>
+<td>docs/headless-test-checklist.md（相对路径 reference/... 链接）</td>
+<td>3</td>
+</tr>
+<tr>
+<td>补漏</td>
+<td>docs/headless-test-checklist.md 之外的 superpowers/specs/2026-08-03-…md（裸文件名引用 <code>SDK 中的 Agent Skills.md</code> 第 101-104 行、<code>agent-sdk-plugins.md</code>:271-285）</td>
+<td>4</td>
+</tr>
+<tr>
+<td>补漏</td>
+<td>ohos/entry/src/main/module.json5</td>
+<td>1</td>
+</tr>
+<tr>
+<td>补漏</td>
+<td>CodegraphPanel.vue、SettingsPanel.vue（裸 theme-development.md §2.2）</td>
+<td>2</td>
+</tr>
+</tbody></table>
+
+
+    </div></div></div>
+    <details><summary>CSS</summary><pre>.msg-text table { border-collapse: collapse; margin: 6px 0; }
+.msg-text th, .msg-text td { padding: 6px 10px; text-align: left;
+                             min-width: calc(3em + 20px); }
+.msg-text th { background: var(--aide-surface-default); font-weight: 600;
+               border-bottom: 1px solid var(--aide-border-strong); }
+.msg-text td { border-bottom: 1px solid var(--aide-border-subtle); }
+.msg-text tr:last-child td { border-bottom: none; }</pre></details>
+  </section>
+
+  <section class="card v-c">
+    <h2>C · 极简书脊 <span class="tag">最贴现有视觉</span></h2>
+    <p>只留表头下一条较亮的线，行线用最淡的 token，表头变小、加字距、转 muted 色——像正文里插了一张排版过的表，不像嵌了个控件。</p>
+    <div class="msg-row"><div class="msg-turn"><div class="msg-text">
+      <p>清理并补漏的明细如下（表格来自一次真实对话）：</p>
+      <table>
+<thead>
+<tr>
+<th>批次</th>
+<th>位置</th>
+<th>处数</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>首轮</td>
+<td><code>CLAUDE.md</code></td>
+<td>5</td>
+</tr>
+<tr>
+<td>首轮</td>
+<td>源码注释：<code>relay-server/src/protocol.rs</code>、<code>packages/aide-sdk/src/remote.ts</code>（2）、<code>ohos/.../doh.ets</code>、<code>ohos/.../remote.ets</code>、<code>agent-sidecar/src/engine/permissions.ts</code>、<code>src/components/ChangeLogPanel.vue</code></td>
+<td>7</td>
+</tr>
+<tr>
+<td>首轮</td>
+<td>docs/superpowers/ 下 3 篇（前端关联、Step 6 验收项）</td>
+<td>4</td>
+</tr>
+<tr>
+<td>补漏</td>
+<td>docs/headless-test-checklist.md（相对路径 reference/... 链接）</td>
+<td>3</td>
+</tr>
+<tr>
+<td>补漏</td>
+<td>docs/headless-test-checklist.md 之外的 superpowers/specs/2026-08-03-…md（裸文件名引用 <code>SDK 中的 Agent Skills.md</code> 第 101-104 行、<code>agent-sdk-plugins.md</code>:271-285）</td>
+<td>4</td>
+</tr>
+<tr>
+<td>补漏</td>
+<td>ohos/entry/src/main/module.json5</td>
+<td>1</td>
+</tr>
+<tr>
+<td>补漏</td>
+<td>CodegraphPanel.vue、SettingsPanel.vue（裸 theme-development.md §2.2）</td>
+<td>2</td>
+</tr>
+</tbody></table>
+
+
+    </div></div></div>
+    <details><summary>CSS</summary><pre>.msg-text table { border-collapse: collapse; margin: 8px 0; }
+.msg-text th, .msg-text td { padding: 5px 12px 5px 0; text-align: left; vertical-align: top;
+                             min-width: calc(3em + 12px); }
+.msg-text th { font-weight: 600; font-size: 11px; letter-spacing: .06em;
+               color: var(--aide-text-muted); border-bottom: 1px solid var(--aide-border-strong); }
+.msg-text th:first-child, .msg-text td:first-child { padding-left: 0; }
+.msg-text td { border-bottom: 1px solid var(--aide-border-subtle); }
+.msg-text tr:last-child td { border-bottom: none; }</pre></details>
+  </section>
+</div>
+
+<script>
+const THEMES = {"warm-dark":{"colorScheme":"dark","bgDeep":"#141218","bgBase":"#1a1820","bgRaised":"#221f29","bgOverlay":"rgba(12,10,16,.72)","surfaceDefault":"#292631","surfaceHover":"#322e3c","surfaceActive":"#3d3848","selectionBg":"#3d3848","textPrimary":"#ece5db","textSecondary":"#b3aa9c","textMuted":"#7d7568","textOnAccent":"#241d15","accent":"#d9ab78","accentHover":"#e6bd8e","accentSubtle":"rgba(217,171,120,.13)","success":"#8bc48a","warning":"#e8c374","danger":"#e87070","info":"#7eb8d8","agentAccent":"#c9a06c","chart1":"#3987e5","chart2":"#d95926","chart3":"#199e70","chart4":"#c98500","chart5":"#d55181","chartFallback":"rgba(255,235,210,.26)","border":"rgba(255,214,160,.09)","borderSubtle":"rgba(255,214,160,.045)","borderStrong":"rgba(255,220,175,.16)","highlightInset":"inset 0 1px 0 rgba(255,235,210,.07)","accentGradient":"linear-gradient(180deg,#e6bd8e,#cf9c66)","accentGlow":"0 6px 20px rgba(212,165,116,.28)","accentRing":"0 0 0 2.5px rgba(217,171,120,.32)","ambientGlow":"radial-gradient(700px 240px at 50% -60px, rgba(224,181,132,.09), transparent 70%)","shadowSm":"0 1px 2px rgba(0,0,0,.28)","shadowMd":"0 6px 20px rgba(0,0,0,.34), 0 1px 4px rgba(0,0,0,.22)","shadowLg":"0 18px 56px rgba(0,0,0,.5), 0 4px 14px rgba(0,0,0,.3)","shadowInset":"inset 0 1px 3px rgba(0,0,0,.3)","radiusSm":"6px","radiusMd":"9px","radiusLg":"13px","spaceUnit":"4px","ease":"cubic-bezier(.2,.8,.2,1)","easeT":".16s cubic-bezier(.2,.8,.2,1)","surfaceBlur":"none","ambientScene":"none","syntaxKeyword":"#b09bc8","syntaxNumber":"#e8a87c"},"glass":{"colorScheme":"dark","bgDeep":"rgba(8,10,16,.82)","bgBase":"rgba(17,19,29,.52)","bgRaised":"rgba(24,26,38,.48)","bgOverlay":"rgba(8,10,16,.55)","surfaceDefault":"rgba(255,255,255,.06)","surfaceHover":"rgba(255,255,255,.1)","surfaceActive":"rgba(255,255,255,.14)","selectionBg":"rgba(255,255,255,.14)","textPrimary":"#eef0f8","textSecondary":"#b9bdd0","textMuted":"#7c8296","textOnAccent":"#eef0ff","accent":"#a5b8ff","accentHover":"#bcc9ff","accentSubtle":"rgba(150,170,255,.16)","success":"#6ee7a8","warning":"#fcd34d","danger":"#f87171","info":"#7dd3fc","agentAccent":"#e0a3d8","chart1":"#3987e5","chart2":"#d95926","chart3":"#199e70","chart4":"#c98500","chart5":"#d55181","chartFallback":"rgba(255,255,255,.28)","border":"rgba(255,255,255,.1)","borderSubtle":"rgba(255,255,255,.06)","borderStrong":"rgba(255,255,255,.17)","highlightInset":"inset 0 1px 0 rgba(255,255,255,.12)","accentGradient":"linear-gradient(180deg, rgba(160,180,255,.42), rgba(130,150,255,.3))","accentGlow":"0 4px 18px rgba(140,160,255,.38)","accentRing":"0 0 0 2.5px rgba(150,170,255,.42)","ambientGlow":"radial-gradient(700px 240px at 50% -60px, rgba(150,170,255,.12), transparent 70%)","shadowSm":"0 1px 2px rgba(0,0,0,.3)","shadowMd":"0 8px 24px rgba(0,0,0,.38)","shadowLg":"0 20px 60px rgba(0,0,0,.55)","shadowInset":"inset 0 1px 3px rgba(0,0,0,.3)","radiusSm":"8px","radiusMd":"10px","radiusLg":"14px","spaceUnit":"4px","ease":"cubic-bezier(.2,.8,.2,1)","easeT":".16s cubic-bezier(.2,.8,.2,1)","surfaceBlur":"blur(20px) saturate(150%)","syntaxKeyword":"#c3b3f7","syntaxNumber":"#f0b08c"},"smoky-pink-glass":{"colorScheme":"light","bgDeep":"rgba(250,250,252,.55)","bgBase":"rgba(243,241,242,.55)","bgRaised":"rgba(255,255,255,.62)","bgOverlay":"rgba(96,86,94,.28)","surfaceDefault":"rgba(255,255,255,.48)","surfaceHover":"rgba(255,255,255,.72)","surfaceActive":"rgba(255,255,255,.85)","selectionBg":"rgba(207,166,160,.38)","textPrimary":"#23262d","textSecondary":"#5c6470","textMuted":"#7b8492","textOnAccent":"#674945","accent":"#CFA6A0","accentHover":"#BE938D","accentSubtle":"rgba(207,166,160,.18)","success":"#3f9e69","warning":"#C98A3D","danger":"#dd6b72","info":"#7C93B8","agentAccent":"#B87F7E","chart1":"#2a78d6","chart2":"#eb6834","chart3":"#1baf7a","chart4":"#eda100","chart5":"#e87ba4","chartFallback":"rgba(90,90,105,.24)","border":"rgba(124,137,154,.18)","borderSubtle":"rgba(124,137,154,.10)","borderStrong":"rgba(207,166,160,.42)","highlightInset":"inset 0 1px 0 rgba(255,255,255,.9)","accentGradient":"linear-gradient(180deg,#E5CBC7,#CFA6A0)","accentGlow":"0 9px 20px rgba(160,112,106,.18)","accentRing":"0 0 0 2.5px rgba(207,166,160,.35)","ambientGlow":"radial-gradient(700px 240px at 50% -60px, rgba(207,166,160,.14), transparent 70%)","shadowSm":"0 2px 8px rgba(87,101,120,.08)","shadowMd":"0 8px 24px rgba(87,101,120,.1)","shadowLg":"0 18px 55px rgba(93,108,128,.16), 0 3px 12px rgba(67,82,102,.06)","shadowInset":"inset 0 1px 3px rgba(93,108,128,.16)","radiusSm":"8px","radiusMd":"12px","radiusLg":"18px","spaceUnit":"4px","ease":"cubic-bezier(.2,.8,.2,1)","easeT":".16s cubic-bezier(.2,.8,.2,1)","surfaceBlur":"blur(26px) saturate(135%)","syntaxKeyword":"#A77872","syntaxNumber":"#6D7FB8"}};
+const cssVar = (k) => '--aide-' + k.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+function apply(name) {
+  const t = THEMES[name];
+  for (const [k, v] of Object.entries(t)) {
+    if (typeof v === 'string' && k !== 'colorScheme') document.documentElement.style.setProperty(cssVar(k), v);
+  }
+  document.documentElement.style.colorScheme = t.colorScheme;
+  for (const b of document.querySelectorAll('#themeBar button')) {
+    b.setAttribute('aria-pressed', String(b.dataset.theme === name));
+  }
+}
+for (const b of document.querySelectorAll('#themeBar button')) b.onclick = () => apply(b.dataset.theme);
+apply('glass');
+</script>
+</body></html>

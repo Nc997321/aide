@@ -1245,7 +1245,11 @@ details[open] > summary .caret {
 }
 .m-text.md a { color: var(--accent); }
 .m-text.md table { border-collapse: collapse; margin: 6px 0; font-size: 12.5px; }
-.m-text.md th, .m-text.md td { border: 1px solid var(--border); padding: 4px 8px; }
+/* min-width 下限：不设则列宽由 auto 布局按 (max-content − min-content) 权重摊，
+   长文本列吃掉几乎全部余量，窄列的 min-content 只有「一个汉字宽」，两字单元格
+   （首轮/批次）就逐字竖排（手机宽 360px 实测复现）。4.5em 含 18px 的单元格
+   padding+border 后仍留 8px 余量；桌面端同一问题见 src/styles/global.css。 */
+.m-text.md th, .m-text.md td { border: 1px solid var(--border); padding: 4px 8px; min-width: 4.5em; }
 
 /* ============================================================
    v3 · 新会话空态（聊天主屏，配对后直达）

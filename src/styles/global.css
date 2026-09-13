@@ -260,3 +260,42 @@ html, body, #app {
   border-top: 1px solid var(--aide-border);
   margin: 8px 0;
 }
+/* 表格 · 款式 B「轻网格」：只留行线，无竖线无外框（三款对照见
+   docs/prototypes/2026-09-13-msg-table-styles.html）。
+   列宽仍归浏览器 auto 布局：富余宽度按各列 (max-content − min-content) 的权重摊，
+   中间长文本列一句话就吃掉几乎全部余量（实测 1348 / 表宽 1431px），两侧窄列只剩
+   min-content，而 CJK 可在任意字间断行 ⇒ min-content = 一个汉字宽。随包
+   Maple Mono NF CN 的汉字是 1.2em，「首轮」需要 31.2px，不给下限时列宽停在
+   31.15px——差 0.05px，于是每个两字单元格逐字竖排（批/次、首/轮），且容器宽度
+   一抖就翻面，调宽度治不了本。
+   下限是 border-box ⇒ 必须把单元格自己的横向 padding 加回去：20px = 10px×2
+   （行线走 border-bottom，不占横向）。日后改 padding 记得同步改这个加数。 */
+.msg-text table {
+  border-collapse: collapse;
+  margin: 6px 0;
+}
+.msg-text th,
+.msg-text td {
+  padding: 6px 10px;
+  text-align: left;
+  min-width: calc(3em + 20px);
+}
+.msg-text th {
+  background: var(--aide-surface-default);
+  font-weight: 600;
+  border-bottom: 1px solid var(--aide-border-strong);
+}
+.msg-text td {
+  border-bottom: 1px solid var(--aide-border-subtle);
+}
+.msg-text tr:last-child td {
+  border-bottom: none;
+}
+/* 上面那条下限的代价：列数 × ~59px 超过面板宽时表格装不下（9 列 ≈ 540px，而分栏
+   最窄可拖到 12% 屏宽）。.chat-messages 是 overflow-y:auto，不兜底的话**整条对话**
+   会横向滚（实测 332px 面板下对话列表 scrollWidth 561 > 332）。这行把溢出收进
+   消息块自己：实测同一场景对话列表不再横滚（317 ≤ 332），表格改为块内横滚；
+   正常宽度下完全惰性（700px 下有无此行结果逐像素一致）。 */
+.msg-text {
+  overflow-x: auto;
+}

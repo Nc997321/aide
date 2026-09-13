@@ -1342,6 +1342,11 @@ function runClipboardAction(p: Promise<void> | undefined): void {
   border: 1px solid var(--aide-surface-hover);
   padding: 8px 12px;
   text-align: left;
+  /* 列宽下限：不设则 auto 布局把富余宽度全给长文本列，窄列被压到一个汉字宽，
+     两字单元格逐字竖排（实测 900px 容器复现）。5em = 62.5px，扣掉单元格
+     padding+border 26px 后内容盒 36.5px，够两字（Maple Mono NF CN 1.2em = 30px）。
+     桌面聊天同一问题见 src/styles/global.css、remote-pwa/src/styles.css。 */
+  min-width: 5em;
 }
 .viewer-markdown th {
   background: var(--aide-bg-deep);
