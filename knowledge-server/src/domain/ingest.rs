@@ -22,7 +22,9 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 // 依赖的是**端口**而不是注册表本体：ingest 不知道有几个后端、
 // 不知道注册表存在，更不知道背后是 docx-to-md 还是别的什么。
-use crate::port::{ParserChain, Tokenizer};
+use crate::port::{
+    placeholder, BlobStore, ParsedAsset, ParserChain, Tokenizer, PLACEHOLDER_CLOSE, PLACEHOLDER_OPEN,
+};
 
 use super::versioning;
 
@@ -41,12 +43,26 @@ pub struct IngestInput {
 #[derive(Debug, Clone)]
 pub struct ParsedFile {
     pub title: String,
+    /// 含解析期占位符 `{{asset:i}}`；`prepare_assets` 会把它换成 `asset://<uuid>`。
     pub markdown: String,
     /// 实际生效的后端标识，落进日志/审计——「这篇文档为什么结构丢了」靠它解释
     pub backend: &'static str,
-    /// 后端自报的降级信息，例如「含图片 12 张，已跳过」。
+    /// 后端自报的降级信息，例如「3 个文本框未提取」。
     /// 不吞掉：导入后内容少了要能说清为什么。
     pub warnings: Vec<String>,
+    /// 附件原始字节。由解析器产出（见 `port::DocumentParser` 的占位符契约）。
+    pub assets: Vec<ParsedAsset>,
+}
+
+/// 已落盘、待入库的附件。
+#[derive(Debug, Clone)]
+pub struct PendingAsset {
+    /// **在 Rust 侧生成**，不依赖数据库默认值 ——
+    /// 这样替换占位符时就知道最终引用形态，blob 的写也能完全在事务之外完成。
+    pub id: Uuid,
+    pub storage_key: String,
+    pub mime: String,
+    pub size_bytes: i64,
 }
 
 /// 同步解析。调用方负责用 `tokio::task::spawn_blocking` 包一层。
@@ -84,6 +100,7 @@ pub fn parse_file(
         markdown: outcome.document.markdown,
         backend: outcome.backend,
         warnings: outcome.document.warnings,
+        assets: outcome.document.assets,
     })
 }
 
@@ -147,6 +164,76 @@ pub async fn ingest_file(
 ) -> AppResult<IngestOutcome> {
     let parsed = parse_file(parsers, input)?;
     ingest_parsed(&mut *conn, tokenizer, input, parsed).await
+}
+
+/// 把解析期占位符换成持久化引用，并把附件字节写进 `BlobStore`。
+///
+/// ⚠️ **在数据库事务之外调用。** blob 的 IO 夹在事务里会长时间占住连接与行锁，
+/// 而且事务回滚**不会撤销**已经落盘的字节 —— 反而制造出「库里没有、盘上有」的孤儿。
+/// 先写 blob 再开事务，最坏情况只留下可回收的孤儿 blob，不会留下不一致的库状态。
+pub fn prepare_assets(blobs: &dyn BlobStore, parsed: &mut ParsedFile) -> Vec<PendingAsset> {
+    let mut pending = Vec::new();
+    let mut markdown = std::mem::take(&mut parsed.markdown);
+    let assets = std::mem::take(&mut parsed.assets);
+
+    for (idx, asset) in assets.into_iter().enumerate() {
+        let token = placeholder(idx);
+        let size_bytes = asset.bytes.len() as i64;
+
+        match blobs.put(&asset.bytes) {
+            Ok(storage_key) => {
+                let id = Uuid::new_v4();
+                markdown = markdown.replace(&token, &format!("asset://{id}"));
+                pending.push(PendingAsset {
+                    id,
+                    storage_key,
+                    mime: asset.mime,
+                    size_bytes,
+                });
+            }
+            Err(e) => {
+                // 降级不失败：把该占位符整个移除（不留悬空引用），并如实上报。
+                // 与 `ParseOutcome.warnings` 的既有语义一致。
+                markdown = markdown.replace(&token, "");
+                parsed.warnings.push(format!("1 张图片上传失败，已省略：{e}"));
+            }
+        }
+    }
+
+    parsed.markdown = markdown;
+    pending
+}
+
+/// 最后一道防线：移除残留的解析期占位符。
+///
+/// 正常路径下替换环节已把它们全部换掉，走到这里还剩下说明有 bug（例如某个 adapter
+/// 自己拼了占位符而没产出对应的 asset）。**不能让它进正文** ——
+/// 残留的 `{{asset:0}}` 会以纯文本形态永久留在文档里，比丢掉一张图更糟。
+///
+/// 返回 (清理后的正文, 移除个数)。
+pub fn strip_leftover_placeholders(markdown: &str) -> (String, usize) {
+    let mut out = String::with_capacity(markdown.len());
+    let mut removed = 0usize;
+    let mut rest = markdown;
+
+    while let Some(start) = rest.find(PLACEHOLDER_OPEN) {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + PLACEHOLDER_OPEN.len()..];
+        match after.find(PLACEHOLDER_CLOSE) {
+            Some(end) => {
+                rest = &after[end + PLACEHOLDER_CLOSE.len()..];
+                removed += 1;
+            }
+            None => {
+                // 只有前缀没有闭合：整段丢掉，别再往回找
+                rest = "";
+                removed += 1;
+            }
+        }
+    }
+
+    out.push_str(rest);
+    (out, removed)
 }
 
 fn stem_of(name: &str) -> String {
@@ -285,5 +372,202 @@ mod tests {
     fn slugify_falls_back_when_empty() {
         assert!(slugify("!!!").starts_with("doc-"));
         assert!(slugify("").starts_with("doc-"));
+    }
+
+    // ── 附件：占位符替换与残留防线 ──────────────────────────────────────────
+
+    use super::*;
+    use crate::port::{BlobError, BlobStore, ParsedAsset};
+
+    /// 内存实现：让 domain 的单测完全不碰文件系统（这正是抽出 BlobStore 的收益）。
+    struct MemBlobs {
+        written: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+        /// 第 N 次 put 必失败（从 0 起）。None = 全部成功。
+        fail_at: Option<usize>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl MemBlobs {
+        fn new() -> Self {
+            Self {
+                written: Default::default(),
+                fail_at: None,
+                calls: Default::default(),
+            }
+        }
+        fn failing_at(n: usize) -> Self {
+            Self {
+                fail_at: Some(n),
+                ..Self::new()
+            }
+        }
+    }
+
+    impl BlobStore for MemBlobs {
+        fn put(&self, bytes: &[u8]) -> Result<String, BlobError> {
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.fail_at == Some(n) {
+                return Err(BlobError::Write("注入的失败".into()));
+            }
+            let key = format!("key{n}");
+            self.written
+                .lock()
+                .unwrap()
+                .insert(key.clone(), bytes.to_vec());
+            Ok(key)
+        }
+        fn get(&self, key: &str) -> Result<Vec<u8>, BlobError> {
+            self.written
+                .lock()
+                .unwrap()
+                .get(key)
+                .cloned()
+                .ok_or_else(|| BlobError::Read("不存在".into()))
+        }
+        fn delete(&self, key: &str) -> Result<(), BlobError> {
+            self.written.lock().unwrap().remove(key);
+            Ok(())
+        }
+    }
+
+    fn parsed_with(markdown: &str, assets: Vec<ParsedAsset>) -> ParsedFile {
+        ParsedFile {
+            title: "T".into(),
+            markdown: markdown.to_string(),
+            backend: "test",
+            warnings: Vec::new(),
+            assets,
+        }
+    }
+
+    fn png(n: u8) -> ParsedAsset {
+        ParsedAsset {
+            mime: "image/png".into(),
+            bytes: vec![n; 4],
+        }
+    }
+
+    #[test]
+    fn replaces_placeholders_with_asset_urls() {
+        let blobs = MemBlobs::new();
+        // 头、图片之间、尾三段正文都要活下来 —— 所以输入刻意两端都有字
+        let mut parsed = parsed_with(
+            "前 ![a]({{asset:0}}) 中 ![b]({{asset:1}}) 尾",
+            vec![png(1), png(2)],
+        );
+
+        let pending = prepare_assets(&blobs, &mut parsed);
+
+        assert_eq!(pending.len(), 2);
+        assert!(parsed
+            .markdown
+            .contains(&format!("asset://{}", pending[0].id)));
+        assert!(parsed
+            .markdown
+            .contains(&format!("asset://{}", pending[1].id)));
+        assert!(!parsed.markdown.contains("{{asset:"), "不得残留占位符");
+        assert!(parsed.markdown.starts_with("前 "), "首部正文必须保留");
+        assert!(parsed.markdown.contains(" 中 "), "图片之间的正文必须保留");
+        assert!(parsed.markdown.ends_with(" 尾"), "尾部正文必须保留");
+    }
+
+    /// 顺序不能错位：第 2 张图换成的必须是第 2 个 uuid。
+    #[test]
+    fn maps_indices_to_the_right_assets() {
+        let blobs = MemBlobs::new();
+        let mut parsed = parsed_with("![a]({{asset:0}})![b]({{asset:1}})", vec![png(1), png(2)]);
+
+        let pending = prepare_assets(&blobs, &mut parsed);
+
+        assert_eq!(blobs.get(&pending[0].storage_key).unwrap(), vec![1u8; 4]);
+        assert_eq!(blobs.get(&pending[1].storage_key).unwrap(), vec![2u8; 4]);
+        let first = parsed
+            .markdown
+            .find(&format!("asset://{}", pending[0].id))
+            .unwrap();
+        let second = parsed
+            .markdown
+            .find(&format!("asset://{}", pending[1].id))
+            .unwrap();
+        assert!(first < second, "第 0 张图必须先出现");
+    }
+
+    /// 单张失败不整体失败：移除该占位符 + 记 warning，其余照常。
+    #[test]
+    fn one_failed_upload_degrades_that_image_only() {
+        let blobs = MemBlobs::failing_at(1);
+        let mut parsed = parsed_with("![a]({{asset:0}})![b]({{asset:1}})", vec![png(1), png(2)]);
+
+        let pending = prepare_assets(&blobs, &mut parsed);
+
+        assert_eq!(pending.len(), 1, "只有 1 张成功");
+        assert!(parsed
+            .markdown
+            .contains(&format!("asset://{}", pending[0].id)));
+        assert!(
+            !parsed.markdown.contains("{{asset:"),
+            "失败的那张的占位符必须被移除"
+        );
+        assert_eq!(parsed.warnings.len(), 1);
+        assert!(
+            parsed.warnings[0].contains("1 张图片上传失败"),
+            "实际：{}",
+            parsed.warnings[0]
+        );
+    }
+
+    /// 0 张图是正常路径，不是边界情况。
+    #[test]
+    fn no_assets_is_a_normal_path() {
+        let blobs = MemBlobs::new();
+        let mut parsed = parsed_with("没有图的文档", Vec::new());
+
+        let pending = prepare_assets(&blobs, &mut parsed);
+
+        assert!(pending.is_empty());
+        assert_eq!(parsed.markdown, "没有图的文档", "无附件时正文必须逐字节不变");
+        assert!(parsed.warnings.is_empty());
+    }
+
+    #[test]
+    fn strips_leftover_placeholders() {
+        let (out, n) = strip_leftover_placeholders("a {{asset:0}} b {{asset:7}} c");
+
+        assert_eq!(n, 2);
+        assert_eq!(out, "a  b  c");
+        assert!(!out.contains("{{asset:"));
+    }
+
+    #[test]
+    fn clean_text_is_untouched_by_the_guard() {
+        let (out, n) = strip_leftover_placeholders("干净的正文 ![a](asset://abc)");
+
+        assert_eq!(n, 0);
+        assert_eq!(out, "干净的正文 ![a](asset://abc)");
+    }
+
+    /// 只有前缀没有闭合也要被吃掉，不能留在正文里。
+    #[test]
+    fn leftover_guard_handles_unclosed_prefix() {
+        let (out, n) = strip_leftover_placeholders("a {{asset:0 b");
+
+        assert_eq!(n, 1);
+        assert!(!out.contains("{{asset:"));
+    }
+
+    /// 落库前的正文里既不能有解析期占位符，也不能有 `asset://0` 这种下标形态。
+    #[test]
+    fn persisted_markdown_never_contains_placeholder_forms() {
+        let blobs = MemBlobs::new();
+        let mut parsed = parsed_with("![a]({{asset:0}}) 尾", vec![png(1)]);
+        let pending = prepare_assets(&blobs, &mut parsed);
+        assert_eq!(pending.len(), 1);
+
+        let (clean, removed) = strip_leftover_placeholders(&parsed.markdown);
+
+        assert_eq!(removed, 0, "正常路径下防线不该有活干");
+        assert!(!clean.contains("{{asset:"));
+        assert!(!clean.contains("asset://0"), "下标形态绝不能落库");
+        assert!(clean.contains(&format!("asset://{}", pending[0].id)));
     }
 }
