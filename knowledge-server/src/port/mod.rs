@@ -7,8 +7,10 @@
 //! 换一个解析库、换一个分词算法，改动面应当收敛到 adapter 下的单个文件，
 //! 而 `domain/` 与 `api/` 一行不动。
 
+pub mod blob_store;
 pub mod document_parser;
 pub mod tokenizer;
 
+pub use blob_store::{BlobError, BlobStore};
 pub use document_parser::{DocumentParser, ParsedDocument, ParseError, ParseOutcome, ParserChain};
 pub use tokenizer::Tokenizer;

@@ -6,5 +6,6 @@
 //!
 //! 换技术时的预期改动面：本目录下的一个文件 + 注册表里的一行。
 
+pub mod blob_store;
 pub mod parser;
 pub mod tokenizer;
