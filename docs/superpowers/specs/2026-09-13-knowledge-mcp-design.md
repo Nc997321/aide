@@ -137,13 +137,13 @@ localStorage 是唯一真相源（`getBaseUrl()` / `getToken()`）。推送时�
 
 ```
 extensions/knowledgeMcp.ts        # 注册器：三道门 + createSdkMcpServer 组装（对齐 docsMcp.ts 的形状）
-extensions/knowledgeTools.ts      # 8 个 buildXxxTool + ≤10 行编排主函数 buildKnowledgeTools(ctx)
+extensions/knowledgeTools.ts      # 一个工具一个 buildXxxTool + ≤10 行编排主函数 buildKnowledgeTools(env)（P1 落 4 个读工具，P2 补到 8 个）
 extensions/knowledge/config.ts    # 凭据文件读取 + 校验（fail-closed）
 extensions/knowledge/client.ts    # REST 薄客户端（fetch 可注入，便于单测；超时在此）
 extensions/knowledge/format.ts    # 纯函数格式化器：失败原因 → 引导文本（单测主力）
 ```
 
-`buildKnowledgeTools(ctx)` 是**目录骨架**：只做「把 8 个 builder 的返回值组成数组」，每个 builder 单独成形、各自 ≤40 行（用户结构约定）。`ctx` = `{ config 读取口, cwd, client }` 对象化（≤4 输入）。
+`buildKnowledgeTools` 是**目录骨架**：只做「把各 builder 的返回值组成数组」（P1 4 个 builders），每个 builder 单独成形、各自 ≤40 行（用户结构约定）。签名落地为 **`buildKnowledgeTools(env)`**（P1），P2 计划按 `buildKnowledgeTools(env, cwd)` 落地（`ingest_file` 的相对路径要按会话 cwd 解析，`cwd` 走第二参）——**没有 ctx 对象**：凭据由 `kbCall` 每次调用现读 `env`（`readKbConfig(env)`），不进闭包持值（闭包值随 `query()` spawn 冻结，重登不自愈，见 §3）。
 
 `textResult()` helper 与 `codegraphTools.ts:127` 形状相同：**本插件自带一份（3 行），不为此做跨文件重构**。
 
@@ -153,7 +153,7 @@ extensions/knowledge/format.ts    # 纯函数格式化器：失败原因 → 引
 |---|---|
 | `engine/session-worker/queryContext.ts:93` | `assembleMcpServers({...codegraphMcp, ...docsMcp, ...knowledgeMcp}, userMcp)` |
 | `engine/session-worker/queryOptions.ts:73` | `allowedTools` 加四条**读**工具规则（见 §7） |
-| `packages/aide-sdk/src/composables/useCustomizations.ts` | `builtinMcpServers` 加 `{ id: "aide-knowledge", transport: "in-process", purpose: "内置知识库读写工具（search/read/list/create/append/update/ingest_file）；受信任工作区挂载，写操作走权限确认" }`——**没有动态事件，纯静态镜像，漏登记永久不可见** |
+| `packages/aide-sdk/src/composables/useCustomizations.ts` | `builtinMcpServers` 加实际登记的那一行（`useCustomizations.ts:77`，P1 文案）：`{ id: "aide-knowledge", transport: "in-process", purpose: "内置知识库读写（search / read_document / list_spaces / list_documents，写工具见 P2），受信任工作区挂载；未登录时工具返回登录引导" }`——**没有动态事件，纯静态镜像，漏登记永久不可见**；P2 落地时回填四个写工具名。 |
 
 ### 6.6 instructions（必需品）
 
@@ -222,7 +222,7 @@ export const KNOWLEDGE_READ_RULES = [
 3. **知识库服务不由本应用 spawn**：它是独立部署的（docker compose / 手工 `cargo run`）。服务没起 → 工具返回网络引导文本，不是崩溃。
 4. **代理**：sidecar 的 fetch 不自动走 HTTP_PROXY。知识库在 LAN/localhost 时无影响；远端部署 + 企业代理的组合留给后续（前端 kbClient 同样是裸 fetch，两边行为一致）。
 5. **无乐观锁**：知识库 PUT 没有 versionNo，并发写入靠 300s 合并窗口兜底。追加工具内先读后拼已是最优，但仍非严格 CAS。
-6. **多端**：remote-pwa / 鸿蒙驱动同一个桌面 sidecar，工具自动可用，无需改动；headless 无凭据文件 → 恒挂 + 引导文本（网关将来写这个文件即可打通）。
+6. **多端**：remote-pwa / 鸿蒙驱动同一个桌面 sidecar，工具自动可用，无需改动；headless 无凭据文件 → 恒挂 + 引导文本。网关将来要打通得**两步**，少一步仍读不到：① 把凭据写进 `~/.aide/knowledge.json`；② 自己设 `AIDE_KB_CONFIG_FILE` 指向该文件——headless **不经过** `spawn_runtime`，而这个 env 只在 `spawn_runtime` 里注入（`runtime/mod.rs`），只写文件的话 `readKbConfig` 拿不到路径，工具照旧回「未连接」。兜底备选：让 `config.ts` 在没有 env 时回落默认路径（`~/.aide/knowledge.json`）。
 
 ## 10. 实施分期（供 writing-plans 参考）
 
