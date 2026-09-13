@@ -14,20 +14,29 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// 凭据文件路径：**按构建档位分名**——dev（debug 构建）= `~/.aide/knowledge.dev.json`，
-/// release = `~/.aide/knowledge.json`（与 state.json 同目录，刻意独立）。
+/// 凭据文件名：**按构建档位分名**——dev（debug 构建）= `knowledge.dev.json`，
+/// release = `knowledge.json`。
 ///
 /// 为什么分名：localStorage 按 WebView **origin** 分区（dev 前端来自 `http://localhost:1420`，
 /// release 来自 Tauri 自己的源），两档各持一份凭据。共用同一文件时后写的一档会覆盖另一档，
 /// 表现为「面板显示未登录、agent 却能读写知识库」，或「release 的 agent 以 dev 那次登录的
 /// 账号身份读写」（换账号时）。
-pub fn kb_config_path() -> PathBuf {
-    let file = if cfg!(debug_assertions) {
+///
+/// 档位判据与 `runtime/mod.rs` 区分 dev/release 取 claude.exe 同源（`debug_assertions`）。
+/// 抽成纯函数是为了**两个名字都能被单测覆盖**——`cfg!` 在同一次构建里只可能取一个值，
+/// 写进函数体就只有一半可测。
+fn config_file_name(debug_build: bool) -> &'static str {
+    if debug_build {
         "knowledge.dev.json"
     } else {
         "knowledge.json"
-    };
-    crate::commands::our_config_dir().join(file)
+    }
+}
+
+/// 凭据文件路径：`~/.aide/knowledge.json`（dev 档为 `knowledge.dev.json`），与
+/// state.json 同目录、刻意独立。文件名随构建档位，理由见 `config_file_name`。
+pub fn kb_config_path() -> PathBuf {
+    crate::commands::our_config_dir().join(config_file_name(cfg!(debug_assertions)))
 }
 
 /// 入参 → 动作：登出删文件 / 否则写。分支判定与副作用分离，便于直接单测。
@@ -112,18 +121,21 @@ mod tests {
 
     #[test]
     fn config_file_name_is_scoped_to_build_profile() {
-        // cargo test 跑在 debug 档 → 期望 dev 名。有人把路径改回单一硬编码名时，这条会红。
+        // 纯函数：两个档位名都钉死。cargo test 只跑 debug 档，若把判据写回函数体，
+        // 非当前档的那一半名字就永远测不到——这条回答「两个名字各是什么」。
+        assert_eq!(config_file_name(true), "knowledge.dev.json");
+        assert_eq!(config_file_name(false), "knowledge.json");
+    }
+
+    #[test]
+    fn kb_config_path_wires_in_the_profile_file_name() {
+        // 接线：kb_config_path 真的把当前档位传了下去，而不是自己另写死一个名。
         let name = kb_config_path()
             .file_name()
             .expect("kb_config_path 永远带文件名")
             .to_string_lossy()
             .to_string();
-        let expected = if cfg!(debug_assertions) {
-            "knowledge.dev.json"
-        } else {
-            "knowledge.json"
-        };
-        assert_eq!(name, expected);
+        assert_eq!(name, config_file_name(cfg!(debug_assertions)));
     }
 
     #[test]
