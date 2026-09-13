@@ -37,16 +37,22 @@ export const KNOWLEDGE_INSTRUCTIONS = `This environment has built-in tools for t
 2. To find content you MUST call mcp__aide-knowledge__search first — never guess document ids, and never try to read knowledge base content with Grep/Read (it lives in a server, not in the workspace). Then mcp__aide-knowledge__read_document with the documentId from the hits.
 3. Don't know what exists? Use mcp__aide-knowledge__list_spaces then mcp__aide-knowledge__list_documents to browse instead of guessing.
 4. Cite documents as 知识库《标题》, and summarize instead of pasting a whole document back to the user.
-5. FAILURES COME BACK AS TEXT with the next step (not connected / login expired / locked / unreachable). Follow the hint: if it says the user must sign in, tell them to sign in from the 知识库 panel and retry.`;
+5. FAILURES COME BACK AS TEXT with the next step (not connected / login expired / locked / unreachable). Follow the hint: if it says the user must sign in, tell them to sign in from the 知识库 panel and retry.
+6. WRITING: append_document adds to the end and keeps what is there (the safe default for accumulating findings); update_document REPLACES the whole body, so read_document first and carry over the rest; create_document makes a new document; ingest_file imports a local file from disk (md/txt/docx/pdf) — pass a path instead of pasting a large file's content.
+7. NEVER GUESS A SPACE when writing. Call mcp__aide-knowledge__list_spaces first; if more than one space is visible and the user did not say which, ask the user — knowledge base writes land somewhere other people can see.
+8. Every write is confirmed by the user through a permission prompt. Say which space and document you are about to write to in the same message, so the prompt is easy to judge.
+9. If a write fails, report the failure text to the user instead of retrying blindly. Never save the content to a local file as a fallback unless the user asks.`;
 
 /**
  * 默认注册。`trusted=false` 或 `taskTools` 非空或 `AIDE_KB_TOOLS=off` → null。
  * 省略 trusted = 信任（向后兼容，测试与手工调用用）。
+ * `cwd` 只往下传给 `ingest_file`（相对路径按会话工作目录解析）。
  */
 export function knowledgeMcpRegistration(
   env: NodeJS.ProcessEnv = process.env,
   trusted = true,
   taskTools?: string[],
+  cwd = "",
 ): Record<string, unknown> | null {
   if (!trusted) return null;
   if (taskTools) return null;
@@ -56,7 +62,7 @@ export function knowledgeMcpRegistration(
     name: "aide-knowledge",
     version: "1.0.0",
     instructions: KNOWLEDGE_INSTRUCTIONS,
-    tools: buildKnowledgeTools(env),
+    tools: buildKnowledgeTools(env, cwd),
   });
 
   return { "aide-knowledge": server };

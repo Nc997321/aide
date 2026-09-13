@@ -12,14 +12,16 @@ type AnyTool = {
   handler: (args: unknown, extra: unknown) => Promise<{ content: { text: string }[] }>;
 };
 
-function toolByName(env: NodeJS.ProcessEnv, name: string): AnyTool {
-  const tools = buildKnowledgeTools(env) as unknown as AnyTool[];
+/** 会话 cwd 由调用点给：多数用例不碰磁盘（默认 /proj），ingest_file 用例传临时目录。 */
+function toolByName(env: NodeJS.ProcessEnv, name: string, cwd = "/proj"): AnyTool {
+  const tools = buildKnowledgeTools(env, cwd) as unknown as AnyTool[];
   const found = tools.find((t) => t.name === name);
   if (!found) throw new Error(`tool ${name} not built`);
   return found;
 }
 
 let dir: string;
+let cwdDir: string;
 let credEnv: NodeJS.ProcessEnv;
 
 beforeEach(() => {
@@ -27,11 +29,13 @@ beforeEach(() => {
   const file = join(dir, "knowledge.json");
   writeFileSync(file, '{"version":1,"baseUrl":"http://kb.test","token":"tok"}');
   credEnv = { [KB_CONFIG_FILE_ENV]: file } as NodeJS.ProcessEnv;
+  cwdDir = mkdtempSync(join(tmpdir(), "kb-cwd-"));
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
   rmSync(dir, { recursive: true, force: true });
+  rmSync(cwdDir, { recursive: true, force: true });
 });
 
 /** 用假 fetch 顶掉全局 fetch（client.ts 的默认参数在调用时读全局，所以能顶掉）。 */
@@ -45,16 +49,20 @@ function stubFetch(reply: { status: number; body: string }) {
 }
 
 describe("buildKnowledgeTools", () => {
-  it("P1 只暴露 4 个读工具", () => {
-    const names = (buildKnowledgeTools(credEnv) as unknown as { name: string }[]).map((t) => t.name);
-    expect(names).toEqual(["search", "read_document", "list_spaces", "list_documents"]);
+  it("P2 后暴露 4 读 + 4 写，顺序稳定", () => {
+    const names = (buildKnowledgeTools(credEnv, "/proj") as unknown as { name: string }[]).map((t) => t.name);
+    expect(names).toEqual([
+      "search", "read_document", "list_spaces", "list_documents",
+      "create_document", "append_document", "update_document", "ingest_file",
+    ]);
   });
 });
 
 describe("未配置凭据（恒挂的降级路径）", () => {
-  it("任何工具都返回「未连接 + 去登录」，且不发请求", async () => {
+  it("未登录时写工具同样只回引导文本，且不发请求", async () => {
     const calls = stubFetch({ status: 200, body: "{}" });
-    const r = await toolByName({} as NodeJS.ProcessEnv, "search").handler({ query: "x" }, undefined);
+    const r = await toolByName({} as NodeJS.ProcessEnv, "create_document")
+      .handler({ title: "t", content: "c" }, undefined);
     expect(r.content[0]!.text).toContain("sign in");
     expect(calls).toEqual([]);
   });
@@ -161,6 +169,62 @@ describe("200 但响应形状不对（畸形 2xx）", () => {
   it("list_documents：resolves（不是 rejects），降级成 bad_response 文本", async () => {
     stubFetch({ status: 200, body: JSON.stringify({ not: "an array" }) });
     const p = toolByName(credEnv, "list_documents").handler({ spaceId: "s1" }, undefined);
+    await expect(p).resolves.toBeDefined();
+    const r = await p;
+    expect(r.content[0]!.text).toContain("unexpected response shape");
+  });
+});
+
+describe("写工具", () => {
+  it("create_document：带 spaceId 直接 POST，不再拉空间列表", async () => {
+    const urls = stubFetch({ status: 200, body: JSON.stringify({ documentId: "d1", revisionId: "r1", versionNo: 1, merged: false }) });
+    const r = await toolByName(credEnv, "create_document")
+      .handler({ spaceId: "s1", title: "标题", content: "正文" }, undefined);
+    expect(urls).toEqual(["http://kb.test/api/documents"]);
+    expect(r.content[0]!.text).toContain("Created");
+  });
+
+  it("append_document：先 GET 再 PUT，PUT 正文含旧正文", async () => {
+    const urls: string[] = [];
+    const bodies: unknown[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      urls.push(url);
+      if (init.method === "PUT") bodies.push(JSON.parse(String(init.body)));
+      const body = init.method === "GET"
+        ? { id: "d1", spaceId: "s1", slug: "a", title: "T", content: "旧", versionNo: 1, status: "published" }
+        : { documentId: "d1", revisionId: "r", versionNo: 2, merged: false };
+      return { status: 200, text: async () => JSON.stringify(body) } as Response;
+    });
+    const r = await toolByName(credEnv, "append_document").handler({ documentId: "d1", content: "新" }, undefined);
+    expect(urls).toEqual(["http://kb.test/api/documents/d1", "http://kb.test/api/documents/d1"]);
+    expect((bodies[0] as { content: string }).content).toBe("旧\n\n新");
+    expect(r.content[0]!.text).toContain("Appended");
+  });
+
+  it("写工具省略 spaceId 且多个空间 → 回问用户，不发写请求", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      urls.push(url);
+      return { status: 200, text: async () => JSON.stringify([{ id: "s1", key: "a", name: "工程", visibility: "internal" }, { id: "s2", key: "b", name: "产品", visibility: "internal" }]) } as Response;
+    });
+    const r = await toolByName(credEnv, "create_document").handler({ title: "t", content: "c" }, undefined);
+    expect(urls).toEqual(["http://kb.test/api/spaces"]);
+    expect(r.content[0]!.text).toContain("Ask the user");
+  });
+
+  it("ingest_file：相对路径按会话 cwd 解析（cwd 由 buildKnowledgeTools 第二参给）", async () => {
+    writeFileSync(join(cwdDir, "note.md"), "# 笔记");
+    const urls = stubFetch({ status: 201, body: JSON.stringify({ documentId: "d1", revisionId: "r1", title: "笔记", backend: "markdown" }) });
+    const r = await toolByName(credEnv, "ingest_file", cwdDir).handler({ filePath: "note.md", spaceId: "s1" }, undefined);
+    expect(urls).toEqual(["http://kb.test/api/ingest?spaceId=s1"]);
+    expect(r.content[0]!.text).toContain("Imported");
+  });
+
+  // kbWrite 与 kbCall 同属「永不抛」红线：写工具也会先拉 /api/spaces，畸形 2xx 下
+  // decideSpace 解构非数组会抛 TypeError，没有这层 catch 就会变成 MCP 的 isError。
+  it("写工具 200 但形状不对 → resolves（不是 rejects），降级成 bad_response 文本", async () => {
+    stubFetch({ status: 200, body: JSON.stringify({ not: "an array" }) });
+    const p = toolByName(credEnv, "create_document").handler({ title: "t", content: "c" }, undefined);
     await expect(p).resolves.toBeDefined();
     const r = await p;
     expect(r.content[0]!.text).toContain("unexpected response shape");

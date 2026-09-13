@@ -66,7 +66,7 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   // AIDE_KB_TOOLS=off 跳过。**未登录也挂**——凭据每次调用现读，未配置时工具返回
   // 「去知识库面板登录」的引导文本（设计 spec §5.1）。无 emit 参数：直连知识库
   // 的 HTTP，不走主进程 IPC（不像 codegraph）。
-  const knowledgeMcp = knowledgeMcpRegistration(deps.processEnv, deps.trusted, deps.taskTools);
+  const knowledgeMcp = knowledgeMcpRegistration(deps.processEnv, deps.trusted, deps.taskTools, deps.cwd);
 
   // Aide 指令加载：不依赖 SDK 文件系统 setting source，自己读 global + project
   // CLAUDE.md 追加到 preset system prompt。settingSources 必须为空，否则 SDK

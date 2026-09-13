@@ -1,4 +1,8 @@
-// aide-knowledge 的工具定义（P1 = 4 个读工具；写工具见 P2 计划）。
+// aide-knowledge 的工具定义（P1 = 4 个读工具，P2 = 4 个写工具）。
+//
+// 读写两条壳：kbCall 服务「一次请求」的读工具，kbWrite 服务「先读后写」的写工具
+// （多步操作在 knowledge/operations.ts）。写工具**不在** allowedTools 白名单里，
+// 每次调用都要过 canUseTool 弹窗（spec §7）。
 //
 // 组织：本文件上层只做编排（buildKnowledgeTools 是一张表），每个工具一个
 // buildXxxTool，各自成形、互不依赖。
@@ -29,6 +33,13 @@ import {
   formatSearchHits,
   formatSpaces,
 } from "./knowledge/format.js";
+import {
+  appendToDocument,
+  createDocument,
+  ingestFile,
+  resolveWriteTarget,
+  updateDocument,
+} from "./knowledge/operations.js";
 
 // 必须是 type 别名而不是 interface：SDK 的 CallToolResult 带 `[x: string]: unknown` 索引
 // 签名，只有匿名对象类型（type 别名）才有隐式索引签名，interface 没有 → handler 返回
@@ -42,8 +53,18 @@ function textResult(text: string): ToolResult {
 }
 
 /**
+ * 未归一的异常 → 文本：2xx 但形状不对（格式化器解引用畸形数据）、或任何穿出来的异常
+ * 一律降级，绝不穿出 handler（MCP 会把抛出的 handler 变成 isError = 本模块的红线）。
+ * 带上原始信息：否则「服务端返回畸形数据」与「我们自己有笔误」给出同一句话，零可观测性。
+ */
+function shapeFailure(e: unknown): ToolResult {
+  const detail = e instanceof Error ? e.message : String(e);
+  return textResult(formatFailure({ kind: "bad_response", detail: `unexpected response shape: ${detail}` }));
+}
+
+/**
  * 单请求工具的公共壳：现读凭据 → 建客户端 → 跑一次请求 → 成功/失败各走格式化器。
- * 永不抛（工具层红线）。多请求工具（P2 的 append / ingest）自己组合这几步。
+ * 永不抛（工具层红线）。多请求工具（P2 的 append / ingest）走 kbWrite。
  */
 async function kbCall<T>(
   env: NodeJS.ProcessEnv,
@@ -56,12 +77,23 @@ async function kbCall<T>(
     const r = await run(createKbClient(cfg));
     return textResult(r.ok ? onOk(r.data) : formatFailure(r.failure));
   } catch (e) {
-    // 2xx 但形状不对（格式化器解引用畸形数据）、或任何未归一的异常：一律降级成
-    // 文本，绝不穿出 handler（MCP 会把抛出的 handler 变成 isError = 本模块的红线）。
-    // 带上原始信息：否则「服务端返回畸形数据」与「我们自己有笔误」给出同一句话，
-    // 零可观测性（改前这类错误会以 rejection 冒出来）。
-    const detail = e instanceof Error ? e.message : String(e);
-    return textResult(formatFailure({ kind: "bad_response", detail: `unexpected response shape: ${detail}` }));
+    return shapeFailure(e);
+  }
+}
+
+/**
+ * 写工具壳：现读凭据 → 建客户端 → 跑一个多步操作（操作自己产出给模型看的文本）。
+ * 与 kbCall 的分工：kbCall 服务「一次请求」的工具，这里服务「先读后写」的工具。
+ * 同样永不抛：写工具也会先 GET（/api/spaces 或文档），畸形 2xx 下 decideSpace 解构
+ * 非数组会抛 TypeError——没有这层 catch 就是 MCP 的 isError（spec §5.2 红线，无例外）。
+ */
+async function kbWrite(env: NodeJS.ProcessEnv, op: (client: KbClient) => Promise<string>): Promise<ToolResult> {
+  const cfg = readKbConfig(env);
+  if (!cfg) return textResult(KB_NOT_CONNECTED_TEXT);
+  try {
+    return textResult(await op(createKbClient(cfg)));
+  } catch (e) {
+    return shapeFailure(e);
   }
 }
 
@@ -116,12 +148,104 @@ function buildListDocumentsTool(env: NodeJS.ProcessEnv) {
   );
 }
 
-/** 工具总装：本文件唯一的编排点（一张表，不加逻辑）。 */
-export function buildKnowledgeTools(env: NodeJS.ProcessEnv) {
+function buildCreateDocumentTool(env: NodeJS.ProcessEnv) {
+  return tool(
+    "create_document",
+    "Create a NEW knowledge base document (title + markdown content). Use it when the user asks to save something that does not exist yet — use append_document to add to an existing document instead of creating a duplicate.",
+    {
+      title: z.string().describe("Document title (also becomes the URL slug)"),
+      content: z.string().describe("Document body in markdown"),
+      spaceId: z.string().optional().describe("Target space id from list_spaces. Omit only when the user's target is unambiguous."),
+      parentId: z.string().optional().describe("Parent document id to nest under. Omit for a top-level document."),
+    },
+    (args) =>
+      kbWrite(env, async (client) => {
+        const target = await resolveWriteTarget(client, args.spaceId);
+        if (target.kind === "ask") return target.text;
+        return createDocument(client, {
+          spaceId: target.id,
+          title: args.title,
+          content: args.content,
+          ...(args.parentId ? { parentId: args.parentId } : {}),
+        });
+      }),
+  );
+}
+
+function buildAppendDocumentTool(env: NodeJS.ProcessEnv) {
+  return tool(
+    "append_document",
+    "Append markdown to the END of an existing knowledge base document, keeping everything already there. This is the safe default for accumulating findings — prefer it over update_document. Call read_document first if you need to see what is already in the document.",
+    {
+      documentId: z.string().describe("Document id (uuid) from search or list_documents"),
+      content: z.string().describe("Markdown to append at the end of the document"),
+      changeNote: z.string().optional().describe("Short note recorded in the revision history"),
+    },
+    (args) =>
+      kbWrite(env, (client) =>
+        appendToDocument(client, {
+          documentId: args.documentId,
+          content: args.content,
+          ...(args.changeNote ? { changeNote: args.changeNote } : {}),
+        }),
+      ),
+  );
+}
+
+function buildUpdateDocumentTool(env: NodeJS.ProcessEnv) {
+  return tool(
+    "update_document",
+    "Replace the WHOLE body of an existing knowledge base document. Read it with read_document first and carry over the parts you are not changing — this overwrites everything. Prefer append_document when you are only adding something.",
+    {
+      documentId: z.string().describe("Document id (uuid) from search or list_documents"),
+      content: z.string().describe("The complete new document body in markdown"),
+      title: z.string().optional().describe("New title. Omit to keep the current title."),
+      changeNote: z.string().optional().describe("Short note recorded in the revision history"),
+    },
+    (args) =>
+      kbWrite(env, (client) =>
+        updateDocument(client, {
+          documentId: args.documentId,
+          content: args.content,
+          ...(args.title ? { title: args.title } : {}),
+          ...(args.changeNote ? { changeNote: args.changeNote } : {}),
+        }),
+      ),
+  );
+}
+
+function buildIngestFileTool(env: NodeJS.ProcessEnv, cwd: string) {
+  return tool(
+    "ingest_file",
+    "Import a local file from disk into the knowledge base (md, markdown, txt, docx, pdf — the server parses it into markdown). Use this instead of pasting a large file's content into create_document. Relative paths resolve against the session working directory.",
+    {
+      filePath: z.string().describe("Path to the file on disk (absolute, or relative to the session working directory)"),
+      spaceId: z.string().optional().describe("Target space id from list_spaces. Omit only when the user's target is unambiguous."),
+      parentId: z.string().optional().describe("Parent document id to nest under. Omit for a top-level document."),
+    },
+    (args) =>
+      kbWrite(env, async (client) => {
+        const target = await resolveWriteTarget(client, args.spaceId);
+        if (target.kind === "ask") return target.text;
+        return ingestFile(client, cwd, {
+          filePath: args.filePath,
+          spaceId: target.id,
+          ...(args.parentId ? { parentId: args.parentId } : {}),
+        });
+      }),
+  );
+}
+
+/** 工具总装：本文件唯一的编排点（一张表，不加逻辑）。cwd 只服务 ingest_file 的相对路径。 */
+export function buildKnowledgeTools(env: NodeJS.ProcessEnv, cwd: string) {
   return [
     buildSearchTool(env),
     buildReadDocumentTool(env),
     buildListSpacesTool(env),
     buildListDocumentsTool(env),
+    buildCreateDocumentTool(env),
+    buildAppendDocumentTool(env),
+    buildUpdateDocumentTool(env),
+    buildIngestFileTool(env, cwd),
   ];
 }
