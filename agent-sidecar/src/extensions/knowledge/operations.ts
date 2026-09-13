@@ -24,6 +24,7 @@ import {
   formatIngestResult,
   formatSavedDocument,
   formatTooLarge,
+  warnTruncatedSource,
 } from "./format.js";
 
 /** 新建文档的载荷（domain DTO：一个概念，不是杂物 options 袋）。 */
@@ -89,12 +90,17 @@ export async function updateDocument(client: KbClient, args: UpdateArgs): Promis
   const cur = await client.getJson<KbDocument>(docPath(args.documentId));
   if (!cur.ok) return formatFailure(cur.failure);
 
+  // 旧文比 read_document 能展示的还长 → 回执里点明（警告不阻断）。形状不对（非串）时
+  // 跳过警告并照常写：整篇替换不会丢「我们看不见的东西」，为一句提示拒绝一次用户已
+  // 批准的重写是过度收紧（append 的守卫是另一回事——那里非串会真的删掉别人的正文）。
+  const carriedOver = typeof cur.data.content === "string" ? warnTruncatedSource(cur.data.content) : "";
+
   const saved = await client.sendJson<KbSaveResult>(docPath(args.documentId), "PUT", {
     title: args.title ?? cur.data.title,
     content: args.content,
     ...(args.changeNote ? { changeNote: args.changeNote } : {}),
   });
-  return saved.ok ? formatSavedDocument(saved.data, "Updated") : formatFailure(saved.failure);
+  return saved.ok ? formatSavedDocument(saved.data, "Updated") + carriedOver : formatFailure(saved.failure);
 }
 
 /** 追加 = 读当前正文 → 拼在末尾 → 整篇写回。沉淀类内容的默认写法。 */

@@ -123,3 +123,19 @@ export function formatIngestResult(res: KbIngestResult): string {
   const warnings = res.warnings?.length ? `\n⚠ Parser warnings: ${res.warnings.join("; ")}` : "";
   return `Imported "${res.title}" into the knowledge base. documentId ${res.documentId}, revision ${res.revisionId}, parser ${res.backend}.${warnings}`;
 }
+
+/**
+ * 整篇替换的「旧文比读得到的还长」警告；空串 = 不警告。
+ *
+ * `read_document` 在 KB_READ_MAX_CHARS 处截断，原文比这还长时模型手里根本没有尾部——
+ * 一旦照 instructions「先读、把不改的部分搬过去」的流程写回，尾部就**静默**没了。
+ * 写入本身是用户批准过的（不阻断），但「你搬运的源本身是残的」必须让人看见；
+ * 知识库有版本历史，回执里给出这条恢复路径。
+ */
+export function warnTruncatedSource(oldContent: string): string {
+  if (oldContent.length <= KB_READ_MAX_CHARS) return "";
+  return (
+    `\n⚠ The previous body was ${oldContent.length} characters, longer than read_document can show (${KB_READ_MAX_CHARS}). ` +
+    "If you carried over only what you read, the tail is now gone — check the version history in the 知识库 panel and re-apply the missing part."
+  );
+}

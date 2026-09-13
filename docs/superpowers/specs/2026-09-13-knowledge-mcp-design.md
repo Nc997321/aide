@@ -67,7 +67,7 @@
 | `KB_CONTENT_MAX_BYTES` | 256 KiB | **单次调用传入的 `content` 参数**上限（append 只算新增段落），超限返回引导文本 |
 | `KB_DOC_MAX_BYTES` | 1 MiB | **写回后的整篇正文**上限。P2 落地只挂在 append：replace 的正文就是整篇，已被单次闸 256 KiB 蕴含（真加进去是一条走不到的分支，实现轮取严删去）——这道闸真正拦的是 append 的**累积** |
 | `KB_READ_MAX_CHARS` | 100 000 | `read_document` 输出上限 |
-| `KB_INGEST_MAX_BYTES` | 32 MiB | 导入文件上限 |
+| `KB_INGEST_MAX_BYTES` | 32 MiB | 导入文件上限。**服务端必须同步**：`knowledge-server` 的 `REQUEST_BODY_LIMIT`（axum `Multipart` 提取器默认只收 2 MiB，不设那层的话 2–32 MiB 的文件会先被整份读进内存、上传，再被服务端拒成一句含糊的 "failed to read stream"） |
 | `KB_HTTP_TIMEOUT_MS` | 15 000 | 读 / 写请求超时 |
 | `KB_INGEST_TIMEOUT_MS` | 120 000 | 导入请求超时（上传 + 服务端解析） |
 
@@ -229,6 +229,7 @@ export const KNOWLEDGE_READ_RULES = [
 6. **多端**：remote-pwa / 鸿蒙驱动同一个桌面 sidecar，工具自动可用，无需改动；headless 无凭据文件 → 恒挂 + 引导文本。网关将来要打通得**两步**，少一步仍读不到：① 把凭据写进凭据文件（名称随档位，见 §6.1）；② 自己设 `AIDE_KB_CONFIG_FILE` 指向该文件——headless **不经过** `spawn_runtime`，而这个 env 只在 `spawn_runtime` 里注入（`runtime/mod.rs`），只写文件的话 `readKbConfig` 拿不到路径，工具照旧回「未连接」。兜底备选：让 `config.ts` 在没有 env 时回落默认路径（凭据文件，名称随档位，见 §6.1，headless 运维自己选名字即可）。
 7. **写工具弹窗的长度边界**（P2 兑现 §7 那条代价）：弹窗展示的是**模型传进来的参数**——`create_document` / `update_document` 会把 ≤256 KiB 的正文整个铺开；`append_document` 只显示新增段落（整篇正文是工具内部 GET 回来拼的，不进弹窗）；`ingest_file` 只有路径。即长度由「模型给的正文」决定，不由「最终写回的正文」决定。
 8. **投影响不到非桌面端**：写工具的多跳 GET→PUT 全在 sidecar 内部完成，remote-pwa / 鸿蒙走的仍是同一条 `send` 通道；权限弹窗由桌面端 `canUseTool` 出（§7），远端 UI 不在本期内。
+9. **长文档整篇替换的残余风险（警告不阻断）**：`read_document` 在 `KB_READ_MAX_CHARS`(100k 字符) 处截断，原文更长时模型手里没有尾部——照「先读、把不改的部分搬过去」改写会丢内容。`update_document` 的处置是**写入照旧 + 回执里点明**（`warnTruncatedSource`：报出旧文长度、点明尾部可能已丢、指向版本历史），不做拒绝——拒绝会挡掉「用户自己给了全文、就是要整篇重写」的正常场景。
 
 ## 10. 实施分期（供 writing-plans 参考）
 
@@ -412,6 +413,8 @@ P1 落地后知识库才能真正被 agent 用起来；P2 是先有读的闭环�
 | 同上的假臂与 `?.` 短路（warnings 缺失） | ✅ | 同上（`base` 那半条，未给 warnings） |
 | 三个尺寸常量的值 | ✅ | 同 describe > 尺寸常量就是设计定的三个数（不是拍脑袋的近似值） |
 | `formatDocumentList` 的 `parentId` 真值臂（P1 遗留 ⬜，本期补） | ✅ | format.test.ts > formatSpaces / formatDocumentList > 子文档带 parentId 时追加 (under …)（列表里能看出层级） |
+| `warnTruncatedSource` 的 `<= KB_READ_MAX_CHARS` 真臂（不警告） | ✅ | format.test.ts > 写侧文案与尺寸常量 > warnTruncatedSource：旧文没超读上限 → 空串（不乱吓人） |
+| 同上的假臂（警告：报长度 + 点尾部 + 指版本历史） | ✅ | 同 describe > warnTruncatedSource：旧文超读上限 → 说清尾部可能已丢 + 给出回滚路径 |
 
 ### knowledge/operations.ts（新增）
 
@@ -430,7 +433,10 @@ P1 落地后知识库才能真正被 agent 用起来；P2 是先有读的闭环�
 | | `args.title ?? cur.title` 真 / 假臂 | ✅ | 同 describe > 显式 title 覆盖当前标题；先 GET 再 PUT…title 沿用当前版本 |
 | | `changeNote` 真 / 假臂 | ✅ | knowledgeTools.test.ts > 写工具 > update_document：先 GET 再 PUT，title/changeNote 给了就带上；同 describe > 省略 title/changeNote → 沿用当前标题、不带 changeNote |
 | | `saved.ok` 真 / 假臂 | ✅ | 同 describe > 先 GET 再用新正文 PUT…；同 describe > 409（他人持锁）→ 带服务端 message 的重试引导 |
-| `appendToDocument` | 读失败 → 文本，不 PUT | ✅ | appendToDocument > 读失败（404）→ 直接返回失败文本，不发 PUT |
+| | 旧文长度 > `KB_READ_MAX_CHARS` → 回执加警告（**不阻断**） | ✅ | 同 describe > 旧文比 read_document 能展示的还长 → 照常写，但回执点明尾部可能已丢 |
+| | 旧文非串 → 跳过警告、照常写（警告不该阻断已批准的替换） | ✅ | 同 describe > 旧文形状不对（非串）→ 照常写、不误报表头警告 |
+| `appendToDocument` | 单次段落超 256 KiB → 拒绝，读也不发 | ✅ | appendToDocument > 单次追加段落超 256 KiB → 拒绝，GET 都不发（与 create / update 同一条闸） |
+| | 读失败 → 文本，不 PUT | ✅ | appendToDocument > 读失败（404）→ 直接返回失败文本，不发 PUT |
 | | 读回的正文非串（形态漂移守卫）→ 不写 | ✅ | 同 describe > 读回的正文不是串（形态漂移）→ 拒绝写回，不发 PUT |
 | | 超整篇闸 → 拒绝，不 PUT | ✅ | 同 describe > 追加后整篇超 1 MiB → 拒绝且不发 PUT（单次上限挡不住累积） |
 | | `changeNote` 真 / 假臂 | ✅ | 同 describe > changeNote 有才带（写进版本历史）；PUT body 必须含旧正文（不带） |
@@ -463,3 +469,12 @@ P1 落地后知识库才能真正被 agent 用起来；P2 是先有读的闭环�
 | `buildKnowledgeTools` | 4 读 + 4 写的名字与顺序 | ✅ | buildKnowledgeTools > P2 后暴露 4 读 + 4 写，顺序稳定 |
 | `knowledgeMcpRegistration` | `cwd` 第四参缺省（`""`） | ✅ | knowledgeMcp.test.ts 全部用例走缺省（`ingest_file` 的 cwd 由工具层测试单独覆盖） |
 | 快照 | 工具表 + 两处 instructions 的 delta | ✅（逐字证死） | knowledgeMcp.test.ts > instructions 是 MCP 采纳率的必需品 > 工具描述快照…（快照 delta 已用脚本核过：只新增四工具块与第 6-9 条，其余逐字节相同） |
+
+### P2 评审后续轮（独立 reviewer 提的四条，均已核实并落地）
+
+| 项 | 处置 | 证据 |
+|---|---|---|
+| `append_document` 漏了单次 256 KiB 段落闸（spec §4.2 常量表与格式器注释都写明了「append 只算新增段落」，实现只查了拼完整篇） | 补闸（位于 GET 之前，与 create / update 同位） | 上表 `appendToDocument` 新增行 + commit `1fd321f9` |
+| `useCustomizations.ts` 的镜像文案仍写「写工具见 P2」——spec §6.5 明确要求 P2 回填四个写工具名（计划里漏了这条任务） | 按实际形态回填：读四个自动放行 / 写四个每次要确认 | 纯静态文案，无分支；`builtinMcpServers` 无测试断言 |
+| 客户端 32 MiB 闸对不上服务端的 2 MiB 硬顶（axum `Multipart` 的 `with_limited_body()` → axum-core `DEFAULT_LIMIT = 2_097_152`，且本 crate 未设 `DefaultBodyLimit`） | 服务端加 `DefaultBodyLimit::max(REQUEST_BODY_LIMIT = 32 MiB)`（客户端保持 spec 的 32 MiB） | `knowledge-server` `cargo check --all-targets` 通过、`cargo test` 10 passed；**需重新部署服务端才生效**（未重部署时 2–32 MiB 仍走服务端那句含糊拒绝） |
+| `update_document` 对 >100k 字符的旧文会静默丢尾部（模型手里没有 read 截断之外的正文） | 写入照旧 + 回执警告（`warnTruncatedSource`），不阻断 | 上表 `updateDocument` 与 `format.ts` 新增行 |

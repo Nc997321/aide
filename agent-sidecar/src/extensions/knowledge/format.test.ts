@@ -14,6 +14,7 @@ import {
   formatSpaces,
   formatTooLarge,
   stripHighlight,
+  warnTruncatedSource,
 } from "./format.js";
 import type { KbDocument, KbFailure } from "./client.js";
 
@@ -173,5 +174,16 @@ describe("写侧文案与尺寸常量", () => {
     expect(
       formatIngestResult({ documentId: "d1", revisionId: "r1", title: "规范", backend: "docx-lite", warnings: ["结构丢失"] }),
     ).toContain("结构丢失");
+  });
+
+  it("warnTruncatedSource：旧文没超读上限 → 空串（不乱吓人）", () => {
+    expect(warnTruncatedSource("x".repeat(KB_READ_MAX_CHARS))).toBe("");
+  });
+
+  it("warnTruncatedSource：旧文超读上限 → 说清尾部可能已丢 + 给出回滚路径", () => {
+    const text = warnTruncatedSource("x".repeat(KB_READ_MAX_CHARS + 1));
+    expect(text).toContain("longer than read_document can show");
+    expect(text).toContain("version history");
+    expect(text).toContain(String(KB_READ_MAX_CHARS + 1)); // 旧文有多长要报出来
   });
 });

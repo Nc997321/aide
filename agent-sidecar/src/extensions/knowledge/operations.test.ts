@@ -25,7 +25,7 @@ import {
   resolveWriteTarget,
   updateDocument,
 } from "./operations.js";
-import { KB_CONTENT_MAX_BYTES, KB_DOC_MAX_BYTES, KB_INGEST_MAX_BYTES } from "./format.js";
+import { KB_CONTENT_MAX_BYTES, KB_DOC_MAX_BYTES, KB_INGEST_MAX_BYTES, KB_READ_MAX_CHARS } from "./format.js";
 import type { KbClient, KbDocument, KbResult } from "./client.js";
 
 /** 假 client：只实现被测路径用到的方法，返回值由用例给定。 */
@@ -131,6 +131,24 @@ describe("updateDocument（整篇替换，先读后写）", () => {
     expect(text).toContain("Refused");
     expect(getJson).not.toHaveBeenCalled();
     expect(sendJson).not.toHaveBeenCalled();
+  });
+
+  it("旧文比 read_document 能展示的还长 → 照常写，但回执点明尾部可能已丢", async () => {
+    const long = { ...doc, content: "x".repeat(KB_READ_MAX_CHARS + 1) };
+    const getJson = vi.fn(async () => ({ ok: true, data: long }) as KbResult<never>);
+    const sendJson = vi.fn(async () => ({ ok: true, data: { documentId: "d1", revisionId: "r", versionNo: 4, merged: false } }) as KbResult<never>);
+    const text = await updateDocument(fakeClient({ getJson, sendJson }), { documentId: "d1", content: "新正文" });
+    expect(text).toContain("Updated");
+    expect(text).toContain("longer than read_document can show");
+    expect(sendJson).toHaveBeenCalledTimes(1); // 警告不阻断：写还是写了
+  });
+
+  it("旧文形状不对（非串）→ 照常写、不误报表头警告", async () => {
+    const getJson = vi.fn(async () => ({ ok: true, data: { ...doc, content: undefined } }) as KbResult<never>);
+    const sendJson = vi.fn(async () => ({ ok: true, data: { documentId: "d1", revisionId: "r", versionNo: 4, merged: false } }) as KbResult<never>);
+    const text = await updateDocument(fakeClient({ getJson, sendJson }), { documentId: "d1", content: "新" });
+    expect(text).toContain("Updated");
+    expect(text).not.toContain("⚠");
   });
 
   it("409（他人持锁）→ 带服务端 message 的重试引导", async () => {
