@@ -1671,7 +1671,7 @@ import { knowledgeMcpRegistration } from "../../extensions/knowledgeMcp.js";
 2. `agent-sidecar/src/engine/session-worker/queryOptions.ts:73`：
 
 ```ts
-import { KNOWLEDGE_READ_RULES } from "../extensions/knowledgeMcp.js";
+import { KNOWLEDGE_READ_RULES } from "../../extensions/knowledgeMcp.js";
 ```
 ```ts
     // allowedTools 统一:问答支线(轻量/完整)与主会话同形,保持前缀一致;
@@ -1679,7 +1679,7 @@ import { KNOWLEDGE_READ_RULES } from "../extensions/knowledgeMcp.js";
     // 知识库只放行**读**工具（工具级规则）——写工具走权限弹窗，见 knowledgeMcp.ts。
     allowedTools: ["Agent", "Task", CODEGRAPH_ALLOW_RULE, DOCS_ALLOW_RULE, ...KNOWLEDGE_READ_RULES],
 ```
-（确认 `queryOptions.ts` 里 `CODEGRAPH_ALLOW_RULE` / `DOCS_ALLOW_RULE` 的导入路径，把新导入并进同一行。）
+（`queryOptions.ts:7-8` 已有 `import { CODEGRAPH_ALLOW_RULE } from "../../extensions/codegraphTools.js";` 等两行，新导入紧随其后即可。）
 
 3. `agent-sidecar/src/engine/session-worker.test.ts:450`：精确断言同步（这是设计上的变更，不是测试缺陷）：
 
