@@ -16,7 +16,7 @@
 //
 // ⚠️ 将来若要给 aide 全局收紧渲染，改这里一处即可，不要在各 v-html 点重复写。
 import { Marked } from "marked";
-import { renderMarkdown, escapeHtml } from "@aide/sdk/utils/markdown";
+import { escapeHtml } from "@aide/sdk/utils/markdown";
 
 /** 允许的 URL 协议。其余（javascript: / data: / vbscript:）一律拒绝。 */
 function safeUrl(raw: string): string | null {
@@ -94,4 +94,6 @@ export function __kbRenderCacheSize(): number {
   return cache.size;
 }
 
-export { renderMarkdown };
+// 这里**故意不**再导出 SDK 的 renderMarkdown：本模块只提供"默认拒绝"的渲染，
+// 从"默认拒绝"的模块里顺手拿到未收紧的版本，是最容易被踩的坑（当前调用方只用
+// renderKbMarkdown）。要通用渲染就走 @aide/sdk/utils/markdown，别从这里拿。

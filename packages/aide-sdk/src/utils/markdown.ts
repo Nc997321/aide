@@ -1,4 +1,5 @@
-import { Marked } from "marked";
+import { Marked, Renderer } from "marked";
+import type { Tokens } from "marked";
 import { hljs } from "./highlight";
 import { parseFileLink } from "./fileLink";
 
@@ -46,9 +47,61 @@ function codespan({ text }: { text: string }): string {
   return `<code${cls}>${escapeHtml(text)}</code>`;
 }
 
+/** 裸 HTML（块级 <div>/<script> 与行内 <b> 两类 token 都走这一个 renderer）：
+ *  一律转义成可见原文，绝不交给浏览器解析。
+ *
+ *  marked 自 v5 起移除 sanitize，裸 HTML 是原样透传的——模型输出里一个
+ *  `<img src=x onerror=...>` 会在 v-html 汇点上真的执行。本文件导出的
+ *  marked / renderMarkdown / renderStreaming 是全仓 marked 派生 v-html 的唯一
+ *  来源（ChatMessage / StreamingText / BtwDrawer / PermissionDialog / FileWindow /
+ *  AutomationDetail / LSP hover / remote-pwa 两处），在渲染器层拦一道即全覆盖。
+ *  选这里而不是 DOMPurify：解析期就决定，零额外 DOM 解析轮次——而 DOMPurify
+ *  每次渲染都要重跑一遍 DOM 解析，正压在本文件刚从流式热路径上摘掉的 O(n²) 上。
+ *
+ *  代价（已知并接受）：模型偶尔吐的 `<details>`/`<br>` 这类合法 HTML 会显示成原文。
+ *  知识库不走这里——它有自己的更严格实例（components/KnowledgeBase/markdown.ts）。 */
+function escapedHtml({ text }: { text: string }): string {
+  return escapeHtml(text);
+}
+
+/** 链接/图片 URL 白名单：只放行"明确安全"的前缀，其余一律降级成纯文本。
+ *
+ *  为什么是前缀白名单、不是协议黑名单：href 里的 `:` 能被实体编码（`&#58;`/
+ *  `&colon;`）或插控制字符（`java\tscript:`）——浏览器解析属性时会先解码/剥离，
+ *  于是 `[x](&#106;avascript:alert(1))` 在 DOM 里就是 `javascript:alert(1)`。
+ *  任何"先取出协议再比对"的黑名单都有这条缝；前缀白名单 fail-closed，没有缝。
+ *
+ *  代价（已知并接受）：不带 `./` 的裸相对路径（`[x](docs/a.md)`）也会降级成纯文本。 */
+const SAFE_URL_PREFIXES = ["#", "/", "./", "../", "https://", "http://", "mailto:"];
+
+/** URL 命中白名单则原样返回，否则 null（调用方据此降级）。 */
+function safeUrl(raw: string): string | null {
+  const v = raw.trim();
+  if (v === "") return null;
+  const lower = v.toLowerCase();
+  return SAFE_URL_PREFIXES.some((prefix) => lower.startsWith(prefix)) ? v : null;
+}
+
+/** 默认渲染器实例：放行的 URL 一律委托给它——属性转义、alt 的预转义处理、
+ *  xhtml 自闭合这些细节都在它的实现里，自造 markup 迟早与 marked 漂移。 */
+const defaultRenderer = new Renderer();
+
+/** 链接：URL 不在白名单 → 只留标签文本（内联格式照常渲染），不产生活链接。 */
+function safeLink(this: Renderer, token: Tokens.Link): string {
+  if (safeUrl(token.href) !== null) return defaultRenderer.link.call(this, token);
+  return this.parser.parseInline(token.tokens);
+}
+
+/** 图片：URL 不在白名单 → 退化成 alt 文本。token.text 是未转义的原始文本，
+ *  且这里落在文本位而非属性位，故转义 &<> 即可。 */
+function safeImage(this: Renderer, token: Tokens.Image): string {
+  if (safeUrl(token.href) !== null) return defaultRenderer.image.call(this, token);
+  return escapeHtml(token.text);
+}
+
 function makeMarked(code: (token: CodeToken) => string): Marked {
   const instance = new Marked({ gfm: true, breaks: false });
-  instance.use({ renderer: { code, codespan } });
+  instance.use({ renderer: { code, codespan, html: escapedHtml, link: safeLink, image: safeImage } });
   return instance;
 }
 
