@@ -608,7 +608,20 @@ mod tests {
 
         assert_eq!(removed, 0, "正常路径下防线不该有活干");
         assert!(!clean.contains("{{asset:"));
-        assert!(!clean.contains("asset://0"), "下标形态绝不能落库");
-        assert!(clean.contains(&format!("asset://{}", pending[0].id)));
+
+        // ⚠️ 这里**不能**写 `!clean.contains("asset://0")` ——
+        //    uuid 恰好以 `0` 开头时（1/16 概率）`asset://0abc-…` 会包含该子串，
+        //    变成偶发误报。改成取出引用内容做精确比对。
+        let refs: Vec<&str> = clean
+            .split("asset://")
+            .skip(1)
+            .map(|s| s.split(')').next().unwrap_or(""))
+            .collect();
+        assert_eq!(refs.len(), 1, "注入 1 张图就该只有 1 个引用");
+        assert_eq!(
+            refs[0],
+            pending[0].id.to_string(),
+            "引用必须是真实 uuid，不能是 `asset://0` 这种下标形态"
+        );
     }
 }
