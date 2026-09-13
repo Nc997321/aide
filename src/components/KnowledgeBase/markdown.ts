@@ -28,6 +28,26 @@ function safeUrl(raw: string): string | null {
   return null;
 }
 
+/** 文档资源引用的协议前缀。由 kbClient.getAsset + objectURL 装载（spec §8.2）。 */
+export const ASSET_SCHEME = "asset://";
+
+/**
+ * **图片专用**的 URL 判定。
+ *
+ * ⚠️ 刻意与 `safeUrl` 分开，不是重复代码：`safeUrl` 同时服务 `<a href>`，
+ * 为了放行图片而改它就顺带改变了**链接**的协议策略 —— 那是另一个面，
+ * 不该被这次改动牵连。（`data:` 就在这个区分上：作为 `<img src>` 危害有限，
+ * 作为 `<a href>` 则是可点击的 `data:text/html`，是实实在在的 XSS 面。）
+ */
+function safeImageUrl(raw: string): string | null {
+  const v = raw.trim();
+  if (v.startsWith(ASSET_SCHEME)) {
+    // 空 id 的 `asset://` 没有意义，当非法处理
+    return v.length > ASSET_SCHEME.length ? v : null;
+  }
+  return safeUrl(v);
+}
+
 const kbMarked = new Marked({ gfm: true, breaks: false });
 
 kbMarked.use({
@@ -64,10 +84,11 @@ kbMarked.use({
       title?: string | null;
       text: string;
     }): string {
-      const url = safeUrl(href);
+      const url = safeImageUrl(href);
       if (!url) return escapeHtml(text);
       const t = title ? ` title="${escapeHtml(title)}"` : "";
-      // loading=lazy：一篇长文档里几十张图不该在打开瞬间全部拉
+      // loading=lazy：一篇长文档里几十张图不该在打开瞬间全部拉。
+      // ⚠️ 对 asset:// 它不生效（src 稍后会被 JS 换成 objectURL），见 spec §12 已知代价
       return `<img src="${escapeHtml(url)}" alt="${escapeHtml(text)}"${t} loading="lazy" />`;
     },
   },
