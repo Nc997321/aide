@@ -3,6 +3,7 @@
 //! 这里不允许出现 docx / jieba / pdf 等任何具体库的名字——
 //! 需要那些能力时通过 `port` 上的 trait 拿，由装配处注入实现。
 
+pub mod deletion;
 pub mod ingest;
 pub mod locking;
 pub mod permission;

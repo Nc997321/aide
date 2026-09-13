@@ -124,6 +124,21 @@ export function formatSavedDocument(res: KbSaveResult, verb: string): string {
   return `${verb} the knowledge base document. documentId ${res.documentId}, version ${res.versionNo}${merged}.`;
 }
 
+/**
+ * 删除回执。**必须写实**：这是软删（服务端只置 `deleted_at`），但界面上没有任何恢复入口，
+ * 模型若以为"删错了还能找回"就会向用户打包票。标题与连带篇数都点名——只回一串 uuid，
+ * 用户无法核对删掉的到底是不是他想删的那篇。
+ */
+export function formatDeletedDocument(title: string, documentId: string, deletedCount: number): string {
+  const subs = deletedCount > 1
+    ? `, together with ${deletedCount - 1} sub-document${deletedCount - 1 === 1 ? "" : "s"}`
+    : "";
+  return (
+    `Deleted "${title}"${subs} (documentId ${documentId}). It is gone from every list, search and read path, ` +
+    "and the 知识库 panel has no restore — an admin would have to recover it from the database."
+  );
+}
+
 /** 导入回执。解析器的降级警告如实透出（服务端按端口/适配器范式把丢失信息放这里）。 */
 export function formatIngestResult(res: KbIngestResult): string {
   const warnings = res.warnings?.length ? `\n⚠ Parser warnings: ${res.warnings.join("; ")}` : "";

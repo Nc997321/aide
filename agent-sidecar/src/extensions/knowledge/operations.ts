@@ -9,6 +9,7 @@ import { basename, isAbsolute, resolve } from "node:path";
 import {
   docPath,
   type KbClient,
+  type KbDeleteResult,
   type KbDocument,
   type KbIngestResult,
   type KbSaveResult,
@@ -20,6 +21,7 @@ import {
   KB_CONTENT_MAX_BYTES,
   KB_DOC_MAX_BYTES,
   KB_INGEST_MAX_BYTES,
+  formatDeletedDocument,
   formatFailure,
   formatIngestResult,
   formatSavedDocument,
@@ -46,6 +48,10 @@ export interface AppendArgs {
   documentId: string;
   content: string;
   changeNote?: string;
+}
+
+export interface DeleteArgs {
+  documentId: string;
 }
 
 /** 正文是否在字节上限内（用 UTF-8 字节数，不用 JS 的 UTF-16 长度）。 */
@@ -134,6 +140,23 @@ export async function appendToDocument(client: KbClient, args: AppendArgs): Prom
     ...(args.changeNote ? { changeNote: args.changeNote } : {}),
   });
   return saved.ok ? formatSavedDocument(saved.data, "Appended to") : formatFailure(saved.failure);
+}
+
+/**
+ * 软删（服务端删父文档会连整棵子树一起置 `deleted_at`）。
+ *
+ * 先读一跳的理由：回执要点名删掉的是哪一篇（`formatDeletedDocument` 要标题），
+ * 且 404/403 必须在这一步就如实返回——**读不到的文档不许走到 DELETE**，
+ * 否则用户收到的是"已删除"，而真相是他给错了 id。
+ */
+export async function deleteDocument(client: KbClient, args: DeleteArgs): Promise<string> {
+  const cur = await client.getJson<KbDocument>(docPath(args.documentId));
+  if (!cur.ok) return formatFailure(cur.failure);
+
+  const res = await client.sendJson<KbDeleteResult>(docPath(args.documentId), "DELETE");
+  if (!res.ok) return formatFailure(res.failure);
+
+  return formatDeletedDocument(cur.data.title, args.documentId, res.data.deletedCount);
 }
 
 export interface IngestArgs {

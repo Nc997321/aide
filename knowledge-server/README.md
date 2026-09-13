@@ -134,7 +134,8 @@ cargo run                     # 启动时自动应用 migrations/*.sql
 
 装完 PG（或 `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`）
 后一键验证后端主链路
-（bootstrap → 邀请/加入 → 建空间 → 建文档 → 编辑锁 → 保存（含合并窗口）→ 回滚 → 检索 → 登出）：
+（bootstrap → 邀请/加入 → 建空间 → 建文档 → 编辑锁 → 保存（含合并窗口）→ 回滚 → 检索 →
+软删（级联子树 / 检索过滤 / 删后重建同名）→ 登出）：
 
 ```bash
 ./smoke.sh                   # 默认 http://127.0.0.1:8788，可传自定义地址
@@ -203,7 +204,7 @@ Bearer 顺带带来：服务端无状态（查 `sessions` 表）、三种前端�
 | 认证 | `GET /api/auth/status`、`POST /api/auth/bootstrap` `/login` `/join` `/logout`、`GET /api/auth/me` |
 | 用户（管理员） | `GET /api/users`、`POST /api/users/invite`、`POST /api/users/{id}/revoke` |
 | 空间 | `GET/POST /api/spaces`、`GET /api/spaces/{id}/documents` |
-| 文档 | `POST /api/documents`、`GET/PUT /api/documents/{id}`、`GET /api/documents/{id}/revisions`、`POST /api/documents/{id}/revert` |
+| 文档 | `POST /api/documents`、`GET/PUT /api/documents/{id}`、`DELETE /api/documents/{id}`（软删，连带整棵子树）、`GET /api/documents/{id}/revisions`、`POST /api/documents/{id}/revert` |
 | 编辑锁 | `POST/DELETE /api/documents/{id}/lock`、`POST /api/documents/{id}/lock/heartbeat` |
 | 检索 | `GET /api/search?q=&space_id=&limit=` |
 | 摄取 | `POST /api/ingest?space_id=`、`GET /api/ingest/formats` |
@@ -214,9 +215,10 @@ Bearer 顺带带来：服务端无状态（查 `sessions` 表）、三种前端�
 - 向量检索（`migrations/optional/003_vector.sql` 已备好，等 pgvector 就位）
 - 摄取管道的 UI（接口已有，docx/pdf 导入目前靠 curl / psql 手动走）
 - 标签 / 双链的读写接口（表已建）
-- **删除文档的接口与入口**（软删地基已就位：`documents.deleted_at` 列 + 全部读路径
-  都已过滤它 + slug 的部分唯一索引已适配「删后重建同名」；缺的只是一个端点与 UI 入口。
-  ⚠️ 要实现时走**软删**，别走硬 `DELETE` —— 后者会级联掉 `revisions` 与 `assets`，不可逆）
+- **回收站 / 恢复**：删除已是软删（`deleted_at`），但界面上没有入口——被删文档只能由
+  管理员在库里 `UPDATE documents SET deleted_at = NULL` 捞回来。要做「已删列表 + 恢复」
+  得新增一个列表端点（读路径现在全都过滤 `deleted_at IS NULL`）与一段 UI
+- 删空的垃圾回收：`deleted_at` 置位后 `revisions` / `assets` 一直留着，没有清理任务
 
 ## 前端在哪
 
@@ -225,6 +227,7 @@ Bearer 顺带带来：服务端无状态（查 `sessions` 表）、三种前端�
 只沿用了 SDK 的工程约定（DTO 镜像 serde camelCase、门面平铺方法）与
 `renderMarkdown` 这个纯工具函数。
 
-可读可搜可编辑：文档编辑（编辑锁 + 30s 心跳 + 冲突禁存）、版本历史与回滚、
-创建空间均已落地；编辑锁的状态机在 `src/composables/useKbDocLock.ts`（API 注入式，
-可脱离网络单测）。
+可读可搜可编辑可删：文档编辑（编辑锁 + 30s 心跳 + 冲突禁存）、版本历史与回滚、
+创建空间、删除（软删，确认弹窗里点明会连带删掉几篇子文档）均已落地；
+编辑锁的状态机在 `src/composables/useKbDocLock.ts`（API 注入式，可脱离网络单测），
+文档树的两种算法（侧栏层级 / 子树篇数）同在 `src/components/KnowledgeBase/docTree.ts`。

@@ -14,6 +14,7 @@ import KbGuide from "./KbGuide.vue";
 import KbDocumentView from "./KbDocumentView.vue";
 import KbSearchView from "./KbSearchView.vue";
 import KbMembers from "./KbMembers.vue";
+import { depthOf as depthOfMap, subtreeSize } from "./docTree";
 
 const emit = defineEmits<{ close: [] }>();
 
@@ -46,22 +47,9 @@ watch(innerView, (v) => {
   if (v === "members" && isAdmin.value) void k.loadUsers();
 });
 
-/** 文档树的层级：沿 parentId 往上数，最多 3 层（再深也按 3 缩进，避免长链）。
- *  后端返回的是扁平列表，树是下一批的事，这里只做视觉缩进。 */
-const depthOf = computed<Record<string, number>>(() => {
-  const byId = new Map(k.documents.value.map((d) => [d.id, d]));
-  const out: Record<string, number> = {};
-  for (const d of k.documents.value) {
-    let depth = 0;
-    let cur = d.parentId ? byId.get(d.parentId) : undefined;
-    while (cur && depth < 3) {
-      depth++;
-      cur = cur.parentId ? byId.get(cur.parentId) : undefined;
-    }
-    out[d.id] = depth;
-  }
-  return out;
-});
+/** 文档树的层级（沿 parentId 往上数，最多 3 层）。树的算法都在 ./docTree，
+ *  与删除确认弹窗算的子树篇数共用同一份实现。 */
+const depthOf = computed<Record<string, number>>(() => depthOfMap(k.documents.value));
 
 // 正在编辑的文档 id。openDoc 切换前检查它，避免编辑中的草稿被侧栏一次点击冲掉
 // （编辑内容本身在 KbDocumentView 里，组件卸载即丢——所以要在卸载前问一句）。
@@ -91,6 +79,29 @@ async function refreshDoc(id: string): Promise<void> {
 
 function onEditing(on: boolean): void {
   editingDocId.value = on ? activeDocId.value : null;
+}
+
+/**
+ * 删除（软删；服务端把子文档一并删掉）。
+ *
+ * 确认弹窗放在**父层**而不是按钮旁边：只有这里手里有整份文档列表，「会连带删掉几篇」
+ * 才算得出来（与侧栏缩进共用 ./docTree）。篇数点明是必要的——用户点的是
+ * 一篇文档，实际消失的可能是一棵树。
+ *
+ * 不做「已删除」的成功提示：那一行从侧栏消失、正文区回落空态，本身就是回执。
+ */
+async function onDeleteDoc(id: string): Promise<void> {
+  const title = k.documents.value.find((d) => d.id === id)?.title ?? id;
+  const total = subtreeSize(k.documents.value, id);
+  const subs = total > 1 ? `，连同 ${total - 1} 篇子文档` : "";
+  const ok = window.confirm(
+    `删除「${title}」${subs}？\n删除后它不再出现在任何列表、检索与正文，且没有恢复入口。`,
+  );
+  if (!ok) return;
+
+  // 只有真删掉了才把视图切走：403 / 断网时留在原地，否则用户既丢了阅读位置、
+  // 文档又还在（错误提示由 k.error 显示在正文区）
+  if (await k.deleteDocument(id)) activeDocId.value = null;
 }
 
 async function onCreateSpace(
@@ -270,6 +281,7 @@ onMounted(() => k.init());
             @saved="(id) => refreshDoc(id)"
             @reverted="(id) => refreshDoc(id)"
             @editing="onEditing"
+            @delete="(id) => void onDeleteDoc(id)"
           />
           <!-- 内置指南：登录后的默认主区内容，长得就像一篇文档 -->
           <KbGuide v-else-if="showGuide" />

@@ -77,6 +77,11 @@ export interface KbIngestResult {
   backend: string;
   warnings?: string[];
 }
+/** 删除回执。`deletedCount` 含根文档本身（删一棵树时 = 根 + 全部子孙）。 */
+export interface KbDeleteResult {
+  documentId: string;
+  deletedCount: number;
+}
 
 // ── 客户端 ──
 
@@ -90,7 +95,8 @@ export interface KbUpload {
 
 export interface KbClient {
   getJson<T>(path: string, query?: KbQuery): Promise<KbResult<T>>;
-  sendJson<T>(path: string, method: "POST" | "PUT", body: unknown): Promise<KbResult<T>>;
+  /** DELETE 不带正文（body 省略 → 不发 Content-Type），其余方法一律 JSON 正文。 */
+  sendJson<T>(path: string, method: "POST" | "PUT" | "DELETE", body?: unknown): Promise<KbResult<T>>;
   sendFile<T>(path: string, query: KbQuery, file: KbUpload): Promise<KbResult<T>>;
 }
 
@@ -225,8 +231,11 @@ export function createKbClient(cfg: KbRuntimeConfig, fetchImpl: FetchLike = fetc
     async getJson<T>(path: string, query?: KbQuery): Promise<KbResult<T>> {
       return finish<T>(await raw("GET", withQuery(path, query), undefined, KB_HTTP_TIMEOUT_MS));
     },
-    async sendJson<T>(path: string, method: "POST" | "PUT", body: unknown): Promise<KbResult<T>> {
-      return finish<T>(await raw(method, path, JSON.stringify(body), KB_HTTP_TIMEOUT_MS));
+    async sendJson<T>(path: string, method: "POST" | "PUT" | "DELETE", body?: unknown): Promise<KbResult<T>> {
+      // ⚠️ 不用 JSON.stringify(body)：body 省略时它返回 undefined 只是巧合（类型签名说的是
+      // string），写成显式分支，DELETE 无正文这件事在代码里看得见。
+      const payload = body === undefined ? undefined : JSON.stringify(body);
+      return finish<T>(await raw(method, path, payload, KB_HTTP_TIMEOUT_MS));
     },
     async sendFile<T>(path: string, query: KbQuery, file: KbUpload): Promise<KbResult<T>> {
       const form = new FormData();

@@ -133,7 +133,7 @@ pub fn build_router(state: AppState) -> AppResult<Router> {
         .route("/api/documents", post(documents::create))
         .route(
             "/api/documents/{id}",
-            get(documents::get).put(documents::update),
+            get(documents::get).put(documents::update).delete(documents::delete),
         )
         .route("/api/documents/{id}/revisions", get(documents::revisions))
         .route("/api/documents/{id}/revert", post(documents::revert))

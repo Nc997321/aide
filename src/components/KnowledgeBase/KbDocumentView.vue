@@ -27,6 +27,9 @@ const emit = defineEmits<{
   reverted: [docId: string];
   /** 编辑会话开关（父层据此在切换文档前拦截未保存修改） */
   editing: [on: boolean];
+  /** 用户点了删除。**只报意图**：确认弹窗与接口调用都在父层——只有它手里有整份
+   *  文档列表，「会连带删掉几篇子文档」才算得出来。 */
+  delete: [docId: string];
 }>();
 
 // 锁 API 注入：状态机因此可以脱离网络单测（见 useKbDocLock.test.ts）
@@ -203,6 +206,9 @@ function onReverted(): void {
           <button class="kb-link" :disabled="lock.state.value.phase === 'acquiring'" @click="startEdit()">
             {{ lock.state.value.phase === "acquiring" ? "取锁中…" : "编辑" }}
           </button>
+          <!-- 只在看态出现（编辑态下没有这个按钮）：编辑中的草稿与「删掉这篇」同时可点，
+               是两条状态机的交叉，没有必要 -->
+          <button class="kb-link danger" @click="emit('delete', doc.id)">删除</button>
         </span>
       </div>
       <p v-if="conflictName" class="kb-lock-note">
@@ -333,6 +339,7 @@ function onReverted(): void {
   cursor: pointer;
 }
 .kb-link:disabled { opacity: 0.5; cursor: default; }
+.kb-link.danger { color: var(--aide-error, #d0453b); }
 .kb-lock-note {
   margin: 10px 0 0;
   font-size: 11px;

@@ -80,3 +80,46 @@ describe("kb.getAsset", () => {
     await expect(kb.getAsset("x")).rejects.toThrow(/连不上知识库服务/);
   });
 });
+
+/** JSON 响应替身：request() 内核只用到 status / ok / text()。 */
+function jsonResponse(body: unknown, status = 200) {
+  return { status, ok: status < 400, text: async () => JSON.stringify(body) } as unknown as Response;
+}
+
+describe("kb.deleteDocument", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setBaseUrl("http://kb.test");
+    setToken("test-token");
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("DELETE /api/documents/{id}，带 Bearer 且**不带正文**", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ documentId: "d1", deletedCount: 3 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const got = await kb.deleteDocument("d1");
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://kb.test/api/documents/d1");
+    expect((init as RequestInit).method).toBe("DELETE");
+    expect((init as RequestInit).headers).toMatchObject({ Authorization: "Bearer test-token" });
+    // 无正文请求不该挂 Content-Type（有些反代会把「有类型的空体」当畸形请求）
+    expect((init as RequestInit).body).toBeUndefined();
+    expect(got).toEqual({ documentId: "d1", deletedCount: 3 });
+  });
+
+  it("404 → 抛 KbError，绝不静默成功", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ error: "not_found", message: "文档不存在或已被删除" }, 404),
+      ),
+    );
+
+    await expect(kb.deleteDocument("gone")).rejects.toThrow(/文档不存在或已被删除/);
+  });
+});

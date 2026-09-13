@@ -67,11 +67,11 @@ function stubFetch(reply: { status: number; body: string }) {
 }
 
 describe("buildKnowledgeTools", () => {
-  it("P2 后暴露 4 读 + 4 写，顺序稳定", () => {
+  it("P2 + 软删后暴露 4 读 + 5 写，顺序稳定", () => {
     const names = (buildKnowledgeTools(credEnv, "/proj") as unknown as { name: string }[]).map((t) => t.name);
     expect(names).toEqual([
       "search", "read_document", "list_spaces", "list_documents",
-      "create_document", "append_document", "update_document", "ingest_file",
+      "create_document", "append_document", "update_document", "ingest_file", "delete_document",
     ]);
   });
 });
@@ -331,5 +331,47 @@ describe("写工具", () => {
     const r = await toolByName(credEnv, "ingest_file", cwdDir).handler({ filePath: "never-read.md" }, undefined);
     expect(urls).toEqual(["http://kb.test/api/spaces"]);
     expect(r.content[0]!.text).toContain("Ask the user");
+  });
+
+  /** 删除的两跳假 fetch：GET 给当前文档，DELETE 给删除回执。 */
+  function stubReadDelete(deletedCount = 3) {
+    const calls: { method: string; url: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      calls.push({ method: init.method ?? "", url });
+      const body = init.method === "GET"
+        ? { id: "d1", spaceId: "s1", slug: "a", title: "废弃设计", content: "旧正文", versionNo: 2, status: "draft" }
+        : { documentId: "d1", deletedCount };
+      return { status: 200, text: async () => JSON.stringify(body) } as Response;
+    });
+    return calls;
+  }
+
+  it("delete_document：先 GET 拿标题再 DELETE，回执点名删的是哪篇、连带几篇", async () => {
+    const calls = stubReadDelete(3);
+    const r = await toolByName(credEnv, "delete_document").handler({ documentId: "d1" }, undefined);
+    expect(calls).toEqual([
+      { method: "GET", url: "http://kb.test/api/documents/d1" },
+      { method: "DELETE", url: "http://kb.test/api/documents/d1" },
+    ]);
+    // 只给 uuid 的回执，用户无法核对删对了没有 —— 标题必须在
+    expect(r.content[0]!.text).toContain("废弃设计");
+    expect(r.content[0]!.text).toContain("2 sub-documents");
+  });
+
+  it("delete_document：单篇（无子文档）时不提子文档", async () => {
+    stubReadDelete(1);
+    const r = await toolByName(credEnv, "delete_document").handler({ documentId: "d1" }, undefined);
+    expect(r.content[0]!.text).not.toContain("sub-document");
+  });
+
+  it("delete_document：读不到文档（404）→ 如实回文本，绝不发 DELETE", async () => {
+    const methods: string[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      methods.push(init.method ?? "");
+      return { status: 404, text: async () => JSON.stringify({ error: "not_found", message: "文档不存在或已被删除" }) } as Response;
+    });
+    const r = await toolByName(credEnv, "delete_document").handler({ documentId: "gone" }, undefined);
+    expect(methods).toEqual(["GET"]);
+    expect(r.content[0]!.text).toContain("404");
   });
 });

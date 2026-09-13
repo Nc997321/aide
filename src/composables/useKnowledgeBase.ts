@@ -298,6 +298,26 @@ export function useKnowledgeBase() {
     }
   }
 
+  /**
+   * 软删一篇文档（服务端连同子文档一起删）。成功 → 刷新侧栏。
+   *
+   * 删掉的正是当前打开的那篇 → 连正文一起清空：留着它，用户会对着一个已经不存在
+   * 的文档继续编辑，直到保存时才收到 404。
+   */
+  async function deleteDocument(id: string): Promise<boolean> {
+    error.value = null;
+    try {
+      await kb.deleteDocument(id);
+    } catch (e) {
+      fail(e, "删除文档失败");
+      return false;
+    }
+    if (activeDoc.value?.id === id) activeDoc.value = null;
+    const spaceId = activeSpaceId.value;
+    if (spaceId) await loadDocuments(spaceId);
+    return true;
+  }
+
   async function search(q: string): Promise<void> {
     query.value = q;
     const trimmed = q.trim();
@@ -355,6 +375,7 @@ export function useKnowledgeBase() {
     createSpace,
     loadDocuments,
     openDocument,
+    deleteDocument,
     search,
     clearSearch,
     panelOpen,

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::AppState;
-use crate::domain::{locking, permission, versioning};
+use crate::domain::{deletion, locking, permission, versioning};
 use crate::error::{AppError, AppResult};
 use crate::types::{CurrentUser, DocumentStatus, Permission, RevisionSummary};
 
@@ -61,6 +61,15 @@ pub struct SaveResult {
     /// 本次保存落进了既有版本（合并窗口内）还是新开了版本。
     /// 前端据此决定要不要提示用户「已合并进上一版本」。
     pub merged: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteResult {
+    pub document_id: Uuid,
+    /// 含根在内的总篇数。前端确认弹窗的预估（按文档列表算子树）与 agent 回执
+    /// 共用这个口径，两处必须说同一个数。
+    pub deleted_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -310,6 +319,27 @@ pub async fn revert(
         revision_id,
         version_no,
         merged: false,
+    }))
+}
+
+/// 软删一篇文档，连同它下面的整棵子树。
+///
+/// 判权用 `Write`，与 update / revert 同档（能改就能删）。**不看编辑锁**：删除是终结
+/// 动作，不是协作——有人正开着编辑器不该拦住删除，他那边下一次保存会拿到 404。
+pub async fn delete(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<DeleteResult>> {
+    let mut tx = state.db.begin().await?;
+    require(&mut tx, user.id, id, Permission::Write).await?;
+
+    let deleted = deletion::soft_delete_subtree(&mut *tx, id).await?;
+    tx.commit().await?;
+
+    Ok(Json(DeleteResult {
+        document_id: id,
+        deleted_count: deleted.len(),
     }))
 }
 

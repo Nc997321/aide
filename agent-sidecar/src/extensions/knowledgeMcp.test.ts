@@ -43,19 +43,26 @@ describe("放行规则是**工具级**的（server 级会连写工具一起放�
   });
 });
 
+/**
+ * 注册谱的序列化形态。SDK server 实例内含 zod v4 schema（内部 root 自引用），
+ * 直接 JSON.stringify 会抛 circular structure —— 用 WeakSet replacer 去环
+ * （codegraphTools.test.ts 先例）。
+ */
+function serializedSpec(): string {
+  const spec = knowledgeMcpRegistration({} as NodeJS.ProcessEnv);
+  const seen = new WeakSet();
+  return JSON.stringify(spec, (_key, value) => {
+    if (typeof value === "object" && value !== null) {
+      if (seen.has(value)) return "[Circular]";
+      seen.add(value);
+    }
+    return value;
+  });
+}
+
 describe("instructions 是 MCP 采纳率的必需品", () => {
   it("工具描述快照 + instructions 关键句（防静默消失）", () => {
-    const spec = knowledgeMcpRegistration({} as NodeJS.ProcessEnv);
-    // SDK server 实例内含 zod v4 schema（内部 root 自引用），直接 JSON.stringify 会抛
-    // circular structure —— 用 WeakSet replacer 去环（codegraphTools.test.ts 先例）。
-    const seen = new WeakSet();
-    const json = JSON.stringify(spec, (_key, value) => {
-      if (typeof value === "object" && value !== null) {
-        if (seen.has(value)) return "[Circular]";
-        seen.add(value);
-      }
-      return value;
-    });
+    const json = serializedSpec();
     expect(json).toMatchSnapshot();
     expect(json).toContain("mcp__aide-knowledge__search");
     // 逐句单行断言而非整串：JSON.stringify 把换行转义成 \n 两个字符，多行
@@ -66,5 +73,15 @@ describe("instructions 是 MCP 采纳率的必需品", () => {
     expect(json).toContain("Cite documents as 知识库《标题》");
     expect(json).toContain("FAILURES COME BACK AS TEXT");
     expect(json).toContain("it lives in a server, not in the workspace");
+  });
+
+  // 删除是这套工具里唯一不可逆的一个（软删 + 面板无恢复入口），护栏句必须逐字在位：
+  // 它一旦被"精简"掉，模型就会在"帮我整理一下"这类模糊指令下自主删文档。
+  it("delete_document 的护栏句在位（唯一不可逆工具）", () => {
+    const json = serializedSpec();
+    expect(json).toContain("delete_document");
+    expect(json).toContain("explicitly asks to delete");
+    expect(json).toContain("never on your own initiative");
+    expect(json).toContain("no restore");
   });
 });

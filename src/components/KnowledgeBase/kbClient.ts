@@ -324,6 +324,11 @@ export const kb = {
   ): Promise<{ documentId: string; revisionId: string; versionNo: number; merged: boolean }> {
     return request("PUT", `/api/documents/${id}`, input);
   },
+  /** 软删：服务端把**子文档一并**置为已删，`deletedCount` 是含根在内的总篇数
+   *  （与 `docTree.subtreeSize` 同口径——确认弹窗的预估和这里的回执必须说同一个数）。 */
+  deleteDocument(id: string): Promise<{ documentId: string; deletedCount: number }> {
+    return request("DELETE", `/api/documents/${id}`);
+  },
 
   // 版本
   revisions(id: string): Promise<

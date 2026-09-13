@@ -3,7 +3,7 @@
 #
 # 一条命令验证后端主链路：bootstrap → invite → join → createSpace →
 # createDocument → lock/heartbeat/release → update（含合并窗口与换作者新版本）→
-# revert → search → logout → 邀请令牌复用拒绝。
+# revert → search → 软删（级联子树 / 检索过滤 / 删后重建同名）→ logout → 邀请令牌复用拒绝。
 #
 # 前置（在 knowledge-server/ 目录下）：
 #   docker compose down -v 2>/dev/null; docker compose up -d --build
@@ -37,16 +37,23 @@ export PYTHONIOENCODING=utf-8 PYTHONUTF8=1
 # ⚠️ 命令替换开子 shell，函数内对全局变量的赋值传不回外层——状态码只能走文件。
 #    调用点固定两步：body="$(api ...)" 之后紧跟 STATUS="$(cat "$CODE_FILE")"。
 #    不用 curl -f：错误响应的 body 也要留着看。
+# ⚠️ 正文走 stdin（--data-binary @-），不走 -d 的参数：Windows 的 git-bash 把**原生程序**
+#    （mingw curl）的 argv 按 ANSI 代码页转码，非 ASCII 正文会变成 GBK 字节，服务端按
+#    UTF-8 解析直接 400 invalid unicode——中文昵称首当其冲。stdin 是字节通道，不经转码。
 CODE_FILE="$(mktemp)"
 api() {
   local method="$1" path="$2" body="${3:-}" token="${4:-}"
   local args=(-sS --max-time 15 -X "$method" -H "Accept: application/json" -w $'\n%{http_code}')
   [ -n "$token" ] && args+=(-H "Authorization: Bearer $token")
   if [ -n "$body" ]; then
-    args+=(-H "Content-Type: application/json" -d "$body")
+    args+=(-H "Content-Type: application/json" --data-binary @-)
   fi
   local out
-  out="$(curl "${args[@]}" "$BASE$path")" || { echo "错误：请求失败（$method $path）" >&2; exit 1; }
+  # 无正文时 printf 只吐空串；curl 没有取数据的参数，不会去读它
+  out="$(printf '%s' "$body" | curl "${args[@]}" "$BASE$path")" || {
+    echo "错误：请求失败（$method $path）" >&2
+    exit 1
+  }
   printf '%s' "${out##*$'\n'}" > "$CODE_FILE"
   printf '%s' "${out%$'\n'*}"
 }
@@ -197,8 +204,9 @@ STATUS="$(cat "$CODE_FILE")"
 expect "$(field "$body" 0.versionNo)" "3" "版本历史最新是 v3"
 
 say "B 检索（jieba 中文分词）"
-body="$(curl -sS --max-time 15 -G "$BASE/api/search" \
-  --data-urlencode "q=凤凰" \
+# 查询值同样走 stdin（q@-）：与 api() 的正文同理，中文不能出现在 argv 上
+body="$(printf '%s' '凤凰' | curl -sS --max-time 15 -G "$BASE/api/search" \
+  --data-urlencode 'q@-' \
   -H "Accept: application/json" -H "Authorization: Bearer $TOKEN_B" \
   -w $'\n%{http_code}')"
 STATUS="${body##*$'\n'}"
@@ -286,6 +294,82 @@ if BEFORE="$(count_storage)" && [ -n "$BEFORE" ]; then
 else
   echo "  (跳过：拿不到容器内的 /app/storage —— 远程 BASE 时正常)"
 fi
+
+say "软删：删父文档连同整棵子树"
+# 刻意造三层（父→子→孙）：只删一层的实现能过「删子」的断言，但过不了递归。
+# 关键词「貔貅」只出现在这一棵树里，供下面的检索断言用。
+body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"title\":\"冒烟父文档\",\"content\":\"父文档。关键词：貔貅。\"}" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "201" "建父文档 → 201"
+DEL_DOC_ID="$(field "$body" documentId)"
+
+body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"parentId\":\"$DEL_DOC_ID\",\"title\":\"冒童子文档\",\"content\":\"子文档。关键词：貔貅。\"}" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "201" "建子文档 → 201"
+CHILD_ID="$(field "$body" documentId)"
+
+body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"parentId\":\"$CHILD_ID\",\"title\":\"冒烟孙文档\",\"content\":\"孙文档。关键词：貔貅。\"}" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "201" "建孙文档 → 201"
+GRAND_ID="$(field "$body" documentId)"
+
+# 先钉一条**正向基线**：只断言「删后检索为空」的话，jieba 万一把这个生僻词切成别的
+# 东西（或 simple 兜底把整句当一个词元），那条负向断言会因为「本来就搜不到」而假绿。
+body="$(printf '%s' '貔貅' | curl -sS --max-time 15 -G "$BASE/api/search" \
+  --data-urlencode 'q@-' \
+  -H "Accept: application/json" -H "Authorization: Bearer $TOKEN_B" \
+  -w $'\n%{http_code}')"
+STATUS="${body##*$'\n'}"
+body="${body%$'\n'*}"
+expect "$STATUS" "200" "删除前检索 → 200"
+case "$body" in
+  *"$DEL_DOC_ID"*) echo "  ✓ 删除前检索得到父文档（下面的负向断言才有意义）" ;;
+  *) echo "  ✗ 删除前就检索不到 —— 负向断言会假绿" >&2; exit 1 ;;
+esac
+
+# 删之前先让别人把锁拿在手上：验证「删除不被编辑锁挡住」。
+# ⚠️ 顺手清锁行这件事在 API 上观察不到（没有读锁的端点），这段断言只钉住「删得掉」；
+#    锁行确实消失要另用 SQL 核对，别指望这里。
+body="$(api POST "/api/documents/$DEL_DOC_ID/lock" "" "$TOKEN_E")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "200" "E 取父文档的编辑锁"
+
+body="$(api DELETE "/api/documents/$DEL_DOC_ID" "" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "200" "DELETE /api/documents/{id} → 200"
+expect "$(field "$body" deletedCount)" "3" "deletedCount = 3（父+子+孙）"
+
+body="$(api GET "/api/spaces/$SPACE_ID/documents" "" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "200" "删除后列空间文档 → 200"
+case "$body" in
+  *"$DEL_DOC_ID"*|*"$CHILD_ID"*|*"$GRAND_ID"*)
+    echo "  ✗ 已删文档仍在空间列表里（级联没走全）" >&2; exit 1 ;;
+  *) echo "  ✓ 父/子/孙三篇都已从空间列表消失" ;;
+esac
+
+body="$(api GET "/api/documents/$DEL_DOC_ID" "" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "404" "直接读已删父文档 → 404"
+
+body="$(api GET "/api/documents/$GRAND_ID" "" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "404" "直接读已删孙文档 → 404"
+
+# 检索是另一条读路径，README 声称「全部读路径都已过滤 deleted_at」——在这兑现
+body="$(printf '%s' '貔貅' | curl -sS --max-time 15 -G "$BASE/api/search" \
+  --data-urlencode 'q@-' \
+  -H "Accept: application/json" -H "Authorization: Bearer $TOKEN_B" \
+  -w $'\n%{http_code}')"
+STATUS="${body##*$'\n'}"
+body="${body%$'\n'*}"
+expect "$STATUS" "200" "删除后检索 → 200"
+expect "$(field "$body" hits)" "[]" "已删文档检索不到"
+
+# slug 是部分唯一索引（WHERE deleted_at IS NULL），删后重建同名必须放行
+body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"title\":\"冒烟父文档\",\"content\":\"重建。\"}" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "201" "删后重建同名文档 → 201（slug 部分唯一索引生效）"
 
 say "登出"
 body="$(api POST /api/auth/logout "" "$TOKEN_E")"

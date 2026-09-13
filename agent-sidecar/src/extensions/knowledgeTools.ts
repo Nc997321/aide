@@ -1,4 +1,4 @@
-// aide-knowledge 的工具定义（P1 = 4 个读工具，P2 = 4 个写工具）。
+// aide-knowledge 的工具定义（P1 = 4 个读工具，P2 = 4 个写工具，软删 = delete_document）。
 //
 // 读写两条壳：kbCall 服务「一次请求」的读工具，kbWrite 服务「先读后写」的写工具
 // （多步操作在 knowledge/operations.ts）。写工具**不在** allowedTools 白名单里，
@@ -36,6 +36,7 @@ import {
 import {
   appendToDocument,
   createDocument,
+  deleteDocument,
   ingestFile,
   resolveWriteTarget,
   updateDocument,
@@ -236,6 +237,15 @@ function buildIngestFileTool(env: NodeJS.ProcessEnv, cwd: string) {
   );
 }
 
+function buildDeleteDocumentTool(env: NodeJS.ProcessEnv) {
+  return tool(
+    "delete_document",
+    "Delete a knowledge base document together with every sub-document under it. This is a soft delete: it disappears from every list, search and read path, and the 知识库 panel has NO restore — use it only when the user explicitly names a document to delete, never to tidy up on your own.",
+    { documentId: z.string().describe("Document id (uuid) from search or list_documents") },
+    (args) => kbWrite(env, (client) => deleteDocument(client, { documentId: args.documentId })),
+  );
+}
+
 /** 工具总装：本文件唯一的编排点（一张表，不加逻辑）。cwd 只服务 ingest_file 的相对路径。 */
 export function buildKnowledgeTools(env: NodeJS.ProcessEnv, cwd: string) {
   return [
@@ -247,5 +257,6 @@ export function buildKnowledgeTools(env: NodeJS.ProcessEnv, cwd: string) {
     buildAppendDocumentTool(env),
     buildUpdateDocumentTool(env),
     buildIngestFileTool(env, cwd),
+    buildDeleteDocumentTool(env),
   ];
 }
