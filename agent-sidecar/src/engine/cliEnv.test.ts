@@ -36,6 +36,21 @@ describe("buildCliEnv", () => {
     expect(env2.CLAUDE_CONFIG_DIR).toBe("/from-override");
   });
 
+  it("AIDE_KB_CONFIG_FILE 不进 CLI 子进程（Bash 工具继承 env 即得凭据路径）", () => {
+    const env = buildCliEnv({
+      processEnv: { AIDE_KB_CONFIG_FILE: "/x/knowledge.json", PATH: "/bin" } as NodeJS.ProcessEnv,
+      envOverrides: {},
+    });
+    expect(env.AIDE_KB_CONFIG_FILE).toBeUndefined();
+    expect(env.PATH).toBe("/bin"); // 其余透传不受影响
+    // 覆盖链最后一环也堵死：envOverrides 想塞也塞不进
+    const env2 = buildCliEnv({
+      processEnv: {} as NodeJS.ProcessEnv,
+      envOverrides: { AIDE_KB_CONFIG_FILE: "/y/knowledge.json" },
+    });
+    expect(env2.AIDE_KB_CONFIG_FILE).toBeUndefined();
+  });
+
   it("固定注入：TODO_TOOLS=1；SUBAGENT_MODEL 键恒在", () => {
     const env = buildCliEnv({ processEnv: {} as NodeJS.ProcessEnv, envOverrides: {} });
     expect(env.CLAUDE_CODE_ENABLE_TODO_TOOLS).toBe("1");

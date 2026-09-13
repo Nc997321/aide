@@ -55,10 +55,13 @@ async function kbCall<T>(
   try {
     const r = await run(createKbClient(cfg));
     return textResult(r.ok ? onOk(r.data) : formatFailure(r.failure));
-  } catch {
+  } catch (e) {
     // 2xx 但形状不对（格式化器解引用畸形数据）、或任何未归一的异常：一律降级成
     // 文本，绝不穿出 handler（MCP 会把抛出的 handler 变成 isError = 本模块的红线）。
-    return textResult(formatFailure({ kind: "bad_response", detail: "unexpected response shape" }));
+    // 带上原始信息：否则「服务端返回畸形数据」与「我们自己有笔误」给出同一句话，
+    // 零可观测性（改前这类错误会以 rejection 冒出来）。
+    const detail = e instanceof Error ? e.message : String(e);
+    return textResult(formatFailure({ kind: "bad_response", detail: `unexpected response shape: ${detail}` }));
   }
 }
 

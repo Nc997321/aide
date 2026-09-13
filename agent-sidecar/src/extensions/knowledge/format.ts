@@ -48,7 +48,7 @@ export function formatFailure(f: KbFailure): string {
 }
 
 export function formatSearchHits(data: KbSearchResult): string {
-  const hits = data.hits ?? [];
+  const hits = data.hits;
   if (hits.length === 0) {
     return `No match for "${data.query}" in the knowledge base. Try different keywords, or ask the user which document they mean.`;
   }
@@ -60,7 +60,7 @@ export function formatSearchHits(data: KbSearchResult): string {
 }
 
 export function formatDocument(doc: KbDocument): string {
-  const body = doc.content ?? "";
+  const body = doc.content;
   const truncated = body.length > KB_READ_MAX_CHARS;
   const shown = truncated ? body.slice(0, KB_READ_MAX_CHARS) : body;
   const head = `# ${doc.title}\ndocumentId ${doc.id}, space ${doc.spaceId}, version ${doc.versionNo}, status ${doc.status}`;
