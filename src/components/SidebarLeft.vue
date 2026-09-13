@@ -478,6 +478,9 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
          同区滚动，底部不再另起一条导航带。 -->
     <SidebarNavGroup @new-session="newSession" />
 
+    <!-- 导航区 ↔ 分区树 的分界（见 .nav-sep 注释） -->
+    <div class="nav-sep" aria-hidden="true" />
+
     <!-- Workspace + Session list（「会话」降级为分区树的根分区之一，与自动化平级；
          session-style-* 挂会话列表样式皮肤（card/row，设置「主题样式」tab 切换）） -->
     <div class="session-list" :class="`session-style-${settings.sessionListStyle ?? 'card'}`">
@@ -678,6 +681,28 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   flex: 1;
   overflow-y: auto;
   padding: 4px 0 8px;
+}
+
+/* ── 导航区 ↔ 分区树 分界线（2026-09-13）──
+   顶部导航组（功能入口：新增会话/插件/观测台/知识库）与分区树（会话/自动化）是
+   两种东西，但两侧左内边距同为 22px、字号字重同为 13.5px/600，中间只有空档没有
+   界线，整栏读起来像一条连续列表。1px 渐隐线：中段实、两端化开，不产生硬端点
+   （与满栏的卡片/圆角语言一致）。
+   颜色取 borderStrong 而非 border——border 是贴着面板背景的贴边档（深色主题
+   白 10%），做分割线在 glass 下几乎不可见，等于没加。
+   上下留白分居两侧容器：上 = 导航组 padding-bottom 8 + margin-top 10，
+   下 = margin-bottom 8 + 会话区 padding-top 4 + 分区头 margin-top 6（各 18px）。 */
+.nav-sep {
+  flex-shrink: 0;
+  height: 1px;
+  margin: 10px 6px 8px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--aide-border-strong) 18%,
+    var(--aide-border-strong) 82%,
+    transparent
+  );
 }
 
 /* ── 品牌区（WorkBuddy 式，固定不滚动）── */

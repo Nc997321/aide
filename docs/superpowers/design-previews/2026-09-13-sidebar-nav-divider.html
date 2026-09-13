@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>侧栏 导航区/分区树 分割线 —— 2026-09-13</title>
+<style>
+  /* ── 主题 token（照抄 src/themes/*.ts，与 applyTheme 写进 :root 的值一致）── */
+  .t-light {
+    --bg-deep: rgba(250,250,252,.55);
+    --bg-raised: rgba(255,255,255,.62);
+    --surface-default: rgba(255,255,255,.48);
+    --accent: #CFA6A0;
+    --accent-subtle: rgba(207,166,160,.18);
+    --text-primary: #23262d;
+    --text-secondary: #5c6470;
+    --text-muted: #7b8492;
+    --border: rgba(124,137,154,.18);
+    --border-subtle: rgba(124,137,154,.10);
+    --border-strong: rgba(207,166,160,.42);
+    --highlight-inset: inset 0 1px 0 rgba(255,255,255,.9);
+    --shadow-sm: 0 2px 8px rgba(87,101,120,.08);
+    --radius-sm: 8px; --radius-md: 12px; --radius-lg: 18px;
+    --ease-t: .16s cubic-bezier(.2,.8,.2,1);
+    --blur: blur(26px) saturate(135%);
+    --scene: radial-gradient(circle at 8% 0%, rgba(255,255,255,.96) 0 17%, transparent 42%),
+             radial-gradient(circle at 100% 0%, rgba(225,196,192,.28) 0 15%, transparent 38%),
+             radial-gradient(circle at 72% 100%, rgba(207,166,160,.18) 0 18%, transparent 42%),
+             linear-gradient(135deg, #faf9fa 0%, #f2eff1 46%, #f8f3f2 100%);
+    color-scheme: light;
+  }
+  .t-dark {
+    --bg-deep: rgba(8,10,16,.82);
+    --bg-raised: rgba(24,26,38,.48);
+    --surface-default: rgba(255,255,255,.06);
+    --accent: #a5b8ff;
+    --accent-subtle: rgba(150,170,255,.16);
+    --text-primary: #eef0f8;
+    --text-secondary: #b9bdd0;
+    --text-muted: #7c8296;
+    --border: rgba(255,255,255,.1);
+    --border-subtle: rgba(255,255,255,.06);
+    --border-strong: rgba(255,255,255,.17);
+    --highlight-inset: inset 0 1px 0 rgba(255,255,255,.12);
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.3);
+    --radius-sm: 8px; --radius-md: 10px; --radius-lg: 14px;
+    --ease-t: .16s cubic-bezier(.2,.8,.2,1);
+    --blur: blur(20px) saturate(150%);
+    --scene: radial-gradient(560px 380px at 10% -8%, rgba(124,108,255,.32), transparent 65%),
+             radial-gradient(520px 420px at 96% 6%, rgba(64,190,220,.22), transparent 65%),
+             radial-gradient(640px 340px at 60% 112%, rgba(210,110,190,.16), transparent 70%),
+             #0a0b11;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 22px 24px 30px;
+    background: #14161c;
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  .page-title { color: #e8eaf2; font-size: 15px; font-weight: 700; margin: 0 0 4px; }
+  .page-sub { color: #8b93a6; font-size: 12.5px; margin: 0 0 18px; line-height: 1.6; }
+  .page-sub code { font-family: Consolas, monospace; font-size: 11.5px; color: #b6bfd6; }
+
+  .rows { display: flex; flex-direction: column; gap: 22px; }
+  .row-label {
+    color: #9aa3b8; font-size: 11.5px; font-weight: 700; letter-spacing: .4px;
+    text-transform: uppercase; margin: 0 0 8px;
+  }
+  .grid { display: flex; gap: 14px; }
+  .cell { display: flex; flex-direction: column; gap: 6px; }
+  .cap { font-size: 11.5px; color: #cfd5e4; font-weight: 600; padding-left: 2px; }
+  .cap b { color: #7f8798; font-weight: 600; }
+  .cap.on { color: #9fd8b4; }
+
+  /* ── 舞台（ambientScene）+ 侧栏面板 ── */
+  .stage {
+    width: 280px; height: 430px; background: var(--scene);
+    border-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,.08);
+  }
+  .sb {
+    height: 100%; display: flex; flex-direction: column; overflow: hidden;
+    background-color: var(--bg-deep);
+    backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+    color: var(--text-secondary);
+  }
+
+  /* ── 品牌区（照抄 .brand）── */
+  .brand { display: flex; align-items: center; gap: 11px; padding: 16px 16px 12px; flex-shrink: 0; }
+  .logo { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, #6f7dff, #b58bd8); flex-shrink: 0; }
+  .brand-name { font-size: 15px; font-weight: 700; letter-spacing: .2px; color: var(--text-primary); }
+  .brand-ver { font-size: 10.5px; color: var(--text-muted); margin-top: 2px; }
+
+  /* ── 导航组（照抄 .nav-group / .nav-row）── */
+  .nav-group { flex-shrink: 0; display: flex; flex-direction: column; gap: 1px; padding: 6px 10px 8px; }
+  .nav-row {
+    display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 12px;
+    border-radius: var(--radius-md); cursor: pointer; font-size: 13.5px; font-weight: 600;
+    color: var(--text-secondary); transition: all var(--ease-t); user-select: none;
+  }
+  .nav-row:hover { color: var(--text-primary); background: var(--surface-default); }
+  .nav-row.on { color: var(--accent); background: var(--accent-subtle); }
+  .nav-icon { width: 15px; height: 15px; flex-shrink: 0; color: var(--text-muted); }
+  .nav-row.on .nav-icon { color: inherit; }
+  .nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nav-count {
+    flex-shrink: 0; min-width: 18px; text-align: center; padding: 1px 6px; font-size: 10px; font-weight: 600;
+    color: var(--text-muted); background: var(--surface-default); border-radius: 8px;
+  }
+
+  /* ── 会话区（照抄 .session-list / .sec-head / .sec-subtree / 行）── */
+  .session-list { flex: 1; overflow: hidden; padding: 4px 0 8px; }
+  .sec-head {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+    margin: 6px 10px 2px; cursor: pointer; font-size: 13.5px; font-weight: 600;
+    color: var(--text-secondary); border: 1px solid transparent; border-radius: var(--radius-lg);
+    transition: all var(--ease-t); user-select: none;
+  }
+  .sec-head:hover { background: var(--surface-default); color: var(--text-primary); }
+  .chevron { flex-shrink: 0; color: var(--text-muted); }
+  .chevron.expanded { transform: rotate(90deg); color: var(--accent); }
+  .sec-ico { display: grid; place-items: center; width: 17px; height: 17px; flex-shrink: 0; color: var(--text-muted); }
+  .sec-ico svg { width: 17px; height: 17px; }
+  .sec-count {
+    margin-left: auto; min-width: 26px; text-align: center; padding: 2px 8px; font-size: 10.5px; font-weight: 600;
+    color: var(--text-muted); background: var(--surface-default); border-radius: 9px;
+  }
+  .sec-subtree { margin-left: 28px; border-left: 1px solid var(--border-subtle); }
+  .workspace-item {
+    display: flex; align-items: center; gap: 9px; padding: 9px 12px; margin: 4px 8px 0 7px;
+    font-size: 13px; font-weight: 600; color: var(--text-secondary); letter-spacing: .2px;
+  }
+  .ws-chevron { flex-shrink: 0; color: var(--text-muted); transform: rotate(90deg); }
+  .ws-icon { width: 14px; height: 14px; flex-shrink: 0; color: var(--text-muted); }
+  .ws-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ws-count {
+    min-width: 26px; text-align: center; padding: 2px 7px; font-size: 10px; font-weight: 600;
+    color: var(--text-muted); background: var(--surface-default); border-radius: 8px;
+  }
+  .session-row {
+    display: flex; align-items: center; margin: 3px 8px 0 7px; padding: 12px 14px;
+    background: var(--bg-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
+    box-shadow: var(--highlight-inset), var(--shadow-sm);
+  }
+  .session-row.on {
+    border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+    background: linear-gradient(135deg, var(--accent-subtle) 0%, transparent 60%), var(--bg-raised);
+  }
+  .session-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; color: var(--text-primary); }
+  .session-time { font-size: 10.5px; color: var(--text-muted); }
+
+  /* ── 分割线四案（上下留白统一 10px / 8px，唯一变量 = 线本身）──
+     A 内缩 · --aide-border     （与侧栏外沿同档；深色主题下白 10% 几乎不可见）
+     B 全宽 · --aide-border     （同上，改为贯穿整个侧栏宽度）
+     C 渐隐 · --aide-borderStrong（浅色主题该 token 是烟粉，会被误读成激活态）
+     D 内缩 · 文字阶派生          （color-mix(text-muted 38%)，明暗主题都稳、中性无色偏） */
+  .sep { flex-shrink: 0; height: 1px; margin: 10px 14px 8px; }
+  .sepA { background: var(--border); }
+  .sepB { margin: 10px 0 8px; background: var(--border); }
+  .sepC { margin-left: 6px; margin-right: 6px; background: linear-gradient(90deg, transparent, var(--border-strong) 18%, var(--border-strong) 82%, transparent); }
+  .sepD { background: color-mix(in srgb, var(--text-muted) 38%, transparent); }
+</style>
+</head>
+<body>
+  <h1 class="page-title">侧栏「导航区 ↔ 分区树」分割线</h1>
+<p class="page-sub" style="color:#9fd8b4;font-weight:600">
+  ✅ 定案：<b>C · 渐隐线</b>（2026-09-13 用户选定）→ 已落地 <code>src/components/SidebarLeft.vue</code> 的
+  <code>.nav-sep</code>。落地后真实组件截图见同目录 <code>-light.png</code> / <code>-dark.png</code>。
+</p>
+  <p class="page-sub">
+    现状：<code>.nav-group</code> 与 <code>.sec-head</code> 左内边距同为 22px、字号字重同为 13.5px/600，中间只有空档没有界线，读起来像一条连续列表。<br>
+    四案线宽一致（1px）、上下留白一致（<code>10px / 线 / 8px</code>，加上容器原有 padding 合计 18px 对称空档），唯一变量是<b>线本身取哪个颜色</b>。
+  </p>
+
+  <div class="rows">
+    <!-- 浅色主题 -->
+    <div>
+      <p class="row-label">浅色 · smoky-pink-glass</p>
+      <div class="grid" id="grid-light"></div>
+    </div>
+    <!-- 深色主题 -->
+    <div>
+      <p class="row-label">深色 · glass</p>
+      <div class="grid" id="grid-dark"></div>
+    </div>
+  </div>
+
+  <script>
+    const ICON = {
+      newSession: '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v8"/><path d="M8 12h8"/><path d="M21 15C21 15.53 20.79 16.04 20.41 16.41C20.04 16.79 19.53 17 19 17H7L3 21V5C3 4.47 3.21 3.96 3.59 3.59C3.96 3.21 4.47 3 5 3H19C19.53 3 20.04 3.21 20.41 3.59C20.79 3.96 21 4.47 21 5V15Z"/></svg>',
+      plugin: '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8L12 3L3 8V16L12 21L21 16V8Z"/><path d="M3 8L12 13L21 8M12 13V21"/></svg>',
+      brain: '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 0-1.41 2.775"/><path d="M9 13a4.5 4.5 0 0 1-1.41 2.775"/></svg>',
+      book: '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
+      chat: '<svg viewBox="0 0 24 24" fill="none"><path d="M21 15C21 15.53 20.79 16.04 20.41 16.41C20.04 16.79 19.53 17 19 17H7L3 21V5C3 4.47 3.21 3.96 3.59 3.59C3.96 3.21 4.47 3 5 3H19C19.53 3 20.04 3.21 20.41 3.59C20.79 3.96 21 4.47 21 5V15Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13.5" r="7.5"/><path d="M7 8L4.4 5.4"/><path d="M17 8L19.6 5.4"/><path d="M7.6 19.5L5.8 21.4"/><path d="M16.4 19.5L18.2 21.4"/><path d="M12 9.8V13.5l2.6 1.7"/></svg>',
+      chevron: '<svg class="chevron expanded" width="13" height="13" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      wsChevron: '<svg class="ws-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      stack: '<svg class="ws-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3L21.5 7.8L12 12.6L2.5 7.8L12 3Z"/><path d="M2.5 12.3L12 17.1L21.5 12.3"/></svg>',
+    };
+
+    const VARIANTS = [
+      { key: 'now', cap: '现状 · 无分割线',        cls: 'now' },
+      { key: 'A',   cap: 'A · 内缩 · border',      cls: 'A' },
+      { key: 'B',   cap: 'B · 全宽 · border',      cls: 'B' },
+      { key: 'C',   cap: 'C · 渐隐 · borderStrong', cls: 'C' },
+      { key: 'D',   cap: 'D · 内缩 · 文字阶派生',   cls: 'D' },
+    ];
+
+    function sidebar(v) {
+      const sep = v.cls === 'now'
+        ? ''
+        : `<div class="sep sep${v.cls}"></div>`;
+      // 留白全部沿用现状容器（nav 下 8 / 会话区上 4 / 分区头上 6），唯一变量 = 中间那根线
+      return `
+      <div class="sb">
+        <div class="brand">
+          <div class="logo"></div>
+          <div><div class="brand-name">Aide</div><div class="brand-ver">v0.8.0</div></div>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-row">${ICON.newSession}<span class="nav-label">新增会话</span></div>
+          <div class="nav-row on">${ICON.plugin}<span class="nav-label">插件</span><span class="nav-count">7</span></div>
+          <div class="nav-row">${ICON.brain}<span class="nav-label">记忆观测台</span></div>
+          <div class="nav-row">${ICON.book}<span class="nav-label">知识库</span></div>
+        </div>
+        ${sep}
+
+        <div class="session-list">
+          <div class="sec-head">
+            ${ICON.chevron}
+            <span class="sec-ico">${ICON.chat}</span>
+            <span>会话</span>
+            <span class="sec-count">168</span>
+          </div>
+          <div class="sec-subtree">
+            <div class="workspace-item">
+              ${ICON.wsChevron}${ICON.stack}
+              <span class="ws-name">aide</span><span class="ws-count">24</span>
+            </div>
+            <div class="session-row on">
+              <span class="session-name">会话行标题示例</span>
+              <span class="session-time">1小时前</span>
+            </div>
+            <div class="session-row">
+              <span class="session-name">流式契约收口</span>
+              <span class="session-time">3小时前</span>
+            </div>
+          </div>
+          <div class="sec-head" style="margin-top:2px">
+            ${ICON.chevron}
+            <span class="sec-ico">${ICON.clock}</span>
+            <span>自动化</span>
+            <span class="sec-count">1</span>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    for (const theme of ['light', 'dark']) {
+      const grid = document.getElementById('grid-' + theme);
+      grid.innerHTML = VARIANTS.map((v) => `
+        <div class="cell">
+          <div class="cap ${v.cls === 'now' ? '' : 'on'}">${v.cap}</div>
+          <div class="stage t-${theme}">${sidebar(v)}</div>
+        </div>`).join('');
+    }
+  </script>
+</body>
+</html>
