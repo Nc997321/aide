@@ -56,6 +56,8 @@
 
 **为什么写工具要「先 GET 再 PUT」**：知识库的 PUT 只接受 `{title, content, changeNote}`，**没有 versionNo 参数**——并发保护只有 300s 同作者合并窗口（`knowledge-server/src/domain/versioning.rs:27-123`）与文档行锁。追加必须在工具内部先读后拼，否则并发下静默覆盖。
 
+**读回来的正文必须是串**：形态漂移（服务端换版本 / 中间代理）时若照 `?? ""` 拼，写回的就只剩新段落 = 静默删掉别人的正文。P2 落地为**显式守卫**：非串 → 返回失败文本、**不写**（与 P1 删掉 `?? ""` 防御臂同一条理由，附录 B 记过）。
+
 **空间不猜**（写工具共用的解析规则）：`spaceId` 可省略 → 可见空间**唯一**则用它；**多个** → 返回文本列出候选空间，让模型回头问用户。绝不默认往第一个空间写——那是共享资源。
 
 **常量**（实现轮可调，先给值）：
@@ -63,7 +65,7 @@
 | 常量 | 值 | 用途 |
 |---|---|---|
 | `KB_CONTENT_MAX_BYTES` | 256 KiB | **单次调用传入的 `content` 参数**上限（append 只算新增段落），超限返回引导文本 |
-| `KB_DOC_MAX_BYTES` | 1 MiB | append / update **写回后的整篇正文**上限；超限返回引导文本，建议改用 import 本地文件 |
+| `KB_DOC_MAX_BYTES` | 1 MiB | **写回后的整篇正文**上限。P2 落地只挂在 append：replace 的正文就是整篇，已被单次闸 256 KiB 蕴含（真加进去是一条走不到的分支，实现轮取严删去）——这道闸真正拦的是 append 的**累积** |
 | `KB_READ_MAX_CHARS` | 100 000 | `read_document` 输出上限 |
 | `KB_INGEST_MAX_BYTES` | 32 MiB | 导入文件上限 |
 | `KB_HTTP_TIMEOUT_MS` | 15 000 | 读 / 写请求超时 |
@@ -225,6 +227,8 @@ export const KNOWLEDGE_READ_RULES = [
 4. **代理**：sidecar 的 fetch 不自动走 HTTP_PROXY。知识库在 LAN/localhost 时无影响；远端部署 + 企业代理的组合留给后续（前端 kbClient 同样是裸 fetch，两边行为一致）。
 5. **无乐观锁**：知识库 PUT 没有 versionNo，并发写入靠 300s 合并窗口兜底。追加工具内先读后拼已是最优，但仍非严格 CAS。
 6. **多端**：remote-pwa / 鸿蒙驱动同一个桌面 sidecar，工具自动可用，无需改动；headless 无凭据文件 → 恒挂 + 引导文本。网关将来要打通得**两步**，少一步仍读不到：① 把凭据写进凭据文件（名称随档位，见 §6.1）；② 自己设 `AIDE_KB_CONFIG_FILE` 指向该文件——headless **不经过** `spawn_runtime`，而这个 env 只在 `spawn_runtime` 里注入（`runtime/mod.rs`），只写文件的话 `readKbConfig` 拿不到路径，工具照旧回「未连接」。兜底备选：让 `config.ts` 在没有 env 时回落默认路径（凭据文件，名称随档位，见 §6.1，headless 运维自己选名字即可）。
+7. **写工具弹窗的长度边界**（P2 兑现 §7 那条代价）：弹窗展示的是**模型传进来的参数**——`create_document` / `update_document` 会把 ≤256 KiB 的正文整个铺开；`append_document` 只显示新增段落（整篇正文是工具内部 GET 回来拼的，不进弹窗）；`ingest_file` 只有路径。即长度由「模型给的正文」决定，不由「最终写回的正文」决定。
+8. **投影响不到非桌面端**：写工具的多跳 GET→PUT 全在 sidecar 内部完成，remote-pwa / 鸿蒙走的仍是同一条 `send` 通道；权限弹窗由桌面端 `canUseTool` 出（§7），远端 UI 不在本期内。
 
 ## 10. 实施分期（供 writing-plans 参考）
 
@@ -252,7 +256,7 @@ P1 落地后知识库才能真正被 agent 用起来；P2 是先有读的闭环�
 
 错误体统一 `{error: <code>, message: <中文>}`；DTO 一律 camelCase。
 
-## 附录 B：分支覆盖对账表（P1 实现轮实测）
+## 附录 B：分支覆盖对账表（P1 实现轮实测；P2 段见文末）
 
 图例：✅ = 有用例触达该臂（执行到但未专门断言的标「未断言」）；⬜ = 可达但无用例；⛔ = 不可达（附理由）。
 测试名列写实存用例名 `文件 > describe > it`；`it.each` 的行按 vitest 渲染值书写（`{ kind: 'unauthorized' } 的文案含关键指引与下一步`）。
@@ -377,3 +381,85 @@ P1 落地后知识库才能真正被 agent 用起来；P2 是先有读的闭环�
 | | 带值路径：三道门全通 → `{"aide-knowledge": server}` | ✅ | knowledgeMcp.test.ts > knowledgeMcpRegistration — 门控矩阵 > 默认注册（缺省 trusted=true、无 taskTools）；knowledgeMcp.test.ts > instructions 是 MCP 采纳率的必需品 > 工具描述快照 + instructions 关键句（防静默消失） |
 | | 装配落位（三处少汇一处即静默失效）| ✅ | session-worker.test.ts > SessionWorker — codegraph MCP registration > lightweight btw keeps full mcpServers / skills / plugins (cache prefix parity) |
 | | `KNOWLEDGE_READ_RULES` 工具级、逐字（非 server 级、无写工具）| ✅ | knowledgeMcp.test.ts > 放行规则是**工具级**的（server 级会连写工具一起放行）> 四条常量逐字固定 / 没有任何一条等于 server 前缀（防漂移成 mcp__aide-knowledge）；session-worker.test.ts > SessionWorker — knowledge MCP 放行规则（工具级）> knowledge 写工具不在 allowedTools（写必弹窗） |
+
+---
+
+## 附录 B（续）：P2 写通路实现轮对账表
+
+图例同上。**P2 四个文件为实测 100% 分支覆盖**（`vitest --coverage --provider=v8`，
+2026-09-13 跑，非静态对账）：`knowledgeTools.ts` 22/22、`knowledge/format.ts` 29/29、
+`knowledge/operations.ts` 40/40、`knowledge/space.ts` 8/8；该轮 focused 7 files / 121 passed，
+全量 agent-sidecar 62 files / 911 passed、仓库根 202 files / 2479 passed。
+
+### knowledge/space.ts（新增，纯函数）
+
+| 分支 | 覆盖 | 测试名 |
+|---|---|---|
+| `requested` 真值（非空串）→ 直接用 | ✅ | space.test.ts > decideSpace > 显式传了 spaceId → 直接用（不校验存在性，服务端会 403/404） |
+| `requested` 假值（undefined / 空串）→ 进可见性判定 | ✅ | 同 describe > 省略 + 恰好一个可见空间 → 用它；同 describe > 空串 spaceId 视同省略（模型可能传 ""） |
+| 可见空间**唯一** → 自动选 | ✅ | 同 describe > 省略 + 恰好一个可见空间 → 用它 |
+| 零个 → 「去查成员资格」文本 | ✅ | 同 describe > 省略 + 零个可见空间 → 让模型去查成员资格（不是「随便挑一个」） |
+| 多个 → 列候选 + 「Ask the user」（含 `name`/`id` 插值） | ✅ | 同 describe > 省略 + 多个可见空间 → 列出候选并让模型问用户，绝不自动挑 |
+
+### knowledge/format.ts（P2 增补）
+
+| 分支 | 覆盖 | 测试名 |
+|---|---|---|
+| `humanBytes` 的 `>= 1 MiB` 真臂（MiB 档） | ✅ | format.test.ts > 写侧文案与尺寸常量 > formatTooLarge 在 MiB 档不显示成 1024 KiB |
+| `humanBytes` 的 KiB 档 | ✅ | 同 describe > formatTooLarge 说清超了什么、上限多少、下一步怎么办 |
+| `formatSavedDocument` 的 `merged` 真 / 假臂 | ✅ | 同 describe > formatSavedDocument 带动词、documentId 与版本号；合并窗口单独提示（一条用例压两臂） |
+| `formatIngestResult` 的 `warnings?.length` 真臂 | ✅ | 同 describe > formatIngestResult 带标题/documentId/parser；有 warnings 时如实列出 |
+| 同上的假臂与 `?.` 短路（warnings 缺失） | ✅ | 同上（`base` 那半条，未给 warnings） |
+| 三个尺寸常量的值 | ✅ | 同 describe > 尺寸常量就是设计定的三个数（不是拍脑袋的近似值） |
+| `formatDocumentList` 的 `parentId` 真值臂（P1 遗留 ⬜，本期补） | ✅ | format.test.ts > formatSpaces / formatDocumentList > 子文档带 parentId 时追加 (under …)（列表里能看出层级） |
+
+### knowledge/operations.ts（新增）
+
+| 函数 | 分支 | 覆盖 | 测试名 |
+|---|---|---|---|
+| `withinLimit` | ≤ 上限 / > 上限 | ✅ | 见下各 operation 的超限与正常用例（create 256 KiB / update 256 KiB / append 1 MiB 三条超限 + 全部成功路径） |
+| `resolveWriteTarget` | `requested` 真值 → 不拉列表 | ✅ | operations.test.ts > resolveWriteTarget > 传了 spaceId → 不再拉空间列表（少一次请求） |
+| | 省略 + 拉到列表 → 交给 `decideSpace` | ✅ | 同 describe > 省略 → 拉 /api/spaces 交给决策：唯一空间自动选 |
+| | 省略 + 拉列表失败 → 文本（不抛） | ✅ | 同 describe > 省略 + 拉列表失败 → 失败文本（不是异常） |
+| `createDocument` | 超单次闸 → 早退，不发请求 | ✅ | createDocument > content 超 256 KiB → 拒绝且不发请求 |
+| | `parentId` 真 / 假臂 | ✅ | 同 describe > 有 parentId 才带 parentId（不塞 null 字段）；POST 用例（不带 parentId） |
+| | `saved.ok` 真臂 | ✅ | 同 describe > POST /api/documents…成功回执带 documentId |
+| | `saved.ok` 假臂 | ✅ | 同 describe > 服务端 403 → 权限引导文本 |
+| `updateDocument` | 超单次闸 → 早退（GET 都不发） | ✅ | updateDocument > 新正文超 256 KiB → 拒绝，GET 都不发（尺寸闸在读之前） |
+| | 读失败 → 文本，不写 | ✅ | 同 describe > 读失败（404）→ 直接返回失败文本，不尝试写 |
+| | `args.title ?? cur.title` 真 / 假臂 | ✅ | 同 describe > 显式 title 覆盖当前标题；先 GET 再 PUT…title 沿用当前版本 |
+| | `changeNote` 真 / 假臂 | ✅ | knowledgeTools.test.ts > 写工具 > update_document：先 GET 再 PUT，title/changeNote 给了就带上；同 describe > 省略 title/changeNote → 沿用当前标题、不带 changeNote |
+| | `saved.ok` 真 / 假臂 | ✅ | 同 describe > 先 GET 再用新正文 PUT…；同 describe > 409（他人持锁）→ 带服务端 message 的重试引导 |
+| `appendToDocument` | 读失败 → 文本，不 PUT | ✅ | appendToDocument > 读失败（404）→ 直接返回失败文本，不发 PUT |
+| | 读回的正文非串（形态漂移守卫）→ 不写 | ✅ | 同 describe > 读回的正文不是串（形态漂移）→ 拒绝写回，不发 PUT |
+| | 超整篇闸 → 拒绝，不 PUT | ✅ | 同 describe > 追加后整篇超 1 MiB → 拒绝且不发 PUT（单次上限挡不住累积） |
+| | `changeNote` 真 / 假臂 | ✅ | 同 describe > changeNote 有才带（写进版本历史）；PUT body 必须含旧正文（不带） |
+| | `saved.ok` 真 / 假臂 | ✅ | 同 describe > PUT body 必须含旧正文…；同 describe > 写回被拒（403）→ 透出权限引导，绝不谎报成功 |
+| `ingestFile` | `isAbsolute` 真 / 假臂 | ✅ | ingestFile > 绝对路径直接用；同 describe > 相对路径按会话 cwd 解析，multipart 文件名取 basename |
+| | `statSync` 抛 → 「File not found」 | ✅ | 同 describe > 文件不存在 → 说明相对路径规则，不发请求 |
+| | `!st.isFile()` → 「Not a file」 | ✅ | 同 describe > 路径是目录 → 明确说不是文件，不发请求 |
+| | 尺寸超 32 MiB → 拒绝（读之前） | ✅ | 同 describe > 超过 32 MiB → 拒绝且不读文件、不发请求 |
+| | `readFileSync` 抛 Error → 报原始原因 | ✅ | 同 describe > stat 过但 read 抛（EACCES）→ 报出原始原因，不发请求 |
+| | 抛的**不是** Error → `String(e)` 臂 | ✅ | 同 describe > 抛的不是 Error → 也要有话说（String(e) 臂，不吞错） |
+| | `r.ok` 真臂 | ✅ | 同 describe > 相对路径按会话 cwd 解析…（Imported 回执） |
+| | `r.ok` 假臂 | ✅ | 同 describe > 服务端解析失败（400）→ 透出服务端 message |
+
+### knowledgeTools.ts / knowledgeMcp.ts（P2 增补）
+
+| 函数 | 分支 | 覆盖 | 测试名 |
+|---|---|---|---|
+| `shapeFailure` | `e instanceof Error` 真臂 | ✅ | knowledgeTools.test.ts > 200 但响应形状不对（畸形 2xx）> 两条（TypeError） |
+| | 假臂（`String(e)`） | ✅ | 同文件 > 写工具 > 抛出的不是 Error → 也降级成文本（String(e) 臂，不穿出 handler） |
+| `kbCall` | `cfg` 为 null → 未连接文本 | ✅ | 未配置凭据（恒挂的降级路径）> 未登录时读工具（kbCall 壳）只回引导文本，且不发请求 |
+| `kbWrite` | `cfg` 为 null → 未连接文本 | ✅ | 同 describe > 未登录时写工具（kbWrite 壳）同样只回引导文本，且不发请求 |
+| | `op` 抛 → `shapeFailure` | ✅ | 写工具 > 写工具 200 但形状不对 → resolves（不是 rejects）… |
+| `buildCreateDocumentTool` | 空间待定（`kind === "ask"`）→ 回文本 | ✅ | 写工具 > 写工具省略 spaceId 且多个空间 → 回问用户，不发写请求 |
+| | `parentId` 真 / 假臂 | ✅ | 写工具 > create_document：给了 parentId 就带上（嵌套文档）；同 describe > create_document：带 spaceId 直接 POST… |
+| `buildAppendDocumentTool` | `changeNote` 真 / 假臂 | ✅ | 写工具 > append_document：changeNote 给了就带上；同 describe > append_document：先 GET 再 PUT…（不带） |
+| `buildUpdateDocumentTool` | 整条 handler（含 `title`/`changeNote` 真 / 假臂） | ✅ | 写工具 > update_document：先 GET 再 PUT，title/changeNote 给了就带上；同 describe > 省略 title/changeNote → 沿用当前标题、不带 changeNote |
+| `buildIngestFileTool` | 空间待定 → 回文本（不上传） | ✅ | 写工具 > ingest_file：省略 spaceId 且多空间 → 回问用户，不上传（文件是否存在都轮不到） |
+| | `parentId` 真 / 假臂 | ✅ | 写工具 > ingest_file：给了 parentId → 进查询串（两者都可选，undefined 不进 URL）；同 describe > ingest_file：相对路径按会话 cwd 解析… |
+| | `cwd` 透传（会话工作目录） | ✅ | 同 describe > ingest_file：相对路径按会话 cwd 解析（cwd 由 buildKnowledgeTools 第二参给） |
+| `buildKnowledgeTools` | 4 读 + 4 写的名字与顺序 | ✅ | buildKnowledgeTools > P2 后暴露 4 读 + 4 写，顺序稳定 |
+| `knowledgeMcpRegistration` | `cwd` 第四参缺省（`""`） | ✅ | knowledgeMcp.test.ts 全部用例走缺省（`ingest_file` 的 cwd 由工具层测试单独覆盖） |
+| 快照 | 工具表 + 两处 instructions 的 delta | ✅（逐字证死） | knowledgeMcp.test.ts > instructions 是 MCP 采纳率的必需品 > 工具描述快照…（快照 delta 已用脚本核过：只新增四工具块与第 6-9 条，其余逐字节相同） |
