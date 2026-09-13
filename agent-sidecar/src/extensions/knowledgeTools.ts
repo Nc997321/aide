@@ -52,8 +52,14 @@ async function kbCall<T>(
 ): Promise<ToolResult> {
   const cfg = readKbConfig(env);
   if (!cfg) return textResult(KB_NOT_CONNECTED_TEXT);
-  const r = await run(createKbClient(cfg));
-  return textResult(r.ok ? onOk(r.data) : formatFailure(r.failure));
+  try {
+    const r = await run(createKbClient(cfg));
+    return textResult(r.ok ? onOk(r.data) : formatFailure(r.failure));
+  } catch {
+    // 2xx 但形状不对（格式化器解引用畸形数据）、或任何未归一的异常：一律降级成
+    // 文本，绝不穿出 handler（MCP 会把抛出的 handler 变成 isError = 本模块的红线）。
+    return textResult(formatFailure({ kind: "bad_response", detail: "unexpected response shape" }));
+  }
 }
 
 function buildSearchTool(env: NodeJS.ProcessEnv) {

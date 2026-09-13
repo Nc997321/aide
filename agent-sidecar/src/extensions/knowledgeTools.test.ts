@@ -145,3 +145,24 @@ describe("list_documents 的 spaceId 编码兜底", () => {
     expect(calls[0]).toBe("http://kb.test/api/spaces/s%F0%9F%98%80/documents");
   });
 });
+
+// 修复轮 2（评审 Important #1）：200 + 合法 JSON 但形状不对（KB 换版本 / 中间代理 /
+// 部署版本不一致），格式化器解引用畸形数据会抛 TypeError 穿出 handler —— MCP 会把它
+// 变成 isError，正是本模块红线禁止的。kbCall 的 catch 是唯一咽喉点，降级成文本。
+describe("200 但响应形状不对（畸形 2xx）", () => {
+  it("list_spaces：resolves（不是 rejects），降级成 bad_response 文本", async () => {
+    stubFetch({ status: 200, body: JSON.stringify({ not: "an array" }) });
+    const p = toolByName(credEnv, "list_spaces").handler({}, undefined);
+    await expect(p).resolves.toBeDefined(); // rejects 会先在这里红（红线要挡的正是它）
+    const r = await p;
+    expect(r.content[0]!.text).toContain("unexpected response shape");
+  });
+
+  it("list_documents：resolves（不是 rejects），降级成 bad_response 文本", async () => {
+    stubFetch({ status: 200, body: JSON.stringify({ not: "an array" }) });
+    const p = toolByName(credEnv, "list_documents").handler({ spaceId: "s1" }, undefined);
+    await expect(p).resolves.toBeDefined();
+    const r = await p;
+    expect(r.content[0]!.text).toContain("unexpected response shape");
+  });
+});
