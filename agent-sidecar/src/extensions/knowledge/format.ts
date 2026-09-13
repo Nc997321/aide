@@ -35,7 +35,7 @@ export function formatFailure(f: KbFailure): string {
     case "locked":
       return `The document is currently locked by another editor (409): ${f.message}. Wait a moment and retry, or ask the user to close their editor.`;
     case "bad_request":
-      return `The knowledge base rejected the request: ${f.message}`;
+      return `The knowledge base rejected the request: ${f.message} Correct the input and retry.`;
     case "server":
       return `The knowledge base returned a server error (${f.status}). Retry once; if it persists, tell the user to check the knowledge base service.`;
     case "network":
@@ -43,7 +43,7 @@ export function formatFailure(f: KbFailure): string {
     case "timeout":
       return "The knowledge base request timed out. Retry once; if it keeps timing out, tell the user the service may be overloaded.";
     case "bad_response":
-      return `The knowledge base returned an unexpected response: ${f.detail}`;
+      return `The knowledge base returned an unexpected response: ${f.detail} Retry once; if it persists, tell the user the response could not be parsed.`;
   }
 }
 

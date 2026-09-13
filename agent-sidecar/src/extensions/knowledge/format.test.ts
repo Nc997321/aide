@@ -18,22 +18,24 @@ describe("stripHighlight", () => {
 });
 
 describe("formatFailure（每条失败原因都给下一步，永不抛）", () => {
-  const cases: [KbFailure, string][] = [
-    [{ kind: "unauthorized" }, "sign in again"],
-    [{ kind: "forbidden" }, "permission"],
-    [{ kind: "not_found" }, "search"],
-    [{ kind: "locked", message: "被占用" }, "被占用"],
-    [{ kind: "bad_request", message: "标题不能为空" }, "标题不能为空"],
-    [{ kind: "server", status: 502 }, "502"],
-    [{ kind: "network", baseUrl: "http://kb:8788", detail: "ECONNREFUSED" }, "http://kb:8788"],
-    [{ kind: "timeout" }, "timed out"],
-    [{ kind: "bad_response", detail: "not JSON" }, "not JSON"],
+  // 第三项 = 该臂的「下一步」针：只钉回显抓不到「漏写下一步」，必须逐臂机械断言。
+  const cases: [KbFailure, string, string][] = [
+    [{ kind: "unauthorized" }, "sign in again", "sign in again"],
+    [{ kind: "forbidden" }, "permission", "Ask the user"],
+    [{ kind: "not_found" }, "search", "Use search"],
+    [{ kind: "locked", message: "被占用" }, "被占用", "Wait a moment and retry"],
+    [{ kind: "bad_request", message: "标题不能为空" }, "标题不能为空", "Correct the input"],
+    [{ kind: "server", status: 502 }, "502", "Retry once"],
+    [{ kind: "network", baseUrl: "http://kb:8788", detail: "ECONNREFUSED" }, "http://kb:8788", "Retry once"],
+    [{ kind: "timeout" }, "timed out", "Retry once"],
+    [{ kind: "bad_response", detail: "not JSON" }, "not JSON", "could not be parsed"],
   ];
 
-  it.each(cases)("%o 的文案含关键指引", (failure, needle) => {
+  it.each(cases)("%o 的文案含关键指引与下一步", (failure, needle, nextStep) => {
     const text = formatFailure(failure);
     expect(typeof text).toBe("string");
     expect(text).toContain(needle);
+    expect(text).toContain(nextStep); // 「每臂都给下一步」这条约束的机械检查
   });
 
   it("unauthorized 明确说不需要开新会话（现读凭据，重登即生效）", () => {
