@@ -2,7 +2,7 @@
 # 发布镜像到阿里云 ACR（方案 A：客户从 registry 拉镜像，不接触源码）。
 #
 #   ./release.sh <标签>          # 例：./release.sh 0.1.0
-#   ./release.sh <完整镜像引用>   # 例：./release.sh crpi-xxx.cn-shanghai.personal.cr.aliyuncs.com/aide-org/aide-knowledge:0.1.0
+#   ./release.sh <完整镜像引用>   # 例：./release.sh crpi-xxx.cn-shanghai.personal.cr.aliyuncs.com/aide-org/aide-knowledge:0.2.1
 #
 # 前置：docker login <crpi 域名> 已完成；docker CLI 可用。
 #   ⚠️ 域名要用 ACR 个人版「访问凭证」页给的 crpi- 专属实例域名（2024-09 后新建的个人版
