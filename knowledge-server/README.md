@@ -214,6 +214,9 @@ Bearer 顺带带来：服务端无状态（查 `sessions` 表）、三种前端�
 - 向量检索（`migrations/optional/003_vector.sql` 已备好，等 pgvector 就位）
 - 摄取管道的 UI（接口已有，docx/pdf 导入目前靠 curl / psql 手动走）
 - 标签 / 双链的读写接口（表已建）
+- **删除文档的接口与入口**（软删地基已就位：`documents.deleted_at` 列 + 全部读路径
+  都已过滤它 + slug 的部分唯一索引已适配「删后重建同名」；缺的只是一个端点与 UI 入口。
+  ⚠️ 要实现时走**软删**，别走硬 `DELETE` —— 后者会级联掉 `revisions` 与 `assets`，不可逆）
 
 ## 前端在哪
 
