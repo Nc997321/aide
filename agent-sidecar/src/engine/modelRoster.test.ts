@@ -28,6 +28,26 @@ describe("ModelRoster.adoptFromInit", () => {
     expect(r.toSdkModel("unknown-model")).toBe("unknown-model"); // 无别名回退真名
   });
 
+  // 现场回放（2026-09-13）：deepseek provider 四个映射槽（opus/sonnet/haiku/subagent）
+  // 全填同一个模型时，CLI 按「槽位」回报三行同真名条目 → 下拉多行同时打勾。
+  it("多槽同真名 → 按真名去重只留首条（value 是下拉的身份，不许重复）", async () => {
+    const r = new ModelRoster();
+    const models = await r.adoptFromInit(fakeQuery([
+      { value: "default", displayName: "Default (recommended)", resolvedModel: "deepseek-flash[1m]" },
+      { value: "opus", displayName: "deepseek-flash", resolvedModel: "deepseek-flash" },
+      { value: "sonnet", displayName: "deepseek-flash", resolvedModel: "deepseek-flash" },
+      { value: "haiku", displayName: "deepseek-flash", resolvedModel: "deepseek-flash" },
+    ]));
+    // 真名不同的行必须原样保留（去重不能把 default 那行也吞掉）
+    expect(models).toEqual([
+      { value: "deepseek-flash[1m]", displayName: "Default (recommended)" },
+      { value: "deepseek-flash", displayName: "deepseek-flash" },
+    ]);
+    // 别名表同口径：重复行不再互相覆盖（原先最后一条 haiku 胜出）
+    expect(r.toSdkModel("deepseek-flash")).toBe("opus");
+    expect(r.toSdkModel("deepseek-flash[1m]")).toBe("default");
+  });
+
   it("无 resolvedModel 的模型（第三方 provider）：value 即真名，无别名回退", async () => {
     const r = new ModelRoster();
     const models = await r.adoptFromInit(fakeQuery([
