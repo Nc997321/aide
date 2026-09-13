@@ -13,7 +13,7 @@ use docx_to_md::{DocumentContainer, ParserConfig};
 
 use crate::port::{DocumentParser, ParseError, ParsedDocument};
 
-use super::{first_heading, no_warnings};
+use super::first_heading;
 
 pub struct DocxToMdParser;
 
@@ -44,12 +44,16 @@ impl DocumentParser for DocxToMdParser {
                 reason: format!("转换失败: {e}"),
             })?;
 
+        // 把内嵌数据 URL 图片抽成附件。docx-to-md 默认的 ImageHandlingMode::InMarkdown
+        // 会把图片写成 `![](data:image/jpeg;base64,...)` —— 抽出来之后正文里只剩
+        // 占位符，字节不再进倒排索引（见 design spec §1.1 第三环）。
+        let extracted = super::docx_images::extract_data_url_images(&markdown);
+
         Ok(ParsedDocument {
-            title: first_heading(&markdown),
-            markdown,
-            warnings: no_warnings(),
-            // 抽图在下一个任务接（Task 5）：本轮先让端口变更编译通过
-            assets: Vec::new(),
+            title: first_heading(&extracted.markdown),
+            markdown: extracted.markdown,
+            warnings: extracted.warnings,
+            assets: extracted.assets,
         })
     }
 }

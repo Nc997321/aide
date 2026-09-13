@@ -50,6 +50,7 @@ dependencies = [
  "argon2",
  "axum",
  "axum-extra",
+ "base64",
  "chrono",
  "docx-lite",
  "docx-to-md",

@@ -3,6 +3,7 @@
 //! 新增一个后端 = 在这里加一个文件 + 在 `registry` 里注册一行。
 //! 上层（`domain::ingest`、`api::ingest`）不需要知道它的存在。
 
+pub mod docx_images;
 pub mod docx_lite;
 pub mod docx_to_md;
 pub mod markdown;

@@ -7,6 +7,9 @@ edition = "2024"
 argon2 = "0.6.0"
 axum = { version = "0.8.9", features = ["multipart"] }
 axum-extra = { version = "0.12.6", features = ["cookie"] }
+# 只用于把 docx 内嵌图片的 data URL 解码成字节（docx-to-md 已传递引入 0.22.1，
+# 这里只是把它提成直接依赖，不产生新下载）
+base64 = "0.22"
 chrono = { version = "0.4.45", features = ["serde"] }
 docx-lite = "0.2.0"
 docx-to-md = "0.1.0"
