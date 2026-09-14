@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 适用协议版本 | `PROTOCOL_VERSION = 1` |
+| 适用协议版本 | `PROTOCOL_VERSION = 2` |
 | 适用引擎版本 | `agent-sidecar` @ `05c024a` 及以后（含 F3/F4 修复轮） |
 | 文档版本 | 1.0（2026-09-14 定稿） |
 | 读者 | 把 Aide headless 引擎当编排大脑的宿主网关实现方 |
@@ -16,7 +16,7 @@
 | 日期 | 版本 | 变更 |
 |---|---|---|
 | 2026-09-14 | 1.0 | 首版定稿。合并 2026-09-11 的对接说明草稿与测试清单的文档级处置项，全量补齐 10 条命令与 44 个事件类型（42 个 headless 可达 + 2 个桌面专用）的字段级参考。 |
-| 2026-09-14 | 1.1 | btw 侧问接入：新增命令 `btw_ask`（§4.12）与事件 `btw_answer`（§5.2）；**从 send schema 剥除 `btw` / `lightweight` / `fork_from` / `tools` 四个桌面字段**（原「明令禁发」改为 schema 层直接拒绝，清单 B14 结案）。事件总数 44 → 45，命令总数 10 → 11。 |
+| 2026-09-14 | 1.1 | btw 侧问接入：新增命令 `btw_ask`（§4.12）与事件 `btw_answer`（§5.2）；**从 send schema 剥除 `btw` / `lightweight` / `fork_from` / `tools` 四个桌面字段**（原「明令禁发」改为 schema 层直接拒绝，清单 B14 结案）。事件总数 44 → 45，命令总数 10 → 11。**`PROTOCOL_VERSION` 1 → 2**（命令面不兼容变更，按 §1.2 判据必须递增）。 |
 
 ---
 
@@ -76,10 +76,12 @@ node dist/runtime.js headless
 stdout 输出一行 JSON：
 
 ```json
-{"type":"headless-listening","port":18090,"protocol":1}
+{"type":"headless-listening","port":18090,"protocol":2}
 ```
 
 `protocol` 字段是版本握手的第一处暴露（另两处在 §2.2 与 §2.1）。网关应在起服时解析这一行，`protocol` 与预期不符即拒绝接入。〔清单 A1〕
+
+**当前值 `2`**（2026-09-14 起）。v1 → v2 是不兼容变更：send 剥除 `btw` / `lightweight` / `fork_from` / `tools` 四个桌面字段，并新增 `btw_ask` 命令。仍在发这些字段的 v1 网关会在升级后**直接拿到 `400 invalid invoke body`**（v1 时只是被忽略）——这正是按等值比较拦版本号的用意。
 
 ### 1.3 监听地址与安全基线
 
@@ -110,7 +112,7 @@ Windows 下引擎会为 Bash 工具注入口 `BASH_ENV`（`chcp 65001`），让 
 
 | 状态码 | 载荷 | 含义 |
 |---|---|---|
-| `200` | `{"ok":true,"protocol":1}` | **只表示已入队**。真实结果一律走 SSE，不在这个响应里。〔清单 A3〕 |
+| `200` | `{"ok":true,"protocol":2}` | **只表示已入队**。真实结果一律走 SSE，不在这个响应里。〔清单 A3〕 |
 | `400` | `{"ok":false,"error":"…"}` | schema 校验失败 / body 不是合法 JSON / body 超 1MB |
 | `401` | `{"ok":false,"error":"unauthorized"}` | `Authorization` 缺失或不为 `Bearer <token>` |
 | `404` | `{"ok":false,"error":"no route: …"}` | 路径或方法不匹配 |
@@ -135,7 +137,7 @@ invalid invoke body — mcp_headers.X-User-Token: invalid_type; images.0.data: i
 **首帧**恒为版本握手（`data:` 后是 JSON，SSE 标准帧格式）：
 
 ```
-data: {"type":"hello","protocol":1,"sessionId":"<你订阅的 sid>"}
+data: {"type":"hello","protocol":2,"sessionId":"<你订阅的 sid>"}
 
 ```
 
@@ -746,7 +748,7 @@ SSE: tool_use_start / tool_result … → message_stop
 
 ```bash
 AIDE_HEADLESS_TOKEN=s3cret CLAUDE_CONFIG_DIR=/tmp/aide-headless node dist/runtime.js headless
-# stdout: {"type":"headless-listening","port":18090,"protocol":1}
+# stdout: {"type":"headless-listening","port":18090,"protocol":2}
 ```
 
 ### 8.2 订阅事件流
@@ -759,7 +761,7 @@ curl -N -H "Authorization: Bearer s3cret" \
 先收到 hello：
 
 ```
-data: {"type":"hello","protocol":1,"sessionId":"租户请求的sid"}
+data: {"type":"hello","protocol":2,"sessionId":"租户请求的sid"}
 ```
 
 ### 8.3 发第一条消息
@@ -776,7 +778,7 @@ curl -s -X POST http://127.0.0.1:18090/invoke \
     "metadata": { "tenant": "acme", "user": "u-42" },
     "mcp_headers": { "agri-platform": { "X-User-Token": "<用户 token>" } }
   }'
-# → {"ok":true,"protocol":1}
+# → {"ok":true,"protocol":2}
 ```
 
 ### 8.4 收 re-key 帧

@@ -19,8 +19,12 @@ import { parseInvokeBody } from "./headless-schema.js";
 
 /** headless 协议版本：/invoke 请求-响应形状、SSE 帧形状、命令面发生不兼容变化
  *  时递增。三处暴露：headless-listening 行（index.ts）、/invoke 成功响应、
- *  SSE 订阅首帧 hello——客户端连上即知版本，不匹配可拒连。 */
-export const PROTOCOL_VERSION = 1;
+ *  SSE 订阅首帧 hello——客户端连上即知版本，不匹配可拒连。
+ *
+ *  v2（2026-09-14）：命令面变更——新增 `btw_ask`；send 的 `btw` / `lightweight` /
+ *  `fork_from` / `tools` 四个桌面字段从 schema 剥除（v1 时是「收下但按桌面语义
+ *  执行」，现在直接 400）。网关按版本号拦（等值比较）即可安全拒接。 */
+export const PROTOCOL_VERSION = 2;
 
 /**
  * 校验 invoke body → SidecarCommand。委托 headless-schema.ts 的 parseInvokeBody：

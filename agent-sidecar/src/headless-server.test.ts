@@ -3,6 +3,7 @@ import {
   startHeadlessServer,
   SessionEventRouter,
   validateInvokeBody,
+  PROTOCOL_VERSION,
   type HeadlessServerHandle,
 } from "./headless-server.js";
 import type { ChatEvent, SidecarCommand } from "./engine/types.js";
@@ -256,7 +257,7 @@ describe("startHeadlessServer (http/sse integration)", () => {
       body: JSON.stringify({ cmd: "send", session_id: "s1", prompt: "hi", cwd: "/tmp" }),
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, protocol: 1 });
+    expect(await res.json()).toEqual({ ok: true, protocol: PROTOCOL_VERSION });
     expect(commands).toHaveLength(1);
     expect(commands[0]).toMatchObject({ cmd: "send", session_id: "s1", prompt: "hi" });
   });
@@ -511,7 +512,7 @@ describe("validateInvokeBody — 正式版 schema（10 命令面）", () => {
   });
 });
 
-describe("协议版本化（PROTOCOL_VERSION = 1）", () => {
+describe("协议版本化（握手三处暴露同一常量）", () => {
   it("SSE 订阅首帧是 hello：带 protocol 与 sessionId", async () => {
     const handle = await startHeadlessServer({
       port: 0,
@@ -529,7 +530,7 @@ describe("协议版本化（PROTOCOL_VERSION = 1）", () => {
         req.on("error", reject);
       });
       expect(firstFrame).toContain('"type":"hello"');
-      expect(firstFrame).toContain('"protocol":1');
+      expect(firstFrame).toContain(`"protocol":${PROTOCOL_VERSION}`);
       expect(firstFrame).toContain('"sessionId":"s-ver"');
     } finally {
       await handle.close();
