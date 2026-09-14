@@ -97,8 +97,10 @@ export interface DiagHeartbeatPayload {
   longTaskMaxMs: number;
   crumbs: unknown[];
   hidden: boolean;
-  /** 本周期长帧：条数 + 最长那一帧的完整分解（null = 本周期无长帧 / 环境不支持 LoAF）。 */
-  frames: { count: number; worst: DiagLongFrame | null };
+  /** 本周期长帧：条数 + 最长那一帧的完整分解。
+   *  `supported=false` = 本环境没装上 LoAF（Chromium 过老），此时 count 恒 0 ——
+   *  必须与「确实没长帧」区分开，否则报告会被读成"渲染没问题"。 */
+  frames: { count: number; worst: DiagLongFrame | null; supported: boolean };
 }
 
 export const api = {

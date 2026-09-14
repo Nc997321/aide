@@ -96,25 +96,28 @@ export function readLongFrame(e: unknown): LongFrameEntry | null {
   // styleAndLayoutStart 是相对帧起点的偏移；为 0 表示这一帧没走到样式布局段。
   const styleLayoutMs = styleLayoutStart > 0 ? Math.max(0, durationMs - styleLayoutStart) : 0;
 
-  const scripts: LongFrameScript[] = (Array.isArray(raw.scripts) ? raw.scripts : [])
-    .map((s) => ({
-      invoker: str(s["invoker"]),
-      source: shortenSource(str(s["sourceURL"])),
-      func: str(s["sourceFunctionName"]),
-      durationMs: Math.round(num(s["duration"])),
-      forcedLayoutMs: Math.round(num(s["forcedStyleAndLayoutDuration"])),
-    }))
-    .sort((a, b) => b.durationMs - a.durationMs)
-    .slice(0, TOP_SCRIPTS);
+  const all: LongFrameScript[] = (Array.isArray(raw.scripts) ? raw.scripts : []).map((s) => ({
+    invoker: str(s["invoker"]),
+    source: shortenSource(str(s["sourceURL"])),
+    func: str(s["sourceFunctionName"]),
+    durationMs: Math.round(num(s["duration"])),
+    forcedLayoutMs: Math.round(num(s["forcedStyleAndLayoutDuration"])),
+  }));
 
-  const scriptMs = scripts.reduce((sum, s) => sum + s.durationMs, 0);
+  // 求和必须过**全量**脚本。只汇总保留的头几条，会把长尾的耗时误算进 restMs——
+  // 于是「很多个小脚本」被读成「GC/空闲」，正是这个采集器要回答的那个问题被答反。
+  // 截断只作用于展示用的 scripts 列表（payload 体积）。
+  const scriptMs = all.reduce((sum, s) => sum + s.durationMs, 0);
+  const forcedLayoutMs = all.reduce((sum, s) => sum + s.forcedLayoutMs, 0);
+  const scripts = [...all].sort((a, b) => b.durationMs - a.durationMs).slice(0, TOP_SCRIPTS);
+
   return {
     t: Math.round(num(raw.startTime)),
     durationMs: Math.round(durationMs),
     scriptMs,
     styleLayoutMs: Math.round(styleLayoutMs),
     restMs: Math.round(Math.max(0, durationMs - scriptMs - styleLayoutMs)),
-    forcedLayoutMs: scripts.reduce((sum, s) => sum + s.forcedLayoutMs, 0),
+    forcedLayoutMs,
     blockingMs: Math.round(num(raw.blockingDuration)),
     scripts,
   };
@@ -124,11 +127,28 @@ let observer: PerformanceObserver | null = null;
 const entries: LongFrameEntry[] = [];
 let periodWorst: LongFrameEntry | null = null;
 let periodCount = 0;
+/** 本环境是否真的起来了 LoAF。报告里必须能区分「没长帧」与「没支持」——
+ *  否则 count 恒 0 会被读成"渲染没问题"，而真相是这个探针根本没装。 */
+let supported = false;
 
-/** 启动采集；环境不支持 LoAF 时返回 false（静默降级）。 */
+/** 采集是否生效。心跳把它带进报告，与 count 一起读。 */
+export function isLongFramesSupported(): boolean {
+  return supported;
+}
+
+/** 启动采集；环境不支持 LoAF 时返回 false（静默降级，但支持状态会进报告）。 */
 export function startLongFrames(): boolean {
   if (observer !== null) return true;
   if (typeof PerformanceObserver === "undefined") return false;
+  // 特性探测**不能**只看 observe 是否抛异常：Node 对未知 type 静默接受（本文件
+  // 的测试实测），于是 supported 会谎报 true 而 count 恒 0 —— 正是这一位要防的
+  // 那种混淆（"没支持"被读成"渲染健康"）。supportedEntryTypes 才是权威清单；
+  // 清单本身缺失（老环境）时才退回"试了再说"。
+  const types: unknown = PerformanceObserver.supportedEntryTypes;
+  if (Array.isArray(types) && !types.includes("long-animation-frame")) {
+    supported = false;
+    return false;
+  }
   try {
     observer = new PerformanceObserver((list) => {
       for (const raw of list.getEntries()) {
@@ -141,9 +161,11 @@ export function startLongFrames(): boolean {
       }
     });
     observer.observe({ type: "long-animation-frame", buffered: true });
+    supported = true;
     return true;
   } catch {
     observer = null; // 旧版本 Chromium 不认识这个 type —— 降级，不抛
+    supported = false;
     return false;
   }
 }
@@ -154,12 +176,18 @@ export function stopLongFrames(): void {
   entries.length = 0;
   periodWorst = null;
   periodCount = 0;
+  supported = false;
 }
 
-/** 取走本周期摘要（条数 + 最长一帧的完整分解）并清零。心跳每 500ms 发一次，
- *  只带「最长那一帧」——它才是撞墙的肇事帧，整周期明细体积不可控。 */
-export function drainWorstFrame(): { count: number; worst: LongFrameEntry | null } {
-  const out = { count: periodCount, worst: periodWorst };
+/** 取走本周期摘要（条数 + 最长一帧的完整分解 + 采集是否生效）并清零。
+ *  心跳每 500ms 发一次，只带「最长那一帧」——它才是撞墙的肇事帧，整周期明细体积
+ *  不可控。`supported` 必须一起走：读报告的人要能区分「没长帧」与「探针没装」。 */
+export function drainWorstFrame(): {
+  count: number;
+  worst: LongFrameEntry | null;
+  supported: boolean;
+} {
+  const out = { count: periodCount, worst: periodWorst, supported };
   periodCount = 0;
   periodWorst = null;
   return out;
@@ -175,4 +203,5 @@ export function resetLongFramesForTest(): void {
   entries.length = 0;
   periodWorst = null;
   periodCount = 0;
+  supported = false;
 }

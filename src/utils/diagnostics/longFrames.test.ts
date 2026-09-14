@@ -2,9 +2,12 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   drainWorstFrame,
   framesSince,
+  isLongFramesSupported,
   readLongFrame,
   resetLongFramesForTest,
   shortenSource,
+  startLongFrames,
+  stopLongFrames,
   type LongFrameEntry,
 } from "./longFrames";
 
@@ -49,7 +52,7 @@ describe("longFrames 长动画帧归因", () => {
     expect(e.restMs).toBe(500); // 全归"其余"——纯 JS 或纯阻塞
   });
 
-  it("scripts 按耗时降序、只留前 3（控 payload 体积）", () => {
+  it("scripts 只留前 3 展示，但 scriptMs / forcedLayoutMs 必须过全量", () => {
     const e = readLongFrame(
       loaf({
         scripts: [10, 90, 50, 70, 30].map((d, i) => ({
@@ -57,12 +60,16 @@ describe("longFrames 长动画帧归因", () => {
           sourceURL: `/x/f${i}.js`,
           sourceFunctionName: `f${i}`,
           duration: d,
-          forcedStyleAndLayoutDuration: 0,
+          forcedStyleAndLayoutDuration: 1,
         })),
       }),
     )!;
-    expect(e.scripts.map((s) => s.durationMs)).toEqual([90, 70, 50]);
-    expect(e.scriptMs).toBe(210); // 只算留下的三条
+    expect(e.scripts.map((s) => s.durationMs)).toEqual([90, 70, 50]); // 展示截断
+    // 求和必须过全量：只汇总头三条（210）会把长尾的 40ms 误算进 restMs ——
+    // 那是把「很多个小脚本」读成「GC/空闲」，正好答反了这个采集器要回答的问题。
+    expect(e.scriptMs).toBe(250); // 10+90+50+70+30
+    expect(e.forcedLayoutMs).toBe(5); // 全量 5 条各 1ms
+    expect(e.restMs).toBe(50); // 500 - 250 - 200，没被长尾灌水
   });
 
   it("点名到函数：invoker / 源文件末段 / 函数名都带出来", () => {
@@ -108,12 +115,23 @@ describe("longFrames 长动画帧归因", () => {
 
   it("drainWorstFrame：取本周期最长的一帧并清零；framesSince 按窗口过滤", () => {
     // 直接喂 observer 回调的路径不好造，改测环形/汇总的契约：
-    // drain 前为空 → count 0 / worst null
-    expect(drainWorstFrame()).toEqual({ count: 0, worst: null });
+    // drain 前为空 → count 0 / worst null / supported false
+    expect(drainWorstFrame()).toEqual({ count: 0, worst: null, supported: false });
 
     // framesSince 在无条目时返回空数组
     expect(framesSince(0)).toEqual([]);
     expect(framesSince(1e9)).toEqual([]);
+  });
+
+  it("环境不支持 LoAF 时：started 返回 false，且 supported 如实为 false（不是「没长帧」）", () => {
+    // node 环境的 PerformanceObserver 不认识 long-animation-frame → 走 catch 降级。
+    // 这条钉的是「静默降级但状态可见」：报告必须能区分探针没装 与 渲染健康。
+    expect(isLongFramesSupported()).toBe(false);
+    const ok = startLongFrames();
+    expect(ok).toBe(false);
+    expect(isLongFramesSupported()).toBe(false);
+    expect(drainWorstFrame().supported).toBe(false);
+    stopLongFrames();
   });
 
   it("LongFrameEntry 的字段是纯数字/字符串，可安全 JSON 序列化（进心跳）", () => {

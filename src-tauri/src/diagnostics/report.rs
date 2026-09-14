@@ -57,6 +57,10 @@ pub struct FrameSummary {
     /// 本周期最长的那一帧（None = 无长帧）
     #[serde(default)]
     pub worst: Option<LongFrame>,
+    /// 本环境是否真的装上了 LoAF。false 时 `count` 恒 0 不代表渲染健康——
+    /// 是探针根本没生效（Chromium 过老）。读报告必须先看这一位。
+    #[serde(default)]
+    pub supported: bool,
 }
 
 /// 一帧的归因分解。三段相加 = `duration_ms`：
