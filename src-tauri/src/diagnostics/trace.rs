@@ -63,6 +63,34 @@ pub fn snapshot() -> Vec<TraceEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::report::TraceEvent;
+
+    /// 本测试写的那些条目（其它测试的 record 不属于我们，必须能被过滤掉）。
+    fn is_ours(e: &TraceEvent) -> bool {
+        matches!(
+            (e.kind, e.name.as_str()),
+            ("cmd_enter", "git_log") | ("cmd_exit", "git_log") | ("emit", "text_delta")
+        )
+    }
+
+    /// 把快照收窄成「从我们第一条起、往后的连续 ours 段」。
+    ///
+    /// 为什么不能直接拿全量快照断言：`TRACE` 是模块级 static，cargo test 默认并行，
+    /// 其它用例埋了 `trace_command` 的路径会并发 `record()`，条目会插进我们的间隙
+    /// （旧版直接断言全量，全量跑必挂、单跑必过——2026-09-14 实测）。真实写入路径
+    /// 关不掉，所以判据改成「过滤出属于本用例的连续子序列」，对自己只做串行断言。
+    fn ours_in_order() -> Vec<(&'static str, String, &'static str)> {
+        let snap = snapshot();
+        let start = match snap.iter().position(is_ours) {
+            Some(i) => i,
+            None => return Vec::new(),
+        };
+        snap[start..]
+            .iter()
+            .take_while(|e| is_ours(e))
+            .map(|e| (e.kind, e.name.clone(), e.thread))
+            .collect()
+    }
 
     // 模块级 static，cargo test 默认并行——所有断言放同一个测试函数里串行执行，
     // 避免不同测试互相踩 TRACE（同 trace_command 的做法）。
@@ -73,26 +101,47 @@ mod tests {
         record("cmd_enter", "git_log", "main");
         record("emit", "text_delta", "worker");
         record("cmd_exit", "git_log", "main");
-        let snap = snapshot();
-        let flat: Vec<(&str, &str, &str)> = snap
-            .iter()
-            .map(|e| (e.kind, e.name.as_str(), e.thread))
-            .collect();
         assert_eq!(
-            flat,
+            ours_in_order(),
             vec![
-                ("cmd_enter", "git_log", "main"),
-                ("emit", "text_delta", "worker"),
-                ("cmd_exit", "git_log", "main"),
+                ("cmd_enter", "git_log".to_string(), "main"),
+                ("emit", "text_delta".to_string(), "worker"),
+                ("cmd_exit", "git_log".to_string(), "main"),
             ]
         );
+        let snap = snapshot();
         assert!(snap.windows(2).all(|w| w[0].t <= w[1].t));
 
-        // 超容量淘汰最旧：填满 + 10，稳定在 CAP
+        // 超容量淘汰最旧。并发写入会混进别人的条目，所以判据不是「长度恒等于 CAP」
+        // （那是并行污染下的假断言），而是三件事同时成立：
+        //   ① 我们连写 CAP+10 条后，环里**仍能看到我们的条目**（没被整体挤掉）；
+        //   ② 环长度不超过容量（淘汰真的在生效）；
+        //   ③ 我们的第一条已被淘汰——它后面还有 CAP+9 条我们自己写的，
+        //      超出容量的部分必然把最旧的挤出去。
         TRACE.lock().unwrap().clear();
         for _ in 0..(TRACE_RING_CAP + 10) {
-            record("emit", "x", "worker");
+            record("emit", "text_delta", "worker");
         }
-        assert_eq!(snapshot().len(), TRACE_RING_CAP);
+        let snap = snapshot();
+        assert!(
+            snap.iter().any(is_ours),
+            "自己写的条目不该在环里消失（并发写入最多占一部分容量）"
+        );
+        assert!(
+            snap.len() <= TRACE_RING_CAP,
+            "环长度 {} 超过容量 {}",
+            snap.len(),
+            TRACE_RING_CAP
+        );
+        let ours = ours_in_order();
+        assert!(
+            !ours.iter().any(|(k, n, _)| (*k, n.as_str()) == ("cmd_enter", "git_log")),
+            "第一条（cmd_enter/git_log）应已被淘汰，实际仍在前段"
+        );
+        assert!(
+            ours.len() >= TRACE_RING_CAP - 1,
+            "被并发写入挤占后我们仍应有 ≈CAP 条在环里，实际 {}",
+            ours.len()
+        );
     }
 }
