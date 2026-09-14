@@ -1,6 +1,10 @@
-import type { ChatEvent, SidecarCommand } from "./types.js";
+import type {
+  AskSideQuestionResult,
+  BtwHistoryRound,
+  ChatEvent,
+  SidecarCommand,
+} from "./types.js";
 import { SessionWorker } from "./session-worker.js";
-import type { AskSideQuestionResult, BtwHistoryRound } from "./session-worker.js";
 import { resolveCodegraphResult } from "../extensions/codegraphClient.js";
 import { isDroppableEvent, writeStdoutFrame } from "./stdoutFrames.js";
 
@@ -76,6 +80,21 @@ export class SessionManager {
     // session_stop 特殊处理：不需要 getOrCreate，直接查已有 worker 停止
     if (cmd.cmd === "session_stop") {
       this.stopSession(cmd.session_id);
+      return;
+    }
+
+    // btw_ask：唯一 async 的命令分支（结果经 btw_answer 事件回来，不是返回值）。
+    // 故意不 await——stdin 行处理器是同步的，await 会阻塞后续命令；结果本来就
+    // 只走事件通道。catch 兜住以防解析前抛异常（不许静默吞）。
+    if (cmd.cmd === "btw_ask") {
+      void this.handleBtwAsk(cmd).catch((e: unknown) => {
+        this.emitToStdout(cmd.session_id, {
+          type: "btw_answer",
+          sessionId: cmd.session_id,
+          question: cmd.question,
+          error: `侧问分发失败：${e instanceof Error ? e.message : String(e)}`,
+        });
+      });
       return;
     }
 
@@ -170,6 +189,27 @@ export class SessionManager {
     if (worker) {
       worker.stop();
       this.workers.delete(sessionId);
+    }
+  }
+
+  /** btw_ask 命令入口（fire-and-forget，结果一律走 btw_answer 事件）。
+   *
+   *  委派给 askSideQuestion；**兜住 worker 不存在的拒绝并补发事件**——否则发起端
+   *  永远收不到任何回复（事件通道是 UI 判定的唯一来源）。worker 自己负责的事件
+   *  这一层不重复发（见该用例的断言）。 */
+  async handleBtwAsk(cmd: Extract<SidecarCommand, { cmd: "btw_ask" }>): Promise<void> {
+    const { session_id: sid, question, history } = cmd;
+    if (!sid) return; // 无处可投：连路由键都没有，发事件也没人认领
+    const verdict = await this.askSideQuestion(sid, question, history ?? []);
+    if (verdict.ok) return;
+    // 只有"worker 压根不存在"由本层补发——worker 存在但失败的，它自己已发过。
+    if (!this.workers.has(sid)) {
+      this.emitToStdout(sid, {
+        type: "btw_answer",
+        sessionId: sid,
+        question,
+        error: verdict.reason,
+      });
     }
   }
 

@@ -239,3 +239,56 @@ describe("SessionManager — btw 侧问路由", () => {
     expect(r).toEqual({ ok: false, reason: "引擎不支持" });
   });
 });
+
+/**
+ * btw_ask 命令入口：fire-and-forget（与 send 同形，结果一律走事件通道）。
+ *
+ * 关键不变量：
+ * - 无 worker 时不新建 worker，但**必须广播** btw_answer(error)——否则发起端永远
+ *   收不到结果（事件通道是 UI 判定的唯一来源）
+ * - 命中 worker 时委派给它，不重复发事件（worker 自己负责）
+ */
+describe("SessionManager — btw_ask 命令入口", () => {
+  it("无 worker：拒绝并存档一条 btw_answer(error) 事件", async () => {
+    const emitted: { sid: string; event: any }[] = [];
+    const manager = new SessionManager({ emit: (sid, event) => emitted.push({ sid, event }) });
+
+    await manager.handleBtwAsk({ cmd: "btw_ask", session_id: "s-nope", question: "问一句" });
+
+    expect(manager.getAllWorkers().size).toBe(0); // ← 不新建
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].sid).toBe("s-nope");
+    expect(emitted[0].event).toMatchObject({ type: "btw_answer", question: "问一句" });
+    expect(emitted[0].event.error).toContain("会话未运行");
+  });
+
+  it("缺 session_id：不崩，也不广播（无处可投）", async () => {
+    const emitted: any[] = [];
+    const manager = new SessionManager({ emit: (sid, event) => emitted.push({ sid, event }) });
+    await expect(
+      manager.handleBtwAsk({ cmd: "btw_ask", session_id: "", question: "问一句" }),
+    ).resolves.toBeUndefined();
+    expect(emitted).toEqual([]);
+  });
+
+  it("命中 worker：委派给它，manager 不重复发事件", async () => {
+    const emitted: any[] = [];
+    const manager = new SessionManager({ emit: (sid, event) => emitted.push({ sid, event }) });
+    const worker = (manager as any).__testCreateWorker("s-hit") as any;
+    let called = 0;
+    worker.askSideQuestion = async () => {
+      called++;
+      return { ok: true };
+    };
+
+    await manager.handleBtwAsk({
+      cmd: "btw_ask",
+      session_id: "s-hit",
+      question: "问一句",
+      history: [{ question: "旧", response: "答" }],
+    });
+
+    expect(called).toBe(1);
+    expect(emitted).toEqual([]); // ← 事件由 worker 发，manager 不越权
+  });
+});

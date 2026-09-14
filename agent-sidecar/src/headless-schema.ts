@@ -83,8 +83,19 @@ const permissionRuleDraft = z.looseObject({
   matcher: permissionMatcher,
 });
 
-// ---- 10 个可 invoke 命令（与 headless-server.ts 的 INVOKABLE_COMMANDS 一一对应，
-//      一致性由 headless-server.test.ts 的对账用例钉住） ----
+// ---- 11 个可 invoke 命令。唯一真相就是下面这个 invokeBodySchema 判别联合
+//      （headless-server.ts 的独立清单已删——两份白名单必然漂移） ----
+
+const btwAskCommand = z.looseObject({
+  cmd: z.literal("btw_ask"),
+  session_id: sid,
+  question: z.string().min(1),
+  // 跨问历史封顶 20 条（前端截断后的数组；这里的上限是边界防御，与前端一致）。
+  history: z
+    .array(z.looseObject({ question: z.string(), response: z.string() }))
+    .max(20)
+    .optional(),
+});
 
 const sendCommand = z.looseObject({
   cmd: z.literal("send"),
@@ -175,6 +186,7 @@ const sessionStopCommand = z.looseObject({ cmd: z.literal("session_stop"), sessi
  */
 export const invokeBodySchema = z.discriminatedUnion("cmd", [
   sendCommand,
+  btwAskCommand,
   updatePermissionPolicyCommand,
   permissionResponseCommand,
   interruptCommand,

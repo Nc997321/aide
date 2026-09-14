@@ -1,4 +1,6 @@
 import type {
+  AskSideQuestionResult,
+  BtwHistoryRound,
   ChatEvent,
   ImageAttachment,
   SidecarCommand,
@@ -68,14 +70,6 @@ import type { PermissionRuleDraft } from "./types.js";
 //（历史这里是逐字节重复的第二份副本，批 1 去重；池化见 engine/tailPool.ts）
 
 // ---- SessionWorker ----
-
-/** btw 跨问历史的一条问答。形状与官方 side_question 的 history 元素逐字段对齐
- *  （`{question, response}`，见 claude.exe 的 `history:x.map(pe=>({question,response}))`）——
- *  改这个形状等于改线上契约，前端也要同步改。 */
-export type BtwHistoryRound = { question: string; response: string };
-
-/** 侧问结果：只表成败，正文一律走 btw_answer 事件（UI 状态只认事件通道）。 */
-export type AskSideQuestionResult = { ok: true } | { ok: false; reason: string };
 
 export interface SessionWorkerOptions {
   cwd?: string;

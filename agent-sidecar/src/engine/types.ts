@@ -291,6 +291,17 @@ export interface ImageAttachment {
   mediaType: string;  // "image/png" | "image/jpeg" | "image/gif" | "image/webp"
 }
 
+// ---- btw 侧问的线上契约（命令与事件共用） ----
+
+/** btw 跨问历史的一条问答。形状与官方 side_question 的 history 元素逐字段对齐
+ *  （`{question, response}`，见 claude.exe 的 `history:x.map(pe=>({question,response}))`）
+ *  ——改这个形状等于改线上契约，前端 `api.btwAsk` 要同步改。 */
+export type BtwHistoryRound = { question: string; response: string };
+
+/** btw_ask 命令的效果：只表成败。正文一律走 btw_answer 事件
+ *  （UI 状态只认事件通道），不随命令响应回来。 */
+export type AskSideQuestionResult = { ok: true } | { ok: false; reason: string };
+
 // Rust → Sidecar（每行一个 JSON，从 stdin 读取）。
 // 所有命令都带 session_id：SessionManager 按它路由到对应 SessionWorker。
 export type SidecarCommand =
@@ -418,6 +429,15 @@ export type SidecarCommand =
   | { cmd: "set_permission_mode"; session_id: string; mode: string }
   // 停止一个会话：Runtime 内部调 worker.stop()（q.close() + 清理），不再由 Rust kill 进程。
   | { cmd: "session_stop"; session_id: string }
+  // btw 侧问（官方 side_question 控制通道）。与 send 的关键区别：**不走
+  // getOrCreate**——主 worker 不存在即拒，不起新进程（设计决策 D2）。
+  // 结果一律经 btw_answer 事件回来，本命令无返回值（fire-and-forget，与 send 同形）。
+  | {
+      cmd: "btw_ask";
+      session_id: string;
+      question: string;
+      history?: BtwHistoryRound[];
+    }
   // codegraph agent 查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。
   | {
       cmd: "codegraph_result";
