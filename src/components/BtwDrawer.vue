@@ -1,21 +1,19 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useBtwSession } from "@/composables/useBtwSession";
-import { renderMarkdown, renderStreaming } from "@/utils/markdown";
+import { renderMarkdown } from "@/utils/markdown";
 
-const props = defineProps<{ visible: boolean; lightweight: boolean; modelLabel: string }>();
+const props = defineProps<{ visible: boolean; modelLabel: string }>();
 const emit = defineEmits<{
   (e: "close"): void;
-  (e: "update:lightweight", v: boolean): void;
 }>();
 
 const { store } = useBtwSession();
 const text = computed(() => store.value.messages.join(""));
-// 与主对话同一渲染管道（.msg-text 样式见 global.css）：流式中走 renderStreaming
-// （结构实时渲染、代码围栏暂不高亮），跑完切 renderMarkdown 补高亮并进缓存。
-const html = computed(() =>
-  store.value.isBusy ? renderStreaming(text.value) : renderMarkdown(text.value),
-);
+// 与主对话同一渲染管道（.msg-text 样式见 global.css）。侧问走官方 side_question
+// 控制通道，结果是整段回来的（无流式帧），所以直接进 renderMarkdown 并吃缓存——
+// 不再需要 renderStreaming 那条"流式中暂不高亮"的路径。约 1.6s 出整段。
+const html = computed(() => renderMarkdown(text.value));
 </script>
 
 <template>
@@ -24,21 +22,13 @@ const html = computed(() =>
       <div class="btw-drawer-stripe"></div>
       <div class="btw-head">
         <div class="btw-title-row">
-          <div class="btw-title"><span class="btw-fork">{{ store.taskId ? store.taskIcon : "↳" }}</span> {{ store.taskId ? store.taskLabel : "顺便问一下" }} <span class="btw-pill">· {{ props.modelLabel }}</span></div>
+          <div class="btw-title"><span class="btw-fork">↳</span> 顺便问一下 <span class="btw-pill">· {{ props.modelLabel }}</span></div>
           <button class="btw-btn" @click="emit('close')">关闭</button>
-        </div>
-        <!-- 任务支线(git-commit)工具集固定,轻量/完整切换无意义,隐藏 -->
-        <div v-if="!store.taskId" class="btw-seg-row">
-          <div class="btw-seg" role="group">
-            <button :aria-pressed="props.lightweight" @click="emit('update:lightweight', true)" :disabled="store.isBusy">轻量</button>
-            <button :aria-pressed="!props.lightweight" @click="emit('update:lightweight', false)" :disabled="store.isBusy">完整</button>
-          </div>
         </div>
       </div>
       <div class="btw-body">
-        <div class="btw-q">{{ store.taskId ? store.taskLabel : store.question }}</div>
+        <div class="btw-q">{{ store.question }}</div>
         <div class="btw-a msg-text" v-html="html"></div>
-        <span v-if="store.isBusy" class="btw-cursor"></span>
         <div v-if="store.error" class="btw-err">{{ store.error }}</div>
       </div>
       <div v-if="store.done" class="btw-foot">
@@ -107,37 +97,6 @@ const html = computed(() =>
   font-weight: 400;
 }
 
-.btw-seg-row {
-  margin-top: 8px;
-}
-
-.btw-seg {
-  display: inline-flex;
-  border: 1px solid var(--aide-border);
-  border-radius: 999px;
-  overflow: hidden;
-}
-
-.btw-seg button {
-  background: none;
-  border: 0;
-  color: var(--aide-text-muted);
-  padding: 3px 11px;
-  font-size: 11px;
-  cursor: pointer;
-  transition: all var(--aide-ease-t);
-}
-
-.btw-seg button[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--aide-accent) 15%, transparent);
-  color: var(--aide-accent);
-}
-
-.btw-seg button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 .btw-btn {
   border: 1px solid var(--aide-border);
   background: transparent;
@@ -176,21 +135,6 @@ const html = computed(() =>
   line-height: 1.6;
   color: var(--aide-text-primary);
   word-break: break-word;
-}
-
-.btw-cursor {
-  display: inline-block;
-  width: 6px;
-  height: 13px;
-  vertical-align: -2px;
-  background: var(--aide-accent);
-  animation: btw-blink 1s steps(2, start) infinite;
-}
-
-@keyframes btw-blink {
-  50% {
-    opacity: 0;
-  }
 }
 
 .btw-err {

@@ -59,8 +59,6 @@ const props = defineProps<{
   /** 发送坐实信号：ChatPanel 门控通过/确认后递增，本组件据此清空输入（取消确认
    *  不递增，输入保留——与旧实现「取消时内容回退对话框」语义一致）。 */
   sendConfirmedNonce: number;
-  /** btw 轻量开关：由 ChatPanel 持有（BtwDrawer 的轻量开关也绑它），经 prop 读、emit 回写 */
-  btwLightweight: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -69,14 +67,12 @@ const emit = defineEmits<{
   /** 发送请求（不清输入）：effectiveProvider/effectiveModel 并入 opts（ChatPanel
    *  的发送前确认门控据此判定是否弹确认形态），相邻 string 不再位置错位 */
   "send-request": [prompt: string, opts: SendOptions & { effectiveProvider: string; effectiveModel: string }];
-  "send-btw": [prompt: string, opts: { lightweight: boolean; model?: string; effort?: string }];
-  "send-btw-task": [opts: { taskId: string }];
+  "send-btw": [prompt: string, opts: { model?: string; effort?: string }];
   "set-model": [model: string];
   "set-effort": [effort: string];
   "set-permission-mode": [mode: string];
   /** 图片 400 回滚文本已回填进输入框（父组件据此清空 store.rollbackText） */
   "rollback-text-consumed": [];
-  "update:btwLightweight": [v: boolean];
   /** hero 头展示的模型名（选中模型变化时上报，ChatPanel 的 hero 标题行用） */
   "hero-model-name": [name: string];
   /** 权限模式变化（用户切换/侧边同步/会话切换）——ChatPanel 的 PermissionDialog
@@ -777,14 +773,6 @@ async function performSend() {
     const action = cmdMatch ? quickActions.find((a) => a.command === cmdMatch[1]) : undefined;
     if (action) {
       const args = (cmdMatch?.[2] ?? "").trim();
-      if (action.kind === "task") {
-        // 任务支线(git-commit):无参数、不进输入模式,一键直跑;输入清空同 btw。
-        inputText.value = "";
-        pendingImages.value = [];
-        pendingMentions.value = [];
-        emit("send-btw-task", { taskId: action.taskId ?? action.id });
-        return;
-      }
       if (action.kind === "btw") {
         inputText.value = "";
         pendingImages.value = [];
@@ -794,7 +782,6 @@ async function performSend() {
           return;
         }
         emit("send-btw", mentionPrefix + args, {
-          lightweight: props.btwLightweight,
           model: btwModel.value || btwDefaultModel.value,
           effort: btwEffort.value,
         });
@@ -813,7 +800,7 @@ async function performSend() {
     // 不在这里乐观触发——等支线真正进入 running 才确认(见上面 status 的 watch),
     // 否则 fork 失败时也会弹"已切回主对话输入"造成误导。
     // 引用芯片在 btw 里只带 @path 字面量（支线没有 mention 展开通道），模型可自行 Read。
-    emit("send-btw", mentionPrefix + text, { lightweight: props.btwLightweight, model: btwModel.value, effort: btwEffort.value });
+    emit("send-btw", mentionPrefix + text, { model: btwModel.value, effort: btwEffort.value });
     inputText.value = "";
     pendingImages.value = [];
     pendingMentions.value = [];
@@ -896,15 +883,10 @@ async function runPromptAction(action: QuickAction, prompt: string): Promise<boo
   return true;
 }
 
-/** 分裂按钮菜单选择：btw 是输入模式切换（不发消息），task 一键直跑任务支线，
- *  prompt 类与手打 /name 同路径。 */
+/** 分裂按钮菜单选择：btw 是输入模式切换（不发消息），prompt 类与手打 /name 同路径。 */
 async function handleQuickAction(action: QuickAction) {
   if (action.kind === "btw") {
     toggleBtw();
-    return;
-  }
-  if (action.kind === "task") {
-    emit("send-btw-task", { taskId: action.taskId ?? action.id });
     return;
   }
   await runPromptAction(action, "/" + action.command);

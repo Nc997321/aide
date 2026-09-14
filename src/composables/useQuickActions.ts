@@ -12,13 +12,10 @@ export interface QuickAction {
   /** UX 标签：菜单项与动作胶囊里展示的人性化名字。 */
   label: string;
   /** prompt = CLI 引擎层原生命令，原文发给 sidecar 执行（/compact /clear）；
-   *  btw = 支线对话，aide 自己实现的 UX 增强（CLI 的 /btw 是 TUI 专属，
-   *  SDK 环境不可用），走 send-btw 链路不发引擎。
-   *  task = btw 任务支线（git-commit）：不 fork 主会话的全新会话 + 工具白名单，
-   *  走 send-btw-task 链路；不进输入模式、无参数，一键直跑。 */
-  kind: "prompt" | "btw" | "task";
-  /** kind === "task" 时的任务标识（目前仅 "git-commit"）。 */
-  taskId?: string;
+   *  btw = 侧问，走 send-btw 链路：对存活主会话调官方 side_question 通道
+   *  （进程内完成，不起新进程）。CLI 的 /btw 命令本体是 TUI 专属，但同一机制
+   *  经 SDK 控制通道可用——见 docs/superpowers/specs 的 btw 重构设计。 */
+  kind: "prompt" | "btw";
   /** 菜单项/胶囊气泡前缀图标（字符）。 */
   icon?: string;
   /** true = 执行前弹 useModal.confirm 二次确认（用于不可逆操作，如 /clear）。 */
@@ -27,7 +24,6 @@ export interface QuickAction {
 
 const actions: QuickAction[] = [
   { id: "btw", command: "btw", label: "顺便问一下", kind: "btw", icon: "↳" },
-  { id: "git-commit", command: "commit", label: "Git 提交", kind: "task", taskId: "git-commit", icon: "⌾" },
   { id: "compact", command: "compact", label: "压缩上下文", kind: "prompt", icon: "✦" },
   { id: "clear", command: "clear", label: "清空上下文", kind: "prompt", icon: "⌫", confirm: true },
 ];

@@ -55,7 +55,6 @@ const {
   consumeRollbackText,
   sendMessage,
   sendBtw,
-  sendBtwTask,
   interrupt,
   setModel,
   setEffort,
@@ -120,12 +119,8 @@ function onRespondPermission(
   });
 }
 
-function onSendBtw(prompt: string, opts: { lightweight: boolean; model?: string; effort?: string }) {
+function onSendBtw(prompt: string, opts: { model?: string; effort?: string }) {
   sendBtw(prompt, opts);
-}
-
-function onSendBtwTask(opts: { taskId: string }) {
-  sendBtwTask(opts.taskId);
 }
 
 function onTabContext(tabId: string, x: number, y: number) {
@@ -203,7 +198,6 @@ function onPickWorkspace(ws: WorkspaceInfo) {
       class="pane-group__chat"
       @send="onSend"
       @send-btw="onSendBtw"
-      @send-btw-task="onSendBtwTask"
       @select-workspace="onPickWorkspace"
       @interrupt="interrupt"
       @set-model="setModel"

@@ -6,7 +6,6 @@ describe("useQuickActions", () => {
     const { actions } = useQuickActions();
     expect(actions).toEqual([
       { id: "btw", command: "btw", label: "顺便问一下", kind: "btw", icon: "↳" },
-      { id: "git-commit", command: "commit", label: "Git 提交", kind: "task", taskId: "git-commit", icon: "⌾" },
       { id: "compact", command: "compact", label: "压缩上下文", kind: "prompt", icon: "✦" },
       { id: "clear", command: "clear", label: "清空上下文", kind: "prompt", icon: "⌫", confirm: true },
     ]);

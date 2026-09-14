@@ -81,8 +81,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   send: [prompt: string, opts: SendOptions];
-  "send-btw": [prompt: string, opts: { lightweight: boolean; model?: string; effort?: string }];
-  "send-btw-task": [opts: { taskId: string }];
+  "send-btw": [prompt: string, opts: { model?: string; effort?: string }];
   interrupt: [];
   "set-model": [model: string];
   "set-effort": [effort: string];
@@ -475,9 +474,6 @@ const {
 // 顶部入口按钮的「磁盘还有更早页」开关（模板里直接读，sessionId 空时 no-op）。
 const canLoadOlder = computed(() => (props.sessionId ? hasMoreOlder(props.sessionId) : false));
 
-// btw 轻量开关：BtwDrawer 与 ChatInputBox 共用（输入框经 prop 读、emit 回写）。
-const btwLightweight = ref(true);
-
 const btw = useBtwSession();
 // 抽屉可见性:status 非 idle 且本窗口的活动会话正是被 fork 的那个主会话。
 // btw store 是全局单例,但抽屉 per-ChatPanel 挂载——只看 status 会让任意窗口触发
@@ -501,13 +497,12 @@ const btwModelLabel = computed(() => {
   return eff ? `${base} · ${effortLabel(eff)}` : base;
 });
 // 「关闭」按状态分两种语义:
-//  - 还在跑(starting/running):最小化——抽屉收起,sidecar 继续后台跑,跑完结论
-//    照样作为批注插进主对话(不杀进程,用户要的就是这个)。
-//  - 已结束/出错(done/error):teardown——杀残留 sidecar(出错时可能挂着一个僵
-//    尸进程)、reset 回 idle。否则 error 态会卡在抽屉里关不掉、进程也赖着不死。
+//  - 还在跑(starting/running):最小化——抽屉收起,侧问在服务端继续跑,答案到达后
+//    照样作为批注插进主对话(用户要的就是这个)。
+//  - 已结束/出错(done/error):只收起抽屉。现在没有独立进程可回收(侧问跑在主会话
+//    进程里),reset 由下一次 startBtw 覆盖完成。
 function closeBtw() {
-  if (btw.store.value.isBusy) btw.minimize();
-  else btw.cleanup();
+  btw.minimize();
 }
 
 
@@ -649,23 +644,18 @@ function onOpenBgDock(taskId: string) {
       :focused="props.focused"
       :session-provider="sessionProvider"
       :send-confirmed-nonce="sendConfirmedNonce"
-      :btw-lightweight="btwLightweight"
       @send-request="onSendRequest"
       @send-btw="(prompt, opts) => emit('send-btw', prompt, opts)"
-      @send-btw-task="(opts) => emit('send-btw-task', opts)"
       @set-model="(m) => emit('set-model', m)"
       @set-effort="(e) => emit('set-effort', e)"
       @set-permission-mode="(m) => emit('set-permission-mode', m)"
       @rollback-text-consumed="emit('rollback-text-consumed')"
-      @update:btw-lightweight="btwLightweight = $event"
       @hero-model-name="heroModelName = $event"
       @permission-mode-changed="permissionMode = $event"
     />
     <BtwDrawer
       :visible="btwDrawerVisible"
-      :lightweight="btwLightweight"
       :model-label="btwModelLabel"
-      @update:lightweight="btwLightweight = $event"
       @close="closeBtw"
     />
   </div>
