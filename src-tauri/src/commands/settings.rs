@@ -205,6 +205,11 @@ pub struct AppSettings {
     /// 与 effort 解耦（2026-08-21 决策）：effort 切换不再联动 thinking。
     #[serde(default = "default_thinking_enabled")]
     pub thinking_enabled: bool,
+    /// 输出样式（Claude Code 内置样式名，见 DEFAULT_OUTPUT_STYLE 说明）。空串 =
+    /// 未设置，按默认处理。与 thinking 同款的生效时机：值随每条 send 下发，但
+    /// sidecar 只在**新建会话**（建 query）时落地——改动对已在跑的会话无效。
+    #[serde(default = "default_output_style")]
+    pub output_style: String,
     #[serde(default)]
     pub proxy: String,
     #[serde(default)]
@@ -314,6 +319,15 @@ fn default_notifications_enabled() -> bool {
 fn default_thinking_enabled() -> bool {
     true
 }
+/// 输出样式的唯一真相源：serde 默认值与 chat.rs 读设置失败时的兜底共用同一常量。
+/// 取值是 Claude Code 内置样式名——"default"（不改变默认行为）/ "Proactive" /
+/// "Concise" / "Explanatory" / "Learning"。自定义样式走插件通道（plugin 的
+/// output-styles 目录），不在本字段的值域内。
+pub(crate) const DEFAULT_OUTPUT_STYLE: &str = "default";
+
+fn default_output_style() -> String {
+    DEFAULT_OUTPUT_STYLE.to_string()
+}
 fn default_theme() -> String {
     "glass".to_string()
 }
@@ -333,6 +347,7 @@ impl Default for AppSettings {
             terminal_font_family: String::new(),
             notifications_enabled: default_notifications_enabled(),
             thinking_enabled: default_thinking_enabled(),
+            output_style: default_output_style(),
             proxy: String::new(),
             shell_path: String::new(),
             workbench_height: 0,

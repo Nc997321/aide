@@ -1,7 +1,22 @@
 import { reactive, ref, watch } from "vue";
 import { api } from "../api";
 import { MONO_FONT_STACK, UI_FONT_STACK, resolveFontFamily, resolveScopedFontFamily } from "../utils/fonts";
-import type { AppSettings, CodeGraphEmbedderConfig, JdkEntry, SecretMutation } from "../types";
+import type { AppSettings, CodeGraphEmbedderConfig, JdkEntry, OutputStyle, SecretMutation } from "../types";
+
+/** 落盘值 → 合法样式（未知/缺失回落默认）。配置可能被手改、或由不认识新值的旧版
+ *  写入，边界处收窄重建不变量——否则非法值会让设置页下拉显示空白（同
+ *  SettingsPanel 的 normalizePermissionMode 处理旧值迁移的思路）。
+ *  值域与 sidecar 的 OUTPUT_STYLES（session-worker/outputStyle.ts）同源，但那边
+ *  **不含 "default"**（它与「不下发」等价），改动要一起改。 */
+function isOutputStyle(v: string | undefined): v is OutputStyle {
+  return (
+    v === "default" ||
+    v === "Proactive" ||
+    v === "Concise" ||
+    v === "Explanatory" ||
+    v === "Learning"
+  );
+}
 
 const defaults: AppSettings = {
   fontSize: 14,
@@ -10,6 +25,7 @@ const defaults: AppSettings = {
   terminalFontFamily: MONO_FONT_STACK,
   notificationsEnabled: true,
   thinkingEnabled: true,
+  outputStyle: "default",
   proxy: "",
   shellPath: "",
   workbenchHeight: 0,
@@ -84,6 +100,8 @@ export function useSettings() {
       settings.terminalFontFamily = resolveScopedFontFamily(s.terminalFontFamily, settings.fontFamily);
       settings.notificationsEnabled = s.notificationsEnabled ?? defaults.notificationsEnabled;
       settings.thinkingEnabled = s.thinkingEnabled ?? defaults.thinkingEnabled;
+      // 过值域校验再收下：手改配置文件 / 旧版写入的未知样式回落默认，别让下拉空白。
+      settings.outputStyle = isOutputStyle(s.outputStyle) ? s.outputStyle : defaults.outputStyle;
       settings.proxy = s.proxy ?? defaults.proxy;
       settings.shellPath = s.shellPath ?? defaults.shellPath;
       settings.workbenchHeight = s.workbenchHeight ?? defaults.workbenchHeight;
@@ -131,6 +149,7 @@ export function useSettings() {
     if (partial.terminalFontFamily !== undefined) settings.terminalFontFamily = partial.terminalFontFamily;
     if (partial.notificationsEnabled !== undefined) settings.notificationsEnabled = partial.notificationsEnabled;
     if (partial.thinkingEnabled !== undefined) settings.thinkingEnabled = partial.thinkingEnabled;
+    if (partial.outputStyle !== undefined) settings.outputStyle = partial.outputStyle;
     if (partial.proxy !== undefined) settings.proxy = partial.proxy;
     if (partial.shellPath !== undefined) settings.shellPath = partial.shellPath;
     if (partial.workbenchHeight !== undefined) settings.workbenchHeight = partial.workbenchHeight;

@@ -357,6 +357,12 @@ export type SidecarCommand =
       // 思考展示开关：false 时 mapper 剥掉 thinking 块（ollama 端点不认
       // thinking 参数，API 层关不掉，只能展示层剥——见 mapper.ts 注释）。
       thinking_enabled?: boolean;
+      // 输出样式（内置四款；值域见 session-worker/outputStyle.ts 的 OUTPUT_STYLES，
+      // 那里不含 "default"）。Rust 从设置读出后随每条 send 下发**非默认值**，但只在
+      // **新建会话**（建 query）时落地——改动不影响已在跑的会话（与 thinking 同款）。
+      // 省略 = 按默认处理；"default" / 空串 / 未知值同样归一为默认。
+      // btw 支线与 automation 运行不下发本字段（见 outputStyle.ts 头注）。
+      output_style?: string;
       // 工作区信任标志：Rust 在 send_message / start_btw_session 里按 cwd 查
       // trustedWorkspaces 白名单后注入。true（或省略，向后兼容/测试）= 信任，
       // 加载项目 CLAUDE.md / .claude/skills/ / .mcp.json；false = 受限模式，

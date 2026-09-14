@@ -107,6 +107,8 @@ const sendCommand = z.looseObject({
   mcp_headers: z.record(z.string(), z.record(z.string(), z.string())).optional(),
   auto_title: z.boolean().optional(),
   thinking_enabled: z.boolean().optional(),
+  // 输出样式名（内置四款 + "default"）。只在新建会话（建 query）时落地。
+  output_style: z.string().optional(),
   trusted: z.boolean().optional(),
   codegraph_enabled: z.boolean().optional(),
   permission_policy: permissionPolicySnapshot.optional(),

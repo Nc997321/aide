@@ -110,6 +110,14 @@ export interface Keybindings {
  *  "row" = 行式（surface 淡底 + accent 竖条选中）。纯 UI 皮肤切换，逻辑共享。 */
 export type SessionListStyle = "card" | "row";
 
+/** 内置输出样式（Claude Code 的 output style）：改的是系统提示里的角色/语气/
+ *  输出格式，不是模型知道什么。`"default"` = 不改变默认行为。
+ *  自定义样式走插件通道（plugin 的 output-styles 目录），不在本值域内。
+ *  ⚠️ 值域与 sidecar 的白名单两处定义（agent-sidecar/src/engine/session-worker/
+ *  outputStyle.ts 的 OUTPUT_STYLES，那边**不含 "default"**——它与「不下发」等价），
+ *  改动要一起改——漂移会让样式静默失效（同 UserMessageBlock 先例）。 */
+export type OutputStyle = "default" | "Proactive" | "Concise" | "Explanatory" | "Learning";
+
 export interface AppSettings {
   fontSize: number;
   /** 界面字体（font-family 栈）：控制界面正文（按钮/标签/面板）与聊天区。 */
@@ -126,6 +134,9 @@ export interface AppSettings {
    *  （sidecar 剥掉 thinking 块）。例外：本地 ollama 模型不认 thinking 参数、无法
    *  能力级禁用，仅隐藏显示。与 effort 解耦。 */
   thinkingEnabled: boolean;
+  /** 输出样式（内置四款 + "default"）。生效时机与 thinking 同款：值随每条 send
+   *  下发，但 sidecar 只在新建会话（建 query）时落地——改动对已在跑的会话无效。 */
+  outputStyle: OutputStyle;
   proxy: string;
   shellPath: string;
   workbenchHeight: number;

@@ -1,4 +1,4 @@
-use crate::commands::settings::get_settings;
+use crate::commands::settings::{get_settings, DEFAULT_OUTPUT_STYLE};
 use crate::commands::{project_root_for_commands, WorkspaceState};
 use crate::runtime::env::build_runtime_env_vars;
 use crate::runtime::AgentRuntimeManager;
@@ -79,6 +79,9 @@ struct SendOptions<'a> {
     jump_queue: bool,
     provider_switched: bool,
     thinking_enabled: bool,
+    /// 输出样式名（见 settings.rs 的 DEFAULT_OUTPUT_STYLE）。**非默认才落字段**——
+    /// 空串与 `"default"` 都不落，sidecar 缺席即按默认处理（判据在 attach_output_style）。
+    output_style: String,
 }
 
 /// 构造 `send` 命令的 JSON（纯函数，可单测）。骨架目录：必填字段 + 逐项附件，
@@ -104,7 +107,23 @@ fn build_send_command(
     attach_permission_mode(&mut cmd, opts.permission_mode);
     attach_flag(&mut cmd, "jump_queue", opts.jump_queue);
     attach_flag(&mut cmd, "provider_switched", opts.provider_switched);
+    attach_output_style(&mut cmd, &opts.output_style);
     cmd
+}
+
+/// 只在样式**非默认**时落字段：`"default"`（设置里最常见的值）与空串都不落。
+///
+/// 「与缺席同义」的边界要说清：对**新建** worker 成立（`outputStyle` 初值 null →
+/// 不发控制请求）；对**已存在的 worker** 不成立——字段缺席时 sidecar 保留上次的
+/// 值，query 重建后仍吃旧样式。即设置改动不回灌正在跑的会话（含其 query 重建），
+/// 与「新会话生效」的口径一致。空串仅手改 config.json 能造出来，属防御。
+///
+/// 注：btw / automation 两条支线不下发本字段、不继承输出样式（见
+/// agent-sidecar/src/engine/session-worker/outputStyle.ts 头注）。
+fn attach_output_style(cmd: &mut serde_json::Value, output_style: &str) {
+    if !output_style.is_empty() && output_style != DEFAULT_OUTPUT_STYLE {
+        cmd["output_style"] = json!(output_style);
+    }
 }
 
 /// 必填骨架。env 恒存在（`attach_env_override` 依赖此不变式，不做 get_mut 兜底）。
@@ -216,7 +235,19 @@ pub async fn send_message(
     // Clone the Arc before `get_settings` takes the `State` by value — the
     // permission snapshot below still needs the service.
     let snapshot_service = settings_service.inner().clone();
-    let settings = get_settings(settings_service).await.ok();
+    // 读设置失败不阻塞发送（proxy / thinking / output_style 各有兜底），但不能无声：
+    // 用户选了非默认输出样式却读不到设置时，这条日志是唯一线索（同上方登记工作区的
+    // 「失败不阻塞但不静默」处理）。
+    let settings = match get_settings(settings_service).await {
+        Ok(s) => Some(s),
+        Err(e) => {
+            tracing::warn!(
+                ?e,
+                "send_message: read settings failed, falling back to defaults"
+            );
+            None
+        }
+    };
     let proxy = settings
         .as_ref()
         .map(|s| s.proxy.clone())
@@ -230,6 +261,12 @@ pub async fn send_message(
         .as_ref()
         .map(|s| s.thinking_enabled)
         .unwrap_or(true);
+    // 输出样式下发 sidecar（设置读取失败时按默认）：生效时机与 thinking 同款——
+    // sidecar 只在新建会话（建 query）时落地，改动不影响已在跑的会话。
+    let output_style = settings
+        .as_ref()
+        .map(|s| s.output_style.clone())
+        .unwrap_or_else(|| DEFAULT_OUTPUT_STYLE.to_string());
 
     let mut cmd = build_send_command(
         &session_id,
@@ -246,6 +283,7 @@ pub async fn send_message(
             jump_queue: jump_queue.unwrap_or(false),
             provider_switched,
             thinking_enabled,
+            output_style,
         },
     );
 
@@ -950,5 +988,39 @@ mod tests {
             },
         );
         assert_eq!(off["thinking_enabled"], false);
+    }
+
+    /// 输出样式（settings.outputStyle）随 send 命令下发给 sidecar：非默认才落字段。
+    /// 默认值 `"default"` 与空串都不落——sidecar 缺席即按默认处理，三条等价。
+    #[test]
+    fn build_send_command_carries_output_style_when_set() {
+        // 生产最常见路径：设置里就是默认值（serde 默认恒为 "default"），不落字段。
+        let defaulted = build_send_command(
+            "s",
+            "hi",
+            "/tmp",
+            &HashMap::new(),
+            SendOptions {
+                output_style: DEFAULT_OUTPUT_STYLE.to_string(),
+                ..base_opts()
+            },
+        );
+        assert!(defaulted.get("output_style").is_none());
+
+        // 空串（仅手改 config.json 能造出来）同样不落。
+        let blank = build_send_command("s", "hi", "/tmp", &HashMap::new(), base_opts());
+        assert!(blank.get("output_style").is_none());
+
+        let set = build_send_command(
+            "s",
+            "hi",
+            "/tmp",
+            &HashMap::new(),
+            SendOptions {
+                output_style: "Explanatory".to_string(),
+                ..base_opts()
+            },
+        );
+        assert_eq!(set["output_style"], "Explanatory");
     }
 }

@@ -4,7 +4,7 @@ import { useSettings } from "../composables/useSettings";
 import { useOnboarding } from "../composables/useOnboarding";
 import { useCustomizations } from "../composables/useCustomizations";
 import { api } from "../api";
-import type { RemoteStatus, SessionListStyle, VimBindings } from "../types";
+import type { OutputStyle, RemoteStatus, SessionListStyle, VimBindings } from "../types";
 import { eventToVimKey } from "../extensions/vimKeybindings";
 import type { CustomizationItem } from "../types/customization";
 import CustomizationList from "./customizations/CustomizationList.vue";
@@ -23,6 +23,15 @@ const themeOptions = [
 const sessionListStyleOptions = [
   { value: "card", label: "卡片（渐变质感）" },
   { value: "row", label: "行式（简洁列表）" },
+];
+/** 输出样式（通用 tab）：值域与 @aide/sdk 的 OutputStyle 同形——内置四款 + 默认。
+ *  自定义样式走插件通道（plugin 的 output-styles 目录），不在这里列。 */
+const outputStyleOptions = [
+  { value: "default", label: "默认（不改变输出风格）" },
+  { value: "Proactive", label: "Proactive（多行动、少打断）" },
+  { value: "Concise", label: "Concise（简洁作答）" },
+  { value: "Explanatory", label: "Explanatory（附 Insight 讲解）" },
+  { value: "Learning", label: "Learning（协作式，留 TODO(human) 给你写）" },
 ];
 import { formatShortcut, detectConflicts } from "../utils/shortcut";
 import { applyTheme, themes } from "../themes";
@@ -359,6 +368,14 @@ function onSessionListStyleChange(v: string) {
   update({ sessionListStyle: v as SessionListStyle });
 }
 
+/** 输出样式切换（通用 tab）：值域由 outputStyleOptions 约束在 OutputStyle 内，
+ *  收窄安全（同 onSessionListStyleChange）。生效时机与「启用思考」同款——新会话起。 */
+function onOutputStyleChange(v: string) {
+  const style = v as OutputStyle;
+  settings.outputStyle = style;
+  update({ outputStyle: style });
+}
+
 function onThemeChange(themeId: string) {
   const tokens = themes[themeId];  if (tokens) {
     applyTheme(tokens);
@@ -567,6 +584,16 @@ function onOverlayClick(e: MouseEvent) {
                     <span class="toggle-track"></span>
                   </label>
                 </div>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">输出样式</label>
+                <ThemedSelect
+                  :model-value="settings.outputStyle"
+                  :options="outputStyleOptions"
+                  @update:model-value="onOutputStyleChange"
+                />
+                <span class="field-hint">改变 Claude 的角色/语气/输出格式（系统提示层），不改它知道什么。新会话起生效</span>
               </div>
 
               <div class="settings-field">

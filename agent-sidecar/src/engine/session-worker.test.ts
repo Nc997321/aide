@@ -1179,6 +1179,59 @@ describe("SessionWorker — 思考开关（send.thinking_enabled → spawn think
   });
 });
 
+describe("SessionWorker — 输出样式（send.output_style → 建 query 后 applyFlagSettings）", () => {
+  /** 伪 query 挂 applyFlagSettings 探针，并按时间顺序记录「应用样式」与「CLI 开始
+   *  拉取首条 prompt」两个时刻——只断言 spawn 选项不够：本特性整条链的失效模式是
+   *  「静默不生效」，必须证明控制请求真的发出去了、且早于首轮。 */
+  async function captureOutputStyle(cmd: any) {
+    const applied: any[] = [];
+    const order: string[] = [];
+    let captured: any;
+    const fakeQuery = ((args: any) => {
+      captured = args?.options ?? args;
+      const prompt = args.prompt;
+      const gen: any = (async function* () {
+        order.push("prompt-pulled");
+        // 只标记拉取时刻，不消费语义（真实消费由 startLoop 的消息循环负责）
+        for await (const _msg of prompt) { /* 空体：仅为触发拉取 */ }
+      })();
+      gen.applyFlagSettings = async (settings: any) => {
+        order.push("apply-style");
+        applied.push(settings);
+      };
+      return gen;
+    }) as any;
+    const worker = new SessionWorker("s-os", () => {}, { queryFn: fakeQuery, cwd: "/proj" });
+    worker.handleCommand({
+      cmd: "send", session_id: "s-os", prompt: "hi", cwd: "/proj", env: {},
+      ...cmd,
+    } as any);
+    await vi.waitFor(() => expect(captured).toBeDefined());
+    await flushPromises();
+    worker.stop();
+    return { applied, order };
+  }
+
+  it("output_style:Explanatory → applyFlagSettings({ outputStyle })", async () => {
+    const { applied } = await captureOutputStyle({ output_style: "Explanatory" });
+    expect(applied).toEqual([{ outputStyle: "Explanatory" }]);
+  });
+
+  it("默认值 / 值域外 / 缺省 → 一次都不调（不发控制请求）", async () => {
+    // 三条都归一到 null：默认值不下发、未知值当默认、缺席即默认。
+    expect((await captureOutputStyle({ output_style: "default" })).applied).toEqual([]);
+    expect((await captureOutputStyle({ output_style: "Turbo" })).applied).toEqual([]);
+    expect((await captureOutputStyle({})).applied).toEqual([]);
+  });
+
+  it("时序：样式在建 query 时应用，早于 CLI 拉走首条 prompt", async () => {
+    // 这条把「不能挪到 session_init 之后」从注释变成可回归的不变式——晚一步则
+    // 第一条消息吃不到样式（整条链唯一难自查的失败模式）。
+    const { order } = await captureOutputStyle({ output_style: "Learning" });
+    expect(order).toEqual(["apply-style", "prompt-pulled"]);
+  });
+});
+
 // ================================================================
 // context_usage 事件（SDK 0.3.246 数据扩展）
 // ================================================================

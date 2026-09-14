@@ -29,6 +29,7 @@ import {
 } from "./modelSwitchGuard.js";
 import { applyEffortSwitch, normalizeEffort } from "./effortSwitch.js";
 import type { EffortSettable } from "./effortSwitch.js";
+import { applyOutputStyle, normalizeOutputStyle, type OutputStyle } from "./session-worker/outputStyle.js";
 import { buildCliEnv } from "./cliEnv.js";
 import { prepareQueryContext } from "./session-worker/queryContext.js";
 import { buildSpawnQueryOptions } from "./session-worker/queryOptions.js";
@@ -154,6 +155,10 @@ export class SessionWorker {
    *  thinking 字段=端点默认，模型总会出思考块，2026-08-21 mock 端点实锤），
    *  无法能力级禁用，仅靠 ② 隐藏显示。 */
   private thinkingEnabled = true;
+  /** 输出样式（send.output_style 下发，handleSend 归一后存这里）。null = 默认/未知，
+   *  建 query 后不下发。与 thinkingEnabled 同款：值每条 send 都刷新，但只在**新建
+   *  会话**（建 query）时落地——改动不影响已在跑的会话（见 session-worker/outputStyle.ts）。 */
+  private outputStyle: OutputStyle | null = null;
   /** 每个 worker 只命名一次（防止 resume/多轮重复生成）。 */
   private titleAttempted = false;
 
@@ -556,6 +561,9 @@ export class SessionWorker {
     this.applySendRuntimeConfig(cmd);
     if (cmd.auto_title !== undefined) this.autoTitle = cmd.auto_title;
     if (cmd.thinking_enabled !== undefined) this.thinkingEnabled = cmd.thinking_enabled;
+    // 归一在入口完成（守门）：非法/未知值绝不进 worker 状态，applyOutputStyle 只
+    // 面对值域内的值或 null。
+    if (cmd.output_style !== undefined) this.outputStyle = normalizeOutputStyle(cmd.output_style);
     // 首条 send 携带的策略快照在 query 起来前落地——PreToolUse hook 首次评估就能用。
     if (cmd.permission_policy) this.applyPermissionPolicy(cmd.permission_policy);
 
@@ -747,6 +755,10 @@ export class SessionWorker {
           this.currentQuery = q;
           loopQuery = q;
           this.shouldForkNextConnect = false;
+          // 输出样式：必须在首轮 prompt 被 CLI 取走之前落地（晚一步 = 第一条消息
+          // 不变样，故不能挪到 session_init 之后）。只在建 query 时应用这一次——
+          // 值虽每条 send 都刷新，但刻意不做会话中热切（见 outputStyle.ts 头注）。
+          await applyOutputStyle(this.outputStyle, q);
           // 内建 hook 清单回传前端（扩展设置页 hook 列表用；Task 10 消费，重复 emit 幂等）。
           this.emit({ type: "builtin_hooks_manifest", manifest: queryCtx.hookManifest });
 
