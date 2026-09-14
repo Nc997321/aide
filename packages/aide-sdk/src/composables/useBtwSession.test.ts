@@ -1,224 +1,230 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useBtwSession, __resetBtwForTest } from "./useBtwSession";
 
-// ── Tauri mocks (project style: module-level invokeMock) ──
-const invokeMock = vi.fn().mockResolvedValue(undefined);
+// ── api 门面 mock（btw 侧问现在只经这一条命令出去） ──
+const btwAskMock = vi.fn().mockResolvedValue(undefined);
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
+vi.mock("../api", () => ({
+  api: {
+    btwAsk: (...args: unknown[]) => btwAskMock(...args),
+    stopChatSession: vi.fn().mockResolvedValue(undefined),
+  },
 }));
 
 beforeEach(() => {
   __resetBtwForTest();
-  invokeMock.mockClear();
-  invokeMock.mockResolvedValue(undefined);
+  btwAskMock.mockClear();
+  btwAskMock.mockResolvedValue(undefined);
 });
 
-describe("useBtwSession routing", () => {
-  it("isBtwSid false before start", () => {
-    expect(useBtwSession().isBtwSid("any")).toBe(false);
+/** 起一条 btw 并让它处于「等事件」态。 */
+async function startBtwForTest(ownerSid: string, question: string, model?: string) {
+  const btw = useBtwSession();
+  await btw.startBtw({ ownerSid, question, model });
+  return btw;
+}
+
+describe("useBtwSession — 发起与事件渲染", () => {
+  it("startBtw 调 btwAsk(sessionId=主会话, history=本地记忆)，且不下发正文", async () => {
+    const { store } = await startBtwForTest("sid-1", "问题");
+    expect(btwAskMock).toHaveBeenCalledWith({ sessionId: "sid-1", question: "问题", history: [] });
+    // 正文一律等事件——命令已受理不等于有答案
+    expect(store.value.messages).toEqual([]);
+    expect(store.value.status).toBe("running");
   });
 
-  it("startBtw registers temp id; events route to store", async () => {
-    const { startBtw, handleBtwEvent, store } = useBtwSession();
-    await startBtw({ tempId: "t1", forkFrom: "main", prompt: "q", cwd: "/r", lightweight: true });
-    expect(useBtwSession().isBtwSid("t1")).toBe(true);
-    handleBtwEvent({ session_id: "t1", type: "text_delta", delta: "hello" });
-    expect(store.value.messages.join("")).toBe("hello");
-  });
-
-  it("message_stop assembles conclusion + calls onDone, sets done", async () => {
-    const { startBtw, handleBtwEvent, store, setOnDone } = useBtwSession();
+  it("btw_answer 事件才落正文，并完成收尾 + 批注回插", async () => {
     const done = vi.fn();
+    const { store, setOnDone, handleBtwAnswer } = await startBtwForTest("sid-1", "问题");
     setOnDone(done);
-    await startBtw({ tempId: "t2", forkFrom: "main", prompt: "why", cwd: "/r", lightweight: false });
-    handleBtwEvent({ session_id: "t2", type: "text_delta", delta: "answer" });
-    handleBtwEvent({ session_id: "t2", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
+
+    handleBtwAnswer({
+      type: "btw_answer",
+      session_id: "sid-1",
+      question: "问题",
+      response: "答案",
+      synthetic: false,
+    });
+
+    expect(store.value.messages.join("")).toBe("答案");
+    expect(store.value.isBusy).toBe(false);
     expect(store.value.done).toBe(true);
-    expect(done).toHaveBeenCalledWith(expect.objectContaining({ actionId: "btw", body: "answer" }));
+    expect(store.value.status).toBe("done");
+    expect(done).toHaveBeenCalledWith(
+      expect.objectContaining({ actionId: "btw", label: "问题", body: "答案" }),
+    );
   });
 
-  it("startBtw replaces existing btw (single instance)", async () => {
-    const { startBtw, isBtwSid } = useBtwSession();
-    await startBtw({ tempId: "a", forkFrom: "main", prompt: "1", cwd: "/r", lightweight: true });
-    await startBtw({ tempId: "b", forkFrom: "main", prompt: "2", cwd: "/r", lightweight: true });
-    expect(isBtwSid("a")).toBe(false);
-    expect(isBtwSid("b")).toBe(true);
+  it("不属于本抽屉的事件被忽略（session 或 question 不匹配）", async () => {
+    const { store, handleBtwAnswer } = await startBtwForTest("sid-1", "问题");
+    handleBtwAnswer({
+      type: "btw_answer",
+      session_id: "别的会话",
+      question: "问题",
+      response: "不该出现",
+    });
+    handleBtwAnswer({
+      type: "btw_answer",
+      session_id: "sid-1",
+      question: "别的问题",
+      response: "也不该出现",
+    });
+    expect(store.value.messages).toEqual([]);
+    expect(store.value.done).toBe(false);
   });
 
-  it("cleanup kills process and clears id", async () => {
-    const { startBtw, cleanup, isBtwSid } = useBtwSession();
-    await startBtw({ tempId: "c", forkFrom: "main", prompt: "1", cwd: "/r", lightweight: true });
-    await cleanup();
-    expect(isBtwSid("c")).toBe(false);
-  });
-
-  // 支线记忆：同一主会话的下一轮 btw 把此前问答拼进 prompt（2026-08-02）。
-  it("next btw prompt carries previous rounds' Q&A of the same owner session", async () => {
-    const { startBtw, handleBtwEvent } = useBtwSession();
-    await startBtw({ tempId: "h1", forkFrom: "main", prompt: "第一问", cwd: "/r", lightweight: true });
-    handleBtwEvent({ session_id: "h1", type: "text_delta", delta: "第一答" });
-    handleBtwEvent({ session_id: "h1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
-
-    await startBtw({ tempId: "h2", forkFrom: "main", prompt: "第二问", cwd: "/r", lightweight: true });
-    const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
-    expect(sentPrompt).toContain("[本次对话此前的支线问答]");
-    expect(sentPrompt).toContain("Q1: 第一问");
-    expect(sentPrompt).toContain("A1: 第一答");
-    expect(sentPrompt).toContain("[本轮问题]\n第二问");
-  });
-
-  it("history is per owner session: another session's btw sees no digest", async () => {
-    const { startBtw, handleBtwEvent } = useBtwSession();
-    await startBtw({ tempId: "x1", forkFrom: "main-a", prompt: "甲的问", cwd: "/r", lightweight: true });
-    handleBtwEvent({ session_id: "x1", type: "text_delta", delta: "甲的答" });
-    handleBtwEvent({ session_id: "x1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
-
-    await startBtw({ tempId: "x2", forkFrom: "main-b", prompt: "乙的问", cwd: "/r", lightweight: true });
-    const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
-    expect(sentPrompt).toBe("乙的问"); // 无历史 → 原样，不串别的会话的记忆
-  });
-
-  it("empty/errored btw leaves no history for the next round", async () => {
-    const { startBtw, handleBtwEvent } = useBtwSession();
-    await startBtw({ tempId: "z1", forkFrom: "main", prompt: "没答出来", cwd: "/r", lightweight: true });
-    handleBtwEvent({ session_id: "z1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null }); // 无 delta
-
-    await startBtw({ tempId: "z2", forkFrom: "main", prompt: "再问", cwd: "/r", lightweight: true });
-    const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
-    expect(sentPrompt).toBe("再问");
-  });
-
-  // 「关闭」=最小化:抽屉收起,但 sidecar 继续后台跑。最小化绝不杀进程——
-  // 跑完结论照样经 onDone 插进主对话,用户在主对话批注里看到结果。
-  it("minimize hides drawer but keeps sidecar alive; conclusion still inserts on done", async () => {
-    const { startBtw, minimize, isBtwSid, store, setOnDone, handleBtwEvent } = useBtwSession();
-    const done = vi.fn();
-    setOnDone(done);
-    await startBtw({ tempId: "m1", forkFrom: "main", prompt: "q", cwd: "/r", lightweight: true });
+  it("btw_answer 带 error：进 error 态并露出抽屉（最小化也要弹回来）", async () => {
+    const { store, handleBtwAnswer, minimize } = await startBtwForTest("sid-1", "问题");
     minimize();
-    // 最小化只置标志,进程仍存活(事件仍路由)、抽屉该因此隐藏。
-    expect(isBtwSid("m1")).toBe(true);
     expect(store.value.minimized).toBe(true);
-    // 后台跑完:onDone 照常把结论插进主对话。
-    handleBtwEvent({ session_id: "m1", type: "text_delta", delta: "bg-answer" });
-    handleBtwEvent({ session_id: "m1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
-    expect(done).toHaveBeenCalledWith(expect.objectContaining({ body: "bg-answer" }));
+
+    handleBtwAnswer({
+      type: "btw_answer",
+      session_id: "sid-1",
+      question: "问题",
+      error: "会话未运行，先发一条消息再问",
+    });
+
+    expect(store.value.error).toContain("会话未运行");
+    expect(store.value.status).toBe("error");
+    expect(store.value.minimized).toBe(false);
+    expect(store.value.isBusy).toBe(false);
   });
 
-  // 重展抽屉:最小化的逆操作。仅清标志、进程不动。
-  it("reopen clears minimized without touching the sidecar", async () => {
-    const { startBtw, minimize, reopen, isBtwSid, store } = useBtwSession();
-    await startBtw({ tempId: "r1", forkFrom: "main", prompt: "q", cwd: "/r", lightweight: true });
+  it("btwAsk 被拒（命令没写进 sidecar）→ error 态", async () => {
+    btwAskMock.mockRejectedValueOnce(new Error("Runtime 不可用"));
+    const { store } = await startBtwForTest("sid-1", "问题");
+    expect(store.value.status).toBe("error");
+    expect(store.value.error).toContain("Runtime 不可用");
+    expect(store.value.isBusy).toBe(false);
+  });
+
+  it("单实例：新 btw 替换旧的（旧抽屉不再吃事件）", async () => {
+    const btw = await startBtwForTest("sid-1", "第一问");
+    await btw.startBtw({ ownerSid: "sid-1", question: "第二问" });
+
+    btw.handleBtwAnswer({
+      type: "btw_answer",
+      session_id: "sid-1",
+      question: "第一问",
+      response: "迟到的旧答案",
+    });
+    expect(btw.store.value.messages).toEqual([]); // 旧答案被 question 匹配挡住
+    expect(btw.store.value.question).toBe("第二问");
+  });
+});
+
+describe("useBtwSession — 跨问记忆（封顶 20 轮）", () => {
+  it("下一轮 btw 把此前问答作为 history 参数传出去", async () => {
+    const { handleBtwAnswer } = await startBtwForTest("sid-1", "第一问");
+    handleBtwAnswer({
+      type: "btw_answer",
+      session_id: "sid-1",
+      question: "第一问",
+      response: "第一答",
+    });
+
+    await useBtwSession().startBtw({ ownerSid: "sid-1", question: "第二问" });
+    expect(btwAskMock).toHaveBeenLastCalledWith({
+      sessionId: "sid-1",
+      question: "第二问",
+      history: [{ question: "第一问", response: "第一答" }],
+    });
+  });
+
+  it("记忆按主会话隔离：另一个会话的 btw 看不到", async () => {
+    const { handleBtwAnswer } = await startBtwForTest("sid-1", "问");
+    handleBtwAnswer({ type: "btw_answer", session_id: "sid-1", question: "问", response: "答" });
+
+    await useBtwSession().startBtw({ ownerSid: "sid-2", question: "别处问" });
+    expect(btwAskMock).toHaveBeenLastCalledWith({
+      sessionId: "sid-2",
+      question: "别处问",
+      history: [],
+    });
+  });
+
+  it("synthetic 兜底答复渲染但不入历史", async () => {
+    const { handleBtwAnswer } = await startBtwForTest("sid-1", "问");
+    handleBtwAnswer({
+      type: "btw_answer",
+      session_id: "sid-1",
+      question: "问",
+      response: "兜底答复",
+      synthetic: true,
+    });
+    expect(useBtwSession().store.value.messages.join("")).toBe("兜底答复");
+
+    await useBtwSession().startBtw({ ownerSid: "sid-1", question: "再问" });
+    expect(btwAskMock).toHaveBeenLastCalledWith({ sessionId: "sid-1", question: "再问", history: [] });
+  });
+
+  it("失败轮不入历史", async () => {
+    const { handleBtwAnswer } = await startBtwForTest("sid-1", "问");
+    handleBtwAnswer({ type: "btw_answer", session_id: "sid-1", question: "问", error: "挂了" });
+
+    await useBtwSession().startBtw({ ownerSid: "sid-1", question: "再问" });
+    expect(btwAskMock).toHaveBeenLastCalledWith({ sessionId: "sid-1", question: "再问", history: [] });
+  });
+
+  it("超 20 轮丢最老（唯一护栏）", async () => {
+    const btw = useBtwSession();
+    for (let i = 1; i <= 22; i++) {
+      await btw.startBtw({ ownerSid: "sid-1", question: `问${i}` });
+      btw.handleBtwAnswer({
+        type: "btw_answer",
+        session_id: "sid-1",
+        question: `问${i}`,
+        response: `答${i}`,
+      });
+    }
+    await btw.startBtw({ ownerSid: "sid-1", question: "最后一问" });
+    const history = (btwAskMock.mock.calls.at(-1)![0] as any).history as {
+      question: string;
+    }[];
+    expect(history).toHaveLength(20);
+    expect(history[0].question).toBe("问3"); // 问1、问2 被挤掉
+    expect(history.at(-1)!.question).toBe("问22");
+  });
+
+  it("clearBtwHistory 清空某主会话的记忆", async () => {
+    const { handleBtwAnswer } = await startBtwForTest("sid-1", "问");
+    handleBtwAnswer({ type: "btw_answer", session_id: "sid-1", question: "问", response: "答" });
+
+    useBtwSession().clearBtwHistory("sid-1");
+    await useBtwSession().startBtw({ ownerSid: "sid-1", question: "再问" });
+    expect(btwAskMock).toHaveBeenLastCalledWith({ sessionId: "sid-1", question: "再问", history: [] });
+  });
+});
+
+describe("useBtwSession — 抽屉可见性与绑定迁移", () => {
+  it("最小化不杀任何东西；重开只清标志", async () => {
+    const { store, minimize, reopen } = await startBtwForTest("sid-1", "问");
     minimize();
     expect(store.value.minimized).toBe(true);
     reopen();
     expect(store.value.minimized).toBe(false);
-    expect(isBtwSid("r1")).toBe(true); // 进程仍存活
+    expect(store.value.status).toBe("running"); // 仍在等事件
   });
 
-  // 出错必须露出来:即便用户已最小化,错误也得把抽屉顶出来,不能在后台静默吞掉。
-  it("error while minimized surfaces the drawer (un-minimizes)", async () => {
-    const { startBtw, minimize, handleBtwEvent, store } = useBtwSession();
-    await startBtw({ tempId: "e1", forkFrom: "main", prompt: "q", cwd: "/r", lightweight: true });
-    minimize();
-    expect(store.value.minimized).toBe(true);
-    handleBtwEvent({ session_id: "e1", type: "error", message: "boom" });
-    expect(store.value.status).toBe("error");
-    expect(store.value.minimized).toBe(false); // 强制顶出抽屉
-    expect(store.value.error).toBe("boom");
-  });
+  it("rebindOwner 跟随主会话 temp→real：抽屉绑定与记忆 key 一起迁", async () => {
+    const { store, handleBtwAnswer, rebindOwner } = await startBtwForTest("temp-1", "问");
+    handleBtwAnswer({ type: "btw_answer", session_id: "temp-1", question: "问", response: "答" });
 
-  // 任务支线(git-commit):forkFrom 空 → 不 fork;tools/policy 透传;批注用任务
-  // 图标/标题;结论不进支线问答记忆(它是固定任务,混入只会污染后续 btw prompt)。
-  it("task btw: no fork, tools/policy passthrough, task annotation, no Q&A history", async () => {
-    const { startBtw, handleBtwEvent, store, setOnDone } = useBtwSession();
-    const done = vi.fn();
-    setOnDone(done);
-    const policy = { revision: 1, rules: [{ id: "g0", effect: "allow" }] };
-    await startBtw({
-      tempId: "task1", forkFrom: "", ownerSid: "main", prompt: "固定任务 prompt",
-      cwd: "/r", lightweight: false,
-      task: { id: "git-commit", label: "Git 提交", icon: "⌾", tools: ["Bash"], policy },
+    rebindOwner("temp-1", "real-1");
+    expect(store.value.ownerSessionId).toBe("real-1");
+
+    await useBtwSession().startBtw({ ownerSid: "real-1", question: "再问" });
+    expect(btwAskMock).toHaveBeenLastCalledWith({
+      sessionId: "real-1",
+      question: "再问",
+      history: [{ question: "问", response: "答" }],
     });
-    expect(store.value.taskId).toBe("git-commit");
-    const args = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1] as Record<string, unknown>;
-    expect(args.forkFrom).toBeNull(); // 空串 → null → Rust 不写 fork_from → 全新会话
-    expect(args.tools).toEqual(["Bash"]);
-    expect(args.permissionPolicy).toEqual(policy);
-    expect(args.prompt).toBe("固定任务 prompt"); // 不拼支线问答历史
-
-    handleBtwEvent({ session_id: "task1", type: "text_delta", delta: "已提交 abc1234" });
-    handleBtwEvent({ session_id: "task1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
-    expect(done).toHaveBeenCalledWith(expect.objectContaining({
-      actionId: "git-commit", label: "Git 提交", icon: "⌾", body: "已提交 abc1234",
-    }));
-
-    // 下一轮普通 btw 的 prompt 不应携带任务支线的"问答"
-    await startBtw({ tempId: "q1", forkFrom: "main", prompt: "正常问", cwd: "/r", lightweight: true });
-    const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
-    expect(sentPrompt).toBe("正常问");
   });
 
-  // 主会话定名跟随:git-commit 可从 pending 会话发起(ownerSid=临时 id),
-  // finalize 改名后不跟随的话抽屉永久失绑(ownerSessionId !== props.sessionId)。
-  it("rebindOwner follows temp→real rename: drawer binding + Q&A memory migrate", async () => {
-    const { startBtw, handleBtwEvent, store, rebindOwner } = useBtwSession();
-    await startBtw({ tempId: "p1", forkFrom: "", ownerSid: "temp-main", prompt: "pending 问", cwd: "/r", lightweight: true });
-    expect(store.value.ownerSessionId).toBe("temp-main");
-    // 留一轮记忆再改名:绑定与记忆 key 都要迁到 realId
-    handleBtwEvent({ session_id: "p1", type: "text_delta", delta: "pending 答" });
-    handleBtwEvent({ session_id: "p1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
-    rebindOwner("temp-main", "real-main");
-    expect(store.value.ownerSessionId).toBe("real-main");
-    await startBtw({ tempId: "p2", forkFrom: "real-main", prompt: "再问", cwd: "/r", lightweight: true });
-    const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
-    expect(sentPrompt).toContain("Q1: pending 问"); // 记忆 key 已迁
-  });
-
-  it("rebindOwner no-ops for unrelated ids", async () => {
-    const { startBtw, store, rebindOwner } = useBtwSession();
-    await startBtw({ tempId: "u1", forkFrom: "main", prompt: "q", cwd: "/r", lightweight: true });
-    rebindOwner("someone-else", "real-x");
-    expect(store.value.ownerSessionId).toBe("main"); // 不受影响
-  });
-
-  // P2-3：支线问答记忆收敛——answer 超上限截保尾、轮数超限丢最老、关 tab 清理。
-  it("answer over cap is tail-truncated in Q&A memory", async () => {
-    const { startBtw, handleBtwEvent } = useBtwSession();
-    await startBtw({ tempId: "cap1", forkFrom: "main", prompt: "问", cwd: "/r", lightweight: true });
-    const big = "A".repeat(64 * 1024 + 500); // > BTW_ANSWER_CAP
-    handleBtwEvent({ session_id: "cap1", type: "text_delta", delta: big });
-    handleBtwEvent({ session_id: "cap1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
-
-    await startBtw({ tempId: "cap2", forkFrom: "main", prompt: "再问", cwd: "/r", lightweight: true });
-    const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
-    expect(sentPrompt).toContain("A".repeat(300)); // 尾部（最新结论）保留
-    expect(sentPrompt.length).toBeLessThan(64 * 1024 + 2000); // 截断后总长有界（未截则 >65.5K）
-  });
-
-  it("history rounds over cap drop oldest (keeps latest 20)", async () => {
-    const { startBtw, handleBtwEvent } = useBtwSession();
-    for (let i = 1; i <= 21; i++) {
-      await startBtw({ tempId: `r${i}`, forkFrom: "main", prompt: `问${i}`, cwd: "/r", lightweight: true });
-      handleBtwEvent({ session_id: `r${i}`, type: "text_delta", delta: `答${i}` });
-      handleBtwEvent({ session_id: `r${i}`, type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
-    }
-    await startBtw({ tempId: "r22", forkFrom: "main", prompt: "问22", cwd: "/r", lightweight: true });
-    const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
-    expect(sentPrompt).not.toContain("Q1: 问1"); // 最老被丢（精确匹配，防误伤问10~问19）
-    expect(sentPrompt).toContain("Q1: 问2"); // digest 重新编号，问2 居首
-    expect(sentPrompt).toContain("Q20: 问21"); // 保留最近 20 条，问21 居尾
-  });
-
-  it("clearBtwHistory wipes owner memory; next btw prompt has no digest", async () => {
-    const { startBtw, handleBtwEvent, clearBtwHistory } = useBtwSession();
-    await startBtw({ tempId: "w1", forkFrom: "main", prompt: "问", cwd: "/r", lightweight: true });
-    handleBtwEvent({ session_id: "w1", type: "text_delta", delta: "答" });
-    handleBtwEvent({ session_id: "w1", type: "message_stop", stop_reason: "end_turn", total_cost_usd: null, usage: null });
-    clearBtwHistory("main"); // 关 tab 时 disposeSession 调
-    await startBtw({ tempId: "w2", forkFrom: "main", prompt: "再问", cwd: "/r", lightweight: true });
-    const sentPrompt = invokeMock.mock.calls[invokeMock.mock.calls.length - 1]?.[1]?.prompt as string;
-    expect(sentPrompt).toBe("再问");
+  it("rebindOwner 对无关 id 是 no-op", async () => {
+    const { store, rebindOwner } = await startBtwForTest("sid-1", "问");
+    rebindOwner("别的", "另一个");
+    expect(store.value.ownerSessionId).toBe("sid-1");
   });
 });

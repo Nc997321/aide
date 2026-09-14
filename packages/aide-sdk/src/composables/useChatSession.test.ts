@@ -18,6 +18,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { useChatSession, __resetForTest, stopSessionById, disposeSession, __pendingEmptyForTest } from "./useChatSession";
+import { useBtwSession } from "./useBtwSession";
 import { useSessionState } from "./useSessionState";
 import { useSessionProviders } from "./useSessionProviders";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
@@ -1170,6 +1171,46 @@ describe("useChatSession per-session store", () => {
     expect(chatB.models.value).toEqual([{ value: "sonnet", displayName: "Sonnet" }]);
     // 但 B 自己还没选过模型，不应该被 A 的选择污染
     expect(chatB.currentModel.value).toBe("");
+  });
+
+  it("btw_answer 按主会话 id 分派到 btw store，不进主对话消息流", async () => {
+    const sid = ref<string | null>("uuid-btw-route");
+    const chat = useChatSession(sid);
+    await flush();
+    const before = chat.messages.value.length;
+
+    await chat.sendBtw("侧问一句");
+    emit({
+      type: "btw_answer",
+      session_id: "uuid-btw-route", // ← 主会话 id（btw 不再有独立会话 id）
+      question: "侧问一句",
+      response: "侧问答案",
+    });
+    await flush();
+
+    // 正文进 btw store
+    const btw = useBtwSession();
+    expect(btw.store.value.messages.join("")).toBe("侧问答案");
+    // 主对话只多出那条批注（结论回插），没有别的污染
+    expect(chat.messages.value.length).toBe(before + 1);
+    expect(btw.store.value.done).toBe(true);
+  });
+
+  it("btw_answer 的 question 与当前问题不符时不落账（同会话多条 btw 消歧）", async () => {
+    const sid = ref<string | null>("uuid-btw-route-2");
+    const chat = useChatSession(sid);
+    await flush();
+
+    await chat.sendBtw("问题甲");
+    emit({
+      type: "btw_answer",
+      session_id: "uuid-btw-route-2",
+      question: "问题乙", // 不是当前那条
+      response: "不该落账",
+    });
+    await flush();
+
+    expect(useBtwSession().store.value.messages).toEqual([]);
   });
 });
 

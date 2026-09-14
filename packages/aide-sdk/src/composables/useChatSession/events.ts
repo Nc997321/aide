@@ -127,10 +127,12 @@ export function handleChatEvent(e: Record<string, unknown>): void {
   }
   const raw = e["session_id"] as string | undefined;
   if (!raw) return;
-  // btw 事件路由到独立 store,不进主对话 store(隔离红线)
-  const btw = useBtwSession();
-  if (btw.isBtwSid(raw)) {
-    btw.handleBtwEvent(e);
+  // btw 侧问结果路由到独立 store，不进主对话消息流（隔离红线）。注意它带的
+  // session_id 是**主会话** id（btw 不再有独立会话 id）——所以判断只能看事件
+  // 类型，不能像过去那样靠 session id 命中。是否属于当前抽屉由 handleBtwAnswer
+  // 里的 ownerSessionId + question 双重匹配决定。
+  if (e["type"] === "btw_answer") {
+    useBtwSession().handleBtwAnswer(e);
     return;
   }
   const sid = resolveSid(raw);
