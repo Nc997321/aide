@@ -184,7 +184,7 @@ src/components/MemoryObservatory/
 - 确认后行淡出，stat 区记忆总数/告警数即时联动；死链条目（文件已不存在）不提供删除按钮，只提示「从索引移除该条目」走同一命令的索引行移除路径
 - CLAUDE.md 行无删除按钮
 
-可视原型（三 tab + 删除确认态已截图验证）：`docs/prototypes/memory-observatory.html`，预览图 `docs/prototypes/memory-observatory-preview.png`。落地时颜色全部换算成 `--aide-*` token（原型中的 hex 仅作设计定稿参照：accent #3987e5 / warning #c98500 / danger #d95926 / success #199e70，与 chart token 种子同源）。
+可视原型（三 tab + 删除确认态已截图验证）：`docs/prototypes/memory-observatory.html`。落地时颜色全部换算成 `--aide-*` token（原型中的 hex 仅作设计定稿参照：accent #3987e5 / warning #c98500 / danger #d95926 / success #199e70，与 chart token 种子同源）。
 
 ## 7. 测试与验收
 
