@@ -16,6 +16,7 @@
 | 日期 | 版本 | 变更 |
 |---|---|---|
 | 2026-09-14 | 1.0 | 首版定稿。合并 2026-09-11 的对接说明草稿与测试清单的文档级处置项，全量补齐 10 条命令与 44 个事件类型（42 个 headless 可达 + 2 个桌面专用）的字段级参考。 |
+| 2026-09-14 | 1.1 | btw 侧问接入：新增命令 `btw_ask`（§4.12）与事件 `btw_answer`（§5.2）；**从 send schema 剥除 `btw` / `lightweight` / `fork_from` / `tools` 四个桌面字段**（原「明令禁发」改为 schema 层直接拒绝，清单 B14 结案）。事件总数 44 → 45，命令总数 10 → 11。 |
 
 ---
 
@@ -43,7 +44,7 @@
 
 10. **body 上限 1MB，且超限响应形态对 fetch 客户端不友好。** 超限时服务端先回 400，再因请求体未读尽 RST 连接；用 `fetch` 会抛 `ECONNRESET` 而拿不到状态码（裸 `http.request` 可以）。网关侧先自我限界，或按「以首响应为准」处理。另：`env` / `metadata` / `mcp_headers` 的值是凭据，引擎保证不落日志、不进 Bash 子进程 env，网关侧同样不要记。〔清单 F5 / C7 / C8〕
 
-11. **桌面字段禁发。** `btw` / `lightweight` / `automation` 是桌面语义。网关发 `btw` 会造出「一轮一会话」的静默自毁重建——每轮结束会话就没了，而你只会看到 `session_init` 又来了。〔清单 F8 / B14〕
+11. **桌面字段不接。** `automation` 是桌面/调度器语义，网关不要发——它会让引擎按无人值守白名单执行，行为与网关预期不符。〔清单 F8〕此前放行的 `btw` / `lightweight` / `fork_from` / `tools` 已在 1.1 版从 schema 剥除：现在发它们会得到 `400 invalid invoke body`（不再是「收下但按桌面语义执行」）。侧问走专用命令 `btw_ask`（§4.12）。〔清单 B14 结案〕
 
 ---
 
@@ -237,7 +238,7 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 
 ## 4. 命令参考
 
-`POST /invoke` 的 body 形如 `{"cmd":"<命令名>", "session_id":"<sid>", …}`。共 **10 条**命令，白名单之外（含 `codegraph_result`）一律 `400`。〔清单 A6〕
+`POST /invoke` 的 body 形如 `{"cmd":"<命令名>", "session_id":"<sid>", …}`。共 **11 条**命令，白名单之外（含 `codegraph_result`）一律 `400`。〔清单 A6〕
 
 除 `send` 与 `session_stop` 外的命令，若 `session_id` 找不到活着的会话会被静默丢弃（规程第 2 条）。
 
@@ -259,7 +260,7 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 | `metadata` | object | — | 不透明租户上下文，见 §7.2 |
 | `mcp_headers` | object | — | MCP 头注入表，见 §7.1 |
 
-**网关应当只使用上表这些字段。** 引擎还接受 `btw` / `lightweight` / `automation` / `jump_queue` / `provider_switched` / `fork_from` / `tools` / `auto_title` / `thinking_enabled` / `output_style` / `trusted` / `codegraph_enabled` 等字段，但它们是桌面产品语义，未在网关场景验证过：前三个明令禁发（规程第 11 条），其余下发后按引擎内部语义执行，网关不要依赖其行为。
+**网关应当只使用上表这些字段。** 引擎还接受 `automation` / `jump_queue` / `provider_switched` / `auto_title` / `thinking_enabled` / `output_style` / `trusted` / `codegraph_enabled` 等字段，但它们是桌面产品语义，未在网关场景验证过：`automation` 明令禁发（规程第 11 条），其余下发后按引擎内部语义执行，网关不要依赖其行为。1.1 版起 `btw` / `lightweight` / `fork_from` / `tools` **不在 schema 内**，发送即 400。
 
 两个具体警告：
 
@@ -372,6 +373,26 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 | `policy` | object | ✅ | `{revision: number, rules: PermissionRule[]}`，见 §6.1 |
 
 语义：`revision` **单调不回退**——旧 revision 的快照被静默忽略（入队仍回 200）；推送后存活 worker 的下一次工具调用即按新策略裁决。〔清单 B10〕
+
+### 4.12 btw_ask
+
+对**存活的**主会话做一次侧问（走 Claude CLI 的 `side_question` 控制通道，在主会话进程内完成，不新建进程）。典型耗时 1~2 秒。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `session_id` | string | ✅ | **主会话** sid（侧问没有自己的会话 id） |
+| `question` | string | ✅ | 侧问内容 |
+| `history` | array | — | 跨问历史，元素 `{question, response}`，最多 20 条。省略 = 不继承此前侧问 |
+
+**语义要点：**
+
+- **无返回值**（与 `send` 同形，fire-and-forget）：`200` 只表示命令已入队。答案**经 `btw_answer` 事件回来**（§5.2）——不消费该事件的网关会「发了没有回音」。
+- **进程内、不落转录**：侧问跑在主会话进程里，不写会话转录 JSONL，也不影响正在进行的回合（主轮进行中也可以问）。
+- **模型不调工具**：官方 fork 层对侧问硬编码拒绝一切工具调用，天然纯问答；网关不要指望它读文件。
+- **主会话不在 = 拒绝**：没有存活会话（从未 `send` 过 / 已 `session_stop` / 进程崩过）时，事件里回一条带 `error` 的 `btw_answer`，不会凭空建会话。规程第 2 条的「静默丢弃」**不适用于本命令**——它一定会回一条事件。
+- 会话正在关闭时 CLI 会回 `Session is shutting down`，同样以 `error` 形态进事件。
+
+**网关动作**：发完后在事件流里按 `session_id` + `question` 匹配 `btw_answer`；带 `error` 的即失败。想要跨问连续性就把此前的 `{question, response}` 累积成 `history` 回传（`synthetic: true` 的兜底答复不要入史）。
 
 ### 4.11 display 块（`send.display` 的元素）
 
@@ -558,12 +579,13 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 
 每 30 秒一帧。网关若做看板可以订阅 `_runtime`，但不要把它和业务会话的订阅混在一条连接上。〔清单 A19〕
 
-### 5.2 可忽略（29 种）
+### 5.2 可忽略（30 种）
 
 这些事件不驱动状态机。网关可以全部丢弃。
 
 | 事件 | 载荷要点 | 若你要消费它 |
 |---|---|---|
+| `btw_answer` | `session_id`, `question`, `response?`, `error?`, `synthetic?` | **侧问的答案通道**——见下方注 |
 | `thinking` | `text` | 思考块整块（非增量） |
 | `thinking_delta` | `delta` | 思考块逐字增量 |
 | `tool_use_start` | `id`, `name`, `input`, `model?` | 展示「正在用什么工具」 |
@@ -576,6 +598,8 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 | `subagent_async_launched` | `id`, `agentId`, `outputFile` | 后台子代理启动 ack |
 | `subagent_end` | `id`, `result`, `is_error` | 子代理收尾 |
 | `subagent_nesting_warning` | `depth`, `threshold` | 嵌套过深的软告警（只警告不阻止） |
+
+> **`btw_answer` 是「可忽略」列表里唯一的例外。** 它不驱动状态机的前提是**你没发过 `btw_ask`**——发过就必须消费：`btw_ask` 没有返回值，答案只从这里来。字段语义：`response` 与 `error` 互斥；`synthetic: true` 表示官方兜底答复（照常展示，但不要喂进 `history`）。
 | `bg_task_started` | `id`, `command?`, `description?`, `outputFile?` | 后台 shell 任务启动 |
 | `bg_task_output` | `id`, `delta` | 后台任务输出增量 |
 | `bg_task_ended` | `id`, `status`, `summary?`, `durationMs?` | 后台任务终态（`completed`/`failed`/`stopped`） |
