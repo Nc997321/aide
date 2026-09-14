@@ -21,6 +21,7 @@
 import { api } from "../api";
 import { drainMaxLag, startLagSampler } from "../utils/diagnostics/eventLoopLag";
 import { drainSummary, entriesSince, startLongTasks } from "../utils/diagnostics/longTasks";
+import { drainWorstFrame, framesSince, startLongFrames } from "../utils/diagnostics/longFrames";
 import { drainPending, snapshotAll, startBreadcrumbs } from "../utils/diagnostics/breadcrumbs";
 import { startScrollTrail } from "../utils/diagnostics/scrollTrail";
 
@@ -37,12 +38,16 @@ let lastVisibilityChangeAt = -Infinity;
 
 async function sendHeartbeat(): Promise<void> {
   const longTasks = drainSummary();
+  // 长帧只带「本周期最长那一帧」：它才是撞墙的肇事帧，整周期明细体积不可控。
+  // 这一帧带脚本/样式布局/其余的分解 + 强制同步布局耗时 + 函数名（见 longFrames.ts）。
+  const frames = drainWorstFrame();
   const payload = {
     lagMaxMs: drainMaxLag(),
     longTaskCount: longTasks.count,
     longTaskMaxMs: longTasks.maxMs,
     crumbs: drainPending(),
     hidden: document.hidden,
+    frames,
   };
   try {
     await api.diagHeartbeat(payload);
@@ -56,6 +61,8 @@ async function sendSupplement(gapMs: number, gapStartPerfMs: number): Promise<vo
     gapMs: Math.round(gapMs),
     // 多取 1s 余量：卡死的肇事 longtask 往往在断档开始前就已启动
     longTasks: entriesSince(gapStartPerfMs - 1000),
+    // 长帧全量明细（含每帧的脚本归因）——补交是低频路径，体积不限
+    longFrames: framesSince(gapStartPerfMs - 1000),
     crumbs: snapshotAll(),
   };
   try {
@@ -72,6 +79,7 @@ export function startDiagnostics(): void {
 
   startLagSampler();
   startLongTasks();
+  startLongFrames(); // 长帧归因：拆「脚本 / 样式布局 / 其余」+ 点名到函数（见 longFrames.ts）
   startBreadcrumbs();
   startScrollTrail(); // 滚动诊断环：间歇性滚轮定格的活体采集（见 scrollTrail.ts）
 

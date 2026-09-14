@@ -37,6 +37,59 @@ pub struct HeartbeatPayload {
     pub crumbs: Vec<Crumb>,
     /// document.hidden——true 时浏览器节流定时器，watchdog 暂停判定
     pub hidden: bool,
+    /// 本周期长动画帧（LoAF）汇总。桌面侧产出；环境不支持 LoAF（非 Chromium /
+    /// 版本过老）时为默认值。Rust 不解释这些字段，只随环落盘供事后分析。
+    #[serde(default)]
+    pub frames: FrameSummary,
+}
+
+/// 长动画帧汇总：条数 + 本周期最长那一帧的归因分解。
+///
+/// 为什么要有它（2026-09-14 取证复盘）：`longTaskMaxMs` 只回答「多贵」，回答不了
+/// 「贵在哪」——真机一次 19.7 秒冻结里主线程 ~100% 忙，而所有计量表都指不到东西
+/// （时间花在框架/引擎/GC 里）。LoAF 把一帧拆成脚本 / 样式布局 / 其余三段，并给出
+/// 每个脚本的**强制同步布局**耗时与函数名，才第一次能回答「布局还是 JS」。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameSummary {
+    /// 本周期长帧条数
+    pub count: u32,
+    /// 本周期最长的那一帧（None = 无长帧）
+    #[serde(default)]
+    pub worst: Option<LongFrame>,
+}
+
+/// 一帧的归因分解。三段相加 = `duration_ms`：
+/// `script_ms`（脚本）+ `style_layout_ms`（样式布局）+ `rest_ms`（既非脚本也非布局
+/// ——GC / 空闲 / 光栅化的嫌疑区）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LongFrame {
+    pub duration_ms: u32,
+    pub script_ms: u32,
+    pub style_layout_ms: u32,
+    pub rest_ms: u32,
+    /// 强制同步布局耗时之和（读写回环的度量）
+    pub forced_layout_ms: u32,
+    /// 阻塞时长（含排队任务）
+    pub blocking_ms: u32,
+    /// 耗时靠前的脚本（已按耗时降序截断）
+    #[serde(default)]
+    pub scripts: Vec<LongFrameScript>,
+}
+
+/// 帧内耗时靠前的脚本——用来**点名到函数**。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LongFrameScript {
+    /// 调用者类型：event-listener / user-callback / script / promise-then…
+    pub invoker: String,
+    /// 源文件末段（产出侧已剥目录与 query）
+    pub source: String,
+    /// 函数名（匿名/内联时为空串）
+    pub func: String,
+    pub duration_ms: u32,
+    pub forced_layout_ms: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

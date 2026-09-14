@@ -69,6 +69,27 @@ export interface BtwAskParams {
   history: { question: string; response: string }[];
 }
 
+/** 长动画帧（LoAF）归因：一帧拆成「脚本 / 样式布局 / 其余」，并点名到函数。
+ *  其余量（`restMs`）= 既非脚本也非布局 —— GC / 空闲 / 光栅化的嫌疑区。
+ *  `forcedLayoutMs` 是**强制同步布局**耗时（读写回环的度量）。
+ *  产出侧是桌面 `src/utils/diagnostics/longFrames.ts`；此处是**线上形状**声明，
+ *  不反向 import 产出侧类型（SDK 不依赖 src）。 */
+export interface DiagLongFrame {
+  durationMs: number;
+  scriptMs: number;
+  styleLayoutMs: number;
+  restMs: number;
+  forcedLayoutMs: number;
+  blockingMs: number;
+  scripts: {
+    invoker: string;
+    source: string;
+    func: string;
+    durationMs: number;
+    forcedLayoutMs: number;
+  }[];
+}
+
 /** diag_heartbeat 的负载（IPC 边界 DTO，镜像 Rust HeartbeatPayload）。 */
 export interface DiagHeartbeatPayload {
   lagMaxMs: number;
@@ -76,6 +97,8 @@ export interface DiagHeartbeatPayload {
   longTaskMaxMs: number;
   crumbs: unknown[];
   hidden: boolean;
+  /** 本周期长帧：条数 + 最长那一帧的完整分解（null = 本周期无长帧 / 环境不支持 LoAF）。 */
+  frames: { count: number; worst: DiagLongFrame | null };
 }
 
 export const api = {
