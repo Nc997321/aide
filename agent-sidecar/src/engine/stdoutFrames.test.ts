@@ -53,6 +53,17 @@ describe("stdoutFrames", () => {
     expect(stdoutBackpressured()).toBe(false);
   });
 
+  it("btw_answer 不是可丢弃事件——丢一条就少一个答案", async () => {
+    const { isDroppableEvent } = await loadModule();
+    const answer: ChatEvent = {
+      type: "btw_answer",
+      sessionId: "sess-1",
+      question: "问一句",
+      response: "答案",
+    };
+    expect(isDroppableEvent(answer)).toBe(false);
+  });
+
   it("背压后：增量帧被丢弃（不写入），非增量帧照常写入（顺序保持）", async () => {
     const m = mockStdout((n) => n !== 0); // 第 0 次写返回 false → 进入背压
     const { writeStdoutFrame } = await loadModule();

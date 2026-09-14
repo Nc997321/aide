@@ -241,6 +241,19 @@ export type ChatEvent =
   // provider-agnostic（任何 provider 都能生成标题）。前端仅在用户未手动
   // 命名过时采纳（auto_rename_session 原子判断），否则忽略。
   | { type: "session_title"; title: string }
+  // btw 侧问（官方 side_question 控制通道）的一次问答结果。sessionId 是 worker
+  // 自己的 routingKey——stdout 帧的 session_id 由 SessionManager 注入；前端据此把
+  // 事件路由回**主会话**（btw 不再有独立 session id）。question 用于同一会话多条
+  // btw 之间消歧。response 与 error 互斥；synthetic=true = 官方兜底答复（渲染但
+  // 不入跨问历史）。背压期间**不可丢弃**（丢一条就少一个答案）。
+  | {
+      type: "btw_answer";
+      sessionId: string;
+      question: string;
+      response?: string;
+      error?: string;
+      synthetic?: boolean;
+    }
   // Rust reader 拦截的 agent 代码索引查询（不转发 Vue；响应走 codegraph_result 命令）。
   | {
       type: "codegraph_query";
