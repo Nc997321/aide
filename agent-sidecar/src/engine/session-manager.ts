@@ -146,8 +146,6 @@ export class SessionManager {
     };
     worker = new SessionWorker(sessionId, emit, {
       cwd: cmd.cwd,
-      btwMode: !!cmd.btw,
-      lightweightMode: !!cmd.lightweight,
       envOverrides: cmd.env ?? {},
       // 会话元数据 / MCP 头注入（headless 网关下发，桌面恒缺席）：worker 侧
       // 统一走边界收窄（sessionMetadata.ts），manager 不重复校验。

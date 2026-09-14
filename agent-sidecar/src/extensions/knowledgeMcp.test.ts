@@ -16,12 +16,8 @@ describe("knowledgeMcpRegistration — 门控矩阵", () => {
     expect(knowledgeMcpRegistration({} as NodeJS.ProcessEnv, false)).toBeNull();
   });
 
-  it("btw 任务支线（taskTools 非空）→ null（前缀最小化）", () => {
-    expect(knowledgeMcpRegistration({} as NodeJS.ProcessEnv, true, ["Bash"])).toBeNull();
-  });
-
   it("trusted 优先于 env（两道门并列，任一不满足即 null）", () => {
-    expect(knowledgeMcpRegistration({} as NodeJS.ProcessEnv, false, undefined)).toBeNull();
+    expect(knowledgeMcpRegistration({} as NodeJS.ProcessEnv, false)).toBeNull();
   });
 });
 

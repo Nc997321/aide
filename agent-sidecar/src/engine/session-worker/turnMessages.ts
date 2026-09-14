@@ -8,9 +8,10 @@ import { detectImageUnsupported } from "../imageRollback.js";
 import { isErrorResult, mapSdkMessage, type MapperDeps } from "../mapper.js";
 
 export interface TurnContext {
-  btwMode: () => boolean;
   /** 图片 400 检测命中：置 rollbackPending + abort 当前 query（回滚在 catch 里执行）。 */
   markImageRollback: () => void;
+  /** 自动化一次性会话：400 后进程自毁，没有"下一轮重放干净历史"，故不回滚。 */
+  isAutomation: () => boolean;
   setTurnActive: (v: boolean) => void;
   /** 插队消息接入：true = 已接入本条 result 之后的新回合（本条消息跳过后续处理）。 */
   promoteJumpQueue: () => boolean;
@@ -40,8 +41,8 @@ export function handleQueryMessage(
 ): "continue" | "terminate" | undefined {
   // 图片 400 回滚：模型不支持图片时，历史里带图消息重放必 400（会话报废）。
   // 检测到即 abort 杀 CLI（停一切写入），catch 里执行回滚（去图重写历史），
-  // 下一轮 query 重放干净历史。btw 是一次性支线（400 后自毁），无需回滚。
-  if (!turn.btwMode() && detectImageUnsupported(msg)) {
+  // 下一轮 query 重放干净历史。automation 是一次性会话（400 后自毁），无需回滚。
+  if (!turn.isAutomation() && detectImageUnsupported(msg)) {
     turn.markImageRollback();
   }
   if (msg.type === "result") {

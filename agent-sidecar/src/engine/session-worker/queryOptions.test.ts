@@ -28,7 +28,7 @@ function parts(over: {
       cliEnv: { PATH: "/bin" },
     },
     workspace: { trusted: true, cwd: "/proj", cwdParam: undefined, cwdWorker: undefined, ...over.workspace },
-    branch: { btwMode: false, taskTools: undefined, automationConfig: undefined, lightweightMode: false, ...over.branch },
+    branch: { automationConfig: undefined, ...over.branch },
     model: { sdkModel: "", effort: "", thinkingEnabled: true, ...over.model },
     fork: { resumeSource: "", shouldFork: false, ...over.fork },
   };
@@ -56,27 +56,19 @@ describe("buildSpawnQueryOptions", () => {
     expect(o.strictMcpConfig).toBe(true);
   });
 
-  it("任务支线（taskTools）/ automation：skills+plugins 全关（前缀最小化）", () => {
-    const task = buildSpawnQueryOptions(parts({ branch: { taskTools: ["Bash"] } })) as Opts;
-    expect(task.skills).toEqual([]);
-    expect(task.plugins).toEqual([]);
+  it("automation：skills+plugins 全关（前缀最小化）", () => {
     const cfg = { taskId: "t", runId: "r", preset: "auto" as const, tools: ["*"], mcpAllowlist: [], taskDir: "", sessionDir: "" };
     const auto = buildSpawnQueryOptions(parts({ branch: { automationConfig: cfg } })) as Opts;
     expect(auto.skills).toEqual([]);
-    // btw 任务支线：tools/allowedTools 收成白名单 + persistSession:false（btwQueryOverrides 臂）
-    const btwTask = buildSpawnQueryOptions(parts({ branch: { btwMode: true, taskTools: ["Bash", "Read"] } })) as Opts;
-    expect(btwTask.tools).toEqual(["Bash", "Read"]);
-    expect(btwTask.allowedTools).toEqual(["Bash", "Read"]);
-    expect(btwTask.persistSession).toBe(false);
+    expect(auto.plugins).toEqual([]);
+    expect(auto.includePartialMessages).toBe(false);
   });
 
-  it("问答主会话 plugins：市场 + 散装注入；btw 问答支线 persistSession:false 不碰工具列表", () => {
+  it("问答主会话 plugins：市场 + 散装注入", () => {
     const o = buildSpawnQueryOptions(parts()) as Opts;
     expect(o.plugins).toHaveLength(2);
-    const btw = buildSpawnQueryOptions(parts({ branch: { btwMode: true } })) as Opts;
-    expect(btw.persistSession).toBe(false);
-    expect(btw.tools).toBeUndefined();
-    expect(btw.includePartialMessages).toBe(false); // btw partial=off
+    expect(o.tools).toBeUndefined();
+    expect(o.includePartialMessages).toBe(true);
   });
 
   it("model/effort 空串不带键；有值带上", () => {
@@ -88,8 +80,9 @@ describe("buildSpawnQueryOptions", () => {
     expect(set.effort).toBe("high");
   });
 
-  it("thinking 三臂：btw/automation 恒 disabled；开关关 disabled；开 adaptive+summarized", () => {
-    expect((buildSpawnQueryOptions(parts({ branch: { btwMode: true } })) as Opts).thinking).toEqual({ type: "disabled" });
+  it("thinking 三臂：automation 恒 disabled；开关关 disabled；开 adaptive+summarized", () => {
+    const cfg = { taskId: "t", runId: "r", preset: "auto" as const, tools: ["*"], mcpAllowlist: [], taskDir: "", sessionDir: "" };
+    expect((buildSpawnQueryOptions(parts({ branch: { automationConfig: cfg } })) as Opts).thinking).toEqual({ type: "disabled" });
     expect((buildSpawnQueryOptions(parts({ model: { thinkingEnabled: false } })) as Opts).thinking).toEqual({ type: "disabled" });
     expect((buildSpawnQueryOptions(parts()) as Opts).thinking).toEqual({ type: "adaptive", display: "summarized" });
   });

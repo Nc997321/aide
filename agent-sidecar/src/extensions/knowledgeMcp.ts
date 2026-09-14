@@ -4,7 +4,6 @@
 // 注册条件（任一不满足即 null）：
 // - `AIDE_KB_TOOLS=off`：operator 级开关（调试 / 不想让 agent 碰知识库的部署）。
 // - `!trusted`：受限模式不暴露知识库读写。
-// - `taskTools` 非空：btw 任务支线全新会话，前缀最小化（沿 docsMcp 写法）。
 // **刻意不设「配置了才挂」的第四道门**：未登录也挂载，调用返回「去知识库面板登录」
 // 的引导文本——工具列表跨会话稳定，且会话中途第一次登录能当场生效（设计 spec §5.1）。
 //
@@ -44,18 +43,16 @@ export const KNOWLEDGE_INSTRUCTIONS = `This environment has built-in tools for t
 9. If a write fails, report the failure text to the user instead of retrying blindly. Never save the content to a local file as a fallback unless the user asks.`;
 
 /**
- * 默认注册。`trusted=false` 或 `taskTools` 非空或 `AIDE_KB_TOOLS=off` → null。
+ * 默认注册。`trusted=false` 或 `AIDE_KB_TOOLS=off` → null。
  * 省略 trusted = 信任（向后兼容，测试与手工调用用）。
  * `cwd` 只往下传给 `ingest_file`（相对路径按会话工作目录解析）。
  */
 export function knowledgeMcpRegistration(
   env: NodeJS.ProcessEnv = process.env,
   trusted = true,
-  taskTools?: string[],
   cwd = "",
 ): Record<string, unknown> | null {
   if (!trusted) return null;
-  if (taskTools) return null;
   if (env.AIDE_KB_TOOLS === "off") return null;
 
   const server = createSdkMcpServer({

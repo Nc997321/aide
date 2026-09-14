@@ -71,9 +71,7 @@ export function ensureDispatchManifest(pluginRoot: string, name: string): boolea
 export function buildDispatchPluginsOption(
   cwd: string,
   trusted: boolean,
-  lightweight: boolean,
 ): SdkPluginConfig[] {
-  if (lightweight) return [];
   const out: SdkPluginConfig[] = [];
 
   const claudeHome = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".aide", "claude");

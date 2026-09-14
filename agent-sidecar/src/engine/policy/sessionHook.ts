@@ -2,7 +2,7 @@
 //
 // 职责（数据主人）：策略快照存储（revision 单调不回退）、会话级规则入库
 // （去重 + 文件工具家族展开）、makeHook 产出权威 hook。
-// 支线状态（btw/taskTools/automation/lightweight/cwd）**不归本类所有**——worker
+// 自动化状态（automation/cwd）**不归本类所有**——worker
 // 注入活值 getter，hook 每次调用时读（支线状态会在 handleSend 里动态翻转）。
 // automationVerdict 注入而非直接 import desktop/automation：policy/ 保持对
 // desktop/ 零运行时依赖（仅类型），层次不破。
@@ -21,10 +21,6 @@ const FILE_FAMILY_TOOLS = ["Edit", "Write", "MultiEdit"] as const;
 
 /** hook 调用时读取的支线状态快照（worker 注入活值 getter）。 */
 export interface PolicyBranchState {
-  btwMode: boolean;
-  lightweightMode: boolean;
-  /** btw 任务支线白名单（非空 = 任务支线，白名单外 deny）。 */
-  taskTools: string[] | undefined;
   automationConfig: AutomationConfig | undefined;
   /** 会话 cwd（hook 构造参数缺省时的兜底）。 */
   cwd: string | undefined;
@@ -113,20 +109,6 @@ export class SessionPolicy {
       const toolInput = input.tool_input;
       if (!toolName) return {};
       const state = this.deps.branchState();
-      // 轻量 btw 是纯问答:行为层禁掉一切工具(matcher ".*" 覆盖 MCP 工具)。
-      // 在请求前缀之外实现——工具列表保持与主会话一致,prompt cache 才能命中;
-      // deny 即时返回,也根治了 2026-08-02「模型调 MCP 工具卡住」(不再 tools:[]
-      // 之后模型可能尝试调用,但每次都吃到明确 deny,立刻转文字回答)。
-      if (state.lightweightMode) {
-        return {
-          hookSpecificOutput: {
-            hookEventName: "PreToolUse" as const,
-            permissionDecision: "deny" as const,
-            permissionDecisionReason:
-              "轻量支线为纯问答,工具已禁用,请直接根据上下文回答",
-          },
-        };
-      }
       // 自动化运行：三值裁决。MCP 工具按连接器白名单（与预设无关）；内建工具
       // full 预设 allow、auto 预设返回 {} 不表态——交还 CLI auto 模式（安全自动
       // 放行，高危询问 → canUseTool 自动化分支兜底 deny，无人值守没人应答弹窗）。
@@ -176,18 +158,6 @@ export class SessionPolicy {
             },
           };
         case "ask": {
-          // btw 支线没有权限弹窗通路(permission_request 会被前端 btw 路由吞掉,
-          // 落到 canUseTool 的请求干等应答 → 永久挂起)——ask 一律当 deny 处理。
-          if (state.btwMode) {
-            return {
-              hookSpecificOutput: {
-                hookEventName: "PreToolUse" as const,
-                permissionDecision: "deny" as const,
-                permissionDecisionReason:
-                  "btw 支线无人应答权限请求(需确认的操作一律拒绝)",
-              },
-            };
-          }
           // 策略要求人工确认 → 交还 CLI 的第一类通道（canUseTool），不在 hook 里
           // 自己弹窗等结果。这条返回值的下游链路（claude.exe，2026-09-08 运行时
           // 实证）：permissionDecision:"ask" → hookPermissionResult{behavior:"ask"}
@@ -208,22 +178,6 @@ export class SessionPolicy {
           };
         }
         default:
-          // btw 任务支线(git-commit):白名单外的命令必须在这里 deny——defer 会在
-          // allowDangerouslySkipPermissions 下被 CLI 静默放行,canUseTool 根本不会被
-          // 调用(2026-08-09 运行时任真:ipconfig 在 btw 任务里直接执行,策略日志
-          // disposition=defer 之后没有任何 canUseTool 回调)。不加这道 = 支线开 bypass。
-          // 问答支线(full btw)保持旧行为:defer → {} → CLI 放行(fork 主会话的
-          // 既有语义,政策快照本来也不推给 btw)。
-          if (state.taskTools) {
-            return {
-              hookSpecificOutput: {
-                hookEventName: "PreToolUse" as const,
-                permissionDecision: "deny" as const,
-                permissionDecisionReason:
-                  "btw 任务支线仅允许白名单内的命令(git 只读 + add/commit)",
-              },
-            };
-          }
           // No Aide policy rule matched → return {} (no opinion) so the CLI proceeds
           // with its normal permission flow (here allowDangerouslySkipPermissions
           // auto-allows). Do NOT return permissionDecision:"defer": the claude.exe CLI

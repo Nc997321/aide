@@ -47,13 +47,12 @@ describe("prepareQueryContext", () => {
     expect(ctx.mcpServers).toEqual({}); // 无用户配置、内建未注册
   });
 
-  it("CLAUDE_CONFIG_DIR 在场透传；taskTools 支线 → codegraph/docs 全不注册（前缀最小化）", async () => {
+  it("CLAUDE_CONFIG_DIR 在场透传；!trusted → codegraph/docs 全不注册", async () => {
     const ctx = await prepareQueryContext(
       deps({
-        trusted: true,
+        trusted: false,
         codegraphEnabled: true,
         processEnv: { CLAUDE_CONFIG_DIR: dir } as NodeJS.ProcessEnv,
-        taskTools: ["Bash"],
       }),
     );
     expect(ctx.mcpServers["aide-codegraph"]).toBeUndefined();

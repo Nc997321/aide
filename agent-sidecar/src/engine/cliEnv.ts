@@ -45,7 +45,7 @@ export function buildCliEnv(p: CliEnvParams): Record<string, string | undefined>
   // TodoWrite)在新模型(Opus 4.8/Sonnet 5/Fable 5)上不再默认进工具面——Aide
   // 的 TaskListPanel 与轮间 TODO 覆盖逻辑依赖它们，显式 env 保持默认可用。
   // 选 env 而非 query.tools：只恢复这一组的默认地位，不触碰 tools 白名单
-  // (btw taskTools/automation 收窄语义不变，白名单没列的照样不注入)。
+  // (automation 收窄语义不变，白名单没列的照样不注入)。
   cliEnv.CLAUDE_CODE_ENABLE_TODO_TOOLS = "1";
   // 凭据相关 env 不进 CLI 子进程：Bash 工具会继承它，模型跑 `env` 即得凭据文件
   // 绝对路径，再 cat 即得 token——这正是设计 spec §3 否决「凭据走 env」的理由。

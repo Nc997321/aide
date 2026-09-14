@@ -73,8 +73,6 @@ import type { PermissionRuleDraft } from "./types.js";
 
 export interface SessionWorkerOptions {
   cwd?: string;
-  btwMode?: boolean;
-  lightweightMode?: boolean;
   initialModel?: string;
   envOverrides?: Record<string, string>;
   /** 会话元数据（headless 网关下发，引擎不解释；hooks 经 HookBuildContext 读取）。 */
@@ -99,12 +97,9 @@ export class SessionWorker {
   readonly queue = new MessageQueue();
   readonly permMgr = new PermissionManager();
   /** 会话策略状态（快照 + 会话级规则 + 权威 PreToolUse hook，见 policy/sessionHook.ts）。
-   *  支线状态不归它所有——注入活值 getter，hook 每次调用时读（handleSend 会动态翻转）。 */
+   *  自动化状态不归它所有——注入活值 getter，hook 每次调用时读。 */
   private readonly policy = new SessionPolicy({
     branchState: () => ({
-      btwMode: this.btwMode,
-      lightweightMode: this.lightweightMode,
-      taskTools: this.taskTools,
       automationConfig: this.automationConfig,
       cwd: this.cwd,
     }),
@@ -164,19 +159,9 @@ export class SessionWorker {
   /** 每个 worker 只命名一次（防止 resume/多轮重复生成）。 */
   private titleAttempted = false;
 
-  // ---- BTW / 轻量模式 ----
-  // 非 readonly：btw send 命令在 handleSend 里动态置 true（构造期选项还拿不到
-  // btw 标志——它是随命令到达的），见 handleSend 的 cmd.btw 分支。
-  btwMode: boolean;
-  lightweightMode: boolean;
-  /** btw 任务支线(git-commit)的内建工具白名单:非空时 query() 的
-   *  tools/allowedTools 收成它 + skills/plugins/codegraph 全关(全新会话,
-   *  前缀最小化)。与 lightweightMode 互斥——问答支线保持与主会话前缀一致。 */
-  private taskTools?: string[];
-
   // ---- 自动化运行（无人值守 headless，调度器发起） ----
   // 非空时：policy hook 白名单裁决 + skills/plugins 关 + thinking 关 + partial 关
-  // + 终态自毁。与 btwMode 互斥（调度器永不发 btw 标志）。
+  // + 终态自毁。
   private automationConfig?: AutomationConfig;
 
   // ---- 工作目录 ----
@@ -234,8 +219,6 @@ export class SessionWorker {
     this.routingKey = routingId;
     this.queryFn = opts.queryFn ?? query;
     this.onSelfStop = opts.onSelfStop;
-    this.btwMode = opts.btwMode ?? false;
-    this.lightweightMode = opts.lightweightMode ?? false;
     this.cwd = opts.cwd;
     this.envOverrides = opts.envOverrides ?? {};
     this.metadata = opts.metadata ?? {};
@@ -282,7 +265,7 @@ export class SessionWorker {
   /** 模型切换守卫（SDK PreModelSwitch/PostModelSwitch 一对）：懒建单例。
    *  btw/automation 一次性支线返回 null（无切换语义，hook 不注册）。 */
   private makeModelSwitchGuard(): ModelSwitchGuard | null {
-    if (this.btwMode || this.automationConfig) return null;
+    if (this.automationConfig) return null;
     if (!this.modelSwitchGuard) {
       this.modelSwitchGuard = makeModelSwitchGuard({
         emit: (e) => this.emit(e),
@@ -395,7 +378,6 @@ export class SessionWorker {
         (e) => this.emit(e),
         this.subagentTracker,
       ),
-      isBtw: () => this.btwMode,
       isAutomation: () => !!this.automationConfig,
     });
   }
@@ -579,27 +561,6 @@ export class SessionWorker {
       if (cmd.session_id) this.resumeSource = cmd.session_id;
     }
 
-    if (cmd.btw) {
-      this.shouldForkNextConnect = true;
-      this.btwMode = true;
-      this.lightweightMode = !!cmd.lightweight;
-      // BTW forks from `fork_from`, not `session_id`（session_id 是 BTW 自己的路由键）
-      if (cmd.fork_from) this.resumeSource = cmd.fork_from;
-      // btw 任务支线(git-commit):工具白名单 → 全新会话 + 前缀最小化。
-      if (cmd.tools?.length) this.taskTools = cmd.tools;
-      // 轻量问答支线:行为层禁工具(policy hook 全 deny)+ prompt 尾部指令,
-      // 请求前缀保持与主会话逐字节一致以命中 prompt cache——绝不能再动
-      // tools/skills/plugins 选项(2026-08-09 缓存前缀实锤)。
-      if (cmd.lightweight) {
-        cmd = {
-          ...cmd,
-          prompt:
-            cmd.prompt +
-            "\n\n[这是纯问答支线:直接根据已有上下文回答,不要调用任何工具。]",
-        };
-      }
-    }
-
     // 自动化运行（调度器发起的无人值守会话）：存配置，白名单裁决在
     // makePolicyHook / makeCanUseToolCallback 里读它。转录落盘（不动
     // persistSession）；resume_session_id（蒸馏轮）走下方既有通道。
@@ -629,7 +590,6 @@ export class SessionWorker {
         this.autoTitle &&
         !this.titleAttempted &&
         !cmd.resume_session_id &&
-        !cmd.btw &&
         !cmd.provider_switched
       ) {
         this.emitSessionTitle(cmd.prompt);
@@ -687,7 +647,7 @@ export class SessionWorker {
 
           // pendingFork 只服务「供应商切换」通知——自动化蒸馏轮也 fork（隔离
           // 运行会话 id），但那是内部机制，不该冒出「已切换供应商」提示。
-          if (this.resumeSource && this.shouldForkNextConnect && !this.btwMode && !this.automationConfig) {
+          if (this.resumeSource && this.shouldForkNextConnect && !this.automationConfig) {
             this.pendingFork = true;
           }
 
@@ -701,7 +661,6 @@ export class SessionWorker {
             codegraphEnabled,
             processEnv: process.env,
             emit: (e) => this.emit(e),
-            taskTools: this.taskTools,
             automationConfig: this.automationConfig,
             mcpHeaders: this.mcpHeaders,
             session: {
@@ -741,10 +700,7 @@ export class SessionWorker {
               },
               workspace: { trusted, cwd: effectiveCwd, cwdParam: cwd, cwdWorker: this.cwd },
               branch: {
-                btwMode: this.btwMode,
-                taskTools: this.taskTools,
                 automationConfig: this.automationConfig,
-                lightweightMode: this.lightweightMode,
               },
               model: {
                 sdkModel: this.currentModel ? this.modelRoster.toSdkModel(this.currentModel) : "",
@@ -767,8 +723,8 @@ export class SessionWorker {
           // 回合消息分派（顺序语义与历史注释见 session-worker/turnMessages.ts；
           // 状态经 TurnContext 闭包注入，模块本身无状态）。
           const turn: TurnContext = {
-            btwMode: () => this.btwMode,
             markImageRollback: () => { this.rollbackPending = true; this.abortController?.abort(); },
+            isAutomation: () => !!this.automationConfig,
             setTurnActive: (v) => { this.turnActive = v; },
             promoteJumpQueue: () => this.promoteJumpQueue(),
             resetToolLifecycle: () => this.toolLifecycle.reset(),
@@ -861,7 +817,7 @@ export class SessionWorker {
         startTail: (id, outputFile) => this.startBgTaskTail(id, outputFile),
         stopTail: (id) => this.stopBgTaskTail(id),
       },
-      partialMode: !this.btwMode,
+      partialMode: true,
       // 思考展示开关：关闭时剥掉 thinking 块（ollama 端点不认 thinking 参数，
       // API 层关不掉，只能展示层剥——见 mapper.ts emitSubagentBlocks 注释）。
       showThinking: this.thinkingEnabled,
@@ -908,7 +864,7 @@ export class SessionWorker {
     // message_stop 已在本轮迭代经 mapSdkMessage 发出；setImmediate
     // 推迟到迭代体外，避免在 for-await 迭代中 close 自己。
     // （result 成功与错误子类型都走到这里，两条路都自毁。）
-    if (this.btwMode || this.automationConfig) setImmediate(() => this.selfTeardown());
+    if (this.automationConfig) setImmediate(() => this.selfTeardown());
   }
 
   // ---- 图片 400 回滚 ----

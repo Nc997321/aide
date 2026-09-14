@@ -85,18 +85,11 @@ describe("buildDispatchPluginsOption", () => {
     }
   }
 
-  it("lightweight 返回 []（即便目录存在）", () => {
-    mkdirSync(join(homeDir, "skills", "x"), { recursive: true });
-    withConfigDir(homeDir, () => {
-      expect(buildDispatchPluginsOption(cwdDir, true, true)).toEqual([]);
-    });
-  });
-
   it("!trusted 仅用户级（项目级不注入）", () => {
     mkdirSync(join(homeDir, "skills", "x"), { recursive: true });
     mkdirSync(join(cwdDir, ".aide", "claude", "skills", "y"), { recursive: true });
     withConfigDir(homeDir, () => {
-      const res = buildDispatchPluginsOption(cwdDir, false, false);
+      const res = buildDispatchPluginsOption(cwdDir, false);
       expect(res).toHaveLength(1);
       expect(res[0]).toEqual({ type: "local", path: homeDir, skipMcpDiscovery: true });
     });
@@ -106,7 +99,7 @@ describe("buildDispatchPluginsOption", () => {
     mkdirSync(join(homeDir, "skills", "x"), { recursive: true });
     mkdirSync(join(cwdDir, ".aide", "claude", "skills", "y"), { recursive: true });
     withConfigDir(homeDir, () => {
-      const res = buildDispatchPluginsOption(cwdDir, true, false);
+      const res = buildDispatchPluginsOption(cwdDir, true);
       expect(res).toHaveLength(2);
       expect(res[0]).toEqual({ type: "local", path: homeDir, skipMcpDiscovery: true });
       expect(res[1]).toEqual({
@@ -120,7 +113,7 @@ describe("buildDispatchPluginsOption", () => {
   it("用户级目录不存在 → 跳过用户级，仅项目级", () => {
     mkdirSync(join(cwdDir, ".aide", "claude", "skills", "y"), { recursive: true });
     withConfigDir(join(homeDir, "nope"), () => {
-      const res = buildDispatchPluginsOption(cwdDir, true, false);
+      const res = buildDispatchPluginsOption(cwdDir, true);
       expect(res).toHaveLength(1);
       expect(res[0].path).toBe(join(cwdDir, ".aide", "claude"));
     });
@@ -129,7 +122,7 @@ describe("buildDispatchPluginsOption", () => {
   it("项目级目录不存在 → 跳过项目级，仅用户级", () => {
     mkdirSync(join(homeDir, "skills", "x"), { recursive: true });
     withConfigDir(homeDir, () => {
-      const res = buildDispatchPluginsOption(cwdDir, true, false);
+      const res = buildDispatchPluginsOption(cwdDir, true);
       expect(res).toHaveLength(1);
       expect(res[0].path).toBe(homeDir);
     });
@@ -139,7 +132,7 @@ describe("buildDispatchPluginsOption", () => {
     mkdirSync(join(homeDir, "skills", "x"), { recursive: true });
     mkdirSync(join(cwdDir, ".aide", "claude", "skills", "y"), { recursive: true });
     withConfigDir(homeDir, () => {
-      const res = buildDispatchPluginsOption(cwdDir, true, false);
+      const res = buildDispatchPluginsOption(cwdDir, true);
       expect(res.every((r) => r.skipMcpDiscovery === true)).toBe(true);
     });
   });
@@ -147,7 +140,7 @@ describe("buildDispatchPluginsOption", () => {
   it("注入会 ensureDispatchManifest 写清单（用户级 aide-user）", () => {
     mkdirSync(join(homeDir, "skills", "x"), { recursive: true });
     withConfigDir(homeDir, () => {
-      buildDispatchPluginsOption(cwdDir, false, false);
+      buildDispatchPluginsOption(cwdDir, false);
       const m = JSON.parse(
         readFileSync(join(homeDir, ".claude-plugin", "plugin.json"), "utf8"),
       );
@@ -159,7 +152,7 @@ describe("buildDispatchPluginsOption", () => {
     mkdirSync(join(homeDir, "skills", "x"), { recursive: true });
     mkdirSync(join(cwdDir, ".aide", "claude", "skills", "y"), { recursive: true });
     withConfigDir(homeDir, () => {
-      buildDispatchPluginsOption(cwdDir, true, false);
+      buildDispatchPluginsOption(cwdDir, true);
       const m = JSON.parse(
         readFileSync(join(cwdDir, ".aide", "claude", ".claude-plugin", "plugin.json"), "utf8"),
       );

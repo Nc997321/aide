@@ -19,8 +19,6 @@ export interface QueryContextDeps {
   codegraphEnabled: boolean;
   processEnv: NodeJS.ProcessEnv;
   emit: (e: ChatEvent) => void;
-  /** btw 任务支线白名单：非空时 codegraph/docs 跳过注册（前缀最小化）。 */
-  taskTools: string[] | undefined;
   automationConfig: AutomationConfig | undefined;
   mcpHeaders: McpHeaderMap | undefined;
   /** builtinHooks 的会话适配器（worker 建闭包桥接 private 成员：
@@ -42,31 +40,22 @@ export interface PreparedQueryContext {
 export async function prepareQueryContext(deps: QueryContextDeps): Promise<PreparedQueryContext> {
   // codegraph agent 工具：默认注册（AIDE_CODEGRAPH_TOOLS=off 关闭）。
   // handler 闭包持有本会话的 emit（经 DeltaCoalescer，红线）与 cwd。
-  // btw 任务支线(taskTools,全新会话)跳过:任务用不上代码索引,前缀最小化。
-  // 轻量 btw 不再跳过——问答支线要保持与主会话请求前缀逐字节一致,
-  // 少注册 MCP 工具 = 工具列表不同 = prompt cache 必崩(2026-08-09 实锤);
-  // 模型误调由 policy hook 的轻量全 deny 兜底,不会卡。
   // 挂载还随工作区索引开关（codegraph_enabled，主进程下发，每工作区默认关）。
-  const codegraphMcp = deps.taskTools
-    ? null
-    : codegraphMcpRegistration(
-        deps.cwd,
-        deps.emit,
-        deps.processEnv,
-        deps.trusted,
-        deps.codegraphEnabled,
-      );
-  // 文档工具(docx + pdf):注册条件=任务支线跳过、!trusted 跳过、AIDE_DOCX_TOOLS=off
-  // 跳过——**不跟随 codegraph_enabled**（docx/pdf 不扫盘不建索引，见 docsMcp.ts）。
+  const codegraphMcp = codegraphMcpRegistration(
+    deps.cwd,
+    deps.emit,
+    deps.processEnv,
+    deps.trusted,
+    deps.codegraphEnabled,
+  );
+  // 文档工具(docx + pdf):注册条件=!trusted 跳过、AIDE_DOCX_TOOLS=off 跳过
+  // ——**不跟随 codegraph_enabled**（docx/pdf 不扫盘不建索引，见 docsMcp.ts）。
   // 无 emit 参数——docx/pdf 一次性同步解析,不像 codegraph 要 IPC 客户端。
-  const docsMcp = deps.taskTools
-    ? null
-    : docsMcpRegistration(deps.cwd, deps.processEnv, deps.trusted);
-  // 知识库读写（P1 只有读工具）：注册条件=任务支线跳过、!trusted 跳过、
-  // AIDE_KB_TOOLS=off 跳过。**未登录也挂**——凭据每次调用现读，未配置时工具返回
-  // 「去知识库面板登录」的引导文本（设计 spec §5.1）。无 emit 参数：直连知识库
-  // 的 HTTP，不走主进程 IPC（不像 codegraph）。
-  const knowledgeMcp = knowledgeMcpRegistration(deps.processEnv, deps.trusted, deps.taskTools, deps.cwd);
+  const docsMcp = docsMcpRegistration(deps.cwd, deps.processEnv, deps.trusted);
+  // 知识库读写（P1 只有读工具）：注册条件=!trusted 跳过、AIDE_KB_TOOLS=off 跳过。
+  // **未登录也挂**——凭据每次调用现读，未配置时工具返回「去知识库面板登录」的引导
+  // 文本（设计 spec §5.1）。无 emit 参数：直连知识库的 HTTP，不走主进程 IPC。
+  const knowledgeMcp = knowledgeMcpRegistration(deps.processEnv, deps.trusted, deps.cwd);
 
   // Aide 指令加载：不依赖 SDK 文件系统 setting source，自己读 global + project
   // CLAUDE.md 追加到 preset system prompt。settingSources 必须为空，否则 SDK

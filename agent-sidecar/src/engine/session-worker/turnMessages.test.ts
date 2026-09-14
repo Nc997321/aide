@@ -21,7 +21,7 @@ import { handleQueryMessage, type TurnContext } from "./turnMessages.js";
 
 function stubCtx(over: Partial<TurnContext> = {}): TurnContext {
   return {
-    btwMode: () => false,
+    isAutomation: () => false,
     markImageRollback: vi.fn(),
     setTurnActive: vi.fn(),
     promoteJumpQueue: () => false,
@@ -49,15 +49,15 @@ beforeEach(() => {
 });
 
 describe("handleQueryMessage", () => {
-  it("图片 400：非 btw 命中检测 → markImageRollback；btw 支线不标", () => {
+  it("图片 400：普通会话命中检测 → markImageRollback；automation 一次性会话不标", () => {
     detectImageUnsupported.mockReturnValue(true);
     const ctx = stubCtx();
     handleQueryMessage(msg({ type: "assistant" }), q, ctx);
     expect(ctx.markImageRollback).toHaveBeenCalled();
 
-    const btwCtx = stubCtx({ btwMode: () => true });
-    handleQueryMessage(msg({ type: "assistant" }), q, btwCtx);
-    expect(btwCtx.markImageRollback).not.toHaveBeenCalled();
+    const autCtx = stubCtx({ isAutomation: () => true });
+    handleQueryMessage(msg({ type: "assistant" }), q, autCtx);
+    expect(autCtx.markImageRollback).not.toHaveBeenCalled();
   });
 
   it("result + 插队接入成功 → 复位工具生命周期 + 遥测 + 返回 continue（跳过后续分派）", () => {

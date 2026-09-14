@@ -324,14 +324,6 @@ export type SidecarCommand =
       // fork_from 是 fork 源会话 ID（BTW 自己的 session_id 仅用于路由，不传给 SDK）。
       // fork_from 省略/空 = 不 fork,全新会话——btw 任务支线(git-commit)走这条路:
       // 不背主会话历史,token 最省。
-      btw?: boolean;
-      lightweight?: boolean;
-      fork_from?: string;
-      // btw 任务支线的内建工具白名单(如 ["Bash","Read","Glob","Grep"]):query()
-      // 的 tools/allowedTools 收成它,MCP 工具一并禁掉,请求前缀最小化。
-      // 仅 btw 任务支线使用;问答支线(轻量/完整)绝不能用——改工具列表会改
-      // 请求前缀,fork 支线的 prompt cache 必崩(2026-08-09 实锤)。
-      tools?: string[];
       // 自动化运行（无人值守 headless 会话，调度器发起）：与 btw 的区别是
       // 转录落盘（persistSession 不动）。preset 是权限预设（auto=CLI 自动裁决/
       // full=全放行）；tools 恒为 ["*"]（可见性不收口，行为层收口）；

@@ -7,9 +7,6 @@ import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
 
 function branchState(over: Partial<PolicyBranchState> = {}): PolicyBranchState {
   return {
-    btwMode: false,
-    lightweightMode: false,
-    taskTools: undefined,
     automationConfig: undefined,
     cwd: "/proj",
     ...over,
@@ -54,12 +51,6 @@ describe("SessionPolicy.applySnapshot", () => {
 });
 
 describe("SessionPolicy.makeHook 支线分支", () => {
-  it("轻量 btw：一切工具 deny（纯问答语义）", async () => {
-    const { policy } = makePolicy({ lightweightMode: true });
-    const out = await policy.makeHook("/proj")(preToolUse("Read"), undefined, { signal: new AbortController().signal }) as HookOut;
-    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
-  });
-
   it("automation：verdict allow/deny 直返，defer 回 {}；白名单提示带连接器清单", async () => {
     const cfg = { taskId: "t", runId: "r", preset: "auto" as const, tools: ["*"], mcpAllowlist: ["conn-a"], taskDir: "", sessionDir: "" };
     for (const [verdict, expected] of [["allow", "allow"], ["deny", "deny"], ["defer", undefined]] as const) {
@@ -68,12 +59,6 @@ describe("SessionPolicy.makeHook 支线分支", () => {
       expect(out.hookSpecificOutput?.permissionDecision).toBe(expected);
       if (verdict === "deny") expect(out.hookSpecificOutput?.permissionDecisionReason).toContain("conn-a");
     }
-  });
-
-  it("btw 任务支线：无匹配规则时 deny（defer 会被 CLI 静默放行 = 支线开 bypass）", async () => {
-    const { policy } = makePolicy({ taskTools: ["Bash"] });
-    const out = await policy.makeHook("/proj")(preToolUse("Read"), undefined, { signal: new AbortController().signal }) as HookOut;
-    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
   });
 
   it("automation deny + 空白名单 → 提示「无」；hook 无 cwd / 无 tool_input 走兜底臂", async () => {
@@ -91,13 +76,6 @@ describe("SessionPolicy.makeHook 支线分支", () => {
       { signal: new AbortController().signal },
     ) as HookOut;
     expect(out2.hookSpecificOutput?.permissionDecision).toBe("ask");
-  });
-
-  it("btw 支线 ask → deny（无人应答权限弹窗，不挂起）", async () => {
-    const { policy } = makePolicy({ btwMode: true });
-    policy.applySnapshot({ revision: 1, rules: [rule("ask", "Bash")] });
-    const out = await policy.makeHook("/proj")(preToolUse("Bash"), undefined, { signal: new AbortController().signal }) as HookOut;
-    expect(out.hookSpecificOutput?.permissionDecision).toBe("deny");
   });
 });
 
