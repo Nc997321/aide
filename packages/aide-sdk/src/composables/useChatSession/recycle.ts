@@ -1,7 +1,6 @@
 import { api } from "../../api";
 import { trail } from "../../utils/diagnostics/scrollTrail";
 import type { ChatMessage } from "../../types/chat";
-import type { LoadMessagesResult } from "../../types";
 import { itemsToChatMessages } from "./transcriptMapping";
 import { pageLedgers, stores, type PageEntry } from "./state";
 
@@ -194,6 +193,16 @@ export function liveSkeletonId(sid: string): string {
   return `liveskel:${sid}`;
 }
 
+/** 隐藏区高度（夹紧后）：陈旧窗口大于现存 live 段时 count 被夹到 liveSeg，高度必须
+ *  按 **px/条比守恒** 同比例收缩——否则占位行声明「我代表 N 条」却撑旧窗口全高，
+ *  内容虚高（真机实测 store.messages=10 条 / scrollHeight=81784px；切会话时容器高
+ *  在 66↔559 抖动，ResizeObserver 每帧读 scrollHeight 强制全量布局 → 冻结）。
+ *  未夹紧（hidden === hiddenCount）时原样返回实测高。`hiddenCount > 0` 由调用方守卫。
+ *  「按 px/条比例折算」也是 slideLiveWindowToTail 过藏分支声明过的同一规则。 */
+function scaleHiddenPx(live: LiveWindowState, hidden: number): number {
+  return hidden < live.hiddenCount ? (live.hiddenPx * hidden) / live.hiddenCount : live.hiddenPx;
+}
+
 /** live 段行构建（ledger 与 no-ledger 两路共用）：隐藏前缀（live 头部 hiddenCount
  *  条）→ 一条 liveskel 占位 + 尾窗 live 行。hiddenCount 只做几何夹紧
  *  （[0, liveSeg]）——收拢/滑动/展开全是滚动层策略（见 useChatScroll），本函数
@@ -219,7 +228,7 @@ function appendLiveWindowRows(
       kind: "liveskel",
       id: liveSkeletonId(sid),
       count: hidden,
-      heightPx: Math.max(1, Math.round(live.hiddenPx)),
+      heightPx: Math.max(1, Math.round(scaleHiddenPx(live, hidden))),
     });
   }
   for (let i = liveStart + hidden; i < len; i++) {

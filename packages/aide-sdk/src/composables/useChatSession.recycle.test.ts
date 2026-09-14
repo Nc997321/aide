@@ -25,11 +25,19 @@ import {
   releasePage,
   restorePage,
   setViewportHot,
+  type Row,
 } from "./useChatSession/recycle";
 import type { ChatMessage } from "../types/chat";
 
 function makeMsg(text: string): ChatMessage {
   return { id: crypto.randomUUID(), role: "assistant", blocks: [{ type: "text", text }], timestamp: 0 };
+}
+
+/** 取 liveskel 行（不存在即测试前置失败——不要静默断言 undefined）。 */
+function liveskelOf(rows: readonly Row[]): Extract<Row, { kind: "liveskel" }> {
+  const hit = rows.find((r): r is Extract<Row, { kind: "liveskel" }> => r.kind === "liveskel");
+  if (!hit) throw new Error("测试前置失败：rows 里没有 liveskel 行");
+  return hit;
 }
 
 /** 造一页台账条目（默认 loaded + restorable）。 */
@@ -101,6 +109,21 @@ describe("useChatSession/recycle 页级回收", () => {
     expect(rows[0].kind === "skeleton" && rows[0].heightPx).toBe(500);
     // 第 2 页的消息内容不被释放波及
     expect(rows[1].kind === "page" && (rows[1].messages[0].blocks[0] as { text: string }).text).toBe("p1-0");
+  });
+
+  it("live 窗口过藏：hiddenCount 被夹紧时 heightPx 必须按 px/条比同比例收缩", () => {
+    const store = getStore("s1");
+    for (let i = 0; i < 10; i++) store.messages.push(makeMsg(`live-${i}`));
+    // 陈旧窗口（dispose 后同 sid 重开、旧窗口大于现存 live 段的残留量级）：
+    // 683 条 × 120px 估算高。live 段只剩 10 条 → count 必然被夹到 10。
+    const stale = { hiddenCount: 683, hiddenPx: 683 * 120 };
+    const skel = liveskelOf(buildRows("s1", store.messages, stale));
+
+    expect(skel.count).toBe(10); // 夹到 live 段长度
+    // 几何必须跟着一起收缩，否则占位行会声明「我代表 10 条」却撑 81960px 的虚高高度
+    // （真机实测：store.messages=10 条、内容高 81784px，切会话时容器高度 66↔559 抖动）。
+    const perMessage = stale.hiddenPx / stale.hiddenCount; // 120 px/条
+    expect(skel.heightPx).toBe(Math.round(10 * perMessage));
   });
 
   it("释放 splice 原位公式：释放第 0、2 页后，store 只剩第 1 页 + live", () => {

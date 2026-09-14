@@ -523,6 +523,10 @@ export function useChatScroll(
     if (existing.hiddenCount >= liveSeg) {
       // 过藏（dispose 后同 sid 重开，内容已换，旧窗口大于现存 live 段）：
       // 按 px/条比例折算重建到尾窗，防 stale 大窗口把 live 段整段吞掉
+      trail(
+        "recycle",
+        `liveOverHidden ${sid.slice(0, 8)} ${existing.hiddenCount}→${targetHidden} px${Math.round(existing.hiddenPx)}`,
+      );
       liveWindows.set(sid, {
         hiddenCount: targetHidden,
         hiddenPx: Math.max(1, Math.round((existing.hiddenPx * targetHidden) / existing.hiddenCount)),
