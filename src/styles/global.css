@@ -248,6 +248,30 @@ html, body, #app {
   padding-left: 10px;
   color: var(--aide-text-secondary);
 }
+/* ── Insight 旁注（Explanatory / Learning 输出样式下模型自绘，结构见
+   utils/markdown.ts 的 insightExtension）──
+   识别是猜模型意图、不是协议，所以这里只管「长什么样」，认不认得出归渲染层。
+   款式「极简」：只加一条顶线与标签，其余与正文同重——够把它从正文里分出来，
+   又不至于像 blockquote / 卡片那样跟正文抢注意力。
+   标签是固定字面量 ★ Insight；两条定界横线在渲染层已丢掉（脚手架，非内容）。
+   样式只写在这里，**HTML 里没有变体信息**：renderMarkdown 按原文缓存，类名带上
+   外观参数就会命中旧缓存、切换时穿帮。 */
+.msg-text .aide-insight {
+  margin: 10px 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--aide-border);
+}
+.msg-text .aide-insight-label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--aide-accent);
+  margin-bottom: 4px;
+}
+/* body 内最后一块的底边距收掉，免得 aside 看起来多一截下缘 */
+.msg-text .aide-insight-body > :last-child {
+  margin-bottom: 0;
+}
 .msg-text a {
   color: var(--aide-accent);
   text-decoration: none;

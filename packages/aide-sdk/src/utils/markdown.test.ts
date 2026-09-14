@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { renderMarkdown, renderStreaming, __renderCacheSizeForTest, __renderCacheBytesForTest } from "./markdown";
 
 /** 卡死修复的回归护栏：流式尾块渲染必须绕开 hljs（O(n²) 放大器），
@@ -170,5 +170,177 @@ describe("renderMarkdown（定稿块，高亮）", () => {
     // 记账字节被压回限内；条数远少于 30（发生了淘汰）
     expect(__renderCacheBytesForTest()).toBeLessThanOrEqual(8 * 1024 * 1024);
     expect(__renderCacheSizeForTest()).toBeLessThan(30);
+  });
+});
+
+/** 输出样式的 Insight 旁注块（Explanatory / Learning 下模型自绘）。
+ *  识别是**猜模型意图**不是协议——宽容 + 可降级是这段的全部要点：
+ *  认得出就结构化，认不出/没闭口/出现假阳性时必须原样渲染，一个字都不能丢。 */
+describe("Insight 旁注块", () => {
+  it("形态①定界行裸写：包成 aside，两条横线消失，正文与列表都在", () => {
+    const html = renderMarkdown(
+      "前言。\n\n★ Insight ─────────────────────\n旁注正文。\n- 要点一\n─────────────────────\n",
+    );
+    expect(html).toContain('<aside class="aide-insight">');
+    expect(html).toContain("★ Insight");
+    expect(html).toContain("旁注正文。");
+    expect(html).toContain("<li>要点一</li>");
+    // 两条定界横线被丢掉（脚手架，不是内容）
+    expect(html).not.toContain("─────");
+    // 闭合横线不再被当成最后一个 li 的续行
+    expect(html).not.toMatch(/<li>要点一[\s\S]*─/);
+  });
+
+  it("形态②定界行被反引号包住：同样识别", () => {
+    const html = renderMarkdown(
+      "`★ Insight ─────────────────`\n- 判据在**调用之后**还有没有活干。\n`─────────────────`\n",
+    );
+    expect(html).toContain('<aside class="aide-insight">');
+    expect(html).toContain("<strong>调用之后</strong>");
+    expect(html).not.toContain("─");
+  });
+
+  it("形态③整块带 > 引用前缀：body 剥掉一层，不产生嵌套 blockquote", () => {
+    const html = renderMarkdown("> ★ Insight ─────\n> 引用式旁注。\n> ─────\n");
+    expect(html).toContain('<aside class="aide-insight">');
+    expect(html).toContain("引用式旁注。");
+    expect(html).not.toContain("<blockquote>");
+  });
+
+  it("未闭口（流式中途 / 模型漏画）→ 包到文本末尾，内容不丢", () => {
+    const html = renderStreaming("★ Insight ─────\n还在流式输出的旁注正文。");
+    expect(html).toContain('<aside class="aide-insight">');
+    expect(html).toContain("还在流式输出的旁注正文。");
+  });
+
+  it("开口行自带正文：那截正文必须留下（曾整行被丢 = 吞内容）", () => {
+    const html = renderMarkdown(
+      "★ Insight ───────────────────── 开头这句直接跟在标签后面。\n- 要点。\n─────────────────\n",
+    );
+    expect(html).toContain('<aside class="aide-insight">');
+    expect(html).toContain("开头这句直接跟在标签后面。"); // ← 丢了就是回归
+    expect(html).toContain("<li>要点。</li>");
+  });
+
+  it("整块压成一行：开口行里就以横线收口", () => {
+    const html = renderMarkdown("★ Insight ───── 一行式的自包含旁注。 ──────────\n\n后文。\n");
+    expect(html).toContain('<aside class="aide-insight">');
+    expect(html).toContain("一行式的自包含旁注。");
+    expect(html).not.toContain("─");
+    expect(html).toContain("<p>后文。</p>");
+  });
+
+  it("末行以横线收尾（未独占一行）：横线剥掉，正文留下", () => {
+    const html = renderMarkdown("★ Insight ─────\n第一句。\n第二句。 ──────────────────\n");
+    expect(html).toContain('<aside class="aide-insight">');
+    expect(html).toContain("第二句。");
+    expect(html).not.toContain("─");
+  });
+
+  it("闭口行之后的内容照常渲染（marked 靠 raw.length 前进，长度错会吞/重复后文）", () => {
+    const html = renderMarkdown(
+      "段首。\n\n★ Insight ─────\n旁注正文。\n─────\n\n尾部段落甲。\n\n尾部段落乙。\n",
+    );
+    expect(html).toContain('<aside class="aide-insight">');
+    expect(html).toContain("<p>段首。</p>");
+    // 后文两条都在，且旁注正文只出现一次（raw 既没吞掉后文也没把它重复吐一遍）
+    expect(html).toContain("<p>尾部段落甲。</p>");
+    expect(html).toContain("<p>尾部段落乙。</p>");
+    expect(html.match(/旁注正文。/g)).toHaveLength(1);
+  });
+
+  it("空 body（开口紧跟闭口）：aside 为空壳，后文不受影响", () => {
+    const html = renderMarkdown("★ Insight ─────\n─────\n\n后文。\n");
+    expect(html).toContain('<aside class="aide-insight">');
+    expect(html).toContain("<p>后文。</p>");
+  });
+
+  it("流式实例（renderStreaming）与定稿实例走同一识别", () => {
+    const html = renderStreaming("★ Insight ─────\n流式旁注。\n─────\n");
+    expect(html).toContain('<aside class="aide-insight">');
+    expect(html).toContain("流式旁注。");
+  });
+
+  it("负例：正文里出现 ★ 但不是 Insight 行 → 不误判", () => {
+    const html = renderMarkdown("评分 ★★★ 很高。\n\n★ 别的星号开头也不算。\n");
+    expect(html).not.toContain("aide-insight");
+    expect(html).toContain("评分 ★★★ 很高。");
+    expect(html).toContain("★ 别的星号开头也不算。");
+  });
+
+  /** 2026-09-14 实锤：标记符号**不是固定的**。截图上那条真实消息用的是 ✶(U+2736)，
+   *  而解析器当时只认 ★(U+2605)——整块静默降级成普通段落（横线留着、无样式），
+   *  排查期间"手抄截图里的 ★ 去探针"把这条差异掩盖了整整一轮。
+   *  下面的原文逐字取自转录（session e824e53b @2026-09-13T15:43:30Z）。 */
+  it("回归：星号是 ✶(U+2736) 而非 ★ 时必须同样识别（截图那条原文）", () => {
+    const html = renderMarkdown(
+      "`✶ Insight ─────────────────────────────────────`\n" +
+        "这个仓库的 CLAUDE.md 里也有一套「用户级约定」，那才是对**代码本身**的硬约束（层次感、参数铁律）。" +
+        "Output style 约束的是我的**表达方式**，和代码质量规范是两条互不相干的线——别把「它讲得多」误当成「它写得对」。\n" +
+        "`─────────────────────────────────────────────────`\n",
+    );
+    expect(html).toContain('<aside class="aide-insight">');
+    expect(html).toContain("<strong>代码本身</strong>"); // body 走既有渲染管线
+    expect(html).not.toContain("─"); // 两条定界横线仍是脚手架
+  });
+
+  it("星号家族其他成员（✦ / ⋆ / ✧）同样识别（符号由模型自绘，不固定）", () => {
+    for (const star of ["✦", "⋆", "✧"]) {
+      const html = renderMarkdown(`${star} Insight ─────\n旁注正文。\n─────\n`);
+      expect(html, `${star} 未识别`).toContain('<aside class="aide-insight">');
+      expect(html).toContain("旁注正文。");
+      expect(html).not.toContain("─");
+    }
+  });
+
+  it("负例：星号不在行首（被引号/括号包住）→ 不当块起点", () => {
+    const html = renderMarkdown(
+      "（★ Insight 是旁注块。）\n\n「✦ Insight」同样不算。\n",
+    );
+    expect(html).not.toContain("aide-insight");
+    expect(html).toContain("（★ Insight 是旁注块。）");
+    expect(html).toContain("「✦ Insight」同样不算。");
+  });
+
+  it("负例：ASCII `*` 不收（那是 markdown 列表符，收了会改掉列表行为）", () => {
+    const html = renderMarkdown("* Insight ─────\n旁注。\n─────\n");
+    expect(html).not.toContain("aide-insight");
+    expect(html).toContain("<li>"); // 仍是列表项
+    expect(html).toContain("旁注。");
+  });
+
+  it("负例：Insightful / Insights 这类同前缀词不算（`\\b` 的唯一价值）", () => {
+    for (const word of ["★ Insightful 是形容词。", "✦ Insights 是复数。"]) {
+      const html = renderMarkdown(`${word}\n\n后文。\n`);
+      expect(html, `${word} 被误判`).not.toContain("aide-insight");
+      expect(html).toContain(word);
+    }
+  });
+
+  it("负例：没有开口行的孤立横线行 → 原样保留，不被吃掉", () => {
+    const src = "正文段落。\n\n─────────\n\n又一段。\n";
+    const html = renderMarkdown(src);
+    expect(html).not.toContain("aide-insight");
+    expect(html).toContain("─────────");
+    expect(html).toContain("又一段。");
+  });
+
+  it("开口行前无空行时退化成普通 markdown（已知边界，内容一字不少）", () => {
+    // 无空行 → 已被段落 tokenizer 吞掉，扩展看不到块起点。刻意不定义 start
+    // 换取全应用 markdown 解析不背 O(n²) 扫描（见 markdown.ts 注释）。
+    const html = renderMarkdown("一段话。\n★ Insight ─────\n旁注。\n─────\n");
+    expect(html).not.toContain("aide-insight");
+    expect(html).toContain("一段话。");
+    expect(html).toContain("旁注。");
+  });
+
+  it("XSS：旁注 body 里的裸 HTML 仍被转义（未新增注入面）", () => {
+    const html = renderMarkdown(
+      "★ Insight ─────\n<img src=x onerror=alert(1)>\n<script>alert(2)</script>\n─────\n",
+    );
+    expect(html).toContain('<aside class="aide-insight">');
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;img");
   });
 });

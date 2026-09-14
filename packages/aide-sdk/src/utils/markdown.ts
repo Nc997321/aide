@@ -1,5 +1,5 @@
 import { Marked, Renderer } from "marked";
-import type { Tokens } from "marked";
+import type { TokenizerAndRendererExtension, Tokens } from "marked";
 import { hljs } from "./highlight";
 import { parseFileLink } from "./fileLink";
 
@@ -99,9 +99,154 @@ function safeImage(this: Renderer, token: Tokens.Image): string {
   return escapeHtml(token.text);
 }
 
+/** ── 输出样式的 Insight 旁注块 ──
+ *
+ *  Claude Code 的 Explanatory / Learning 输出样式会让模型自绘一段旁注：
+ *      ★ Insight ─────────────────────────
+ *      …讲解（正文 + 列表）…
+ *      ────────────────────────────────────
+ *  它是**模型自由输出的文本，不是协议字段**：定界行可能裸写、可能被反引号包住、
+ *  可能整体带 `>` 引用前缀，长短也不固定。所以识别必须宽容、落空必须能降级——
+ *  宁可退回普通 markdown，也不能吃掉一个字（同 display 通道的降级约定）。
+ *
+ *  ⚠️ 连标签前的星号**都不固定**（2026-09-14 实锤：上一轮把截图文字手抄成 ★ 去
+ *  探针，真身其实是 ✶ U+2736，于是"探针全绿、用户看到的仍是旧样子"）——按星形
+ *  符号家族识别，见 INSIGHT_LABEL_RE。
+ *
+ *  为什么必须在这一层做：闭合的那行 `───` 紧跟最后一个列表项、中间没有空行，
+ *  marked 会把它当成该 <li> 的续行吞掉——用户看到的是「最后一条 bullet 里挂着
+ *  一条莫名其妙的横线」。块级扩展在 list tokenizer 之前整段吃掉，顺带把这个渲染
+ *  bug 一并修掉。
+ *
+ *  ⚠️ 刻意**不定义 `start`**：marked 对 startBlock 的处理是每个块迭代都把剩余
+ *  全文重新扫一遍（`e.slice(1)` + 逐个 start 取 min），定义它等于给全应用所有
+ *  markdown 解析加一趟 O(n²) 扫描——本文件被这类扫描坑过不止一次。代价：开口行
+ *  前必须有空行才成为块起点（实测的模型输出都满足）；没有空行时它早已被段落
+ *  吞掉，结果是退化成普通 markdown，内容不丢。
+ *  ⚠️ 同一条账也压在 tokenizer 自己身上：它同样每个块位置被调用一次，所以**存否
+ *  判定只许碰首行**（`indexOf("\n")`，见 tokenizer 内注释）——否则省下的那趟
+ *  O(n²) 会被自己原样补回来（实测过，152KB 文档差 10 倍）。
+ *
+ *  产出的 <aside> **不含任何视觉变体**（三套外观全交给 CSS，见 styles/global.css）：
+ *  renderMarkdown 按原文缓存，变体一旦进 HTML 就会命中旧缓存、切换时穿帮。 */
+
+/** 一行剥掉模型自绘的脚手架：行首空白、`>` 引用前缀、包裹的反引号。 */
+function stripScaffold(line: string): string {
+  return line
+    .replace(/^[ \t]*>[ \t]?/, "")
+    .trim()
+    .replace(/^`+/, "")
+    .replace(/`+$/, "")
+    .trim();
+}
+
+/** 标签行：**星形符号家族**（1-3 枚连写）+ 字面量 `Insight`。
+ *
+ *  为什么不钉死一个码位：星号由模型自绘，实测同一会话里 ★(U+2605) 与 ✶(U+2736)
+ *  混用且后者更多——钉死一个就是把另一形态静默降级（2026-09-14 的真实事故）。
+ *  值域一律写成码位转义：这次事故的本质就是"两个星号肉眼几乎一样、码位不同"，
+ *  字符类里摆裸字符等于把同一个坑再埋一次（谁也没法确认那个字到底是不是 273D）。
+ *  收录：黑/白星 U+2605-2606 · 星号星 U+22C6 · 六/八芒星与星形装饰 U+2726-273D ·
+ *  大星 U+2B50。
+ *  刻意**不收 ASCII `*`**：那是 markdown 列表符，收进来会把 `* Insight 是什么`
+ *  这类正文行误判成块起点，而误判会把后续行一路吃进 aside（见下方循环）。
+ *  边界不放宽（引号/括号包住的 Insight 不算）由「行首即符号」这条兜着，
+ *  负例见 markdown.test.ts。 */
+const INSIGHT_LABEL_RE = /^[\u2605\u2606\u22c6\u2726-\u273d\u2b50]{1,3}[ \t]*Insight\b/i;
+
+/** 开口行 → 同一行上剩下的正文字（可为空串 = 标签独占一行）；不是开口行返回 null。
+ *  **必须把剩下的正文留下来**：模型有时把开头一整句直接跟在标签后面
+ *  （`★ Insight ───── 这仓库的 CLAUDE.md…`），整行丢掉就是吞内容。 */
+function insightOpenRest(line: string): string | null {
+  const stripped = stripScaffold(line);
+  const m = INSIGHT_LABEL_RE.exec(stripped);
+  if (!m) return null;
+  return stripped.slice(m[0].length).replace(/^[ \t]*─+[ \t]*/, "").trim();
+}
+
+/** 行尾的闭口横线：命中返回去掉它的文本，未命中返回 null。
+ *  只认制表符 U+2500（模型自绘的就是它）——把 ASCII 连字符也算进来会误伤正文。 */
+function stripClosingRule(text: string): string | null {
+  const m = /[ \t]*─{3,}[ \t]*$/.exec(text);
+  return m ? text.slice(0, m.index).trimEnd() : null;
+}
+
+/** 独占一行的闭口横线。 */
+function isClosingRuleLine(line: string): boolean {
+  return /^─{3,}$/.test(stripScaffold(line));
+}
+
+const insightExtension: TokenizerAndRendererExtension = {
+  name: "aideInsight",
+  level: "block",
+  tokenizer(src: string): Tokens.Generic | undefined {
+    // 存否判定**只看首行**：本函数被 marked 在**每一个块位置**用「剩余全文」调用一次
+    // （块级扩展无 `start` 时就是这语义），在这里 `split` 全文 = 把本文件最忌讳的
+    // O(n²) 请回来——2026-09-14 实测：152KB 文档 10.7ms → 107.2ms，纯段落文档
+    // 段数每翻倍耗时 ×3-4。命中是极少数（一条消息通常 0-1 次），全文切分留到命中之后。
+    const nl = src.indexOf("\n");
+    const firstLine = nl === -1 ? src : src.slice(0, nl);
+    const rest = insightOpenRest(firstLine);
+    if (rest === null) return undefined;
+    const lines = src.split("\n");
+
+    // 整块写成引用（`> ★ Insight`）时，body 也剥掉一层 `>`，免得 <aside> 里再套一个
+    // blockquote——引用层级由开口行决定，body 跟随。
+    const quoted = /^[ \t]*>/.test(firstLine);
+    const strip = (l: string) => (quoted ? l.replace(/^[ \t]*>[ \t]?/, "") : l);
+
+    const body: string[] = [];
+    let consumed = 1;
+
+    // ① 开口行自带正文、且以横线收在同一行（整块压成一行）
+    const inline = stripClosingRule(rest);
+    if (inline !== null) {
+      body.push(inline);
+    } else {
+      body.push(rest);
+      // ② 逐行吃到收口为止。收口有两种写法：**独占一行**的横线，以及**行尾收在一句话
+      //    后面**（`第二句。 ────`）——后者不能只认「整行是横线」，否则整块被判成未闭
+      //    合、把后面的正文也吞进 aside。两种都没有（流式中途 / 模型漏画）→ 吃到末尾。
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i] ?? "";
+        consumed = i + 1;
+        // 判定用剥壳后的文本（容忍 `> ` 前缀与反引号包裹）；进 body 的用只剥引用前缀
+        // 的那份，免得把行内的反引号当脚手架削掉。
+        if (isClosingRuleLine(line)) break;
+        const content = strip(line);
+        const withoutRule = stripClosingRule(content);
+        if (withoutRule !== null) {
+          body.push(withoutRule);
+          break;
+        }
+        body.push(content);
+      }
+    }
+
+    return {
+      type: "aideInsight",
+      // marked 靠 raw.length 前进：拼回被消费的原始行（含闭口行，不含其后的换行）。
+      raw: lines.slice(0, consumed).join("\n"),
+      tokens: this.lexer.blockTokens(body.join("\n"), []),
+    };
+  },
+  // 标签是固定字面量，body 走既有渲染管线（转义纪律不变），无新增 XSS 面。
+  renderer(token: Tokens.Generic): string {
+    return (
+      '<aside class="aide-insight">' +
+      '<span class="aide-insight-label">★ Insight</span>' +
+      `<div class="aide-insight-body">${this.parser.parse(token.tokens ?? [])}</div>` +
+      "</aside>"
+    );
+  },
+};
+
 function makeMarked(code: (token: CodeToken) => string): Marked {
   const instance = new Marked({ gfm: true, breaks: false });
-  instance.use({ renderer: { code, codespan, html: escapedHtml, link: safeLink, image: safeImage } });
+  instance.use({
+    renderer: { code, codespan, html: escapedHtml, link: safeLink, image: safeImage },
+    extensions: [insightExtension],
+  });
   return instance;
 }
 
