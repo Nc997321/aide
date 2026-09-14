@@ -683,27 +683,22 @@ mod tests {
         assert_eq!(cmd["session_id"], "normal-sid"); // 路由键仍然存在
     }
 
-    /// 回归：BTW send 必须带 fork_from（fork 源会话）和 btw:true。
-    /// session_id 是 BTW 自己的路由键，不应等于 fork_from（否则会和主会话 worker 冲突）。
+    /// btw_ask 命令形状：session_id 是**主会话**路由键（btw 不再有独立会话 id），
+    /// history 空/省略时不带该键（对齐官方：调用方不传就没有跨问连续性）。
     #[test]
-    fn btw_cmd_has_fork_from_not_session_id_as_fork_source() {
-        // 模拟 start_btw_session 构造的 JSON
-        let btw_id = "btw-temp-id";
-        let fork_from = "main-session-id";
-        let cmd = json!({
-            "cmd": "send",
-            "session_id": btw_id,
-            "prompt": "顺便问",
-            "cwd": "/repo",
-            "btw": true,
-            "lightweight": true,
-            "fork_from": fork_from,
-            "env": {}
+    fn btw_ask_cmd_uses_main_session_id_and_omits_empty_history() {
+        let main_sid = "main-session-id";
+        let mut cmd = json!({
+            "cmd": "btw_ask",
+            "session_id": main_sid,
+            "question": "顺便问",
         });
-        assert_eq!(cmd["btw"], true);
-        assert_eq!(cmd["session_id"], btw_id); // BTW 自己的路由键
-        assert_eq!(cmd["fork_from"], fork_from); // fork 源独立字段
-        assert_ne!(cmd["session_id"], cmd["fork_from"]); // 两者不能相同，否则 worker 路由冲突
+        assert_eq!(cmd["session_id"], main_sid);
+        assert!(cmd.get("history").is_none());
+
+        cmd["history"] = json!([{ "question": "旧问", "response": "旧答" }]);
+        assert_eq!(cmd["history"][0]["question"], "旧问");
+        assert_eq!(cmd["history"][0]["response"], "旧答");
     }
 
     /// 回归（Bug 2）：resume_id 必须进 resume_session_id 字段，不能覆盖 session_id（路由键）。
