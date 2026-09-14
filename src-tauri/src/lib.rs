@@ -556,7 +556,7 @@ pub fn run() {
             commands::chat::get_default_models,
             commands::chat::get_default_permission_modes,
             commands::chat::stop_chat_session,
-            commands::chat::start_btw_session,
+            commands::chat::btw_ask,
             // Knowledge base runtime credentials
             // (→ `~/.aide/` 下的凭据文件，名称随构建档位：dev = knowledge.dev.json，release = knowledge.json)
             commands::knowledge::knowledge_set_runtime_config,

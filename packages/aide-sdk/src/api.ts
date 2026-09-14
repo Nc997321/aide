@@ -60,19 +60,13 @@ export interface PermissionResponseParams {
   sessionRules?: PermissionRuleDraft[];
 }
 
-/** start_btw_session 的完整负载（IPC 边界 DTO）。 */
-export interface StartBtwParams {
-  btwId: string;
-  /** null/空 = 不 fork，全新会话 */
-  forkFrom?: string | null;
-  prompt: string;
-  cwd: string;
-  lightweight: boolean;
-  permissionMode?: string | null;
-  model?: string | null;
-  effort?: string | null;
-  tools?: string[] | null;
-  permissionPolicy?: unknown | null;
+/** btw_ask 的完整负载（IPC 边界 DTO）。
+ *  sessionId 是**主会话** id——btw 不再有独立会话 id，也不再起独立进程。
+ *  history 由发起端维护（封顶 20 轮），形状与官方 side_question 的 history 元素一致。 */
+export interface BtwAskParams {
+  sessionId: string;
+  question: string;
+  history: { question: string; response: string }[];
 }
 
 /** diag_heartbeat 的负载（IPC 边界 DTO，镜像 Rust HeartbeatPayload）。 */
@@ -119,9 +113,11 @@ export const api = {
   permissionResponse(params: PermissionResponseParams): Promise<void> {
     return getTransport().invoke("permission_response", { ...params });
   },
-  /** btw 支线（页内追问/任务支线）拉起；参数即 start_btw_session 命令 DTO。 */
-  startBtwSession(params: StartBtwParams): Promise<void> {
-    return getTransport().invoke("start_btw_session", { ...params });
+  /** btw 侧问：走存活主会话进程内的官方 side_question 通道（不起新进程）。
+   *  **fire-and-forget**：正文与错误一律经 btw_answer 事件回来（UI 状态只认事件
+   *  通道），这里的 resolve 只表示命令已写进 sidecar stdin。 */
+  btwAsk(params: BtwAskParams): Promise<void> {
+    return getTransport().invoke("btw_ask", { ...params });
   },
   /** 终止一个后台任务；终态经 bg_task_ended(status:"stopped") 回来，无单独回执。 */
   stopBgTask(sessionId: string, taskId: string): Promise<void> {

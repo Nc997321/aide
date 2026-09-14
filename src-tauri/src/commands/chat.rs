@@ -439,89 +439,35 @@ pub async fn stop_chat_session(
     out
 }
 
-/// 启动 btw 支线：不再 spawn 独立进程，改为发 send 命令到 Runtime，
-/// Runtime 内部创建 btwMode=true 的 SessionWorker。
+/// btw 侧问：走**存活的**主会话进程内的官方 side_question 控制通道，不起新进程
+/// （老路每次提问 spawn 一个 claude.exe，实测 init≈4.1s、总计 7.7~8s；本路温热态
+/// 1.1~1.6s）。
 ///
-/// fork_from 为 None/空 = 不 fork，全新会话（btw 任务支线如 git-commit：
-/// 不背主会话历史，token 最省）；tools 非空 = 任务支线的内建工具白名单
-/// （query() 的 tools/allowedTools 收成它）；permission_policy 原样透传
-/// （worker 的 handleSend 已消费），任务支线靠它在 policy 层放行白名单命令。
+/// 与 send_message 的关键区别：**没有 cwd/env/provider 装配**——本命令复用存活
+/// query 的既有装配，不建进程。也**不做存活性校验**（Rust 保持哑管道）：查不到
+/// worker 由 sidecar 判定并经 btw_answer(error) 事件回复。
+///
+/// 全程 fire-and-forget：正文与错误一律经 btw_answer 事件回来（UI 状态只认事件
+/// 通道），本命令的 Result 只表示"命令写进 sidecar stdin 成没成"。
 #[tauri::command]
-pub async fn start_btw_session(
-    btw_id: String,
-    fork_from: Option<String>,
-    prompt: String,
-    cwd: String,
-    lightweight: bool,
-    permission_mode: Option<String>,
-    model: Option<String>,
-    effort: Option<String>,
-    tools: Option<Vec<String>>,
-    permission_policy: Option<serde_json::Value>,
+pub async fn btw_ask(
+    session_id: String,
+    question: String,
+    history: Option<Vec<serde_json::Value>>,
     runtime_mgr: State<'_, AgentRuntimeManager>,
-    settings_service: State<'_, std::sync::Arc<crate::settings::SettingsService>>,
 ) -> Result<(), String> {
-    let active = resolve_active_provider(settings_service.inner().clone()).await?;
-    let proxy = get_settings(settings_service)
-        .await
-        .map(|s| s.proxy)
-        .unwrap_or_default();
-    let provider_env = build_runtime_env_vars(&active, &proxy);
-
-    // session_id = BTW 自己的路由键（避免与主会话 worker 冲突）；
-    // fork_from = fork 源会话（SDK 据此 fork 主会话上下文）。
+    // session_id 是**主会话**路由键（btw 不再有独立会话 id）。
     let mut cmd = json!({
-        "cmd": "send",
-        "session_id": btw_id,
-        "prompt": prompt,
-        "cwd": cwd,
-        "btw": true,
-        "lightweight": lightweight,
-        "env": provider_env,
+        "cmd": "btw_ask",
+        "session_id": session_id,
+        "question": question,
     });
-    // fork_from 空/省略 = 全新会话（worker 侧 `if (forkFrom)` 判空），不写进 JSON。
-    if let Some(ref f) = fork_from {
-        if !f.is_empty() {
-            cmd["fork_from"] = json!(f);
+    // 空/省略 = 无跨问连续性（对齐官方：调用方不传就没有）。
+    if let Some(h) = history {
+        if !h.is_empty() {
+            cmd["history"] = json!(h);
         }
     }
-    if let Some(t) = tools {
-        if !t.is_empty() {
-            cmd["tools"] = json!(t);
-        }
-    }
-    if let Some(p) = permission_policy {
-        cmd["permission_policy"] = p;
-    }
-    // 工作区信任标志（与 send_message 同语义）。
-    cmd["trusted"] = json!(crate::commands::workspace::is_path_trusted(&cwd));
-    // 工作区级代码索引开关（与 send_message 同语义，未开不挂 codegraph MCP）。
-    cmd["codegraph_enabled"] = json!(crate::commands::workspace::is_codegraph_enabled_for_path(
-        &cwd
-    ));
-
-    if let Some(ref m) = model {
-        if !m.is_empty() {
-            if let Some(env) = cmd.get_mut("env").and_then(|e| e.as_object_mut()) {
-                env.insert("ANTHROPIC_MODEL".to_string(), json!(m));
-            }
-        }
-    }
-    // effort 与普通 send 的 initial_effort 同形：骑 env 通道，worker 只读作初始
-    // currentEffort（options.effort），绝不会以 env 形式透传给 CLI。
-    if let Some(ref effort) = effort {
-        if !effort.is_empty() {
-            if let Some(env) = cmd.get_mut("env").and_then(|e| e.as_object_mut()) {
-                env.insert("CLAUDE_CODE_EFFORT_LEVEL".to_string(), json!(effort));
-            }
-        }
-    }
-    if let Some(mode) = permission_mode {
-        if !mode.is_empty() {
-            cmd["permission_mode"] = json!(mode);
-        }
-    }
-
     runtime_mgr.send_to_runtime(&cmd).await
 }
 

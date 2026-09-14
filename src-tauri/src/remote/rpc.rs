@@ -55,7 +55,7 @@ static REGISTRY: &[(&str, Handler)] = &[
     ("set_model", handlers::set_model),
     ("set_effort", handlers::set_effort),
     ("set_permission_mode", handlers::set_permission_mode),
-    ("start_btw_session", handlers::start_btw_session),
+    ("btw_ask", handlers::btw_ask),
     // ── 后台任务快照（远程对账：打开会话/重连时回填 bgTasks）──
     ("list_bg_tasks", handlers::list_bg_tasks),
     // ── 会话管理与元数据 ──

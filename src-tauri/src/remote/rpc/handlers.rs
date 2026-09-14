@@ -231,47 +231,21 @@ pub fn set_permission_mode(
     })
 }
 
-/// start_btw_session 参数 DTO（镜像前端 StartBtwParams）。
+/// btw_ask 参数 DTO（镜像前端 api.btwAsk）。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct StartBtwArgs {
-    btw_id: String,
-    fork_from: Option<String>,
-    prompt: String,
-    cwd: String,
-    lightweight: bool,
-    permission_mode: Option<String>,
-    model: Option<String>,
-    effort: Option<String>,
-    tools: Option<Vec<String>>,
-    permission_policy: Option<Value>,
+struct BtwAskArgs {
+    session_id: String,
+    question: String,
+    #[serde(default)]
+    history: Option<Vec<Value>>,
 }
 
-pub fn start_btw_session(
-    app: AppHandle,
-    params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
+pub fn btw_ask(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
-        let a: StartBtwArgs = parse(params)?;
+        let a: BtwAskArgs = parse(params)?;
         let runtime = app.state::<AgentRuntimeManager>();
-        let settings = app.state::<Arc<SettingsService>>();
-        to_json(
-            crate::commands::chat::start_btw_session(
-                a.btw_id,
-                a.fork_from,
-                a.prompt,
-                a.cwd,
-                a.lightweight,
-                a.permission_mode,
-                a.model,
-                a.effort,
-                a.tools,
-                a.permission_policy,
-                runtime,
-                settings,
-            )
-            .await,
-        )
+        to_json(crate::commands::chat::btw_ask(a.session_id, a.question, a.history, runtime).await)
     })
 }
 

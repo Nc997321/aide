@@ -2,7 +2,7 @@
 // 桌面与 remote-pwa 共用本包；传输层可注入（桌面默认 Tauri IPC，远端 setTransport(RemoteTransport)）。
 
 export { api } from "./api";
-export type { SendMessageParams, PermissionResponseParams, StartBtwParams, DiagHeartbeatPayload } from "./api";
+export type { SendMessageParams, PermissionResponseParams, BtwAskParams, DiagHeartbeatPayload } from "./api";
 export { permissionsApi } from "./api/permissions";
 export { memoryObservatoryApi, CLAUDE_MD_ALIAS } from "./api/memoryObservatory";
 export type {
