@@ -4,9 +4,11 @@ import { MessageQueue } from "./generator.js";
 // 2026-08-21 竞态实锤（场景 B 注入丢失的根因）：abort 后第一轮迭代器还挂在
 // resolveNext 上（SDK 已 abort 不再调 next），此时 push 的消息会被旧迭代器
 // shift 走、卡死在 yield 挂起点——下一轮新迭代器永远拿不到。
-// 修复：注入消息不走共享 queue（session-worker 预置到每轮 query 私有迭代器），
-// 本测试钉住 MessageQueue 的原始语义（旧迭代器优先消费），防止有人把注入
-// 改回 queue.push。
+// 当年只让注入消息绕开共享 queue（预置槽），队列语义未动；2026-09-14 同一机制
+// 在**正常续发**路径复现（402 错误终态 → 重发永远「正在思考」），才补上第二道
+// 闸：换轮方同步调 retireIterators() 作废旧迭代器（见 session-worker startLoop）。
+// 下面第一条钉住「不 retire 时旧迭代器优先消费」这一原始语义——它是换轮必须
+// retire 的理由，也是注入不能改回 queue.push 的理由。
 describe("MessageQueue", () => {
   it("aborted round's hung iterator steals push()ed messages (rollback injection lost)", async () => {
     const q = new MessageQueue();
@@ -35,6 +37,40 @@ describe("MessageQueue", () => {
     // 新迭代器拿到的不是注入，而是用户消息——注入已丢失
     expect((got.value as any).message.content).toBe("user's next message");
     expect(((q as any).queue as unknown[]).length).toBe(0);
+  });
+
+  it("retire 后孤儿迭代器只退场，消息留给下一轮迭代器（2026-09-14 402 事故）", async () => {
+    const q = new MessageQueue();
+    // 上一轮：SDK 输入泵挂着等输入，随后那轮异常终止（没人 return 这个迭代器）
+    const orphan = q[Symbol.asyncIterator]();
+    const orphanPending = orphan.next();
+    // 换轮：新 query 建立之前先作废旧迭代器
+    q.retireIterators();
+    q.push({
+      type: "user",
+      message: { role: "user", content: "继续" },
+      parent_tool_use_id: null,
+    } as any);
+    // 孤儿被唤醒后直接退场，不认领消息——认领了就是 UI 永远「正在思考」
+    expect((await orphanPending).done).toBe(true);
+    // 消息仍在队列里，交给新一轮的迭代器
+    const next = q[Symbol.asyncIterator]();
+    expect(((await next.next()).value as any).message.content).toBe("继续");
+    expect(q.size).toBe(0);
+  });
+
+  it("retire 不影响作废之后新建的迭代器（换轮不误伤自己）", async () => {
+    const q = new MessageQueue();
+    q.retireIterators();
+    q.retireIterators();
+    const it = q[Symbol.asyncIterator]();
+    const pending = it.next();
+    q.push({
+      type: "user",
+      message: { role: "user", content: "b" },
+      parent_tool_use_id: null,
+    } as any);
+    expect(((await pending).value as any).message.content).toBe("b");
   });
 
   it("pending iterator stays resolvable until replaced by the next iterator", async () => {

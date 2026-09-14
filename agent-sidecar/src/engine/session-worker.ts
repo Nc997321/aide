@@ -637,6 +637,11 @@ export class SessionWorker {
     try {
       while (!this.stopped) {
         try {
+          // 换轮第一件事，且必须在下面任何 await 之前：handleSend 是「先调
+          // startLoop、再 pushUserMessage」，本函数一旦 await 装配，用户消息就
+          // 已经落进共享队列了——上一轮若异常终止，它的孤儿迭代器此刻还挂在
+          // resolveNext 上，会把那条消息 shift 走（详见 retireIterators 注释）。
+          this.queue.retireIterators();
           // 构造显式 env 传给 CLI subprocess（组装规矩见 engine/cliEnv.ts：白名单
           // 透传 → per-session 覆盖 → automation 会话目录 → effort 显式删除 → 固定注入）
           const cliEnv = buildCliEnv({
@@ -786,6 +791,10 @@ export class SessionWorker {
             // fatal:false 语义不变：进程仍存活、等下一条。
             break;
           }
+          // 本轮迭代器随这条 query 一起死了（上面两条路径都会回到 while 重开一轮）：
+          // 先作废它，否则下面 promote 的插队消息会被它 shift 走，下一轮 query
+          // 收不到——与 2026-08-21「abort 后注入丢失」同一机制，见 retireIterators。
+          this.queue.retireIterators();
           this.promoteJumpQueue();
         }
       }

@@ -57,6 +57,57 @@ describe("SessionWorker — jump queue", () => {
 });
 
 /**
+ * 2026-09-14 事故回归：「余额不足（HTTP 402）」等错误终态之后重发，界面永远停在
+ * 「正在思考」，CLI 起来了却一句话不说。
+ *
+ * 现场形态：错误终态让循环 break 退出，但本轮输入迭代器仍挂在 MessageQueue 的
+ * resolveNext 上成了孤儿。用户重发时 startLoop 先在 prepareQueryContext 处 await
+ * （新迭代器还没建），pushUserMessage 已经把消息落进共享队列 → 唤醒的是孤儿 →
+ * 消息被它 shift 走，新 query 的输入流永远是空的 → CLI 干等 stdin，一条事件都不发。
+ * 与 2026-08-21「abort 后注入丢失」是同一机制，当时只让回滚注入绕开共享队列，
+ * 正常续发路径一直裸奔。
+ */
+describe("SessionWorker — 错误终态后的孤儿输入迭代器", () => {
+  /** 轮询到条件成立或超时——失败要给断言差异，不是挂死等超时。 */
+  async function until(pred: () => boolean, ms = 1500): Promise<boolean> {
+    const deadline = Date.now() + ms;
+    while (!pred() && Date.now() < deadline) {
+      await new Promise<void>((r) => setTimeout(r, 5));
+    }
+    return pred();
+  }
+
+  it("错误终止后重发：消息必须到达新 query（不得被上一轮的孤儿迭代器吞掉）", async () => {
+    const received: string[] = [];
+    let round = 0;
+    const worker = new SessionWorker("s1", () => {}, {
+      // 真 SDK 输入泵的形态：收下一条后继续挂着等输入。刻意不用 for await——
+      // 它退出时会自动 return() 把迭代器收干净，而现场是「没人收的孤儿」。
+      queryFn: ((args: any) => (async function* () {
+        round += 1;
+        const myRound = round;
+        const input = (args.prompt as AsyncIterable<any>)[Symbol.asyncIterator]();
+        const first = await input.next();
+        received.push(`r${myRound}:${first.value.message.content}`);
+        if (myRound === 1) {
+          void input.next();                  // 挂着等输入 → 停在 resolveNext
+          throw new Error("query 异常终止（等价 402 错误终态）");
+        }
+        void input.next();
+      })()) as any,
+    });
+
+    worker.handleCommand({ cmd: "send", session_id: "s1", prompt: "第一条", cwd: "/tmp" } as any);
+    await until(() => received.length >= 1);
+
+    worker.handleCommand({ cmd: "send", session_id: "s1", prompt: "继续", cwd: "/tmp" } as any);
+    await until(() => received.length >= 2);
+
+    expect(received).toEqual(["r1:第一条", "r2:继续"]);
+  });
+});
+
+/**
  * 用户消息广播（方案 C：三端统一只认事件，不再本地乐观渲染气泡）。
  *
  * 关键不变量：
