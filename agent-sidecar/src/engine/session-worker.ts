@@ -69,6 +69,14 @@ import type { PermissionRuleDraft } from "./types.js";
 
 // ---- SessionWorker ----
 
+/** btw 跨问历史的一条问答。形状与官方 side_question 的 history 元素逐字段对齐
+ *  （`{question, response}`，见 claude.exe 的 `history:x.map(pe=>({question,response}))`）——
+ *  改这个形状等于改线上契约，前端也要同步改。 */
+export type BtwHistoryRound = { question: string; response: string };
+
+/** 侧问结果：只表成败，正文一律走 btw_answer 事件（UI 状态只认事件通道）。 */
+export type AskSideQuestionResult = { ok: true } | { ok: false; reason: string };
+
 export interface SessionWorkerOptions {
   cwd?: string;
   btwMode?: boolean;
@@ -1012,6 +1020,62 @@ export class SessionWorker {
   }
 
   /** 停止会话：关闭 query，释放 claude.exe，清理资源 */
+  /** btw 侧问：走存活主 query 的官方 side_question 控制通道——进程内完成，不起新
+   *  进程（老路每次提问 spawn 一个 claude.exe，实测 7.7~8s vs 本路 1.1~1.6s）。
+   *
+   *  正文不进返回值：统一经 btw_answer 广播，三端渲染同一条事件（多端一致性红线）。
+   *  守卫是运行时必需——askSideQuestion 在 sdk.d.ts 里**零类型**（只在 sdk.mjs
+   *  运行时存在，0.3.252 实测），SDK 升级改名/移除时这里报错而不是崩。 */
+  async askSideQuestion(
+    question: string,
+    history: BtwHistoryRound[],
+  ): Promise<AskSideQuestionResult> {
+    const emitAnswer = (payload: { response?: string; error?: string; synthetic?: boolean }) =>
+      this.emit({
+        type: "btw_answer",
+        sessionId: this.routingKey,
+        question,
+        ...payload,
+      });
+
+    // 无存活 query 是**路由层**的事实（会话从未运行/已停/已崩）：由 SessionManager
+    // 回答，本层只拒绝、不发事件——没有会话就没有听众，广播是噪音。
+    if (!this.currentQuery) {
+      return { ok: false, reason: "会话未运行" };
+    }
+
+    const q = this.currentQuery as NonNullable<typeof this.currentQuery> & {
+      askSideQuestion?: (
+        question: string,
+        opts?: { history?: BtwHistoryRound[] },
+      ) => Promise<{ response: string; synthetic?: boolean } | null>;
+    };
+
+    // SDK 版本漂移：会话活着但不认这个通道——抽屉需要看到解释，所以广播 error。
+    if (typeof q.askSideQuestion !== "function") {
+      const reason = "当前引擎不支持侧问（SDK 版本漂移）";
+      emitAnswer({ error: reason });
+      return { ok: false, reason };
+    }
+
+    try {
+      // 空历史不传 opts——对齐官方：调用方不传就没有跨问连续性。
+      const r = await q.askSideQuestion(question, history.length ? { history } : undefined);
+      if (!r?.response) {
+        const reason = "模型没有给出答复";
+        emitAnswer({ error: reason });
+        return { ok: false, reason };
+      }
+      emitAnswer({ response: r.response, synthetic: r.synthetic ?? false });
+      return { ok: true };
+    } catch (e) {
+      // 会话正在关闭时 CLI 会回 "Session is shutting down"——如实上报给抽屉。
+      const reason = e instanceof Error ? e.message : String(e);
+      emitAnswer({ error: reason });
+      return { ok: false, reason };
+    }
+  }
+
   stop(): void {
     // 自动化一次性会话在回合中途被硬停（session_stop 等）：补一条终态事件，
     // 否则调度器永远等不到 message_stop，运行卡「运行中」直到重启自愈。

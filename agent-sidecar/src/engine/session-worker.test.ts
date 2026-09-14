@@ -1399,3 +1399,95 @@ describe("SessionWorker — result 时插队 promote 的 continue 臂（循环�
     worker.stop();
   });
 });
+
+describe("SessionWorker — btw 侧问（官方 side_question 通道）", () => {
+  /** 假 query：可迭代（startLoop 需要）+ 可选挂载 askSideQuestion（模拟 SDK 运行时方法）。 */
+  function makeFakeQuery(impl?: (q: string, opts: any) => Promise<any>) {
+    const gen = (async function* () {
+      await new Promise(() => {}); // 挂住输入流（streaming-input CLI 形态）
+    })();
+    if (impl) (gen as any).askSideQuestion = impl;
+    return gen;
+  }
+  /** 等 startLoop 把 currentQuery 装上（builtin_hooks_manifest 在赋值之后同步发）。 */
+  async function startWorker(sid: string, impl?: (q: string, opts: any) => Promise<any>) {
+    const events: ChatEvent[] = [];
+    const worker = new SessionWorker(sid, (e) => events.push(e), {
+      queryFn: (() => makeFakeQuery(impl)) as any,
+    });
+    void worker.startLoop();
+    await vi.waitFor(() => expect(events.some((e) => e.type === "builtin_hooks_manifest")).toBe(true));
+    return { worker, events };
+  }
+
+  it("没有存活 query 时拒绝，且不发事件", async () => {
+    const { worker, events } = makeWorker("btw-guard-1");
+    const r = await worker.askSideQuestion("问一句", []);
+    expect(r.ok).toBe(false);
+    expect(events).toEqual([]);
+  });
+
+  it("SDK 句柄缺 askSideQuestion（版本漂移）时拒绝并广播 error", async () => {
+    const { worker, events } = await startWorker("btw-guard-2");
+    const r = await worker.askSideQuestion("问一句", []);
+    expect(r.ok).toBe(false);
+    const ans = events.filter((e) => e.type === "btw_answer") as any[];
+    expect(ans).toHaveLength(1);
+    expect(ans[0].error).toContain("引擎不支持");
+    expect(ans[0].sessionId).toBe("btw-guard-2");
+  });
+
+  it("成功路径：广播 response，返回值不含正文", async () => {
+    const seen: any[] = [];
+    const { worker, events } = await startWorker("btw-ok", async (q, opts) => {
+      seen.push({ q, opts });
+      return { response: "答案是石榴", synthetic: false };
+    });
+    const r = await worker.askSideQuestion("问一句", [{ question: "旧问", response: "旧答" }]);
+    expect(r).toEqual({ ok: true }); // ← 正文不进返回值
+    expect(seen[0].q).toBe("问一句");
+    expect(seen[0].opts).toEqual({ history: [{ question: "旧问", response: "旧答" }] });
+    const ans = events.filter((e) => e.type === "btw_answer") as any[];
+    expect(ans).toHaveLength(1);
+    expect(ans[0]).toMatchObject({ question: "问一句", response: "答案是石榴", synthetic: false });
+  });
+
+  it("空 history 不传 opts（对齐官方：调用方不传就没有连续性）", async () => {
+    const seen: any[] = [];
+    const { worker } = await startWorker("btw-nohistory", async (q, opts) => {
+      seen.push({ q, opts });
+      return { response: "ok", synthetic: false };
+    });
+    await worker.askSideQuestion("问一句", []);
+    expect(seen[0].opts).toBeUndefined();
+  });
+
+  it("synthetic 兜底答复照常广播并标记", async () => {
+    const { worker, events } = await startWorker("btw-synth", async () => ({
+      response: "兜底答复",
+      synthetic: true,
+    }));
+    await worker.askSideQuestion("问一句", []);
+    const ans = events.filter((e) => e.type === "btw_answer") as any[];
+    expect(ans[0].synthetic).toBe(true);
+    expect(ans[0].response).toBe("兜底答复");
+  });
+
+  it("SDK 返回 null 时广播 error 并拒绝", async () => {
+    const { worker, events } = await startWorker("btw-null", async () => null);
+    const r = await worker.askSideQuestion("问一句", []);
+    expect(r.ok).toBe(false);
+    const ans = events.filter((e) => e.type === "btw_answer") as any[];
+    expect(ans[0].error).toBeTruthy();
+  });
+
+  it("SDK 抛异常时广播 error 并拒绝（关会话中的 Session is shutting down 走这条）", async () => {
+    const { worker, events } = await startWorker("btw-throw", async () => {
+      throw new Error("Session is shutting down");
+    });
+    const r = await worker.askSideQuestion("问一句", []);
+    expect(r.ok).toBe(false);
+    const ans = events.filter((e) => e.type === "btw_answer") as any[];
+    expect(ans[0].error).toContain("shutting down");
+  });
+});
