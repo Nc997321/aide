@@ -1,26 +1,22 @@
 <script setup lang="ts">
 import { getFileIcon } from "../utils/fileIcons";
-import ChangeDiffPane from "./ChangeDiffPane.vue";
 import type { ChangeTreeNode } from "../utils/changeTree";
 import type { ChangeFile } from "../types";
 
 defineOptions({ name: "ChangeTreeItem" });
 
-/** 本组件只服务变更面板（不是通用树），diff 渲染直接依赖 ChangeDiffPane：
- *  递归组件自引用的插槽 prop 会让类型推断成环，宁可多三个 props。 */
+/** 本组件只服务变更面板（不是通用树）：文件行 = 打开 diff 窗口 / 打开文件 / 撤回，
+ *  三个动作各自显式传入，不给通用插槽（递归组件自引用的插槽 prop 会让类型推断成环）。 */
 const props = defineProps<{
   node: ChangeTreeNode;
   depth: number;
   collapsedDirs: Set<string>;
   openFile: (f: ChangeFile) => void;
+  /** 弹 diff 窗口（统一树是跨轮视图，恒走累计视图） */
+  openDiff: (f: ChangeFile) => void;
   revertFile: (f: ChangeFile) => void;
   toggleDir: (path: string) => void;
-  /** 当前展开 diff 的文件路径（单开）；null = 无 */
-  expandedPath: string | null;
-  toggleExpand: (path: string) => void;
   workspaceRoot?: string;
-  diffMode?: "split" | "unified";
-  cumulativeNote?: string;
 }>();
 
 const isCollapsed = () => props.collapsedDirs.has(props.node.kind === "dir" ? props.node.path : "");
@@ -61,13 +57,10 @@ const rowPadding = () => `${props.depth * 14 + 8}px`;
           :depth="depth + 1"
           :collapsed-dirs="collapsedDirs"
           :open-file="openFile"
+          :open-diff="openDiff"
           :revert-file="revertFile"
           :toggle-dir="toggleDir"
-          :expanded-path="expandedPath"
-          :toggle-expand="toggleExpand"
           :workspace-root="workspaceRoot"
-          :diff-mode="diffMode"
-          :cumulative-note="cumulativeNote"
         />
       </template>
     </template>
@@ -75,10 +68,10 @@ const rowPadding = () => `${props.depth * 14 + 8}px`;
     <div v-else>
       <div
         class="cft-file"
-        :class="{ 'cft-file--deleted': node.file.status === 'D', 'cft-file--open': expandedPath === node.file.path }"
+        :class="{ 'cft-file--deleted': node.file.status === 'D' }"
         :style="{ paddingLeft: rowPadding() }"
-        v-tooltip="node.file.path"
-        @click="toggleExpand(node.file.path)"
+        v-tooltip="`${node.file.path} — 点击查看 diff`"
+        @click="props.openDiff(node.file)"
       >
         <span class="cft-status" :class="`status-${node.file.status || 'M'}`">{{ node.file.status || 'M' }}</span>
         <svg
@@ -105,15 +98,6 @@ const rowPadding = () => `${props.depth * 14 + 8}px`;
           @click.stop="revertFile(node.file)"
         ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button>
       </div>
-      <ChangeDiffPane
-        v-if="expandedPath === node.file.path"
-        :path="node.file.path"
-        :status="node.file.status"
-        :segments="[]"
-        :workspace-root="workspaceRoot"
-        :mode="diffMode ?? 'unified'"
-        :cumulative-note="cumulativeNote"
-      />
     </div>
   </div>
 </template>
@@ -190,10 +174,6 @@ const rowPadding = () => `${props.depth * 14 + 8}px`;
 }
 .cft-file--deleted .cft-name {
   text-decoration: line-through;
-}
-
-.cft-file--open {
-  background: var(--aide-surface-default);
 }
 
 .cft-status {

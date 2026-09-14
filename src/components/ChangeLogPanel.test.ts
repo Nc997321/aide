@@ -2,11 +2,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import ChangeLogPanel from "./ChangeLogPanel.vue";
-import ChangeDiffPane from "./ChangeDiffPane.vue";
+import type { WindowDiff } from "../composables/useFileViewer";
 
 const mocks = vi.hoisted(() => ({
   rounds: [] as any[],
   openResolved: vi.fn(async () => {}),
+  viewerOpen: vi.fn(async (_path: string, _opts?: { diff?: WindowDiff }) => {}),
   workspaceOf: vi.fn((): { wsKey: string; wsPath: string } | null => null),
   getProjectInfo: vi.fn(async () => ({ root: "", name: "", branch: "" })),
   gitDiffPair: vi.fn(async () => ({
@@ -24,6 +25,12 @@ vi.mock("../composables/useFileResolver", () => ({
 
 vi.mock("../composables/useSessionWorkspaces", () => ({
   useSessionWorkspaces: () => ({ workspaceOf: mocks.workspaceOf }),
+}));
+
+// diff 窗口由窗口层打开（useDiffWindow → useFileViewer）：本文件只验证「点了行 →
+// 递给窗口层的载荷对不对」，窗口内部渲染不属于这里。
+vi.mock("../composables/useFileViewer", () => ({
+  useFileViewer: () => ({ open: mocks.viewerOpen }),
 }));
 
 vi.mock("../api", () => ({
@@ -53,9 +60,7 @@ function mountPanel() {
       revertSingleFile: mocks.revertSingleFile,
       revertFileGlobally: mocks.revertFileGlobally,
     },
-    // DiffViewer 是 CodeMirror 实例，jsdom 下挂载会炸；这里只验证「什么时候
-    // 展开、传什么参数」，diff 本身的渲染不属于本文件的职责。
-    global: { directives: { tooltip: () => {} }, stubs: { ChangeDiffPane: true } },
+    global: { directives: { tooltip: () => {} } },
   });
 }
 
@@ -189,19 +194,59 @@ describe("ChangeLogPanel — 变更文件点击打开", () => {
     expect(wrapper.get(".changelog-scope").text()).toContain("Bash");
   });
 
-  it("点轮内行 = 展开该文件 diff（并排），再点收起", async () => {
+  it("点轮内行 = 弹该文件的 diff 窗口，载荷用本轮片段（逐段逐行）", async () => {
+    mocks.rounds = [
+      {
+        index: 1,
+        time: "12:00:00",
+        prompt: "改点东西",
+        files: [{ path: "src/App.vue", status: "M", additions: 1, deletions: 1 }],
+        touches: [
+          {
+            path: "src/App.vue",
+            status: "M",
+            additions: 1,
+            deletions: 1,
+            segments: [{ oldText: "a", newText: "b", addCount: 1, delCount: 1 }],
+          },
+        ],
+      },
+    ];
     const wrapper = mountPanel();
-    expect(wrapper.findAllComponents(ChangeDiffPane)).toHaveLength(0);
 
     await wrapper.get(".cfl-row").trigger("click");
     await flushPromises();
-    const panes = wrapper.findAllComponents(ChangeDiffPane);
-    expect(panes).toHaveLength(1);
-    expect(panes[0].props("mode")).toBe("split");
 
-    await wrapper.get(".cfl-row").trigger("click");
+    // 有片段就不查 git：本轮精确 diff 与 HEAD 无关；窗口拿绝对路径
+    expect(mocks.gitDiffPair).not.toHaveBeenCalled();
+    expect(mocks.viewerOpen).toHaveBeenCalledWith("C:/repo/src/App.vue", {
+      diff: {
+        parts: [expect.objectContaining({ pair: expect.objectContaining({ newText: "b" }) })],
+      },
+    });
+  });
+
+  it("点顶部统一树文件 = 累计视图窗口（跨轮视图没有片段）", async () => {
+    const wrapper = mountPanel();
+
+    await wrapper.get(".cft-file").trigger("click");
     await flushPromises();
-    expect(wrapper.findAllComponents(ChangeDiffPane)).toHaveLength(0);
+
+    expect(mocks.gitDiffPair).toHaveBeenCalledWith("src/App.vue", { cwd: "C:/repo" });
+    expect(mocks.viewerOpen).toHaveBeenCalledWith("C:/repo/src/App.vue", {
+      diff: expect.objectContaining({ note: expect.stringContaining("累计视图") }),
+    });
+  });
+
+  it("diff 打不开（git 报错）：面板给 toast，不静默", async () => {
+    mocks.gitDiffPair.mockRejectedValueOnce(new Error("not a git repository"));
+    const wrapper = mountPanel();
+
+    await wrapper.get(".cft-file").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("加载 diff 失败");
+    expect(mocks.viewerOpen).not.toHaveBeenCalled();
   });
 
   it("顶部统一树 = 全会话累计：跨轮同路径合并一条（行数累加、状态取最新）", () => {

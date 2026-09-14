@@ -1,14 +1,12 @@
 <script setup lang="ts">
-import { ref } from "vue";
 import { getFileIcon } from "../utils/fileIcons";
-import ChangeDiffPane from "./ChangeDiffPane.vue";
 import type { ChangeFile, TouchedFile } from "../types";
 
 /**
  * 轮次文件**平铺**列表（一行一条，不再是每轮一棵树）。
  *
- * 点行 = 展开该文件的 diff（并排）；「打开 ↗」与「撤回」是行内的独立图标——
- * 三个动作互不抢占，不需要靠修饰键或双击区分。
+ * 点行 = 弹该文件的 diff 窗口（与 Git 面板同款：大窗口看差异）；「打开 ↗」与「撤回」
+ * 是行内的独立图标——三个动作互不抢占，不需要靠修饰键或双击区分。
  *
  * `rows` 用 `TouchedFile`（比 `ChangeFile` 多一份本轮片段）：历史轮没有片段，
  * 由调用方用空数组补齐，这里不做「有没有 touches」的分支判断。
@@ -17,19 +15,11 @@ const props = defineProps<{
   rows: TouchedFile[];
   /** 会话所属工作区根：拼绝对路径（打开 / 片段行号定位）、给 git 当 cwd */
   workspaceRoot?: string;
-  /** 并排（轮内）/ 单排（顶部统一树复用时） */
-  mode?: "split" | "unified";
   openFile: (f: ChangeFile) => void;
+  /** 弹 diff 窗口（片段在内存 → 本轮精确，否则累计视图） */
+  openDiff: (row: TouchedFile) => void;
   revertFile: (f: ChangeFile) => void;
 }>();
-
-/** 单开：同时只展开一个文件的 diff。
- *  DiffViewer 是 CodeMirror 实例，多开会在窄面板里堆出多个编辑器（内存 + 布局代价）。 */
-const expanded = ref<string | null>(null);
-
-function toggle(path: string) {
-  expanded.value = expanded.value === path ? null : path;
-}
 
 /** 路径拆目录段（弱化）+ 基名（强调）：窄面板里主角是文件名。 */
 function splitPath(p: string): { dir: string; name: string } {
@@ -44,16 +34,9 @@ function splitPath(p: string): { dir: string; name: string } {
     <div v-for="row in rows" :key="row.path" class="cfl-item">
       <div
         class="cfl-row"
-        :class="{ 'cfl-row--open': expanded === row.path }"
-        v-tooltip="row.path"
-        @click="toggle(row.path)"
+        v-tooltip="`${row.path} — 点击查看 diff`"
+        @click="props.openDiff(row)"
       >
-        <svg
-          class="cfl-chevron" :class="{ expanded: expanded === row.path }"
-          width="12" height="12" viewBox="0 0 12 12" fill="none"
-        >
-          <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
         <span class="cfl-status" :class="`status-${row.status || 'M'}`">{{ row.status || 'M' }}</span>
         <svg
           class="cfl-icon"
@@ -81,14 +64,6 @@ function splitPath(p: string): { dir: string; name: string } {
           @click.stop="props.revertFile(row)"
         ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button>
       </div>
-      <ChangeDiffPane
-        v-if="expanded === row.path"
-        :path="row.path"
-        :status="row.status"
-        :segments="row.segments"
-        :workspace-root="props.workspaceRoot"
-        :mode="props.mode ?? 'split'"
-      />
     </div>
   </div>
 </template>
@@ -112,20 +87,6 @@ function splitPath(p: string): { dir: string; name: string } {
   background: var(--aide-surface-default);
   color: var(--aide-text-primary);
 }
-.cfl-row--open {
-  background: var(--aide-surface-default);
-}
-
-.cfl-chevron {
-  flex-shrink: 0;
-  color: var(--aide-text-muted);
-  transition: transform 0.15s ease;
-}
-.cfl-chevron.expanded {
-  transform: rotate(90deg);
-  color: var(--aide-accent);
-}
-
 .cfl-status {
   flex-shrink: 0;
   width: 16px;

@@ -5,6 +5,7 @@ import BashOutputBlock from "./BashOutputBlock.vue";
 import DiffViewer from "./fileviewer/DiffViewer.vue";
 import { buildChangeInfo, locateAnchorLine, locateEditStartLine, type ChangeInfo } from "@/utils/changeCard";
 import { isChangeTool } from "@/utils/blockSegments";
+import { estimateDiffHeight } from "@/utils/diffHeight";
 import { summarizeToolInput } from "@/utils/toolSummary";
 import { readRangeLabel } from "@aide/sdk/utils/lspRelay";
 import { truncatedLabel } from "@/utils/messageBytes";
@@ -72,18 +73,12 @@ const changeInfo = computed<ChangeInfo | null>(() => {
   return buildChangeInfo(props.block.name, props.block.input);
 });
 
-/** DiffViewer 需要定高容器（内部 100% 布局）：按片段行数估算，超高封顶内滚 */
+/** DiffViewer 需要定高容器（内部 100% 布局）：按片段行数估算，超高封顶内滚。
+ *  估算与文件窗的 diff 面板共用（utils/diffHeight），同一段 diff 两处显高一致。 */
 const changeHeight = computed(() => {
   const info = changeInfo.value;
   if (!info) return 0;
-  const lines = Math.max(
-    info.pair.oldText.split("\n").length,
-    info.pair.newText.split("\n").length,
-    1,
-  );
-  const TOOLBAR = 38;
-  const perLine = Math.round(settings.fontSize * 1.6);
-  return Math.min(480, Math.max(120, TOOLBAR + lines * perLine + 16));
+  return estimateDiffHeight(info.pair, settings.fontSize);
 });
 
 /** 「打开 ↗」：在文件查看器中打开并定位到新内容所在行（找不到锚点就只打开） */

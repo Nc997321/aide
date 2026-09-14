@@ -25,9 +25,10 @@ vi.mock("./useRecent", () => ({
   useRecent: () => ({ recordFile: vi.fn(async () => undefined) }),
 }));
 
-import { useFileViewer, isWindowDirty } from "./useFileViewer";
+import { useFileViewer, isWindowDirty, windowDiffOfPair } from "./useFileViewer";
 import { useNotifications } from "./useNotifications";
 import { api } from "../api";
+import type { DiffPair } from "../types";
 
 describe("useFileViewer 多窗口 store", () => {
   beforeEach(() => {
@@ -65,6 +66,34 @@ describe("useFileViewer 多窗口 store", () => {
     await v.open("src/a.ts", { content: "diff v2", language: "diff" });
     expect(v.windows.value).toHaveLength(1);
     expect(v.windows.value[0].content).toBe("diff v2");
+  });
+
+  it("diff 载荷窗口：只读虚拟窗，同路径换载荷就地刷新（不新开）", async () => {
+    const v = useFileViewer();
+    const pair: DiffPair = {
+      oldText: "old",
+      newText: "new",
+      oldLabel: "修改前",
+      newLabel: "修改后",
+      status: "modified",
+      isBinary: false,
+      eolOnly: false,
+      tooBig: false,
+    };
+    await v.open("src/a.ts", { diff: windowDiffOfPair(pair) });
+    expect(v.windows.value[0].readonly).toBe(true);
+    expect(v.windows.value[0].virtual).toBe(true);
+    expect(v.windows.value[0].diff?.parts).toHaveLength(1);
+
+    // 同一文件从累计视图（单段）切到本轮片段（多段）→ 原窗口就地刷新
+    await v.open("src/a.ts", { diff: { parts: [{ pair }, { pair }], note: "本轮片段" } });
+    expect(v.windows.value).toHaveLength(1);
+    expect(v.windows.value[0].diff?.parts).toHaveLength(2);
+    expect(v.windows.value[0].diff?.note).toBe("本轮片段");
+
+    // diff 窗与真实文件窗是两扇窗（virtual 区分）——diff 窗里「打开文件并定位」靠它并存
+    await v.open("src/a.ts");
+    expect(v.windows.value).toHaveLength(2);
   });
 
   it("dirty 判定与保存：编辑内容偏离基线为脏，保存后回到干净", async () => {

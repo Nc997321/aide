@@ -133,3 +133,14 @@ function actionLabel(kind: ErrorAction["kind"]): string {
     case "force-delete-branch": return "强制删除";
   }
 }
+
+/**
+ * 任意抛出值 → 可直接展示的文本。
+ * invoke 的 reject 值不保证是 Error（Rust 侧可能是字符串），UI 提示统一走这里，
+ * 免得每个调用点各写一遍 `typeof e === "string" ? ... : (e as Error).message`。
+ */
+export function errorText(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message || String(e);
+  return String(e);
+}

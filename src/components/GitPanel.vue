@@ -2,14 +2,14 @@
 import { ref, onMounted, watch, computed } from "vue";
 import { api } from "../api";
 import { useGit } from "../composables/useGit";
-import { useFileViewer } from "../composables/useFileViewer";
+import { useFileViewer, windowDiffOfPair } from "../composables/useFileViewer";
 import { useModal } from "../composables/useModal";
 import { useToast } from "../composables/useToast";
 import AToast from "../ui/AToast.vue";
 import ATabBar from "../ui/ATabBar.vue";
 import GitCompare from "./git-panel/GitCompare.vue";
 import GitTags from "./git-panel/GitTags.vue";
-import { parseGitError } from "../utils/errors";
+import { errorText, parseGitError } from "../utils/errors";
 
 const {
   commits,
@@ -196,9 +196,9 @@ async function openDiffInViewer(relPath: string, staged?: boolean, commitHash?: 
     const pair = await api.gitDiffPair(relPath, { staged, commitHash: commitHash || undefined });
     // git 命令吃仓库相对路径；fileViewer 窗口必须拿绝对路径
     // （文件树定位/打开真实文件/路径展示都建立在绝对路径约定上）
-    fileViewer.open(toAbsPath(relPath), { diffPair: pair });
+    fileViewer.open(toAbsPath(relPath), { diff: windowDiffOfPair(pair) });
   } catch (e) {
-    showToast(`加载 diff 失败：${typeof e === "string" ? e : (e as Error).message || e}`, "danger");
+    showToast(`加载 diff 失败：${errorText(e)}`, "danger");
   }
 }
 

@@ -3,9 +3,13 @@ import { computed, ref } from "vue";
 import { mergeChangeFiles } from "../utils/changeFiles";
 import type { ChangeRound, ChangeFile } from "../composables/useConversationChanges";
 import { useFileResolver } from "../composables/useFileResolver";
+import { useDiffWindow } from "../composables/useDiffWindow";
 import { useSessionWorkspaces } from "../composables/useSessionWorkspaces";
+import { useToast } from "../composables/useToast";
+import { errorText } from "../utils/errors";
 import ChangeFileTree from "./ChangeFileTree.vue";
 import ChangeFileList from "./ChangeFileList.vue";
+import AToast from "../ui/AToast.vue";
 import type { TouchedFile } from "../types";
 
 // P2-4 合一：rounds 与撤回操作由 App.vue 的 useConversationChanges 唯一实例
@@ -22,6 +26,8 @@ const props = defineProps<{
 }>();
 
 const { openResolved } = useFileResolver();
+const { openDiff: openDiffWindow } = useDiffWindow();
+const { toastState, showToast } = useToast();
 const sessionWs = useSessionWorkspaces();
 
 /** 会话所属工作区根。**归集时绑定的实体归属字段**，这里只查表读一次：
@@ -44,24 +50,44 @@ function expandGroup(key: string) {
 }
 
 /**
- * 打开变更文件：走文件解析器的「探测 → 工作区内按名搜索 → 多命中浮层」完整兜底，
- * 与聊天文件链接同一条路径——条目被移动/改名后仍能被搜索找回，而不是直接报错。
- * 已删除（D）条目磁盘上无对应物，「打开 ↗」不渲染；内容用 diff 或「撤回」恢复。
+ * 「打开 ↗」：在文件查看器里打开文件本身，走文件解析器的「探测 → 工作区内按名搜索 →
+ * 多命中浮层」完整兜底，与聊天文件链接同一条路径——条目被移动/改名后仍能被搜索找回，
+ * 而不是直接报错。已删除（D）条目磁盘上无对应物，不渲染此入口；内容用 diff 或「撤回」恢复。
  */
 async function openFile(f: ChangeFile) {
   if (f.status === "D") return;
   await openResolved(f.path, wsRoot.value);
 }
 
-function revertFileInRound(round: ChangeRound, f: ChangeFile) {
-  void props.revertSingleFile(round, f.path);
+/** 点条目 = 弹 diff 窗口：片段还在内存 → 本轮精确 diff，否则累计视图。
+ *  失败给 toast——窗口没弹出来必须让用户知道，而不是点了没反应。 */
+async function openDiff(row: TouchedFile) {
+  try {
+    await openDiffWindow(row, wsRoot.value);
+  } catch (e) {
+    showToast(`加载 diff 失败：${errorText(e)}`, "danger");
+  }
+}
+
+/** 顶部统一树是跨轮视图，没有片段 → 以累计视图打开。 */
+function openDiffFromTree(f: ChangeFile) {
+  void openDiff(asTouched(f));
+}
+
+/** 补齐成归集器的统一形状（空片段 = 累计视图）：落盘投影里没有片段字段。 */
+function asTouched(f: ChangeFile): TouchedFile {
+  return { ...f, segments: [] };
 }
 
 /** 轮内平铺的行：内存有本轮片段就带片段（点开 = 本轮精确 diff），历史轮没有 →
  *  空片段数组，走累计视图。补齐成同一种形状，渲染层不做「有没有 touches」的分支。 */
 function rowsOf(round: ChangeRound): TouchedFile[] {
   if (round.touches) return round.touches;
-  return round.files.map((f) => ({ ...f, segments: [] }));
+  return round.files.map(asTouched);
+}
+
+function revertFileInRound(round: ChangeRound, f: ChangeFile) {
+  void props.revertSingleFile(round, f.path);
 }
 
 /** 顶部统一树的输入：全会话累计（D2）。跨轮同路径合并，行数累加、状态取最新。 */
@@ -130,10 +156,9 @@ const renderItems = computed<RenderItem[]>(() => {
           <ChangeFileTree
             :files="allFiles"
             :open-file="openFile"
+            :open-diff="openDiffFromTree"
             :revert-file="(f: ChangeFile) => void props.revertFileGlobally(f.path)"
             :workspace-root="wsRoot"
-            diff-mode="unified"
-            cumulative-note="全会话累计：显示该文件相对 HEAD 的全部差异"
           />
         </div>
         <template v-for="item in renderItems" :key="item.kind === 'round' ? `r-${item.round.index}` : `c-${item.key}`">
@@ -173,14 +198,17 @@ const renderItems = computed<RenderItem[]>(() => {
               v-else
               :rows="rowsOf(item.round)"
               :workspace-root="wsRoot"
-              mode="split"
               :open-file="openFile"
+              :open-diff="openDiff"
               :revert-file="(f: ChangeFile) => revertFileInRound(item.round, f)"
             />
           </div>
         </template>
       </template>
     </div>
+
+    <!-- 面板内提示（diff 打开失败等）：锚定本面板右下角，不进通知中心 -->
+    <AToast :state="toastState" placement="inside-bottom" />
   </div>
 </template>
 
@@ -190,6 +218,7 @@ const renderItems = computed<RenderItem[]>(() => {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  position: relative; /* AToast 的定位祖先 */
   background: var(--aide-bg-deep);
   overflow: hidden;
   backdrop-filter: var(--aide-surface-blur);

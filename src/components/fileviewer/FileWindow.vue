@@ -11,7 +11,7 @@ import { api } from "../../api";
 import CodeEditor from "../CodeEditor.vue";
 import type { GutterGotoPayload } from "../../extensions/cmImplGutter";
 import type { VimExCommand } from "../../extensions/vimExCommands";
-import DiffViewer from "./DiffViewer.vue";
+import WindowDiffPane from "./WindowDiffPane.vue";
 import { firstChangedLine } from "./diffLocate";
 import { extToLang, highlightCode } from "../../utils/highlight";
 import { formatContent } from "../../utils/format";
@@ -436,19 +436,21 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
+/** diff 窗口首段：状态判断（能否定位/打开真实文件）与「首个变更处」锚点都取它。
+ *  多段窗（本轮片段）取首段——片段顺序即发生顺序，首段就是最早那处改动。 */
+const diffHead = computed(() => props.win.diff?.parts[0]?.pair ?? null);
+
 /** 可定位条件：普通文件恒真；diff 虚拟窗的 filePath 也是真实磁盘路径
  *  （git 入口已经 toAbsPath 补绝对），唯独 deleted 状态文件已不在盘上，
  *  定位无意义。 */
 const canLocateInTree = computed(
-  () =>
-    !props.win.virtual ||
-    (!!props.win.diffPair && props.win.diffPair.status !== "deleted"),
+  () => !props.win.virtual || (!!diffHead.value && diffHead.value.status !== "deleted"),
 );
 
-/** 「打开文件定位到首个变更」：仅 git 全文件 diff 窗（deleted 无文件可开）。
- *  聊天变更卡是片段 diff，走它自己的「打开 ↗」锚点定位，不经这里。 */
+/** 「打开文件定位到首个变更」：仅全文 diff 窗（deleted 无文件可开）。
+ *  片段 diff（变更卡 / 本轮片段窗）的定位锚点在片段内部，走各自的入口，不经这里。 */
 const canOpenAtChange = computed(
-  () => !!props.win.diffPair && props.win.diffPair.status !== "deleted",
+  () => !!diffHead.value && diffHead.value.status !== "deleted",
 );
 
 function locateInTree() {
@@ -457,7 +459,7 @@ function locateInTree() {
 
 /** 打开真实文件（与 diff 窗并存）并滚到首个变更行 */
 function openAtFirstChange() {
-  const pair = props.win.diffPair;
+  const pair = diffHead.value;
   if (!pair) return;
   void openAndScrollTo(props.win.filePath, firstChangedLine(pair));
 }
@@ -661,7 +663,7 @@ function runClipboardAction(p: Promise<void> | undefined): void {
       </div>
 
       <!-- 只读：diff / 大文件 / 虚拟内容 -->
-      <DiffViewer v-else-if="win.diffPair" :pair="win.diffPair" :filePath="win.filePath" />
+      <WindowDiffPane v-else-if="win.diff" :diff="win.diff" :file-path="win.filePath" />
       <pre v-else-if="win.readonly" v-scroll-memory="scrollKey('pre')" class="fw-pre"><code class="viewer-code" v-html="highlighted"></code></pre>
 
       <!-- Markdown 全预览 -->

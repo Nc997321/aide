@@ -17,8 +17,9 @@ import ThemedSelect from "../ThemedSelect.vue";
 import GitCommitRow from "./GitCommitRow.vue";
 import GitFileRow from "./GitFileRow.vue";
 import { useGit } from "../../composables/useGit";
-import { useFileViewer } from "../../composables/useFileViewer";
+import { useFileViewer, windowDiffOfPair } from "../../composables/useFileViewer";
 import { useToast } from "../../composables/useToast";
+import { errorText } from "../../utils/errors";
 import type { CompareFile, CommitDetail, DiffEntry } from "../../types";
 
 const { currentBranch, branches, projectRoot, compare, compareLoading, compareError, loadCompare, clearCompare, loadCommitDetail, toAbsPath } =
@@ -100,9 +101,9 @@ async function onCompareFileClick(f: CompareFile) {
       { base: currentBranch.value, head: headBranch.value },
       f.oldPath,
     );
-    fileViewer.open(toAbsPath(f.path), { diffPair: pair });
+    fileViewer.open(toAbsPath(f.path), { diff: windowDiffOfPair(pair) });
   } catch (e) {
-    showToast(`加载 diff 失败：${typeof e === "string" ? e : (e as Error).message || e}`, "danger");
+    showToast(`加载 diff 失败：${errorText(e)}`, "danger");
   }
 }
 
@@ -111,9 +112,9 @@ async function onCommitFileClick(f: DiffEntry, hash: string) {
   try {
     const pair = await api.gitDiffPair(f.path, { commitHash: hash });
     // 同 GitPanel：git 用相对路径，fileViewer 窗口用绝对路径
-    fileViewer.open(toAbsPath(f.path), { diffPair: pair });
+    fileViewer.open(toAbsPath(f.path), { diff: windowDiffOfPair(pair) });
   } catch (e) {
-    showToast(`加载 diff 失败：${typeof e === "string" ? e : (e as Error).message || e}`, "danger");
+    showToast(`加载 diff 失败：${errorText(e)}`, "danger");
   }
 }
 

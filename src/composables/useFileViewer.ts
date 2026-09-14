@@ -34,6 +34,26 @@ export interface NavEntry {
   mdMode: MarkdownMode;
 }
 
+/** diff 窗口的一段：一份 pair + 该段在文件中的真实起始行（全文 diff 不传 → 行号从 1 数）。 */
+export interface WindowDiffPart {
+  pair: DiffPair;
+  firstLine?: number;
+}
+
+/** 窗口的 diff 载荷：单段（git 全文 diff：HEAD → 当前）或多段（某一轮内的工具片段，
+ *  按发生顺序依次渲染）。`note` 是视图来源说明（哪种语义），渲染在 diff 上方；
+ *  来源无歧义时不写。空载荷用 `FileWindowState.diff === null` 表达，不造空数组。 */
+export interface WindowDiff {
+  /** 恒非空——空载荷走 null */
+  parts: readonly WindowDiffPart[];
+  note?: string;
+}
+
+/** 单段 diff 载荷：git 全文 diff 窗（Git 面板 / 提交对比）用。 */
+export function windowDiffOfPair(pair: DiffPair): WindowDiff {
+  return { parts: [{ pair }] };
+}
+
 export interface FileWindowState {
   id: string;
   filePath: string;
@@ -45,8 +65,8 @@ export interface FileWindowState {
   imageUrl: string;
   /** 显式注入的语言标识，空串走扩展名推断 */
   language: string;
-  /** git diff 对比数据（virtual 窗口专用）；存在则渲染 DiffViewer */
-  diffPair: DiffPair | null;
+  /** diff 载荷（virtual 窗口专用）；存在则渲染 WindowDiffPane */
+  diff: WindowDiff | null;
   error: string;
   saving: boolean;
   /** 图片 / 虚拟内容 / 大文件——不挂编辑器 */
@@ -198,7 +218,7 @@ async function loadIntoWindow(win: FileWindowState, path: string, opts?: { conte
   win.imageUrl = imageUrl;
   win.readonly = readonly;
   win.language = "";
-  win.diffPair = null;
+  win.diff = null;
   win.error = error;
   win.isMarkdown = isMarkdownPath(path);
   win.mdMode = "preview";
@@ -214,21 +234,21 @@ async function loadIntoWindow(win: FileWindowState, path: string, opts?: { conte
 export function useFileViewer() {
   /**
    * 打开文件。同一磁盘路径已开着 → 聚焦已有窗口（文件树重复点击不产生副本）；
-   * 注入内容的虚拟视图（git diff）同路径重开 → 原窗口内容就地刷新。
+   * 注入内容的虚拟视图（git diff / 片段 diff）同路径重开 → 原窗口内容就地刷新。
    * 新窗口加入平铺全览（取消聚焦），窗口随数量增多平均变小。
    */
-  async function open(path: string, opts?: { content?: string; language?: string; diffPair?: DiffPair }) {
-    // 虚拟视图注入内容：diffPair 分支不用 content（diff 内容由 diffPair 携带）；
-    // 非 diffPair 的虚拟打开 content 必有值（isVirtual 定义保证），开头收窄一次，
+  async function open(path: string, opts?: { content?: string; language?: string; diff?: WindowDiff }) {
+    // 虚拟视图注入内容：diff 分支不用 content（diff 内容由 WindowDiff 携带）；
+    // 非 diff 的虚拟打开 content 必有值（isVirtual 定义保证），开头收窄一次，
     // 后续分支用 injectContent 避免 opts!.content! 双断言。
-    const injectContent = opts?.diffPair === undefined ? opts?.content : undefined;
-    const isVirtual = opts?.content !== undefined || opts?.diffPair !== undefined;
+    const injectContent = opts?.diff === undefined ? opts?.content : undefined;
+    const isVirtual = opts?.content !== undefined || opts?.diff !== undefined;
     const existing = windows.value.find((w) => w.filePath === path && w.virtual === isVirtual);
     if (existing) {
-      if (opts?.diffPair) {
-        existing.diffPair = opts.diffPair;
+      if (opts?.diff !== undefined) {
+        existing.diff = opts.diff;
       } else if (isVirtual) {
-        // 契约：!diffPair 且 isVirtual → content 必有值（见 injectContent 注释）
+        // 契约：!diff 且 isVirtual → content 必有值（见 injectContent 注释）
         existing.content = injectContent!;
         existing.editContent = injectContent!;
         existing.language = opts?.language || existing.language;
@@ -245,7 +265,7 @@ export function useFileViewer() {
       editContent: "",
       imageUrl: "",
       language: opts?.language || "",
-      diffPair: opts?.diffPair || null,
+      diff: opts?.diff ?? null,
       error: "",
       saving: false,
       readonly: isVirtual,
@@ -265,8 +285,8 @@ export function useFileViewer() {
     };
 
     if (isVirtual) {
-      if (!opts?.diffPair) {
-        // 契约同上：!diffPair 且 isVirtual → content 必有值
+      if (opts?.diff === undefined) {
+        // 契约同上：!diff 且 isVirtual → content 必有值
         win.content = injectContent!;
         win.editContent = win.content;
       }
