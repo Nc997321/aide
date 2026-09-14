@@ -1,5 +1,6 @@
 import type { ChatEvent, SidecarCommand } from "./types.js";
 import { SessionWorker } from "./session-worker.js";
+import type { AskSideQuestionResult, BtwHistoryRound } from "./session-worker.js";
 import { resolveCodegraphResult } from "../extensions/codegraphClient.js";
 import { isDroppableEvent, writeStdoutFrame } from "./stdoutFrames.js";
 
@@ -170,6 +171,21 @@ export class SessionManager {
       worker.stop();
       this.workers.delete(sessionId);
     }
+  }
+
+  /** btw 侧问：**只查不建**。主 worker 不存在（新会话未发消息 / 用户停过 / 进程崩过）
+   *  就直接拒绝——不起兜底 worker（设计决策 D2：那条老路同样冷启动、同样不快，
+   *  为它养一套 fork worker 是纯负债）。 */
+  async askSideQuestion(
+    sessionId: string,
+    question: string,
+    history: BtwHistoryRound[],
+  ): Promise<AskSideQuestionResult> {
+    const worker = this.workers.get(sessionId);
+    if (!worker) {
+      return { ok: false, reason: "会话未运行，先发一条消息再问" };
+    }
+    return worker.askSideQuestion(question, history);
   }
 
   // ---- 诊断 ----

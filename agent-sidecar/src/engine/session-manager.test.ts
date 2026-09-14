@@ -198,3 +198,44 @@ describe("SessionManager — 会话元数据 / MCP 头注入传递（headless �
     expect(worker.mcpHeaders).toBeUndefined();
   });
 });
+
+/**
+ * btw 侧问路由：**查而不建**。
+ *
+ * 关键不变量：
+ * - worker 不存在时直接拒绝，绝不 getOrCreate（老路的兜底 worker 已废弃）
+ * - 命中 worker 时原样转发 question/history，返回值透传
+ */
+describe("SessionManager — btw 侧问路由", () => {
+  it("worker 不存在时拒绝，且不新建 worker", async () => {
+    const manager = new SessionManager();
+    const r = await manager.askSideQuestion("未运行的会话", "问一句", []);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("会话未运行");
+    expect(manager.getAllWorkers().size).toBe(0); // ← 查而不建
+  });
+
+  it("命中 worker 时原样转发 question / history", async () => {
+    const manager = new SessionManager();
+    const worker = (manager as any).__testCreateWorker("s-1") as any;
+    const seen: any[] = [];
+    worker.askSideQuestion = async (q: string, h: any[]) => {
+      seen.push({ q, h });
+      return { ok: true };
+    };
+
+    const r = await manager.askSideQuestion("s-1", "问一句", [{ question: "旧", response: "答" }]);
+    expect(r).toEqual({ ok: true });
+    expect(seen[0].q).toBe("问一句");
+    expect(seen[0].h).toEqual([{ question: "旧", response: "答" }]);
+  });
+
+  it("worker 的拒绝原因原样回传（不吞错）", async () => {
+    const manager = new SessionManager();
+    const worker = (manager as any).__testCreateWorker("s-2") as any;
+    worker.askSideQuestion = async () => ({ ok: false, reason: "引擎不支持" });
+
+    const r = await manager.askSideQuestion("s-2", "问一句", []);
+    expect(r).toEqual({ ok: false, reason: "引擎不支持" });
+  });
+});
