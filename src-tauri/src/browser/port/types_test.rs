@@ -4,8 +4,8 @@
 use url::Url;
 
 use crate::browser::port::types::{
-    Bounds, BrowserView, BrowserViewId, BrowserViewIdError, NavState, Position, Size, SizeError,
-    ViewError,
+    Bounds, BrowserView, BrowserViewId, BrowserViewIdError, NavState, PageLoadSignal, Position,
+    Size, SizeError, ViewError,
 };
 
 fn url(s: &str) -> Url {
@@ -214,6 +214,110 @@ fn begin_nav_after_back_truncates_forward_branch() {
     assert!(!v.can_go_forward());
     assert_eq!(v.go_back(), Some(url("https://a.com")));
     assert!(!v.can_go_back());
+}
+
+// ── 加载信号吸收（页面内点击 / 重定向 / 重载都会从这里进） ──
+
+#[test]
+fn absorb_started_from_idle_begins_nav() {
+    // 首个加载信号：Idle 态吸收 Started → 入历史、进 Loading。
+    let mut v = view();
+    assert!(v.absorb_page_load(url("https://a.com"), PageLoadSignal::Started));
+    assert_eq!(
+        *v.nav(),
+        NavState::Loading {
+            url: url("https://a.com")
+        }
+    );
+    assert!(!v.can_go_back());
+}
+
+#[test]
+fn absorb_started_new_url_pushes_history() {
+    // 页面内点击跳到别的 URL：等价于一次新导航，历史增长（「后退」应能回到来的那页）。
+    let mut v = view();
+    v.begin_nav(url("https://a.com"));
+    v.finish_nav("A".into()).unwrap();
+    assert!(v.absorb_page_load(url("https://b.com"), PageLoadSignal::Started));
+    assert_eq!(
+        *v.nav(),
+        NavState::Loading {
+            url: url("https://b.com")
+        }
+    );
+    assert!(v.can_go_back());
+}
+
+#[test]
+fn absorb_started_same_url_is_reload_without_history_growth() {
+    // 同 URL（⟳ / 地址栏回车 / 重载）：进 Loading 但不压历史——否则「后退」会退到同一页。
+    let mut v = view();
+    v.begin_nav(url("https://a.com"));
+    v.finish_nav("A".into()).unwrap();
+    assert!(v.absorb_page_load(url("https://a.com"), PageLoadSignal::Started));
+    assert!(matches!(v.nav(), NavState::Loading { .. }));
+    assert!(!v.can_go_back(), "重载不得增长历史");
+}
+
+#[test]
+fn absorb_duplicate_started_while_loading_is_ignored() {
+    // 同一 URL 的重复 Started（已在加载中）→ 无状态变化，调用方据此不广播。
+    let mut v = view();
+    v.begin_nav(url("https://a.com"));
+    assert!(!v.absorb_page_load(url("https://a.com"), PageLoadSignal::Started));
+    assert_eq!(
+        *v.nav(),
+        NavState::Loading {
+            url: url("https://a.com")
+        }
+    );
+}
+
+#[test]
+fn absorb_finished_while_loading_sets_ready() {
+    // v1 title 恒为空串：DocumentTitleChanged 要 webview2-com（下一批），前端展示 URL。
+    let mut v = view();
+    v.begin_nav(url("https://a.com"));
+    assert!(v.absorb_page_load(url("https://a.com"), PageLoadSignal::Finished));
+    assert_eq!(
+        *v.nav(),
+        NavState::Ready {
+            url: url("https://a.com"),
+            title: String::new()
+        }
+    );
+}
+
+#[test]
+fn absorb_finished_outside_loading_is_ignored() {
+    // 陈旧 Finished（Idle：无导航在途；Ready：已完成）→ 不改状态、不广播。
+    let mut v = view();
+    assert!(!v.absorb_page_load(url("https://a.com"), PageLoadSignal::Finished));
+    assert_eq!(*v.nav(), NavState::Idle);
+
+    v.begin_nav(url("https://a.com"));
+    v.finish_nav("A".into()).unwrap();
+    assert!(!v.absorb_page_load(url("https://a.com"), PageLoadSignal::Finished));
+    assert_eq!(
+        *v.nav(),
+        NavState::Ready {
+            url: url("https://a.com"),
+            title: "A".into()
+        }
+    );
+}
+
+#[test]
+fn reload_current_from_ready_sets_loading_once() {
+    let mut v = view();
+    v.begin_nav(url("https://a.com"));
+    v.finish_nav("A".into()).unwrap();
+    assert!(v.reload_current());
+    // 已在 Loading 同 URL → 第二次是重复信号。
+    assert!(!v.reload_current());
+    // Idle（无当前 URL）→ 无事可做。
+    let mut empty = view();
+    assert!(!empty.reload_current());
 }
 
 // ── 布局 / 可见性 ──

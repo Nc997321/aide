@@ -1,6 +1,6 @@
 //! DTO 边界转换单测：进边界 TryFrom 重建不变量、出边界 From 拍平（M3）。
 
-use crate::browser::dto::{BoundsDto, BrowserViewDto, NavStateDto};
+use crate::browser::dto::{BoundsDto, BrowserViewDto, CreateBrowserDto, NavEventDto, NavStateDto};
 use crate::browser::port::types::{Bounds, BrowserView, BrowserViewId, NavState, Position, Size};
 
 // ── BoundsDto ↔ Bounds ──
@@ -77,6 +77,43 @@ fn nav_state_failed_carries_url_and_reason() {
             reason: "net::ERR".into()
         }
     );
+}
+
+// ── NavEventDto：事件通道的线上形状（前端契约） ──
+
+#[test]
+fn nav_event_serializes_flat_for_frontend() {
+    // 前端 `NavEventDto = { id } & NavStateDto`：事件必须**拍平**（`state`/`url` 与 `id` 同级），
+    // 不是 `{ id, nav: {...} }`。这条形状漂移在 TS 侧不报错、只会静默不更新——所以钉在测试里。
+    let ev = NavEventDto {
+        id: "browser-1".into(),
+        nav: NavStateDto::Loading {
+            url: "https://a.com/".into(),
+        },
+        can_go_back: true,
+        can_go_forward: false,
+    };
+    let v = serde_json::to_value(&ev).unwrap();
+    assert_eq!(v["id"], "browser-1");
+    assert_eq!(v["state"], "loading");
+    assert_eq!(v["url"], "https://a.com/");
+    assert_eq!(v["can_go_back"], true);
+    assert_eq!(v["can_go_forward"], false);
+    assert!(v.get("nav").is_none(), "nav 必须拍平，不能嵌一层");
+}
+
+// ── CreateBrowserDto：进边界（身份不进 DTO） ──
+
+#[test]
+fn create_dto_deserializes_without_id() {
+    // 身份归状态主人：调用方不给 id（前端不造时间戳 id，未来的 agent 工具也不必先知道 id）。
+    let dto: CreateBrowserDto = serde_json::from_value(serde_json::json!({
+        "url": "https://a.com",
+        "bounds": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 80.0 }
+    }))
+    .expect("无 id 的创建入参应可反序列化");
+    assert_eq!(dto.url, "https://a.com");
+    assert_eq!(dto.bounds.w, 100.0);
 }
 
 // ── BrowserView → BrowserViewDto ──

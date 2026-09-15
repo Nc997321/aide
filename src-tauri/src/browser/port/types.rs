@@ -156,6 +156,22 @@ pub enum NavState {
     Failed { url: Url, reason: String },
 }
 
+/// 引擎观测到的页面加载信号（端口词汇：引擎只报「开始/完成」，不认识用途）。
+///
+/// 存在理由：**页面内点击/重定向/脚本跳转由 WebView2 自己发起**，我们的 `begin_nav` 看不见
+/// 它们。不吸收这些信号，地址栏就永远停在最后一次命令发出的 URL 上。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageLoadSignal {
+    /// 内容开始加载（WebView2 `ContentLoading`）。
+    Started,
+    /// 导航完成（WebView2 `NavigationCompleted`）。
+    ///
+    /// ⚠️ 该事件**成功与失败都会发**（`NavigationCompleted.IsSuccess` 被 wry 丢弃，事件里带不出来），
+    /// 所以 v1 的 `Finished` 一律当成功、`fail_nav` 暂时无人调用；根治 = 下一批下钻 webview2-com
+    /// 读 `IsSuccess`（见 docs 续作路线）。
+    Finished,
+}
+
 /// `BrowserView` 状态机的非法变更（M6：拒绝并交调用方决策，不静默接受）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewError {
@@ -258,6 +274,46 @@ impl BrowserView {
         match &self.nav {
             NavState::Loading { url } => Ok(url.clone()),
             _ => Err(ViewError::NotLoading),
+        }
+    }
+
+    /// 同一个 URL 的重新加载：不压历史（历史只在真正的新导航上增长），仅把状态置回 `Loading`。
+    /// 返回是否发生变化——`false` = 已经在加载同一个 URL（重复信号，调用方不广播）。
+    ///
+    /// 浏览器惯例：地址栏输入当前 URL 回车、⟳ 按钮，都算重载而不是新导航；否则「后退」会退到
+    /// 同一个页面（看起来像坏了）。
+    pub fn reload_current(&mut self) -> bool {
+        match self.current_url().cloned() {
+            Some(url) if !matches!(self.nav, NavState::Loading { .. }) => {
+                self.nav = NavState::Loading { url };
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// 吸收一次引擎观测到的页面加载事件（含页面内点击/重定向/脚本跳转）。
+    /// 返回是否发生状态迁移——`false` = 陈旧/重复信号，调用方**不广播**（事件通道只报真变化）。
+    ///
+    /// 已知代价（下一批根治）：重定向链会逐跳压历史，镜像与 WebView2 真历史会漂移；根治 = 把
+    /// 前进后退整体委托给 WebView2（`CanGoBackChanged` 驱动按钮态），届时删掉本镜像。
+    pub fn absorb_page_load(&mut self, url: Url, signal: PageLoadSignal) -> bool {
+        match signal {
+            PageLoadSignal::Started => {
+                if self.current_url() == Some(&url) {
+                    return self.reload_current();
+                }
+                self.begin_nav(url);
+                true
+            }
+            PageLoadSignal::Finished => {
+                if !matches!(self.nav, NavState::Loading { .. }) {
+                    return false;
+                }
+                // title 待 webview2-com 的 DocumentTitleChanged（本批留空，前端展示 URL）。
+                let _ = self.finish_nav(String::new());
+                true
+            }
         }
     }
 

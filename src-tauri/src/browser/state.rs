@@ -13,11 +13,22 @@ use crate::browser::port::types::{BrowserView, BrowserViewId};
 #[derive(Debug, Default)]
 pub struct BrowserRegistry {
     views: HashMap<BrowserViewId, BrowserView>,
+    /// 视图 id 序号。**身份归状态主人**：id 由注册表发（不由 UI 造时间戳），面板、未来的 agent
+    /// 工具、任何新消费方拿到的都是同一个可寻址 id；也免掉调用方 id 撞车这类事故。
+    next_seq: u64,
 }
 
 impl BrowserRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 分配一个视图 id（`browser-<n>`，进程内不复用）。分配后调用方再 `insert` 自己的视图。
+    pub fn allocate_id(&mut self) -> BrowserViewId {
+        self.next_seq += 1;
+        // 生成值恒非空，`try_new` 的守门在此不可能失败。
+        BrowserViewId::try_new(format!("browser-{}", self.next_seq))
+            .expect("allocate_id 生成的 id 非空")
     }
 
     /// 入库；若同 id 已存在，返回被替换的旧视图（调用方据此决定是否先 close 引擎侧）。
@@ -36,14 +47,6 @@ impl BrowserRegistry {
     pub fn remove(&mut self, id: &BrowserViewId) -> Option<BrowserView> {
         self.views.remove(id)
     }
-
-    pub fn len(&self) -> usize {
-        self.views.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.views.is_empty()
-    }
 }
 
 /// Tauri 托管状态。命令层 `.manage(BrowserState::new())` 后取用（接线在原型阶段）。
@@ -53,5 +56,29 @@ pub struct BrowserState(pub Arc<Mutex<BrowserRegistry>>);
 impl BrowserState {
     pub fn new() -> Self {
         Self(Arc::new(Mutex::new(BrowserRegistry::new())))
+    }
+}
+
+#[cfg(test)]
+mod state_test {
+    use super::*;
+    use crate::browser::port::types::{Bounds, Position, Size};
+
+    fn bounds() -> Bounds {
+        Bounds::new(Position::new(0.0, 0.0), Size::try_new(10.0, 10.0).unwrap())
+    }
+
+    #[test]
+    fn allocate_id_is_unique_and_never_reuses() {
+        let mut reg = BrowserRegistry::new();
+        let a = reg.allocate_id();
+        let b = reg.allocate_id();
+        assert_ne!(a, b);
+        // 关掉再开也不复用序号（避免"旧 id 撞上已销毁视图"的歧义）。
+        reg.insert(BrowserView::new(a.clone(), bounds()));
+        reg.remove(&a);
+        let c = reg.allocate_id();
+        assert_ne!(c, a);
+        assert_ne!(c, b);
     }
 }
