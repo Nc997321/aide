@@ -4,7 +4,7 @@
 |---|---|
 | 适用协议版本 | `PROTOCOL_VERSION = 2` |
 | 适用引擎版本 | `agent-sidecar` @ `05c024a` 及以后（含 F3/F4 修复轮） |
-| 文档版本 | 1.0（2026-09-14 定稿） |
+| 文档版本 | 1.3（2026-09-15） |
 | 读者 | 把 Aide headless 引擎当编排大脑的宿主网关实现方 |
 | 真相源 | `agent-sidecar/src/headless-schema.ts`（命令字段）· `engine/types.ts`（事件字段）· `headless-server.ts`（HTTP/SSE 层）· `src/index.ts`（启动面） |
 | 验收底稿 | `docs/headless-test-checklist.md`（本文件每条实测断言都可回溯到该清单的 A/B/C/D 组用例与 F1–F11 发现） |
@@ -17,6 +17,8 @@
 |---|---|---|
 | 2026-09-14 | 1.0 | 首版定稿。合并 2026-09-11 的对接说明草稿与测试清单的文档级处置项，全量补齐 10 条命令与 44 个事件类型（42 个 headless 可达 + 2 个桌面专用）的字段级参考。 |
 | 2026-09-14 | 1.1 | btw 侧问接入：新增命令 `btw_ask`（§4.12）与事件 `btw_answer`（§5.2）；**从 send schema 剥除 `btw` / `lightweight` / `fork_from` / `tools` 四个桌面字段**（原「明令禁发」改为 schema 层直接拒绝，清单 B14 结案）。事件总数 44 → 45，命令总数 10 → 11。**`PROTOCOL_VERSION` 1 → 2**（命令面不兼容变更，按 §1.2 判据必须递增）。 |
+| 2026-09-15 | 1.2 | `permission_response` 增**标签形态**（§4.2，官方推荐）：`response:{kind}` 四变体 `approve` / `answer` / `deny` / `unanswered`，与扁平形态**互斥**（恰好一个在场）。新增 `unanswered` 语义 = 无人应答（确认超时等），模型侧走官方「无人工审批可用」外框（自带"不要重试"）；`deny` 仍走人工外框。新增类别校验与 `fatal:false` 报错臂。**`PROTOCOL_VERSION` 保持 2**——纯增量（新形态是可选字段，扁平形态语义零变化，旧客户端不受影响）。 |
+| 2026-09-15 | 1.3 | `send.images` 增**本地路径形态** `{path}`（§4.1）：引擎自己读文件，绕开 1MB body 上限——手机原图经 base64 后 2.7~5.3MB，此前根本进不来。两种形态互斥；路径形态**不需要 mediaType**（引擎按魔数嗅探），并带读入上限 20MB/张与非图片拒收两道守卫。既有内嵌形态零改动。**`PROTOCOL_VERSION` 保持 2**（纯增量）。另记 §9.3 第 11 条：图片失败的可见性缺口（`terminal_reason`/`image_error` 未接），待真模型实测后落地。 |
 
 ---
 
@@ -42,7 +44,7 @@
 
 9. **权限模式别裸依赖 auto。** 第三方 provider 下 CLI 内置的 auto 分类器不稳定：单步分类延迟 48–154 秒、stage-2 报错时 fail-closed 误拒良性命令。长驻会话按 §6 三选一（规则前置 / manual / bypassPermissions）。〔清单 F9〕
 
-10. **body 上限 1MB，且超限响应形态对 fetch 客户端不友好。** 超限时服务端先回 400，再因请求体未读尽 RST 连接；用 `fetch` 会抛 `ECONNRESET` 而拿不到状态码（裸 `http.request` 可以）。网关侧先自我限界，或按「以首响应为准」处理。另：`env` / `metadata` / `mcp_headers` 的值是凭据，引擎保证不落日志、不进 Bash 子进程 env，网关侧同样不要记。〔清单 F5 / C7 / C8〕
+10. **body 上限 1MB，且超限响应形态对 fetch 客户端不友好。** 超限时服务端先回 400，再因请求体未读尽 RST 连接；用 `fetch` 会抛 `ECONNRESET` 而拿不到状态码（裸 `http.request` 可以）。网关侧先自我限界，或按「以首响应为准」处理。**大图不要走 body**——`send.images` 的路径形态（§4.1）让引擎自己去读本地文件，路径字符串几十字节，绕开这道闸。另：`env` / `metadata` / `mcp_headers` 的值是凭据，引擎保证不落日志、不进 Bash 子进程 env，网关侧同样不要记。〔清单 F5 / C7 / C8〕
 
 11. **桌面字段不接。** `automation` 是桌面/调度器语义，网关不要发——它会让引擎按无人值守白名单执行，行为与网关预期不符。〔清单 F8〕此前放行的 `btw` / `lightweight` / `fork_from` / `tools` 已在 1.1 版从 schema 剥除：现在发它们会得到 `400 invalid invoke body`（不再是「收下但按桌面语义执行」）。侧问走专用命令 `btw_ask`（§4.12）。〔清单 B14 结案〕
 
@@ -253,7 +255,7 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 | `session_id` | string | ✅ | 客户端生成的 sid；re-key 之后用真 id |
 | `prompt` | string | ✅ | 发给模型的纯文本（@引用已展开） |
 | `display` | array | — | 渲染描述块，见 §4.11 |
-| `images` | array | — | `[{data: <base64 无前缀>, mediaType: "image/png"}]` |
+| `images` | array | — | 图片附件，两形态**二选一**（见下方「图片附件」） |
 | `cwd` | string | — | 会话工作目录 |
 | `permission_mode` | string | — | **首条生效**，存活期切换走 `set_permission_mode`（§4.8） |
 | `permission_policy` | object | — | 策略快照，见 §6.1 |
@@ -269,23 +271,94 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 - **`codegraph_enabled: true` 在 headless 下是个死胡同。** 它会让引擎注册 codegraph MCP 工具，工具调用会发出 `codegraph_query` 事件等一个 `codegraph_result` 命令来应答——而那个响应通道是桌面 Rust 进程专属的，headless 下**没有人会应答**。网关不要开这个字段。
 - **`permission_mode` / `effort` / `model` / `mode` 的值在 schema 层是不校验的字符串**（`z.string()`，不是枚举）。引擎把它当不透明值透传给 provider。写错值的后果是 provider 侧拒绝，不是 400。
 
+#### 图片附件（`images`）
+
+两种形态**二选一**（`{data, mediaType}` 与 `{path}` 恰好一个在场；都在场或都不在场都是 `400`，报 `images.N.path: custom`）：
+
+| 形态 | 形状 | 说明 |
+|---|---|---|
+| 内嵌 | `{"data": "<base64 无前缀>", "mediaType": "image/png"}` | 字节随 body 一起传；`mediaType` 必填 |
+| 本地路径 | `{"path": "C:/photos/a.jpg"}` | 引擎自己去读这个文件；**不传 mediaType**，引擎按文件头嗅探 |
+
+**为什么要路径形态**：`/invoke` body 上限 1MB（规程 10），base64 再膨胀 4/3——手机原图（2~4MB → 2.7~5.3MB）根本进不来。路径字符串本身只有几十字节，绕开了这道闸；引擎与网关同机（网关 spawn 它），所以那个文件它读得到。
+
+**路径形态的两道守卫**（引擎侧，不可协商）：
+
+- **读入上限 20MB/张**：超限即拒。这是**引擎进程的自我保护**（读入 → base64 ≈ ×1.33 → JSON 副本），不是模型的能力线。
+- **魔数嗅探**：读进来必须是 png / jpeg / gif / webp，否则拒。传一个非图片文件（比如 `/etc/passwd`）不会静默成功。
+
+**失败可见**：路径不存在 / 非图片 / 超限，都会让**该条 send 整体拒发**，并推一条 `fatal:false` 的 `error` 帧（`message` 以 `图片` 开头，见 §5.1）——消息不会静默丢。
+
+> **仍建议网关侧按需降采样**（长边 ~1500px）。视觉输入按像素面积计费（约 1 token / 28×28 像素），一张 4000×3000 原图 ≈ 15k 视觉 token，信息量却未必增加。路径形态解决的是"传得进来"，不是"值得传"。
+
+**官方没有输入图片的大小上限**（SDK 文档通篇未提；文中唯一的尺寸数字是宿主侧 `readFile` 控制通道的 1MB 默认 / 10MB 上限）。多大、怎么处理是 SDK 的事，我们只负责形状对、字节在。**但图片失败的可见性当前有缺口**，见 §9.3 第 11 条。
+
 **触发的事件**：`session_init`（首条，或会话重启时）→ 流式过程事件 → `message_stop`。
 
 ### 4.2 permission_response
 
 应答一条挂起的 `permission_request`。不应答会一直挂着（`interrupt` 可整轮撤销，挂起请求一并作废）。
 
+**两种形态，二选一**：同一命令里 **`response`（标签形态）与 `approved`（扁平形态）恰好一个在场**——两个都在场或都不在场都是 `400`（`response: custom`）。标签形态是官方推荐；扁平形态是桌面客户端的历史形状，**新写网关不要用**。
+
+#### 标签形态（推荐）
+
+按挂起请求的 `name` 与你的意图选一个变体：
+
+| 收到的请求 | 变体 | 必传 | 可选 |
+|---|---|---|---|
+| 问答类（`name === "AskUserQuestion"`） | `answer` | `answers` | — |
+| | `deny`（拒答 / 跳过） | — | `message` |
+| 工具授权类 | `approve` | — | `nextMode`、`sessionRules` |
+| | `deny`（人拒绝 / 转述人的拒绝） | — | `message` |
+| | `unanswered`（没人应答） | — | `reason` |
+
+变体与引擎能力一一对应，不多不少——刻意**没有** `skip`（它与 `deny` 是同一段引擎行为）；拒绝理由一律**可选**（理由归你，引擎不发明也不索取）。
+
+```jsonc
+{ "cmd": "permission_response", "session_id": "…", "id": "perm-7",
+  "response": { "kind": "approve",    "nextMode": "auto", "sessionRules": [ … ] } }
+
+{ "cmd": "permission_response", "session_id": "…", "id": "perm-7",
+  "response": { "kind": "answer",     "answers": { "选哪个？": "A" } } }
+
+{ "cmd": "permission_response", "session_id": "…", "id": "perm-7",
+  "response": { "kind": "deny",       "message": "客户经理已驳回，请改成只读查询" } }
+
+{ "cmd": "permission_response", "session_id": "…", "id": "perm-7",
+  "response": { "kind": "unanswered", "reason": "确认超时，操作未执行" } }
+```
+
+**`deny` 与 `unanswered` 的区别是「谁拒的」，模型侧措辞因此不同**：
+
+- `deny` → 官方 nhe/YFe 外框，模型被告知"用户不想继续……（用户说了什么）"。
+- `unanswered` → 官方「无人工审批可用」外框，措辞自带 `do not retry it in this session — report the limitation to the user`。
+
+> ⚠️ **超时自动拒绝请用 `unanswered`，不要拿 `deny` 塞系统判词。** 把"确认超时"放进 `deny` 的 `message`，模型会被告知"用户说：确认超时"——归因失真，且**丢掉"不要重试"指令**（实测后果：模型按 6 分钟周期反复重试同一写操作，共 3 轮）。
+
+**类别必须匹配**（只对标签形态校验；扁平形态保持历史行为一格不动）：
+
+| 变体 × 挂起工具 | 结果 |
+|---|---|
+| `answer` × 非 `AskUserQuestion` | 拒绝 + 非致命 `error` 帧 |
+| `approve` × `AskUserQuestion` | 拒绝 + 非致命 `error` 帧（问答必须用 `answer`，否则作答丢失） |
+| 其余组合 | 正常应答 |
+
+**非法组合不静默**：POST 仍回 `200`（fire-and-forget），随后 SSE 推一条 `fatal:false` 的 `error` 帧（`message` 以 `permission_response` 开头），该挂起请求按**拒绝**收尾（工具不执行，**绝不悬死**）。它表示你的用法有 bug，应当记录并修正。
+
+**触发的事件**：无直接回执；工具的继续 / deny 结果走既有的工具事件与后续流。
+
+#### 扁平形态（兼容，桌面在用）
+
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `session_id` | string | ✅ | |
 | `id` | string | ✅ | 对应 `permission_request.id` |
 | `approved` | boolean | ✅ | 批准 / 拒绝 |
-| `message` | string | — | 拒绝时给模型看的原因（模型据此自然语言收尾） |
+| `message` | string | — | 拒绝理由（**人工**拒绝才用它，见上方警告） |
 | `answers` | object | — | 字段式问答的回答 |
 | `nextMode` | string | — | 顺带切换权限模式 |
 | `sessionRules` | array | — | 会话级规则草稿，见 §6.3 |
-
-**触发的事件**：无直接回执；工具的继续 / deny 结果走既有的工具事件与后续流。
 
 ### 4.3 interrupt
 
@@ -519,6 +592,8 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 
 **网关动作**：`fatal !== false` 时把会话标记为停止；`fatal: false` 时展示警告但保持会话可用。
 
+**协议用法错误也走这一帧**：命令在 schema 层过了、但语义不成立（如 `permission_response` 的变体与挂起请求类别不匹配，见 §4.2）时，引擎推一条 `fatal:false` 的 `error`（`message` 以命令名开头，如 `permission_response answer 变体只对 AskUserQuestion 有效…`），并把该挂起请求按拒绝收尾。会话保持可用。
+
 **注意到达延迟**：模型端点不可达时这一帧最长约 189 秒才来（规程第 7 条）。网关不能靠它做快速故障检测。〔清单 F2〕
 
 #### user_message
@@ -688,13 +763,15 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 
 ```
 SSE: permission_request{id, name, input}
-      ↓ 网关呈现给用户
-POST: permission_response{session_id, id, approved:true|false, message?}
+      ↓ 网关按 name 与意图选变体
+POST: permission_response{session_id, id, response:{kind, …}}     ← 标签形态
       ↓
 SSE: tool_use_start / tool_result … → message_stop
 ```
 
-拒绝时把理由放进 `message`，模型会据此自然语言收尾而不是硬中断。〔清单 B4 / D2〕
+选变体的三分支：`name === "AskUserQuestion"` → `answer`（作答）或 `deny`（拒答）；工具授权 → `approve` / `deny`；**没人应答（确认超时、离线批处理）→ `unanswered`**（见 §4.2 的警告：别拿 `deny` 塞系统判词）。变体与请求类别不匹配时，SSE 另推一条 `fatal:false` 的 `error`，该请求按拒绝收尾。
+
+拒绝时把理由放进 `message` / `reason`，模型会据此自然语言收尾而不是硬中断。〔清单 B4 / D2〕
 
 **`sessionRules`**（可选）：随 `permission_response` 下发会话级规则草稿 `[{effect, tool, matcher}]`，引擎入库时补全 `id` / `scope`（恒为 `session`）/ `order`。用于「这次批准，本会话内同类都放行」。
 
@@ -801,7 +878,7 @@ data: {"sessionId":"1f3a-…","event":{"type":"permission_request","id":"perm-7"
 ```bash
 curl -s -X POST http://127.0.0.1:18090/invoke \
   -H "Authorization: Bearer s3cret" -H "Content-Type: application/json" \
-  -d '{"cmd":"permission_response","session_id":"1f3a-…-真id","id":"perm-7","approved":true}'
+  -d '{"cmd":"permission_response","session_id":"1f3a-…-真id","id":"perm-7","response":{"kind":"approve"}}'
 ```
 
 然后收工具产出与收尾：
@@ -899,11 +976,13 @@ function handleEvent(sessionId, ev) {
 | 2 | SSE 无背压熔断 | 勤读（规程 4） |
 | 3 | Windows 无优雅关停、会留孤儿进程 | 网关自带按父 PID 差集的清理（规程 8） |
 | 4 | 引擎无持久化 | `resume_session_id` 续接（规程 6） |
-| 5 | 超 1MB 的响应对 fetch 不友好 | 自我限界（规程 10） |
+| 5 | 超 1MB 的响应对 fetch 不友好 | 自我限界（规程 10）；**大图改用 `send.images` 的路径形态**（§4.1），不经 body |
 | 6 | 第三方 provider 下 `models_available` 缺席 | 选择器不依赖它〔清单 F7〕 |
 | 7 | 第三方 provider 下 auto 分类器不稳 | §6.3 三选一〔清单 F9〕 |
 | 8 | `session_init` 每轮重发 | re-key 幂等〔清单 F10〕 |
 | 9 | 命令发给不存在会话静默丢弃 | 网关自己维护会话状态（规程 2） |
+| 10 | `unanswered` 的外框（官方「无人工审批可用」模板）未登记进桌面/PWA 的拒绝态识别前缀——本产品 UI 认不出它会当普通工具报错 | 无实际影响：headless 会话的转录不由本产品 UI 渲染（网关自己的界面消费）。将来若把桌面 automation 的两处裸文案收编到这条外框，必须同步 `packages/aide-sdk/src/utils/toolDenial.ts` 的前缀 |
+| 11 | **图片失败可能不可见**：引擎不读 result 消息的 `terminal_reason`（SDK 正式字段，取值含 `"image_error"`，见 `docs/TypescriptSDk.MD:1489`）。图片过大或损坏导致本轮异常收尾时，若落在 `subtype:"success"` + `is_error:false` 上，引擎会当**正常结束**处理（`mapper.ts` 的 success 早退），网关看到的是一个「没产出就结束」的轮次 | 网关侧：发过 `images` 且本轮无产出地结束 → 优先怀疑图片（缩小后重发）。引擎侧已排期接住 `terminal_reason`，但 `image_error` 实际落在哪个 subtype 需真模型实测校准，故未随 v1.3 落地 |
 
 ### 9.4 复跑验收
 
