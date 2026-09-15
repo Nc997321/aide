@@ -12,6 +12,11 @@ import {
 
 const PORT = 18190;
 const PORT16 = 18191;
+/** 线上协议版本：与 src/headless-server.ts 的 PROTOCOL_VERSION 同步。
+ *  刻意不 import（本脚本是 dist 产物的黑盒驱动，要与源码独立），也刻意写死
+ *  字面量——升版本时这三条握手断言必须跟着改，改不动就说明版本门没真上线路。
+ *  v2（2026-09-14）：btw_ask + send 四字段剥除；v1 的旧值曾在此滞留成 3 条假红灯。 */
+const PROTOCOL = 2;
 const DEAD_KEY = "smoke-host-dead-key-7f3"; // 假哨兵：兼做 C8 泄漏扫描靶
 const deadEnv = deadEndpointEnv(DEAD_KEY);
 const t0 = Date.now();
@@ -22,26 +27,37 @@ const rt: RuntimeHandle = await spawnRuntime({ port: PORT, configDir: cfg.dir })
 // ---- A1 启动与版本握手 ----
 const listenLine = rt.logs.find((l) => l.includes("headless-listening")) ?? "";
 const hello1 = JSON.parse(listenLine.slice(listenLine.indexOf("{")));
-check("A1 listening 行", hello1.type === "headless-listening" && hello1.port === PORT && hello1.protocol === 1, listenLine);
+check("A1 listening 行", hello1.type === "headless-listening" && hello1.port === PORT && hello1.protocol === PROTOCOL, listenLine);
 
 // ---- A2 SSE hello 首帧 ----
 const s2 = sseOpen(PORT, "a2");
 await waitFor("A2 hello", () => s2.frames[0]);
-check("A2 hello 首帧", JSON.stringify(s2.frames[0]) === JSON.stringify({ type: "hello", protocol: 1, sessionId: "a2" }), JSON.stringify(s2.frames[0]));
+check("A2 hello 首帧", JSON.stringify(s2.frames[0]) === JSON.stringify({ type: "hello", protocol: PROTOCOL, sessionId: "a2" }), JSON.stringify(s2.frames[0]));
 
 // ---- A3 invoke 成功响应形状（真实结果只走 SSE 不在响应里） ----
 const r3 = await invokeOnce(PORT, { cmd: "send", session_id: "a3", prompt: "hello a3", cwd: cfg.dir, env: deadEnv });
-const shape3 = r3.status === 200 && r3.json?.ok === true && r3.json?.protocol === 1 && Object.keys(r3.json).join() === "ok,protocol";
+const shape3 = r3.status === 200 && r3.json?.ok === true && r3.json?.protocol === PROTOCOL && Object.keys(r3.json).join() === "ok,protocol";
 check("A3 invoke 响应形状", shape3, JSON.stringify(r3.json));
 
 // ---- A4 非回环无 token 拒启：dist 入口只读 PORT/TOKEN env，host 参数不可达 ----
 check("A4 拒启基线", true, "e2e 面不可达（dist 入口无 host env），以单测为准（本轮 59 例绿）；发现：网关对外暴露需自带入口层");
 
-// ---- A6 十命令白名单面：逐命令最小合法体全 200；codegraph_result/未知命令 400 ----
+// ---- A6 十一命令白名单面：逐命令最小合法体全 200；codegraph_result/未知命令 400 ----
 const minBodies: Array<[string, Record<string, unknown>]> = [
   ["send", { cmd: "send", session_id: "a6-send", prompt: "hi", cwd: cfg.dir, env: deadEnv }],
+  // send.images 两形态的 schema 面（读取/守卫在单测 imageAttachments.test.ts；本臂只证
+  // 到达 200，用不存在的路径即可——它会在命令层被拒成 error 帧，不 spawn 进程）
+  ["send(images inline)", { cmd: "send", session_id: "a6-send", prompt: "hi", cwd: cfg.dir, env: deadEnv, images: [{ data: "aGk=", mediaType: "image/png" }] }],
+  ["send(images path)", { cmd: "send", session_id: "a6-send", prompt: "hi", cwd: cfg.dir, env: deadEnv, images: [{ path: "a6/not-a-real-file.jpg" }] }],
+  ["btw_ask", { cmd: "btw_ask", session_id: "a6-x", question: "q" }],
   ["update_permission_policy", { cmd: "update_permission_policy", session_id: "a6-x", policy: { revision: 1, rules: [] } }],
-  ["permission_response", { cmd: "permission_response", session_id: "a6-x", id: "p1", approved: true }],
+  // permission_response 两形态都必须收下：扁平（桌面/远程/ohos 的历史形状）…
+  ["permission_response(flat)", { cmd: "permission_response", session_id: "a6-x", id: "p1", approved: true }],
+  // …与标签（官方推荐，网关用）四变体
+  ["permission_response(approve)", { cmd: "permission_response", session_id: "a6-x", id: "p1", response: { kind: "approve" } }],
+  ["permission_response(answer)", { cmd: "permission_response", session_id: "a6-x", id: "p1", response: { kind: "answer", answers: { q: "a" } } }],
+  ["permission_response(deny)", { cmd: "permission_response", session_id: "a6-x", id: "p1", response: { kind: "deny" } }],
+  ["permission_response(unanswered)", { cmd: "permission_response", session_id: "a6-x", id: "p1", response: { kind: "unanswered", reason: "确认超时" } }],
   ["interrupt", { cmd: "interrupt", session_id: "a6-x" }],
   ["stop_bg_task", { cmd: "stop_bg_task", session_id: "a6-x", task_id: "t1" }],
   ["set_model", { cmd: "set_model", session_id: "a6-x", model: "sonnet" }],
@@ -57,7 +73,7 @@ for (const [name, body] of minBodies) {
 }
 const rCg = await invokeOnce(PORT, { cmd: "codegraph_result", session_id: "a6-x", request_id: "r", result: "{}" });
 const rUn = await invokeOnce(PORT, { cmd: "totally_unknown", session_id: "a6-x" });
-check("A6 10 命令全 200 + 白名单外 400", a6bad.length === 0 && rCg.status === 400 && rUn.status === 400, a6bad.join(",") || `codegraph=${rCg.status} unknown=${rUn.status}`);
+check("A6 11 命令面全 200（含 permission_response 两形态）+ 白名单外 400", a6bad.length === 0 && rCg.status === 400 && rUn.status === 400, a6bad.join(",") || `codegraph=${rCg.status} unknown=${rUn.status}`);
 
 // ---- A7 深校验拒绝臂：400 含 path+code 且不回显值 ----
 const SENT = "SHOULD_NOT_ECHO_A7";
@@ -66,6 +82,18 @@ const a7arms: Array<[string, unknown]> = [
   ["automation 缺字段", { cmd: "send", session_id: "a7", prompt: "x", automation: { task_id: SENT } }],
   ["policy.revision 非数", { cmd: "update_permission_policy", session_id: "a7", policy: { revision: SENT, rules: [] } }],
   ["mcp_headers 值非 string", { cmd: "send", session_id: "a7", prompt: "x", mcp_headers: { srv: { "X-Secret": SENT, "X-Bad": 42 } } }],
+  // permission_response 形态互斥（§4.2）：皆无 / 皆有 = 400，path 指向 response
+  ["permission_response 两形态皆无", { cmd: "permission_response", session_id: "a7", id: "p1" }],
+  ["permission_response 两形态皆有", { cmd: "permission_response", session_id: "a7", id: "p1", approved: true, response: { kind: "deny" } }],
+  // 标签形态夹带扁平字段 = 意图冲突，path 指向 approved
+  ["permission_response 标签夹带扁平", { cmd: "permission_response", session_id: "a7", id: "p1", response: { kind: "approve" }, message: SENT }],
+  // 标签形态缺必传 answers
+  ["permission_response 缺 answers", { cmd: "permission_response", session_id: "a7", id: "p1", response: { kind: "answer" } }],
+  // send.images 形态互斥（§4.1）：皆无 / 皆有 = 400；内嵌形态缺 mediaType = 400。
+  // path 值放 SENT 哨兵——顺带证新字段同样不回显值（N5）
+  ["images 两形态皆无", { cmd: "send", session_id: "a7", prompt: "x", images: [{}] }],
+  ["images 两形态皆有", { cmd: "send", session_id: "a7", prompt: "x", images: [{ data: "aa", path: SENT }] }],
+  ["images 内嵌缺 mediaType", { cmd: "send", session_id: "a7", prompt: "x", images: [{ data: "aa" }] }],
 ];
 let a7ok = true; const a7notes: string[] = [];
 for (const [arm, body] of a7arms) {
@@ -74,7 +102,7 @@ for (const [arm, body] of a7arms) {
   const hasPath = /path|"|:/.test(r.text) && r.text.includes(": "); // path: code 形状
   if (r.status !== 400 || echoed || !hasPath) { a7ok = false; a7notes.push(`${arm}→${r.status}${echoed ? " 回显值!" : ""}`); }
 }
-check("A7 四拒绝臂 400+path 不回显", a7ok, a7notes.join(";") || "全部 400，path:code 形状，零回显");
+check("A7 十一拒绝臂 400+path 不回显", a7ok, a7notes.join(";") || "全部 400，path:code 形状，零回显");
 
 // ---- A8 前向兼容：未知顶层字段 + 未知 display 块原样到命令层（display 面经 user_message 实证） ----
 const s8 = sseOpen(PORT, "a8");

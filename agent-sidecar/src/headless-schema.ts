@@ -17,10 +17,32 @@ import type { SidecarCommand } from "./engine/types.js";
 
 const sid = z.string().min(1);
 
-const imageAttachment = z.looseObject({
-  data: z.string(),
-  mediaType: z.string(),
-});
+// send.images 的一条：内嵌 base64 与引擎本地路径**互斥**（二选一；规则与理由见
+// engine/types.ts 的 WireImageAttachment，读取与守卫见 engine/imageAttachments.ts）。
+//   · 内嵌形态：data + mediaType 都必填——**不放松既有必填**（放松会让已写好的
+//     调用方开始依赖新默认值，那是静默的行为变更）。
+//   · 路径形态：只传 path（`{path: "…"}`，绕开 /invoke 的 1MB body 上限）；
+//     mediaType 由引擎按魔数嗅探后自己填。
+// 失败仍是 issue（path + code，N5 不回显值）：互斥违规 path=path、缺媒体类型
+// path=mediaType，操作者据此判断触发的是哪条规则。
+const imageAttachment = z
+  .looseObject({
+    data: z.string().min(1).optional(),
+    mediaType: z.string().min(1).optional(),
+    path: z.string().min(1).optional(),
+  })
+  .superRefine((v, ctx) => {
+    const inline = v.data !== undefined;
+    const byPath = v.path !== undefined;
+    if (inline === byPath) {
+      // 皆无 / 皆有：两种形态都不可判（前者缺字节来源，后者意图冲突）
+      ctx.addIssue({ code: "custom", path: ["path"] });
+      return;
+    }
+    if (inline && v.mediaType === undefined) {
+      ctx.addIssue({ code: "custom", path: ["mediaType"] });
+    }
+  });
 
 /** display 块：不透明透传面（见文件头），只校验「对象 + type 字符串」。 */
 const displayBlock = z.looseObject({ type: z.string() });
@@ -127,16 +149,64 @@ const updatePermissionPolicyCommand = z.looseObject({
   policy: permissionPolicySnapshot,
 });
 
-const permissionResponseCommand = z.looseObject({
-  cmd: z.literal("permission_response"),
-  session_id: sid,
-  id: z.string().min(1),
-  approved: z.boolean(),
-  answers: z.record(z.string(), z.string()).optional(),
-  nextMode: z.string().optional(),
-  message: z.string().optional(),
-  sessionRules: z.array(permissionRuleDraft).optional(),
-});
+// ---- permission_response：标签联合（官方推荐）与扁平形态（兼容）**二选一** ----
+//
+// ⚠️ zod 机械约束（4.4.3 实测）：判别键 cmd 的取值必须全局唯一，同一个
+// "permission_response" 字面量**不能有两个成员**——成员包成 z.union 也不行
+// （判别表要求成员自带 propValues，$ZodUnion 没有 → 抛 "Invalid discriminated
+// union option"，且该异常**穿透 safeParse** 而不是变成 issue）。故本命令在 union
+// 里只占**一个**成员，形态互斥由 .superRefine 兜底：
+//   · 恰好一个在场：response（标签形态）或 approved（扁平形态）
+//   · 标签形态不得夹带扁平字段（混用 = 意图不可判）
+// 失败仍是 issue（path + code，N5 不回显值）：互斥违规 path=response，混用
+// path=approved——操作者据此判断触发的是哪条规则。变体语义见 engine/types.ts
+// 的 PermissionResponseWire 与 engine/permissionResponse.ts 头注（能力一一对应）。
+const permissionResponseWire = z.discriminatedUnion("kind", [
+  z.looseObject({
+    kind: z.literal("approve"),
+    nextMode: z.string().optional(),
+    sessionRules: z.array(permissionRuleDraft).optional(),
+  }),
+  // answers 必填：SDK 要求把作答重塑进 updatedInput，无作答的"放行问答"没有意义
+  z.looseObject({ kind: z.literal("answer"), answers: z.record(z.string(), z.string()) }),
+  z.looseObject({ kind: z.literal("deny"), message: z.string().optional() }),
+  z.looseObject({ kind: z.literal("unanswered"), reason: z.string().optional() }),
+]);
+
+const permissionResponseCommand = z
+  .looseObject({
+    cmd: z.literal("permission_response"),
+    session_id: sid,
+    id: z.string().min(1),
+    // 标签形态（网关用；见上）
+    response: permissionResponseWire.optional(),
+    // ---- 扁平形态（桌面 Rust / 远程 / ohos 恒走这条；网关不要用） ----
+    // approved 在扁平形态下必填的严格性**不靠 .optional() 放松**，而由下面
+    // superRefine 的「恰好一个在场」规则恢复：两形态皆无 = 400。
+    approved: z.boolean().optional(),
+    answers: z.record(z.string(), z.string()).optional(),
+    nextMode: z.string().optional(),
+    message: z.string().optional(),
+    sessionRules: z.array(permissionRuleDraft).optional(),
+  })
+  .superRefine((v, ctx) => {
+    const tagged = v.response !== undefined;
+    const flat = v.approved !== undefined;
+    if (tagged === flat) {
+      // 皆无 / 皆有：两种形态都不可判（前者缺 approved，后者意图冲突）
+      ctx.addIssue({ code: "custom", path: ["response"] });
+      return;
+    }
+    if (
+      tagged &&
+      (v.answers !== undefined ||
+        v.nextMode !== undefined ||
+        v.message !== undefined ||
+        v.sessionRules !== undefined)
+    ) {
+      ctx.addIssue({ code: "custom", path: ["approved"] });
+    }
+  });
 
 const interruptCommand = z.looseObject({ cmd: z.literal("interrupt"), session_id: sid });
 
