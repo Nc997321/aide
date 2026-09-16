@@ -5,6 +5,7 @@ import WelcomeStep from "./steps/WelcomeStep.vue";
 import WorkspaceStep from "./steps/WorkspaceStep.vue";
 import LoginStep from "./steps/LoginStep.vue";
 import ModelStep from "./steps/ModelStep.vue";
+import { vOverlayLayer } from "../../directives/overlayLayer";
 
 const ob = useOnboarding();
 
@@ -32,7 +33,7 @@ function onPrimary() {
 
 <template>
   <Teleport to="body">
-    <div class="onboarding-overlay">
+    <div class="onboarding-overlay" v-overlay-layer>
       <div class="wiz-top">
         <div class="rail">
           <template v-for="(s, i) in STEPS" :key="s.key">

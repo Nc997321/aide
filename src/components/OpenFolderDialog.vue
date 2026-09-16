@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import DirTreePicker from "./DirTreePicker.vue";
+import { vOverlayLayer } from "../directives/overlayLayer";
 
 const props = defineProps<{ visible: boolean }>();
 const emit = defineEmits<{
@@ -28,7 +29,7 @@ async function onConfirm() {
 
 <template>
   <Teleport to="body">
-    <div v-if="props.visible" class="of-overlay" @click.self="close">
+    <div v-if="props.visible" class="of-overlay" v-overlay-layer @click.self="close">
       <div class="of-dialog" @click.stop>
         <div class="of-header">打开目录</div>
         <DirTreePicker v-model="path" />

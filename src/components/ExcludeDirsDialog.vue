@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, computed } from "vue";
 import DirTreePicker from "./DirTreePicker.vue";
+import { vOverlayLayer } from "../directives/overlayLayer";
 
 /**
  * 排除目录多选弹窗：DirTreePicker mode=directory + multiple + root 锁定工作空间。
@@ -57,7 +58,7 @@ function onConfirm() {
 
 <template>
   <Teleport to="body">
-    <div v-if="props.visible" class="of-overlay" @click.self="close">
+    <div v-if="props.visible" class="of-overlay" v-overlay-layer @click.self="close">
       <div class="of-dialog" @click.stop>
         <div class="of-header">选择排除目录 <span class="fp-sub">（可多选 · 限工作空间内）</span></div>
         <DirTreePicker v-model="selected" mode="directory" multiple :root="workspaceRoot" />

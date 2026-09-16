@@ -6,6 +6,8 @@
 // z 序交错。所以 `.bp-surface` 是布局里的「占位洞」——原生视图被钉在它的屏幕坐标上；标签条与
 // 工具栏排在洞**外**（不重叠），否则会被原生视图吃掉。面板关闭 / 切标签都必须 `setVisible(false)`，
 // 否则原生视图脱离 DOM 生命周期、继续浮在全部内容之上。
+// 同理，**任何 HTML 浮层盖上来时它都得让位**（`v-overlay-layer` 登记驱动，见「可见性总闸」）——
+// 浮层的 z-index 再高也压不住原生子视图，只有让位一条路。
 //
 // 坐标：窗口 `decorations(false)` + 主 webview 铺满客户区 → `getBoundingClientRect()`(CSS px)
 // 直接等于 Tauri logical px（devicePixelRatio == scale_factor），无需换算；rect 视口相对，天然
@@ -24,6 +26,7 @@ import {
 } from "../../composables/useEmbeddedBrowser";
 import { useBrowserPanel } from "../../composables/useBrowserPanel";
 import { useBrowserBookmarks } from "../../composables/useBrowserBookmarks";
+import { overlayLayerOpen } from "../../directives/overlayLayer";
 import FilePickerDialog from "../FilePickerDialog.vue";
 import {
   navOfEvent,
@@ -134,6 +137,17 @@ function hideTab(t: Tab | undefined) {
   if (!t?.viewId) return;
   void browser.setVisible(t.viewId, false).catch(() => {});
 }
+
+// ── 可见性总闸：原生视图给 HTML 浮层让位 ──
+
+/** 活动视图此刻该不该露头：面板开着 **且** 没有任何浮层盖着——面板内的（导入书签的文件选择器）
+ *  与面板外的（设置、Ctrl+P 命令面板、全局 modal、右键菜单）一视同仁。
+ *
+ *  原生视图浮在所有 HTML 之上、**不受 z-index 约束**（见文件头「物理约束」），浮层一开它就必须
+ *  让位，否则浮层只在「洞」以上那一条可见、取消/确认按钮全被网页吃掉。
+ *  **浮层清单不在这里维护**：谁有遮罩谁在根元素挂 `v-overlay-layer` 自己登记
+ *  （见 `directives/overlayLayer.ts`），这里只读结论——所以新增浮层不必回来改这个文件。 */
+const viewAllowed = computed(() => panelOpen.value && !overlayLayerOpen.value);
 
 /** 地址栏回显：用户正在输入时不抢（否则事件一到就把输入冲掉）。 */
 function syncAddressFromTab() {
@@ -268,6 +282,7 @@ const {
   idOf: bookmarkIdOf,
 } = useBrowserBookmarks();
 
+/** 导入用的文件选择器开没开（它自己会挂 `v-overlay-layer` 让原生视图让位，这里只管开关）。 */
 const pickerVisible = ref(false);
 
 /** ★ 的目标 URL：活动标签的当前 URL；空标签时用地址栏里已输入的内容。 */
@@ -326,12 +341,12 @@ watch(activeId, async (_id, oldId) => {
   hideTab(tabs.value.find((t) => t.id === oldId));
   clearMessage();
   address.value = active.value?.url ?? "";
-  await showActive();
+  if (viewAllowed.value) await showActive();
 });
 
-// 面板开关：开 → 显示活动视图；关 → 隐藏（保活，不销毁）。
-watch(panelOpen, (open) => {
-  if (open) void showActive();
+// 可见性总闸：面板开关 **与** 浮层开关都收敛到 viewAllowed——开 → 露头，关 → 让位（保活，不销毁）。
+watch(viewAllowed, (ok) => {
+  if (ok) void showActive();
   else hideTab(active.value);
 });
 
@@ -342,7 +357,7 @@ onMounted(() => {
 
   // 首次挂载时面板可能已经是开的（`everOpened` 与 `panelOpen` 同一次点击里置位，
   // 组件的 watch 捕不到那次变化）——补一次显示，别让首个视图隐着。
-  if (panelOpen.value) void showActive();
+  if (viewAllowed.value) void showActive();
 
   // 收藏条数据（模块级单例状态，挂载时拉一次；之后每次写操作各自刷新）。
   void refreshBookmarks();
@@ -472,7 +487,8 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 导入用的文件选择器：复用应用内单文件选择弹窗（有盘符入口 + 可编辑地址栏，
-         能选到任意路径——书签文件通常在 Downloads，不在工作区内） -->
+         能选到任意路径——书签文件通常在 Downloads，不在工作区内）。
+         它的根元素挂了 `v-overlay-layer`：一开就登记，原生视图自动让位（见「可见性总闸」）。 -->
     <FilePickerDialog
       v-model:visible="pickerVisible"
       title="导入书签文件"

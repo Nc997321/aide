@@ -15,6 +15,7 @@ import { computed } from "vue";
 import { api } from "@/api";
 import { useChatSession } from "@aide/sdk/chat";
 import { formatTokens } from "./contextUsage";
+import { vOverlayLayer } from "../../directives/overlayLayer";
 
 const props = defineProps<{
   sessionId: string;
@@ -44,7 +45,7 @@ async function decide(approve: boolean): Promise<void> {
 
 <template>
   <Teleport to="body">
-    <div v-if="request" class="mswitch-overlay" role="dialog" aria-label="切换模型确认">
+    <div v-if="request" class="mswitch-overlay" v-overlay-layer role="dialog" aria-label="切换模型确认">
       <div class="mswitch-panel">
         <div class="mswitch-title">切换模型确认</div>
         <div class="mswitch-body">

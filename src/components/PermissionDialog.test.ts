@@ -3,7 +3,10 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mount, enableAutoUnmount } from "@vue/test-utils";
 import { nextTick } from "vue";
 import PermissionDialog from "./PermissionDialog.vue";
+import ModalDialog from "./ModalDialog.vue";
+import ContextMenu from "./ContextMenu.vue";
 import { useModal } from "../composables/useModal";
+import { useContextMenu } from "../composables/useContextMenu";
 import type { PermissionRequest } from "../types/chat";
 import type { PermissionRule, PermissionScope } from "../types/permissions";
 import type { RememberContextState } from "../composables/usePermissionRememberContext";
@@ -779,23 +782,45 @@ describe("PermissionDialog — 键盘确认（Enter/Esc）", () => {
     expect(wrapper.emitted("respond")).toBeUndefined();
   });
 
-  it("遮罩层开着（设置面板 / 全局 modal）：按键属于遮罩，不穿透", () => {
+  it("遮罩层开着（全局 modal）：按键属于遮罩，不穿透；遮罩撤了要让回来", async () => {
     const wrapper = mountAttached({ permission: bashPermission() });
-    const overlay = document.createElement("div");
-    overlay.className = "settings-overlay";
-    document.body.appendChild(overlay);
+
+    // 真·遮罩：ModalDialog 是全局 modal 的渲染方，也是浮层登记处的一员（根元素挂 v-overlay-layer）。
+    // 原先这里往 body 塞一个裸 div + 类名来骗过 `querySelector(遮罩类名表)`——类名表已废，
+    // 现在按「谁挂 v-overlay-layer 谁登记」判定，所以必须挂真组件。
+    mount(ModalDialog, { attachTo: document.body });
+    const { confirm, cancel, visible } = useModal();
+    void confirm("标题", "内容");
+    expect(visible.value).toBe(true);
+    await nextTick(); // 等遮罩根元素渲染出来 → 登记生效
+
     press("Enter");
     press("Escape");
     expect(wrapper.emitted("respond")).toBeUndefined();
     expect(wrapper.find('[data-action="deny-reason"]').exists()).toBe(false);
-    overlay.remove();
 
-    const { confirm, cancel, visible } = useModal();
-    void confirm("标题", "内容");
-    expect(visible.value).toBe(true);
+    cancel();
+    await nextTick();
+    // 遮罩撤掉后键盘必须回到权限弹窗——否则「关掉设置面板后 Enter 失效」这类回归没测到
+    press("Enter");
+    expect(wrapper.emitted("respond")).toBeTruthy();
+  });
+
+  it("浮层登记处里的每个遮罩都让路（右键菜单这类浮动层也算）", async () => {
+    const wrapper = mountAttached({ permission: bashPermission() });
+    mount(ContextMenu, { attachTo: document.body });
+    // 旧实现只抄了 9 个遮罩类名，右键菜单不在表里 → 菜单开着按 Enter 会直接批权限。
+    // 现在登记处按「谁挂 v-overlay-layer」判定，菜单开着 = 键盘属于菜单。
+    useContextMenu().show(10, 10, [{ label: "复制", action: () => {} }]);
+    await nextTick();
+
     press("Enter");
     expect(wrapper.emitted("respond")).toBeUndefined();
-    cancel();
+
+    useContextMenu().hide();
+    await nextTick();
+    press("Enter");
+    expect(wrapper.emitted("respond")).toBeTruthy();
   });
 
   it("两个弹窗并存（多窗格都待确认）：键盘不动作，强制鼠标（安全缺省）", () => {

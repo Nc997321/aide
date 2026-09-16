@@ -20,6 +20,7 @@ import SidebarNavGroup from "./SidebarNavGroup.vue";
 import SidebarSectionHead from "./SidebarSectionHead.vue";
 import { useToast } from "../composables/useToast";
 import type { Session, WorkspaceInfo } from "../types";
+import { vOverlayLayer } from "../directives/overlayLayer";
 
 const props = defineProps<{
   activeSessionId: string;
@@ -642,7 +643,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
     <AToast :state="toastState" />
 
     <Teleport to="body">
-      <div v-if="trustPrompt" class="trust-overlay" @click.self="closeTrustPrompt">
+      <div v-if="trustPrompt" class="trust-overlay" v-overlay-layer @click.self="closeTrustPrompt">
         <div class="trust-modal" role="dialog" aria-modal="true" @click.stop>
           <div class="trust-shield">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>

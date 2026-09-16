@@ -73,8 +73,11 @@ HTML → markdown（参照 `docsMcp` 把 docx 变 markdown 的形态），带 ur
 - **坐标**：窗口 `decorations(false)` + 主 webview 铺满客户区 → `getBoundingClientRect()`(CSS px)
   **直接 == Tauri logical px**，无需换算；rect 视口相对，天然吸收滚动。
   **rect 空（display:none / 宽高 0）→ `setVisible(false)`**，这一招自动覆盖所有隐藏场景。
-- **原生视图浮在所有 HTML 之上**（不受 z-index 约束）→ 面板关闭/切标签必须显式隐藏；面板打开时
-  主区内的 HTML 浮层（右键菜单、文件窗口）会被它盖住——v1 已知限制，记在文档里别当新 bug 修。
+- **原生视图浮在所有 HTML 之上**（不受 z-index 约束）→ 面板关闭/切标签必须显式隐藏。**任何全屏
+  遮罩**盖上来时也要让位（2026-09-16 修）：由浮层登记处统一驱动——`directives/overlayLayer.ts`
+  的 `v-overlay-layer`（谁有遮罩谁在根元素挂）+ `BrowserPanel.vue` 的 `viewAllowed` 总闸。
+  漏挂由 `pnpm check:overlay-layers` 在构建期拦下（`WorkbenchTerminal` 是常驻非模态，已登记豁免）。
+  同一个登记处也接管了 `PermissionDialog` 的键盘让路（原先那份 `OVERLAY_SELECTOR` 遮罩类名表已删）。
 
 ## 4. 怎么跑 / 怎么验
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import DirTreePicker from "./DirTreePicker.vue";
+import { vOverlayLayer } from "../directives/overlayLayer";
 
 /**
  * 单文件选择弹窗（通用）：复用 DirTreePicker 的 mixed 模式（目录可展开、文件可选），单选。
@@ -53,7 +54,7 @@ function onConfirm() {
 
 <template>
   <Teleport to="body">
-    <div v-if="props.visible" class="of-overlay" @click.self="close">
+    <div v-if="props.visible" class="of-overlay" v-overlay-layer @click.self="close">
       <div class="of-dialog" @click.stop>
         <div class="of-header">{{ props.title }}</div>
         <DirTreePicker v-model="path" mode="mixed" />

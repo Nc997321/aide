@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, nextTick } from "vue";
 import { useModal } from "../composables/useModal";
+import { vOverlayLayer } from "../directives/overlayLayer";
 
 const {
   visible,
@@ -52,7 +53,7 @@ function onOverlayClick(e: MouseEvent) {
 
 <template>
   <Teleport to="body">
-    <div v-if="visible" class="modal-overlay" @click="onOverlayClick" @keydown="onKeydown">
+    <div v-if="visible" class="modal-overlay" v-overlay-layer @click="onOverlayClick" @keydown="onKeydown">
       <div class="modal-dialog" :class="[mode === 'custom' ? width : '']" @click.stop>
         <div class="modal-header">{{ title }}</div>
 

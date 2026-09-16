@@ -2,6 +2,7 @@
 import { ref, watch, nextTick, computed, onUnmounted } from "vue";
 import IconOrChar from "../components/IconOrChar.vue";
 import Icon from "../components/Icon.vue";
+import { vOverlayLayer } from "../directives/overlayLayer";
 
 export interface PaletteResult {
   id: string;
@@ -150,7 +151,7 @@ defineExpose({ setSearchFn, setRecentFn });
 <template>
   <Teleport to="body">
     <Transition name="a-palette">
-      <div v-if="open" class="a-palette-overlay" @click="onOverlayClick">
+      <div v-if="open" class="a-palette-overlay" v-overlay-layer @click="onOverlayClick">
         <div class="a-palette-box">
           <div class="a-palette-input-row">
             <span class="a-palette-icon"><Icon name="search" :size="15" /></span>

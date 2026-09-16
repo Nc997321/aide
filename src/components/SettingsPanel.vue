@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, computed } from "vue";
+import { vOverlayLayer } from "../directives/overlayLayer";
 import { useSettings } from "../composables/useSettings";
 import { useOnboarding } from "../composables/useOnboarding";
 import { useCustomizations } from "../composables/useCustomizations";
@@ -456,7 +457,7 @@ function onOverlayClick(e: MouseEvent) {
 
 <template>
   <Teleport to="body">
-    <div class="settings-overlay" @click="onOverlayClick" @keydown="onKeydown">
+    <div class="settings-overlay" v-overlay-layer @click="onOverlayClick" @keydown="onKeydown">
       <div class="settings-dialog" @click.stop>
         <!-- Header -->
         <div class="dialog-header">

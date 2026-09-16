@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick } from "vue";
 import { useContextMenu, type MenuItem } from "../composables/useContextMenu";
+import { vOverlayLayer } from "../directives/overlayLayer";
 
 const { visible, x, y, items, hide } = useContextMenu();
 
@@ -79,6 +80,7 @@ onUnmounted(() => {
         v-if="visible"
         ref="menuRef"
         class="context-menu"
+        v-overlay-layer
         :style="{ left: screenX + 'px', top: screenY + 'px' }"
       >
         <template v-for="(item, i) in items" :key="i">

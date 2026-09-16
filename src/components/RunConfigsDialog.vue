@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
+import { vOverlayLayer } from "../directives/overlayLayer";
 import { useRunConfigs } from "../composables/useRunConfigs";
 import { useSettings } from "../composables/useSettings";
 import { useWorkspaceJdk } from "../composables/useWorkspaceJdk";
@@ -119,7 +120,7 @@ async function close() {
 </script>
 
 <template>
-  <div class="rcd-backdrop" @click.self="close">
+  <div class="rcd-backdrop" v-overlay-layer @click.self="close">
     <div class="rcd-dialog">
       <div class="rcd-header">
         <svg width="14" height="14" viewBox="0 0 10 10" fill="var(--aide-success)" style="flex-shrink:0">

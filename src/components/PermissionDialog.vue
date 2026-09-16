@@ -27,7 +27,7 @@ import {
   stripTrailingNumericArg,
 } from "@/utils/permissionRuleDerivation";
 import { marked } from "@/utils/markdown";
-import { useModal } from "@/composables/useModal";
+import { overlayLayerOpen } from "@/directives/overlayLayer";
 import Icon from "./Icon.vue";
 
 const props = defineProps<{
@@ -164,23 +164,6 @@ function onTextInputEnter(e: KeyboardEvent, action: () => void) {
 // 挂 window bubble 相（事件链最后一站）。与上游消费者的协作约定：凡吃掉 Esc/Enter
 // 的（App capture 的 workbench Esc、palette/settings/modal 的 Esc）都必须
 // preventDefault——这里见 defaultPrevented 一律让路，一次按键只产生一个效果。
-const { visible: modalVisible } = useModal();
-
-/** 遮罩根类名登记处：这些覆盖层开着时按键属于遮罩，不穿透到权限弹窗（覆盖层都
- *  v-if 控制，DOM 存在 = 开着）。新增全屏遮罩组件时把根类名加进来。
- *  workbench-overlay 不在此列：它不是模态、常驻 DOM，其 Esc 收起由 App 的
- *  capture handler 消费并 preventDefault，走 defaultPrevented 守卫。 */
-const OVERLAY_SELECTOR = [
-  ".settings-overlay",
-  ".a-palette-overlay",
-  ".onboarding-overlay",
-  ".of-overlay",
-  ".rw-overlay",
-  ".trust-overlay",
-  ".fr-overlay",
-  ".picker-overlay",
-  ".pb-overlay",
-].join(", ");
 
 /** 焦点在文本输入类元素上：按键归输入框（聊天输入发送 / deny 理由 / 提问自由
  *  文本 / xterm helper / palette 输入等，各有自己的 Enter/Esc 语义）。 */
@@ -197,9 +180,17 @@ function isActionTarget(t: EventTarget | null): boolean {
   return t instanceof HTMLElement && !!t.closest('button, a[href], [role="button"]');
 }
 
-/** 遮罩层开着 = 按键属于遮罩：全局 modal（useModal 单例状态）+ 各覆盖层 DOM。 */
+/** 遮罩层开着 = 按键属于遮罩。
+ *
+ *  原先这里是「useModal 单例状态 + `document.querySelector(遮罩类名表)`」两份清单拼起来的：
+ *  同一个概念记两处必然漂移（类名改了、新遮罩忘了登记，键盘就悄悄穿透）。现在统一问浮层登记处
+ *  ——**谁有遮罩谁在根元素挂 `v-overlay-layer`**（`directives/overlayLayer.ts`），这里只读结论，
+ *  也顺带覆盖了全局 modal（ModalDialog 自己就是登记方之一）。
+ *
+ *  workbench-overlay 不在登记处：它不是模态、常驻 DOM，其 Esc 收起由 App 的 capture handler
+ *  消费并 preventDefault，走本组件上游的 defaultPrevented 守卫。 */
 function isOverlayBlocked(): boolean {
-  return modalVisible.value || !!document.querySelector(OVERLAY_SELECTOR);
+  return overlayLayerOpen.value;
 }
 
 /** 多窗格各挂一个 PermissionDialog：两个会话同时待确认时 Enter 会双批——只允许

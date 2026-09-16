@@ -14,6 +14,7 @@ import { useToast } from "../../composables/useToast";
 import { marked } from "../../utils/markdown";
 import Icon from "../Icon.vue";
 import type { RunRecord, RunUsage } from "../../api/automation";
+import { vOverlayLayer } from "../../directives/overlayLayer";
 
 const auto = useAutomation();
 const paneLayout = usePaneLayout();
@@ -223,7 +224,7 @@ const PLAYBOOK_CARD: Record<string, { title: string; desc: string }> = {
 
     <!-- 手册查看模态 -->
     <Teleport to="body">
-      <div v-if="playbookOpen" class="pb-overlay" @click.self="playbookOpen = false">
+      <div v-if="playbookOpen" class="pb-overlay" v-overlay-layer @click.self="playbookOpen = false">
         <div class="pb-modal">
           <div class="pb-head">
             <span class="pb-title">执行手册 · {{ task.name }}</span>

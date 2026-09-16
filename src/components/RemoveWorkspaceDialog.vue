@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import type { WorkspaceInfo } from "../types";
+import { vOverlayLayer } from "../directives/overlayLayer";
 
 const props = defineProps<{ visible: boolean; workspace: WorkspaceInfo | null }>();
 const emit = defineEmits<{
@@ -25,7 +26,7 @@ const wsName = () => {
 
 <template>
   <Teleport to="body">
-    <div v-if="props.visible && props.workspace" class="rw-overlay" @click.self="close">
+    <div v-if="props.visible && props.workspace" class="rw-overlay" v-overlay-layer @click.self="close">
       <div class="rw-dialog" @click.stop>
         <div class="rw-header">移除工作区「{{ wsName() }}」</div>
 

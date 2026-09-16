@@ -201,7 +201,11 @@ src/components/Browser/                 # 同名子目录内聚
 - `useBrowserView` 持 `ResizeObserver` 观察占位 div + 监听窗口 `resize`/`scroll` + `IntersectionObserver` 判可见。
 - 任一变化 → 节流（rAF）→ `getBoundingClientRect()` → 转 logical px（除 `devicePixelRatio`）→ 调 `browser_set_bounds`。
 - **panel 不可见（切到别的 tab/折叠）→ 立即 `browser_set_visible(false)` 或 bounds 置 0**，否则原生视图浮在全部内容之上。
-- 盖在网页之上的浮层（查找栏/下拉）一律 `Teleport` 到 body + `fixed` 定位（照 `backdrop-nested-root-teleport` 配方），且**矩形不得与洞重叠**，重叠部分会被原生视图吃掉。
+- 盖在网页之上的浮层（查找栏/下拉）一律 `Teleport` 到 body + `fixed` 定位（照 `backdrop-nested-root-teleport` 配方）。
+  与洞重叠 = 会被原生视图吃掉，解法是**让位**（不是躲）：**任何全屏遮罩**开着时把原生视图
+  `setVisible(false)`，关掉再唤回——由浮层登记处统一驱动（`directives/overlayLayer.ts` +
+  `BrowserPanel.vue` 的 `viewAllowed` 总闸，2026-09-16 落地）。所以新增浮层不再需要改浏览器面板，
+  只需在自己的遮罩根元素挂 `v-overlay-layer`；漏挂由 `pnpm check:overlay-layers` 在构建期拦下。
 
 主题/配色走 `var(--aide-*)` token，禁硬编码 hex（CLAUDE.md 主题红线）。
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useFileResolver } from "@/composables/useFileResolver";
+import { vOverlayLayer } from "../directives/overlayLayer";
 
 const props = defineProps<{ workspacePath?: string }>();
 
@@ -32,7 +33,7 @@ const pickerTitle = computed(() => `找到 ${candidates.value.length} 个匹配�
     </div>
 
     <!-- 多命中选择：需要用户决策，用带背板的居中弹窗 -->
-    <div v-if="pickerVisible" class="fr-overlay" @click.self="cancelPicker">
+    <div v-if="pickerVisible" class="fr-overlay" v-overlay-layer @click.self="cancelPicker">
       <div class="fr-picker">
         <div class="fr-picker-head">{{ pickerTitle }}</div>
         <div class="fr-picker-list">

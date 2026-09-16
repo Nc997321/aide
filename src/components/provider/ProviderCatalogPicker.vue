@@ -4,6 +4,7 @@ import { useProviderCatalog } from "@/composables/useProviderCatalog";
 import { useProviders } from "@/composables/useProviders";
 import ProviderLogo from "../ProviderLogo.vue";
 import type { ProviderKind } from "@/types";
+import { vOverlayLayer } from "../../directives/overlayLayer";
 
 const props = defineProps<{
   /** 额外置灰的 kind（如未保存草稿占用的类型），提示语与「已添加」区分 */
@@ -34,7 +35,7 @@ function pick(kind: ProviderKind) {
 </script>
 
 <template>
-  <div class="picker-overlay" @click.self="emit('cancel')">
+  <div class="picker-overlay" v-overlay-layer @click.self="emit('cancel')">
     <div class="picker-card">
       <div class="picker-title">选择供应商</div>
       <div class="grid">
