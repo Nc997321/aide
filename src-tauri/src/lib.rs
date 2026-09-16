@@ -169,9 +169,7 @@ pub fn run() {
         .manage(std::sync::Arc::new(lsp::LspState::new()))
         .manage(std::sync::Arc::new(automation::AutomationService::new()))
         // 内嵌浏览器：平台引擎（Windows=Webview2Engine）+ 领域视图注册表。
-        .manage(std::sync::Arc::new(
-            browser::adapter::PlatformEngine::new(),
-        ))
+        .manage(std::sync::Arc::new(browser::adapter::PlatformEngine::new()))
         .manage(browser::state::BrowserState::new())
         .setup(|app| {
             app.state::<std::sync::Arc<settings::SettingsService>>()
@@ -337,6 +335,10 @@ pub fn run() {
             commands::browser::browser_go_back,
             commands::browser::browser_go_forward,
             commands::browser::browser_close,
+            commands::browser::browser_bookmarks_list,
+            commands::browser::browser_bookmarks_add,
+            commands::browser::browser_bookmarks_remove,
+            commands::browser::browser_bookmarks_import,
             commands::shell::pty_write,
             commands::shell::pty_resize,
             commands::shell::pty_kill,

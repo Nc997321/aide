@@ -2,6 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { ChatEvent } from "./types.js";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import type { SubagentTracker } from "./subagents.js";
+import {
+  describeDecisionMismatch,
+  toPendingDecision,
+  type PendingDecision,
+  type PermissionResponseDecision,
+} from "./permissionResponse.js";
 
 /** Context passed to `PermissionManager.request` — the optional abort signal
  *  (from the SDK canUseTool path) and the subagent attribution id. */
@@ -15,16 +21,14 @@ export interface PermissionRequestContext {
  *  `appliedMode` (from the removed "always allow" → SDK setMode path) is gone. */
 export interface ResolveOutcome {
   toolName: string;
+  /** 决策与挂起请求的类别不匹配（如给 Bash 发 answer 变体）：已按拒绝 fail-closed
+   *  结算（工具不执行、绝不悬死），调用方据此发非致命 error 帧（N1：失败要让对端
+   *  看见）。 */
+  mismatch?: string;
 }
 
 interface PendingEntry {
-  resolve: (decision: {
-    approved: boolean;
-    answers?: Record<string, string>;
-    /** 拒绝理由（用户输入）：作为 user feedback 交给 CLI，由官方模板包装后
-     *  反馈给模型（见 makeCallback 的 deny 分支）。 */
-    message?: string;
-  }) => void;
+  resolve: (decision: PendingDecision) => void;
   toolName: string;
   /** Notify every connected client to dismiss this request. Fired on all
    *  terminal paths (settled by anyone, aborted, interrupt, bulk-approve). */
@@ -39,9 +43,16 @@ interface PendingEntry {
 // 示例（「建议替代方案」一节）也是自带外框的。
 // 模板原文取自 claude.exe（YFe/nhe/hRe，@279529599 起）。
 //
-// 读取方：packages/aide-sdk/src/utils/toolDenial.ts 的 parseToolDenial 按这两个
-// 前缀反解「是否拒绝 + 拒绝理由」，前端据此渲染拒绝态。**改这里的外框必须同步
-// 那边的前缀**，否则 UI 静默退化成普通报错（不崩、只是认不出来）。
+// 读取方：packages/aide-sdk/src/utils/toolDenial.ts 的 parseToolDenial 按前缀反解
+// 「是否拒绝 + 拒绝理由」，前端据此渲染拒绝态。**改前两个外框必须同步那边的前缀**，
+// 否则 UI 静默退化成普通报错（不崩、只是认不出来）。
+//
+// ⚠️ 第三种外框 `unansweredDenyMessage`（无人应答，见下）**刻意未同步**：它只服务
+// headless 会话，而 headless 的转录不由本产品 UI 渲染（网关自己的界面消费），故
+// parseToolDenial 认不出它也不产生任何用户可见降级。将来若把 automation 的两处裸
+// 文案（本文件的 makeGuardedCanUseTool、policy/sessionHook.ts 的「连接器未预授权」）
+// 收编到这条外框上，**必须同步 toolDenial.ts 的前缀**——automation 的转录会进会话
+// 查看器，不同步就仍是普通报错态。
 const DENY_BASE =
   "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).";
 const DENY_POLICY_BASE =
@@ -58,6 +69,27 @@ export function userDenyMessage(feedback?: string): string {
 /** 策略/规则拒绝（非人工）。外框用 hRe（"Try a different approach"），理由追加在后。 */
 export function policyDenyMessage(reason?: string): string {
   return reason ? `${DENY_POLICY_BASE}\n\n${reason}` : DENY_POLICY_BASE;
+}
+
+/** 无人应答（确认超时 / 无人值守）。外框**逐字取** claude.exe 的官方「无人工审批
+ *  可用」模板（2026-09-15 实测：`LC_ALL=C grep -a` 命中前缀 "Permission for this
+ *  tool use was denied: it requires interactive approval"）。官方原文末尾是
+ *  `What was requested: ${e}`（填被拒请求内容），这里改为空行接调用方给的理由——
+ *  与 policyDenyMessage 的分隔约定一致。
+ *
+ *  为什么必须换外框而不是复用 nhe/hRe：这是唯一自带"不要重试"指令的官方模板
+ *  （`do not retry it in this session — report the limitation to the user`），
+ *  而这正是本通道存在的理由——复用 hRe 的 "Try a different approach" 会邀请模型
+ *  换个法子继续，重试闭环只是减弱不是消失。
+ *
+ *  理由由**调用方**提供（它自己的业务语言，如"确认超时，操作未执行"），引擎不发明；
+ *  不给理由就裸跑外框。 */
+const DENY_UNANSWERED_BASE =
+  "Permission for this tool use was denied: it requires interactive approval, and permission prompts are not available in this session. The action was NOT performed. Do not claim it succeeded, and do not retry it in this session — report the limitation to the user, or suggest an alternative.";
+
+export function unansweredDenyMessage(reason?: string): string {
+  const r = reason?.trim();
+  return r ? `${DENY_UNANSWERED_BASE}\n\n${r}` : DENY_UNANSWERED_BASE;
 }
 
 /**
@@ -85,7 +117,14 @@ export class PermissionManager {
     context: PermissionRequestContext,
     emit: (e: ChatEvent) => void,
     subagents?: SubagentTracker,
-  ): Promise<{ approved: boolean; updatedInput?: Record<string, unknown>; message?: string }> {
+  ): Promise<{
+    approved: boolean;
+    updatedInput?: Record<string, unknown>;
+    /** 拒绝理由（人工 = 用户原话；无人应答 = 调用方判词）。 */
+    message?: string;
+    /** 拒绝来源（由 resolve 带来的决策）：缺席 = 人工语义。 */
+    deniedBy?: PendingDecision["deniedBy"];
+  }> {
     // Signal already aborted before the callback fired (interrupt/tool race):
     // addEventListener on an already-aborted signal won't fire, so check first.
     if (context.signal?.aborted) {
@@ -102,11 +141,7 @@ export class PermissionManager {
       input,
       ...(fromSubagent ? { fromSubagent } : {}),
     });
-    const decision = await new Promise<{
-      approved: boolean;
-      answers?: Record<string, string>;
-      message?: string;
-    }>(
+    const decision = await new Promise<PendingDecision>(
       (resolve) => {
         this.pending.set(id, {
           resolve,
@@ -126,8 +161,12 @@ export class PermissionManager {
       },
     );
     if (!decision.approved) {
-      // 拒绝理由：仅 deny 路径有意义（用户输入），作为 user feedback 交给 CLI。
-      return { approved: false, ...(decision.message ? { message: decision.message } : {}) };
+      // 拒绝理由与来源一并交回 makeCallback——外框按来源挑（见文件顶部两段注释）。
+      return {
+        approved: false,
+        ...(decision.message ? { message: decision.message } : {}),
+        ...(decision.deniedBy ? { deniedBy: decision.deniedBy } : {}),
+      };
     }
     // AskUserQuestion: SDK requires the answers reshaped into updatedInput
     // ({questions, answers}) — the one divergence from plain tool approval,
@@ -160,13 +199,20 @@ export class PermissionManager {
         subagents,
       );
       if (!result.approved) {
-        // 人工拒绝：官方外框 + 用户附言（见文件顶部的 userDenyMessage 注释）。
-        // decisionClassification 如实上报「人工拒绝」——SDK 宿主弹窗后按文档要求
-        // 设置，CLI 不再保守推断（sdk.d.ts PermissionDecisionClassification）。
+        // 外框按**拒绝来源**挑（见文件顶部两段注释）：无人应答 → 官方「无人工审批
+        // 可用」模板；人工与既有终结路径（interrupt/abort/连带放行）→ YFe（有附言）
+        // / nhe（无附言）。
+        const unanswered = result.deniedBy === "unanswered";
         return {
           behavior: "deny" as const,
-          message: userDenyMessage(result.message),
-          decisionClassification: "user_reject" as const,
+          message: unanswered
+            ? unansweredDenyMessage(result.message)
+            : userDenyMessage(result.message),
+          // decisionClassification 如实上报——它是遥测分类（sdk.d.ts:2218），而类型
+          // 只有 user_* 三值（:2220），没有"非用户"取值：**无人应答时省略**，不冒充
+          // 用户（省略时 CLI 按其保守默认把 deny 记成 reject，事实等价且不是我们
+          // 主动写错）。
+          ...(unanswered ? {} : { decisionClassification: "user_reject" as const }),
         };
       }
       return {
@@ -177,8 +223,12 @@ export class PermissionManager {
   }
 
   /** Settle a pending request (returns undefined when no matching pending id).
+   *  Takes the **normalized decision** (engine/permissionResponse.ts) instead of four
+   *  positional fields — the wire shape is normalized once at the command boundary,
+   *  so this layer never interprets field combinations itself.
    *  The controller uses the returned `toolName` to detect ExitPlanMode /
-   *  EnterPlanMode and apply the follow-up mode change.
+   *  EnterPlanMode and apply the follow-up mode change; a non-empty `mismatch` means
+   *  the decision was rejected fail-closed and must be surfaced to the caller.
    *
    *  无论谁做的决策都广播 `permission_cancelled`：命令通道（本机点击 / 远程 RPC）
    *  和事件通道是两条独立的管道，而 UI 状态只认事件通道。本机点击时前端在 invoke
@@ -186,20 +236,23 @@ export class PermissionManager {
    *  到达这里，桌面前端没有任何本地对账动作——不广播，桌面弹窗就永久挂着（用户
    *  再点一次还会 resolve 成 undefined，静默无反应）。前端把该事件读成「从队列
    *  移除」，所以对本机决策重放一次是幂等的 no-op。 */
-  resolve(
-    id: string,
-    approved: boolean,
-    answers?: Record<string, string>,
-    /** 拒绝理由：透传给 SDK 的 deny message（仅 approved=false 时生效）。 */
-    message?: string,
-  ): ResolveOutcome | undefined {
+  resolve(id: string, decision: PermissionResponseDecision): ResolveOutcome | undefined {
     const entry = this.pending.get(id);
     if (!entry) return undefined;
+    // 类别校验在结算**之前**：不匹配要改判为拒绝（fail-closed，工具不执行），
+    // 而不是放行一个语义不成立的操作。同 tick 查表+结算，无 await 插入。
+    const mismatch = describeDecisionMismatch(decision, entry.toolName);
     this.pending.delete(id);
     // 先撤 UI 再放行工具：事件同步发出，工具续跑是微任务，弹窗不会盖在已执行的
     // 工具结果上。pending 已删，后续 abort 的 delete 返回 false，不会重复广播。
     entry.emitCancelled();
-    entry.resolve({ approved, answers, message });
+    if (mismatch) {
+      // 非法组合不静默吞：按拒绝结算（判词进 deny message，来源记 unanswered——
+      // 这不是用户做的决定），判词同时回给调用方去发非致命 error 帧。
+      entry.resolve({ approved: false, deniedBy: "unanswered", message: mismatch });
+      return { toolName: entry.toolName, mismatch };
+    }
+    entry.resolve(toPendingDecision(decision));
     return { toolName: entry.toolName };
   }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { PermissionManager, userDenyMessage } from "./permissions.js";
+import { PermissionManager, unansweredDenyMessage, userDenyMessage } from "./permissions.js";
 import { SubagentTracker } from "./subagents.js";
 import type { ChatEvent } from "./types.js";
 
@@ -13,7 +13,7 @@ describe("PermissionManager — AskUserQuestion answers 重组", () => {
     const resultPromise = callback("AskUserQuestion", input, {});
 
     const id = (events[0] as any).id;
-    mgr.resolve(id, true, { "用什么颜色？": "蓝色" });
+    mgr.resolve(id, { kind: "answer", answers: { "用什么颜色？": "蓝色" } });
 
     const result = await resultPromise;
     expect(result).toEqual({
@@ -30,20 +30,22 @@ describe("PermissionManager — AskUserQuestion answers 重组", () => {
     const input = { command: "ls" };
     const resultPromise = callback("Bash", input, {});
     const id = (events[0] as any).id;
-    mgr.resolve(id, true);
+    mgr.resolve(id, { kind: "approve" });
 
     const result = await resultPromise;
     expect(result).toEqual({ behavior: "allow", updatedInput: input });
   });
 
-  it("denying AskUserQuestion returns the framed nhe-style deny (no feedback), ignoring any stray answers", async () => {
+  it("denying AskUserQuestion returns the framed nhe-style deny (no feedback)", async () => {
     const events: ChatEvent[] = [];
     const mgr = new PermissionManager();
     const callback = mgr.makeCallback((e) => events.push(e));
 
     const resultPromise = callback("AskUserQuestion", { questions: [] }, {});
     const id = (events[0] as any).id;
-    mgr.resolve(id, false);
+    // 问答的「跳过/拒答」= deny（skip 与 deny 是同一段引擎代码，线形状刻意不设
+    // skip——那是调用方 UI 的按钮文案，见 engine/permissionResponse.ts 头注）。
+    mgr.resolve(id, { kind: "deny" });
 
     const result = await resultPromise;
     expect(result).toEqual({
@@ -60,7 +62,7 @@ describe("PermissionManager — AskUserQuestion answers 重组", () => {
 
     const resultPromise = callback("Bash", { command: "rm -rf /tmp/cache" }, {});
     const id = (events[0] as any).id;
-    mgr.resolve(id, false, undefined, "别删目录，改成只清空里层的 .tmp 文件");
+    mgr.resolve(id, { kind: "deny", message: "别删目录，改成只清空里层的 .tmp 文件" });
 
     const result = await resultPromise;
     expect(result).toEqual({
@@ -80,7 +82,7 @@ describe("PermissionManager — AskUserQuestion answers 重组", () => {
 
     const resultPromise = callback("Bash", { command: "ls" }, {});
     const id = (events[0] as any).id;
-    mgr.resolve(id, false);
+    mgr.resolve(id, { kind: "deny" });
 
     const result = await resultPromise;
     expect(result).toEqual({
@@ -90,7 +92,7 @@ describe("PermissionManager — AskUserQuestion answers 重组", () => {
     });
   });
 
-  it("approving a non-AskUserQuestion tool ignores an answers payload (defensive: no accidental reshape)", async () => {
+  it("扁平形态误传 answers 给非 AskUserQuestion 工具时仍放行原 input（兼容臂保持旧行为）", async () => {
     const events: ChatEvent[] = [];
     const mgr = new PermissionManager();
     const callback = mgr.makeCallback((e) => events.push(e));
@@ -98,8 +100,9 @@ describe("PermissionManager — AskUserQuestion answers 重组", () => {
     const input = { file_path: "x.ts" };
     const resultPromise = callback("Write", input, {});
     const id = (events[0] as any).id;
-    // 即便前端误传了 answers，非 AskUserQuestion 工具也不该被重塑
-    mgr.resolve(id, true, { "some question": "some answer" });
+    // 扁平形态（桌面/远程/ohos）不做类别校验——这是 2026-09 之前的既有行为，改动
+    // 一个字节都不动；标签形态才校验（answer × 非问答会被拒，见用例「类别不匹配」）。
+    mgr.resolve(id, { kind: "compat_flat", approved: true, answers: { "some question": "some answer" } });
 
     const result = await resultPromise;
     expect(result).toEqual({ behavior: "allow", updatedInput: input });
@@ -181,7 +184,7 @@ describe("PermissionManager — resolve / cancelAll（无 always / appliedMode /
   it("普通批准：返回工具名，无 appliedMode（always 路径已移除）", async () => {
     const { mgr, callback, requestIds } = setup();
     const p = callback("Bash", { command: "ls" }, {});
-    const outcome = mgr.resolve(requestIds()[0], true);
+    const outcome = mgr.resolve(requestIds()[0], { kind: "approve" });
     expect(outcome).toEqual({ toolName: "Bash" });
     expect((outcome as any).appliedMode).toBeUndefined();
     expect(((await p) as any).behavior).toBe("allow");
@@ -191,7 +194,7 @@ describe("PermissionManager — resolve / cancelAll（无 always / appliedMode /
 
   it("未知 id 的 resolve 返回 undefined 且不广播（重复应答 / 迟到达）", () => {
     const { mgr, cancelledIds } = setup();
-    expect(mgr.resolve("nope", true)).toBeUndefined();
+    expect(mgr.resolve("nope", { kind: "approve" })).toBeUndefined();
     expect(cancelledIds()).toEqual([]);
   });
 
@@ -203,12 +206,12 @@ describe("PermissionManager — resolve / cancelAll（无 always / appliedMode /
 
     // 远程客户端（手机 / PWA）只发 permission_response 命令，桌面前端不做任何本地
     // 对账——没有这条广播，桌面弹窗永久残留，再点一次还 resolve 成 undefined。
-    mgr.resolve(id1, true);
+    mgr.resolve(id1, { kind: "approve" });
     expect(cancelledIds()).toEqual([id1]);
     expect(((await p1) as any).behavior).toBe("allow");
 
     // 拒绝同样广播：UI 只需知道「这条请求终结了」，不区分结果
-    mgr.resolve(id2, false, undefined, "不需要");
+    mgr.resolve(id2, { kind: "deny", message: "不需要" });
     expect(cancelledIds().sort()).toEqual([id1, id2].sort());
     expect(((await p2) as any).behavior).toBe("deny");
   });
@@ -219,7 +222,7 @@ describe("PermissionManager — resolve / cancelAll（无 always / appliedMode /
     let secondSettled = false;
     void callback("Read", { file_path: "b.java" }, {}).then(() => { secondSettled = true; });
 
-    mgr.resolve(requestIds()[0], false);
+    mgr.resolve(requestIds()[0], { kind: "deny" });
     expect(((await p1) as any).behavior).toBe("deny");
     await Promise.resolve();
     expect(secondSettled).toBe(false);
@@ -267,7 +270,7 @@ describe("PermissionManager — request() 直接调用（policy hook 的 ask 路
     const input = { questions: [{ question: "q", options: [{ label: "a" }] }] };
     const pending = mgr.request("AskUserQuestion", input, {}, (e) => events.push(e));
     const id = (events[0] as any).id;
-    mgr.resolve(id, true, { q: "a" });
+    mgr.resolve(id, { kind: "answer", answers: { q: "a" } });
     const result = await pending;
     expect(result).toEqual({ approved: true, updatedInput: { questions: input.questions, answers: { q: "a" } } });
   });
@@ -276,9 +279,78 @@ describe("PermissionManager — request() 直接调用（policy hook 的 ask 路
     const events: ChatEvent[] = [];
     const mgr = new PermissionManager();
     const pending = mgr.request("Bash", { command: "ls" }, {}, (e) => events.push(e));
-    mgr.resolve((events[0] as any).id, false);
+    mgr.resolve((events[0] as any).id, { kind: "deny" });
     const result = await pending;
     expect(result).toEqual({ approved: false });
     expect((result as any).updatedInput).toBeUndefined();
+  });
+});
+
+// 拒绝来源决定模型看到的外框：人工（YFe/nhe，说"用户说了什么"）vs 无人应答
+// （官方「无人工审批可用」模板，自带"不要重试"）。来源由线形状的变体带进来。
+describe("PermissionManager — 拒绝来源决定外框（无人应答 vs 人工）", () => {
+  it("unanswered 走官方非人工外框，且不冒充用户（省略 decisionClassification）", async () => {
+    const { mgr, callback, requestIds } = setup();
+    const p = callback("Bash", { command: "ls" }, {});
+    mgr.resolve(requestIds()[0], { kind: "unanswered", reason: "确认超时，操作未执行" });
+    const result: any = await p;
+    expect(result.behavior).toBe("deny");
+    expect(result.message).toBe(unansweredDenyMessage("确认超时，操作未执行"));
+    expect(result.message).toContain("requires interactive approval");
+    expect(result.message).toContain("do not retry it in this session");
+    expect(result.message).toContain("确认超时，操作未执行");
+    // SDK 类型只有 user_* 三值、没有"非用户"取值 → 省略，而不是填 user_reject 撒谎
+    expect(result.decisionClassification).toBeUndefined();
+  });
+
+  it("unanswered 不给理由就裸跑外框（理由归调用方，引擎不编造）", async () => {
+    const { mgr, callback, requestIds } = setup();
+    const p = callback("Bash", { command: "ls" }, {});
+    mgr.resolve(requestIds()[0], { kind: "unanswered" });
+    expect((await p) as any).toMatchObject({
+      behavior: "deny",
+      message: unansweredDenyMessage(),
+    });
+  });
+
+  it("人工拒绝仍走 YFe 外框并带 decisionClassification（两个分支不串味）", async () => {
+    const { mgr, callback, requestIds } = setup();
+    const p = callback("Bash", { command: "ls" }, {});
+    mgr.resolve(requestIds()[0], { kind: "deny", message: "别删" });
+    const result: any = await p;
+    expect(result.message).toBe(userDenyMessage("别删"));
+    expect(result.decisionClassification).toBe("user_reject");
+  });
+});
+
+describe("PermissionManager — 类别不匹配按拒绝 fail-closed 收尾（不静默吞、不悬死）", () => {
+  it("answer 给非问答工具：工具被拒而非放行，返回判词，外框用非人工模板", async () => {
+    const { mgr, callback, requestIds, cancelledIds } = setup();
+    const p = callback("Bash", { command: "ls" }, {});
+    const id = requestIds()[0];
+    const outcome = mgr.resolve(id, { kind: "answer", answers: { q: "a" } });
+    expect(outcome?.mismatch).toContain("AskUserQuestion");
+    const result: any = await p;
+    expect(result.behavior).toBe("deny");
+    expect(result.message).toContain("requires interactive approval");
+    expect(result.decisionClassification).toBeUndefined();
+    // 红线：任何终结挂起请求的路径都要广播 permission_cancelled
+    expect(cancelledIds()).toEqual([id]);
+  });
+
+  it("approve 给 AskUserQuestion：同样按拒绝收尾并返回判词", async () => {
+    const { mgr, callback, requestIds } = setup();
+    const p = callback("AskUserQuestion", { questions: [] }, {});
+    const outcome = mgr.resolve(requestIds()[0], { kind: "approve" });
+    expect(outcome?.mismatch).toContain("answer");
+    expect(((await p) as any).behavior).toBe("deny");
+  });
+
+  it("匹配的决策不带 mismatch（正常路径不受影响）", async () => {
+    const { mgr, callback, requestIds } = setup();
+    const p = callback("Bash", { command: "ls" }, {});
+    const outcome = mgr.resolve(requestIds()[0], { kind: "approve" });
+    expect(outcome?.mismatch).toBeUndefined();
+    expect(((await p) as any).behavior).toBe("allow");
   });
 });

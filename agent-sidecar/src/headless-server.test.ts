@@ -79,14 +79,44 @@ describe("validateInvokeBody", () => {
     expect(ok.command).toMatchObject({ mcp_headers: { "*": { "X-Tenant": "acme" } } });
   });
 
-  it("permission_response：id 缺失 / approved 非 boolean 拒绝；合法通过", () => {
+  it("permission_response：两形态二选一（互斥），标签四变体逐臂通过", () => {
+    const base = { cmd: "permission_response", session_id: "s1", id: "p1" };
+    // ---- 扁平形态（桌面/远程/ohos 的历史形状）：id 必填、approved 必填且 boolean ----
     expect(validateInvokeBody({ cmd: "permission_response", session_id: "s1", approved: true })).toEqual(
       expect.objectContaining({ ok: false }),
     );
-    expect(validateInvokeBody({ cmd: "permission_response", session_id: "s1", id: "p1", approved: "yes" })).toEqual(
-      expect.objectContaining({ ok: false }),
+    expect(validateInvokeBody({ ...base, approved: "yes" })).toEqual(expect.objectContaining({ ok: false }));
+    expect(validateInvokeBody({ ...base, approved: true }).ok).toBe(true);
+    expect(validateInvokeBody({ ...base, approved: false, message: "不需要" }).ok).toBe(true);
+
+    // ---- 标签形态（官方推荐，网关用）：四变体各带自己的必传项 ----
+    expect(validateInvokeBody({ ...base, response: { kind: "approve" } }).ok).toBe(true);
+    expect(validateInvokeBody({ ...base, response: { kind: "approve", nextMode: "auto" } }).ok).toBe(true);
+    expect(validateInvokeBody({ ...base, response: { kind: "answer", answers: { q: "a" } } }).ok).toBe(true);
+    expect(validateInvokeBody({ ...base, response: { kind: "deny" } }).ok).toBe(true);
+    expect(validateInvokeBody({ ...base, response: { kind: "deny", message: "别删" } }).ok).toBe(true);
+    expect(validateInvokeBody({ ...base, response: { kind: "unanswered", reason: "确认超时" } }).ok).toBe(true);
+
+    // ---- 互斥：恰好一个在场（皆无/皆有都不可判）----
+    expect(validateInvokeBody({ ...base })).toEqual(
+      expect.objectContaining({ ok: false, error: expect.stringContaining("response: custom") }),
     );
-    expect(validateInvokeBody({ cmd: "permission_response", session_id: "s1", id: "p1", approved: true }).ok).toBe(true);
+    expect(validateInvokeBody({ ...base, approved: true, response: { kind: "deny" } })).toEqual(
+      expect.objectContaining({ ok: false, error: expect.stringContaining("response: custom") }),
+    );
+    // 标签形态夹带扁平字段 = 意图冲突（path 指向扁平面那格）
+    expect(validateInvokeBody({ ...base, response: { kind: "approve" }, nextMode: "auto" })).toEqual(
+      expect.objectContaining({ ok: false, error: expect.stringContaining("approved: custom") }),
+    );
+
+    // ---- 标签形态内部：未知 kind / 缺必传 answers 都拒 ----
+    expect(validateInvokeBody({ ...base, response: { kind: "bogus" } }).ok).toBe(false);
+    expect(validateInvokeBody({ ...base, response: { kind: "answer" } }).ok).toBe(false);
+
+    // ---- looseObject 两层都保留未知字段（前向兼容对账规则不破）----
+    const forward = validateInvokeBody({ ...base, response: { kind: "deny", 未来变体字段: 1 }, 未来命令字段: 2 });
+    expect(forward.ok).toBe(true);
+    expect((forward as any).command.response).toMatchObject({ 未来变体字段: 1 });
   });
 
   it("set_permission_mode / set_model / set_effort 各自字段缺失拒绝；合法路径通过", () => {
@@ -434,12 +464,14 @@ describe("startHeadlessServer security baseline", () => {
 });
 // ---- 正式版：zod schema（headless-schema.ts）+ 白名单对账 + 协议版本化 ----
 
-describe("validateInvokeBody — 正式版 schema（10 命令面）", () => {
+describe("validateInvokeBody — 正式版 schema（11 命令面）", () => {
   const base = { session_id: "s1" };
 
-  it("白名单对账：10 命令最小合法体全过；codegraph_result 永关（与 schema union 一致性钉子）", () => {
+  it("白名单对账：11 命令最小合法体全过；codegraph_result 永关（与 schema union 一致性钉子）", () => {
     const minimal: Record<string, object> = {
       send: { prompt: "p" },
+      btw_ask: { question: "q" },
+      // 扁平形态做最小体（标签形态的逐臂覆盖见上面 permission_response 用例）
       permission_response: { id: "p1", approved: true },
       interrupt: {},
       set_permission_mode: { mode: "auto" },
@@ -454,7 +486,7 @@ describe("validateInvokeBody — 正式版 schema（10 命令面）", () => {
       const v = validateInvokeBody({ cmd, ...base, ...fields });
       expect(v.ok, `command ${cmd} should parse`).toBe(true);
     }
-    expect(Object.keys(minimal)).toHaveLength(10);
+    expect(Object.keys(minimal)).toHaveLength(11);
     // 桌面 Rust 回包通道永关：headless 无回包方，schema union 里没有它
     expect(validateInvokeBody({ cmd: "codegraph_result", request_id: "r1", ok: true }).ok).toBe(false);
   });
@@ -479,6 +511,22 @@ describe("validateInvokeBody — 正式版 schema（10 命令面）", () => {
   it("send 深校验：images/automation/permission_policy 形状臂", () => {
     expect(validateInvokeBody({ cmd: "send", ...base, prompt: "p", images: [{ data: "aa", mediaType: 42 }] }).ok).toBe(false);
     expect(validateInvokeBody({ cmd: "send", ...base, prompt: "p", images: [{ data: "aa", mediaType: "image/png" }] }).ok).toBe(true);
+
+    // images 的两形态互斥：内嵌（data+mediaType）或引擎本地路径（只 path）二选一。
+    // 路径形式绕开 1MB body 上限，媒体类型由引擎嗅探——见 engine/imageAttachments.ts。
+    expect(validateInvokeBody({ cmd: "send", ...base, prompt: "p", images: [{ path: "C:/photos/a.jpg" }] }).ok).toBe(true);
+    expect(validateInvokeBody({ cmd: "send", ...base, prompt: "p", images: [{ path: "" }] }).ok).toBe(false);
+    // 皆无 / 皆有 → 不可判（path 指向那条互斥规则）
+    expect(validateInvokeBody({ cmd: "send", ...base, prompt: "p", images: [{}] })).toEqual(
+      expect.objectContaining({ ok: false, error: expect.stringContaining("images.0.path: custom") }),
+    );
+    expect(
+      validateInvokeBody({ cmd: "send", ...base, prompt: "p", images: [{ data: "aa", path: "C:/a.jpg" }] }),
+    ).toEqual(expect.objectContaining({ ok: false, error: expect.stringContaining("images.0.path: custom") }));
+    // 内嵌形态的 mediaType 仍必填（既有契约不放松）
+    expect(validateInvokeBody({ cmd: "send", ...base, prompt: "p", images: [{ data: "aa" }] })).toEqual(
+      expect.objectContaining({ ok: false, error: expect.stringContaining("images.0.mediaType: custom") }),
+    );
     expect(validateInvokeBody({
       cmd: "send", ...base, prompt: "p",
       automation: { task_id: "t", tools: ["*"], mcp_allowlist: [] }, // 缺 run_id

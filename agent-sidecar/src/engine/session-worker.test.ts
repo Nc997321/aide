@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterAll } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -687,7 +687,7 @@ describe("SessionWorker — Aide 权限策略 PreToolUse hook", () => {
     await flushPromises();
     const req: any = events.find((e: any) => e.type === "permission_request");
     expect(req).toBeDefined();
-    worker.permMgr.resolve(req.id, true);
+    worker.permMgr.resolve(req.id, { kind: "approve" });
     const out: any = await pending;
     expect(out.behavior).toBe("allow");
   });
@@ -698,7 +698,7 @@ describe("SessionWorker — Aide 权限策略 PreToolUse hook", () => {
     const withReason = cb("Bash", { command: "ls" }, {} as any);
     await flushPromises();
     const req1: any = events.find((e: any) => e.type === "permission_request");
-    worker.permMgr.resolve(req1.id, false, undefined, "别删目录");
+    worker.permMgr.resolve(req1.id, { kind: "deny", message: "别删目录" });
     const deny: any = await withReason;
     expect(deny.behavior).toBe("deny");
     expect(deny.decisionClassification).toBe("user_reject");
@@ -709,7 +709,7 @@ describe("SessionWorker — Aide 权限策略 PreToolUse hook", () => {
     const noReason = cb("Bash", { command: "ls" }, {} as any);
     await flushPromises();
     const reqs = events.filter((e: any) => e.type === "permission_request");
-    worker.permMgr.resolve(reqs[reqs.length - 1].id, false);
+    worker.permMgr.resolve(reqs[reqs.length - 1].id, { kind: "deny" });
     expect(await noReason).toEqual({
       behavior: "deny",
       decisionClassification: "user_reject",
@@ -741,7 +741,7 @@ describe("SessionWorker — Aide 权限策略 PreToolUse hook", () => {
     const pending = cb("AskUserQuestion", input, {} as any);
     await flushPromises();
     const req = events.find((e: any) => e.type === "permission_request");
-    worker.permMgr.resolve(req.id, true, { q: "a" });
+    worker.permMgr.resolve(req.id, { kind: "answer", answers: { q: "a" } });
     const out: any = await pending;
     expect(out.behavior).toBe("allow");
     expect(out.updatedInput).toEqual({ questions: input.questions, answers: { q: "a" } });
@@ -784,6 +784,109 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
       decisionClassification: "user_reject",
       message: userDenyMessage("别删目录，改成只清空里层的 .tmp 文件"),
     });
+  });
+
+  // ---- 标签形态（官方推荐；headless 网关用）走完整命令通道 ----
+
+  it("标签形态 unanswered：走官方非人工外框、不冒充用户，且不发 error 帧", async () => {
+    const { worker, events } = makeWorker();
+    const cb = worker._testCanUseTool();
+    const pending = cb("Bash", { command: "ls" }, {} as any);
+    await flushPromises();
+    const req = events.find((e: any) => e.type === "permission_request");
+    worker.handleCommand({
+      cmd: "permission_response",
+      session_id: "test-sid",
+      id: req.id,
+      response: { kind: "unanswered", reason: "确认超时，操作未执行" },
+    } as any);
+    const out: any = await pending;
+    expect(out.behavior).toBe("deny");
+    expect(out.message).toContain("requires interactive approval");
+    expect(out.message).toContain("确认超时，操作未执行");
+    // 不冒充用户：SDK 类型只有 user_* 三值，省略而不是填 user_reject
+    expect(out.decisionClassification).toBeUndefined();
+    expect(events.filter((e: any) => e.type === "error")).toEqual([]);
+  });
+
+  it("标签形态 answer：作答重塑进 updatedInput（完整通道）", async () => {
+    const { worker, events } = makeWorker();
+    const cb = worker._testCanUseTool();
+    const input = { questions: [{ question: "q", options: [{ label: "a" }] }] };
+    const pending = cb("AskUserQuestion", input, {} as any);
+    await flushPromises();
+    const req = events.find((e: any) => e.type === "permission_request");
+    worker.handleCommand({
+      cmd: "permission_response",
+      session_id: "test-sid",
+      id: req.id,
+      response: { kind: "answer", answers: { q: "a" } },
+    } as any);
+    const out: any = await pending;
+    expect(out.behavior).toBe("allow");
+    expect(out.updatedInput).toEqual({ questions: input.questions, answers: { q: "a" } });
+  });
+
+  it("标签形态 approve + sessionRules：规则入库（标签与扁平走同一条附随路径）", async () => {
+    const { worker, events } = makeWorker();
+    worker._testApplyPermissionPolicy(rule("ask", "Edit"));
+    const cb = worker._testCanUseTool();
+    const first = cb("Edit", { file_path: "/tmp/x.ts" }, {} as any);
+    await flushPromises();
+    const req = events.find((e: any) => e.type === "permission_request");
+    worker.handleCommand({
+      cmd: "permission_response",
+      session_id: "test-sid",
+      id: req.id,
+      response: {
+        kind: "approve",
+        sessionRules: [
+          { effect: "allow" as const, tool: "Edit", matcher: { kind: "path" as const, field: "file_path" as const, file: "/tmp/x.ts" } },
+        ],
+      },
+    } as any);
+    expect(((await first) as any).behavior).toBe("allow");
+    // 第二次同文件：规则已入库 → hook 直接放行，不再弹权限请求
+    const hook = worker._testPolicyHook("/tmp");
+    const out: any = await hook({
+      hook_event_name: "PreToolUse",
+      tool_name: "Edit",
+      tool_input: { file_path: "/tmp/x.ts" },
+    } as any);
+    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
+  });
+
+  it("类别不匹配（answer × Bash）：工具被拒 + 非致命 error 帧让对端看见（N1）", async () => {
+    const { worker, events } = makeWorker();
+    const cb = worker._testCanUseTool();
+    const pending = cb("Bash", { command: "ls" }, {} as any);
+    await flushPromises();
+    const req = events.find((e: any) => e.type === "permission_request");
+    worker.handleCommand({
+      cmd: "permission_response",
+      session_id: "test-sid",
+      id: req.id,
+      response: { kind: "answer", answers: { q: "a" } },
+    } as any);
+    const out: any = await pending;
+    // fail-closed：语义不成立的应答绝不放行工具
+    expect(out.behavior).toBe("deny");
+    expect(out.message).toContain("requires interactive approval");
+    const err = events.find((e: any) => e.type === "error") as any;
+    expect(err).toBeDefined();
+    expect(err.fatal).toBe(false); // 非致命：会话仍可用
+    expect(err.message).toContain("permission_response");
+  });
+
+  it("未知 / 迟到 id 的标签应答保持静默（幂等，不当错误报）", async () => {
+    const { worker, events } = makeWorker();
+    worker.handleCommand({
+      cmd: "permission_response",
+      session_id: "test-sid",
+      id: "never",
+      response: { kind: "deny" },
+    } as any);
+    expect(events.filter((e: any) => e.type === "error")).toEqual([]);
   });
 
   it("permission_response no longer carries always (command shape, no updatedPermissions)", async () => {
@@ -1329,5 +1432,68 @@ describe("SessionWorker — btw 侧问（官方 side_question 通道）", () => 
     expect(r.ok).toBe(false);
     const ans = events.filter((e) => e.type === "btw_answer") as any[];
     expect(ans[0].error).toContain("shutting down");
+  });
+});
+
+// 图片附件的线形状归一：接线与**失败可见**。
+//
+// 归一点在 handleSend 入口，下游（buildUserMessage / 插队队列 / display）只认识
+// 内嵌形式——这件事由类型系统钉死（把 wire 形状直接传给 pushUserMessage 编不过）。
+// 这里钉的是运行时那一半：坏路径必须报成非致命 error 帧（N1：失败要让对端看见），
+// 而不是静默丢消息。守卫本身的用例见 imageAttachments.test.ts。
+describe("SessionWorker — send 的图片附件归一（接线与失败可见）", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "worker-img-"));
+  const pngPath = path.join(dir, "photo.png");
+  writeFileSync(pngPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]));
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("路径读不到：报非致命 error 帧、该条 send 拒发、不推进队列", async () => {
+    const { worker, events } = makeWorker();
+    worker.handleCommand({
+      cmd: "send",
+      session_id: "test-sid",
+      prompt: "看看这张图",
+      cwd: dir,
+      images: [{ path: path.join(dir, "missing.jpg") }],
+    } as any);
+    // 文件读走 libuv 线程池，不是 microtask——固定 flush 等不到（既有纪律：一律 vi.waitFor）
+    await vi.waitFor(() => {
+      expect(events.filter((e) => e.type === "error")).toHaveLength(1);
+    });
+    const err = events.find((e: any) => e.type === "error") as any;
+    expect(err.fatal).toBe(false);
+    expect(err.message).toContain("图片读取失败");
+    expect(worker._testQueueLength()).toBe(0);
+  });
+
+  it("路径读得到：读出并归一后照常入队，无 error 帧", async () => {
+    let releaseQuery!: () => void;
+    const gate = new Promise<void>((r) => {
+      releaseQuery = r;
+    });
+    const events: any[] = [];
+    const worker = new SessionWorker("sid-img", (e) => events.push(e), {
+      queryFn: (() =>
+        (async function* () {
+          await gate;
+          throw new Error("query cancelled");
+        })()) as any,
+    });
+    worker.handleCommand({
+      cmd: "send",
+      session_id: "sid-img",
+      prompt: "看看这张图",
+      cwd: dir,
+      images: [{ path: pngPath }],
+    } as any);
+    // 入队即证明「读文件 + 嗅探 + 归一」全过（否则会走上面那条 error 帧分支）
+    await vi.waitFor(() => {
+      expect(worker._testQueueLength()).toBe(1);
+    });
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    releaseQuery();
   });
 });

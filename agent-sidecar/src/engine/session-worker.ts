@@ -8,6 +8,12 @@ import type {
 } from "./types.js";
 import { MessageQueue } from "./generator.js";
 import { PermissionManager, makeGuardedCanUseTool } from "./permissions.js";
+import { approvedExtras, classifyPermissionResponse } from "./permissionResponse.js";
+import {
+  hasPathAttachment,
+  normalizeInlineImages,
+  resolveImageAttachments,
+} from "./imageAttachments.js";
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
 import { ToolLifecycleTracker } from "./toolLifecycle.js";
@@ -474,20 +480,41 @@ export class SessionWorker {
       this.enqueueSend(cmd);
 
     } else if (cmd.cmd === "permission_response") {
-      const outcome = this.permMgr.resolve(cmd.id, cmd.approved, cmd.answers, cmd.message);
-      // 会话级规则随放行原子入库（「允许」文件工具 → 同文件本会话自动放行）。
-      // 拒绝/取消不带 sessionRules，天然只走允许路径。
-      if (cmd.approved && cmd.sessionRules?.length) {
-        this.addSessionRules(cmd.sessionRules);
+      // 形状归一（标签形态 / 兼容扁平形态 → 规范决策）是本分支**唯一**的读法：
+      // 下面只碰 decision，不再各自解释字段组合（词汇与规则见 engine/permissionResponse.ts）。
+      const verdict = classifyPermissionResponse(cmd);
+      if (!verdict.ok) {
+        // 不可判的形状（只可能来自 stdin 面——headless 有 schema 挡在 400）。
+        // 不静默吞（N1），并按拒绝 fail-closed 收尾：绝不把挂起请求悬死。
+        this.emit({ type: "error", message: `permission_response ${verdict.reason}`, fatal: false });
+        this.permMgr.resolve(cmd.id, { kind: "unanswered", reason: verdict.reason });
+        return;
       }
-      if (cmd.approved) {
-        // 放行后的模式迁移决议（ExitPlanMode / EnterPlanMode / nextMode 三分支，
-        // 原注释随迁）收拢在 permissionModes.ts 的 resolveApprovedTransition（拆分批 3）。
-        const transition = resolveApprovedTransition(outcome?.toolName, cmd.nextMode);
-        if (transition) {
-          this.applyPermissionMode(transition.mode);
-          if (transition.approveEdits) this.permMgr.approveMatching(EDIT_TOOL_NAMES);
-        }
+      const outcome = this.permMgr.resolve(cmd.id, verdict.decision);
+      if (outcome?.mismatch) {
+        // 类别不匹配（如给 Bash 发 answer）：resolve 内已按拒绝 fail-closed 结算，
+        // 这里只负责让对端看见（N1）并早退——**不放行附随**，避免出现"模式切了但
+        // 工具被拒"的不一致。
+        this.emit({ type: "error", message: `permission_response ${outcome.mismatch}`, fatal: false });
+        return;
+      }
+      // 放行附随（会话级规则 + 模式迁移）：读法收拢在 approvedExtras——非放行臂返回
+      // null，天然守住「拒绝/取消不带 sessionRules，只走允许路径」。
+      const extras = approvedExtras(verdict.decision);
+      if (extras?.sessionRules?.length) {
+        // 规则入库**不依赖 resolve 是否命中挂起项**——历史行为如此（"文件族展开去重"
+        // 的既有用例就用未知 id 驱动），入库与会话状态无关；命中与否只影响下面的
+        // 模式迁移（它需要 outcome.toolName 才能判 ExitPlanMode/EnterPlanMode）。
+        this.addSessionRules(extras.sessionRules);
+      }
+      // 未知/迟到 id：静默——幂等重复应答是正常时序，不是错误（既有语义）。
+      if (!outcome) return;
+      // 放行后的模式迁移决议（ExitPlanMode / EnterPlanMode / nextMode 三分支，
+      // 原注释随迁）收拢在 permissionModes.ts 的 resolveApprovedTransition（拆分批 3）。
+      const transition = resolveApprovedTransition(outcome.toolName, extras?.nextMode);
+      if (transition) {
+        this.applyPermissionMode(transition.mode);
+        if (transition.approveEdits) this.permMgr.approveMatching(EDIT_TOOL_NAMES);
       }
 
     } else if (cmd.cmd === "update_permission_policy") {
@@ -553,6 +580,15 @@ export class SessionWorker {
 
     if (this.stopped) return;
 
+    // 图片线形状归一：内嵌 base64 / 引擎本地路径 → 内嵌（守卫见 imageAttachments.ts）。
+    // 守门在入口——下游（buildUserMessage / 插队队列 / display）只认识内嵌形式。
+    // **无 path 时走同步归一**：下面的同步前缀里发生着会话标题、权限模式等副作用，
+    // 无条件 await 会把它们整体推迟一个 microtask（实测打挂 5 个既有用例）。
+    // 抛错由 enqueueSend 报成非致命 error 帧：该条 send 整体拒发，不静默丢消息。
+    const images = hasPathAttachment(cmd.images)
+      ? await resolveImageAttachments(cmd.images)
+      : normalizeInlineImages(cmd.images);
+
     // session_id 在命令里是路由键（SessionManager 用它找 worker）。
     // this.resumeSource 的含义是 fork 源——只在 btw / provider_switched 时
     // 才从命令里读取；普通 send 不设（否则 SDK 会尝试 resume 不存在的会话）。
@@ -598,7 +634,7 @@ export class SessionWorker {
       // （chat send/btw + automation build/distill）都恒发该 key，缺 key =
       // 新路径忘了下发 → fail-closed 不挂 MCP，而不是静默开启。
       this.startLoop(cmd.cwd ?? this.cwd, cmd.trusted !== false, cmd.codegraph_enabled === true);
-      this.pushUserMessage(cmd.prompt, cmd.images, cmd.display);
+      this.pushUserMessage(cmd.prompt, images, cmd.display);
       this.turnActive = true;
       return;
     }
@@ -607,7 +643,7 @@ export class SessionWorker {
     if (cmd.jump_queue && this.currentQuery && this.turnActive) {
       this.jumpQueueCtl.request({
         prompt: cmd.prompt,
-        images: cmd.images,
+        images,
         display: cmd.display,
       });
       if (this.toolLifecycle.isIdle()) {
@@ -625,7 +661,7 @@ export class SessionWorker {
     // 发送时刻的快照——handleSend 可能被图片 probe 推迟（enqueueSend 串行化），
     // 等待期间用户切的新模式会被这里的旧值回退。模式随消息携带只保留给
     // 上面「首条消息」分支（进程未起时 set_permission_mode 静默失败的兜底）。
-    this.pushUserMessage(cmd.prompt, cmd.images, cmd.display);
+    this.pushUserMessage(cmd.prompt, images, cmd.display);
     this.turnActive = true;
   }
 

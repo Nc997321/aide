@@ -10,9 +10,38 @@
 //! 线程契约：实现方负责把对原生视图的调用编组到 webview 所属线程（经 `Webview::with_webview`）。
 //! 调用方（命令层）**不可**对这些调用 `spawn_blocking`（会跑到错误线程，plan §10#3）。
 
+use std::sync::Arc;
+
 use url::Url;
 
-use crate::browser::port::types::{Bounds, BrowserViewId};
+use crate::browser::port::types::{Bounds, BrowserViewId, PageLoadSignal};
+
+/// 页面加载观察者：引擎每观测到一次加载信号回调一次。
+///
+/// **线程契约（已核实，别踩）**：回调在 webview 所属线程执行（Windows = 主线程——wry 用 `Rc`
+/// 持有该 handler，非 `Send`）。因此回调里**只准做纯状态变更**：
+/// - 调 `eval` / `set_position` / `set_size` / `add_child` → 内部 `run_on_main_thread` + 阻塞
+///   `rx.recv()`，主线程等自己 = **死锁**；
+/// - 调 `AppHandle::emit` → 事件投递终点是 `Webview::eval`，同一把锁 = **同样死锁**（广播必须
+///   交给 worker，见 `facade::apply_page_load`）。
+#[derive(Clone)]
+pub struct PageLoadObserver(Arc<dyn Fn(&Url, PageLoadSignal) + Send + Sync + 'static>);
+
+impl PageLoadObserver {
+    pub fn new(f: impl Fn(&Url, PageLoadSignal) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    pub fn call(&self, url: &Url, signal: PageLoadSignal) {
+        (self.0)(url, signal)
+    }
+}
+
+impl std::fmt::Debug for PageLoadObserver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<page-load observer>")
+    }
+}
 
 /// 创建配置。对象化避免相邻同类型裸传（S2）；可选字段在后（S5）。
 #[derive(Debug, Clone)]
@@ -23,8 +52,11 @@ pub struct CreateCfg {
     pub bounds: Bounds,
     /// 自定义 UA（OAuth/反爬可能需要）；`None` 用内核默认。
     pub user_agent: Option<String>,
-    /// 是否开 devtools。release 默认 `false`（安全要求，plan §8）。
+    /// 是否**主动**开 devtools（`false` = 不动内核默认：debug 构建仍可开，release 本就没有）。
+    /// 不是"强制关"——那样会把 dev 下的排查能力也关掉（plan §8 的安全要求由 release 构建保证）。
     pub devtools: bool,
+    /// 页面加载信号回传口。`None` = 不关心（无广播需求）。
+    pub on_page_load: Option<PageLoadObserver>,
 }
 
 /// 引擎调用失败原因。具体错误类型（rust 技能 §四：库代码定义具体错误，应用层汇总传播）。
@@ -39,7 +71,9 @@ pub enum EngineError {
     CookieFailed(String),
     /// 引擎内部错误（锁中毒、几何设置失败等），带上下文。
     Internal(String),
-    /// 当前平台无适配器（macOS/Linux v1 未实现）。
+    /// 当前平台无适配器（macOS/Linux v1 未实现）。Windows 构建里无人构造（那个分支的
+    /// `UnsupportedEngine` 被 cfg 掉），故按平台门控 allow——非 Windows 构建下它是活路径。
+    #[cfg_attr(windows, allow(dead_code))]
     PlatformUnsupported,
 }
 
@@ -67,6 +101,14 @@ impl std::error::Error for EngineError {}
 ///
 /// 注：**前进后退不在端口上**——历史/游标的唯一主人是 `BrowserView`（领域层），外壳取
 /// `view.go_back() -> Option<Url>` 后调 `navigate`。引擎不另记一份历史（避免双主人）。
+// 未接线的方法（stop / eval / capture / cookies_clear）是**端口完整能力面**，不是空壳：
+// - eval（带返回值）/ capture：用途①「agent 网页任务」与③「本地预览」的地基，实现在 adapter 里
+//   已就位（capture/cookies_clear 当前如实返回「需 webview2-com」的错误，不假装成功）；
+// - stop：UI 停止加载按钮（下一批）；
+// - cookies_clear：用途④ OAuth 的隔离清理。
+// 它们是设计文档 §6 承诺的扩展面（agent 工具从 facade 进、调的就是这些方法），故保留接线前的
+// allow；**新增方法前先问一句「谁调它」**——答不上来就别加（死代码直接删，不靠 allow 留尸）。
+#[allow(dead_code)]
 pub trait BrowserEngine: Send + Sync {
     /// 在 `window` 内创建一个加载 `cfg.initial_url` 的子视图。
     fn create(

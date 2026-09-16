@@ -20,6 +20,7 @@ import { useAutomation } from "./composables/useAutomation";
 import { useMarketplace } from "./composables/useMarketplace";
 import { useMemoryObservatory } from "./composables/useMemoryObservatory";
 import { useKnowledgeBase } from "./composables/useKnowledgeBase";
+import { useBrowserPanel } from "./composables/useBrowserPanel";
 import { useChatSession, setAuthRequiredHandler } from "./composables/useChatSession";
 import { usePaneLayout } from "./composables/usePaneLayout";
 import { usePaneLayoutPersistence } from "./composables/paneLayout/persistence";
@@ -174,8 +175,8 @@ const gitPanelRef = ref<InstanceType<typeof GitPanel> | null>(null);
 const titleBarRef = ref<InstanceType<typeof TitleBar> | null>(null);
 const paletteOpen = ref(false);
 const paletteRef = ref<InstanceType<typeof ACommandPalette> | null>(null);
-// 内嵌浏览器面板开关（Ctrl+Shift+B 切换）。桌面壳专属，原生子 webview 浮在主区之上。
-const browserOpen = ref(false);
+// 内嵌浏览器面板（Ctrl+Shift+B 切换；侧栏入口同一开关）。桌面壳专属，原生子 webview 浮在主区之上。
+const browserPanel = useBrowserPanel();
 // 「当前会话」= 聚焦分屏组激活 tab 的会话——布局层的计算属性，所有下游
 // （右面板 / 权限弹窗 / 标题栏 / 侧栏高亮）沿用旧的单一 activeSessionId 语义。
 const paneLayout = usePaneLayout();
@@ -370,28 +371,35 @@ function onSearchFilesChanged() {
   fileTreeRef.value?.loadRoot();
 }
 
-// 自动化 ⇄ 插件市场 ⇄ 记忆观测台 ⇄ 知识库四者互斥：主区 v-if 链有优先级（自动化 >
-// 市场 > 观测台 > 知识库），不互斥的话先开的那个会一直挡住后开的，点侧栏入口毫无
-// 反应（自动化漏了互斥就是这个症状）。放在 App 层做，覆盖全部入口（侧栏任务节点、
-// 底部入口行、市场的 ⋯ 菜单「打开市场」、标题栏/通知的 openPanel）。
+// 自动化 ⇄ 插件市场 ⇄ 记忆观测台 ⇄ 知识库 ⇄ 内嵌浏览器五者互斥：主区 v-if 链有优先级
+// （自动化 > 市场 > 观测台 > 知识库），不互斥的话先开的那个会一直挡住后开的，点侧栏入口
+// 毫无反应（自动化漏了互斥就是这个症状）。放在 App 层做，覆盖全部入口（侧栏任务节点、
+// 底部入口行、市场的 ⋯ 菜单「打开市场」、标题栏/通知的 openPanel、Ctrl+Shift+B）。
 //
-// 四个面板两两互斥，写成"打开谁就关掉其余三个"比写一个 N×N 的表好维护。
+// 五个面板两两互斥，写成"打开谁就关掉其余四个"比写一个 N×N 的表好维护。
+// 浏览器面板走 v-show（不卸载，保活原生视图），所以它的互斥**只靠这条 + PaneLayout 的
+// v-show 条件**——不靠 v-if 链的分支顺序。
 function closeOtherPanels(except: string) {
   if (except !== "marketplace") marketplace.closePanel();
   if (except !== "observatory") observatory.closePanel();
   if (except !== "automation") automation.closePanel();
   if (except !== "kb") knowledgeBase.closePanel();
+  if (except !== "browser") browserPanel.closePanel();
 }
 watch(marketplace.panelOpen, (open) => { if (open) closeOtherPanels("marketplace"); });
 watch(observatory.panelOpen, (open) => { if (open) closeOtherPanels("observatory"); });
 watch(knowledgeBase.panelOpen, (open) => { if (open) closeOtherPanels("kb"); });
+watch(browserPanel.panelOpen, (open) => { if (open) closeOtherPanels("browser"); });
 watch(() => automation.state.view, (v) => { if (v !== null) closeOtherPanels("automation"); });
 
 function onSessionChanged(id: string) {
-  // 选中会话时关掉自动化/插件市场/记忆观测台面板，主区切回聊天
+  // 选中会话时关掉自动化/插件市场/记忆观测台/浏览器面板，主区切回聊天
+  // （知识库不关：它跟会话/工作区/配对都无关，见主区挂载处的注释）。
+  // 浏览器是保活语义——关面板只是 setVisible(false)，网页与前进后退历史都留着，切回来还在。
   automation.closePanel();
   marketplace.closePanel();
   observatory.closePanel();
+  browserPanel.closePanel();
   // 打开语义（预览覆盖/全局唯一聚焦）由布局层统一裁决
   paneLayout.openSession(id);
 }
@@ -675,7 +683,7 @@ function handleKeydown(e: KeyboardEvent) {
   if (e.ctrlKey && e.shiftKey && (e.code === "KeyB" || e.key === "B")) {
     e.preventDefault();
     e.stopPropagation();
-    browserOpen.value = !browserOpen.value;
+    browserPanel.togglePanel();
     return;
   }
 
@@ -1068,8 +1076,17 @@ onUnmounted(() => {
         <!-- 知识库不接 workspaceKey：它连的是独立进程 knowledge-server，
              与当前打开的工作区、会话、配对状态都无关——没配对也能用。 -->
         <KnowledgeBase v-else-if="knowledgeBase.panelOpen.value" class="h-full" @close="knowledgeBase.closePanel()" />
+        <!-- 内嵌浏览器：**v-if + v-show 而非 v-else-if 链**——首次打开才挂载（异步 chunk 不在
+             启动时拉），挂上后常驻、关面板只 v-show 隐藏（保活原生视图：切回来同一页面、同一
+             滚动位置、前进后退历史都在）。因此它的互斥靠 closeOtherPanels + PaneLayout 的
+             v-show 条件，而不是 v-if 链的分支顺序。 -->
+        <BrowserPanel
+          v-if="browserPanel.everOpened.value"
+          v-show="browserPanel.panelOpen.value"
+          class="h-full"
+        />
         <PaneLayout
-          v-show="automation.state.view === null && !marketplace.panelOpen.value && !observatory.panelOpen.value && !knowledgeBase.panelOpen.value"
+          v-show="automation.state.view === null && !marketplace.panelOpen.value && !observatory.panelOpen.value && !knowledgeBase.panelOpen.value && !browserPanel.panelOpen.value"
           :workspace-path="workspacePath"
           class="h-full"
         />
@@ -1144,9 +1161,6 @@ onUnmounted(() => {
         @close="runConfigsDialogVisible = false"
       />
       <WorkbenchTerminal :workspace-key="activeWorkspaceKey ?? ''" :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
-
-      <!-- 内嵌浏览器面板（Ctrl+Shift+B）：原生 WebView2 子视图浮在占位洞之上 -->
-      <BrowserPanel :open="browserOpen" @close="browserOpen = false" />
     </div>
 
     <ACommandPalette

@@ -307,3 +307,118 @@ agent（Claude Agent SDK，跑在 sidecar）需要「打开网页 / 点 / 读 / 
 - 安全 / capabilities / `dangerousRemoteUrlIpcAccess`: https://v2.tauri.app/security/capabilities/
 - WebView2 `ICoreWebView2`（CapturePreview / CookieManager / ExecuteScript / WebResourceRequested）: https://learn.microsoft.com/en-us/microsoft-edge/webview2/
 - `webview2-com` 0.38.2（已在依赖树，提为直接依赖）: https://docs.rs/webview2-com/0.38.2/
+
+---
+
+## 12. 2026-09-15 形态定稿与扩展原则（不占 tab、agent-first）
+
+### 12.1 形态：主区一级视图 + 面板自带标签页
+
+**变更**（用户 2026-09-15 拍板）：不做「会话式 tab」（浏览器作为 PaneLayout 里的一个 tab 与会话并排）。
+改为跟「插件 / 知识库」同范式：**侧栏入口 → 主区 v-show 一级视图**，浏览器**面板内部自带标签条**。
+
+- **废掉的**（原计划 Step 1/Step 2 整套）：`TabItem = ChatTab | BrowserTab` 联合类型、tab-kind handler
+  注册表、抽 `ChatTabContent.vue`、切 tab 不重挂的会话保活不变量。**聊天接线一字节未动**——这是这次
+  改形态最大的收益：风险面从"碰全 app 最纠缠的聊天渲染"缩到"加一个自包含面板"。
+- **保留的**：方案 A（multiwebview + 原生 WebView2 子视图，不退 B）、坐标同步一招（rect 空 → 隐藏）、
+  原生视图隐显语义、`unstable` 锁在 adapter 内。
+- **代价**：浏览器不再能与会话**并排分屏**（要并排只能走将来"多个原生视图同屏"，注册表已支持）。
+
+多标签实现要点：**每个标签一个原生视图**（Rust 注册表天然 `id → 视图`）+ 切换只换显隐；
+空标签不建视图、首次导航才 create。标签标题 v1 用**域名**（tauri/wry 都没暴露取网页标题的接口，
+已核实；真标题 = 下一批 `DocumentTitleChanged`）。
+
+### 12.2 扩展原则（用户要求：要留接口，但**不"定型"**）
+
+四条落地规则——**留结构，不留空壳**：
+
+1. **能力面分层，每层只认下一层**：`port`（能力契约）→ `facade`（唯一编排：校验→引擎→注册表→广播）
+   → 消费方（命令层 = UI 薄壳 / 未来的 agent 工具桥接 / 未来的"存进知识库"按钮）。
+   新增消费方 = 加适配器，不动内核。
+2. **内核提供机制，不认识「用途」**（同 CLAUDE.md headless 的机制/策略边界）：门面里不出现"保存"
+   "引用"这类词——`capture` 只负责给字节，字节拿去干什么由调用方组合。
+3. **状态单一主人 + 事件广播开放**：`BrowserRegistry` 是唯一真相；`browser-nav` 广播对任何消费方
+   开放。**两个驱动者（用户 / agent）看到同一个页面**——agent 驱动时面板自动跟随，不需要额外机制。
+4. **不预先写空 adapter、不留假接口**；文档记「当前决定 + 理由 + 何时重审」，不写终局蓝图。
+
+**反向集成（后话，已确认不需要改内核）**：保存页面到知识库 = 读页面（机制）+ `knowledgeMcp` 写工具
+（现成）；引用页面到会话 = 读页面 + 现有 `display`/引用通道。**扩展靠组合，不靠改内核**。
+
+### 12.3 本批落地（2026-09-15）
+
+- **Rust**：`facade.rs` 从 STUB 变实体（能力入口，视图 id 改由注册表发 = 身份归状态主人）；
+  `on_page_load` → `PageLoadObserver` → 纯状态迁移（`BrowserView::absorb_page_load`）→ `browser-nav`
+  广播（`NavEventDto`：`{id, state, url, title?, can_go_back, can_go_forward}` 拍平）；命令层退成薄壳。
+- **前端**：`useBrowserPanel`（模块级开关 + 懒挂载/挂上常驻 = 保活）；`BrowserPanel.vue` 主区形态 +
+  标签条；`utils/browser.ts` 纯逻辑（URL 归一 / 标签标题 / 事件还原，带单测）；侧栏第 5 行入口；
+  App 互斥链扩到五者。
+- **语义修正**：**同 URL 导航 = 重载**（不压历史）；页面内点击/重定向由加载信号吸收进状态机
+  （此前地址栏永远停在最后一次命令的 URL 上）。
+
+### 12.4 新增地雷（已核实源码，别踩）
+
+- **`on_page_load` 回调在主线程**（wry 用 `Rc` 持有 handler，非 `Send`）。回调里：
+  - 调 `eval` / `set_position` / `add_child` → `run_on_main_thread` + 阻塞 `recv()` 等自己 = **死锁**；
+  - 调 `AppHandle::emit` → 投递终点是 `Webview::emit_js` → `Webview::eval` → 同一个阻塞 getter =
+    **同样死锁**。→ 广播必须 `spawn_blocking` 交给 worker（`facade::apply_page_load` 就这形状）。
+- **`PageLoadEvent::Finished` = `NavigationCompleted`，成功失败都发**（wry 丢弃了 `IsSuccess`）→ v1 的
+  `Finished` 一律当成功、`fail_nav` 暂无调用者。根治 = webview2-com 读 `IsSuccess`。
+- **`ContentLoading` 会为同一次导航多次触发**（重载/子资源）→ 状态迁移必须幂等
+  （`absorb_page_load` 对"同 URL 且已在 Loading"返回 false = 不广播）。
+
+### 12.5 下一批（agent 路径，按重要性）
+
+1. **webview2-com 下钻 = 地基**：`eval` 带返回值（`ExecuteScript` + completed handler）、`CapturePreview`
+   截图、`DocumentTitleChanged` 标题、`NavigationCompleted.IsSuccess` 失败判定、`CanGoBackChanged`。
+   —— 没有"读"，agent 只能导航不能看，工具链等于零。
+2. **页面 → 可读文本**（HTML→markdown，参照 `docsMcp` 的形态）。
+3. **桥接**：复用 **codegraph 的既有模式**（sidecar 工具 emit `{type, request_id}` → Rust 拦执行 →
+   结果经 stdin 写回按 id 配对，见 `codegraphClient.ts` / `codegraph/agent_bridge.rs`）——
+   **零新通道、零新端口**。工具面照 `knowledgeMcp`：读工具自动放行、写/动作工具必弹窗。
+   headless / 远程场景如实返回「本环境没有内嵌浏览器」。
+4. 前端镜像登记（CLAUDE.md：内置 MCP/Hooks 新增必须同步 `useCustomizations`）。
+
+### 12.6 已知限制与债（更新）
+
+| 项 | 状态 | 缺什么 |
+|---|---|---|
+| 标签标题 | 🔶 域名 | `DocumentTitleChanged`（下一批） |
+| 失败页判定 | 🔶 一律当成功 | `NavigationCompleted.IsSuccess` |
+| 历史镜像 | 🔶 近似 | 重定向链/pushState 会与 WebView2 真历史漂移 → 根治 = 前进后退整体委托 WebView2 |
+| 标签持久化 | ⬜ | 跨重启恢复（需要视图生命周期事件 + 落盘） |
+| 停止加载 | ⬜ | `stop` 已实现未接命令（工具栏 ⊘ 按钮） |
+| 本地预览入口 | ⬜ | file:// 白名单守门 + UI 入口 |
+| agent 读/截图 | ⬜ | webview2-com（下一批，见 12.5） |
+| OAuth 隔离 | ⬜ | CookieManager + data_store_identifier |
+| macOS/Linux | ⬜ | `UnsupportedEngine` 占位中 |
+| 覆盖率 | ⬜ | adapter/命令层 instrumented 覆盖对账 |
+
+> 死代码账：模块级 `#![allow(dead_code)]` 已摘除（2026-09-15）。剩余未接线项各自带理由 allow：
+> `BrowserEngine` 的 stop/eval/capture/cookies_clear（端口完整能力面 + 下一批承诺）、
+> `EngineError::PlatformUnsupported`（`cfg_attr(windows, ...)`，非 Windows 构建下是活路径）。
+
+### 12.7 书签（收藏夹）
+
+**边界**：书签是浏览器子系统的**旁支数据能力**——不参与引擎/注册表/事件，所以**不经 `BrowserFacade`**
+（门面编排的是"视图"）。命令层与将来的 agent 工具都直接调 `BookmarkStore`：同一个存储、同一条路径、
+同一份去重规则。这正是"机制/用途分离"的检验点：用户手点 ★、导入文件、将来 agent 自己收藏，三条来源
+共用一条 `add`。
+
+| 侧面 | 决定 |
+|---|---|
+| 落盘 | `~/.aide/browser/bookmarks.json`（Aide 自有数据树，原子写；与 sessions/observatory 同范式） |
+| 身份 | `id = bm-<ms>-<seq>`；**去重键 = URL**（`url_guard` 归一化后比较：`https://a.com` 与 `https://a.com/` 是同一条） |
+| 守门 | 一律过 `url_guard`——书签文件里的 `javascript:` / `chrome://` 进不来（**导入不是可信输入**） |
+| 导入格式 | Chromium `Bookmarks` JSON（`roots` 命名容器 + `children` 树）+ Netscape 书签 HTML（**各浏览器「导出书签」的互换标准**），按内容嗅探，不看扩展名 |
+| 编码 | BOM 判 UTF-16LE/BE，其余按 UTF-8（lossy）——记事本另存 HTML 默认 UTF-16 LE，`read_to_string` 会直接失败 |
+| 导入语义 | **只增不删**（合并，不是替换）：按 URL 跳过重复；如实上报 `{added, skipped, invalid}`，不笼统说"导入完成" |
+| 坏文件 | **隔离不静默覆盖**：改名 `bookmarks.json.corrupt-<ms>` 后按空库继续——旧数据留在磁盘可恢复，功能不因一个坏文件挂掉 |
+| UI | 地址栏 ★（选中态 = 已收藏；未收藏点=收藏，已收藏点=取消）+ 收藏条（点标题直达、✕ 删除）+ 右端「导入…」 |
+
+**已知限制**：目录结构**拍平**（Chromium 的 folder 树 / `<H3>` 都不保留）；书签标题不可改（页面真标题
+要 webview2-com 的 `DocumentTitleChanged`，现在用主机名）；GBK 导出会显示成替换字符（要 `encoding_rs`）；
+无拖拽排序/搜索/多选删除。
+
+**顺手定的两条实现口径**：① 删除不弹确认（误删再点 ★ 就回来，不是不可逆数据）；② 「选文件」复用应用内
+`FilePickerDialog`（`DirTreePicker` 有盘符入口 + 可编辑地址栏 → 能选到 Downloads 等任意路径），
+**不引 `tauri-plugin-dialog`**——少一个依赖、少一层平台差异。

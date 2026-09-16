@@ -3,10 +3,21 @@ import { ref, watch } from "vue";
 import DirTreePicker from "./DirTreePicker.vue";
 
 /**
- * 文件选择弹窗（server 二进制用）：复用 DirTreePicker 的 mixed 模式
- * （目录可展开、文件可选），单选。外壳视觉与 OpenFolderDialog 一致。
+ * 单文件选择弹窗（通用）：复用 DirTreePicker 的 mixed 模式（目录可展开、文件可选），单选。
+ * 外壳视觉与 OpenFolderDialog 一致。带盘符入口 + 可编辑地址栏 → 能选到任意路径的文件。
+ *
+ * 现有使用方：LSP server 二进制选择（title 用默认值）、内嵌浏览器书签导入。
  */
-const props = defineProps<{ visible: boolean }>();
+const props = withDefaults(
+  defineProps<{
+    visible: boolean;
+    /** 弹窗标题（不同使用方各自措辞）。 */
+    title?: string;
+    /** 未选文件时点确认的提示。 */
+    emptyError?: string;
+  }>(),
+  { title: "选择 server 文件", emptyError: "请选择 server 文件" },
+);
 const emit = defineEmits<{
   "update:visible": [v: boolean];
   confirm: [path: string];
@@ -31,7 +42,7 @@ function close() {
 function onConfirm() {
   const p = typeof path.value === "string" ? path.value.trim() : "";
   if (!p) {
-    error.value = "请选择 server 文件";
+    error.value = props.emptyError;
     return;
   }
   error.value = "";
@@ -44,7 +55,7 @@ function onConfirm() {
   <Teleport to="body">
     <div v-if="props.visible" class="of-overlay" @click.self="close">
       <div class="of-dialog" @click.stop>
-        <div class="of-header">选择 server 文件</div>
+        <div class="of-header">{{ props.title }}</div>
         <DirTreePicker v-model="path" mode="mixed" />
         <div class="fp-target">
           <b>已选：</b>{{ typeof path === "string" ? path || "（未选择）" : "（未选择）" }}

@@ -1,8 +1,294 @@
-//! 浏览器子系统门面 / 门控收口（STUB）。
+//! 浏览器子系统门面：**能力入口**（顶层组织文件）。
 //!
-//! 照「Facade pattern for subsystem switches」记忆：子系统总开关/门控统一收口于此，
-//! 禁止在调用点散落 `if browser_enabled` 补丁。命令层接线时在此提供：
-//! - 子系统启用判定（设置项 + 平台支持），收口成单一入口；
-//! - 对命令层暴露的最小门面（创建/导航/截图… 转发到 `BrowserEngine` + `BrowserRegistry`）。
+//! 谁从这里进：命令层（UI 薄壳）、未来的 agent 工具桥接、以及任何新消费方。门面是唯一做
+//! 「校验 → 引擎 → 注册表 → 广播」编排的地方——**新增一个消费方 = 加一个适配器，不动内核**
+//! （设计原则见 docs/superpowers/plans/2026-09-10-embedded-browser.md §11）。
 //!
-//! 本轮不实现——待 A/B 决策与命令层落地。
+//! **门面不认识「用途」**（同 CLAUDE.md headless 的机制/策略边界：引擎提供机制，宿主决定策略）：
+//! 它不知道调用方是面板、agent 工具，还是将来某个「把页面存进知识库」的按钮，所以这里不出现
+//! 「保存」「引用」这类词——那些是消费方的组合，不是内核能力。
+//!
+//! 广播口径：**状态变化只由加载事件路径广播**（`apply_page_load`）。命令路径回同步快照给调用方
+//! （UI 或 agent 自己知道刚做了什么），不额外广播——页面加载信号随后会把同一份状态推给所有人，
+//! 两个驱动者（用户/agent）因此看到同一个页面。
+//!
+//! 线程：方法可能被 async 命令从 tokio worker 调用；锁内不做引擎 IO（state.rs 红线）。
+
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use tauri::{AppHandle, Emitter, Manager};
+use url::Url;
+
+use crate::browser::adapter::PlatformEngine;
+use crate::browser::core::url_guard;
+use crate::browser::dto::{BoundsDto, BrowserViewDto, NavEventDto, NavStateDto};
+use crate::browser::port::engine::{BrowserEngine, CreateCfg, EngineError, PageLoadObserver};
+use crate::browser::port::types::{
+    Bounds, BrowserView, BrowserViewId, NavState, PageLoadSignal, SizeError,
+};
+use crate::browser::state::{BrowserRegistry, BrowserState};
+
+/// 主窗口 label（lib.rs setup 里创建的 "main"）。命令层因此零窗口知识。
+const MAIN_WINDOW: &str = "main";
+
+/// 导航事件广播名。前端 `useEmbeddedBrowser.onBrowserNav` 订阅同名事件。
+pub const NAV_EVENT: &str = "browser-nav";
+
+/// 门面错误：把各层具体错误汇总成调用方能读的形态（应用层汇总传播）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum FacadeError {
+    /// URL 未过 `url_guard`（scheme 白名单/畸形）。
+    UrlRejected(String),
+    /// 矩形非法（负/NaN 尺寸）——进边界守门失败。
+    BoundsRejected(SizeError),
+    /// 视图 id 非法（空串）。
+    ViewIdRejected(String),
+    /// 视图不存在（已关闭/从未创建）。文案带调用方传来的原始 id（可读性优先）。
+    ViewNotFound(String),
+    /// main 窗口不存在（启动早期竞态）。
+    NoMainWindow,
+    /// 注册表锁中毒：状态不可信。
+    RegistryPoisoned,
+    /// 引擎侧失败。
+    Engine(EngineError),
+}
+
+impl std::fmt::Display for FacadeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FacadeError::UrlRejected(detail) => write!(f, "url rejected: {detail}"),
+            FacadeError::BoundsRejected(detail) => write!(f, "invalid bounds: {detail}"),
+            FacadeError::ViewIdRejected(detail) => write!(f, "invalid view id: {detail}"),
+            FacadeError::ViewNotFound(id) => write!(f, "browser view not found: {id}"),
+            FacadeError::NoMainWindow => write!(f, "main window not found"),
+            FacadeError::RegistryPoisoned => write!(f, "browser registry lock poisoned"),
+            FacadeError::Engine(detail) => write!(f, "{detail}"),
+        }
+    }
+}
+
+impl std::error::Error for FacadeError {}
+
+impl From<EngineError> for FacadeError {
+    fn from(e: EngineError) -> Self {
+        Self::Engine(e)
+    }
+}
+
+/// 浏览器门面。持 `AppHandle` 只为两件事：取托管状态、广播事件。
+pub struct BrowserFacade {
+    app: AppHandle,
+    engine: Arc<PlatformEngine>,
+    registry: Arc<Mutex<BrowserRegistry>>,
+}
+
+impl BrowserFacade {
+    /// 从 Tauri 托管状态装配（engine / registry 都在 `lib.rs` setup 里 manage）。
+    pub fn new(app: &AppHandle) -> Self {
+        Self {
+            engine: app.state::<Arc<PlatformEngine>>().inner().clone(),
+            registry: app.state::<BrowserState>().0.clone(),
+            app: app.clone(),
+        }
+    }
+
+    /// 创建视图并加载首个 URL。**id 由注册表发**（身份归状态主人：面板与未来的 agent 工具
+    /// 拿到的都是同一个可寻址 id）。
+    pub fn create(&self, url_raw: &str, bounds: BoundsDto) -> Result<BrowserViewDto, FacadeError> {
+        let url = url_guard::guard(url_raw).map_err(|e| FacadeError::UrlRejected(e.to_string()))?;
+        let bounds = Bounds::try_from(bounds).map_err(FacadeError::BoundsRejected)?;
+
+        // **先入库、再建引擎视图**：加载信号可能在 `create` 返回前就到达（它们在主线程上跑），
+        // 注册表里必须先有这一条，否则首个 Started 会被当成「视图不存在」丢掉。
+        let id = {
+            let mut reg = self.lock()?;
+            let id = reg.allocate_id();
+            reg.insert(BrowserView::new(id.clone(), bounds));
+            id
+        };
+
+        let window = self
+            .app
+            .get_window(MAIN_WINDOW)
+            .ok_or(FacadeError::NoMainWindow)?;
+        let cfg = CreateCfg {
+            initial_url: url.clone(),
+            bounds,
+            user_agent: None,
+            devtools: false,
+            on_page_load: Some(self.observer(id.clone())),
+        };
+        if let Err(e) = self.engine.create(&window, id.clone(), cfg) {
+            // 建视图失败 → 回收注册表占位，不留幽灵条目。
+            let _ = self.lock()?.remove(&id);
+            return Err(e.into());
+        }
+
+        let mut reg = self.lock()?;
+        let view = reg
+            .get_mut(&id)
+            .ok_or_else(|| FacadeError::ViewNotFound(id.as_str().to_string()))?;
+        // 首个导航入历史。**仅当还停在 Idle**：若加载信号已经先推进了状态（`create` 期间主线程
+        // 就在收事件），这里不重复记账——否则历史会多一条、甚至把 Ready 拖回 Loading。
+        if matches!(view.nav(), NavState::Idle) {
+            view.begin_nav(url);
+        }
+        Ok(BrowserViewDto::from(&*view))
+    }
+
+    /// 导航。**同一 URL = 重载**（浏览器惯例：不压历史，否则「后退」退到同一页看起来像坏了）。
+    pub fn navigate(&self, id_raw: &str, url_raw: &str) -> Result<BrowserViewDto, FacadeError> {
+        let id = self.parse_id(id_raw)?;
+        let url = url_guard::guard(url_raw).map_err(|e| FacadeError::UrlRejected(e.to_string()))?;
+
+        // 读态（锁内）→ 引擎 IO（锁外）→ 改写（锁内）：锁内不做 IO。
+        let is_reload = {
+            let reg = self.lock()?;
+            let view = reg
+                .get(&id)
+                .ok_or_else(|| FacadeError::ViewNotFound(id_raw.to_string()))?;
+            view.current_url() == Some(&url)
+        };
+
+        if is_reload {
+            self.engine.reload(&id)?;
+        } else {
+            self.engine.navigate(&id, &url)?;
+        }
+
+        let mut reg = self.lock()?;
+        let view = reg
+            .get_mut(&id)
+            .ok_or_else(|| FacadeError::ViewNotFound(id_raw.to_string()))?;
+        if is_reload {
+            view.reload_current();
+        } else {
+            view.begin_nav(url);
+        }
+        Ok(BrowserViewDto::from(&*view))
+    }
+
+    /// 后退：领域移游标取目标 URL（历史唯一主人是 `BrowserView`）→ 引擎导航 → 回快照。
+    pub fn go_back(&self, id_raw: &str) -> Result<BrowserViewDto, FacadeError> {
+        self.move_cursor(id_raw, |v| v.go_back())
+    }
+
+    /// 前进：对称于 [`go_back`](Self::go_back)。
+    pub fn go_forward(&self, id_raw: &str) -> Result<BrowserViewDto, FacadeError> {
+        self.move_cursor(id_raw, |v| v.go_forward())
+    }
+
+    /// 布局同步：占位洞的矩形拍到原生视图 + 领域。
+    pub fn set_bounds(&self, id_raw: &str, bounds: BoundsDto) -> Result<(), FacadeError> {
+        let id = self.parse_id(id_raw)?;
+        let bounds = Bounds::try_from(bounds).map_err(FacadeError::BoundsRejected)?;
+        self.engine.set_bounds(&id, bounds)?;
+        if let Some(view) = self.lock()?.get_mut(&id) {
+            view.set_bounds(bounds);
+        }
+        Ok(())
+    }
+
+    /// 显隐：面板切走必须隐藏原生视图（它浮在全部 HTML 之上，不受 DOM 生命周期约束）。
+    pub fn set_visible(&self, id_raw: &str, visible: bool) -> Result<(), FacadeError> {
+        let id = self.parse_id(id_raw)?;
+        self.engine.set_visible(&id, visible)?;
+        if let Some(view) = self.lock()?.get_mut(&id) {
+            view.set_visible(visible);
+        }
+        Ok(())
+    }
+
+    /// 关闭视图：引擎销毁子 webview + 领域移除。此后该 id 不复用。
+    pub fn close(&self, id_raw: &str) -> Result<(), FacadeError> {
+        let id = self.parse_id(id_raw)?;
+        self.engine.close(&id)?;
+        self.lock()?.remove(&id);
+        Ok(())
+    }
+
+    /// 加载信号观察者：引擎每报一次事件，就把信号交给 [`apply_page_load`]。
+    fn observer(&self, id: BrowserViewId) -> PageLoadObserver {
+        let app = self.app.clone();
+        PageLoadObserver::new(move |url, signal| apply_page_load(&app, &id, url, signal))
+    }
+
+    /// 前后退公共路径：游标移动（锁内）→ 引擎 IO（锁外）→ 回快照。
+    fn move_cursor(
+        &self,
+        id_raw: &str,
+        step: impl Fn(&mut BrowserView) -> Option<Url>,
+    ) -> Result<BrowserViewDto, FacadeError> {
+        let id = self.parse_id(id_raw)?;
+        let (target, snapshot) = {
+            let mut reg = self.lock()?;
+            let view = reg
+                .get_mut(&id)
+                .ok_or_else(|| FacadeError::ViewNotFound(id_raw.to_string()))?;
+            // 无可退/可进：游标不动、状态不动（领域层保证），仍回当前快照。
+            (step(view), BrowserViewDto::from(&*view))
+        };
+        if let Some(url) = target {
+            self.engine.navigate(&id, &url)?;
+        }
+        Ok(snapshot)
+    }
+
+    fn parse_id(&self, raw: &str) -> Result<BrowserViewId, FacadeError> {
+        BrowserViewId::try_new(raw).map_err(|e| FacadeError::ViewIdRejected(e.to_string()))
+    }
+
+    fn lock(&self) -> Result<MutexGuard<'_, BrowserRegistry>, FacadeError> {
+        self.registry
+            .lock()
+            .map_err(|_| FacadeError::RegistryPoisoned)
+    }
+}
+
+/// 加载信号落库 + 广播（观察者的本体）。
+///
+/// **跑在主线程**（webview 事件回调，线程契约见 `PageLoadObserver`）：
+/// - 锁注册表做**纯状态迁移** ✓（无 IO，锁持有期极短）；
+/// - 广播必须 `spawn_blocking` 交给 worker —— `AppHandle::emit` 的投递终点是 `Webview::eval`
+///   （`run_on_main_thread` + 阻塞 `recv()`），在主线程调就是**主线程等自己 = 自锁**（已核实）。
+///
+/// 广播载荷是「发出那一刻重新读的快照」而不是事件本体：所以即便两个广播乱序，后跑的重读一次
+/// 新状态，UI 不会被旧载荷拉回去。
+fn apply_page_load(app: &AppHandle, id: &BrowserViewId, url: &Url, signal: PageLoadSignal) {
+    let state = app.state::<BrowserState>();
+    let changed = match state.0.lock() {
+        Ok(mut reg) => reg
+            .get_mut(id)
+            .map(|v| v.absorb_page_load(url.clone(), signal))
+            .unwrap_or(false),
+        // 锁中毒：状态不可信，宁可不广播也不把坏状态推给 UI。
+        Err(_) => false,
+    };
+    if !changed {
+        return;
+    }
+
+    let app = app.clone();
+    let id = id.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        if let Ok(event) = nav_event(&app, &id) {
+            let _ = app.emit(NAV_EVENT, event);
+        }
+    });
+}
+
+/// 读一眼当下的导航状态（广播载荷）。
+fn nav_event(app: &AppHandle, id: &BrowserViewId) -> Result<NavEventDto, FacadeError> {
+    // 先落成变量再取字段：`app.state()` 返回的 `State` 是临时值，链式取 `.0` 会被借用检查拒绝。
+    let state = app.state::<BrowserState>();
+    let reg = state.0.lock().map_err(|_| FacadeError::RegistryPoisoned)?;
+    let view = reg
+        .get(id)
+        .ok_or_else(|| FacadeError::ViewNotFound(id.as_str().to_string()))?;
+    Ok(NavEventDto {
+        id: id.as_str().to_string(),
+        nav: NavStateDto::from(view.nav()),
+        can_go_back: view.can_go_back(),
+        can_go_forward: view.can_go_forward(),
+    })
+}
