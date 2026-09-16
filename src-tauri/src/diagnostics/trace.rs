@@ -62,8 +62,8 @@ pub fn snapshot() -> Vec<TraceEvent> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::report::TraceEvent;
+    use super::*;
 
     /// 本测试写的那些条目（其它测试的 record 不属于我们，必须能被过滤掉）。
     fn is_ours(e: &TraceEvent) -> bool {
@@ -135,7 +135,9 @@ mod tests {
         );
         let ours = ours_in_order();
         assert!(
-            !ours.iter().any(|(k, n, _)| (*k, n.as_str()) == ("cmd_enter", "git_log")),
+            !ours
+                .iter()
+                .any(|(k, n, _)| (*k, n.as_str()) == ("cmd_enter", "git_log")),
             "第一条（cmd_enter/git_log）应已被淘汰，实际仍在前段"
         );
         assert!(

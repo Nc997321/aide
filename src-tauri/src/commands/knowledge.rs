@@ -96,7 +96,10 @@ fn write_config_atomic(path: &Path, content: &str) -> Result<(), String> {
 #[tauri::command]
 pub fn knowledge_set_runtime_config(base_url: String, token: Option<String>) -> Result<(), String> {
     let _trace = crate::diagnostics::trace_command("knowledge_set_runtime_config");
-    apply_config_action(&kb_config_path(), config_action(&base_url, token.as_deref()))
+    apply_config_action(
+        &kb_config_path(),
+        config_action(&base_url, token.as_deref()),
+    )
 }
 
 #[cfg(test)]
@@ -105,8 +108,14 @@ mod tests {
 
     #[test]
     fn logout_when_token_missing_or_blank() {
-        assert!(matches!(config_action("http://kb:8788", None), ConfigAction::Delete));
-        assert!(matches!(config_action("http://kb:8788", Some("   ")), ConfigAction::Delete));
+        assert!(matches!(
+            config_action("http://kb:8788", None),
+            ConfigAction::Delete
+        ));
+        assert!(matches!(
+            config_action("http://kb:8788", Some("   ")),
+            ConfigAction::Delete
+        ));
     }
 
     #[test]
@@ -143,7 +152,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("aide-kb-test-{}", std::process::id()));
         let path = dir.join("knowledge.json");
         apply_config_action(&path, config_action("http://kb:8788", Some("tok"))).unwrap();
-        assert!(fs::read_to_string(&path).unwrap().contains("\"token\": \"tok\""));
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("\"token\": \"tok\""));
         apply_config_action(&path, config_action("http://kb:8788", None)).unwrap();
         assert!(!path.exists());
         // 再删一次 = 已是登出态，幂等成功（不是错误）
